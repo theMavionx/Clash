@@ -78,6 +78,25 @@ const CannonBallIcon = ({ size = 48 }) => (
   </svg>
 );
 
+const SurrenderFlagIcon = ({ size = 30 }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 32 32"
+    aria-hidden="true"
+    focusable="false"
+  >
+    <path
+      d="M8 27V5m1 2h12.5l-2.6 4 2.6 4H9"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="3"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
 // ── Rally pointer (red grenade) icon ───────────────────────────────────────
 // Stylised cartoon grenade in the same line-art language as CannonBallIcon
 // so the two abilities feel like a matched set on the HUD.
@@ -96,6 +115,19 @@ const RallyGrenadeIcon = ({ size = 48 }) => (
     <path d="M22 20 L22 53 M29 18 L29 54 M36 20 L36 53" stroke="#7a160d" strokeWidth="1.4" opacity="0.8"/>
     {/* highlight */}
     <ellipse cx="22" cy="28" rx="4" ry="5" fill="rgba(255,255,255,0.22)" transform="rotate(-25 22 28)"/>
+  </svg>
+);
+
+const EnergyBoltIcon = ({ size = 14 }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 16 16"
+    aria-hidden="true"
+    focusable="false"
+    style={{ display: 'block', flex: '0 0 auto' }}
+  >
+    <path d="M9.2 0.8 3.5 8.7h3.3L6 15.2l6.5-8.8H9.1L9.2 0.8Z" fill="currentColor" />
   </svg>
 );
 
@@ -120,9 +152,67 @@ function normalizeTroopKey(name) {
 }
 
 // ── Attack HUD (shown during enemy mode) ──────────────────────────────────
+function ManualAttackHUD({ onSurrender, onCannon, onRally, cannonMode, rallyMode, selectedTroopIdx, onSelectTroop, cannonEnergy, fleetInfo, battleTimer }) {
+  const { isMobile: mobile } = useLayout();
+  const [showDetails, setShowDetails] = useState(false);
+  const groups = fleetInfo?.troop_groups || [];
+  const ship = fleetInfo?.ship || {};
+  const ready = !!fleetInfo?.ready;
+  const rallyCost = cannonEnergy?.rallyNextCost ?? 1;
+  const rallyDisabled = !rallyMode && !!cannonEnergy && cannonEnergy.energy < rallyCost;
+  return (
+    <>
+      <div style={hud.wrapTopRight}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          {battleTimer != null && <div style={{ ...hud.timerPill, color: battleTimer <= 30 ? '#E53935' : '#5C3A21', border: `2px solid ${battleTimer <= 30 ? '#7f0000' : '#9f8759'}` }}>{Math.floor(battleTimer / 60)}:{String(battleTimer % 60).padStart(2, '0')}</div>}
+          <button style={hud.homeBtn} onClick={onSurrender} title="Surrender" aria-label="Surrender">
+            <SurrenderFlagIcon />
+          </button>
+        </div>
+      </div>
+      <div style={{ ...hud.wrapLeft, ...(mobile ? { bottom: 10, left: 10, gap: 4, flexWrap: 'wrap', maxWidth: 'calc(100vw - 80px)' } : {}) }}>
+        <button style={{ ...hud.card, width: mobile ? 30 : 36, height: mobile ? 30 : 36, padding: 0, borderColor: 'rgba(255,215,0,0.7)', cursor: 'pointer' }} onClick={(event) => { event.stopPropagation(); setShowDetails(true); }} title="Main ship and army">
+          <img src={shipImg} alt="" style={{ width: '90%', height: '90%', objectFit: 'contain' }} />
+        </button>
+        {!ready && <div style={{ ...hud.card, width: mobile ? 92 : 116, height: mobile ? 46 : 58, padding: '4px 8px', borderColor: '#2c83ba', color: '#5C3A21', fontSize: mobile ? 9 : 11, fontWeight: 900, textAlign: 'center' }}>MAIN SHIP<br/>APPROACHING...</div>}
+        {groups.map((group, groupIdx) => {
+          const info = TROOP_IMG_MAP[normalizeTroopKey(group.key)] || {};
+          const selected = selectedTroopIdx === groupIdx;
+          const size = mobile ? 56 : 70;
+          return (
+            <button key={group.key || groupIdx} style={{ ...hud.card, width: size, height: size, padding: 2, position: 'relative', flexDirection: 'column', gap: 1, opacity: ready ? 1 : 0.55, borderColor: selected ? '#FFD700' : '#9f8759', boxShadow: selected ? '0 0 12px rgba(255,215,0,0.6), inset 0 0 8px rgba(255,215,0,0.15)' : 'none', cursor: ready ? 'pointer' : 'wait' }} onClick={(event) => { event.stopPropagation(); if (ready) onSelectTroop(groupIdx); }} disabled={!ready} title={`Deploy ${info.label || group.label || group.key}`}>
+              {info.img && <img src={info.img} alt="" style={{ width: '76%', height: '67%', objectFit: 'contain' }} />}
+              <span style={{ maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: mobile ? 7 : 9, fontWeight: 900, color: '#5C3A21', textTransform: 'uppercase', lineHeight: 1 }}>{info.label || group.label || group.key}</span>
+              <span style={{ position: 'absolute', top: -4, right: -4, background: '#5C3A21', color: '#fff7df', fontSize: 9, fontWeight: 900, borderRadius: 6, padding: '1px 5px', border: '1px solid #3d1f00' }}>x{group.count || 0}</span>
+            </button>
+          );
+        })}
+      </div>
+      {showDetails && <div style={hud.shipModal} onClick={() => setShowDetails(false)}><div style={hud.shipModalPanel} onClick={(event) => event.stopPropagation()}>
+        <div style={{ fontSize: 16, fontWeight: 900, color: '#5C3A21' }}>Main Ship Lv.{ship.level || 1}</div>
+        <img src={shipImg} alt="Main ship" style={{ width: 150, height: 90, objectFit: 'contain' }} />
+        <div style={{ fontSize: 12, fontWeight: 800, color: '#5C3A21' }}>{fleetInfo?.remaining ?? 0} units remaining · {ship.capacity || 0} capacity</div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: 5, width: '100%' }}>{groups.map((group) => { const info = TROOP_IMG_MAP[normalizeTroopKey(group.key)] || {}; return <div key={group.key} style={{ display: 'flex', alignItems: 'center', gap: 4, background: '#fffaf0', border: '1px solid #d4c8b0', borderRadius: 6, padding: '3px 7px' }}>{info.img && <img src={info.img} alt="" style={{ width: 24, height: 24, objectFit: 'contain' }} />}<span style={{ fontSize: 10, fontWeight: 800, color: '#5C3A21' }}>{info.label || group.label || group.key} x{group.count || 0}</span></div>; })}</div>
+        <button style={{ marginTop: 6, padding: '8px 20px', background: '#fff6dc', border: '2px solid #9f8759', borderRadius: 8, color: '#5C3A21', fontSize: 13, fontWeight: 800, cursor: 'pointer', fontFamily: 'inherit' }} onClick={() => setShowDetails(false)}>Close</button>
+      </div></div>}
+      <div style={{ ...hud.wrapRight, ...(mobile ? { bottom: 10, right: 10 } : {}) }}><div style={hud.cannonGroup}>
+        {cannonEnergy && <div style={hud.energyPill}><span style={hud.energyIcon}><EnergyBoltIcon size={15} /></span><span style={hud.energyValue}>{cannonEnergy.energy}</span></div>}
+        <div style={hud.abilityRow}>
+          <button style={{ ...hud.cannonBtn, ...(rallyMode ? hud.rallyActive : {}), ...(rallyDisabled ? hud.cannonDisabled : {}) }} onClick={() => { if (!rallyDisabled) onRally(); }} title={rallyMode ? 'Cancel rally mode' : 'Rally pointer'}><RallyGrenadeIcon size={46} />{cannonEnergy && <div style={hud.cannonCostBadge}>{rallyCost}<span style={hud.cannonCostIcon}><EnergyBoltIcon size={9} /></span></div>}</button>
+          <button style={{ ...hud.cannonBtn, ...(cannonMode ? hud.cannonActive : {}), ...(cannonEnergy && cannonEnergy.energy < cannonEnergy.nextCost ? hud.cannonDisabled : {}) }} onClick={() => { if (!cannonEnergy || cannonEnergy.energy >= cannonEnergy.nextCost) onCannon(); }} title="Ship Cannon"><CannonBallIcon size={46} />{cannonEnergy && <div style={hud.cannonCostBadge}>{cannonEnergy.nextCost}<span style={hud.cannonCostIcon}><EnergyBoltIcon size={9} /></span></div>}</button>
+        </div>
+      </div></div>
+    </>
+  );
+}
+
 function AttackHUD({ onReturnHome, onSurrender, onCannon, onRally, cannonMode, rallyMode, selectedTroopIdx, onSelectTroop, cannonEnergy, fleetInfo, battleTimer }) {
   const { isMobile: mobile } = useLayout();
   const [expandedShip, setExpandedShip] = useState(null);
+
+  if (fleetInfo?.mode === 'manual_troops') {
+    return <ManualAttackHUD {...{ onSurrender, onCannon, onRally, cannonMode, rallyMode, selectedTroopIdx, onSelectTroop, cannonEnergy, fleetInfo, battleTimer }} />;
+  }
 
   // Build ship cards from fleet info
   const ships = fleetInfo?.ships || [];
@@ -146,7 +236,7 @@ function AttackHUD({ onReturnHome, onSurrender, onCannon, onRally, cannonMode, r
             onMouseOver={e => e.currentTarget.style.filter = 'brightness(1.2)'}
             onMouseOut={e => e.currentTarget.style.filter = 'none'}
           >
-            <span style={{ fontSize: 26, lineHeight: 1 }}>🏳️</span>
+            <SurrenderFlagIcon />
           </button>
         </div>
       </div>
@@ -264,7 +354,7 @@ function AttackHUD({ onReturnHome, onSurrender, onCannon, onRally, cannonMode, r
         <div style={hud.cannonGroup}>
           {cannonEnergy && (
             <div style={hud.energyPill}>
-              <span style={hud.energyIcon}>⚡</span>
+              <span style={hud.energyIcon}><EnergyBoltIcon size={15} /></span>
               <span style={hud.energyValue}>{cannonEnergy.energy}</span>
             </div>
           )}
@@ -300,7 +390,7 @@ function AttackHUD({ onReturnHome, onSurrender, onCannon, onRally, cannonMode, r
                   {cannonEnergy && (
                     <div style={hud.cannonCostBadge}>
                       {rallyCost}
-                      <span style={hud.cannonCostIcon}>⚡</span>
+                      <span style={hud.cannonCostIcon}><EnergyBoltIcon size={9} /></span>
                     </div>
                   )}
                 </button>
@@ -319,7 +409,7 @@ function AttackHUD({ onReturnHome, onSurrender, onCannon, onRally, cannonMode, r
               {cannonEnergy && (
                 <div style={hud.cannonCostBadge}>
                   {cannonEnergy.nextCost}
-                  <span style={hud.cannonCostIcon}>⚡</span>
+                  <span style={hud.cannonCostIcon}><EnergyBoltIcon size={9} /></span>
                 </div>
               )}
             </button>
@@ -435,7 +525,7 @@ function ReplayHUD({ onReturnHome, battleTimer, replayDuration = 0, replayLabel 
           onMouseOver={e => e.currentTarget.style.filter = 'brightness(1.2)'}
           onMouseOut={e => e.currentTarget.style.filter = 'none'}
         >
-          <span style={{ fontSize: mobile ? 22 : 26, lineHeight: 1 }}>🏳️</span>
+          <SurrenderFlagIcon size={mobile ? 26 : 30} />
         </button>
       </div>
       </div>
@@ -530,7 +620,7 @@ function ActionButtons({ onOpenBattleLog, onOpenBots }) {
     const altarUnlocked = !!(player?.building_unlocks?.altar || player?.shop_entitlements?.altar || player?.altar?.active);
     let count = 0;
     for (const [id, def] of Object.entries(defs)) {
-      if (id === 'flag') continue;
+      if (id === 'flag' || def?.no_shop) continue;
       if (id === 'altar' && !altarUnlocked) continue;
       if (!hasTownHall && id !== 'town_hall') continue;
       // Check TH unlock
@@ -620,7 +710,9 @@ function ActionButtons({ onOpenBattleLog, onOpenBots }) {
               </button>
             </div>
             <div style={rf.body}>
-              <div style={{fontSize: 42, textAlign: 'center'}}>🏳️</div>
+              <div style={{ display: 'flex', justifyContent: 'center', color: '#B71C1C' }}>
+                <SurrenderFlagIcon size={42} />
+              </div>
               <div style={{fontSize: 15, fontWeight: 800, color: '#5C3A21', textAlign: 'center', lineHeight: 1.5}}>
                 You will lose <span style={{color: '#E53935'}}>trophies</span> and retreat from battle. Dead troops will need reinforcing.
               </div>
@@ -943,11 +1035,12 @@ const hud = {
   },
   homeBtn: {
     width: 56, height: 56,
+    padding: 0,
     background: 'linear-gradient(180deg, #E53935 0%, #b71c1c 100%)',
     border: '3px solid #7f0000',
     borderRadius: 14,
     display: 'flex', alignItems: 'center', justifyContent: 'center',
-    cursor: 'pointer', flexShrink: 0,
+    cursor: 'pointer', flexShrink: 0, overflow: 'hidden',
     transition: 'filter 0.15s',
     outline: 'none',
     color: '#fff',

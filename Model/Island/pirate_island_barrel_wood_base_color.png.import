@@ -2,21 +2,21 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://db1sc51u4fsqm"
-path.s3tc="res://.godot/imported/Isl_texture_pbr_20250901_metallic-texture_pbr_20250901_roughness.webp-feb0761696712596dc95b2dbe778ac82.s3tc.ctex"
-path.etc2="res://.godot/imported/Isl_texture_pbr_20250901_metallic-texture_pbr_20250901_roughness.webp-feb0761696712596dc95b2dbe778ac82.etc2.ctex"
+uid="uid://cfumxa8ifvogb"
+path.s3tc="res://.godot/imported/pirate_island_barrel_wood_base_color.png-27afe296f1549bb935301aeac364757e.s3tc.ctex"
+path.etc2="res://.godot/imported/pirate_island_barrel_wood_base_color.png-27afe296f1549bb935301aeac364757e.etc2.ctex"
 metadata={
 "imported_formats": ["s3tc_bptc", "etc2_astc"],
 "vram_texture": true
 }
 generator_parameters={
-"md5": "a4a5c2c8d01e5a7d4c82a7955fa03440"
+"md5": "7f2c87a393f0e868f8b9b8ccd3912a60"
 }
 
 [deps]
 
-source_file="res://Model/Island/Isl_texture_pbr_20250901_metallic-texture_pbr_20250901_roughness.webp"
-dest_files=["res://.godot/imported/Isl_texture_pbr_20250901_metallic-texture_pbr_20250901_roughness.webp-feb0761696712596dc95b2dbe778ac82.s3tc.ctex", "res://.godot/imported/Isl_texture_pbr_20250901_metallic-texture_pbr_20250901_roughness.webp-feb0761696712596dc95b2dbe778ac82.etc2.ctex"]
+source_file="res://Model/Island/pirate_island_barrel_wood_base_color.png"
+dest_files=["res://.godot/imported/pirate_island_barrel_wood_base_color.png-27afe296f1549bb935301aeac364757e.s3tc.ctex", "res://.godot/imported/pirate_island_barrel_wood_base_color.png-27afe296f1549bb935301aeac364757e.etc2.ctex"]
 
 [params]
 

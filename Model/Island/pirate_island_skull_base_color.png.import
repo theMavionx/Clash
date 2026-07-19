@@ -2,18 +2,21 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://cibl361w2y388"
-path.s3tc="res://.godot/imported/MainShip_Atlas_Pirate.png-2d4e45cd5ca2aeee9e985936662d5058.s3tc.ctex"
-path.etc2="res://.godot/imported/MainShip_Atlas_Pirate.png-2d4e45cd5ca2aeee9e985936662d5058.etc2.ctex"
+uid="uid://dtnx50ybtjimt"
+path.s3tc="res://.godot/imported/pirate_island_skull_base_color.png-b5836452a9a581e70c6c6405ed7c1c6c.s3tc.ctex"
+path.etc2="res://.godot/imported/pirate_island_skull_base_color.png-b5836452a9a581e70c6c6405ed7c1c6c.etc2.ctex"
 metadata={
 "imported_formats": ["s3tc_bptc", "etc2_astc"],
 "vram_texture": true
 }
+generator_parameters={
+"md5": "067e51aa4315dade21bdb7e9a37fde86"
+}
 
 [deps]
 
-source_file="res://Model/Ship/MainShip/MainShip_Atlas_Pirate.png"
-dest_files=["res://.godot/imported/MainShip_Atlas_Pirate.png-2d4e45cd5ca2aeee9e985936662d5058.s3tc.ctex", "res://.godot/imported/MainShip_Atlas_Pirate.png-2d4e45cd5ca2aeee9e985936662d5058.etc2.ctex"]
+source_file="res://Model/Island/pirate_island_skull_base_color.png"
+dest_files=["res://.godot/imported/pirate_island_skull_base_color.png-b5836452a9a581e70c6c6405ed7c1c6c.s3tc.ctex", "res://.godot/imported/pirate_island_skull_base_color.png-b5836452a9a581e70c6c6405ed7c1c6c.etc2.ctex"]
 
 [params]
 

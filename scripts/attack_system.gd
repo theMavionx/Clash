@@ -10,6 +10,9 @@ extends Node3D
 @export var max_ships: int = 5
 @export var troop_spawn_delay: float = 0.2
 @export var troop_scale: float = 0.1
+@export var main_ship_controller_path: NodePath = NodePath("../MainShipController")
+@export_range(0.05, 1.0, 0.01) var hold_deploy_initial_delay: float = 0.24
+@export_range(0.05, 0.5, 0.01) var hold_deploy_repeat_interval: float = 0.10
 
 # ---------------------------------------------------------------------------
 # Ship rocking / bobbing animation constants
@@ -225,6 +228,18 @@ var _ship_markers: Array = []
 ## Incremented whenever combat placement/replay is cancelled. Delayed spawn
 ## timers capture this value so they cannot spawn troops after return_home.
 var _combat_generation: int = 0
+var _manual_deployment_mode: bool = false
+var _main_ship_ready_for_deployment: bool = false
+var _army_entries: Array[String] = []
+var _army_groups: Array[Dictionary] = []
+var _selected_group_idx: int = 0
+var _manual_deploy_index: int = 0
+var _main_ship_controller: Node = null
+var _hold_deploy_active: bool = false
+var _hold_deploy_elapsed: float = 0.0
+var _hold_deploy_next_delay: float = 0.0
+var _hold_deploy_hit: Vector3 = Vector3.INF
+var _hold_deploy_group_key: String = ""
 
 
 func _cancel_pending_combat_spawns() -> void:
@@ -249,6 +264,7 @@ func _ready() -> void:
 		return
 	ship_plane.visible = false
 	_refresh_placement_bounds()
+	_main_ship_controller = get_node_or_null(main_ship_controller_path)
 	WebLoadLogger.report("attack_system_ready_done")
 
 
@@ -272,7 +288,10 @@ func _refresh_placement_bounds() -> void:
 
 func _physics_process(delta: float) -> void:
 	delta = minf(delta, 0.1)
-	_separate_ships(delta)
+	if _manual_deployment_mode:
+		_update_hold_deployment(delta)
+	else:
+		_separate_ships(delta)
 
 
 ## Push overlapping ships apart so they never clip through each other.
@@ -304,40 +323,129 @@ func enter_attack_mode(fleet: Array = []) -> void:
 	ensure_combat_resources_loaded()
 	_cancel_pending_combat_spawns()
 	_refresh_placement_bounds()
-	is_attack_mode = true
+	_manual_deployment_mode = true
+	_main_ship_ready_for_deployment = false
+	is_attack_mode = false
 	_ships_placed = 0
 	_total_ships_launched = 0
-	_fleet = fleet
+	_manual_deploy_index = 0
+	_selected_group_idx = 0
+	_fleet = fleet.duplicate(true)
 	_ship_stop_positions.clear()
 	_ship_markers.clear()
-	var ship_count: int = mini(_fleet.size(), max_ships)
-	if ship_count == 0:
-		is_attack_mode = false
+	_army_entries.clear()
+	_army_groups.clear()
+	if _fleet.is_empty():
+		_manual_deployment_mode = false
+		_emit_army_info()
+		return
+	var raw_troops: Variant = _fleet[0].get("troops", [])
+	if raw_troops is Array:
+		for raw_entry in raw_troops:
+			var troop_entry: String = str(raw_entry).strip_edges()
+			if troop_entry == "" or troop_entry == "_SLOT_FILLER_":
+				continue
+			_army_entries.append(troop_entry)
+	_rebuild_army_groups()
+	if _army_entries.is_empty():
+		_manual_deployment_mode = false
+		_emit_army_info()
 		return
 	var audio = get_node_or_null("/root/AudioManager")
 	if audio and audio.has_method("play_pre_attack"):
 		audio.play_pre_attack()
-	# Build fleet summary for React HUD
-	var ships_data: Array = []
-	for i in mini(_fleet.size(), max_ships):
-		var ship = _fleet[i]
-		ships_data.append({
-			"level": ship.get("level", 1),
-			"troops": ship.get("troops", []),
-			"port_number": ship.get("port_number", i + 1),
-			"port_server_id": ship.get("port_server_id", -1),
-		})
-	var bridge: Node = get_node_or_null("/root/Bridge")
-	if bridge:
-		bridge.send_to_react("fleet_info", {"total_ships": ship_count, "placed": 0, "ships": ships_data})
+	_emit_army_info()
+	if ship_plane:
+		ship_plane.visible = false
+	_main_ship_controller = get_node_or_null(main_ship_controller_path)
+	if _main_ship_controller == null or not _main_ship_controller.has_method("sail_to_combat"):
+		push_error("AttackSystem: MainShipController is unavailable")
+		_manual_deployment_mode = false
+		return
+	print("[ATTACK_DEPLOY] main_ship_sailing units=", _army_entries.size())
+	await _main_ship_controller.sail_to_combat()
+	if not _manual_deployment_mode or _army_entries.is_empty():
+		return
+	_main_ship_ready_for_deployment = true
+	is_attack_mode = true
 	if ship_plane:
 		ship_plane.visible = true
-		var mat: StandardMaterial3D = StandardMaterial3D.new()
-		mat.albedo_color = Color(0.8, 0.1, 0.1, 0.35)
-		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-		ship_plane.material_override = mat
-	print("Attack mode ON - place up to %d ships from fleet!" % ship_count)
+	_emit_army_info()
+	print("[ATTACK_DEPLOY] manual_deployment_ready units=", _army_entries.size())
+
+
+func _rebuild_army_groups() -> void:
+	var previous_key: String = ""
+	if _selected_group_idx >= 0 and _selected_group_idx < _army_groups.size():
+		previous_key = str(_army_groups[_selected_group_idx].get("key", ""))
+	var group_map: Dictionary = {}
+	var group_order: Array[String] = []
+	for troop_entry in _army_entries:
+		var key: String = _normalize_troop_entry(troop_entry)
+		if not group_map.has(key):
+			group_map[key] = {"key": key, "label": key, "count": 0, "entries": []}
+			group_order.append(key)
+		group_map[key]["count"] = int(group_map[key].get("count", 0)) + 1
+		group_map[key]["entries"].append(troop_entry)
+	_army_groups.clear()
+	for key in group_order:
+		_army_groups.append(group_map[key])
+	_selected_group_idx = 0
+	if previous_key != "":
+		for i in _army_groups.size():
+			if str(_army_groups[i].get("key", "")) == previous_key:
+				_selected_group_idx = i
+				break
+
+
+func _emit_army_info() -> void:
+	var bridge: Node = get_node_or_null("/root/Bridge")
+	if bridge == null:
+		return
+	var ship_data: Dictionary = _fleet[0] if not _fleet.is_empty() else {}
+	bridge.send_to_react("fleet_info", {
+		"mode": "manual_troops",
+		"ready": _main_ship_ready_for_deployment,
+		"selected_group": _selected_group_idx,
+		"remaining": _army_entries.size(),
+		"ship": {
+			"level": int(ship_data.get("level", 1)),
+			"capacity": int(ship_data.get("capacity", _army_entries.size())),
+		},
+		"troop_groups": _army_groups.duplicate(true),
+		# Compatibility fields keep older cached React clients functional.
+		"total_ships": 1 if not ship_data.is_empty() else 0,
+		"placed": 1 if _main_ship_ready_for_deployment else 0,
+		"ships": [{
+			"level": int(ship_data.get("level", 1)),
+			"troops": _army_entries.duplicate(),
+			"placed": _army_entries.is_empty(),
+		}] if not ship_data.is_empty() else [],
+	})
+
+
+func remaining_undeployed_troops() -> int:
+	if not _manual_deployment_mode:
+		return 0
+	return _army_entries.size()
+
+
+func select_troop_group(index: int) -> int:
+	_stop_hold_deployment()
+	if _army_groups.is_empty():
+		_selected_group_idx = 0
+	else:
+		_selected_group_idx = clampi(index, 0, _army_groups.size() - 1)
+	_next_troop_idx = _selected_group_idx
+	_emit_army_info()
+	return _selected_group_idx
+
+
+func get_main_ship_node() -> Node3D:
+	_main_ship_controller = get_node_or_null(main_ship_controller_path)
+	if _main_ship_controller and _main_ship_controller.has_method("get_active_ship_node"):
+		return _main_ship_controller.get_active_ship_node()
+	return null
 
 
 ## Replay setup: same fleet data as attack mode, but no interactive placement
@@ -346,6 +454,7 @@ func enter_replay_mode(fleet: Array = []) -> void:
 	ensure_combat_resources_loaded()
 	_refresh_placement_bounds()
 	exit_attack_mode()
+	_manual_deployment_mode = false
 	_fleet = fleet.duplicate(true)
 	_ships_placed = 0
 	_total_ships_launched = 0
@@ -354,12 +463,12 @@ func enter_replay_mode(fleet: Array = []) -> void:
 	is_attack_mode = false
 	if ship_plane:
 		ship_plane.visible = false
-		ship_plane.material_override = null
 
 
 ## Temporarily hides the placement plane without resetting any state.
 ## Used when cannon mode activates mid-placement to prevent RMB conflicts.
 func _pause_attack_mode() -> void:
+	_stop_hold_deployment()
 	is_attack_mode = false
 	if ship_plane:
 		ship_plane.visible = false
@@ -367,36 +476,44 @@ func _pause_attack_mode() -> void:
 
 ## Restores the placement plane after cannon mode ends, if ships still remain.
 func _resume_attack_mode() -> void:
+	if _manual_deployment_mode:
+		if not _main_ship_ready_for_deployment or _army_entries.is_empty():
+			return
+		is_attack_mode = true
+		if ship_plane:
+			ship_plane.visible = true
+		return
 	if _ships_placed >= mini(_fleet.size(), max_ships):
 		return
 	is_attack_mode = true
 	if ship_plane:
 		ship_plane.visible = true
-		var mat: StandardMaterial3D = StandardMaterial3D.new()
-		mat.albedo_color = Color(0.8, 0.1, 0.1, 0.35)
-		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-		ship_plane.material_override = mat
 
 
 ## Called when all ships are placed — hides plane but keeps markers alive.
 func _finish_attack_mode() -> void:
+	_stop_hold_deployment()
 	is_attack_mode = false
-	_ships_placed = 0
+	_main_ship_ready_for_deployment = false
 	_ship_stop_positions.clear()
 	if ship_plane:
 		ship_plane.visible = false
-		ship_plane.material_override = null
 
 
 ## Deactivates attack mode, hides the placement plane, and frees any
 ## pending flag markers that were not yet cleaned up by arriving ships.
 func exit_attack_mode() -> void:
+	_stop_hold_deployment()
 	_cancel_pending_combat_spawns()
 	is_attack_mode = false
 	_ships_placed = 0
 	_total_ships_launched = 0
 	_next_troop_idx = 0
+	_manual_deployment_mode = false
+	_main_ship_ready_for_deployment = false
+	_army_entries.clear()
+	_army_groups.clear()
+	_manual_deploy_index = 0
 	# Kill any in-flight ship tweens to prevent orphaned troop deployment
 	for tw in _active_ship_tweens:
 		if tw and tw.is_valid():
@@ -410,7 +527,6 @@ func exit_attack_mode() -> void:
 	_ship_stop_positions.clear()
 	if ship_plane:
 		ship_plane.visible = false
-		ship_plane.material_override = null
 
 
 func cleanup_combat_nodes() -> void:
@@ -440,11 +556,23 @@ func _input(event: InputEvent) -> void:
 	if not is_attack_mode:
 		return
 
-	if event is InputEventMouseButton and event.pressed:
+	if event is InputEventMouseButton:
+		if event.button_index == MOUSE_BUTTON_LEFT and not event.pressed:
+			if _hold_deploy_active:
+				_stop_hold_deployment()
+				get_viewport().set_input_as_handled()
+			return
+		if not event.pressed:
+			return
 		if event.button_index == MOUSE_BUTTON_LEFT:
 			var hit = _get_mouse_hit()
 			if hit != Vector3.INF:
-				if _try_place_ship(hit):
+				if _manual_deployment_mode:
+					var selected_key: String = _selected_troop_group_key()
+					if _try_deploy_selected_troop(hit):
+						_start_hold_deployment(hit, selected_key)
+						get_viewport().set_input_as_handled()
+				elif _try_place_ship(hit):
 					get_viewport().set_input_as_handled()
 					if _ships_placed >= mini(_fleet.size(), max_ships):
 						_finish_attack_mode()
@@ -454,6 +582,67 @@ func _input(event: InputEvent) -> void:
 			# RMB is easy to hit accidentally in web builds. Do not cancel ship
 			# placement here; surrender/return_home are the explicit exits.
 			get_viewport().set_input_as_handled()
+	elif event is InputEventMouseMotion and _hold_deploy_active:
+		_hold_deploy_hit = _get_mouse_hit()
+		get_viewport().set_input_as_handled()
+
+
+func _selected_troop_group_key() -> String:
+	if _army_groups.is_empty():
+		return ""
+	_selected_group_idx = clampi(_selected_group_idx, 0, _army_groups.size() - 1)
+	return str(_army_groups[_selected_group_idx].get("key", ""))
+
+
+func _start_hold_deployment(hit: Vector3, group_key: String) -> void:
+	_hold_deploy_active = group_key != "" and hit != Vector3.INF
+	_hold_deploy_elapsed = 0.0
+	_hold_deploy_next_delay = maxf(0.05, hold_deploy_initial_delay)
+	_hold_deploy_hit = hit
+	_hold_deploy_group_key = group_key
+
+
+func _stop_hold_deployment() -> void:
+	_hold_deploy_active = false
+	_hold_deploy_elapsed = 0.0
+	_hold_deploy_next_delay = 0.0
+	_hold_deploy_hit = Vector3.INF
+	_hold_deploy_group_key = ""
+
+
+func _update_hold_deployment(delta: float) -> void:
+	if not _hold_deploy_active:
+		return
+	if not is_attack_mode or not _main_ship_ready_for_deployment or not Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
+		_stop_hold_deployment()
+		return
+	_hold_deploy_hit = _get_mouse_hit()
+	_advance_hold_deployment(delta)
+
+
+func _advance_hold_deployment(delta: float) -> void:
+	if not _hold_deploy_active:
+		return
+	_hold_deploy_elapsed += maxf(0.0, delta)
+	if _hold_deploy_elapsed < _hold_deploy_next_delay:
+		return
+	if _hold_deploy_hit == Vector3.INF:
+		return
+	var matching_group_index: int = -1
+	for i in _army_groups.size():
+		if str(_army_groups[i].get("key", "")) == _hold_deploy_group_key:
+			matching_group_index = i
+			break
+	if matching_group_index < 0:
+		_stop_hold_deployment()
+		return
+	_selected_group_idx = matching_group_index
+	_next_troop_idx = matching_group_index
+	if not _try_deploy_selected_troop(_hold_deploy_hit):
+		_stop_hold_deployment()
+		return
+	_hold_deploy_elapsed = 0.0
+	_hold_deploy_next_delay = maxf(0.05, hold_deploy_repeat_interval)
 
 
 func _get_mouse_hit() -> Vector3:
@@ -484,6 +673,105 @@ func _get_mouse_hit() -> Vector3:
 		return world_hit
 
 	return Vector3.INF
+
+
+func _try_deploy_selected_troop(hit: Vector3) -> bool:
+	if not _manual_deployment_mode or not _main_ship_ready_for_deployment:
+		return false
+	if not _is_within_ship_plane(hit) or _army_groups.is_empty():
+		return false
+	_selected_group_idx = clampi(_selected_group_idx, 0, _army_groups.size() - 1)
+	var selected_key: String = str(_army_groups[_selected_group_idx].get("key", ""))
+	var entry_index: int = -1
+	for i in _army_entries.size():
+		if _normalize_troop_entry(_army_entries[i]) == selected_key:
+			entry_index = i
+			break
+	if entry_index < 0:
+		return false
+	var troop_entry: String = _army_entries[entry_index]
+	var bs_ref: Node = get_node_or_null("../BuildingSystem")
+	var troop_key: String = _normalize_troop_entry(troop_entry)
+	var fallback_level: int = 1
+	if bs_ref and "troop_levels" in bs_ref:
+		fallback_level = int(bs_ref.troop_levels.get(troop_key, 1))
+	var troop_level: int = _troop_entry_level(troop_entry, fallback_level)
+	var deploy_pos: Vector3 = hit
+	if bs_ref and "grid_y" in bs_ref:
+		deploy_pos.y = float(bs_ref.grid_y)
+	if not _spawn_manual_troop(troop_entry, troop_level, deploy_pos, _manual_deploy_index):
+		push_warning("AttackSystem: deployment failed for %s; keeping it in the roster" % troop_key)
+		return false
+	_army_entries.remove_at(entry_index)
+	if bs_ref and bs_ref.is_viewing_enemy:
+		var t: float = Time.get_ticks_msec() / 1000.0 - bs_ref._battle_start_time
+		bs_ref._battle_replay.append({
+			"t": t,
+			"type": "deploy_troop",
+			"deploy_index": _manual_deploy_index,
+			"troop": troop_entry,
+			"troopType": troop_key,
+			"troopLevel": troop_level,
+			"x": hit.x,
+			"z": hit.z,
+		})
+	_manual_deploy_index += 1
+	_total_ships_launched = 1
+	var audio: Node = get_node_or_null("/root/AudioManager")
+	if _manual_deploy_index == 1 and audio and audio.has_method("play_fight"):
+		audio.play_fight()
+	_rebuild_army_groups()
+	if _army_entries.is_empty():
+		_finish_attack_mode()
+	_emit_army_info()
+	print("[ATTACK_DEPLOY] troop=", troop_key, " remaining=", _army_entries.size(), " x=", hit.x, " z=", hit.z)
+	return true
+
+
+func _spawn_manual_troop(troop_entry: String, troop_level: int, spawn_pos: Vector3, deploy_index: int) -> bool:
+	var troop_key: String = _normalize_troop_entry(troop_entry)
+	var cached: Dictionary = _get_or_load_troop_resources(troop_key)
+	var model_res: Resource = cached.get("model", null)
+	var script_res: Resource = cached.get("script", null)
+	if model_res == null or script_res == null:
+		push_warning("AttackSystem: troop resources are missing for %s" % troop_key)
+		return false
+	var bs_ref: Node = get_node_or_null("../BuildingSystem")
+	_spawn_troop_after_delay(
+		0.0,
+		_combat_generation,
+		model_res,
+		script_res,
+		"TroopDeploy_%d" % deploy_index,
+		deploy_index,
+		troop_level,
+		spawn_pos,
+		Vector3.ZERO,
+		spawn_pos.y,
+		bs_ref,
+		troop_entry,
+		true
+	)
+	return true
+
+
+func replay_deploy_troop(action: Dictionary) -> bool:
+	var troop_entry: String = str(action.get("troop", action.get("troop_entry", action.get("troopType", "")))).strip_edges()
+	if troop_entry == "":
+		return false
+	var troop_key: String = _normalize_troop_entry(troop_entry)
+	var level: int = int(action.get("troopLevel", action.get("troop_level", 1)))
+	_refresh_placement_bounds()
+	var spawn_pos := Vector3(float(action.get("x", 0.0)), plane_y, float(action.get("z", 0.0)))
+	var bs_ref: Node = get_node_or_null("../BuildingSystem")
+	if bs_ref and "grid_y" in bs_ref:
+		spawn_pos.y = float(bs_ref.grid_y)
+	var replay_index: int = int(action.get("deploy_index", _manual_deploy_index))
+	var spawned: bool = _spawn_manual_troop(troop_entry, _troop_entry_level(troop_entry, level), spawn_pos, replay_index)
+	if spawned:
+		_manual_deploy_index = maxi(_manual_deploy_index, replay_index + 1)
+		print("[ATTACK_REPLAY] deploy_troop troop=", troop_key, " index=", replay_index)
+	return spawned
 
 
 ## Returns a stop position offset laterally so it doesn't overlap existing ships.
@@ -881,7 +1169,8 @@ func _spawn_troop_after_delay(
 	offset: Vector3,
 	building_y: float,
 	bs_ref: Node,
-	troop_entry: String = ""
+	troop_entry: String = "",
+	exact_position: bool = false
 ) -> void:
 	var ok: bool = await _wait_combat_delay(delay, spawn_generation)
 	if not ok:
@@ -899,7 +1188,7 @@ func _spawn_troop_after_delay(
 	var final_troop_scale := _scale_for_troop(troop_node_name, troop_scale)
 	troop._spawn_scale = final_troop_scale
 	troop.scale = Vector3(final_troop_scale, final_troop_scale, final_troop_scale)
-	troop.global_position = BaseTroop._clamp_to_island(troop_spawn_pos + offset)
+	troop.global_position = troop_spawn_pos + offset if exact_position else BaseTroop._clamp_to_island(troop_spawn_pos + offset)
 	troop.global_position.y = building_y
 	if offset == Vector3.ZERO:
 		troop._sep_counter = 0

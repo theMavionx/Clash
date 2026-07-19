@@ -95,6 +95,7 @@ const THUMBNAIL_MAP = {
   mortar: imgMortar,
   storage: imgStorage,
   altar: imgAltar,
+  main_ship: imgShip,
 };
 
 const THUMBNAIL_STYLE_MAP = {
@@ -112,6 +113,7 @@ const DESC_MAP = {
   sawmill: 'Sawmills produce wood over time.',
   barn: 'Trains troops.',
   port: 'Deploy ships to attack.',
+  main_ship: 'Carries your army into battle. Upgrade it to unlock more troop capacity.',
   town_hall: 'The heart of your village.',
   turret: 'Targets ground enemies.',
   tombstone: 'Spawns skeletons to defend.',
@@ -721,6 +723,11 @@ function BuildingInfoPanel({ onOpenTroops }) {
     setView('ACTIONS'); // Close after upgrading
   }, [sendToGodot]);
 
+  const handleMainShipUpgrade = useCallback(() => {
+    sendToGodot('upgrade_main_ship');
+    setView('ACTIONS');
+  }, [sendToGodot]);
+
   const handleBuyShip = useCallback(() => {
     sendToGodot('buy_ship');
     setView('ACTIONS'); // Close after upgrading
@@ -896,7 +903,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
   if (!building) return null;
 
   const isMaxLevel = building.level >= building.max_level;
-  const upgHealth = Math.floor(building.max_hp * 0.2);
+  const upgHealth = Math.floor(Number(building.max_hp || 0) * 0.2);
 
   const renderActions = () => (
     <div style={{ ...styles.actionsWrap, ...isMobile && { bottom: 130, gap: 16 } }}>
@@ -904,10 +911,12 @@ function BuildingInfoPanel({ onOpenTroops }) {
         <span style={styles.actionName}>{building.name}</span>
         <span style={styles.actionLevel}>Level {building.level}</span>
       </div>
-      {(building.is_enemy || building.id === 'altar' || (isMaxLevel && building.id !== 'altar')) && (
+      {(building.is_enemy || building.id === 'altar' || building.id === 'main_ship' || (isMaxLevel && building.id !== 'altar')) && (
         <button
           style={{ ...styles.circleBtn, ...styles.btnInfo }}
           onClick={() => setView('INFO')}
+          title="Info"
+          aria-label="Info"
           onMouseOver={e => e.currentTarget.style.transform = 'scale(1.05)'}
           onMouseOut={e => e.currentTarget.style.transform = 'scale(1)'}
           onMouseDown={e => e.currentTarget.style.transform = 'scale(0.95)'}
@@ -984,10 +993,12 @@ function BuildingInfoPanel({ onOpenTroops }) {
         </button>
       )}
 
-      {building.id === 'port' && !building.is_enemy && building.has_ship && (
+      {(building.id === 'main_ship' || (building.id === 'port' && building.has_ship)) && !building.is_enemy && (
         <button
           style={{ ...styles.circleBtn, ...styles.btnTroops }}
           onClick={() => setView('LOAD_TROOPS')}
+          title="Add Troops"
+          aria-label="Add Troops"
           onMouseOver={e => e.currentTarget.style.transform = 'scale(1.05)'}
           onMouseOut={e => e.currentTarget.style.transform = 'scale(1)'}
           onMouseDown={e => e.currentTarget.style.transform = 'scale(0.95)'}
@@ -1006,6 +1017,8 @@ function BuildingInfoPanel({ onOpenTroops }) {
         <button 
           style={{ ...styles.circleBtn, ...styles.btnUpgrade, ...isMobile && { width: 56, height: 56 } }} 
           onClick={() => setView('UPGRADE')}
+          title="Upgrade"
+          aria-label="Upgrade"
           onMouseOver={e => e.currentTarget.style.transform = 'scale(1.05)'}
           onMouseOut={e => e.currentTarget.style.transform = 'scale(1)'}
           onMouseDown={e => e.currentTarget.style.transform = 'scale(0.95)'}
@@ -1131,6 +1144,30 @@ function BuildingInfoPanel({ onOpenTroops }) {
 
   const renderInfo = () => {
     const description = DESC_MAP[building.id];
+    if (building.id === 'main_ship') {
+      const capacity = Number(building.ship_capacity || 0);
+      const loaded = Array.isArray(building.ship_troops) ? building.ship_troops.length : 0;
+      const leftContent = (
+        <>
+          <StatBox label="Troop Capacity" current={capacity} />
+          <StatBox label="Loaded Slots" current={loaded} />
+          <StatBox label="Level" current={building.ship_level || building.level} />
+        </>
+      );
+      const rightContent = (
+        <>
+          <h3 style={styles.sectionTitle}>Description</h3>
+          <div style={styles.descriptionBox}>
+            <span style={styles.descriptionText}>{description}</span>
+          </div>
+          <h3 style={styles.sectionTitle}>Status</h3>
+          <div style={{...styles.reqBoxMax, padding: 16, background: 'rgba(0, 0, 0, 0.05)', borderRadius: 8, border: '1px solid rgba(0, 0, 0, 0.1)', boxShadow: 'inset 0 1px 2px rgba(255,255,255,0.5)'}}>
+            <span style={{color: '#377d9f', fontSize: 16, fontWeight: 800}}>Ready for battle</span>
+          </div>
+        </>
+      );
+      return renderModal('MAIN SHIP', building.ship_level || building.level, leftContent, buildingImg, rightContent, null, null);
+    }
     const leftContent = (
       <>
         <StatBox label="Health" current={building.max_hp} />
@@ -1253,6 +1290,28 @@ function BuildingInfoPanel({ onOpenTroops }) {
   };
 
   const renderUpgrade = () => {
+    if (building.id === 'main_ship') {
+      const currentLevel = Number(building.ship_level || building.level || 1);
+      const currentCapacity = Number(building.ship_capacity || 0);
+      const nextCapacity = Number(building.ship_next_capacity || currentCapacity);
+      const shipUpgradeCost = building.ship_upgrade_cost || {};
+      const leftContent = (
+        <>
+          <StatBox label="Troop Capacity" current={currentCapacity} upgradeTo={nextCapacity} />
+          <StatBox label="Level" current={currentLevel} upgradeTo={currentLevel + 1} />
+        </>
+      );
+      const rightContent = <ResourceReqs costObj={shipUpgradeCost} title="Upgrade Cost" />;
+      return renderModal(
+        'UPGRADE MAIN SHIP',
+        currentLevel,
+        leftContent,
+        buildingImg,
+        rightContent,
+        'Upgrade Now',
+        handleMainShipUpgrade,
+      );
+    }
     const leftContent = (
       <>
         <StatBox label="Health" current={building.max_hp} upgradeTo={building.max_hp + upgHealth} />
@@ -1425,6 +1484,9 @@ function BuildingInfoPanel({ onOpenTroops }) {
     const shipLevel = building.ship_level || 1;
     const shipTroops = localTroops || building.ship_troops || [];
     const capacity = building.ship_capacity || shipLevel * 3;
+    const isMainShip = building.id === 'main_ship';
+    const shipUpgradeCost = building.ship_upgrade_cost || {};
+    const canAffordShipUpgrade = ['gold', 'wood', 'ore'].every((key) => Number(resources?.[key] || 0) >= Number(shipUpgradeCost?.[key] || 0));
     const portNumber = Number(building.port_number || 0);
     const troopLvls = building.troop_levels || {};
     const getTroopLvl = (name) => {
@@ -1636,10 +1698,20 @@ function BuildingInfoPanel({ onOpenTroops }) {
           {/* Header */}
           <div style={{...LT.header, height: isMobile ? 44 : 54}}>
             <span style={{...LT.headerTitle, fontSize: isMobile ? 18 : 24}}>
-              {portNumber ? `Choose Troops - P${portNumber}` : 'Choose Troops'}
+              {isMainShip ? `Main Ship Lv.${shipLevel}` : portNumber ? `Choose Troops - P${portNumber}` : 'Choose Troops'}
             </span>
             <button style={LT.closeBtn} onClick={handleClose}>X</button>
           </div>
+
+          {isMainShip && (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: isMobile ? '8px 10px' : '10px 16px', background: '#efe3c8', borderBottom: '2px solid #cbb98f' }}>
+              <div style={{ color: '#5C3A21', fontWeight: 900, fontSize: isMobile ? 11 : 13 }}>
+                Capacity {capacity}{shipLevel < 5 ? ` · Next ${[3, 12, 27, 36, 45][shipLevel]}` : ' · MAX LEVEL'}
+                {shipLevel < 5 && <div style={{ color: '#8b6b3f', fontSize: isMobile ? 9 : 10, marginTop: 2 }}>{Object.entries(shipUpgradeCost).map(([key, value]) => `${value} ${key}`).join(' · ')}</div>}
+              </div>
+              {shipLevel < 5 && <button type="button" disabled={!canAffordShipUpgrade} onClick={() => sendToGodot('upgrade_main_ship')} style={{ padding: isMobile ? '8px 12px' : '10px 16px', border: '2px solid #7d5d24', borderRadius: 7, background: canAffordShipUpgrade ? '#f3ba35' : '#c8baa0', color: '#4b2b16', fontWeight: 900, cursor: canAffordShipUpgrade ? 'pointer' : 'not-allowed', fontFamily: 'inherit' }}>UPGRADE</button>}
+            </div>
+          )}
 
           {/* Loaded troops slots */}
           <div style={{...LT.loadedBar, padding: isMobile ? '11px 10px' : '12px 16px', flexWrap: 'wrap', gap: isMobile ? 7 : 8, ...(mobileLoadedBarStyle || {})}}>
@@ -2270,7 +2342,9 @@ const styles = {
     width: 88,
     height: 88,
     borderRadius: 18,
-    border: '4px solid #84dfff',
+    borderWidth: 4,
+    borderStyle: 'solid',
+    borderColor: '#84dfff',
     background: 'linear-gradient(180deg, #1cc9ff, #1182d5)',
     boxShadow: '0 8px 0 rgba(2, 30, 54, 0.55), 0 10px 20px rgba(0,0,0,0.35), inset 0 2px 0 rgba(255,255,255,0.45)',
     color: '#fff',
@@ -2682,7 +2756,9 @@ const styles = {
     gap: 9,
   },
   flagLibraryCard: {
-    border: '3px solid #b89455',
+    borderWidth: 3,
+    borderStyle: 'solid',
+    borderColor: '#b89455',
     borderRadius: 12,
     background: 'rgba(255,255,255,0.3)',
     boxShadow: '0 4px 0 rgba(90,54,22,0.18), inset 0 2px 0 rgba(255,255,255,0.52)',

@@ -18,6 +18,15 @@ const COLLECT_ICON_TEXTURES: Dictionary = {
 	"gold": "res://Model/Resources/gold_bar.png",
 }
 
+const COLLECTION_FEEDBACK_COLORS: Dictionary = {
+	"gold": Color(0.90, 0.75, 0.20),
+	"wood": Color(0.45, 0.70, 0.30),
+	"ore": Color(0.60, 0.65, 0.70),
+}
+const COLLECTION_FEEDBACK_SIZE := Vector2(180.0, 52.0)
+const COLLECTION_FEEDBACK_RISE := 62.0
+const COLLECTION_FEEDBACK_DURATION := 1.05
+
 # ── Back-reference to BuildingSystem ──────────────────────────
 ## The Node3D that owns this helper (a BuildingSystem instance).
 var bs: Node3D
@@ -220,6 +229,8 @@ func _create_collect_icon(b: Dictionary, building_node: Node3D, def: Dictionary)
 ## Handle a tap/click on a collect icon: hide it, fire the flying animation,
 ## then sync resources with the server.
 func _click_collect_icon(btn: Control, b: Dictionary, res_type: String) -> void:
+	if bool(b.get("_collecting", false)):
+		return
 	# Block collection if storage is full
 	var current: int = int(bs.resources.get(res_type, 0))
 	var caps: Dictionary = bs._get_resource_caps()
@@ -230,9 +241,7 @@ func _click_collect_icon(btn: Control, b: Dictionary, res_type: String) -> void:
 	var start_pos: Vector2 = btn.global_position + btn.size / 2.0
 	btn.visible = false
 	btn.set_meta("anim_scale", 0.0)
-	_play_collect_sfx(res_type)
-	_spawn_collection_flying_icon(start_pos, res_type)
-	_collect_and_animate(b, res_type)
+	_collect_and_animate(b, res_type, start_pos)
 
 
 func _play_collect_sfx(res_type: String) -> void:
@@ -307,14 +316,92 @@ func _spawn_collection_flying_icon(start_pos: Vector2, res_type: String) -> void
 			.set_delay(fly_dur * 0.8)
 		tw.chain().tween_callback(flying.queue_free)
 
+
+func _format_collection_amount(amount: int) -> String:
+	var digits := str(maxi(amount, 0))
+	var formatted := ""
+	while digits.length() > 3:
+		formatted = " " + digits.right(3) + formatted
+		digits = digits.left(digits.length() - 3)
+	return digits + formatted
+
+
+func _collection_feedback_position(b: Dictionary) -> Vector2:
+	var icon := b.get("_collect_icon") as Control
+	if is_instance_valid(icon):
+		return icon.global_position + icon.size * 0.5
+	var node := b.get("node") as Node3D
+	var cam := BaseTroop._get_camera_cached()
+	if is_instance_valid(node) and is_instance_valid(cam):
+		var def: Dictionary = bs.building_defs.get(b.get("id", ""), {})
+		var world_pos := node.global_position + Vector3(0.0, float(def.get("height", 0.35)) + 0.16, 0.0)
+		if not cam.is_position_behind(world_pos):
+			return cam.unproject_position(world_pos)
+	return bs.get_viewport().get_visible_rect().size * 0.5
+
+
+## Show the authoritative amount credited by a completed collection. The label
+## lives in screen space so it remains legible at every camera zoom.
+func _spawn_collection_amount_feedback(start_pos: Vector2, res_type: String, amount: int) -> Label:
+	if amount <= 0:
+		return null
+	var label := Label.new()
+	label.name = "CollectionAmountFeedback_%s" % res_type.capitalize()
+	label.text = "+%s" % _format_collection_amount(amount)
+	label.size = COLLECTION_FEEDBACK_SIZE
+	label.pivot_offset = COLLECTION_FEEDBACK_SIZE * 0.5
+	label.position = start_pos - Vector2(COLLECTION_FEEDBACK_SIZE.x * 0.5, COLLECTION_FEEDBACK_SIZE.y + 12.0)
+	label.scale = Vector2.ONE * 0.72
+	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	label.add_theme_font_size_override("font_size", 30)
+	label.add_theme_color_override("font_color", COLLECTION_FEEDBACK_COLORS.get(res_type, Color.WHITE))
+	label.add_theme_color_override("font_outline_color", Color(0.12, 0.08, 0.04, 0.96))
+	label.add_theme_constant_override("outline_size", 8)
+	label.add_theme_color_override("font_shadow_color", Color(0.0, 0.0, 0.0, 0.45))
+	label.add_theme_constant_override("shadow_offset_x", 2)
+	label.add_theme_constant_override("shadow_offset_y", 3)
+	label.z_index = 120
+
+	if bs.world_ui_canvas:
+		bs.world_ui_canvas.add_child(label)
+	else:
+		bs.add_child(label)
+
+	var start := label.position
+	var rise_target := start - Vector2(0.0, COLLECTION_FEEDBACK_RISE)
+	var tween := label.create_tween()
+	tween.set_parallel(true)
+	tween.tween_property(label, "position", start - Vector2(0.0, 14.0), 0.18) \
+		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tween.tween_property(label, "scale", Vector2.ONE * 1.12, 0.18) \
+		.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tween.set_parallel(false)
+	tween.tween_property(label, "scale", Vector2.ONE, 0.10) \
+		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tween.set_parallel(true)
+	tween.tween_property(label, "position", rise_target, COLLECTION_FEEDBACK_DURATION - 0.28) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tween.tween_property(label, "modulate:a", 0.0, 0.38) \
+		.set_delay(COLLECTION_FEEDBACK_DURATION - 0.66).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
+	tween.set_parallel(false)
+	tween.tween_callback(label.queue_free)
+	return label
+
 ## Deduct stored amount from the building, optionally sync with server, then
 ## tween the on-screen resource counter up to the new total.
-func _collect_and_animate(b: Dictionary, res_type: String) -> void:
+func _collect_and_animate(b: Dictionary, res_type: String, feedback_pos: Vector2 = Vector2.INF) -> void:
+	if bool(b.get("_collecting", false)):
+		return
 	var server_id: int  = b.get("server_id", -1)
 	var local_amount: int = int(b.get("stored", 0.0))
 	if local_amount <= 0:
 		return
+	b["_collecting"] = true
 	b["stored"] = 0.0
+	if not feedback_pos.is_finite():
+		feedback_pos = _collection_feedback_position(b)
 
 	var old_val: int    = int(bs.resources.get(res_type, 0))
 	var target_val: int = old_val + local_amount
@@ -323,6 +410,20 @@ func _collect_and_animate(b: Dictionary, res_type: String) -> void:
 	if net and net.has_token():
 		var result = await net.collect_resources(server_id)
 		if result.has("error"):
+			var restored_stored := float(b.get("stored", 0.0)) + float(local_amount)
+			var def: Dictionary = bs.building_defs.get(b.get("id", ""), {})
+			var max_values: Array = def.get("produce_max", [])
+			if not max_values.is_empty():
+				var level_index := clampi(int(b.get("level", 1)) - 1, 0, max_values.size() - 1)
+				restored_stored = minf(restored_stored, float(max_values[level_index]))
+			b["stored"] = restored_stored
+			b["_collecting"] = false
+			var icon := b.get("_collect_icon") as Control
+			if is_instance_valid(icon):
+				icon.visible = true
+				icon.set_meta("anim_scale", 1.0)
+			if bs.has_method("_show_error"):
+				bs._show_error(str(result.error))
 			return
 		if result.has("resources"):
 			target_val = int(result.resources.get(res_type, target_val))
@@ -331,6 +432,14 @@ func _collect_and_animate(b: Dictionary, res_type: String) -> void:
 					bs.resources[k] = result.resources[k]
 	else:
 		target_val = old_val + local_amount
+
+	var credited_amount := maxi(0, target_val - old_val)
+	if credited_amount <= 0:
+		credited_amount = local_amount
+	b["_collecting"] = false
+	_play_collect_sfx(res_type)
+	_spawn_collection_flying_icon(feedback_pos, res_type)
+	_spawn_collection_amount_feedback(feedback_pos, res_type, credited_amount)
 
 	var tw := bs.create_tween().set_trans(Tween.TRANS_LINEAR).set_ease(Tween.EASE_IN_OUT)
 	tw.tween_method(
@@ -372,6 +481,10 @@ func _animate_agent_collection(b: Dictionary, result: Dictionary) -> void:
 	var old_val: int = int(bs.resources.get(res_type, 0))
 	var resources_after: Dictionary = result.get("resources", {})
 	var target_val: int = int(resources_after.get(res_type, old_val + int(result.get("collected", 0))))
+	var credited_amount := maxi(0, target_val - old_val)
+	if credited_amount <= 0:
+		credited_amount = maxi(0, int(result.get("collected", 0)))
+	_spawn_collection_amount_feedback(start_pos, res_type, credited_amount)
 	for k in ["gold", "wood", "ore"]:
 		if k != res_type and resources_after.has(k):
 			bs.resources[k] = resources_after[k]

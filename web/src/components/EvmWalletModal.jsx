@@ -400,7 +400,9 @@ const M = {
   providerBtn: {
     display: 'flex', alignItems: 'center', gap: 12,
     padding: '12px 14px', borderRadius: 12,
-    border: '2px solid #377d9f',
+    borderWidth: 2,
+    borderStyle: 'solid',
+    borderColor: '#377d9f',
     background: '#fff',
     color: '#1a3c4f', fontSize: 15, fontWeight: 800,
     textAlign: 'left', outline: 'none',

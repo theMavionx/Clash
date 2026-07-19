@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node index.js",
     "dev": "node --watch index.js",
+    "test:decibel-tpsl": "node test-decibel-tpsl-builder.js",
     "test:gmtrade": "node test-gmtrade.js"
   },
   "type": "commonjs",

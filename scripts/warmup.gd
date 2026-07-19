@@ -48,6 +48,8 @@ var _runtime_warmup_nodes: Array[Node] = []
 var _combat_frames_elapsed: int = 0
 var _fire_dragon_warmup_inst: Node = null
 var _fire_dragon_repeat_index: int = 0
+var _includes_combat_warmup: bool = false
+var _combat_assets_spawned: bool = false
 
 
 static func start_combat_warmup(parent: Node) -> Node:
@@ -76,12 +78,23 @@ func _ready() -> void:
 	_last_report_ticks = _started_ticks
 	position = WARMUP_POS
 	scale = WARMUP_SCALE
-	print("[WARMUP_PROFILE] start mode=", mode, " frames=", COMBAT_WARMUP_FRAMES if mode == "combat" else HOME_WARMUP_FRAMES)
+	_includes_combat_warmup = mode == "combat" or (mode == "home" and not _combat_warmup_done)
+	print(
+		"[WARMUP_PROFILE] start mode=", mode,
+		" frames=", COMBAT_WARMUP_FRAMES if _includes_combat_warmup else HOME_WARMUP_FRAMES,
+		" includes_combat=", _includes_combat_warmup
+	)
 	if mode == "combat":
 		_frames_left = COMBAT_WARMUP_FRAMES
-		_spawn_combat_warmup_nodes()
 	else:
+		# The first attack used to pay this exact combat setup cost after the
+		# clouds closed. Run it once under the initial loading overlay instead.
+		# `start_combat_warmup()` still remains the runtime safety fallback.
 		_frames_left = HOME_WARMUP_FRAMES
+		if _includes_combat_warmup:
+			_frames_left = maxi(HOME_WARMUP_FRAMES, COMBAT_WARMUP_FRAMES)
+			_combat_warmup_active = true
+			_combat_warmup_node = self
 		_report_loading_progress(76, "home_warmup_start")
 		_spawn_home_warmup_nodes()
 		_report_loading_progress(82, "home_warmup_assets")
@@ -89,7 +102,13 @@ func _ready() -> void:
 
 
 func _process(_delta: float) -> void:
-	if mode == "combat":
+	if _includes_combat_warmup:
+		if not _combat_assets_spawned:
+			# Some warmup representatives create their own child VFX. Running this
+			# one frame after `_ready()` avoids mutating nodes while Godot is still
+			# assembling the scene tree.
+			_spawn_combat_warmup_nodes()
+			_combat_assets_spawned = true
 		_combat_frames_elapsed += 1
 		var now := Time.get_ticks_msec()
 		print(
@@ -102,7 +121,8 @@ func _process(_delta: float) -> void:
 		_process_fire_dragon_prewarm_frames()
 	_frames_left -= 1
 	if mode != "combat":
-		var total: int = HOME_WARMUP_FRAMES if HOME_WARMUP_FRAMES > 0 else 1
+		var total: int = maxi(HOME_WARMUP_FRAMES, COMBAT_WARMUP_FRAMES) if _includes_combat_warmup else HOME_WARMUP_FRAMES
+		total = maxi(1, total)
 		var completed: int = total - _frames_left
 		if completed < 0:
 			completed = 0
@@ -112,13 +132,13 @@ func _process(_delta: float) -> void:
 		_report_loading_progress(progress, "home_warmup_frames")
 	if _frames_left <= 0:
 		var finished_ticks := Time.get_ticks_msec()
-		if mode == "combat":
+		if _includes_combat_warmup:
 			_combat_warmup_done = true
 			_combat_warmup_active = false
 			_combat_warmup_node = null
-		else:
+		if mode != "combat":
 			_report_loading_progress(88, "home_warmup_done")
-		_clear_runtime_warmup_nodes()
+			_clear_runtime_warmup_nodes()
 		print(
 			"[WARMUP_PROFILE] finish mode=", mode,
 			" total_ms=", Time.get_ticks_msec() - _started_ticks,

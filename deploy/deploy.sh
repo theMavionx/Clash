@@ -804,6 +804,12 @@ copy_source_to_release() {
         --exclude='shared' \
         "$SOURCE_DIR/" "$RELEASE_DIR/"
 
+    log "Generating server combat grid snapshot from deployed Godot scene..."
+    node "$RELEASE_DIR/tools/combat-grid/generate-combat-grid-config.cjs" \
+        --scene "$RELEASE_DIR/scenes/Main.tscn" \
+        --out "$RELEASE_DIR/server/combat_grid.generated.json" \
+        || die "Combat grid generation failed"
+
     if [ "$GODOT_CHANGED" = "1" ]; then
         [ -f "$WEB_DIR/public/godot/Work.pck" ] \
             || die "Godot export missing at $WEB_DIR/public/godot/Work.pck. Export locally and upload web/public/godot before deploy."

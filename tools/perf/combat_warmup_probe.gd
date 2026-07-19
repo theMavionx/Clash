@@ -15,6 +15,9 @@ func _run() -> void:
 	if "--dragon-only" in OS.get_cmdline_user_args():
 		await _run_dragon_only()
 		return
+	if "--startup-cache" in OS.get_cmdline_user_args():
+		await _run_startup_cache_probe()
+		return
 	var parent := Node3D.new()
 	root.add_child(parent)
 	var script_started := Time.get_ticks_msec()
@@ -36,6 +39,48 @@ func _run() -> void:
 	var frame_ms := Time.get_ticks_msec() - frame_started
 	print("[WARMUP_PROBE] script_ms=%d spawn_ms=%d frame_ms=%d frames=%d" % [script_ms, spawn_ms, frame_ms, frames])
 	warmup = null
+	warmup_script = null
+	parent.queue_free()
+	await process_frame
+	await process_frame
+	quit()
+
+
+func _run_startup_cache_probe() -> void:
+	var parent := Node3D.new()
+	root.add_child(parent)
+	var warmup_script: Script = ResourceLoader.load("res://scripts/warmup.gd", "Script")
+	if warmup_script == null:
+		push_error("[WARMUP_PROBE] unable to load warmup.gd")
+		quit(1)
+		return
+
+	var home_warmup: Node = warmup_script.new()
+	home_warmup.set("mode", "home")
+	parent.add_child(home_warmup)
+	var frames := 0
+	while is_instance_valid(home_warmup) and not bool(home_warmup.get("_finished_emitted")) and frames < 240:
+		await process_frame
+		frames += 1
+	var startup_finished := not is_instance_valid(home_warmup) or bool(home_warmup.get("_finished_emitted"))
+	var reload_warmup: Node = warmup_script.new()
+	reload_warmup.set("mode", "home")
+	parent.add_child(reload_warmup)
+	var reload_skipped_combat := not bool(reload_warmup.get("_includes_combat_warmup"))
+	var attack_warmup: Node = warmup_script.start_combat_warmup(parent)
+	var cache_hit := startup_finished and reload_skipped_combat and attack_warmup == null
+	print(
+		"[WARMUP_PROBE] startup_cache finished=%s reload_skipped=%s attack_skipped=%s frames=%d" %
+		[startup_finished, reload_skipped_combat, attack_warmup == null, frames]
+	)
+	if not cache_hit:
+		push_error("[WARMUP_PROBE] startup combat warmup was not reused by first attack")
+		quit(1)
+		return
+	home_warmup = null
+	reload_warmup.queue_free()
+	reload_warmup = null
+	attack_warmup = null
 	warmup_script = null
 	parent.queue_free()
 	await process_frame

@@ -20,6 +20,10 @@ const {
   cannonShotCost, VALID_TROOP_TYPES, normalizeNftRarity,
 } = require('./combat_defs');
 const { BUILDING_DEFS } = require('./db');
+const {
+  clampWorldPointToGrid,
+  clampWorldPointToGridUnion,
+} = require('./combat_grid_config');
 const TROOP_PROJECTILE_SPAWN_Y = 0.154; // troop global Y + BaseTroop.PROJECTILE_SPAWN_Y in Godot telemetry
 const TROOP_TARGET_AIM_Y = 0.05;       // BaseTroop.TARGET_AIM_Y
 const TOWER_PROJECTILE_SPAWN_Y = 0.05;
@@ -172,26 +176,6 @@ function angleDiff(a, b) {
   return Math.abs(((a - b + Math.PI) % twoPi) - Math.PI);
 }
 
-function clampToIsland(pos, gc) {
-  if (!isValidGridConfig(gc)) return pos;
-  const extentX = gc.grid_extent_x * 1.05;
-  const extentZ = gc.grid_extent_z * 1.05;
-  const dx = pos.x - gc.grid_center_x;
-  const dz = pos.z - gc.grid_center_z;
-  const cosNeg = Math.cos(-gc.grid_rotation);
-  const sinNeg = Math.sin(-gc.grid_rotation);
-  let localX = dx * cosNeg - dz * sinNeg;
-  let localZ = dx * sinNeg + dz * cosNeg;
-  localX = clamp(localX, -extentX * 0.5, extentX * 0.5);
-  localZ = clamp(localZ, -extentZ * 0.5, extentZ * 0.5);
-  const cosR = Math.cos(gc.grid_rotation);
-  const sinR = Math.sin(gc.grid_rotation);
-  return {
-    x: gc.grid_center_x + localX * cosR - localZ * sinR,
-    z: gc.grid_center_z + localX * sinR + localZ * cosR,
-  };
-}
-
 function lerp(a, b, weight) {
   return a + (b - a) * weight;
 }
@@ -243,7 +227,7 @@ function checkStuck(t, myAngle) {
   t._stuckTimer = 0;
 }
 
-function applyMovementSteering(t, moveX, moveZ, target, aliveTroops, aliveGuards, aliveBuildings, defaultGridConfig) {
+function applyMovementSteering(t, moveX, moveZ, target, aliveTroops, aliveGuards, aliveBuildings, movementGridConfigs) {
   let sepX = 0;
   let sepZ = 0;
   const sepRangeSq = SEPARATION_RADIUS * SEPARATION_RADIUS * 4.0;
@@ -295,7 +279,7 @@ function applyMovementSteering(t, moveX, moveZ, target, aliveTroops, aliveGuards
 
   t.x += moveX + sepX * SEPARATION_FORCE * TICK_DT * 3.0;
   t.z += moveZ + sepZ * SEPARATION_FORCE * TICK_DT * 3.0;
-  const clamped = clampToIsland(t, defaultGridConfig);
+  const clamped = clampWorldPointToGridUnion(movementGridConfigs, t, 1.05);
   t.x = clamped.x;
   t.z = clamped.z;
 }
@@ -611,6 +595,9 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
   if (!actions || !Array.isArray(actions)) {
     return { valid: false, reason: 'No actions' };
   }
+  const movementGridConfigs = [gridConfigMap['0'], gridConfigMap['2']]
+    .filter(isValidGridConfig);
+  if (movementGridConfigs.length === 0) movementGridConfigs.push(defaultGridConfig);
 
   // Init buildings with world coordinates
   const buildings = defenderBuildings.map(b => {
@@ -638,6 +625,7 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
   const wardDamage = (damage) => Math.ceil((Number(damage) || 0) * (1 + wardPct / 100));
   let nextTroopId = 0;
   let shipsPlaced = 0;
+  let troopsManuallyDeployed = 0;
   const pendingSpawns = [];
   const pendingCannonballs = [];
 
@@ -903,6 +891,31 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
     while (actionIdx < sortedActions.length && sortedActions[actionIdx].t <= time) {
       const act = sortedActions[actionIdx++];
 
+      if (act.type === 'deploy_troop') {
+        const rawName = act.troop || act.troop_entry || act.troopType;
+        const troopType = normalizeTroopTypeName(rawName);
+        if (VALID_TROOP_TYPES.includes(troopType)) {
+          const level = troopEntryLevel(rawName)
+            || (serverTroopLevels && (serverTroopLevels[rawName] || serverTroopLevels[troopType]))
+            || act.troopLevel
+            || 1;
+          pendingSpawns.push({
+            time: finiteNumber(act.t, 0) + Math.min(TROOP_SPAWN_DELAY, 0.08),
+            troopType,
+            troopLevel: level,
+            playerTroopLevels: serverTroopLevels || act.playerTroopLevels || act.troopLevels || {},
+            nftRarity: isNftBackedTroopType(troopType)
+              ? (serverNftRarities[nftRarityLookupKey(troopType, rawName)] || nftRarityFromEntry(rawName) || 'common')
+              : null,
+            x: finiteNumber(act.x, 0),
+            z: finiteNumber(act.z, 0),
+            gridIndex: 2,
+            replayOrder: finiteNumber(act.deploy_index, troopsManuallyDeployed),
+          });
+          troopsManuallyDeployed++;
+        }
+      }
+
       if (act.type === 'place_ship' && shipsPlaced < MAX_SHIPS) {
         // Support both old (troopType) and new (troops[]) format
         const shipTroops = (act.troops || (act.troopType ? [act.troopType] : [])).slice(0, TROOPS_PER_SHIP);
@@ -1044,7 +1057,10 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
         if (!stats) continue;
         // One troop per spawn entry
         const troopId = nextTroopId++;
-        const spawnPos = clampToIsland({ x: sp.x, z: sp.z }, defaultGridConfig);
+        const spawnGridConfig = sp.gridIndex == null
+          ? defaultGridConfig
+          : (gridConfigMap[String(sp.gridIndex)] || defaultGridConfig);
+        const spawnPos = clampWorldPointToGrid(spawnGridConfig, { x: sp.x, z: sp.z }, 1.05);
         troops.push({
           id: troopId,
           replayOrder: sp.replayOrder,
@@ -1674,7 +1690,7 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
           aliveTroops,
           aliveGuards,
           aliveBuildings,
-          defaultGridConfig
+          movementGridConfigs
         );
         if (slotDist < 0.05 || targetDist <= t.range) {
           t._state = 'attacking';
@@ -1997,9 +2013,9 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
   }
 
   // Defeat — require at least one ship placed
-  const hasShips = sortedActions.some(a => a.type === 'place_ship');
-  if (!hasShips) {
-    return { valid: false, reason: 'No ships deployed in defeat', resolvedResult };
+  const hasDeployment = sortedActions.some(a => a.type === 'place_ship' || a.type === 'deploy_troop');
+  if (!hasDeployment) {
+    return { valid: false, reason: 'No troops deployed in defeat', resolvedResult };
   }
   if (resolvedResult === 'victory') {
     return { valid: true, reason: 'Server victory: Town Hall destroyed (client claimed defeat)', resolvedResult, townHallDestroyed: true, buildingsDestroyed, townHallHpPct, ..._debug };

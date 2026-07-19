@@ -423,6 +423,48 @@ function extractOrderEventsFromTransaction(txResponse, subaccountAddr = '', clie
   return out;
 }
 
+function extractTpslOrderEventsFromTransaction(txResponse, subaccountAddr = '') {
+  const out = [];
+  const seen = new Set();
+  try {
+    const events = Array.isArray(txResponse?.events) ? txResponse.events : [];
+    const wantedUser = normalizeAptosAddress(subaccountAddr);
+    for (const event of events) {
+      if (!/perp_positions::PositionUpdateEvent/.test(String(event?.type || ''))) continue;
+      const data = event?.data || {};
+      const eventUser = normalizeAptosAddress(data.user || data.account || '');
+      if (wantedUser && eventUser && eventUser !== wantedUser) continue;
+      const market = normalizeAptosAddress(data.market?.inner || data.market || '');
+      const addLeg = (value, kind, fullSized) => {
+        const row = value?.order_id != null ? value : optionVecValue(value);
+        const orderId = row?.order_id ?? row?.orderId ?? row;
+        if (orderId == null || orderId === '') return;
+        const key = `${kind}:${String(orderId)}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        out.push(jsonSafe({
+          type: event.type,
+          orderId: String(orderId),
+          user: eventUser || null,
+          market: market || null,
+          tpslKind: kind,
+          fullSized: !!fullSized,
+          triggerPrice: row?.trigger_price == null ? null : String(row.trigger_price),
+          limitPrice: optionVecValue(row?.limit_price) == null ? null : String(optionVecValue(row.limit_price)),
+          size: row?.size == null ? null : String(row.size),
+        }));
+      };
+      for (const row of Array.isArray(data.fixed_sized_tps) ? data.fixed_sized_tps : []) addLeg(row, 'tp', false);
+      for (const row of Array.isArray(data.fixed_sized_sls) ? data.fixed_sized_sls : []) addLeg(row, 'sl', false);
+      addLeg(data.full_sized_tp, 'tp', true);
+      addLeg(data.full_sized_sl, 'sl', true);
+    }
+  } catch {
+    return out;
+  }
+  return out;
+}
+
 function txResult(txResponse, label, extra = {}) {
   const hash = txHashFrom(txResponse);
   if (txResponse?.success === false) {
@@ -661,6 +703,31 @@ async function cancelOrder(args) {
   });
 }
 
+async function cancelTpSlOrderForPosition(args) {
+  return captureWrite('TP/SL cancel', async () => {
+    const payload = cleanObject({
+      orderId: args.orderId,
+      marketName: args.marketName ? String(args.marketName) : undefined,
+      marketAddr: args.marketAddr ? normalizeAptosAddress(args.marketAddr) : undefined,
+      subaccountAddr: args.subaccountAddr ? normalizeAptosAddress(args.subaccountAddr) : undefined,
+    });
+    if (!payload.orderId) throw new Error('orderId required');
+    if (!payload.marketName && !payload.marketAddr) throw new Error('marketName or marketAddr required');
+    if (!payload.subaccountAddr) throw new Error('subaccountAddr required');
+    const marketAddr = payload.marketAddr || await getMarketAddr(payload.marketName);
+    const tx = await sendDecibelTx({
+      function: `${DECIBEL_PACKAGE_MAINNET}::dex_accounts_entry::cancel_tp_sl_order_for_position`,
+      typeArguments: [],
+      functionArguments: [
+        payload.subaccountAddr,
+        marketAddr,
+        parseChainInt(payload.orderId, 'orderId'),
+      ],
+    });
+    return txResult(tx, 'TP/SL cancel');
+  });
+}
+
 async function placeTpSlOrderForPosition(args) {
   return captureWrite('TP/SL update', async () => {
     const payload = cleanObject({
@@ -680,25 +747,43 @@ async function placeTpSlOrderForPosition(args) {
     const hasTp = assertTpslLeg(payload, 'tp', 'Take-profit');
     const hasSl = assertTpslLeg(payload, 'sl', 'Stop-loss');
     if (!hasTp && !hasSl) throw new Error('TP/SL requires at least one take-profit or stop-loss leg');
+    const roundedTpTriggerPrice = payload.tpTriggerPrice == null
+      ? undefined
+      : roundToTickSize(payload.tpTriggerPrice, payload.tickSize);
+    const roundedTpLimitPrice = payload.tpLimitPrice == null
+      ? undefined
+      : roundToTickSize(payload.tpLimitPrice, payload.tickSize);
+    const roundedSlTriggerPrice = payload.slTriggerPrice == null
+      ? undefined
+      : roundToTickSize(payload.slTriggerPrice, payload.tickSize);
+    const roundedSlLimitPrice = payload.slLimitPrice == null
+      ? undefined
+      : roundToTickSize(payload.slLimitPrice, payload.tickSize);
     const tx = await sendDecibelTx({
       function: `${DECIBEL_PACKAGE_MAINNET}::dex_accounts_entry::place_tp_sl_order_for_position`,
       typeArguments: [],
       functionArguments: [
         payload.subaccountAddr,
         payload.marketAddr,
-        payload.tpTriggerPrice == null ? undefined : roundToTickSize(payload.tpTriggerPrice, payload.tickSize),
-        payload.tpLimitPrice == null ? undefined : roundToTickSize(payload.tpLimitPrice, payload.tickSize),
+        roundedTpTriggerPrice,
+        roundedTpLimitPrice,
         payload.tpSize,
-        payload.slTriggerPrice == null ? undefined : roundToTickSize(payload.slTriggerPrice, payload.tickSize),
-        payload.slLimitPrice == null ? undefined : roundToTickSize(payload.slLimitPrice, payload.tickSize),
+        roundedSlTriggerPrice,
+        roundedSlLimitPrice,
         payload.slSize,
         payload.builderAddr,
         payload.builderFee == null ? undefined : bpsToChainUnits(payload.builderFee),
       ],
     });
+    const expectedTriggerByKind = new Map([
+      ...(hasTp ? [['tp', String(roundedTpTriggerPrice)]] : []),
+      ...(hasSl ? [['sl', String(roundedSlTriggerPrice)]] : []),
+    ]);
+    const orderEvents = extractTpslOrderEventsFromTransaction(tx, payload.subaccountAddr)
+      .filter((event) => expectedTriggerByKind.get(event.tpslKind) === String(event.triggerPrice));
     return txResult(tx, 'TP/SL update', {
       orderId: extractOrderIdFromTransaction(tx, payload.subaccountAddr) || undefined,
-      orderEvents: extractOrderEventsFromTransaction(tx, payload.subaccountAddr),
+      orderEvents,
     });
   });
 }
@@ -1473,6 +1558,7 @@ module.exports = {
   getPrimarySubaccountAddr,
   placeOrder,
   cancelOrder,
+  cancelTpSlOrderForPosition,
   placeTpSlOrderForPosition,
   updateTpOrderForPosition,
   updateSlOrderForPosition,
@@ -1496,4 +1582,7 @@ module.exports = {
   positionNotionalUsd,
   positionCollateralUsd,
   symbolFromMarket,
+  __test: {
+    extractTpslOrderEventsFromTransaction,
+  },
 };

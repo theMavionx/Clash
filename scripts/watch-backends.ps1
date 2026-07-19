@@ -13,6 +13,7 @@ $MainDir = Join-Path $Root 'server'
 $FuturesDir = Join-Path $Root 'server-futures'
 $WebDir = Join-Path $Root 'web'
 $LogDir = Join-Path $Root '.local-logs'
+$CombatGridGenerator = Join-Path $Root 'tools\combat-grid\generate-combat-grid-config.cjs'
 $BundledPython = Join-Path $env:USERPROFILE '.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe'
 $DefaultLighterPythonBin = if (Test-Path $BundledPython) { $BundledPython } else { 'python' }
 $BotApiProxy = if ($env:VITE_BOT_API_PROXY) { $env:VITE_BOT_API_PROXY } else { 'http://62.72.35.202:8080' }
@@ -25,6 +26,13 @@ $BotWsProxy = if ($env:VITE_BOT_WS_PROXY) {
 }
 
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
+
+function Sync-CombatGrid {
+  & node $CombatGridGenerator
+  if ($LASTEXITCODE -ne 0) {
+    throw "Combat grid generation failed with exit code $LASTEXITCODE"
+  }
+}
 
 function New-Service([string]$Name, [string]$Dir, [int]$Port, [string]$FileName, [string[]]$Arguments, [hashtable]$EnvVars, [string[]]$WatchDirs) {
   @{
@@ -131,6 +139,14 @@ function New-ServiceWatcher([hashtable]$Service, [string]$Path) {
   $action = {
     $path = $Event.SourceEventArgs.FullPath
     $ext = [System.IO.Path]::GetExtension($path).ToLowerInvariant()
+    if ($ext -eq '.tscn') {
+      if ([System.IO.Path]::GetFileName($path) -ne 'Main.tscn') { return }
+      & node $CombatGridGenerator
+      if ($LASTEXITCODE -ne 0) {
+        Write-Warning "[local-dev] combat grid generation failed after scene change: $path"
+      }
+      return
+    }
     if ($ext -notin @('.js', '.cjs', '.mjs', '.json', '.env')) { return }
     if ($path -match '\\node_modules\\|\\.git\\|\\.local-logs\\|\\dist\\') { return }
     $service = $Event.MessageData
@@ -158,7 +174,7 @@ $services = @(
       NFT_SUPPLY_REFRESH_DISABLE = $(if ($FullWorkers) { '0' } else { '1' })
       CUSTODIAL_MARKETPLACE_SETTLEMENT_WORKER = $(if ($FullWorkers) { '1' } else { '0' })
     } `
-    -WatchDirs @($MainDir)),
+    -WatchDirs @($MainDir, (Join-Path $Root 'scenes'))),
   (New-Service `
     -Name 'futures' `
     -Dir $FuturesDir `
@@ -172,6 +188,7 @@ $services = @(
       GMX_REWARDS_WORKER = $(if ($FullWorkers) { '1' } else { '0' })
       HYPERLIQUID_REWARDS_WORKER = $(if ($FullWorkers) { '1' } else { '0' })
       HOTSTUFF_REWARDS_WORKER = $(if ($FullWorkers) { '1' } else { '0' })
+      DANGO_REALTIME_WORKER = $(if ($FullWorkers) { '1' } else { '0' })
       OSTIUM_BUILDER_ADDRESS = $(if ($env:OSTIUM_BUILDER_ADDRESS) { $env:OSTIUM_BUILDER_ADDRESS } else { '0xB36402e87a86206D3a114a98B53f31362291fe1B' })
       OSTIUM_BUILDER_FEE_BPS = $(if ($env:OSTIUM_BUILDER_FEE_BPS) { $env:OSTIUM_BUILDER_FEE_BPS } else { '2' })
       LIGHTER_PYTHON_BIN = $(if ($env:LIGHTER_PYTHON_BIN) { $env:LIGHTER_PYTHON_BIN } else { $DefaultLighterPythonBin })
@@ -204,6 +221,7 @@ if ($WithWeb) {
 
 $watchers = @()
 try {
+  Sync-CombatGrid
   foreach ($service in $services) {
     Start-ServiceProcess -Service $service
     foreach ($path in $service.WatchDirs) {

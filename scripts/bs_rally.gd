@@ -225,11 +225,12 @@ func replay_drop_rally(world_pos: Vector3, flight_time_override: float = -1.0) -
 
 
 func _get_attack_ship() -> Node3D:
-	if not bs._ship_attack_node or not is_instance_valid(bs._ship_attack_node):
-		bs._ship_attack_node = bs.get_tree().root.find_child("MainShipAttack", true, false)
-	if not bs._ship_attack_node or not bs._ship_attack_node.visible:
-		return null
-	return bs._ship_attack_node
+	var attack_system: Node = bs.get_node_or_null("../AttackSystem")
+	if attack_system and attack_system.has_method("get_main_ship_node"):
+		var main_ship: Node3D = attack_system.get_main_ship_node()
+		if is_instance_valid(main_ship) and main_ship.visible:
+			return main_ship
+	return null
 
 
 func _record_rally_telemetry(kind: String, payload: Dictionary) -> void:

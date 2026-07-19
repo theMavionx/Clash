@@ -207,6 +207,7 @@ func _send_initial_state() -> void:
 				"cost": d.get("cost", {}),
 				"hp_levels": d.get("hp_levels", []),
 				"max_count": effective_max,
+				"no_shop": d.get("no_shop", false),
 				"requires_purchase": d.get("requires_purchase", false),
 				"shop_sku": d.get("shop_sku", ""),
 			}
@@ -335,8 +336,13 @@ func _handle_react_action(action: String, data: Dictionary) -> void:
 		"select_troop":
 			var asys: Node = get_tree().current_scene.get_node_or_null("AttackSystem")
 			if asys:
-				asys._next_troop_idx = clampi(int(data.get("idx", 0)), 0, asys.SHIP_TROOPS.size() - 1)
-				send_to_react("troop_idx_changed", {"idx": asys._next_troop_idx})
+				var selected_idx: int = int(data.get("idx", 0))
+				if asys.has_method("select_troop_group"):
+					selected_idx = int(asys.select_troop_group(selected_idx))
+				else:
+					asys._next_troop_idx = clampi(selected_idx, 0, asys.SHIP_TROOPS.size() - 1)
+					selected_idx = asys._next_troop_idx
+				send_to_react("troop_idx_changed", {"idx": selected_idx})
 		"upgrade_building":
 			var active = _get_active_building_system()
 			if active:
@@ -383,6 +389,10 @@ func _handle_react_action(action: String, data: Dictionary) -> void:
 			var active = _get_active_building_system()
 			if active:
 				active._buy_ship()
+		"upgrade_main_ship":
+			var active_ship = _get_active_building_system()
+			if active_ship and active_ship.has_method("_upgrade_main_ship"):
+				active_ship._upgrade_main_ship()
 		"buy_troop":
 			var active_bt = _get_active_building_system()
 			if active_bt:

@@ -1,14 +1,21 @@
 [gd_scene format=3 uid="uid://dosexdc7fxdx0"]
 
-[ext_resource type="PackedScene" uid="uid://bgghwmgkhv3sv" path="res://Model/Island/Isl.glb" id="1_uu6xs"]
+[ext_resource type="PackedScene" uid="uid://byc1re1u02718" path="res://Model/Island/pirate_island.glb" id="1_uu6xs"]
 [ext_resource type="Script" uid="uid://vikmob2bagbn" path="res://scripts/camera_rig.gd" id="2_cam"]
 [ext_resource type="Shader" uid="uid://w1c5sjoqq7u4" path="res://shaders/water.gdshader" id="3_cm0pq"]
 [ext_resource type="Script" uid="uid://56cxsu5s20t6" path="res://scripts/building_system.gd" id="4_cm0pq"]
 [ext_resource type="Script" uid="uid://df6gm7o36dvf7" path="res://scripts/attack_system.gd" id="5_vcsgt"]
-[ext_resource type="PackedScene" uid="uid://cl3mm08tunr88" path="res://Model/Ship/MainShip/MainShip.glb" id="16_cvmbd"]
 [ext_resource type="Script" uid="uid://q87h4tn8gjye" path="res://scripts/warmup.gd" id="17_warmup"]
+[ext_resource type="Script" uid="uid://l616bio6q488" path="res://scripts/island_ambient_animator.gd" id="18_island_anim"]
+[ext_resource type="Shader" uid="uid://7lwieihxbgm6" path="res://shaders/editor_grid_preview.gdshader" id="19_attack_grid"]
+[ext_resource type="Script" uid="uid://cmduqolu7578d" path="res://scripts/main_ship_controller.gd" id="20_main_ship"]
 
 [sub_resource type="BoxMesh" id="BoxMesh_r0du0"]
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_attack_grid"]
+render_priority = 127
+shader = ExtResource("19_attack_grid")
+shader_parameter/fill_color = Color(0.8, 0.1, 0.1, 0.35)
 
 [sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_uu6xs"]
 sky_top_color = Color(0.35, 0.55, 0.9, 1)
@@ -58,24 +65,21 @@ subdivide_depth = 64
 [node name="IslandScene" type="Node3D" unique_id=876129500]
 metadata/_edit_lock_ = true
 
-[node name="Island" parent="." unique_id=1497323444 instance=ExtResource("1_uu6xs")]
-transform = Transform3D(4.3852644, 0, 4.0950527, 0, 6, 0, -4.0950527, 0, 4.3852644, 0.03855443, -0.43582493, 0.014738083)
+[node name="Island" type="Node3D" parent="." unique_id=1497323444]
+transform = Transform3D(-0.078772314, 0, -0.99689263, 0, 1, 0, 0.99689263, 0, -0.078772314, 0, 0.46901703, 0)
+script = ExtResource("18_island_anim")
+
+[node name="Visual" parent="Island" unique_id=224559130 instance=ExtResource("1_uu6xs")]
+transform = Transform3D(0.04, 0, 0, 0, 0.04, 0, 0, 0, 0.04, 0.304064, -0.303565, 1.994608)
 metadata/_edit_lock_ = true
 
 [node name="gridPlane" type="MeshInstance3D" parent="Island" unique_id=2081397116]
-transform = Transform3D(0.5499543, 0, 0.0070937276, 0, 0.01666667, 0, -0.0070937276, 0, 0.5499543, -0.20163433, 0.07670069, 0.20906071)
-visible = false
-mesh = SubResource("BoxMesh_r0du0")
-metadata/_edit_lock_ = true
-
-[node name="gridPlane2" type="MeshInstance3D" parent="Island" unique_id=120704184]
-transform = Transform3D(0.5499543, 0, 0.000788, 0, 0.01666667, 0, -0.0070937276, 0, 0.061106, -0.19726524, 0.07670069, 0.51994365)
-visible = false
+transform = Transform3D(0.013980418, 0, 3.2999754, 0, 0.10000002, 0, -3.5444183, 0, 0.013016254, 0.30954075, 0.071223736, 1.6492015)
 mesh = SubResource("BoxMesh_r0du0")
 
 [node name="shipPlane" type="MeshInstance3D" parent="Island" unique_id=1227187679]
-transform = Transform3D(-2.3132623e-08, -0.0017484016, 0.0802146, -4.440892e-16, 0.0067781336, 0.020691143, -0.5292127, 7.6425054e-11, -3.5062913e-09, -0.51140136, 0.07651963, 0.21346119)
-visible = false
+transform = Transform3D(0.015739053, 0.005432136, 0.8430168, 0.011951455, 0.0427945, -0.27602443, -3.1752284, 0.00021936814, 0.0008201301, 2.492822, -0.1325823, 1.6417363)
+material_override = SubResource("ShaderMaterial_attack_grid")
 mesh = SubResource("BoxMesh_r0du0")
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=1039932902]
@@ -96,12 +100,13 @@ environment = SubResource("Environment_cm0pq")
 script = ExtResource("2_cam")
 pan_limit_min = Vector3(-2, 0, -2)
 pan_limit_max = Vector3(2, 0, 2)
+camera_pitch = 55.0
 
 [node name="PitchPivot" type="Node3D" parent="CameraRig" unique_id=1993174817]
-transform = Transform3D(1, 0, 0, 0, 0.7071069, 0.70710665, 0, -0.70710665, 0.7071069, 0, 0, 0)
+transform = Transform3D(1, 0, 0, 0, 0.5735764, 0.819152, 0, -0.819152, 0.5735764, 0, 0, 0)
 
 [node name="Camera3D" type="Camera3D" parent="CameraRig/PitchPivot" unique_id=138786099]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -5.9604645e-08, 4.852085)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 4.852085)
 current = true
 
 [node name="FillLight" type="DirectionalLight3D" parent="." unique_id=1825883239]
@@ -117,28 +122,24 @@ metadata/_edit_lock_ = true
 
 [node name="BuildingSystem" type="Node3D" parent="." unique_id=1299042875]
 script = ExtResource("4_cm0pq")
+grid_width = 29
 grid_plane_path = NodePath("../Island/gridPlane")
 
-[node name="BuildingSystem2" type="Node3D" parent="." unique_id=988755368]
-script = ExtResource("4_cm0pq")
-grid_height = 3
-grid_plane_path = NodePath("../Island/gridPlane2")
-create_ui = false
-
 [node name="AttackSystem" type="Node3D" parent="." unique_id=2124013103]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.1991491, 0)
 script = ExtResource("5_vcsgt")
+
+[node name="MainShipShoreAnchor" type="Marker3D" parent="." unique_id=1425114476]
+transform = Transform3D(0.990497, 0, -0.137531, 0, 1, 0, 0.137531, 0, 0.990497, -2.120217, 0, 3.043754)
+
+[node name="MainShipController" type="Node3D" parent="." unique_id=1597021843]
+script = ExtResource("20_main_ship")
 
 [node name="BuildingSystem3" type="Node3D" parent="." unique_id=2087156778]
 script = ExtResource("4_cm0pq")
 grid_height = 5
 grid_plane_path = NodePath("../Island/shipPlane")
 create_ui = false
-
-[node name="MainShipAttack" parent="." unique_id=562739322 instance=ExtResource("16_cvmbd")]
-transform = Transform3D(-0.07, 0, -1.0569706e-08, 0, 0.07, 0, 1.0569706e-08, 0, -0.07, -0.15186018, 0.0918113, 5.3458157)
-
-[node name="MainShipBase" parent="." unique_id=843481737 instance=ExtResource("16_cvmbd")]
-transform = Transform3D(-0.055034157, 0, -0.043257855, 0, 0.07, 0, 0.043257855, 0, -0.055034157, 3.3860698, 0.085252225, 2.7880461)
 
 [node name="Warmup" type="Node3D" parent="." unique_id=1569715766]
 script = ExtResource("17_warmup")

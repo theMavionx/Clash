@@ -1,7 +1,9 @@
 param(
     [int]$WebPort = 5173,
     [int]$ServerPort = 4000,
+    [int]$FuturesPort = 3999,
     [switch]$SkipServer,
+    [switch]$SkipFutures,
     [switch]$SkipWeb,
     [switch]$NoOpen,
     [switch]$OpenServerDashboard,
@@ -215,6 +217,29 @@ if (-not $SkipServer) {
     Wait-ForPort -Name "Server" -Port $ServerPort
 }
 
+$futuresWasRunning = Test-TcpPort -Port $FuturesPort
+if ($SkipFutures) {
+    Write-Host "Skipping local futures server start."
+} elseif ($futuresWasRunning) {
+    Write-Host "Futures port $FuturesPort is already in use; using existing local futures server."
+} else {
+    $futuresOut = Join-Path $LogDir "futures.out.log"
+    $futuresErr = Join-Path $LogDir "futures.err.log"
+    $futuresCommand = "`$env:FUTURES_PORT='$FuturesPort'; `$env:DANGO_REALTIME_WORKER='0'; npm.cmd --prefix server-futures run dev"
+    $futuresProcess = Start-HiddenPowerShell -Name "local Clash futures server" -Command $futuresCommand -StdOut $futuresOut -StdErr $futuresErr
+    Write-Host "Futures PID: $($futuresProcess.Id)"
+    $startedProcesses += [pscustomobject]@{
+        name = "futures"
+        id = $futuresProcess.Id
+        port = $FuturesPort
+        started_at = (Get-Date).ToString("o")
+    }
+}
+
+if (-not $SkipFutures) {
+    Wait-ForPort -Name "Futures server" -Port $FuturesPort
+}
+
 $webWasRunning = Test-TcpPort -Port $WebPort
 if ($SkipWeb) {
     Write-Host "Skipping Vite web start."
@@ -223,7 +248,7 @@ if ($SkipWeb) {
 } else {
     $webOut = Join-Path $LogDir "web.out.log"
     $webErr = Join-Path $LogDir "web.err.log"
-    $webCommand = "`$env:VITE_API_PROXY='http://127.0.0.1:$ServerPort'; `$env:VITE_WS_PROXY='ws://127.0.0.1:$ServerPort'; npm.cmd --prefix web run dev -- --host 127.0.0.1 --port $WebPort"
+    $webCommand = "`$env:VITE_API_PROXY='http://127.0.0.1:$ServerPort'; `$env:VITE_WS_PROXY='ws://127.0.0.1:$ServerPort'; `$env:VITE_FUTURES_PROXY='http://127.0.0.1:$FuturesPort'; npm.cmd --prefix web run dev -- --host 127.0.0.1 --port $WebPort"
     $webProcess = Start-HiddenPowerShell -Name "local Vite web client" -Command $webCommand -StdOut $webOut -StdErr $webErr
     Write-Host "Web PID: $($webProcess.Id)"
     $startedProcesses += [pscustomobject]@{
@@ -249,6 +274,7 @@ $gameUrl = $gameUrls[0]
 $adminKeyForUrl = [uri]::EscapeDataString($LocalAdminKey)
 $adminUrl = "http://127.0.0.1:$WebPort/admin.html?admin_key=$adminKeyForUrl"
 $serverUrl = "http://127.0.0.1:$ServerPort/"
+$futuresUrl = "http://127.0.0.1:$FuturesPort/"
 
 Write-Host ""
 Write-Host "Manual test URLs:"
@@ -259,6 +285,7 @@ Write-Host "Admin panel:     $adminUrl"
 Write-Host "Local admin key: $LocalAdminKey"
 if ($OpenServerDashboard) {
     Write-Host "Server panel:    $serverUrl"
+    Write-Host "Futures panel:   $futuresUrl"
 }
 Write-Host ""
 if ($startedProcesses.Count -gt 0) {
@@ -272,7 +299,7 @@ Write-Host "Stop background local servers with: tools\codex\stop-local-playtest.
 if (-not $NoOpen) {
     $urlsToOpen = @($gameUrls) + @($adminUrl)
     if ($OpenServerDashboard) {
-        $urlsToOpen += $serverUrl
+        $urlsToOpen += @($serverUrl, $futuresUrl)
     }
     Open-LocalUrls -Urls $urlsToOpen -GuestProfileCount $GuestCount
 }

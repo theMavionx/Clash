@@ -1,4 +1,6 @@
-const GRID_SIZE = 27;
+const MAIN_GRID_WIDTH = 29;
+const MAIN_GRID_HEIGHT = 27;
+const COAST_GRID_WIDTH = 27;
 const BOT_BASE_GENERATION = 'raid-recovery-v1';
 const BOT_VARIANTS_PER_BUCKET = 8;
 
@@ -56,7 +58,7 @@ const BOT_BUILDING_SIZES = {
 };
 
 const BOT_GRID_SPECS = {
-  0: [27, 27],
+  0: [MAIN_GRID_WIDTH, MAIN_GRID_HEIGHT],
   1: [27, 3],
   2: [27, 5],
 };
@@ -276,16 +278,16 @@ function transformBuilding(building, variant) {
   const size = BOT_BUILDING_SIZES[building.type] || [1, 1];
   const next = { ...building };
   if (next.grid_index === 0) {
-    if (variant & 1) next.grid_x = GRID_SIZE - next.grid_x - size[0];
-    if (variant & 2) next.grid_z = GRID_SIZE - next.grid_z - size[1];
+    if (variant & 1) next.grid_x = MAIN_GRID_WIDTH - next.grid_x - size[0];
+    if (variant & 2) next.grid_z = MAIN_GRID_HEIGHT - next.grid_z - size[1];
     const shift = ((variant >> 2) % 2) === 0 ? -1 : 1;
     if (variant >= 4 && next.type !== 'town_hall') {
-      next.grid_x = clamp(next.grid_x + shift, 0, GRID_SIZE - size[0]);
-      next.grid_z = clamp(next.grid_z - shift, 0, GRID_SIZE - size[1]);
+      next.grid_x = clamp(next.grid_x + shift, 0, MAIN_GRID_WIDTH - size[0]);
+      next.grid_z = clamp(next.grid_z - shift, 0, MAIN_GRID_HEIGHT - size[1]);
     }
   } else if (next.grid_index === 1) {
-    if (variant & 1) next.grid_x = GRID_SIZE - next.grid_x - size[0];
-    if (variant >= 4) next.grid_x = clamp(next.grid_x + 1, 0, GRID_SIZE - size[0]);
+    if (variant & 1) next.grid_x = COAST_GRID_WIDTH - next.grid_x - size[0];
+    if (variant >= 4) next.grid_x = clamp(next.grid_x + 1, 0, COAST_GRID_WIDTH - size[0]);
   }
   return next;
 }

@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "source_scene": "scenes/Main.tscn",
+  "config_sha256": "d7b114816c9bd4901f4e38b9f90a2573efe72d57dc591b9d4fd9da15e91d548a",
+  "sources": {
+    "0": "BuildingSystem -> Island/gridPlane",
+    "1": "retired compatibility grid",
+    "2": "BuildingSystem3 -> Island/shipPlane"
+  },
+  "grids": {
+    "0": {
+      "grid_width": 29,
+      "grid_height": 27,
+      "cell_size": 0.122222271023,
+      "grid_extent_x": 3.544445859658,
+      "grid_extent_z": 3.300001059005,
+      "grid_center_x": -1.66846006189,
+      "grid_center_z": 0.178667473952,
+      "grid_rotation": -0.0827983345
+    },
+    "1": {
+      "grid_width": 27,
+      "grid_height": 3,
+      "cell_size": 0.122222238117,
+      "grid_extent_x": 3.300000429153,
+      "grid_extent_z": 0.366666465998,
+      "grid_center_x": 1.302690863609,
+      "grid_center_z": 3.102639913559,
+      "grid_rotation": 0.764087736607
+    },
+    "2": {
+      "grid_width": 27,
+      "grid_height": 5,
+      "cell_size": 0.117603329219,
+      "grid_extent_x": 3.175289888921,
+      "grid_extent_z": 0.887055510563,
+      "grid_center_x": -1.833000175204,
+      "grid_center_z": 2.355752512373,
+      "grid_rotation": -0.083332935828
+    }
+  }
+}

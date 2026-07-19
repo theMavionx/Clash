@@ -270,12 +270,20 @@ func _check_ship_cannon_click(mouse_pos: Vector2) -> bool:
 	var camera = BaseTroop._get_camera_cached()
 	if not camera:
 		return false
-	if not bs._ship_attack_node or not is_instance_valid(bs._ship_attack_node):
-		bs._ship_attack_node = bs.get_tree().root.find_child("MainShipAttack", true, false)
-	if not bs._ship_attack_node or not bs._ship_attack_node.visible:
+	var ship: Node3D = _get_attack_ship()
+	if not ship:
 		return false
-	var screen_pos = camera.unproject_position(bs._ship_attack_node.global_position)
+	var screen_pos = camera.unproject_position(ship.global_position)
 	return mouse_pos.distance_to(screen_pos) < 80.0
+
+
+func _get_attack_ship() -> Node3D:
+	var attack_system: Node = bs.get_node_or_null("../AttackSystem")
+	if attack_system and attack_system.has_method("get_main_ship_node"):
+		var main_ship: Node3D = attack_system.get_main_ship_node()
+		if is_instance_valid(main_ship) and main_ship.visible:
+			return main_ship
+	return null
 
 
 func _enter_ship_cannon_mode() -> void:
@@ -334,11 +342,9 @@ func _fire_ship_cannon(bdata: Dictionary) -> void:
 	# Check cannon energy
 	if _cannon_energy < _cannon_next_cost:
 		return
-	if not bs._ship_attack_node or not is_instance_valid(bs._ship_attack_node):
-		bs._ship_attack_node = bs.get_tree().root.find_child("MainShipAttack", true, false)
-	if not bs._ship_attack_node:
+	var ship: Node3D = _get_attack_ship()
+	if not ship:
 		return
-	var ship: Node3D = bs._ship_attack_node
 	var bnode: Node3D = bdata.get("node", null) as Node3D
 	if not bnode or not is_instance_valid(bnode):
 		return

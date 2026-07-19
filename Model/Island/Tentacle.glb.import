@@ -3,13 +3,13 @@
 importer="scene"
 importer_version=1
 type="PackedScene"
-uid="uid://cl3mm08tunr88"
-path="res://.godot/imported/MainShip.glb-54f870353cd1326501ecc3ec894c4b7b.scn"
+uid="uid://cb1xbjx4vxtih"
+path="res://.godot/imported/Tentacle.glb-26b7efb46af98445b5d34d8941c51f5e.scn"
 
 [deps]
 
-source_file="res://Model/Ship/MainShip/MainShip.glb"
-dest_files=["res://.godot/imported/MainShip.glb-54f870353cd1326501ecc3ec894c4b7b.scn"]
+source_file="res://Model/Island/Tentacle.glb"
+dest_files=["res://.godot/imported/Tentacle.glb-26b7efb46af98445b5d34d8941c51f5e.scn"]
 
 [params]
 

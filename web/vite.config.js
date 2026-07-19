@@ -98,6 +98,15 @@ const ETHEREUM_ALCHEMY_KEY = process.env.ETHEREUM_ALCHEMY_KEY
   || BASE_ALCHEMY_KEY
   || '';
 const BASE_RPC_PROXY_TARGET = 'https://mainnet.base.org';
+const INK_RPC_PROXY_TARGET = String(
+  process.env.INK_RPC_URL
+  || viteEnv.INK_RPC_URL
+  || process.env.NFT_INK_RPC_URL
+  || viteEnv.NFT_INK_RPC_URL
+  || process.env.VITE_INK_RPC_URL
+  || viteEnv.VITE_INK_RPC_URL
+  || 'https://rpc-gel.inkonchain.com'
+).split(',')[0].trim();
 const FUTURES_PROXY_TARGET = process.env.VITE_FUTURES_PROXY
   || viteEnv.VITE_FUTURES_PROXY
   || 'http://127.0.0.1:3999';
@@ -381,6 +390,18 @@ export default defineConfig({
       },
       '/rpc/base': {
         target: BASE_RPC_PROXY_TARGET,
+        changeOrigin: true,
+        secure: true,
+        configure: (proxy) => {
+          proxy.on('proxyReq', (proxyReq) => {
+            proxyReq.removeHeader('origin');
+            proxyReq.removeHeader('referer');
+          });
+        },
+        rewrite: () => '/',
+      },
+      '/rpc/ink': {
+        target: INK_RPC_PROXY_TARGET,
         changeOrigin: true,
         secure: true,
         configure: (proxy) => {

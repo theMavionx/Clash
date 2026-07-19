@@ -4,6 +4,11 @@
 // verification re-simulates client battles server-side, so stat drift here
 // causes valid wins to be rejected.
 
+const {
+  CANONICAL_GRID_CONFIG,
+  CANONICAL_GRID_CONFIGS,
+} = require('./combat_grid_config');
+
 const MAX_TROOP_LEVEL = 7;
 
 const TROOP_STATS = {
@@ -272,44 +277,6 @@ function cannonShotCost(shotNumber) { return shotNumber; }
 
 // Valid troop types (order matches attack_system.gd SHIP_TROOPS)
 const VALID_TROOP_TYPES = ['knight', 'mage', 'barbarian', 'archer', 'ranger', 'demon_king', 'fire_dragon'];
-
-// Canonical world-space grid config from scenes/Main.tscn. Browser clients
-// submit their live scene values, but headless agents need deterministic
-// coordinates for server-side replay verification and live replay playback.
-const CANONICAL_GRID_CONFIGS = {
-  0: {
-    grid_width: 27,
-    grid_height: 27,
-    cell_size: 0.122222238117,
-    grid_extent_x: 3.300000429153,
-    grid_extent_z: 3.300000429153,
-    grid_center_x: 0.010449171066,
-    grid_center_z: 1.757227778435,
-    grid_rotation: 0.764087796211,
-  },
-  1: {
-    grid_width: 27,
-    grid_height: 3,
-    cell_size: 0.122222238117,
-    grid_extent_x: 3.300000429153,
-    grid_extent_z: 0.366666465998,
-    grid_center_x: 1.302690863609,
-    grid_center_z: 3.102639913559,
-    grid_rotation: 0.764087736607,
-  },
-  2: {
-    grid_width: 27,
-    grid_height: 5,
-    cell_size: 0.117602825165,
-    grid_extent_x: 3.175276279449,
-    grid_extent_z: 0.497041463852,
-    grid_center_x: -1.329941034317,
-    grid_center_z: 3.045037269592,
-    grid_rotation: 2.321985960007,
-  },
-};
-
-const CANONICAL_GRID_CONFIG = CANONICAL_GRID_CONFIGS[0];
 
 module.exports = {
   MAX_TROOP_LEVEL,

@@ -375,6 +375,9 @@ export function GodotProvider({ children }) {
           break;
         case 'fleet_info':
           setFleetInfo(data);
+          if (Number.isInteger(Number(data?.selected_group))) {
+            setSelectedTroopIdx(Math.max(0, Number(data.selected_group)));
+          }
           break;
         case 'resource_caps':
           setResourceCaps(prev => {

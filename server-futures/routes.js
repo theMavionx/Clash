@@ -7,6 +7,7 @@ const pacifica = require('./pacifica');
 const avantis = require('./avantis');
 const deposit = require('./deposit');
 const decibel = require('./decibel');
+const { executeDecibelTpslMutation } = require('./decibel-tpsl-lifecycle');
 const dango = require('./dango');
 const gmx = require('./gmx');
 const gmxRewards = require('./gmx-rewards-worker');
@@ -2144,7 +2145,13 @@ function decibelOrderMatchesMarket(order, marketAddr) {
 
 function decibelOrderLooksTpsl(order) {
   const text = `${order?.order_type || order?.orderType || ''} ${order?.trigger_condition || order?.triggerCondition || ''}`.toLowerCase();
-  return /\b(take\s*profit|take-profit|stop\s*loss|stop-loss|tp|sl)\b/.test(text) || !!(order?.is_tpsl ?? order?.isTpsl);
+  const hasTrigger = order?.trigger_price != null
+    || order?.triggerPrice != null
+    || order?.stop_price != null
+    || order?.stopPrice != null;
+  return /\b(take\s*profit|take-profit|stop\s*loss|stop-loss|tp|sl)\b/.test(text)
+    || !!(order?.is_tpsl ?? order?.isTpsl)
+    || (hasTrigger && !!(order?.reduce_only ?? order?.reduceOnly));
 }
 
 function decibelOrderClientId(order) {
@@ -2383,82 +2390,41 @@ router.post('/decibel/tpsl', auth, async (req, res) => {
     const builder = requireDecibelBuilderFee(req, res);
     if (!builder) return;
     const body = await sanitizeDecibelTpslBody(req.body || {}, verified.subaccount);
-    const hasTp = body.tpTriggerPrice != null || body.tpLimitPrice != null || body.tpSize != null;
-    const hasSl = body.slTriggerPrice != null || body.slLimitPrice != null || body.slSize != null;
-    const tpOrderId = body.tpOrderId || body.tp_order_id;
-    const slOrderId = body.slOrderId || body.sl_order_id;
     const base = {
       ...body,
       ...builder,
       subaccountAddr: verified.subaccount,
     };
-    const results = [];
-    if (hasTp && tpOrderId) {
-      results.push({
-        leg: 'tp',
-        ...(await decibel.updateTpOrderForPosition({
-          ...base,
-          prevOrderId: tpOrderId,
-        })),
+    // Decibel's dedicated update_tp/sl entry functions do not accept builder
+    // parameters. Replacing the old conditional order is required to keep
+    // the Clash builder attached to the eventual closing fill.
+    const mutation = await executeDecibelTpslMutation({
+      decibel,
+      body,
+      base,
+      isOrderNotFound: isDecibelOrderNotFound,
+    });
+    const { results, placement, plan } = mutation;
+    if (!mutation.success) {
+      return res.status(400).json({
+        success: false,
+        results,
+        error: mutation.failed?.error || 'Decibel TP/SL failed',
       });
     }
-    if (hasSl && slOrderId) {
-      results.push({
-        leg: 'sl',
-        ...(await decibel.updateSlOrderForPosition({
-          ...base,
-          prevOrderId: slOrderId,
-        })),
-      });
-    }
-    const placePayload = {
+    const placementLeg = plan.hasTp && plan.hasSl ? 'tp_sl' : (plan.hasTp ? 'tp' : 'sl');
+    recordDecibelBuilderProof(req.playerId, verified.subaccount, {
       ...base,
-      ...(hasTp && !tpOrderId ? {
-        tpTriggerPrice: body.tpTriggerPrice,
-        tpLimitPrice: body.tpLimitPrice,
-        tpSize: body.tpSize,
-      } : {
-        tpTriggerPrice: undefined,
-        tpLimitPrice: undefined,
-        tpSize: undefined,
-      }),
-      ...(hasSl && !slOrderId ? {
-        slTriggerPrice: body.slTriggerPrice,
-        slLimitPrice: body.slLimitPrice,
-        slSize: body.slSize,
-      } : {
-        slTriggerPrice: undefined,
-        slLimitPrice: undefined,
-        slSize: undefined,
-      }),
-    };
-    if ((hasTp && !tpOrderId) || (hasSl && !slOrderId)) {
-      results.push({
-        leg: hasTp && !tpOrderId && hasSl && !slOrderId ? 'tp_sl' : (hasTp && !tpOrderId ? 'tp' : 'sl'),
-        ...(await decibel.placeTpSlOrderForPosition(placePayload)),
-      });
-    }
-    const failed = results.find(r => r?.success === false);
-    if (failed) return res.status(400).json({ success: false, results, error: failed.error || 'Decibel TP/SL failed' });
-    for (const result of results) {
-      if (result?.success === false) continue;
-      const leg = result.leg === 'tp_sl' ? 'tp_sl' : String(result.leg || '');
-      recordDecibelBuilderProof(req.playerId, verified.subaccount, {
-        ...base,
-        clientOrderId: result.clientOrderId || result.client_order_id || null,
-        rewardSymbol: body.rewardSymbol || body.symbol || null,
-      }, result, leg || 'tpsl', leg || 'tpsl');
-    }
+      clientOrderId: placement?.clientOrderId || placement?.client_order_id || null,
+      rewardSymbol: body.rewardSymbol || body.symbol || null,
+    }, placement, placementLeg, placementLeg);
     const hashes = results.map(r => r.transactionHash || r.hash).filter(Boolean);
     const ordersAfter = await fetchDecibelOpenOrdersAfterWrite(verified.subaccount, {
       attempts: 6,
       delayMs: 300,
       marketAddr: body.marketAddr || body.market_addr,
       requireTpsl: true,
-      expectedTpslKinds: [
-        ...(hasTp ? ['tp'] : []),
-        ...(hasSl ? ['sl'] : []),
-      ],
+      expectedTpslKinds: plan.expectedKinds,
     });
     res.json({
       success: true,

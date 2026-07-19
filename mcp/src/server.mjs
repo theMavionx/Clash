@@ -654,12 +654,25 @@ function normalize2(x, z) {
   return { x: x / length, z: z / length };
 }
 
-// Actual landing-line endpoints captured from Godot's AttackSystem log:
-// "Ship 1/5 sailing to: (...)". Use these as the authoritative AI ship
-// stop segment instead of re-deriving it from exported transforms, which can
-// drift between editor/export/runtime coordinate spaces.
-const AI_ATTACK_LANDING_A = { x: -2.24423, z: 1.775085 };
-const AI_ATTACK_LANDING_B = { x: -0.140565, z: 4.027834 };
+const AI_ATTACK_GRID = combat.CANONICAL_GRID_CONFIGS?.[2];
+if (!AI_ATTACK_GRID) throw new Error('Generated attack grid 2 is unavailable');
+
+function attackGridLocalToWorld(localX, localZ = 0) {
+  const angle = Number(AI_ATTACK_GRID.grid_rotation) || 0;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  return {
+    x: Number(AI_ATTACK_GRID.grid_center_x) + localX * cos + localZ * sin,
+    z: Number(AI_ATTACK_GRID.grid_center_z) - localX * sin + localZ * cos,
+  };
+}
+
+// Keep AI deployment slots inside the same generated shipPlane bounds used
+// by the game and server replay validation. Leaving 10% inset on both ends
+// avoids edge rejection after JSON/float rounding.
+const AI_ATTACK_HALF_LINE = Number(AI_ATTACK_GRID.grid_extent_x) * 0.4;
+const AI_ATTACK_LANDING_A = attackGridLocalToWorld(-AI_ATTACK_HALF_LINE);
+const AI_ATTACK_LANDING_B = attackGridLocalToWorld(AI_ATTACK_HALF_LINE);
 const AI_ATTACK_LINE_VECTOR = {
   x: AI_ATTACK_LANDING_B.x - AI_ATTACK_LANDING_A.x,
   z: AI_ATTACK_LANDING_B.z - AI_ATTACK_LANDING_A.z,

@@ -8,6 +8,14 @@ const ALTAR_MODEL_SCENE_PATH: String = "res://Model/Altar/Models/Stylized_Altar_
 const ALTAR_MODEL_SCENE = preload(ALTAR_MODEL_SCENE_PATH)
 const SHIP_COST_GOLD: int = 250
 const MAX_PORT_SHIP_LEVEL: int = 3
+const BUILDING_CAMERA_FACING_YAW_DEGREES: float = 90.0
+const PLAYER_SHIP_LEVELS: Dictionary = {
+	1: {"capacity": 3, "cost": {}},
+	2: {"capacity": 12, "cost": {"gold": 1000, "wood": 2000, "ore": 1700}},
+	3: {"capacity": 27, "cost": {"gold": 1800, "wood": 3600, "ore": 3100}},
+	4: {"capacity": 36, "cost": {"gold": 2400, "wood": 4800, "ore": 4100}},
+	5: {"capacity": 45, "cost": {"gold": 3250, "wood": 6400, "ore": 5500}},
+}
 
 # ── Grid Settings ─────────────────────────────────────────────
 @export var grid_width: int = 27
@@ -61,6 +69,7 @@ var building_defs: Dictionary = {
 		"cost": {"gold": 240, "wood": 560, "ore": 480},
 		"ship_cost": {"gold": SHIP_COST_GOLD},
 		"no_outline": true,
+		"no_shop": true,
 	},
 	"sawmill": {
 		"name": "Sawmill",
@@ -152,6 +161,9 @@ var building_defs: Dictionary = {
 			"model": "res://Model/Characters/Model/Ranger.glb",
 			"scale": 0.07,
 			"offset_y": 0.3,
+			"align_to_model_center": true,
+			"rotation_y": -90.0,
+			"inherit_building_yaw": true,
 		},
 	},
 	"mage_tower": {
@@ -329,7 +341,6 @@ const TH_MAX_COUNT: Dictionary = {
 	"mine": [1, 2, 3, 3, 4],
 	"sawmill": [1, 2, 3, 3, 4],
 	"barn": [1, 1, 1, 1, 1],
-	"port": [1, 2, 3, 3, 5],
 	"altar": [1, 1, 1, 1, 1],
 	"archer_tower": [1, 2, 3, 3, 3],
 	"tombstone": [0, 1, 3, 3, 3],
@@ -341,10 +352,10 @@ const TH_MAX_COUNT: Dictionary = {
 }
 
 const TH_UPGRADE_REQUIRES: Dictionary = {
-	1: ["mine", "sawmill", "barn", "port"],
-	2: ["mine", "sawmill", "barn", "port", "storage", "tombstone", "archer_tower"],
-	3: ["mine", "sawmill", "barn", "port", "storage", "tombstone", "archer_tower", "turret"],
-	4: ["mine", "sawmill", "barn", "port", "storage", "tombstone", "archer_tower", "turret", "mage_tower"],
+	1: ["mine", "sawmill", "barn"],
+	2: ["mine", "sawmill", "barn", "storage", "tombstone", "archer_tower"],
+	3: ["mine", "sawmill", "barn", "storage", "tombstone", "archer_tower", "turret"],
+	4: ["mine", "sawmill", "barn", "storage", "tombstone", "archer_tower", "turret", "mage_tower"],
 }
 
 func _get_th_level() -> int:
@@ -532,6 +543,7 @@ var shop_unlocks: Dictionary = {}
 
 # ── Selection State ───────────────────────────────────────────
 var selected_building: Dictionary = {}
+var _home_player_flag_url: String = ""
 var _cel_shader: Shader
 
 # ── Scene / Script preload cache ─────────────────────────────
@@ -545,7 +557,11 @@ static var _mortar_script_res: Script = null
 static var _altar_effect_script_res: Script = null
 static var _town_hall_flag_texture_cache: Dictionary = {}
 static var _town_hall_flag_pending_models: Dictionary = {}
+static var _town_hall_flag_pending_ship_controllers: Dictionary = {}
 static var _town_hall_flag_pending_requests: Dictionary = {}
+static var _town_hall_flag_retry_counts: Dictionary = {}
+const TOWN_HALL_FLAG_MAX_RETRIES := 2
+const TOWN_HALL_FLAG_RETRY_DELAY_SECONDS := 0.75
 
 
 static func _load_packed_scene_resource(path: String) -> PackedScene:
@@ -607,8 +623,6 @@ func _attach_building_defense_script(node: Node3D, building_type: String) -> voi
 			node.set_script(_mortar_script_res)
 
 # ── Ship node cache ───────────────────────────────────────────
-var _ship_attack_node: Node3D = null
-var _ship_base_node: Node3D = null
 var _water_y: float = 0.0
 var _saved_ship_transforms: Array = []
 var _saved_port_ships: Array = []
@@ -1515,11 +1529,16 @@ func _finish_town_hall_flag_request(url: String, texture: Texture2D) -> void:
 		_town_hall_flag_texture_cache[url] = texture
 	var models: Array = _town_hall_flag_pending_models.get(url, [])
 	_town_hall_flag_pending_models.erase(url)
+	var ship_controllers: Array = _town_hall_flag_pending_ship_controllers.get(url, [])
+	_town_hall_flag_pending_ship_controllers.erase(url)
 	if texture == null:
 		return
 	for model in models:
 		if is_instance_valid(model):
 			_apply_town_hall_flag_material_recursive(model, texture)
+	for controller in ship_controllers:
+		if is_instance_valid(controller) and controller.has_method("apply_player_flag_texture"):
+			controller.apply_player_flag_texture(url, texture)
 
 
 func _request_town_hall_flag_texture(url: String) -> void:
@@ -1527,23 +1546,47 @@ func _request_town_hall_flag_texture(url: String) -> void:
 		return
 	_town_hall_flag_pending_requests[url] = true
 	var http := HTTPRequest.new()
-	http.timeout = 12.0
+	http.timeout = 8.0
 	add_child(http)
 	var request_url := _town_hall_flag_absolute_url(url)
 	http.request_completed.connect(func(result: int, response_code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
 		if is_instance_valid(http):
 			http.queue_free()
 		if result != HTTPRequest.RESULT_SUCCESS or response_code < 200 or response_code >= 300:
-			push_warning("Town Hall flag request failed %s result=%s status=%s" % [request_url, result, response_code])
-			_finish_town_hall_flag_request(url, null)
+			_schedule_town_hall_flag_retry(url, request_url, result, response_code)
 			return
+		_town_hall_flag_retry_counts.erase(url)
 		_finish_town_hall_flag_request(url, _decode_town_hall_flag_texture(body, request_url))
 	)
 	var err := http.request(request_url)
 	if err != OK:
 		http.queue_free()
-		push_warning("Town Hall flag request could not start %s error=%s" % [request_url, err])
+		_schedule_town_hall_flag_retry(url, request_url, HTTPRequest.RESULT_REQUEST_FAILED, err)
+
+
+func _schedule_town_hall_flag_retry(url: String, request_url: String, result: int, response_code: int) -> void:
+	var retry_count := int(_town_hall_flag_retry_counts.get(url, 0))
+	if retry_count >= TOWN_HALL_FLAG_MAX_RETRIES:
+		_town_hall_flag_retry_counts.erase(url)
+		push_warning("Town Hall flag request failed %s result=%s status=%s attempts=%s" % [
+			request_url,
+			result,
+			response_code,
+			retry_count + 1,
+		])
 		_finish_town_hall_flag_request(url, null)
+		return
+	_town_hall_flag_retry_counts[url] = retry_count + 1
+	_town_hall_flag_pending_requests.erase(url)
+	var delay_seconds := TOWN_HALL_FLAG_RETRY_DELAY_SECONDS * float(retry_count + 1)
+	get_tree().create_timer(delay_seconds).timeout.connect(func() -> void:
+		var has_pending_targets := (
+			_town_hall_flag_pending_models.has(url)
+			or _town_hall_flag_pending_ship_controllers.has(url)
+		)
+		if has_pending_targets and not _town_hall_flag_pending_requests.has(url):
+			_request_town_hall_flag_texture(url)
+	)
 
 
 func _apply_town_hall_flag_url(model: Node, raw_url: String) -> void:
@@ -1576,6 +1619,47 @@ func _apply_town_hall_flag_to_building_data(building: Dictionary) -> void:
 	var model := _get_building_visual_model(node)
 	if is_instance_valid(model):
 		_apply_town_hall_flag_url(model, url)
+
+
+func _player_flag_url_from_server_state(state: Dictionary) -> String:
+	var flag_value: Variant = state.get("town_hall_flag", null)
+	if flag_value is Dictionary:
+		return str((flag_value as Dictionary).get("image_url", "")).strip_edges()
+	var buildings_value: Variant = state.get("buildings", [])
+	if buildings_value is Array:
+		for building_value in buildings_value:
+			if not (building_value is Dictionary):
+				continue
+			var building := building_value as Dictionary
+			if str(building.get("id", building.get("type", ""))) != "town_hall":
+				continue
+			return str(building.get("town_hall_flag_url", building.get("flag_url", ""))).strip_edges()
+	return ""
+
+
+func _apply_main_ship_flag_url(raw_url: String, remember_as_home: bool = false) -> void:
+	var url := raw_url.strip_edges()
+	if remember_as_home:
+		_home_player_flag_url = url
+	var controller: Node = get_node_or_null("../MainShipController")
+	if not is_instance_valid(controller) or not controller.has_method("set_player_flag_url"):
+		return
+	controller.set_player_flag_url(url)
+	if url == "":
+		return
+	var cached: Texture2D = _town_hall_flag_texture_cache.get(url, null)
+	if cached != null:
+		controller.apply_player_flag_texture(url, cached)
+		return
+	var controllers: Array = _town_hall_flag_pending_ship_controllers.get(url, [])
+	if not controllers.has(controller):
+		controllers.append(controller)
+	_town_hall_flag_pending_ship_controllers[url] = controllers
+	_request_town_hall_flag_texture(url)
+
+
+func _restore_home_player_flag() -> void:
+	_apply_main_ship_flag_url(_home_player_flag_url, false)
 
 
 func _create_fps_label() -> void:
@@ -2301,6 +2385,7 @@ func _reveal_initial_cover() -> void:
 func _apply_server_state(state: Dictionary) -> void:
 	_set_shop_unlocks(state)
 	_apply_resources_from_server(state)
+	_apply_main_ship_flag_url(_player_flag_url_from_server_state(state), true)
 	if state.has("altar_skills") and state.altar_skills is Dictionary:
 		_load_altar_skill_levels_from_server(state.altar_skills)
 	var net = _net
@@ -2433,7 +2518,7 @@ func _load_buildings_from_server(server_buildings: Array) -> void:
 				var s = _get_model_scale(def, level)
 				model.scale = Vector3(s, s, s)
 				model.set_meta("building_visual_model", true)
-				model.rotation_degrees.y = def.get("model_rotation_y", 270.0)
+				model.rotation_degrees.y = _get_model_rotation_y(def)
 				var offsets = def.get("model_offsets", [])
 				if offsets.size() >= level:
 					model.position = offsets[level - 1]
@@ -2584,6 +2669,7 @@ func _sync_react_buildings() -> void:
 
 func _set_player_town_hall_flag(raw_url: String) -> void:
 	var url := str(raw_url).strip_edges()
+	_apply_main_ship_flag_url(url, true)
 	var changed := false
 	for bs in _building_systems:
 		if not is_instance_valid(bs):
@@ -2769,6 +2855,7 @@ func _on_server_auth_ok(player_data: Dictionary) -> void:
 	if player_data.has("ore"):
 		resources.ore = player_data.ore
 	_update_resource_ui()
+	_apply_main_ship_flag_url(_player_flag_url_from_server_state(player_data), true)
 	if player_data.has("altar_skills") and player_data.altar_skills is Dictionary:
 		_load_altar_skill_levels_from_server(player_data.altar_skills)
 	if player_data.has("buildings") and player_data.buildings is Array:
@@ -2967,7 +3054,7 @@ func _create_ghost() -> void:
 			var model = scene_res.instantiate()
 			var s = def.get("model_scale", 0.2)
 			model.scale = Vector3(s, s, s)
-			model.rotation_degrees.y = def.get("model_rotation_y", 270.0)
+			model.rotation_degrees.y = _get_model_rotation_y(def)
 			ghost.add_child(model)
 			_apply_cel_shader(model)
 			_apply_building_albedo(model, def)
@@ -3012,7 +3099,7 @@ func _compute_model_aabb(def: Dictionary, level: int = 1) -> Dictionary:
 	var model = scene_res.instantiate()
 	var s = _get_model_scale(def, level)
 	model.scale = Vector3(s, s, s)
-	model.rotation_degrees.y = def.get("model_rotation_y", 270.0)
+	model.rotation_degrees.y = _get_model_rotation_y(def)
 	var offsets = def.get("model_offsets", [])
 	if offsets.size() >= level:
 		model.position = offsets[level - 1]
@@ -3231,7 +3318,7 @@ func _create_placed_building(def: Dictionary) -> Node3D:
 			var s = _get_model_scale(def, 1)
 			model.scale = Vector3(s, s, s)
 			model.set_meta("building_visual_model", true)
-			model.rotation_degrees.y = def.get("model_rotation_y", 270.0)
+			model.rotation_degrees.y = _get_model_rotation_y(def)
 			model.position = def.get("model_offset", Vector3.ZERO)
 			if current_building_id == "altar":
 				_attach_altar_effect(model)
@@ -4123,7 +4210,7 @@ func _run_upgrade_sequence(b: Dictionary, def: Dictionary, server_new_level: int
 			var s = _get_model_scale(def, b.level)
 			new_model.scale = Vector3(s, s, s)
 			new_model.set_meta("building_visual_model", true)
-			new_model.rotation_degrees.y = def.get("model_rotation_y", 270.0)
+			new_model.rotation_degrees.y = _get_model_rotation_y(def)
 			var offsets = def.get("model_offsets", [])
 			if offsets.size() >= b.level:
 				new_model.position = offsets[b.level - 1]
@@ -4233,6 +4320,10 @@ func _get_model_scale(def: Dictionary, level: int = 1) -> float:
 	if level >= 1 and scales.size() >= level:
 		return float(scales[level - 1])
 	return float(def.get("model_scale", 0.2))
+
+
+func _get_model_rotation_y(def: Dictionary) -> float:
+	return float(def.get("model_rotation_y", 270.0)) + BUILDING_CAMERA_FACING_YAW_DEGREES
 
 
 func _get_building_visual_model(building_node: Node3D) -> Node3D:
@@ -4793,7 +4884,7 @@ func _apply_building_level_visuals_for_test(b: Dictionary, def: Dictionary) -> v
 			var s := _get_model_scale(def, lvl)
 			model.scale = Vector3(s, s, s)
 			model.set_meta("building_visual_model", true)
-			model.rotation_degrees.y = def.get("model_rotation_y", 270.0)
+			model.rotation_degrees.y = _get_model_rotation_y(def)
 			var offsets: Array = def.get("model_offsets", [])
 			if offsets.size() >= lvl:
 				model.position = offsets[lvl - 1]
@@ -4874,8 +4965,17 @@ func _spawn_tower_unit(b: Dictionary, def: Dictionary) -> void:
 	var s = unit_scale
 	unit.scale = Vector3(s, s, s)
 	b.get("node").add_child(unit)
-	unit.position = Vector3(0, offset_y, 0)
-	unit.rotation_degrees.y = -90.0
+	var anchor_xz := Vector2.ZERO
+	if bool(tu.get("align_to_model_center", false)):
+		var building_id := str(b.get("id", ""))
+		var level := clampi(int(b.get("level", 1)), 1, int(def.get("hp_levels", [1]).size()))
+		var aabb_data := _get_cached_aabb(_aabb_cache_key(building_id, level))
+		anchor_xz = aabb_data.get("center", Vector2.ZERO)
+	unit.position = Vector3(anchor_xz.x, offset_y, anchor_xz.y)
+	var unit_rotation_y := float(tu.get("rotation_y", -90.0))
+	if bool(tu.get("inherit_building_yaw", false)):
+		unit_rotation_y += BUILDING_CAMERA_FACING_YAW_DEGREES
+	unit.rotation_degrees.y = unit_rotation_y
 	_apply_cel_shader(unit)
 	# Set level to match building level
 	if unit.has_method("set_level"):
@@ -5393,6 +5493,16 @@ func _find_ship_at_click(mouse_pos: Vector2) -> Dictionary:
 	var camera = BaseTroop._get_camera_cached()
 	if not camera:
 		return {}
+	var main_ship_controller: Node3D = get_node_or_null("../MainShipController")
+	if is_instance_valid(main_ship_controller) and main_ship_controller.visible:
+		var main_ship_hit := false
+		if main_ship_controller.has_method("is_screen_point_over_ship"):
+			main_ship_hit = bool(main_ship_controller.call("is_screen_point_over_ship", camera, mouse_pos, 18.0))
+		else:
+			var main_ship_screen: Vector2 = camera.unproject_position(main_ship_controller.global_position)
+			main_ship_hit = mouse_pos.distance_to(main_ship_screen) < 90.0
+		if main_ship_hit:
+			return {"main_ship": true, "ship_node": main_ship_controller}
 	for bs_node in _building_systems:
 		for b in bs_node.placed_buildings:
 			if b.get("id") != "port":
@@ -5411,6 +5521,9 @@ func _find_ship_at_click(mouse_pos: Vector2) -> Dictionary:
 
 ## Shows the React load-troops modal for a port ship.
 func _show_ship_panel(ship_data: Dictionary) -> void:
+	if bool(ship_data.get("main_ship", false)):
+		await _show_main_ship_panel()
+		return
 	var pnode: Node3D = ship_data.get("port_node")
 	if not is_instance_valid(pnode):
 		return
@@ -5475,6 +5588,48 @@ func _show_ship_panel(ship_data: Dictionary) -> void:
 		})
 
 
+func _show_main_ship_panel() -> void:
+	if _block_without_server("open main ship"):
+		return
+	var result: Dictionary = await _net.get_player_ship()
+	if not is_instance_valid(self):
+		return
+	if result.has("error"):
+		_show_error(str(result.get("error", "Unable to load main ship")))
+		return
+	var ship: Dictionary = result.get("ship", result)
+	selected_building = {"id": "main_ship", "server_id": "main_ship", "node": get_node_or_null("../MainShipController")}
+	_send_main_ship_panel(ship)
+
+
+func _send_main_ship_panel(ship: Dictionary) -> void:
+	var bridge: Node = _bridge
+	if bridge == null:
+		return
+	var level: int = clampi(int(ship.get("level", ship.get("ship_level", 1))), 1, 5)
+	var troops_value: Variant = ship.get("troops", ship.get("ship_troops", []))
+	var troops: Array = troops_value.duplicate(true) if troops_value is Array else []
+	var next_cost: Dictionary = PLAYER_SHIP_LEVELS.get(level + 1, {}).get("cost", {}) if level < 5 else {}
+	var next_capacity: int = int(PLAYER_SHIP_LEVELS.get(level + 1, {}).get("capacity", 0)) if level < 5 else 0
+	bridge.send_to_react("building_selected", {
+		"id": "main_ship",
+		"name": "Main Ship",
+		"level": level,
+		"max_level": 5,
+		"is_enemy": false,
+		"has_ship": true,
+		"ship_level": level,
+		"ship_troops": troops,
+		"fleet_ship_troops": [{"server_id": "main_ship", "ship_troops": troops}],
+		"ship_capacity": int(ship.get("capacity", PLAYER_SHIP_LEVELS.get(level, {}).get("capacity", troops.size()))),
+		"ship_next_capacity": next_capacity,
+		"ship_upgrade_cost": next_cost,
+		"troop_levels": troop_levels,
+		"server_id": "main_ship",
+		"open_load_troops": false,
+	})
+
+
 ## Hides and frees the ship info panel.
 func _hide_ship_panel() -> void:
 	if ship_info_panel and is_instance_valid(ship_info_panel):
@@ -5491,7 +5646,35 @@ func _buy_ship_level(ship_lvl: int) -> void:
 
 
 func _load_troop_to_ship(troop_name: String, extra: Dictionary = {}) -> void:
+	if selected_building.get("id") == "main_ship":
+		var result: Dictionary = await _net.load_troop_to_player_ship(troop_name, extra)
+		_apply_main_ship_action_result(result)
+		return
 	_port._load_troop_to_ship(troop_name, extra)
+
+
+func _upgrade_main_ship() -> void:
+	if _block_without_server("upgrade main ship"):
+		return
+	var result: Dictionary = await _net.upgrade_player_ship()
+	_apply_main_ship_action_result(result)
+
+
+func _apply_main_ship_action_result(result: Dictionary) -> void:
+	if not is_instance_valid(self):
+		return
+	if result.has("error"):
+		_show_error(str(result.get("error", "Main ship update failed")))
+		return
+	if result.has("resources"):
+		_apply_resources_from_server(result.resources)
+	var ship_value: Variant = result.get("ship", result)
+	if not (ship_value is Dictionary):
+		_show_error("Main ship update returned invalid data")
+		return
+	var ship: Dictionary = ship_value
+	_send_main_ship_panel(ship)
+	_apply_main_ship_state_from_server(ship)
 
 func _reinforce_troops() -> void:
 	# Refill all ships with troops that were lost in battle
@@ -5506,14 +5689,9 @@ func _reinforce_troops() -> void:
 			return
 		# Reload ship troops from server response
 		if result.has("ships"):
-			for ship_data in result.ships:
-				var bid: int = ship_data.get("id", -1)
-				for bs_node in _building_systems:
-					for b in bs_node.placed_buildings:
-						if b.get("server_id") == bid and b.get("id") == "port":
-							var pnode = b.get("node")
-							if is_instance_valid(pnode):
-								pnode.set_meta("ship_troops", ship_data.get("ship_troops", []))
+			var ships_value: Variant = result.get("ships", [])
+			if ships_value is Array:
+				_apply_ships_from_server(ships_value)
 		if result.has("resources"):
 			_apply_resources_from_server(result.resources)
 		_refresh_port_panel()
@@ -5536,15 +5714,50 @@ func _on_troop_died(troop_name: String) -> void:
 	return
 
 
-## Applies authoritative ship_troops data returned by the server (e.g. from
-## /attack/result) to the local port metas across all building systems.
-## Accepts an Array of {id, ship_troops, ship_troops_template, level}.
+func _apply_main_ship_state_from_server(ship_data: Dictionary) -> void:
+	var troops_value: Variant = ship_data.get("troops", ship_data.get("ship_troops", []))
+	var server_troops: Array = troops_value.duplicate(true) if troops_value is Array else []
+	var server_level: int = clampi(int(ship_data.get("level", ship_data.get("ship_level", 1))), 1, 5)
+	var server_capacity: int = maxi(
+		server_troops.size(),
+		int(ship_data.get("capacity", ship_data.get("ship_capacity", PLAYER_SHIP_LEVELS.get(server_level, {}).get("capacity", 3))))
+	)
+	var main_ship_controller: Node = get_node_or_null("../MainShipController")
+	if is_instance_valid(main_ship_controller):
+		main_ship_controller.set_meta("ship_troops", server_troops)
+		main_ship_controller.set_meta("ship_level", server_level)
+		main_ship_controller.set_meta("ship_capacity", server_capacity)
+	var bridge: Node = _bridge
+	if bridge:
+		bridge.send_to_react("ship_updated", {
+			"ship_troops": server_troops,
+			"ship_level": server_level,
+			"ship_capacity": server_capacity,
+			"ship_upgrade_cost": PLAYER_SHIP_LEVELS.get(server_level + 1, {}).get("cost", {}) if server_level < 5 else {},
+		})
+
+
+## Applies authoritative ship data returned by the server after battle or
+## reinforcement. Supports the current string main_ship id and legacy numeric
+## port ids while clients migrate to the single-ship model.
 func _apply_ships_from_server(ships: Array) -> void:
 	if ships == null or ships.is_empty():
 		return
-	for ship_data in ships:
-		var sid: int = ship_data.get("id", -1)
-		var server_troops: Array = ship_data.get("ship_troops", [])
+	for ship_value in ships:
+		if not (ship_value is Dictionary):
+			continue
+		var ship_data: Dictionary = ship_value
+		var ship_id_value: Variant = ship_data.get("id", -1)
+		if str(ship_id_value).strip_edges() == "main_ship":
+			_apply_main_ship_state_from_server(ship_data)
+			continue
+		var ship_id_text: String = str(ship_id_value).strip_edges()
+		if not ship_id_text.is_valid_int():
+			push_warning("Ignoring ship payload with invalid id: %s" % ship_id_text)
+			continue
+		var sid: int = int(ship_id_text)
+		var troops_value: Variant = ship_data.get("ship_troops", ship_data.get("troops", []))
+		var server_troops: Array = troops_value.duplicate(true) if troops_value is Array else []
 		var server_level: int = clampi(int(ship_data.get("level", 1)), 1, MAX_PORT_SHIP_LEVEL)
 		for bs_node in _building_systems:
 			for b in bs_node.placed_buildings:
@@ -5555,9 +5768,17 @@ func _apply_ships_from_server(ships: Array) -> void:
 						pnode.set_meta("ship_level", server_level)
 
 func _swap_troop_on_ship(slot: int, troop_name: String, extra: Dictionary = {}) -> void:
+	if selected_building.get("id") == "main_ship":
+		var result: Dictionary = await _net.swap_troop_on_player_ship(slot, troop_name, extra)
+		_apply_main_ship_action_result(result)
+		return
 	_port._swap_troop_on_ship(slot, troop_name, extra)
 
 func _remove_troop_from_ship(slot: int) -> void:
+	if selected_building.get("id") == "main_ship":
+		var result: Dictionary = await _net.remove_troop_from_player_ship(slot)
+		_apply_main_ship_action_result(result)
+		return
 	_port._remove_troop_from_ship(slot)
 
 func _animate_main_ship() -> void:
@@ -6093,24 +6314,17 @@ func _on_attack_pressed() -> void:
 
 ## Refreshes ship_troops meta on all ports from the authoritative server state.
 ## Called before assembling the fleet so the client and server agree on loadouts.
-func _refresh_port_ship_meta_from_server() -> void:
+func _refresh_player_ship_from_server() -> Dictionary:
 	var net: Node = _net
 	if not net or not net.has_token():
-		return
-	var result = await net.get_ships()
+		return {}
+	var result: Dictionary = await net.get_player_ship()
 	if not is_instance_valid(self):
-		return
-	if not (result is Dictionary) or not result.has("ships"):
-		return
-	for ship_data in result.ships:
-		var sid: int = ship_data.get("id", -1)
-		var server_troops: Array = ship_data.get("ship_troops", [])
-		for bs_node in _building_systems:
-			for b in bs_node.placed_buildings:
-				if b.get("server_id") == sid and b.get("id") == "port":
-					var pnode = b.get("node")
-					if is_instance_valid(pnode):
-						pnode.set_meta("ship_troops", server_troops)
+		return {}
+	if result.has("error"):
+		push_warning("Player ship refresh failed: %s" % str(result.get("error", "unknown error")))
+		return {}
+	return result.get("ship", result)
 
 
 ## Builds the fleet array from all port ships for the attack system.
@@ -6118,32 +6332,30 @@ func _refresh_port_ship_meta_from_server() -> void:
 ## NOTE: Fleet contains ONLY purchased troops. Empty ships are excluded.
 ## The previous auto-fill behaviour was a desync/cheat source — see code review.
 func _build_fleet() -> Array:
-	await _refresh_port_ship_meta_from_server()
+	var player_ship: Dictionary = await _refresh_player_ship_from_server()
 	if not is_instance_valid(self):
 		return []
-	_refresh_port_number_labels()
-	var fleet: Array = []
-	for bs_node in _building_systems:
-		for b in bs_node.placed_buildings:
-			if b.get("id") != "port":
-				continue
-			var pnode = b.get("node", null)
-			if not is_instance_valid(pnode) or not pnode.has_meta("has_ship"):
-				continue
-			var ship_level: int = clampi(int(pnode.get_meta("ship_level", 1)), 1, MAX_PORT_SHIP_LEVEL)
-			var ship_troops: Array = pnode.get_meta("ship_troops", [])
-			if not ship_troops.is_empty():
-				fleet.append({
-					"level": ship_level,
-					"troops": ship_troops.duplicate(),
-					"port_number": int(pnode.get_meta("port_number", _port_display_number_for_building(b))),
-					"port_server_id": int(b.get("server_id", -1)),
-				})
-	# Sandbox guarantee: TestMain can exercise boss units without setting up
-	# a port/ship. "_SLOT_FILLER_" pads each 2-slot footprint.
+	if not player_ship.is_empty():
+		var troops_value: Variant = player_ship.get("troops", player_ship.get("ship_troops", []))
+		var ship_troops: Array = troops_value.duplicate(true) if troops_value is Array else []
+		if not ship_troops.is_empty():
+			var template_value: Variant = player_ship.get("troop_template", ship_troops)
+			return [{
+				"id": str(player_ship.get("id", "main_ship")),
+				"level": clampi(int(player_ship.get("level", player_ship.get("ship_level", 1))), 1, 5),
+				"capacity": int(player_ship.get("capacity", player_ship.get("ship_capacity", ship_troops.size()))),
+				"troops": ship_troops,
+				"troop_template": template_value.duplicate(true) if template_value is Array else ship_troops.duplicate(true),
+			}]
+	# TestMain remains fully playable without a local server session.
 	if test_mode:
-		fleet.append({"level": 2, "troops": ["DemonKing", "_SLOT_FILLER_", "FireDragon", "_SLOT_FILLER_"]})
-	return fleet
+		return [{
+			"id": "test_main_ship",
+			"level": 3,
+			"capacity": 27,
+			"troops": ["Knight:l2", "Knight:l2", "Mage:l2", "Archer:l2", "DemonKing:rEpic:nft_test", "_SLOT_FILLER_", "FireDragon:rCommon:nft_test_dragon", "_SLOT_FILLER_"],
+		}]
+	return []
 
 
 func _get_all_port_ships() -> Array:
@@ -6151,16 +6363,17 @@ func _get_all_port_ships() -> Array:
 
 
 func _sail_ships_away() -> void:
-	await _battle._sail_ships_away()
+	_battle._hide_home_fleet_for_transition()
 
 
 func _restore_ships_and_troops() -> void:
 	_battle._restore_ships_and_troops()
 
 
-## Called after ships already sailed and clouds closed — skips those phases
+## Compatibility entry point: clouds are already closed and the home fleet is
+## hidden without playing a departure animation.
 func _switch_to_enemy_island_after_sail() -> void:
-	_battle._switch_to_enemy_island_after_sail()
+	await _battle._switch_to_enemy_island_covered()
 
 
 func _find_nearest_port_with_ship(from_pos: Vector3) -> Vector3:
@@ -6215,6 +6428,10 @@ func _replay_playback() -> void:
 ## Replay a ship placement action.
 func _replay_place_ship(action: Dictionary, attack_system: Node) -> void:
 	_battle._replay_place_ship(action, attack_system)
+
+
+func _replay_deploy_troop(action: Dictionary, attack_system: Node) -> void:
+	_battle._replay_deploy_troop(action, attack_system)
 
 
 ## Replay a cannon fire action.

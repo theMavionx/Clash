@@ -9,6 +9,10 @@ const {
   SKELETON_GUARD,
 } = require('./combat_defs');
 const {
+  CANONICAL_GRID_CONFIGS,
+  COMBAT_GRID_VERSION,
+} = require('./combat_grid_config');
+const {
   MATCHMAKING_CONFIG,
   buildBotBaseTemplates,
 } = require('./matchmaking_defs');
@@ -68,6 +72,18 @@ db.exec(`
     skill_id  TEXT NOT NULL,
     level     INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (player_id, skill_id)
+  );
+
+  CREATE TABLE IF NOT EXISTS player_ships (
+    player_id            TEXT PRIMARY KEY REFERENCES players(id) ON DELETE CASCADE,
+    level                INTEGER NOT NULL DEFAULT 1,
+    troops               TEXT NOT NULL DEFAULT '[]',
+    troop_template       TEXT NOT NULL DEFAULT '[]',
+    capacity_override    INTEGER NOT NULL DEFAULT 0,
+    migration_json       TEXT,
+    migrated_from_ports_at TEXT,
+    created_at           TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at           TEXT NOT NULL DEFAULT (datetime('now'))
   );
 `);
 
@@ -5567,7 +5583,6 @@ const TH_MAX_COUNT = {
   mine:         [1, 2, 3, 3, 4],
   sawmill:      [1, 2, 3, 3, 4],
   barn:         [1, 1, 1, 1, 1],
-  port:         [1, 2, 3, 3, 5],
   altar:        [1, 1, 1, 1, 1],
   archer_tower: [1, 2, 3, 3, 3],
   tombstone:    [0, 1, 3, 3, 3],  // unlocked at TH2
@@ -5580,10 +5595,10 @@ const TH_MAX_COUNT = {
 
 // Required buildings to upgrade Town Hall (all must be at TH's current level)
 const TH_UPGRADE_REQUIRES = {
-  1: ['mine', 'sawmill', 'barn', 'port'],
-  2: ['mine', 'sawmill', 'barn', 'port', 'storage', 'tombstone', 'archer_tower'],
-  3: ['mine', 'sawmill', 'barn', 'port', 'storage', 'tombstone', 'archer_tower', 'turret'],
-  4: ['mine', 'sawmill', 'barn', 'port', 'storage', 'tombstone', 'archer_tower', 'turret', 'mage_tower'],
+  1: ['mine', 'sawmill', 'barn'],
+  2: ['mine', 'sawmill', 'barn', 'storage', 'tombstone', 'archer_tower'],
+  3: ['mine', 'sawmill', 'barn', 'storage', 'tombstone', 'archer_tower', 'turret'],
+  4: ['mine', 'sawmill', 'barn', 'storage', 'tombstone', 'archer_tower', 'turret', 'mage_tower'],
 };
 
 const BUILDING_DEFS = {
@@ -6080,7 +6095,7 @@ function demonKingRequiredWins(level) {
 }
 
 const GRID_SPECS = {
-  0: { width: 27, height: 27, label: 'main island', allowed: null, blocked: ['port'] },
+  0: { width: 29, height: 27, label: 'main island', allowed: null, blocked: ['port'] },
   1: { width: 27, height: 3, label: 'port coast', allowed: ['port'], blocked: [] },
   2: { width: 27, height: 5, label: 'attack approach', allowed: ['flag'], blocked: [] },
 };
@@ -7085,6 +7100,7 @@ function registerPlayer(name, options = {}) {
   for (const troop of ACTIVE_TROOP_TYPES) {
     stmts.upsertTroopLevel.run(id, troop, 1);
   }
+  ensurePlayerShip(id);
   const player = { id, name, token };
   if (options.referralCode) {
     try {
@@ -8091,6 +8107,7 @@ function getBuildingUnlocks(playerId) {
 }
 
 function placeBuilding(playerId, type, gridX, gridZ, gridIndex = 0) {
+  if (type === 'port') return { error: 'Ports were replaced by the player main ship' };
   const def = BUILDING_DEFS[type];
   if (!def) return { error: `Unknown building type: ${type}` };
 
@@ -8236,7 +8253,10 @@ function moveBuilding(playerId, buildingId, gridX, gridZ, gridIndex = null) {
 }
 
 function getPlayerBuildings(playerId) {
-  return decorateBuildingsForPlayer(playerId, stmts.getBuildings.all(playerId));
+  return decorateBuildingsForPlayer(
+    playerId,
+    stmts.getBuildings.all(playerId).filter((building) => building.type !== 'port'),
+  );
 }
 
 function getTownHallFlag(playerId) {
@@ -9329,6 +9349,8 @@ function findEnemy(playerId) {
     // scene, but a headless agent can't. Ship it so the agent can build a
     // valid `battle_start` action without guessing coordinates.
     grid_config: CANONICAL_GRID_CONFIG,
+    grid_configs: CANONICAL_GRID_CONFIGS,
+    combat_grid_version: COMBAT_GRID_VERSION,
   };
   })();
 }
@@ -9501,6 +9523,8 @@ function findEnemyByName(playerId, rawTargetName) {
       battle_session_id: sessionId,
       battle_session_expires_at: reservedUntil,
       grid_config: CANONICAL_GRID_CONFIG,
+      grid_configs: CANONICAL_GRID_CONFIGS,
+      combat_grid_version: COMBAT_GRID_VERSION,
     };
   })();
 }
@@ -9649,6 +9673,8 @@ function startRevengeBattle(playerId, sourceBattleId) {
       battle_session_id: sessionId,
       battle_session_expires_at: reservedUntil,
       grid_config: CANONICAL_GRID_CONFIG,
+      grid_configs: CANONICAL_GRID_CONFIGS,
+      combat_grid_version: COMBAT_GRID_VERSION,
     };
   })();
 }
@@ -9804,6 +9830,7 @@ function getFullPlayerState(playerId) {
     wallets,
     dex_accounts: dexAccounts,
     buildings: getPlayerBuildings(playerId),
+    ship: getPlayerShip(playerId),
     town_hall_flag: townHallFlag ? {
       image_url: townHallFlag.image_url,
       updated_at: townHallFlag.updated_at,
@@ -9829,6 +9856,156 @@ function repairAllBuildings(playerId) {
 }
 
 const SHIP_COST_GOLD = 250;
+
+const PLAYER_SHIP_LEVELS = Object.freeze({
+  1: Object.freeze({ capacity: 3, town_hall: 1, cost: Object.freeze({ gold: 0, wood: 0, ore: 0 }) }),
+  2: Object.freeze({ capacity: 12, town_hall: 2, cost: Object.freeze({ gold: 1000, wood: 2000, ore: 1700 }) }),
+  3: Object.freeze({ capacity: 27, town_hall: 3, cost: Object.freeze({ gold: 1800, wood: 3600, ore: 3100 }) }),
+  4: Object.freeze({ capacity: 36, town_hall: 4, cost: Object.freeze({ gold: 2400, wood: 4800, ore: 4100 }) }),
+  5: Object.freeze({ capacity: 45, town_hall: 5, cost: Object.freeze({ gold: 3250, wood: 6400, ore: 5500 }) }),
+});
+
+function safeShipTroopArray(raw) {
+  if (Array.isArray(raw)) return raw.filter((entry) => typeof entry === 'string');
+  try {
+    const parsed = JSON.parse(raw || '[]');
+    return Array.isArray(parsed) ? parsed.filter((entry) => typeof entry === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function playerShipCapacity(level, capacityOverride = 0) {
+  const normalizedLevel = Math.max(1, Math.min(5, Number(level) || 1));
+  return Math.max(
+    Number(PLAYER_SHIP_LEVELS[normalizedLevel]?.capacity || 3),
+    Math.max(0, Number(capacityOverride) || 0),
+  );
+}
+
+function playerShipLevelForCapacity(capacity) {
+  const requested = Math.max(3, Number(capacity) || 3);
+  for (const level of [1, 2, 3, 4, 5]) {
+    if (PLAYER_SHIP_LEVELS[level].capacity >= requested) return level;
+  }
+  return 5;
+}
+
+function serializePlayerShip(row) {
+  if (!row) return null;
+  const level = Math.max(1, Math.min(5, Number(row.level) || 1));
+  return {
+    id: 'main_ship',
+    level,
+    capacity: playerShipCapacity(level, row.capacity_override),
+    troops: safeShipTroopArray(row.troops),
+    troop_template: safeShipTroopArray(row.troop_template),
+    migrated_from_ports_at: row.migrated_from_ports_at || null,
+    updated_at: row.updated_at || null,
+  };
+}
+
+// Existing fleets are folded into one authoritative ship on first access. The
+// legacy port rows remain untouched so migration can be audited or rolled back.
+function ensurePlayerShip(playerId) {
+  if (!playerId) return null;
+  const existing = db.prepare('SELECT * FROM player_ships WHERE player_id = ?').get(playerId);
+  if (existing) return serializePlayerShip(existing);
+
+  const ports = db.prepare(`
+    SELECT id, level, has_ship, ship_troops, ship_troops_template
+    FROM buildings
+    WHERE player_id = ? AND type = 'port' AND has_ship = 1
+    ORDER BY id ASC
+  `).all(playerId);
+  const troops = [];
+  const troopTemplate = [];
+  let legacyCapacity = 0;
+  const sourcePorts = [];
+  for (const port of ports) {
+    const portLevel = Math.max(1, Math.min(3, Number(port.level) || 1));
+    legacyCapacity += portLevel * 3;
+    const current = safeShipTroopArray(port.ship_troops);
+    const template = safeShipTroopArray(port.ship_troops_template);
+    troops.push(...current);
+    troopTemplate.push(...template);
+    sourcePorts.push({ id: port.id, level: portLevel, current_slots: current.length, template_slots: template.length });
+  }
+  const requiredCapacity = Math.max(3, legacyCapacity, troops.length, troopTemplate.length);
+  const level = playerShipLevelForCapacity(requiredCapacity);
+  const levelCapacity = PLAYER_SHIP_LEVELS[level].capacity;
+  const capacityOverride = Math.max(0, requiredCapacity - levelCapacity);
+  const migration = {
+    version: 1,
+    source: ports.length > 0 ? 'legacy_ports' : 'new_player',
+    legacy_capacity: legacyCapacity,
+    source_ports: sourcePorts,
+  };
+  db.prepare(`
+    INSERT INTO player_ships
+      (player_id, level, troops, troop_template, capacity_override, migration_json, migrated_from_ports_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    playerId,
+    level,
+    JSON.stringify(troops),
+    JSON.stringify(troopTemplate.length > 0 ? troopTemplate : troops),
+    capacityOverride,
+    JSON.stringify(migration),
+    ports.length > 0 ? new Date().toISOString() : null,
+  );
+  return serializePlayerShip(db.prepare('SELECT * FROM player_ships WHERE player_id = ?').get(playerId));
+}
+
+function getPlayerShip(playerId) {
+  return ensurePlayerShip(playerId);
+}
+
+function updatePlayerShipTroops(playerId, troops, troopTemplate = undefined) {
+  ensurePlayerShip(playerId);
+  const current = db.prepare('SELECT * FROM player_ships WHERE player_id = ?').get(playerId);
+  if (!current) return null;
+  const normalizedTroops = safeShipTroopArray(troops);
+  const normalizedTemplate = troopTemplate === undefined
+    ? safeShipTroopArray(current.troop_template)
+    : safeShipTroopArray(troopTemplate);
+  const capacity = playerShipCapacity(current.level, current.capacity_override);
+  if (normalizedTroops.length > capacity || normalizedTemplate.length > capacity) {
+    return { error: 'Ship capacity exceeded', capacity };
+  }
+  db.prepare(`
+    UPDATE player_ships
+    SET troops = ?, troop_template = ?, updated_at = datetime('now')
+    WHERE player_id = ?
+  `).run(JSON.stringify(normalizedTroops), JSON.stringify(normalizedTemplate), playerId);
+  return getPlayerShip(playerId);
+}
+
+function upgradePlayerShip(playerId) {
+  const ship = getPlayerShip(playerId);
+  if (!ship) return { error: 'Player ship not found' };
+  if (ship.level >= 5) return { error: 'Ship is already at max level' };
+  const nextLevel = ship.level + 1;
+  const config = PLAYER_SHIP_LEVELS[nextLevel];
+  const townHallLevel = getTownHallLevel(playerId);
+  if (townHallLevel < config.town_hall) {
+    return { error: `Upgrade Town Hall to level ${config.town_hall} first` };
+  }
+  const cost = config.cost;
+  if (!canAfford(playerId, cost.gold, cost.wood, cost.ore)) {
+    return { error: 'Not enough resources', cost };
+  }
+  subtractResources(playerId, cost.gold, cost.wood, cost.ore, {
+    sourceType: 'main_ship_upgrade',
+    metadata: { from_level: ship.level, to_level: nextLevel },
+  });
+  db.prepare(`
+    UPDATE player_ships
+    SET level = ?, capacity_override = 0, updated_at = datetime('now')
+    WHERE player_id = ?
+  `).run(nextLevel, playerId);
+  return { success: true, ship: getPlayerShip(playerId), cost, resources: getResources(playerId) };
+}
 
 function buyShip(playerId, buildingId) {
   const building = stmts.getBuildingById.get(buildingId, playerId);
@@ -10119,7 +10296,7 @@ function completeRaidMatchmakingFromReplay(replayData, claimedResult, verifiedRe
   const actions = Array.isArray(replayData?.actions)
     ? replayData.actions
     : (Array.isArray(replayData) ? replayData : []);
-  const shipActions = actions.filter((action) => action?.type === 'place_ship');
+  const shipActions = actions.filter((action) => ['place_ship', 'deploy_troop'].includes(action?.type));
   let result = resolvedRaidResult(claimedResult, verifiedResult, simResult);
   if (result === 'defeat' && (shipActions.length === 0 || Number(duration || 0) < 15)) {
     result = 'abandoned';
@@ -10142,21 +10319,35 @@ function completeRaidMatchmakingFromReplay(replayData, claimedResult, verifiedRe
   }
 }
 
+function withAttackerFlagSnapshot(replayData, attackerId) {
+  const attackerFlagUrl = String(getTownHallFlag(attackerId)?.image_url || '').trim();
+  const decorateActions = (actions) => actions.map((action) => {
+    if (!action || action.type !== 'battle_start') return action;
+    return { ...action, attacker_flag_url: attackerFlagUrl };
+  });
+  if (Array.isArray(replayData)) return decorateActions(replayData);
+  if (replayData && typeof replayData === 'object' && Array.isArray(replayData.actions)) {
+    return { ...replayData, actions: decorateActions(replayData.actions) };
+  }
+  return replayData;
+}
+
 function storeReplay(attackerId, defenderId, replayData, buildingsSnapshot, claimedResult, verifiedResult, reason, loot, simResult) {
   const duration = replayDurationSec(replayData, simResult);
+  const persistedReplayData = withAttackerFlagSnapshot(replayData, attackerId);
   const info = stmts.insertReplay.run(
     attackerId, defenderId, claimedResult, verifiedResult, reason || '',
-    JSON.stringify(replayData), JSON.stringify(buildingsSnapshot),
+    JSON.stringify(persistedReplayData), JSON.stringify(buildingsSnapshot),
     loot?.gold || 0, loot?.wood || 0, loot?.ore || 0,
     simResult?.townHallHpPct ?? null, simResult?.buildingsDestroyed ?? 0,
     replaySimDebug(simResult), duration
   );
   const replayId = Number(info?.lastInsertRowid || 0) || null;
-  const sessionId = battleSessionIdFromReplayData(replayData);
+  const sessionId = battleSessionIdFromReplayData(persistedReplayData);
   if (replayId && sessionId) {
     try { stmts.linkRevengeBattleBySession.run(replayId, attackerId, defenderId, sessionId); } catch {}
   }
-  completeRaidMatchmakingFromReplay(replayData, claimedResult, verifiedResult, reason, loot, simResult, duration);
+  completeRaidMatchmakingFromReplay(persistedReplayData, claimedResult, verifiedResult, reason, loot, simResult, duration);
   return replayId;
 }
 
@@ -10241,7 +10432,7 @@ function battleRiskShipDeployPatternFromReplay(replayData) {
   const actions = battleRiskReplayActions(replayData);
   const coords = [];
   for (const action of actions) {
-    if (action?.type !== 'place_ship') continue;
+    if (!['place_ship', 'deploy_troop'].includes(action?.type)) continue;
     const troopSpawns = Array.isArray(action.troop_spawns) ? action.troop_spawns : [];
     const firstSpawn = troopSpawns[0] || {};
     const rawX = battleRiskFiniteCoord(action.troop_x, action.x, firstSpawn.x);
@@ -10278,7 +10469,7 @@ function getBattleShipDeployPatternMetrics(options = {}) {
     SELECT attacker_id, replay_data, created_at
     FROM battle_replays
     WHERE created_at > datetime('now', ?)
-      AND replay_data LIKE '%place_ship%'
+      AND (replay_data LIKE '%place_ship%' OR replay_data LIKE '%deploy_troop%')
       ${playerSql}
     ORDER BY created_at DESC, id DESC
     LIMIT ?
@@ -10870,6 +11061,12 @@ module.exports = {
   getNftBackedTroopUpgradeStatus,
   demonKingRequiredWins,
   getFullPlayerState,
+  getPlayerShip,
+  ensurePlayerShip,
+  updatePlayerShipTroops,
+  upgradePlayerShip,
+  playerShipCapacity,
+  PLAYER_SHIP_LEVELS,
   buyShip,
   battleVictory,
   battleDefeat,

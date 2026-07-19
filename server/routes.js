@@ -15,6 +15,12 @@ const elfa = require('./elfa');
 const diag = require('./diag');
 const earnings = require('./earnings');
 const { MAX_SHIPS } = require('./combat_defs');
+const {
+  CANONICAL_GRID_CONFIG,
+  CANONICAL_GRID_CONFIGS,
+  COMBAT_GRID_VERSION,
+  isWorldPointInsideGrid,
+} = require('./combat_grid_config');
 const tradeRecon = require('./trade_reconciliation');
 const { loadIncrementalTournamentTrades } = require('./tournament_trade_sync');
 const luckyRaiderPayouts = require('./lucky_raider_payouts');
@@ -11889,6 +11895,30 @@ function _custodiedMarketplaceNftKeysForSeller(playerId) {
   }
   return keys;
 }
+
+function _playerShipState(playerId) {
+  db.ensurePlayerShip(playerId);
+  const row = db.db.prepare('SELECT * FROM player_ships WHERE player_id = ?').get(playerId);
+  if (!row) return null;
+  let troops = [];
+  let troopTemplate = [];
+  try { troops = JSON.parse(row.troops || '[]'); } catch { troops = []; }
+  try { troopTemplate = JSON.parse(row.troop_template || '[]'); } catch { troopTemplate = []; }
+  const level = Math.max(1, Math.min(5, Number(row.level) || 1));
+  return {
+    ...row,
+    id: 'main_ship',
+    level,
+    capacity: db.playerShipCapacity(level, row.capacity_override),
+    troops,
+    troop_template: troopTemplate,
+  };
+}
+
+function _playerShipSources(playerId) {
+  const ship = _playerShipState(playerId);
+  return ship ? [{ id: 'main_ship', ship_troops: JSON.stringify(ship.troops) }] : [];
+}
 function _marketplaceOrderNftCollectionKey(order = {}) {
   const meta = (() => {
     try { return order.metadata_json ? JSON.parse(order.metadata_json) : {}; } catch { return {}; }
@@ -11924,7 +11954,7 @@ function _marketplaceOrderNftCollectionKey(order = {}) {
 }
 function _loadedDemonKingTokenKeys(playerId) {
   const keys = new Set();
-  const ports = db.db.prepare('SELECT ship_troops FROM buildings WHERE player_id = ? AND type = ? AND has_ship = 1').all(playerId, 'port');
+  const ports = _playerShipSources(playerId);
   for (const port of ports) {
     let troops = [];
     try { troops = JSON.parse(port.ship_troops || '[]'); } catch { troops = []; }
@@ -11939,7 +11969,7 @@ function _loadedDemonKingTokenKeys(playerId) {
 }
 function _loadedNftBackedTokenKeys(playerId) {
   const keys = new Set();
-  const ports = db.db.prepare('SELECT ship_troops FROM buildings WHERE player_id = ? AND type = ? AND has_ship = 1').all(playerId, 'port');
+  const ports = _playerShipSources(playerId);
   for (const port of ports) {
     let troops = [];
     try { troops = JSON.parse(port.ship_troops || '[]'); } catch { troops = []; }
@@ -11955,17 +11985,17 @@ function _loadedNftBackedTokenKeys(playerId) {
 function _findLoadedDemonKingToken(playerId, tokenKey, options = {}) {
   const expectedKey = String(tokenKey || '').toLowerCase();
   if (!expectedKey) return null;
-  const exceptBuildingId = Number(options.exceptBuildingId || 0);
+  const exceptBuildingId = options.exceptBuildingId == null ? null : String(options.exceptBuildingId);
   const exceptStart = Number.isInteger(options.exceptStart) ? options.exceptStart : null;
   const exceptEnd = Number.isInteger(options.exceptEnd) ? options.exceptEnd : null;
-  const ports = db.db.prepare('SELECT id, ship_troops FROM buildings WHERE player_id = ? AND type = ? AND has_ship = 1').all(playerId, 'port');
+  const ports = _playerShipSources(playerId);
   for (const port of ports) {
     let troops = [];
     try { troops = JSON.parse(port.ship_troops || '[]'); } catch { troops = []; }
     for (let index = 0; index < troops.length; index++) {
       const troop = troops[index];
       if (_isSlotFiller(troop)) continue;
-      if (port.id === exceptBuildingId && exceptStart !== null && exceptEnd !== null && index >= exceptStart && index < exceptEnd) {
+      if (String(port.id) === exceptBuildingId && exceptStart !== null && exceptEnd !== null && index >= exceptStart && index < exceptEnd) {
         continue;
       }
       const parsed = parseDemonKingTroopEntry(troop);
@@ -11979,17 +12009,17 @@ function _findLoadedDemonKingToken(playerId, tokenKey, options = {}) {
 function _findLoadedNftBackedToken(playerId, tokenKey, options = {}) {
   const expectedKey = String(tokenKey || '').toLowerCase();
   if (!expectedKey) return null;
-  const exceptBuildingId = Number(options.exceptBuildingId || 0);
+  const exceptBuildingId = options.exceptBuildingId == null ? null : String(options.exceptBuildingId);
   const exceptStart = Number.isInteger(options.exceptStart) ? options.exceptStart : null;
   const exceptEnd = Number.isInteger(options.exceptEnd) ? options.exceptEnd : null;
-  const ports = db.db.prepare('SELECT id, ship_troops FROM buildings WHERE player_id = ? AND type = ? AND has_ship = 1').all(playerId, 'port');
+  const ports = _playerShipSources(playerId);
   for (const port of ports) {
     let troops = [];
     try { troops = JSON.parse(port.ship_troops || '[]'); } catch { troops = []; }
     for (let index = 0; index < troops.length; index++) {
       const troop = troops[index];
       if (_isSlotFiller(troop)) continue;
-      if (port.id === exceptBuildingId && exceptStart !== null && exceptEnd !== null && index >= exceptStart && index < exceptEnd) {
+      if (String(port.id) === exceptBuildingId && exceptStart !== null && exceptEnd !== null && index >= exceptStart && index < exceptEnd) {
         continue;
       }
       const parsed = parseNftBackedTroopEntry(troop);
@@ -12002,7 +12032,7 @@ function _findLoadedNftBackedToken(playerId, tokenKey, options = {}) {
 }
 function _firstDuplicateLoadedDemonKingToken(playerId) {
   const seen = new Map();
-  const ports = db.db.prepare('SELECT id, ship_troops FROM buildings WHERE player_id = ? AND type = ? AND has_ship = 1').all(playerId, 'port');
+  const ports = _playerShipSources(playerId);
   for (const port of ports) {
     let troops = [];
     try { troops = JSON.parse(port.ship_troops || '[]'); } catch { troops = []; }
@@ -12021,7 +12051,7 @@ function _firstDuplicateLoadedDemonKingToken(playerId) {
 }
 function _firstDuplicateLoadedNftBackedToken(playerId) {
   const seen = new Map();
-  const ports = db.db.prepare('SELECT id, ship_troops FROM buildings WHERE player_id = ? AND type = ? AND has_ship = 1').all(playerId, 'port');
+  const ports = _playerShipSources(playerId);
   for (const port of ports) {
     let troops = [];
     try { troops = JSON.parse(port.ship_troops || '[]'); } catch { troops = []; }
@@ -12038,13 +12068,72 @@ function _firstDuplicateLoadedNftBackedToken(playerId) {
   }
   return null;
 }
+function _troopsFromBattleAction(action) {
+  if (!action || !['place_ship', 'deploy_troop'].includes(action.type)) return [];
+  if (action.type === 'deploy_troop') {
+    const troop = action.troop || action.troop_entry || action.troopType;
+    return troop ? [troop] : [];
+  }
+  return Array.isArray(action.troops)
+    ? action.troops
+    : (action.troopType ? [action.troopType] : []);
+}
+
+function _battleTroopIdentity(entry) {
+  const parsed = parseNftBackedTroopEntry(entry);
+  if (!parsed.error) return `nft:${_nftBackedKeyFromParsed(parsed)}`;
+  return `troop:${_normalizeTroopName(entry)}`;
+}
+
+function _singleShipReplayIssue(actions, playerId) {
+  const deployActions = (Array.isArray(actions) ? actions : []).filter((action) => action?.type === 'deploy_troop');
+  if (!deployActions.length) return null;
+  const ship = _playerShipState(playerId);
+  if (!ship) return { type: 'missing_ship', error: 'Player ship not found' };
+  const available = new Map();
+  for (const troop of ship.troops) {
+    if (_isSlotFiller(troop)) continue;
+    const key = _battleTroopIdentity(troop);
+    available.set(key, (available.get(key) || 0) + 1);
+  }
+  const grid = CANONICAL_GRID_CONFIGS?.[2] || CANONICAL_GRID_CONFIGS?.['2'];
+
+  for (let index = 0; index < deployActions.length; index++) {
+    const action = deployActions[index];
+    const troop = action.troop || action.troop_entry || action.troopType;
+    const normalized = _normalizeTroopName(troop);
+    if (!troop || !VALID_TROOPS.includes(normalized)) {
+      return { type: 'invalid_troop', index, error: 'Invalid troop deployment' };
+    }
+    const key = _battleTroopIdentity(troop);
+    const count = available.get(key) || 0;
+    if (count <= 0) return { type: 'troop_not_loaded', index, troop, error: 'Troop is not available on the player ship' };
+    available.set(key, count - 1);
+
+    const x = Number(action.x);
+    const z = Number(action.z);
+    if (!Number.isFinite(x) || !Number.isFinite(z)) {
+      return { type: 'invalid_coordinate', index, error: 'Invalid troop deployment coordinates' };
+    }
+    if (grid && !isWorldPointInsideGrid(grid, x, z, 0.06)) {
+      return {
+        type: 'outside_attack_grid',
+        index,
+        x,
+        z,
+        combat_grid_version: COMBAT_GRID_VERSION,
+        error: 'Troop deployment is outside the attack grid',
+      };
+    }
+  }
+  return null;
+}
+
 function _firstDuplicateDemonKingTokenInShipActions(actions = []) {
   const seen = new Map();
   for (const action of Array.isArray(actions) ? actions : []) {
-    if (action?.type !== 'place_ship') continue;
-    const troops = Array.isArray(action.troops)
-      ? action.troops
-      : (action.troopType ? [action.troopType] : []);
+    const troops = _troopsFromBattleAction(action);
+    if (!troops.length) continue;
     for (let index = 0; index < troops.length; index++) {
       const troop = troops[index];
       if (_isSlotFiller(troop)) continue;
@@ -12064,10 +12153,8 @@ function _firstNftBackedReplayIssue(actions = [], playerId) {
   const loadedKeys = _loadedNftBackedTokenKeys(playerId);
   const seen = new Map();
   for (const action of Array.isArray(actions) ? actions : []) {
-    if (action?.type !== 'place_ship') continue;
-    const troops = Array.isArray(action.troops)
-      ? action.troops
-      : (action.troopType ? [action.troopType] : []);
+    const troops = _troopsFromBattleAction(action);
+    if (!troops.length) continue;
     for (let index = 0; index < troops.length; index++) {
       const troop = troops[index];
       if (_isSlotFiller(troop)) continue;
@@ -12124,10 +12211,8 @@ function _demonKingWinTokensFromActions(actions, playerId) {
   const loadedKeys = _loadedDemonKingTokenKeys(playerId);
   const tokens = new Map();
   for (const action of Array.isArray(actions) ? actions : []) {
-    if (action?.type !== 'place_ship') continue;
-    const troops = Array.isArray(action.troops)
-      ? action.troops
-      : (action.troopType ? [action.troopType] : []);
+    const troops = _troopsFromBattleAction(action);
+    if (!troops.length) continue;
     for (const troop of troops) {
       if (_isSlotFiller(troop)) continue;
       const parsed = parseDemonKingTroopEntry(troop);
@@ -12141,7 +12226,7 @@ function _demonKingWinTokensFromActions(actions, playerId) {
 }
 function _nftBackedWinTokensByCollectionFromActions(actions, playerId) {
   const loadedKeys = new Set();
-  const ports = db.db.prepare('SELECT ship_troops FROM buildings WHERE player_id = ? AND type = ? AND has_ship = 1').all(playerId, 'port');
+  const ports = _playerShipSources(playerId);
   for (const port of ports) {
     let troops = [];
     try { troops = JSON.parse(port.ship_troops || '[]'); } catch { troops = []; }
@@ -12155,10 +12240,8 @@ function _nftBackedWinTokensByCollectionFromActions(actions, playerId) {
 
   const byCollection = new Map();
   for (const action of Array.isArray(actions) ? actions : []) {
-    if (action?.type !== 'place_ship') continue;
-    const troops = Array.isArray(action.troops)
-      ? action.troops
-      : (action.troopType ? [action.troopType] : []);
+    const troops = _troopsFromBattleAction(action);
+    if (!troops.length) continue;
     for (const troop of troops) {
       if (_isSlotFiller(troop)) continue;
       const parsed = parseNftBackedTroopEntry(troop);
@@ -12313,31 +12396,21 @@ function _filterUnavailableTroopEntries(troops, activeNftKeys = null, options = 
 }
 
 function _sanitizeDisabledShipTroopsForPlayer(playerId) {
-  const ports = db.db.prepare(
-    'SELECT id, ship_troops, ship_troops_template FROM buildings WHERE player_id = ? AND type = ?'
-  ).all(playerId, 'port');
+  const ship = _playerShipState(playerId);
+  if (!ship) return 0;
   let changed = 0;
   const activeNftKeys = _activeNftBackedTokenKeysForPlayer(playerId);
   const removedNftTroops = [];
-
-  for (const port of ports) {
-    let current = [];
-    let template = [];
-    try { current = JSON.parse(port.ship_troops || '[]'); } catch { current = []; }
-    try { template = JSON.parse(port.ship_troops_template || '[]'); } catch { template = []; }
-
-    const nextCurrent = _filterUnavailableTroopEntries(current, activeNftKeys, { removed: removedNftTroops });
-    const nextTemplate = _filterUnavailableTroopEntries(template, activeNftKeys, { removed: removedNftTroops });
-    if (
-      JSON.stringify(current) === JSON.stringify(nextCurrent)
-      && JSON.stringify(template) === JSON.stringify(nextTemplate)
-    ) {
-      continue;
-    }
-
-    db.db.prepare('UPDATE buildings SET ship_troops = ?, ship_troops_template = ? WHERE id = ?')
-      .run(JSON.stringify(nextCurrent), JSON.stringify(nextTemplate), port.id);
-    changed += 1;
+  const current = ship.troops;
+  const template = ship.troop_template;
+  const nextCurrent = _filterUnavailableTroopEntries(current, activeNftKeys, { removed: removedNftTroops });
+  const nextTemplate = _filterUnavailableTroopEntries(template, activeNftKeys, { removed: removedNftTroops });
+  if (
+    JSON.stringify(current) !== JSON.stringify(nextCurrent)
+    || JSON.stringify(template) !== JSON.stringify(nextTemplate)
+  ) {
+    db.updatePlayerShipTroops(playerId, nextCurrent, nextTemplate);
+    changed = 1;
   }
 
   if (removedNftTroops.length > 0) {
@@ -12348,7 +12421,7 @@ function _sanitizeDisabledShipTroopsForPlayer(playerId) {
     }, {});
     console.warn('[battle] pruned unavailable ship troops', {
       player_id: playerId,
-      ports_changed: changed,
+      ship_changed: changed,
       removed: byReason,
     });
   }
@@ -12396,16 +12469,14 @@ function _applyCasualties(playerId, casualties) {
   if (!casualties || typeof casualties !== 'object') return applied;
 
   // Count total deployed troops across all ships
-  const ports = db.db.prepare('SELECT id, ship_troops, ship_troops_template FROM buildings WHERE player_id = ? AND type = ? AND has_ship = 1').all(playerId, 'port');
+  const ship = _playerShipState(playerId);
+  if (!ship) return applied;
   // Count from actual ship_troops (not template) — template may differ after swaps
   const deployed = {};
-  for (const port of ports) {
-    const troops = JSON.parse(port.ship_troops || '[]');
-    for (const t of troops) {
-      if (_isSlotFiller(t)) continue;
-      const name = _normalizeTroopName(t);
-      deployed[name] = (deployed[name] || 0) + 1;
-    }
+  for (const troop of ship.troops) {
+    if (_isSlotFiller(troop)) continue;
+    const name = _normalizeTroopName(troop);
+    deployed[name] = (deployed[name] || 0) + 1;
   }
 
   // Cap casualties to deployed counts (prevent client from claiming more losses than deployed)
@@ -12423,28 +12494,25 @@ function _applyCasualties(playerId, casualties) {
   }
 
   const remaining = { ...validCasualties };
-  for (const port of ports) {
-    const troops = JSON.parse(port.ship_troops || '[]');
-    const filtered = [];
-    let skipNextFiller = false;
-    for (const t of troops) {
-      if (skipNextFiller && _isSlotFiller(t)) {
-        skipNextFiller = false;
-        continue;
-      }
+  const filtered = [];
+  let skipNextFiller = false;
+  for (const troop of ship.troops) {
+    if (skipNextFiller && _isSlotFiller(troop)) {
       skipNextFiller = false;
-      const name = _normalizeTroopName(t);
-      if (remaining[name] && remaining[name] > 0) {
-        remaining[name]--;
-        applied[name] = (applied[name] || 0) + 1;
-        if (_troopSlotCost(name) > 1) skipNextFiller = true;
-      } else {
-        filtered.push(t);
-      }
+      continue;
     }
-    if (filtered.length !== troops.length) {
-      db.db.prepare('UPDATE buildings SET ship_troops = ? WHERE id = ?').run(JSON.stringify(filtered), port.id);
+    skipNextFiller = false;
+    const name = _normalizeTroopName(troop);
+    if (remaining[name] && remaining[name] > 0) {
+      remaining[name]--;
+      applied[name] = (applied[name] || 0) + 1;
+      if (_troopSlotCost(name) > 1) skipNextFiller = true;
+    } else {
+      filtered.push(troop);
     }
+  }
+  if (filtered.length !== ship.troops.length) {
+    db.updatePlayerShipTroops(playerId, filtered, ship.troop_template);
   }
 
   // Defensive log: if any casualties weren't applied, /troop-died removed them first,
@@ -12469,14 +12537,8 @@ function _paidCasualties(casualties) {
 // Returns current ship_troops for all ports as [{id, level, ship_troops, ship_troops_template}].
 // Used to push the authoritative post-battle state back to the client in /attack/result response.
 function _getShipsPayload(playerId) {
-  _sanitizeDisabledShipTroopsForPlayer(playerId);
-  const ports = db.db.prepare('SELECT id, level, ship_troops, ship_troops_template, has_ship FROM buildings WHERE player_id = ? AND type = ?').all(playerId, 'port');
-  return ports.filter(p => p.has_ship).map(p => ({
-    id: p.id,
-    level: _shipLevelForPort(p),
-    ship_troops: JSON.parse(p.ship_troops || '[]'),
-    ship_troops_template: JSON.parse(p.ship_troops_template || '[]'),
-  }));
+  const ship = _mainShipResponse(playerId);
+  return ship ? [ship] : [];
 }
 
 router.post('/attack/result', auth, (req, res) => {
@@ -12490,10 +12552,11 @@ router.post('/attack/result', auth, (req, res) => {
     return res.status(400).json({ error: 'Defender has no buildings' });
   }
 
-  // Extract grid_config from battle_start action
+  // Keep the submitted scene metadata for diagnostics. Verification always
+  // uses the generated server snapshot so clients cannot redefine valid bounds.
   const battleStartAction = actions.find(a => a.type === 'battle_start');
-  const gridConfig = battleStartAction?.grid_config;
-  const gridConfigs = battleStartAction?.grid_configs;
+  const submittedGridConfig = battleStartAction?.grid_config;
+  const submittedGridConfigs = battleStartAction?.grid_configs;
   const battleSessionId = String(battle_session_id || battleStartAction?.battle_session_id || '').trim();
   const gameActions = actions.filter(a => a.type !== 'battle_start');
   const releaseBattleSession = (status = 'cancelled') => {
@@ -12509,13 +12572,15 @@ router.post('/attack/result', auth, (req, res) => {
 
   // Basic validation
   const shipActions = gameActions.filter(a => a.type === 'place_ship');
+  const troopDeployActions = gameActions.filter(a => a.type === 'deploy_troop');
+  const deploymentActions = [...shipActions, ...troopDeployActions];
   const replayWarnings = [];
-  if (claimedResult === 'victory' && shipActions.length === 0) {
-    replayWarnings.push('No ships deployed');
+  if (claimedResult === 'victory' && deploymentActions.length === 0) {
+    replayWarnings.push('No troops deployed');
     if (STRICT_BATTLE_REPLAY_VERIFICATION) {
       releaseBattleSession('cancelled');
       db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'rejected', 'No ships', null, null);
-      return res.status(403).json({ error: 'No ships deployed' });
+      return res.status(403).json({ error: 'No troops deployed' });
     }
   }
   if (shipActions.length > MAX_SHIPS) {
@@ -12527,6 +12592,12 @@ router.post('/attack/result', auth, (req, res) => {
     }
   }
   _sanitizeDisabledShipTroopsForPlayer(req.player.id);
+  const rosterReplayIssue = _singleShipReplayIssue(gameActions, req.player.id);
+  if (rosterReplayIssue) {
+    releaseBattleSession('cancelled');
+    db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'rejected', rosterReplayIssue.error, null, rosterReplayIssue);
+    return res.status(403).json({ error: rosterReplayIssue.error, code: `SHIP_${String(rosterReplayIssue.type || 'REPLAY').toUpperCase()}` });
+  }
   const nftReplayIssue = _firstNftBackedReplayIssue(gameActions, req.player.id);
   if (nftReplayIssue) {
     releaseBattleSession('cancelled');
@@ -12536,15 +12607,15 @@ router.post('/attack/result', auth, (req, res) => {
       : nftReplayIssue.type === 'not_owned'
         ? `${label} NFT is not owned by the attacker`
         : nftReplayIssue.type === 'not_loaded'
-          ? `${label} NFT is not loaded on attacker ships`
+          ? `${label} NFT is not loaded on the attacker ship`
           : `${label} NFT replay entry is invalid`;
     db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'rejected', reason, null, null);
     return res.status(403).json({
       error: nftReplayIssue.type === 'duplicate'
         ? `Each ${label} NFT can only be deployed once per battle`
         : nftReplayIssue.type === 'not_loaded'
-          ? `This ${label} is not loaded on your ships. Refresh your fleet and try again.`
-        : `This ${label} is no longer available on your account. Refresh your fleet and try again.`,
+          ? `This ${label} is not loaded on your ship. Refresh your army and try again.`
+          : `This ${label} is no longer available on your account. Refresh your army and try again.`,
       code: nftReplayIssue.type === 'duplicate'
         ? 'NFT_TROOP_DUPLICATE_REPLAY'
         : nftReplayIssue.type === 'not_loaded'
@@ -12562,8 +12633,8 @@ router.post('/attack/result', auth, (req, res) => {
   for (const row of troopLevelRows) serverTroopLevels[row.troop_type] = row.level;
   const serverNftRarities = {};
   for (const act of gameActions) {
-    if (act?.type !== 'place_ship') continue;
-    const troops = Array.isArray(act.troops) ? act.troops : (act.troopType ? [act.troopType] : []);
+    const troops = _troopsFromBattleAction(act);
+    if (!troops.length) continue;
     for (const troop of troops) {
       if (_isSlotFiller(troop)) continue;
       const parsed = parseNftBackedTroopEntry(troop);
@@ -12574,8 +12645,8 @@ router.post('/attack/result', auth, (req, res) => {
     }
   }
   for (const act of gameActions) {
-    if (act.type === 'place_ship' && act.troopType && act.troopLevel) {
-      const normalizedTroop = _normalizeTroopName(act.troopType);
+    if (['place_ship', 'deploy_troop'].includes(act.type) && act.troopType && act.troopLevel) {
+      const normalizedTroop = _normalizeTroopName(act.troop || act.troop_entry || act.troopType);
       const serverKey = _serverTroopKey(normalizedTroop);
       const serverLvl = serverTroopLevels[serverKey] || 1;
       act.troopLevel = Math.min(act.troopLevel, serverLvl);
@@ -12588,8 +12659,8 @@ router.post('/attack/result', auth, (req, res) => {
     defenderBuildings,
     actions: gameActions,
     claimedResult,
-    gridConfig,
-    gridConfigs,
+    gridConfig: CANONICAL_GRID_CONFIG,
+    gridConfigs: CANONICAL_GRID_CONFIGS,
     serverTroopLevels,
     serverNftRarities,
     defenderAltarLevels: db.getAltarSkillLevels(defender_id),
@@ -12638,15 +12709,18 @@ router.post('/attack/result', auth, (req, res) => {
     attacker: req.player.id, defender: defender_id,
     reason: replayReason,
     thHp: Math.round((verification.townHallHpPct || 0) * 100) + '%',
-    ships: gameActions.filter(a => a.type === 'place_ship').length,
+    ships: shipActions.length || (troopDeployActions.length ? 1 : 0),
+    troops_deployed: troopDeployActions.length,
     rallies: gameActions.filter(a => a.type === 'rally_drop').length,
     destroyed: verification.buildingsDestroyed,
   });
   console.log(`[BATTLE] ${claimedResult}->${serverResolvedResult} ${replayStatus} by ${req.player.id} vs ${defender_id}: ${replayReason} (TH ${Math.round((verification.townHallHpPct || 0) * 100)}%)`);
-  console.log(`[BATTLE] Ships: ${gameActions.filter(a => a.type === 'place_ship').length}, Rallies: ${gameActions.filter(a => a.type === 'rally_drop').length}, Troops spawned: ${verification._troopsSpawned || '?'}, Buildings destroyed: ${verification.buildingsDestroyed}`);
-  console.log(`[BATTLE] Actions:`, JSON.stringify(gameActions.filter(a => a.type === 'place_ship').map(a => ({t: a.t, troops: a.troops, troopType: a.troopType, x: a.x?.toFixed(2), z: a.z?.toFixed(2)}))));
-  console.log(`[BATTLE] Grid:`, JSON.stringify(gridConfig));
-  if (gridConfigs) console.log(`[BATTLE] Grids:`, JSON.stringify(gridConfigs));
+  console.log(`[BATTLE] Ships: ${shipActions.length || (troopDeployActions.length ? 1 : 0)}, Manual deploys: ${troopDeployActions.length}, Rallies: ${gameActions.filter(a => a.type === 'rally_drop').length}, Troops spawned: ${verification._troopsSpawned || '?'}, Buildings destroyed: ${verification.buildingsDestroyed}`);
+  console.log(`[BATTLE] Actions:`, JSON.stringify(deploymentActions.map(a => ({t: a.t, type: a.type, troops: a.troops, troopType: a.troop || a.troopType, x: Number(a.x).toFixed(2), z: Number(a.z).toFixed(2)}))));
+  console.log(`[BATTLE] Grid version=${COMBAT_GRID_VERSION}:`, JSON.stringify(CANONICAL_GRID_CONFIGS));
+  if (submittedGridConfig || submittedGridConfigs) {
+    console.log(`[BATTLE] Client grid metadata:`, JSON.stringify(submittedGridConfigs || submittedGridConfig));
+  }
   console.log(`[BATTLE] TroopLevels:`, JSON.stringify(serverTroopLevels));
   if (Object.keys(serverNftRarities).length) console.log(`[BATTLE] NftRarities:`, JSON.stringify(serverNftRarities));
   console.log(`[BATTLE] Defender buildings:`, defenderBuildings.length, defenderBuildings.map(b => `${b.type}:lv${b.level}:hp${b.hp}`).join(', '));
@@ -12800,24 +12874,13 @@ router.post('/battle/surrender', auth, (req, res) => {
 
 function validateAttackReadyForPlayer(playerId) {
   _sanitizeDisabledShipTroopsForPlayer(playerId);
-  const buildings = db.getPlayerBuildings(playerId);
-  const ports = buildings.filter(b => b.type === 'port');
-  if (ports.length === 0) {
-    return { status: 400, error: 'You need a Port to attack. Build one first.' };
+  const ship = _playerShipState(playerId);
+  if (!ship) {
+    return { status: 400, error: 'Your main ship is not ready yet. Reload the game and try again.' };
   }
-  const portsWithShips = ports.filter(p => p.has_ship === 1);
-  if (portsWithShips.length === 0) {
-    return { status: 400, error: 'You need a Ship to attack. Buy one at your Port.' };
-  }
-  let totalTroopsLoaded = 0;
-  for (const p of portsWithShips) {
-    try {
-      const troops = JSON.parse(p.ship_troops || '[]');
-      totalTroopsLoaded += troops.length;
-    } catch {}
-  }
+  const totalTroopsLoaded = ship.troops.filter((troop) => !_isSlotFiller(troop)).length;
   if (totalTroopsLoaded === 0) {
-    return { status: 400, error: 'No troops loaded on your ships. Train troops at the Barn first.' };
+    return { status: 400, error: 'No troops loaded on your main ship. Train troops at the Barn first.' };
   }
   const duplicateDemonKing = _firstDuplicateLoadedNftBackedToken(playerId);
   if (duplicateDemonKing) {
@@ -13206,17 +13269,160 @@ router.post('/buildings/:id/remove-troop', auth, (req, res) => {
   }
 });
 
-// Get current ship troops for all ports (used before attack to sync)
+function _mainShipResponse(playerId) {
+  _sanitizeDisabledShipTroopsForPlayer(playerId);
+  const ship = _playerShipState(playerId);
+  if (!ship) return null;
+  return {
+    id: 'main_ship',
+    level: ship.level,
+    capacity: ship.capacity,
+    ship_capacity: ship.capacity,
+    troops: ship.troops,
+    ship_troops: ship.troops,
+    troop_template: ship.troop_template,
+    ship_troops_template: ship.troop_template,
+    next_upgrade: db.PLAYER_SHIP_LEVELS[ship.level + 1] || null,
+  };
+}
+
+router.get('/ship', auth, (req, res) => {
+  const ship = _mainShipResponse(req.player.id);
+  if (!ship) return res.status(404).json({ error: 'Player ship not found' });
+  res.json({ ship });
+});
+
+router.post('/ship/upgrade', auth, (req, res) => {
+  const result = db.upgradePlayerShip(req.player.id);
+  if (result?.error) return res.status(400).json(result);
+  res.json({ ...result, ship: _mainShipResponse(req.player.id) });
+});
+
+router.post('/ship/load-troop', auth, async (req, res) => {
+  const { troop_name } = req.body || {};
+  const normalizedTroop = _normalizeTroopName(troop_name);
+  if (!troop_name || !VALID_TROOPS.includes(normalizedTroop)) {
+    return res.status(400).json(_activeTroopError(normalizedTroop));
+  }
+  let verifiedNftTroop = null;
+  if (_isNftBackedTroop(normalizedTroop)) {
+    verifiedNftTroop = await verifyNftBackedTroopLoadToken(
+      req.player,
+      troop_name,
+      req.body?.owner || req.body?.nft_owner || req.body?.wallet,
+    );
+    if (verifiedNftTroop?.error) return res.status(verifiedNftTroop.status || 400).json(verifiedNftTroop);
+  }
+
+  const txn = db.db.transaction(() => {
+    const ship = _playerShipState(req.player.id);
+    if (!ship) throw { status: 404, error: 'Player ship not found' };
+    const slotCost = _troopSlotCost(normalizedTroop);
+    if (ship.troops.length + slotCost > ship.capacity) throw { status: 400, error: 'Ship is full' };
+    const troopEntry = verifiedNftTroop?.troopEntry || _canonicalTroopEntry(troop_name);
+    if (_isNftBackedTroop(normalizedTroop)) {
+      const loaded = _findLoadedNftBackedToken(req.player.id, _nftBackedEntryKey(troopEntry));
+      if (loaded) {
+        const label = _nftBackedTroopConfig(normalizedTroop)?.label || 'NFT';
+        throw { status: 409, error: `This ${label} NFT is already loaded`, code: 'NFT_TROOP_ALREADY_LOADED' };
+      }
+    }
+    const troopCost = _troopBuyCost(normalizedTroop);
+    if (!db.canAfford(req.player.id, troopCost, 0, 0)) throw { status: 400, error: 'Not enough gold', cost: troopCost };
+    if (troopCost > 0) {
+      db.subtractResources(req.player.id, troopCost, 0, 0, {
+        sourceType: 'main_ship_troop_load',
+        metadata: { troop_name: normalizedTroop },
+      });
+    }
+    const next = [...ship.troops];
+    _appendTroopSlots(next, troopEntry);
+    const updated = db.updatePlayerShipTroops(req.player.id, next, next);
+    if (updated?.error) throw { status: 400, error: updated.error };
+    return { ship: _mainShipResponse(req.player.id), resources: db.getResources(req.player.id) };
+  });
+  try {
+    res.json({ success: true, ...txn() });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.error || 'Server error', code: error.code });
+  }
+});
+
+router.post('/ship/swap-troop', auth, async (req, res) => {
+  const slot = Number(req.body?.slot);
+  const troopName = req.body?.troop_name;
+  const normalizedTroop = _normalizeTroopName(troopName);
+  if (!Number.isInteger(slot) || !troopName) return res.status(400).json({ error: 'Valid slot and troop_name required' });
+  if (!VALID_TROOPS.includes(normalizedTroop)) return res.status(400).json(_activeTroopError(normalizedTroop));
+  let verifiedNftTroop = null;
+  if (_isNftBackedTroop(normalizedTroop)) {
+    verifiedNftTroop = await verifyNftBackedTroopLoadToken(
+      req.player,
+      troopName,
+      req.body?.owner || req.body?.nft_owner || req.body?.wallet,
+    );
+    if (verifiedNftTroop?.error) return res.status(verifiedNftTroop.status || 400).json(verifiedNftTroop);
+  }
+  const txn = db.db.transaction(() => {
+    const ship = _playerShipState(req.player.id);
+    if (!ship) throw { status: 404, error: 'Player ship not found' };
+    const span = _swapSpanForReplacement(ship.troops, slot, normalizedTroop, ship.capacity);
+    if (!span) throw { status: 400, error: 'Not enough ship capacity for this troop' };
+    const troopEntry = verifiedNftTroop?.troopEntry || _canonicalTroopEntry(troopName);
+    if (_isNftBackedTroop(normalizedTroop)) {
+      const loaded = _findLoadedNftBackedToken(req.player.id, _nftBackedEntryKey(troopEntry), {
+        exceptBuildingId: 'main_ship', exceptStart: span.start, exceptEnd: span.end,
+      });
+      if (loaded) throw { status: 409, error: 'This NFT is already loaded', code: 'NFT_TROOP_ALREADY_LOADED' };
+    }
+    const cost = _isNftBackedTroop(normalizedTroop) ? 0 : TROOP_COST;
+    if (!db.canAfford(req.player.id, cost, 0, 0)) throw { status: 400, error: 'Not enough gold', cost };
+    if (cost > 0) {
+      db.subtractResources(req.player.id, cost, 0, 0, {
+        sourceType: 'main_ship_troop_swap', metadata: { troop_name: normalizedTroop, slot },
+      });
+    }
+    const replacement = [];
+    _appendTroopSlots(replacement, troopEntry);
+    const next = [...ship.troops];
+    next.splice(span.start, span.end - span.start, ...replacement);
+    const updated = db.updatePlayerShipTroops(req.player.id, next, next);
+    if (updated?.error) throw { status: 400, error: updated.error };
+    return { ship: _mainShipResponse(req.player.id), resources: db.getResources(req.player.id) };
+  });
+  try {
+    res.json({ success: true, ...txn() });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.error || 'Server error', code: error.code });
+  }
+});
+
+router.post('/ship/remove-troop', auth, (req, res) => {
+  const slot = Number(req.body?.slot);
+  if (!Number.isInteger(slot)) return res.status(400).json({ error: 'Valid slot required' });
+  const ship = _playerShipState(req.player.id);
+  if (!ship) return res.status(404).json({ error: 'Player ship not found' });
+  const span = _troopUnitSpanAt(ship.troops, slot);
+  if (!span) return res.status(400).json({ error: 'Invalid troop slot' });
+  const next = [...ship.troops];
+  const removedTroops = next.slice(span.start, span.end).filter((entry) => !_isSlotFiller(entry));
+  next.splice(span.start, span.end - span.start);
+  const updated = db.updatePlayerShipTroops(req.player.id, next, next);
+  if (updated?.error) return res.status(400).json(updated);
+  res.json({ success: true, removed_troops: removedTroops, ship: _mainShipResponse(req.player.id), resources: db.getResources(req.player.id) });
+});
+
+router.post('/ship/unload-troops', auth, (req, res) => {
+  const updated = db.updatePlayerShipTroops(req.player.id, [], []);
+  if (updated?.error) return res.status(400).json(updated);
+  res.json({ success: true, ship: _mainShipResponse(req.player.id) });
+});
+
+// Compatibility endpoint: old clients expect an array of ships. New clients
+// receive the same single ship in both `ship` and `ships[0]`.
 router.get('/ships', auth, (req, res) => {
-  _sanitizeDisabledShipTroopsForPlayer(req.player.id);
-  const ports = db.db.prepare('SELECT id, level, ship_troops, ship_troops_template, has_ship FROM buildings WHERE player_id = ? AND type = ?').all(req.player.id, 'port');
-  const ships = ports.filter(p => p.has_ship).map(p => ({
-    id: p.id,
-    level: _shipLevelForPort(p),
-    ship_troops: JSON.parse(p.ship_troops || '[]'),
-    ship_troops_template: JSON.parse(p.ship_troops_template || '[]'),
-  }));
-  res.json({ ships });
+  const ship = _mainShipResponse(req.player.id);
+  res.json({ ship, ships: ship ? [ship] : [] });
 });
 
 // Report a single troop death during battle. This endpoint is telemetry-only:
@@ -13268,25 +13474,16 @@ router.post('/troop-died', auth, (req, res) => {
 
 function _buildReinforcePlan(playerId) {
   _sanitizeDisabledShipTroopsForPlayer(playerId);
-  const ports = db.db.prepare('SELECT * FROM buildings WHERE player_id = ? AND type = ? AND has_ship = 1').all(playerId, 'port');
+  const ship = _playerShipState(playerId);
   const casualties = {};
   const shipsToRestore = [];
   let totalToRestore = 0;
-
-  for (const port of ports) {
-    let current = [];
-    let template = [];
-    try { current = JSON.parse(port.ship_troops || '[]'); } catch { current = []; }
-    try { template = JSON.parse(port.ship_troops_template || '[]'); } catch { template = []; }
-    if (template.length === 0) continue;
-
+  if (ship) {
+    const current = ship.troops;
+    const template = ship.troop_template;
     const missingSlots = Math.max(0, template.length - current.length);
-    if (missingSlots <= 0) continue;
-
-    const capacity = _shipCapacityForPort(port);
+    const capacity = ship.capacity;
     const slotBudget = Math.max(0, Math.min(missingSlots, capacity - current.length));
-    if (slotBudget <= 0) continue;
-
     const currentCounts = {};
     for (const t of current) {
       if (_isSlotFiller(t)) continue;
@@ -13296,7 +13493,7 @@ function _buildReinforcePlan(playerId) {
 
     const toAdd = [];
     let restoredCount = 0;
-    for (const t of template) {
+    for (const t of slotBudget > 0 ? template : []) {
       if (toAdd.length >= slotBudget) break;
       if (_isSlotFiller(t)) continue;
       const normalized = _normalizeTroopName(t);
@@ -13312,7 +13509,7 @@ function _buildReinforcePlan(playerId) {
       }
     }
     if (toAdd.length > 0) {
-      shipsToRestore.push({ port, current, toAdd });
+      shipsToRestore.push({ ship, current, toAdd });
       totalToRestore += restoredCount;
     }
   }
@@ -13347,13 +13544,12 @@ router.post('/reinforce', auth, (req, res) => {
     // Append only pre-clipped missing troops to current (preserves swaps,
     // restores casualties, and never charges for troops that do not fit).
     const resultShips = [];
-    for (const { port, current, toAdd } of shipsToRestore) {
-      const capacity = _shipCapacityForPort(port);
+    for (const { ship, current, toAdd } of shipsToRestore) {
+      const capacity = ship.capacity;
       const slotsAvailable = Math.max(0, capacity - current.length);
       const restored = [...current, ...toAdd.slice(0, slotsAvailable)];
-      const troopsJson = JSON.stringify(restored);
-      db.db.prepare('UPDATE buildings SET ship_troops = ? WHERE id = ?').run(troopsJson, port.id);
-      resultShips.push({ id: port.id, level: _shipLevelForPort(port), ship_troops: restored, ship_capacity: capacity });
+      db.updatePlayerShipTroops(req.player.id, restored, ship.troop_template);
+      resultShips.push({ id: 'main_ship', level: ship.level, ship_troops: restored, ship_capacity: capacity });
     }
 
     const updated = db.db.prepare('SELECT gold, wood, ore FROM players WHERE id = ?').get(req.player.id);

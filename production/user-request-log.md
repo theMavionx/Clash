@@ -1774,3 +1774,117 @@ Follow-up:
 - Request: "коміт деплой на прод"
 - Scope: commit and deploy the reviewed Ostium builder attribution, tournament DEX attribution, trade History, and stale one-tap cancellation fixes, together with the already committed MM bot dashboard polish.
 - Explicit authorization: commit, push, and deploy the current reviewed release to production.
+
+### UR-2026-07-18-SINGLE-SHIP-MANUAL-TROOP-DEPLOYMENT
+- Timestamp: 2026-07-18 Europe/Kyiv
+- Request: remove the port grid and old multi-ship attack flow; use the large ship already included in the current island model as the player's single persistent ship, with one shared troop capacity and one upgrade progression.
+- Battle flow: the ship sails broadside to the enemy shore, the bottom HUD lists the player's troop types, and the player selects a troop and places each unit manually anywhere inside the configured attack grid.
+- Visual scope: remove the two old ship instances, animate the new ship movement cleanly, and retain the existing port area itself for a later redesign.
+- Compatibility: preserve old battle replays and old port data while migrating current capacity and troops without reducing owned capacity or losing NFT troops.
+- No commit, push, production deploy, or production database mutation requested.
+
+### UR-2026-07-18-SINGLE-SHIP-LOCAL-END-TO-END-TEST
+- Timestamp: 2026-07-18 Europe/Kyiv
+- Request: implement the system, test it independently with screenshots, create a fresh Godot web export, and test that export in a browser using a development-only way to bypass authentication.
+- Quality requirement: verify ship arrival, troop selection and placement, combat progression, server replay validation, and browser rendering rather than stopping at syntax checks.
+- No commit, push, production deploy, or production database mutation requested.
+
+### UR-2026-07-18-ATTACK-GRID-FINAL-POSITION
+- Timestamp: 2026-07-18 Europe/Kyiv
+- Request: use the newly positioned narrow attack grid saved in `Main.tscn`, running along the right edge of the main island building area as shown in the supplied reference.
+- Scope: preserve the owner's production-scene transform, synchronize the local test scene, recalculate server validation coordinates from the runtime world transform, and repeat visual/manual-deployment verification.
+- No commit, push, production deploy, or production database mutation requested.
+
+### UR-2026-07-18-ANIMATED-ISLAND-TENTACLES
+- Timestamp: 2026-07-18 Europe/Kyiv
+- Request: use `C:/Users/Admin/Downloads/Tentacle.glb`, which contains the animated version of the same island tentacle, and add a restrained idle animation to the tentacles already positioned around the island.
+- Scope: preserve the three existing tentacle placements, replace their static meshes with skinned instances from the supplied asset, and offset idle playback so the ambient motion does not look synchronized.
+- No commit, push, production deploy, or production database mutation requested.
+
+### UR-2026-07-18-FULL-LOCAL-BROWSER-PLAYTEST
+- Timestamp: 2026-07-18 Europe/Kyiv
+- Request: restore the normal browser authentication entry and start the complete local backend stack so the owner can run an authenticated end-to-end browser playtest.
+- Scope: run the main API, futures API, and Vite web client; use the normal Privy flow without the optional `?guest=1` local bypass; verify health and representative proxied endpoints.
+- Local services only; no commit, push, production deploy, or production database mutation requested.
+
+### UR-2026-07-18-SMOOTHER-MAIN-SHIP-WAVES
+- Timestamp: 2026-07-18 Europe/Kyiv
+- Request: reduce the excessive rocking of the island's main ship on the waves and make its idle water motion smoother.
+- Scope: lower the vertical bob and roll amplitudes, slow the wave cycle to suit the ship's visual mass, and verify the runtime motion envelope without changing sailing paths or attack timing.
+- No commit, push, production deploy, or production database mutation requested.
+
+### UR-2026-07-18-DECIBEL-TPSL-CLOSE-VOLUME
+- Timestamp: 2026-07-18 Europe/Kyiv
+- Request: investigate and fix Decibel volume accounting for player `0nimu`, where an entry fill is counted but a TP/SL-triggered close does not increase tournament volume.
+- Scope: compare verified Decibel fills with the reward importer, cursor, deduplication, builder attribution, trade history, and tournament credits; fix the root cause without admitting unrelated or non-builder trades.
+- Production access is read-only for the initial audit; no commit, push, deploy, or production database mutation requested.
+- Audit result: Onimu has a missing verified close of `$4,988.34039`; the original TP carried the Clash builder, but `update_tp_order_for_position` replaced it with order `85071002449029091020867747098864386048` without builder fields because Decibel's update entry function has no builder parameters.
+- Local fix: existing TP/SL legs are cancelled through `cancel_tp_sl_order_for_position` and recreated through builder-aware `place_tp_sl_order_for_position`; exact replacement order IDs are captured from Aptos `PositionUpdateEvent` and stored as builder proofs.
+- Verification: focused lifecycle tests, JS syntax checks, diff checks, and the real Onimu Aptos TP transaction fixture pass. Production remains unchanged pending explicit deploy/backfill approval.
+
+### UR-2026-07-18-LOCAL-FLAG-AND-INK-PROXY
+- Timestamp: 2026-07-18 Europe/Kyiv
+- Request: investigate local browser errors where a Town Hall flag image request fails with Godot HTTP status `0`/result `13`, and `POST /rpc/ink` returns `404` from Vite.
+- Scope: verify the generated flag URL, main API static route, Vite development proxies, and Ink RPC forwarding; restore the local authenticated playtest flow without changing production.
+- No commit, push, production deploy, or production database mutation requested.
+- Audit result: the Town Hall flag exists and both the API and Vite return the immutable `image/png` successfully; Godot result `13` is a transient `HTTPRequest` timeout, while `/rpc/ink` was absent from the Vite proxy table.
+- Local fix: Town Hall flag loading now retries twice with a short backoff before failing, and Vite forwards same-origin `/rpc/ink` JSON-RPC calls to the configured Ink endpoint.
+- Verification: the flag returns HTTP `200` with `131266` bytes, `/rpc/ink` returns Ink chain ID `0xdef1`, the production web build passes, `git diff --check` passes, and Godot 4.6 opens the project headlessly without script parse errors.
+
+### UR-2026-07-18-MAIN-SHIP-POST-BATTLE-SYNC
+- Timestamp: 2026-07-18 Europe/Kyiv
+- Request: fix the post-battle Godot type error in `BuildingSystem._apply_ships_from_server` after Town Hall destruction.
+- Root cause: the single-ship server model returns the string id `main_ship`, while two legacy client sync paths still assigned ship ids directly to typed `int` variables.
+- Scope: normalize authoritative ship payloads, sync the main ship separately, preserve numeric legacy port compatibility, and use the shared path for reinforcement responses.
+- No commit, push, production deploy, or production database mutation requested.
+- Verification: a focused Godot runtime test passes for both a string `main_ship` payload and a legacy numeric port payload; Godot 4.6 also opens the full project headlessly without script parse errors.
+
+### UR-2026-07-18-MAIN-SHIP-BROADSIDE-ARRIVAL
+- Timestamp: 2026-07-18 Europe/Kyiv
+- Request: fix the main ship approaching the attack shore stern-first and clipping underneath the island/attack-grid surface.
+- Root cause: the imported ship's longitudinal/bow axis is local `X`, while combat orientation treated local `Z` as forward; combat also reset the root to raw water `Y` and used a fixed shore gap unrelated to hull dimensions.
+- Scope: orient the ship broadside using the model's actual long axis, preserve its authored home waterline, and derive shore placement from the hull AABB with a small controlled shoreline overlap.
+- Rendering finding: the attack-grid shader disabled depth testing at render priority `127`, forcing grid lines over the ship even when the ship was physically above the surface; the grid now keeps normal depth testing without writing depth.
+- Placement finding: `shipPlane` is the deployment boundary inside the island rather than the waterline, so deriving the berth from its half-depth still placed the hull inside the island mesh. `MainShipShoreAnchor` now defines the shoreline independently in both production and test scenes, while the controller applies the measured hull inset and preserves the authored waterline.
+- Verification: live GL Compatibility captures confirm the ship remains broadside halfway through the approach and finishes fully visible with a slight shoreline overlap; the focused main-ship motion test, full Godot editor parse, diff check, and fresh local web export pass.
+- No commit, push, production deploy, or production database mutation requested.
+
+### UR-2026-07-18-INSTANT-ATTACK-CLOUD-COVER
+- Timestamp: 2026-07-18 Europe/Kyiv
+- Request: remove the home-ship departure animation after pressing Attack and start closing the battle clouds immediately.
+- Scope: remove visible troop boarding and ship departure waits from both normal enemy search and revenge; close/present the cloud first, then snapshot and hide the fleet behind it without moving the ship; retain combat-side ship arrival and the existing failure recovery.
+- Verification: a focused live Godot transition fixture confirms the cloud starts first, the home ship never changes position, it becomes hidden only behind the cover, and a failed search restores it at the original berth.
+- No commit, push, production deploy, or production database mutation requested.
+
+### UR-2026-07-18-RESTORE-RED-ATTACK-GRID
+- Timestamp: 2026-07-18 Europe/Kyiv
+- Request: replace the yellow attack-grid preview with the previous solid red attack-zone strip.
+- Scope: retain the owner's attack-zone length and orientation, widen its short axis by 1.8x in Main and TestMain, restore the historical translucent red material, remove all cell and border lines, and keep normal depth testing so the strip does not draw over the ship.
+- Verification: a live GL Compatibility capture confirms the deployment zone is a wider solid translucent red strip without a grid; a fresh Godot Web release export completes successfully.
+- No commit, push, production deploy, or production database mutation requested.
+
+### UR-2026-07-18-RESTORE-NORMAL-ISLAND-LIGHTING
+- Timestamp: 2026-07-18 Europe/Kyiv
+- Request: restore the normal island lighting because the scene became washed out and excessively bright.
+- Scope: remove the temporary skull OmniLight, restore the original fill-light direction and energy, restore full directional shadows, and return ambient energy to the previous production value in Main and TestMain.
+- Verification: a fresh GL Compatibility capture and full Godot 4.6 editor parse pass with the restored lighting configuration.
+- No commit, push, production deploy, or production database mutation requested.
+
+### UR-2026-07-18-CAMERA-COLLISION-AND-MAP-BOUNDS
+- Timestamp: 2026-07-18 Europe/Kyiv
+- Request: prevent the camera from entering island textures and stop panning beyond the usable ocean area.
+- Scope: add one prebuilt camera-only concave collision resource for the island's skull and cliffs, route the camera through a SpringArm3D on a dedicated physics layer, raise the minimum terrain-safe zoom, and enforce the existing Main/TestMain pan limits for mouse, touch, keyboard, pinch focus shifts, and building edge-pan.
+- Verification: a focused runtime test confirms target clamping, matching collision layers, safe minimum zoom, and real SpringArm hits across sampled island paths; full Godot parse and scene smoke checks pass.
+- No commit, push, production deploy, or production database mutation requested.
+
+### UR-2026-07-18-BUILDING-CAMERA-FACING-YAW
+- Timestamp: 2026-07-18 Europe/Kyiv
+- Request: rotate buildings approximately 30 degrees so their facades present better toward the fixed game camera.
+- Scope: apply one visual-only yaw offset after each asset's authored correction across server loading, placement previews, new placement, AABB calculation, upgrades, and test-level swaps; preserve building nodes, footprints, grid coordinates, and combat orientation.
+- No commit, push, production deploy, or production database mutation requested.
+
+### UR-2026-07-19-AUTO-SYNC-COMBAT-GRID
+- Timestamp: 2026-07-19 Europe/Kyiv
+- Request: fix battles being rejected with `Troop deployment is outside the attack grid` after the Godot attack zone changed, and remove the need to manually duplicate every grid edit in the server.
+- Scope: make the Godot scene the single source for server-authoritative combat grid geometry, keep a validated generated fallback, update local watchers/deploy checks, and verify the current manual troop deployment end to end.
+- No commit, push, production deploy, or production database mutation requested.

@@ -338,26 +338,14 @@ func _remove_troop_from_ship(slot: int) -> void:
 # Main ship animation
 # ---------------------------------------------------------------------------
 
-## Positions and shows/hides the main attack and base ship nodes relative to
-## the water plane.
+## Ensures the island's single main ship starts at its authored dock pose.
 func _animate_main_ship() -> void:
 	var water = bs.get_tree().root.find_child("Water", true, false)
 	if water:
 		bs._water_y = water.global_position.y
-	var _root = bs.get_tree().root
-	if not bs._ship_attack_node or not is_instance_valid(bs._ship_attack_node):
-		bs._ship_attack_node = _root.find_child("MainShipAttack", true, false)
-	if not bs._ship_base_node or not is_instance_valid(bs._ship_base_node):
-		bs._ship_base_node = _root.find_child("MainShipBase", true, false)
-	var attack_ship = bs._ship_attack_node
-	var base_ship = bs._ship_base_node
-	if attack_ship:
-		attack_ship.visible = false
-		attack_ship.global_position.y = bs._water_y + 0.12 - 0.03
-	if base_ship:
-		base_ship.visible = true
-		base_ship.global_position.y = bs._water_y + 0.09
-		base_ship.rotation.y = deg_to_rad(-135.8)
+	var controller: Node = bs.get_node_or_null("../MainShipController")
+	if controller and controller.has_method("force_home"):
+		controller.call_deferred("force_home")
 
 # ---------------------------------------------------------------------------
 # Ship spawning

@@ -364,6 +364,13 @@ func _replay_info() -> Dictionary:
 	return info
 
 
+func _replay_attacker_flag_url() -> String:
+	for action in _replay_actions:
+		if action is Dictionary and str(action.get("type", "")) == "battle_start":
+			return str(action.get("attacker_flag_url", "")).strip_edges()
+	return ""
+
+
 func _replay_result_for_overlay() -> Dictionary:
 	var payload: Dictionary = {}
 	if not _replay_result_payload.is_empty():
@@ -589,9 +596,8 @@ func _record_battle_end(result: String) -> void:
 		"result": result,
 	})
 
-## Frees all home troops and port ships immediately — called when switching
-## to enemy island so they don't linger in the background.
-## MainShipBase and MainShipAttack are never touched.
+## Frees home troops and any legacy port visuals when switching to the enemy.
+## The persistent Ship_Large is owned exclusively by MainShipController.
 func _free_home_troops_and_ships() -> void:
 	# Free home troops
 	for ht in bs._home_troops:
@@ -599,7 +605,8 @@ func _free_home_troops_and_ships() -> void:
 		if is_instance_valid(troop):
 			troop.queue_free()
 	bs._home_troops.clear()
-	# Free port ship nodes (not MainShipBase/MainShipAttack)
+	# Legacy port rows remain available for migration, but their old visuals do
+	# not participate in the single-ship battle scene.
 	for data in bs._saved_port_ships:
 		var bsys = data.get("bs")
 		var gp = data.get("grid_pos")
@@ -613,20 +620,12 @@ func _free_home_troops_and_ships() -> void:
 					if is_instance_valid(ship):
 						ship.queue_free()
 				break
-	# Free saved ship transforms for port ships that sailed away. KEEP the
-	# MainShipBase entry — we need it to restore the dock position after
-	# _return_home, since MainShipBase survives the attack cycle and is
-	# just hidden/shown rather than freed/recreated.
-	var kept_transforms: Array = []
+	# Ship_Large is persistent and never enters this legacy transform list.
 	for data in bs._saved_ship_transforms:
 		var ship = data.get("node")
-		if not is_instance_valid(ship):
-			continue
-		if ship == bs._ship_attack_node or ship == bs._ship_base_node:
-			kept_transforms.append(data)
-			continue
-		ship.queue_free()
-	bs._saved_ship_transforms = kept_transforms
+		if is_instance_valid(ship):
+			ship.queue_free()
+	bs._saved_ship_transforms.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -640,14 +639,23 @@ func _start_hidden_combat_warmup() -> Node:
 	return script.start_combat_warmup(bs)
 
 
-func _await_hidden_combat_warmup(warmup: Node, max_wait_sec: float = COMBAT_WARMUP_MAX_WAIT_SEC) -> void:
-	if warmup == null or not is_instance_valid(warmup):
+func _await_hidden_combat_warmup(warmup: Variant, max_wait_sec: float = COMBAT_WARMUP_MAX_WAIT_SEC) -> void:
+	# Combat warmup queues itself for deletion after its last render frame. An
+	# async fleet/network step can therefore leave this Variant holding a freed
+	# Object. Keep the boundary untyped so validity is checked before assigning
+	# it to a Node-typed local; a `Node` argument would reject it before entering.
+	var safe_warmup: Node = null
+	# `is` also errors on a freed instance, so validity must be the left side of
+	# this short-circuit expression.
+	if is_instance_valid(warmup) and warmup is Node:
+		safe_warmup = warmup
+	if safe_warmup == null:
 		return
 	var waited: float = 0.0
-	while is_instance_valid(warmup) and not bool(warmup.get("_finished_emitted")) and waited < max_wait_sec:
+	while is_instance_valid(safe_warmup) and not bool(safe_warmup.get("_finished_emitted")) and waited < max_wait_sec:
 		await bs.get_tree().process_frame
 		waited += bs.get_process_delta_time()
-	if is_instance_valid(warmup) and not bool(warmup.get("_finished_emitted")):
+	if is_instance_valid(safe_warmup) and not bool(safe_warmup.get("_finished_emitted")):
 		print("[BATTLE_ENTRY] combat_warmup_continue_in_background wait_ms=", int(waited * 1000.0))
 	else:
 		print("[BATTLE_ENTRY] combat_warmup_done wait_ms=", int(waited * 1000.0))
@@ -724,7 +732,7 @@ func _run_battle_entry_switch(combat_warmup: Variant, warmup_already_waited: boo
 	if combat_warmup is Node and is_instance_valid(combat_warmup):
 		safe_warmup = combat_warmup
 	print("[BATTLE_ENTRY] ", label, "_runner_start seq=", seq, " elapsed_ms=", Time.get_ticks_msec() - started_ticks, " warmup_valid=", safe_warmup != null, " enemy_has_buildings=", enemy_info.has("buildings"))
-	await _switch_to_enemy_island_after_sail(safe_warmup, warmup_already_waited)
+	await _switch_to_enemy_island_covered(safe_warmup, warmup_already_waited)
 	print("[BATTLE_ENTRY] ", label, "_runner_done seq=", seq, " elapsed_ms=", Time.get_ticks_msec() - started_ticks, " viewing=", is_viewing_enemy, " in_progress=", _find_in_progress)
 
 
@@ -735,9 +743,8 @@ func _dispatch_battle_entry_switch(combat_warmup: Variant, warmup_already_waited
 	_run_battle_entry_switch(combat_warmup, warmup_already_waited, seq, started_ticks, label)
 	_watch_battle_entry_switch(seq, started_ticks, label)
 
-## Kicks off the enemy search flow: boards home troops, sails ships, closes
-## the cloud transition, fetches an enemy from the server, then switches to
-## the enemy island. Called when the Find Enemy button is pressed.
+## Kicks off the enemy search flow. The cloud closes immediately; fleet
+## snapshotting and scene preparation happen while the home island is covered.
 func _on_find_pressed() -> void:
 	if is_viewing_enemy or _find_in_progress:
 		return
@@ -761,41 +768,7 @@ func _on_find_pressed() -> void:
 	_find_in_progress = true
 	if bs.find_button:
 		bs.find_button.disabled = true
-		bs.find_button.text = "Preparing..."
-	# Snapshot the fleet BEFORE anything is freed or destroyed
-	_saved_fleet = await bs._build_fleet()
-	if bs.find_button:
-		bs.find_button.text = "Boarding..."
-	var pending_count: int = 0
-	for ht in bs._home_troops:
-		var troop = ht.get("node")
-		if not is_instance_valid(troop) or not troop.visible:
-			continue
-		var port_pos: Vector3 = bs._find_nearest_port_with_ship(troop.global_position)
-		if port_pos == Vector3.INF:
-			troop.visible = false
-			continue
-		if troop.has_method("board_ship"):
-			pending_count += 1
-			troop.board_ship(port_pos)
-			troop.boarded.connect(func():
-				pending_count -= 1
-			, CONNECT_ONE_SHOT)
-		else:
-			troop.visible = false
-	var wait_timer: float = 0.0
-	while pending_count > 0 and wait_timer < 6.0:
-		await bs.get_tree().process_frame
-		wait_timer += bs.get_process_delta_time()
-	print("[BATTLE_ENTRY] boarding_done elapsed_ms=", Time.get_ticks_msec() - entry_started_ticks, " wait_sec=", wait_timer)
-	for ht in bs._home_troops:
-		var troop = ht.get("node")
-		if is_instance_valid(troop):
-			troop.visible = false
-	if bs.find_button:
-		bs.find_button.text = "Sailing..."
-	await _sail_ships_away()
-	print("[BATTLE_ENTRY] sailing_done elapsed_ms=", Time.get_ticks_msec() - entry_started_ticks)
+		bs.find_button.text = "Finding..."
 	var bridge2 = bs._bridge
 	if bridge2:
 		bridge2.send_to_react("cloud_transition", {"visible": true, "message": "Finding opponent..."})
@@ -804,6 +777,11 @@ func _on_find_pressed() -> void:
 	await _await_cloud_cover_presented(cloud, "cloud_close", entry_started_ticks)
 	print("[BATTLE_ENTRY] cloud_closed elapsed_ms=", Time.get_ticks_msec() - entry_started_ticks)
 	var combat_warmup: Node = _start_cloud_covered_combat_warmup("find_enemy", entry_started_ticks)
+	# Snapshot before hiding/freeing any home units. This work is now concealed
+	# by the cloud instead of being presented as boarding/sailing animation.
+	_saved_fleet = await bs._build_fleet()
+	_hide_home_fleet_for_transition()
+	print("[BATTLE_ENTRY] fleet_hidden elapsed_ms=", Time.get_ticks_msec() - entry_started_ticks, " ships=", _saved_fleet.size())
 	await _await_hidden_combat_warmup(combat_warmup)
 	if bs.find_button:
 		bs.find_button.text = "Searching..."
@@ -859,40 +837,7 @@ func _on_revenge_pressed(source_battle_id: int) -> void:
 	_find_in_progress = true
 	if bs.find_button:
 		bs.find_button.disabled = true
-		bs.find_button.text = "Preparing..."
-	_saved_fleet = await bs._build_fleet()
-	if bs.find_button:
-		bs.find_button.text = "Boarding..."
-	var pending_count: int = 0
-	for ht in bs._home_troops:
-		var troop: Node = ht.get("node")
-		if not is_instance_valid(troop) or not troop.visible:
-			continue
-		var port_pos: Vector3 = bs._find_nearest_port_with_ship(troop.global_position)
-		if port_pos == Vector3.INF:
-			troop.visible = false
-			continue
-		if troop.has_method("board_ship"):
-			pending_count += 1
-			troop.board_ship(port_pos)
-			troop.boarded.connect(func():
-				pending_count -= 1
-			, CONNECT_ONE_SHOT)
-		else:
-			troop.visible = false
-	var wait_timer: float = 0.0
-	while pending_count > 0 and wait_timer < 6.0:
-		await bs.get_tree().process_frame
-		wait_timer += bs.get_process_delta_time()
-	print("[BATTLE_ENTRY] revenge_boarding_done elapsed_ms=", Time.get_ticks_msec() - entry_started_ticks, " wait_sec=", wait_timer)
-	for ht in bs._home_troops:
-		var troop: Node = ht.get("node")
-		if is_instance_valid(troop):
-			troop.visible = false
-	if bs.find_button:
-		bs.find_button.text = "Sailing..."
-	await _sail_ships_away()
-	print("[BATTLE_ENTRY] revenge_sailing_done elapsed_ms=", Time.get_ticks_msec() - entry_started_ticks)
+		bs.find_button.text = "Finding..."
 	var bridge2: Node = bs._bridge
 	if bridge2:
 		bridge2.send_to_react("cloud_transition", {"visible": true, "message": "Finding opponent..."})
@@ -901,6 +846,9 @@ func _on_revenge_pressed(source_battle_id: int) -> void:
 	await _await_cloud_cover_presented(cloud, "revenge_cloud_close", entry_started_ticks)
 	print("[BATTLE_ENTRY] revenge_cloud_closed elapsed_ms=", Time.get_ticks_msec() - entry_started_ticks)
 	var combat_warmup: Node = _start_cloud_covered_combat_warmup("revenge", entry_started_ticks)
+	_saved_fleet = await bs._build_fleet()
+	_hide_home_fleet_for_transition()
+	print("[BATTLE_ENTRY] revenge_fleet_hidden elapsed_ms=", Time.get_ticks_msec() - entry_started_ticks, " ships=", _saved_fleet.size())
 	await _await_hidden_combat_warmup(combat_warmup)
 	if bs.find_button:
 		bs.find_button.text = "Revenge..."
@@ -930,52 +878,30 @@ func _on_revenge_pressed(source_battle_id: int) -> void:
 	_dispatch_battle_entry_switch(null, true, entry_started_ticks, "revenge_switch")
 
 
-## Animates all active ships sailing off-screen and saves their transforms
-## so they can be restored later by _restore_ships_and_troops().
-func _sail_ships_away() -> void:
-	var _r = bs.get_tree().root
-	if not bs._ship_attack_node or not is_instance_valid(bs._ship_attack_node):
-		bs._ship_attack_node = _r.find_child("MainShipAttack", true, false)
-	if not bs._ship_base_node or not is_instance_valid(bs._ship_base_node):
-		bs._ship_base_node = _r.find_child("MainShipBase", true, false)
-	var sailing_ships: Array = []
-	if bs._ship_base_node and is_instance_valid(bs._ship_base_node):
-		sailing_ships.append(bs._ship_base_node)
-	sailing_ships.append_array(bs._get_all_port_ships())
+## Hides the persistent home fleet only after the cloud is fully covering the
+## island. Search failures restore these nodes through the existing recovery.
+func _hide_home_fleet_for_transition() -> void:
 	bs._saved_ship_transforms.clear()
-	for ship in sailing_ships:
-		if is_instance_valid(ship):
-			bs._saved_ship_transforms.append({"node": ship, "pos": ship.global_position, "rot_y": ship.rotation.y})
 	bs._saved_port_ships.clear()
-	for bsys in bs.get_tree().get_nodes_in_group("building_systems"):
-		for b in bsys.placed_buildings:
-			if b.get("id") == "port":
-				var pnode = b.get("node", null)
-				if is_instance_valid(pnode) and pnode.has_meta("has_ship"):
-					bs._saved_port_ships.append({
-						"grid_pos": b.grid_pos,
-						"bs": bsys,
-						"ship_level": pnode.get_meta("ship_level", 1),
-						"ship_troops": pnode.get_meta("ship_troops", []),
-					})
-	if sailing_ships.size() > 0:
-		var sail_tween = bs.create_tween().set_parallel(true)
-		for ship in sailing_ships:
-			if not is_instance_valid(ship):
-				continue
-			var forward: Vector3 = Vector3(1, 0, -1).normalized()
-			var target_pos = ship.global_position + forward * 4.0
-			target_pos.y = ship.global_position.y
-			sail_tween.tween_property(ship, "global_position", target_pos, 2.0).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
-		await sail_tween.finished
-	for ship in sailing_ships:
-		if is_instance_valid(ship):
-			ship.visible = false
+	var main_ship_controller: Node = bs.get_node_or_null("../MainShipController")
+	if main_ship_controller and main_ship_controller.has_method("hide_for_battle_transition"):
+		main_ship_controller.hide_for_battle_transition()
+	else:
+		push_error("BattleSystem: MainShipController is unavailable")
+	for ht in bs._home_troops:
+		var troop: Node = ht.get("node")
+		if is_instance_valid(troop):
+			troop.visible = false
 
 
 ## Restores ships to their saved transforms and makes home troops visible again.
 ## Called when enemy search fails or after returning home.
 func _restore_ships_and_troops() -> void:
+	if bs and bs.has_method("_restore_home_player_flag"):
+		bs._restore_home_player_flag()
+	var main_ship_controller: Node = bs.get_node_or_null("../MainShipController")
+	if main_ship_controller and main_ship_controller.has_method("force_home"):
+		main_ship_controller.force_home()
 	for data in bs._saved_ship_transforms:
 		var ship = data.get("node")
 		if is_instance_valid(ship):
@@ -983,10 +909,6 @@ func _restore_ships_and_troops() -> void:
 			ship.rotation.y = data.rot_y
 			ship.visible = true
 	bs._saved_ship_transforms.clear()
-	if bs._ship_attack_node:
-		bs._ship_attack_node.visible = false
-	if bs._ship_base_node:
-		bs._ship_base_node.visible = true
 	for ht in bs._home_troops:
 		var troop: Node = ht.get("node")
 		if is_instance_valid(troop):
@@ -1016,6 +938,7 @@ func _switch_to_enemy_island() -> void:
 	_battle_replay.append({
 		"type": "battle_start",
 		"battle_session_id": str(enemy_info.get("battle_session_id", "")),
+		"combat_grid_version": str(enemy_info.get("combat_grid_version", "")),
 		"grid_configs": _battle_grid_configs(),
 		"grid_config": {
 			"grid_width": bs.grid_width,
@@ -1028,15 +951,6 @@ func _switch_to_enemy_island() -> void:
 			"grid_rotation": bs.grid_rotation,
 		}
 	})
-	var _r = bs.get_tree().root
-	if not bs._ship_attack_node or not is_instance_valid(bs._ship_attack_node):
-		bs._ship_attack_node = _r.find_child("MainShipAttack", true, false)
-	if not bs._ship_base_node or not is_instance_valid(bs._ship_base_node):
-		bs._ship_base_node = _r.find_child("MainShipBase", true, false)
-	if bs._ship_attack_node:
-		bs._ship_attack_node.visible = true
-	if bs._ship_base_node:
-		bs._ship_base_node.visible = false
 	# Free home troops and port ships immediately — consumed by the attack
 	_free_home_troops_and_ships()
 	for bsys in bs._building_systems:
@@ -1125,10 +1039,9 @@ func _switch_to_enemy_island() -> void:
 		attack_system.enter_attack_mode(_saved_fleet)
 
 
-## Switches to the enemy island assuming ships have already sailed away.
-## Skips the cloud-close step; the caller is responsible for closing the
-## cloud before calling this function.
-func _switch_to_enemy_island_after_sail(combat_warmup: Variant = null, warmup_already_waited: bool = false) -> void:
+## Switches to the enemy island after the caller has covered the home scene
+## and hidden its fleet. This path intentionally contains no departure sail.
+func _switch_to_enemy_island_covered(combat_warmup: Variant = null, warmup_already_waited: bool = false) -> void:
 	var switch_started_ticks: int = Time.get_ticks_msec()
 	var safe_warmup: Node = null
 	if combat_warmup is Node and is_instance_valid(combat_warmup):
@@ -1149,6 +1062,7 @@ func _switch_to_enemy_island_after_sail(combat_warmup: Variant = null, warmup_al
 	_battle_replay.append({
 		"type": "battle_start",
 		"battle_session_id": str(enemy_info.get("battle_session_id", "")),
+		"combat_grid_version": str(enemy_info.get("combat_grid_version", "")),
 		"grid_configs": _battle_grid_configs(),
 		"grid_config": {
 			"grid_width": bs.grid_width,
@@ -1161,8 +1075,6 @@ func _switch_to_enemy_island_after_sail(combat_warmup: Variant = null, warmup_al
 			"grid_rotation": bs.grid_rotation,
 		}
 	})
-	if bs._ship_attack_node:
-		bs._ship_attack_node.visible = true
 	# Free home troops and port ships immediately — they are consumed by the attack
 	_free_home_troops_and_ships()
 	print("[BATTLE_ENTRY] switch_freed_home elapsed_ms=", Time.get_ticks_msec() - switch_started_ticks)
@@ -1252,8 +1164,6 @@ func _switch_to_enemy_island_after_sail(combat_warmup: Variant = null, warmup_al
 	var bridge2 = bs._bridge
 	if bridge2:
 		bridge2.send_to_react("cloud_transition", {"visible": false})
-	if bs._ship_attack_node and is_instance_valid(bs._ship_attack_node):
-		bs._ship_attack_node.visible = true
 	var attack_system = bs.get_node_or_null("../AttackSystem")
 	if attack_system and attack_system.has_method("enter_attack_mode"):
 		attack_system.enter_attack_mode(_saved_fleet)
@@ -1302,25 +1212,13 @@ func _return_home() -> void:
 	if bs._rally:
 		bs._rally._exit_rally_mode()
 		bs._rally.reset()
-	var _r2 = bs.get_tree().root
-	if not bs._ship_attack_node or not is_instance_valid(bs._ship_attack_node):
-		bs._ship_attack_node = _r2.find_child("MainShipAttack", true, false)
-	if not bs._ship_base_node or not is_instance_valid(bs._ship_base_node):
-		bs._ship_base_node = _r2.find_child("MainShipBase", true, false)
-	if bs._ship_attack_node:
-		bs._ship_attack_node.visible = false
-	# Restore MainShipBase (and any other saved-transform ship) to its pre-
-	# sail-away dock position. Without this the ship re-appears at the
-	# `_sail_ships_away` target (original + forward * 4) and looks teleported
-	# out into open water after victory.
+	# Legacy local sessions may still have a cached port ship transform.
 	for data in bs._saved_ship_transforms:
 		var restore_ship: Node3D = data.get("node")
 		if is_instance_valid(restore_ship):
 			restore_ship.global_position = data.pos
 			restore_ship.rotation.y = data.rot_y
 	bs._saved_ship_transforms.clear()
-	if bs._ship_base_node:
-		bs._ship_base_node.visible = true
 	for ht in bs._home_troops:
 		if is_instance_valid(ht.get("node")):
 			ht.node.visible = true
@@ -1367,6 +1265,11 @@ func _return_home() -> void:
 		return_button = null
 	enemy_info = {}
 	_victory_declared = false
+	if bs.has_method("_restore_home_player_flag"):
+		bs._restore_home_player_flag()
+	var main_ship_controller: Node = bs.get_node_or_null("../MainShipController")
+	if main_ship_controller and main_ship_controller.has_method("force_home"):
+		main_ship_controller.force_home()
 	cloud.reveal()
 	var revealed: bool = await _await_signal_or_timeout(cloud, "reveal_finished", 2.5, "return_home_cloud_reveal")
 	if not revealed and cloud.has_method("hide_now"):
@@ -1379,10 +1282,6 @@ func _return_home() -> void:
 	bs._saved_port_ships.clear()
 	bs._port.owned_ships = 0
 	bs._home_troops.clear()
-	if bs._ship_attack_node:
-		bs._ship_attack_node.visible = false
-	if bs._ship_base_node:
-		bs._ship_base_node.visible = true
 	_returning_home = false
 
 
@@ -1679,6 +1578,11 @@ func _run_submit_bg(net_node: Node, defender_id: String, casualties: Dictionary)
 ## playback.
 func _replay_troops_for_action(action: Dictionary) -> Array:
 	var result: Array = []
+	if str(action.get("type", "")) == "deploy_troop":
+		var troop_entry: String = str(action.get("troop", action.get("troop_entry", action.get("troopType", "")))).strip_edges()
+		if troop_entry != "":
+			result.append(troop_entry)
+		return result
 	var raw_troops = action.get("troops", [])
 	if raw_troops is Array:
 		for troop in raw_troops:
@@ -1694,6 +1598,12 @@ func _replay_troops_for_action(action: Dictionary) -> Array:
 
 func _replay_fleet_from_actions(actions: Array) -> Array:
 	var fleet: Array = []
+	var manual_troops: Array = []
+	for action in actions:
+		if str(action.get("type", "")) == "deploy_troop":
+			manual_troops.append_array(_replay_troops_for_action(action))
+	if not manual_troops.is_empty():
+		return [{"id": "replay_main_ship", "level": 1, "capacity": manual_troops.size(), "troops": manual_troops}]
 	for action in actions:
 		if action.get("type", "") != "place_ship":
 			continue
@@ -1827,15 +1737,11 @@ func _start_replay(replay_data: Array, buildings_snapshot: Array, attacker_name:
 		})
 		_send_replay_timer(true)
 		bridge.send_to_react("cloud_transition", {"visible": true})
-	var _r = bs.get_tree().root
-	if not bs._ship_attack_node or not is_instance_valid(bs._ship_attack_node):
-		bs._ship_attack_node = _r.find_child("MainShipAttack", true, false)
-	if not bs._ship_base_node or not is_instance_valid(bs._ship_base_node):
-		bs._ship_base_node = _r.find_child("MainShipBase", true, false)
-	if bs._ship_attack_node:
-		bs._ship_attack_node.visible = true
-	if bs._ship_base_node:
-		bs._ship_base_node.visible = false
+	if bs.has_method("_apply_main_ship_flag_url"):
+		bs._apply_main_ship_flag_url(_replay_attacker_flag_url(), false)
+	var main_ship_controller: Node = bs.get_node_or_null("../MainShipController")
+	if main_ship_controller and main_ship_controller.has_method("force_combat"):
+		main_ship_controller.force_combat()
 	for ht in bs._home_troops:
 		if is_instance_valid(ht.get("node")):
 			ht.node.visible = false
@@ -1890,7 +1796,7 @@ func _start_replay(replay_data: Array, buildings_snapshot: Array, attacker_name:
 func _replay_playback() -> void:
 	var actions: Array = []
 	for a in _replay_actions:
-		if a.get("type", "") in ["place_ship", "cannon_fire", "rally_drop"]:
+		if a.get("type", "") in ["place_ship", "deploy_troop", "cannon_fire", "rally_drop"]:
 			actions.append(a)
 	actions.sort_custom(func(a, b): return float(a.get("t", 0.0)) < float(b.get("t", 0.0)))
 	if actions.is_empty():
@@ -1933,6 +1839,8 @@ func _replay_playback() -> void:
 		match action.get("type", ""):
 			"place_ship":
 				_replay_place_ship(action, attack_system)
+			"deploy_troop":
+				_replay_deploy_troop(action, attack_system)
 			"cannon_fire":
 				_replay_cannon_fire(action)
 			"rally_drop":
@@ -2030,6 +1938,11 @@ func _replay_place_ship(action: Dictionary, attack_system: Node) -> void:
 	bs.troop_levels[level_key] = original_level
 
 
+func _replay_deploy_troop(action: Dictionary, attack_system: Node) -> void:
+	if attack_system and attack_system.has_method("replay_deploy_troop"):
+		attack_system.replay_deploy_troop(action)
+
+
 func _replay_building_pos(server_id: int) -> Vector3:
 	if server_id <= 0:
 		return Vector3.INF
@@ -2081,8 +1994,8 @@ func _replay_cannon_fire(action: Dictionary) -> void:
 
 
 ## Called every frame from BuildingSystem._process while in enemy-view mode.
-## Detects when all attacking troops have been lost and ALL ships have been
-## deployed (placed + sailed), then submits a defeat result after a grace period.
+## Detects when all attacking troops have been lost and no deployable reserve
+## remains, then submits a defeat result after a grace period.
 func check_defeat(delta: float) -> void:
 	if not is_viewing_enemy or _replay_active or _victory_declared:
 		return
@@ -2105,6 +2018,9 @@ func check_defeat(delta: float) -> void:
 			return
 
 	var attack_system: Node = bs.get_node_or_null("../AttackSystem")
+	var undeployed_troops: int = 0
+	if attack_system and attack_system.has_method("remaining_undeployed_troops"):
+		undeployed_troops = int(attack_system.call("remaining_undeployed_troops"))
 
 	var troops_alive: bool = not BaseTroop._get_troops_cached().is_empty()
 	# Ships still sailing count as "alive" — they haven't deployed yet
@@ -2115,9 +2031,12 @@ func check_defeat(delta: float) -> void:
 				ships_still_sailing = true
 				break
 
-	if troops_alive or ships_still_sailing:
+	if troops_alive or ships_still_sailing or undeployed_troops > 0:
 		if troops_alive:
 			_had_troops = true
+		# The current single-ship flow keeps undeployed troops in AttackSystem's
+		# roster. Losing the last live unit is not a defeat while that reserve
+		# still contains deployable units.
 		_skeleton_respawn_timer = 0.0
 		return
 
@@ -2147,8 +2066,7 @@ func check_defeat(delta: float) -> void:
 	var defeat_casualties: Dictionary = _actual_battle_casualties()
 	var defeat_reason: String = "All troops lost" if had_any_troops else "No troops deployed"
 	if net_def and net_def.has_token() and def_id != "" and not _victory_declared:
-		_victory_declared = true  # prevent double-submission
-		_record_battle_end("defeat")
+		_begin_live_defeat()
 		var defeat_session_id: String = str(enemy_info.get("battle_session_id", ""))
 		var defeat_result: Dictionary = await net_def.submit_battle_result(def_id, _battle_replay, "defeat", defeat_casualties, defeat_session_id)
 		if not is_instance_valid(bs): return
@@ -2157,6 +2075,8 @@ func check_defeat(delta: float) -> void:
 			bs._apply_ships_from_server(defeat_result.get("ships", []))
 		if defeat_result is Dictionary and defeat_result.has("casualties"):
 			defeat_casualties = defeat_result.get("casualties", defeat_casualties)
+	elif not _victory_declared:
+		_begin_live_defeat()
 	if not is_instance_valid(bs): return
 	var audio = bs.get_node_or_null("/root/AudioManager")
 	if audio and audio.has_method("play_result"):
@@ -2174,12 +2094,11 @@ func _force_defeat(reason: String) -> void:
 		return
 	_had_troops = false
 	_skeleton_respawn_timer = 0.0
-	_victory_declared = true  # prevent check_defeat from firing again
-	_record_battle_end("defeat")
+	var defeat_casualties: Dictionary = _actual_battle_casualties()
+	_begin_live_defeat()
 	var audio = bs.get_node_or_null("/root/AudioManager")
 	if audio and audio.has_method("play_result"):
 		audio.play_result()
-	var defeat_casualties: Dictionary = _actual_battle_casualties()
 
 	var net_def: Node = bs._net
 	var def_id: String = enemy_info.get("id", "")
@@ -2190,6 +2109,17 @@ func _force_defeat(reason: String) -> void:
 	if bridge_def:
 		_flush_troop_deaths_once(defeat_casualties)
 		bridge_def.send_to_react("battle_result", {"type": "defeat", "reason": reason, "casualties": defeat_casualties})
+
+
+func _begin_live_defeat() -> void:
+	if _victory_declared:
+		return
+	_battle_timer_active = false
+	_victory_declared = true
+	_record_battle_end("defeat")
+	_cleanup_combat_runtime_nodes()
+	if bs and bs._bridge:
+		bs._bridge.send_to_react("battle_timer", {"remaining": null})
 
 
 ## Called every frame from BuildingSystem._process while on the home island.

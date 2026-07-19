@@ -30,14 +30,12 @@ const MAX_VILLAGE_BUILD_ORDER: Array[String] = [
 	"turret",
 	"mage_tower",
 	"mortar",
-	"port",
 ]
 
 const TEST_TH_MAX_COUNT: Dictionary = {
 	"mine": [1, 2, 3, 3, 4],
 	"sawmill": [1, 2, 3, 3, 4],
 	"barn": [1, 1, 1, 1, 1],
-	"port": [1, 2, 3, 3, 3],
 	"archer_tower": [1, 2, 3, 3, 3],
 	"tombstone": [0, 1, 3, 3, 3],
 	"altar": [1, 1, 1, 1, 1],
@@ -87,9 +85,6 @@ func _core_layout() -> Array:
 		{"grid": "main", "id": "turret", "pos": Vector2i(20, 10)},
 		{"grid": "main", "id": "mage_tower", "pos": Vector2i(20, 15)},
 		{"grid": "main", "id": "mortar", "pos": Vector2i(23, 13)},
-		{"grid": "port", "id": "port", "pos": Vector2i(2, 0)},
-		{"grid": "port", "id": "port", "pos": Vector2i(8, 0)},
-		{"grid": "port", "id": "port", "pos": Vector2i(14, 0)},
 	]
 
 
@@ -99,12 +94,337 @@ func _ready() -> void:
 	call_deferred("_set_status", "Scene ready. F1 panel, 1 build random village.")
 	if OS.get_cmdline_args().has("--capture-demon-colors"):
 		call_deferred("_capture_demon_king_color_test")
+	if OS.get_cmdline_user_args().has("--capture-attack-grid"):
+		call_deferred("_capture_attack_grid_test")
+	if OS.get_cmdline_user_args().has("--capture-single-ship-combat"):
+		call_deferred("_capture_single_ship_combat_test")
+	if OS.get_cmdline_user_args().has("--capture-main-ship-approach-frames"):
+		call_deferred("_capture_main_ship_approach_frames")
+	if OS.get_cmdline_user_args().has("--capture-tentacle-idle"):
+		call_deferred("_capture_tentacle_idle_test")
+	if OS.get_cmdline_user_args().has("--capture-archer-towers"):
+		call_deferred("_capture_archer_tower_test")
+	if OS.get_cmdline_user_args().has("--verify-archer-tower-combat"):
+		call_deferred("_verify_archer_tower_combat")
+	if OS.get_cmdline_user_args().has("--capture-resource-collection-feedback"):
+		call_deferred("_capture_resource_collection_feedback")
+	if OS.get_cmdline_user_args().has("--verify-main-ship-motion"):
+		call_deferred("_verify_main_ship_motion")
+	if OS.get_cmdline_user_args().has("--verify-main-ship-flag-uv"):
+		call_deferred("_verify_main_ship_flag_uv")
+	if OS.get_cmdline_user_args().has("--capture-main-ship-flag-orientation"):
+		call_deferred("_capture_main_ship_flag_orientation")
+	if OS.get_cmdline_user_args().has("--verify-camera-safety"):
+		call_deferred("_verify_camera_safety")
+	if OS.get_cmdline_user_args().has("--verify-stale-warmup-await"):
+		call_deferred("_verify_stale_warmup_await")
+	if OS.get_cmdline_user_args().has("--verify-defeat-reserve"):
+		call_deferred("_verify_defeat_reserve")
+	if OS.get_cmdline_user_args().has("--verify-hold-deployment"):
+		call_deferred("_verify_hold_deployment")
 	if OS.get_cmdline_user_args().has("--auto-fps-profile"):
 		call_deferred("run_mixed_fps_profile")
 
 
 func _exit_tree() -> void:
 	Engine.time_scale = 1.0
+
+
+func _verify_defeat_reserve() -> void:
+	var bs: Node = get_node_or_null("../BuildingSystem")
+	var attack: Node = get_node_or_null("../AttackSystem")
+	var battle: Variant = bs.get("_battle") if bs else null
+	if bs == null or attack == null or battle == null:
+		push_error("Defeat reserve test failed: combat systems are missing.")
+		get_tree().quit(1)
+		return
+
+	attack.cleanup_combat_nodes()
+	battle.reset()
+	await get_tree().process_frame
+	battle.is_viewing_enemy = true
+	battle._replay_active = false
+	battle._victory_declared = false
+	battle._battle_timer_active = true
+	battle._battle_timer = 15.0
+	battle._battle_start_time = Time.get_ticks_msec() / 1000.0 - 15.0
+	battle._saved_fleet = [{"level": 1, "troops": ["Mage", "Mage"]}]
+	battle.enemy_info = {}
+	battle._had_troops = true
+	battle._skeleton_respawn_timer = 0.0
+	attack._manual_deployment_mode = true
+	attack._main_ship_ready_for_deployment = true
+	attack.is_attack_mode = true
+	attack._fleet = battle._saved_fleet.duplicate(true)
+	attack._army_entries.clear()
+	attack._army_entries.append("Mage")
+	attack._rebuild_army_groups()
+	attack._total_ships_launched = 1
+
+	var spawn_pos := Vector3(0.0, float(bs.grid_y), 0.0)
+	if not attack._spawn_manual_troop("Mage", 1, spawn_pos, 0):
+		push_error("Defeat reserve test failed: Mage could not be spawned.")
+		get_tree().quit(1)
+		return
+	var deployed_mage: Node = await _wait_for_live_test_troop(2.0)
+	if deployed_mage == null:
+		push_error("Defeat reserve test failed: deployed Mage did not activate.")
+		get_tree().quit(1)
+		return
+	deployed_mage.take_damage(int(deployed_mage.get("max_hp")) + 1)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	battle.check_defeat(4.0)
+	var reserve_blocked_defeat: bool = (
+		not battle._victory_declared
+		and battle._battle_timer_active
+		and attack.remaining_undeployed_troops() == 1
+		and battle._skeleton_respawn_timer == 0.0
+	)
+	if not reserve_blocked_defeat:
+		push_error(
+			"Defeat reserve test failed: reserve did not block defeat "
+			+ "(victory_declared=%s timer_active=%s reserve=%d grace=%.2f)." % [
+				battle._victory_declared,
+				battle._battle_timer_active,
+				attack.remaining_undeployed_troops(),
+				battle._skeleton_respawn_timer,
+			]
+		)
+		get_tree().quit(1)
+		return
+
+	if not attack._spawn_manual_troop("Mage", 1, spawn_pos, 1):
+		push_error("Defeat reserve test failed: cleanup Mage could not be spawned.")
+		get_tree().quit(1)
+		return
+	var cleanup_mage: Node = await _wait_for_live_test_troop(2.0)
+	if cleanup_mage == null:
+		push_error("Defeat reserve test failed: cleanup Mage did not activate.")
+		get_tree().quit(1)
+		return
+	battle._force_defeat("Regression test timeout")
+	await get_tree().process_frame
+	await get_tree().process_frame
+	var combat_nodes_left: int = 0
+	for group_name in ["troops", "ships", "deployed_ships"]:
+		combat_nodes_left += get_tree().get_nodes_in_group(group_name).size()
+	var cleanup_complete: bool = (
+		battle._victory_declared
+		and not battle._battle_timer_active
+		and not attack.is_attack_mode
+		and attack.remaining_undeployed_troops() == 0
+		and combat_nodes_left == 0
+		and not is_instance_valid(cleanup_mage)
+	)
+	if not cleanup_complete:
+		push_error(
+			"Defeat reserve test failed: combat cleanup incomplete "
+			+ "(timer_active=%s attack_mode=%s reserve=%d nodes=%d mage_valid=%s)." % [
+				battle._battle_timer_active,
+				attack.is_attack_mode,
+				attack.remaining_undeployed_troops(),
+				combat_nodes_left,
+				is_instance_valid(cleanup_mage),
+			]
+		)
+		get_tree().quit(1)
+		return
+	print("[DEFEAT_RESERVE_TEST] PASS reserve_blocked=true cleanup=true")
+	get_tree().quit()
+
+
+func _wait_for_live_test_troop(timeout_seconds: float) -> Node:
+	var elapsed := 0.0
+	while elapsed < timeout_seconds:
+		await get_tree().process_frame
+		for candidate in get_tree().get_nodes_in_group("troops"):
+			if BaseTroop.is_live_troop(candidate):
+				return candidate
+		elapsed += get_process_delta_time()
+	return null
+
+
+func _verify_hold_deployment() -> void:
+	var bs: Node = get_node_or_null("../BuildingSystem")
+	var attack: Node = get_node_or_null("../AttackSystem")
+	if bs == null or attack == null:
+		push_error("Hold deployment test failed: combat systems are missing.")
+		get_tree().quit(1)
+		return
+	attack.cleanup_combat_nodes()
+	await get_tree().process_frame
+	attack._manual_deployment_mode = true
+	attack._main_ship_ready_for_deployment = true
+	attack.is_attack_mode = true
+	attack._manual_deploy_index = 0
+	attack._fleet = [{"level": 1, "troops": ["Mage", "Mage", "Mage", "Mage", "Mage", "Archer", "Archer"]}]
+	attack._army_entries.clear()
+	for _i in 5:
+		attack._army_entries.append("Mage")
+	for _i in 2:
+		attack._army_entries.append("Archer")
+	attack._rebuild_army_groups()
+	attack._selected_group_idx = 0
+	var deploy_at: Vector3 = attack.plane_center
+	deploy_at.y = float(bs.grid_y)
+	var selected_key: String = attack._selected_troop_group_key()
+	if selected_key != "Mage" or not attack._try_deploy_selected_troop(deploy_at):
+		push_error("Hold deployment test failed: initial Mage deployment was rejected.")
+		get_tree().quit(1)
+		return
+	attack._start_hold_deployment(deploy_at, selected_key)
+	for _i in 24:
+		attack._advance_hold_deployment(0.05)
+	attack._stop_hold_deployment()
+	for _i in 4:
+		await get_tree().process_frame
+
+	var remaining_types: Array[String] = []
+	for entry in attack._army_entries:
+		remaining_types.append(attack._normalize_troop_entry(entry))
+	var deployed_before_release: int = attack._manual_deploy_index
+	attack._advance_hold_deployment(1.0)
+	await get_tree().process_frame
+	var live_troops: int = 0
+	for candidate in get_tree().get_nodes_in_group("troops"):
+		if BaseTroop.is_live_troop(candidate):
+			live_troops += 1
+	var passed: bool = (
+		deployed_before_release == 5
+		and attack._manual_deploy_index == deployed_before_release
+		and remaining_types == ["Archer", "Archer"]
+		and live_troops == 5
+		and not attack._hold_deploy_active
+	)
+	attack.cleanup_combat_nodes()
+	await get_tree().process_frame
+	await get_tree().process_frame
+	if not passed:
+		push_error(
+			"Hold deployment test failed "
+			+ "(deployed=%d remaining=%s live=%d hold_active=%s)." % [
+				deployed_before_release,
+				remaining_types,
+				live_troops,
+				attack._hold_deploy_active,
+			]
+		)
+		get_tree().quit(1)
+		return
+	print("[HOLD_DEPLOYMENT_TEST] PASS deployed=5 remaining_archers=2 release_stopped=true")
+	get_tree().quit()
+
+
+func _verify_stale_warmup_await() -> void:
+	await get_tree().process_frame
+	var scene := get_tree().current_scene
+	var building_system := scene.get_node_or_null("BuildingSystem") if scene else null
+	var battle: BSBattle = building_system.get("_battle") if building_system else null
+	if battle == null:
+		push_error("Stale warmup test failed: BSBattle is missing.")
+		get_tree().quit(1)
+		return
+	var stale_warmup: Node = Node.new()
+	building_system.add_child(stale_warmup)
+	stale_warmup.queue_free()
+	await get_tree().process_frame
+	await battle._await_hidden_combat_warmup(stale_warmup, 0.01)
+	print("[STALE_WARMUP_TEST] PASS freed_object_was_ignored=true")
+	get_tree().quit()
+
+
+func _verify_camera_safety() -> void:
+	await get_tree().process_frame
+	await get_tree().physics_frame
+	var scene := get_tree().current_scene
+	var rig := scene.get_node_or_null("CameraRig") if scene else null
+	if rig == null:
+		push_error("Camera safety test failed: CameraRig is missing.")
+		get_tree().quit(1)
+		return
+	var pivot := rig.get_node_or_null("PitchPivot") as Node3D
+	var camera := pivot.get_node_or_null("Camera3D") as Camera3D if pivot else null
+	if camera == null or camera.get_parent() != pivot:
+		push_error("Camera safety test failed: Camera3D must be attached directly to PitchPivot.")
+		get_tree().quit(1)
+		return
+
+	rig.set_process(false)
+	var pan_min: Vector3 = rig.get("pan_limit_min")
+	var pan_max: Vector3 = rig.get("pan_limit_max")
+	var safe_min_zoom: float = float(rig.call("_effective_min_zoom"))
+	var max_camera_zoom: float = float(rig.get("max_zoom"))
+	var minimum_height: float = float(rig.get("minimum_camera_height"))
+	var positions: Array[Vector3] = [
+		Vector3(pan_min.x, 0.0, pan_min.z),
+		Vector3(pan_min.x, 0.0, pan_max.z),
+		Vector3(pan_max.x, 0.0, pan_min.z),
+		Vector3(pan_max.x, 0.0, pan_max.z),
+	]
+	var checks := 0
+	for zoom in [safe_min_zoom, max_camera_zoom]:
+		for target_position in positions:
+			rig.global_position = target_position
+			rig.set("_target_position", target_position)
+			rig.set("_target_zoom", zoom)
+			rig.set("_current_zoom", zoom)
+			rig.call("_apply_zoom_distance")
+			await get_tree().process_frame
+			var actual_distance := camera.global_position.distance_to(rig.global_position)
+			if camera.global_position.y < minimum_height - 0.001:
+				push_error("Camera safety test failed: height %.3f is below %.3f." % [camera.global_position.y, minimum_height])
+				get_tree().quit(1)
+				return
+			if not is_equal_approx(actual_distance, zoom):
+				push_error("Camera safety test failed: boom distance %.3f does not match zoom %.3f." % [actual_distance, zoom])
+				get_tree().quit(1)
+				return
+			checks += 1
+
+	# Cross the full allowed area while zooming in and assert that no frame jumps.
+	rig.global_position = positions[0]
+	rig.set("_target_position", positions[3])
+	rig.set("_current_zoom", max_camera_zoom)
+	rig.set("_target_zoom", safe_min_zoom)
+	rig.call("_apply_zoom_distance")
+	var previous_camera_position := camera.global_position
+	var largest_frame_step := 0.0
+	for frame in range(120):
+		rig.call("_process", 1.0 / 60.0)
+		var frame_step := camera.global_position.distance_to(previous_camera_position)
+		largest_frame_step = maxf(largest_frame_step, frame_step)
+		if frame_step > 1.0:
+			push_error("Camera safety test failed: frame %d jumped %.3f world units." % [frame, frame_step])
+			get_tree().quit(1)
+			return
+		if camera.global_position.y < minimum_height - 0.001:
+			push_error("Camera safety test failed: transition frame %d dropped below minimum height." % frame)
+			get_tree().quit(1)
+			return
+		previous_camera_position = camera.global_position
+
+	# Capture the most zoomed-in corner, where the old SpringArm guard collapsed.
+	rig.global_position = positions[3]
+	rig.set("_target_position", positions[3])
+	rig.set("_current_zoom", safe_min_zoom)
+	rig.set("_target_zoom", safe_min_zoom)
+	rig.call("_apply_zoom_distance")
+	if _panel:
+		_panel.visible = false
+	await get_tree().process_frame
+	await get_tree().process_frame
+	var output_path := "user://camera-safety.png"
+	for text in OS.get_cmdline_user_args():
+		if text.begins_with("--camera-capture-out="):
+			output_path = text.trim_prefix("--camera-capture-out=")
+	var err := get_viewport().get_texture().get_image().save_png(output_path)
+	if err != OK:
+		push_error("Camera safety capture failed: %s" % error_string(err))
+		get_tree().quit(1)
+		return
+	print("[CAMERA_SAFETY_TEST] PASS checks=%d min_zoom=%.3f min_height=%.3f max_frame_step=%.3f capture=%s" % [checks, safe_min_zoom, minimum_height, largest_frame_step, output_path])
+	get_tree().quit()
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -695,11 +1015,959 @@ func _capture_demon_king_color_test() -> void:
 	get_tree().quit()
 
 
+func _capture_attack_grid_test() -> void:
+	var scene := get_tree().current_scene
+	var attack_plane: MeshInstance3D = null
+	if scene:
+		attack_plane = scene.get_node_or_null("Island/shipPlane") as MeshInstance3D
+	if attack_plane == null:
+		push_error("Attack grid capture failed: Island/shipPlane is missing.")
+		get_tree().quit(1)
+		return
+	attack_plane.visible = true
+	_frame_attack_grid_camera(attack_plane)
+	if _panel:
+		_panel.visible = false
+		var panel_layer := _panel.get_parent()
+		if panel_layer is CanvasLayer:
+			(panel_layer as CanvasLayer).visible = false
+	_hide_capture_canvas_items(scene)
+	await get_tree().create_timer(1.5).timeout
+	await RenderingServer.frame_post_draw
+	var output_path: String = "user://attack_grid_preview.png"
+	for arg in OS.get_cmdline_user_args():
+		var text := String(arg)
+		if text.begins_with("--capture-out="):
+			output_path = text.get_slice("=", 1)
+	var image: Image = get_viewport().get_texture().get_image()
+	var err: Error = image.save_png(output_path)
+	if err == OK:
+		print("[TestHarness] Attack grid capture saved: ", output_path)
+	else:
+		push_error("Attack grid capture failed: %s" % error_string(err))
+	get_tree().quit()
+
+
+func _capture_tentacle_idle_test() -> void:
+	var scene := get_tree().current_scene
+	if scene == null:
+		push_error("Tentacle idle capture failed: current scene is missing.")
+		get_tree().quit(1)
+		return
+
+	var tentacles: Array[Node3D] = []
+	for node in scene.find_children("AnimatedTentacle*", "Node3D", true, false):
+		tentacles.append(node as Node3D)
+	if tentacles.size() != 3:
+		push_error("Tentacle idle capture failed: expected 3 animated tentacles, got %d." % tentacles.size())
+		get_tree().quit(1)
+		return
+
+	var tracked_rotations: Array[Quaternion] = []
+	for tentacle in tentacles:
+		var player := tentacle.find_child("AnimationPlayer", true, false) as AnimationPlayer
+		var skeleton := tentacle.find_child("Skeleton3D", true, false) as Skeleton3D
+		if player == null or skeleton == null or not player.is_playing() or "idle" not in String(player.current_animation).to_lower():
+			push_error("Tentacle idle capture failed: idle playback is inactive on %s." % tentacle.name)
+			get_tree().quit(1)
+			return
+		var tracked_bone := skeleton.find_bone("Tentacle10")
+		if tracked_bone < 0:
+			push_error("Tentacle idle capture failed: Tentacle10 bone is missing on %s." % tentacle.name)
+			get_tree().quit(1)
+			return
+		tracked_rotations.append(skeleton.get_bone_pose_rotation(tracked_bone))
+
+	_hide_tentacle_capture_chrome(scene)
+	await get_tree().create_timer(0.35).timeout
+	var output_dir := _tentacle_capture_dir()
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(output_dir))
+	if not await _save_tentacle_capture(output_dir.path_join("01-idle-a.png"), "idle-a"):
+		get_tree().quit(1)
+		return
+
+	await get_tree().create_timer(1.15).timeout
+	var changed_count := 0
+	for tentacle_index in tentacles.size():
+		var skeleton := tentacles[tentacle_index].find_child("Skeleton3D", true, false) as Skeleton3D
+		var tracked_bone := skeleton.find_bone("Tentacle10")
+		var current_rotation := skeleton.get_bone_pose_rotation(tracked_bone)
+		if tracked_rotations[tentacle_index].angle_to(current_rotation) > 0.005:
+			changed_count += 1
+	if changed_count != tentacles.size():
+		push_error("Tentacle idle capture failed: only %d/%d bone poses changed." % [changed_count, tentacles.size()])
+		get_tree().quit(1)
+		return
+
+	if not await _save_tentacle_capture(output_dir.path_join("02-idle-b.png"), "idle-b"):
+		get_tree().quit(1)
+		return
+	print("[TENTACLE_IDLE_TEST] PASS animated=%d changed=%d output=%s" % [tentacles.size(), changed_count, output_dir])
+	get_tree().quit()
+
+
+func _hide_tentacle_capture_chrome(scene: Node) -> void:
+	_hide_capture_canvas_items(scene)
+	if _panel:
+		_panel.visible = false
+		var panel_layer := _panel.get_parent()
+		if panel_layer is CanvasLayer:
+			(panel_layer as CanvasLayer).visible = false
+
+
+func _tentacle_capture_dir() -> String:
+	for arg in OS.get_cmdline_user_args():
+		var text := String(arg)
+		if text.begins_with("--capture-out-dir="):
+			return text.get_slice("=", 1)
+	return "user://tentacle_idle"
+
+
+func _save_tentacle_capture(path: String, label: String) -> bool:
+	await RenderingServer.frame_post_draw
+	var image := get_viewport().get_texture().get_image()
+	var err := image.save_png(path)
+	if err != OK:
+		push_error("Tentacle idle capture %s failed: %s" % [label, error_string(err)])
+		return false
+	print("[TENTACLE_IDLE_TEST] capture=%s path=%s" % [label, path])
+	return true
+
+
+func _verify_main_ship_motion() -> void:
+	var controller := get_node_or_null("../MainShipController")
+	if controller == null:
+		push_error("Main ship motion check failed: controller is missing.")
+		get_tree().quit(1)
+		return
+
+	var ready_wait := 0.0
+	while not controller.is_ready() and ready_wait < 2.0:
+		await get_tree().process_frame
+		ready_wait += get_process_delta_time()
+	if not controller.is_ready():
+		push_error("Main ship motion check failed: ship did not attach.")
+		get_tree().quit(1)
+		return
+
+	controller.force_home()
+	var ship_visual := controller.get("ship_visual") as Node3D
+	var rest_transform: Transform3D = controller.get("_visual_rest_transform")
+	if ship_visual == null:
+		push_error("Main ship motion check failed: ship visual is missing.")
+		get_tree().quit(1)
+		return
+
+	var rest_rotation := rest_transform.basis.orthonormalized().get_rotation_quaternion()
+	var max_vertical_offset := 0.0
+	var max_roll_angle := 0.0
+	var elapsed := 0.0
+	while elapsed < 3.0:
+		await get_tree().process_frame
+		elapsed += get_process_delta_time()
+		max_vertical_offset = maxf(
+			max_vertical_offset,
+			absf(ship_visual.transform.origin.y - rest_transform.origin.y)
+		)
+		var current_rotation := ship_visual.transform.basis.orthonormalized().get_rotation_quaternion()
+		max_roll_angle = maxf(max_roll_angle, rest_rotation.angle_to(current_rotation))
+
+	var configured_bob := float(controller.get("bob_amplitude"))
+	var configured_roll := float(controller.get("roll_degrees"))
+	if configured_bob > 0.015 or configured_roll > 0.65:
+		push_error(
+			"Main ship motion check failed: configured motion is too strong (bob=%.4f roll=%.2f)."
+			% [configured_bob, configured_roll]
+		)
+		get_tree().quit(1)
+		return
+	if max_vertical_offset > configured_bob + 0.002:
+		push_error("Main ship motion check failed: observed bob %.4f exceeds configuration." % max_vertical_offset)
+		get_tree().quit(1)
+		return
+	if rad_to_deg(max_roll_angle) > configured_roll + 0.1:
+		push_error("Main ship motion check failed: observed roll %.2f exceeds configuration." % rad_to_deg(max_roll_angle))
+		get_tree().quit(1)
+		return
+	if max_vertical_offset < configured_bob * 0.75 or rad_to_deg(max_roll_angle) < configured_roll * 0.75:
+		push_error("Main ship motion check failed: wave motion did not complete a representative cycle.")
+		get_tree().quit(1)
+		return
+
+	print(
+		"[MAIN_SHIP_MOTION_TEST] PASS bob=%.4f roll_deg=%.2f speed_hz=%.2f"
+		% [max_vertical_offset, rad_to_deg(max_roll_angle), float(controller.get("bob_speed"))]
+	)
+	get_tree().quit()
+
+
+func _verify_main_ship_flag_uv() -> void:
+	var controller := get_node_or_null("../MainShipController")
+	if controller == null:
+		push_error("Main ship flag UV check failed: controller is missing.")
+		get_tree().quit(1)
+		return
+	var ready_wait := 0.0
+	while not controller.is_ready() and ready_wait < 2.0:
+		await get_tree().process_frame
+		ready_wait += get_process_delta_time()
+	if not controller.is_ready():
+		push_error("Main ship flag UV check failed: ship did not attach.")
+		get_tree().quit(1)
+		return
+	var summary: Dictionary = controller.get_flag_uv_layout_summary()
+	if int(summary.get("surface_count", 0)) < 1:
+		push_error("Main ship flag UV check failed: ShipSail surface is missing.")
+		get_tree().quit(1)
+		return
+	for surface_value in summary.get("surfaces", []):
+		if not (surface_value is Dictionary):
+			continue
+		var surface := surface_value as Dictionary
+		var uv_min: Vector2 = surface.get("min", Vector2.ZERO)
+		var uv_max: Vector2 = surface.get("max", Vector2.ZERO)
+		var span := uv_max - uv_min
+		if span.x < 0.99 or span.y < 0.99:
+			push_error("Main ship flag UV check failed: collapsed UV span %s." % span)
+			get_tree().quit(1)
+			return
+	print("[MAIN_SHIP_FLAG_UV_TEST] PASS surfaces=%s" % summary.surface_count)
+	get_tree().quit()
+
+
+func _capture_main_ship_flag_orientation() -> void:
+	await get_tree().process_frame
+	var scene := get_tree().current_scene
+	var controller := get_node_or_null("../MainShipController")
+	if scene == null or controller == null:
+		push_error("Main ship flag orientation capture failed: controller is missing.")
+		get_tree().quit(1)
+		return
+	var wait_seconds := 0.0
+	while not controller.is_ready() and wait_seconds < 3.0:
+		await get_tree().process_frame
+		wait_seconds += get_process_delta_time()
+	if not controller.is_ready():
+		push_error("Main ship flag orientation capture failed: ship did not attach.")
+		get_tree().quit(1)
+		return
+
+	var marker := Image.create(256, 256, false, Image.FORMAT_RGBA8)
+	marker.fill(Color("f45b24"))
+	marker.fill_rect(Rect2i(0, 0, 256, 52), Color("ed2532"))
+	marker.fill_rect(Rect2i(0, 204, 256, 52), Color("2458d3"))
+	marker.fill_rect(Rect2i(0, 0, 42, 256), Color("25b96f"))
+	marker.fill_rect(Rect2i(84, 18, 88, 18), Color.WHITE)
+	var marker_texture := ImageTexture.create_from_image(marker)
+	controller.set_player_flag_url("orientation-test")
+	controller.apply_player_flag_texture("orientation-test", marker_texture)
+	controller.force_combat()
+	_hide_capture_canvas_items(scene)
+	_frame_main_ship_flag_camera(controller.global_position)
+	await get_tree().create_timer(0.35).timeout
+	await RenderingServer.frame_post_draw
+	var output_path := ProjectSettings.globalize_path("user://main-ship-flag-orientation.png")
+	for arg in OS.get_cmdline_user_args():
+		var text := String(arg)
+		if text.begins_with("--capture-out="):
+			output_path = text.get_slice("=", 1)
+	var err := get_viewport().get_texture().get_image().save_png(output_path)
+	if err != OK:
+		push_error("Main ship flag orientation capture failed: %s" % error_string(err))
+		get_tree().quit(1)
+		return
+	print("[MAIN_SHIP_FLAG_ORIENTATION] capture=", output_path)
+	get_tree().quit()
+
+
+func _frame_main_ship_flag_camera(ship_position: Vector3) -> void:
+	var old_camera := get_viewport().get_camera_3d()
+	if old_camera:
+		old_camera.current = false
+	var camera := Camera3D.new()
+	camera.name = "MainShipFlagOrientationCamera"
+	camera.projection = Camera3D.PROJECTION_ORTHOGONAL
+	camera.size = 1.75
+	get_tree().current_scene.add_child(camera)
+	var target := ship_position + Vector3(0.0, 0.38, 0.0)
+	camera.global_position = target + Vector3(2.1, 2.35, 2.25)
+	camera.look_at(target, Vector3.UP)
+	camera.current = true
+
+
+func _frame_attack_grid_camera(attack_plane: MeshInstance3D) -> void:
+	var old_camera := get_viewport().get_camera_3d()
+	if old_camera:
+		old_camera.current = false
+	var camera := Camera3D.new()
+	camera.name = "AttackGridCaptureCamera"
+	camera.projection = Camera3D.PROJECTION_ORTHOGONAL
+	camera.size = 4.5
+	get_tree().current_scene.add_child(camera)
+	var target := attack_plane.global_position
+	camera.global_position = target + Vector3(4.8, 6.8, 5.2)
+	camera.look_at(target, Vector3.UP)
+	camera.current = true
+
+
+func _capture_archer_tower_test() -> void:
+	var scene := get_tree().current_scene
+	var bs := _building_system_for_building("archer_tower")
+	if scene == null or bs == null:
+		push_error("Archer Tower capture failed: building system is missing.")
+		get_tree().quit(1)
+		return
+	if _panel:
+		_panel.visible = false
+		var panel_layer := _panel.get_parent()
+		if panel_layer is CanvasLayer:
+			(panel_layer as CanvasLayer).visible = false
+	_hide_capture_canvas_items(scene)
+	reset_sandbox()
+	await get_tree().process_frame
+
+	var def: Dictionary = bs.building_defs.get("archer_tower", {})
+	var grid_positions: Array[Vector2i] = [
+		Vector2i(2, 10),
+		Vector2i(7, 10),
+		Vector2i(12, 10),
+		Vector2i(17, 10),
+		Vector2i(22, 10),
+	]
+	var tower_centers: Array[Vector3] = []
+	var max_center_delta := 0.0
+	for level in range(1, 6):
+		var grid_pos := grid_positions[level - 1]
+		bs._spawn_building_locally("archer_tower", grid_pos, def, -1)
+		await get_tree().process_frame
+		var building: Dictionary = _last_building_at(bs, "archer_tower", grid_pos)
+		if building.is_empty():
+			push_error("Archer Tower capture failed: level %d did not spawn." % level)
+			get_tree().quit(1)
+			return
+		await _set_building_level_for_test(bs, building, def, level)
+		await get_tree().create_timer(0.12).timeout
+		var building_node: Node3D = building.get("node", null)
+		var visual_model: Node3D = bs._get_building_visual_model(building_node)
+		var tower_unit: Node3D = building.get("tower_unit_node", null)
+		var tower_aabb := _world_mesh_aabb(visual_model)
+		var unit_aabb := _world_mesh_aabb(tower_unit)
+		var center_delta := Vector2(
+			unit_aabb.get_center().x - tower_aabb.get_center().x,
+			unit_aabb.get_center().z - tower_aabb.get_center().z
+		)
+		max_center_delta = maxf(max_center_delta, center_delta.length())
+		print(
+			"[ARCHER_TOWER_CAPTURE] level=", level,
+			" tower_aabb=", tower_aabb,
+			" unit_aabb=", unit_aabb,
+			" center_delta_xz=", center_delta,
+			" unit_foot_y=", unit_aabb.position.y
+		)
+		tower_centers.append(tower_aabb.get_center())
+
+	_frame_archer_tower_camera(tower_centers)
+	await get_tree().create_timer(2.05).timeout
+	await RenderingServer.frame_post_draw
+	var output_path := ProjectSettings.globalize_path("user://archer-towers.png")
+	for arg in OS.get_cmdline_user_args():
+		var text := String(arg)
+		if text.begins_with("--capture-out="):
+			output_path = text.get_slice("=", 1)
+	var err := get_viewport().get_texture().get_image().save_png(output_path)
+	if err != OK:
+		push_error("Archer Tower capture failed: %s" % error_string(err))
+		get_tree().quit(1)
+		return
+	if max_center_delta > 0.03:
+		push_error("Archer Tower capture failed: unit center drift is %.4f." % max_center_delta)
+		get_tree().quit(1)
+		return
+	print("[ARCHER_TOWER_CAPTURE] PASS max_center_delta=", snappedf(max_center_delta, 0.0001), " capture=", output_path)
+	get_tree().quit()
+
+
+func _capture_resource_collection_feedback() -> void:
+	var scene := get_tree().current_scene
+	var bs := _building_system_for_grid("main")
+	if scene == null or bs == null:
+		push_error("Resource collection capture failed: building system is missing.")
+		get_tree().quit(1)
+		return
+	if _panel:
+		_panel.visible = false
+		var panel_layer := _panel.get_parent()
+		if panel_layer is CanvasLayer:
+			(panel_layer as CanvasLayer).visible = false
+	if is_instance_valid(bs.canvas):
+		bs.canvas.visible = false
+	if is_instance_valid(bs.world_ui_canvas):
+		bs.world_ui_canvas.visible = true
+	bs.resources["wood"] = 0
+	bs.resources["ore"] = 0
+	reset_sandbox()
+	await get_tree().process_frame
+
+	var specs: Array[Dictionary] = [
+		{"id": "sawmill", "grid_pos": Vector2i(6, 10), "amount": 1860, "resource": "wood"},
+		{"id": "mine", "grid_pos": Vector2i(17, 10), "amount": 1480, "resource": "ore"},
+	]
+	var buildings: Array[Dictionary] = []
+	var centers: Array[Vector3] = []
+	for spec in specs:
+		var building_id := String(spec.id)
+		var grid_pos: Vector2i = spec.grid_pos
+		var def: Dictionary = bs.building_defs.get(building_id, {})
+		bs._spawn_building_locally(building_id, grid_pos, def, -1)
+		await get_tree().process_frame
+		var building := _last_building_at(bs, building_id, grid_pos)
+		if building.is_empty():
+			push_error("Resource collection capture failed: %s did not spawn." % building_id)
+			get_tree().quit(1)
+			return
+		_set_building_level_immediate(bs, building, def, 4)
+		building["stored"] = float(spec.amount)
+		buildings.append(building)
+		var building_node := building.get("node") as Node3D
+		centers.append(building_node.global_position)
+
+	_frame_resource_collection_camera(centers)
+	await get_tree().create_timer(0.55).timeout
+	bs._production._update_collect_icons()
+	await get_tree().process_frame
+	# Keep this visual test deterministic and exercise the local-success branch;
+	# authenticated server collection is covered by the same post-success method.
+	bs._net = null
+	for index in buildings.size():
+		var building: Dictionary = buildings[index]
+		var icon := building.get("_collect_icon") as Control
+		if not is_instance_valid(icon):
+			push_error("Resource collection capture failed: collect icon is missing for %s." % specs[index].id)
+			get_tree().quit(1)
+			return
+		bs._production._click_collect_icon(icon, building, String(specs[index].resource))
+
+	var output_dir := _resource_collection_capture_dir()
+	DirAccess.make_dir_recursive_absolute(output_dir)
+	await get_tree().create_timer(0.17).timeout
+	if not _verify_resource_feedback_labels(bs.world_ui_canvas, specs):
+		get_tree().quit(1)
+		return
+	if not await _save_resource_collection_capture(output_dir.path_join("01-pop.png"), "pop"):
+		get_tree().quit(1)
+		return
+	await get_tree().create_timer(0.36).timeout
+	if not await _save_resource_collection_capture(output_dir.path_join("02-rise.png"), "rise"):
+		get_tree().quit(1)
+		return
+	await get_tree().create_timer(0.75).timeout
+	var leftovers: Array[Node] = bs.world_ui_canvas.find_children("CollectionAmountFeedback_*", "Label", true, false)
+	if not leftovers.is_empty():
+		push_error("Resource collection capture failed: %d feedback labels did not clean up." % leftovers.size())
+		get_tree().quit(1)
+		return
+	print("[RESOURCE_COLLECTION_FEEDBACK] PASS labels=2 cleanup=true output=", output_dir)
+	get_tree().quit()
+
+
+func _frame_resource_collection_camera(centers: Array[Vector3]) -> void:
+	if centers.is_empty():
+		return
+	var old_camera := get_viewport().get_camera_3d()
+	if old_camera:
+		old_camera.current = false
+	var center := Vector3.ZERO
+	for item in centers:
+		center += item
+	center /= float(centers.size())
+	var camera := Camera3D.new()
+	camera.name = "ResourceCollectionCaptureCamera"
+	camera.projection = Camera3D.PROJECTION_ORTHOGONAL
+	camera.size = 3.15
+	get_tree().current_scene.add_child(camera)
+	camera.global_position = center + Vector3(2.8, 2.45, 4.0)
+	camera.look_at(center + Vector3(0.0, 0.18, 0.0), Vector3.UP)
+	camera.current = true
+
+
+func _resource_collection_capture_dir() -> String:
+	for arg in OS.get_cmdline_user_args():
+		var text := String(arg)
+		if text.begins_with("--capture-out-dir="):
+			return text.get_slice("=", 1)
+	return ProjectSettings.globalize_path("user://resource_collection_feedback")
+
+
+func _verify_resource_feedback_labels(world_canvas: CanvasLayer, specs: Array[Dictionary]) -> bool:
+	if not is_instance_valid(world_canvas):
+		push_error("Resource collection capture failed: world UI canvas is missing.")
+		return false
+	for spec in specs:
+		var expected_name := "CollectionAmountFeedback_%s" % String(spec.resource).capitalize()
+		var label := world_canvas.get_node_or_null(expected_name) as Label
+		var expected_text := "+%s" % bs_format_number(int(spec.amount))
+		if label == null or label.text != expected_text:
+			var visible_labels: Array[String] = []
+			for child in world_canvas.get_children():
+				if child is Label:
+					visible_labels.append("%s=%s" % [child.name, (child as Label).text])
+			print("[RESOURCE_COLLECTION_FEEDBACK] visible_labels=", visible_labels)
+			push_error("Resource collection capture failed: expected %s with %s." % [expected_name, expected_text])
+			return false
+	return true
+
+
+func bs_format_number(amount: int) -> String:
+	var digits := str(maxi(amount, 0))
+	var formatted := ""
+	while digits.length() > 3:
+		formatted = " " + digits.right(3) + formatted
+		digits = digits.left(digits.length() - 3)
+	return digits + formatted
+
+
+func _save_resource_collection_capture(path: String, label: String) -> bool:
+	await RenderingServer.frame_post_draw
+	var err := get_viewport().get_texture().get_image().save_png(path)
+	if err != OK:
+		push_error("Resource collection %s capture failed: %s" % [label, error_string(err)])
+		return false
+	print("[RESOURCE_COLLECTION_FEEDBACK] capture=", label, " path=", path)
+	return true
+
+
+func _world_mesh_aabb(root: Node) -> AABB:
+	var merged := AABB()
+	var first := true
+	if root == null:
+		return merged
+	for mesh_instance in _mesh_instances_below(root):
+		var local_aabb: AABB = mesh_instance.get_aabb()
+		for ix in range(2):
+			for iy in range(2):
+				for iz in range(2):
+					var corner := local_aabb.position + local_aabb.size * Vector3(ix, iy, iz)
+					var world_corner: Vector3 = mesh_instance.global_transform * corner
+					if first:
+						merged = AABB(world_corner, Vector3.ZERO)
+						first = false
+					else:
+						merged = merged.expand(world_corner)
+	return merged
+
+
+func _mesh_instances_below(root: Node) -> Array[MeshInstance3D]:
+	var result: Array[MeshInstance3D] = []
+	if root is MeshInstance3D:
+		result.append(root as MeshInstance3D)
+	for child in root.get_children():
+		result.append_array(_mesh_instances_below(child))
+	return result
+
+
+func _frame_archer_tower_camera(centers: Array[Vector3]) -> void:
+	if centers.is_empty():
+		return
+	var old_camera := get_viewport().get_camera_3d()
+	if old_camera:
+		old_camera.current = false
+	var center := Vector3.ZERO
+	for item in centers:
+		center += item
+	center /= float(centers.size())
+	var camera := Camera3D.new()
+	camera.name = "ArcherTowerCaptureCamera"
+	camera.projection = Camera3D.PROJECTION_ORTHOGONAL
+	camera.size = 3.3
+	get_tree().current_scene.add_child(camera)
+	camera.global_position = center + Vector3(3.1, 2.7, 4.2)
+	camera.look_at(center + Vector3(0.0, 0.20, 0.0), Vector3.UP)
+	camera.current = true
+
+
+func _verify_archer_tower_combat() -> void:
+	var bs := _building_system_for_building("archer_tower")
+	var attack := get_node_or_null("../AttackSystem")
+	if bs == null or attack == null:
+		push_error("Archer Tower combat test failed: combat nodes are missing.")
+		get_tree().quit(1)
+		return
+	reset_sandbox()
+	await get_tree().process_frame
+	if not await spawn_building_level("archer_tower", 1):
+		push_error("Archer Tower combat test failed: tower did not spawn.")
+		get_tree().quit(1)
+		return
+	var tower: Dictionary = {}
+	for candidate in bs.placed_buildings:
+		if str(candidate.get("id", "")) == "archer_tower":
+			tower = candidate
+			break
+	if tower.is_empty():
+		push_error("Archer Tower combat test failed: tower state is missing.")
+		get_tree().quit(1)
+		return
+	var tower_node: Node3D = tower.get("node", null)
+	var tower_unit: Node3D = tower.get("tower_unit_node", null)
+	if tower_node == null or tower_unit == null:
+		push_error("Archer Tower combat test failed: tower archer is missing.")
+		get_tree().quit(1)
+		return
+
+	attack._spawn_troops_at_pos(["Knight"], {}, tower_node.global_position + Vector3(0.55, 0.0, 0.0))
+	var troop: Node = null
+	var spawn_wait := 0.0
+	while troop == null and spawn_wait < 2.0:
+		await get_tree().process_frame
+		spawn_wait += get_process_delta_time()
+		for candidate in get_tree().get_nodes_in_group("troops"):
+			if BaseTroop.is_live_troop(candidate):
+				troop = candidate
+				break
+	if troop == null:
+		push_error("Archer Tower combat test failed: target troop did not activate.")
+		get_tree().quit(1)
+		return
+	var initial_hp := int(troop.get("hp"))
+	var combat_wait := 0.0
+	while is_instance_valid(troop) and int(troop.get("hp")) >= initial_hp and combat_wait < 4.0:
+		await get_tree().process_frame
+		combat_wait += get_process_delta_time()
+	if not is_instance_valid(troop):
+		print("[ARCHER_TOWER_COMBAT] PASS target_defeated initial_hp=", initial_hp, " elapsed=", combat_wait)
+		get_tree().quit()
+		return
+	var remaining_hp := int(troop.get("hp"))
+	if remaining_hp >= initial_hp:
+		push_error("Archer Tower combat test failed: target HP stayed at %d." % remaining_hp)
+		get_tree().quit(1)
+		return
+	print(
+		"[ARCHER_TOWER_COMBAT] PASS initial_hp=", initial_hp,
+		" remaining_hp=", remaining_hp,
+		" damage=", initial_hp - remaining_hp,
+		" elapsed=", snappedf(combat_wait, 0.001),
+		" tower_state=", tower_unit.get("state")
+	)
+	get_tree().quit()
+
+
+func _capture_single_ship_combat_test() -> void:
+	var scene := get_tree().current_scene
+	var attack := get_node_or_null("../AttackSystem")
+	var controller := get_node_or_null("../MainShipController")
+	var attack_plane: MeshInstance3D = scene.get_node_or_null("Island/shipPlane") as MeshInstance3D if scene else null
+	if attack == null or controller == null or attack_plane == null:
+		push_error("Single ship capture failed: combat nodes are missing.")
+		get_tree().quit(1)
+		return
+	if _panel:
+		_panel.visible = false
+		var panel_layer := _panel.get_parent()
+		if panel_layer is CanvasLayer:
+			(panel_layer as CanvasLayer).visible = false
+	_hide_capture_canvas_items(scene)
+	reset_sandbox()
+	await get_tree().process_frame
+	if not await spawn_building_level("town_hall", 3):
+		push_error("Single ship capture failed: target Town Hall did not spawn.")
+		get_tree().quit(1)
+		return
+	_hide_single_ship_capture_overlays(scene)
+	_print_runtime_grid_config(2, get_node_or_null("../BuildingSystem3"))
+	mixed_test_attack_loadout()
+	await get_tree().create_timer(0.5).timeout
+	var ship_node: Node3D = controller.get_active_ship_node() if controller.has_method("get_active_ship_node") else null
+	if ship_node == null:
+		push_error("Single ship capture failed: Ship_Large is not attached.")
+		get_tree().quit(1)
+		return
+	_frame_single_ship_camera(ship_node.global_position, attack_plane.global_position)
+	var output_dir := _single_ship_capture_dir()
+	DirAccess.make_dir_recursive_absolute(output_dir)
+	if not await _save_single_ship_capture(output_dir.path_join("01-home.png"), "home"):
+		get_tree().quit(1)
+		return
+
+	await start_test_attack()
+	await get_tree().create_timer(0.75).timeout
+	if not await _save_single_ship_capture(output_dir.path_join("02-approach.png"), "approach"):
+		get_tree().quit(1)
+		return
+	var ready_wait := 0.0
+	while not bool(attack._main_ship_ready_for_deployment) and ready_wait < float(attack.sail_duration) + 3.0:
+		await get_tree().process_frame
+		ready_wait += get_process_delta_time()
+	if not bool(attack._main_ship_ready_for_deployment):
+		push_error("Single ship capture failed: main ship did not reach combat shore.")
+		get_tree().quit(1)
+		return
+	if not await _save_single_ship_capture(output_dir.path_join("03-ready.png"), "ready"):
+		get_tree().quit(1)
+		return
+
+	var deployed := 0
+	var offsets := [
+		Vector2(-0.62, -0.10),
+		Vector2(-0.30, 0.10),
+		Vector2(0.0, -0.06),
+		Vector2(0.30, 0.10),
+		Vector2(0.62, -0.10),
+	]
+	var basis := attack_plane.global_transform.basis
+	var axis_x := basis.x.normalized()
+	var axis_z := basis.z.normalized()
+	for local_offset in offsets:
+		if attack._army_entries.is_empty():
+			break
+		attack.select_troop_group(0)
+		var deploy_at: Vector3 = attack.plane_center + axis_x * local_offset.x + axis_z * local_offset.y
+		if not attack._try_deploy_selected_troop(deploy_at):
+			push_error("Single ship capture failed: troop deployment %d was rejected." % deployed)
+			get_tree().quit(1)
+			return
+		deployed += 1
+	if deployed < mini(5, TEST_ATTACK_TROOPS.size()):
+		push_error("Single ship capture failed: only %d troops deployed." % deployed)
+		get_tree().quit(1)
+		return
+	await get_tree().create_timer(1.0).timeout
+	if not await _save_single_ship_capture(output_dir.path_join("04-deployed.png"), "deployed"):
+		get_tree().quit(1)
+		return
+	print("[SINGLE_SHIP_TEST] PASS deployed=", deployed, " replay_actions=", attack._manual_deploy_index, " output_dir=", output_dir)
+	get_tree().quit()
+
+
+func _capture_main_ship_approach_frames() -> void:
+	var scene := get_tree().current_scene
+	var attack := get_node_or_null("../AttackSystem")
+	var controller := get_node_or_null("../MainShipController")
+	if scene == null or attack == null or controller == null:
+		push_error("Main ship frame capture failed: combat nodes are missing.")
+		get_tree().quit(1)
+		return
+	if not controller.has_method("get_combat_motion_debug"):
+		push_error("Main ship frame capture failed: motion telemetry is unavailable.")
+		get_tree().quit(1)
+		return
+	if _panel:
+		_panel.visible = false
+		var panel_layer := _panel.get_parent()
+		if panel_layer is CanvasLayer:
+			(panel_layer as CanvasLayer).visible = false
+	_hide_capture_canvas_items(scene)
+	reset_sandbox()
+	await get_tree().process_frame
+	if not await spawn_building_level("town_hall", 3):
+		push_error("Main ship frame capture failed: target Town Hall did not spawn.")
+		get_tree().quit(1)
+		return
+	_hide_single_ship_capture_overlays(scene)
+	mixed_test_attack_loadout()
+	await get_tree().create_timer(0.25).timeout
+	var initial_debug: Dictionary = controller.get_combat_motion_debug()
+	var spawn_pos: Vector3 = initial_debug.get("spawn_pos", Vector3.ZERO)
+	var stop_pos: Vector3 = initial_debug.get("stop_pos", Vector3.ZERO)
+	_frame_main_ship_approach_camera(spawn_pos, stop_pos)
+	var output_dir := _single_ship_capture_dir()
+	DirAccess.make_dir_recursive_absolute(output_dir)
+	if not await _save_ship_motion_frame(output_dir, 0, "home", controller):
+		get_tree().quit(1)
+		return
+
+	await start_test_attack()
+	var previous_position: Vector3 = controller.global_position
+	var minimum_alignment := 1.0
+	var straight_samples := 0
+	var turning_samples := 0
+	var frame_index := 1
+	var reached_combat := false
+	while frame_index <= 180:
+		await RenderingServer.frame_post_draw
+		var debug: Dictionary = controller.get_combat_motion_debug()
+		var phase := String(debug.get("phase", "unknown"))
+		var position: Vector3 = debug.get("position", controller.global_position)
+		var bow_direction: Vector3 = debug.get("bow_direction", Vector3.ZERO)
+		var movement := position - previous_position
+		movement.y = 0.0
+		var alignment := 1.0
+		if movement.length_squared() > 0.000001 and bow_direction.length_squared() > 0.000001:
+			alignment = bow_direction.normalized().dot(movement.normalized())
+			minimum_alignment = minf(minimum_alignment, alignment)
+			if phase == "straight":
+				straight_samples += 1
+			elif phase == "turning":
+				turning_samples += 1
+		var file_name := "frame-%03d-%s.png" % [frame_index, phase]
+		if not _write_viewport_png(output_dir.path_join(file_name)):
+			get_tree().quit(1)
+			return
+		print(
+			"[MAIN_SHIP_FRAME] index=", frame_index,
+			" phase=", phase,
+			" position=", position,
+			" bow=", bow_direction,
+			" movement=", movement,
+			" alignment=", snappedf(alignment, 0.0001),
+			" capture=", file_name
+		)
+		previous_position = position
+		frame_index += 1
+		if phase == "combat":
+			reached_combat = true
+			break
+
+	var final_debug: Dictionary = controller.get_combat_motion_debug()
+	var final_position: Vector3 = final_debug.get("position", controller.global_position)
+	var final_stop: Vector3 = final_debug.get("stop_pos", final_position)
+	var final_long_axis: Vector3 = final_debug.get("long_axis", Vector3.ZERO)
+	var expected_lateral: Vector3 = final_debug.get("lateral", Vector3.ZERO)
+	var final_outward: Vector3 = final_debug.get("outward_axis", Vector3.ZERO)
+	var expected_shore_normal: Vector3 = final_debug.get("shore_normal", Vector3.ZERO)
+	var stop_error := final_position.distance_to(final_stop)
+	var broadside_alignment := absf(final_long_axis.dot(expected_lateral))
+	var shore_alignment := final_outward.dot(expected_shore_normal)
+	var failures: Array[String] = []
+	if not reached_combat:
+		failures.append("combat pose was not reached")
+	if straight_samples < 2:
+		failures.append("straight approach was not sampled")
+	if turning_samples < 2:
+		failures.append("shoreline turn was not sampled")
+	if minimum_alignment < 0.93:
+		failures.append("bow diverged from movement (minimum %.4f)" % minimum_alignment)
+	if stop_error > 0.02:
+		failures.append("final stop error %.4f" % stop_error)
+	if broadside_alignment < 0.98:
+		failures.append("final broadside alignment %.4f" % broadside_alignment)
+	if shore_alignment < 0.98:
+		failures.append("final shore-facing alignment %.4f" % shore_alignment)
+	if not failures.is_empty():
+		push_error("Main ship frame capture failed: %s" % "; ".join(failures))
+		get_tree().quit(1)
+		return
+	print(
+		"[MAIN_SHIP_FRAME_TEST] PASS frames=", frame_index,
+		" straight_samples=", straight_samples,
+		" turning_samples=", turning_samples,
+		" minimum_alignment=", snappedf(minimum_alignment, 0.0001),
+		" stop_error=", snappedf(stop_error, 0.0001),
+		" broadside_alignment=", snappedf(broadside_alignment, 0.0001),
+		" shore_alignment=", snappedf(shore_alignment, 0.0001),
+		" output_dir=", output_dir
+	)
+	get_tree().quit()
+
+
+func _save_ship_motion_frame(output_dir: String, frame_index: int, phase: String, controller: Node) -> bool:
+	await RenderingServer.frame_post_draw
+	var file_name := "frame-%03d-%s.png" % [frame_index, phase]
+	if not _write_viewport_png(output_dir.path_join(file_name)):
+		return false
+	var debug: Dictionary = controller.get_combat_motion_debug()
+	print(
+		"[MAIN_SHIP_FRAME] index=", frame_index,
+		" phase=", phase,
+		" position=", debug.get("position", Vector3.ZERO),
+		" bow=", debug.get("bow_direction", Vector3.ZERO),
+		" capture=", file_name
+	)
+	return true
+
+
+func _write_viewport_png(path: String) -> bool:
+	var image := get_viewport().get_texture().get_image()
+	var err := image.save_png(path)
+	if err != OK:
+		push_error("Main ship frame capture failed for %s: %s" % [path, error_string(err)])
+		return false
+	return true
+
+
+func _hide_single_ship_capture_overlays(scene: Node) -> void:
+	for system in get_tree().get_nodes_in_group("building_systems"):
+		if system.has_method("_deselect_building"):
+			system.call("_deselect_building")
+		var building_panel: Variant = system.get("building_panel")
+		if building_panel is CanvasItem:
+			(building_panel as CanvasItem).visible = false
+	_hide_capture_canvas_items(scene)
+
+
+func _print_runtime_grid_config(grid_index: int, system: Node) -> void:
+	if system == null:
+		push_error("[GRID_CONFIG] Missing BuildingSystem for grid %d" % grid_index)
+		return
+	print(
+		"[GRID_CONFIG] index=", grid_index,
+		" width=", system.get("grid_width"),
+		" height=", system.get("grid_height"),
+		" cell_size=", system.get("cell_size"),
+		" extent_x=", system.get("grid_extent_x"),
+		" extent_z=", system.get("grid_extent_z"),
+		" center_x=", (system.get("grid_center") as Vector3).x,
+		" center_z=", (system.get("grid_center") as Vector3).z,
+		" rotation=", system.get("grid_rotation")
+	)
+
+
+func _single_ship_capture_dir() -> String:
+	for arg in OS.get_cmdline_user_args():
+		var text := String(arg)
+		if text.begins_with("--capture-out-dir="):
+			return text.get_slice("=", 1)
+	return ProjectSettings.globalize_path("user://single_ship_combat")
+
+
+func _save_single_ship_capture(path: String, label: String) -> bool:
+	await RenderingServer.frame_post_draw
+	var image := get_viewport().get_texture().get_image()
+	var err := image.save_png(path)
+	if err != OK:
+		push_error("Single ship capture %s failed: %s" % [label, error_string(err)])
+		return false
+	print("[SINGLE_SHIP_TEST] capture=", label, " path=", path)
+	return true
+
+
+func _frame_single_ship_camera(home_position: Vector3, grid_position: Vector3) -> void:
+	var old_camera := get_viewport().get_camera_3d()
+	if old_camera:
+		old_camera.current = false
+	var camera := Camera3D.new()
+	camera.name = "SingleShipCaptureCamera"
+	camera.projection = Camera3D.PROJECTION_ORTHOGONAL
+	camera.size = 7.2
+	get_tree().current_scene.add_child(camera)
+	var target := (home_position + grid_position) * 0.5
+	target.y = 0.0
+	camera.global_position = target + Vector3(6.4, 8.6, 7.2)
+	camera.look_at(target, Vector3.UP)
+	camera.current = true
+
+
+func _frame_main_ship_approach_camera(spawn_position: Vector3, stop_position: Vector3) -> void:
+	var old_camera := get_viewport().get_camera_3d()
+	if old_camera:
+		old_camera.current = false
+	var camera := Camera3D.new()
+	camera.name = "MainShipApproachFrameCamera"
+	camera.projection = Camera3D.PROJECTION_ORTHOGONAL
+	camera.size = maxf(6.2, spawn_position.distance_to(stop_position) + 2.2)
+	get_tree().current_scene.add_child(camera)
+	var target := (spawn_position + stop_position) * 0.5
+	target.y = 0.0
+	camera.global_position = target + Vector3(5.6, 7.8, 6.4)
+	camera.look_at(target, Vector3.UP)
+	camera.current = true
+
+
 func _hide_capture_scene_chrome() -> void:
 	for node in get_tree().get_nodes_in_group("building_systems"):
 		if node is Node3D:
 			(node as Node3D).visible = false
-	for node_name in ["Island", "Water", "MainShipAttack", "MainShipBase"]:
+	for node_name in ["Island", "Water"]:
 		var node := get_tree().current_scene.get_node_or_null(node_name) if get_tree().current_scene else null
 		if node is Node3D:
 			(node as Node3D).visible = false
@@ -1076,7 +2344,7 @@ func start_test_attack() -> void:
 		for troop_name in ship.get("troops", []):
 			if troop_name != "_SLOT_FILLER_":
 				total_troops += 1
-	_set_status("Attack ready: %d troops on %d ships. Click ship water." % [total_troops, fleet.size()])
+	_set_status("Main ship approaching with %d troops. Select a unit and click the attack grid." % total_troops)
 
 
 func run_mixed_fps_profile() -> void:
@@ -1084,7 +2352,7 @@ func run_mixed_fps_profile() -> void:
 		_set_status("FPS profile is already running.")
 		return
 	var attack := get_node_or_null("../AttackSystem")
-	if not attack or not attack.has_method("_try_place_ship"):
+	if not attack or not attack.has_method("_try_deploy_selected_troop"):
 		_set_status("AttackSystem does not support automatic FPS test deployment.")
 		return
 
@@ -1108,14 +2376,24 @@ func run_mixed_fps_profile() -> void:
 	mixed_test_attack_loadout()
 	_set_status("FPS profile: warming combat assets...")
 	await start_test_attack()
-	var placed: bool = attack._try_place_ship(attack.plane_center)
-	print("[FPS_PROFILE] auto_deploy placed=", placed, " position=", attack.plane_center)
-	if not placed:
-		_set_status("FPS profile failed: automatic ship deployment was rejected.")
+	var ship_wait: float = 0.0
+	while not bool(attack._main_ship_ready_for_deployment) and ship_wait < float(attack.sail_duration) + 2.0:
+		await get_tree().process_frame
+		ship_wait += get_process_delta_time()
+	var deployed_count: int = 0
+	while not attack._army_entries.is_empty():
+		attack.select_troop_group(0)
+		var offset: Vector3 = attack._get_lateral_dir() * (float(deployed_count % 5) - 2.0) * 0.08
+		if not attack._try_deploy_selected_troop(attack.plane_center + offset):
+			break
+		deployed_count += 1
+	print("[FPS_PROFILE] auto_deploy count=", deployed_count, " position=", attack.plane_center)
+	if deployed_count == 0:
+		_set_status("FPS profile failed: automatic troop deployment was rejected.")
 		_fps_profile_active = false
 		return
 
-	var deploy_wait: float = float(attack.sail_duration) + float(attack.troop_spawn_delay) * 7.0 + FPS_PROFILE_SETTLE_SECONDS
+	var deploy_wait: float = float(attack.troop_spawn_delay) * 7.0 + FPS_PROFILE_SETTLE_SECONDS
 	print("[FPS_PROFILE] deploy_wait seconds=", deploy_wait)
 	await get_tree().create_timer(deploy_wait).timeout
 	_set_status("FPS profile: measuring mixed combat...")
@@ -1214,11 +2492,8 @@ func _sample_fps_profile(phase: String, duration_seconds: float) -> Dictionary:
 
 
 func _build_test_attack_fleet() -> Array:
-	var attack := get_node_or_null("../AttackSystem")
-	var max_ships: int = int(attack.max_ships) if attack and ("max_ships" in attack) else 5
-	var ship_capacity: int = TEST_ATTACK_SHIP_LEVEL * 3
-	var fleet: Array = []
-	var current_ship: Dictionary = {"level": TEST_ATTACK_SHIP_LEVEL, "troops": []}
+	var ship_capacity: int = 27
+	var main_ship: Dictionary = {"id": "test_main_ship", "level": TEST_ATTACK_SHIP_LEVEL, "capacity": ship_capacity, "troops": []}
 	var used_slots: int = 0
 
 	for troop_name in TEST_ATTACK_TROOPS:
@@ -1227,20 +2502,14 @@ func _build_test_attack_fleet() -> Array:
 		var slot_cost: int = _attack_troop_slot_cost(troop_name)
 		for _i in range(count):
 			if used_slots + slot_cost > ship_capacity:
-				fleet.append(current_ship)
-				if fleet.size() >= max_ships:
-					return fleet
-				current_ship = {"level": TEST_ATTACK_SHIP_LEVEL, "troops": []}
-				used_slots = 0
-			var troops: Array = current_ship["troops"]
+				return [main_ship]
+			var troops: Array = main_ship["troops"]
 			troops.append(_attack_troop_entry(troop_name, level))
 			for _slot in range(slot_cost - 1):
 				troops.append("_SLOT_FILLER_")
 			used_slots += slot_cost
 
-	if not current_ship.get("troops", []).is_empty() and fleet.size() < max_ships:
-		fleet.append(current_ship)
-	return fleet
+	return [main_ship] if not main_ship.get("troops", []).is_empty() else []
 
 
 func _attack_troop_entry(troop_name: String, level: int) -> String:

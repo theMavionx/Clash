@@ -22,21 +22,6 @@ const JOBS = [
     kind: 'png',
   },
   {
-    file: 'Model/Island/Isl_texture_pbr_20250901.png',
-    kind: 'png',
-    resize: { width: 1024, height: 1024, fit: 'inside', withoutEnlargement: true },
-  },
-  {
-    file: 'Model/Island/Isl_texture_pbr_20250901_normal.png',
-    kind: 'png',
-    resize: { width: 1024, height: 1024, fit: 'inside', withoutEnlargement: true },
-  },
-  {
-    file: 'Model/Island/Isl_texture_pbr_20250901_metallic-texture_pbr_20250901_roughness.png',
-    kind: 'png',
-    resize: { width: 1024, height: 1024, fit: 'inside', withoutEnlargement: true },
-  },
-  {
     file: 'Model/BrokenModel/BrokenModel_0.jpg',
     kind: 'jpeg',
     resize: { width: 1024, height: 1024, fit: 'inside', withoutEnlargement: true },

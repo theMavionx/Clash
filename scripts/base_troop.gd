@@ -279,19 +279,14 @@ static func _get_building_systems_cached() -> Array:
 		_bs_nodes_cache_frame = frame
 	return _cached_bs_nodes
 
-## Cached island bounds — center, extents, rotation (from main BuildingSystem)
-static var _island_center: Vector3 = Vector3.ZERO
-static var _island_extent_x: float = 10.0
-static var _island_extent_z: float = 10.0
-static var _island_rot: float = 0.0
+## Cached movement region. Troops may move through the main island grid and
+## the shore deployment grid, but nowhere else on the map.
+static var _movement_grid_bounds: Array = []
 static var _island_bounds_ready: bool = false
 
 static func reset_island_bounds_cache() -> void:
 	_island_bounds_ready = false
-	_island_center = Vector3.ZERO
-	_island_extent_x = 10.0
-	_island_extent_z = 10.0
-	_island_rot = 0.0
+	_movement_grid_bounds.clear()
 
 
 static func reset_combat_runtime_cache() -> void:
@@ -385,41 +380,76 @@ static func _ensure_island_bounds() -> void:
 	var tree: SceneTree = Engine.get_main_loop() as SceneTree
 	if not tree:
 		return
-	# Use main grid (largest) with slight padding for walking around edges
-	var best_area: float = 0.0
+	_movement_grid_bounds.clear()
+	var fallback_bounds: Dictionary = {}
+	var fallback_area: float = 0.0
 	for bs in tree.get_nodes_in_group("building_systems"):
-		var area: float = bs.grid_extent_x * bs.grid_extent_z
-		if area > best_area:
-			best_area = area
-			_island_center = bs.grid_center
-			_island_extent_x = bs.grid_extent_x * 1.05
-			_island_extent_z = bs.grid_extent_z * 1.05
-			_island_rot = bs.grid_rotation
-	if best_area > 0.01:
+		if not is_instance_valid(bs):
+			continue
+		var extent_x: float = float(bs.get("grid_extent_x"))
+		var extent_z: float = float(bs.get("grid_extent_z"))
+		if extent_x <= 0.01 or extent_z <= 0.01:
+			continue
+		var bounds: Dictionary = {
+			"center": bs.get("grid_center"),
+			"extent_x": extent_x * 1.05,
+			"extent_z": extent_z * 1.05,
+			"rotation": float(bs.get("grid_rotation")),
+		}
+		var area: float = extent_x * extent_z
+		if area > fallback_area:
+			fallback_area = area
+			fallback_bounds = bounds
+		var grid_index: int = int(bs.call("_get_grid_index")) if bs.has_method("_get_grid_index") else -1
+		if grid_index == 0 or grid_index == 2:
+			_movement_grid_bounds.append(bounds)
+	if _movement_grid_bounds.is_empty() and not fallback_bounds.is_empty():
+		_movement_grid_bounds.append(fallback_bounds)
+	if not _movement_grid_bounds.is_empty():
 		_island_bounds_ready = true
 
 
-## Clamps `pos` to the rotated bounding box of the main island grid so troops
-## cannot walk off the edge of the map.
+static func _clamp_to_grid_bounds(pos: Vector3, bounds: Dictionary) -> Vector3:
+	var center: Vector3 = bounds.get("center", Vector3.ZERO)
+	var rotation: float = float(bounds.get("rotation", 0.0))
+	var dx: float = pos.x - center.x
+	var dz: float = pos.z - center.z
+	var cos_r: float = cos(rotation)
+	var sin_r: float = sin(rotation)
+	var local_x: float = dx * cos_r - dz * sin_r
+	var local_z: float = dx * sin_r + dz * cos_r
+	var half_x: float = float(bounds.get("extent_x", 0.0)) * 0.5
+	var half_z: float = float(bounds.get("extent_z", 0.0)) * 0.5
+	local_x = clampf(local_x, -half_x, half_x)
+	local_z = clampf(local_z, -half_z, half_z)
+	var clamped: Vector3 = pos
+	clamped.x = center.x + local_x * cos_r + local_z * sin_r
+	clamped.z = center.z - local_x * sin_r + local_z * cos_r
+	return clamped
+
+
+## Clamp to the exact union of the island and shore deployment grids. A point
+## inside either grid is preserved, so manual deployment depth is not lost on
+## the first movement tick.
 static func _clamp_to_island(pos: Vector3) -> Vector3:
 	if not _island_bounds_ready:
 		_ensure_island_bounds()
-	# Transform to local island space (rotated grid)
-	var dx: float = pos.x - _island_center.x
-	var dz: float = pos.z - _island_center.z
-	var cos_r: float = cos(-_island_rot)
-	var sin_r: float = sin(-_island_rot)
-	var local_x: float = dx * cos_r - dz * sin_r
-	var local_z: float = dx * sin_r + dz * cos_r
-	# Clamp to island extents
-	local_x = clampf(local_x, -_island_extent_x * 0.5, _island_extent_x * 0.5)
-	local_z = clampf(local_z, -_island_extent_z * 0.5, _island_extent_z * 0.5)
-	# Transform back to world space
-	var cos_r2: float = cos(_island_rot)
-	var sin_r2: float = sin(_island_rot)
-	pos.x = _island_center.x + local_x * cos_r2 - local_z * sin_r2
-	pos.z = _island_center.z + local_x * sin_r2 + local_z * cos_r2
-	return pos
+	if _movement_grid_bounds.is_empty():
+		return pos
+	var nearest: Vector3 = pos
+	var nearest_dist_sq: float = INF
+	for bounds_value: Variant in _movement_grid_bounds:
+		var bounds: Dictionary = bounds_value
+		var candidate: Vector3 = _clamp_to_grid_bounds(pos, bounds)
+		var dx: float = candidate.x - pos.x
+		var dz: float = candidate.z - pos.z
+		var dist_sq: float = dx * dx + dz * dz
+		if dist_sq <= 0.000000000001:
+			return pos
+		if dist_sq < nearest_dist_sq:
+			nearest_dist_sq = dist_sq
+			nearest = candidate
+	return nearest
 
 
 ## Returns the avoidance radius for a building based on its cell footprint.

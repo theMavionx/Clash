@@ -15,7 +15,7 @@ extends Node3D
 ## How fast the camera zooms with scroll wheel
 @export var zoom_speed: float = 1.0
 ## Minimum distance from pivot (closest zoom)
-@export var min_zoom: float = 0.5
+@export var min_zoom: float = 1.5
 ## Maximum distance from pivot (farthest zoom)
 @export var max_zoom: float = 5
 ## Pinch zoom speed multiplier (touch)
@@ -33,8 +33,13 @@ extends Node3D
 @export var pan_limit_min: Vector3 = Vector3(-15.0, 0.0, -15.0)
 @export var pan_limit_max: Vector3 = Vector3(15.0, 0.0, 15.0)
 
-## Camera pitch angle in degrees (45 = standard Clash-style)
-@export_range(20.0, 80.0) var camera_pitch: float = 45.0
+## Lowest world-space camera height. This keeps the camera above the water even
+## when the pitch changes without relying on unstable terrain collision pushes.
+@export var minimum_camera_height: float = 1.0
+
+## Camera pitch angle in degrees (55 keeps the island readable while showing
+## slightly more of the build and attack areas from above).
+@export_range(20.0, 80.0) var camera_pitch: float = 55.0
 
 # ── Internal State ───────────────────────────────────────────────
 var _pitch_pivot: Node3D     # Rotates around X (pitch / tilt)
@@ -65,7 +70,11 @@ func add_trauma(amount: float) -> void:
 func _ready() -> void:
 	WebLoadLogger.report("camera_ready_start")
 	_pitch_pivot = $PitchPivot
-	_camera = $PitchPivot/Camera3D
+	_camera = _pitch_pivot.get_node_or_null("Camera3D") as Camera3D
+	if _camera == null:
+		push_error("CameraRig: Camera3D is missing")
+		set_process(false)
+		return
 
 	_target_position = global_position
 
@@ -74,10 +83,11 @@ func _ready() -> void:
 
 	# Set initial zoom
 	_target_zoom = _camera.position.z
-	if _target_zoom < min_zoom or _target_zoom > max_zoom:
-		_target_zoom = (min_zoom + max_zoom) / 2.0
+	var safe_min_zoom := _effective_min_zoom()
+	if _target_zoom < safe_min_zoom or _target_zoom > max_zoom:
+		_target_zoom = (safe_min_zoom + max_zoom) / 2.0
 	_current_zoom = _target_zoom
-	_camera.position.z = _current_zoom
+	_apply_zoom_distance()
 	WebLoadLogger.report("camera_ready_done", {"zoom": _current_zoom})
 
 
@@ -216,8 +226,28 @@ func _is_building_system_busy() -> bool:
 	return false
 
 
+func _clamp_pan_position(value: Vector3) -> Vector3:
+	var min_x := minf(pan_limit_min.x, pan_limit_max.x)
+	var max_x := maxf(pan_limit_min.x, pan_limit_max.x)
+	var min_z := minf(pan_limit_min.z, pan_limit_max.z)
+	var max_z := maxf(pan_limit_min.z, pan_limit_max.z)
+	return Vector3(clampf(value.x, min_x, max_x), 0.0, clampf(value.z, min_z, max_z))
+
+
+func _effective_min_zoom() -> float:
+	var vertical_ratio := sin(deg_to_rad(clampf(camera_pitch, 1.0, 89.0)))
+	var height_safe_zoom := maxf(minimum_camera_height, 0.0) / maxf(vertical_ratio, 0.01)
+	return minf(maxf(min_zoom, height_safe_zoom), max_zoom)
+
+
+func _apply_zoom_distance() -> void:
+	_current_zoom = clampf(_current_zoom, _effective_min_zoom(), max_zoom)
+	_camera.position.z = _current_zoom
+
+
 func _process(delta_raw: float) -> void:
 	var delta = minf(delta_raw, 0.1)
+	var safe_min_zoom := _effective_min_zoom()
 	# ── WASD movement ────────────────────────────────────────────
 	var move_dir := Vector3.ZERO
 	if Input.is_key_pressed(KEY_W):
@@ -257,7 +287,7 @@ func _process(delta_raw: float) -> void:
 
 	# ── Q/E zoom ─────────────────────────────────────────────────
 	if Input.is_key_pressed(KEY_E):
-		_target_zoom = maxf(_target_zoom - zoom_speed * delta * 3.0, min_zoom)
+		_target_zoom = maxf(_target_zoom - zoom_speed * delta * 3.0, safe_min_zoom)
 	if Input.is_key_pressed(KEY_Q):
 		_target_zoom = minf(_target_zoom + zoom_speed * delta * 3.0, max_zoom)
 
@@ -265,15 +295,17 @@ func _process(delta_raw: float) -> void:
 	if Input.is_key_pressed(KEY_C):
 		_target_position = Vector3.ZERO
 		_target_zoom = max_zoom
+	_target_position = _clamp_pan_position(_target_position)
+	_target_zoom = clampf(_target_zoom, safe_min_zoom, max_zoom)
 
 	var t = 1.0 - exp(-smoothing * delta)
 
 	# Smoothly interpolate position (pan)
-	global_position = global_position.lerp(_target_position, t)
+	global_position = _clamp_pan_position(global_position.lerp(_target_position, t))
 
 	# Smoothly interpolate zoom
 	_current_zoom = lerpf(_current_zoom, _target_zoom, t)
-	_camera.position.z = _current_zoom
+	_apply_zoom_distance()
 
 	# Apply pitch angle
 	_pitch_pivot.rotation_degrees.x = -camera_pitch

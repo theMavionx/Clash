@@ -46,24 +46,46 @@ function Stop-ProcessTree {
     }
 }
 
-if (-not (Test-Path -LiteralPath $PidFile)) {
-    Write-Host "No local playtest PID file found at $PidFile"
-    Write-Host "Nothing to stop from the last playtest command."
-    exit 0
+if (Test-Path -LiteralPath $PidFile) {
+    $rawEntries = Get-Content -LiteralPath $PidFile -Raw | ConvertFrom-Json
+    $entries = if ($rawEntries -is [System.Array]) { $rawEntries } else { @($rawEntries) }
+    foreach ($entry in @($entries)) {
+        $id = [int]$entry.id
+        $name = [string]$entry.name
+        $proc = Get-Process -Id $id -ErrorAction SilentlyContinue
+        if (-not $proc) {
+            Write-Host "$name process $id is already stopped."
+            continue
+        }
+
+        Stop-ProcessTree -RootId $id -Name $name
+    }
+} else {
+    Write-Host "No local playtest PID file found at $PidFile; checking managed processes and ports."
 }
 
-$rawEntries = Get-Content -LiteralPath $PidFile -Raw | ConvertFrom-Json
-$entries = if ($rawEntries -is [System.Array]) { $rawEntries } else { @($rawEntries) }
-foreach ($entry in @($entries)) {
-    $id = [int]$entry.id
-    $name = [string]$entry.name
-    $proc = Get-Process -Id $id -ErrorAction SilentlyContinue
-    if (-not $proc) {
-        Write-Host "$name process $id is already stopped."
-        continue
-    }
+# Wrapper processes can exit after spawning npm/node, leaving stale listeners
+# that are no longer reachable from pids.json. Stop the persistent local manager
+# first so it cannot respawn services while ports are being cleaned up.
+$repoPattern = [Regex]::Escape([string]$RepoRoot)
+$managerProcesses = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+    $commandLine = [string]$_.CommandLine
+    $commandLine -match $repoPattern -and (
+        $commandLine -match '\\scripts\\watch-backends\.ps1' -or
+        $commandLine -match '\\tools\\codex\\playtest-local\.ps1'
+    )
+})
+foreach ($manager in $managerProcesses) {
+    Stop-ProcessTree -RootId ([int]$manager.ProcessId) -Name 'local dev manager'
+}
 
-    Stop-ProcessTree -RootId $id -Name $name
+foreach ($port in @(4000, 3999, 5173)) {
+    $listenerIds = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue |
+        Select-Object -ExpandProperty OwningProcess -Unique |
+        Where-Object { $_ })
+    foreach ($listenerId in $listenerIds) {
+        Stop-ProcessTree -RootId ([int]$listenerId) -Name "local port $port"
+    }
 }
 
 Remove-Item -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue

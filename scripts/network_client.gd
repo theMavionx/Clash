@@ -389,6 +389,34 @@ func report_troop_death(troop_name: String) -> Dictionary:
 func get_ships() -> Dictionary:
 	return await _http_get("/ships")
 
+func get_player_ship() -> Dictionary:
+	return await _http_get("/ship")
+
+func upgrade_player_ship() -> Dictionary:
+	return await _http_post("/ship/upgrade", {})
+
+func load_troop_to_player_ship(troop_name: String, extra: Dictionary = {}) -> Dictionary:
+	var payload: Dictionary = {"troop_name": troop_name}
+	if extra.has("nft_owner"):
+		payload["nft_owner"] = str(extra.get("nft_owner", ""))
+	if extra.has("owner"):
+		payload["owner"] = str(extra.get("owner", ""))
+	return await _http_post("/ship/load-troop", payload)
+
+func swap_troop_on_player_ship(slot: int, troop_name: String, extra: Dictionary = {}) -> Dictionary:
+	var payload: Dictionary = {"slot": slot, "troop_name": troop_name}
+	if extra.has("nft_owner"):
+		payload["nft_owner"] = str(extra.get("nft_owner", ""))
+	if extra.has("owner"):
+		payload["owner"] = str(extra.get("owner", ""))
+	return await _http_post("/ship/swap-troop", payload)
+
+func remove_troop_from_player_ship(slot: int) -> Dictionary:
+	return await _http_post("/ship/remove-troop", {"slot": slot})
+
+func unload_player_ship() -> Dictionary:
+	return await _http_post("/ship/unload-troops", {})
+
 func link_wallet(w: String) -> void:
 	if token == "" or w == "":
 		return
