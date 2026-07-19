@@ -19,6 +19,27 @@ $exportHtml = Join-Path $localGodotDir "Work.html"
 $plink = Join-Path $PuttyDir "plink.exe"
 $pscp = Join-Path $PuttyDir "pscp.exe"
 
+function Invoke-NativeChecked {
+  param(
+    [Parameter(Mandatory = $true)][string]$FilePath,
+    [Parameter(Mandatory = $true)][string[]]$Arguments,
+    [Parameter(Mandatory = $true)][string]$FailureMessage
+  )
+
+  # Git and SSH tools legitimately write progress to stderr. Windows PowerShell
+  # promotes that stream to error records, so rely on the native exit code here.
+  $previousErrorActionPreference = $ErrorActionPreference
+  try {
+    $ErrorActionPreference = "Continue"
+    & $FilePath @Arguments
+    $exitCode = $LASTEXITCODE
+  } finally {
+    $ErrorActionPreference = $previousErrorActionPreference
+  }
+
+  if ($exitCode -ne 0) { throw "$FailureMessage with exit code $exitCode" }
+}
+
 function Resolve-GodotExe {
   param([string]$Preferred)
   if ($Preferred -and (Test-Path $Preferred)) { return $Preferred }
@@ -116,21 +137,18 @@ try {
 
   Write-Host "==> Updating canonical source checkout on server: $RemoteSourceDir"
   $pullCmd = "cd '$RemoteSourceDir' && git fetch origin '$Branch' && git pull --ff-only origin '$Branch' && mkdir -p '$remoteGodotDir'"
-  & $plink -batch -ssh -P 22 -pw $password -hostkey $HostKey $remote $pullCmd
-  if ($LASTEXITCODE -ne 0) { throw "Remote git pull failed with exit code $LASTEXITCODE" }
+  Invoke-NativeChecked -FilePath $plink -Arguments @("-batch", "-ssh", "-P", "22", "-pw", $password, "-hostkey", $HostKey, $remote, $pullCmd) -FailureMessage "Remote git pull failed"
 
   if ($shouldExportGodot) {
     Write-Host "==> Uploading Godot export to $remoteGodotDir"
-    & $pscp -batch -scp -P 22 -pw $password -hostkey $HostKey -r (Join-Path $localGodotDir "*") $remoteTarget
-    if ($LASTEXITCODE -ne 0) { throw "Godot upload failed with exit code $LASTEXITCODE" }
+    Invoke-NativeChecked -FilePath $pscp -Arguments @("-batch", "-scp", "-P", "22", "-pw", $password, "-hostkey", $HostKey, "-r", (Join-Path $localGodotDir "*"), $remoteTarget) -FailureMessage "Godot upload failed"
   }
 
   if (-not $SkipDeploy) {
     Write-Host "==> Running atomic deploy from /opt/clash"
     $godotChangedValue = if ($shouldExportGodot) { "1" } else { "0" }
     $deployCmd = "cd '$RemoteSourceDir' && sudo -n env CLASH_GODOT_CHANGED=$godotChangedValue bash deploy/deploy.sh"
-    & $plink -batch -ssh -P 22 -pw $password -hostkey $HostKey $remote $deployCmd
-    if ($LASTEXITCODE -ne 0) { throw "Remote deploy failed with exit code $LASTEXITCODE" }
+    Invoke-NativeChecked -FilePath $plink -Arguments @("-batch", "-ssh", "-P", "22", "-pw", $password, "-hostkey", $HostKey, $remote, $deployCmd) -FailureMessage "Remote deploy failed"
   }
 } finally {
   Pop-Location
