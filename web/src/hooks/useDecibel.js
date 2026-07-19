@@ -23,6 +23,7 @@ import {
   DECIBEL_PACKAGE_MAINNET, DECIBEL_USDC_MAINNET,
   REFERRAL_CODE,
 } from '../lib/decibel';
+import { writeDecibelSubaccountCache, readDecibelSubaccountCache } from '../lib/decibelSubaccountCache';
 import {
   startDecibelRealtime,
   stopDecibelRealtime,
@@ -719,8 +720,6 @@ function summarizeDecibelVerificationForLog(verification) {
 }
 
 const BUILDER_APPROVAL_PREFIX = 'clash_decibel_builder_approval:';
-const SUBACCOUNT_CACHE_PREFIX = 'clash_decibel_subaccount:';
-const SUBACCOUNT_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
 function builderApprovalKey(owner, sub, builder) {
   return `${BUILDER_APPROVAL_PREFIX}${normalizeAptosAddress(owner)}:${normalizeAptosAddress(sub)}:${normalizeAptosAddress(builder)}:${BUILDER_FEE_BPS}`;
@@ -751,35 +750,13 @@ function markLocalBuilderApproval(owner, sub, builder) {
   catch { /* storage unavailable: activation still relies on tx success */ }
 }
 
-function subaccountCacheKey(owner) {
-  return `${SUBACCOUNT_CACHE_PREFIX}${normalizeAptosAddress(owner)}`;
-}
-
 function readLocalSubaccount(owner) {
-  if (!owner) return null;
-  try {
-    const raw = localStorage.getItem(subaccountCacheKey(owner));
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (!parsed?.sub || typeof parsed.ts !== 'number') return null;
-    if (Date.now() - parsed.ts > SUBACCOUNT_CACHE_TTL_MS) {
-      localStorage.removeItem(subaccountCacheKey(owner));
-      return null;
-    }
-    return normalizeAptosAddress(parsed.sub);
-  } catch {
-    return null;
-  }
+  return readDecibelSubaccountCache(owner);
 }
 
 function markLocalSubaccount(owner, sub) {
   if (!owner || !sub) return;
-  try {
-    localStorage.setItem(subaccountCacheKey(owner), JSON.stringify({
-      sub: normalizeAptosAddress(sub),
-      ts: Date.now(),
-    }));
-  } catch { /* storage unavailable: subaccount will be probed on-chain */ }
+  writeDecibelSubaccountCache(owner, sub);
 }
 
 function moveOptionValue(viewResult) {
@@ -1952,6 +1929,8 @@ export function useDecibel() {
       setApiWalletAddr(apiAddr);
       setApiWalletDelegated(true);
       setSetupVerified(true);
+      // Always refresh Bots localStorage bridge — Setup & Sync reads this key.
+      markLocalSubaccount(address, finalSub);
       setActivationStep(null);
       D.step('✅ activation complete');
       D.groupEnd();

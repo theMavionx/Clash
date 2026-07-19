@@ -27,48 +27,7 @@ import {
   refreshOstiumOneTapStatus,
 } from './ostiumOneTapSetup';
 import { OSTIUM_CHAIN_ID } from './ostiumConfig';
-
-const DECIBEL_SUBACCOUNT_PREFIX = 'clash_decibel_subaccount:';
-const DECIBEL_SUBACCOUNT_TTL_MS = 24 * 60 * 60 * 1000;
-
-function normalizeAptosAddress(addr) {
-  const raw = String(addr || '').trim().toLowerCase();
-  if (!raw) return '';
-  const hex = raw.startsWith('0x') ? raw.slice(2) : raw;
-  if (!/^[0-9a-f]+$/.test(hex)) return raw;
-  return `0x${hex.padStart(64, '0')}`;
-}
-
-function aptosWalletsForPlayer(player, dex = '', ctx = {}) {
-  const out = [];
-  const add = (value) => {
-    const w = normalizeAptosAddress(value);
-    if (w && !out.includes(w)) out.push(w);
-  };
-  add(ctx.aptosWalletAddress);
-  if (dex) add(registeredDexWallet(player, dex, 'aptos'));
-  add(registeredDexWallet(player, '', 'aptos'));
-  add(playerLoginWallet(player, 'aptos'));
-  return out;
-}
-
-function readDecibelSubaccountCache(owner) {
-  const key = normalizeAptosAddress(owner);
-  if (!key || typeof window === 'undefined') return null;
-  try {
-    const raw = window.localStorage.getItem(`${DECIBEL_SUBACCOUNT_PREFIX}${key}`);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (!parsed?.sub || typeof parsed.ts !== 'number') return null;
-    if (Date.now() - parsed.ts > DECIBEL_SUBACCOUNT_TTL_MS) {
-      window.localStorage.removeItem(`${DECIBEL_SUBACCOUNT_PREFIX}${key}`);
-      return null;
-    }
-    return normalizeAptosAddress(parsed.sub);
-  } catch {
-    return null;
-  }
-}
+import { resolveDecibelActivation } from './decibelSubaccountCache';
 
 export function solanaWalletsForPlayer(player, dex = '', ctx = {}) {
   const out = [];
@@ -398,21 +357,12 @@ async function ensureKatanaReady(player, ctx = {}) {
 }
 
 async function ensureDecibelReady(player, ctx = {}) {
-  const wallets = aptosWalletsForPlayer(player, 'decibel', ctx);
-  let sub = null;
-  let wallet = null;
-  for (const w of wallets) {
-    const cached = readDecibelSubaccountCache(w);
-    if (cached) {
-      sub = cached;
-      wallet = w;
-      break;
-    }
-  }
-  if (!sub) {
+  const resolved = await resolveDecibelActivation(player, ctx);
+  if (!resolved.ok) {
     return {
       ok: false,
-      error: 'No Decibel activation. Futures → Decibel → enable fast trading (Petra signs delegate to server API wallet).',
+      error: resolved.error
+        || 'No Decibel activation. Futures → Decibel → enable fast trading (Petra signs delegate to server API wallet).',
     };
   }
 
@@ -440,7 +390,7 @@ async function ensureDecibelReady(player, ctx = {}) {
     }
   }
 
-  return { ok: true, wallet, subaccount: sub };
+  return { ok: true, wallet: resolved.wallet, subaccount: resolved.subaccount };
 }
 
 async function ensureFlashReady(player, ctx = {}) {

@@ -46,10 +46,15 @@ const GMTRADE_ONE_TAP_PREFIX = 'clash_gmtrade_one_tap_signer_v1';
 const PERPL_ONE_TAP_PREFIX = 'clash_perpl_one_tap_signer_v1';
 const FLASH_ONE_TAP_PREFIX = 'clash_flash_one_tap_agent_v1:';
 const DECIBEL_STORAGE_KEY = 'clash_decibel_bot_credentials_v1';
-const DECIBEL_SUBACCOUNT_PREFIX = 'clash_decibel_subaccount:';
-const DECIBEL_SUBACCOUNT_TTL_MS = 24 * 60 * 60 * 1000;
 /** VPS signs via env — never paste server API wallet key in the browser. */
 export const DECIBEL_SERVER_SECRET_REF = 'env:PHANTOM__EXCHANGES__DECIBEL__SECRET_KEY';
+
+export {
+  readDecibelSubaccountCache,
+  writeDecibelSubaccountCache,
+  resolveDecibelActivation,
+} from './decibelSubaccountCache';
+import { resolveDecibelActivation } from './decibelSubaccountCache';
 
 function isEvmAddress(value) {
   return /^0x[0-9a-fA-F]{40}$/.test(String(value || '').trim());
@@ -576,46 +581,6 @@ export const UNSUPPORTED_GAME_WALLET_EXCHANGES = [
 export function isBotsExchangeEnabled(exchangeId) {
   const ex = String(exchangeId || '').toLowerCase();
   return ex && !BOTS_DISABLED_EXCHANGES.includes(ex);
-}
-
-function normalizeAptosAddress(addr) {
-  const raw = String(addr || '').trim().toLowerCase();
-  if (!raw) return '';
-  const hex = raw.startsWith('0x') ? raw.slice(2) : raw;
-  if (!/^[0-9a-f]+$/.test(hex)) return raw;
-  return `0x${hex.padStart(64, '0')}`;
-}
-
-function aptosCandidateWallets(player, dex = '', ctx = {}) {
-  const out = [];
-  const add = (value) => {
-    const w = normalizeAptosAddress(value);
-    if (w && !out.includes(w)) out.push(w);
-  };
-  add(ctx.aptosWalletAddress);
-  if (dex) add(registeredDexWallet(player, dex, 'aptos'));
-  add(registeredDexWallet(player, '', 'aptos'));
-  add(playerLoginWallet(player, 'aptos'));
-  return out;
-}
-
-/** Subaccount cache written by Futures useDecibel after activation. */
-export function readDecibelSubaccountCache(owner) {
-  const key = normalizeAptosAddress(owner);
-  if (!key) return null;
-  try {
-    const raw = window.localStorage.getItem(`${DECIBEL_SUBACCOUNT_PREFIX}${key}`);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (!parsed?.sub || typeof parsed.ts !== 'number') return null;
-    if (Date.now() - parsed.ts > DECIBEL_SUBACCOUNT_TTL_MS) {
-      window.localStorage.removeItem(`${DECIBEL_SUBACCOUNT_PREFIX}${key}`);
-      return null;
-    }
-    return normalizeAptosAddress(parsed.sub);
-  } catch {
-    return null;
-  }
 }
 
 function flashSecretToBase58(secretKeyB64) {
@@ -1255,29 +1220,29 @@ export async function gatherGameCredentials(exchangeId, player, ctx = {}) {
   }
 
   if (ex === 'decibel') {
-    const wallets = aptosCandidateWallets(player, 'decibel', ctx);
-    for (const w of wallets) {
-      const sub = readDecibelSubaccountCache(w);
-      if (sub) {
-        return {
-          ok: true,
-          privateKey: DECIBEL_SERVER_SECRET_REF,
-          subAccount: sub,
-          metadata: {
-            source: 'server_delegate',
-            exchange: ex,
-            wallet: w,
-            sub_account_id: sub,
-            signing_mode: 'server_delegate',
-          },
-          hint: 'Decibel server delegate (signing on VPS)',
-        };
-      }
+    const resolved = await resolveDecibelActivation(player, ctx);
+    if (!resolved.ok) {
+      return {
+        ok: false,
+        partial: Boolean(resolved.partial),
+        error: resolved.error
+          || 'No Decibel activation. Futures → Decibel → enable fast trading (delegate to server API wallet).',
+      };
     }
     return {
-      ok: false,
-      partial: true,
-      error: 'No Decibel activation. Futures → Decibel → enable fast trading (delegate to server API wallet).',
+      ok: true,
+      privateKey: DECIBEL_SERVER_SECRET_REF,
+      subAccount: resolved.subaccount,
+      metadata: {
+        source: resolved.source === 'derived' ? 'derived_primary' : 'server_delegate',
+        exchange: ex,
+        wallet: resolved.wallet,
+        sub_account_id: resolved.subaccount,
+        signing_mode: 'server_delegate',
+      },
+      hint: resolved.source === 'derived'
+        ? 'Decibel primary subaccount (derived)'
+        : 'Decibel server delegate (signing on VPS)',
     };
   }
 
@@ -1592,6 +1557,8 @@ async function setupAndSyncGameAccountInner({
   solanaSignMessage,
   solanaWalletAddress,
   solWallet,
+  aptosWalletAddress,
+  petraWalletAddress,
   probeBalance = true,
   walletCtx: walletCtxIn = {},
 }) {
@@ -1601,6 +1568,7 @@ async function setupAndSyncGameAccountInner({
     return { ok: false, error: `${GAME_WALLET_EXCHANGE_LABELS[ex] || ex} does not support game-wallet sync in Bots.` };
   }
 
+  const aptosAddr = aptosWalletAddress || petraWalletAddress || walletCtxIn.aptosWalletAddress || walletCtxIn.petraWalletAddress || null;
   const walletCtx = {
     evmProvider,
     evmWalletAddress: walletAddress,
@@ -1613,7 +1581,11 @@ async function setupAndSyncGameAccountInner({
     solanaSignMessage,
     solanaWalletAddress,
     solWallet,
+    aptosWalletAddress: aptosAddr,
+    petraWalletAddress: aptosAddr,
     ...walletCtxIn,
+    // Prefer explicit Petra from BotsPanel over nested ctx leftovers.
+    ...(aptosAddr ? { aptosWalletAddress: aptosAddr, petraWalletAddress: aptosAddr } : {}),
   };
 
   const ready = await ensureGameExchangeReady(ex, player, {

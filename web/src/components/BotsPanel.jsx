@@ -4,6 +4,7 @@ import { cartoonBtn } from '../styles/theme';
 import { colors, shared } from './basic/styles';
 import { usePlayer } from '../hooks/useGodot';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
+import { useAptosWallet } from '../contexts/AptosWalletContext';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { DEX_CONFIG, getAvailableDexConfigs } from '../contexts/DexContext';
 import {
@@ -1184,6 +1185,8 @@ function BotsPanel({ onClose }) {
   const player = usePlayer();
   const token = player?.token || null;
   const evmWallet = useEvmWallet();
+  const aptosWallet = useAptosWallet();
+  const aptosWalletAddress = aptosWallet?.address || null;
   const solWallet = useWallet();
   const solanaSignMessage = solWallet?.signMessage || null;
   const solanaWalletAddress = solWallet?.publicKey?.toBase58?.() || null;
@@ -1197,6 +1200,8 @@ function BotsPanel({ onClose }) {
     ensureChain: evmWallet?.ensureChain || null,
     solanaSignMessage,
     solanaWalletAddress,
+    aptosWalletAddress,
+    petraWalletAddress: aptosWalletAddress,
   }), [
     evmWallet?.provider,
     evmWallet?.address,
@@ -1205,6 +1210,7 @@ function BotsPanel({ onClose }) {
     evmWallet?.ensureChain,
     solanaSignMessage,
     solanaWalletAddress,
+    aptosWalletAddress,
   ]);
 
   const gameSetupSyncOpts = useMemo(() => ({
@@ -1218,6 +1224,12 @@ function BotsPanel({ onClose }) {
     solanaSignMessage,
     solanaWalletAddress,
     solWallet,
+    aptosWalletAddress,
+    petraWalletAddress: aptosWalletAddress,
+    walletCtx: {
+      aptosWalletAddress,
+      petraWalletAddress: aptosWalletAddress,
+    },
   }), [
     evmWallet?.provider,
     evmWallet?.address,
@@ -1229,6 +1241,7 @@ function BotsPanel({ onClose }) {
     solanaSignMessage,
     solanaWalletAddress,
     solWallet,
+    aptosWalletAddress,
   ]);
 
   const [view, setView] = useState('dashboard');
@@ -3343,7 +3356,7 @@ function BotsPanel({ onClose }) {
                     )}
                     {row.exchange === 'decibel' && !row.synced && (
                       <div style={{ marginTop: 6, fontSize: 10, opacity: 0.8, lineHeight: 1.35 }}>
-                        Signing via server API wallet on VPS (not your private key). First Futures → Decibel → enable fast trading, then Setup & Sync.
+                        Connect Petra here. Futures → Decibel → Authorize fast trading, then Setup & Sync (server API wallet signs on VPS).
                       </div>
                     )}
                     {row.exchange === 'hibachi' && !row.synced && (
