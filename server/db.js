@@ -9934,7 +9934,10 @@ function ensurePlayerShip(playerId) {
   const requiredCapacity = Math.max(3, legacyCapacity, troops.length, troopTemplate.length);
   const level = playerShipLevelForCapacity(requiredCapacity);
   const levelCapacity = PLAYER_SHIP_LEVELS[level].capacity;
-  const capacityOverride = Math.max(0, requiredCapacity - levelCapacity);
+  // capacity_override is an absolute preserved capacity, not a delta. Legacy
+  // accounts can exceed the new level-5 cap because older builds allowed more
+  // than five ports; keep every paid slot instead of truncating that fleet.
+  const capacityOverride = requiredCapacity > levelCapacity ? requiredCapacity : 0;
   const migration = {
     version: 1,
     source: ports.length > 0 ? 'legacy_ports' : 'new_player',

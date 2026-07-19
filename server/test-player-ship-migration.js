@@ -67,6 +67,20 @@ try {
     1,
   );
 
+  const overCapPlayerId = 'legacy-six-port-player';
+  insertPlayer(overCapPlayerId, 'legacy_over_cap_test');
+  for (let portIndex = 0; portIndex < 6; portIndex += 1) {
+    insertLegacyPort(overCapPlayerId, portIndex, ['Mage:1', 'Archer:1', 'Knight:1']);
+  }
+  const overCapShip = gameDb.ensurePlayerShip(overCapPlayerId);
+  assert.equal(overCapShip.level, 5);
+  assert.equal(overCapShip.capacity, 54, 'legacy capacity above the new level cap must be preserved');
+  assert.equal(overCapShip.troops.length, 18);
+  assert.equal(
+    gameDb.db.prepare('SELECT capacity_override FROM player_ships WHERE player_id = ?').get(overCapPlayerId).capacity_override,
+    54,
+  );
+
   const newPlayerId = 'new-single-ship-player';
   insertPlayer(newPlayerId, 'new_ship_test');
   const freshShip = gameDb.ensurePlayerShip(newPlayerId);
@@ -75,7 +89,7 @@ try {
   assert.deepEqual(freshShip.troops, []);
   assert.equal(freshShip.migrated_from_ports_at, null);
 
-  console.log('[player-ship-migration] PASS legacy_ports=5 capacity=45 troops=15 idempotent=true');
+  console.log('[player-ship-migration] PASS legacy_ports=5 capacity=45 over_cap=54 troops=15 idempotent=true');
 } finally {
   gameDb.db.close();
   for (const suffix of ['', '-wal', '-shm']) {
