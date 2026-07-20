@@ -1,6 +1,17 @@
 extends Node
 ## Test-only one-button village builder for scenes/TestMain.tscn.
 
+class DelayedCollectionNetwork:
+	extends Node
+	var delay_seconds := 1.5
+
+	func has_token() -> bool:
+		return true
+
+	func collect_resources(_building_id: int) -> Dictionary:
+		await get_tree().create_timer(delay_seconds).timeout
+		return {}
+
 var _panel: PanelContainer
 var _status: Label
 var _spawn_list: VBoxContainer
@@ -1435,9 +1446,12 @@ func _capture_resource_collection_feedback() -> void:
 	await get_tree().create_timer(0.55).timeout
 	bs._production._update_collect_icons()
 	await get_tree().process_frame
-	# Keep this visual test deterministic and exercise the local-success branch;
-	# authenticated server collection is covered by the same post-success method.
-	bs._net = null
+	# A deliberately slow network verifies that click feedback is optimistic and
+	# appears immediately instead of waiting for the collection response.
+	var delayed_net := DelayedCollectionNetwork.new()
+	scene.add_child(delayed_net)
+	bs._net = delayed_net
+	var click_started_usec := Time.get_ticks_usec()
 	for index in buildings.size():
 		var building: Dictionary = buildings[index]
 		var icon := building.get("_collect_icon") as Control
@@ -1446,6 +1460,12 @@ func _capture_resource_collection_feedback() -> void:
 			get_tree().quit(1)
 			return
 		bs._production._click_collect_icon(icon, building, String(specs[index].resource))
+	await get_tree().process_frame
+	var feedback_latency_ms := float(Time.get_ticks_usec() - click_started_usec) / 1000.0
+	if feedback_latency_ms > 100.0:
+		push_error("Resource collection feedback was delayed by %.2f ms." % feedback_latency_ms)
+		get_tree().quit(1)
+		return
 
 	var output_dir := _resource_collection_capture_dir()
 	DirAccess.make_dir_recursive_absolute(output_dir)
@@ -1460,13 +1480,16 @@ func _capture_resource_collection_feedback() -> void:
 	if not await _save_resource_collection_capture(output_dir.path_join("02-rise.png"), "rise"):
 		get_tree().quit(1)
 		return
-	await get_tree().create_timer(0.75).timeout
+	await get_tree().create_timer(1.25).timeout
 	var leftovers: Array[Node] = bs.world_ui_canvas.find_children("CollectionAmountFeedback_*", "Label", true, false)
 	if not leftovers.is_empty():
 		push_error("Resource collection capture failed: %d feedback labels did not clean up." % leftovers.size())
 		get_tree().quit(1)
 		return
-	print("[RESOURCE_COLLECTION_FEEDBACK] PASS labels=2 cleanup=true output=", output_dir)
+	print(
+		"[RESOURCE_COLLECTION_FEEDBACK] PASS labels=2 feedback_ms=%.2f network_delay_ms=1500 cleanup=true output=%s"
+		% [feedback_latency_ms, output_dir]
+	)
 	get_tree().quit()
 
 

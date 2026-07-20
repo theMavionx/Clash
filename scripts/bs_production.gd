@@ -340,8 +340,8 @@ func _collection_feedback_position(b: Dictionary) -> Vector2:
 	return bs.get_viewport().get_visible_rect().size * 0.5
 
 
-## Show the authoritative amount credited by a completed collection. The label
-## lives in screen space so it remains legible at every camera zoom.
+## Show the amount credited by a collection. The label lives in screen space
+## so it remains legible at every camera zoom.
 func _spawn_collection_amount_feedback(start_pos: Vector2, res_type: String, amount: int) -> Label:
 	if amount <= 0:
 		return null
@@ -405,6 +405,16 @@ func _collect_and_animate(b: Dictionary, res_type: String, feedback_pos: Vector2
 
 	var old_val: int    = int(bs.resources.get(res_type, 0))
 	var target_val: int = old_val + local_amount
+	var caps: Dictionary = bs._get_resource_caps()
+	var cap: int = int(caps.get(res_type, target_val))
+	var preview_amount := maxi(0, mini(local_amount, cap - old_val))
+
+	# Collection feedback must never wait for the network. The local production
+	# snapshot is deterministic enough for an immediate preview; the successful
+	# server response below remains authoritative and can correct the label.
+	_play_collect_sfx(res_type)
+	_spawn_collection_flying_icon(feedback_pos, res_type)
+	var amount_feedback := _spawn_collection_amount_feedback(feedback_pos, res_type, preview_amount)
 
 	var net = bs._net
 	if net and net.has_token():
@@ -437,9 +447,8 @@ func _collect_and_animate(b: Dictionary, res_type: String, feedback_pos: Vector2
 	if credited_amount <= 0:
 		credited_amount = local_amount
 	b["_collecting"] = false
-	_play_collect_sfx(res_type)
-	_spawn_collection_flying_icon(feedback_pos, res_type)
-	_spawn_collection_amount_feedback(feedback_pos, res_type, credited_amount)
+	if is_instance_valid(amount_feedback) and credited_amount != preview_amount:
+		amount_feedback.text = "+%s" % _format_collection_amount(credited_amount)
 
 	var tw := bs.create_tween().set_trans(Tween.TRANS_LINEAR).set_ease(Tween.EASE_IN_OUT)
 	tw.tween_method(
