@@ -218,6 +218,34 @@ function parseStrategyInstanceId(id) {
   return { kind: '', exchanges: [], symbols: [] };
 }
 
+function formatLaunchVol(usd) {
+  const n = Number(usd);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `$${(n / 1_000).toFixed(0)}k`;
+  return `$${n.toFixed(0)}`;
+}
+
+function formatLaunchFundingBps(bps) {
+  const n = Number(bps);
+  if (!Number.isFinite(n)) return null;
+  // Decibel UI shows hourly %; API is bps — 0.12 bps ≈ 0.0012%/h if continuous meter.
+  const pctPerHour = n / 10_000 * 100;
+  const sign = pctPerHour > 0 ? '+' : '';
+  return `${sign}${pctPerHour.toFixed(4)}%/h`;
+}
+
+function decibelMarketMetaLabel(meta) {
+  if (!meta) return '';
+  const parts = [];
+  const vol = formatLaunchVol(meta.volume_24h);
+  if (vol) parts.push(`vol ${vol}`);
+  const fund = formatLaunchFundingBps(meta.funding_rate_bps);
+  if (fund) parts.push(`fund ${fund}`);
+  if (meta.recommended) parts.push('recommended');
+  return parts.length ? ` — ${parts.join(' · ')}` : '';
+}
+
 function parseDecimalField(value) {
   if (value == null || value === '') return null;
   const n = Number(typeof value === 'string' ? value : value);
@@ -543,7 +571,7 @@ const mapHandleToBot = (
     } else if (balFmt.tone === 'warn') {
       lastAction = 'Bot runs but account balance is $0 — deposit margin before quoting';
     } else {
-      lastAction = `Bot runs but ${exchange} has 0 quotes — check margin, min notional, leverage`;
+      lastAction = `Bot runs but ${exchange} has 0 quotes — check margin (≥venue min×2), size, leverage`;
     }
   } else {
     lastAction = 'Worker spawned, waiting for first cycle';
@@ -964,11 +992,23 @@ function AggressivePlanCard({ plan, liveCostPer1M }) {
             {`−$${Number(plan.expectedDailyCostUsd || 0).toFixed(2)}`}
           </strong>
         </div>
+        <div style={S.aggressivePlanCell}>
+          <span style={S.aggressivePlanKey}>Achievable/day</span>
+          <strong style={{
+            ...S.aggressivePlanVal,
+            color: plan.capped ? '#B45309' : undefined,
+          }}>
+            {formatVolumeUsd(plan.achievableVolumeUsd ?? plan.dailyVolumeUsd)}
+          </strong>
+        </div>
       </div>
       <p style={S.aggressivePlanHint}>
         Model: ~{plan.roundTripsPerDay} round-trips/day → size = volume ÷ (2×RTs).
         Deposit covers dual quotes + inventory at {plan.avgLeverage}× (cap {plan.maxLeverage}×).
         Cost mixes maker/taker fees + ~{plan.adverseBps} bps bleed (1 bps ≈ $100/$1M).
+        {plan.capped
+          ? ` Target exceeds venue cadence — honest ceiling ~${formatVolumeUsd(plan.achievableVolumeUsd)} (raise size/deposit or lower target).`
+          : ''}
       </p>
     </div>
   );
@@ -1316,6 +1356,8 @@ function BotsPanel({ onClose }) {
   const [gameAuthBusy, setGameAuthBusy] = useState(false);
   const [gameAuthProbing, setGameAuthProbing] = useState(null);
   const [playerDexAccounts, setPlayerDexAccounts] = useState([]);
+  /** Decibel launch markets enriched with volume/funding from bot API. */
+  const [decibelLaunchMarkets, setDecibelLaunchMarkets] = useState([]);
 
   const playerForBots = useMemo(() => {
     if (!player) return player;
@@ -1380,6 +1422,45 @@ function BotsPanel({ onClose }) {
   const selectedSyncedAccount = syncedAccounts.find(
     (account) => account.exchange?.toLowerCase() === selectedExchangeId,
   ) || null;
+
+  const decibelMetaBySymbol = useMemo(() => {
+    const map = {};
+    for (const row of decibelLaunchMarkets) {
+      const sym = String(row?.symbol || '').toUpperCase();
+      if (sym) map[sym] = row;
+    }
+    return map;
+  }, [decibelLaunchMarkets]);
+
+  const sortedExchangeInstances = useMemo(() => {
+    const list = [...selectedExchangeInstances];
+    if (selectedExchangeId !== 'decibel') return list;
+    return list.sort((a, b) => {
+      const sa = String((a.symbols || [])[0] || '').toUpperCase();
+      const sb = String((b.symbols || [])[0] || '').toUpperCase();
+      const va = Number(decibelMetaBySymbol[sa]?.volume_24h) || 0;
+      const vb = Number(decibelMetaBySymbol[sb]?.volume_24h) || 0;
+      if (vb !== va) return vb - va;
+      return sa.localeCompare(sb);
+    });
+  }, [selectedExchangeInstances, selectedExchangeId, decibelMetaBySymbol]);
+
+  useEffect(() => {
+    if (!token || selectedExchangeId !== 'decibel') return undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetchBotApiJson('/exchanges/decibel/markets', token);
+        const rows = res?.data?.markets;
+        if (!cancelled && Array.isArray(rows)) {
+          setDecibelLaunchMarkets(rows);
+        }
+      } catch (err) {
+        console.warn('decibel launch markets fetch failed:', err);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [token, selectedExchangeId]);
   const selectedGameAuthRow = useMemo(() => (
     gameAuthRows.find((row) => row.exchange === selectedExchangeId)
       || (selectedSyncedAccount ? {
@@ -1416,7 +1497,16 @@ function BotsPanel({ onClose }) {
     setScanCompleted(false);
     setSelectedExchangeId(exchangeId);
     setNewAccExchange(exchangeId);
-    const instanceId = option.instances.length === 1 ? option.instances[0].id : '';
+    let instanceId = '';
+    if (option.instances.length === 1) {
+      instanceId = option.instances[0].id;
+    } else if (exchangeId === 'decibel') {
+      // Prefer BTC as recommended default among whitelist markets.
+      const btc = option.instances.find((inst) => (
+        (inst.symbols || []).some((s) => String(s).toUpperCase() === 'BTC-USD')
+      ));
+      instanceId = btc?.id || option.instances[0]?.id || '';
+    }
     setSelectedInstanceId(instanceId);
     const details = getBotConfigDetails(instanceId || exchangeId);
     const presetId = details.preset || 'calm';
@@ -1497,14 +1587,6 @@ function BotsPanel({ onClose }) {
   const activeCount = bots.filter((bot) => bot.status === 'Running' || bot.status === 'Paused').length;
   const mockPnl = portfolioPnl != null ? portfolioPnl : totalPnl;
 
-  const aggressivePlan = useMemo(() => {
-    if (preset !== 'aggressive') return null;
-    return planAggressiveVolume({
-      dailyVolumeUsd,
-      exchangeId: selectedExchangeId,
-    });
-  }, [preset, dailyVolumeUsd, selectedExchangeId]);
-
   const selectedFreeMarginUsd = useMemo(() => {
     if (!selectedExchangeId) return null;
     const bal = exchangeBalances[String(selectedExchangeId).toLowerCase()];
@@ -1512,6 +1594,15 @@ function BotsPanel({ onClose }) {
     const avail = bal.available ?? bal.equity;
     return avail != null && Number.isFinite(Number(avail)) ? Number(avail) : null;
   }, [selectedExchangeId, exchangeBalances]);
+
+  const aggressivePlan = useMemo(() => {
+    if (preset !== 'aggressive') return null;
+    return planAggressiveVolume({
+      dailyVolumeUsd,
+      exchangeId: selectedExchangeId,
+      availableUsd: selectedFreeMarginUsd ?? undefined,
+    });
+  }, [preset, dailyVolumeUsd, selectedExchangeId, selectedFreeMarginUsd]);
 
   const calmPlan = useMemo(() => {
     if (preset !== 'calm') return null;
@@ -1533,12 +1624,13 @@ function BotsPanel({ onClose }) {
     const plan = planAggressiveVolume({
       dailyVolumeUsd: volumeUsd,
       exchangeId,
+      availableUsd: selectedFreeMarginUsd ?? undefined,
     });
     setDailyVolumeUsd(volumeUsd);
     setTradeSize(plan.tradeSizeUsd);
     setMaxPosition(plan.maxPositionUsd);
     return plan;
-  }, [selectedExchangeId]);
+  }, [selectedExchangeId, selectedFreeMarginUsd]);
 
   const applyCalmPlan = useCallback((opts = {}) => {
     const plan = planCalmFromBalance({
@@ -2620,6 +2712,9 @@ function BotsPanel({ onClose }) {
           min_funding_diff_bps: spreadBps,
           preset,
           profile: preset,
+          ...(selectedFreeMarginUsd != null
+            ? { available_usd: String(selectedFreeMarginUsd) }
+            : {}),
           ...(preset === 'aggressive'
             ? { target_daily_volume_usd: String(dailyVolumeUsd) }
             : {}),
@@ -2628,6 +2723,12 @@ function BotsPanel({ onClose }) {
       const cfgRes = await configResponse.json();
       if (!cfgRes?.success) {
         throw new Error(formatApiError(cfgRes?.error, 'config save failed'));
+      }
+      if (cfgRes?.data?.volume_plan?.capped) {
+        const ach = cfgRes.data.volume_plan.achievable_volume_usd;
+        setNotice(
+          `Volume target exceeds Decibel cadence — bot sized for ~$${ach}/day achievable. Raise deposit or lower target.`,
+        );
       }
 
       const startResponse = await fetch(botApiUrl(`/api/v1/strategies/${encodeURIComponent(selectedInstanceId)}/start`), {
@@ -2659,7 +2760,7 @@ function BotsPanel({ onClose }) {
     } finally {
       setLaunching(false);
     }
-  }, [launching, selectedInstanceId, token, tradeSize, maxPosition, dailyVolumeUsd, aggressivePlan, preset, selectedType, fetchInstances, fetchOrderHistory, resetLaunch, syncedAccounts, appendHistory, authorizeGrvtBuilder, evmWallet, resolveEvmWallet]);
+  }, [launching, selectedInstanceId, token, tradeSize, maxPosition, dailyVolumeUsd, aggressivePlan, preset, selectedType, fetchInstances, fetchOrderHistory, resetLaunch, syncedAccounts, appendHistory, authorizeGrvtBuilder, evmWallet, resolveEvmWallet, selectedFreeMarginUsd]);
 
   // Real-time WebSocket updates via Clash game backend mediator
   const [wsConnected, setWsConnected] = useState(false);
@@ -3799,7 +3900,7 @@ function BotsPanel({ onClose }) {
                 : 'Calm: we size Trade Size / Max Position from your free margin. Default target $100k/day — if balance is too small we show the safe volume and deposit needed.'}
             </p>
           </div>
-          {selectedExchangeInstances.length > 1 && (
+          {(sortedExchangeInstances.length > 1 || selectedExchangeId === 'decibel') && (
             <div style={S.marketPickerCard}>
               <label htmlFor="bot-market" style={S.label}>Market</label>
               <select
@@ -3809,13 +3910,22 @@ function BotsPanel({ onClose }) {
                 onChange={(event) => setSelectedInstanceId(event.target.value)}
               >
                 <option value="">Select a market</option>
-                {selectedExchangeInstances.map((instance) => (
-                  <option key={instance.id} value={instance.id}>
-                    {(instance.symbols || []).map((symbol) => String(symbol).toUpperCase()).join(', ') || instance.id}
-                  </option>
-                ))}
+                {sortedExchangeInstances.map((instance) => {
+                  const symbols = (instance.symbols || []).map((symbol) => String(symbol).toUpperCase());
+                  const primary = symbols[0] || '';
+                  const meta = selectedExchangeId === 'decibel' ? decibelMetaBySymbol[primary] : null;
+                  return (
+                    <option key={instance.id} value={instance.id}>
+                      {symbols.join(', ') || instance.id}{decibelMarketMetaLabel(meta)}
+                    </option>
+                  );
+                })}
               </select>
-              <span style={S.marketPickerHint}>Each market launches its exact configured bot instance.</span>
+              <span style={S.marketPickerHint}>
+                {selectedExchangeId === 'decibel'
+                  ? 'Liquid majors only. Sorted by 24h volume when live data is available. BTC is the default.'
+                  : 'Each market launches its exact configured bot instance.'}
+              </span>
             </div>
           )}
           <div style={S.presetCard}>

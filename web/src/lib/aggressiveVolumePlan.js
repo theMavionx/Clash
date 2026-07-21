@@ -14,6 +14,8 @@
  */
 
 const ROUND_TRIPS_PER_DAY = 400;
+/** Decibel maker cadence (rebalance ≥30s, open cooldown 60s, patient exits). */
+const DECIBEL_ROUND_TRIPS_PER_DAY = 120;
 const INVENTORY_MULT = 6;
 const SAFETY_BUFFER = 1.25;
 /** Aggressive prefers maker fills (symmetric_mm maker-prefer) but some taker exits. */
@@ -24,13 +26,13 @@ const ADVERSE_BPS = 0.5;
 
 /** Per-venue fee + planning leverage (not venue max — safer MM defaults). */
 const VENUE = {
-  decibel: { makerBps: 1, takerBps: 4, leverage: 10, maxLeverage: 40 },
-  ostium: { makerBps: 5, takerBps: 8, leverage: 10, maxLeverage: 50 },
-  pacifica: { makerBps: 2, takerBps: 4, leverage: 10, maxLeverage: 50 },
-  hyperliquid: { makerBps: -2, takerBps: 5, leverage: 5, maxLeverage: 50 },
-  grvt: { makerBps: -2, takerBps: 5, leverage: 5, maxLeverage: 50 },
-  avantis: { makerBps: 3, takerBps: 6, leverage: 10, maxLeverage: 50 },
-  default: { makerBps: 2, takerBps: 5, leverage: 10, maxLeverage: 50 },
+  decibel: { makerBps: 1, takerBps: 4, leverage: 10, maxLeverage: 40, sizeMax: 2000, rts: DECIBEL_ROUND_TRIPS_PER_DAY },
+  ostium: { makerBps: 5, takerBps: 8, leverage: 10, maxLeverage: 50, sizeMax: 500, rts: ROUND_TRIPS_PER_DAY },
+  pacifica: { makerBps: 2, takerBps: 4, leverage: 10, maxLeverage: 50, sizeMax: 500, rts: ROUND_TRIPS_PER_DAY },
+  hyperliquid: { makerBps: -2, takerBps: 5, leverage: 5, maxLeverage: 50, sizeMax: 500, rts: ROUND_TRIPS_PER_DAY },
+  grvt: { makerBps: -2, takerBps: 5, leverage: 5, maxLeverage: 50, sizeMax: 500, rts: ROUND_TRIPS_PER_DAY },
+  avantis: { makerBps: 3, takerBps: 6, leverage: 10, maxLeverage: 50, sizeMax: 500, rts: ROUND_TRIPS_PER_DAY },
+  default: { makerBps: 2, takerBps: 5, leverage: 10, maxLeverage: 50, sizeMax: 500, rts: ROUND_TRIPS_PER_DAY },
 };
 
 export const AGGRESSIVE_VOLUME_SLIDER = {
@@ -106,24 +108,42 @@ export function observedCostPer1M(volumeUsd, netCostUsd) {
  * @param {number} opts.dailyVolumeUsd
  * @param {string} [opts.exchangeId]
  * @param {number} [opts.roundTripsPerDay]
+ * @param {number} [opts.availableUsd] — live free margin; clamps size to dual-leg affordability
  * @returns {object} plan
  */
 export function planAggressiveVolume({
   dailyVolumeUsd,
   exchangeId = '',
-  roundTripsPerDay = ROUND_TRIPS_PER_DAY,
+  roundTripsPerDay,
+  availableUsd,
 } = {}) {
   const v = venuePlanDefaults(exchangeId);
   const target = Math.max(0, Number(dailyVolumeUsd) || 0);
-  const rts = Math.max(1, Number(roundTripsPerDay) || ROUND_TRIPS_PER_DAY);
+  const rts = Math.max(1, Number(roundTripsPerDay) || v.rts || ROUND_TRIPS_PER_DAY);
+  const sizeMax = v.sizeMax || 500;
 
   let tradeSize = target > 0 ? target / (2 * rts) : 0;
-  tradeSize = snap(tradeSize, 5, 500, 5);
+  tradeSize = snap(tradeSize, 5, sizeMax, 5);
 
-  let maxPosition = snap(tradeSize * INVENTORY_MULT, 50, 5000, 50);
+  // Dual-leg: available × lev × 0.85 / 2
+  const parsedAvailable = Number(availableUsd);
+  const hasAvailable = availableUsd != null && Number.isFinite(parsedAvailable);
+  const avail = hasAvailable ? Math.max(0, parsedAvailable) : 0;
+  if (hasAvailable) {
+    const maxLeg = (avail * (v.leverage || 10) * 0.85) / 2;
+    if (tradeSize > maxLeg) {
+      tradeSize = maxLeg >= 5
+        ? Math.min(sizeMax, Math.floor(maxLeg / 5) * 5)
+        : 0;
+    }
+  }
+
+  let maxPosition = tradeSize > 0
+    ? snap(tradeSize * INVENTORY_MULT, 50, Math.max(5000, sizeMax * INVENTORY_MULT), 50)
+    : 0;
   // Keep at least 2× trade for dual inventory headroom.
-  if (maxPosition < tradeSize * 2) {
-    maxPosition = snap(tradeSize * 2, 50, 5000, 50);
+  if (tradeSize > 0 && maxPosition < tradeSize * 2) {
+    maxPosition = snap(tradeSize * 2, 50, Math.max(5000, sizeMax * INVENTORY_MULT), 50);
   }
 
   const leverage = v.leverage;
@@ -131,8 +151,11 @@ export function planAggressiveVolume({
   const inventoryMarginUsd = maxPosition / leverage;
   const depositUsd = Math.ceil(Math.max(quoteMarginUsd, inventoryMarginUsd) * SAFETY_BUFFER);
 
+  const achievableVolumeUsd = 2 * tradeSize * rts;
+  const capped = target > 0 && achievableVolumeUsd + 1 < target;
+
   const { costPer1M, feeBps, adverseBps } = estimateCostPer1M(exchangeId);
-  const expectedDailyCostUsd = target > 0 ? (costPer1M * target) / 1_000_000 : 0;
+  const expectedDailyCostUsd = target > 0 ? (costPer1M * Math.min(target, achievableVolumeUsd)) / 1_000_000 : 0;
 
   return {
     dailyVolumeUsd: target,
@@ -150,6 +173,8 @@ export function planAggressiveVolume({
     expectedDailyCostUsd,
     makerFeeBps: v.makerBps,
     takerFeeBps: v.takerBps,
+    achievableVolumeUsd,
+    capped,
   };
 }
 
@@ -157,6 +182,5 @@ export function planAggressiveVolume({
 export function impliedDailyVolumeFromSize(tradeSizeUsd, roundTripsPerDay = ROUND_TRIPS_PER_DAY) {
   const size = Number(tradeSizeUsd) || 0;
   const rts = Math.max(1, roundTripsPerDay);
-  const raw = size * 2 * rts;
-  return snap(raw, AGGRESSIVE_VOLUME_SLIDER.min, AGGRESSIVE_VOLUME_SLIDER.max, AGGRESSIVE_VOLUME_SLIDER.step);
+  return 2 * size * rts;
 }
