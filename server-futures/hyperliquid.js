@@ -222,6 +222,18 @@ async function getUserFills(address, { startTime, endTime } = {}) {
   return postInfo({ type: 'userFills', user: address });
 }
 
+async function getMaxBuilderFee(address, builder) {
+  if (!isEvmAddress(address)) throw new Error('wallet required (0x...)');
+  if (!isEvmAddress(builder)) throw new Error('builder required (0x...)');
+  const value = await postInfo({
+    type: 'maxBuilderFee',
+    user: address,
+    builder,
+  });
+  const fee = Number(value?.maxBuilderFee ?? value?.max_builder_fee ?? value);
+  return Number.isFinite(fee) && fee >= 0 ? fee : 0;
+}
+
 module.exports = {
   HYPERLIQUID_API,
   isEvmAddress,
@@ -232,4 +244,5 @@ module.exports = {
   getPositionsByAddress,
   getOrdersByAddress,
   getUserFills,
+  getMaxBuilderFee,
 };

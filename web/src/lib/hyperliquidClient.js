@@ -6,6 +6,7 @@ export const HYPERLIQUID_TESTNET = String(import.meta.env.VITE_HYPERLIQUID_TESTN
 export const HYPERLIQUID_API_URL = String(import.meta.env.VITE_HYPERLIQUID_API_URL || '').trim();
 export const HYPERLIQUID_BUILDER_ADDRESS = String(import.meta.env.VITE_HYPERLIQUID_BUILDER_ADDRESS || '').trim();
 export const HYPERLIQUID_BUILDER_FEE_TENTH_BPS = Number(import.meta.env.VITE_HYPERLIQUID_BUILDER_FEE_TENTH_BPS || 10);
+export const HYPERLIQUID_CLOID_PREFIX = '434f5001'; // "COP" + attribution format version.
 export const HYPERLIQUID_REFERRAL_CODE = String(import.meta.env.VITE_HYPERLIQUID_REFERRAL_CODE || 'CLASHOFPERPS').trim();
 export const HYPERLIQUID_ARBITRUM_CHAIN_ID = 42161;
 export const HYPERLIQUID_SIGNATURE_CHAIN_ID_HEX = `0x${HYPERLIQUID_ARBITRUM_CHAIN_ID.toString(16)}`;
@@ -354,6 +355,7 @@ export function makeHyperliquidCloid() {
   } else {
     for (let i = 0; i < bytes.length; i += 1) bytes[i] = Math.floor(Math.random() * 256);
   }
+  bytes.set([0x43, 0x4f, 0x50, 0x01], 0);
   return `0x${Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('')}`;
 }
 

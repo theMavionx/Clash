@@ -71,6 +71,7 @@ const VERIFIED_SOURCES_BY_DEX = {
 const USER_SCOPED_IMPORT_DEXES = new Set([
   'decibel',
   'dango',
+  'hyperliquid',
   'ostium',
   'gmtrade',
   'hotstuff',
@@ -456,6 +457,18 @@ async function runDexAdapter(player, dex, wallet, opts = {}) {
     return {
       dex,
       ...(await dango.importRecentFillsForPlayer(playerId, wallet, futuresDbWritable().addTrade, { limit })),
+    };
+  }
+
+  if (dex === 'hyperliquid') {
+    const hyperliquidRewards = require('../server-futures/hyperliquid-rewards-worker');
+    return {
+      dex,
+      ...(await hyperliquidRewards.importFillsForPlayer(playerId, wallet, {
+        lookbackSeconds: opts.lookbackSeconds,
+        attempts: opts.attempts || 1,
+        delayMs: opts.delayMs,
+      })),
     };
   }
 

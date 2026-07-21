@@ -36,6 +36,7 @@ const {
   solanaRpcUrls: buildSolanaRpcUrls,
   withSolanaRpcFallback,
 } = require('./solana_rpc');
+const { normalizeConfirmedMintTxs, resolveEvmMintTokenIds } = require('./nft_mint_receipt');
 
 const router = express.Router();
 
@@ -1517,15 +1518,7 @@ function normalizeCollectionServerSupplyState(collection, raw = null) {
         expiresAt: row.expiresAt,
       }))
     : [];
-  const confirmedTxs = Array.isArray(base.confirmedTxs)
-    ? base.confirmedTxs.slice(-200).map((row) => ({
-        tx: String(row.tx || '').slice(0, 140),
-        reservationId: row.reservationId ? String(row.reservationId) : null,
-        chain: row.chain ? String(row.chain).toLowerCase() : null,
-        quantity: Math.max(1, Math.floor(Number(row.quantity || 1))),
-        confirmedAt: row.confirmedAt || new Date(now).toISOString(),
-      })).filter((row) => row.tx)
-    : [];
+  const confirmedTxs = normalizeConfirmedMintTxs(base.confirmedTxs, now);
   return {
     collection: collection.slug,
     cap: collection.maxSupply,
@@ -1618,6 +1611,65 @@ function reserveCollectionServerSupply(collection, optionsOrQuantity) {
   return reserveCollectionServerSupplyTx(collection, options);
 }
 
+function collectionMintConfirmationExpectation(collection, body = {}) {
+  const state = normalizeCollectionServerSupplyState(
+    collection,
+    readAppSettingJson(collectionSupplySettingKey(collection), null)
+      || collectionDeploymentBaselineSupply(collection),
+  );
+  const tx = String(body.tx || body.hash || body.signature || '').trim();
+  if (tx) {
+    const confirmed = state.confirmedTxs.find((row) => row.tx === tx);
+    if (confirmed) {
+      const chain = String(confirmed.chain || body.chain || '').toLowerCase();
+      let storedBuyer = confirmed.buyer || null;
+      if (!storedBuyer) {
+        try {
+          const rarity = db.db.prepare(`
+            SELECT owner_wallet
+            FROM nft_rarities
+            WHERE collection = ? AND chain = ?
+              AND json_valid(COALESCE(metadata_json, ''))
+              AND lower(json_extract(metadata_json, '$.tx')) = lower(?)
+              AND owner_wallet IS NOT NULL AND owner_wallet != ''
+            ORDER BY datetime(updated_at) DESC
+            LIMIT 1
+          `).get(collection.slug, chain, tx);
+          storedBuyer = rarity?.owner_wallet || null;
+        } catch {}
+      }
+      if (!storedBuyer) {
+        try {
+          const inventory = db.db.prepare(`
+            SELECT wallet
+            FROM player_nfts
+            WHERE collection = ? AND chain = ? AND lower(tx_hash) = lower(?)
+              AND wallet IS NOT NULL AND wallet != ''
+            ORDER BY datetime(updated_at) DESC
+            LIMIT 1
+          `).get(collection.slug, chain, tx);
+          storedBuyer = inventory?.wallet || null;
+        } catch {}
+      }
+      return {
+        buyer: storedBuyer || body.buyer || body.wallet || null,
+        quantity: Math.max(1, Math.floor(Number(confirmed.quantity || body.quantity || 1))),
+        chain,
+        confirmed: true,
+      };
+    }
+  }
+  const reservationId = String(body.reservationId || '').trim();
+  const reservation = state.reservations.find((row) => row.id === reservationId);
+  if (!reservation) return null;
+  return {
+    buyer: reservation.buyer || body.buyer || body.wallet || null,
+    quantity: Math.max(1, Math.floor(Number(reservation.quantity || 1))),
+    chain: String(reservation.chain || body.chain || '').toLowerCase(),
+    confirmed: false,
+  };
+}
+
 const confirmCollectionServerMintTx = db.db.transaction((collection, body) => {
   const key = collectionSupplySettingKey(collection);
   const state = normalizeCollectionServerSupplyState(
@@ -1625,15 +1677,33 @@ const confirmCollectionServerMintTx = db.db.transaction((collection, body) => {
     readAppSettingJson(key, null) || collectionDeploymentBaselineSupply(collection),
   );
   const tx = String(body.tx || body.hash || body.signature || '').trim();
+  const bodyTokenIds = Array.isArray(body.tokenIds)
+    ? body.tokenIds.map((id) => String(id || '').trim()).filter(Boolean)
+    : [];
   if (tx) {
     const confirmed = state.confirmedTxs.find((row) => row.tx === tx);
     if (confirmed) {
+      const quantity = Math.max(1, Math.floor(Number(confirmed.quantity || body.quantity || 1)));
+      const confirmedTokenIds = Array.isArray(confirmed.tokenIds)
+        ? confirmed.tokenIds.map((id) => String(id || '').trim()).filter(Boolean)
+        : [];
+      const authoritativeTokenIds = bodyTokenIds.length
+        ? bodyTokenIds.slice(0, quantity)
+        : confirmedTokenIds;
+      if (bodyTokenIds.length && JSON.stringify(authoritativeTokenIds) !== JSON.stringify(confirmedTokenIds)) {
+        confirmed.tokenIds = authoritativeTokenIds;
+        if (!confirmed.buyer && (body.buyer || body.wallet)) {
+          confirmed.buyer = body.buyer || body.wallet;
+        }
+        state.updatedAt = new Date().toISOString();
+        writeAppSettingJson(key, state);
+      }
       return {
         alreadyConfirmed: true,
         supply: collectionSupplyResponse(collection, state),
         chain: confirmed.chain || body.chain || 'unknown',
-        quantity: confirmed.quantity || body.quantity || 1,
-        tokenIds: Array.isArray(confirmed.tokenIds) ? confirmed.tokenIds : [],
+        quantity,
+        tokenIds: authoritativeTokenIds,
         buyer: confirmed.buyer || body.buyer || body.wallet || null,
         reservationId: confirmed.reservationId || body.reservationId || null,
         tx,
@@ -1648,12 +1718,9 @@ const confirmCollectionServerMintTx = db.db.transaction((collection, body) => {
     throw err;
   }
   const [reservation] = state.reservations.splice(idx, 1);
-  const quantity = Math.max(1, Math.floor(Number(body.quantity || reservation.quantity || 1)));
-  const chain = String(body.chain || reservation.chain || 'unknown').toLowerCase();
+  const quantity = Math.max(1, Math.floor(Number(reservation.quantity || 1)));
+  const chain = String(reservation.chain || body.chain || 'unknown').toLowerCase();
   const previousChainMinted = Math.max(0, Math.floor(Number(state.perChain?.[chain] || 0)));
-  const bodyTokenIds = Array.isArray(body.tokenIds)
-    ? body.tokenIds.map((id) => String(id || '').trim()).filter(Boolean)
-    : [];
   const mintedTokenIds = bodyTokenIds.length
     ? bodyTokenIds.slice(0, quantity)
     : Array.from({ length: quantity }, (_, i) => String(previousChainMinted + i + 1));
@@ -1669,6 +1736,7 @@ const confirmCollectionServerMintTx = db.db.transaction((collection, body) => {
       quantity,
       tokenIds: mintedTokenIds,
       buyer: reservation.buyer || body.buyer || body.wallet || null,
+      payment: reservation.payment || body.payment || null,
       confirmedAt: new Date().toISOString(),
     });
     state.confirmedTxs = state.confirmedTxs.slice(-200);
@@ -5366,12 +5434,46 @@ router.post('/nft/:collectionSlug/mint/confirm', async (req, res) => {
     if (nftCollectionUsesRarity(collection) && !txHash) {
       return res.status(400).json({ error: 'tx hash is required to reveal NFT rarity' });
     }
+    let confirmedTokenIds = requestedTokenIds;
+    let confirmedBuyer = req.body?.buyer || req.body?.wallet || null;
+    let confirmedQuantity = req.body?.quantity;
+    if (['base', 'arbitrum', 'monad', 'ink'].includes(chain)) {
+      const expectation = collectionMintConfirmationExpectation(collection, {
+        reservationId: req.body?.reservationId,
+        tx: txHash,
+        chain,
+        quantity: req.body?.quantity,
+        buyer: req.body?.buyer,
+        wallet: req.body?.wallet,
+      });
+      if (!expectation?.buyer) {
+        return res.status(409).json({ error: 'Mint reservation buyer is missing or expired' });
+      }
+      if (expectation.chain && expectation.chain !== chain) {
+        return res.status(409).json({ error: `Mint was reserved on ${expectation.chain}, not ${chain}` });
+      }
+      confirmedBuyer = expectation.buyer;
+      confirmedQuantity = expectation.quantity;
+      const deployment = nftCollectionDeployment(collection.slug, chain);
+      const contract = process.env[`NFT_${collection.envKey}_${chain.toUpperCase()}_CONTRACT`]
+        || deployment.proxy
+        || deployment.contract;
+      confirmedTokenIds = await resolveEvmMintTokenIds({
+        rpcCall: gameShopEvmRpcCall,
+        chain,
+        txHash,
+        contract,
+        recipient: expectation.buyer,
+        quantity: expectation.quantity,
+      });
+    }
     const result = confirmCollectionServerMintTx(collection, {
       reservationId: req.body?.reservationId,
       tx: txHash,
       chain,
-      quantity: req.body?.quantity,
-      tokenIds: requestedTokenIds,
+      quantity: confirmedQuantity,
+      tokenIds: confirmedTokenIds,
+      buyer: confirmedBuyer,
     });
     const resultTokenIds = Array.isArray(result.tokenIds)
       ? result.tokenIds.map((id) => String(id || '').trim()).filter(Boolean)

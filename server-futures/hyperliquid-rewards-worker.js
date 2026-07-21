@@ -18,6 +18,11 @@ const HYPERLIQUID_BUILDER_ADDRESS = String(
   || process.env.VITE_HYPERLIQUID_BUILDER_ADDRESS
   || '',
 ).trim().toLowerCase();
+const HYPERLIQUID_BUILDER_FEE_TENTH_BPS = Math.max(
+  1,
+  Math.min(1000, Math.floor(Number(process.env.HYPERLIQUID_BUILDER_FEE_TENTH_BPS || 10) || 10)),
+);
+const HYPERLIQUID_CLOID_PREFIX = '0x434f5001';
 
 function fillTimeMs(fill) {
   const n = Number(fill?.time ?? fill?.timestamp ?? 0);
@@ -41,11 +46,18 @@ function tradeKey(wallet, fill) {
 }
 
 function sideFromFill(fill) {
-  const dir = String(fill?.dir || '');
+  const dir = String(fill?.dir || '').toLowerCase();
   const isClose = /close/i.test(dir);
-  const isLong = /long/i.test(dir) || fill?.side === 'B';
-  if (isClose) return isLong ? 'close_long' : 'close_short';
-  return isLong ? 'long' : 'short';
+  const mentionsLong = /long/i.test(dir);
+  const mentionsShort = /short/i.test(dir);
+  if (isClose) {
+    if (mentionsLong) return 'close_long';
+    if (mentionsShort) return 'close_short';
+    return fill?.side === 'B' ? 'close_short' : 'close_long';
+  }
+  if (mentionsLong) return 'long';
+  if (mentionsShort) return 'short';
+  return fill?.side === 'B' ? 'long' : 'short';
 }
 
 function normalizeFill(wallet, fill) {
@@ -68,6 +80,8 @@ function normalizeFill(wallet, fill) {
     notional_usd: notional,
     verifiedSource: 'hyperliquid_api',
     pnl: fill?.closedPnl != null ? String(fill.closedPnl) : null,
+    fee: fillBuilderFee(fill) > 0 ? String(fillBuilderFee(fill)) : null,
+    createdAt: fillTimeMs(fill) > 0 ? new Date(fillTimeMs(fill)).toISOString() : null,
   };
 }
 
@@ -94,10 +108,78 @@ function fillBuilderFee(fill) {
   return Number.isFinite(n) ? n : 0;
 }
 
-function isClashBuilderFill(fill) {
-  if (!hyperliquid.isEvmAddress(HYPERLIQUID_BUILDER_ADDRESS)) return false;
-  return fillBuilderAddress(fill) === HYPERLIQUID_BUILDER_ADDRESS
-    && fillBuilderFee(fill) > 0;
+function isClashCloid(fill) {
+  return String(fill?.cloid || '').trim().toLowerCase().startsWith(HYPERLIQUID_CLOID_PREFIX);
+}
+
+function expectedBuilderFee(notionalUsd, feeTenthBps = HYPERLIQUID_BUILDER_FEE_TENTH_BPS) {
+  const notional = Number(notionalUsd);
+  const rate = Number(feeTenthBps);
+  if (!Number.isFinite(notional) || notional <= 0 || !Number.isFinite(rate) || rate <= 0) return 0;
+  return notional * rate / 100_000;
+}
+
+function builderFeeMatchesConfiguredRate(fill, options = {}) {
+  const amount = Math.abs(Number(fill?.sz || 0));
+  const price = Number(fill?.px || 0);
+  const actual = fillBuilderFee(fill);
+  const expected = expectedBuilderFee(
+    amount * price,
+    options.builderFeeTenthBps ?? HYPERLIQUID_BUILDER_FEE_TENTH_BPS,
+  );
+  if (!(actual > 0) || !(expected > 0)) return false;
+  // Hyperliquid serializes builderFee with six decimal places.
+  const tolerance = Math.max(0.0000011, expected * 0.00001);
+  return Math.abs(actual - expected) <= tolerance;
+}
+
+function classifyClashBuilderFill(fill, options = {}) {
+  const builderAddress = String(
+    options.builderAddress ?? HYPERLIQUID_BUILDER_ADDRESS,
+  ).trim().toLowerCase();
+  const builderFeeTenthBps = Number(
+    options.builderFeeTenthBps ?? HYPERLIQUID_BUILDER_FEE_TENTH_BPS,
+  );
+  const explicitBuilder = fillBuilderAddress(fill);
+  const feeMatches = builderFeeMatchesConfiguredRate(fill, { builderFeeTenthBps });
+  if (!hyperliquid.isEvmAddress(builderAddress)) {
+    return { ok: false, reason: 'builder_not_configured' };
+  }
+  if (explicitBuilder && explicitBuilder !== builderAddress) {
+    return { ok: false, reason: 'different_builder', explicitBuilder };
+  }
+  if (!feeMatches) {
+    return { ok: false, reason: 'builder_fee_mismatch', explicitBuilder: explicitBuilder || null };
+  }
+  if (explicitBuilder === builderAddress) {
+    return {
+      ok: true,
+      mode: 'explicit_builder',
+      explicitBuilder,
+      builderFeeTenthBps,
+    };
+  }
+  const approvalTenthBps = Number(options.approvalTenthBps);
+  if (!Number.isFinite(approvalTenthBps) || approvalTenthBps < builderFeeTenthBps) {
+    return {
+      ok: false,
+      reason: 'builder_approval_missing',
+      approvalTenthBps: Number.isFinite(approvalTenthBps) ? approvalTenthBps : null,
+    };
+  }
+  const clashCloid = isClashCloid(fill);
+  return {
+    ok: true,
+    mode: clashCloid ? 'cloid_and_builder_fee' : 'legacy_builder_fee_and_approval',
+    explicitBuilder: null,
+    clashCloid,
+    builderFeeTenthBps,
+    approvalTenthBps,
+  };
+}
+
+function isClashBuilderFill(fill, options = {}) {
+  return classifyClashBuilderFill(fill, options).ok;
 }
 
 async function importFillsForPlayer(playerId, wallet, opts = {}) {
@@ -117,8 +199,21 @@ async function importFillsForPlayer(playerId, wallet, opts = {}) {
   }
   if (!Array.isArray(fills)) fills = Array.isArray(fills?.data) ? fills.data : [];
 
+  if (!hyperliquid.isEvmAddress(HYPERLIQUID_BUILDER_ADDRESS)) {
+    return { ok: false, imported: 0, skipped: fills.length, total: fills.length, reason: 'builder_not_configured' };
+  }
+  const needsBuilderApproval = fills.some((fill) => (
+    !fillBuilderAddress(fill)
+    && fillBuilderFee(fill) > 0
+    && normalizeFill(cleanWallet, fill)
+  ));
+  const approvalTenthBps = needsBuilderApproval
+    ? await hyperliquid.getMaxBuilderFee(cleanWallet, HYPERLIQUID_BUILDER_ADDRESS)
+    : null;
+
   let imported = 0;
   let adopted = 0;
+  let updated = 0;
   let skipped = 0;
   for (const fill of fills) {
     const ts = fillTimeMs(fill);
@@ -131,7 +226,8 @@ async function importFillsForPlayer(playerId, wallet, opts = {}) {
       skipped++;
       continue;
     }
-    if (!isClashBuilderFill(fill)) {
+    const attribution = classifyClashBuilderFill(fill, { approvalTenthBps });
+    if (!attribution.ok) {
       try {
         db.db.prepare(`
           UPDATE trade_history
@@ -144,8 +240,28 @@ async function importFillsForPlayer(playerId, wallet, opts = {}) {
       skipped++;
       continue;
     }
+    trade.proofJson = JSON.stringify({
+      source: 'hyperliquid_user_fills',
+      builder: HYPERLIQUID_BUILDER_ADDRESS,
+      builder_fee_tenth_bps: HYPERLIQUID_BUILDER_FEE_TENTH_BPS,
+      verification_mode: attribution.mode,
+      clash_cloid: attribution.clashCloid === true,
+      approval_tenth_bps: attribution.approvalTenthBps ?? null,
+      fill: {
+        tid: fill?.tid ?? null,
+        hash: fill?.hash ?? null,
+        oid: fill?.oid ?? null,
+        cloid: fill?.cloid ?? null,
+        time: fillTimeMs(fill) || null,
+        coin: fill?.coin ?? null,
+        dir: fill?.dir ?? null,
+        px: fill?.px ?? null,
+        sz: fill?.sz ?? null,
+        builder_fee: fillBuilderFee(fill),
+      },
+    });
     try {
-      const before = db.db.prepare('SELECT id, player_id FROM trade_history WHERE client_order_id = ?').get(trade.clientOrderId);
+      const before = db.db.prepare('SELECT id, player_id, status FROM trade_history WHERE client_order_id = ?').get(trade.clientOrderId);
       if (before) {
         if (before.player_id !== playerId && trade.clientOrderId.startsWith(`hyperliquid:${cleanWallet}:`)) {
           const moved = db.db.prepare(`
@@ -155,11 +271,10 @@ async function importFillsForPlayer(playerId, wallet, opts = {}) {
           `).run(playerId, before.id);
           if (moved.changes > 0) adopted++;
         }
-        skipped++;
-        continue;
       }
-      const r = db.addTrade(playerId, trade);
-      if (r?.id) imported++;
+      const r = db.upsertVerifiedTrade(playerId, trade);
+      if (r?.inserted > 0) imported++;
+      else if (r?.updated > 0) updated++;
       else skipped++;
     } catch (e) {
       skipped++;
@@ -168,7 +283,15 @@ async function importFillsForPlayer(playerId, wallet, opts = {}) {
       }
     }
   }
-  return { ok: true, imported, adopted, skipped, total: fills.length };
+  return {
+    ok: true,
+    imported,
+    adopted,
+    updated,
+    skipped,
+    total: fills.length,
+    builderApprovalTenthBps: approvalTenthBps,
+  };
 }
 
 async function pollOnce(mainDb) {
@@ -223,5 +346,14 @@ module.exports = {
   start,
   pollOnce,
   importFillsForPlayer,
+  normalizeFill,
+  sideFromFill,
+  fillBuilderAddress,
+  fillBuilderFee,
+  isClashCloid,
+  expectedBuilderFee,
+  builderFeeMatchesConfiguredRate,
+  classifyClashBuilderFill,
+  isClashBuilderFill,
   isEvmAddress: hyperliquid.isEvmAddress,
 };
