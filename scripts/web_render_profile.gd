@@ -207,7 +207,11 @@ func _apply_profile() -> void:
 			continue
 		var environment := world_environment.environment.duplicate(true) as Environment
 		environment.glow_enabled = false
-		environment.ambient_light_energy = 0.95
+		# Keep the original island brightness while retaining the cheaper web effects.
+		environment.ambient_light_color = Color(0.65, 0.72, 0.9, 1.0)
+		environment.ambient_light_energy = 1.44
+		environment.tonemap_exposure = 0.65
+		environment.tonemap_white = 6.0
 		world_environment.environment = environment
 	for light_node in _find_nodes_of_type(scene_root, "DirectionalLight3D"):
 		var directional_light := light_node as DirectionalLight3D
@@ -216,7 +220,7 @@ func _apply_profile() -> void:
 			if directional_light.name == "DirectionalLight3D":
 				directional_light.light_energy = 1.15
 			elif directional_light.name == "FillLight":
-				directional_light.light_energy = 0.32
+				directional_light.light_energy = 0.5
 
 	var water := get_node_or_null(water_path) as MeshInstance3D
 	if water != null:
@@ -535,9 +539,9 @@ func _apply_web_water(water: MeshInstance3D) -> void:
 	material.shader = WEB_WATER_SHADER
 	material.set_shader_parameter("wave_texture_a", WEB_WAVE_TEXTURE_A)
 	material.set_shader_parameter("wave_texture_b", WEB_WAVE_TEXTURE_B)
-	material.set_shader_parameter("WATER_COL", Color(0.07, 0.43, 0.86, 1.0))
-	material.set_shader_parameter("WATER2_COL", Color(0.025, 0.24, 0.68, 1.0))
-	material.set_shader_parameter("FOAM_COL", Color(0.78, 0.94, 0.98, 1.0))
+	material.set_shader_parameter("WATER_COL", Color(0.32, 0.68, 0.98, 1.0))
+	material.set_shader_parameter("WATER2_COL", Color(0.18, 0.54, 0.9, 1.0))
+	material.set_shader_parameter("FOAM_COL", Color(0.88, 0.98, 1.0, 1.0))
 	material.set_shader_parameter("distortion_speed", 1.0)
 	material.set_shader_parameter("tile", Vector2(34.0, 34.0))
 	material.set_shader_parameter("height", 0.05)

@@ -1904,3 +1904,10 @@ Follow-up:
 - Timestamp: 2026-07-21 17:44 Europe/Kyiv
 - Request: commit the completed changes, create a fresh Godot Web export, push to GitHub, and deploy to production.
 - Approval: explicit approval for commit, push, production deploy, and Godot runtime upload in the current conversation.
+
+### UR-2026-07-21-RESTORE-BRIGHT-WEB-LIGHTING
+- Timestamp: 2026-07-21 18:01 Europe/Kyiv
+- Request: compare the new island lighting with the previous brighter presentation and restore the brighter look from the reference.
+- Scope: restore the original ambient and fill-light levels inside the optimized Web profile, brighten the lightweight water palette, and retain the performance savings from disabled Web shadows/glow and static batching.
+- Verification: fresh Godot Web export, direct browser canvas capture, 60 FPS telemetry, and zero browser console errors.
+- Approval: covered by the active explicit commit, push, fresh Godot export, and production deploy request.
