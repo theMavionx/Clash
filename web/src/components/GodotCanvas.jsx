@@ -959,6 +959,12 @@ function getGodotPixelRatio() {
   const mem = navigator.deviceMemory || 4;
   const narrow = Math.min(window.innerWidth, window.innerHeight) <= 600;
   const cap = mem <= 4 || narrow ? 1.5 : 2;
+  if (isLocalDevHost()) {
+    const requested = Number(new URLSearchParams(window.location.search).get('godot_pixel_ratio'));
+    if (Number.isFinite(requested) && requested >= 0.5 && requested <= 2) {
+      return Math.min(raw, requested);
+    }
+  }
   return Math.min(raw, cap);
 }
 

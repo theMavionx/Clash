@@ -122,6 +122,9 @@ func _send_perf_data() -> void:
 			"draw_calls": Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME),
 			"objects": Performance.get_monitor(Performance.RENDER_TOTAL_OBJECTS_IN_FRAME),
 			"nodes": Performance.get_monitor(Performance.OBJECT_NODE_COUNT),
+			"process_ms": Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0,
+			"physics_ms": Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS) * 1000.0,
+			"navigation_ms": Performance.get_monitor(Performance.TIME_NAVIGATION_PROCESS) * 1000.0,
 		}
 	})
 	JavaScriptBridge.eval("window.onGodotMessage && window.onGodotMessage(%s)" % payload)

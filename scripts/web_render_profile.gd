@@ -1,0 +1,615 @@
+class_name WebRenderProfile
+extends Node
+
+const WEB_WATER_SHADER: Shader = preload("res://shaders/water_web.gdshader")
+const WEB_WAVE_TEXTURE_A: Texture2D = preload("res://textures/water/simple_wave1.png")
+const WEB_WAVE_TEXTURE_B: Texture2D = preload("res://textures/water/simple_wave2.png")
+const ISLAND_STATIC_BATCH: ArrayMesh = preload("res://generated/performance/pirate_island_static_batch.res")
+const ARCHER_TOWER_STATIC_BATCHES: Array[ArrayMesh] = [
+	preload("res://generated/performance/archer_tower_level_1_static_batch.res"),
+	preload("res://generated/performance/archer_tower_level_2_static_batch.res"),
+	preload("res://generated/performance/archer_tower_level_3_static_batch.res"),
+	preload("res://generated/performance/archer_tower_level_4_static_batch.res"),
+	preload("res://generated/performance/archer_tower_level_5_static_batch.res"),
+]
+const BUILDING_STATIC_BATCHES: Dictionary = {
+	"res://Model/Mine/1.glb": preload("res://generated/performance/mine_static_batch.res"),
+	"res://Model/Barn/1.glb": preload("res://generated/performance/barn_level_1_static_batch.res"),
+	"res://Model/Barn/2.glb": preload("res://generated/performance/barn_level_2_static_batch.res"),
+	"res://Model/Barn/3.glb": preload("res://generated/performance/barn_level_3_static_batch.res"),
+	"res://Model/Sawmill/1.glb": preload("res://generated/performance/sawmill_static_batch.res"),
+	"res://Model/Storage/Storage shed_1.glb": preload("res://generated/performance/storage_level_1_static_batch.res"),
+	"res://Model/Storage/Storage House_2.glb": preload("res://generated/performance/storage_level_2_static_batch.res"),
+	"res://Model/Storage/Business Building_3.glb": preload("res://generated/performance/storage_level_3_static_batch.res"),
+	"res://Model/Town_Hall/Town Hall Level 1.glb": preload("res://generated/performance/town_hall_level_1_static_batch.res"),
+	"res://Model/Town_Hall/Town Hall Level 2.glb": preload("res://generated/performance/town_hall_level_2_static_batch.res"),
+	"res://Model/Town_Hall/Town Hall Level 3.glb": preload("res://generated/performance/town_hall_level_3_static_batch.res"),
+	"res://Model/Town_Hall/Town Hall Level 4.glb": preload("res://generated/performance/town_hall_level_4_static_batch.res"),
+	"res://Model/Town_Hall/Town Hall Level 5.glb": preload("res://generated/performance/town_hall_level_5_static_batch.res"),
+}
+const DYNAMIC_NAME_PARTS: Array[String] = [
+	"anim", "armature", "skeleton", "ship", "sail", "flag", "tentacle",
+	"turret", "cannon", "barrel", "stand", "archer", "mage", "mortar", "projectile",
+	"minecart",
+]
+const ISLAND_SOURCE_PATH := "res://Model/Island/pirate_island.glb"
+const ARCHER_TOWER_SOURCE_PATHS: Array[String] = [
+	"res://Model/Archer_towers/tower_1.glb",
+	"res://Model/Archer_towers/towerplus_2.fbx",
+	"res://Model/Archer_towers/3,4,5.glb",
+]
+const DEFAULT_WEB_ANIMATION_HZ := 20.0
+static var _optimized_materials: Dictionary = {}
+static var _optimized_batch_meshes: Dictionary = {}
+static var _active_profile: WebRenderProfile
+
+var _static_batch_signature := ""
+var _static_batch_refresh_pending := false
+var _static_batch_refresh_delay_frames := 0
+var _static_multimesh_container: Node3D
+var _static_multimesh_groups: Dictionary = {}
+var _managed_animation_players: Dictionary = {}
+var _pending_animation_players: Array[WeakRef] = []
+var _animation_target_hz := DEFAULT_WEB_ANIMATION_HZ
+
+@export var force_enabled: bool = false
+@export var water_path: NodePath = NodePath("../Water")
+@export var island_visual_path: NodePath = NodePath("../Island/Visual")
+
+
+func _ready() -> void:
+	if not is_enabled():
+		set_process(false)
+		return
+	_active_profile = self
+	_animation_target_hz = _resolve_web_animation_hz()
+	get_tree().node_added.connect(_on_scene_node_added)
+	call_deferred("_register_existing_animation_players")
+	_schedule_static_multimesh_refresh()
+	call_deferred("_apply_profile")
+
+
+func _exit_tree() -> void:
+	if get_tree() != null and get_tree().node_added.is_connected(_on_scene_node_added):
+		get_tree().node_added.disconnect(_on_scene_node_added)
+	if _active_profile == self:
+		_active_profile = null
+
+
+func _process(_delta: float) -> void:
+	if not is_enabled():
+		return
+	_register_pending_animation_players()
+	if _static_batch_refresh_pending:
+		_static_batch_refresh_delay_frames -= 1
+		if _static_batch_refresh_delay_frames <= 0:
+			_static_batch_refresh_pending = false
+		_refresh_static_multimeshes()
+	_sync_static_multimesh_transforms()
+	_advance_budgeted_animations(_delta)
+
+
+func _schedule_static_multimesh_refresh() -> void:
+	_static_batch_refresh_pending = true
+	_static_batch_refresh_delay_frames = 2
+
+
+func _resolve_web_animation_hz() -> float:
+	var local_value := _local_query_value("perf_animation_hz")
+	if local_value.is_valid_float():
+		return clampf(local_value.to_float(), 10.0, 60.0)
+	return DEFAULT_WEB_ANIMATION_HZ
+
+
+func _on_scene_node_added(node: Node) -> void:
+	if node is AnimationPlayer:
+		_pending_animation_players.append(weakref(node))
+
+
+func _register_pending_animation_players() -> void:
+	if _pending_animation_players.is_empty():
+		return
+	var pending := _pending_animation_players
+	_pending_animation_players = []
+	for player_ref in pending:
+		var player := player_ref.get_ref() as AnimationPlayer
+		if is_instance_valid(player):
+			_register_animation_player(player)
+
+
+func _register_existing_animation_players() -> void:
+	var scene_root := get_tree().current_scene
+	if scene_root == null:
+		return
+	for raw_player in scene_root.find_children("*", "AnimationPlayer", true, false):
+		_register_animation_player(raw_player as AnimationPlayer)
+	print(
+		"[WEB_ANIMATION_BUDGET] hz=%.1f players=%d"
+		% [_animation_target_hz, _managed_animation_players.size()]
+	)
+
+
+func _register_animation_player(player: AnimationPlayer) -> void:
+	if player == null or not is_instance_valid(player) or not player.is_inside_tree():
+		return
+	var visual_root := _find_animation_visual_root(player)
+	if visual_root == null:
+		return
+	var key := player.get_instance_id()
+	if _managed_animation_players.has(key):
+		return
+	var interval := 1.0 / _animation_target_hz
+	var phase_slots := maxi(1, int(round(_animation_target_hz / 10.0)))
+	var phase := float(key % phase_slots) / float(phase_slots) * interval
+	player.callback_mode_process = AnimationMixer.ANIMATION_CALLBACK_MODE_PROCESS_MANUAL
+	_managed_animation_players[key] = {
+		"player_ref": weakref(player),
+		"elapsed": 0.0,
+		"interval": interval,
+		"until_sample": phase,
+		"animation": player.current_animation,
+	}
+
+
+func _find_animation_visual_root(player: AnimationPlayer) -> Node3D:
+	var current := player.get_parent()
+	while current != null:
+		if current is Node3D:
+			return current as Node3D
+		current = current.get_parent()
+	return null
+
+
+func _advance_budgeted_animations(delta: float) -> void:
+	if _managed_animation_players.is_empty():
+		return
+	var stale_keys: Array = []
+	for key in _managed_animation_players.keys():
+		var data := _managed_animation_players[key] as Dictionary
+		var player_ref := data.get("player_ref") as WeakRef
+		var player := player_ref.get_ref() as AnimationPlayer if player_ref != null else null
+		if (
+			not is_instance_valid(player)
+			or player.is_queued_for_deletion()
+			or not player.is_inside_tree()
+		):
+			stale_keys.append(key)
+			continue
+		var current_animation := player.current_animation
+		var elapsed := float(data.get("elapsed", 0.0))
+		var interval := float(data.get("interval", 1.0 / DEFAULT_WEB_ANIMATION_HZ))
+		var until_sample := float(data.get("until_sample", 0.0))
+		if current_animation != StringName(data.get("animation", StringName())):
+			data["animation"] = current_animation
+			elapsed = 0.0
+			until_sample = 0.0
+		elapsed += delta
+		until_sample -= delta
+		if until_sample <= 0.0:
+			player.advance(elapsed)
+			elapsed = 0.0
+			while until_sample <= 0.0:
+				until_sample += interval
+		data["elapsed"] = elapsed
+		data["until_sample"] = until_sample
+		_managed_animation_players[key] = data
+	for key in stale_keys:
+		_managed_animation_players.erase(key)
+
+
+func _apply_profile() -> void:
+	var scene_root := get_tree().current_scene
+	if scene_root == null:
+		return
+	for environment_node in _find_nodes_of_type(scene_root, "WorldEnvironment"):
+		var world_environment := environment_node as WorldEnvironment
+		if world_environment == null or world_environment.environment == null:
+			continue
+		var environment := world_environment.environment.duplicate(true) as Environment
+		environment.glow_enabled = false
+		environment.ambient_light_energy = 0.95
+		world_environment.environment = environment
+	for light_node in _find_nodes_of_type(scene_root, "DirectionalLight3D"):
+		var directional_light := light_node as DirectionalLight3D
+		if directional_light != null:
+			directional_light.shadow_enabled = false
+			if directional_light.name == "DirectionalLight3D":
+				directional_light.light_energy = 1.15
+			elif directional_light.name == "FillLight":
+				directional_light.light_energy = 0.32
+
+	var water := get_node_or_null(water_path) as MeshInstance3D
+	if water != null:
+		_apply_web_water(water)
+	var island_visual := get_node_or_null(island_visual_path)
+	if island_visual != null:
+		apply_static_batch_for_web(island_visual, ISLAND_SOURCE_PATH)
+		optimize_visual_for_web(island_visual)
+	_refresh_static_multimeshes()
+	if _has_local_probe_options():
+		await get_tree().create_timer(8.0).timeout
+		_apply_local_probe_options(scene_root)
+	print("[WEB_RENDER_PROFILE] applied lighting=directional glow=off shadows=off water=lightweight")
+
+
+static func is_enabled() -> bool:
+	return (
+		OS.has_feature("web")
+		or (
+			OS.is_debug_build()
+			and OS.get_environment("CLASH_FORCE_WEB_RENDER_PROFILE") == "1"
+		)
+	)
+
+
+static func optimize_visual_for_web(root: Node) -> void:
+	if root == null or not is_enabled():
+		return
+	_apply_vertex_lighting_recursive(root)
+
+
+static func apply_static_batch_for_web(root: Node, source_path: String, level: int = 0) -> bool:
+	if root == null or not is_enabled() or bool(root.get_meta("web_static_batch_applied", false)):
+		return false
+	var batch_mesh := _resolve_static_batch(source_path, level)
+	if batch_mesh == null:
+		return false
+	var animated_roots := _collect_animated_roots(root)
+	var hidden_meshes := 0
+	var hidden_surfaces := 0
+	for raw_mesh in root.find_children("*", "MeshInstance3D", true, false):
+		var mesh_instance := raw_mesh as MeshInstance3D
+		if not _is_static_candidate(mesh_instance, animated_roots):
+			continue
+		hidden_meshes += 1
+		if mesh_instance.mesh != null:
+			hidden_surfaces += mesh_instance.mesh.get_surface_count()
+		mesh_instance.visible = false
+	var batch_instance := MeshInstance3D.new()
+	batch_instance.name = "WebStaticBatch"
+	batch_instance.mesh = batch_mesh
+	batch_instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	root.add_child(batch_instance)
+	root.set_meta("web_static_batch_applied", true)
+	if is_instance_valid(_active_profile):
+		_active_profile._schedule_static_multimesh_refresh()
+		batch_instance.tree_exiting.connect(
+			_active_profile._schedule_static_multimesh_refresh,
+			CONNECT_ONE_SHOT
+		)
+	print(
+		"[WEB_STATIC_BATCH] source=%s level=%d hidden_meshes=%d hidden_surfaces=%d batch_surfaces=%d"
+		% [source_path, level, hidden_meshes, hidden_surfaces, batch_mesh.get_surface_count()]
+	)
+	return true
+
+
+static func _resolve_static_batch(source_path: String, level: int) -> ArrayMesh:
+	if source_path == ISLAND_SOURCE_PATH:
+		return ISLAND_STATIC_BATCH
+	if ARCHER_TOWER_SOURCE_PATHS.has(source_path):
+		var level_index := clampi(level, 1, ARCHER_TOWER_STATIC_BATCHES.size()) - 1
+		return ARCHER_TOWER_STATIC_BATCHES[level_index]
+	if BUILDING_STATIC_BATCHES.has(source_path):
+		return BUILDING_STATIC_BATCHES[source_path] as ArrayMesh
+	return null
+
+
+static func _collect_animated_roots(root: Node) -> Array[Node]:
+	var result: Array[Node] = []
+	for raw_player in root.find_children("*", "AnimationPlayer", true, false):
+		var player := raw_player as AnimationPlayer
+		if player == null:
+			continue
+		var animation_root := player.get_node_or_null(player.root_node)
+		if animation_root == null:
+			animation_root = player
+		for library_name in player.get_animation_library_list():
+			var library := player.get_animation_library(library_name)
+			if library == null:
+				continue
+			for animation_name in library.get_animation_list():
+				var animation := library.get_animation(animation_name)
+				if animation == null:
+					continue
+				for track_index in range(animation.get_track_count()):
+					var path_text := String(animation.track_get_path(track_index)).get_slice(":", 0)
+					if path_text.is_empty():
+						continue
+					var target := animation_root.get_node_or_null(NodePath(path_text))
+					if target != null and not result.has(target):
+						result.append(target)
+	return result
+
+
+static func _is_static_candidate(mesh_instance: MeshInstance3D, animated_roots: Array[Node]) -> bool:
+	if mesh_instance == null or mesh_instance.mesh == null:
+		return false
+	if not mesh_instance.skeleton.is_empty() or _has_skeleton_ancestor(mesh_instance):
+		return false
+	for animated_root in animated_roots:
+		if animated_root == mesh_instance or animated_root.is_ancestor_of(mesh_instance):
+			return false
+	var current: Node = mesh_instance
+	while current != null:
+		var lower_name := String(current.name).to_lower()
+		for part in DYNAMIC_NAME_PARTS:
+			if lower_name.contains(part):
+				return false
+		current = current.get_parent()
+	return true
+
+
+static func _has_skeleton_ancestor(node: Node) -> bool:
+	var current := node.get_parent()
+	while current != null:
+		if current is Skeleton3D:
+			return true
+		current = current.get_parent()
+	return false
+
+
+static func _apply_vertex_lighting_recursive(node: Node) -> void:
+	if node is MeshInstance3D:
+		var mesh_instance := node as MeshInstance3D
+		var mesh := mesh_instance.mesh
+		if mesh != null:
+			for surface_index in range(mesh.get_surface_count()):
+				var source_material := mesh_instance.get_surface_override_material(surface_index)
+				if source_material == null:
+					source_material = mesh.surface_get_material(surface_index)
+				if not source_material is BaseMaterial3D:
+					continue
+				var optimized := _get_vertex_lit_material(source_material as BaseMaterial3D)
+				if optimized != null:
+					mesh_instance.set_surface_override_material(surface_index, optimized)
+	for child in node.get_children():
+		_apply_vertex_lighting_recursive(child)
+
+
+static func _get_vertex_lit_material(source: BaseMaterial3D) -> BaseMaterial3D:
+	var key := source.get_instance_id()
+	if _optimized_materials.has(key):
+		return _optimized_materials[key] as BaseMaterial3D
+	var optimized := source.duplicate(true) as BaseMaterial3D
+	if optimized == null:
+		return null
+	optimized.shading_mode = BaseMaterial3D.SHADING_MODE_PER_VERTEX
+	_optimized_materials[key] = optimized
+	return optimized
+
+
+static func _get_vertex_lit_batch_mesh(source: ArrayMesh) -> ArrayMesh:
+	if source == null:
+		return null
+	var key := source.get_instance_id()
+	if _optimized_batch_meshes.has(key):
+		return _optimized_batch_meshes[key] as ArrayMesh
+	var optimized_mesh := source.duplicate(true) as ArrayMesh
+	if optimized_mesh == null:
+		return source
+	for surface_index in range(optimized_mesh.get_surface_count()):
+		var source_material := optimized_mesh.surface_get_material(surface_index)
+		if source_material is BaseMaterial3D:
+			optimized_mesh.surface_set_material(
+				surface_index,
+				_get_vertex_lit_material(source_material as BaseMaterial3D)
+			)
+	_optimized_batch_meshes[key] = optimized_mesh
+	return optimized_mesh
+
+
+func _refresh_static_multimeshes() -> void:
+	var scene_root := get_tree().current_scene as Node3D
+	if scene_root == null:
+		return
+	var grouped: Dictionary = {}
+	for raw_batch in scene_root.find_children("WebStaticBatch", "MeshInstance3D", true, false):
+		var batch := raw_batch as MeshInstance3D
+		if (
+			batch == null
+			or batch.is_queued_for_deletion()
+			or batch.mesh == null
+			or not batch.mesh is ArrayMesh
+		):
+			continue
+		var owner_root := batch.get_parent() as Node3D
+		if owner_root == null or owner_root.is_queued_for_deletion():
+			continue
+		var key := batch.mesh.resource_path
+		if key.is_empty():
+			key = "instance:%d" % batch.mesh.get_instance_id()
+		var entries: Array = grouped.get(key, [])
+		entries.append({"batch": batch, "owner": owner_root})
+		grouped[key] = entries
+
+	var signature_parts: Array[String] = []
+	var sorted_keys := grouped.keys()
+	sorted_keys.sort()
+	for raw_key in sorted_keys:
+		var key := str(raw_key)
+		var ids: Array[String] = []
+		for entry in grouped[key] as Array:
+			var batch := entry.get("batch") as MeshInstance3D
+			if is_instance_valid(batch) and not batch.is_queued_for_deletion():
+				ids.append(str(batch.get_instance_id()))
+		ids.sort()
+		signature_parts.append("%s:%s" % [key, ",".join(ids)])
+	var next_signature := "|".join(signature_parts)
+	if next_signature == _static_batch_signature:
+		return
+	_static_batch_signature = next_signature
+	_rebuild_static_multimeshes(scene_root, grouped, sorted_keys)
+
+
+func _rebuild_static_multimeshes(scene_root: Node3D, grouped: Dictionary, sorted_keys: Array) -> void:
+	for group_data in _static_multimesh_groups.values():
+		var old_instance_ref := group_data.get("instance_ref") as WeakRef
+		var old_instance := old_instance_ref.get_ref() as MultiMeshInstance3D if old_instance_ref != null else null
+		if is_instance_valid(old_instance):
+			old_instance.queue_free()
+	_static_multimesh_groups.clear()
+
+	for raw_batch in scene_root.find_children("WebStaticBatch", "MeshInstance3D", true, false):
+		var batch := raw_batch as MeshInstance3D
+		if batch != null and not batch.is_queued_for_deletion():
+			batch.visible = true
+
+	if _static_multimesh_container == null or not is_instance_valid(_static_multimesh_container):
+		_static_multimesh_container = Node3D.new()
+		_static_multimesh_container.name = "WebStaticMultiMeshes"
+		scene_root.add_child(_static_multimesh_container)
+
+	var grouped_instances := 0
+	for raw_key in sorted_keys:
+		var key := str(raw_key)
+		var entries := grouped.get(key, []) as Array
+		if entries.size() < 2:
+			continue
+		var first_batch := entries[0].get("batch") as MeshInstance3D
+		if first_batch == null or not first_batch.mesh is ArrayMesh:
+			continue
+		var multimesh := MultiMesh.new()
+		multimesh.transform_format = MultiMesh.TRANSFORM_3D
+		multimesh.mesh = _get_vertex_lit_batch_mesh(first_batch.mesh as ArrayMesh)
+		var multimesh_instance := MultiMeshInstance3D.new()
+		multimesh_instance.name = "WebStaticMultiMesh_%d" % _static_multimesh_groups.size()
+		multimesh_instance.multimesh = multimesh
+		multimesh_instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_static_multimesh_container.add_child(multimesh_instance)
+		var runtime_entries: Array[Dictionary] = []
+		for entry in entries:
+			var batch := entry.get("batch") as MeshInstance3D
+			var owner_root := entry.get("owner") as Node3D
+			if is_instance_valid(batch) and not batch.is_queued_for_deletion():
+				batch.visible = false
+			if is_instance_valid(batch) and is_instance_valid(owner_root):
+				runtime_entries.append({
+					"batch_ref": weakref(batch),
+					"owner_ref": weakref(owner_root),
+				})
+		multimesh.instance_count = runtime_entries.size()
+		_static_multimesh_groups[key] = {
+			"instance_ref": weakref(multimesh_instance),
+			"multimesh": multimesh,
+			"entries": runtime_entries,
+		}
+		grouped_instances += runtime_entries.size()
+	_sync_static_multimesh_transforms()
+	print(
+		"[WEB_STATIC_MULTIMESH] groups=%d instances=%d unique_batches=%d"
+		% [_static_multimesh_groups.size(), grouped_instances, grouped.size()]
+	)
+
+
+func _sync_static_multimesh_transforms() -> void:
+	if _static_multimesh_container == null or not is_instance_valid(_static_multimesh_container):
+		return
+	var container_inverse := _static_multimesh_container.global_transform.affine_inverse()
+	var hidden_transform := Transform3D(Basis.from_scale(Vector3.ZERO), Vector3.ZERO)
+	for group_data in _static_multimesh_groups.values():
+		var multimesh := group_data.get("multimesh") as MultiMesh
+		var entries := group_data.get("entries", []) as Array
+		if multimesh == null:
+			continue
+		for index in range(mini(multimesh.instance_count, entries.size())):
+			var entry := entries[index] as Dictionary
+			var batch_ref := entry.get("batch_ref") as WeakRef
+			var owner_ref := entry.get("owner_ref") as WeakRef
+			var batch := batch_ref.get_ref() as MeshInstance3D if batch_ref != null else null
+			var owner_root := owner_ref.get_ref() as Node3D if owner_ref != null else null
+			if (
+				is_instance_valid(batch)
+				and is_instance_valid(owner_root)
+				and not batch.is_queued_for_deletion()
+				and not owner_root.is_queued_for_deletion()
+				and owner_root.is_visible_in_tree()
+			):
+				multimesh.set_instance_transform(index, container_inverse * batch.global_transform)
+			else:
+				multimesh.set_instance_transform(index, hidden_transform)
+
+
+func _apply_web_water(water: MeshInstance3D) -> void:
+	var material := ShaderMaterial.new()
+	material.shader = WEB_WATER_SHADER
+	material.set_shader_parameter("wave_texture_a", WEB_WAVE_TEXTURE_A)
+	material.set_shader_parameter("wave_texture_b", WEB_WAVE_TEXTURE_B)
+	material.set_shader_parameter("WATER_COL", Color(0.07, 0.43, 0.86, 1.0))
+	material.set_shader_parameter("WATER2_COL", Color(0.025, 0.24, 0.68, 1.0))
+	material.set_shader_parameter("FOAM_COL", Color(0.78, 0.94, 0.98, 1.0))
+	material.set_shader_parameter("distortion_speed", 1.0)
+	material.set_shader_parameter("tile", Vector2(34.0, 34.0))
+	material.set_shader_parameter("height", 0.05)
+	material.set_shader_parameter("wave_size", Vector2(2.4, 2.4))
+	material.set_shader_parameter("wave_speed", 0.72)
+	material.set_shader_parameter("shore_fade_distance", 0.65)
+	material.set_shader_parameter("shallow_alpha", 0.16)
+	material.set_shader_parameter("deep_alpha", 0.98)
+	water.material_override = material
+	if water.mesh is PlaneMesh:
+		var source_plane := water.mesh as PlaneMesh
+		var web_plane := source_plane.duplicate(true) as PlaneMesh
+		web_plane.subdivide_width = mini(source_plane.subdivide_width, 24)
+		web_plane.subdivide_depth = mini(source_plane.subdivide_depth, 24)
+		water.mesh = web_plane
+
+
+func _find_nodes_of_type(node: Node, type_name: String) -> Array[Node]:
+	var result: Array[Node] = []
+	if node.is_class(type_name):
+		result.append(node)
+	for child in node.get_children():
+		result.append_array(_find_nodes_of_type(child, type_name))
+	return result
+
+
+func _has_local_probe_options() -> bool:
+	return (
+		_local_query_value("perf_water") == "off"
+		or _local_query_value("perf_animations") == "off"
+		or _local_query_value("perf_home_troops") == "off"
+		or _local_query_value("perf_building_process") == "off"
+		or _local_query_value("perf_ship_process") == "off"
+	)
+
+
+func _apply_local_probe_options(scene_root: Node) -> void:
+	var applied: Array[String] = []
+	if _local_query_value("perf_water") == "off":
+		var water := scene_root.get_node_or_null("Water") as MeshInstance3D
+		if water != null:
+			water.visible = false
+			applied.append("water")
+	if _local_query_value("perf_animations") == "off":
+		for raw_player in scene_root.find_children("*", "AnimationPlayer", true, false):
+			var player := raw_player as AnimationPlayer
+			if player != null:
+				player.active = false
+		applied.append("animations")
+	if _local_query_value("perf_home_troops") == "off":
+		for troop in get_tree().get_nodes_in_group("home_troops"):
+			if is_instance_valid(troop):
+				troop.set_process(false)
+		applied.append("home_troops")
+	if _local_query_value("perf_building_process") == "off":
+		for building_system in get_tree().get_nodes_in_group("building_systems"):
+			if is_instance_valid(building_system):
+				building_system.set_process(false)
+		applied.append("building_process")
+	if _local_query_value("perf_ship_process") == "off":
+		var ship := scene_root.get_node_or_null("MainShipController")
+		if ship != null:
+			ship.set_process(false)
+			applied.append("ship_process")
+	print("[LOCAL_PERF_PROBE] disabled=", applied)
+
+
+func _local_query_value(key: String) -> String:
+	if not OS.has_feature("web"):
+		return ""
+	var host := String(JavaScriptBridge.eval("window.location.hostname", true)).to_lower()
+	if host not in ["localhost", "127.0.0.1", "::1", "[::1]"]:
+		return ""
+	var script := "(new URL(window.location.href)).searchParams.get('%s') || ''" % key
+	return String(JavaScriptBridge.eval(script, true)).strip_edges().to_lower()

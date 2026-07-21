@@ -3,8 +3,9 @@
 
 shader_type spatial;
 
-render_mode depth_draw_always;
+render_mode blend_mix, depth_draw_never;
 
+uniform sampler2D depth_texture : hint_depth_texture, repeat_disable, filter_nearest;
 uniform vec4 WATER_COL : source_color = vec4(0.04, 0.38, 0.88, 1.0);
 uniform vec4 WATER2_COL : source_color = vec4(0.04, 0.35, 0.78, 1.0);
 uniform vec4 FOAM_COL : source_color = vec4(0.8125, 0.9609, 0.9648, 1.0);
@@ -13,6 +14,9 @@ uniform vec2 tile = vec2(5.0, 5.0);
 uniform float height = 2.0;
 uniform vec2 wave_size = vec2(2.0, 2.0);
 uniform float wave_speed = 1.5;
+uniform float shore_fade_distance = 0.65;
+uniform float shallow_alpha = 0.16;
+uniform float deep_alpha = 0.98;
 uniform bool paused = false;
 uniform float frozen_time = 0.0;
 
@@ -186,4 +190,16 @@ void fragment() {
     float t = paused ? frozen_time : TIME;
     vec2 uv = UV;
     ALBEDO = vec3(water(uv * tile, vec3(0, 1, 0), t * distortion_speed));
+
+    float scene_depth_raw = texture(depth_texture, SCREEN_UV).r;
+#if CURRENT_RENDERER == RENDERER_COMPATIBILITY
+    vec3 scene_ndc = vec3(SCREEN_UV, scene_depth_raw) * 2.0 - 1.0;
+#else
+    vec3 scene_ndc = vec3(SCREEN_UV * 2.0 - 1.0, scene_depth_raw);
+#endif
+    vec4 scene_view = INV_PROJECTION_MATRIX * vec4(scene_ndc, 1.0);
+    scene_view.xyz /= scene_view.w;
+    float depth_gap = max((-scene_view.z) - (-VERTEX.z), 0.0);
+    float deep_water = smoothstep(0.0, max(shore_fade_distance, 0.001), depth_gap);
+    ALPHA = mix(shallow_alpha, deep_alpha, deep_water);
 }

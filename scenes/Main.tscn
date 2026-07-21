@@ -9,6 +9,7 @@
 [ext_resource type="Script" uid="uid://l616bio6q488" path="res://scripts/island_ambient_animator.gd" id="18_island_anim"]
 [ext_resource type="Shader" uid="uid://7lwieihxbgm6" path="res://shaders/editor_grid_preview.gdshader" id="19_attack_grid"]
 [ext_resource type="Script" uid="uid://cmduqolu7578d" path="res://scripts/main_ship_controller.gd" id="20_main_ship"]
+[ext_resource type="Script" path="res://scripts/web_render_profile.gd" id="21_web_render"]
 
 [sub_resource type="BoxMesh" id="BoxMesh_r0du0"]
 
@@ -70,11 +71,11 @@ transform = Transform3D(-0.078772314, 0, -0.99689263, 0, 1, 0, 0.99689263, 0, -0
 script = ExtResource("18_island_anim")
 
 [node name="Visual" parent="Island" unique_id=224559130 instance=ExtResource("1_uu6xs")]
-transform = Transform3D(0.04, 0, 0, 0, 0.04, 0, 0, 0, 0.04, 0.304064, -0.303565, 1.994608)
+transform = Transform3D(0.048, 0, 0, 0, 0.04, 0, 0, 0, 0.048, 0.304064, -0.303565, 1.994608)
 metadata/_edit_lock_ = true
 
 [node name="gridPlane" type="MeshInstance3D" parent="Island" unique_id=2081397116]
-transform = Transform3D(0.013980418, 0, 3.2999754, 0, 0.10000002, 0, -3.5444183, 0, 0.013016254, 0.30954075, 0.071223736, 1.6492015)
+transform = Transform3D(0.016776502, 0, 3.9599705, 0, 0.10000002, 0, -4.253302, 0, 0.015619505, 0.30954075, 0.071223736, 1.6492015)
 mesh = SubResource("BoxMesh_r0du0")
 
 [node name="shipPlane" type="MeshInstance3D" parent="Island" unique_id=1227187679]
@@ -98,16 +99,18 @@ environment = SubResource("Environment_cm0pq")
 
 [node name="CameraRig" type="Node3D" parent="." unique_id=56277757]
 script = ExtResource("2_cam")
-pan_limit_min = Vector3(-2, 0, -2)
-pan_limit_max = Vector3(2, 0, 2)
+max_zoom = 8.0
+pan_limit_min = Vector3(-2.5, 0, -2.5)
+pan_limit_max = Vector3(2.5, 0, 2.5)
 camera_pitch = 55.0
 
 [node name="PitchPivot" type="Node3D" parent="CameraRig" unique_id=1993174817]
 transform = Transform3D(1, 0, 0, 0, 0.5735764, 0.819152, 0, -0.819152, 0.5735764, 0, 0, 0)
 
 [node name="Camera3D" type="Camera3D" parent="CameraRig/PitchPivot" unique_id=138786099]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 4.852085)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 7.3)
 current = true
+fov = 58.0
 
 [node name="FillLight" type="DirectionalLight3D" parent="." unique_id=1825883239]
 transform = Transform3D(-0.8660254, 0.25000003, 0.43301275, 0, 0.8660254, -0.5, -0.50000006, -0.4330127, -0.75, 0, 0, 0)
@@ -143,3 +146,6 @@ create_ui = false
 
 [node name="Warmup" type="Node3D" parent="." unique_id=1569715766]
 script = ExtResource("17_warmup")
+
+[node name="WebRenderProfile" type="Node" parent="."]
+script = ExtResource("21_web_render")

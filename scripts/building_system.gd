@@ -2540,6 +2540,7 @@ func _load_buildings_from_server(server_buildings: Array) -> void:
 					_apply_town_hall_flag_url(model, str(b.get("town_hall_flag_url", b.get("flag_url", ""))))
 				if building_type == "archer_tower":
 					_apply_archer_tower_level_visuals(model, level)
+				_apply_web_render_profile(model, scene_path, level)
 
 		# Position on grid
 		var sx = def.cells.x * cell_size
@@ -3327,6 +3328,7 @@ func _create_placed_building(def: Dictionary) -> Node3D:
 			_apply_building_albedo(model, def)
 			if current_building_id == "archer_tower":
 				_apply_archer_tower_level_visuals(model, 1)
+			_apply_web_render_profile(model, _scene_path, 1)
 			return node
 	# Fallback: cube if no model
 	var mesh_inst = MeshInstance3D.new()
@@ -4222,6 +4224,7 @@ func _run_upgrade_sequence(b: Dictionary, def: Dictionary, server_new_level: int
 				_apply_town_hall_flag_url(new_model, str(b.get("town_hall_flag_url", "")))
 			if b.id == "archer_tower":
 				_apply_archer_tower_level_visuals(new_model, b.level)
+			_apply_web_render_profile(new_model, scene_path, b.level)
 			# Recreate HP bar (old one was freed with model children)
 			var hp_bar_data = _create_building_hp_bar(model, def)
 			b["hp_bar"] = hp_bar_data.bar
@@ -4324,6 +4327,13 @@ func _get_model_scale(def: Dictionary, level: int = 1) -> float:
 
 func _get_model_rotation_y(def: Dictionary) -> float:
 	return float(def.get("model_rotation_y", 270.0)) + BUILDING_CAMERA_FACING_YAW_DEGREES
+
+
+func _apply_web_render_profile(model: Node, scene_path: String, level: int) -> void:
+	if model == null or not WebRenderProfile.is_enabled():
+		return
+	WebRenderProfile.apply_static_batch_for_web(model, scene_path, level)
+	WebRenderProfile.optimize_visual_for_web(model)
 
 
 func _get_building_visual_model(building_node: Node3D) -> Node3D:
@@ -4901,6 +4911,7 @@ func _apply_building_level_visuals_for_test(b: Dictionary, def: Dictionary) -> v
 				_apply_town_hall_flag_url(model, str(b.get("town_hall_flag_url", "")))
 			if building_id == "archer_tower":
 				_apply_archer_tower_level_visuals(model, lvl)
+			_apply_web_render_profile(model, scene_path, lvl)
 
 			var hp_bar_data = _create_building_hp_bar(node, def)
 			b["hp_bar"] = hp_bar_data.bar

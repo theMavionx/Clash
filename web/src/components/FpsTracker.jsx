@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, memo } from 'react';
+import { useEffect, useState, memo } from 'react';
 
 const FPS_DROP_THRESHOLD = 40;
 const FPS_CRITICAL_THRESHOLD = 25;
@@ -23,7 +23,19 @@ function FpsTracker() {
     : '#ff4444';
 
   return (
-    <div style={styles.container}>
+    <div
+      id="godot-perf-tracker"
+      data-fps={perf.fps ?? ''}
+      data-draw-calls={perf.draw_calls ?? ''}
+      data-objects={perf.objects ?? ''}
+      data-nodes={perf.nodes ?? ''}
+      data-state={perf.state ?? ''}
+      data-troops={perf.troops ?? ''}
+      data-process-ms={perf.process_ms ?? ''}
+      data-physics-ms={perf.physics_ms ?? ''}
+      data-navigation-ms={perf.navigation_ms ?? ''}
+      style={styles.container}
+    >
       <span style={{ ...styles.fpsNumber, color: fpsColor }}>{perf.fps}</span>
     </div>
   );

@@ -1888,3 +1888,19 @@ Follow-up:
 - Request: fix battles being rejected with `Troop deployment is outside the attack grid` after the Godot attack zone changed, and remove the need to manually duplicate every grid edit in the server.
 - Scope: make the Godot scene the single source for server-authoritative combat grid geometry, keep a validated generated fallback, update local watchers/deploy checks, and verify the current manual troop deployment end to end.
 - No commit, push, production deploy, or production database mutation requested.
+### UR-2026-07-21-WEB-RENDER-PERFORMANCE-PASS
+- Timestamp: 2026-07-21 11:41 Europe/Kyiv
+- Request: experimentally optimize the Godot Web game toward high FPS while preserving every animation, turret rotation, flag, ship, and combat behavior; keep the water animated, allow batching only for proven-static visuals, do not change resource icons or attack/server logic, and verify each step with scripts, browser screenshots, performance telemetry, and combat checks.
+- Scope: establish a clean baseline, inventory dynamic nodes, add a reversible Web render profile, simplify the moving water shader, pre-bake safe static visual batches, export locally, and prove visual/combat parity before any production promotion.
+- No commit, push, production deploy, or production database mutation requested.
+
+### UR-2026-07-21-ISLAND-GROUND-AND-BUILD-GRID
+- Timestamp: 2026-07-21 17:20 Europe/Kyiv
+- Request: fix all buildings appearing sunk into the enlarged island and restore the placement/movement grid visibility.
+- Scope: preserve the enlarged horizontal island and grid footprint while restoring the island's original vertical scale so the terrain, buildings, and grid share the same world height in Main and TestMain.
+- Verification: Godot scene import, generated combat-grid regression, final Web export, and browser checks with a temporary always-visible build grid.
+
+### UR-2026-07-21-COMMIT-DEPLOY-WEB-RENDER
+- Timestamp: 2026-07-21 17:44 Europe/Kyiv
+- Request: commit the completed changes, create a fresh Godot Web export, push to GitHub, and deploy to production.
+- Approval: explicit approval for commit, push, production deploy, and Godot runtime upload in the current conversation.
