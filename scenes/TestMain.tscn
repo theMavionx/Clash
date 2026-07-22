@@ -67,7 +67,7 @@ visible = false
 mesh = SubResource("BoxMesh_r0du0")
 
 [node name="shipPlane" type="MeshInstance3D" parent="Island" unique_id=395846292]
-transform = Transform3D(0.33767048, -0.018849766, 0.8648041, -3.458169e-08, 0.040668998, 0.12414698, -3.16973, -0.00061948446, 0.028434202, 2.123196, 0.023292989, 1.8100585)
+transform = Transform3D(0.029619157, 0.0021351168, 0.86168206, 0.035344727, 0.043082587, -0.21062225, -3.6703281, 0.0005230724, 0.003157355, 2.784562, 0.023292989, 1.6345824)
 material_override = SubResource("ShaderMaterial_attack_grid")
 mesh = SubResource("BoxMesh_r0du0")
 

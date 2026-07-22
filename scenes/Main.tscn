@@ -9,8 +9,8 @@
 [ext_resource type="Script" uid="uid://l616bio6q488" path="res://scripts/island_ambient_animator.gd" id="18_island_anim"]
 [ext_resource type="Shader" uid="uid://7lwieihxbgm6" path="res://shaders/editor_grid_preview.gdshader" id="19_attack_grid"]
 [ext_resource type="Script" uid="uid://cmduqolu7578d" path="res://scripts/main_ship_controller.gd" id="20_main_ship"]
-[ext_resource type="Script" path="res://scripts/web_render_profile.gd" id="21_web_render"]
-[ext_resource type="Script" path="res://scripts/ambient_shark.gd" id="22_ambient_shark"]
+[ext_resource type="Script" uid="uid://b7xdngybiry1h" path="res://scripts/web_render_profile.gd" id="21_web_render"]
+[ext_resource type="Script" uid="uid://dm5kmux1bmaua" path="res://scripts/ambient_shark.gd" id="22_ambient_shark"]
 
 [sub_resource type="BoxMesh" id="BoxMesh_r0du0"]
 
@@ -66,7 +66,7 @@ transform = Transform3D(0.016776502, 0, 3.9599705, 0, 0.10000002, 0, -4.253302, 
 mesh = SubResource("BoxMesh_r0du0")
 
 [node name="shipPlane" type="MeshInstance3D" parent="Island" unique_id=1227187679]
-transform = Transform3D(0.33767048, -0.018849766, 0.8648041, -3.458169e-08, 0.040668998, 0.12414698, -3.16973, -0.00061948446, 0.028434202, 2.123196, 0.023292989, 1.8100585)
+transform = Transform3D(0.029619157, 0.0021351168, 0.86168206, 0.035344727, 0.043082587, -0.21062225, -3.6703281, 0.0005230724, 0.003157355, 2.784562, 0.023292989, 1.6345824)
 material_override = SubResource("ShaderMaterial_attack_grid")
 mesh = SubResource("BoxMesh_r0du0")
 
@@ -89,7 +89,6 @@ script = ExtResource("2_cam")
 max_zoom = 8.0
 pan_limit_min = Vector3(-3, 0, -3)
 pan_limit_max = Vector3(3, 0, 3)
-camera_pitch = 55.0
 
 [node name="PitchPivot" type="Node3D" parent="CameraRig" unique_id=1993174817]
 transform = Transform3D(1, 0, 0, 0, 0.5735764, 0.819152, 0, -0.819152, 0.5735764, 0, 0, 0)
@@ -134,8 +133,8 @@ create_ui = false
 [node name="Warmup" type="Node3D" parent="." unique_id=1569715766]
 script = ExtResource("17_warmup")
 
-[node name="WebRenderProfile" type="Node" parent="."]
+[node name="WebRenderProfile" type="Node" parent="." unique_id=879594835]
 script = ExtResource("21_web_render")
 
-[node name="AmbientShark" type="Node3D" parent="."]
+[node name="AmbientShark" type="Node3D" parent="." unique_id=807560671]
 script = ExtResource("22_ambient_shark")

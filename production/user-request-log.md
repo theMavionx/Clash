@@ -1959,3 +1959,9 @@ Follow-up:
 - Request: commit and deploy the fix for the red attack deployment zone being absent in production.
 - Scope: align the production `Main.tscn` attack plane with the verified visible TestMain transform, regenerate the server-authoritative combat-grid snapshot, update the stale-grid regression fixture, retain the approved wider camera pan bounds, include all other currently tracked working-tree changes at the owner's explicit follow-up request, create a fresh Godot Web export, push `main`, and deploy atomically to production.
 - Approval: explicit owner authorization for commit, push, fresh Godot export, and production deploy in this conversation.
+
+### UR-2026-07-22-ATTACK-GRID-FINAL-DEPLOY
+- Timestamp: 2026-07-22 Europe/Kyiv
+- Request: preserve the owner's final attack-zone placement from Godot and upload it to production.
+- Scope: mirror the final `Main.tscn` attack-plane transform into TestMain, regenerate the server-authoritative combat-grid snapshot, verify deployment and replay behavior, create a fresh Godot Web export, commit and push the synchronized release, and deploy atomically to production.
+- Approval: explicit owner authorization to upload the finalized attack zone to production; commit and push are required by the standard deployment pipeline so server validation and the Godot client use the same geometry.

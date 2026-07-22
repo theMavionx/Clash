@@ -9,12 +9,12 @@ const {
   isWorldPointInsideGrid,
 } = require('./combat_grid_config');
 
-const OLD_ATTACK_GRID = Object.freeze({
-  grid_extent_x: 3.175289888921,
-  grid_extent_z: 0.887055510563,
-  grid_center_x: -1.833000175204,
-  grid_center_z: 2.355752512373,
-  grid_rotation: -0.083332935828,
+const NARROW_MISALIGNED_ATTACK_GRID = Object.freeze({
+  grid_extent_x: 3.187665220327,
+  grid_extent_z: 0.874132199826,
+  grid_center_x: -1.971683040514,
+  grid_center_z: 1.974015947925,
+  grid_rotation: -0.184983466728,
 });
 
 function localToWorld(grid, localX, localZ) {
@@ -38,13 +38,18 @@ assert.equal(
 );
 const currentOnlyPoint = localToWorld(
   attackGrid,
-  -attackGrid.grid_extent_x * 0.5 + 0.001,
+  attackGrid.grid_extent_x * 0.5 - 0.001,
   -attackGrid.grid_extent_z * 0.5 + 0.001,
 );
 assert.equal(
-  isWorldPointInsideGrid(OLD_ATTACK_GRID, currentOnlyPoint.x, currentOnlyPoint.z, 0.06),
+  isWorldPointInsideGrid(
+    NARROW_MISALIGNED_ATTACK_GRID,
+    currentOnlyPoint.x,
+    currentOnlyPoint.z,
+    0.06,
+  ),
   false,
-  'regression fixture must reproduce rejection by the stale server grid',
+  'regression fixture must reject a point that only fits the restored attack grid',
 );
 
 const insideEdge = localToWorld(

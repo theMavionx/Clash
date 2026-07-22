@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "source_scene": "scenes/Main.tscn",
-  "config_sha256": "051137000abb327d87ba3192b117c8562251b261e95d1805f8b9c5c7f7785185",
+  "config_sha256": "ea6b056dcf7afe286da7efcc5428fb7d2737309e3c1f6c9f5b4deeb5b71c2020",
   "sources": {
     "0": "BuildingSystem -> Island/gridPlane",
     "1": "retired compatibility grid",
@@ -31,12 +31,12 @@
     "2": {
       "grid_width": 27,
       "grid_height": 5,
-      "cell_size": 0.118061674827,
-      "grid_extent_x": 3.187665220327,
-      "grid_extent_z": 0.874132199826,
-      "grid_center_x": -1.971683040514,
-      "grid_center_z": 1.974015947925,
-      "grid_rotation": -0.184983466728
+      "cell_size": 0.1359488063,
+      "grid_extent_x": 3.670617770109,
+      "grid_extent_z": 0.887055617514,
+      "grid_center_x": -1.848849539904,
+      "grid_center_z": 2.647149497506,
+      "grid_rotation": -0.086445624337
     }
   }
 }
