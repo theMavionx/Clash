@@ -469,6 +469,9 @@ static func _get_buildings_cached() -> Array:
 		if tree:
 			for bs in tree.get_nodes_in_group("building_systems"):
 				for b in bs.placed_buildings:
+					var bdef: Dictionary = bs.building_defs.get(b.get("id", ""), {})
+					if bool(bdef.get("non_targetable", false)):
+						continue
 					if b.get("hp", 0) > 0 and is_instance_valid(b.get("node")):
 						# Reuse pooled entries to avoid Dictionary allocation every frame
 						var entry: Dictionary
@@ -1093,6 +1096,48 @@ func take_damage(dmg: int) -> void:
 		set_process(false)
 		_report_death()
 		queue_free()
+
+
+## Applies the same level-based shark trap damage as the server replay. A
+## surviving heavy troop stays active; a lethal hit keeps a short visual shell
+## so the bite and disappearance remain readable.
+func damage_by_shark_trap(damage: int, visual_duration: float = 0.68) -> bool:
+	if _is_dead:
+		return false
+	var applied_damage := maxi(1, damage)
+	var hp_before := hp
+	hp = maxi(0, hp - applied_damage)
+	_record_replay_telemetry("shark_trap_damage", {
+		"damage": applied_damage,
+		"hp_before": hp_before,
+		"hp_after": hp,
+	})
+	_update_hp_bar()
+	if hp > 0:
+		if anim_player != null and anim_player.has_animation("GetHit"):
+			anim_player.play("GetHit", 0.05, 1.15)
+		return false
+	_is_dead = true
+	_record_replay_telemetry("troop_death", {"damage": applied_damage, "source": "shark_trap"})
+	if is_in_group("troops"):
+		remove_from_group("troops")
+	invalidate_combat_lists()
+	if has_method("_clear_owned_projectiles"):
+		call("_clear_owned_projectiles")
+	set_process(false)
+	set_physics_process(false)
+	_report_death()
+	var disappear_time := 0.18
+	var tween := create_tween()
+	tween.tween_interval(maxf(0.0, visual_duration - disappear_time))
+	tween.tween_property(self, "scale", Vector3.ZERO, disappear_time).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_IN)
+	tween.tween_callback(queue_free)
+	return true
+
+
+## Compatibility wrapper for older replay/client call sites.
+func eliminate_by_shark_trap(visual_duration: float = 0.68) -> void:
+	damage_by_shark_trap(maxi(1, hp), visual_duration)
 
 
 ## Records this troop's death for a single end-of-battle UI report. Persistent

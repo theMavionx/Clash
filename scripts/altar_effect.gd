@@ -61,7 +61,6 @@ func _setup() -> void:
 	_effect_span = maxf(0.001, maxf(bounds.size.x, bounds.size.z))
 	_collect_altar_particles()
 	_create_spark_shells()
-	_create_magic_ring(bounds)
 	set_process(not _sparks.is_empty() or is_instance_valid(_ring))
 
 

@@ -1378,6 +1378,7 @@ const ADMIN_BUILDING_TOOL_DEFS = [
   { type: 'mortar', label: 'Mortar', max: 1 },
   { type: 'port', label: 'Port', max: 3 },
   { type: 'sawmill', label: 'Sawmill', max: 5 },
+  { type: 'shark_trap', label: 'Shark Trap', max: 2 },
   { type: 'storage', label: 'Storage', max: 5 },
   { type: 'tombstone', label: 'Tombstone', max: 4 },
   { type: 'town_hall', label: 'Town Hall', max: 5 },

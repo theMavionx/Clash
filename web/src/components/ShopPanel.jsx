@@ -17,6 +17,7 @@ import imgArcherTower from '../assets/buildings/archertower.png';
 import imgStorage from '../assets/buildings/storage.png';
 import imgMageTower from '../assets/buildings/magetower.png';
 import imgMortar from '../assets/buildings/mortar.png';
+import imgSharkTrap from '../assets/buildings/sharktrap.png';
 import imgAltar from '../assets/units/altar.png';
 
 const ALTAR_PRICE_LABEL = '$15.00';
@@ -40,6 +41,7 @@ const DESC_MAP = {
   archertower: 'Ranged defense',
   mage_tower: 'Casts splash magic at enemies',
   mortar: 'Long-range splash defense',
+  shark_trap: 'Eliminates one ground troop; damages Demon King',
   altar: 'Onchain base boost',
 };
 
@@ -54,6 +56,7 @@ const CATEGORY_MAP = {
   archertower: 'Defense',
   mage_tower: 'Defense',
   mortar: 'Defense',
+  shark_trap: 'Defense',
   altar: 'Economy',
   port: 'Military',
   town_hall: 'Economy',
@@ -72,6 +75,7 @@ const THUMBNAIL_MAP = {
   archertower: imgArcherTower,
   mage_tower: imgMageTower,
   mortar: imgMortar,
+  shark_trap: imgSharkTrap,
   storage: imgStorage,
   altar: imgAltar,
 };
@@ -84,6 +88,7 @@ const THUMBNAIL_SCALE_MAP = {
   archertower: 1.4,
   mage_tower: 1.2,
   mortar: 1.15,
+  shark_trap: 1.18,
   altar: 1.28,
 };
 

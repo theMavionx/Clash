@@ -1,9 +1,7 @@
 class_name WebRenderProfile
 extends Node
 
-const WEB_WATER_SHADER: Shader = preload("res://shaders/water_web.gdshader")
-const WEB_WAVE_TEXTURE_A: Texture2D = preload("res://textures/water/simple_wave1.png")
-const WEB_WAVE_TEXTURE_B: Texture2D = preload("res://textures/water/simple_wave2.png")
+const STABLE_WATER_MATERIAL: ShaderMaterial = preload("res://shaders/water_stable.tres")
 const ISLAND_STATIC_BATCH: ArrayMesh = preload("res://generated/performance/pirate_island_static_batch.res")
 const ARCHER_TOWER_STATIC_BATCHES: Array[ArrayMesh] = [
 	preload("res://generated/performance/archer_tower_level_1_static_batch.res"),
@@ -207,20 +205,22 @@ func _apply_profile() -> void:
 			continue
 		var environment := world_environment.environment.duplicate(true) as Environment
 		environment.glow_enabled = false
-		# Keep the original island brightness while retaining the cheaper web effects.
-		environment.ambient_light_color = Color(0.65, 0.72, 0.9, 1.0)
+		# Balance material readability against highlight clipping in the web build.
+		environment.ambient_light_color = Color(0.72, 0.78, 0.92, 1.0)
 		environment.ambient_light_energy = 1.44
-		environment.tonemap_exposure = 0.65
-		environment.tonemap_white = 6.0
+		environment.tonemap_exposure = 0.9
+		environment.tonemap_white = 7.0
+		environment.ssao_enabled = false
+		environment.ssil_enabled = false
 		world_environment.environment = environment
 	for light_node in _find_nodes_of_type(scene_root, "DirectionalLight3D"):
 		var directional_light := light_node as DirectionalLight3D
 		if directional_light != null:
 			directional_light.shadow_enabled = false
 			if directional_light.name == "DirectionalLight3D":
-				directional_light.light_energy = 1.15
+				directional_light.light_energy = 1.41
 			elif directional_light.name == "FillLight":
-				directional_light.light_energy = 0.5
+				directional_light.light_energy = 0.61
 
 	var water := get_node_or_null(water_path) as MeshInstance3D
 	if water != null:
@@ -535,21 +535,7 @@ func _sync_static_multimesh_transforms() -> void:
 
 
 func _apply_web_water(water: MeshInstance3D) -> void:
-	var material := ShaderMaterial.new()
-	material.shader = WEB_WATER_SHADER
-	material.set_shader_parameter("wave_texture_a", WEB_WAVE_TEXTURE_A)
-	material.set_shader_parameter("wave_texture_b", WEB_WAVE_TEXTURE_B)
-	material.set_shader_parameter("WATER_COL", Color(0.32, 0.68, 0.98, 1.0))
-	material.set_shader_parameter("WATER2_COL", Color(0.18, 0.54, 0.9, 1.0))
-	material.set_shader_parameter("FOAM_COL", Color(0.88, 0.98, 1.0, 1.0))
-	material.set_shader_parameter("distortion_speed", 1.0)
-	material.set_shader_parameter("tile", Vector2(34.0, 34.0))
-	material.set_shader_parameter("height", 0.05)
-	material.set_shader_parameter("wave_size", Vector2(2.4, 2.4))
-	material.set_shader_parameter("wave_speed", 0.72)
-	material.set_shader_parameter("shore_fade_distance", 0.65)
-	material.set_shader_parameter("shallow_alpha", 0.16)
-	material.set_shader_parameter("deep_alpha", 0.98)
+	var material := STABLE_WATER_MATERIAL.duplicate(true) as ShaderMaterial
 	water.material_override = material
 	if water.mesh is PlaneMesh:
 		var source_plane := water.mesh as PlaneMesh

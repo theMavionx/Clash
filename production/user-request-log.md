@@ -1911,3 +1911,45 @@ Follow-up:
 - Scope: restore the original ambient and fill-light levels inside the optimized Web profile, brighten the lightweight water palette, and retain the performance savings from disabled Web shadows/glow and static batching.
 - Verification: fresh Godot Web export, direct browser canvas capture, 60 FPS telemetry, and zero browser console errors.
 - Approval: covered by the active explicit commit, push, fresh Godot export, and production deploy request.
+
+### UR-2026-07-22-HIDE-STARTUP-WARMUP
+- Timestamp: 2026-07-22 Europe/Kyiv
+- Request: fix the startup warmup becoming visible when entering the game.
+- Scope: keep the React loading cover active until both the home island state and the Godot warmup are complete, while retaining the existing timeout recovery so startup cannot hang permanently.
+- No commit, push, production deploy, or production database mutation requested.
+
+### UR-2026-07-22-AMBIENT-SHARK-WATER-ROUTE
+- Timestamp: 2026-07-22 Europe/Kyiv
+- Request: make the ambient shark swim along an irregular route instead of a fixed circle, keep it visibly submerged under the transparent water, and prevent it from touching the island or entering the attack-zone shoreline.
+- Scope: anchor movement to the real island and water level, generate randomized smooth route segments with varying radius, direction, speed, and depth, and reject every segment that intersects either the island keepout or the transformed `shipPlane` attack grid.
+- Verification: two randomized 720-frame Godot runtime tests pass with varying route radius, continuous speed, at least 0.188 units of submersion, and no keepout intersections; a fresh Web export and browser capture sequence confirm the shark moves between different outer-water positions, remains tinted through the water, and stays clear of the shoreline.
+- No commit, push, production deploy, or production database mutation requested.
+
+### UR-2026-07-22-SMOOTH-AMBIENT-SHARK
+- Timestamp: 2026-07-22 Europe/Kyiv
+- Request: remove visible jerks from the ambient shark movement.
+- Root cause: every randomized route segment immediately replaced the previous segment speed, while direct `look_at` calls applied heading changes without turn inertia.
+- Scope: advance the route by physical distance with bounded acceleration, preserve leftover movement across segment boundaries, smooth heading changes with frame-rate-independent angular response, and substep browser frame stalls without weakening shoreline or attack-grid checks.
+- Verification: two randomized 720-frame Godot tests pass with maximum reported acceleration at or below `0.182 units/s2` and maximum one-frame heading change of `0.1 degrees`; the fresh Web export runs at 59-60 FPS and sequential browser captures show continuous movement through the visible water lane without position or heading snaps.
+- No commit, push, production deploy, or production database mutation requested.
+
+### UR-2026-07-22-UNIFIED-STABLE-WATER-MATERIAL
+- Timestamp: 2026-07-22 Europe/Kyiv
+- Request: fix Godot showing the old water shader while the browser uses the newer stable water shader.
+- Root cause: Main and TestMain referenced the legacy `water.gdshader`, while `web_render_profile.gd` replaced it with `water_web.gdshader` only in Web builds.
+- Scope: introduce one shared `water_stable.tres` material for editor, native, and Web; preserve the existing stable Web palette, motion, transparency, and wave textures; keep only the Web-specific mesh subdivision reduction in the render profile.
+- Verification: the focused parity test confirms the editor material and post-profile Web material use the same shader, textures, and parameters, while Web subdivisions remain capped at 24; full Godot project parsing passes.
+- No commit, push, production deploy, or production database mutation requested.
+
+### UR-2026-07-22-SHARK-TRAP-FIVE-LEVELS
+- Timestamp: 2026-07-22 Europe/Kyiv
+- Request: make the shark trap affect only ground troops, replace the jumping shark with a vertical submerged head-and-bite animation, add five Town Hall-gated damage levels, and show the ambient swimming shark only on bases that own a trap.
+- Scope: add level damage `[500, 750, 1050, 1450, 2000]`, preserve one trigger per trap, ignore flying troops, instantly eliminate any ordinary ground troop, significantly damage but not instantly kill a same-level Demon King, enforce the generic `trap level <= Town Hall level` upgrade rule, align the bite head to the triggering troop rather than the trap center, and keep the ambient shark as a conditional visual hint.
+- Verification: server simulations pass all five levels, level-1 instant kill against a level-5 ordinary Knight, flying-unit immunity, Demon King survival (`1024 HP` at level 5), and two-trap independence; the Godot runtime test activates the trap with an offset level-5 Knight, validates head-to-target alignment and instant death, captures owner/rise/bite/sink/air-ignore/Demon King/ambient states, and passes with no script/runtime errors; fresh Godot Web export and Vite production build pass.
+- No commit, push, production deploy, or production database mutation requested.
+
+### UR-2026-07-22-SHARK-TRAP-RELEASE
+- Timestamp: 2026-07-22 Europe/Kyiv
+- Request: confirm that attackers cannot see the Shark Trap before activation, then create a fresh Godot export, commit, push, and deploy the completed release to production.
+- Scope: add an explicit runtime concealment assertion for both the shark model and its water marker, rerun combat/server/UI checks, export the current Godot Web runtime, commit all reviewed current release files while excluding local capture artifacts, push `main`, and run the standard atomic production deployment.
+- Approval: explicit owner authorization for commit, push, fresh Godot export, and production deploy in this conversation.

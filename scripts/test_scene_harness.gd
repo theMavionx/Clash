@@ -39,6 +39,7 @@ const MAX_VILLAGE_BUILD_ORDER: Array[String] = [
 	"altar",
 	"archer_tower",
 	"turret",
+	"shark_trap",
 	"mage_tower",
 	"mortar",
 ]
@@ -51,6 +52,7 @@ const TEST_TH_MAX_COUNT: Dictionary = {
 	"tombstone": [0, 1, 3, 3, 3],
 	"altar": [1, 1, 1, 1, 1],
 	"turret": [0, 0, 3, 3, 3],
+	"shark_trap": [0, 0, 1, 1, 2],
 	"storage": [0, 1, 2, 3, 4],
 	"mage_tower": [0, 0, 0, 2, 2],
 	"mortar": [0, 0, 0, 0, 1],
@@ -94,6 +96,7 @@ func _core_layout() -> Array:
 		{"grid": "main", "id": "altar", "pos": Vector2i(12, 15)},
 		{"grid": "main", "id": "archer_tower", "pos": Vector2i(15, 13)},
 		{"grid": "main", "id": "turret", "pos": Vector2i(20, 10)},
+		{"grid": "main", "id": "shark_trap", "pos": Vector2i(22, 10)},
 		{"grid": "main", "id": "mage_tower", "pos": Vector2i(20, 15)},
 		{"grid": "main", "id": "mortar", "pos": Vector2i(23, 13)},
 	]
@@ -117,6 +120,12 @@ func _ready() -> void:
 		call_deferred("_capture_archer_tower_test")
 	if OS.get_cmdline_user_args().has("--verify-archer-tower-combat"):
 		call_deferred("_verify_archer_tower_combat")
+	if OS.get_cmdline_user_args().has("--verify-shark-trap"):
+		call_deferred("_verify_shark_trap")
+	if OS.get_cmdline_user_args().has("--verify-ambient-shark-route"):
+		call_deferred("_verify_ambient_shark_route")
+	if OS.get_cmdline_user_args().has("--verify-water-material-parity"):
+		call_deferred("_verify_water_material_parity")
 	if OS.get_cmdline_user_args().has("--capture-resource-collection-feedback"):
 		call_deferred("_capture_resource_collection_feedback")
 	if OS.get_cmdline_user_args().has("--verify-main-ship-motion"):
@@ -1673,6 +1682,438 @@ func _verify_archer_tower_combat() -> void:
 		" tower_state=", tower_unit.get("state")
 	)
 	get_tree().quit()
+
+
+func _verify_shark_trap() -> void:
+	var scene := get_tree().current_scene
+	var bs := _building_system_for_grid("main")
+	var attack := get_node_or_null("../AttackSystem")
+	var battle: Variant = bs.get("_battle") if bs else null
+	var ambient := scene.get_node_or_null("AmbientShark") as Node3D if scene else null
+	if scene == null or bs == null or attack == null or battle == null or ambient == null:
+		push_error("Shark Trap test failed: combat systems are missing.")
+		get_tree().quit(1)
+		return
+	if _panel:
+		_panel.visible = false
+		var panel_layer := _panel.get_parent()
+		if panel_layer is CanvasLayer:
+			(panel_layer as CanvasLayer).visible = false
+	_hide_capture_canvas_items(scene)
+	var output_dir := ProjectSettings.globalize_path("user://shark_trap")
+	for arg in OS.get_cmdline_user_args():
+		var text := String(arg)
+		if text.begins_with("--capture-out-dir="):
+			output_dir = text.get_slice("=", 1)
+	DirAccess.make_dir_recursive_absolute(output_dir)
+
+	reset_sandbox()
+	_clear_shark_test_troops()
+	await get_tree().create_timer(0.35).timeout
+	if not ambient.has_method("is_decor_visible") or bool(ambient.call("is_decor_visible")):
+		push_error("Shark Trap test failed: ambient shark is visible without an installed trap.")
+		get_tree().quit(1)
+		return
+	battle.is_viewing_enemy = false
+	var trap_def: Dictionary = bs.building_defs.get("shark_trap", {})
+	var trap_grid := Vector2i(12, 12)
+	bs._spawn_building_locally("shark_trap", trap_grid, trap_def, -1)
+	await get_tree().process_frame
+	var owner_trap := _last_building_at(bs, "shark_trap", trap_grid)
+	if owner_trap.is_empty():
+		push_error("Shark Trap test failed: owner preview did not spawn.")
+		get_tree().quit(1)
+		return
+	var owner_node := owner_trap.get("node") as Node3D
+	_set_building_level_immediate(bs, owner_trap, trap_def, 3)
+	if not bool(owner_node.get_meta("shark_head_visual_ready", false)) or int(owner_node.get_meta("trap_damage", 0)) != 1050:
+		push_error("Shark Trap test failed: owner head preview or level 3 damage is not configured.")
+		get_tree().quit(1)
+		return
+	await get_tree().create_timer(0.35).timeout
+	if not bool(ambient.call("is_decor_visible")):
+		push_error("Shark Trap test failed: ambient shark is hidden despite an installed trap.")
+		get_tree().quit(1)
+		return
+	_frame_shark_test_camera(owner_node.global_position, 1.05)
+	await get_tree().create_timer(0.42).timeout
+	await _hold_shark_web_capture()
+	if not await _save_shark_test_capture(output_dir.path_join("01-owner-preview.png"), "owner-preview"):
+		get_tree().quit(1)
+		return
+
+	reset_sandbox()
+	_clear_shark_test_troops()
+	await get_tree().process_frame
+	battle.is_viewing_enemy = true
+	bs._spawn_building_locally("shark_trap", trap_grid, trap_def, -1)
+	await get_tree().process_frame
+	var combat_trap := _last_building_at(bs, "shark_trap", trap_grid)
+	var combat_node := combat_trap.get("node") as Node3D
+	if combat_node == null or not combat_node.has_method("is_concealed_from_attacker") or not bool(combat_node.call("is_concealed_from_attacker")):
+		push_error("Shark Trap test failed: attacker can see the untriggered trap.")
+		get_tree().quit(1)
+		return
+	var ground_spawn_position: Vector3 = combat_node.global_position + bs.global_transform.basis * Vector3(0.105, 0.0, -0.075) if combat_node != null else Vector3.ZERO
+	bs.troop_levels["Knight"] = 5
+	if combat_node == null or not attack._spawn_manual_troop("Knight", 5, ground_spawn_position, 0):
+		push_error("Shark Trap test failed: ground troop did not spawn.")
+		get_tree().quit(1)
+		return
+	var ground_target: Node3D = null
+	for troop in get_tree().get_nodes_in_group("troops"):
+		if BaseTroop.is_live_troop(troop) and troop.has_method("_get_troop_name") and str(troop.call("_get_troop_name")) == "Knight":
+			ground_target = troop as Node3D
+			break
+	if ground_target == null:
+		push_error("Shark Trap test failed: ground target could not be resolved.")
+		get_tree().quit(1)
+		return
+	var trigger_wait := 0.0
+	while not bool(combat_node.get_meta("trap_spent", false)) and trigger_wait < 1.0:
+		await get_tree().process_frame
+		trigger_wait += get_process_delta_time()
+	if not bool(combat_node.get_meta("trap_spent", false)):
+		push_error("Shark Trap test failed: ground troop did not trigger the trap.")
+		get_tree().quit(1)
+		return
+	if int(ground_target.get("hp")) != 0:
+		push_error("Shark Trap test failed: an over-levelled ordinary ground troop survived.")
+		get_tree().quit(1)
+		return
+	_frame_shark_test_camera(combat_node.global_position, 1.8)
+	await get_tree().create_timer(0.08).timeout
+	await _hold_shark_web_capture()
+	if not await _save_shark_test_capture(output_dir.path_join("02a-ground-rise.png"), "ground-rise"):
+		get_tree().quit(1)
+		return
+	await get_tree().create_timer(0.13).timeout
+	var alignment_error := float(combat_node.call("visual_head_alignment_error_to", ground_target.global_position))
+	if alignment_error > 0.025:
+		push_error("Shark Trap test failed: bite head missed the target by %.4f units." % alignment_error)
+		get_tree().quit(1)
+		return
+	if not await _save_shark_test_capture(output_dir.path_join("02b-ground-bite.png"), "ground-bite"):
+		get_tree().quit(1)
+		return
+	await get_tree().create_timer(0.24).timeout
+	if not await _save_shark_test_capture(output_dir.path_join("02c-ground-sink.png"), "ground-sink"):
+		get_tree().quit(1)
+		return
+	await get_tree().create_timer(0.30).timeout
+
+	reset_sandbox()
+	_clear_shark_test_troops()
+	await get_tree().process_frame
+	battle.is_viewing_enemy = true
+	var air_grid := Vector2i(17, 12)
+	bs._spawn_building_locally("shark_trap", air_grid, trap_def, -2)
+	await get_tree().process_frame
+	var air_trap := _last_building_at(bs, "shark_trap", air_grid)
+	var air_node := air_trap.get("node") as Node3D
+	if air_node == null or not attack._spawn_manual_troop("FireDragon", 1, air_node.global_position, 1):
+		push_error("Shark Trap test failed: flying troop did not spawn.")
+		get_tree().quit(1)
+		return
+	await get_tree().create_timer(0.55).timeout
+	if bool(air_node.get_meta("trap_spent", false)):
+		push_error("Shark Trap test failed: flying troop triggered the trap.")
+		get_tree().quit(1)
+		return
+	var live_dragon := false
+	for troop in get_tree().get_nodes_in_group("troops"):
+		if BaseTroop.is_live_troop(troop) and BaseTroop.is_air_troop(troop):
+			live_dragon = true
+			break
+	if not live_dragon:
+		push_error("Shark Trap test failed: flying troop did not survive.")
+		get_tree().quit(1)
+		return
+	_frame_shark_test_camera(air_node.global_position, 2.2)
+	await _hold_shark_web_capture()
+	if not await _save_shark_test_capture(output_dir.path_join("03-air-ignored.png"), "air-ignored"):
+		get_tree().quit(1)
+		return
+
+	reset_sandbox()
+	_clear_shark_test_troops()
+	await get_tree().process_frame
+	battle.is_viewing_enemy = true
+	var demon_grid := Vector2i(12, 12)
+	bs._spawn_building_locally("shark_trap", demon_grid, trap_def, -3)
+	await get_tree().process_frame
+	var demon_trap := _last_building_at(bs, "shark_trap", demon_grid)
+	var demon_node := demon_trap.get("node") as Node3D
+	_set_building_level_immediate(bs, demon_trap, trap_def, 5)
+	bs.troop_levels["DemonKing"] = 5
+	if demon_node == null or not attack._spawn_manual_troop("DemonKing", 5, demon_node.global_position, 2):
+		push_error("Shark Trap test failed: Demon King did not spawn.")
+		get_tree().quit(1)
+		return
+	var demon_trigger_wait := 0.0
+	while not bool(demon_node.get_meta("trap_spent", false)) and demon_trigger_wait < 1.2:
+		await get_tree().process_frame
+		demon_trigger_wait += get_process_delta_time()
+	if not bool(demon_node.get_meta("trap_spent", false)):
+		push_error("Shark Trap test failed: Demon King did not trigger the trap.")
+		get_tree().quit(1)
+		return
+	var live_demon: Node = null
+	for troop in get_tree().get_nodes_in_group("troops"):
+		if BaseTroop.is_live_troop(troop) and troop.has_method("_get_troop_name") and str(troop.call("_get_troop_name")) == "DemonKing":
+			live_demon = troop
+			break
+	if not is_instance_valid(live_demon) or int(live_demon.get("hp")) != 1024:
+		push_error("Shark Trap test failed: level 5 Demon King HP should be 1024 after a 2000 damage hit.")
+		get_tree().quit(1)
+		return
+	await get_tree().create_timer(0.30).timeout
+	_frame_shark_test_camera(demon_node.global_position, 2.0)
+	await _hold_shark_web_capture()
+	if not await _save_shark_test_capture(output_dir.path_join("04-demon-king-damaged.png"), "demon-king-damaged"):
+		get_tree().quit(1)
+		return
+	if not ambient.has_method("is_water_lane_clear") or not bool(ambient.call("is_water_lane_clear", 360)):
+		push_error("Shark Trap test failed: ambient shark route enters the island keepout zone.")
+		get_tree().quit(1)
+		return
+	_frame_ambient_shark_camera(ambient.global_position, 3.2)
+	await _hold_shark_web_capture()
+	if not await _save_shark_test_capture(output_dir.path_join("05-ambient-shark.png"), "ambient"):
+		get_tree().quit(1)
+		return
+	print("[SHARK_TRAP_CLIENT] PASS ground=instant-kill alignment=", snappedf(alignment_error, 0.0001), " air=ignored demon_hp=1024 ambient=conditional output=", output_dir)
+	get_tree().quit()
+
+
+func _verify_ambient_shark_route() -> void:
+	var scene := get_tree().current_scene
+	var ambient := scene.get_node_or_null("AmbientShark") as Node3D if scene else null
+	if ambient == null:
+		push_error("Ambient Shark route test failed: controller is missing.")
+		get_tree().quit(1)
+		return
+	await get_tree().process_frame
+	if not bool(ambient.call("is_water_lane_clear", 720)):
+		push_error("Ambient Shark route test failed: configured lane intersects island or attack grid.")
+		get_tree().quit(1)
+		return
+	if not bool(ambient.call("is_shark_submerged")):
+		push_error("Ambient Shark route test failed: shark is not below the water line.")
+		get_tree().quit(1)
+		return
+	var warmup := scene.get_node_or_null("Warmup") as Node3D
+	var warmup_frames := 0
+	while warmup != null and warmup.visible and warmup_frames < 900:
+		await get_tree().process_frame
+		warmup_frames += 1
+	await get_tree().process_frame
+
+	var start_position := ambient.global_position
+	var previous_position := start_position
+	var minimum_radius := INF
+	var maximum_radius := 0.0
+	var maximum_step := 0.0
+	var maximum_speed := 0.0
+	var maximum_step_from := previous_position
+	var maximum_step_to := previous_position
+	var minimum_depth := INF
+	var initial_state: Dictionary = ambient.call("route_debug_state")
+	var previous_reported_speed := float(initial_state.get("current_speed", 0.0))
+	var previous_yaw := float(initial_state.get("yaw", 0.0))
+	var maximum_reported_acceleration := 0.0
+	var maximum_yaw_step := 0.0
+	for _frame in range(720):
+		await get_tree().process_frame
+		var current_position := ambient.global_position
+		if not bool(ambient.call("is_current_position_clear")):
+			push_error("Ambient Shark route test failed: live route entered a keepout zone.")
+			get_tree().quit(1)
+			return
+		var state: Dictionary = ambient.call("route_debug_state")
+		var center: Vector3 = state.get("center", Vector3.ZERO)
+		var radius := Vector2(current_position.x - center.x, current_position.z - center.z).length()
+		minimum_radius = minf(minimum_radius, radius)
+		maximum_radius = maxf(maximum_radius, radius)
+		var frame_step := previous_position.distance_to(current_position)
+		var frame_delta := maxf(get_process_delta_time(), 0.0001)
+		maximum_speed = maxf(maximum_speed, frame_step / frame_delta)
+		var reported_speed := float(state.get("current_speed", 0.0))
+		maximum_reported_acceleration = maxf(
+			maximum_reported_acceleration,
+			absf(reported_speed - previous_reported_speed) / frame_delta
+		)
+		previous_reported_speed = reported_speed
+		var current_yaw := float(state.get("yaw", 0.0))
+		maximum_yaw_step = maxf(
+			maximum_yaw_step,
+			absf(wrapf(current_yaw - previous_yaw, -PI, PI))
+		)
+		previous_yaw = current_yaw
+		if frame_step > maximum_step:
+			maximum_step = frame_step
+			maximum_step_from = previous_position
+			maximum_step_to = current_position
+		minimum_depth = minf(minimum_depth, float(state.get("water_y", 0.0)) - current_position.y)
+		previous_position = current_position
+	var travelled := start_position.distance_to(ambient.global_position)
+	if travelled < 0.35:
+		push_error("Ambient Shark route test failed: shark did not travel through the water lane.")
+		get_tree().quit(1)
+		return
+	if minimum_depth < 0.045:
+		push_error("Ambient Shark route test failed: waves exposed too much of the shark.")
+		get_tree().quit(1)
+		return
+	if maximum_speed > 1.35:
+		push_error(
+			"Ambient Shark route test failed: route contains a visible speed spike "
+			+ str(snappedf(maximum_speed, 0.001))
+			+ " units/s step=" + str(snappedf(maximum_step, 0.001))
+			+ " from=" + str(maximum_step_from)
+			+ " to=" + str(maximum_step_to)
+		)
+		get_tree().quit(1)
+		return
+	var configured_acceleration := float(initial_state.get("swim_acceleration", 0.18))
+	if maximum_reported_acceleration > configured_acceleration + 0.035:
+		push_error(
+			"Ambient Shark route test failed: swim speed changed abruptly "
+			+ str(snappedf(maximum_reported_acceleration, 0.001))
+			+ " units/s2."
+		)
+		get_tree().quit(1)
+		return
+	if maximum_yaw_step > 0.16:
+		push_error(
+			"Ambient Shark route test failed: heading snapped by "
+			+ str(snappedf(rad_to_deg(maximum_yaw_step), 0.1))
+			+ " degrees in one frame."
+		)
+		get_tree().quit(1)
+		return
+	print(
+		"[AMBIENT_SHARK_TEST] PASS travelled=", snappedf(travelled, 0.001),
+		" radial_variation=", snappedf(maximum_radius - minimum_radius, 0.001),
+		" minimum_depth=", snappedf(minimum_depth, 0.001),
+		" maximum_step=", snappedf(maximum_step, 0.001),
+		" maximum_speed=", snappedf(maximum_speed, 0.001),
+		" maximum_acceleration=", snappedf(maximum_reported_acceleration, 0.001),
+		" maximum_yaw_step_deg=", snappedf(rad_to_deg(maximum_yaw_step), 0.1),
+		" state=", ambient.call("route_debug_state")
+	)
+	get_tree().quit()
+
+
+func _verify_water_material_parity() -> void:
+	var scene := get_tree().current_scene
+	var water := scene.get_node_or_null("Water") as MeshInstance3D if scene else null
+	var profile := scene.get_node_or_null("WebRenderProfile") as WebRenderProfile if scene else null
+	var editor_material := water.material_override as ShaderMaterial if water else null
+	if water == null or profile == null or editor_material == null or editor_material.shader == null:
+		push_error("Water material parity test failed: scene water resources are missing.")
+		get_tree().quit(1)
+		return
+	if editor_material.resource_path != "res://shaders/water_stable.tres":
+		push_error("Water material parity test failed: editor does not use shared stable material.")
+		get_tree().quit(1)
+		return
+	if editor_material.shader.resource_path != "res://shaders/water_web.gdshader":
+		push_error("Water material parity test failed: editor still uses the legacy shader.")
+		get_tree().quit(1)
+		return
+	var parameter_names: Array[String] = [
+		"wave_texture_a",
+		"wave_texture_b",
+		"WATER_COL",
+		"WATER2_COL",
+		"FOAM_COL",
+		"distortion_speed",
+		"tile",
+		"height",
+		"wave_size",
+		"wave_speed",
+		"shore_fade_distance",
+		"shallow_alpha",
+		"deep_alpha",
+	]
+	var editor_values: Dictionary = {}
+	for parameter_name in parameter_names:
+		editor_values[parameter_name] = editor_material.get_shader_parameter(parameter_name)
+	profile._apply_web_water(water)
+	var browser_material := water.material_override as ShaderMaterial
+	if browser_material == null or browser_material.shader != editor_material.shader:
+		push_error("Water material parity test failed: Web profile selected a different shader.")
+		get_tree().quit(1)
+		return
+	for parameter_name in parameter_names:
+		if browser_material.get_shader_parameter(parameter_name) != editor_values[parameter_name]:
+			push_error("Water material parity test failed: parameter differs: " + parameter_name)
+			get_tree().quit(1)
+			return
+	var web_plane := water.mesh as PlaneMesh
+	if web_plane == null or web_plane.subdivide_width > 24 or web_plane.subdivide_depth > 24:
+		push_error("Water material parity test failed: Web mesh optimization was not retained.")
+		get_tree().quit(1)
+		return
+	print(
+		"[WATER_MATERIAL_PARITY] PASS material=", editor_material.resource_path,
+		" shader=", editor_material.shader.resource_path,
+		" web_subdivisions=", web_plane.subdivide_width, "x", web_plane.subdivide_depth
+	)
+	get_tree().quit()
+
+
+func _hold_shark_web_capture() -> void:
+	# Browser verification needs a stable frame long enough for an external
+	# screenshot. Native/headless verification keeps the fast path unchanged.
+	if OS.has_feature("web"):
+		await get_tree().create_timer(1.5).timeout
+
+
+func _clear_shark_test_troops() -> void:
+	for troop in get_tree().get_nodes_in_group("troops"):
+		if is_instance_valid(troop):
+			troop.queue_free()
+	BaseTroop.invalidate_combat_lists()
+
+
+func _frame_shark_test_camera(target: Vector3, size: float) -> void:
+	var old_camera := get_viewport().get_camera_3d()
+	if old_camera:
+		old_camera.current = false
+	var camera := Camera3D.new()
+	camera.name = "SharkTrapTestCamera"
+	camera.projection = Camera3D.PROJECTION_ORTHOGONAL
+	camera.size = size
+	get_tree().current_scene.add_child(camera)
+	camera.global_position = target + Vector3(1.65, 1.55, 2.25)
+	camera.look_at(target + Vector3(0.0, 0.05, 0.0), Vector3.UP)
+	camera.current = true
+
+
+func _frame_ambient_shark_camera(target: Vector3, size: float) -> void:
+	var old_camera := get_viewport().get_camera_3d()
+	if old_camera:
+		old_camera.current = false
+	var camera := Camera3D.new()
+	camera.name = "AmbientSharkTestCamera"
+	camera.projection = Camera3D.PROJECTION_ORTHOGONAL
+	camera.size = size
+	get_tree().current_scene.add_child(camera)
+	camera.global_position = target + Vector3(0.9, 2.35, 1.7)
+	camera.look_at(target, Vector3.UP)
+	camera.current = true
+
+
+func _save_shark_test_capture(path: String, label: String) -> bool:
+	await RenderingServer.frame_post_draw
+	var err := get_viewport().get_texture().get_image().save_png(path)
+	if err != OK:
+		push_error("Shark Trap %s capture failed: %s" % [label, error_string(err)])
+		return false
+	print("[SHARK_TRAP_CLIENT] capture=", label, " path=", path)
+	return true
 
 
 func _capture_single_ship_combat_test() -> void:

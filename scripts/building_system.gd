@@ -227,6 +227,23 @@ var building_defs: Dictionary = {
 		"test_range": 2.90,
 		"test_reload_sec": 1.95,
 	},
+	"shark_trap": {
+		"name": "Shark Trap",
+		"cells": Vector2i(2, 2),
+		"color": Color(0.08, 0.46, 0.62, 0.5),
+		"height": 0.08,
+		"scene": "res://Model/Shark/Shark.glb",
+		"model_scale": 0.055,
+		"model_offset": Vector3(0, -0.05, 0),
+		"model_rotation_y": 0.0,
+		"hp_levels": [1, 1, 1, 1, 1],
+		"damage_levels": [500, 750, 1050, 1450, 2000],
+		"cost": {"gold": 300, "wood": 800, "ore": 650},
+		"max_count": 2,
+		"no_outline": true,
+		"no_hp_bar": true,
+		"non_targetable": true,
+	},
 	"tombstone": {
 		"name": "Tombstone",
 		"cells": Vector2i(3, 3),
@@ -332,6 +349,7 @@ const TH_UNLOCK: Dictionary = {
 	"storage": 2,
 	"tombstone": 2,
 	"turret": 3,
+	"shark_trap": 3,
 	"mage_tower": 4,
 	"mortar": 5,
 }
@@ -345,6 +363,7 @@ const TH_MAX_COUNT: Dictionary = {
 	"archer_tower": [1, 2, 3, 3, 3],
 	"tombstone": [0, 1, 3, 3, 3],
 	"turret": [0, 0, 3, 3, 3],
+	"shark_trap": [0, 0, 1, 1, 2],
 	"storage": [0, 1, 2, 3, 3],
 	"mage_tower": [0, 0, 0, 2, 2],
 	"mortar": [0, 0, 0, 0, 1],
@@ -554,6 +573,7 @@ static var _scene_res_cache: Dictionary = {}
 static var _turret_script_res: Script = null
 static var _mage_tower_script_res: Script = null
 static var _mortar_script_res: Script = null
+static var _shark_trap_script_res: Script = null
 static var _altar_effect_script_res: Script = null
 static var _town_hall_flag_texture_cache: Dictionary = {}
 static var _town_hall_flag_pending_models: Dictionary = {}
@@ -621,6 +641,11 @@ func _attach_building_defense_script(node: Node3D, building_type: String) -> voi
 			_mortar_script_res = _load_script_resource("res://scripts/tower_mortar.gd")
 		if _mortar_script_res:
 			node.set_script(_mortar_script_res)
+	elif building_type == "shark_trap":
+		if _shark_trap_script_res == null:
+			_shark_trap_script_res = _load_script_resource("res://scripts/shark_trap.gd")
+		if _shark_trap_script_res:
+			node.set_script(_shark_trap_script_res)
 
 # ── Ship node cache ───────────────────────────────────────────
 var _water_y: float = 0.0
@@ -3886,6 +3911,9 @@ func _select_building(b: Dictionary) -> void:
 		var next_hp: int = max_hp
 		if def.has("hp_levels") and level < def.hp_levels.size():
 			next_hp = def.hp_levels[level]  # level is 1-based, array is 0-based, so [level] = next
+		var damage_levels: Array = def.get("damage_levels", [])
+		var current_damage: int = int(damage_levels[clampi(level - 1, 0, damage_levels.size() - 1)]) if not damage_levels.is_empty() else 0
+		var next_damage: int = int(damage_levels[clampi(level, 0, damage_levels.size() - 1)]) if not damage_levels.is_empty() else current_damage
 		var bs_has_ship = false
 		var bs_ship_level: int = 0
 		var bs_ship_troops: Array = []
@@ -3901,6 +3929,8 @@ func _select_building(b: Dictionary) -> void:
 			"id": b.id, "name": def.name, "level": level,
 			"hp": hp, "max_hp": max_hp, "max_level": max_level,
 			"next_hp": next_hp,
+			"damage": current_damage,
+			"next_damage": next_damage,
 			"upgrade_cost": upgrade_cost,
 			"is_enemy": is_viewing_enemy,
 			"is_barn": b.id == "barn",
@@ -5089,6 +5119,8 @@ func _make_bldg_hp_mat(color: Color, size: Vector2, priority: int) -> ShaderMate
 	return mat
 
 func _create_building_hp_bar(building: Node3D, def: Dictionary) -> Dictionary:
+	if bool(def.get("no_hp_bar", false)):
+		return {"bar": null, "fill": null}
 	var bar = Node3D.new()
 	bar.name = "BuildingHpBar"
 	bar.top_level = true

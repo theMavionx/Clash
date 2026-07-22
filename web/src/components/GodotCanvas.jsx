@@ -53,6 +53,7 @@ const GODOT_LOADED_HIDE_DELAY_MS = 120;
 const GODOT_ENGINE_READY_EASE_MS = 250;
 const GODOT_UI_READY_FALLBACK_MS = 2500;
 const GODOT_ENGINE_READY_FALLBACK_MS = 8000;
+const GODOT_STARTUP_BARRIER_FALLBACK_MS = 60000;
 const LOADING_CLOCK_INTERVAL_MS = 250;
 const MAIN_THREAD_BLOCK_LOG_THRESHOLD_MS = 900;
 const VALIDATE_GODOT_FETCHES = false;
@@ -1190,6 +1191,7 @@ function GodotCanvas({ onEngineReady }) {
     let stage2DelayId = null;
     let engineReadyFallbackId = null;
     let uiReadyFallbackId = null;
+    let startupBarrierFallbackId = null;
     let titleGuardId = null;
     let loadingClockId = null;
     let lastProgressBucket = -1;
@@ -1474,6 +1476,8 @@ function GodotCanvas({ onEngineReady }) {
       let stage2StartTime = null;
       let stage2BuildingsDone = false;
       let stage2ReadyReason = null;
+      let stage2HomeReady = false;
+      let stage2WarmupDone = false;
       let engineReadyDone = false;
       const finishStage2Now = (reason = 'stage2_complete') => {
         if (disposed || isLoadedStateRef.current) return;
@@ -1498,6 +1502,10 @@ function GodotCanvas({ onEngineReady }) {
         if (uiReadyFallbackId) {
           clearTimeout(uiReadyFallbackId);
           uiReadyFallbackId = null;
+        }
+        if (startupBarrierFallbackId) {
+          clearTimeout(startupBarrierFallbackId);
+          startupBarrierFallbackId = null;
         }
         recordLoadingEvent('stage2_complete', {
           reason,
@@ -1537,6 +1545,17 @@ function GodotCanvas({ onEngineReady }) {
       completeLoadingFromRuntimeReady = (reason, meta = {}) => {
         if (disposed || isLoadedStateRef.current || !engineReadyDone) return;
         if (stage2BuildingsDone && reason !== 'visibility_resume') return;
+        const forceStartupBarrier = meta?.force_startup_barrier === true;
+        if ((!stage2HomeReady || !stage2WarmupDone) && !forceStartupBarrier) {
+          const payload = recordLoadingEvent('startup_barrier_waiting', {
+            reason,
+            home_ready: stage2HomeReady,
+            warmup_done: stage2WarmupDone,
+            ...meta,
+          });
+          addClientBreadcrumb('godot.startup_barrier_waiting', payload, 'warning');
+          return;
+        }
         stage2BuildingsDone = true;
         if (stage2RafId) {
           cancelAnimationFrame(stage2RafId);
@@ -1590,10 +1609,24 @@ function GodotCanvas({ onEngineReady }) {
       // so we don't use them to drive progress — only log for diagnostics.
       const completeStage2FromGodot = (reason = 'godot_ready_signal') => {
         if (disposed) return;
-        if (stage2BuildingsDone && isLoadedStateRef.current) return;
-        addClientBreadcrumb('godot.stage2_complete', { reason });
+        if (stage2BuildingsDone) return;
+        addClientBreadcrumb('godot.stage2_signal', { reason });
+        if (reason === 'home_warmup_done') {
+          stage2WarmupDone = true;
+        }
+        if (reason === 'home_ready' || reason === 'ready' || reason === 'godotBuildingsLoaded') {
+          stage2HomeReady = true;
+        }
+        if (!stage2HomeReady || !stage2WarmupDone) {
+          recordLoadingEvent('stage2_waiting_for_startup_barrier', {
+            reason,
+            home_ready: stage2HomeReady,
+            warmup_done: stage2WarmupDone,
+          });
+          return;
+        }
         stage2BuildingsDone = true;
-        stage2ReadyReason = reason;
+        stage2ReadyReason = 'home_and_warmup_ready';
         if (engineReadyFallbackId) {
           clearTimeout(engineReadyFallbackId);
           engineReadyFallbackId = null;
@@ -1603,12 +1636,8 @@ function GodotCanvas({ onEngineReady }) {
           uiReadyFallbackId = null;
         }
         setStage(2);
-        if (reason === 'home_ready' || reason === 'ready' || reason === 'godotBuildingsLoaded') {
-          finishStage2Now(reason);
-          return;
-        }
         if (!engineReadyDone) return;
-        finishStage2Now(reason);
+        finishStage2Now(stage2ReadyReason);
       };
 
       const godotLoadingProgress = (rawPct, phase = 'godot', meta = {}) => {
@@ -1630,10 +1659,10 @@ function GodotCanvas({ onEngineReady }) {
         animateStageProgress(
           progressTarget,
           progressTarget >= 100 ? 520 : 220,
-          progressTarget >= 100 && engineReadyDone ? finishLoadingOverlay : null
+          null
         );
         addClientBreadcrumb('godot.loading_phase', payload);
-        if (phase === 'home_ready' || phase === 'ready') {
+        if (phase === 'home_warmup_done' || phase === 'home_ready' || phase === 'ready') {
           completeStage2FromGodot(phase);
         }
       };
@@ -1683,6 +1712,13 @@ function GodotCanvas({ onEngineReady }) {
             timeout_ms: GODOT_ENGINE_READY_FALLBACK_MS,
           });
         }, GODOT_ENGINE_READY_FALLBACK_MS);
+        if (startupBarrierFallbackId) clearTimeout(startupBarrierFallbackId);
+        startupBarrierFallbackId = window.setTimeout(() => {
+          completeLoadingFromRuntimeReady?.('startup_barrier_timeout', {
+            timeout_ms: GODOT_STARTUP_BARRIER_FALLBACK_MS,
+            force_startup_barrier: true,
+          });
+        }, GODOT_STARTUP_BARRIER_FALLBACK_MS);
         if (restoreGodotFetch) {
           restoreGodotFetch();
           restoreGodotFetch = null;
@@ -1781,6 +1817,7 @@ function GodotCanvas({ onEngineReady }) {
       if (stage2DelayId) clearTimeout(stage2DelayId);
       if (engineReadyFallbackId) clearTimeout(engineReadyFallbackId);
       if (uiReadyFallbackId) clearTimeout(uiReadyFallbackId);
+      if (startupBarrierFallbackId) clearTimeout(startupBarrierFallbackId);
       if (titleGuardId) clearInterval(titleGuardId);
       if (loadingClockId) clearInterval(loadingClockId);
       if (window.godotLoadingProgress) window.godotLoadingProgress = null;

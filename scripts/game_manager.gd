@@ -34,9 +34,6 @@ func _ready() -> void:
 	island_view.visible = true
 	island_view.process_mode = Node.PROCESS_MODE_INHERIT
 
-	if OS.has_feature("web"):
-		_boost_web_lighting.call_deferred()
-
 	cloud._set_clouds_covering()
 	await get_tree().process_frame
 	cloud.reveal()
@@ -56,29 +53,3 @@ func _exit_tree() -> void:
 
 func _on_visibility_change(_args: Array) -> void:
 	pass
-
-
-func _boost_web_lighting() -> void:
-	var root = get_tree().current_scene
-
-	for node in _find_all_of_class(root, "WorldEnvironment"):
-		var env = node.environment
-		if env:
-			env.ambient_light_energy = 1.8
-			env.ambient_light_color = Color(0.85, 0.88, 0.96, 1)
-			env.tonemap_exposure = 1.8
-			env.tonemap_white = 12.0
-			env.ssao_enabled = false
-			env.ssil_enabled = false
-
-	for node in _find_all_of_class(root, "DirectionalLight3D"):
-		node.light_energy *= 3.0
-
-
-func _find_all_of_class(node: Node, class_name_str: String) -> Array:
-	var result: Array = []
-	if node.is_class(class_name_str):
-		result.append(node)
-	for child in node.get_children():
-		result.append_array(_find_all_of_class(child, class_name_str))
-	return result

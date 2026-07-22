@@ -29,6 +29,7 @@ import imgStorage from '../assets/buildings/storage.png';
 import imgShip from '../assets/buildings/shipsmall.png';
 import imgMageTower from '../assets/buildings/magetower.png';
 import imgMortar from '../assets/buildings/mortar.png';
+import imgSharkTrap from '../assets/buildings/sharktrap.png';
 import imgAltar from '../assets/units/altar.png';
 
 import knightImg from '../assets/units/knight.png';
@@ -93,6 +94,7 @@ const THUMBNAIL_MAP = {
   archertower: imgArcherTower,
   mage_tower: imgMageTower,
   mortar: imgMortar,
+  shark_trap: imgSharkTrap,
   storage: imgStorage,
   altar: imgAltar,
   main_ship: imgShip,
@@ -122,6 +124,7 @@ const DESC_MAP = {
   archertower: 'Ranged defense against invaders.',
   mage_tower: 'Casts splash magic at groups of enemy troops.',
   mortar: 'Long-range splash defense with a minimum firing range.',
+  shark_trap: 'A hidden 2 x 2 trap that eliminates the first ordinary ground troop. Higher levels deal more damage to Demon King.',
   residence: 'Residences produce gold.',
 };
 
@@ -1168,7 +1171,12 @@ function BuildingInfoPanel({ onOpenTroops }) {
       );
       return renderModal('MAIN SHIP', building.ship_level || building.level, leftContent, buildingImg, rightContent, null, null);
     }
-    const leftContent = (
+    const leftContent = building.id === 'shark_trap' ? (
+      <>
+        <StatBox label="Damage" current={building.damage} />
+        <StatBox label="Level" current={building.level} />
+      </>
+    ) : (
       <>
         <StatBox label="Health" current={building.max_hp} />
         <StatBox label="Level" current={building.level} />
@@ -1312,7 +1320,12 @@ function BuildingInfoPanel({ onOpenTroops }) {
         handleMainShipUpgrade,
       );
     }
-    const leftContent = (
+    const leftContent = building.id === 'shark_trap' ? (
+      <>
+        <StatBox label="Damage" current={building.damage} upgradeTo={building.next_damage} />
+        <StatBox label="Level" current={building.level} upgradeTo={building.level + 1} />
+      </>
+    ) : (
       <>
         <StatBox label="Health" current={building.max_hp} upgradeTo={building.max_hp + upgHealth} />
         <StatBox label="Level" current={building.level} upgradeTo={building.level + 1} />

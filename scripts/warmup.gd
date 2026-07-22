@@ -137,8 +137,12 @@ func _process(_delta: float) -> void:
 			_combat_warmup_active = false
 			_combat_warmup_node = null
 		if mode != "combat":
-			_report_loading_progress(88, "home_warmup_done")
+			# Remove every warmup representative before React is allowed to drop
+			# the opaque loading cover. queue_free() alone is end-of-frame, which
+			# can expose one compiled representative on a fast loader transition.
+			visible = false
 			_clear_runtime_warmup_nodes()
+			_report_loading_progress(88, "home_warmup_done")
 		print(
 			"[WARMUP_PROFILE] finish mode=", mode,
 			" total_ms=", Time.get_ticks_msec() - _started_ticks,

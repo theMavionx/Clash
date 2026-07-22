@@ -524,6 +524,22 @@ function gridToWorld(gridX, gridZ, sizeX, sizeZ, gc) {
   };
 }
 
+function isCombatTargetBuilding(building) {
+  return building?.type !== 'shark_trap';
+}
+
+function troopInsideSharkTrap(troop, trap) {
+  if (!troop || !trap || troop.flying || troop.hp <= 0 || trap.triggered) return false;
+  const dx = troop.x - trap.x;
+  const dz = troop.z - trap.z;
+  const cos = Math.cos(trap.gridRotation);
+  const sin = Math.sin(trap.gridRotation);
+  const localX = dx * cos - dz * sin;
+  const localZ = dx * sin + dz * cos;
+  return Math.abs(localX) <= trap.halfX + trap.padding
+    && Math.abs(localZ) <= trap.halfZ + trap.padding;
+}
+
 function updateProjectiles(projectiles, phase = null, onHit = null, onLost = null, ownerRef = undefined) {
   let cannonEnergyGain = 0;
   for (let i = projectiles.length - 1; i >= 0; i--) {
@@ -611,6 +627,9 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
       hp: b.hp, maxHp: b.max_hp,
       gridIndex,
       x: pos.x, z: pos.z,
+      sizeX: size[0], sizeZ: size[1],
+      cellSize: gc.cell_size,
+      gridRotation: gc.grid_rotation,
       avoidRadius: Math.max(size[0], size[1]) * gc.cell_size * 0.5 + 0.06,
     };
   });
@@ -618,6 +637,26 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
   const troops = [];
   const guards = [];
   const defenses = [];
+  const sharkTraps = buildings
+    .filter(b => b.type === 'shark_trap')
+    .map(b => {
+      const damageLevels = BUILDING_DEFS.shark_trap?.damage_levels || [500, 750, 1050, 1450, 2000];
+      const level = Math.max(1, Math.min(damageLevels.length, Number(b.level) || 1));
+      return {
+        buildingId: b.id,
+        level,
+        damage: Number(damageLevels[level - 1]) || 500,
+        x: b.x,
+        z: b.z,
+        halfX: b.sizeX * b.cellSize * 0.5,
+        halfZ: b.sizeZ * b.cellSize * 0.5,
+        gridRotation: b.gridRotation,
+        padding: 0.018,
+        triggered: false,
+        troopId: null,
+      };
+    })
+    .sort((a, b) => Number(a.buildingId) - Number(b.buildingId));
   const projectiles = [];
   let townHallId = null;
   const wardLevel = Math.max(0, Math.min(3, Number(defenderAltarLevels?.ward) || 0));
@@ -971,7 +1010,7 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
           });
           continue;
         }
-        const target = buildings.find(b => b.id === act.buildingId && b.hp > 0);
+        const target = buildings.find(b => b.id === act.buildingId && b.hp > 0 && isCombatTargetBuilding(b));
         if (target) {
           const flight = cannonFlightTime(target);
           cannonShotsFired++;
@@ -1003,7 +1042,7 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
       if (act.type === 'rally_drop') {
         const rallyBuildingId = finiteNumber(act.buildingId ?? act.building_id, NaN);
         const rallyBuilding = Number.isFinite(rallyBuildingId)
-          ? buildings.find(b => b.id === rallyBuildingId && b.hp > 0)
+          ? buildings.find(b => b.id === rallyBuildingId && b.hp > 0 && isCombatTargetBuilding(b))
           : null;
         const pointSource = rallyBuilding ? 'building' : 'point';
         const x = rallyBuilding ? rallyBuilding.x : finiteNumber(act.x, NaN);
@@ -1130,7 +1169,61 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
     const aliveGuards = [];
     for (const g of guards) { if (g.hp > 0) aliveGuards.push(g); }
     const aliveBuildings = [];
-    for (const b of buildings) { if (b.hp > 0) aliveBuildings.push(b); }
+    for (const b of buildings) { if (b.hp > 0 && isCombatTargetBuilding(b)) aliveBuildings.push(b); }
+
+    // Traps resolve before defenses and movement. Each trap eliminates one
+    // ordinary ground troop; Demon King instead takes level-scaled damage.
+    for (const trap of sharkTraps) {
+      if (trap.triggered) continue;
+      let targetIndex = -1;
+      let targetDistanceSq = Infinity;
+      let targetReplayOrder = Infinity;
+      for (let i = 0; i < aliveTroops.length; i++) {
+        const troop = aliveTroops[i];
+        if (!troopInsideSharkTrap(troop, trap)) continue;
+        const distanceSq = distSq2d(troop.x, troop.z, trap.x, trap.z);
+        const replayOrder = Number(troop.replayOrder);
+        if (distanceSq < targetDistanceSq - 1e-9
+          || (Math.abs(distanceSq - targetDistanceSq) <= 1e-9 && replayOrder < targetReplayOrder)) {
+          targetIndex = i;
+          targetDistanceSq = distanceSq;
+          targetReplayOrder = replayOrder;
+        }
+      }
+      if (targetIndex < 0) continue;
+      const target = aliveTroops[targetIndex];
+      const hpBefore = target.hp;
+      const instantKill = normalizeTroopTypeName(target.type) !== 'demon_king';
+      const appliedDamage = instantKill ? Math.max(1, target.hp) : trap.damage;
+      target.hp -= appliedDamage;
+      trap.triggered = true;
+      trap.troopId = target.id;
+      traceEvent('shark_trap_trigger', {
+        buildingId: trap.buildingId,
+        level: trap.level,
+        damage: appliedDamage,
+        levelDamage: trap.damage,
+        instantKill,
+        troopId: target.id,
+        replayOrder: target.replayOrder,
+        troop: target.type,
+        hpBefore,
+        hpAfter: Math.max(0, target.hp),
+        x: round3(target.x),
+        z: round3(target.z),
+      });
+      if (target.hp <= 0) {
+        target._state = 'dead';
+        target._currentTarget = null;
+        aliveTroops.splice(targetIndex, 1);
+        traceEvent('troop_death', {
+          troopId: target.id,
+          replayOrder: target.replayOrder,
+          troop: target.type,
+          source: 'shark_trap',
+        });
+      }
+    }
 
     // Rally grenade impact. The client spends energy on launch, but troops
     // only receive the command when the grenade lands.
@@ -1966,6 +2059,14 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
     _rallyDropsUsed: rallyDropsUsed,
     _rallyEventsAccepted: rallyEventsAccepted,
     _rallyEventsIgnored: rallyEventsIgnored,
+    _sharkTrapsTriggered: sharkTraps.filter(trap => trap.triggered).length,
+    _sharkTrapDetails: sharkTraps.map(trap => ({
+      buildingId: trap.buildingId,
+      level: trap.level,
+      damage: trap.damage,
+      triggered: trap.triggered,
+      troopId: trap.troopId,
+    })),
     _pendingRalliesLeft: pendingRallies.length,
     _rallyFocus: rallyFocus ? {
       type: rallyFocus.isGuard ? 'guard' : rallyFocus.target.type,

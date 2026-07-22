@@ -5574,6 +5574,7 @@ const TH_UNLOCK = {
   storage:   2,  // unlocked at TH2
   tombstone: 2,  // unlocked at TH2
   turret:    3,  // unlocked at TH3
+  shark_trap: 3, // unlocked at TH3
   mage_tower: 4, // unlocked at TH4
   mortar:    5,  // unlocked at TH5
 };
@@ -5587,6 +5588,7 @@ const TH_MAX_COUNT = {
   archer_tower: [1, 2, 3, 3, 3],
   tombstone:    [0, 1, 3, 3, 3],  // unlocked at TH2
   turret:       [0, 0, 3, 3, 3],  // unlocked at TH3
+  shark_trap:   [0, 0, 1, 1, 2],  // one at TH3, second at TH5
   storage:      [0, 1, 2, 3, 3],  // unlocked at TH2
   mage_tower:   [0, 0, 0, 2, 2],  // unlocked at TH4
   mortar:       [0, 0, 0, 0, 1],  // unlocked at TH5
@@ -5681,6 +5683,14 @@ const BUILDING_DEFS = {
     hp_levels: [1700],
     cost: { gold: 600, wood: 900, ore: 700 },
     max_count: 1,
+  },
+  shark_trap: {
+    size: [2, 2], max_level: 5,
+    hp_levels: [1, 1, 1, 1, 1],
+    damage_levels: [500, 750, 1050, 1450, 2000],
+    cost: { gold: 300, wood: 800, ore: 650 },
+    max_count: 2,
+    non_targetable: true,
   },
 };
 
@@ -6083,7 +6093,7 @@ const ALTAR_SKILL_DEFS = {
   },
 };
 
-const DEFENSE_BUILDING_TYPES = new Set(['turret', 'archer_tower', 'archertower', 'archtower', 'mage_tower', 'tombstone', 'mortar']);
+const DEFENSE_BUILDING_TYPES = new Set(['turret', 'archer_tower', 'archertower', 'archtower', 'mage_tower', 'tombstone', 'mortar', 'shark_trap']);
 
 const DEMON_KING_UPGRADE_WINS = {
   2: 1000,
@@ -6118,6 +6128,7 @@ const TROPHY_TABLE = {
   archer_tower: [15, 35, 70, 125, 200],
   mage_tower:   [20, 45, 90, 145, 225],
   mortar:       [30, 65, 125, 210],
+  shark_trap:   [25, 40, 60, 85, 115],
 };
 
 // ---------- Helper Functions ----------
@@ -8903,6 +8914,10 @@ function defensePowerForBuilding(building) {
     const stats = SKELETON_GUARD.levels?.[level] || SKELETON_GUARD;
     const dps = (Number(stats.damage) || 0) / Math.max(0.1, Number(stats.atkSpeed) || 1);
     return (Number(stats.hp) || 0) * 0.12 + dps * 38 + (Number(stats.detectionRadius) || 0) * 170;
+  }
+  if (type === 'shark_trap') {
+    const damage = BUILDING_DEFS.shark_trap.damage_levels?.[Math.max(0, Math.min(4, level - 1))] || 500;
+    return damage * 1.4;
   }
   return 0;
 }

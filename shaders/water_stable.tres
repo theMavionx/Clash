@@ -1,0 +1,24 @@
+[gd_resource type="ShaderMaterial" load_steps=4 format=3]
+
+[ext_resource type="Shader" path="res://shaders/water_web.gdshader" id="1_shader"]
+[ext_resource type="Texture2D" path="res://textures/water/simple_wave1.png" id="2_wave_a"]
+[ext_resource type="Texture2D" path="res://textures/water/simple_wave2.png" id="3_wave_b"]
+
+[resource]
+render_priority = 0
+shader = ExtResource("1_shader")
+shader_parameter/wave_texture_a = ExtResource("2_wave_a")
+shader_parameter/wave_texture_b = ExtResource("3_wave_b")
+shader_parameter/WATER_COL = Color(0.32, 0.68, 0.98, 1)
+shader_parameter/WATER2_COL = Color(0.18, 0.54, 0.9, 1)
+shader_parameter/FOAM_COL = Color(0.88, 0.98, 1, 1)
+shader_parameter/distortion_speed = 1.0
+shader_parameter/tile = Vector2(34, 34)
+shader_parameter/height = 0.05
+shader_parameter/wave_size = Vector2(2.4, 2.4)
+shader_parameter/wave_speed = 0.72
+shader_parameter/shore_fade_distance = 0.65
+shader_parameter/shallow_alpha = 0.16
+shader_parameter/deep_alpha = 0.98
+shader_parameter/paused = false
+shader_parameter/frozen_time = 0.0
