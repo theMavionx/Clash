@@ -1,8 +1,17 @@
 const MAIN_GRID_WIDTH = 29;
 const MAIN_GRID_HEIGHT = 27;
 const COAST_GRID_WIDTH = 27;
-const BOT_BASE_GENERATION = 'raid-recovery-v1';
-const BOT_VARIANTS_PER_BUCKET = 8;
+const BOT_BASE_GENERATION = 'raid-recovery-v2';
+
+// Keep the pool large enough to avoid repetitive targets while preserving a
+// deliberate difficulty mix at each progression tier.
+const BOT_TEMPLATE_COUNTS_BY_TH = {
+  1: { easy: 8, normal: 8, hard: 8 },
+  2: { easy: 10, normal: 12, hard: 8 },
+  3: { easy: 8, normal: 14, hard: 8 },
+  4: { easy: 7, normal: 11, hard: 7 },
+  5: { easy: 6, normal: 12, hard: 7 },
+};
 
 const MATCHMAKING_CONFIG = {
   targetSuccessRate: 0.57,
@@ -36,11 +45,11 @@ const MATCHMAKING_CONFIG = {
 };
 
 const BOT_RESOURCES_BY_TH = {
-  1: { gold: 2400, wood: 2400, ore: 2400 },
-  2: { gold: 5400, wood: 6200, ore: 5600 },
-  3: { gold: 12000, wood: 14500, ore: 13000 },
-  4: { gold: 23000, wood: 28000, ore: 25000 },
-  5: { gold: 42000, wood: 50000, ore: 45000 },
+  1: { gold: 1000, wood: 1000, ore: 1000 },
+  2: { gold: 1120, wood: 1200, ore: 1160 },
+  3: { gold: 1300, wood: 1450, ore: 1380 },
+  4: { gold: 1500, wood: 1650, ore: 1580 },
+  5: { gold: 1700, wood: 1800, ore: 1750 },
 };
 
 const BOT_BUILDING_SIZES = {
@@ -55,6 +64,7 @@ const BOT_BUILDING_SIZES = {
   archer_tower: [3, 3],
   mage_tower: [3, 3],
   mortar: [2, 2],
+  shark_trap: [2, 2],
 };
 
 const BOT_GRID_SPECS = {
@@ -268,7 +278,100 @@ const BASE_LAYOUTS = {
       b('port', 3, 15, 0, 1, { has_ship: 1 }),
     ],
   },
+  5: {
+    easy: [
+      b('town_hall', 5, 11, 11),
+      b('archer_tower', 4, 6, 7),
+      b('archer_tower', 4, 18, 7),
+      b('archer_tower', 3, 12, 5),
+      b('tombstone', 4, 6, 15),
+      b('tombstone', 3, 18, 15),
+      b('turret', 4, 9, 17),
+      b('turret', 3, 16, 17),
+      b('mage_tower', 3, 7, 11),
+      b('mage_tower', 2, 19, 11),
+      b('mortar', 1, 13, 8),
+      b('shark_trap', 3, 3, 23),
+      b('mine', 4, 2, 3),
+      b('mine', 4, 22, 3),
+      b('mine', 3, 2, 20),
+      b('sawmill', 4, 22, 20),
+      b('sawmill', 4, 2, 10),
+      b('sawmill', 3, 22, 10),
+      b('barn', 4, 10, 22),
+      b('storage', 4, 4, 16),
+      b('storage', 3, 20, 16),
+    ],
+    normal: [
+      b('town_hall', 5, 11, 11),
+      b('archer_tower', 5, 6, 7),
+      b('archer_tower', 4, 18, 7),
+      b('archer_tower', 4, 12, 5),
+      b('tombstone', 4, 6, 15),
+      b('tombstone', 4, 18, 15),
+      b('tombstone', 3, 12, 20),
+      b('turret', 4, 9, 17),
+      b('turret', 4, 16, 17),
+      b('turret', 3, 13, 8),
+      b('mage_tower', 4, 7, 11),
+      b('mage_tower', 3, 19, 11),
+      b('mortar', 1, 13, 17),
+      b('shark_trap', 4, 3, 23),
+      b('shark_trap', 3, 24, 23),
+      b('mine', 5, 2, 3),
+      b('mine', 4, 22, 3),
+      b('mine', 4, 2, 20),
+      b('mine', 3, 22, 20),
+      b('sawmill', 5, 2, 10),
+      b('sawmill', 4, 22, 10),
+      b('sawmill', 4, 6, 23),
+      b('sawmill', 3, 20, 23),
+      b('barn', 5, 10, 22),
+      b('storage', 5, 4, 16),
+      b('storage', 4, 20, 16),
+      b('storage', 3, 4, 10),
+    ],
+    hard: [
+      b('town_hall', 5, 11, 11),
+      b('archer_tower', 5, 6, 7),
+      b('archer_tower', 5, 18, 7),
+      b('archer_tower', 5, 12, 5),
+      b('tombstone', 4, 6, 15),
+      b('tombstone', 4, 18, 15),
+      b('tombstone', 4, 12, 20),
+      b('turret', 5, 9, 17),
+      b('turret', 5, 16, 17),
+      b('turret', 4, 13, 8),
+      b('mage_tower', 5, 7, 11),
+      b('mage_tower', 5, 19, 11),
+      b('mortar', 1, 13, 17),
+      b('shark_trap', 5, 3, 23),
+      b('shark_trap', 5, 24, 23),
+      b('mine', 5, 2, 3),
+      b('mine', 5, 22, 3),
+      b('mine', 5, 2, 20),
+      b('mine', 4, 22, 20),
+      b('sawmill', 5, 2, 10),
+      b('sawmill', 5, 22, 10),
+      b('sawmill', 5, 6, 23),
+      b('sawmill', 4, 20, 23),
+      b('barn', 5, 10, 22),
+      b('storage', 5, 4, 16),
+      b('storage', 5, 20, 16),
+      b('storage', 4, 4, 10),
+    ],
+  },
 };
+
+const CRYPTO_NAME_PREFIXES = [
+  'Block', 'Chain', 'DeFi', 'Satoshi', 'Sol', 'Ether', 'ZK', 'Moon',
+  'Alpha', 'Onchain', 'Ledger', 'Yield', 'Node', 'Vault', 'Aptos', 'Delta',
+];
+
+const CRYPTO_NAME_SUFFIXES = [
+  'Corsair', 'Raider', 'Kraken', 'Mariner', 'Voyager',
+  'Reaper', 'Nomad', 'Captain', 'Whale', 'Sailor',
+];
 
 function b(type, level, gridX, gridZ, gridIndex = 0, extra = {}) {
   return { type, level, grid_x: gridX, grid_z: gridZ, grid_index: gridIndex, ...extra };
@@ -277,17 +380,20 @@ function b(type, level, gridX, gridZ, gridIndex = 0, extra = {}) {
 function transformBuilding(building, variant) {
   const size = BOT_BUILDING_SIZES[building.type] || [1, 1];
   const next = { ...building };
+  const shiftGroup = Math.floor(variant / 4);
+  const shift = shiftGroup === 0
+    ? 0
+    : (shiftGroup % 2 === 1 ? Math.ceil(shiftGroup / 2) : -Math.ceil(shiftGroup / 2));
   if (next.grid_index === 0) {
     if (variant & 1) next.grid_x = MAIN_GRID_WIDTH - next.grid_x - size[0];
     if (variant & 2) next.grid_z = MAIN_GRID_HEIGHT - next.grid_z - size[1];
-    const shift = ((variant >> 2) % 2) === 0 ? -1 : 1;
-    if (variant >= 4 && next.type !== 'town_hall') {
+    if (shift !== 0 && next.type !== 'town_hall') {
       next.grid_x = clamp(next.grid_x + shift, 0, MAIN_GRID_WIDTH - size[0]);
       next.grid_z = clamp(next.grid_z - shift, 0, MAIN_GRID_HEIGHT - size[1]);
     }
   } else if (next.grid_index === 1) {
     if (variant & 1) next.grid_x = COAST_GRID_WIDTH - next.grid_x - size[0];
-    if (variant >= 4) next.grid_x = clamp(next.grid_x + 1, 0, COAST_GRID_WIDTH - size[0]);
+    if (shift !== 0) next.grid_x = clamp(next.grid_x + shift, 0, COAST_GRID_WIDTH - size[0]);
   }
   return next;
 }
@@ -296,21 +402,23 @@ function botResources(th, difficulty) {
   const base = BOT_RESOURCES_BY_TH[th] || BOT_RESOURCES_BY_TH[1];
   const mult = difficulty === 'easy' ? 0.82 : difficulty === 'hard' ? 1.12 : 1.0;
   return {
-    gold: Math.round(base.gold * mult),
-    wood: Math.round(base.wood * mult),
-    ore: Math.round(base.ore * mult),
+    gold: clamp(Math.round(base.gold * mult), 1000, 2000),
+    wood: clamp(Math.round(base.wood * mult), 1000, 2000),
+    ore: clamp(Math.round(base.ore * mult), 1000, 2000),
   };
 }
 
 function buildBotBaseTemplates() {
   const templates = [];
+  let nameIndex = 0;
   for (const th of Object.keys(BASE_LAYOUTS).map(Number)) {
     for (const difficulty of Object.keys(BASE_LAYOUTS[th])) {
-      for (let variant = 0; variant < BOT_VARIANTS_PER_BUCKET; variant += 1) {
+      const variantCount = BOT_TEMPLATE_COUNTS_BY_TH[th]?.[difficulty] || 0;
+      for (let variant = 0; variant < variantCount; variant += 1) {
         const id = `bot-th${th}-${difficulty}-${variant + 1}`;
         templates.push({
           id,
-          name: `Raid Bot TH${th} ${titleCase(difficulty)} ${variant + 1}`,
+          name: cryptoPlayerName(nameIndex),
           th,
           difficulty,
           variant: variant + 1,
@@ -319,10 +427,17 @@ function buildBotBaseTemplates() {
           trophies: th * 120 + (difficulty === 'easy' ? 0 : difficulty === 'normal' ? 40 : 90),
           buildings: repairLayout(BASE_LAYOUTS[th][difficulty].map((building) => transformBuilding(building, variant))),
         });
+        nameIndex += 1;
       }
     }
   }
   return templates;
+}
+
+function cryptoPlayerName(index) {
+  const prefix = CRYPTO_NAME_PREFIXES[index % CRYPTO_NAME_PREFIXES.length];
+  const suffix = CRYPTO_NAME_SUFFIXES[Math.floor(index / CRYPTO_NAME_PREFIXES.length) % CRYPTO_NAME_SUFFIXES.length];
+  return `${prefix}${suffix}`;
 }
 
 function repairLayout(buildings) {
@@ -386,11 +501,6 @@ function cellKey(gridIndex, x, z) {
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
-}
-
-function titleCase(value) {
-  const text = String(value || '');
-  return text.slice(0, 1).toUpperCase() + text.slice(1);
 }
 
 module.exports = {

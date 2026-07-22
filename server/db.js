@@ -5875,7 +5875,7 @@ function materializeBotTarget(candidate, sessionId) {
   if (!template) throw new Error('Bot template not found');
   const suffix = String(sessionId || uuidv4()).replace(/-/g, '').slice(0, 12);
   const botId = `bot-raid-${template.id}-${suffix}`;
-  const botName = `${template.name} ${suffix.slice(0, 4)}`;
+  const botName = `${template.name}_${suffix.slice(0, 4)}`;
   const insertBot = db.prepare(`
     INSERT INTO players (
       id, name, token, gold, wood, ore, trophies, level,
@@ -10143,6 +10143,24 @@ const _battleVictoryTxn = db.transaction((attackerId, defenderId, battleSessionI
       prosperity_bonus_pct: boostedLoot.prosperity_bonus_pct,
     },
   });
+
+  // System raid bases are reusable content, not player economies. Restore the
+  // exact pre-raid balance after the attacker has received loot so every
+  // future materialization and any retained session row stays deterministic.
+  if (rewardProfile.is_bot) {
+    addResources(defenderId, lootGold, lootWood, lootOre, {
+      sourceType: 'raid_bot_resource_restore',
+      metadata: {
+        attacker_id: attackerId,
+        battle_session_id: battleSessionId,
+        restored_to: {
+          gold: defender.gold,
+          wood: defender.wood,
+          ore: defender.ore,
+        },
+      },
+    });
+  }
 
   // Tournament admins can override post-raid shield length. Zero means
   // "no shield" while still stamping last_attacked_by/at for cooldowns.
