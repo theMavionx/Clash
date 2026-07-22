@@ -5632,17 +5632,58 @@ func _show_ship_panel(ship_data: Dictionary) -> void:
 
 
 func _show_main_ship_panel() -> void:
-	if _block_without_server("open main ship"):
-		return
-	var result: Dictionary = await _net.get_player_ship()
-	if not is_instance_valid(self):
-		return
-	if result.has("error"):
-		_show_error(str(result.get("error", "Unable to load main ship")))
-		return
-	var ship: Dictionary = result.get("ship", result)
+	var ship: Dictionary
+	if test_mode:
+		ship = _test_player_ship_snapshot()
+	else:
+		if _block_without_server("open main ship"):
+			return
+		var net: Node = _net
+		if net == null or not net.has_method("get_player_ship"):
+			_show_error("Main ship service is not ready yet")
+			return
+		var result: Dictionary = await net.get_player_ship()
+		if not is_instance_valid(self):
+			return
+		if result.has("error"):
+			_show_error(str(result.get("error", "Unable to load main ship")))
+			return
+		var ship_value: Variant = result.get("ship", result)
+		if not (ship_value is Dictionary):
+			_show_error("Main ship service returned invalid data")
+			return
+		ship = ship_value
 	selected_building = {"id": "main_ship", "server_id": "main_ship", "node": get_node_or_null("../MainShipController")}
 	_send_main_ship_panel(ship)
+
+
+func _test_player_ship_snapshot() -> Dictionary:
+	var controller: Node = get_node_or_null("../MainShipController")
+	var level: int = 3
+	var troops: Array = [
+		"Knight:l2",
+		"Knight:l2",
+		"Mage:l2",
+		"Archer:l2",
+		"DemonKing:rEpic:nft_test",
+		"_SLOT_FILLER_",
+		"FireDragon:rCommon:nft_test_dragon",
+		"_SLOT_FILLER_",
+	]
+	if is_instance_valid(controller):
+		level = clampi(int(controller.get_meta("ship_level", level)), 1, 5)
+		var troops_value: Variant = controller.get_meta("ship_troops", troops)
+		if troops_value is Array:
+			troops = troops_value.duplicate(true)
+	var capacity: int = int(PLAYER_SHIP_LEVELS.get(level, {}).get("capacity", troops.size()))
+	if is_instance_valid(controller):
+		capacity = int(controller.get_meta("ship_capacity", capacity))
+	return {
+		"id": "test_main_ship",
+		"level": level,
+		"capacity": maxi(capacity, troops.size()),
+		"troops": troops,
+	}
 
 
 func _send_main_ship_panel(ship: Dictionary) -> void:
@@ -6392,12 +6433,8 @@ func _build_fleet() -> Array:
 			}]
 	# TestMain remains fully playable without a local server session.
 	if test_mode:
-		return [{
-			"id": "test_main_ship",
-			"level": 3,
-			"capacity": 27,
-			"troops": ["Knight:l2", "Knight:l2", "Mage:l2", "Archer:l2", "DemonKing:rEpic:nft_test", "_SLOT_FILLER_", "FireDragon:rCommon:nft_test_dragon", "_SLOT_FILLER_"],
-		}]
+		var test_ship := _test_player_ship_snapshot()
+		return [test_ship] if not test_ship.get("troops", []).is_empty() else []
 	return []
 
 
@@ -6653,6 +6690,7 @@ func _start_move(b: Dictionary) -> void:
 		if bs != self and bs._is_moving:
 			bs._cancel_move(false)
 	_is_moving = true
+	_set_collection_icons_suppressed_for_all(true)
 	_move_source_gp = b.grid_pos
 	_move_last_grid_step_gp = _move_source_gp
 	_move_source_pos = b["node"].position
@@ -6793,6 +6831,7 @@ func _cancel_move(reselect: bool = true) -> void:
 
 func _end_move() -> void:
 	_is_moving = false
+	_set_collection_icons_suppressed_for_all(false)
 	current_building_id = ""
 	_move_last_grid_step_gp = Vector2i(-9999, -9999)
 	if not always_show_grid:
@@ -6800,6 +6839,18 @@ func _end_move() -> void:
 	if _move_indicator and is_instance_valid(_move_indicator):
 		_move_indicator.queue_free()
 	_move_indicator = null
+
+
+func _set_collection_icons_suppressed_for_all(suppressed: bool) -> void:
+	var systems: Array = _building_systems
+	if systems.is_empty() and is_inside_tree():
+		systems = get_tree().get_nodes_in_group("building_systems")
+	for system in systems:
+		if not is_instance_valid(system):
+			continue
+		var production := system.get("_production") as BSProduction
+		if production:
+			production.set_collection_icons_suppressed(suppressed)
 
 
 func _despawn_port_ship_for_move(b: Dictionary) -> void:

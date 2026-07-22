@@ -1953,3 +1953,9 @@ Follow-up:
 - Request: confirm that attackers cannot see the Shark Trap before activation, then create a fresh Godot export, commit, push, and deploy the completed release to production.
 - Scope: add an explicit runtime concealment assertion for both the shark model and its water marker, rerun combat/server/UI checks, export the current Godot Web runtime, commit all reviewed current release files while excluding local capture artifacts, push `main`, and run the standard atomic production deployment.
 - Approval: explicit owner authorization for commit, push, fresh Godot export, and production deploy in this conversation.
+
+### UR-2026-07-22-RESTORE-PRODUCTION-ATTACK-ZONE
+- Timestamp: 2026-07-22 Europe/Kyiv
+- Request: commit and deploy the fix for the red attack deployment zone being absent in production.
+- Scope: align the production `Main.tscn` attack plane with the verified visible TestMain transform, regenerate the server-authoritative combat-grid snapshot, update the stale-grid regression fixture, retain the approved wider camera pan bounds, include all other currently tracked working-tree changes at the owner's explicit follow-up request, create a fresh Godot Web export, push `main`, and deploy atomically to production.
+- Approval: explicit owner authorization for commit, push, fresh Godot export, and production deploy in this conversation.

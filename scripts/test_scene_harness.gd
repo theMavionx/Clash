@@ -128,8 +128,12 @@ func _ready() -> void:
 		call_deferred("_verify_water_material_parity")
 	if OS.get_cmdline_user_args().has("--capture-resource-collection-feedback"):
 		call_deferred("_capture_resource_collection_feedback")
+	if OS.get_cmdline_user_args().has("--verify-collect-icons-during-move"):
+		call_deferred("_verify_collect_icons_during_move")
 	if OS.get_cmdline_user_args().has("--verify-main-ship-motion"):
 		call_deferred("_verify_main_ship_motion")
+	if OS.get_cmdline_user_args().has("--verify-main-ship-panel"):
+		call_deferred("_verify_main_ship_panel")
 	if OS.get_cmdline_user_args().has("--verify-main-ship-flag-uv"):
 		call_deferred("_verify_main_ship_flag_uv")
 	if OS.get_cmdline_user_args().has("--capture-main-ship-flag-orientation"):
@@ -1221,6 +1225,36 @@ func _verify_main_ship_motion() -> void:
 	get_tree().quit()
 
 
+func _verify_main_ship_panel() -> void:
+	await get_tree().process_frame
+	var building_system := get_node_or_null("../BuildingSystem") as BuildingSystem
+	if building_system == null:
+		push_error("Main ship panel test failed: BuildingSystem is missing.")
+		get_tree().quit(1)
+		return
+	await building_system._show_main_ship_panel()
+	if str(building_system.selected_building.get("id", "")) != "main_ship":
+		push_error("Main ship panel test failed: local ship was not selected.")
+		get_tree().quit(1)
+		return
+	var snapshot: Dictionary = building_system._test_player_ship_snapshot()
+	if int(snapshot.get("level", 0)) < 1 or int(snapshot.get("capacity", 0)) < snapshot.get("troops", []).size():
+		push_error("Main ship panel test failed: local ship snapshot is invalid.")
+		get_tree().quit(1)
+		return
+	print("[MAIN_SHIP_PANEL_TEST] PASS level=%d capacity=%d troops=%d net_required=false" % [
+		int(snapshot.get("level", 0)),
+		int(snapshot.get("capacity", 0)),
+		snapshot.get("troops", []).size(),
+	])
+	var warmup := get_node_or_null("../Warmup")
+	var wait_seconds := 0.0
+	while warmup != null and warmup.visible and wait_seconds < 5.0:
+		await get_tree().process_frame
+		wait_seconds += get_process_delta_time()
+	get_tree().quit()
+
+
 func _verify_main_ship_flag_uv() -> void:
 	var controller := get_node_or_null("../MainShipController")
 	if controller == null:
@@ -1502,6 +1536,80 @@ func _capture_resource_collection_feedback() -> void:
 	get_tree().quit()
 
 
+func _verify_collect_icons_during_move() -> void:
+	var bs := _building_system_for_grid("main")
+	if bs == null:
+		push_error("Move collection icon test failed: building system is missing.")
+		get_tree().quit(1)
+		return
+	if _panel:
+		_panel.visible = false
+	reset_sandbox()
+	await get_tree().process_frame
+	var def: Dictionary = bs.building_defs.get("mine", {})
+	var grid_pos := Vector2i(12, 10)
+	bs._spawn_building_locally("mine", grid_pos, def, -1)
+	await get_tree().process_frame
+	var building := _last_building_at(bs, "mine", grid_pos)
+	if building.is_empty():
+		push_error("Move collection icon test failed: mine did not spawn.")
+		get_tree().quit(1)
+		return
+	building["stored"] = 100.0
+	var building_node := building.get("node") as Node3D
+	_frame_resource_collection_camera([building_node.global_position])
+	await get_tree().process_frame
+	bs._production._update_collect_icons()
+	await get_tree().process_frame
+	var icon := building.get("_collect_icon") as Control
+	if not is_instance_valid(icon) or not icon.visible or icon.mouse_filter != Control.MOUSE_FILTER_STOP:
+		push_error("Move collection icon test failed: initial collect icon is not interactive.")
+		get_tree().quit(1)
+		return
+	bs.selected_building = building
+	bs._start_move(building)
+	if not bs._is_moving or icon.visible or icon.mouse_filter != Control.MOUSE_FILTER_IGNORE:
+		push_error("Move collection icon test failed: move start did not suppress the collect icon.")
+		get_tree().quit(1)
+		return
+	bs._production._update_collect_icons()
+	await get_tree().process_frame
+	if icon.visible or icon.mouse_filter != Control.MOUSE_FILTER_IGNORE:
+		push_error("Move collection icon test failed: frame update restored the icon during movement.")
+		get_tree().quit(1)
+		return
+	var stored_before_click := float(building.get("stored", 0.0))
+	bs._production._click_collect_icon(icon, building, "ore")
+	if not is_equal_approx(float(building.get("stored", 0.0)), stored_before_click):
+		push_error("Move collection icon test failed: suppressed icon still collected resources.")
+		get_tree().quit(1)
+		return
+	bs._cancel_move(false)
+	await get_tree().process_frame
+	bs._production._update_collect_icons()
+	if bs._is_moving or not icon.visible or icon.mouse_filter != Control.MOUSE_FILTER_STOP:
+		push_error("Move collection icon test failed: cancel did not restore the collect icon.")
+		get_tree().quit(1)
+		return
+	bs._start_move(building)
+	var confirmed_grid_pos := Vector2i(16, 10)
+	var size_x := float(def.cells.x) * float(bs.cell_size)
+	var size_z := float(def.cells.y) * float(bs.cell_size)
+	var confirmed_local_pos: Vector3 = bs._grid_to_local(confirmed_grid_pos)
+	confirmed_local_pos += Vector3(size_x * 0.5, 0.0, size_z * 0.5)
+	bs.current_grid_pos = confirmed_grid_pos
+	building_node.position = confirmed_local_pos
+	bs._confirm_move()
+	await get_tree().process_frame
+	bs._production._update_collect_icons()
+	if bs._is_moving or building.get("grid_pos") != confirmed_grid_pos or not icon.visible or icon.mouse_filter != Control.MOUSE_FILTER_STOP:
+		push_error("Move collection icon test failed: confirm did not restore the collect icon.")
+		get_tree().quit(1)
+		return
+	print("[MOVE_COLLECTION_ICON_TEST] PASS hidden_during_move=true input_blocked=true restored_after_cancel=true restored_after_confirm=true")
+	get_tree().quit()
+
+
 func _frame_resource_collection_camera(centers: Array[Vector3]) -> void:
 	if centers.is_empty():
 		return
@@ -1741,6 +1849,31 @@ func _verify_shark_trap() -> void:
 	if not await _save_shark_test_capture(output_dir.path_join("01-owner-preview.png"), "owner-preview"):
 		get_tree().quit(1)
 		return
+
+	# TestMain's Start button attacks the current sandbox directly. It never
+	# flips BSBattle.is_viewing_enemy, so verify that entering AttackSystem mode
+	# arms an already-instantiated owner trap and keeps it hidden from the player.
+	attack.is_attack_mode = true
+	await get_tree().physics_frame
+	await get_tree().physics_frame
+	if not bool(owner_node.call("is_concealed_from_attacker")):
+		push_error("Shark Trap test failed: TestMain self-attack did not conceal and arm the owner trap.")
+		get_tree().quit(1)
+		return
+	var self_attack_target_position: Vector3 = owner_node.global_position + bs.global_transform.basis * Vector3(0.08, 0.0, -0.06)
+	if not attack._spawn_manual_troop("Knight", 1, self_attack_target_position, 90):
+		push_error("Shark Trap test failed: TestMain self-attack target did not spawn.")
+		get_tree().quit(1)
+		return
+	var self_attack_wait := 0.0
+	while not bool(owner_node.get_meta("trap_spent", false)) and self_attack_wait < 1.0:
+		await get_tree().physics_frame
+		self_attack_wait += get_physics_process_delta_time()
+	if not bool(owner_node.get_meta("trap_spent", false)):
+		push_error("Shark Trap test failed: TestMain self-attack did not trigger the armed trap.")
+		get_tree().quit(1)
+		return
+	attack.is_attack_mode = false
 
 	reset_sandbox()
 	_clear_shark_test_troops()

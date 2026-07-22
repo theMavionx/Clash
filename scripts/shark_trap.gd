@@ -25,6 +25,7 @@ var _head_hidden_position := Vector3.ZERO
 var _bite_tracking: bool = false
 var _bite_target_local := Vector3.ZERO
 var _bite_target: Node3D = null
+var _combat_concealed: bool = false
 
 
 func _ready() -> void:
@@ -35,17 +36,16 @@ func _ready() -> void:
 	set_meta("trap_damage", _damage)
 	_configure_vertical_head()
 	_create_water_marker()
-	if _is_enemy_battle():
-		if is_instance_valid(_visual_model):
-			_visual_model.position = _head_hidden_position
-			_visual_model.visible = false
-		if is_instance_valid(_water_marker):
-			_water_marker.visible = false
+	if _is_combat_active():
+		_enter_attacker_view()
 	else:
 		_setup_owner_preview()
 	process_priority = 100
 	set_process(false)
-	set_physics_process(_is_enemy_battle())
+	# Keep this lightweight watcher active on the owner island too. The TestMain
+	# self-attack flow enables AttackSystem directly instead of switching bases,
+	# so combat state can change after this node has already entered the tree.
+	set_physics_process(true)
 
 
 func _process(_delta: float) -> void:
@@ -67,8 +67,14 @@ func set_ward_bonus_pct(_pct: int) -> void:
 
 
 func _physics_process(_delta: float) -> void:
-	if _spent or not _is_enemy_battle() or not is_instance_valid(_bs):
+	if _spent or not is_instance_valid(_bs):
 		return
+	if not _is_combat_active():
+		if _combat_concealed:
+			_exit_attacker_view()
+		return
+	if not _combat_concealed:
+		_enter_attacker_view()
 	var target := _find_trigger_target()
 	if target != null:
 		_trigger(target)
@@ -76,6 +82,32 @@ func _physics_process(_delta: float) -> void:
 
 func _is_enemy_battle() -> bool:
 	return is_instance_valid(_bs) and bool(_bs.get("is_viewing_enemy"))
+
+
+func _is_combat_active() -> bool:
+	if _is_enemy_battle():
+		return true
+	if not is_instance_valid(_bs):
+		return false
+	var attack_system := _bs.get_node_or_null("../AttackSystem")
+	return attack_system != null and bool(attack_system.get("is_attack_mode"))
+
+
+func _enter_attacker_view() -> void:
+	_combat_concealed = true
+	if is_instance_valid(_preview_player):
+		_preview_player.stop()
+	if is_instance_valid(_visual_model):
+		_visual_model.position = _head_hidden_position
+		_visual_model.visible = false
+	if is_instance_valid(_water_marker):
+		_water_marker.visible = false
+	print("[SHARK_TRAP] armed and concealed server_id=", int(get_meta("server_id", -1)))
+
+
+func _exit_attacker_view() -> void:
+	_combat_concealed = false
+	_setup_owner_preview()
 
 
 func _find_visual_model() -> Node3D:
@@ -180,7 +212,7 @@ func visual_head_alignment_error_to(global_target: Vector3) -> float:
 
 
 func is_concealed_from_attacker() -> bool:
-	if not _is_enemy_battle() or _spent:
+	if not _is_combat_active() or _spent:
 		return false
 	var model_hidden := not is_instance_valid(_visual_model) or not _visual_model.visible
 	var marker_hidden := not is_instance_valid(_water_marker) or not _water_marker.visible

@@ -30,6 +30,7 @@ const COLLECTION_FEEDBACK_DURATION := 1.05
 # ── Back-reference to BuildingSystem ──────────────────────────
 ## The Node3D that owns this helper (a BuildingSystem instance).
 var bs: Node3D
+var _collection_icons_suppressed: bool = false
 
 ## Initialise with the owning BuildingSystem node.
 ## Returns self so the caller can chain: BSProduction.new().init(self)
@@ -109,6 +110,9 @@ func _tick_production() -> void:
 ## Project a collect-icon above each production building that has resource >= 1.
 ## Call every frame (from _process) after _tick_production has run.
 func _update_collect_icons() -> void:
+	if _collection_icons_suppressed:
+		_hide_collection_icons_without_freeing()
+		return
 	var cam := BaseTroop._get_camera_cached()
 	if not cam:
 		return
@@ -125,6 +129,7 @@ func _update_collect_icons() -> void:
 			if not icon:
 				icon = _create_collect_icon(b, node, def)
 				b["_collect_icon"] = icon
+			icon.mouse_filter = Control.MOUSE_FILTER_STOP
 			icon.visible = true
 			# Check if storage is full — tint icon red
 			var _res_type: String = def.get("produces", "gold")
@@ -165,6 +170,7 @@ func _create_collect_icon(b: Dictionary, building_node: Node3D, def: Dictionary)
 	var btn := TextureButton.new()
 	btn.custom_minimum_size = Vector2(56, 56)
 	btn.size                = Vector2(56, 56)
+	btn.mouse_filter        = Control.MOUSE_FILTER_STOP
 
 	# Circular background panel
 	var bg := Panel.new()
@@ -229,6 +235,8 @@ func _create_collect_icon(b: Dictionary, building_node: Node3D, def: Dictionary)
 ## Handle a tap/click on a collect icon: hide it, fire the flying animation,
 ## then sync resources with the server.
 func _click_collect_icon(btn: Control, b: Dictionary, res_type: String) -> void:
+	if _collection_icons_suppressed or not is_instance_valid(btn) or not btn.visible:
+		return
 	if bool(b.get("_collecting", false)):
 		return
 	# Block collection if storage is full
@@ -430,7 +438,8 @@ func _collect_and_animate(b: Dictionary, res_type: String, feedback_pos: Vector2
 			b["_collecting"] = false
 			var icon := b.get("_collect_icon") as Control
 			if is_instance_valid(icon):
-				icon.visible = true
+				icon.mouse_filter = Control.MOUSE_FILTER_IGNORE if _collection_icons_suppressed else Control.MOUSE_FILTER_STOP
+				icon.visible = not _collection_icons_suppressed
 				icon.set_meta("anim_scale", 1.0)
 			if bs.has_method("_show_error"):
 				bs._show_error(str(result.error))
@@ -518,3 +527,25 @@ func _hide_all_collect_icons() -> void:
 			icon.visible = false
 			icon.queue_free()
 		b["_collect_icon"] = null
+
+
+## Temporarily remove collection controls from both rendering and hit testing.
+## Existing buttons are retained so ending a move does not recreate their UI.
+func set_collection_icons_suppressed(suppressed: bool) -> void:
+	_collection_icons_suppressed = suppressed
+	if suppressed:
+		_hide_collection_icons_without_freeing()
+		return
+	for b in bs.placed_buildings:
+		var icon := b.get("_collect_icon") as Control
+		if is_instance_valid(icon):
+			icon.mouse_filter = Control.MOUSE_FILTER_STOP
+	_update_collect_icons()
+
+
+func _hide_collection_icons_without_freeing() -> void:
+	for b in bs.placed_buildings:
+		var icon := b.get("_collect_icon") as Control
+		if is_instance_valid(icon):
+			icon.visible = false
+			icon.mouse_filter = Control.MOUSE_FILTER_IGNORE

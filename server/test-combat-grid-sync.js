@@ -10,11 +10,11 @@ const {
 } = require('./combat_grid_config');
 
 const OLD_ATTACK_GRID = Object.freeze({
-  grid_extent_x: 3.175276517868,
-  grid_extent_z: 0.497041285038,
-  grid_center_x: -1.97168302536,
-  grid_center_z: 1.974015831947,
-  grid_rotation: -0.137968242168,
+  grid_extent_x: 3.175289888921,
+  grid_extent_z: 0.887055510563,
+  grid_center_x: -1.833000175204,
+  grid_center_z: 2.355752512373,
+  grid_rotation: -0.083332935828,
 });
 
 function localToWorld(grid, localX, localZ) {
@@ -36,8 +36,13 @@ assert.equal(
   true,
   'current Godot attack-grid center must be accepted',
 );
+const currentOnlyPoint = localToWorld(
+  attackGrid,
+  -attackGrid.grid_extent_x * 0.5 + 0.001,
+  -attackGrid.grid_extent_z * 0.5 + 0.001,
+);
 assert.equal(
-  isWorldPointInsideGrid(OLD_ATTACK_GRID, attackGrid.grid_center_x, attackGrid.grid_center_z, 0.06),
+  isWorldPointInsideGrid(OLD_ATTACK_GRID, currentOnlyPoint.x, currentOnlyPoint.z, 0.06),
   false,
   'regression fixture must reproduce rejection by the stale server grid',
 );
