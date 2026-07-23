@@ -1,0 +1,56 @@
+[gd_scene load_steps=12 format=3]
+
+[ext_resource type="PackedScene" path="res://Model/Characters/pirate_archer/parts/all_bodies_cloaks.fbx" id="1_body"]
+[ext_resource type="PackedScene" path="res://Model/Characters/pirate_archer/parts/head_female.fbx" id="2_head"]
+[ext_resource type="PackedScene" path="res://Model/Characters/pirate_archer/parts/hair_08.fbx" id="3_hair"]
+[ext_resource type="PackedScene" path="res://Model/Characters/pirate_archer/parts/eye_07.fbx" id="4_eye"]
+[ext_resource type="PackedScene" path="res://Model/Characters/pirate_archer/parts/mouth_02.fbx" id="5_mouth"]
+[ext_resource type="PackedScene" path="res://Model/Characters/pirate_archer/parts/pirate_patch.fbx" id="6_patch"]
+[ext_resource type="PackedScene" path="res://Model/Characters/pirate_archer/parts/ribbon.fbx" id="7_ribbon"]
+[ext_resource type="PackedScene" path="res://Model/Characters/pirate_archer/animations/attack_01_bow.fbx" id="8_bow"]
+[ext_resource type="PackedScene" path="res://Model/Characters/pirate_archer/animations/attack_01_arrow.fbx" id="9_arrow"]
+[ext_resource type="Script" path="res://Model/Characters/pirate_archer/pirate_archer_visual.gd" id="10_visual"]
+
+[node name="PirateArcher" instance=ExtResource("1_body")]
+
+[node name="HeadAttachment" type="BoneAttachment3D" parent="Skeleton3D"]
+bone_name = "head"
+bone_idx = 10
+
+[node name="HeadPose" type="Node3D" parent="Skeleton3D/HeadAttachment"]
+quaternion = Quaternion(0.50000006, 0.5, -0.50000006, 0.5)
+
+[node name="HeadFemale" parent="Skeleton3D/HeadAttachment/HeadPose" instance=ExtResource("2_head")]
+
+[node name="Hair" parent="Skeleton3D/HeadAttachment/HeadPose" instance=ExtResource("3_hair")]
+
+[node name="Eye" parent="Skeleton3D/HeadAttachment/HeadPose" instance=ExtResource("4_eye")]
+
+[node name="Mouth" parent="Skeleton3D/HeadAttachment/HeadPose" instance=ExtResource("5_mouth")]
+
+[node name="PiratePatch" parent="Skeleton3D/HeadAttachment/HeadPose" instance=ExtResource("6_patch")]
+
+[node name="Ribbon" parent="Skeleton3D/HeadAttachment/HeadPose" instance=ExtResource("7_ribbon")]
+
+[node name="BowAttachment" type="BoneAttachment3D" parent="Skeleton3D"]
+bone_name = "weapon_l"
+bone_idx = 21
+
+[node name="BowPose" type="Node3D" parent="Skeleton3D/BowAttachment"]
+position = Vector3(-0.0091, 0, -0.0054)
+quaternion = Quaternion(0, 0.7071068, 0, 0.7071068)
+
+[node name="Bow" parent="Skeleton3D/BowAttachment/BowPose" instance=ExtResource("8_bow")]
+
+[node name="ArrowAttachment" type="BoneAttachment3D" parent="Skeleton3D"]
+bone_name = "weapon_r"
+bone_idx = 37
+
+[node name="ArrowPose" type="Node3D" parent="Skeleton3D/ArrowAttachment"]
+quaternion = Quaternion(0.5, -0.5, 0.5, -0.5)
+scale = Vector3(0.7, 0.7, 0.7)
+
+[node name="Arrow" parent="Skeleton3D/ArrowAttachment/ArrowPose" instance=ExtResource("9_arrow")]
+
+[node name="VisualSetup" type="Node" parent="."]
+script = ExtResource("10_visual")

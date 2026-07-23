@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { adminDelete, adminGet, adminPatch, adminPost, clearAdminKey, getStoredAdminKey, storeAdminKey } from './api';
 import {
   DEX_LABELS,
@@ -235,16 +235,25 @@ export default function AdminApp() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [lastRefresh, setLastRefresh] = useState(null);
+  const skipNextActiveRefresh = useRef(false);
 
   async function login(nextKey = key) {
     setError('');
     setLoading(true);
     try {
-      await adminGet('/admin/players', { key: nextKey });
+      const [playersData, replaysData, tournamentsData] = await Promise.all([
+        adminGet('/admin/players', { key: nextKey }),
+        adminGet('/admin/replays', { key: nextKey }),
+        adminGet('/admin/tournaments', { key: nextKey }),
+      ]);
       storeAdminKey(nextKey);
       setKey(nextKey);
+      setPlayers(Array.isArray(playersData) ? playersData : (playersData.players || []));
+      setReplays(Array.isArray(replaysData) ? replaysData : (replaysData.replays || []));
+      setTournaments(tournamentsData.tournaments || []);
+      setLastRefresh(new Date());
+      skipNextActiveRefresh.current = true;
       setAuthed(true);
-      await refreshCore();
     } catch (err) {
       setError(err.message || 'Invalid admin key');
       setAuthed(false);
@@ -303,6 +312,10 @@ export default function AdminApp() {
 
   useEffect(() => {
     if (!authed) return;
+    if (skipNextActiveRefresh.current) {
+      skipNextActiveRefresh.current = false;
+      return;
+    }
     refreshActive();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, authed]);

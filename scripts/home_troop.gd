@@ -53,7 +53,7 @@ var _grid_y: float = 0.0
 var _troop_type: String = ""  # "Knight", "Mage", etc.
 var level: int = 1
 
-# ── Animation files — same paths as BaseTroop.MEDIUM_RIG_ANIM_FILES ──
+# Legacy animation files; modular troops select their dedicated libraries below.
 const ANIM_FILES: Array[String] = [
 	"res://Model/Characters/Animations/Rig_Medium/Rig_Medium_General.glb",
 	"res://Model/Characters/Animations/Rig_Medium/Rig_Medium_MovementBasic.glb",
@@ -82,7 +82,13 @@ func init_troop(troop_type: String, lvl: int) -> void:
 func _process(delta: float) -> void:
 	delta = minf(delta, 0.1)
 	# Force scale 0.1 every frame — GLB animations override it otherwise
-	scale = Vector3(0.1, 0.1, 0.1)
+	var is_modular_troop := (
+		bool(get_meta("clash_pirate_knight", false))
+		or bool(get_meta("clash_pirate_archer", false))
+		or bool(get_meta("clash_pirate_mage", false))
+	)
+	var home_scale := 0.17 if is_modular_troop else 0.1
+	scale = Vector3.ONE * home_scale
 	match state:
 		WanderState.IDLE:
 			_idle_timer -= delta
@@ -269,40 +275,23 @@ func _setup_animations() -> void:
 	add_child(_anim_player)
 	_anim_player.root_node = _anim_player.get_path_to(self)
 
-	var cache_key: String = ",".join(ANIM_FILES)
-	var lib: AnimationLibrary
-	if BaseTroop._anim_lib_cache.has(cache_key):
-		lib = BaseTroop._anim_lib_cache[cache_key]
-	else:
-		lib = AnimationLibrary.new()
-		for file_path in ANIM_FILES:
-			var res = load(file_path)
-			if res == null:
-				continue
-			var container = Node3D.new()
-			add_child(container)
-			var instance = res.instantiate()
-			container.add_child(instance)
-			_hide_meshes(container)
-			var src = _find_anim_player(instance)
-			if src:
-				for anim_name in src.get_animation_list():
-					if anim_name == "RESET" or anim_name == "T-Pose":
-						continue
-					var anim = src.get_animation(anim_name)
-					if anim and not lib.has_animation(anim_name):
-						var dup = anim.duplicate()
-						if anim_name.begins_with("Running") or anim_name.begins_with("Walking") or anim_name.begins_with("Idle") or anim_name == "Cheering":
-							dup.loop_mode = Animation.LOOP_LINEAR
-						# Strip ALL scale and position tracks — they override spawn scale
-						for ti in range(dup.get_track_count() - 1, -1, -1):
-							var path: String = str(dup.track_get_path(ti))
-							if ":scale" in path or ":position" in path:
-								dup.remove_track(ti)
-						lib.add_animation(anim_name, dup)
-			container.free()
-		BaseTroop._anim_lib_cache[cache_key] = lib
-
+	var selected_files: Array = ANIM_FILES
+	var selected_aliases: Dictionary = {}
+	if bool(get_meta("clash_pirate_knight", false)):
+		selected_files = BaseTroop.PIRATE_KNIGHT_ANIM_FILES
+		selected_aliases = BaseTroop.PIRATE_KNIGHT_ANIM_ALIASES
+	elif bool(get_meta("clash_pirate_archer", false)):
+		selected_files = BaseTroop.PIRATE_ARCHER_ANIM_FILES
+		selected_aliases = BaseTroop.PIRATE_ARCHER_ANIM_ALIASES
+	elif bool(get_meta("clash_pirate_mage", false)):
+		selected_files = BaseTroop.PIRATE_MAGE_ANIM_FILES
+		selected_aliases = BaseTroop.PIRATE_MAGE_ANIM_ALIASES
+	BaseTroop.prewarm_anim_library(selected_files, selected_aliases)
+	var cache_key := BaseTroop._animation_cache_key(selected_files, selected_aliases)
+	var lib: AnimationLibrary = BaseTroop._anim_lib_cache.get(cache_key, null)
+	if lib == null:
+		push_warning("HomeTroop: animation library is unavailable for %s." % _troop_type)
+		return
 	_anim_player.add_animation_library("", lib)
 	_play_anim("Idle_A")
 
@@ -334,6 +323,12 @@ func _setup_weapon() -> void:
 		return
 	var skeleton = _find_skeleton(self)
 	if not skeleton:
+		return
+	if _troop_type == "Knight" and skeleton.find_bone("weapon_r") >= 0:
+		return
+	if _troop_type == "Archer" and skeleton.find_bone("weapon_l") >= 0:
+		return
+	if _troop_type == "Mage" and skeleton.find_bone("weapon_r") >= 0:
 		return
 	var bone_idx = skeleton.find_bone(bone)
 	if bone_idx < 0:

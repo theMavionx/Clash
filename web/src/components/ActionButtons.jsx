@@ -15,6 +15,7 @@ import NftMintPanel from './NftMintPanel';
 import knightImg  from '../assets/units/knight.png';
 import mageImg    from '../assets/units/mage.png';
 import archerImg  from '../assets/units/archer.png';
+import mimicImg   from '../assets/units/mimic.png';
 import arbaletImg from '../assets/units/arbalet.png';
 import berserkImg from '../assets/units/berserk.png';
 import demonKingImg from '../assets/units/demonking.png';
@@ -25,9 +26,10 @@ const dragonImg = '/cdn/nft/dragon/1/default.jpg';
 // If SHIP_TROOPS order changes in attack_system.gd, update this array too.
 // zoom/offsetY — per-portrait tweaks to normalize framing across different source images
 const ATTACK_TROOPS = [
-  { key: 'knight',    label: 'Knight',    img: knightImg,  zoom: 1.35, offsetY: '10%' },
-  { key: 'mage',      label: 'Mage',      img: mageImg,    zoom: 1.45, offsetY: '15%' },
+  { key: 'knight',    label: 'Knight',    img: knightImg },
+  { key: 'mage',      label: 'Mage',      img: mageImg },
   { key: 'archer',    label: 'Archer',    img: archerImg },
+  { key: 'mimic',     label: 'Mimic Barrel', img: mimicImg },
   { key: 'demonking', label: 'Demon King', img: demonKingImg },
   { key: 'firedragon', label: 'Dragon', img: dragonImg },
 ];
@@ -133,10 +135,11 @@ const EnergyBoltIcon = ({ size = 14 }) => (
 
 // Map troop names to images/display info
 const TROOP_IMG_MAP = {
-  knight: { img: knightImg, label: 'Knight', zoom: 1.35, offsetY: '10%' },
-  mage: { img: mageImg, label: 'Mage', zoom: 1.45, offsetY: '15%' },
+  knight: { img: knightImg, label: 'Knight' },
+  mage: { img: mageImg, label: 'Mage' },
   barbarian: { img: berserkImg, label: 'Barbarian' },
   archer: { img: archerImg, label: 'Archer' },
+  mimic: { img: mimicImg, label: 'Mimic Barrel' },
   ranger: { img: arbaletImg, label: 'Ranger' },
   demonking: { img: demonKingImg, label: 'Demon King' },
   demon_king: { img: demonKingImg, label: 'Demon King' },
@@ -896,7 +899,7 @@ function ActionButtons({ onOpenBattleLog, onOpenBots }) {
 
 const REINFORCE_COST = 50;
 const UNIT_IMG_MAP = {
-  Knight: knightImg, Mage: mageImg, Barbarian: berserkImg, Archer: archerImg, Ranger: arbaletImg,
+  Knight: knightImg, Mage: mageImg, Barbarian: berserkImg, Archer: archerImg, Mimic: mimicImg, Ranger: arbaletImg,
 };
 
 function ReinforceModal({ casualties, cost: serverCost, onConfirm, onClose }) {

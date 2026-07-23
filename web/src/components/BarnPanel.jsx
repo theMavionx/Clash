@@ -16,6 +16,7 @@ import knightImg from '../assets/units/knight.png';
 import mageImg from '../assets/units/mage.png';
 import arbaletImg from '../assets/units/arbalet.png';
 import archerImg from '../assets/units/archer.png';
+import mimicImg from '../assets/units/mimic.png';
 import berserkImg from '../assets/units/berserk.png';
 import demonKingImg from '../assets/units/demonking.png';
 
@@ -54,6 +55,7 @@ const UNIT_IMAGES = {
   Knight: knightImg,
   Mage: mageImg,
   Archer: archerImg,
+  Mimic: mimicImg,
   Ranger: arbaletImg,
   Barbarian: berserkImg,
   DemonKing: demonKingImg,
@@ -61,10 +63,11 @@ const UNIT_IMAGES = {
 };
 
 const CARD_TROOP_STYLE_MAP = {
-  Knight: { scale: 1.8, offsetY: '35%' },
-  Mage: { scale: 1.85, offsetY: '45%' },
+  Knight: { scale: 1.25, offsetY: '15%' },
+  Mage: { scale: 1.25, offsetY: '15%' },
   Barbarian: { scale: 1.25, offsetY: '15%' },
   Archer: { scale: 1.25, offsetY: '15%' },
+  Mimic: { scale: 1.1, offsetY: '4%' },
   Ranger: { scale: 1.25, offsetY: '15%' },
   DemonKing: { scale: 1.35, offsetY: '10%' },
   FireDragon: { scale: 1.2, offsetY: '8%' },
@@ -239,6 +242,20 @@ const TROOP_STATS = {
     },
     maxStats: { hp: 840, damage: 180, atk_speed: 1.05 }
   },
+  Mimic: {
+    display: "Mimic Barrel",
+    trait: "Trap Runner: defenses ignore it while rolling. Traps still trigger, but deal no damage.",
+    stats: {
+      1: { hp: 300, damage: 20, atk_speed: 1.5 },
+      2: { hp: 400, damage: 27, atk_speed: 1.42 },
+      3: { hp: 520, damage: 36, atk_speed: 1.34 },
+      4: { hp: 680, damage: 47, atk_speed: 1.27 },
+      5: { hp: 860, damage: 61, atk_speed: 1.2 },
+      6: { hp: 1060, damage: 79, atk_speed: 1.13 },
+      7: { hp: 1300, damage: 102, atk_speed: 1.06 },
+    },
+    maxStats: { hp: 1300, damage: 102, atk_speed: 1.5 }
+  },
   Ranger: {
     display: "Ranger",
     stats: {
@@ -280,7 +297,7 @@ const TROOP_STATS = {
   }
 };
 
-const ACTIVE_TROOP_NAMES = ['Knight', 'Mage', 'Archer', 'DemonKing', 'FireDragon'];
+const ACTIVE_TROOP_NAMES = ['Knight', 'Mage', 'Archer', 'Mimic', 'DemonKing', 'FireDragon'];
 const NFT_TROOP_SLOT_COUNT = 2;
 const NFT_RARITY_MULTIPLIERS = {
   common: 1.2,
@@ -297,6 +314,7 @@ const TROOP_LEVEL_KEYS = {
   Mage: ['Mage', 'mage'],
   Barbarian: ['Barbarian', 'barbarian'],
   Archer: ['Archer', 'archer'],
+  Mimic: ['Mimic', 'mimic'],
   Ranger: ['Ranger', 'ranger'],
   DemonKing: ['DemonKing', 'demon_king', 'demonking'],
   FireDragon: ['FireDragon', 'fire_dragon', 'firedragon'],
@@ -741,6 +759,21 @@ function BarnPanel({ building, onClose }) {
                 <ProgressBar label="Damage Output" value={stats.damage} max={maxStats.damage} gradient="linear-gradient(90deg, #10b981, #34d399)" />
                 <ProgressBar label="Attack Speed" value={stats.atk_speed} max={maxStats.atk_speed} showAsTime={true} gradient="linear-gradient(90deg, #6366f1, #818cf8)" />
                 <ProgressBar label="Level Progress" value={displayLvl} max={troopMaxLevel} gradient="linear-gradient(90deg, #8b5cf6, #a78bfa)" />
+              </div>
+            )}
+            {TROOP_STATS[currentTroopName]?.trait && (
+              <div style={{
+                marginTop: mobile ? 8 : 10,
+                padding: mobile ? '8px 10px' : '10px 12px',
+                border: '1px solid #c9a95f',
+                borderRadius: 6,
+                background: '#fff5cf',
+                color: '#68431f',
+                fontSize: mobile ? 11 : 12,
+                fontWeight: 800,
+                lineHeight: 1.35,
+              }}>
+                {TROOP_STATS[currentTroopName].trait}
               </div>
             )}
 

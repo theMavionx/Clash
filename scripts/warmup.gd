@@ -325,17 +325,39 @@ func _prewarm_weapon_scenes() -> void:
 func _prewarm_troop_anim_libraries() -> void:
 	var t0 := Time.get_ticks_msec()
 	BaseTroop.prewarm_anim_library(BaseTroop.MEDIUM_RIG_ANIM_FILES)
+	BaseTroop.prewarm_anim_library(
+		BaseTroop.PIRATE_ARCHER_ANIM_FILES,
+		BaseTroop.PIRATE_ARCHER_ANIM_ALIASES
+	)
+	BaseTroop.prewarm_anim_library(
+		BaseTroop.PIRATE_MAGE_ANIM_FILES,
+		BaseTroop.PIRATE_MAGE_ANIM_ALIASES
+	)
+	BaseTroop.prewarm_anim_library(
+		BaseTroop.PIRATE_KNIGHT_ANIM_FILES,
+		BaseTroop.PIRATE_KNIGHT_ANIM_ALIASES
+	)
+	BaseTroop.prewarm_anim_library(
+		[
+			"res://Model/Characters/MimicBarrel/Animations/Idle.fbx",
+			"res://Model/Characters/MimicBarrel/Animations/Roll_Forward_WO_Root.fbx",
+			"res://Model/Characters/MimicBarrel/Animations/Tongue_Attack.fbx",
+			"res://Model/Characters/MimicBarrel/Animations/Take_Damage.fbx",
+			"res://Model/Characters/MimicBarrel/Animations/Die.fbx",
+		],
+		{
+			"res://Model/Characters/MimicBarrel/Animations/Idle.fbx": "Idle_A",
+			"res://Model/Characters/MimicBarrel/Animations/Roll_Forward_WO_Root.fbx": "Running_A",
+			"res://Model/Characters/MimicBarrel/Animations/Tongue_Attack.fbx": "Tongue_Attack",
+			"res://Model/Characters/MimicBarrel/Animations/Take_Damage.fbx": "GetHit",
+			"res://Model/Characters/MimicBarrel/Animations/Die.fbx": "Die",
+		}
+	)
 	# Skeleton-guard rig (different cache key — scripts/skeleton_guard.gd).
 	BaseTroop.prewarm_anim_library([
 		"res://Model/Characters/Skelet/Animations/gltf/Rig_Medium/Rig_Medium_General.glb",
 		"res://Model/Characters/Skelet/Animations/gltf/Rig_Medium/Rig_Medium_MovementBasic.glb",
 		"res://Model/Characters/Animations/Rig_Medium/Rig_Medium_CombatMelee.glb",
-		"res://Model/Characters/Animations/Rig_Medium/Rig_Medium_Simulation.glb",
-	])
-	# Tower-archer subset.
-	BaseTroop.prewarm_anim_library([
-		"res://Model/Characters/Animations/Rig_Medium/Rig_Medium_General.glb",
-		"res://Model/Characters/Animations/Rig_Medium/Rig_Medium_CombatRanged.glb",
 		"res://Model/Characters/Animations/Rig_Medium/Rig_Medium_Simulation.glb",
 	])
 

@@ -29,6 +29,7 @@ var attack_timer: float = 0.0
 
 var anim_player: AnimationPlayer
 var anim_files: Array = []
+var anim_file_aliases: Dictionary = {}
 var attack_anim: String = ""
 var _hp_bar: Node3D
 var _hp_fill: MeshInstance3D
@@ -48,7 +49,7 @@ const RENDER_DIAG_MAX_EVENTS: int = 24
 const RENDER_DIAG_MAX_MESHES: int = 10
 const RENDER_DIAG_MAX_PARTICLES: int = 8
 const TROOP_BODY_TEXTURES: Dictionary = {
-	"archer": "res://Model/Characters/Model/Ranger_ranger_texture.png",
+	"archer": "res://Model/Characters/pirate_archer/textures/palette_albedo.png",
 	"barbarian": "res://Model/Characters/Model/Barbarian_barbarian_texture.png",
 	"knight": "res://Model/Characters/Model/Knight_knight_texture.png",
 	"mage": "res://Model/Characters/Model/Mage_mage_texture.png",
@@ -56,7 +57,7 @@ const TROOP_BODY_TEXTURES: Dictionary = {
 	"rogue": "res://Model/Characters/Model/Rogue_rogue_texture.png",
 }
 const TROOP_BODY_MESH_PREFIXES: Dictionary = {
-	"archer": ["Ranger_"],
+	"archer": ["Body02", "Head02_Female", "Hair08", "Eye07", "Mouth02", "AC07_PiratePatch", "AC09_Ribbon", "Bow01", "Arrow01"],
 	"barbarian": ["Barbarian_"],
 	"knight": ["Knight_"],
 	"mage": ["Mage_"],
@@ -357,6 +358,14 @@ static func can_target_troop(troop: Variant, can_target_ground: bool, can_target
 	return can_target_air if is_air_troop(troop) else can_target_ground
 
 
+static func can_defense_target_troop(troop: Variant, can_target_ground: bool, can_target_air: bool) -> bool:
+	if not can_target_troop(troop, can_target_ground, can_target_air):
+		return false
+	if troop.has_method("is_targetable_by_defenses"):
+		return bool(troop.call("is_targetable_by_defenses"))
+	return true
+
+
 func is_air_unit() -> bool:
 	return unit_target_type == UNIT_TARGET_AIR
 
@@ -643,7 +652,7 @@ func _setup_animations() -> void:
 	anim_player.root_node = anim_player.get_path_to(self)
 
 	# Build cache key from sorted anim_files paths
-	var cache_key: String = ",".join(anim_files)
+	var cache_key: String = _animation_cache_key(anim_files, anim_file_aliases)
 	var lib: AnimationLibrary
 	if _anim_lib_cache.has(cache_key):
 		lib = _anim_lib_cache[cache_key]
@@ -664,16 +673,17 @@ func _setup_animations() -> void:
 					if anim_name == "RESET" or anim_name == "T-Pose":
 						continue
 					var anim: Animation = src.get_animation(anim_name)
-					if anim and not lib.has_animation(anim_name):
+					var target_name: String = str(anim_file_aliases.get(file_path, anim_name))
+					if anim and not lib.has_animation(target_name):
 						var dup: Animation = anim.duplicate()
-						if anim_name.begins_with("Running") or anim_name.begins_with("Walking") or anim_name.begins_with("Idle") or anim_name == "Cheering":
+						if target_name.begins_with("Running") or target_name.begins_with("Walking") or target_name.begins_with("Idle") or target_name == "Cheering":
 							dup.loop_mode = Animation.LOOP_LINEAR
 						# Strip ALL scale and position tracks — they override spawn scale
 						for ti in range(dup.get_track_count() - 1, -1, -1):
 							var path: String = str(dup.track_get_path(ti))
 							if ":scale" in path or ":position" in path:
 								dup.remove_track(ti)
-						lib.add_animation(anim_name, dup)
+						lib.add_animation(target_name, dup)
 			instance.free()
 		_anim_lib_cache[cache_key] = lib
 
@@ -697,10 +707,10 @@ const SLOT_OFFSETS: Array = [-0.0, 0.4, -0.4, 0.8, -0.8, 1.2, -1.2]
 ## instantiated GLB nodes are kept OUT of the tree — AnimationPlayer's
 ## `get_animation_list()` and `get_animation()` both work on detached nodes,
 ## they don't require tree presence.
-static func prewarm_anim_library(anim_files_list: Array) -> void:
+static func prewarm_anim_library(anim_files_list: Array, file_aliases: Dictionary = {}) -> void:
 	if anim_files_list.is_empty():
 		return
-	var cache_key: String = ",".join(anim_files_list)
+	var cache_key: String = _animation_cache_key(anim_files_list, file_aliases)
 	if _anim_lib_cache.has(cache_key):
 		return
 	var lib := AnimationLibrary.new()
@@ -715,18 +725,27 @@ static func prewarm_anim_library(anim_files_list: Array) -> void:
 				if anim_name == "RESET" or anim_name == "T-Pose":
 					continue
 				var anim: Animation = src.get_animation(anim_name)
-				if anim and not lib.has_animation(anim_name):
+				var target_name: String = str(file_aliases.get(file_path, anim_name))
+				if anim and not lib.has_animation(target_name):
 					var dup: Animation = anim.duplicate()
-					if anim_name.begins_with("Running") or anim_name.begins_with("Walking") or anim_name.begins_with("Idle") or anim_name == "Cheering":
+					if target_name.begins_with("Running") or target_name.begins_with("Walking") or target_name.begins_with("Idle") or target_name == "Cheering":
 						dup.loop_mode = Animation.LOOP_LINEAR
 					for ti in range(dup.get_track_count() - 1, -1, -1):
 						var path: String = str(dup.track_get_path(ti))
 						if ":scale" in path or ":position" in path:
 							dup.remove_track(ti)
-					lib.add_animation(anim_name, dup)
+					lib.add_animation(target_name, dup)
 		# Free the detached instance; no queue_free needed since it's not in tree.
 		inst.free()
 	_anim_lib_cache[cache_key] = lib
+
+
+static func _animation_cache_key(anim_files_list: Array, file_aliases: Dictionary = {}) -> String:
+	var key_parts: PackedStringArray = []
+	for file_path in anim_files_list:
+		var path := str(file_path)
+		key_parts.append("%s=>%s" % [path, str(file_aliases.get(path, ""))])
+	return "|".join(key_parts)
 
 
 ## Recursive AnimationPlayer search — unlike `_find_anim_player` (instance
@@ -742,7 +761,8 @@ static func _find_anim_player_recursive(node: Node) -> AnimationPlayer:
 
 
 ## Animation file paths for the medium rig — shared by Knight, Mage, and Archer.
-## Subclasses that use this rig should assign `anim_files = MEDIUM_RIG_ANIM_FILES` in `_init_stats()`.
+## Legacy modular troops that use this rig should assign
+## `anim_files = MEDIUM_RIG_ANIM_FILES` in `_init_stats()`.
 const MEDIUM_RIG_ANIM_FILES: Array = [
 	"res://Model/Characters/Animations/Rig_Medium/Rig_Medium_General.glb",
 	"res://Model/Characters/Animations/Rig_Medium/Rig_Medium_MovementBasic.glb",
@@ -750,6 +770,48 @@ const MEDIUM_RIG_ANIM_FILES: Array = [
 	"res://Model/Characters/Animations/Rig_Medium/Rig_Medium_CombatRanged.glb",
 	"res://Model/Characters/Animations/Rig_Medium/Rig_Medium_Simulation.glb",
 ]
+const PIRATE_ARCHER_ANIM_FILES: Array = [
+	"res://Model/Characters/pirate_archer/animations/idle_battle.fbx",
+	"res://Model/Characters/pirate_archer/animations/run_battle_in_place.fbx",
+	"res://Model/Characters/pirate_archer/animations/attack_01.fbx",
+	"res://Model/Characters/pirate_archer/animations/get_hit_01.fbx",
+	"res://Model/Characters/pirate_archer/animations/victory.fbx",
+]
+const PIRATE_ARCHER_ANIM_ALIASES: Dictionary = {
+	"res://Model/Characters/pirate_archer/animations/idle_battle.fbx": "Idle_A",
+	"res://Model/Characters/pirate_archer/animations/run_battle_in_place.fbx": "Running_A",
+	"res://Model/Characters/pirate_archer/animations/attack_01.fbx": "Ranged_Bow_Release",
+	"res://Model/Characters/pirate_archer/animations/get_hit_01.fbx": "GetHit",
+	"res://Model/Characters/pirate_archer/animations/victory.fbx": "Cheering",
+}
+const PIRATE_MAGE_ANIM_FILES: Array = [
+	"res://Model/Characters/pirate_mage/animations/idle_battle.fbx",
+	"res://Model/Characters/pirate_mage/animations/run_battle_in_place.fbx",
+	"res://Model/Characters/pirate_mage/animations/attack_01.fbx",
+	"res://Model/Characters/pirate_mage/animations/get_hit_01.fbx",
+	"res://Model/Characters/pirate_mage/animations/victory.fbx",
+]
+const PIRATE_MAGE_ANIM_ALIASES: Dictionary = {
+	"res://Model/Characters/pirate_mage/animations/idle_battle.fbx": "Idle_A",
+	"res://Model/Characters/pirate_mage/animations/run_battle_in_place.fbx": "Running_A",
+	"res://Model/Characters/pirate_mage/animations/attack_01.fbx": "Ranged_Magic_Spellcasting",
+	"res://Model/Characters/pirate_mage/animations/get_hit_01.fbx": "GetHit",
+	"res://Model/Characters/pirate_mage/animations/victory.fbx": "Cheering",
+}
+const PIRATE_KNIGHT_ANIM_FILES: Array = [
+	"res://Model/Characters/pirate_knight/animations/idle_battle.fbx",
+	"res://Model/Characters/pirate_knight/animations/run_battle_in_place.fbx",
+	"res://Model/Characters/pirate_knight/animations/attack_01.fbx",
+	"res://Model/Characters/pirate_knight/animations/get_hit_01.fbx",
+	"res://Model/Characters/pirate_knight/animations/victory.fbx",
+]
+const PIRATE_KNIGHT_ANIM_ALIASES: Dictionary = {
+	"res://Model/Characters/pirate_knight/animations/idle_battle.fbx": "Idle_A",
+	"res://Model/Characters/pirate_knight/animations/run_battle_in_place.fbx": "Running_A",
+	"res://Model/Characters/pirate_knight/animations/attack_01.fbx": "Melee_1H_Attack_Chop",
+	"res://Model/Characters/pirate_knight/animations/get_hit_01.fbx": "GetHit",
+	"res://Model/Characters/pirate_knight/animations/victory.fbx": "Cheering",
+}
 ## Y offset for spawning projectiles from the troop's hand/weapon bone.
 const PROJECTILE_SPAWN_Y: float = 0.08
 ## Y offset applied to the aim target position so projectiles arc toward the building's centre.
@@ -1172,6 +1234,7 @@ func _get_troop_name() -> String:
 		"barbarian": return "Barbarian"
 		"archer": return "Archer"
 		"ranger": return "Ranger"
+		"mimic": return "Mimic"
 		"demon_king": return "DemonKing"
 		"fire_dragon": return "FireDragon"
 	return ""
@@ -1871,7 +1934,8 @@ static func _mesh_name_matches_prefix(mesh_name: String, prefixes: Array) -> boo
 func _stabilize_render_meshes_recursive(node: Node) -> void:
 	if node is MeshInstance3D:
 		var mesh_instance: MeshInstance3D = node as MeshInstance3D
-		mesh_instance.visible = true
+		if not bool(mesh_instance.get_meta("clash_keep_hidden", false)):
+			mesh_instance.visible = true
 		mesh_instance.extra_cull_margin = maxf(mesh_instance.extra_cull_margin, TROOP_MESH_CULL_MARGIN)
 		mesh_instance.ignore_occlusion_culling = true
 		mesh_instance.lod_bias = maxf(mesh_instance.lod_bias, TROOP_MESH_LOD_BIAS)

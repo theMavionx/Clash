@@ -49,28 +49,34 @@ const SHIP_MODELS: Array[String] = [
 	"res://Model/Ship/Ships/ship-pirate-large_3.glb",
 ]
 const SHIP_SCALES: Array[float] = [0.05, 0.05, 0.05]
+## Modular Tiny Hero meshes are authored smaller than the legacy combat rigs.
+## FireDragon already matches the combat scale and must keep the base scale.
 const TROOP_SCALE_MULTIPLIERS: Dictionary = {
-	"FireDragon": 0.15,
+	"Knight": 1.7,
+	"Mage": 1.7,
+	"Archer": 1.7,
+	"Mimic": 1.45,
 }
 
 ## Troop name → {model, script} for spawning combat troops
 const TROOP_DEFS: Dictionary = {
-	"Knight":    {"model": "res://Model/Characters/Model/Knight.glb",      "script": "res://scripts/knight.gd"},
-	"Mage":      {"model": "res://Model/Characters/Model/Mage.glb",        "script": "res://scripts/mage.gd"},
+	"Knight":    {"model": "res://Model/Characters/pirate_knight/pirate_knight.tscn", "script": "res://scripts/knight.gd"},
+	"Mage":      {"model": "res://Model/Characters/pirate_mage/pirate_mage.tscn", "script": "res://scripts/mage.gd"},
 	"Barbarian": {"model": "res://Model/Characters/Model/Barbarian.glb",   "script": "res://scripts/barbarian.gd"},
-	"Archer":    {"model": "res://Model/Characters/Model/Ranger.glb",      "script": "res://scripts/archer.gd"},
+	"Archer":    {"model": "res://Model/Characters/pirate_archer/pirate_archer.tscn", "script": "res://scripts/archer.gd"},
 	"Ranger":    {"model": "res://Model/Characters/Model/Rogue_Hooded.glb","script": "res://scripts/ranger.gd"},
+	"Mimic":     {"model": "res://Model/Characters/MimicBarrel/MimicBarrel.fbx", "script": "res://scripts/mimic.gd"},
 	"DemonKing": {"model": "res://Model/Characters/Model/DemonKing_Body.fbx",   "script": "res://scripts/demon_king.gd"},
 	"FireDragon": {"model": "res://Model/Characters/FireDragon/FireDragon.tscn", "script": "res://scripts/fire_dragon.gd"},
 }
-const ACTIVE_PRELOAD_TROOPS: Array[String] = ["Knight", "Mage", "Archer", "DemonKing", "FireDragon"]
+const ACTIVE_PRELOAD_TROOPS: Array[String] = ["Knight", "Mage", "Archer", "Mimic", "DemonKing", "FireDragon"]
 
 ## Legacy constant kept for replay compatibility
 const SHIP_TROOPS = [
-	{"model": "res://Model/Characters/Model/Knight.glb",      "script": "res://scripts/knight.gd"},
-	{"model": "res://Model/Characters/Model/Mage.glb",        "script": "res://scripts/mage.gd"},
+	{"model": "res://Model/Characters/pirate_knight/pirate_knight.tscn", "script": "res://scripts/knight.gd"},
+	{"model": "res://Model/Characters/pirate_mage/pirate_mage.tscn", "script": "res://scripts/mage.gd"},
 	{"model": "res://Model/Characters/Model/Barbarian.glb",   "script": "res://scripts/barbarian.gd"},
-	{"model": "res://Model/Characters/Model/Ranger.glb",      "script": "res://scripts/archer.gd"},
+	{"model": "res://Model/Characters/pirate_archer/pirate_archer.tscn", "script": "res://scripts/archer.gd"},
 	{"model": "res://Model/Characters/Model/Rogue_Hooded.glb","script": "res://scripts/ranger.gd"},
 ]
 
@@ -1185,7 +1191,10 @@ func _spawn_troop_after_delay(
 	if troop.has_method("set_nft_rarity"):
 		troop.set_nft_rarity(_troop_entry_rarity(troop_entry))
 	get_tree().current_scene.add_child(troop)
-	var final_troop_scale := _scale_for_troop(troop_node_name, troop_scale)
+	var troop_scale_key := _normalize_troop_entry(troop_entry)
+	if not TROOP_DEFS.has(troop_scale_key) and script_res != null:
+		troop_scale_key = _script_to_troop_key(script_res.resource_path)
+	var final_troop_scale := _scale_for_troop(troop_scale_key, troop_scale)
 	troop._spawn_scale = final_troop_scale
 	troop.scale = Vector3(final_troop_scale, final_troop_scale, final_troop_scale)
 	troop.global_position = troop_spawn_pos + offset if exact_position else BaseTroop._clamp_to_island(troop_spawn_pos + offset)
@@ -1361,6 +1370,7 @@ static func _script_to_troop_key(script_path: String) -> String:
 		"barbarian":  return "Barbarian"
 		"archer":     return "Archer"
 		"ranger":     return "Ranger"
+		"mimic":      return "Mimic"
 		"demon_king": return "DemonKing"
 		"fire_dragon": return "FireDragon"
 	return file.capitalize()
@@ -1379,6 +1389,8 @@ static func _normalize_troop_entry(troop_name: String) -> String:
 			return "Archer"
 		"ranger":
 			return "Ranger"
+		"mimic":
+			return "Mimic"
 		"demonking", "demon_king":
 			return "DemonKing"
 		"firedragon", "fire_dragon":

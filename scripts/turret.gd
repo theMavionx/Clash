@@ -312,7 +312,7 @@ func _physics_process(delta: float) -> void:
 		_target_search_timer = 0.0
 		_find_target()
 
-	if _target and BaseTroop.can_target_troop(_target, CAN_TARGET_GROUND, CAN_TARGET_AIR):
+	if _target and BaseTroop.can_defense_target_troop(_target, CAN_TARGET_GROUND, CAN_TARGET_AIR):
 		var diff: Vector3 = _target.global_position - global_position
 		diff.y = 0
 		var d_sq: float = diff.length_squared()
@@ -346,7 +346,7 @@ func _physics_process(delta: float) -> void:
 
 func _find_target() -> void:
 	var detect_sq: float = detect_range * detect_range
-	if _target and BaseTroop.can_target_troop(_target, CAN_TARGET_GROUND, CAN_TARGET_AIR):
+	if _target and BaseTroop.can_defense_target_troop(_target, CAN_TARGET_GROUND, CAN_TARGET_AIR):
 		var dx = global_position.x - _target.global_position.x
 		var dz = global_position.z - _target.global_position.z
 		if dx * dx + dz * dz <= detect_sq:
@@ -355,7 +355,7 @@ func _find_target() -> void:
 	var nearest_dist_sq: float = detect_sq
 	var my_pos: Vector3 = global_position
 	for troop in BaseTroop._get_troops_cached():
-		if not BaseTroop.can_target_troop(troop, CAN_TARGET_GROUND, CAN_TARGET_AIR):
+		if not BaseTroop.can_defense_target_troop(troop, CAN_TARGET_GROUND, CAN_TARGET_AIR):
 			continue
 		var dx: float = my_pos.x - troop.global_position.x
 		var dz: float = my_pos.z - troop.global_position.z
@@ -402,7 +402,7 @@ func _record_defense_telemetry(kind: String, target: Node3D, extra: Dictionary =
 
 
 func _spawn_bullet() -> void:
-	if not BaseTroop.can_target_troop(_target, CAN_TARGET_GROUND, CAN_TARGET_AIR):
+	if not BaseTroop.can_defense_target_troop(_target, CAN_TARGET_GROUND, CAN_TARGET_AIR):
 		return
 
 	var b: Dictionary = _get_pooled_bullet()
@@ -465,7 +465,7 @@ func _update_bullets(delta: float) -> void:
 				b.flash.visible = false
 
 		# Target died — return to pool
-		if not BaseTroop.can_target_troop(b.target, CAN_TARGET_GROUND, CAN_TARGET_AIR):
+		if not BaseTroop.can_defense_target_troop(b.target, CAN_TARGET_GROUND, CAN_TARGET_AIR):
 			_return_to_pool(b)
 			_remove_active_bullet_at(i)
 			i -= 1

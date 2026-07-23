@@ -6133,6 +6133,17 @@ const TROOP_DEFS = {
       { gold: 3200, wood: 3200, ore: 0 },
     ],
   },
+  mimic: {
+    max_level: 7,
+    cost: [
+      { gold: 175, wood: 175, ore: 0 },
+      { gold: 350, wood: 350, ore: 0 },
+      { gold: 700, wood: 700, ore: 0 },
+      { gold: 1400, wood: 1400, ore: 0 },
+      { gold: 2600, wood: 2600, ore: 0 },
+      { gold: 4400, wood: 4400, ore: 0 },
+    ],
+  },
   demon_king: {
     max_level: 7,
     cost: [
@@ -10991,7 +11002,16 @@ function getBattleRiskPlayers(options = {}) {
     ORDER BY COALESCE(s.attack_starts_24h, 0) DESC, COALESCE(r.accepted_wins_24h, 0) DESC
   `).all(...params);
 
-  const shipDeployMetricsByPlayer = getBattleShipDeployPatternMetrics({ playerId });
+  // Parsing up to 50k replay JSON blobs at once blocked the main API event
+  // loop when the admin risk panel loaded. The candidate query above already
+  // gives us every active player, and the attacker/time index makes these
+  // focused reads both exact and substantially cheaper.
+  const shipDeployMetricsByPlayer = new Map();
+  for (const row of rows) {
+    const metrics = getBattleShipDeployPatternMetrics({ playerId: row.player_id, limit: 2000 });
+    const playerMetrics = metrics.get(row.player_id);
+    if (playerMetrics) shipDeployMetricsByPlayer.set(row.player_id, playerMetrics);
+  }
   return rows
     .map((row) => normalizeBattleRiskRow({ ...row, ...(shipDeployMetricsByPlayer.get(row.player_id) || {}) }, includeClean))
     .filter(Boolean)

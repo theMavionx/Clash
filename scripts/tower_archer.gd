@@ -8,6 +8,8 @@ const ATTACK_ANIM: String = "Ranged_Bow_Release"
 const HIT_DIST_SQ: float = 0.05 * 0.05
 const POOL_SIZE: int = 12
 const TARGET_SEARCH_INTERVAL: float = 0.15
+const CAN_TARGET_GROUND: bool = true
+const CAN_TARGET_AIR: bool = true
 
 const LEVEL_STATS = {
 	1: {"damage": 25, "fire_rate": 1.0, "detect_range": 1.10},
@@ -42,13 +44,6 @@ var _pool_exhausted_warned: bool = false
 static var _bow_scene_res: Resource = null
 static var _arrow_scene_res: Resource = null
 
-const ANIM_FILES = [
-	"res://Model/Characters/Animations/Rig_Medium/Rig_Medium_General.glb",
-	"res://Model/Characters/Animations/Rig_Medium/Rig_Medium_CombatRanged.glb",
-	"res://Model/Characters/Animations/Rig_Medium/Rig_Medium_Simulation.glb",
-]
-
-
 func _ready() -> void:
 	_apply_stats()
 	_setup_animations()
@@ -78,6 +73,8 @@ func _setup_bow() -> void:
 	var sk = _find_skeleton(self)
 	if not sk:
 		return
+	if sk.find_bone("weapon_l") >= 0:
+		return
 	var bone_idx = sk.find_bone("handslot.l")
 	if bone_idx < 0:
 		return
@@ -102,36 +99,18 @@ func _setup_animations() -> void:
 	add_child(anim_player)
 	anim_player.root_node = anim_player.get_path_to(self)
 
-	# Reuse BaseTroop._anim_lib_cache so all archer towers share one parsed
-	# AnimationLibrary. Cache key is plain joined file list — matches the key
-	# format used by BaseTroop.prewarm_anim_library() so the boot-time prewarm
-	# in warmup.gd actually hits this branch instead of rebuilding.
-	var cache_key: String = ",".join(ANIM_FILES)
-	var lib: AnimationLibrary
-	if BaseTroop._anim_lib_cache.has(cache_key):
-		lib = BaseTroop._anim_lib_cache[cache_key]
-	else:
-		lib = AnimationLibrary.new()
-		for file_path in ANIM_FILES:
-			var res = load(file_path)
-			if not res:
-				continue
-			var instance = res.instantiate()
-			add_child(instance)
-			_hide_meshes(instance)
-			var src = _find_anim_player(instance)
-			if src:
-				for anim_name in src.get_animation_list():
-					if anim_name == "RESET" or anim_name == "T-Pose":
-						continue
-					var anim = src.get_animation(anim_name)
-					if anim and not lib.has_animation(anim_name):
-						var dup = anim.duplicate()
-						if anim_name.begins_with("Idle"):
-							dup.loop_mode = Animation.LOOP_LINEAR
-						lib.add_animation(anim_name, dup)
-			instance.free()
-		BaseTroop._anim_lib_cache[cache_key] = lib
+	BaseTroop.prewarm_anim_library(
+		BaseTroop.PIRATE_ARCHER_ANIM_FILES,
+		BaseTroop.PIRATE_ARCHER_ANIM_ALIASES
+	)
+	var cache_key := BaseTroop._animation_cache_key(
+		BaseTroop.PIRATE_ARCHER_ANIM_FILES,
+		BaseTroop.PIRATE_ARCHER_ANIM_ALIASES
+	)
+	var lib: AnimationLibrary = BaseTroop._anim_lib_cache.get(cache_key, null)
+	if lib == null:
+		push_warning("TowerArcher: pirate archer animation library is unavailable.")
+		return
 
 	anim_player.add_animation_library("", lib)
 	if anim_player.has_animation("Idle_A"):
@@ -175,7 +154,7 @@ func _physics_process(delta: float) -> void:
 		_target_search_timer = 0.0
 		_find_target()
 
-	if _target and BaseTroop.is_live_troop(_target):
+	if _target and BaseTroop.can_defense_target_troop(_target, CAN_TARGET_GROUND, CAN_TARGET_AIR):
 		# Switch to attacking
 		if state == State.IDLE:
 			state = State.ATTACKING
@@ -218,7 +197,7 @@ func _play_victory() -> void:
 
 func _find_target() -> void:
 	var detect_sq = detect_range * detect_range
-	if _target and BaseTroop.is_live_troop(_target):
+	if _target and BaseTroop.can_defense_target_troop(_target, CAN_TARGET_GROUND, CAN_TARGET_AIR):
 		var dx = global_position.x - _target.global_position.x
 		var dz = global_position.z - _target.global_position.z
 		if dx * dx + dz * dz <= detect_sq:
@@ -227,7 +206,7 @@ func _find_target() -> void:
 	var nearest_dist_sq = detect_sq
 	var my_pos = global_position
 	for troop in BaseTroop._get_troops_cached():
-		if not BaseTroop.is_live_troop(troop):
+		if not BaseTroop.can_defense_target_troop(troop, CAN_TARGET_GROUND, CAN_TARGET_AIR):
 			continue
 		var dx = my_pos.x - troop.global_position.x
 		var dz = my_pos.z - troop.global_position.z
@@ -334,7 +313,7 @@ func _update_arrows(delta: float) -> void:
 			i -= 1
 			continue
 		# Target died
-		if not BaseTroop.is_live_troop(b.target):
+		if not BaseTroop.can_defense_target_troop(b.target, CAN_TARGET_GROUND, CAN_TARGET_AIR):
 			_return_to_pool(b)
 			_remove_active_arrow_at(i)
 			i -= 1

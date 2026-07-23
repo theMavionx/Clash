@@ -32,11 +32,15 @@ func _init_stats() -> void:
 	atk_speed = s.atk_speed
 	attack_anim = "Melee_1H_Attack_Chop"
 	attack_sfx_path = "res://Musik/sound_effects/knight/attack.mp3"
-	anim_files = BaseTroop.MEDIUM_RIG_ANIM_FILES
+	anim_files = BaseTroop.PIRATE_KNIGHT_ANIM_FILES
+	anim_file_aliases = BaseTroop.PIRATE_KNIGHT_ANIM_ALIASES
 
 
 ## Attaches the sword model to the right hand bone.
 func _setup_weapons() -> void:
+	var skeleton := _find_skeleton(self)
+	if skeleton != null and skeleton.find_bone("weapon_r") >= 0:
+		return
 	_sword_attachment = _attach_to_bone("handslot.r", "SwordAttachment", sword_scene, "Sword")
 
 

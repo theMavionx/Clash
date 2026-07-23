@@ -630,7 +630,7 @@ func _setup_animations() -> void:
 	anim_player.root_node = anim_player.get_path_to(self)
 
 	# Reuse BaseTroop's shared animation library cache to avoid rebuilding per skeleton
-	var cache_key: String = ",".join(ANIM_FILES)
+	var cache_key: String = BaseTroop._animation_cache_key(ANIM_FILES)
 	var lib: AnimationLibrary
 	if BaseTroop._anim_lib_cache.has(cache_key):
 		lib = BaseTroop._anim_lib_cache[cache_key]

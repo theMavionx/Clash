@@ -158,8 +158,8 @@ var building_defs: Dictionary = {
 		"altar_ward_bonus": true,
 		"hp_bar_height": 0.5,
 		"tower_unit": {
-			"model": "res://Model/Characters/Model/Ranger.glb",
-			"scale": 0.07,
+			"model": "res://Model/Characters/pirate_archer/pirate_archer.tscn",
+			"scale": 0.11,
 			"offset_y": 0.3,
 			"align_to_model_center": true,
 			"rotation_y": -90.0,
@@ -819,12 +819,12 @@ const SHIP_DISPLAY_SCALE: float = 0.05
 var barn_panel: PanelContainer
 var barn_vbox: VBoxContainer
 var troop_levels: Dictionary = {
-	"Knight": 1, "Mage": 1, "Archer": 1, "DemonKing": 1, "FireDragon": 1,
+	"Knight": 1, "Mage": 1, "Archer": 1, "Mimic": 1, "DemonKing": 1, "FireDragon": 1,
 }
 var troop_defs: Dictionary = {
 	"Knight": {
 		"display": "Knight (Tank)",
-		"model": "res://Model/Characters/Model/Knight.glb",
+		"model": "res://Model/Characters/pirate_knight/pirate_knight.tscn",
 		"script": "res://scripts/knight.gd",
 		"max_level": 7,
 		"costs": {
@@ -838,7 +838,7 @@ var troop_defs: Dictionary = {
 	},
 	"Mage": {
 		"display": "Wizard (Burst Mage)",
-		"model": "res://Model/Characters/Model/Mage.glb",
+		"model": "res://Model/Characters/pirate_mage/pirate_mage.tscn",
 		"script": "res://scripts/mage.gd",
 		"max_level": 7,
 		"costs": {
@@ -852,8 +852,22 @@ var troop_defs: Dictionary = {
 	},
 	"Archer": {
 		"display": "Archer (Sniper)",
-		"model": "res://Model/Characters/Model/Ranger.glb",
+		"model": "res://Model/Characters/pirate_archer/pirate_archer.tscn",
 		"script": "res://scripts/archer.gd",
+		"max_level": 7,
+		"costs": {
+			1: {"gold": 175, "wood": 175},
+			2: {"gold": 350, "wood": 350},
+			3: {"gold": 700, "wood": 700},
+			4: {"gold": 1400, "wood": 1400},
+			5: {"gold": 2600, "wood": 2600},
+			6: {"gold": 4400, "wood": 4400},
+		}
+	},
+	"Mimic": {
+		"display": "Mimic Barrel (Trap Runner)",
+		"model": "res://Model/Characters/MimicBarrel/MimicBarrel.fbx",
+		"script": "res://scripts/mimic.gd",
 		"max_level": 7,
 		"costs": {
 			1: {"gold": 175, "wood": 175},

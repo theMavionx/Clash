@@ -1,0 +1,34 @@
+[gd_scene load_steps=7 format=3]
+
+[ext_resource type="PackedScene" path="res://Model/Characters/pirate_archer/parts/all_bodies_cloaks.fbx" id="1_body"]
+[ext_resource type="PackedScene" path="res://Model/Characters/pirate_mage/parts/head_wizard.fbx" id="2_head"]
+[ext_resource type="PackedScene" path="res://Model/Characters/pirate_mage/parts/hat_08.fbx" id="3_hat"]
+[ext_resource type="PackedScene" path="res://Model/Characters/pirate_mage/parts/nerd_glass.fbx" id="4_glasses"]
+[ext_resource type="PackedScene" path="res://Model/Characters/pirate_mage/parts/wand_03.fbx" id="6_wand"]
+[ext_resource type="Script" path="res://Model/Characters/pirate_mage/pirate_mage_visual.gd" id="7_visual"]
+
+[node name="PirateMage" instance=ExtResource("1_body")]
+
+[node name="HeadAttachment" type="BoneAttachment3D" parent="Skeleton3D"]
+bone_name = "head"
+bone_idx = 10
+
+[node name="HeadPose" type="Node3D" parent="Skeleton3D/HeadAttachment"]
+quaternion = Quaternion(0.50000006, 0.5, -0.50000006, 0.5)
+
+[node name="WizardHead" parent="Skeleton3D/HeadAttachment/HeadPose" instance=ExtResource("2_head")]
+
+[node name="WizardHat" parent="Skeleton3D/HeadAttachment/HeadPose" instance=ExtResource("3_hat")]
+
+[node name="SpiralGlasses" parent="Skeleton3D/HeadAttachment/HeadPose" instance=ExtResource("4_glasses")]
+
+[node name="WandAttachment" type="BoneAttachment3D" parent="Skeleton3D"]
+bone_name = "weapon_r"
+bone_idx = 37
+
+[node name="WandPose" type="Node3D" parent="Skeleton3D/WandAttachment"]
+
+[node name="Wand" parent="Skeleton3D/WandAttachment/WandPose" instance=ExtResource("6_wand")]
+
+[node name="VisualSetup" type="Node" parent="."]
+script = ExtResource("7_visual")

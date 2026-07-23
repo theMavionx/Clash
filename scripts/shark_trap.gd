@@ -303,8 +303,9 @@ func _trigger(target: Node3D) -> void:
 	var target_local := to_local(target_position)
 	var replay_order := int(target.get_meta("replay_order", -1))
 	var hp_before := int(target.get("hp"))
-	var instant_kill := not _is_demon_king(target)
-	var applied_damage := maxi(1, hp_before) if instant_kill else _damage
+	var trap_immune := target.has_method("is_trap_immune") and bool(target.call("is_trap_immune"))
+	var instant_kill := not trap_immune and not _is_demon_king(target)
+	var applied_damage := 0 if trap_immune else (maxi(1, hp_before) if instant_kill else _damage)
 	if is_instance_valid(_bs) and _bs.has_method("record_replay_telemetry"):
 		_bs.record_replay_telemetry("shark_trap_trigger", {
 			"building_id": int(get_meta("server_id", -1)),
@@ -312,13 +313,22 @@ func _trigger(target: Node3D) -> void:
 			"damage": applied_damage,
 			"level_damage": _damage,
 			"instant_kill": instant_kill,
+			"trap_immune": trap_immune,
 			"replay_order": replay_order,
 			"hp_before": hp_before,
+			"hp_after": hp_before if trap_immune else maxi(0, hp_before - applied_damage),
 			"x": snappedf(target_position.x, 0.001),
 			"z": snappedf(target_position.z, 0.001),
 		})
 	var visual_duration := RISE_DURATION + BITE_HOLD_DURATION
-	if target.has_method("damage_by_shark_trap"):
+	if applied_damage <= 0:
+		if target.has_method("_record_replay_telemetry"):
+			target.call("_record_replay_telemetry", "shark_trap_immune", {
+				"damage": 0,
+				"hp_before": hp_before,
+				"hp_after": hp_before,
+			})
+	elif target.has_method("damage_by_shark_trap"):
 		target.call("damage_by_shark_trap", applied_damage, visual_duration)
 	elif target.has_method("take_damage"):
 		target.call("take_damage", applied_damage)

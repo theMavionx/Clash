@@ -57,6 +57,7 @@ const TROOP_NAMES = {
   barbarian: 'Barbarian',
   archer: 'Archer',
   ranger: 'Ranger',
+  mimic: 'Mimic',
   demon_king: 'DemonKing',
   fire_dragon: 'FireDragon',
 };
@@ -131,6 +132,7 @@ function troopTargetType(troop) {
 
 function canDefenseTargetTroop(defense, troop) {
   if (!troop || troop.hp <= 0) return false;
+  if (troop.untargetableWhileRunning && troop._state === 'running') return false;
   const minRange = Math.max(0, Number(defense?.minRange) || 0);
   if (
     minRange > 0
@@ -555,6 +557,11 @@ function updateProjectiles(projectiles, phase = null, onHit = null, onLost = nul
     const tgt = p.targetRef;
     if (!tgt || tgt.hp <= 0) {
       if (onLost) onLost(p, !tgt ? 'target_missing' : 'target_dead');
+      projectiles.splice(i, 1);
+      continue;
+    }
+    if (phase === 'defense' && tgt.untargetableWhileRunning && tgt._state === 'running') {
+      if (onLost) onLost(p, 'target_untargetable');
       projectiles.splice(i, 1);
       continue;
     }
@@ -1109,13 +1116,15 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
           melee: stats.melee, projSpeed: stats.projSpeed || 0,
           directHit: !!stats.directHit,
           flying: !!stats.flying,
+          trapImmune: !!stats.trapImmune,
+          untargetableWhileRunning: !!stats.untargetableWhileRunning,
           targetType: stats.flying ? UNIT_TARGET_AIR : UNIT_TARGET_GROUND,
           hitDelay: stats.hitDelay || 0, shootDelay: stats.shootDelay || 0,
           x: spawnPos.x, z: spawnPos.z,
           atkTimer: 0, hitPending: false, hitTimer: 0,
           hitDone: false,
           _pendingTarget: null,
-          _state: 'idle',
+          _state: stats.untargetableWhileRunning ? 'running' : 'idle',
           _retargetCounter: 0,
           _sepCounter: 0,
           _slotEvalTimer: 0,
@@ -1172,7 +1181,8 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
     for (const b of buildings) { if (b.hp > 0 && isCombatTargetBuilding(b)) aliveBuildings.push(b); }
 
     // Traps resolve before defenses and movement. Each trap eliminates one
-    // ordinary ground troop; Demon King instead takes level-scaled damage.
+    // ordinary ground troop; Demon King takes level-scaled damage, while an
+    // immune troop still consumes the trap but takes no damage.
     for (const trap of sharkTraps) {
       if (trap.triggered) continue;
       let targetIndex = -1;
@@ -1193,8 +1203,9 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
       if (targetIndex < 0) continue;
       const target = aliveTroops[targetIndex];
       const hpBefore = target.hp;
-      const instantKill = normalizeTroopTypeName(target.type) !== 'demon_king';
-      const appliedDamage = instantKill ? Math.max(1, target.hp) : trap.damage;
+      const trapImmune = !!target.trapImmune;
+      const instantKill = !trapImmune && normalizeTroopTypeName(target.type) !== 'demon_king';
+      const appliedDamage = trapImmune ? 0 : (instantKill ? Math.max(1, target.hp) : trap.damage);
       target.hp -= appliedDamage;
       trap.triggered = true;
       trap.troopId = target.id;
@@ -1204,6 +1215,7 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
         damage: appliedDamage,
         levelDamage: trap.damage,
         instantKill,
+        trapImmune,
         troopId: target.id,
         replayOrder: target.replayOrder,
         troop: target.type,

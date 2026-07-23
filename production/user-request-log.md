@@ -1965,3 +1965,17 @@ Follow-up:
 - Request: preserve the owner's final attack-zone placement from Godot and upload it to production.
 - Scope: mirror the final `Main.tscn` attack-plane transform into TestMain, regenerate the server-authoritative combat-grid snapshot, verify deployment and replay behavior, create a fresh Godot Web export, commit and push the synchronized release, and deploy atomically to production.
 - Approval: explicit owner authorization to upload the finalized attack zone to production; commit and push are required by the standard deployment pipeline so server validation and the Godot client use the same geometry.
+
+### UR-2026-07-22-ADMIN-PANEL-524
+- Timestamp: 2026-07-22 Europe/Kyiv
+- Request: investigate and fix the production admin panel returning HTTP 524 for stats and multiple admin sections.
+- Scope: inspect production API/Nginx telemetry, profile the synchronous SQLite analytics paths, prevent expensive sections from blocking the main API event loop, and verify the admin endpoints locally before any separately approved production release.
+- Implementation: move player/session analytics from Node-side row materialization into SQLite aggregates, reduce per-DEX history scans, add matching futures indexes and short admin caches, bound external earnings readers with stale fallback, and remove duplicate login refreshes.
+- Verification: local production-build fixture returned core endpoints in 0.21-0.22s, cold stats/matchmaking in 0.29-0.33s, cached stats/matchmaking in 8ms, revenue analytics in 1.4s, and bounded cold earnings in 12.2s instead of 37.6s; Node syntax checks, focused admin ESLint, full web build, full ESLint (warnings only), and git diff checks passed.
+- Approval: investigation and local fixes requested; no commit, push, deploy, restart, or production database mutation approved yet.
+
+### UR-2026-07-23-OSTIUM-TOURNAMENT-RESUME
+- Timestamp: 2026-07-23 Europe/Kyiv
+- Request: reset the points for the latest day of the paused production Ostium tournament, resume the tournament, and verify that it starts again correctly.
+- Scope: identify the exact active/paused Ostium tournament and latest daily window, back up the affected production rows, reset only that daily result without changing earlier days, resume the tournament transactionally, and verify production API timing plus recalculation behavior.
+- Approval: explicit owner authorization in this conversation for the targeted production database mutation and tournament resume.

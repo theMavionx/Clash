@@ -44,11 +44,15 @@ func _init_stats() -> void:
 	atk_speed = s.atk_speed
 	attack_anim = "Ranged_Magic_Spellcasting"
 	attack_sfx_path = "res://Musik/sound_effects/mage/attack.mp3"
-	anim_files = BaseTroop.MEDIUM_RIG_ANIM_FILES
+	anim_files = BaseTroop.PIRATE_MAGE_ANIM_FILES
+	anim_file_aliases = BaseTroop.PIRATE_MAGE_ANIM_ALIASES
 
 
 ## Attaches the staff model to the right hand bone.
 func _setup_weapons() -> void:
+	var skeleton := _find_skeleton(self)
+	if skeleton and skeleton.find_bone("weapon_r") >= 0:
+		return
 	_attach_to_bone("handslot.r", "StaffAttachment", staff_scene, "Staff")
 
 

@@ -54,7 +54,7 @@ function deploy(troop, attackGridX, t = 0) {
   return { type: 'deploy_troop', troop, troopLevel: 1, x: point.x, z: point.z, t };
 }
 
-function simulate(defenderBuildings, actions, serverTroopLevels = { Knight: 1, FireDragon: 1 }) {
+function simulate(defenderBuildings, actions, serverTroopLevels = { Knight: 1, Mimic: 1, FireDragon: 1 }) {
   return loadVerifierWithoutDb()({
     defenderBuildings,
     actions,
@@ -83,6 +83,17 @@ for (let level = 1; level <= 5; level++) {
 const overlevelledGround = simulate(base(1), [deploy('Knight', 0)], { Knight: 5 });
 assert.equal(overlevelledGround.casualties.Knight, 1, 'ordinary ground troop must be eliminated regardless of HP');
 
+const mimic = simulate(base(5), [deploy('Mimic', 0)], { Mimic: 1 });
+const mimicEnd = mimic._troopEndState.find(row => row.type === 'mimic');
+assert.equal(mimic._sharkTrapsTriggered, 1, 'Mimic must consume the trap');
+assert.equal(mimic.casualties.Mimic || 0, 0, 'Mimic must not take trap damage');
+assert.ok(mimicEnd, 'Mimic should remain in the replay result');
+assert.equal(mimicEnd.hp, 300, 'Mimic HP must remain unchanged after trap activation');
+const mimicTrigger = mimic._trace.find(row => row.kind === 'shark_trap_trigger');
+assert.equal(mimicTrigger.trapImmune, true);
+assert.equal(mimicTrigger.damage, 0);
+assert.equal(mimicTrigger.instantKill, false);
+
 const air = simulate(base(5), [deploy('FireDragon', 0)], { FireDragon: 5 });
 assert.equal(air._sharkTrapsTriggered, 0, 'flying troop must not trigger trap');
 assert.equal(air._trace.filter(row => row.kind === 'shark_trap_trigger').length, 0);
@@ -104,4 +115,4 @@ const twoTraps = simulate([
 assert.equal(twoTraps._sharkTrapsTriggered, 2, 'each trap should trigger independently');
 assert.equal(twoTraps.casualties.Knight, 2, 'two traps should eliminate two troops');
 
-console.log('[SHARK_TRAP_SERVER] PASS levels=1..5 air=ignored demon_hp=1024 two_traps=2');
+console.log('[SHARK_TRAP_SERVER] PASS levels=1..5 mimic=consumed_immune air=ignored demon_hp=1024 two_traps=2');

@@ -209,7 +209,7 @@ func _find_target() -> void:
 	var nearest_dist_sq: float = detect_sq
 	var my_pos: Vector3 = global_position
 	for troop in BaseTroop._get_troops_cached():
-		if not BaseTroop.can_target_troop(troop, CAN_TARGET_GROUND, CAN_TARGET_AIR):
+		if not BaseTroop.can_defense_target_troop(troop, CAN_TARGET_GROUND, CAN_TARGET_AIR):
 			continue
 		var dx: float = my_pos.x - troop.global_position.x
 		var dz: float = my_pos.z - troop.global_position.z
@@ -268,7 +268,7 @@ func _fire_at_target(target: Node3D) -> void:
 func _is_valid_mortar_target(target: Node3D) -> bool:
 	if not is_instance_valid(target):
 		return false
-	if not BaseTroop.can_target_troop(target, CAN_TARGET_GROUND, CAN_TARGET_AIR):
+	if not BaseTroop.can_defense_target_troop(target, CAN_TARGET_GROUND, CAN_TARGET_AIR):
 		return false
 	var dx: float = global_position.x - target.global_position.x
 	var dz: float = global_position.z - target.global_position.z
@@ -313,7 +313,7 @@ func _apply_splash(impact_pos: Vector3, base_damage: int, radius: float) -> void
 	var radius_sq: float = radius * radius
 	var hit_count: int = 0
 	for troop in BaseTroop._get_troops_cached():
-		if not BaseTroop.can_target_troop(troop, CAN_TARGET_GROUND, CAN_TARGET_AIR):
+		if not BaseTroop.can_defense_target_troop(troop, CAN_TARGET_GROUND, CAN_TARGET_AIR):
 			continue
 		var dx: float = impact_pos.x - troop.global_position.x
 		var dz: float = impact_pos.z - troop.global_position.z

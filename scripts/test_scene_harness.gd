@@ -59,11 +59,12 @@ const TEST_TH_MAX_COUNT: Dictionary = {
 	"town_hall": [1, 1, 1, 1, 1],
 }
 
-const TEST_ATTACK_TROOPS: Array[String] = ["Knight", "Mage", "Archer", "DemonKing", "FireDragon"]
+const TEST_ATTACK_TROOPS: Array[String] = ["Knight", "Mage", "Archer", "Mimic", "DemonKing", "FireDragon"]
 const TEST_ATTACK_MAX_LEVEL: Dictionary = {
 	"Knight": 7,
 	"Mage": 7,
 	"Archer": 7,
+	"Mimic": 7,
 	"DemonKing": 7,
 	"FireDragon": 7,
 }
@@ -120,6 +121,10 @@ func _ready() -> void:
 		call_deferred("_capture_archer_tower_test")
 	if OS.get_cmdline_user_args().has("--verify-archer-tower-combat"):
 		call_deferred("_verify_archer_tower_combat")
+	if OS.get_cmdline_user_args().has("--verify-pirate-archer-combat"):
+		call_deferred("_verify_pirate_archer_combat")
+	if OS.get_cmdline_user_args().has("--capture-troop-scale-comparison"):
+		call_deferred("_capture_troop_scale_comparison")
 	if OS.get_cmdline_user_args().has("--verify-shark-trap"):
 		call_deferred("_verify_shark_trap")
 	if OS.get_cmdline_user_args().has("--verify-ambient-shark-route"):
@@ -1405,7 +1410,7 @@ func _capture_archer_tower_test() -> void:
 		var visual_model: Node3D = bs._get_building_visual_model(building_node)
 		var tower_unit: Node3D = building.get("tower_unit_node", null)
 		var tower_aabb := _world_mesh_aabb(visual_model)
-		var unit_aabb := _world_mesh_aabb(tower_unit)
+		var unit_aabb := _world_mesh_aabb(tower_unit, ["BowAttachment", "ArrowAttachment"])
 		var center_delta := Vector2(
 			unit_aabb.get_center().x - tower_aabb.get_center().x,
 			unit_aabb.get_center().z - tower_aabb.get_center().z
@@ -1676,12 +1681,14 @@ func _save_resource_collection_capture(path: String, label: String) -> bool:
 	return true
 
 
-func _world_mesh_aabb(root: Node) -> AABB:
+func _world_mesh_aabb(root: Node, excluded_ancestors: Array[String] = []) -> AABB:
 	var merged := AABB()
 	var first := true
 	if root == null:
 		return merged
 	for mesh_instance in _mesh_instances_below(root):
+		if _has_named_ancestor_below(mesh_instance, root, excluded_ancestors):
+			continue
 		var local_aabb: AABB = mesh_instance.get_aabb()
 		for ix in range(2):
 			for iy in range(2):
@@ -1694,6 +1701,15 @@ func _world_mesh_aabb(root: Node) -> AABB:
 					else:
 						merged = merged.expand(world_corner)
 	return merged
+
+
+func _has_named_ancestor_below(node: Node, root: Node, names: Array[String]) -> bool:
+	var current := node
+	while current != null and current != root:
+		if names.has(String(current.name)):
+			return true
+		current = current.get_parent()
+	return false
 
 
 func _mesh_instances_below(root: Node) -> Array[MeshInstance3D]:
@@ -1789,6 +1805,200 @@ func _verify_archer_tower_combat() -> void:
 		" elapsed=", snappedf(combat_wait, 0.001),
 		" tower_state=", tower_unit.get("state")
 	)
+	get_tree().quit()
+
+
+func _verify_pirate_archer_combat() -> void:
+	var bs := _building_system_for_building("mine")
+	var attack := get_node_or_null("../AttackSystem")
+	if bs == null or attack == null:
+		push_error("Pirate Archer combat test failed: combat nodes are missing.")
+		get_tree().quit(1)
+		return
+	reset_sandbox()
+	await get_tree().process_frame
+	if not await spawn_building_level("mine", 1):
+		push_error("Pirate Archer combat test failed: target building did not spawn.")
+		get_tree().quit(1)
+		return
+	var target: Dictionary = {}
+	for candidate in bs.placed_buildings:
+		if str(candidate.get("id", "")) == "mine":
+			target = candidate
+			break
+	if target.is_empty():
+		push_error("Pirate Archer combat test failed: target state is missing.")
+		get_tree().quit(1)
+		return
+	var target_node: Node3D = target.get("node", null)
+	if target_node == null:
+		push_error("Pirate Archer combat test failed: target node is missing.")
+		get_tree().quit(1)
+		return
+
+	attack._spawn_troops_at_pos(["Archer"], {}, target_node.global_position + Vector3(0.60, 0.0, 0.0))
+	var troop: Node = null
+	var spawn_wait := 0.0
+	while troop == null and spawn_wait < 2.0:
+		await get_tree().process_frame
+		spawn_wait += get_process_delta_time()
+		for candidate in get_tree().get_nodes_in_group("troops"):
+			if BaseTroop.is_live_troop(candidate) and bool(candidate.get_meta("clash_pirate_archer", false)):
+				troop = candidate
+				break
+	if troop == null:
+		push_error("Pirate Archer combat test failed: troop did not activate.")
+		get_tree().quit(1)
+		return
+	if not bool(troop.get_meta("clash_pirate_archer", false)):
+		push_error("Pirate Archer combat test failed: legacy visual was spawned.")
+		get_tree().quit(1)
+		return
+	var expected_scale := AttackSystem._scale_for_troop("Archer", attack.troop_scale)
+	if not is_equal_approx(float(troop._spawn_scale), expected_scale):
+		push_error(
+			"Pirate Archer combat test failed: expected spawn scale %.3f, got %.3f."
+			% [expected_scale, float(troop._spawn_scale)]
+		)
+		get_tree().quit(1)
+		return
+	var player := troop.get_node_or_null("TroopAnimPlayer") as AnimationPlayer
+	if player == null or not player.has_animation("Ranged_Bow_Release"):
+		push_error("Pirate Archer combat test failed: attack animation is unavailable.")
+		get_tree().quit(1)
+		return
+
+	var initial_hp := int(target.get("hp", 0))
+	var projectile_seen := false
+	var combat_wait := 0.0
+	while int(target.get("hp", initial_hp)) >= initial_hp and combat_wait < 4.0:
+		await get_tree().process_frame
+		combat_wait += get_process_delta_time()
+		var active_projectiles: Variant = troop.get("_active")
+		if active_projectiles is Array and not active_projectiles.is_empty():
+			projectile_seen = true
+	var remaining_hp := int(target.get("hp", initial_hp))
+	if remaining_hp >= initial_hp:
+		push_error("Pirate Archer combat test failed: target HP stayed at %d." % initial_hp)
+		get_tree().quit(1)
+		return
+	if not projectile_seen:
+		push_error("Pirate Archer combat test failed: no arrow projectile was observed.")
+		get_tree().quit(1)
+		return
+	print(
+		"[PIRATE_ARCHER_COMBAT] PASS initial_hp=", initial_hp,
+		" remaining_hp=", remaining_hp,
+		" damage=", initial_hp - remaining_hp,
+		" elapsed=", snappedf(combat_wait, 0.001),
+		" animation=", player.current_animation
+	)
+	get_tree().quit()
+
+
+func _capture_troop_scale_comparison() -> void:
+	var scene := get_tree().current_scene
+	var attack := get_node_or_null("../AttackSystem")
+	if scene == null or attack == null:
+		push_error("Troop scale comparison failed: AttackSystem is missing.")
+		get_tree().quit(1)
+		return
+	reset_sandbox()
+	await get_tree().process_frame
+	attack._spawn_troops_at_pos(["Knight", "Mage", "Archer", "Mimic"], {}, Vector3.ZERO)
+
+	var knight: Node3D = null
+	var mage: Node3D = null
+	var archer: Node3D = null
+	var mimic: Node3D = null
+	var spawn_wait := 0.0
+	while (knight == null or mage == null or archer == null or mimic == null) and spawn_wait < 3.0:
+		await get_tree().process_frame
+		spawn_wait += get_process_delta_time()
+		for candidate in get_tree().get_nodes_in_group("troops"):
+			if not BaseTroop.is_live_troop(candidate):
+				continue
+			var script: Script = candidate.get_script() as Script
+			var script_path := String(script.resource_path) if script != null else ""
+			if script_path.ends_with("/knight.gd"):
+				knight = candidate as Node3D
+			elif script_path.ends_with("/mage.gd"):
+				mage = candidate as Node3D
+			elif script_path.ends_with("/archer.gd"):
+				archer = candidate as Node3D
+			elif script_path.ends_with("/mimic.gd"):
+				mimic = candidate as Node3D
+	if knight == null or mage == null or archer == null or mimic == null:
+		push_error("Troop scale comparison failed: combat troops did not spawn.")
+		get_tree().quit(1)
+		return
+
+	for troop in [knight, mage, archer, mimic]:
+		troop.set_process(false)
+		troop.set_physics_process(false)
+	var ground_y := maxf(maxf(knight.global_position.y, mage.global_position.y), maxf(archer.global_position.y, mimic.global_position.y))
+	var comparison_troops: Array[Node3D] = [knight, mage, archer, mimic]
+	var comparison_x: Array[float] = [-0.72, -0.24, 0.24, 0.72]
+	for index in comparison_troops.size():
+		comparison_troops[index].global_position = Vector3(comparison_x[index], ground_y, 0.0)
+		comparison_troops[index].rotation = Vector3.ZERO
+
+	_hide_capture_canvas_items(scene)
+	var old_camera := get_viewport().get_camera_3d()
+	if old_camera:
+		old_camera.current = false
+	var camera := Camera3D.new()
+	camera.name = "TroopScaleComparisonCamera"
+	camera.projection = Camera3D.PROJECTION_ORTHOGONAL
+	camera.size = 1.25
+	scene.add_child(camera)
+	var target := Vector3(0.0, ground_y + 0.13, 0.0)
+	camera.global_position = target + Vector3(0.0, 2.2, 1.8)
+	camera.look_at(target, Vector3.UP)
+	camera.current = true
+
+	await get_tree().create_timer(0.25).timeout
+	var knight_aabb := _world_mesh_aabb(knight)
+	var mage_aabb := _world_mesh_aabb(mage)
+	var archer_aabb := _world_mesh_aabb(archer, ["BowAttachment", "ArrowAttachment"])
+	var mimic_aabb := _world_mesh_aabb(mimic)
+	var expected_archer_scale := AttackSystem._scale_for_troop("Archer", attack.troop_scale)
+	var expected_mimic_scale := AttackSystem._scale_for_troop("Mimic", attack.troop_scale)
+	print(
+		"[TROOP_SCALE_COMPARISON] knight_scale=", knight._spawn_scale,
+		" knight_height=", snappedf(knight_aabb.size.y, 0.0001),
+		" mage_scale=", mage._spawn_scale,
+		" mage_height=", snappedf(mage_aabb.size.y, 0.0001),
+		" archer_scale=", archer._spawn_scale,
+		" expected_archer_scale=", expected_archer_scale,
+		" archer_height=", snappedf(archer_aabb.size.y, 0.0001),
+		" mimic_scale=", mimic._spawn_scale,
+		" expected_mimic_scale=", expected_mimic_scale,
+		" mimic_height=", snappedf(mimic_aabb.size.y, 0.0001)
+	)
+	if not is_equal_approx(float(archer._spawn_scale), expected_archer_scale):
+		push_error("Troop scale comparison failed: Archer multiplier was not applied.")
+		get_tree().quit(1)
+		return
+	if not is_equal_approx(float(mimic._spawn_scale), expected_mimic_scale):
+		push_error("Troop scale comparison failed: Mimic multiplier was not applied.")
+		get_tree().quit(1)
+		return
+
+	var output_dir := ProjectSettings.globalize_path("user://")
+	for arg in OS.get_cmdline_user_args():
+		var text := String(arg)
+		if text.begins_with("--capture-out-dir="):
+			output_dir = text.get_slice("=", 1)
+	DirAccess.make_dir_recursive_absolute(output_dir)
+	var output_path := output_dir.path_join("troop_scale_comparison.png")
+	await RenderingServer.frame_post_draw
+	var err := get_viewport().get_texture().get_image().save_png(output_path)
+	if err != OK:
+		push_error("Troop scale comparison capture failed: %s" % error_string(err))
+		get_tree().quit(1)
+		return
+	print("[TROOP_SCALE_COMPARISON] capture=", output_path)
 	get_tree().quit()
 
 
@@ -1939,6 +2149,73 @@ func _verify_shark_trap() -> void:
 	_clear_shark_test_troops()
 	await get_tree().process_frame
 	battle.is_viewing_enemy = true
+	var mimic_grid := Vector2i(12, 12)
+	bs._spawn_building_locally("shark_trap", mimic_grid, trap_def, -4)
+	await get_tree().process_frame
+	var mimic_trap := _last_building_at(bs, "shark_trap", mimic_grid)
+	var mimic_trap_node := mimic_trap.get("node") as Node3D
+	_set_building_level_immediate(bs, mimic_trap, trap_def, 5)
+	bs.troop_levels["Mimic"] = 1
+	if mimic_trap_node == null or not attack._spawn_manual_troop("Mimic", 1, mimic_trap_node.global_position, 3):
+		push_error("Shark Trap test failed: Mimic did not spawn.")
+		get_tree().quit(1)
+		return
+	var live_mimic: Node3D = null
+	for troop in get_tree().get_nodes_in_group("troops"):
+		if BaseTroop.is_live_troop(troop) and troop.has_method("_get_troop_name") and str(troop.call("_get_troop_name")) == "Mimic":
+			live_mimic = troop as Node3D
+			break
+	if live_mimic == null:
+		push_error("Shark Trap test failed: Mimic could not be resolved.")
+		get_tree().quit(1)
+		return
+	var mimic_anim := live_mimic.get("anim_player") as AnimationPlayer
+	for required_anim in ["Idle_A", "Running_A", "Tongue_Attack", "GetHit", "Die"]:
+		if mimic_anim == null or not mimic_anim.has_animation(required_anim):
+			push_error("Mimic test failed: required animation is missing: %s" % required_anim)
+			get_tree().quit(1)
+			return
+	var mimic_hp_before := int(live_mimic.get("hp"))
+	var mimic_trigger_wait := 0.0
+	while not bool(mimic_trap_node.get_meta("trap_spent", false)) and mimic_trigger_wait < 1.2:
+		await get_tree().physics_frame
+		mimic_trigger_wait += get_physics_process_delta_time()
+	if not bool(mimic_trap_node.get_meta("trap_spent", false)):
+		push_error("Shark Trap test failed: Mimic did not consume the trap.")
+		get_tree().quit(1)
+		return
+	if not BaseTroop.is_live_troop(live_mimic) or int(live_mimic.get("hp")) != mimic_hp_before:
+		push_error("Shark Trap test failed: Mimic took damage from the consumed trap.")
+		get_tree().quit(1)
+		return
+	live_mimic.set_physics_process(false)
+	live_mimic.set("state", BaseTroop.State.RUNNING)
+	mimic_anim.play("Running_A")
+	if BaseTroop.can_defense_target_troop(live_mimic, true, true):
+		push_error("Mimic test failed: rolling Mimic is targetable by defenses.")
+		get_tree().quit(1)
+		return
+	_frame_shark_test_camera(mimic_trap_node.global_position, 1.8)
+	await get_tree().create_timer(0.12).timeout
+	await _hold_shark_web_capture()
+	if not await _save_shark_test_capture(output_dir.path_join("03-mimic-immune.png"), "mimic-immune"):
+		get_tree().quit(1)
+		return
+	live_mimic.set("state", BaseTroop.State.ATTACKING)
+	if not BaseTroop.can_defense_target_troop(live_mimic, true, true):
+		push_error("Mimic test failed: attacking Mimic is not targetable by defenses.")
+		get_tree().quit(1)
+		return
+	live_mimic.set_physics_process(true)
+	if OS.get_cmdline_user_args().has("--verify-mimic-only"):
+		print("[MIMIC_CLIENT] PASS trap=consumed damage=0 rolling=untargetable attacking=targetable animations=complete output=", output_dir)
+		get_tree().quit()
+		return
+
+	reset_sandbox()
+	_clear_shark_test_troops()
+	await get_tree().process_frame
+	battle.is_viewing_enemy = true
 	var air_grid := Vector2i(17, 12)
 	bs._spawn_building_locally("shark_trap", air_grid, trap_def, -2)
 	await get_tree().process_frame
@@ -1964,7 +2241,7 @@ func _verify_shark_trap() -> void:
 		return
 	_frame_shark_test_camera(air_node.global_position, 2.2)
 	await _hold_shark_web_capture()
-	if not await _save_shark_test_capture(output_dir.path_join("03-air-ignored.png"), "air-ignored"):
+	if not await _save_shark_test_capture(output_dir.path_join("04-air-ignored.png"), "air-ignored"):
 		get_tree().quit(1)
 		return
 
@@ -2003,7 +2280,7 @@ func _verify_shark_trap() -> void:
 	await get_tree().create_timer(0.30).timeout
 	_frame_shark_test_camera(demon_node.global_position, 2.0)
 	await _hold_shark_web_capture()
-	if not await _save_shark_test_capture(output_dir.path_join("04-demon-king-damaged.png"), "demon-king-damaged"):
+	if not await _save_shark_test_capture(output_dir.path_join("05-demon-king-damaged.png"), "demon-king-damaged"):
 		get_tree().quit(1)
 		return
 	if not ambient.has_method("is_water_lane_clear") or not bool(ambient.call("is_water_lane_clear", 360)):
@@ -2012,10 +2289,10 @@ func _verify_shark_trap() -> void:
 		return
 	_frame_ambient_shark_camera(ambient.global_position, 3.2)
 	await _hold_shark_web_capture()
-	if not await _save_shark_test_capture(output_dir.path_join("05-ambient-shark.png"), "ambient"):
+	if not await _save_shark_test_capture(output_dir.path_join("06-ambient-shark.png"), "ambient"):
 		get_tree().quit(1)
 		return
-	print("[SHARK_TRAP_CLIENT] PASS ground=instant-kill alignment=", snappedf(alignment_error, 0.0001), " air=ignored demon_hp=1024 ambient=conditional output=", output_dir)
+	print("[SHARK_TRAP_CLIENT] PASS ground=instant-kill mimic=consumed_immune rolling=untargetable air=ignored demon_hp=1024 ambient=conditional output=", output_dir)
 	get_tree().quit()
 
 

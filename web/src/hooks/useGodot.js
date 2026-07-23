@@ -42,6 +42,7 @@ function normalizeTroopLevelKey(name) {
   if (normalized === 'mage') return 'Mage';
   if (normalized === 'barbarian') return 'Barbarian';
   if (normalized === 'archer') return 'Archer';
+  if (normalized === 'mimic') return 'Mimic';
   if (normalized === 'ranger') return 'Ranger';
   return String(name || '').trim();
 }

@@ -204,6 +204,10 @@ try {
 // Index for /claim-gold lookup — main server reads WHERE player_id=? AND dex=? AND id>? frequently.
 try { db.exec("CREATE INDEX IF NOT EXISTS idx_trade_history_player_dex ON trade_history(player_id, dex, id)"); } catch {}
 try { db.exec("CREATE INDEX IF NOT EXISTS idx_trade_history_player_dex_updated ON trade_history(player_id, dex, updated_at, id)"); } catch {}
+// Admin analytics filters every venue by dex/status, then either a time
+// window or player. Keep those scans bounded as trade history grows.
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_trade_history_dex_status_created ON trade_history(dex, status, created_at)"); } catch {}
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_trade_history_dex_status_player ON trade_history(dex, status, player_id)"); } catch {}
 // Ostium closes inherit routing eligibility from the matching Open fill by
 // trader + position id. Keep that lookup indexed as fill history grows.
 try {

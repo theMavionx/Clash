@@ -57,6 +57,15 @@ const TROOP_STATS = {
     6: { hp: 890, damage: 140, atkSpeed: 0.65, moveSpeed: 0.55, range: 0.85, melee: false, projSpeed: 3.0, shootDelay: 0.4 },
     7: { hp: 1100, damage: 182, atkSpeed: 0.60, moveSpeed: 0.55, range: 0.85, melee: false, projSpeed: 3.0, shootDelay: 0.4 },
   },
+  mimic: {
+    1: { hp: 300,  damage: 20,  atkSpeed: 1.50, moveSpeed: 0.62, range: 0.27, melee: true, hitDelay: 0.45, trapImmune: true, untargetableWhileRunning: true },
+    2: { hp: 400,  damage: 27,  atkSpeed: 1.42, moveSpeed: 0.62, range: 0.27, melee: true, hitDelay: 0.45, trapImmune: true, untargetableWhileRunning: true },
+    3: { hp: 520,  damage: 36,  atkSpeed: 1.34, moveSpeed: 0.62, range: 0.27, melee: true, hitDelay: 0.45, trapImmune: true, untargetableWhileRunning: true },
+    4: { hp: 680,  damage: 47,  atkSpeed: 1.27, moveSpeed: 0.62, range: 0.27, melee: true, hitDelay: 0.45, trapImmune: true, untargetableWhileRunning: true },
+    5: { hp: 860,  damage: 61,  atkSpeed: 1.20, moveSpeed: 0.62, range: 0.27, melee: true, hitDelay: 0.45, trapImmune: true, untargetableWhileRunning: true },
+    6: { hp: 1060, damage: 79,  atkSpeed: 1.13, moveSpeed: 0.62, range: 0.27, melee: true, hitDelay: 0.45, trapImmune: true, untargetableWhileRunning: true },
+    7: { hp: 1300, damage: 102, atkSpeed: 1.06, moveSpeed: 0.62, range: 0.27, melee: true, hitDelay: 0.45, trapImmune: true, untargetableWhileRunning: true },
+  },
   demon_king: {
     1: { hp: 1080, damage: 92,  atkSpeed: 1.40, moveSpeed: 0.38, range: 0.32, melee: true, hitDelay: 0.4 },
     2: { hp: 1440, damage: 120, atkSpeed: 1.30, moveSpeed: 0.38, range: 0.32, melee: true, hitDelay: 0.4 },
@@ -97,6 +106,7 @@ const TROOP_TYPE_DISPLAY_KEYS = {
   barbarian: 'Barbarian',
   archer: 'Archer',
   ranger: 'Ranger',
+  mimic: 'Mimic',
   demon_king: 'DemonKing',
   fire_dragon: 'FireDragon',
 };
@@ -276,7 +286,7 @@ const CANNON_TARGET_Y = 0.05;
 function cannonShotCost(shotNumber) { return shotNumber; }
 
 // Valid troop types (order matches attack_system.gd SHIP_TROOPS)
-const VALID_TROOP_TYPES = ['knight', 'mage', 'barbarian', 'archer', 'ranger', 'demon_king', 'fire_dragon'];
+const VALID_TROOP_TYPES = ['knight', 'mage', 'barbarian', 'archer', 'ranger', 'mimic', 'demon_king', 'fire_dragon'];
 
 module.exports = {
   MAX_TROOP_LEVEL,
