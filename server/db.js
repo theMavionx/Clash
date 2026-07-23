@@ -15,6 +15,7 @@ const {
 const {
   MATCHMAKING_CONFIG,
   buildBotBaseTemplates,
+  botResources,
 } = require('./matchmaking_defs');
 const uuidv4 = () => crypto.randomUUID();
 
@@ -1749,6 +1750,19 @@ try {
       ON raid_matchmaking(defender_id, created_at DESC);
   `);
 } catch (e) { console.warn('[db] raid matchmaking migration:', e.message); }
+
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS raid_bot_template_state (
+      template_id     TEXT PRIMARY KEY,
+      encounter_count INTEGER NOT NULL DEFAULT 0,
+      last_gold       INTEGER,
+      last_wood       INTEGER,
+      last_ore        INTEGER,
+      updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+} catch (e) { console.warn('[db] raid bot state migration:', e.message); }
 
 // Paid utility purchases. Kept separate from `players.wallet`: a player can
 // be logged in through Aptos/Solana/etc. and still pay from a one-off Base
@@ -5878,6 +5892,62 @@ function botMaterializedToken(templateId, sessionId) {
     .digest('hex')}`;
 }
 
+function botMaterializedName(templateName, sessionId) {
+  const base = String(templateName || 'player').trim().slice(0, 24) || 'player';
+  const nameExists = db.prepare(`SELECT 1 FROM players WHERE lower(name) = lower(?) LIMIT 1`);
+  if (!nameExists.get(base)) return base;
+
+  const seed = crypto.createHash('sha256')
+    .update(`raid-bot-name:${base}:${sessionId}`)
+    .digest()
+    .readUInt32BE(0);
+  for (let attempt = 0; attempt < 10000; attempt += 1) {
+    const suffix = 1 + ((seed + attempt * 7919) % 9999);
+    const candidate = `${base}${suffix}`;
+    if (!nameExists.get(candidate)) return candidate;
+  }
+  throw new Error('Unable to allocate raid bot display name');
+}
+
+const getRaidBotTemplateState = db.prepare(`
+  SELECT encounter_count, last_gold, last_wood, last_ore
+  FROM raid_bot_template_state
+  WHERE template_id = ?
+`);
+const upsertRaidBotTemplateState = db.prepare(`
+  INSERT INTO raid_bot_template_state (
+    template_id, encounter_count, last_gold, last_wood, last_ore, updated_at
+  ) VALUES (?, ?, ?, ?, ?, datetime('now'))
+  ON CONFLICT(template_id) DO UPDATE SET
+    encounter_count = excluded.encounter_count,
+    last_gold = excluded.last_gold,
+    last_wood = excluded.last_wood,
+    last_ore = excluded.last_ore,
+    updated_at = datetime('now')
+`);
+
+function nextBotMaterializationResources(template, sessionId) {
+  const state = getRaidBotTemplateState.get(template.id);
+  const encounterCount = Math.max(0, Number(state?.encounter_count) || 0) + 1;
+  const previous = state
+    ? { gold: state.last_gold, wood: state.last_wood, ore: state.last_ore }
+    : template.resources;
+  const resources = botResources(
+    template.th,
+    template.difficulty,
+    `${template.id}:encounter:${encounterCount}:${sessionId}`,
+    previous,
+  );
+  upsertRaidBotTemplateState.run(
+    template.id,
+    encounterCount,
+    resources.gold,
+    resources.wood,
+    resources.ore,
+  );
+  return resources;
+}
+
 function cleanupOldBotTargets() {
   try {
     const result = db.prepare(`
@@ -5943,7 +6013,8 @@ function materializeBotTarget(candidate, sessionId) {
   if (!template) throw new Error('Bot template not found');
   const suffix = String(sessionId || uuidv4()).replace(/-/g, '').slice(0, 12);
   const botId = `bot-raid-${template.id}-${suffix}`;
-  const botName = `${template.name}_${suffix.slice(0, 4)}`;
+  const botName = botMaterializedName(template.name, sessionId);
+  const resources = nextBotMaterializationResources(template, sessionId);
   const insertBot = db.prepare(`
     INSERT INTO players (
       id, name, token, gold, wood, ore, trophies, level,
@@ -5962,9 +6033,9 @@ function materializeBotTarget(candidate, sessionId) {
     botId,
     botName,
     botMaterializedToken(template.id, sessionId),
-    template.resources.gold,
-    template.resources.wood,
-    template.resources.ore,
+    resources.gold,
+    resources.wood,
+    resources.ore,
     template.trophies,
     template.th,
     template.difficulty,
@@ -10212,22 +10283,40 @@ const _battleVictoryTxn = db.transaction((attackerId, defenderId, battleSessionI
     },
   });
 
-  // System raid bases are reusable content, not player economies. Restore the
-  // exact pre-raid balance after the attacker has received loot so every
-  // future materialization and any retained session row stays deterministic.
+  // System raid bases are reusable content, not player economies. Refill the
+  // base to a new deterministic stock after each raid, so repeat encounters
+  // stay in the configured range without exposing identical loot every time.
   if (rewardProfile.is_bot) {
-    addResources(defenderId, lootGold, lootWood, lootOre, {
-      sourceType: 'raid_bot_resource_restore',
-      metadata: {
-        attacker_id: attackerId,
-        battle_session_id: battleSessionId,
-        restored_to: {
-          gold: defender.gold,
-          wood: defender.wood,
-          ore: defender.ore,
+    const postLootResources = getResources(defenderId);
+    const nextResources = botResources(
+      defender.level,
+      defender.bot_difficulty || 'normal',
+      `${defender.id}:${battleSessionId}:post-raid`,
+      defender,
+    );
+    addResources(
+      defenderId,
+      nextResources.gold - postLootResources.gold,
+      nextResources.wood - postLootResources.wood,
+      nextResources.ore - postLootResources.ore,
+      {
+        sourceType: 'raid_bot_resource_restore',
+        metadata: {
+          attacker_id: attackerId,
+          battle_session_id: battleSessionId,
+          previous_stock: {
+            gold: defender.gold,
+            wood: defender.wood,
+            ore: defender.ore,
+          },
+          restored_to: {
+            gold: nextResources.gold,
+            wood: nextResources.wood,
+            ore: nextResources.ore,
+          },
         },
       },
-    });
+    );
   }
 
   // Tournament admins can override post-raid shield length. Zero means

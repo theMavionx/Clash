@@ -2309,10 +2309,12 @@ export function useOstium() {
   }, []);
 
   const readLiveCancelTarget = useCallback(async ({ symbol, orderId, pairIndex }) => {
-    const client = await createBuildClient();
-    const liveOrders = await client.getOpenOrders({ user: walletAddr });
+    const liveOrders = await fetchJson(
+      `${FUTURES_API}/orders?dex=ostium&address=${encodeURIComponent(walletAddr)}`,
+      { cache: 'no-store' },
+    );
     return resolveOstiumCancelTarget(liveOrders, { symbol, orderId, pairIndex });
-  }, [createBuildClient, walletAddr]);
+  }, [walletAddr]);
 
   const cancelOrder = useCallback(async (symbol, orderId, pairIndex = null) => {
     setLoading(true);

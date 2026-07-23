@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { buildBotBaseTemplates } = require('./matchmaking_defs');
+const { buildBotBaseTemplates, botResources } = require('./matchmaking_defs');
 
 const EXPECTED_BY_TH = { 1: 24, 2: 30, 3: 30, 4: 25, 5: 25 };
 const EXPECTED_BY_BUCKET = {
@@ -23,6 +23,10 @@ const MAX_LEVEL = {
   town_hall: 5, mine: 5, barn: 5, port: 3, sawmill: 5, turret: 5,
   tombstone: 4, storage: 5, archer_tower: 5, mage_tower: 5, mortar: 1, shark_trap: 5,
 };
+const REQUIRED_PLAYER_LIKE_NAMES = [
+  'ghost', 'www', 'egorble', 'papajshon', 'nick', 'volumer', 'luckier',
+  '0xbro', 'onlywin', 'semlysak', 'idol', 'ggbet', '555gg',
+];
 
 function layoutSignature(template) {
   return template.buildings
@@ -64,6 +68,11 @@ for (const template of templates) {
   for (const amount of Object.values(template.resources)) {
     assert.ok(amount >= 1000 && amount <= 2000, `${template.id} resource ${amount} is outside 1k-2k`);
   }
+  assert.equal(
+    new Set(Object.values(template.resources)).size,
+    3,
+    `${template.id} should not have identical gold, wood, and ore`,
+  );
   verifyNoOverlap(template);
 }
 
@@ -72,6 +81,32 @@ for (const [bucket, expected] of Object.entries(EXPECTED_BY_BUCKET)) assert.equa
 assert.equal(new Set(templates.map((template) => template.id)).size, templates.length, 'template ids must be unique');
 assert.equal(new Set(templates.map((template) => template.name)).size, templates.length, 'bot names must be unique');
 assert.equal(templates.some((template) => /bot/i.test(template.name)), false, 'player-facing names must not say bot');
+const templateNames = new Set(templates.map((template) => template.name));
+for (const name of REQUIRED_PLAYER_LIKE_NAMES) {
+  assert.equal(templateNames.has(name), true, `requested player-like name ${name} should be in the pool`);
+}
+for (const th of [2, 3, 4, 5]) {
+  assert.equal(
+    templates.some((template) => template.th === th && REQUIRED_PLAYER_LIKE_NAMES.includes(template.name)),
+    true,
+    `TH${th} should expose requested player-like names`,
+  );
+}
+assert.equal(
+  new Set(templates.map((template) => JSON.stringify(template.resources))).size,
+  templates.length,
+  'every template should have a distinct resource stock',
+);
+
+const repeatedBotFirstStock = botResources(3, 'normal', 'same-player:first-raid');
+const repeatedBotSecondStock = botResources(3, 'normal', 'same-player:second-raid', repeatedBotFirstStock);
+for (const resource of ['gold', 'wood', 'ore']) {
+  assert.notEqual(
+    repeatedBotSecondStock[resource],
+    repeatedBotFirstStock[resource],
+    `the same bot should receive different ${resource} after the next raid`,
+  );
+}
 
 for (const th of [2, 3, 4, 5]) {
   const signatures = templates.filter((template) => template.th === th).map(layoutSignature);
@@ -103,8 +138,19 @@ try {
   assert.equal(match.is_bot, 1, match.error);
   assert.equal(match.matchmaking.target_is_bot, 1);
   assert.equal(/bot/i.test(match.name), false, 'materialized target should retain a player-like name');
+  assert.equal(/_[0-9a-f]{4}$/i.test(match.name), false, 'materialized names should not expose session hashes');
   assert.ok(match.buildings.length > 0, 'materialized target must include a playable base');
   for (const amount of Object.values(match.resources)) assert.ok(amount >= 1000 && amount <= 2000);
+  const materializedState = gameDb.db.prepare(`
+    SELECT encounter_count, last_gold, last_wood, last_ore
+    FROM raid_bot_template_state
+  `).get();
+  assert.equal(materializedState.encounter_count, 1, 'materialization should advance the template encounter counter');
+  assert.deepEqual(
+    [materializedState.last_gold, materializedState.last_wood, materializedState.last_ore],
+    [match.resources.gold, match.resources.wood, match.resources.ore],
+    'the next encounter should compare against the last resources shown to players',
+  );
 
   const attackerId = 'raid-bot-test-attacker';
   const defenderId = 'raid-bot-test-defender';
@@ -116,7 +162,7 @@ try {
   gameDb.db.prepare(`
     INSERT INTO players (id, name, token, gold, wood, ore, trophies, level, is_bot, bot_difficulty)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(defenderId, 'BlockCorsair_fixture', 'bot-token', 1500, 1600, 1700, 280, 2, 1, 'normal');
+  `).run(defenderId, 'raidfixture', 'bot-token', 1500, 1600, 1700, 280, 2, 1, 'normal');
 
   const insertTownHall = gameDb.db.prepare(`
     INSERT INTO buildings (player_id, type, level, grid_x, grid_z, grid_index, hp, max_hp)
@@ -138,8 +184,14 @@ try {
   const result = gameDb.battleVictory(attackerId, defenderId, sessionId);
   assert.equal(result.success, true, result.error);
   assert.equal(result.target_is_bot, true);
-  assert.deepEqual(gameDb.getResources(defenderId), before, 'system base resources must be restored after a raid');
+  const after = gameDb.getResources(defenderId);
+  for (const resource of ['gold', 'wood', 'ore']) {
+    assert.ok(after[resource] >= 1000 && after[resource] <= 2000, `${resource} should remain in the bot loot range`);
+    assert.notEqual(after[resource], before[resource], `${resource} should change after a bot raid`);
+  }
   assert.ok(result.loot.gold > 0 && result.loot.wood > 0 && result.loot.ore > 0, 'attacker must receive loot');
+  assert.equal(result.trophy_delta, 30, 'a bot victory should award the standard 30 trophies');
+  assert.equal(gameDb.getTrophies(attackerId), 30, 'bot trophies should be persisted for the attacker');
   const restoreEvent = gameDb.db.prepare(`
     SELECT source_type, gold_after, wood_after, ore_after
     FROM resource_delta_events
@@ -148,10 +200,10 @@ try {
   assert.ok(restoreEvent, 'resource restoration must be auditable');
   assert.deepEqual(
     [restoreEvent.gold_after, restoreEvent.wood_after, restoreEvent.ore_after],
-    [before.gold, before.wood, before.ore],
+    [after.gold, after.wood, after.ore],
   );
 
-  console.log(`[raid-bot-pool] PASS total=${templates.length} th2=30 th3=30 th4=25 th5=25 resources=1000..2000 materialized=true restored=true`);
+  console.log(`[raid-bot-pool] PASS total=${templates.length} th2=30 th3=30 th4=25 th5=25 resources=varied trophies=30 materialized=true rerolled=true`);
 } finally {
   gameDb.db.close();
   for (const suffix of ['', '-wal', '-shm']) fs.rmSync(`${dbPath}${suffix}`, { force: true });

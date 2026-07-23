@@ -1,7 +1,9 @@
+const crypto = require('crypto');
+
 const MAIN_GRID_WIDTH = 29;
 const MAIN_GRID_HEIGHT = 27;
 const COAST_GRID_WIDTH = 27;
-const BOT_BASE_GENERATION = 'raid-recovery-v2';
+const BOT_BASE_GENERATION = 'raid-recovery-v3';
 
 // Keep the pool large enough to avoid repetitive targets while preserving a
 // deliberate difficulty mix at each progression tier.
@@ -363,15 +365,38 @@ const BASE_LAYOUTS = {
   },
 };
 
-const CRYPTO_NAME_PREFIXES = [
-  'Block', 'Chain', 'DeFi', 'Satoshi', 'Sol', 'Ether', 'ZK', 'Moon',
-  'Alpha', 'Onchain', 'Ledger', 'Yield', 'Node', 'Vault', 'Aptos', 'Delta',
+const PLAYER_LIKE_NAMES = [
+  'ghost', 'www', 'egorble', 'papajshon', 'nick', 'volumer', 'luckier',
+  '0xbro', 'onlywin', 'semlysak', 'idol', 'ggbet', '555gg',
+  'mike', 'alex', 'roman', 'den', 'ivan', 'max', 'neo', 'zero', 'void',
+  'nova', 'storm', 'flare', 'orbit', 'raven', 'ace', 'drift', 'clutch',
+  'prime', 'dexter', 'pepe', 'shiro', 'yuki', 'kage', 'mono', 'toly',
+  'solman', 'whale', 'degen', 'hodler', 'lucky', 'sasha', 'dima', 'vlad',
+  'kostya', 'serg', 'artem', 'bogdan', 'taras', 'vitalik', 'murad', 'tim',
+  'zed', 'kai', 'leo', 'ronin', 'sage', 'mist', 'frost', 'blaze', 'ember',
+  'spark', 'echo', 'pixel', 'glitch', 'turbo', 'rocket', 'joker', 'viper',
+  'venom', 'cobra', 'panda', 'neko', 'oni', 'shin', 'ryu', 'kira', 'ren',
+  'sora', 'akira', 'kenzo', 'haru', 'natsu', 'mako', 'wave', 'tide',
+  'reef', 'sail', 'skiff', 'rum', 'jolly', 'hook', 'coin', 'block',
+  'chain', 'mint', 'stake', 'yield', 'gasless', 'trader', 'scalper',
+  'maker', 'taker', 'bullrun', 'green', 'red', 'blue', 'goldie', 'woody',
+  'stoney', 'crusher', 'raider', 'legend', 'newbie', 'casual', 'farmer',
+  'grinder', 'pusher', 'defender', 'raiderx', 'moonboy', 'sun', 'star',
+  'cloud', 'rain', 'thunder', 'static', 'neon', 'cyber', 'vector',
+  'matrix', 'byte', 'cache', 'proxy', 'socket', 'ping', 'latency',
+  'sigma', 'omega', 'beta', 'delta', 'gamma', 'kappa', 'ggwp', 'ezwin',
+  'nofear', 'allday', 'oneup', 'fivefive', 'nine', 'seven', '0xace',
+  '0xmax', '0xneo', '0xvoid', '1tap', 'twotap', 'hype', 'chill',
+  'sleep', 'awake',
 ];
-
-const CRYPTO_NAME_SUFFIXES = [
-  'Corsair', 'Raider', 'Kraken', 'Mariner', 'Voyager',
-  'Reaper', 'Nomad', 'Captain', 'Whale', 'Sailor',
-];
+const REQUESTED_PLAYER_NAMES_BY_TH = {
+  2: ['ghost', 'www', 'egorble', 'papajshon'],
+  3: ['nick', 'volumer', 'luckier'],
+  4: ['0xbro', 'onlywin', 'semlysak'],
+  5: ['idol', 'ggbet', '555gg'],
+};
+const REQUESTED_PLAYER_NAMES = new Set(Object.values(REQUESTED_PLAYER_NAMES_BY_TH).flat());
+const FALLBACK_PLAYER_NAMES = PLAYER_LIKE_NAMES.filter((name) => !REQUESTED_PLAYER_NAMES.has(name));
 
 function b(type, level, gridX, gridZ, gridIndex = 0, extra = {}) {
   return { type, level, grid_x: gridX, grid_z: gridZ, grid_index: gridIndex, ...extra };
@@ -398,46 +423,64 @@ function transformBuilding(building, variant) {
   return next;
 }
 
-function botResources(th, difficulty) {
+function seededResourceOffset(seed, resource, spread) {
+  const digest = crypto.createHash('sha256')
+    .update(`raid-resource:${seed}:${resource}`)
+    .digest();
+  return (digest.readUInt16BE(0) % (spread * 2 + 1)) - spread;
+}
+
+function botResources(th, difficulty, seed = '', previous = null) {
   const base = BOT_RESOURCES_BY_TH[th] || BOT_RESOURCES_BY_TH[1];
-  const mult = difficulty === 'easy' ? 0.82 : difficulty === 'hard' ? 1.12 : 1.0;
-  return {
-    gold: clamp(Math.round(base.gold * mult), 1000, 2000),
-    wood: clamp(Math.round(base.wood * mult), 1000, 2000),
-    ore: clamp(Math.round(base.ore * mult), 1000, 2000),
-  };
+  const difficultyShift = difficulty === 'easy' ? -90 : difficulty === 'hard' ? 110 : 0;
+  const resources = {};
+  const used = new Set();
+
+  for (const resource of ['gold', 'wood', 'ore']) {
+    const anchor = clamp(base[resource] + difficultyShift, 1100, 1900);
+    let amount = clamp(anchor + seededResourceOffset(seed, resource, 95), 1000, 2000);
+    while (used.has(amount) || (previous && amount === Number(previous[resource]))) {
+      amount = amount >= 2000 ? 1000 : amount + 1;
+    }
+    resources[resource] = amount;
+    used.add(amount);
+  }
+  return resources;
 }
 
 function buildBotBaseTemplates() {
   const templates = [];
-  let nameIndex = 0;
+  let fallbackNameIndex = 0;
   for (const th of Object.keys(BASE_LAYOUTS).map(Number)) {
+    let tierNameIndex = 0;
     for (const difficulty of Object.keys(BASE_LAYOUTS[th])) {
       const variantCount = BOT_TEMPLATE_COUNTS_BY_TH[th]?.[difficulty] || 0;
       for (let variant = 0; variant < variantCount; variant += 1) {
         const id = `bot-th${th}-${difficulty}-${variant + 1}`;
+        const requestedNames = REQUESTED_PLAYER_NAMES_BY_TH[th] || [];
+        const name = requestedNames[tierNameIndex]
+          || fallbackPlayerName(fallbackNameIndex++);
         templates.push({
           id,
-          name: cryptoPlayerName(nameIndex),
+          name,
           th,
           difficulty,
           variant: variant + 1,
           generation: BOT_BASE_GENERATION,
-          resources: botResources(th, difficulty),
+          resources: botResources(th, difficulty, id),
           trophies: th * 120 + (difficulty === 'easy' ? 0 : difficulty === 'normal' ? 40 : 90),
           buildings: repairLayout(BASE_LAYOUTS[th][difficulty].map((building) => transformBuilding(building, variant))),
         });
-        nameIndex += 1;
+        tierNameIndex += 1;
       }
     }
   }
   return templates;
 }
 
-function cryptoPlayerName(index) {
-  const prefix = CRYPTO_NAME_PREFIXES[index % CRYPTO_NAME_PREFIXES.length];
-  const suffix = CRYPTO_NAME_SUFFIXES[Math.floor(index / CRYPTO_NAME_PREFIXES.length) % CRYPTO_NAME_SUFFIXES.length];
-  return `${prefix}${suffix}`;
+function fallbackPlayerName(index) {
+  if (index < FALLBACK_PLAYER_NAMES.length) return FALLBACK_PLAYER_NAMES[index];
+  return `player${100 + index}`;
 }
 
 function repairLayout(buildings) {
@@ -507,4 +550,5 @@ module.exports = {
   BOT_BASE_GENERATION,
   MATCHMAKING_CONFIG,
   buildBotBaseTemplates,
+  botResources,
 };

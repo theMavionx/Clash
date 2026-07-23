@@ -4,6 +4,7 @@ const {
   OrderType,
   OstiumClient,
 } = require('@ostium/builder-sdk');
+const { localLimitIndex } = require('./ostiumLimitOrder');
 
 const OSTIUM_CHAIN_ID = 42161;
 const DEFAULT_OSTIUM_BUILDER_ADDRESS = '0xB36402e87a86206D3a114a98B53f31362291fe1B';
@@ -89,6 +90,24 @@ const OSTIUM_EXECUTED_FILLS_QUERY = `
       vaultFee devFee oracleFee rolloverFee liquidationFee
       builder builderFee totalProfitPercent amountSentToTrader closePercent
       executedTx executedAt
+    }
+  }
+`;
+const OSTIUM_ACTIVE_LIMITS_QUERY = `
+  query ClashActiveLimits($trader: String!, $skip: Int!, $first: Int!) {
+    limits(
+      where: { isActive: true, trader: $trader }
+      skip: $skip
+      first: $first
+      orderBy: updatedAt
+      orderDirection: desc
+    ) {
+      id uniqueId orderId trader
+      pair { id from to group { id name } }
+      isBuy limitType isActive executionStarted
+      collateral notional tradeNotional leverage
+      openPrice takeProfitPrice stopLossPrice
+      block initiatedAt updatedAt
     }
   }
 `;
@@ -202,6 +221,53 @@ async function getRawExecutedFills(account, limit) {
   const rows = payload?.data?.orders;
   if (!Array.isArray(rows)) throw new Error('Ostium fills response is missing orders');
   return rows.map(formatRawOstiumFill);
+}
+
+function formatRawOstiumLimit(raw) {
+  const idx = localLimitIndex(raw);
+  if (idx == null) {
+    throw new Error(`Ostium limit ${String(raw?.id || raw?.orderId || 'unknown')} has no valid local slot index`);
+  }
+  const pairId = String(raw?.pair?.id ?? '');
+  const takeProfit = scaled(raw?.takeProfitPrice, 18);
+  const stopLoss = scaled(raw?.stopLossPrice, 18);
+  return {
+    pairTo: String(raw?.pair?.to || ''),
+    pairFrom: String(raw?.pair?.from || ''),
+    pairId,
+    trader: String(raw?.trader || '').toLowerCase(),
+    idx,
+    side: raw?.isBuy ? 'B' : 'S',
+    limitPx: String(scaled(raw?.openPrice, 18)),
+    szi: String(scaled(raw?.tradeNotional, 18)),
+    ...(takeProfit > 0 ? { tpPx: String(takeProfit) } : {}),
+    ...(stopLoss > 0 ? { slPx: String(stopLoss) } : {}),
+    orderType: String(raw?.limitType || '').toUpperCase() === 'STOP' ? 'Stop' : 'Limit',
+    timestamp: (Number.parseInt(String(raw?.initiatedAt || '0'), 10) || 0) * 1000,
+    canonicalId: String(raw?.id || ''),
+    uniqueId: String(raw?.uniqueId || ''),
+    globalOrderId: String(raw?.orderId || ''),
+  };
+}
+
+async function getRawOpenLimits(account) {
+  const rows = [];
+  const first = 250;
+  for (let skip = 0; ; skip += first) {
+    const response = await proxySubgraph({
+      query: OSTIUM_ACTIVE_LIMITS_QUERY,
+      variables: { trader: account, skip, first },
+    });
+    const payload = response?.data;
+    if (Array.isArray(payload?.errors) && payload.errors.length) {
+      throw new Error(payload.errors.map(error => error?.message || String(error)).join('; '));
+    }
+    const page = payload?.data?.limits;
+    if (!Array.isArray(page)) throw new Error('Ostium active limits response is missing limits');
+    rows.push(...page);
+    if (page.length < first) break;
+  }
+  return rows.map(formatRawOstiumLimit);
 }
 
 function ostiumFillAccounting(fill) {
@@ -860,7 +926,7 @@ async function getAccountByAddress(address) {
   const [balances, positions, orders] = await Promise.all([
     client.getBalances(account).catch(() => null),
     client.getOpenPositions({ user: account }).catch(() => null),
-    client.getOpenOrders({ user: account }).catch(() => []),
+    getRawOpenLimits(account).catch(() => []),
   ]);
   const margin = positions?.marginSummary || {};
   const walletUsdc = num(balances?.usdc, 0);
@@ -980,7 +1046,10 @@ function normalizeOrder(order, marketsById = new Map()) {
     price: num(order?.limitPx || order?.price || order?.triggerPx, 0),
     take_profit: order?.tpPx || null,
     stop_loss: order?.slPx || null,
-    order_id: order?.idx ?? order?.orderId ?? order?.id ?? null,
+    order_id: order?.idx ?? null,
+    global_order_id: order?.globalOrderId || null,
+    canonical_order_id: order?.canonicalId || null,
+    unique_order_id: order?.uniqueId || null,
     idx: order?.idx ?? null,
     pair_index: Number(pairId),
     type: order?.orderType || 'limit',
@@ -996,12 +1065,11 @@ async function getOrdersByAddress(address) {
   const account = normalizeAddress(address);
   if (!account) throw new Error('valid EVM address required');
   try {
-    const client = await getReadClient();
     const contextPromise = getMarketContext().catch((e) => {
       console.warn('[ostium] order market context degraded:', e.message || e);
       return marketCache;
     });
-    const rows = await client.getOpenOrders({ user: account });
+    const rows = await getRawOpenLimits(account);
     const context = await contextPromise;
     const normalized = (Array.isArray(rows) ? rows : []).map(row => normalizeOrder(row, context.pairById));
     ordersCache.set(account, { at: Date.now(), rows: normalized });
