@@ -4411,6 +4411,65 @@ function tournamentDailyPoolActivityDays(t, dayInput) {
   return [day];
 }
 
+function tournamentDailyPoolWindowMs(t, dayInput) {
+  const day = normalizeDailyPoolDay(dayInput);
+  const firstDay = tournamentFirstDailyPoolDay(t);
+  let startMs = dailyPoolAwardCutoffMs(t, day);
+  if (day === firstDay) {
+    startMs = Math.max(
+      startMs,
+      sqlDateMs(t?.start_at) ?? 0,
+      sqlDateMs(t?.daily_pool_enabled_at) ?? 0
+    );
+  }
+  const closeMs = dailyPoolAwardCutoffMs(t, addUtcDays(day, 1));
+  const tournamentEndMs = sqlDateMs(t?.end_at);
+  const endMs = Number.isFinite(tournamentEndMs)
+    ? Math.min(closeMs, tournamentEndMs)
+    : closeMs;
+  return { day, startMs, endMs };
+}
+
+function tournamentExcludedDailyPoolDays(t) {
+  const tid = Number(t?.id || t?.tournament_id);
+  if (!Number.isFinite(tid) || tid <= 0) return [];
+  const periods = tournamentPausePeriods(tid);
+  if (!periods.length) return [];
+  let candidates = [];
+  try {
+    candidates = db.prepare(`
+      SELECT r.day_utc
+        FROM tournament_daily_point_runs r
+       WHERE r.tournament_id = ?
+         AND COALESCE(r.total_points, 0) = 0
+         AND NOT EXISTS (
+           SELECT 1
+             FROM tournament_daily_activity a
+            WHERE a.tournament_id = r.tournament_id
+              AND a.day_utc = r.day_utc
+         )
+         AND NOT EXISTS (
+           SELECT 1
+             FROM tournament_daily_awards a
+            WHERE a.tournament_id = r.tournament_id
+              AND a.day_utc = r.day_utc
+         )
+       ORDER BY r.day_utc ASC
+    `).all(tid);
+  } catch {
+    return [];
+  }
+  return candidates
+    .map((row) => normalizeDailyPoolDay(row.day_utc))
+    .filter((day) => {
+      const window = tournamentDailyPoolWindowMs(t, day);
+      if (!Number.isFinite(window.startMs) || !Number.isFinite(window.endMs) || window.endMs <= window.startMs) {
+        return false;
+      }
+      return periods.some((period) => period.startMs < window.endMs && period.endMs > window.startMs);
+    });
+}
+
 function parseDailyPoolOverrides(value) {
   if (!value) return {};
   let raw = value;
@@ -4428,28 +4487,37 @@ function parseDailyPoolOverrides(value) {
   return out;
 }
 
-function dailyPoolDayIndex(t, dayInput) {
-  const firstMs = Date.parse(`${tournamentFirstDailyPoolDay(t)}T00:00:00Z`);
-  const dayMs = Date.parse(`${normalizeDailyPoolDay(dayInput)}T00:00:00Z`);
+function dailyPoolDayIndex(t, dayInput, excludedDaysInput = null) {
+  const firstDay = tournamentFirstDailyPoolDay(t);
+  const day = normalizeDailyPoolDay(dayInput);
+  const firstMs = Date.parse(`${firstDay}T00:00:00Z`);
+  const dayMs = Date.parse(`${day}T00:00:00Z`);
   if (!Number.isFinite(firstMs) || !Number.isFinite(dayMs) || dayMs <= firstMs) return 0;
-  return Math.max(0, Math.floor((dayMs - firstMs) / (24 * 60 * 60 * 1000)));
+  const calendarIndex = Math.max(0, Math.floor((dayMs - firstMs) / (24 * 60 * 60 * 1000)));
+  const excludedDays = Array.isArray(excludedDaysInput)
+    ? excludedDaysInput
+    : tournamentExcludedDailyPoolDays(t);
+  const excludedBeforeDay = excludedDays
+    .filter((excludedDay) => excludedDay >= firstDay && excludedDay < day)
+    .length;
+  return Math.max(0, calendarIndex - excludedBeforeDay);
 }
 
-function tournamentDailyPoolPointsForDay(t, dayInput) {
+function tournamentDailyPoolPointsForDay(t, dayInput, options = {}) {
   const day = normalizeDailyPoolDay(dayInput);
   const base = Math.max(1, Math.min(1_000_000, Number(t?.daily_pool_points || 1000) || 1000));
   const overrides = parseDailyPoolOverrides(t?.daily_pool_overrides);
+  const dayIndex = dailyPoolDayIndex(t, day, options.excludedDays);
   if (overrides[day] !== undefined) {
     return {
       points: overrides[day],
       base,
       growth_pct: Math.max(-99, Math.min(500, Number(t?.daily_pool_growth_pct || 0) || 0)),
-      day_index: dailyPoolDayIndex(t, day),
+      day_index: dayIndex,
       override: true,
     };
   }
   const growthPct = Math.max(-99, Math.min(500, Number(t?.daily_pool_growth_pct || 0) || 0));
-  const dayIndex = dailyPoolDayIndex(t, day);
   const multiplier = Math.pow(1 + (growthPct / 100), dayIndex);
   const points = Math.max(1, Math.min(1_000_000, Number((base * multiplier).toFixed(4))));
   return { points, base, growth_pct: growthPct, day_index: dayIndex, override: false };
@@ -11129,6 +11197,8 @@ module.exports = {
   getTournamentTradeSyncState,
   setTournamentTradeSyncState,
   luckyRaiderAttackStatsForPlayer,
+  getTournamentExcludedDailyPoolDays: tournamentExcludedDailyPoolDays,
+  getTournamentDailyPoolPointsForDay: tournamentDailyPoolPointsForDay,
   awardTournamentDailyPoolDay,
   awardLatestClosedTournamentDailyPoolDay,
   awardTournamentLuckyRaiderDay,

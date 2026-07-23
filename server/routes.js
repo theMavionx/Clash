@@ -21050,26 +21050,8 @@ function tournamentDailyPoolWindow(t, dayInput) {
   };
 }
 
-function tournamentDailyPoolDayIndex(t, dayInput) {
-  const firstMs = Date.parse(`${tournamentDailyPoolFirstDay(t)}T00:00:00Z`);
-  const dayMs = Date.parse(`${String(dayInput || '').slice(0, 10)}T00:00:00Z`);
-  if (!Number.isFinite(firstMs) || !Number.isFinite(dayMs) || dayMs <= firstMs) return 0;
-  return Math.max(0, Math.floor((dayMs - firstMs) / (24 * 60 * 60 * 1000)));
-}
-
-function tournamentDailyPoolPointsForDay(t, dayInput) {
-  const day = /^\d{4}-\d{2}-\d{2}$/.test(String(dayInput || '')) ? String(dayInput) : tournamentUtcDayString();
-  const base = normalizeTournamentDailyPoolPoints(t?.daily_pool_points, 1000);
-  const growthPct = normalizeTournamentDailyPoolGrowthPct(t?.daily_pool_growth_pct, 0);
-  let overrides = {};
-  try { overrides = normalizeTournamentDailyPoolOverrides(t?.daily_pool_overrides); }
-  catch { overrides = {}; }
-  const dayIndex = tournamentDailyPoolDayIndex(t, day);
-  if (overrides[day] !== undefined) {
-    return { points: overrides[day], base, growth_pct: growthPct, day_index: dayIndex, override: true };
-  }
-  const points = normalizeTournamentDailyPoolPoints(base * Math.pow(1 + growthPct / 100, dayIndex), base);
-  return { points, base, growth_pct: growthPct, day_index: dayIndex, override: false };
+function tournamentDailyPoolPointsForDay(t, dayInput, options = {}) {
+  return db.getTournamentDailyPoolPointsForDay(t, dayInput, options);
 }
 
 function normalizeTournamentShieldHours(v, fallback = null) {
@@ -23387,8 +23369,8 @@ function readTournamentDailyRunDetails(row) {
   catch { return {}; }
 }
 
-function buildTournamentDailyEstimate(activityRows, t, dayUtc = tournamentUtcDayString()) {
-  const poolState = tournamentDailyPoolPointsForDay(t, dayUtc);
+function buildTournamentDailyEstimate(activityRows, t, dayUtc = tournamentUtcDayString(), options = {}) {
+  const poolState = tournamentDailyPoolPointsForDay(t, dayUtc, options);
   const pool = poolState.points;
   const weights = tournamentPointWeights(t);
   const categories = [
@@ -23607,6 +23589,10 @@ function buildTournamentDailyPointRows(t, options = {}) {
   const limit = Math.max(1, Math.min(60, parseInt(options.limit, 10) || 7));
   const includeCurrentDay = options.includeCurrentDay !== false && tournamentPhase(t) === 'live';
   const currentDay = includeCurrentDay ? tournamentDailyPoolCurrentDay(t) : null;
+  const excludedPauseDayList = Array.isArray(options.excludedPauseDays)
+    ? options.excludedPauseDays
+    : db.getTournamentExcludedDailyPoolDays(t);
+  const excludedPauseDays = new Set(excludedPauseDayList);
   const daySet = new Set(db.db.prepare(`
     SELECT day_utc FROM (
       SELECT day_utc FROM tournament_daily_activity WHERE tournament_id = ?
@@ -23623,6 +23609,7 @@ function buildTournamentDailyPointRows(t, options = {}) {
       const value = String(day || '');
       return /^\d{4}-\d{2}-\d{2}$/.test(value)
         && value >= firstDay
+        && !excludedPauseDays.has(value)
         && (!currentDay || value <= currentDay);
     })
     .sort((a, b) => String(b).localeCompare(String(a)))
@@ -23738,7 +23725,9 @@ function buildTournamentDailyPointRows(t, options = {}) {
       });
     }
 
-    const estimate = buildTournamentDailyEstimate(Array.from(byPlayer.values()), t, day);
+    const estimate = buildTournamentDailyEstimate(Array.from(byPlayer.values()), t, day, {
+      excludedDays: excludedPauseDayList,
+    });
     const players = Array.from(byPlayer.values()).map((row) => {
       const estimated = estimate.byPlayer.get(row.player_id) || {};
       return {
@@ -23788,6 +23777,7 @@ function buildTournamentDailyPointRows(t, options = {}) {
     const run = runByDay.get(day);
     return {
       day_utc: day,
+      round_number: Number(estimate.details?.pool_state?.day_index || 0) + 1,
       activity_days: activityDays,
       window: tournamentDailyPoolWindow(t, day),
       processed,
@@ -23831,12 +23821,14 @@ router.get('/tournaments/:id/daily-points', (req, res) => {
 
   const totalVolumeUsd = tournamentTotalVolumeUsd(tid);
   const limit = Math.max(1, Math.min(60, parseInt(req.query.limit, 10) || 7));
+  const excludedPauseDays = db.getTournamentExcludedDailyPoolDays(t);
   res.json({
     tournament: tournamentRowToPublic(t, { totalVolumeUsd }),
     my_player_id: viewer?.id || null,
     server_day_utc: tournamentUtcDayString(),
     server_round_day_utc: tournamentDailyPoolCurrentDay(t),
-    days: buildTournamentDailyPointRows(t, { limit }),
+    excluded_pause_days: excludedPauseDays,
+    days: buildTournamentDailyPointRows(t, { limit, excludedPauseDays }),
   });
 });
 

@@ -133,10 +133,15 @@ function fmtUtcDateTime(value) {
 
 function dailyRoundNumber(dayRow) {
   const idx = Number(
-    dayRow?.estimate?.pool_state?.day_index
-    ?? dayRow?.run?.details?.pool_state?.day_index
+    dayRow?.round_number
+    ?? (
+      Number(
+        dayRow?.estimate?.pool_state?.day_index
+        ?? dayRow?.run?.details?.pool_state?.day_index
+      ) + 1
+    )
   );
-  return Number.isFinite(idx) ? idx + 1 : null;
+  return Number.isFinite(idx) && idx > 0 ? idx : null;
 }
 
 function dailyRoundLabel(dayRow) {
