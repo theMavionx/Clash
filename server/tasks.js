@@ -7,6 +7,7 @@
 // futures.trade_history; Solana wallets hit the Pacifica API.
 
 const db = require('./db');
+const { mergeMonotonicTaskProgress } = require('./task_progress');
 const path = require('path');
 const tradeRecon = require('./trade_reconciliation');
 
@@ -1240,14 +1241,20 @@ function getPlayerTask(playerId, taskId) {
 function upsertPlayerTask(playerId, taskId, { snapshot, progress, progress_value, target_value }) {
   const existing = getPlayerTask(playerId, taskId);
   if (existing) {
+    const merged = mergeMonotonicTaskProgress(existing, {
+      progress,
+      progress_value,
+      target_value,
+    });
     db.db.prepare(
       `UPDATE player_tasks SET progress = ?, progress_value = ?, target_value = ? WHERE player_id = ? AND task_id = ?`
-    ).run(progress, progress_value, target_value, playerId, taskId);
+    ).run(merged.progress, merged.progress_value, merged.target_value, playerId, taskId);
   } else {
     db.db.prepare(
       `INSERT INTO player_tasks (player_id, task_id, snapshot, progress, progress_value, target_value) VALUES (?, ?, ?, ?, ?, ?)`
     ).run(playerId, taskId, JSON.stringify(snapshot || {}), progress, progress_value, target_value);
   }
+  return getPlayerTask(playerId, taskId);
 }
 
 function canClaim(playerTask, task) {
@@ -1283,6 +1290,7 @@ module.exports = {
   getTaskById,
   getPlayerTask,
   upsertPlayerTask,
+  mergeMonotonicTaskProgress,
   canClaim,
   fetchWalletTrades,
   fetchPacificaAllTrades,

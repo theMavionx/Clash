@@ -15905,7 +15905,7 @@ async function maybeRefreshTaskProgress(player, task, playerTask, requestHeaders
     const progress = result.target_value > 0
       ? Math.min(1, result.progress_value / result.target_value)
       : 0;
-    tasks.upsertPlayerTask(player.id, task.id, {
+    const stored = tasks.upsertPlayerTask(player.id, task.id, {
       snapshot: snap,
       progress,
       progress_value: result.progress_value,
@@ -15913,9 +15913,9 @@ async function maybeRefreshTaskProgress(player, task, playerTask, requestHeaders
     });
     return {
       ...playerTask,
-      progress,
-      progress_value: result.progress_value,
-      target_value: result.target_value,
+      progress: stored.progress,
+      progress_value: stored.progress_value,
+      target_value: stored.target_value,
     };
   } catch (e) {
     console.warn(`[tasks] live progress refresh failed player=${player?.name || player?.id} task=${task?.id}:`, e.message);
@@ -16256,6 +16256,17 @@ router.post('/tasks/:id/claim', auth, async (req, res) => {
     }
     throw e;
   }
+
+  const mergedProgress = tasks.mergeMonotonicTaskProgress(pt, result);
+  result = {
+    ...result,
+    ...mergedProgress,
+    completed: Boolean(
+      result.completed
+      || (mergedProgress.target_value > 0
+        && mergedProgress.progress_value >= mergedProgress.target_value)
+    ),
+  };
 
   // Always update cached progress (progress update is an independent fact,
   // kept outside the payout txn so it lands even if the completion check
