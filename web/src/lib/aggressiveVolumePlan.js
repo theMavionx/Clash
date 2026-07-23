@@ -17,6 +17,8 @@ const ROUND_TRIPS_PER_DAY = 400;
 /** Decibel maker cadence (rebalance ≥30s, open cooldown 60s, patient exits). */
 const DECIBEL_ROUND_TRIPS_PER_DAY = 120;
 const INVENTORY_MULT = 6;
+/** Absolute per-order notional ceiling (mirrors backend AGGRESSIVE_ORDER_SIZE_ABS_MAX_USD). */
+const AGGRESSIVE_ORDER_SIZE_ABS_MAX = 50_000;
 const SAFETY_BUFFER = 1.25;
 /** Aggressive prefers maker fills (symmetric_mm maker-prefer) but some taker exits. */
 const TAKER_SHARE = 0.2;
@@ -26,13 +28,13 @@ const ADVERSE_BPS = 0.5;
 
 /** Per-venue fee + planning leverage (not venue max — safer MM defaults). */
 const VENUE = {
-  decibel: { makerBps: 1, takerBps: 4, leverage: 10, maxLeverage: 40, sizeMax: 2000, rts: DECIBEL_ROUND_TRIPS_PER_DAY },
-  ostium: { makerBps: 5, takerBps: 8, leverage: 10, maxLeverage: 50, sizeMax: 500, rts: ROUND_TRIPS_PER_DAY },
-  pacifica: { makerBps: 2, takerBps: 4, leverage: 10, maxLeverage: 50, sizeMax: 500, rts: ROUND_TRIPS_PER_DAY },
-  hyperliquid: { makerBps: -2, takerBps: 5, leverage: 5, maxLeverage: 50, sizeMax: 500, rts: ROUND_TRIPS_PER_DAY },
-  grvt: { makerBps: -2, takerBps: 5, leverage: 5, maxLeverage: 50, sizeMax: 500, rts: ROUND_TRIPS_PER_DAY },
-  avantis: { makerBps: 3, takerBps: 6, leverage: 10, maxLeverage: 50, sizeMax: 500, rts: ROUND_TRIPS_PER_DAY },
-  default: { makerBps: 2, takerBps: 5, leverage: 10, maxLeverage: 50, sizeMax: 500, rts: ROUND_TRIPS_PER_DAY },
+  decibel: { makerBps: 1, takerBps: 4, leverage: 10, maxLeverage: 40, sizeMax: AGGRESSIVE_ORDER_SIZE_ABS_MAX, rts: DECIBEL_ROUND_TRIPS_PER_DAY },
+  ostium: { makerBps: 5, takerBps: 8, leverage: 10, maxLeverage: 50, sizeMax: AGGRESSIVE_ORDER_SIZE_ABS_MAX, rts: ROUND_TRIPS_PER_DAY },
+  pacifica: { makerBps: 2, takerBps: 4, leverage: 10, maxLeverage: 50, sizeMax: AGGRESSIVE_ORDER_SIZE_ABS_MAX, rts: ROUND_TRIPS_PER_DAY },
+  hyperliquid: { makerBps: -2, takerBps: 5, leverage: 5, maxLeverage: 50, sizeMax: AGGRESSIVE_ORDER_SIZE_ABS_MAX, rts: ROUND_TRIPS_PER_DAY },
+  grvt: { makerBps: -2, takerBps: 5, leverage: 5, maxLeverage: 50, sizeMax: AGGRESSIVE_ORDER_SIZE_ABS_MAX, rts: ROUND_TRIPS_PER_DAY },
+  avantis: { makerBps: 3, takerBps: 6, leverage: 10, maxLeverage: 50, sizeMax: AGGRESSIVE_ORDER_SIZE_ABS_MAX, rts: ROUND_TRIPS_PER_DAY },
+  default: { makerBps: 2, takerBps: 5, leverage: 10, maxLeverage: 50, sizeMax: AGGRESSIVE_ORDER_SIZE_ABS_MAX, rts: ROUND_TRIPS_PER_DAY },
 };
 
 export const AGGRESSIVE_VOLUME_SLIDER = {
@@ -120,30 +122,25 @@ export function planAggressiveVolume({
   const v = venuePlanDefaults(exchangeId);
   const target = Math.max(0, Number(dailyVolumeUsd) || 0);
   const rts = Math.max(1, Number(roundTripsPerDay) || v.rts || ROUND_TRIPS_PER_DAY);
-  const sizeMax = v.sizeMax || 500;
+  const sizeMax = v.sizeMax || AGGRESSIVE_ORDER_SIZE_ABS_MAX;
 
   let tradeSize = target > 0 ? target / (2 * rts) : 0;
   tradeSize = snap(tradeSize, 5, sizeMax, 5);
 
   // Dual-leg: available × lev × 0.85 / 2
-  const parsedAvailable = Number(availableUsd);
-  const hasAvailable = availableUsd != null && Number.isFinite(parsedAvailable);
-  const avail = hasAvailable ? Math.max(0, parsedAvailable) : 0;
-  if (hasAvailable) {
+  const avail = Math.max(0, Number(availableUsd) || 0);
+  if (avail > 0) {
     const maxLeg = (avail * (v.leverage || 10) * 0.85) / 2;
-    if (tradeSize > maxLeg) {
-      tradeSize = maxLeg >= 5
-        ? Math.min(sizeMax, Math.floor(maxLeg / 5) * 5)
-        : 0;
+    if (maxLeg > 0 && tradeSize > maxLeg) {
+      tradeSize = snap(maxLeg, 5, sizeMax, 5);
     }
   }
 
-  let maxPosition = tradeSize > 0
-    ? snap(tradeSize * INVENTORY_MULT, 50, Math.max(5000, sizeMax * INVENTORY_MULT), 50)
-    : 0;
+  const invCeil = Math.max(sizeMax * INVENTORY_MULT, tradeSize * INVENTORY_MULT);
+  let maxPosition = snap(tradeSize * INVENTORY_MULT, 50, invCeil, 50);
   // Keep at least 2× trade for dual inventory headroom.
-  if (tradeSize > 0 && maxPosition < tradeSize * 2) {
-    maxPosition = snap(tradeSize * 2, 50, Math.max(5000, sizeMax * INVENTORY_MULT), 50);
+  if (maxPosition < tradeSize * 2) {
+    maxPosition = snap(tradeSize * 2, 50, invCeil, 50);
   }
 
   const leverage = v.leverage;

@@ -73,14 +73,14 @@ function encryptSecret(plain, key) {
 
 const BOT_TYPES = [
   {
-    id: 'delta_neutral',
-    name: 'Delta Neutral',
-    code: 'delta_neutral',
+    id: 'dca',
+    name: 'DCA',
+    code: 'dca',
     accent: '#1E88E5',
     accentDark: '#1565C0',
-    tagline: 'Keeps market exposure close to zero.',
-    description: 'Places offsetting long and short exposure so the bot focuses on spread capture instead of directional bets.',
-    bestFor: 'Sideways markets, inventory control, lower directional risk.',
+    tagline: 'Harvests funding while staying near flat.',
+    description: 'Opens long on one exchange and short on another so market exposure stays close to zero while collecting funding.',
+    bestFor: 'Funding gaps between two venues, lower directional risk.',
     cadence: 'Hedges every fill',
   },
   {
@@ -94,20 +94,10 @@ const BOT_TYPES = [
     bestFor: 'Liquid pairs, stable spreads, balanced inventory.',
     cadence: 'Requotes on drift',
   },
-  {
-    id: 'ping_pong',
-    name: 'Ping Pong',
-    code: 'ping_pong',
-    accent: '#E8B830',
-    accentDark: '#B88712',
-    tagline: 'Alternates buy and sell orders after fills.',
-    description: 'Buys near the lower band, then waits to sell higher. After a sell, it looks for the next buy setup.',
-    bestFor: 'Range-bound chop, small repeatable moves, simple execution.',
-    cadence: 'One leg at a time',
-  },
 ];
 
-const LAUNCH_BOT_TYPES = ['symmetric_mm', 'delta_neutral']
+/** Live launch strategies: Symmetric MM + DCA (funding / dual-venue). */
+const LAUNCH_BOT_TYPES = ['symmetric_mm', 'dca']
   .map((id) => BOT_TYPES.find((bot) => bot.id === id))
   .filter(Boolean);
 
@@ -150,8 +140,13 @@ function signedMoney(value) {
 }
 
 function getBotType(type) {
-  return BOT_TYPES.find((bot) => bot.id === type)
+  const key = (type === 'delta_neutral') ? 'dca' : type;
+  return BOT_TYPES.find((bot) => bot.id === key)
     || BOT_TYPES.find((bot) => bot.id === 'symmetric_mm');
+}
+
+function isDcaKind(kind) {
+  return kind === 'dca' || kind === 'delta_neutral';
 }
 
 function formatApiError(error, fallback = 'unknown error') {
@@ -184,7 +179,7 @@ function formatApiError(error, fallback = 'unknown error') {
 
 /** Strip `{tenant}:` prefix — ids are `{wallet}:symmetric_mm:hyperliquid:BTC-USD`. */
 function stripTenantPrefix(id) {
-  const kinds = ['symmetric_mm', 'delta_neutral', 'ping_pong'];
+  const kinds = ['symmetric_mm', 'dca', 'delta_neutral', 'ping_pong'];
   for (const kind of kinds) {
     const idx = id.indexOf(`${kind}:`);
     if (idx >= 0) return id.slice(idx);
@@ -194,15 +189,16 @@ function stripTenantPrefix(id) {
 
 function parseStrategyInstanceId(id) {
   const bare = stripTenantPrefix(id);
-  if (bare.startsWith('delta_neutral:')) {
-    const rest = bare.slice('delta_neutral:'.length);
+  if (bare.startsWith('dca:') || bare.startsWith('delta_neutral:')) {
+    const prefix = bare.startsWith('dca:') ? 'dca:' : 'delta_neutral:';
+    const rest = bare.slice(prefix.length);
     const colon = rest.lastIndexOf(':');
-    if (colon < 0) return { kind: 'delta_neutral', exchanges: [], symbols: [] };
+    if (colon < 0) return { kind: 'dca', exchanges: [], symbols: [] };
     const pair = rest.slice(0, colon);
     const symbol = rest.slice(colon + 1);
     const [longEx, shortEx] = pair.split('<->');
     return {
-      kind: 'delta_neutral',
+      kind: 'dca',
       exchanges: [longEx, shortEx].filter(Boolean),
       symbols: symbol ? [symbol] : [],
     };
@@ -437,7 +433,9 @@ function accountActiveForExchange(accounts, exchange) {
 
 const getBotConfigDetails = (id) => {
   const key = String(id || '');
-  if (key.includes('grvt') && key.includes('ping_pong')) return { tradeSize: 10, maxPosition: 100, preset: 'calm' };
+  if (key.includes('grvt') && key.includes('ping_pong')) {
+    return { tradeSize: 10, maxPosition: 100, preset: 'calm' };
+  }
   if (key.includes('grvt')) return { tradeSize: 10, maxPosition: 100, preset: 'calm' };
   if (key.includes('hyperliquid') && key.includes('symmetric_mm')) return { tradeSize: 10, maxPosition: 50, preset: 'aggressive' };
   if (key.includes('pacifica')) return { tradeSize: 50, maxPosition: 50, preset: 'calm' };
@@ -460,7 +458,7 @@ const matchPositionToBot = (botId, posExchange, posSymbol) => {
 const getExchangeName = (id) => {
   if (!id) return '';
   const parsed = parseStrategyInstanceId(id);
-  if (parsed.kind === 'delta_neutral' && parsed.exchanges.length === 2) {
+  if (parsed.kind === 'dca' && parsed.exchanges.length === 2) {
     return `${parsed.exchanges[0].toUpperCase()} / ${parsed.exchanges[1].toUpperCase()}`;
   }
   if (parsed.exchanges[0]) return parsed.exchanges[0].toUpperCase();
@@ -511,6 +509,10 @@ const mapHandleToBot = (
   const balFmt = formatExchangeBalance(bal);
   const fills = countFillsForExchange(orderHistory, exchange);
   const inventory = formatInventory(rt);
+  const hasOpenInventory = inventory != null
+    && inventory !== '0'
+    && Number.isFinite(Number(inventory))
+    && Number(inventory) !== 0;
   const unrealizedRaw = bal?.unrealized != null ? bal.unrealized : null;
   // Stopped + flat: "—" (not $0.00) so users don't think the feed is stuck.
   // Running / non-zero: show live exchange unrealized.
@@ -561,6 +563,12 @@ const mapHandleToBot = (
     lastAction = `Exchange balance error: ${shortenError(bal.error)}`;
   } else if (openQuotes > 0) {
     lastAction = `${openQuotes} quote(s) on exchange · cycle ${cycles}`;
+  } else if (cycles > 0 && hasOpenInventory) {
+    if (exchangeKey === 'decibel' || exchangeKey === 'ostium') {
+      lastAction = `Position open (${inventory}) — closing via maker exit; 0 new quotes until flat (normal MM)`;
+    } else {
+      lastAction = `Position open (${inventory}) — draining inventory; new quotes resume when flat`;
+    }
   } else if (cycles > 0) {
     if (String(exchange).toUpperCase().includes('GRVT') && handle.kind === 'ping_pong') {
       lastAction = 'Ping Pong active — after fill bot drains position; low margin until close is normal';
@@ -2760,7 +2768,7 @@ function BotsPanel({ onClose }) {
     } finally {
       setLaunching(false);
     }
-  }, [launching, selectedInstanceId, token, tradeSize, maxPosition, dailyVolumeUsd, aggressivePlan, preset, selectedType, fetchInstances, fetchOrderHistory, resetLaunch, syncedAccounts, appendHistory, authorizeGrvtBuilder, evmWallet, resolveEvmWallet, selectedFreeMarginUsd]);
+  }, [launching, selectedInstanceId, token, tradeSize, maxPosition, dailyVolumeUsd, aggressivePlan, preset, selectedType, fetchInstances, fetchOrderHistory, resetLaunch, syncedAccounts, appendHistory, authorizeGrvtBuilder, evmWallet, resolveEvmWallet]);
 
   // Real-time WebSocket updates via Clash game backend mediator
   const [wsConnected, setWsConnected] = useState(false);
@@ -3850,28 +3858,24 @@ function BotsPanel({ onClose }) {
           <div style={S.strategyGrid}>
             {LAUNCH_BOT_TYPES.map((bot) => {
               const active = selectedType === bot.id;
-              const disabled = bot.id === 'delta_neutral';
               return (
                 <button
                   key={bot.id}
                   type="button"
                   className="bots-focusable"
-                  disabled={disabled}
-                  aria-pressed={!disabled && active}
+                  aria-pressed={active}
                   style={{
                     ...S.strategyCard,
                     ...(active ? S.strategyCardActive : {}),
-                    ...(disabled ? S.strategyCardDisabled : {}),
                   }}
-                  onClick={() => !disabled && setSelectedType(bot.id)}
+                  onClick={() => setSelectedType(bot.id)}
                 >
-                  <div style={{ ...S.botAvatar, background: disabled ? '#B8B1A4' : `linear-gradient(180deg, ${bot.accent} 0%, ${bot.accentDark} 100%)` }}>
+                  <div style={{ ...S.botAvatar, background: `linear-gradient(180deg, ${bot.accent} 0%, ${bot.accentDark} 100%)` }}>
                     <RobotGlyph size={28} color="#fff" />
                   </div>
                   <div style={S.strategyText}>
                     <div style={S.strategyTitleRow}>
                       <strong>{bot.name}</strong>
-                      {disabled && <span style={S.soonBadge}>Soon</span>}
                     </div>
                     <span>{bot.description}</span>
                   </div>
