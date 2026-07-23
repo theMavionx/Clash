@@ -793,6 +793,7 @@ export function useOstium() {
   const pricesRef = useRef([]);
   const claimGoldRef = useRef(null);
   const importFillsRef = useRef(null);
+  const linkedWalletRef = useRef({ key: '', promise: null });
   const positionsRef = useRef([]);
   const ordersRef = useRef([]);
   const delegateSignerRef = useRef(null);
@@ -819,6 +820,35 @@ export function useOstium() {
     }
     return headers;
   }, [token]);
+
+  const ensureOstiumWalletLinked = useCallback(async () => {
+    const normalizedWallet = String(walletAddr || '').trim().toLowerCase();
+    if (!token || !isEvmAddress(normalizedWallet)) return false;
+    const key = `${token}:${normalizedWallet}`;
+    if (linkedWalletRef.current.key === key && linkedWalletRef.current.promise) {
+      return linkedWalletRef.current.promise;
+    }
+    const promise = fetchJson('/api/players/dex-accounts/ostium/link', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({
+        wallet: normalizedWallet,
+        walletSource: walletSource || 'evm-wallet',
+      }),
+    }).then(() => true).catch((error) => {
+      linkedWalletRef.current = { key: '', promise: null };
+      throw error;
+    });
+    linkedWalletRef.current = { key, promise };
+    return promise;
+  }, [authHeaders, token, walletAddr, walletSource]);
+
+  useEffect(() => {
+    if (!isActiveDex || !token || !isEvmAddress(walletAddr)) return;
+    ensureOstiumWalletLinked().catch((error) => {
+      console.warn('[useOstium] dex wallet link failed:', error?.message || error);
+    });
+  }, [ensureOstiumWalletLinked, isActiveDex, token, walletAddr]);
 
   const ostiumLivePairKey = useMemo(() => {
     if (!isActiveDex) return '';
@@ -1878,6 +1908,7 @@ export function useOstium() {
   const importFills = useCallback(async ({ attempts = CLAIM_LOOKBACK_ATTEMPTS, delayMs = 1500 } = {}) => {
     if (!walletAddr || !token) return null;
     try {
+      await ensureOstiumWalletLinked();
       return await fetchJson(`${FUTURES_API}/ostium/import-fills?dex=ostium`, {
         method: 'POST',
         headers: authHeaders(),
@@ -1891,7 +1922,7 @@ export function useOstium() {
       console.warn('[useOstium] import-fills:', e?.message || e);
       return null;
     }
-  }, [authHeaders, token, walletAddr]);
+  }, [authHeaders, ensureOstiumWalletLinked, token, walletAddr]);
 
   importFillsRef.current = importFills;
 

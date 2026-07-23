@@ -37,6 +37,7 @@ const {
   withSolanaRpcFallback,
 } = require('./solana_rpc');
 const { normalizeConfirmedMintTxs, resolveEvmMintTokenIds } = require('./nft_mint_receipt');
+const { planDexAccountWalletUpdate } = require('./dex_account_selection');
 
 const router = express.Router();
 
@@ -9466,33 +9467,25 @@ function resolveKnownDexWalletForPlayerId(playerId, dex) {
 
 function upsertPlayerDexAccountFromLoginWallet(playerId, dex, wallet, status = 'ready', metadata = {}) {
   const venueWallet = dexAcceptsWallet(dex, wallet) ? canonicalWalletIdentifier(wallet) : '';
-  const meta = { ...(metadata || {}) };
-  if (!venueWallet && wallet && isValidWallet(wallet)) {
-    meta.ignored_wallet = canonicalWalletIdentifier(wallet);
-    meta.ignored_chain_type = walletChainType(wallet);
-    const existingVenueWallet = resolveKnownDexWalletForPlayerId(playerId, dex);
-    if (existingVenueWallet) {
-      upsertPlayerDexAccount(
-        playerId,
-        dex,
-        existingVenueWallet,
-        status,
-        {
-          ...meta,
-          preserved_wallet: existingVenueWallet,
-          preserved_because: 'login_wallet_chain_mismatch',
-        },
-      );
-      return;
-    }
-    meta.__clear_wallet = true;
-  }
+  const mismatchedLoginWallet = !venueWallet && wallet && isValidWallet(wallet)
+    ? canonicalWalletIdentifier(wallet)
+    : '';
+  const existingVenueWallet = mismatchedLoginWallet
+    ? resolveKnownDexWalletForPlayerId(playerId, dex)
+    : '';
+  const plan = planDexAccountWalletUpdate({
+    venueWallet,
+    existingVenueWallet,
+    loginWallet: mismatchedLoginWallet,
+    loginChainType: mismatchedLoginWallet ? walletChainType(mismatchedLoginWallet) : null,
+    metadata,
+  });
   upsertPlayerDexAccount(
     playerId,
     dex,
-    venueWallet,
-    venueWallet ? status : 'disconnected',
-    meta,
+    plan.wallet,
+    plan.wallet ? status : plan.status,
+    plan.metadata,
   );
 }
 
@@ -11600,15 +11593,13 @@ router.post('/players/dex-accounts/:dex/select', auth, (req, res) => {
   if (venueWallet) {
     upsertUnifiedIdentity(req.player.id, venueWallet, { label: req.body?.walletSource || req.body?.source });
   }
-  upsertPlayerDexAccount(
+  upsertPlayerDexAccountFromLoginWallet(
     req.player.id,
     dex,
-    venueWallet,
-    venueWallet ? 'ready' : 'disconnected',
+    wallet,
+    'ready',
     {
       source: req.body?.walletSource || req.body?.source || 'select-dex',
-      __clear_wallet: !venueWallet,
-      ...(wallet && !venueWallet ? { ignored_wallet: canonicalWalletIdentifier(wallet), ignored_chain_type: walletChainType(wallet) } : {}),
     },
   );
   try {
