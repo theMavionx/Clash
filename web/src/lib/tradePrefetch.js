@@ -371,12 +371,6 @@ function buildDexSpecificRequests({ dex, token, walletAddress, signal }) {
 
   if (dex === 'katana') {
     addPrefetchRequest(requests, futuresUrl('/katana/health'), { headers, signal });
-    if (address) {
-      addPrefetchRequest(requests, futuresUrl(`/katana/account?address=${encoded(address)}`), { headers, signal });
-      addPrefetchRequest(requests, futuresUrl(`/katana/positions?address=${encoded(address)}`), { headers, signal });
-      addPrefetchRequest(requests, futuresUrl(`/katana/orders?address=${encoded(address)}&closed=false&limit=100`), { headers, signal });
-      addPrefetchRequest(requests, futuresUrl(`/katana/delegated-keys?address=${encoded(address)}`), { headers, signal });
-    }
     return requests;
   }
 

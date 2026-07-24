@@ -87,6 +87,27 @@ function rows(payload) {
   return [];
 }
 
+function hasDelegatedSigner(payload, signerAddress) {
+  const expected = normalizeAddress(signerAddress);
+  return !!expected && rows(payload).some((row) => normalizeAddress(row?.delegatedKey) === expected);
+}
+
+async function waitForDelegatedSigner(url, headers, signerAddress) {
+  const delays = [0, 250, 750, 1500];
+  let lastError = null;
+  for (const delay of delays) {
+    if (delay) await new Promise((resolve) => window.setTimeout(resolve, delay));
+    try {
+      const payload = await fetchJson(url, { headers });
+      if (hasDelegatedSigner(payload, signerAddress)) return payload;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  if (lastError) throw lastError;
+  throw new Error('Katana delegated key was accepted but is not visible yet.');
+}
+
 export async function loadKatanaStoredCredentials() {
   const normalize = normalizeKatanaCredentials;
   const migrated = await migratePlainLocalStorageCredential(STORAGE_KEY, STORAGE_KEY, normalize);
@@ -153,9 +174,9 @@ async function authorizeKatanaOneTapSigner({
   const wallet = String(walletAddress || credentials.wallet || '').trim();
   const query = `wallet=${encodeURIComponent(wallet)}`;
   const headers = authHeaders(playerToken, credentials);
-  const existing = await fetchJson(`${FUTURES_API}/katana/delegated-keys?${query}`, { headers }).catch(() => []);
-  const existingRows = rows(existing);
-  if (existingRows.some((row) => normalizeAddress(row?.delegatedKey) === normalizeAddress(signer.address))) {
+  const delegatedKeysUrl = `${FUTURES_API}/katana/delegated-keys?${query}`;
+  const existing = await fetchJson(delegatedKeysUrl, { headers });
+  if (hasDelegatedSigner(existing, signer.address)) {
     return { ok: true, already_authorized: true, signer: signer.address };
   }
   const prepared = await fetchJson(`${FUTURES_API}/katana/delegated-key/prepare`, {
@@ -176,6 +197,7 @@ async function authorizeKatanaOneTapSigner({
       signature,
     }),
   });
+  await waitForDelegatedSigner(delegatedKeysUrl, headers, signer.address);
   return { ok: true, signer: signer.address, result };
 }
 
@@ -195,19 +217,8 @@ export async function ensureKatanaOneTapReady(ctx = {}) {
     return { ok: false, error: 'Connect EVM wallet for Katana.' };
   }
 
-  const existing = await loadKatanaStoredOneTapSigner(walletAddress);
-  if (existing?.privateKey) {
-    const auth = await authorizeKatanaOneTapSigner({
-      playerToken,
-      credentials,
-      walletAddress,
-      signer: existing,
-      ctx,
-    }).catch(() => null);
-    if (auth?.ok) return { ok: true, wallet: walletAddress, signer: existing.address };
-  }
-
   try {
+    const existing = await loadKatanaStoredOneTapSigner(walletAddress);
     const signer = existing || signerFromPrivateKey(generatePrivateKey());
     const auth = await authorizeKatanaOneTapSigner({
       playerToken,
