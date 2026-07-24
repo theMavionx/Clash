@@ -285,6 +285,9 @@ function normalizeMarket(row) {
     lot_size: row.stepSize || row.step_size || '0.0001',
     tick_size: row.tickSize || row.tick_size || '0.01',
     min_order_size: row.minOrderSize || row.minimumOrderSize || '0',
+    maker_order_minimum: row.makerOrderMinimum || row.maker_order_minimum || '0',
+    taker_order_minimum: row.takerOrderMinimum || row.taker_order_minimum || '0',
+    minimum_position_size: row.minimumPositionSize || row.minimum_position_size || '0',
     max_leverage: num(maxLeverage, 50),
     mark: num(row.indexPrice ?? row.markPrice),
     oracle: num(row.indexPrice ?? row.markPrice),
@@ -501,12 +504,35 @@ function normalizeTif(value) {
   throw Object.assign(new Error('Unsupported Katana timeInForce'), { status: 400 });
 }
 
-function formatQuantity(value) {
+function formatQuantity(value, market = null, { reduceOnly = false } = {}) {
   const n = Number(value);
   if (!Number.isFinite(n) || n <= 0) return '';
-  const floored = Math.floor((n + 1e-12) * 10_000) / 10_000;
-  if (!(floored > 0)) return '';
-  return floored.toFixed(8);
+  const stepRaw = market?.lot_size
+    || market?.stepSize
+    || market?._raw?.stepSize
+    || '0.0001';
+  const step = Number(stepRaw);
+  const decimals = decimalPlacesFromStep(stepRaw, 8);
+  const scale = 10 ** decimals;
+  const stepUnits = Number.isFinite(step) && step > 0
+    ? Math.max(1, Math.round(step * scale))
+    : 1;
+  let quantityUnits = Math.floor(((n * scale) + 1e-7) / stepUnits) * stepUnits;
+
+  if (reduceOnly) {
+    const takerMinimumRaw = market?.taker_order_minimum
+      || market?.takerOrderMinimum
+      || market?._raw?.takerOrderMinimum
+      || 0;
+    const takerMinimum = Number(takerMinimumRaw);
+    if (Number.isFinite(takerMinimum) && takerMinimum > 0) {
+      const minimumUnits = Math.ceil(((takerMinimum * scale) - 1e-7) / stepUnits) * stepUnits;
+      quantityUnits = Math.max(quantityUnits, minimumUnits);
+    }
+  }
+
+  if (!(quantityUnits > 0)) return '';
+  return (quantityUnits / scale).toFixed(8);
 }
 
 function decimalPlacesFromStep(value, fallback = 8) {
@@ -551,13 +577,15 @@ function orderParams(input = {}, creds, options = {}) {
   const { OrderType } = sdk();
   const type = normalizeOrderType(input.type || input.orderType || input.order_type, options.market);
   const marketMeta = options.marketMeta || null;
+  const hasReduceOnly = input.reduceOnly !== undefined || input.reduce_only !== undefined;
+  const reduceOnly = hasReduceOnly ? !!(input.reduceOnly ?? input.reduce_only) : false;
   const params = {
     type,
     side: normalizeSide(input.side),
     nonce: nonce(),
     wallet: walletParam(input.wallet, creds),
     market: marketName(input.market || input.symbol),
-    quantity: formatQuantity(input.quantity || input.amount || ''),
+    quantity: formatQuantity(input.quantity || input.amount || '', marketMeta, { reduceOnly }),
   };
   const delegatedKey = String(input.delegatedKey || input.delegated_key || '').trim();
   if (delegatedKey) {
@@ -565,10 +593,10 @@ function orderParams(input = {}, creds, options = {}) {
     params.delegatedKey = delegatedKey;
   }
   if (!params.quantity || !(Number(params.quantity) > 0)) {
-    throw Object.assign(new Error('Katana order quantity must be at least 0.0001 base units'), { status: 400 });
+    throw Object.assign(new Error('Katana order quantity must be at least one market step'), { status: 400 });
   }
   params.clientOrderId = katanaClientOrderId(input);
-  if (input.reduceOnly !== undefined || input.reduce_only !== undefined) params.reduceOnly = !!(input.reduceOnly ?? input.reduce_only);
+  if (hasReduceOnly) params.reduceOnly = reduceOnly;
   const isTriggerOrder = type === OrderType.takeProfitMarket
     || type === OrderType.stopLossMarket
     || type === OrderType.takeProfitLimit
@@ -1164,6 +1192,7 @@ module.exports = {
   getFundingRates,
   getHealth,
   importFillsForPlayer,
+  formatQuantity,
   getMarketInfo,
   getOrderbook,
   getOrders,

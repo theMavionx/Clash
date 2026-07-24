@@ -11,6 +11,7 @@ import {
   removeEncryptedCredential,
   writeEncryptedCredential,
 } from '../lib/encryptedCredentialStorage';
+import { loadKatanaStoredCredentials } from '../lib/katanaOneTapSetup';
 
 const FUTURES_API = '/api/futures';
 const STORAGE_KEY = 'clash_katana_credentials_v1';
@@ -144,6 +145,27 @@ function rows(payload) {
   return [];
 }
 
+function hasDelegatedSigner(payload, signerAddress) {
+  const expected = normalizeAddress(signerAddress);
+  return !!expected && rows(payload).some(row => normalizeAddress(row?.delegatedKey) === expected);
+}
+
+async function waitForDelegatedSigner(url, headers, signerAddress) {
+  const delays = [0, 250, 750, 1500];
+  let lastError = null;
+  for (const delay of delays) {
+    if (delay) await new Promise(resolve => window.setTimeout(resolve, delay));
+    try {
+      const payload = await fetchJson(url, { headers });
+      if (hasDelegatedSigner(payload, signerAddress)) return payload;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  if (lastError) throw lastError;
+  throw new Error('Katana delegated key was accepted but is not visible yet.');
+}
+
 function pricesArray(payload) {
   if (Array.isArray(payload)) return payload;
   if (payload && typeof payload === 'object') return Object.values(payload);
@@ -245,7 +267,7 @@ export function useKatana() {
       }
     })();
     return () => { cancelled = true; };
-  }, [isActiveDex]);
+  }, [isActiveDex, walletAddr]);
 
   useEffect(() => {
     if (!isActiveDex) return;
@@ -526,16 +548,22 @@ export function useKatana() {
   const authorizeOneTapSigner = useCallback(async (signer) => {
     if (!token) return disabled('Missing game session token.');
     if (!walletAddr) return disabled('Connect a Katana wallet first.');
-    const localStatus = credentialStatus(credentials);
-    if (!localStatus.has_credentials) {
-      return disabled(`Missing Katana credentials: ${localStatus.missing_fields.join(', ') || 'api_key, api_secret'}`);
-    }
     try {
+      const storedCredentials = await loadKatanaStoredCredentials().catch(() => null);
+      const activeCredentials = normalizeKatanaCredentials(storedCredentials) || credentials;
+      const localStatus = credentialStatus(activeCredentials);
+      if (!localStatus.has_credentials) {
+        return disabled(`Missing Katana credentials: ${localStatus.missing_fields.join(', ') || 'api_key, api_secret'}`);
+      }
+      if (normalizeAddress(activeCredentials.wallet) !== normalizeAddress(walletAddr)) {
+        return disabled('Saved Katana API credentials belong to a different wallet. Activate Katana for the connected wallet.');
+      }
+      setCredentials(activeCredentials);
       const query = `wallet=${encodeURIComponent(walletAddr)}`;
-      const headers = authHeaders(token, credentials);
-      const existing = await fetchJson(`${FUTURES_API}/katana/delegated-keys?${query}`, { headers }).catch(() => []);
-      const existingRows = rows(existing);
-      if (existingRows.some(row => normalizeAddress(row?.delegatedKey) === normalizeAddress(signer.address))) {
+      const delegatedKeysUrl = `${FUTURES_API}/katana/delegated-keys?${query}`;
+      const headers = authHeaders(token, activeCredentials);
+      const existing = await fetchJson(delegatedKeysUrl, { headers });
+      if (hasDelegatedSigner(existing, signer.address)) {
         setOneTapAuthorized(true);
         return { ok: true, already_authorized: true, signer: signer.address };
       }
@@ -562,6 +590,7 @@ export function useKatana() {
         signer: signer.address,
         result,
       });
+      await waitForDelegatedSigner(delegatedKeysUrl, headers, signer.address);
       setOneTapAuthorized(true);
       return { ok: true, signer: signer.address, result };
     } catch (e) {
@@ -592,7 +621,7 @@ export function useKatana() {
     } catch (e) {
       return { error: e?.message || 'Failed to enable Katana one tap trading' };
     }
-  }, [authorizeOneTapSigner]);
+  }, [authorizeOneTapSigner, walletAddr]);
 
   const claimGold = useCallback(async ({ reason = 'katana' } = {}) => {
     if (!token) return disabled('Missing game session token.');
