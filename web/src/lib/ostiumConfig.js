@@ -43,7 +43,14 @@ export const OSTIUM_SUBGRAPH_URL = sameOriginHttpUrl(
   import.meta.env.VITE_OSTIUM_SUBGRAPH_URL
   || '/api/futures/ostium/subgraph/gn'
 );
-export const OSTIUM_BUILDER_API_URL = import.meta.env.VITE_OSTIUM_BUILDER_API_URL || '';
+export const OSTIUM_BUILDER_API_URL = (
+  import.meta.env.VITE_OSTIUM_BUILDER_API_URL
+  || 'https://builder.prod.bedrock.ostium.io'
+).replace(/\/+$/u, '');
+export const OSTIUM_PRICE_STREAM_WS = (
+  import.meta.env.VITE_OSTIUM_PRICE_STREAM_WS
+  || 'wss://builder.prod.bedrock.ostium.io/v1/prices/stream'
+);
 export const OSTIUM_TRADING_CALLBACKS_ADDRESS = (
   import.meta.env.VITE_OSTIUM_TRADING_CALLBACKS_ADDRESS
   || '0x7720fC8c8680bF4a1Af99d44c6c265a74e9742a9'
