@@ -1707,6 +1707,57 @@ router.get('/decibel/signer', auth, async (req, res) => {
   }
 });
 
+router.get('/decibel/rpc-status', auth, (req, res) => {
+  if (!ensureDecibel(req, res)) return;
+  res.json(decibel.getAptosKeyPoolStatus());
+});
+
+router.post('/decibel/aptos-view', auth, async (req, res) => {
+  try {
+    if (!ensureDecibel(req, res)) return;
+    const functionId = String(req.body?.function || '').trim();
+    if (!/^0x[0-9a-f]+::[A-Za-z_][A-Za-z0-9_]*::[A-Za-z_][A-Za-z0-9_]*$/i.test(functionId)) {
+      return res.status(400).json({ error: 'valid Aptos view function required' });
+    }
+    const args = Array.isArray(req.body?.arguments) ? req.body.arguments : [];
+    const typeArguments = Array.isArray(req.body?.type_arguments) ? req.body.type_arguments : [];
+    res.json(await decibel.aptosView(functionId, args, typeArguments));
+  } catch (e) {
+    console.error('[decibel] Aptos view error:', e);
+    res.status(e.status || 502).json({ error: e.message || 'Aptos view failed' });
+  }
+});
+
+router.get('/decibel/markets', auth, async (req, res) => {
+  try {
+    if (!ensureDecibel(req, res)) return;
+    res.json(await decibel.fetchMarkets());
+  } catch (e) {
+    res.status(e.status || 502).json({ error: e.message || 'Failed to read Decibel markets' });
+  }
+});
+
+router.get('/decibel/prices', auth, async (req, res) => {
+  try {
+    if (!ensureDecibel(req, res)) return;
+    res.json(await decibel.fetchMarketPrices());
+  } catch (e) {
+    res.status(e.status || 502).json({ error: e.message || 'Failed to read Decibel prices' });
+  }
+});
+
+router.get('/decibel/account', auth, async (req, res) => {
+  try {
+    const verified = await requireDecibelOwnerAndSubaccount(req, res);
+    if (!verified) return;
+    const account = await decibel.fetchAccountOverview(verified.subaccount);
+    if (!account) return res.status(404).json({ error: 'Decibel account not found' });
+    res.json(account);
+  } catch (e) {
+    res.status(e.status || 502).json({ error: e.message || 'Failed to read Decibel account' });
+  }
+});
+
 router.get('/katana/health', async (req, res) => {
   try {
     res.json(await katana.getHealth());
