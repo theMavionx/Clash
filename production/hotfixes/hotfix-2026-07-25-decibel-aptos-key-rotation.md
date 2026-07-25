@@ -2,12 +2,14 @@
 Date: 2026-07-25
 Severity: S2
 Reporter: Owner
-Status: READY FOR DEPLOYMENT
+Status: READY FOR REDEPLOYMENT
 
 ### Problem
 Decibel reads and transaction preparation depend on Aptos Labs/Geomi APIs with
 per-key request limits. The integration used one credential, so exhausting that
 quota caused Decibel API failures for every player until the limit reset.
+The admin Earnings reader had a separate single-key request and continued to
+show MonthlyBudget HTTP 429 after the trading integration was fixed.
 
 ### Root Cause
 The server and parts of the browser client were configured around one static
@@ -24,6 +26,7 @@ credential after an authentication, quota, or rate-limit response.
 - Route recurring browser reads through authenticated server endpoints so the
   failover keys are never embedded in the web bundle.
 - Preserve the existing direct browser read as a compatibility fallback.
+- Use the same pool for the admin Decibel `account_overviews` earnings read.
 
 ### Testing
 - Key-pool unit test covers rotation, cooldown, expiry, non-retryable errors,
@@ -33,6 +36,8 @@ credential after an authentication, quota, or rate-limit response.
 - Every new credential returned HTTP 200 from both Aptos fullnode and Decibel
   markets endpoints.
 - Node syntax checks, web lint, production web build, and diff whitespace check.
+- Admin earnings regression test forces MonthlyBudget HTTP 429 on the primary
+  key and confirms the same request succeeds through the next pool key.
 - Production smoke checks must confirm process health, pool size, Decibel
   markets response, and no new key-limit errors after deployment.
 
