@@ -1,146 +1,15 @@
-[gd_scene format=3 uid="uid://cl5y6ktjmmrew"]
+[gd_scene load_steps=3 format=3 uid="uid://cl5y6ktjmmrew"]
 
-[ext_resource type="PackedScene" uid="uid://byc1re1u02718" path="res://Model/Island/pirate_island.glb" id="1_uu6xs"]
-[ext_resource type="Script" uid="uid://vikmob2bagbn" path="res://scripts/camera_rig.gd" id="2_cam"]
-[ext_resource type="Material" path="res://shaders/water_stable.tres" id="3_cm0pq"]
-[ext_resource type="Script" uid="uid://56cxsu5s20t6" path="res://scripts/building_system.gd" id="4_cm0pq"]
-[ext_resource type="Script" uid="uid://df6gm7o36dvf7" path="res://scripts/attack_system.gd" id="5_vcsgt"]
-[ext_resource type="Script" path="res://scripts/main_ship_controller.gd" id="20_main_ship"]
-[ext_resource type="Script" uid="uid://q87h4tn8gjye" path="res://scripts/warmup.gd" id="17_warmup"]
-[ext_resource type="Script" uid="uid://glo5lshn6c7" path="res://scripts/test_scene_harness.gd" id="18_harness"]
-[ext_resource type="Script" path="res://scripts/island_ambient_animator.gd" id="19_island_anim"]
-[ext_resource type="Shader" path="res://shaders/editor_grid_preview.gdshader" id="20_attack_grid"]
-[ext_resource type="Script" path="res://scripts/web_render_profile.gd" id="21_web_render"]
-[ext_resource type="Script" path="res://scripts/ambient_shark.gd" id="22_ambient_shark"]
-[sub_resource type="BoxMesh" id="BoxMesh_r0du0"]
+[ext_resource type="PackedScene" uid="uid://dosexdc7fxdx0" path="res://scenes/Main.tscn" id="1_main"]
+[ext_resource type="Script" uid="uid://glo5lshn6c7" path="res://scripts/test_scene_harness.gd" id="2_harness"]
 
-[sub_resource type="ShaderMaterial" id="ShaderMaterial_attack_grid"]
-render_priority = 127
-shader = ExtResource("20_attack_grid")
-shader_parameter/fill_color = Color(0.8, 0.1, 0.1, 0.35)
+[node name="TestIslandScene" instance=ExtResource("1_main")]
 
-[sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_uu6xs"]
-sky_top_color = Color(0.35, 0.55, 0.9, 1)
-sky_horizon_color = Color(0.65, 0.75, 0.9, 1)
-ground_bottom_color = Color(0.2, 0.17, 0.13, 1)
-ground_horizon_color = Color(0.65, 0.75, 0.9, 1)
-sun_curve = 0.1
-
-[sub_resource type="Sky" id="Sky_r0du0"]
-sky_material = SubResource("ProceduralSkyMaterial_uu6xs")
-
-[sub_resource type="Environment" id="Environment_cm0pq"]
-background_mode = 2
-sky = SubResource("Sky_r0du0")
-ambient_light_source = 3
-ambient_light_color = Color(0.65, 0.72, 0.9, 1)
-ambient_light_energy = 1.44
-tonemap_mode = 3
-tonemap_exposure = 0.65
-tonemap_white = 6.0
-glow_enabled = true
-glow_bloom = 0.08
-fog_enabled = true
-fog_light_color = Color(0.75, 0.82, 0.95, 1)
-fog_sun_scatter = 0.2
-fog_density = 0.001
-
-[sub_resource type="PlaneMesh" id="PlaneMesh_lgr22"]
-size = Vector2(40, 40)
-subdivide_width = 64
-subdivide_depth = 64
-
-[node name="TestIslandScene" type="Node3D" unique_id=732450442]
-metadata/_edit_lock_ = true
-
-[node name="Island" type="Node3D" parent="." unique_id=975866043]
-transform = Transform3D(-0.078772314, 0, -0.99689263, 0, 1, 0, 0.99689263, 0, -0.078772314, 0, 0.46901703, 0)
-script = ExtResource("19_island_anim")
-
-[node name="Visual" parent="Island" unique_id=848043811 instance=ExtResource("1_uu6xs")]
-transform = Transform3D(0.048, 0, 0, 0, 0.04, 0, 0, 0, 0.048, 0.304064, -0.303565, 1.994608)
-metadata/_edit_lock_ = true
-
-[node name="gridPlane" type="MeshInstance3D" parent="Island" unique_id=1065138321]
-transform = Transform3D(0.016776502, 0, 3.9599705, 0, 0.10000002, 0, -4.253302, 0, 0.015619505, 0.30954075, 0.071223736, 1.6492015)
-visible = false
-mesh = SubResource("BoxMesh_r0du0")
-
-[node name="shipPlane" type="MeshInstance3D" parent="Island" unique_id=395846292]
-transform = Transform3D(0.029619157, 0.0021351168, 0.86168206, 0.035344727, 0.043082587, -0.21062225, -3.6703281, 0.0005230724, 0.003157355, 2.784562, 0.023292989, 1.6345824)
-material_override = SubResource("ShaderMaterial_attack_grid")
-mesh = SubResource("BoxMesh_r0du0")
-
-[node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=1206777412]
-transform = Transform3D(0.8660254, 0.3830223, -0.3213939, 0, 0.6427878, 0.7660446, 0.5, -0.6634141, 0.55667055, 0, 10, 0)
-light_color = Color(1, 0.95, 0.85, 1)
-light_angular_distance = 1.0
-shadow_enabled = true
-shadow_bias = 0.15
-shadow_normal_bias = 3.0
-shadow_blur = 2.0
-directional_shadow_mode = 0
-directional_shadow_max_distance = 50.0
-
-[node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=1827601912]
-environment = SubResource("Environment_cm0pq")
-
-[node name="CameraRig" type="Node3D" parent="." unique_id=1731418691]
-script = ExtResource("2_cam")
-max_zoom = 8.0
-pan_limit_min = Vector3(-3, 0, -3)
-pan_limit_max = Vector3(3, 0, 3)
-camera_pitch = 55.0
-
-[node name="PitchPivot" type="Node3D" parent="CameraRig" unique_id=1904087244]
-transform = Transform3D(1, 0, 0, 0, 0.5735764, 0.819152, 0, -0.819152, 0.5735764, 0, 0, 0)
-
-[node name="Camera3D" type="Camera3D" parent="CameraRig/PitchPivot" unique_id=282510699]
-position = Vector3(0, 0, 7.3)
-current = true
-fov = 58.0
-
-[node name="FillLight" type="DirectionalLight3D" parent="." unique_id=1875370571]
-transform = Transform3D(-0.8660254, 0.25000003, 0.43301275, 0, 0.8660254, -0.5, -0.50000006, -0.4330127, -0.75, 0, 0, 0)
-light_color = Color(0.7, 0.78, 0.95, 1)
-light_energy = 0.5
-
-[node name="Water" type="MeshInstance3D" parent="." unique_id=1137932582]
-transform = Transform3D(1.5, 0, 0, 0, 1.5, 0, 0, 0, 1.5, 0, 0, 0)
-material_override = ExtResource("3_cm0pq")
-mesh = SubResource("PlaneMesh_lgr22")
-metadata/_edit_lock_ = true
-
-[node name="BuildingSystem" type="Node3D" parent="." unique_id=1835597445]
-script = ExtResource("4_cm0pq")
-grid_width = 29
-grid_plane_path = NodePath("../Island/gridPlane")
+[node name="BuildingSystem" parent="." index="6"]
 test_mode = true
 
-[node name="AttackSystem" type="Node3D" parent="." unique_id=107993275]
-script = ExtResource("5_vcsgt")
-
-[node name="MainShipShoreAnchor" type="Marker3D" parent="."]
-transform = Transform3D(0.990497, 0, -0.137531, 0, 1, 0, 0.137531, 0, 0.990497, -2.120217, 0, 3.043754)
-
-[node name="MainShipController" type="Node3D" parent="."]
-script = ExtResource("20_main_ship")
-
-[node name="BuildingSystem3" type="Node3D" parent="." unique_id=1602934528]
-script = ExtResource("4_cm0pq")
-grid_height = 5
-grid_plane_path = NodePath("../Island/shipPlane")
-create_ui = false
+[node name="BuildingSystem3" parent="." index="10"]
 test_mode = true
 
-[node name="Warmup" type="Node3D" parent="." unique_id=2084624394]
-script = ExtResource("17_warmup")
-
-[node name="WebRenderProfile" type="Node" parent="."]
-script = ExtResource("21_web_render")
-
-[node name="AmbientShark" type="Node3D" parent="."]
-script = ExtResource("22_ambient_shark")
-
-[node name="TestSceneHarness" type="Node" parent="." unique_id=1942396599]
-script = ExtResource("18_harness")
+[node name="TestSceneHarness" type="Node" parent="."]
+script = ExtResource("2_harness")

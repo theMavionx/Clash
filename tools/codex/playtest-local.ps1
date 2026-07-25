@@ -202,7 +202,19 @@ if ($SkipServer) {
 } else {
     $serverOut = Join-Path $LogDir "server.out.log"
     $serverErr = Join-Path $LogDir "server.err.log"
-    $serverCommand = "`$env:PORT='$ServerPort'; `$env:ADMIN_KEY='$LocalAdminKey'; `$env:CLASH_ADMIN_KEY='$LocalAdminKey'; npm.cmd --prefix server run dev"
+    $serverCommand = @(
+        "`$env:PORT='$ServerPort'"
+        "`$env:ADMIN_KEY='$LocalAdminKey'"
+        "`$env:CLASH_ADMIN_KEY='$LocalAdminKey'"
+        "`$env:CLASH_MARKETPLACE_INDEXER='0'"
+        "`$env:CLASH_BRIDGE_RETRY_WORKER='0'"
+        "`$env:CUSTODIAL_MARKETPLACE_SETTLEMENT_WORKER='0'"
+        "`$env:NFT_OWNERSHIP_DAILY_SYNC='0'"
+        "`$env:NFT_SUPPLY_REFRESH_DISABLE='1'"
+        "`$env:GAME_SHOP_SOLANA_RECONCILE_ENABLED='0'"
+        "`$env:CLASH_HERMES_JOBS_ENABLED='0'"
+        "npm.cmd --prefix server start"
+    ) -join "; "
     $serverProcess = Start-HiddenPowerShell -Name "local Clash server" -Command $serverCommand -StdOut $serverOut -StdErr $serverErr
     Write-Host "Server PID: $($serverProcess.Id)"
     $startedProcesses += [pscustomobject]@{
@@ -225,7 +237,7 @@ if ($SkipFutures) {
 } else {
     $futuresOut = Join-Path $LogDir "futures.out.log"
     $futuresErr = Join-Path $LogDir "futures.err.log"
-    $futuresCommand = "`$env:FUTURES_PORT='$FuturesPort'; `$env:DANGO_REALTIME_WORKER='0'; npm.cmd --prefix server-futures run dev"
+    $futuresCommand = "`$env:FUTURES_PORT='$FuturesPort'; `$env:DANGO_REALTIME_WORKER='0'; npm.cmd --prefix server-futures start"
     $futuresProcess = Start-HiddenPowerShell -Name "local Clash futures server" -Command $futuresCommand -StdOut $futuresOut -StdErr $futuresErr
     Write-Host "Futures PID: $($futuresProcess.Id)"
     $startedProcesses += [pscustomobject]@{

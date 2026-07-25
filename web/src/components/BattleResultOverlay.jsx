@@ -10,10 +10,25 @@ import knightImg from '../assets/units/knight.png';
 import mageImg from '../assets/units/mage.png';
 import archerImg from '../assets/units/archer.png';
 import mimicImg from '../assets/units/mimic.png';
+import necromancerImg from '../assets/units/necromancer.png';
+import horrorImg from '../assets/units/horror.png';
+import mechanicalDragonImg from '../assets/units/mechanical_dragon.png';
+import iceGolemImg from '../assets/units/ice_golem.png';
 import arbaletImg from '../assets/units/arbalet.png';
 import berserkImg from '../assets/units/berserk.png';
 
-const UNIT_IMAGES = { Knight: knightImg, Mage: mageImg, Barbarian: berserkImg, Archer: archerImg, Mimic: mimicImg, Ranger: arbaletImg };
+const UNIT_IMAGES = {
+  Knight: knightImg,
+  Mage: mageImg,
+  Barbarian: berserkImg,
+  Archer: archerImg,
+  Mimic: mimicImg,
+  Necromancer: necromancerImg,
+  Horror: horrorImg,
+  MechanicalDragon: mechanicalDragonImg,
+  IceGolem: iceGolemImg,
+  Ranger: arbaletImg,
+};
 
 const fmt = (n) => (n || 0).toLocaleString().replace(/,/g, ' ');
 
@@ -157,7 +172,9 @@ function BattleResultOverlay({ result, onClose }) {
                     {UNIT_IMAGES[name] && <img src={UNIT_IMAGES[name]} alt={name} style={styles.casualtyImg} />}
                     <div style={styles.casualtyCount}>x{count}</div>
                   </div>
-                  <span style={styles.casualtyName}>{name}</span>
+                  <span style={styles.casualtyName}>
+                    {name === 'Mimic' ? 'Barrel' : name === 'MechanicalDragon' ? 'Mech Dragon' : name === 'IceGolem' ? 'Ice Golem' : name}
+                  </span>
                 </div>
               ))}
             </div>

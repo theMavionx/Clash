@@ -60,6 +60,20 @@ html, body, #root {
 }
 .shop-scroll::-webkit-scrollbar-corner,
 .parchment-scroll::-webkit-scrollbar-corner { background: transparent; }
+
+/* Native touch scrolling for the in-battle troop carousel. The partially
+   visible next card communicates overflow without spending mobile HUD space
+   on a separate instruction or scrollbar. */
+.attack-troop-scroll {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.attack-troop-scroll::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
 /* Kill the up/down arrow buttons Windows Chrome/Edge render by
    default — they break the soft parchment look. */
 .shop-scroll::-webkit-scrollbar-button,

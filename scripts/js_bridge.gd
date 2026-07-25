@@ -217,7 +217,14 @@ func _send_initial_state() -> void:
 		var troop_defs := {}
 		for key in bs.troop_defs:
 			var td = bs.troop_defs[key]
-			troop_defs[key] = {"display": td.display, "costs": {}, "max_level": int(td.get("max_level", 1))}
+			troop_defs[key] = {
+				"display": td.display,
+				"costs": {},
+				"max_level": int(td.get("max_level", 1)),
+				"min_town_hall_level": int(td.get("min_town_hall_level", 1)),
+				"slot_cost": int(td.get("slot_cost", 1)),
+				"buy_cost": int(td.get("buy_cost", bs.BUY_TROOP_COST)),
+			}
 			for lvl in td.costs:
 				troop_defs[key].costs[str(lvl)] = td.costs[lvl]
 		# Count how many of each type are already placed
@@ -225,7 +232,12 @@ func _send_initial_state() -> void:
 		for b in bs.placed_buildings:
 			var bid = b.get("id", "")
 			placed_counts[bid] = placed_counts.get(bid, 0) + 1
-		send_to_react("building_defs", {"buildings": defs, "troops": troop_defs, "placed_counts": placed_counts})
+		send_to_react("building_defs", {
+			"buildings": defs,
+			"troops": troop_defs,
+			"placed_counts": placed_counts,
+			"town_hall_level": th_lvl,
+		})
 		send_to_react("resources", {
 			"gold": bs.resources.gold,
 			"wood": bs.resources.wood,

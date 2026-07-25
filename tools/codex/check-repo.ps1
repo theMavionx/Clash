@@ -19,6 +19,7 @@ $NodeFiles = @(
     "server/combat_grid_config.js",
     "server/test-combat-grid-sync.js",
     "server/test-player-ship-migration.js",
+    "server/test-client-server-combat-parity.js",
     "server/index.js",
     "server/routes.js",
     "server/db.js",
@@ -31,6 +32,22 @@ $NodeFiles = @(
 Invoke-Step "combat grid snapshot" { node tools/combat-grid/generate-combat-grid-config.cjs --check }
 Invoke-Step "combat grid regression" { node server/test-combat-grid-sync.js }
 Invoke-Step "player ship migration regression" { node server/test-player-ship-migration.js }
+Invoke-Step "client/server combat parity" { node server/test-client-server-combat-parity.js }
+
+$CombatRegressionTests = @(
+    "server/test-mimic-combat.js",
+    "server/test-shark-trap.js",
+    "server/test-necromancer-combat.js",
+    "server/test-horror-evolution-combat.js",
+    "server/test-mechanical-dragon-combat.js",
+    "server/test-ice-golem-combat.js",
+    "server/test-th6-progression.js"
+)
+foreach ($TestFile in $CombatRegressionTests) {
+    if (Test-Path $TestFile) {
+        Invoke-Step "combat regression $TestFile" { node $TestFile }
+    }
+}
 
 foreach ($File in $NodeFiles) {
     if (Test-Path $File) {

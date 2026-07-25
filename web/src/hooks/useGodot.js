@@ -38,6 +38,10 @@ function normalizeTroopLevelKey(name) {
   const normalized = String(name || '').trim().toLowerCase().replace(/[_\s-]/g, '');
   if (normalized === 'demonking') return 'DemonKing';
   if (normalized === 'firedragon') return 'FireDragon';
+  if (normalized === 'necromancer' || normalized === 'skeletonmage') return 'Necromancer';
+  if (normalized === 'horror' || normalized === 'horrorevolution') return 'Horror';
+  if (normalized === 'mechanicaldragon' || normalized === 'mechdragon') return 'MechanicalDragon';
+  if (normalized === 'icegolem') return 'IceGolem';
   if (normalized === 'knight') return 'Knight';
   if (normalized === 'mage') return 'Mage';
   if (normalized === 'barbarian') return 'Barbarian';

@@ -11,6 +11,46 @@ const {
 
 const MAX_TROOP_LEVEL = 7;
 
+// One deployed Horror evolves through two deterministic child generations.
+// The child forms are battle-only entities: they consume no extra ship slots
+// and are not persisted as separate casualties.
+const HORROR_EVOLUTION = {
+  childrenPerSplit: 2,
+  finalStage: 2,
+  replayOrderBase: 1_000_000,
+  stageSpawnLockSec: [0, 0.24, 0.18],
+  stageSplitOffset: [0, 0.09, 0.065],
+  stages: {
+    0: {
+      1: { hp: 680,  damage: 68,  atkSpeed: 1.24, moveSpeed: 0.38, range: 0.31, melee: true, hitDelay: 0.42 },
+      2: { hp: 895,  damage: 91,  atkSpeed: 1.24, moveSpeed: 0.38, range: 0.31, melee: true, hitDelay: 0.42 },
+      3: { hp: 1170, damage: 122, atkSpeed: 1.24, moveSpeed: 0.38, range: 0.31, melee: true, hitDelay: 0.42 },
+      4: { hp: 1510, damage: 165, atkSpeed: 1.24, moveSpeed: 0.38, range: 0.31, melee: true, hitDelay: 0.42 },
+      5: { hp: 1920, damage: 222, atkSpeed: 1.24, moveSpeed: 0.38, range: 0.31, melee: true, hitDelay: 0.42 },
+      6: { hp: 2390, damage: 296, atkSpeed: 1.24, moveSpeed: 0.38, range: 0.31, melee: true, hitDelay: 0.42 },
+      7: { hp: 2930, damage: 390, atkSpeed: 1.24, moveSpeed: 0.38, range: 0.31, melee: true, hitDelay: 0.42 },
+    },
+    1: {
+      1: { hp: 205, damage: 24,  atkSpeed: 0.96, moveSpeed: 0.46, range: 0.27, melee: true, hitDelay: 0.42 },
+      2: { hp: 270, damage: 32,  atkSpeed: 0.96, moveSpeed: 0.46, range: 0.27, melee: true, hitDelay: 0.42 },
+      3: { hp: 350, damage: 43,  atkSpeed: 0.96, moveSpeed: 0.46, range: 0.27, melee: true, hitDelay: 0.42 },
+      4: { hp: 450, damage: 58,  atkSpeed: 0.96, moveSpeed: 0.46, range: 0.27, melee: true, hitDelay: 0.42 },
+      5: { hp: 570, damage: 78,  atkSpeed: 0.96, moveSpeed: 0.46, range: 0.27, melee: true, hitDelay: 0.42 },
+      6: { hp: 705, damage: 104, atkSpeed: 0.96, moveSpeed: 0.46, range: 0.27, melee: true, hitDelay: 0.42 },
+      7: { hp: 860, damage: 137, atkSpeed: 0.96, moveSpeed: 0.46, range: 0.27, melee: true, hitDelay: 0.42 },
+    },
+    2: {
+      1: { hp: 62,  damage: 9,  atkSpeed: 0.72, moveSpeed: 0.54, range: 0.23, melee: true, hitDelay: 0.42 },
+      2: { hp: 82,  damage: 12, atkSpeed: 0.72, moveSpeed: 0.54, range: 0.23, melee: true, hitDelay: 0.42 },
+      3: { hp: 106, damage: 16, atkSpeed: 0.72, moveSpeed: 0.54, range: 0.23, melee: true, hitDelay: 0.42 },
+      4: { hp: 136, damage: 22, atkSpeed: 0.72, moveSpeed: 0.54, range: 0.23, melee: true, hitDelay: 0.42 },
+      5: { hp: 172, damage: 29, atkSpeed: 0.72, moveSpeed: 0.54, range: 0.23, melee: true, hitDelay: 0.42 },
+      6: { hp: 213, damage: 39, atkSpeed: 0.72, moveSpeed: 0.54, range: 0.23, melee: true, hitDelay: 0.42 },
+      7: { hp: 260, damage: 51, atkSpeed: 0.72, moveSpeed: 0.54, range: 0.23, melee: true, hitDelay: 0.42 },
+    },
+  },
+};
+
 const TROOP_STATS = {
   knight: {
     1: { hp: 450,  damage: 38, atkSpeed: 1.40, moveSpeed: 0.5,  range: 0.24, melee: true, hitDelay: 0.4 },
@@ -29,6 +69,18 @@ const TROOP_STATS = {
     5: { hp: 440, damage: 182, atkSpeed: 0.82, moveSpeed: 0.4,  range: 0.95, melee: false, projSpeed: 1.5 },
     6: { hp: 555, damage: 238, atkSpeed: 0.76, moveSpeed: 0.4,  range: 0.95, melee: false, projSpeed: 1.5 },
     7: { hp: 690, damage: 310, atkSpeed: 0.70, moveSpeed: 0.4,  range: 0.95, melee: false, projSpeed: 1.5 },
+  },
+  // Implements the approved server-authoritative Necromancer combat slice.
+  // Direct damage stays below Mage at every level; summon power is configured
+  // separately through NECROMANCER_SUMMON.
+  necromancer: {
+    1: { hp: 220, damage: 34,  atkSpeed: 1.35, moveSpeed: 0.38, range: 0.90, melee: false, projSpeed: 1.4 },
+    2: { hp: 290, damage: 44,  atkSpeed: 1.23, moveSpeed: 0.38, range: 0.90, melee: false, projSpeed: 1.4 },
+    3: { hp: 380, damage: 62,  atkSpeed: 1.12, moveSpeed: 0.38, range: 0.90, melee: false, projSpeed: 1.4 },
+    4: { hp: 490, damage: 82,  atkSpeed: 1.02, moveSpeed: 0.38, range: 0.90, melee: false, projSpeed: 1.4 },
+    5: { hp: 620, damage: 108, atkSpeed: 0.94, moveSpeed: 0.38, range: 0.90, melee: false, projSpeed: 1.4 },
+    6: { hp: 770, damage: 142, atkSpeed: 0.87, moveSpeed: 0.38, range: 0.90, melee: false, projSpeed: 1.4 },
+    7: { hp: 940, damage: 186, atkSpeed: 0.81, moveSpeed: 0.38, range: 0.90, melee: false, projSpeed: 1.4 },
   },
   barbarian: {
     1: { hp: 240, damage: 24, atkSpeed: 0.6,  moveSpeed: 0.4,  range: 0.24, melee: true, hitDelay: 0.4 },
@@ -65,6 +117,27 @@ const TROOP_STATS = {
     5: { hp: 860,  damage: 61,  atkSpeed: 1.20, moveSpeed: 0.62, range: 0.27, melee: true, hitDelay: 0.45, trapImmune: true, untargetableWhileRunning: true },
     6: { hp: 1060, damage: 79,  atkSpeed: 1.13, moveSpeed: 0.62, range: 0.27, melee: true, hitDelay: 0.45, trapImmune: true, untargetableWhileRunning: true },
     7: { hp: 1300, damage: 102, atkSpeed: 1.06, moveSpeed: 0.62, range: 0.27, melee: true, hitDelay: 0.45, trapImmune: true, untargetableWhileRunning: true },
+  },
+  horror: HORROR_EVOLUTION.stages[0],
+  mechanical_dragon: {
+    // Keep the authored attack cadence stable. Levels scale through HP/damage
+    // instead of speeding up the large animation into twitchy motion.
+    1: { hp: 700,  damage: 106, atkSpeed: 1.03, moveSpeed: 0.36, range: 0.80, melee: false, hitDelay: 0.50, directHit: true, flying: true, chainJumps: 2, chainRadius: 0.62, chainFalloffBps: 6500 },
+    2: { hp: 920,  damage: 150, atkSpeed: 1.03, moveSpeed: 0.36, range: 0.80, melee: false, hitDelay: 0.50, directHit: true, flying: true, chainJumps: 2, chainRadius: 0.62, chainFalloffBps: 6500 },
+    3: { hp: 1200, damage: 218, atkSpeed: 1.03, moveSpeed: 0.36, range: 0.80, melee: false, hitDelay: 0.50, directHit: true, flying: true, chainJumps: 2, chainRadius: 0.62, chainFalloffBps: 6500 },
+    4: { hp: 1550, damage: 310, atkSpeed: 1.03, moveSpeed: 0.36, range: 0.80, melee: false, hitDelay: 0.50, directHit: true, flying: true, chainJumps: 2, chainRadius: 0.62, chainFalloffBps: 6500 },
+    5: { hp: 1970, damage: 449, atkSpeed: 1.03, moveSpeed: 0.36, range: 0.80, melee: false, hitDelay: 0.50, directHit: true, flying: true, chainJumps: 2, chainRadius: 0.62, chainFalloffBps: 6500 },
+    6: { hp: 2450, damage: 629, atkSpeed: 1.03, moveSpeed: 0.36, range: 0.80, melee: false, hitDelay: 0.50, directHit: true, flying: true, chainJumps: 2, chainRadius: 0.62, chainFalloffBps: 6500 },
+    7: { hp: 3000, damage: 876, atkSpeed: 1.03, moveSpeed: 0.36, range: 0.80, melee: false, hitDelay: 0.50, directHit: true, flying: true, chainJumps: 2, chainRadius: 0.62, chainFalloffBps: 6500 },
+  },
+  ice_golem: {
+    1: { hp: 2100, damage: 78,  atkSpeed: 1.42, moveSpeed: 0.34, range: 0.32, melee: true, hitDelay: 0.56, defensePriority: true, deathFreezeRadius: 0.90, deathFreezeDuration: 7.0 },
+    2: { hp: 2700, damage: 105, atkSpeed: 1.42, moveSpeed: 0.34, range: 0.32, melee: true, hitDelay: 0.56, defensePriority: true, deathFreezeRadius: 0.90, deathFreezeDuration: 7.0 },
+    3: { hp: 3500, damage: 143, atkSpeed: 1.42, moveSpeed: 0.34, range: 0.32, melee: true, hitDelay: 0.56, defensePriority: true, deathFreezeRadius: 0.90, deathFreezeDuration: 7.0 },
+    4: { hp: 4450, damage: 195, atkSpeed: 1.42, moveSpeed: 0.34, range: 0.32, melee: true, hitDelay: 0.56, defensePriority: true, deathFreezeRadius: 0.90, deathFreezeDuration: 7.0 },
+    5: { hp: 5600, damage: 263, atkSpeed: 1.42, moveSpeed: 0.34, range: 0.32, melee: true, hitDelay: 0.56, defensePriority: true, deathFreezeRadius: 0.90, deathFreezeDuration: 7.0 },
+    6: { hp: 6900, damage: 351, atkSpeed: 1.42, moveSpeed: 0.34, range: 0.32, melee: true, hitDelay: 0.56, defensePriority: true, deathFreezeRadius: 0.90, deathFreezeDuration: 7.0 },
+    7: { hp: 8400, damage: 462, atkSpeed: 1.42, moveSpeed: 0.34, range: 0.32, melee: true, hitDelay: 0.56, defensePriority: true, deathFreezeRadius: 0.90, deathFreezeDuration: 7.0 },
   },
   demon_king: {
     1: { hp: 1080, damage: 92,  atkSpeed: 1.40, moveSpeed: 0.38, range: 0.32, melee: true, hitDelay: 0.4 },
@@ -103,10 +176,14 @@ const NFT_TROOP_SLOT_COUNT = 2;
 const TROOP_TYPE_DISPLAY_KEYS = {
   knight: 'Knight',
   mage: 'Mage',
+  necromancer: 'Necromancer',
   barbarian: 'Barbarian',
   archer: 'Archer',
   ranger: 'Ranger',
   mimic: 'Mimic',
+  horror: 'Horror',
+  mechanical_dragon: 'MechanicalDragon',
+  ice_golem: 'IceGolem',
   demon_king: 'DemonKing',
   fire_dragon: 'FireDragon',
 };
@@ -167,6 +244,7 @@ const DEFENSE_STATS = {
     3: { damage: 122, fireRate: 0.34, detectRange: 1.18, projSpeed: 4.0 },
     4: { damage: 170, fireRate: 0.29, detectRange: 1.30, projSpeed: 4.0 },
     5: { damage: 230, fireRate: 0.25, detectRange: 1.42, projSpeed: 4.0 },
+    6: { damage: 285, fireRate: 0.23, detectRange: 1.52, projSpeed: 4.0 },
   },
   archer_tower: {
     1: { damage: 25, fireRate: 1.0,  detectRange: 1.10, projSpeed: 2.5 },
@@ -174,6 +252,7 @@ const DEFENSE_STATS = {
     3: { damage: 112, fireRate: 0.52, detectRange: 1.55, projSpeed: 2.5 },
     4: { damage: 158, fireRate: 0.44, detectRange: 1.78, projSpeed: 2.5 },
     5: { damage: 210, fireRate: 0.38, detectRange: 2.00, projSpeed: 2.5 },
+    6: { damage: 260, fireRate: 0.35, detectRange: 2.15, projSpeed: 2.5 },
   },
   mage_tower: {
     1: {
@@ -231,12 +310,17 @@ const DEFENSE_STATS = {
       fireRate: 0.12,
       projSpeed: 0,
     },
-  },
-  mortar: {
-    1: { damage: 95, fireRate: 2.40, detectRange: 1.433, minRange: 0.70, projSpeed: 3.0, splashRadius: 0.22 },
-    2: { damage: 135, fireRate: 2.25, detectRange: 1.600, minRange: 0.75, projSpeed: 3.2, splashRadius: 0.26 },
-    3: { damage: 185, fireRate: 2.10, detectRange: 1.767, minRange: 0.80, projSpeed: 3.4, splashRadius: 0.30 },
-    4: { damage: 245, fireRate: 1.95, detectRange: 1.933, minRange: 0.85, projSpeed: 3.6, splashRadius: 0.34 },
+    6: {
+      beam: true,
+      baseDamage: 46,
+      maxDamage: 250,
+      tickRate: 0.11,
+      rampTime: 1.9,
+      detectRange: 1.95,
+      damage: 46,
+      fireRate: 0.11,
+      projSpeed: 0,
+    },
   },
   mortar: {
     1: { damage: 95, fireRate: 2.40, detectRange: 1.433, minRange: 0.70, projSpeed: 3.0, splashRadius: 0.22 },
@@ -253,6 +337,7 @@ const SKELETON_GUARD = {
     2: { hp: 520, damage: 60, atkSpeed: 0.74, moveSpeed: 0.52, detectionRadius: 1.10 },
     3: { hp: 620, damage: 72, atkSpeed: 0.70, moveSpeed: 0.54, detectionRadius: 1.25 },
     4: { hp: 820, damage: 96, atkSpeed: 0.64, moveSpeed: 0.58, detectionRadius: 1.40 },
+    5: { hp: 1050, damage: 122, atkSpeed: 0.60, moveSpeed: 0.60, detectionRadius: 1.52 },
   },
   hp: 520,
   damage: 60,
@@ -265,6 +350,68 @@ const SKELETON_GUARD = {
   hitDelay: 0.4,
   hitDistance: 0.2,
 };
+
+// Necromancer summons reuse the current tombstone-skeleton progression as
+// their source of truth, then apply weaker melee-minion multipliers. Like
+// tombstone guards, they are owner-bound and are removed with their spawner.
+const NECROMANCER_SUMMON = {
+  initialDelay: 0.375,
+  respawnDelay: 2.5,
+  batchSize: 3,
+  maxActive: 3,
+  spawnForwardDistance: 0.18,
+  spawnLateralSpacing: 0.12,
+  guardLevelByNecromancerLevel: {
+    1: 1,
+    2: 1,
+    3: 2,
+    4: 3,
+    5: 4,
+    6: 5,
+    7: 5,
+  },
+  hpMultiplierBps: 3000,
+  damageMultiplierBps: 3500,
+  attackSpeedMultiplierBps: 15000,
+  moveSpeedMultiplierBps: 10000,
+  range: 0.15,
+  hitDelay: 0.4,
+};
+
+function scaleByBps(value, multiplierBps, minimum = 0) {
+  return Math.max(minimum, Math.round((Number(value) || 0) * multiplierBps / 10000));
+}
+
+function computeNecromancerSkeletonStats(necromancerLevel = 1) {
+  const level = clampInt(necromancerLevel, 1, MAX_TROOP_LEVEL);
+  const guardLevel = NECROMANCER_SUMMON.guardLevelByNecromancerLevel[level] || 1;
+  const guardStats = SKELETON_GUARD.levels[guardLevel] || SKELETON_GUARD.levels[1];
+  return {
+    hp: scaleByBps(guardStats.hp, NECROMANCER_SUMMON.hpMultiplierBps, 1),
+    damage: scaleByBps(guardStats.damage, NECROMANCER_SUMMON.damageMultiplierBps, 1),
+    atkSpeed: Math.max(
+      0.01,
+      Math.round(
+        (Number(guardStats.atkSpeed) || 1)
+        * NECROMANCER_SUMMON.attackSpeedMultiplierBps
+        / 10000
+        * 1000
+      ) / 1000
+    ),
+    moveSpeed: Math.max(
+      0,
+      Math.round(
+        (Number(guardStats.moveSpeed) || 0)
+        * NECROMANCER_SUMMON.moveSpeedMultiplierBps
+        / 10000
+        * 1000
+      ) / 1000
+    ),
+    range: NECROMANCER_SUMMON.range,
+    melee: true,
+    hitDelay: NECROMANCER_SUMMON.hitDelay,
+  };
+}
 
 // Attack session constraints
 const MAX_SHIPS = 3;
@@ -286,7 +433,10 @@ const CANNON_TARGET_Y = 0.05;
 function cannonShotCost(shotNumber) { return shotNumber; }
 
 // Valid troop types (order matches attack_system.gd SHIP_TROOPS)
-const VALID_TROOP_TYPES = ['knight', 'mage', 'barbarian', 'archer', 'ranger', 'mimic', 'demon_king', 'fire_dragon'];
+const VALID_TROOP_TYPES = [
+  'knight', 'mage', 'necromancer', 'barbarian', 'archer', 'ranger', 'mimic',
+  'horror', 'mechanical_dragon', 'ice_golem', 'demon_king', 'fire_dragon',
+];
 
 module.exports = {
   MAX_TROOP_LEVEL,
@@ -297,6 +447,9 @@ module.exports = {
   NFT_RARITY_MULTIPLIERS,
   DEFENSE_STATS,
   SKELETON_GUARD,
+  NECROMANCER_SUMMON,
+  HORROR_EVOLUTION,
+  computeNecromancerSkeletonStats,
   MAX_SHIPS,
   TROOPS_PER_SHIP,
   MAX_TROOPS,

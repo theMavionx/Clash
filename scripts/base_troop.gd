@@ -8,6 +8,7 @@ extends Node3D
 @export var separation_radius: float = 0.14
 @export var separation_force: float = 0.6
 @export var can_pass_through_friendly_units: bool = false
+@export var can_target_guards: bool = true
 @export var attack_sfx_path: String = ""
 @export_enum("ground", "air") var unit_target_type: String = "ground"
 
@@ -903,6 +904,8 @@ func _apply_rally_target() -> bool:
 		return false
 
 	if _rally_target_guard != null:
+		if not can_target_guards:
+			return false
 		if target_guard != _rally_target_guard:
 			var rally_guard_payload: Dictionary = _merge_target_switch_context(_guard_target_payload(_rally_target_guard), INF)
 			target_guard = _rally_target_guard
@@ -944,6 +947,7 @@ func _apply_rally_target() -> bool:
 func _find_alternative_target() -> void:
 	if _apply_rally_target():
 		return
+	var second_priority: int = 2147483647
 	var second_dist_sq: float = INF
 	var second_b: Dictionary = {}
 	var second_bs = null
@@ -955,10 +959,12 @@ func _find_alternative_target() -> void:
 			continue
 		if is_instance_valid(current_node) and b.get("node") == current_node:
 			continue
+		var priority: int = _building_target_priority(b)
 		var dx = my_pos.x - entry.pos.x
 		var dz = my_pos.z - entry.pos.z
 		var d_sq = dx * dx + dz * dz
-		if d_sq < second_dist_sq:
+		if priority < second_priority or (priority == second_priority and d_sq < second_dist_sq):
+			second_priority = priority
 			second_dist_sq = d_sq
 			second_b = b
 			second_bs = entry.bs
@@ -984,39 +990,46 @@ func _find_alternative_target() -> void:
 func _find_next_target() -> void:
 	if _apply_rally_target():
 		return
+	var nearest_priority: int = 2147483647
 	var nearest_dist_sq: float = INF
 	var nearest_b: Dictionary = {}
 	var nearest_bs_ref = null
 	var nearest_guard: Node3D = null
 	var my_pos = global_position
-	var search_pos: Vector3 = _rally_pos if _is_rally_live() else my_pos
+	var rally_focus_compatible: bool = can_target_guards or _rally_target_guard == null
+	var search_pos: Vector3 = _rally_pos if _is_rally_live() and rally_focus_compatible else my_pos
 
 	for entry in _get_buildings_cached():
 		var b = entry.b
 		if b.get("hp", 0) <= 0 or not is_instance_valid(b.get("node")):
 			continue
+		var priority: int = _building_target_priority(b)
 		var dx = search_pos.x - entry.pos.x
 		var dz = search_pos.z - entry.pos.z
 		var d_sq = dx * dx + dz * dz
-		if d_sq < nearest_dist_sq:
+		if priority < nearest_priority or (priority == nearest_priority and d_sq < nearest_dist_sq):
+			nearest_priority = priority
 			nearest_dist_sq = d_sq
 			nearest_b = b
 			nearest_bs_ref = entry.bs
 			nearest_guard = null
 
-	for guard in _get_guards_list_cached():
-		if not is_instance_valid(guard) or not guard.is_inside_tree():
-			continue
-		if guard.hp <= 0:
-			continue
-		var dx = search_pos.x - guard.global_position.x
-		var dz = search_pos.z - guard.global_position.z
-		var d_sq = dx * dx + dz * dz
-		if d_sq < nearest_dist_sq:
-			nearest_dist_sq = d_sq
-			nearest_b = {}
-			nearest_bs_ref = null
-			nearest_guard = guard
+	if can_target_guards:
+		for guard in _get_guards_list_cached():
+			if not is_instance_valid(guard) or not guard.is_inside_tree():
+				continue
+			if guard.hp <= 0:
+				continue
+			var priority: int = _guard_target_priority(guard)
+			var dx = search_pos.x - guard.global_position.x
+			var dz = search_pos.z - guard.global_position.z
+			var d_sq = dx * dx + dz * dz
+			if priority < nearest_priority or (priority == nearest_priority and d_sq < nearest_dist_sq):
+				nearest_priority = priority
+				nearest_dist_sq = d_sq
+				nearest_b = {}
+				nearest_bs_ref = null
+				nearest_guard = guard
 
 	if _should_keep_current_target(search_pos, nearest_dist_sq, nearest_b, nearest_guard):
 		return
@@ -1058,8 +1071,15 @@ func _find_next_target() -> void:
 func _should_keep_current_target(search_pos: Vector3, candidate_dist_sq: float, candidate_b: Dictionary, candidate_guard: Node3D) -> bool:
 	if candidate_dist_sq == INF:
 		return false
+	var candidate_priority: int = (
+		_guard_target_priority(candidate_guard)
+		if candidate_guard != null
+		else _building_target_priority(candidate_b)
+	)
 
 	if target_guard != null and is_instance_valid(target_guard) and target_guard.is_inside_tree() and target_guard.hp > 0:
+		if _guard_target_priority(target_guard) != candidate_priority:
+			return false
 		var gdx_sticky: float = search_pos.x - target_guard.global_position.x
 		var gdz_sticky: float = search_pos.z - target_guard.global_position.z
 		var sticky_range: float = attack_range * maxf(GUARD_THREAT_MULT, ATTACK_MAX_RANGE_MULT)
@@ -1073,10 +1093,14 @@ func _should_keep_current_target(search_pos: Vector3, candidate_dist_sq: float, 
 
 	var current_dist_sq: float = INF
 	if target_guard != null and is_instance_valid(target_guard) and target_guard.is_inside_tree() and target_guard.hp > 0:
+		if _guard_target_priority(target_guard) != candidate_priority:
+			return false
 		var gdx: float = search_pos.x - target_guard.global_position.x
 		var gdz: float = search_pos.z - target_guard.global_position.z
 		current_dist_sq = gdx * gdx + gdz * gdz
 	elif target_building.size() > 0 and target_building.get("hp", 0) > 0 and is_instance_valid(target_building.get("node")):
+		if _building_target_priority(target_building) != candidate_priority:
+			return false
 		var bpos: Vector3 = target_building.node.global_position
 		var bdx: float = search_pos.x - bpos.x
 		var bdz: float = search_pos.z - bpos.z
@@ -1087,8 +1111,21 @@ func _should_keep_current_target(search_pos: Vector3, candidate_dist_sq: float, 
 	return sqrt(candidate_dist_sq) + TARGET_SWITCH_MIN_ADVANTAGE >= sqrt(current_dist_sq)
 
 
+## Target-priority hooks. Lower values are selected first, then distance and
+## the existing stable target ordering decide ties. Most troops keep the
+## legacy unified nearest-target behavior.
+func _building_target_priority(_building: Dictionary) -> int:
+	return 0
+
+
+func _guard_target_priority(_guard: Node3D) -> int:
+	return 0
+
+
 ## Immediate guard threat check.
 func _check_guard_threat() -> void:
+	if not can_target_guards:
+		return
 	if _rally_active:
 		if _has_valid_rally_target():
 			return
@@ -1148,16 +1185,7 @@ func take_damage(dmg: int) -> void:
 		return
 	hp -= dmg
 	if hp <= 0:
-		_is_dead = true
-		_record_replay_telemetry("troop_death", {"damage": dmg})
-		if is_in_group("troops"):
-			remove_from_group("troops")
-		invalidate_combat_lists()
-		if has_method("_clear_owned_projectiles"):
-			call("_clear_owned_projectiles")
-		set_process(false)
-		_report_death()
-		queue_free()
+		_begin_lethal_damage(dmg, "damage")
 
 
 ## Applies the same level-based shark trap damage as the server replay. A
@@ -1179,8 +1207,19 @@ func damage_by_shark_trap(damage: int, visual_duration: float = 0.68) -> bool:
 		if anim_player != null and anim_player.has_animation("GetHit"):
 			anim_player.play("GetHit", 0.05, 1.15)
 		return false
+	_begin_lethal_damage(applied_damage, "shark_trap", visual_duration, true)
+	return true
+
+
+func _begin_lethal_damage(damage_taken: int, source: String, visual_duration: float = 0.0, shrink_at_end: bool = false) -> void:
+	if _is_dead:
+		return
 	_is_dead = true
-	_record_replay_telemetry("troop_death", {"damage": applied_damage, "source": "shark_trap"})
+	var death_payload: Dictionary = {"damage": damage_taken}
+	if source != "damage":
+		death_payload["source"] = source
+	_record_replay_telemetry("troop_death", death_payload)
+	_on_lethal_damage(source)
 	if is_in_group("troops"):
 		remove_from_group("troops")
 	invalidate_combat_lists()
@@ -1189,12 +1228,29 @@ func damage_by_shark_trap(damage: int, visual_duration: float = 0.68) -> bool:
 	set_process(false)
 	set_physics_process(false)
 	_report_death()
-	var disappear_time := 0.18
+	var total_visual_duration: float = maxf(visual_duration, _death_visual_duration(source))
+	if total_visual_duration <= 0.0:
+		queue_free()
+		return
+	if anim_player != null and anim_player.has_animation("Death_A"):
+		anim_player.speed_scale = 1.0
+		anim_player.play("Death_A", 0.05)
+	var disappear_time := minf(0.18, total_visual_duration)
 	var tween := create_tween()
-	tween.tween_interval(maxf(0.0, visual_duration - disappear_time))
-	tween.tween_property(self, "scale", Vector3.ZERO, disappear_time).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_IN)
+	tween.tween_interval(maxf(0.0, total_visual_duration - disappear_time))
+	if shrink_at_end or disappear_time > 0.0:
+		tween.tween_property(self, "scale", Vector3.ZERO, disappear_time).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_IN)
 	tween.tween_callback(queue_free)
-	return true
+
+
+## Subclasses may trigger deterministic effects at the exact lethal event.
+## The effect must not depend on how long the authored death animation lasts.
+func _on_lethal_damage(_source: String) -> void:
+	pass
+
+
+func _death_visual_duration(_source: String) -> float:
+	return 0.0
 
 
 ## Compatibility wrapper for older replay/client call sites.
@@ -1235,6 +1291,11 @@ func _get_troop_name() -> String:
 		"archer": return "Archer"
 		"ranger": return "Ranger"
 		"mimic": return "Mimic"
+		"necromancer": return "Necromancer"
+		"necromancer_skeleton": return "NecromancerSkeleton"
+		"horror_evolution": return "Horror"
+		"mechanical_dragon": return "MechanicalDragon"
+		"ice_golem": return "IceGolem"
 		"demon_king": return "DemonKing"
 		"fire_dragon": return "FireDragon"
 	return ""
@@ -1251,8 +1312,9 @@ func _record_replay_telemetry(kind: String, data: Dictionary = {}) -> void:
 	payload.state = int(state)
 	payload.attack_timer = snappedf(attack_timer, 0.001)
 	payload.orbit_angle = snappedf(_orbit_angle, 0.001)
-	payload.x = snappedf(global_position.x, 0.001)
-	payload.z = snappedf(global_position.z, 0.001)
+	var telemetry_position: Vector3 = global_position if is_inside_tree() else position
+	payload.x = snappedf(telemetry_position.x, 0.001)
+	payload.z = snappedf(telemetry_position.z, 0.001)
 	for bs_node in _get_building_systems_cached():
 		if is_instance_valid(bs_node) and bs_node.has_method("record_replay_telemetry"):
 			bs_node.record_replay_telemetry(kind, payload)

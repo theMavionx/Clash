@@ -1,8 +1,8 @@
 # Economy Balance Design Document
 
-**Version:** 2.0
+**Version:** 2.1
 **Author:** economy-designer
-**Date:** 2026-05-20
+**Date:** 2026-07-24
 **Status:** Synced to implementation (`server/db.js`, `server/routes.js`)
 
 > **v2.0 note:** All values in this document now reflect the *live code* in
@@ -12,6 +12,38 @@
 > revision replaces them with as-built values. Where the as-built economy no
 > longer satisfies the original 28-day fantasy, a **⚠️ Balance risk** note is
 > added rather than hiding the gap.
+
+> **v2.1 TH6 addendum:** Sections below retain historical TH1-TH5 analysis, while
+> this block is the canonical extension for Town Hall 6. Runtime values remain
+> authoritative in `server/db.js` and are mirrored by `scripts/building_system.gd`.
+
+### Town Hall 6 Progression
+
+- Town Hall 5 -> 6 costs 48,000 gold, 72,000 wood, and 66,000 ore.
+- TH6 base resource capacity is 25,000 per resource. Three level-6 Storages add
+  27,000 each, producing a 106,000 cap per resource.
+- Upgrade cost multipliers are 2x, 3x, 5x, 8x, and 12x for levels 2 through 6.
+- Mine and Sawmill production extend to level 6: Mine 170 ore/min with a 5,000
+  local cap; Sawmill 230 wood/min with a 6,000 local cap.
+- TH6 adds a third Shark Trap and a second Mortar.
+- Regular progression buildings gain one reachable level. Tombstone reaches
+  level 5, Mortar reaches level 2, and Shark Trap reaches level 6. Port remains
+  capped at level 3 and Altar remains capped at level 1.
+- TH6 Shark Trap damage is 2,400. It remains ground-only and is consumed by a
+  rolling Mimic without damaging the Mimic.
+- Mimic Barrel unlocks at TH5.
+- Ice Golem unlocks at TH6. It uses four ship slots, targets defenses before
+  economy buildings, and freezes nearby defenses for three seconds on death.
+- Main Ship progression remains capped at level 5 and 45 troop slots. TH6 does
+  not add capacity.
+
+### TH6 Defense Validation
+
+The deterministic combat matrix in `server/tools/th6-balance-check.js` validates
+120 spawn, support, and composition variants against a fully built TH6 defense.
+The fixed 45-slot ship can win with a specialized Dragon-heavy composition, so
+TH6 is intentionally difficult but not an unkillable state. Any future defense
+or troop tuning must keep at least one legal 45-slot winning scenario.
 
 ---
 
@@ -543,6 +575,62 @@ DPS, single body, vulnerable to focus/AoE). ⚠️ If a tighter cap is wanted, t
 **Economy:** none yet. Proposed premium pricing (pending approval, ore-weighted, ≈1.6× Knight
 path): Lv1→2 = 400G + 350O; Lv2→3 = 800G + 700O. Add a `slot_cost: 2` field to its
 `TROOP_DEFS` entry on promotion.
+
+### 11.3 Mechanical Dragon - four-slot chain siege
+
+**Status:** TH6 heavy flying troop. It consumes **4 ship slots**, costs **400 gold** to
+load, and chains each attack from the primary building to at most two nearby buildings
+at 65% cumulative falloff per jump.
+
+The four-slot revision raises per-unit HP by about 45%. Its authored attack cadence is
+fixed at 1.03 seconds across every level so progression never accelerates the large model
+into twitchy animation. Levels scale through HP and damage instead. At level 7 it has
+3,000 HP and deals 876 primary damage every 1.03 seconds. Its ideal three-target chain is
+`876 -> 569 -> 370`, or 440.5 DPS per slot; this stays below the level-7 Mage's
+442.9 DPS per slot while giving the dragon a distinct durable siege role.
+
+The 45-slot level-5 ship can carry at most 11 Mechanical Dragons plus one standard
+one-slot troop. This prevents the stronger individual unit from increasing total
+ship damage without a capacity trade-off.
+
+### 11.4 Ice Golem - four-slot defense vanguard
+
+**Status:** TH6 heavy ground troop. It consumes **4 ship slots**, costs **400
+gold** to load, and always selects the nearest living defensive building before
+considering economy buildings.
+
+Its attack animation keeps a fixed 1.42-second cadence at every level. The
+level-7 unit has 8,400 HP and 462 damage per strike. Its direct DPS per slot is
+deliberately below a same-level Knight because its tactical value comes from
+pathing into the defensive line and applying a seven-second death freeze in a
+0.90-unit radius.
+
+The freeze pauses new attacks from turrets, archer towers, mage towers,
+mortars, tombstones and their guards, plus hidden shark-trap scans. Already
+fired projectiles continue. Repeated freezes refresh to the later expiry rather
+than stacking durations. Hidden traps receive no visual overlay.
+
+Two Ice Golems plus 37 normal troops fit the 45-slot ship and destroy more
+buildings in the deterministic TH6 baseline than the 45-slot normal roster.
+Mass Ice Golems remain inefficient, preserving the intended vanguard role.
+
+### 11.5 Horror - three-slot evolution attrition troop
+
+**Status:** TH6 ground troop. It consumes **3 ship slots**, costs **350 gold**
+to load, and evolves deterministically from one Horror into two Creepers, then
+from each Creeper into two terminal Lurkers. Only the loaded Horror is
+persistent inventory and only its death counts as a casualty.
+
+At level 7 the complete family has 5,690 effective HP, or 1,896.7 HP per ship
+slot, approximately matching a level-7 Knight's 1,900 HP per slot. Its phase
+DPS is `314.5 -> 285.4 -> 283.3`, so peak DPS per slot remains substantially
+below the Knight. The troop therefore trades burst damage for overkill
+resistance and additional target pressure without increasing raw ship power.
+
+The server creates all six descendants from lethal combat events and records
+their generation and lineage in replay telemetry. Clients never submit split
+deployments, descendants consume no extra slots, and all three authored bite
+animations apply damage at 42% of their 0.833-second clip.
 
 ---
 

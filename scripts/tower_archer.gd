@@ -17,6 +17,7 @@ const LEVEL_STATS = {
 	3: {"damage": 112, "fire_rate": 0.52, "detect_range": 1.55},
 	4: {"damage": 158, "fire_rate": 0.44, "detect_range": 1.78},
 	5: {"damage": 210, "fire_rate": 0.38, "detect_range": 2.00},
+	6: {"damage": 260, "fire_rate": 0.35, "detect_range": 2.15},
 }
 
 enum State { IDLE, ATTACKING, VICTORY }
@@ -28,6 +29,7 @@ var ward_bonus_pct: int = 0
 var fire_rate: float = 1.2
 var detect_range: float = 1.10
 var _fire_timer: float = 0.0
+var _freeze_remaining: float = 0.0
 var _target: Node3D = null
 var _target_search_timer: float = 0.0
 var _idle_rotation_y: float = 0.0
@@ -148,6 +150,11 @@ func _physics_process(delta: float) -> void:
 		_build_pool()
 
 	_update_arrows(delta)
+	if _freeze_remaining > 0.0:
+		_freeze_remaining = maxf(0.0, _freeze_remaining - delta)
+		if anim_player and anim_player.has_animation("Idle_A") and anim_player.current_animation != "Idle_A":
+			anim_player.play("Idle_A")
+		return
 
 	_target_search_timer += delta
 	if _target_search_timer >= TARGET_SEARCH_INTERVAL:
@@ -182,6 +189,10 @@ func _physics_process(delta: float) -> void:
 			rotation_degrees.y = _idle_rotation_y
 			if anim_player and anim_player.has_animation("Idle_A"):
 				anim_player.play("Idle_A")
+
+
+func freeze_for(duration: float) -> void:
+	_freeze_remaining = maxf(_freeze_remaining, maxf(0.0, duration))
 
 
 func _play_victory() -> void:

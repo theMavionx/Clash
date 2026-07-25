@@ -1,7 +1,7 @@
 import { memo, useCallback, useState, useEffect, useMemo, useRef } from 'react';
 import { useWallet as useSolWallet } from '@solana/wallet-adapter-react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
-import { usePlayer, useResources, useSend, useSelectedBuilding } from '../hooks/useGodot';
+import { useBuildingDefs, usePlayer, useResources, useSend, useSelectedBuilding } from '../hooks/useGodot';
 import { useLayout } from '../hooks/useIsMobile';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { useAptosWallet } from '../contexts/AptosWalletContext';
@@ -36,9 +36,14 @@ import knightImg from '../assets/units/knight.png';
 import mageImg from '../assets/units/mage.png';
 import archerImg from '../assets/units/archer.png';
 import mimicImg from '../assets/units/mimic.png';
+import necromancerImg from '../assets/units/necromancer.png';
+import horrorImg from '../assets/units/horror.png';
+import mechanicalDragonImg from '../assets/units/mechanical_dragon.png';
+import iceGolemImg from '../assets/units/ice_golem.png';
 import arbaletImg from '../assets/units/arbalet.png';
 import berserkImg from '../assets/units/berserk.png';
 import demonKingImg from '../assets/units/demonking.png';
+import fireDragonImg from '../assets/units/fire_dragon.png';
 
 const ICONS = { gold: goldIcon, wood: woodIcon, ore: stoneIcon };
 const DEMON_KING_PORT_FORCE_SYNC_MS = 60_000;
@@ -49,10 +54,14 @@ const UNIT_IMAGES = {
   Mage: mageImg,
   Archer: archerImg,
   Mimic: mimicImg,
+  Necromancer: necromancerImg,
+  Horror: horrorImg,
+  MechanicalDragon: mechanicalDragonImg,
+  IceGolem: iceGolemImg,
   Ranger: arbaletImg,
   Barbarian: berserkImg,
   DemonKing: demonKingImg,
-  FireDragon: dragonImg,
+  FireDragon: fireDragonImg,
 };
 
 const TROOP_STYLE_MAP = {
@@ -61,6 +70,10 @@ const TROOP_STYLE_MAP = {
   Barbarian: { scale: 1.9, offsetY: '25%' },
   Archer: { scale: 1.9, offsetY: '25%' },
   Mimic: { scale: 1.35, offsetY: '7%' },
+  Necromancer: { scale: 1.32, offsetY: '7%' },
+  Horror: { scale: 1.32, offsetY: '7%' },
+  MechanicalDragon: { scale: 1.22, offsetY: '7%' },
+  IceGolem: { scale: 1.22, offsetY: '6%' },
   Ranger: { scale: 1.9, offsetY: '25%' },
   DemonKing: { scale: 1.3, offsetY: '10%' },
   FireDragon: { scale: 1.05, offsetY: '0%' },
@@ -72,6 +85,10 @@ const CARD_TROOP_STYLE_MAP = {
   Barbarian: { scale: 1.05, offsetY: '0%' },
   Archer: { scale: 1.05, offsetY: '0%' },
   Mimic: { scale: 1.18, offsetY: '0%' },
+  Necromancer: { scale: 1.10, offsetY: '3%' },
+  Horror: { scale: 1.10, offsetY: '3%' },
+  MechanicalDragon: { scale: 1.08, offsetY: '3%' },
+  IceGolem: { scale: 1.08, offsetY: '2%' },
   Ranger: { scale: 1.05, offsetY: '0%' },
   // Demon King renders with the same full-bleed `troopImg` treatment as
   // the other troops (cover + top-center) — bumped a touch larger so the
@@ -192,11 +209,27 @@ function troopBaseName(name) {
   if (lower === 'barbarian') return 'Barbarian';
   if (lower === 'archer') return 'Archer';
   if (lower === 'mimic') return 'Mimic';
+  if (lower === 'necromancer' || lower === 'skeletonmage' || lower === 'skeleton_mage') return 'Necromancer';
+  if (lower === 'horror' || lower === 'horrorevolution' || lower === 'horror_evolution') return 'Horror';
+  if (lower === 'mechanicaldragon' || lower === 'mechanical_dragon' || lower === 'mechdragon') return 'MechanicalDragon';
+  if (lower === 'icegolem' || lower === 'ice_golem') return 'IceGolem';
   if (lower === 'ranger') return 'Ranger';
   return base;
 }
 
+function troopDisplayName(name) {
+  const base = troopBaseName(name);
+  if (base === 'Mimic') return 'Barrel';
+  if (base === 'Horror') return 'Horror';
+  if (base === 'MechanicalDragon') return 'Mech Dragon';
+  if (base === 'IceGolem') return 'Ice Golem';
+  return base;
+}
+
 function troopSlotCost(name) {
+  if (troopBaseName(name) === 'Necromancer') return 2;
+  if (troopBaseName(name) === 'Horror') return 3;
+  if (['MechanicalDragon', 'IceGolem'].includes(troopBaseName(name))) return 4;
   return nftBackedTroopConfig(troopBaseName(name)) ? 2 : 1;
 }
 
@@ -320,7 +353,7 @@ function nftBackedTroopConfig(base) {
       collection: 'dragon',
       label: 'Dragon',
       shortLabel: 'DRAGON',
-      image: dragonImg,
+      image: fireDragonImg,
     };
   }
   return null;
@@ -505,6 +538,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
   const { selectedBuilding: building } = useSelectedBuilding();
   const player = usePlayer();
   const resources = useResources();
+  const { buildingDefs } = useBuildingDefs();
   const { isMobile } = useLayout();
   const nftPlayer = useHydratedNftPlayer(player);
   const evmWallet = useEvmWallet();
@@ -1511,7 +1545,13 @@ function BuildingInfoPanel({ onOpenTroops }) {
       const base = troopBaseName(name);
       return troopLvls[base] || troopLvls[base.toLowerCase()] || troopLvls[name] || troopLvls[String(name || '').toLowerCase()] || 1;
     };
-    const allTroops = ['Knight', 'Mage', 'Archer', 'Mimic'];
+    const allTroops = ['Knight', 'Mage', 'Archer', 'Mimic', 'Necromancer', 'Horror', 'MechanicalDragon', 'IceGolem'];
+    const currentTownHallLevel = Number(buildingDefs?.th_level || buildingDefs?.town_hall_level || 1) || 1;
+    const troopDefinitions = buildingDefs?.troops || {};
+    const troopUnlock = (name) => {
+      const required = Math.max(1, Number(troopDefinitions?.[name]?.min_town_hall_level || 1) || 1);
+      return { required, unlocked: currentTownHallLevel >= required };
+    };
     const loadedGroups = loadedTroopGroups(shipTroops);
     const selectedSpan = swapSlot !== null ? troopUnitSpanAt(shipTroops, swapSlot) : null;
     const selectedGroup = loadedTroopGroupForSlot(loadedGroups, swapSlot);
@@ -1805,7 +1845,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
             <div style={{...LT.swapActionBar, ...(isMobile ? { flexDirection: 'column', gap: 6, padding: '8px 10px' } : {})}}>
               <div style={{...LT.swapHint, fontSize: isMobile ? 12 : 14}}>
                 {selectedGroup
-                  ? `${selectedGroup.base}${selectedGroup.count > 1 ? ` x${selectedGroup.count}` : ''} selected`
+                  ? `${troopDisplayName(selectedGroup.base)}${selectedGroup.count > 1 ? ` x${selectedGroup.count}` : ''} selected`
                   : selectedSpan ? `Slot ${selectedSpan.start + 1} selected` : `Select a troop below for slot ${swapSlot + 1}`}
               </div>
               {selectedSpan && (
@@ -1821,13 +1861,27 @@ function BuildingInfoPanel({ onOpenTroops }) {
             <div style={{...LT.normalTroopGrid, gap: isMobile ? 6 : 10}}>
             {allTroops.map(name => {
               const lvl = getTroopLvl(name);
+              const unlock = troopUnlock(name);
               return (
                 <button
                   key={name}
-                  title={name === 'Mimic' ? 'Trap Runner: defenses ignore it while rolling; traps trigger without damaging it.' : undefined}
-                  style={{...LT.troopCard, width: cardW, flexShrink: isMobile ? 1 : 0}}
+                  disabled={!unlock.unlocked}
+                  title={!unlock.unlocked
+                    ? `Town Hall Lv ${unlock.required} required`
+                    : name === 'Mimic'
+                      ? 'Trap Runner: defenses ignore it while rolling; traps trigger without damaging it.'
+                      : name === 'Necromancer'
+                        ? 'Grave Caller: ranged green magic and up to 3 weak skeleton summons. Uses 2 ship slots.'
+                      : name === 'Horror'
+                        ? 'Brood Evolution: splits 1 into 2 Creepers, then 4 Lurkers. Uses 3 ship slots.'
+                      : name === 'MechanicalDragon'
+                        ? 'Chain Siege: lightning jumps to 2 nearby buildings. Heavy flying unit; uses 4 ship slots.'
+                        : name === 'IceGolem'
+                          ? 'Frozen Vanguard: attacks defenses first and freezes nearby defenses for 7 seconds on death. Uses 4 ship slots.'
+                        : undefined}
+                  style={{...LT.troopCard, width: cardW, flexShrink: isMobile ? 1 : 0, ...(!unlock.unlocked ? { opacity: 0.5, cursor: 'not-allowed' } : null)}}
                   onClick={() => {
-                    if (!canPlaceTroop(name)) {
+                    if (!unlock.unlocked || !canPlaceTroop(name)) {
                       return;
                     } else {
                       handleLoadTroop(name);
@@ -1841,9 +1895,13 @@ function BuildingInfoPanel({ onOpenTroops }) {
                     )}
                   </div>
                   <div style={{...LT.bottomOverlay, height: isMobile ? 28 : 34}}>
-                    <span style={{...LT.bottomLabel, fontSize: isMobile ? 8 : 10}}>{name.toUpperCase()}</span>
+                    <span style={{...LT.bottomLabel, fontSize: isMobile ? 8 : 10}}>{troopDisplayName(name).toUpperCase()}</span>
                     <img src={goldIcon} alt="gold" style={LT.costIcon} />
-                    <span style={{...LT.costText, fontSize: isMobile ? 11 : 13}}>{TROOP_COST}</span>
+                    <span style={{...LT.costText, fontSize: isMobile ? 11 : 13}}>
+                      {unlock.unlocked
+                        ? Number(troopDefinitions?.[name]?.buy_cost ?? TROOP_COST)
+                        : `TH${unlock.required}`}
+                    </span>
                   </div>
                 </button>
               );

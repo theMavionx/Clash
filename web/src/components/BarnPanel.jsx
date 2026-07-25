@@ -17,8 +17,13 @@ import mageImg from '../assets/units/mage.png';
 import arbaletImg from '../assets/units/arbalet.png';
 import archerImg from '../assets/units/archer.png';
 import mimicImg from '../assets/units/mimic.png';
+import necromancerImg from '../assets/units/necromancer.png';
+import horrorImg from '../assets/units/horror.png';
+import mechanicalDragonImg from '../assets/units/mechanical_dragon.png';
+import iceGolemImg from '../assets/units/ice_golem.png';
 import berserkImg from '../assets/units/berserk.png';
 import demonKingImg from '../assets/units/demonking.png';
+import fireDragonImg from '../assets/units/fire_dragon.png';
 
 const dragonImg = '/cdn/nft/dragon/1/default.jpg';
 
@@ -56,10 +61,14 @@ const UNIT_IMAGES = {
   Mage: mageImg,
   Archer: archerImg,
   Mimic: mimicImg,
+  Necromancer: necromancerImg,
+  Horror: horrorImg,
+  MechanicalDragon: mechanicalDragonImg,
+  IceGolem: iceGolemImg,
   Ranger: arbaletImg,
   Barbarian: berserkImg,
   DemonKing: demonKingImg,
-  FireDragon: dragonImg,
+  FireDragon: fireDragonImg,
 };
 
 const CARD_TROOP_STYLE_MAP = {
@@ -68,6 +77,10 @@ const CARD_TROOP_STYLE_MAP = {
   Barbarian: { scale: 1.25, offsetY: '15%' },
   Archer: { scale: 1.25, offsetY: '15%' },
   Mimic: { scale: 1.1, offsetY: '4%' },
+  Necromancer: { scale: 1.12, offsetY: '5%' },
+  Horror: { scale: 1.12, offsetY: '5%' },
+  MechanicalDragon: { scale: 1.14, offsetY: '7%' },
+  IceGolem: { scale: 1.12, offsetY: '5%' },
   Ranger: { scale: 1.25, offsetY: '15%' },
   DemonKing: { scale: 1.35, offsetY: '10%' },
   FireDragon: { scale: 1.2, offsetY: '8%' },
@@ -243,7 +256,7 @@ const TROOP_STATS = {
     maxStats: { hp: 840, damage: 180, atk_speed: 1.05 }
   },
   Mimic: {
-    display: "Mimic Barrel",
+    display: "Barrel",
     trait: "Trap Runner: defenses ignore it while rolling. Traps still trigger, but deal no damage.",
     stats: {
       1: { hp: 300, damage: 20, atk_speed: 1.5 },
@@ -255,6 +268,62 @@ const TROOP_STATS = {
       7: { hp: 1300, damage: 102, atk_speed: 1.06 },
     },
     maxStats: { hp: 1300, damage: 102, atk_speed: 1.5 }
+  },
+  Necromancer: {
+    display: "Necromancer",
+    trait: "Grave Caller: ranged green magic and up to 3 weak skeleton summons. Uses 2 ship slots.",
+    stats: {
+      1: { hp: 220, damage: 34, atk_speed: 1.35 },
+      2: { hp: 290, damage: 44, atk_speed: 1.23 },
+      3: { hp: 380, damage: 62, atk_speed: 1.12 },
+      4: { hp: 490, damage: 82, atk_speed: 1.02 },
+      5: { hp: 620, damage: 108, atk_speed: 0.94 },
+      6: { hp: 770, damage: 142, atk_speed: 0.87 },
+      7: { hp: 940, damage: 186, atk_speed: 0.81 },
+    },
+    maxStats: { hp: 940, damage: 186, atk_speed: 1.35 }
+  },
+  Horror: {
+    display: "Horror",
+    trait: "Brood Evolution: uses 3 ship slots. On death it splits into 2 Creepers; each Creeper splits into 2 Lurkers.",
+    stats: {
+      1: { hp: 680, damage: 68, atk_speed: 1.24 },
+      2: { hp: 895, damage: 91, atk_speed: 1.24 },
+      3: { hp: 1170, damage: 122, atk_speed: 1.24 },
+      4: { hp: 1510, damage: 165, atk_speed: 1.24 },
+      5: { hp: 1920, damage: 222, atk_speed: 1.24 },
+      6: { hp: 2390, damage: 296, atk_speed: 1.24 },
+      7: { hp: 2930, damage: 390, atk_speed: 1.24 },
+    },
+    maxStats: { hp: 2930, damage: 390, atk_speed: 1.24 }
+  },
+  MechanicalDragon: {
+    display: "Mechanical Dragon",
+    trait: "Chain Siege: lightning jumps to 2 nearby buildings for 65% and 42% damage. Heavy flying unit, uses 4 ship slots.",
+    stats: {
+      1: { hp: 700, damage: 106, atk_speed: 1.03 },
+      2: { hp: 920, damage: 150, atk_speed: 1.03 },
+      3: { hp: 1200, damage: 218, atk_speed: 1.03 },
+      4: { hp: 1550, damage: 310, atk_speed: 1.03 },
+      5: { hp: 1970, damage: 449, atk_speed: 1.03 },
+      6: { hp: 2450, damage: 629, atk_speed: 1.03 },
+      7: { hp: 3000, damage: 876, atk_speed: 1.03 },
+    },
+    maxStats: { hp: 3000, damage: 876, atk_speed: 1.03 }
+  },
+  IceGolem: {
+    display: "Ice Golem",
+    trait: "Frozen Vanguard: attacks defenses first. On death, freezes nearby defenses for 7 seconds. Heavy ground unit, uses 4 ship slots.",
+    stats: {
+      1: { hp: 2100, damage: 78, atk_speed: 1.42 },
+      2: { hp: 2700, damage: 105, atk_speed: 1.42 },
+      3: { hp: 3500, damage: 143, atk_speed: 1.42 },
+      4: { hp: 4450, damage: 195, atk_speed: 1.42 },
+      5: { hp: 5600, damage: 263, atk_speed: 1.42 },
+      6: { hp: 6900, damage: 351, atk_speed: 1.42 },
+      7: { hp: 8400, damage: 462, atk_speed: 1.42 },
+    },
+    maxStats: { hp: 8400, damage: 462, atk_speed: 1.42 }
   },
   Ranger: {
     display: "Ranger",
@@ -297,7 +366,10 @@ const TROOP_STATS = {
   }
 };
 
-const ACTIVE_TROOP_NAMES = ['Knight', 'Mage', 'Archer', 'Mimic', 'DemonKing', 'FireDragon'];
+const ACTIVE_TROOP_NAMES = [
+  'Knight', 'Mage', 'Archer', 'Mimic', 'Necromancer', 'Horror',
+  'MechanicalDragon', 'IceGolem', 'DemonKing', 'FireDragon',
+];
 const NFT_TROOP_SLOT_COUNT = 2;
 const NFT_RARITY_MULTIPLIERS = {
   common: 1.2,
@@ -315,6 +387,10 @@ const TROOP_LEVEL_KEYS = {
   Barbarian: ['Barbarian', 'barbarian'],
   Archer: ['Archer', 'archer'],
   Mimic: ['Mimic', 'mimic'],
+  Necromancer: ['Necromancer', 'necromancer', 'SkeletonMage', 'skeleton_mage'],
+  Horror: ['Horror', 'horror', 'HorrorEvolution', 'horror_evolution'],
+  MechanicalDragon: ['MechanicalDragon', 'mechanical_dragon', 'mechanicaldragon', 'mechdragon'],
+  IceGolem: ['IceGolem', 'ice_golem', 'icegolem'],
   Ranger: ['Ranger', 'ranger'],
   DemonKing: ['DemonKing', 'demon_king', 'demonking'],
   FireDragon: ['FireDragon', 'fire_dragon', 'firedragon'],
@@ -331,7 +407,7 @@ const NFT_BACKED_TROOPS = {
     collection: 'dragon',
     serverType: 'fire_dragon',
     label: 'Dragon',
-    image: dragonImg,
+    image: fireDragonImg,
   },
 };
 
@@ -450,11 +526,14 @@ function BarnPanel({ building, onClose }) {
   const [demonKingError, setDemonKingError] = useState(null);
   const [pendingUpgrade, setPendingUpgrade] = useState(null);
   const troops = buildingDefs?.troops || {};
+  const currentTownHallLevel = Number(buildingDefs?.th_level || buildingDefs?.town_hall_level || 1) || 1;
   const troopNames = ACTIVE_TROOP_NAMES.filter((name) => troops[name]);
   const safeIndex = troopNames.length ? Math.min(currentIndex, troopNames.length - 1) : 0;
   const currentTroopName = troopNames[safeIndex];
   const currentNftTroop = nftBackedTroopConfig(currentTroopName);
   const tdef = currentTroopName ? troops[currentTroopName] : null;
+  const requiredTownHallLevel = Math.max(1, Number(tdef?.min_town_hall_level || 1) || 1);
+  const troopUnlocked = currentTownHallLevel >= requiredTownHallLevel;
   const lvl = currentTroopName ? troopLevelFromMap(troopLevels, currentTroopName, 1) : 1;
   const prevLvlRef = useRef(lvl);
   const prevTroopRef = useRef(currentTroopName);
@@ -668,6 +747,7 @@ function BarnPanel({ building, onClose }) {
   const upgradePending = !!pendingUpgrade && pendingUpgrade.troop === currentTroopName && Number(pendingUpgrade.expectedLevel || 0) === Number(displayLvl || 0);
   const handleMainUpgrade = () => {
     if (upgradePending) return;
+    if (!troopUnlocked) return;
     if (!barnReadyForNextLevel) return;
     if (!isNftBackedTroop) {
       handleUpgradeTroop(currentTroopName, displayLvl);
@@ -817,6 +897,11 @@ function BarnPanel({ building, onClose }) {
             )}
 
             <h3 style={{...styles.sectionTitle, marginTop: mobile ? 10 : 16, fontSize: mobile ? 16 : 20}}>Upgrade Resources</h3>
+            {!troopUnlocked && (
+              <div style={styles.demonInventoryHint}>
+                Town Hall Lv {requiredTownHallLevel} unlocks {displayName}.
+              </div>
+            )}
             {!barnReadyForNextLevel && (
               <div style={styles.demonInventoryHint}>
                 Barn Lv {requiredBarnLevel} unlocks troop Lv {nextTroopLevel}. Upgrade the Barn first.
@@ -847,17 +932,19 @@ function BarnPanel({ building, onClose }) {
             <button
               style={{
                 ...styles.actionBtn,
-                ...(!barnReadyForNextLevel || upgradePending ? styles.actionBtnDisabled : null),
+                ...(!troopUnlocked || !barnReadyForNextLevel || upgradePending ? styles.actionBtnDisabled : null),
                 width: '100%',
                 maxWidth: mobile ? '100%' : 240,
                 padding: mobile ? '12px 16px' : '14px 20px',
                 fontSize: mobile ? 14 : 14,
               }}
-              disabled={!barnReadyForNextLevel || upgradePending}
+              disabled={!troopUnlocked || !barnReadyForNextLevel || upgradePending}
               onClick={handleMainUpgrade}
             >
               {upgradePending
                 ? 'Upgrading...'
+                : !troopUnlocked
+                ? `Town Hall Lv ${requiredTownHallLevel} required`
                 : !barnReadyForNextLevel
                 ? `Upgrade Barn to Lv ${requiredBarnLevel}`
                 : isNftBackedTroop

@@ -1979,3 +1979,33 @@ Follow-up:
 - Request: reset the points for the latest day of the paused production Ostium tournament, resume the tournament, and verify that it starts again correctly.
 - Scope: identify the exact active/paused Ostium tournament and latest daily window, back up the affected production rows, reset only that daily result without changing earlier days, resume the tournament transactionally, and verify production API timing plus recalculation behavior.
 - Approval: explicit owner authorization in this conversation for the targeted production database mutation and tournament resume.
+
+### UR-2026-07-24-MECHANICAL-DRAGON
+- Timestamp: 2026-07-24 Europe/Kyiv
+- Request: add the mechanical dragon from `Robots Ultimate Pack 02 Cute Series` as a new attacking unit that fires lightning which chains through several nearest buildings; balance its damage and make the unit mechanically distinct.
+- Scope: import the authored model and animations, implement matching Godot and server-authoritative deterministic chain-lightning combat, add Town Hall progression/capacity/cost data, expose the unit in troop and battle UI, and verify model animation, chain targeting, damage falloff, balance, and Web build compatibility locally.
+- No commit, push, production deploy, or production database mutation requested.
+
+### UR-2026-07-24-MECHANICAL-DRAGON-FOUR-SLOTS
+- Timestamp: 2026-07-24 Europe/Kyiv
+- Request: make Mechanical Dragon consume four ship slots instead of one/three and strengthen it to match the heavier capacity cost.
+- Scope: raise HP and sustained damage output by about 45% across all seven levels, retain chain behavior, keep per-slot damage below Mage, set the load price to 400 gold, and validate the 45-slot TH6 roster.
+- No commit, push, production deploy, or production database mutation requested.
+
+### UR-2026-07-24-MECHANICAL-DRAGON-ANIMATION-SYNC
+- Timestamp: 2026-07-24 Europe/Kyiv
+- Request: restore the Mechanical Dragon's color and synchronize lightning with the middle of its authored attack animation using frame-by-frame validation.
+- Scope: preserve the source material palette, scale the complete attack clip to each level's cooldown, emit client and server damage at normalized phase 0.50, anchor the lightning muzzle to the animated jaw bone, and add visual and combat probes that verify timing, chain damage, VFX spawn, and cleanup.
+- No commit, push, production deploy, or production database mutation requested.
+
+### UR-2026-07-24-MECHANICAL-DRAGON-LIGHTNING-VFX
+- Timestamp: 2026-07-24 Europe/Kyiv
+- Request: make Mechanical Dragon lightning visually richer, research an appropriate Godot approach, and add a first-use warmup for the effect.
+- Scope: replace per-segment cylinders with three batched crossed-ribbon layers, deterministic flicker variants, side branches, impact glow/ring, CPU sparks, and add the real model/animation/VFX path to hidden combat warmup; verify the effect frame-by-frame and preserve authoritative combat timing and damage.
+- No commit, push, production deploy, or production database mutation requested.
+
+### UR-2026-07-24-MECHANICAL-DRAGON-FIXED-CADENCE
+- Timestamp: 2026-07-24 Europe/Kyiv
+- Request: do not accelerate troop attack animation as it levels; for the Mechanical Dragon, prefer stronger damage/HP progression because fast dragon attacks look twitchy.
+- Scope: fix Mechanical Dragon attack cooldown at 1.03 seconds across all levels, move the removed speed progression into per-strike damage while preserving sustained DPS, retain the existing HP curve, and verify client/server cadence plus TH6 combat balance.
+- No commit, push, production deploy, or production database mutation requested.

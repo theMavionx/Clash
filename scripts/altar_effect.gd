@@ -14,6 +14,7 @@ var _ring: MeshInstance3D = null
 var _ring_mat: StandardMaterial3D = null
 var _time: float = 0.0
 var _effect_span: float = 1.0
+var _setup_attempts: int = 0
 
 const SPARK_GLITCH_SHADER := """
 shader_type spatial;
@@ -54,6 +55,12 @@ func _ready() -> void:
 func _setup() -> void:
 	if not is_instance_valid(self):
 		return
+	if absf(global_transform.basis.determinant()) <= 0.000001:
+		_setup_attempts += 1
+		if _setup_attempts <= 3:
+			call_deferred("_setup")
+		return
+	_setup_attempts = 0
 	_sparks.clear()
 	_clear_runtime_effect_nodes()
 
@@ -251,6 +258,8 @@ func _compute_bounds(root_node: Node) -> AABB:
 
 
 func _aabb_to_self(node: Node3D, aabb: AABB) -> AABB:
+	if absf(global_transform.basis.determinant()) <= 0.000001:
+		return AABB()
 	var xform := global_transform.affine_inverse() * node.global_transform
 	var first := true
 	var out := AABB()

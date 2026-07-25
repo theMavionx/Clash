@@ -3,7 +3,6 @@ extends BaseTroop
 ## it is rolling, and ground traps are consumed without damaging it.
 
 const ALBEDO_TEXTURE := preload("res://Model/Characters/MimicBarrel/Textures/mimic_barrel_albedo.png")
-const VISUAL_GROUND_OFFSET: float = 0.94
 
 const LEVEL_STATS := {
 	1: {"hp": 300, "damage": 20, "atk_speed": 1.50},
@@ -39,7 +38,6 @@ var _hit_this_swing: bool = false
 func _ready() -> void:
 	super._ready()
 	_remove_unbound_animation_tracks()
-	_raise_visual_to_ground()
 	_apply_mimic_material()
 
 
@@ -90,15 +88,6 @@ func _do_attack(delta: float) -> void:
 		_hit_this_swing = true
 		_play_attack_sfx()
 		_deal_target_damage()
-
-
-func _raise_visual_to_ground() -> void:
-	var rig := get_node_or_null("Rig") as Node3D
-	if rig != null:
-		rig.position.y += VISUAL_GROUND_OFFSET
-	var skeleton := get_node_or_null("Skeleton3D") as Skeleton3D
-	if skeleton != null:
-		skeleton.position.y += VISUAL_GROUND_OFFSET
 
 
 func _apply_mimic_material() -> void:

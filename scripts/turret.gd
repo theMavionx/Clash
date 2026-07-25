@@ -7,6 +7,8 @@ const LEVEL_STATS = {
 	2: {"damage": 68, "fire_rate": 0.48, "detect_range": 1.05},
 	3: {"damage": 122, "fire_rate": 0.34, "detect_range": 1.18},
 	4: {"damage": 170, "fire_rate": 0.29, "detect_range": 1.30},
+	5: {"damage": 230, "fire_rate": 0.25, "detect_range": 1.42},
+	6: {"damage": 285, "fire_rate": 0.23, "detect_range": 1.52},
 }
 
 const MUZZLE_FLASH_FRAMES: Array[String] = [
@@ -39,6 +41,7 @@ var damage: int = 80
 var ward_bonus_pct: int = 0
 var fire_rate: float = 1.0
 var _fire_timer: float = 0.0
+var _freeze_remaining: float = 0.0
 var _target: Node3D = null
 var _anim_player: AnimationPlayer = null
 var _is_attacking: bool = false
@@ -306,6 +309,11 @@ func _physics_process(delta: float) -> void:
 		return
 
 	_update_bullets(delta)
+	if _freeze_remaining > 0.0:
+		_freeze_remaining = maxf(0.0, _freeze_remaining - delta)
+		if _anim_player and _anim_player.has_animation("idle") and _anim_player.current_animation != "idle":
+			_anim_player.play("idle")
+		return
 
 	_target_search_timer += delta
 	if _target_search_timer >= TARGET_SEARCH_INTERVAL:
@@ -342,6 +350,10 @@ func _physics_process(delta: float) -> void:
 			_fire_timer = 0.0
 			if _anim_player and _anim_player.has_animation("idle"):
 				_anim_player.play("idle")
+
+
+func freeze_for(duration: float) -> void:
+	_freeze_remaining = maxf(_freeze_remaining, maxf(0.0, duration))
 
 
 func _find_target() -> void:

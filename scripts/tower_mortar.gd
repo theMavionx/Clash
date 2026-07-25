@@ -57,6 +57,7 @@ var travel_time: float = 0.82
 var _target: Node3D = null
 var _target_search_timer: float = 0.0
 var _fire_timer: float = 0.0
+var _freeze_remaining: float = 0.0
 var _is_attacking: bool = false
 var _pool: Array[Dictionary] = []
 var _active: Array[Dictionary] = []
@@ -168,6 +169,9 @@ func _physics_process(delta: float) -> void:
 	_update_range_visuals()
 
 	_update_projectiles(delta)
+	if _freeze_remaining > 0.0:
+		_freeze_remaining = maxf(0.0, _freeze_remaining - delta)
+		return
 
 	var troops_exist: bool = BaseTroop._get_troops_cached().size() > 0
 	if not troops_exist:
@@ -193,6 +197,10 @@ func _physics_process(delta: float) -> void:
 		_target = null
 		_is_attacking = false
 		_fire_timer = 0.0
+
+
+func freeze_for(duration: float) -> void:
+	_freeze_remaining = maxf(_freeze_remaining, maxf(0.0, duration))
 
 
 func _find_target() -> void:

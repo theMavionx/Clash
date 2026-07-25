@@ -4,9 +4,9 @@
 //
 // Decibel's REST is hosted by Aptos Labs and requires a Bearer API key.
 // The free tier from build.aptoslabs.com is sufficient for low-volume
-// indexing. Set `DECIBEL_API_KEY` (or fall back to `APTOS_API_KEY` /
-// `VITE_APTOS_NODE_API_KEY`) in the server's env before starting; without
-// it every request comes back 401 and the worker quietly records nothing.
+// indexing. Set `DECIBEL_API_KEY` for the primary credential and
+// `DECIBEL_API_KEYS` for comma-separated failover credentials. Keys remain
+// server-side and are rotated when Aptos Labs reports a quota/rate limit.
 
 // Verified against `@decibeltrade/sdk` source (read/user-positions/...js,
 // read/account-overview/...js): the API lives at
@@ -33,6 +33,11 @@ try {
 }
 
 const crypto = require('crypto');
+const {
+  AptosApiKeyPool,
+  isAptosKeyLimitError,
+  keyPoolFromEnv,
+} = require('./aptos-key-pool');
 
 const DECIBEL_HTTP = process.env.DECIBEL_HTTP_URL
   || 'https://api.mainnet.aptoslabs.com/decibel';
@@ -45,10 +50,11 @@ const APTOS_CHAIN_ID = 1;
 const DECIBEL_PACKAGE_MAINNET =
   '0x50ead22afd6ffd9769e3b3d6e0e64a2a350d68e8b102c4e72e33d0b8cfdfdb06';
 
-const DECIBEL_API_KEY = process.env.DECIBEL_API_KEY
-  || process.env.APTOS_API_KEY
-  || process.env.VITE_APTOS_NODE_API_KEY
-  || '';
+const DECIBEL_API_KEYS = keyPoolFromEnv(process.env);
+const aptosApiKeyPool = new AptosApiKeyPool({
+  keys: DECIBEL_API_KEYS,
+  cooldownMs: Number(process.env.APTOS_API_KEY_COOLDOWN_MS || 5 * 60 * 1000),
+});
 const DECIBEL_GAS_STATION_API_KEY = process.env.DECIBEL_GAS_STATION_API_KEY
   || process.env.APTOS_GAS_STATION_API_KEY
   || process.env.VITE_APTOS_GAS_STATION_API_KEY
@@ -59,23 +65,28 @@ const DECIBEL_API_WALLET_PRIVATE_KEY = process.env.DECIBEL_API_WALLET_PRIVATE_KE
   || '';
 const API_WALLET_READY_OCTA = BigInt(Math.round(0.2 * 1e8));
 
-if (!DECIBEL_API_KEY) {
-  console.warn('[decibel] No API key set (DECIBEL_API_KEY / APTOS_API_KEY). Decibel REST will 401.');
+if (!DECIBEL_API_KEYS.length) {
+  console.warn('[decibel] No API key set (DECIBEL_API_KEY / DECIBEL_API_KEYS). Decibel REST will 401.');
+} else {
+  console.log('[decibel] Aptos API key pool ready', {
+    key_count: DECIBEL_API_KEYS.length,
+  });
 }
 
-function authHeaders() {
-  if (!DECIBEL_API_KEY) return { accept: 'application/json' };
-  return {
-    accept: 'application/json',
-    Authorization: `Bearer ${DECIBEL_API_KEY}`,
-  };
-}
-
-function aptosJsonHeaders() {
-  return {
-    'Content-Type': 'application/json',
-    ...(DECIBEL_API_KEY ? { Authorization: `Bearer ${DECIBEL_API_KEY}` } : {}),
-  };
+async function fetchWithAptosKey(url, options = {}, label = 'Aptos request') {
+  return aptosApiKeyPool.run(label, async (apiKey) => {
+    const headers = new Headers(options.headers || {});
+    if (apiKey) headers.set('Authorization', `Bearer ${apiKey}`);
+    const response = await fetch(url, { ...options, headers });
+    if (!response.ok) {
+      const body = await response.clone().text().catch(() => '');
+      const error = new Error(`${label} failed: ${response.status} ${body || response.statusText}`);
+      error.status = response.status;
+      error.body = body;
+      if (isAptosKeyLimitError(error)) throw error;
+    }
+    return response;
+  });
 }
 
 function normalizeAptosAddress(addr) {
@@ -87,20 +98,44 @@ function normalizeAptosAddress(addr) {
 }
 
 async function aptosView(functionId, args = [], typeArguments = []) {
-  const r = await fetch(`${APTOS_FULLNODE}/view`, {
+  const r = await fetchWithAptosKey(`${APTOS_FULLNODE}/view`, {
     method: 'POST',
-    headers: aptosJsonHeaders(),
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       function: functionId,
       type_arguments: typeArguments,
       arguments: args,
     }),
-  });
+  }, `Aptos view ${functionId}`);
   if (!r.ok) {
     const body = await r.text().catch(() => '');
     throw new Error(`Aptos view ${functionId} failed: ${r.status} ${body || r.statusText}`);
   }
   return r.json();
+}
+
+async function fetchAptosJsonPath(pathname, options = {}) {
+  const cleanPath = String(pathname || '').replace(/^\/+/, '');
+  if (!cleanPath) throw new Error('Aptos path is required');
+  const response = await fetchWithAptosKey(
+    `${APTOS_FULLNODE.replace(/\/$/, '')}/${cleanPath}`,
+    {
+      ...options,
+      headers: {
+        accept: 'application/json',
+        ...(options.headers || {}),
+      },
+    },
+    `Aptos ${cleanPath}`,
+  );
+  if (!response.ok) {
+    const body = await response.text().catch(() => '');
+    const error = new Error(`Aptos ${cleanPath} failed: ${response.status} ${body || response.statusText}`);
+    error.status = response.status;
+    error.body = body;
+    throw error;
+  }
+  return response.json();
 }
 
 async function aptosPublicView(functionId, args = [], typeArguments = []) {
@@ -166,7 +201,7 @@ async function fetchUsdcBalance(address) {
 
 let aptosModule = null;
 let serverAccount = null;
-let aptosClient = null;
+const aptosClients = new Map();
 let deployment = null;
 
 async function loadAptosSdk() {
@@ -215,15 +250,24 @@ function normalizeTimeInForce(value) {
   return 0;
 }
 
-async function getAptosClient() {
-  if (aptosClient) return aptosClient;
+async function getAptosClient(apiKey = '') {
+  const cacheKey = apiKey || '__public__';
+  if (aptosClients.has(cacheKey)) return aptosClients.get(cacheKey);
   const { Aptos, AptosConfig, Network } = await loadAptosSdk();
-  aptosClient = new Aptos(new AptosConfig({
+  const aptosClient = new Aptos(new AptosConfig({
     network: Network.MAINNET,
     fullnode: APTOS_FULLNODE,
-    clientConfig: DECIBEL_API_KEY ? { API_KEY: DECIBEL_API_KEY } : undefined,
+    clientConfig: apiKey ? { API_KEY: apiKey } : undefined,
   }));
+  aptosClients.set(cacheKey, aptosClient);
   return aptosClient;
+}
+
+async function withAptosClient(label, operation) {
+  return aptosApiKeyPool.run(label, async (apiKey) => {
+    const aptos = await getAptosClient(apiKey);
+    return operation(aptos);
+  });
 }
 
 async function getDeployment() {
@@ -271,13 +315,16 @@ function generateReplayProtectionNonce() {
 const DECIBEL_GAS_PRICE_CACHE_MS = Math.max(1000, Number(process.env.DECIBEL_GAS_PRICE_CACHE_MS || 15_000));
 let gasPriceCache = { value: 100, at: 0, promise: null };
 
-async function getCachedGasUnitPrice(aptos) {
+async function getCachedGasUnitPrice() {
   const now = Date.now();
   if (gasPriceCache.value && now - gasPriceCache.at < DECIBEL_GAS_PRICE_CACHE_MS) {
     return gasPriceCache.value;
   }
   if (gasPriceCache.promise) return gasPriceCache.promise;
-  gasPriceCache.promise = aptos.getGasPriceEstimation()
+  gasPriceCache.promise = withAptosClient(
+    'Aptos gas price',
+    aptos => aptos.getGasPriceEstimation(),
+  )
     .then((gas) => {
       const value = Math.max(1, Number(gas?.gas_estimate || gas?.prioritized_gas_estimate || gasPriceCache.value || 100));
       gasPriceCache = { value, at: Date.now(), promise: null };
@@ -314,13 +361,13 @@ async function sendDecibelTx(payload) {
     return Date.now();
   };
   let stepStarted = Date.now();
-  const aptos = await getAptosClient();
+  const signingAptos = await getAptosClient(DECIBEL_API_KEYS[0] || '');
   stepStarted = mark('client_ms', stepStarted);
   const account = await getServerAccount();
   stepStarted = mark('account_ms', stepStarted);
-  const gasUnitPrice = await getCachedGasUnitPrice(aptos);
+  const gasUnitPrice = await getCachedGasUnitPrice();
   stepStarted = mark('gas_ms', stepStarted);
-  const transaction = await aptos.transaction.build.simple({
+  const transaction = await withAptosClient('Aptos transaction build', aptos => aptos.transaction.build.simple({
     sender: account.accountAddress,
     data: payload,
     options: {
@@ -328,13 +375,19 @@ async function sendDecibelTx(payload) {
       maxGasAmount: 200_000,
       gasUnitPrice,
     },
-  });
+  }));
   stepStarted = mark('build_ms', stepStarted);
-  const senderAuthenticator = aptos.transaction.sign({ signer: account, transaction });
+  const senderAuthenticator = signingAptos.transaction.sign({ signer: account, transaction });
   stepStarted = mark('sign_ms', stepStarted);
-  const pending = await aptos.transaction.submit.simple({ transaction, senderAuthenticator });
+  const pending = await withAptosClient(
+    'Aptos transaction submit',
+    aptos => aptos.transaction.submit.simple({ transaction, senderAuthenticator }),
+  );
   stepStarted = mark('submit_ms', stepStarted);
-  const confirmed = await aptos.waitForTransaction({ transactionHash: pending.hash });
+  const confirmed = await withAptosClient(
+    'Aptos transaction wait',
+    aptos => aptos.waitForTransaction({ transactionHash: pending.hash }),
+  );
   mark('wait_ms', stepStarted);
   timings.total_ms = Date.now() - startedAt;
   try {
@@ -885,7 +938,7 @@ async function fetchMarkets() {
   if (marketsCache && Date.now() - marketsCacheAt < MARKETS_CACHE_MS) return marketsCache;
   try {
     const url = `${DECIBEL_HTTP}/api/v1/markets`;
-    const r = await fetch(url, { headers: authHeaders() });
+    const r = await fetchWithAptosKey(url, { headers: { accept: 'application/json' } }, 'Decibel markets');
     if (!r.ok) return marketsCache || [];
     const j = await r.json();
     const list = Array.isArray(j) ? j : (Array.isArray(j?.data) ? j.data : []);
@@ -909,7 +962,11 @@ async function fetchDecibelRows(path, query = {}) {
   let lastError = null;
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
-      const r = await fetch(url, { headers: authHeaders() });
+      const r = await fetchWithAptosKey(
+        url,
+        { headers: { accept: 'application/json' } },
+        `Decibel ${path}`,
+      );
       if (!r.ok) {
         const body = await r.text().catch(() => '');
         lastError = new Error(`Decibel ${path} failed: ${r.status} ${body || r.statusText}`);
@@ -1009,7 +1066,11 @@ async function fetchCandlesticks(options = {}) {
     params.set('nSigma', '3.0');
   }
   const url = `${DECIBEL_HTTP}/api/v1/candlesticks?${params.toString()}`;
-  const r = await fetch(url, { headers: authHeaders() });
+  const r = await fetchWithAptosKey(
+    url,
+    { headers: { accept: 'application/json' } },
+    'Decibel candlesticks',
+  );
   if (!r.ok) {
     const body = await r.text().catch(() => '');
     throw new Error(`Decibel candlesticks failed: ${r.status} ${body || r.statusText}`);
@@ -1060,7 +1121,11 @@ async function fetchUserSubaccounts(ownerAddr) {
   if (!ownerAddr) return [];
   try {
     const url = `${DECIBEL_HTTP}/api/v1/subaccounts?owner=${encodeURIComponent(ownerAddr)}`;
-    const r = await fetch(url, { headers: authHeaders() });
+    const r = await fetchWithAptosKey(
+      url,
+      { headers: { accept: 'application/json' } },
+      'Decibel subaccounts',
+    );
     if (!r.ok) return [];
     const j = await r.json();
     const list = Array.isArray(j) ? j : (Array.isArray(j?.data) ? j.data : []);
@@ -1553,6 +1618,9 @@ module.exports = {
   normalizeAptosAddress,
   normalizeClientOrderId,
   newClientOrderId,
+  aptosView,
+  fetchAptosJsonPath,
+  getAptosKeyPoolStatus: () => aptosApiKeyPool.snapshot(),
   getServerSignerInfo,
   fetchUsdcBalance,
   getPrimarySubaccountAddr,

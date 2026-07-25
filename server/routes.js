@@ -11855,6 +11855,17 @@ const TROOP_NAME_MAP = {
   archer: 'Archer',
   ranger: 'Ranger',
   mimic: 'Mimic',
+  necromancer: 'Necromancer',
+  skeletonmage: 'Necromancer',
+  skeleton_mage: 'Necromancer',
+  horror: 'Horror',
+  horrorevolution: 'Horror',
+  horror_evolution: 'Horror',
+  mechanicaldragon: 'MechanicalDragon',
+  mechanical_dragon: 'MechanicalDragon',
+  mechdragon: 'MechanicalDragon',
+  icegolem: 'IceGolem',
+  ice_golem: 'IceGolem',
   demonking: 'DemonKing',
   demon_king: 'DemonKing',
   firedragon: 'FireDragon',
@@ -11901,11 +11912,11 @@ function _serverTroopKey(name) {
   const normalized = _normalizeTroopName(name);
   if (normalized === 'DemonKing') return 'demon_king';
   if (normalized === 'FireDragon') return 'fire_dragon';
+  if (normalized === 'Necromancer') return 'necromancer';
+  if (normalized === 'Horror') return 'horror';
+  if (normalized === 'MechanicalDragon') return 'mechanical_dragon';
+  if (normalized === 'IceGolem') return 'ice_golem';
   return String(normalized || '').toLowerCase();
-}
-function _isHeavyTroop(name) {
-  const normalized = _normalizeTroopName(name);
-  return normalized === 'DemonKing' || normalized === 'FireDragon';
 }
 function _isDisabledTroopName(name) {
   return db.isTroopDisabled(_normalizeTroopName(name));
@@ -12352,7 +12363,11 @@ function _nftBackedWinTokensByCollectionFromActions(actions, playerId) {
   return out;
 }
 function _troopSlotCost(name) {
-  return _isHeavyTroop(name) ? 2 : 1;
+  const normalized = _normalizeTroopName(name);
+  const configured = Number(db.TROOP_DEFS?.[_serverTroopKey(normalized)]?.slot_cost);
+  if (Number.isInteger(configured) && configured > 0) return configured;
+  if (normalized === 'DemonKing' || normalized === 'FireDragon') return 2;
+  return 1;
 }
 function _shipLevelForPort(building) {
   const maxPortLevel = Number(db.BUILDING_DEFS?.port?.max_level || 3);
@@ -12589,18 +12604,18 @@ function _applyCasualties(playerId, casualties) {
 
   const remaining = { ...validCasualties };
   const filtered = [];
-  let skipNextFiller = false;
+  let fillerSlotsToSkip = 0;
   for (const troop of ship.troops) {
-    if (skipNextFiller && _isSlotFiller(troop)) {
-      skipNextFiller = false;
+    if (fillerSlotsToSkip > 0 && _isSlotFiller(troop)) {
+      fillerSlotsToSkip--;
       continue;
     }
-    skipNextFiller = false;
+    fillerSlotsToSkip = 0;
     const name = _normalizeTroopName(troop);
     if (remaining[name] && remaining[name] > 0) {
       remaining[name]--;
       applied[name] = (applied[name] || 0) + 1;
-      if (_troopSlotCost(name) > 1) skipNextFiller = true;
+      fillerSlotsToSkip = _troopSlotCost(name) - 1;
     } else {
       filtered.push(troop);
     }
@@ -13165,6 +13180,10 @@ const TROOP_BUY_COSTS = {
   Mage: 100,
   Archer: 100,
   Mimic: 100,
+  Necromancer: 250,
+  Horror: 350,
+  MechanicalDragon: 400,
+  IceGolem: 400,
   DemonKing: 0,
   FireDragon: 0,
 };
@@ -13173,11 +13192,17 @@ const KNOWN_TROOPS = new Set(Object.values(TROOP_NAME_MAP));
 function _troopBuyCost(name) {
   return TROOP_BUY_COSTS[_normalizeTroopName(name)] ?? 100;
 }
+function _troopTownHallGate(playerId, troopName) {
+  const gate = db.getTroopTownHallUnlock(playerId, _serverTroopKey(troopName));
+  return gate.unlocked ? null : gate;
+}
 router.post('/troops/buy', auth, (req, res) => {
   const { troop_name } = req.body;
   if (!troop_name) return res.status(400).json({ error: 'troop_name required' });
   const normalizedTroop = _normalizeTroopName(troop_name);
   if (!VALID_TROOPS.includes(normalizedTroop)) return res.status(400).json(_activeTroopError(normalizedTroop));
+  const townHallGate = _troopTownHallGate(req.player.id, normalizedTroop);
+  if (townHallGate) return res.status(townHallGate.status || 403).json(townHallGate);
   const cost = _troopBuyCost(normalizedTroop);
   if (_isNftBackedTroop(normalizedTroop)) {
     return res.json({ success: true, troop_name: normalizedTroop, cost: 0, resources: db.getResources(req.player.id), nft_backed: true });
@@ -13203,6 +13228,8 @@ router.post('/buildings/:id/load-troop', auth, async (req, res) => {
   const { troop_name } = req.body;
   const normalizedTroop = _normalizeTroopName(troop_name);
   if (!troop_name || !VALID_TROOPS.includes(normalizedTroop)) return res.status(400).json(_activeTroopError(normalizedTroop));
+  const townHallGate = _troopTownHallGate(req.player.id, normalizedTroop);
+  if (townHallGate) return res.status(townHallGate.status || 403).json(townHallGate);
   let verifiedNftTroop = null;
   if (_isNftBackedTroop(normalizedTroop)) {
     verifiedNftTroop = await verifyNftBackedTroopLoadToken(req.player, troop_name, req.body?.owner || req.body?.nft_owner || req.body?.wallet);
@@ -13265,6 +13292,8 @@ router.post('/buildings/:id/swap-troop', auth, async (req, res) => {
     return res.status(400).json({ error: 'Valid integer slot and troop_name required' });
   }
   if (!VALID_TROOPS.includes(normalizedTroop)) return res.status(400).json(_activeTroopError(normalizedTroop));
+  const townHallGate = _troopTownHallGate(req.player.id, normalizedTroop);
+  if (townHallGate) return res.status(townHallGate.status || 403).json(townHallGate);
   let verifiedNftTroop = null;
   if (_isNftBackedTroop(normalizedTroop)) {
     verifiedNftTroop = await verifyNftBackedTroopLoadToken(req.player, troop_name, req.body?.owner || req.body?.nft_owner || req.body?.wallet);
@@ -13305,7 +13334,7 @@ router.post('/buildings/:id/swap-troop', auth, async (req, res) => {
     }
 
     const player = db.db.prepare('SELECT gold FROM players WHERE id = ?').get(req.player.id);
-    const swapCost = _isNftBackedTroop(normalizedTroop) ? 0 : TROOP_COST;
+    const swapCost = _troopBuyCost(normalizedTroop);
     if (player.gold < swapCost) throw { status: 400, error: 'Not enough gold' };
 
     if (swapCost > 0) db.db.prepare('UPDATE players SET gold = gold - ? WHERE id = ?').run(swapCost, req.player.id);
@@ -13412,6 +13441,8 @@ router.post('/ship/load-troop', auth, async (req, res) => {
   if (!troop_name || !VALID_TROOPS.includes(normalizedTroop)) {
     return res.status(400).json(_activeTroopError(normalizedTroop));
   }
+  const townHallGate = _troopTownHallGate(req.player.id, normalizedTroop);
+  if (townHallGate) return res.status(townHallGate.status || 403).json(townHallGate);
   let verifiedNftTroop = null;
   if (_isNftBackedTroop(normalizedTroop)) {
     verifiedNftTroop = await verifyNftBackedTroopLoadToken(
@@ -13462,6 +13493,8 @@ router.post('/ship/swap-troop', auth, async (req, res) => {
   const normalizedTroop = _normalizeTroopName(troopName);
   if (!Number.isInteger(slot) || !troopName) return res.status(400).json({ error: 'Valid slot and troop_name required' });
   if (!VALID_TROOPS.includes(normalizedTroop)) return res.status(400).json(_activeTroopError(normalizedTroop));
+  const townHallGate = _troopTownHallGate(req.player.id, normalizedTroop);
+  if (townHallGate) return res.status(townHallGate.status || 403).json(townHallGate);
   let verifiedNftTroop = null;
   if (_isNftBackedTroop(normalizedTroop)) {
     verifiedNftTroop = await verifyNftBackedTroopLoadToken(
@@ -13483,7 +13516,7 @@ router.post('/ship/swap-troop', auth, async (req, res) => {
       });
       if (loaded) throw { status: 409, error: 'This NFT is already loaded', code: 'NFT_TROOP_ALREADY_LOADED' };
     }
-    const cost = _isNftBackedTroop(normalizedTroop) ? 0 : TROOP_COST;
+    const cost = _troopBuyCost(normalizedTroop);
     if (!db.canAfford(req.player.id, cost, 0, 0)) throw { status: 400, error: 'Not enough gold', cost };
     if (cost > 0) {
       db.subtractResources(req.player.id, cost, 0, 0, {
@@ -18676,19 +18709,10 @@ const ADMIN_MAX_VILLAGE_BUILD_ORDER = [
 ];
 
 const ADMIN_TH_MAX_COUNT = {
-  mine: [1, 2, 3, 3, 4],
-  sawmill: [1, 2, 3, 3, 4],
-  barn: [1, 1, 1, 1, 1],
-  port: [1, 2, 3, 3, 3],
-  archer_tower: [1, 2, 3, 3, 3],
-  tombstone: [0, 1, 3, 3, 3],
-  altar: [1, 1, 1, 1, 1],
-  turret: [0, 0, 3, 3, 3],
-  shark_trap: [0, 0, 1, 1, 2],
-  storage: [0, 1, 2, 3, 3],
-  mage_tower: [0, 0, 0, 2, 2],
-  mortar: [0, 0, 0, 0, 1],
-  town_hall: [1, 1, 1, 1, 1],
+  ...db.TH_MAX_COUNT,
+  // Legacy ports remain admin-visible for old accounts, but the main ship
+  // progression still ends at level 5 and receives no TH6 capacity increase.
+  port: [1, 2, 3, 3, 3, 3],
 };
 
 function adminMaxBuildingCountForTh(type, townHallLevel) {
@@ -18698,9 +18722,7 @@ function adminMaxBuildingCountForTh(type, townHallLevel) {
 }
 
 function adminBuildingTargetLevelForTh(type, def, townHallLevel) {
-  const maxLevel = adminBuildingMaxLevel(type, def);
-  if (type === 'town_hall') return Math.max(1, Math.min(maxLevel, townHallLevel));
-  return Math.max(1, Math.min(maxLevel, townHallLevel));
+  return db.getBuildingMaxLevelForTownHall(type, townHallLevel);
 }
 
 function adminBuildingMaxLevel(type, def) {
@@ -18796,7 +18818,7 @@ router.post('/admin/players/:name/max-village', adminAuth, (req, res) => {
   try {
     const player = db.db.prepare('SELECT id, name FROM players WHERE name = ? AND COALESCE(is_bot, 0) = 0').get(req.params.name);
     if (!player) return res.status(404).json({ error: 'Player not found' });
-    const townHallLevel = Math.max(1, Math.min(5, Math.floor(Number(req.body?.town_hall_level || req.body?.level || 1))));
+    const townHallLevel = Math.max(1, Math.min(6, Math.floor(Number(req.body?.town_hall_level || req.body?.level || 1))));
     const result = db.db.transaction(() => {
       db.db.prepare('DELETE FROM buildings WHERE player_id = ?').run(player.id);
       const added = [];

@@ -56,6 +56,9 @@ const TROOP_SCALE_MULTIPLIERS: Dictionary = {
 	"Mage": 1.7,
 	"Archer": 1.7,
 	"Mimic": 1.45,
+	"Necromancer": 1.55,
+	"Horror": 1.25,
+	"IceGolem": 2.0,
 }
 
 ## Troop name → {model, script} for spawning combat troops
@@ -66,10 +69,29 @@ const TROOP_DEFS: Dictionary = {
 	"Archer":    {"model": "res://Model/Characters/pirate_archer/pirate_archer.tscn", "script": "res://scripts/archer.gd"},
 	"Ranger":    {"model": "res://Model/Characters/Model/Rogue_Hooded.glb","script": "res://scripts/ranger.gd"},
 	"Mimic":     {"model": "res://Model/Characters/MimicBarrel/MimicBarrel.fbx", "script": "res://scripts/mimic.gd"},
+	"Necromancer": {
+		"model": "res://Model/Characters/Necromancer/Necromancer.fbx",
+		"script": "res://scripts/necromancer.gd",
+	},
+	"Horror": {
+		"model": "res://Model/Characters/HorrorEvolution/horror.fbx",
+		"script": "res://scripts/horror_evolution.gd",
+	},
+	"MechanicalDragon": {
+		"model": "res://Model/Characters/MechanicalDragon/MechanicalDragon.fbx",
+		"script": "res://scripts/mechanical_dragon.gd",
+	},
+	"IceGolem": {
+		"model": "res://Model/Characters/IceGolem/IceGolem.fbx",
+		"script": "res://scripts/ice_golem.gd",
+	},
 	"DemonKing": {"model": "res://Model/Characters/Model/DemonKing_Body.fbx",   "script": "res://scripts/demon_king.gd"},
 	"FireDragon": {"model": "res://Model/Characters/FireDragon/FireDragon.tscn", "script": "res://scripts/fire_dragon.gd"},
 }
-const ACTIVE_PRELOAD_TROOPS: Array[String] = ["Knight", "Mage", "Archer", "Mimic", "DemonKing", "FireDragon"]
+const ACTIVE_PRELOAD_TROOPS: Array[String] = [
+	"Knight", "Mage", "Archer", "Mimic", "Necromancer", "Horror",
+	"MechanicalDragon", "IceGolem", "DemonKing", "FireDragon",
+]
 
 ## Legacy constant kept for replay compatibility
 const SHIP_TROOPS = [
@@ -540,7 +562,7 @@ func cleanup_combat_nodes() -> void:
 	var tree: SceneTree = get_tree()
 	if tree == null:
 		return
-	for group_name in ["troops", "skeleton_guards", "ships", "deployed_ships"]:
+	for group_name in ["troops", "skeleton_guards", "ships", "deployed_ships", "combat_ephemeral_vfx"]:
 		for node in tree.get_nodes_in_group(group_name):
 			if not is_instance_valid(node):
 				continue
@@ -1371,6 +1393,10 @@ static func _script_to_troop_key(script_path: String) -> String:
 		"archer":     return "Archer"
 		"ranger":     return "Ranger"
 		"mimic":      return "Mimic"
+		"necromancer": return "Necromancer"
+		"horror_evolution": return "Horror"
+		"mechanical_dragon": return "MechanicalDragon"
+		"ice_golem": return "IceGolem"
 		"demon_king": return "DemonKing"
 		"fire_dragon": return "FireDragon"
 	return file.capitalize()
@@ -1391,6 +1417,14 @@ static func _normalize_troop_entry(troop_name: String) -> String:
 			return "Ranger"
 		"mimic":
 			return "Mimic"
+		"necromancer", "skeletonmage", "skeleton_mage":
+			return "Necromancer"
+		"horror", "horrorevolution", "horror_evolution":
+			return "Horror"
+		"mechanicaldragon", "mechanical_dragon", "mechdragon":
+			return "MechanicalDragon"
+		"icegolem", "ice_golem":
+			return "IceGolem"
 		"demonking", "demon_king":
 			return "DemonKing"
 		"firedragon", "fire_dragon":
@@ -1407,7 +1441,7 @@ static func _troop_entry_level(troop_name: String, fallback_level: int = 1) -> i
 		var text: String = String(part).strip_edges()
 		if text.length() >= 2 and text.substr(0, 1).to_lower() == "l":
 			var parsed: int = int(text.substr(1))
-			if parsed >= 1 and parsed <= 4:
+			if parsed >= 1 and parsed <= 7:
 				return parsed
 	return fallback_level
 

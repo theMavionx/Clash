@@ -10,8 +10,8 @@ const BUILDING_DEFS = {
   town_hall: { size: [4, 4], hp_levels: [3500] },
   shark_trap: {
     size: [2, 2],
-    hp_levels: [1, 1, 1, 1, 1],
-    damage_levels: [500, 750, 1050, 1450, 2000],
+    hp_levels: [1, 1, 1, 1, 1, 1],
+    damage_levels: [500, 750, 1050, 1450, 2000, 2400],
     non_targetable: true,
   },
 };
@@ -70,7 +70,7 @@ const base = (trapLevel = 1) => [
   building(2, 'shark_trap', 3, 25, trapLevel),
 ];
 
-for (let level = 1; level <= 5; level++) {
+for (let level = 1; level <= 6; level++) {
   const ground = simulate(base(level), [deploy('Knight', 0)], { Knight: level });
   assert.equal(ground._sharkTrapsTriggered, 1, `level ${level} ground troop should trigger one trap`);
   assert.equal(ground.casualties.Knight, 1, `level ${level} trap should eliminate a same-level Knight`);
@@ -115,4 +115,4 @@ const twoTraps = simulate([
 assert.equal(twoTraps._sharkTrapsTriggered, 2, 'each trap should trigger independently');
 assert.equal(twoTraps.casualties.Knight, 2, 'two traps should eliminate two troops');
 
-console.log('[SHARK_TRAP_SERVER] PASS levels=1..5 mimic=consumed_immune air=ignored demon_hp=1024 two_traps=2');
+console.log('[SHARK_TRAP_SERVER] PASS levels=1..6 mimic=consumed_immune air=ignored demon_hp=1024 two_traps=2');

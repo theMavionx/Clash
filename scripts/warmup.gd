@@ -24,6 +24,22 @@ extends Node3D
 const HOME_WARMUP_FRAMES: int = 4
 const COMBAT_WARMUP_FRAMES: int = 6
 const FIRE_DRAGON_PREWARM_REPEAT_FRAMES: Array[int] = [4]
+const MECHANICAL_DRAGON_PREWARM_PHASES: Array[float] = [
+	0.08,
+	0.24,
+	0.42,
+	0.52,
+	0.70,
+	0.88,
+]
+const NECROMANCER_SUMMON_PREWARM_PHASES: Array[float] = [
+	0.0,
+	0.18,
+	0.42,
+	0.68,
+	0.86,
+	1.0,
+]
 ## Sub-pixel scales (< ~0.005) are frustum-culled by both renderers — the draw
 ## call never reaches the GPU and the pipeline isn't compiled. 0.02 is small
 ## enough to be invisible against the water/sky but big enough to rasterize.
@@ -48,6 +64,10 @@ var _runtime_warmup_nodes: Array[Node] = []
 var _combat_frames_elapsed: int = 0
 var _fire_dragon_warmup_inst: Node = null
 var _fire_dragon_repeat_index: int = 0
+var _mechanical_dragon_warmup_player: AnimationPlayer = null
+var _mechanical_dragon_phase_index: int = 0
+var _necromancer_warmup_inst: Node = null
+var _necromancer_phase_index: int = 0
 var _includes_combat_warmup: bool = false
 var _combat_assets_spawned: bool = false
 
@@ -119,6 +139,8 @@ func _process(_delta: float) -> void:
 		)
 		_last_report_ticks = now
 		_process_fire_dragon_prewarm_frames()
+		_process_mechanical_dragon_prewarm_frames()
+		_process_necromancer_prewarm_frames()
 	_frames_left -= 1
 	if mode != "combat":
 		var total: int = maxi(HOME_WARMUP_FRAMES, COMBAT_WARMUP_FRAMES) if _includes_combat_warmup else HOME_WARMUP_FRAMES
@@ -136,12 +158,12 @@ func _process(_delta: float) -> void:
 			_combat_warmup_done = true
 			_combat_warmup_active = false
 			_combat_warmup_node = null
+		# Some representatives are attached directly to the current combat scene
+		# so they render at the exact live scale. Remove them in both startup and
+		# fallback combat modes; freeing this warmup root cannot remove siblings.
+		visible = false
+		_clear_runtime_warmup_nodes()
 		if mode != "combat":
-			# Remove every warmup representative before React is allowed to drop
-			# the opaque loading cover. queue_free() alone is end-of-frame, which
-			# can expose one compiled representative on a fast loader transition.
-			visible = false
-			_clear_runtime_warmup_nodes()
 			_report_loading_progress(88, "home_warmup_done")
 		print(
 			"[WARMUP_PROFILE] finish mode=", mode,
@@ -182,6 +204,10 @@ func _spawn_combat_warmup_nodes() -> void:
 	_run_profiled_combat_step("troop_models_and_scripts", "_warmup_one_troop_glb")
 	_run_profiled_combat_step("demon_king", "_warmup_demon_king")
 	_run_profiled_combat_step("fire_dragon", "_warmup_fire_dragon_attack")
+	_run_profiled_combat_step("necromancer", "_warmup_necromancer")
+	_run_profiled_combat_step("horror_evolution", "_warmup_horror_evolution")
+	_run_profiled_combat_step("mechanical_dragon", "_warmup_mechanical_dragon")
+	_run_profiled_combat_step("ice_golem", "_warmup_ice_golem")
 	_run_profiled_combat_step("mage_tower", "_warmup_mage_tower")
 	_run_profiled_combat_step("flag", "_warmup_flag_glb")
 	_run_profiled_combat_step("ships", "_warmup_ship_glbs")
@@ -354,6 +380,28 @@ func _prewarm_troop_anim_libraries() -> void:
 		}
 	)
 	# Skeleton-guard rig (different cache key — scripts/skeleton_guard.gd).
+	BaseTroop.prewarm_anim_library(
+		[
+			"res://Model/Characters/Necromancer/Animations/necromancer_idle.fbx",
+			"res://Model/Characters/Necromancer/Animations/necromancer_move.fbx",
+			"res://Model/Characters/Necromancer/Animations/necromancer_attack.fbx",
+			"res://Model/Characters/Necromancer/Animations/necromancer_summon.fbx",
+			"res://Model/Characters/Necromancer/Animations/necromancer_hit.fbx",
+			"res://Model/Characters/Necromancer/Animations/necromancer_die.fbx",
+			"res://Model/Characters/Necromancer/Animations/necromancer_spawn.fbx",
+			"res://Model/Characters/Necromancer/Animations/necromancer_victory.fbx",
+		],
+		{
+			"res://Model/Characters/Necromancer/Animations/necromancer_idle.fbx": "Idle_A",
+			"res://Model/Characters/Necromancer/Animations/necromancer_move.fbx": "Running_A",
+			"res://Model/Characters/Necromancer/Animations/necromancer_attack.fbx": "Necromancer_Attack",
+			"res://Model/Characters/Necromancer/Animations/necromancer_summon.fbx": "Necromancer_Summon",
+			"res://Model/Characters/Necromancer/Animations/necromancer_hit.fbx": "GetHit",
+			"res://Model/Characters/Necromancer/Animations/necromancer_die.fbx": "Death_A",
+			"res://Model/Characters/Necromancer/Animations/necromancer_spawn.fbx": "Spawn_A",
+			"res://Model/Characters/Necromancer/Animations/necromancer_victory.fbx": "Cheering",
+		}
+	)
 	BaseTroop.prewarm_anim_library([
 		"res://Model/Characters/Skelet/Animations/gltf/Rig_Medium/Rig_Medium_General.glb",
 		"res://Model/Characters/Skelet/Animations/gltf/Rig_Medium/Rig_Medium_MovementBasic.glb",
@@ -647,6 +695,157 @@ func _warmup_fire_dragon_attack() -> void:
 	_warmup_fire_dragon_breath_materials()
 
 
+## Mechanical Dragon has a unique skinned model, FBX animation library, and
+## a batched additive chain-lightning effect. Draw the real effect once under
+## the loading cover so its ArrayMesh, transparency, particles, and materials
+## do not compile on the first live strike.
+func _warmup_mechanical_dragon() -> void:
+	if AttackSystem._troop_res_cache.is_empty():
+		AttackSystem._preload_combat_resources()
+	var entry: Dictionary = AttackSystem._troop_res_cache.get("MechanicalDragon", {})
+	var model_res: Resource = entry.get("model", null)
+	var script_res: Script = entry.get("script", null)
+	if model_res == null or script_res == null:
+		print("[WARMUP] MechanicalDragon resources missing - skipped")
+		return
+
+	var inst: Node3D = (model_res as PackedScene).instantiate()
+	inst.name = "WarmupMechanicalDragon"
+	inst.set_script(script_res)
+	# The warmup root is already scaled to 0.02. Applying the live 0.1 troop
+	# scale again made the effective model 0.002, below the renderer's culling
+	# threshold, so WebGL never submitted the skinned draw that compiles the
+	# Mechanical Dragon pipeline.
+	inst.scale = Vector3.ONE
+	_force_shadow_casting(inst)
+	add_child(inst)
+
+	var player := inst.get_node_or_null("TroopAnimPlayer") as AnimationPlayer
+	if player != null and player.has_animation("Lightning_Attack"):
+		player.callback_mode_process = AnimationMixer.ANIMATION_CALLBACK_MODE_PROCESS_MANUAL
+		player.play("Lightning_Attack")
+		_mechanical_dragon_warmup_player = player
+		_mechanical_dragon_phase_index = 0
+
+	if inst.has_method("prewarm_lightning_vfx"):
+		var warmed_vfx: Variant = inst.call("prewarm_lightning_vfx")
+		if warmed_vfx is Array:
+			for vfx in warmed_vfx:
+				if vfx is Node and is_instance_valid(vfx):
+					_runtime_warmup_nodes.append(vfx)
+		elif warmed_vfx is Node and is_instance_valid(warmed_vfx):
+			_runtime_warmup_nodes.append(warmed_vfx)
+
+	var animation_files: Variant = inst.get("anim_files")
+	var animation_aliases: Variant = inst.get("anim_file_aliases")
+	if animation_files is Array and animation_aliases is Dictionary:
+		BaseTroop.prewarm_anim_library(animation_files, animation_aliases)
+
+
+## Necromancer adds a custom FBX/material set, green projectile shader, summon
+## portal, and a second animated troop model. Exercise all of them while the
+## loading cover is visible so the first live summon does not compile mid-fight.
+func _warmup_necromancer() -> void:
+	if AttackSystem._troop_res_cache.is_empty():
+		AttackSystem._preload_combat_resources()
+	var entry: Dictionary = AttackSystem._troop_res_cache.get("Necromancer", {})
+	var model_res: Resource = entry.get("model", null)
+	var script_res: Script = entry.get("script", null)
+	if model_res == null or script_res == null:
+		print("[WARMUP] Necromancer resources missing - skipped")
+		return
+
+	var inst: Node3D = (model_res as PackedScene).instantiate()
+	inst.name = "WarmupNecromancer"
+	inst.set_script(script_res)
+	var necromancer_scale := AttackSystem._scale_for_troop("Necromancer", 0.1)
+	inst.set("_spawn_scale", necromancer_scale)
+	inst.scale = Vector3.ONE * necromancer_scale
+	_force_shadow_casting(inst)
+	add_child(inst)
+	_necromancer_warmup_inst = inst
+
+	var animation_files: Variant = inst.get("anim_files")
+	var animation_aliases: Variant = inst.get("anim_file_aliases")
+	if animation_files is Array and animation_aliases is Dictionary:
+		BaseTroop.prewarm_anim_library(animation_files, animation_aliases)
+	if inst.has_method("prewarm_necromancer_vfx"):
+		var warmed_nodes: Variant = inst.call("prewarm_necromancer_vfx")
+		if warmed_nodes is Array:
+			for warmed_node in warmed_nodes:
+				if warmed_node is Node and is_instance_valid(warmed_node):
+					_runtime_warmup_nodes.append(warmed_node)
+
+
+## The Horror changes mesh and animation library twice during combat. Warm all
+## three generations now so a lethal split cannot block the first battle frame.
+func _warmup_horror_evolution() -> void:
+	var script_res := load("res://scripts/horror_evolution.gd") as Script
+	if script_res == null:
+		print("[WARMUP] Horror script missing - skipped")
+		return
+	var stage_models: Array[String] = [
+		"res://Model/Characters/HorrorEvolution/horror.fbx",
+		"res://Model/Characters/HorrorEvolution/creeper.fbx",
+		"res://Model/Characters/HorrorEvolution/lurker.fbx",
+	]
+	var horror_scale := AttackSystem._scale_for_troop("Horror", 0.1)
+	for stage_index in range(stage_models.size()):
+		var model_res := load(stage_models[stage_index]) as PackedScene
+		if model_res == null:
+			print("[WARMUP] Horror stage missing: ", stage_models[stage_index])
+			continue
+		var inst := model_res.instantiate() as Node3D
+		inst.name = "WarmupHorrorStage%d" % stage_index
+		inst.set_script(script_res)
+		inst.set("evolution_stage", stage_index)
+		inst.set("_spawn_scale", horror_scale)
+		inst.scale = Vector3.ONE * horror_scale
+		_force_shadow_casting(inst)
+		add_child(inst)
+		var animation_files: Variant = inst.get("anim_files")
+		var animation_aliases: Variant = inst.get("anim_file_aliases")
+		if animation_files is Array and animation_aliases is Dictionary:
+			BaseTroop.prewarm_anim_library(animation_files, animation_aliases)
+
+
+## Ice Golem adds a skinned FBX, a custom smash/death animation set, and the
+## transparent radial/frost VFX. Exercise the real resources while the loading
+## cover is still visible so the first death does not compile them mid-battle.
+func _warmup_ice_golem() -> void:
+	if AttackSystem._troop_res_cache.is_empty():
+		AttackSystem._preload_combat_resources()
+	var entry: Dictionary = AttackSystem._troop_res_cache.get("IceGolem", {})
+	var model_res: Resource = entry.get("model", null)
+	var script_res: Script = entry.get("script", null)
+	if model_res == null or script_res == null:
+		print("[WARMUP] IceGolem resources missing - skipped")
+		return
+
+	var inst: Node3D = (model_res as PackedScene).instantiate()
+	inst.name = "WarmupIceGolem"
+	inst.set_script(script_res)
+	var golem_scale := AttackSystem._scale_for_troop("IceGolem", 0.1)
+	inst.scale = Vector3.ONE * golem_scale
+	_force_shadow_casting(inst)
+	add_child(inst)
+
+	var animation_files: Variant = inst.get("anim_files")
+	var animation_aliases: Variant = inst.get("anim_file_aliases")
+	if animation_files is Array and animation_aliases is Dictionary:
+		BaseTroop.prewarm_anim_library(animation_files, animation_aliases)
+
+	var vfx := IceFreezeVFX.new()
+	vfx.name = "WarmupIceFreezeVFX"
+	add_child(vfx)
+	vfx.show_freeze(
+		inst.global_position,
+		0.22,
+		0.18,
+		[{"node": inst, "server_id": -1, "show_overlay": true}]
+	)
+
+
 func _process_fire_dragon_prewarm_frames() -> void:
 	if _fire_dragon_warmup_inst == null or not is_instance_valid(_fire_dragon_warmup_inst):
 		return
@@ -661,6 +860,35 @@ func _process_fire_dragon_prewarm_frames() -> void:
 		_fire_dragon_warmup_inst.call("prewarm_fire_breath_vfx")
 	print("[WARMUP_PROFILE] dragon_repeat_done frame=", _combat_frames_elapsed, " step_ms=", Time.get_ticks_msec() - started)
 	_fire_dragon_repeat_index += 1
+
+
+func _process_mechanical_dragon_prewarm_frames() -> void:
+	if (
+		_mechanical_dragon_warmup_player == null
+		or not is_instance_valid(_mechanical_dragon_warmup_player)
+		or _mechanical_dragon_phase_index >= MECHANICAL_DRAGON_PREWARM_PHASES.size()
+	):
+		return
+	var animation := _mechanical_dragon_warmup_player.get_animation("Lightning_Attack")
+	if animation == null or animation.length <= 0.0:
+		return
+	var phase: float = MECHANICAL_DRAGON_PREWARM_PHASES[_mechanical_dragon_phase_index]
+	_mechanical_dragon_warmup_player.seek(animation.length * phase, true)
+	_mechanical_dragon_warmup_player.advance(0.0)
+	_mechanical_dragon_phase_index += 1
+
+
+func _process_necromancer_prewarm_frames() -> void:
+	if (
+		_necromancer_warmup_inst == null
+		or not is_instance_valid(_necromancer_warmup_inst)
+		or _necromancer_phase_index >= NECROMANCER_SUMMON_PREWARM_PHASES.size()
+	):
+		return
+	var phase: float = NECROMANCER_SUMMON_PREWARM_PHASES[_necromancer_phase_index]
+	if _necromancer_warmup_inst.has_method("advance_necromancer_prewarm"):
+		_necromancer_warmup_inst.call("advance_necromancer_prewarm", phase)
+	_necromancer_phase_index += 1
 
 
 func _warmup_fire_dragon_breath_materials() -> void:

@@ -27,6 +27,27 @@ const LEVEL_STATS := {
 		"ramp_time": 2.5,
 		"detect_range": 1.45,
 	},
+	4: {
+		"base_damage": 26,
+		"max_damage": 142,
+		"tick_rate": 0.14,
+		"ramp_time": 2.2,
+		"detect_range": 1.64,
+	},
+	5: {
+		"base_damage": 36,
+		"max_damage": 198,
+		"tick_rate": 0.12,
+		"ramp_time": 2.0,
+		"detect_range": 1.82,
+	},
+	6: {
+		"base_damage": 46,
+		"max_damage": 250,
+		"tick_rate": 0.11,
+		"ramp_time": 1.9,
+		"detect_range": 1.95,
+	},
 }
 
 @export var detect_range: float = 1.05
@@ -61,6 +82,7 @@ var ramp_time: float = 4.0
 var _target: Node3D = null
 var _target_search_timer: float = 0.0
 var _damage_tick: float = 0.0
+var _freeze_remaining: float = 0.0
 var _charge: float = 0.0
 var _beam_ready: bool = false
 
@@ -236,6 +258,11 @@ func _physics_process(delta: float) -> void:
 	delta = BaseTroop.combat_delta(delta)
 	if not _beam_ready:
 		return
+	if _freeze_remaining > 0.0:
+		_freeze_remaining = maxf(0.0, _freeze_remaining - delta)
+		_stop_attack_sfx()
+		_hide_beam()
+		return
 
 	if BaseTroop._get_troops_cached().size() == 0:
 		_drop_target()
@@ -257,6 +284,10 @@ func _physics_process(delta: float) -> void:
 		_hide_beam()
 
 	_animate_crystal(delta)
+
+
+func freeze_for(duration: float) -> void:
+	_freeze_remaining = maxf(_freeze_remaining, maxf(0.0, duration))
 
 
 func _process_beam_damage(delta: float) -> void:

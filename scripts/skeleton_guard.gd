@@ -30,6 +30,7 @@ const LEVEL_STATS: Dictionary = {
 	2: {"hp": 520, "damage": 60, "atk_speed": 0.74, "move_speed": 0.52, "detection_radius": 1.10},
 	3: {"hp": 620, "damage": 72, "atk_speed": 0.70, "move_speed": 0.54, "detection_radius": 1.25},
 	4: {"hp": 820, "damage": 96, "atk_speed": 0.64, "move_speed": 0.58, "detection_radius": 1.40},
+	5: {"hp": 1050, "damage": 122, "atk_speed": 0.60, "move_speed": 0.60, "detection_radius": 1.52},
 }
 
 var level: int = 2
@@ -89,6 +90,7 @@ var _attack_timer: float = 0.0
 var _target_troop: Node3D = null
 var _hit_this_swing: bool = false
 var _is_dead: bool = false
+var _freeze_remaining: float = 0.0
 
 var _sep_counter: int = 0
 var _last_separation: Vector3 = Vector3.ZERO
@@ -158,6 +160,11 @@ func _physics_process(delta: float) -> void:
 		return
 	delta = BaseTroop.combat_delta(delta)
 	_update_hp_bar()
+	if _freeze_remaining > 0.0:
+		_freeze_remaining = maxf(0.0, _freeze_remaining - delta)
+		if anim_player and anim_player.has_animation("Idle_A") and anim_player.current_animation != "Idle_A":
+			anim_player.play("Idle_A")
+		return
 	match state:
 		State.IDLE:
 			_do_idle(delta)
@@ -171,6 +178,10 @@ func _physics_process(delta: float) -> void:
 			pass
 		State.RELOCATE:
 			_do_relocate(delta)
+
+
+func freeze_for(duration: float) -> void:
+	_freeze_remaining = maxf(_freeze_remaining, maxf(0.0, duration))
 
 
 # ── Idle: stand for a bit, then pick patrol target ────────────
