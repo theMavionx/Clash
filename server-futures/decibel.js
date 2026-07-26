@@ -970,6 +970,8 @@ async function fetchDecibelRows(path, query = {}) {
       if (!r.ok) {
         const body = await r.text().catch(() => '');
         lastError = new Error(`Decibel ${path} failed: ${r.status} ${body || r.statusText}`);
+        lastError.status = r.status;
+        lastError.body = body;
         if (attempt < 2 && DECIBEL_RETRY_STATUSES.has(r.status)) {
           await decibelSleep(250 * (attempt + 1));
           continue;
@@ -982,6 +984,9 @@ async function fetchDecibelRows(path, query = {}) {
       if (Array.isArray(j?.data)) return j.data;
       if (Array.isArray(j?.items)) return j.items;
       if (Array.isArray(j?.data?.items)) return j.data.items;
+      // Decibel returns account_overviews as one object, while the other
+      // read endpoints return arrays. Preserve the rows contract for callers.
+      if (path === 'account_overviews' && j && typeof j === 'object') return [j];
       return [];
     } catch (err) {
       lastError = err;
@@ -1172,8 +1177,9 @@ async function fetchAccountOverview(subaccountAddr, options = {}) {
       include_performance: options.includePerformance ? 'true' : undefined,
     });
     return rows[0] || null;
-  } catch {
-    return null;
+  } catch (error) {
+    if (Number(error?.status) === 404) return null;
+    throw error;
   }
 }
 

@@ -16,6 +16,11 @@ The server and parts of the browser client were configured around one static
 Aptos API key. There was no shared key pool, cooldown, or retry on an alternate
 credential after an authentication, quota, or rate-limit response.
 
+The Decibel `account_overviews` endpoint also returns a single JSON object, but
+the server reader only accepted array-shaped responses. A successful rotated
+request was therefore converted to `null`, exposed as HTTP 404, and the browser
+fell back to the public SDK endpoint where no server-side key pool exists.
+
 ### Fix
 - Keep the primary key in `DECIBEL_API_KEY` and load additional server-only keys
   from `DECIBEL_API_KEYS`.
@@ -26,6 +31,8 @@ credential after an authentication, quota, or rate-limit response.
 - Route recurring browser reads through authenticated server endpoints so the
   failover keys are never embedded in the web bundle.
 - Preserve the existing direct browser read as a compatibility fallback.
+- Accept the singleton `account_overviews` response and only treat a real 404 as
+  a missing Decibel account; quota failures now remain retryable server errors.
 - Use the same pool for the admin Decibel `account_overviews` earnings read.
 
 ### Testing
@@ -35,6 +42,8 @@ credential after an authentication, quota, or rate-limit response.
   second credential completed the Aptos request with HTTP 200.
 - Every new credential returned HTTP 200 from both Aptos fullnode and Decibel
   markets endpoints.
+- Account regression test confirms a MonthlyBudget 429 rotates to the next key
+  and returns the singleton balance payload instead of a false 404.
 - Node syntax checks, web lint, production web build, and diff whitespace check.
 - Admin earnings regression test forces MonthlyBudget HTTP 429 on the primary
   key and confirms the same request succeeds through the next pool key.
