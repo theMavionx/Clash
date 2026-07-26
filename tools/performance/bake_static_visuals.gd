@@ -115,6 +115,11 @@ const BAKE_CONFIGS: Array[Dictionary] = [
 		"output": "res://generated/performance/town_hall_level_5_static_batch.res",
 		"variant_level": 0,
 	},
+	{
+		"source": "res://Model/Town_Hall/Town Hall Level 6.glb",
+		"output": "res://generated/performance/town_hall_level_6_static_batch.res",
+		"variant_level": 0,
+	},
 ]
 
 

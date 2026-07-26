@@ -20,6 +20,10 @@ var _attack_counts: Dictionary = {}
 var _attack_levels: Dictionary = {}
 var _attack_count_labels: Dictionary = {}
 var _attack_level_labels: Dictionary = {}
+var _attack_loadout_box: VBoxContainer
+var _test_ship_level_label: Label
+var _test_ship_capacity_label: Label
+var _test_attack_ship_level: int = 1
 var _fps_profile_active: bool = false
 var _speed_label: Label
 var _demon_color_preview_root: Node3D
@@ -29,45 +33,20 @@ var _model_scale_sliders: Dictionary = {}
 var _model_scale_base_values: Dictionary = {}
 var _model_scale_multipliers: Dictionary = {}
 
-const MAX_VILLAGE_BUILD_ORDER: Array[String] = [
-	"town_hall",
-	"mine",
-	"sawmill",
-	"barn",
-	"storage",
-	"tombstone",
-	"altar",
-	"archer_tower",
-	"turret",
-	"shark_trap",
-	"mage_tower",
-	"mortar",
+const TEST_ATTACK_PREFERRED_ORDER: Array[String] = [
+	"Knight",
+	"Mage",
+	"Archer",
+	"PeaShooter",
+	"Mimic",
+	"Necromancer",
+	"Horror",
+	"MechanicalDragon",
+	"IceGolem",
+	"WindMage",
+	"DemonKing",
+	"FireDragon",
 ]
-
-const TEST_TH_MAX_COUNT: Dictionary = {
-	"mine": [1, 2, 3, 3, 4],
-	"sawmill": [1, 2, 3, 3, 4],
-	"barn": [1, 1, 1, 1, 1],
-	"archer_tower": [1, 2, 3, 3, 3],
-	"tombstone": [0, 1, 3, 3, 3],
-	"altar": [1, 1, 1, 1, 1],
-	"turret": [0, 0, 3, 3, 3],
-	"shark_trap": [0, 0, 1, 1, 2],
-	"storage": [0, 1, 2, 3, 4],
-	"mage_tower": [0, 0, 0, 2, 2],
-	"mortar": [0, 0, 0, 0, 1],
-	"town_hall": [1, 1, 1, 1, 1],
-}
-
-const TEST_ATTACK_TROOPS: Array[String] = ["Knight", "Mage", "Archer", "DemonKing", "FireDragon"]
-const TEST_ATTACK_MAX_LEVEL: Dictionary = {
-	"Knight": 7,
-	"Mage": 7,
-	"Archer": 7,
-	"DemonKing": 7,
-	"FireDragon": 7,
-}
-const TEST_ATTACK_SHIP_LEVEL: int = 3
 const FPS_PROFILE_IDLE_SECONDS: float = 6.0
 const FPS_PROFILE_COMBAT_SECONDS: float = 12.0
 const FPS_PROFILE_SETTLE_SECONDS: float = 2.0
@@ -86,20 +65,10 @@ const DEMON_COLOR_TEST_VARIANTS: Array[Dictionary] = [
 
 
 func _core_layout() -> Array:
-	return [
-		{"grid": "main", "id": "town_hall", "pos": Vector2i(11, 10)},
-		{"grid": "main", "id": "mine", "pos": Vector2i(4, 5)},
-		{"grid": "main", "id": "sawmill", "pos": Vector2i(8, 5)},
-		{"grid": "main", "id": "barn", "pos": Vector2i(15, 5)},
-		{"grid": "main", "id": "storage", "pos": Vector2i(3, 12)},
-		{"grid": "main", "id": "tombstone", "pos": Vector2i(8, 13)},
-		{"grid": "main", "id": "altar", "pos": Vector2i(12, 15)},
-		{"grid": "main", "id": "archer_tower", "pos": Vector2i(15, 13)},
-		{"grid": "main", "id": "turret", "pos": Vector2i(20, 10)},
-		{"grid": "main", "id": "shark_trap", "pos": Vector2i(22, 10)},
-		{"grid": "main", "id": "mage_tower", "pos": Vector2i(20, 15)},
-		{"grid": "main", "id": "mortar", "pos": Vector2i(23, 13)},
-	]
+	var layout: Array = []
+	for building_id in _active_building_ids():
+		layout.append({"id": building_id, "pos": Vector2i.ZERO})
+	return layout
 
 
 func _ready() -> void:
@@ -120,6 +89,10 @@ func _ready() -> void:
 		call_deferred("_capture_archer_tower_test")
 	if OS.get_cmdline_user_args().has("--verify-archer-tower-combat"):
 		call_deferred("_verify_archer_tower_combat")
+	if OS.get_cmdline_user_args().has("--verify-pirate-archer-combat"):
+		call_deferred("_verify_pirate_archer_combat")
+	if OS.get_cmdline_user_args().has("--capture-troop-scale-comparison"):
+		call_deferred("_capture_troop_scale_comparison")
 	if OS.get_cmdline_user_args().has("--verify-shark-trap"):
 		call_deferred("_verify_shark_trap")
 	if OS.get_cmdline_user_args().has("--verify-ambient-shark-route"):
@@ -128,6 +101,12 @@ func _ready() -> void:
 		call_deferred("_verify_water_material_parity")
 	if OS.get_cmdline_user_args().has("--capture-resource-collection-feedback"):
 		call_deferred("_capture_resource_collection_feedback")
+	if OS.get_cmdline_user_args().has("--capture-th6-village"):
+		call_deferred("_capture_th6_village")
+	if OS.get_cmdline_user_args().has("--verify-test-scene-parity"):
+		call_deferred("_verify_test_scene_parity")
+	if OS.get_cmdline_user_args().has("--verify-test-scene-mixed-combat"):
+		call_deferred("_verify_test_scene_mixed_combat")
 	if OS.get_cmdline_user_args().has("--verify-collect-icons-during-move"):
 		call_deferred("_verify_collect_icons_during_move")
 	if OS.get_cmdline_user_args().has("--verify-main-ship-motion"):
@@ -538,7 +517,7 @@ func _create_panel() -> void:
 	max_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	max_row.add_theme_constant_override("separation", 6)
 	vbox.add_child(max_row)
-	for th_level in range(1, 6):
+	for th_level in range(1, _max_supported_town_hall_level() + 1):
 		var btn := Button.new()
 		btn.text = str(th_level)
 		btn.custom_minimum_size = Vector2(42, 38)
@@ -606,21 +585,76 @@ func _add_attack_loadout_controls(vbox: VBoxContainer) -> void:
 	attack_label.add_theme_font_size_override("font_size", 17)
 	vbox.add_child(attack_label)
 
-	var attack_box := VBoxContainer.new()
-	attack_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	attack_box.add_theme_constant_override("separation", 5)
-	vbox.add_child(attack_box)
+	var ship_row := HBoxContainer.new()
+	ship_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	ship_row.add_theme_constant_override("separation", 5)
+	vbox.add_child(ship_row)
 
-	for troop_name in TEST_ATTACK_TROOPS:
-		_attack_counts[troop_name] = 0
-		_attack_levels[troop_name] = int(TEST_ATTACK_MAX_LEVEL.get(troop_name, 4))
+	var ship_label := Label.new()
+	ship_label.text = "Main Ship"
+	ship_label.custom_minimum_size = Vector2(96, 32)
+	ship_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	ship_label.add_theme_font_size_override("font_size", 14)
+	ship_row.add_child(ship_label)
+
+	_test_attack_ship_level = _max_test_ship_level()
+	ship_row.add_child(_small_button("L-", Callable(self, "_change_test_ship_level").bind(-1)))
+	_test_ship_level_label = Label.new()
+	_test_ship_level_label.custom_minimum_size = Vector2(42, 32)
+	_test_ship_level_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_test_ship_level_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_test_ship_level_label.add_theme_font_size_override("font_size", 14)
+	ship_row.add_child(_test_ship_level_label)
+	ship_row.add_child(_small_button("L+", Callable(self, "_change_test_ship_level").bind(1)))
+
+	_test_ship_capacity_label = Label.new()
+	_test_ship_capacity_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_test_ship_capacity_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_test_ship_capacity_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_test_ship_capacity_label.add_theme_font_size_override("font_size", 14)
+	ship_row.add_child(_test_ship_capacity_label)
+
+	_attack_loadout_box = VBoxContainer.new()
+	_attack_loadout_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_attack_loadout_box.add_theme_constant_override("separation", 5)
+	vbox.add_child(_attack_loadout_box)
+	call_deferred("_populate_attack_loadout_rows")
+
+	var presets := HBoxContainer.new()
+	presets.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	presets.add_theme_constant_override("separation", 6)
+	vbox.add_child(presets)
+	presets.add_child(_small_button("Clear", clear_test_attack_loadout))
+	presets.add_child(_small_button("Mixed x1", mixed_test_attack_loadout))
+	presets.add_child(_small_button("Load Ship", load_test_attack_army))
+	presets.add_child(_small_button("Attack", start_test_attack))
+	presets.add_child(_small_button("FPS Test", run_mixed_fps_profile))
+	_refresh_test_ship_row()
+
+
+func _populate_attack_loadout_rows() -> void:
+	if not _attack_loadout_box:
+		return
+	var troops: Array[String] = _test_attack_troops()
+	if troops.is_empty():
+		call_deferred("_populate_attack_loadout_rows")
+		return
+	for child in _attack_loadout_box.get_children():
+		child.queue_free()
+	_attack_count_labels.clear()
+	_attack_level_labels.clear()
+
+	for troop_name in troops:
+		_attack_counts[troop_name] = int(_attack_counts.get(troop_name, 0))
+		_attack_levels[troop_name] = int(_attack_levels.get(troop_name, _test_attack_max_level(troop_name)))
 		var row := HBoxContainer.new()
+		row.set_meta("troop_name", troop_name)
 		row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		row.add_theme_constant_override("separation", 4)
-		attack_box.add_child(row)
+		_attack_loadout_box.add_child(row)
 
 		var name_label := Label.new()
-		name_label.text = troop_name
+		name_label.text = _test_troop_display_name(troop_name)
 		name_label.custom_minimum_size = Vector2(96, 32)
 		name_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		name_label.add_theme_font_size_override("font_size", 14)
@@ -646,15 +680,7 @@ func _add_attack_loadout_controls(vbox: VBoxContainer) -> void:
 		_attack_level_labels[troop_name] = level_label
 		row.add_child(_small_button("L+", Callable(self, "_change_attack_level").bind(troop_name, 1)))
 		_refresh_attack_row(troop_name)
-
-	var presets := HBoxContainer.new()
-	presets.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	presets.add_theme_constant_override("separation", 6)
-	vbox.add_child(presets)
-	presets.add_child(_small_button("Clear", clear_test_attack_loadout))
-	presets.add_child(_small_button("Mixed x1", mixed_test_attack_loadout))
-	presets.add_child(_small_button("Start", start_test_attack))
-	presets.add_child(_small_button("FPS Test", run_mixed_fps_profile))
+	_refresh_test_ship_row()
 
 
 func _add_speed_controls(vbox: VBoxContainer) -> void:
@@ -726,16 +752,7 @@ func _populate_model_scale_controls() -> void:
 	_model_scale_base_values.clear()
 	_model_scale_multipliers.clear()
 
-	var ids: Array[String] = []
-	for building_id in MAX_VILLAGE_BUILD_ORDER:
-		if not ids.has(building_id):
-			ids.append(building_id)
-	var source_ids: Array = main_bs.building_defs.keys()
-	source_ids.sort()
-	for raw_id in source_ids:
-		var building_id := String(raw_id)
-		if not ids.has(building_id):
-			ids.append(building_id)
+	var ids: Array[String] = _active_building_ids()
 
 	for building_id in ids:
 		var bs: Node = _building_system_for_building(building_id)
@@ -1383,14 +1400,15 @@ func _capture_archer_tower_test() -> void:
 	var def: Dictionary = bs.building_defs.get("archer_tower", {})
 	var grid_positions: Array[Vector2i] = [
 		Vector2i(2, 10),
-		Vector2i(7, 10),
-		Vector2i(12, 10),
-		Vector2i(17, 10),
+		Vector2i(6, 10),
+		Vector2i(10, 10),
+		Vector2i(14, 10),
+		Vector2i(18, 10),
 		Vector2i(22, 10),
 	]
 	var tower_centers: Array[Vector3] = []
 	var max_center_delta := 0.0
-	for level in range(1, 6):
+	for level in range(1, 7):
 		var grid_pos := grid_positions[level - 1]
 		bs._spawn_building_locally("archer_tower", grid_pos, def, -1)
 		await get_tree().process_frame
@@ -1405,7 +1423,7 @@ func _capture_archer_tower_test() -> void:
 		var visual_model: Node3D = bs._get_building_visual_model(building_node)
 		var tower_unit: Node3D = building.get("tower_unit_node", null)
 		var tower_aabb := _world_mesh_aabb(visual_model)
-		var unit_aabb := _world_mesh_aabb(tower_unit)
+		var unit_aabb := _world_mesh_aabb(tower_unit, ["BowAttachment", "ArrowAttachment"])
 		var center_delta := Vector2(
 			unit_aabb.get_center().x - tower_aabb.get_center().x,
 			unit_aabb.get_center().z - tower_aabb.get_center().z
@@ -1676,12 +1694,14 @@ func _save_resource_collection_capture(path: String, label: String) -> bool:
 	return true
 
 
-func _world_mesh_aabb(root: Node) -> AABB:
+func _world_mesh_aabb(root: Node, excluded_ancestors: Array[String] = []) -> AABB:
 	var merged := AABB()
 	var first := true
 	if root == null:
 		return merged
 	for mesh_instance in _mesh_instances_below(root):
+		if _has_named_ancestor_below(mesh_instance, root, excluded_ancestors):
+			continue
 		var local_aabb: AABB = mesh_instance.get_aabb()
 		for ix in range(2):
 			for iy in range(2):
@@ -1694,6 +1714,15 @@ func _world_mesh_aabb(root: Node) -> AABB:
 					else:
 						merged = merged.expand(world_corner)
 	return merged
+
+
+func _has_named_ancestor_below(node: Node, root: Node, names: Array[String]) -> bool:
+	var current := node
+	while current != null and current != root:
+		if names.has(String(current.name)):
+			return true
+		current = current.get_parent()
+	return false
 
 
 func _mesh_instances_below(root: Node) -> Array[MeshInstance3D]:
@@ -1789,6 +1818,200 @@ func _verify_archer_tower_combat() -> void:
 		" elapsed=", snappedf(combat_wait, 0.001),
 		" tower_state=", tower_unit.get("state")
 	)
+	get_tree().quit()
+
+
+func _verify_pirate_archer_combat() -> void:
+	var bs := _building_system_for_building("mine")
+	var attack := get_node_or_null("../AttackSystem")
+	if bs == null or attack == null:
+		push_error("Pirate Archer combat test failed: combat nodes are missing.")
+		get_tree().quit(1)
+		return
+	reset_sandbox()
+	await get_tree().process_frame
+	if not await spawn_building_level("mine", 1):
+		push_error("Pirate Archer combat test failed: target building did not spawn.")
+		get_tree().quit(1)
+		return
+	var target: Dictionary = {}
+	for candidate in bs.placed_buildings:
+		if str(candidate.get("id", "")) == "mine":
+			target = candidate
+			break
+	if target.is_empty():
+		push_error("Pirate Archer combat test failed: target state is missing.")
+		get_tree().quit(1)
+		return
+	var target_node: Node3D = target.get("node", null)
+	if target_node == null:
+		push_error("Pirate Archer combat test failed: target node is missing.")
+		get_tree().quit(1)
+		return
+
+	attack._spawn_troops_at_pos(["Archer"], {}, target_node.global_position + Vector3(0.60, 0.0, 0.0))
+	var troop: Node = null
+	var spawn_wait := 0.0
+	while troop == null and spawn_wait < 2.0:
+		await get_tree().process_frame
+		spawn_wait += get_process_delta_time()
+		for candidate in get_tree().get_nodes_in_group("troops"):
+			if BaseTroop.is_live_troop(candidate) and bool(candidate.get_meta("clash_pirate_archer", false)):
+				troop = candidate
+				break
+	if troop == null:
+		push_error("Pirate Archer combat test failed: troop did not activate.")
+		get_tree().quit(1)
+		return
+	if not bool(troop.get_meta("clash_pirate_archer", false)):
+		push_error("Pirate Archer combat test failed: legacy visual was spawned.")
+		get_tree().quit(1)
+		return
+	var expected_scale := AttackSystem._scale_for_troop("Archer", attack.troop_scale)
+	if not is_equal_approx(float(troop._spawn_scale), expected_scale):
+		push_error(
+			"Pirate Archer combat test failed: expected spawn scale %.3f, got %.3f."
+			% [expected_scale, float(troop._spawn_scale)]
+		)
+		get_tree().quit(1)
+		return
+	var player := troop.get_node_or_null("TroopAnimPlayer") as AnimationPlayer
+	if player == null or not player.has_animation("Ranged_Bow_Release"):
+		push_error("Pirate Archer combat test failed: attack animation is unavailable.")
+		get_tree().quit(1)
+		return
+
+	var initial_hp := int(target.get("hp", 0))
+	var projectile_seen := false
+	var combat_wait := 0.0
+	while int(target.get("hp", initial_hp)) >= initial_hp and combat_wait < 4.0:
+		await get_tree().process_frame
+		combat_wait += get_process_delta_time()
+		var active_projectiles: Variant = troop.get("_active")
+		if active_projectiles is Array and not active_projectiles.is_empty():
+			projectile_seen = true
+	var remaining_hp := int(target.get("hp", initial_hp))
+	if remaining_hp >= initial_hp:
+		push_error("Pirate Archer combat test failed: target HP stayed at %d." % initial_hp)
+		get_tree().quit(1)
+		return
+	if not projectile_seen:
+		push_error("Pirate Archer combat test failed: no arrow projectile was observed.")
+		get_tree().quit(1)
+		return
+	print(
+		"[PIRATE_ARCHER_COMBAT] PASS initial_hp=", initial_hp,
+		" remaining_hp=", remaining_hp,
+		" damage=", initial_hp - remaining_hp,
+		" elapsed=", snappedf(combat_wait, 0.001),
+		" animation=", player.current_animation
+	)
+	get_tree().quit()
+
+
+func _capture_troop_scale_comparison() -> void:
+	var scene := get_tree().current_scene
+	var attack := get_node_or_null("../AttackSystem")
+	if scene == null or attack == null:
+		push_error("Troop scale comparison failed: AttackSystem is missing.")
+		get_tree().quit(1)
+		return
+	reset_sandbox()
+	await get_tree().process_frame
+	attack._spawn_troops_at_pos(["Knight", "Mage", "Archer", "Mimic"], {}, Vector3.ZERO)
+
+	var knight: Node3D = null
+	var mage: Node3D = null
+	var archer: Node3D = null
+	var mimic: Node3D = null
+	var spawn_wait := 0.0
+	while (knight == null or mage == null or archer == null or mimic == null) and spawn_wait < 3.0:
+		await get_tree().process_frame
+		spawn_wait += get_process_delta_time()
+		for candidate in get_tree().get_nodes_in_group("troops"):
+			if not BaseTroop.is_live_troop(candidate):
+				continue
+			var script: Script = candidate.get_script() as Script
+			var script_path := String(script.resource_path) if script != null else ""
+			if script_path.ends_with("/knight.gd"):
+				knight = candidate as Node3D
+			elif script_path.ends_with("/mage.gd"):
+				mage = candidate as Node3D
+			elif script_path.ends_with("/archer.gd"):
+				archer = candidate as Node3D
+			elif script_path.ends_with("/mimic.gd"):
+				mimic = candidate as Node3D
+	if knight == null or mage == null or archer == null or mimic == null:
+		push_error("Troop scale comparison failed: combat troops did not spawn.")
+		get_tree().quit(1)
+		return
+
+	for troop in [knight, mage, archer, mimic]:
+		troop.set_process(false)
+		troop.set_physics_process(false)
+	var ground_y := maxf(maxf(knight.global_position.y, mage.global_position.y), maxf(archer.global_position.y, mimic.global_position.y))
+	var comparison_troops: Array[Node3D] = [knight, mage, archer, mimic]
+	var comparison_x: Array[float] = [-0.72, -0.24, 0.24, 0.72]
+	for index in comparison_troops.size():
+		comparison_troops[index].global_position = Vector3(comparison_x[index], ground_y, 0.0)
+		comparison_troops[index].rotation = Vector3.ZERO
+
+	_hide_capture_canvas_items(scene)
+	var old_camera := get_viewport().get_camera_3d()
+	if old_camera:
+		old_camera.current = false
+	var camera := Camera3D.new()
+	camera.name = "TroopScaleComparisonCamera"
+	camera.projection = Camera3D.PROJECTION_ORTHOGONAL
+	camera.size = 1.25
+	scene.add_child(camera)
+	var target := Vector3(0.0, ground_y + 0.13, 0.0)
+	camera.global_position = target + Vector3(0.0, 2.2, 1.8)
+	camera.look_at(target, Vector3.UP)
+	camera.current = true
+
+	await get_tree().create_timer(0.25).timeout
+	var knight_aabb := _world_mesh_aabb(knight)
+	var mage_aabb := _world_mesh_aabb(mage)
+	var archer_aabb := _world_mesh_aabb(archer, ["BowAttachment", "ArrowAttachment"])
+	var mimic_aabb := _world_mesh_aabb(mimic)
+	var expected_archer_scale := AttackSystem._scale_for_troop("Archer", attack.troop_scale)
+	var expected_mimic_scale := AttackSystem._scale_for_troop("Mimic", attack.troop_scale)
+	print(
+		"[TROOP_SCALE_COMPARISON] knight_scale=", knight._spawn_scale,
+		" knight_height=", snappedf(knight_aabb.size.y, 0.0001),
+		" mage_scale=", mage._spawn_scale,
+		" mage_height=", snappedf(mage_aabb.size.y, 0.0001),
+		" archer_scale=", archer._spawn_scale,
+		" expected_archer_scale=", expected_archer_scale,
+		" archer_height=", snappedf(archer_aabb.size.y, 0.0001),
+		" mimic_scale=", mimic._spawn_scale,
+		" expected_mimic_scale=", expected_mimic_scale,
+		" mimic_height=", snappedf(mimic_aabb.size.y, 0.0001)
+	)
+	if not is_equal_approx(float(archer._spawn_scale), expected_archer_scale):
+		push_error("Troop scale comparison failed: Archer multiplier was not applied.")
+		get_tree().quit(1)
+		return
+	if not is_equal_approx(float(mimic._spawn_scale), expected_mimic_scale):
+		push_error("Troop scale comparison failed: Mimic multiplier was not applied.")
+		get_tree().quit(1)
+		return
+
+	var output_dir := ProjectSettings.globalize_path("user://")
+	for arg in OS.get_cmdline_user_args():
+		var text := String(arg)
+		if text.begins_with("--capture-out-dir="):
+			output_dir = text.get_slice("=", 1)
+	DirAccess.make_dir_recursive_absolute(output_dir)
+	var output_path := output_dir.path_join("troop_scale_comparison.png")
+	await RenderingServer.frame_post_draw
+	var err := get_viewport().get_texture().get_image().save_png(output_path)
+	if err != OK:
+		push_error("Troop scale comparison capture failed: %s" % error_string(err))
+		get_tree().quit(1)
+		return
+	print("[TROOP_SCALE_COMPARISON] capture=", output_path)
 	get_tree().quit()
 
 
@@ -1939,6 +2162,73 @@ func _verify_shark_trap() -> void:
 	_clear_shark_test_troops()
 	await get_tree().process_frame
 	battle.is_viewing_enemy = true
+	var mimic_grid := Vector2i(12, 12)
+	bs._spawn_building_locally("shark_trap", mimic_grid, trap_def, -4)
+	await get_tree().process_frame
+	var mimic_trap := _last_building_at(bs, "shark_trap", mimic_grid)
+	var mimic_trap_node := mimic_trap.get("node") as Node3D
+	_set_building_level_immediate(bs, mimic_trap, trap_def, 5)
+	bs.troop_levels["Mimic"] = 1
+	if mimic_trap_node == null or not attack._spawn_manual_troop("Mimic", 1, mimic_trap_node.global_position, 3):
+		push_error("Shark Trap test failed: Mimic did not spawn.")
+		get_tree().quit(1)
+		return
+	var live_mimic: Node3D = null
+	for troop in get_tree().get_nodes_in_group("troops"):
+		if BaseTroop.is_live_troop(troop) and troop.has_method("_get_troop_name") and str(troop.call("_get_troop_name")) == "Mimic":
+			live_mimic = troop as Node3D
+			break
+	if live_mimic == null:
+		push_error("Shark Trap test failed: Mimic could not be resolved.")
+		get_tree().quit(1)
+		return
+	var mimic_anim := live_mimic.get("anim_player") as AnimationPlayer
+	for required_anim in ["Idle_A", "Running_A", "Tongue_Attack", "GetHit", "Die"]:
+		if mimic_anim == null or not mimic_anim.has_animation(required_anim):
+			push_error("Mimic test failed: required animation is missing: %s" % required_anim)
+			get_tree().quit(1)
+			return
+	var mimic_hp_before := int(live_mimic.get("hp"))
+	var mimic_trigger_wait := 0.0
+	while not bool(mimic_trap_node.get_meta("trap_spent", false)) and mimic_trigger_wait < 1.2:
+		await get_tree().physics_frame
+		mimic_trigger_wait += get_physics_process_delta_time()
+	if not bool(mimic_trap_node.get_meta("trap_spent", false)):
+		push_error("Shark Trap test failed: Mimic did not consume the trap.")
+		get_tree().quit(1)
+		return
+	if not BaseTroop.is_live_troop(live_mimic) or int(live_mimic.get("hp")) != mimic_hp_before:
+		push_error("Shark Trap test failed: Mimic took damage from the consumed trap.")
+		get_tree().quit(1)
+		return
+	live_mimic.set_physics_process(false)
+	live_mimic.set("state", BaseTroop.State.RUNNING)
+	mimic_anim.play("Running_A")
+	if BaseTroop.can_defense_target_troop(live_mimic, true, true):
+		push_error("Mimic test failed: rolling Mimic is targetable by defenses.")
+		get_tree().quit(1)
+		return
+	_frame_shark_test_camera(mimic_trap_node.global_position, 1.8)
+	await get_tree().create_timer(0.12).timeout
+	await _hold_shark_web_capture()
+	if not await _save_shark_test_capture(output_dir.path_join("03-mimic-immune.png"), "mimic-immune"):
+		get_tree().quit(1)
+		return
+	live_mimic.set("state", BaseTroop.State.ATTACKING)
+	if not BaseTroop.can_defense_target_troop(live_mimic, true, true):
+		push_error("Mimic test failed: attacking Mimic is not targetable by defenses.")
+		get_tree().quit(1)
+		return
+	live_mimic.set_physics_process(true)
+	if OS.get_cmdline_user_args().has("--verify-mimic-only"):
+		print("[MIMIC_CLIENT] PASS trap=consumed damage=0 rolling=untargetable attacking=targetable animations=complete output=", output_dir)
+		get_tree().quit()
+		return
+
+	reset_sandbox()
+	_clear_shark_test_troops()
+	await get_tree().process_frame
+	battle.is_viewing_enemy = true
 	var air_grid := Vector2i(17, 12)
 	bs._spawn_building_locally("shark_trap", air_grid, trap_def, -2)
 	await get_tree().process_frame
@@ -1964,7 +2254,7 @@ func _verify_shark_trap() -> void:
 		return
 	_frame_shark_test_camera(air_node.global_position, 2.2)
 	await _hold_shark_web_capture()
-	if not await _save_shark_test_capture(output_dir.path_join("03-air-ignored.png"), "air-ignored"):
+	if not await _save_shark_test_capture(output_dir.path_join("04-air-ignored.png"), "air-ignored"):
 		get_tree().quit(1)
 		return
 
@@ -2003,7 +2293,7 @@ func _verify_shark_trap() -> void:
 	await get_tree().create_timer(0.30).timeout
 	_frame_shark_test_camera(demon_node.global_position, 2.0)
 	await _hold_shark_web_capture()
-	if not await _save_shark_test_capture(output_dir.path_join("04-demon-king-damaged.png"), "demon-king-damaged"):
+	if not await _save_shark_test_capture(output_dir.path_join("05-demon-king-damaged.png"), "demon-king-damaged"):
 		get_tree().quit(1)
 		return
 	if not ambient.has_method("is_water_lane_clear") or not bool(ambient.call("is_water_lane_clear", 360)):
@@ -2012,10 +2302,10 @@ func _verify_shark_trap() -> void:
 		return
 	_frame_ambient_shark_camera(ambient.global_position, 3.2)
 	await _hold_shark_web_capture()
-	if not await _save_shark_test_capture(output_dir.path_join("05-ambient-shark.png"), "ambient"):
+	if not await _save_shark_test_capture(output_dir.path_join("06-ambient-shark.png"), "ambient"):
 		get_tree().quit(1)
 		return
-	print("[SHARK_TRAP_CLIENT] PASS ground=instant-kill alignment=", snappedf(alignment_error, 0.0001), " air=ignored demon_hp=1024 ambient=conditional output=", output_dir)
+	print("[SHARK_TRAP_CLIENT] PASS ground=instant-kill mimic=consumed_immune rolling=untargetable air=ignored demon_hp=1024 ambient=conditional output=", output_dir)
 	get_tree().quit()
 
 
@@ -2324,7 +2614,7 @@ func _capture_single_ship_combat_test() -> void:
 			get_tree().quit(1)
 			return
 		deployed += 1
-	if deployed < mini(5, TEST_ATTACK_TROOPS.size()):
+	if deployed < mini(5, _test_attack_troops().size()):
 		push_error("Single ship capture failed: only %d troops deployed." % deployed)
 		get_tree().quit(1)
 		return
@@ -2635,26 +2925,25 @@ func _frame_demon_king_color_camera() -> void:
 func _populate_spawn_list() -> void:
 	if not _spawn_list:
 		return
-	var bs: Node = _building_system_for_grid("main")
-	if not bs:
+	var ids: Array[String] = _active_building_ids()
+	if ids.is_empty():
 		call_deferred("_populate_spawn_list")
 		return
-	var ids: Array = bs.building_defs.keys()
-	ids.sort()
 	for child in _spawn_list.get_children():
 		child.queue_free()
 	for building_id in ids:
+		var bs: Node = _building_system_for_building(building_id)
+		if not bs:
+			continue
 		var def: Dictionary = bs.building_defs.get(building_id, {})
 		if def.get("no_shop", false):
 			continue
-		if String(building_id) == "flag":
-			continue
-		_add_spawn_row(String(building_id), def)
-	_add_ship_spawn_row()
+		_add_spawn_row(building_id, def)
 
 
 func _add_spawn_row(building_id: String, def: Dictionary) -> void:
 	var box := VBoxContainer.new()
+	box.set_meta("building_id", building_id)
 	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	box.add_theme_constant_override("separation", 4)
 	_spawn_list.add_child(box)
@@ -2697,7 +2986,7 @@ func _add_ship_spawn_row() -> void:
 	levels.add_theme_constant_override("separation", 6)
 	box.add_child(levels)
 
-	for level in range(1, 4):
+	for level in range(1, _max_test_ship_level() + 1):
 		var btn := Button.new()
 		btn.text = str(level)
 		btn.custom_minimum_size = Vector2(42, 38)
@@ -2708,9 +2997,9 @@ func _add_ship_spawn_row() -> void:
 
 
 func spawn_ship_level(target_level: int) -> void:
-	var spawned: bool = await spawn_building_level("port", target_level)
-	if spawned:
-		_set_status("Spawned Ship level %d with a Port." % target_level)
+	_test_attack_ship_level = clampi(target_level, 1, _max_test_ship_level())
+	_refresh_test_ship_row()
+	load_test_attack_army()
 
 
 func spawn_building_level(building_id: String, target_level: int) -> bool:
@@ -2790,10 +3079,10 @@ func build_working_village() -> void:
 	randomize()
 
 	for item in _core_layout():
-		var bs := _building_system_for_grid(String(item.grid))
+		var building_id := String(item.id)
+		var bs := _building_system_for_building(building_id)
 		if not bs:
 			continue
-		var building_id := String(item.id)
 		if not bs.building_defs.has(building_id):
 			continue
 		var def: Dictionary = bs.building_defs[building_id]
@@ -2831,7 +3120,7 @@ func build_working_village() -> void:
 
 
 func build_max_village_for_town_hall(th_level: int) -> void:
-	th_level = clampi(th_level, 1, 5)
+	th_level = clampi(th_level, 1, _max_supported_town_hall_level())
 	_build_generation += 1
 	var generation := _build_generation
 	reset_sandbox(false)
@@ -2841,7 +3130,7 @@ func build_max_village_for_town_hall(th_level: int) -> void:
 
 	var spawned_count: int = 0
 	randomize()
-	for building_id in MAX_VILLAGE_BUILD_ORDER:
+	for building_id in _max_village_build_order():
 		var bs := _building_system_for_building(building_id)
 		if not bs or not ("building_defs" in bs) or not bs.building_defs.has(building_id):
 			continue
@@ -2881,14 +3170,173 @@ func build_max_village_for_town_hall(th_level: int) -> void:
 	_set_status("Built max TH%d village: %d buildings." % [th_level, spawned_count])
 
 
+func _capture_th6_village() -> void:
+	var town_hall_level: int = _max_supported_town_hall_level()
+	await build_max_village_for_town_hall(town_hall_level)
+	await get_tree().create_timer(1.25).timeout
+
+	var expected_counts: Dictionary = {}
+	for building_id in _max_village_build_order():
+		var expected_count: int = _max_building_count_for_th(building_id, town_hall_level)
+		if expected_count > 0:
+			expected_counts[building_id] = expected_count
+	var actual_counts: Dictionary = {}
+	var total_buildings: int = 0
+	for bs in get_tree().get_nodes_in_group("building_systems"):
+		if not ("placed_buildings" in bs):
+			continue
+		for building: Dictionary in bs.placed_buildings:
+			var building_id: String = str(building.get("id", ""))
+			if not expected_counts.has(building_id):
+				continue
+			actual_counts[building_id] = int(actual_counts.get(building_id, 0)) + 1
+			total_buildings += 1
+			var expected_level: int = _target_building_level_for_th(
+				building_id,
+				bs.building_defs.get(building_id, {}),
+				town_hall_level
+			)
+			if int(building.get("level", 0)) != expected_level:
+				push_error("TH6 capture failed: %s expected level %d, got %d." % [
+					building_id,
+					expected_level,
+					int(building.get("level", 0)),
+				])
+				get_tree().quit(1)
+				return
+
+	for building_id: String in expected_counts:
+		if int(actual_counts.get(building_id, 0)) != int(expected_counts[building_id]):
+			push_error("TH6 capture failed: %s expected count %d, got %d." % [
+				building_id,
+				int(expected_counts[building_id]),
+				int(actual_counts.get(building_id, 0)),
+			])
+			get_tree().quit(1)
+			return
+
+	var town_hall := _building_system_for_building("town_hall")
+	var town_hall_visual_found: bool = false
+	if town_hall and "placed_buildings" in town_hall:
+		for building: Dictionary in town_hall.placed_buildings:
+			if str(building.get("id", "")) != "town_hall":
+				continue
+			var building_node: Node = building.get("node", null)
+			if is_instance_valid(building_node):
+				town_hall_visual_found = not building_node.find_children("*", "MeshInstance3D", true, false).is_empty()
+			break
+	if not town_hall_visual_found:
+		push_error("TH6 capture failed: Town Hall 6 has no rendered mesh.")
+		get_tree().quit(1)
+		return
+
+	if DisplayServer.get_name() == "headless":
+		print("[MAX_VILLAGE_TEST] PASS th=%d buildings=%d ship_capacity=%d" % [
+			town_hall_level,
+			total_buildings,
+			_ship_capacity_for_level(_max_test_ship_level()),
+		])
+		get_tree().quit()
+		return
+
+	var scene := get_tree().current_scene
+	if _panel:
+		_panel.visible = false
+		var layer := _panel.get_parent()
+		if layer is CanvasLayer:
+			(layer as CanvasLayer).visible = false
+	if scene:
+		_hide_capture_canvas_items(scene)
+	await RenderingServer.frame_post_draw
+	var output_path := ProjectSettings.globalize_path("user://th6-village.png")
+	for arg in OS.get_cmdline_user_args():
+		var text := String(arg)
+		if text.begins_with("--capture-out="):
+			output_path = text.get_slice("=", 1)
+	var err := get_viewport().get_texture().get_image().save_png(output_path)
+	if err != OK:
+		push_error("TH6 capture failed: %s" % error_string(err))
+		get_tree().quit(1)
+		return
+	print("[MAX_VILLAGE_TEST] PASS th=%d buildings=%d ship_capacity=%d capture=%s" % [
+		town_hall_level,
+		total_buildings,
+		_ship_capacity_for_level(_max_test_ship_level()),
+		output_path,
+	])
+	get_tree().quit()
+
+
+func _verify_test_scene_mixed_combat() -> void:
+	await get_tree().process_frame
+	reset_sandbox()
+	await get_tree().process_frame
+	if not await spawn_building_level("town_hall", 3):
+		push_error("[TEST_SCENE_MIXED_COMBAT] target Town Hall did not spawn")
+		get_tree().quit(1)
+		return
+
+	mixed_test_attack_loadout()
+	var expected_troops: int = _test_attack_troops().size()
+	await start_test_attack()
+	var attack: Node = get_node_or_null("../AttackSystem")
+	if attack == null:
+		push_error("[TEST_SCENE_MIXED_COMBAT] AttackSystem is missing")
+		get_tree().quit(1)
+		return
+
+	var ready_wait: float = 0.0
+	var ready_timeout: float = float(attack.get("sail_duration")) + 4.0
+	while not bool(attack.get("_main_ship_ready_for_deployment")) and ready_wait < ready_timeout:
+		await get_tree().process_frame
+		ready_wait += get_process_delta_time()
+	if not bool(attack.get("_main_ship_ready_for_deployment")):
+		push_error("[TEST_SCENE_MIXED_COMBAT] Main Ship never reached the attack shore")
+		get_tree().quit(1)
+		return
+
+	var deployed: int = 0
+	while not attack.get("_army_entries").is_empty():
+		attack.select_troop_group(0)
+		var offset: Vector3 = attack._get_lateral_dir() * (float(deployed % 5) - 2.0) * 0.08
+		if not attack._try_deploy_selected_troop(attack.plane_center + offset):
+			break
+		deployed += 1
+	if deployed != expected_troops:
+		push_error("[TEST_SCENE_MIXED_COMBAT] expected %d deployments, got %d" % [expected_troops, deployed])
+		get_tree().quit(1)
+		return
+
+	var spawn_wait: float = float(attack.get("troop_spawn_delay")) * float(deployed) + 1.0
+	await get_tree().create_timer(spawn_wait).timeout
+	var live_troops: int = get_tree().get_nodes_in_group("troops").size()
+	if live_troops < deployed:
+		push_error("[TEST_SCENE_MIXED_COMBAT] only %d/%d troops reached the scene" % [live_troops, deployed])
+		get_tree().quit(1)
+		return
+	print("[TEST_SCENE_MIXED_COMBAT] PASS roster=%d deployed=%d live=%d" % [
+		expected_troops,
+		deployed,
+		live_troops,
+	])
+	get_tree().quit()
+
+
 func _change_attack_count(troop_name: String, delta: int) -> void:
 	var current: int = int(_attack_counts.get(troop_name, 0))
-	_attack_counts[troop_name] = clampi(current + delta, 0, 45)
+	var next_count: int = maxi(0, current + delta)
+	if delta > 0:
+		var next_slots: int = _selected_attack_slots() + _attack_troop_slot_cost(troop_name)
+		if next_slots > _ship_capacity_for_level(_test_attack_ship_level):
+			_set_status("Main Ship is full. Raise its level or remove another troop.")
+			return
+	_attack_counts[troop_name] = next_count
 	_refresh_attack_row(troop_name)
+	_refresh_test_ship_row()
 
 
 func _change_attack_level(troop_name: String, delta: int) -> void:
-	var max_level: int = int(TEST_ATTACK_MAX_LEVEL.get(troop_name, 4))
+	var max_level: int = _test_attack_max_level(troop_name)
 	var current: int = int(_attack_levels.get(troop_name, max_level))
 	_attack_levels[troop_name] = clampi(current + delta, 1, max_level)
 	_refresh_attack_row(troop_name)
@@ -2904,16 +3352,19 @@ func _refresh_attack_row(troop_name: String) -> void:
 
 
 func clear_test_attack_loadout() -> void:
-	for troop_name in TEST_ATTACK_TROOPS:
+	for troop_name in _test_attack_troops():
 		_attack_counts[troop_name] = 0
 		_refresh_attack_row(troop_name)
+	_refresh_test_ship_row()
 	_set_status("Attack loadout cleared.")
 
 
 func mixed_test_attack_loadout() -> void:
-	for troop_name in TEST_ATTACK_TROOPS:
+	_test_attack_ship_level = _max_test_ship_level()
+	for troop_name in _test_attack_troops():
 		_attack_counts[troop_name] = 1
 		_refresh_attack_row(troop_name)
+	_refresh_test_ship_row()
 	_set_status("Mixed attack loadout: one of each troop.")
 
 
@@ -2926,7 +3377,8 @@ func start_test_attack() -> void:
 	if fleet.is_empty():
 		_set_status("Choose at least one attacker.")
 		return
-	_apply_test_troop_levels()
+	if not _load_test_attack_army(false):
+		return
 	var warmup_started := Time.get_ticks_msec()
 	var warmup_script: Script = load("res://scripts/warmup.gd")
 	if warmup_script != null:
@@ -2942,6 +3394,36 @@ func start_test_attack() -> void:
 			if troop_name != "_SLOT_FILLER_":
 				total_troops += 1
 	_set_status("Main ship approaching with %d troops. Select a unit and click the attack grid." % total_troops)
+
+
+func load_test_attack_army() -> void:
+	_load_test_attack_army(true)
+
+
+func _load_test_attack_army(report_status: bool) -> bool:
+	var fleet: Array = _build_test_attack_fleet()
+	if fleet.is_empty():
+		if report_status:
+			_set_status("Choose at least one troop to load.")
+		return false
+	var main_ship: Dictionary = fleet[0]
+	var controller: Node = get_node_or_null("../MainShipController")
+	if not is_instance_valid(controller):
+		if report_status:
+			_set_status("MainShipController not found.")
+		return false
+	var troops: Array = main_ship.get("troops", []).duplicate(true)
+	controller.set_meta("ship_level", int(main_ship.get("level", _test_attack_ship_level)))
+	controller.set_meta("ship_capacity", int(main_ship.get("capacity", troops.size())))
+	controller.set_meta("ship_troops", troops)
+	controller.set_meta("ship_troops_template", troops.duplicate(true))
+	_apply_test_troop_levels()
+	if report_status:
+		_set_status("Loaded %d occupied slots into Main Ship level %d." % [
+			troops.size(),
+			_test_attack_ship_level,
+		])
+	return true
 
 
 func run_mixed_fps_profile() -> void:
@@ -3089,11 +3571,16 @@ func _sample_fps_profile(phase: String, duration_seconds: float) -> Dictionary:
 
 
 func _build_test_attack_fleet() -> Array:
-	var ship_capacity: int = 27
-	var main_ship: Dictionary = {"id": "test_main_ship", "level": TEST_ATTACK_SHIP_LEVEL, "capacity": ship_capacity, "troops": []}
+	var ship_capacity: int = _ship_capacity_for_level(_test_attack_ship_level)
+	var main_ship: Dictionary = {
+		"id": "test_main_ship",
+		"level": _test_attack_ship_level,
+		"capacity": ship_capacity,
+		"troops": [],
+	}
 	var used_slots: int = 0
 
-	for troop_name in TEST_ATTACK_TROOPS:
+	for troop_name in _test_attack_troops():
 		var count: int = int(_attack_counts.get(troop_name, 0))
 		var level: int = int(_attack_levels.get(troop_name, 1))
 		var slot_cost: int = _attack_troop_slot_cost(troop_name)
@@ -3114,14 +3601,14 @@ func _attack_troop_entry(troop_name: String, level: int) -> String:
 
 
 func _attack_troop_slot_cost(troop_name: String) -> int:
-	return 2 if troop_name == "DemonKing" or troop_name == "FireDragon" else 1
+	return maxi(1, int(_test_troop_def(troop_name).get("slot_cost", 1)))
 
 
 func _apply_test_troop_levels() -> void:
 	for bs in get_tree().get_nodes_in_group("building_systems"):
 		if not ("troop_levels" in bs):
 			continue
-		for troop_name in TEST_ATTACK_TROOPS:
+		for troop_name in _test_attack_troops():
 			bs.troop_levels[troop_name] = int(_attack_levels.get(troop_name, 1))
 
 
@@ -3185,9 +3672,10 @@ func _active_building_system() -> Node:
 
 
 func _building_system_for_building(building_id: String) -> Node:
-	if building_id == "port":
-		return _building_system_for_grid("port")
-	return _building_system_for_grid("main")
+	for bs in get_tree().get_nodes_in_group("building_systems"):
+		if _building_system_allows(bs, building_id):
+			return bs
+	return null
 
 
 func _set_building_level_immediate(bs: Node, b: Dictionary, def: Dictionary, target_level: int) -> void:
@@ -3273,19 +3761,152 @@ func _set_random_building_level(bs: Node, b: Dictionary, def: Dictionary) -> voi
 	await bs._run_upgrade_sequence(b, def, target_level)
 
 
+func _max_supported_town_hall_level() -> int:
+	var levels: Array = BuildingSystem.TH_MAX_LEVEL.get("town_hall", [])
+	return maxi(1, levels.size())
+
+
+func _active_building_ids() -> Array[String]:
+	var ids: Array[String] = []
+	for bs in get_tree().get_nodes_in_group("building_systems"):
+		if not ("building_defs" in bs):
+			continue
+		for raw_id in bs.building_defs.keys():
+			var building_id := String(raw_id)
+			var def: Dictionary = bs.building_defs.get(building_id, {})
+			if building_id == "flag" or bool(def.get("no_shop", false)):
+				continue
+			if _building_system_allows(bs, building_id) and not ids.has(building_id):
+				ids.append(building_id)
+	ids.sort_custom(Callable(self, "_building_id_less"))
+	return ids
+
+
+func _max_village_build_order() -> Array[String]:
+	return _active_building_ids()
+
+
+func _building_id_less(left: String, right: String) -> bool:
+	if left == "town_hall":
+		return right != "town_hall"
+	if right == "town_hall":
+		return false
+	var left_unlock: int = _building_unlock_level(left)
+	var right_unlock: int = _building_unlock_level(right)
+	if left_unlock != right_unlock:
+		return left_unlock < right_unlock
+	return left.naturalnocasecmp_to(right) < 0
+
+
+func _building_unlock_level(building_id: String) -> int:
+	var bs: Node = _building_system_for_building(building_id)
+	var definition_unlock: int = 1
+	if bs and "building_defs" in bs:
+		definition_unlock = int(bs.building_defs.get(building_id, {}).get("min_town_hall_level", 1))
+	return maxi(definition_unlock, int(BuildingSystem.TH_UNLOCK.get(building_id, 1)))
+
+
+func _building_system_allows(bs: Node, building_id: String) -> bool:
+	if not bs or not ("building_defs" in bs) or not bs.building_defs.has(building_id):
+		return false
+	if "allowed_buildings" in bs and not bs.allowed_buildings.is_empty() and building_id not in bs.allowed_buildings:
+		return false
+	if "blocked_buildings" in bs and building_id in bs.blocked_buildings:
+		return false
+	return true
+
+
+func _test_attack_troops() -> Array[String]:
+	var bs: Node = _building_system_for_grid("main")
+	if not bs or not ("troop_defs" in bs):
+		return []
+	var available: Array[String] = []
+	for raw_name in bs.troop_defs.keys():
+		var troop_name := String(raw_name)
+		if AttackSystem.TROOP_DEFS.has(troop_name):
+			available.append(troop_name)
+
+	var ordered: Array[String] = []
+	for troop_name in TEST_ATTACK_PREFERRED_ORDER:
+		if available.has(troop_name):
+			ordered.append(troop_name)
+			available.erase(troop_name)
+	available.sort()
+	ordered.append_array(available)
+	return ordered
+
+
+func _test_troop_def(troop_name: String) -> Dictionary:
+	var bs: Node = _building_system_for_grid("main")
+	if bs and "troop_defs" in bs:
+		return bs.troop_defs.get(troop_name, {})
+	return {}
+
+
+func _test_troop_display_name(troop_name: String) -> String:
+	var display_name := String(_test_troop_def(troop_name).get("display", troop_name))
+	var role_start: int = display_name.find(" (")
+	return display_name.left(role_start) if role_start > 0 else display_name
+
+
+func _test_attack_max_level(troop_name: String) -> int:
+	return maxi(1, int(_test_troop_def(troop_name).get("max_level", 1)))
+
+
+func _max_test_ship_level() -> int:
+	var max_level: int = 1
+	for raw_level in BuildingSystem.PLAYER_SHIP_LEVELS.keys():
+		max_level = maxi(max_level, int(raw_level))
+	return max_level
+
+
+func _ship_capacity_for_level(ship_level: int) -> int:
+	var normalized_level: int = clampi(ship_level, 1, _max_test_ship_level())
+	return maxi(1, int(BuildingSystem.PLAYER_SHIP_LEVELS.get(normalized_level, {}).get("capacity", 1)))
+
+
+func _selected_attack_slots() -> int:
+	var used_slots: int = 0
+	for troop_name in _test_attack_troops():
+		used_slots += int(_attack_counts.get(troop_name, 0)) * _attack_troop_slot_cost(troop_name)
+	return used_slots
+
+
+func _change_test_ship_level(delta: int) -> void:
+	var next_level: int = clampi(_test_attack_ship_level + delta, 1, _max_test_ship_level())
+	if _ship_capacity_for_level(next_level) < _selected_attack_slots():
+		_set_status("Remove troops before lowering the Main Ship level.")
+		return
+	_test_attack_ship_level = next_level
+	_refresh_test_ship_row()
+
+
+func _refresh_test_ship_row() -> void:
+	if _test_ship_level_label:
+		_test_ship_level_label.text = "L%d" % _test_attack_ship_level
+	if _test_ship_capacity_label:
+		_test_ship_capacity_label.text = "%d / %d slots" % [
+			_selected_attack_slots(),
+			_ship_capacity_for_level(_test_attack_ship_level),
+		]
+
+
 func _max_building_count_for_th(building_id: String, th_level: int) -> int:
 	if building_id == "town_hall":
 		return 1
-	var limits: Array = TEST_TH_MAX_COUNT.get(building_id, [])
-	if limits.is_empty():
+	if th_level < _building_unlock_level(building_id):
 		return 0
+	var limits: Array = BuildingSystem.TH_MAX_COUNT.get(building_id, [])
+	if limits.is_empty():
+		return 1
 	var idx: int = clampi(th_level - 1, 0, limits.size() - 1)
 	return int(limits[idx])
 
 
 func _target_building_level_for_th(building_id: String, def: Dictionary, th_level: int) -> int:
-	if building_id == "town_hall":
-		return clampi(th_level, 1, _max_level_for_def(def))
+	var bs: Node = _building_system_for_building(building_id)
+	if bs and bs.has_method("_get_building_max_level_for_th"):
+		return int(bs._get_building_max_level_for_th(building_id, th_level))
 	return mini(th_level, _max_level_for_def(def))
 
 
@@ -3342,12 +3963,20 @@ func _configure_test_ship(bs: Node, b: Dictionary, ship_level: int) -> void:
 	var node: Node = b.get("node", null)
 	if not is_instance_valid(node):
 		return
-	var troops: Array = ["Knight", "Mage", "Archer", "DemonKing", "_SLOT_FILLER_", "FireDragon", "_SLOT_FILLER_"]
-	var capacity: int = ship_level * 3
+	var normalized_level: int = clampi(ship_level, 1, _max_test_ship_level())
+	var troops: Array = []
+	var capacity: int = _ship_capacity_for_level(normalized_level)
+	for troop_name in _test_attack_troops():
+		var slot_cost: int = _attack_troop_slot_cost(troop_name)
+		if troops.size() + slot_cost > capacity:
+			break
+		troops.append(_attack_troop_entry(troop_name, _test_attack_max_level(troop_name)))
+		for _slot in range(slot_cost - 1):
+			troops.append("_SLOT_FILLER_")
 	node.set_meta("has_ship", true)
-	node.set_meta("ship_level", ship_level)
-	node.set_meta("ship_troops", troops.slice(0, mini(capacity, troops.size())))
-	node.set_meta("ship_troops_template", node.get_meta("ship_troops"))
+	node.set_meta("ship_level", normalized_level)
+	node.set_meta("ship_troops", troops)
+	node.set_meta("ship_troops_template", troops.duplicate(true))
 	if bs and bs.has_method("_spawn_port_ship"):
 		var old_ship_node: Node = node.get_meta("ship_node", null)
 		if is_instance_valid(old_ship_node):
@@ -3355,6 +3984,116 @@ func _configure_test_ship(bs: Node, b: Dictionary, ship_level: int) -> void:
 		if node.has_meta("ship_node"):
 			node.remove_meta("ship_node")
 		bs._spawn_port_ship(b)
+
+
+func _verify_test_scene_parity() -> void:
+	await get_tree().process_frame
+	await get_tree().process_frame
+	var failures: Array[String] = []
+	var test_root: Node = get_parent()
+
+	var main_scene: PackedScene = load("res://scenes/Main.tscn")
+	if main_scene == null:
+		failures.append("Main.tscn could not be loaded")
+	else:
+		var main_root: Node = main_scene.instantiate()
+		var production_paths: Array[String] = []
+		_collect_scene_paths(main_root, "", production_paths)
+		for node_path in production_paths:
+			if test_root.get_node_or_null(NodePath(node_path)) == null:
+				failures.append("missing Main node: %s" % node_path)
+		main_root.free()
+
+	var building_systems: Array[Node] = []
+	for raw_bs in get_tree().get_nodes_in_group("building_systems"):
+		var bs: Node = raw_bs
+		building_systems.append(bs)
+		if not bool(bs.get("test_mode")):
+			failures.append("%s is not in test_mode" % bs.name)
+	if building_systems.is_empty():
+		failures.append("no BuildingSystem nodes registered")
+
+	var building_ids: Array[String] = _active_building_ids()
+	var spawn_ids: Array[String] = []
+	if _spawn_list:
+		for child in _spawn_list.get_children():
+			if child.has_meta("building_id"):
+				spawn_ids.append(String(child.get_meta("building_id")))
+	for building_id in building_ids:
+		if not spawn_ids.has(building_id):
+			failures.append("building missing from spawn tools: %s" % building_id)
+
+	var main_bs: Node = _building_system_for_grid("main")
+	var expected_troops: Array[String] = []
+	if main_bs and "troop_defs" in main_bs:
+		for raw_name in main_bs.troop_defs.keys():
+			var troop_name := String(raw_name)
+			expected_troops.append(troop_name)
+			if not AttackSystem.TROOP_DEFS.has(troop_name):
+				failures.append("troop has no AttackSystem definition: %s" % troop_name)
+	else:
+		failures.append("main BuildingSystem troop registry unavailable")
+
+	var loadout_troops: Array[String] = []
+	if _attack_loadout_box:
+		for child in _attack_loadout_box.get_children():
+			if child.has_meta("troop_name"):
+				loadout_troops.append(String(child.get_meta("troop_name")))
+	for troop_name in expected_troops:
+		if AttackSystem.TROOP_DEFS.has(troop_name) and not loadout_troops.has(troop_name):
+			failures.append("troop missing from loadout tools: %s" % troop_name)
+
+	_test_attack_ship_level = _max_test_ship_level()
+	mixed_test_attack_loadout()
+	var fleet: Array = _build_test_attack_fleet()
+	var fleet_troops: Array[String] = []
+	if not fleet.is_empty():
+		for raw_entry in fleet[0].get("troops", []):
+			var entry := String(raw_entry)
+			if entry != "_SLOT_FILLER_":
+				fleet_troops.append(entry.get_slice(":", 0))
+	for troop_name in _test_attack_troops():
+		if not fleet_troops.has(troop_name):
+			failures.append("troop missing from mixed fleet: %s" % troop_name)
+	if not _load_test_attack_army(false):
+		failures.append("mixed fleet could not be loaded into MainShipController")
+
+	if not failures.is_empty():
+		for failure in failures:
+			push_error("[TEST_SCENE_PARITY] %s" % failure)
+		get_tree().quit(1)
+		return
+	print("[TEST_SCENE_PARITY] PASS main_nodes=%d buildings=%d troops=%d ship_level=%d capacity=%d" % [
+		_count_scene_paths("res://scenes/Main.tscn"),
+		building_ids.size(),
+		expected_troops.size(),
+		_test_attack_ship_level,
+		_ship_capacity_for_level(_test_attack_ship_level),
+	])
+	get_tree().quit()
+
+
+func _collect_scene_paths(node: Node, prefix: String, output: Array[String]) -> void:
+	for child in node.get_children():
+		var child_path := String(child.name) if prefix.is_empty() else "%s/%s" % [prefix, child.name]
+		output.append(child_path)
+		# Imported GLB/PackedScene descendants are runtime implementation details.
+		# Their owners may legally reparent or replace them while the authored
+		# TestMain/Main boundary remains identical.
+		if not String(child.scene_file_path).is_empty():
+			continue
+		_collect_scene_paths(child, child_path, output)
+
+
+func _count_scene_paths(scene_path: String) -> int:
+	var packed: PackedScene = load(scene_path)
+	if packed == null:
+		return 0
+	var root: Node = packed.instantiate()
+	var paths: Array[String] = []
+	_collect_scene_paths(root, "", paths)
+	root.free()
+	return paths.size()
 
 
 func _set_status(text: String) -> void:

@@ -231,6 +231,41 @@ for (const dir of forceIncludeScriptRoots) {
 
 refs.add('res://scenes/Main.tscn');
 
+// Follow string dependencies inside text resources that are already reachable.
+// A scene can reference a script under Model/, and that script can preload a
+// texture. Godot's scene-only exporter includes the script but does not always
+// discover the script's preload dependency, which leaves a valid editor scene
+// broken only in the web PCK. Restricting traversal to known reachable text
+// resources avoids sweeping entire source asset packs into the export.
+const textDependencyQueue = [...refs];
+const scannedTextDependencies = new Set();
+while (textDependencyQueue.length > 0) {
+  const resPath = textDependencyQueue.shift();
+  if (scannedTextDependencies.has(resPath)) continue;
+  scannedTextDependencies.add(resPath);
+
+  const ext = path.extname(resPath).toLowerCase();
+  if (!scanExts.has(ext)) continue;
+  const filePath = resToFs(resPath);
+  if (!fs.existsSync(filePath)) continue;
+
+  const text = fs.readFileSync(filePath, 'utf8');
+  const dependencyPattern = /["'](res:\/\/[^"']+)["']/g;
+  let match;
+  while ((match = dependencyPattern.exec(text))) {
+    const dependency = match[1];
+    if (dependency.startsWith('res://.godot/')) continue;
+    if (dependency.startsWith('res://addons/godot_mcp/')) continue;
+    for (const expanded of expandPattern(dependency)) {
+      if (webHtmlAudioResources.has(expanded) || !existsAsResource(expanded)) continue;
+      if (!refs.has(expanded)) {
+        refs.add(expanded);
+        textDependencyQueue.push(expanded);
+      }
+    }
+  }
+}
+
 // Godot's scene export can miss texture dependencies hidden behind imported
 // glTF/GLB scenes, causing runtime "No loader found for resource ... Texture2D"
 // errors. Include only the images referenced by scene assets we already know

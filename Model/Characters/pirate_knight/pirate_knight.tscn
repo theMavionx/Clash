@@ -1,0 +1,37 @@
+[gd_scene load_steps=9 format=3]
+
+[ext_resource type="PackedScene" path="res://Model/Characters/pirate_archer/parts/all_bodies_cloaks.fbx" id="1_body"]
+[ext_resource type="PackedScene" path="res://Model/Characters/pirate_knight/parts/head_male.fbx" id="2_head"]
+[ext_resource type="PackedScene" path="res://Model/Characters/pirate_knight/parts/hat_14.fbx" id="3_helmet"]
+[ext_resource type="PackedScene" path="res://Model/Characters/pirate_knight/parts/eye_05.fbx" id="4_eye"]
+[ext_resource type="PackedScene" path="res://Model/Characters/pirate_knight/parts/mouth_07.fbx" id="5_mouth"]
+[ext_resource type="PackedScene" path="res://Model/Characters/pirate_knight/parts/sword_07.fbx" id="6_sword"]
+[ext_resource type="Script" path="res://Model/Characters/pirate_knight/pirate_knight_visual.gd" id="7_visual"]
+
+[node name="PirateKnight" instance=ExtResource("1_body")]
+
+[node name="HeadAttachment" type="BoneAttachment3D" parent="Skeleton3D"]
+bone_name = "head"
+bone_idx = 10
+
+[node name="HeadPose" type="Node3D" parent="Skeleton3D/HeadAttachment"]
+quaternion = Quaternion(0.50000006, 0.5, -0.50000006, 0.5)
+
+[node name="HeadMale" parent="Skeleton3D/HeadAttachment/HeadPose" instance=ExtResource("2_head")]
+
+[node name="OpenHelmet" parent="Skeleton3D/HeadAttachment/HeadPose" instance=ExtResource("3_helmet")]
+
+[node name="Eye" parent="Skeleton3D/HeadAttachment/HeadPose" instance=ExtResource("4_eye")]
+
+[node name="Mouth" parent="Skeleton3D/HeadAttachment/HeadPose" instance=ExtResource("5_mouth")]
+
+[node name="SwordAttachment" type="BoneAttachment3D" parent="Skeleton3D"]
+bone_name = "weapon_r"
+bone_idx = 37
+
+[node name="SwordPose" type="Node3D" parent="Skeleton3D/SwordAttachment"]
+
+[node name="Sword" parent="Skeleton3D/SwordAttachment/SwordPose" instance=ExtResource("6_sword")]
+
+[node name="VisualSetup" type="Node" parent="."]
+script = ExtResource("7_visual")

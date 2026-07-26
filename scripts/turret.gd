@@ -7,6 +7,8 @@ const LEVEL_STATS = {
 	2: {"damage": 68, "fire_rate": 0.48, "detect_range": 1.05},
 	3: {"damage": 122, "fire_rate": 0.34, "detect_range": 1.18},
 	4: {"damage": 170, "fire_rate": 0.29, "detect_range": 1.30},
+	5: {"damage": 230, "fire_rate": 0.25, "detect_range": 1.42},
+	6: {"damage": 285, "fire_rate": 0.23, "detect_range": 1.52},
 }
 
 const MUZZLE_FLASH_FRAMES: Array[String] = [
@@ -39,6 +41,7 @@ var damage: int = 80
 var ward_bonus_pct: int = 0
 var fire_rate: float = 1.0
 var _fire_timer: float = 0.0
+var _freeze_remaining: float = 0.0
 var _target: Node3D = null
 var _anim_player: AnimationPlayer = null
 var _is_attacking: bool = false
@@ -306,13 +309,18 @@ func _physics_process(delta: float) -> void:
 		return
 
 	_update_bullets(delta)
+	if _freeze_remaining > 0.0:
+		_freeze_remaining = maxf(0.0, _freeze_remaining - delta)
+		if _anim_player and _anim_player.has_animation("idle") and _anim_player.current_animation != "idle":
+			_anim_player.play("idle")
+		return
 
 	_target_search_timer += delta
 	if _target_search_timer >= TARGET_SEARCH_INTERVAL:
 		_target_search_timer = 0.0
 		_find_target()
 
-	if _target and BaseTroop.can_target_troop(_target, CAN_TARGET_GROUND, CAN_TARGET_AIR):
+	if _target and BaseTroop.can_defense_target_troop(_target, CAN_TARGET_GROUND, CAN_TARGET_AIR):
 		var diff: Vector3 = _target.global_position - global_position
 		diff.y = 0
 		var d_sq: float = diff.length_squared()
@@ -344,9 +352,13 @@ func _physics_process(delta: float) -> void:
 				_anim_player.play("idle")
 
 
+func freeze_for(duration: float) -> void:
+	_freeze_remaining = maxf(_freeze_remaining, maxf(0.0, duration))
+
+
 func _find_target() -> void:
 	var detect_sq: float = detect_range * detect_range
-	if _target and BaseTroop.can_target_troop(_target, CAN_TARGET_GROUND, CAN_TARGET_AIR):
+	if _target and BaseTroop.can_defense_target_troop(_target, CAN_TARGET_GROUND, CAN_TARGET_AIR):
 		var dx = global_position.x - _target.global_position.x
 		var dz = global_position.z - _target.global_position.z
 		if dx * dx + dz * dz <= detect_sq:
@@ -355,7 +367,7 @@ func _find_target() -> void:
 	var nearest_dist_sq: float = detect_sq
 	var my_pos: Vector3 = global_position
 	for troop in BaseTroop._get_troops_cached():
-		if not BaseTroop.can_target_troop(troop, CAN_TARGET_GROUND, CAN_TARGET_AIR):
+		if not BaseTroop.can_defense_target_troop(troop, CAN_TARGET_GROUND, CAN_TARGET_AIR):
 			continue
 		var dx: float = my_pos.x - troop.global_position.x
 		var dz: float = my_pos.z - troop.global_position.z
@@ -402,7 +414,7 @@ func _record_defense_telemetry(kind: String, target: Node3D, extra: Dictionary =
 
 
 func _spawn_bullet() -> void:
-	if not BaseTroop.can_target_troop(_target, CAN_TARGET_GROUND, CAN_TARGET_AIR):
+	if not BaseTroop.can_defense_target_troop(_target, CAN_TARGET_GROUND, CAN_TARGET_AIR):
 		return
 
 	var b: Dictionary = _get_pooled_bullet()
@@ -465,7 +477,7 @@ func _update_bullets(delta: float) -> void:
 				b.flash.visible = false
 
 		# Target died — return to pool
-		if not BaseTroop.can_target_troop(b.target, CAN_TARGET_GROUND, CAN_TARGET_AIR):
+		if not BaseTroop.can_defense_target_troop(b.target, CAN_TARGET_GROUND, CAN_TARGET_AIR):
 			_return_to_pool(b)
 			_remove_active_bullet_at(i)
 			i -= 1

@@ -1,0 +1,301 @@
+class_name BSRageSpell
+extends RefCounted
+## Main Ship level 6 tactical field. Paid deployed troops inside the radius deal
+## double damage and move/attack 25% faster. Summons and split descendants are
+## deliberately excluded so the field cannot multiply free army capacity.
+
+const UNLOCK_SHIP_LEVEL: int = 6
+const ENERGY_COST: int = 7
+const RADIUS: float = 0.82
+const DURATION_SEC: float = 9.0
+const APPLY_TICK_SEC: float = 0.20
+const BOOST_GRACE_SEC: float = 0.25
+const DAMAGE_MULTIPLIER: float = 2.0
+const SPEED_MULTIPLIER: float = 1.25
+const FIELD_COLOR: Color = Color(1.0, 0.48, 0.10, 1.0)
+const FIELD_ACCENT: Color = Color(0.72, 0.18, 1.0, 1.0)
+
+var bs: Node3D
+var _ship_level: int = 1
+var _rage_mode: bool = false
+var _rage_used: bool = false
+var _rage_paused_attack: bool = false
+var _rage_label: Label = null
+var _active_zone: Dictionary = {}
+
+
+func init(building_system: Node3D) -> BSRageSpell:
+	bs = building_system
+	return self
+
+
+func reset(ship_level: int = 1) -> void:
+	_ship_level = clampi(ship_level, 1, 6)
+	_rage_used = false
+	_exit_rage_mode()
+	_clear_zone()
+
+
+func is_unlocked() -> bool:
+	return _ship_level >= UNLOCK_SHIP_LEVEL
+
+
+func is_used() -> bool:
+	return _rage_used
+
+
+func energy_cost() -> int:
+	return ENERGY_COST
+
+
+func process(delta: float) -> void:
+	if _active_zone.is_empty():
+		return
+	var root: Node3D = _active_zone.get("root", null)
+	if not is_instance_valid(root):
+		_active_zone.clear()
+		return
+	var age: float = float(_active_zone.get("age", 0.0)) + delta
+	var tick_accum: float = float(_active_zone.get("tick_accum", 0.0)) + delta
+	_active_zone["age"] = age
+	while tick_accum + 0.000001 >= APPLY_TICK_SEC:
+		tick_accum -= APPLY_TICK_SEC
+		_boost_troops(root.global_position)
+	_active_zone["tick_accum"] = tick_accum
+	_pulse_zone(age)
+	if age >= DURATION_SEC:
+		_clear_zone()
+
+
+func _enter_rage_mode() -> void:
+	if (
+		not is_unlocked()
+		or _rage_used
+		or not bs._cannon
+		or bs._cannon._cannon_energy < ENERGY_COST
+	):
+		return
+	_cancel_other_modes()
+	_rage_mode = true
+	var bridge: Node = bs.get_node_or_null("/root/Bridge")
+	if bridge:
+		bridge.send_to_react("rage_mode", {"active": true})
+	var attack_system: Node = bs.get_node_or_null("../AttackSystem")
+	if attack_system and attack_system.has_method("_pause_attack_mode"):
+		_rage_paused_attack = bool(attack_system.is_attack_mode)
+		attack_system._pause_attack_mode()
+	else:
+		_rage_paused_attack = false
+	if bs.canvas and not _rage_label:
+		_rage_label = Label.new()
+		_rage_label.text = "Rage Field - boost troops inside the area"
+		_rage_label.anchor_left = 0.5
+		_rage_label.anchor_right = 0.5
+		_rage_label.offset_left = -300
+		_rage_label.offset_right = 300
+		_rage_label.offset_top = 20
+		_rage_label.offset_bottom = 55
+		_rage_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		_rage_label.add_theme_font_size_override("font_size", 20)
+		_rage_label.add_theme_color_override("font_color", FIELD_COLOR)
+		bs.canvas.add_child(_rage_label)
+
+
+func _exit_rage_mode() -> void:
+	_rage_mode = false
+	var bridge: Node = bs.get_node_or_null("/root/Bridge")
+	if bridge:
+		bridge.send_to_react("rage_mode", {"active": false})
+	if is_instance_valid(_rage_label):
+		_rage_label.queue_free()
+	_rage_label = null
+	if _rage_paused_attack:
+		_rage_paused_attack = false
+		var attack_system: Node = bs.get_node_or_null("../AttackSystem")
+		if attack_system and attack_system.has_method("_resume_attack_mode"):
+			attack_system._resume_attack_mode()
+
+
+func _drop_rage(world_pos: Vector3) -> bool:
+	if (
+		not is_unlocked()
+		or _rage_used
+		or not bs._cannon
+		or bs._cannon._cannon_energy < ENERGY_COST
+	):
+		return false
+	bs._cannon._cannon_energy -= ENERGY_COST
+	_rage_used = true
+	var clamped := BaseTroop._clamp_to_island(world_pos)
+	var pos := Vector3(clamped.x, bs.grid_y + 0.014, clamped.z)
+	_activate_zone(pos)
+	_record_action(pos)
+	bs._cannon._update_cannon_energy_ui()
+	return true
+
+
+func replay_drop_rage(world_pos: Vector3) -> void:
+	_rage_used = true
+	var clamped := BaseTroop._clamp_to_island(world_pos)
+	_activate_zone(Vector3(clamped.x, bs.grid_y + 0.014, clamped.z))
+
+
+func _boost_troops(center: Vector3) -> void:
+	var radius_sq := RADIUS * RADIUS
+	var boosted_count := 0
+	for troop_value in BaseTroop._get_troops_cached():
+		var troop := troop_value as BaseTroop
+		if not is_instance_valid(troop) or not troop.can_receive_tactical_boost():
+			continue
+		var offset := troop.global_position - center
+		if offset.x * offset.x + offset.z * offset.z > radius_sq:
+			continue
+		if troop.apply_tactical_boost(
+			BOOST_GRACE_SEC,
+			DAMAGE_MULTIPLIER,
+			SPEED_MULTIPLIER
+		):
+			boosted_count += 1
+	_active_zone["last_boosted_count"] = boosted_count
+
+
+func _activate_zone(pos: Vector3) -> void:
+	_clear_zone()
+	var root := Node3D.new()
+	root.name = "MainShipRageField"
+	bs.get_tree().current_scene.add_child(root)
+	root.global_position = pos
+
+	var disk := MeshInstance3D.new()
+	var disk_mesh := CylinderMesh.new()
+	disk_mesh.top_radius = RADIUS
+	disk_mesh.bottom_radius = RADIUS
+	disk_mesh.height = 0.008
+	disk_mesh.radial_segments = 48
+	disk.mesh = disk_mesh
+	disk.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var disk_mat := StandardMaterial3D.new()
+	disk_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	disk_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	disk_mat.albedo_color = Color(
+		FIELD_ACCENT.r,
+		FIELD_ACCENT.g,
+		FIELD_ACCENT.b,
+		0.16
+	)
+	disk_mat.emission_enabled = true
+	disk_mat.emission = FIELD_ACCENT
+	disk_mat.emission_energy_multiplier = 1.1
+	disk.material_override = disk_mat
+	root.add_child(disk)
+
+	var ring_mats: Array[StandardMaterial3D] = []
+	var rings: Array[MeshInstance3D] = []
+	for ring_index in range(3):
+		var ring := MeshInstance3D.new()
+		var ring_mesh := TorusMesh.new()
+		ring_mesh.inner_radius = 0.014
+		ring_mesh.outer_radius = RADIUS * (0.46 + float(ring_index) * 0.27)
+		ring_mesh.rings = 32
+		ring_mesh.ring_segments = 8
+		ring.mesh = ring_mesh
+		ring.position.y = 0.012 + float(ring_index) * 0.003
+		ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		var ring_mat := StandardMaterial3D.new()
+		ring_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		ring_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		ring_mat.albedo_color = Color(
+			FIELD_COLOR.r,
+			FIELD_COLOR.g,
+			FIELD_COLOR.b,
+			0.76
+		)
+		ring_mat.emission_enabled = true
+		ring_mat.emission = FIELD_COLOR
+		ring_mat.emission_energy_multiplier = 1.6
+		ring.material_override = ring_mat
+		root.add_child(ring)
+		rings.append(ring)
+		ring_mats.append(ring_mat)
+
+	_active_zone = {
+		"root": root,
+		"disk_mat": disk_mat,
+		"rings": rings,
+		"ring_mats": ring_mats,
+		"age": 0.0,
+		"tick_accum": APPLY_TICK_SEC,
+		"last_boosted_count": 0,
+	}
+
+
+func _pulse_zone(age: float) -> void:
+	var pulse := 0.5 + 0.5 * sin(age * 5.2)
+	var disk_mat: StandardMaterial3D = _active_zone.get("disk_mat", null)
+	if disk_mat:
+		disk_mat.albedo_color = Color(
+			FIELD_ACCENT.r,
+			FIELD_ACCENT.g,
+			FIELD_ACCENT.b,
+			0.11 + pulse * 0.10
+		)
+	var rings: Array = _active_zone.get("rings", [])
+	var ring_mats: Array = _active_zone.get("ring_mats", [])
+	for index in range(mini(rings.size(), ring_mats.size())):
+		var ring: MeshInstance3D = rings[index]
+		var ring_mat: StandardMaterial3D = ring_mats[index]
+		if is_instance_valid(ring):
+			ring.rotation.y = age * (0.35 + float(index) * 0.18)
+			var scale_pulse := 1.0 + 0.035 * sin(age * 4.4 + float(index))
+			ring.scale = Vector3(scale_pulse, 1.0, scale_pulse)
+		if ring_mat:
+			ring_mat.albedo_color = Color(
+				FIELD_COLOR.r,
+				FIELD_COLOR.g,
+				FIELD_COLOR.b,
+				0.52 + pulse * 0.38
+			)
+
+
+func _record_action(pos: Vector3) -> void:
+	if bs.is_viewing_enemy:
+		var elapsed: float = (
+			float(Time.get_ticks_msec()) / 1000.0
+			- float(bs._battle_start_time)
+		)
+		bs._battle_replay.append({
+			"t": elapsed,
+			"type": "rage_drop",
+			"x": pos.x,
+			"z": pos.z,
+		})
+	if bs.has_method("record_replay_telemetry"):
+		bs.record_replay_telemetry("rage_drop", {
+			"x": snappedf(pos.x, 0.001),
+			"z": snappedf(pos.z, 0.001),
+			"radius": RADIUS,
+			"duration": DURATION_SEC,
+			"source": "manual",
+		})
+
+
+func _cancel_other_modes() -> void:
+	if bs._cannon and bs._cannon._ship_cannon_mode:
+		bs._cannon._exit_ship_cannon_mode()
+	if bs._rally and bs._rally._rally_mode:
+		bs._rally._exit_rally_mode()
+	if bs._medkit and bs._medkit._medkit_mode:
+		bs._medkit._exit_medkit_mode()
+	if bs._freeze and bs._freeze._freeze_mode:
+		bs._freeze._exit_freeze_mode()
+	if bs._skeleton_barrel and bs._skeleton_barrel._barrel_mode:
+		bs._skeleton_barrel._exit_barrel_mode()
+
+
+func _clear_zone() -> void:
+	if _active_zone.is_empty():
+		return
+	var root: Node = _active_zone.get("root", null)
+	if is_instance_valid(root):
+		root.queue_free()
+	_active_zone.clear()

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { adminDelete, adminGet, adminPatch, adminPost, clearAdminKey, getStoredAdminKey, storeAdminKey } from './api';
 import {
   DEX_LABELS,
@@ -235,16 +235,25 @@ export default function AdminApp() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [lastRefresh, setLastRefresh] = useState(null);
+  const skipNextActiveRefresh = useRef(false);
 
   async function login(nextKey = key) {
     setError('');
     setLoading(true);
     try {
-      await adminGet('/admin/players', { key: nextKey });
+      const [playersData, replaysData, tournamentsData] = await Promise.all([
+        adminGet('/admin/players', { key: nextKey }),
+        adminGet('/admin/replays', { key: nextKey }),
+        adminGet('/admin/tournaments', { key: nextKey }),
+      ]);
       storeAdminKey(nextKey);
       setKey(nextKey);
+      setPlayers(Array.isArray(playersData) ? playersData : (playersData.players || []));
+      setReplays(Array.isArray(replaysData) ? replaysData : (replaysData.replays || []));
+      setTournaments(tournamentsData.tournaments || []);
+      setLastRefresh(new Date());
+      skipNextActiveRefresh.current = true;
       setAuthed(true);
-      await refreshCore();
     } catch (err) {
       setError(err.message || 'Invalid admin key');
       setAuthed(false);
@@ -303,6 +312,10 @@ export default function AdminApp() {
 
   useEffect(() => {
     if (!authed) return;
+    if (skipNextActiveRefresh.current) {
+      skipNextActiveRefresh.current = false;
+      return;
+    }
     refreshActive();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, authed]);
@@ -1507,11 +1520,11 @@ function PlayerToolsDrawer({ player, onClose, reload }) {
         <div className="admin-card">
           <div className="admin-card-head"><div><div className="admin-card-title">Village Presets</div><div className="admin-card-sub">Server-side building tools with auto placement.</div></div></div>
           <div className="admin-card-body admin-filter-row">
-            {[1, 2, 3, 4, 5].map((level) => (
+            {[1, 2, 3, 4, 5, 6].map((level) => (
               <button className="admin-btn" key={level} onClick={() => run(`Max village TH${level}`, () => adminPost(`/admin/players/${encodeURIComponent(player.name)}/max-village`, { town_hall_level: level }))}>TH {level}</button>
             ))}
             <button className="admin-btn green" onClick={() => run('Max everything', async () => {
-              await adminPost(`/admin/players/${encodeURIComponent(player.name)}/max-village`, { town_hall_level: 5 });
+              await adminPost(`/admin/players/${encodeURIComponent(player.name)}/max-village`, { town_hall_level: 6 });
               return adminPost(`/admin/players/${encodeURIComponent(player.name)}/add-resources`, { gold: 999999999, wood: 999999999, ore: 999999999 });
             })}>Max everything</button>
           </div>

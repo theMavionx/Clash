@@ -1965,3 +1965,71 @@ Follow-up:
 - Request: preserve the owner's final attack-zone placement from Godot and upload it to production.
 - Scope: mirror the final `Main.tscn` attack-plane transform into TestMain, regenerate the server-authoritative combat-grid snapshot, verify deployment and replay behavior, create a fresh Godot Web export, commit and push the synchronized release, and deploy atomically to production.
 - Approval: explicit owner authorization to upload the finalized attack zone to production; commit and push are required by the standard deployment pipeline so server validation and the Godot client use the same geometry.
+
+### UR-2026-07-22-ADMIN-PANEL-524
+- Timestamp: 2026-07-22 Europe/Kyiv
+- Request: investigate and fix the production admin panel returning HTTP 524 for stats and multiple admin sections.
+- Scope: inspect production API/Nginx telemetry, profile the synchronous SQLite analytics paths, prevent expensive sections from blocking the main API event loop, and verify the admin endpoints locally before any separately approved production release.
+- Implementation: move player/session analytics from Node-side row materialization into SQLite aggregates, reduce per-DEX history scans, add matching futures indexes and short admin caches, bound external earnings readers with stale fallback, and remove duplicate login refreshes.
+- Verification: local production-build fixture returned core endpoints in 0.21-0.22s, cold stats/matchmaking in 0.29-0.33s, cached stats/matchmaking in 8ms, revenue analytics in 1.4s, and bounded cold earnings in 12.2s instead of 37.6s; Node syntax checks, focused admin ESLint, full web build, full ESLint (warnings only), and git diff checks passed.
+- Approval: investigation and local fixes requested; no commit, push, deploy, restart, or production database mutation approved yet.
+
+### UR-2026-07-23-OSTIUM-TOURNAMENT-RESUME
+- Timestamp: 2026-07-23 Europe/Kyiv
+- Request: reset the points for the latest day of the paused production Ostium tournament, resume the tournament, and verify that it starts again correctly.
+- Scope: identify the exact active/paused Ostium tournament and latest daily window, back up the affected production rows, reset only that daily result without changing earlier days, resume the tournament transactionally, and verify production API timing plus recalculation behavior.
+- Approval: explicit owner authorization in this conversation for the targeted production database mutation and tournament resume.
+
+### UR-2026-07-24-MECHANICAL-DRAGON
+- Timestamp: 2026-07-24 Europe/Kyiv
+- Request: add the mechanical dragon from `Robots Ultimate Pack 02 Cute Series` as a new attacking unit that fires lightning which chains through several nearest buildings; balance its damage and make the unit mechanically distinct.
+- Scope: import the authored model and animations, implement matching Godot and server-authoritative deterministic chain-lightning combat, add Town Hall progression/capacity/cost data, expose the unit in troop and battle UI, and verify model animation, chain targeting, damage falloff, balance, and Web build compatibility locally.
+- No commit, push, production deploy, or production database mutation requested.
+
+### UR-2026-07-24-MECHANICAL-DRAGON-FOUR-SLOTS
+- Timestamp: 2026-07-24 Europe/Kyiv
+- Request: make Mechanical Dragon consume four ship slots instead of one/three and strengthen it to match the heavier capacity cost.
+- Scope: raise HP and sustained damage output by about 45% across all seven levels, retain chain behavior, keep per-slot damage below Mage, set the load price to 400 gold, and validate the 45-slot TH6 roster.
+- No commit, push, production deploy, or production database mutation requested.
+
+### UR-2026-07-24-MECHANICAL-DRAGON-ANIMATION-SYNC
+- Timestamp: 2026-07-24 Europe/Kyiv
+- Request: restore the Mechanical Dragon's color and synchronize lightning with the middle of its authored attack animation using frame-by-frame validation.
+- Scope: preserve the source material palette, scale the complete attack clip to each level's cooldown, emit client and server damage at normalized phase 0.50, anchor the lightning muzzle to the animated jaw bone, and add visual and combat probes that verify timing, chain damage, VFX spawn, and cleanup.
+- No commit, push, production deploy, or production database mutation requested.
+
+### UR-2026-07-24-MECHANICAL-DRAGON-LIGHTNING-VFX
+- Timestamp: 2026-07-24 Europe/Kyiv
+- Request: make Mechanical Dragon lightning visually richer, research an appropriate Godot approach, and add a first-use warmup for the effect.
+- Scope: replace per-segment cylinders with three batched crossed-ribbon layers, deterministic flicker variants, side branches, impact glow/ring, CPU sparks, and add the real model/animation/VFX path to hidden combat warmup; verify the effect frame-by-frame and preserve authoritative combat timing and damage.
+- No commit, push, production deploy, or production database mutation requested.
+
+### UR-2026-07-24-MECHANICAL-DRAGON-FIXED-CADENCE
+- Timestamp: 2026-07-24 Europe/Kyiv
+- Request: do not accelerate troop attack animation as it levels; for the Mechanical Dragon, prefer stronger damage/HP progression because fast dragon attacks look twitchy.
+- Scope: fix Mechanical Dragon attack cooldown at 1.03 seconds across all levels, move the removed speed progression into per-strike damage while preserving sustained DPS, retain the existing HP curve, and verify client/server cadence plus TH6 combat balance.
+- No commit, push, production deploy, or production database mutation requested.
+
+### UR-2026-07-25-SPLIT-STARTUP-COMBAT-WARMUP
+- Timestamp: 2026-07-25 Europe/Kyiv
+- Request: split the current blocking warmup into a short `IslandStartupWarmup` and an invisible, non-blocking `CombatIdleWarmup`; export Godot and thoroughly test browser loading time, first-battle entry, FPS, visibility, and stability while bypassing registration for the local test.
+- Scope: measure the existing browser baseline, remove combat resources from the startup loading barrier, schedule combat asset/shader preparation incrementally after the island is interactive, keep all representatives outside the player's visible viewport, preserve a bounded first-battle fallback, add diagnostics and focused probes, create a fresh Web export, and run repeated cold/warm browser checks.
+- No commit, push, production deploy, or production database mutation requested.
+
+### UR-2026-07-25-TROOP-CAPACITY-REBALANCE
+- Timestamp: 2026-07-25 Europe/Kyiv
+- Request: change ship capacity costs to Knight 1, Archer 1, Mage 4, Barrel 6, Fire Dragon 10, Demon King 5, Ice Golem 10, Horror 20, and Necromancer 15, then precisely rebalance their combat stats around those weights.
+- Scope: audit current client and server troop definitions, ship capacity progression, special abilities, DPS/HP per capacity, army compositions, and server simulation; synchronize capacity and stat changes across Godot, backend validation/simulation, and UI; verify that no roster dominates and intended bases remain beatable.
+- No commit, push, production deploy, or production database mutation requested.
+
+### UR-2026-07-26-WIND-MAGE
+- Timestamp: 2026-07-26 Europe/Kyiv
+- Request: add the Wind Mage from `Monsters Ultimate Pack 06 Cute Series` as a 15-slot attacking unit with a wide, long wind attack; spawn two or three small Windlings at deterministic random positions inside the attack corridor, make them continue attacking, synchronize authored animations frame by frame, and add the unit to every relevant UI including a usable mobile attack selector.
+- Scope: import the authored Wind Mage and Windling models/animations, implement matching deterministic Godot and server-authoritative corridor damage plus summon lifecycle, add balanced progression/cost/unlock data, render lightweight wind VFX, integrate portraits and aliases across troop/fleet/battle/result UI, and verify combat parity, animation timing, balance guardrails, Web build, and mobile overflow behavior locally.
+- No commit, push, production deploy, or production database mutation requested.
+
+### UR-2026-07-26-PEA-SHOOTER
+- Timestamp: 2026-07-26 Europe/Kyiv
+- Request: add the green Pea Shooter from `Polygonal Creatures Pack 2` as a new balanced attacking unit that fires green balls and occupies about five ship slots.
+- Scope: import only the required authored model, projectile, green material, and animations; implement a frame-synchronized three-pea burst in Godot and the authoritative server simulation; add Town Hall progression, five-slot capacity, 500-Gold loading cost, aliases, persistence, UI portrait, mobile-safe attack selection, replay telemetry, parity tests, and balance verification.
+- No commit, push, production deploy, or production database mutation requested.

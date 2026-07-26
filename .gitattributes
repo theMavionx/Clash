@@ -1,2 +1,6 @@
 # Normalize EOL for all files that Git considers text files.
 * text=auto eol=lf
+
+# Autodesk FBX files may use either binary or ASCII encoding, but must always
+# be handled as opaque game assets rather than line-diffed source files.
+*.fbx binary

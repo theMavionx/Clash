@@ -160,6 +160,13 @@ func reset() -> void:
 	_reset_troop_death_reports()
 
 
+func _ship_level_from_fleet(fleet: Array, fallback: int = 1) -> int:
+	for ship_value in fleet:
+		if ship_value is Dictionary:
+			return clampi(int(ship_value.get("level", fallback)), 1, 6)
+	return clampi(fallback, 1, 6)
+
+
 func _battle_elapsed_sec() -> float:
 	if _battle_start_time <= 0.0:
 		return maxf(0.0, _battle_timer)
@@ -265,6 +272,14 @@ func _cleanup_combat_runtime_nodes() -> void:
 			if is_instance_valid(c.get("node")):
 				c.node.queue_free()
 		bs._cannon._ship_cannonballs.clear()
+	if bs and bs._freeze:
+		bs._freeze.reset()
+	if bs and bs._rage:
+		bs._rage.reset()
+	if bs and bs._skeleton_barrel:
+		bs._skeleton_barrel.reset()
+	if bs and bs._medkit:
+		bs._medkit.reset()
 	var attack_system: Node = bs.get_node_or_null("../AttackSystem") if bs else null
 	if attack_system and attack_system.has_method("cleanup_combat_nodes"):
 		attack_system.cleanup_combat_nodes()
@@ -293,6 +308,14 @@ func _freeze_combat_runtime_nodes() -> void:
 		bs._cannon._exit_ship_cannon_mode()
 	if bs and bs._rally:
 		bs._rally._exit_rally_mode()
+	if bs and bs._freeze:
+		bs._freeze._exit_freeze_mode()
+	if bs and bs._rage:
+		bs._rage._exit_rage_mode()
+	if bs and bs._skeleton_barrel:
+		bs._skeleton_barrel._exit_barrel_mode()
+	if bs and bs._medkit:
+		bs._medkit._exit_medkit_mode()
 	var attack_system: Node = bs.get_node_or_null("../AttackSystem") if bs else null
 	if attack_system:
 		if attack_system.has_method("_cancel_pending_combat_spawns"):
@@ -324,6 +347,14 @@ func _stop_attacker_combat_after_town_hall_destroyed(play_victory: bool = true) 
 		bs._cannon._ship_cannonballs.clear()
 	if bs._rally:
 		bs._rally._exit_rally_mode()
+	if bs._freeze:
+		bs._freeze._exit_freeze_mode()
+	if bs._rage:
+		bs._rage._exit_rage_mode()
+	if bs._skeleton_barrel:
+		bs._skeleton_barrel._exit_barrel_mode()
+	if bs._medkit:
+		bs._medkit._exit_medkit_mode()
 	var attack_system: Node = bs.get_node_or_null("../AttackSystem")
 	if attack_system:
 		if attack_system.has_method("_cancel_pending_combat_spawns"):
@@ -932,9 +963,17 @@ func _switch_to_enemy_island() -> void:
 	_battle_timer = 0.0
 	_battle_timer_active = true
 	if bs._cannon and bs._cannon.has_method("reset"):
-		bs._cannon.reset()
+		bs._cannon.reset(_ship_level_from_fleet(_saved_fleet))
 	if bs._rally:
 		bs._rally.reset()
+	if bs._medkit:
+		bs._medkit.reset(_ship_level_from_fleet(_saved_fleet))
+	if bs._freeze:
+		bs._freeze.reset(_ship_level_from_fleet(_saved_fleet))
+	if bs._rage:
+		bs._rage.reset(_ship_level_from_fleet(_saved_fleet))
+	if bs._skeleton_barrel:
+		bs._skeleton_barrel.reset(_ship_level_from_fleet(_saved_fleet))
 	_battle_replay.append({
 		"type": "battle_start",
 		"battle_session_id": str(enemy_info.get("battle_session_id", "")),
@@ -1056,9 +1095,17 @@ func _switch_to_enemy_island_covered(combat_warmup: Variant = null, warmup_alrea
 	_battle_timer = 0.0
 	_battle_timer_active = true
 	if bs._cannon and bs._cannon.has_method("reset"):
-		bs._cannon.reset()
+		bs._cannon.reset(_ship_level_from_fleet(_saved_fleet))
 	if bs._rally:
 		bs._rally.reset()
+	if bs._medkit:
+		bs._medkit.reset(_ship_level_from_fleet(_saved_fleet))
+	if bs._freeze:
+		bs._freeze.reset(_ship_level_from_fleet(_saved_fleet))
+	if bs._rage:
+		bs._rage.reset(_ship_level_from_fleet(_saved_fleet))
+	if bs._skeleton_barrel:
+		bs._skeleton_barrel.reset(_ship_level_from_fleet(_saved_fleet))
 	_battle_replay.append({
 		"type": "battle_start",
 		"battle_session_id": str(enemy_info.get("battle_session_id", "")),
@@ -1212,6 +1259,15 @@ func _return_home() -> void:
 	if bs._rally:
 		bs._rally._exit_rally_mode()
 		bs._rally.reset()
+	if bs._medkit:
+		bs._medkit._exit_medkit_mode()
+		bs._medkit.reset()
+	if bs._freeze:
+		bs._freeze.reset()
+	if bs._rage:
+		bs._rage.reset()
+	if bs._skeleton_barrel:
+		bs._skeleton_barrel.reset()
 	# Legacy local sessions may still have a cached port ship transform.
 	for data in bs._saved_ship_transforms:
 		var restore_ship: Node3D = data.get("node")
@@ -1603,7 +1659,12 @@ func _replay_fleet_from_actions(actions: Array) -> Array:
 		if str(action.get("type", "")) == "deploy_troop":
 			manual_troops.append_array(_replay_troops_for_action(action))
 	if not manual_troops.is_empty():
-		return [{"id": "replay_main_ship", "level": 1, "capacity": manual_troops.size(), "troops": manual_troops}]
+		var replay_ship_level: int = 1
+		for action in actions:
+			if str(action.get("type", "")) == "deploy_troop":
+				replay_ship_level = clampi(int(action.get("shipLevel", 1)), 1, 6)
+				break
+		return [{"id": "replay_main_ship", "level": replay_ship_level, "capacity": manual_troops.size(), "troops": manual_troops}]
 	for action in actions:
 		if action.get("type", "") != "place_ship":
 			continue
@@ -1774,12 +1835,21 @@ func _start_replay(replay_data: Array, buildings_snapshot: Array, attacker_name:
 	await cloud.reveal_finished
 	if bridge:
 		bridge.send_to_react("cloud_transition", {"visible": false})
-	bs._cannon.reset()
+	var replay_fleet: Array = _replay_fleet_from_actions(_replay_actions)
+	bs._cannon.reset(_ship_level_from_fleet(replay_fleet))
 	if bs._rally:
 		bs._rally.reset()
+	if bs._medkit:
+		bs._medkit.reset(_ship_level_from_fleet(replay_fleet))
+	if bs._freeze:
+		bs._freeze.reset(_ship_level_from_fleet(replay_fleet))
+	if bs._rage:
+		bs._rage.reset(_ship_level_from_fleet(replay_fleet))
+	if bs._skeleton_barrel:
+		bs._skeleton_barrel.reset(_ship_level_from_fleet(replay_fleet))
 	var attack_system: Node = bs.get_node_or_null("../AttackSystem")
 	if attack_system and attack_system.has_method("enter_replay_mode"):
-		attack_system.enter_replay_mode(_replay_fleet_from_actions(_replay_actions))
+		attack_system.enter_replay_mode(replay_fleet)
 	Engine.time_scale = 1.0
 	BaseTroop.reset_combat_runtime_cache()
 	SkeletonGuard.reset_runtime_cache()
@@ -1796,7 +1866,16 @@ func _start_replay(replay_data: Array, buildings_snapshot: Array, attacker_name:
 func _replay_playback() -> void:
 	var actions: Array = []
 	for a in _replay_actions:
-		if a.get("type", "") in ["place_ship", "deploy_troop", "cannon_fire", "rally_drop"]:
+		if a.get("type", "") in [
+			"place_ship",
+			"deploy_troop",
+			"cannon_fire",
+			"rally_drop",
+			"medkit_drop",
+			"freeze_drop",
+			"rage_drop",
+			"skeleton_barrel_fire",
+		]:
 			actions.append(a)
 	actions.sort_custom(func(a, b): return float(a.get("t", 0.0)) < float(b.get("t", 0.0)))
 	if actions.is_empty():
@@ -1845,6 +1924,14 @@ func _replay_playback() -> void:
 				_replay_cannon_fire(action)
 			"rally_drop":
 				_replay_rally_drop(action)
+			"medkit_drop":
+				_replay_medkit_drop(action)
+			"freeze_drop":
+				_replay_freeze_drop(action)
+			"rage_drop":
+				_replay_rage_drop(action)
+			"skeleton_barrel_fire":
+				_replay_skeleton_barrel_fire(action)
 	while replay_outcome_reason == "" and _replay_active and is_instance_valid(bs):
 		var settle_wait_ok: bool = await _replay_wait(REPLAY_OUTCOME_POLL_INTERVAL)
 		if not settle_wait_ok:
@@ -1978,6 +2065,77 @@ func _replay_rally_drop(action: Dictionary) -> void:
 		"flight_time": snappedf(float(action.get("flight_time", -1.0)), 0.001),
 	})
 	bs._rally.replay_drop_rally(pos, float(action.get("flight_time", -1.0)))
+
+
+func _replay_medkit_drop(action: Dictionary) -> void:
+	if not bs._medkit or not bs._medkit.has_method("replay_drop_medkit"):
+		return
+	var pos := Vector3(
+		float(action.get("x", 0.0)),
+		bs.grid_y,
+		float(action.get("z", 0.0))
+	)
+	record_replay_telemetry("medkit_action", {
+		"x": snappedf(pos.x, 0.001),
+		"z": snappedf(pos.z, 0.001),
+	})
+	bs._medkit.replay_drop_medkit(pos)
+
+
+func _replay_freeze_drop(action: Dictionary) -> void:
+	if not bs._freeze or not bs._freeze.has_method("replay_drop_freeze"):
+		return
+	var pos := Vector3(
+		float(action.get("x", 0.0)),
+		bs.grid_y,
+		float(action.get("z", 0.0))
+	)
+	record_replay_telemetry("freeze_action", {
+		"x": snappedf(pos.x, 0.001),
+		"z": snappedf(pos.z, 0.001),
+	})
+	bs._freeze.replay_drop_freeze(pos)
+
+
+func _replay_rage_drop(action: Dictionary) -> void:
+	if not bs._rage or not bs._rage.has_method("replay_drop_rage"):
+		return
+	var pos := Vector3(
+		float(action.get("x", 0.0)),
+		bs.grid_y,
+		float(action.get("z", 0.0))
+	)
+	record_replay_telemetry("rage_action", {
+		"x": snappedf(pos.x, 0.001),
+		"z": snappedf(pos.z, 0.001),
+	})
+	bs._rage.replay_drop_rage(pos)
+
+
+func _replay_skeleton_barrel_fire(action: Dictionary) -> void:
+	if not bs._skeleton_barrel or not bs._skeleton_barrel.has_method("replay_fire_at_building"):
+		return
+	var building_id: int = int(action.get("buildingId", action.get("building_id", -1)))
+	var fallback := Vector3(
+		float(action.get("x", 0.0)),
+		bs.grid_y,
+		float(action.get("z", 0.0))
+	)
+	var target: Dictionary = {}
+	for building_sys in bs._building_systems:
+		for building in building_sys.placed_buildings:
+			if int(building.get("server_id", -1)) == building_id:
+				target = building
+				break
+		if not target.is_empty():
+			break
+	record_replay_telemetry("skeleton_barrel_action", {
+		"building_id": building_id,
+		"target_found": not target.is_empty(),
+		"x": snappedf(fallback.x, 0.001),
+		"z": snappedf(fallback.z, 0.001),
+	})
+	bs._skeleton_barrel.replay_fire_at_building(target, fallback)
 
 
 ## Replays a single cannon_fire action by looking up the target building by

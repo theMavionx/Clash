@@ -24,6 +24,7 @@ const BUILDING_STATIC_BATCHES: Dictionary = {
 	"res://Model/Town_Hall/Town Hall Level 3.glb": preload("res://generated/performance/town_hall_level_3_static_batch.res"),
 	"res://Model/Town_Hall/Town Hall Level 4.glb": preload("res://generated/performance/town_hall_level_4_static_batch.res"),
 	"res://Model/Town_Hall/Town Hall Level 5.glb": preload("res://generated/performance/town_hall_level_5_static_batch.res"),
+	"res://Model/Town_Hall/Town Hall Level 6.glb": preload("res://generated/performance/town_hall_level_6_static_batch.res"),
 }
 const DYNAMIC_NAME_PARTS: Array[String] = [
 	"anim", "armature", "skeleton", "ship", "sail", "flag", "tentacle",

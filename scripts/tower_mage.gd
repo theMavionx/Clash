@@ -27,6 +27,27 @@ const LEVEL_STATS := {
 		"ramp_time": 2.5,
 		"detect_range": 1.45,
 	},
+	4: {
+		"base_damage": 26,
+		"max_damage": 142,
+		"tick_rate": 0.14,
+		"ramp_time": 2.2,
+		"detect_range": 1.64,
+	},
+	5: {
+		"base_damage": 36,
+		"max_damage": 198,
+		"tick_rate": 0.12,
+		"ramp_time": 2.0,
+		"detect_range": 1.82,
+	},
+	6: {
+		"base_damage": 46,
+		"max_damage": 250,
+		"tick_rate": 0.11,
+		"ramp_time": 1.9,
+		"detect_range": 1.95,
+	},
 }
 
 @export var detect_range: float = 1.05
@@ -36,6 +57,8 @@ const LEVEL_STATS := {
 @export var retract_when_idle: bool = false
 
 const TARGET_SEARCH_INTERVAL: float = 0.15
+const CAN_TARGET_GROUND: bool = true
+const CAN_TARGET_AIR: bool = true
 const BEAM_START_Y: float = 0.36
 const BEAM_RADIUS_MIN: float = 0.010
 const BEAM_RADIUS_MAX: float = 0.030
@@ -59,6 +82,7 @@ var ramp_time: float = 4.0
 var _target: Node3D = null
 var _target_search_timer: float = 0.0
 var _damage_tick: float = 0.0
+var _freeze_remaining: float = 0.0
 var _charge: float = 0.0
 var _beam_ready: bool = false
 
@@ -234,6 +258,11 @@ func _physics_process(delta: float) -> void:
 	delta = BaseTroop.combat_delta(delta)
 	if not _beam_ready:
 		return
+	if _freeze_remaining > 0.0:
+		_freeze_remaining = maxf(0.0, _freeze_remaining - delta)
+		_stop_attack_sfx()
+		_hide_beam()
+		return
 
 	if BaseTroop._get_troops_cached().size() == 0:
 		_drop_target()
@@ -246,7 +275,7 @@ func _physics_process(delta: float) -> void:
 		_target_search_timer = 0.0
 		_find_target()
 
-	if _target and BaseTroop.is_live_troop(_target):
+	if _target and BaseTroop.can_defense_target_troop(_target, CAN_TARGET_GROUND, CAN_TARGET_AIR):
 		_start_attack_sfx()
 		_process_beam_damage(delta)
 		_update_beam_visuals()
@@ -257,18 +286,22 @@ func _physics_process(delta: float) -> void:
 	_animate_crystal(delta)
 
 
+func freeze_for(duration: float) -> void:
+	_freeze_remaining = maxf(_freeze_remaining, maxf(0.0, duration))
+
+
 func _process_beam_damage(delta: float) -> void:
 	_charge = minf(1.0, _charge + delta / maxf(ramp_time, 0.001))
 	_damage_tick += delta
 	while _damage_tick >= tick_rate:
 		_damage_tick -= tick_rate
-		if not BaseTroop.is_live_troop(_target):
+		if not BaseTroop.can_defense_target_troop(_target, CAN_TARGET_GROUND, CAN_TARGET_AIR):
 			_drop_target()
 			return
 		if _target.has_method("take_damage"):
 			_target.take_damage(_current_damage())
 			_attack_t = 0.0
-		if not BaseTroop.is_live_troop(_target):
+		if not BaseTroop.can_defense_target_troop(_target, CAN_TARGET_GROUND, CAN_TARGET_AIR):
 			_drop_target()
 			return
 
@@ -323,7 +356,7 @@ func _find_target() -> void:
 	var detect_sq: float = detect_range * detect_range
 	# Keep the current target if it is still alive and in range. This preserves
 	# charge like an inferno beam; switching targets always resets the ramp.
-	if _target and BaseTroop.is_live_troop(_target):
+	if _target and BaseTroop.can_defense_target_troop(_target, CAN_TARGET_GROUND, CAN_TARGET_AIR):
 		var dx0: float = global_position.x - _target.global_position.x
 		var dz0: float = global_position.z - _target.global_position.z
 		if dx0 * dx0 + dz0 * dz0 <= detect_sq:
@@ -333,7 +366,7 @@ func _find_target() -> void:
 	var nearest_sq: float = detect_sq
 	var my_pos: Vector3 = global_position
 	for troop in BaseTroop._get_troops_cached():
-		if not BaseTroop.is_live_troop(troop):
+		if not BaseTroop.can_defense_target_troop(troop, CAN_TARGET_GROUND, CAN_TARGET_AIR):
 			continue
 		var dx: float = my_pos.x - troop.global_position.x
 		var dz: float = my_pos.z - troop.global_position.z
@@ -357,13 +390,13 @@ func _beam_start_position() -> Vector3:
 
 
 func _target_aim_position() -> Vector3:
-	if BaseTroop.is_live_troop(_target):
+	if BaseTroop.can_defense_target_troop(_target, CAN_TARGET_GROUND, CAN_TARGET_AIR):
 		return _target.global_position + Vector3(0, BaseTroop.TARGET_AIM_Y, 0)
 	return global_position + Vector3(0, BEAM_START_Y, 0)
 
 
 func _update_beam_visuals() -> void:
-	if not BaseTroop.is_live_troop(_target):
+	if not BaseTroop.can_defense_target_troop(_target, CAN_TARGET_GROUND, CAN_TARGET_AIR):
 		_hide_beam()
 		return
 
@@ -446,7 +479,7 @@ func _animate_crystal(delta: float) -> void:
 	if not is_instance_valid(_crystal):
 		return
 
-	var has_target: bool = _target != null and BaseTroop.is_live_troop(_target)
+	var has_target: bool = _target != null and BaseTroop.can_defense_target_troop(_target, CAN_TARGET_GROUND, CAN_TARGET_AIR)
 	var target_raise: float = 1.0 if (has_target or not retract_when_idle) else 0.0
 	_raise = move_toward(_raise, target_raise, CRYSTAL_RAISE_LERP * delta)
 	_anim_time += delta

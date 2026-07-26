@@ -489,6 +489,18 @@ func _server_troop_type(troop_type: String) -> String:
 			return "demon_king"
 		"FireDragon":
 			return "fire_dragon"
+		"MechanicalDragon":
+			return "mechanical_dragon"
+		"IceGolem":
+			return "ice_golem"
+		"WindMage":
+			return "wind_mage"
+		"PeaShooter":
+			return "pea_shooter"
+		"Necromancer":
+			return "necromancer"
+		"Horror":
+			return "horror"
 	return troop_type.to_lower()
 
 func upgrade_troop(troop_type: String, expected_level: int = -1) -> Dictionary:

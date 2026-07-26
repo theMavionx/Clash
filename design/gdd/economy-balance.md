@@ -1,8 +1,8 @@
 # Economy Balance Design Document
 
-**Version:** 2.0
+**Version:** 2.1
 **Author:** economy-designer
-**Date:** 2026-05-20
+**Date:** 2026-07-24
 **Status:** Synced to implementation (`server/db.js`, `server/routes.js`)
 
 > **v2.0 note:** All values in this document now reflect the *live code* in
@@ -12,6 +12,44 @@
 > revision replaces them with as-built values. Where the as-built economy no
 > longer satisfies the original 28-day fantasy, a **⚠️ Balance risk** note is
 > added rather than hiding the gap.
+
+> **v2.1 TH6 addendum:** Sections below retain historical TH1-TH5 analysis, while
+> this block is the canonical extension for Town Hall 6. Runtime values remain
+> authoritative in `server/db.js` and are mirrored by `scripts/building_system.gd`.
+
+### Town Hall 6 Progression
+
+- Town Hall 5 -> 6 costs 48,000 gold, 72,000 wood, and 66,000 ore.
+- TH6 base resource capacity is 25,000 per resource. Three level-6 Storages add
+  27,000 each, producing a 106,000 cap per resource.
+- Upgrade cost multipliers are 2x, 3x, 5x, 8x, and 12x for levels 2 through 6.
+- Mine and Sawmill production extend to level 6: Mine 170 ore/min with a 5,000
+  local cap; Sawmill 230 wood/min with a 6,000 local cap.
+- TH6 adds a third Shark Trap and a second Mortar.
+- Regular progression buildings gain one reachable level. Tombstone reaches
+  level 5, Mortar reaches level 2, and Shark Trap reaches level 6. Port remains
+  capped at level 3 and Altar remains capped at level 1.
+- TH6 Shark Trap damage is 2,400. It remains ground-only and is consumed by a
+  rolling Mimic without damaging the Mimic.
+- Mimic Barrel unlocks at TH5.
+- Ice Golem unlocks at TH6. It uses ten ship slots, targets defenses before
+  economy buildings, and freezes nearby defenses for seven seconds on death.
+- Main Ship progression reaches level 6 but remains capped at 45 troop slots.
+  Level 6 adds no capacity; it raises shared ability energy to 14 and unlocks
+  one 14-second Healing Field per battle. Starting energy by level is
+  4, 6, 8, 10, 12, 14.
+- Main Ship upgrade costs are documented in
+  `design/balance/main-ship-progression-2026-07-25.md`.
+- The canonical occupied-slot table and per-slot combat targets are recorded in
+  `design/balance/troop-capacity-rebalance-2026-07-25.md`.
+
+### TH6 Defense Validation
+
+The deterministic combat matrix in `server/tools/th6-balance-check.js` validates
+120 spawn, support, and composition variants against a fully built TH6 defense.
+The fixed 45-slot ship can win with a specialized Dragon-heavy composition, so
+TH6 is intentionally difficult but not an unkillable state. Any future defense
+or troop tuning must keep at least one legal 45-slot winning scenario.
 
 ---
 
@@ -214,9 +252,9 @@ in `upgradeTroop()` with `BARN_LEVEL_REQUIRED`.
 | Fire Dragon | 250G+250O | 500G+500O | 1000G+1000O | 2000G+2000O | 3600G+3600O | 6000G+6000O | **13350G+13350O** |
 | **Totals** | - | - | - | - | - | - | **69445G + 16620W + 50075O** |
 
-Demon King and Fire Dragon remain NFT-backed 2-slot troops, but they now have server-side
-`TROOP_DEFS` entries and upgrade costs. Their combat stats scale from Knight and Mage,
-respectively, at the same shared troop level plus rarity multiplier.
+Demon King and Fire Dragon remain NFT-backed troops, but now occupy 5 and 10 slots,
+respectively. Both have server-side `TROOP_DEFS` entries and common-rarity combat tables;
+Epic and Legendary rarity scale those tables without changing occupied slots.
 
 Troops start at Lv1 (free, auto-initialized at player creation). The `cost` array is
 indexed by *current* level: `cost[0]` = Lv1→Lv2, `cost[1]` = Lv2→Lv3. (`cost[2]` exists in
@@ -230,17 +268,16 @@ the data but is never charged, since `max_level = 3`.)
 | Archer | 150G + 150W | 350G + 350W | **500G + 500W** | gold/wood |
 | Ranger | 120G + 120W | 250G + 250W | **370G + 370W** | gold/wood |
 | **Totals** | — | — | **2,520G + 870W + 1,550O** | — |
-| Demon King ⚗️ | — | — | **no server cost yet** | premium, 2 ship slots |
+| Demon King | — | — | **NFT-backed** | premium, 5 ship slots |
 
 (The unused `cost[2]` entries are: Knight 600G+500O, Mage 1000G+1000O,
 Barbarian 700G+700O, Archer 700G+700W, Ranger 500G+500W.)
 
-⚗️ **Demon King is not in `TROOP_DEFS`** — it has no server-side cost and is not part of
-the economy totals. It is defined client-side (`demon_king.gd`, registered in
-`attack_system.gd` / `building_system.gd`) and consumes **2 ship slots** per deploy. Before
-it ships to production it needs a `TROOP_DEFS` entry. Suggested premium pricing (to be
-approved): Lv1→2 = 400G + 350O, Lv2→3 = 800G + 700O (≈1.6× the Knight upgrade path, ore-
-weighted). See Section 11 for combat stats.
+**NFT troops:** Demon King and Fire Dragon are present in `TROOP_DEFS`, but loading them
+does not charge synthetic gold because ownership is represented by the NFT inventory.
+They consume 5 and 10 ship slots and use the same level progression as ordinary troops.
+See the current per-slot analysis in
+`design/balance/troop-capacity-rebalance-2026-07-25.md`.
 
 ### 4.3 Daily Gold Budget Formula
 
@@ -371,9 +408,9 @@ mage:      { cost: [{ gold: 200, ore: 200 }, { gold: 500, ore: 500 }, { gold: 10
 barbarian: { cost: [{ gold: 150, ore: 150 }, { gold: 350, ore: 350 }, { gold:  700, ore:  700 }] },
 archer:    { cost: [{ gold: 150, wood: 150 }, { gold: 350, wood: 350 }, { gold: 700, wood: 700 }] },
 ranger:    { cost: [{ gold: 120, wood: 120 }, { gold: 250, wood: 250 }, { gold: 500, wood: 500 }] },
-// demon_king: NOT YET DEFINED server-side. Proposed (pending approval):
-// demon_king: { max_level: 3, slot_cost: 2,
-//   cost: [{ gold: 400, ore: 350 }, { gold: 800, ore: 700 }, { gold: 1600, ore: 1400 }] },
+// NFT-backed troop roots are server-defined and have no synthetic load cost:
+demon_king: { max_level: 7, slot_cost: 5, buy_cost: 0 },
+fire_dragon: { max_level: 7, slot_cost: 10, buy_cost: 0 },
 ```
 
 ### 7.4 Production & Storage (`db.js`)
@@ -520,29 +557,68 @@ tier in `TH_UNLOCK`, (3) add a `TROPHY_TABLE` row, (4) fix the stale server comm
 
 ### 11.2 Demon King — `demon_king.gd`
 
-**Status:** ⚗️ Premium heavy-melee troop, **not in `TROOP_DEFS`** (no server cost). Registered
-client-side in `attack_system.gd` and `building_system.gd`. Consumes **2 ship slots** per
-deploy (`slot_cost: 2`) — the trade-off for its raw power.
+**Status:** NFT-backed heavy melee troop in `TROOP_DEFS`. It consumes **5 ship slots**
+and uses one owned NFT token per loaded root.
 
-**Role:** Single large "boss" body. Big reach (0.32 vs Knight's 0.24), 24% slower movement
-than Knight (0.38 vs 0.50), slow heavy swings.
+At level 7 common rarity it has 11,400 HP and deals 1,110 damage every 0.90 seconds:
+2,280 HP and 246.7 DPS per occupied slot. It is more durable than a Knight per slot but
+remains a single melee body, so focus fire and pathing preserve counterplay. Epic and
+Legendary rarity scale this common table without reducing slot cost.
 
-| Level | HP | Damage | atk_speed (cooldown s) | DPS | Move | Range |
-|-------|-----|--------|------------------------|-----|------|-------|
-| 1 | 560 | 78 | 2.20 | 35.5 | 0.38 | 0.32 |
-| 2 | 735 | 102 | 2.05 | 49.8 | 0.38 | 0.32 |
-| 3 | 960 | 134 | 1.90 | 70.5 | 0.38 | 0.32 |
+### 11.3 Mechanical Dragon - four-slot chain siege
 
-**Design intent (code comment):** "~1.55× Knight on HP/DPS so 2 Knights still out-stat 1
-Demon King." HP holds exactly (960 = 1.56× Knight L3's 617). **DPS is actually 2.34× Knight**
-(70.5 vs 30.1), not 1.55×. The 2-slot framing still works as a trade: per 2 slots, **2 Knights
-= 1,234 HP / 60 DPS** (more HP, two bodies) vs **Demon King = 960 HP / 71 DPS** (less HP, more
-DPS, single body, vulnerable to focus/AoE). ⚠️ If a tighter cap is wanted, trim L3 damage
-~134 → ~95 to bring DPS to ~1.55× Knight.
+**Status:** TH6 heavy flying troop. It consumes **4 ship slots**, costs **400 gold** to
+load, and chains each attack from the primary building to at most two nearby buildings
+at 65% cumulative falloff per jump.
 
-**Economy:** none yet. Proposed premium pricing (pending approval, ore-weighted, ≈1.6× Knight
-path): Lv1→2 = 400G + 350O; Lv2→3 = 800G + 700O. Add a `slot_cost: 2` field to its
-`TROOP_DEFS` entry on promotion.
+The four-slot revision raises per-unit HP by about 45%. Its authored attack cadence is
+fixed at 1.03 seconds across every level so progression never accelerates the large model
+into twitchy animation. Levels scale through HP and damage instead. At level 7 it has
+3,000 HP and deals 876 primary damage every 1.03 seconds. Its ideal three-target chain is
+`876 -> 569 -> 370`, or 440.5 DPS per slot; this stays below the level-7 Mage's
+442.9 DPS per slot while giving the dragon a distinct durable siege role.
+
+The 45-slot level-5 ship can carry at most 11 Mechanical Dragons plus one standard
+one-slot troop. This prevents the stronger individual unit from increasing total
+ship damage without a capacity trade-off.
+
+### 11.4 Ice Golem - ten-slot defense vanguard
+
+**Status:** TH6 heavy ground troop. It consumes **10 ship slots**, costs **1,000
+gold** to load, and always selects the nearest living defensive building before
+considering economy buildings.
+
+Its attack animation keeps a fixed 1.42-second cadence at every level. The
+level-7 unit has 21,000 HP and 1,155 damage per strike. Its direct DPS per slot is
+deliberately below a same-level Knight because its tactical value comes from
+pathing into the defensive line and applying a seven-second death freeze in a
+0.90-unit radius.
+
+The freeze pauses new attacks from turrets, archer towers, mage towers,
+mortars, tombstones and their guards, plus hidden shark-trap scans. Already
+fired projectiles continue. Repeated freezes refresh to the later expiry rather
+than stacking durations. Hidden traps receive no visual overlay.
+
+Four Ice Golems plus five normal troops fit the 45-slot ship. Mass Ice Golems
+remain inefficient in deterministic TH6 checks, preserving the vanguard role.
+
+### 11.5 Horror - twenty-slot evolution attrition troop
+
+**Status:** TH6 ground troop. It consumes **20 ship slots**, costs **2,000 gold**
+to load, and evolves deterministically from one Horror into two Creepers, then
+from each Creeper into two terminal Lurkers. Only the loaded Horror is
+persistent inventory and only its death counts as a casualty.
+
+At level 7 the complete family has 37,931 effective HP, or 1,896.5 HP per ship
+slot, approximately matching a level-7 Knight's 1,900 HP per slot. Its phase
+DPS is `2,096.8 -> 1,902.1 -> 1,888.9`, so peak DPS per slot remains substantially
+below the Knight. The troop therefore trades burst damage for overkill
+resistance and additional target pressure without increasing raw ship power.
+
+The server creates all six descendants from lethal combat events and records
+their generation and lineage in replay telemetry. Clients never submit split
+deployments, descendants consume no extra slots, and all three authored bite
+animations apply damage at 42% of their 0.833-second clip.
 
 ---
 

@@ -175,6 +175,9 @@ func _buy_ship_level(ship_lvl: int) -> void:
 ## The capacity check is deferred to the server — local meta may be stale
 ## (e.g. post-battle casualties not yet synced), so we always round-trip.
 func _load_troop_to_ship(troop_name: String, extra: Dictionary = {}) -> void:
+	if not bs._is_troop_unlocked(_troop_entry_base_name(troop_name)):
+		bs._show_error(bs._troop_unlock_error(_troop_entry_base_name(troop_name)))
+		return
 	var port_node: Node3D = bs.selected_building.get("node", null)
 	if not is_instance_valid(port_node) or not port_node.has_meta("has_ship"):
 		return
@@ -227,6 +230,9 @@ func _load_troop_to_ship(troop_name: String, extra: Dictionary = {}) -> void:
 		})
 
 func _swap_troop_on_ship(slot: int, troop_name: String, extra: Dictionary = {}) -> void:
+	if not bs._is_troop_unlocked(_troop_entry_base_name(troop_name)):
+		bs._show_error(bs._troop_unlock_error(_troop_entry_base_name(troop_name)))
+		return
 	var port_node: Node3D = bs.selected_building.get("node", null)
 	if not is_instance_valid(port_node) or not port_node.has_meta("has_ship"):
 		return

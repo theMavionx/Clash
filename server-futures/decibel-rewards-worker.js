@@ -35,8 +35,6 @@ const DECIBEL_RECONCILE_DEBUG = String(process.env.DECIBEL_RECONCILE_DEBUG || '1
 
 const MAIN_DB_PATH = process.env.CLASH_MAIN_DB
   || path.join(__dirname, '..', 'server', 'clash.db');
-const APTOS_FULLNODE = process.env.APTOS_FULLNODE_URL
-  || 'https://fullnode.mainnet.aptoslabs.com/v1';
 const DECIBEL_PACKAGE_MAINNET =
   '0x50ead22afd6ffd9769e3b3d6e0e64a2a350d68e8b102c4e72e33d0b8cfdfdb06';
 const DEFAULT_DECIBEL_BUILDER_SUBACCOUNT =
@@ -211,13 +209,7 @@ async function fetchAptosTxByVersion(version) {
   const raw = String(version || '').trim();
   if (!/^\d+$/.test(raw)) return null;
   if (aptosTxCache.has(raw)) return aptosTxCache.get(raw);
-  const url = `${APTOS_FULLNODE.replace(/\/$/, '')}/transactions/by_version/${raw}`;
-  const headers = process.env.DECIBEL_API_KEY
-    ? { accept: 'application/json', Authorization: `Bearer ${process.env.DECIBEL_API_KEY}` }
-    : { accept: 'application/json' };
-  const r = await fetch(url, { headers });
-  if (!r.ok) throw new Error(`Aptos tx ${raw} failed: ${r.status}`);
-  const tx = await r.json();
+  const tx = await decibel.fetchAptosJsonPath(`transactions/by_version/${raw}`);
   if (aptosTxCache.size > 500) aptosTxCache.clear();
   aptosTxCache.set(raw, tx);
   return tx;

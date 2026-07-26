@@ -91,6 +91,10 @@ const GODOT_PHASE_PROGRESS = {
   home_warmup_outline: 79,
   home_warmup_clicks: 80,
   home_warmup_assets: 82,
+  combat_loadout_waiting: 88,
+  combat_loadout_warmup_start: 89,
+  combat_loadout_warmup_step: 90,
+  combat_loadout_warmup_done: 91,
   home_warmup_done: 88,
   home_scene_apply: 92,
   home_scene_filtered: 93,
@@ -138,6 +142,10 @@ const GODOT_PHASE_LABELS = {
   home_warmup_clicks: 'Warming selection controls',
   home_warmup_assets: 'Island warmup assets ready',
   home_warmup_frames: 'Compiling first island frames',
+  combat_loadout_waiting: 'Reading battle loadout',
+  combat_loadout_warmup_start: 'Preparing battle units',
+  combat_loadout_warmup_step: 'Compiling battle effects',
+  combat_loadout_warmup_done: 'Battle units ready',
   home_warmup_done: 'Island warmup complete',
   home_scene_apply: 'Placing island buildings',
   home_scene_filtered: 'Reading building snapshot',
@@ -1396,6 +1404,8 @@ function GodotCanvas({ onEngineReady }) {
 
     const startGodot = () => {
       if (disposed) return;
+      window.__clashGodotStartupInteractive = false;
+      window.__clashGodotStartupInteractiveAt = null;
       const GODOT = window.Engine || window.Godot;
       if (!GODOT) {
         addClientBreadcrumb('godot.engine_missing', {}, 'error');
@@ -1433,7 +1443,14 @@ function GodotCanvas({ onEngineReady }) {
         webAudio.stopLoading();
         if (loadedTimeoutId) clearTimeout(loadedTimeoutId);
         loadedTimeoutId = setTimeout(() => {
-          if (!disposed) setIsLoaded(true);
+          if (!disposed) {
+            setIsLoaded(true);
+            window.__clashGodotStartupInteractive = true;
+            window.__clashGodotStartupInteractiveAt = performance.now();
+            recordLoadingEvent('startup_interactive', {
+              reason: stage2ReadyReason || 'stage2_complete',
+            });
+          }
         }, GODOT_LOADED_HIDE_DELAY_MS);
       };
 

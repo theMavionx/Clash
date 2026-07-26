@@ -9,9 +9,9 @@ func _initialize() -> void:
 func _run() -> void:
 	var loaded_count: int = 0
 	var scene: PackedScene = null
-	for level in range(1, 6):
+	for level in range(1, 7):
 		var path := "res://Model/Town_Hall/Town Hall Level %d.glb" % level
-		scene = load(path)
+		scene = ResourceLoader.load(path, "PackedScene", ResourceLoader.CACHE_MODE_IGNORE) as PackedScene
 		if scene == null:
 			push_error("[TOWN_HALL_PROBE] load_failed path=" + path)
 			quit(1)

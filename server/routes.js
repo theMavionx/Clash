@@ -14,7 +14,7 @@ const tasks = require('./tasks');
 const elfa = require('./elfa');
 const diag = require('./diag');
 const earnings = require('./earnings');
-const { MAX_SHIPS } = require('./combat_defs');
+const { MAX_SHIPS, MAX_TROOPS, TROOP_SLOT_COSTS } = require('./combat_defs');
 const {
   CANONICAL_GRID_CONFIG,
   CANONICAL_GRID_CONFIGS,
@@ -11851,9 +11851,25 @@ router.delete('/buildings/:id', auth, (req, res) => {
 const TROOP_NAME_MAP = {
   knight: 'Knight',
   mage: 'Mage',
+  windmage: 'WindMage',
+  wind_mage: 'WindMage',
   barbarian: 'Barbarian',
   archer: 'Archer',
+  peashooter: 'PeaShooter',
+  pea_shooter: 'PeaShooter',
   ranger: 'Ranger',
+  mimic: 'Mimic',
+  necromancer: 'Necromancer',
+  skeletonmage: 'Necromancer',
+  skeleton_mage: 'Necromancer',
+  horror: 'Horror',
+  horrorevolution: 'Horror',
+  horror_evolution: 'Horror',
+  mechanicaldragon: 'MechanicalDragon',
+  mechanical_dragon: 'MechanicalDragon',
+  mechdragon: 'MechanicalDragon',
+  icegolem: 'IceGolem',
+  ice_golem: 'IceGolem',
   demonking: 'DemonKing',
   demon_king: 'DemonKing',
   firedragon: 'FireDragon',
@@ -11900,11 +11916,13 @@ function _serverTroopKey(name) {
   const normalized = _normalizeTroopName(name);
   if (normalized === 'DemonKing') return 'demon_king';
   if (normalized === 'FireDragon') return 'fire_dragon';
+  if (normalized === 'Necromancer') return 'necromancer';
+  if (normalized === 'WindMage') return 'wind_mage';
+  if (normalized === 'PeaShooter') return 'pea_shooter';
+  if (normalized === 'Horror') return 'horror';
+  if (normalized === 'MechanicalDragon') return 'mechanical_dragon';
+  if (normalized === 'IceGolem') return 'ice_golem';
   return String(normalized || '').toLowerCase();
-}
-function _isHeavyTroop(name) {
-  const normalized = _normalizeTroopName(name);
-  return normalized === 'DemonKing' || normalized === 'FireDragon';
 }
 function _isDisabledTroopName(name) {
   return db.isTroopDisabled(_normalizeTroopName(name));
@@ -11997,12 +12015,15 @@ function _playerShipState(playerId) {
   let troopTemplate = [];
   try { troops = JSON.parse(row.troops || '[]'); } catch { troops = []; }
   try { troopTemplate = JSON.parse(row.troop_template || '[]'); } catch { troopTemplate = []; }
-  const level = Math.max(1, Math.min(5, Number(row.level) || 1));
+  const level = Math.max(1, Math.min(6, Number(row.level) || 1));
+  const config = db.PLAYER_SHIP_LEVELS[level] || db.PLAYER_SHIP_LEVELS[1];
   return {
     ...row,
     id: 'main_ship',
     level,
     capacity: db.playerShipCapacity(level, row.capacity_override),
+    energy: Number(config.energy || 4),
+    medkit_unlocked: !!config.medkit_unlocked,
     troops,
     troop_template: troopTemplate,
   };
@@ -12351,7 +12372,13 @@ function _nftBackedWinTokensByCollectionFromActions(actions, playerId) {
   return out;
 }
 function _troopSlotCost(name) {
-  return _isHeavyTroop(name) ? 2 : 1;
+  const normalized = _normalizeTroopName(name);
+  const serverKey = _serverTroopKey(normalized);
+  const configured = Number(db.TROOP_DEFS?.[serverKey]?.slot_cost);
+  if (Number.isInteger(configured) && configured > 0) return configured;
+  const canonical = Number(TROOP_SLOT_COSTS?.[serverKey]);
+  if (Number.isInteger(canonical) && canonical > 0) return canonical;
+  return 1;
 }
 function _shipLevelForPort(building) {
   const maxPortLevel = Number(db.BUILDING_DEFS?.port?.max_level || 3);
@@ -12588,18 +12615,18 @@ function _applyCasualties(playerId, casualties) {
 
   const remaining = { ...validCasualties };
   const filtered = [];
-  let skipNextFiller = false;
+  let fillerSlotsToSkip = 0;
   for (const troop of ship.troops) {
-    if (skipNextFiller && _isSlotFiller(troop)) {
-      skipNextFiller = false;
+    if (fillerSlotsToSkip > 0 && _isSlotFiller(troop)) {
+      fillerSlotsToSkip--;
       continue;
     }
-    skipNextFiller = false;
+    fillerSlotsToSkip = 0;
     const name = _normalizeTroopName(troop);
     if (remaining[name] && remaining[name] > 0) {
       remaining[name]--;
       applied[name] = (applied[name] || 0) + 1;
-      if (_troopSlotCost(name) > 1) skipNextFiller = true;
+      fillerSlotsToSkip = _troopSlotCost(name) - 1;
     } else {
       filtered.push(troop);
     }
@@ -12684,6 +12711,35 @@ router.post('/attack/result', auth, (req, res) => {
       return res.status(403).json({ error: 'Too many ships in replay' });
     }
   }
+  const replayShipSlots = shipActions.reduce((total, action) => {
+    const troops = Array.isArray(action?.troops)
+      ? action.troops
+      : (action?.troopType ? [action.troopType] : []);
+    return total + troops.reduce(
+      (slots, troop) => slots + (_isSlotFiller(troop) ? 0 : _troopSlotCost(troop)),
+      0,
+    );
+  }, 0);
+  if (replayShipSlots > MAX_TROOPS) {
+    releaseBattleSession('cancelled');
+    db.storeReplay(
+      req.player.id,
+      defender_id,
+      actions,
+      defenderBuildings,
+      claimedResult,
+      'rejected',
+      'Ship capacity exceeded',
+      null,
+      { replay_ship_slots: replayShipSlots, max_ship_slots: MAX_TROOPS },
+    );
+    return res.status(403).json({
+      error: 'Ship capacity exceeded',
+      code: 'SHIP_CAPACITY_EXCEEDED',
+      replay_ship_slots: replayShipSlots,
+      max_ship_slots: MAX_TROOPS,
+    });
+  }
   _sanitizeDisabledShipTroopsForPlayer(req.player.id);
   const rosterReplayIssue = _singleShipReplayIssue(gameActions, req.player.id);
   if (rosterReplayIssue) {
@@ -12755,6 +12811,7 @@ router.post('/attack/result', auth, (req, res) => {
     gridConfig: CANONICAL_GRID_CONFIG,
     gridConfigs: CANONICAL_GRID_CONFIGS,
     serverTroopLevels,
+    serverShipLevel: _playerShipState(req.player.id)?.level || 1,
     serverNftRarities,
     defenderAltarLevels: db.getAltarSkillLevels(defender_id),
     debugTrace: BATTLE_DEBUG_TRACE,
@@ -13046,8 +13103,21 @@ router.get('/matchmaking/stats', auth, (req, res) => {
   res.json(db.getPlayerMatchmakingStats(req.player.id));
 });
 
+const ADMIN_MATCHMAKING_CACHE_TTL_MS = 60 * 1000;
+const adminMatchmakingStatsCache = new Map();
+
 router.get('/admin/matchmaking/stats', adminAuth, (req, res) => {
-  res.json(db.getGlobalMatchmakingStats(req.query?.days || 7));
+  const days = Math.max(1, Math.min(90, Math.trunc(Number(req.query?.days) || 7)));
+  const cached = adminMatchmakingStatsCache.get(days);
+  const ageMs = cached ? Date.now() - cached.createdAt : Number.POSITIVE_INFINITY;
+  if (cached && ageMs >= 0 && ageMs < ADMIN_MATCHMAKING_CACHE_TTL_MS) {
+    res.set('X-Clash-Admin-Matchmaking-Cache', 'hit');
+    return res.json(cached.payload);
+  }
+  const payload = db.getGlobalMatchmakingStats(days);
+  adminMatchmakingStatsCache.set(days, { createdAt: Date.now(), payload });
+  res.set('X-Clash-Admin-Matchmaking-Cache', 'miss');
+  res.json(payload);
 });
 
 router.get('/admin/battle-risk', adminAuth, (req, res) => {
@@ -13146,23 +13216,39 @@ router.get('/battle-log', auth, (req, res) => {
 // ==================== TROOPS ====================
 
 // Buy a troop (deduct gold, server-validated)
-const TROOP_BUY_COSTS = {
-  Knight: 100,
-  Mage: 100,
-  Archer: 100,
-  DemonKing: 0,
-  FireDragon: 0,
-};
+const TROOP_BUY_COSTS = Object.freeze(Object.fromEntries([
+  'Knight',
+  'Mage',
+  'WindMage',
+  'Archer',
+  'PeaShooter',
+  'Mimic',
+  'Necromancer',
+  'Horror',
+  'MechanicalDragon',
+  'IceGolem',
+  'DemonKing',
+  'FireDragon',
+].map((name) => [
+  name,
+  Math.max(0, Number(db.TROOP_DEFS[_serverTroopKey(name)]?.buy_cost) || 0),
+])));
 const VALID_TROOPS = Object.keys(TROOP_BUY_COSTS);
 const KNOWN_TROOPS = new Set(Object.values(TROOP_NAME_MAP));
 function _troopBuyCost(name) {
   return TROOP_BUY_COSTS[_normalizeTroopName(name)] ?? 100;
+}
+function _troopTownHallGate(playerId, troopName) {
+  const gate = db.getTroopTownHallUnlock(playerId, _serverTroopKey(troopName));
+  return gate.unlocked ? null : gate;
 }
 router.post('/troops/buy', auth, (req, res) => {
   const { troop_name } = req.body;
   if (!troop_name) return res.status(400).json({ error: 'troop_name required' });
   const normalizedTroop = _normalizeTroopName(troop_name);
   if (!VALID_TROOPS.includes(normalizedTroop)) return res.status(400).json(_activeTroopError(normalizedTroop));
+  const townHallGate = _troopTownHallGate(req.player.id, normalizedTroop);
+  if (townHallGate) return res.status(townHallGate.status || 403).json(townHallGate);
   const cost = _troopBuyCost(normalizedTroop);
   if (_isNftBackedTroop(normalizedTroop)) {
     return res.json({ success: true, troop_name: normalizedTroop, cost: 0, resources: db.getResources(req.player.id), nft_backed: true });
@@ -13178,16 +13264,17 @@ router.post('/troops/buy', auth, (req, res) => {
 });
 
 // Load troop onto a ship at a port
-const TROOP_COST = 100;
-const REINFORCE_COST = 50;
+const REINFORCE_COST_PER_SLOT = 50;
 
-// Load a troop into a ship slot (costs 100 gold). Also saves template.
+// Load a troop into the ship. Non-NFT cost is 100 gold per occupied slot.
 router.post('/buildings/:id/load-troop', auth, async (req, res) => {
   const buildingId = parseInt(req.params.id, 10);
   if (isNaN(buildingId)) return res.status(400).json({ error: 'Invalid building ID' });
   const { troop_name } = req.body;
   const normalizedTroop = _normalizeTroopName(troop_name);
   if (!troop_name || !VALID_TROOPS.includes(normalizedTroop)) return res.status(400).json(_activeTroopError(normalizedTroop));
+  const townHallGate = _troopTownHallGate(req.player.id, normalizedTroop);
+  if (townHallGate) return res.status(townHallGate.status || 403).json(townHallGate);
   let verifiedNftTroop = null;
   if (_isNftBackedTroop(normalizedTroop)) {
     verifiedNftTroop = await verifyNftBackedTroopLoadToken(req.player, troop_name, req.body?.owner || req.body?.nft_owner || req.body?.wallet);
@@ -13240,7 +13327,7 @@ router.post('/buildings/:id/load-troop', auth, async (req, res) => {
   }
 });
 
-// Swap a troop in a specific slot (costs 100 gold). Does NOT update template.
+// Swap a troop in a specific slot. Non-NFT cost is 100 gold per occupied slot.
 router.post('/buildings/:id/swap-troop', auth, async (req, res) => {
   const buildingId = parseInt(req.params.id, 10);
   if (isNaN(buildingId)) return res.status(400).json({ error: 'Invalid building ID' });
@@ -13250,6 +13337,8 @@ router.post('/buildings/:id/swap-troop', auth, async (req, res) => {
     return res.status(400).json({ error: 'Valid integer slot and troop_name required' });
   }
   if (!VALID_TROOPS.includes(normalizedTroop)) return res.status(400).json(_activeTroopError(normalizedTroop));
+  const townHallGate = _troopTownHallGate(req.player.id, normalizedTroop);
+  if (townHallGate) return res.status(townHallGate.status || 403).json(townHallGate);
   let verifiedNftTroop = null;
   if (_isNftBackedTroop(normalizedTroop)) {
     verifiedNftTroop = await verifyNftBackedTroopLoadToken(req.player, troop_name, req.body?.owner || req.body?.nft_owner || req.body?.wallet);
@@ -13290,7 +13379,7 @@ router.post('/buildings/:id/swap-troop', auth, async (req, res) => {
     }
 
     const player = db.db.prepare('SELECT gold FROM players WHERE id = ?').get(req.player.id);
-    const swapCost = _isNftBackedTroop(normalizedTroop) ? 0 : TROOP_COST;
+    const swapCost = _troopBuyCost(normalizedTroop);
     if (player.gold < swapCost) throw { status: 400, error: 'Not enough gold' };
 
     if (swapCost > 0) db.db.prepare('UPDATE players SET gold = gold - ? WHERE id = ?').run(swapCost, req.player.id);
@@ -13397,6 +13486,8 @@ router.post('/ship/load-troop', auth, async (req, res) => {
   if (!troop_name || !VALID_TROOPS.includes(normalizedTroop)) {
     return res.status(400).json(_activeTroopError(normalizedTroop));
   }
+  const townHallGate = _troopTownHallGate(req.player.id, normalizedTroop);
+  if (townHallGate) return res.status(townHallGate.status || 403).json(townHallGate);
   let verifiedNftTroop = null;
   if (_isNftBackedTroop(normalizedTroop)) {
     verifiedNftTroop = await verifyNftBackedTroopLoadToken(
@@ -13447,6 +13538,8 @@ router.post('/ship/swap-troop', auth, async (req, res) => {
   const normalizedTroop = _normalizeTroopName(troopName);
   if (!Number.isInteger(slot) || !troopName) return res.status(400).json({ error: 'Valid slot and troop_name required' });
   if (!VALID_TROOPS.includes(normalizedTroop)) return res.status(400).json(_activeTroopError(normalizedTroop));
+  const townHallGate = _troopTownHallGate(req.player.id, normalizedTroop);
+  if (townHallGate) return res.status(townHallGate.status || 403).json(townHallGate);
   let verifiedNftTroop = null;
   if (_isNftBackedTroop(normalizedTroop)) {
     verifiedNftTroop = await verifyNftBackedTroopLoadToken(
@@ -13468,7 +13561,7 @@ router.post('/ship/swap-troop', auth, async (req, res) => {
       });
       if (loaded) throw { status: 409, error: 'This NFT is already loaded', code: 'NFT_TROOP_ALREADY_LOADED' };
     }
-    const cost = _isNftBackedTroop(normalizedTroop) ? 0 : TROOP_COST;
+    const cost = _troopBuyCost(normalizedTroop);
     if (!db.canAfford(req.player.id, cost, 0, 0)) throw { status: 400, error: 'Not enough gold', cost };
     if (cost > 0) {
       db.subtractResources(req.player.id, cost, 0, 0, {
@@ -13571,6 +13664,7 @@ function _buildReinforcePlan(playerId) {
   const casualties = {};
   const shipsToRestore = [];
   let totalToRestore = 0;
+  let totalSlotsToRestore = 0;
   if (ship) {
     const current = ship.troops;
     const template = ship.troop_template;
@@ -13599,6 +13693,7 @@ function _buildReinforcePlan(playerId) {
         _appendTroopSlots(toAdd, normalized);
         casualties[normalized] = (casualties[normalized] || 0) + 1;
         restoredCount += 1;
+        totalSlotsToRestore += slotCost;
       }
     }
     if (toAdd.length > 0) {
@@ -13607,7 +13702,7 @@ function _buildReinforcePlan(playerId) {
     }
   }
 
-  return { casualties, totalToRestore, shipsToRestore };
+  return { casualties, totalToRestore, totalSlotsToRestore, shipsToRestore };
 }
 
 // Get casualties: compare ship_troops vs ship_troops_template to find restorable missing troops
@@ -13616,21 +13711,22 @@ router.get('/casualties', auth, (req, res) => {
   res.json({
     casualties: plan.casualties,
     total: plan.totalToRestore,
-    cost: plan.totalToRestore * REINFORCE_COST,
+    slots: plan.totalSlotsToRestore,
+    cost: plan.totalSlotsToRestore * REINFORCE_COST_PER_SLOT,
   });
 });
 
-// Reinforce: restore dead troops from template (costs 50 gold per restored troop)
+// Reinforce: restore dead troops from template (costs 50 gold per restored slot)
 router.post('/reinforce', auth, (req, res) => {
   const txn = db.db.transaction(() => {
-    const { totalToRestore, shipsToRestore } = _buildReinforcePlan(req.player.id);
+    const { totalToRestore, totalSlotsToRestore, shipsToRestore } = _buildReinforcePlan(req.player.id);
 
-    if (totalToRestore === 0) return { cost: 0, restored: 0, ships: [] };
+    if (totalToRestore === 0) return { cost: 0, restored: 0, restored_slots: 0, ships: [] };
 
-    const totalCost = totalToRestore * REINFORCE_COST;
+    const totalCost = totalSlotsToRestore * REINFORCE_COST_PER_SLOT;
     const spent = db.subtractResources(req.player.id, totalCost, 0, 0, {
       sourceType: 'reinforce',
-      metadata: { restored: totalToRestore, cost_gold: totalCost },
+      metadata: { restored: totalToRestore, restored_slots: totalSlotsToRestore, cost_gold: totalCost },
     });
     if (spent?.error) throw { status: 400, error: `Not enough gold (need ${totalCost})` };
 
@@ -13646,7 +13742,13 @@ router.post('/reinforce', auth, (req, res) => {
     }
 
     const updated = db.db.prepare('SELECT gold, wood, ore FROM players WHERE id = ?').get(req.player.id);
-    return { cost: totalCost, restored: totalToRestore, ships: resultShips, resources: updated };
+    return {
+      cost: totalCost,
+      restored: totalToRestore,
+      restored_slots: totalSlotsToRestore,
+      ships: resultShips,
+      resources: updated,
+    };
   });
 
   try {
@@ -18661,19 +18763,10 @@ const ADMIN_MAX_VILLAGE_BUILD_ORDER = [
 ];
 
 const ADMIN_TH_MAX_COUNT = {
-  mine: [1, 2, 3, 3, 4],
-  sawmill: [1, 2, 3, 3, 4],
-  barn: [1, 1, 1, 1, 1],
-  port: [1, 2, 3, 3, 3],
-  archer_tower: [1, 2, 3, 3, 3],
-  tombstone: [0, 1, 3, 3, 3],
-  altar: [1, 1, 1, 1, 1],
-  turret: [0, 0, 3, 3, 3],
-  shark_trap: [0, 0, 1, 1, 2],
-  storage: [0, 1, 2, 3, 3],
-  mage_tower: [0, 0, 0, 2, 2],
-  mortar: [0, 0, 0, 0, 1],
-  town_hall: [1, 1, 1, 1, 1],
+  ...db.TH_MAX_COUNT,
+  // Legacy ports remain admin-visible for old accounts, but the main ship
+  // progression still ends at level 5 and receives no TH6 capacity increase.
+  port: [1, 2, 3, 3, 3, 3],
 };
 
 function adminMaxBuildingCountForTh(type, townHallLevel) {
@@ -18683,9 +18776,7 @@ function adminMaxBuildingCountForTh(type, townHallLevel) {
 }
 
 function adminBuildingTargetLevelForTh(type, def, townHallLevel) {
-  const maxLevel = adminBuildingMaxLevel(type, def);
-  if (type === 'town_hall') return Math.max(1, Math.min(maxLevel, townHallLevel));
-  return Math.max(1, Math.min(maxLevel, townHallLevel));
+  return db.getBuildingMaxLevelForTownHall(type, townHallLevel);
 }
 
 function adminBuildingMaxLevel(type, def) {
@@ -18781,7 +18872,7 @@ router.post('/admin/players/:name/max-village', adminAuth, (req, res) => {
   try {
     const player = db.db.prepare('SELECT id, name FROM players WHERE name = ? AND COALESCE(is_bot, 0) = 0').get(req.params.name);
     if (!player) return res.status(404).json({ error: 'Player not found' });
-    const townHallLevel = Math.max(1, Math.min(5, Math.floor(Number(req.body?.town_hall_level || req.body?.level || 1))));
+    const townHallLevel = Math.max(1, Math.min(6, Math.floor(Number(req.body?.town_hall_level || req.body?.level || 1))));
     const result = db.db.transaction(() => {
       db.db.prepare('DELETE FROM buildings WHERE player_id = ?').run(player.id);
       const added = [];
@@ -19797,8 +19888,218 @@ function buildAdminTelemetryStats() {
   };
 }
 
+function buildAdminPlayerAnalytics(futuresByPlayer) {
+  const dayMs = 24 * 60 * 60 * 1000;
+  const dayKey = (ms) => new Date(ms).toISOString().slice(0, 10);
+  const roundOne = (value) => Math.round((Number(value) || 0) * 10) / 10;
+
+  // player_activity_events is the sampled, authenticated heartbeat stream.
+  // Aggregate it in SQLite instead of materializing hundreds of thousands of
+  // heartbeat and client-log rows in the Node process.
+  const dailyRows = adminSafeAll(`
+    SELECT date(e.created_at) AS day, COUNT(DISTINCT e.player_id) AS active_players
+    FROM player_activity_events e
+    JOIN players p ON p.id = e.player_id
+    WHERE e.created_at > datetime('now', '-30 days')
+      AND COALESCE(p.is_bot, 0) = 0
+    GROUP BY date(e.created_at)
+  `);
+  const activeByDay = new Map(dailyRows.map((row) => [row.day, Number(row.active_players || 0)]));
+  const activeAverage = (days) => {
+    let total = 0;
+    const now = Date.now();
+    for (let i = 0; i < days; i += 1) total += activeByDay.get(dayKey(now - i * dayMs)) || 0;
+    return roundOne(total / days);
+  };
+
+  const actions = adminSafeAll(`
+    WITH recent_actions AS (
+      SELECT COALESCE(NULLIF(e.event_type, ''), NULLIF(e.source, ''), 'activity') AS action
+      FROM player_activity_events e
+      JOIN players p ON p.id = e.player_id
+      WHERE e.created_at > datetime('now', '-7 days')
+        AND COALESCE(p.is_bot, 0) = 0
+      UNION ALL
+      SELECT COALESCE(NULLIF(cl.source, ''), NULLIF(cl.level, ''), 'client_log') AS action
+      FROM client_logs cl
+      JOIN players p ON p.id = cl.player_id
+      WHERE cl.player_id IS NOT NULL
+        AND cl.created_at > datetime('now', '-7 days')
+        AND COALESCE(p.is_bot, 0) = 0
+    )
+    SELECT substr(action, 1, 80) AS action, COUNT(*) AS count
+    FROM recent_actions
+    GROUP BY substr(action, 1, 80)
+    ORDER BY count DESC
+    LIMIT 20
+  `).map((row) => ({ action: row.action, count: Number(row.count || 0) }));
+
+  const activityRows = adminSafeAll(`
+    WITH activity AS (
+      SELECT e.player_id,
+             COUNT(DISTINCT CASE WHEN e.created_at > datetime('now', '-7 days') THEN date(e.created_at) END) AS active_days_7d,
+             COUNT(DISTINCT date(e.created_at)) AS active_days_30d,
+             SUM(CASE WHEN e.created_at > datetime('now', '-7 days') THEN 1 ELSE 0 END) AS events_7d,
+             MAX(e.id) AS latest_event_id
+      FROM player_activity_events e
+      JOIN players p ON p.id = e.player_id
+      WHERE e.created_at > datetime('now', '-30 days')
+        AND COALESCE(p.is_bot, 0) = 0
+      GROUP BY e.player_id
+    )
+    SELECT a.player_id, a.active_days_7d, a.active_days_30d, a.events_7d,
+           e.created_at AS last_action_at,
+           COALESCE(NULLIF(e.event_type, ''), NULLIF(e.source, ''), 'activity') AS last_action
+    FROM activity a
+    LEFT JOIN player_activity_events e ON e.id = a.latest_event_id
+  `);
+  const activityByPlayer = new Map(activityRows.map((row) => [row.player_id, row]));
+
+  const sessionRows = adminSafeAll(`
+    WITH ordered AS (
+      SELECT e.player_id, e.id, e.created_at,
+             LAG(e.created_at) OVER (PARTITION BY e.player_id ORDER BY e.created_at, e.id) AS previous_at
+      FROM player_activity_events e
+      JOIN players p ON p.id = e.player_id
+      WHERE e.created_at > datetime('now', '-30 days')
+        AND COALESCE(p.is_bot, 0) = 0
+    ), marked AS (
+      SELECT *, CASE
+        WHEN previous_at IS NULL OR unixepoch(created_at) - unixepoch(previous_at) > 1800 THEN 1
+        ELSE 0
+      END AS new_session
+      FROM ordered
+    ), grouped AS (
+      SELECT *, SUM(new_session) OVER (
+        PARTITION BY player_id ORDER BY created_at, id ROWS UNBOUNDED PRECEDING
+      ) AS session_id
+      FROM marked
+    ), sessions AS (
+      SELECT player_id, session_id, MIN(created_at) AS session_start, MAX(created_at) AS session_end
+      FROM grouped
+      GROUP BY player_id, session_id
+    )
+    SELECT player_id,
+           SUM(CASE WHEN session_start > datetime('now', '-7 days') THEN 1 ELSE 0 END) AS sessions_7d,
+           SUM(CASE
+             WHEN session_start > datetime('now', '-7 days') AND session_end > session_start
+             THEN (julianday(session_end) - julianday(session_start)) * 1440.0
+             ELSE 0
+           END) AS duration_minutes_7d,
+           SUM(CASE
+             WHEN session_start > datetime('now', '-7 days') AND session_end > session_start THEN 1
+             ELSE 0
+           END) AS duration_sessions_7d
+    FROM sessions
+    GROUP BY player_id
+  `);
+  const sessionsByPlayer = new Map(sessionRows.map((row) => [row.player_id, row]));
+
+  const thRows = adminSafeAll(`
+    WITH player_th AS (
+      SELECT p.id, COALESCE(MAX(CASE WHEN b.type = 'town_hall' THEN b.level END), 1) AS th_level
+      FROM players p
+      LEFT JOIN buildings b ON b.player_id = p.id
+      WHERE COALESCE(p.is_bot, 0) = 0
+      GROUP BY p.id
+    ), total AS (SELECT COUNT(*) AS n FROM player_th)
+    SELECT th_level, COUNT(*) AS players,
+           ROUND(COUNT(*) * 100.0 / NULLIF((SELECT n FROM total), 0), 1) AS pct
+    FROM player_th
+    GROUP BY th_level
+    ORDER BY th_level
+  `);
+  const thAvgRow = adminSafeGet(`
+    WITH player_th AS (
+      SELECT p.id, COALESCE(MAX(CASE WHEN b.type = 'town_hall' THEN b.level END), 1) AS th_level
+      FROM players p
+      LEFT JOIN buildings b ON b.player_id = p.id
+      WHERE COALESCE(p.is_bot, 0) = 0
+      GROUP BY p.id
+    )
+    SELECT ROUND(AVG(th_level), 2) AS avg_th FROM player_th
+  `);
+
+  const battleRows = adminSafeAll(`
+    SELECT attacker_id AS player_id, COUNT(*) AS battles_7d,
+           COALESCE(SUM(CASE WHEN verified_result = 'accepted' THEN 1 ELSE 0 END), 0) AS accepted_7d
+    FROM battle_replays
+    WHERE created_at > datetime('now', '-7 days')
+    GROUP BY attacker_id
+  `);
+  const battlesByPlayer = new Map(battleRows.map((row) => [row.player_id, row]));
+  const playerRowsAll = adminSafeAll(`
+    SELECT p.id, p.name, p.dex, p.last_seen_at,
+           COALESCE(MAX(CASE WHEN b.type = 'town_hall' THEN b.level END), 1) AS th_level,
+           COUNT(b.id) AS buildings_count
+    FROM players p
+    LEFT JOIN buildings b ON b.player_id = p.id
+    WHERE COALESCE(p.is_bot, 0) = 0
+    GROUP BY p.id
+    ORDER BY p.last_seen_at DESC
+  `).map((player) => {
+    const activity = activityByPlayer.get(player.id) || {};
+    const sessions = sessionsByPlayer.get(player.id) || {};
+    const battles = battlesByPlayer.get(player.id) || {};
+    const futures = futuresByPlayer.get(player.id) || { volume_usd: 0, trades_count: 0, by_dex: {} };
+    const durationCount = Number(sessions.duration_sessions_7d || 0);
+    return {
+      id: player.id,
+      name: player.name,
+      dex: player.dex || 'unknown',
+      th_level: Number(player.th_level || 1),
+      buildings_count: Number(player.buildings_count || 0),
+      active_days_7d: Number(activity.active_days_7d || 0),
+      active_days_30d: Number(activity.active_days_30d || 0),
+      sessions_7d: Number(sessions.sessions_7d || 0),
+      avg_session_min_7d: durationCount > 0
+        ? roundOne(Number(sessions.duration_minutes_7d || 0) / durationCount)
+        : 0,
+      events_7d: Number(activity.events_7d || 0),
+      battles_7d: Number(battles.battles_7d || 0),
+      accepted_battles_7d: Number(battles.accepted_7d || 0),
+      futures_volume_usd: Number((Number(futures.volume_usd) || 0).toFixed(2)),
+      futures_trades_count: Number(futures.trades_count) || 0,
+      futures_by_dex: futures.by_dex || {},
+      last_seen_at: player.last_seen_at,
+      last_action_at: activity.last_action_at || player.last_seen_at || null,
+      last_action: activity.last_action || null,
+    };
+  });
+
+  const summarySessions = sessionRows.reduce((sum, row) => sum + Number(row.sessions_7d || 0), 0);
+  const summaryDuration = sessionRows.reduce((sum, row) => sum + Number(row.duration_minutes_7d || 0), 0);
+  const summaryDurationCount = sessionRows.reduce((sum, row) => sum + Number(row.duration_sessions_7d || 0), 0);
+  const observedEvents = activityRows.reduce((sum, row) => sum + Number(row.events_7d || 0), 0);
+
+  return {
+    summary: {
+      avg_daily_active_7d: activeAverage(7),
+      avg_daily_active_30d: activeAverage(30),
+      sessions_7d: summarySessions,
+      avg_session_min_7d: summaryDurationCount > 0 ? roundOne(summaryDuration / summaryDurationCount) : 0,
+      observed_events_7d: observedEvents,
+      note: 'Session length is estimated from sampled authenticated API heartbeats; a new session starts after 30 minutes of inactivity.',
+    },
+    town_hall: { average: thAvgRow.avg_th || 0, distribution: thRows },
+    actions,
+    players: playerRowsAll.slice(0, 200),
+    players_export: playerRowsAll,
+  };
+}
+
+const ADMIN_STATS_CACHE_TTL_MS = 60 * 1000;
+let adminStatsCache = null;
+let adminStatsCacheAt = 0;
+
 // Server stats
 router.get('/admin/stats', adminAuth, (req, res) => {
+  const cacheAgeMs = Date.now() - adminStatsCacheAt;
+  if (adminStatsCache && cacheAgeMs >= 0 && cacheAgeMs < ADMIN_STATS_CACHE_TTL_MS) {
+    res.set('X-Clash-Admin-Stats-Cache', 'hit');
+    return res.json(adminStatsCache);
+  }
+  res.set('X-Clash-Admin-Stats-Cache', 'miss');
   const playerCount = db.db.prepare('SELECT COUNT(*) as c FROM players WHERE COALESCE(is_bot, 0) = 0').get().c;
   const buildingCount = db.db.prepare(`
     SELECT COUNT(*) as c
@@ -19881,49 +20182,42 @@ router.get('/admin/stats', adminAuth, (req, res) => {
     const fdb = futuresDbReadonly();
     if (fdb) {
       const sourceWhereForDex = (dex) => tradeRecon.verifiedSourceWhereForDex(dex);
-      const nameLookup = db.db.prepare('SELECT name, wallet FROM players WHERE id = ?');
+      const playerNames = new Map(db.db.prepare('SELECT id, name, wallet FROM players').all()
+        .map((player) => [player.id, player]));
       for (const dex of ACTIVITY_DEXES) {
         const sourceWhere = sourceWhereForDex(dex);
-        const totals = fdb.prepare(`
-          SELECT COUNT(*) AS trades,
-                 COUNT(DISTINCT player_id) AS traders,
-                 COALESCE(SUM(notional_usd), 0) AS volume
-          FROM trade_history WHERE dex = ? AND status = 'filled' AND ${sourceWhere}
-        `);
         const recent = fdb.prepare(`
           SELECT COUNT(*) AS trades FROM trade_history
           WHERE dex = ? AND status = 'filled' AND ${sourceWhere}
             AND created_at > datetime('now', '-24 hours')
         `);
-        const top = fdb.prepare(`
-          SELECT player_id, COALESCE(SUM(notional_usd), 0) AS vol, COUNT(*) AS trades
-          FROM trade_history WHERE dex = ? AND status = 'filled' AND ${sourceWhere}
-          GROUP BY player_id ORDER BY vol DESC LIMIT 10
-        `);
-        const tot = totals.get(dex) || {};
         const rec = recent.get(dex) || {};
-        dexActivity[dex] = {
-          total_trades: tot.trades || 0,
-          active_traders: tot.traders || 0,
-          total_volume: tot.volume || 0,
-          trades_24h: rec.trades || 0,
-        };
-        const raw = top.all(dex);
-        dexTop[dex] = raw.map(r => {
-          const p = nameLookup.get(r.player_id) || {};
-          return {
-            player_id: r.player_id,
-            name: p.name || '?',
-            wallet: p.wallet || '',
-            volume: r.vol,
-            trades: r.trades,
-          };
-        });
         const perPlayer = fdb.prepare(`
           SELECT player_id, COALESCE(SUM(notional_usd), 0) AS volume, COUNT(*) AS trades
           FROM trade_history WHERE dex = ? AND status = 'filled' AND ${sourceWhere}
           GROUP BY player_id
         `).all(dex);
+        const totalTrades = perPlayer.reduce((sum, row) => sum + Number(row.trades || 0), 0);
+        const totalVolume = perPlayer.reduce((sum, row) => sum + Number(row.volume || 0), 0);
+        dexActivity[dex] = {
+          total_trades: totalTrades,
+          active_traders: perPlayer.length,
+          total_volume: totalVolume,
+          trades_24h: rec.trades || 0,
+        };
+        dexTop[dex] = [...perPlayer]
+          .sort((a, b) => Number(b.volume || 0) - Number(a.volume || 0))
+          .slice(0, 10)
+          .map(r => {
+          const p = playerNames.get(r.player_id) || {};
+          return {
+            player_id: r.player_id,
+            name: p.name || '?',
+            wallet: p.wallet || '',
+            volume: r.volume,
+            trades: r.trades,
+          };
+        });
         for (const row of perPlayer) {
           if (!row.player_id) continue;
           const existing = futuresByPlayer.get(row.player_id) || { volume_usd: 0, trades_count: 0, by_dex: {} };
@@ -19975,7 +20269,7 @@ router.get('/admin/stats', adminAuth, (req, res) => {
           ORDER BY id DESC LIMIT 20
         `.replace(', fee,', hasFeeColumn ? ', fee,' : ", NULL AS fee,")
           .replace(', proof_json,', hasProofColumn ? ', proof_json,' : ", NULL AS proof_json,")).all().map(row => {
-          const p = nameLookup.get(row.player_id) || {};
+          const p = playerNames.get(row.player_id) || {};
           const clientOrderId = String(row.client_order_id || '');
           const parts = clientOrderId.split(':');
           const subAccountId = parts.length >= 3 ? parts[1] : '';
@@ -20111,202 +20405,9 @@ router.get('/admin/stats', adminAuth, (req, res) => {
     LIMIT 100
   `).all();
 
-  const playerAnalytics = (() => {
-    const now = Date.now();
-    const dayMs = 24 * 60 * 60 * 1000;
-    const sessionGapMs = 30 * 60 * 1000;
-    const toMs = (value) => {
-      if (!value) return 0;
-      const t = new Date(String(value).replace(' ', 'T') + 'Z').getTime();
-      return Number.isFinite(t) ? t : 0;
-    };
-    const dayKey = (ms) => new Date(ms).toISOString().slice(0, 10);
-    const eventRows = [];
-    try {
-      eventRows.push(...db.db.prepare(`
-        SELECT e.player_id, e.created_at, e.event_type AS action, e.source
-        FROM player_activity_events e
-        JOIN players p ON p.id = e.player_id
-        WHERE e.created_at > datetime('now', '-30 days')
-          AND COALESCE(p.is_bot, 0) = 0
-      `).all());
-    } catch {}
-    try {
-      eventRows.push(...db.db.prepare(`
-        SELECT cl.player_id, cl.created_at, COALESCE(NULLIF(cl.source, ''), cl.level, 'client_log') AS action, 'client_log' AS source
-        FROM client_logs cl
-        JOIN players p ON p.id = cl.player_id
-        WHERE cl.player_id IS NOT NULL
-          AND cl.created_at > datetime('now', '-30 days')
-          AND COALESCE(p.is_bot, 0) = 0
-      `).all());
-    } catch {}
+  const playerAnalytics = buildAdminPlayerAnalytics(futuresByPlayer);
 
-    const eventsByPlayer = new Map();
-    const activeDays7 = new Map();
-    const activeDays30 = new Map();
-    const activePlayersByDay7 = new Map();
-    const activePlayersByDay30 = new Map();
-    const actionCounts = new Map();
-    for (const row of eventRows) {
-      const ms = toMs(row.created_at);
-      if (!row.player_id || !ms) continue;
-      if (!eventsByPlayer.has(row.player_id)) eventsByPlayer.set(row.player_id, []);
-      eventsByPlayer.get(row.player_id).push({ ...row, ms });
-
-      const age = now - ms;
-      const d = dayKey(ms);
-      if (age <= 30 * dayMs) {
-        if (!activeDays30.has(row.player_id)) activeDays30.set(row.player_id, new Set());
-        activeDays30.get(row.player_id).add(d);
-        if (!activePlayersByDay30.has(d)) activePlayersByDay30.set(d, new Set());
-        activePlayersByDay30.get(d).add(row.player_id);
-      }
-      if (age <= 7 * dayMs) {
-        if (!activeDays7.has(row.player_id)) activeDays7.set(row.player_id, new Set());
-        activeDays7.get(row.player_id).add(d);
-        if (!activePlayersByDay7.has(d)) activePlayersByDay7.set(d, new Set());
-        activePlayersByDay7.get(d).add(row.player_id);
-        const key = String(row.action || row.source || 'activity').slice(0, 80);
-        actionCounts.set(key, (actionCounts.get(key) || 0) + 1);
-      }
-    }
-
-    const sessionsByPlayer = new Map();
-    const allSessions = [];
-    for (const [playerId, rows] of eventsByPlayer.entries()) {
-      rows.sort((a, b) => a.ms - b.ms);
-      const sessions = [];
-      let start = 0;
-      let end = 0;
-      let events = 0;
-      for (const row of rows) {
-        if (!start || row.ms - end > sessionGapMs) {
-          if (start) sessions.push({ start, end, events, durationMs: Math.max(0, end - start) });
-          start = row.ms;
-          events = 0;
-        }
-        end = row.ms;
-        events += 1;
-      }
-      if (start) sessions.push({ start, end, events, durationMs: Math.max(0, end - start) });
-      sessionsByPlayer.set(playerId, sessions);
-      allSessions.push(...sessions);
-    }
-
-    const activeAvg = (map, days) => {
-      let total = 0;
-      for (let i = 0; i < days; i += 1) {
-        total += map.get(dayKey(now - i * dayMs))?.size || 0;
-      }
-      return Math.round((total / days) * 10) / 10;
-    };
-    const avgDurationMin = (sessions) => {
-      const withDuration = sessions.filter(s => s.durationMs > 0);
-      if (!withDuration.length) return 0;
-      const avg = withDuration.reduce((sum, s) => sum + s.durationMs, 0) / withDuration.length;
-      return Math.round((avg / 60000) * 10) / 10;
-    };
-
-    const thRows = db.db.prepare(`
-      WITH player_th AS (
-        SELECT p.id, COALESCE(MAX(CASE WHEN b.type = 'town_hall' THEN b.level END), 1) AS th_level
-        FROM players p
-        LEFT JOIN buildings b ON b.player_id = p.id
-        WHERE COALESCE(p.is_bot, 0) = 0
-        GROUP BY p.id
-      ),
-      total AS (SELECT COUNT(*) AS n FROM player_th)
-      SELECT th_level,
-             COUNT(*) AS players,
-             ROUND(COUNT(*) * 100.0 / NULLIF((SELECT n FROM total), 0), 1) AS pct
-      FROM player_th
-      GROUP BY th_level
-      ORDER BY th_level
-    `).all();
-    const thAvgRow = db.db.prepare(`
-      WITH player_th AS (
-        SELECT p.id, COALESCE(MAX(CASE WHEN b.type = 'town_hall' THEN b.level END), 1) AS th_level
-        FROM players p
-        LEFT JOIN buildings b ON b.player_id = p.id
-        WHERE COALESCE(p.is_bot, 0) = 0
-        GROUP BY p.id
-      )
-      SELECT ROUND(AVG(th_level), 2) AS avg_th FROM player_th
-    `).get() || {};
-
-    const battleRows = db.db.prepare(`
-      SELECT attacker_id AS player_id,
-             COUNT(*) AS battles_7d,
-             COALESCE(SUM(CASE WHEN verified_result = 'accepted' THEN 1 ELSE 0 END), 0) AS accepted_7d
-      FROM battle_replays
-      WHERE created_at > datetime('now', '-7 days')
-      GROUP BY attacker_id
-    `).all();
-    const battlesByPlayer = new Map(battleRows.map(r => [r.player_id, r]));
-    const playerRowsAll = db.db.prepare(`
-      SELECT p.id, p.name, p.dex, p.last_seen_at,
-             COALESCE(MAX(CASE WHEN b.type = 'town_hall' THEN b.level END), 1) AS th_level,
-             COUNT(b.id) AS buildings_count
-      FROM players p
-      LEFT JOIN buildings b ON b.player_id = p.id
-      WHERE COALESCE(p.is_bot, 0) = 0
-      GROUP BY p.id
-      ORDER BY p.last_seen_at DESC
-    `).all().map((p) => {
-      const sessions = sessionsByPlayer.get(p.id) || [];
-      const evs = eventsByPlayer.get(p.id) || [];
-      const latest = evs.length ? evs[evs.length - 1] : null;
-      const b = battlesByPlayer.get(p.id) || {};
-      const futures = futuresByPlayer.get(p.id) || { volume_usd: 0, trades_count: 0, by_dex: {} };
-      return {
-        id: p.id,
-        name: p.name,
-        dex: p.dex || 'unknown',
-        th_level: p.th_level || 1,
-        buildings_count: p.buildings_count || 0,
-        active_days_7d: activeDays7.get(p.id)?.size || 0,
-        active_days_30d: activeDays30.get(p.id)?.size || 0,
-        sessions_7d: sessions.filter(s => now - s.start <= 7 * dayMs).length,
-        avg_session_min_7d: avgDurationMin(sessions.filter(s => now - s.start <= 7 * dayMs)),
-        events_7d: evs.filter(e => now - e.ms <= 7 * dayMs).length,
-        battles_7d: b.battles_7d || 0,
-        accepted_battles_7d: b.accepted_7d || 0,
-        futures_volume_usd: Number((Number(futures.volume_usd) || 0).toFixed(2)),
-        futures_trades_count: Number(futures.trades_count) || 0,
-        futures_by_dex: futures.by_dex || {},
-        last_seen_at: p.last_seen_at,
-        last_action_at: latest?.created_at || p.last_seen_at || null,
-        last_action: latest?.action || null,
-      };
-    });
-
-    return {
-      summary: {
-        avg_daily_active_7d: activeAvg(activePlayersByDay7, 7),
-        avg_daily_active_30d: activeAvg(activePlayersByDay30, 30),
-        sessions_7d: allSessions.filter(s => now - s.start <= 7 * dayMs).length,
-        avg_session_min_7d: avgDurationMin(allSessions.filter(s => now - s.start <= 7 * dayMs)),
-        observed_events_7d: eventRows.filter(r => {
-          const ms = toMs(r.created_at);
-          return ms && now - ms <= 7 * dayMs;
-        }).length,
-        note: 'Session length is estimated from heartbeat/client-log events; a new session starts after 30 minutes of inactivity.',
-      },
-      town_hall: {
-        average: thAvgRow.avg_th || 0,
-        distribution: thRows,
-      },
-      actions: Array.from(actionCounts.entries())
-        .map(([action, count]) => ({ action, count }))
-        .sort((a, b) => b.count - a.count)
-        .slice(0, 20),
-      players: playerRowsAll.slice(0, 200),
-      players_export: playerRowsAll,
-    };
-  })();
-
-  res.json({
+  const payload = {
     players: playerCount, buildings: buildingCount, replays: replayCount,
     accepted, rejected, shielded, recentBattles,
     economy: { totalGold, totalWood, totalOre },
@@ -20348,7 +20449,10 @@ router.get('/admin/stats', adminAuth, (req, res) => {
     player_analytics: playerAnalytics,
     uptime: Math.floor(process.uptime()),
     memory: Math.round(process.memoryUsage().rss / 1024 / 1024),
-  });
+  };
+  adminStatsCache = payload;
+  adminStatsCacheAt = Date.now();
+  res.json(payload);
 });
 
 // ---------- Admin: Tasks CRUD ----------

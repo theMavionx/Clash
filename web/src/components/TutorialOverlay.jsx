@@ -26,9 +26,9 @@ const ARMY_STEPS = [
 const ATTACK_STEPS = [
   { title: 'Battle!', text: 'You\'re about to attack! Let\'s learn the basics.', icon: '⚔️' },
   { title: 'Place Ships', text: 'Tap the water near the enemy shore to deploy your ships. Troops will swim ashore and attack automatically.', icon: '⛵' },
-  { title: 'Ship Cannon', text: 'You have a cannon with 10 energy. Fire it at buildings for massive damage! Each shot costs more energy.', icon: '💥' },
+  { title: 'Ship Cannon', text: 'Your Main Ship level sets the starting battle energy shared by the cannon and rally. Each use costs more energy.', icon: '💥' },
   { title: 'Destroy Town Hall', text: 'Destroy the enemy Town Hall to win! All remaining buildings will crumble after it falls.', icon: '🏆' },
-  { title: 'Casualties', text: 'Troops lost in battle need to be reinforced. Tap the Reinforce button after returning home (50 gold per troop).', icon: '🩹' },
+  { title: 'Casualties', text: 'Troops lost in battle need to be reinforced. Tap the Reinforce button after returning home (50 gold per occupied ship slot).', icon: '🩹' },
 ];
 
 const TRADE_STEPS = [

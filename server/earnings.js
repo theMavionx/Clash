@@ -2787,6 +2787,10 @@ async function fetchRevenueAnalytics({ mainDb = null, tournamentLimit = 120 } = 
 }
 
 const CACHE_TTL_MS = 60 * 1000;
+const EARNINGS_READER_TIMEOUT_MS = Math.max(
+  5_000,
+  Math.min(30_000, Number(process.env.EARNINGS_READER_TIMEOUT_MS) || 12_000),
+);
 let _cache = null;
 let _cacheAt = 0;
 
@@ -2888,11 +2892,28 @@ async function readEarningsDex(label, context = {}) {
     err.status = 404;
     throw err;
   }
+  let timer = null;
   try {
-    const value = await config.read(context);
+    const value = await Promise.race([
+      config.read(context),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} earnings reader timed out`)), EARNINGS_READER_TIMEOUT_MS);
+      }),
+    ]);
     return wrapEarningsResult(label, value);
   } catch (reason) {
+    const cached = _cache?.[label];
+    if (cached) {
+      return {
+        ...cached,
+        cached: true,
+        stale: true,
+        stale_reason: String(reason?.message || reason).slice(0, 240),
+      };
+    }
     return wrapEarningsResult(label, { status: 'rejected', reason });
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 

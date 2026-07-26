@@ -372,6 +372,7 @@ prepare_shared_runtime() {
                 printf '%s\n' NODE_ENV=production
                 printf '%s\n' ELFA_API_KEY=
                 printf '%s\n' DECIBEL_API_KEY=
+                printf '%s\n' DECIBEL_API_KEYS=
                 printf '%s\n' DECIBEL_API_WALLET_PRIVATE_KEY=
                 printf '%s\n' DECIBEL_ALLOWED_BUILDER_ADDRS=
                 printf '%s\n' DECIBEL_BUILDER_FEE_BPS=1
@@ -435,6 +436,7 @@ prepare_shared_runtime() {
     ensure_env_default "NODE_ENV" "production"
     ensure_env_default "ELFA_API_KEY" ""
     ensure_env_default "DECIBEL_API_KEY" ""
+    ensure_env_default "DECIBEL_API_KEYS" ""
     ensure_env_default "DECIBEL_API_WALLET_PRIVATE_KEY" ""
     ensure_env_default "DECIBEL_ALLOWED_BUILDER_ADDRS" ""
     ensure_env_default "DECIBEL_BUILDER_FEE_BPS" "1"

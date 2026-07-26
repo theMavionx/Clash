@@ -1,19 +1,19 @@
 extends BaseTroop
-## FireDragon - NFT-backed flying 2-slot troop.
+## FireDragon - NFT-backed flying 10-slot troop.
 ## The player upgrades one shared Dragon troop level; each owned NFT then
-## applies its rarity multiplier over two Mages at the same troop level.
+## applies its rarity multiplier over the canonical common Dragon stats.
 
 
 enum DragonSkin { BLACK }
 
-const MAGE_LEVEL_STATS: Dictionary = {
-	1: {"hp": 150, "damage": 58, "atk_speed": 1.25},
-	2: {"hp": 200, "damage": 74, "atk_speed": 1.12},
-	3: {"hp": 265, "damage": 104, "atk_speed": 1.0},
-	4: {"hp": 345, "damage": 138, "atk_speed": 0.90},
-	5: {"hp": 440, "damage": 182, "atk_speed": 0.82},
-	6: {"hp": 555, "damage": 238, "atk_speed": 0.76},
-	7: {"hp": 690, "damage": 310, "atk_speed": 0.70},
+const COMMON_LEVEL_STATS: Dictionary = {
+	1: {"hp": 1750, "damage": 470, "atk_speed": 1.25},
+	2: {"hp": 2320, "damage": 600, "atk_speed": 1.12},
+	3: {"hp": 3080, "damage": 840, "atk_speed": 1.0},
+	4: {"hp": 4000, "damage": 1115, "atk_speed": 0.90},
+	5: {"hp": 5100, "damage": 1470, "atk_speed": 0.82},
+	6: {"hp": 6440, "damage": 1920, "atk_speed": 0.76},
+	7: {"hp": 8000, "damage": 2500, "atk_speed": 0.70},
 }
 
 const NFT_RARITY_MULTIPLIERS: Dictionary = {
@@ -22,7 +22,6 @@ const NFT_RARITY_MULTIPLIERS: Dictionary = {
 	"legendary": 1.5,
 	"unrevealed": 1.2,
 }
-const DRAGON_SLOT_COUNT: float = 2.0
 const MAX_TROOP_LEVEL: int = 7
 
 const ANIMATION_PATHS: Dictionary = {
@@ -136,11 +135,12 @@ static func _compute_dynamic_stats(dragon_level: int, levels: Dictionary, rarity
 	var troop_level: int = _troop_level_from_map(levels, "fire_dragon")
 	if not levels.has("fire_dragon") and not levels.has("FireDragon"):
 		troop_level = clamped_level
-	var stat: Dictionary = MAGE_LEVEL_STATS.get(troop_level, MAGE_LEVEL_STATS[1])
-	var power_mult: float = float(NFT_RARITY_MULTIPLIERS.get(_normalize_rarity(rarity), 1.2))
+	var stat: Dictionary = COMMON_LEVEL_STATS.get(troop_level, COMMON_LEVEL_STATS[1])
+	var rarity_mult: float = float(NFT_RARITY_MULTIPLIERS.get(_normalize_rarity(rarity), 1.2))
+	var rarity_scale: float = rarity_mult / float(NFT_RARITY_MULTIPLIERS.common)
 	return {
-		"hp": int(ceil(float(stat.hp) * DRAGON_SLOT_COUNT * power_mult)),
-		"damage": int(ceil(float(stat.damage) * DRAGON_SLOT_COUNT * power_mult)),
+		"hp": int(ceil(float(stat.hp) * rarity_scale)),
+		"damage": int(ceil(float(stat.damage) * rarity_scale)),
 		"atk_speed": float(stat.atk_speed),
 	}
 

@@ -3,7 +3,7 @@ extends Node3D
 ## target and damage from replay movement; this script mirrors that result and
 ## owns presentation only.
 
-const DAMAGE_LEVELS: Array[int] = [500, 750, 1050, 1450, 2000]
+const DAMAGE_LEVELS: Array[int] = [500, 750, 1050, 1450, 2000, 2400]
 const TRIGGER_PADDING: float = 0.018
 const HEAD_TIP_HEIGHT: float = 0.105
 const HEAD_VISIBLE_DEPTH: float = 0.10
@@ -26,6 +26,7 @@ var _bite_tracking: bool = false
 var _bite_target_local := Vector3.ZERO
 var _bite_target: Node3D = null
 var _combat_concealed: bool = false
+var _freeze_remaining: float = 0.0
 
 
 func _ready() -> void:
@@ -66,8 +67,12 @@ func set_ward_bonus_pct(_pct: int) -> void:
 	pass
 
 
-func _physics_process(_delta: float) -> void:
+func _physics_process(delta: float) -> void:
 	if _spent or not is_instance_valid(_bs):
+		return
+	delta = BaseTroop.combat_delta(delta)
+	if _freeze_remaining > 0.0:
+		_freeze_remaining = maxf(0.0, _freeze_remaining - delta)
 		return
 	if not _is_combat_active():
 		if _combat_concealed:
@@ -78,6 +83,10 @@ func _physics_process(_delta: float) -> void:
 	var target := _find_trigger_target()
 	if target != null:
 		_trigger(target)
+
+
+func freeze_for(duration: float) -> void:
+	_freeze_remaining = maxf(_freeze_remaining, maxf(0.0, duration))
 
 
 func _is_enemy_battle() -> bool:
@@ -303,8 +312,9 @@ func _trigger(target: Node3D) -> void:
 	var target_local := to_local(target_position)
 	var replay_order := int(target.get_meta("replay_order", -1))
 	var hp_before := int(target.get("hp"))
-	var instant_kill := not _is_demon_king(target)
-	var applied_damage := maxi(1, hp_before) if instant_kill else _damage
+	var trap_immune := target.has_method("is_trap_immune") and bool(target.call("is_trap_immune"))
+	var instant_kill := not trap_immune and not _is_demon_king(target)
+	var applied_damage := 0 if trap_immune else (maxi(1, hp_before) if instant_kill else _damage)
 	if is_instance_valid(_bs) and _bs.has_method("record_replay_telemetry"):
 		_bs.record_replay_telemetry("shark_trap_trigger", {
 			"building_id": int(get_meta("server_id", -1)),
@@ -312,13 +322,22 @@ func _trigger(target: Node3D) -> void:
 			"damage": applied_damage,
 			"level_damage": _damage,
 			"instant_kill": instant_kill,
+			"trap_immune": trap_immune,
 			"replay_order": replay_order,
 			"hp_before": hp_before,
+			"hp_after": hp_before if trap_immune else maxi(0, hp_before - applied_damage),
 			"x": snappedf(target_position.x, 0.001),
 			"z": snappedf(target_position.z, 0.001),
 		})
 	var visual_duration := RISE_DURATION + BITE_HOLD_DURATION
-	if target.has_method("damage_by_shark_trap"):
+	if applied_damage <= 0:
+		if target.has_method("_record_replay_telemetry"):
+			target.call("_record_replay_telemetry", "shark_trap_immune", {
+				"damage": 0,
+				"hp_before": hp_before,
+				"hp_after": hp_before,
+			})
+	elif target.has_method("damage_by_shark_trap"):
 		target.call("damage_by_shark_trap", applied_damage, visual_duration)
 	elif target.has_method("take_damage"):
 		target.call("take_damage", applied_damage)

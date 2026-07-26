@@ -8,6 +8,7 @@ extends Node3D
 @export var separation_radius: float = 0.14
 @export var separation_force: float = 0.6
 @export var can_pass_through_friendly_units: bool = false
+@export var can_target_guards: bool = true
 @export var attack_sfx_path: String = ""
 @export_enum("ground", "air") var unit_target_type: String = "ground"
 
@@ -19,6 +20,11 @@ var hp: int = 100
 var max_hp: int = 100
 var damage: int = 10
 var atk_speed: float = 1.0
+var _tactical_boost_active: bool = false
+var _tactical_boost_remaining: float = 0.0
+var _tactical_boost_base_damage: int = 0
+var _tactical_boost_base_atk_speed: float = 0.0
+var _tactical_boost_base_move_speed: float = 0.0
 
 enum State { INACTIVE, IDLE, RUNNING, ATTACKING, VICTORY }
 var state: State = State.INACTIVE
@@ -29,6 +35,7 @@ var attack_timer: float = 0.0
 
 var anim_player: AnimationPlayer
 var anim_files: Array = []
+var anim_file_aliases: Dictionary = {}
 var attack_anim: String = ""
 var _hp_bar: Node3D
 var _hp_fill: MeshInstance3D
@@ -48,7 +55,7 @@ const RENDER_DIAG_MAX_EVENTS: int = 24
 const RENDER_DIAG_MAX_MESHES: int = 10
 const RENDER_DIAG_MAX_PARTICLES: int = 8
 const TROOP_BODY_TEXTURES: Dictionary = {
-	"archer": "res://Model/Characters/Model/Ranger_ranger_texture.png",
+	"archer": "res://Model/Characters/pirate_archer/textures/palette_albedo.png",
 	"barbarian": "res://Model/Characters/Model/Barbarian_barbarian_texture.png",
 	"knight": "res://Model/Characters/Model/Knight_knight_texture.png",
 	"mage": "res://Model/Characters/Model/Mage_mage_texture.png",
@@ -56,7 +63,7 @@ const TROOP_BODY_TEXTURES: Dictionary = {
 	"rogue": "res://Model/Characters/Model/Rogue_rogue_texture.png",
 }
 const TROOP_BODY_MESH_PREFIXES: Dictionary = {
-	"archer": ["Ranger_"],
+	"archer": ["Body02", "Head02_Female", "Hair08", "Eye07", "Mouth02", "AC07_PiratePatch", "AC09_Ribbon", "Bow01", "Arrow01"],
 	"barbarian": ["Barbarian_"],
 	"knight": ["Knight_"],
 	"mage": ["Mage_"],
@@ -357,6 +364,14 @@ static func can_target_troop(troop: Variant, can_target_ground: bool, can_target
 	return can_target_air if is_air_troop(troop) else can_target_ground
 
 
+static func can_defense_target_troop(troop: Variant, can_target_ground: bool, can_target_air: bool) -> bool:
+	if not can_target_troop(troop, can_target_ground, can_target_air):
+		return false
+	if troop.has_method("is_targetable_by_defenses"):
+		return bool(troop.call("is_targetable_by_defenses"))
+	return true
+
+
 func is_air_unit() -> bool:
 	return unit_target_type == UNIT_TARGET_AIR
 
@@ -553,6 +568,7 @@ func _init_stats() -> void:
 ## Applies level `lvl` to this troop by re-running `_init_stats()`.
 ## Call after spawning when the player's stored troop level is known.
 func upgrade_to(lvl: int) -> void:
+	_clear_tactical_boost()
 	level = lvl
 	_init_stats()
 	max_hp = hp
@@ -617,6 +633,7 @@ func _physics_process(delta: float) -> void:
 	if _is_dead or state == State.INACTIVE or state == State.VICTORY:
 		return
 	delta = combat_delta(delta)
+	_update_tactical_boost(delta)
 	# Force scale every frame — GLB animations override it otherwise
 	scale = Vector3(_spawn_scale, _spawn_scale, _spawn_scale)
 	_update_hp_bar()
@@ -643,7 +660,7 @@ func _setup_animations() -> void:
 	anim_player.root_node = anim_player.get_path_to(self)
 
 	# Build cache key from sorted anim_files paths
-	var cache_key: String = ",".join(anim_files)
+	var cache_key: String = _animation_cache_key(anim_files, anim_file_aliases)
 	var lib: AnimationLibrary
 	if _anim_lib_cache.has(cache_key):
 		lib = _anim_lib_cache[cache_key]
@@ -664,16 +681,17 @@ func _setup_animations() -> void:
 					if anim_name == "RESET" or anim_name == "T-Pose":
 						continue
 					var anim: Animation = src.get_animation(anim_name)
-					if anim and not lib.has_animation(anim_name):
+					var target_name: String = str(anim_file_aliases.get(file_path, anim_name))
+					if anim and not lib.has_animation(target_name):
 						var dup: Animation = anim.duplicate()
-						if anim_name.begins_with("Running") or anim_name.begins_with("Walking") or anim_name.begins_with("Idle") or anim_name == "Cheering":
+						if target_name.begins_with("Running") or target_name.begins_with("Walking") or target_name.begins_with("Idle") or target_name == "Cheering":
 							dup.loop_mode = Animation.LOOP_LINEAR
 						# Strip ALL scale and position tracks — they override spawn scale
 						for ti in range(dup.get_track_count() - 1, -1, -1):
 							var path: String = str(dup.track_get_path(ti))
 							if ":scale" in path or ":position" in path:
 								dup.remove_track(ti)
-						lib.add_animation(anim_name, dup)
+						lib.add_animation(target_name, dup)
 			instance.free()
 		_anim_lib_cache[cache_key] = lib
 
@@ -697,10 +715,10 @@ const SLOT_OFFSETS: Array = [-0.0, 0.4, -0.4, 0.8, -0.8, 1.2, -1.2]
 ## instantiated GLB nodes are kept OUT of the tree — AnimationPlayer's
 ## `get_animation_list()` and `get_animation()` both work on detached nodes,
 ## they don't require tree presence.
-static func prewarm_anim_library(anim_files_list: Array) -> void:
+static func prewarm_anim_library(anim_files_list: Array, file_aliases: Dictionary = {}) -> void:
 	if anim_files_list.is_empty():
 		return
-	var cache_key: String = ",".join(anim_files_list)
+	var cache_key: String = _animation_cache_key(anim_files_list, file_aliases)
 	if _anim_lib_cache.has(cache_key):
 		return
 	var lib := AnimationLibrary.new()
@@ -715,18 +733,27 @@ static func prewarm_anim_library(anim_files_list: Array) -> void:
 				if anim_name == "RESET" or anim_name == "T-Pose":
 					continue
 				var anim: Animation = src.get_animation(anim_name)
-				if anim and not lib.has_animation(anim_name):
+				var target_name: String = str(file_aliases.get(file_path, anim_name))
+				if anim and not lib.has_animation(target_name):
 					var dup: Animation = anim.duplicate()
-					if anim_name.begins_with("Running") or anim_name.begins_with("Walking") or anim_name.begins_with("Idle") or anim_name == "Cheering":
+					if target_name.begins_with("Running") or target_name.begins_with("Walking") or target_name.begins_with("Idle") or target_name == "Cheering":
 						dup.loop_mode = Animation.LOOP_LINEAR
 					for ti in range(dup.get_track_count() - 1, -1, -1):
 						var path: String = str(dup.track_get_path(ti))
 						if ":scale" in path or ":position" in path:
 							dup.remove_track(ti)
-					lib.add_animation(anim_name, dup)
+					lib.add_animation(target_name, dup)
 		# Free the detached instance; no queue_free needed since it's not in tree.
 		inst.free()
 	_anim_lib_cache[cache_key] = lib
+
+
+static func _animation_cache_key(anim_files_list: Array, file_aliases: Dictionary = {}) -> String:
+	var key_parts: PackedStringArray = []
+	for file_path in anim_files_list:
+		var path := str(file_path)
+		key_parts.append("%s=>%s" % [path, str(file_aliases.get(path, ""))])
+	return "|".join(key_parts)
 
 
 ## Recursive AnimationPlayer search — unlike `_find_anim_player` (instance
@@ -742,7 +769,8 @@ static func _find_anim_player_recursive(node: Node) -> AnimationPlayer:
 
 
 ## Animation file paths for the medium rig — shared by Knight, Mage, and Archer.
-## Subclasses that use this rig should assign `anim_files = MEDIUM_RIG_ANIM_FILES` in `_init_stats()`.
+## Legacy modular troops that use this rig should assign
+## `anim_files = MEDIUM_RIG_ANIM_FILES` in `_init_stats()`.
 const MEDIUM_RIG_ANIM_FILES: Array = [
 	"res://Model/Characters/Animations/Rig_Medium/Rig_Medium_General.glb",
 	"res://Model/Characters/Animations/Rig_Medium/Rig_Medium_MovementBasic.glb",
@@ -750,6 +778,48 @@ const MEDIUM_RIG_ANIM_FILES: Array = [
 	"res://Model/Characters/Animations/Rig_Medium/Rig_Medium_CombatRanged.glb",
 	"res://Model/Characters/Animations/Rig_Medium/Rig_Medium_Simulation.glb",
 ]
+const PIRATE_ARCHER_ANIM_FILES: Array = [
+	"res://Model/Characters/pirate_archer/animations/idle_battle.fbx",
+	"res://Model/Characters/pirate_archer/animations/run_battle_in_place.fbx",
+	"res://Model/Characters/pirate_archer/animations/attack_01.fbx",
+	"res://Model/Characters/pirate_archer/animations/get_hit_01.fbx",
+	"res://Model/Characters/pirate_archer/animations/victory.fbx",
+]
+const PIRATE_ARCHER_ANIM_ALIASES: Dictionary = {
+	"res://Model/Characters/pirate_archer/animations/idle_battle.fbx": "Idle_A",
+	"res://Model/Characters/pirate_archer/animations/run_battle_in_place.fbx": "Running_A",
+	"res://Model/Characters/pirate_archer/animations/attack_01.fbx": "Ranged_Bow_Release",
+	"res://Model/Characters/pirate_archer/animations/get_hit_01.fbx": "GetHit",
+	"res://Model/Characters/pirate_archer/animations/victory.fbx": "Cheering",
+}
+const PIRATE_MAGE_ANIM_FILES: Array = [
+	"res://Model/Characters/pirate_mage/animations/idle_battle.fbx",
+	"res://Model/Characters/pirate_mage/animations/run_battle_in_place.fbx",
+	"res://Model/Characters/pirate_mage/animations/attack_01.fbx",
+	"res://Model/Characters/pirate_mage/animations/get_hit_01.fbx",
+	"res://Model/Characters/pirate_mage/animations/victory.fbx",
+]
+const PIRATE_MAGE_ANIM_ALIASES: Dictionary = {
+	"res://Model/Characters/pirate_mage/animations/idle_battle.fbx": "Idle_A",
+	"res://Model/Characters/pirate_mage/animations/run_battle_in_place.fbx": "Running_A",
+	"res://Model/Characters/pirate_mage/animations/attack_01.fbx": "Ranged_Magic_Spellcasting",
+	"res://Model/Characters/pirate_mage/animations/get_hit_01.fbx": "GetHit",
+	"res://Model/Characters/pirate_mage/animations/victory.fbx": "Cheering",
+}
+const PIRATE_KNIGHT_ANIM_FILES: Array = [
+	"res://Model/Characters/pirate_knight/animations/idle_battle.fbx",
+	"res://Model/Characters/pirate_knight/animations/run_battle_in_place.fbx",
+	"res://Model/Characters/pirate_knight/animations/attack_01.fbx",
+	"res://Model/Characters/pirate_knight/animations/get_hit_01.fbx",
+	"res://Model/Characters/pirate_knight/animations/victory.fbx",
+]
+const PIRATE_KNIGHT_ANIM_ALIASES: Dictionary = {
+	"res://Model/Characters/pirate_knight/animations/idle_battle.fbx": "Idle_A",
+	"res://Model/Characters/pirate_knight/animations/run_battle_in_place.fbx": "Running_A",
+	"res://Model/Characters/pirate_knight/animations/attack_01.fbx": "Melee_1H_Attack_Chop",
+	"res://Model/Characters/pirate_knight/animations/get_hit_01.fbx": "GetHit",
+	"res://Model/Characters/pirate_knight/animations/victory.fbx": "Cheering",
+}
 ## Y offset for spawning projectiles from the troop's hand/weapon bone.
 const PROJECTILE_SPAWN_Y: float = 0.08
 ## Y offset applied to the aim target position so projectiles arc toward the building's centre.
@@ -841,6 +911,8 @@ func _apply_rally_target() -> bool:
 		return false
 
 	if _rally_target_guard != null:
+		if not can_target_guards:
+			return false
 		if target_guard != _rally_target_guard:
 			var rally_guard_payload: Dictionary = _merge_target_switch_context(_guard_target_payload(_rally_target_guard), INF)
 			target_guard = _rally_target_guard
@@ -882,6 +954,7 @@ func _apply_rally_target() -> bool:
 func _find_alternative_target() -> void:
 	if _apply_rally_target():
 		return
+	var second_priority: int = 2147483647
 	var second_dist_sq: float = INF
 	var second_b: Dictionary = {}
 	var second_bs = null
@@ -893,10 +966,12 @@ func _find_alternative_target() -> void:
 			continue
 		if is_instance_valid(current_node) and b.get("node") == current_node:
 			continue
+		var priority: int = _building_target_priority(b)
 		var dx = my_pos.x - entry.pos.x
 		var dz = my_pos.z - entry.pos.z
 		var d_sq = dx * dx + dz * dz
-		if d_sq < second_dist_sq:
+		if priority < second_priority or (priority == second_priority and d_sq < second_dist_sq):
+			second_priority = priority
 			second_dist_sq = d_sq
 			second_b = b
 			second_bs = entry.bs
@@ -922,39 +997,46 @@ func _find_alternative_target() -> void:
 func _find_next_target() -> void:
 	if _apply_rally_target():
 		return
+	var nearest_priority: int = 2147483647
 	var nearest_dist_sq: float = INF
 	var nearest_b: Dictionary = {}
 	var nearest_bs_ref = null
 	var nearest_guard: Node3D = null
 	var my_pos = global_position
-	var search_pos: Vector3 = _rally_pos if _is_rally_live() else my_pos
+	var rally_focus_compatible: bool = can_target_guards or _rally_target_guard == null
+	var search_pos: Vector3 = _rally_pos if _is_rally_live() and rally_focus_compatible else my_pos
 
 	for entry in _get_buildings_cached():
 		var b = entry.b
 		if b.get("hp", 0) <= 0 or not is_instance_valid(b.get("node")):
 			continue
+		var priority: int = _building_target_priority(b)
 		var dx = search_pos.x - entry.pos.x
 		var dz = search_pos.z - entry.pos.z
 		var d_sq = dx * dx + dz * dz
-		if d_sq < nearest_dist_sq:
+		if priority < nearest_priority or (priority == nearest_priority and d_sq < nearest_dist_sq):
+			nearest_priority = priority
 			nearest_dist_sq = d_sq
 			nearest_b = b
 			nearest_bs_ref = entry.bs
 			nearest_guard = null
 
-	for guard in _get_guards_list_cached():
-		if not is_instance_valid(guard) or not guard.is_inside_tree():
-			continue
-		if guard.hp <= 0:
-			continue
-		var dx = search_pos.x - guard.global_position.x
-		var dz = search_pos.z - guard.global_position.z
-		var d_sq = dx * dx + dz * dz
-		if d_sq < nearest_dist_sq:
-			nearest_dist_sq = d_sq
-			nearest_b = {}
-			nearest_bs_ref = null
-			nearest_guard = guard
+	if can_target_guards:
+		for guard in _get_guards_list_cached():
+			if not is_instance_valid(guard) or not guard.is_inside_tree():
+				continue
+			if guard.hp <= 0:
+				continue
+			var priority: int = _guard_target_priority(guard)
+			var dx = search_pos.x - guard.global_position.x
+			var dz = search_pos.z - guard.global_position.z
+			var d_sq = dx * dx + dz * dz
+			if priority < nearest_priority or (priority == nearest_priority and d_sq < nearest_dist_sq):
+				nearest_priority = priority
+				nearest_dist_sq = d_sq
+				nearest_b = {}
+				nearest_bs_ref = null
+				nearest_guard = guard
 
 	if _should_keep_current_target(search_pos, nearest_dist_sq, nearest_b, nearest_guard):
 		return
@@ -996,8 +1078,15 @@ func _find_next_target() -> void:
 func _should_keep_current_target(search_pos: Vector3, candidate_dist_sq: float, candidate_b: Dictionary, candidate_guard: Node3D) -> bool:
 	if candidate_dist_sq == INF:
 		return false
+	var candidate_priority: int = (
+		_guard_target_priority(candidate_guard)
+		if candidate_guard != null
+		else _building_target_priority(candidate_b)
+	)
 
 	if target_guard != null and is_instance_valid(target_guard) and target_guard.is_inside_tree() and target_guard.hp > 0:
+		if _guard_target_priority(target_guard) != candidate_priority:
+			return false
 		var gdx_sticky: float = search_pos.x - target_guard.global_position.x
 		var gdz_sticky: float = search_pos.z - target_guard.global_position.z
 		var sticky_range: float = attack_range * maxf(GUARD_THREAT_MULT, ATTACK_MAX_RANGE_MULT)
@@ -1011,10 +1100,14 @@ func _should_keep_current_target(search_pos: Vector3, candidate_dist_sq: float, 
 
 	var current_dist_sq: float = INF
 	if target_guard != null and is_instance_valid(target_guard) and target_guard.is_inside_tree() and target_guard.hp > 0:
+		if _guard_target_priority(target_guard) != candidate_priority:
+			return false
 		var gdx: float = search_pos.x - target_guard.global_position.x
 		var gdz: float = search_pos.z - target_guard.global_position.z
 		current_dist_sq = gdx * gdx + gdz * gdz
 	elif target_building.size() > 0 and target_building.get("hp", 0) > 0 and is_instance_valid(target_building.get("node")):
+		if _building_target_priority(target_building) != candidate_priority:
+			return false
 		var bpos: Vector3 = target_building.node.global_position
 		var bdx: float = search_pos.x - bpos.x
 		var bdz: float = search_pos.z - bpos.z
@@ -1025,8 +1118,21 @@ func _should_keep_current_target(search_pos: Vector3, candidate_dist_sq: float, 
 	return sqrt(candidate_dist_sq) + TARGET_SWITCH_MIN_ADVANTAGE >= sqrt(current_dist_sq)
 
 
+## Target-priority hooks. Lower values are selected first, then distance and
+## the existing stable target ordering decide ties. Most troops keep the
+## legacy unified nearest-target behavior.
+func _building_target_priority(_building: Dictionary) -> int:
+	return 0
+
+
+func _guard_target_priority(_guard: Node3D) -> int:
+	return 0
+
+
 ## Immediate guard threat check.
 func _check_guard_threat() -> void:
+	if not can_target_guards:
+		return
 	if _rally_active:
 		if _has_valid_rally_target():
 			return
@@ -1086,16 +1192,69 @@ func take_damage(dmg: int) -> void:
 		return
 	hp -= dmg
 	if hp <= 0:
-		_is_dead = true
-		_record_replay_telemetry("troop_death", {"damage": dmg})
-		if is_in_group("troops"):
-			remove_from_group("troops")
-		invalidate_combat_lists()
-		if has_method("_clear_owned_projectiles"):
-			call("_clear_owned_projectiles")
-		set_process(false)
-		_report_death()
-		queue_free()
+		_begin_lethal_damage(dmg, "damage")
+
+
+func heal(amount: int) -> int:
+	if _is_dead or amount <= 0 or hp <= 0 or hp >= max_hp:
+		return 0
+	var before: int = hp
+	hp = mini(max_hp, hp + amount)
+	_update_hp_bar()
+	return hp - before
+
+
+func can_receive_tactical_boost() -> bool:
+	return (
+		not _is_dead
+		and state != State.INACTIVE
+		and state != State.VICTORY
+		and not has_meta("summoned_unit")
+		and not has_meta("evolution_child")
+	)
+
+
+func apply_tactical_boost(
+	duration: float,
+	damage_multiplier: float,
+	speed_multiplier: float
+) -> bool:
+	if not can_receive_tactical_boost():
+		return false
+	var safe_duration := maxf(0.0, duration)
+	var safe_damage_multiplier := maxf(1.0, damage_multiplier)
+	var safe_speed_multiplier := maxf(1.0, speed_multiplier)
+	if not _tactical_boost_active:
+		_tactical_boost_active = true
+		_tactical_boost_base_damage = damage
+		_tactical_boost_base_atk_speed = atk_speed
+		_tactical_boost_base_move_speed = move_speed
+	damage = maxi(1, roundi(float(_tactical_boost_base_damage) * safe_damage_multiplier))
+	atk_speed = maxf(0.05, _tactical_boost_base_atk_speed / safe_speed_multiplier)
+	move_speed = _tactical_boost_base_move_speed * safe_speed_multiplier
+	_tactical_boost_remaining = maxf(_tactical_boost_remaining, safe_duration)
+	return true
+
+
+func _update_tactical_boost(delta: float) -> void:
+	if not _tactical_boost_active:
+		return
+	_tactical_boost_remaining -= delta
+	if _tactical_boost_remaining <= 0.0:
+		_clear_tactical_boost()
+
+
+func _clear_tactical_boost() -> void:
+	if not _tactical_boost_active:
+		return
+	damage = _tactical_boost_base_damage
+	atk_speed = _tactical_boost_base_atk_speed
+	move_speed = _tactical_boost_base_move_speed
+	_tactical_boost_active = false
+	_tactical_boost_remaining = 0.0
+	_tactical_boost_base_damage = 0
+	_tactical_boost_base_atk_speed = 0.0
+	_tactical_boost_base_move_speed = 0.0
 
 
 ## Applies the same level-based shark trap damage as the server replay. A
@@ -1117,8 +1276,19 @@ func damage_by_shark_trap(damage: int, visual_duration: float = 0.68) -> bool:
 		if anim_player != null and anim_player.has_animation("GetHit"):
 			anim_player.play("GetHit", 0.05, 1.15)
 		return false
+	_begin_lethal_damage(applied_damage, "shark_trap", visual_duration, true)
+	return true
+
+
+func _begin_lethal_damage(damage_taken: int, source: String, visual_duration: float = 0.0, shrink_at_end: bool = false) -> void:
+	if _is_dead:
+		return
 	_is_dead = true
-	_record_replay_telemetry("troop_death", {"damage": applied_damage, "source": "shark_trap"})
+	var death_payload: Dictionary = {"damage": damage_taken}
+	if source != "damage":
+		death_payload["source"] = source
+	_record_replay_telemetry("troop_death", death_payload)
+	_on_lethal_damage(source)
 	if is_in_group("troops"):
 		remove_from_group("troops")
 	invalidate_combat_lists()
@@ -1127,12 +1297,29 @@ func damage_by_shark_trap(damage: int, visual_duration: float = 0.68) -> bool:
 	set_process(false)
 	set_physics_process(false)
 	_report_death()
-	var disappear_time := 0.18
+	var total_visual_duration: float = maxf(visual_duration, _death_visual_duration(source))
+	if total_visual_duration <= 0.0:
+		queue_free()
+		return
+	if anim_player != null and anim_player.has_animation("Death_A"):
+		anim_player.speed_scale = 1.0
+		anim_player.play("Death_A", 0.05)
+	var disappear_time := minf(0.18, total_visual_duration)
 	var tween := create_tween()
-	tween.tween_interval(maxf(0.0, visual_duration - disappear_time))
-	tween.tween_property(self, "scale", Vector3.ZERO, disappear_time).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_IN)
+	tween.tween_interval(maxf(0.0, total_visual_duration - disappear_time))
+	if shrink_at_end or disappear_time > 0.0:
+		tween.tween_property(self, "scale", Vector3.ZERO, disappear_time).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_IN)
 	tween.tween_callback(queue_free)
-	return true
+
+
+## Subclasses may trigger deterministic effects at the exact lethal event.
+## The effect must not depend on how long the authored death animation lasts.
+func _on_lethal_damage(_source: String) -> void:
+	pass
+
+
+func _death_visual_duration(_source: String) -> float:
+	return 0.0
 
 
 ## Compatibility wrapper for older replay/client call sites.
@@ -1171,7 +1358,16 @@ func _get_troop_name() -> String:
 		"mage": return "Mage"
 		"barbarian": return "Barbarian"
 		"archer": return "Archer"
+		"pea_shooter": return "PeaShooter"
 		"ranger": return "Ranger"
+		"mimic": return "Mimic"
+		"necromancer": return "Necromancer"
+		"necromancer_skeleton": return "NecromancerSkeleton"
+		"horror_evolution": return "Horror"
+		"mechanical_dragon": return "MechanicalDragon"
+		"ice_golem": return "IceGolem"
+		"wind_mage": return "WindMage"
+		"windling": return "Windling"
 		"demon_king": return "DemonKing"
 		"fire_dragon": return "FireDragon"
 	return ""
@@ -1188,8 +1384,9 @@ func _record_replay_telemetry(kind: String, data: Dictionary = {}) -> void:
 	payload.state = int(state)
 	payload.attack_timer = snappedf(attack_timer, 0.001)
 	payload.orbit_angle = snappedf(_orbit_angle, 0.001)
-	payload.x = snappedf(global_position.x, 0.001)
-	payload.z = snappedf(global_position.z, 0.001)
+	var telemetry_position: Vector3 = global_position if is_inside_tree() else position
+	payload.x = snappedf(telemetry_position.x, 0.001)
+	payload.z = snappedf(telemetry_position.z, 0.001)
 	for bs_node in _get_building_systems_cached():
 		if is_instance_valid(bs_node) and bs_node.has_method("record_replay_telemetry"):
 			bs_node.record_replay_telemetry(kind, payload)
@@ -1871,7 +2068,8 @@ static func _mesh_name_matches_prefix(mesh_name: String, prefixes: Array) -> boo
 func _stabilize_render_meshes_recursive(node: Node) -> void:
 	if node is MeshInstance3D:
 		var mesh_instance: MeshInstance3D = node as MeshInstance3D
-		mesh_instance.visible = true
+		if not bool(mesh_instance.get_meta("clash_keep_hidden", false)):
+			mesh_instance.visible = true
 		mesh_instance.extra_cull_margin = maxf(mesh_instance.extra_cull_margin, TROOP_MESH_CULL_MARGIN)
 		mesh_instance.ignore_occlusion_culling = true
 		mesh_instance.lod_bias = maxf(mesh_instance.lod_bias, TROOP_MESH_LOD_BIAS)
