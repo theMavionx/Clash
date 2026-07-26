@@ -44,6 +44,8 @@ import arbaletImg from '../assets/units/arbalet.png';
 import berserkImg from '../assets/units/berserk.png';
 import demonKingImg from '../assets/units/demonking.png';
 import fireDragonImg from '../assets/units/fire_dragon.png';
+import windMageImg from '../assets/units/wind_mage.png';
+import peaShooterImg from '../assets/units/pea_shooter.png';
 
 const ICONS = { gold: goldIcon, wood: woodIcon, ore: stoneIcon };
 const DEMON_KING_PORT_FORCE_SYNC_MS = 60_000;
@@ -53,8 +55,10 @@ const UNIT_IMAGES = {
   Knight: knightImg,
   Mage: mageImg,
   Archer: archerImg,
+  PeaShooter: peaShooterImg,
   Mimic: mimicImg,
   Necromancer: necromancerImg,
+  WindMage: windMageImg,
   Horror: horrorImg,
   MechanicalDragon: mechanicalDragonImg,
   IceGolem: iceGolemImg,
@@ -69,8 +73,10 @@ const TROOP_STYLE_MAP = {
   Mage: { scale: 1.9, offsetY: '25%' },
   Barbarian: { scale: 1.9, offsetY: '25%' },
   Archer: { scale: 1.9, offsetY: '25%' },
+  PeaShooter: { scale: 1.35, offsetY: '7%' },
   Mimic: { scale: 1.35, offsetY: '7%' },
   Necromancer: { scale: 1.32, offsetY: '7%' },
+  WindMage: { scale: 1.32, offsetY: '7%' },
   Horror: { scale: 1.32, offsetY: '7%' },
   MechanicalDragon: { scale: 1.22, offsetY: '7%' },
   IceGolem: { scale: 1.22, offsetY: '6%' },
@@ -84,8 +90,10 @@ const CARD_TROOP_STYLE_MAP = {
   Mage: { scale: 1.05, offsetY: '0%' },
   Barbarian: { scale: 1.05, offsetY: '0%' },
   Archer: { scale: 1.05, offsetY: '0%' },
+  PeaShooter: { scale: 1.08, offsetY: '2%' },
   Mimic: { scale: 1.18, offsetY: '0%' },
   Necromancer: { scale: 1.10, offsetY: '3%' },
+  WindMage: { scale: 1.10, offsetY: '3%' },
   Horror: { scale: 1.10, offsetY: '3%' },
   MechanicalDragon: { scale: 1.08, offsetY: '3%' },
   IceGolem: { scale: 1.08, offsetY: '2%' },
@@ -97,7 +105,6 @@ const CARD_TROOP_STYLE_MAP = {
   FireDragon: { scale: 1.02, offsetY: '0%' },
 };
 
-const TROOP_COST = 100; // gold per unit
 const SLOT_FILLER = '_SLOT_FILLER_';
 const TOWN_HALL_FLAG_SKU = 'town_hall_flag';
 const TOWN_HALL_FLAG_CANVAS_SIZE = 256;
@@ -136,7 +143,7 @@ const DESC_MAP = {
   sawmill: 'Sawmills produce wood over time.',
   barn: 'Trains troops.',
   port: 'Deploy ships to attack.',
-  main_ship: 'Carries your army into battle. Upgrade it to unlock more troop capacity.',
+  main_ship: 'Carries your army into battle. Upgrades add capacity and battle energy; level 6 unlocks the healing field.',
   town_hall: 'The heart of your village.',
   turret: 'Targets ground enemies.',
   tombstone: 'Spawns skeletons to defend.',
@@ -208,8 +215,10 @@ function troopBaseName(name) {
   if (lower === 'mage') return 'Mage';
   if (lower === 'barbarian') return 'Barbarian';
   if (lower === 'archer') return 'Archer';
+  if (lower === 'peashooter' || lower === 'pea_shooter' || lower === 'pea-shooter') return 'PeaShooter';
   if (lower === 'mimic') return 'Mimic';
   if (lower === 'necromancer' || lower === 'skeletonmage' || lower === 'skeleton_mage') return 'Necromancer';
+  if (lower === 'windmage' || lower === 'wind_mage' || lower === 'wind-mage') return 'WindMage';
   if (lower === 'horror' || lower === 'horrorevolution' || lower === 'horror_evolution') return 'Horror';
   if (lower === 'mechanicaldragon' || lower === 'mechanical_dragon' || lower === 'mechdragon') return 'MechanicalDragon';
   if (lower === 'icegolem' || lower === 'ice_golem') return 'IceGolem';
@@ -223,14 +232,27 @@ function troopDisplayName(name) {
   if (base === 'Horror') return 'Horror';
   if (base === 'MechanicalDragon') return 'Mech Dragon';
   if (base === 'IceGolem') return 'Ice Golem';
+  if (base === 'WindMage') return 'Wind Mage';
+  if (base === 'PeaShooter') return 'Pea Shooter';
   return base;
 }
 
 function troopSlotCost(name) {
-  if (troopBaseName(name) === 'Necromancer') return 2;
-  if (troopBaseName(name) === 'Horror') return 3;
-  if (['MechanicalDragon', 'IceGolem'].includes(troopBaseName(name))) return 4;
-  return nftBackedTroopConfig(troopBaseName(name)) ? 2 : 1;
+  const costs = {
+    Knight: 1,
+    Archer: 1,
+    PeaShooter: 5,
+    Mage: 4,
+    Mimic: 6,
+    MechanicalDragon: 4,
+    DemonKing: 5,
+    IceGolem: 10,
+    FireDragon: 10,
+    Necromancer: 15,
+    WindMage: 15,
+    Horror: 20,
+  };
+  return costs[troopBaseName(name)] || 1;
 }
 
 function troopReplacementEntries(name) {
@@ -1189,10 +1211,14 @@ function BuildingInfoPanel({ onOpenTroops }) {
     if (building.id === 'main_ship') {
       const capacity = Number(building.ship_capacity || 0);
       const loaded = Array.isArray(building.ship_troops) ? building.ship_troops.length : 0;
+      const energy = Number(building.ship_energy || 4);
+      const medkitUnlocked = !!building.ship_medkit_unlocked;
       const leftContent = (
         <>
           <StatBox label="Troop Capacity" current={capacity} />
           <StatBox label="Loaded Slots" current={loaded} />
+          <StatBox label="Battle Energy" current={energy} />
+          <StatBox label="Healing Field" current={medkitUnlocked ? 'Unlocked' : 'Locked'} />
           <StatBox label="Level" current={building.ship_level || building.level} />
         </>
       );
@@ -1341,10 +1367,16 @@ function BuildingInfoPanel({ onOpenTroops }) {
       const currentLevel = Number(building.ship_level || building.level || 1);
       const currentCapacity = Number(building.ship_capacity || 0);
       const nextCapacity = Number(building.ship_next_capacity || currentCapacity);
+      const currentEnergy = Number(building.ship_energy || 4);
+      const nextEnergy = Number(building.ship_next_energy || currentEnergy);
+      const currentMedkit = !!building.ship_medkit_unlocked;
+      const nextMedkit = !!building.ship_next_medkit_unlocked;
       const shipUpgradeCost = building.ship_upgrade_cost || {};
       const leftContent = (
         <>
           <StatBox label="Troop Capacity" current={currentCapacity} upgradeTo={nextCapacity} />
+          <StatBox label="Battle Energy" current={currentEnergy} upgradeTo={nextEnergy} />
+          <StatBox label="Healing Field" current={currentMedkit ? 'Unlocked' : 'Locked'} upgradeTo={!currentMedkit && nextMedkit ? 'Unlocked' : null} />
           <StatBox label="Level" current={currentLevel} upgradeTo={currentLevel + 1} />
         </>
       );
@@ -1536,6 +1568,8 @@ function BuildingInfoPanel({ onOpenTroops }) {
     const shipLevel = building.ship_level || 1;
     const shipTroops = localTroops || building.ship_troops || [];
     const capacity = building.ship_capacity || shipLevel * 3;
+    const shipEnergy = Number(building.ship_energy || 4);
+    const nextShipEnergy = Number(building.ship_next_energy || shipEnergy);
     const isMainShip = building.id === 'main_ship';
     const shipUpgradeCost = building.ship_upgrade_cost || {};
     const canAffordShipUpgrade = ['gold', 'wood', 'ore'].every((key) => Number(resources?.[key] || 0) >= Number(shipUpgradeCost?.[key] || 0));
@@ -1545,11 +1579,18 @@ function BuildingInfoPanel({ onOpenTroops }) {
       const base = troopBaseName(name);
       return troopLvls[base] || troopLvls[base.toLowerCase()] || troopLvls[name] || troopLvls[String(name || '').toLowerCase()] || 1;
     };
-    const allTroops = ['Knight', 'Mage', 'Archer', 'Mimic', 'Necromancer', 'Horror', 'MechanicalDragon', 'IceGolem'];
+    const allTroops = ['Knight', 'Mage', 'Archer', 'PeaShooter', 'Mimic', 'Necromancer', 'WindMage', 'Horror', 'MechanicalDragon', 'IceGolem'];
     const currentTownHallLevel = Number(buildingDefs?.th_level || buildingDefs?.town_hall_level || 1) || 1;
     const troopDefinitions = buildingDefs?.troops || {};
     const troopUnlock = (name) => {
-      const required = Math.max(1, Number(troopDefinitions?.[name]?.min_town_hall_level || 1) || 1);
+      const base = troopBaseName(name);
+      const snakeCase = base.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase();
+      const definition = troopDefinitions?.[name]
+        || troopDefinitions?.[base]
+        || troopDefinitions?.[base.toLowerCase()]
+        || troopDefinitions?.[snakeCase]
+        || {};
+      const required = Math.max(1, Number(definition.min_town_hall_level || 1) || 1);
       return { required, unlocked: currentTownHallLevel >= required };
     };
     const loadedGroups = loadedTroopGroups(shipTroops);
@@ -1669,7 +1710,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
               ? nftRarityBadgeStyle(token.rarity, 1, { compact: true })
               : {};
             const disabled = swapSlot === null
-              ? shipTroops.length + 2 > capacity
+              ? shipTroops.length + troopSlotCost(entry) > capacity
               : !troopSwapPlacement(shipTroops, swapSlot, entry, capacity);
             return (
               <button
@@ -1695,7 +1736,9 @@ function BuildingInfoPanel({ onOpenTroops }) {
                 </div>
                 <div style={{...LT.bottomOverlay, height: isMobile ? 30 : 38}}>
                   <span style={{...LT.bottomLabel, fontSize: isMobile ? 7 : 9}}>{cfg.shortLabel} {tokenLabel}</span>
-                  <span style={{...LT.costText, fontSize: isMobile ? 10 : 12}}>FREE / 2</span>
+                  <span style={{...LT.costText, fontSize: isMobile ? 10 : 12}}>
+                    {troopSlotCost(base)} SLOTS
+                  </span>
                 </div>
               </button>
             );
@@ -1764,10 +1807,14 @@ function BuildingInfoPanel({ onOpenTroops }) {
           {isMainShip && (
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: isMobile ? '8px 10px' : '10px 16px', background: '#efe3c8', borderBottom: '2px solid #cbb98f' }}>
               <div style={{ color: '#5C3A21', fontWeight: 900, fontSize: isMobile ? 11 : 13 }}>
-                Capacity {capacity}{shipLevel < 5 ? ` · Next ${[3, 12, 27, 36, 45][shipLevel]}` : ' · MAX LEVEL'}
-                {shipLevel < 5 && <div style={{ color: '#8b6b3f', fontSize: isMobile ? 9 : 10, marginTop: 2 }}>{Object.entries(shipUpgradeCost).map(([key, value]) => `${value} ${key}`).join(' · ')}</div>}
+                Capacity {capacity}{shipLevel < 6 ? ` · Next ${[3, 12, 27, 36, 45, 45][shipLevel]}` : ' · MAX LEVEL'}
+                <div style={{ color: '#6b552f', fontSize: isMobile ? 9 : 10, marginTop: 2 }}>
+                  Battle energy {shipEnergy}{shipLevel < 6 ? ` · Next ${nextShipEnergy}` : ''}
+                </div>
+                {shipLevel >= 6 && <div style={{ color: '#1c8b4d', fontSize: isMobile ? 9 : 10, marginTop: 2 }}>Healing field unlocked</div>}
+                {shipLevel < 6 && <div style={{ color: '#8b6b3f', fontSize: isMobile ? 9 : 10, marginTop: 2 }}>{Object.entries(shipUpgradeCost).map(([key, value]) => `${value} ${key}`).join(' · ')}</div>}
               </div>
-              {shipLevel < 5 && <button type="button" disabled={!canAffordShipUpgrade} onClick={() => sendToGodot('upgrade_main_ship')} style={{ padding: isMobile ? '8px 12px' : '10px 16px', border: '2px solid #7d5d24', borderRadius: 7, background: canAffordShipUpgrade ? '#f3ba35' : '#c8baa0', color: '#4b2b16', fontWeight: 900, cursor: canAffordShipUpgrade ? 'pointer' : 'not-allowed', fontFamily: 'inherit' }}>UPGRADE</button>}
+              {shipLevel < 6 && <button type="button" disabled={!canAffordShipUpgrade} onClick={() => sendToGodot('upgrade_main_ship')} style={{ padding: isMobile ? '8px 12px' : '10px 16px', border: '2px solid #7d5d24', borderRadius: 7, background: canAffordShipUpgrade ? '#f3ba35' : '#c8baa0', color: '#4b2b16', fontWeight: 900, cursor: canAffordShipUpgrade ? 'pointer' : 'not-allowed', fontFamily: 'inherit' }}>UPGRADE</button>}
             </div>
           )}
 
@@ -1858,10 +1905,14 @@ function BuildingInfoPanel({ onOpenTroops }) {
 
           {/* Troop selection grid */}
           <div style={{...LT.grid, padding: isMobile ? '8px 8px' : '14px 18px', gap: isMobile ? 8 : 10, flexDirection: 'column', flexWrap: 'nowrap', justifyContent: 'flex-start', alignItems: 'center'}}>
+            <div style={{...LT.troopPriceNote, fontSize: isMobile ? 9 : 11}}>
+              Non-NFT troops cost 100 gold per occupied ship slot.
+            </div>
             <div style={{...LT.normalTroopGrid, gap: isMobile ? 6 : 10}}>
             {allTroops.map(name => {
               const lvl = getTroopLvl(name);
               const unlock = troopUnlock(name);
+              const occupiedSlots = troopSlotCost(name);
               return (
                 <button
                   key={name}
@@ -1871,13 +1922,15 @@ function BuildingInfoPanel({ onOpenTroops }) {
                     : name === 'Mimic'
                       ? 'Trap Runner: defenses ignore it while rolling; traps trigger without damaging it.'
                       : name === 'Necromancer'
-                        ? 'Grave Caller: ranged green magic and up to 3 weak skeleton summons. Uses 2 ship slots.'
+                        ? 'Grave Caller: ranged green magic and up to 3 renewable skeleton summons. Uses 15 ship slots.'
                       : name === 'Horror'
-                        ? 'Brood Evolution: splits 1 into 2 Creepers, then 4 Lurkers. Uses 3 ship slots.'
+                        ? 'Brood Evolution: splits 1 into 2 Creepers, then 4 Lurkers. Uses 20 ship slots.'
                       : name === 'MechanicalDragon'
                         ? 'Chain Siege: lightning jumps to 2 nearby buildings. Heavy flying unit; uses 4 ship slots.'
-                        : name === 'IceGolem'
-                          ? 'Frozen Vanguard: attacks defenses first and freezes nearby defenses for 7 seconds on death. Uses 4 ship slots.'
+                      : name === 'IceGolem'
+                          ? 'Frozen Vanguard: attacks defenses first and freezes nearby defenses for 7 seconds on death. Uses 10 ship slots.'
+                        : name === 'WindMage'
+                          ? 'Wind Corridor: sweeps a long widening lane and summons temporary Windlings. Uses 15 ship slots.'
                         : undefined}
                   style={{...LT.troopCard, width: cardW, flexShrink: isMobile ? 1 : 0, ...(!unlock.unlocked ? { opacity: 0.5, cursor: 'not-allowed' } : null)}}
                   onClick={() => {
@@ -1896,10 +1949,9 @@ function BuildingInfoPanel({ onOpenTroops }) {
                   </div>
                   <div style={{...LT.bottomOverlay, height: isMobile ? 28 : 34}}>
                     <span style={{...LT.bottomLabel, fontSize: isMobile ? 8 : 10}}>{troopDisplayName(name).toUpperCase()}</span>
-                    <img src={goldIcon} alt="gold" style={LT.costIcon} />
                     <span style={{...LT.costText, fontSize: isMobile ? 11 : 13}}>
                       {unlock.unlocked
-                        ? Number(troopDefinitions?.[name]?.buy_cost ?? TROOP_COST)
+                        ? `${occupiedSlots} ${occupiedSlots === 1 ? 'SLOT' : 'SLOTS'}`
                         : `TH${unlock.required}`}
                     </span>
                   </div>
@@ -1929,7 +1981,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
               const rarityStyle = nftRarityCardStyle(token.rarity, 1);
               const rarityBadgeStyle = nftRarityBadgeStyle(token.rarity, 1, { compact: true });
               const disabled = swapSlot === null
-                ? shipTroops.length + 2 > capacity
+                ? shipTroops.length + troopSlotCost(entry) > capacity
                 : (() => {
                     return !troopSwapPlacement(shipTroops, swapSlot, entry, capacity);
                   })();
@@ -1955,7 +2007,9 @@ function BuildingInfoPanel({ onOpenTroops }) {
                   </div>
                   <div style={{...LT.bottomOverlay, height: isMobile ? 30 : 38}}>
                     <span style={{...LT.bottomLabel, fontSize: isMobile ? 7 : 9}}>KING {demonTokenLabel}</span>
-                    <span style={{...LT.costText, fontSize: isMobile ? 10 : 12}}>FREE / 2</span>
+                    <span style={{...LT.costText, fontSize: isMobile ? 10 : 12}}>
+                      {troopSlotCost(entry)} SLOTS
+                    </span>
                   </div>
                 </button>
               );
@@ -3219,8 +3273,14 @@ const LT = {
     fontSize: 10, fontWeight: 900, color: '#fff', textShadow: '0 1px 2px rgba(0,0,0,0.8)',
     flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', letterSpacing: 0.5,
   },
-  costIcon: { width: 14, height: 14, objectFit: 'contain', filter: 'drop-shadow(0 1px 1px black)' },
   costText: { fontSize: 13, fontWeight: 900, color: '#FFD700', textShadow: '0 1px 2px rgba(0,0,0,0.8)' },
+  troopPriceNote: {
+    width: '100%',
+    color: '#6f512f',
+    fontWeight: 900,
+    textAlign: 'center',
+    lineHeight: 1.25,
+  },
   swapBadge: {
     position: 'absolute', top: -2, right: -2,
     background: '#E53935', color: '#fff', fontSize: 10, fontWeight: 900,

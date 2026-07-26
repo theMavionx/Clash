@@ -42,6 +42,8 @@ function normalizeTroopLevelKey(name) {
   if (normalized === 'horror' || normalized === 'horrorevolution') return 'Horror';
   if (normalized === 'mechanicaldragon' || normalized === 'mechdragon') return 'MechanicalDragon';
   if (normalized === 'icegolem') return 'IceGolem';
+  if (normalized === 'windmage') return 'WindMage';
+  if (normalized === 'peashooter') return 'PeaShooter';
   if (normalized === 'knight') return 'Knight';
   if (normalized === 'mage') return 'Mage';
   if (normalized === 'barbarian') return 'Barbarian';
@@ -108,11 +110,31 @@ export function GodotProvider({ children }) {
   const [futuresOpen, setFuturesOpen] = useState(false);
   const [cannonMode, setCannonMode] = useState(false);
   const [rallyMode, setRallyMode] = useState(false);
+  const [medkitMode, setMedkitMode] = useState(false);
+  const [freezeMode, setFreezeMode] = useState(false);
+  const [rageMode, setRageMode] = useState(false);
+  const [skeletonBarrelMode, setSkeletonBarrelMode] = useState(false);
   const [selectedTroopIdx, setSelectedTroopIdx] = useState(0);
   const [battleResult, setBattleResult] = useState(null);
   const [pendingCasualties, setPendingCasualties] = useState(null);
   const [battleTimer, setBattleTimer] = useState(null); // seconds remaining, null = no timer
-  const [cannonEnergy, setCannonEnergy] = useState({ energy: 10, nextCost: 1, rallyNextCost: 1 });
+  const [cannonEnergy, setCannonEnergy] = useState({
+    energy: 0,
+    nextCost: 1,
+    rallyNextCost: 1,
+    medkitCost: 6,
+    medkitUnlocked: false,
+    medkitUsed: false,
+    freezeCost: 5,
+    freezeUnlocked: false,
+    freezeUsed: false,
+    rageCost: 7,
+    rageUnlocked: false,
+    rageUsed: false,
+    skeletonBarrelCost: 8,
+    skeletonBarrelUnlocked: false,
+    skeletonBarrelUsed: false,
+  });
   const [fleetInfo, setFleetInfo] = useState(null);
   // Fallback matches TH1 base capacity (server/db.js + building_system.gd).
   // Godot pushes real caps via `resource_caps` on boot; this default only
@@ -315,10 +337,43 @@ export function GodotProvider({ children }) {
           setClientActivity({ critical_action: !!data.active });
           if (data.active) {
             setFleetInfo(null);
-            setCannonEnergy({ energy: 10, nextCost: 1, rallyNextCost: 1 }); setBattleResult(null);
+            setCannonEnergy({
+              energy: 0,
+              nextCost: 1,
+              rallyNextCost: 1,
+              medkitCost: 6,
+              medkitUnlocked: false,
+              medkitUsed: false,
+              freezeCost: 5,
+              freezeUnlocked: false,
+              freezeUsed: false,
+              rageCost: 7,
+              rageUnlocked: false,
+              rageUsed: false,
+              skeletonBarrelCost: 8,
+              skeletonBarrelUnlocked: false,
+              skeletonBarrelUsed: false,
+            });
+            setBattleResult(null);
+            setCannonMode(false);
             setRallyMode(false);
+            setMedkitMode(false);
+            setFreezeMode(false);
+            setRageMode(false);
+            setSkeletonBarrelMode(false);
           }
-          if (!data.active) { setSelectedBuilding(null); setCannonMode(false); setRallyMode(false); setSelectedTroopIdx(0); setBattleTimer(null); setFleetInfo(null); }
+          if (!data.active) {
+            setSelectedBuilding(null);
+            setCannonMode(false);
+            setRallyMode(false);
+            setMedkitMode(false);
+            setFreezeMode(false);
+            setRageMode(false);
+            setSkeletonBarrelMode(false);
+            setSelectedTroopIdx(0);
+            setBattleTimer(null);
+            setFleetInfo(null);
+          }
           break;
         case 'troop_idx_changed':
           setSelectedTroopIdx(data.idx ?? 0);
@@ -328,6 +383,18 @@ export function GodotProvider({ children }) {
           break;
         case 'rally_mode':
           setRallyMode(data.active);
+          break;
+        case 'medkit_mode':
+          setMedkitMode(data.active);
+          break;
+        case 'freeze_mode':
+          setFreezeMode(data.active);
+          break;
+        case 'rage_mode':
+          setRageMode(data.active);
+          break;
+        case 'skeleton_barrel_mode':
+          setSkeletonBarrelMode(data.active);
           break;
         case 'battle_result':
           setBattleResult(data);
@@ -374,8 +441,52 @@ export function GodotProvider({ children }) {
             const energy = data.energy || 0;
             const nextCost = data.next_cost || 1;
             const rallyNextCost = data.rally_next_cost || 1;
-            if (prev.energy === energy && prev.nextCost === nextCost && prev.rallyNextCost === rallyNextCost) return prev;
-            return { energy, nextCost, rallyNextCost };
+            const medkitCost = data.medkit_cost || 6;
+            const medkitUnlocked = !!data.medkit_unlocked;
+            const medkitUsed = !!data.medkit_used;
+            const freezeCost = data.freeze_cost || 5;
+            const freezeUnlocked = !!data.freeze_unlocked;
+            const freezeUsed = !!data.freeze_used;
+            const rageCost = data.rage_cost || 7;
+            const rageUnlocked = !!data.rage_unlocked;
+            const rageUsed = !!data.rage_used;
+            const skeletonBarrelCost = data.skeleton_barrel_cost || 8;
+            const skeletonBarrelUnlocked = !!data.skeleton_barrel_unlocked;
+            const skeletonBarrelUsed = !!data.skeleton_barrel_used;
+            if (
+              prev.energy === energy
+              && prev.nextCost === nextCost
+              && prev.rallyNextCost === rallyNextCost
+              && prev.medkitCost === medkitCost
+              && prev.medkitUnlocked === medkitUnlocked
+              && prev.medkitUsed === medkitUsed
+              && prev.freezeCost === freezeCost
+              && prev.freezeUnlocked === freezeUnlocked
+              && prev.freezeUsed === freezeUsed
+              && prev.rageCost === rageCost
+              && prev.rageUnlocked === rageUnlocked
+              && prev.rageUsed === rageUsed
+              && prev.skeletonBarrelCost === skeletonBarrelCost
+              && prev.skeletonBarrelUnlocked === skeletonBarrelUnlocked
+              && prev.skeletonBarrelUsed === skeletonBarrelUsed
+            ) return prev;
+            return {
+              energy,
+              nextCost,
+              rallyNextCost,
+              medkitCost,
+              medkitUnlocked,
+              medkitUsed,
+              freezeCost,
+              freezeUnlocked,
+              freezeUsed,
+              rageCost,
+              rageUnlocked,
+              rageUsed,
+              skeletonBarrelCost,
+              skeletonBarrelUnlocked,
+              skeletonBarrelUsed,
+            };
           });
           break;
         case 'fleet_info':
@@ -483,8 +594,8 @@ export function GodotProvider({ children }) {
     selectedBuilding,
   }), [selectedBuilding]);
   const uiCtx = useMemo(() => ({
-    ready, shopOpen, enemyMode, error, showRegister, collectibles, cloudVisible, cloudMessage, futuresOpen, cannonMode, rallyMode, selectedTroopIdx, battleResult, setBattleResult, cannonEnergy, fleetInfo, pendingCasualties, setPendingCasualties, battleTimer
-  }), [ready, shopOpen, enemyMode, error, showRegister, collectibles, cloudVisible, cloudMessage, futuresOpen, cannonMode, rallyMode, selectedTroopIdx, battleResult, cannonEnergy, fleetInfo, pendingCasualties, battleTimer]);
+    ready, shopOpen, enemyMode, error, showRegister, collectibles, cloudVisible, cloudMessage, futuresOpen, cannonMode, rallyMode, medkitMode, freezeMode, rageMode, skeletonBarrelMode, selectedTroopIdx, battleResult, setBattleResult, cannonEnergy, fleetInfo, pendingCasualties, setPendingCasualties, battleTimer
+  }), [ready, shopOpen, enemyMode, error, showRegister, collectibles, cloudVisible, cloudMessage, futuresOpen, cannonMode, rallyMode, medkitMode, freezeMode, rageMode, skeletonBarrelMode, selectedTroopIdx, battleResult, cannonEnergy, fleetInfo, pendingCasualties, battleTimer]);
   const tutorialCtx = useMemo(() => ({
     tutorialFlags, tutorialPhase, setTutorialFlags, setTutorialPhase
   }), [tutorialFlags, tutorialPhase]);

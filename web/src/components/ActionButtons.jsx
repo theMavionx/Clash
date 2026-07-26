@@ -9,6 +9,10 @@ import mmBotIcon from '../assets/resources/mm-bot-icon.png';
 import tournamentIcon from '../assets/resources/tournament-icon.png';
 import buttonBg from '../assets/resources/file_00000000a6f87246844c6271b76cd436.png';
 import shipImg from '../assets/buildings/shipsmall.png';
+import medkitAbilityImg from '../assets/ui/medkit-ability.png';
+import freezeOrbAbilityImg from '../assets/ui/freeze-orb-ability.png';
+import rageFieldAbilityImg from '../assets/ui/rage-field-ability.png';
+import skeletonBarrelAbilityImg from '../assets/ui/skeleton-barrel-ability.png';
 import TournamentPanel from './TournamentPanel';
 import NftMintPanel from './NftMintPanel';
 
@@ -24,19 +28,23 @@ import arbaletImg from '../assets/units/arbalet.png';
 import berserkImg from '../assets/units/berserk.png';
 import demonKingImg from '../assets/units/demonking.png';
 import fireDragonImg from '../assets/units/fire_dragon.png';
+import windMageImg from '../assets/units/wind_mage.png';
+import peaShooterImg from '../assets/units/pea_shooter.png';
 
-// Matches SHIP_TROOPS index order in attack_system.gd — must stay in sync!
-// If SHIP_TROOPS order changes in attack_system.gd, update this array too.
+// Canonical player-facing roster. Combat messages carry troop keys, so this
+// order controls presentation only and does not depend on the legacy index list.
 // zoom/offsetY — per-portrait tweaks to normalize framing across different source images
 const ATTACK_TROOPS = [
   { key: 'knight', label: 'Knight', img: knightImg },
   { key: 'mage', label: 'Mage', img: mageImg },
   { key: 'archer', label: 'Archer', img: archerImg },
+  { key: 'peashooter', label: 'Pea Shooter', mobileLabel: 'Pea', img: peaShooterImg },
   { key: 'mimic', label: 'Barrel', img: mimicImg },
   { key: 'necromancer', label: 'Necromancer', mobileLabel: 'Necro', img: necromancerImg },
   { key: 'horror', label: 'Horror', img: horrorImg },
   { key: 'mechanicaldragon', label: 'Mech Dragon', mobileLabel: 'Mech', img: mechanicalDragonImg },
   { key: 'icegolem', label: 'Ice Golem', mobileLabel: 'Golem', img: iceGolemImg },
+  { key: 'windmage', label: 'Wind Mage', mobileLabel: 'Wind', img: windMageImg, monogram: 'WM' },
   { key: 'demonking', label: 'Demon King', mobileLabel: 'Demon', img: demonKingImg },
   { key: 'firedragon', label: 'Dragon', img: fireDragonImg },
 ];
@@ -140,6 +148,174 @@ const EnergyBoltIcon = ({ size = 14 }) => (
   </svg>
 );
 
+const ONE_USE_SHIP_ABILITIES = [
+  {
+    key: 'medkit',
+    label: 'Healing Field',
+    image: medkitAbilityImg,
+    costKey: 'medkitCost',
+    unlockedKey: 'medkitUnlocked',
+    usedKey: 'medkitUsed',
+    defaultCost: 6,
+    activeStyle: 'medkitActive',
+  },
+  {
+    key: 'freeze',
+    label: 'Freeze Orb',
+    image: freezeOrbAbilityImg,
+    costKey: 'freezeCost',
+    unlockedKey: 'freezeUnlocked',
+    usedKey: 'freezeUsed',
+    defaultCost: 5,
+    activeStyle: 'freezeActive',
+  },
+  {
+    key: 'rage',
+    label: 'Rage Field',
+    image: rageFieldAbilityImg,
+    costKey: 'rageCost',
+    unlockedKey: 'rageUnlocked',
+    usedKey: 'rageUsed',
+    defaultCost: 7,
+    activeStyle: 'rageActive',
+  },
+  {
+    key: 'skeletonBarrel',
+    label: 'Skeleton Barrel',
+    image: skeletonBarrelAbilityImg,
+    costKey: 'skeletonBarrelCost',
+    unlockedKey: 'skeletonBarrelUnlocked',
+    usedKey: 'skeletonBarrelUsed',
+    defaultCost: 8,
+    activeStyle: 'skeletonBarrelActive',
+  },
+];
+
+function ShipAbilityRail({
+  mobile,
+  cannonEnergy,
+  cannonMode,
+  rallyMode,
+  medkitMode,
+  freezeMode,
+  rageMode,
+  skeletonBarrelMode,
+  onCannon,
+  onRally,
+  onMedkit,
+  onFreeze,
+  onRage,
+  onSkeletonBarrel,
+}) {
+  const energy = cannonEnergy?.energy ?? 0;
+  const cannonCost = cannonEnergy?.nextCost ?? 1;
+  const rallyCost = cannonEnergy?.rallyNextCost ?? 1;
+  const cannonDisabled = !cannonMode && !!cannonEnergy && energy < cannonCost;
+  const rallyDisabled = !rallyMode && !!cannonEnergy && energy < rallyCost;
+  const abilityButtonStyle = mobile
+    ? { ...hud.cannonBtn, width: 48, height: 48, borderRadius: 12 }
+    : hud.cannonBtn;
+  const abilityIconSize = mobile ? 32 : 46;
+  const modes = { medkit: medkitMode, freeze: freezeMode, rage: rageMode, skeletonBarrel: skeletonBarrelMode };
+  const handlers = { medkit: onMedkit, freeze: onFreeze, rage: onRage, skeletonBarrel: onSkeletonBarrel };
+
+  const handleAbilityWheel = useCallback((event) => {
+    if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+    event.currentTarget.scrollLeft += event.deltaY;
+  }, []);
+
+  const cannonTip = cannonMode
+    ? 'Cancel Ship Cannon'
+    : cannonDisabled
+    ? `Need ${cannonCost} energy for Ship Cannon`
+    : 'Ship Cannon';
+  const rallyTip = rallyMode
+    ? 'Cancel Rally Pointer'
+    : rallyDisabled
+    ? `Need ${rallyCost} energy for Rally Pointer`
+    : 'Rally Pointer';
+
+  return (
+    <div
+      className="attack-troop-scroll"
+      style={{
+        ...hud.abilityRail,
+        gap: mobile ? 4 : 8,
+        width: mobile ? '100%' : 'min(540px, calc(55vw - 20px))',
+      }}
+      onWheel={handleAbilityWheel}
+      onPointerDown={(event) => event.stopPropagation()}
+      onTouchStart={(event) => event.stopPropagation()}
+      aria-label="Main Ship abilities"
+    >
+      <button
+        style={{ ...abilityButtonStyle, ...(cannonMode ? hud.cannonActive : {}), ...(cannonDisabled ? hud.cannonDisabled : {}) }}
+        onClick={() => { if (!cannonDisabled) onCannon(); }}
+        title={cannonTip}
+        aria-label={cannonTip}
+        aria-pressed={cannonMode}
+        aria-disabled={cannonDisabled}
+      >
+        <CannonBallIcon size={abilityIconSize} />
+        {cannonEnergy && <div style={{ ...hud.cannonCostBadge, ...(mobile ? hud.cannonCostBadgeMobile : {}) }}>{cannonCost}<span style={hud.cannonCostIcon}><EnergyBoltIcon size={9} /></span></div>}
+      </button>
+      <button
+        style={{ ...abilityButtonStyle, ...(rallyMode ? hud.rallyActive : {}), ...(rallyDisabled ? hud.cannonDisabled : {}) }}
+        onClick={() => { if (!rallyDisabled) onRally(); }}
+        title={rallyTip}
+        aria-label={rallyTip}
+        aria-pressed={rallyMode}
+        aria-disabled={rallyDisabled}
+      >
+        <RallyGrenadeIcon size={abilityIconSize} />
+        {cannonEnergy && <div style={{ ...hud.cannonCostBadge, ...(mobile ? hud.cannonCostBadgeMobile : {}) }}>{rallyCost}<span style={hud.cannonCostIcon}><EnergyBoltIcon size={9} /></span></div>}
+      </button>
+      {ONE_USE_SHIP_ABILITIES.map((ability) => {
+        if (!cannonEnergy?.[ability.unlockedKey]) return null;
+        const active = !!modes[ability.key];
+        const used = !!cannonEnergy[ability.usedKey];
+        const cost = cannonEnergy[ability.costKey] ?? ability.defaultCost;
+        const disabled = !active && (used || energy < cost);
+        const tooltip = active
+          ? `Cancel ${ability.label}`
+          : used
+          ? `${ability.label} already used`
+          : energy < cost
+          ? `Need ${cost} energy for ${ability.label}`
+          : ability.label;
+        return (
+          <button
+            key={ability.key}
+            style={{
+              ...abilityButtonStyle,
+              ...(active ? hud[ability.activeStyle] : {}),
+              ...(disabled ? hud.cannonDisabled : {}),
+            }}
+            onClick={() => { if (!disabled) handlers[ability.key]?.(); }}
+            title={tooltip}
+            aria-label={tooltip}
+            aria-pressed={active}
+            aria-disabled={disabled}
+          >
+            <img
+              src={ability.image}
+              alt=""
+              style={{
+                width: mobile ? 36 : 60,
+                height: mobile ? 36 : 60,
+                objectFit: 'contain',
+                objectPosition: 'center',
+                pointerEvents: 'none',
+              }}
+            />
+            <div style={{ ...hud.cannonCostBadge, ...(mobile ? hud.cannonCostBadgeMobile : {}) }}>{cost}<span style={hud.cannonCostIcon}><EnergyBoltIcon size={9} /></span></div>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 const ACTIVE_TROOP_IMG_MAP = Object.fromEntries(
   ATTACK_TROOPS.map((troop) => [troop.key, troop]),
 );
@@ -159,29 +335,75 @@ const TROOP_IMG_MAP = {
   ice_golem: ACTIVE_TROOP_IMG_MAP.icegolem,
   demon_king: ACTIVE_TROOP_IMG_MAP.demonking,
   fire_dragon: ACTIVE_TROOP_IMG_MAP.firedragon,
+  wind_mage: ACTIVE_TROOP_IMG_MAP.windmage,
+  pea_shooter: ACTIVE_TROOP_IMG_MAP.peashooter,
 };
 
 function normalizeTroopKey(name) {
-  const base = String(name || '').split(':')[0].toLowerCase();
+  const base = String(name || '').split(':')[0].trim().toLowerCase().replace(/[\s-]+/g, '_');
   if (base === 'necromancer' || base === 'skeletonmage' || base === 'skeleton_mage') return 'necromancer';
   if (base === 'mechanicaldragon' || base === 'mechanical_dragon' || base === 'mechdragon') return 'mechanicaldragon';
   if (base === 'icegolem' || base === 'ice_golem') return 'icegolem';
   if (base === 'horror' || base === 'horrorevolution' || base === 'horror_evolution') return 'horror';
   if (base === 'demonking' || base === 'demon_king') return 'demonking';
   if (base === 'firedragon' || base === 'fire_dragon') return 'firedragon';
+  if (base === 'windmage' || base === 'wind_mage') return 'windmage';
+  if (base === 'peashooter' || base === 'pea_shooter' || base === 'pea-shooter') return 'peashooter';
   return base;
 }
 
+function TroopPortrait({ info, style, fallbackStyle = null }) {
+  if (info?.img) return <img src={info.img} alt="" style={style} />;
+  if (!info?.monogram) return null;
+  return (
+    <span
+      aria-hidden="true"
+      style={{
+        ...style,
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        color: '#2d6f7d',
+        background: 'rgba(119, 218, 205, 0.22)',
+        border: '1px solid rgba(45, 111, 125, 0.4)',
+        borderRadius: 4,
+        fontWeight: 900,
+        lineHeight: 1,
+        ...fallbackStyle,
+      }}
+    >
+      {info.monogram}
+    </span>
+  );
+}
+
 // ── Attack HUD (shown during enemy mode) ──────────────────────────────────
-function ManualAttackHUD({ onSurrender, onCannon, onRally, cannonMode, rallyMode, selectedTroopIdx, onSelectTroop, cannonEnergy, fleetInfo, battleTimer }) {
+function ManualAttackHUD({
+  onSurrender,
+  onCannon,
+  onRally,
+  onMedkit,
+  onFreeze,
+  onRage,
+  onSkeletonBarrel,
+  cannonMode,
+  rallyMode,
+  medkitMode,
+  freezeMode,
+  rageMode,
+  skeletonBarrelMode,
+  selectedTroopIdx,
+  onSelectTroop,
+  cannonEnergy,
+  fleetInfo,
+  battleTimer,
+}) {
   const { isMobile: mobile } = useLayout();
   const [showDetails, setShowDetails] = useState(false);
   const troopScrollRef = useRef(null);
   const groups = fleetInfo?.troop_groups || [];
   const ship = fleetInfo?.ship || {};
   const ready = !!fleetInfo?.ready;
-  const rallyCost = cannonEnergy?.rallyNextCost ?? 1;
-  const rallyDisabled = !rallyMode && !!cannonEnergy && cannonEnergy.energy < rallyCost;
 
   useLayoutEffect(() => {
     const scroller = troopScrollRef.current;
@@ -202,11 +424,6 @@ function ManualAttackHUD({ onSurrender, onCannon, onRally, cannonMode, rallyMode
     scroller.scrollLeft += event.deltaY;
   }, []);
 
-  const abilityButtonStyle = mobile
-    ? { ...hud.cannonBtn, width: 58, height: 58, borderRadius: 14 }
-    : hud.cannonBtn;
-  const abilityIconSize = mobile ? 34 : 46;
-
   return (
     <>
       <div style={{ ...hud.wrapTopRight, ...(mobile ? { top: 'calc(env(safe-area-inset-top, 0px) + 8px)', right: 'calc(env(safe-area-inset-right, 0px) + 8px)' } : {}) }}>
@@ -219,20 +436,25 @@ function ManualAttackHUD({ onSurrender, onCannon, onRally, cannonMode, rallyMode
       </div>
       <div style={{
         ...hud.wrapLeft,
-        maxWidth: mobile ? 'none' : 'calc(100vw - 230px)',
+        right: mobile
+          ? 'calc(env(safe-area-inset-right, 0px) + 8px)'
+          : 'calc(min(540px, 55vw) + 40px)',
+        maxWidth: 'none',
+        minWidth: 0,
+        overflow: 'hidden',
+        boxSizing: 'border-box',
+        alignItems: 'flex-end',
         ...(mobile ? {
-          bottom: 'calc(env(safe-area-inset-bottom, 0px) + 8px)',
+          bottom: 'calc(env(safe-area-inset-bottom, 0px) + 108px)',
           left: 'calc(env(safe-area-inset-left, 0px) + 8px)',
-          right: 'calc(env(safe-area-inset-right, 0px) + 142px)',
           gap: 4,
-          minWidth: 0,
-          overflow: 'hidden',
         } : {}),
       }}>
-        <button style={{ ...hud.card, width: mobile ? 32 : 36, height: mobile ? 32 : 36, padding: 0, borderColor: 'rgba(255,215,0,0.7)', cursor: 'pointer', flexShrink: 0 }} onClick={(event) => { event.stopPropagation(); setShowDetails(true); }} title="Main ship and army">
+        <button style={{ ...hud.card, width: mobile ? 32 : 36, height: mobile ? 32 : 36, padding: 0, borderColor: 'rgba(255,215,0,0.7)', cursor: 'pointer', flexShrink: 0, position: 'relative', overflow: 'visible' }} onClick={(event) => { event.stopPropagation(); setShowDetails(true); }} title={ready ? 'Main ship and army' : 'Main ship approaching'}>
           <img src={shipImg} alt="" style={{ width: '90%', height: '90%', objectFit: 'contain' }} />
+          {!ready && mobile && <span aria-hidden="true" style={{ position: 'absolute', right: -3, bottom: -3, width: 10, height: 10, borderRadius: '50%', background: '#2c83ba', border: '2px solid #fff7df', boxShadow: '0 1px 3px rgba(0,0,0,0.35)' }} />}
         </button>
-        {!ready && <div style={{ ...hud.card, width: mobile ? 82 : 116, height: mobile ? 42 : 58, padding: '4px 8px', borderColor: '#2c83ba', color: '#5C3A21', fontSize: mobile ? 8 : 11, fontWeight: 900, textAlign: 'center', flexShrink: 0 }}>MAIN SHIP<br/>APPROACHING...</div>}
+        {!ready && !mobile && <div style={{ ...hud.card, width: 116, height: 58, padding: '4px 8px', borderColor: '#2c83ba', color: '#5C3A21', fontSize: 11, fontWeight: 900, textAlign: 'center', flexShrink: 0 }}>MAIN SHIP<br/>APPROACHING...</div>}
         <div
           ref={troopScrollRef}
           className="attack-troop-scroll"
@@ -258,7 +480,11 @@ function ManualAttackHUD({ onSurrender, onCannon, onRally, cannonMode, rallyMode
                 aria-label={`Deploy ${info.label || group.label || group.key}, ${group.count || 0} remaining`}
                 aria-pressed={selected}
               >
-                {info.img && <img src={info.img} alt="" style={{ width: '76%', height: '67%', objectFit: 'contain' }} />}
+                <TroopPortrait
+                  info={info}
+                  style={{ width: '76%', height: '67%', objectFit: 'contain' }}
+                  fallbackStyle={{ fontSize: mobile ? 13 : 16 }}
+                />
                 <span style={{ maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: mobile ? 8 : 9, fontWeight: 900, color: '#5C3A21', textTransform: 'uppercase', lineHeight: 1 }}>{displayLabel}</span>
                 <span style={{ position: 'absolute', top: -4, right: -4, background: '#5C3A21', color: '#fff7df', fontSize: 9, fontWeight: 900, borderRadius: 6, padding: '1px 5px', border: '1px solid #3d1f00' }}>x{group.count || 0}</span>
               </button>
@@ -270,26 +496,84 @@ function ManualAttackHUD({ onSurrender, onCannon, onRally, cannonMode, rallyMode
         <div style={{ fontSize: 16, fontWeight: 900, color: '#5C3A21' }}>Main Ship Lv.{ship.level || 1}</div>
         <img src={shipImg} alt="Main ship" style={{ width: 150, height: 90, objectFit: 'contain' }} />
         <div style={{ fontSize: 12, fontWeight: 800, color: '#5C3A21' }}>{fleetInfo?.remaining ?? 0} units remaining · {ship.capacity || 0} capacity</div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: 5, width: '100%' }}>{groups.map((group) => { const info = TROOP_IMG_MAP[normalizeTroopKey(group.key)] || {}; return <div key={group.key} style={{ display: 'flex', alignItems: 'center', gap: 4, background: '#fffaf0', border: '1px solid #d4c8b0', borderRadius: 6, padding: '3px 7px' }}>{info.img && <img src={info.img} alt="" style={{ width: 24, height: 24, objectFit: 'contain' }} />}<span style={{ fontSize: 10, fontWeight: 800, color: '#5C3A21' }}>{info.label || group.label || group.key} x{group.count || 0}</span></div>; })}</div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: 5, width: '100%' }}>{groups.map((group) => { const info = TROOP_IMG_MAP[normalizeTroopKey(group.key)] || {}; return <div key={group.key} style={{ display: 'flex', alignItems: 'center', gap: 4, background: '#fffaf0', border: '1px solid #d4c8b0', borderRadius: 6, padding: '3px 7px' }}><TroopPortrait info={info} style={{ width: 24, height: 24, objectFit: 'contain' }} fallbackStyle={{ fontSize: 8 }} /><span style={{ fontSize: 10, fontWeight: 800, color: '#5C3A21' }}>{info.label || group.label || group.key} x{group.count || 0}</span></div>; })}</div>
         <button style={{ marginTop: 6, padding: '8px 20px', background: '#fff6dc', border: '2px solid #9f8759', borderRadius: 8, color: '#5C3A21', fontSize: 13, fontWeight: 800, cursor: 'pointer', fontFamily: 'inherit' }} onClick={() => setShowDetails(false)}>Close</button>
       </div></div>}
-      <div style={{ ...hud.wrapRight, ...(mobile ? { bottom: 'calc(env(safe-area-inset-bottom, 0px) + 8px)', right: 'calc(env(safe-area-inset-right, 0px) + 8px)' } : {}) }}><div style={{ ...hud.cannonGroup, ...(mobile ? { gap: 5 } : {}) }}>
+      <div style={{
+        ...hud.wrapRight,
+        ...(mobile ? {
+          bottom: 'calc(env(safe-area-inset-bottom, 0px) + 8px)',
+          right: 'calc(env(safe-area-inset-right, 0px) + 8px)',
+          left: 'calc(env(safe-area-inset-left, 0px) + 8px)',
+        } : {}),
+      }}><div style={{ ...hud.cannonGroup, width: '100%', ...(mobile ? { gap: 5 } : {}) }}>
         {cannonEnergy && <div style={{ ...hud.energyPill, ...(mobile ? hud.energyPillMobile : {}) }}><span style={{ ...hud.energyIcon, ...(mobile ? hud.energyIconMobile : {}) }}><EnergyBoltIcon size={mobile ? 11 : 15} /></span><span style={{ ...hud.energyValue, ...(mobile ? hud.energyValueMobile : {}) }}>{cannonEnergy.energy}</span></div>}
-        <div style={{ ...hud.abilityRow, ...(mobile ? { gap: 5 } : {}) }}>
-          <button style={{ ...abilityButtonStyle, ...(rallyMode ? hud.rallyActive : {}), ...(rallyDisabled ? hud.cannonDisabled : {}) }} onClick={() => { if (!rallyDisabled) onRally(); }} title={rallyMode ? 'Cancel rally mode' : 'Rally pointer'}><RallyGrenadeIcon size={abilityIconSize} />{cannonEnergy && <div style={{ ...hud.cannonCostBadge, ...(mobile ? hud.cannonCostBadgeMobile : {}) }}>{rallyCost}<span style={hud.cannonCostIcon}><EnergyBoltIcon size={9} /></span></div>}</button>
-          <button style={{ ...abilityButtonStyle, ...(cannonMode ? hud.cannonActive : {}), ...(cannonEnergy && cannonEnergy.energy < cannonEnergy.nextCost ? hud.cannonDisabled : {}) }} onClick={() => { if (!cannonEnergy || cannonEnergy.energy >= cannonEnergy.nextCost) onCannon(); }} title="Ship Cannon"><CannonBallIcon size={abilityIconSize} />{cannonEnergy && <div style={{ ...hud.cannonCostBadge, ...(mobile ? hud.cannonCostBadgeMobile : {}) }}>{cannonEnergy.nextCost}<span style={hud.cannonCostIcon}><EnergyBoltIcon size={9} /></span></div>}</button>
-        </div>
+        <ShipAbilityRail {...{
+          mobile,
+          cannonEnergy,
+          cannonMode,
+          rallyMode,
+          medkitMode,
+          freezeMode,
+          rageMode,
+          skeletonBarrelMode,
+          onCannon,
+          onRally,
+          onMedkit,
+          onFreeze,
+          onRage,
+          onSkeletonBarrel,
+        }} />
       </div></div>
     </>
   );
 }
 
-function AttackHUD({ onReturnHome, onSurrender, onCannon, onRally, cannonMode, rallyMode, selectedTroopIdx, onSelectTroop, cannonEnergy, fleetInfo, battleTimer }) {
+function AttackHUD({
+  onReturnHome,
+  onSurrender,
+  onCannon,
+  onRally,
+  onMedkit,
+  onFreeze,
+  onRage,
+  onSkeletonBarrel,
+  cannonMode,
+  rallyMode,
+  medkitMode,
+  freezeMode,
+  rageMode,
+  skeletonBarrelMode,
+  selectedTroopIdx,
+  onSelectTroop,
+  cannonEnergy,
+  fleetInfo,
+  battleTimer,
+}) {
   const { isMobile: mobile } = useLayout();
   const [expandedShip, setExpandedShip] = useState(null);
 
   if (fleetInfo?.mode === 'manual_troops') {
-    return <ManualAttackHUD {...{ onSurrender, onCannon, onRally, cannonMode, rallyMode, selectedTroopIdx, onSelectTroop, cannonEnergy, fleetInfo, battleTimer }} />;
+    return <ManualAttackHUD {...{
+      onSurrender,
+      onCannon,
+      onRally,
+      onMedkit,
+      onFreeze,
+      onRage,
+      onSkeletonBarrel,
+      cannonMode,
+      rallyMode,
+      medkitMode,
+      freezeMode,
+      rageMode,
+      skeletonBarrelMode,
+      selectedTroopIdx,
+      onSelectTroop,
+      cannonEnergy,
+      fleetInfo,
+      battleTimer,
+    }} />;
   }
 
   // Build ship cards from fleet info
@@ -320,7 +604,28 @@ function AttackHUD({ onReturnHome, onSurrender, onCannon, onRally, cannonMode, r
       </div>
 
       {/* Ships - Bottom Left: compact ship icons */}
-      <div style={{ ...hud.wrapLeft, ...(mobile ? { bottom: 10, left: 10, gap: 4, flexWrap: 'wrap', maxWidth: 'calc(100vw - 80px)' } : {}) }}>
+      <div
+        className="attack-troop-scroll"
+        style={{
+          ...hud.wrapLeft,
+          right: mobile
+            ? 'calc(env(safe-area-inset-right, 0px) + 8px)'
+            : 'calc(min(540px, 55vw) + 40px)',
+          minWidth: 0,
+          overflowX: 'auto',
+          overflowY: 'hidden',
+          ...(mobile ? {
+            bottom: 'calc(env(safe-area-inset-bottom, 0px) + 108px)',
+            left: 'calc(env(safe-area-inset-left, 0px) + 8px)',
+            gap: 4,
+            flexWrap: 'nowrap',
+            maxWidth: 'none',
+          } : {}),
+        }}
+        onPointerDown={(event) => event.stopPropagation()}
+        onTouchStart={(event) => event.stopPropagation()}
+        aria-label="Fleet deployment controls"
+      >
         {/* Fleet info button */}
         <button
           style={{ ...hud.card, width: mobile ? 28 : 34, height: mobile ? 28 : 34, padding: 0, borderColor: 'rgba(255,215,0,0.6)', cursor: 'pointer', flexDirection: 'column', gap: 0 }}
@@ -364,7 +669,7 @@ function AttackHUD({ onReturnHome, onSurrender, onCannon, onRally, cannonMode, r
                   const info = TROOP_IMG_MAP[normalizeTroopKey(troop)] || {};
                   return (
                     <span key={`${troop}-${index}`} style={{ width: mobile ? 11 : 13, height: mobile ? 11 : 13, borderRadius: 3, overflow: 'hidden', border: '1px solid rgba(92,58,33,0.45)', background: '#fff6dc' }}>
-                      {info.img && <img src={info.img} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />}
+                      <TroopPortrait info={info} style={{ width: '100%', height: '100%', objectFit: 'cover' }} fallbackStyle={{ fontSize: 6, border: 'none', borderRadius: 0 }} />
                     </span>
                   );
                 })}
@@ -412,7 +717,7 @@ function AttackHUD({ onReturnHome, onSurrender, onCannon, onRally, cannonMode, r
                       return (
                         <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 3, background: '#fffaf0', border: '1px solid #d4c8b0', borderRadius: 6, padding: '2px 6px' }}>
                           <div style={{ width: 22, height: 22, borderRadius: 3, overflow: 'hidden' }}>
-                            {info.img && <img src={info.img} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />}
+                            <TroopPortrait info={info} style={{ width: '100%', height: '100%', objectFit: 'cover' }} fallbackStyle={{ fontSize: 7, border: 'none' }} />
                           </div>
                           <span style={{ fontSize: 10, fontWeight: 800, color: '#5C3A21' }}>{info.label || key} x{count}</span>
                         </div>
@@ -428,70 +733,37 @@ function AttackHUD({ onReturnHome, onSurrender, onCannon, onRally, cannonMode, r
       )}
 
       {/* Cannon + Energy - Bottom Right */}
-      <div style={{ ...hud.wrapRight, ...(mobile ? { bottom: 10, right: 10 } : {}) }}>
-        <div style={hud.cannonGroup}>
+      <div style={{
+        ...hud.wrapRight,
+        ...(mobile ? {
+          bottom: 'calc(env(safe-area-inset-bottom, 0px) + 8px)',
+          right: 'calc(env(safe-area-inset-right, 0px) + 8px)',
+          left: 'calc(env(safe-area-inset-left, 0px) + 8px)',
+        } : {}),
+      }}>
+        <div style={{ ...hud.cannonGroup, width: '100%', ...(mobile ? { gap: 5 } : {}) }}>
           {cannonEnergy && (
-            <div style={hud.energyPill}>
-              <span style={hud.energyIcon}><EnergyBoltIcon size={15} /></span>
-              <span style={hud.energyValue}>{cannonEnergy.energy}</span>
+            <div style={{ ...hud.energyPill, ...(mobile ? hud.energyPillMobile : {}) }}>
+              <span style={{ ...hud.energyIcon, ...(mobile ? hud.energyIconMobile : {}) }}><EnergyBoltIcon size={mobile ? 11 : 15} /></span>
+              <span style={{ ...hud.energyValue, ...(mobile ? hud.energyValueMobile : {}) }}>{cannonEnergy.energy}</span>
             </div>
           )}
-          <div style={hud.abilityRow}>
-            {(() => {
-              // Single computed flag drives both the click handler AND the
-              // styling. Keeping them separate previously meant a stale
-              // visual state could lie about whether the button responds.
-              const rallyCost = cannonEnergy?.rallyNextCost ?? 1;
-              const noEnergy = cannonEnergy && cannonEnergy.energy < rallyCost;
-              // Only energy should block arming the rally pointer. It is valid
-              // to throw a marker before troops have fully spawned; newly
-              // activated units will still read the live rally target.
-              const rallyDisabled = !rallyMode && noEnergy;
-              const tip = rallyMode
-                ? 'Click to cancel rally mode'
-                : noEnergy
-                ? `Need ${rallyCost} energy to drop a rally`
-                : 'Rally pointer — direct your troops';
-              return (
-                <button
-                  style={{
-                    ...hud.cannonBtn,
-                    ...(rallyMode ? hud.rallyActive : {}),
-                    ...(rallyDisabled ? hud.cannonDisabled : {}),
-                  }}
-                  onClick={() => { if (!rallyDisabled) onRally(); }}
-                  title={tip}
-                  onMouseOver={e => !rallyMode && !rallyDisabled && (e.currentTarget.style.filter = 'brightness(1.15)')}
-                  onMouseOut={e => !rallyMode && !rallyDisabled && (e.currentTarget.style.filter = 'none')}
-                >
-                  <RallyGrenadeIcon size={46} />
-                  {cannonEnergy && (
-                    <div style={hud.cannonCostBadge}>
-                      {rallyCost}
-                      <span style={hud.cannonCostIcon}><EnergyBoltIcon size={9} /></span>
-                    </div>
-                  )}
-                </button>
-              );
-            })()}
-            <button
-              style={{ ...hud.cannonBtn, ...(cannonMode ? hud.cannonActive : {}), ...(cannonEnergy && cannonEnergy.energy < cannonEnergy.nextCost ? hud.cannonDisabled : {}) }}
-              onClick={() => { if (!cannonEnergy || cannonEnergy.energy >= cannonEnergy.nextCost) onCannon(); }}
-              title="Ship Cannon"
-              onMouseOver={e => !cannonMode && (e.currentTarget.style.filter = 'brightness(1.15)')}
-              onMouseOut={e => !cannonMode && (e.currentTarget.style.filter = 'none')}
-            >
-              <CannonBallIcon size={46} />
-
-              {/* Cost Badge on the Button */}
-              {cannonEnergy && (
-                <div style={hud.cannonCostBadge}>
-                  {cannonEnergy.nextCost}
-                  <span style={hud.cannonCostIcon}><EnergyBoltIcon size={9} /></span>
-                </div>
-              )}
-            </button>
-          </div>
+          <ShipAbilityRail {...{
+            mobile,
+            cannonEnergy,
+            cannonMode,
+            rallyMode,
+            medkitMode,
+            freezeMode,
+            rageMode,
+            skeletonBarrelMode,
+            onCannon,
+            onRally,
+            onMedkit,
+            onFreeze,
+            onRage,
+            onSkeletonBarrel,
+          }} />
         </div>
       </div>
     </>
@@ -671,7 +943,21 @@ const ShieldIcon = ({ size = 60 }) => (
 
 function ActionButtons({ onOpenBattleLog, onOpenBots }) {
   const { sendToGodot, setFuturesOpen } = useSend();
-  const { enemyMode, cannonMode, rallyMode, selectedTroopIdx, cannonEnergy, fleetInfo, pendingCasualties, setPendingCasualties, battleTimer } = useUI();
+  const {
+    enemyMode,
+    cannonMode,
+    rallyMode,
+    medkitMode,
+    freezeMode,
+    rageMode,
+    skeletonBarrelMode,
+    selectedTroopIdx,
+    cannonEnergy,
+    fleetInfo,
+    pendingCasualties,
+    setPendingCasualties,
+    battleTimer,
+  } = useUI();
   const player = usePlayer();
   const token = player?.token || null;
   const [showReinforce, setShowReinforce] = useState(false);
@@ -743,12 +1029,20 @@ function ActionButtons({ onOpenBattleLog, onOpenBots }) {
   const handleOpenTrade   = useCallback(() => setFuturesOpen(true),            [setFuturesOpen]);
   const handleShipCannon  = useCallback(() => sendToGodot('ship_cannon_mode'), [sendToGodot]);
   const handleShipRally   = useCallback(() => sendToGodot('ship_rally_mode'), [sendToGodot]);
+  const handleShipMedkit  = useCallback(() => sendToGodot('ship_medkit_mode'), [sendToGodot]);
+  const handleShipFreeze  = useCallback(() => sendToGodot('ship_freeze_mode'), [sendToGodot]);
+  const handleShipRage    = useCallback(() => sendToGodot('ship_rage_mode'), [sendToGodot]);
+  const handleSkeletonBarrel = useCallback(() => sendToGodot('ship_skeleton_barrel_mode'), [sendToGodot]);
   const handleSelectTroop = useCallback((idx) => {
     console.log('[SELECT TROOP]', idx, 'cannonMode:', cannonMode);
     if (cannonMode) sendToGodot('ship_cannon_mode'); // toggle off cannon
     if (rallyMode) sendToGodot('ship_rally_mode');   // toggle off rally so a stale click doesn't drop a marker mid-troop-select
+    if (medkitMode) sendToGodot('ship_medkit_mode');
+    if (freezeMode) sendToGodot('ship_freeze_mode');
+    if (rageMode) sendToGodot('ship_rage_mode');
+    if (skeletonBarrelMode) sendToGodot('ship_skeleton_barrel_mode');
     sendToGodot('select_troop', { idx });
-  }, [sendToGodot, cannonMode, rallyMode]);
+  }, [sendToGodot, cannonMode, rallyMode, medkitMode, freezeMode, rageMode, skeletonBarrelMode]);
 
   if (enemyMode.active) {
     // Replay mode — only show return button, no attack controls
@@ -770,8 +1064,16 @@ function ActionButtons({ onOpenBattleLog, onOpenBots }) {
         onSurrender={() => setShowSurrender(true)}
         onCannon={handleShipCannon}
         onRally={handleShipRally}
+        onMedkit={handleShipMedkit}
+        onFreeze={handleShipFreeze}
+        onRage={handleShipRage}
+        onSkeletonBarrel={handleSkeletonBarrel}
         cannonMode={cannonMode}
         rallyMode={rallyMode}
+        medkitMode={medkitMode}
+        freezeMode={freezeMode}
+        rageMode={rageMode}
+        skeletonBarrelMode={skeletonBarrelMode}
         selectedTroopIdx={selectedTroopIdx ?? 0}
         onSelectTroop={handleSelectTroop}
         cannonEnergy={cannonEnergy}
@@ -972,17 +1274,37 @@ function ActionButtons({ onOpenBattleLog, onOpenBots }) {
   );
 }
 
-const REINFORCE_COST = 50;
+const REINFORCE_COST_PER_SLOT = 50;
+const REINFORCE_SLOT_COSTS = {
+  Knight: 1,
+  Archer: 1,
+  PeaShooter: 5,
+  Mage: 4,
+  Mimic: 6,
+  MechanicalDragon: 4,
+  IceGolem: 10,
+  Necromancer: 15,
+  windmage: 15,
+  Horror: 20,
+};
 const UNIT_IMG_MAP = {
   Knight: knightImg, Mage: mageImg, Barbarian: berserkImg, Archer: archerImg,
   Mimic: mimicImg, Necromancer: necromancerImg, Horror: horrorImg,
   MechanicalDragon: mechanicalDragonImg, IceGolem: iceGolemImg, Ranger: arbaletImg,
+  WindMage: windMageImg,
+  PeaShooter: peaShooterImg,
 };
 
 function ReinforceModal({ casualties, cost: serverCost, onConfirm, onClose }) {
   const entries = Object.entries(casualties).filter(([, c]) => c > 0);
   const total = entries.reduce((s, [, c]) => s + c, 0);
-  const cost = serverCost ?? total * REINFORCE_COST;
+  const totalSlots = entries.reduce(
+    (sum, [name, count]) => sum + count * (
+      REINFORCE_SLOT_COSTS[name] || REINFORCE_SLOT_COSTS[normalizeTroopKey(name)] || 1
+    ),
+    0,
+  );
+  const cost = serverCost ?? totalSlots * REINFORCE_COST_PER_SLOT;
 
   return (
     <div style={rf.overlay} onClick={onClose}>
@@ -998,11 +1320,15 @@ function ReinforceModal({ casualties, cost: serverCost, onConfirm, onClose }) {
             {entries.map(([name, count]) => (
               <div key={name} style={rf.card}>
                 <div style={rf.imgWrap}>
-                  {UNIT_IMG_MAP[name] && <img src={UNIT_IMG_MAP[name]} alt={name} style={rf.img} />}
+                  {UNIT_IMG_MAP[name]
+                    ? <img src={UNIT_IMG_MAP[name]} alt={name} style={rf.img} />
+                    : normalizeTroopKey(name) === 'windmage'
+                    ? <span aria-hidden="true" style={{ ...rf.img, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: '#2d6f7d', background: 'rgba(119, 218, 205, 0.22)', border: '1px solid rgba(45, 111, 125, 0.4)', borderRadius: 4, fontSize: 12, fontWeight: 900 }}>WM</span>
+                    : null}
                   <div style={rf.countBadge}>x{count}</div>
                 </div>
                 <span style={rf.name}>
-                  {name === 'Mimic' ? 'Barrel' : name === 'MechanicalDragon' ? 'Mech Dragon' : name === 'IceGolem' ? 'Ice Golem' : name}
+                  {name === 'Mimic' ? 'Barrel' : name === 'MechanicalDragon' ? 'Mech Dragon' : name === 'IceGolem' ? 'Ice Golem' : normalizeTroopKey(name) === 'windmage' ? 'Wind Mage' : name}
                 </span>
               </div>
             ))}
@@ -1232,8 +1558,8 @@ const hud = {
   },
   troopScroller: {
     display: 'flex',
-    flex: '1 1 0%',
-    width: 0,
+    flex: '1 1 auto',
+    width: 'auto',
     maxWidth: '100%',
     minWidth: 0,
     alignItems: 'flex-end',
@@ -1330,8 +1656,48 @@ const hud = {
     boxShadow: '0 0 22px rgba(255,55,40,0.55), inset 0 0 10px rgba(255,55,40,0.18)',
     filter: 'brightness(1.18)',
   },
-  abilityRow: {
-    display: 'flex', flexDirection: 'row', alignItems: 'flex-end', gap: 8,
+  medkitActive: {
+    borderWidth: 3,
+    borderStyle: 'solid',
+    borderColor: 'rgba(32,184,101,0.95)',
+    boxShadow: '0 0 22px rgba(32,184,101,0.55), inset 0 0 10px rgba(32,184,101,0.18)',
+    filter: 'brightness(1.12)',
+  },
+  freezeActive: {
+    borderWidth: 3,
+    borderStyle: 'solid',
+    borderColor: 'rgba(70,203,255,0.95)',
+    boxShadow: '0 0 22px rgba(70,203,255,0.55), inset 0 0 10px rgba(70,203,255,0.18)',
+    filter: 'brightness(1.14)',
+  },
+  rageActive: {
+    borderWidth: 3,
+    borderStyle: 'solid',
+    borderColor: 'rgba(197,65,222,0.95)',
+    boxShadow: '0 0 22px rgba(197,65,222,0.55), inset 0 0 10px rgba(197,65,222,0.18)',
+    filter: 'brightness(1.14)',
+  },
+  skeletonBarrelActive: {
+    borderWidth: 3,
+    borderStyle: 'solid',
+    borderColor: 'rgba(223,139,45,0.95)',
+    boxShadow: '0 0 22px rgba(223,139,45,0.55), inset 0 0 10px rgba(223,139,45,0.18)',
+    filter: 'brightness(1.14)',
+  },
+  abilityRail: {
+    display: 'flex',
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    flexShrink: 0,
+    minWidth: 0,
+    maxWidth: '100%',
+    overflowX: 'auto',
+    overflowY: 'hidden',
+    padding: '4px 2px 5px',
+    boxSizing: 'border-box',
+    overscrollBehaviorX: 'contain',
+    touchAction: 'pan-x',
+    WebkitOverflowScrolling: 'touch',
   },
   cannonDisabled: {
     opacity: 0.35,

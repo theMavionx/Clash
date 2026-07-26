@@ -24,6 +24,8 @@ import iceGolemImg from '../assets/units/ice_golem.png';
 import berserkImg from '../assets/units/berserk.png';
 import demonKingImg from '../assets/units/demonking.png';
 import fireDragonImg from '../assets/units/fire_dragon.png';
+import windMageImg from '../assets/units/wind_mage.png';
+import peaShooterImg from '../assets/units/pea_shooter.png';
 
 const dragonImg = '/cdn/nft/dragon/1/default.jpg';
 
@@ -60,8 +62,10 @@ const UNIT_IMAGES = {
   Knight: knightImg,
   Mage: mageImg,
   Archer: archerImg,
+  PeaShooter: peaShooterImg,
   Mimic: mimicImg,
   Necromancer: necromancerImg,
+  WindMage: windMageImg,
   Horror: horrorImg,
   MechanicalDragon: mechanicalDragonImg,
   IceGolem: iceGolemImg,
@@ -76,8 +80,10 @@ const CARD_TROOP_STYLE_MAP = {
   Mage: { scale: 1.25, offsetY: '15%' },
   Barbarian: { scale: 1.25, offsetY: '15%' },
   Archer: { scale: 1.25, offsetY: '15%' },
+  PeaShooter: { scale: 1.10, offsetY: '4%' },
   Mimic: { scale: 1.1, offsetY: '4%' },
   Necromancer: { scale: 1.12, offsetY: '5%' },
+  WindMage: { scale: 1.12, offsetY: '5%' },
   Horror: { scale: 1.12, offsetY: '5%' },
   MechanicalDragon: { scale: 1.14, offsetY: '7%' },
   IceGolem: { scale: 1.12, offsetY: '5%' },
@@ -218,16 +224,17 @@ const TROOP_STATS = {
   },
   Mage: {
     display: "Mage",
+    trait: "Burst Mage: high ranged damage with low HP per slot. Uses 4 ship slots.",
     stats: {
-      1: { hp: 150, damage: 58, atk_speed: 1.25 },
-      2: { hp: 200, damage: 74, atk_speed: 1.12 },
-      3: { hp: 265, damage: 104, atk_speed: 1.0 },
-      4: { hp: 345, damage: 138, atk_speed: 0.9 },
-      5: { hp: 440, damage: 182, atk_speed: 0.82 },
-      6: { hp: 555, damage: 238, atk_speed: 0.76 },
-      7: { hp: 690, damage: 310, atk_speed: 0.7 },
+      1: { hp: 450, damage: 203, atk_speed: 1.25 },
+      2: { hp: 600, damage: 259, atk_speed: 1.12 },
+      3: { hp: 795, damage: 364, atk_speed: 1.0 },
+      4: { hp: 1035, damage: 483, atk_speed: 0.9 },
+      5: { hp: 1320, damage: 637, atk_speed: 0.82 },
+      6: { hp: 1665, damage: 833, atk_speed: 0.76 },
+      7: { hp: 2070, damage: 1085, atk_speed: 0.7 },
     },
-    maxStats: { hp: 690, damage: 310, atk_speed: 1.25 }
+    maxStats: { hp: 2070, damage: 1085, atk_speed: 1.25 }
   },
   Barbarian: {
     display: "Barbarian",
@@ -255,47 +262,75 @@ const TROOP_STATS = {
     },
     maxStats: { hp: 840, damage: 180, atk_speed: 1.05 }
   },
+  PeaShooter: {
+    display: "Pea Shooter",
+    trait: "Burst Sprout: fires three green peas per attack cycle. Uses 5 ship slots.",
+    stats: {
+      1: { hp: 1250, damage: 110, atk_speed: 1.75 },
+      2: { hp: 1650, damage: 150, atk_speed: 1.75 },
+      3: { hp: 2150, damage: 205, atk_speed: 1.75 },
+      4: { hp: 2800, damage: 280, atk_speed: 1.75 },
+      5: { hp: 3550, damage: 380, atk_speed: 1.75 },
+      6: { hp: 4450, damage: 510, atk_speed: 1.75 },
+      7: { hp: 5500, damage: 680, atk_speed: 1.75 },
+    },
+    maxStats: { hp: 5500, damage: 680, atk_speed: 1.75 }
+  },
   Mimic: {
     display: "Barrel",
-    trait: "Trap Runner: defenses ignore it while rolling. Traps still trigger, but deal no damage.",
+    trait: "Trap Runner: defenses ignore it while rolling. Traps trigger without damage. Uses 6 ship slots.",
     stats: {
-      1: { hp: 300, damage: 20, atk_speed: 1.5 },
-      2: { hp: 400, damage: 27, atk_speed: 1.42 },
-      3: { hp: 520, damage: 36, atk_speed: 1.34 },
-      4: { hp: 680, damage: 47, atk_speed: 1.27 },
-      5: { hp: 860, damage: 61, atk_speed: 1.2 },
-      6: { hp: 1060, damage: 79, atk_speed: 1.13 },
-      7: { hp: 1300, damage: 102, atk_speed: 1.06 },
+      1: { hp: 1800, damage: 120, atk_speed: 1.5 },
+      2: { hp: 2400, damage: 162, atk_speed: 1.42 },
+      3: { hp: 3120, damage: 216, atk_speed: 1.34 },
+      4: { hp: 4080, damage: 282, atk_speed: 1.27 },
+      5: { hp: 5160, damage: 366, atk_speed: 1.2 },
+      6: { hp: 6360, damage: 474, atk_speed: 1.13 },
+      7: { hp: 7800, damage: 612, atk_speed: 1.06 },
     },
-    maxStats: { hp: 1300, damage: 102, atk_speed: 1.5 }
+    maxStats: { hp: 7800, damage: 612, atk_speed: 1.5 }
   },
   Necromancer: {
     display: "Necromancer",
-    trait: "Grave Caller: ranged green magic and up to 3 weak skeleton summons. Uses 2 ship slots.",
+    trait: "Grave Caller: ranged green magic and up to 3 renewable skeleton summons. Uses 15 ship slots.",
     stats: {
-      1: { hp: 220, damage: 34, atk_speed: 1.35 },
-      2: { hp: 290, damage: 44, atk_speed: 1.23 },
-      3: { hp: 380, damage: 62, atk_speed: 1.12 },
-      4: { hp: 490, damage: 82, atk_speed: 1.02 },
-      5: { hp: 620, damage: 108, atk_speed: 0.94 },
-      6: { hp: 770, damage: 142, atk_speed: 0.87 },
-      7: { hp: 940, damage: 186, atk_speed: 0.81 },
+      1: { hp: 2640, damage: 510, atk_speed: 1.35 },
+      2: { hp: 3480, damage: 660, atk_speed: 1.23 },
+      3: { hp: 4560, damage: 930, atk_speed: 1.12 },
+      4: { hp: 5880, damage: 1230, atk_speed: 1.02 },
+      5: { hp: 7440, damage: 1620, atk_speed: 0.94 },
+      6: { hp: 9240, damage: 2130, atk_speed: 0.87 },
+      7: { hp: 11280, damage: 2790, atk_speed: 0.81 },
     },
-    maxStats: { hp: 940, damage: 186, atk_speed: 1.35 }
+    maxStats: { hp: 11280, damage: 2790, atk_speed: 1.35 }
+  },
+  WindMage: {
+    display: "Wind Mage",
+    trait: "Wind Corridor: sweeps a wide lane and summons temporary Windlings.",
+    stats: {
+      1: { hp: 2200, damage: 430, atk_speed: 2.20 },
+      2: { hp: 2900, damage: 560, atk_speed: 2.20 },
+      3: { hp: 3800, damage: 740, atk_speed: 2.20 },
+      4: { hp: 4900, damage: 980, atk_speed: 2.20 },
+      5: { hp: 6200, damage: 1280, atk_speed: 2.20 },
+      6: { hp: 7700, damage: 1660, atk_speed: 2.20 },
+      7: { hp: 9400, damage: 2140, atk_speed: 2.20 },
+    },
+    maxStats: { hp: 9400, damage: 2140, atk_speed: 2.20 }
   },
   Horror: {
     display: "Horror",
-    trait: "Brood Evolution: uses 3 ship slots. On death it splits into 2 Creepers; each Creeper splits into 2 Lurkers.",
+    trait: "Brood Evolution: uses 20 ship slots. On death it splits into 2 Creepers; each Creeper splits into 2 Lurkers.",
     stats: {
-      1: { hp: 680, damage: 68, atk_speed: 1.24 },
-      2: { hp: 895, damage: 91, atk_speed: 1.24 },
-      3: { hp: 1170, damage: 122, atk_speed: 1.24 },
-      4: { hp: 1510, damage: 165, atk_speed: 1.24 },
-      5: { hp: 1920, damage: 222, atk_speed: 1.24 },
-      6: { hp: 2390, damage: 296, atk_speed: 1.24 },
-      7: { hp: 2930, damage: 390, atk_speed: 1.24 },
+      1: { hp: 4533, damage: 453, atk_speed: 1.24 },
+      2: { hp: 5967, damage: 607, atk_speed: 1.24 },
+      3: { hp: 7800, damage: 813, atk_speed: 1.24 },
+      4: { hp: 10067, damage: 1100, atk_speed: 1.24 },
+      5: { hp: 12800, damage: 1480, atk_speed: 1.24 },
+      6: { hp: 15933, damage: 1973, atk_speed: 1.24 },
+      7: { hp: 19533, damage: 2600, atk_speed: 1.24 },
     },
-    maxStats: { hp: 2930, damage: 390, atk_speed: 1.24 }
+    maxStats: { hp: 19533, damage: 2600, atk_speed: 1.24 }
   },
   MechanicalDragon: {
     display: "Mechanical Dragon",
@@ -313,17 +348,17 @@ const TROOP_STATS = {
   },
   IceGolem: {
     display: "Ice Golem",
-    trait: "Frozen Vanguard: attacks defenses first. On death, freezes nearby defenses for 7 seconds. Heavy ground unit, uses 4 ship slots.",
+    trait: "Frozen Vanguard: attacks defenses first. On death, freezes nearby defenses for 7 seconds. Uses 10 ship slots.",
     stats: {
-      1: { hp: 2100, damage: 78, atk_speed: 1.42 },
-      2: { hp: 2700, damage: 105, atk_speed: 1.42 },
-      3: { hp: 3500, damage: 143, atk_speed: 1.42 },
-      4: { hp: 4450, damage: 195, atk_speed: 1.42 },
-      5: { hp: 5600, damage: 263, atk_speed: 1.42 },
-      6: { hp: 6900, damage: 351, atk_speed: 1.42 },
-      7: { hp: 8400, damage: 462, atk_speed: 1.42 },
+      1: { hp: 5250, damage: 195, atk_speed: 1.42 },
+      2: { hp: 6750, damage: 263, atk_speed: 1.42 },
+      3: { hp: 8750, damage: 358, atk_speed: 1.42 },
+      4: { hp: 11125, damage: 488, atk_speed: 1.42 },
+      5: { hp: 14000, damage: 658, atk_speed: 1.42 },
+      6: { hp: 17250, damage: 878, atk_speed: 1.42 },
+      7: { hp: 21000, damage: 1155, atk_speed: 1.42 },
     },
-    maxStats: { hp: 8400, damage: 462, atk_speed: 1.42 }
+    maxStats: { hp: 21000, damage: 1155, atk_speed: 1.42 }
   },
   Ranger: {
     display: "Ranger",
@@ -340,54 +375,66 @@ const TROOP_STATS = {
   },
   DemonKing: {
     display: "Demon King",
+    trait: "Heavy Boss: premium melee durability and reach. Uses 5 ship slots.",
     stats: {
-      1: { hp: 1080, damage: 92, atk_speed: 1.4 },
-      2: { hp: 1440, damage: 120, atk_speed: 1.3 },
-      3: { hp: 1872, damage: 159, atk_speed: 1.2 },
-      4: { hp: 2400, damage: 207, atk_speed: 1.1 },
-      5: { hp: 3024, damage: 269, atk_speed: 1.02 },
-      6: { hp: 3744, damage: 348, atk_speed: 0.96 },
-      7: { hp: 4560, damage: 444, atk_speed: 0.9 },
+      1: { hp: 2700, damage: 228, atk_speed: 1.4 },
+      2: { hp: 3600, damage: 300, atk_speed: 1.3 },
+      3: { hp: 4680, damage: 396, atk_speed: 1.2 },
+      4: { hp: 6000, damage: 516, atk_speed: 1.1 },
+      5: { hp: 7560, damage: 672, atk_speed: 1.02 },
+      6: { hp: 9360, damage: 870, atk_speed: 0.96 },
+      7: { hp: 11400, damage: 1110, atk_speed: 0.9 },
     },
-    maxStats: { hp: 4560, damage: 444, atk_speed: 1.4 }
+    maxStats: { hp: 11400, damage: 1110, atk_speed: 1.4 }
   },
   FireDragon: {
     display: "Dragon",
+    trait: "Flying Boss: ranged fire ignores ground traps. Uses 10 ship slots.",
     stats: {
-      1: { hp: 360, damage: 140, atk_speed: 1.25 },
-      2: { hp: 480, damage: 178, atk_speed: 1.12 },
-      3: { hp: 636, damage: 250, atk_speed: 1.0 },
-      4: { hp: 828, damage: 332, atk_speed: 0.9 },
-      5: { hp: 1056, damage: 437, atk_speed: 0.82 },
-      6: { hp: 1332, damage: 572, atk_speed: 0.76 },
-      7: { hp: 1656, damage: 744, atk_speed: 0.7 },
+      1: { hp: 1750, damage: 470, atk_speed: 1.25 },
+      2: { hp: 2320, damage: 600, atk_speed: 1.12 },
+      3: { hp: 3080, damage: 840, atk_speed: 1.0 },
+      4: { hp: 4000, damage: 1115, atk_speed: 0.9 },
+      5: { hp: 5100, damage: 1470, atk_speed: 0.82 },
+      6: { hp: 6440, damage: 1920, atk_speed: 0.76 },
+      7: { hp: 8000, damage: 2500, atk_speed: 0.7 },
     },
-    maxStats: { hp: 1656, damage: 744, atk_speed: 1.25 }
+    maxStats: { hp: 8000, damage: 2500, atk_speed: 1.25 }
   }
 };
 
 const ACTIVE_TROOP_NAMES = [
-  'Knight', 'Mage', 'Archer', 'Mimic', 'Necromancer', 'Horror',
-  'MechanicalDragon', 'IceGolem', 'DemonKing', 'FireDragon',
+  'Knight', 'Mage', 'Archer', 'PeaShooter', 'Mimic', 'Necromancer', 'Horror',
+  'MechanicalDragon', 'IceGolem', 'WindMage', 'DemonKing', 'FireDragon',
 ];
-const NFT_TROOP_SLOT_COUNT = 2;
+const TROOP_LOGISTICS = {
+  PeaShooter: {
+    townHallLevel: 4,
+    slotCost: 5,
+    loadCostGold: 500,
+  },
+  WindMage: {
+    townHallLevel: 6,
+    slotCost: 15,
+    loadCostGold: 1500,
+  },
+};
 const NFT_RARITY_MULTIPLIERS = {
   common: 1.2,
   epic: 1.3,
   legendary: 1.5,
   unrevealed: 1.2,
 };
-const NFT_REFERENCE_TROOPS = {
-  DemonKing: 'Knight',
-  FireDragon: 'Mage',
-};
+const NFT_REFERENCE_TROOPS = new Set(['DemonKing', 'FireDragon']);
 const TROOP_LEVEL_KEYS = {
   Knight: ['Knight', 'knight'],
   Mage: ['Mage', 'mage'],
   Barbarian: ['Barbarian', 'barbarian'],
   Archer: ['Archer', 'archer'],
+  PeaShooter: ['PeaShooter', 'pea_shooter', 'peashooter', 'Pea Shooter', 'pea-shooter'],
   Mimic: ['Mimic', 'mimic'],
   Necromancer: ['Necromancer', 'necromancer', 'SkeletonMage', 'skeleton_mage'],
+  WindMage: ['WindMage', 'wind_mage', 'windmage', 'Wind Mage', 'wind-mage'],
   Horror: ['Horror', 'horror', 'HorrorEvolution', 'horror_evolution'],
   MechanicalDragon: ['MechanicalDragon', 'mechanical_dragon', 'mechanicaldragon', 'mechdragon'],
   IceGolem: ['IceGolem', 'ice_golem', 'icegolem'],
@@ -395,6 +442,14 @@ const TROOP_LEVEL_KEYS = {
   DemonKing: ['DemonKing', 'demon_king', 'demonking'],
   FireDragon: ['FireDragon', 'fire_dragon', 'firedragon'],
 };
+
+function troopDefinitionFromMap(definitions = {}, troopName) {
+  const keys = TROOP_LEVEL_KEYS[troopName] || [troopName, troopName.toLowerCase()];
+  for (const key of keys) {
+    if (Object.prototype.hasOwnProperty.call(definitions, key)) return definitions[key];
+  }
+  return null;
+}
 
 const NFT_BACKED_TROOPS = {
   DemonKing: {
@@ -449,20 +504,19 @@ function rarityMultiplier(rarity) {
 }
 
 function computeNftTroopStats(name, level, troopLevels = {}, rarity = 'common') {
-  const referenceName = NFT_REFERENCE_TROOPS[name];
   const sharedLevel = troopLevelFromMap(troopLevels, name, level);
-  const stats = TROOP_STATS[referenceName]?.stats?.[sharedLevel] || TROOP_STATS[referenceName]?.stats?.[1];
+  const stats = TROOP_STATS[name]?.stats?.[sharedLevel] || TROOP_STATS[name]?.stats?.[1];
   if (!stats) return TROOP_STATS[name]?.stats?.[clampLevel(level, 1, MAX_TROOP_LEVEL)];
-  const mult = rarityMultiplier(rarity);
+  const mult = rarityMultiplier(rarity) / NFT_RARITY_MULTIPLIERS.common;
   return {
-    hp: Math.ceil((Number(stats.hp) || 0) * NFT_TROOP_SLOT_COUNT * mult),
-    damage: Math.ceil((Number(stats.damage) || 0) * NFT_TROOP_SLOT_COUNT * mult),
+    hp: Math.ceil((Number(stats.hp) || 0) * mult),
+    damage: Math.ceil((Number(stats.damage) || 0) * mult),
     atk_speed: Number(stats.atk_speed) || 1,
   };
 }
 
 function getTroopStats(name, level, troopLevels = {}, rarity = 'common') {
-  if (NFT_REFERENCE_TROOPS[name]) return computeNftTroopStats(name, level, troopLevels, rarity);
+  if (NFT_REFERENCE_TROOPS.has(name)) return computeNftTroopStats(name, level, troopLevels, rarity);
   return TROOP_STATS[name]?.stats?.[level];
 }
 
@@ -473,7 +527,7 @@ function getTroopMaxStats(name, troopLevels = {}, rarity = 'common') {
       .map((key) => Number(key))
       .filter((value) => Number.isFinite(value)),
   );
-  if (NFT_REFERENCE_TROOPS[name]) {
+  if (NFT_REFERENCE_TROOPS.has(name)) {
     return computeNftTroopStats(name, maxLevel, { ...(troopLevels || {}), [name]: maxLevel }, rarity);
   }
   return TROOP_STATS[name]?.maxStats || TROOP_STATS[name]?.stats?.[maxLevel];
@@ -527,12 +581,16 @@ function BarnPanel({ building, onClose }) {
   const [pendingUpgrade, setPendingUpgrade] = useState(null);
   const troops = buildingDefs?.troops || {};
   const currentTownHallLevel = Number(buildingDefs?.th_level || buildingDefs?.town_hall_level || 1) || 1;
-  const troopNames = ACTIVE_TROOP_NAMES.filter((name) => troops[name]);
+  const troopNames = ACTIVE_TROOP_NAMES.filter((name) => troopDefinitionFromMap(troops, name));
   const safeIndex = troopNames.length ? Math.min(currentIndex, troopNames.length - 1) : 0;
   const currentTroopName = troopNames[safeIndex];
   const currentNftTroop = nftBackedTroopConfig(currentTroopName);
-  const tdef = currentTroopName ? troops[currentTroopName] : null;
-  const requiredTownHallLevel = Math.max(1, Number(tdef?.min_town_hall_level || 1) || 1);
+  const tdef = currentTroopName ? troopDefinitionFromMap(troops, currentTroopName) : null;
+  const troopLogistics = TROOP_LOGISTICS[currentTroopName] || null;
+  const requiredTownHallLevel = Math.max(
+    1,
+    Number(tdef?.min_town_hall_level || troopLogistics?.townHallLevel || 1) || 1,
+  );
   const troopUnlocked = currentTownHallLevel >= requiredTownHallLevel;
   const lvl = currentTroopName ? troopLevelFromMap(troopLevels, currentTroopName, 1) : 1;
   const prevLvlRef = useRef(lvl);
@@ -699,7 +757,13 @@ function BarnPanel({ building, onClose }) {
       .map((key) => Number(key))
       .filter((value) => Number.isFinite(value)),
   );
-  const troopMaxLevel = Math.max(1, Number(tdef?.max_level) || maxLevelFromCosts);
+  const maxLevelFromStats = Math.max(
+    1,
+    ...Object.keys(TROOP_STATS[currentTroopName]?.stats || {})
+      .map((key) => Number(key))
+      .filter((value) => Number.isFinite(value)),
+  );
+  const troopMaxLevel = Math.max(1, Number(tdef?.max_level) || maxLevelFromCosts, maxLevelFromStats);
   const isNftBackedTroop = !!currentNftTroop;
   const isDemonKingNftTroop = currentNftTroop?.collection === 'demonking' || currentNftTroop?.collection === 'demon_king';
   const isRarityNftTroop = isDemonKingNftTroop || currentNftTroop?.collection === 'dragon';
@@ -738,7 +802,6 @@ function BarnPanel({ building, onClose }) {
   const stats = getTroopStats(currentTroopName, displayLvl, troopLevels, selectedNftRarity);
   const maxStats = getTroopMaxStats(currentTroopName, troopLevels, selectedNftRarity);
   const displayName = TROOP_STATS[currentTroopName]?.display || tdef?.display || currentTroopName;
-  const hasImage = !!UNIT_IMAGES[currentTroopName];
 
   const sphereSize = mobile ? 100 : 200;
   const sliderW = mobile ? 32 : 48;
@@ -813,8 +876,21 @@ function BarnPanel({ building, onClose }) {
                       }}
                     />
                   ) : troopNames.map(name => {
-                    if (!UNIT_IMAGES[name]) return null;
                     const isActive = name === currentTroopName;
+                    if (!UNIT_IMAGES[name]) {
+                      if (!isActive) return null;
+                      return (
+                        <div
+                          key={name}
+                          className={isAnimatingUpgrade ? 'upgrade-anim-char' : ''}
+                          style={{...styles.characterFallback, opacity: 1}}
+                          aria-label="Wind Mage portrait pending"
+                        >
+                          <span style={{fontSize: mobile ? 24 : 44}}>WM</span>
+                          <small style={{fontSize: mobile ? 7 : 10}}>WIND MAGE</small>
+                        </div>
+                      );
+                    }
                     const charStyle = CARD_TROOP_STYLE_MAP[name] || { scale: 1.8, offsetY: '5%' };
                     return (
                       <img
@@ -854,6 +930,21 @@ function BarnPanel({ building, onClose }) {
                 lineHeight: 1.35,
               }}>
                 {TROOP_STATS[currentTroopName].trait}
+              </div>
+            )}
+            {troopLogistics && (
+              <div style={{
+                marginTop: 6,
+                display: 'flex',
+                flexWrap: 'wrap',
+                gap: mobile ? 5 : 7,
+                color: '#1f5968',
+                fontSize: mobile ? 10 : 11,
+                fontWeight: 900,
+              }}>
+                <span style={styles.logisticsChip}>TH{troopLogistics.townHallLevel}</span>
+                <span style={styles.logisticsChip}>{troopLogistics.slotCost} ship slots</span>
+                <span style={styles.logisticsChip}>{troopLogistics.loadCostGold.toLocaleString()} gold to load</span>
               </div>
             )}
 
@@ -1104,6 +1195,30 @@ const styles = {
     filter: 'drop-shadow(0 10px 20px rgba(0,0,0,0.4))',
     transformOrigin: 'bottom center',
     transition: 'opacity 0.35s ease-in-out',
+  },
+  characterFallback: {
+    position: 'absolute',
+    inset: '13%',
+    zIndex: 5,
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 3,
+    color: '#2d6f7d',
+    background: 'rgba(119, 218, 205, 0.22)',
+    border: '1px solid rgba(45, 111, 125, 0.4)',
+    borderRadius: '50%',
+    fontWeight: 900,
+    lineHeight: 1,
+    pointerEvents: 'none',
+  },
+  logisticsChip: {
+    padding: '4px 7px',
+    border: '1px solid rgba(45, 111, 125, 0.32)',
+    borderRadius: 5,
+    background: 'rgba(222, 248, 241, 0.72)',
+    whiteSpace: 'nowrap',
   },
   demonInventory: {
     background: 'rgba(255,255,255,0.18)',

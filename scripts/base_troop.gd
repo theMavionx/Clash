@@ -20,6 +20,11 @@ var hp: int = 100
 var max_hp: int = 100
 var damage: int = 10
 var atk_speed: float = 1.0
+var _tactical_boost_active: bool = false
+var _tactical_boost_remaining: float = 0.0
+var _tactical_boost_base_damage: int = 0
+var _tactical_boost_base_atk_speed: float = 0.0
+var _tactical_boost_base_move_speed: float = 0.0
 
 enum State { INACTIVE, IDLE, RUNNING, ATTACKING, VICTORY }
 var state: State = State.INACTIVE
@@ -563,6 +568,7 @@ func _init_stats() -> void:
 ## Applies level `lvl` to this troop by re-running `_init_stats()`.
 ## Call after spawning when the player's stored troop level is known.
 func upgrade_to(lvl: int) -> void:
+	_clear_tactical_boost()
 	level = lvl
 	_init_stats()
 	max_hp = hp
@@ -627,6 +633,7 @@ func _physics_process(delta: float) -> void:
 	if _is_dead or state == State.INACTIVE or state == State.VICTORY:
 		return
 	delta = combat_delta(delta)
+	_update_tactical_boost(delta)
 	# Force scale every frame — GLB animations override it otherwise
 	scale = Vector3(_spawn_scale, _spawn_scale, _spawn_scale)
 	_update_hp_bar()
@@ -1188,6 +1195,68 @@ func take_damage(dmg: int) -> void:
 		_begin_lethal_damage(dmg, "damage")
 
 
+func heal(amount: int) -> int:
+	if _is_dead or amount <= 0 or hp <= 0 or hp >= max_hp:
+		return 0
+	var before: int = hp
+	hp = mini(max_hp, hp + amount)
+	_update_hp_bar()
+	return hp - before
+
+
+func can_receive_tactical_boost() -> bool:
+	return (
+		not _is_dead
+		and state != State.INACTIVE
+		and state != State.VICTORY
+		and not has_meta("summoned_unit")
+		and not has_meta("evolution_child")
+	)
+
+
+func apply_tactical_boost(
+	duration: float,
+	damage_multiplier: float,
+	speed_multiplier: float
+) -> bool:
+	if not can_receive_tactical_boost():
+		return false
+	var safe_duration := maxf(0.0, duration)
+	var safe_damage_multiplier := maxf(1.0, damage_multiplier)
+	var safe_speed_multiplier := maxf(1.0, speed_multiplier)
+	if not _tactical_boost_active:
+		_tactical_boost_active = true
+		_tactical_boost_base_damage = damage
+		_tactical_boost_base_atk_speed = atk_speed
+		_tactical_boost_base_move_speed = move_speed
+	damage = maxi(1, roundi(float(_tactical_boost_base_damage) * safe_damage_multiplier))
+	atk_speed = maxf(0.05, _tactical_boost_base_atk_speed / safe_speed_multiplier)
+	move_speed = _tactical_boost_base_move_speed * safe_speed_multiplier
+	_tactical_boost_remaining = maxf(_tactical_boost_remaining, safe_duration)
+	return true
+
+
+func _update_tactical_boost(delta: float) -> void:
+	if not _tactical_boost_active:
+		return
+	_tactical_boost_remaining -= delta
+	if _tactical_boost_remaining <= 0.0:
+		_clear_tactical_boost()
+
+
+func _clear_tactical_boost() -> void:
+	if not _tactical_boost_active:
+		return
+	damage = _tactical_boost_base_damage
+	atk_speed = _tactical_boost_base_atk_speed
+	move_speed = _tactical_boost_base_move_speed
+	_tactical_boost_active = false
+	_tactical_boost_remaining = 0.0
+	_tactical_boost_base_damage = 0
+	_tactical_boost_base_atk_speed = 0.0
+	_tactical_boost_base_move_speed = 0.0
+
+
 ## Applies the same level-based shark trap damage as the server replay. A
 ## surviving heavy troop stays active; a lethal hit keeps a short visual shell
 ## so the bite and disappearance remain readable.
@@ -1289,6 +1358,7 @@ func _get_troop_name() -> String:
 		"mage": return "Mage"
 		"barbarian": return "Barbarian"
 		"archer": return "Archer"
+		"pea_shooter": return "PeaShooter"
 		"ranger": return "Ranger"
 		"mimic": return "Mimic"
 		"necromancer": return "Necromancer"
@@ -1296,6 +1366,8 @@ func _get_troop_name() -> String:
 		"horror_evolution": return "Horror"
 		"mechanical_dragon": return "MechanicalDragon"
 		"ice_golem": return "IceGolem"
+		"wind_mage": return "WindMage"
+		"windling": return "Windling"
 		"demon_king": return "DemonKing"
 		"fire_dragon": return "FireDragon"
 	return ""

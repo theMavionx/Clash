@@ -1,6 +1,7 @@
 extends "res://scripts/mage.gd"
 class_name Necromancer
-## Two-slot ranged summoner. Direct damage is intentionally below Mage while
+## Fifteen-slot ranged summoner. Direct damage and renewable skeleton pressure
+## consume most of one late-game army, while the owner remains vulnerable.
 ## up to three weak, owner-bound skeletons add pressure and distraction.
 
 const MAX_TROOP_LEVEL: int = 7
@@ -27,13 +28,13 @@ const ALBEDO_TEXTURE: Texture2D = preload(
 const STAFF_SCENE: String = "res://Model/Characters/Necromancer/NecromancerStaff.fbx"
 
 const NECROMANCER_LEVEL_STATS: Dictionary = {
-	1: {"hp": 220, "damage": 34, "atk_speed": 1.35},
-	2: {"hp": 290, "damage": 44, "atk_speed": 1.23},
-	3: {"hp": 380, "damage": 62, "atk_speed": 1.12},
-	4: {"hp": 490, "damage": 82, "atk_speed": 1.02},
-	5: {"hp": 620, "damage": 108, "atk_speed": 0.94},
-	6: {"hp": 770, "damage": 142, "atk_speed": 0.87},
-	7: {"hp": 940, "damage": 186, "atk_speed": 0.81},
+	1: {"hp": 2640, "damage": 510, "atk_speed": 1.35},
+	2: {"hp": 3480, "damage": 660, "atk_speed": 1.23},
+	3: {"hp": 4560, "damage": 930, "atk_speed": 1.12},
+	4: {"hp": 5880, "damage": 1230, "atk_speed": 1.02},
+	5: {"hp": 7440, "damage": 1620, "atk_speed": 0.94},
+	6: {"hp": 9240, "damage": 2130, "atk_speed": 0.87},
+	7: {"hp": 11280, "damage": 2790, "atk_speed": 0.81},
 }
 
 const ANIM_FILES: Array[String] = [
@@ -203,10 +204,10 @@ func _release_attack_projectile() -> void:
 		call_deferred("_begin_summon")
 
 
-func _build_pool() -> void:
+func _build_pool(pool_parent: Node = null) -> void:
 	if _pool_ready:
 		return
-	var scene_root := get_tree().current_scene
+	var scene_root := pool_parent if pool_parent != null else get_tree().current_scene
 	if scene_root == null:
 		return
 	if _shared_necro_projectile_shader == null:
@@ -240,10 +241,10 @@ func _build_pool() -> void:
 		})
 
 
-func prewarm_necromancer_vfx() -> Array[Node]:
-	_build_pool()
+func prewarm_necromancer_vfx(warmup_parent: Node = null) -> Array[Node]:
+	_build_pool(warmup_parent)
 	var warmed_nodes: Array[Node] = []
-	var scene_root := get_tree().current_scene
+	var scene_root := warmup_parent if warmup_parent != null else get_tree().current_scene
 	if scene_root == null:
 		return warmed_nodes
 

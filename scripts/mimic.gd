@@ -5,13 +5,13 @@ extends BaseTroop
 const ALBEDO_TEXTURE := preload("res://Model/Characters/MimicBarrel/Textures/mimic_barrel_albedo.png")
 
 const LEVEL_STATS := {
-	1: {"hp": 300, "damage": 20, "atk_speed": 1.50},
-	2: {"hp": 400, "damage": 27, "atk_speed": 1.42},
-	3: {"hp": 520, "damage": 36, "atk_speed": 1.34},
-	4: {"hp": 680, "damage": 47, "atk_speed": 1.27},
-	5: {"hp": 860, "damage": 61, "atk_speed": 1.20},
-	6: {"hp": 1060, "damage": 79, "atk_speed": 1.13},
-	7: {"hp": 1300, "damage": 102, "atk_speed": 1.06},
+	1: {"hp": 1800, "damage": 120, "atk_speed": 1.50},
+	2: {"hp": 2400, "damage": 162, "atk_speed": 1.42},
+	3: {"hp": 3120, "damage": 216, "atk_speed": 1.34},
+	4: {"hp": 4080, "damage": 282, "atk_speed": 1.27},
+	5: {"hp": 5160, "damage": 366, "atk_speed": 1.20},
+	6: {"hp": 6360, "damage": 474, "atk_speed": 1.13},
+	7: {"hp": 7800, "damage": 612, "atk_speed": 1.06},
 }
 
 const ANIM_FILES: Array[String] = [

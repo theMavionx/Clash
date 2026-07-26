@@ -37,11 +37,13 @@ const TEST_ATTACK_PREFERRED_ORDER: Array[String] = [
 	"Knight",
 	"Mage",
 	"Archer",
+	"PeaShooter",
 	"Mimic",
 	"Necromancer",
 	"Horror",
 	"MechanicalDragon",
 	"IceGolem",
+	"WindMage",
 	"DemonKing",
 	"FireDragon",
 ]

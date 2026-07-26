@@ -1,5 +1,5 @@
 extends BaseTroop
-## Four-slot ground siege tank. It destroys defensive buildings first, then
+## Ten-slot ground siege tank. It destroys defensive buildings first, then
 ## falls back to normal target selection. Its death freezes nearby defenses.
 
 const MAX_TROOP_LEVEL: int = 7
@@ -23,13 +23,13 @@ const EMISSION_TEXTURE: Texture2D = preload(
 ## Attack cadence remains authored and readable at every level. HP and damage
 ## carry progression because this troop's value is tanking and disruption.
 const LEVEL_STATS: Dictionary = {
-	1: {"hp": 2100, "damage": 78, "atk_speed": 1.42},
-	2: {"hp": 2700, "damage": 105, "atk_speed": 1.42},
-	3: {"hp": 3500, "damage": 143, "atk_speed": 1.42},
-	4: {"hp": 4450, "damage": 195, "atk_speed": 1.42},
-	5: {"hp": 5600, "damage": 263, "atk_speed": 1.42},
-	6: {"hp": 6900, "damage": 351, "atk_speed": 1.42},
-	7: {"hp": 8400, "damage": 462, "atk_speed": 1.42},
+	1: {"hp": 5250, "damage": 195, "atk_speed": 1.42},
+	2: {"hp": 6750, "damage": 263, "atk_speed": 1.42},
+	3: {"hp": 8750, "damage": 358, "atk_speed": 1.42},
+	4: {"hp": 11125, "damage": 488, "atk_speed": 1.42},
+	5: {"hp": 14000, "damage": 658, "atk_speed": 1.42},
+	6: {"hp": 17250, "damage": 878, "atk_speed": 1.42},
+	7: {"hp": 21000, "damage": 1155, "atk_speed": 1.42},
 }
 
 const ANIM_FILES: Array[String] = [

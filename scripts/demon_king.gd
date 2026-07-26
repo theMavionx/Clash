@@ -1,6 +1,6 @@
 extends BaseTroop
-## DemonKing — premium heavy melee, occupies 2 ship slots.
-## NFT-backed 2-slot troop. The player upgrades one shared Demon King troop
+## DemonKing - premium heavy melee, occupies 5 ship slots.
+## NFT-backed 5-slot troop. The player upgrades one shared Demon King troop
 ## level; each owned NFT then applies its rarity multiplier.
 ##
 ## Mesh: Model/Characters/Model/DemonKing_Body.fbx — actually a copy of
@@ -72,7 +72,7 @@ const NFT_RARITY_MULTIPLIERS: Dictionary = {
 	"legendary": 1.5,
 	"unrevealed": 1.2,
 }
-const DEMON_KING_SLOT_COUNT: float = 2.0
+const DEMON_KING_COMBAT_WEIGHT: float = 5.0
 const MAX_TROOP_LEVEL: int = 7
 
 const DEMON_ANIM_FILES: Array = [
@@ -294,8 +294,8 @@ static func _compute_dynamic_stats(demon_level: int, levels: Dictionary, rarity:
 	var stat: Dictionary = stat_by_level.get(troop_level, stat_by_level[1])
 	var power_mult: float = float(NFT_RARITY_MULTIPLIERS.get(_normalize_rarity(rarity), 1.2))
 	return {
-		"hp": int(ceil(float(stat.hp) * DEMON_KING_SLOT_COUNT * power_mult)),
-		"damage": int(ceil(float(stat.damage) * DEMON_KING_SLOT_COUNT * power_mult)),
+		"hp": int(ceil(float(stat.hp) * DEMON_KING_COMBAT_WEIGHT * power_mult)),
+		"damage": int(ceil(float(stat.damage) * DEMON_KING_COMBAT_WEIGHT * power_mult)),
 		"atk_speed": float(stat.atk_speed),
 	}
 

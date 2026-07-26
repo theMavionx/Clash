@@ -493,6 +493,10 @@ func _server_troop_type(troop_type: String) -> String:
 			return "mechanical_dragon"
 		"IceGolem":
 			return "ice_golem"
+		"WindMage":
+			return "wind_mage"
+		"PeaShooter":
+			return "pea_shooter"
 		"Necromancer":
 			return "necromancer"
 		"Horror":

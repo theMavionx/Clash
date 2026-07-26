@@ -19,7 +19,7 @@ var _cannon_paused_attack: bool = false
 var _ship_cannonballs: Array = []
 
 var _ship_cannon_cooldown: float = 0.0
-var _cannon_energy: int = 10
+var _cannon_energy: int = 4
 var _cannon_next_cost: int = 1
 var _attack_ship_wave_tweens: Array = []
 var _ship_flash: MeshInstance3D = null
@@ -92,10 +92,18 @@ func _preload_flash_textures() -> void:
 # Public API
 # ---------------------------------------------------------------------------
 
-## Resets cannon energy and cost to their default starting values.
-func reset() -> void:
-	_cannon_energy = 10
+## Resets the shared cannon/rally pool from the authoritative Main Ship level.
+func reset(ship_level: int = 0) -> void:
+	var resolved_level: int = ship_level
+	if resolved_level <= 0 and is_instance_valid(bs):
+		var controller: Node = bs.get_node_or_null("../MainShipController")
+		if is_instance_valid(controller):
+			resolved_level = int(controller.get_meta("ship_level", 1))
+	resolved_level = clampi(resolved_level, 1, 6)
+	_cannon_energy = int(bs._main_ship_energy_for_level(resolved_level)) if is_instance_valid(bs) else 4
 	_cannon_next_cost = 1
+	if is_instance_valid(bs):
+		bs.call_deferred("_update_cannon_energy_ui")
 
 ## Called every frame from BuildingSystem._process.
 func process(delta: float) -> void:
@@ -292,6 +300,14 @@ func _enter_ship_cannon_mode() -> void:
 	# ambiguous. Cancel rally first, then enter cannon.
 	if bs._rally and bs._rally._rally_mode:
 		bs._rally._exit_rally_mode()
+	if bs._medkit and bs._medkit._medkit_mode:
+		bs._medkit._exit_medkit_mode()
+	if bs._freeze and bs._freeze._freeze_mode:
+		bs._freeze._exit_freeze_mode()
+	if bs._rage and bs._rage._rage_mode:
+		bs._rage._exit_rage_mode()
+	if bs._skeleton_barrel and bs._skeleton_barrel._barrel_mode:
+		bs._skeleton_barrel._exit_barrel_mode()
 	_ship_cannon_mode = true
 	var bridge = bs.get_node_or_null("/root/Bridge")
 	if bridge:
@@ -450,8 +466,38 @@ func _update_cannon_energy_ui() -> void:
 		# UI reflects both costs against the same energy snapshot, with no
 		# possible inter-message drift after a rally drop or cannon fire.
 		var rally_cost: int = bs._rally._rally_next_cost if bs._rally else 1
+		var medkit_cost: int = bs._medkit.energy_cost() if bs._medkit else 6
+		var medkit_unlocked: bool = bs._medkit.is_unlocked() if bs._medkit else false
+		var medkit_used: bool = bs._medkit.is_used() if bs._medkit else false
+		var freeze_cost: int = bs._freeze.energy_cost() if bs._freeze else 5
+		var freeze_unlocked: bool = bs._freeze.is_unlocked() if bs._freeze else false
+		var freeze_used: bool = bs._freeze.is_used() if bs._freeze else false
+		var rage_cost: int = bs._rage.energy_cost() if bs._rage else 7
+		var rage_unlocked: bool = bs._rage.is_unlocked() if bs._rage else false
+		var rage_used: bool = bs._rage.is_used() if bs._rage else false
+		var skeleton_barrel_cost: int = (
+			bs._skeleton_barrel.energy_cost() if bs._skeleton_barrel else 8
+		)
+		var skeleton_barrel_unlocked: bool = (
+			bs._skeleton_barrel.is_unlocked() if bs._skeleton_barrel else false
+		)
+		var skeleton_barrel_used: bool = (
+			bs._skeleton_barrel.is_used() if bs._skeleton_barrel else false
+		)
 		bridge.send_to_react("cannon_energy", {
 			"energy": _cannon_energy,
 			"next_cost": _cannon_next_cost,
 			"rally_next_cost": rally_cost,
+			"medkit_cost": medkit_cost,
+			"medkit_unlocked": medkit_unlocked,
+			"medkit_used": medkit_used,
+			"freeze_cost": freeze_cost,
+			"freeze_unlocked": freeze_unlocked,
+			"freeze_used": freeze_used,
+			"rage_cost": rage_cost,
+			"rage_unlocked": rage_unlocked,
+			"rage_used": rage_used,
+			"skeleton_barrel_cost": skeleton_barrel_cost,
+			"skeleton_barrel_unlocked": skeleton_barrel_unlocked,
+			"skeleton_barrel_used": skeleton_barrel_used,
 		})

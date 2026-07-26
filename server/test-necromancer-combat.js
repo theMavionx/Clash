@@ -11,6 +11,7 @@ const {
   DEFENSE_STATS,
   NECROMANCER_SUMMON,
   SKELETON_GUARD,
+  TROOP_SLOT_COSTS,
   TROOP_STATS,
   computeNecromancerSkeletonStats,
 } = require('./combat_defs');
@@ -65,10 +66,14 @@ function building(id, type, gridX, gridZ, hpOverride = null) {
 
 function shipAction() {
   const point = gridToWorld(12, 0, 1, 1, CANONICAL_GRID_CONFIGS[2]);
+  const troops = [
+    'Necromancer:L7',
+    ...Array(TROOP_SLOT_COSTS.necromancer - 1).fill('_SLOT_FILLER_'),
+  ];
   return {
     type: 'place_ship',
-    troops: ['Necromancer:L7', '_SLOT_FILLER_'],
-    troop_spawns: [{ x: point.x, z: point.z }, {}],
+    troops,
+    troop_spawns: [{ x: point.x, z: point.z }, ...Array(troops.length - 1).fill({})],
     troop_x: point.x,
     troop_z: point.z,
     ship_index: 0,
@@ -112,8 +117,9 @@ function focusedTrace(result) {
 
 for (let level = 1; level <= 7; level++) {
   assert.ok(
-    TROOP_STATS.necromancer[level].damage < TROOP_STATS.mage[level].damage,
-    `Necromancer level ${level} direct damage must stay below Mage`,
+    TROOP_STATS.necromancer[level].damage / TROOP_SLOT_COSTS.necromancer
+      < TROOP_STATS.mage[level].damage / TROOP_SLOT_COSTS.mage,
+    `Necromancer level ${level} direct damage per slot must stay below Mage`,
   );
 }
 
@@ -175,7 +181,11 @@ assert.ok(
   'summon telemetry must identify capacity-free Necromancer skeletons',
 );
 assert.equal(first._deployedTroopsSpawned, 1);
-assert.equal(first._shipSlotsConsumed, 2, 'Necromancer plus its filler must consume two ship slots');
+assert.equal(
+  first._shipSlotsConsumed,
+  TROOP_SLOT_COSTS.necromancer,
+  'Necromancer and its fillers must consume all configured ship slots',
+);
 assert.equal(first._summonsSpawned, 3);
 assert.equal(first._summonsActivePeak, 3);
 assert.equal(first._summonShipSlotsConsumed, 0, 'summoned skeletons must consume no ship slots');
@@ -361,7 +371,7 @@ process.env.CLASH_MAIN_DB = dbPath;
 const gameDb = require('./db');
 try {
   assert.equal(gameDb.TROOP_DEFS.necromancer.min_town_hall_level, 6);
-  assert.equal(gameDb.TROOP_DEFS.necromancer.slot_cost, 2);
+  assert.equal(gameDb.TROOP_DEFS.necromancer.slot_cost, TROOP_SLOT_COSTS.necromancer);
 } finally {
   gameDb.db.close();
   for (const suffix of ['', '-wal', '-shm']) {

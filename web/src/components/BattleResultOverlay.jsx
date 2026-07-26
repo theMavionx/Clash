@@ -16,14 +16,18 @@ import mechanicalDragonImg from '../assets/units/mechanical_dragon.png';
 import iceGolemImg from '../assets/units/ice_golem.png';
 import arbaletImg from '../assets/units/arbalet.png';
 import berserkImg from '../assets/units/berserk.png';
+import windMageImg from '../assets/units/wind_mage.png';
+import peaShooterImg from '../assets/units/pea_shooter.png';
 
 const UNIT_IMAGES = {
   Knight: knightImg,
   Mage: mageImg,
   Barbarian: berserkImg,
   Archer: archerImg,
+  PeaShooter: peaShooterImg,
   Mimic: mimicImg,
   Necromancer: necromancerImg,
+  WindMage: windMageImg,
   Horror: horrorImg,
   MechanicalDragon: mechanicalDragonImg,
   IceGolem: iceGolemImg,
@@ -32,9 +36,31 @@ const UNIT_IMAGES = {
 
 const fmt = (n) => (n || 0).toLocaleString().replace(/,/g, ' ');
 
-function isDemonKingTroopName(name) {
-  return String(name || '').trim().toLowerCase().replace(/[_\s-]/g, '') === 'demonking'
-    || String(name || '').trim().startsWith('DemonKing:');
+const REINFORCE_COST_PER_SLOT = 50;
+const REINFORCE_SLOT_COSTS = {
+  knight: 1,
+  archer: 1,
+  peashooter: 5,
+  mage: 4,
+  mimic: 6,
+  mechanicaldragon: 4,
+  icegolem: 10,
+  necromancer: 15,
+  windmage: 15,
+  horror: 20,
+};
+
+function normalizedTroopName(name) {
+  return String(name || '')
+    .split(':', 1)[0]
+    .trim()
+    .toLowerCase()
+    .replace(/[_\s-]/g, '');
+}
+
+function isNftBackedTroopName(name) {
+  const normalized = normalizedTroopName(name);
+  return normalized === 'demonking' || normalized === 'firedragon';
 }
 
 function battleErrorMessage(result) {
@@ -80,9 +106,13 @@ function BattleResultOverlay({ result, onClose }) {
   const isAiOnlineBattle = !!result.ai_online_battle;
   const casualties = isError
     ? []
-    : Object.entries(result.casualties || {}).filter(([name, c]) => !isDemonKingTroopName(name) && c > 0);
-  const totalCasualties = casualties.reduce((sum, [, c]) => sum + c, 0);
-  const totalReinforceCost = totalCasualties * 50;
+    : Object.entries(result.casualties || {}).filter(([name, c]) => !isNftBackedTroopName(name) && c > 0);
+  const totalReinforceCost = casualties.reduce(
+    (sum, [name, count]) => (
+      sum + count * (REINFORCE_SLOT_COSTS[normalizedTroopName(name)] || 1) * REINFORCE_COST_PER_SLOT
+    ),
+    0,
+  );
   const hasLootObject = !!result.loot && typeof result.loot === 'object';
   const hasLootValue = hasLootObject && ['gold', 'wood', 'ore'].some((key) => Number(result.loot?.[key] || 0) > 0);
   const showLootPanel = isVictory && hasLootObject && (hasLootValue || isAiOnlineBattle);
@@ -173,7 +203,7 @@ function BattleResultOverlay({ result, onClose }) {
                     <div style={styles.casualtyCount}>x{count}</div>
                   </div>
                   <span style={styles.casualtyName}>
-                    {name === 'Mimic' ? 'Barrel' : name === 'MechanicalDragon' ? 'Mech Dragon' : name === 'IceGolem' ? 'Ice Golem' : name}
+                    {name === 'Mimic' ? 'Barrel' : name === 'MechanicalDragon' ? 'Mech Dragon' : name === 'IceGolem' ? 'Ice Golem' : normalizedTroopName(name) === 'windmage' ? 'Wind Mage' : normalizedTroopName(name) === 'peashooter' ? 'Pea Shooter' : name}
                   </span>
                 </div>
               ))}

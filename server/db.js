@@ -4,7 +4,10 @@ const crypto = require('crypto');
 const {
   CANONICAL_GRID_CONFIG,
   TROOP_STATS,
+  TROOP_SLOT_COSTS,
+  MAX_TROOPS,
   HORROR_EVOLUTION,
+  PLAYER_SHIP_LEVELS,
   computeDemonKingStats,
   DEFENSE_STATS,
   SKELETON_GUARD,
@@ -95,6 +98,7 @@ try { db.exec(`ALTER TABLE players ADD COLUMN wallet TEXT`); } catch {}
 try { db.exec(`ALTER TABLE buildings ADD COLUMN has_ship INTEGER NOT NULL DEFAULT 0`); } catch {}
 try { db.exec(`ALTER TABLE buildings ADD COLUMN ship_troops TEXT NOT NULL DEFAULT '[]'`); } catch {}
 try { db.exec(`ALTER TABLE buildings ADD COLUMN ship_troops_template TEXT NOT NULL DEFAULT '[]'`); } catch {}
+try { db.exec(`ALTER TABLE player_ships ADD COLUMN slot_cost_version INTEGER NOT NULL DEFAULT 1`); } catch {}
 // Shield: protects from attacks after being raided
 try { db.exec(`ALTER TABLE players ADD COLUMN shield_until TEXT`); } catch {}
 // Attack cooldown: prevent re-attacking same player
@@ -6113,6 +6117,8 @@ cleanupOldBotTargets();
 const TROOP_DEFS = {
   knight: {
     max_level: 7,
+    slot_cost: TROOP_SLOT_COSTS.knight,
+    buy_cost: 100,
     cost: [
       { gold: 150, wood: 0, ore: 125 },
       { gold: 300, wood: 0, ore: 250 },
@@ -6124,6 +6130,22 @@ const TROOP_DEFS = {
   },
   mage: {
     max_level: 7,
+    slot_cost: TROOP_SLOT_COSTS.mage,
+    buy_cost: 400,
+    cost: [
+      { gold: 250, wood: 0, ore: 250 },
+      { gold: 500, wood: 0, ore: 500 },
+      { gold: 1000, wood: 0, ore: 1000 },
+      { gold: 2000, wood: 0, ore: 2000 },
+      { gold: 3600, wood: 0, ore: 3600 },
+      { gold: 6000, wood: 0, ore: 6000 },
+    ],
+  },
+  wind_mage: {
+    max_level: 7,
+    min_town_hall_level: 6,
+    slot_cost: TROOP_SLOT_COSTS.wind_mage,
+    buy_cost: 1500,
     cost: [
       { gold: 250, wood: 0, ore: 250 },
       { gold: 500, wood: 0, ore: 500 },
@@ -6136,8 +6158,8 @@ const TROOP_DEFS = {
   necromancer: {
     max_level: 7,
     min_town_hall_level: 6,
-    slot_cost: 2,
-    buy_cost: 250,
+    slot_cost: TROOP_SLOT_COSTS.necromancer,
+    buy_cost: 1500,
     cost: [
       { gold: 250, wood: 0, ore: 250 },
       { gold: 500, wood: 0, ore: 500 },
@@ -6150,8 +6172,8 @@ const TROOP_DEFS = {
   horror: {
     max_level: 7,
     min_town_hall_level: 6,
-    slot_cost: 3,
-    buy_cost: 350,
+    slot_cost: TROOP_SLOT_COSTS.horror,
+    buy_cost: 2000,
     cost: [
       { gold: 375, wood: 0, ore: 375 },
       { gold: 750, wood: 0, ore: 750 },
@@ -6174,6 +6196,8 @@ const TROOP_DEFS = {
   },
   archer: {
     max_level: 7,
+    slot_cost: TROOP_SLOT_COSTS.archer,
+    buy_cost: 100,
     cost: [
       { gold: 175, wood: 175, ore: 0 },
       { gold: 350, wood: 350, ore: 0 },
@@ -6181,6 +6205,20 @@ const TROOP_DEFS = {
       { gold: 1400, wood: 1400, ore: 0 },
       { gold: 2600, wood: 2600, ore: 0 },
       { gold: 4400, wood: 4400, ore: 0 },
+    ],
+  },
+  pea_shooter: {
+    max_level: 7,
+    min_town_hall_level: 4,
+    slot_cost: TROOP_SLOT_COSTS.pea_shooter,
+    buy_cost: 500,
+    cost: [
+      { gold: 300, wood: 300, ore: 0 },
+      { gold: 600, wood: 600, ore: 0 },
+      { gold: 1200, wood: 1200, ore: 0 },
+      { gold: 2400, wood: 2400, ore: 0 },
+      { gold: 4200, wood: 4200, ore: 0 },
+      { gold: 7000, wood: 7000, ore: 0 },
     ],
   },
   ranger: {
@@ -6197,6 +6235,8 @@ const TROOP_DEFS = {
   mimic: {
     max_level: 7,
     min_town_hall_level: 5,
+    slot_cost: TROOP_SLOT_COSTS.mimic,
+    buy_cost: 600,
     cost: [
       { gold: 175, wood: 175, ore: 0 },
       { gold: 350, wood: 350, ore: 0 },
@@ -6209,7 +6249,7 @@ const TROOP_DEFS = {
   mechanical_dragon: {
     max_level: 7,
     min_town_hall_level: 6,
-    slot_cost: 4,
+    slot_cost: TROOP_SLOT_COSTS.mechanical_dragon,
     buy_cost: 400,
     cost: [
       { gold: 500, wood: 0, ore: 500 },
@@ -6223,8 +6263,8 @@ const TROOP_DEFS = {
   ice_golem: {
     max_level: 7,
     min_town_hall_level: 6,
-    slot_cost: 4,
-    buy_cost: 400,
+    slot_cost: TROOP_SLOT_COSTS.ice_golem,
+    buy_cost: 1000,
     cost: [
       { gold: 500, wood: 0, ore: 500 },
       { gold: 1000, wood: 0, ore: 1000 },
@@ -6236,6 +6276,8 @@ const TROOP_DEFS = {
   },
   demon_king: {
     max_level: 7,
+    slot_cost: TROOP_SLOT_COSTS.demon_king,
+    buy_cost: 0,
     cost: [
       { gold: 150, wood: 0, ore: 125 },
       { gold: 300, wood: 0, ore: 250 },
@@ -6247,6 +6289,8 @@ const TROOP_DEFS = {
   },
   fire_dragon: {
     max_level: 7,
+    slot_cost: TROOP_SLOT_COSTS.fire_dragon,
+    buy_cost: 0,
     cost: [
       { gold: 250, wood: 0, ore: 250 },
       { gold: 500, wood: 0, ore: 500 },
@@ -6263,6 +6307,8 @@ const ACTIVE_TROOP_TYPES = Object.keys(TROOP_DEFS).filter((troop) => !DISABLED_T
 function normalizeTroopTypeKey(troopType) {
   const compact = String(troopType || '').trim().toLowerCase().replace(/[\s_-]/g, '');
   if (compact === 'skeletonmage') return 'necromancer';
+  if (compact === 'windmage') return 'wind_mage';
+  if (compact === 'peashooter') return 'pea_shooter';
   if (compact === 'demonking') return 'demon_king';
   if (compact === 'firedragon') return 'fire_dragon';
   if (compact === 'mechanicaldragon' || compact === 'mechdragon') return 'mechanical_dragon';
@@ -9081,6 +9127,10 @@ function getProductionStatus(playerId) {
 }
 
 const MATCHMAKING_TROOP_ALIASES = {
+  peashooter: 'pea_shooter',
+  pea_shooter: 'pea_shooter',
+  windmage: 'wind_mage',
+  wind_mage: 'wind_mage',
   demonking: 'demon_king',
   demon_king: 'demon_king',
   firedragon: 'fire_dragon',
@@ -10194,14 +10244,8 @@ function repairAllBuildings(playerId) {
 }
 
 const SHIP_COST_GOLD = 250;
-
-const PLAYER_SHIP_LEVELS = Object.freeze({
-  1: Object.freeze({ capacity: 3, town_hall: 1, cost: Object.freeze({ gold: 0, wood: 0, ore: 0 }) }),
-  2: Object.freeze({ capacity: 12, town_hall: 2, cost: Object.freeze({ gold: 1000, wood: 2000, ore: 1700 }) }),
-  3: Object.freeze({ capacity: 27, town_hall: 3, cost: Object.freeze({ gold: 1800, wood: 3600, ore: 3100 }) }),
-  4: Object.freeze({ capacity: 36, town_hall: 4, cost: Object.freeze({ gold: 2400, wood: 4800, ore: 4100 }) }),
-  5: Object.freeze({ capacity: 45, town_hall: 5, cost: Object.freeze({ gold: 3250, wood: 6400, ore: 5500 }) }),
-});
+const TROOP_SLOT_COST_VERSION = 2;
+const SHIP_SLOT_FILLER = '_SLOT_FILLER_';
 
 function safeShipTroopArray(raw) {
   if (Array.isArray(raw)) return raw.filter((entry) => typeof entry === 'string');
@@ -10213,16 +10257,159 @@ function safeShipTroopArray(raw) {
   }
 }
 
+function shipTroopTypeKey(entry) {
+  const root = String(entry || '').split(':', 1)[0];
+  return normalizeTroopTypeKey(root);
+}
+
+function shipTroopSlotCost(entry) {
+  const cost = Number(TROOP_SLOT_COSTS[shipTroopTypeKey(entry)]);
+  return Number.isInteger(cost) && cost > 0 ? cost : 1;
+}
+
+function shipTroopIdentity(entry) {
+  const type = shipTroopTypeKey(entry);
+  if (type === 'demon_king' || type === 'fire_dragon') {
+    return `${type}:${String(entry || '').trim().toLowerCase()}`;
+  }
+  return type;
+}
+
+function shipTroopRoots(raw) {
+  return safeShipTroopArray(raw).filter((entry) => entry !== SHIP_SLOT_FILLER);
+}
+
+function packShipTroopRoots(roots, capacity) {
+  const packed = [];
+  const keptRoots = [];
+  const overflowRoots = [];
+  for (const entry of roots) {
+    const slotCost = shipTroopSlotCost(entry);
+    if (packed.length + slotCost > capacity) {
+      overflowRoots.push(entry);
+      continue;
+    }
+    keptRoots.push(entry);
+    packed.push(entry);
+    for (let index = 1; index < slotCost; index += 1) packed.push(SHIP_SLOT_FILLER);
+  }
+  return { packed, keptRoots, overflowRoots };
+}
+
+function validatePackedShipTroops(troops, capacity) {
+  if (!Array.isArray(troops) || troops.length > capacity) return false;
+  for (let index = 0; index < troops.length;) {
+    const entry = troops[index];
+    if (entry === SHIP_SLOT_FILLER) return false;
+    const slotCost = shipTroopSlotCost(entry);
+    if (index + slotCost > troops.length) return false;
+    for (let offset = 1; offset < slotCost; offset += 1) {
+      if (troops[index + offset] !== SHIP_SLOT_FILLER) return false;
+    }
+    index += slotCost;
+  }
+  return true;
+}
+
+function filterCurrentRootsToTemplate(currentRoots, templateRoots) {
+  const remaining = new Map();
+  for (const entry of templateRoots) {
+    const key = shipTroopIdentity(entry);
+    remaining.set(key, (remaining.get(key) || 0) + 1);
+  }
+  return currentRoots.filter((entry) => {
+    const key = shipTroopIdentity(entry);
+    const count = remaining.get(key) || 0;
+    if (count <= 0) return false;
+    remaining.set(key, count - 1);
+    return true;
+  });
+}
+
+function migratePlayerShipSlotCosts(row) {
+  if (!row) return row;
+  const capacity = playerShipCapacity(row.level, row.capacity_override);
+  const currentPacked = safeShipTroopArray(row.troops);
+  const templatePacked = safeShipTroopArray(row.troop_template);
+  if (
+    Number(row.slot_cost_version || 1) >= TROOP_SLOT_COST_VERSION
+    && validatePackedShipTroops(currentPacked, capacity)
+    && validatePackedShipTroops(templatePacked, capacity)
+  ) {
+    return row;
+  }
+  const currentRoots = shipTroopRoots(row.troops);
+  const sourceTemplateRoots = shipTroopRoots(row.troop_template);
+  const templateRoots = sourceTemplateRoots.length > 0 ? sourceTemplateRoots : currentRoots;
+  const packedTemplate = packShipTroopRoots(templateRoots, capacity);
+  const retainedCurrentRoots = filterCurrentRootsToTemplate(currentRoots, packedTemplate.keptRoots);
+  const packedCurrent = packShipTroopRoots(retainedCurrentRoots, capacity);
+  const refundable = packedTemplate.overflowRoots.filter((entry) => {
+    const type = shipTroopTypeKey(entry);
+    return type !== 'demon_king' && type !== 'fire_dragon';
+  });
+  const refundGold = refundable.reduce((sum, entry) => {
+    return sum + Math.max(0, Number(TROOP_DEFS[shipTroopTypeKey(entry)]?.buy_cost) || 0);
+  }, 0);
+  let migration = {};
+  try { migration = JSON.parse(row.migration_json || '{}') || {}; } catch { migration = {}; }
+  migration.slot_cost_migration = {
+    from_version: Number(row.slot_cost_version || 1),
+    to_version: TROOP_SLOT_COST_VERSION,
+    capacity,
+    template_units_before: templateRoots.length,
+    template_units_after: packedTemplate.keptRoots.length,
+    removed_units: packedTemplate.overflowRoots.map((entry) => shipTroopTypeKey(entry)),
+    refund_gold: refundGold,
+    migrated_at: new Date().toISOString(),
+  };
+
+  const migrate = db.transaction(() => {
+    db.prepare(`
+      UPDATE player_ships
+      SET troops = ?,
+          troop_template = ?,
+          slot_cost_version = ?,
+          migration_json = ?,
+          updated_at = datetime('now')
+      WHERE player_id = ?
+    `).run(
+      JSON.stringify(packedCurrent.packed),
+      JSON.stringify(packedTemplate.packed),
+      TROOP_SLOT_COST_VERSION,
+      JSON.stringify(migration),
+      row.player_id,
+    );
+    if (refundGold > 0) {
+      addResources(row.player_id, refundGold, 0, 0, {
+        sourceType: 'ship_slot_rebalance_refund',
+        metadata: {
+          slot_cost_version: TROOP_SLOT_COST_VERSION,
+          refunded_units: refundable.map((entry) => shipTroopTypeKey(entry)),
+        },
+      });
+    }
+  });
+  migrate();
+  return db.prepare('SELECT * FROM player_ships WHERE player_id = ?').get(row.player_id);
+}
+
 function playerShipCapacity(level, capacityOverride = 0) {
-  const normalizedLevel = Math.max(1, Math.min(5, Number(level) || 1));
-  return Math.max(
-    Number(PLAYER_SHIP_LEVELS[normalizedLevel]?.capacity || 3),
-    Math.max(0, Number(capacityOverride) || 0),
+  const normalizedLevel = Math.max(1, Math.min(6, Number(level) || 1));
+  return Math.min(
+    MAX_TROOPS,
+    Math.max(
+      Number(PLAYER_SHIP_LEVELS[normalizedLevel]?.capacity || 3),
+      Math.max(0, Number(capacityOverride) || 0),
+    ),
   );
 }
 
 function playerShipLevelForCapacity(capacity) {
   const requested = Math.max(3, Number(capacity) || 3);
+  // Capacity 45 already belonged to level 5 before level 6 existed. Keep
+  // legacy port migrations on level 5 so the level 6 ability is earned only
+  // through the explicit upgrade path.
   for (const level of [1, 2, 3, 4, 5]) {
     if (PLAYER_SHIP_LEVELS[level].capacity >= requested) return level;
   }
@@ -10231,13 +10418,17 @@ function playerShipLevelForCapacity(capacity) {
 
 function serializePlayerShip(row) {
   if (!row) return null;
-  const level = Math.max(1, Math.min(5, Number(row.level) || 1));
+  const level = Math.max(1, Math.min(6, Number(row.level) || 1));
+  const config = PLAYER_SHIP_LEVELS[level] || PLAYER_SHIP_LEVELS[1];
   return {
     id: 'main_ship',
     level,
     capacity: playerShipCapacity(level, row.capacity_override),
+    energy: Number(config.energy || 4),
+    medkit_unlocked: !!config.medkit_unlocked,
     troops: safeShipTroopArray(row.troops),
     troop_template: safeShipTroopArray(row.troop_template),
+    slot_cost_version: Number(row.slot_cost_version || 1),
     migrated_from_ports_at: row.migrated_from_ports_at || null,
     updated_at: row.updated_at || null,
   };
@@ -10248,7 +10439,7 @@ function serializePlayerShip(row) {
 function ensurePlayerShip(playerId) {
   if (!playerId) return null;
   const existing = db.prepare('SELECT * FROM player_ships WHERE player_id = ?').get(playerId);
-  if (existing) return serializePlayerShip(existing);
+  if (existing) return serializePlayerShip(migratePlayerShipSlotCosts(existing));
 
   const ports = db.prepare(`
     SELECT id, level, has_ship, ship_troops, ship_troops_template
@@ -10271,11 +10462,10 @@ function ensurePlayerShip(playerId) {
   }
   const requiredCapacity = Math.max(3, legacyCapacity, troops.length, troopTemplate.length);
   const level = playerShipLevelForCapacity(requiredCapacity);
-  const levelCapacity = PLAYER_SHIP_LEVELS[level].capacity;
-  // capacity_override is an absolute preserved capacity, not a delta. Legacy
-  // accounts can exceed the new level-5 cap because older builds allowed more
-  // than five ports; keep every paid slot instead of truncating that fleet.
-  const capacityOverride = requiredCapacity > levelCapacity ? requiredCapacity : 0;
+  // Main Ship has one global 45-slot ceiling. Keep the legacy capacity in
+  // migration metadata for audit, then let the versioned slot migration pack
+  // roots into the legal capacity and refund ordinary overflow.
+  const capacityOverride = 0;
   const migration = {
     version: 1,
     source: ports.length > 0 ? 'legacy_ports' : 'new_player',
@@ -10284,8 +10474,8 @@ function ensurePlayerShip(playerId) {
   };
   db.prepare(`
     INSERT INTO player_ships
-      (player_id, level, troops, troop_template, capacity_override, migration_json, migrated_from_ports_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+      (player_id, level, troops, troop_template, capacity_override, migration_json, migrated_from_ports_at, slot_cost_version)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     playerId,
     level,
@@ -10294,8 +10484,10 @@ function ensurePlayerShip(playerId) {
     capacityOverride,
     JSON.stringify(migration),
     ports.length > 0 ? new Date().toISOString() : null,
+    ports.length > 0 ? 1 : TROOP_SLOT_COST_VERSION,
   );
-  return serializePlayerShip(db.prepare('SELECT * FROM player_ships WHERE player_id = ?').get(playerId));
+  const inserted = db.prepare('SELECT * FROM player_ships WHERE player_id = ?').get(playerId);
+  return serializePlayerShip(migratePlayerShipSlotCosts(inserted));
 }
 
 function getPlayerShip(playerId) {
@@ -10314,6 +10506,12 @@ function updatePlayerShipTroops(playerId, troops, troopTemplate = undefined) {
   if (normalizedTroops.length > capacity || normalizedTemplate.length > capacity) {
     return { error: 'Ship capacity exceeded', capacity };
   }
+  if (
+    !validatePackedShipTroops(normalizedTroops, capacity)
+    || !validatePackedShipTroops(normalizedTemplate, capacity)
+  ) {
+    return { error: 'Invalid troop slot layout', capacity };
+  }
   db.prepare(`
     UPDATE player_ships
     SET troops = ?, troop_template = ?, updated_at = datetime('now')
@@ -10325,7 +10523,7 @@ function updatePlayerShipTroops(playerId, troops, troopTemplate = undefined) {
 function upgradePlayerShip(playerId) {
   const ship = getPlayerShip(playerId);
   if (!ship) return { error: 'Player ship not found' };
-  if (ship.level >= 5) return { error: 'Ship is already at max level' };
+  if (ship.level >= 6) return { error: 'Ship is already at max level' };
   const nextLevel = ship.level + 1;
   const config = PLAYER_SHIP_LEVELS[nextLevel];
   const townHallLevel = getTownHallLevel(playerId);
@@ -10588,6 +10786,9 @@ function compactSimTrace(trace) {
     'shark_trap_trigger',
     'necromancer_summon',
     'necromancer_skeleton_damage',
+    'wind_mage_wave_hit',
+    'wind_mage_summon',
+    'windling_despawn',
     'summoned_unit_death',
     'summoned_unit_despawn',
     'guard_death',
@@ -10612,9 +10813,18 @@ function compactSimTrace(trace) {
       replayOrder: event.replayOrder ?? event.targetReplayOrder ?? event.sourceReplayOrder ?? null,
       targetId: event.targetId ?? event.target?.id ?? null,
       targetType: event.targetType ?? event.target?.type ?? null,
-      hp: event.hp ?? event.hpAfter ?? event.target?.hp ?? null,
+      hp: event.hp ?? event.hpAfter ?? event.hp_after ?? event.target?.hp ?? null,
       damage: event.damage ?? null,
       reason: event.reason ?? null,
+      ownerTroopId: event.ownerTroopId ?? null,
+      summonIndex: event.summon_index ?? event.summonSequence ?? null,
+      castSerial: event.cast_serial ?? null,
+      batchIndex: event.batch_index ?? null,
+      batchSize: event.batch_size ?? null,
+      activeWindlings: event.active_windlings ?? null,
+      waveIndex: event.wave_index ?? null,
+      x: event.x ?? null,
+      z: event.z ?? null,
       jumpIndex: event.jumpIndex ?? null,
       radius: event.radius ?? null,
       duration: event.duration ?? null,
@@ -10638,6 +10848,11 @@ function replaySimDebug(simResult) {
     summonsSpawned: simResult._summonsSpawned,
     summonsActivePeak: simResult._summonsActivePeak,
     summonsAlive: simResult._summonsAlive,
+    windMageWaveHits: simResult._windMageWaveHits,
+    windMageSecondaryHits: simResult._windMageSecondaryHits,
+    windlingsSpawned: simResult._windlingsSpawned,
+    windlingsExpired: simResult._windlingsExpired,
+    windlingsAlive: simResult._windlingsAlive,
     shipSlotsConsumed: simResult._shipSlotsConsumed,
     summonShipSlotsConsumed: simResult._summonShipSlotsConsumed,
     simulationEndReason: simResult._simulationEndReason,
@@ -11477,6 +11692,7 @@ module.exports = {
   upgradePlayerShip,
   playerShipCapacity,
   PLAYER_SHIP_LEVELS,
+  TROOP_SLOT_COST_VERSION,
   buyShip,
   battleVictory,
   battleDefeat,

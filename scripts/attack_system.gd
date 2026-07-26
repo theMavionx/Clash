@@ -56,9 +56,11 @@ const TROOP_SCALE_MULTIPLIERS: Dictionary = {
 	"Mage": 1.7,
 	"Archer": 1.7,
 	"Mimic": 1.45,
+	"PeaShooter": 1.30,
 	"Necromancer": 1.55,
 	"Horror": 1.25,
 	"IceGolem": 2.0,
+	"WindMage": 1.1,
 }
 
 ## Troop name → {model, script} for spawning combat troops
@@ -67,6 +69,10 @@ const TROOP_DEFS: Dictionary = {
 	"Mage":      {"model": "res://Model/Characters/pirate_mage/pirate_mage.tscn", "script": "res://scripts/mage.gd"},
 	"Barbarian": {"model": "res://Model/Characters/Model/Barbarian.glb",   "script": "res://scripts/barbarian.gd"},
 	"Archer":    {"model": "res://Model/Characters/pirate_archer/pirate_archer.tscn", "script": "res://scripts/archer.gd"},
+	"PeaShooter": {
+		"model": "res://Model/Characters/PeaShooter/PeaShooter.fbx",
+		"script": "res://scripts/pea_shooter.gd",
+	},
 	"Ranger":    {"model": "res://Model/Characters/Model/Rogue_Hooded.glb","script": "res://scripts/ranger.gd"},
 	"Mimic":     {"model": "res://Model/Characters/MimicBarrel/MimicBarrel.fbx", "script": "res://scripts/mimic.gd"},
 	"Necromancer": {
@@ -85,12 +91,16 @@ const TROOP_DEFS: Dictionary = {
 		"model": "res://Model/Characters/IceGolem/IceGolem.fbx",
 		"script": "res://scripts/ice_golem.gd",
 	},
+	"WindMage": {
+		"model": "res://Model/Characters/WindMage/WindMage.fbx",
+		"script": "res://scripts/wind_mage.gd",
+	},
 	"DemonKing": {"model": "res://Model/Characters/Model/DemonKing_Body.fbx",   "script": "res://scripts/demon_king.gd"},
 	"FireDragon": {"model": "res://Model/Characters/FireDragon/FireDragon.tscn", "script": "res://scripts/fire_dragon.gd"},
 }
 const ACTIVE_PRELOAD_TROOPS: Array[String] = [
-	"Knight", "Mage", "Archer", "Mimic", "Necromancer", "Horror",
-	"MechanicalDragon", "IceGolem", "DemonKing", "FireDragon",
+	"Knight", "Mage", "Archer", "PeaShooter", "Mimic", "Necromancer", "Horror",
+	"MechanicalDragon", "IceGolem", "WindMage", "DemonKing", "FireDragon",
 ]
 
 ## Legacy constant kept for replay compatibility
@@ -147,6 +157,37 @@ static func _preload_combat_resources() -> void:
 	)
 
 
+static func _preload_combat_resources_for_troops(troop_names: Array) -> void:
+	_preload_ship_resources()
+	for raw_name in troop_names:
+		var troop_name := str(raw_name).split(":", false, 1)[0].strip_edges()
+		if troop_name == "" or troop_name.begins_with("_"):
+			continue
+		_get_or_load_troop_resources(troop_name)
+	_finalize_incremental_combat_preload()
+
+
+static func _finalize_incremental_combat_preload() -> void:
+	var ships_ready := _ship_model_cache.size() >= SHIP_MODELS.size()
+	if ships_ready:
+		for ship_res in _ship_model_cache:
+			if ship_res == null:
+				ships_ready = false
+				break
+	var troops_ready := true
+	for troop_name in ACTIVE_PRELOAD_TROOPS:
+		var entry: Dictionary = _troop_res_cache.get(troop_name, {})
+		if entry.get("model", null) == null or entry.get("script", null) == null:
+			troops_ready = false
+			break
+	_combat_preload_done = ships_ready and troops_ready
+	print(
+		"[COMBAT_PRELOAD] incremental_finish done=", _combat_preload_done,
+		" ships=", _ship_model_cache.size(),
+		" troops=", _troop_res_cache.size()
+	)
+
+
 static func _get_or_load_troop_resources(troop_name: String) -> Dictionary:
 	if _troop_res_cache.has(troop_name):
 		return _troop_res_cache[troop_name]
@@ -191,10 +232,13 @@ static func _preload_ship_resources() -> void:
 		_get_ship_model_resource(i)
 
 
-func ensure_combat_resources_loaded() -> void:
+func ensure_combat_resources_loaded(troop_names: Array = []) -> void:
 	if _flag_scene_res == null:
 		_flag_scene_res = _load_packed_scene_resource("res://Model/flag/pirate_flag_animated.glb")
-	_preload_combat_resources()
+	if troop_names.is_empty():
+		_preload_combat_resources()
+	else:
+		_preload_combat_resources_for_troops(troop_names)
 
 
 func prewarm_flag_marker() -> Node3D:
@@ -348,7 +392,7 @@ func _separate_ships(delta: float) -> void:
 ## [fleet] is an Array of {level: int, troops: Array[String]} — one entry per ship.
 ## If fleet is empty, falls back to legacy mode (no ships to place).
 func enter_attack_mode(fleet: Array = []) -> void:
-	ensure_combat_resources_loaded()
+	ensure_combat_resources_loaded(_troop_names_from_fleet(fleet))
 	_cancel_pending_combat_spawns()
 	_refresh_placement_bounds()
 	_manual_deployment_mode = true
@@ -476,10 +520,26 @@ func get_main_ship_node() -> Node3D:
 	return null
 
 
+func _troop_names_from_fleet(fleet: Array) -> Array:
+	var names: Array = []
+	for fleet_entry in fleet:
+		if not (fleet_entry is Dictionary):
+			continue
+		var troops_value: Variant = fleet_entry.get("troops", [])
+		if not (troops_value is Array):
+			continue
+		for raw_name in troops_value:
+			var troop_name := str(raw_name).split(":", false, 1)[0].strip_edges()
+			if troop_name == "" or troop_name.begins_with("_") or names.has(troop_name):
+				continue
+			names.append(troop_name)
+	return names
+
+
 ## Replay setup: same fleet data as attack mode, but no interactive placement
 ## plane. Replay actions drive placement directly from recorded coordinates.
 func enter_replay_mode(fleet: Array = []) -> void:
-	ensure_combat_resources_loaded()
+	ensure_combat_resources_loaded(_troop_names_from_fleet(fleet))
 	_refresh_placement_bounds()
 	exit_attack_mode()
 	_manual_deployment_mode = false
@@ -740,6 +800,7 @@ func _try_deploy_selected_troop(hit: Vector3) -> bool:
 			"troop": troop_entry,
 			"troopType": troop_key,
 			"troopLevel": troop_level,
+			"shipLevel": int(_fleet[0].get("level", 1)) if not _fleet.is_empty() else 1,
 			"x": hit.x,
 			"z": hit.z,
 		})
@@ -1391,12 +1452,14 @@ static func _script_to_troop_key(script_path: String) -> String:
 		"mage":       return "Mage"
 		"barbarian":  return "Barbarian"
 		"archer":     return "Archer"
+		"pea_shooter": return "PeaShooter"
 		"ranger":     return "Ranger"
 		"mimic":      return "Mimic"
 		"necromancer": return "Necromancer"
 		"horror_evolution": return "Horror"
 		"mechanical_dragon": return "MechanicalDragon"
 		"ice_golem": return "IceGolem"
+		"wind_mage": return "WindMage"
 		"demon_king": return "DemonKing"
 		"fire_dragon": return "FireDragon"
 	return file.capitalize()
@@ -1413,6 +1476,8 @@ static func _normalize_troop_entry(troop_name: String) -> String:
 			return "Barbarian"
 		"archer":
 			return "Archer"
+		"peashooter", "pea_shooter", "pea-shooter":
+			return "PeaShooter"
 		"ranger":
 			return "Ranger"
 		"mimic":
@@ -1425,6 +1490,8 @@ static func _normalize_troop_entry(troop_name: String) -> String:
 			return "MechanicalDragon"
 		"icegolem", "ice_golem":
 			return "IceGolem"
+		"windmage", "wind_mage":
+			return "WindMage"
 		"demonking", "demon_king":
 			return "DemonKing"
 		"firedragon", "fire_dragon":

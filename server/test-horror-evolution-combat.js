@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const Module = require('node:module');
 const path = require('node:path');
 const { CANONICAL_GRID_CONFIGS } = require('./combat_grid_config');
-const { HORROR_EVOLUTION } = require('./combat_defs');
+const { HORROR_EVOLUTION, TROOP_SLOT_COSTS } = require('./combat_defs');
 
 const BUILDING_DEFS = {
   town_hall: { size: [4, 4], hp_levels: [1000000] },
@@ -48,10 +48,14 @@ function building(id, type, gridX, gridZ, level = 1) {
 
 function shipAction() {
   const point = gridToWorld(12, 0, 1, 1, CANONICAL_GRID_CONFIGS[2]);
+  const troops = [
+    'Horror:L1',
+    ...Array(TROOP_SLOT_COSTS.horror - 1).fill('_SLOT_FILLER_'),
+  ];
   return {
     type: 'place_ship',
-    troops: ['Horror:L1', '_SLOT_FILLER_', '_SLOT_FILLER_'],
-    troop_spawns: [{ x: point.x, z: point.z }, {}, {}],
+    troops,
+    troop_spawns: [{ x: point.x, z: point.z }, ...Array(troops.length - 1).fill({})],
     troop_x: point.x,
     troop_z: point.z,
     ship_index: 0,
@@ -101,7 +105,11 @@ assert.deepEqual(
 );
 assert.equal(first._evolutionChildrenSpawned, 6, 'debug counter must include all temporary descendants');
 assert.equal(first._troopsSpawned, 7, 'one deployed root plus six descendants must exist in the simulation');
-assert.equal(first._shipSlotsConsumed, 3, 'only the deployed root consumes its configured three ship slots');
+assert.equal(
+  first._shipSlotsConsumed,
+  TROOP_SLOT_COSTS.horror,
+  'only the deployed root consumes its configured twenty ship slots',
+);
 assert.deepEqual(first.casualties, { Horror: 1 }, 'temporary descendants must not become persistent casualties');
 
 const terminalDeaths = first._trace.filter(

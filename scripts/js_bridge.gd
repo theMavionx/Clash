@@ -12,7 +12,21 @@ var _seen_agent_attack_sessions: Dictionary = {}
 const AGENT_REPLAY_SEEN_LIMIT: int = 30
 const AGENT_REPLAY_QUEUE_LIMIT: int = 10
 const PERF_INTERVAL: float = 0.25  # send perf data 4x per second
+const FPS_RECOVERY_STARTUP_GRACE_MS: int = 45000
+const FPS_RECOVERY_MIN_BASELINE: float = 45.0
+const FPS_RECOVERY_DROP_RATIO: float = 0.55
+const FPS_RECOVERY_MAX_TRIGGER_FPS: float = 30.0
+const FPS_RECOVERY_LOW_SAMPLES: int = 12
+const FPS_RECOVERY_PAUSE_SEC: float = 0.32
+const FPS_RECOVERY_RESULT_DELAY_SEC: float = 2.0
+const FPS_RECOVERY_COOLDOWN_MS: int = 45000
 var _bs_cache: Array = []  # cached building_systems group
+var _bridge_ready_ticks_ms: int = 0
+var _fps_baseline: float = 0.0
+var _fps_low_sample_count: int = 0
+var _fps_recovery_in_flight: bool = false
+var _fps_recovery_failures: int = 0
+var _last_fps_recovery_ms: int = -FPS_RECOVERY_COOLDOWN_MS
 
 
 func _refresh_cache() -> void:
@@ -25,6 +39,7 @@ func _refresh_cache() -> void:
 func _ready() -> void:
 	WebLoadLogger.report("autoload_bridge_ready_start")
 	_is_web = OS.has_feature("web")
+	_bridge_ready_ticks_ms = Time.get_ticks_msec()
 	process_mode = Node.PROCESS_MODE_ALWAYS  # keep bridge alive during tree pause
 	call_deferred("_refresh_cache")
 	if not _is_web:
@@ -33,6 +48,22 @@ func _ready() -> void:
 	var cb: JavaScriptObject = JavaScriptBridge.create_callback(_on_react_call)
 	_callbacks["_on_react_call"] = cb
 	JavaScriptBridge.get_interface("window").set("godotBridge", cb)
+	var visibility_cb: JavaScriptObject = JavaScriptBridge.create_callback(_on_visibility_resume)
+	_callbacks["_on_visibility_resume"] = visibility_cb
+	JavaScriptBridge.get_interface("window").set("_godotFpsVisibilityCb", visibility_cb)
+	JavaScriptBridge.eval("""
+		(function() {
+			if (window.__clashFpsVisibilityHandler) {
+				document.removeEventListener('visibilitychange', window.__clashFpsVisibilityHandler);
+			}
+			window.__clashFpsVisibilityHandler = function() {
+				if (!document.hidden && window._godotFpsVisibilityCb) {
+					window._godotFpsVisibilityCb(1);
+				}
+			};
+			document.addEventListener('visibilitychange', window.__clashFpsVisibilityHandler);
+		})();
+	""")
 	WebLoadLogger.report("autoload_bridge_ready_done")
 
 	await get_tree().create_timer(0.5).timeout
@@ -43,7 +74,18 @@ func _exit_tree() -> void:
 	set_process(false)
 	if not _is_web:
 		return
-	JavaScriptBridge.eval("(function(){try{if(window.godotBridge){window.godotBridge=null;}}catch(e){}})()", true)
+	JavaScriptBridge.eval("""
+		(function() {
+			try {
+				if (window.__clashFpsVisibilityHandler) {
+					document.removeEventListener('visibilitychange', window.__clashFpsVisibilityHandler);
+					window.__clashFpsVisibilityHandler = null;
+				}
+				window._godotFpsVisibilityCb = null;
+				window.godotBridge = null;
+			} catch (e) {}
+		})();
+	""", true)
 	_callbacks.clear()
 
 
@@ -58,7 +100,14 @@ func _process(delta: float) -> void:
 	_send_perf_data()
 
 
+func _on_visibility_resume(_args: Array) -> void:
+	call_deferred("request_fps_recovery", "visibility_resume", true)
+
+
 func _send_perf_data() -> void:
+	var fps: float = Engine.get_frames_per_second()
+	_update_fps_recovery_watchdog(fps)
+
 	var troop_list: Array = BaseTroop._get_troops_cached()
 	var troops: int = troop_list.size()
 	var guards: int = BaseTroop._get_guards_list_cached().size()
@@ -108,7 +157,7 @@ func _send_perf_data() -> void:
 	var payload: String = JSON.stringify({
 		"action": "perf",
 		"data": {
-			"fps": Engine.get_frames_per_second(),
+			"fps": fps,
 			"troops": troops,
 			"guards": guards,
 			"turrets": turrets,
@@ -128,6 +177,135 @@ func _send_perf_data() -> void:
 		}
 	})
 	JavaScriptBridge.eval("window.onGodotMessage && window.onGodotMessage(%s)" % payload)
+
+
+func _update_fps_recovery_watchdog(fps: float) -> void:
+	if fps <= 0.0:
+		return
+	if not _fps_recovery_in_flight and not get_tree().paused:
+		_fps_baseline = maxf(_fps_baseline, fps)
+	if Time.get_ticks_msec() - _bridge_ready_ticks_ms < FPS_RECOVERY_STARTUP_GRACE_MS:
+		_fps_low_sample_count = 0
+		return
+	if (
+		_fps_baseline < FPS_RECOVERY_MIN_BASELINE
+		or _fps_recovery_in_flight
+		or _ui_overlay_pause_requested
+		or get_tree().paused
+		or _is_combat_runtime_active()
+	):
+		_fps_low_sample_count = 0
+		return
+
+	var trigger_fps: float = minf(
+		FPS_RECOVERY_MAX_TRIGGER_FPS,
+		_fps_baseline * FPS_RECOVERY_DROP_RATIO
+	)
+	if fps > trigger_fps:
+		_fps_low_sample_count = 0
+		return
+
+	_fps_low_sample_count += 1
+	if _fps_low_sample_count < FPS_RECOVERY_LOW_SAMPLES:
+		return
+	_fps_low_sample_count = 0
+	call_deferred("request_fps_recovery", "sustained_low_fps", false)
+
+
+func _is_combat_runtime_active() -> bool:
+	var current_scene: Node = get_tree().current_scene
+	var attack_sys: Node = current_scene.get_node_or_null("AttackSystem") if current_scene else null
+	if attack_sys and "is_attack_mode" in attack_sys and bool(attack_sys.is_attack_mode):
+		return true
+
+	for bs in _bs_cache:
+		if not is_instance_valid(bs):
+			continue
+		if "is_viewing_enemy" in bs and bool(bs.is_viewing_enemy):
+			return true
+		if "_replay_active" in bs and bool(bs._replay_active):
+			return true
+		if "_battle" not in bs:
+			continue
+		var battle = bs._battle
+		if (
+			is_instance_valid(battle)
+			and "_battle_timer_active" in battle
+			and bool(battle._battle_timer_active)
+			and ("_victory_declared" not in battle or not bool(battle._victory_declared))
+		):
+			return true
+	return false
+
+
+func request_fps_recovery(reason: String = "manual", force: bool = false) -> void:
+	if (
+		_fps_recovery_in_flight
+		or _ui_overlay_pause_requested
+		or get_tree().paused
+		or _is_combat_runtime_active()
+	):
+		return
+
+	var now_ms: int = Time.get_ticks_msec()
+	var cooldown_multiplier: int = clampi(_fps_recovery_failures + 1, 1, 4)
+	var cooldown_ms: int = FPS_RECOVERY_COOLDOWN_MS * cooldown_multiplier
+	if now_ms - _last_fps_recovery_ms < cooldown_ms:
+		return
+	if not force and now_ms - _bridge_ready_ticks_ms < FPS_RECOVERY_STARTUP_GRACE_MS:
+		return
+
+	_fps_recovery_in_flight = true
+	_last_fps_recovery_ms = now_ms
+	_fps_low_sample_count = 0
+	var fps_before: float = Engine.get_frames_per_second()
+	WebLoadLogger.report("fps_recovery_start", {
+		"reason": reason,
+		"fps": fps_before,
+		"baseline_fps": _fps_baseline,
+		"failed_attempts": _fps_recovery_failures,
+		"nodes": Performance.get_monitor(Performance.OBJECT_NODE_COUNT),
+		"draw_calls": Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME),
+	})
+
+	_fps_recovery_pause_requested = true
+	_apply_island_pause_state()
+	await get_tree().create_timer(
+		FPS_RECOVERY_PAUSE_SEC,
+		true,
+		false,
+		true
+	).timeout
+	_fps_recovery_pause_requested = false
+	_apply_island_pause_state()
+
+	await get_tree().create_timer(
+		FPS_RECOVERY_RESULT_DELAY_SEC,
+		true,
+		false,
+		true
+	).timeout
+	var fps_after: float = Engine.get_frames_per_second()
+	var recovered: bool = (
+		fps_after >= fps_before * 1.25
+		or (
+			_fps_baseline >= FPS_RECOVERY_MIN_BASELINE
+			and fps_after >= _fps_baseline * 0.75
+		)
+	)
+	if recovered:
+		_fps_recovery_failures = 0
+	else:
+		_fps_recovery_failures = mini(_fps_recovery_failures + 1, 3)
+	WebLoadLogger.report("fps_recovery_finish", {
+		"reason": reason,
+		"fps_before": fps_before,
+		"fps_after": fps_after,
+		"baseline_fps": _fps_baseline,
+		"recovered": recovered,
+		"failed_attempts": _fps_recovery_failures,
+	})
+	_fps_recovery_in_flight = false
 
 
 func send_to_react(action: String, data: Dictionary) -> void:
@@ -348,6 +526,30 @@ func _handle_react_action(action: String, data: Dictionary) -> void:
 					bs._exit_ship_rally_mode()
 				else:
 					bs._enter_ship_rally_mode()
+		"ship_medkit_mode":
+			if bs:
+				if bs._ship_medkit_mode:
+					bs._exit_ship_medkit_mode()
+				else:
+					bs._enter_ship_medkit_mode()
+		"ship_freeze_mode":
+			if bs:
+				if bs._ship_freeze_mode:
+					bs._exit_ship_freeze_mode()
+				else:
+					bs._enter_ship_freeze_mode()
+		"ship_rage_mode":
+			if bs:
+				if bs._ship_rage_mode:
+					bs._exit_ship_rage_mode()
+				else:
+					bs._enter_ship_rage_mode()
+		"ship_skeleton_barrel_mode":
+			if bs:
+				if bs._ship_skeleton_barrel_mode:
+					bs._exit_ship_skeleton_barrel_mode()
+				else:
+					bs._enter_ship_skeleton_barrel_mode()
 		"select_troop":
 			var asys: Node = get_tree().current_scene.get_node_or_null("AttackSystem")
 			if asys:
@@ -806,14 +1008,22 @@ func _get_active_building_system() -> Node:
 
 
 var _island_paused := false
+var _ui_overlay_pause_requested := false
+var _fps_recovery_pause_requested := false
 var _water_mats: Array[ShaderMaterial] = []  # cached ShaderMaterial refs for water/foam
 
 func _set_island_paused(paused: bool) -> void:
-	if paused == _island_paused:
+	_ui_overlay_pause_requested = paused
+	_apply_island_pause_state()
+
+
+func _apply_island_pause_state() -> void:
+	var should_pause: bool = _ui_overlay_pause_requested or _fps_recovery_pause_requested
+	if should_pause == _island_paused:
 		return
-	_island_paused = paused
-	get_tree().paused = paused
-	_set_water_paused(paused)
+	_island_paused = should_pause
+	get_tree().paused = should_pause
+	_set_water_paused(should_pause)
 
 
 func _set_water_paused(pause: bool) -> void:

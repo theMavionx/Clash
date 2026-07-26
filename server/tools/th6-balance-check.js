@@ -13,8 +13,11 @@ const { verifyReplay } = require('../combat_session');
 const {
   CANONICAL_GRID_CONFIGS,
   TROOP_STATS,
+  TROOP_SLOT_COSTS,
   DEFENSE_STATS,
   HORROR_EVOLUTION,
+  WIND_MAGE,
+  WINDLING_STATS,
   SKELETON_GUARD,
   computeNecromancerSkeletonStats,
 } = require('../combat_defs');
@@ -142,6 +145,25 @@ function repeated(pattern, count) {
   return Array.from({ length: count }, (_, index) => pattern[index % pattern.length]);
 }
 
+function troopTypeKey(name) {
+  return String(name || '')
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .toLowerCase();
+}
+
+function troopSlotCost(name) {
+  return TROOP_SLOT_COSTS[troopTypeKey(name)] || 1;
+}
+
+function roster(groups) {
+  const troops = groups.flatMap(([name, count]) => repeated([name], count));
+  const slotCost = troops.reduce((sum, troop) => sum + troopSlotCost(troop), 0);
+  if (slotCost !== 45) {
+    throw new Error(`TH6 balance roster must occupy exactly 45 slots, got ${slotCost}`);
+  }
+  return troops;
+}
+
 function runScenario(name, troops, options = {}) {
   const levels = {
     Knight: 7,
@@ -152,6 +174,8 @@ function runScenario(name, troops, options = {}) {
     Horror: 7,
     MechanicalDragon: 7,
     IceGolem: 7,
+    WindMage: 7,
+    PeaShooter: 7,
     DemonKing: 7,
     FireDragon: 7,
   };
@@ -176,12 +200,7 @@ function runScenario(name, troops, options = {}) {
   }
   return {
     name,
-    slotCost: troops.reduce((sum, troop) => {
-      if (troop === 'MechanicalDragon' || troop === 'IceGolem') return sum + 4;
-      if (troop === 'Horror') return sum + 3;
-      if (troop === 'Necromancer' || troop === 'DemonKing' || troop === 'FireDragon') return sum + 2;
-      return sum + 1;
-    }, 0),
+    slotCost: troops.reduce((sum, troop) => sum + troopSlotCost(troop), 0),
     deployed: troops.length,
     result: result.resolvedResult,
     thHpPct: Number((result.townHallHpPct * 100).toFixed(1)),
@@ -197,54 +216,54 @@ function runScenario(name, troops, options = {}) {
 
 try {
   const baselineScenarios = [
-    runScenario('TH5 baseline', repeated(['Knight', 'Archer', 'Mage'], 45), { townHallLevel: 5 }),
-    runScenario('balanced normal roster', repeated(['Knight', 'Archer', 'Mage'], 45)),
-    runScenario('frontline-heavy roster', repeated(['Knight', 'Knight', 'Archer', 'Mage'], 45)),
-    runScenario('trap-runner roster', repeated(['Mimic', 'Knight', 'Archer', 'Mage'], 45)),
-    runScenario('necromancer support roster', [
-      ...repeated(['Necromancer'], 6),
-      ...repeated(['Knight', 'Archer', 'Mage'], 33),
-    ]),
-    runScenario('horror attrition squad', repeated(['Horror'], 15)),
-    runScenario('three horror vanguard', [
-      ...repeated(['Horror'], 3),
-      ...repeated(['Knight', 'Archer', 'Mage'], 36),
-    ]),
-    runScenario('mechanical dragon squad', [...repeated(['MechanicalDragon'], 11), 'Knight']),
-    runScenario('ice golem siege squad', [...repeated(['IceGolem'], 11), 'Knight']),
-    runScenario('two ice golem vanguard', [
-      'IceGolem',
-      'IceGolem',
-      ...repeated(['Knight', 'Archer', 'Mage'], 37),
-    ]),
-    runScenario('two common NFT troops', [
-      'DemonKing',
-      'FireDragon',
-      ...repeated(['Knight', 'Archer', 'Mage'], 41),
-    ]),
+    runScenario('TH5 baseline', roster([['Mage', 5], ['Knight', 13], ['Archer', 12]]), { townHallLevel: 5 }),
+    runScenario('balanced normal roster', roster([['Mage', 5], ['Knight', 13], ['Archer', 12]])),
+    runScenario('frontline-heavy roster', roster([['Mage', 4], ['Knight', 18], ['Archer', 11]])),
+    runScenario('trap-runner roster', roster([['Mimic', 3], ['Mage', 3], ['Knight', 8], ['Archer', 7]])),
+    runScenario('necromancer support roster', roster([['Necromancer', 1], ['Mage', 4], ['Knight', 7], ['Archer', 7]])),
+    runScenario('wind mage corridor roster', roster([['WindMage', 3]])),
+    runScenario('wind mage mixed roster', roster([['WindMage', 2], ['Mage', 2], ['Knight', 4], ['Archer', 3]])),
+    runScenario('pea shooter volley', roster([['PeaShooter', 9]])),
+    runScenario('pea shooter mixed roster', roster([['PeaShooter', 6], ['Mage', 2], ['Knight', 3], ['Archer', 4]])),
+    runScenario('horror attrition squad', roster([['Horror', 2], ['Archer', 5]])),
+    runScenario('horror and ice vanguard', roster([['Horror', 1], ['IceGolem', 2], ['Knight', 3], ['Archer', 2]])),
+    runScenario('mechanical dragon squad', roster([['MechanicalDragon', 11], ['Knight', 1]])),
+    runScenario('ice golem siege squad', roster([['IceGolem', 4], ['Knight', 5]])),
+    runScenario('two ice golem vanguard', roster([['IceGolem', 2], ['Mage', 4], ['Knight', 5], ['Archer', 4]])),
+    runScenario('two common NFT troops', roster([
+      ['DemonKing', 1],
+      ['FireDragon', 1],
+      ['Mage', 4],
+      ['Knight', 7],
+      ['Archer', 7],
+    ])),
     runScenario(
       'balanced normal roster with support',
-      repeated(['Knight', 'Archer', 'Mage'], 45),
+      roster([['Mage', 5], ['Knight', 13], ['Archer', 12]]),
       { spawnColumn: 18, tactical: true },
     ),
   ];
   const searchPatterns = {
-    allKnights: repeated(['Knight'], 45),
-    allArchers: repeated(['Archer'], 45),
-    allMages: repeated(['Mage'], 45),
-    normalMix: repeated(['Knight', 'Archer', 'Mage'], 45),
-    frontlineMix: repeated(['Knight', 'Knight', 'Archer', 'Mage'], 45),
-    mimicMix: repeated(['Mimic', 'Knight', 'Archer', 'Mage'], 45),
-    necromancerSupport: [...repeated(['Necromancer'], 6), ...repeated(['Knight', 'Archer', 'Mage'], 33)],
-    necromancerArmy: [...repeated(['Necromancer'], 22), 'Knight'],
-    horrorVanguard: [...repeated(['Horror'], 3), ...repeated(['Knight', 'Archer', 'Mage'], 36)],
-    horrorArmy: repeated(['Horror'], 15),
-    mechanicalAir: [...repeated(['MechanicalDragon'], 11), 'Knight'],
-    mechanicalSiege: [...repeated(['MechanicalDragon'], 8), ...repeated(['Knight', 'Archer', 'Mage'], 13)],
-    iceGolemVanguard: [...repeated(['IceGolem'], 2), ...repeated(['Knight', 'Archer', 'Mage'], 37)],
-    iceGolemSiege: [...repeated(['IceGolem'], 8), ...repeated(['Knight', 'Archer', 'Mage'], 13)],
-    demonFrontline: [...repeated(['DemonKing'], 8), ...repeated(['Archer', 'Mage'], 29)],
-    dragonAir: [...repeated(['FireDragon'], 12), ...repeated(['Knight', 'Archer', 'Mage'], 21)],
+    allKnights: roster([['Knight', 45]]),
+    allArchers: roster([['Archer', 45]]),
+    allMages: roster([['Mage', 11], ['Knight', 1]]),
+    normalMix: roster([['Mage', 5], ['Knight', 13], ['Archer', 12]]),
+    frontlineMix: roster([['Mage', 4], ['Knight', 18], ['Archer', 11]]),
+    mimicMix: roster([['Mimic', 3], ['Mage', 3], ['Knight', 8], ['Archer', 7]]),
+    necromancerSupport: roster([['Necromancer', 1], ['Mage', 4], ['Knight', 7], ['Archer', 7]]),
+    necromancerArmy: roster([['Necromancer', 3]]),
+    windMageCorridor: roster([['WindMage', 3]]),
+    windMageMixed: roster([['WindMage', 2], ['Mage', 2], ['Knight', 4], ['Archer', 3]]),
+    peaShooterVolley: roster([['PeaShooter', 9]]),
+    peaShooterMixed: roster([['PeaShooter', 6], ['Mage', 2], ['Knight', 3], ['Archer', 4]]),
+    horrorVanguard: roster([['Horror', 1], ['IceGolem', 1], ['Mage', 2], ['Knight', 4], ['Archer', 3]]),
+    horrorArmy: roster([['Horror', 2], ['Archer', 5]]),
+    mechanicalAir: roster([['MechanicalDragon', 11], ['Knight', 1]]),
+    mechanicalSiege: roster([['MechanicalDragon', 8], ['Mage', 2], ['Knight', 3], ['Archer', 2]]),
+    iceGolemVanguard: roster([['IceGolem', 2], ['Mage', 4], ['Knight', 5], ['Archer', 4]]),
+    iceGolemSiege: roster([['IceGolem', 4], ['Archer', 5]]),
+    demonFrontline: roster([['DemonKing', 9]]),
+    dragonAir: roster([['FireDragon', 4], ['Archer', 5]]),
   };
   const searchedScenarios = [];
   for (const [patternName, troops] of Object.entries(searchPatterns)) {
@@ -293,6 +312,20 @@ try {
       || a.thHpPct - b.thHpPct
       || b.buildingsDestroyed - a.buildingsDestroyed
     ))[0] || null;
+  const bestWindMageScenario = [...searchedScenarios]
+    .filter((scenario) => scenario.name.startsWith('windMage'))
+    .sort((a, b) => (
+      Number(b.result === 'victory') - Number(a.result === 'victory')
+      || a.thHpPct - b.thHpPct
+      || b.buildingsDestroyed - a.buildingsDestroyed
+    ))[0] || null;
+  const bestPeaShooterScenario = [...searchedScenarios]
+    .filter((scenario) => scenario.name.startsWith('peaShooter'))
+    .sort((a, b) => (
+      Number(b.result === 'victory') - Number(a.result === 'victory')
+      || a.thHpPct - b.thHpPct
+      || b.buildingsDestroyed - a.buildingsDestroyed
+    ))[0] || null;
 
   const level6Dps = {
     turret: Number((DEFENSE_STATS.turret[6].damage / DEFENSE_STATS.turret[6].fireRate).toFixed(1)),
@@ -303,11 +336,21 @@ try {
     skeletonGuard: Number((SKELETON_GUARD.levels[5].damage / SKELETON_GUARD.levels[5].atkSpeed).toFixed(1)),
   };
   const level7AttackDps = Object.fromEntries(
-    ['knight', 'archer', 'mage', 'mimic', 'necromancer', 'horror', 'mechanical_dragon', 'ice_golem'].map((type) => [
+    ['knight', 'archer', 'mage', 'pea_shooter', 'mimic', 'necromancer', 'wind_mage', 'horror', 'mechanical_dragon', 'ice_golem'].map((type) => [
       type,
       Number((TROOP_STATS[type][7].damage / TROOP_STATS[type][7].atkSpeed).toFixed(1)),
     ]),
   );
+  const peaShooter = TROOP_STATS.pea_shooter[7];
+  const peaShooterDps = {
+    slotCost: TROOP_SLOT_COSTS.pea_shooter,
+    hp: peaShooter.hp,
+    hpPerSlot: Number((peaShooter.hp / TROOP_SLOT_COSTS.pea_shooter).toFixed(1)),
+    burst: Number((peaShooter.damage * 3 / peaShooter.atkSpeed).toFixed(1)),
+    burstPerSlot: Number((
+      peaShooter.damage * 3 / peaShooter.atkSpeed / TROOP_SLOT_COSTS.pea_shooter
+    ).toFixed(1)),
+  };
   const mechanicalDragon = TROOP_STATS.mechanical_dragon[7];
   const mechanicalPrimaryDps = mechanicalDragon.damage / mechanicalDragon.atkSpeed;
   const mechanicalSecondHit = Math.round(
@@ -332,18 +375,20 @@ try {
   };
   const iceGolem = TROOP_STATS.ice_golem[7];
   const iceGolemDps = {
-    slotCost: 4,
+    slotCost: TROOP_SLOT_COSTS.ice_golem,
     hp: iceGolem.hp,
-    hpPerSlot: Number((iceGolem.hp / 4).toFixed(1)),
+    hpPerSlot: Number((iceGolem.hp / TROOP_SLOT_COSTS.ice_golem).toFixed(1)),
     primary: Number((iceGolem.damage / iceGolem.atkSpeed).toFixed(1)),
-    primaryPerSlot: Number((iceGolem.damage / iceGolem.atkSpeed / 4).toFixed(1)),
+    primaryPerSlot: Number((
+      iceGolem.damage / iceGolem.atkSpeed / TROOP_SLOT_COSTS.ice_golem
+    ).toFixed(1)),
     freezeRadius: iceGolem.deathFreezeRadius,
     freezeDuration: iceGolem.deathFreezeDuration,
   };
   const necromancer = TROOP_STATS.necromancer[7];
   const necromancerSkeleton = computeNecromancerSkeletonStats(7);
   const necromancerDps = {
-    slotCost: 2,
+    slotCost: TROOP_SLOT_COSTS.necromancer,
     hp: necromancer.hp,
     direct: Number((necromancer.damage / necromancer.atkSpeed).toFixed(1)),
     summonedAtCap: Number((necromancerSkeleton.damage / necromancerSkeleton.atkSpeed * 3).toFixed(1)),
@@ -352,11 +397,37 @@ try {
       + necromancerSkeleton.damage / necromancerSkeleton.atkSpeed * 3
     ).toFixed(1)),
   };
+  const windMage = TROOP_STATS.wind_mage[7];
+  const windling = WINDLING_STATS[7];
+  const windMageDps = {
+    slotCost: TROOP_SLOT_COSTS.wind_mage,
+    hp: windMage.hp,
+    hpPerSlot: Number((windMage.hp / TROOP_SLOT_COSTS.wind_mage).toFixed(1)),
+    primary: Number((windMage.damage / windMage.atkSpeed).toFixed(1)),
+    primaryPerSlot: Number((
+      windMage.damage / windMage.atkSpeed / TROOP_SLOT_COSTS.wind_mage
+    ).toFixed(1)),
+    idealFiveTarget: Number((
+      windMage.damage
+      * (1 + WIND_MAGE.maxSecondaryTargets * WIND_MAGE.secondaryDamageBps / 10000)
+      / windMage.atkSpeed
+    ).toFixed(1)),
+    idealFiveTargetPerSlot: Number((
+      windMage.damage
+      * (1 + WIND_MAGE.maxSecondaryTargets * WIND_MAGE.secondaryDamageBps / 10000)
+      / windMage.atkSpeed
+      / TROOP_SLOT_COSTS.wind_mage
+    ).toFixed(1)),
+    windlingDpsAtCap: Number((
+      windling.damage / windling.atkSpeed * WIND_MAGE.maxActiveWindlings
+    ).toFixed(1)),
+    summonCap: WIND_MAGE.maxActiveWindlings,
+  };
   const horrorRoot = HORROR_EVOLUTION.stages[0][7];
   const horrorMedium = HORROR_EVOLUTION.stages[1][7];
   const horrorSmall = HORROR_EVOLUTION.stages[2][7];
   const horrorEvolution = {
-    slotCost: 3,
+    slotCost: TROOP_SLOT_COSTS.horror,
     totalFamilyHp: (
       horrorRoot.hp
       + HORROR_EVOLUTION.childrenPerSplit * horrorMedium.hp
@@ -374,12 +445,16 @@ try {
   ).toFixed(1));
 
   console.log(JSON.stringify({
-    shipCapacity: gameDb.PLAYER_SHIP_LEVELS[5].capacity,
+    shipCapacity: gameDb.PLAYER_SHIP_LEVELS[6].capacity,
+    shipEnergy: gameDb.PLAYER_SHIP_LEVELS[6].energy,
+    medkitUnlocked: gameDb.PLAYER_SHIP_LEVELS[6].medkit_unlocked,
     level6Dps,
     level7AttackDps,
     mechanicalDragonDps,
     iceGolemDps,
     necromancerDps,
+    windMageDps,
+    peaShooterDps,
     horrorEvolution,
     baselineScenarios,
     bestScenarios,
@@ -387,17 +462,30 @@ try {
     bestIceGolemScenario,
     bestIceGolemVanguardScenario,
     bestHorrorScenario,
+    bestWindMageScenario,
+    bestPeaShooterScenario,
     searchedScenarioCount: searchedScenarios.length,
     winningScenarioCount: searchedScenarios.filter((scenario) => scenario.result === 'victory').length,
   }, null, 2));
 
-  if (gameDb.PLAYER_SHIP_LEVELS[5].capacity !== 45) process.exitCode = 1;
+  if (
+    gameDb.PLAYER_SHIP_LEVELS[6].capacity !== 45
+    || gameDb.PLAYER_SHIP_LEVELS[6].energy !== 14
+    || !gameDb.PLAYER_SHIP_LEVELS[6].medkit_unlocked
+  ) process.exitCode = 1;
   if (!searchedScenarios.some((scenario) => scenario.result === 'victory')) process.exitCode = 2;
   if (scenarios.some((scenario) => scenario.slotCost > 45)) process.exitCode = 3;
-  if (mechanicalDragonDps.idealThreeTargetPerSlot >= level7AttackDps.mage) process.exitCode = 4;
+  if (
+    mechanicalDragonDps.idealThreeTargetPerSlot
+      >= level7AttackDps.mage / TROOP_SLOT_COSTS.mage * 1.2
+  ) process.exitCode = 4;
   if (iceGolemDps.primaryPerSlot >= level7AttackDps.knight) process.exitCode = 5;
   if (horrorEvolution.hpPerSlot > TROOP_STATS.knight[7].hp) process.exitCode = 6;
   if (horrorEvolution.peakPhaseDpsPerSlot >= level7AttackDps.knight) process.exitCode = 7;
+  if (windMageDps.primaryPerSlot >= level7AttackDps.mage / TROOP_SLOT_COSTS.mage) process.exitCode = 8;
+  if (windMageDps.idealFiveTargetPerSlot >= mechanicalDragonDps.idealThreeTargetPerSlot * 1.2) process.exitCode = 9;
+  if (peaShooterDps.burstPerSlot >= level7AttackDps.archer) process.exitCode = 10;
+  if (peaShooterDps.hpPerSlot >= TROOP_STATS.knight[7].hp) process.exitCode = 11;
 } finally {
   gameDb.db.close();
   for (const suffix of ['', '-wal', '-shm']) {

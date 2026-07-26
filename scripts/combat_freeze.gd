@@ -34,7 +34,12 @@ static func is_freezable_defense(raw_id: Variant) -> bool:
 	return FREEZABLE_DEFENSE_IDS.has(canonical_building_id(raw_id))
 
 
-static func apply_radial(origin: Vector3, radius: float, duration: float) -> Array[Dictionary]:
+static func apply_radial(
+	origin: Vector3,
+	radius: float,
+	duration: float,
+	include_spawned_guards: bool = true
+) -> Array[Dictionary]:
 	var affected: Array[Dictionary] = []
 	var radius_sq := maxf(0.0, radius) * maxf(0.0, radius)
 	for bs_node in BaseTroop._get_building_systems_cached():
@@ -54,7 +59,12 @@ static func apply_radial(origin: Vector3, radius: float, duration: float) -> Arr
 			var dz := building_node.global_position.z - origin.z
 			if dx * dx + dz * dz > radius_sq:
 				continue
-			_freeze_building_actors(building, building_node, duration)
+			_freeze_building_actors(
+				building,
+				building_node,
+				duration,
+				include_spawned_guards
+			)
 			affected.append({
 				"building": building,
 				"node": building_node,
@@ -65,11 +75,18 @@ static func apply_radial(origin: Vector3, radius: float, duration: float) -> Arr
 	return affected
 
 
-static func _freeze_building_actors(building: Dictionary, building_node: Node3D, duration: float) -> void:
+static func _freeze_building_actors(
+	building: Dictionary,
+	building_node: Node3D,
+	duration: float,
+	include_spawned_guards: bool
+) -> void:
 	_freeze_actor(building_node, duration)
 	var tower_unit: Variant = building.get("tower_unit_node", null)
 	if is_instance_valid(tower_unit):
 		_freeze_actor(tower_unit, duration)
+	if not include_spawned_guards:
+		return
 	var skeletons: Variant = building.get("skeletons", [])
 	if skeletons is Array:
 		for skeleton in skeletons:

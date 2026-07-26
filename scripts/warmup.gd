@@ -8,11 +8,11 @@ extends Node3D
 ## "preload materials, shaders, and particles by displaying them for at least
 ## one frame in the view frustum when the level is loading."
 ##
-## This node instantiates one representative of every material variant the
-## gameplay code will later use, keeps them visible for WARMUP_FRAMES frames
-## (long enough for the GPU driver to finish pipeline creation), and then
-## frees itself. The representatives are placed at `WARMUP_POS` inside the
-## main-camera frustum at tiny scale so the player never notices them.
+## Island startup only warms the small set needed to reveal the home scene.
+## Combat representatives render into an unpresented SubViewport after the
+## island is interactive. Idle rendering is submitted once per paced step, so
+## representatives never appear on screen and the hidden viewport does not
+## keep consuming frames between compilation steps.
 ##
 ## Placed in Main.tscn — runs once when the island loads, before the first
 ## attack starts.
@@ -23,6 +23,86 @@ extends Node3D
 ## variant on the first few frames.
 const HOME_WARMUP_FRAMES: int = 4
 const COMBAT_WARMUP_FRAMES: int = 6
+const COMBAT_IDLE_SETTLE_MSEC: int = 1200
+const COMBAT_IDLE_STEP_INTERVAL_MSEC: int = 450
+const COMBAT_IDLE_RENDER_INTERVAL_MSEC: int = 180
+const STARTUP_LOADOUT_REQUEST_GRACE_MSEC: int = 1500
+const COMBAT_VIEWPORT_SIZE: Vector2i = Vector2i(64, 64)
+const STARTUP_COMMON_STEP_NAMES: Array[String] = [
+	"defense_resources",
+	"hp_bar",
+	"additive_billboard_plain",
+	"additive_billboard_textured",
+	"turret_trail",
+	"target_ring",
+	"rally_marker",
+	"mage_tower",
+	"fire_bomb",
+	"building_destruction",
+]
+const COMBAT_STEP_NAMES: Array[String] = [
+	"defense_resources",
+	"hp_bar",
+	"additive_billboard_plain",
+	"additive_billboard_textured",
+	"turret_trail",
+	"target_ring",
+	"rally_marker",
+	"magic_orb",
+	"troop_models_and_scripts",
+	"demon_king",
+	"fire_dragon",
+	"necromancer",
+	"horror_evolution",
+	"mechanical_dragon",
+	"ice_golem",
+	"wind_mage",
+	"pea_shooter",
+	"mage_tower",
+	"flag",
+	"ships",
+	"troop_animation_libraries",
+	"weapon_scenes",
+	"fire_bomb",
+	"building_destruction",
+]
+const COMBAT_STEP_METHODS: Array[StringName] = [
+	&"_warmup_defense_resources",
+	&"_warmup_hp_bar",
+	&"_warmup_additive_billboard_plain",
+	&"_warmup_additive_billboard_textured",
+	&"_warmup_turret_trail",
+	&"_warmup_target_ring",
+	&"_warmup_rally_marker",
+	&"_warmup_magic_orb",
+	&"_warmup_one_troop_glb",
+	&"_warmup_demon_king",
+	&"_warmup_fire_dragon_attack",
+	&"_warmup_necromancer",
+	&"_warmup_horror_evolution",
+	&"_warmup_mechanical_dragon",
+	&"_warmup_ice_golem",
+	&"_warmup_wind_mage",
+	&"_warmup_pea_shooter",
+	&"_warmup_mage_tower",
+	&"_warmup_flag_glb",
+	&"_warmup_ship_glbs",
+	&"_prewarm_troop_anim_libraries",
+	&"_prewarm_weapon_scenes",
+	&"_warmup_fire_bomb",
+	&"_warmup_building_destruction",
+]
+const HEAVY_LOADOUT_GPU_STEP_NAMES: Array[String] = [
+	"troop_models_and_scripts",
+	"demon_king",
+	"fire_dragon",
+	"necromancer",
+	"horror_evolution",
+	"mechanical_dragon",
+	"ice_golem",
+	"wind_mage",
+	"pea_shooter",
+]
 const FIRE_DRAGON_PREWARM_REPEAT_FRAMES: Array[int] = [4]
 const MECHANICAL_DRAGON_PREWARM_PHASES: Array[float] = [
 	0.08,
@@ -40,6 +120,20 @@ const NECROMANCER_SUMMON_PREWARM_PHASES: Array[float] = [
 	0.86,
 	1.0,
 ]
+const WIND_MAGE_PREWARM_PHASES: Array[float] = [
+	0.08,
+	0.28,
+	0.52,
+	0.72,
+	0.92,
+]
+const PEA_SHOOTER_PREWARM_PHASES: Array[float] = [
+	0.08,
+	0.22,
+	0.50,
+	0.78,
+	0.94,
+]
 ## Sub-pixel scales (< ~0.005) are frustum-culled by both renderers — the draw
 ## call never reaches the GPU and the pipeline isn't compiled. 0.02 is small
 ## enough to be invisible against the water/sky but big enough to rasterize.
@@ -53,8 +147,18 @@ signal finished
 static var _combat_warmup_done: bool = false
 static var _combat_warmup_active: bool = false
 static var _combat_warmup_node: Node = null
+static var _island_startup_warmup_done: bool = false
+static var _combat_idle_requested: bool = false
+static var _combat_idle_parent: Node = null
+static var _combat_requested_troops: Array[String] = []
+static var _combat_scope_restricted: bool = false
+static var _combat_loadout_request_pending: bool = false
+static var _combat_loadout_request_resolved: bool = false
+static var _island_common_warmup_done: bool = false
+static var _island_common_warmup_node: Node = null
+static var _startup_loadout_gpu_warmup_done: bool = false
 
-@export_enum("home", "combat") var mode: String = "home"
+@export_enum("home", "startup_common", "startup_loadout_gpu", "combat_idle", "combat") var mode: String = "home"
 
 var _frames_left: int = HOME_WARMUP_FRAMES
 var _finished_emitted: bool = false
@@ -68,29 +172,155 @@ var _mechanical_dragon_warmup_player: AnimationPlayer = null
 var _mechanical_dragon_phase_index: int = 0
 var _necromancer_warmup_inst: Node = null
 var _necromancer_phase_index: int = 0
+var _wind_mage_warmup_player: AnimationPlayer = null
+var _wind_mage_phase_index: int = 0
+var _pea_shooter_warmup_player: AnimationPlayer = null
+var _pea_shooter_phase_index: int = 0
 var _includes_combat_warmup: bool = false
-var _combat_assets_spawned: bool = false
+var _combat_execution_started: bool = false
+var _combat_step_index: int = 0
+var _combat_post_frames: int = 0
+var _last_combat_step_finished_ticks: int = 0
+var _idle_interactive_ticks: int = 0
+var _warmup_host_viewport: SubViewport = null
+var _requested_troop_names: Array[String] = []
+var _combat_render_step_indices: Array[int] = []
+var _combat_preload_troops: Array[String] = []
+var _restrict_to_requested_troops: bool = false
+var _startup_loadout_wait_ticks: int = 0
+var _resource_preload_already_satisfied: bool = false
 
 
-static func start_combat_warmup(parent: Node) -> Node:
+static func begin_combat_idle_warmup_request(parent: Node) -> void:
+	if _combat_warmup_done:
+		return
+	_combat_loadout_request_pending = true
+	_combat_loadout_request_resolved = false
+	if parent != null and parent.is_inside_tree():
+		_combat_idle_parent = parent
+
+
+static func cancel_combat_idle_warmup_request() -> void:
+	_combat_loadout_request_pending = false
+	_combat_loadout_request_resolved = true
+
+
+static func request_combat_idle_warmup(parent: Node, troop_names: Array = []) -> Node:
+	_combat_idle_requested = true
+	_combat_loadout_request_pending = false
+	_combat_loadout_request_resolved = true
+	_combat_scope_restricted = true
+	_merge_requested_troops(troop_names)
+	if parent != null and parent.is_inside_tree():
+		_combat_idle_parent = parent
+	if _combat_warmup_done:
+		return null
+	if _combat_warmup_active and is_instance_valid(_combat_warmup_node):
+		return _combat_warmup_node
+	if _island_startup_warmup_done:
+		if not _startup_loadout_gpu_warmup_done:
+			# The expensive model pipelines must not freeze an already visible
+			# island. A late loadout is completed under the battle clouds.
+			return null
+		return _create_hidden_combat_warmup(
+			_combat_idle_parent if is_instance_valid(_combat_idle_parent) else parent,
+			"combat_idle"
+		)
+	return null
+
+
+static func start_combat_warmup(parent: Node, troop_names: Array = []) -> Node:
+	_merge_requested_troops(troop_names)
 	if _combat_warmup_done:
 		return null
 	if _combat_warmup_active:
 		if is_instance_valid(_combat_warmup_node):
+			if _combat_warmup_node.has_method("_promote_to_blocking_combat"):
+				_combat_warmup_node.call("_promote_to_blocking_combat")
 			return _combat_warmup_node
 		_combat_warmup_active = false
 		_combat_warmup_node = null
+	return _create_hidden_combat_warmup(parent, "combat")
+
+
+static func _create_hidden_combat_warmup(parent: Node, requested_mode: String) -> Node:
+	return _create_hidden_warmup(parent, requested_mode, true)
+
+
+static func _create_hidden_warmup(parent: Node, requested_mode: String, track_combat: bool) -> Node:
 	if parent == null or not parent.is_inside_tree():
 		return null
 	var script: Script = load("res://scripts/warmup.gd")
 	if script == null:
 		return null
+
+	var viewport := SubViewport.new()
+	viewport.name = "CombatIdleWarmupViewport"
+	viewport.size = COMBAT_VIEWPORT_SIZE
+	viewport.own_world_3d = true
+	viewport.transparent_bg = false
+	viewport.render_target_clear_mode = SubViewport.CLEAR_MODE_ALWAYS
+	viewport.render_target_update_mode = (
+		SubViewport.UPDATE_DISABLED
+		if requested_mode == "combat_idle"
+		else SubViewport.UPDATE_ALWAYS
+	)
+	var world_root := Node3D.new()
+	world_root.name = "CombatIdleWarmupWorld"
+	viewport.add_child(world_root)
+
+	var camera := Camera3D.new()
+	camera.name = "CombatIdleWarmupCamera"
+	camera.projection = Camera3D.PROJECTION_ORTHOGONAL
+	camera.size = 0.28
+	camera.position = Vector3(0.0, 0.20, 0.72)
+	camera.look_at_from_position(camera.position, Vector3(0.0, 0.04, 0.0))
+	world_root.add_child(camera)
+	camera.current = true
+
+	var light := DirectionalLight3D.new()
+	light.name = "CombatIdleWarmupLight"
+	light.rotation_degrees = Vector3(-52.0, -28.0, 0.0)
+	light.light_energy = 1.0
+	light.shadow_enabled = true
+	world_root.add_child(light)
+
+	var world_environment := WorldEnvironment.new()
+	var environment := Environment.new()
+	environment.background_mode = Environment.BG_COLOR
+	environment.background_color = Color(0.08, 0.10, 0.14)
+	environment.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+	environment.ambient_light_color = Color(0.72, 0.78, 0.88)
+	environment.ambient_light_energy = 0.65
+	world_environment.environment = environment
+	world_root.add_child(world_environment)
+
 	var node: Node = script.new()
-	node.set("mode", "combat")
-	parent.add_child(node)
-	_combat_warmup_active = true
-	_combat_warmup_node = node
+	node.set("mode", requested_mode)
+	node.set("_warmup_host_viewport", viewport)
+	node.set("_requested_troop_names", _combat_requested_troops.duplicate())
+	node.set("_restrict_to_requested_troops", _combat_scope_restricted)
+	node.set(
+		"_resource_preload_already_satisfied",
+		requested_mode == "combat_idle" and _startup_loadout_gpu_warmup_done
+	)
+	world_root.add_child(node)
+	parent.add_child(viewport)
+	if track_combat:
+		_combat_warmup_active = true
+		_combat_warmup_node = node
+	else:
+		_island_common_warmup_node = node
 	return node
+
+
+static func _merge_requested_troops(troop_names: Array) -> void:
+	for raw_value in troop_names:
+		var troop_name := str(raw_value).split(":", false, 1)[0].strip_edges()
+		if troop_name == "" or troop_name.begins_with("_"):
+			continue
+		if not _combat_requested_troops.has(troop_name):
+			_combat_requested_troops.append(troop_name)
 
 
 func _ready() -> void:
@@ -98,83 +328,358 @@ func _ready() -> void:
 	_last_report_ticks = _started_ticks
 	position = WARMUP_POS
 	scale = WARMUP_SCALE
-	_includes_combat_warmup = mode == "combat" or (mode == "home" and not _combat_warmup_done)
+	_includes_combat_warmup = mode != "home"
+	if _includes_combat_warmup:
+		if mode == "startup_common":
+			_combat_preload_troops = []
+		else:
+			_combat_preload_troops = (
+				_requested_troop_names.duplicate()
+				if _restrict_to_requested_troops
+				else AttackSystem.ACTIVE_PRELOAD_TROOPS.duplicate()
+			)
+		_combat_render_step_indices = _build_combat_render_step_indices()
 	print(
 		"[WARMUP_PROFILE] start mode=", mode,
 		" frames=", COMBAT_WARMUP_FRAMES if _includes_combat_warmup else HOME_WARMUP_FRAMES,
 		" includes_combat=", _includes_combat_warmup
 	)
-	if mode == "combat":
+	if _includes_combat_warmup:
 		_frames_left = COMBAT_WARMUP_FRAMES
+		_report_combat_idle_state("waiting")
 	else:
-		# The first attack used to pay this exact combat setup cost after the
-		# clouds closed. Run it once under the initial loading overlay instead.
-		# `start_combat_warmup()` still remains the runtime safety fallback.
 		_frames_left = HOME_WARMUP_FRAMES
-		if _includes_combat_warmup:
-			_frames_left = maxi(HOME_WARMUP_FRAMES, COMBAT_WARMUP_FRAMES)
-			_combat_warmup_active = true
-			_combat_warmup_node = self
+		if not _island_common_warmup_done and not is_instance_valid(_island_common_warmup_node):
+			call_deferred("_start_startup_common_warmup")
 		_report_loading_progress(76, "home_warmup_start")
 		_spawn_home_warmup_nodes()
 		_report_loading_progress(82, "home_warmup_assets")
 	set_process(true)
 
 
+func _start_startup_common_warmup() -> void:
+	if _island_common_warmup_done or is_instance_valid(_island_common_warmup_node):
+		return
+	var parent := get_parent()
+	if parent == null or not parent.is_inside_tree():
+		push_warning("Island startup warmup skipped: scene parent is unavailable")
+		_island_common_warmup_done = true
+		return
+	var common_warmup := _create_hidden_warmup(parent, "startup_common", false)
+	if not is_instance_valid(common_warmup):
+		push_warning("Island startup warmup skipped: hidden viewport could not be created")
+		_island_common_warmup_done = true
+
+
 func _process(_delta: float) -> void:
 	if _includes_combat_warmup:
-		if not _combat_assets_spawned:
-			# Some warmup representatives create their own child VFX. Running this
-			# one frame after `_ready()` avoids mutating nodes while Godot is still
-			# assembling the scene tree.
-			_spawn_combat_warmup_nodes()
-			_combat_assets_spawned = true
-		_combat_frames_elapsed += 1
-		var now := Time.get_ticks_msec()
-		print(
-			"[WARMUP_PROFILE] render_frame frame=", _combat_frames_elapsed,
-			"/", COMBAT_WARMUP_FRAMES,
-			" frame_ms=", now - _last_report_ticks,
-			" total_ms=", now - _started_ticks
-		)
-		_last_report_ticks = now
-		_process_fire_dragon_prewarm_frames()
-		_process_mechanical_dragon_prewarm_frames()
-		_process_necromancer_prewarm_frames()
-	_frames_left -= 1
-	if mode != "combat":
-		var total: int = maxi(HOME_WARMUP_FRAMES, COMBAT_WARMUP_FRAMES) if _includes_combat_warmup else HOME_WARMUP_FRAMES
-		total = maxi(1, total)
-		var completed: int = total - _frames_left
-		if completed < 0:
-			completed = 0
-		if completed > total:
-			completed = total
-		var progress: int = 82 + int(round((float(completed) / float(total)) * 6.0))
-		_report_loading_progress(progress, "home_warmup_frames")
+		_process_combat_warmup()
+		return
+
+	if _frames_left > 0:
+		_frames_left -= 1
+	var total: int = maxi(1, HOME_WARMUP_FRAMES)
+	var completed: int = clampi(total - _frames_left, 0, total)
+	var progress: int = 82 + int(round((float(completed) / float(total)) * 6.0))
+	_report_loading_progress(progress, "home_warmup_frames")
 	if _frames_left <= 0:
-		var finished_ticks := Time.get_ticks_msec()
-		if _includes_combat_warmup:
+		if not _island_common_warmup_done:
+			return
+		if _combat_warmup_active:
+			return
+		if (
+			_combat_idle_requested
+			and not _startup_loadout_gpu_warmup_done
+			and not _combat_requested_troops.is_empty()
+		):
+			var gpu_warmup := _create_hidden_combat_warmup(
+				_combat_idle_parent if is_instance_valid(_combat_idle_parent) else get_parent(),
+				"startup_loadout_gpu"
+			)
+			if is_instance_valid(gpu_warmup):
+				_report_loading_progress(
+					89,
+					"combat_loadout_warmup_start",
+					{"troops": _combat_requested_troops.duplicate()}
+				)
+				return
+			push_warning("Startup loadout GPU warmup skipped: hidden viewport could not be created")
+		if _combat_loadout_request_pending and not _combat_loadout_request_resolved:
+			if _startup_loadout_wait_ticks <= 0:
+				_startup_loadout_wait_ticks = Time.get_ticks_msec()
+				_report_loading_progress(88, "combat_loadout_waiting")
+			if Time.get_ticks_msec() - _startup_loadout_wait_ticks < STARTUP_LOADOUT_REQUEST_GRACE_MSEC:
+				return
+			print(
+				"[WARMUP_PROFILE] startup_loadout_request_timeout wait_ms=",
+				Time.get_ticks_msec() - _startup_loadout_wait_ticks
+			)
+			_combat_loadout_request_pending = false
+		_island_startup_warmup_done = true
+		_report_loading_progress(88, "home_warmup_done")
+		print(
+			"[WARMUP_PROFILE] finish mode=", mode,
+			" total_ms=", Time.get_ticks_msec() - _started_ticks,
+			" render_frames=0 cleanup_ms=0"
+		)
+		if (
+			_combat_idle_requested
+			and not _combat_warmup_done
+			and not _combat_warmup_active
+		):
+			var idle_warmup := _create_hidden_combat_warmup(
+				_combat_idle_parent if is_instance_valid(_combat_idle_parent) else get_parent(),
+				"combat_idle"
+			)
+			if not is_instance_valid(idle_warmup):
+				push_warning("Combat idle warmup skipped: hidden viewport could not be created")
+		_finish_warmup_node()
+
+
+func _process_combat_warmup() -> void:
+	if not _combat_execution_started:
+		if mode == "combat_idle" and not _idle_window_is_ready():
+			return
+		_combat_execution_started = true
+		_last_combat_step_finished_ticks = Time.get_ticks_msec()
+		print(
+			"[WARMUP_PROFILE] combat_execution_start mode=", mode,
+			" idle_delay_ms=", _last_combat_step_finished_ticks - _started_ticks,
+			" hidden_viewport=", _warmup_host_viewport != null
+		)
+		_report_combat_idle_state("running")
+
+	var preload_step_count: int = 0
+	if not _skip_incremental_resource_preload():
+		preload_step_count = AttackSystem.SHIP_MODELS.size() + _combat_preload_troops.size()
+	var total_step_count: int = preload_step_count + _combat_render_step_indices.size()
+	if _combat_step_index < total_step_count:
+		var now := Time.get_ticks_msec()
+		if (
+			mode == "combat_idle"
+			and now - _last_combat_step_finished_ticks < COMBAT_IDLE_STEP_INTERVAL_MSEC
+		):
+			return
+		if _combat_step_index > 0:
+			print(
+				"[WARMUP_PROFILE] render_gap step_index=", _combat_step_index,
+				" frame_ms=", now - _last_combat_step_finished_ticks,
+				" total_ms=", now - _started_ticks
+			)
+		_run_incremental_combat_step(_combat_step_index, preload_step_count)
+		_combat_step_index += 1
+		_request_hidden_render_once()
+		_last_combat_step_finished_ticks = Time.get_ticks_msec()
+		return
+
+	var frame_now := Time.get_ticks_msec()
+	if (
+		mode == "combat_idle"
+		and frame_now - _last_combat_step_finished_ticks < COMBAT_IDLE_RENDER_INTERVAL_MSEC
+	):
+		return
+	_combat_frames_elapsed += 1
+	_combat_post_frames += 1
+	print(
+		"[WARMUP_PROFILE] render_frame frame=", _combat_post_frames,
+		"/", COMBAT_WARMUP_FRAMES,
+		" frame_ms=", frame_now - _last_combat_step_finished_ticks,
+		" total_ms=", frame_now - _started_ticks
+	)
+	_last_combat_step_finished_ticks = frame_now
+	_process_fire_dragon_prewarm_frames()
+	_process_mechanical_dragon_prewarm_frames()
+	_process_necromancer_prewarm_frames()
+	_process_wind_mage_prewarm_frames()
+	_process_pea_shooter_prewarm_frames()
+	_request_hidden_render_once()
+	if _combat_post_frames >= COMBAT_WARMUP_FRAMES:
+		if mode == "startup_common":
+			_island_common_warmup_done = true
+			_island_common_warmup_node = null
+		elif mode == "startup_loadout_gpu":
+			_startup_loadout_gpu_warmup_done = true
+			_combat_warmup_active = false
+			_combat_warmup_node = null
+		else:
 			_combat_warmup_done = true
 			_combat_warmup_active = false
 			_combat_warmup_node = null
-		# Some representatives are attached directly to the current combat scene
-		# so they render at the exact live scale. Remove them in both startup and
-		# fallback combat modes; freeing this warmup root cannot remove siblings.
 		visible = false
 		_clear_runtime_warmup_nodes()
-		if mode != "combat":
-			_report_loading_progress(88, "home_warmup_done")
 		print(
 			"[WARMUP_PROFILE] finish mode=", mode,
 			" total_ms=", Time.get_ticks_msec() - _started_ticks,
 			" render_frames=", _combat_frames_elapsed,
-			" cleanup_ms=", Time.get_ticks_msec() - finished_ticks
+			" combat_steps=", total_step_count
 		)
-		if not _finished_emitted:
-			_finished_emitted = true
-			finished.emit()
-		set_process(false)
+		_report_combat_idle_state("complete")
+		if mode == "startup_loadout_gpu":
+			_report_loading_progress(
+				91,
+				"combat_loadout_warmup_done",
+				{"troops": _requested_troop_names.duplicate()}
+			)
+		_finish_warmup_node()
+
+
+func _idle_window_is_ready() -> bool:
+	if _idle_interactive_ticks <= 0:
+		_idle_interactive_ticks = Time.get_ticks_msec()
+		print("[WARMUP_PROFILE] combat_idle_window_open settle_ms=", COMBAT_IDLE_SETTLE_MSEC)
+		return false
+	return Time.get_ticks_msec() - _idle_interactive_ticks >= COMBAT_IDLE_SETTLE_MSEC
+
+
+func _promote_to_blocking_combat() -> void:
+	if mode != "combat_idle":
+		return
+	mode = "combat"
+	if _warmup_host_viewport != null and is_instance_valid(_warmup_host_viewport):
+		_warmup_host_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	print(
+		"[WARMUP_PROFILE] combat_idle_promoted step_index=", _combat_step_index,
+		" elapsed_ms=", Time.get_ticks_msec() - _started_ticks
+	)
+
+
+func _request_hidden_render_once() -> void:
+	if (
+		mode == "combat_idle"
+		and _warmup_host_viewport != null
+		and is_instance_valid(_warmup_host_viewport)
+	):
+		_warmup_host_viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
+
+
+func _run_incremental_combat_step(step_index: int, preload_step_count: int) -> void:
+	if not _skip_incremental_resource_preload():
+		if step_index < AttackSystem.SHIP_MODELS.size():
+			var ship_index := step_index
+			_run_profiled_callable_step(
+				"preload_ship_%d" % (ship_index + 1),
+				func() -> void:
+					AttackSystem._get_ship_model_resource(ship_index)
+			)
+			return
+
+		var troop_step := step_index - AttackSystem.SHIP_MODELS.size()
+		if troop_step < _combat_preload_troops.size():
+			var troop_name: String = _combat_preload_troops[troop_step]
+			_run_profiled_callable_step(
+				"preload_troop_%s" % troop_name,
+				func() -> void:
+					AttackSystem._get_or_load_troop_resources(troop_name)
+			)
+			if troop_step == _combat_preload_troops.size() - 1:
+				AttackSystem._finalize_incremental_combat_preload()
+			return
+
+	var render_step := _combat_render_step_indices[step_index - preload_step_count]
+	_run_profiled_combat_step(
+		COMBAT_STEP_NAMES[render_step],
+		COMBAT_STEP_METHODS[render_step]
+	)
+
+
+func _skip_incremental_resource_preload() -> bool:
+	return _resource_preload_already_satisfied
+
+
+func _build_combat_render_step_indices() -> Array[int]:
+	if mode == "startup_common":
+		var startup_steps: Array[int] = []
+		for index in range(COMBAT_STEP_NAMES.size()):
+			if STARTUP_COMMON_STEP_NAMES.has(COMBAT_STEP_NAMES[index]):
+				startup_steps.append(index)
+		print("[WARMUP_PROFILE] combat_scope=startup_common render_steps=", startup_steps.size())
+		return startup_steps
+	if not _restrict_to_requested_troops:
+		var all_steps: Array[int] = []
+		for index in range(COMBAT_STEP_METHODS.size()):
+			all_steps.append(index)
+		print("[WARMUP_PROFILE] combat_scope=full render_steps=", all_steps.size())
+		return all_steps
+
+	var common_step_names: Array[String] = []
+	var conditional_steps := {
+		"magic_orb": ["Mage", "Necromancer"],
+		"demon_king": ["DemonKing"],
+		"fire_dragon": ["FireDragon"],
+		"necromancer": ["Necromancer"],
+		"horror_evolution": ["Horror"],
+		"mechanical_dragon": ["MechanicalDragon"],
+		"ice_golem": ["IceGolem"],
+		"wind_mage": ["WindMage"],
+		"pea_shooter": ["PeaShooter"],
+		"troop_models_and_scripts": AttackSystem.ACTIVE_PRELOAD_TROOPS,
+		"troop_animation_libraries": AttackSystem.ACTIVE_PRELOAD_TROOPS,
+		"weapon_scenes": ["Knight", "Mage", "Archer"],
+	}
+	var selected: Array[int] = []
+	for index in range(COMBAT_STEP_NAMES.size()):
+		var step_name: String = COMBAT_STEP_NAMES[index]
+		if common_step_names.has(step_name):
+			selected.append(index)
+			continue
+		var required_troops: Array = conditional_steps.get(step_name, [])
+		for troop_name in required_troops:
+			if _requested_troop_names.has(str(troop_name)):
+				selected.append(index)
+				break
+	print(
+		"[WARMUP_PROFILE] combat_scope=loadout troops=", _requested_troop_names,
+		" render_steps=", selected.size()
+	)
+	if mode == "startup_loadout_gpu":
+		return selected.filter(
+			func(index: int) -> bool:
+				return HEAVY_LOADOUT_GPU_STEP_NAMES.has(COMBAT_STEP_NAMES[index])
+		)
+	if mode == "combat_idle" and _startup_loadout_gpu_warmup_done:
+		return selected.filter(
+			func(index: int) -> bool:
+				return not HEAVY_LOADOUT_GPU_STEP_NAMES.has(COMBAT_STEP_NAMES[index])
+		)
+	return selected
+
+
+func _run_profiled_callable_step(step: String, callback: Callable) -> void:
+	var started := Time.get_ticks_msec()
+	print("[WARMUP_PROFILE] step_start step=", step, " total_ms=", started - _started_ticks)
+	callback.call()
+	var finished := Time.get_ticks_msec()
+	print(
+		"[WARMUP_PROFILE] step_done step=", step,
+		" step_ms=", finished - started,
+		" total_ms=", finished - _started_ticks
+	)
+
+
+func _report_combat_idle_state(state: String) -> void:
+	if mode != "combat_idle" or not OS.has_feature("web"):
+		return
+	var payload := {
+		"state": state,
+		"mode": mode,
+		"ticks_ms": Time.get_ticks_msec(),
+		"elapsed_ms": Time.get_ticks_msec() - _started_ticks,
+		"step_index": _combat_step_index,
+	}
+	JavaScriptBridge.eval(
+		"window.__clashCombatIdleWarmup = %s;" % JSON.stringify(payload),
+		true
+	)
+
+
+func _finish_warmup_node() -> void:
+	if not _finished_emitted:
+		_finished_emitted = true
+		finished.emit()
+	set_process(false)
+	if _warmup_host_viewport != null and is_instance_valid(_warmup_host_viewport):
+		_warmup_host_viewport.call_deferred("queue_free")
+	else:
 		queue_free()
 
 
@@ -190,31 +695,6 @@ func _spawn_home_warmup_nodes() -> void:
 	_warmup_upgrade_outline()
 	_report_loading_progress(80, "home_warmup_clicks")
 	_warmup_click_indicators()
-
-
-func _spawn_combat_warmup_nodes() -> void:
-	_run_profiled_combat_step("defense_resources", "_warmup_defense_resources")
-	_run_profiled_combat_step("hp_bar", "_warmup_hp_bar")
-	_run_profiled_combat_step("additive_billboard_plain", "_warmup_additive_billboard_plain")
-	_run_profiled_combat_step("additive_billboard_textured", "_warmup_additive_billboard_textured")
-	_run_profiled_combat_step("turret_trail", "_warmup_turret_trail")
-	_run_profiled_combat_step("target_ring", "_warmup_target_ring")
-	_run_profiled_combat_step("rally_marker", "_warmup_rally_marker")
-	_run_profiled_combat_step("magic_orb", "_warmup_magic_orb")
-	_run_profiled_combat_step("troop_models_and_scripts", "_warmup_one_troop_glb")
-	_run_profiled_combat_step("demon_king", "_warmup_demon_king")
-	_run_profiled_combat_step("fire_dragon", "_warmup_fire_dragon_attack")
-	_run_profiled_combat_step("necromancer", "_warmup_necromancer")
-	_run_profiled_combat_step("horror_evolution", "_warmup_horror_evolution")
-	_run_profiled_combat_step("mechanical_dragon", "_warmup_mechanical_dragon")
-	_run_profiled_combat_step("ice_golem", "_warmup_ice_golem")
-	_run_profiled_combat_step("mage_tower", "_warmup_mage_tower")
-	_run_profiled_combat_step("flag", "_warmup_flag_glb")
-	_run_profiled_combat_step("ships", "_warmup_ship_glbs")
-	_run_profiled_combat_step("troop_animation_libraries", "_prewarm_troop_anim_libraries")
-	_run_profiled_combat_step("weapon_scenes", "_prewarm_weapon_scenes")
-	_run_profiled_combat_step("fire_bomb", "_warmup_fire_bomb")
-	_run_profiled_combat_step("building_destruction", "_warmup_building_destruction")
 
 
 func _run_profiled_combat_step(step: String, method_name: StringName) -> void:
@@ -349,7 +829,73 @@ func _prewarm_weapon_scenes() -> void:
 ## medium rig (used by all 5 current troops) and the skeleton-guard rig. Runs
 ## off the main attack path so gameplay never pays this cost.
 func _prewarm_troop_anim_libraries() -> void:
-	var t0 := Time.get_ticks_msec()
+	if _restrict_to_requested_troops:
+		if _requested_troop_names.has("Archer"):
+			BaseTroop.prewarm_anim_library(
+				BaseTroop.PIRATE_ARCHER_ANIM_FILES,
+				BaseTroop.PIRATE_ARCHER_ANIM_ALIASES
+			)
+		if _requested_troop_names.has("Mage"):
+			BaseTroop.prewarm_anim_library(
+				BaseTroop.PIRATE_MAGE_ANIM_FILES,
+				BaseTroop.PIRATE_MAGE_ANIM_ALIASES
+			)
+		if _requested_troop_names.has("Knight"):
+			BaseTroop.prewarm_anim_library(
+				BaseTroop.PIRATE_KNIGHT_ANIM_FILES,
+				BaseTroop.PIRATE_KNIGHT_ANIM_ALIASES
+			)
+		if _requested_troop_names.has("Mimic"):
+			BaseTroop.prewarm_anim_library(
+				[
+					"res://Model/Characters/MimicBarrel/Animations/Idle.fbx",
+					"res://Model/Characters/MimicBarrel/Animations/Roll_Forward_WO_Root.fbx",
+					"res://Model/Characters/MimicBarrel/Animations/Tongue_Attack.fbx",
+					"res://Model/Characters/MimicBarrel/Animations/Take_Damage.fbx",
+					"res://Model/Characters/MimicBarrel/Animations/Die.fbx",
+				],
+				{
+					"res://Model/Characters/MimicBarrel/Animations/Idle.fbx": "Idle_A",
+					"res://Model/Characters/MimicBarrel/Animations/Roll_Forward_WO_Root.fbx": "Running_A",
+					"res://Model/Characters/MimicBarrel/Animations/Tongue_Attack.fbx": "Tongue_Attack",
+					"res://Model/Characters/MimicBarrel/Animations/Take_Damage.fbx": "GetHit",
+					"res://Model/Characters/MimicBarrel/Animations/Die.fbx": "Die",
+				}
+			)
+		if _requested_troop_names.has("Necromancer"):
+			BaseTroop.prewarm_anim_library(
+				[
+					"res://Model/Characters/Necromancer/Animations/necromancer_idle.fbx",
+					"res://Model/Characters/Necromancer/Animations/necromancer_move.fbx",
+					"res://Model/Characters/Necromancer/Animations/necromancer_attack.fbx",
+					"res://Model/Characters/Necromancer/Animations/necromancer_summon.fbx",
+					"res://Model/Characters/Necromancer/Animations/necromancer_hit.fbx",
+					"res://Model/Characters/Necromancer/Animations/necromancer_die.fbx",
+					"res://Model/Characters/Necromancer/Animations/necromancer_spawn.fbx",
+					"res://Model/Characters/Necromancer/Animations/necromancer_victory.fbx",
+				],
+				{
+					"res://Model/Characters/Necromancer/Animations/necromancer_idle.fbx": "Idle_A",
+					"res://Model/Characters/Necromancer/Animations/necromancer_move.fbx": "Running_A",
+					"res://Model/Characters/Necromancer/Animations/necromancer_attack.fbx": "Necromancer_Attack",
+					"res://Model/Characters/Necromancer/Animations/necromancer_summon.fbx": "Necromancer_Summon",
+					"res://Model/Characters/Necromancer/Animations/necromancer_hit.fbx": "GetHit",
+					"res://Model/Characters/Necromancer/Animations/necromancer_die.fbx": "Death_A",
+					"res://Model/Characters/Necromancer/Animations/necromancer_spawn.fbx": "Spawn_A",
+					"res://Model/Characters/Necromancer/Animations/necromancer_victory.fbx": "Cheering",
+				}
+			)
+			BaseTroop.prewarm_anim_library([
+				"res://Model/Characters/Skelet/Animations/gltf/Rig_Medium/Rig_Medium_General.glb",
+				"res://Model/Characters/Skelet/Animations/gltf/Rig_Medium/Rig_Medium_MovementBasic.glb",
+				"res://Model/Characters/Animations/Rig_Medium/Rig_Medium_CombatMelee.glb",
+				"res://Model/Characters/Animations/Rig_Medium/Rig_Medium_Simulation.glb",
+			])
+		if _requested_troop_names.has("WindMage"):
+			_prewarm_wind_mage_anim_libraries()
+		if _requested_troop_names.has("PeaShooter"):
+			_prewarm_pea_shooter_anim_libraries()
+		return
 	BaseTroop.prewarm_anim_library(BaseTroop.MEDIUM_RIG_ANIM_FILES)
 	BaseTroop.prewarm_anim_library(
 		BaseTroop.PIRATE_ARCHER_ANIM_FILES,
@@ -408,6 +954,68 @@ func _prewarm_troop_anim_libraries() -> void:
 		"res://Model/Characters/Animations/Rig_Medium/Rig_Medium_CombatMelee.glb",
 		"res://Model/Characters/Animations/Rig_Medium/Rig_Medium_Simulation.glb",
 	])
+	_prewarm_wind_mage_anim_libraries()
+	_prewarm_pea_shooter_anim_libraries()
+
+
+func _prewarm_wind_mage_anim_libraries() -> void:
+	BaseTroop.prewarm_anim_library(
+		[
+			"res://Model/Characters/WindMage/Animations/wind_mage_idle.fbx",
+			"res://Model/Characters/WindMage/Animations/wind_mage_move.fbx",
+			"res://Model/Characters/WindMage/Animations/wind_mage_attack.fbx",
+			"res://Model/Characters/WindMage/Animations/wind_mage_summon.fbx",
+			"res://Model/Characters/WindMage/Animations/wind_mage_spawn.fbx",
+			"res://Model/Characters/WindMage/Animations/wind_mage_hit.fbx",
+			"res://Model/Characters/WindMage/Animations/wind_mage_die.fbx",
+		],
+		{
+			"res://Model/Characters/WindMage/Animations/wind_mage_idle.fbx": "Idle_A",
+			"res://Model/Characters/WindMage/Animations/wind_mage_move.fbx": "Running_A",
+			"res://Model/Characters/WindMage/Animations/wind_mage_attack.fbx": "Wind_Slash",
+			"res://Model/Characters/WindMage/Animations/wind_mage_summon.fbx": "Wind_Summon",
+			"res://Model/Characters/WindMage/Animations/wind_mage_spawn.fbx": "Spawn_A",
+			"res://Model/Characters/WindMage/Animations/wind_mage_hit.fbx": "GetHit",
+			"res://Model/Characters/WindMage/Animations/wind_mage_die.fbx": "Death_A",
+		}
+	)
+	BaseTroop.prewarm_anim_library(
+		[
+			"res://Model/Characters/Windling/Animations/windling_idle.fbx",
+			"res://Model/Characters/Windling/Animations/windling_move.fbx",
+			"res://Model/Characters/Windling/Animations/windling_attack.fbx",
+			"res://Model/Characters/Windling/Animations/windling_spawn.fbx",
+			"res://Model/Characters/Windling/Animations/windling_hit.fbx",
+			"res://Model/Characters/Windling/Animations/windling_die.fbx",
+		],
+		{
+			"res://Model/Characters/Windling/Animations/windling_idle.fbx": "Idle_A",
+			"res://Model/Characters/Windling/Animations/windling_move.fbx": "Running_A",
+			"res://Model/Characters/Windling/Animations/windling_attack.fbx": "Windling_Attack",
+			"res://Model/Characters/Windling/Animations/windling_spawn.fbx": "Spawn_A",
+			"res://Model/Characters/Windling/Animations/windling_hit.fbx": "GetHit",
+			"res://Model/Characters/Windling/Animations/windling_die.fbx": "Death_A",
+		}
+	)
+
+
+func _prewarm_pea_shooter_anim_libraries() -> void:
+	BaseTroop.prewarm_anim_library(
+		[
+			"res://Model/Characters/PeaShooter/Animations/pea_shooter_idle.fbx",
+			"res://Model/Characters/PeaShooter/Animations/pea_shooter_move.fbx",
+			"res://Model/Characters/PeaShooter/Animations/pea_shooter_attack.fbx",
+			"res://Model/Characters/PeaShooter/Animations/pea_shooter_hit.fbx",
+			"res://Model/Characters/PeaShooter/Animations/pea_shooter_die.fbx",
+		],
+		{
+			"res://Model/Characters/PeaShooter/Animations/pea_shooter_idle.fbx": "Idle_A",
+			"res://Model/Characters/PeaShooter/Animations/pea_shooter_move.fbx": "Running_A",
+			"res://Model/Characters/PeaShooter/Animations/pea_shooter_attack.fbx": "Pea_Combo",
+			"res://Model/Characters/PeaShooter/Animations/pea_shooter_hit.fbx": "GetHit",
+			"res://Model/Characters/PeaShooter/Animations/pea_shooter_die.fbx": "Death_A",
+		}
+	)
 
 
 func _warmup_hp_bar() -> void:
@@ -603,8 +1211,15 @@ func _warmup_one_troop_glb() -> void:
 	# Forces the skinned-mesh pipeline variant every troop rig uses.
 	if AttackSystem._troop_res_cache.is_empty():
 		AttackSystem._preload_combat_resources()
-	var knight_entry: Dictionary = AttackSystem._troop_res_cache.get("Knight", {})
-	var model_res: Resource = knight_entry.get("model", null)
+	var candidates: Array[String] = _requested_troop_names.duplicate()
+	if not _restrict_to_requested_troops:
+		candidates = ["Knight"]
+	var model_res: Resource = null
+	for troop_name in candidates:
+		var troop_entry: Dictionary = AttackSystem._troop_res_cache.get(str(troop_name), {})
+		model_res = troop_entry.get("model", null)
+		if model_res != null:
+			break
 	if model_res == null:
 		print("[WARMUP] knight GLB missing from cache — skipped")
 		return
@@ -730,10 +1345,12 @@ func _warmup_mechanical_dragon() -> void:
 	if inst.has_method("prewarm_lightning_vfx"):
 		var warmed_vfx: Variant = inst.call("prewarm_lightning_vfx")
 		if warmed_vfx is Array:
+			set_meta("mechanical_lightning_prepared_count", warmed_vfx.size())
 			for vfx in warmed_vfx:
 				if vfx is Node and is_instance_valid(vfx):
 					_runtime_warmup_nodes.append(vfx)
 		elif warmed_vfx is Node and is_instance_valid(warmed_vfx):
+			set_meta("mechanical_lightning_prepared_count", 1)
 			_runtime_warmup_nodes.append(warmed_vfx)
 
 	var animation_files: Variant = inst.get("anim_files")
@@ -770,8 +1387,9 @@ func _warmup_necromancer() -> void:
 	if animation_files is Array and animation_aliases is Dictionary:
 		BaseTroop.prewarm_anim_library(animation_files, animation_aliases)
 	if inst.has_method("prewarm_necromancer_vfx"):
-		var warmed_nodes: Variant = inst.call("prewarm_necromancer_vfx")
+		var warmed_nodes: Variant = inst.call("prewarm_necromancer_vfx", self)
 		if warmed_nodes is Array:
+			set_meta("necromancer_prepared_node_count", warmed_nodes.size())
 			for warmed_node in warmed_nodes:
 				if warmed_node is Node and is_instance_valid(warmed_node):
 					_runtime_warmup_nodes.append(warmed_node)
@@ -846,6 +1464,103 @@ func _warmup_ice_golem() -> void:
 	)
 
 
+## Wind Mage compiles two animated rigs, its translucent wind ribbons, and the
+## summoned-unit material pipeline before the first live cast.
+func _warmup_wind_mage() -> void:
+	if AttackSystem._troop_res_cache.is_empty():
+		AttackSystem._preload_combat_resources()
+	var entry: Dictionary = AttackSystem._troop_res_cache.get("WindMage", {})
+	var model_res: Resource = entry.get("model", null)
+	var script_res: Script = entry.get("script", null)
+	if model_res == null or script_res == null:
+		print("[WARMUP] WindMage resources missing - skipped")
+		return
+
+	var mage := (model_res as PackedScene).instantiate() as Node3D
+	mage.name = "WarmupWindMage"
+	mage.set_script(script_res)
+	var mage_scale := AttackSystem._scale_for_troop("WindMage", 0.1)
+	mage.set("_spawn_scale", mage_scale)
+	mage.scale = Vector3.ONE * mage_scale
+	_force_shadow_casting(mage)
+	add_child(mage)
+
+	var player := mage.get_node_or_null("TroopAnimPlayer") as AnimationPlayer
+	if player != null and player.has_animation("Wind_Slash"):
+		player.callback_mode_process = AnimationMixer.ANIMATION_CALLBACK_MODE_PROCESS_MANUAL
+		player.play("Wind_Slash")
+		_wind_mage_warmup_player = player
+		_wind_mage_phase_index = 0
+
+	if mage.has_method("prewarm_wind_vfx"):
+		var warmed_vfx: Variant = mage.call("prewarm_wind_vfx", self)
+		if warmed_vfx is Array:
+			set_meta("wind_mage_prepared_node_count", warmed_vfx.size())
+			for warmed_node in warmed_vfx:
+				if warmed_node is Node and is_instance_valid(warmed_node):
+					_runtime_warmup_nodes.append(warmed_node)
+
+	var windling_scene := load(
+		"res://Model/Characters/Windling/Windling.fbx"
+	) as PackedScene
+	var windling_script := load("res://scripts/windling.gd") as Script
+	if windling_scene != null and windling_script != null:
+		var windling := windling_scene.instantiate() as Node3D
+		windling.name = "WarmupWindling"
+		windling.set_script(windling_script)
+		windling.set("_spawn_scale", 0.105)
+		windling.scale = Vector3.ONE * 0.105
+		_force_shadow_casting(windling)
+		add_child(windling)
+
+	_prewarm_wind_mage_anim_libraries()
+
+
+## Render all three burst phases and the same pooled low-poly pea mesh/material
+## used in combat so the first live volley does not compile render pipelines.
+func _warmup_pea_shooter() -> void:
+	if AttackSystem._troop_res_cache.is_empty():
+		AttackSystem._preload_combat_resources()
+	var entry: Dictionary = AttackSystem._troop_res_cache.get("PeaShooter", {})
+	var model_res: Resource = entry.get("model", null)
+	var script_res: Script = entry.get("script", null)
+	if model_res == null or script_res == null:
+		print("[WARMUP] PeaShooter resources missing - skipped")
+		return
+
+	var shooter := (model_res as PackedScene).instantiate() as Node3D
+	shooter.name = "WarmupPeaShooter"
+	shooter.set_script(script_res)
+	var shooter_scale := AttackSystem._scale_for_troop("PeaShooter", 0.1)
+	shooter.scale = Vector3.ONE * shooter_scale
+	_force_shadow_casting(shooter)
+	add_child(shooter)
+
+	var player := shooter.get_node_or_null("TroopAnimPlayer") as AnimationPlayer
+	if player != null and player.has_animation("Pea_Combo"):
+		player.callback_mode_process = AnimationMixer.ANIMATION_CALLBACK_MODE_PROCESS_MANUAL
+		player.play("Pea_Combo")
+		_pea_shooter_warmup_player = player
+		_pea_shooter_phase_index = 0
+
+	var projectile_mesh := shooter.call("_get_projectile_mesh") as Mesh
+	var projectile_material := shooter.call("_get_projectile_material") as Material
+	if projectile_mesh != null and projectile_material != null:
+		for projectile_index in range(3):
+			var projectile := MeshInstance3D.new()
+			projectile.name = "WarmupPeaProjectile_%d" % projectile_index
+			projectile.mesh = projectile_mesh
+			projectile.material_override = projectile_material
+			projectile.position = Vector3(
+				-0.045 + float(projectile_index) * 0.045,
+				0.08,
+				0.04
+			)
+			add_child(projectile)
+
+	_prewarm_pea_shooter_anim_libraries()
+
+
 func _process_fire_dragon_prewarm_frames() -> void:
 	if _fire_dragon_warmup_inst == null or not is_instance_valid(_fire_dragon_warmup_inst):
 		return
@@ -889,6 +1604,38 @@ func _process_necromancer_prewarm_frames() -> void:
 	if _necromancer_warmup_inst.has_method("advance_necromancer_prewarm"):
 		_necromancer_warmup_inst.call("advance_necromancer_prewarm", phase)
 	_necromancer_phase_index += 1
+
+
+func _process_wind_mage_prewarm_frames() -> void:
+	if (
+		_wind_mage_warmup_player == null
+		or not is_instance_valid(_wind_mage_warmup_player)
+		or _wind_mage_phase_index >= WIND_MAGE_PREWARM_PHASES.size()
+	):
+		return
+	var animation := _wind_mage_warmup_player.get_animation("Wind_Slash")
+	if animation == null or animation.length <= 0.0:
+		return
+	var phase: float = WIND_MAGE_PREWARM_PHASES[_wind_mage_phase_index]
+	_wind_mage_warmup_player.seek(animation.length * phase, true)
+	_wind_mage_warmup_player.advance(0.0)
+	_wind_mage_phase_index += 1
+
+
+func _process_pea_shooter_prewarm_frames() -> void:
+	if (
+		_pea_shooter_warmup_player == null
+		or not is_instance_valid(_pea_shooter_warmup_player)
+		or _pea_shooter_phase_index >= PEA_SHOOTER_PREWARM_PHASES.size()
+	):
+		return
+	var animation := _pea_shooter_warmup_player.get_animation("Pea_Combo")
+	if animation == null or animation.length <= 0.0:
+		return
+	var phase: float = PEA_SHOOTER_PREWARM_PHASES[_pea_shooter_phase_index]
+	_pea_shooter_warmup_player.seek(animation.length * phase, true)
+	_pea_shooter_warmup_player.advance(0.0)
+	_pea_shooter_phase_index += 1
 
 
 func _warmup_fire_dragon_breath_materials() -> void:
@@ -1110,12 +1857,6 @@ func _warmup_flag_glb() -> void:
 	_force_shadow_casting(inst)
 	add_child(inst)
 	_warmup_flag_animation(inst)
-
-	var attack_system := _find_attack_system()
-	if attack_system and attack_system.has_method("prewarm_flag_marker"):
-		var marker = attack_system.call("prewarm_flag_marker")
-		if marker is Node:
-			_runtime_warmup_nodes.append(marker)
 
 
 ## Pre-draws one instance of each ship level so the "first cannon-ship

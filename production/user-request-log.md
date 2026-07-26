@@ -2009,3 +2009,27 @@ Follow-up:
 - Request: do not accelerate troop attack animation as it levels; for the Mechanical Dragon, prefer stronger damage/HP progression because fast dragon attacks look twitchy.
 - Scope: fix Mechanical Dragon attack cooldown at 1.03 seconds across all levels, move the removed speed progression into per-strike damage while preserving sustained DPS, retain the existing HP curve, and verify client/server cadence plus TH6 combat balance.
 - No commit, push, production deploy, or production database mutation requested.
+
+### UR-2026-07-25-SPLIT-STARTUP-COMBAT-WARMUP
+- Timestamp: 2026-07-25 Europe/Kyiv
+- Request: split the current blocking warmup into a short `IslandStartupWarmup` and an invisible, non-blocking `CombatIdleWarmup`; export Godot and thoroughly test browser loading time, first-battle entry, FPS, visibility, and stability while bypassing registration for the local test.
+- Scope: measure the existing browser baseline, remove combat resources from the startup loading barrier, schedule combat asset/shader preparation incrementally after the island is interactive, keep all representatives outside the player's visible viewport, preserve a bounded first-battle fallback, add diagnostics and focused probes, create a fresh Web export, and run repeated cold/warm browser checks.
+- No commit, push, production deploy, or production database mutation requested.
+
+### UR-2026-07-25-TROOP-CAPACITY-REBALANCE
+- Timestamp: 2026-07-25 Europe/Kyiv
+- Request: change ship capacity costs to Knight 1, Archer 1, Mage 4, Barrel 6, Fire Dragon 10, Demon King 5, Ice Golem 10, Horror 20, and Necromancer 15, then precisely rebalance their combat stats around those weights.
+- Scope: audit current client and server troop definitions, ship capacity progression, special abilities, DPS/HP per capacity, army compositions, and server simulation; synchronize capacity and stat changes across Godot, backend validation/simulation, and UI; verify that no roster dominates and intended bases remain beatable.
+- No commit, push, production deploy, or production database mutation requested.
+
+### UR-2026-07-26-WIND-MAGE
+- Timestamp: 2026-07-26 Europe/Kyiv
+- Request: add the Wind Mage from `Monsters Ultimate Pack 06 Cute Series` as a 15-slot attacking unit with a wide, long wind attack; spawn two or three small Windlings at deterministic random positions inside the attack corridor, make them continue attacking, synchronize authored animations frame by frame, and add the unit to every relevant UI including a usable mobile attack selector.
+- Scope: import the authored Wind Mage and Windling models/animations, implement matching deterministic Godot and server-authoritative corridor damage plus summon lifecycle, add balanced progression/cost/unlock data, render lightweight wind VFX, integrate portraits and aliases across troop/fleet/battle/result UI, and verify combat parity, animation timing, balance guardrails, Web build, and mobile overflow behavior locally.
+- No commit, push, production deploy, or production database mutation requested.
+
+### UR-2026-07-26-PEA-SHOOTER
+- Timestamp: 2026-07-26 Europe/Kyiv
+- Request: add the green Pea Shooter from `Polygonal Creatures Pack 2` as a new balanced attacking unit that fires green balls and occupies about five ship slots.
+- Scope: import only the required authored model, projectile, green material, and animations; implement a frame-synchronized three-pea burst in Godot and the authoritative server simulation; add Town Hall progression, five-slot capacity, 500-Gold loading cost, aliases, persistence, UI portrait, mobile-safe attack selection, replay telemetry, parity tests, and balance verification.
+- No commit, push, production deploy, or production database mutation requested.

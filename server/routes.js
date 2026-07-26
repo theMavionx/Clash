@@ -14,7 +14,7 @@ const tasks = require('./tasks');
 const elfa = require('./elfa');
 const diag = require('./diag');
 const earnings = require('./earnings');
-const { MAX_SHIPS } = require('./combat_defs');
+const { MAX_SHIPS, MAX_TROOPS, TROOP_SLOT_COSTS } = require('./combat_defs');
 const {
   CANONICAL_GRID_CONFIG,
   CANONICAL_GRID_CONFIGS,
@@ -11851,8 +11851,12 @@ router.delete('/buildings/:id', auth, (req, res) => {
 const TROOP_NAME_MAP = {
   knight: 'Knight',
   mage: 'Mage',
+  windmage: 'WindMage',
+  wind_mage: 'WindMage',
   barbarian: 'Barbarian',
   archer: 'Archer',
+  peashooter: 'PeaShooter',
+  pea_shooter: 'PeaShooter',
   ranger: 'Ranger',
   mimic: 'Mimic',
   necromancer: 'Necromancer',
@@ -11913,6 +11917,8 @@ function _serverTroopKey(name) {
   if (normalized === 'DemonKing') return 'demon_king';
   if (normalized === 'FireDragon') return 'fire_dragon';
   if (normalized === 'Necromancer') return 'necromancer';
+  if (normalized === 'WindMage') return 'wind_mage';
+  if (normalized === 'PeaShooter') return 'pea_shooter';
   if (normalized === 'Horror') return 'horror';
   if (normalized === 'MechanicalDragon') return 'mechanical_dragon';
   if (normalized === 'IceGolem') return 'ice_golem';
@@ -12009,12 +12015,15 @@ function _playerShipState(playerId) {
   let troopTemplate = [];
   try { troops = JSON.parse(row.troops || '[]'); } catch { troops = []; }
   try { troopTemplate = JSON.parse(row.troop_template || '[]'); } catch { troopTemplate = []; }
-  const level = Math.max(1, Math.min(5, Number(row.level) || 1));
+  const level = Math.max(1, Math.min(6, Number(row.level) || 1));
+  const config = db.PLAYER_SHIP_LEVELS[level] || db.PLAYER_SHIP_LEVELS[1];
   return {
     ...row,
     id: 'main_ship',
     level,
     capacity: db.playerShipCapacity(level, row.capacity_override),
+    energy: Number(config.energy || 4),
+    medkit_unlocked: !!config.medkit_unlocked,
     troops,
     troop_template: troopTemplate,
   };
@@ -12364,9 +12373,11 @@ function _nftBackedWinTokensByCollectionFromActions(actions, playerId) {
 }
 function _troopSlotCost(name) {
   const normalized = _normalizeTroopName(name);
-  const configured = Number(db.TROOP_DEFS?.[_serverTroopKey(normalized)]?.slot_cost);
+  const serverKey = _serverTroopKey(normalized);
+  const configured = Number(db.TROOP_DEFS?.[serverKey]?.slot_cost);
   if (Number.isInteger(configured) && configured > 0) return configured;
-  if (normalized === 'DemonKing' || normalized === 'FireDragon') return 2;
+  const canonical = Number(TROOP_SLOT_COSTS?.[serverKey]);
+  if (Number.isInteger(canonical) && canonical > 0) return canonical;
   return 1;
 }
 function _shipLevelForPort(building) {
@@ -12700,6 +12711,35 @@ router.post('/attack/result', auth, (req, res) => {
       return res.status(403).json({ error: 'Too many ships in replay' });
     }
   }
+  const replayShipSlots = shipActions.reduce((total, action) => {
+    const troops = Array.isArray(action?.troops)
+      ? action.troops
+      : (action?.troopType ? [action.troopType] : []);
+    return total + troops.reduce(
+      (slots, troop) => slots + (_isSlotFiller(troop) ? 0 : _troopSlotCost(troop)),
+      0,
+    );
+  }, 0);
+  if (replayShipSlots > MAX_TROOPS) {
+    releaseBattleSession('cancelled');
+    db.storeReplay(
+      req.player.id,
+      defender_id,
+      actions,
+      defenderBuildings,
+      claimedResult,
+      'rejected',
+      'Ship capacity exceeded',
+      null,
+      { replay_ship_slots: replayShipSlots, max_ship_slots: MAX_TROOPS },
+    );
+    return res.status(403).json({
+      error: 'Ship capacity exceeded',
+      code: 'SHIP_CAPACITY_EXCEEDED',
+      replay_ship_slots: replayShipSlots,
+      max_ship_slots: MAX_TROOPS,
+    });
+  }
   _sanitizeDisabledShipTroopsForPlayer(req.player.id);
   const rosterReplayIssue = _singleShipReplayIssue(gameActions, req.player.id);
   if (rosterReplayIssue) {
@@ -12771,6 +12811,7 @@ router.post('/attack/result', auth, (req, res) => {
     gridConfig: CANONICAL_GRID_CONFIG,
     gridConfigs: CANONICAL_GRID_CONFIGS,
     serverTroopLevels,
+    serverShipLevel: _playerShipState(req.player.id)?.level || 1,
     serverNftRarities,
     defenderAltarLevels: db.getAltarSkillLevels(defender_id),
     debugTrace: BATTLE_DEBUG_TRACE,
@@ -13175,18 +13216,23 @@ router.get('/battle-log', auth, (req, res) => {
 // ==================== TROOPS ====================
 
 // Buy a troop (deduct gold, server-validated)
-const TROOP_BUY_COSTS = {
-  Knight: 100,
-  Mage: 100,
-  Archer: 100,
-  Mimic: 100,
-  Necromancer: 250,
-  Horror: 350,
-  MechanicalDragon: 400,
-  IceGolem: 400,
-  DemonKing: 0,
-  FireDragon: 0,
-};
+const TROOP_BUY_COSTS = Object.freeze(Object.fromEntries([
+  'Knight',
+  'Mage',
+  'WindMage',
+  'Archer',
+  'PeaShooter',
+  'Mimic',
+  'Necromancer',
+  'Horror',
+  'MechanicalDragon',
+  'IceGolem',
+  'DemonKing',
+  'FireDragon',
+].map((name) => [
+  name,
+  Math.max(0, Number(db.TROOP_DEFS[_serverTroopKey(name)]?.buy_cost) || 0),
+])));
 const VALID_TROOPS = Object.keys(TROOP_BUY_COSTS);
 const KNOWN_TROOPS = new Set(Object.values(TROOP_NAME_MAP));
 function _troopBuyCost(name) {
@@ -13218,10 +13264,9 @@ router.post('/troops/buy', auth, (req, res) => {
 });
 
 // Load troop onto a ship at a port
-const TROOP_COST = 100;
-const REINFORCE_COST = 50;
+const REINFORCE_COST_PER_SLOT = 50;
 
-// Load a troop into a ship slot (costs 100 gold). Also saves template.
+// Load a troop into the ship. Non-NFT cost is 100 gold per occupied slot.
 router.post('/buildings/:id/load-troop', auth, async (req, res) => {
   const buildingId = parseInt(req.params.id, 10);
   if (isNaN(buildingId)) return res.status(400).json({ error: 'Invalid building ID' });
@@ -13282,7 +13327,7 @@ router.post('/buildings/:id/load-troop', auth, async (req, res) => {
   }
 });
 
-// Swap a troop in a specific slot (costs 100 gold). Does NOT update template.
+// Swap a troop in a specific slot. Non-NFT cost is 100 gold per occupied slot.
 router.post('/buildings/:id/swap-troop', auth, async (req, res) => {
   const buildingId = parseInt(req.params.id, 10);
   if (isNaN(buildingId)) return res.status(400).json({ error: 'Invalid building ID' });
@@ -13619,6 +13664,7 @@ function _buildReinforcePlan(playerId) {
   const casualties = {};
   const shipsToRestore = [];
   let totalToRestore = 0;
+  let totalSlotsToRestore = 0;
   if (ship) {
     const current = ship.troops;
     const template = ship.troop_template;
@@ -13647,6 +13693,7 @@ function _buildReinforcePlan(playerId) {
         _appendTroopSlots(toAdd, normalized);
         casualties[normalized] = (casualties[normalized] || 0) + 1;
         restoredCount += 1;
+        totalSlotsToRestore += slotCost;
       }
     }
     if (toAdd.length > 0) {
@@ -13655,7 +13702,7 @@ function _buildReinforcePlan(playerId) {
     }
   }
 
-  return { casualties, totalToRestore, shipsToRestore };
+  return { casualties, totalToRestore, totalSlotsToRestore, shipsToRestore };
 }
 
 // Get casualties: compare ship_troops vs ship_troops_template to find restorable missing troops
@@ -13664,21 +13711,22 @@ router.get('/casualties', auth, (req, res) => {
   res.json({
     casualties: plan.casualties,
     total: plan.totalToRestore,
-    cost: plan.totalToRestore * REINFORCE_COST,
+    slots: plan.totalSlotsToRestore,
+    cost: plan.totalSlotsToRestore * REINFORCE_COST_PER_SLOT,
   });
 });
 
-// Reinforce: restore dead troops from template (costs 50 gold per restored troop)
+// Reinforce: restore dead troops from template (costs 50 gold per restored slot)
 router.post('/reinforce', auth, (req, res) => {
   const txn = db.db.transaction(() => {
-    const { totalToRestore, shipsToRestore } = _buildReinforcePlan(req.player.id);
+    const { totalToRestore, totalSlotsToRestore, shipsToRestore } = _buildReinforcePlan(req.player.id);
 
-    if (totalToRestore === 0) return { cost: 0, restored: 0, ships: [] };
+    if (totalToRestore === 0) return { cost: 0, restored: 0, restored_slots: 0, ships: [] };
 
-    const totalCost = totalToRestore * REINFORCE_COST;
+    const totalCost = totalSlotsToRestore * REINFORCE_COST_PER_SLOT;
     const spent = db.subtractResources(req.player.id, totalCost, 0, 0, {
       sourceType: 'reinforce',
-      metadata: { restored: totalToRestore, cost_gold: totalCost },
+      metadata: { restored: totalToRestore, restored_slots: totalSlotsToRestore, cost_gold: totalCost },
     });
     if (spent?.error) throw { status: 400, error: `Not enough gold (need ${totalCost})` };
 
@@ -13694,7 +13742,13 @@ router.post('/reinforce', auth, (req, res) => {
     }
 
     const updated = db.db.prepare('SELECT gold, wood, ore FROM players WHERE id = ?').get(req.player.id);
-    return { cost: totalCost, restored: totalToRestore, ships: resultShips, resources: updated };
+    return {
+      cost: totalCost,
+      restored: totalToRestore,
+      restored_slots: totalSlotsToRestore,
+      ships: resultShips,
+      resources: updated,
+    };
   });
 
   try {

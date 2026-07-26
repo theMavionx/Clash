@@ -125,6 +125,14 @@ func _enter_rally_mode() -> void:
 	# the user never has two click-to-fire modes armed at once.
 	if bs._cannon and bs._cannon._ship_cannon_mode:
 		bs._cannon._exit_ship_cannon_mode()
+	if bs._medkit and bs._medkit._medkit_mode:
+		bs._medkit._exit_medkit_mode()
+	if bs._freeze and bs._freeze._freeze_mode:
+		bs._freeze._exit_freeze_mode()
+	if bs._rage and bs._rage._rage_mode:
+		bs._rage._exit_rage_mode()
+	if bs._skeleton_barrel and bs._skeleton_barrel._barrel_mode:
+		bs._skeleton_barrel._exit_barrel_mode()
 	_rally_mode = true
 	var bridge = bs.get_node_or_null("/root/Bridge")
 	if bridge:

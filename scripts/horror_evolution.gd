@@ -47,43 +47,43 @@ const STAGE_TEXTURES: Array[Texture2D] = [
 	LURKER_TEXTURE,
 ]
 
-## The family is balanced as a three-slot attrition unit. Later stages trade
+## The family is balanced as a twenty-slot attrition unit. Later stages trade
 ## per-body power for extra targets, so total effective HP is useful without
-## eclipsing four-slot siege troops.
+## eclipsing a full mixed army.
 const LEVEL_STATS: Dictionary = {
 	1: {
-		"hp": [680, 205, 62],
-		"damage": [68, 24, 9],
+		"hp": [4533, 1367, 413],
+		"damage": [453, 160, 60],
 		"atk_speed": [1.24, 0.96, 0.72],
 	},
 	2: {
-		"hp": [895, 270, 82],
-		"damage": [91, 32, 12],
+		"hp": [5967, 1800, 547],
+		"damage": [607, 213, 80],
 		"atk_speed": [1.24, 0.96, 0.72],
 	},
 	3: {
-		"hp": [1170, 350, 106],
-		"damage": [122, 43, 16],
+		"hp": [7800, 2333, 707],
+		"damage": [813, 287, 107],
 		"atk_speed": [1.24, 0.96, 0.72],
 	},
 	4: {
-		"hp": [1510, 450, 136],
-		"damage": [165, 58, 22],
+		"hp": [10067, 3000, 907],
+		"damage": [1100, 387, 147],
 		"atk_speed": [1.24, 0.96, 0.72],
 	},
 	5: {
-		"hp": [1920, 570, 172],
-		"damage": [222, 78, 29],
+		"hp": [12800, 3800, 1147],
+		"damage": [1480, 520, 193],
 		"atk_speed": [1.24, 0.96, 0.72],
 	},
 	6: {
-		"hp": [2390, 705, 213],
-		"damage": [296, 104, 39],
+		"hp": [15933, 4700, 1420],
+		"damage": [1973, 693, 260],
 		"atk_speed": [1.24, 0.96, 0.72],
 	},
 	7: {
-		"hp": [2930, 860, 260],
-		"damage": [390, 137, 51],
+		"hp": [19533, 5733, 1733],
+		"damage": [2600, 913, 340],
 		"atk_speed": [1.24, 0.96, 0.72],
 	},
 }

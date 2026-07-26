@@ -18,14 +18,21 @@ const {
   CANONICAL_GRID_CONFIG,
   CANONICAL_GRID_CONFIGS,
   TIME_LIMIT_SEC,
-  MAX_SHIPS,
-  TROOPS_PER_SHIP,
+  MAX_TROOPS,
+  TROOP_SLOT_COSTS,
 } = require('../combat_defs');
 
 const CORE_ROSTER = ['knight', 'mage', 'archer'];
 const PREMIUM_DEFERRED_ROSTER = ['demon_king'];
 const ACTIVE_ROSTER = new Set([...CORE_ROSTER, ...PREMIUM_DEFERRED_ROSTER]);
 const SLOT_FILLER = '_SLOT_FILLER_';
+const MAIN_SHIP_CAPACITY = Object.freeze({
+  1: 3,
+  2: 12,
+  3: 27,
+  4: 36,
+  5: MAX_TROOPS,
+});
 
 const BUILDING_DEFS = {
   town_hall: { size: [4, 4], hp_levels: [3500, 8000, 16000, 24000, 36000] },
@@ -172,16 +179,34 @@ function demonToken(level) {
   return `demon_king:L${Math.max(1, Math.min(3, Number(level) || 1))}`;
 }
 
-function withDemon(level, rest) {
-  return [demonToken(level), SLOT_FILLER, ...rest];
+function troopType(token) {
+  return String(token || '').split(':')[0].trim().toLowerCase();
 }
 
-function chunkShips(tokens, maxShips = MAX_SHIPS, slotsPerShip = TROOPS_PER_SHIP) {
-  const chunks = [];
-  for (let i = 0; i < tokens.length && chunks.length < maxShips; i += slotsPerShip) {
-    chunks.push(tokens.slice(i, i + slotsPerShip));
+function troopSlotCost(token) {
+  return Math.max(1, Number(TROOP_SLOT_COSTS[troopType(token)]) || 1);
+}
+
+function packedTroop(token) {
+  return [token, ...Array(troopSlotCost(token) - 1).fill(SLOT_FILLER)];
+}
+
+function packPattern(pattern, capacity, oneSlotFallback = 'knight') {
+  const packed = [];
+  let patternIndex = 0;
+  while (pattern.length > 0) {
+    const token = pattern[patternIndex % pattern.length];
+    const entries = packedTroop(token);
+    if (packed.length + entries.length > capacity) break;
+    packed.push(...entries);
+    patternIndex += 1;
   }
-  return chunks;
+  while (packed.length < capacity) {
+    const entries = packedTroop(oneSlotFallback);
+    if (packed.length + entries.length > capacity) break;
+    packed.push(...entries);
+  }
+  return packed;
 }
 
 function troopSpawns(base, count, shipIndex) {
@@ -361,29 +386,29 @@ function archerBacklineLayout() {
   ];
 }
 
-function standardMix(total, demonLevel = null) {
+function standardMix(capacity, demonLevel = null) {
   const normalPattern = ['knight', 'archer', 'mage', 'knight', 'archer', 'mage'];
-  const normalCount = demonLevel ? Math.max(0, total - 2) : total;
-  const normals = repeatPattern(normalPattern, normalCount);
-  return demonLevel ? withDemon(demonLevel, normals) : normals;
+  const pattern = demonLevel ? [demonToken(demonLevel), ...normalPattern] : normalPattern;
+  return packPattern(pattern, capacity);
 }
 
 function scenarioLoadouts(kind, options = {}) {
-  const ships = options.ships || 5;
   const shipLevel = Math.max(1, Math.min(5, Number(options.shipLevel || options.attackerTh || options.level || 1)));
-  const slotsPerShip = Math.max(1, Math.min(TROOPS_PER_SHIP, shipLevel * 3));
-  const slots = ships * slotsPerShip;
+  const capacity = MAIN_SHIP_CAPACITY[shipLevel];
   const level = options.level || 1;
 
-  if (kind === 'archer_spam') return chunkShips(repeatPattern(['archer'], slots), ships, slotsPerShip);
-  if (kind === 'mage_burst') return chunkShips(repeatPattern(['mage'], slots), ships, slotsPerShip);
-  if (kind === 'archer_heavy') return chunkShips(repeatPattern(['knight', 'archer', 'archer', 'mage'], slots), ships, slotsPerShip);
-  if (kind === 'mage_heavy') return chunkShips(repeatPattern(['knight', 'mage', 'mage', 'archer'], slots), ships, slotsPerShip);
-  if (kind === 'knight_archer') return chunkShips(repeatPattern(['knight', 'archer'], slots), ships, slotsPerShip);
-  if (kind === 'knight_mage') return chunkShips(repeatPattern(['knight', 'knight', 'mage'], slots), ships, slotsPerShip);
-  if (kind === 'demon_solo') return chunkShips([demonToken(level), SLOT_FILLER], 1, slotsPerShip);
-  if (kind === 'demon_mixed') return chunkShips(withDemon(level, repeatPattern(['knight', 'archer', 'mage'], slots - 2)), ships, slotsPerShip);
-  if (kind === 'standard') return chunkShips(standardMix(slots, options.demonLevel), ships, slotsPerShip);
+  if (kind === 'archer_spam') return [packPattern(['archer'], capacity, 'archer')];
+  if (kind === 'mage_burst') return [packPattern(['mage'], capacity)];
+  if (kind === 'archer_heavy') return [packPattern(['knight', 'archer', 'archer', 'mage'], capacity)];
+  if (kind === 'mage_heavy') return [packPattern(['knight', 'mage', 'mage', 'archer'], capacity)];
+  if (kind === 'knight_archer') return [packPattern(['knight', 'archer'], capacity)];
+  if (kind === 'knight_mage') return [packPattern(['knight', 'knight', 'mage'], capacity)];
+  if (kind === 'demon_solo') return [packedTroop(demonToken(level))];
+  if (kind === 'demon_mixed') return [[
+    ...packedTroop(demonToken(level)),
+    ...packPattern(['knight', 'archer', 'mage'], capacity - TROOP_SLOT_COSTS.demon_king),
+  ]];
+  if (kind === 'standard') return [standardMix(capacity, options.demonLevel)];
 
   throw new Error(`Unknown loadout kind: ${kind}`);
 }

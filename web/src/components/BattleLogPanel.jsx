@@ -9,7 +9,13 @@ const TROOP_LABELS = {
   mage: 'Mage',
   barbarian: 'Barbarian',
   archer: 'Archer',
+  peashooter: 'Pea Shooter',
+  pea_shooter: 'Pea Shooter',
+  'pea-shooter': 'Pea Shooter',
   ranger: 'Ranger',
+  windmage: 'Wind Mage',
+  wind_mage: 'Wind Mage',
+  'wind-mage': 'Wind Mage',
   demonking: 'Demon King',
   demon_king: 'Demon King',
 };
