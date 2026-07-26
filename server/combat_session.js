@@ -55,6 +55,7 @@ const TARGET_SWITCH_MIN_ADVANTAGE = 0.08;
 const GUARD_TARGET_TIE_DIST = 0.02;
 const ATTACK_SLOT_OFFSETS = [-0.0, 0.4, -0.4, 0.8, -0.8, 1.2, -1.2];
 const SLOT_EVAL_INTERVAL_SEC = 6 / 60;
+const HIGH_DENSITY_TROOP_THRESHOLD = 24;
 const UNIT_TARGET_GROUND = 'ground';
 const UNIT_TARGET_AIR = 'air';
 const ICE_GOLEM_PRIORITY_DEFENSE_TYPES = new Set([
@@ -272,16 +273,31 @@ function computeAttackSlot(t, target, aliveTroops) {
   t._slotEvalTimer = (t._slotEvalTimer || 0) + TICK_DT;
   if (t._slotEvalTimer >= SLOT_EVAL_INTERVAL_SEC) {
     t._slotEvalTimer %= SLOT_EVAL_INTERVAL_SEC;
+    const targetTroops = [];
+    const targetAngles = [];
+    for (const other of aliveTroops) {
+      if (other.hp <= 0 || other._currentTarget !== target) continue;
+      targetTroops.push(other);
+      targetAngles.push(Math.atan2(other.x - target.x, other.z - target.z));
+    }
+    if (!t._currentTargetIsGuard && targetTroops.length > HIGH_DENSITY_TROOP_THRESHOLD) {
+      const denseIndex = targetTroops.indexOf(t);
+      if (denseIndex >= 0) {
+        t._orbitAngle = (Math.PI * 2 * denseIndex) / targetTroops.length;
+      }
+      return {
+        x: target.x + Math.sin(t._orbitAngle) * t.range * 0.95,
+        z: target.z + Math.cos(t._orbitAngle) * t.range * 0.95,
+      };
+    }
     let bestAngle = myAngle;
     let bestMinDist = 0;
     for (const offset of ATTACK_SLOT_OFFSETS) {
       const testAngle = myAngle + offset;
       let minOtherDist = 999;
-      for (const other of aliveTroops) {
-        if (other === t || other.hp <= 0) continue;
-        if (other._currentTarget !== target) continue;
-        const otherAngle = Math.atan2(other.x - target.x, other.z - target.z);
-        minOtherDist = Math.min(minOtherDist, angleDiff(testAngle, otherAngle));
+      for (let i = 0; i < targetTroops.length; i++) {
+        if (targetTroops[i] === t) continue;
+        minOtherDist = Math.min(minOtherDist, angleDiff(testAngle, targetAngles[i]));
       }
       if (minOtherDist > bestMinDist) {
         bestMinDist = minOtherDist;
@@ -2021,7 +2037,7 @@ function verifyReplay({
       use: impact.use,
       troopId,
       replayOrder: summoned.replayOrder,
-      targetBuildingId: impact.target.id,
+      targetBuildingId: impact.target?.id ?? null,
       spawnIndex,
       hp: stats.hp,
       damage: stats.damage,
@@ -2530,11 +2546,22 @@ function verifyReplay({
             && isCombatTargetBuilding(candidate)
           ))
           : null;
-        if (!target) {
+        const pointResult = target
+          ? { valid: true, point: { x: target.x, z: target.z } }
+          : validateTacticalPoint(act);
+        if (!pointResult.valid) {
           skeletonBarrelEventsIgnored++;
           traceEvent('skeleton_barrel_ignored', {
-            reason: 'invalid_target',
+            reason: (
+              rawBuildingId != null
+              && typeof act.x !== 'number'
+              && typeof act.z !== 'number'
+            )
+              ? 'invalid_target'
+              : pointResult.reason,
             buildingId: rawBuildingId ?? null,
+            x: act.x ?? null,
+            z: act.z ?? null,
           });
           continue;
         }
@@ -2542,7 +2569,7 @@ function verifyReplay({
           skeletonBarrelEventsIgnored++;
           traceEvent('skeleton_barrel_ignored', {
             reason: 'energy',
-            buildingId: target.id,
+            buildingId: target?.id ?? null,
             cost: SKELETON_BARREL.energyCost,
             energy: cannonEnergy,
           });
@@ -2556,15 +2583,17 @@ function verifyReplay({
         pendingSkeletonBarrels.push({
           use: skeletonBarrelUses,
           time: impactAt,
-          x: target.x,
-          z: target.z,
+          x: pointResult.point.x,
+          z: pointResult.point.z,
           target,
         });
         traceEvent('skeleton_barrel_fire', {
           use: skeletonBarrelUses,
           cost: SKELETON_BARREL.energyCost,
           energyAfter: cannonEnergy,
-          target: traceEntityPayload(target, 'building'),
+          target: target ? traceEntityPayload(target, 'building') : null,
+          x: round3(pointResult.point.x),
+          z: round3(pointResult.point.z),
           travelTime: SKELETON_BARREL.travelSec,
           impactAt: round3(impactAt),
         });
@@ -2688,8 +2717,8 @@ function verifyReplay({
       }
     }
 
-    // Skeleton barrels use a fixed authoritative travel time. The payload
-    // stores a server building reference and never trusts client coordinates.
+    // Skeleton barrels use a fixed authoritative travel time. A valid building
+    // id resolves to its server position; ground drops use validated grid coords.
     for (let i = pendingSkeletonBarrels.length - 1; i >= 0; i--) {
       if (pendingSkeletonBarrels[i].time <= time + 1e-9) {
         const impact = pendingSkeletonBarrels.splice(i, 1)[0];
@@ -3365,7 +3394,17 @@ function verifyReplay({
         if (nearG && nearG.distSq < bestDistSq) {
           bestTarget = nearG.target; bestDistSq = nearG.distSq; targetIsGuard = true;
         }
-        const currentMatchesPriorityTier = !usesDefensePriority
+        const currentGuardDistSq = t._currentTargetIsGuard && t._currentTarget
+          ? distSq2d(t.x, t.z, t._currentTarget.x, t._currentTarget.z)
+          : Infinity;
+        const currentGuardStickyRange = t.range * Math.max(GUARD_THREAT_MULT, 2.0);
+        // Match the client: once a nearby guard is engaged, a periodic
+        // defense-priority search must not reset the melee wind-up.
+        const hasEngagedGuard = t._currentTargetIsGuard
+          && t._currentTarget?.hp > 0
+          && currentGuardDistSq <= currentGuardStickyRange * currentGuardStickyRange;
+        const currentMatchesPriorityTier = hasEngagedGuard
+          || !usesDefensePriority
           || (!t._currentTargetIsGuard && isIceGolemPriorityDefense(t._currentTarget));
         if (currentMatchesPriorityTier && shouldKeepCurrentTarget(t, bestTarget, bestDistSq)) {
           traceEvent('target_keep', {

@@ -12,10 +12,8 @@ const DYNAMIC_NAME_PARTS: Array[String] = [
 	"turret",
 	"cannon",
 	"barrel",
-	"stand",
 	"archer",
-	"mage",
-	"mortar",
+	"crystal",
 	"projectile",
 	"minecart",
 ]
@@ -24,6 +22,7 @@ const BAKE_CONFIGS: Array[Dictionary] = [
 		"source": "res://Model/Island/pirate_island.glb",
 		"output": "res://generated/performance/pirate_island_static_batch.res",
 		"variant_level": 0,
+		"include_name_parts": ["barrel", "chest"],
 	},
 	{
 		"source": "res://Model/Archer_towers/tower_1.glb",
@@ -59,36 +58,43 @@ const BAKE_CONFIGS: Array[Dictionary] = [
 		"source": "res://Model/Barn/1.glb",
 		"output": "res://generated/performance/barn_level_1_static_batch.res",
 		"variant_level": 0,
+		"vertex_color_batch": true,
 	},
 	{
 		"source": "res://Model/Barn/2.glb",
 		"output": "res://generated/performance/barn_level_2_static_batch.res",
 		"variant_level": 0,
+		"vertex_color_batch": true,
 	},
 	{
 		"source": "res://Model/Barn/3.glb",
 		"output": "res://generated/performance/barn_level_3_static_batch.res",
 		"variant_level": 0,
+		"vertex_color_batch": true,
 	},
 	{
 		"source": "res://Model/Sawmill/1.glb",
 		"output": "res://generated/performance/sawmill_static_batch.res",
 		"variant_level": 0,
+		"vertex_color_batch": true,
 	},
 	{
 		"source": "res://Model/Storage/Storage shed_1.glb",
 		"output": "res://generated/performance/storage_level_1_static_batch.res",
 		"variant_level": 0,
+		"vertex_color_batch": true,
 	},
 	{
 		"source": "res://Model/Storage/Storage House_2.glb",
 		"output": "res://generated/performance/storage_level_2_static_batch.res",
 		"variant_level": 0,
+		"vertex_color_batch": true,
 	},
 	{
 		"source": "res://Model/Storage/Business Building_3.glb",
 		"output": "res://generated/performance/storage_level_3_static_batch.res",
 		"variant_level": 0,
+		"vertex_color_batch": true,
 	},
 	{
 		"source": "res://Model/Town_Hall/Town Hall Level 1.glb",
@@ -120,6 +126,67 @@ const BAKE_CONFIGS: Array[Dictionary] = [
 		"output": "res://generated/performance/town_hall_level_6_static_batch.res",
 		"variant_level": 0,
 	},
+	{
+		"source": "res://Model/Turret/scene.gltf",
+		"output": "res://generated/performance/turret_static_batch.res",
+		"variant_level": 0,
+		"include_name_parts": ["stand"],
+	},
+	{
+		"source": "res://Model/Altar/Models/Stylized_Altar_web.tscn",
+		"output": "res://generated/performance/altar_static_batch.res",
+		"variant_level": 0,
+	},
+	{
+		"source": "res://Model/MageTower/1.fbx",
+		"output": "res://generated/performance/mage_tower_level_1_static_batch.res",
+		"variant_level": 0,
+	},
+	{
+		"source": "res://Model/MageTower/2.fbx",
+		"output": "res://generated/performance/mage_tower_level_2_static_batch.res",
+		"variant_level": 0,
+	},
+	{
+		"source": "res://Model/MageTower/3.fbx",
+		"output": "res://generated/performance/mage_tower_level_3_static_batch.res",
+		"variant_level": 0,
+	},
+	{
+		"source": "res://Model/Mortar/mortar_lvl1.fbx",
+		"output": "res://generated/performance/mortar_level_1_static_batch.res",
+		"variant_level": 0,
+	},
+	{
+		"source": "res://Model/Mortar/mortar_lvl2.fbx",
+		"output": "res://generated/performance/mortar_level_2_static_batch.res",
+		"variant_level": 0,
+	},
+	{
+		"source": "res://Model/Mortar/mortar_lvl3.fbx",
+		"output": "res://generated/performance/mortar_level_3_static_batch.res",
+		"variant_level": 0,
+	},
+	{
+		"source": "res://Model/Mortar/mortar_lvl4.fbx",
+		"output": "res://generated/performance/mortar_level_4_static_batch.res",
+		"variant_level": 0,
+	},
+	{
+		"source": "res://Model/Tombstone/GLB format/2.glb",
+		"output": "res://generated/performance/tombstone_level_2_static_batch.res",
+		"variant_level": 0,
+	},
+	{
+		"source": "res://Model/Tombstone/GLB format/3.glb",
+		"output": "res://generated/performance/tombstone_level_3_static_batch.res",
+		"variant_level": 0,
+	},
+	{
+		"source": "res://Model/Tombstone/GLB format/4.glb",
+		"output": "res://generated/performance/tombstone_level_4_static_batch.res",
+		"variant_level": 0,
+	},
 ]
 
 
@@ -140,6 +207,8 @@ func _bake(config: Dictionary) -> bool:
 	var source_path := str(config.get("source", ""))
 	var output_path := str(config.get("output", ""))
 	var variant_level := int(config.get("variant_level", 0))
+	var include_name_parts: Array = config.get("include_name_parts", [])
+	var vertex_color_batch := bool(config.get("vertex_color_batch", false))
 	var packed_scene := load(source_path) as PackedScene
 	if packed_scene == null:
 		push_error("[STATIC_BATCH] source failed to load: %s" % source_path)
@@ -162,7 +231,10 @@ func _bake(config: Dictionary) -> bool:
 	var has_source_aabb := false
 	for raw_mesh in root.find_children("*", "MeshInstance3D", true, false):
 		var mesh_instance := raw_mesh as MeshInstance3D
-		if not _is_static_candidate(mesh_instance, animated_roots):
+		if (
+			not _matches_explicit_static_include(mesh_instance, include_name_parts, root)
+			and not _is_static_candidate(mesh_instance, animated_roots, root)
+		):
 			continue
 		if not _is_effectively_visible(mesh_instance, root):
 			continue
@@ -183,13 +255,36 @@ func _bake(config: Dictionary) -> bool:
 			var material := mesh_instance.get_surface_override_material(surface_index)
 			if material == null:
 				material = mesh.surface_get_material(surface_index)
-			var material_key := 0 if material == null else material.get_instance_id()
+			var material_key: Variant = (
+				"vertex_color_flat"
+				if vertex_color_batch
+				else (0 if material == null else material.get_instance_id())
+			)
 			var surface_tool := surface_tools.get(material_key) as SurfaceTool
 			if surface_tool == null:
 				surface_tool = SurfaceTool.new()
 				surface_tools[material_key] = surface_tool
-				materials[material_key] = material
-			surface_tool.append_from(mesh, surface_index, local_transform)
+				materials[material_key] = (
+					_vertex_color_material(material)
+					if vertex_color_batch
+					else material
+				)
+			if vertex_color_batch:
+				if not _append_with_baked_albedo(
+					surface_tool,
+					mesh,
+					surface_index,
+					local_transform,
+					material
+				):
+					push_error(
+						"[STATIC_BATCH] vertex-color append failed source=%s surface=%d"
+						% [source_path, surface_index]
+					)
+					root.queue_free()
+					return false
+			else:
+				surface_tool.append_from(mesh, surface_index, local_transform)
 			source_surfaces += 1
 			var indices := mesh.surface_get_arrays(surface_index)[Mesh.ARRAY_INDEX] as PackedInt32Array
 			if indices != null and not indices.is_empty():
@@ -239,6 +334,74 @@ func _bake(config: Dictionary) -> bool:
 	return true
 
 
+func _append_with_baked_albedo(
+	target: SurfaceTool,
+	mesh: Mesh,
+	surface_index: int,
+	local_transform: Transform3D,
+	material: Material
+) -> bool:
+	if not material is BaseMaterial3D:
+		return false
+	var base := material as BaseMaterial3D
+	if (
+		base.albedo_texture != null
+		or base.normal_texture != null
+		or base.emission_enabled
+		or base.transparency != BaseMaterial3D.TRANSPARENCY_DISABLED
+	):
+		return false
+	var transformed := SurfaceTool.new()
+	transformed.append_from(mesh, surface_index, local_transform)
+	var arrays := transformed.commit_to_arrays()
+	var vertices := arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array
+	if vertices == null or vertices.is_empty():
+		return false
+	var raw_colors: Variant = arrays[Mesh.ARRAY_COLOR]
+	var colors := (
+		raw_colors as PackedColorArray
+		if raw_colors is PackedColorArray
+		else PackedColorArray()
+	)
+	if colors.size() != vertices.size():
+		colors = PackedColorArray()
+		colors.resize(vertices.size())
+		colors.fill(Color.WHITE)
+	for vertex_index in range(colors.size()):
+		colors[vertex_index] *= base.albedo_color
+	arrays[Mesh.ARRAY_COLOR] = colors
+	var colored_mesh := ArrayMesh.new()
+	colored_mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	target.append_from(colored_mesh, 0, Transform3D.IDENTITY)
+	return true
+
+
+func _vertex_color_material(source: Material) -> Material:
+	if not source is BaseMaterial3D:
+		return source
+	var result := source.duplicate(true) as BaseMaterial3D
+	result.albedo_color = Color.WHITE
+	result.vertex_color_use_as_albedo = true
+	return result
+
+
+func _matches_explicit_static_include(
+	mesh_instance: MeshInstance3D,
+	include_name_parts: Array,
+	model_root: Node
+) -> bool:
+	if include_name_parts.is_empty():
+		return false
+	var current: Node = mesh_instance
+	while current != null and current != model_root:
+		var lower_name := String(current.name).to_lower()
+		for raw_part in include_name_parts:
+			if lower_name.contains(str(raw_part).to_lower()):
+				return true
+		current = current.get_parent()
+	return false
+
+
 func _count_triangles(mesh: ArrayMesh) -> int:
 	var triangles := 0
 	for surface_index in range(mesh.get_surface_count()):
@@ -280,7 +443,11 @@ func _collect_animated_roots(root: Node) -> Array[Node]:
 	return result
 
 
-func _is_static_candidate(mesh_instance: MeshInstance3D, animated_roots: Array[Node]) -> bool:
+func _is_static_candidate(
+	mesh_instance: MeshInstance3D,
+	animated_roots: Array[Node],
+	model_root: Node
+) -> bool:
 	if mesh_instance == null or mesh_instance.mesh == null:
 		return false
 	if not mesh_instance.skeleton.is_empty() or _has_skeleton_ancestor(mesh_instance):
@@ -289,8 +456,14 @@ func _is_static_candidate(mesh_instance: MeshInstance3D, animated_roots: Array[N
 		if animated_root == mesh_instance or animated_root.is_ancestor_of(mesh_instance):
 			return false
 	var current: Node = mesh_instance
-	while current != null:
+	while current != null and current != model_root:
 		var lower_name := String(current.name).to_lower()
+		# Imported asset container names (for example "turret.fbx") describe the
+		# whole file, not a movable component. Component meshes below them still
+		# pass through the dynamic-name checks.
+		if lower_name.ends_with(".fbx") or lower_name.ends_with(".gltf") or lower_name.ends_with(".glb"):
+			current = current.get_parent()
+			continue
 		for part in DYNAMIC_NAME_PARTS:
 			if lower_name.contains(part):
 				return false

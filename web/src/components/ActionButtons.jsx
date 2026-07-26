@@ -193,6 +193,8 @@ const ONE_USE_SHIP_ABILITIES = [
 
 function ShipAbilityRail({
   mobile,
+  inline = false,
+  menu = false,
   cannonEnergy,
   cannonMode,
   rallyMode,
@@ -212,10 +214,17 @@ function ShipAbilityRail({
   const rallyCost = cannonEnergy?.rallyNextCost ?? 1;
   const cannonDisabled = !cannonMode && !!cannonEnergy && energy < cannonCost;
   const rallyDisabled = !rallyMode && !!cannonEnergy && energy < rallyCost;
+  const menuLayout = mobile && menu;
   const abilityButtonStyle = mobile
-    ? { ...hud.cannonBtn, width: 48, height: 48, borderRadius: 12 }
+    ? {
+      ...hud.cannonBtn,
+      width: menuLayout ? 50 : inline ? 64 : 48,
+      height: menuLayout ? 50 : inline ? 64 : 48,
+      borderRadius: 12,
+      scrollSnapAlign: inline ? 'start' : 'none',
+    }
     : hud.cannonBtn;
-  const abilityIconSize = mobile ? 32 : 46;
+  const abilityIconSize = mobile ? (menuLayout ? 34 : inline ? 40 : 32) : 46;
   const modes = { medkit: medkitMode, freeze: freezeMode, rage: rageMode, skeletonBarrel: skeletonBarrelMode };
   const handlers = { medkit: onMedkit, freeze: onFreeze, rage: onRage, skeletonBarrel: onSkeletonBarrel };
 
@@ -237,15 +246,17 @@ function ShipAbilityRail({
 
   return (
     <div
-      className="attack-troop-scroll"
-      style={{
+      className={inline ? undefined : 'attack-troop-scroll'}
+      style={inline ? { display: 'contents' } : menuLayout ? {
+        ...hud.mobileAbilityGrid,
+      } : {
         ...hud.abilityRail,
         gap: mobile ? 4 : 8,
         width: mobile ? '100%' : 'min(540px, calc(55vw - 20px))',
       }}
-      onWheel={handleAbilityWheel}
-      onPointerDown={(event) => event.stopPropagation()}
-      onTouchStart={(event) => event.stopPropagation()}
+      onWheel={inline ? undefined : handleAbilityWheel}
+      onPointerDown={inline ? undefined : (event) => event.stopPropagation()}
+      onTouchStart={inline ? undefined : (event) => event.stopPropagation()}
       aria-label="Main Ship abilities"
     >
       <button
@@ -301,8 +312,8 @@ function ShipAbilityRail({
               src={ability.image}
               alt=""
               style={{
-                width: mobile ? 36 : 60,
-                height: mobile ? 36 : 60,
+                width: mobile ? (menuLayout ? 38 : inline ? 44 : 36) : 60,
+                height: mobile ? (menuLayout ? 38 : inline ? 44 : 36) : 60,
                 objectFit: 'contain',
                 objectPosition: 'center',
                 pointerEvents: 'none',
@@ -312,6 +323,111 @@ function ShipAbilityRail({
           </button>
         );
       })}
+    </div>
+  );
+}
+
+function MobileShipAbilityMenu({
+  cannonEnergy,
+  cannonMode,
+  rallyMode,
+  medkitMode,
+  freezeMode,
+  rageMode,
+  skeletonBarrelMode,
+  onCannon,
+  onRally,
+  onMedkit,
+  onFreeze,
+  onRage,
+  onSkeletonBarrel,
+}) {
+  const [open, setOpen] = useState(false);
+  const dockRef = useRef(null);
+  const active = cannonMode
+    || rallyMode
+    || medkitMode
+    || freezeMode
+    || rageMode
+    || skeletonBarrelMode;
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const closeOutside = (event) => {
+      if (!dockRef.current?.contains(event.target)) setOpen(false);
+    };
+    const closeOnEscape = (event) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+    window.addEventListener('pointerdown', closeOutside);
+    window.addEventListener('keydown', closeOnEscape);
+    return () => {
+      window.removeEventListener('pointerdown', closeOutside);
+      window.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [open]);
+
+  const choose = useCallback((handler) => () => {
+    handler?.();
+    setOpen(false);
+  }, []);
+
+  const energy = cannonEnergy?.energy ?? 0;
+  return (
+    <div
+      ref={dockRef}
+      style={hud.mobileAbilityDock}
+      onPointerDown={(event) => event.stopPropagation()}
+      onTouchStart={(event) => event.stopPropagation()}
+    >
+      {open && (
+        <div style={hud.mobileAbilityPopover} role="menu" aria-label="Main Ship abilities">
+          <ShipAbilityRail
+            mobile
+            menu
+            cannonEnergy={cannonEnergy}
+            cannonMode={cannonMode}
+            rallyMode={rallyMode}
+            medkitMode={medkitMode}
+            freezeMode={freezeMode}
+            rageMode={rageMode}
+            skeletonBarrelMode={skeletonBarrelMode}
+            onCannon={choose(onCannon)}
+            onRally={choose(onRally)}
+            onMedkit={choose(onMedkit)}
+            onFreeze={choose(onFreeze)}
+            onRage={choose(onRage)}
+            onSkeletonBarrel={choose(onSkeletonBarrel)}
+          />
+        </div>
+      )}
+      <div
+        style={{ ...hud.energyPill, ...hud.mobileDockEnergy }}
+        role="status"
+        aria-label={`${energy} energy available`}
+      >
+        <span style={{ ...hud.energyIcon, ...hud.energyIconMobile }}>
+          <EnergyBoltIcon size={11} />
+        </span>
+        <span style={{ ...hud.energyValue, ...hud.energyValueMobile }}>{energy}</span>
+      </div>
+      <button
+        type="button"
+        style={{
+          ...hud.mobileAbilityToggle,
+          ...(open || active ? hud.mobileAbilityToggleActive : {}),
+        }}
+        onClick={() => setOpen((value) => !value)}
+        title="Ship abilities"
+        aria-label="Ship abilities"
+        aria-haspopup="menu"
+        aria-expanded={open}
+      >
+        <span style={hud.mobileAbilityToggleIcon}>
+          <EnergyBoltIcon size={20} />
+        </span>
+        <span aria-hidden="true" style={hud.mobileAbilityChevron} />
+      </button>
     </div>
   );
 }
@@ -333,6 +449,8 @@ const TROOP_IMG_MAP = {
   mechanical_dragon: ACTIVE_TROOP_IMG_MAP.mechanicaldragon,
   mechdragon: ACTIVE_TROOP_IMG_MAP.mechanicaldragon,
   ice_golem: ACTIVE_TROOP_IMG_MAP.icegolem,
+  barrel: ACTIVE_TROOP_IMG_MAP.mimic,
+  mimic_barrel: ACTIVE_TROOP_IMG_MAP.mimic,
   demon_king: ACTIVE_TROOP_IMG_MAP.demonking,
   fire_dragon: ACTIVE_TROOP_IMG_MAP.firedragon,
   wind_mage: ACTIVE_TROOP_IMG_MAP.windmage,
@@ -345,6 +463,7 @@ function normalizeTroopKey(name) {
   if (base === 'mechanicaldragon' || base === 'mechanical_dragon' || base === 'mechdragon') return 'mechanicaldragon';
   if (base === 'icegolem' || base === 'ice_golem') return 'icegolem';
   if (base === 'horror' || base === 'horrorevolution' || base === 'horror_evolution') return 'horror';
+  if (base === 'barrel' || base === 'mimic_barrel') return 'mimic';
   if (base === 'demonking' || base === 'demon_king') return 'demonking';
   if (base === 'firedragon' || base === 'fire_dragon') return 'firedragon';
   if (base === 'windmage' || base === 'wind_mage') return 'windmage';
@@ -399,10 +518,8 @@ function ManualAttackHUD({
   battleTimer,
 }) {
   const { isMobile: mobile } = useLayout();
-  const [showDetails, setShowDetails] = useState(false);
   const troopScrollRef = useRef(null);
   const groups = fleetInfo?.troop_groups || [];
-  const ship = fleetInfo?.ship || {};
   const ready = !!fleetInfo?.ready;
 
   useLayoutEffect(() => {
@@ -437,7 +554,7 @@ function ManualAttackHUD({
       <div style={{
         ...hud.wrapLeft,
         right: mobile
-          ? 'calc(env(safe-area-inset-right, 0px) + 8px)'
+          ? 'calc(env(safe-area-inset-right, 0px) + 70px)'
           : 'calc(min(540px, 55vw) + 40px)',
         maxWidth: 'none',
         minWidth: 0,
@@ -445,20 +562,20 @@ function ManualAttackHUD({
         boxSizing: 'border-box',
         alignItems: 'flex-end',
         ...(mobile ? {
-          bottom: 'calc(env(safe-area-inset-bottom, 0px) + 108px)',
+          bottom: 'calc(env(safe-area-inset-bottom, 0px) + 8px)',
           left: 'calc(env(safe-area-inset-left, 0px) + 8px)',
           gap: 4,
         } : {}),
       }}>
-        <button style={{ ...hud.card, width: mobile ? 32 : 36, height: mobile ? 32 : 36, padding: 0, borderColor: 'rgba(255,215,0,0.7)', cursor: 'pointer', flexShrink: 0, position: 'relative', overflow: 'visible' }} onClick={(event) => { event.stopPropagation(); setShowDetails(true); }} title={ready ? 'Main ship and army' : 'Main ship approaching'}>
-          <img src={shipImg} alt="" style={{ width: '90%', height: '90%', objectFit: 'contain' }} />
-          {!ready && mobile && <span aria-hidden="true" style={{ position: 'absolute', right: -3, bottom: -3, width: 10, height: 10, borderRadius: '50%', background: '#2c83ba', border: '2px solid #fff7df', boxShadow: '0 1px 3px rgba(0,0,0,0.35)' }} />}
-        </button>
         {!ready && !mobile && <div style={{ ...hud.card, width: 116, height: 58, padding: '4px 8px', borderColor: '#2c83ba', color: '#5C3A21', fontSize: 11, fontWeight: 900, textAlign: 'center', flexShrink: 0 }}>MAIN SHIP<br/>APPROACHING...</div>}
         <div
           ref={troopScrollRef}
           className="attack-troop-scroll"
-          style={{ ...hud.troopScroller, gap: mobile ? 5 : 7 }}
+          style={{
+            ...hud.troopScroller,
+            gap: mobile ? 6 : 7,
+            scrollSnapType: mobile ? 'x proximity' : 'none',
+          }}
           onWheel={handleTroopWheel}
           onPointerDown={(event) => event.stopPropagation()}
           onTouchStart={(event) => event.stopPropagation()}
@@ -467,13 +584,13 @@ function ManualAttackHUD({
           {groups.map((group, groupIdx) => {
             const info = TROOP_IMG_MAP[normalizeTroopKey(group.key)] || {};
             const selected = selectedTroopIdx === groupIdx;
-            const size = mobile ? 56 : 70;
+            const size = mobile ? 64 : 70;
             const displayLabel = (mobile && info.mobileLabel) || info.label || group.label || group.key;
             return (
               <button
                 key={group.key || groupIdx}
                 data-troop-index={groupIdx}
-                style={{ ...hud.card, width: size, minWidth: size, height: size, padding: 2, position: 'relative', flexDirection: 'column', gap: 1, opacity: ready ? 1 : 0.55, borderColor: selected ? '#FFD700' : '#9f8759', boxShadow: selected ? '0 0 12px rgba(255,215,0,0.6), inset 0 0 8px rgba(255,215,0,0.15)' : 'none', cursor: ready ? 'pointer' : 'wait' }}
+                style={{ ...hud.card, width: size, minWidth: size, height: size, padding: 2, position: 'relative', flexDirection: 'column', gap: 1, scrollSnapAlign: 'start', opacity: ready ? 1 : 0.55, borderColor: selected ? '#FFD700' : '#9f8759', boxShadow: selected ? '0 0 12px rgba(255,215,0,0.6), inset 0 0 8px rgba(255,215,0,0.15)' : 'none', cursor: ready ? 'pointer' : 'wait' }}
                 onClick={(event) => { event.stopPropagation(); if (ready) onSelectTroop(groupIdx); }}
                 disabled={!ready}
                 title={`Deploy ${info.label || group.label || group.key}`}
@@ -492,20 +609,25 @@ function ManualAttackHUD({
           })}
         </div>
       </div>
-      {showDetails && <div style={hud.shipModal} onClick={() => setShowDetails(false)}><div style={hud.shipModalPanel} onClick={(event) => event.stopPropagation()}>
-        <div style={{ fontSize: 16, fontWeight: 900, color: '#5C3A21' }}>Main Ship Lv.{ship.level || 1}</div>
-        <img src={shipImg} alt="Main ship" style={{ width: 150, height: 90, objectFit: 'contain' }} />
-        <div style={{ fontSize: 12, fontWeight: 800, color: '#5C3A21' }}>{fleetInfo?.remaining ?? 0} units remaining · {ship.capacity || 0} capacity</div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: 5, width: '100%' }}>{groups.map((group) => { const info = TROOP_IMG_MAP[normalizeTroopKey(group.key)] || {}; return <div key={group.key} style={{ display: 'flex', alignItems: 'center', gap: 4, background: '#fffaf0', border: '1px solid #d4c8b0', borderRadius: 6, padding: '3px 7px' }}><TroopPortrait info={info} style={{ width: 24, height: 24, objectFit: 'contain' }} fallbackStyle={{ fontSize: 8 }} /><span style={{ fontSize: 10, fontWeight: 800, color: '#5C3A21' }}>{info.label || group.label || group.key} x{group.count || 0}</span></div>; })}</div>
-        <button style={{ marginTop: 6, padding: '8px 20px', background: '#fff6dc', border: '2px solid #9f8759', borderRadius: 8, color: '#5C3A21', fontSize: 13, fontWeight: 800, cursor: 'pointer', fontFamily: 'inherit' }} onClick={() => setShowDetails(false)}>Close</button>
-      </div></div>}
-      <div style={{
+      {mobile && (
+        <MobileShipAbilityMenu {...{
+          cannonEnergy,
+          cannonMode,
+          rallyMode,
+          medkitMode,
+          freezeMode,
+          rageMode,
+          skeletonBarrelMode,
+          onCannon,
+          onRally,
+          onMedkit,
+          onFreeze,
+          onRage,
+          onSkeletonBarrel,
+        }} />
+      )}
+      {!mobile && <div style={{
         ...hud.wrapRight,
-        ...(mobile ? {
-          bottom: 'calc(env(safe-area-inset-bottom, 0px) + 8px)',
-          right: 'calc(env(safe-area-inset-right, 0px) + 8px)',
-          left: 'calc(env(safe-area-inset-left, 0px) + 8px)',
-        } : {}),
       }}><div style={{ ...hud.cannonGroup, width: '100%', ...(mobile ? { gap: 5 } : {}) }}>
         {cannonEnergy && <div style={{ ...hud.energyPill, ...(mobile ? hud.energyPillMobile : {}) }}><span style={{ ...hud.energyIcon, ...(mobile ? hud.energyIconMobile : {}) }}><EnergyBoltIcon size={mobile ? 11 : 15} /></span><span style={{ ...hud.energyValue, ...(mobile ? hud.energyValueMobile : {}) }}>{cannonEnergy.energy}</span></div>}
         <ShipAbilityRail {...{
@@ -524,7 +646,7 @@ function ManualAttackHUD({
           onRage,
           onSkeletonBarrel,
         }} />
-      </div></div>
+      </div></div>}
     </>
   );
 }
@@ -1698,6 +1820,87 @@ const hud = {
     overscrollBehaviorX: 'contain',
     touchAction: 'pan-x',
     WebkitOverflowScrolling: 'touch',
+  },
+  mobileAbilityDock: {
+    position: 'fixed',
+    right: 'calc(env(safe-area-inset-right, 0px) + 8px)',
+    bottom: 'calc(env(safe-area-inset-bottom, 0px) + 8px)',
+    width: 54,
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'stretch',
+    gap: 4,
+    zIndex: 12,
+    pointerEvents: 'all',
+  },
+  mobileDockEnergy: {
+    minWidth: 0,
+    width: 54,
+    height: 32,
+    padding: '3px 6px',
+    justifyContent: 'center',
+    gap: 4,
+    boxSizing: 'border-box',
+  },
+  mobileAbilityToggle: {
+    width: 54,
+    height: 54,
+    padding: 0,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    color: '#5C3A21',
+    background: 'linear-gradient(180deg, #fff6dc 0%, #ead9b2 100%)',
+    borderWidth: 2,
+    borderStyle: 'solid',
+    borderColor: '#9f8759',
+    borderRadius: 12,
+    boxShadow: '0 4px 10px rgba(0,0,0,0.22), inset 0 1px 0 rgba(255,255,255,0.5)',
+    outline: 'none',
+    cursor: 'pointer',
+  },
+  mobileAbilityToggleActive: {
+    borderColor: '#d64817',
+    boxShadow: '0 0 14px rgba(214,72,23,0.42), inset 0 1px 0 rgba(255,255,255,0.55)',
+  },
+  mobileAbilityToggleIcon: {
+    width: 30,
+    height: 30,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 9,
+    color: '#fff',
+    background: '#d64817',
+    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.3)',
+  },
+  mobileAbilityChevron: {
+    width: 7,
+    height: 7,
+    borderTop: '2px solid #5C3A21',
+    borderLeft: '2px solid #5C3A21',
+    transform: 'rotate(45deg) translate(1px, 1px)',
+    transformOrigin: 'center',
+  },
+  mobileAbilityPopover: {
+    position: 'absolute',
+    right: 0,
+    bottom: 'calc(100% + 8px)',
+    padding: 6,
+    background: 'linear-gradient(180deg, rgba(255,246,220,0.98) 0%, rgba(234,217,178,0.98) 100%)',
+    border: '2px solid #9f8759',
+    borderRadius: 14,
+    boxShadow: '0 10px 28px rgba(0,0,0,0.34), inset 0 1px 0 rgba(255,255,255,0.6)',
+    boxSizing: 'border-box',
+  },
+  mobileAbilityGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(2, 50px)',
+    gridAutoRows: '50px',
+    gap: 5,
+    width: 105,
+    overflow: 'visible',
   },
   cannonDisabled: {
     opacity: 0.35,

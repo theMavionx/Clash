@@ -36,7 +36,7 @@ const HORROR_SCENE: PackedScene = preload(
 	"res://Model/Characters/HorrorEvolution/horror.fbx"
 )
 const HORROR_SCRIPT: Script = preload("res://scripts/horror_evolution.gd")
-const EXPECTED_STAGE_DAMAGE: Array[int] = [68, 24, 9]
+const EXPECTED_STAGE_DAMAGE: Array[int] = [453, 160, 60]
 const EXPECTED_STAGE_COUNTS: Array[int] = [1, 2, 4]
 const REQUIRED_ANIMATIONS: Array[String] = [
 	"Idle_A",

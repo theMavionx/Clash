@@ -8,7 +8,9 @@ extends BaseTroop
 @export var projectile_color: Color = Color(0.65, 0.1, 1.0)
 @export var hit_distance: float = 0.05
 
-const POOL_SIZE: int = 6
+## At max range an orb flies for 0.64s. Three slots cover the fastest
+## boosted attack interval while avoiding six hidden meshes per mage.
+const POOL_SIZE: int = 3
 ## Squared hit threshold — avoids sqrt each projectile tick.
 const HIT_DIST_SQ: float = 0.05 * 0.05
 
@@ -165,6 +167,7 @@ func _exit_tree() -> void:
 			b.node.queue_free()
 	_pool.clear()
 	_active.clear()
+	super._exit_tree()
 
 
 ## Advances the attack timer and fires a magic orb when the timer expires.

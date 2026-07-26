@@ -402,6 +402,7 @@ func _on_lethal_damage(source: String) -> void:
 
 func _exit_tree() -> void:
 	_cleanup_windlings("owner_exit")
+	super._exit_tree()
 
 
 func _apply_body_material() -> void:

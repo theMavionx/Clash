@@ -158,6 +158,15 @@ static var _island_common_warmup_done: bool = false
 static var _island_common_warmup_node: Node = null
 static var _startup_loadout_gpu_warmup_done: bool = false
 
+
+static func is_combat_profile_ready() -> bool:
+	return (
+		_island_startup_warmup_done
+		and _combat_warmup_done
+		and not _combat_warmup_active
+		and not is_instance_valid(_island_common_warmup_node)
+	)
+
 @export_enum("home", "startup_common", "startup_loadout_gpu", "combat_idle", "combat") var mode: String = "home"
 
 var _frames_left: int = HOME_WARMUP_FRAMES

@@ -25,10 +25,22 @@ const BUILDING_STATIC_BATCHES: Dictionary = {
 	"res://Model/Town_Hall/Town Hall Level 4.glb": preload("res://generated/performance/town_hall_level_4_static_batch.res"),
 	"res://Model/Town_Hall/Town Hall Level 5.glb": preload("res://generated/performance/town_hall_level_5_static_batch.res"),
 	"res://Model/Town_Hall/Town Hall Level 6.glb": preload("res://generated/performance/town_hall_level_6_static_batch.res"),
+	"res://Model/Turret/scene.gltf": preload("res://generated/performance/turret_static_batch.res"),
+	"res://Model/Altar/Models/Stylized_Altar_web.tscn": preload("res://generated/performance/altar_static_batch.res"),
+	"res://Model/MageTower/1.fbx": preload("res://generated/performance/mage_tower_level_1_static_batch.res"),
+	"res://Model/MageTower/2.fbx": preload("res://generated/performance/mage_tower_level_2_static_batch.res"),
+	"res://Model/MageTower/3.fbx": preload("res://generated/performance/mage_tower_level_3_static_batch.res"),
+	"res://Model/Mortar/mortar_lvl1.fbx": preload("res://generated/performance/mortar_level_1_static_batch.res"),
+	"res://Model/Mortar/mortar_lvl2.fbx": preload("res://generated/performance/mortar_level_2_static_batch.res"),
+	"res://Model/Mortar/mortar_lvl3.fbx": preload("res://generated/performance/mortar_level_3_static_batch.res"),
+	"res://Model/Mortar/mortar_lvl4.fbx": preload("res://generated/performance/mortar_level_4_static_batch.res"),
+	"res://Model/Tombstone/GLB format/2.glb": preload("res://generated/performance/tombstone_level_2_static_batch.res"),
+	"res://Model/Tombstone/GLB format/3.glb": preload("res://generated/performance/tombstone_level_3_static_batch.res"),
+	"res://Model/Tombstone/GLB format/4.glb": preload("res://generated/performance/tombstone_level_4_static_batch.res"),
 }
 const DYNAMIC_NAME_PARTS: Array[String] = [
 	"anim", "armature", "skeleton", "ship", "sail", "flag", "tentacle",
-	"turret", "cannon", "barrel", "stand", "archer", "mage", "mortar", "projectile",
+	"turret", "cannon", "barrel", "archer", "crystal", "projectile",
 	"minecart",
 ]
 const ISLAND_SOURCE_PATH := "res://Model/Island/pirate_island.glb"
@@ -37,9 +49,27 @@ const ARCHER_TOWER_SOURCE_PATHS: Array[String] = [
 	"res://Model/Archer_towers/towerplus_2.fbx",
 	"res://Model/Archer_towers/3,4,5.glb",
 ]
+const EXPLICIT_STATIC_INCLUDE_NAME_PARTS: Dictionary = {
+	"res://Model/Island/pirate_island.glb": ["barrel", "chest"],
+	"res://Model/Turret/scene.gltf": ["stand"],
+}
+const RUNTIME_SINGLE_MATERIAL_SOURCES: Dictionary = {
+	"res://Model/Altar/Models/Stylized_Altar_web.tscn": true,
+	"res://Model/MageTower/1.fbx": true,
+	"res://Model/MageTower/2.fbx": true,
+	"res://Model/MageTower/3.fbx": true,
+	"res://Model/Mortar/mortar_lvl1.fbx": true,
+	"res://Model/Mortar/mortar_lvl2.fbx": true,
+	"res://Model/Mortar/mortar_lvl3.fbx": true,
+	"res://Model/Mortar/mortar_lvl4.fbx": true,
+}
 const DEFAULT_WEB_ANIMATION_HZ := 20.0
+const DENSE_TROOP_ANIMATION_HZ := 10.0
+const DENSE_TROOP_THRESHOLD := 24
+const DENSITY_REFRESH_INTERVAL_SEC := 0.5
 static var _optimized_materials: Dictionary = {}
 static var _optimized_batch_meshes: Dictionary = {}
+static var _runtime_material_batch_meshes: Dictionary = {}
 static var _active_profile: WebRenderProfile
 
 var _static_batch_signature := ""
@@ -50,6 +80,7 @@ var _static_multimesh_groups: Dictionary = {}
 var _managed_animation_players: Dictionary = {}
 var _pending_animation_players: Array[WeakRef] = []
 var _animation_target_hz := DEFAULT_WEB_ANIMATION_HZ
+var _density_refresh_remaining := 0.0
 
 @export var force_enabled: bool = false
 @export var water_path: NodePath = NodePath("../Water")
@@ -85,6 +116,10 @@ func _process(_delta: float) -> void:
 			_static_batch_refresh_pending = false
 		_refresh_static_multimeshes()
 	_sync_static_multimesh_transforms()
+	_density_refresh_remaining -= _delta
+	if _density_refresh_remaining <= 0.0:
+		_density_refresh_remaining = DENSITY_REFRESH_INTERVAL_SEC
+		_refresh_dense_troop_animation_budget()
 	_advance_budgeted_animations(_delta)
 
 
@@ -131,6 +166,8 @@ func _register_existing_animation_players() -> void:
 func _register_animation_player(player: AnimationPlayer) -> void:
 	if player == null or not is_instance_valid(player) or not player.is_inside_tree():
 		return
+	if bool(player.get_meta("clash_troop_animation_managed", false)):
+		return
 	var visual_root := _find_animation_visual_root(player)
 	if visual_root == null:
 		return
@@ -143,11 +180,38 @@ func _register_animation_player(player: AnimationPlayer) -> void:
 	player.callback_mode_process = AnimationMixer.ANIMATION_CALLBACK_MODE_PROCESS_MANUAL
 	_managed_animation_players[key] = {
 		"player_ref": weakref(player),
+		"visual_root_ref": weakref(visual_root),
 		"elapsed": 0.0,
 		"interval": interval,
+		"base_interval": interval,
 		"until_sample": phase,
 		"animation": player.current_animation,
 	}
+
+
+func _refresh_dense_troop_animation_budget() -> void:
+	var dense_troops: bool = get_tree().get_node_count_in_group("troops") > DENSE_TROOP_THRESHOLD
+	var dense_interval: float = 1.0 / DENSE_TROOP_ANIMATION_HZ
+	for key in _managed_animation_players.keys():
+		var data := _managed_animation_players[key] as Dictionary
+		var root_ref := data.get("visual_root_ref") as WeakRef
+		var visual_root := root_ref.get_ref() as Node if root_ref != null else null
+		var base_interval: float = float(data.get("base_interval", 1.0 / DEFAULT_WEB_ANIMATION_HZ))
+		data["interval"] = (
+			maxf(base_interval, dense_interval)
+			if dense_troops and _has_troop_ancestor(visual_root)
+			else base_interval
+		)
+		_managed_animation_players[key] = data
+
+
+func _has_troop_ancestor(node: Node) -> bool:
+	var current := node
+	while current != null:
+		if current.is_in_group("troops"):
+			return true
+		current = current.get_parent()
+	return false
 
 
 func _find_animation_visual_root(player: AnimationPlayer) -> Node3D:
@@ -238,13 +302,11 @@ func _apply_profile() -> void:
 
 
 static func is_enabled() -> bool:
-	return (
-		OS.has_feature("web")
-		or (
-			OS.is_debug_build()
-			and OS.get_environment("CLASH_FORCE_WEB_RENDER_PROFILE") == "1"
-		)
-	)
+	if OS.has_feature("web"):
+		return true
+	if not OS.is_debug_build():
+		return false
+	return OS.get_environment("CLASH_DISABLE_OPTIMIZED_RENDER_PROFILE") != "1"
 
 
 static func optimize_visual_for_web(root: Node) -> void:
@@ -260,19 +322,38 @@ static func apply_static_batch_for_web(root: Node, source_path: String, level: i
 	if batch_mesh == null:
 		return false
 	var animated_roots := _collect_animated_roots(root)
+	var explicit_include_name_parts: Array = EXPLICIT_STATIC_INCLUDE_NAME_PARTS.get(source_path, [])
 	var hidden_meshes := 0
 	var hidden_surfaces := 0
+	var runtime_material: Material = null
 	for raw_mesh in root.find_children("*", "MeshInstance3D", true, false):
 		var mesh_instance := raw_mesh as MeshInstance3D
-		if not _is_static_candidate(mesh_instance, animated_roots):
+		if (
+			not _matches_explicit_static_include(mesh_instance, explicit_include_name_parts, root)
+			and not _is_static_candidate(mesh_instance, animated_roots, root)
+		):
 			continue
+		if (
+			runtime_material == null
+			and RUNTIME_SINGLE_MATERIAL_SOURCES.has(source_path)
+			and batch_mesh.get_surface_count() == 1
+			and mesh_instance.mesh != null
+			and mesh_instance.mesh.get_surface_count() > 0
+		):
+			runtime_material = mesh_instance.get_surface_override_material(0)
+			if runtime_material == null:
+				runtime_material = mesh_instance.mesh.surface_get_material(0)
 		hidden_meshes += 1
 		if mesh_instance.mesh != null:
 			hidden_surfaces += mesh_instance.mesh.get_surface_count()
 		mesh_instance.visible = false
 	var batch_instance := MeshInstance3D.new()
 	batch_instance.name = "WebStaticBatch"
-	batch_instance.mesh = batch_mesh
+	batch_instance.mesh = (
+		_get_runtime_material_batch_mesh(batch_mesh, runtime_material)
+		if runtime_material != null
+		else batch_mesh
+	)
 	batch_instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	root.add_child(batch_instance)
 	root.set_meta("web_static_batch_applied", true)
@@ -298,6 +379,23 @@ static func _resolve_static_batch(source_path: String, level: int) -> ArrayMesh:
 	if BUILDING_STATIC_BATCHES.has(source_path):
 		return BUILDING_STATIC_BATCHES[source_path] as ArrayMesh
 	return null
+
+
+static func _matches_explicit_static_include(
+	mesh_instance: MeshInstance3D,
+	include_name_parts: Array,
+	model_root: Node
+) -> bool:
+	if include_name_parts.is_empty():
+		return false
+	var current: Node = mesh_instance
+	while current != null and current != model_root:
+		var lower_name := String(current.name).to_lower()
+		for raw_part in include_name_parts:
+			if lower_name.contains(str(raw_part).to_lower()):
+				return true
+		current = current.get_parent()
+	return false
 
 
 static func _collect_animated_roots(root: Node) -> Array[Node]:
@@ -327,7 +425,11 @@ static func _collect_animated_roots(root: Node) -> Array[Node]:
 	return result
 
 
-static func _is_static_candidate(mesh_instance: MeshInstance3D, animated_roots: Array[Node]) -> bool:
+static func _is_static_candidate(
+	mesh_instance: MeshInstance3D,
+	animated_roots: Array[Node],
+	model_root: Node
+) -> bool:
 	if mesh_instance == null or mesh_instance.mesh == null:
 		return false
 	if not mesh_instance.skeleton.is_empty() or _has_skeleton_ancestor(mesh_instance):
@@ -336,8 +438,11 @@ static func _is_static_candidate(mesh_instance: MeshInstance3D, animated_roots: 
 		if animated_root == mesh_instance or animated_root.is_ancestor_of(mesh_instance):
 			return false
 	var current: Node = mesh_instance
-	while current != null:
+	while current != null and current != model_root:
 		var lower_name := String(current.name).to_lower()
+		if lower_name.ends_with(".fbx") or lower_name.ends_with(".gltf") or lower_name.ends_with(".glb"):
+			current = current.get_parent()
+			continue
 		for part in DYNAMIC_NAME_PARTS:
 			if lower_name.contains(part):
 				return false
@@ -402,6 +507,50 @@ static func _get_vertex_lit_batch_mesh(source: ArrayMesh) -> ArrayMesh:
 			)
 	_optimized_batch_meshes[key] = optimized_mesh
 	return optimized_mesh
+
+
+static func _get_runtime_material_batch_mesh(
+	source: ArrayMesh,
+	runtime_material: Material
+) -> ArrayMesh:
+	if source == null or runtime_material == null:
+		return source
+	var material_signature := _material_signature(runtime_material)
+	var key := "%d:%s" % [source.get_instance_id(), material_signature]
+	if _runtime_material_batch_meshes.has(key):
+		return _runtime_material_batch_meshes[key] as ArrayMesh
+	var runtime_mesh := source.duplicate(true) as ArrayMesh
+	if runtime_mesh == null:
+		return source
+	var material_to_use := runtime_material
+	if runtime_material is BaseMaterial3D:
+		material_to_use = _get_vertex_lit_material(runtime_material as BaseMaterial3D)
+	for surface_index in range(runtime_mesh.get_surface_count()):
+		runtime_mesh.surface_set_material(surface_index, material_to_use)
+	_runtime_material_batch_meshes[key] = runtime_mesh
+	return runtime_mesh
+
+
+static func _material_signature(material: Material) -> String:
+	if material is BaseMaterial3D:
+		var base := material as BaseMaterial3D
+		var albedo_path := (
+			base.albedo_texture.resource_path
+			if base.albedo_texture != null
+			else ""
+		)
+		var emission_path := (
+			base.emission_texture.resource_path
+			if base.emission_texture != null
+			else ""
+		)
+		return "%s|%s|%s|%.3f" % [
+			albedo_path,
+			emission_path,
+			base.albedo_color.to_html(true),
+			base.emission_energy_multiplier,
+		]
+	return "instance:%d" % material.get_instance_id()
 
 
 func _refresh_static_multimeshes() -> void:

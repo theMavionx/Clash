@@ -60,6 +60,13 @@ func _troop_unit_span_at(ship_troops: Array, index: int) -> Dictionary:
 		end += 1
 	return {"start": start, "end": end}
 
+func _loaded_troop_group_key(troop_name: Variant) -> String:
+	var entry: String = str(troop_name)
+	var base: String = _troop_entry_base_name(entry)
+	if base == "DemonKing" or base == "FireDragon":
+		return "nft:%s" % entry.to_lower()
+	return "troop:%s" % base.to_lower()
+
 
 func _swap_span_for_replacement(ship_troops: Array, slot: int, replacement_name: String, capacity: int) -> Dictionary:
 	if slot < 0 or slot >= ship_troops.size():
@@ -337,6 +344,60 @@ func _remove_troop_from_ship(slot: int) -> void:
 		bridge.send_to_react("ship_updated", {
 			"ship_level": ship_level,
 			"ship_troops": updated_troops,
+			"ship_capacity": ship_level * 3,
+		})
+
+func _remove_troop_group_from_ship(slot: int) -> void:
+	var port_node: Node3D = bs.selected_building.get("node", null)
+	if not is_instance_valid(port_node) or not port_node.has_meta("has_ship"):
+		return
+	var ship_troops: Array = port_node.get_meta("ship_troops", [])
+	var selected_span: Dictionary = _troop_unit_span_at(ship_troops, slot)
+	if selected_span.is_empty():
+		return
+	var group_key: String = _loaded_troop_group_key(ship_troops[int(selected_span.start)])
+	var ship_level: int = clampi(int(port_node.get_meta("ship_level", 1)), 1, MAX_SHIP_LEVEL)
+	var sid: int = bs.selected_building.get("server_id", -1)
+	var net: Node = bs._net
+	if net and net.has_token() and sid >= 0:
+		var result: Dictionary = await net.remove_troop_group(
+			sid,
+			int(selected_span.start),
+			_ship_edit_context(port_node, ship_troops)
+		)
+		if not is_instance_valid(port_node):
+			return
+		if result.has("error"):
+			bs._show_error(str(result.error))
+		else:
+			port_node.set_meta("ship_troops", result.get("ship_troops", []))
+			if result.has("resources"):
+				bs._apply_resources_from_server(result.resources)
+	else:
+		if not bs.test_mode:
+			if bs.has_method("_block_without_server"):
+				bs._block_without_server("remove troop group")
+			return
+		var next_troops: Array = []
+		var index: int = 0
+		while index < ship_troops.size():
+			var span: Dictionary = _troop_unit_span_at(ship_troops, index)
+			if span.is_empty():
+				index += 1
+				continue
+			if _loaded_troop_group_key(ship_troops[int(span.start)]) != group_key:
+				for entry_index in range(int(span.start), int(span.end)):
+					next_troops.append(ship_troops[entry_index])
+			index = int(span.end)
+		port_node.set_meta("ship_troops", next_troops)
+	if not is_instance_valid(port_node):
+		return
+	bs._refresh_port_panel()
+	var bridge: Node = bs._bridge
+	if bridge:
+		bridge.send_to_react("ship_updated", {
+			"ship_level": ship_level,
+			"ship_troops": port_node.get_meta("ship_troops", []),
 			"ship_capacity": ship_level * 3,
 		})
 

@@ -255,6 +255,65 @@ function troopSlotCost(name) {
   return costs[troopBaseName(name)] || 1;
 }
 
+const TROOP_INFO = {
+  Knight: {
+    role: 'Frontline fighter',
+    description: 'A reliable melee unit with balanced health and damage. Use Knights to protect ranged troops.',
+  },
+  Mage: {
+    role: 'Ranged damage',
+    description: 'A powerful ranged spellcaster. Mages deal strong damage but work best behind tougher frontline units.',
+  },
+  Archer: {
+    role: 'Long-range attacker',
+    description: 'A precise ranged unit that attacks from a safe distance and stays behind your frontline.',
+  },
+  PeaShooter: {
+    role: 'Sustained ranged damage',
+    description: 'Fires a steady stream of green projectiles from range. Strong when protected by durable troops.',
+  },
+  Mimic: {
+    role: 'Trap runner',
+    description: 'Rolls past defensive targeting and activates traps without taking trap damage until it stops rolling.',
+  },
+  Necromancer: {
+    role: 'Summoner',
+    description: 'Fires green magic and summons three skeletons. A new group rises after the previous skeletons are defeated.',
+  },
+  WindMage: {
+    role: 'Lane control',
+    description: 'Sweeps a long, widening lane with wind and summons temporary Windlings inside the attack path.',
+  },
+  Horror: {
+    role: 'Swarm evolution',
+    description: 'Splits into two Creepers when defeated. Each Creeper can split again into two smaller Lurkers.',
+  },
+  MechanicalDragon: {
+    role: 'Chain siege',
+    description: 'A heavy flying attacker whose lightning chains from its first target to nearby buildings.',
+  },
+  IceGolem: {
+    role: 'Defense breaker',
+    description: 'Targets defensive buildings first. When defeated, it freezes nearby defenses for 7 seconds.',
+  },
+  DemonKing: {
+    role: 'NFT champion',
+    description: 'A durable NFT-backed ground champion with powerful melee damage.',
+  },
+  FireDragon: {
+    role: 'NFT flying siege',
+    description: 'An NFT-backed flying attacker that breathes sustained fire over enemy buildings.',
+  },
+  Ranger: {
+    role: 'Long-range attacker',
+    description: 'A ranged specialist that attacks enemy buildings from a safe distance.',
+  },
+  Barbarian: {
+    role: 'Melee fighter',
+    description: 'A close-range attacker built for straightforward frontline pressure.',
+  },
+};
+
 function troopReplacementEntries(name) {
   const entries = [name];
   for (let i = 1; i < troopSlotCost(name); i += 1) entries.push(SLOT_FILLER);
@@ -588,6 +647,9 @@ function BuildingInfoPanel({ onOpenTroops }) {
   
   const [view, setView] = useState('ACTIONS');
   const [swapSlot, setSwapSlot] = useState(null);
+  const [troopAction, setTroopAction] = useState(null);
+  const [troopActionPending, setTroopActionPending] = useState(null);
+  const [troopInfo, setTroopInfo] = useState(null);
   const [localTroops, setLocalTroops] = useState(null);
   const [demonKingNfts, setDemonKingNfts] = useState([]);
   const [demonKingNftLoading, setDemonKingNftLoading] = useState(false);
@@ -624,6 +686,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
     setFlagFile(null);
     setFlagPreview('');
     setFlagStatus('');
+    setTroopInfo(null);
   }, [building?.id, building?.server_id, building?.open_load_troops]);
 
   useEffect(() => {
@@ -663,7 +726,14 @@ function BuildingInfoPanel({ onOpenTroops }) {
   const serverTroopsKey = `${building?.server_id ?? building?.id ?? ''}:${building?.ship_troops ? building.ship_troops.join('|') : ''}:${building?.ship_update_nonce || 0}`;
   useEffect(() => {
     setLocalTroops(null);
+    setTroopActionPending(null);
   }, [serverTroopsKey]);
+
+  useEffect(() => {
+    if (!troopActionPending) return undefined;
+    const timeout = window.setTimeout(() => setTroopActionPending(null), 10000);
+    return () => window.clearTimeout(timeout);
+  }, [troopActionPending]);
 
   useEffect(() => {
     if (view !== 'LOAD_TROOPS' || !hasDemonKingWallet) {
@@ -1595,7 +1665,9 @@ function BuildingInfoPanel({ onOpenTroops }) {
     };
     const loadedGroups = loadedTroopGroups(shipTroops);
     const selectedSpan = swapSlot !== null ? troopUnitSpanAt(shipTroops, swapSlot) : null;
-    const selectedGroup = loadedTroopGroupForSlot(loadedGroups, swapSlot);
+    const selectedGroup = troopAction
+      ? loadedGroups.find((group) => group.key === troopAction.key) || null
+      : loadedTroopGroupForSlot(loadedGroups, swapSlot);
     const freeSlots = Math.max(0, capacity - shipTroops.length);
     const nftKeysFromTroops = (troops, base, skipSpan = null) => {
       const keys = [];
@@ -1644,6 +1716,30 @@ function BuildingInfoPanel({ onOpenTroops }) {
       }));
     };
 
+    const openTroopInfo = (event, details) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setTroopInfo(details);
+    };
+
+    const renderTroopInfoButton = (details) => (
+      <span
+        role="button"
+        tabIndex={0}
+        aria-label={`View ${troopDisplayName(details.name)} details`}
+        title="Unit details"
+        style={{...LT.troopInfoButton, ...(isMobile ? LT.troopInfoButtonMobile : null)}}
+        onPointerDown={(event) => event.stopPropagation()}
+        onClick={(event) => openTroopInfo(event, details)}
+        onKeyDown={(event) => {
+          if (event.key !== 'Enter' && event.key !== ' ') return;
+          openTroopInfo(event, details);
+        }}
+      >
+        i
+      </span>
+    );
+
     const handleLoadTroop = (name) => {
       const base = troopBaseName(name);
       const slotCost = troopSlotCost(name);
@@ -1657,13 +1753,16 @@ function BuildingInfoPanel({ onOpenTroops }) {
           setLocalTroops(nextTroops);
           sendToGodot('load_troop', { troop_name: name, nft_owner: nftBackedTroopConfig(base) ? nftOwnerForEntry(name) : undefined });
           setSwapSlot(null);
+          setTroopAction(null);
           return;
         }
         const updated = [...shipTroops];
         updated.splice(placement.start, placement.end - placement.start, ...replacement);
         setLocalTroops(updated);
         sendToGodot('swap_troop', { slot: swapSlot, troop_name: name, nft_owner: nftBackedTroopConfig(base) ? nftOwnerForEntry(name) : undefined });
-        setSwapSlot(null);
+        const replacementGroup = loadedTroopGroupForSlot(loadedTroopGroups(updated), placement.start);
+        setSwapSlot(replacementGroup?.start ?? null);
+        setTroopAction(replacementGroup ? { key: replacementGroup.key, base: replacementGroup.base } : null);
       } else {
         const nextTroops = [...shipTroops, ...replacement];
         setLocalTroops(nextTroops);
@@ -1686,15 +1785,15 @@ function BuildingInfoPanel({ onOpenTroops }) {
         <>
           {loading && (
             <button type="button" style={{...LT.troopCard, ...LT.troopCardMuted, width: cardW, flexShrink: isMobile ? 1 : 0}}>
-              <div style={{...LT.demonIdBadge, ...(isMobile ? LT.demonIdBadgeMobile : null), fontSize: isMobile ? 9 : 11}}>
+              {renderTroopInfoButton({ name: base, level: 1, status: 'Syncing NFT ownership' })}
+              <div style={{...LT.demonIdBadge, ...(isMobile ? LT.demonIdBadgeMobile : null), ...LT.demonIdBadgeWithInfo, fontSize: isMobile ? 9 : 11}}>
                 SYNC
               </div>
               <div style={{...LT.troopLvlBadge, fontSize: isMobile ? 12 : 16}}>NFT</div>
               <div style={LT.troopImgWrap}>
                 <img src={image} alt={cfg.label} style={{ ...LT.troopImg, ...LT.troopImgMuted, transform: `scale(${CARD_TROOP_STYLE_MAP[base]?.scale || 1}) translateY(${CARD_TROOP_STYLE_MAP[base]?.offsetY || '0%'})` }} />
               </div>
-              <div style={{...LT.bottomOverlay, height: isMobile ? 30 : 38}}>
-                <span style={{...LT.bottomLabel, fontSize: isMobile ? 7 : 9}}>{cfg.label.toUpperCase()}</span>
+              <div style={{...LT.bottomOverlay, height: isMobile ? 26 : 30}}>
                 <span style={{...LT.costText, fontSize: isMobile ? 9 : 11}}>SYNCING</span>
               </div>
             </button>
@@ -1716,13 +1815,19 @@ function BuildingInfoPanel({ onOpenTroops }) {
               <button
                 key={entry}
                 type="button"
-                disabled={disabled}
+                aria-disabled={disabled}
                 style={{...LT.troopCard, ...rarityStyle, width: cardW, flexShrink: isMobile ? 1 : 0, ...(disabled ? { opacity: 0.45, cursor: 'not-allowed' } : null)}}
                 onClick={() => {
                   if (!disabled) handleLoadTroop(entry);
                 }}
               >
-                <div style={{...LT.demonIdBadge, ...(isMobile ? LT.demonIdBadgeMobile : null), fontSize: isMobile ? 9 : 11}}>
+                {renderTroopInfoButton({
+                  name: entry,
+                  level: Number(token.level || 1),
+                  tokenLabel,
+                  rarity: usesRarity ? nftRarityLabel(token.rarity, 1) : '',
+                })}
+                <div style={{...LT.demonIdBadge, ...(isMobile ? LT.demonIdBadgeMobile : null), ...LT.demonIdBadgeWithInfo, fontSize: isMobile ? 9 : 11}}>
                   {tokenLabel}
                 </div>
                 <div style={{...LT.demonUseBadge, fontSize: isMobile ? 9 : 10}}>
@@ -1734,8 +1839,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
                 <div style={LT.troopImgWrap}>
                   <img src={image} alt={cfg.label} style={{ ...LT.troopImg, transform: `scale(${CARD_TROOP_STYLE_MAP[base]?.scale || 1}) translateY(${CARD_TROOP_STYLE_MAP[base]?.offsetY || '0%'})` }} />
                 </div>
-                <div style={{...LT.bottomOverlay, height: isMobile ? 30 : 38}}>
-                  <span style={{...LT.bottomLabel, fontSize: isMobile ? 7 : 9}}>{cfg.shortLabel} {tokenLabel}</span>
+                <div style={{...LT.bottomOverlay, height: isMobile ? 26 : 30}}>
                   <span style={{...LT.costText, fontSize: isMobile ? 10 : 12}}>
                     {troopSlotCost(base)} SLOTS
                   </span>
@@ -1749,15 +1853,19 @@ function BuildingInfoPanel({ onOpenTroops }) {
               style={{...LT.troopCard, ...LT.troopCardMuted, width: cardW, flexShrink: isMobile ? 1 : 0}}
               onClick={() => openNftShop(cfg.collection)}
             >
-              <div style={{...LT.demonIdBadge, ...(isMobile ? LT.demonIdBadgeMobile : null), fontSize: isMobile ? 9 : 11}}>
+              {renderTroopInfoButton({
+                name: base,
+                level: 1,
+                status: hasDemonKingWallet ? (error || (tokens.length ? 'All owned NFTs are loaded' : 'NFT required')) : 'Connect a supported wallet',
+              })}
+              <div style={{...LT.demonIdBadge, ...(isMobile ? LT.demonIdBadgeMobile : null), ...LT.demonIdBadgeWithInfo, fontSize: isMobile ? 9 : 11}}>
                 {useRatio}
               </div>
               <div style={{...LT.troopLvlBadge, fontSize: isMobile ? 12 : 16}}>NFT</div>
               <div style={LT.troopImgWrap}>
                 <img src={image} alt={cfg.label} style={{ ...LT.troopImg, ...LT.troopImgMuted, transform: `scale(${CARD_TROOP_STYLE_MAP[base]?.scale || 1}) translateY(${CARD_TROOP_STYLE_MAP[base]?.offsetY || '0%'})` }} />
               </div>
-              <div style={{...LT.bottomOverlay, height: isMobile ? 30 : 38}}>
-                <span style={{...LT.bottomLabel, fontSize: isMobile ? 7 : 9}}>{cfg.label.toUpperCase()}</span>
+              <div style={{...LT.bottomOverlay, height: isMobile ? 26 : 30}}>
                 <span style={{...LT.costText, fontSize: isMobile ? 9 : 11}}>
                   {hasDemonKingWallet ? (error || (tokens.length ? 'ALL USED' : 'NEED NFT')) : 'CONNECT'}
                 </span>
@@ -1769,13 +1877,30 @@ function BuildingInfoPanel({ onOpenTroops }) {
     };
 
     const handleRemoveTroop = () => {
-      if (swapSlot === null) return;
-      const span = troopUnitSpanAt(shipTroops, swapSlot);
+      if (!selectedGroup || troopActionPending) return;
+      const span = selectedSpan
+        && selectedGroup.spans.some((item) => item.start === selectedSpan.start)
+        ? selectedSpan
+        : selectedGroup.spans[0];
       if (!span) return;
       const updated = [...shipTroops];
       updated.splice(span.start, span.end - span.start);
       setLocalTroops(updated);
+      setTroopActionPending('one');
       sendToGodot('remove_troop', { slot: span.start });
+      const remainingGroup = loadedTroopGroups(updated).find((group) => group.key === selectedGroup.key);
+      setSwapSlot(remainingGroup?.start ?? null);
+    };
+
+    const handleRemoveTroopGroup = () => {
+      if (!selectedGroup || troopActionPending) return;
+      const updated = [...shipTroops];
+      [...selectedGroup.spans]
+        .sort((a, b) => b.start - a.start)
+        .forEach((span) => updated.splice(span.start, span.end - span.start));
+      setLocalTroops(updated);
+      setTroopActionPending('all');
+      sendToGodot('remove_troop_group', { slot: selectedGroup.start });
       setSwapSlot(null);
     };
 
@@ -1784,7 +1909,15 @@ function BuildingInfoPanel({ onOpenTroops }) {
       return !!troopSwapPlacement(shipTroops, swapSlot, name, capacity);
     };
 
-    const handleClose = () => { setSwapSlot(null); setView('ACTIONS'); };
+    const closeTroopAction = () => {
+      setSwapSlot(null);
+      setTroopAction(null);
+      setTroopActionPending(null);
+    };
+    const handleClose = () => {
+      closeTroopAction();
+      setView('ACTIONS');
+    };
 
     const slotW = isMobile ? 52 : (capacity > 6 ? 58 : 78);
     const slotH = isMobile ? 66 : (capacity > 6 ? 74 : 100);
@@ -1793,8 +1926,18 @@ function BuildingInfoPanel({ onOpenTroops }) {
       justifyContent: 'center',
       alignContent: 'center',
     } : null;
+    const troopInfoBase = troopInfo ? troopBaseName(troopInfo.name) : '';
+    const troopInfoCopy = troopInfoBase
+      ? (TROOP_INFO[troopInfoBase] || {
+          role: 'Combat unit',
+          description: 'Deploy this unit from the main ship during an attack.',
+        })
+      : null;
+    const troopInfoNft = troopInfoBase ? nftBackedTroopConfig(troopInfoBase) : null;
+    const troopInfoSlots = troopInfoBase ? troopSlotCost(troopInfoBase) : 0;
+    const troopInfoImage = troopInfoBase ? (troopInfoNft?.image || UNIT_IMAGES[troopInfoBase]) : null;
     return (
-      <div style={{...LT.overlay, ...(isMobile ? { alignItems: 'stretch' } : {})}} onClick={handleClose}>
+      <div style={{...LT.overlay, ...(isMobile ? { alignItems: 'stretch' } : {})}}>
         <div style={{...LT.panel, ...(isMobile ? { width: '100vw', maxWidth: '100vw', height: '100%', maxHeight: 'none', borderRadius: 0 } : {})}} onClick={e => e.stopPropagation()}>
           {/* Header */}
           <div style={{...LT.header, height: isMobile ? 44 : 54}}>
@@ -1823,7 +1966,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
             {loadedGroups.map((group) => {
               const t = group.entry;
               const base = group.base;
-              const isSwapping = !!selectedGroup && selectedGroup.key === group.key;
+              const isSwapping = troopAction?.key === group.key;
               const nftCfg = nftBackedTroopConfig(base);
               const nftTokens = base === 'FireDragon' ? dragonNfts : demonKingNfts;
               const imgSrc = nftCfg?.image || UNIT_IMAGES[base];
@@ -1834,8 +1977,17 @@ function BuildingInfoPanel({ onOpenTroops }) {
                 <div
                   key={group.key}
                   style={{ ...LT.loadedSlot, width: slotW, height: slotH, ...(isSwapping ? LT.loadedSlotActive : {}) }}
-                  onClick={() => setSwapSlot(isSwapping ? null : group.start)}
+                  onClick={() => {
+                    setSwapSlot(group.start);
+                    setTroopAction({ key: group.key, base: group.base });
+                  }}
                 >
+                  {renderTroopInfoButton({
+                    name: t,
+                    level: getTroopLvl(base),
+                    tokenLabel: nftTokenLabel,
+                    status: `${group.count} loaded`,
+                  })}
                   <div style={{ ...LT.troopImgWrap, paddingBottom: 0 }}>
                     {imgSrc && (
                       <div key={`${t}-${group.count}-${group.slots}`} style={{ animation: 'swapFlash 0.35s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards', width: '100%', height: '100%', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
@@ -1851,18 +2003,13 @@ function BuildingInfoPanel({ onOpenTroops }) {
                     )}
                   </div>
                   {nftTokenLabel && (
-                    <div style={{...LT.demonIdBadge, ...(isMobile ? LT.demonIdBadgeMobile : null), fontSize: isMobile ? 11 : 9}}>
+                    <div style={{...LT.demonIdBadge, ...(isMobile ? LT.demonIdBadgeMobile : null), ...LT.demonIdBadgeWithInfo, fontSize: isMobile ? 11 : 9}}>
                       {nftTokenLabel}
                     </div>
                   )}
                   {group.count > 1 && (
                     <div style={{...LT.loadedCountBadge, fontSize: isMobile ? 11 : 12}}>
                       x{group.count}
-                    </div>
-                  )}
-                  {group.slots > group.count && (
-                    <div style={{...LT.loadedSlotUseBadge, fontSize: isMobile ? 8 : 9}}>
-                      {group.slots} slots
                     </div>
                   )}
                   {isSwapping && <div style={LT.swapBadge}>SWAP</div>}
@@ -1878,7 +2025,10 @@ function BuildingInfoPanel({ onOpenTroops }) {
                 ...(freeSlots <= 0 ? LT.freeSlotSummaryFull : null),
               }}
               onClick={() => {
-                if (freeSlots > 0) setSwapSlot(shipTroops.length);
+                if (freeSlots > 0) {
+                  setTroopAction(null);
+                  setSwapSlot(shipTroops.length);
+                }
               }}
             >
               <span style={{...LT.freeSlotNumber, fontSize: isMobile ? 20 : 24}}>{freeSlots}</span>
@@ -1888,18 +2038,28 @@ function BuildingInfoPanel({ onOpenTroops }) {
             </div>
           </div>
 
-          {swapSlot !== null && (
-            <div style={{...LT.swapActionBar, ...(isMobile ? { flexDirection: 'column', gap: 6, padding: '8px 10px' } : {})}}>
+          {(troopAction || swapSlot !== null) && (
+            <div style={{...LT.swapActionBar, ...(isMobile ? { gap: 6, padding: '7px 8px', flexWrap: 'wrap' } : {})}}>
               <div style={{...LT.swapHint, fontSize: isMobile ? 12 : 14}}>
                 {selectedGroup
                   ? `${troopDisplayName(selectedGroup.base)}${selectedGroup.count > 1 ? ` x${selectedGroup.count}` : ''} selected`
-                  : selectedSpan ? `Slot ${selectedSpan.start + 1} selected` : `Select a troop below for slot ${swapSlot + 1}`}
+                  : troopAction
+                    ? `${troopDisplayName(troopAction.base)} is no longer loaded`
+                    : selectedSpan ? `Slot ${selectedSpan.start + 1} selected` : `Select a troop below for slot ${swapSlot + 1}`}
               </div>
-              {selectedSpan && (
-                <button type="button" style={LT.removeTroopBtn} onClick={handleRemoveTroop}>
-                  REMOVE
+              {troopAction && (
+                <button type="button" style={{...LT.removeTroopBtn, ...(selectedGroup && !troopActionPending ? null : LT.actionBtnDisabled)}} disabled={!selectedGroup || !!troopActionPending} onClick={handleRemoveTroop}>
+                  {troopActionPending === 'one' ? 'REMOVING...' : 'REMOVE'}
                 </button>
               )}
+              {troopAction && (
+                <button type="button" style={{...LT.removeAllTroopsBtn, ...(selectedGroup && !troopActionPending ? null : LT.actionBtnDisabled)}} disabled={!selectedGroup || !!troopActionPending} onClick={handleRemoveTroopGroup}>
+                  {troopActionPending === 'all' ? 'REMOVING...' : 'REMOVE ALL'}
+                </button>
+              )}
+              <button type="button" title="Close troop actions" aria-label="Close troop actions" style={LT.troopActionCloseBtn} onClick={closeTroopAction}>
+                X
+              </button>
             </div>
           )}
 
@@ -1916,22 +2076,8 @@ function BuildingInfoPanel({ onOpenTroops }) {
               return (
                 <button
                   key={name}
-                  disabled={!unlock.unlocked}
-                  title={!unlock.unlocked
-                    ? `Town Hall Lv ${unlock.required} required`
-                    : name === 'Mimic'
-                      ? 'Trap Runner: defenses ignore it while rolling; traps trigger without damaging it.'
-                      : name === 'Necromancer'
-                        ? 'Grave Caller: ranged green magic and up to 3 renewable skeleton summons. Uses 15 ship slots.'
-                      : name === 'Horror'
-                        ? 'Brood Evolution: splits 1 into 2 Creepers, then 4 Lurkers. Uses 20 ship slots.'
-                      : name === 'MechanicalDragon'
-                        ? 'Chain Siege: lightning jumps to 2 nearby buildings. Heavy flying unit; uses 4 ship slots.'
-                      : name === 'IceGolem'
-                          ? 'Frozen Vanguard: attacks defenses first and freezes nearby defenses for 7 seconds on death. Uses 10 ship slots.'
-                        : name === 'WindMage'
-                          ? 'Wind Corridor: sweeps a long widening lane and summons temporary Windlings. Uses 15 ship slots.'
-                        : undefined}
+                  aria-disabled={!unlock.unlocked}
+                  title={!unlock.unlocked ? `Town Hall Lv ${unlock.required} required` : undefined}
                   style={{...LT.troopCard, width: cardW, flexShrink: isMobile ? 1 : 0, ...(!unlock.unlocked ? { opacity: 0.5, cursor: 'not-allowed' } : null)}}
                   onClick={() => {
                     if (!unlock.unlocked || !canPlaceTroop(name)) {
@@ -1941,14 +2087,19 @@ function BuildingInfoPanel({ onOpenTroops }) {
                     }
                   }}
                 >
+                  {renderTroopInfoButton({
+                    name,
+                    level: lvl,
+                    requiredTownHall: unlock.required,
+                    unlocked: unlock.unlocked,
+                  })}
                   <div style={{...LT.troopLvlBadge, fontSize: isMobile ? 12 : 16}}>Lvl {lvl}</div>
                   <div style={LT.troopImgWrap}>
                     {UNIT_IMAGES[name] && (
                       <img src={UNIT_IMAGES[name]} alt={name} style={{ ...LT.troopImg, transform: `scale(${CARD_TROOP_STYLE_MAP[name]?.scale || 1}) translateY(${CARD_TROOP_STYLE_MAP[name]?.offsetY || '0%'})` }} />
                     )}
                   </div>
-                  <div style={{...LT.bottomOverlay, height: isMobile ? 28 : 34}}>
-                    <span style={{...LT.bottomLabel, fontSize: isMobile ? 8 : 10}}>{troopDisplayName(name).toUpperCase()}</span>
+                  <div style={{...LT.bottomOverlay, height: isMobile ? 24 : 28}}>
                     <span style={{...LT.costText, fontSize: isMobile ? 11 : 13}}>
                       {unlock.unlocked
                         ? `${occupiedSlots} ${occupiedSlots === 1 ? 'SLOT' : 'SLOTS'}`
@@ -1962,15 +2113,15 @@ function BuildingInfoPanel({ onOpenTroops }) {
             <div style={{...LT.demonKingRow, gap: isMobile ? 6 : 10}}>
             {demonKingNftLoading && (
               <button type="button" style={{...LT.troopCard, ...LT.troopCardMuted, width: cardW, flexShrink: isMobile ? 1 : 0}}>
-                <div style={{...LT.demonIdBadge, ...(isMobile ? LT.demonIdBadgeMobile : null), fontSize: isMobile ? 9 : 11}}>
+                {renderTroopInfoButton({ name: 'DemonKing', level: 1, status: 'Syncing NFT ownership' })}
+                <div style={{...LT.demonIdBadge, ...(isMobile ? LT.demonIdBadgeMobile : null), ...LT.demonIdBadgeWithInfo, fontSize: isMobile ? 9 : 11}}>
                   SYNC
                 </div>
                 <div style={{...LT.troopLvlBadge, fontSize: isMobile ? 12 : 16}}>NFT</div>
                   <div style={LT.troopImgWrap}>
                   <img src={demonKingImg} alt="Demon King" style={{ ...LT.troopImg, ...LT.troopImgMuted, transform: `scale(${CARD_TROOP_STYLE_MAP.DemonKing.scale}) translateY(${CARD_TROOP_STYLE_MAP.DemonKing.offsetY})` }} />
                 </div>
-                <div style={{...LT.bottomOverlay, height: isMobile ? 30 : 38}}>
-                  <span style={{...LT.bottomLabel, fontSize: isMobile ? 7 : 9}}>DEMON KING</span>
+                <div style={{...LT.bottomOverlay, height: isMobile ? 26 : 30}}>
                   <span style={{...LT.costText, fontSize: isMobile ? 9 : 11}}>SYNCING</span>
                 </div>
               </button>
@@ -1989,13 +2140,19 @@ function BuildingInfoPanel({ onOpenTroops }) {
                 <button
                   key={entry}
                   type="button"
-                  disabled={disabled}
+                  aria-disabled={disabled}
                   style={{...LT.troopCard, ...rarityStyle, width: cardW, flexShrink: isMobile ? 1 : 0, ...(disabled ? { opacity: 0.45, cursor: 'not-allowed' } : null)}}
                   onClick={() => {
                     if (!disabled) handleLoadTroop(entry);
                   }}
                 >
-                  <div style={{...LT.demonIdBadge, ...(isMobile ? LT.demonIdBadgeMobile : null), fontSize: isMobile ? 9 : 11}}>
+                  {renderTroopInfoButton({
+                    name: entry,
+                    level: Number(token.level || 1),
+                    tokenLabel: demonTokenLabel,
+                    rarity: nftRarityLabel(token.rarity, 1),
+                  })}
+                  <div style={{...LT.demonIdBadge, ...(isMobile ? LT.demonIdBadgeMobile : null), ...LT.demonIdBadgeWithInfo, fontSize: isMobile ? 9 : 11}}>
                     {demonTokenLabel}
                   </div>
                   <div style={{...LT.demonUseBadge, fontSize: isMobile ? 9 : 10}}>
@@ -2005,8 +2162,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
                   <div style={LT.troopImgWrap}>
                     <img src={demonKingImg} alt="Demon King" style={{ ...LT.troopImg, transform: `scale(${CARD_TROOP_STYLE_MAP.DemonKing.scale}) translateY(${CARD_TROOP_STYLE_MAP.DemonKing.offsetY})` }} />
                   </div>
-                  <div style={{...LT.bottomOverlay, height: isMobile ? 30 : 38}}>
-                    <span style={{...LT.bottomLabel, fontSize: isMobile ? 7 : 9}}>KING {demonTokenLabel}</span>
+                  <div style={{...LT.bottomOverlay, height: isMobile ? 26 : 30}}>
                     <span style={{...LT.costText, fontSize: isMobile ? 10 : 12}}>
                       {troopSlotCost(entry)} SLOTS
                     </span>
@@ -2020,15 +2176,21 @@ function BuildingInfoPanel({ onOpenTroops }) {
                 style={{...LT.troopCard, ...LT.troopCardMuted, width: cardW, flexShrink: isMobile ? 1 : 0}}
                 onClick={openNftShop}
               >
-                <div style={{...LT.demonIdBadge, ...(isMobile ? LT.demonIdBadgeMobile : null), fontSize: isMobile ? 9 : 11}}>
+                {renderTroopInfoButton({
+                  name: 'DemonKing',
+                  level: 1,
+                  status: hasDemonKingWallet
+                    ? (demonKingNftError || (demonKingNfts.length ? 'All owned NFTs are loaded' : 'NFT required'))
+                    : 'Connect a supported wallet',
+                })}
+                <div style={{...LT.demonIdBadge, ...(isMobile ? LT.demonIdBadgeMobile : null), ...LT.demonIdBadgeWithInfo, fontSize: isMobile ? 9 : 11}}>
                   {demonKingUseRatio}
                 </div>
                 <div style={{...LT.troopLvlBadge, fontSize: isMobile ? 12 : 16}}>NFT</div>
                 <div style={LT.troopImgWrap}>
                   <img src={demonKingImg} alt="Demon King" style={{ ...LT.troopImg, ...LT.troopImgMuted, transform: `scale(${CARD_TROOP_STYLE_MAP.DemonKing.scale}) translateY(${CARD_TROOP_STYLE_MAP.DemonKing.offsetY})` }} />
                 </div>
-                <div style={{...LT.bottomOverlay, height: isMobile ? 30 : 38}}>
-                  <span style={{...LT.bottomLabel, fontSize: isMobile ? 7 : 9}}>DEMON KING</span>
+                <div style={{...LT.bottomOverlay, height: isMobile ? 26 : 30}}>
                   <span style={{...LT.costText, fontSize: isMobile ? 9 : 11}}>
                     {hasDemonKingWallet ? (demonKingNftError || (demonKingNfts.length ? 'ALL USED' : 'NEED NFT')) : 'CONNECT'}
                   </span>
@@ -2045,6 +2207,76 @@ function BuildingInfoPanel({ onOpenTroops }) {
             })}
             </div>
           </div>
+          {troopInfo && troopInfoCopy && (
+            <div style={LT.troopInfoBackdrop} onClick={() => setTroopInfo(null)}>
+              <section
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="troop-info-title"
+                style={{...LT.troopInfoDialog, ...(isMobile ? LT.troopInfoDialogMobile : null)}}
+                onClick={(event) => event.stopPropagation()}
+              >
+                <button
+                  type="button"
+                  aria-label="Close unit details"
+                  title="Close"
+                  style={LT.troopInfoCloseButton}
+                  onClick={() => setTroopInfo(null)}
+                >
+                  X
+                </button>
+                <div style={LT.troopInfoHeader}>
+                  <div style={LT.troopInfoPortrait}>
+                    {troopInfoImage && (
+                      <img
+                        src={troopInfoImage}
+                        alt=""
+                        style={{
+                          ...LT.troopInfoPortraitImage,
+                          transform: `scale(${CARD_TROOP_STYLE_MAP[troopInfoBase]?.scale || 1}) translateY(${CARD_TROOP_STYLE_MAP[troopInfoBase]?.offsetY || '0%'})`,
+                        }}
+                      />
+                    )}
+                  </div>
+                  <div style={LT.troopInfoHeading}>
+                    <h3 id="troop-info-title" style={LT.troopInfoTitle}>{troopDisplayName(troopInfoBase)}</h3>
+                    <div style={LT.troopInfoRole}>{troopInfoCopy.role}</div>
+                    {(troopInfo.tokenLabel || troopInfo.rarity) && (
+                      <div style={LT.troopInfoToken}>
+                        {[troopInfo.tokenLabel, troopInfo.rarity].filter(Boolean).join(' - ')}
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <p style={LT.troopInfoDescription}>{troopInfoCopy.description}</p>
+                <div style={LT.troopInfoStats}>
+                  <div style={LT.troopInfoStat}>
+                    <span style={LT.troopInfoStatLabel}>LEVEL</span>
+                    <strong style={LT.troopInfoStatValue}>{Math.max(1, Number(troopInfo.level || 1))}</strong>
+                  </div>
+                  <div style={LT.troopInfoStat}>
+                    <span style={LT.troopInfoStatLabel}>SHIP SPACE</span>
+                    <strong style={LT.troopInfoStatValue}>{troopInfoSlots}</strong>
+                  </div>
+                  <div style={LT.troopInfoStat}>
+                    <span style={LT.troopInfoStatLabel}>RECRUITMENT</span>
+                    <strong style={LT.troopInfoStatValue}>
+                      {troopInfoNft ? 'Owned NFT' : `${troopInfoSlots * 100} gold`}
+                    </strong>
+                  </div>
+                  <div style={LT.troopInfoStat}>
+                    <span style={LT.troopInfoStatLabel}>UNLOCK</span>
+                    <strong style={LT.troopInfoStatValue}>
+                      {troopInfoNft
+                        ? 'NFT'
+                        : `Town Hall ${Math.max(1, Number(troopInfo.requiredTownHall || troopUnlock(troopInfoBase).required))}`}
+                    </strong>
+                  </div>
+                </div>
+                {troopInfo.status && <div style={LT.troopInfoStatus}>{troopInfo.status}</div>}
+              </section>
+            </div>
+          )}
         </div>
       </div>
     );
@@ -3063,7 +3295,7 @@ const LT = {
     border: '4px solid #377d9f',
     boxShadow: '0 20px 60px rgba(0,0,0,0.8), inset 0 0 0 4px #ebdaba',
     display: 'flex', flexDirection: 'column',
-    overflow: 'hidden', fontFamily: '"Inter","Segoe UI",sans-serif',
+    overflow: 'hidden', position: 'relative', fontFamily: '"Inter","Segoe UI",sans-serif',
   },
   header: {
     display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative',
@@ -3221,6 +3453,35 @@ const LT = {
     fontSize: 16, fontStyle: 'italic', fontWeight: 900, color: '#fff', 
     textShadow: '0 2px 3px rgba(0,0,0,0.9), 0 -1px 2px rgba(0,0,0,1), 1px 0 2px rgba(0,0,0,1), -1px 0 2px rgba(0,0,0,1)',
   },
+  troopInfoButton: {
+    position: 'absolute',
+    top: 6,
+    left: 6,
+    zIndex: 24,
+    width: 23,
+    height: 23,
+    borderRadius: '50%',
+    border: '2px solid rgba(72, 49, 28, 0.75)',
+    background: 'rgba(255, 248, 225, 0.94)',
+    color: '#5d4027',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    fontFamily: 'Georgia, serif',
+    fontSize: 15,
+    fontStyle: 'italic',
+    fontWeight: 900,
+    lineHeight: 1,
+    cursor: 'pointer',
+    boxShadow: '0 2px 4px rgba(0,0,0,0.32)',
+  },
+  troopInfoButtonMobile: {
+    top: 4,
+    left: 4,
+    width: 21,
+    height: 21,
+    fontSize: 13,
+  },
   demonIdBadge: {
     position: 'absolute', top: 6, left: 6, zIndex: 12,
     maxWidth: '58%', padding: '3px 5px', borderRadius: 5,
@@ -3229,6 +3490,10 @@ const LT = {
     fontWeight: 900, lineHeight: 1, whiteSpace: 'nowrap',
     overflow: 'hidden', textOverflow: 'ellipsis',
     textShadow: '0 1px 2px rgba(0,0,0,0.9)',
+  },
+  demonIdBadgeWithInfo: {
+    left: 34,
+    maxWidth: '42%',
   },
   demonIdBadgeMobile: {
     top: 4,
@@ -3266,14 +3531,149 @@ const LT = {
   bottomOverlay: {
     position: 'absolute', bottom: 0, left: 0, right: 0,
     height: 34, background: 'linear-gradient(180deg, rgba(0,0,0,0.2) 0%, rgba(0,0,0,0.8) 100%)',
-    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, zIndex: 10,
+    display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10,
     padding: '0 4px',
   },
-  bottomLabel: { 
-    fontSize: 10, fontWeight: 900, color: '#fff', textShadow: '0 1px 2px rgba(0,0,0,0.8)',
-    flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', letterSpacing: 0.5,
-  },
   costText: { fontSize: 13, fontWeight: 900, color: '#FFD700', textShadow: '0 1px 2px rgba(0,0,0,0.8)' },
+  troopInfoBackdrop: {
+    position: 'absolute',
+    inset: 0,
+    zIndex: 80,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 14,
+    background: 'rgba(22, 17, 12, 0.64)',
+  },
+  troopInfoDialog: {
+    position: 'relative',
+    width: 430,
+    maxWidth: '100%',
+    maxHeight: '100%',
+    overflowY: 'auto',
+    padding: 18,
+    border: '3px solid #377d9f',
+    borderRadius: 8,
+    background: '#fff7e4',
+    color: '#5c3a21',
+    boxShadow: '0 14px 34px rgba(0,0,0,0.48)',
+  },
+  troopInfoDialogMobile: {
+    width: '100%',
+    padding: 14,
+  },
+  troopInfoCloseButton: {
+    position: 'absolute',
+    top: 9,
+    right: 9,
+    zIndex: 3,
+    width: 30,
+    height: 30,
+    border: '2px solid #8f6b43',
+    borderRadius: '50%',
+    background: '#f7ead0',
+    color: '#5c3a21',
+    fontSize: 14,
+    fontWeight: 900,
+    lineHeight: 1,
+    cursor: 'pointer',
+  },
+  troopInfoHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 14,
+    paddingRight: 34,
+  },
+  troopInfoPortrait: {
+    position: 'relative',
+    flex: '0 0 86px',
+    width: 86,
+    height: 94,
+    overflow: 'hidden',
+    border: '2px solid #9b815d',
+    borderRadius: 7,
+    background: 'linear-gradient(180deg, #d9d6cb 0%, #aaa79c 100%)',
+  },
+  troopInfoPortraitImage: {
+    width: '100%',
+    height: '100%',
+    objectFit: 'cover',
+    objectPosition: 'top center',
+    transformOrigin: 'top center',
+    filter: 'drop-shadow(0 4px 6px rgba(0,0,0,0.35))',
+  },
+  troopInfoHeading: {
+    minWidth: 0,
+  },
+  troopInfoTitle: {
+    margin: 0,
+    color: '#4e2f1b',
+    fontSize: 22,
+    fontWeight: 900,
+    lineHeight: 1.1,
+  },
+  troopInfoRole: {
+    marginTop: 5,
+    color: '#287da5',
+    fontSize: 13,
+    fontWeight: 900,
+    textTransform: 'uppercase',
+  },
+  troopInfoToken: {
+    marginTop: 6,
+    color: '#7b5b34',
+    fontSize: 12,
+    fontWeight: 800,
+    overflowWrap: 'anywhere',
+  },
+  troopInfoDescription: {
+    margin: '14px 0 12px',
+    color: '#64482f',
+    fontSize: 14,
+    fontWeight: 700,
+    lineHeight: 1.4,
+  },
+  troopInfoStats: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+    gap: 8,
+  },
+  troopInfoStat: {
+    minWidth: 0,
+    padding: '9px 10px',
+    border: '1px solid #d2bd96',
+    borderRadius: 6,
+    background: '#f1e4c9',
+  },
+  troopInfoStatLabel: {
+    display: 'block',
+    color: '#8a704d',
+    fontSize: 9,
+    fontWeight: 900,
+    lineHeight: 1.1,
+  },
+  troopInfoStatValue: {
+    display: 'block',
+    marginTop: 3,
+    color: '#4e2f1b',
+    fontSize: 13,
+    fontWeight: 900,
+    lineHeight: 1.2,
+    overflowWrap: 'anywhere',
+  },
+  troopInfoStatus: {
+    marginTop: 10,
+    padding: '8px 10px',
+    border: '1px solid #d0a641',
+    borderRadius: 6,
+    background: '#fff0b8',
+    color: '#674514',
+    fontSize: 12,
+    fontWeight: 900,
+    lineHeight: 1.3,
+    textAlign: 'center',
+    overflowWrap: 'anywhere',
+  },
   troopPriceNote: {
     width: '100%',
     color: '#6f512f',
@@ -3300,5 +3700,23 @@ const LT = {
     color: '#fff', fontSize: 12, fontWeight: 900, padding: '7px 14px',
     cursor: 'pointer', boxShadow: '0 2px 0 #7d211c, 0 3px 6px rgba(0,0,0,0.25)',
     letterSpacing: 0,
+  },
+  removeAllTroopsBtn: {
+    border: '2px solid #6b1712', borderRadius: 7,
+    background: 'linear-gradient(180deg, #e84940 0%, #a9221b 100%)',
+    color: '#fff', fontSize: 12, fontWeight: 900, padding: '7px 14px',
+    cursor: 'pointer', boxShadow: '0 2px 0 #5d1713, 0 3px 6px rgba(0,0,0,0.25)',
+    letterSpacing: 0,
+  },
+  troopActionCloseBtn: {
+    width: 30, height: 30, flex: '0 0 30px',
+    border: '2px solid #927650', borderRadius: '50%',
+    background: '#fff8e7', color: '#6f512f', fontSize: 15, fontWeight: 900,
+    cursor: 'pointer', lineHeight: 1, padding: 0,
+  },
+  actionBtnDisabled: {
+    opacity: 0.45,
+    cursor: 'default',
+    boxShadow: 'none',
   },
 };

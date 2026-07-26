@@ -70,6 +70,7 @@ const DRAGON_SPAWN_SCALE: float = 0.015
 
 var _current_dragon_animation: String = ""
 var _current_animation_length: float = 0.0
+var _last_visual_sync_state: int = -1
 var _ground_y: float = 0.0
 var _flight_time: float = 0.0
 var _hit_this_swing: bool = false
@@ -196,7 +197,8 @@ func _physics_process(delta: float) -> void:
 		return
 	_flight_time += BaseTroop.combat_delta(delta)
 	super._physics_process(delta)
-	_apply_flight_height()
+	if state != State.RUNNING:
+		_apply_flight_height()
 	_sync_visual_state()
 
 
@@ -712,6 +714,7 @@ func _exit_tree() -> void:
 			if is_instance_valid(holder):
 				holder.queue_free()
 	_breath_vfx_pool.clear()
+	super._exit_tree()
 
 
 func _make_fire_particle_material(texture: Texture2D, color: Color, additive: bool) -> StandardMaterial3D:
@@ -825,6 +828,10 @@ func _find_skeleton(node: Node) -> Skeleton3D:
 func _sync_visual_state() -> void:
 	if _is_dead:
 		return
+	var state_value := int(state)
+	if _last_visual_sync_state == state_value:
+		return
+	_last_visual_sync_state = state_value
 	match state:
 		State.RUNNING:
 			_play_dragon_animation("fly_forward")
@@ -835,10 +842,18 @@ func _sync_visual_state() -> void:
 
 
 func _apply_flight_height() -> void:
-	var bob: float = sin(_flight_time * flight_bob_speed) * flight_bob_height
-	global_position.y = _ground_y + flight_height + bob
+	var desired_y := _resolve_movement_y(_ground_y)
+	if not is_equal_approx(global_position.y, desired_y):
+		var next_position := global_position
+		next_position.y = desired_y
+		global_position = next_position
 	if _hp_bar and is_instance_valid(_hp_bar):
 		_hp_bar.global_position = global_position + Vector3(0.0, 0.25, 0.0)
+
+
+func _resolve_movement_y(_base_y: float) -> float:
+	var bob: float = sin(_flight_time * flight_bob_speed) * flight_bob_height
+	return _ground_y + flight_height + bob
 
 
 func _play_dragon_animation(animation_name: String, force_restart: bool = false) -> float:
@@ -875,6 +890,8 @@ func _play_dragon_animation(animation_name: String, force_restart: bool = false)
 	anim_player = _find_animation_player(animated_model)
 	if anim_player:
 		_current_animation_length = _play_first_imported_clip(anim_player, animation_name, true)
+		if state != State.INACTIVE:
+			_enable_animation_budget()
 		BaseTroop.report_render_diagnostic(self, "troop.fire_dragon.animation.%s" % animation_name, {
 			"animation": animation_name,
 			"force_restart": force_restart,

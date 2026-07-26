@@ -12403,6 +12403,33 @@ function _troopUnitSpanAt(shipTroops, index) {
   while (end < shipTroops.length && _isSlotFiller(shipTroops[end])) end++;
   return { start, end };
 }
+function _loadedTroopGroupKey(name) {
+  if (_isNftBackedTroop(name)) return `nft:${_nftBackedEntryKey(name)}`;
+  return `troop:${_normalizeTroopName(name)}`;
+}
+function _removeLoadedTroopGroup(shipTroops, slot) {
+  const selectedSpan = _troopUnitSpanAt(shipTroops, slot);
+  if (!selectedSpan) return null;
+  const selectedKey = _loadedTroopGroupKey(shipTroops[selectedSpan.start]);
+  const next = [];
+  const removedTroops = [];
+  let index = 0;
+  while (index < shipTroops.length) {
+    const span = _troopUnitSpanAt(shipTroops, index);
+    if (!span) {
+      index++;
+      continue;
+    }
+    const entry = shipTroops[span.start];
+    if (_loadedTroopGroupKey(entry) === selectedKey) {
+      removedTroops.push(entry);
+    } else {
+      next.push(...shipTroops.slice(span.start, span.end));
+    }
+    index = span.end;
+  }
+  return { next, removedTroops };
+}
 function _swapSpanForReplacement(shipTroops, slot, replacementName, capacity) {
   if (!Array.isArray(shipTroops) || !Number.isInteger(slot) || slot < 0 || slot >= shipTroops.length) return null;
   if (_isSlotFiller(shipTroops[slot])) return null;
@@ -13451,6 +13478,54 @@ router.post('/buildings/:id/remove-troop', auth, (req, res) => {
   }
 });
 
+router.post('/buildings/:id/remove-troop-group', auth, (req, res) => {
+  const buildingId = parseInt(req.params.id, 10);
+  if (isNaN(buildingId)) return res.status(400).json({ error: 'Invalid building ID' });
+  const slot = Number(req.body?.slot);
+  if (!Number.isInteger(slot)) return res.status(400).json({ error: 'Valid integer slot required' });
+
+  const txn = db.db.transaction(() => {
+    const resolved = _resolvePlayerShipEditBuilding(req.player.id, buildingId, req.body || {});
+    const building = resolved.building;
+    if (!building) {
+      throw {
+        status: 404,
+        error: 'Building not found',
+        requested_building_id: buildingId,
+      };
+    }
+    if (building.type !== 'port' || !building.has_ship) throw { status: 400, error: 'No ship at this port' };
+
+    let shipTroops = [];
+    try { shipTroops = JSON.parse(building.ship_troops || '[]'); } catch { shipTroops = []; }
+    const removal = _removeLoadedTroopGroup(shipTroops, slot);
+    if (!removal) throw { status: 400, error: 'Invalid troop slot' };
+
+    const troopsJson = JSON.stringify(removal.next);
+    db.db.prepare('UPDATE buildings SET ship_troops = ?, ship_troops_template = ? WHERE id = ?')
+      .run(troopsJson, troopsJson, building.id);
+
+    const updated = db.db.prepare('SELECT gold, wood, ore FROM players WHERE id = ?').get(req.player.id);
+    return {
+      ship_troops: removal.next,
+      removed_troops: removal.removedTroops,
+      ship_level: _shipLevelForPort(building),
+      ship_capacity: _shipCapacityForPort(building),
+      resources: updated,
+      building_id: building.id,
+      requested_building_id: buildingId,
+      matched_by: resolved.matchedBy,
+    };
+  });
+
+  try {
+    const result = txn();
+    res.json({ success: true, ...result });
+  } catch (e) {
+    res.status(e.status || 500).json({ error: e.error || 'Server error' });
+  }
+});
+
 function _mainShipResponse(playerId) {
   _sanitizeDisabledShipTroopsForPlayer(playerId);
   const ship = _playerShipState(playerId);
@@ -13596,6 +13671,23 @@ router.post('/ship/remove-troop', auth, (req, res) => {
   const updated = db.updatePlayerShipTroops(req.player.id, next, next);
   if (updated?.error) return res.status(400).json(updated);
   res.json({ success: true, removed_troops: removedTroops, ship: _mainShipResponse(req.player.id), resources: db.getResources(req.player.id) });
+});
+
+router.post('/ship/remove-troop-group', auth, (req, res) => {
+  const slot = Number(req.body?.slot);
+  if (!Number.isInteger(slot)) return res.status(400).json({ error: 'Valid slot required' });
+  const ship = _playerShipState(req.player.id);
+  if (!ship) return res.status(404).json({ error: 'Player ship not found' });
+  const removal = _removeLoadedTroopGroup(ship.troops, slot);
+  if (!removal) return res.status(400).json({ error: 'Invalid troop slot' });
+  const updated = db.updatePlayerShipTroops(req.player.id, removal.next, removal.next);
+  if (updated?.error) return res.status(400).json(updated);
+  res.json({
+    success: true,
+    removed_troops: removal.removedTroops,
+    ship: _mainShipResponse(req.player.id),
+    resources: db.getResources(req.player.id),
+  });
 });
 
 router.post('/ship/unload-troops', auth, (req, res) => {

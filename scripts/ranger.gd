@@ -138,6 +138,7 @@ func _exit_tree() -> void:
 			b.node.queue_free()
 	_pool.clear()
 	_active.clear()
+	super._exit_tree()
 
 
 ## Advances the attack timer and fires a bolt at shoot_threshold into the animation.

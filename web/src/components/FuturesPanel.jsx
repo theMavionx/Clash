@@ -344,6 +344,22 @@ function formatCompactUsd(value) {
   return Number.isFinite(n) && n > 0 ? `$${formatCompactNumber(n)}` : '—';
 }
 
+function formatAccountHeaderUsd(value, compact = false) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return '$0.00';
+  const abs = Math.abs(n);
+  if (abs >= 1_000_000) {
+    return `${n < 0 ? '-' : ''}$${(abs / 1_000_000).toFixed(abs >= 10_000_000 ? 0 : 1)}M`;
+  }
+  if (compact && abs >= 10_000) {
+    return `${n < 0 ? '-' : ''}$${(abs / 1_000).toFixed(abs >= 100_000 ? 0 : 1)}K`;
+  }
+  return `${n < 0 ? '-' : ''}$${abs.toLocaleString(undefined, {
+    minimumFractionDigits: abs < 1_000 ? 2 : 0,
+    maximumFractionDigits: abs < 1_000 ? 2 : 0,
+  })}`;
+}
+
 function marketSideOpenInterest(row = {}) {
   const raw = row?._raw || {};
   const long = firstFinite(
@@ -3759,6 +3775,14 @@ function FuturesPanel() {
   // or a stored player wallet as "connected" unless the hook resolved the
   // address it will actually use for signing.
   const hasWallet = !!walletAddr;
+  // Do not interpret the hooks' initial null account as a confirmed $0
+  // balance. Hooks with a dedicated accountReady flag keep this pending until
+  // the venue account read completes; older hooks fall back to the first
+  // account or wallet-USDC snapshot.
+  const balanceCheckPending = hasWallet && (
+    accountReady === false
+    || (account == null && walletUsdc == null)
+  );
   const isSolanaDex = dex === 'pacifica' || dex === 'phoenix' || dex === 'gmtrade' || dex === 'flash';
   const [solanaWalletGrace, setSolanaWalletGrace] = useState(true);
   useEffect(() => {
@@ -4349,6 +4373,10 @@ function FuturesPanel() {
     : dex === 'hyperliquid'
     ? pacAccountValueBase + (hlUnifiedAccount ? 0 : hlSpotAvailable)
     : pacAccountValueBase;
+  // Free collateral is part of account value. Some exchange snapshots omit
+  // equity while still returning available margin, so keep the header total
+  // internally consistent until the complete snapshot arrives.
+  const headerAccountValue = Math.max(pacAccountValue, pacBalance);
   const currentMarket = useMemo(() => markets.find(m => m.symbol === symbol || marketDisplaySymbol(m) === symbol), [markets, symbol]);
   const currentMarginDetail = marginModeDetails?.[symbol] || currentMarket?.margin_capabilities || {};
   const currentMarginModes = Array.isArray(currentMarket?.margin_modes)
@@ -5386,17 +5414,41 @@ function FuturesPanel() {
               </svg>
             </button>
           )}
-          <div style={{...S.balBadge, padding: '4px 8px'}}>
-            <span style={{fontSize: 8, fontWeight: 700, color: '#a3906a', lineHeight: 1}}>
-              {dex === 'flash' ? 'FREE' : dex === 'ostium' ? 'USDC' : 'BALANCE'}
-            </span>
-            {/* Flash shows free balance for new trades; other venues show
-                account equity / portfolio value where available. Ostium
-                opening margin is wallet USDC, not account value locked in
-                existing positions. */}
-            <span style={{fontSize: 13, fontWeight: 900, color: '#5C3A21', lineHeight: 1.1}}>
-              ${(dex === 'flash' || dex === 'ostium' ? pacBalance : pacAccountValue).toFixed(2)}
-            </span>
+          <div
+            style={{
+              ...S.balanceSummary,
+              ...(isMobile ? S.balanceSummaryMobile : {}),
+            }}
+            role="group"
+            aria-busy={balanceCheckPending}
+            aria-label={balanceCheckPending
+              ? 'Loading trading account balance'
+              : `Balance $${headerAccountValue.toFixed(2)}, free margin $${pacBalance.toFixed(2)}`}
+            title={balanceCheckPending
+              ? 'Loading trading account balance'
+              : `Balance: $${headerAccountValue.toFixed(2)} total account value\nFree: $${pacBalance.toFixed(2)} available for new trades`}
+          >
+            <div style={{...S.balanceMetric, ...(isMobile ? S.balanceMetricMobile : {})}}>
+              <span style={S.balanceMetricLabel}>Balance</span>
+              <span style={S.balanceMetricValue}>
+                {balanceCheckPending ? (
+                  <span style={S.balanceLoadingValue}>
+                    <span style={S.balanceLoadingSpinner} aria-hidden="true" />
+                    <span>{isMobile ? '...' : 'Loading'}</span>
+                  </span>
+                ) : formatAccountHeaderUsd(headerAccountValue, isMobile)}
+              </span>
+            </div>
+            <span style={S.balanceDivider} aria-hidden="true" />
+            <div style={{...S.balanceMetric, ...(isMobile ? S.balanceMetricMobile : {})}}>
+              <span style={S.balanceMetricLabel}>Free</span>
+              <span style={{
+                ...S.balanceMetricValue,
+                color: balanceCheckPending ? '#8C7D5C' : '#2E7D32',
+              }}>
+                {balanceCheckPending ? '—' : formatAccountHeaderUsd(pacBalance, isMobile)}
+              </span>
+            </div>
           </div>
         </div>
       </div>
@@ -5426,7 +5478,7 @@ function FuturesPanel() {
           A user with an open position has available_to_spend ≈ 0 but
           account_equity > 0; gating on free margin would pop the deposit
           prompt for any user with a position. */}
-      {pacAccountValue < 0.01 && (
+      {!balanceCheckPending && pacAccountValue < 0.01 && (
         <div style={S.noBalanceHint} onClick={() => setActiveTab('Account')}>
           No balance — go to Account tab to deposit USDC
         </div>
@@ -11374,9 +11426,44 @@ const S = {
     display: 'flex', alignItems: 'center', gap: 6, padding: '5px 10px',
     background: '#e8dfc8', border: '3px solid #d4c8b0', borderRadius: 10, cursor: 'pointer', color: '#333',
   },
-  balBadge: {
-    display: 'flex', flexDirection: 'column', alignItems: 'flex-end',
-    padding: '3px 10px', background: '#e8dfc8', border: '2px solid #d4c8b0', borderRadius: 8,
+  balanceSummary: {
+    display: 'flex', alignItems: 'stretch', flexShrink: 0,
+    minWidth: 142, padding: '4px 7px',
+    background: '#e8dfc8', border: '2px solid #d4c8b0', borderRadius: 8,
+    boxSizing: 'border-box',
+  },
+  balanceSummaryMobile: {
+    minWidth: 116,
+    padding: '4px 5px',
+  },
+  balanceMetric: {
+    display: 'flex', flexDirection: 'column', alignItems: 'flex-end', justifyContent: 'center',
+    minWidth: 56, padding: '0 4px',
+  },
+  balanceMetricMobile: {
+    minWidth: 46,
+    padding: '0 2px',
+  },
+  balanceMetricLabel: {
+    fontSize: 8, fontWeight: 800, color: '#8C7D5C', lineHeight: 1,
+    letterSpacing: 0, textTransform: 'uppercase', whiteSpace: 'nowrap',
+  },
+  balanceMetricValue: {
+    fontSize: 12, fontWeight: 900, color: '#5C3A21', lineHeight: 1.2,
+    fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap',
+  },
+  balanceLoadingValue: {
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4,
+    minHeight: 14, color: '#8C7D5C', fontSize: 9, textTransform: 'uppercase',
+  },
+  balanceLoadingSpinner: {
+    width: 9, height: 9, borderRadius: '50%', flexShrink: 0,
+    borderWidth: 2, borderStyle: 'solid', borderColor: '#c7b996',
+    borderTopColor: '#5C3A21', animation: 'wallet-spin 0.75s linear infinite',
+  },
+  balanceDivider: {
+    width: 1, alignSelf: 'stretch', margin: '0 2px',
+    background: '#c7b996', opacity: 0.9,
   },
   chips: {
     display: 'flex', flexWrap: 'wrap', gap: 5, padding: 8,

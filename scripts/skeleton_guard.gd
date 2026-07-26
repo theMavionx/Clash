@@ -9,6 +9,7 @@ signal died(guard: Node3D)
 const BLADE_SCENE = "res://Model/Characters/Skelet/assets/gltf/Skeleton_Blade.gltf"
 const BODY_TEXTURE = "res://Model/Characters/Skelet/characters/gltf/Skeleton_Minion_skeleton_texture.png"
 const BODY_MESH_PREFIX = "Skeleton_Minion_"
+const MESH_COMBINER := preload("res://Model/Characters/skinned_mesh_combiner.gd")
 const HIT_DELAY_RATIO = 0.4
 const ATTACK_ANIM = "Melee_1H_Attack_Chop"
 const CAN_TARGET_GROUND: bool = true
@@ -24,6 +25,7 @@ const ANIM_FILES = [
 ## Shared blade scene — cached so every skeleton after the first doesn't re-load.
 static var _blade_scene_res: Resource = null
 static var _web_body_material: StandardMaterial3D = null
+static var _combined_body_mesh: ArrayMesh = null
 
 const LEVEL_STATS: Dictionary = {
 	1: {"hp": 360, "damage": 38, "atk_speed": 0.86, "move_speed": 0.46, "detection_radius": 0.95},
@@ -143,9 +145,11 @@ const HP_BAR_H = 0.012
 
 func _ready() -> void:
 	add_to_group("skeleton_guards")
+	BaseTroop.invalidate_guards_cache()
 	_setup_animations()
 	_setup_weapon()
 	refresh_web_body_material_fallback()
+	_combine_body_visual()
 	_create_hp_bar()
 	BaseTroop.report_render_diagnostic(self, "guard.skeleton.ready", {
 		"guard_name": name,
@@ -425,7 +429,7 @@ func take_damage(dmg: int) -> void:
 		_record_replay_telemetry("guard_death", {"damage": dmg})
 		if is_in_group("skeleton_guards"):
 			remove_from_group("skeleton_guards")
-		BaseTroop.invalidate_combat_lists()
+		BaseTroop.invalidate_guards_cache()
 		reset_runtime_cache()
 		set_process(false)
 		died.emit(self)
@@ -711,6 +715,50 @@ func refresh_web_body_material_fallback() -> void:
 			"texture": BODY_TEXTURE,
 			"applied_meshes": applied_count,
 		})
+
+
+func _combine_body_visual() -> void:
+	var skeleton := _find_skeleton(self)
+	if skeleton == null:
+		return
+	var body_parts: Array[MeshInstance3D] = []
+	for child in skeleton.get_children():
+		if (
+			child is MeshInstance3D
+			and str(child.name).begins_with(BODY_MESH_PREFIX)
+			and child.mesh != null
+			and child.skin != null
+		):
+			body_parts.append(child as MeshInstance3D)
+	if body_parts.size() < 2:
+		return
+	var material: Material = body_parts[0].material_override
+	if material == null and body_parts[0].mesh.get_surface_count() > 0:
+		material = body_parts[0].get_surface_override_material(0)
+		if material == null:
+			material = body_parts[0].mesh.surface_get_material(0)
+	if material == null:
+		material = _get_web_body_material()
+	if _combined_body_mesh == null:
+		_combined_body_mesh = MESH_COMBINER.bake_skinned_parts(
+			skeleton,
+			body_parts,
+			material,
+			"SkeletonGuardCombined"
+		)
+	if _combined_body_mesh == null:
+		return
+	var combined := MeshInstance3D.new()
+	combined.name = "CombinedSkeletonGuard"
+	combined.mesh = _combined_body_mesh
+	combined.skin = body_parts[0].skin
+	combined.skeleton = NodePath("..")
+	combined.material_override = material
+	combined.extra_cull_margin = 0.5
+	combined.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	skeleton.add_child(combined)
+	MESH_COMBINER.prune_mesh_sources(body_parts)
+	set_meta("clash_combined_skeleton_guard", true)
 
 
 static func _get_web_body_material() -> StandardMaterial3D:

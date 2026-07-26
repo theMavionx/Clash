@@ -608,7 +608,7 @@ const SKELETON_BARREL = Object.freeze({
   unlockShipLevel: 6,
   energyCost: 8,
   maxUses: 1,
-  travelSec: 0.9,
+  travelSec: 1.6,
   impactDamage: 650,
   spawnCount: 4,
   spawnRadius: 0.16,

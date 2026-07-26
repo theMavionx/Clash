@@ -438,8 +438,8 @@ func _spawn_impact_fx(pos: Vector3, radius: float) -> void:
 		scene_root = self
 
 	var root := Node3D.new()
-	root.global_position = pos + Vector3(0, 0.035, 0)
 	scene_root.add_child(root)
+	root.global_position = pos + Vector3(0, 0.035, 0)
 	_active_fx.append(root)
 
 	var core := MeshInstance3D.new()
@@ -465,13 +465,15 @@ func _spawn_impact_fx(pos: Vector3, radius: float) -> void:
 	var tw := create_tween()
 	root.scale = Vector3(0.35, 0.35, 0.35)
 	tw.tween_property(root, "scale", Vector3(1.25, 1.25, 1.25), IMPACT_FX_DURATION).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	tw.tween_callback(Callable(self, "_free_impact_fx").bind(root))
+	tw.tween_callback(Callable(self, "_free_impact_fx").bind(weakref(root)))
 
 
-func _free_impact_fx(root: Node) -> void:
+func _free_impact_fx(root_ref: WeakRef) -> void:
+	var root: Node = root_ref.get_ref() as Node
+	if root == null:
+		return
 	_active_fx.erase(root)
-	if is_instance_valid(root):
-		root.queue_free()
+	root.queue_free()
 
 
 func _ensure_materials() -> void:

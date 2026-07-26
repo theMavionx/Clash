@@ -24,6 +24,11 @@ var _attack_loadout_box: VBoxContainer
 var _test_ship_level_label: Label
 var _test_ship_capacity_label: Label
 var _test_attack_ship_level: int = 1
+var _test_ship_ability_hud: PanelContainer
+var _test_ship_energy_label: Label
+var _test_ship_ability_hint: Label
+var _test_ship_ability_buttons: Dictionary = {}
+var _test_ship_ability_refresh_elapsed: float = 0.0
 var _fps_profile_active: bool = false
 var _speed_label: Label
 var _demon_color_preview_root: Node3D
@@ -50,10 +55,43 @@ const TEST_ATTACK_PREFERRED_ORDER: Array[String] = [
 const FPS_PROFILE_IDLE_SECONDS: float = 6.0
 const FPS_PROFILE_COMBAT_SECONDS: float = 12.0
 const FPS_PROFILE_SETTLE_SECONDS: float = 2.0
+const KNIGHT_SWARM_PROFILE_COUNT: int = 45
+const TROOP_MATRIX_PROFILE_CAPACITY: int = 45
+const MIXED_SWARM_PROFILE_COUNTS: Dictionary = {
+	"Knight": 12,
+	"Archer": 12,
+	"Mage": 10,
+	"PeaShooter": 10,
+	"Mimic": 8,
+	"Necromancer": 8,
+	"Horror": 6,
+	"MechanicalDragon": 6,
+	"IceGolem": 6,
+	"WindMage": 8,
+	"DemonKing": 7,
+	"FireDragon": 7,
+}
 const TEST_SPEED_PRESETS: Array[float] = [0.5, 1.0, 2.0, 4.0]
 const TEST_SPEED_STEP: float = 0.25
 const TEST_SPEED_MIN: float = 0.25
 const TEST_SPEED_MAX: float = 8.0
+const TEST_SHIP_ABILITY_REFRESH_SEC: float = 0.10
+const TEST_SHIP_ABILITY_ORDER: Array[String] = [
+	"cannon",
+	"rally",
+	"medkit",
+	"freeze",
+	"rage",
+	"skeleton_barrel",
+]
+const TEST_SHIP_ABILITY_LABELS: Dictionary = {
+	"cannon": "Cannon",
+	"rally": "Rally",
+	"medkit": "Heal",
+	"freeze": "Freeze",
+	"rage": "Rage",
+	"skeleton_barrel": "Barrel",
+}
 const MODEL_SCALE_MIN: float = 0.10
 const MODEL_SCALE_MAX: float = 1.50
 const MODEL_SCALE_STEP: float = 0.01
@@ -73,6 +111,7 @@ func _core_layout() -> Array:
 
 func _ready() -> void:
 	_create_panel()
+	_create_test_ship_ability_hud()
 	call_deferred("_populate_spawn_list")
 	call_deferred("_set_status", "Scene ready. F1 panel, 1 build random village.")
 	if OS.get_cmdline_args().has("--capture-demon-colors"):
@@ -125,12 +164,30 @@ func _ready() -> void:
 		call_deferred("_verify_defeat_reserve")
 	if OS.get_cmdline_user_args().has("--verify-hold-deployment"):
 		call_deferred("_verify_hold_deployment")
+	if OS.get_cmdline_user_args().has("--verify-test-ship-abilities"):
+		call_deferred("_verify_test_ship_abilities")
 	if OS.get_cmdline_user_args().has("--auto-fps-profile"):
 		call_deferred("run_mixed_fps_profile")
+	if OS.get_cmdline_user_args().has("--auto-knight-swarm-profile"):
+		call_deferred("run_knight_swarm_fps_profile")
+	if OS.get_cmdline_user_args().has("--auto-mixed-swarm-profile"):
+		call_deferred("run_mixed_swarm_fps_profile")
+	if OS.get_cmdline_user_args().has("--auto-troop-matrix-profile"):
+		call_deferred("run_troop_matrix_fps_profile")
 
 
 func _exit_tree() -> void:
 	Engine.time_scale = 1.0
+
+
+func _process(delta: float) -> void:
+	if not is_instance_valid(_test_ship_ability_hud) or not _test_ship_ability_hud.is_visible_in_tree():
+		return
+	_test_ship_ability_refresh_elapsed += delta
+	if _test_ship_ability_refresh_elapsed < TEST_SHIP_ABILITY_REFRESH_SEC:
+		return
+	_test_ship_ability_refresh_elapsed = 0.0
+	_refresh_test_ship_ability_hud()
 
 
 func _verify_defeat_reserve() -> void:
@@ -577,6 +634,385 @@ func _small_button(text: String, callback: Callable) -> Button:
 	btn.add_theme_font_size_override("font_size", 15)
 	btn.pressed.connect(callback)
 	return btn
+
+
+func _create_test_ship_ability_hud() -> void:
+	var canvas := CanvasLayer.new()
+	canvas.name = "TestShipAbilityCanvas"
+	canvas.layer = 45
+	add_child(canvas)
+
+	_test_ship_ability_hud = PanelContainer.new()
+	_test_ship_ability_hud.name = "TestShipAbilityHUD"
+	_test_ship_ability_hud.anchor_left = 0.24
+	_test_ship_ability_hud.anchor_top = 1.0
+	_test_ship_ability_hud.anchor_right = 0.98
+	_test_ship_ability_hud.anchor_bottom = 1.0
+	_test_ship_ability_hud.offset_top = -106.0
+	_test_ship_ability_hud.offset_bottom = -10.0
+	_test_ship_ability_hud.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	canvas.add_child(_test_ship_ability_hud)
+
+	var panel_style := StyleBoxFlat.new()
+	panel_style.bg_color = Color(0.07, 0.09, 0.13, 0.94)
+	panel_style.border_color = Color(0.35, 0.43, 0.58, 0.95)
+	panel_style.set_border_width_all(2)
+	panel_style.corner_radius_top_left = 12
+	panel_style.corner_radius_top_right = 12
+	panel_style.corner_radius_bottom_left = 12
+	panel_style.corner_radius_bottom_right = 12
+	_test_ship_ability_hud.add_theme_stylebox_override("panel", panel_style)
+
+	var outer_margin := MarginContainer.new()
+	outer_margin.add_theme_constant_override("margin_left", 10)
+	outer_margin.add_theme_constant_override("margin_top", 8)
+	outer_margin.add_theme_constant_override("margin_right", 10)
+	outer_margin.add_theme_constant_override("margin_bottom", 8)
+	_test_ship_ability_hud.add_child(outer_margin)
+
+	var row := HBoxContainer.new()
+	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	row.add_theme_constant_override("separation", 8)
+	outer_margin.add_child(row)
+
+	var energy_box := VBoxContainer.new()
+	energy_box.custom_minimum_size = Vector2(116, 0)
+	energy_box.alignment = BoxContainer.ALIGNMENT_CENTER
+	energy_box.add_theme_constant_override("separation", 2)
+	row.add_child(energy_box)
+
+	var energy_title := Label.new()
+	energy_title.text = "MAIN SHIP"
+	energy_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	energy_title.add_theme_font_size_override("font_size", 12)
+	energy_title.add_theme_color_override("font_color", Color(0.63, 0.73, 0.91))
+	energy_box.add_child(energy_title)
+
+	_test_ship_energy_label = Label.new()
+	_test_ship_energy_label.text = "Energy: --"
+	_test_ship_energy_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_test_ship_energy_label.add_theme_font_size_override("font_size", 18)
+	_test_ship_energy_label.add_theme_color_override("font_color", Color(1.0, 0.62, 0.18))
+	energy_box.add_child(_test_ship_energy_label)
+
+	_test_ship_ability_hint = Label.new()
+	_test_ship_ability_hint.text = "Start Attack"
+	_test_ship_ability_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_test_ship_ability_hint.add_theme_font_size_override("font_size", 11)
+	_test_ship_ability_hint.add_theme_color_override("font_color", Color(0.74, 0.77, 0.84))
+	energy_box.add_child(_test_ship_ability_hint)
+
+	var ability_scroll := ScrollContainer.new()
+	ability_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	ability_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	ability_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	ability_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	row.add_child(ability_scroll)
+
+	var abilities := HBoxContainer.new()
+	abilities.name = "AbilityButtons"
+	abilities.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	abilities.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	abilities.add_theme_constant_override("separation", 6)
+	ability_scroll.add_child(abilities)
+
+	for ability_key in TEST_SHIP_ABILITY_ORDER:
+		var button := Button.new()
+		button.name = "%sButton" % ability_key.to_pascal_case()
+		button.custom_minimum_size = Vector2(88, 68)
+		button.toggle_mode = true
+		button.add_theme_font_size_override("font_size", 14)
+		button.text = TEST_SHIP_ABILITY_LABELS.get(ability_key, ability_key)
+		button.pressed.connect(
+			Callable(self, "_toggle_test_ship_ability").bind(ability_key)
+		)
+		abilities.add_child(button)
+		_test_ship_ability_buttons[ability_key] = button
+
+	var utility_box := VBoxContainer.new()
+	utility_box.custom_minimum_size = Vector2(78, 0)
+	utility_box.alignment = BoxContainer.ALIGNMENT_CENTER
+	utility_box.add_theme_constant_override("separation", 4)
+	row.add_child(utility_box)
+	var refill_button := _small_button("Refill", refill_test_ship_energy)
+	refill_button.tooltip_text = "Restore energy without resetting one-use abilities."
+	utility_box.add_child(refill_button)
+	var reset_button := _small_button("Reset", reset_test_ship_abilities)
+	reset_button.tooltip_text = "Restore energy, costs, and all one-use abilities."
+	utility_box.add_child(reset_button)
+
+	_refresh_test_ship_ability_hud()
+
+
+func _test_combat_building_system() -> Node:
+	var main_bs: Node = _building_system_for_grid("main")
+	if main_bs:
+		return main_bs
+	for raw_bs in get_tree().get_nodes_in_group("building_systems"):
+		var bs: Node = raw_bs
+		if bs and bool(bs.get("create_ui")):
+			return bs
+	return null
+
+
+func _test_attack_is_ready() -> bool:
+	var attack: Node = get_node_or_null("../AttackSystem")
+	var bs: Node = _test_combat_building_system()
+	return (
+		is_instance_valid(attack)
+		and bool(attack.get("_main_ship_ready_for_deployment"))
+		and bool(attack.get("is_attack_mode"))
+		and is_instance_valid(bs)
+		and bool(bs.get("is_viewing_enemy"))
+	)
+
+
+func _test_ship_ability_state(ability_key: String) -> Dictionary:
+	var bs: Node = _test_combat_building_system()
+	if not is_instance_valid(bs) or bs.get("_cannon") == null:
+		return {
+			"cost": 0,
+			"active": false,
+			"unlocked": false,
+			"used": false,
+		}
+	var cannon: BSCannon = bs.get("_cannon")
+	match ability_key:
+		"cannon":
+			return {
+				"cost": cannon._cannon_next_cost,
+				"active": cannon._ship_cannon_mode,
+				"unlocked": true,
+				"used": false,
+			}
+		"rally":
+			var rally: BSRally = bs.get("_rally")
+			return {
+				"cost": rally._rally_next_cost if rally else 1,
+				"active": rally._rally_mode if rally else false,
+				"unlocked": rally != null,
+				"used": false,
+			}
+		"medkit":
+			var medkit: BSMedkit = bs.get("_medkit")
+			return {
+				"cost": medkit.energy_cost() if medkit else 6,
+				"active": medkit._medkit_mode if medkit else false,
+				"unlocked": medkit.is_unlocked() if medkit else false,
+				"used": medkit.is_used() if medkit else false,
+			}
+		"freeze":
+			var freeze: BSFreezeSpell = bs.get("_freeze")
+			return {
+				"cost": freeze.energy_cost() if freeze else 5,
+				"active": freeze._freeze_mode if freeze else false,
+				"unlocked": freeze.is_unlocked() if freeze else false,
+				"used": freeze.is_used() if freeze else false,
+			}
+		"rage":
+			var rage: BSRageSpell = bs.get("_rage")
+			return {
+				"cost": rage.energy_cost() if rage else 7,
+				"active": rage._rage_mode if rage else false,
+				"unlocked": rage.is_unlocked() if rage else false,
+				"used": rage.is_used() if rage else false,
+			}
+		"skeleton_barrel":
+			var barrel: BSSkeletonBarrel = bs.get("_skeleton_barrel")
+			return {
+				"cost": barrel.energy_cost() if barrel else 8,
+				"active": barrel._barrel_mode if barrel else false,
+				"unlocked": barrel.is_unlocked() if barrel else false,
+				"used": barrel.is_used() if barrel else false,
+			}
+	return {
+		"cost": 0,
+		"active": false,
+		"unlocked": false,
+		"used": false,
+	}
+
+
+func _refresh_test_ship_ability_hud() -> void:
+	if not is_instance_valid(_test_ship_ability_hud):
+		return
+	var bs: Node = _test_combat_building_system()
+	var ready := _test_attack_is_ready()
+	var energy := 0
+	var max_energy := _ship_energy_for_level(_test_attack_ship_level)
+	if is_instance_valid(bs) and bs.get("_cannon") != null:
+		var cannon: BSCannon = bs.get("_cannon")
+		energy = cannon._cannon_energy
+	if is_instance_valid(_test_ship_energy_label):
+		_test_ship_energy_label.text = "Energy: %d / %d" % [energy, max_energy]
+	if is_instance_valid(_test_ship_ability_hint):
+		if ready:
+			_test_ship_ability_hint.text = "Choose, then click target"
+		else:
+			_test_ship_ability_hint.text = "Start Attack"
+
+	for ability_key in TEST_SHIP_ABILITY_ORDER:
+		var button: Button = _test_ship_ability_buttons.get(ability_key, null)
+		if not is_instance_valid(button):
+			continue
+		var state := _test_ship_ability_state(ability_key)
+		var cost := int(state.get("cost", 0))
+		var active := bool(state.get("active", false))
+		var unlocked := bool(state.get("unlocked", false))
+		var used := bool(state.get("used", false))
+		var disabled := not ready or not unlocked or used or (not active and energy < cost)
+		button.disabled = disabled
+		button.text = "%s\n%d energy" % [
+			TEST_SHIP_ABILITY_LABELS.get(ability_key, ability_key),
+			cost,
+		]
+		if active:
+			button.text = "%s\nCANCEL" % TEST_SHIP_ABILITY_LABELS.get(
+				ability_key,
+				ability_key
+			)
+		elif not unlocked:
+			button.text = "%s\nLOCKED" % TEST_SHIP_ABILITY_LABELS.get(
+				ability_key,
+				ability_key
+			)
+		elif used:
+			button.text = "%s\nUSED" % TEST_SHIP_ABILITY_LABELS.get(
+				ability_key,
+				ability_key
+			)
+		button.button_pressed = active
+		button.tooltip_text = _test_ship_ability_tooltip(
+			ability_key,
+			cost,
+			active,
+			unlocked,
+			used,
+			ready
+		)
+
+
+func _test_ship_ability_tooltip(
+	ability_key: String,
+	cost: int,
+	active: bool,
+	unlocked: bool,
+	used: bool,
+	ready: bool
+) -> String:
+	if not ready:
+		return "Start a test attack and wait for the Main Ship."
+	if not unlocked:
+		return "Requires Main Ship level 6."
+	if used:
+		return "This one-use ability has already been used in this test battle."
+	if active:
+		return "Cancel target selection."
+	var descriptions := {
+		"cannon": "Fire at a selected building.",
+		"rally": "Redirect deployed troops toward a selected area.",
+		"medkit": "Place a healing field for deployed troops.",
+		"freeze": "Freeze defenses in the selected area.",
+		"rage": "Boost troops inside the selected area.",
+		"skeleton_barrel": "Damage a building and deploy four skeletons.",
+	}
+	return "%s Cost: %d energy." % [
+		descriptions.get(ability_key, "Use Main Ship ability."),
+		cost,
+	]
+
+
+func _toggle_test_ship_ability(ability_key: String) -> void:
+	if not _test_attack_is_ready():
+		_set_status("Start Attack and wait for the Main Ship before using abilities.")
+		return
+	var bs: Node = _test_combat_building_system()
+	if not is_instance_valid(bs):
+		return
+	match ability_key:
+		"cannon":
+			if bool(bs.get("_ship_cannon_mode")):
+				bs.call("_exit_ship_cannon_mode")
+			else:
+				bs.call("_enter_ship_cannon_mode")
+		"rally":
+			if bool(bs.get("_ship_rally_mode")):
+				bs.call("_exit_ship_rally_mode")
+			else:
+				bs.call("_enter_ship_rally_mode")
+		"medkit":
+			if bool(bs.get("_ship_medkit_mode")):
+				bs.call("_exit_ship_medkit_mode")
+			else:
+				bs.call("_enter_ship_medkit_mode")
+		"freeze":
+			if bool(bs.get("_ship_freeze_mode")):
+				bs.call("_exit_ship_freeze_mode")
+			else:
+				bs.call("_enter_ship_freeze_mode")
+		"rage":
+			if bool(bs.get("_ship_rage_mode")):
+				bs.call("_exit_ship_rage_mode")
+			else:
+				bs.call("_enter_ship_rage_mode")
+		"skeleton_barrel":
+			if bool(bs.get("_ship_skeleton_barrel_mode")):
+				bs.call("_exit_ship_skeleton_barrel_mode")
+			else:
+				bs.call("_enter_ship_skeleton_barrel_mode")
+	_set_status("%s selected. Click its target in the battle area." % (
+		TEST_SHIP_ABILITY_LABELS.get(ability_key, ability_key)
+	))
+	_refresh_test_ship_ability_hud()
+
+
+func refill_test_ship_energy() -> void:
+	var bs: Node = _test_combat_building_system()
+	if not is_instance_valid(bs) or bs.get("_cannon") == null:
+		_set_status("Main Ship combat system is not ready.")
+		return
+	var cannon: BSCannon = bs.get("_cannon")
+	cannon._cannon_energy = _ship_energy_for_level(_test_attack_ship_level)
+	cannon._update_cannon_energy_ui()
+	_refresh_test_ship_ability_hud()
+	_set_status("Main Ship energy refilled.")
+
+
+func reset_test_ship_abilities(report_status: bool = true) -> void:
+	var bs: Node = _test_combat_building_system()
+	if not is_instance_valid(bs):
+		return
+	var ship_level := clampi(_test_attack_ship_level, 1, _max_test_ship_level())
+	var cannon: BSCannon = bs.get("_cannon")
+	var rally: BSRally = bs.get("_rally")
+	var medkit: BSMedkit = bs.get("_medkit")
+	var freeze: BSFreezeSpell = bs.get("_freeze")
+	var rage: BSRageSpell = bs.get("_rage")
+	var barrel: BSSkeletonBarrel = bs.get("_skeleton_barrel")
+	if cannon:
+		cannon.reset(ship_level)
+	if rally:
+		rally.reset()
+	if medkit:
+		medkit.reset(ship_level)
+	if freeze:
+		freeze.reset(ship_level)
+	if rage:
+		rage.reset(ship_level)
+	if barrel:
+		barrel.reset(ship_level)
+	_refresh_test_ship_ability_hud()
+	if report_status:
+		_set_status("Main Ship energy and abilities reset.")
+
+
+func _ship_energy_for_level(ship_level: int) -> int:
+	var normalized_level := clampi(ship_level, 1, _max_test_ship_level())
+	return int(BuildingSystem.PLAYER_SHIP_LEVELS.get(
+		normalized_level,
+		{}
+	).get("energy", 4))
 
 
 func _add_attack_loadout_controls(vbox: VBoxContainer) -> void:
@@ -3322,6 +3758,246 @@ func _verify_test_scene_mixed_combat() -> void:
 	get_tree().quit()
 
 
+func _verify_test_ship_abilities() -> void:
+	await get_tree().process_frame
+	reset_sandbox()
+	await get_tree().process_frame
+	if not await spawn_building_level("town_hall", 3):
+		push_error("[TEST_SHIP_ABILITIES] target Town Hall did not spawn")
+		get_tree().quit(1)
+		return
+
+	clear_test_attack_loadout()
+	_test_attack_ship_level = _max_test_ship_level()
+	_attack_counts["Knight"] = 1
+	_attack_levels["Knight"] = _test_attack_max_level("Knight")
+	_refresh_attack_row("Knight")
+	_refresh_test_ship_row()
+	await start_test_attack()
+
+	var attack: Node = get_node_or_null("../AttackSystem")
+	var bs: Node = _test_combat_building_system()
+	if not is_instance_valid(attack) or not is_instance_valid(bs):
+		push_error("[TEST_SHIP_ABILITIES] combat systems are missing")
+		get_tree().quit(1)
+		return
+	var ready_wait := 0.0
+	var ready_timeout := float(attack.get("sail_duration")) + 4.0
+	while not _test_attack_is_ready() and ready_wait < ready_timeout:
+		await get_tree().process_frame
+		ready_wait += get_process_delta_time()
+	if not _test_attack_is_ready():
+		push_error("[TEST_SHIP_ABILITIES] Main Ship never became ready")
+		get_tree().quit(1)
+		return
+
+	var cannon: BSCannon = bs.get("_cannon")
+	var rally: BSRally = bs.get("_rally")
+	var medkit: BSMedkit = bs.get("_medkit")
+	var freeze: BSFreezeSpell = bs.get("_freeze")
+	var rage: BSRageSpell = bs.get("_rage")
+	var barrel: BSSkeletonBarrel = bs.get("_skeleton_barrel")
+	var expected_energy := _ship_energy_for_level(_test_attack_ship_level)
+	if (
+		cannon == null
+		or cannon._cannon_energy != expected_energy
+		or rally == null
+		or medkit == null
+		or not medkit.is_unlocked()
+		or freeze == null
+		or not freeze.is_unlocked()
+		or rage == null
+		or not rage.is_unlocked()
+		or barrel == null
+		or not barrel.is_unlocked()
+	):
+		push_error("[TEST_SHIP_ABILITIES] level 6 energy/unlocks are incorrect")
+		get_tree().quit(1)
+		return
+
+	var target: Dictionary = {}
+	var target_building_system: Node = null
+	for raw_bs in get_tree().get_nodes_in_group("building_systems"):
+		var candidate_bs: Node = raw_bs
+		for building in candidate_bs.get("placed_buildings"):
+			if str(building.get("id", "")) == "town_hall":
+				target = building
+				target_building_system = candidate_bs
+				break
+		if not target.is_empty():
+			break
+	if target.is_empty():
+		push_error("[TEST_SHIP_ABILITIES] target building is missing")
+		get_tree().quit(1)
+		return
+
+	var target_node: Node3D = target.get("node", null)
+	var target_position := target_node.global_position
+	var camera := get_viewport().get_camera_3d()
+	if camera == null or not is_instance_valid(target_building_system):
+		push_error("[TEST_SHIP_ABILITIES] barrel targeting prerequisites are missing")
+		get_tree().quit(1)
+		return
+	var direct_barrel_pick: Dictionary = bs.call(
+		"_find_ship_barrel_target_from_screen",
+		camera.unproject_position(target_position)
+	)
+	if (
+		direct_barrel_pick.get("building", {}).get("node", null)
+		!= target_node
+	):
+		push_error("[TEST_SHIP_ABILITIES] direct barrel click did not select target")
+		get_tree().quit(1)
+		return
+
+	var target_local: Vector3 = target_building_system.to_local(target_position)
+	var test_cell_size: float = float(target_building_system.get("cell_size"))
+	var ground_local := Vector3.INF
+	for offset in [
+		Vector3(test_cell_size * 6.0, 0.0, 0.0),
+		Vector3(-test_cell_size * 6.0, 0.0, 0.0),
+		Vector3(0.0, 0.0, test_cell_size * 6.0),
+		Vector3(0.0, 0.0, -test_cell_size * 6.0),
+	]:
+		var candidate_ground: Vector3 = target_local + offset
+		candidate_ground.y = float(target_building_system.get("grid_y"))
+		if (
+			target_building_system.call("_is_local_inside_grid", candidate_ground)
+			and target_building_system.call(
+				"_find_building_at",
+				target_building_system.call("_local_to_grid", candidate_ground)
+			).is_empty()
+		):
+			ground_local = candidate_ground
+			break
+	if ground_local == Vector3.INF:
+		push_error("[TEST_SHIP_ABILITIES] no free ground point for barrel test")
+		get_tree().quit(1)
+		return
+	var ground_world: Vector3 = target_building_system.to_global(ground_local)
+	ground_world.y = float(target_building_system.get("grid_y"))
+	var ground_barrel_pick: Dictionary = bs.call(
+		"_find_ship_barrel_target_from_screen",
+		camera.unproject_position(ground_world)
+	)
+	var resolved_ground: Vector3 = ground_barrel_pick.get("position", Vector3.INF)
+	if (
+		not ground_barrel_pick.get("building", {}).is_empty()
+		or resolved_ground == Vector3.INF
+		or Vector2(resolved_ground.x, resolved_ground.z).distance_to(
+			Vector2(ground_world.x, ground_world.z)
+		) > 0.02
+	):
+		push_error("[TEST_SHIP_ABILITIES] distant barrel click snapped to a building")
+		get_tree().quit(1)
+		return
+
+	var hp_before := int(target.get("hp", 0))
+	cannon._fire_ship_cannon(target)
+	if cannon._cannon_energy != expected_energy - 1:
+		push_error("[TEST_SHIP_ABILITIES] cannon did not consume energy")
+		get_tree().quit(1)
+		return
+	var cannon_wait := 0.0
+	while int(target.get("hp", hp_before)) == hp_before and cannon_wait < 10.0:
+		await get_tree().process_frame
+		cannon_wait += get_process_delta_time()
+	if int(target.get("hp", hp_before)) >= hp_before:
+		push_error("[TEST_SHIP_ABILITIES] cannon did not damage its target")
+		get_tree().quit(1)
+		return
+
+	reset_test_ship_abilities(false)
+	if not rally._drop_rally(target_position):
+		push_error("[TEST_SHIP_ABILITIES] rally grenade could not be launched")
+		get_tree().quit(1)
+		return
+	reset_test_ship_abilities(false)
+	if not medkit._drop_medkit(target_position):
+		push_error("[TEST_SHIP_ABILITIES] medkit could not be placed")
+		get_tree().quit(1)
+		return
+	reset_test_ship_abilities(false)
+	if not freeze._drop_freeze(target_position):
+		push_error("[TEST_SHIP_ABILITIES] freeze orb could not be launched")
+		get_tree().quit(1)
+		return
+	reset_test_ship_abilities(false)
+	if not rage._drop_rage(target_position):
+		push_error("[TEST_SHIP_ABILITIES] rage field could not be placed")
+		get_tree().quit(1)
+		return
+	var rage_root: Node3D = rage._active_zone.get("root", null)
+	if not is_instance_valid(rage_root):
+		push_error("[TEST_SHIP_ABILITIES] rage field visual is missing")
+		get_tree().quit(1)
+		return
+	for rage_child in rage_root.get_children():
+		if not rage_child is MeshInstance3D:
+			continue
+		var rage_mesh_instance := rage_child as MeshInstance3D
+		if (
+			rage_mesh_instance.mesh == null
+			or rage_mesh_instance.mesh.get_aabb().size.y > 0.0001
+		):
+			push_error("[TEST_SHIP_ABILITIES] rage field is not flat")
+			get_tree().quit(1)
+			return
+		var rage_material := (
+			rage_mesh_instance.material_override
+			as StandardMaterial3D
+		)
+		if rage_material == null or rage_material.no_depth_test:
+			push_error("[TEST_SHIP_ABILITIES] rage field ignores scene depth")
+			get_tree().quit(1)
+			return
+	reset_test_ship_abilities(false)
+	if not barrel.fire_at_building(target):
+		push_error("[TEST_SHIP_ABILITIES] skeleton barrel could not be launched")
+		get_tree().quit(1)
+		return
+	reset_test_ship_abilities(false)
+
+	if _test_ship_ability_buttons.size() != TEST_SHIP_ABILITY_ORDER.size():
+		push_error("[TEST_SHIP_ABILITIES] HUD does not expose every ability")
+		get_tree().quit(1)
+		return
+	_refresh_test_ship_ability_hud()
+	if not _test_ship_energy_label.text.contains(str(expected_energy)):
+		push_error("[TEST_SHIP_ABILITIES] HUD energy label is stale")
+		get_tree().quit(1)
+		return
+
+	if is_instance_valid(_panel):
+		_panel.visible = false
+	await get_tree().process_frame
+	await get_tree().process_frame
+	var capture_path := "headless-renderer"
+	var capture_image: Image = null
+	if DisplayServer.get_name() != "headless":
+		var viewport_texture := get_viewport().get_texture()
+		capture_image = (
+			viewport_texture.get_image() if viewport_texture != null else null
+		)
+	if capture_image != null and not capture_image.is_empty():
+		capture_path = ProjectSettings.globalize_path(
+			"user://test-main-ship-abilities.png"
+		)
+		var capture_error := capture_image.save_png(capture_path)
+		if capture_error != OK:
+			push_error("[TEST_SHIP_ABILITIES] screenshot failed: %s" % (
+				error_string(capture_error)
+			))
+			get_tree().quit(1)
+			return
+	print("[TEST_SHIP_ABILITIES] PASS energy=%d abilities=%d capture=%s" % [
+		expected_energy,
+		_test_ship_ability_buttons.size(),
+		capture_path,
+	])
+	get_tree().quit()
+
+
 func _change_attack_count(troop_name: String, delta: int) -> void:
 	var current: int = int(_attack_counts.get(troop_name, 0))
 	var next_count: int = maxi(0, current + delta)
@@ -3387,6 +4063,7 @@ func start_test_attack() -> void:
 			_set_status("Combat warmup running - see [WARMUP_PROFILE] logs.")
 			await warmup.finished
 	print("[TestHarness] combat_warmup_elapsed_ms=", Time.get_ticks_msec() - warmup_started)
+	_prepare_test_battle(fleet)
 	attack.enter_attack_mode(fleet)
 	var total_troops: int = 0
 	for ship in fleet:
@@ -3394,6 +4071,34 @@ func start_test_attack() -> void:
 			if troop_name != "_SLOT_FILLER_":
 				total_troops += 1
 	_set_status("Main ship approaching with %d troops. Select a unit and click the attack grid." % total_troops)
+
+
+func _prepare_test_battle(fleet: Array) -> void:
+	var now_sec := Time.get_ticks_msec() / 1000.0
+	for raw_bs in get_tree().get_nodes_in_group("building_systems"):
+		var bs: Node = raw_bs
+		if not is_instance_valid(bs):
+			continue
+		bs.set("is_viewing_enemy", true)
+		var battle: BSBattle = bs.get("_battle")
+		if battle == null:
+			continue
+		battle._replay_active = false
+		battle._victory_declared = false
+		battle._battle_timer = 0.0
+		battle._battle_timer_active = bool(bs.get("create_ui"))
+		battle._battle_start_time = now_sec
+		battle._saved_fleet = fleet.duplicate(true)
+		battle._battle_replay.clear()
+		battle._had_troops = false
+		battle._skeleton_respawn_timer = 0.0
+		battle.enemy_info = {
+			"id": "test-sandbox",
+			"name": "Test Sandbox",
+			"battle_session_id": "test-local",
+		}
+	reset_test_ship_abilities(false)
+	_refresh_test_ship_ability_hud()
 
 
 func load_test_attack_army() -> void:
@@ -3507,6 +4212,606 @@ func run_mixed_fps_profile() -> void:
 		get_tree().quit()
 
 
+func _prepare_automated_profile_ui() -> void:
+	if is_instance_valid(_panel):
+		_panel.visible = false
+	if is_instance_valid(_test_ship_ability_hud):
+		_test_ship_ability_hud.visible = false
+	_test_ship_ability_refresh_elapsed = 0.0
+
+
+func run_knight_swarm_fps_profile() -> void:
+	if _fps_profile_active:
+		_set_status("FPS profile is already running.")
+		return
+	var attack := get_node_or_null("../AttackSystem")
+	if not attack or not attack.has_method("_try_deploy_selected_troop"):
+		_set_status("AttackSystem does not support automatic FPS test deployment.")
+		return
+
+	_fps_profile_active = true
+	_prepare_automated_profile_ui()
+	Engine.time_scale = 1.0
+	var profile_args: PackedStringArray = OS.get_cmdline_user_args()
+	var profile_troop_name := "Knight"
+	for argument in profile_args:
+		if argument.begins_with("--swarm-profile-troop="):
+			profile_troop_name = argument.trim_prefix("--swarm-profile-troop=")
+			break
+	if not TEST_ATTACK_PREFERRED_ORDER.has(profile_troop_name):
+		push_error(
+			"[KNIGHT_SWARM_PROFILE] unsupported troop=%s"
+			% profile_troop_name
+		)
+		_fps_profile_active = false
+		return
+	var full_base_profile: bool = profile_args.has("--swarm-profile-full-base")
+	print(
+		"[KNIGHT_SWARM_PROFILE] start count=",
+		KNIGHT_SWARM_PROFILE_COUNT,
+		" troop=",
+		profile_troop_name,
+		" full_base=",
+		full_base_profile
+	)
+	await _await_profile_background_warmup()
+	if full_base_profile:
+		_set_status("Swarm profile: building maximum TH6 village...")
+		await build_max_village_for_town_hall(6)
+	else:
+		_set_status("Swarm profile: building isolated target...")
+		reset_sandbox()
+		await get_tree().process_frame
+		if not await spawn_building_level("town_hall", 6):
+			_set_status("Swarm profile failed: Town Hall target did not spawn.")
+			_fps_profile_active = false
+			return
+	var profile_target: Dictionary = {}
+	for raw_bs in get_tree().get_nodes_in_group("building_systems"):
+		for building in raw_bs.get("placed_buildings"):
+			if str(building.get("id", "")) == "town_hall":
+				profile_target = building
+				break
+		if not profile_target.is_empty():
+			break
+	if profile_target.is_empty():
+		_set_status("Knight swarm profile failed: Town Hall target data is missing.")
+		_fps_profile_active = false
+		return
+	profile_target["max_hp"] = 50000000
+	profile_target["hp"] = 50000000
+	await get_tree().create_timer(FPS_PROFILE_SETTLE_SECONDS).timeout
+	_dump_render_inventory("full_base_idle" if full_base_profile else "isolated_idle")
+
+	var quick_profile: bool = profile_args.has("--quick-knight-profile")
+	var idle_seconds: float = 2.0 if quick_profile else FPS_PROFILE_IDLE_SECONDS
+	var combat_seconds: float = 6.0 if quick_profile else FPS_PROFILE_COMBAT_SECONDS
+	var idle_metrics: Dictionary = await _sample_fps_profile("knight_idle", idle_seconds)
+	if full_base_profile and profile_args.has("--profile-render-breakdown"):
+		await _sample_render_breakdown()
+	clear_test_attack_loadout()
+	_test_attack_ship_level = _max_test_ship_level()
+	_attack_counts[profile_troop_name] = KNIGHT_SWARM_PROFILE_COUNT
+	_attack_levels[profile_troop_name] = 7
+	_refresh_attack_row(profile_troop_name)
+	_refresh_test_ship_row()
+	if not _load_test_attack_army(false):
+		_set_status("Knight swarm profile failed: 45-knight fleet did not fit.")
+		_fps_profile_active = false
+		return
+
+	await start_test_attack()
+	var ship_wait: float = 0.0
+	while not bool(attack._main_ship_ready_for_deployment) and ship_wait < float(attack.sail_duration) + 2.0:
+		await get_tree().process_frame
+		ship_wait += get_process_delta_time()
+
+	var deployed_count: int = 0
+	while not attack._army_entries.is_empty():
+		attack.select_troop_group(0)
+		var column: int = deployed_count % 9
+		var row: int = deployed_count / 9
+		var offset: Vector3 = (
+			(attack._get_lateral_dir() as Vector3) * (float(column) - 4.0) * 0.055
+			+ (attack._get_sail_dir() as Vector3) * float(row) * 0.035
+		)
+		if not attack._try_deploy_selected_troop(attack.plane_center + offset):
+			break
+		deployed_count += 1
+	print("[KNIGHT_SWARM_PROFILE] auto_deploy count=", deployed_count)
+	if deployed_count != KNIGHT_SWARM_PROFILE_COUNT:
+		_set_status("Knight swarm profile failed: deployed %d / %d." % [
+			deployed_count,
+			KNIGHT_SWARM_PROFILE_COUNT,
+		])
+		_fps_profile_active = false
+		return
+
+	var disable_separation: bool = profile_args.has("--knight-probe-no-separation")
+	var disable_slots: bool = profile_args.has("--knight-probe-no-slots")
+	var disable_physics: bool = profile_args.has("--knight-probe-no-physics")
+	var disable_animation: bool = profile_args.has("--knight-probe-no-animation")
+	var disable_visuals: bool = profile_args.has("--knight-probe-no-visuals")
+	var disable_defense_physics: bool = profile_args.has(
+		"--knight-probe-no-defense-physics"
+	)
+	var disable_guard_physics: bool = profile_args.has(
+		"--knight-probe-no-guard-physics"
+	)
+	var probe_modes: Array[String] = []
+	if disable_separation:
+		probe_modes.append("no_separation")
+	if disable_slots:
+		probe_modes.append("no_slots")
+	if disable_physics:
+		probe_modes.append("no_physics")
+	if disable_animation:
+		probe_modes.append("no_animation")
+	if disable_visuals:
+		probe_modes.append("no_visuals")
+	if disable_defense_physics:
+		probe_modes.append("no_defense_physics")
+	if disable_guard_physics:
+		probe_modes.append("no_guard_physics")
+	for troop in get_tree().get_nodes_in_group("troops"):
+		if not is_instance_valid(troop):
+			continue
+		if full_base_profile:
+			troop.set("max_hp", 50000000)
+			troop.set("hp", 50000000)
+		if disable_separation:
+			troop.set("can_pass_through_friendly_units", true)
+		if disable_slots:
+			troop.set("_slot_eval_timer", -1000000.0)
+		if disable_physics:
+			troop.set_physics_process(false)
+		if disable_animation:
+			troop.set("_animation_budget_active", false)
+		if disable_visuals:
+			troop.visible = false
+	if disable_visuals:
+		var crowd_batch := get_tree().current_scene.get_node_or_null("TroopCrowdBatch")
+		if crowd_batch is Node3D:
+			(crowd_batch as Node3D).visible = false
+	if disable_defense_physics:
+		var disabled_defense_count := _set_profile_defense_physics(false)
+		print(
+			"[KNIGHT_SWARM_PROFILE] disabled_defense_physics count=",
+			disabled_defense_count
+		)
+	if disable_guard_physics:
+		var disabled_guard_count := 0
+		for guard in get_tree().get_nodes_in_group("skeleton_guards"):
+			if not is_instance_valid(guard):
+				continue
+			guard.set_physics_process(false)
+			disabled_guard_count += 1
+		print(
+			"[KNIGHT_SWARM_PROFILE] disabled_guard_physics count=",
+			disabled_guard_count
+		)
+	print("[KNIGHT_SWARM_PROFILE] probe_modes=", probe_modes)
+
+	var deploy_wait: float = (
+		float(attack.troop_spawn_delay) * float(KNIGHT_SWARM_PROFILE_COUNT)
+		+ FPS_PROFILE_SETTLE_SECONDS
+	)
+	await get_tree().create_timer(deploy_wait).timeout
+	_dump_render_inventory("full_base_combat" if full_base_profile else "isolated_combat")
+	await _capture_knight_swarm_profile_frame(profile_args)
+	var combat_metrics: Dictionary = await _sample_fps_profile(
+		"knight_combat",
+		combat_seconds
+	)
+	print("[KNIGHT_SWARM_PROFILE] summary idle=", idle_metrics, " combat=", combat_metrics)
+	_set_status("Knight swarm profile complete. See [KNIGHT_SWARM_PROFILE].")
+	_fps_profile_active = false
+	if OS.get_cmdline_user_args().has("--auto-knight-swarm-profile"):
+		await get_tree().process_frame
+		get_tree().quit()
+
+
+func _set_profile_defense_physics(enabled: bool) -> int:
+	var defense_scripts := {
+		"res://scripts/turret.gd": true,
+		"res://scripts/tower_archer.gd": true,
+		"res://scripts/tower_mortar.gd": true,
+		"res://scripts/tower_mage.gd": true,
+	}
+	var changed_count := 0
+	var scene := get_tree().current_scene
+	if scene == null:
+		return changed_count
+	for node in scene.find_children("*", "", true, false):
+		var script := node.get_script() as Script
+		if script == null or not defense_scripts.has(script.resource_path):
+			continue
+		node.set_physics_process(enabled)
+		changed_count += 1
+	return changed_count
+
+
+func _sample_render_breakdown() -> void:
+	var scene := get_tree().current_scene
+	if scene == null:
+		return
+	var building_roots: Array[Node3D] = []
+	for raw_bs in get_tree().get_nodes_in_group("building_systems"):
+		for building in raw_bs.get("placed_buildings"):
+			var building_node := building.get("node", null) as Node3D
+			if is_instance_valid(building_node):
+				building_roots.append(building_node)
+	var island_visual := scene.get_node_or_null("Island/Visual") as Node3D
+	var water := scene.get_node_or_null("Water") as Node3D
+
+	for building_node in building_roots:
+		building_node.visible = false
+	await get_tree().process_frame
+	await _sample_fps_profile("render_without_buildings", 1.5)
+	for building_node in building_roots:
+		if is_instance_valid(building_node):
+			building_node.visible = true
+
+	if is_instance_valid(island_visual):
+		island_visual.visible = false
+	await get_tree().process_frame
+	await _sample_fps_profile("render_without_island", 1.5)
+	if is_instance_valid(island_visual):
+		island_visual.visible = true
+
+	if is_instance_valid(water):
+		water.visible = false
+	await get_tree().process_frame
+	await _sample_fps_profile("render_without_water", 1.5)
+	if is_instance_valid(water):
+		water.visible = true
+	await get_tree().process_frame
+
+
+func _capture_knight_swarm_profile_frame(profile_args: PackedStringArray) -> void:
+	var output_path := ""
+	for argument in profile_args:
+		if argument.begins_with("--knight-swarm-capture-out="):
+			output_path = argument.trim_prefix("--knight-swarm-capture-out=")
+			break
+	if output_path.is_empty():
+		return
+	var output_dir := output_path.get_base_dir()
+	if not output_dir.is_empty():
+		DirAccess.make_dir_recursive_absolute(
+			ProjectSettings.globalize_path(output_dir)
+			if output_dir.begins_with("user://")
+			else output_dir
+		)
+	await RenderingServer.frame_post_draw
+	var err := get_viewport().get_texture().get_image().save_png(output_path)
+	if err != OK:
+		push_error(
+			"[KNIGHT_SWARM_PROFILE] capture failed path=%s error=%s"
+			% [output_path, error_string(err)]
+		)
+		return
+	print("[KNIGHT_SWARM_PROFILE] capture=", output_path)
+
+
+func _dump_render_inventory(phase: String) -> void:
+	var scene_root := get_tree().current_scene
+	if scene_root == null:
+		return
+	var groups: Dictionary = {}
+	var paths: Dictionary = {}
+	var visible_meshes := 0
+	var visible_surfaces := 0
+	var visible_multimeshes := 0
+	var visible_particles := 0
+	var visible_3d_labels := 0
+	var visible_canvas_items := 0
+	var canvas_groups: Dictionary = {}
+	for raw_visual in scene_root.find_children("*", "VisualInstance3D", true, false):
+		var visual := raw_visual as VisualInstance3D
+		if visual == null or not visual.is_visible_in_tree():
+			continue
+		var draw_units := 1
+		if visual is MeshInstance3D:
+			var mesh_instance := visual as MeshInstance3D
+			if mesh_instance.mesh == null:
+				continue
+			draw_units = maxi(1, mesh_instance.mesh.get_surface_count())
+			visible_meshes += 1
+			visible_surfaces += draw_units
+		elif visual is MultiMeshInstance3D:
+			var multimesh_instance := visual as MultiMeshInstance3D
+			if multimesh_instance.multimesh == null or multimesh_instance.multimesh.mesh == null:
+				continue
+			draw_units = maxi(1, multimesh_instance.multimesh.mesh.get_surface_count())
+			visible_multimeshes += 1
+			visible_surfaces += draw_units
+		elif visual is GPUParticles3D or visual is CPUParticles3D:
+			visible_particles += 1
+		elif visual is Label3D:
+			visible_3d_labels += 1
+		var label := _render_inventory_group(visual)
+		groups[label] = int(groups.get(label, 0)) + draw_units
+		var visual_path := str(scene_root.get_path_to(visual))
+		paths[visual_path] = int(paths.get(visual_path, 0)) + draw_units
+	for raw_canvas in scene_root.find_children("*", "CanvasItem", true, false):
+		var canvas_item := raw_canvas as CanvasItem
+		if canvas_item != null and canvas_item.is_visible_in_tree():
+			visible_canvas_items += 1
+			var canvas_label := _render_inventory_group(canvas_item)
+			canvas_groups[canvas_label] = int(canvas_groups.get(canvas_label, 0)) + 1
+	var ranked: Array[Dictionary] = []
+	for label in groups:
+		ranked.append({"label": str(label), "draw_units": int(groups[label])})
+	ranked.sort_custom(
+		func(a: Dictionary, b: Dictionary) -> bool:
+			return int(a.draw_units) > int(b.draw_units)
+	)
+	if ranked.size() > 18:
+		ranked.resize(18)
+	var ranked_paths: Array[Dictionary] = []
+	for visual_path in paths:
+		ranked_paths.append({
+			"path": str(visual_path),
+			"draw_units": int(paths[visual_path]),
+		})
+	ranked_paths.sort_custom(
+		func(a: Dictionary, b: Dictionary) -> bool:
+			return int(a.draw_units) > int(b.draw_units)
+	)
+	if ranked_paths.size() > 30:
+		ranked_paths.resize(30)
+	var ranked_canvas: Array[Dictionary] = []
+	for label in canvas_groups:
+		ranked_canvas.append({
+			"label": str(label),
+			"items": int(canvas_groups[label]),
+		})
+	ranked_canvas.sort_custom(
+		func(a: Dictionary, b: Dictionary) -> bool:
+			return int(a.items) > int(b.items)
+	)
+	if ranked_canvas.size() > 12:
+		ranked_canvas.resize(12)
+	print(
+		"[RENDER_INVENTORY] phase=%s meshes=%d surfaces=%d multimeshes=%d particles=%d labels3d=%d canvas_items=%d top=%s canvas_top=%s"
+		% [
+			phase,
+			visible_meshes,
+			visible_surfaces,
+			visible_multimeshes,
+			visible_particles,
+			visible_3d_labels,
+			visible_canvas_items,
+			ranked,
+			ranked_canvas,
+		]
+	)
+	print("[RENDER_PATHS] phase=%s top=%s" % [phase, ranked_paths])
+
+
+func _render_inventory_group(node: Node) -> String:
+	var current := node
+	var top_level_name := str(node.name)
+	var scene_root := get_tree().current_scene
+	while current != null:
+		if current.has_meta("building_type"):
+			return "building:%s" % str(current.get_meta("building_type"))
+		if current.is_in_group("troops"):
+			return "troops"
+		if current.name == "Island":
+			return "island"
+		if current.name == "Water":
+			return "water"
+		if current.get_parent() == scene_root:
+			top_level_name = str(current.name)
+		current = current.get_parent()
+	return "scene:%s" % top_level_name
+
+
+func run_mixed_swarm_fps_profile() -> void:
+	if _fps_profile_active:
+		_set_status("FPS profile is already running.")
+		return
+	var attack := get_node_or_null("../AttackSystem")
+	if not attack or not attack.has_method("_spawn_troops_at_pos"):
+		_set_status("AttackSystem does not support mixed swarm profiling.")
+		return
+
+	_fps_profile_active = true
+	_prepare_automated_profile_ui()
+	Engine.time_scale = 1.0
+	var troop_names: Array[String] = []
+	for troop_name in TEST_ATTACK_PREFERRED_ORDER:
+		for _unit_index in int(MIXED_SWARM_PROFILE_COUNTS.get(troop_name, 0)):
+			troop_names.append(troop_name)
+	print(
+		"[MIXED_SWARM_PROFILE] start count=",
+		troop_names.size(),
+		" roster=",
+		MIXED_SWARM_PROFILE_COUNTS
+	)
+	await _await_profile_background_warmup()
+	reset_sandbox()
+	await get_tree().process_frame
+	if not await spawn_building_level("town_hall", 6):
+		_set_status("Mixed swarm profile failed: Town Hall target did not spawn.")
+		_fps_profile_active = false
+		return
+	var profile_target: Dictionary = {}
+	for raw_bs in get_tree().get_nodes_in_group("building_systems"):
+		for building in raw_bs.get("placed_buildings"):
+			if str(building.get("id", "")) == "town_hall":
+				profile_target = building
+				break
+		if not profile_target.is_empty():
+			break
+	if profile_target.is_empty():
+		_set_status("Mixed swarm profile failed: Town Hall target data is missing.")
+		_fps_profile_active = false
+		return
+	profile_target["max_hp"] = 500000000
+	profile_target["hp"] = 500000000
+	await get_tree().create_timer(FPS_PROFILE_SETTLE_SECONDS).timeout
+
+	var profile_args: PackedStringArray = OS.get_cmdline_user_args()
+	var quick_profile: bool = profile_args.has("--quick-mixed-profile")
+	var idle_seconds: float = 2.0 if quick_profile else FPS_PROFILE_IDLE_SECONDS
+	var combat_seconds: float = 8.0 if quick_profile else FPS_PROFILE_COMBAT_SECONDS
+	var idle_metrics: Dictionary = await _sample_fps_profile("mixed_swarm_idle", idle_seconds)
+	_prepare_test_battle([])
+	var old_spawn_delay: float = float(attack.troop_spawn_delay)
+	attack.troop_spawn_delay = 0.01
+	var spawn_center: Vector3 = attack.plane_center
+	if spawn_center == Vector3.ZERO:
+		spawn_center = Vector3(-1.75, 0.0, 2.65)
+	attack._spawn_troops_at_pos(troop_names, {}, spawn_center)
+	await get_tree().create_timer(float(troop_names.size()) * 0.01 + 0.5).timeout
+	attack.troop_spawn_delay = old_spawn_delay
+
+	var spawned_count: int = get_tree().get_node_count_in_group("troops")
+	print("[MIXED_SWARM_PROFILE] spawned=", spawned_count)
+	if spawned_count < troop_names.size():
+		push_error(
+			"[MIXED_SWARM_PROFILE] expected at least %d troops, got %d"
+			% [troop_names.size(), spawned_count]
+		)
+		_fps_profile_active = false
+		return
+	await get_tree().create_timer(FPS_PROFILE_SETTLE_SECONDS).timeout
+	var combat_metrics: Dictionary = await _sample_fps_profile(
+		"mixed_swarm_combat",
+		combat_seconds
+	)
+	print(
+		"[MIXED_SWARM_PROFILE] summary idle=",
+		idle_metrics,
+		" combat=",
+		combat_metrics
+	)
+	_set_status("Mixed swarm profile complete. See [MIXED_SWARM_PROFILE].")
+	_fps_profile_active = false
+	if OS.get_cmdline_user_args().has("--auto-mixed-swarm-profile"):
+		await get_tree().process_frame
+		get_tree().quit()
+
+
+func run_troop_matrix_fps_profile() -> void:
+	if _fps_profile_active:
+		_set_status("FPS profile is already running.")
+		return
+	var attack := get_node_or_null("../AttackSystem")
+	if not attack or not attack.has_method("_spawn_troops_at_pos"):
+		_set_status("AttackSystem does not support troop matrix profiling.")
+		return
+
+	_fps_profile_active = true
+	_prepare_automated_profile_ui()
+	Engine.time_scale = 1.0
+	await _await_profile_background_warmup()
+	var summaries: Dictionary = {}
+	var requested_filter := _troop_matrix_profile_filter()
+	for troop_name in TEST_ATTACK_PREFERRED_ORDER:
+		if not requested_filter.is_empty() and not requested_filter.has(troop_name):
+			continue
+		attack.cleanup_combat_nodes()
+		await get_tree().process_frame
+		await get_tree().process_frame
+		reset_sandbox()
+		await get_tree().process_frame
+		if not await spawn_building_level("town_hall", 6):
+			push_error("[TROOP_MATRIX_PROFILE] target spawn failed troop=%s" % troop_name)
+			_fps_profile_active = false
+			return
+		for raw_bs in get_tree().get_nodes_in_group("building_systems"):
+			for building in raw_bs.get("placed_buildings"):
+				if str(building.get("id", "")) == "town_hall":
+					building["max_hp"] = 500000000
+					building["hp"] = 500000000
+		_prepare_test_battle([])
+		var troop_names: Array[String] = []
+		var slot_cost: int = _attack_troop_slot_cost(troop_name)
+		var profile_count: int = maxi(
+			1,
+			floori(float(TROOP_MATRIX_PROFILE_CAPACITY) / float(slot_cost))
+		)
+		for _unit_index in profile_count:
+			troop_names.append(troop_name)
+		var old_spawn_delay: float = float(attack.troop_spawn_delay)
+		attack.troop_spawn_delay = 0.005
+		attack._spawn_troops_at_pos(
+			troop_names,
+			{},
+			Vector3(-1.75, 0.0, 2.65)
+		)
+		await get_tree().create_timer(0.75).timeout
+		attack.troop_spawn_delay = old_spawn_delay
+		var active_count := get_tree().get_node_count_in_group("troops")
+		var metrics: Dictionary = await _sample_fps_profile(
+			"matrix_%s" % troop_name.to_lower(),
+			2.0
+		)
+		metrics["active_count"] = active_count
+		summaries[troop_name] = metrics
+		print(
+			"[TROOP_MATRIX_PROFILE] troop=",
+			troop_name,
+			" requested=",
+			profile_count,
+			" slot_cost=",
+			slot_cost,
+			" occupied_slots=",
+			profile_count * slot_cost,
+			" active=",
+			active_count,
+			" median_fps=",
+			float(metrics.get("median_fps", 0.0)),
+			" draw_calls=",
+			float(metrics.get("avg_draw_calls", 0.0)),
+			" physics_ms=",
+			float(metrics.get("avg_physics_ms", 0.0))
+		)
+	print("[TROOP_MATRIX_PROFILE] summary=", summaries)
+	_fps_profile_active = false
+	if OS.get_cmdline_user_args().has("--auto-troop-matrix-profile"):
+		await get_tree().process_frame
+		get_tree().quit()
+
+
+func _troop_matrix_profile_filter() -> Dictionary:
+	var result: Dictionary = {}
+	for argument in OS.get_cmdline_user_args():
+		if not argument.begins_with("--troop-matrix-filter="):
+			continue
+		var raw_names := argument.trim_prefix("--troop-matrix-filter=")
+		for raw_name in raw_names.split(",", false):
+			var name := raw_name.strip_edges()
+			if name != "":
+				result[name] = true
+	return result
+
+
+func _await_profile_background_warmup(timeout_seconds: float = 25.0) -> void:
+	var warmup_script: Script = load("res://scripts/warmup.gd")
+	if warmup_script == null or not warmup_script.has_method("is_combat_profile_ready"):
+		return
+	var started_msec: int = Time.get_ticks_msec()
+	var timeout_msec: int = roundi(timeout_seconds * 1000.0)
+	while (
+		Time.get_ticks_msec() - started_msec < timeout_msec
+		and not bool(warmup_script.call("is_combat_profile_ready"))
+	):
+		await get_tree().process_frame
+	await get_tree().process_frame
+	await get_tree().process_frame
+	print(
+		"[FPS_PROFILE] background_warmup_wait_ms=",
+		Time.get_ticks_msec() - started_msec,
+		" ready=",
+		bool(warmup_script.call("is_combat_profile_ready"))
+	)
+
+
 func _sample_fps_profile(phase: String, duration_seconds: float) -> Dictionary:
 	var started_us: int = Time.get_ticks_usec()
 	var previous_frame_us: int = started_us
@@ -3514,6 +4819,13 @@ func _sample_fps_profile(phase: String, duration_seconds: float) -> Dictionary:
 	var duration_us: int = int(duration_seconds * 1000000.0)
 	var fps_samples: Array[float] = []
 	var frame_times_ms: Array[float] = []
+	var process_ms_samples: Array[float] = []
+	var physics_ms_samples: Array[float] = []
+	var navigation_ms_samples: Array[float] = []
+	var draw_call_samples: Array[float] = []
+	var object_samples: Array[float] = []
+	var node_samples: Array[float] = []
+	var resource_samples: Array[float] = []
 	var report_index: int = 0
 
 	while Time.get_ticks_usec() - started_us < duration_us:
@@ -3530,8 +4842,24 @@ func _sample_fps_profile(phase: String, duration_seconds: float) -> Dictionary:
 			var troops: int = get_tree().get_nodes_in_group("troops").size()
 			var draw_calls: int = int(Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME))
 			var objects: int = int(Performance.get_monitor(Performance.RENDER_TOTAL_OBJECTS_IN_FRAME))
+			var nodes: int = int(Performance.get_monitor(Performance.OBJECT_NODE_COUNT))
+			var resources: int = int(Performance.get_monitor(Performance.OBJECT_RESOURCE_COUNT))
+			var process_ms: float = Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0
+			var physics_ms: float = Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS) * 1000.0
+			var navigation_ms: float = Performance.get_monitor(Performance.TIME_NAVIGATION_PROCESS) * 1000.0
+			process_ms_samples.append(process_ms)
+			physics_ms_samples.append(physics_ms)
+			navigation_ms_samples.append(navigation_ms)
+			draw_call_samples.append(float(draw_calls))
+			object_samples.append(float(objects))
+			node_samples.append(float(nodes))
+			resource_samples.append(float(resources))
 			print("[FPS_PROFILE] sample phase=", phase, " second=", report_index,
-				" fps=", fps, " troops=", troops, " draw_calls=", draw_calls, " objects=", objects)
+				" fps=", fps, " troops=", troops, " draw_calls=", draw_calls, " objects=", objects,
+				" nodes=", nodes, " resources=", resources,
+				" process_ms=", snappedf(process_ms, 0.01),
+				" physics_ms=", snappedf(physics_ms, 0.01),
+				" navigation_ms=", snappedf(navigation_ms, 0.01))
 			next_report_us += 1000000
 
 	var avg_fps: float = 0.0
@@ -3565,9 +4893,25 @@ func _sample_fps_profile(phase: String, duration_seconds: float) -> Dictionary:
 		"min_fps": min_fps,
 		"p95_frame_ms": p95_frame_ms,
 		"max_frame_ms": max_frame_ms,
+		"avg_process_ms": _average_float_samples(process_ms_samples),
+		"avg_physics_ms": _average_float_samples(physics_ms_samples),
+		"avg_navigation_ms": _average_float_samples(navigation_ms_samples),
+		"avg_draw_calls": _average_float_samples(draw_call_samples),
+		"avg_objects": _average_float_samples(object_samples),
+		"avg_nodes": _average_float_samples(node_samples),
+		"avg_resources": _average_float_samples(resource_samples),
 		"fps_samples": fps_samples.size(),
 		"frame_samples": frame_times_ms.size(),
 	}
+
+
+func _average_float_samples(samples: Array[float]) -> float:
+	if samples.is_empty():
+		return 0.0
+	var total: float = 0.0
+	for value in samples:
+		total += value
+	return snappedf(total / float(samples.size()), 0.01)
 
 
 func _build_test_attack_fleet() -> Array:
@@ -3636,12 +4980,21 @@ func _format_test_speed(speed: float) -> String:
 func reset_sandbox(cancel_active_build: bool = true) -> void:
 	if cancel_active_build:
 		_build_generation += 1
-	for bs in get_tree().get_nodes_in_group("building_systems"):
-		if bs and bs.has_method("_destroy_all_buildings"):
-			bs._destroy_all_buildings()
 	var attack := get_node_or_null("../AttackSystem")
 	if attack and attack.has_method("exit_attack_mode"):
 		attack.exit_attack_mode()
+	for raw_bs in get_tree().get_nodes_in_group("building_systems"):
+		var bs: Node = raw_bs
+		if not is_instance_valid(bs):
+			continue
+		var battle: BSBattle = bs.get("_battle")
+		if battle:
+			battle.reset()
+		bs.set("is_viewing_enemy", false)
+		if bs.has_method("_destroy_all_buildings"):
+			bs._destroy_all_buildings()
+	reset_test_ship_abilities(false)
+	_refresh_test_ship_ability_hud()
 	_set_status("Sandbox reset.")
 
 

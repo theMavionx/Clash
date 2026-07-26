@@ -61,7 +61,7 @@ function parseNumberConstant(source, name) {
 }
 
 function parseAssignedNumber(source, name) {
-  const match = source.match(new RegExp(`\\b${name}\\s*=\\s*([\\d.]+)`));
+  const match = source.match(new RegExp(`\\b${name}(?:\\s*:\\s*\\w+)?\\s*=\\s*([\\d.]+)`));
   assert.ok(match, `missing client assignment ${name}`);
   return Number(match[1]);
 }
@@ -184,6 +184,12 @@ function assertDefenseStats(relativePath, serverType, fieldMap, expectedLevels) 
   }
 }
 
+assertTroopStats('scripts/knight.gd', 'knight');
+assertTroopStats('scripts/archer.gd', 'archer', {
+  move_speed: 'moveSpeed',
+  attack_range: 'range',
+  projectile_fly_speed: 'projSpeed',
+});
 assertTroopStats('scripts/mimic.gd', 'mimic', {
   move_speed: 'moveSpeed',
   attack_range: 'range',
@@ -594,7 +600,7 @@ for (let level = 1; level <= 5; level++) {
 }
 
 console.log(
-  '[COMBAT_PARITY] PASS troops=mage,pea_shooter,wind_mage,windling,mimic,mechanical_dragon,ice_golem,necromancer,horror,demon_king,fire_dragon'
+  '[COMBAT_PARITY] PASS troops=knight,archer,mage,pea_shooter,wind_mage,windling,mimic,mechanical_dragon,ice_golem,necromancer,horror,demon_king,fire_dragon'
   + ' summon=owner_bound,capped,expiring shark_trap=levels_1_to_6'
   + ' ship_slots=knight1,archer1,mage4,pea5,mimic6,mechanical4,demon5,ice10,fire10,wind_mage15,necromancer15,horror20'
   + ' tactical_constants=freeze,rage,skeleton_barrel'

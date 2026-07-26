@@ -78,7 +78,7 @@ func _run_test() -> void:
 		animation_player != null
 		and animation_player.has_animation("Melee_1H_Attack_Chop")
 	)
-	var sword_count := knight.find_children("OHS07_Sword_R", "MeshInstance3D", true, false).size()
+	var combined := knight.find_child("CombinedKnightMesh", true, false) as MeshInstance3D
 
 	if hp_after >= hp_before:
 		push_error("Pirate knight combat failed: melee attack did not damage the target.")
@@ -88,8 +88,23 @@ func _run_test() -> void:
 		push_error("Pirate knight combat failed: attack animation did not play.")
 		quit(1)
 		return
-	if sword_count != 1:
-		push_error("Pirate knight combat failed: expected one modular sword, found %d." % sword_count)
+	if knight.find_child("OHS07_Sword_R", true, false) != null:
+		push_error("Pirate knight combat failed: modular sword source was not pruned.")
+		quit(1)
+		return
+	if combined == null or not combined.visible or combined.mesh.get_surface_count() != 1:
+		push_error("Pirate knight combat failed: combined animated mesh is unavailable.")
+		quit(1)
+		return
+	var baked_parts := combined.get_meta("clash_baked_parts", PackedStringArray()) as PackedStringArray
+	if not (
+		baked_parts.has("head")
+		and baked_parts.has("helmet")
+		and baked_parts.has("eye")
+		and baked_parts.has("mouth")
+		and baked_parts.has("sword")
+	):
+		push_error("Pirate knight combat failed: combined mesh is missing visible parts.")
 		quit(1)
 		return
 
@@ -98,7 +113,7 @@ func _run_test() -> void:
 		" hp_after=", hp_after,
 		" damage=", hp_before - hp_after,
 		" attack_animation=", saw_attack_animation,
-		" sword_count=", sword_count
+		" combined_vertices=", combined.mesh.surface_get_array_len(0)
 	)
 	stage.queue_free()
 	await process_frame

@@ -7,9 +7,9 @@ const MAX_TROOP_LEVEL: int = 7
 const BURST_COUNT: int = 3
 const BURST_PHASES: Array[float] = [0.22, 0.50, 0.78]
 const PROJECTILE_SPEED: float = 2.15
-## A burst can have at most three peas in flight. Six entries leave one full
-## spare burst for slow frames without multiplying FBX nodes per deployed unit.
-const PROJECTILE_POOL_SIZE: int = 6
+## A burst has at most three peas in flight, including with the tactical speed
+## boost. Keeping one slot per burst phase avoids unused nodes per deployed unit.
+const PROJECTILE_POOL_SIZE: int = 3
 const PROJECTILE_HIT_DIST_SQ: float = 0.05 * 0.05
 const PROJECTILE_RADIUS: float = 0.026
 const GREEN_TEXTURE: Texture2D = preload(
@@ -381,6 +381,7 @@ func _exit_tree() -> void:
 			projectile_node.queue_free()
 	_pool.clear()
 	_active_projectiles.clear()
+	super._exit_tree()
 
 
 func _apply_body_material() -> void:

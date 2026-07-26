@@ -1,5 +1,9 @@
 class_name BaseTroop
 extends Node3D
+
+const TROOP_HEALTH_BAR_BATCH := preload("res://scripts/troop_health_bar_batch.gd")
+const TROOP_CROWD_BATCH := preload("res://scripts/troop_crowd_batch.gd")
+const TROOP_STATUS_BATCH := preload("res://scripts/troop_status_batch.gd")
 ## Base class for all troops with combat AI.
 ## Subclasses override _init_stats() and _setup_weapons().
 
@@ -39,18 +43,30 @@ var anim_file_aliases: Dictionary = {}
 var attack_anim: String = ""
 var _hp_bar: Node3D
 var _hp_fill: MeshInstance3D
-var _attack_sfx_player: AudioStreamPlayer = null
 const TROOP_MESH_CULL_MARGIN: float = 0.75
 const TROOP_MESH_LOD_BIAS: float = 4.0
+const DENSE_TROOP_LOD_INDEX: int = 0
+const SWARM_TROOP_THRESHOLD: int = 40
+const SWARM_TROOP_LOD_INDEX: int = 1
+const MASS_TROOP_THRESHOLD: int = 70
+const MASS_TROOP_LOD_INDEX: int = 2
 const ATTACK_SFX_VOLUME_DB: float = -8.0
 const ATTACK_SFX_PITCH_JITTER: float = 0.06
+const ATTACK_SFX_POOL_SIZE: int = 6
 
 ## Cached troop list — shared across all BaseTroop instances via static
 static var _cached_troops: Array = []
 static var _troops_cache_frame: int = -1
+static var _troops_cache_valid: bool = false
+static var _slot_angle_cache_frame: int = -1
+static var _slot_angle_groups: Dictionary = {}
 static var _attack_sfx_cache: Dictionary = {}
 static var _attack_sfx_missing: Dictionary = {}
+static var _attack_sfx_pools: Dictionary = {}
+static var _attack_sfx_pool_cursors: Dictionary = {}
 static var _render_diag_emitted: Dictionary = {}
+static var _dense_render_tier_active: int = 0
+static var _dense_render_mode_initialized: bool = false
 const RENDER_DIAG_MAX_EVENTS: int = 24
 const RENDER_DIAG_MAX_MESHES: int = 10
 const RENDER_DIAG_MAX_PARTICLES: int = 8
@@ -227,6 +243,8 @@ static var _camera_cache_frame: int = -1
 
 ## Throttle separation — not every troop needs it every frame
 var _sep_counter: int = 0
+var _move_sep_counter: int = 0
+var _last_move_separation: Vector3 = Vector3.ZERO
 var _slot_eval_timer: float = 0.0
 var _last_separation: Vector3 = Vector3.ZERO
 var _hp_bar_frame: int = 0  # throttle HP bar billboard rotation
@@ -242,6 +260,11 @@ const TARGET_SWITCH_MIN_ADVANTAGE: float = 0.08
 const RETARGET_INTERVAL_SEC: float = 10.0 / 60.0
 const SLOT_EVAL_INTERVAL_SEC: float = 6.0 / 60.0
 const REPLAY_COMBAT_DELTA: float = 1.0 / 60.0
+const HIGH_DENSITY_TROOP_THRESHOLD: int = 24
+const HIGH_DENSITY_SEPARATION_INTERVAL: int = 4
+const HIGH_DENSITY_ATTACK_SEPARATION_INTERVAL: int = 12
+const NORMAL_TROOP_ANIMATION_HZ: float = 30.0
+const DENSE_TROOP_ANIMATION_HZ: float = 10.0
 
 static var _replay_combat_cache_frame: int = -1
 static var _replay_combat_locked: bool = false
@@ -257,6 +280,8 @@ static var _HP_COLORS: Array = [
 var _stuck_timer: float = 0.0
 var _last_pos: Vector3 = Vector3.ZERO
 var _orbit_angle: float = 0.0  # radians offset to orbit around blocked target
+var _last_face_direction: Vector3 = Vector3.ZERO
+const FACE_DIRECTION_DOT_THRESHOLD: float = 0.9997
 
 ## Shared animation libraries — one per anim_files key, reused by all troops of same type
 static var _anim_lib_cache: Dictionary = {}  # key(String) -> AnimationLibrary
@@ -264,6 +289,7 @@ static var _anim_lib_cache: Dictionary = {}  # key(String) -> AnimationLibrary
 ## Cached building data — refreshed once per frame, used by _find_next_target and avoidance
 static var _cached_building_list: Array = []  # [{dict, bs, pos}]
 static var _buildings_cache_frame: int = -1
+static var _buildings_cache_valid: bool = false
 static var _building_entry_pool: Array = []  # reusable Dict pool to avoid per-frame allocation
 static var _building_entry_pool_idx: int = 0
 
@@ -328,13 +354,28 @@ static func combat_delta(delta: float) -> float:
 
 
 static func invalidate_combat_lists() -> void:
+	invalidate_troops_cache()
+	invalidate_buildings_cache()
+	invalidate_guards_cache()
+
+
+static func invalidate_troops_cache() -> void:
 	_cached_troops.clear()
 	_troops_cache_frame = -1
+	_troops_cache_valid = false
+
+
+static func invalidate_buildings_cache() -> void:
 	_cached_building_list.clear()
 	_buildings_cache_frame = -1
+	_buildings_cache_valid = false
 	_building_entry_pool_idx = 0
+
+
+static func invalidate_guards_cache() -> void:
 	_cached_guards_list.clear()
 	_guards_list_cache_frame = -1
+	_guards_cache_valid = false
 
 
 static func is_live_troop(troop: Variant) -> bool:
@@ -411,6 +452,10 @@ static func _ensure_island_bounds() -> void:
 			"extent_z": extent_z * 1.05,
 			"rotation": float(bs.get("grid_rotation")),
 		}
+		bounds["cos_rotation"] = cos(float(bounds["rotation"]))
+		bounds["sin_rotation"] = sin(float(bounds["rotation"]))
+		bounds["half_x"] = float(bounds["extent_x"]) * 0.5
+		bounds["half_z"] = float(bounds["extent_z"]) * 0.5
 		var area: float = extent_x * extent_z
 		if area > fallback_area:
 			fallback_area = area
@@ -426,15 +471,14 @@ static func _ensure_island_bounds() -> void:
 
 static func _clamp_to_grid_bounds(pos: Vector3, bounds: Dictionary) -> Vector3:
 	var center: Vector3 = bounds.get("center", Vector3.ZERO)
-	var rotation: float = float(bounds.get("rotation", 0.0))
 	var dx: float = pos.x - center.x
 	var dz: float = pos.z - center.z
-	var cos_r: float = cos(rotation)
-	var sin_r: float = sin(rotation)
+	var cos_r: float = float(bounds.get("cos_rotation", 1.0))
+	var sin_r: float = float(bounds.get("sin_rotation", 0.0))
 	var local_x: float = dx * cos_r - dz * sin_r
 	var local_z: float = dx * sin_r + dz * cos_r
-	var half_x: float = float(bounds.get("extent_x", 0.0)) * 0.5
-	var half_z: float = float(bounds.get("extent_z", 0.0)) * 0.5
+	var half_x: float = float(bounds.get("half_x", 0.0))
+	var half_z: float = float(bounds.get("half_z", 0.0))
 	local_x = clampf(local_x, -half_x, half_x)
 	local_z = clampf(local_z, -half_z, half_z)
 	var clamped: Vector3 = pos
@@ -477,8 +521,7 @@ static func _building_avoid_radius(b: Dictionary, bs_node: Node, padding: float 
 
 
 static func _get_buildings_cached() -> Array:
-	var frame: int = combat_cache_key()
-	if frame != _buildings_cache_frame:
+	if not _buildings_cache_valid:
 		_cached_building_list.clear()
 		var tree: SceneTree = Engine.get_main_loop() as SceneTree
 		if tree:
@@ -502,26 +545,27 @@ static func _get_buildings_cached() -> Array:
 						_cached_building_list.append(entry)
 			_cached_building_list.sort_custom(func(a, b): return _building_order_key(a.get("b", {})) < _building_order_key(b.get("b", {})))
 		_building_entry_pool_idx = 0
-		_buildings_cache_frame = frame
+		_buildings_cache_frame = combat_cache_key()
+		_buildings_cache_valid = true
 	return _cached_building_list
 
 
 static var _cached_guards_list: Array = []
 static var _guards_list_cache_frame: int = -1
+static var _guards_cache_valid: bool = false
 
 static func _get_guards_list_cached() -> Array:
-	var frame: int = combat_cache_key()
-	if frame != _guards_list_cache_frame:
+	if not _guards_cache_valid:
 		var tree: SceneTree = Engine.get_main_loop() as SceneTree
 		if tree:
 			_cached_guards_list = tree.get_nodes_in_group("skeleton_guards")
-		_guards_list_cache_frame = frame
+		_guards_list_cache_frame = combat_cache_key()
+		_guards_cache_valid = true
 	return _cached_guards_list
 
 
 static func _get_troops_cached() -> Array:
-	var frame: int = combat_cache_key()
-	if frame != _troops_cache_frame:
+	if not _troops_cache_valid:
 		_cached_troops.clear()
 		var tree: SceneTree = Engine.get_main_loop() as SceneTree
 		if tree:
@@ -529,7 +573,8 @@ static func _get_troops_cached() -> Array:
 				if is_live_troop(troop):
 					_cached_troops.append(troop)
 			_cached_troops.sort_custom(func(a, b): return _troop_order_key(a) < _troop_order_key(b))
-		_troops_cache_frame = frame
+		_troops_cache_frame = combat_cache_key()
+		_troops_cache_valid = true
 	return _cached_troops
 
 
@@ -556,8 +601,11 @@ func _ready() -> void:
 	_report_troop_render_diagnostic("ready")
 	# Keep combat replay deterministic and aligned with the server simulator.
 	_sep_counter = 0
+	_move_sep_counter = 0
+	_last_move_separation = Vector3.ZERO
 	_slot_eval_timer = 0.0
 	_retarget_timer = 0.0
+	_last_face_direction = Vector3.ZERO
 
 
 ## Override to set hp, damage, atk_speed, move_speed, attack_range, attack_anim, anim_files
@@ -583,11 +631,6 @@ func _setup_weapons() -> void:
 func _setup_attack_sfx() -> void:
 	if attack_sfx_path == "":
 		return
-	if _attack_sfx_player == null:
-		_attack_sfx_player = AudioStreamPlayer.new()
-		_attack_sfx_player.name = "AttackSFX"
-		_attack_sfx_player.volume_db = ATTACK_SFX_VOLUME_DB
-		add_child(_attack_sfx_player)
 	if not _attack_sfx_cache.has(attack_sfx_path) and not _attack_sfx_missing.has(attack_sfx_path):
 		var stream: AudioStream = ResourceLoader.load(attack_sfx_path) as AudioStream
 		if stream:
@@ -595,23 +638,67 @@ func _setup_attack_sfx() -> void:
 		else:
 			_attack_sfx_missing[attack_sfx_path] = true
 			push_warning("%s: missing attack sound '%s'" % [name, attack_sfx_path])
-	if _attack_sfx_cache.has(attack_sfx_path):
-		_attack_sfx_player.stream = _attack_sfx_cache[attack_sfx_path]
 
 
 func _play_attack_sfx() -> void:
 	if attack_sfx_path == "":
 		return
-	if _attack_sfx_player == null or _attack_sfx_player.stream == null:
+	if not _attack_sfx_cache.has(attack_sfx_path):
 		_setup_attack_sfx()
-	if _attack_sfx_player == null or _attack_sfx_player.stream == null:
+	var stream := _attack_sfx_cache.get(attack_sfx_path) as AudioStream
+	if stream == null:
 		return
-	_attack_sfx_player.pitch_scale = randf_range(1.0 - ATTACK_SFX_PITCH_JITTER, 1.0 + ATTACK_SFX_PITCH_JITTER)
-	_attack_sfx_player.play()
+	var pool_key := _attack_sfx_pool_key(attack_sfx_path)
+	var pool := _get_attack_sfx_pool(pool_key, stream)
+	if pool.is_empty():
+		return
+	var cursor: int = int(_attack_sfx_pool_cursors.get(pool_key, 0)) % pool.size()
+	var player := pool[cursor] as AudioStreamPlayer
+	_attack_sfx_pool_cursors[pool_key] = (cursor + 1) % pool.size()
+	player.pitch_scale = randf_range(
+		1.0 - ATTACK_SFX_PITCH_JITTER,
+		1.0 + ATTACK_SFX_PITCH_JITTER
+	)
+	player.play()
+
+
+func _attack_sfx_pool_key(path: String) -> String:
+	var scene := get_tree().current_scene
+	var scene_id: int = int(scene.get_instance_id()) if is_instance_valid(scene) else 0
+	return "%d:%s" % [scene_id, path]
+
+
+func _get_attack_sfx_pool(pool_key: String, stream: AudioStream) -> Array:
+	var existing: Array = _attack_sfx_pools.get(pool_key, [])
+	var valid_pool: Array = []
+	for player_value in existing:
+		if is_instance_valid(player_value) and player_value is AudioStreamPlayer:
+			valid_pool.append(player_value)
+	if valid_pool.size() == ATTACK_SFX_POOL_SIZE:
+		return valid_pool
+
+	var scene := get_tree().current_scene
+	if not is_instance_valid(scene):
+		scene = get_tree().root
+	for player_value in valid_pool:
+		if is_instance_valid(player_value):
+			player_value.queue_free()
+	valid_pool.clear()
+	for pool_index in ATTACK_SFX_POOL_SIZE:
+		var player := AudioStreamPlayer.new()
+		player.name = "TroopAttackSFX_%d" % pool_index
+		player.volume_db = ATTACK_SFX_VOLUME_DB
+		player.stream = stream
+		scene.add_child(player)
+		valid_pool.append(player)
+	_attack_sfx_pools[pool_key] = valid_pool
+	_attack_sfx_pool_cursors[pool_key] = 0
+	return valid_pool
 
 
 ## Transitions the troop from INACTIVE to IDLE, makes it visible, registers it
-## in the "troops" group, creates its HP bar, and immediately searches for a target.
+## in the "troops" group and immediately searches for a target. The HP bar is
+## created lazily after the first hit instead of adding three nodes per troop.
 ## Call this after placing the troop in the scene via the attack system.
 func activate() -> void:
 	if state != State.INACTIVE:
@@ -622,21 +709,226 @@ func activate() -> void:
 	_report_troop_render_diagnostic("activate")
 	state = State.IDLE
 	add_to_group("troops")
-	_create_hp_bar()
+	invalidate_troops_cache()
+	_last_face_direction = Vector3.ZERO
+	_move_sep_counter = posmod(_troop_order_key(self), HIGH_DENSITY_SEPARATION_INTERVAL)
+	_sep_counter = posmod(_troop_order_key(self), HIGH_DENSITY_ATTACK_SEPARATION_INTERVAL)
+	_enable_animation_budget()
+	_refresh_dense_troop_rendering()
 	_record_replay_telemetry("troop_spawn", {})
 	_find_next_target()
 
 
+func _exit_tree() -> void:
+	if _crowd_batch_registered and is_instance_valid(_crowd_batch_manager):
+		_crowd_batch_manager.call("unregister_troop", self, false)
+	if is_instance_valid(_status_batch_manager):
+		_status_batch_manager.call("unregister_troop", self)
+	_crowd_batch_registered = false
+	_crowd_batch_manager = null
+	_status_batch_manager = null
+
+
+func _refresh_dense_troop_rendering() -> void:
+	var troops: Array = get_tree().get_nodes_in_group("troops")
+	var render_tier := _dense_render_tier(troops.size())
+	if _dense_render_mode_initialized and render_tier == _dense_render_tier_active:
+		_set_dense_render_tier(render_tier)
+		return
+	_dense_render_mode_initialized = true
+	_dense_render_tier_active = render_tier
+	for troop in troops:
+		if is_instance_valid(troop) and troop is BaseTroop:
+			troop._set_dense_render_tier(render_tier)
+
+
+static func _dense_render_tier(troop_count: int) -> int:
+	if troop_count >= MASS_TROOP_THRESHOLD:
+		return 3
+	if troop_count >= SWARM_TROOP_THRESHOLD:
+		return 2
+	if troop_count > HIGH_DENSITY_TROOP_THRESHOLD:
+		return 1
+	return 0
+
+
+static func _dense_lod_index_for_tier(render_tier: int) -> int:
+	match render_tier:
+		3:
+			return MASS_TROOP_LOD_INDEX
+		2:
+			return SWARM_TROOP_LOD_INDEX
+		_:
+			return DENSE_TROOP_LOD_INDEX
+
+
+var _dense_render_tier_applied: int = -1
+var _batched_hp_registered: bool = false
+var _crowd_batch_manager: Node = null
+var _crowd_batch_registered: bool = false
+var _status_batch_manager: Node = null
+
+
+func _set_dense_render_tier(render_tier: int) -> void:
+	if _dense_render_tier_applied == render_tier:
+		return
+	_dense_render_tier_applied = render_tier
+	var dense := render_tier > 0
+	var lod_index := _dense_lod_index_for_tier(render_tier)
+	for raw_mesh in find_children("*", "MeshInstance3D", true, false):
+		var mesh_instance := raw_mesh as MeshInstance3D
+		if mesh_instance != null:
+			var full_detail_mesh: Mesh = mesh_instance.get_meta(
+				"clash_full_detail_mesh",
+				mesh_instance.mesh
+			) as Mesh
+			if not mesh_instance.has_meta("clash_full_detail_mesh"):
+				mesh_instance.set_meta("clash_full_detail_mesh", full_detail_mesh)
+			if dense and mesh_instance.skin != null:
+				mesh_instance.mesh = SkinnedMeshCombiner.dense_lod_variant(
+					full_detail_mesh,
+					lod_index
+				)
+			else:
+				mesh_instance.mesh = full_detail_mesh
+			mesh_instance.lod_bias = TROOP_MESH_LOD_BIAS
+			mesh_instance.cast_shadow = (
+				GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+				if dense
+				else GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+			)
+	if render_tier >= 2 and DisplayServer.get_name() != "headless":
+		if not _crowd_batch_registered:
+			_crowd_batch_manager = TROOP_CROWD_BATCH.get_for_scene(self)
+			if _crowd_batch_manager != null:
+				_crowd_batch_registered = bool(
+					_crowd_batch_manager.call("register_troop", self)
+				)
+	elif _crowd_batch_registered:
+		_crowd_batch_manager.call("unregister_troop", self, true)
+		_crowd_batch_registered = false
+		_crowd_batch_manager = null
+	if dense:
+		if is_instance_valid(_hp_bar):
+			_hp_bar.queue_free()
+			_hp_bar = null
+			_hp_fill = null
+	else:
+		_unregister_batched_hp_bar()
+
+
 var _spawn_scale: float = 0.1
+var _animation_budget_active: bool = false
+var _animation_budget_accumulator: float = 0.0
+var _animation_budget_animation: StringName = &""
+var _animation_budget_dense: bool = false
+static var _animation_density_cache_frame: int = -1
+static var _animation_density_cache_value: bool = false
+static var _ai_profile_enabled: bool = OS.get_cmdline_user_args().has("--profile-troop-ai")
+static var _ai_profile_last_frame: int = -1
+static var _ai_profile_frame_count: int = 0
+static var _ai_profile_troop_calls: int = 0
+static var _ai_profile_animation_usec: int = 0
+static var _ai_profile_common_usec: int = 0
+static var _ai_profile_targeting_usec: int = 0
+static var _ai_profile_action_usec: int = 0
+
+
+func _enable_animation_budget() -> void:
+	if anim_player == null:
+		return
+	anim_player.set_meta("clash_troop_animation_managed", true)
+	anim_player.callback_mode_process = AnimationMixer.ANIMATION_CALLBACK_MODE_PROCESS_MANUAL
+	_animation_budget_active = true
+	_animation_budget_animation = anim_player.current_animation
+	_reset_animation_budget_phase(_is_dense_animation_crowd())
+	anim_player.advance(0.0)
+
+
+func _release_animation_budget() -> void:
+	if not _animation_budget_active or anim_player == null:
+		return
+	_animation_budget_active = false
+	_animation_budget_accumulator = 0.0
+	anim_player.callback_mode_process = AnimationMixer.ANIMATION_CALLBACK_MODE_PROCESS_IDLE
+
+
+func _is_dense_animation_crowd() -> bool:
+	var frame: int = combat_cache_key()
+	if frame != _animation_density_cache_frame:
+		var tree: SceneTree = get_tree()
+		_animation_density_cache_value = (
+			tree != null
+			and tree.get_node_count_in_group("troops") > HIGH_DENSITY_TROOP_THRESHOLD
+		)
+		_animation_density_cache_frame = frame
+	return _animation_density_cache_value
+
+
+func _advance_animation_budget(delta: float) -> void:
+	if not _animation_budget_active or anim_player == null:
+		return
+	if (
+		_crowd_batch_registered
+		and is_instance_valid(_crowd_batch_manager)
+		and not bool(
+			_crowd_batch_manager.call("should_advance_animation", self)
+		)
+	):
+		return
+	var dense: bool = _is_dense_animation_crowd()
+	if dense != _animation_budget_dense:
+		_reset_animation_budget_phase(dense)
+	var current_animation: StringName = anim_player.current_animation
+	if current_animation != _animation_budget_animation:
+		_animation_budget_animation = current_animation
+		_reset_animation_budget_phase(dense)
+		anim_player.advance(0.0)
+	var target_hz: float = (
+		DENSE_TROOP_ANIMATION_HZ
+		if dense
+		else NORMAL_TROOP_ANIMATION_HZ
+	)
+	var interval: float = 1.0 / target_hz
+	_animation_budget_accumulator += delta
+	if _animation_budget_accumulator < interval:
+		return
+	var elapsed: float = _animation_budget_accumulator
+	_animation_budget_accumulator = fmod(_animation_budget_accumulator, interval)
+	anim_player.advance(elapsed)
+
+
+func _reset_animation_budget_phase(dense: bool) -> void:
+	_animation_budget_dense = dense
+	var target_hz: float = DENSE_TROOP_ANIMATION_HZ if dense else NORMAL_TROOP_ANIMATION_HZ
+	var phase_slots: int = maxi(1, roundi(60.0 / target_hz))
+	var phase_index: int = posmod(_troop_order_key(self), phase_slots)
+	var interval: float = 1.0 / target_hz
+	_animation_budget_accumulator = -interval * float(phase_index) / float(phase_slots)
 
 func _physics_process(delta: float) -> void:
+	var profile_started_usec: int = Time.get_ticks_usec() if _ai_profile_enabled else 0
+	_advance_animation_budget(delta)
 	if _is_dead or state == State.INACTIVE or state == State.VICTORY:
 		return
+	var profile_animation_usec: int = (
+		Time.get_ticks_usec() - profile_started_usec
+		if _ai_profile_enabled
+		else 0
+	)
 	delta = combat_delta(delta)
 	_update_tactical_boost(delta)
 	# Force scale every frame — GLB animations override it otherwise
-	scale = Vector3(_spawn_scale, _spawn_scale, _spawn_scale)
+	# Animation scale tracks are stripped in _setup_animations(). Avoid
+	# dirtying every descendant transform when the scale is already correct.
+	if (
+		not is_equal_approx(scale.x, _spawn_scale)
+		or not is_equal_approx(scale.y, _spawn_scale)
+		or not is_equal_approx(scale.z, _spawn_scale)
+	):
+		scale = Vector3(_spawn_scale, _spawn_scale, _spawn_scale)
 	_update_hp_bar()
+	var profile_common_end_usec: int = Time.get_ticks_usec() if _ai_profile_enabled else 0
 	# Periodic retargeting uses replay time, not rendered frame count. Browser
 	# FPS can dip below 60; frame-count timers made replays drift from the
 	# server's fixed 60 Hz simulation.
@@ -646,16 +938,73 @@ func _physics_process(delta: float) -> void:
 		_find_next_target()
 	# Immediate guard threat check — suppressed while a rally focus is locked.
 	_check_guard_threat()
+	var profile_targeting_end_usec: int = Time.get_ticks_usec() if _ai_profile_enabled else 0
 	match state:
 		State.RUNNING:
 			_move_to_target(delta)
 		State.ATTACKING:
 			_do_attack(delta)
+	if _ai_profile_enabled:
+		_record_ai_profile_sample(
+			profile_animation_usec,
+			profile_common_end_usec - profile_started_usec - profile_animation_usec,
+			profile_targeting_end_usec - profile_common_end_usec,
+			Time.get_ticks_usec() - profile_targeting_end_usec
+		)
+
+
+static func _record_ai_profile_sample(
+	animation_usec: int,
+	common_usec: int,
+	targeting_usec: int,
+	action_usec: int
+) -> void:
+	var frame := Engine.get_physics_frames()
+	if frame != _ai_profile_last_frame:
+		_ai_profile_last_frame = frame
+		_ai_profile_frame_count += 1
+	_ai_profile_troop_calls += 1
+	_ai_profile_animation_usec += animation_usec
+	_ai_profile_common_usec += common_usec
+	_ai_profile_targeting_usec += targeting_usec
+	_ai_profile_action_usec += action_usec
+	if _ai_profile_frame_count < 120:
+		return
+	var frame_count := maxf(float(_ai_profile_frame_count), 1.0)
+	print(
+		(
+			"[TROOP_AI_PROFILE] frames=%d calls=%d "
+			+ "animation_ms_per_frame=%.3f common_ms_per_frame=%.3f "
+			+ "targeting_ms_per_frame=%.3f action_ms_per_frame=%.3f "
+			+ "total_ms_per_frame=%.3f"
+		)
+		% [
+			_ai_profile_frame_count,
+			_ai_profile_troop_calls,
+			float(_ai_profile_animation_usec) / frame_count / 1000.0,
+			float(_ai_profile_common_usec) / frame_count / 1000.0,
+			float(_ai_profile_targeting_usec) / frame_count / 1000.0,
+			float(_ai_profile_action_usec) / frame_count / 1000.0,
+			float(
+				_ai_profile_animation_usec
+				+ _ai_profile_common_usec
+				+ _ai_profile_targeting_usec
+				+ _ai_profile_action_usec
+			) / frame_count / 1000.0,
+		]
+	)
+	_ai_profile_frame_count = 0
+	_ai_profile_troop_calls = 0
+	_ai_profile_animation_usec = 0
+	_ai_profile_common_usec = 0
+	_ai_profile_targeting_usec = 0
+	_ai_profile_action_usec = 0
 
 
 func _setup_animations() -> void:
 	anim_player = AnimationPlayer.new()
 	anim_player.name = "TroopAnimPlayer"
+	anim_player.set_meta("clash_troop_animation_managed", true)
 	add_child(anim_player)
 	anim_player.root_node = anim_player.get_path_to(self)
 
@@ -702,6 +1051,43 @@ func _setup_animations() -> void:
 
 
 const SLOT_OFFSETS: Array = [-0.0, 0.4, -0.4, 0.8, -0.8, 1.2, -1.2]
+
+
+func _slot_target_cache_key() -> String:
+	if target_guard != null and is_instance_valid(target_guard):
+		return "guard:%d" % int(target_guard.get_instance_id())
+	var target_node: Node = target_building.get("node", null)
+	return "building:%d" % int(target_node.get_instance_id()) if is_instance_valid(target_node) else "building:missing"
+
+
+func _get_slot_angle_group(target_pos: Vector3) -> Dictionary:
+	var frame: int = combat_cache_key()
+	if frame != _slot_angle_cache_frame:
+		_slot_angle_groups.clear()
+		_slot_angle_cache_frame = frame
+	var target_key: String = _slot_target_cache_key()
+	if _slot_angle_groups.has(target_key):
+		return _slot_angle_groups[target_key]
+
+	var matching_troops: Array = []
+	var matching_angles := PackedFloat64Array()
+	for other in _get_troops_cached():
+		if not is_instance_valid(other) or not (other is BaseTroop):
+			continue
+		if target_guard != null:
+			if other.target_guard != target_guard:
+				continue
+		elif other.target_building.get("node") != target_building.get("node"):
+			continue
+		var other_pos: Vector3 = other.global_position
+		matching_troops.append(other)
+		matching_angles.append(atan2(other_pos.x - target_pos.x, other_pos.z - target_pos.z))
+	var group: Dictionary = {
+		"troops": matching_troops,
+		"angles": matching_angles,
+	}
+	_slot_angle_groups[target_key] = group
+	return group
 
 
 ## Static version of the _setup_animations cache-build path. Populates
@@ -869,11 +1255,23 @@ func _create_hp_bar() -> void:
 
 
 func _update_hp_bar() -> void:
-	if not _hp_bar or not _hp_fill:
+	if _dense_render_tier_applied > 0:
+		if hp < max_hp and hp > 0:
+			if not _batched_hp_registered:
+				var batch := TROOP_HEALTH_BAR_BATCH.ensure_for(self)
+				if batch != null:
+					batch.register_troop(self)
+					_batched_hp_registered = true
+		else:
+			_unregister_batched_hp_bar()
 		return
 	if hp >= max_hp:
-		if _hp_bar.visible:
+		if is_instance_valid(_hp_bar) and _hp_bar.visible:
 			_hp_bar.visible = false
+		return
+	if not is_instance_valid(_hp_bar) or not is_instance_valid(_hp_fill):
+		_create_hp_bar()
+	if not is_instance_valid(_hp_bar) or not is_instance_valid(_hp_fill):
 		return
 	_hp_bar.visible = true
 	_hp_bar.global_position = global_position + Vector3(0, 0.25, 0)
@@ -901,6 +1299,15 @@ func _update_hp_bar() -> void:
 	if band != _last_hp_band:
 		_last_hp_band = band
 		mat.set_shader_parameter("albedo", _HP_COLORS[band])
+
+
+func _unregister_batched_hp_bar() -> void:
+	if not _batched_hp_registered:
+		return
+	var batch := TROOP_HEALTH_BAR_BATCH.ensure_for(self)
+	if batch != null:
+		batch.unregister_troop(self)
+	_batched_hp_registered = false
 
 
 func _apply_rally_target() -> bool:
@@ -1085,13 +1492,15 @@ func _should_keep_current_target(search_pos: Vector3, candidate_dist_sq: float, 
 	)
 
 	if target_guard != null and is_instance_valid(target_guard) and target_guard.is_inside_tree() and target_guard.hp > 0:
-		if _guard_target_priority(target_guard) != candidate_priority:
-			return false
+		# Keep an engaged guard through periodic priority searches; switching
+		# away and back in one tick resets the melee wind-up indefinitely.
 		var gdx_sticky: float = search_pos.x - target_guard.global_position.x
 		var gdz_sticky: float = search_pos.z - target_guard.global_position.z
 		var sticky_range: float = attack_range * maxf(GUARD_THREAT_MULT, ATTACK_MAX_RANGE_MULT)
 		if gdx_sticky * gdx_sticky + gdz_sticky * gdz_sticky <= sticky_range * sticky_range:
 			return true
+		if _guard_target_priority(target_guard) != candidate_priority:
+			return false
 
 	if candidate_guard != null and candidate_guard == target_guard:
 		return false
@@ -1177,6 +1586,7 @@ func _play_victory() -> void:
 	target_building = {}
 	target_bs = null
 	target_guard = null
+	_release_animation_budget()
 	if anim_player.has_animation("Cheering"):
 		anim_player.play("Cheering")
 	elif anim_player.has_animation("Idle_A"):
@@ -1202,6 +1612,18 @@ func heal(amount: int) -> int:
 	hp = mini(max_hp, hp + amount)
 	_update_hp_bar()
 	return hp - before
+
+
+func show_healing_feedback(duration: float = 0.42) -> void:
+	if _is_dead or hp <= 0:
+		return
+	var status_batch := _get_troop_status_batch()
+	if status_batch != null:
+		status_batch.show_status(
+			self,
+			TroopStatusBatch.EFFECT_HEAL,
+			duration
+		)
 
 
 func can_receive_tactical_boost() -> bool:
@@ -1233,6 +1655,13 @@ func apply_tactical_boost(
 	atk_speed = maxf(0.05, _tactical_boost_base_atk_speed / safe_speed_multiplier)
 	move_speed = _tactical_boost_base_move_speed * safe_speed_multiplier
 	_tactical_boost_remaining = maxf(_tactical_boost_remaining, safe_duration)
+	var status_batch := _get_troop_status_batch()
+	if status_batch != null:
+		status_batch.show_status(
+			self,
+			TroopStatusBatch.EFFECT_RAGE,
+			safe_duration
+		)
 	return true
 
 
@@ -1255,6 +1684,32 @@ func _clear_tactical_boost() -> void:
 	_tactical_boost_base_damage = 0
 	_tactical_boost_base_atk_speed = 0.0
 	_tactical_boost_base_move_speed = 0.0
+
+
+func _get_troop_status_batch() -> TroopStatusBatch:
+	if is_instance_valid(_status_batch_manager):
+		return _status_batch_manager as TroopStatusBatch
+	_status_batch_manager = TROOP_STATUS_BATCH.get_for_scene(self)
+	return _status_batch_manager as TroopStatusBatch
+
+
+func tactical_status_radius() -> float:
+	var base_radius := maxf(0.16, separation_radius * 1.12)
+	match _get_troop_name():
+		"FireDragon":
+			return maxf(base_radius, 0.34)
+		"MechanicalDragon":
+			return maxf(base_radius, 0.31)
+		"DemonKing":
+			return maxf(base_radius, 0.30)
+		"IceGolem":
+			return maxf(base_radius, 0.28)
+		"Horror":
+			return maxf(base_radius, 0.25)
+		"Necromancer", "WindMage":
+			return maxf(base_radius, 0.22)
+		_:
+			return base_radius
 
 
 ## Applies the same level-based shark trap damage as the server replay. A
@@ -1284,6 +1739,12 @@ func _begin_lethal_damage(damage_taken: int, source: String, visual_duration: fl
 	if _is_dead:
 		return
 	_is_dead = true
+	if _crowd_batch_registered and is_instance_valid(_crowd_batch_manager):
+		_crowd_batch_manager.call("unregister_troop", self, true)
+		_crowd_batch_registered = false
+		_crowd_batch_manager = null
+	if is_instance_valid(_status_batch_manager):
+		_status_batch_manager.call("unregister_troop", self)
 	var death_payload: Dictionary = {"damage": damage_taken}
 	if source != "damage":
 		death_payload["source"] = source
@@ -1291,7 +1752,8 @@ func _begin_lethal_damage(damage_taken: int, source: String, visual_duration: fl
 	_on_lethal_damage(source)
 	if is_in_group("troops"):
 		remove_from_group("troops")
-	invalidate_combat_lists()
+	invalidate_troops_cache()
+	_refresh_dense_troop_rendering()
 	if has_method("_clear_owned_projectiles"):
 		call("_clear_owned_projectiles")
 	set_process(false)
@@ -1301,6 +1763,7 @@ func _begin_lethal_damage(damage_taken: int, source: String, visual_duration: fl
 	if total_visual_duration <= 0.0:
 		queue_free()
 		return
+	_release_animation_budget()
 	if anim_player != null and anim_player.has_animation("Death_A"):
 		anim_player.speed_scale = 1.0
 		anim_player.play("Death_A", 0.05)
@@ -1629,24 +2092,36 @@ func _compute_attack_slot(target_pos: Vector3, my_angle: float, delta: float) ->
 		_slot_eval_timer = fmod(_slot_eval_timer, SLOT_EVAL_INTERVAL_SEC)
 		var best_angle = my_angle
 		var best_min_dist = 0.0
+		var angle_group: Dictionary = _get_slot_angle_group(target_pos)
+		var matching_troops: Array = angle_group.get("troops", [])
+		var other_angles: PackedFloat64Array = angle_group.get("angles", PackedFloat64Array())
+		if target_guard == null and matching_troops.size() > HIGH_DENSITY_TROOP_THRESHOLD:
+			var dense_index: int = matching_troops.find(self)
+			if dense_index >= 0:
+				_orbit_angle = TAU * float(dense_index) / float(matching_troops.size())
+				return target_pos + Vector3(sin(_orbit_angle), 0, cos(_orbit_angle)) * attack_range * 0.95
+		# Keep the original live-position behavior for normal-sized fights.
+		# Only dense swarms use the shared per-frame angle snapshot above.
+		matching_troops.clear()
+		other_angles.clear()
+		for other in _get_troops_cached():
+			if not is_instance_valid(other) or not (other is BaseTroop):
+				continue
+			if target_guard != null:
+				if other.target_guard != target_guard:
+					continue
+			elif other.target_building.get("node") != target_building.get("node"):
+				continue
+			var other_pos: Vector3 = other.global_position
+			matching_troops.append(other)
+			other_angles.append(atan2(other_pos.x - target_pos.x, other_pos.z - target_pos.z))
 		for test_offset in SLOT_OFFSETS:
 			var test_angle = my_angle + test_offset
 			var min_other_dist = 999.0
-			for other in _get_troops_cached():
-				if other == self or not is_instance_valid(other):
+			for angle_index in range(other_angles.size()):
+				if matching_troops[angle_index] == self:
 					continue
-				if not (other is BaseTroop):
-					continue
-				# Only spread against troops attacking the same live target.
-				# For skeleton guards target_building is empty, so comparing only
-				# target_building grouped every guard fight together and made
-				# replay paths diverge from the server simulator.
-				if target_guard != null:
-					if other.target_guard != target_guard:
-						continue
-				elif other.target_building.get("node") != target_building.get("node"):
-					continue
-				var other_angle = atan2(other.global_position.x - target_pos.x, other.global_position.z - target_pos.z)
+				var other_angle: float = other_angles[angle_index]
 				var angle_diff = absf(fmod(test_angle - other_angle + PI, TAU) - PI)
 				min_other_dist = minf(min_other_dist, angle_diff)
 			if min_other_dist > best_min_dist:
@@ -1659,42 +2134,78 @@ func _compute_attack_slot(target_pos: Vector3, my_angle: float, delta: float) ->
 ## Combined steering: troop separation + guard avoidance + building avoidance.
 ## Applies movement, clamps to island, restores Y.
 func _apply_separation_steering(move_dir: Vector3, target_pos: Vector3, delta: float) -> Vector3:
-	var sep = Vector3.ZERO
-	var sep_range_sq = separation_radius * separation_radius * 4.0
+	var self_pos: Vector3 = global_position
+	var troops: Array = _get_troops_cached()
+	var sep: Vector3
+	if troops.size() > HIGH_DENSITY_TROOP_THRESHOLD:
+		_move_sep_counter = (_move_sep_counter + 1) % HIGH_DENSITY_SEPARATION_INTERVAL
+		if _move_sep_counter == 0:
+			_last_move_separation = _compute_movement_separation(move_dir, self_pos, troops)
+		sep = _last_move_separation
+	else:
+		sep = _compute_movement_separation(move_dir, self_pos, troops)
+		_last_move_separation = sep
+
+	var combined := move_dir + sep * separation_force * delta * 3.0
+	var next_position := _clamp_to_island(self_pos + combined)
+	next_position.y = _resolve_movement_y(target_pos.y)
+	# One transform write is important for skinned troops: every write dirties
+	# the full Skeleton3D hierarchy, attachments, and weapon transforms.
+	global_position = next_position
+	return combined
+
+
+## Flying troops override this so horizontal movement and flight height are
+## committed through the same transform write.
+func _resolve_movement_y(base_y: float) -> float:
+	return base_y
+
+
+func _compute_movement_separation(move_dir: Vector3, self_pos: Vector3, troops: Array) -> Vector3:
+	var sep := Vector3.ZERO
+	var sep_range_sq: float = separation_radius * separation_radius * 4.0
 	var move_len: float = move_dir.length()
 	var forward: Vector3 = move_dir / move_len if move_len > 0.0001 else Vector3.ZERO
 	var lateral: Vector3 = Vector3.UP.cross(forward).normalized() if forward.length_squared() > 0.0001 else Vector3.ZERO
 
 	# Troop-to-troop separation. Heavy pass-through units still avoid guards
-	# and buildings, but allied troops should not be able to body-block them.
-	if not can_pass_through_friendly_units:
-		for other in _get_troops_cached():
+	# and buildings. Dense groups already receive deterministic target slots,
+	# and the server does not simulate allied push-apart, so the quadratic
+	# cosmetic pass is intentionally limited to normal-sized fights.
+	if not can_pass_through_friendly_units and troops.size() <= HIGH_DENSITY_TROOP_THRESHOLD:
+		for other in troops:
 			if other == self or not is_instance_valid(other):
 				continue
-			var to_other = other.global_position - global_position
-			to_other.y = 0
-			var d_sq = to_other.length_squared()
+			var other_pos: Vector3 = other.global_position
+			var dx: float = other_pos.x - self_pos.x
+			var dz: float = other_pos.z - self_pos.z
+			var d_sq: float = dx * dx + dz * dz
 			if d_sq > sep_range_sq or d_sq < 0.000001:
 				continue
-			var d = sqrt(d_sq)
+			var d: float = sqrt(d_sq)
 			if d < separation_radius:
-				sep -= (to_other / d) * (separation_radius - d) / separation_radius
+				var weight: float = (separation_radius - d) / (separation_radius * d)
+				sep.x -= dx * weight
+				sep.z -= dz * weight
 
 	# Guard avoidance — light push from non-target guards
 	for guard in _get_guards_list_cached():
 		if not is_instance_valid(guard) or guard == target_guard:
 			continue
-		var to_guard = guard.global_position - global_position
-		to_guard.y = 0
-		var gd_sq = to_guard.length_squared()
+		var guard_pos: Vector3 = guard.global_position
+		var guard_dx: float = guard_pos.x - self_pos.x
+		var guard_dz: float = guard_pos.z - self_pos.z
+		var gd_sq: float = guard_dx * guard_dx + guard_dz * guard_dz
 		if gd_sq < sep_range_sq and gd_sq > 0.000001:
-			var gd = sqrt(gd_sq)
+			var gd: float = sqrt(gd_sq)
 			if gd < separation_radius:
-				sep -= (to_guard / gd) * (separation_radius - gd) / separation_radius * 0.5
+				var guard_weight: float = (separation_radius - gd) / (separation_radius * gd) * 0.5
+				sep.x -= guard_dx * guard_weight
+				sep.z -= guard_dz * guard_weight
 
 			# Lateral steer prevents troops from trying to walk through guards.
 			if gd < separation_radius * 2.0 and lateral.length_squared() > 0.0001:
-				var guard_dir: Vector3 = to_guard / gd
+				var guard_dir := Vector3(guard_dx / gd, 0.0, guard_dz / gd)
 				var ahead: float = guard_dir.dot(forward)
 				if ahead > 0.15:
 					var side: float = guard_dir.dot(lateral)
@@ -1709,19 +2220,19 @@ func _apply_separation_steering(move_dir: Vector3, target_pos: Vector3, delta: f
 		var bnode = entry.b.get("node")
 		if not is_instance_valid(bnode):
 			continue
-		var to_me = global_position - entry.pos
-		to_me.y = 0
-		var bd = to_me.length()
-		var avoid_r = _building_avoid_radius(entry.b, entry.bs)
-		if bd > 0.001 and bd < avoid_r:
-			var push_strength = (avoid_r - bd) / avoid_r
-			sep += to_me.normalized() * push_strength * 1.5
-
-	var combined = move_dir + sep * separation_force * delta * 3.0
-	global_position += combined
-	global_position = _clamp_to_island(global_position)
-	global_position.y = target_pos.y
-	return combined
+		var building_pos: Vector3 = entry.pos
+		var building_dx: float = self_pos.x - building_pos.x
+		var building_dz: float = self_pos.z - building_pos.z
+		var bd_sq: float = building_dx * building_dx + building_dz * building_dz
+		var avoid_r: float = _building_avoid_radius(entry.b, entry.bs)
+		if bd_sq <= 0.000001 or bd_sq >= avoid_r * avoid_r:
+			continue
+		var bd: float = sqrt(bd_sq)
+		if bd > 0.001:
+			var building_weight: float = (avoid_r - bd) / (avoid_r * bd) * 1.5
+			sep.x += building_dx * building_weight
+			sep.z += building_dz * building_weight
+	return sep
 
 
 ## Stuck detection: every 0.6s checks if troop barely moved.
@@ -1738,6 +2249,22 @@ func _check_stuck(delta: float, my_angle: float) -> void:
 			_orbit_angle = lerpf(_orbit_angle, my_angle, 0.3)
 		_last_pos = global_position
 		_stuck_timer = 0.0
+
+
+func _face_move_direction(direction: Vector3) -> void:
+	var flat_direction := Vector3(direction.x, 0.0, direction.z)
+	var length_sq: float = flat_direction.length_squared()
+	if length_sq <= 0.000001:
+		return
+	flat_direction /= sqrt(length_sq)
+	if (
+		_last_face_direction.length_squared() > 0.5
+		and _last_face_direction.dot(flat_direction) >= FACE_DIRECTION_DOT_THRESHOLD
+	):
+		return
+	look_at(global_position + flat_direction, Vector3.UP)
+	rotate_y(PI)
+	_last_face_direction = flat_direction
 
 
 ## Movement each frame: seek target, avoid obstacles, flow around buildings.
@@ -1767,10 +2294,7 @@ func _move_to_target(delta: float) -> void:
 		dir = dir_to_target
 
 	# Face target directly (model faces -Z so rotate 180)
-	var face_target = global_position + dir_to_target
-	face_target.y = global_position.y
-	look_at(face_target, Vector3.UP)
-	rotate_y(PI)
+	_face_move_direction(dir_to_target)
 
 	# Steering: seek + separation + building avoidance
 	_apply_separation_steering(dir * move_speed * delta, target_pos, delta)
@@ -1785,8 +2309,7 @@ func _move_to_target(delta: float) -> void:
 			if attack_anim != "" and anim_player.has_animation(attack_anim):
 				anim_player.play(attack_anim)
 		state = State.ATTACKING
-		look_at(global_position + dir_to_target, Vector3.UP)
-		rotate_y(PI)
+		_face_move_direction(dir_to_target)
 		return
 
 	# Stuck detection
@@ -1798,24 +2321,38 @@ func _get_separation() -> Vector3:
 		_last_separation = Vector3.ZERO
 		return Vector3.ZERO
 
-	# Use cached result from move (updated every 3rd frame)
+	# Dense swarms reuse the same short-range push for a few extra fixed ticks.
+	# The server does not simulate allied troop push-apart, so this only affects
+	# client-side crowd readability and cannot change validated combat damage.
+	var troops = _get_troops_cached()
+	if troops.size() > HIGH_DENSITY_TROOP_THRESHOLD:
+		_last_separation = Vector3.ZERO
+		return Vector3.ZERO
+	var separation_interval: int = (
+		HIGH_DENSITY_ATTACK_SEPARATION_INTERVAL
+		if troops.size() > HIGH_DENSITY_TROOP_THRESHOLD
+		else 3
+	)
 	_sep_counter += 1
-	if _sep_counter % 3 != 0:
+	if _sep_counter % separation_interval != 0:
 		return _last_separation
 
 	var push = Vector3.ZERO
 	var sep_sq = separation_radius * separation_radius
-	var troops = _get_troops_cached()
+	var self_pos: Vector3 = global_position
 	for other in troops:
 		if other == self or not is_instance_valid(other):
 			continue
-		var to_me = global_position - other.global_position
-		to_me.y = 0
-		var d_sq = to_me.length_squared()
+		var other_pos: Vector3 = other.global_position
+		var dx: float = self_pos.x - other_pos.x
+		var dz: float = self_pos.z - other_pos.z
+		var d_sq: float = dx * dx + dz * dz
 		if d_sq > sep_sq or d_sq < 0.000001:
 			continue
-		var d = sqrt(d_sq)
-		push += (to_me / d) * (separation_radius - d) / separation_radius
+		var d: float = sqrt(d_sq)
+		var weight: float = (separation_radius - d) / (separation_radius * d)
+		push.x += dx * weight
+		push.z += dz * weight
 	_last_separation = push
 	return push
 
@@ -1839,8 +2376,7 @@ func _do_attack(delta: float) -> void:
 	# Face the target each frame
 	var face_dir = to_target.normalized()
 	if face_dir.length_squared() > 0.001:
-		look_at(global_position + face_dir, Vector3.UP)
-		rotate_y(PI)
+		_face_move_direction(face_dir)
 
 	# Light separation while attacking — but never push beyond attack range
 	if separation_force > 0.0:
@@ -1849,8 +2385,7 @@ func _do_attack(delta: float) -> void:
 			var new_pos = global_position + sep * separation_force * delta * 0.3
 			var new_dist = (target_pos - new_pos).length()
 			if new_dist < attack_range * 1.2:
-				global_position = new_pos
-				global_position = _clamp_to_island(global_position)
+				global_position = _clamp_to_island(new_pos)
 
 	attack_timer += delta
 	if attack_timer >= atk_speed:
@@ -2073,6 +2608,11 @@ func _stabilize_render_meshes_recursive(node: Node) -> void:
 		mesh_instance.extra_cull_margin = maxf(mesh_instance.extra_cull_margin, TROOP_MESH_CULL_MARGIN)
 		mesh_instance.ignore_occlusion_culling = true
 		mesh_instance.lod_bias = maxf(mesh_instance.lod_bias, TROOP_MESH_LOD_BIAS)
+		if mesh_instance.skin != null:
+			SkinnedMeshCombiner.dense_lod_variant(
+				mesh_instance.mesh,
+				DENSE_TROOP_LOD_INDEX
+			)
 	for child in node.get_children():
 		_stabilize_render_meshes_recursive(child)
 

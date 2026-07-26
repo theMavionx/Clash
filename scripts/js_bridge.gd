@@ -630,6 +630,10 @@ func _handle_react_action(action: String, data: Dictionary) -> void:
 			var active_rt = _get_active_building_system()
 			if active_rt:
 				active_rt._remove_troop_from_ship(int(data.get("slot", 0)))
+		"remove_troop_group":
+			var active_rtg = _get_active_building_system()
+			if active_rtg:
+				active_rtg._remove_troop_group_from_ship(int(data.get("slot", 0)))
 		"set_sound_enabled":
 			var audio = get_node_or_null("/root/AudioManager")
 			if audio and audio.has_method("set_sound_enabled"):

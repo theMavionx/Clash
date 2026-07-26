@@ -10,6 +10,8 @@ const MEDKIT_RADIUS: float = 0.72
 const MEDKIT_TICK_SEC: float = 0.25
 const MEDKIT_HEAL_PER_TICK: int = 12
 const MEDKIT_COLOR: Color = Color(0.18, 0.92, 0.42, 1.0)
+const MEDKIT_DISK_ALPHA_MIN: float = 0.32
+const MEDKIT_DISK_ALPHA_MAX: float = 0.44
 
 var bs: Node3D
 var _ship_level: int = 1
@@ -173,7 +175,15 @@ func _heal_troops(center: Vector3) -> void:
 		if offset.x * offset.x + offset.z * offset.z > radius_sq:
 			continue
 		if troop.has_method("heal"):
-			troop.call("heal", MEDKIT_HEAL_PER_TICK)
+			var healed_amount := int(troop.call("heal", MEDKIT_HEAL_PER_TICK))
+			if (
+				healed_amount > 0
+				and troop.has_method("show_healing_feedback")
+			):
+				troop.call(
+					"show_healing_feedback",
+					MEDKIT_TICK_SEC * 1.7
+				)
 
 
 func _activate_zone(pos: Vector3) -> void:
@@ -193,7 +203,12 @@ func _activate_zone(pos: Vector3) -> void:
 	var disk_mat := StandardMaterial3D.new()
 	disk_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	disk_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	disk_mat.albedo_color = Color(MEDKIT_COLOR.r, MEDKIT_COLOR.g, MEDKIT_COLOR.b, 0.18)
+	disk_mat.albedo_color = Color(
+		MEDKIT_COLOR.r,
+		MEDKIT_COLOR.g,
+		MEDKIT_COLOR.b,
+		(MEDKIT_DISK_ALPHA_MIN + MEDKIT_DISK_ALPHA_MAX) * 0.5
+	)
 	disk_mat.no_depth_test = false
 	disk.material_override = disk_mat
 	root.add_child(disk)
@@ -239,7 +254,12 @@ func _pulse_zone(age: float) -> void:
 	var disk_mat: StandardMaterial3D = _active_zone.get("disk_mat", null)
 	var ring_mat: StandardMaterial3D = _active_zone.get("ring_mat", null)
 	if disk_mat:
-		disk_mat.albedo_color = Color(MEDKIT_COLOR.r, MEDKIT_COLOR.g, MEDKIT_COLOR.b, 0.13 + pulse * 0.08)
+		disk_mat.albedo_color = Color(
+			MEDKIT_COLOR.r,
+			MEDKIT_COLOR.g,
+			MEDKIT_COLOR.b,
+			lerpf(MEDKIT_DISK_ALPHA_MIN, MEDKIT_DISK_ALPHA_MAX, pulse)
+		)
 	if ring_mat:
 		ring_mat.albedo_color = Color(MEDKIT_COLOR.r, MEDKIT_COLOR.g, MEDKIT_COLOR.b, 0.62 + pulse * 0.34)
 

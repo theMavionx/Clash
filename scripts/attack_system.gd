@@ -56,7 +56,7 @@ const TROOP_SCALE_MULTIPLIERS: Dictionary = {
 	"Mage": 1.7,
 	"Archer": 1.7,
 	"Mimic": 1.45,
-	"PeaShooter": 1.30,
+	"PeaShooter": 1.40,
 	"Necromancer": 1.55,
 	"Horror": 1.25,
 	"IceGolem": 2.0,
@@ -1280,8 +1280,13 @@ func _spawn_troop_after_delay(
 	var final_troop_scale := _scale_for_troop(troop_scale_key, troop_scale)
 	troop._spawn_scale = final_troop_scale
 	troop.scale = Vector3(final_troop_scale, final_troop_scale, final_troop_scale)
-	troop.global_position = troop_spawn_pos + offset if exact_position else BaseTroop._clamp_to_island(troop_spawn_pos + offset)
-	troop.global_position.y = building_y
+	var spawn_position: Vector3 = (
+		troop_spawn_pos + offset
+		if exact_position
+		else BaseTroop._clamp_to_island(troop_spawn_pos + offset)
+	)
+	spawn_position.y = building_y
+	troop.global_position = spawn_position
 	if offset == Vector3.ZERO:
 		troop._sep_counter = 0
 		troop._retarget_timer = 0.0

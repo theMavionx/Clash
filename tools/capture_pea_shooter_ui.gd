@@ -132,8 +132,14 @@ func _frame_camera(character: Node3D, camera: Camera3D) -> void:
 		quit(1)
 		return
 	var center := bounds.get_center()
-	var view_direction := Vector3(0.34, 0.14, 1.0).normalized()
-	var distance := maxf(bounds.size.x, bounds.size.z) * 2.05
+	var view_direction := Vector3(0.28, 0.10, 1.0).normalized()
+	var horizontal_extent := Vector2(bounds.size.x, bounds.size.z).length()
+	var portrait_extent := maxf(bounds.size.y, horizontal_extent)
+	var distance := maxf(2.0, portrait_extent * 4.0)
+	camera.projection = Camera3D.PROJECTION_ORTHOGONAL
+	camera.size = portrait_extent * 1.22
+	camera.near = 0.01
+	camera.far = distance * 3.0
 	camera.position = center + view_direction * distance
 	camera.look_at(center, Vector3.UP)
 

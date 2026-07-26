@@ -27,6 +27,31 @@ func _run_capture() -> void:
 
 	for _frame in 8:
 		await process_frame
+
+	var combined_body := character.find_child("CombinedArcherMesh", true, false) as MeshInstance3D
+	var bow_mesh := character.find_child("Bow01", true, false) as MeshInstance3D
+	if (
+		combined_body == null
+		or combined_body.mesh == null
+		or not combined_body.visible
+		or bow_mesh == null
+		or not bow_mesh.visible
+	):
+		push_error("Pirate archer capture failed: combined body or bow visibility is incorrect.")
+		quit(1)
+		return
+	if character.find_child("Body02", true, false) != null:
+		push_error("Pirate archer capture failed: modular body was not pruned.")
+		quit(1)
+		return
+	var baked_parts := combined_body.get_meta(
+		"clash_baked_parts",
+		PackedStringArray()
+	) as PackedStringArray
+	if baked_parts.size() != 7:
+		push_error("Pirate archer capture failed: face, hair, patch, or ribbon was not baked.")
+		quit(1)
+		return
 	_capture(viewport, _output_path("idle"))
 
 	var player := character.get_node_or_null("TroopAnimPlayer") as AnimationPlayer
@@ -78,7 +103,11 @@ func _run_capture() -> void:
 		quit(1)
 		return
 	_capture(viewport, _output_path("attack_release"))
-	print("[PIRATE_ARCHER_CAPTURE] PASS arrow visibility idle=false running=false draw=true release=false")
+	print(
+		"[PIRATE_ARCHER_CAPTURE] PASS arrow visibility idle=false running=false draw=true release=false",
+		" baked_parts=", baked_parts,
+		" combined_vertices=", combined_body.mesh.surface_get_array_len(0)
+	)
 
 	viewport.queue_free()
 	await process_frame

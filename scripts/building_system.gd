@@ -3727,13 +3727,16 @@ func _unhandled_input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 			return
 		elif _ship_skeleton_barrel_mode:
-			var barrel_target: Dictionary = _find_ship_cannon_target_from_screen(
+			var barrel_target: Dictionary = _find_ship_barrel_target_from_screen(
 				touch.position
 			)
 			if (
 				not barrel_target.is_empty()
 				and _skeleton_barrel
-				and _skeleton_barrel.fire_at_building(barrel_target)
+				and _skeleton_barrel.fire_at_target(
+					barrel_target.get("building", {}),
+					barrel_target.get("position", Vector3.INF)
+				)
 			):
 				_exit_ship_skeleton_barrel_mode()
 			get_viewport().set_input_as_handled()
@@ -3788,12 +3791,15 @@ func _unhandled_input(event: InputEvent) -> void:
 				_exit_ship_skeleton_barrel_mode()
 			elif event.button_index == MOUSE_BUTTON_LEFT:
 				var barrel_target: Dictionary = (
-					_find_ship_cannon_target_from_screen(event.position)
+					_find_ship_barrel_target_from_screen(event.position)
 				)
 				if (
 					not barrel_target.is_empty()
 					and _skeleton_barrel
-					and _skeleton_barrel.fire_at_building(barrel_target)
+					and _skeleton_barrel.fire_at_target(
+						barrel_target.get("building", {}),
+						barrel_target.get("position", Vector3.INF)
+					)
 				):
 					_exit_ship_skeleton_barrel_mode()
 			get_viewport().set_input_as_handled()
@@ -4305,6 +4311,55 @@ func _find_ship_cannon_target_from_screen(screen_pos: Vector2) -> Dictionary:
 			nearest_dist_sq = dist_sq
 			nearest = candidate
 	return nearest
+
+
+func _find_ship_barrel_target_from_screen(screen_pos: Vector2) -> Dictionary:
+	const SNAP_RADIUS_CELLS: float = 1.25
+	for bs_node in _building_systems:
+		if not is_instance_valid(bs_node):
+			continue
+		var local_hit: Vector3 = bs_node._get_screen_local(screen_pos)
+		if local_hit == Vector3.INF or not bs_node._is_local_inside_grid(local_hit):
+			continue
+		var world_hit: Vector3 = bs_node.to_global(local_hit)
+		var gp: Vector2i = bs_node._local_to_grid(local_hit)
+		var direct: Dictionary = bs_node._find_building_at(gp)
+		if not direct.is_empty():
+			var direct_node := direct.get("node", null) as Node3D
+			return {
+				"building": direct,
+				"position": (
+					direct_node.global_position
+					if is_instance_valid(direct_node)
+					else world_hit
+				),
+			}
+
+		var candidate: Dictionary = bs_node._find_nearest_building_to_local(local_hit)
+		if candidate.is_empty():
+			return {"building": {}, "position": world_hit}
+		var candidate_node := candidate.get("node", null) as Node3D
+		if not is_instance_valid(candidate_node):
+			return {"building": {}, "position": world_hit}
+
+		var candidate_local: Vector3 = bs_node.to_local(candidate_node.global_position)
+		var candidate_def: Dictionary = bs_node.building_defs.get(
+			str(candidate.get("id", "")),
+			{}
+		)
+		var footprint: Vector2i = candidate_def.get("cells", Vector2i.ONE)
+		var half_x: float = float(footprint.x) * bs_node.cell_size * 0.5
+		var half_z: float = float(footprint.y) * bs_node.cell_size * 0.5
+		var edge_dx: float = maxf(absf(candidate_local.x - local_hit.x) - half_x, 0.0)
+		var edge_dz: float = maxf(absf(candidate_local.z - local_hit.z) - half_z, 0.0)
+		var snap_radius: float = bs_node.cell_size * SNAP_RADIUS_CELLS
+		if edge_dx * edge_dx + edge_dz * edge_dz <= snap_radius * snap_radius:
+			return {
+				"building": candidate,
+				"position": candidate_node.global_position,
+			}
+		return {"building": {}, "position": world_hit}
+	return {}
 
 func _select_building(b: Dictionary) -> void:
 	_set_mortar_range_visuals_for_selected(false)
@@ -6295,6 +6350,13 @@ func _remove_troop_from_ship(slot: int) -> void:
 		_apply_main_ship_action_result(result)
 		return
 	_port._remove_troop_from_ship(slot)
+
+func _remove_troop_group_from_ship(slot: int) -> void:
+	if selected_building.get("id") == "main_ship":
+		var result: Dictionary = await _net.remove_troop_group_from_player_ship(slot)
+		_apply_main_ship_action_result(result)
+		return
+	_port._remove_troop_group_from_ship(slot)
 
 func _animate_main_ship() -> void:
 	_port._animate_main_ship()

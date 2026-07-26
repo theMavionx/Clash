@@ -380,6 +380,13 @@ func remove_troop(building_id: int, slot: int, extra: Dictionary = {}) -> Dictio
 			payload[key] = extra.get(key)
 	return await _http_post("/buildings/%d/remove-troop" % building_id, payload)
 
+func remove_troop_group(building_id: int, slot: int, extra: Dictionary = {}) -> Dictionary:
+	var payload: Dictionary = {"slot": slot}
+	for key in ["ship_troops", "port_number", "grid_index", "grid_x", "grid_z"]:
+		if extra.has(key):
+			payload[key] = extra.get(key)
+	return await _http_post("/buildings/%d/remove-troop-group" % building_id, payload)
+
 func reinforce() -> Dictionary:
 	return await _http_post("/reinforce", {})
 
@@ -413,6 +420,9 @@ func swap_troop_on_player_ship(slot: int, troop_name: String, extra: Dictionary 
 
 func remove_troop_from_player_ship(slot: int) -> Dictionary:
 	return await _http_post("/ship/remove-troop", {"slot": slot})
+
+func remove_troop_group_from_player_ship(slot: int) -> Dictionary:
+	return await _http_post("/ship/remove-troop-group", {"slot": slot})
 
 func unload_player_ship() -> Dictionary:
 	return await _http_post("/ship/unload-troops", {})

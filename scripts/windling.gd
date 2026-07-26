@@ -169,8 +169,13 @@ func _death_visual_duration(_source: String) -> float:
 
 func _apply_flight_height() -> void:
 	var pos := global_position
-	pos.y = _ground_y + FLIGHT_HEIGHT + sin(_flight_time * FLIGHT_BOB_SPEED) * FLIGHT_BOB_HEIGHT
-	global_position = pos
+	pos.y = _resolve_movement_y(_ground_y)
+	if not is_equal_approx(global_position.y, pos.y):
+		global_position = pos
+
+
+func _resolve_movement_y(_base_y: float) -> float:
+	return _ground_y + FLIGHT_HEIGHT + sin(_flight_time * FLIGHT_BOB_SPEED) * FLIGHT_BOB_HEIGHT
 
 
 func _apply_body_material() -> void:

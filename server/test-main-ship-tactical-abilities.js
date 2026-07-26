@@ -155,7 +155,7 @@ assert.deepEqual(
     unlockShipLevel: 6,
     energyCost: 8,
     maxUses: 1,
-    travelSec: 0.9,
+    travelSec: 1.6,
     impactDamage: 650,
     spawnCount: 4,
     lifetimeSec: 18,
@@ -405,7 +405,11 @@ const barrelActions = [
     z: 999,
     t: 0,
   },
-  { type: RAGE_DROP.actionType, ...barrelPoint, t: 0.95 },
+  {
+    type: RAGE_DROP.actionType,
+    ...barrelPoint,
+    t: SKELETON_BARREL.travelSec + 0.05,
+  },
 ];
 const barrelResult = simulate(barrelBuildings, barrelActions);
 const barrelRepeat = simulate(barrelBuildings, barrelActions);
@@ -472,6 +476,31 @@ for (const expiration of barrelExpirations) {
     SKELETON_BARREL.travelSec + SKELETON_BARREL.lifetimeSec,
   );
 }
+
+const groundBarrelResult = simulate(barrelBuildings, [
+  {
+    type: SKELETON_BARREL.actionType,
+    ...barrelPoint,
+    t: 0,
+  },
+]);
+const groundBarrelFire = groundBarrelResult._trace.find(
+  row => row.kind === 'skeleton_barrel_fire',
+);
+const groundBarrelImpact = groundBarrelResult._trace.find(
+  row => row.kind === 'skeleton_barrel_impact',
+);
+const groundBarrelSpawns = groundBarrelResult._trace.filter(
+  row => row.kind === 'skeleton_barrel_skeleton_spawn',
+);
+assert.equal(groundBarrelResult._skeletonBarrelEventsAccepted, 1);
+assert.equal(groundBarrelFire.target, null);
+assert.equal(groundBarrelFire.impactAt, SKELETON_BARREL.travelSec);
+assert.equal(groundBarrelImpact.buildingId, null);
+assert.equal(groundBarrelImpact.actualDamage, 0);
+assert.equal(groundBarrelImpact.hpBefore, 0);
+assert.equal(groundBarrelImpact.hpAfter, null);
+assert.equal(groundBarrelSpawns.length, SKELETON_BARREL.spawnCount);
 assert.equal(barrelResult._skeletonBarrelSkeletonsSpawned, 4);
 assert.equal(barrelResult._skeletonBarrelSkeletonsExpired, 4);
 assert.equal(barrelResult._skeletonBarrelShipSlotsConsumed, 0);

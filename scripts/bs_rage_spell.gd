@@ -14,6 +14,8 @@ const DAMAGE_MULTIPLIER: float = 2.0
 const SPEED_MULTIPLIER: float = 1.25
 const FIELD_COLOR: Color = Color(1.0, 0.48, 0.10, 1.0)
 const FIELD_ACCENT: Color = Color(0.72, 0.18, 1.0, 1.0)
+const FIELD_GROUND_OFFSET: float = 0.004
+const FIELD_SEGMENTS: int = 64
 
 var bs: Node3D
 var _ship_level: int = 1
@@ -127,7 +129,7 @@ func _drop_rage(world_pos: Vector3) -> bool:
 	bs._cannon._cannon_energy -= ENERGY_COST
 	_rage_used = true
 	var clamped := BaseTroop._clamp_to_island(world_pos)
-	var pos := Vector3(clamped.x, bs.grid_y + 0.014, clamped.z)
+	var pos := Vector3(clamped.x, bs.grid_y + FIELD_GROUND_OFFSET, clamped.z)
 	_activate_zone(pos)
 	_record_action(pos)
 	bs._cannon._update_cannon_energy_ui()
@@ -137,7 +139,11 @@ func _drop_rage(world_pos: Vector3) -> bool:
 func replay_drop_rage(world_pos: Vector3) -> void:
 	_rage_used = true
 	var clamped := BaseTroop._clamp_to_island(world_pos)
-	_activate_zone(Vector3(clamped.x, bs.grid_y + 0.014, clamped.z))
+	_activate_zone(Vector3(
+		clamped.x,
+		bs.grid_y + FIELD_GROUND_OFFSET,
+		clamped.z
+	))
 
 
 func _boost_troops(center: Vector3) -> void:
@@ -167,25 +173,22 @@ func _activate_zone(pos: Vector3) -> void:
 	root.global_position = pos
 
 	var disk := MeshInstance3D.new()
-	var disk_mesh := CylinderMesh.new()
-	disk_mesh.top_radius = RADIUS
-	disk_mesh.bottom_radius = RADIUS
-	disk_mesh.height = 0.008
-	disk_mesh.radial_segments = 48
-	disk.mesh = disk_mesh
+	disk.mesh = _make_flat_disc_mesh(RADIUS, FIELD_SEGMENTS)
 	disk.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	var disk_mat := StandardMaterial3D.new()
 	disk_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	disk_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	disk_mat.no_depth_test = false
 	disk_mat.albedo_color = Color(
 		FIELD_ACCENT.r,
 		FIELD_ACCENT.g,
 		FIELD_ACCENT.b,
-		0.16
+		0.08
 	)
 	disk_mat.emission_enabled = true
 	disk_mat.emission = FIELD_ACCENT
-	disk_mat.emission_energy_multiplier = 1.1
+	disk_mat.emission_energy_multiplier = 0.35
+	disk_mat.render_priority = -2
 	disk.material_override = disk_mat
 	root.add_child(disk)
 
@@ -193,26 +196,28 @@ func _activate_zone(pos: Vector3) -> void:
 	var rings: Array[MeshInstance3D] = []
 	for ring_index in range(3):
 		var ring := MeshInstance3D.new()
-		var ring_mesh := TorusMesh.new()
-		ring_mesh.inner_radius = 0.014
-		ring_mesh.outer_radius = RADIUS * (0.46 + float(ring_index) * 0.27)
-		ring_mesh.rings = 32
-		ring_mesh.ring_segments = 8
-		ring.mesh = ring_mesh
-		ring.position.y = 0.012 + float(ring_index) * 0.003
+		var ring_radius := RADIUS * (0.46 + float(ring_index) * 0.27)
+		ring.mesh = _make_flat_ring_mesh(
+			ring_radius,
+			0.018,
+			FIELD_SEGMENTS
+		)
+		ring.position.y = 0.001 + float(ring_index) * 0.0005
 		ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		var ring_mat := StandardMaterial3D.new()
 		ring_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 		ring_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		ring_mat.no_depth_test = false
 		ring_mat.albedo_color = Color(
 			FIELD_COLOR.r,
 			FIELD_COLOR.g,
 			FIELD_COLOR.b,
-			0.76
+			0.58
 		)
 		ring_mat.emission_enabled = true
 		ring_mat.emission = FIELD_COLOR
-		ring_mat.emission_energy_multiplier = 1.6
+		ring_mat.emission_energy_multiplier = 0.75
+		ring_mat.render_priority = -1
 		ring.material_override = ring_mat
 		root.add_child(ring)
 		rings.append(ring)
@@ -237,7 +242,7 @@ func _pulse_zone(age: float) -> void:
 			FIELD_ACCENT.r,
 			FIELD_ACCENT.g,
 			FIELD_ACCENT.b,
-			0.11 + pulse * 0.10
+			0.055 + pulse * 0.045
 		)
 	var rings: Array = _active_zone.get("rings", [])
 	var ring_mats: Array = _active_zone.get("ring_mats", [])
@@ -245,7 +250,6 @@ func _pulse_zone(age: float) -> void:
 		var ring: MeshInstance3D = rings[index]
 		var ring_mat: StandardMaterial3D = ring_mats[index]
 		if is_instance_valid(ring):
-			ring.rotation.y = age * (0.35 + float(index) * 0.18)
 			var scale_pulse := 1.0 + 0.035 * sin(age * 4.4 + float(index))
 			ring.scale = Vector3(scale_pulse, 1.0, scale_pulse)
 		if ring_mat:
@@ -253,8 +257,71 @@ func _pulse_zone(age: float) -> void:
 				FIELD_COLOR.r,
 				FIELD_COLOR.g,
 				FIELD_COLOR.b,
-				0.52 + pulse * 0.38
+				0.40 + pulse * 0.24
 			)
+
+
+func _make_flat_disc_mesh(radius: float, segments: int) -> ImmediateMesh:
+	var mesh := ImmediateMesh.new()
+	mesh.surface_begin(Mesh.PRIMITIVE_TRIANGLES)
+	for index in range(segments):
+		var angle_a := TAU * float(index) / float(segments)
+		var angle_b := TAU * float(index + 1) / float(segments)
+		mesh.surface_add_vertex(Vector3.ZERO)
+		mesh.surface_add_vertex(Vector3(
+			cos(angle_b) * radius,
+			0.0,
+			sin(angle_b) * radius
+		))
+		mesh.surface_add_vertex(Vector3(
+			cos(angle_a) * radius,
+			0.0,
+			sin(angle_a) * radius
+		))
+	mesh.surface_end()
+	return mesh
+
+
+func _make_flat_ring_mesh(
+	radius: float,
+	width: float,
+	segments: int
+) -> ImmediateMesh:
+	var mesh := ImmediateMesh.new()
+	var inner_radius := maxf(0.001, radius - width * 0.5)
+	var outer_radius := radius + width * 0.5
+	mesh.surface_begin(Mesh.PRIMITIVE_TRIANGLES)
+	for index in range(segments):
+		var angle_a := TAU * float(index) / float(segments)
+		var angle_b := TAU * float(index + 1) / float(segments)
+		var inner_a := Vector3(
+			cos(angle_a) * inner_radius,
+			0.0,
+			sin(angle_a) * inner_radius
+		)
+		var inner_b := Vector3(
+			cos(angle_b) * inner_radius,
+			0.0,
+			sin(angle_b) * inner_radius
+		)
+		var outer_a := Vector3(
+			cos(angle_a) * outer_radius,
+			0.0,
+			sin(angle_a) * outer_radius
+		)
+		var outer_b := Vector3(
+			cos(angle_b) * outer_radius,
+			0.0,
+			sin(angle_b) * outer_radius
+		)
+		mesh.surface_add_vertex(inner_a)
+		mesh.surface_add_vertex(outer_b)
+		mesh.surface_add_vertex(outer_a)
+		mesh.surface_add_vertex(inner_a)
+		mesh.surface_add_vertex(inner_b)
+		mesh.surface_add_vertex(outer_b)
+	mesh.surface_end()
+	return mesh
 
 
 func _record_action(pos: Vector3) -> void:

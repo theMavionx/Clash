@@ -40,6 +40,7 @@ const runAttack = attackMode !== '0';
 const runEarlyAttack = attackMode === 'early';
 const mockManualHud = String(args['mock-manual-hud'] || '0') !== '0';
 const mockManualHudReady = String(args['mock-manual-ready'] || '1') !== '0';
+const openAbilityMenu = String(args['open-ability-menu'] || '0') !== '0';
 const dismissUi = String(args['dismiss-ui'] || '1') !== '0';
 const triggerVisibilityRecovery = String(args['visibility-recovery'] || '0') !== '0';
 
@@ -228,6 +229,15 @@ if (mockManualHud) {
     await skipButton.click({ timeout: 2000 }).catch(() => {});
     await page.waitForTimeout(500);
   }
+  if (openAbilityMenu) {
+    const abilityMenuButton = page.getByRole('button', { name: 'Ship abilities' });
+    await abilityMenuButton.click({ timeout: 3000 });
+    await page.waitForFunction(
+      () => document.querySelector('[aria-label="Main Ship abilities"]') != null,
+      null,
+      { timeout: 3000 },
+    );
+  }
 }
 
 const collectFpsSample = (durationMs) => page.evaluate(async (sampleDurationMs) => {
@@ -397,7 +407,8 @@ if (runAttack && !runEarlyAttack) {
 const manualHudScrollProbe = mockManualHud
   ? await page.evaluate(() => {
     const scroller = document.querySelector('[aria-label="Troops available to deploy"]');
-    const lastCard = scroller?.querySelector('[data-troop-index]:last-child');
+    const carouselCards = scroller ? Array.from(scroller.querySelectorAll('button')) : [];
+    const lastCard = carouselCards.at(-1);
     if (!scroller || !lastCard) return null;
     const initialScrollLeft = scroller.scrollLeft;
     scroller.scrollLeft = scroller.scrollWidth;

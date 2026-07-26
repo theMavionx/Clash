@@ -169,8 +169,12 @@ func _run_probe() -> void:
 			)
 			break
 		await get_tree().process_frame
-	if int(turret.hp) != hp_before - 78:
-		_fail("level-1 smash damage mismatch: %d" % (hp_before - int(turret.hp)))
+	var actual_damage := hp_before - int(turret.hp)
+	if actual_damage != int(golem.damage):
+		_fail(
+			"level-1 smash damage mismatch actual=%d expected=%d"
+			% [actual_damage, int(golem.damage)]
+		)
 		return
 	if absf(strike_phase - 0.56) > 0.04:
 		_fail("smash phase mismatch: %.3f" % strike_phase)
@@ -267,7 +271,9 @@ func _run_probe() -> void:
 		return
 
 	print(
-		"[ICE_GOLEM_COMBAT] PASS target=turret damage=78 strike_phase=",
+		"[ICE_GOLEM_COMBAT] PASS target=turret damage=",
+		actual_damage,
+		" strike_phase=",
 		snappedf(strike_phase, 0.001),
 		" shoulder_span=", snappedf(shoulder_span, 0.001),
 		" upper_arm_length=", snappedf(left_upper_arm_length, 0.001),

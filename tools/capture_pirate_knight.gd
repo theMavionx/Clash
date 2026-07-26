@@ -45,23 +45,25 @@ func _run_capture() -> void:
 			quit(1)
 			return
 
-	var body := character.find_child("Body17", true, false) as MeshInstance3D
-	var helmet := character.find_child("Hat14", true, false) as MeshInstance3D
-	var eye := character.find_child("Eye05", true, false) as MeshInstance3D
-	var mouth := character.find_child("Mouth07", true, false) as MeshInstance3D
-	var sword := character.find_child("OHS07_Sword_R", true, false) as MeshInstance3D
-	if body == null or helmet == null or eye == null or mouth == null or sword == null:
+	var combined := character.find_child("CombinedKnightMesh", true, false) as MeshInstance3D
+	if combined == null or combined.mesh == null or not combined.visible:
 		var mesh_names: PackedStringArray = []
 		for mesh in character.find_children("*", "MeshInstance3D", true, false):
 			mesh_names.append(str(mesh.name))
 		print("[PIRATE_KNIGHT_CAPTURE] meshes=", ", ".join(mesh_names))
-		push_error("Pirate knight capture failed: one or more selected modular parts are missing.")
+		push_error("Pirate knight capture failed: combined mesh is missing.")
 		quit(1)
 		return
-	if not body.visible or not helmet.visible or not eye.visible or not mouth.visible or not sword.visible:
-		push_error("Pirate knight capture failed: one or more selected modular parts are hidden.")
+	var baked_parts := combined.get_meta("clash_baked_parts", PackedStringArray()) as PackedStringArray
+	if baked_parts.size() != 6:
+		push_error("Pirate knight capture failed: head, helmet, face, or sword was not baked.")
 		quit(1)
 		return
+	for removed_name in ["Body17", "Hat14", "Eye05", "Mouth07", "OHS07_Sword_R"]:
+		if character.find_child(removed_name, true, false) != null:
+			push_error("Pirate knight capture failed: modular source %s was not pruned." % removed_name)
+			quit(1)
+			return
 
 	await _capture_pose(viewport, player, "Idle_A", 0.20, "idle")
 	await _capture_pose(viewport, player, "Running_A", 0.34, "running")
@@ -70,10 +72,8 @@ func _run_capture() -> void:
 	await _capture_pose(viewport, player, "Cheering", 0.30, "victory")
 
 	print(
-		"[PIRATE_KNIGHT_CAPTURE] PASS body=", body.name,
-		" helmet=", helmet.name,
-		" face=", eye.name, "+", mouth.name,
-		" sword=", sword.name,
+		"[PIRATE_KNIGHT_CAPTURE] PASS baked_parts=", baked_parts,
+		" combined_vertices=", combined.mesh.surface_get_array_len(0),
 		" animations=", REQUIRED_ANIMATIONS.size()
 	)
 	viewport.queue_free()

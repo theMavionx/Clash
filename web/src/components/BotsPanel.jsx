@@ -118,7 +118,7 @@ const DEFAULT_HISTORY = [
   { id: 'h-1', time: '12:00', bot: 'System', event: 'MM Bot controller initialized', value: 'Ready' },
 ];
 
-const STEPS = ['exchange', 'strategy', 'settings', 'review'];
+const STEPS = ['strategy', 'exchange', 'settings', 'review'];
 const STEP_LABELS = {
   exchange: 'Exchange',
   strategy: 'Strategy',
@@ -1293,7 +1293,7 @@ function BotsPanel({ onClose }) {
   ]);
 
   const [view, setView] = useState('dashboard');
-  const [step, setStep] = useState('exchange');
+  const [step, setStep] = useState('strategy');
   const [history, setHistory] = useState(DEFAULT_HISTORY);
   const [orderHistory, setOrderHistory] = useState([]);
   const [expandedBotId, setExpandedBotId] = useState(null);
@@ -1378,8 +1378,9 @@ function BotsPanel({ onClose }) {
 
   const exchangeOptions = useMemo(() => getAvailableDexConfigs().map((dex) => {
     const instances = configuredInstances.filter((inst) => {
-      if (inst.kind !== 'symmetric_mm') return false;
-      return parseStrategyInstanceId(inst.id).exchanges.some(
+      const parsed = parseStrategyInstanceId(inst.id);
+      if (parsed.kind !== selectedType) return false;
+      return parsed.exchanges.some(
         (exchange) => exchange.toLowerCase() === dex.id.toLowerCase(),
       );
     });
@@ -1387,6 +1388,11 @@ function BotsPanel({ onClose }) {
       (account) => account.exchange?.toLowerCase() === dex.id.toLowerCase(),
     ) || null;
     const accountActive = accountActiveForExchange(syncedAccounts, dex.id);
+    const launchableInstance = instances.find((instance) => (
+      parseStrategyInstanceId(instance.id).exchanges.every(
+        (exchange) => accountActiveForExchange(syncedAccounts, exchange),
+      )
+    ));
     const setupSupported = supportsGameWalletSync(dex.id);
     return {
       dex,
@@ -1394,7 +1400,7 @@ function BotsPanel({ onClose }) {
       syncedAccount,
       accountActive,
       strategyAvailable: instances.length > 0 && (setupSupported || accountActive),
-      readyForLaunch: instances.length > 0 && accountActive,
+      readyForLaunch: Boolean(launchableInstance),
       setupSupported,
       status: instances.length === 0
         ? (syncedAccount ? 'CONNECTED' : 'UNAVAILABLE')
@@ -1410,7 +1416,7 @@ function BotsPanel({ onClose }) {
     };
     return rank(a) - rank(b)
       || String(a.dex.label || a.dex.id).localeCompare(String(b.dex.label || b.dex.id));
-  }), [configuredInstances, syncedAccounts]);
+  }), [configuredInstances, selectedType, syncedAccounts]);
 
   const accountExchangeOptions = useMemo(() => getAvailableDexConfigs()
     .filter((dex) => supportsGameWalletSync(dex.id)
@@ -1539,6 +1545,14 @@ function BotsPanel({ onClose }) {
     }
   }, [exchangeOptions, exchangeBalances]);
 
+  const handleStrategySelect = useCallback((strategyId) => {
+    if (strategyId === selectedType) return;
+    setSelectedType(strategyId);
+    setSelectedExchangeId('');
+    setSelectedInstanceId('');
+    setScanCompleted(false);
+  }, [selectedType]);
+
   useEffect(() => {
     if (view !== 'launch') return undefined;
     const frame = requestAnimationFrame(() => stepHeadingRef.current?.focus());
@@ -1655,7 +1669,7 @@ function BotsPanel({ onClose }) {
   }, [selectedFreeMarginUsd, selectedExchangeId, calmTargetVolumeUsd]);
 
   const resetLaunch = useCallback(() => {
-    setStep('exchange');
+    setStep('strategy');
     setSelectedType('symmetric_mm');
     setTradeSize(20);
     setMaxPosition(200);
@@ -3790,11 +3804,56 @@ function BotsPanel({ onClose }) {
         <div style={shared.spacer36} />
       </div>
 
+      {step === 'strategy' && (
+        <div className="bots-step-page" style={S.stepPage}>
+          <div>
+            <h2 ref={stepHeadingRef} tabIndex={-1} style={S.stepTitle}>Choose Strategy</h2>
+            <p style={S.stepCopy}>Pick how the bot manages quotes and market exposure.</p>
+          </div>
+          <div style={S.strategyGrid}>
+            {LAUNCH_BOT_TYPES.map((bot) => {
+              const active = selectedType === bot.id;
+              return (
+                <button
+                  key={bot.id}
+                  type="button"
+                  className="bots-focusable"
+                  aria-pressed={active}
+                  style={{
+                    ...S.strategyCard,
+                    ...(active ? S.strategyCardActive : {}),
+                  }}
+                  onClick={() => handleStrategySelect(bot.id)}
+                >
+                  <div style={{ ...S.botAvatar, background: `linear-gradient(180deg, ${bot.accent} 0%, ${bot.accentDark} 100%)` }}>
+                    <RobotGlyph size={28} color="#fff" />
+                  </div>
+                  <div style={S.strategyText}>
+                    <div style={S.strategyTitleRow}>
+                      <strong>{bot.name}</strong>
+                    </div>
+                    <span>{bot.description}</span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+          <button
+            type="button"
+            className="bots-focusable"
+            style={{ ...cartoonBtn('#1E88E5', '#1565C0'), ...S.nextButton }}
+            onClick={() => setStep('exchange')}
+          >
+            Continue to Exchange
+          </button>
+        </div>
+      )}
+
       {step === 'exchange' && (
         <div className="bots-step-page" style={S.stepPage}>
           <div>
             <h2 ref={stepHeadingRef} tabIndex={-1} style={S.stepTitle}>Choose Exchange</h2>
-            <p style={S.stepCopy}>Select where your market-making bot will trade.</p>
+            <p style={S.stepCopy}>Select where your {selectedBot.name} strategy will trade.</p>
           </div>
           <div style={S.exchangePickerCard}>
             <span style={S.label}>Exchange</span>
@@ -3814,7 +3873,7 @@ function BotsPanel({ onClose }) {
                   </span>
                 </>
               ) : (
-                <span>Select a supported exchange with a configured Symmetric strategy.</span>
+                <span>Select an exchange with a configured {selectedBot.name} strategy.</span>
               )}
             </div>
           </div>
@@ -3842,51 +3901,6 @@ function BotsPanel({ onClose }) {
               ...S.nextButton,
               ...(!selectedExchangeOption?.readyForLaunch ? S.disabledButton : {}),
             }}
-            onClick={() => setStep('strategy')}
-          >
-            Continue to Strategy
-          </button>
-        </div>
-      )}
-
-      {step === 'strategy' && (
-        <div className="bots-step-page" style={S.stepPage}>
-          <div>
-            <h2 ref={stepHeadingRef} tabIndex={-1} style={S.stepTitle}>Choose Strategy</h2>
-            <p style={S.stepCopy}>Pick how the bot manages quotes and market exposure.</p>
-          </div>
-          <div style={S.strategyGrid}>
-            {LAUNCH_BOT_TYPES.map((bot) => {
-              const active = selectedType === bot.id;
-              return (
-                <button
-                  key={bot.id}
-                  type="button"
-                  className="bots-focusable"
-                  aria-pressed={active}
-                  style={{
-                    ...S.strategyCard,
-                    ...(active ? S.strategyCardActive : {}),
-                  }}
-                  onClick={() => setSelectedType(bot.id)}
-                >
-                  <div style={{ ...S.botAvatar, background: `linear-gradient(180deg, ${bot.accent} 0%, ${bot.accentDark} 100%)` }}>
-                    <RobotGlyph size={28} color="#fff" />
-                  </div>
-                  <div style={S.strategyText}>
-                    <div style={S.strategyTitleRow}>
-                      <strong>{bot.name}</strong>
-                    </div>
-                    <span>{bot.description}</span>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-          <button
-            type="button"
-            className="bots-focusable"
-            style={{ ...cartoonBtn('#1E88E5', '#1565C0'), ...S.nextButton }}
             onClick={() => setStep('settings')}
           >
             Continue to Settings

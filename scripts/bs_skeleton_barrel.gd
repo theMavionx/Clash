@@ -7,7 +7,7 @@ extends RefCounted
 const UNLOCK_SHIP_LEVEL: int = 6
 const ENERGY_COST: int = 8
 const IMPACT_DAMAGE: int = 650
-const FLIGHT_SEC: float = 0.9
+const FLIGHT_SEC: float = 1.6
 const SKELETON_COUNT: int = 4
 const BARREL_SCALE: float = 0.050
 const ISLAND_SCENE: PackedScene = preload("res://Model/Island/pirate_island.glb")
@@ -111,7 +111,7 @@ func _enter_barrel_mode() -> void:
 		_barrel_paused_attack = false
 	if bs.canvas and not _barrel_label:
 		_barrel_label = Label.new()
-		_barrel_label.text = "Skeleton Barrel - select a building"
+		_barrel_label.text = "Skeleton Barrel - choose impact point"
 		_barrel_label.anchor_left = 0.5
 		_barrel_label.anchor_right = 0.5
 		_barrel_label.offset_left = -300
@@ -143,6 +143,13 @@ func _exit_barrel_mode() -> void:
 
 
 func fire_at_building(building: Dictionary) -> bool:
+	var target := _building_position(building)
+	if target == Vector3.INF:
+		return false
+	return fire_at_target(building, target)
+
+
+func fire_at_target(building: Dictionary, target: Vector3) -> bool:
 	if (
 		not is_unlocked()
 		or _barrel_used
@@ -150,7 +157,6 @@ func fire_at_building(building: Dictionary) -> bool:
 		or bs._cannon._cannon_energy < ENERGY_COST
 	):
 		return false
-	var target := _building_position(building)
 	if target == Vector3.INF:
 		return false
 	bs._cannon._cannon_energy -= ENERGY_COST

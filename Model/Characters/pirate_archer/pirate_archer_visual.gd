@@ -8,8 +8,10 @@ const BODY_ATTACK_ANIMATION: StringName = &"Ranged_Bow_Release"
 const WEAPON_ATTACK_ANIMATION: StringName = &"Take 001"
 const ARROW_RELEASE_VISIBILITY_CUTOFF: float = 0.58
 const PALETTE: Texture2D = preload("res://Model/Characters/pirate_archer/textures/palette_albedo.png")
+const MESH_COMBINER := preload("res://Model/Characters/skinned_mesh_combiner.gd")
 
 static var _shared_material: StandardMaterial3D = null
+static var _combined_character_mesh: ArrayMesh = null
 
 var _body_animation_player: AnimationPlayer = null
 var _bow_animation_player: AnimationPlayer = null
@@ -18,6 +20,8 @@ var _arrow_visual_root: Node3D = null
 var _arrow_attachment: Node3D = null
 var _bow_attachment: Node3D = null
 var _arrow_base_rotation := Quaternion.IDENTITY
+var _was_attacking: bool = false
+var _last_weapon_normalized_time: float = -1.0
 
 
 func _ready() -> void:
@@ -63,9 +67,21 @@ func _ready() -> void:
 	_arrow_animation_player = character.get_node_or_null(
 		"Skeleton3D/ArrowAttachment/ArrowPose/Arrow/AnimationPlayer"
 	) as AnimationPlayer
+	_set_weapon_players_manual()
+	_build_combined_character(character, skeleton)
 
 
 func _process(_delta: float) -> void:
+	_sync_visual_state()
+
+
+func set_crowd_visual_active(active: bool) -> void:
+	set_process(active)
+	if active:
+		_sync_visual_state()
+
+
+func _sync_visual_state() -> void:
 	if _body_animation_player == null:
 		_body_animation_player = get_parent().get_node_or_null("TroopAnimPlayer") as AnimationPlayer
 	if _body_animation_player == null:
@@ -78,19 +94,35 @@ func _process(_delta: float) -> void:
 		and _body_animation_player.is_playing()
 	)
 	if not is_attacking:
-		_set_arrow_visible(false)
-		_reset_weapon_animation(_bow_animation_player)
-		_reset_weapon_animation(_arrow_animation_player)
+		if _was_attacking:
+			_set_arrow_visible(false)
+			_reset_weapon_animation(_bow_animation_player)
+			_reset_weapon_animation(_arrow_animation_player)
+			_last_weapon_normalized_time = -1.0
+		_was_attacking = false
 		return
 
 	var body_length := _body_animation_player.current_animation_length
 	var normalized_time := 0.0
 	if body_length > 0.0:
 		normalized_time = clampf(_body_animation_player.current_animation_position / body_length, 0.0, 1.0)
+	if (
+		_was_attacking
+		and absf(normalized_time - _last_weapon_normalized_time) < 0.0001
+	):
+		return
+	_was_attacking = true
+	_last_weapon_normalized_time = normalized_time
 	_set_arrow_visible(normalized_time < ARROW_RELEASE_VISIBILITY_CUTOFF)
 	_sync_weapon_animation(_bow_animation_player, normalized_time)
 	_sync_weapon_animation(_arrow_animation_player, normalized_time)
 	_align_arrow_to_bow()
+
+
+func _set_weapon_players_manual() -> void:
+	for player in [_bow_animation_player, _arrow_animation_player]:
+		if player != null:
+			player.callback_mode_process = AnimationMixer.ANIMATION_CALLBACK_MODE_PROCESS_MANUAL
 
 
 func _set_arrow_visible(should_show: bool) -> void:
@@ -168,6 +200,68 @@ func _apply_character_material(mesh_instance: MeshInstance3D) -> void:
 		_shared_material.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST_WITH_MIPMAPS
 	mesh_instance.material_override = _shared_material
 	mesh_instance.extra_cull_margin = 0.75
+
+
+func _build_combined_character(character: Node3D, skeleton: Skeleton3D) -> void:
+	var body := skeleton.get_node_or_null(BODY_NAME) as MeshInstance3D
+	if body == null or body.mesh == null or body.skin == null:
+		return
+	var rigid_parts: Array[Dictionary] = []
+	for part_path in [
+		"HeadAttachment/HeadPose/HeadFemale/Head02_Female",
+		"HeadAttachment/HeadPose/Hair/Hair08",
+		"HeadAttachment/HeadPose/Eye/Eye07",
+		"HeadAttachment/HeadPose/Mouth/Mouth02",
+		"HeadAttachment/HeadPose/PiratePatch/AC07_PiratePatch",
+		"HeadAttachment/HeadPose/Ribbon/AC09_Ribbon",
+	]:
+		var part := skeleton.get_node_or_null(part_path) as MeshInstance3D
+		if part == null or part.mesh == null:
+			return
+		rigid_parts.append({"mesh_instance": part, "bone": "head"})
+
+	if _combined_character_mesh == null:
+		_combined_character_mesh = MESH_COMBINER.bake(
+			skeleton,
+			body,
+			rigid_parts,
+			_shared_material,
+			"PirateArcherCombined"
+		)
+	if _combined_character_mesh == null:
+		return
+
+	var combined := MeshInstance3D.new()
+	combined.name = "CombinedArcherMesh"
+	combined.mesh = _combined_character_mesh
+	combined.skin = body.skin
+	combined.skeleton = NodePath("..")
+	combined.extra_cull_margin = 0.75
+	combined.material_override = _shared_material
+	skeleton.add_child(combined)
+	combined.set_meta(
+		"clash_baked_parts",
+		PackedStringArray(
+			["body", "head", "hair", "eye", "mouth", "patch", "ribbon"]
+		)
+	)
+	var keep_nodes: Array[Node] = [combined]
+	for attachment_name in ["BowAttachment", "ArrowAttachment"]:
+		var attachment := skeleton.get_node_or_null(attachment_name)
+		if attachment != null:
+			keep_nodes.append(attachment)
+	MESH_COMBINER.prune_modular_sources(skeleton, keep_nodes)
+	var bow_mesh := skeleton.get_node_or_null(
+		"BowAttachment/BowPose/Bow/Bow_CTRL/Skeleton3D/Bow01"
+	) as MeshInstance3D
+	var arrow_mesh := skeleton.get_node_or_null(
+		"ArrowAttachment/ArrowPose/Arrow/Arrow_CTRL/Skeleton3D/Arrow01"
+	) as MeshInstance3D
+	if bow_mesh != null:
+		MESH_COMBINER.prune_mesh_variants(_bow_attachment, [bow_mesh])
+	if arrow_mesh != null:
+		MESH_COMBINER.prune_mesh_variants(_arrow_attachment, [arrow_mesh])
+	character.set_meta("clash_combined_archer_mesh", true)
 
 
 func _find_skeleton(node: Node) -> Skeleton3D:

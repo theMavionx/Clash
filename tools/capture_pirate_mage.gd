@@ -45,10 +45,26 @@ func _run_capture() -> void:
 			quit(1)
 			return
 
-	var selected_body := character.find_child("Body09", true, false) as MeshInstance3D
+	var combined_body := character.find_child("CombinedMageMesh", true, false) as MeshInstance3D
 	var wand_mesh := character.find_child("Wand03", true, false) as MeshInstance3D
-	if selected_body == null or not selected_body.visible:
-		push_error("Pirate mage capture failed: Body09 is missing or hidden.")
+	if (
+		combined_body == null
+		or combined_body.mesh == null
+		or not combined_body.visible
+	):
+		push_error("Pirate mage capture failed: combined body visibility is incorrect.")
+		quit(1)
+		return
+	if character.find_child("Body09", true, false) != null:
+		push_error("Pirate mage capture failed: modular body was not pruned.")
+		quit(1)
+		return
+	var baked_parts := combined_body.get_meta(
+		"clash_baked_parts",
+		PackedStringArray()
+	) as PackedStringArray
+	if baked_parts.size() != 4:
+		push_error("Pirate mage capture failed: head, hat, or glasses were not baked.")
 		quit(1)
 		return
 	if wand_mesh == null or not wand_mesh.visible:
@@ -83,7 +99,11 @@ func _run_capture() -> void:
 	await _settle_frames(3)
 	_capture(viewport, _output_path("get_hit"))
 
-	print("[PIRATE_MAGE_CAPTURE] PASS animations=", REQUIRED_ANIMATIONS)
+	print(
+		"[PIRATE_MAGE_CAPTURE] PASS animations=", REQUIRED_ANIMATIONS,
+		" baked_parts=", baked_parts,
+		" combined_vertices=", combined_body.mesh.surface_get_array_len(0)
+	)
 	viewport.queue_free()
 	await process_frame
 	quit()

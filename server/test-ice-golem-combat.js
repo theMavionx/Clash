@@ -12,6 +12,7 @@ const BUILDING_DEFS = {
   storage: { size: [2, 2], hp_levels: [5000] },
   turret: { size: [2, 2], hp_levels: [5000, 5000, 5000, 5000, 5000, 5000] },
   archer_tower: { size: [2, 2], hp_levels: [5000, 5000, 5000, 5000, 5000, 5000] },
+  tombstone: { size: [2, 2], hp_levels: [5000, 5000, 5000, 5000, 5000, 5000] },
 };
 
 function loadVerifierWithoutDb() {
@@ -82,6 +83,24 @@ assert.equal(
   'Ice Golem must ignore a nearer storage while a defensive building is alive'
 );
 
+const guardEngagementResult = simulate([
+  building(40, 'town_hall', 4, 3),
+  building(41, 'tombstone', 12, 24),
+  building(42, 'turret', 16, 22, 6),
+], [
+  deploy('IceGolem', 12, 0, 1),
+], { IceGolem: 1, ice_golem: 1 });
+
+const firstGuardHit = guardEngagementResult._trace.find(row =>
+  row.kind === 'troop_melee_hit'
+  && row.troop === 'ice_golem'
+  && row.targetKind === 'guard'
+);
+assert.ok(
+  firstGuardHit,
+  'Ice Golem must finish its wind-up against an engaged guard instead of retargeting every search tick'
+);
+
 const originalIceHp = TROOP_STATS.ice_golem[1].hp;
 TROOP_STATS.ice_golem[1].hp = 180;
 let freezeResult;
@@ -120,5 +139,6 @@ for (const buildingId of freeze.affectedBuildingIds) {
 
 console.log(
   `[ICE_GOLEM_SERVER] PASS first_target=${firstIceTarget.targetType}`
+  + ` guard_hit_t=${firstGuardHit.t.toFixed(2)}`
   + ` freeze_t=${freeze.t.toFixed(2)} affected=${freeze.affectedBuildingIds.join(',')}`
 );
