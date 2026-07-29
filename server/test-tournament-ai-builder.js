@@ -2,6 +2,7 @@
 
 const assert = require('assert');
 const {
+  extractJson,
   generateTournamentDraft,
   normalizeDraft,
   systemPrompt,
@@ -25,12 +26,21 @@ async function main() {
     const result = await generateTournamentDraft({
       prompt: 'Create a two-day Ostium volume tournament with different daily rewards.',
       currentDraft: { name: 'Existing draft', status: 'draft' },
-      models: ['broken/model', 'working/model'],
+      models: ['broken/model', 'incomplete/model', 'working/model'],
       fetchImpl: async (_url, options) => {
         const request = JSON.parse(options.body);
         calls.push(request);
         if (request.model === 'broken/model') {
           return response(429, { error: { message: 'rate limited' } });
+        }
+        if (request.model === 'incomplete/model') {
+          return response(200, {
+            choices: [{
+              message: {
+                content: '{"summary":"Not enough fields","draft":{"sort_by":"volume_usd"}} trailing explanation',
+              },
+            }],
+          });
         }
         return response(200, {
           choices: [{
@@ -95,7 +105,7 @@ async function main() {
       },
     });
 
-    assert.deepStrictEqual(calls.map((call) => call.model), ['broken/model', 'working/model']);
+    assert.deepStrictEqual(calls.map((call) => call.model), ['broken/model', 'incomplete/model', 'working/model']);
     assert.strictEqual(result.model, 'working/model');
     assert.strictEqual(result.draft.name, 'Ostium Daily Sprint');
     assert.strictEqual(result.draft.status, undefined);
@@ -126,6 +136,10 @@ async function main() {
     assert.strictEqual(normalized.reward_config.daily_pools[0].volume_target_usd, 0);
     assert.strictEqual(normalized.reward_config.daily_pools[0].volume_target_scope, 'player');
     assert.strictEqual(normalized.reward_config.daily_pools[0].rewards[0].type, 'money');
+    assert.deepStrictEqual(
+      extractJson('prefix {"draft":{"name":"First"}} suffix {"ignored":true}'),
+      { draft: { name: 'First' } },
+    );
 
     const prompt = systemPrompt(new Date('2026-07-29T12:00:00Z'));
     assert(prompt.includes('do not have tools, database access, payout permissions'));

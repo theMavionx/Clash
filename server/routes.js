@@ -26405,6 +26405,17 @@ async function proxyToBot(req, res) {
   }
 }
 
+try {
+  const { mountAdminPhantomBots } = require('./admin_phantom_bots');
+  mountAdminPhantomBots(router, {
+    adminAuth,
+    botUrl: BOT_URL,
+    botProxySecret: BOT_PROXY_SECRET,
+  });
+} catch (err) {
+  console.warn('[admin-phantom-bots] failed to mount:', err?.message || err);
+}
+
 router.use('/v1/strategies', auth, proxyToBot);
 router.use('/v1/bot', auth, proxyToBot);
 router.use('/v1/portfolio', auth, proxyToBot);

@@ -48,9 +48,12 @@ function modelChain(env = process.env) {
   const explicit = parseModelChain(env.CLASH_TOURNAMENT_AI_MODELS);
   return unique(explicit.length ? explicit : [
     env.CLASH_TOURNAMENT_AI_MODEL,
+    'poolside/laguna-s-2.1:free',
     'google/gemma-4-31b-it:free',
-    'openai/gpt-oss-20b:free',
+    'google/gemma-4-26b-a4b-it:free',
+    'inclusionai/ling-3.0-flash:free',
     'openrouter/free',
+    'openai/gpt-oss-20b:free',
     ...resolveModelChain(env),
     'openai/gpt-4.1-mini',
     'google/gemini-2.5-flash',
@@ -323,11 +326,49 @@ function extractJson(content) {
   const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
   const candidate = fenced?.[1] || raw;
   const start = candidate.indexOf('{');
-  const end = candidate.lastIndexOf('}');
-  if (start < 0 || end <= start) throw new Error('AI response did not contain a JSON object');
+  if (start < 0) throw new Error('AI response did not contain a JSON object');
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  let end = -1;
+  for (let index = start; index < candidate.length; index += 1) {
+    const char = candidate[index];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+    if (char === '{') depth += 1;
+    else if (char === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        end = index;
+        break;
+      }
+    }
+  }
+  if (end <= start) throw new Error('AI response contained an incomplete JSON object');
   const parsed = JSON.parse(candidate.slice(start, end + 1));
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('AI response JSON must be an object');
   return parsed;
+}
+
+function assertCompleteDraft(draft) {
+  const missing = [];
+  if (!draft.name) missing.push('name');
+  if (!draft.start_at) missing.push('start_at');
+  if (!draft.end_at) missing.push('end_at');
+  if (!draft.dex && !draft.eligible_dexes?.length && draft.dex_scope !== 'all') {
+    missing.push('dex');
+  }
+  if (missing.length) {
+    throw new Error(`AI returned an incomplete tournament draft: missing ${missing.join(', ')}`);
+  }
 }
 
 async function requestModel({ model, prompt, currentDraft, fetchImpl = fetch, timeoutMs = DEFAULT_TIMEOUT_MS }) {
@@ -417,6 +458,7 @@ async function generateTournamentDraft(options = {}) {
       });
       const draft = normalizeDraft(parsed);
       if (!Object.keys(draft).length) throw new Error('AI returned an empty tournament draft');
+      assertCompleteDraft(draft);
       return {
         ok: true,
         model,
@@ -443,5 +485,6 @@ module.exports = {
   modelChain,
   normalizeDraft,
   normalizeRewardConfig,
+  extractJson,
   systemPrompt,
 };

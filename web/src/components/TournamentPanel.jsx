@@ -372,7 +372,7 @@ function rewardPoolLine(pool, fallbackCurrency = 'USD') {
   const target = Number(pool?.volume_target_usd || 0) > 0
     ? `${fmtUsdWhole(pool.volume_target_usd)} ${pool.volume_target_scope === 'tournament' ? 'tournament' : 'per player'} target`
     : '';
-  return [label, day, target, top, rewards.join(' + ')].filter(Boolean).join(' В· ');
+  return [label, day, target, top, rewards.join(' + ')].filter(Boolean).join(' | ');
 }
 
 function RewardScheduleCard({ schedule, sectorName, currency = 'USD', currentTownHallLevel = 0 }) {

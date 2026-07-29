@@ -142,6 +142,7 @@ const NAV = [
   { id: 'client', label: 'Client Logs', hint: 'Browser diagnostics', icon: 'CL' },
   { id: 'ai-reports', label: 'AI Log Reports', hint: 'Daily incident reports', icon: 'AI' },
   { id: 'feedback', label: 'Feedback', hint: 'Player reports', icon: 'FB' },
+  { id: 'phantom-bots', label: 'Phantom Bots', hint: 'Live MM bots & 24h results', icon: 'PB' },
   { id: 'elfa', label: 'Elfa', hint: 'Signal stats', icon: 'EF' },
 ];
 
@@ -172,6 +173,7 @@ const SIMPLE_LOADERS = {
   client: () => adminGet('/admin/client-logs?since_min=60&limit=250'),
   'ai-reports': () => adminGet('/admin/ai-log-reports?limit=20'),
   feedback: () => adminGet('/admin/feedback?limit=200'),
+  'phantom-bots': () => adminGet('/admin/phantom-bots?hours=24'),
   elfa: () => adminGet('/admin/elfa/stats'),
 };
 
@@ -421,8 +423,25 @@ export default function AdminApp() {
             {active === 'nft' && <NftPanel data={simpleData.nft} />}
             {active === 'feedback' && <FeedbackPanel data={simpleData.feedback} />}
             {active === 'ai-reports' && <AiReportsPanel data={simpleData['ai-reports']} reload={refreshActive} />}
+            {active === 'phantom-bots' && (
+              <PhantomBotsPanel
+                data={simpleData['phantom-bots']}
+                reload={async (hours = 24) => {
+                  setLoading(true);
+                  try {
+                    const data = await adminGet(`/admin/phantom-bots?hours=${hours}`);
+                    setSimpleData((prev) => ({ ...prev, 'phantom-bots': data }));
+                    setLastRefresh(new Date());
+                  } catch (err) {
+                    setError(err.message || 'Failed to load phantom bots');
+                  } finally {
+                    setLoading(false);
+                  }
+                }}
+              />
+            )}
             {active === 'elfa' && <ElfaPanel data={simpleData.elfa} />}
-            {!['overview', 'players', 'mm-bots', 'tournaments', 'replays', 'stats', 'clash', 'tasks', 'client', 'logs', 'earnings', 'referrals', 'shop', 'marketplace', 'nft', 'feedback', 'ai-reports', 'elfa'].includes(active) && (
+            {!['overview', 'players', 'mm-bots', 'tournaments', 'replays', 'stats', 'clash', 'tasks', 'client', 'logs', 'earnings', 'referrals', 'shop', 'marketplace', 'nft', 'feedback', 'ai-reports', 'phantom-bots', 'elfa'].includes(active) && (
               <GenericDataPanel id={active} data={simpleData[active]} reload={refreshActive} />
             )}
           </section>
@@ -2054,7 +2073,7 @@ function TournamentWizard({ initial, onClose, onSaved }) {
                 <strong>AI Tournament Builder</strong>
                 <small>Describe the event. AI fills a reviewable draft but cannot save, activate, or pay rewards.</small>
               </span>
-              <span aria-hidden="true">{aiOpen ? '−' : '+'}</span>
+              <span aria-hidden="true">{aiOpen ? '-' : '+'}</span>
             </button>
             {aiOpen && (
               <div className="tournament-ai-body">
@@ -2067,7 +2086,7 @@ function TournamentWizard({ initial, onClose, onSaved }) {
                   disabled={aiPlanning}
                 />
                 <div className="tournament-ai-actions">
-                  <span className="admin-help">The generated values are applied to this wizard only. Review every tab, then save normally.</span>
+                  <span className="admin-help">Generated values apply to this wizard only. Review every tab, then save normally.</span>
                   <button className="admin-btn primary" onClick={planWithAi} disabled={aiPlanning || aiPrompt.trim().length < 8}>
                     {aiPlanning ? 'Planning tournament...' : 'Generate and apply draft'}
                   </button>
@@ -2713,9 +2732,11 @@ function RewardScheduleEditor({
     updateList(key, [...(config[key] || []), {
       enabled: true,
       label: nextDay ? `Rewards ${nextDay}` : label,
-      day_utc: nextDay,
-      volume_target_usd: 0,
-      volume_target_scope: 'player',
+      ...(isDaily ? {
+        day_utc: nextDay,
+        volume_target_usd: 0,
+        volume_target_scope: 'player',
+      } : {}),
       top_n: isDaily ? 5 : 10,
       metric: 'points',
       rewards: [normalizeReward(rewardDefaults('money'))],
@@ -5063,6 +5084,144 @@ function AiReportsPanel({ data, reload }) {
         </div>
       </div>
       {open && <Drawer title={`AI Report #${open.id}`} subtitle={`${fmtTime(open.window_start)} - ${fmtTime(open.window_end)}`} onClose={() => setOpen(null)}><pre className="admin-mono admin-scroll" style={{ whiteSpace: 'pre-wrap', overflow: 'auto' }}>{open.report_text || open.markdown || open.summary || JSON.stringify(open, null, 2)}</pre></Drawer>}
+    </div>
+  );
+}
+
+function PhantomBotsPanel({ data, reload }) {
+  const [q, setQ] = useState('');
+  const [exchange, setExchange] = useState('all');
+  const [status, setStatus] = useState('all');
+  const [hours, setHours] = useState(Number(data?.hours) || 24);
+
+  useEffect(() => {
+    if (data?.hours != null) setHours(Number(data.hours) || 24);
+  }, [data?.hours]);
+
+  if (!data) return <LoadingCard title="Phantom Bots" />;
+
+  const bots = Array.isArray(data.bots) ? data.bots : [];
+  const exchanges = Array.from(new Set(bots.map((b) => String(b.exchange || '').toLowerCase()).filter(Boolean))).sort();
+  const filtered = bots.filter((bot) => {
+    const hay = `${bot.user_id || ''} ${bot.id || ''} ${bot.exchange || ''} ${bot.kind || ''}`.toLowerCase();
+    if (q && !hay.includes(q.toLowerCase())) return false;
+    if (exchange !== 'all' && String(bot.exchange || '').toLowerCase() !== exchange) return false;
+    if (status === 'live' && !bot.live) return false;
+    if (status === 'stopped' && bot.live) return false;
+    if (status === 'historical' && bot.status !== 'historical') return false;
+    return true;
+  });
+
+  const periodNum = (bot, key) => Number(bot?.period?.[key] || 0) || 0;
+  const shortId = (id) => {
+    const s = String(id || '');
+    if (s.length <= 28) return s;
+    return `${s.slice(0, 10)}…${s.slice(-10)}`;
+  };
+
+  return (
+    <div className="admin-grid">
+      <StatsGrid stats={[
+        { label: 'Running now', value: data.running_count || 0, tone: 'green' },
+        { label: 'Tracked bots', value: data.bot_count || 0, tone: 'blue' },
+        { label: 'Users', value: data.user_count || 0 },
+        { label: 'Window', value: `${data.hours || hours}h`, tone: 'gold' },
+      ]} />
+
+      <div className="admin-card">
+        <div className="admin-card-head">
+          <div>
+            <div className="admin-card-title">Filters</div>
+            <div className="admin-card-sub">Live strategies from Phantom + period PnL from audit_log (same source as Telegram stats).</div>
+          </div>
+          <div className="admin-actions">
+            <button className="admin-btn" onClick={() => reload(hours)}>Refresh</button>
+          </div>
+        </div>
+        <div className="admin-card-body" style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))' }}>
+          <label className="admin-field">
+            <span className="admin-label">Search user / id</span>
+            <input className="admin-input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="uuid / exchange / kind" />
+          </label>
+          <label className="admin-field">
+            <span className="admin-label">Exchange</span>
+            <select className="admin-select" value={exchange} onChange={(e) => setExchange(e.target.value)}>
+              <option value="all">All</option>
+              {exchanges.map((ex) => <option key={ex} value={ex}>{ex}</option>)}
+            </select>
+          </label>
+          <label className="admin-field">
+            <span className="admin-label">Status</span>
+            <select className="admin-select" value={status} onChange={(e) => setStatus(e.target.value)}>
+              <option value="all">All</option>
+              <option value="live">Live only</option>
+              <option value="stopped">Not live</option>
+              <option value="historical">Historical (audit only)</option>
+            </select>
+          </label>
+          <label className="admin-field">
+            <span className="admin-label">Hours</span>
+            <select
+              className="admin-select"
+              value={hours}
+              onChange={(e) => {
+                const next = Number(e.target.value) || 24;
+                setHours(next);
+                reload(next);
+              }}
+            >
+              <option value={1}>1h</option>
+              <option value={6}>6h</option>
+              <option value={12}>12h</option>
+              <option value={24}>24h</option>
+              <option value={168}>7d</option>
+            </select>
+          </label>
+        </div>
+      </div>
+
+      <CompactTable
+        title={`Bots (${filtered.length})`}
+        subtitle={`Showing filtered rows · period window ${data.hours || hours}h`}
+        columns={['User', 'Exchange', 'Kind', 'Status', 'Fills/Closes', 'Volume', 'Fees', 'Net', 'Id']}
+        rows={filtered.map((bot) => {
+          const vol = periodNum(bot, 'volume_usd');
+          const fees = periodNum(bot, 'fees_usd');
+          const net = periodNum(bot, 'net_after_fees_usd');
+          const fills = Number(bot?.period?.fills || 0) || 0;
+          const closes = Number(bot?.period?.closes || 0) || 0;
+          return [
+            <span className="admin-mono" key="u">{String(bot.user_id || '').slice(0, 8) || '-'}</span>,
+            String(bot.exchange || '-').toUpperCase(),
+            bot.kind || '-',
+            bot.live
+              ? <span className="admin-badge green" key="s">LIVE</span>
+              : <span className={'admin-badge ' + (bot.status === 'historical' ? 'gold' : '')} key="s">{String(bot.status || 'stopped').toUpperCase()}</span>,
+            `${fills} / ${closes}`,
+            fmtUsd(vol, 2),
+            fmtUsd(fees, 4),
+            <span key="n" style={{ color: net >= 0 ? 'var(--admin-green)' : 'var(--admin-red)' }}>{fmtUsd(net, 4)}</span>,
+            <span className="admin-mono" title={bot.id} key="id">{shortId(bot.id)}</span>,
+          ];
+        })}
+      />
+
+      <CompactTable
+        title="Exchange totals"
+        subtitle={`Aggregated across all users · ${data.hours || hours}h`}
+        columns={['Exchange', 'Users', 'Fills', 'Closes', 'Volume', 'Fees', 'Realized', 'Wins', 'Losses']}
+        rows={(data.exchange_totals || []).map((row) => [
+          String(row.exchange || '').toUpperCase(),
+          row.users || 0,
+          row.fills || 0,
+          row.closes || 0,
+          fmtUsd(Number(row.volume_usd) || 0, 2),
+          fmtUsd(Number(row.fees_usd) || 0, 4),
+          fmtUsd(Number(row.realized_pnl_usd) || 0, 4),
+          fmtUsd(Number(row.wins_usd) || 0, 4),
+          fmtUsd(Number(row.losses_usd) || 0, 4),
+        ])}
+      />
     </div>
   );
 }
