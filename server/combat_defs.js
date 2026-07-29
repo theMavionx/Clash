@@ -737,7 +737,7 @@ const FREEZE_DROP = Object.freeze({
   unlockShipLevel: 7,
   energyCost: 5,
   maxUses: 1,
-  travelSec: 0.9,
+  travelSec: 0.6,
   radius: 0.95,
   durationSec: 6.0,
 });
@@ -760,7 +760,7 @@ const SKELETON_BARREL = Object.freeze({
   unlockShipLevel: 10,
   energyCost: 8,
   maxUses: 1,
-  travelSec: 1.6,
+  travelSec: 1.067,
   impactDamage: 650,
   spawnCount: 4,
   spawnRadius: 0.16,
