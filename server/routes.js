@@ -25796,6 +25796,18 @@ const BOT_BALANCE_STALE_MS = Math.max(0, Math.min(300_000, Number(process.env.CL
 const BOT_BALANCE_CACHE_MAX = Math.max(10, Math.min(1000, Number(process.env.CLASH_BOT_BALANCE_CACHE_MAX || 250)));
 const botBalanceResponseCache = new Map();
 
+try {
+  const { mountAdminPhantomBots } = require('./admin_phantom_bots');
+  mountAdminPhantomBots(router, {
+    adminAuth,
+    botUrl: BOT_URL,
+    botProxySecret: BOT_PROXY_SECRET,
+  });
+} catch (err) {
+  console.warn('[admin-phantom-bots] failed to mount endpoints:', err?.message || err);
+}
+
+
 function isBotBalanceProxyRequest(req) {
   return req.method === 'GET'
     && /^\/api\/v1\/(?:bot\/)?exchanges\/[^/?#]+\/balance(?:[?#]|$)/.test(String(req.originalUrl || ''));

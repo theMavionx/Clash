@@ -14,8 +14,9 @@
  */
 
 const ROUND_TRIPS_PER_DAY = 400;
-/** Decibel maker cadence (rebalance ≥30s, open cooldown 60s, patient exits). */
-const DECIBEL_ROUND_TRIPS_PER_DAY = 120;
+/** Decibel maker cadence — live completes ~60–80 RT/day, not optimistic 120+. */
+const DECIBEL_ROUND_TRIPS_PER_DAY = 70;
+const PACIFICA_ROUND_TRIPS_PER_DAY = 150;
 const INVENTORY_MULT = 6;
 /** Absolute per-order notional ceiling (mirrors backend AGGRESSIVE_ORDER_SIZE_ABS_MAX_USD). */
 const AGGRESSIVE_ORDER_SIZE_ABS_MAX = 50_000;
@@ -28,9 +29,9 @@ const ADVERSE_BPS = 0.5;
 
 /** Per-venue fee + planning leverage (not venue max — safer MM defaults). */
 const VENUE = {
-  decibel: { makerBps: 1, takerBps: 4, leverage: 10, maxLeverage: 40, sizeMax: AGGRESSIVE_ORDER_SIZE_ABS_MAX, rts: DECIBEL_ROUND_TRIPS_PER_DAY },
+  decibel: { makerBps: 1, takerBps: 4, leverage: 10, maxLeverage: 10, sizeMax: AGGRESSIVE_ORDER_SIZE_ABS_MAX, rts: DECIBEL_ROUND_TRIPS_PER_DAY, leverageFixed: true },
   ostium: { makerBps: 5, takerBps: 8, leverage: 10, maxLeverage: 50, sizeMax: AGGRESSIVE_ORDER_SIZE_ABS_MAX, rts: ROUND_TRIPS_PER_DAY },
-  pacifica: { makerBps: 2, takerBps: 4, leverage: 10, maxLeverage: 50, sizeMax: AGGRESSIVE_ORDER_SIZE_ABS_MAX, rts: ROUND_TRIPS_PER_DAY },
+  pacifica: { makerBps: 2, takerBps: 4, leverage: 10, maxLeverage: 50, sizeMax: AGGRESSIVE_ORDER_SIZE_ABS_MAX, rts: PACIFICA_ROUND_TRIPS_PER_DAY },
   hyperliquid: { makerBps: -2, takerBps: 5, leverage: 5, maxLeverage: 50, sizeMax: AGGRESSIVE_ORDER_SIZE_ABS_MAX, rts: ROUND_TRIPS_PER_DAY },
   grvt: { makerBps: -2, takerBps: 5, leverage: 5, maxLeverage: 50, sizeMax: AGGRESSIVE_ORDER_SIZE_ABS_MAX, rts: ROUND_TRIPS_PER_DAY },
   avantis: { makerBps: 3, takerBps: 6, leverage: 10, maxLeverage: 50, sizeMax: AGGRESSIVE_ORDER_SIZE_ABS_MAX, rts: ROUND_TRIPS_PER_DAY },
@@ -161,6 +162,8 @@ export function planAggressiveVolume({
     maxPositionUsd: maxPosition,
     avgLeverage: leverage,
     maxLeverage: v.maxLeverage,
+    leverageFixed: !!v.leverageFixed,
+    availableUsd: avail > 0 ? avail : null,
     depositUsd,
     quoteMarginUsd,
     inventoryMarginUsd,

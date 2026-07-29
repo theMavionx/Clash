@@ -9,6 +9,7 @@ import { HOTSTUFF_CHAIN_ID } from './hotstuffConfig';
 import { loadHotstuffStoredAgent } from './hotstuffAgentStorage';
 import { ensureNadoLinkedSignerReady } from './nadoLinkedSignerSetup';
 import { readNadoLinkedSigner } from './nadoLinkedSignerStorage';
+import { INK_CHAIN_ID } from './nadoConfig';
 import { readPacificaAgent, findAnyPacificaAgent, listStoredPacificaMasters } from './pacificaAgentStorage';
 import { bindPacificaAgent } from './pacificaBind';
 import { registeredDexWallet, playerLoginWallet } from './playerDexAccounts';
@@ -179,11 +180,14 @@ async function ensureNadoReady(player, ctx = {}) {
   try {
     await ensureNadoLinkedSignerReady({
       walletAddress: primary,
-      walletClient: ctx.walletClient,
-      publicClient: ctx.publicClient,
+      // Never pass default Base walletClient — Nado is Ink (57073).
+      walletClient: ctx.getWalletClient?.(INK_CHAIN_ID) || null,
+      publicClient: ctx.getPublicClient?.(INK_CHAIN_ID) || null,
       getWalletClient: ctx.getWalletClient,
       getPublicClient: ctx.getPublicClient,
-      ensureChain: ctx.ensureChain,
+      ensureChain: ctx.ensureChain
+        ? () => ctx.ensureChain(INK_CHAIN_ID)
+        : null,
     });
     const linked = readNadoLinkedSigner(primary);
     if (linked?.privateKey) return { ok: true, wallet: primary };
