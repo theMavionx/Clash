@@ -368,7 +368,11 @@ function rewardPoolLine(pool, fallbackCurrency = 'USD') {
   const rewards = rewardPoolSummary(pool?.rewards || [], fallbackCurrency);
   const label = pool?.label || 'Reward pool';
   const top = Number(pool?.top_n || 0) > 0 ? `top ${pool.top_n}` : '';
-  return [label, top, rewards.join(' + ')].filter(Boolean).join(' В· ');
+  const day = pool?.day_utc ? `UTC ${pool.day_utc}` : '';
+  const target = Number(pool?.volume_target_usd || 0) > 0
+    ? `${fmtUsdWhole(pool.volume_target_usd)} ${pool.volume_target_scope === 'tournament' ? 'tournament' : 'per player'} target`
+    : '';
+  return [label, day, target, top, rewards.join(' + ')].filter(Boolean).join(' | ');
 }
 
 function RewardScheduleCard({ schedule, sectorName, currency = 'USD', currentTownHallLevel = 0 }) {
@@ -399,7 +403,9 @@ function RewardScheduleCard({ schedule, sectorName, currency = 'USD', currentTow
         <strong>Rewards</strong>
         {sectorName && <span>{sectorName}</span>}
       </div>
-      {(schedule.daily_pools || []).filter((pool) => pool.enabled !== false).map((pool, idx) => (
+      {(schedule.daily_pools || []).filter((pool) => (
+        pool.enabled !== false && (!pool.day_utc || pool.is_active !== false)
+      )).map((pool, idx) => (
         <div key={`daily-${idx}`} style={S.rewardScheduleLine}>Daily: {rewardPoolLine(pool, currency)}</div>
       ))}
       {(schedule.final_pools || []).filter((pool) => pool.enabled !== false).map((pool, idx) => (
