@@ -531,7 +531,7 @@ function readNadoLinkedSigner(owner) {
   }
 }
 
-/** Temporarily disabled in Bots — broken auth or needs access codes. */
+/** Temporarily disabled in Bots — broken auth or needs access codes. Flash is fully retired (hidden). */
 export const BOTS_DISABLED_EXCHANGES = ['gmx', 'gmtrade', 'perpl', 'phoenix', 'risex', 'flash'];
 
 /** Exchanges Bots can sync from game-local credential storage. */
@@ -559,7 +559,6 @@ export const GAME_WALLET_EXCHANGE_LABELS = {
   katana: 'Katana',
   nado: 'Nado',
   pacifica: 'Pacifica',
-  flash: 'Flash Trade',
   gmx: 'GMX',
   gmtrade: 'GMTrade',
   perpl: 'Perpl',
@@ -567,14 +566,13 @@ export const GAME_WALLET_EXCHANGE_LABELS = {
   decibel: 'Decibel',
 };
 
-/** Not available for Bots sync (disabled or dev-only). */
+/** Not available for Bots sync (disabled or dev-only). Flash omitted — not shown. */
 export const UNSUPPORTED_GAME_WALLET_EXCHANGES = [
   { id: 'gmx', label: 'GMX', reason: 'temporarily disabled — delegate auth required' },
   { id: 'gmtrade', label: 'GMTrade', reason: 'temporarily disabled — not working' },
   { id: 'perpl', label: 'Perpl', reason: 'temporarily disabled — delegate auth required' },
   { id: 'phoenix', label: 'Phoenix', reason: 'temporarily disabled — one-tap via foreign wallet not working' },
   { id: 'risex', label: 'RISEx', reason: 'temporarily disabled — access codes required' },
-  { id: 'flash', label: 'Flash Trade', reason: 'temporarily disabled — contract migration in progress' },
   { id: 'mock', label: 'Mock', reason: 'dev tests only' },
 ];
 
@@ -1501,6 +1499,8 @@ export async function saveThenSyncGameAccount({
       walletAddress: walletCtx.evmWalletAddress || walletCtx.walletAddress,
       walletClient: walletCtx.walletClient,
       publicClient: walletCtx.publicClient,
+      getWalletClient: walletCtx.getWalletClient,
+      getPublicClient: walletCtx.getPublicClient,
       ensureChain: walletCtx.ensureChain,
       solanaSignMessage: walletCtx.solanaSignMessage,
       solanaWalletAddress: walletCtx.solanaWalletAddress,

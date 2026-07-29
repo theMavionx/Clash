@@ -2,7 +2,7 @@
  * Shared Nado linked-signer enable flow (Futures + Bots).
  */
 import { createNadoClient } from '@nadohq/client';
-import { createWalletClient, http, zeroAddress } from 'viem';
+import { createWalletClient, http } from 'viem';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import {
   INK_CHAIN_ID,
@@ -31,12 +31,27 @@ function createLinkedSignerWalletClient(record) {
 
 function resolveWalletClients({ walletAddress, walletClient, publicClient, getWalletClient, getPublicClient }) {
   const owner = String(walletAddress || '').trim().toLowerCase();
-  const wc = walletClient
-    || (typeof getWalletClient === 'function' ? getWalletClient(INK_CHAIN_ID) : null);
-  const pc = publicClient
-    || (typeof getPublicClient === 'function' ? getPublicClient(INK_CHAIN_ID) : null);
+  // Prefer Ink-bound clients. BotsPanel often passes the default walletClient
+  // which is Base (8453) — Nado linkSigner then throws chainId mismatch vs 57073.
+  const inkWc = typeof getWalletClient === 'function' ? getWalletClient(INK_CHAIN_ID) : null;
+  const inkPc = typeof getPublicClient === 'function' ? getPublicClient(INK_CHAIN_ID) : null;
+  let wc = inkWc || null;
+  let pc = inkPc || null;
+  if (!wc && walletClient) {
+    const cid = Number(walletClient.chain?.id);
+    if (!cid || cid === INK_CHAIN_ID) wc = walletClient;
+  }
+  if (!pc && publicClient) {
+    const cid = Number(publicClient.chain?.id);
+    if (!cid || cid === INK_CHAIN_ID) pc = publicClient;
+  }
   if (!owner || !wc || !pc) {
     throw new Error('Connect Ink EVM wallet — Setup & Sync will link the Nado signer.');
+  }
+  if (Number(wc.chain?.id) && Number(wc.chain.id) !== INK_CHAIN_ID) {
+    throw new Error(
+      `Wallet client is on chain ${wc.chain.id}; Nado requires Ink (${INK_CHAIN_ID}). Switch network and retry.`,
+    );
   }
   return { owner, walletClient: wc, publicClient: pc };
 }
@@ -54,10 +69,11 @@ async function getRemoteLinkedSigner(client, walletAddr) {
  * Enable Nado one-tap linked signer (wallet signs linkSigner if needed).
  */
 export async function ensureNadoLinkedSignerReady(ctx = {}) {
-  const { owner, walletClient, publicClient } = resolveWalletClients(ctx);
   if (typeof ctx.ensureChain === 'function') {
     await ctx.ensureChain(INK_CHAIN_ID);
   }
+  // Re-resolve AFTER switch so getWalletClient sees Ink provider state.
+  const { owner, walletClient, publicClient } = resolveWalletClients(ctx);
 
   const stored = readNadoLinkedSigner(owner);
   if (stored) {

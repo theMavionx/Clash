@@ -118,7 +118,7 @@ const DEFAULT_HISTORY = [
   { id: 'h-1', time: '12:00', bot: 'System', event: 'MM Bot controller initialized', value: 'Ready' },
 ];
 
-const STEPS = ['strategy', 'exchange', 'settings', 'review'];
+const STEPS = ['exchange', 'strategy', 'settings', 'review'];
 const STEP_LABELS = {
   exchange: 'Exchange',
   strategy: 'Strategy',
@@ -473,6 +473,7 @@ const mapHandleToBot = (
   overrides = {},
   exchangeBalances = {},
   orderHistory = [],
+  periodStats24h = {},
 ) => {
   const details = getBotConfigDetails(handle.id);
   const ov = overrides[handle.id] || {};
@@ -507,8 +508,31 @@ const mapHandleToBot = (
   )];
   const bal = exchangeBalances[exchangeKey];
   const balFmt = formatExchangeBalance(bal);
-  const fills = countFillsForExchange(orderHistory, exchange);
+  const fills = Number(rt.fills) || countFillsForExchange(orderHistory, exchange);
+  const sessionVolumeUsd = Number(rt.volume_usd);
+  const sessionFeesUsd = Number(rt.fees_usd);
+  const sessionRealizedUsd = Number(rt.realized_pnl_usd);
+  const sessionSummary = (Number.isFinite(sessionVolumeUsd) && sessionVolumeUsd > 0) || (Number(rt.fills) > 0)
+    ? {
+      volumeUsd: Number.isFinite(sessionVolumeUsd) ? sessionVolumeUsd : 0,
+      feesUsd: Number.isFinite(sessionFeesUsd) ? sessionFeesUsd : 0,
+      realizedUsd: Number.isFinite(sessionRealizedUsd) ? sessionRealizedUsd : 0,
+      fills: Number(rt.fills) || 0,
+    }
+    : null;
   const inventory = formatInventory(rt);
+  const periodRaw = periodStats24h[handle.id] || null;
+  const periodSummary = periodRaw ? {
+    fills: Number(periodRaw.fills) || 0,
+    closes: Number(periodRaw.closes) || 0,
+    volumeUsd: Number(periodRaw.volume_usd) || 0,
+    feesUsd: Number(periodRaw.fees_usd) || 0,
+    feeBps: Number(periodRaw.fee_bps) || 0,
+    winsUsd: Number(periodRaw.wins_usd) || 0,
+    lossesUsd: Number(periodRaw.losses_usd) || 0,
+    realizedUsd: Number(periodRaw.realized_pnl_usd) || 0,
+    netUsd: Number(periodRaw.net_after_fees_usd) || 0,
+  } : null;
   const hasOpenInventory = inventory != null
     && inventory !== '0'
     && Number.isFinite(Number(inventory))
@@ -609,6 +633,8 @@ const mapHandleToBot = (
     openQuotes,
     inBackoff,
     backoffSymbols,
+    sessionSummary,
+    periodSummary,
     uptime: isRunning
       ? (inBackoff
         ? `Paused · ${cycles} cycles`
@@ -1012,10 +1038,15 @@ function AggressivePlanCard({ plan, liveCostPer1M }) {
       </div>
       <p style={S.aggressivePlanHint}>
         Model: ~{plan.roundTripsPerDay} round-trips/day → size = volume ÷ (2×RTs).
-        Deposit covers dual quotes + inventory at {plan.avgLeverage}× (cap {plan.maxLeverage}×).
+        Deposit covers dual quotes + inventory at {plan.avgLeverage}×
+        {plan.maxLeverage != null ? ` (cap ${plan.maxLeverage}×)` : ''}.
+        {plan.leverageFixed ? ' Venue bot leverage is fixed (not adaptive).' : ' Adaptive raise toward cap if margin is tight.'}
         Cost mixes maker/taker fees + ~{plan.adverseBps} bps bleed (1 bps ≈ $100/$1M).
         {plan.capped
           ? ` Target exceeds venue cadence — honest ceiling ~${formatVolumeUsd(plan.achievableVolumeUsd)} (raise size/deposit or lower target).`
+          : ''}
+        {plan.availableUsd == null && Number(plan.dailyVolumeUsd) > 100_000
+          ? ' Connect balance so size is clamped to free margin — without it the target is uncapped planning only.'
           : ''}
       </p>
     </div>
@@ -1185,18 +1216,68 @@ function BotCard({ bot, expanded, onToggle, onStart, onStop }) {
               </div>
             </div>
             <div style={S.detailCard}>
-              <span style={S.metricLabel}>Runtime</span>
+              <span style={S.metricLabel}>Runtime (this process)</span>
               <div style={S.detailRows}>
                 <span>Cycles <strong>{bot.cycles ?? 0}</strong></span>
                 <span>Open quotes <strong>{bot.openQuotes ?? 0}</strong></span>
                 <span>Fills <strong>{bot.fills}</strong></span>
                 <span>Inventory <strong>{bot.inventory}</strong></span>
+                {bot.sessionSummary ? (
+                  <>
+                    <span>Session vol <strong>{bot.sessionSummary.volumeUsd.toFixed(2)} USD</strong></span>
+                    <span>Session fees <strong>{bot.sessionSummary.feesUsd.toFixed(4)} USD</strong></span>
+                    <span>Session realized <strong>{bot.sessionSummary.realizedUsd.toFixed(4)} USD</strong></span>
+                  </>
+                ) : (
+                  <span style={{ fontSize: 11, opacity: 0.75 }}>Session stats reset on bot restart</span>
+                )}
               </div>
             </div>
             <div style={S.detailCard}>
               <span style={S.metricLabel}>Preset</span>
               <strong style={S.detailTitle}>{PRESETS[bot.preset]?.label || 'Calm'}</strong>
               <p style={S.detailCopy}>{PRESETS[bot.preset]?.copy || PRESETS.calm.copy}</p>
+            </div>
+            <div style={S.detailCard}>
+              <span style={S.metricLabel}>Summary (24h)</span>
+              {bot.periodSummary ? (
+                <div style={S.detailRows}>
+                  <span>Fills / closes: <strong>{bot.periodSummary.fills} / {bot.periodSummary.closes}</strong></span>
+                  <span>Volume: <strong>{bot.periodSummary.volumeUsd.toFixed(2)} USD</strong></span>
+                  <span>
+                    Fees (cost):{' '}
+                    <strong>
+                      {bot.periodSummary.feesUsd.toFixed(4)} USD
+                      {bot.periodSummary.volumeUsd > 0
+                        ? ` (~${bot.periodSummary.feeBps.toFixed(2)} bps)`
+                        : ''}
+                    </strong>
+                  </span>
+                  <span>
+                    Wins / losses (gross closes):{' '}
+                    <strong>
+                      +{bot.periodSummary.winsUsd.toFixed(4)} / −{bot.periodSummary.lossesUsd.toFixed(4)} USD
+                    </strong>
+                  </span>
+                  <span>
+                    Period realized (gross):{' '}
+                    <strong>{bot.periodSummary.realizedUsd.toFixed(4)} USD</strong>
+                  </span>
+                  <span>
+                    Net after fees (trust this):{' '}
+                    <strong style={{
+                      color: bot.periodSummary.netUsd >= 0 ? colors.long : colors.short,
+                    }}>
+                      {bot.periodSummary.netUsd.toFixed(4)} USD
+                    </strong>
+                  </span>
+                </div>
+              ) : (
+                <p style={S.detailCopy}>
+                  No journaled trades in the last 24h for this bot id.
+                  If the exchange shows fills, check Telegram/audit after restart — session stats above are process-local.
+                </p>
+              )}
             </div>
           </div>
           <div style={S.lastAction}>
@@ -1245,6 +1326,8 @@ function BotsPanel({ onClose }) {
     walletAddress: evmWallet?.address?.toLowerCase?.() || evmWallet?.address || null,
     walletClient: evmWallet?.walletClient || null,
     publicClient: evmWallet?.publicClient || null,
+    getWalletClient: evmWallet?.getWalletClient || null,
+    getPublicClient: evmWallet?.getPublicClient || null,
     ensureChain: evmWallet?.ensureChain || null,
     solanaSignMessage,
     solanaWalletAddress,
@@ -1255,6 +1338,8 @@ function BotsPanel({ onClose }) {
     evmWallet?.address,
     evmWallet?.walletClient,
     evmWallet?.publicClient,
+    evmWallet?.getWalletClient,
+    evmWallet?.getPublicClient,
     evmWallet?.ensureChain,
     solanaSignMessage,
     solanaWalletAddress,
@@ -1293,7 +1378,7 @@ function BotsPanel({ onClose }) {
   ]);
 
   const [view, setView] = useState('dashboard');
-  const [step, setStep] = useState('strategy');
+  const [step, setStep] = useState('exchange');
   const [history, setHistory] = useState(DEFAULT_HISTORY);
   const [orderHistory, setOrderHistory] = useState([]);
   const [expandedBotId, setExpandedBotId] = useState(null);
@@ -1316,6 +1401,7 @@ function BotsPanel({ onClose }) {
   const [configuredInstances, setConfiguredInstances] = useState([]);
   const [runningInstances, setRunningInstances] = useState([]);
   const [runtimeById, setRuntimeById] = useState({});
+  const [periodStats24h, setPeriodStats24h] = useState({});
   const [globalActiveOrders, setGlobalActiveOrders] = useState(0);
   const [selectedInstanceId, setSelectedInstanceId] = useState('');
   const [selectedExchangeId, setSelectedExchangeId] = useState('');
@@ -1378,9 +1464,8 @@ function BotsPanel({ onClose }) {
 
   const exchangeOptions = useMemo(() => getAvailableDexConfigs().map((dex) => {
     const instances = configuredInstances.filter((inst) => {
-      const parsed = parseStrategyInstanceId(inst.id);
-      if (parsed.kind !== selectedType) return false;
-      return parsed.exchanges.some(
+      if (inst.kind !== 'symmetric_mm') return false;
+      return parseStrategyInstanceId(inst.id).exchanges.some(
         (exchange) => exchange.toLowerCase() === dex.id.toLowerCase(),
       );
     });
@@ -1388,11 +1473,6 @@ function BotsPanel({ onClose }) {
       (account) => account.exchange?.toLowerCase() === dex.id.toLowerCase(),
     ) || null;
     const accountActive = accountActiveForExchange(syncedAccounts, dex.id);
-    const launchableInstance = instances.find((instance) => (
-      parseStrategyInstanceId(instance.id).exchanges.every(
-        (exchange) => accountActiveForExchange(syncedAccounts, exchange),
-      )
-    ));
     const setupSupported = supportsGameWalletSync(dex.id);
     return {
       dex,
@@ -1400,7 +1480,7 @@ function BotsPanel({ onClose }) {
       syncedAccount,
       accountActive,
       strategyAvailable: instances.length > 0 && (setupSupported || accountActive),
-      readyForLaunch: Boolean(launchableInstance),
+      readyForLaunch: instances.length > 0 && accountActive,
       setupSupported,
       status: instances.length === 0
         ? (syncedAccount ? 'CONNECTED' : 'UNAVAILABLE')
@@ -1416,7 +1496,7 @@ function BotsPanel({ onClose }) {
     };
     return rank(a) - rank(b)
       || String(a.dex.label || a.dex.id).localeCompare(String(b.dex.label || b.dex.id));
-  }), [configuredInstances, selectedType, syncedAccounts]);
+  }), [configuredInstances, syncedAccounts]);
 
   const accountExchangeOptions = useMemo(() => getAvailableDexConfigs()
     .filter((dex) => supportsGameWalletSync(dex.id)
@@ -1545,14 +1625,6 @@ function BotsPanel({ onClose }) {
     }
   }, [exchangeOptions, exchangeBalances]);
 
-  const handleStrategySelect = useCallback((strategyId) => {
-    if (strategyId === selectedType) return;
-    setSelectedType(strategyId);
-    setSelectedExchangeId('');
-    setSelectedInstanceId('');
-    setScanCompleted(false);
-  }, [selectedType]);
-
   useEffect(() => {
     if (view !== 'launch') return undefined;
     const frame = requestAnimationFrame(() => stepHeadingRef.current?.focus());
@@ -1595,6 +1667,7 @@ function BotsPanel({ onClose }) {
       overridesById,
       exchangeBalances,
       orderHistory,
+      periodStats24h,
     ));
   }, [
     configuredInstances,
@@ -1604,6 +1677,7 @@ function BotsPanel({ onClose }) {
     overridesById,
     exchangeBalances,
     orderHistory,
+    periodStats24h,
   ]);
 
   const activeCount = bots.filter((bot) => bot.status === 'Running' || bot.status === 'Paused').length;
@@ -1669,7 +1743,7 @@ function BotsPanel({ onClose }) {
   }, [selectedFreeMarginUsd, selectedExchangeId, calmTargetVolumeUsd]);
 
   const resetLaunch = useCallback(() => {
-    setStep('strategy');
+    setStep('exchange');
     setSelectedType('symmetric_mm');
     setTradeSize(20);
     setMaxPosition(200);
@@ -2564,11 +2638,13 @@ function BotsPanel({ onClose }) {
         configured = [],
         runtime = {},
         overrides = {},
+        period_stats_24h: periodStats = {},
         active_orders: activeOrders = 0,
       } = res.data;
       setConfiguredInstances(configured);
       setRunningInstances(running);
       setRuntimeById(runtime || {});
+      setPeriodStats24h(periodStats || {});
       setOverridesById(overrides || {});
       setGlobalActiveOrders(Number(activeOrders) || 0);
       if (res.data.exchange_balances) {
@@ -3804,56 +3880,11 @@ function BotsPanel({ onClose }) {
         <div style={shared.spacer36} />
       </div>
 
-      {step === 'strategy' && (
-        <div className="bots-step-page" style={S.stepPage}>
-          <div>
-            <h2 ref={stepHeadingRef} tabIndex={-1} style={S.stepTitle}>Choose Strategy</h2>
-            <p style={S.stepCopy}>Pick how the bot manages quotes and market exposure.</p>
-          </div>
-          <div style={S.strategyGrid}>
-            {LAUNCH_BOT_TYPES.map((bot) => {
-              const active = selectedType === bot.id;
-              return (
-                <button
-                  key={bot.id}
-                  type="button"
-                  className="bots-focusable"
-                  aria-pressed={active}
-                  style={{
-                    ...S.strategyCard,
-                    ...(active ? S.strategyCardActive : {}),
-                  }}
-                  onClick={() => handleStrategySelect(bot.id)}
-                >
-                  <div style={{ ...S.botAvatar, background: `linear-gradient(180deg, ${bot.accent} 0%, ${bot.accentDark} 100%)` }}>
-                    <RobotGlyph size={28} color="#fff" />
-                  </div>
-                  <div style={S.strategyText}>
-                    <div style={S.strategyTitleRow}>
-                      <strong>{bot.name}</strong>
-                    </div>
-                    <span>{bot.description}</span>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-          <button
-            type="button"
-            className="bots-focusable"
-            style={{ ...cartoonBtn('#1E88E5', '#1565C0'), ...S.nextButton }}
-            onClick={() => setStep('exchange')}
-          >
-            Continue to Exchange
-          </button>
-        </div>
-      )}
-
       {step === 'exchange' && (
         <div className="bots-step-page" style={S.stepPage}>
           <div>
             <h2 ref={stepHeadingRef} tabIndex={-1} style={S.stepTitle}>Choose Exchange</h2>
-            <p style={S.stepCopy}>Select where your {selectedBot.name} strategy will trade.</p>
+            <p style={S.stepCopy}>Select where your market-making bot will trade.</p>
           </div>
           <div style={S.exchangePickerCard}>
             <span style={S.label}>Exchange</span>
@@ -3873,7 +3904,7 @@ function BotsPanel({ onClose }) {
                   </span>
                 </>
               ) : (
-                <span>Select an exchange with a configured {selectedBot.name} strategy.</span>
+                <span>Select a supported exchange with a configured Symmetric strategy.</span>
               )}
             </div>
           </div>
@@ -3901,6 +3932,51 @@ function BotsPanel({ onClose }) {
               ...S.nextButton,
               ...(!selectedExchangeOption?.readyForLaunch ? S.disabledButton : {}),
             }}
+            onClick={() => setStep('strategy')}
+          >
+            Continue to Strategy
+          </button>
+        </div>
+      )}
+
+      {step === 'strategy' && (
+        <div className="bots-step-page" style={S.stepPage}>
+          <div>
+            <h2 ref={stepHeadingRef} tabIndex={-1} style={S.stepTitle}>Choose Strategy</h2>
+            <p style={S.stepCopy}>Pick how the bot manages quotes and market exposure.</p>
+          </div>
+          <div style={S.strategyGrid}>
+            {LAUNCH_BOT_TYPES.map((bot) => {
+              const active = selectedType === bot.id;
+              return (
+                <button
+                  key={bot.id}
+                  type="button"
+                  className="bots-focusable"
+                  aria-pressed={active}
+                  style={{
+                    ...S.strategyCard,
+                    ...(active ? S.strategyCardActive : {}),
+                  }}
+                  onClick={() => setSelectedType(bot.id)}
+                >
+                  <div style={{ ...S.botAvatar, background: `linear-gradient(180deg, ${bot.accent} 0%, ${bot.accentDark} 100%)` }}>
+                    <RobotGlyph size={28} color="#fff" />
+                  </div>
+                  <div style={S.strategyText}>
+                    <div style={S.strategyTitleRow}>
+                      <strong>{bot.name}</strong>
+                    </div>
+                    <span>{bot.description}</span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+          <button
+            type="button"
+            className="bots-focusable"
+            style={{ ...cartoonBtn('#1E88E5', '#1565C0'), ...S.nextButton }}
             onClick={() => setStep('settings')}
           >
             Continue to Settings
