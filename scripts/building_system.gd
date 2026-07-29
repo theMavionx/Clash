@@ -686,6 +686,9 @@ static var _town_hall_flag_pending_models: Dictionary = {}
 static var _town_hall_flag_pending_ship_controllers: Dictionary = {}
 static var _town_hall_flag_pending_requests: Dictionary = {}
 static var _town_hall_flag_retry_counts: Dictionary = {}
+const DEFAULT_TOWN_HALL_FLAG_TEXTURE: Texture2D = preload(
+	"res://Model/Town_Hall/Town Hall Level 1_FlagTexture2.png"
+)
 const TOWN_HALL_FLAG_MAX_RETRIES := 2
 const TOWN_HALL_FLAG_RETRY_DELAY_SECONDS := 0.75
 
@@ -1807,6 +1810,7 @@ func _apply_town_hall_flag_material_recursive(node: Node, texture: Texture2D) ->
 			if mat == null:
 				mat = StandardMaterial3D.new()
 			mat.resource_local_to_scene = true
+			mat.albedo_color = Color.WHITE
 			mat.albedo_texture = texture
 			mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
 			mi.set_surface_override_material(i, mat)
@@ -1911,7 +1915,9 @@ func _apply_town_hall_flag_url(model: Node, raw_url: String) -> void:
 	if model == null:
 		return
 	if url == "":
-		_clear_town_hall_flag_material_recursive(model)
+		# Imported Town Hall models use a white placeholder for the flag.
+		# Standard means the same Clash flag shown on the main ship.
+		_apply_town_hall_flag_material_recursive(model, DEFAULT_TOWN_HALL_FLAG_TEXTURE)
 		return
 	var cached: Texture2D = _town_hall_flag_texture_cache.get(url, null)
 	if cached != null:
