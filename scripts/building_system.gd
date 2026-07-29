@@ -990,6 +990,7 @@ var troop_defs: Dictionary = {
 		"display": "Wizard (Burst Mage)",
 		"model": "res://Model/Characters/pirate_mage/pirate_mage.tscn",
 		"script": "res://scripts/mage.gd",
+		"min_town_hall_level": 3,
 		"slot_cost": 4,
 		"buy_cost": 400,
 		"max_level": 7,

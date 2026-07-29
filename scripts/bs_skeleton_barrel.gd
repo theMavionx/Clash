@@ -7,7 +7,7 @@ extends RefCounted
 const UNLOCK_SHIP_LEVEL: int = 10
 const ENERGY_COST: int = 8
 const IMPACT_DAMAGE: int = 650
-const FLIGHT_SEC: float = 1.6
+const FLIGHT_SEC: float = 1.067
 const SKELETON_COUNT: int = 4
 const SKELETON_POOL_PREPARE_INTERVAL_SEC: float = 0.12
 const BARREL_SCALE: float = 0.065

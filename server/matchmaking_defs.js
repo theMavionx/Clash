@@ -12,7 +12,7 @@ const BOT_TEMPLATE_COUNTS_BY_TH = {
   2: { easy: 10, normal: 12, hard: 8 },
   3: { easy: 8, normal: 14, hard: 8 },
   4: { easy: 7, normal: 11, hard: 7 },
-  5: { easy: 6, normal: 12, hard: 7 },
+  5: { easy: 50, normal: 50, hard: 50 },
 };
 
 const MATCHMAKING_CONFIG = {
@@ -30,6 +30,11 @@ const MATCHMAKING_CONFIG = {
   strugglingSuccessRate: 0.45,
   candidatePoolSize: 30,
   minLiveCandidatesBeforeBots: 20,
+  competitiveResultMinPowerRatio: 0.40,
+  competitiveResultMaxPowerRatio: 1.60,
+  maxTownHallGapBelow: 1,
+  maxTownHallGapBelowHighTier: 2,
+  maxTownHallGapAbove: 1,
   botLootMultiplier: {
     easy: 0.78,
     normal: 0.88,
@@ -283,26 +288,26 @@ const BASE_LAYOUTS = {
   5: {
     easy: [
       b('town_hall', 5, 11, 11),
-      b('archer_tower', 4, 6, 7),
-      b('archer_tower', 4, 18, 7),
-      b('archer_tower', 3, 12, 5),
-      b('tombstone', 4, 6, 15),
-      b('tombstone', 3, 18, 15),
-      b('turret', 4, 9, 17),
-      b('turret', 3, 16, 17),
-      b('mage_tower', 3, 7, 11),
-      b('mage_tower', 2, 19, 11),
+      b('archer_tower', 1, 6, 7),
+      b('archer_tower', 1, 18, 7),
+      b('archer_tower', 1, 12, 5),
+      b('tombstone', 1, 6, 15),
+      b('tombstone', 1, 18, 15),
+      b('turret', 1, 9, 17),
+      b('turret', 1, 16, 17),
+      b('mage_tower', 1, 7, 11),
+      b('mage_tower', 1, 19, 11),
       b('mortar', 1, 13, 8),
-      b('shark_trap', 3, 3, 23),
-      b('mine', 4, 2, 3),
-      b('mine', 4, 22, 3),
-      b('mine', 3, 2, 20),
-      b('sawmill', 4, 22, 20),
-      b('sawmill', 4, 2, 10),
-      b('sawmill', 3, 22, 10),
-      b('barn', 4, 10, 22),
-      b('storage', 4, 4, 16),
-      b('storage', 3, 20, 16),
+      b('shark_trap', 1, 3, 23),
+      b('mine', 2, 2, 3),
+      b('mine', 2, 22, 3),
+      b('mine', 1, 2, 20),
+      b('sawmill', 2, 22, 20),
+      b('sawmill', 2, 2, 10),
+      b('sawmill', 1, 22, 10),
+      b('barn', 2, 10, 22),
+      b('storage', 2, 4, 16),
+      b('storage', 1, 20, 16),
     ],
     normal: [
       b('town_hall', 5, 11, 11),
@@ -397,6 +402,18 @@ const REQUESTED_PLAYER_NAMES_BY_TH = {
 };
 const REQUESTED_PLAYER_NAMES = new Set(Object.values(REQUESTED_PLAYER_NAMES_BY_TH).flat());
 const FALLBACK_PLAYER_NAMES = PLAYER_LIKE_NAMES.filter((name) => !REQUESTED_PLAYER_NAMES.has(name));
+const GENERATED_NAME_ROOTS = [
+  'ace', 'aero', 'aki', 'alfa', 'andy', 'argo', 'ash', 'axel', 'ben',
+  'bit', 'bolt', 'bravo', 'bruno', 'cash', 'chad', 'chip', 'cole', 'dash',
+  'dax', 'dino', 'don', 'dusk', 'eli', 'enzo', 'finn', 'flux', 'fox',
+  'fred', 'gabe', 'gray', 'hex', 'hiro', 'hugo', 'ian', 'jack', 'jake',
+  'jay', 'jett', 'joe', 'joey', 'josh', 'juno', 'kane', 'karl', 'kim',
+  'kirk', 'kris', 'lex', 'liam', 'loki', 'luke', 'mac', 'mark', 'matt',
+  'milo', 'nash', 'niko', 'noah', 'odin', 'ollie', 'otto', 'paul', 'pax',
+  'ray', 'rex', 'rico', 'rob', 'sam', 'sean', 'seth', 'sky', 'tom',
+  'tony', 'trey', 'tron', 'vince', 'wade', 'will', 'xeno', 'zane', 'zen',
+];
+const GENERATED_NAME_SUFFIXES = ['', 'x', '7', '77', 'gg', 'win', 'sol', 'eth'];
 
 function b(type, level, gridX, gridZ, gridIndex = 0, extra = {}) {
   return { type, level, grid_x: gridX, grid_z: gridZ, grid_index: gridIndex, ...extra };
@@ -451,6 +468,7 @@ function botResources(th, difficulty, seed = '', previous = null) {
 function buildBotBaseTemplates() {
   const templates = [];
   let fallbackNameIndex = 0;
+  const usedNames = new Set();
   for (const th of Object.keys(BASE_LAYOUTS).map(Number)) {
     let tierNameIndex = 0;
     for (const difficulty of Object.keys(BASE_LAYOUTS[th])) {
@@ -458,8 +476,11 @@ function buildBotBaseTemplates() {
       for (let variant = 0; variant < variantCount; variant += 1) {
         const id = `bot-th${th}-${difficulty}-${variant + 1}`;
         const requestedNames = REQUESTED_PLAYER_NAMES_BY_TH[th] || [];
-        const name = requestedNames[tierNameIndex]
-          || fallbackPlayerName(fallbackNameIndex++);
+        const requestedName = requestedNames[tierNameIndex] || null;
+        const name = requestedName && !usedNames.has(requestedName)
+          ? requestedName
+          : nextFallbackPlayerName(fallbackNameIndex++, usedNames);
+        usedNames.add(name);
         templates.push({
           id,
           name,
@@ -480,7 +501,22 @@ function buildBotBaseTemplates() {
 
 function fallbackPlayerName(index) {
   if (index < FALLBACK_PLAYER_NAMES.length) return FALLBACK_PLAYER_NAMES[index];
-  return `player${100 + index}`;
+  const generatedIndex = index - FALLBACK_PLAYER_NAMES.length;
+  const root = GENERATED_NAME_ROOTS[generatedIndex % GENERATED_NAME_ROOTS.length];
+  const suffixIndex = Math.floor(generatedIndex / GENERATED_NAME_ROOTS.length);
+  const suffix = GENERATED_NAME_SUFFIXES[suffixIndex % GENERATED_NAME_SUFFIXES.length];
+  const cycle = Math.floor(suffixIndex / GENERATED_NAME_SUFFIXES.length);
+  return `${root}${suffix}${cycle > 0 ? cycle + 1 : ''}`.slice(0, 16);
+}
+
+function nextFallbackPlayerName(index, usedNames) {
+  let nextIndex = index;
+  for (let attempt = 0; attempt < 10000; attempt += 1) {
+    const candidate = fallbackPlayerName(nextIndex);
+    nextIndex += 1;
+    if (!usedNames.has(candidate)) return candidate;
+  }
+  throw new Error('Unable to allocate a unique raid bot template name');
 }
 
 function repairLayout(buildings) {

@@ -51,6 +51,10 @@ var _target_position: Vector3 = Vector3.ZERO
 
 var _is_panning: bool = false
 var zoom_blocked: bool = false
+var _last_user_camera_input_ticks: int = 0
+var _last_web_interaction_probe_ticks: int = -1000
+var _web_camera_interaction_active: bool = false
+const WEB_INTERACTION_PROBE_INTERVAL_MSEC: int = 50
 
 # ── Touch state ──────────────────────────────────────────────────
 var _touch_points: Dictionary = {}      # touch_index -> Vector2 current position
@@ -69,6 +73,7 @@ func add_trauma(amount: float) -> void:
 
 func _ready() -> void:
 	WebLoadLogger.report("camera_ready_start")
+	add_to_group("camera_rigs")
 	_pitch_pivot = $PitchPivot
 	_camera = _pitch_pivot.get_node_or_null("Camera3D") as Camera3D
 	if _camera == null:
@@ -104,13 +109,16 @@ func _unhandled_input(event: InputEvent) -> void:
 				_is_panning = false
 			else:
 				_is_panning = mb.pressed
+				_mark_user_camera_input()
 
 		# Scroll wheel → zoom in/out (always allowed)
 		if mb.pressed and not zoom_blocked:
 			if mb.button_index == MOUSE_BUTTON_WHEEL_UP:
 				_target_zoom = maxf(_target_zoom - zoom_speed, min_zoom)
+				_mark_user_camera_input()
 			elif mb.button_index == MOUSE_BUTTON_WHEEL_DOWN:
 				_target_zoom = minf(_target_zoom + zoom_speed, max_zoom)
+				_mark_user_camera_input()
 
 	# ── Mouse Motion → Pan ───────────────────────────────────────
 	# Block mouse pan completely while placing/moving — also blocks emulated-from-touch.
@@ -121,6 +129,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion and _is_panning and not bs_busy and _touch_points.is_empty():
 		var motion := event as InputEventMouseMotion
 		var delta := motion.relative
+		_mark_user_camera_input()
 
 		# Pan along world X and Z axes
 		var right := Vector3(1.0, 0.0, 0.0)
@@ -136,6 +145,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	# ── Touch tracking (always — needed for edge-pan + pinch) ────
 	if event is InputEventScreenTouch:
 		var st := event as InputEventScreenTouch
+		_mark_user_camera_input()
 		if st.pressed:
 			_touch_points[st.index] = st.position
 			_touch_start[st.index] = st.position
@@ -151,6 +161,7 @@ func _unhandled_input(event: InputEvent) -> void:
 
 	if event is InputEventScreenDrag:
 		var sd := event as InputEventScreenDrag
+		_mark_user_camera_input()
 		_touch_points[sd.index] = sd.position
 
 		# Pinch-to-zoom — always works, even during placement so player can zoom out.
@@ -226,6 +237,43 @@ func _is_building_system_busy() -> bool:
 	return false
 
 
+func _mark_user_camera_input() -> void:
+	_last_user_camera_input_ticks = Time.get_ticks_msec()
+
+
+## The hidden combat warmup uses this signal to avoid compiling shaders while
+## the player is dragging, zooming, or while camera smoothing is still moving.
+func is_user_camera_interacting(quiet_msec: int = 700) -> bool:
+	if _is_panning or _is_dragging_touch or not _touch_points.is_empty():
+		return true
+	if Time.get_ticks_msec() - _last_user_camera_input_ticks < maxi(0, quiet_msec):
+		return true
+	if global_position.distance_squared_to(_target_position) > 0.000025:
+		return true
+	if absf(_current_zoom - _target_zoom) > 0.005:
+		return true
+	return _is_web_camera_interaction_recent(quiet_msec)
+
+
+func _is_web_camera_interaction_recent(quiet_msec: int) -> bool:
+	if not OS.has_feature("web"):
+		return false
+	var now := Time.get_ticks_msec()
+	if now - _last_web_interaction_probe_ticks < WEB_INTERACTION_PROBE_INTERVAL_MSEC:
+		return _web_camera_interaction_active
+	_last_web_interaction_probe_ticks = now
+	var max_age := maxi(0, quiet_msec)
+	var result: Variant = JavaScriptBridge.eval(
+		(
+			"performance.now() - Number(window.__clashLastCameraInteractionAt"
+			+ " || -1000000) < %d"
+		) % max_age,
+		true
+	)
+	_web_camera_interaction_active = bool(result)
+	return _web_camera_interaction_active
+
+
 func _clamp_pan_position(value: Vector3) -> Vector3:
 	var min_x := minf(pan_limit_min.x, pan_limit_max.x)
 	var max_x := maxf(pan_limit_min.x, pan_limit_max.x)
@@ -259,6 +307,7 @@ func _process(delta_raw: float) -> void:
 	if Input.is_key_pressed(KEY_D):
 		move_dir.x += 1.0
 	if move_dir != Vector3.ZERO:
+		_mark_user_camera_input()
 		var speed = key_pan_speed * _current_zoom * 0.2 * delta
 		_target_position += move_dir.normalized() * speed
 		_target_position.y = 0.0
@@ -281,18 +330,22 @@ func _process(delta_raw: float) -> void:
 		elif finger_pos.y > screen_size.y - edge_y:
 			edge_dir.z = ((finger_pos.y - (screen_size.y - edge_y)) / edge_y)
 		if edge_dir != Vector3.ZERO:
+			_mark_user_camera_input()
 			var zoom_factor: float = _current_zoom * 0.2
 			_target_position += edge_dir * edge_pan_speed * zoom_factor * delta
 			_target_position.y = 0.0
 
 	# ── Q/E zoom ─────────────────────────────────────────────────
 	if Input.is_key_pressed(KEY_E):
+		_mark_user_camera_input()
 		_target_zoom = maxf(_target_zoom - zoom_speed * delta * 3.0, safe_min_zoom)
 	if Input.is_key_pressed(KEY_Q):
+		_mark_user_camera_input()
 		_target_zoom = minf(_target_zoom + zoom_speed * delta * 3.0, max_zoom)
 
 	# ── C = center camera on island ──────────────────────────────
 	if Input.is_key_pressed(KEY_C):
+		_mark_user_camera_input()
 		_target_position = Vector3.ZERO
 		_target_zoom = max_zoom
 	_target_position = _clamp_pan_position(_target_position)

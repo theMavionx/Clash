@@ -7,7 +7,7 @@ const UNLOCK_SHIP_LEVEL: int = 7
 const ENERGY_COST: int = 5
 const RADIUS: float = 0.95
 const DURATION_SEC: float = 6.0
-const FLIGHT_SEC: float = 0.9
+const FLIGHT_SEC: float = 0.6
 const ORB_COLOR: Color = Color(0.26, 0.84, 1.0, 1.0)
 
 var bs: Node3D

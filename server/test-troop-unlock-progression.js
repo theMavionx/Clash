@@ -13,7 +13,7 @@ const gameDb = require('./db');
 
 const EXPECTED_UNLOCKS = Object.freeze({
   knight: 1,
-  mage: 1,
+  mage: 3,
   archer: 1,
   pea_shooter: 4,
   mimic: 5,
@@ -93,7 +93,7 @@ try {
     }
   }
 
-  for (const troopType of ['mechanical_dragon', 'ice_golem', 'necromancer', 'wind_mage', 'horror']) {
+  for (const troopType of ['mage', 'mechanical_dragon', 'ice_golem', 'necromancer', 'wind_mage', 'horror']) {
     const requiredLevel = EXPECTED_UNLOCKS[troopType];
     setTownHallLevel(townHallId, requiredLevel - 1);
     const result = gameDb.upgradeTroop(player.id, troopType);

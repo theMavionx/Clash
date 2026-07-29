@@ -6,12 +6,12 @@ const os = require('node:os');
 const path = require('node:path');
 const { buildBotBaseTemplates, botResources } = require('./matchmaking_defs');
 
-const EXPECTED_BY_TH = { 1: 24, 2: 30, 3: 30, 4: 25, 5: 25 };
+const EXPECTED_BY_TH = { 1: 24, 2: 30, 3: 30, 4: 25, 5: 150 };
 const EXPECTED_BY_BUCKET = {
   '2:easy': 10, '2:normal': 12, '2:hard': 8,
   '3:easy': 8, '3:normal': 14, '3:hard': 8,
   '4:easy': 7, '4:normal': 11, '4:hard': 7,
-  '5:easy': 6, '5:normal': 12, '5:hard': 7,
+  '5:easy': 50, '5:normal': 50, '5:hard': 50,
 };
 const GRID_SPECS = { 0: [29, 27], 1: [27, 3], 2: [27, 5] };
 const BUILDING_SIZES = {
@@ -152,6 +152,68 @@ try {
     'the next encounter should compare against the last resources shown to players',
   );
 
+  const th5FinderId = 'raid-pool-th5-floor-fixture';
+  gameDb.db.prepare(`
+    INSERT INTO players (id, name, token, gold, wood, ore, trophies, level)
+    VALUES (?, ?, ?, 10000, 2000, 2000, 0, 5)
+  `).run(th5FinderId, 'Th5Matchmaker', 'th5-finder-token');
+  gameDb.db.prepare(`
+    INSERT INTO buildings (player_id, type, level, grid_x, grid_z, grid_index, hp, max_hp)
+    VALUES (?, 'town_hall', 5, 11, 11, 0, 32000, 32000)
+  `).run(th5FinderId);
+  const insertLowTierPlayer = gameDb.db.prepare(`
+    INSERT INTO players (id, name, token, gold, wood, ore, trophies, level)
+    VALUES (?, ?, ?, 1500, 1500, 1500, 0, 1)
+  `);
+  const insertLowTierTownHall = gameDb.db.prepare(`
+    INSERT INTO buildings (player_id, type, level, grid_x, grid_z, grid_index, hp, max_hp)
+    VALUES (?, 'town_hall', 1, 11, 11, 0, 4000, 4000)
+  `);
+  for (let index = 0; index < 40; index += 1) {
+    const lowTierId = `raid-pool-th1-live-${index}`;
+    insertLowTierPlayer.run(lowTierId, `LowTier${index}`, `low-tier-token-${index}`);
+    insertLowTierTownHall.run(lowTierId);
+  }
+  const insertTrivialWin = gameDb.db.prepare(`
+    INSERT INTO raid_matchmaking (
+      battle_session_id, attacker_id, defender_id, result, base_power_ratio
+    ) VALUES (?, ?, ?, 'victory', 0.10)
+  `);
+  for (let index = 0; index < 5; index += 1) {
+    insertTrivialWin.run(`trivial-win-${index}`, th5FinderId, `old-th1-target-${index}`);
+  }
+  const th5Match = gameDb.findEnemy(th5FinderId);
+  assert.equal(th5Match.is_bot, 1, th5Match.error);
+  const matchedTownHall = th5Match.buildings.find((building) => building.type === 'town_hall');
+  assert.ok(matchedTownHall, 'TH5 match must contain a town hall');
+  assert.ok(
+    matchedTownHall.level >= 4,
+    `TH5 attacker must not be matched against TH${matchedTownHall.level}`,
+  );
+  assert.equal(
+    th5Match.matchmaking.live_candidate_count,
+    0,
+    'all TH1 live candidates must be removed before scoring a TH5 match',
+  );
+  assert.ok(
+    th5Match.matchmaking.bot_candidate_count >= 150,
+    'TH5 attacker should receive the expanded high-tier bot pool',
+  );
+  assert.equal(
+    th5Match.matchmaking.selection_reason,
+    'normal',
+    'trivial victories below the competitive power band must not mark the attacker as strong',
+  );
+  assert.equal(
+    th5Match.matchmaking.recent_raid_count,
+    0,
+    'trivial victories must not consume the competitive performance window',
+  );
+  assert.ok(
+    th5Match.matchmaking.base_power < 40000,
+    'the easy TH5 bot layout must remain beatable by a lightly loaded TH5 ship',
+  );
+
   const attackerId = 'raid-bot-test-attacker';
   const defenderId = 'raid-bot-test-defender';
   const sessionId = 'raid-bot-test-session';
@@ -233,7 +295,7 @@ try {
   assert.equal(gameDb.getTrophies(defeatAttackerId), 89, 'TH4 attack defeat should subtract 11 trophies');
   assert.equal(gameDb.getTrophies(defeatDefenderId), 122, 'TH4 successful defense should award 22 trophies');
 
-  console.log(`[raid-bot-pool] PASS total=${templates.length} th2=30 th3=30 th4=25 th5=25 resources=varied victory=12 defeat=-11 defense=22 materialized=true rerolled=true`);
+  console.log(`[raid-bot-pool] PASS total=${templates.length} th2=30 th3=30 th4=25 th5=150 resources=varied victory=12 defeat=-11 defense=22 materialized=true rerolled=true`);
 } finally {
   gameDb.db.close();
   for (const suffix of ['', '-wal', '-shm']) fs.rmSync(`${dbPath}${suffix}`, { force: true });

@@ -43,6 +43,7 @@ const mockManualHudReady = String(args['mock-manual-ready'] || '1') !== '0';
 const openAbilityMenu = String(args['open-ability-menu'] || '0') !== '0';
 const dismissUi = String(args['dismiss-ui'] || '1') !== '0';
 const triggerVisibilityRecovery = String(args['visibility-recovery'] || '0') !== '0';
+const exerciseCameraDuringWarmup = String(args['camera-pan'] || '0') !== '0';
 
 await fs.mkdir(path.dirname(outputPath), { recursive: true });
 await fs.mkdir(path.dirname(screenshotPath), { recursive: true });
@@ -288,8 +289,61 @@ const collectFpsSample = (durationMs) => page.evaluate(async (sampleDurationMs) 
   };
 }, durationMs);
 
-const triggerAttackProbe = async () => {
-  for (let pass = 0; pass < 10; pass += 1) {
+const exerciseCamera = async (durationMs) => {
+  const canvas = page.locator('#godot-canvas');
+  const bounds = await canvas.boundingBox();
+  if (!bounds) return { cycles: 0, reason: 'canvas_missing' };
+  const centerX = bounds.x + bounds.width * 0.50;
+  const centerY = bounds.y + bounds.height * 0.68;
+  await page.mouse.move(centerX, centerY);
+  await page.mouse.down();
+  const startedAtMs = Date.now();
+  let cycles = 0;
+  const interactionSamples = [];
+  try {
+    while (Date.now() - startedAtMs < durationMs) {
+      const direction = cycles % 2 === 0 ? 1 : -1;
+      const remainingMs = durationMs - (Date.now() - startedAtMs);
+      await page.mouse.move(
+        centerX + direction * bounds.width * 0.12,
+        centerY + direction * bounds.height * 0.04,
+        { steps: 18 },
+      );
+      interactionSamples.push(await page.evaluate(
+        ({ x, y }) => {
+          const target = document.elementFromPoint(x, y);
+          return {
+            target_id: target?.id || '',
+            target_tag: target?.tagName || '',
+            interaction_age_ms: Number.isFinite(window.__clashLastCameraInteractionAt)
+              ? Math.round(performance.now() - window.__clashLastCameraInteractionAt)
+              : null,
+          };
+        },
+        {
+          x: centerX + direction * bounds.width * 0.12,
+          y: centerY + direction * bounds.height * 0.04,
+        },
+      ));
+      cycles += 1;
+      if (remainingMs > 0) {
+        await page.waitForTimeout(Math.min(80, remainingMs));
+      }
+    }
+  } finally {
+    await page.mouse.up();
+  }
+  return {
+    cycles,
+    duration_ms: Date.now() - startedAtMs,
+    input: 'pointer_drag',
+    interaction_samples: interactionSamples.slice(0, 40),
+  };
+};
+
+const dismissBlockingGuides = async () => {
+  let quietPasses = 0;
+  for (let pass = 0; pass < 16; pass += 1) {
     let dismissed = false;
     for (const label of [/^skip$/i, /^done$/i, /^close$/i]) {
       const button = page.getByRole('button', { name: label }).last();
@@ -300,9 +354,15 @@ const triggerAttackProbe = async () => {
         break;
       }
     }
-    if (!dismissed) break;
+    quietPasses = dismissed ? 0 : quietPasses + 1;
+    if (quietPasses >= 4) break;
+    await page.waitForTimeout(250);
   }
-  const canvas = page.locator('canvas').first();
+};
+
+const triggerAttackProbe = async () => {
+  await dismissBlockingGuides();
+  const canvas = page.locator('#godot-canvas');
   const bounds = await canvas.boundingBox();
   if (!bounds) return null;
   const attackStartedAt = Date.now();
@@ -314,6 +374,12 @@ const triggerAttackProbe = async () => {
       bounds.x + bounds.width * 0.055,
       bounds.y + bounds.height * 0.88,
     );
+  }
+  await page.waitForTimeout(350);
+  await dismissBlockingGuides();
+  const casualMatchButton = page.getByRole('button', { name: /^find a match/i }).first();
+  if (await casualMatchButton.isVisible().catch(() => false)) {
+    await casualMatchButton.click({ timeout: 2000 });
   }
   const attackDeadline = Date.now() + 30000;
   while (Date.now() < attackDeadline) {
@@ -337,14 +403,21 @@ const triggerAttackProbe = async () => {
   };
 };
 
+await page.waitForTimeout(900);
+await dismissBlockingGuides();
 let attack = null;
 if (runEarlyAttack) {
   attack = await triggerAttackProbe();
 }
-await page.waitForTimeout(900);
+await page.waitForTimeout(150);
 await page.screenshot({ path: warmupScreenshotPath, fullPage: false });
 
-const warmupFpsSample = await collectFpsSample(postReadyMs);
+const [warmupFpsSample, cameraExercise] = exerciseCameraDuringWarmup
+  ? await Promise.all([
+    collectFpsSample(postReadyMs),
+    exerciseCamera(postReadyMs),
+  ])
+  : [await collectFpsSample(postReadyMs), null];
 let warmupCompletionTimedOut = false;
 const postReadyWarmupState = await page.evaluate(
   () => window.__clashCombatIdleWarmup || null,
@@ -446,6 +519,7 @@ const result = {
   captured_at_ms: Date.now() - startedAt,
   loading_events: loadingEvents,
   warmup_fps: warmupFpsSample,
+  camera_exercise: cameraExercise,
   fps: fpsSample,
   attack,
   manual_hud_scroll: manualHudScrollProbe,
@@ -513,6 +587,7 @@ console.log(JSON.stringify({
   warmup_completion_timed_out: warmupCompletionTimedOut,
   visibility_recovery: visibilityRecovery,
   warmup_fps: warmupFpsSample,
+  camera_exercise: cameraExercise,
   fps: fpsSample,
   page_errors: pageErrors.length,
   request_failures: requestFailures.length,

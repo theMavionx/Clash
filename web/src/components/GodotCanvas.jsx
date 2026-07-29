@@ -984,6 +984,12 @@ const canvasStyle = {
   outline: 'none',
 };
 
+const CAMERA_MOVEMENT_KEYS = new Set(['w', 'a', 's', 'd', 'q', 'e', 'c']);
+
+function markGodotCameraInteraction() {
+  window.__clashLastCameraInteractionAt = performance.now();
+}
+
 function describeGlobalError(event) {
   const reason = event?.reason;
   const error = event?.error || reason;
@@ -1136,6 +1142,62 @@ function GodotCanvas({ onEngineReady }) {
   const stageProgressStateRef = useRef(0);
   const webglReloadStartedRef = useRef(false);
   const webAudioRef = useRef(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return undefined;
+
+    let cameraPointerActive = false;
+    const eventTargetsCanvas = (event) => (
+      event.target === canvas || event.composedPath?.().includes(canvas)
+    );
+    const handlePointerStart = (event) => {
+      if (!eventTargetsCanvas(event)) return;
+      cameraPointerActive = true;
+      markGodotCameraInteraction();
+    };
+    const handlePointerMove = () => {
+      if (cameraPointerActive) markGodotCameraInteraction();
+    };
+    const handlePointerEnd = () => {
+      if (!cameraPointerActive) return;
+      markGodotCameraInteraction();
+      cameraPointerActive = false;
+    };
+    const handleWheel = (event) => {
+      if (eventTargetsCanvas(event)) markGodotCameraInteraction();
+    };
+    const handleKeyDown = (event) => {
+      if (
+        document.activeElement === canvas
+        && CAMERA_MOVEMENT_KEYS.has(String(event.key || '').toLowerCase())
+      ) {
+        markGodotCameraInteraction();
+      }
+    };
+
+    window.addEventListener('pointerdown', handlePointerStart, true);
+    window.addEventListener('pointermove', handlePointerMove, true);
+    window.addEventListener('pointerup', handlePointerEnd, true);
+    window.addEventListener('pointercancel', handlePointerEnd, true);
+    window.addEventListener('mousedown', handlePointerStart, true);
+    window.addEventListener('mousemove', handlePointerMove, true);
+    window.addEventListener('mouseup', handlePointerEnd, true);
+    window.addEventListener('wheel', handleWheel, { capture: true, passive: true });
+    window.addEventListener('keydown', handleKeyDown, true);
+
+    return () => {
+      window.removeEventListener('pointerdown', handlePointerStart, true);
+      window.removeEventListener('pointermove', handlePointerMove, true);
+      window.removeEventListener('pointerup', handlePointerEnd, true);
+      window.removeEventListener('pointercancel', handlePointerEnd, true);
+      window.removeEventListener('mousedown', handlePointerStart, true);
+      window.removeEventListener('mousemove', handlePointerMove, true);
+      window.removeEventListener('mouseup', handlePointerEnd, true);
+      window.removeEventListener('wheel', handleWheel, true);
+      window.removeEventListener('keydown', handleKeyDown, true);
+    };
+  }, []);
 
   useEffect(() => {
     onEngineReadyRef.current = onEngineReady;

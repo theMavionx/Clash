@@ -53,8 +53,8 @@ const RALLY_SPARK_RADIUS: float = 0.018
 const RALLY_COLOR: Color = Color(1.0, 0.18, 0.12, 1.0)
 ## Flight tuning mirrors the ship cannonball so the marker visibly launches
 ## from the war ship instead of appearing on the island instantly.
-const RALLY_GRENADE_SPEED: float = 1.2
-const RALLY_GRENADE_MIN_FLIGHT: float = 1.5
+const RALLY_GRENADE_SPEED: float = 1.8
+const RALLY_GRENADE_MIN_FLIGHT: float = 1.0
 const RALLY_GRENADE_RADIUS: float = 0.035
 
 # ---------------------------------------------------------------------------

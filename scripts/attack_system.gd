@@ -56,7 +56,7 @@ const TROOP_SCALE_MULTIPLIERS: Dictionary = {
 	"Mage": 1.7,
 	"Archer": 1.7,
 	"Mimic": 1.45,
-	"PeaShooter": 1.40,
+	"PeaShooter": 1.75,
 	"Necromancer": 1.55,
 	"Horror": 1.25,
 	"IceGolem": 2.0,

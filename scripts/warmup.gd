@@ -26,6 +26,7 @@ const COMBAT_WARMUP_FRAMES: int = 6
 const COMBAT_IDLE_SETTLE_MSEC: int = 1200
 const COMBAT_IDLE_STEP_INTERVAL_MSEC: int = 450
 const COMBAT_IDLE_RENDER_INTERVAL_MSEC: int = 180
+const COMBAT_IDLE_CAMERA_QUIET_MSEC: int = 700
 const STARTUP_LOADOUT_REQUEST_GRACE_MSEC: int = 1500
 const COMBAT_VIEWPORT_SIZE: Vector2i = Vector2i(64, 64)
 const STARTUP_COMMON_STEP_NAMES: Array[String] = [
@@ -230,6 +231,8 @@ var _restrict_to_requested_troops: bool = false
 var _startup_loadout_wait_ticks: int = 0
 var _resource_preload_already_satisfied: bool = false
 var _protected_crowd_pose_troop: String = ""
+var _camera_rig_ref: WeakRef = null
+var _combat_idle_paused_for_camera: bool = false
 
 
 static func begin_combat_idle_warmup_request(parent: Node) -> void:
@@ -505,6 +508,8 @@ func _process(_delta: float) -> void:
 
 
 func _process_combat_warmup() -> void:
+	if mode == "combat_idle" and not _combat_idle_camera_window_is_ready():
+		return
 	if not _combat_execution_started:
 		if mode == "combat_idle" and not _idle_window_is_ready():
 			return
@@ -598,6 +603,54 @@ func _idle_window_is_ready() -> bool:
 		print("[WARMUP_PROFILE] combat_idle_window_open settle_ms=", COMBAT_IDLE_SETTLE_MSEC)
 		return false
 	return Time.get_ticks_msec() - _idle_interactive_ticks >= COMBAT_IDLE_SETTLE_MSEC
+
+
+func _combat_idle_camera_window_is_ready() -> bool:
+	var camera_rig := _resolve_camera_rig()
+	var camera_is_active := false
+	if (
+		camera_rig != null
+		and is_instance_valid(camera_rig)
+		and camera_rig.has_method("is_user_camera_interacting")
+	):
+		camera_is_active = bool(
+			camera_rig.call(
+				"is_user_camera_interacting",
+				COMBAT_IDLE_CAMERA_QUIET_MSEC
+			)
+		)
+	if camera_is_active:
+		if not _combat_idle_paused_for_camera:
+			_combat_idle_paused_for_camera = true
+			print(
+				"[WARMUP_PROFILE] combat_idle_camera_pause step_index=",
+				_combat_step_index
+			)
+		return false
+	if _combat_idle_paused_for_camera:
+		_combat_idle_paused_for_camera = false
+		_last_combat_step_finished_ticks = Time.get_ticks_msec()
+		print(
+			"[WARMUP_PROFILE] combat_idle_camera_resume step_index=",
+			_combat_step_index,
+			" quiet_ms=",
+			COMBAT_IDLE_CAMERA_QUIET_MSEC
+		)
+	return true
+
+
+func _resolve_camera_rig() -> Node:
+	if _camera_rig_ref != null:
+		var cached := _camera_rig_ref.get_ref() as Node
+		if is_instance_valid(cached) and cached.is_inside_tree():
+			return cached
+	var scene_tree := get_tree()
+	if scene_tree == null:
+		return null
+	var camera_rig := scene_tree.get_first_node_in_group("camera_rigs")
+	if camera_rig != null:
+		_camera_rig_ref = weakref(camera_rig)
+	return camera_rig
 
 
 func _promote_to_blocking_combat() -> void:

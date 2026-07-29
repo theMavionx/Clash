@@ -2512,7 +2512,13 @@ const stmts = {
     SELECT id, name, trophies, level,
            COALESCE(is_bot, 0) AS is_bot,
            bot_difficulty,
-           bot_variant
+           bot_variant,
+           (
+             SELECT MAX(th.level)
+             FROM buildings th
+             WHERE th.player_id = players.id
+               AND th.type = 'town_hall'
+           ) AS defender_th
     FROM players
     WHERE id != ?
       AND COALESCE(is_bot, 0) = 0
@@ -3250,7 +3256,8 @@ const stmts = {
     WHERE battle_session_id = ? AND attacker_id = ?
   `),
   recentRaidMatchmakingResults: db.prepare(`
-    SELECT result, target_is_bot, target_bot_difficulty, difficulty_bucket, recovery_level, created_at
+    SELECT result, target_is_bot, target_bot_difficulty, difficulty_bucket,
+           recovery_level, base_power_ratio, created_at
     FROM raid_matchmaking
     WHERE attacker_id = ?
       AND result IN ('victory', 'defeat')
@@ -6067,19 +6074,20 @@ function cleanupOldBotTargets() {
 
 function virtualBotCandidatesForProfile(attackPower, profile) {
   const attackerTh = Math.max(1, Math.min(7, Number(attackPower.town_hall_level || 1)));
-  const minTh = profile.recovery_level > 0 ? Math.max(1, attackerTh - 1) : Math.max(1, attackerTh - 1);
-  const maxTh = profile.recovery_level > 0
-    ? attackerTh
-    : profile.selection_reason === 'strong_player'
-      ? Math.min(7, attackerTh + 1)
-      : Math.min(7, attackerTh + 1);
+  const templates = buildBotBaseTemplates();
+  const maxTemplateTh = templates.reduce((highest, template) => Math.max(highest, template.th), 1);
+  const maxGapBelow = attackerTh >= 6
+    ? MATCHMAKING_CONFIG.maxTownHallGapBelowHighTier
+    : MATCHMAKING_CONFIG.maxTownHallGapBelow;
+  const minTh = Math.max(1, attackerTh - maxGapBelow);
+  const maxTh = Math.min(maxTemplateTh, attackerTh + MATCHMAKING_CONFIG.maxTownHallGapAbove);
   const allowedDifficulties = profile.recovery_level > 0
     ? new Set(['easy', 'normal'])
     : profile.selection_reason === 'strong_player'
       ? new Set(['normal', 'hard'])
       : new Set(['easy', 'normal', 'hard']);
 
-  return buildBotBaseTemplates()
+  return templates
     .filter((template) => template.th >= minTh && template.th <= maxTh && allowedDifficulties.has(template.difficulty))
     .map((template) => {
       const base = computeBasePowerFromBuildings(template.buildings);
@@ -6186,6 +6194,7 @@ const TROOP_DEFS = {
   },
   mage: {
     max_level: 7,
+    min_town_hall_level: 3,
     slot_cost: TROOP_SLOT_COSTS.mage,
     buy_cost: 400,
     cost: [
@@ -9454,24 +9463,47 @@ function getRecentRaidPerformance(playerId) {
     rows = stmts.recentBattleReplayResults.all(playerId, limit)
       .map((row) => ({ result: replayRowToRaidResult(row), created_at: row.created_at }));
   }
+  const competitiveRows = rows.filter((row) => {
+    const ratio = Number(row.base_power_ratio);
+    if (!Number.isFinite(ratio) || ratio <= 0) return true;
+    return ratio >= MATCHMAKING_CONFIG.competitiveResultMinPowerRatio
+      && ratio <= MATCHMAKING_CONFIG.competitiveResultMaxPowerRatio;
+  });
   let wins = 0;
   let losses = 0;
   let consecutiveLosses = 0;
-  for (const row of rows) {
+  for (const row of competitiveRows) {
     if (row.result === 'victory') wins += 1;
     if (row.result === 'defeat') losses += 1;
   }
-  for (const row of rows) {
+  for (const row of competitiveRows) {
     if (row.result === 'defeat') consecutiveLosses += 1;
     else break;
   }
   return {
-    raids: rows.length,
+    raids: competitiveRows.length,
+    total_raids: rows.length,
     wins,
     losses,
-    success_rate: rows.length ? wins / rows.length : null,
+    success_rate: competitiveRows.length ? wins / competitiveRows.length : null,
     consecutive_losses: consecutiveLosses,
   };
+}
+
+function filterCandidatesByTownHall(candidates, attackerTownHallLevel) {
+  const attackerTh = Math.max(1, Math.trunc(Number(attackerTownHallLevel) || 1));
+  const maxGapBelow = attackerTh >= 6
+    ? MATCHMAKING_CONFIG.maxTownHallGapBelowHighTier
+    : MATCHMAKING_CONFIG.maxTownHallGapBelow;
+  const minTh = Math.max(1, attackerTh - maxGapBelow);
+  const maxTh = attackerTh + MATCHMAKING_CONFIG.maxTownHallGapAbove;
+  return candidates.filter((candidate) => {
+    const defenderTh = Math.max(
+      1,
+      Math.trunc(Number(candidate.defender_th || candidate.level) || 1),
+    );
+    return defenderTh >= minTh && defenderTh <= maxTh;
+  });
 }
 
 function matchmakingProfileForPlayer(playerId, attackPower) {
@@ -9709,7 +9741,10 @@ function findEnemy(playerId) {
   const profile = matchmakingProfileForPlayer(playerId, attackPower);
   const rawCandidates = stmts.findEnemyCandidates.all(playerId, playerId, playerId, playerId);
   const matchFilter = filterTournamentAttackCandidates(playerId, rawCandidates);
-  const liveCandidates = matchFilter.candidates;
+  const liveCandidates = filterCandidatesByTownHall(
+    matchFilter.candidates,
+    attackPower.town_hall_level,
+  );
   const includeBots = raidBotTargetsEnabled()
     && botCandidatesAllowedForTournament(matchFilter)
     && (

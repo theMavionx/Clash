@@ -4,7 +4,7 @@ const BuildingSystemScript := preload("res://scripts/building_system.gd")
 
 const EXPECTED_UNLOCKS: Dictionary = {
 	"Knight": 1,
-	"Mage": 1,
+	"Mage": 3,
 	"Archer": 1,
 	"PeaShooter": 4,
 	"Mimic": 5,
