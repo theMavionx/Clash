@@ -140,6 +140,7 @@ if (dismissUi) {
     /^continue$/i,
     /^close$/i,
     /^skip$/i,
+    /^done$/i,
   ];
   for (let pass = 0; pass < 4; pass += 1) {
     let clicked = false;

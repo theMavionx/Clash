@@ -17,6 +17,7 @@ import imgPort from '../assets/buildings/port.png';
 import imgSawmill from '../assets/buildings/sawmill.png';
 import imgTownHall from '../assets/buildings/townhall.png';
 import imgTurret from '../assets/buildings/turret.png';
+import imgCannon from '../assets/buildings/cannon.png';
 import imgTombstone from '../assets/buildings/tombstone.png';
 import imgArcherTower from '../assets/buildings/archertower.png';
 import imgStorage from '../assets/buildings/storage.png';
@@ -32,7 +33,7 @@ import berserkImg from '../assets/units/berserk.png';
 const URLS = [
   goldIcon, woodIcon, stoneIcon,
   imgMine, imgBarn, imgPort, imgSawmill, imgTownHall,
-  imgTurret, imgTombstone, imgArcherTower, imgStorage, imgShip, imgSharkTrap,
+  imgTurret, imgCannon, imgTombstone, imgArcherTower, imgStorage, imgShip, imgSharkTrap,
   knightImg, mageImg, arbaletImg, archerImg, berserkImg,
 ];
 

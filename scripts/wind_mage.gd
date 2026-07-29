@@ -5,7 +5,7 @@ extends BaseTroop
 
 const MAX_TROOP_LEVEL: int = 7
 const BPS_DENOMINATOR: int = 10000
-const SECONDARY_DAMAGE_BPS: int = 4500
+const SECONDARY_DAMAGE_BPS: int = 5000
 const MAX_SECONDARY_TARGETS: int = 4
 const WAVE_LENGTH: float = 1.65
 const WAVE_NEAR_HALF_WIDTH: float = 0.24
@@ -38,7 +38,7 @@ const LEVEL_STATS: Dictionary = {
 	4: {"hp": 4900, "damage": 980, "atk_speed": 2.20},
 	5: {"hp": 6200, "damage": 1280, "atk_speed": 2.20},
 	6: {"hp": 7700, "damage": 1660, "atk_speed": 2.20},
-	7: {"hp": 9400, "damage": 2140, "atk_speed": 2.20},
+	7: {"hp": 12000, "damage": 3000, "atk_speed": 2.20},
 }
 
 const ANIM_FILES: Array[String] = [
@@ -169,7 +169,6 @@ func _release_wind_slash() -> void:
 				building_system.remove_building(building)
 
 	_spawn_windling_batch(forward)
-	BaseTroop.invalidate_combat_lists()
 	if primary_destroyed:
 		target_building = {}
 		target_bs = null
@@ -231,9 +230,12 @@ func _resolve_wave_targets(forward: Vector3) -> Array[Dictionary]:
 func _secondary_damage() -> int:
 	return maxi(
 		1,
-		int(
-			(damage * SECONDARY_DAMAGE_BPS + BPS_DENOMINATOR / 2)
-			/ BPS_DENOMINATOR
+		floori(
+			(
+				float(damage * SECONDARY_DAMAGE_BPS)
+				+ float(BPS_DENOMINATOR) * 0.5
+			)
+			/ float(BPS_DENOMINATOR)
 		)
 	)
 
@@ -305,7 +307,9 @@ func _spawn_windling(forward: Vector3, batch_index: int, batch_size: int) -> voi
 	})
 
 	var rise_target := spawn_position
-	var rise_tween := windling.create_tween().set_parallel(true)
+	var rise_tween := windling.create_tween()
+	rise_tween.set_process_mode(Tween.TWEEN_PROCESS_PHYSICS)
+	rise_tween.set_parallel(true)
 	rise_tween.tween_property(
 		windling,
 		"global_position",
@@ -378,15 +382,19 @@ static func _hash_unit(hash_value: int) -> float:
 
 
 func _prune_windlings() -> void:
-	var alive: Array[Node3D] = []
-	for windling in _windlings:
+	var write_index: int = 0
+	for read_index in _windlings.size():
+		var windling: Node3D = _windlings[read_index]
 		if (
 			is_instance_valid(windling)
 			and not bool(windling.get("_is_dead"))
 			and not bool(windling.get("_despawning"))
 		):
-			alive.append(windling)
-	_windlings = alive
+			if write_index != read_index:
+				_windlings[write_index] = windling
+			write_index += 1
+	if write_index < _windlings.size():
+		_windlings.resize(write_index)
 
 
 func _cleanup_windlings(reason: String) -> void:

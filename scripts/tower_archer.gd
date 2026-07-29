@@ -4,6 +4,11 @@ extends Node3D
 
 const ARROW_SCENE: String = "res://Model/Characters/Assets/arrow_bow.gltf"
 const BOW_SCENE: String = "res://Model/Characters/Assets/bow_withString.gltf"
+const PROJECTILE_BATCH_SCRIPT := preload(
+	"res://scripts/projectile_multimesh_batch.gd"
+)
+const PROJECTILE_CHANNEL: StringName = &"tower_archer_arrow"
+const PROJECTILE_BATCH_CAPACITY: int = 384
 const ATTACK_ANIM: String = "Ranged_Bow_Release"
 const HIT_DIST_SQ: float = 0.05 * 0.05
 const POOL_SIZE: int = 12
@@ -16,8 +21,9 @@ const LEVEL_STATS = {
 	2: {"damage": 62, "fire_rate": 0.68, "detect_range": 1.32},
 	3: {"damage": 112, "fire_rate": 0.52, "detect_range": 1.55},
 	4: {"damage": 158, "fire_rate": 0.44, "detect_range": 1.78},
-	5: {"damage": 210, "fire_rate": 0.38, "detect_range": 2.00},
-	6: {"damage": 260, "fire_rate": 0.35, "detect_range": 2.15},
+	5: {"damage": 200, "fire_rate": 0.38, "detect_range": 2.00},
+	6: {"damage": 221, "fire_rate": 0.35, "detect_range": 2.15},
+	7: {"damage": 288, "fire_rate": 0.32, "detect_range": 2.30},
 }
 
 enum State { IDLE, ATTACKING, VICTORY }
@@ -41,10 +47,15 @@ var _active: Array[Dictionary] = []
 var _pool_ready: bool = false
 var _arrow_res: Resource = null
 var _pool_exhausted_warned: bool = false
+var _projectile_batch: ProjectileMultiMeshBatch = null
 
 ## Shared bow + arrow scenes — loaded once across all archer towers.
 static var _bow_scene_res: Resource = null
 static var _arrow_scene_res: Resource = null
+static var _projectile_arrow_mesh: Mesh = null
+static var _projectile_arrow_material: Material = null
+static var _projectile_arrow_transform := Transform3D.IDENTITY
+static var _projectile_visual_ready: bool = false
 
 func _ready() -> void:
 	_apply_stats()
@@ -126,12 +137,8 @@ func _physics_process(delta: float) -> void:
 	if state == State.VICTORY:
 		return
 
-	# Count live enemies
-	var troops = BaseTroop._get_troops_cached()
-	var troops_alive := 0
-	for t in troops:
-		if BaseTroop.is_live_troop(t):
-			troops_alive += 1
+	# The shared cache already excludes dead, freed, and inactive troops.
+	var troops_alive: int = BaseTroop._get_troops_cached().size()
 
 	# All enemies killed after battle — victory!
 	if _had_enemies and troops_alive == 0 and _active.size() == 0:
@@ -216,11 +223,15 @@ func _find_target() -> void:
 	_target = null
 	var nearest_dist_sq = detect_sq
 	var my_pos = global_position
-	for troop in BaseTroop._get_troops_cached():
+	var troops: Array = BaseTroop._get_troops_cached()
+	var troop_positions: PackedVector3Array = BaseTroop._get_troop_positions_cached()
+	for troop_index in range(troops.size()):
+		var troop: Variant = troops[troop_index]
 		if not BaseTroop.can_defense_target_troop(troop, CAN_TARGET_GROUND, CAN_TARGET_AIR):
 			continue
-		var dx = my_pos.x - troop.global_position.x
-		var dz = my_pos.z - troop.global_position.z
+		var troop_pos: Vector3 = troop_positions[troop_index]
+		var dx = my_pos.x - troop_pos.x
+		var dz = my_pos.z - troop_pos.z
 		var d_sq = dx * dx + dz * dz
 		if d_sq < nearest_dist_sq:
 			nearest_dist_sq = d_sq
@@ -235,19 +246,62 @@ func _build_pool() -> void:
 	if not _arrow_res:
 		_pool_ready = true
 		return
-	var scene_root = get_tree().current_scene
+	_prepare_projectile_visual()
+	if _projectile_arrow_mesh == null:
+		return
+	var scene_root := get_tree().current_scene
+	_projectile_batch = PROJECTILE_BATCH_SCRIPT.get_for_scene(scene_root)
+	if (
+		_projectile_batch == null
+		or not _projectile_batch.ensure_channel(
+			PROJECTILE_CHANNEL,
+			_projectile_arrow_mesh,
+			_projectile_arrow_material,
+			PROJECTILE_BATCH_CAPACITY
+		)
+	):
+		return
 	for i in POOL_SIZE:
-		var arrow_node = _arrow_res.instantiate()
-		arrow_node.scale = Vector3(0.1, 0.1, 0.1)
-		arrow_node.visible = false
-		scene_root.add_child(arrow_node)
 		_pool.append({
-			"node": arrow_node,
+			"slot": -1,
+			"position": Vector3.ZERO,
 			"active": false,
 			"target": null,
 			"dir": Vector3.ZERO,
 		})
 	_pool_ready = true
+
+
+func _prepare_projectile_visual() -> void:
+	if _projectile_visual_ready:
+		return
+	if _arrow_res == null or not _arrow_res is PackedScene:
+		return
+	var source_root := (_arrow_res as PackedScene).instantiate() as Node3D
+	if source_root == null:
+		return
+	var source_mesh := _find_mesh_by_name(source_root, "Arrow01")
+	if source_mesh == null:
+		source_mesh = _find_mesh_by_name(source_root, "arrow_bow")
+	if source_mesh == null:
+		source_mesh = _find_first_mesh(source_root)
+	if source_mesh != null and source_mesh.mesh != null:
+		_projectile_arrow_mesh = source_mesh.mesh
+		_projectile_arrow_material = source_mesh.material_override
+		if (
+			_projectile_arrow_material == null
+			and source_mesh.mesh.get_surface_count() > 0
+		):
+			_projectile_arrow_material = source_mesh.mesh.surface_get_material(0)
+		_projectile_arrow_transform = (
+			Transform3D(
+				Basis.from_euler(Vector3(0.0, PI, 0.0)),
+				Vector3.ZERO
+			).scaled_local(Vector3(0.045, 0.045, 0.045))
+			* _relative_transform(source_mesh, source_root)
+		)
+		_projectile_visual_ready = true
+	source_root.free()
 
 
 func _get_pooled() -> Dictionary:
@@ -292,19 +346,30 @@ func _record_defense_telemetry(kind: String, target: Node3D, extra: Dictionary =
 func _spawn_arrow() -> void:
 	if not _target or not is_instance_valid(_target):
 		return
+	if _projectile_batch == null or not is_instance_valid(_projectile_batch):
+		_pool_ready = false
+		_pool.clear()
+		_build_pool()
+	if _projectile_batch == null or not is_instance_valid(_projectile_batch):
+		return
 	var b = _get_pooled()
 	if b.is_empty():
 		return
-	var spawn_pos = global_position + Vector3(0, 0.05, 0)
-	var target_pos = _target.global_position + Vector3(0, 0.05, 0)
-	var dir = (target_pos - spawn_pos).normalized()
+	var slot_index := _projectile_batch.acquire(PROJECTILE_CHANNEL)
+	if slot_index < 0:
+		if not _pool_exhausted_warned:
+			_pool_exhausted_warned = true
+			push_warning("%s: shared arrow batch exhausted." % name)
+		return
+	var spawn_pos := global_position + Vector3(0, 0.05, 0)
+	var target_pos := _target.global_position + Vector3(0, 0.05, 0)
+	var dir := (target_pos - spawn_pos).normalized()
 	b.active = true
+	b.slot = slot_index
 	b.target = _target
 	b.dir = dir
-	b.node.global_position = spawn_pos
-	b.node.visible = true
-	if dir.length() > 0.01:
-		b.node.look_at(spawn_pos + dir, Vector3.UP)
+	b.position = spawn_pos
+	_update_projectile_visual(b, target_pos)
 	_active.append(b)
 	_record_defense_telemetry("defense_fire", _target, {
 		"damage": damage,
@@ -319,7 +384,8 @@ func _update_arrows(delta: float) -> void:
 	var i = _active.size() - 1
 	while i >= 0:
 		var b = _active[i]
-		if not is_instance_valid(b.node):
+		if _projectile_batch == null or not is_instance_valid(_projectile_batch):
+			_return_to_pool(b)
 			_remove_active_arrow_at(i)
 			i -= 1
 			continue
@@ -329,13 +395,18 @@ func _update_arrows(delta: float) -> void:
 			_remove_active_arrow_at(i)
 			i -= 1
 			continue
-		var target_pos = b.target.global_position + Vector3(0, 0.05, 0)
-		b.dir = (target_pos - b.node.global_position).normalized()
-		b.node.global_position += b.dir * 2.5 * delta
-		if b.dir.length() > 0.01:
-			b.node.look_at(b.node.global_position + b.dir, Vector3.UP)
+		var target := b.get("target") as Node3D
+		if target == null:
+			_return_to_pool(b)
+			_remove_active_arrow_at(i)
+			i -= 1
+			continue
+		var target_pos: Vector3 = target.global_position + Vector3(0, 0.05, 0)
+		var projectile_position := b.get("position", Vector3.ZERO) as Vector3
+		b.dir = (target_pos - projectile_position).normalized()
+		b.position = projectile_position.move_toward(target_pos, 2.5 * delta)
 		# Hit detection (squared distance)
-		var dp = b.node.global_position - target_pos
+		var dp: Vector3 = (b.position as Vector3) - target_pos
 		if dp.x * dp.x + dp.y * dp.y + dp.z * dp.z < HIT_DIST_SQ:
 			var hp_before: int = int(b.target.get("hp")) if b.target.get("hp") != null else 0
 			if b.target.has_method("take_damage"):
@@ -345,13 +416,15 @@ func _update_arrows(delta: float) -> void:
 				"damage": damage,
 				"hp_before": hp_before,
 				"hp_after": hp_after,
-				"projectile_x": snappedf(b.node.global_position.x, 0.001),
-				"projectile_y": snappedf(b.node.global_position.y, 0.001),
-				"projectile_z": snappedf(b.node.global_position.z, 0.001),
+				"projectile_x": snappedf((b.position as Vector3).x, 0.001),
+				"projectile_y": snappedf((b.position as Vector3).y, 0.001),
+				"projectile_z": snappedf((b.position as Vector3).z, 0.001),
 				"hit_dist_sq": snappedf(dp.x * dp.x + dp.y * dp.y + dp.z * dp.z, 0.0001),
 			})
 			_return_to_pool(b)
 			_remove_active_arrow_at(i)
+		else:
+			_update_projectile_visual(b, target_pos)
 		i -= 1
 
 
@@ -361,16 +434,21 @@ func _remove_active_arrow_at(index: int) -> void:
 
 
 func _return_to_pool(b: Dictionary) -> void:
+	var slot_index := int(b.get("slot", -1))
+	if _projectile_batch != null and slot_index >= 0:
+		_projectile_batch.release(PROJECTILE_CHANNEL, slot_index)
+	b.slot = -1
+	b.position = Vector3.ZERO
 	b.active = false
 	b.target = null
-	b.node.visible = false
+	b.dir = Vector3.ZERO
 	_pool_exhausted_warned = false
 
 
 func _exit_tree() -> void:
 	for b in _pool:
-		if is_instance_valid(b.get("node")):
-			b.node.queue_free()
+		if b is Dictionary:
+			_return_to_pool(b)
 	_pool.clear()
 	_active.clear()
 
@@ -402,3 +480,52 @@ func _find_anim_player(node: Node) -> AnimationPlayer:
 		if result:
 			return result
 	return null
+
+
+func _find_mesh_by_name(node: Node, mesh_name: String) -> MeshInstance3D:
+	if node is MeshInstance3D and str(node.name) == mesh_name:
+		return node as MeshInstance3D
+	for child in node.get_children():
+		var found := _find_mesh_by_name(child, mesh_name)
+		if found != null:
+			return found
+	return null
+
+
+func _find_first_mesh(node: Node) -> MeshInstance3D:
+	if node is MeshInstance3D and (node as MeshInstance3D).mesh != null:
+		return node as MeshInstance3D
+	for child in node.get_children():
+		var found := _find_first_mesh(child)
+		if found != null:
+			return found
+	return null
+
+
+func _relative_transform(node: Node3D, ancestor: Node3D) -> Transform3D:
+	var result := Transform3D.IDENTITY
+	var current: Node3D = node
+	while current != null and current != ancestor:
+		result = current.transform * result
+		current = current.get_parent() as Node3D
+	return result
+
+
+func _update_projectile_visual(projectile: Dictionary, target_pos: Vector3) -> void:
+	if _projectile_batch == null or not is_instance_valid(_projectile_batch):
+		return
+	var slot_index := int(projectile.get("slot", -1))
+	if slot_index < 0:
+		return
+	var projectile_position := projectile.get("position", Vector3.ZERO) as Vector3
+	if projectile_position.distance_squared_to(target_pos) <= 0.000001:
+		return
+	var flight_transform := Transform3D(Basis.IDENTITY, projectile_position).looking_at(
+		target_pos,
+		Vector3.UP
+	)
+	_projectile_batch.set_instance_transform(
+		PROJECTILE_CHANNEL,
+		slot_index,
+		flight_transform * _projectile_arrow_transform
+	)

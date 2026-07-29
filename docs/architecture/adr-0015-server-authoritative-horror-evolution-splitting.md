@@ -23,10 +23,13 @@ temporary descendants as persistent casualties.
 - Client and server must agree on the bite impact frame for all three forms.
 
 ## Decision
-Horror is a three-slot Town Hall 6 attrition troop. One persistent root troop
+Horror is a twenty-slot Town Hall 10 attrition troop. One persistent root troop
 uses the large Horror model. Lethal damage creates two temporary stage-one
 Creepers; lethal damage to each Creeper creates two temporary stage-two
 Lurkers. Stage two is terminal.
+
+The Town Hall gate and capacity were rebalanced on 2026-07-28. This does not
+change the server-authoritative split architecture recorded by this ADR.
 
 The split direction is derived from the root replay order and generation, while
 child lineage determines a stable replay order. Children inherit the root
@@ -41,7 +44,7 @@ casualty map. The server records every child in `troop_split_spawn` telemetry.
 
 ### Architecture Diagram
 ```text
-Loaded Horror (3 ship slots)
+Loaded Horror (20 ship slots)
           |
           | lethal damage
           v
@@ -96,7 +99,7 @@ Loaded Horror (3 ship slots)
 
 ### Risks
 - **Entity spikes**: bounded to six temporary descendants per loaded Horror.
-- **Balance dominance**: three-slot cost and lower phase DPS offset effective HP.
+- **Balance dominance**: twenty-slot cost and lower phase DPS offset effective HP.
 - **Parity drift**: covered by stat-parity and deterministic split tests.
 
 ## Performance Implications
@@ -115,10 +118,11 @@ UI must ship together.
 - Two stage-one deaths create exactly four stage-two children.
 - Stage-two deaths create no descendants.
 - Descendants are targetable during spawn lock and act only after it expires.
-- One family consumes three ship slots and reports at most one casualty.
+- One family consumes twenty ship slots and reports at most one casualty.
 - Two simulations produce identical child lineage, order, and positions.
 - Bite damage occurs at 42% of each authored `0.833 s` attack clip.
-- Total effective family HP and phase DPS remain below raw three-Knight output.
+- Total effective family HP stays near twenty same-level Knights while phase
+  DPS remains far below that equal-slot frontline reference.
 
 ## Related Decisions
 - `docs/architecture/adr-0013-server-authoritative-mechanical-dragon-chain-lightning.md`

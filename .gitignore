@@ -69,6 +69,8 @@ addons/godot_mcp/
 .codex-remote-attachments/
 .clash-hermes-local/
 .client-logs*.json
+.codex-artifacts/
+/NUL
 
 # Godot Web Export
 web/public/godot/

@@ -1,10 +1,10 @@
 class_name BSRageSpell
 extends RefCounted
-## Main Ship level 6 tactical field. Paid deployed troops inside the radius deal
+## Main Ship level 8 tactical field. Paid deployed troops inside the radius deal
 ## double damage and move/attack 25% faster. Summons and split descendants are
 ## deliberately excluded so the field cannot multiply free army capacity.
 
-const UNLOCK_SHIP_LEVEL: int = 6
+const UNLOCK_SHIP_LEVEL: int = 8
 const ENERGY_COST: int = 7
 const RADIUS: float = 0.82
 const DURATION_SEC: float = 9.0
@@ -14,7 +14,9 @@ const DAMAGE_MULTIPLIER: float = 2.0
 const SPEED_MULTIPLIER: float = 1.25
 const FIELD_COLOR: Color = Color(1.0, 0.48, 0.10, 1.0)
 const FIELD_ACCENT: Color = Color(0.72, 0.18, 1.0, 1.0)
-const FIELD_GROUND_OFFSET: float = 0.004
+const FIELD_GROUND_OFFSET: float = 0.075
+const FIELD_DISK_ALPHA_MIN: float = 0.35
+const FIELD_DISK_ALPHA_MAX: float = 0.45
 const FIELD_SEGMENTS: int = 64
 
 var bs: Node3D
@@ -32,7 +34,7 @@ func init(building_system: Node3D) -> BSRageSpell:
 
 
 func reset(ship_level: int = 1) -> void:
-	_ship_level = clampi(ship_level, 1, 6)
+	_ship_level = clampi(ship_level, 1, 10)
 	_rage_used = false
 	_exit_rage_mode()
 	_clear_zone()
@@ -165,30 +167,39 @@ func _boost_troops(center: Vector3) -> void:
 	_active_zone["last_boosted_count"] = boosted_count
 
 
-func _activate_zone(pos: Vector3) -> void:
+func _activate_zone(pos: Vector3, visual_parent: Node = null) -> void:
 	_clear_zone()
 	var root := Node3D.new()
 	root.name = "MainShipRageField"
-	bs.get_tree().current_scene.add_child(root)
+	var parent: Node = visual_parent
+	if parent == null and is_instance_valid(bs) and bs.get_tree() != null:
+		parent = bs.get_tree().current_scene
+	if parent == null:
+		return
+	parent.add_child(root)
 	root.global_position = pos
 
 	var disk := MeshInstance3D.new()
-	disk.mesh = _make_flat_disc_mesh(RADIUS, FIELD_SEGMENTS)
+	var disk_mesh := CylinderMesh.new()
+	disk_mesh.top_radius = RADIUS
+	disk_mesh.bottom_radius = RADIUS
+	disk_mesh.height = 0.008
+	disk_mesh.radial_segments = FIELD_SEGMENTS
+	disk.mesh = disk_mesh
 	disk.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	var disk_mat := StandardMaterial3D.new()
 	disk_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	disk_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	disk_mat.no_depth_test = false
 	disk_mat.albedo_color = Color(
-		FIELD_ACCENT.r,
-		FIELD_ACCENT.g,
-		FIELD_ACCENT.b,
-		0.08
+		FIELD_COLOR.r,
+		FIELD_COLOR.g,
+		FIELD_COLOR.b,
+		(FIELD_DISK_ALPHA_MIN + FIELD_DISK_ALPHA_MAX) * 0.5
 	)
 	disk_mat.emission_enabled = true
-	disk_mat.emission = FIELD_ACCENT
-	disk_mat.emission_energy_multiplier = 0.35
-	disk_mat.render_priority = -2
+	disk_mat.emission = FIELD_COLOR
+	disk_mat.emission_energy_multiplier = 0.45
 	disk.material_override = disk_mat
 	root.add_child(disk)
 
@@ -217,7 +228,6 @@ func _activate_zone(pos: Vector3) -> void:
 		ring_mat.emission_enabled = true
 		ring_mat.emission = FIELD_COLOR
 		ring_mat.emission_energy_multiplier = 0.75
-		ring_mat.render_priority = -1
 		ring.material_override = ring_mat
 		root.add_child(ring)
 		rings.append(ring)
@@ -239,10 +249,10 @@ func _pulse_zone(age: float) -> void:
 	var disk_mat: StandardMaterial3D = _active_zone.get("disk_mat", null)
 	if disk_mat:
 		disk_mat.albedo_color = Color(
-			FIELD_ACCENT.r,
-			FIELD_ACCENT.g,
-			FIELD_ACCENT.b,
-			0.055 + pulse * 0.045
+			FIELD_COLOR.r,
+			FIELD_COLOR.g,
+			FIELD_COLOR.b,
+			lerpf(FIELD_DISK_ALPHA_MIN, FIELD_DISK_ALPHA_MAX, pulse)
 		)
 	var rings: Array = _active_zone.get("rings", [])
 	var ring_mats: Array = _active_zone.get("ring_mats", [])

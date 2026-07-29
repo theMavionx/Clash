@@ -1207,9 +1207,9 @@ func replay_deploy_troops_at_spawn(action: Dictionary) -> bool:
 	var raw_troops = action.get("troops", [])
 	if raw_troops is Array:
 		for troop in raw_troops:
-			var name: String = str(troop).strip_edges()
-			if name != "":
-				troop_names.append(name)
+			var troop_name: String = str(troop).strip_edges()
+			if troop_name != "":
+				troop_names.append(troop_name)
 	elif action.has("troopType"):
 		var legacy_name: String = str(action.get("troopType", "")).strip_edges()
 		if legacy_name != "":

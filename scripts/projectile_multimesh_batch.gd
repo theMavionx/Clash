@@ -40,7 +40,9 @@ func ensure_channel(
 		return int((_channels[channel_key] as Dictionary).get("capacity", 0)) >= capacity
 
 	var multimesh := MultiMesh.new()
-	multimesh.transform_format = MultiMesh.TRANSFORM_3D
+	multimesh.transform_format = (
+		MultiMesh.TRANSFORM_3D as MultiMesh.TransformFormat
+	)
 	multimesh.use_colors = false
 	multimesh.use_custom_data = false
 	multimesh.mesh = mesh
@@ -95,6 +97,8 @@ func set_instance_transform(
 		return
 	var used_slots := channel.get("used_slots", {}) as Dictionary
 	if not used_slots.has(slot_index):
+		return
+	if not world_transform.is_finite():
 		return
 	var multimesh := channel.get("multimesh") as MultiMesh
 	if multimesh != null:

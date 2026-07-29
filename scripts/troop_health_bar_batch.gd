@@ -15,6 +15,8 @@ static var _active: TroopHealthBarBatch = null
 var _troops: Dictionary = {}
 var _background_multimesh := MultiMesh.new()
 var _fill_multimesh := MultiMesh.new()
+var _live_troops_scratch: Array[Node3D] = []
+var _stale_ids_scratch: Array[int] = []
 
 
 static func ensure_for(node: Node) -> TroopHealthBarBatch:
@@ -37,10 +39,14 @@ static func ensure_for(node: Node) -> TroopHealthBarBatch:
 
 
 func _ready() -> void:
-	_background_multimesh.transform_format = MultiMesh.TRANSFORM_3D
+	_background_multimesh.transform_format = (
+		MultiMesh.TRANSFORM_3D as MultiMesh.TransformFormat
+	)
 	_background_multimesh.use_colors = true
 	_background_multimesh.mesh = _create_quad()
-	_fill_multimesh.transform_format = MultiMesh.TRANSFORM_3D
+	_fill_multimesh.transform_format = (
+		MultiMesh.TRANSFORM_3D as MultiMesh.TransformFormat
+	)
 	_fill_multimesh.use_colors = true
 	_fill_multimesh.mesh = _create_quad()
 
@@ -74,8 +80,8 @@ func unregister_troop(troop: Node3D) -> void:
 
 
 func _process(_delta: float) -> void:
-	var live_troops: Array[Node3D] = []
-	var stale_ids: Array[int] = []
+	_live_troops_scratch.clear()
+	_stale_ids_scratch.clear()
 	for raw_id in _troops:
 		var troop_ref := _troops[raw_id] as WeakRef
 		var troop := troop_ref.get_ref() as Node3D if troop_ref != null else null
@@ -86,13 +92,13 @@ func _process(_delta: float) -> void:
 			or int(troop.get("hp")) <= 0
 			or int(troop.get("hp")) >= int(troop.get("max_hp"))
 		):
-			stale_ids.append(int(raw_id))
+			_stale_ids_scratch.append(int(raw_id))
 			continue
-		live_troops.append(troop)
-	for stale_id in stale_ids:
+		_live_troops_scratch.append(troop)
+	for stale_id in _stale_ids_scratch:
 		_troops.erase(stale_id)
 
-	var count := live_troops.size()
+	var count := _live_troops_scratch.size()
 	if _background_multimesh.instance_count != count:
 		_background_multimesh.instance_count = count
 		_fill_multimesh.instance_count = count
@@ -100,23 +106,27 @@ func _process(_delta: float) -> void:
 		return
 
 	var camera := get_viewport().get_camera_3d()
+	var facing_basis := Basis.IDENTITY
+	if camera != null:
+		# Use the camera's complete orientation. Keeping only the horizontal
+		# direction turns these quads edge-on under the elevated battle camera,
+		# where overlapping dark bars look like stretched troop geometry.
+		var camera_basis := camera.global_transform.basis.orthonormalized()
+		if camera_basis.is_finite():
+			facing_basis = camera_basis
 	var inverse := global_transform.affine_inverse()
 	for index in count:
-		var troop := live_troops[index]
+		var troop := _live_troops_scratch[index]
 		var bar_position := troop.global_position + Vector3.UP * BAR_HEIGHT_OFFSET
-		var facing_basis := Basis.IDENTITY
-		if camera != null:
-			var direction := camera.global_position - bar_position
-			direction.y = 0.0
-			if direction.length_squared() > 0.000001:
-				facing_basis = Basis.looking_at(-direction.normalized(), Vector3.UP)
 		var ratio := clampf(
 			float(troop.get("hp")) / maxf(1.0, float(troop.get("max_hp"))),
 			0.0,
 			1.0
 		)
 		var background_transform := Transform3D(
-			facing_basis.scaled(Vector3(BAR_WIDTH, BAR_HEIGHT, 1.0)),
+			facing_basis * Basis.from_scale(
+				Vector3(BAR_WIDTH, BAR_HEIGHT, 1.0)
+			),
 			bar_position
 		)
 		var fill_width := BAR_WIDTH * ratio
@@ -126,7 +136,9 @@ func _process(_delta: float) -> void:
 			+ facing_basis.z * FILL_DEPTH_OFFSET
 		)
 		var fill_transform := Transform3D(
-			facing_basis.scaled(Vector3(fill_width, BAR_HEIGHT, 1.0)),
+			facing_basis * Basis.from_scale(
+				Vector3(fill_width, BAR_HEIGHT, 1.0)
+			),
 			fill_position
 		)
 		_background_multimesh.set_instance_transform(

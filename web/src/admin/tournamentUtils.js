@@ -52,6 +52,11 @@ export function emptyTournament(eventKind = 'standard') {
     team_prize_splits: [],
     team_member_reward_by: 'volume_usd',
     attack_match_policy: 'all',
+    battle_mode: 'casual',
+    ranked_daily_attack_limit: 20,
+    ranked_shield_hours: 0,
+    ranked_max_defenses_per_day: 20,
+    ranked_altar_bonus_enabled: false,
     start_at: '',
     end_at: '',
     preregistration_enabled: false,
@@ -165,6 +170,11 @@ export function tournamentToForm(tournament) {
     preregistration_enabled: !!tournament.preregistration_enabled,
     registration_require_twitter: !!tournament.registration_require_twitter,
     freeze_trophies: tournament.freeze_trophies !== false,
+    battle_mode: tournament.battle_mode === 'ranked_raids' ? 'ranked_raids' : 'casual',
+    ranked_daily_attack_limit: Math.max(1, Math.floor(Number(tournament.ranked_daily_attack_limit || 20) || 20)),
+    ranked_shield_hours: Math.max(0, Number(tournament.ranked_shield_hours || 0) || 0),
+    ranked_max_defenses_per_day: Math.max(0, Math.floor(Number(tournament.ranked_max_defenses_per_day ?? 20) || 0)),
+    ranked_altar_bonus_enabled: !!tournament.ranked_altar_bonus_enabled,
     min_town_hall_level: Math.max(0, Math.floor(Number(tournament.min_town_hall_level || 0) || 0)),
     seeker_only: !!tournament.seeker_only,
     rewards_in_cop: !!tournament.rewards_in_cop,
@@ -243,8 +253,8 @@ export function defaultRewardConfig() {
   };
 }
 
-export function normalizeRewardSchedulePool(raw = {}, fallbackLabel = 'Reward pool') {
-  return {
+export function normalizeRewardSchedulePool(raw = {}, fallbackLabel = 'Reward pool', { daily = false } = {}) {
+  const pool = {
     enabled: raw.enabled !== false,
     label: String(raw.label || raw.name || fallbackLabel).slice(0, 80),
     top_n: Math.max(1, Math.min(100, Math.floor(Number(raw.top_n || raw.winners || 5) || 5))),
@@ -256,6 +266,18 @@ export function normalizeRewardSchedulePool(raw = {}, fallbackLabel = 'Reward po
     })).filter((p) => p.amount > 0) : [],
     metric: raw.metric || 'points',
   };
+  if (daily) {
+    const dayUtc = String(raw.day_utc || raw.day || raw.date || '').trim();
+    pool.day_utc = /^\d{4}-\d{2}-\d{2}$/.test(dayUtc) ? dayUtc : '';
+    pool.volume_target_usd = Math.max(0, Math.min(
+      10_000_000_000,
+      Number(raw.volume_target_usd ?? raw.daily_volume_target_usd ?? raw.volume_target) || 0,
+    ));
+    pool.volume_target_scope = ['player', 'tournament'].includes(raw.volume_target_scope)
+      ? raw.volume_target_scope
+      : 'player';
+  }
+  return pool;
 }
 
 export function normalizeRewardConfig(raw = {}) {
@@ -273,7 +295,7 @@ export function normalizeRewardConfig(raw = {}) {
   const maxTickets = Math.max(1, Math.min(100000, Math.floor(Number(lucky.max_tickets || base.lucky_daily_raider.max_tickets) || 20)));
   const manualWinners = normalizeLuckyRaiderManualWinners(lucky.manual_winners ?? lucky.manual_winner_ids ?? lucky.manual_winners_text);
   return {
-    daily_pools: (Array.isArray(source.daily_pools) ? source.daily_pools : []).map((pool, idx) => normalizeRewardSchedulePool(pool, `Daily pool ${idx + 1}`)),
+    daily_pools: (Array.isArray(source.daily_pools) ? source.daily_pools : []).map((pool, idx) => normalizeRewardSchedulePool(pool, `Daily pool ${idx + 1}`, { daily: true })),
     final_pools: (Array.isArray(source.final_pools) ? source.final_pools : []).map((pool, idx) => normalizeRewardSchedulePool(pool, `Final pool ${idx + 1}`)),
     lucky_daily_raider: {
       enabled: !!lucky.enabled,
@@ -437,6 +459,11 @@ export function formToTournamentBody(form) {
     team_prize_splits: form.team_prize_mode === 'custom_split' ? (form.team_prize_splits || []) : [],
     team_member_reward_by: form.team_member_reward_by || 'volume_usd',
     attack_match_policy: form.attack_match_policy || 'all',
+    battle_mode: form.battle_mode === 'ranked_raids' ? 'ranked_raids' : 'casual',
+    ranked_daily_attack_limit: Math.max(1, Math.min(100, Math.floor(Number(form.ranked_daily_attack_limit || 20) || 20))),
+    ranked_shield_hours: Math.max(0, Math.min(168, Number(form.ranked_shield_hours || 0) || 0)),
+    ranked_max_defenses_per_day: Math.max(0, Math.min(100, Math.floor(Number(form.ranked_max_defenses_per_day ?? 20) || 0))),
+    ranked_altar_bonus_enabled: !!form.ranked_altar_bonus_enabled,
     start_at: form.start_at || undefined,
     end_at: form.end_at || undefined,
     preregistration_enabled: !!form.preregistration_enabled,
@@ -500,6 +527,23 @@ export function validateTournamentStep(step, form) {
     const needsPoints = form.scoring_mode === 'daily_pool' || form.sort_by === 'points' || form.mode === 'dex_vs_dex';
     const total = Number(form.points_trophy_weight || 0) + Number(form.points_volume_weight || 0) + Number(form.points_pnl_weight || 0);
     if (needsPoints && Math.abs(total - 100) > 0.001) errors.push(`Point weights must total 100%. Current total is ${total}%.`);
+    if (form.battle_mode === 'ranked_raids') {
+      const dailyLimit = Number(form.ranked_daily_attack_limit);
+      const shieldHours = Number(form.ranked_shield_hours);
+      const defenseLimit = Number(form.ranked_max_defenses_per_day);
+      if (!Number.isInteger(dailyLimit) || dailyLimit < 1 || dailyLimit > 100) {
+        errors.push('Ranked attacks per player must be a whole number from 1 to 100.');
+      }
+      if (!Number.isFinite(shieldHours) || shieldHours < 0 || shieldHours > 168) {
+        errors.push('Ranked shield duration must be between 0 and 168 hours.');
+      }
+      if (!Number.isInteger(defenseLimit) || defenseLimit < 0 || defenseLimit > 100) {
+        errors.push('Ranked defenses per player must be a whole number from 0 to 100.');
+      }
+      if (defenseLimit > 0 && defenseLimit < dailyLimit) {
+        errors.push('Ranked defenses must be unlimited (0) or at least the daily attack cap, otherwise some players cannot use all attacks.');
+      }
+    }
   }
   if (step === 3) {
     for (const tier of form.prize_tiers || []) {

@@ -1520,11 +1520,11 @@ function PlayerToolsDrawer({ player, onClose, reload }) {
         <div className="admin-card">
           <div className="admin-card-head"><div><div className="admin-card-title">Village Presets</div><div className="admin-card-sub">Server-side building tools with auto placement.</div></div></div>
           <div className="admin-card-body admin-filter-row">
-            {[1, 2, 3, 4, 5, 6].map((level) => (
+            {[1, 2, 3, 4, 5, 6, 7].map((level) => (
               <button className="admin-btn" key={level} onClick={() => run(`Max village TH${level}`, () => adminPost(`/admin/players/${encodeURIComponent(player.name)}/max-village`, { town_hall_level: level }))}>TH {level}</button>
             ))}
             <button className="admin-btn green" onClick={() => run('Max everything', async () => {
-              await adminPost(`/admin/players/${encodeURIComponent(player.name)}/max-village`, { town_hall_level: 6 });
+              await adminPost(`/admin/players/${encodeURIComponent(player.name)}/max-village`, { town_hall_level: 7 });
               return adminPost(`/admin/players/${encodeURIComponent(player.name)}/add-resources`, { gold: 999999999, wood: 999999999, ore: 999999999 });
             })}>Max everything</button>
           </div>
@@ -1683,7 +1683,15 @@ function TournamentsPanel({ tournaments, reload }) {
                     <td className="admin-mono">#{t.id}</td>
                     <td><strong>{t.name}</strong><div className="admin-card-sub">{t.description}</div></td>
                     <td>{t.dex_scope === 'all' ? <span className="admin-badge gold">All DEXes</span> : <DexBadge dex={t.dex} />}</td>
-                    <td>{t.event_kind === 'lucky_raider' ? 'Lucky Raider' : (t.mode === 'dex_vs_dex' ? 'DEX vs DEX' : 'Individual')}</td>
+                    <td>
+                      {t.event_kind === 'lucky_raider'
+                        ? 'Lucky Raider'
+                        : t.is_ranked_raid || t.battle_mode === 'ranked_raids'
+                          ? 'Ranked raids'
+                          : t.mode === 'dex_vs_dex'
+                            ? 'DEX vs DEX'
+                            : 'Individual'}
+                    </td>
                     <td>
                       {(() => {
                         const luckyMinTh = t.event_kind === 'lucky_raider'
@@ -1941,6 +1949,10 @@ function TournamentWizard({ initial, onClose, onSaved }) {
   const [step, setStep] = useState(0);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
+  const [aiOpen, setAiOpen] = useState(!initial?.id);
+  const [aiPrompt, setAiPrompt] = useState('');
+  const [aiPlanning, setAiPlanning] = useState(false);
+  const [aiResult, setAiResult] = useState(null);
   const isEdit = !!initial?.id;
   const isLuckyRaider = form.event_kind === 'lucky_raider';
   const steps = isLuckyRaider
@@ -1969,6 +1981,39 @@ function TournamentWizard({ initial, onClose, onSaved }) {
     }
     setError('');
     setStep((value) => Math.min(steps.length - 1, value + 1));
+  }
+
+  async function planWithAi() {
+    const prompt = aiPrompt.trim();
+    if (prompt.length < 8) {
+      setError('Describe the tournament for AI in at least 8 characters.');
+      return;
+    }
+    setAiPlanning(true);
+    setError('');
+    setAiResult(null);
+    try {
+      const result = await adminPost('/admin/tournaments/ai/plan', {
+        prompt,
+        current_draft: formToTournamentBody(form),
+      });
+      if (!result?.draft || typeof result.draft !== 'object') throw new Error('AI returned no tournament draft');
+      setForm((previous) => tournamentToForm({
+        ...formToTournamentBody(previous),
+        ...result.draft,
+        status: previous.status,
+      }));
+      setAiResult({
+        model: result.model || '',
+        summary: result.summary || 'Tournament draft applied.',
+        warnings: Array.isArray(result.warnings) ? result.warnings : [],
+      });
+      setStep(0);
+    } catch (err) {
+      setError(err.message || 'AI tournament planning failed');
+    } finally {
+      setAiPlanning(false);
+    }
   }
 
   async function save() {
@@ -2003,6 +2048,40 @@ function TournamentWizard({ initial, onClose, onSaved }) {
           ))}
         </div>
         <div className="wizard-panel">
+          <div className={'tournament-ai-planner' + (aiOpen ? ' open' : '')}>
+            <button className="tournament-ai-toggle" onClick={() => setAiOpen((value) => !value)}>
+              <span>
+                <strong>AI Tournament Builder</strong>
+                <small>Describe the event. AI fills a reviewable draft but cannot save, activate, or pay rewards.</small>
+              </span>
+              <span aria-hidden="true">{aiOpen ? '−' : '+'}</span>
+            </button>
+            {aiOpen && (
+              <div className="tournament-ai-body">
+                <textarea
+                  className="admin-textarea tournament-ai-prompt"
+                  rows={4}
+                  value={aiPrompt}
+                  onChange={(event) => setAiPrompt(event.target.value)}
+                  placeholder="Example: Create a 7-day Ostium volume tournament starting tomorrow at 22:00 UTC. Each day has its own $25k player target and $100 prize pool for top 3; final pool $1,000 for top 10."
+                  disabled={aiPlanning}
+                />
+                <div className="tournament-ai-actions">
+                  <span className="admin-help">The generated values are applied to this wizard only. Review every tab, then save normally.</span>
+                  <button className="admin-btn primary" onClick={planWithAi} disabled={aiPlanning || aiPrompt.trim().length < 8}>
+                    {aiPlanning ? 'Planning tournament...' : 'Generate and apply draft'}
+                  </button>
+                </div>
+                {aiResult && (
+                  <div className="tournament-ai-result">
+                    <strong>{aiResult.summary}</strong>
+                    {aiResult.model && <span>Model: {aiResult.model}</span>}
+                    {aiResult.warnings.map((warning, index) => <span key={index}>Review: {warning}</span>)}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
           {error && <div className="admin-error">{error}</div>}
           {!isLuckyRaider && step === 0 && <TournamentScheduleStep form={form} update={update} />}
           {!isLuckyRaider && step === 1 && <TournamentEligibilityStep form={form} update={update} />}
@@ -2331,15 +2410,17 @@ function MegaSectorEditor({ mega, updateMega }) {
 
 function TournamentScoringStep({ form, update }) {
   const total = Number(form.points_trophy_weight || 0) + Number(form.points_volume_weight || 0) + Number(form.points_pnl_weight || 0);
+  const isRankedRaid = form.battle_mode === 'ranked_raids';
   return (
     <div className="admin-card">
-      <div className="admin-card-head"><div><div className="admin-card-title">Scoring and Boosts</div><div className="admin-card-sub">Keep the score model explicit before rewards are configured.</div></div></div>
+      <div className="admin-card-head"><div><div className="admin-card-title">Scoring and ranked raids</div><div className="admin-card-sub">Trading activity always powers the tournament. Ranked raids can add capped attack and defense trophies to the same event.</div></div></div>
       <div className="admin-card-body admin-grid">
         <div className="admin-form-grid three">
           <label className="admin-field"><span className="admin-label">Sort by</span><MetricSelect value={form.sort_by} onChange={(value) => update({ sort_by: value })} /></label>
           <label className="admin-field"><span className="admin-label">Scoring mode</span><select className="admin-select" value={form.scoring_mode} onChange={(e) => update({ scoring_mode: e.target.value })}><option value="live">Live scoring</option><option value="daily_pool">Daily point pool</option></select></label>
           <NumberField label="Daily pool points" value={form.daily_pool_points} onChange={(v) => update({ daily_pool_points: v })} />
         </div>
+
         {form.scoring_mode === 'daily_pool' && (
           <div className="admin-form-grid three">
             <DateTimeField label="Daily pool starts at" value={form.daily_pool_enabled_at} onChange={(value) => update({ daily_pool_enabled_at: value })} />
@@ -2348,6 +2429,7 @@ function TournamentScoringStep({ form, update }) {
           </div>
         )}
         {form.scoring_mode === 'daily_pool' && <DailyPoolConfig form={form} update={update} />}
+
         <div className="admin-form-grid three">
           <NumberField label="Trophy weight %" value={form.points_trophy_weight} onChange={(v) => update({ points_trophy_weight: v })} />
           <NumberField label="Volume weight %" value={form.points_volume_weight} onChange={(v) => update({ points_volume_weight: v })} />
@@ -2360,10 +2442,58 @@ function TournamentScoringStep({ form, update }) {
           <NumberField label="Trophy boost" value={form.trophy_boost} step="0.1" onChange={(v) => update({ trophy_boost: v })} />
         </div>
         <div className="admin-form-grid three">
-          <label className="admin-field"><span className="admin-label">Shield after raid hours</span><input className="admin-input" type="number" value={form.shield_hours} onChange={(e) => update({ shield_hours: e.target.value })} /></label>
+          <label className="admin-field"><span className="admin-label">Shield after casual raid hours</span><input className="admin-input" type="number" value={form.shield_hours} onChange={(e) => update({ shield_hours: e.target.value })} /></label>
           <label className="admin-field"><span className="admin-label">Freeze account trophies</span><select className="admin-select" value={form.freeze_trophies ? '1' : '0'} onChange={(e) => update({ freeze_trophies: e.target.value === '1' })}><option value="1">Yes</option><option value="0">No</option></select></label>
           <label className="admin-field"><span className="admin-label">Seeker only</span><select className="admin-select" value={form.seeker_only ? '1' : '0'} onChange={(e) => update({ seeker_only: e.target.value === '1' })}><option value="0">No</option><option value="1">Yes</option></select></label>
         </div>
+
+        <div className="admin-choice-grid">
+          <ToggleChoice
+            active={!isRankedRaid}
+            title="Ranked raids off"
+            subtitle="Only trading activity and ordinary raids contribute to this tournament."
+            onClick={() => update({ battle_mode: 'casual' })}
+          />
+          <ToggleChoice
+            active={isRankedRaid}
+            title="Ranked raid add-on"
+            subtitle="Adds daily attack limits, defense losses and net raid trophies to this same DEX tournament."
+            onClick={() => update({ battle_mode: 'ranked_raids' })}
+          />
+        </div>
+
+        {isRankedRaid && (
+          <>
+            <div className="admin-ranked-summary">
+              <div>
+                <strong>One combined DEX tournament</strong>
+                <span>Volume, PnL, gold, daily points and rewards stay active. Ranked raid trophies use the same participant and daily ledgers.</span>
+              </div>
+              <div>
+                <strong>Independent raid limits</strong>
+                <span>Every simultaneous DEX tournament owns its own attack quota, defense cap and shield state.</span>
+              </div>
+            </div>
+            <div className="admin-form-grid three">
+              <NumberField label="Attacks per player / UTC day" value={form.ranked_daily_attack_limit} onChange={(v) => update({ ranked_daily_attack_limit: v })} />
+              <NumberField label="Tournament shield after defense (hours)" value={form.ranked_shield_hours} step="0.5" onChange={(v) => update({ ranked_shield_hours: v })} />
+              <NumberField label="Max defenses per player / UTC day" value={form.ranked_max_defenses_per_day} onChange={(v) => update({ ranked_max_defenses_per_day: v })} />
+            </div>
+            <div className="admin-form-grid three">
+              <label className="admin-field">
+                <span className="admin-label">Altar trophy bonus</span>
+                <select className="admin-select" value={form.ranked_altar_bonus_enabled ? '1' : '0'} onChange={(e) => update({ ranked_altar_bonus_enabled: e.target.value === '1' })}>
+                  <option value="0">Disabled for ranked raids</option>
+                  <option value="1">Enabled</option>
+                </select>
+              </label>
+              <div className="admin-field">
+                <span className="admin-label">Fair defender capacity</span>
+                <span className="admin-card-sub">Use 0 for unlimited defenses. Otherwise the defense cap must be at least the attack cap. Use 0 hours to disable tournament shields.</span>
+              </div>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -2515,6 +2645,7 @@ function TournamentRewardsStep({ form, update }) {
         subtitle="Daily pools, final rewards, and Lucky Daily Raider are additive to legacy volume tiers."
         value={form.reward_config}
         onChange={(reward_config) => update({ reward_config })}
+        tournamentDays={tournamentUtcDays(form, 60)}
         allowPreset
       />
       <div className="admin-card">
@@ -2558,7 +2689,15 @@ function TournamentRewardsStep({ form, update }) {
   );
 }
 
-function RewardScheduleEditor({ value, onChange, title = 'Reward Schedule', subtitle = '', allowPreset = false, luckyOnly = false }) {
+function RewardScheduleEditor({
+  value,
+  onChange,
+  title = 'Reward Schedule',
+  subtitle = '',
+  allowPreset = false,
+  luckyOnly = false,
+  tournamentDays = [],
+}) {
   const config = normalizeRewardConfig(value || {});
   const [manualWinnerDraft, setManualWinnerDraft] = useState('');
   function setConfig(next) {
@@ -2568,7 +2707,37 @@ function RewardScheduleEditor({ value, onChange, title = 'Reward Schedule', subt
     setConfig({ ...config, [key]: next });
   }
   function addPool(key, label) {
-    updateList(key, [...(config[key] || []), { enabled: true, label, top_n: key === 'daily_pools' ? 5 : 10, metric: 'points', rewards: [normalizeReward(rewardDefaults('money'))], payouts: [] }]);
+    const isDaily = key === 'daily_pools';
+    const assignedDays = new Set((config.daily_pools || []).map((pool) => pool.day_utc).filter(Boolean));
+    const nextDay = isDaily ? tournamentDays.find((day) => !assignedDays.has(day)) || '' : '';
+    updateList(key, [...(config[key] || []), {
+      enabled: true,
+      label: nextDay ? `Rewards ${nextDay}` : label,
+      day_utc: nextDay,
+      volume_target_usd: 0,
+      volume_target_scope: 'player',
+      top_n: isDaily ? 5 : 10,
+      metric: 'points',
+      rewards: [normalizeReward(rewardDefaults('money'))],
+      payouts: [],
+    }]);
+  }
+  function addEveryTournamentDay() {
+    const existing = config.daily_pools || [];
+    const byDay = new Map(existing.filter((pool) => pool.day_utc).map((pool) => [pool.day_utc, pool]));
+    const generic = existing.filter((pool) => !pool.day_utc);
+    const generated = tournamentDays.map((day, index) => byDay.get(day) || {
+      enabled: true,
+      label: `Day ${index + 1}`,
+      day_utc: day,
+      volume_target_usd: 0,
+      volume_target_scope: 'player',
+      top_n: 5,
+      metric: 'points',
+      rewards: [normalizeReward(rewardDefaults('money'))],
+      payouts: [],
+    });
+    updateList('daily_pools', [...generic, ...generated]);
   }
   function updatePool(key, index, patch) {
     const next = [...(config[key] || [])];
@@ -2617,7 +2786,10 @@ function RewardScheduleEditor({ value, onChange, title = 'Reward Schedule', subt
           <>
             <div className="admin-toolbar">
               <strong>Daily pools</strong>
-              <button className="admin-btn" onClick={() => addPool('daily_pools', 'Daily Pool')}>Add daily pool</button>
+              <div className="admin-actions">
+                {!!tournamentDays.length && <button className="admin-btn" onClick={addEveryTournamentDay}>Create all {tournamentDays.length} days</button>}
+                <button className="admin-btn" onClick={() => addPool('daily_pools', 'Daily Pool')}>Add daily pool</button>
+              </div>
             </div>
             {(config.daily_pools || []).map((pool, index) => (
               <RewardSchedulePoolEditor
@@ -2626,6 +2798,8 @@ function RewardScheduleEditor({ value, onChange, title = 'Reward Schedule', subt
                 index={index}
                 updatePool={(idx, patch) => updatePool('daily_pools', idx, patch)}
                 removePool={(idx) => removePool('daily_pools', idx)}
+                daily
+                tournamentDays={tournamentDays}
               />
             ))}
             {!(config.daily_pools || []).length && <div className="admin-help">No daily reward pool configured.</div>}
@@ -2774,7 +2948,14 @@ function RewardScheduleEditor({ value, onChange, title = 'Reward Schedule', subt
   );
 }
 
-function RewardSchedulePoolEditor({ pool, index, updatePool, removePool }) {
+function RewardSchedulePoolEditor({
+  pool,
+  index,
+  updatePool,
+  removePool,
+  daily = false,
+  tournamentDays = [],
+}) {
   function update(patch) {
     updatePool(index, patch);
   }
@@ -2791,6 +2972,29 @@ function RewardSchedulePoolEditor({ pool, index, updatePool, removePool }) {
           <NumberField label="Top winners" value={pool.top_n || 5} onChange={(v) => update({ top_n: v })} />
             <label className="admin-field"><span className="admin-label">Metric</span><MetricSelect value={pool.metric || 'points'} onChange={(value) => update({ metric: value })} /></label>
         </div>
+        {daily && (
+          <div className="admin-form-grid three daily-reward-targets">
+            <label className="admin-field">
+              <span className="admin-label">Reward day UTC</span>
+              {tournamentDays.length ? (
+                <select className="admin-select" value={pool.day_utc || ''} onChange={(event) => update({ day_utc: event.target.value })}>
+                  <option value="">Every tournament day</option>
+                  {tournamentDays.map((day) => <option key={day} value={day}>{day}</option>)}
+                </select>
+              ) : (
+                <input className="admin-input" type="date" value={pool.day_utc || ''} onChange={(event) => update({ day_utc: event.target.value })} />
+              )}
+            </label>
+            <NumberField label="Daily volume target ($)" value={pool.volume_target_usd || 0} onChange={(value) => update({ volume_target_usd: value })} />
+            <label className="admin-field">
+              <span className="admin-label">Target applies to</span>
+              <select className="admin-select" value={pool.volume_target_scope || 'player'} onChange={(event) => update({ volume_target_scope: event.target.value })}>
+                <option value="player">Each player</option>
+                <option value="tournament">Whole tournament</option>
+              </select>
+            </label>
+          </div>
+        )}
         <RewardRowsEditor rewards={pool.rewards || []} onChange={(rewards) => update({ rewards })} />
       </div>
     </div>

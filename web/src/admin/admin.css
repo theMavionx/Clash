@@ -855,9 +855,92 @@ button {
   gap: 14px;
 }
 
+.tournament-ai-planner {
+  border: 1px solid rgba(56, 189, 248, 0.34);
+  border-radius: 8px;
+  background: linear-gradient(135deg, rgba(14, 116, 144, 0.13), rgba(15, 23, 42, 0.84));
+  overflow: hidden;
+}
+
+.tournament-ai-planner.open {
+  border-color: rgba(56, 189, 248, 0.56);
+}
+
+.tournament-ai-toggle {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: #e0f2fe;
+  padding: 13px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  text-align: left;
+}
+
+.tournament-ai-toggle strong,
+.tournament-ai-toggle small {
+  display: block;
+}
+
+.tournament-ai-toggle small {
+  color: var(--admin-muted);
+  margin-top: 3px;
+  line-height: 1.35;
+}
+
+.tournament-ai-toggle > span:last-child {
+  color: #7dd3fc;
+  font-size: 24px;
+  line-height: 1;
+}
+
+.tournament-ai-body {
+  border-top: 1px solid rgba(56, 189, 248, 0.2);
+  padding: 14px;
+  display: grid;
+  gap: 10px;
+}
+
+.tournament-ai-prompt {
+  min-height: 108px;
+}
+
+.tournament-ai-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.tournament-ai-actions .admin-help {
+  margin: 0;
+}
+
+.tournament-ai-result {
+  display: grid;
+  gap: 4px;
+  border-left: 3px solid #38bdf8;
+  border-radius: 4px;
+  background: rgba(14, 116, 144, 0.13);
+  color: #bae6fd;
+  padding: 9px 11px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.daily-reward-targets {
+  border-top: 1px solid var(--admin-border-soft);
+  border-bottom: 1px solid var(--admin-border-soft);
+  padding: 12px 0;
+}
+
 .wizard-footer {
   display: flex;
   justify-content: space-between;
+  align-items: center;
+  align-self: start;
   gap: 10px;
   border-top: 1px solid var(--admin-border-soft);
   padding-top: 14px;
@@ -881,6 +964,27 @@ button {
 .admin-choice.active {
   border-color: rgba(255, 215, 0, 0.62);
   background: rgba(255, 215, 0, 0.1);
+}
+
+.admin-ranked-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.admin-ranked-summary > div {
+  display: grid;
+  gap: 4px;
+  border: 1px solid rgba(56, 189, 248, 0.32);
+  border-radius: 8px;
+  background: rgba(14, 116, 144, 0.1);
+  padding: 12px;
+}
+
+.admin-ranked-summary span {
+  color: var(--admin-muted);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .tier-pager {
@@ -1385,6 +1489,15 @@ button {
 
   .wizard-panel {
     gap: 12px;
+  }
+
+  .tournament-ai-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .tournament-ai-actions .admin-btn {
+    width: 100%;
   }
 
   .wizard-footer {

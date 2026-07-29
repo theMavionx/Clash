@@ -2,14 +2,14 @@
 
 ## Role And Fantasy
 
-Wind Mage is a Town Hall 6 support attacker that controls a long, widening lane.
+Wind Mage is a Town Hall 8 support attacker that controls a long, widening lane.
 Each cast damages buildings in the lane and calls temporary Windlings into that
 same space. It rewards deployment angles and clustered defenses rather than raw
 single-target damage.
 
 ## Army Economy
 
-- Unlock: Town Hall 6
+- Unlock: Town Hall 8
 - Ship capacity: 15 slots
 - Training cost: 1,500 gold (100 gold per occupied slot)
 - Upgrade levels: 1-7
@@ -25,11 +25,14 @@ single-target damage.
 | 4 | 4,900 | 980 | 2.20 s |
 | 5 | 6,200 | 1,280 | 2.20 s |
 | 6 | 7,700 | 1,660 | 2.20 s |
-| 7 | 9,400 | 2,140 | 2.20 s |
+| 7 | 12,000 | 3,000 | 2.20 s |
 
 The strike lands at 52% of the attack animation. The primary target receives
-full damage. Up to four other buildings inside the wind corridor receive 45%
+full damage. Up to four other buildings inside the wind corridor receive 50%
 damage. Skeleton guards and other units are not valid wave targets.
+
+The table stores authored pre-curve values. The level-7 primary root resolves
+to 21,600 HP and 5,400 primary damage after the shared `1.80x` same-TH curve.
 
 ## Wind Corridor
 
@@ -37,7 +40,7 @@ damage. Skeleton guards and other units are not valid wave targets.
 - Near half-width: 0.24 world units
 - Far half-width: 0.45 world units
 - Secondary target cap: 4
-- Secondary damage: 45%
+- Secondary damage: 50%
 
 The corridor origin and orientation are derived from the caster and primary
 target. Server simulation uses the same deterministic geometry as the client.
@@ -55,7 +58,7 @@ positions inside the corridor.
 | 4 | 200 | 44 | 0.90 s |
 | 5 | 250 | 57 | 0.90 s |
 | 6 | 310 | 73 | 0.90 s |
-| 7 | 380 | 93 | 0.90 s |
+| 7 | 450 | 110 | 0.90 s |
 
 - Lifetime: 8 seconds
 - Per-owner cap: 6 active Windlings
@@ -81,7 +84,7 @@ positions inside the corridor.
 - Targets outside the corridor take no wave damage.
 - A cast creates two or three Windlings and never exceeds six per caster.
 - Windlings cannot attack guards and do not become casualties.
-- The unit is available from Town Hall 6 for 15 ship slots in every ship,
+- The unit is available from Town Hall 8 for 15 ship slots in every ship,
   upgrade, casualty, replay, and mobile attack UI.
 - The mobile attack roster scrolls horizontally without covering battle HUD
   controls.

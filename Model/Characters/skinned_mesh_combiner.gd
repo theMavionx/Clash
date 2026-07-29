@@ -153,6 +153,51 @@ static func bake_skinned_parts(
 	return result
 
 
+static func bake_rigid_parts(
+	root: Node3D,
+	parts: Array[MeshInstance3D],
+	material: Material,
+	resource_name: String
+) -> ArrayMesh:
+	if root == null or parts.is_empty():
+		return null
+	if not _is_transform_invertible(root.global_transform):
+		return null
+
+	var vertices := PackedVector3Array()
+	var normals := PackedVector3Array()
+	var tangents := PackedFloat32Array()
+	var uvs := PackedVector2Array()
+	var indices := PackedInt32Array()
+	var root_inverse := root.global_transform.affine_inverse()
+	for part in parts:
+		if part == null or part.mesh == null:
+			return null
+		if not _append_rigid_mesh_arrays(
+			part.mesh,
+			root_inverse * part.global_transform,
+			vertices,
+			normals,
+			tangents,
+			uvs,
+			indices
+		):
+			return null
+
+	var surface_arrays: Array = []
+	surface_arrays.resize(Mesh.ARRAY_MAX)
+	surface_arrays[Mesh.ARRAY_VERTEX] = vertices
+	surface_arrays[Mesh.ARRAY_NORMAL] = normals
+	surface_arrays[Mesh.ARRAY_TANGENT] = tangents
+	surface_arrays[Mesh.ARRAY_TEX_UV] = uvs
+	surface_arrays[Mesh.ARRAY_INDEX] = indices
+	var result := ArrayMesh.new()
+	result.resource_name = resource_name
+	result.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, surface_arrays)
+	result.surface_set_material(0, material)
+	return result
+
+
 static func prune_modular_sources(
 	skeleton: Skeleton3D,
 	keep_nodes: Array[Node]
@@ -223,7 +268,10 @@ static func dense_lod_variant(source: Mesh, lod_index: int = 0) -> Mesh:
 			lod_index
 		)
 		var arrays: Array = source.surface_get_arrays(surface_index)
-		var primitive_type: int = source.surface_get_primitive_type(surface_index)
+		var primitive_type := (
+			source.surface_get_primitive_type(surface_index)
+			as Mesh.PrimitiveType
+		)
 		if not _dense_lod_indices_are_safe(
 			arrays,
 			dense_indices,
@@ -248,7 +296,7 @@ static func dense_lod_variant(source: Mesh, lod_index: int = 0) -> Mesh:
 		var arrays: Array = surface.arrays
 		arrays[Mesh.ARRAY_INDEX] = surface.indices
 		dense_mesh.add_surface_from_arrays(
-			surface.primitive,
+			int(surface.primitive) as Mesh.PrimitiveType,
 			arrays
 		)
 		dense_mesh.surface_set_material(surface_index, surface.material)
@@ -271,7 +319,7 @@ static func _cache_dense_lod_fallback(
 static func _dense_lod_indices_are_safe(
 	source_arrays: Array,
 	dense_indices: PackedInt32Array,
-	primitive_type: int
+	primitive_type: Mesh.PrimitiveType
 ) -> bool:
 	var vertices: PackedVector3Array = source_arrays[Mesh.ARRAY_VERTEX]
 	var source_indices: PackedInt32Array = source_arrays[Mesh.ARRAY_INDEX]
@@ -400,6 +448,56 @@ static func _append_mesh_arrays(
 			for influence in range(4):
 				bones.append(int(source_bones[tangent_offset + influence]))
 				weights.append(float(source_weights[tangent_offset + influence]))
+	for source_index in source_indices:
+		indices.append(vertex_offset + int(source_index))
+	return true
+
+
+static func _append_rigid_mesh_arrays(
+	source_mesh: Mesh,
+	source_to_root: Transform3D,
+	vertices: PackedVector3Array,
+	normals: PackedVector3Array,
+	tangents: PackedFloat32Array,
+	uvs: PackedVector2Array,
+	indices: PackedInt32Array
+) -> bool:
+	if source_mesh.get_surface_count() != 1:
+		return false
+	if not _is_transform_invertible(source_to_root):
+		return false
+	var source: Array = source_mesh.surface_get_arrays(0)
+	var source_vertices: PackedVector3Array = source[Mesh.ARRAY_VERTEX]
+	var source_normals: PackedVector3Array = source[Mesh.ARRAY_NORMAL]
+	var source_tangents: PackedFloat32Array = source[Mesh.ARRAY_TANGENT]
+	var source_uvs: PackedVector2Array = source[Mesh.ARRAY_TEX_UV]
+	var source_indices: PackedInt32Array = source[Mesh.ARRAY_INDEX]
+	if (
+		source_vertices.is_empty()
+		or source_normals.size() != source_vertices.size()
+		or source_tangents.size() != source_vertices.size() * 4
+		or source_uvs.size() != source_vertices.size()
+		or source_indices.is_empty()
+	):
+		return false
+
+	var vertex_offset := vertices.size()
+	var normal_basis := source_to_root.basis.inverse().transposed()
+	for vertex_index in range(source_vertices.size()):
+		vertices.append(source_to_root * source_vertices[vertex_index])
+		normals.append((normal_basis * source_normals[vertex_index]).normalized())
+		var tangent_offset := vertex_index * 4
+		var tangent_direction := Vector3(
+			source_tangents[tangent_offset],
+			source_tangents[tangent_offset + 1],
+			source_tangents[tangent_offset + 2]
+		)
+		tangent_direction = (normal_basis * tangent_direction).normalized()
+		tangents.append(tangent_direction.x)
+		tangents.append(tangent_direction.y)
+		tangents.append(tangent_direction.z)
+		tangents.append(source_tangents[tangent_offset + 3])
+		uvs.append(source_uvs[vertex_index])
 	for source_index in source_indices:
 		indices.append(vertex_offset + int(source_index))
 	return true

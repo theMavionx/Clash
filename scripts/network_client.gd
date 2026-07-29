@@ -524,8 +524,11 @@ func upgrade_altar_skill(skill_id: String) -> Dictionary:
 
 # ── Matchmaking ───────────────────────────────────────────────
 
-func find_enemy() -> Dictionary:
-	return await _http_get("/find-enemy")
+func find_enemy(tournament_id: int = 0) -> Dictionary:
+	var endpoint: String = "/find-enemy"
+	if tournament_id > 0:
+		endpoint += "?tournament_id=%d" % tournament_id
+	return await _http_get(endpoint)
 
 func start_revenge(source_battle_id: int) -> Dictionary:
 	return await _http_post("/revenge/start", {"battle_id": source_battle_id})

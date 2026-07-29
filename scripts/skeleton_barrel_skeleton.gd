@@ -10,6 +10,7 @@ const BODY_TEXTURE: Texture2D = preload(
 	"res://Model/Characters/Skelet/characters/gltf/Skeleton_Minion_skeleton_texture.png"
 )
 const BODY_MESH_PREFIX: String = "Skeleton_Minion_"
+const MESH_COMBINER := preload("res://Model/Characters/skinned_mesh_combiner.gd")
 const LIFETIME_SEC: float = 18.0
 const ANIM_FILES: Array[String] = [
 	"res://Model/Characters/Skelet/Animations/gltf/Rig_Medium/Rig_Medium_General.glb",
@@ -19,6 +20,7 @@ const ANIM_FILES: Array[String] = [
 ]
 
 static var _body_material: StandardMaterial3D = null
+static var _combined_body_mesh: ArrayMesh = null
 var summon_index: int = 0
 var _lifetime_remaining: float = LIFETIME_SEC
 var _despawning: bool = false
@@ -28,6 +30,7 @@ func _ready() -> void:
 	_spawn_scale = 0.10
 	super._ready()
 	_apply_body_material()
+	_build_combined_body()
 
 
 func _init_stats() -> void:
@@ -41,6 +44,10 @@ func _init_stats() -> void:
 	atk_speed = 1.15
 	attack_anim = "Melee_1H_Attack_Chop"
 	anim_files = ANIM_FILES
+
+
+func _uses_troop_level_power_curve() -> bool:
+	return false
 
 
 func _setup_weapons() -> void:
@@ -113,3 +120,43 @@ func _apply_body_material() -> void:
 			and str(mesh_instance.name).begins_with(BODY_MESH_PREFIX)
 		):
 			mesh_instance.material_override = _body_material
+
+
+func _build_combined_body() -> void:
+	var skeleton := _find_skeleton(self)
+	if skeleton == null:
+		return
+	var body_parts: Array[MeshInstance3D] = []
+	for child in skeleton.get_children():
+		if child is MeshInstance3D and str(child.name).begins_with(BODY_MESH_PREFIX):
+			body_parts.append(child as MeshInstance3D)
+	if body_parts.size() <= 1:
+		return
+	if _combined_body_mesh == null:
+		_combined_body_mesh = MESH_COMBINER.bake_skinned_parts(
+			skeleton,
+			body_parts,
+			_body_material,
+			"SkeletonBarrelSkeletonCombined"
+		)
+	if _combined_body_mesh == null:
+		return
+
+	var combined := MeshInstance3D.new()
+	combined.name = "CombinedSkeletonBarrelSkeleton"
+	combined.mesh = _combined_body_mesh
+	combined.skin = body_parts[0].skin
+	combined.skeleton = NodePath("..")
+	combined.material_override = _body_material
+	combined.extra_cull_margin = TROOP_MESH_CULL_MARGIN
+	combined.set_meta("clash_baked_parts", PackedStringArray([
+		"arms",
+		"body",
+		"cloak",
+		"eyes",
+		"head",
+		"jaw",
+		"legs",
+	]))
+	skeleton.add_child(combined)
+	MESH_COMBINER.prune_mesh_sources(body_parts)

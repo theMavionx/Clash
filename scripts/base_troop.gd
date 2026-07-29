@@ -30,6 +30,18 @@ var _tactical_boost_base_damage: int = 0
 var _tactical_boost_base_atk_speed: float = 0.0
 var _tactical_boost_base_move_speed: float = 0.0
 
+# Mirrors server/combat_defs.js. The curve applies only to primary deployed
+# troops; summoned helper units keep their own separately balanced stats.
+const TROOP_LEVEL_POWER_MULTIPLIERS: Array[float] = [
+	0.82,
+	0.82,
+	1.20,
+	1.85,
+	1.68,
+	1.61,
+	1.74,
+]
+
 enum State { INACTIVE, IDLE, RUNNING, ATTACKING, VICTORY }
 var state: State = State.INACTIVE
 var target_building: Dictionary = {}
@@ -53,11 +65,18 @@ const MASS_TROOP_LOD_INDEX: int = 2
 const ATTACK_SFX_VOLUME_DB: float = -8.0
 const ATTACK_SFX_PITCH_JITTER: float = 0.06
 const ATTACK_SFX_POOL_SIZE: int = 6
+const DENSE_RANGED_SLOT_MIN_RANGE: float = 0.55
+const DENSE_RANGED_GOLDEN_ANGLE: float = 2.399963229728653
+const DENSE_SPATIAL_CELL_SIZE: float = 0.22
 
 ## Cached troop list — shared across all BaseTroop instances via static
 static var _cached_troops: Array = []
 static var _troops_cache_frame: int = -1
 static var _troops_cache_valid: bool = false
+static var _cached_troop_positions := PackedVector3Array()
+static var _troop_positions_cache_frame: int = -1
+static var _troop_spatial_cache_frame: int = -1
+static var _troop_spatial_buckets: Dictionary = {}
 static var _slot_angle_cache_frame: int = -1
 static var _slot_angle_groups: Dictionary = {}
 static var _attack_sfx_cache: Dictionary = {}
@@ -67,6 +86,8 @@ static var _attack_sfx_pool_cursors: Dictionary = {}
 static var _render_diag_emitted: Dictionary = {}
 static var _dense_render_tier_active: int = 0
 static var _dense_render_mode_initialized: bool = false
+static var profile_dense_separation_interval: int = 0
+static var profile_dense_slot_interval_sec: float = 0.0
 const RENDER_DIAG_MAX_EVENTS: int = 24
 const RENDER_DIAG_MAX_MESHES: int = 10
 const RENDER_DIAG_MAX_PARTICLES: int = 8
@@ -268,6 +289,8 @@ const DENSE_TROOP_ANIMATION_HZ: float = 10.0
 
 static var _replay_combat_cache_frame: int = -1
 static var _replay_combat_locked: bool = false
+static var _replay_telemetry_sink_cache_frame: int = -1
+static var _replay_telemetry_sink_active: bool = false
 
 ## Pre-allocated HP bar colors — avoids Color allocation every frame
 static var _HP_COLORS: Array = [
@@ -312,6 +335,33 @@ static func _get_building_systems_cached() -> Array:
 		_bs_nodes_cache_frame = frame
 	return _cached_bs_nodes
 
+
+static func invalidate_replay_telemetry_sink_cache() -> void:
+	_replay_telemetry_sink_cache_frame = -1
+	_replay_telemetry_sink_active = false
+
+
+static func has_active_replay_telemetry_sink() -> bool:
+	var frame: int = combat_cache_key()
+	if frame == _replay_telemetry_sink_cache_frame:
+		return _replay_telemetry_sink_active
+	_replay_telemetry_sink_cache_frame = frame
+	_replay_telemetry_sink_active = false
+	for bs_node in _get_building_systems_cached():
+		if not is_instance_valid(bs_node):
+			continue
+		if bs_node.has_method("has_active_replay_telemetry_sink"):
+			if bool(bs_node.call("has_active_replay_telemetry_sink")):
+				_replay_telemetry_sink_active = true
+				break
+		elif bs_node.has_method("record_replay_telemetry"):
+			# Compatibility for focused probes and external telemetry sinks that
+			# predate the explicit active-state API.
+			_replay_telemetry_sink_active = true
+			break
+	return _replay_telemetry_sink_active
+
+
 ## Cached movement region. Troops may move through the main island grid and
 ## the shore deployment grid, but nowhere else on the map.
 static var _movement_grid_bounds: Array = []
@@ -332,6 +382,7 @@ static func reset_combat_runtime_cache() -> void:
 	_camera_cache_frame = -1
 	_replay_combat_cache_frame = -1
 	_replay_combat_locked = false
+	invalidate_replay_telemetry_sink_cache()
 
 
 static func is_replay_combat_locked() -> bool:
@@ -363,6 +414,10 @@ static func invalidate_troops_cache() -> void:
 	_cached_troops.clear()
 	_troops_cache_frame = -1
 	_troops_cache_valid = false
+	_cached_troop_positions.clear()
+	_troop_positions_cache_frame = -1
+	_troop_spatial_buckets.clear()
+	_troop_spatial_cache_frame = -1
 
 
 static func invalidate_buildings_cache() -> void:
@@ -376,6 +431,8 @@ static func invalidate_guards_cache() -> void:
 	_cached_guards_list.clear()
 	_guards_list_cache_frame = -1
 	_guards_cache_valid = false
+	_cached_guard_positions.clear()
+	_guard_positions_cache_frame = -1
 
 
 static func is_live_troop(troop: Variant) -> bool:
@@ -538,8 +595,14 @@ static func _get_buildings_cached() -> Array:
 							entry["b"] = b
 							entry["bs"] = bs
 							entry["pos"] = b.node.global_position
+							entry["avoid_radius"] = _building_avoid_radius(b, bs)
 						else:
-							entry = {"b": b, "bs": bs, "pos": b.node.global_position}
+							entry = {
+								"b": b,
+								"bs": bs,
+								"pos": b.node.global_position,
+								"avoid_radius": _building_avoid_radius(b, bs),
+							}
 							_building_entry_pool.append(entry)
 						_building_entry_pool_idx += 1
 						_cached_building_list.append(entry)
@@ -553,6 +616,8 @@ static func _get_buildings_cached() -> Array:
 static var _cached_guards_list: Array = []
 static var _guards_list_cache_frame: int = -1
 static var _guards_cache_valid: bool = false
+static var _cached_guard_positions := PackedVector3Array()
+static var _guard_positions_cache_frame: int = -1
 
 static func _get_guards_list_cached() -> Array:
 	if not _guards_cache_valid:
@@ -562,6 +627,26 @@ static func _get_guards_list_cached() -> Array:
 		_guards_list_cache_frame = combat_cache_key()
 		_guards_cache_valid = true
 	return _cached_guards_list
+
+
+static func _get_guard_positions_cached() -> PackedVector3Array:
+	var guards: Array = _get_guards_list_cached()
+	var frame: int = combat_cache_key()
+	if (
+		frame == _guard_positions_cache_frame
+		and _cached_guard_positions.size() == guards.size()
+	):
+		return _cached_guard_positions
+	_cached_guard_positions.resize(guards.size())
+	for guard_index in range(guards.size()):
+		var guard: Variant = guards[guard_index]
+		_cached_guard_positions[guard_index] = (
+			guard.global_position
+			if is_instance_valid(guard) and guard is Node3D
+			else Vector3(INF, 0.0, INF)
+		)
+	_guard_positions_cache_frame = frame
+	return _cached_guard_positions
 
 
 static func _get_troops_cached() -> Array:
@@ -578,6 +663,50 @@ static func _get_troops_cached() -> Array:
 	return _cached_troops
 
 
+static func _get_troop_positions_cached() -> PackedVector3Array:
+	var troops: Array = _get_troops_cached()
+	var frame: int = combat_cache_key()
+	if (
+		frame == _troop_positions_cache_frame
+		and _cached_troop_positions.size() == troops.size()
+	):
+		return _cached_troop_positions
+	_cached_troop_positions.resize(troops.size())
+	for troop_index in range(troops.size()):
+		var troop: Variant = troops[troop_index]
+		_cached_troop_positions[troop_index] = (
+			troop.global_position
+			if is_instance_valid(troop) and troop is Node3D
+			else Vector3(INF, 0.0, INF)
+		)
+	_troop_positions_cache_frame = frame
+	return _cached_troop_positions
+
+
+static func _troop_spatial_cell(world_position: Vector3) -> Vector2i:
+	return Vector2i(
+		floori(world_position.x / DENSE_SPATIAL_CELL_SIZE),
+		floori(world_position.z / DENSE_SPATIAL_CELL_SIZE)
+	)
+
+
+static func _get_troop_spatial_buckets_cached() -> Dictionary:
+	var positions: PackedVector3Array = _get_troop_positions_cached()
+	var frame: int = combat_cache_key()
+	if frame == _troop_spatial_cache_frame:
+		return _troop_spatial_buckets
+	_troop_spatial_buckets.clear()
+	for troop_index in range(positions.size()):
+		var cell: Vector2i = _troop_spatial_cell(positions[troop_index])
+		var bucket := PackedInt32Array()
+		if _troop_spatial_buckets.has(cell):
+			bucket = _troop_spatial_buckets[cell]
+		bucket.append(troop_index)
+		_troop_spatial_buckets[cell] = bucket
+	_troop_spatial_cache_frame = frame
+	return _troop_spatial_buckets
+
+
 static func _get_camera_cached() -> Camera3D:
 	var frame: int = combat_cache_key()
 	if frame != _camera_cache_frame:
@@ -592,6 +721,7 @@ static func _get_camera_cached() -> Camera3D:
 
 func _ready() -> void:
 	_init_stats()
+	_apply_troop_level_power_curve()
 	max_hp = hp
 	_setup_attack_sfx()
 	_setup_animations()
@@ -613,12 +743,26 @@ func _init_stats() -> void:
 	pass
 
 
+func _uses_troop_level_power_curve() -> bool:
+	return true
+
+
+func _apply_troop_level_power_curve() -> void:
+	if not _uses_troop_level_power_curve():
+		return
+	var index := clampi(level - 1, 0, TROOP_LEVEL_POWER_MULTIPLIERS.size() - 1)
+	var multiplier := TROOP_LEVEL_POWER_MULTIPLIERS[index]
+	hp = maxi(1, roundi(float(hp) * multiplier))
+	damage = maxi(1, roundi(float(damage) * multiplier))
+
+
 ## Applies level `lvl` to this troop by re-running `_init_stats()`.
 ## Call after spawning when the player's stored troop level is known.
 func upgrade_to(lvl: int) -> void:
 	_clear_tactical_boost()
 	level = lvl
 	_init_stats()
+	_apply_troop_level_power_curve()
 	max_hp = hp
 	_setup_attack_sfx()
 
@@ -700,13 +844,20 @@ func _get_attack_sfx_pool(pool_key: String, stream: AudioStream) -> Array:
 ## in the "troops" group and immediately searches for a target. The HP bar is
 ## created lazily after the first hit instead of adding three nodes per troop.
 ## Call this after placing the troop in the scene via the attack system.
-func activate() -> void:
-	if state != State.INACTIVE:
+func prepare_activation_visuals() -> void:
+	if _activation_visuals_prepared:
 		return
-	visible = true
 	_apply_web_body_material_fallback()
 	_stabilize_render_meshes()
 	_report_troop_render_diagnostic("activate")
+	_activation_visuals_prepared = true
+
+
+func activate(refresh_dense_rendering: bool = true) -> void:
+	if state != State.INACTIVE:
+		return
+	visible = true
+	prepare_activation_visuals()
 	state = State.IDLE
 	add_to_group("troops")
 	invalidate_troops_cache()
@@ -714,7 +865,8 @@ func activate() -> void:
 	_move_sep_counter = posmod(_troop_order_key(self), HIGH_DENSITY_SEPARATION_INTERVAL)
 	_sep_counter = posmod(_troop_order_key(self), HIGH_DENSITY_ATTACK_SEPARATION_INTERVAL)
 	_enable_animation_budget()
-	_refresh_dense_troop_rendering()
+	if refresh_dense_rendering:
+		_refresh_dense_troop_rendering()
 	_record_replay_telemetry("troop_spawn", {})
 	_find_next_target()
 
@@ -763,6 +915,7 @@ static func _dense_lod_index_for_tier(render_tier: int) -> int:
 
 
 var _dense_render_tier_applied: int = -1
+var _activation_visuals_prepared: bool = false
 var _batched_hp_registered: bool = false
 var _crowd_batch_manager: Node = null
 var _crowd_batch_registered: bool = false
@@ -784,7 +937,11 @@ func _set_dense_render_tier(render_tier: int) -> void:
 			) as Mesh
 			if not mesh_instance.has_meta("clash_full_detail_mesh"):
 				mesh_instance.set_meta("clash_full_detail_mesh", full_detail_mesh)
-			if dense and mesh_instance.skin != null:
+			if (
+				dense
+				and mesh_instance.skin != null
+				and not bool(mesh_instance.get_meta("clash_dense_lod_ignore", false))
+			):
 				mesh_instance.mesh = SkinnedMeshCombiner.dense_lod_variant(
 					full_detail_mesh,
 					lod_index
@@ -832,6 +989,14 @@ static var _ai_profile_animation_usec: int = 0
 static var _ai_profile_common_usec: int = 0
 static var _ai_profile_targeting_usec: int = 0
 static var _ai_profile_action_usec: int = 0
+static var _move_profile_last_frame: int = -1
+static var _move_profile_frame_count: int = 0
+static var _move_profile_calls: int = 0
+static var _move_profile_target_usec: int = 0
+static var _move_profile_slot_usec: int = 0
+static var _move_profile_face_usec: int = 0
+static var _move_profile_steering_usec: int = 0
+static var _move_profile_state_usec: int = 0
 
 
 func _enable_animation_budget() -> void:
@@ -968,7 +1133,7 @@ static func _record_ai_profile_sample(
 	_ai_profile_common_usec += common_usec
 	_ai_profile_targeting_usec += targeting_usec
 	_ai_profile_action_usec += action_usec
-	if _ai_profile_frame_count < 120:
+	if _ai_profile_frame_count < 20:
 		return
 	var frame_count := maxf(float(_ai_profile_frame_count), 1.0)
 	print(
@@ -999,6 +1164,59 @@ static func _record_ai_profile_sample(
 	_ai_profile_common_usec = 0
 	_ai_profile_targeting_usec = 0
 	_ai_profile_action_usec = 0
+
+
+static func _record_move_profile_sample(
+	target_usec: int,
+	slot_usec: int,
+	face_usec: int,
+	steering_usec: int,
+	state_usec: int
+) -> void:
+	var frame := Engine.get_physics_frames()
+	if frame != _move_profile_last_frame:
+		_move_profile_last_frame = frame
+		_move_profile_frame_count += 1
+	_move_profile_calls += 1
+	_move_profile_target_usec += target_usec
+	_move_profile_slot_usec += slot_usec
+	_move_profile_face_usec += face_usec
+	_move_profile_steering_usec += steering_usec
+	_move_profile_state_usec += state_usec
+	if _move_profile_frame_count < 20:
+		return
+	var frame_count := maxf(float(_move_profile_frame_count), 1.0)
+	print(
+		(
+			"[TROOP_MOVE_PROFILE] frames=%d calls=%d "
+			+ "target_ms_per_frame=%.3f slot_ms_per_frame=%.3f "
+			+ "face_ms_per_frame=%.3f steering_ms_per_frame=%.3f "
+			+ "state_ms_per_frame=%.3f total_ms_per_frame=%.3f"
+		)
+		% [
+			_move_profile_frame_count,
+			_move_profile_calls,
+			float(_move_profile_target_usec) / frame_count / 1000.0,
+			float(_move_profile_slot_usec) / frame_count / 1000.0,
+			float(_move_profile_face_usec) / frame_count / 1000.0,
+			float(_move_profile_steering_usec) / frame_count / 1000.0,
+			float(_move_profile_state_usec) / frame_count / 1000.0,
+			float(
+				_move_profile_target_usec
+				+ _move_profile_slot_usec
+				+ _move_profile_face_usec
+				+ _move_profile_steering_usec
+				+ _move_profile_state_usec
+			) / frame_count / 1000.0,
+		]
+	)
+	_move_profile_frame_count = 0
+	_move_profile_calls = 0
+	_move_profile_target_usec = 0
+	_move_profile_slot_usec = 0
+	_move_profile_face_usec = 0
+	_move_profile_steering_usec = 0
+	_move_profile_state_usec = 0
 
 
 func _setup_animations() -> void:
@@ -1060,7 +1278,7 @@ func _slot_target_cache_key() -> String:
 	return "building:%d" % int(target_node.get_instance_id()) if is_instance_valid(target_node) else "building:missing"
 
 
-func _get_slot_angle_group(target_pos: Vector3) -> Dictionary:
+func _get_slot_angle_group(_target_pos: Vector3) -> Dictionary:
 	var frame: int = combat_cache_key()
 	if frame != _slot_angle_cache_frame:
 		_slot_angle_groups.clear()
@@ -1070,7 +1288,7 @@ func _get_slot_angle_group(target_pos: Vector3) -> Dictionary:
 		return _slot_angle_groups[target_key]
 
 	var matching_troops: Array = []
-	var matching_angles := PackedFloat64Array()
+	var troop_indices: Dictionary = {}
 	for other in _get_troops_cached():
 		if not is_instance_valid(other) or not (other is BaseTroop):
 			continue
@@ -1079,12 +1297,11 @@ func _get_slot_angle_group(target_pos: Vector3) -> Dictionary:
 				continue
 		elif other.target_building.get("node") != target_building.get("node"):
 			continue
-		var other_pos: Vector3 = other.global_position
+		troop_indices[int(other.get_instance_id())] = matching_troops.size()
 		matching_troops.append(other)
-		matching_angles.append(atan2(other_pos.x - target_pos.x, other_pos.z - target_pos.z))
 	var group: Dictionary = {
 		"troops": matching_troops,
-		"angles": matching_angles,
+		"indices": troop_indices,
 	}
 	_slot_angle_groups[target_key] = group
 	return group
@@ -1429,14 +1646,18 @@ func _find_next_target() -> void:
 			nearest_guard = null
 
 	if can_target_guards:
-		for guard in _get_guards_list_cached():
+		var guards: Array = _get_guards_list_cached()
+		var guard_positions: PackedVector3Array = _get_guard_positions_cached()
+		for guard_index in range(guards.size()):
+			var guard: Variant = guards[guard_index]
 			if not is_instance_valid(guard) or not guard.is_inside_tree():
 				continue
 			if guard.hp <= 0:
 				continue
 			var priority: int = _guard_target_priority(guard)
-			var dx = search_pos.x - guard.global_position.x
-			var dz = search_pos.z - guard.global_position.z
+			var guard_pos: Vector3 = guard_positions[guard_index]
+			var dx = search_pos.x - guard_pos.x
+			var dz = search_pos.z - guard_pos.z
 			var d_sq = dx * dx + dz * dz
 			if priority < nearest_priority or (priority == nearest_priority and d_sq < nearest_dist_sq):
 				nearest_priority = priority
@@ -1477,7 +1698,14 @@ func _find_next_target() -> void:
 		target_building = {}
 		target_bs = null
 		target_guard = null
-		_trigger_victory_all()
+		# A target list can be briefly empty while an enemy island is being
+		# replaced or its building cache is invalidated. Victory is owned by
+		# BSBattle after the Town Hall is actually destroyed; treating an empty
+		# scan as victory leaves every troop permanently cheering.
+		if state != State.IDLE:
+			state = State.IDLE
+			if anim_player.has_animation("Idle_A"):
+				anim_player.play("Idle_A")
 
 
 ## Target stickiness prevents tiny position differences from flipping troops
@@ -1552,13 +1780,17 @@ func _check_guard_threat() -> void:
 	var my_pos = global_position
 	var closest_guard: Node3D = null
 	var closest_d_sq: float = threat_sq
-	for guard in _get_guards_list_cached():
+	var guards: Array = _get_guards_list_cached()
+	var guard_positions: PackedVector3Array = _get_guard_positions_cached()
+	for guard_index in range(guards.size()):
+		var guard: Variant = guards[guard_index]
 		if not is_instance_valid(guard) or not guard.is_inside_tree():
 			continue
 		if guard.hp <= 0:
 			continue
-		var dx = my_pos.x - guard.global_position.x
-		var dz = my_pos.z - guard.global_position.z
+		var guard_pos: Vector3 = guard_positions[guard_index]
+		var dx = my_pos.x - guard_pos.x
+		var dz = my_pos.z - guard_pos.z
 		var d_sq = dx * dx + dz * dz
 		if d_sq < closest_d_sq:
 			closest_d_sq = d_sq
@@ -1837,6 +2069,8 @@ func _get_troop_name() -> String:
 
 
 func _record_replay_telemetry(kind: String, data: Dictionary = {}) -> void:
+	if not has_active_replay_telemetry_sink():
+		return
 	var payload: Dictionary = data.duplicate(true)
 	payload.troop_instance = int(get_instance_id())
 	if has_meta("replay_order"):
@@ -1897,6 +2131,8 @@ func _previous_target_payload() -> Dictionary:
 
 
 func _merge_target_switch_context(payload: Dictionary, dist_sq: float) -> Dictionary:
+	if not has_active_replay_telemetry_sink():
+		return payload
 	var previous_payload: Dictionary = _previous_target_payload()
 	for key in previous_payload.keys():
 		payload[key] = previous_payload[key]
@@ -1948,6 +2184,8 @@ func _target_candidates_payload(limit: int = 5) -> Array:
 
 
 func _record_projectile_payload(kind: String, payload: Dictionary, projectile_pos: Vector3, extra: Dictionary = {}) -> void:
+	if not has_active_replay_telemetry_sink():
+		return
 	payload["projectile_x"] = snappedf(projectile_pos.x, 0.001)
 	payload["projectile_y"] = snappedf(projectile_pos.y, 0.001)
 	payload["projectile_z"] = snappedf(projectile_pos.z, 0.001)
@@ -1959,6 +2197,8 @@ func _record_projectile_payload(kind: String, payload: Dictionary, projectile_po
 
 
 func _record_projectile_telemetry(kind: String, target_ref: Dictionary, guard_ref = null, projectile_pos: Vector3 = Vector3.ZERO, extra: Dictionary = {}) -> void:
+	if not has_active_replay_telemetry_sink():
+		return
 	_record_projectile_payload(kind, _target_payload_from_refs(target_ref, guard_ref), projectile_pos, extra)
 
 
@@ -2088,22 +2328,60 @@ func _deal_target_damage() -> void:
 ## the result to `_orbit_angle`. Returns the slot position as a Vector3.
 func _compute_attack_slot(target_pos: Vector3, my_angle: float, delta: float) -> Vector3:
 	_slot_eval_timer += delta
-	if _slot_eval_timer >= SLOT_EVAL_INTERVAL_SEC:
-		_slot_eval_timer = fmod(_slot_eval_timer, SLOT_EVAL_INTERVAL_SEC)
+	var slot_interval := (
+		profile_dense_slot_interval_sec
+		if profile_dense_slot_interval_sec > 0.0
+		else SLOT_EVAL_INTERVAL_SEC
+	)
+	if _slot_eval_timer >= slot_interval:
+		_slot_eval_timer = fmod(_slot_eval_timer, slot_interval)
 		var best_angle = my_angle
 		var best_min_dist = 0.0
 		var angle_group: Dictionary = _get_slot_angle_group(target_pos)
 		var matching_troops: Array = angle_group.get("troops", [])
-		var other_angles: PackedFloat64Array = angle_group.get("angles", PackedFloat64Array())
 		if target_guard == null and matching_troops.size() > HIGH_DENSITY_TROOP_THRESHOLD:
-			var dense_index: int = matching_troops.find(self)
+			var troop_indices: Dictionary = angle_group.get("indices", {})
+			var dense_index: int = int(troop_indices.get(int(get_instance_id()), -1))
 			if dense_index >= 0:
-				_orbit_angle = TAU * float(dense_index) / float(matching_troops.size())
-				return target_pos + Vector3(sin(_orbit_angle), 0, cos(_orbit_angle)) * attack_range * 0.95
+				var dense_count: int = matching_troops.size()
+				if attack_range >= DENSE_RANGED_SLOT_MIN_RANGE:
+					# A single ring cannot fit 40+ ranged troops without their
+					# bodies and weapons overlapping. A deterministic annular
+					# sunflower layout keeps them readable without restoring
+					# the old O(n²) pairwise separation pass.
+					var max_radius: float = attack_range * 0.92
+					var min_radius: float = maxf(
+						separation_radius * 1.65,
+						max_radius * 0.50
+					)
+					var radial_t: float = sqrt(
+						(float(dense_index) + 0.5) / float(dense_count)
+					)
+					var slot_radius: float = lerpf(
+						min_radius,
+						max_radius,
+						radial_t
+					)
+					_orbit_angle = fmod(
+						float(dense_index) * DENSE_RANGED_GOLDEN_ANGLE,
+						TAU
+					)
+					return target_pos + Vector3(
+						sin(_orbit_angle),
+						0,
+						cos(_orbit_angle)
+					) * slot_radius
+				_orbit_angle = TAU * float(dense_index) / float(dense_count)
+				return target_pos + Vector3(
+					sin(_orbit_angle),
+					0,
+					cos(_orbit_angle)
+				) * attack_range * 0.95
 		# Keep the original live-position behavior for normal-sized fights.
-		# Only dense swarms use the shared per-frame angle snapshot above.
+		# Dense swarms only need stable membership, count, and index; avoiding
+		# discarded atan2 calculations here materially reduces crowded battles.
 		matching_troops.clear()
-		other_angles.clear()
+		var other_angles := PackedFloat64Array()
 		for other in _get_troops_cached():
 			if not is_instance_valid(other) or not (other is BaseTroop):
 				continue
@@ -2138,7 +2416,12 @@ func _apply_separation_steering(move_dir: Vector3, target_pos: Vector3, delta: f
 	var troops: Array = _get_troops_cached()
 	var sep: Vector3
 	if troops.size() > HIGH_DENSITY_TROOP_THRESHOLD:
-		_move_sep_counter = (_move_sep_counter + 1) % HIGH_DENSITY_SEPARATION_INTERVAL
+		var dense_interval := (
+			profile_dense_separation_interval
+			if profile_dense_separation_interval > 0
+			else HIGH_DENSITY_SEPARATION_INTERVAL
+		)
+		_move_sep_counter = (_move_sep_counter + 1) % dense_interval
 		if _move_sep_counter == 0:
 			_last_move_separation = _compute_movement_separation(move_dir, self_pos, troops)
 		sep = _last_move_separation
@@ -2168,31 +2451,36 @@ func _compute_movement_separation(move_dir: Vector3, self_pos: Vector3, troops: 
 	var forward: Vector3 = move_dir / move_len if move_len > 0.0001 else Vector3.ZERO
 	var lateral: Vector3 = Vector3.UP.cross(forward).normalized() if forward.length_squared() > 0.0001 else Vector3.ZERO
 
-	# Troop-to-troop separation. Heavy pass-through units still avoid guards
-	# and buildings. Dense groups already receive deterministic target slots,
-	# and the server does not simulate allied push-apart, so the quadratic
-	# cosmetic pass is intentionally limited to normal-sized fights.
-	if not can_pass_through_friendly_units and troops.size() <= HIGH_DENSITY_TROOP_THRESHOLD:
-		for other in troops:
-			if other == self or not is_instance_valid(other):
-				continue
-			var other_pos: Vector3 = other.global_position
-			var dx: float = other_pos.x - self_pos.x
-			var dz: float = other_pos.z - self_pos.z
-			var d_sq: float = dx * dx + dz * dz
-			if d_sq > sep_range_sq or d_sq < 0.000001:
-				continue
-			var d: float = sqrt(d_sq)
-			if d < separation_radius:
-				var weight: float = (separation_radius - d) / (separation_radius * d)
-				sep.x -= dx * weight
-				sep.z -= dz * weight
+	# Dense crowds use a shared spatial hash instead of dropping separation.
+	# Each troop checks only adjacent cells, keeping this near O(n) while
+	# preventing bodies and weapon attachments from occupying the same space.
+	if not can_pass_through_friendly_units:
+		if troops.size() > HIGH_DENSITY_TROOP_THRESHOLD:
+			sep += _compute_dense_troop_separation(self_pos, troops)
+		else:
+			for other in troops:
+				if other == self or not is_instance_valid(other):
+					continue
+				var other_pos: Vector3 = other.global_position
+				var dx: float = other_pos.x - self_pos.x
+				var dz: float = other_pos.z - self_pos.z
+				var d_sq: float = dx * dx + dz * dz
+				if d_sq > sep_range_sq or d_sq < 0.000001:
+					continue
+				var d: float = sqrt(d_sq)
+				if d < separation_radius:
+					var weight: float = (separation_radius - d) / (separation_radius * d)
+					sep.x -= dx * weight
+					sep.z -= dz * weight
 
 	# Guard avoidance — light push from non-target guards
-	for guard in _get_guards_list_cached():
+	var guards: Array = _get_guards_list_cached()
+	var guard_positions: PackedVector3Array = _get_guard_positions_cached()
+	for guard_index in range(guards.size()):
+		var guard: Variant = guards[guard_index]
 		if not is_instance_valid(guard) or guard == target_guard:
 			continue
-		var guard_pos: Vector3 = guard.global_position
+		var guard_pos: Vector3 = guard_positions[guard_index]
 		var guard_dx: float = guard_pos.x - self_pos.x
 		var guard_dz: float = guard_pos.z - self_pos.z
 		var gd_sq: float = guard_dx * guard_dx + guard_dz * guard_dz
@@ -2224,7 +2512,7 @@ func _compute_movement_separation(move_dir: Vector3, self_pos: Vector3, troops: 
 		var building_dx: float = self_pos.x - building_pos.x
 		var building_dz: float = self_pos.z - building_pos.z
 		var bd_sq: float = building_dx * building_dx + building_dz * building_dz
-		var avoid_r: float = _building_avoid_radius(entry.b, entry.bs)
+		var avoid_r: float = float(entry.get("avoid_radius", 0.18))
 		if bd_sq <= 0.000001 or bd_sq >= avoid_r * avoid_r:
 			continue
 		var bd: float = sqrt(bd_sq)
@@ -2233,6 +2521,57 @@ func _compute_movement_separation(move_dir: Vector3, self_pos: Vector3, troops: 
 			sep.x += building_dx * building_weight
 			sep.z += building_dz * building_weight
 	return sep
+
+
+func _compute_dense_troop_separation(self_pos: Vector3, troops: Array) -> Vector3:
+	var push := Vector3.ZERO
+	var positions: PackedVector3Array = _get_troop_positions_cached()
+	var buckets: Dictionary = _get_troop_spatial_buckets_cached()
+	var center_cell: Vector2i = _troop_spatial_cell(self_pos)
+	var cell_radius: int = maxi(
+		1,
+		ceili(separation_radius / DENSE_SPATIAL_CELL_SIZE)
+	)
+	var sep_sq: float = separation_radius * separation_radius
+	var self_id: int = int(get_instance_id())
+	for cell_z in range(center_cell.y - cell_radius, center_cell.y + cell_radius + 1):
+		for cell_x in range(center_cell.x - cell_radius, center_cell.x + cell_radius + 1):
+			var cell := Vector2i(cell_x, cell_z)
+			if not buckets.has(cell):
+				continue
+			var bucket: PackedInt32Array = buckets[cell]
+			for troop_index in bucket:
+				if troop_index < 0 or troop_index >= troops.size():
+					continue
+				var other: Variant = troops[troop_index]
+				if other == self or not is_instance_valid(other):
+					continue
+				var other_pos: Vector3 = positions[troop_index]
+				var dx: float = self_pos.x - other_pos.x
+				var dz: float = self_pos.z - other_pos.z
+				var d_sq: float = dx * dx + dz * dz
+				if d_sq > sep_sq:
+					continue
+				if d_sq < 0.000001:
+					# Held spawn can put several troops at the exact same point.
+					# Give each pair an opposite deterministic escape direction.
+					var other_id: int = int(other.get_instance_id())
+					var low_id: int = mini(self_id, other_id)
+					var high_id: int = maxi(self_id, other_id)
+					var pair_seed: int = (low_id * 73856093) ^ (high_id * 19349663)
+					var pair_angle: float = float(posmod(pair_seed, 3600)) * TAU / 3600.0
+					var pair_sign: float = 1.0 if self_id < other_id else -1.0
+					push.x += cos(pair_angle) * pair_sign
+					push.z += sin(pair_angle) * pair_sign
+					continue
+				var distance: float = sqrt(d_sq)
+				var weight: float = (
+					(separation_radius - distance)
+					/ (separation_radius * distance)
+				)
+				push.x += dx * weight
+				push.z += dz * weight
+	return push
 
 
 ## Stuck detection: every 0.6s checks if troop barely moved.
@@ -2269,6 +2608,7 @@ func _face_move_direction(direction: Vector3) -> void:
 
 ## Movement each frame: seek target, avoid obstacles, flow around buildings.
 func _move_to_target(delta: float) -> void:
+	var profile_target_start_usec: int = Time.get_ticks_usec() if _ai_profile_enabled else 0
 	if not _has_valid_target():
 		_find_next_target()
 		return
@@ -2280,6 +2620,7 @@ func _move_to_target(delta: float) -> void:
 		return
 	var dist = sqrt(dist_sq)
 	var dir_to_target = diff / dist
+	var profile_target_end_usec: int = Time.get_ticks_usec() if _ai_profile_enabled else 0
 
 	# Orbit slot around buildings (spread troops evenly)
 	var my_angle = atan2(global_position.x - target_pos.x, global_position.z - target_pos.z)
@@ -2292,12 +2633,15 @@ func _move_to_target(delta: float) -> void:
 		dir = to_slot / slot_dist
 	else:
 		dir = dir_to_target
+	var profile_slot_end_usec: int = Time.get_ticks_usec() if _ai_profile_enabled else 0
 
 	# Face target directly (model faces -Z so rotate 180)
 	_face_move_direction(dir_to_target)
+	var profile_face_end_usec: int = Time.get_ticks_usec() if _ai_profile_enabled else 0
 
 	# Steering: seek + separation + building avoidance
 	_apply_separation_steering(dir * move_speed * delta, target_pos, delta)
+	var profile_steering_end_usec: int = Time.get_ticks_usec() if _ai_profile_enabled else 0
 
 	# Enter attack when close to slot or within attack range
 	if slot_dist < 0.05 or dist <= attack_range:
@@ -2310,10 +2654,26 @@ func _move_to_target(delta: float) -> void:
 				anim_player.play(attack_anim)
 		state = State.ATTACKING
 		_face_move_direction(dir_to_target)
+		if _ai_profile_enabled:
+			_record_move_profile_sample(
+				profile_target_end_usec - profile_target_start_usec,
+				profile_slot_end_usec - profile_target_end_usec,
+				profile_face_end_usec - profile_slot_end_usec,
+				profile_steering_end_usec - profile_face_end_usec,
+				Time.get_ticks_usec() - profile_steering_end_usec
+			)
 		return
 
 	# Stuck detection
 	_check_stuck(delta, my_angle)
+	if _ai_profile_enabled:
+		_record_move_profile_sample(
+			profile_target_end_usec - profile_target_start_usec,
+			profile_slot_end_usec - profile_target_end_usec,
+			profile_face_end_usec - profile_slot_end_usec,
+			profile_steering_end_usec - profile_face_end_usec,
+			Time.get_ticks_usec() - profile_steering_end_usec
+		)
 
 
 func _get_separation() -> Vector3:
@@ -2325,9 +2685,6 @@ func _get_separation() -> Vector3:
 	# The server does not simulate allied troop push-apart, so this only affects
 	# client-side crowd readability and cannot change validated combat damage.
 	var troops = _get_troops_cached()
-	if troops.size() > HIGH_DENSITY_TROOP_THRESHOLD:
-		_last_separation = Vector3.ZERO
-		return Vector3.ZERO
 	var separation_interval: int = (
 		HIGH_DENSITY_ATTACK_SEPARATION_INTERVAL
 		if troops.size() > HIGH_DENSITY_TROOP_THRESHOLD
@@ -2335,6 +2692,10 @@ func _get_separation() -> Vector3:
 	)
 	_sep_counter += 1
 	if _sep_counter % separation_interval != 0:
+		return _last_separation
+
+	if troops.size() > HIGH_DENSITY_TROOP_THRESHOLD:
+		_last_separation = _compute_dense_troop_separation(global_position, troops)
 		return _last_separation
 
 	var push = Vector3.ZERO

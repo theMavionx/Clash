@@ -27,7 +27,7 @@ func _render_portrait() -> void:
 	var character := CHARACTER_SCENE.instantiate() as Node3D
 	character.set_script(WIND_MAGE_SCRIPT)
 	character.scale = Vector3.ONE * 0.1
-	character.rotation_degrees.y = 156.0
+	character.rotation_degrees.y = -24.0
 	stage.add_child(character)
 
 	for _frame in 10:
@@ -37,13 +37,13 @@ func _render_portrait() -> void:
 		await process_frame
 
 	var player := character.get_node_or_null("TroopAnimPlayer") as AnimationPlayer
-	if player == null or not player.has_animation("Wind_Slash"):
-		push_error("Wind Mage UI portrait failed: Wind Slash animation is unavailable.")
+	if player == null or not player.has_animation("Idle_A"):
+		push_error("Wind Mage UI portrait failed: idle animation is unavailable.")
 		quit(1)
 		return
-	player.play("Wind_Slash")
+	player.play("Idle_A")
 	player.speed_scale = 0.0
-	player.seek(player.current_animation_length * 0.36, true)
+	player.seek(player.current_animation_length * 0.25, true)
 
 	for _frame in 2:
 		await process_frame
@@ -153,8 +153,8 @@ func _fit_portrait(source: Image) -> Image:
 	)
 	output.fill(Color.TRANSPARENT)
 	var destination := Vector2i(
-		(OUTPUT_SIZE.x - fitted_size.x) / 2,
-		(OUTPUT_SIZE.y - fitted_size.y) / 2
+		floori(float(OUTPUT_SIZE.x - fitted_size.x) / 2.0),
+		floori(float(OUTPUT_SIZE.y - fitted_size.y) / 2.0)
 	)
 	output.blit_rect(
 		cropped,

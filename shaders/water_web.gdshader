@@ -18,6 +18,7 @@ uniform float shallow_alpha = 0.16;
 uniform float deep_alpha = 0.98;
 uniform bool paused = false;
 uniform float frozen_time = 0.0;
+uniform bool use_depth_fade = true;
 
 void vertex() {
 	float t = paused ? frozen_time : TIME;
@@ -52,16 +53,20 @@ void fragment() {
 	ALBEDO = mix(water_color, FOAM_COL.rgb, foam);
 	ROUGHNESS = mix(0.46, 0.68, foam);
 
-	float scene_depth_raw = texture(depth_texture, SCREEN_UV).r;
+	if (!use_depth_fade) {
+		ALPHA = max(deep_alpha, foam * 0.56);
+	} else {
+		float scene_depth_raw = texture(depth_texture, SCREEN_UV).r;
 #if CURRENT_RENDERER == RENDERER_COMPATIBILITY
-	vec3 scene_ndc = vec3(SCREEN_UV, scene_depth_raw) * 2.0 - 1.0;
+		vec3 scene_ndc = vec3(SCREEN_UV, scene_depth_raw) * 2.0 - 1.0;
 #else
-	vec3 scene_ndc = vec3(SCREEN_UV * 2.0 - 1.0, scene_depth_raw);
+		vec3 scene_ndc = vec3(SCREEN_UV * 2.0 - 1.0, scene_depth_raw);
 #endif
-	vec4 scene_view = INV_PROJECTION_MATRIX * vec4(scene_ndc, 1.0);
-	scene_view.xyz /= scene_view.w;
-	float depth_gap = max((-scene_view.z) - (-VERTEX.z), 0.0);
-	float deep_water = smoothstep(0.0, max(shore_fade_distance, 0.001), depth_gap);
-	float water_alpha = mix(shallow_alpha, deep_alpha, deep_water);
-	ALPHA = max(water_alpha, foam * 0.56);
+		vec4 scene_view = INV_PROJECTION_MATRIX * vec4(scene_ndc, 1.0);
+		scene_view.xyz /= scene_view.w;
+		float depth_gap = max((-scene_view.z) - (-VERTEX.z), 0.0);
+		float deep_water = smoothstep(0.0, max(shore_fade_distance, 0.001), depth_gap);
+		float water_alpha = mix(shallow_alpha, deep_alpha, deep_water);
+		ALPHA = max(water_alpha, foam * 0.56);
+	}
 }

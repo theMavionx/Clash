@@ -7,8 +7,9 @@ const LEVEL_STATS = {
 	2: {"damage": 68, "fire_rate": 0.48, "detect_range": 1.05},
 	3: {"damage": 122, "fire_rate": 0.34, "detect_range": 1.18},
 	4: {"damage": 170, "fire_rate": 0.29, "detect_range": 1.30},
-	5: {"damage": 230, "fire_rate": 0.25, "detect_range": 1.42},
-	6: {"damage": 285, "fire_rate": 0.23, "detect_range": 1.52},
+	5: {"damage": 219, "fire_rate": 0.25, "detect_range": 1.42},
+	6: {"damage": 242, "fire_rate": 0.23, "detect_range": 1.52},
+	7: {"damage": 315, "fire_rate": 0.21, "detect_range": 1.62},
 }
 
 const MUZZLE_FLASH_FRAMES: Array[String] = [
@@ -53,6 +54,7 @@ var _barrel: Node3D = null
 var _target_search_timer: float = 0.0
 var _attack_sfx_player: AudioStreamPlayer = null
 const TARGET_SEARCH_INTERVAL: float = 0.15
+const AIM_VISUAL_INTERVAL: float = 1.0 / 30.0
 
 ## Shared materials — one for all turrets
 static var _shared_trail_mat: StandardMaterial3D = null
@@ -93,6 +95,7 @@ var _bullet_pool: Array[Dictionary] = []   # pre-created {node, trail, flash} di
 var _active_bullets: Array[Dictionary] = [] # currently flying
 var _pool_ready: bool = false
 var _pool_built: int = 0       # how many pool entries created so far
+var _aim_visual_timer: float = AIM_VISUAL_INTERVAL
 
 
 func _ready() -> void:
@@ -324,7 +327,9 @@ func _physics_process(delta: float) -> void:
 		var diff: Vector3 = _target.global_position - global_position
 		diff.y = 0
 		var d_sq: float = diff.length_squared()
-		if d_sq > 0.0001:
+		_aim_visual_timer += delta
+		if d_sq > 0.0001 and _aim_visual_timer >= AIM_VISUAL_INTERVAL:
+			_aim_visual_timer = fmod(_aim_visual_timer, AIM_VISUAL_INTERVAL)
 			if _aim_node:
 				var parent_basis_inv: Basis = _aim_node.get_parent().global_transform.basis.inverse()
 				var local_dir: Vector3 = parent_basis_inv * (diff / sqrt(d_sq))
@@ -366,11 +371,15 @@ func _find_target() -> void:
 	_target = null
 	var nearest_dist_sq: float = detect_sq
 	var my_pos: Vector3 = global_position
-	for troop in BaseTroop._get_troops_cached():
+	var troops: Array = BaseTroop._get_troops_cached()
+	var troop_positions: PackedVector3Array = BaseTroop._get_troop_positions_cached()
+	for troop_index in range(troops.size()):
+		var troop: Variant = troops[troop_index]
 		if not BaseTroop.can_defense_target_troop(troop, CAN_TARGET_GROUND, CAN_TARGET_AIR):
 			continue
-		var dx: float = my_pos.x - troop.global_position.x
-		var dz: float = my_pos.z - troop.global_position.z
+		var troop_pos: Vector3 = troop_positions[troop_index]
+		var dx: float = my_pos.x - troop_pos.x
+		var dz: float = my_pos.z - troop_pos.z
 		var d_sq: float = dx * dx + dz * dz
 		if d_sq < nearest_dist_sq:
 			nearest_dist_sq = d_sq

@@ -36,14 +36,37 @@ var _pool_exhaustion_warned: bool = false
 var _projectile_batch: ProjectileMultiMeshBatch = null
 
 
+func _set_dense_render_tier(render_tier: int) -> void:
+	var previous_tier := _dense_render_tier_applied
+	super._set_dense_render_tier(render_tier)
+	var visual_setup := get_node_or_null("VisualSetup")
+	if visual_setup != null and visual_setup.has_method("set_crowd_visual_active"):
+		# Apply weapon visibility in the same frame as the LOD transition.
+		# Waiting for the visual driver's process tick leaves the nested bow
+		# skeleton visible long enough to produce black streaks in WebGL crowds.
+		visual_setup.call("set_crowd_visual_active", true)
+	if render_tier < 2 or previous_tier >= 2:
+		return
+	# Arrows launched while the army was still below the swarm threshold keep
+	# flying logically, but their old MultiMesh slots must not remain as long
+	# streaks after the renderer switches to the dense representation.
+	for projectile in _active:
+		if not projectile is Dictionary:
+			continue
+		var slot_index := int(projectile.get("slot", -1))
+		if _projectile_batch != null and slot_index >= 0:
+			_projectile_batch.release(PROJECTILE_CHANNEL, slot_index)
+		projectile["slot"] = -1
+
+
 const LEVEL_STATS = {
 	1: {"hp": 210, "damage": 40, "atk_speed": 1.05},
 	2: {"hp": 280, "damage": 51, "atk_speed": 0.95},
 	3: {"hp": 310, "damage": 58, "atk_speed": 0.85},
 	4: {"hp": 425, "damage": 82, "atk_speed": 0.78},
-	5: {"hp": 540, "damage": 108, "atk_speed": 0.72},
-	6: {"hp": 680, "damage": 140, "atk_speed": 0.67},
-	7: {"hp": 840, "damage": 180, "atk_speed": 0.62},
+	5: {"hp": 624, "damage": 125, "atk_speed": 0.72},
+	6: {"hp": 750, "damage": 154, "atk_speed": 0.67},
+	7: {"hp": 1164, "damage": 250, "atk_speed": 0.62},
 }
 
 ## Sets hp, damage, atk_speed, move_speed, attack_range, attack_anim, and anim_files
@@ -145,7 +168,7 @@ func _prepare_projectile_arrow_visual() -> void:
 		var projectile_visual_transform := Transform3D(
 			Basis.from_euler(Vector3(0.0, PI, 0.0)),
 			Vector3.ZERO
-		).scaled_local(Vector3(0.1, 0.1, 0.1))
+		).scaled_local(Vector3(0.045, 0.045, 0.045))
 		_projectile_arrow_transform_shared = (
 			projectile_visual_transform
 			* source_transform
@@ -253,12 +276,15 @@ func _spawn_arrow() -> void:
 		_build_pool()
 	if _projectile_batch == null:
 		return
-	var slot_index := _projectile_batch.acquire(PROJECTILE_CHANNEL)
-	if slot_index < 0:
-		if not _pool_exhaustion_warned:
-			_pool_exhaustion_warned = true
-			push_warning("Archer: shared projectile batch exhausted.")
-		return
+	var slot_index := -1
+	var render_projectile := _dense_render_tier_applied < 2
+	if render_projectile:
+		slot_index = _projectile_batch.acquire(PROJECTILE_CHANNEL)
+		if slot_index < 0:
+			if not _pool_exhaustion_warned:
+				_pool_exhaustion_warned = true
+				push_warning("Archer: shared projectile batch exhausted.")
+			return
 
 	b.active = true
 	b.slot = slot_index
@@ -275,6 +301,7 @@ func _spawn_arrow() -> void:
 	_record_projectile_telemetry("troop_projectile_fire", b.target_ref, b.target_guard_ref, b.position, {
 		"projectile_speed": projectile_fly_speed,
 		"pool_active": _active.size(),
+		"visual_lod_hidden": not render_projectile,
 	})
 
 
@@ -316,7 +343,6 @@ func _update_projectiles(delta: float) -> void:
 			target_pos,
 			projectile_fly_speed * delta
 		)
-		_update_projectile_visual(p, target_pos)
 
 		var dp: Vector3 = (p.position as Vector3) - target_pos
 		if dp.x * dp.x + dp.y * dp.y + dp.z * dp.z < HIT_DIST_SQ:
@@ -352,19 +378,26 @@ func _update_projectiles(delta: float) -> void:
 					_find_next_target()
 			_return_to_pool(p)
 			_remove_active_projectile_at(i)
+		else:
+			_update_projectile_visual(p, target_pos)
 		i -= 1
 
 
 func _update_projectile_visual(projectile: Dictionary, target_pos: Vector3) -> void:
 	if _projectile_batch == null:
 		return
-	var position := projectile.get("position", Vector3.ZERO) as Vector3
-	var flight_transform := Transform3D(Basis.IDENTITY, position).looking_at(
+	var slot_index := int(projectile.get("slot", -1))
+	if slot_index < 0:
+		return
+	var projectile_position := projectile.get("position", Vector3.ZERO) as Vector3
+	if projectile_position.distance_squared_to(target_pos) <= 0.000001:
+		return
+	var flight_transform := Transform3D(Basis.IDENTITY, projectile_position).looking_at(
 		target_pos,
 		Vector3.UP
 	)
 	_projectile_batch.set_instance_transform(
 		PROJECTILE_CHANNEL,
-		int(projectile.get("slot", -1)),
+		slot_index,
 		flight_transform * _projectile_arrow_transform_shared
 	)

@@ -3,7 +3,7 @@ extends Node3D
 ## target and damage from replay movement; this script mirrors that result and
 ## owns presentation only.
 
-const DAMAGE_LEVELS: Array[int] = [500, 750, 1050, 1450, 2000, 2400]
+const DAMAGE_LEVELS: Array[int] = [500, 750, 1050, 1450, 2000, 2400, 2900]
 const TRIGGER_PADDING: float = 0.018
 const HEAD_TIP_HEIGHT: float = 0.105
 const HEAD_VISIBLE_DEPTH: float = 0.10
@@ -12,6 +12,9 @@ const BITE_EXTRA_HEIGHT: float = 0.075
 const RISE_DURATION: float = 0.20
 const BITE_HOLD_DURATION: float = 0.22
 const SINK_DURATION: float = 0.24
+const COMBINED_WEB_SHARK_MESH: ArrayMesh = preload(
+	"res://generated/performance/shark_combined_web.res"
+)
 
 var _bs: Node = null
 var _visual_model: Node3D = null
@@ -32,6 +35,7 @@ var _freeze_remaining: float = 0.0
 func _ready() -> void:
 	_bs = get_parent()
 	_visual_model = _find_visual_model()
+	_optimize_web_shark_mesh()
 	set_meta("trap_spent", false)
 	set_meta("trap_level", _level)
 	set_meta("trap_damage", _damage)
@@ -124,6 +128,54 @@ func _find_visual_model() -> Node3D:
 		if child is Node3D and child.has_meta("building_visual_model"):
 			return child as Node3D
 	return null
+
+
+func _optimize_web_shark_mesh() -> void:
+	set_meta("web_shark_opt_reason", "start")
+	if not OS.has_feature("web"):
+		set_meta("web_shark_opt_reason", "not_web")
+		return
+	if not is_instance_valid(_visual_model):
+		set_meta("web_shark_opt_reason", "visual_missing")
+		return
+	var parts: Array[MeshInstance3D] = []
+	for raw_mesh in _visual_model.find_children(
+		"*",
+		"MeshInstance3D",
+		true,
+		false
+	):
+		var mesh_instance := raw_mesh as MeshInstance3D
+		if (
+			mesh_instance != null
+			and mesh_instance.mesh != null
+			and mesh_instance.skin != null
+		):
+			parts.append(mesh_instance)
+	if parts.size() != 2:
+		set_meta("web_shark_opt_reason", "parts_%d" % parts.size())
+		return
+	var skeleton := parts[0].get_node_or_null(
+		parts[0].skeleton
+	) as Skeleton3D
+	if skeleton == null:
+		set_meta("web_shark_opt_reason", "skeleton_missing")
+		return
+	var material := parts[0].get_active_material(0)
+	if material == null or parts[1].get_active_material(0) != material:
+		set_meta("web_shark_opt_reason", "material_mismatch")
+		return
+	var combined := MeshInstance3D.new()
+	combined.name = "CombinedWebShark"
+	combined.mesh = COMBINED_WEB_SHARK_MESH
+	combined.skin = parts[0].skin
+	combined.skeleton = NodePath("..")
+	combined.cast_shadow = parts[0].cast_shadow
+	combined.visibility_range_end = parts[0].visibility_range_end
+	skeleton.add_child(combined)
+	SkinnedMeshCombiner.prune_mesh_sources(parts)
+	set_meta("web_shark_mesh_combined", true)
+	set_meta("web_shark_opt_reason", "combined")
 
 
 func _configure_vertical_head() -> void:

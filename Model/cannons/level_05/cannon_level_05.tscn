@@ -1,0 +1,21 @@
+[gd_scene load_steps=4 format=3]
+
+[ext_resource type="PackedScene" path="res://Model/cannons/level_05/cannon_level_05.glb" id="1_model"]
+[ext_resource type="Material" path="res://Model/cannons/level_05/base_material.tres" id="2_base"]
+[ext_resource type="Material" path="res://Model/cannons/level_05/barrel_material.tres" id="3_barrel"]
+
+[node name="CannonLevel05" type="Node3D"]
+
+[node name="Model" parent="." instance=ExtResource("1_model")]
+
+[node name="Cannon5Base" parent="Model" index="0"]
+surface_material_override/0 = ExtResource("2_base")
+surface_material_override/1 = ExtResource("3_barrel")
+
+[node name="Cannon5" parent="Model/Cannon5Base" index="0"]
+surface_material_override/0 = ExtResource("3_barrel")
+
+[node name="CannonMuzzle" type="Marker3D" parent="Model/Cannon5Base/Cannon5"]
+position = Vector3(0, 1.0575, 1.8492)
+
+[editable path="Model"]

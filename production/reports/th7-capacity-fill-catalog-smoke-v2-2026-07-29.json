@@ -1,0 +1,4351 @@
+{
+  "generatedAt": "2026-07-29T14:56:16.908Z",
+  "config": {
+    "seed": 42,
+    "profile": "th7",
+    "townHalls": [
+      7
+    ],
+    "requestedBaseCount": 144,
+    "generatedBaseCount": 1,
+    "requestedMatches": 0,
+    "simulatedMatches": 0,
+    "exhaustive": false,
+    "sameTownHallOnly": false,
+    "attackLevelProfile": "mixed-cycle",
+    "attackPolicyCount": 0,
+    "initialAttackPolicyCount": 0,
+    "adversarialRounds": 0,
+    "adversarialMatchesPerRound": 500,
+    "breakabilityPoliciesPerTownHall": 0,
+    "breakabilityCalibrationBasesPerTownHall": 0,
+    "breakabilityNftRarity": "common",
+    "breakabilityCandidatePolicyCount": 0,
+    "breakabilityBattles": 0,
+    "breakabilityUnbeatenBases": 0,
+    "unitUtilityBasesPerTroop": 0,
+    "unitUtilityBattles": 0,
+    "nftRarityProbeBasesPerTroop": 0,
+    "nftRarityProbeBattles": 0,
+    "spawnMechanicCount": 100,
+    "spawnFormationCount": 10,
+    "spawnTimingCount": 5,
+    "deploymentOrderCount": 2,
+    "pureUnitMatrixBattles": 0,
+    "elitePolicyMinSamples": 3,
+    "adversarialPairing": "balanced-latin-square",
+    "unbeatenNonAdaptiveBases": 0,
+    "labOffenseScaleByLevel": {
+      "5": 1,
+      "6": 1,
+      "7": 1
+    },
+    "labOffenseScaleByTroop": {},
+    "labDefenseDamageScale": 1,
+    "labLateDefenseScale": 1,
+    "labTh7DefenseScale": 1,
+    "shipCapacity": 45,
+    "shipCapacities": {
+      "1": 3,
+      "2": 12,
+      "3": 27,
+      "4": 36,
+      "5": 45,
+      "6": 45,
+      "7": 45
+    },
+    "targetWinRate": 0.55,
+    "band": 0.08,
+    "elapsedMs": 107
+  },
+  "catalog": {
+    "maxTownHall": 7,
+    "buildings": [
+      {
+        "type": "altar",
+        "size": [
+          3,
+          3
+        ],
+        "maxLevel": 1,
+        "maxCount": 1,
+        "unlockTownHall": 1,
+        "requiresPurchase": true,
+        "role": "support"
+      },
+      {
+        "type": "archer_tower",
+        "size": [
+          3,
+          3
+        ],
+        "maxLevel": 7,
+        "maxCount": 4,
+        "unlockTownHall": 1,
+        "requiresPurchase": false,
+        "role": "defense"
+      },
+      {
+        "type": "barn",
+        "size": [
+          4,
+          3
+        ],
+        "maxLevel": 7,
+        "maxCount": 1,
+        "unlockTownHall": 1,
+        "requiresPurchase": false,
+        "role": "economy"
+      },
+      {
+        "type": "cannon",
+        "size": [
+          3,
+          3
+        ],
+        "maxLevel": 7,
+        "maxCount": 2,
+        "unlockTownHall": 7,
+        "requiresPurchase": false,
+        "role": "defense"
+      },
+      {
+        "type": "mage_tower",
+        "size": [
+          3,
+          3
+        ],
+        "maxLevel": 7,
+        "maxCount": 2,
+        "unlockTownHall": 4,
+        "requiresPurchase": false,
+        "role": "defense"
+      },
+      {
+        "type": "mine",
+        "size": [
+          3,
+          3
+        ],
+        "maxLevel": 7,
+        "maxCount": 4,
+        "unlockTownHall": 1,
+        "requiresPurchase": false,
+        "role": "economy"
+      },
+      {
+        "type": "mortar",
+        "size": [
+          2,
+          2
+        ],
+        "maxLevel": 3,
+        "maxCount": 2,
+        "unlockTownHall": 5,
+        "requiresPurchase": false,
+        "role": "defense"
+      },
+      {
+        "type": "sawmill",
+        "size": [
+          3,
+          3
+        ],
+        "maxLevel": 7,
+        "maxCount": 4,
+        "unlockTownHall": 1,
+        "requiresPurchase": false,
+        "role": "economy"
+      },
+      {
+        "type": "shark_trap",
+        "size": [
+          2,
+          2
+        ],
+        "maxLevel": 7,
+        "maxCount": 3,
+        "unlockTownHall": 3,
+        "requiresPurchase": false,
+        "role": "trap"
+      },
+      {
+        "type": "storage",
+        "size": [
+          4,
+          5
+        ],
+        "maxLevel": 7,
+        "maxCount": 4,
+        "unlockTownHall": 2,
+        "requiresPurchase": false,
+        "role": "economy"
+      },
+      {
+        "type": "tombstone",
+        "size": [
+          3,
+          3
+        ],
+        "maxLevel": 6,
+        "maxCount": 4,
+        "unlockTownHall": 2,
+        "requiresPurchase": false,
+        "role": "defense"
+      },
+      {
+        "type": "town_hall",
+        "size": [
+          4,
+          4
+        ],
+        "maxLevel": 7,
+        "maxCount": 1,
+        "unlockTownHall": 1,
+        "requiresPurchase": false,
+        "role": "core"
+      },
+      {
+        "type": "turret",
+        "size": [
+          2,
+          2
+        ],
+        "maxLevel": 7,
+        "maxCount": 6,
+        "unlockTownHall": 3,
+        "requiresPurchase": false,
+        "role": "defense"
+      }
+    ],
+    "troops": [
+      {
+        "type": "archer",
+        "slotCost": 1,
+        "unlockTownHall": 1,
+        "maxLevel": 7,
+        "maxHp": 1746,
+        "directDps": 603.226,
+        "melee": false,
+        "ranged": true,
+        "flying": false,
+        "trapImmune": false
+      },
+      {
+        "type": "demon_king",
+        "slotCost": 5,
+        "unlockTownHall": 1,
+        "maxLevel": 7,
+        "maxHp": 19260,
+        "directDps": 2080,
+        "melee": true,
+        "ranged": false,
+        "flying": false,
+        "trapImmune": false
+      },
+      {
+        "type": "fire_dragon",
+        "slotCost": 10,
+        "unlockTownHall": 1,
+        "maxLevel": 7,
+        "maxHp": 15732,
+        "directDps": 7025.714,
+        "melee": false,
+        "ranged": true,
+        "flying": true,
+        "trapImmune": false
+      },
+      {
+        "type": "horror",
+        "slotCost": 20,
+        "unlockTownHall": 10,
+        "maxLevel": 7,
+        "maxHp": 39384,
+        "directDps": 4227.419,
+        "melee": true,
+        "ranged": false,
+        "flying": false,
+        "trapImmune": false
+      },
+      {
+        "type": "ice_golem",
+        "slotCost": 10,
+        "unlockTownHall": 9,
+        "maxLevel": 7,
+        "maxHp": 39312,
+        "directDps": 1521.127,
+        "melee": true,
+        "ranged": false,
+        "flying": false,
+        "trapImmune": false
+      },
+      {
+        "type": "knight",
+        "slotCost": 1,
+        "unlockTownHall": 1,
+        "maxLevel": 7,
+        "maxHp": 3737,
+        "directDps": 404.444,
+        "melee": true,
+        "ranged": false,
+        "flying": false,
+        "trapImmune": false
+      },
+      {
+        "type": "mage",
+        "slotCost": 4,
+        "unlockTownHall": 1,
+        "maxLevel": 7,
+        "maxHp": 8197,
+        "directDps": 6138.571,
+        "melee": false,
+        "ranged": true,
+        "flying": false,
+        "trapImmune": false
+      },
+      {
+        "type": "mechanical_dragon",
+        "slotCost": 4,
+        "unlockTownHall": 6,
+        "maxLevel": 7,
+        "maxHp": 5900,
+        "directDps": 1672.816,
+        "melee": false,
+        "ranged": true,
+        "flying": true,
+        "trapImmune": false
+      },
+      {
+        "type": "mimic",
+        "slotCost": 6,
+        "unlockTownHall": 5,
+        "maxLevel": 7,
+        "maxHp": 16200,
+        "directDps": 1188.679,
+        "melee": true,
+        "ranged": false,
+        "flying": false,
+        "trapImmune": true
+      },
+      {
+        "type": "necromancer",
+        "slotCost": 15,
+        "unlockTownHall": 7,
+        "maxLevel": 7,
+        "maxHp": 37260,
+        "directDps": 11377.778,
+        "melee": false,
+        "ranged": true,
+        "flying": false,
+        "trapImmune": false
+      },
+      {
+        "type": "pea_shooter",
+        "slotCost": 5,
+        "unlockTownHall": 4,
+        "maxLevel": 7,
+        "maxHp": 12060,
+        "directDps": 848.571,
+        "melee": false,
+        "ranged": true,
+        "flying": false,
+        "trapImmune": false
+      },
+      {
+        "type": "wind_mage",
+        "slotCost": 15,
+        "unlockTownHall": 8,
+        "maxLevel": 7,
+        "maxHp": 21600,
+        "directDps": 2454.545,
+        "melee": false,
+        "ranged": true,
+        "flying": false,
+        "trapImmune": false
+      }
+    ],
+    "warnings": []
+  },
+  "coverage": {
+    "expectedBuildings": [
+      "altar",
+      "archer_tower",
+      "barn",
+      "cannon",
+      "mage_tower",
+      "mine",
+      "mortar",
+      "sawmill",
+      "shark_trap",
+      "storage",
+      "tombstone",
+      "town_hall",
+      "turret"
+    ],
+    "generatedBuildings": [
+      "archer_tower",
+      "barn",
+      "cannon",
+      "mage_tower",
+      "mine",
+      "mortar",
+      "sawmill",
+      "shark_trap",
+      "storage",
+      "tombstone",
+      "town_hall",
+      "turret"
+    ],
+    "missingBuildings": [
+      "altar"
+    ],
+    "expectedTroops": [
+      "archer",
+      "demon_king",
+      "fire_dragon",
+      "knight",
+      "mage",
+      "mechanical_dragon",
+      "mimic",
+      "necromancer",
+      "pea_shooter"
+    ],
+    "simulatedTroops": [],
+    "missingTroops": [],
+    "generatedTownHalls": [
+      7
+    ],
+    "generatedBases": 1,
+    "simulatedBases": 0,
+    "expectedSpawnProfiles": [
+      "wide-line__burst__roster-order",
+      "wide-line__burst__tank-front-support-rear",
+      "wide-line__rapid__roster-order",
+      "wide-line__rapid__tank-front-support-rear",
+      "wide-line__two-waves__roster-order",
+      "wide-line__two-waves__tank-front-support-rear",
+      "wide-line__three-waves__roster-order",
+      "wide-line__three-waves__tank-front-support-rear",
+      "wide-line__drip__roster-order",
+      "wide-line__drip__tank-front-support-rear",
+      "center-column__burst__roster-order",
+      "center-column__burst__tank-front-support-rear",
+      "center-column__rapid__roster-order",
+      "center-column__rapid__tank-front-support-rear",
+      "center-column__two-waves__roster-order",
+      "center-column__two-waves__tank-front-support-rear",
+      "center-column__three-waves__roster-order",
+      "center-column__three-waves__tank-front-support-rear",
+      "center-column__drip__roster-order",
+      "center-column__drip__tank-front-support-rear",
+      "left-flank__burst__roster-order",
+      "left-flank__burst__tank-front-support-rear",
+      "left-flank__rapid__roster-order",
+      "left-flank__rapid__tank-front-support-rear",
+      "left-flank__two-waves__roster-order",
+      "left-flank__two-waves__tank-front-support-rear",
+      "left-flank__three-waves__roster-order",
+      "left-flank__three-waves__tank-front-support-rear",
+      "left-flank__drip__roster-order",
+      "left-flank__drip__tank-front-support-rear",
+      "right-flank__burst__roster-order",
+      "right-flank__burst__tank-front-support-rear",
+      "right-flank__rapid__roster-order",
+      "right-flank__rapid__tank-front-support-rear",
+      "right-flank__two-waves__roster-order",
+      "right-flank__two-waves__tank-front-support-rear",
+      "right-flank__three-waves__roster-order",
+      "right-flank__three-waves__tank-front-support-rear",
+      "right-flank__drip__roster-order",
+      "right-flank__drip__tank-front-support-rear",
+      "dual-flank__burst__roster-order",
+      "dual-flank__burst__tank-front-support-rear",
+      "dual-flank__rapid__roster-order",
+      "dual-flank__rapid__tank-front-support-rear",
+      "dual-flank__two-waves__roster-order",
+      "dual-flank__two-waves__tank-front-support-rear",
+      "dual-flank__three-waves__roster-order",
+      "dual-flank__three-waves__tank-front-support-rear",
+      "dual-flank__drip__roster-order",
+      "dual-flank__drip__tank-front-support-rear",
+      "three-lane__burst__roster-order",
+      "three-lane__burst__tank-front-support-rear",
+      "three-lane__rapid__roster-order",
+      "three-lane__rapid__tank-front-support-rear",
+      "three-lane__two-waves__roster-order",
+      "three-lane__two-waves__tank-front-support-rear",
+      "three-lane__three-waves__roster-order",
+      "three-lane__three-waves__tank-front-support-rear",
+      "three-lane__drip__roster-order",
+      "three-lane__drip__tank-front-support-rear",
+      "diamond__burst__roster-order",
+      "diamond__burst__tank-front-support-rear",
+      "diamond__rapid__roster-order",
+      "diamond__rapid__tank-front-support-rear",
+      "diamond__two-waves__roster-order",
+      "diamond__two-waves__tank-front-support-rear",
+      "diamond__three-waves__roster-order",
+      "diamond__three-waves__tank-front-support-rear",
+      "diamond__drip__roster-order",
+      "diamond__drip__tank-front-support-rear",
+      "vanguard-wedge__burst__roster-order",
+      "vanguard-wedge__burst__tank-front-support-rear",
+      "vanguard-wedge__rapid__roster-order",
+      "vanguard-wedge__rapid__tank-front-support-rear",
+      "vanguard-wedge__two-waves__roster-order",
+      "vanguard-wedge__two-waves__tank-front-support-rear",
+      "vanguard-wedge__three-waves__roster-order",
+      "vanguard-wedge__three-waves__tank-front-support-rear",
+      "vanguard-wedge__drip__roster-order",
+      "vanguard-wedge__drip__tank-front-support-rear",
+      "inverted-wedge__burst__roster-order",
+      "inverted-wedge__burst__tank-front-support-rear",
+      "inverted-wedge__rapid__roster-order",
+      "inverted-wedge__rapid__tank-front-support-rear",
+      "inverted-wedge__two-waves__roster-order",
+      "inverted-wedge__two-waves__tank-front-support-rear",
+      "inverted-wedge__three-waves__roster-order",
+      "inverted-wedge__three-waves__tank-front-support-rear",
+      "inverted-wedge__drip__roster-order",
+      "inverted-wedge__drip__tank-front-support-rear",
+      "edge-sweep__burst__roster-order",
+      "edge-sweep__burst__tank-front-support-rear",
+      "edge-sweep__rapid__roster-order",
+      "edge-sweep__rapid__tank-front-support-rear",
+      "edge-sweep__two-waves__roster-order",
+      "edge-sweep__two-waves__tank-front-support-rear",
+      "edge-sweep__three-waves__roster-order",
+      "edge-sweep__three-waves__tank-front-support-rear",
+      "edge-sweep__drip__roster-order",
+      "edge-sweep__drip__tank-front-support-rear"
+    ],
+    "simulatedSpawnProfiles": [],
+    "missingSpawnProfiles": [],
+    "spawnProfilesByTownHall": {}
+  },
+  "baseValidation": {
+    "valid": true,
+    "errors": [],
+    "warnings": [],
+    "uniqueLayouts": 1
+  },
+  "statAudit": {
+    "troopRows": [
+      {
+        "type": "archer",
+        "level": 7,
+        "slots": 1,
+        "hp": 1746,
+        "directDps": 603.23,
+        "hpPerSlot": 1746,
+        "directDpsPerSlot": 603.23,
+        "notes": ""
+      },
+      {
+        "type": "demon_king",
+        "level": 7,
+        "slots": 5,
+        "hp": 19260,
+        "directDps": 2080,
+        "hpPerSlot": 3852,
+        "directDpsPerSlot": 416,
+        "notes": ""
+      },
+      {
+        "type": "fire_dragon",
+        "level": 7,
+        "slots": 10,
+        "hp": 15732,
+        "directDps": 7025.71,
+        "hpPerSlot": 1573.2,
+        "directDpsPerSlot": 702.57,
+        "notes": ""
+      },
+      {
+        "type": "horror",
+        "level": 7,
+        "slots": 20,
+        "hp": 39384,
+        "directDps": 4227.42,
+        "hpPerSlot": 1969.2,
+        "directDpsPerSlot": 211.37,
+        "notes": ""
+      },
+      {
+        "type": "ice_golem",
+        "level": 7,
+        "slots": 10,
+        "hp": 39312,
+        "directDps": 1521.13,
+        "hpPerSlot": 3931.2,
+        "directDpsPerSlot": 152.11,
+        "notes": "defense priority"
+      },
+      {
+        "type": "knight",
+        "level": 7,
+        "slots": 1,
+        "hp": 3737,
+        "directDps": 404.44,
+        "hpPerSlot": 3737,
+        "directDpsPerSlot": 404.44,
+        "notes": ""
+      },
+      {
+        "type": "mage",
+        "level": 7,
+        "slots": 4,
+        "hp": 8197,
+        "directDps": 6138.57,
+        "hpPerSlot": 2049.25,
+        "directDpsPerSlot": 1534.64,
+        "notes": ""
+      },
+      {
+        "type": "mechanical_dragon",
+        "level": 7,
+        "slots": 4,
+        "hp": 5900,
+        "directDps": 1672.82,
+        "hpPerSlot": 1475,
+        "directDpsPerSlot": 418.2,
+        "notes": "chain x3"
+      },
+      {
+        "type": "mimic",
+        "level": 7,
+        "slots": 6,
+        "hp": 16200,
+        "directDps": 1188.68,
+        "hpPerSlot": 2700,
+        "directDpsPerSlot": 198.11,
+        "notes": "trap immune"
+      },
+      {
+        "type": "necromancer",
+        "level": 7,
+        "slots": 15,
+        "hp": 37260,
+        "directDps": 11377.78,
+        "hpPerSlot": 2484,
+        "directDpsPerSlot": 758.52,
+        "notes": ""
+      },
+      {
+        "type": "pea_shooter",
+        "level": 7,
+        "slots": 5,
+        "hp": 12060,
+        "directDps": 848.57,
+        "hpPerSlot": 2412,
+        "directDpsPerSlot": 169.71,
+        "notes": ""
+      },
+      {
+        "type": "wind_mage",
+        "level": 7,
+        "slots": 15,
+        "hp": 21600,
+        "directDps": 2454.55,
+        "hpPerSlot": 1440,
+        "directDpsPerSlot": 163.64,
+        "notes": ""
+      }
+    ],
+    "defenseRows": [
+      {
+        "type": "turret",
+        "level": 1,
+        "peakDps": 50,
+        "range": 0.9
+      },
+      {
+        "type": "turret",
+        "level": 2,
+        "peakDps": 141.67,
+        "range": 1.05
+      },
+      {
+        "type": "turret",
+        "level": 3,
+        "peakDps": 358.82,
+        "range": 1.18
+      },
+      {
+        "type": "turret",
+        "level": 4,
+        "peakDps": 586.21,
+        "range": 1.3
+      },
+      {
+        "type": "turret",
+        "level": 5,
+        "peakDps": 876,
+        "range": 1.42
+      },
+      {
+        "type": "turret",
+        "level": 6,
+        "peakDps": 1052.17,
+        "range": 1.52
+      },
+      {
+        "type": "turret",
+        "level": 7,
+        "peakDps": 1500,
+        "range": 1.62
+      },
+      {
+        "type": "archer_tower",
+        "level": 1,
+        "peakDps": 25,
+        "range": 1.1
+      },
+      {
+        "type": "archer_tower",
+        "level": 2,
+        "peakDps": 91.18,
+        "range": 1.32
+      },
+      {
+        "type": "archer_tower",
+        "level": 3,
+        "peakDps": 215.38,
+        "range": 1.55
+      },
+      {
+        "type": "archer_tower",
+        "level": 4,
+        "peakDps": 359.09,
+        "range": 1.78
+      },
+      {
+        "type": "archer_tower",
+        "level": 5,
+        "peakDps": 526.32,
+        "range": 2
+      },
+      {
+        "type": "archer_tower",
+        "level": 6,
+        "peakDps": 631.43,
+        "range": 2.15
+      },
+      {
+        "type": "archer_tower",
+        "level": 7,
+        "peakDps": 900,
+        "range": 2.3
+      },
+      {
+        "type": "mage_tower",
+        "level": 1,
+        "peakDps": 72,
+        "range": 1.05
+      },
+      {
+        "type": "mage_tower",
+        "level": 2,
+        "peakDps": 270,
+        "range": 1.24
+      },
+      {
+        "type": "mage_tower",
+        "level": 3,
+        "peakDps": 600,
+        "range": 1.45
+      },
+      {
+        "type": "mage_tower",
+        "level": 4,
+        "peakDps": 1014.29,
+        "range": 1.64
+      },
+      {
+        "type": "mage_tower",
+        "level": 5,
+        "peakDps": 1566.67,
+        "range": 1.82
+      },
+      {
+        "type": "mage_tower",
+        "level": 6,
+        "peakDps": 1936.36,
+        "range": 1.95
+      },
+      {
+        "type": "mage_tower",
+        "level": 7,
+        "peakDps": 2810,
+        "range": 2.08
+      },
+      {
+        "type": "mortar",
+        "level": 1,
+        "peakDps": 39.58,
+        "range": 1.433
+      },
+      {
+        "type": "mortar",
+        "level": 2,
+        "peakDps": 60,
+        "range": 1.6
+      },
+      {
+        "type": "mortar",
+        "level": 3,
+        "peakDps": 88.1,
+        "range": 1.767
+      },
+      {
+        "type": "mortar",
+        "level": 4,
+        "peakDps": 125.64,
+        "range": 1.933
+      },
+      {
+        "type": "cannon",
+        "level": 1,
+        "peakDps": 25,
+        "range": 1.35
+      },
+      {
+        "type": "cannon",
+        "level": 2,
+        "peakDps": 90.91,
+        "range": 1.45
+      },
+      {
+        "type": "cannon",
+        "level": 3,
+        "peakDps": 215.79,
+        "range": 1.55
+      },
+      {
+        "type": "cannon",
+        "level": 4,
+        "peakDps": 358.82,
+        "range": 1.65
+      },
+      {
+        "type": "cannon",
+        "level": 5,
+        "peakDps": 525.88,
+        "range": 1.75
+      },
+      {
+        "type": "cannon",
+        "level": 6,
+        "peakDps": 632.5,
+        "range": 1.85
+      },
+      {
+        "type": "cannon",
+        "level": 7,
+        "peakDps": 900,
+        "range": 2
+      }
+    ],
+    "issues": [
+      {
+        "severity": "warning",
+        "code": "troop-dps-outlier",
+        "message": "mage direct DPS/slot is 3.74x median."
+      }
+    ]
+  },
+  "balanceIssues": [
+    {
+      "severity": "critical",
+      "code": "coverage",
+      "message": "Missing content coverage. Buildings: altar; troops: none."
+    },
+    {
+      "severity": "warning",
+      "code": "troop-dps-outlier",
+      "message": "mage direct DPS/slot is 3.74x median."
+    }
+  ],
+  "aggregate": {
+    "overall": {
+      "count": 0,
+      "wins": 0,
+      "validCount": 0,
+      "validWins": 0,
+      "invalid": 0,
+      "durationSec": 0,
+      "buildingsDestroyed": 0,
+      "buildingCount": 0,
+      "townHallHpPct": 0,
+      "troopsSpawned": 0,
+      "troopsAlive": 0,
+      "guardsAlive": 0,
+      "sharkTrapsTriggered": 0,
+      "summonsSpawned": 0,
+      "evolutionChildrenSpawned": 0,
+      "validBuildingsDestroyed": 0,
+      "validBuildingCount": 0,
+      "validTownHallHpPct": 0
+    },
+    "byMatchup": {},
+    "byDefenderTownHall": {},
+    "byAttackerTownHall": {},
+    "byBaseArchetype": {},
+    "byBaseLevelProfile": {},
+    "byArmy": {},
+    "byAttackPolicy": {},
+    "bySpawnProfile": {},
+    "bySpawnProfileTownHall": {},
+    "bySpawnFormation": {},
+    "bySpawnTiming": {},
+    "byDeploymentOrder": {},
+    "byTactics": {},
+    "byNftRarity": {},
+    "byNftTroopRarity": {},
+    "byDefenderWard": {},
+    "byAttackLevelProfile": {},
+    "byExperimentCohort": {},
+    "byCohortTactics": {},
+    "byCohortSpawnFormation": {},
+    "byCohortSpawnTiming": {},
+    "byCohortDeploymentOrder": {},
+    "byCohortTownHall": {},
+    "byCohortTroop": {},
+    "byCohortTroopTownHall": {},
+    "byTroop": {},
+    "byTroopTownHall": {},
+    "byPureTroop": {},
+    "byPureTroopTownHall": {},
+    "byPureTroopBaseArchetype": {},
+    "byPureTroopTownHallBaseArchetype": {},
+    "byPureBase": {},
+    "byNonAdaptiveBase": {},
+    "byCohortBase": {},
+    "byBaseArchetypeTownHall": {},
+    "byArmyBaseArchetype": {},
+    "byBase": {},
+    "samples": []
+  },
+  "bases": [
+    {
+      "id": "th7-asymmetric-left-186",
+      "townHall": 7,
+      "archetype": "asymmetric-left",
+      "levelProfile": "maxed",
+      "variation": 185,
+      "buildings": [
+        {
+          "id": 1,
+          "type": "town_hall",
+          "level": 7,
+          "grid_x": 8,
+          "grid_z": 3,
+          "grid_index": 0,
+          "hp": 72000,
+          "max_hp": 72000,
+          "role": "core",
+          "size": [
+            4,
+            4
+          ]
+        },
+        {
+          "id": 2,
+          "type": "archer_tower",
+          "level": 7,
+          "grid_x": 9,
+          "grid_z": 8,
+          "grid_index": 0,
+          "hp": 10200,
+          "max_hp": 10200,
+          "role": "defense",
+          "size": [
+            3,
+            3
+          ]
+        },
+        {
+          "id": 3,
+          "type": "archer_tower",
+          "level": 7,
+          "grid_x": 4,
+          "grid_z": 7,
+          "grid_index": 0,
+          "hp": 10200,
+          "max_hp": 10200,
+          "role": "defense",
+          "size": [
+            3,
+            3
+          ]
+        },
+        {
+          "id": 4,
+          "type": "archer_tower",
+          "level": 7,
+          "grid_x": 13,
+          "grid_z": 7,
+          "grid_index": 0,
+          "hp": 10200,
+          "max_hp": 10200,
+          "role": "defense",
+          "size": [
+            3,
+            3
+          ]
+        },
+        {
+          "id": 5,
+          "type": "cannon",
+          "level": 7,
+          "grid_x": 7,
+          "grid_z": 12,
+          "grid_index": 0,
+          "hp": 9000,
+          "max_hp": 9000,
+          "role": "defense",
+          "size": [
+            3,
+            3
+          ]
+        },
+        {
+          "id": 6,
+          "type": "cannon",
+          "level": 7,
+          "grid_x": 13,
+          "grid_z": 11,
+          "grid_index": 0,
+          "hp": 9000,
+          "max_hp": 9000,
+          "role": "defense",
+          "size": [
+            3,
+            3
+          ]
+        },
+        {
+          "id": 7,
+          "type": "mage_tower",
+          "level": 7,
+          "grid_x": 3,
+          "grid_z": 11,
+          "grid_index": 0,
+          "hp": 8300,
+          "max_hp": 8300,
+          "role": "defense",
+          "size": [
+            3,
+            3
+          ]
+        },
+        {
+          "id": 8,
+          "type": "mage_tower",
+          "level": 7,
+          "grid_x": 17,
+          "grid_z": 8,
+          "grid_index": 0,
+          "hp": 8300,
+          "max_hp": 8300,
+          "role": "defense",
+          "size": [
+            3,
+            3
+          ]
+        },
+        {
+          "id": 9,
+          "type": "mortar",
+          "level": 3,
+          "grid_x": 1,
+          "grid_z": 7,
+          "grid_index": 0,
+          "hp": 3200,
+          "max_hp": 3200,
+          "role": "defense",
+          "size": [
+            2,
+            2
+          ]
+        },
+        {
+          "id": 10,
+          "type": "mortar",
+          "level": 3,
+          "grid_x": 11,
+          "grid_z": 15,
+          "grid_index": 0,
+          "hp": 3200,
+          "max_hp": 3200,
+          "role": "defense",
+          "size": [
+            2,
+            2
+          ]
+        },
+        {
+          "id": 11,
+          "type": "turret",
+          "level": 7,
+          "grid_x": 4,
+          "grid_z": 15,
+          "grid_index": 0,
+          "hp": 12000,
+          "max_hp": 12000,
+          "role": "defense",
+          "size": [
+            2,
+            2
+          ]
+        },
+        {
+          "id": 12,
+          "type": "turret",
+          "level": 7,
+          "grid_x": 8,
+          "grid_z": 16,
+          "grid_index": 0,
+          "hp": 12000,
+          "max_hp": 12000,
+          "role": "defense",
+          "size": [
+            2,
+            2
+          ]
+        },
+        {
+          "id": 13,
+          "type": "turret",
+          "level": 7,
+          "grid_x": 14,
+          "grid_z": 15,
+          "grid_index": 0,
+          "hp": 12000,
+          "max_hp": 12000,
+          "role": "defense",
+          "size": [
+            2,
+            2
+          ]
+        },
+        {
+          "id": 14,
+          "type": "tombstone",
+          "level": 6,
+          "grid_x": 17,
+          "grid_z": 12,
+          "grid_index": 0,
+          "hp": 4700,
+          "max_hp": 4700,
+          "role": "defense",
+          "size": [
+            3,
+            3
+          ]
+        },
+        {
+          "id": 15,
+          "type": "tombstone",
+          "level": 6,
+          "grid_x": 17,
+          "grid_z": 16,
+          "grid_index": 0,
+          "hp": 4700,
+          "max_hp": 4700,
+          "role": "defense",
+          "size": [
+            3,
+            3
+          ]
+        },
+        {
+          "id": 16,
+          "type": "tombstone",
+          "level": 6,
+          "grid_x": 21,
+          "grid_z": 9,
+          "grid_index": 0,
+          "hp": 4700,
+          "max_hp": 4700,
+          "role": "defense",
+          "size": [
+            3,
+            3
+          ]
+        },
+        {
+          "id": 17,
+          "type": "storage",
+          "level": 7,
+          "grid_x": 21,
+          "grid_z": 3,
+          "grid_index": 0,
+          "hp": 18000,
+          "max_hp": 18000,
+          "role": "economy",
+          "size": [
+            4,
+            5
+          ]
+        },
+        {
+          "id": 18,
+          "type": "storage",
+          "level": 7,
+          "grid_x": 1,
+          "grid_z": 19,
+          "grid_index": 0,
+          "hp": 18000,
+          "max_hp": 18000,
+          "role": "economy",
+          "size": [
+            4,
+            5
+          ]
+        },
+        {
+          "id": 19,
+          "type": "storage",
+          "level": 7,
+          "grid_x": 11,
+          "grid_z": 18,
+          "grid_index": 0,
+          "hp": 18000,
+          "max_hp": 18000,
+          "role": "economy",
+          "size": [
+            4,
+            5
+          ]
+        },
+        {
+          "id": 20,
+          "type": "barn",
+          "level": 7,
+          "grid_x": 21,
+          "grid_z": 15,
+          "grid_index": 0,
+          "hp": 28000,
+          "max_hp": 28000,
+          "role": "economy",
+          "size": [
+            4,
+            3
+          ]
+        },
+        {
+          "id": 21,
+          "type": "mine",
+          "level": 7,
+          "grid_x": 17,
+          "grid_z": 4,
+          "grid_index": 0,
+          "hp": 18000,
+          "max_hp": 18000,
+          "role": "economy",
+          "size": [
+            3,
+            3
+          ]
+        },
+        {
+          "id": 22,
+          "type": "mine",
+          "level": 7,
+          "grid_x": 7,
+          "grid_z": 19,
+          "grid_index": 0,
+          "hp": 18000,
+          "max_hp": 18000,
+          "role": "economy",
+          "size": [
+            3,
+            3
+          ]
+        },
+        {
+          "id": 23,
+          "type": "mine",
+          "level": 7,
+          "grid_x": 25,
+          "grid_z": 9,
+          "grid_index": 0,
+          "hp": 18000,
+          "max_hp": 18000,
+          "role": "economy",
+          "size": [
+            3,
+            3
+          ]
+        },
+        {
+          "id": 24,
+          "type": "mine",
+          "level": 7,
+          "grid_x": 16,
+          "grid_z": 21,
+          "grid_index": 0,
+          "hp": 18000,
+          "max_hp": 18000,
+          "role": "economy",
+          "size": [
+            3,
+            3
+          ]
+        },
+        {
+          "id": 25,
+          "type": "sawmill",
+          "level": 7,
+          "grid_x": 7,
+          "grid_z": 23,
+          "grid_index": 0,
+          "hp": 18000,
+          "max_hp": 18000,
+          "role": "economy",
+          "size": [
+            3,
+            3
+          ]
+        },
+        {
+          "id": 26,
+          "type": "sawmill",
+          "level": 7,
+          "grid_x": 21,
+          "grid_z": 19,
+          "grid_index": 0,
+          "hp": 18000,
+          "max_hp": 18000,
+          "role": "economy",
+          "size": [
+            3,
+            3
+          ]
+        },
+        {
+          "id": 27,
+          "type": "sawmill",
+          "level": 7,
+          "grid_x": 20,
+          "grid_z": 23,
+          "grid_index": 0,
+          "hp": 18000,
+          "max_hp": 18000,
+          "role": "economy",
+          "size": [
+            3,
+            3
+          ]
+        },
+        {
+          "id": 28,
+          "type": "sawmill",
+          "level": 7,
+          "grid_x": 25,
+          "grid_z": 19,
+          "grid_index": 0,
+          "hp": 18000,
+          "max_hp": 18000,
+          "role": "economy",
+          "size": [
+            3,
+            3
+          ]
+        },
+        {
+          "id": 29,
+          "type": "shark_trap",
+          "level": 7,
+          "grid_x": 1,
+          "grid_z": 16,
+          "grid_index": 0,
+          "hp": 1,
+          "max_hp": 1,
+          "role": "trap",
+          "size": [
+            2,
+            2
+          ]
+        },
+        {
+          "id": 30,
+          "type": "shark_trap",
+          "level": 7,
+          "grid_x": 26,
+          "grid_z": 16,
+          "grid_index": 0,
+          "hp": 1,
+          "max_hp": 1,
+          "role": "trap",
+          "size": [
+            2,
+            2
+          ]
+        },
+        {
+          "id": 31,
+          "type": "shark_trap",
+          "level": 7,
+          "grid_x": 26,
+          "grid_z": 13,
+          "grid_index": 0,
+          "hp": 1,
+          "max_hp": 1,
+          "role": "trap",
+          "size": [
+            2,
+            2
+          ]
+        }
+      ],
+      "metrics": {
+        "buildingCount": 31,
+        "defenseCount": 15,
+        "trapCount": 3,
+        "normalizedSpread": 0.33
+      }
+    }
+  ],
+  "armies": [
+    {
+      "id": "th1-pure-archer",
+      "townHall": 1,
+      "name": "pure-archer",
+      "units": [
+        "archer",
+        "archer",
+        "archer"
+      ],
+      "slotsUsed": 3,
+      "capacity": 3,
+      "utilization": 1
+    },
+    {
+      "id": "th1-pure-knight",
+      "townHall": 1,
+      "name": "pure-knight",
+      "units": [
+        "knight",
+        "knight",
+        "knight"
+      ],
+      "slotsUsed": 3,
+      "capacity": 3,
+      "utilization": 1
+    },
+    {
+      "id": "th1-balanced",
+      "townHall": 1,
+      "name": "balanced",
+      "units": [
+        "archer",
+        "archer",
+        "knight"
+      ],
+      "slotsUsed": 3,
+      "capacity": 3,
+      "utilization": 1
+    },
+    {
+      "id": "th1-support-mix",
+      "townHall": 1,
+      "name": "support-mix",
+      "units": [
+        "archer",
+        "knight",
+        "archer"
+      ],
+      "slotsUsed": 3,
+      "capacity": 3,
+      "utilization": 1
+    },
+    {
+      "id": "th1-random-2",
+      "townHall": 1,
+      "name": "random-2",
+      "units": [
+        "knight",
+        "archer",
+        "knight"
+      ],
+      "slotsUsed": 3,
+      "capacity": 3,
+      "utilization": 1
+    },
+    {
+      "id": "th2-pure-archer",
+      "townHall": 2,
+      "name": "pure-archer",
+      "units": [
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer"
+      ],
+      "slotsUsed": 12,
+      "capacity": 12,
+      "utilization": 1
+    },
+    {
+      "id": "th2-pure-demon_king",
+      "townHall": 2,
+      "name": "pure-demon_king",
+      "units": [
+        "demon_king",
+        "demon_king"
+      ],
+      "slotsUsed": 10,
+      "capacity": 12,
+      "utilization": 0.8333
+    },
+    {
+      "id": "th2-core-demon_king-filled",
+      "townHall": 2,
+      "name": "core-demon_king-filled",
+      "units": [
+        "demon_king",
+        "demon_king",
+        "knight",
+        "archer"
+      ],
+      "slotsUsed": 12,
+      "capacity": 12,
+      "utilization": 1
+    },
+    {
+      "id": "th2-pure-fire_dragon",
+      "townHall": 2,
+      "name": "pure-fire_dragon",
+      "units": [
+        "fire_dragon"
+      ],
+      "slotsUsed": 10,
+      "capacity": 12,
+      "utilization": 0.8333
+    },
+    {
+      "id": "th2-core-fire_dragon-filled",
+      "townHall": 2,
+      "name": "core-fire_dragon-filled",
+      "units": [
+        "fire_dragon",
+        "knight",
+        "archer"
+      ],
+      "slotsUsed": 12,
+      "capacity": 12,
+      "utilization": 1
+    },
+    {
+      "id": "th2-pure-knight",
+      "townHall": 2,
+      "name": "pure-knight",
+      "units": [
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight"
+      ],
+      "slotsUsed": 12,
+      "capacity": 12,
+      "utilization": 1
+    },
+    {
+      "id": "th2-pure-mage",
+      "townHall": 2,
+      "name": "pure-mage",
+      "units": [
+        "mage",
+        "mage",
+        "mage"
+      ],
+      "slotsUsed": 12,
+      "capacity": 12,
+      "utilization": 1
+    },
+    {
+      "id": "th2-balanced",
+      "townHall": 2,
+      "name": "balanced",
+      "units": [
+        "demon_king",
+        "archer",
+        "archer",
+        "knight",
+        "mage"
+      ],
+      "slotsUsed": 12,
+      "capacity": 12,
+      "utilization": 1
+    },
+    {
+      "id": "th2-melee-pressure",
+      "townHall": 2,
+      "name": "melee-pressure",
+      "units": [
+        "demon_king",
+        "knight",
+        "demon_king",
+        "knight"
+      ],
+      "slotsUsed": 12,
+      "capacity": 12,
+      "utilization": 1
+    },
+    {
+      "id": "th2-ranged-pressure",
+      "townHall": 2,
+      "name": "ranged-pressure",
+      "units": [
+        "archer",
+        "fire_dragon",
+        "archer"
+      ],
+      "slotsUsed": 12,
+      "capacity": 12,
+      "utilization": 1
+    },
+    {
+      "id": "th2-support-mix",
+      "townHall": 2,
+      "name": "support-mix",
+      "units": [
+        "demon_king",
+        "archer",
+        "knight",
+        "demon_king"
+      ],
+      "slotsUsed": 12,
+      "capacity": 12,
+      "utilization": 1
+    },
+    {
+      "id": "th2-hero-necro-dragon-mages",
+      "townHall": 2,
+      "name": "hero-necro-dragon-mages",
+      "units": [
+        "demon_king",
+        "mage",
+        "knight",
+        "knight",
+        "knight"
+      ],
+      "slotsUsed": 12,
+      "capacity": 12,
+      "utilization": 1
+    },
+    {
+      "id": "th2-random-1",
+      "townHall": 2,
+      "name": "random-1",
+      "units": [
+        "fire_dragon",
+        "archer",
+        "knight"
+      ],
+      "slotsUsed": 12,
+      "capacity": 12,
+      "utilization": 1
+    },
+    {
+      "id": "th2-random-2",
+      "townHall": 2,
+      "name": "random-2",
+      "units": [
+        "archer",
+        "fire_dragon",
+        "knight"
+      ],
+      "slotsUsed": 12,
+      "capacity": 12,
+      "utilization": 1
+    },
+    {
+      "id": "th2-random-3",
+      "townHall": 2,
+      "name": "random-3",
+      "units": [
+        "demon_king",
+        "archer",
+        "mage",
+        "knight",
+        "archer"
+      ],
+      "slotsUsed": 12,
+      "capacity": 12,
+      "utilization": 1
+    },
+    {
+      "id": "th2-random-4",
+      "townHall": 2,
+      "name": "random-4",
+      "units": [
+        "archer",
+        "demon_king",
+        "mage",
+        "knight",
+        "archer"
+      ],
+      "slotsUsed": 12,
+      "capacity": 12,
+      "utilization": 1
+    },
+    {
+      "id": "th2-random-5",
+      "townHall": 2,
+      "name": "random-5",
+      "units": [
+        "knight",
+        "demon_king",
+        "mage",
+        "archer",
+        "knight"
+      ],
+      "slotsUsed": 12,
+      "capacity": 12,
+      "utilization": 1
+    },
+    {
+      "id": "th3-pure-archer",
+      "townHall": 3,
+      "name": "pure-archer",
+      "units": [
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer"
+      ],
+      "slotsUsed": 27,
+      "capacity": 27,
+      "utilization": 1
+    },
+    {
+      "id": "th3-pure-demon_king",
+      "townHall": 3,
+      "name": "pure-demon_king",
+      "units": [
+        "demon_king",
+        "demon_king",
+        "demon_king",
+        "demon_king",
+        "demon_king"
+      ],
+      "slotsUsed": 25,
+      "capacity": 27,
+      "utilization": 0.9259
+    },
+    {
+      "id": "th3-core-demon_king-filled",
+      "townHall": 3,
+      "name": "core-demon_king-filled",
+      "units": [
+        "demon_king",
+        "demon_king",
+        "demon_king",
+        "demon_king",
+        "demon_king",
+        "knight",
+        "archer"
+      ],
+      "slotsUsed": 27,
+      "capacity": 27,
+      "utilization": 1
+    },
+    {
+      "id": "th3-pure-fire_dragon",
+      "townHall": 3,
+      "name": "pure-fire_dragon",
+      "units": [
+        "fire_dragon",
+        "fire_dragon"
+      ],
+      "slotsUsed": 20,
+      "capacity": 27,
+      "utilization": 0.7407
+    },
+    {
+      "id": "th3-core-fire_dragon-filled",
+      "townHall": 3,
+      "name": "core-fire_dragon-filled",
+      "units": [
+        "fire_dragon",
+        "fire_dragon",
+        "knight",
+        "archer",
+        "mage",
+        "knight"
+      ],
+      "slotsUsed": 27,
+      "capacity": 27,
+      "utilization": 1
+    },
+    {
+      "id": "th3-pure-knight",
+      "townHall": 3,
+      "name": "pure-knight",
+      "units": [
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight"
+      ],
+      "slotsUsed": 27,
+      "capacity": 27,
+      "utilization": 1
+    },
+    {
+      "id": "th3-pure-mage",
+      "townHall": 3,
+      "name": "pure-mage",
+      "units": [
+        "mage",
+        "mage",
+        "mage",
+        "mage",
+        "mage",
+        "mage"
+      ],
+      "slotsUsed": 24,
+      "capacity": 27,
+      "utilization": 0.8889
+    },
+    {
+      "id": "th3-core-mage-filled",
+      "townHall": 3,
+      "name": "core-mage-filled",
+      "units": [
+        "mage",
+        "mage",
+        "mage",
+        "mage",
+        "mage",
+        "mage",
+        "knight",
+        "archer",
+        "knight"
+      ],
+      "slotsUsed": 27,
+      "capacity": 27,
+      "utilization": 1
+    },
+    {
+      "id": "th3-balanced",
+      "townHall": 3,
+      "name": "balanced",
+      "units": [
+        "demon_king",
+        "archer",
+        "archer",
+        "knight",
+        "fire_dragon",
+        "demon_king",
+        "mage"
+      ],
+      "slotsUsed": 27,
+      "capacity": 27,
+      "utilization": 1
+    },
+    {
+      "id": "th3-melee-pressure",
+      "townHall": 3,
+      "name": "melee-pressure",
+      "units": [
+        "demon_king",
+        "knight",
+        "demon_king",
+        "knight",
+        "demon_king",
+        "knight",
+        "demon_king",
+        "knight",
+        "knight",
+        "knight",
+        "knight"
+      ],
+      "slotsUsed": 27,
+      "capacity": 27,
+      "utilization": 1
+    },
+    {
+      "id": "th3-ranged-pressure",
+      "townHall": 3,
+      "name": "ranged-pressure",
+      "units": [
+        "archer",
+        "fire_dragon",
+        "mage",
+        "archer",
+        "fire_dragon",
+        "archer"
+      ],
+      "slotsUsed": 27,
+      "capacity": 27,
+      "utilization": 1
+    },
+    {
+      "id": "th3-support-mix",
+      "townHall": 3,
+      "name": "support-mix",
+      "units": [
+        "demon_king",
+        "archer",
+        "knight",
+        "fire_dragon",
+        "demon_king",
+        "mage",
+        "archer"
+      ],
+      "slotsUsed": 27,
+      "capacity": 27,
+      "utilization": 1
+    },
+    {
+      "id": "th3-hero-necro-dragon-mages",
+      "townHall": 3,
+      "name": "hero-necro-dragon-mages",
+      "units": [
+        "demon_king",
+        "fire_dragon",
+        "mage",
+        "mage",
+        "knight",
+        "knight",
+        "knight",
+        "knight"
+      ],
+      "slotsUsed": 27,
+      "capacity": 27,
+      "utilization": 1
+    },
+    {
+      "id": "th3-random-1",
+      "townHall": 3,
+      "name": "random-1",
+      "units": [
+        "fire_dragon",
+        "demon_king",
+        "mage",
+        "knight",
+        "archer",
+        "demon_king",
+        "knight"
+      ],
+      "slotsUsed": 27,
+      "capacity": 27,
+      "utilization": 1
+    },
+    {
+      "id": "th3-random-2",
+      "townHall": 3,
+      "name": "random-2",
+      "units": [
+        "fire_dragon",
+        "knight",
+        "archer",
+        "demon_king",
+        "mage",
+        "knight",
+        "archer",
+        "mage"
+      ],
+      "slotsUsed": 27,
+      "capacity": 27,
+      "utilization": 1
+    },
+    {
+      "id": "th3-random-3",
+      "townHall": 3,
+      "name": "random-3",
+      "units": [
+        "fire_dragon",
+        "archer",
+        "mage",
+        "knight",
+        "demon_king",
+        "archer",
+        "mage",
+        "knight"
+      ],
+      "slotsUsed": 27,
+      "capacity": 27,
+      "utilization": 1
+    },
+    {
+      "id": "th3-random-4",
+      "townHall": 3,
+      "name": "random-4",
+      "units": [
+        "demon_king",
+        "archer",
+        "fire_dragon",
+        "mage",
+        "knight",
+        "demon_king",
+        "archer"
+      ],
+      "slotsUsed": 27,
+      "capacity": 27,
+      "utilization": 1
+    },
+    {
+      "id": "th3-random-5",
+      "townHall": 3,
+      "name": "random-5",
+      "units": [
+        "knight",
+        "mage",
+        "archer",
+        "demon_king",
+        "fire_dragon",
+        "knight",
+        "mage",
+        "archer"
+      ],
+      "slotsUsed": 27,
+      "capacity": 27,
+      "utilization": 1
+    },
+    {
+      "id": "th3-random-6",
+      "townHall": 3,
+      "name": "random-6",
+      "units": [
+        "knight",
+        "demon_king",
+        "archer",
+        "fire_dragon",
+        "mage",
+        "knight",
+        "demon_king"
+      ],
+      "slotsUsed": 27,
+      "capacity": 27,
+      "utilization": 1
+    },
+    {
+      "id": "th4-pure-archer",
+      "townHall": 4,
+      "name": "pure-archer",
+      "units": [
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer"
+      ],
+      "slotsUsed": 36,
+      "capacity": 36,
+      "utilization": 1
+    },
+    {
+      "id": "th4-pure-demon_king",
+      "townHall": 4,
+      "name": "pure-demon_king",
+      "units": [
+        "demon_king",
+        "demon_king",
+        "demon_king",
+        "demon_king",
+        "demon_king",
+        "demon_king",
+        "demon_king"
+      ],
+      "slotsUsed": 35,
+      "capacity": 36,
+      "utilization": 0.9722
+    },
+    {
+      "id": "th4-core-demon_king-filled",
+      "townHall": 4,
+      "name": "core-demon_king-filled",
+      "units": [
+        "demon_king",
+        "demon_king",
+        "demon_king",
+        "demon_king",
+        "demon_king",
+        "demon_king",
+        "demon_king",
+        "knight"
+      ],
+      "slotsUsed": 36,
+      "capacity": 36,
+      "utilization": 1
+    },
+    {
+      "id": "th4-pure-fire_dragon",
+      "townHall": 4,
+      "name": "pure-fire_dragon",
+      "units": [
+        "fire_dragon",
+        "fire_dragon",
+        "fire_dragon"
+      ],
+      "slotsUsed": 30,
+      "capacity": 36,
+      "utilization": 0.8333
+    },
+    {
+      "id": "th4-core-fire_dragon-filled",
+      "townHall": 4,
+      "name": "core-fire_dragon-filled",
+      "units": [
+        "fire_dragon",
+        "fire_dragon",
+        "fire_dragon",
+        "knight",
+        "archer",
+        "mage"
+      ],
+      "slotsUsed": 36,
+      "capacity": 36,
+      "utilization": 1
+    },
+    {
+      "id": "th4-pure-knight",
+      "townHall": 4,
+      "name": "pure-knight",
+      "units": [
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight"
+      ],
+      "slotsUsed": 36,
+      "capacity": 36,
+      "utilization": 1
+    },
+    {
+      "id": "th4-pure-mage",
+      "townHall": 4,
+      "name": "pure-mage",
+      "units": [
+        "mage",
+        "mage",
+        "mage",
+        "mage",
+        "mage",
+        "mage",
+        "mage",
+        "mage",
+        "mage"
+      ],
+      "slotsUsed": 36,
+      "capacity": 36,
+      "utilization": 1
+    },
+    {
+      "id": "th4-pure-pea_shooter",
+      "townHall": 4,
+      "name": "pure-pea_shooter",
+      "units": [
+        "pea_shooter",
+        "pea_shooter",
+        "pea_shooter",
+        "pea_shooter",
+        "pea_shooter",
+        "pea_shooter",
+        "pea_shooter"
+      ],
+      "slotsUsed": 35,
+      "capacity": 36,
+      "utilization": 0.9722
+    },
+    {
+      "id": "th4-core-pea_shooter-filled",
+      "townHall": 4,
+      "name": "core-pea_shooter-filled",
+      "units": [
+        "pea_shooter",
+        "pea_shooter",
+        "pea_shooter",
+        "pea_shooter",
+        "pea_shooter",
+        "pea_shooter",
+        "pea_shooter",
+        "knight"
+      ],
+      "slotsUsed": 36,
+      "capacity": 36,
+      "utilization": 1
+    },
+    {
+      "id": "th4-balanced",
+      "townHall": 4,
+      "name": "balanced",
+      "units": [
+        "demon_king",
+        "archer",
+        "archer",
+        "knight",
+        "fire_dragon",
+        "demon_king",
+        "demon_king",
+        "mage",
+        "knight",
+        "knight",
+        "archer",
+        "knight"
+      ],
+      "slotsUsed": 36,
+      "capacity": 36,
+      "utilization": 1
+    },
+    {
+      "id": "th4-frontline-ranged",
+      "townHall": 4,
+      "name": "frontline-ranged",
+      "units": [
+        "demon_king",
+        "archer",
+        "archer",
+        "knight",
+        "fire_dragon",
+        "fire_dragon",
+        "demon_king",
+        "knight",
+        "archer",
+        "archer"
+      ],
+      "slotsUsed": 36,
+      "capacity": 36,
+      "utilization": 1
+    },
+    {
+      "id": "th4-melee-pressure",
+      "townHall": 4,
+      "name": "melee-pressure",
+      "units": [
+        "demon_king",
+        "knight",
+        "demon_king",
+        "knight",
+        "demon_king",
+        "knight",
+        "demon_king",
+        "knight",
+        "demon_king",
+        "knight",
+        "demon_king",
+        "knight"
+      ],
+      "slotsUsed": 36,
+      "capacity": 36,
+      "utilization": 1
+    },
+    {
+      "id": "th4-ranged-pressure",
+      "townHall": 4,
+      "name": "ranged-pressure",
+      "units": [
+        "archer",
+        "fire_dragon",
+        "mage",
+        "pea_shooter",
+        "archer",
+        "fire_dragon",
+        "mage",
+        "archer"
+      ],
+      "slotsUsed": 36,
+      "capacity": 36,
+      "utilization": 1
+    },
+    {
+      "id": "th4-support-mix",
+      "townHall": 4,
+      "name": "support-mix",
+      "units": [
+        "demon_king",
+        "archer",
+        "knight",
+        "fire_dragon",
+        "demon_king",
+        "mage",
+        "knight",
+        "pea_shooter",
+        "archer",
+        "knight",
+        "knight",
+        "archer"
+      ],
+      "slotsUsed": 36,
+      "capacity": 36,
+      "utilization": 1
+    },
+    {
+      "id": "th4-hero-necro-dragon-mages",
+      "townHall": 4,
+      "name": "hero-necro-dragon-mages",
+      "units": [
+        "demon_king",
+        "fire_dragon",
+        "mage",
+        "mage",
+        "knight",
+        "demon_king",
+        "mage",
+        "knight",
+        "knight",
+        "knight"
+      ],
+      "slotsUsed": 36,
+      "capacity": 36,
+      "utilization": 1
+    },
+    {
+      "id": "th4-random-1",
+      "townHall": 4,
+      "name": "random-1",
+      "units": [
+        "fire_dragon",
+        "mage",
+        "pea_shooter",
+        "knight",
+        "demon_king",
+        "archer",
+        "fire_dragon"
+      ],
+      "slotsUsed": 36,
+      "capacity": 36,
+      "utilization": 1
+    },
+    {
+      "id": "th4-random-2",
+      "townHall": 4,
+      "name": "random-2",
+      "units": [
+        "archer",
+        "knight",
+        "mage",
+        "demon_king",
+        "fire_dragon",
+        "pea_shooter",
+        "archer",
+        "knight",
+        "mage",
+        "archer",
+        "knight",
+        "archer",
+        "knight"
+      ],
+      "slotsUsed": 36,
+      "capacity": 36,
+      "utilization": 1
+    },
+    {
+      "id": "th4-random-3",
+      "townHall": 4,
+      "name": "random-3",
+      "units": [
+        "archer",
+        "knight",
+        "pea_shooter",
+        "demon_king",
+        "mage",
+        "fire_dragon",
+        "archer",
+        "knight",
+        "pea_shooter",
+        "archer",
+        "knight",
+        "archer"
+      ],
+      "slotsUsed": 36,
+      "capacity": 36,
+      "utilization": 1
+    },
+    {
+      "id": "th4-random-4",
+      "townHall": 4,
+      "name": "random-4",
+      "units": [
+        "archer",
+        "knight",
+        "fire_dragon",
+        "demon_king",
+        "mage",
+        "pea_shooter",
+        "archer",
+        "knight",
+        "demon_king",
+        "archer",
+        "knight",
+        "archer"
+      ],
+      "slotsUsed": 36,
+      "capacity": 36,
+      "utilization": 1
+    },
+    {
+      "id": "th4-random-5",
+      "townHall": 4,
+      "name": "random-5",
+      "units": [
+        "demon_king",
+        "pea_shooter",
+        "archer",
+        "mage",
+        "knight",
+        "fire_dragon",
+        "demon_king",
+        "pea_shooter"
+      ],
+      "slotsUsed": 36,
+      "capacity": 36,
+      "utilization": 1
+    },
+    {
+      "id": "th4-random-6",
+      "townHall": 4,
+      "name": "random-6",
+      "units": [
+        "demon_king",
+        "knight",
+        "archer",
+        "mage",
+        "pea_shooter",
+        "fire_dragon",
+        "demon_king",
+        "knight",
+        "archer",
+        "knight",
+        "archer",
+        "knight"
+      ],
+      "slotsUsed": 36,
+      "capacity": 36,
+      "utilization": 1
+    },
+    {
+      "id": "th5-pure-archer",
+      "townHall": 5,
+      "name": "pure-archer",
+      "units": [
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th5-pure-demon_king",
+      "townHall": 5,
+      "name": "pure-demon_king",
+      "units": [
+        "demon_king",
+        "demon_king",
+        "demon_king",
+        "demon_king",
+        "demon_king",
+        "demon_king",
+        "demon_king",
+        "demon_king",
+        "demon_king"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th5-pure-fire_dragon",
+      "townHall": 5,
+      "name": "pure-fire_dragon",
+      "units": [
+        "fire_dragon",
+        "fire_dragon",
+        "fire_dragon",
+        "fire_dragon"
+      ],
+      "slotsUsed": 40,
+      "capacity": 45,
+      "utilization": 0.8889
+    },
+    {
+      "id": "th5-core-fire_dragon-filled",
+      "townHall": 5,
+      "name": "core-fire_dragon-filled",
+      "units": [
+        "fire_dragon",
+        "fire_dragon",
+        "fire_dragon",
+        "fire_dragon",
+        "knight",
+        "archer",
+        "knight",
+        "archer",
+        "knight"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th5-pure-knight",
+      "townHall": 5,
+      "name": "pure-knight",
+      "units": [
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th5-pure-mage",
+      "townHall": 5,
+      "name": "pure-mage",
+      "units": [
+        "mage",
+        "mage",
+        "mage",
+        "mage",
+        "mage",
+        "mage",
+        "mage",
+        "mage",
+        "mage",
+        "mage",
+        "mage"
+      ],
+      "slotsUsed": 44,
+      "capacity": 45,
+      "utilization": 0.9778
+    },
+    {
+      "id": "th5-core-mage-filled",
+      "townHall": 5,
+      "name": "core-mage-filled",
+      "units": [
+        "mage",
+        "mage",
+        "mage",
+        "mage",
+        "mage",
+        "mage",
+        "mage",
+        "mage",
+        "mage",
+        "mage",
+        "mage",
+        "knight"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th5-pure-mimic",
+      "townHall": 5,
+      "name": "pure-mimic",
+      "units": [
+        "mimic",
+        "mimic",
+        "mimic",
+        "mimic",
+        "mimic",
+        "mimic",
+        "mimic"
+      ],
+      "slotsUsed": 42,
+      "capacity": 45,
+      "utilization": 0.9333
+    },
+    {
+      "id": "th5-core-mimic-filled",
+      "townHall": 5,
+      "name": "core-mimic-filled",
+      "units": [
+        "mimic",
+        "mimic",
+        "mimic",
+        "mimic",
+        "mimic",
+        "mimic",
+        "mimic",
+        "knight",
+        "archer",
+        "knight"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th5-pure-pea_shooter",
+      "townHall": 5,
+      "name": "pure-pea_shooter",
+      "units": [
+        "pea_shooter",
+        "pea_shooter",
+        "pea_shooter",
+        "pea_shooter",
+        "pea_shooter",
+        "pea_shooter",
+        "pea_shooter",
+        "pea_shooter",
+        "pea_shooter"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th5-balanced",
+      "townHall": 5,
+      "name": "balanced",
+      "units": [
+        "demon_king",
+        "archer",
+        "archer",
+        "knight",
+        "fire_dragon",
+        "demon_king",
+        "mimic",
+        "mage",
+        "fire_dragon",
+        "knight",
+        "knight"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th5-frontline-ranged",
+      "townHall": 5,
+      "name": "frontline-ranged",
+      "units": [
+        "demon_king",
+        "archer",
+        "archer",
+        "knight",
+        "fire_dragon",
+        "fire_dragon",
+        "mimic",
+        "mage",
+        "mage",
+        "archer",
+        "archer",
+        "knight"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th5-melee-pressure",
+      "townHall": 5,
+      "name": "melee-pressure",
+      "units": [
+        "demon_king",
+        "knight",
+        "mimic",
+        "demon_king",
+        "knight",
+        "mimic",
+        "demon_king",
+        "knight",
+        "mimic",
+        "demon_king",
+        "knight",
+        "knight",
+        "knight",
+        "knight"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th5-ranged-pressure",
+      "townHall": 5,
+      "name": "ranged-pressure",
+      "units": [
+        "archer",
+        "fire_dragon",
+        "mage",
+        "pea_shooter",
+        "archer",
+        "fire_dragon",
+        "mage",
+        "pea_shooter",
+        "archer",
+        "mage"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th5-support-mix",
+      "townHall": 5,
+      "name": "support-mix",
+      "units": [
+        "demon_king",
+        "archer",
+        "knight",
+        "fire_dragon",
+        "mimic",
+        "mage",
+        "demon_king",
+        "pea_shooter",
+        "demon_king",
+        "archer",
+        "knight",
+        "archer"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th5-trap-runner-mix",
+      "townHall": 5,
+      "name": "trap-runner-mix",
+      "units": [
+        "mimic",
+        "demon_king",
+        "archer",
+        "mimic",
+        "knight",
+        "fire_dragon",
+        "mimic",
+        "mimic",
+        "mage"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th5-hero-necro-dragon-mages",
+      "townHall": 5,
+      "name": "hero-necro-dragon-mages",
+      "units": [
+        "demon_king",
+        "fire_dragon",
+        "mage",
+        "mage",
+        "knight",
+        "demon_king",
+        "fire_dragon",
+        "mage",
+        "knight",
+        "knight"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th5-random-1",
+      "townHall": 5,
+      "name": "random-1",
+      "units": [
+        "mage",
+        "mimic",
+        "knight",
+        "archer",
+        "fire_dragon",
+        "demon_king",
+        "pea_shooter",
+        "mage",
+        "mimic",
+        "knight",
+        "archer",
+        "knight"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th5-random-2",
+      "townHall": 5,
+      "name": "random-2",
+      "units": [
+        "pea_shooter",
+        "knight",
+        "mage",
+        "archer",
+        "demon_king",
+        "fire_dragon",
+        "mimic",
+        "pea_shooter",
+        "knight",
+        "mage",
+        "archer",
+        "knight",
+        "archer"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th5-random-3",
+      "townHall": 5,
+      "name": "random-3",
+      "units": [
+        "demon_king",
+        "knight",
+        "pea_shooter",
+        "mimic",
+        "archer",
+        "mage",
+        "fire_dragon",
+        "demon_king",
+        "knight",
+        "pea_shooter",
+        "archer",
+        "knight"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th5-random-4",
+      "townHall": 5,
+      "name": "random-4",
+      "units": [
+        "demon_king",
+        "archer",
+        "mimic",
+        "mage",
+        "fire_dragon",
+        "knight",
+        "pea_shooter",
+        "demon_king",
+        "archer",
+        "mimic",
+        "knight"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th5-random-5",
+      "townHall": 5,
+      "name": "random-5",
+      "units": [
+        "demon_king",
+        "pea_shooter",
+        "knight",
+        "archer",
+        "mage",
+        "mimic",
+        "fire_dragon",
+        "demon_king",
+        "pea_shooter",
+        "knight",
+        "archer",
+        "knight"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th5-random-6",
+      "townHall": 5,
+      "name": "random-6",
+      "units": [
+        "demon_king",
+        "fire_dragon",
+        "mimic",
+        "archer",
+        "knight",
+        "mage",
+        "pea_shooter",
+        "demon_king",
+        "mimic",
+        "archer",
+        "knight"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th6-pure-archer",
+      "townHall": 6,
+      "name": "pure-archer",
+      "units": [
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th6-pure-demon_king",
+      "townHall": 6,
+      "name": "pure-demon_king",
+      "units": [
+        "demon_king",
+        "demon_king",
+        "demon_king",
+        "demon_king",
+        "demon_king",
+        "demon_king",
+        "demon_king",
+        "demon_king",
+        "demon_king"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th6-pure-fire_dragon",
+      "townHall": 6,
+      "name": "pure-fire_dragon",
+      "units": [
+        "fire_dragon",
+        "fire_dragon",
+        "fire_dragon",
+        "fire_dragon"
+      ],
+      "slotsUsed": 40,
+      "capacity": 45,
+      "utilization": 0.8889
+    },
+    {
+      "id": "th6-core-fire_dragon-filled",
+      "townHall": 6,
+      "name": "core-fire_dragon-filled",
+      "units": [
+        "fire_dragon",
+        "fire_dragon",
+        "fire_dragon",
+        "fire_dragon",
+        "knight",
+        "archer",
+        "knight",
+        "archer",
+        "knight"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th6-pure-knight",
+      "townHall": 6,
+      "name": "pure-knight",
+      "units": [
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th6-pure-mage",
+      "townHall": 6,
+      "name": "pure-mage",
+      "units": [
+        "mage",
+        "mage",
+        "mage",
+        "mage",
+        "mage",
+        "mage",
+        "mage",
+        "mage",
+        "mage",
+        "mage",
+        "mage"
+      ],
+      "slotsUsed": 44,
+      "capacity": 45,
+      "utilization": 0.9778
+    },
+    {
+      "id": "th6-core-mage-filled",
+      "townHall": 6,
+      "name": "core-mage-filled",
+      "units": [
+        "mage",
+        "mage",
+        "mage",
+        "mage",
+        "mage",
+        "mage",
+        "mage",
+        "mage",
+        "mage",
+        "mage",
+        "mage",
+        "knight"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th6-pure-mechanical_dragon",
+      "townHall": 6,
+      "name": "pure-mechanical_dragon",
+      "units": [
+        "mechanical_dragon",
+        "mechanical_dragon",
+        "mechanical_dragon",
+        "mechanical_dragon",
+        "mechanical_dragon",
+        "mechanical_dragon",
+        "mechanical_dragon",
+        "mechanical_dragon",
+        "mechanical_dragon",
+        "mechanical_dragon",
+        "mechanical_dragon"
+      ],
+      "slotsUsed": 44,
+      "capacity": 45,
+      "utilization": 0.9778
+    },
+    {
+      "id": "th6-core-mechanical_dragon-filled",
+      "townHall": 6,
+      "name": "core-mechanical_dragon-filled",
+      "units": [
+        "mechanical_dragon",
+        "mechanical_dragon",
+        "mechanical_dragon",
+        "mechanical_dragon",
+        "mechanical_dragon",
+        "mechanical_dragon",
+        "mechanical_dragon",
+        "mechanical_dragon",
+        "mechanical_dragon",
+        "mechanical_dragon",
+        "mechanical_dragon",
+        "knight"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th6-pure-mimic",
+      "townHall": 6,
+      "name": "pure-mimic",
+      "units": [
+        "mimic",
+        "mimic",
+        "mimic",
+        "mimic",
+        "mimic",
+        "mimic",
+        "mimic"
+      ],
+      "slotsUsed": 42,
+      "capacity": 45,
+      "utilization": 0.9333
+    },
+    {
+      "id": "th6-core-mimic-filled",
+      "townHall": 6,
+      "name": "core-mimic-filled",
+      "units": [
+        "mimic",
+        "mimic",
+        "mimic",
+        "mimic",
+        "mimic",
+        "mimic",
+        "mimic",
+        "knight",
+        "archer",
+        "knight"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th6-pure-pea_shooter",
+      "townHall": 6,
+      "name": "pure-pea_shooter",
+      "units": [
+        "pea_shooter",
+        "pea_shooter",
+        "pea_shooter",
+        "pea_shooter",
+        "pea_shooter",
+        "pea_shooter",
+        "pea_shooter",
+        "pea_shooter",
+        "pea_shooter"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th6-balanced",
+      "townHall": 6,
+      "name": "balanced",
+      "units": [
+        "demon_king",
+        "archer",
+        "archer",
+        "knight",
+        "fire_dragon",
+        "demon_king",
+        "mimic",
+        "mage",
+        "fire_dragon",
+        "knight",
+        "knight"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th6-frontline-ranged",
+      "townHall": 6,
+      "name": "frontline-ranged",
+      "units": [
+        "demon_king",
+        "archer",
+        "archer",
+        "knight",
+        "fire_dragon",
+        "fire_dragon",
+        "mimic",
+        "mage",
+        "mage",
+        "knight",
+        "archer",
+        "archer"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th6-melee-pressure",
+      "townHall": 6,
+      "name": "melee-pressure",
+      "units": [
+        "demon_king",
+        "knight",
+        "mimic",
+        "demon_king",
+        "knight",
+        "mimic",
+        "demon_king",
+        "knight",
+        "mimic",
+        "demon_king",
+        "knight",
+        "knight",
+        "knight",
+        "knight"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th6-ranged-pressure",
+      "townHall": 6,
+      "name": "ranged-pressure",
+      "units": [
+        "archer",
+        "fire_dragon",
+        "mage",
+        "mechanical_dragon",
+        "pea_shooter",
+        "archer",
+        "fire_dragon",
+        "mage",
+        "mechanical_dragon",
+        "archer",
+        "archer"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th6-air-pressure",
+      "townHall": 6,
+      "name": "air-pressure",
+      "units": [
+        "fire_dragon",
+        "mechanical_dragon",
+        "fire_dragon",
+        "mechanical_dragon",
+        "fire_dragon",
+        "mechanical_dragon"
+      ],
+      "slotsUsed": 42,
+      "capacity": 45,
+      "utilization": 0.9333
+    },
+    {
+      "id": "th6-support-mix",
+      "townHall": 6,
+      "name": "support-mix",
+      "units": [
+        "demon_king",
+        "archer",
+        "knight",
+        "fire_dragon",
+        "mimic",
+        "mage",
+        "demon_king",
+        "mechanical_dragon",
+        "knight",
+        "pea_shooter",
+        "archer",
+        "knight",
+        "knight"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th6-trap-runner-mix",
+      "townHall": 6,
+      "name": "trap-runner-mix",
+      "units": [
+        "mimic",
+        "demon_king",
+        "archer",
+        "mimic",
+        "knight",
+        "fire_dragon",
+        "mimic",
+        "mimic",
+        "mage"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th6-hero-necro-dragon-mages",
+      "townHall": 6,
+      "name": "hero-necro-dragon-mages",
+      "units": [
+        "demon_king",
+        "fire_dragon",
+        "mage",
+        "mage",
+        "knight",
+        "demon_king",
+        "fire_dragon",
+        "mage",
+        "knight",
+        "knight"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th6-random-1",
+      "townHall": 6,
+      "name": "random-1",
+      "units": [
+        "archer",
+        "demon_king",
+        "fire_dragon",
+        "pea_shooter",
+        "knight",
+        "mechanical_dragon",
+        "mage",
+        "mimic",
+        "archer",
+        "demon_king",
+        "knight",
+        "archer",
+        "knight"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th6-random-2",
+      "townHall": 6,
+      "name": "random-2",
+      "units": [
+        "archer",
+        "mage",
+        "demon_king",
+        "fire_dragon",
+        "knight",
+        "pea_shooter",
+        "mechanical_dragon",
+        "mimic",
+        "archer",
+        "mage",
+        "knight",
+        "archer",
+        "knight",
+        "archer"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th6-random-3",
+      "townHall": 6,
+      "name": "random-3",
+      "units": [
+        "archer",
+        "mechanical_dragon",
+        "knight",
+        "pea_shooter",
+        "mage",
+        "mimic",
+        "fire_dragon",
+        "demon_king",
+        "archer",
+        "mechanical_dragon",
+        "knight",
+        "archer",
+        "knight",
+        "archer"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th6-random-4",
+      "townHall": 6,
+      "name": "random-4",
+      "units": [
+        "mechanical_dragon",
+        "mage",
+        "pea_shooter",
+        "knight",
+        "mimic",
+        "fire_dragon",
+        "demon_king",
+        "archer",
+        "mechanical_dragon",
+        "mage",
+        "knight"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th6-random-5",
+      "townHall": 6,
+      "name": "random-5",
+      "units": [
+        "pea_shooter",
+        "knight",
+        "archer",
+        "demon_king",
+        "mage",
+        "mechanical_dragon",
+        "mimic",
+        "fire_dragon",
+        "pea_shooter",
+        "knight",
+        "archer",
+        "knight",
+        "archer"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th6-random-6",
+      "townHall": 6,
+      "name": "random-6",
+      "units": [
+        "pea_shooter",
+        "fire_dragon",
+        "knight",
+        "mechanical_dragon",
+        "archer",
+        "mage",
+        "demon_king",
+        "mimic",
+        "pea_shooter",
+        "knight",
+        "archer",
+        "knight",
+        "archer"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th7-pure-archer",
+      "townHall": 7,
+      "name": "pure-archer",
+      "units": [
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer",
+        "archer"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th7-pure-demon_king",
+      "townHall": 7,
+      "name": "pure-demon_king",
+      "units": [
+        "demon_king",
+        "demon_king",
+        "demon_king",
+        "demon_king",
+        "demon_king",
+        "demon_king",
+        "demon_king",
+        "demon_king",
+        "demon_king"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th7-pure-fire_dragon",
+      "townHall": 7,
+      "name": "pure-fire_dragon",
+      "units": [
+        "fire_dragon",
+        "fire_dragon",
+        "fire_dragon",
+        "fire_dragon"
+      ],
+      "slotsUsed": 40,
+      "capacity": 45,
+      "utilization": 0.8889
+    },
+    {
+      "id": "th7-core-fire_dragon-filled",
+      "townHall": 7,
+      "name": "core-fire_dragon-filled",
+      "units": [
+        "fire_dragon",
+        "fire_dragon",
+        "fire_dragon",
+        "fire_dragon",
+        "knight",
+        "archer",
+        "knight",
+        "archer",
+        "knight"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th7-pure-knight",
+      "townHall": 7,
+      "name": "pure-knight",
+      "units": [
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight",
+        "knight"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th7-pure-mage",
+      "townHall": 7,
+      "name": "pure-mage",
+      "units": [
+        "mage",
+        "mage",
+        "mage",
+        "mage",
+        "mage",
+        "mage",
+        "mage",
+        "mage",
+        "mage",
+        "mage",
+        "mage"
+      ],
+      "slotsUsed": 44,
+      "capacity": 45,
+      "utilization": 0.9778
+    },
+    {
+      "id": "th7-core-mage-filled",
+      "townHall": 7,
+      "name": "core-mage-filled",
+      "units": [
+        "mage",
+        "mage",
+        "mage",
+        "mage",
+        "mage",
+        "mage",
+        "mage",
+        "mage",
+        "mage",
+        "mage",
+        "mage",
+        "knight"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th7-pure-mechanical_dragon",
+      "townHall": 7,
+      "name": "pure-mechanical_dragon",
+      "units": [
+        "mechanical_dragon",
+        "mechanical_dragon",
+        "mechanical_dragon",
+        "mechanical_dragon",
+        "mechanical_dragon",
+        "mechanical_dragon",
+        "mechanical_dragon",
+        "mechanical_dragon",
+        "mechanical_dragon",
+        "mechanical_dragon",
+        "mechanical_dragon"
+      ],
+      "slotsUsed": 44,
+      "capacity": 45,
+      "utilization": 0.9778
+    },
+    {
+      "id": "th7-core-mechanical_dragon-filled",
+      "townHall": 7,
+      "name": "core-mechanical_dragon-filled",
+      "units": [
+        "mechanical_dragon",
+        "mechanical_dragon",
+        "mechanical_dragon",
+        "mechanical_dragon",
+        "mechanical_dragon",
+        "mechanical_dragon",
+        "mechanical_dragon",
+        "mechanical_dragon",
+        "mechanical_dragon",
+        "mechanical_dragon",
+        "mechanical_dragon",
+        "knight"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th7-pure-mimic",
+      "townHall": 7,
+      "name": "pure-mimic",
+      "units": [
+        "mimic",
+        "mimic",
+        "mimic",
+        "mimic",
+        "mimic",
+        "mimic",
+        "mimic"
+      ],
+      "slotsUsed": 42,
+      "capacity": 45,
+      "utilization": 0.9333
+    },
+    {
+      "id": "th7-core-mimic-filled",
+      "townHall": 7,
+      "name": "core-mimic-filled",
+      "units": [
+        "mimic",
+        "mimic",
+        "mimic",
+        "mimic",
+        "mimic",
+        "mimic",
+        "mimic",
+        "knight",
+        "archer",
+        "knight"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th7-pure-necromancer",
+      "townHall": 7,
+      "name": "pure-necromancer",
+      "units": [
+        "necromancer",
+        "necromancer",
+        "necromancer"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th7-pure-pea_shooter",
+      "townHall": 7,
+      "name": "pure-pea_shooter",
+      "units": [
+        "pea_shooter",
+        "pea_shooter",
+        "pea_shooter",
+        "pea_shooter",
+        "pea_shooter",
+        "pea_shooter",
+        "pea_shooter",
+        "pea_shooter",
+        "pea_shooter"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th7-balanced",
+      "townHall": 7,
+      "name": "balanced",
+      "units": [
+        "demon_king",
+        "archer",
+        "archer",
+        "knight",
+        "fire_dragon",
+        "demon_king",
+        "mimic",
+        "mage",
+        "fire_dragon",
+        "knight",
+        "knight"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th7-frontline-ranged",
+      "townHall": 7,
+      "name": "frontline-ranged",
+      "units": [
+        "demon_king",
+        "archer",
+        "archer",
+        "knight",
+        "fire_dragon",
+        "fire_dragon",
+        "mimic",
+        "mage",
+        "mage",
+        "knight",
+        "archer",
+        "archer"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th7-melee-pressure",
+      "townHall": 7,
+      "name": "melee-pressure",
+      "units": [
+        "demon_king",
+        "knight",
+        "mimic",
+        "demon_king",
+        "knight",
+        "mimic",
+        "demon_king",
+        "knight",
+        "mimic",
+        "demon_king",
+        "knight",
+        "knight",
+        "knight",
+        "knight"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th7-ranged-pressure",
+      "townHall": 7,
+      "name": "ranged-pressure",
+      "units": [
+        "archer",
+        "fire_dragon",
+        "mage",
+        "mechanical_dragon",
+        "necromancer",
+        "pea_shooter",
+        "archer",
+        "mage",
+        "archer"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th7-air-pressure",
+      "townHall": 7,
+      "name": "air-pressure",
+      "units": [
+        "fire_dragon",
+        "mechanical_dragon",
+        "fire_dragon",
+        "mechanical_dragon",
+        "fire_dragon",
+        "mechanical_dragon"
+      ],
+      "slotsUsed": 42,
+      "capacity": 45,
+      "utilization": 0.9333
+    },
+    {
+      "id": "th7-support-mix",
+      "townHall": 7,
+      "name": "support-mix",
+      "units": [
+        "demon_king",
+        "necromancer",
+        "archer",
+        "knight",
+        "necromancer",
+        "mimic",
+        "knight",
+        "archer"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th7-trap-runner-mix",
+      "townHall": 7,
+      "name": "trap-runner-mix",
+      "units": [
+        "mimic",
+        "demon_king",
+        "archer",
+        "mimic",
+        "knight",
+        "fire_dragon",
+        "mimic",
+        "mimic",
+        "mage"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th7-hero-necro-dragon-mages",
+      "townHall": 7,
+      "name": "hero-necro-dragon-mages",
+      "units": [
+        "necromancer",
+        "demon_king",
+        "fire_dragon",
+        "mage",
+        "mage",
+        "knight",
+        "demon_king",
+        "knight"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th7-random-1",
+      "townHall": 7,
+      "name": "random-1",
+      "units": [
+        "archer",
+        "demon_king",
+        "fire_dragon",
+        "knight",
+        "mage",
+        "mechanical_dragon",
+        "mimic",
+        "pea_shooter",
+        "archer",
+        "demon_king",
+        "knight",
+        "archer",
+        "knight"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th7-random-2",
+      "townHall": 7,
+      "name": "random-2",
+      "units": [
+        "necromancer",
+        "knight",
+        "archer",
+        "pea_shooter",
+        "demon_king",
+        "mechanical_dragon",
+        "mage",
+        "mimic",
+        "knight",
+        "archer",
+        "knight",
+        "archer"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th7-random-3",
+      "townHall": 7,
+      "name": "random-3",
+      "units": [
+        "necromancer",
+        "archer",
+        "knight",
+        "fire_dragon",
+        "mechanical_dragon",
+        "mage",
+        "pea_shooter",
+        "demon_king"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th7-random-4",
+      "townHall": 7,
+      "name": "random-4",
+      "units": [
+        "archer",
+        "mage",
+        "mimic",
+        "knight",
+        "mechanical_dragon",
+        "necromancer",
+        "demon_king",
+        "pea_shooter",
+        "archer",
+        "knight",
+        "archer",
+        "knight"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th7-random-5",
+      "townHall": 7,
+      "name": "random-5",
+      "units": [
+        "mimic",
+        "fire_dragon",
+        "mechanical_dragon",
+        "knight",
+        "demon_king",
+        "archer",
+        "pea_shooter",
+        "mage",
+        "mimic",
+        "knight",
+        "archer",
+        "knight"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    },
+    {
+      "id": "th7-random-6",
+      "townHall": 7,
+      "name": "random-6",
+      "units": [
+        "pea_shooter",
+        "fire_dragon",
+        "demon_king",
+        "archer",
+        "mimic",
+        "mechanical_dragon",
+        "knight",
+        "mage",
+        "pea_shooter",
+        "archer",
+        "knight",
+        "archer",
+        "knight"
+      ],
+      "slotsUsed": 45,
+      "capacity": 45,
+      "utilization": 1
+    }
+  ],
+  "attackPolicies": [],
+  "breakabilityAttackPolicies": [],
+  "evolution": [],
+  "breakability": {
+    "enabled": false,
+    "policiesPerTownHall": 0,
+    "nftRarity": "common",
+    "candidatePolicyCount": 0,
+    "selectedPolicyIdsByTownHall": {},
+    "calibrationBaseIdsByTownHall": {},
+    "calibrationBattles": 0,
+    "battles": 0,
+    "rescueBattles": 0,
+    "adaptiveRescueBattles": 0,
+    "totalBattles": 0,
+    "invalid": 0,
+    "generatedBaseCount": 0,
+    "testedBaseCount": 0,
+    "untestedBaseCount": 0,
+    "untestedBases": [],
+    "invalidOnlyBaseCount": 0,
+    "invalidOnlyBases": [],
+    "initialUnbeatenBaseCount": 0,
+    "rescuedBaseCount": 0,
+    "rescuedBases": [],
+    "adaptivePolicies": [],
+    "unbeatenBaseCount": 0,
+    "unbeatenBases": [],
+    "byBase": {},
+    "byPolicy": {},
+    "calibrationByPolicy": {},
+    "bestAttemptByBase": {},
+    "bestAttemptByBaseArmy": {}
+  },
+  "unitUtility": {
+    "enabled": false,
+    "basesPerTroop": 0,
+    "referenceTownHall": 0,
+    "totalPairs": 0,
+    "totalBattles": 0,
+    "invalid": 0,
+    "byTroop": {},
+    "byRole": {}
+  },
+  "nftRarityProbe": {
+    "enabled": false,
+    "basesPerTroop": 0,
+    "totalBattles": 0,
+    "invalid": 0,
+    "byTroop": {}
+  }
+}

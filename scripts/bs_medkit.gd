@@ -28,7 +28,7 @@ func init(building_system: Node3D) -> BSMedkit:
 
 
 func reset(ship_level: int = 1) -> void:
-	_ship_level = clampi(ship_level, 1, 6)
+	_ship_level = clampi(ship_level, 1, 10)
 	_medkit_used = false
 	_exit_medkit_mode()
 	_clear_zone()
@@ -186,11 +186,16 @@ func _heal_troops(center: Vector3) -> void:
 				)
 
 
-func _activate_zone(pos: Vector3) -> void:
+func _activate_zone(pos: Vector3, visual_parent: Node = null) -> void:
 	_clear_zone()
 	var root := Node3D.new()
 	root.name = "MedkitHealingField"
-	bs.get_tree().current_scene.add_child(root)
+	var parent: Node = visual_parent
+	if parent == null and is_instance_valid(bs) and bs.get_tree() != null:
+		parent = bs.get_tree().current_scene
+	if parent == null:
+		return
+	parent.add_child(root)
 	root.global_position = pos
 
 	var disk := MeshInstance3D.new()

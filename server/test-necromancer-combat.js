@@ -370,7 +370,7 @@ const dbPath = path.join(os.tmpdir(), `clash-necromancer-combat-${process.pid}-$
 process.env.CLASH_MAIN_DB = dbPath;
 const gameDb = require('./db');
 try {
-  assert.equal(gameDb.TROOP_DEFS.necromancer.min_town_hall_level, 6);
+  assert.equal(gameDb.TROOP_DEFS.necromancer.min_town_hall_level, 7);
   assert.equal(gameDb.TROOP_DEFS.necromancer.slot_cost, TROOP_SLOT_COSTS.necromancer);
 } finally {
   gameDb.db.close();

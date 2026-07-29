@@ -13,6 +13,10 @@ const scanExts = new Set(['.gd', '.tscn', '.tres', '.gdshader']);
 const sceneExts = new Set(['.glb', '.gltf', '.fbx']);
 const textureExts = new Set(['.png', '.jpg', '.jpeg', '.webp']);
 const sourceRefPattern = /["'](res:\/\/[^"']+)["']/g;
+const scanFileExcludes = new Set([
+  'res://scenes/TestMain.tscn',
+  'res://scripts/test_scene_harness.gd',
+]);
 // Long music is played by React/HTMLAudio on web. Keeping these tracks in the
 // Godot web export manifest makes some browsers decode large audio buffers
 // during startup, which can stall the loader for minutes on memory-constrained
@@ -36,6 +40,9 @@ const webHtmlAudioResources = new Set([
 // at every subclass on first load. Scripts are tiny — including the whole
 // scripts/ tree adds <1 MB and trades a real foot-gun for ~nothing.
 const forceIncludeScriptRoots = ['scripts'];
+const forceIncludeScriptExcludes = new Set([
+  'res://scripts/test_scene_harness.gd',
+]);
 const godotIgnoreDirs = [
   'web/dist',
   'web/node_modules',
@@ -204,6 +211,7 @@ if (fs.existsSync(projectFile)) files.push(projectFile);
 
 for (const file of files) {
   if (path.resolve(file) === path.resolve(output)) continue;
+  if (scanFileExcludes.has(fsToRes(file))) continue;
   const text = fs.readFileSync(file, 'utf8');
   let match;
   while ((match = sourceRefPattern.exec(text))) {
@@ -225,7 +233,9 @@ for (const dir of forceIncludeScriptRoots) {
   if (!fs.existsSync(abs)) continue;
   for (const file of walk(abs)) {
     if (path.extname(file) !== '.gd') continue;
-    refs.add(fsToRes(file));
+    const resPath = fsToRes(file);
+    if (forceIncludeScriptExcludes.has(resPath)) continue;
+    refs.add(resPath);
   }
 }
 

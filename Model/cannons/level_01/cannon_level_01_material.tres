@@ -1,0 +1,9 @@
+[gd_resource type="StandardMaterial3D" load_steps=2 format=3]
+
+[ext_resource type="Texture2D" path="res://Model/cannons/level_01/cannon_level_01_palette.png" id="1_palette"]
+
+[resource]
+resource_name = "CannonLevel01Material"
+albedo_texture = ExtResource("1_palette")
+metallic = 0.0
+roughness = 0.82

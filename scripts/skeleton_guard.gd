@@ -32,7 +32,8 @@ const LEVEL_STATS: Dictionary = {
 	2: {"hp": 520, "damage": 60, "atk_speed": 0.74, "move_speed": 0.52, "detection_radius": 1.10},
 	3: {"hp": 620, "damage": 72, "atk_speed": 0.70, "move_speed": 0.54, "detection_radius": 1.25},
 	4: {"hp": 820, "damage": 96, "atk_speed": 0.64, "move_speed": 0.58, "detection_radius": 1.40},
-	5: {"hp": 1050, "damage": 122, "atk_speed": 0.60, "move_speed": 0.60, "detection_radius": 1.52},
+	5: {"hp": 998, "damage": 116, "atk_speed": 0.60, "move_speed": 0.60, "detection_radius": 1.52},
+	6: {"hp": 1148, "damage": 131, "atk_speed": 0.57, "move_speed": 0.62, "detection_radius": 1.62},
 }
 
 var level: int = 2

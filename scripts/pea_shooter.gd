@@ -21,9 +21,9 @@ const LEVEL_STATS: Dictionary = {
 	2: {"hp": 1650, "damage": 150, "atk_speed": 1.75},
 	3: {"hp": 2150, "damage": 195, "atk_speed": 1.75},
 	4: {"hp": 2800, "damage": 280, "atk_speed": 1.75},
-	5: {"hp": 3550, "damage": 380, "atk_speed": 1.75},
-	6: {"hp": 4450, "damage": 510, "atk_speed": 1.75},
-	7: {"hp": 5500, "damage": 680, "atk_speed": 1.75},
+	5: {"hp": 3905, "damage": 418, "atk_speed": 1.75},
+	6: {"hp": 4670, "damage": 536, "atk_speed": 1.75},
+	7: {"hp": 6700, "damage": 825, "atk_speed": 1.75},
 }
 
 const ANIM_FILES: Array[String] = [
@@ -183,7 +183,14 @@ func _spawn_pea(burst_index: int) -> void:
 	projectile["target_bs_ref"] = target_bs
 	projectile["target_guard_ref"] = target_guard
 	projectile["burst_index"] = burst_index
-	var projectile_node := projectile.get("node") as Node3D
+	var raw_projectile_node: Variant = projectile.get("node", null)
+	if not is_instance_valid(raw_projectile_node):
+		_return_projectile(projectile)
+		return
+	var projectile_node := raw_projectile_node as Node3D
+	if projectile_node == null:
+		_return_projectile(projectile)
+		return
 	projectile_node.global_position = _mouth_world_position()
 	projectile_node.visible = true
 	var target_position := _get_target_position() + Vector3(
@@ -244,13 +251,19 @@ func _update_projectiles(delta: float) -> void:
 	var index := _active_projectiles.size() - 1
 	while index >= 0:
 		var projectile: Dictionary = _active_projectiles[index]
-		var projectile_node := projectile.get("node") as Node3D
-		if projectile_node == null or not is_instance_valid(projectile_node):
+		var raw_projectile_node: Variant = projectile.get("node", null)
+		var projectile_node: Node3D = null
+		if is_instance_valid(raw_projectile_node):
+			projectile_node = raw_projectile_node as Node3D
+		if projectile_node == null:
 			_active_projectiles.remove_at(index)
 			index -= 1
 			continue
 
-		var guard_ref: Node = projectile.get("target_guard_ref", null)
+		var raw_guard_ref: Variant = projectile.get("target_guard_ref", null)
+		var guard_ref: Node = null
+		if is_instance_valid(raw_guard_ref):
+			guard_ref = raw_guard_ref as Node
 		var target_ref: Dictionary = projectile.get("target_ref", {})
 		var target_position := Vector3.ZERO
 		var has_target := false
@@ -266,16 +279,21 @@ func _update_projectiles(delta: float) -> void:
 				+ Vector3(0.0, BaseTroop.TARGET_AIM_Y, 0.0)
 			)
 			has_target = true
-		elif (
+		else:
+			var raw_building_node: Variant = target_ref.get("node", null)
+			var building_node: Node3D = null
+			if is_instance_valid(raw_building_node):
+				building_node = raw_building_node as Node3D
+			if (
 			not target_ref.is_empty()
 			and int(target_ref.get("hp", 0)) > 0
-			and is_instance_valid(target_ref.get("node"))
-		):
-			target_position = (
-				(target_ref.get("node") as Node3D).global_position
-				+ Vector3(0.0, BaseTroop.TARGET_AIM_Y, 0.0)
-			)
-			has_target = true
+			and building_node != null
+			):
+				target_position = (
+					building_node.global_position
+					+ Vector3(0.0, BaseTroop.TARGET_AIM_Y, 0.0)
+				)
+				has_target = true
 
 		if not has_target:
 			_record_projectile_telemetry(
@@ -290,7 +308,7 @@ func _update_projectiles(delta: float) -> void:
 				}
 			)
 			_return_projectile(projectile)
-			_active_projectiles.remove_at(index)
+			_remove_active_projectile(projectile, index)
 			index -= 1
 			continue
 
@@ -303,8 +321,23 @@ func _update_projectiles(delta: float) -> void:
 		if offset.length_squared() < PROJECTILE_HIT_DIST_SQ:
 			_apply_projectile_hit(projectile, target_ref, guard_ref, offset.length_squared())
 			_return_projectile(projectile)
-			_active_projectiles.remove_at(index)
+			_remove_active_projectile(projectile, index)
 		index -= 1
+
+
+func _remove_active_projectile(projectile: Dictionary, expected_index: int) -> void:
+	# Applying a hit can synchronously destroy a target and trigger combat
+	# cleanup. Never remove by a stale index after callbacks have run.
+	if (
+		expected_index >= 0
+		and expected_index < _active_projectiles.size()
+		and is_same(_active_projectiles[expected_index], projectile)
+	):
+		_active_projectiles.remove_at(expected_index)
+		return
+	var live_index: int = _active_projectiles.find(projectile)
+	if live_index >= 0:
+		_active_projectiles.remove_at(live_index)
 
 
 func _apply_projectile_hit(
@@ -326,10 +359,16 @@ func _apply_projectile_hit(
 		hp_after = int(guard_ref.get("hp"))
 	elif not target_ref.is_empty():
 		hp_after = int(target_ref.get("hp", hp_after))
+	var impact_position := Vector3.ZERO
+	var raw_projectile_node: Variant = projectile.get("node", null)
+	if is_instance_valid(raw_projectile_node):
+		var projectile_node := raw_projectile_node as Node3D
+		if projectile_node != null:
+			impact_position = projectile_node.global_position
 	_record_projectile_payload(
 		"troop_projectile_hit",
 		payload,
-		(projectile.get("node") as Node3D).global_position,
+		impact_position,
 		{
 			"projectile_speed": projectile_fly_speed(),
 			"burst_index": int(projectile.get("burst_index", -1)),
@@ -363,9 +402,11 @@ func _return_projectile(projectile: Dictionary) -> void:
 	projectile["target_bs_ref"] = null
 	projectile["target_guard_ref"] = null
 	projectile["burst_index"] = -1
-	var projectile_node := projectile.get("node") as Node3D
-	if projectile_node != null and is_instance_valid(projectile_node):
-		projectile_node.visible = false
+	var raw_projectile_node: Variant = projectile.get("node", null)
+	if is_instance_valid(raw_projectile_node):
+		var projectile_node := raw_projectile_node as Node3D
+		if projectile_node != null:
+			projectile_node.visible = false
 
 
 func _clear_owned_projectiles() -> void:
@@ -376,9 +417,11 @@ func _clear_owned_projectiles() -> void:
 
 func _exit_tree() -> void:
 	for projectile: Dictionary in _pool:
-		var projectile_node := projectile.get("node") as Node3D
-		if projectile_node != null and is_instance_valid(projectile_node):
-			projectile_node.queue_free()
+		var raw_projectile_node: Variant = projectile.get("node", null)
+		if is_instance_valid(raw_projectile_node):
+			var projectile_node := raw_projectile_node as Node3D
+			if projectile_node != null:
+				projectile_node.queue_free()
 	_pool.clear()
 	_active_projectiles.clear()
 	super._exit_tree()

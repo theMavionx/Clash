@@ -37,6 +37,12 @@ var _model_scale_labels: Dictionary = {}
 var _model_scale_sliders: Dictionary = {}
 var _model_scale_base_values: Dictionary = {}
 var _model_scale_multipliers: Dictionary = {}
+var _water_variant_label: Label
+var _water_fps_label: Label
+var _water_fps_elapsed: float = 0.0
+var _water_fps_min: float = INF
+var _water_fps_max: float = 0.0
+var _water_variant_key: String = "quality"
 
 const TEST_ATTACK_PREFERRED_ORDER: Array[String] = [
 	"Knight",
@@ -71,6 +77,127 @@ const MIXED_SWARM_PROFILE_COUNTS: Dictionary = {
 	"DemonKing": 7,
 	"FireDragon": 7,
 }
+const TH6_BROWSER_PROFILE_CAPACITY: int = 45
+const TH6_BROWSER_PROFILE_SAMPLE_SEC: float = 4.0
+const TH6_BROWSER_PROFILE_LAYOUT_SEED: int = 620260
+const TH6_BOTTLENECK_PROFILE_SAMPLE_SEC: float = 3.0
+const TH6_BOTTLENECK_PROFILE_MODES: Array[Dictionary] = [
+	{"name": "default"},
+	{"name": "no_separation", "no_separation": true},
+	{"name": "no_slots", "no_slots": true},
+	{"name": "no_animation", "no_animation": true},
+	{"name": "no_physics", "no_physics": true},
+	{"name": "no_visuals", "no_visuals": true},
+	{"name": "no_defense_physics", "no_defense_physics": true},
+	{"name": "no_guard_physics", "no_guard_physics": true},
+	{
+		"name": "no_tower_or_guard_physics",
+		"no_defense_physics": true,
+		"no_guard_physics": true,
+	},
+	{"name": "dense_separation_10hz", "separation_interval": 6},
+	{"name": "dense_separation_7_5hz", "separation_interval": 8},
+	{"name": "dense_slots_5hz", "slot_interval_sec": 0.2},
+	{
+		"name": "dense_cadence_7_5hz_slots_5hz",
+		"separation_interval": 8,
+		"slot_interval_sec": 0.2,
+	},
+	{
+		"name": "no_troop_physics_or_visuals",
+		"no_physics": true,
+		"no_visuals": true,
+	},
+	{
+		"name": "no_troop_or_defense_physics",
+		"no_physics": true,
+		"no_defense_physics": true,
+	},
+	{
+		"name": "no_troop_or_guard_physics",
+		"no_physics": true,
+		"no_guard_physics": true,
+	},
+]
+const TH6_BROWSER_PROFILE_SCENARIOS: Array[Dictionary] = [
+	{"name": "knight_capacity", "single": "Knight"},
+	{"name": "archer_capacity", "single": "Archer"},
+	{"name": "mage_capacity", "single": "Mage"},
+	{"name": "pea_capacity", "single": "PeaShooter"},
+	{"name": "barrel_capacity", "single": "Mimic"},
+	{"name": "mechanical_capacity", "single": "MechanicalDragon"},
+	{"name": "ice_golem_capacity", "single": "IceGolem"},
+	{"name": "necromancer_capacity", "single": "Necromancer"},
+	{"name": "horror_capacity", "single": "Horror"},
+	{"name": "wind_mage_capacity", "single": "WindMage"},
+	{"name": "demon_king_capacity", "single": "DemonKing"},
+	{"name": "fire_dragon_capacity", "single": "FireDragon"},
+	{
+		"name": "light_mixed",
+		"troops": {"Knight": 15, "Archer": 15, "PeaShooter": 3},
+	},
+	{
+		"name": "classic_mixed",
+		"troops": {"Knight": 13, "Archer": 12, "Mage": 5},
+	},
+	{
+		"name": "heavy_mixed",
+		"troops": {
+			"MechanicalDragon": 2,
+			"IceGolem": 1,
+			"FireDragon": 1,
+			"DemonKing": 3,
+		},
+	},
+	{
+		"name": "summoner_mixed",
+		"troops": {"Necromancer": 1, "WindMage": 1, "PeaShooter": 3},
+	},
+	{
+		"name": "evolution_mixed",
+		"troops": {"Horror": 2, "PeaShooter": 1},
+	},
+	{
+		"name": "knight_rage",
+		"single": "Knight",
+		"abilities": ["rage"],
+	},
+	{
+		"name": "classic_medkit",
+		"troops": {"Knight": 15, "Archer": 15, "Mage": 3},
+		"abilities": ["medkit"],
+	},
+	{
+		"name": "heavy_freeze_barrel",
+		"troops": {
+			"MechanicalDragon": 2,
+			"IceGolem": 1,
+			"FireDragon": 1,
+			"DemonKing": 3,
+		},
+		"abilities": ["freeze", "skeleton_barrel"],
+	},
+	{
+		"name": "heavy_freeze_only",
+		"troops": {
+			"MechanicalDragon": 2,
+			"IceGolem": 1,
+			"FireDragon": 1,
+			"DemonKing": 3,
+		},
+		"abilities": ["freeze"],
+	},
+	{
+		"name": "heavy_barrel_only",
+		"troops": {
+			"MechanicalDragon": 2,
+			"IceGolem": 1,
+			"FireDragon": 1,
+			"DemonKing": 3,
+		},
+		"abilities": ["skeleton_barrel"],
+	},
+]
 const TEST_SPEED_PRESETS: Array[float] = [0.5, 1.0, 2.0, 4.0]
 const TEST_SPEED_STEP: float = 0.25
 const TEST_SPEED_MIN: float = 0.25
@@ -95,6 +222,28 @@ const TEST_SHIP_ABILITY_LABELS: Dictionary = {
 const MODEL_SCALE_MIN: float = 0.10
 const MODEL_SCALE_MAX: float = 1.50
 const MODEL_SCALE_STEP: float = 0.01
+const WATER_LAB_SAMPLE_SECONDS: float = 6.0
+const WATER_LAB_SETTLE_SECONDS: float = 3.0
+const WATER_VARIANTS: Array[Dictionary] = [
+	{
+		"key": "quality",
+		"label": "Quality",
+		"material_path": "res://shaders/water_stable.tres",
+		"description": "Current production water: two wave maps and shore depth fade.",
+	},
+	{
+		"key": "balanced",
+		"label": "Balanced",
+		"material_path": "res://shaders/water_balanced.tres",
+		"description": "One wave map, analytic crossing waves and shore depth fade.",
+	},
+	{
+		"key": "performance",
+		"label": "Performance",
+		"material_path": "res://shaders/water_fast.tres",
+		"description": "Moving waves and foam without per-pixel scene-depth reconstruction.",
+	},
+]
 const DEMON_COLOR_TEST_VARIANTS: Array[Dictionary] = [
 	{"label": "Blue", "variant": "blue", "pos": Vector3(-1.6, 0.08, 2.25), "color": Color(0.18, 0.48, 1.0)},
 	{"label": "Purple", "variant": "purple", "pos": Vector3(0.0, 0.08, 2.25), "color": Color(0.58, 0.30, 1.0)},
@@ -174,6 +323,20 @@ func _ready() -> void:
 		call_deferred("run_mixed_swarm_fps_profile")
 	if OS.get_cmdline_user_args().has("--auto-troop-matrix-profile"):
 		call_deferred("run_troop_matrix_fps_profile")
+	if OS.get_cmdline_user_args().has("--auto-th6-browser-matrix-profile"):
+		call_deferred("run_th6_browser_matrix_profile")
+	if OS.get_cmdline_user_args().has("--auto-th6-bottleneck-profile"):
+		call_deferred("run_th6_bottleneck_profile")
+	if OS.get_cmdline_user_args().has("--auto-th6-defense-breakdown-profile"):
+		call_deferred("run_th6_defense_breakdown_profile")
+	if OS.get_cmdline_user_args().has("--auto-th6-idle-render-profile"):
+		call_deferred("run_th6_idle_render_profile")
+	if OS.get_cmdline_user_args().has("--auto-th6-building-render-profile"):
+		call_deferred("run_th6_building_render_profile")
+	if OS.get_cmdline_user_args().has("--auto-th6-hotspot-ab-profile"):
+		call_deferred("run_th6_hotspot_ab_profile")
+	if OS.get_cmdline_user_args().has("--auto-water-variant-profile"):
+		call_deferred("run_water_variant_profile")
 
 
 func _exit_tree() -> void:
@@ -181,6 +344,7 @@ func _exit_tree() -> void:
 
 
 func _process(delta: float) -> void:
+	_update_water_lab_fps(delta)
 	if not is_instance_valid(_test_ship_ability_hud) or not _test_ship_ability_hud.is_visible_in_tree():
 		return
 	_test_ship_ability_refresh_elapsed += delta
@@ -565,6 +729,8 @@ func _create_panel() -> void:
 	_status.add_theme_font_size_override("font_size", 16)
 	vbox.add_child(_status)
 
+	_add_water_lab_controls(vbox)
+
 	var max_label := Label.new()
 	max_label.text = "Max Village by Town Hall"
 	max_label.add_theme_font_size_override("font_size", 17)
@@ -610,6 +776,116 @@ func _create_panel() -> void:
 	hint.text = "Hotkeys: F1 panel, 1 build random village, 2 clear all, 3 toggle music, arrows speed."
 	hint.add_theme_font_size_override("font_size", 15)
 	vbox.add_child(hint)
+
+
+func _add_water_lab_controls(parent: VBoxContainer) -> void:
+	var separator := HSeparator.new()
+	parent.add_child(separator)
+
+	var heading := Label.new()
+	heading.text = "Water Lab"
+	heading.add_theme_font_size_override("font_size", 17)
+	parent.add_child(heading)
+
+	var row := HBoxContainer.new()
+	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_theme_constant_override("separation", 6)
+	parent.add_child(row)
+	for variant in WATER_VARIANTS:
+		var key := str(variant.get("key", "quality"))
+		var button := Button.new()
+		button.text = str(variant.get("label", key.capitalize()))
+		button.custom_minimum_size = Vector2(0, 38)
+		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		button.tooltip_text = str(variant.get("description", ""))
+		button.pressed.connect(
+			Callable(self, "_apply_water_variant").bind(key)
+		)
+		row.add_child(button)
+
+	_water_variant_label = Label.new()
+	_water_variant_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_water_variant_label.text = "Quality: current production water"
+	_water_variant_label.add_theme_font_size_override("font_size", 14)
+	parent.add_child(_water_variant_label)
+
+	_water_fps_label = Label.new()
+	_water_fps_label.text = "Live FPS: warming up"
+	_water_fps_label.add_theme_font_size_override("font_size", 14)
+	parent.add_child(_water_fps_label)
+
+	var note := Label.new()
+	note.text = "The production material is unchanged. These buttons affect TestMain only."
+	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	note.add_theme_font_size_override("font_size", 13)
+	parent.add_child(note)
+
+
+func _water_node() -> MeshInstance3D:
+	var scene := get_tree().current_scene
+	if scene == null:
+		return null
+	return scene.get_node_or_null("Water") as MeshInstance3D
+
+
+func _water_variant_definition(key: String) -> Dictionary:
+	for variant in WATER_VARIANTS:
+		if str(variant.get("key", "")) == key:
+			return variant
+	return WATER_VARIANTS[0]
+
+
+func _apply_water_variant(key: String) -> void:
+	var water := _water_node()
+	if not is_instance_valid(water):
+		_set_status("Water Lab: Water node is missing.")
+		return
+	var variant := _water_variant_definition(key)
+	var material_path := str(variant.get("material_path", ""))
+	var source_material := (
+		ResourceLoader.load(material_path, "Material") as Material
+		if not material_path.is_empty()
+		else null
+	)
+	if source_material == null:
+		_set_status("Water Lab: %s material is missing." % key)
+		return
+	water.material_override = source_material.duplicate(true)
+	_water_variant_key = str(variant.get("key", key))
+	_water_fps_elapsed = 0.0
+	_water_fps_min = INF
+	_water_fps_max = 0.0
+	if is_instance_valid(_water_variant_label):
+		_water_variant_label.text = "%s: %s" % [
+			str(variant.get("label", key.capitalize())),
+			str(variant.get("description", "")),
+		]
+	_set_status("Water Lab: %s selected." % str(variant.get("label", key)))
+	print(
+		"[WATER_LAB] selected key=",
+		_water_variant_key,
+		" material=",
+		source_material.resource_path
+	)
+
+
+func _update_water_lab_fps(delta: float) -> void:
+	if not is_instance_valid(_water_fps_label):
+		return
+	_water_fps_elapsed += delta
+	var fps := float(Engine.get_frames_per_second())
+	if fps > 0.0:
+		_water_fps_min = minf(_water_fps_min, fps)
+		_water_fps_max = maxf(_water_fps_max, fps)
+	if _water_fps_elapsed < 0.5:
+		return
+	_water_fps_elapsed = 0.0
+	var min_text := "--" if is_inf(_water_fps_min) else str(roundi(_water_fps_min))
+	_water_fps_label.text = "Live FPS: %d | observed %s-%d" % [
+		roundi(fps),
+		min_text,
+		roundi(_water_fps_max),
+	]
 
 
 func _button(text: String, callback: Callable) -> Button:
@@ -838,7 +1114,7 @@ func _refresh_test_ship_ability_hud() -> void:
 	if not is_instance_valid(_test_ship_ability_hud):
 		return
 	var bs: Node = _test_combat_building_system()
-	var ready := _test_attack_is_ready()
+	var attack_ready := _test_attack_is_ready()
 	var energy := 0
 	var max_energy := _ship_energy_for_level(_test_attack_ship_level)
 	if is_instance_valid(bs) and bs.get("_cannon") != null:
@@ -847,7 +1123,7 @@ func _refresh_test_ship_ability_hud() -> void:
 	if is_instance_valid(_test_ship_energy_label):
 		_test_ship_energy_label.text = "Energy: %d / %d" % [energy, max_energy]
 	if is_instance_valid(_test_ship_ability_hint):
-		if ready:
+		if attack_ready:
 			_test_ship_ability_hint.text = "Choose, then click target"
 		else:
 			_test_ship_ability_hint.text = "Start Attack"
@@ -861,7 +1137,12 @@ func _refresh_test_ship_ability_hud() -> void:
 		var active := bool(state.get("active", false))
 		var unlocked := bool(state.get("unlocked", false))
 		var used := bool(state.get("used", false))
-		var disabled := not ready or not unlocked or used or (not active and energy < cost)
+		var disabled := (
+			not attack_ready
+			or not unlocked
+			or used
+			or (not active and energy < cost)
+		)
 		button.disabled = disabled
 		button.text = "%s\n%d energy" % [
 			TEST_SHIP_ABILITY_LABELS.get(ability_key, ability_key),
@@ -889,7 +1170,7 @@ func _refresh_test_ship_ability_hud() -> void:
 			active,
 			unlocked,
 			used,
-			ready
+			attack_ready
 		)
 
 
@@ -899,9 +1180,9 @@ func _test_ship_ability_tooltip(
 	active: bool,
 	unlocked: bool,
 	used: bool,
-	ready: bool
+	attack_ready: bool
 ) -> String:
-	if not ready:
+	if not attack_ready:
 		return "Start a test attack and wait for the Main Ship."
 	if not unlocked:
 		return "Requires Main Ship level 6."
@@ -3110,9 +3391,9 @@ func _capture_main_ship_approach_frames() -> void:
 		await RenderingServer.frame_post_draw
 		var debug: Dictionary = controller.get_combat_motion_debug()
 		var phase := String(debug.get("phase", "unknown"))
-		var position: Vector3 = debug.get("position", controller.global_position)
+		var ship_position: Vector3 = debug.get("position", controller.global_position)
 		var bow_direction: Vector3 = debug.get("bow_direction", Vector3.ZERO)
-		var movement := position - previous_position
+		var movement := ship_position - previous_position
 		movement.y = 0.0
 		var alignment := 1.0
 		if movement.length_squared() > 0.000001 and bow_direction.length_squared() > 0.000001:
@@ -3129,13 +3410,13 @@ func _capture_main_ship_approach_frames() -> void:
 		print(
 			"[MAIN_SHIP_FRAME] index=", frame_index,
 			" phase=", phase,
-			" position=", position,
+			" position=", ship_position,
 			" bow=", bow_direction,
 			" movement=", movement,
 			" alignment=", snappedf(alignment, 0.0001),
 			" capture=", file_name
 		)
-		previous_position = position
+		previous_position = ship_position
 		frame_index += 1
 		if phase == "combat":
 			reached_combat = true
@@ -3555,7 +3836,10 @@ func build_working_village() -> void:
 	_set_status("Random working village with random levels built.")
 
 
-func build_max_village_for_town_hall(th_level: int) -> void:
+func build_max_village_for_town_hall(
+	th_level: int,
+	deterministic_seed: int = 0
+) -> void:
 	th_level = clampi(th_level, 1, _max_supported_town_hall_level())
 	_build_generation += 1
 	var generation := _build_generation
@@ -3565,7 +3849,10 @@ func build_max_village_for_town_hall(th_level: int) -> void:
 		return
 
 	var spawned_count: int = 0
-	randomize()
+	if deterministic_seed == 0:
+		randomize()
+	else:
+		seed(deterministic_seed)
 	for building_id in _max_village_build_order():
 		var bs := _building_system_for_building(building_id)
 		if not bs or not ("building_defs" in bs) or not bs.building_defs.has(building_id):
@@ -3923,6 +4210,26 @@ func _verify_test_ship_abilities() -> void:
 		get_tree().quit(1)
 		return
 	reset_test_ship_abilities(false)
+	rage._enter_rage_mode()
+	if not rage._rage_mode:
+		push_error("[TEST_SHIP_ABILITIES] rage targeting mode did not activate")
+		get_tree().quit(1)
+		return
+	var rage_click := InputEventMouseButton.new()
+	rage_click.button_index = MOUSE_BUTTON_LEFT
+	rage_click.position = camera.unproject_position(ground_world)
+	rage_click.pressed = true
+	bs._unhandled_input(rage_click)
+	if (
+		not rage._rage_used
+		or rage._rage_mode
+		or cannon._cannon_energy != expected_energy - rage.energy_cost()
+		or not is_instance_valid(rage._active_zone.get("root", null))
+	):
+		push_error("[TEST_SHIP_ABILITIES] rage browser-style ground click was not applied")
+		get_tree().quit(1)
+		return
+	reset_test_ship_abilities(false)
 	if not rage._drop_rage(target_position):
 		push_error("[TEST_SHIP_ABILITIES] rage field could not be placed")
 		get_tree().quit(1)
@@ -3932,17 +4239,25 @@ func _verify_test_ship_abilities() -> void:
 		push_error("[TEST_SHIP_ABILITIES] rage field visual is missing")
 		get_tree().quit(1)
 		return
+	if rage_root.global_position.y < bs.grid_y + 0.07:
+		push_error("[TEST_SHIP_ABILITIES] rage field is below the web-safe ground offset")
+		get_tree().quit(1)
+		return
+	var rage_disk_found := false
 	for rage_child in rage_root.get_children():
 		if not rage_child is MeshInstance3D:
 			continue
 		var rage_mesh_instance := rage_child as MeshInstance3D
-		if (
-			rage_mesh_instance.mesh == null
-			or rage_mesh_instance.mesh.get_aabb().size.y > 0.0001
-		):
-			push_error("[TEST_SHIP_ABILITIES] rage field is not flat")
+		if rage_mesh_instance.mesh == null:
+			push_error("[TEST_SHIP_ABILITIES] rage field mesh is missing")
 			get_tree().quit(1)
 			return
+		if rage_mesh_instance.mesh is CylinderMesh:
+			rage_disk_found = true
+			if rage_mesh_instance.mesh.get_aabb().size.y > 0.01:
+				push_error("[TEST_SHIP_ABILITIES] rage field disk is not flat")
+				get_tree().quit(1)
+				return
 		var rage_material := (
 			rage_mesh_instance.material_override
 			as StandardMaterial3D
@@ -3951,6 +4266,10 @@ func _verify_test_ship_abilities() -> void:
 			push_error("[TEST_SHIP_ABILITIES] rage field ignores scene depth")
 			get_tree().quit(1)
 			return
+	if not rage_disk_found:
+		push_error("[TEST_SHIP_ABILITIES] rage field lacks a web-compatible disk")
+		get_tree().quit(1)
+		return
 	reset_test_ship_abilities(false)
 	if not barrel.fire_at_building(target):
 		push_error("[TEST_SHIP_ABILITIES] skeleton barrel could not be launched")
@@ -4310,7 +4629,7 @@ func run_knight_swarm_fps_profile() -> void:
 	while not attack._army_entries.is_empty():
 		attack.select_troop_group(0)
 		var column: int = deployed_count % 9
-		var row: int = deployed_count / 9
+		var row: int = floori(float(deployed_count) / 9.0)
 		var offset: Vector3 = (
 			(attack._get_lateral_dir() as Vector3) * (float(column) - 4.0) * 0.055
 			+ (attack._get_sail_dir() as Vector3) * float(row) * 0.035
@@ -4414,6 +4733,7 @@ func run_knight_swarm_fps_profile() -> void:
 func _set_profile_defense_physics(enabled: bool) -> int:
 	var defense_scripts := {
 		"res://scripts/turret.gd": true,
+		"res://scripts/cannon.gd": true,
 		"res://scripts/tower_archer.gd": true,
 		"res://scripts/tower_mortar.gd": true,
 		"res://scripts/tower_mage.gd": true,
@@ -4427,6 +4747,37 @@ func _set_profile_defense_physics(enabled: bool) -> int:
 		if script == null or not defense_scripts.has(script.resource_path):
 			continue
 		node.set_physics_process(enabled)
+		changed_count += 1
+	return changed_count
+
+
+func _set_profile_guard_physics(enabled: bool) -> int:
+	var changed_count := 0
+	for guard in get_tree().get_nodes_in_group("skeleton_guards"):
+		if not is_instance_valid(guard):
+			continue
+		guard.set_physics_process(enabled)
+		changed_count += 1
+	return changed_count
+
+
+func _set_profile_defense_only(script_path: String) -> int:
+	var defense_scripts := {
+		"res://scripts/turret.gd": true,
+		"res://scripts/cannon.gd": true,
+		"res://scripts/tower_archer.gd": true,
+		"res://scripts/tower_mortar.gd": true,
+		"res://scripts/tower_mage.gd": true,
+	}
+	var changed_count := 0
+	var scene := get_tree().current_scene
+	if scene == null:
+		return changed_count
+	for node in scene.find_children("*", "", true, false):
+		var script := node.get_script() as Script
+		if script == null or not defense_scripts.has(script.resource_path):
+			continue
+		node.set_physics_process(script.resource_path == script_path)
 		changed_count += 1
 	return changed_count
 
@@ -4778,6 +5129,1076 @@ func run_troop_matrix_fps_profile() -> void:
 		get_tree().quit()
 
 
+func run_th6_browser_matrix_profile() -> void:
+	if _fps_profile_active:
+		_set_status("FPS profile is already running.")
+		return
+	var attack := get_node_or_null("../AttackSystem")
+	if not attack or not attack.has_method("_spawn_troops_at_pos"):
+		push_error("[TH6_BROWSER_MATRIX] AttackSystem is unavailable")
+		return
+
+	_fps_profile_active = true
+	_prepare_automated_profile_ui()
+	Engine.time_scale = 1.0
+	var scenarios: Array[Dictionary] = []
+	var requested_scenario := ""
+	var disable_defense_physics := false
+	var defense_only_script := ""
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--th6-profile-scenario="):
+			requested_scenario = arg.trim_prefix("--th6-profile-scenario=")
+		elif arg == "--th6-profile-no-defense":
+			disable_defense_physics = true
+		elif arg.begins_with("--th6-profile-defense-only="):
+			defense_only_script = (
+				"res://scripts/%s.gd"
+				% arg.trim_prefix("--th6-profile-defense-only=")
+			)
+	for raw_scenario in TH6_BROWSER_PROFILE_SCENARIOS:
+		var scenario := raw_scenario as Dictionary
+		if (
+			requested_scenario.is_empty()
+			or str(scenario.get("name", "")) == requested_scenario
+		):
+			scenarios.append(scenario)
+	if scenarios.is_empty():
+		push_error(
+			"[TH6_BROWSER_MATRIX] unknown scenario=%s"
+			% requested_scenario
+		)
+		_fps_profile_active = false
+		return
+	print(
+		"[TH6_BROWSER_MATRIX] start scenarios=",
+		scenarios.size(),
+		" capacity=",
+		TH6_BROWSER_PROFILE_CAPACITY
+	)
+	var warmup_troops: Array = []
+	for warmup_scenario in scenarios:
+		for troop_name in _th6_profile_troops(warmup_scenario):
+			warmup_troops.append(troop_name)
+	var warmup_script: Script = load("res://scripts/warmup.gd")
+	if warmup_script != null:
+		if warmup_script.has_method("start_combat_warmup"):
+			# Automated profiles have no user-idle window. Run the same hidden
+			# render work in blocking mode so the benchmark cannot wait forever
+			# for interactive-idle eligibility.
+			warmup_script.start_combat_warmup(self, warmup_troops)
+	await _await_profile_background_warmup(70.0)
+	await build_max_village_for_town_hall(
+		6,
+		TH6_BROWSER_PROFILE_LAYOUT_SEED
+	)
+	await get_tree().create_timer(1.0).timeout
+	_prepare_profile_buildings()
+	_prepare_test_battle([])
+	_dump_render_inventory("th6_browser_idle")
+	var idle_metrics := await _sample_fps_profile("th6_browser_idle", 4.0)
+	var results: Array[Dictionary] = []
+
+	for scenario_index in range(scenarios.size()):
+		var scenario: Dictionary = scenarios[scenario_index]
+		var scenario_name := str(scenario.get("name", "scenario_%02d" % (
+			scenario_index + 1
+		)))
+		print(
+			"[TH6_BROWSER_MATRIX] begin index=",
+			scenario_index + 1,
+			" name=",
+			scenario_name
+		)
+		attack.cleanup_combat_nodes()
+		await get_tree().process_frame
+		await get_tree().process_frame
+		_prepare_profile_buildings()
+		_prepare_test_battle([])
+		if disable_defense_physics:
+			_set_profile_defense_physics(false)
+		elif not defense_only_script.is_empty():
+			_set_profile_defense_only(defense_only_script)
+		_test_attack_ship_level = 6
+		reset_test_ship_abilities(false)
+
+		var troop_names := _th6_profile_troops(scenario)
+		var occupied_slots := _th6_profile_occupied_slots(troop_names)
+		if occupied_slots > TH6_BROWSER_PROFILE_CAPACITY:
+			push_error(
+				"[TH6_BROWSER_MATRIX] invalid scenario=%s occupied=%d"
+				% [scenario_name, occupied_slots]
+			)
+			continue
+		var spawn_center := Vector3(-1.75, 0.0, 2.65)
+		var old_spawn_delay: float = float(attack.troop_spawn_delay)
+		attack.troop_spawn_delay = 0.005
+		_spawn_th6_profile_formation(attack, troop_names, spawn_center)
+		await get_tree().create_timer(
+			maxf(0.65, float(troop_names.size()) * 0.006)
+		).timeout
+		attack.troop_spawn_delay = old_spawn_delay
+		for raw_troop in get_tree().get_nodes_in_group("troops"):
+			var troop := raw_troop as Node3D
+			if not is_instance_valid(troop):
+				continue
+			troop.set("max_hp", 50000000)
+			troop.set("hp", 50000000)
+		var ability_results := _apply_th6_profile_abilities(
+			scenario.get("abilities", []),
+			spawn_center
+		)
+		await get_tree().create_timer(0.35).timeout
+		var metrics := await _sample_fps_profile(
+			"th6_%02d_%s" % [scenario_index + 1, scenario_name],
+			_profile_sample_duration(TH6_BROWSER_PROFILE_SAMPLE_SEC)
+		)
+		metrics["index"] = scenario_index + 1
+		metrics["name"] = scenario_name
+		metrics["requested_troops"] = troop_names.size()
+		metrics["occupied_slots"] = occupied_slots
+		metrics["active_troops"] = get_tree().get_nodes_in_group(
+			"troops"
+		).size()
+		metrics["active_guards"] = get_tree().get_nodes_in_group(
+			"skeleton_guards"
+		).size()
+		metrics["active_particles"] = _count_profile_particles()
+		metrics["abilities"] = ability_results
+		results.append(metrics)
+		print(
+			"[TH6_BROWSER_MATRIX] capture index=",
+			scenario_index + 1,
+			" name=",
+			scenario_name
+		)
+		# Browser screenshots stall the WebGL render thread. Keep that work
+		# outside the measured sample and give the runner time to finish it
+		# before the next scenario replaces the combat state.
+		await get_tree().create_timer(1.5).timeout
+		print(
+			"[TH6_BROWSER_MATRIX] end index=",
+			scenario_index + 1,
+			" name=",
+			scenario_name,
+			" median_fps=",
+			float(metrics.get("median_fps", 0.0)),
+			" p95_frame_ms=",
+			float(metrics.get("p95_frame_ms", 0.0)),
+			" physics_ms=",
+			float(metrics.get("avg_physics_ms", 0.0)),
+			" draw_calls=",
+			float(metrics.get("avg_draw_calls", 0.0)),
+			" active_troops=",
+			int(metrics.get("active_troops", 0))
+		)
+
+	attack.cleanup_combat_nodes()
+	if disable_defense_physics or not defense_only_script.is_empty():
+		_set_profile_defense_physics(true)
+	reset_test_ship_abilities(false)
+	_fps_profile_active = false
+	var report := {
+		"capacity": TH6_BROWSER_PROFILE_CAPACITY,
+		"layout_seed": TH6_BROWSER_PROFILE_LAYOUT_SEED,
+		"idle": idle_metrics,
+		"scenarios": results,
+	}
+	print("[TH6_BROWSER_MATRIX] RESULT ", JSON.stringify(report))
+
+
+func run_th6_bottleneck_profile() -> void:
+	if _fps_profile_active:
+		_set_status("FPS profile is already running.")
+		return
+	var attack := get_node_or_null("../AttackSystem")
+	if not attack or not attack.has_method("_spawn_troops_at_pos"):
+		push_error("[TH6_BOTTLENECK] AttackSystem is unavailable")
+		return
+
+	_fps_profile_active = true
+	_prepare_automated_profile_ui()
+	Engine.time_scale = 1.0
+	print("[TH6_BOTTLENECK] start")
+	await _await_profile_background_warmup(35.0)
+	await build_max_village_for_town_hall(
+		6,
+		TH6_BROWSER_PROFILE_LAYOUT_SEED
+	)
+	await get_tree().create_timer(1.0).timeout
+	_prepare_profile_buildings()
+	_prepare_test_battle([])
+	var requested_mode := ""
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--th6-bottleneck-mode="):
+			requested_mode = arg.trim_prefix("--th6-bottleneck-mode=")
+	var idle_results: Dictionary = {}
+	if requested_mode.is_empty():
+		idle_results = await _sample_th6_idle_render_breakdown()
+	var results: Array[Dictionary] = []
+
+	for raw_mode in TH6_BOTTLENECK_PROFILE_MODES:
+		var mode: Dictionary = raw_mode
+		var mode_name := str(mode.get("name", "unknown"))
+		if not requested_mode.is_empty() and mode_name != requested_mode:
+			continue
+		print("[TH6_BOTTLENECK] begin mode=", mode_name)
+		attack.cleanup_combat_nodes()
+		await get_tree().process_frame
+		await get_tree().process_frame
+		_prepare_profile_buildings()
+		_prepare_test_battle([])
+		_set_profile_defense_physics(true)
+		BaseTroop.profile_dense_separation_interval = int(
+			mode.get("separation_interval", 0)
+		)
+		BaseTroop.profile_dense_slot_interval_sec = float(
+			mode.get("slot_interval_sec", 0.0)
+		)
+
+		var spawn_center := Vector3(-1.75, 0.0, 2.65)
+		var old_spawn_delay: float = float(attack.troop_spawn_delay)
+		attack.troop_spawn_delay = 0.005
+		var troop_names: Array[String] = []
+		for _troop_index in KNIGHT_SWARM_PROFILE_COUNT:
+			troop_names.append("Knight")
+		attack._spawn_troops_at_pos(troop_names, {}, spawn_center)
+		await get_tree().create_timer(0.85).timeout
+		attack.troop_spawn_delay = old_spawn_delay
+
+		for raw_troop in get_tree().get_nodes_in_group("troops"):
+			var troop := raw_troop as Node3D
+			if not is_instance_valid(troop):
+				continue
+			troop.set("max_hp", 50000000)
+			troop.set("hp", 50000000)
+			if bool(mode.get("no_separation", false)):
+				troop.set("can_pass_through_friendly_units", true)
+			if bool(mode.get("no_slots", false)):
+				troop.set("_slot_eval_timer", -1000000.0)
+			if bool(mode.get("no_animation", false)):
+				troop.set("_animation_budget_active", false)
+			if bool(mode.get("no_physics", false)):
+				troop.set_physics_process(false)
+			if bool(mode.get("no_visuals", false)):
+				troop.visible = false
+		var crowd_batch := get_tree().current_scene.get_node_or_null(
+			"TroopCrowdBatch"
+		) as Node3D
+		if is_instance_valid(crowd_batch):
+			crowd_batch.visible = not bool(
+				mode.get("no_visuals", false)
+			)
+		if bool(mode.get("no_defense_physics", false)):
+			_set_profile_defense_physics(false)
+		if bool(mode.get("no_guard_physics", false)):
+			_set_profile_guard_physics(false)
+
+		await get_tree().create_timer(0.35).timeout
+		var metrics := await _sample_fps_profile(
+			"th6_bottleneck_%s" % mode_name,
+			_profile_sample_duration(
+				TH6_BOTTLENECK_PROFILE_SAMPLE_SEC
+			)
+		)
+		metrics["name"] = mode_name
+		metrics["active_troops"] = get_tree().get_nodes_in_group(
+			"troops"
+		).size()
+		results.append(metrics)
+		print(
+			"[TH6_BOTTLENECK] end mode=",
+			mode_name,
+			" median_fps=",
+			float(metrics.get("median_fps", 0.0)),
+			" process_ms=",
+			float(metrics.get("avg_process_ms", 0.0)),
+			" physics_ms=",
+			float(metrics.get("avg_physics_ms", 0.0)),
+			" draw_calls=",
+			float(metrics.get("avg_draw_calls", 0.0))
+		)
+
+	_set_profile_defense_physics(true)
+	_set_profile_guard_physics(true)
+	BaseTroop.profile_dense_separation_interval = 0
+	BaseTroop.profile_dense_slot_interval_sec = 0.0
+	if is_instance_valid(
+		get_tree().current_scene.get_node_or_null("TroopCrowdBatch")
+	):
+		get_tree().current_scene.get_node("TroopCrowdBatch").visible = true
+	attack.cleanup_combat_nodes()
+	_fps_profile_active = false
+	print(
+		"[TH6_BOTTLENECK] RESULT ",
+		JSON.stringify({
+			"idle": idle_results,
+			"modes": results,
+		})
+	)
+
+
+func run_th6_defense_breakdown_profile() -> void:
+	if _fps_profile_active:
+		return
+	var attack := get_node_or_null("../AttackSystem")
+	if not attack or not attack.has_method("_spawn_troops_at_pos"):
+		push_error("[TH6_DEFENSE_BREAKDOWN] AttackSystem is unavailable")
+		return
+
+	_fps_profile_active = true
+	_prepare_automated_profile_ui()
+	Engine.time_scale = 1.0
+	print("[TH6_DEFENSE_BREAKDOWN] start")
+	await _await_profile_background_warmup(35.0)
+	await build_max_village_for_town_hall(6, TH6_BROWSER_PROFILE_LAYOUT_SEED)
+	await get_tree().create_timer(1.0).timeout
+	_prepare_profile_buildings()
+	_prepare_test_battle([])
+
+	var modes: Array[Dictionary] = [
+		{"name": "all", "script": ""},
+		{"name": "none", "script": "none"},
+		{"name": "turret", "script": "res://scripts/turret.gd"},
+		{"name": "archer", "script": "res://scripts/tower_archer.gd"},
+		{"name": "mortar", "script": "res://scripts/tower_mortar.gd"},
+		{"name": "mage", "script": "res://scripts/tower_mage.gd"},
+		{"name": "cannon", "script": "res://scripts/cannon.gd"},
+	]
+	var results: Array[Dictionary] = []
+	for raw_mode in modes:
+		var mode := raw_mode as Dictionary
+		var mode_name := str(mode.get("name", "unknown"))
+		var script_path := str(mode.get("script", ""))
+		print("[TH6_DEFENSE_BREAKDOWN] begin mode=", mode_name)
+		attack.cleanup_combat_nodes()
+		await get_tree().process_frame
+		await get_tree().process_frame
+		_prepare_profile_buildings()
+		_prepare_test_battle([])
+		if script_path == "none":
+			_set_profile_defense_physics(false)
+		elif script_path.is_empty():
+			_set_profile_defense_physics(true)
+		else:
+			_set_profile_defense_only(script_path)
+
+		var troop_names: Array[String] = []
+		for _troop_index in KNIGHT_SWARM_PROFILE_COUNT:
+			troop_names.append("Knight")
+		var old_spawn_delay: float = float(attack.troop_spawn_delay)
+		attack.troop_spawn_delay = 0.005
+		attack._spawn_troops_at_pos(
+			troop_names,
+			{},
+			Vector3(-1.75, 0.0, 2.65)
+		)
+		await get_tree().create_timer(0.85).timeout
+		attack.troop_spawn_delay = old_spawn_delay
+		for raw_troop in get_tree().get_nodes_in_group("troops"):
+			var troop := raw_troop as Node3D
+			if not is_instance_valid(troop):
+				continue
+			troop.set("max_hp", 50000000)
+			troop.set("hp", 50000000)
+		await get_tree().create_timer(0.35).timeout
+		var metrics := await _sample_fps_profile(
+			"th6_defense_%s" % mode_name,
+			TH6_BOTTLENECK_PROFILE_SAMPLE_SEC
+		)
+		metrics["name"] = mode_name
+		results.append(metrics)
+		print(
+			"[TH6_DEFENSE_BREAKDOWN] end mode=",
+			mode_name,
+			" median_fps=",
+			float(metrics.get("median_fps", 0.0)),
+			" process_ms=",
+			float(metrics.get("avg_process_ms", 0.0)),
+			" physics_ms=",
+			float(metrics.get("avg_physics_ms", 0.0))
+		)
+
+	attack.cleanup_combat_nodes()
+	_set_profile_defense_physics(true)
+	_fps_profile_active = false
+	print("[TH6_DEFENSE_BREAKDOWN] RESULT ", JSON.stringify({"modes": results}))
+
+
+func run_th6_idle_render_profile() -> void:
+	if _fps_profile_active:
+		_set_status("FPS profile is already running.")
+		return
+	_fps_profile_active = true
+	_prepare_automated_profile_ui()
+	Engine.time_scale = 1.0
+	print("[TH6_IDLE_RENDER] start")
+	await _await_profile_background_warmup(35.0)
+	await build_max_village_for_town_hall(
+		6,
+		TH6_BROWSER_PROFILE_LAYOUT_SEED
+	)
+	await get_tree().create_timer(1.0).timeout
+	_prepare_profile_buildings()
+	_prepare_test_battle([])
+	var requested_mode := ""
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--th6-idle-mode="):
+			requested_mode = arg.trim_prefix("--th6-idle-mode=")
+			break
+	var idle_results: Dictionary
+	if requested_mode.is_empty():
+		idle_results = await _sample_th6_idle_render_breakdown()
+	else:
+		idle_results[requested_mode] = await _sample_th6_idle_render_mode(
+			requested_mode,
+			8.0
+		)
+	_fps_profile_active = false
+	print(
+		"[TH6_IDLE_RENDER] RESULT ",
+		JSON.stringify({"idle": idle_results})
+	)
+
+
+func run_water_variant_profile() -> void:
+	if _fps_profile_active:
+		_set_status("FPS profile is already running.")
+		return
+	_fps_profile_active = true
+	_prepare_automated_profile_ui()
+	Engine.time_scale = 1.0
+	print("[WATER_VARIANT] start")
+	await _await_profile_background_warmup(35.0)
+	await build_max_village_for_town_hall(
+		6,
+		TH6_BROWSER_PROFILE_LAYOUT_SEED
+	)
+	await get_tree().create_timer(1.0).timeout
+	_prepare_profile_buildings()
+	_prepare_test_battle([])
+
+	var results: Array[Dictionary] = []
+	for variant_index in range(WATER_VARIANTS.size()):
+		var variant := WATER_VARIANTS[variant_index]
+		var key := str(variant.get("key", "quality"))
+		_apply_water_variant(key)
+		await get_tree().create_timer(WATER_LAB_SETTLE_SECONDS).timeout
+		print(
+			"[WATER_VARIANT] capture index=",
+			variant_index + 1,
+			" name=",
+			key
+		)
+		var metrics := await _sample_fps_profile(
+			"water_%s" % key,
+			WATER_LAB_SAMPLE_SECONDS
+		)
+		metrics["key"] = key
+		metrics["label"] = str(variant.get("label", key.capitalize()))
+		metrics["description"] = str(variant.get("description", ""))
+		results.append(metrics)
+
+	_apply_water_variant("quality")
+	_fps_profile_active = false
+	print(
+		"[WATER_VARIANT] RESULT ",
+		JSON.stringify({"variants": results})
+	)
+
+
+func run_th6_building_render_profile() -> void:
+	if _fps_profile_active:
+		_set_status("FPS profile is already running.")
+		return
+	_fps_profile_active = true
+	_prepare_automated_profile_ui()
+	Engine.time_scale = 1.0
+	print("[TH6_BUILDING_RENDER] start")
+	await _await_profile_background_warmup(35.0)
+	await build_max_village_for_town_hall(
+		6,
+		TH6_BROWSER_PROFILE_LAYOUT_SEED
+	)
+	await get_tree().create_timer(1.0).timeout
+	_prepare_profile_buildings()
+	await get_tree().create_timer(1.0).timeout
+
+	var grouped_roots: Dictionary = {}
+	for raw_bs in get_tree().get_nodes_in_group("building_systems"):
+		if not ("placed_buildings" in raw_bs):
+			continue
+		for building: Dictionary in raw_bs.placed_buildings:
+			var building_node := building.get("node", null) as Node3D
+			if not is_instance_valid(building_node):
+				continue
+			var building_id := str(building.get("id", "unknown"))
+			var roots: Array = grouped_roots.get(building_id, [])
+			roots.append(building_node)
+			grouped_roots[building_id] = roots
+
+	var cold_baseline := await _sample_fps_profile(
+		"th6_building_all_cold",
+		TH6_BOTTLENECK_PROFILE_SAMPLE_SEC
+	)
+	await get_tree().create_timer(8.0).timeout
+	var warm_baseline := await _sample_fps_profile(
+		"th6_building_all_warm",
+		TH6_BOTTLENECK_PROFILE_SAMPLE_SEC
+	)
+	var render_summaries: Dictionary = {}
+	for raw_building_id in grouped_roots.keys():
+		var building_id := str(raw_building_id)
+		var roots := grouped_roots.get(building_id, []) as Array
+		render_summaries[building_id] = _building_render_submission_summary(roots)
+	var results: Array[Dictionary] = []
+	var building_ids := grouped_roots.keys()
+	building_ids.sort()
+	for raw_building_id in building_ids:
+		var building_id := str(raw_building_id)
+		var roots := grouped_roots.get(building_id, []) as Array
+		for raw_root in roots:
+			var root := raw_root as Node3D
+			if is_instance_valid(root):
+				root.visible = false
+		await get_tree().create_timer(1.0).timeout
+		var metrics := await _sample_fps_profile(
+			"th6_building_without_%s" % building_id,
+			TH6_BOTTLENECK_PROFILE_SAMPLE_SEC
+		)
+		metrics["building_id"] = building_id
+		metrics["instances"] = roots.size()
+		results.append(metrics)
+		for raw_root in roots:
+			var root := raw_root as Node3D
+			if is_instance_valid(root):
+				root.visible = true
+		await get_tree().create_timer(1.0).timeout
+
+	var final_baseline := await _sample_fps_profile(
+		"th6_building_all_final",
+		TH6_BOTTLENECK_PROFILE_SAMPLE_SEC
+	)
+	_fps_profile_active = false
+	print(
+		"[TH6_BUILDING_RENDER] RESULT ",
+		JSON.stringify({
+			"cold_baseline": cold_baseline,
+			"warm_baseline": warm_baseline,
+			"final_baseline": final_baseline,
+			"building_types": results,
+			"render_summaries": render_summaries,
+		})
+	)
+
+
+func _building_render_submission_summary(roots: Array) -> Dictionary:
+	var summary := {
+		"instances": roots.size(),
+		"visible_meshes": 0,
+		"mesh_surfaces": 0,
+		"skinned_meshes": 0,
+		"transparent_surfaces": 0,
+		"multimeshes": 0,
+		"particles": 0,
+		"animation_players": 0,
+		"active_animation_players": 0,
+		"mesh_names": {},
+		"optimization_reasons": {},
+	}
+	for raw_root in roots:
+		var root := raw_root as Node3D
+		if not is_instance_valid(root):
+			continue
+		if root.has_meta("web_shark_opt_reason"):
+			var reason := str(root.get_meta("web_shark_opt_reason"))
+			var reasons := summary.optimization_reasons as Dictionary
+			reasons[reason] = int(reasons.get(reason, 0)) + 1
+		for raw_mesh in root.find_children("*", "MeshInstance3D", true, false):
+			var mesh_instance := raw_mesh as MeshInstance3D
+			if (
+				mesh_instance == null
+				or not mesh_instance.is_visible_in_tree()
+				or mesh_instance.mesh == null
+			):
+				continue
+			summary.visible_meshes = int(summary.visible_meshes) + 1
+			var surface_count := mesh_instance.mesh.get_surface_count()
+			summary.mesh_surfaces = int(summary.mesh_surfaces) + surface_count
+			if mesh_instance.skin != null or not mesh_instance.skeleton.is_empty():
+				summary.skinned_meshes = int(summary.skinned_meshes) + 1
+			var mesh_key := str(mesh_instance.name)
+			var mesh_names := summary.mesh_names as Dictionary
+			mesh_names[mesh_key] = int(mesh_names.get(mesh_key, 0)) + 1
+			for surface_index in range(surface_count):
+				var material := mesh_instance.get_active_material(surface_index)
+				if material is BaseMaterial3D and (
+					(material as BaseMaterial3D).transparency
+					!= BaseMaterial3D.TRANSPARENCY_DISABLED
+				):
+					summary.transparent_surfaces = (
+						int(summary.transparent_surfaces) + 1
+					)
+		for raw_multimesh in root.find_children(
+			"*",
+			"MultiMeshInstance3D",
+			true,
+			false
+		):
+			var multimesh_instance := raw_multimesh as MultiMeshInstance3D
+			if (
+				multimesh_instance != null
+				and multimesh_instance.is_visible_in_tree()
+			):
+				summary.multimeshes = int(summary.multimeshes) + 1
+		for raw_particles in root.find_children(
+			"*",
+			"GPUParticles3D",
+			true,
+			false
+		):
+			var particles := raw_particles as GPUParticles3D
+			if particles != null and particles.is_visible_in_tree():
+				summary.particles = int(summary.particles) + 1
+		for raw_player in root.find_children(
+			"*",
+			"AnimationPlayer",
+			true,
+			false
+		):
+			var player := raw_player as AnimationPlayer
+			if player == null:
+				continue
+			summary.animation_players = int(summary.animation_players) + 1
+			if player.is_playing():
+				summary.active_animation_players = (
+					int(summary.active_animation_players) + 1
+				)
+	return summary
+
+
+func run_th6_hotspot_ab_profile() -> void:
+	if _fps_profile_active:
+		_set_status("FPS profile is already running.")
+		return
+	_fps_profile_active = true
+	_prepare_automated_profile_ui()
+	Engine.time_scale = 1.0
+	print("[TH6_HOTSPOT_AB] start")
+	await _await_profile_background_warmup(35.0)
+	await build_max_village_for_town_hall(
+		6,
+		TH6_BROWSER_PROFILE_LAYOUT_SEED
+	)
+	await get_tree().create_timer(10.0).timeout
+	_prepare_profile_buildings()
+	await get_tree().create_timer(2.0).timeout
+
+	var grouped_roots: Dictionary = {}
+	for raw_bs in get_tree().get_nodes_in_group("building_systems"):
+		if not ("placed_buildings" in raw_bs):
+			continue
+		for building: Dictionary in raw_bs.placed_buildings:
+			var building_node := building.get("node", null) as Node3D
+			if not is_instance_valid(building_node):
+				continue
+			var building_id := str(building.get("id", "unknown"))
+			var roots: Array = grouped_roots.get(building_id, [])
+			roots.append(building_node)
+			grouped_roots[building_id] = roots
+
+	var tests: Array[Dictionary] = [
+		{"building_id": "archer_tower", "condition": "meshes_hidden"},
+		{"building_id": "archer_tower", "condition": "animations_paused"},
+		{"building_id": "archer_tower", "condition": "processing_disabled"},
+		{"building_id": "shark_trap", "condition": "meshes_hidden"},
+		{"building_id": "shark_trap", "condition": "animations_paused"},
+		{"building_id": "shark_trap", "condition": "processing_disabled"},
+	]
+	var results: Array[Dictionary] = []
+	for test: Dictionary in tests:
+		var building_id := str(test.building_id)
+		var condition := str(test.condition)
+		var roots := grouped_roots.get(building_id, []) as Array
+		var before := await _sample_fps_profile(
+			"%s_%s_before" % [building_id, condition],
+			TH6_BOTTLENECK_PROFILE_SAMPLE_SEC
+		)
+		var restore_state := _apply_hotspot_profile_condition(
+			roots,
+			condition
+		)
+		await get_tree().create_timer(0.5).timeout
+		var active := await _sample_fps_profile(
+			"%s_%s_active" % [building_id, condition],
+			TH6_BOTTLENECK_PROFILE_SAMPLE_SEC
+		)
+		_restore_hotspot_profile_condition(restore_state)
+		await get_tree().create_timer(0.5).timeout
+		var after := await _sample_fps_profile(
+			"%s_%s_after" % [building_id, condition],
+			TH6_BOTTLENECK_PROFILE_SAMPLE_SEC
+		)
+		results.append({
+			"building_id": building_id,
+			"condition": condition,
+			"instances": roots.size(),
+			"before": before,
+			"active": active,
+			"after": after,
+		})
+
+	_fps_profile_active = false
+	print(
+		"[TH6_HOTSPOT_AB] RESULT ",
+		JSON.stringify({"tests": results})
+	)
+
+
+func _apply_hotspot_profile_condition(
+	roots: Array,
+	condition: String
+) -> Array[Dictionary]:
+	var restore_state: Array[Dictionary] = []
+	for raw_root in roots:
+		var root := raw_root as Node3D
+		if not is_instance_valid(root):
+			continue
+		if condition == "processing_disabled":
+			restore_state.append({
+				"kind": "process_mode",
+				"node": root,
+				"value": root.process_mode,
+			})
+			root.process_mode = Node.PROCESS_MODE_DISABLED
+			continue
+		if condition == "meshes_hidden":
+			for raw_mesh in root.find_children(
+				"*",
+				"MeshInstance3D",
+				true,
+				false
+			):
+				var mesh_instance := raw_mesh as MeshInstance3D
+				if mesh_instance == null:
+					continue
+				restore_state.append({
+					"kind": "visible",
+					"node": mesh_instance,
+					"value": mesh_instance.visible,
+				})
+				mesh_instance.visible = false
+			continue
+		if condition == "animations_paused":
+			for raw_player in root.find_children(
+				"*",
+				"AnimationPlayer",
+				true,
+				false
+			):
+				var player := raw_player as AnimationPlayer
+				if player == null:
+					continue
+				restore_state.append({
+					"kind": "speed_scale",
+					"node": player,
+					"value": player.speed_scale,
+				})
+				player.speed_scale = 0.0
+	return restore_state
+
+
+func _restore_hotspot_profile_condition(
+	restore_state: Array[Dictionary]
+) -> void:
+	for entry: Dictionary in restore_state:
+		var node := entry.get("node", null) as Node
+		if not is_instance_valid(node):
+			continue
+		match str(entry.get("kind", "")):
+			"process_mode":
+				node.process_mode = int(entry.get(
+					"value",
+					Node.PROCESS_MODE_INHERIT
+				)) as Node.ProcessMode
+			"visible":
+				(node as VisualInstance3D).visible = bool(
+					entry.get("value", true)
+				)
+			"speed_scale":
+				(node as AnimationPlayer).speed_scale = float(
+					entry.get("value", 1.0)
+				)
+
+
+func _sample_th6_idle_render_breakdown() -> Dictionary:
+	var scene := get_tree().current_scene
+	if scene == null:
+		return {}
+	var result := {
+		"default": await _sample_fps_profile(
+			"th6_bottleneck_idle_default",
+			TH6_BOTTLENECK_PROFILE_SAMPLE_SEC
+		),
+	}
+	var building_roots: Array[Node3D] = []
+	for raw_bs in get_tree().get_nodes_in_group("building_systems"):
+		for building in raw_bs.get("placed_buildings"):
+			var building_node := building.get("node", null) as Node3D
+			if is_instance_valid(building_node):
+				building_roots.append(building_node)
+	for building_node in building_roots:
+		building_node.visible = false
+	await get_tree().process_frame
+	result["without_buildings"] = await _sample_fps_profile(
+		"th6_bottleneck_idle_without_buildings",
+		TH6_BOTTLENECK_PROFILE_SAMPLE_SEC
+	)
+	for building_node in building_roots:
+		if is_instance_valid(building_node):
+			building_node.visible = true
+
+	var island_visual := scene.get_node_or_null("Island/Visual") as Node3D
+	if is_instance_valid(island_visual):
+		island_visual.visible = false
+	await get_tree().process_frame
+	result["without_island"] = await _sample_fps_profile(
+		"th6_bottleneck_idle_without_island",
+		TH6_BOTTLENECK_PROFILE_SAMPLE_SEC
+	)
+	if is_instance_valid(island_visual):
+		island_visual.visible = true
+
+	var water := scene.get_node_or_null("Water") as Node3D
+	if is_instance_valid(water):
+		water.visible = false
+	await get_tree().process_frame
+	result["without_water"] = await _sample_fps_profile(
+		"th6_bottleneck_idle_without_water",
+		TH6_BOTTLENECK_PROFILE_SAMPLE_SEC
+	)
+	if is_instance_valid(water):
+		water.visible = true
+	for building_node in building_roots:
+		if is_instance_valid(building_node):
+			building_node.visible = false
+	if is_instance_valid(island_visual):
+		island_visual.visible = false
+	if is_instance_valid(water):
+		water.visible = false
+	await get_tree().process_frame
+	result["minimal_scene"] = await _sample_fps_profile(
+		"th6_bottleneck_idle_minimal_scene",
+		TH6_BOTTLENECK_PROFILE_SAMPLE_SEC
+	)
+	for building_node in building_roots:
+		if is_instance_valid(building_node):
+			building_node.visible = true
+	if is_instance_valid(island_visual):
+		island_visual.visible = true
+	if is_instance_valid(water):
+		water.visible = true
+	await get_tree().process_frame
+	return result
+
+
+func _sample_th6_idle_render_mode(
+	mode: String,
+	duration_seconds: float
+) -> Dictionary:
+	var scene := get_tree().current_scene
+	if scene == null:
+		return {}
+	var building_roots: Array[Node3D] = []
+	for raw_bs in get_tree().get_nodes_in_group("building_systems"):
+		for building in raw_bs.get("placed_buildings"):
+			var building_node := building.get("node", null) as Node3D
+			if is_instance_valid(building_node):
+				building_roots.append(building_node)
+	var island_visual := scene.get_node_or_null("Island/Visual") as Node3D
+	var water := scene.get_node_or_null("Water") as Node3D
+	var hide_buildings := mode in ["without_buildings", "minimal_scene"]
+	var hide_island := mode in ["without_island", "minimal_scene"]
+	var hide_water := mode in ["without_water", "minimal_scene"]
+	if mode not in [
+		"default",
+		"without_buildings",
+		"without_island",
+		"without_water",
+		"minimal_scene",
+	]:
+		push_error("Unknown TH6 idle render mode: %s" % mode)
+		return {}
+	for building_node in building_roots:
+		building_node.visible = not hide_buildings
+	if is_instance_valid(island_visual):
+		island_visual.visible = not hide_island
+	if is_instance_valid(water):
+		water.visible = not hide_water
+	await get_tree().process_frame
+	await get_tree().create_timer(4.0).timeout
+	return await _sample_fps_profile(
+		"th6_idle_%s" % mode,
+		duration_seconds
+	)
+
+
+func _th6_profile_troops(scenario: Dictionary) -> Array[String]:
+	var troops: Array[String] = []
+	var single_name := str(scenario.get("single", ""))
+	if not single_name.is_empty():
+		var single_cost := _attack_troop_slot_cost(single_name)
+		var single_count := maxi(
+			1,
+			floori(
+				float(TH6_BROWSER_PROFILE_CAPACITY)
+				/ float(single_cost)
+			)
+		)
+		for _unit_index in single_count:
+			troops.append(single_name)
+		return troops
+	var counts: Dictionary = scenario.get("troops", {})
+	for troop_name in TEST_ATTACK_PREFERRED_ORDER:
+		for _unit_index in int(counts.get(troop_name, 0)):
+			troops.append(troop_name)
+	return troops
+
+
+func _th6_profile_occupied_slots(troop_names: Array[String]) -> int:
+	var occupied := 0
+	for troop_name in troop_names:
+		occupied += _attack_troop_slot_cost(troop_name)
+	return occupied
+
+
+func _spawn_th6_profile_formation(
+	attack: Node,
+	troop_names: Array[String],
+	spawn_center: Vector3
+) -> void:
+	# Real deployment happens across the beach. Spawning the entire army inside
+	# a 15 cm strip creates an artificial overlap bottleneck and unreadable
+	# screenshots, so the matrix uses a compact five-row frontage instead.
+	const COLUMN_COUNT: int = 9
+	const COLUMN_SPACING: float = 0.22
+	const ROW_SPACING: float = 0.18
+	var row_count := ceili(float(troop_names.size()) / float(COLUMN_COUNT))
+	for troop_index in range(troop_names.size()):
+		var column := troop_index % COLUMN_COUNT
+		var row := floori(float(troop_index) / float(COLUMN_COUNT))
+		var row_item_count := mini(
+			COLUMN_COUNT,
+			troop_names.size() - row * COLUMN_COUNT
+		)
+		var x_offset := (
+			float(column) - float(row_item_count - 1) * 0.5
+		) * COLUMN_SPACING
+		var z_offset := (
+			float(row) - float(row_count - 1) * 0.5
+		) * ROW_SPACING
+		attack.call(
+			"_spawn_troops_at_pos",
+			[troop_names[troop_index]],
+			{},
+			spawn_center + Vector3(x_offset, 0.0, z_offset)
+		)
+
+
+func _prepare_profile_buildings() -> void:
+	for raw_bs in get_tree().get_nodes_in_group("building_systems"):
+		if not ("placed_buildings" in raw_bs):
+			continue
+		for building: Dictionary in raw_bs.placed_buildings:
+			building["max_hp"] = 500000000
+			building["hp"] = 500000000
+			var node := building.get("node", null) as Node3D
+			if is_instance_valid(node):
+				node.visible = true
+	BaseTroop.reset_combat_runtime_cache()
+
+
+func _apply_th6_profile_abilities(
+	raw_abilities: Variant,
+	spawn_center: Vector3
+) -> Dictionary:
+	var results: Dictionary = {}
+	var abilities: Array = raw_abilities if raw_abilities is Array else []
+	if abilities.is_empty():
+		return results
+	var bs := _test_combat_building_system()
+	if not is_instance_valid(bs):
+		return {"error": "building_system_missing"}
+	var cannon: BSCannon = bs.get("_cannon")
+	if cannon == null:
+		return {"error": "cannon_missing"}
+	cannon._cannon_energy = 100
+	var target := _th6_profile_town_hall()
+	var target_node := target.get("node", null) as Node3D
+	var defense_center := (
+		target_node.global_position
+		if is_instance_valid(target_node)
+		else Vector3.ZERO
+	)
+	for ability_value in abilities:
+		var ability_name := str(ability_value)
+		var applied := false
+		match ability_name:
+			"medkit":
+				var medkit: BSMedkit = bs.get("_medkit")
+				applied = medkit != null and medkit._drop_medkit(spawn_center)
+			"freeze":
+				var freeze: BSFreezeSpell = bs.get("_freeze")
+				applied = freeze != null and freeze._drop_freeze(
+					defense_center
+				)
+			"rage":
+				var rage: BSRageSpell = bs.get("_rage")
+				applied = rage != null and rage._drop_rage(spawn_center)
+			"skeleton_barrel":
+				var barrel: BSSkeletonBarrel = bs.get("_skeleton_barrel")
+				applied = (
+					barrel != null
+					and not target.is_empty()
+					and barrel.fire_at_building(target)
+				)
+		results[ability_name] = applied
+	return results
+
+
+func _th6_profile_town_hall() -> Dictionary:
+	for raw_bs in get_tree().get_nodes_in_group("building_systems"):
+		if not ("placed_buildings" in raw_bs):
+			continue
+		for building: Dictionary in raw_bs.placed_buildings:
+			if str(building.get("id", "")) == "town_hall":
+				return building
+	return {}
+
+
+func _count_profile_particles() -> int:
+	var scene := get_tree().current_scene
+	if scene == null:
+		return 0
+	var count := 0
+	for child in scene.find_children("*", "GPUParticles3D", true, false):
+		var particles := child as GPUParticles3D
+		if (
+			is_instance_valid(particles)
+			and particles.is_visible_in_tree()
+			and particles.emitting
+		):
+			count += 1
+	for child in scene.find_children("*", "CPUParticles3D", true, false):
+		var particles := child as CPUParticles3D
+		if (
+			is_instance_valid(particles)
+			and particles.is_visible_in_tree()
+			and particles.emitting
+		):
+			count += 1
+	return count
+
+
 func _troop_matrix_profile_filter() -> Dictionary:
 	var result: Dictionary = {}
 	for argument in OS.get_cmdline_user_args():
@@ -4785,9 +6206,9 @@ func _troop_matrix_profile_filter() -> Dictionary:
 			continue
 		var raw_names := argument.trim_prefix("--troop-matrix-filter=")
 		for raw_name in raw_names.split(",", false):
-			var name := raw_name.strip_edges()
-			if name != "":
-				result[name] = true
+			var troop_filter_name := raw_name.strip_edges()
+			if troop_filter_name != "":
+				result[troop_filter_name] = true
 	return result
 
 
@@ -4815,6 +6236,7 @@ func _await_profile_background_warmup(timeout_seconds: float = 25.0) -> void:
 func _sample_fps_profile(phase: String, duration_seconds: float) -> Dictionary:
 	var started_us: int = Time.get_ticks_usec()
 	var previous_frame_us: int = started_us
+	var previous_physics_frame: int = Engine.get_physics_frames()
 	var next_report_us: int = started_us + 1000000
 	var duration_us: int = int(duration_seconds * 1000000.0)
 	var fps_samples: Array[float] = []
@@ -4823,44 +6245,111 @@ func _sample_fps_profile(phase: String, duration_seconds: float) -> Dictionary:
 	var physics_ms_samples: Array[float] = []
 	var navigation_ms_samples: Array[float] = []
 	var draw_call_samples: Array[float] = []
+	var primitive_samples: Array[float] = []
+	var video_memory_samples: Array[float] = []
+	var texture_memory_samples: Array[float] = []
+	var buffer_memory_samples: Array[float] = []
 	var object_samples: Array[float] = []
 	var node_samples: Array[float] = []
 	var resource_samples: Array[float] = []
+	var visible_draw_call_samples: Array[float] = []
+	var shadow_draw_call_samples: Array[float] = []
+	var canvas_draw_call_samples: Array[float] = []
+	var visible_primitive_samples: Array[float] = []
+	var render_cpu_ms_samples: Array[float] = []
+	var render_gpu_ms_samples: Array[float] = []
+	var troop_count_samples: Array[float] = []
+	var guard_count_samples: Array[float] = []
+	var physics_ticks_per_frame: Array[float] = []
+	var cache_before: Dictionary = TroopCrowdBatch.pose_cache_stats()
 	var report_index: int = 0
+	var verbose_samples := OS.get_cmdline_user_args().has(
+		"--profile-verbose-samples"
+	)
 
 	while Time.get_ticks_usec() - started_us < duration_us:
 		await get_tree().process_frame
 		var now_us: int = Time.get_ticks_usec()
+		var physics_frame: int = Engine.get_physics_frames()
+		physics_ticks_per_frame.append(
+			float(maxi(0, physics_frame - previous_physics_frame))
+		)
+		previous_physics_frame = physics_frame
 		var frame_ms: float = float(now_us - previous_frame_us) / 1000.0
 		previous_frame_us = now_us
 		if frame_ms > 0.0 and frame_ms < 1000.0:
 			frame_times_ms.append(frame_ms)
-		if now_us >= next_report_us:
+		if verbose_samples and now_us >= next_report_us:
 			report_index += 1
 			var fps: float = Engine.get_frames_per_second()
 			fps_samples.append(fps)
-			var troops: int = get_tree().get_nodes_in_group("troops").size()
-			var draw_calls: int = int(Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME))
-			var objects: int = int(Performance.get_monitor(Performance.RENDER_TOTAL_OBJECTS_IN_FRAME))
-			var nodes: int = int(Performance.get_monitor(Performance.OBJECT_NODE_COUNT))
-			var resources: int = int(Performance.get_monitor(Performance.OBJECT_RESOURCE_COUNT))
-			var process_ms: float = Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0
-			var physics_ms: float = Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS) * 1000.0
-			var navigation_ms: float = Performance.get_monitor(Performance.TIME_NAVIGATION_PROCESS) * 1000.0
-			process_ms_samples.append(process_ms)
-			physics_ms_samples.append(physics_ms)
-			navigation_ms_samples.append(navigation_ms)
-			draw_call_samples.append(float(draw_calls))
-			object_samples.append(float(objects))
-			node_samples.append(float(nodes))
-			resource_samples.append(float(resources))
+			var snapshot := _capture_fps_profile_monitor_sample()
+			var troops := int(snapshot.troops)
+			var guards := int(snapshot.guards)
+			troop_count_samples.append(float(troops))
+			guard_count_samples.append(float(guards))
+			process_ms_samples.append(float(snapshot.process_ms))
+			physics_ms_samples.append(float(snapshot.physics_ms))
+			navigation_ms_samples.append(float(snapshot.navigation_ms))
+			draw_call_samples.append(float(snapshot.draw_calls))
+			primitive_samples.append(float(snapshot.primitives))
+			video_memory_samples.append(float(snapshot.video_memory))
+			texture_memory_samples.append(float(snapshot.texture_memory))
+			buffer_memory_samples.append(float(snapshot.buffer_memory))
+			object_samples.append(float(snapshot.objects))
+			node_samples.append(float(snapshot.nodes))
+			resource_samples.append(float(snapshot.resources))
+			visible_draw_call_samples.append(float(snapshot.visible_draw_calls))
+			shadow_draw_call_samples.append(float(snapshot.shadow_draw_calls))
+			canvas_draw_call_samples.append(float(snapshot.canvas_draw_calls))
+			visible_primitive_samples.append(float(snapshot.visible_primitives))
+			render_cpu_ms_samples.append(float(snapshot.render_cpu_ms))
+			render_gpu_ms_samples.append(float(snapshot.render_gpu_ms))
 			print("[FPS_PROFILE] sample phase=", phase, " second=", report_index,
-				" fps=", fps, " troops=", troops, " draw_calls=", draw_calls, " objects=", objects,
-				" nodes=", nodes, " resources=", resources,
-				" process_ms=", snappedf(process_ms, 0.01),
-				" physics_ms=", snappedf(physics_ms, 0.01),
-				" navigation_ms=", snappedf(navigation_ms, 0.01))
+				" fps=", fps, " troops=", troops,
+				" draw_calls=", snapshot.draw_calls,
+				" guards=", guards,
+				" primitives=", snapshot.primitives,
+				" video_mem=", snapshot.video_memory,
+				" objects=", snapshot.objects,
+				" nodes=", snapshot.nodes,
+				" resources=", snapshot.resources,
+				" viewport_draws=", snapshot.visible_draw_calls, "/",
+				snapshot.shadow_draw_calls, "/", snapshot.canvas_draw_calls,
+				" render_cpu_ms=", snappedf(snapshot.render_cpu_ms, 0.01),
+				" render_gpu_ms=", snappedf(snapshot.render_gpu_ms, 0.01),
+				" process_ms=", snappedf(snapshot.process_ms, 0.01),
+				" physics_ms=", snappedf(snapshot.physics_ms, 0.01),
+				" navigation_ms=", snappedf(snapshot.navigation_ms, 0.01))
+			# Exclude diagnostic monitor synchronization and console I/O
+			# from the next measured frame.
+			previous_frame_us = Time.get_ticks_usec()
 			next_report_us += 1000000
+
+	if not verbose_samples:
+		fps_samples = _derive_fps_samples(frame_times_ms)
+
+	if draw_call_samples.is_empty():
+		var snapshot := _capture_fps_profile_monitor_sample()
+		troop_count_samples.append(float(snapshot.troops))
+		guard_count_samples.append(float(snapshot.guards))
+		process_ms_samples.append(float(snapshot.process_ms))
+		physics_ms_samples.append(float(snapshot.physics_ms))
+		navigation_ms_samples.append(float(snapshot.navigation_ms))
+		draw_call_samples.append(float(snapshot.draw_calls))
+		primitive_samples.append(float(snapshot.primitives))
+		video_memory_samples.append(float(snapshot.video_memory))
+		texture_memory_samples.append(float(snapshot.texture_memory))
+		buffer_memory_samples.append(float(snapshot.buffer_memory))
+		object_samples.append(float(snapshot.objects))
+		node_samples.append(float(snapshot.nodes))
+		resource_samples.append(float(snapshot.resources))
+		visible_draw_call_samples.append(float(snapshot.visible_draw_calls))
+		shadow_draw_call_samples.append(float(snapshot.shadow_draw_calls))
+		canvas_draw_call_samples.append(float(snapshot.canvas_draw_calls))
+		visible_primitive_samples.append(float(snapshot.visible_primitives))
+		render_cpu_ms_samples.append(float(snapshot.render_cpu_ms))
+		render_gpu_ms_samples.append(float(snapshot.render_gpu_ms))
 
 	var avg_fps: float = 0.0
 	var min_fps: float = 0.0
@@ -4873,36 +6362,164 @@ func _sample_fps_profile(phase: String, duration_seconds: float) -> Dictionary:
 		avg_fps /= float(fps_samples.size())
 		var sorted_fps: Array[float] = fps_samples.duplicate()
 		sorted_fps.sort()
-		var middle: int = sorted_fps.size() / 2
+		var middle: int = floori(float(sorted_fps.size()) / 2.0)
 		if sorted_fps.size() % 2 == 0:
 			median_fps = (sorted_fps[middle - 1] + sorted_fps[middle]) * 0.5
 		else:
 			median_fps = sorted_fps[middle]
 
-	var p95_frame_ms: float = 0.0
-	var max_frame_ms: float = 0.0
-	if not frame_times_ms.is_empty():
-		frame_times_ms.sort()
-		var p95_index: int = clampi(int(ceil(float(frame_times_ms.size()) * 0.95)) - 1, 0, frame_times_ms.size() - 1)
-		p95_frame_ms = frame_times_ms[p95_index]
-		max_frame_ms = frame_times_ms[-1]
+	var cache_after: Dictionary = TroopCrowdBatch.pose_cache_stats()
 
 	return {
 		"avg_fps": avg_fps,
 		"median_fps": median_fps,
 		"min_fps": min_fps,
-		"p95_frame_ms": p95_frame_ms,
-		"max_frame_ms": max_frame_ms,
+		"p50_frame_ms": _percentile_float_samples(frame_times_ms, 0.50),
+		"p95_frame_ms": _percentile_float_samples(frame_times_ms, 0.95),
+		"p99_frame_ms": _percentile_float_samples(frame_times_ms, 0.99),
+		"max_frame_ms": _percentile_float_samples(frame_times_ms, 1.0),
+		"frames_over_16_67_pct": _sample_ratio_over(frame_times_ms, 16.67),
+		"frames_over_25_pct": _sample_ratio_over(frame_times_ms, 25.0),
+		"frames_over_33_33_pct": _sample_ratio_over(frame_times_ms, 33.33),
+		"frames_over_50_pct": _sample_ratio_over(frame_times_ms, 50.0),
+		"physics_ticks_p50": _percentile_float_samples(
+			physics_ticks_per_frame, 0.50
+		),
+		"physics_ticks_p95": _percentile_float_samples(
+			physics_ticks_per_frame, 0.95
+		),
+		"physics_ticks_max": _percentile_float_samples(
+			physics_ticks_per_frame, 1.0
+		),
+		"render_frames_with_catchup_pct": _sample_ratio_over(
+			physics_ticks_per_frame, 1.0
+		),
 		"avg_process_ms": _average_float_samples(process_ms_samples),
 		"avg_physics_ms": _average_float_samples(physics_ms_samples),
 		"avg_navigation_ms": _average_float_samples(navigation_ms_samples),
 		"avg_draw_calls": _average_float_samples(draw_call_samples),
+		"avg_primitives": _average_float_samples(primitive_samples),
+		"avg_video_memory": _average_float_samples(video_memory_samples),
+		"avg_texture_memory": _average_float_samples(texture_memory_samples),
+		"avg_buffer_memory": _average_float_samples(buffer_memory_samples),
 		"avg_objects": _average_float_samples(object_samples),
 		"avg_nodes": _average_float_samples(node_samples),
 		"avg_resources": _average_float_samples(resource_samples),
+		"avg_visible_draw_calls": _average_float_samples(
+			visible_draw_call_samples
+		),
+		"avg_shadow_draw_calls": _average_float_samples(
+			shadow_draw_call_samples
+		),
+		"avg_canvas_draw_calls": _average_float_samples(
+			canvas_draw_call_samples
+		),
+		"avg_visible_primitives": _average_float_samples(
+			visible_primitive_samples
+		),
+		"avg_render_cpu_ms": _average_float_samples(render_cpu_ms_samples),
+		"avg_render_gpu_ms": _average_float_samples(render_gpu_ms_samples),
+		"troops_min": _percentile_float_samples(troop_count_samples, 0.0),
+		"troops_max": _percentile_float_samples(troop_count_samples, 1.0),
+		"guards_min": _percentile_float_samples(guard_count_samples, 0.0),
+		"guards_max": _percentile_float_samples(guard_count_samples, 1.0),
+		"pose_cache_hits_delta": int(cache_after.get("hits", 0)) - int(
+			cache_before.get("hits", 0)
+		),
+		"pose_cache_misses_delta": int(cache_after.get("misses", 0)) - int(
+			cache_before.get("misses", 0)
+		),
+		"pose_cache_evictions_delta": int(
+			cache_after.get("evictions", 0)
+		) - int(cache_before.get("evictions", 0)),
+		"pose_cache_meshes": int(cache_after.get("meshes", 0)),
+		"pose_cache_vertices": int(cache_after.get("vertices", 0)),
+		"pose_cache_protected": int(cache_after.get("protected", 0)),
 		"fps_samples": fps_samples.size(),
 		"frame_samples": frame_times_ms.size(),
 	}
+
+
+func _capture_fps_profile_monitor_sample() -> Dictionary:
+	var viewport_rid: RID = get_viewport().get_viewport_rid()
+	return {
+		"troops": get_tree().get_nodes_in_group("troops").size(),
+		"guards": get_tree().get_nodes_in_group("skeleton_guards").size(),
+		"draw_calls": int(Performance.get_monitor(
+			Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME
+		)),
+		"primitives": int(Performance.get_monitor(
+			Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME
+		)),
+		"video_memory": int(Performance.get_monitor(
+			Performance.RENDER_VIDEO_MEM_USED
+		)),
+		"texture_memory": int(Performance.get_monitor(
+			Performance.RENDER_TEXTURE_MEM_USED
+		)),
+		"buffer_memory": int(Performance.get_monitor(
+			Performance.RENDER_BUFFER_MEM_USED
+		)),
+		"objects": int(Performance.get_monitor(
+			Performance.RENDER_TOTAL_OBJECTS_IN_FRAME
+		)),
+		"nodes": int(Performance.get_monitor(Performance.OBJECT_NODE_COUNT)),
+		"resources": int(Performance.get_monitor(
+			Performance.OBJECT_RESOURCE_COUNT
+		)),
+		"visible_draw_calls": RenderingServer.viewport_get_render_info(
+			viewport_rid,
+			RenderingServer.VIEWPORT_RENDER_INFO_TYPE_VISIBLE,
+			RenderingServer.VIEWPORT_RENDER_INFO_DRAW_CALLS_IN_FRAME
+		),
+		"shadow_draw_calls": RenderingServer.viewport_get_render_info(
+			viewport_rid,
+			RenderingServer.VIEWPORT_RENDER_INFO_TYPE_SHADOW,
+			RenderingServer.VIEWPORT_RENDER_INFO_DRAW_CALLS_IN_FRAME
+		),
+		"canvas_draw_calls": RenderingServer.viewport_get_render_info(
+			viewport_rid,
+			RenderingServer.VIEWPORT_RENDER_INFO_TYPE_CANVAS,
+			RenderingServer.VIEWPORT_RENDER_INFO_DRAW_CALLS_IN_FRAME
+		),
+		"visible_primitives": RenderingServer.viewport_get_render_info(
+			viewport_rid,
+			RenderingServer.VIEWPORT_RENDER_INFO_TYPE_VISIBLE,
+			RenderingServer.VIEWPORT_RENDER_INFO_PRIMITIVES_IN_FRAME
+		),
+		"render_cpu_ms": RenderingServer.viewport_get_measured_render_time_cpu(
+			viewport_rid
+		),
+		"render_gpu_ms": RenderingServer.viewport_get_measured_render_time_gpu(
+			viewport_rid
+		),
+		"process_ms": (
+			Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0
+		),
+		"physics_ms": (
+			Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS) * 1000.0
+		),
+		"navigation_ms": (
+			Performance.get_monitor(Performance.TIME_NAVIGATION_PROCESS)
+			* 1000.0
+		),
+	}
+
+
+func _derive_fps_samples(frame_times_ms: Array[float]) -> Array[float]:
+	var samples: Array[float] = []
+	var elapsed_ms: float = 0.0
+	var frame_count: int = 0
+	for frame_ms in frame_times_ms:
+		elapsed_ms += frame_ms
+		frame_count += 1
+		if elapsed_ms >= 1000.0:
+			samples.append(float(frame_count) * 1000.0 / elapsed_ms)
+			elapsed_ms = 0.0
+			frame_count = 0
+	if frame_count > 0 and elapsed_ms >= 500.0:
+		samples.append(float(frame_count) * 1000.0 / elapsed_ms)
+	return samples
 
 
 func _average_float_samples(samples: Array[float]) -> float:
@@ -4912,6 +6529,42 @@ func _average_float_samples(samples: Array[float]) -> float:
 	for value in samples:
 		total += value
 	return snappedf(total / float(samples.size()), 0.01)
+
+
+func _percentile_float_samples(
+	samples: Array[float],
+	percentile: float
+) -> float:
+	if samples.is_empty():
+		return 0.0
+	var sorted_samples: Array[float] = samples.duplicate()
+	sorted_samples.sort()
+	var index := clampi(
+		int(ceil(float(sorted_samples.size()) * percentile)) - 1,
+		0,
+		sorted_samples.size() - 1
+	)
+	return sorted_samples[index]
+
+
+func _sample_ratio_over(samples: Array[float], threshold: float) -> float:
+	if samples.is_empty():
+		return 0.0
+	var over_count := 0
+	for sample in samples:
+		if sample > threshold:
+			over_count += 1
+	return float(over_count) * 100.0 / float(samples.size())
+
+
+func _profile_sample_duration(default_seconds: float) -> float:
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--profile-sample-sec="):
+			return maxf(
+				1.0,
+				float(arg.trim_prefix("--profile-sample-sec="))
+			)
+	return default_seconds
 
 
 func _build_test_attack_fleet() -> Array:

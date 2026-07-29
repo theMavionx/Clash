@@ -82,8 +82,8 @@ const LEVEL_STATS: Dictionary = {
 		"atk_speed": [1.24, 0.96, 0.72],
 	},
 	7: {
-		"hp": [19533, 5733, 1733],
-		"damage": [2600, 913, 340],
+		"hp": [21880, 6420, 1940],
+		"damage": [2912, 1023, 381],
 		"atk_speed": [1.24, 0.96, 0.72],
 	},
 }
@@ -163,8 +163,8 @@ func _init_stats() -> void:
 		anim_file_aliases[anim_files[file_index]] = STAGE_ANIM_NAMES[file_index]
 
 
-func activate() -> void:
-	super.activate()
+func activate(refresh_dense_rendering: bool = true) -> void:
+	super.activate(refresh_dense_rendering)
 	if is_evolution_child:
 		_spawn_lock_remaining = SPLIT_SPAWN_LOCK_SEC[evolution_stage]
 		if anim_player != null and anim_player.has_animation("Spawn_A"):

@@ -12,6 +12,10 @@ const FLICKER_INTERVAL: float = 0.045
 static var _outer_material: StandardMaterial3D = null
 static var _bolt_material: StandardMaterial3D = null
 static var _core_material: StandardMaterial3D = null
+static var _impact_glow_mesh: SphereMesh = null
+static var _impact_core_mesh: SphereMesh = null
+static var _impact_ring_mesh: TorusMesh = null
+static var _spark_mesh: SphereMesh = null
 
 var _elapsed: float = 0.0
 var _current_variant: int = -1
@@ -31,6 +35,7 @@ func setup(
 	lifetime_override: float = LIFETIME
 ) -> void:
 	add_to_group("mechanical_lightning_vfx")
+	add_to_group("combat_ephemeral_vfx")
 	global_position = world_start
 	var local_finish: Vector3 = to_local(world_finish)
 	if local_finish.length_squared() <= 0.000001:
@@ -217,48 +222,33 @@ func _set_variant(variant_index: int) -> void:
 		_core.mesh = _variant_meshes[offset + 2]
 
 
-func _add_impact(position: Vector3) -> void:
+func _add_impact(impact_position: Vector3) -> void:
 	_impact_glow = MeshInstance3D.new()
 	_impact_glow.name = "LightningImpactGlow"
-	var glow_mesh := SphereMesh.new()
-	glow_mesh.radius = 0.055
-	glow_mesh.height = 0.11
-	glow_mesh.radial_segments = 10
-	glow_mesh.rings = 5
-	_impact_glow.mesh = glow_mesh
+	_impact_glow.mesh = _impact_glow_mesh_ref()
 	_impact_glow.material_override = _outer_material_ref()
-	_impact_glow.position = position
+	_impact_glow.position = impact_position
 	_impact_glow.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(_impact_glow)
 
 	_impact_core = MeshInstance3D.new()
 	_impact_core.name = "LightningImpactCore"
-	var core_mesh := SphereMesh.new()
-	core_mesh.radius = 0.026
-	core_mesh.height = 0.052
-	core_mesh.radial_segments = 8
-	core_mesh.rings = 4
-	_impact_core.mesh = core_mesh
+	_impact_core.mesh = _impact_core_mesh_ref()
 	_impact_core.material_override = _core_material_ref()
-	_impact_core.position = position
+	_impact_core.position = impact_position
 	_impact_core.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(_impact_core)
 
 	_impact_ring = MeshInstance3D.new()
 	_impact_ring.name = "LightningImpactRing"
-	var ring_mesh := TorusMesh.new()
-	ring_mesh.inner_radius = 0.030
-	ring_mesh.outer_radius = 0.044
-	ring_mesh.rings = 12
-	ring_mesh.ring_segments = 6
-	_impact_ring.mesh = ring_mesh
+	_impact_ring.mesh = _impact_ring_mesh_ref()
 	_impact_ring.material_override = _bolt_material_ref()
-	_impact_ring.position = position
+	_impact_ring.position = impact_position
 	_impact_ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(_impact_ring)
 
 
-func _add_sparks(position: Vector3) -> void:
+func _add_sparks(impact_position: Vector3) -> void:
 	var sparks := CPUParticles3D.new()
 	sparks.name = "LightningImpactSparks"
 	sparks.amount = 10
@@ -274,16 +264,51 @@ func _add_sparks(position: Vector3) -> void:
 	sparks.initial_velocity_max = 0.28
 	sparks.scale_amount_min = 0.45
 	sparks.scale_amount_max = 1.0
-	sparks.position = position
-	var spark_mesh := SphereMesh.new()
-	spark_mesh.radius = 0.006
-	spark_mesh.height = 0.018
-	spark_mesh.radial_segments = 5
-	spark_mesh.rings = 2
-	spark_mesh.material = _core_material_ref()
-	sparks.mesh = spark_mesh
+	sparks.position = impact_position
+	sparks.mesh = _spark_mesh_ref()
 	add_child(sparks)
 	sparks.restart()
+
+
+static func _impact_glow_mesh_ref() -> SphereMesh:
+	if _impact_glow_mesh == null:
+		_impact_glow_mesh = SphereMesh.new()
+		_impact_glow_mesh.radius = 0.055
+		_impact_glow_mesh.height = 0.11
+		_impact_glow_mesh.radial_segments = 10
+		_impact_glow_mesh.rings = 5
+	return _impact_glow_mesh
+
+
+static func _impact_core_mesh_ref() -> SphereMesh:
+	if _impact_core_mesh == null:
+		_impact_core_mesh = SphereMesh.new()
+		_impact_core_mesh.radius = 0.026
+		_impact_core_mesh.height = 0.052
+		_impact_core_mesh.radial_segments = 8
+		_impact_core_mesh.rings = 4
+	return _impact_core_mesh
+
+
+static func _impact_ring_mesh_ref() -> TorusMesh:
+	if _impact_ring_mesh == null:
+		_impact_ring_mesh = TorusMesh.new()
+		_impact_ring_mesh.inner_radius = 0.030
+		_impact_ring_mesh.outer_radius = 0.044
+		_impact_ring_mesh.rings = 12
+		_impact_ring_mesh.ring_segments = 6
+	return _impact_ring_mesh
+
+
+static func _spark_mesh_ref() -> SphereMesh:
+	if _spark_mesh == null:
+		_spark_mesh = SphereMesh.new()
+		_spark_mesh.radius = 0.006
+		_spark_mesh.height = 0.018
+		_spark_mesh.radial_segments = 5
+		_spark_mesh.rings = 2
+		_spark_mesh.material = _core_material_ref()
+	return _spark_mesh
 
 
 static func _outer_material_ref() -> StandardMaterial3D:

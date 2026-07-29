@@ -368,7 +368,11 @@ function rewardPoolLine(pool, fallbackCurrency = 'USD') {
   const rewards = rewardPoolSummary(pool?.rewards || [], fallbackCurrency);
   const label = pool?.label || 'Reward pool';
   const top = Number(pool?.top_n || 0) > 0 ? `top ${pool.top_n}` : '';
-  return [label, top, rewards.join(' + ')].filter(Boolean).join(' В· ');
+  const day = pool?.day_utc ? `UTC ${pool.day_utc}` : '';
+  const target = Number(pool?.volume_target_usd || 0) > 0
+    ? `${fmtUsdWhole(pool.volume_target_usd)} ${pool.volume_target_scope === 'tournament' ? 'tournament' : 'per player'} target`
+    : '';
+  return [label, day, target, top, rewards.join(' + ')].filter(Boolean).join(' В· ');
 }
 
 function RewardScheduleCard({ schedule, sectorName, currency = 'USD', currentTownHallLevel = 0 }) {
@@ -399,7 +403,9 @@ function RewardScheduleCard({ schedule, sectorName, currency = 'USD', currentTow
         <strong>Rewards</strong>
         {sectorName && <span>{sectorName}</span>}
       </div>
-      {(schedule.daily_pools || []).filter((pool) => pool.enabled !== false).map((pool, idx) => (
+      {(schedule.daily_pools || []).filter((pool) => (
+        pool.enabled !== false && (!pool.day_utc || pool.is_active !== false)
+      )).map((pool, idx) => (
         <div key={`daily-${idx}`} style={S.rewardScheduleLine}>Daily: {rewardPoolLine(pool, currency)}</div>
       ))}
       {(schedule.final_pools || []).filter((pool) => pool.enabled !== false).map((pool, idx) => (
@@ -622,6 +628,62 @@ function LuckyRaiderPanel({ t, schedule, currentTownHallLevel = 0 }) {
   );
 }
 
+function RankedRaidSummary({ state, tournament, joined }) {
+  const attackLimit = Number(state?.daily_attack_limit || tournament?.ranked_daily_attack_limit || 0);
+  const defenseLimit = Number(state?.max_defenses_per_day || tournament?.ranked_max_defenses_per_day || 0);
+  const attacksUsed = Number(state?.attacks_used || 0);
+  const defensesUsed = Number(state?.defenses_used || 0);
+  const shieldUntil = state?.shield_until ? fmtDate(state.shield_until) : null;
+
+  return (
+    <div style={S.rankedSummary}>
+      <div style={S.rankedSummaryHead}>
+        <div>
+          <div style={S.rankedSummaryTitle}>Ranked raids</div>
+          <div style={S.rankedSummarySub}>
+            Trading and island raids contribute to this same tournament.
+          </div>
+        </div>
+        <span style={joined ? S.rankedSummaryLive : S.rankedSummaryLocked}>
+          {joined ? 'ACTIVE' : 'JOIN TO PLAY'}
+        </span>
+      </div>
+
+      {joined ? (
+        <>
+          <div style={S.rankedSummaryGrid}>
+            <div style={S.rankedSummaryStat}>
+              <span style={S.rankedSummaryValue}>{fmt(state?.score || 0)}</span>
+              <span style={S.rankedSummaryLabel}>Raid trophies</span>
+            </div>
+            <div style={S.rankedSummaryStat}>
+              <span style={S.rankedSummaryValue}>{attacksUsed}/{attackLimit || '-'}</span>
+              <span style={S.rankedSummaryLabel}>Attacks today</span>
+            </div>
+            <div style={S.rankedSummaryStat}>
+              <span style={S.rankedSummaryValue}>{defensesUsed}/{defenseLimit || '∞'}</span>
+              <span style={S.rankedSummaryLabel}>Defenses today</span>
+            </div>
+            <div style={S.rankedSummaryStat}>
+              <span style={S.rankedSummaryValue}>{Number(state?.wins || 0)}W / {Number(state?.losses || 0)}L</span>
+              <span style={S.rankedSummaryLabel}>Raid record</span>
+            </div>
+          </div>
+          <div style={S.rankedSummaryMeta}>
+            <span>Attack {Number(state?.offense_trophies || 0) >= 0 ? '+' : ''}{fmt(state?.offense_trophies || 0)}</span>
+            <span>Defense {Number(state?.defense_trophies || 0) >= 0 ? '+' : ''}{fmt(state?.defense_trophies || 0)}</span>
+            <span>{shieldUntil ? `Shield until ${shieldUntil}` : 'No tournament shield'}</span>
+          </div>
+        </>
+      ) : (
+        <div style={S.rankedSummaryJoin}>
+          Join once to unlock both trading standings and the tournament raid quota.
+        </div>
+      )}
+    </div>
+  );
+}
+
 function TournamentPanel({ onClose }) {
   // Tab gate: 'active' (default) or 'history'. History shows ended
   // tournaments + their final leaderboards so a finished cup doesn't just
@@ -704,6 +766,7 @@ function TournamentPanel({ onClose }) {
   }, [dailyDays, pickedDailyDay, activeDailyDayId]);
   const playerId = player?.player_id || player?.id;
   const dailyMyPlayerId = daily?.my_player_id || playerId;
+  const rankedRaid = !isHistory && tab === 'active' ? me?.ranked_raid : null;
   const activeInitialLoading = tab === 'active' && !tournamentLoaded && !me;
   const luckyInitialLoading = tab === 'lucky' && !luckyLoaded && !luckyMe;
   const prizeProgress = useMemo(() => {
@@ -946,7 +1009,7 @@ function TournamentPanel({ onClose }) {
             <img src={trophyIcon} alt="" style={S.headerIcon} />
             <span style={S.headerTitle}>Tournament</span>
           </div>
-          <button style={S.closeBtn} onClick={onClose}>
+          <button style={S.closeBtn} onClick={onClose} aria-label="Close">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4">
               <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
             </svg>
@@ -1094,6 +1157,7 @@ function TournamentPanel({ onClose }) {
                 <div style={S.tagRow}>
                   <span style={S.dexTag}>{dexLabel(t, dex)}</span>
                   {isMegaTournament(t) && <span style={S.megaTag}>MEGA</span>}
+                  {t.battle_mode === 'ranked_raids' && <span style={S.rankedTag}>RANKED RAIDS</span>}
                   {t.mode === 'dex_vs_dex' && <span style={S.teamTag}>DEX VS DEX</span>}
                   <span style={S.tag}>Sort: {sortLabel(t)}</span>
                   {isDailyPoolTournament(t) && <span style={S.prizeTag}>{fmt(t.daily_pool_points || 1000)} pts/day at {dailyPoolAwardTime(t)} UTC</span>}
@@ -1130,6 +1194,14 @@ function TournamentPanel({ onClose }) {
                   </span>
                   {t.pause_reason && <span style={S.pausedReason}>{t.pause_reason}</span>}
                 </div>
+              )}
+
+              {rankedRaid?.enabled && (
+                <RankedRaidSummary
+                  state={rankedRaid}
+                  tournament={t}
+                  joined={joined}
+                />
               )}
 
               {joined && renderRewardWalletControl()}
@@ -1739,6 +1811,11 @@ const S = {
     background: '#ede9fe', border: '2px solid #8b5cf6', color: '#5b21b6',
     textTransform: 'uppercase', letterSpacing: 0.4,
   },
+  rankedTag: {
+    fontSize: 10, fontWeight: 900, padding: '3px 7px', borderRadius: 6,
+    background: '#dbeafe', border: '2px solid #3b82f6', color: '#1d4ed8',
+    textTransform: 'uppercase', letterSpacing: 0.4,
+  },
   tag: {
     fontSize: 10, fontWeight: 800, padding: '3px 7px', borderRadius: 6,
     background: '#fdf8e7', border: '2px solid #d4c8b0', color: '#7c5a3a',
@@ -1772,6 +1849,52 @@ const S = {
   },
   pausedReason: {
     color: '#92400e', fontSize: 10, fontWeight: 800, lineHeight: 1.3,
+  },
+  rankedSummary: {
+    display: 'flex', flexDirection: 'column', gap: 9,
+    padding: '10px 11px', borderRadius: 8,
+    background: '#e8f3f8', border: '3px solid #77b6d3',
+  },
+  rankedSummaryHead: {
+    display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8,
+  },
+  rankedSummaryTitle: {
+    color: '#315f77', fontSize: 13, fontWeight: 900, textTransform: 'uppercase',
+  },
+  rankedSummarySub: {
+    color: '#647d87', fontSize: 10, fontWeight: 750, lineHeight: 1.35, marginTop: 2,
+  },
+  rankedSummaryLive: {
+    flexShrink: 0, padding: '3px 6px', borderRadius: 5,
+    background: '#dcfce7', border: '1px solid #22c55e',
+    color: '#15803d', fontSize: 8, fontWeight: 900,
+  },
+  rankedSummaryLocked: {
+    flexShrink: 0, padding: '3px 6px', borderRadius: 5,
+    background: '#fef3c7', border: '1px solid #f59e0b',
+    color: '#92400e', fontSize: 8, fontWeight: 900,
+  },
+  rankedSummaryGrid: {
+    display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
+    borderTop: '2px solid #b8d6e3', borderBottom: '2px solid #b8d6e3',
+  },
+  rankedSummaryStat: {
+    minWidth: 0, padding: '7px 3px', textAlign: 'center',
+  },
+  rankedSummaryValue: {
+    display: 'block', color: '#315f77', fontSize: 13, fontWeight: 900,
+    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+  },
+  rankedSummaryLabel: {
+    display: 'block', color: '#78909a', fontSize: 7, fontWeight: 900,
+    textTransform: 'uppercase', marginTop: 2,
+  },
+  rankedSummaryMeta: {
+    display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: '4px 10px',
+    color: '#5b7480', fontSize: 9, fontWeight: 800,
+  },
+  rankedSummaryJoin: {
+    color: '#5b7480', fontSize: 10, fontWeight: 800, lineHeight: 1.4,
   },
   boostTag: {
     fontSize: 10, fontWeight: 900, padding: '3px 7px', borderRadius: 6,

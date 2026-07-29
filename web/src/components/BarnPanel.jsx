@@ -764,6 +764,7 @@ function BarnPanel({ building, onClose }) {
       .filter((value) => Number.isFinite(value)),
   );
   const troopMaxLevel = Math.max(1, Number(tdef?.max_level) || maxLevelFromCosts, maxLevelFromStats);
+  const troopTownHallLevelCap = Math.min(troopMaxLevel, Math.max(1, currentTownHallLevel));
   const isNftBackedTroop = !!currentNftTroop;
   const isDemonKingNftTroop = currentNftTroop?.collection === 'demonking' || currentNftTroop?.collection === 'demon_king';
   const isRarityNftTroop = isDemonKingNftTroop || currentNftTroop?.collection === 'dragon';
@@ -788,6 +789,11 @@ function BarnPanel({ building, onClose }) {
     ? positiveIntOrNull(authoritativeNftStatus.next_level ?? authoritativeNftStatus.nextLevel)
     : null;
   const nextTroopLevel = isMax ? null : (hasStatusNextLevel ? statusNextLevel : displayLvl + 1);
+  const townHallReadyForNextLevel = !nextTroopLevel || (
+    typeof authoritativeNftStatus?.town_hall_ready === 'boolean'
+      ? authoritativeNftStatus.town_hall_ready
+      : nextTroopLevel <= troopTownHallLevelCap
+  );
   const statusRequiredBarnLevel = positiveIntOrNull(authoritativeNftStatus?.required_barn_level ?? authoritativeNftStatus?.requiredBarnLevel);
   const requiredBarnLevel = nextTroopLevel
     ? (statusRequiredBarnLevel || requiredBarnLevelForTroopLevel(nextTroopLevel))
@@ -811,6 +817,7 @@ function BarnPanel({ building, onClose }) {
   const handleMainUpgrade = () => {
     if (upgradePending) return;
     if (!troopUnlocked) return;
+    if (!townHallReadyForNextLevel) return;
     if (!barnReadyForNextLevel) return;
     if (!isNftBackedTroop) {
       handleUpgradeTroop(currentTroopName, displayLvl);
@@ -993,6 +1000,11 @@ function BarnPanel({ building, onClose }) {
                 Town Hall Lv {requiredTownHallLevel} unlocks {displayName}.
               </div>
             )}
+            {troopUnlocked && !townHallReadyForNextLevel && nextTroopLevel && (
+              <div style={styles.demonInventoryHint}>
+                Town Hall Lv {nextTroopLevel} unlocks troop Lv {nextTroopLevel}.
+              </div>
+            )}
             {!barnReadyForNextLevel && (
               <div style={styles.demonInventoryHint}>
                 Barn Lv {requiredBarnLevel} unlocks troop Lv {nextTroopLevel}. Upgrade the Barn first.
@@ -1023,24 +1035,26 @@ function BarnPanel({ building, onClose }) {
             <button
               style={{
                 ...styles.actionBtn,
-                ...(!troopUnlocked || !barnReadyForNextLevel || upgradePending ? styles.actionBtnDisabled : null),
+                ...(!troopUnlocked || !townHallReadyForNextLevel || !barnReadyForNextLevel || upgradePending ? styles.actionBtnDisabled : null),
                 width: '100%',
                 maxWidth: mobile ? '100%' : 240,
                 padding: mobile ? '12px 16px' : '14px 20px',
                 fontSize: mobile ? 14 : 14,
               }}
-              disabled={!troopUnlocked || !barnReadyForNextLevel || upgradePending}
+              disabled={!troopUnlocked || !townHallReadyForNextLevel || !barnReadyForNextLevel || upgradePending}
               onClick={handleMainUpgrade}
             >
               {upgradePending
                 ? 'Upgrading...'
                 : !troopUnlocked
                 ? `Town Hall Lv ${requiredTownHallLevel} required`
+                : !townHallReadyForNextLevel
+                ? `Upgrade Town Hall to Lv ${nextTroopLevel}`
                 : !barnReadyForNextLevel
                 ? `Upgrade Barn to Lv ${requiredBarnLevel}`
                 : isNftBackedTroop
                 ? (selectedDemonNft ? `Upgrade ${currentNftTroop.label} to Lv` : `Get ${currentNftTroop.label} NFT`)
-                : 'Upgrade to Lv'} {upgradePending || !barnReadyForNextLevel || (isNftBackedTroop && !selectedDemonNft) ? '' : nextTroopLevel}
+                : 'Upgrade to Lv'} {upgradePending || !townHallReadyForNextLevel || !barnReadyForNextLevel || (isNftBackedTroop && !selectedDemonNft) ? '' : nextTroopLevel}
             </button>
           </div>
         )}

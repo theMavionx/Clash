@@ -10,11 +10,17 @@ const db = require('./db');
 const hermesClient = require('./hermes_client');
 const hermesJobs = require('./hermes_jobs');
 const logAiAnalyzer = require('./log_ai_analyzer');
+const tournamentAiBuilder = require('./tournament_ai_builder');
 const tasks = require('./tasks');
 const elfa = require('./elfa');
 const diag = require('./diag');
 const earnings = require('./earnings');
-const { MAX_SHIPS, MAX_TROOPS, TROOP_SLOT_COSTS } = require('./combat_defs');
+const {
+  MAX_SHIPS,
+  MAX_TROOPS,
+  TROOP_SLOT_COSTS,
+  resolveAuthoritativeNftRarity,
+} = require('./combat_defs');
 const {
   CANONICAL_GRID_CONFIG,
   CANONICAL_GRID_CONFIGS,
@@ -12015,7 +12021,7 @@ function _playerShipState(playerId) {
   let troopTemplate = [];
   try { troops = JSON.parse(row.troops || '[]'); } catch { troops = []; }
   try { troopTemplate = JSON.parse(row.troop_template || '[]'); } catch { troopTemplate = []; }
-  const level = Math.max(1, Math.min(6, Number(row.level) || 1));
+  const level = Math.max(1, Math.min(db.MAX_PLAYER_SHIP_LEVEL, Number(row.level) || 1));
   const config = db.PLAYER_SHIP_LEVELS[level] || db.PLAYER_SHIP_LEVELS[1];
   return {
     ...row,
@@ -12024,6 +12030,10 @@ function _playerShipState(playerId) {
     capacity: db.playerShipCapacity(level, row.capacity_override),
     energy: Number(config.energy || 4),
     medkit_unlocked: !!config.medkit_unlocked,
+    freeze_unlocked: !!config.freeze_unlocked,
+    rage_unlocked: !!config.rage_unlocked,
+    tactical_reserve_unlocked: !!config.tactical_reserve_unlocked,
+    skeleton_barrel_unlocked: !!config.skeleton_barrel_unlocked,
     troops,
     troop_template: troopTemplate,
   };
@@ -12816,7 +12826,9 @@ router.post('/attack/result', auth, (req, res) => {
       const parsed = parseNftBackedTroopEntry(troop);
       if (parsed.error) continue;
       const row = db.getPlayerCollectionNft(req.player.id, parsed.collection, parsed.chainKey, parsed.tokenIdRaw);
-      const rarity = String(row?.rarity || parsed.rarity || 'common').toLowerCase();
+      // Rarity is server-authoritative. The replay suffix identifies what the
+      // client rendered, but must never upgrade an unrevealed/null DB row.
+      const rarity = resolveAuthoritativeNftRarity(row?.rarity, parsed.rarity);
       serverNftRarities[`${parsed.collection}:${parsed.chainKey}:${parsed.tokenIdRaw}`.toLowerCase()] = rarity;
     }
   }
@@ -13108,7 +13120,10 @@ router.get('/find-enemy', auth, (req, res) => {
   const readiness = validateAttackReadyForPlayer(req.player.id);
   if (readiness) return res.status(readiness.status || 400).json(readiness);
 
-  const result = db.findEnemy(req.player.id);
+  const tournamentId = Number(req.query?.tournament_id || 0);
+  const result = tournamentId > 0
+    ? db.findRankedEnemy(req.player.id, tournamentId)
+    : db.findEnemy(req.player.id);
   if (result.error) {
     logBattle('find_enemy failed', { player: req.player.id, error: result.error, attack_cost_gold: result.attack_cost_gold });
     return res.status(result.status || 404).json(result);
@@ -13122,6 +13137,8 @@ router.get('/find-enemy', auth, (req, res) => {
     base_power_ratio: result.matchmaking?.base_power_ratio || null,
     battle_session_id: result.battle_session_id,
     attack_cost_gold: result.attack_cost_gold,
+    tournament_id: result.ranked_tournament?.id || null,
+    ranked_attack_number: result.ranked_tournament?.attack_number || null,
   });
   res.json(result);
 });
@@ -13533,8 +13550,21 @@ function _mainShipResponse(playerId) {
   return {
     id: 'main_ship',
     level: ship.level,
+    max_level: db.MAX_PLAYER_SHIP_LEVEL,
     capacity: ship.capacity,
     ship_capacity: ship.capacity,
+    energy: ship.energy,
+    medkit_unlocked: ship.medkit_unlocked,
+    freeze_unlocked: ship.freeze_unlocked,
+    rage_unlocked: ship.rage_unlocked,
+    tactical_reserve_unlocked: ship.tactical_reserve_unlocked,
+    skeleton_barrel_unlocked: ship.skeleton_barrel_unlocked,
+    unlocked_abilities: [
+      ship.medkit_unlocked && 'Healing Field',
+      ship.freeze_unlocked && 'Freeze Orb',
+      ship.rage_unlocked && 'Rage Field',
+      ship.skeleton_barrel_unlocked && 'Skeleton Barrel',
+    ].filter(Boolean),
     troops: ship.troops,
     ship_troops: ship.troops,
     troop_template: ship.troop_template,
@@ -18851,14 +18881,15 @@ const ADMIN_MAX_VILLAGE_BUILD_ORDER = [
   'shark_trap',
   'mage_tower',
   'mortar',
+  'cannon',
   'port',
 ];
 
 const ADMIN_TH_MAX_COUNT = {
   ...db.TH_MAX_COUNT,
-  // Legacy ports remain admin-visible for old accounts, but the main ship
-  // progression still ends at level 5 and receives no TH6 capacity increase.
-  port: [1, 2, 3, 3, 3, 3],
+  // Legacy ports remain admin-visible for old accounts, but Port building
+  // progression remains capped at level 3 through TH7.
+  port: [1, 2, 3, 3, 3, 3, 3],
 };
 
 function adminMaxBuildingCountForTh(type, townHallLevel) {
@@ -18964,7 +18995,7 @@ router.post('/admin/players/:name/max-village', adminAuth, (req, res) => {
   try {
     const player = db.db.prepare('SELECT id, name FROM players WHERE name = ? AND COALESCE(is_bot, 0) = 0').get(req.params.name);
     if (!player) return res.status(404).json({ error: 'Player not found' });
-    const townHallLevel = Math.max(1, Math.min(6, Math.floor(Number(req.body?.town_hall_level || req.body?.level || 1))));
+    const townHallLevel = Math.max(1, Math.min(7, Math.floor(Number(req.body?.town_hall_level || req.body?.level || 1))));
     const result = db.db.transaction(() => {
       db.db.prepare('DELETE FROM buildings WHERE player_id = ?').run(player.id);
       const added = [];
@@ -21758,10 +21789,14 @@ function normalizeTournamentPrizeTiers(input, { strict = false } = {}) {
   return tiers.sort((a, b) => a.volume_usd - b.volume_usd);
 }
 
-function normalizeRewardSchedulePool(raw = {}, index = 0, { strict = false, labelPrefix = 'Pool' } = {}) {
+function normalizeRewardSchedulePool(raw = {}, index = 0, {
+  strict = false,
+  labelPrefix = 'Pool',
+  daily = false,
+} = {}) {
   const rewards = normalizePrizeRewards(Array.isArray(raw.rewards) ? raw.rewards : [], null, { strict });
   const topN = Math.max(1, Math.min(100, Math.floor(Number(raw.top_n ?? raw.winners ?? 5) || 5)));
-  return {
+  const pool = {
     enabled: parseBool(raw.enabled ?? true),
     label: sanitizePrizeText(raw.label || raw.name || `${labelPrefix} ${index + 1}`, `${labelPrefix} ${index + 1}`),
     top_n: topN,
@@ -21770,6 +21805,27 @@ function normalizeRewardSchedulePool(raw = {}, index = 0, { strict = false, labe
     payouts: normalizePrizeRewardPayouts(raw.payouts || []),
     metric: normalizeTournamentTeamMetric(raw.metric || 'points', TOURNAMENT_POINTS_SORT),
   };
+  if (daily) {
+    const dayUtc = String(raw.day_utc || raw.day || raw.date || '').trim();
+    if (dayUtc && !/^\d{4}-\d{2}-\d{2}$/.test(dayUtc)) {
+      if (strict) throw new Error(`${pool.label} day_utc must use YYYY-MM-DD`);
+    }
+    const parsedDay = dayUtc ? Date.parse(`${dayUtc}T00:00:00Z`) : NaN;
+    if (dayUtc && !Number.isFinite(parsedDay) && strict) {
+      throw new Error(`${pool.label} day_utc is invalid`);
+    }
+    const targetScope = String(raw.volume_target_scope || raw.target_scope || 'player').trim().toLowerCase();
+    if (!['player', 'tournament'].includes(targetScope) && strict) {
+      throw new Error(`${pool.label} volume_target_scope must be player or tournament`);
+    }
+    pool.day_utc = Number.isFinite(parsedDay) ? dayUtc : '';
+    pool.volume_target_usd = Math.max(0, Math.min(
+      10_000_000_000,
+      sanitizePrizeNumber(raw.volume_target_usd ?? raw.daily_volume_target_usd ?? raw.volume_target, 0),
+    ));
+    pool.volume_target_scope = ['player', 'tournament'].includes(targetScope) ? targetScope : 'player';
+  }
+  return pool;
 }
 
 function normalizeRewardSchedulePools(input, opts = {}) {
@@ -21807,7 +21863,7 @@ function normalizeTournamentRewardConfig(input, { strict = false } = {}) {
   const maxTickets = Math.max(1, Math.min(100000, Math.floor(Number(luckyRaw.max_tickets || 20) || 20)));
   const manualWinners = normalizeLuckyRaiderManualWinners(luckyRaw.manual_winners ?? luckyRaw.manual_winner_ids ?? luckyRaw.manual_winners_text);
   return {
-    daily_pools: normalizeRewardSchedulePools(raw.daily_pools, { strict, labelPrefix: 'Daily pool' }),
+    daily_pools: normalizeRewardSchedulePools(raw.daily_pools, { strict, labelPrefix: 'Daily pool', daily: true }),
     final_pools: normalizeRewardSchedulePools(raw.final_pools, { strict, labelPrefix: 'Final pool' }),
     lucky_daily_raider: {
       enabled: parseBool(luckyRaw.enabled),
@@ -22681,8 +22737,14 @@ function tournamentLuckyRaiderState(t, viewerId = null) {
 
 function tournamentRewardScheduleState(t, viewerId = null) {
   const config = normalizeTournamentRewardConfig(t?.reward_config || {});
+  const currentDayUtc = tournamentDailyPoolCurrentDay(t);
   return {
     ...config,
+    current_day_utc: currentDayUtc,
+    daily_pools: config.daily_pools.map((pool) => ({
+      ...pool,
+      is_active: !pool.day_utc || pool.day_utc === currentDayUtc,
+    })),
     lucky_daily_raider: tournamentLuckyRaiderState(t, viewerId),
   };
 }
@@ -22787,6 +22849,7 @@ function tournamentRowToPublic(t, options = {}) {
   try { dailyPoolOverrides = normalizeTournamentDailyPoolOverrides(t.daily_pool_overrides); }
   catch { dailyPoolOverrides = {}; }
   const dailyPoolAwardTimeUtc = normalizeTournamentDailyPoolAwardTimeUtc(t.daily_pool_award_time_utc, '00:00');
+  const rankedRaidConfig = db.rankedRaids.normalizeRankedRaidConfig(t);
   return {
     id: t.id,
     event_kind: normalizeTournamentEventKind(t.event_kind),
@@ -22808,6 +22871,14 @@ function tournamentRowToPublic(t, options = {}) {
     team_member_reward_label: tournamentMetricLabel(teamMemberRewardBy),
     attack_match_policy: attackMatchPolicy,
     attack_match_policy_label: tournamentAttackMatchPolicyLabel(attackMatchPolicy),
+    battle_mode: rankedRaidConfig.battle_mode,
+    is_ranked_raid: rankedRaidConfig.battle_mode === db.rankedRaids.RANKED_BATTLE_MODE,
+    ranked_daily_attack_limit: rankedRaidConfig.daily_attack_limit,
+    ranked_shield_hours: rankedRaidConfig.shield_hours,
+    ranked_max_defenses_per_day: rankedRaidConfig.max_defenses_per_day,
+    ranked_altar_bonus_enabled: rankedRaidConfig.altar_bonus_enabled,
+    ranked_win_trophies: rankedRaidConfig.win_trophies,
+    ranked_defense_loss_trophies: rankedRaidConfig.defense_loss_trophies,
     scoring_mode: scoringMode,
     scoring_label: scoringMode === 'daily_pool' ? `Daily points at ${dailyPoolAwardTimeUtc} UTC` : 'Live scoring',
     min_town_hall_level: tournamentTownHallRequirement(t),
@@ -22859,6 +22930,27 @@ function tournamentRowToPublic(t, options = {}) {
     registration_closes_at: cleanSqlDate(t.registration_closes_at),
     can_join: canJoinTournament(t, now),
     created_at: t.created_at,
+  };
+}
+
+function buildRankedRaidPlayerState(tournament, playerId, participant = null) {
+  if (!db.rankedRaids.isRankedRaidTournament(tournament)) return null;
+  const phase = tournamentPhase(tournament, nowSql());
+  const joined = !!participant && participant.left_at === null;
+  const day = db.rankedRaids.playerDayStats(db.db, tournament.id, playerId);
+  return {
+    enabled: true,
+    joined,
+    score: joined ? Number(participant.trophies || 0) : 0,
+    ...day,
+    shield_until: joined
+      ? db.rankedRaids.getRankedShield(db.db, tournament.id, playerId)
+      : null,
+    can_attack: joined
+      && phase === 'live'
+      && !tournament.paused_at
+      && day.attacks_remaining > 0,
+    leaderboard_preview: db.rankedRaids.leaderboardPreview(db.db, tournament.id, 3),
   };
 }
 
@@ -23145,6 +23237,58 @@ router.get('/tournaments', (req, res) => {
   res.json({ tournaments: rows.map(tournamentRowToPublic) });
 });
 
+router.get('/tournaments/ranked-raids', auth, (req, res) => {
+  db.rankedRaids.cleanupStaleReservations(db.db);
+  const requestedDex = String(req.query.dex || '').trim().toLowerCase();
+  const dex = TOURNAMENT_DEXES.includes(requestedDex) ? requestedDex : req.player.dex;
+  const rows = db.db.prepare(`
+    SELECT *
+      FROM tournaments
+     WHERE status = 'active'
+       AND COALESCE(event_kind, 'standard') = 'standard'
+       AND COALESCE(battle_mode, 'casual') = 'ranked_raids'
+       AND (paused_at IS NOT NULL OR end_at IS NULL OR replace(replace(end_at, 'T', ' '), ' UTC', '') > datetime('now'))
+       AND (
+         replace(replace(start_at, 'T', ' '), ' UTC', '') <= datetime('now')
+         OR preregistration_enabled = 1
+       )
+     ORDER BY
+       CASE WHEN replace(replace(start_at, 'T', ' '), ' UTC', '') <= datetime('now') THEN 0 ELSE 1 END,
+       replace(replace(start_at, 'T', ' '), ' UTC', '') ASC,
+       id DESC
+  `).all()
+    .map((row) => ({
+      row,
+      participant: db.rankedRaids.getParticipant(db.db, row.id, req.player.id),
+    }))
+    .filter(({ row }) => isTournamentForDex(row, dex))
+    .filter(({ row }) => !isTournamentSeekerOnly(row) || isSeekerPlayer(req.player));
+
+  const tournaments = rows.map(({ row, participant }) => {
+    const publicRow = tournamentRowToPublic(row);
+    const phase = tournamentPhase(row, nowSql());
+    const joined = !!participant && participant.left_at === null;
+    const ranked = buildRankedRaidPlayerState(row, req.player.id, joined ? participant : null);
+    return {
+      ...publicRow,
+      joined,
+      phase,
+      can_join: !joined && canJoinTournament(row, nowSql()),
+      can_attack: !!ranked?.can_attack,
+      me: joined ? {
+        trophies: Number(participant.trophies || 0),
+        gold: Number(participant.gold || 0),
+        trades_count: Number(participant.trades_count || 0),
+        volume_usd: Number(participant.volume_usd || 0),
+        pnl_usd: Number(participant.pnl_usd || 0),
+        ...ranked,
+      } : null,
+      leaderboard_preview: ranked?.leaderboard_preview || [],
+    };
+  });
+  res.json({ tournaments });
+});
+
 function ensureLuckyRaiderParticipant(t, player, rewardWallet = null, twitterHandle = null) {
   if (!t?.id || !player?.id) return null;
   const normalizedRewardWallet = rewardWallet ? normalizeRewardSolanaWallet(rewardWallet) : null;
@@ -23241,29 +23385,54 @@ router.get('/tournaments/lucky-raider', auth, (req, res) => {
 // (if any) plus their participation row. UI uses this to decide whether to
 // show "Join" or "Leave + leaderboard" on the trophy button.
 router.get('/tournaments/me', auth, (req, res) => {
-  const dex = req.player.dex;
+  const requestedDex = String(req.query.dex || '').trim().toLowerCase();
+  const dex = TOURNAMENT_DEXES.includes(requestedDex) ? requestedDex : req.player.dex;
   const seekerAccess = isSeekerPlayer(req.player) ? 1 : 0;
   const t = db.db.prepare(`
-    SELECT * FROM tournaments
-    WHERE status = 'active'
-      AND COALESCE(event_kind, 'standard') = 'standard'
+    SELECT t.*
+    FROM tournaments t
+    LEFT JOIN tournament_participants selected_tp
+      ON selected_tp.tournament_id = t.id
+     AND selected_tp.player_id = ?
+    WHERE t.status = 'active'
+      AND COALESCE(t.event_kind, 'standard') = 'standard'
       AND (
-        COALESCE(dex_scope, 'single') = 'all'
-        OR dex = ?
-        OR instr(COALESCE(eligible_dexes, '[]'), '"' || ? || '"') > 0
+        COALESCE(t.dex_scope, 'single') = 'all'
+        OR t.dex = ?
+        OR instr(COALESCE(t.eligible_dexes, '[]'), '"' || ? || '"') > 0
       )
-      AND (COALESCE(seeker_only, 0) = 0 OR ? = 1)
-      AND (paused_at IS NOT NULL OR end_at IS NULL OR replace(replace(end_at, 'T', ' '), ' UTC', '') > datetime('now'))
+      AND (COALESCE(t.seeker_only, 0) = 0 OR ? = 1)
       AND (
-        replace(replace(start_at, 'T', ' '), ' UTC', '') <= datetime('now')
-        OR preregistration_enabled = 1
+        t.paused_at IS NOT NULL
+        OR t.end_at IS NULL
+        OR replace(replace(t.end_at, 'T', ' '), ' UTC', '') > datetime('now')
+      )
+      AND (
+        replace(replace(t.start_at, 'T', ' '), ' UTC', '') <= datetime('now')
+        OR t.preregistration_enabled = 1
       )
     ORDER BY
-      CASE WHEN replace(replace(start_at, 'T', ' '), ' UTC', '') <= datetime('now') THEN 0 ELSE 1 END,
-      replace(replace(start_at, 'T', ' '), ' UTC', '') ASC,
-      id DESC
+      CASE
+        WHEN selected_tp.player_id IS NOT NULL AND selected_tp.left_at IS NULL THEN 0
+        ELSE 1
+      END,
+      CASE
+        WHEN replace(replace(t.start_at, 'T', ' '), ' UTC', '') <= datetime('now') THEN 0
+        ELSE 1
+      END,
+      CASE
+        WHEN replace(replace(t.start_at, 'T', ' '), ' UTC', '') <= datetime('now')
+          THEN replace(replace(t.start_at, 'T', ' '), ' UTC', '')
+        ELSE NULL
+      END DESC,
+      CASE
+        WHEN replace(replace(t.start_at, 'T', ' '), ' UTC', '') > datetime('now')
+          THEN replace(replace(t.start_at, 'T', ' '), ' UTC', '')
+        ELSE NULL
+      END ASC,
+      t.id DESC
     LIMIT 1
-  `).get(dex, dex, seekerAccess);
+  `).get(req.player.id, dex, dex, seekerAccess);
   if (!t) return res.json({ tournament: null, joined: false, phase: null, can_join: false });
   const pub = tournamentRowToPublic(t);
   let me = db.db.prepare(`
@@ -23290,6 +23459,7 @@ router.get('/tournaments/me', auth, (req, res) => {
     comboMeScore = scored.find(s => s.player_id === req.player.id) || null;
   }
   const thRequirement = playerMeetsTournamentTownHallRequirement(t, req.player.id);
+  const rankedRaid = buildRankedRaidPlayerState(t, req.player.id, me);
   res.json({
     tournament: pub,
     joined: !!(me && me.left_at === null),
@@ -23315,6 +23485,7 @@ router.get('/tournaments/me', auth, (req, res) => {
       reward_wallet_evm: me.reward_wallet_evm || null,
       twitter_handle: me.twitter_handle || null,
     } : null,
+    ranked_raid: rankedRaid,
   });
 });
 
@@ -23324,7 +23495,8 @@ router.get('/tournaments/me', auth, (req, res) => {
 // TournamentPanel — the leaderboard itself is fetched lazily on click via
 // /tournaments/:id/leaderboard (already public).
 router.get('/tournaments/history', auth, (req, res) => {
-  const dex = req.player.dex;
+  const requestedDex = String(req.query.dex || '').trim().toLowerCase();
+  const dex = TOURNAMENT_DEXES.includes(requestedDex) ? requestedDex : req.player.dex;
   const limit = Math.min(parseInt(req.query.limit, 10) || 20, 100);
   const seekerAccess = isSeekerPlayer(req.player) ? 1 : 0;
   // status = 'ended' OR end_at < now (catch tournaments whose admin forgot
@@ -23395,10 +23567,9 @@ router.get('/tournaments/history', auth, (req, res) => {
 });
 
 // Join a tournament. Player can join when their current DEX is in the
-// tournament's single/custom/all scope. If
-// they have a stale soft-leave row from a previous join we re-activate it
-// (preserving counters? — no, reset to zero since the user explicitly
-// left). The tournament can be in pre-registration or already live.
+// tournament's single/custom/all scope. Standard tournaments reset counters
+// after a soft leave; ranked raids preserve their immutable score ledger.
+// The tournament can be in pre-registration or already live.
 router.post('/tournaments/:id/join', auth, (req, res) => {
   const tid = parseInt(req.params.id, 10);
   if (!Number.isFinite(tid)) return res.status(400).json({ error: 'invalid id' });
@@ -23454,22 +23625,39 @@ router.post('/tournaments/:id/join', auth, (req, res) => {
       reason: 'twitter_handle_required',
     });
   }
-  // Insert or re-activate. Reset counters on re-join — explicitly leaving
-  // means the player accepts losing their slot's stats.
+  // Ranked raid score is an immutable tournament ledger projection, so leaving
+  // and rejoining must not erase attack or defense results. Standard trading
+  // tournaments retain their existing reset-on-rejoin behavior.
   const teamDex = normalizeTournamentMode(t.mode) === 'dex_vs_dex' ? req.player.dex : null;
-  db.db.prepare(`
-    INSERT INTO tournament_participants (tournament_id, player_id, joined_at, left_at, trophies, gold, trades_count, volume_usd, pnl_usd, team_dex, reward_wallet_evm, twitter_handle)
-    VALUES (?, ?, datetime('now'), NULL, 0, 0, 0, 0, 0, ?, ?, ?)
-    ON CONFLICT(tournament_id, player_id) DO UPDATE SET
-      joined_at = datetime('now'),
-      left_at = NULL,
-      trophies = 0, gold = 0, trades_count = 0, volume_usd = 0, pnl_usd = 0,
-      team_dex = excluded.team_dex,
-      reward_wallet_evm = excluded.reward_wallet_evm,
-      twitter_handle = excluded.twitter_handle,
-      last_activity_at = datetime('now')
-  `).run(tid, req.player.id, teamDex, rewardWallet, twitter.handle);
-  const sync = phase === 'live' ? syncFuturesTournamentRows(req.player.id, req.player.dex, { tournamentId: tid }) : null;
+  if (db.rankedRaids.isRankedRaidTournament(t)) {
+    db.db.prepare(`
+      INSERT INTO tournament_participants (tournament_id, player_id, joined_at, left_at, trophies, gold, trades_count, volume_usd, pnl_usd, team_dex, reward_wallet_evm, twitter_handle)
+      VALUES (?, ?, datetime('now'), NULL, 0, 0, 0, 0, 0, ?, ?, ?)
+      ON CONFLICT(tournament_id, player_id) DO UPDATE SET
+        joined_at = datetime('now'),
+        left_at = NULL,
+        team_dex = excluded.team_dex,
+        reward_wallet_evm = COALESCE(excluded.reward_wallet_evm, tournament_participants.reward_wallet_evm),
+        twitter_handle = COALESCE(excluded.twitter_handle, tournament_participants.twitter_handle),
+        last_activity_at = datetime('now')
+    `).run(tid, req.player.id, teamDex, rewardWallet, twitter.handle);
+  } else {
+    db.db.prepare(`
+      INSERT INTO tournament_participants (tournament_id, player_id, joined_at, left_at, trophies, gold, trades_count, volume_usd, pnl_usd, team_dex, reward_wallet_evm, twitter_handle)
+      VALUES (?, ?, datetime('now'), NULL, 0, 0, 0, 0, 0, ?, ?, ?)
+      ON CONFLICT(tournament_id, player_id) DO UPDATE SET
+        joined_at = datetime('now'),
+        left_at = NULL,
+        trophies = 0, gold = 0, trades_count = 0, volume_usd = 0, pnl_usd = 0,
+        team_dex = excluded.team_dex,
+        reward_wallet_evm = excluded.reward_wallet_evm,
+        twitter_handle = excluded.twitter_handle,
+        last_activity_at = datetime('now')
+    `).run(tid, req.player.id, teamDex, rewardWallet, twitter.handle);
+  }
+  const sync = phase === 'live'
+    ? syncFuturesTournamentRows(req.player.id, req.player.dex, { tournamentId: tid })
+    : null;
   console.log(`[tournament ${tid} join] player=${req.player.name} (${req.player.dex}) phase=${phase} -> JOINED ${t.name}`);
   res.json({ ok: true, joined: true, phase, sync: sync ? { ok: !!sync.ok } : null });
 });
@@ -23543,6 +23731,17 @@ router.post('/tournaments/:id/reward-wallet', auth, (req, res) => {
 router.post('/tournaments/:id/leave', auth, (req, res) => {
   const tid = parseInt(req.params.id, 10);
   if (!Number.isFinite(tid)) return res.status(400).json({ error: 'invalid id' });
+  const tournament = db.db.prepare('SELECT * FROM tournaments WHERE id = ?').get(tid);
+  if (!tournament) return res.status(404).json({ error: 'tournament not found' });
+  if (
+    db.rankedRaids.isRankedRaidTournament(tournament)
+    && tournamentPhase(tournament, nowSql()) === 'live'
+  ) {
+    return res.status(409).json({
+      error: 'You cannot leave a ranked raid tournament after it starts.',
+      reason: 'ranked_tournament_locked',
+    });
+  }
   const r = db.db.prepare(`
     UPDATE tournament_participants SET left_at = datetime('now')
     WHERE tournament_id = ? AND player_id = ? AND left_at IS NULL
@@ -24373,6 +24572,25 @@ router.patch('/admin/lucky-raider/payouts/:id/destination', adminAuth, (req, res
   }
 });
 
+router.post('/admin/tournaments/ai/plan', adminAuth, async (req, res) => {
+  try {
+    const result = await tournamentAiBuilder.generateTournamentDraft({
+      prompt: req.body?.prompt,
+      currentDraft: req.body?.current_draft,
+    });
+    res.json(result);
+  } catch (error) {
+    const status = Number(error?.status);
+    const responseStatus = Number.isInteger(status) && status >= 400 && status < 600 ? status : 500;
+    console.warn('[admin tournament ai] planning failed:', error?.message || error);
+    res.status(responseStatus).json({
+      ok: false,
+      error: String(error?.message || 'Tournament AI planning failed').slice(0, 240),
+      failures: Array.isArray(error?.failures) ? error.failures.slice(0, 10) : undefined,
+    });
+  }
+});
+
 // Create a tournament. start_at defaults to now, end_at is optional, boosts
 // default to 1.0 (no boost), sort_by defaults to raw weighted points.
 router.post('/admin/tournaments', adminAuth, (req, res) => {
@@ -24384,6 +24602,8 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
     scoring_mode, daily_pool_points, daily_pool_growth_pct, daily_pool_overrides, daily_pool_enabled_at, daily_pool_award_time_utc,
     prize_currency, prize_tiers, mega_config, reward_config, rewards_in_cop, seeker_only,
     mode, team_score_by, team_prize_mode, team_prize_splits, team_member_reward_by, attack_match_policy,
+    battle_mode, ranked_daily_attack_limit, ranked_shield_hours,
+    ranked_max_defenses_per_day, ranked_altar_bonus_enabled,
   } = req.body || {};
   if (!name || typeof name !== 'string') return res.status(400).json({ error: 'name required' });
   const eventKind = normalizeTournamentEventKind(event_kind);
@@ -24393,6 +24613,15 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
   const teamPrizeMode = normalizeTournamentTeamPrizeMode(team_prize_mode, 'winner_takes_all');
   const teamMemberRewardBy = normalizeTournamentTeamMetric(team_member_reward_by, 'volume_usd');
   const attackMatchPolicy = normalizeTournamentAttackMatchPolicy(attack_match_policy, 'all');
+  const rankedRaidConfig = db.rankedRaids.normalizeRankedRaidConfig({
+    battle_mode,
+    ranked_daily_attack_limit,
+    ranked_shield_hours,
+    ranked_max_defenses_per_day,
+    ranked_altar_bonus_enabled,
+  });
+  const rankedRaidConfigError = db.rankedRaids.validateRankedRaidConfig(rankedRaidConfig);
+  if (rankedRaidConfigError) return res.status(400).json({ error: rankedRaidConfigError });
   const scoringMode = normalizeTournamentScoringMode(scoring_mode, 'live');
   const dailyPoolPoints = normalizeTournamentDailyPoolPoints(daily_pool_points, 1000);
   let dailyPoolAwardTimeUtc;
@@ -24408,7 +24637,9 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
   if (tournamentMode === 'dex_vs_dex' && tournamentEligibleDexes(dexConfig).length < 2) {
     return res.status(400).json({ error: 'DEX vs DEX tournaments need at least two eligible DEXes' });
   }
-  const sortCol = scoringMode === 'daily_pool' ? TOURNAMENT_POINTS_SORT : normalizeTournamentSort(sort_by, TOURNAMENT_POINTS_SORT);
+  const sortCol = scoringMode === 'daily_pool'
+    ? TOURNAMENT_POINTS_SORT
+    : normalizeTournamentSort(sort_by, TOURNAMENT_POINTS_SORT);
   const needsPointWeights = sortCol === TOURNAMENT_POINTS_SORT
     || scoringMode === 'daily_pool'
     || (tournamentMode === 'dex_vs_dex' && (teamScoreBy === TOURNAMENT_POINTS_SORT || teamMemberRewardBy === TOURNAMENT_POINTS_SORT));
@@ -24488,9 +24719,10 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
       points_trophy_weight, points_volume_weight, points_pnl_weight,
       scoring_mode, daily_pool_points, daily_pool_growth_pct, daily_pool_overrides, daily_pool_enabled_at, daily_pool_award_time_utc,
       prize_currency, prize_tiers, mega_config, reward_config, rewards_in_cop, seeker_only,
-      shield_hours, freeze_trophies, min_town_hall_level, registration_require_twitter, preregistration_enabled, registration_opens_at, registration_closes_at
+      shield_hours, freeze_trophies, min_town_hall_level, registration_require_twitter, preregistration_enabled, registration_opens_at, registration_closes_at,
+      battle_mode, ranked_daily_attack_limit, ranked_shield_hours, ranked_max_defenses_per_day, ranked_altar_bonus_enabled
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     eventKind,
     name.trim(),
@@ -24532,7 +24764,12 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
     requireTwitter,
     prereg,
     registrationOpenIso,
-    registrationCloseIso
+    registrationCloseIso,
+    rankedRaidConfig.battle_mode,
+    rankedRaidConfig.daily_attack_limit,
+    rankedRaidConfig.shield_hours,
+    rankedRaidConfig.max_defenses_per_day,
+    rankedRaidConfig.altar_bonus_enabled ? 1 : 0
   );
   const t = db.db.prepare('SELECT * FROM tournaments WHERE id = ?').get(r.lastInsertRowid);
   res.json({ ok: true, tournament: tournamentRowToPublic(t) });
@@ -24552,6 +24789,8 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
     scoring_mode, daily_pool_points, daily_pool_growth_pct, daily_pool_overrides, daily_pool_enabled_at, daily_pool_award_time_utc,
     prize_currency, prize_tiers, mega_config, reward_config, rewards_in_cop, seeker_only,
     mode, team_score_by, team_prize_mode, team_prize_splits, team_member_reward_by, attack_match_policy,
+    battle_mode, ranked_daily_attack_limit, ranked_shield_hours,
+    ranked_max_defenses_per_day, ranked_altar_bonus_enabled,
   } = req.body || {};
   const nextEventKind = event_kind !== undefined ? normalizeTournamentEventKind(event_kind) : normalizeTournamentEventKind(t.event_kind);
   const dexConfig = normalizeTournamentDexConfig(req.body || {}, t);
@@ -24560,7 +24799,27 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
   const teamPrizeMode = normalizeTournamentTeamPrizeMode(team_prize_mode !== undefined ? team_prize_mode : t.team_prize_mode, 'winner_takes_all');
   const teamMemberRewardBy = normalizeTournamentTeamMetric(team_member_reward_by !== undefined ? team_member_reward_by : t.team_member_reward_by, 'volume_usd');
   const attackMatchPolicy = normalizeTournamentAttackMatchPolicy(attack_match_policy !== undefined ? attack_match_policy : t.attack_match_policy, 'all');
-  const nextScoringMode = normalizeTournamentScoringMode(scoring_mode !== undefined ? scoring_mode : t.scoring_mode, 'live');
+  const nextRankedRaidConfig = db.rankedRaids.normalizeRankedRaidConfig({
+    battle_mode: battle_mode !== undefined ? battle_mode : t.battle_mode,
+    ranked_daily_attack_limit: ranked_daily_attack_limit !== undefined
+      ? ranked_daily_attack_limit
+      : t.ranked_daily_attack_limit,
+    ranked_shield_hours: ranked_shield_hours !== undefined
+      ? ranked_shield_hours
+      : t.ranked_shield_hours,
+    ranked_max_defenses_per_day: ranked_max_defenses_per_day !== undefined
+      ? ranked_max_defenses_per_day
+      : t.ranked_max_defenses_per_day,
+    ranked_altar_bonus_enabled: ranked_altar_bonus_enabled !== undefined
+      ? ranked_altar_bonus_enabled
+      : t.ranked_altar_bonus_enabled,
+  });
+  const rankedRaidConfigError = db.rankedRaids.validateRankedRaidConfig(nextRankedRaidConfig);
+  if (rankedRaidConfigError) return res.status(400).json({ error: rankedRaidConfigError });
+  const nextScoringMode = normalizeTournamentScoringMode(
+    scoring_mode !== undefined ? scoring_mode : t.scoring_mode,
+    'live'
+  );
   const nextDailyPoolPoints = normalizeTournamentDailyPoolPoints(daily_pool_points !== undefined ? daily_pool_points : t.daily_pool_points, 1000);
   let nextDailyPoolAwardTimeUtc;
   let nextDailyPoolGrowthPct;
@@ -24607,7 +24866,9 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
     registration_closes_at: nextRegistrationClosesAt,
   });
   if (windowError) return res.status(400).json({ error: windowError });
-  const nextSortBy = nextScoringMode === 'daily_pool' ? TOURNAMENT_POINTS_SORT : normalizeTournamentSort(sort_by, t.sort_by);
+  const nextSortBy = nextScoringMode === 'daily_pool'
+    ? TOURNAMENT_POINTS_SORT
+    : normalizeTournamentSort(sort_by, t.sort_by);
   const needsPointWeights = nextSortBy === TOURNAMENT_POINTS_SORT
     || nextScoringMode === 'daily_pool'
     || (tournamentMode === 'dex_vs_dex' && (teamScoreBy === TOURNAMENT_POINTS_SORT || teamMemberRewardBy === TOURNAMENT_POINTS_SORT));
@@ -24701,6 +24962,11 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
       : Number(t.preregistration_enabled || 0),
     registration_opens_at: nextRegistrationOpensAt,
     registration_closes_at: nextRegistrationClosesAt,
+    battle_mode: nextRankedRaidConfig.battle_mode,
+    ranked_daily_attack_limit: nextRankedRaidConfig.daily_attack_limit,
+    ranked_shield_hours: nextRankedRaidConfig.shield_hours,
+    ranked_max_defenses_per_day: nextRankedRaidConfig.max_defenses_per_day,
+    ranked_altar_bonus_enabled: nextRankedRaidConfig.altar_bonus_enabled ? 1 : 0,
   };
   db.db.prepare(`
     UPDATE tournaments SET event_kind = ?, name = ?, description = ?, dex = ?, dex_scope = ?, eligible_dexes = ?,
@@ -24710,7 +24976,8 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
                             points_trophy_weight = ?, points_volume_weight = ?, points_pnl_weight = ?,
                             scoring_mode = ?, daily_pool_points = ?, daily_pool_growth_pct = ?, daily_pool_overrides = ?, daily_pool_enabled_at = ?, daily_pool_award_time_utc = ?,
                             prize_currency = ?, prize_tiers = ?, mega_config = ?, reward_config = ?, rewards_in_cop = ?, seeker_only = ?,
-                            freeze_trophies = ?, min_town_hall_level = ?, registration_require_twitter = ?, preregistration_enabled = ?, registration_opens_at = ?, registration_closes_at = ?
+                            freeze_trophies = ?, min_town_hall_level = ?, registration_require_twitter = ?, preregistration_enabled = ?, registration_opens_at = ?, registration_closes_at = ?,
+                            battle_mode = ?, ranked_daily_attack_limit = ?, ranked_shield_hours = ?, ranked_max_defenses_per_day = ?, ranked_altar_bonus_enabled = ?
     WHERE id = ?
   `).run(
     next.event_kind,
@@ -24754,6 +25021,11 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
     next.preregistration_enabled,
     next.registration_opens_at,
     next.registration_closes_at,
+    next.battle_mode,
+    next.ranked_daily_attack_limit,
+    next.ranked_shield_hours,
+    next.ranked_max_defenses_per_day,
+    next.ranked_altar_bonus_enabled,
     tid
   );
   if (next.status !== 'active' && t.paused_at) {

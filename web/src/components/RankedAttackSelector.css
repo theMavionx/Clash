@@ -1,0 +1,567 @@
+.ranked-attack-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10080;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(19, 27, 31, 0.66);
+  backdrop-filter: blur(3px);
+}
+
+.ranked-attack-panel {
+  width: min(980px, 100%);
+  max-height: min(820px, calc(100vh - 36px));
+  overflow: auto;
+  border: 4px solid #286783;
+  border-radius: 8px;
+  background: #f4e8cc;
+  box-shadow: 0 18px 48px rgba(16, 26, 31, 0.46), inset 0 0 0 2px #a5d2e5;
+  color: #573822;
+  scrollbar-color: #9e875d transparent;
+}
+
+.ranked-attack-panel > header {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 76px;
+  padding: 12px 16px;
+  border-bottom: 4px solid #bda678;
+  background: #55acd2;
+}
+
+.ranked-attack-title-lockup {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 11px;
+}
+
+.ranked-attack-title-lockup > img {
+  width: 44px;
+  height: 44px;
+  flex: 0 0 44px;
+  object-fit: contain;
+}
+
+.ranked-attack-title-lockup span {
+  display: block;
+  color: #22495b;
+  font-size: 10px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.ranked-attack-panel h2,
+.ranked-attack-panel h3,
+.ranked-attack-panel p {
+  margin: 0;
+}
+
+.ranked-attack-panel h2 {
+  overflow: hidden;
+  color: #fff;
+  font-size: clamp(24px, 4vw, 34px);
+  line-height: 1.04;
+  text-overflow: ellipsis;
+  text-shadow: 0 3px 0 #315c70;
+  white-space: nowrap;
+}
+
+.ranked-attack-close {
+  width: 42px;
+  height: 42px;
+  flex: 0 0 42px;
+  border: 3px solid #8c1d18;
+  border-radius: 8px;
+  background: #e7463d;
+  box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.35), 0 3px 0 #8c1d18;
+  color: #fff;
+  cursor: pointer;
+  font: inherit;
+  font-size: 24px;
+  font-weight: 900;
+  line-height: 32px;
+}
+
+.ranked-attack-tournament-picker {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 14px 0;
+  color: #795e3e;
+  font-size: 10px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.ranked-attack-tournament-picker select {
+  min-width: 0;
+  flex: 1;
+  border: 2px solid #b99f70;
+  border-radius: 6px;
+  background: #fff9e8;
+  color: #573822;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 8px 10px;
+}
+
+.ranked-attack-modes {
+  display: grid;
+  grid-template-columns: minmax(0, 0.84fr) minmax(0, 1.16fr);
+  align-items: stretch;
+  gap: 14px;
+  padding: 14px;
+}
+
+.ranked-attack-mode {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  grid-template-rows: 180px minmax(0, 1fr);
+  overflow: hidden;
+  border: 3px solid #a98a58;
+  border-radius: 8px;
+  background: #fff8e7;
+  box-shadow: inset 0 0 0 2px #ead8af, 0 4px 0 rgba(87, 56, 34, 0.22);
+}
+
+.ranked-attack-mode.ranked {
+  border-color: #7f6544;
+}
+
+.ranked-attack-mode.unavailable {
+  filter: saturate(0.55);
+  opacity: 0.78;
+}
+
+.ranked-attack-visual {
+  position: relative;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-bottom: 3px solid #a98a58;
+}
+
+.ranked-attack-visual.casual {
+  background: #b5dce8;
+}
+
+.ranked-attack-visual.ranked {
+  background: #f0bd59;
+}
+
+.ranked-attack-hero {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+}
+
+.ranked-attack-hero.casual {
+  width: 86%;
+  height: 86%;
+  filter: drop-shadow(0 7px 7px rgba(47, 57, 61, 0.24));
+}
+
+.ranked-attack-hero.tournament {
+  width: 64%;
+  height: 82%;
+  filter: drop-shadow(0 7px 6px rgba(70, 42, 18, 0.28));
+}
+
+.ranked-attack-dex-mark {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border: 2px solid rgba(76, 48, 26, 0.45);
+  border-radius: 7px;
+  background: #fff8e7;
+  box-shadow: 0 2px 0 rgba(76, 48, 26, 0.22);
+}
+
+.ranked-attack-dex-mark img {
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
+}
+
+.ranked-attack-status {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  border: 2px solid currentColor;
+  border-radius: 999px;
+  padding: 4px 8px;
+  background: #fff8e7;
+  font-size: 9px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.ranked-attack-status.casual {
+  color: #8d5d17;
+}
+
+.ranked-attack-status.live {
+  color: #267531;
+}
+
+.ranked-attack-status.prereg {
+  color: #2f63a0;
+}
+
+.ranked-attack-content {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 10px;
+  padding: 13px;
+}
+
+.ranked-attack-heading > span {
+  display: block;
+  margin-bottom: 2px;
+  color: #ae680e;
+  font-size: 10px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.ranked-attack-heading h3 {
+  overflow: hidden;
+  color: #4d301f;
+  font-size: 21px;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ranked-attack-heading p {
+  margin-top: 5px;
+  color: #816847;
+  font-size: 12px;
+  font-weight: 750;
+  line-height: 1.4;
+}
+
+.ranked-attack-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border-top: 2px solid #dcc9a0;
+  border-bottom: 2px solid #dcc9a0;
+}
+
+.ranked-attack-metrics > div {
+  min-width: 0;
+  padding: 8px 5px;
+  text-align: center;
+}
+
+.ranked-attack-metrics > div + div {
+  border-left: 1px solid #dcc9a0;
+}
+
+.ranked-attack-metrics span {
+  display: block;
+  overflow: hidden;
+  color: #987d58;
+  font-size: 8px;
+  font-weight: 900;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.ranked-attack-metrics strong {
+  display: block;
+  margin-top: 2px;
+  color: #4c3424;
+  font-size: 16px;
+}
+
+.ranked-attack-trading-strip {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px 12px;
+  color: #806747;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.ranked-attack-trading-strip b {
+  color: #356b42;
+}
+
+.ranked-attack-rules {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.ranked-attack-rules span {
+  border-radius: 5px;
+  background: #e6d7b7;
+  color: #795d39;
+  padding: 4px 7px;
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.ranked-attack-rules b {
+  color: #4c3424;
+}
+
+.ranked-attack-notice,
+.ranked-attack-deadline {
+  color: #2e6d91;
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.ranked-attack-registration {
+  display: grid;
+  gap: 7px;
+  border-top: 2px solid #dcc9a0;
+  padding-top: 9px;
+}
+
+.ranked-attack-registration label {
+  display: grid;
+  gap: 3px;
+}
+
+.ranked-attack-registration label > span {
+  color: #8c704e;
+  font-size: 9px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.ranked-attack-registration input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  border: 2px solid #bfa675;
+  border-radius: 6px;
+  outline: none;
+  background: #fffaf0;
+  color: #4c3424;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 750;
+  padding: 8px 9px;
+}
+
+.ranked-attack-registration input:focus {
+  border-color: #3f9de1;
+  box-shadow: 0 0 0 2px rgba(63, 157, 225, 0.18);
+}
+
+.ranked-attack-casual-button,
+.ranked-attack-primary {
+  min-height: 50px;
+  margin-top: auto;
+  border-radius: 7px;
+  cursor: pointer;
+  color: #fff;
+  font: inherit;
+  font-weight: 900;
+  text-shadow: 0 2px 0 rgba(65, 37, 12, 0.45);
+}
+
+.ranked-attack-casual-button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border: 3px solid #a86709;
+  background: #ffb32c;
+  box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.45), 0 3px 0 #a86709;
+  padding: 0 16px;
+}
+
+.ranked-attack-primary {
+  border: 3px solid #1f6395;
+  background: #3f9de1;
+  box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.4), 0 3px 0 #1f6395;
+  padding: 0 12px;
+}
+
+.ranked-attack-primary:disabled,
+.ranked-attack-casual-button:disabled {
+  cursor: not-allowed;
+  filter: grayscale(0.7);
+  opacity: 0.62;
+}
+
+.ranked-attack-loading {
+  display: grid;
+  min-height: 300px;
+  place-items: center;
+  align-content: center;
+  gap: 8px;
+  border: 3px dashed #a7b9bf;
+  border-radius: 8px;
+  color: #32719b;
+  font-size: 12px;
+  font-weight: 850;
+  text-align: center;
+}
+
+.ranked-attack-loading span {
+  width: 22px;
+  height: 22px;
+  border: 3px solid #b5d9ec;
+  border-top-color: #32719b;
+  border-radius: 50%;
+  animation: ranked-attack-spin 0.7s linear infinite;
+}
+
+.ranked-attack-error {
+  margin: 0 14px 14px;
+  border: 2px solid #cf6862;
+  border-radius: 7px;
+  background: #ffe6e2;
+  color: #a22d28;
+  padding: 10px 12px;
+  font-size: 11px;
+  font-weight: 850;
+  text-align: center;
+}
+
+@keyframes ranked-attack-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (max-width: 720px) {
+  .ranked-attack-overlay {
+    align-items: end;
+    padding: 0;
+  }
+
+  .ranked-attack-panel {
+    max-height: 94vh;
+    border-width: 3px 3px 0;
+    border-radius: 8px 8px 0 0;
+  }
+
+  .ranked-attack-panel > header {
+    min-height: 64px;
+    padding: 10px 12px;
+  }
+
+  .ranked-attack-title-lockup > img {
+    width: 36px;
+    height: 36px;
+    flex-basis: 36px;
+  }
+
+  .ranked-attack-panel h2 {
+    font-size: 25px;
+  }
+
+  .ranked-attack-modes {
+    grid-template-columns: 1fr;
+    gap: 11px;
+    padding: 11px;
+  }
+
+  .ranked-attack-mode {
+    grid-template-columns: 116px minmax(0, 1fr);
+    grid-template-rows: minmax(220px, auto);
+  }
+
+  .ranked-attack-visual {
+    border-right: 3px solid #a98a58;
+    border-bottom: 0;
+  }
+
+  .ranked-attack-hero.casual {
+    width: 100%;
+    height: 84%;
+  }
+
+  .ranked-attack-hero.tournament {
+    width: 88%;
+    height: 76%;
+  }
+
+  .ranked-attack-dex-mark {
+    left: 7px;
+    bottom: 7px;
+    width: 34px;
+    height: 34px;
+  }
+
+  .ranked-attack-dex-mark img {
+    width: 25px;
+    height: 25px;
+  }
+
+  .ranked-attack-status {
+    top: 7px;
+    right: 7px;
+    padding: 3px 6px;
+    font-size: 8px;
+  }
+
+  .ranked-attack-content {
+    gap: 8px;
+    padding: 10px;
+  }
+
+  .ranked-attack-heading h3 {
+    font-size: 17px;
+  }
+
+  .ranked-attack-heading p {
+    font-size: 10px;
+  }
+
+  .ranked-attack-metrics strong {
+    font-size: 13px;
+  }
+
+  .ranked-attack-trading-strip,
+  .ranked-attack-rules,
+  .ranked-attack-notice {
+    font-size: 9px;
+  }
+
+  .ranked-attack-casual-button,
+  .ranked-attack-primary {
+    min-height: 44px;
+    font-size: 12px;
+  }
+}
+
+@media (max-width: 460px) {
+  .ranked-attack-mode {
+    grid-template-columns: 92px minmax(0, 1fr);
+  }
+
+  .ranked-attack-heading p {
+    display: none;
+  }
+
+  .ranked-attack-trading-strip {
+    justify-content: flex-start;
+  }
+
+  .ranked-attack-rules span:nth-child(n+3) {
+    display: none;
+  }
+}

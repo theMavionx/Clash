@@ -22,12 +22,34 @@ const WARMUP_FRAMES: int = 90
 const SAMPLE_FRAMES: int = 120
 const MIXED_GROUP_SIZE: int = 4
 const MIN_STABLE_FPS: float = 15.0
+const COMBAT_TARGET_COUNT: int = 9
+
+class ProbeBuildingSystem:
+	extends Node
+
+	var placed_buildings: Array[Dictionary] = []
+	var building_defs: Dictionary = {
+		"probe_target": {
+			"cells": Vector2i(2, 2),
+			"non_targetable": false,
+		},
+	}
+	var cell_size: float = 0.5
+	var grid_center: Vector3 = Vector3.ZERO
+	var grid_extent_x: float = 14.0
+	var grid_extent_z: float = 11.0
+	var grid_rotation: float = 0.0
+
+	func _get_grid_index() -> int:
+		return 0
 
 var _probe_name: String = "mixed"
 var _requested_count: int = DEFAULT_COUNT
 var _output_dir: String = "res://.codex-artifacts/all-troop-crowd"
 var _troops: Array[Node3D] = []
 var _failures: PackedStringArray = []
+var _simulate_combat: bool = false
+var _probe_building_system: ProbeBuildingSystem
 
 
 func _ready() -> void:
@@ -38,12 +60,16 @@ func _ready() -> void:
 			_requested_count = maxi(1, int(arg.trim_prefix("--count=")))
 		elif arg.begins_with("--probe-output="):
 			_output_dir = arg.trim_prefix("--probe-output=")
+		elif arg == "--simulate-combat":
+			_simulate_combat = true
 	call_deferred("_run")
 
 
 func _run() -> void:
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(_output_dir))
 	_build_stage()
+	if _simulate_combat:
+		_build_combat_targets()
 	var specs := _selected_specs()
 	if specs.is_empty():
 		_failures.append("unknown troop selection: %s" % _probe_name)
@@ -154,6 +180,39 @@ func _build_stage() -> void:
 	add_child(camera)
 
 
+func _build_combat_targets() -> void:
+	_probe_building_system = ProbeBuildingSystem.new()
+	_probe_building_system.name = "ProbeBuildingSystem"
+	_probe_building_system.add_to_group("building_systems")
+	add_child(_probe_building_system)
+	var target_material := StandardMaterial3D.new()
+	target_material.albedo_color = Color("#62748f")
+	target_material.roughness = 0.9
+	for index in range(COMBAT_TARGET_COUNT):
+		var target := MeshInstance3D.new()
+		target.name = "ProbeTarget_%02d" % index
+		var mesh := BoxMesh.new()
+		mesh.size = Vector3(0.75, 0.65, 0.75)
+		mesh.material = target_material
+		target.mesh = mesh
+		var column := index % 3
+		var row := floori(float(index) / 3.0)
+		target.position = Vector3(
+			(float(column) - 1.0) * 2.2,
+			0.325,
+			-1.0 - float(row) * 1.8
+		)
+		add_child(target)
+		_probe_building_system.placed_buildings.append({
+			"id": "probe_target",
+			"server_id": index + 1,
+			"grid_pos": Vector2i(column, row),
+			"hp": 1_000_000_000,
+			"node": target,
+		})
+	BaseTroop.reset_combat_runtime_cache()
+
+
 func _spawn_troop(spec: Dictionary, index: int, total_count: int) -> void:
 	var troop_name := str(spec.get("name", "Unknown"))
 	var model := load(str(spec.get("model", ""))) as PackedScene
@@ -177,7 +236,7 @@ func _spawn_troop(spec: Dictionary, index: int, total_count: int) -> void:
 	var columns := maxi(1, ceili(sqrt(float(total_count))))
 	var rows := maxi(1, ceili(float(total_count) / float(columns)))
 	var column := index % columns
-	var row := index / columns
+	var row := floori(float(index) / float(columns))
 	troop.position = Vector3(
 		(float(column) - float(columns - 1) * 0.5) * 0.92,
 		0.0,
@@ -185,10 +244,14 @@ func _spawn_troop(spec: Dictionary, index: int, total_count: int) -> void:
 	)
 	add_child(troop)
 	await get_tree().process_frame
-	troop.set_process(false)
-	troop.set_physics_process(false)
-	troop.add_to_group("troops")
-	_play_representative_animation(troop)
+	if _simulate_combat:
+		troop.set_meta("replay_order", index)
+		troop.call("activate")
+	else:
+		troop.set_process(false)
+		troop.set_physics_process(false)
+		troop.add_to_group("troops")
+		_play_representative_animation(troop)
 	_troops.append(troop)
 
 
@@ -218,7 +281,9 @@ func _first_animation_player(node: Node) -> AnimationPlayer:
 func _validate_crowd_state() -> void:
 	var manager := get_node_or_null("TroopCrowdBatch")
 	var expected_batched := 0
-	for troop in _troops:
+	for troop in get_tree().get_nodes_in_group("troops"):
+		if not is_instance_valid(troop) or troop.is_queued_for_deletion():
+			continue
 		var troop_script := troop.get_script() as Script
 		if (
 			troop_script == null
@@ -232,25 +297,55 @@ func _validate_crowd_state() -> void:
 	var registered: Dictionary = manager.get("_troops")
 	var assignments: Dictionary = manager.get("_assignments")
 	var channels: Dictionary = manager.get("_channels")
+	var deferred_visible := 0
+	var deferred_invisible := 0
+	for raw_id in registered.keys():
+		var troop_id := int(raw_id)
+		if assignments.has(troop_id):
+			continue
+		var troop := registered.get(troop_id) as Node3D
+		if troop == null or not is_instance_valid(troop):
+			continue
+		var has_visible_part := false
+		for raw_part in troop.find_children("*", "MeshInstance3D", true, false):
+			var part := raw_part as MeshInstance3D
+			if part != null and part.mesh != null and part.is_visible_in_tree():
+				has_visible_part = true
+				break
+		if has_visible_part:
+			deferred_visible += 1
+		else:
+			deferred_invisible += 1
 	if registered.size() != expected_batched:
 		_failures.append(
 			"registered %d of %d expected troops"
 			% [registered.size(), expected_batched]
 		)
-	if assignments.size() != expected_batched:
+	if assignments.size() + deferred_visible != expected_batched:
 		_failures.append(
-			"assigned %d of %d expected troops"
-			% [assignments.size(), expected_batched]
+			"render-ready %d of %d expected troops (assigned=%d deferred_visible=%d)"
+			% [
+				assignments.size() + deferred_visible,
+				expected_batched,
+				assignments.size(),
+				deferred_visible,
+			]
 		)
+	if deferred_invisible > 0:
+		_failures.append("%d deferred troops have no visible fallback" % deferred_invisible)
 	if expected_batched > 0 and channels.is_empty():
 		_failures.append("crowd batching produced no render channels")
 	print(
-		"[ALL_TROOP_CROWD_STATE] probe=%s spawned=%d registered=%d assigned=%d channels=%d"
+		(
+			"[ALL_TROOP_CROWD_STATE] probe=%s spawned=%d registered=%d "
+			+ "assigned=%d deferred_visible=%d channels=%d"
+		)
 		% [
 			_probe_name,
 			_troops.size(),
 			registered.size(),
 			assignments.size(),
+			deferred_visible,
 			channels.size(),
 		]
 	)
@@ -279,7 +374,7 @@ func _finish(average_fps: float, p95_fps: float, minimum_fps: float) -> void:
 		print(
 			"[ALL_TROOP_CROWD] PASS probe=%s troops=%d avg_fps=%.2f p95_fps=%.2f min_fps=%.2f"
 			% [
-				_probe_name,
+				"%s%s" % [_probe_name, "-combat" if _simulate_combat else ""],
 				_troops.size(),
 				average_fps,
 				p95_fps,
@@ -293,7 +388,7 @@ func _finish(average_fps: float, p95_fps: float, minimum_fps: float) -> void:
 	print(
 		"[ALL_TROOP_CROWD] FAIL probe=%s troops=%d failures=%d avg_fps=%.2f p95_fps=%.2f min_fps=%.2f"
 		% [
-			_probe_name,
+			"%s%s" % [_probe_name, "-combat" if _simulate_combat else ""],
 			_troops.size(),
 			_failures.size(),
 			average_fps,

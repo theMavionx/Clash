@@ -5,6 +5,7 @@ const { verifyReplay } = require('./combat_session');
 const {
   CANONICAL_GRID_CONFIGS,
   FREEZE_DROP,
+  MEDKIT_ENERGY_COST,
   PLAYER_SHIP_LEVELS,
   RAGE_DROP,
   SKELETON_BARREL,
@@ -75,7 +76,7 @@ function deploy(troop = 'Knight', level = 7, t = 0, attackGridX = 13) {
 }
 
 function simulate(defenderBuildings, actions, {
-  shipLevel = 6,
+  shipLevel = 10,
   levels = {},
 } = {}) {
   return verifyReplay({
@@ -108,7 +109,7 @@ assert.deepEqual(
     durationSec: FREEZE_DROP.durationSec,
   },
   {
-    unlockShipLevel: 6,
+    unlockShipLevel: 7,
     energyCost: 5,
     maxUses: 1,
     travelSec: 0.9,
@@ -129,7 +130,7 @@ assert.deepEqual(
     graceSec: RAGE_DROP.graceSec,
   },
   {
-    unlockShipLevel: 6,
+    unlockShipLevel: 8,
     energyCost: 7,
     maxUses: 1,
     radius: 0.82,
@@ -152,7 +153,7 @@ assert.deepEqual(
     skeleton: SKELETON_BARREL.skeleton,
   },
   {
-    unlockShipLevel: 6,
+    unlockShipLevel: 10,
     energyCost: 8,
     maxUses: 1,
     travelSec: 1.6,
@@ -219,6 +220,24 @@ assert.ok(traceReason(locked, 'rage_drop_ignored', 'locked'));
 assert.ok(traceReason(locked, 'skeleton_barrel_ignored', 'locked'));
 assert.equal(locked._cannonEnergy, PLAYER_SHIP_LEVELS[5].energy);
 
+const freezeLocked = simulate(validationBuildings, [
+  commonDeploy,
+  { type: FREEZE_DROP.actionType, ...validationPoint, t: 0 },
+], { shipLevel: FREEZE_DROP.unlockShipLevel - 1 });
+assert.ok(traceReason(freezeLocked, 'freeze_drop_ignored', 'locked'));
+
+const rageLocked = simulate(validationBuildings, [
+  commonDeploy,
+  { type: RAGE_DROP.actionType, ...validationPoint, t: 0 },
+], { shipLevel: RAGE_DROP.unlockShipLevel - 1 });
+assert.ok(traceReason(rageLocked, 'rage_drop_ignored', 'locked'));
+
+const barrelLocked = simulate(validationBuildings, [
+  commonDeploy,
+  { type: SKELETON_BARREL.actionType, buildingId: 2, t: 0 },
+], { shipLevel: SKELETON_BARREL.unlockShipLevel - 1 });
+assert.ok(traceReason(barrelLocked, 'skeleton_barrel_ignored', 'locked'));
+
 const invalidInputs = simulate(validationBuildings, [
   commonDeploy,
   { type: FREEZE_DROP.actionType, x: 999, z: 999, t: 0 },
@@ -228,10 +247,11 @@ const invalidInputs = simulate(validationBuildings, [
 assert.ok(traceReason(invalidInputs, 'freeze_drop_ignored', 'out_of_bounds'));
 assert.ok(traceReason(invalidInputs, 'rage_drop_ignored', 'invalid_point'));
 assert.ok(traceReason(invalidInputs, 'skeleton_barrel_ignored', 'invalid_target'));
-assert.equal(invalidInputs._cannonEnergy, PLAYER_SHIP_LEVELS[6].energy);
+assert.equal(invalidInputs._cannonEnergy, PLAYER_SHIP_LEVELS[10].energy);
 
 const energySpoof = simulate(validationBuildings, [
   commonDeploy,
+  { type: 'medkit_drop', ...validationPoint, t: 0 },
   { type: FREEZE_DROP.actionType, ...validationPoint, t: 0 },
   { type: RAGE_DROP.actionType, ...validationPoint, t: 0.1 },
   {
@@ -249,7 +269,8 @@ assert.equal(energySpoof._skeletonBarrelEventsAccepted, 0);
 assert.ok(traceReason(energySpoof, 'skeleton_barrel_ignored', 'energy'));
 assert.equal(
   energySpoof._cannonEnergy,
-  PLAYER_SHIP_LEVELS[6].energy
+  PLAYER_SHIP_LEVELS[10].energy
+    - MEDKIT_ENERGY_COST
     - FREEZE_DROP.energyCost
     - RAGE_DROP.energyCost,
 );
@@ -512,7 +533,7 @@ assert.equal(
 assert.equal(barrelResult.casualties.SkeletonBarrelSkeleton, undefined);
 assert.equal(
   barrelResult._cannonEnergy,
-  PLAYER_SHIP_LEVELS[6].energy
+  PLAYER_SHIP_LEVELS[10].energy
     - SKELETON_BARREL.energyCost
     + 2
     - RAGE_DROP.energyCost,

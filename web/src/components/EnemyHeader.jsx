@@ -32,7 +32,17 @@ function EnemyHeader() {
         </div>
 
         <div style={styles.infoStack}>
-          <span style={compact ? { ...styles.playerName, ...styles.playerNameReplayMobile } : styles.playerName}>{enemyMode.name}</span>
+          <span
+            data-enemy-name
+            title={enemyMode.name}
+            style={{
+              ...styles.playerName,
+              ...(mobile ? styles.playerNameMobile : null),
+              ...(compact ? styles.playerNameReplayMobile : null),
+            }}
+          >
+            {enemyMode.name}
+          </span>
 
           {enemyMode.trophies !== undefined && (
             <div style={compact ? { ...styles.trophyContainer, height: 26, marginLeft: 2 } : styles.trophyContainer}>
@@ -152,6 +162,7 @@ const styles = {
     flexDirection: 'column',
     justifyContent: 'center',
     gap: 2,
+    minWidth: 0,
   },
   playerName: {
     color: '#fff',
@@ -160,6 +171,14 @@ const styles = {
     textShadow: '-1px -1px 0 #1a1a1a, 1px -1px 0 #1a1a1a, -1px 1px 0 #1a1a1a, 1px 1px 0 #1a1a1a, 0 2px 2px rgba(0,0,0,0.8)',
     marginLeft: 4,
     letterSpacing: '0.5px',
+  },
+  playerNameMobile: {
+    display: 'block',
+    maxWidth: 'min(44vw, calc(100vw - 180px), 320px)',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    letterSpacing: 0,
   },
   playerNameReplayMobile: {
     maxWidth: 'calc(100vw - 178px)',

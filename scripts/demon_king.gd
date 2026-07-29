@@ -18,61 +18,22 @@ extends BaseTroop
 ## "Melee_1H_Attack_Chop") so the rest of the combat code works unchanged.
 
 
-const NORMAL_TROOP_STATS: Dictionary = {
-	"knight": {
-		1: {"hp": 450, "damage": 38, "atk_speed": 1.40},
-		2: {"hp": 600, "damage": 50, "atk_speed": 1.30},
-		3: {"hp": 780, "damage": 66, "atk_speed": 1.20},
-		4: {"hp": 1000, "damage": 86, "atk_speed": 1.10},
-		5: {"hp": 1260, "damage": 112, "atk_speed": 1.02},
-		6: {"hp": 1560, "damage": 145, "atk_speed": 0.96},
-		7: {"hp": 1900, "damage": 185, "atk_speed": 0.90},
-	},
-	"mage": {
-		1: {"hp": 150, "damage": 58, "atk_speed": 1.25},
-		2: {"hp": 200, "damage": 74, "atk_speed": 1.12},
-		3: {"hp": 265, "damage": 104, "atk_speed": 1.0},
-		4: {"hp": 345, "damage": 138, "atk_speed": 0.90},
-		5: {"hp": 440, "damage": 182, "atk_speed": 0.82},
-		6: {"hp": 555, "damage": 238, "atk_speed": 0.76},
-		7: {"hp": 690, "damage": 310, "atk_speed": 0.70},
-	},
-	"barbarian": {
-		1: {"hp": 240, "damage": 24, "atk_speed": 0.60},
-		2: {"hp": 320, "damage": 32, "atk_speed": 0.55},
-		3: {"hp": 420, "damage": 43, "atk_speed": 0.50},
-		4: {"hp": 550, "damage": 57, "atk_speed": 0.46},
-		5: {"hp": 705, "damage": 75, "atk_speed": 0.42},
-		6: {"hp": 880, "damage": 97, "atk_speed": 0.39},
-		7: {"hp": 1080, "damage": 124, "atk_speed": 0.36},
-	},
-	"archer": {
-		1: {"hp": 210, "damage": 40, "atk_speed": 1.05},
-		2: {"hp": 280, "damage": 51, "atk_speed": 0.95},
-		3: {"hp": 310, "damage": 58, "atk_speed": 0.85},
-		4: {"hp": 425, "damage": 82, "atk_speed": 0.78},
-		5: {"hp": 540, "damage": 108, "atk_speed": 0.72},
-		6: {"hp": 680, "damage": 140, "atk_speed": 0.67},
-		7: {"hp": 840, "damage": 180, "atk_speed": 0.62},
-	},
-	"ranger": {
-		1: {"hp": 250, "damage": 34, "atk_speed": 1.0},
-		2: {"hp": 330, "damage": 45, "atk_speed": 0.92},
-		3: {"hp": 430, "damage": 60, "atk_speed": 0.83},
-		4: {"hp": 560, "damage": 80, "atk_speed": 0.76},
-		5: {"hp": 710, "damage": 106, "atk_speed": 0.70},
-		6: {"hp": 890, "damage": 140, "atk_speed": 0.65},
-		7: {"hp": 1100, "damage": 182, "atk_speed": 0.60},
-	},
+const COMMON_LEVEL_STATS: Dictionary = {
+	1: {"hp": 2700, "damage": 228, "atk_speed": 1.40},
+	2: {"hp": 3600, "damage": 300, "atk_speed": 1.30},
+	3: {"hp": 4680, "damage": 396, "atk_speed": 1.20},
+	4: {"hp": 6000, "damage": 516, "atk_speed": 1.10},
+	5: {"hp": 6800, "damage": 610, "atk_speed": 1.02},
+	6: {"hp": 9000, "damage": 850, "atk_speed": 0.96},
+	7: {"hp": 10700, "damage": 1040, "atk_speed": 0.90},
 }
 
 const NFT_RARITY_MULTIPLIERS: Dictionary = {
 	"common": 1.2,
-	"epic": 1.3,
-	"legendary": 1.5,
+	"epic": 1.23,
+	"legendary": 1.25,
 	"unrevealed": 1.2,
 }
-const DEMON_KING_COMBAT_WEIGHT: float = 5.0
 const MAX_TROOP_LEVEL: int = 7
 
 const DEMON_ANIM_FILES: Array = [
@@ -290,12 +251,12 @@ static func _compute_dynamic_stats(demon_level: int, levels: Dictionary, rarity:
 	var troop_level: int = _troop_level_from_map(levels, "demon_king")
 	if not levels.has("demon_king") and not levels.has("DemonKing"):
 		troop_level = clamped_level
-	var stat_by_level: Dictionary = NORMAL_TROOP_STATS["knight"]
-	var stat: Dictionary = stat_by_level.get(troop_level, stat_by_level[1])
-	var power_mult: float = float(NFT_RARITY_MULTIPLIERS.get(_normalize_rarity(rarity), 1.2))
+	var stat: Dictionary = COMMON_LEVEL_STATS.get(troop_level, COMMON_LEVEL_STATS[1])
+	var rarity_mult: float = float(NFT_RARITY_MULTIPLIERS.get(_normalize_rarity(rarity), 1.2))
+	var rarity_scale: float = rarity_mult / float(NFT_RARITY_MULTIPLIERS.common)
 	return {
-		"hp": int(ceil(float(stat.hp) * DEMON_KING_COMBAT_WEIGHT * power_mult)),
-		"damage": int(ceil(float(stat.damage) * DEMON_KING_COMBAT_WEIGHT * power_mult)),
+		"hp": int(ceil(float(stat.hp) * rarity_scale)),
+		"damage": int(ceil(float(stat.damage) * rarity_scale)),
 		"atk_speed": float(stat.atk_speed),
 	}
 

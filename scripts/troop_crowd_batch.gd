@@ -11,20 +11,44 @@ extends Node3D
 const CAPACITY_PER_POSE: int = 96
 const POSE_FRAME_COUNT: int = 6
 const POSE_REFRESH_HZ: float = 10.0
+const STALE_CLEANUP_INTERVAL_SEC: float = 0.25
+const MAX_CHANNEL_BUILDS_PER_FRAME: int = 3
+const CHANNEL_BUILD_BUDGET_USEC: int = 4_000
+const MAX_CACHED_POSE_MESHES: int = 160
+const MAX_CACHED_POSE_VERTICES: int = 1_200_000
 static var HIDDEN_TRANSFORM := Transform3D(Basis.from_scale(Vector3.ZERO), Vector3.ZERO)
 static var COMBAT_AABB := AABB(Vector3(-16.0, -4.0, -16.0), Vector3(32.0, 12.0, 32.0))
 
 static var _scene_managers: Dictionary = {}
+## Pose meshes are expensive to bake because Godot must skin every vertex on
+## the CPU. Keep a bounded LRU across combat scene transitions so later battles
+## reuse compatible poses without allowing process-lifetime memory growth.
+static var _pose_mesh_cache: Dictionary = {}
+static var _pose_mesh_cache_order: Array[String] = []
+static var _pose_mesh_cache_vertices: int = 0
+static var _pose_mesh_protected: Dictionary = {}
+static var _pose_mesh_protected_order: Array[String] = []
+static var _pose_cache_hits: int = 0
+static var _pose_cache_misses: int = 0
+static var _pose_cache_evictions: int = 0
+static var _pose_cache_profile_enabled: bool = false
 
 var _troops: Dictionary = {}
 var _troop_parts: Dictionary = {}
 var _troop_visual_drivers: Dictionary = {}
 var _troop_visual_signatures: Dictionary = {}
+var _troop_animation_names: Dictionary = {}
+var _troop_animation_keys: Dictionary = {}
+var _troop_last_transforms: Dictionary = {}
+var _troop_last_pose_keys: Dictionary = {}
 var _assignments: Dictionary = {}
 var _channels: Dictionary = {}
 var _failed_channel_keys: Dictionary = {}
+var _pending_channel_builds: Array[Dictionary] = []
+var _pending_channel_keys: Dictionary = {}
 var _animation_leaders: Dictionary = {}
 var _pose_elapsed: float = 0.0
+var _stale_cleanup_elapsed: float = 0.0
 var _pose_tick: int = 0
 var _profile_enabled: bool = false
 var _profile_samples: int = 0
@@ -46,6 +70,7 @@ static func get_for_scene(owner: Node) -> TroopCrowdBatch:
 	manager.name = "TroopCrowdBatch"
 	manager.process_priority = 100
 	manager._profile_enabled = OS.get_cmdline_user_args().has("--profile-crowd-batch")
+	_pose_cache_profile_enabled = manager._profile_enabled
 	scene_root.add_child(manager)
 	_scene_managers[scene_id] = manager
 	return manager
@@ -82,6 +107,10 @@ func unregister_troop(troop: Node3D, restore_visuals: bool = true) -> void:
 	_troop_parts.erase(troop_id)
 	_troop_visual_drivers.erase(troop_id)
 	_troop_visual_signatures.erase(troop_id)
+	_troop_animation_names.erase(troop_id)
+	_troop_animation_keys.erase(troop_id)
+	_troop_last_transforms.erase(troop_id)
+	_troop_last_pose_keys.erase(troop_id)
 
 
 func _exit_tree() -> void:
@@ -96,9 +125,15 @@ func _exit_tree() -> void:
 	_troop_parts.clear()
 	_troop_visual_drivers.clear()
 	_troop_visual_signatures.clear()
+	_troop_animation_names.clear()
+	_troop_animation_keys.clear()
+	_troop_last_transforms.clear()
+	_troop_last_pose_keys.clear()
 	_assignments.clear()
 	_channels.clear()
 	_failed_channel_keys.clear()
+	_pending_channel_builds.clear()
+	_pending_channel_keys.clear()
 	_animation_leaders.clear()
 	for scene_id in _scene_managers.keys():
 		if _scene_managers[scene_id] == self:
@@ -107,9 +142,16 @@ func _exit_tree() -> void:
 
 func _process(delta: float) -> void:
 	var started_usec := Time.get_ticks_usec()
-	_cleanup_stale_troops()
+	_stale_cleanup_elapsed += delta
+	if _stale_cleanup_elapsed >= STALE_CLEANUP_INTERVAL_SEC:
+		_stale_cleanup_elapsed = fmod(
+			_stale_cleanup_elapsed,
+			STALE_CLEANUP_INTERVAL_SEC
+		)
+		_cleanup_stale_troops()
 	if _troops.is_empty():
 		return
+	_build_pending_channels()
 	_pose_elapsed += delta
 	if _pose_elapsed >= 1.0 / POSE_REFRESH_HZ:
 		_pose_elapsed = fmod(_pose_elapsed, 1.0 / POSE_REFRESH_HZ)
@@ -123,12 +165,19 @@ func _process(delta: float) -> void:
 		_profile_max_usec = maxi(_profile_max_usec, elapsed_usec)
 		if _profile_samples >= 120:
 			print(
-				"[TROOP_CROWD_PROFILE] avg_ms=%.3f max_ms=%.3f troops=%d channels=%d"
+				(
+					"[TROOP_CROWD_PROFILE] avg_ms=%.3f max_ms=%.3f "
+					+ "troops=%d channels=%d pending=%d cache_meshes=%d "
+					+ "cache_vertices=%d"
+				)
 				% [
 					float(_profile_total_usec) / float(_profile_samples) / 1000.0,
 					float(_profile_max_usec) / 1000.0,
 					_troops.size(),
 					_channels.size(),
+					_pending_channel_builds.size(),
+					_pose_mesh_cache.size(),
+					_pose_mesh_cache_vertices,
 				]
 			)
 			_profile_samples = 0
@@ -180,6 +229,10 @@ func _cleanup_stale_troops() -> void:
 		_troop_parts.erase(troop_id)
 		_troop_visual_drivers.erase(troop_id)
 		_troop_visual_signatures.erase(troop_id)
+		_troop_animation_names.erase(troop_id)
+		_troop_animation_keys.erase(troop_id)
+		_troop_last_transforms.erase(troop_id)
+		_troop_last_pose_keys.erase(troop_id)
 	for animation_key in _animation_leaders.keys():
 		var leader_id := int(_animation_leaders[animation_key])
 		if not _troops.has(leader_id):
@@ -210,29 +263,34 @@ func _refresh_pose_assignments() -> void:
 		if parts.is_empty():
 			_restore_troop_visuals(troop, parts)
 			continue
-		var part_assignments: Array[Dictionary] = []
+		var channel_keys: Array[String] = []
+		var waiting_for_channels := false
 		var build_failed := false
+		var source_troop := _animation_source_for(troop)
+		var source_parts: Array[MeshInstance3D] = _resolve_parts(
+			_troop_parts.get(source_troop.get_instance_id(), [])
+		)
 		for part_index in range(parts.size()):
-			var part := parts[part_index]
 			var channel_key := "%s|part:%d" % [pose_key, part_index]
+			channel_keys.append(channel_key)
 			if _failed_channel_keys.has(channel_key):
 				build_failed = true
 				break
+			if _channels.has(channel_key):
+				continue
+			var source_part := parts[part_index]
+			if part_index < source_parts.size():
+				source_part = source_parts[part_index]
+			_queue_channel_build(channel_key, source_troop, source_part)
+			waiting_for_channels = true
+		if build_failed or waiting_for_channels:
+			_restore_troop_visuals(troop, parts)
+			_set_troop_visual_drivers_active(troop_id, true)
+			continue
+		var part_assignments: Array[Dictionary] = []
+		for part_index in range(parts.size()):
+			var channel_key := channel_keys[part_index]
 			var channel: Dictionary = _channels.get(channel_key, {})
-			if channel.is_empty():
-				var source_troop := _animation_source_for(troop)
-				var source_parts: Array[MeshInstance3D] = _resolve_parts(
-					_troop_parts.get(source_troop.get_instance_id(), [])
-				)
-				var source_part := part
-				if part_index < source_parts.size():
-					source_part = source_parts[part_index]
-				channel = _create_channel(channel_key, source_troop, source_part)
-				if channel.is_empty():
-					_failed_channel_keys[channel_key] = true
-					build_failed = true
-					break
-				_channels[channel_key] = channel
 			var slot := _acquire_slot(channel, troop_id)
 			if slot < 0:
 				build_failed = true
@@ -276,6 +334,16 @@ func _update_instance_transforms() -> void:
 		if troop == null:
 			continue
 		var assignment: Dictionary = _assignments[troop_id]
+		var troop_transform: Transform3D = troop.global_transform
+		var pose_key: String = str(assignment.get("pose_key", ""))
+		var previous_pose_key: String = str(_troop_last_pose_keys.get(troop_id, ""))
+		var previous_transform: Variant = _troop_last_transforms.get(troop_id)
+		if (
+			previous_pose_key == pose_key
+			and previous_transform is Transform3D
+			and (previous_transform as Transform3D).is_equal_approx(troop_transform)
+		):
+			continue
 		for part_assignment in assignment.get("parts", []):
 			var channel_key := str(part_assignment.get("channel_key", ""))
 			var slot := int(part_assignment.get("slot", -1))
@@ -289,8 +357,10 @@ func _update_instance_transforms() -> void:
 			)
 			multimesh.set_instance_transform(
 				slot,
-				manager_inverse * troop.global_transform * relative_transform
+				manager_inverse * troop_transform * relative_transform
 			)
+		_troop_last_transforms[troop_id] = troop_transform
+		_troop_last_pose_keys[troop_id] = pose_key
 
 
 func _pose_key(troop: Node3D) -> String:
@@ -299,18 +369,26 @@ func _pose_key(troop: Node3D) -> String:
 
 
 func _animation_group_key(troop: Node3D) -> String:
-	var script_path := ""
-	var troop_script: Script = troop.get_script() as Script
-	if troop_script != null:
-		script_path = troop_script.resource_path
+	var troop_id: int = troop.get_instance_id()
 	var player: AnimationPlayer = troop.get("anim_player") as AnimationPlayer
 	var animation_name := "static"
 	if player != null and player.current_animation != "":
 		animation_name = str(player.current_animation)
+	if str(_troop_animation_names.get(troop_id, "")) == animation_name:
+		var cached_key: String = str(_troop_animation_keys.get(troop_id, ""))
+		if not cached_key.is_empty():
+			return cached_key
+	var script_path := ""
+	var troop_script: Script = troop.get_script() as Script
+	if troop_script != null:
+		script_path = troop_script.resource_path
 	var visual_signature := str(
-		_troop_visual_signatures.get(troop.get_instance_id(), "visual:unknown")
+		_troop_visual_signatures.get(troop_id, "visual:unknown")
 	)
-	return "%s|%s|%s" % [script_path, visual_signature, animation_name]
+	var animation_key := "%s|%s|%s" % [script_path, visual_signature, animation_name]
+	_troop_animation_names[troop_id] = animation_name
+	_troop_animation_keys[troop_id] = animation_key
+	return animation_key
 
 
 func _animation_source_for(troop: Node3D) -> Node3D:
@@ -362,17 +440,84 @@ func _refresh_visual_driver_activity() -> void:
 		_set_troop_visual_drivers_active(troop_id, should_run)
 
 
+func _queue_channel_build(
+	channel_key: String,
+	source_troop: Node3D,
+	source_part: MeshInstance3D
+) -> void:
+	if (
+		_channels.has(channel_key)
+		or _failed_channel_keys.has(channel_key)
+		or _pending_channel_keys.has(channel_key)
+	):
+		return
+	_pending_channel_keys[channel_key] = true
+	_pending_channel_builds.append({
+		"key": channel_key,
+		"troop": weakref(source_troop),
+		"part": weakref(source_part),
+	})
+
+
+func _build_pending_channels() -> void:
+	if _pending_channel_builds.is_empty():
+		return
+	var started_usec := Time.get_ticks_usec()
+	var built_count := 0
+	while (
+		not _pending_channel_builds.is_empty()
+		and built_count < MAX_CHANNEL_BUILDS_PER_FRAME
+	):
+		var request: Dictionary = _pending_channel_builds.pop_front()
+		var channel_key := str(request.get("key", ""))
+		_pending_channel_keys.erase(channel_key)
+		if channel_key.is_empty() or _channels.has(channel_key):
+			continue
+		var troop_ref := request.get("troop") as WeakRef
+		var part_ref := request.get("part") as WeakRef
+		var source_troop := troop_ref.get_ref() as Node3D if troop_ref != null else null
+		var source_part := (
+			part_ref.get_ref() as MeshInstance3D
+			if part_ref != null
+			else null
+		)
+		if (
+			source_troop == null
+			or source_part == null
+			or not is_instance_valid(source_troop)
+			or not is_instance_valid(source_part)
+		):
+			continue
+		var channel := _create_channel(channel_key, source_troop, source_part)
+		if channel.is_empty():
+			_failed_channel_keys[channel_key] = true
+		else:
+			_channels[channel_key] = channel
+		built_count += 1
+		if Time.get_ticks_usec() - started_usec >= CHANNEL_BUILD_BUDGET_USEC:
+			break
+
+
 func _create_channel(
 	channel_key: String,
 	troop: Node3D,
 	part: MeshInstance3D
 ) -> Dictionary:
 	var started_usec := Time.get_ticks_usec()
-	var pose_mesh := _bake_pose_mesh(part)
+	var cache_hit := false
+	var pose_mesh := _cached_pose_mesh(channel_key)
+	if pose_mesh != null:
+		cache_hit = true
+	else:
+		pose_mesh = _bake_pose_mesh(part)
+		if pose_mesh != null:
+			_cache_pose_mesh(channel_key, pose_mesh)
 	if pose_mesh == null:
 		return {}
 	var multimesh := MultiMesh.new()
-	multimesh.transform_format = MultiMesh.TRANSFORM_3D
+	multimesh.transform_format = (
+		MultiMesh.TRANSFORM_3D as MultiMesh.TransformFormat
+	)
 	multimesh.instance_count = CAPACITY_PER_POSE
 	multimesh.visible_instance_count = 0
 	multimesh.mesh = pose_mesh
@@ -392,11 +537,21 @@ func _create_channel(
 		free_slots.append(slot)
 	if _profile_enabled:
 		print(
-			"[TROOP_CROWD_PROFILE] channel_ms=%.3f key=%s vertices=%d"
+			(
+				"[TROOP_CROWD_PROFILE] channel_ms=%.3f cache_hit=%s "
+				+ "key=%s part=%s mesh=%s vertices=%d source_aabb=%s "
+				+ "pose_aabb=%s relative_scale=%s"
+			)
 			% [
 				float(Time.get_ticks_usec() - started_usec) / 1000.0,
+				str(cache_hit),
 				channel_key,
+				str(part.name),
+				part.mesh.resource_path,
 				_mesh_vertex_count(pose_mesh),
+				str(part.mesh.get_aabb()),
+				str(pose_mesh.get_aabb()),
+				str(relative_transform.basis.get_scale()),
 			]
 		)
 	return {
@@ -407,6 +562,99 @@ func _create_channel(
 		"troop_slots": {},
 		"next_slot": 0,
 	}
+
+
+func _cached_pose_mesh(channel_key: String) -> Mesh:
+	var pose_mesh := _pose_mesh_cache.get(channel_key) as Mesh
+	if pose_mesh == null:
+		_pose_cache_misses += 1
+		return null
+	_pose_cache_hits += 1
+	var order_index := _pose_mesh_cache_order.find(channel_key)
+	if order_index >= 0:
+		_pose_mesh_cache_order.remove_at(order_index)
+	_pose_mesh_cache_order.append(channel_key)
+	return pose_mesh
+
+
+func _cache_pose_mesh(
+	channel_key: String,
+	pose_mesh: Mesh,
+	protect_from_normal_eviction: bool = false
+) -> void:
+	if pose_mesh == null:
+		return
+	var vertex_count := _mesh_vertex_count(pose_mesh)
+	if _pose_mesh_cache.has(channel_key):
+		var previous_mesh := _pose_mesh_cache[channel_key] as Mesh
+		if previous_mesh != null:
+			_pose_mesh_cache_vertices -= _mesh_vertex_count(previous_mesh)
+		var previous_index := _pose_mesh_cache_order.find(channel_key)
+		if previous_index >= 0:
+			_pose_mesh_cache_order.remove_at(previous_index)
+	_pose_mesh_cache[channel_key] = pose_mesh
+	_pose_mesh_cache_order.append(channel_key)
+	_pose_mesh_cache_vertices += vertex_count
+	if protect_from_normal_eviction:
+		_protect_pose_key(channel_key)
+	while (
+		_pose_mesh_cache_order.size() > MAX_CACHED_POSE_MESHES
+		or _pose_mesh_cache_vertices > MAX_CACHED_POSE_VERTICES
+	):
+		if _pose_mesh_cache_order.size() <= 1:
+			break
+		var eviction_index := _first_unprotected_cache_index()
+		if eviction_index < 0:
+			eviction_index = 0
+		var evicted_key: String = _pose_mesh_cache_order[eviction_index]
+		_pose_mesh_cache_order.remove_at(eviction_index)
+		var evicted_mesh := _pose_mesh_cache.get(evicted_key) as Mesh
+		if evicted_mesh != null:
+			_pose_mesh_cache_vertices -= _mesh_vertex_count(evicted_mesh)
+		_pose_mesh_cache.erase(evicted_key)
+		_pose_mesh_protected.erase(evicted_key)
+		var protected_index := _pose_mesh_protected_order.find(evicted_key)
+		if protected_index >= 0:
+			_pose_mesh_protected_order.remove_at(protected_index)
+		_pose_cache_evictions += 1
+		if _pose_cache_profile_enabled:
+			print(
+				"[TROOP_CROWD_CACHE] evict key=", evicted_key,
+				" meshes=", _pose_mesh_cache.size(),
+				" vertices=", _pose_mesh_cache_vertices
+			)
+
+
+static func begin_pose_cache_scope() -> void:
+	_pose_mesh_protected.clear()
+	_pose_mesh_protected_order.clear()
+
+
+static func pose_cache_stats() -> Dictionary:
+	return {
+		"meshes": _pose_mesh_cache.size(),
+		"vertices": _pose_mesh_cache_vertices,
+		"protected": _pose_mesh_protected.size(),
+		"hits": _pose_cache_hits,
+		"misses": _pose_cache_misses,
+		"evictions": _pose_cache_evictions,
+	}
+
+
+func _protect_pose_key(channel_key: String) -> void:
+	if _pose_mesh_protected.has(channel_key):
+		var previous_index := _pose_mesh_protected_order.find(channel_key)
+		if previous_index >= 0:
+			_pose_mesh_protected_order.remove_at(previous_index)
+	_pose_mesh_protected[channel_key] = true
+	_pose_mesh_protected_order.append(channel_key)
+
+
+func _first_unprotected_cache_index() -> int:
+	for index in range(_pose_mesh_cache_order.size()):
+		if not _pose_mesh_protected.has(_pose_mesh_cache_order[index]):
+			return index
+	return -1
 
 
 func _mesh_vertex_count(mesh: Mesh) -> int:
@@ -431,6 +679,53 @@ func _bake_pose_mesh(part: MeshInstance3D) -> Mesh:
 		if material != null:
 			pose_mesh.surface_set_material(surface_index, material)
 	return pose_mesh
+
+
+## Populate the process-wide pose cache from a hidden warmup representative.
+## The caller is responsible for sampling the AnimationPlayer before invoking
+## this method. Keeping the bake here guarantees warmup and live combat use the
+## exact same visual signature and cache-key format.
+func prewarm_current_pose(
+	troop: Node3D,
+	animation_name: String,
+	frame_index: int,
+	protect_from_normal_eviction: bool = false
+) -> int:
+	if troop == null or not is_instance_valid(troop):
+		return 0
+	if _uses_runtime_swapped_visuals(troop):
+		return 0
+	var parts := _collect_render_parts(troop)
+	if parts.is_empty():
+		return 0
+	var troop_script := troop.get_script() as Script
+	var script_path := troop_script.resource_path if troop_script != null else ""
+	var animation_key := "%s|%s|%s" % [
+		script_path,
+		_visual_signature(parts),
+		animation_name if not animation_name.is_empty() else "static",
+	]
+	var baked_count := 0
+	for part_index in range(parts.size()):
+		var channel_key := "%s|frame:%d|part:%d" % [
+			animation_key,
+			posmod(frame_index, POSE_FRAME_COUNT),
+			part_index,
+		]
+		if _cached_pose_mesh(channel_key) != null:
+			if protect_from_normal_eviction:
+				_protect_pose_key(channel_key)
+			continue
+		var pose_mesh := _bake_pose_mesh(parts[part_index])
+		if pose_mesh == null:
+			continue
+		_cache_pose_mesh(
+			channel_key,
+			pose_mesh,
+			protect_from_normal_eviction
+		)
+		baked_count += 1
+	return baked_count
 
 
 func _acquire_slot(channel: Dictionary, troop_id: int) -> int:
@@ -528,7 +823,42 @@ func _material_signature(material: Material) -> String:
 			base.emission.to_html(true) if base.emission_enabled else "",
 			base.emission_energy_multiplier if base.emission_enabled else 0.0,
 		]
+	if material is ShaderMaterial:
+		var shader_material := material as ShaderMaterial
+		var shader := shader_material.shader
+		if shader == null:
+			return "ShaderMaterial:none"
+		var parameters := PackedStringArray()
+		for raw_uniform in shader.get_shader_uniform_list():
+			var uniform := raw_uniform as Dictionary
+			var uniform_name := str(uniform.get("name", ""))
+			if uniform_name.is_empty():
+				continue
+			parameters.append(
+				"%s=%s"
+				% [
+					uniform_name,
+					_shader_parameter_signature(
+						shader_material.get_shader_parameter(uniform_name)
+					),
+				]
+			)
+		return "ShaderMaterial:%s[%s]" % [
+			shader.resource_path,
+			",".join(parameters),
+		]
 	return "%s:%s" % [material.get_class(), material.resource_path]
+
+
+func _shader_parameter_signature(value: Variant) -> String:
+	if value is Resource:
+		var resource := value as Resource
+		if not resource.resource_path.is_empty():
+			return resource.resource_path
+		return "%s:%s" % [resource.get_class(), resource.resource_name]
+	if value is Color:
+		return (value as Color).to_html(true)
+	return var_to_str(value)
 
 
 func _collect_visual_drivers(troop: Node) -> Array[WeakRef]:

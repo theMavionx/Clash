@@ -47,7 +47,7 @@ const HORROR_EVOLUTION = {
       4: { hp: 10067, damage: 1100, atkSpeed: 1.24, moveSpeed: 0.38, range: 0.31, melee: true, hitDelay: 0.42 },
       5: { hp: 12800, damage: 1480, atkSpeed: 1.24, moveSpeed: 0.38, range: 0.31, melee: true, hitDelay: 0.42 },
       6: { hp: 15933, damage: 1973, atkSpeed: 1.24, moveSpeed: 0.38, range: 0.31, melee: true, hitDelay: 0.42 },
-      7: { hp: 19533, damage: 2600, atkSpeed: 1.24, moveSpeed: 0.38, range: 0.31, melee: true, hitDelay: 0.42 },
+      7: { hp: 21880, damage: 2912, atkSpeed: 1.24, moveSpeed: 0.38, range: 0.31, melee: true, hitDelay: 0.42 },
     },
     1: {
       1: { hp: 1367, damage: 160, atkSpeed: 0.96, moveSpeed: 0.46, range: 0.27, melee: true, hitDelay: 0.42 },
@@ -56,7 +56,7 @@ const HORROR_EVOLUTION = {
       4: { hp: 3000, damage: 387, atkSpeed: 0.96, moveSpeed: 0.46, range: 0.27, melee: true, hitDelay: 0.42 },
       5: { hp: 3800, damage: 520, atkSpeed: 0.96, moveSpeed: 0.46, range: 0.27, melee: true, hitDelay: 0.42 },
       6: { hp: 4700, damage: 693, atkSpeed: 0.96, moveSpeed: 0.46, range: 0.27, melee: true, hitDelay: 0.42 },
-      7: { hp: 5733, damage: 913, atkSpeed: 0.96, moveSpeed: 0.46, range: 0.27, melee: true, hitDelay: 0.42 },
+      7: { hp: 6420, damage: 1023, atkSpeed: 0.96, moveSpeed: 0.46, range: 0.27, melee: true, hitDelay: 0.42 },
     },
     2: {
       1: { hp: 413,  damage: 60,  atkSpeed: 0.72, moveSpeed: 0.54, range: 0.23, melee: true, hitDelay: 0.42 },
@@ -65,7 +65,7 @@ const HORROR_EVOLUTION = {
       4: { hp: 907,  damage: 147, atkSpeed: 0.72, moveSpeed: 0.54, range: 0.23, melee: true, hitDelay: 0.42 },
       5: { hp: 1147, damage: 193, atkSpeed: 0.72, moveSpeed: 0.54, range: 0.23, melee: true, hitDelay: 0.42 },
       6: { hp: 1420, damage: 260, atkSpeed: 0.72, moveSpeed: 0.54, range: 0.23, melee: true, hitDelay: 0.42 },
-      7: { hp: 1733, damage: 340, atkSpeed: 0.72, moveSpeed: 0.54, range: 0.23, melee: true, hitDelay: 0.42 },
+      7: { hp: 1940, damage: 381, atkSpeed: 0.72, moveSpeed: 0.54, range: 0.23, melee: true, hitDelay: 0.42 },
     },
   },
 };
@@ -76,18 +76,18 @@ const TROOP_STATS = {
     2: { hp: 600,  damage: 50, atkSpeed: 1.30, moveSpeed: 0.5,  range: 0.24, melee: true, hitDelay: 0.4 },
     3: { hp: 780,  damage: 66, atkSpeed: 1.20, moveSpeed: 0.5,  range: 0.24, melee: true, hitDelay: 0.4 },
     4: { hp: 1000, damage: 86, atkSpeed: 1.10, moveSpeed: 0.5,  range: 0.24, melee: true, hitDelay: 0.4 },
-    5: { hp: 1260, damage: 112, atkSpeed: 1.02, moveSpeed: 0.5,  range: 0.24, melee: true, hitDelay: 0.4 },
-    6: { hp: 1560, damage: 145, atkSpeed: 0.96, moveSpeed: 0.5,  range: 0.24, melee: true, hitDelay: 0.4 },
-    7: { hp: 1900, damage: 185, atkSpeed: 0.90, moveSpeed: 0.5,  range: 0.24, melee: true, hitDelay: 0.4 },
+    5: { hp: 1248, damage: 111, atkSpeed: 1.02, moveSpeed: 0.5,  range: 0.24, melee: true, hitDelay: 0.4 },
+    6: { hp: 1716, damage: 159, atkSpeed: 0.96, moveSpeed: 0.5,  range: 0.24, melee: true, hitDelay: 0.4 },
+    7: { hp: 2076, damage: 202, atkSpeed: 0.90, moveSpeed: 0.5,  range: 0.24, melee: true, hitDelay: 0.4 },
   },
   mage: {
     1: { hp: 450,  damage: 203,  atkSpeed: 1.25, moveSpeed: 0.4,  range: 0.95, melee: false, projSpeed: 1.5 },
     2: { hp: 600,  damage: 259,  atkSpeed: 1.12, moveSpeed: 0.4,  range: 0.95, melee: false, projSpeed: 1.5 },
     3: { hp: 795,  damage: 364,  atkSpeed: 1.0,  moveSpeed: 0.4,  range: 0.95, melee: false, projSpeed: 1.5 },
     4: { hp: 1035, damage: 483,  atkSpeed: 0.9,  moveSpeed: 0.4,  range: 0.95, melee: false, projSpeed: 1.5 },
-    5: { hp: 1320, damage: 637,  atkSpeed: 0.82, moveSpeed: 0.4,  range: 0.95, melee: false, projSpeed: 1.5 },
-    6: { hp: 1665, damage: 833,  atkSpeed: 0.76, moveSpeed: 0.4,  range: 0.95, melee: false, projSpeed: 1.5 },
-    7: { hp: 2070, damage: 1085, atkSpeed: 0.70, moveSpeed: 0.4,  range: 0.95, melee: false, projSpeed: 1.5 },
+    5: { hp: 2430, damage: 1086, atkSpeed: 0.82, moveSpeed: 0.4,  range: 0.95, melee: false, projSpeed: 1.5 },
+    6: { hp: 2830, damage: 1416, atkSpeed: 0.76, moveSpeed: 0.4,  range: 0.95, melee: false, projSpeed: 1.5 },
+    7: { hp: 4554, damage: 2387, atkSpeed: 0.70, moveSpeed: 0.4,  range: 0.95, melee: false, projSpeed: 1.5 },
   },
   wind_mage: {
     1: { hp: 2200, damage: 430,  atkSpeed: 2.20, moveSpeed: 0.37, range: 1.0, melee: false, directHit: true, hitDelay: 0.52, buildingOnly: true },
@@ -96,7 +96,7 @@ const TROOP_STATS = {
     4: { hp: 4900, damage: 980,  atkSpeed: 2.20, moveSpeed: 0.37, range: 1.0, melee: false, directHit: true, hitDelay: 0.52, buildingOnly: true },
     5: { hp: 6200, damage: 1280, atkSpeed: 2.20, moveSpeed: 0.37, range: 1.0, melee: false, directHit: true, hitDelay: 0.52, buildingOnly: true },
     6: { hp: 7700, damage: 1660, atkSpeed: 2.20, moveSpeed: 0.37, range: 1.0, melee: false, directHit: true, hitDelay: 0.52, buildingOnly: true },
-    7: { hp: 9400, damage: 2140, atkSpeed: 2.20, moveSpeed: 0.37, range: 1.0, melee: false, directHit: true, hitDelay: 0.52, buildingOnly: true },
+    7: { hp: 12000, damage: 3000, atkSpeed: 2.20, moveSpeed: 0.37, range: 1.0, melee: false, directHit: true, hitDelay: 0.52, buildingOnly: true },
   },
   // Implements the approved server-authoritative Necromancer combat slice.
   // Direct damage per occupied slot stays below Mage at every level; summon
@@ -108,7 +108,7 @@ const TROOP_STATS = {
     4: { hp: 5880,  damage: 1230, atkSpeed: 1.02, moveSpeed: 0.38, range: 0.90, melee: false, projSpeed: 1.4 },
     5: { hp: 7440,  damage: 1620, atkSpeed: 0.94, moveSpeed: 0.38, range: 0.90, melee: false, projSpeed: 1.4 },
     6: { hp: 9240,  damage: 2130, atkSpeed: 0.87, moveSpeed: 0.38, range: 0.90, melee: false, projSpeed: 1.4 },
-    7: { hp: 11280, damage: 2790, atkSpeed: 0.81, moveSpeed: 0.38, range: 0.90, melee: false, projSpeed: 1.4 },
+    7: { hp: 20700, damage: 5120, atkSpeed: 0.81, moveSpeed: 0.38, range: 0.90, melee: false, projSpeed: 1.4 },
   },
   barbarian: {
     1: { hp: 240, damage: 24, atkSpeed: 0.6,  moveSpeed: 0.4,  range: 0.24, melee: true, hitDelay: 0.4 },
@@ -124,18 +124,18 @@ const TROOP_STATS = {
     2: { hp: 280, damage: 51, atkSpeed: 0.95, moveSpeed: 0.45, range: 0.95, melee: false, projSpeed: 2.5 },
     3: { hp: 310, damage: 58, atkSpeed: 0.85, moveSpeed: 0.45, range: 0.95, melee: false, projSpeed: 2.5 },
     4: { hp: 425, damage: 82, atkSpeed: 0.78, moveSpeed: 0.45, range: 0.95, melee: false, projSpeed: 2.5 },
-    5: { hp: 540, damage: 108, atkSpeed: 0.72, moveSpeed: 0.45, range: 0.95, melee: false, projSpeed: 2.5 },
-    6: { hp: 680, damage: 140, atkSpeed: 0.67, moveSpeed: 0.45, range: 0.95, melee: false, projSpeed: 2.5 },
-    7: { hp: 840, damage: 180, atkSpeed: 0.62, moveSpeed: 0.45, range: 0.95, melee: false, projSpeed: 2.5 },
+    5: { hp: 624, damage: 125, atkSpeed: 0.72, moveSpeed: 0.45, range: 0.95, melee: false, projSpeed: 2.5 },
+    6: { hp: 750, damage: 154, atkSpeed: 0.67, moveSpeed: 0.45, range: 0.95, melee: false, projSpeed: 2.5 },
+    7: { hp: 1164, damage: 250, atkSpeed: 0.62, moveSpeed: 0.45, range: 0.95, melee: false, projSpeed: 2.5 },
   },
   pea_shooter: {
     1: { hp: 1250, damage: 110, atkSpeed: 1.75, moveSpeed: 0.40, range: 0.82, melee: false, projSpeed: 2.15, burstPhases: [0.22, 0.50, 0.78] },
     2: { hp: 1650, damage: 150, atkSpeed: 1.75, moveSpeed: 0.40, range: 0.82, melee: false, projSpeed: 2.15, burstPhases: [0.22, 0.50, 0.78] },
     3: { hp: 2150, damage: 195, atkSpeed: 1.75, moveSpeed: 0.40, range: 0.82, melee: false, projSpeed: 2.15, burstPhases: [0.22, 0.50, 0.78] },
     4: { hp: 2800, damage: 280, atkSpeed: 1.75, moveSpeed: 0.40, range: 0.82, melee: false, projSpeed: 2.15, burstPhases: [0.22, 0.50, 0.78] },
-    5: { hp: 3550, damage: 380, atkSpeed: 1.75, moveSpeed: 0.40, range: 0.82, melee: false, projSpeed: 2.15, burstPhases: [0.22, 0.50, 0.78] },
-    6: { hp: 4450, damage: 510, atkSpeed: 1.75, moveSpeed: 0.40, range: 0.82, melee: false, projSpeed: 2.15, burstPhases: [0.22, 0.50, 0.78] },
-    7: { hp: 5500, damage: 680, atkSpeed: 1.75, moveSpeed: 0.40, range: 0.82, melee: false, projSpeed: 2.15, burstPhases: [0.22, 0.50, 0.78] },
+    5: { hp: 3905, damage: 418, atkSpeed: 1.75, moveSpeed: 0.40, range: 0.82, melee: false, projSpeed: 2.15, burstPhases: [0.22, 0.50, 0.78] },
+    6: { hp: 4670, damage: 536, atkSpeed: 1.75, moveSpeed: 0.40, range: 0.82, melee: false, projSpeed: 2.15, burstPhases: [0.22, 0.50, 0.78] },
+    7: { hp: 6700, damage: 825, atkSpeed: 1.75, moveSpeed: 0.40, range: 0.82, melee: false, projSpeed: 2.15, burstPhases: [0.22, 0.50, 0.78] },
   },
   ranger: {
     1: { hp: 250, damage: 34, atkSpeed: 1.0,  moveSpeed: 0.55, range: 0.85, melee: false, projSpeed: 3.0, shootDelay: 0.4 },
@@ -151,9 +151,9 @@ const TROOP_STATS = {
     2: { hp: 2400, damage: 162, atkSpeed: 1.42, moveSpeed: 0.62, range: 0.27, melee: true, hitDelay: 0.45, trapImmune: true, untargetableWhileRunning: true },
     3: { hp: 3120, damage: 216, atkSpeed: 1.34, moveSpeed: 0.62, range: 0.27, melee: true, hitDelay: 0.45, trapImmune: true, untargetableWhileRunning: true },
     4: { hp: 4080, damage: 282, atkSpeed: 1.27, moveSpeed: 0.62, range: 0.27, melee: true, hitDelay: 0.45, trapImmune: true, untargetableWhileRunning: true },
-    5: { hp: 5160, damage: 366, atkSpeed: 1.20, moveSpeed: 0.62, range: 0.27, melee: true, hitDelay: 0.45, trapImmune: true, untargetableWhileRunning: true },
-    6: { hp: 6360, damage: 474, atkSpeed: 1.13, moveSpeed: 0.62, range: 0.27, melee: true, hitDelay: 0.45, trapImmune: true, untargetableWhileRunning: true },
-    7: { hp: 7800, damage: 612, atkSpeed: 1.06, moveSpeed: 0.62, range: 0.27, melee: true, hitDelay: 0.45, trapImmune: true, untargetableWhileRunning: true },
+    5: { hp: 6244, damage: 443, atkSpeed: 1.20, moveSpeed: 0.62, range: 0.27, melee: true, hitDelay: 0.45, trapImmune: true, untargetableWhileRunning: true },
+    6: { hp: 9540, damage: 711, atkSpeed: 1.13, moveSpeed: 0.62, range: 0.27, melee: true, hitDelay: 0.45, trapImmune: true, untargetableWhileRunning: true },
+    7: { hp: 11200, damage: 870, atkSpeed: 1.06, moveSpeed: 0.62, range: 0.27, melee: true, hitDelay: 0.45, trapImmune: true, untargetableWhileRunning: true },
   },
   horror: HORROR_EVOLUTION.stages[0],
   mechanical_dragon: {
@@ -165,7 +165,7 @@ const TROOP_STATS = {
     4: { hp: 1550, damage: 310, atkSpeed: 1.03, moveSpeed: 0.36, range: 0.80, melee: false, hitDelay: 0.50, directHit: true, flying: true, chainJumps: 2, chainRadius: 0.62, chainFalloffBps: 6500 },
     5: { hp: 1970, damage: 449, atkSpeed: 1.03, moveSpeed: 0.36, range: 0.80, melee: false, hitDelay: 0.50, directHit: true, flying: true, chainJumps: 2, chainRadius: 0.62, chainFalloffBps: 6500 },
     6: { hp: 2450, damage: 629, atkSpeed: 1.03, moveSpeed: 0.36, range: 0.80, melee: false, hitDelay: 0.50, directHit: true, flying: true, chainJumps: 2, chainRadius: 0.62, chainFalloffBps: 6500 },
-    7: { hp: 3000, damage: 876, atkSpeed: 1.03, moveSpeed: 0.36, range: 0.80, melee: false, hitDelay: 0.50, directHit: true, flying: true, chainJumps: 2, chainRadius: 0.62, chainFalloffBps: 6500 },
+    7: { hp: 3278, damage: 957, atkSpeed: 1.03, moveSpeed: 0.36, range: 0.80, melee: false, hitDelay: 0.50, directHit: true, flying: true, chainJumps: 2, chainRadius: 0.62, chainFalloffBps: 6500 },
   },
   ice_golem: {
     1: { hp: 5250,  damage: 195,  atkSpeed: 1.42, moveSpeed: 0.34, range: 0.32, melee: true, hitDelay: 0.56, defensePriority: true, deathFreezeRadius: 0.90, deathFreezeDuration: 7.0 },
@@ -174,27 +174,83 @@ const TROOP_STATS = {
     4: { hp: 11125, damage: 488,  atkSpeed: 1.42, moveSpeed: 0.34, range: 0.32, melee: true, hitDelay: 0.56, defensePriority: true, deathFreezeRadius: 0.90, deathFreezeDuration: 7.0 },
     5: { hp: 14000, damage: 658,  atkSpeed: 1.42, moveSpeed: 0.34, range: 0.32, melee: true, hitDelay: 0.56, defensePriority: true, deathFreezeRadius: 0.90, deathFreezeDuration: 7.0 },
     6: { hp: 17250, damage: 878,  atkSpeed: 1.42, moveSpeed: 0.34, range: 0.32, melee: true, hitDelay: 0.56, defensePriority: true, deathFreezeRadius: 0.90, deathFreezeDuration: 7.0 },
-    7: { hp: 21000, damage: 1155, atkSpeed: 1.42, moveSpeed: 0.34, range: 0.32, melee: true, hitDelay: 0.56, defensePriority: true, deathFreezeRadius: 0.90, deathFreezeDuration: 7.0 },
+    7: { hp: 21840, damage: 1200, atkSpeed: 1.42, moveSpeed: 0.34, range: 0.32, melee: true, hitDelay: 0.56, defensePriority: true, deathFreezeRadius: 0.90, deathFreezeDuration: 7.0 },
   },
   demon_king: {
     1: { hp: 2700,  damage: 228,  atkSpeed: 1.40, moveSpeed: 0.38, range: 0.32, melee: true, hitDelay: 0.4 },
     2: { hp: 3600,  damage: 300,  atkSpeed: 1.30, moveSpeed: 0.38, range: 0.32, melee: true, hitDelay: 0.4 },
     3: { hp: 4680,  damage: 396,  atkSpeed: 1.20, moveSpeed: 0.38, range: 0.32, melee: true, hitDelay: 0.4 },
     4: { hp: 6000,  damage: 516,  atkSpeed: 1.10, moveSpeed: 0.38, range: 0.32, melee: true, hitDelay: 0.4 },
-    5: { hp: 7560,  damage: 672,  atkSpeed: 1.02, moveSpeed: 0.38, range: 0.32, melee: true, hitDelay: 0.4 },
-    6: { hp: 9360,  damage: 870,  atkSpeed: 0.96, moveSpeed: 0.38, range: 0.32, melee: true, hitDelay: 0.4 },
-    7: { hp: 11400, damage: 1110, atkSpeed: 0.90, moveSpeed: 0.38, range: 0.32, melee: true, hitDelay: 0.4 },
+    5: { hp: 6800,  damage: 610,  atkSpeed: 1.02, moveSpeed: 0.38, range: 0.32, melee: true, hitDelay: 0.4 },
+    6: { hp: 9000,  damage: 850,  atkSpeed: 0.96, moveSpeed: 0.38, range: 0.32, melee: true, hitDelay: 0.4 },
+    7: { hp: 10700, damage: 1040, atkSpeed: 0.90, moveSpeed: 0.38, range: 0.32, melee: true, hitDelay: 0.4 },
   },
   fire_dragon: {
     1: { hp: 1750, damage: 470,  atkSpeed: 1.25, moveSpeed: 0.38, range: 0.72, melee: false, hitDelay: 0.4, directHit: true, flying: true },
     2: { hp: 2320, damage: 600,  atkSpeed: 1.12, moveSpeed: 0.38, range: 0.72, melee: false, hitDelay: 0.4, directHit: true, flying: true },
     3: { hp: 3080, damage: 840,  atkSpeed: 1.00, moveSpeed: 0.38, range: 0.72, melee: false, hitDelay: 0.4, directHit: true, flying: true },
     4: { hp: 4000, damage: 1115, atkSpeed: 0.90, moveSpeed: 0.38, range: 0.72, melee: false, hitDelay: 0.4, directHit: true, flying: true },
-    5: { hp: 5100, damage: 1470, atkSpeed: 0.82, moveSpeed: 0.38, range: 0.72, melee: false, hitDelay: 0.4, directHit: true, flying: true },
+    5: { hp: 5049, damage: 1455, atkSpeed: 0.82, moveSpeed: 0.38, range: 0.72, melee: false, hitDelay: 0.4, directHit: true, flying: true },
     6: { hp: 6440, damage: 1920, atkSpeed: 0.76, moveSpeed: 0.38, range: 0.72, melee: false, hitDelay: 0.4, directHit: true, flying: true },
-    7: { hp: 8000, damage: 2500, atkSpeed: 0.70, moveSpeed: 0.38, range: 0.72, melee: false, hitDelay: 0.4, directHit: true, flying: true },
+    7: { hp: 8740, damage: 2732, atkSpeed: 0.70, moveSpeed: 0.38, range: 0.72, melee: false, hitDelay: 0.4, directHit: true, flying: true },
   },
 };
+
+// Same-TH offense curve. Raw unit tables remain readable and preserve each
+// unit's authored role; this shared multiplier keeps the effective primary
+// troop power aligned with the defense/HP progression at the same Town Hall.
+// Summoned helper units retain their separately authored balance.
+const TROOP_LEVEL_POWER_MULTIPLIERS = Object.freeze([
+  0.82,
+  0.82,
+  1.20,
+  1.85,
+  1.68,
+  1.61,
+  1.74,
+]);
+
+function troopLevelPowerMultiplier(level) {
+  const index = Math.max(
+    0,
+    Math.min(TROOP_LEVEL_POWER_MULTIPLIERS.length - 1, (Number(level) || 1) - 1),
+  );
+  return TROOP_LEVEL_POWER_MULTIPLIERS[index];
+}
+
+// Preserve the authored pre-curve common NFT tables. Rarity is applied before
+// the shared Town Hall power curve on the Godot client, so the server must use
+// the same order to remain integer-exact for epic and legendary troops.
+const NFT_TROOP_COMMON_RAW_STATS = Object.freeze(Object.fromEntries(
+  ['demon_king', 'fire_dragon'].map((type) => [
+    type,
+    Object.freeze(Object.fromEntries(
+      Object.entries(TROOP_STATS[type]).map(([level, stats]) => [
+        level,
+        Object.freeze({ ...stats }),
+      ]),
+    )),
+  ]),
+));
+
+function applyTroopLevelPowerCurve() {
+  const visited = new Set();
+  const primaryLevelTables = [
+    ...Object.values(TROOP_STATS),
+    ...Object.values(HORROR_EVOLUTION.stages || {}),
+  ];
+  for (const levels of primaryLevelTables) {
+    for (const [rawLevel, stats] of Object.entries(levels || {})) {
+      if (!stats || visited.has(stats)) continue;
+      visited.add(stats);
+      const multiplier = troopLevelPowerMultiplier(rawLevel);
+      stats.hp = Math.max(1, Math.round(Number(stats.hp) * multiplier));
+      stats.damage = Math.max(1, Math.round(Number(stats.damage) * multiplier));
+    }
+  }
+}
+
+applyTroopLevelPowerCurve();
 
 // NFT-backed troops are upgraded like normal troop types. The common table is
 // canonical; higher rarity scales it without changing occupied ship slots.
@@ -204,10 +260,20 @@ const NFT_TROOP_REFERENCE = {
 };
 const NFT_RARITY_MULTIPLIERS = {
   common: 1.2,
-  epic: 1.3,
-  legendary: 1.5,
+  epic: 1.23,
+  legendary: 1.25,
   unrevealed: 1.2,
 };
+let balanceLabNftScaleByLevel = Object.create(null);
+let balanceLabNftScaleByTroop = Object.create(null);
+
+// Test-lab hook only. Production never calls this, so all default scales are 1.
+// Keeping the scale inside computeNftTroopStats ensures diagnostic searches
+// affect NFT and regular troops consistently without changing rarity rules.
+function setBalanceLabNftStatScales(scaleByLevel = {}, scaleByTroop = {}) {
+  balanceLabNftScaleByLevel = { ...scaleByLevel };
+  balanceLabNftScaleByTroop = { ...scaleByTroop };
+}
 
 const TROOP_TYPE_DISPLAY_KEYS = {
   knight: 'Knight',
@@ -249,16 +315,35 @@ function normalizeNftRarity(rarity) {
   return NFT_RARITY_MULTIPLIERS[key] ? key : 'common';
 }
 
+function resolveAuthoritativeNftRarity(databaseRarity, _replayRarity = null) {
+  const key = String(databaseRarity || 'unrevealed').trim().toLowerCase();
+  return NFT_RARITY_MULTIPLIERS[key] ? key : 'unrevealed';
+}
+
 function computeNftTroopStats(troopLevels = {}, troopType = 'demon_king', rarity = 'common', fallbackLevel = 1) {
   const cfg = NFT_TROOP_REFERENCE[troopType] || NFT_TROOP_REFERENCE.demon_king;
   const troopLevel = troopLevelFromMap(troopLevels, troopType, fallbackLevel);
   const reference = TROOP_STATS[troopType]?.[troopLevel] || TROOP_STATS[troopType]?.[1];
+  const rawReference = NFT_TROOP_COMMON_RAW_STATS[troopType]?.[troopLevel]
+    || NFT_TROOP_COMMON_RAW_STATS[troopType]?.[1]
+    || reference;
   const multiplier = NFT_RARITY_MULTIPLIERS[normalizeNftRarity(rarity)];
   const rarityScale = multiplier / NFT_RARITY_MULTIPLIERS.common;
-  const atkSpeed = Number(reference.atkSpeed) || 1;
+  const levelPower = troopLevelPowerMultiplier(troopLevel);
+  const labScale = Number(balanceLabNftScaleByLevel[troopLevel] || 1)
+    * (troopLevel >= 5 ? Number(balanceLabNftScaleByTroop[troopType] || 1) : 1);
+  const atkSpeed = Number(rawReference.atkSpeed) || Number(reference.atkSpeed) || 1;
+  const commonHp = Math.max(
+    1,
+    Math.round(Math.ceil((Number(rawReference.hp) || 0) * rarityScale) * levelPower),
+  );
+  const commonDamage = Math.max(
+    1,
+    Math.round(Math.ceil((Number(rawReference.damage) || 0) * rarityScale) * levelPower),
+  );
   return {
-    hp: Math.ceil((Number(reference.hp) || 0) * rarityScale),
-    damage: Math.ceil((Number(reference.damage) || 0) * rarityScale),
+    hp: Math.max(1, Math.round(commonHp * labScale)),
+    damage: Math.max(1, Math.round(commonDamage * labScale)),
     atkSpeed,
     moveSpeed: cfg.moveSpeed,
     range: cfg.range,
@@ -276,7 +361,7 @@ function computeDemonKingStats(troopLevels = {}, rarity = 'common') {
 }
 
 const WIND_MAGE = Object.freeze({
-  secondaryDamageBps: 4500,
+  secondaryDamageBps: 5000,
   maxSecondaryTargets: 4,
   waveLength: 1.65,
   waveNearHalfWidth: 0.24,
@@ -296,7 +381,7 @@ const WINDLING_STATS = Object.freeze({
   4: Object.freeze({ hp: 200, damage: 44, atkSpeed: 0.90, moveSpeed: 0.71, range: 0.42, melee: true, hitDelay: 0.48, flying: true, buildingOnly: true }),
   5: Object.freeze({ hp: 250, damage: 57, atkSpeed: 0.90, moveSpeed: 0.73, range: 0.42, melee: true, hitDelay: 0.48, flying: true, buildingOnly: true }),
   6: Object.freeze({ hp: 310, damage: 73, atkSpeed: 0.90, moveSpeed: 0.75, range: 0.42, melee: true, hitDelay: 0.48, flying: true, buildingOnly: true }),
-  7: Object.freeze({ hp: 380, damage: 93, atkSpeed: 0.90, moveSpeed: 0.77, range: 0.42, melee: true, hitDelay: 0.48, flying: true, buildingOnly: true }),
+  7: Object.freeze({ hp: 450, damage: 110, atkSpeed: 0.90, moveSpeed: 0.77, range: 0.42, melee: true, hitDelay: 0.48, flying: true, buildingOnly: true }),
 });
 
 const WINDLING_LIFETIME_SEC = 8.0;
@@ -326,16 +411,18 @@ const DEFENSE_STATS = {
     2: { damage: 68, fireRate: 0.48, detectRange: 1.05, projSpeed: 4.0 },
     3: { damage: 122, fireRate: 0.34, detectRange: 1.18, projSpeed: 4.0 },
     4: { damage: 170, fireRate: 0.29, detectRange: 1.30, projSpeed: 4.0 },
-    5: { damage: 230, fireRate: 0.25, detectRange: 1.42, projSpeed: 4.0 },
-    6: { damage: 285, fireRate: 0.23, detectRange: 1.52, projSpeed: 4.0 },
+    5: { damage: 219, fireRate: 0.25, detectRange: 1.42, projSpeed: 4.0 },
+    6: { damage: 242, fireRate: 0.23, detectRange: 1.52, projSpeed: 4.0 },
+    7: { damage: 315, fireRate: 0.21, detectRange: 1.62, projSpeed: 4.0 },
   },
   archer_tower: {
     1: { damage: 25, fireRate: 1.0,  detectRange: 1.10, projSpeed: 2.5 },
     2: { damage: 62, fireRate: 0.68, detectRange: 1.32, projSpeed: 2.5 },
     3: { damage: 112, fireRate: 0.52, detectRange: 1.55, projSpeed: 2.5 },
     4: { damage: 158, fireRate: 0.44, detectRange: 1.78, projSpeed: 2.5 },
-    5: { damage: 210, fireRate: 0.38, detectRange: 2.00, projSpeed: 2.5 },
-    6: { damage: 260, fireRate: 0.35, detectRange: 2.15, projSpeed: 2.5 },
+    5: { damage: 200, fireRate: 0.38, detectRange: 2.00, projSpeed: 2.5 },
+    6: { damage: 221, fireRate: 0.35, detectRange: 2.15, projSpeed: 2.5 },
+    7: { damage: 288, fireRate: 0.32, detectRange: 2.30, projSpeed: 2.5 },
   },
   mage_tower: {
     1: {
@@ -384,24 +471,35 @@ const DEFENSE_STATS = {
     },
     5: {
       beam: true,
-      baseDamage: 36,
-      maxDamage: 198,
+      baseDamage: 34,
+      maxDamage: 188,
       tickRate: 0.12,
       rampTime: 2.0,
       detectRange: 1.82,
-      damage: 36,
+      damage: 34,
       fireRate: 0.12,
       projSpeed: 0,
     },
     6: {
       beam: true,
-      baseDamage: 46,
-      maxDamage: 250,
+      baseDamage: 39,
+      maxDamage: 213,
       tickRate: 0.11,
       rampTime: 1.9,
       detectRange: 1.95,
-      damage: 46,
+      damage: 39,
       fireRate: 0.11,
+      projSpeed: 0,
+    },
+    7: {
+      beam: true,
+      baseDamage: 52,
+      maxDamage: 281,
+      tickRate: 0.10,
+      rampTime: 1.8,
+      detectRange: 2.08,
+      damage: 52,
+      fireRate: 0.10,
       projSpeed: 0,
     },
   },
@@ -410,6 +508,15 @@ const DEFENSE_STATS = {
     2: { damage: 135, fireRate: 2.25, detectRange: 1.600, minRange: 0.75, projSpeed: 3.2, splashRadius: 0.26 },
     3: { damage: 185, fireRate: 2.10, detectRange: 1.767, minRange: 0.80, projSpeed: 3.4, splashRadius: 0.30 },
     4: { damage: 245, fireRate: 1.95, detectRange: 1.933, minRange: 0.85, projSpeed: 3.6, splashRadius: 0.34 },
+  },
+  cannon: {
+    1: { damage: 40, fireRate: 1.60, detectRange: 1.35, projSpeed: 3.2 },
+    2: { damage: 100, fireRate: 1.10, detectRange: 1.45, projSpeed: 3.2 },
+    3: { damage: 205, fireRate: 0.95, detectRange: 1.55, projSpeed: 3.2 },
+    4: { damage: 305, fireRate: 0.85, detectRange: 1.65, projSpeed: 3.2 },
+    5: { damage: 447, fireRate: 0.85, detectRange: 1.75, projSpeed: 3.2 },
+    6: { damage: 506, fireRate: 0.80, detectRange: 1.85, projSpeed: 3.2 },
+    7: { damage: 675, fireRate: 0.75, detectRange: 2.00, projSpeed: 3.2 },
   },
 };
 
@@ -420,7 +527,8 @@ const SKELETON_GUARD = {
     2: { hp: 520, damage: 60, atkSpeed: 0.74, moveSpeed: 0.52, detectionRadius: 1.10 },
     3: { hp: 620, damage: 72, atkSpeed: 0.70, moveSpeed: 0.54, detectionRadius: 1.25 },
     4: { hp: 820, damage: 96, atkSpeed: 0.64, moveSpeed: 0.58, detectionRadius: 1.40 },
-    5: { hp: 1050, damage: 122, atkSpeed: 0.60, moveSpeed: 0.60, detectionRadius: 1.52 },
+    5: { hp: 998,  damage: 116, atkSpeed: 0.60, moveSpeed: 0.60, detectionRadius: 1.52 },
+    6: { hp: 1148, damage: 131, atkSpeed: 0.57, moveSpeed: 0.62, detectionRadius: 1.62 },
   },
   hp: 520,
   damage: 60,
@@ -508,6 +616,7 @@ const LOOT_PERCENT = 0.15;
 
 // Main Ship progression is authoritative for both economy and battle energy.
 // Upgrade costs are charged when entering the keyed level.
+const MAX_PLAYER_SHIP_LEVEL = 10;
 const PLAYER_SHIP_LEVELS = Object.freeze({
   1: Object.freeze({
     capacity: 3,
@@ -544,12 +653,55 @@ const PLAYER_SHIP_LEVELS = Object.freeze({
     energy: 14,
     town_hall: 6,
     medkit_unlocked: true,
+    unlocks: Object.freeze(['Healing Field']),
     cost: Object.freeze({ gold: 9000, wood: 18000, ore: 15500 }),
+  }),
+  7: Object.freeze({
+    capacity: 45,
+    energy: 16,
+    town_hall: 7,
+    medkit_unlocked: true,
+    freeze_unlocked: true,
+    unlocks: Object.freeze(['Freeze Orb']),
+    cost: Object.freeze({ gold: 12000, wood: 24000, ore: 21000 }),
+  }),
+  8: Object.freeze({
+    capacity: 45,
+    energy: 18,
+    town_hall: 7,
+    medkit_unlocked: true,
+    freeze_unlocked: true,
+    rage_unlocked: true,
+    unlocks: Object.freeze(['Rage Field']),
+    cost: Object.freeze({ gold: 16000, wood: 32000, ore: 28000 }),
+  }),
+  9: Object.freeze({
+    capacity: 45,
+    energy: 20,
+    town_hall: 7,
+    medkit_unlocked: true,
+    freeze_unlocked: true,
+    rage_unlocked: true,
+    tactical_reserve_unlocked: true,
+    unlocks: Object.freeze(['Tactical Reserve (+2 energy)']),
+    cost: Object.freeze({ gold: 21000, wood: 42000, ore: 36000 }),
+  }),
+  10: Object.freeze({
+    capacity: 45,
+    energy: 22,
+    town_hall: 7,
+    medkit_unlocked: true,
+    freeze_unlocked: true,
+    rage_unlocked: true,
+    tactical_reserve_unlocked: true,
+    skeleton_barrel_unlocked: true,
+    unlocks: Object.freeze(['Skeleton Barrel']),
+    cost: Object.freeze({ gold: 27000, wood: 54000, ore: 46000 }),
   }),
 });
 
 function playerShipLevelConfig(level) {
-  const normalized = Math.max(1, Math.min(6, Math.trunc(Number(level) || 1)));
+  const normalized = Math.max(1, Math.min(MAX_PLAYER_SHIP_LEVEL, Math.trunc(Number(level) || 1)));
   return PLAYER_SHIP_LEVELS[normalized];
 }
 
@@ -578,11 +730,11 @@ const MEDKIT_RADIUS = 0.72;
 const MEDKIT_TICK_SEC = 0.25;
 const MEDKIT_HEAL_PER_TICK = 12;
 
-// Main Ship level 6 tactical abilities. These immutable contracts are used by
+// Main Ship tactical abilities. These immutable contracts are used by
 // the replay verifier so action payloads cannot override energy or combat data.
 const FREEZE_DROP = Object.freeze({
   actionType: 'freeze_drop',
-  unlockShipLevel: 6,
+  unlockShipLevel: 7,
   energyCost: 5,
   maxUses: 1,
   travelSec: 0.9,
@@ -592,7 +744,7 @@ const FREEZE_DROP = Object.freeze({
 
 const RAGE_DROP = Object.freeze({
   actionType: 'rage_drop',
-  unlockShipLevel: 6,
+  unlockShipLevel: 8,
   energyCost: 7,
   maxUses: 1,
   radius: 0.82,
@@ -605,7 +757,7 @@ const RAGE_DROP = Object.freeze({
 
 const SKELETON_BARREL = Object.freeze({
   actionType: 'skeleton_barrel_fire',
-  unlockShipLevel: 6,
+  unlockShipLevel: 10,
   energyCost: 8,
   maxUses: 1,
   travelSec: 1.6,
@@ -635,6 +787,8 @@ module.exports = {
   MAX_TROOP_LEVEL,
   TROOP_SLOT_COSTS,
   TROOP_STATS,
+  TROOP_LEVEL_POWER_MULTIPLIERS,
+  troopLevelPowerMultiplier,
   WIND_MAGE,
   WINDLING_STATS,
   WINDLING_LIFETIME_SEC,
@@ -643,7 +797,9 @@ module.exports = {
   computeNftTroopStats,
   computeDemonKingStats,
   normalizeNftRarity,
+  resolveAuthoritativeNftRarity,
   NFT_RARITY_MULTIPLIERS,
+  setBalanceLabNftStatScales,
   DEFENSE_STATS,
   SKELETON_GUARD,
   NECROMANCER_SUMMON,
@@ -656,6 +812,7 @@ module.exports = {
   TIME_LIMIT_SEC,
   LOOT_PERCENT,
   VALID_TROOP_TYPES,
+  MAX_PLAYER_SHIP_LEVEL,
   PLAYER_SHIP_LEVELS,
   playerShipLevelConfig,
   cannonInitialEnergyForShipLevel,

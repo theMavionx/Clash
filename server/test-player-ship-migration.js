@@ -6,7 +6,11 @@ const os = require('node:os');
 const path = require('node:path');
 const {
   CANONICAL_GRID_CONFIG,
+  FREEZE_DROP,
+  MAX_PLAYER_SHIP_LEVEL,
   PLAYER_SHIP_LEVELS,
+  RAGE_DROP,
+  SKELETON_BARREL,
   TROOP_SLOT_COSTS,
   cannonInitialEnergyForShipLevel,
   MEDKIT_ENERGY_COST,
@@ -47,7 +51,12 @@ const EXPECTED_SHIP_LEVELS = {
   4: { capacity: 36, energy: 10, cost: { gold: 4800, wood: 9600, ore: 8200 } },
   5: { capacity: 45, energy: 12, cost: { gold: 6500, wood: 12800, ore: 11000 } },
   6: { capacity: 45, energy: 14, cost: { gold: 9000, wood: 18000, ore: 15500 } },
+  7: { capacity: 45, energy: 16, cost: { gold: 12000, wood: 24000, ore: 21000 } },
+  8: { capacity: 45, energy: 18, cost: { gold: 16000, wood: 32000, ore: 28000 } },
+  9: { capacity: 45, energy: 20, cost: { gold: 21000, wood: 42000, ore: 36000 } },
+  10: { capacity: 45, energy: 22, cost: { gold: 27000, wood: 54000, ore: 46000 } },
 };
+assert.equal(Object.keys(EXPECTED_SHIP_LEVELS).length, MAX_PLAYER_SHIP_LEVEL);
 for (const [level, expected] of Object.entries(EXPECTED_SHIP_LEVELS)) {
   assert.equal(PLAYER_SHIP_LEVELS[level].capacity, expected.capacity);
   assert.equal(PLAYER_SHIP_LEVELS[level].energy, expected.energy);
@@ -211,15 +220,15 @@ try {
   const upgradePlayerId = 'main-ship-upgrade-player';
   insertPlayer(upgradePlayerId, 'main_ship_upgrade');
   gameDb.db.prepare(`
-    UPDATE players SET gold = 100000, wood = 100000, ore = 100000 WHERE id = ?
+    UPDATE players SET gold = 500000, wood = 500000, ore = 500000 WHERE id = ?
   `).run(upgradePlayerId);
   gameDb.db.prepare(`
     INSERT INTO buildings
       (player_id, type, level, grid_x, grid_z, grid_index, hp, max_hp)
-    VALUES (?, 'town_hall', 6, 0, 0, 1, 1, 1)
+    VALUES (?, 'town_hall', 7, 0, 0, 1, 1, 1)
   `).run(upgradePlayerId);
-  let expectedResources = { gold: 100000, wood: 100000, ore: 100000 };
-  for (let targetLevel = 2; targetLevel <= 6; targetLevel += 1) {
+  let expectedResources = { gold: 500000, wood: 500000, ore: 500000 };
+  for (let targetLevel = 2; targetLevel <= MAX_PLAYER_SHIP_LEVEL; targetLevel += 1) {
     const expected = EXPECTED_SHIP_LEVELS[targetLevel];
     const upgraded = gameDb.upgradePlayerShip(upgradePlayerId);
     assert.equal(upgraded.success, true);
@@ -227,12 +236,16 @@ try {
     assert.equal(upgraded.ship.capacity, expected.capacity);
     assert.equal(upgraded.ship.energy, expected.energy);
     assert.equal(upgraded.ship.medkit_unlocked, targetLevel >= MEDKIT_UNLOCK_SHIP_LEVEL);
+    assert.equal(upgraded.ship.freeze_unlocked, targetLevel >= FREEZE_DROP.unlockShipLevel);
+    assert.equal(upgraded.ship.rage_unlocked, targetLevel >= RAGE_DROP.unlockShipLevel);
+    assert.equal(upgraded.ship.skeleton_barrel_unlocked, targetLevel >= SKELETON_BARREL.unlockShipLevel);
     assert.deepEqual(upgraded.cost, expected.cost);
     for (const resource of ['gold', 'wood', 'ore']) {
       expectedResources[resource] -= expected.cost[resource];
       assert.equal(upgraded.resources[resource], expectedResources[resource]);
     }
   }
+  assert.match(gameDb.upgradePlayerShip(upgradePlayerId).error, /max level/);
 
   const refundPlayerId = 'slot-rebalance-refund-player';
   insertPlayer(refundPlayerId, 'slot_rebalance_refund');

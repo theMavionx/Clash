@@ -71,8 +71,8 @@ try {
   ]);
   assert.deepEqual(gameDb.getBuildingUpgradeCost('mine', 5), { gold: 960, wood: 2400, ore: 0 });
   assert.deepEqual(gameDb.getBuildingUpgradeCost('mortar', 1), { gold: 1200, wood: 1800, ore: 1400 });
-  assert.deepEqual(gameDb.TH_MAX_COUNT.mortar, [0, 0, 0, 0, 1, 2]);
-  assert.deepEqual(gameDb.TH_MAX_COUNT.shark_trap, [0, 0, 1, 1, 2, 3]);
+  assert.deepEqual(gameDb.TH_MAX_COUNT.mortar.slice(0, 6), [0, 0, 0, 0, 1, 2]);
+  assert.deepEqual(gameDb.TH_MAX_COUNT.shark_trap.slice(0, 6), [0, 0, 1, 1, 2, 3]);
   assert.equal(gameDb.getBuildingMaxLevelForTownHall('mortar', 5), 1);
   assert.equal(gameDb.getBuildingMaxLevelForTownHall('mortar', 6), 2);
   assert.equal(gameDb.getBuildingMaxLevelForTownHall('tombstone', 5), 4);
@@ -138,15 +138,15 @@ try {
   assert.equal(levelSixShip.ship.energy, 14);
   assert.equal(levelSixShip.ship.medkit_unlocked, true);
   assert.deepEqual(levelSixShip.cost, { gold: 9000, wood: 18000, ore: 15500 });
-  assert.match(gameDb.upgradePlayerShip(playerId).error, /max level/);
+  assert.match(gameDb.upgradePlayerShip(playerId).error, /Town Hall to level 7/);
   assert.equal(gameDb.updatePlayerShipTroops(playerId, Array(45).fill('Knight:1')).capacity, 45);
   assert.equal(gameDb.updatePlayerShipTroops(playerId, Array(46).fill('Knight:1')).error, 'Ship capacity exceeded');
   assert.equal(
-    gameDb.updatePlayerShipTroops(playerId, ['Necromancer:7']).error,
+    gameDb.updatePlayerShipTroops(playerId, ['Necromancer:6']).error,
     'Invalid troop slot layout',
   );
   assert.equal(
-    gameDb.updatePlayerShipTroops(playerId, ['Knight:7', '_SLOT_FILLER_']).error,
+    gameDb.updatePlayerShipTroops(playerId, ['Knight:6', '_SLOT_FILLER_']).error,
     'Invalid troop slot layout',
   );
 
@@ -155,68 +155,41 @@ try {
   const mechanicalDragonSlots = [];
   for (let i = 0; i < 11; i++) {
     mechanicalDragonSlots.push(
-      'MechanicalDragon:7',
+      'MechanicalDragon:6',
       '_SLOT_FILLER_',
       '_SLOT_FILLER_',
       '_SLOT_FILLER_',
     );
   }
-  mechanicalDragonSlots.push('Knight:7');
+  mechanicalDragonSlots.push('Knight:6');
   assert.equal(gameDb.updatePlayerShipTroops(playerId, mechanicalDragonSlots).capacity, 45);
   assert.equal(
     gameDb.updatePlayerShipTroops(
       playerId,
-      [...mechanicalDragonSlots, 'MechanicalDragon:7', '_SLOT_FILLER_', '_SLOT_FILLER_', '_SLOT_FILLER_'],
+      [...mechanicalDragonSlots, 'MechanicalDragon:6', '_SLOT_FILLER_', '_SLOT_FILLER_', '_SLOT_FILLER_'],
     ).error,
     'Ship capacity exceeded',
   );
 
-  assert.equal(gameDb.TROOP_DEFS.ice_golem.min_town_hall_level, 6);
+  assert.equal(gameDb.TROOP_DEFS.ice_golem.min_town_hall_level, 9);
   assert.equal(gameDb.TROOP_DEFS.ice_golem.slot_cost, 10);
   assert.equal(gameDb.TROOP_DEFS.ice_golem.buy_cost, 1000);
-  const iceGolemSlots = [];
-  for (let i = 0; i < 4; i++) {
-    iceGolemSlots.push(
-      'IceGolem:7',
-      ...Array(9).fill('_SLOT_FILLER_'),
-    );
-  }
-  iceGolemSlots.push(...Array(5).fill('Knight:7'));
-  assert.equal(gameDb.updatePlayerShipTroops(playerId, iceGolemSlots).capacity, 45);
-  assert.equal(
-    gameDb.updatePlayerShipTroops(
-      playerId,
-      [
-        ...iceGolemSlots,
-        'IceGolem:7',
-        ...Array(9).fill('_SLOT_FILLER_'),
-      ],
-    ).error,
-    'Ship capacity exceeded',
-  );
+  const lockedIceGolem = gameDb.getTroopTownHallUnlock(playerId, 'IceGolem');
+  assert.equal(lockedIceGolem.unlocked, false);
+  assert.equal(lockedIceGolem.current_town_hall_level, 6);
+  assert.equal(lockedIceGolem.required_town_hall_level, 9);
+  assert.equal(lockedIceGolem.code, 'TOWN_HALL_LEVEL_REQUIRED');
+  assert.equal(gameDb.upgradeTroop(playerId, 'IceGolem').code, 'TOWN_HALL_LEVEL_REQUIRED');
 
-  assert.equal(gameDb.TROOP_DEFS.necromancer.min_town_hall_level, 6);
+  assert.equal(gameDb.TROOP_DEFS.necromancer.min_town_hall_level, 7);
   assert.equal(gameDb.TROOP_DEFS.necromancer.slot_cost, 15);
   assert.equal(gameDb.TROOP_DEFS.necromancer.buy_cost, 1500);
-  const necromancerSlots = [];
-  for (let i = 0; i < 3; i++) {
-    necromancerSlots.push(
-      'Necromancer:7',
-      ...Array(14).fill('_SLOT_FILLER_'),
-    );
-  }
-  assert.equal(gameDb.updatePlayerShipTroops(playerId, necromancerSlots).capacity, 45);
-  assert.equal(
-    gameDb.updatePlayerShipTroops(
-      playerId,
-      [
-        ...necromancerSlots,
-        'Necromancer:7',
-        ...Array(14).fill('_SLOT_FILLER_'),
-      ],
-    ).error,
-    'Ship capacity exceeded',
-  );
+  const lockedNecromancer = gameDb.getTroopTownHallUnlock(playerId, 'Necromancer');
+  assert.equal(lockedNecromancer.unlocked, false);
+  assert.equal(lockedNecromancer.current_town_hall_level, 6);
+  assert.equal(lockedNecromancer.required_town_hall_level, 7);
+  assert.equal(lockedNecromancer.code, 'TOWN_HALL_LEVEL_REQUIRED');
+  assert.equal(gameDb.upgradeTroop(playerId, 'Necromancer').code, 'TOWN_HALL_LEVEL_REQUIRED');
 
   const deployPoint = gridToWorld(12, 0, 1, 1, CANONICAL_GRID_CONFIGS[2]);
   const fullShipReplay = verifyReplay({
@@ -251,7 +224,7 @@ try {
   );
   assert.equal(fullShipReplay.resolvedResult, 'victory');
 
-  console.log('[TH6_PROGRESSION] PASS th6=true mortars=2 shark_traps=3 mimic_th=5 ship_capacity=45 manual_deploy=45 mechanical_dragons=11 ice_golems=4 necromancers=3');
+  console.log('[TH6_PROGRESSION] PASS th6=true mortars=2 shark_traps=3 mimic_th=5 ship_capacity=45 manual_deploy=45 mechanical_dragons=11 ice_golem_locked_until_th9=true necromancer_locked_until_th7=true');
 } finally {
   gameDb.db.close();
   for (const suffix of ['', '-wal', '-shm']) {

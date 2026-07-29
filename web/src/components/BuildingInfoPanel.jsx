@@ -16,6 +16,7 @@ import { openSolanaWallet } from '../lib/solanaWalletUi';
 import goldIcon from '../assets/resources/gold_bar.png';
 import woodIcon from '../assets/resources/wood_bar.png';
 import stoneIcon from '../assets/resources/stone_bar.png';
+import trophyIcon from '../assets/resources/free-icon-cup-with-star-109765.png';
 
 import imgMine from '../assets/buildings/mine.png';
 import imgBarn from '../assets/buildings/barn.png';
@@ -23,6 +24,7 @@ import imgPort from '../assets/buildings/port.png';
 import imgSawmill from '../assets/buildings/sawmill.png';
 import imgTownHall from '../assets/buildings/townhall.png';
 import imgTurret from '../assets/buildings/turret.png';
+import imgCannon from '../assets/buildings/cannon.png';
 import imgTombstone from '../assets/buildings/tombstone.png';
 import imgArcherTower from '../assets/buildings/archertower.png';
 import imgStorage from '../assets/buildings/storage.png';
@@ -68,6 +70,22 @@ const UNIT_IMAGES = {
   FireDragon: fireDragonImg,
 };
 
+const MAIN_SHIP_ABILITY_FLAGS = [
+  ['ship_medkit_unlocked', 'Healing Field'],
+  ['ship_freeze_unlocked', 'Freeze Orb'],
+  ['ship_rage_unlocked', 'Rage Field'],
+  ['ship_skeleton_barrel_unlocked', 'Skeleton Barrel'],
+];
+
+const mainShipAbilityLabels = (building = {}) => {
+  if (Array.isArray(building.ship_unlocked_abilities)) {
+    return building.ship_unlocked_abilities.filter(Boolean);
+  }
+  return MAIN_SHIP_ABILITY_FLAGS
+    .filter(([flag]) => !!building[flag])
+    .map(([, label]) => label);
+};
+
 const TROOP_STYLE_MAP = {
   Knight: { scale: 1.9, offsetY: '25%' },
   Mage: { scale: 1.9, offsetY: '25%' },
@@ -108,6 +126,18 @@ const CARD_TROOP_STYLE_MAP = {
 const SLOT_FILLER = '_SLOT_FILLER_';
 const TOWN_HALL_FLAG_SKU = 'town_hall_flag';
 const TOWN_HALL_FLAG_CANVAS_SIZE = 256;
+// Display-only mirror of server/raid_trophy_progression.js.
+const RAID_WIN_TROPHIES_BY_TOWN_HALL = Object.freeze({
+  1: 6,
+  2: 12,
+  3: 18,
+  4: 22,
+  5: 30,
+});
+const raidWinTrophiesForTownHall = (level) => {
+  const normalizedLevel = Math.max(1, Math.floor(Number(level) || 1));
+  return RAID_WIN_TROPHIES_BY_TOWN_HALL[Math.min(5, normalizedLevel)];
+};
 
 const THUMBNAIL_MAP = {
   mine: imgMine,
@@ -116,6 +146,7 @@ const THUMBNAIL_MAP = {
   sawmill: imgSawmill,
   town_hall: imgTownHall,
   turret: imgTurret,
+  cannon: imgCannon,
   tombstone: imgTombstone,
   archtower: imgArcherTower,
   archer_tower: imgArcherTower,
@@ -146,6 +177,7 @@ const DESC_MAP = {
   main_ship: 'Carries your army into battle. Upgrades add capacity and battle energy; level 6 unlocks the healing field.',
   town_hall: 'The heart of your village.',
   turret: 'Targets ground enemies.',
+  cannon: 'A heavy ground-only defense with powerful single-target shots.',
   tombstone: 'Spawns skeletons to defend.',
   archtower: 'Ranged defense against invaders.',
   archer_tower: 'Ranged defense against invaders.',
@@ -1282,13 +1314,13 @@ function BuildingInfoPanel({ onOpenTroops }) {
       const capacity = Number(building.ship_capacity || 0);
       const loaded = Array.isArray(building.ship_troops) ? building.ship_troops.length : 0;
       const energy = Number(building.ship_energy || 4);
-      const medkitUnlocked = !!building.ship_medkit_unlocked;
+      const unlockedAbilities = mainShipAbilityLabels(building);
       const leftContent = (
         <>
           <StatBox label="Troop Capacity" current={capacity} />
           <StatBox label="Loaded Slots" current={loaded} />
           <StatBox label="Battle Energy" current={energy} />
-          <StatBox label="Healing Field" current={medkitUnlocked ? 'Unlocked' : 'Locked'} />
+          <StatBox label="Tactical Abilities" current={`${unlockedAbilities.length} / 4`} />
           <StatBox label="Level" current={building.ship_level || building.level} />
         </>
       );
@@ -1300,7 +1332,9 @@ function BuildingInfoPanel({ onOpenTroops }) {
           </div>
           <h3 style={styles.sectionTitle}>Status</h3>
           <div style={{...styles.reqBoxMax, padding: 16, background: 'rgba(0, 0, 0, 0.05)', borderRadius: 8, border: '1px solid rgba(0, 0, 0, 0.1)', boxShadow: 'inset 0 1px 2px rgba(255,255,255,0.5)'}}>
-            <span style={{color: '#377d9f', fontSize: 16, fontWeight: 800}}>Ready for battle</span>
+            <span style={{color: '#377d9f', fontSize: 16, fontWeight: 800}}>
+              {unlockedAbilities.length > 0 ? unlockedAbilities.join(' · ') : 'Basic cannon and rally'}
+            </span>
           </div>
         </>
       );
@@ -1309,6 +1343,12 @@ function BuildingInfoPanel({ onOpenTroops }) {
     const leftContent = building.id === 'shark_trap' ? (
       <>
         <StatBox label="Damage" current={building.damage} />
+        <StatBox label="Level" current={building.level} />
+      </>
+    ) : building.id === 'cannon' ? (
+      <>
+        <StatBox label="Damage" current={building.damage} />
+        <StatBox label="Health" current={building.max_hp} />
         <StatBox label="Level" current={building.level} />
       </>
     ) : (
@@ -1435,19 +1475,21 @@ function BuildingInfoPanel({ onOpenTroops }) {
   const renderUpgrade = () => {
     if (building.id === 'main_ship') {
       const currentLevel = Number(building.ship_level || building.level || 1);
+      const maxLevel = Number(building.max_level || building.ship_max_level || 10);
       const currentCapacity = Number(building.ship_capacity || 0);
       const nextCapacity = Number(building.ship_next_capacity || currentCapacity);
       const currentEnergy = Number(building.ship_energy || 4);
       const nextEnergy = Number(building.ship_next_energy || currentEnergy);
-      const currentMedkit = !!building.ship_medkit_unlocked;
-      const nextMedkit = !!building.ship_next_medkit_unlocked;
+      const nextUnlocks = Array.isArray(building.ship_next_unlocks)
+        ? building.ship_next_unlocks.filter(Boolean)
+        : [];
       const shipUpgradeCost = building.ship_upgrade_cost || {};
       const leftContent = (
         <>
           <StatBox label="Troop Capacity" current={currentCapacity} upgradeTo={nextCapacity} />
           <StatBox label="Battle Energy" current={currentEnergy} upgradeTo={nextEnergy} />
-          <StatBox label="Healing Field" current={currentMedkit ? 'Unlocked' : 'Locked'} upgradeTo={!currentMedkit && nextMedkit ? 'Unlocked' : null} />
-          <StatBox label="Level" current={currentLevel} upgradeTo={currentLevel + 1} />
+          <StatBox label="New Unlock" current={nextUnlocks.length > 0 ? nextUnlocks.join(', ') : 'Energy reserve'} />
+          <StatBox label="Level" current={currentLevel} upgradeTo={currentLevel < maxLevel ? currentLevel + 1 : null} />
         </>
       );
       const rightContent = <ResourceReqs costObj={shipUpgradeCost} title="Upgrade Cost" />;
@@ -1461,9 +1503,19 @@ function BuildingInfoPanel({ onOpenTroops }) {
         handleMainShipUpgrade,
       );
     }
+    const isTownHallUpgrade = building.id === 'town_hall';
+    const currentTownHallTrophies = raidWinTrophiesForTownHall(building.level);
+    const nextTownHallTrophies = raidWinTrophiesForTownHall(Number(building.level || 1) + 1);
+    const trophyRewardIncreases = nextTownHallTrophies > currentTownHallTrophies;
     const leftContent = building.id === 'shark_trap' ? (
       <>
         <StatBox label="Damage" current={building.damage} upgradeTo={building.next_damage} />
+        <StatBox label="Level" current={building.level} upgradeTo={building.level + 1} />
+      </>
+    ) : building.id === 'cannon' ? (
+      <>
+        <StatBox label="Damage" current={building.damage} upgradeTo={building.next_damage} />
+        <StatBox label="Health" current={building.max_hp} upgradeTo={building.next_hp} />
         <StatBox label="Level" current={building.level} upgradeTo={building.level + 1} />
       </>
     ) : (
@@ -1472,7 +1524,26 @@ function BuildingInfoPanel({ onOpenTroops }) {
         <StatBox label="Level" current={building.level} upgradeTo={building.level + 1} />
       </>
     );
-    const rightContent = <ResourceReqs costObj={building.upgrade_cost} title="Upgrade Cost" />;
+    const rightContent = (
+      <>
+        <ResourceReqs costObj={building.upgrade_cost} title="Upgrade Cost" />
+        {isTownHallUpgrade && (
+          <div style={styles.trophyUpgradeNotice}>
+            <img src={trophyIcon} alt="" style={styles.trophyUpgradeIcon} />
+            <div style={styles.trophyUpgradeCopy}>
+              <strong style={styles.trophyUpgradeTitle}>
+                {trophyRewardIncreases ? 'Trophy reward increases' : 'Maximum trophy reward unlocked'}
+              </strong>
+              <span style={styles.trophyUpgradeText}>
+                {trophyRewardIncreases
+                  ? `New Town Hall tier: +${currentTownHallTrophies} to +${nextTownHallTrophies}. Victories over bases at this tier award the higher base reward.`
+                  : `This Town Hall tier keeps the maximum base victory reward of +${currentTownHallTrophies} trophies.`}
+              </span>
+            </div>
+          </div>
+        )}
+      </>
+    );
 
     return renderModal(
       `UPGRADE ${building.name.toUpperCase()}`, 
@@ -1635,12 +1706,18 @@ function BuildingInfoPanel({ onOpenTroops }) {
   };
 
   const renderLoadTroops = () => {
-    const shipLevel = building.ship_level || 1;
+    const shipLevel = Number(building.ship_level || 1);
     const shipTroops = localTroops || building.ship_troops || [];
     const capacity = building.ship_capacity || shipLevel * 3;
     const shipEnergy = Number(building.ship_energy || 4);
     const nextShipEnergy = Number(building.ship_next_energy || shipEnergy);
     const isMainShip = building.id === 'main_ship';
+    const shipMaxLevel = Number(building.max_level || building.ship_max_level || 10);
+    const shipUnlockedAbilities = mainShipAbilityLabels(building);
+    const shipNextUnlocks = Array.isArray(building.ship_next_unlocks)
+      ? building.ship_next_unlocks.filter(Boolean)
+      : [];
+    const shipNextTownHall = Number(building.ship_next_town_hall || 1);
     const shipUpgradeCost = building.ship_upgrade_cost || {};
     const canAffordShipUpgrade = ['gold', 'wood', 'ore'].every((key) => Number(resources?.[key] || 0) >= Number(shipUpgradeCost?.[key] || 0));
     const portNumber = Number(building.port_number || 0);
@@ -1950,14 +2027,27 @@ function BuildingInfoPanel({ onOpenTroops }) {
           {isMainShip && (
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: isMobile ? '8px 10px' : '10px 16px', background: '#efe3c8', borderBottom: '2px solid #cbb98f' }}>
               <div style={{ color: '#5C3A21', fontWeight: 900, fontSize: isMobile ? 11 : 13 }}>
-                Capacity {capacity}{shipLevel < 6 ? ` · Next ${[3, 12, 27, 36, 45, 45][shipLevel]}` : ' · MAX LEVEL'}
+                Capacity {capacity}{shipLevel >= 5 ? ' · MAX CAPACITY' : ` · Next ${Number(building.ship_next_capacity || capacity)}`}
                 <div style={{ color: '#6b552f', fontSize: isMobile ? 9 : 10, marginTop: 2 }}>
-                  Battle energy {shipEnergy}{shipLevel < 6 ? ` · Next ${nextShipEnergy}` : ''}
+                  Battle energy {shipEnergy}{shipLevel < shipMaxLevel ? ` · Next ${nextShipEnergy}` : ' · MAX LEVEL'}
                 </div>
-                {shipLevel >= 6 && <div style={{ color: '#1c8b4d', fontSize: isMobile ? 9 : 10, marginTop: 2 }}>Healing field unlocked</div>}
-                {shipLevel < 6 && <div style={{ color: '#8b6b3f', fontSize: isMobile ? 9 : 10, marginTop: 2 }}>{Object.entries(shipUpgradeCost).map(([key, value]) => `${value} ${key}`).join(' · ')}</div>}
+                {shipUnlockedAbilities.length > 0 && (
+                  <div style={{ color: '#1c8b4d', fontSize: isMobile ? 9 : 10, marginTop: 2 }}>
+                    {shipUnlockedAbilities.join(' · ')}
+                  </div>
+                )}
+                {shipLevel < shipMaxLevel && (
+                  <>
+                    <div style={{ color: '#9b5d14', fontSize: isMobile ? 9 : 10, marginTop: 2 }}>
+                      Next: {shipNextUnlocks.length > 0 ? shipNextUnlocks.join(', ') : '+2 battle energy'} · TH{shipNextTownHall}
+                    </div>
+                    <div style={{ color: '#8b6b3f', fontSize: isMobile ? 9 : 10, marginTop: 2 }}>
+                      {Object.entries(shipUpgradeCost).map(([key, value]) => `${value} ${key}`).join(' · ')}
+                    </div>
+                  </>
+                )}
               </div>
-              {shipLevel < 6 && <button type="button" disabled={!canAffordShipUpgrade} onClick={() => sendToGodot('upgrade_main_ship')} style={{ padding: isMobile ? '8px 12px' : '10px 16px', border: '2px solid #7d5d24', borderRadius: 7, background: canAffordShipUpgrade ? '#f3ba35' : '#c8baa0', color: '#4b2b16', fontWeight: 900, cursor: canAffordShipUpgrade ? 'pointer' : 'not-allowed', fontFamily: 'inherit' }}>UPGRADE</button>}
+              {shipLevel < shipMaxLevel && <button type="button" disabled={!canAffordShipUpgrade} onClick={() => sendToGodot('upgrade_main_ship')} style={{ padding: isMobile ? '8px 12px' : '10px 16px', border: '2px solid #7d5d24', borderRadius: 7, background: canAffordShipUpgrade ? '#f3ba35' : '#c8baa0', color: '#4b2b16', fontWeight: 900, cursor: canAffordShipUpgrade ? 'pointer' : 'not-allowed', fontFamily: 'inherit' }}>UPGRADE</button>}
             </div>
           )}
 
@@ -3101,6 +3191,42 @@ const styles = {
     fontSize: 16,
     fontWeight: 900,
     color: '#1a3c4f',
+  },
+  trophyUpgradeNotice: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+    width: '100%',
+    padding: '10px 12px',
+    boxSizing: 'border-box',
+    borderRadius: 8,
+    border: '2px solid #c89b2b',
+    background: 'linear-gradient(180deg, #fff6c9 0%, #f5dfa0 100%)',
+    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.8), 0 2px 4px rgba(89,57,18,0.16)',
+  },
+  trophyUpgradeIcon: {
+    width: 34,
+    height: 34,
+    flex: '0 0 34px',
+    objectFit: 'contain',
+    filter: 'drop-shadow(0 2px 1px rgba(84,55,15,0.28))',
+  },
+  trophyUpgradeCopy: {
+    display: 'flex',
+    flexDirection: 'column',
+    minWidth: 0,
+    gap: 2,
+  },
+  trophyUpgradeTitle: {
+    color: '#6d431b',
+    fontSize: 13,
+    lineHeight: 1.15,
+  },
+  trophyUpgradeText: {
+    color: '#785b31',
+    fontSize: 11,
+    fontWeight: 800,
+    lineHeight: 1.3,
   },
   flagLibraryHeader: {
     color: '#6d4a2e',

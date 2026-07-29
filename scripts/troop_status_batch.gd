@@ -9,8 +9,8 @@ extends Node3D
 const EFFECT_RAGE: StringName = &"rage"
 const EFFECT_HEAL: StringName = &"heal"
 const STATUS_SHADER: Shader = preload("res://shaders/upgrade_outline.gdshader")
-const RAGE_COLOR := Color(0.08, 0.48, 1.0, 0.90)
-const HEAL_COLOR := Color(0.12, 0.76, 1.0, 0.76)
+const RAGE_COLOR := Color(1.0, 0.34, 0.04, 0.90)
+const HEAL_COLOR := Color(0.10, 0.88, 0.28, 0.82)
 const RAGE_OUTLINE_WIDTH: float = 0.030
 const HEAL_OUTLINE_WIDTH: float = 0.024
 

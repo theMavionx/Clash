@@ -29,21 +29,27 @@ pay for their special behavior with lower direct damage or lower durability per 
 
 | Troop | HP/slot | Direct DPS/slot | Additional value |
 |---|---:|---:|---|
-| Knight | 1,900 | 205.6 | two-body and pathing baseline |
-| Archer | 840 | 290.3 | range and sustained fire |
-| Mage | 517.5 | 387.5 | highest normal single-target burst per slot |
-| Barrel | 1,300 | 96.2 | ignored by defenses while rolling; safely triggers traps |
-| Mechanical Dragon | 750 | 212.6 | 440.7 ideal DPS/slot only when all three chain targets exist |
-| Demon King | 2,280 | 246.7 | single premium melee body |
-| Fire Dragon | 800 | 357.1 | flying and ground-trap immunity |
-| Ice Golem | 2,100 | 81.3 | defense priority and 7-second death freeze |
-| Necromancer | 752 | 229.6 | 239.2 combined DPS/slot at the three-skeleton cap |
-| Horror family | 1,896.5 lifetime | 104.8 peak phase | overkill resistance across 1-2-4 bodies |
+| Knight | 3,612.0 | 390.0 | melee/pathing baseline |
+| Archer | 2,025.0 | 701.6 | range and sustained fire |
+| Mage | 1,981.0 | 1,483.2 | highest normal single-target burst per slot |
+| Mimic | 3,248.0 | 238.1 | trap immunity and untargetable while running |
+| Mechanical Dragon | 1,426.0 | 404.1 | up to 837.6 ideal DPS/slot when all three chain targets exist |
+| Demon King (Common) | 3,723.6 | 402.2 | single premium melee body |
+| Fire Dragon (Common) | 1,520.8 | 679.1 | flying and ground-trap immunity |
+| Pea Shooter | 2,331.6 | 492.3 burst-adjusted | three independently resolved hits per cycle |
+| Ice Golem | 3,800.2 | 147.0 | defense priority and 7-second death freeze |
+| Necromancer | 2,401.2 | 733.2 direct | renewable three-skeleton screen is additional value |
+| Wind Mage | 1,392.0 | 158.2 direct | 50% corridor hits and bounded Windlings are additional value |
+| Horror family | 3,695.9 lifetime | 204.3 root phase | overkill resistance across 1-2-4 bodies |
+
+Values above are authoritative level-7 values after the shared `1.74x`
+same-TH power curve. Summons keep their separately authored stats.
 
 These values intentionally avoid a strict winner:
 
-- Mage has the best normal direct DPS per slot, but the lowest HP per slot.
-- Demon King has the highest HP per slot, but is melee, single-body, and NFT-backed.
+- Mage has the best normal direct DPS per slot, but remains a fragile ranged body.
+- Ice Golem has the highest root HP per slot and pays for it with the lowest
+  direct DPS; Demon King remains the premium common-rarity melee reference.
 - Fire Dragon approaches Mage DPS while paying ten slots for flight and trap immunity.
 - Ice Golem and Barrel trade direct DPS for battlefield utility.
 - Necromancer summons stay below Archer sustained DPS per slot even at summon cap.

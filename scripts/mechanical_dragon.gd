@@ -33,7 +33,7 @@ const LEVEL_STATS: Dictionary = {
 	4: {"hp": 1550, "damage": 310, "atk_speed": 1.03},
 	5: {"hp": 1970, "damage": 449, "atk_speed": 1.03},
 	6: {"hp": 2450, "damage": 629, "atk_speed": 1.03},
-	7: {"hp": 3000, "damage": 876, "atk_speed": 1.03},
+	7: {"hp": 3278, "damage": 957, "atk_speed": 1.03},
 }
 
 const ANIM_FILES: Array[String] = [
@@ -85,9 +85,9 @@ func _init_stats() -> void:
 	anim_file_aliases = ANIM_ALIASES
 
 
-func activate() -> void:
+func activate(refresh_dense_rendering: bool = true) -> void:
 	_ground_y = global_position.y
-	super.activate()
+	super.activate(refresh_dense_rendering)
 	_apply_flight_height()
 
 
@@ -218,7 +218,6 @@ func _apply_chain_lightning() -> void:
 			if is_instance_valid(building_system) and building_system.has_method("remove_building"):
 				building_system.remove_building(building)
 
-	BaseTroop.invalidate_combat_lists()
 	if primary_destroyed:
 		target_building = {}
 		target_bs = null
@@ -274,8 +273,23 @@ func _resolve_chain_path(primary: Dictionary, primary_bs: Node) -> Array[Diction
 func _chain_damage(jump_index: int) -> int:
 	var multiplier_bps: int = BPS_DENOMINATOR
 	for _step in range(jump_index):
-		multiplier_bps = int((multiplier_bps * CHAIN_FALLOFF_BPS + BPS_DENOMINATOR / 2) / BPS_DENOMINATOR)
-	return maxi(1, int((damage * multiplier_bps + BPS_DENOMINATOR / 2) / BPS_DENOMINATOR))
+		multiplier_bps = floori(
+			(
+				float(multiplier_bps * CHAIN_FALLOFF_BPS)
+				+ float(BPS_DENOMINATOR) * 0.5
+			)
+			/ float(BPS_DENOMINATOR)
+		)
+	return maxi(
+		1,
+		floori(
+			(
+				float(damage * multiplier_bps)
+				+ float(BPS_DENOMINATOR) * 0.5
+			)
+			/ float(BPS_DENOMINATOR)
+		)
+	)
 
 
 func _stable_building_key(building: Dictionary) -> int:

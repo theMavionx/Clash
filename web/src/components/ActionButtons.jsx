@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, useMemo } from 'react';
 import { useSend, useUI, useResources, useBuildingDefs, usePlayer } from '../hooks/useGodot';
 import { useLayout } from '../hooks/useIsMobile';
+import { useDex } from '../contexts/DexContext';
 import buildIcon from '../assets/resources/Gemini_Generated_Image_dl9plxdl9plxdl9p-removebg-preview.png';
 import attackIcon from '../assets/resources/file_000000006858720a8f860ee8da33335a.png';
 import chartIcon from '../assets/resources/chart.png';
@@ -15,6 +16,7 @@ import rageFieldAbilityImg from '../assets/ui/rage-field-ability.png';
 import skeletonBarrelAbilityImg from '../assets/ui/skeleton-barrel-ability.png';
 import TournamentPanel from './TournamentPanel';
 import NftMintPanel from './NftMintPanel';
+import RankedAttackSelector from './RankedAttackSelector';
 
 import knightImg  from '../assets/units/knight.png';
 import mageImg    from '../assets/units/mage.png';
@@ -191,6 +193,26 @@ const ONE_USE_SHIP_ABILITIES = [
   },
 ];
 
+const DESKTOP_SHIP_ABILITY_BUTTON_SIZE = 82;
+const DESKTOP_SHIP_ABILITY_GAP = 8;
+const DESKTOP_SHIP_ABILITY_PADDING = 4;
+
+function getVisibleShipAbilityCount(cannonEnergy) {
+  return 2 + ONE_USE_SHIP_ABILITIES.reduce(
+    (count, ability) => count + (cannonEnergy?.[ability.unlockedKey] ? 1 : 0),
+    0,
+  );
+}
+
+function getDesktopShipAbilityRailWidth(cannonEnergy) {
+  const abilityCount = getVisibleShipAbilityCount(cannonEnergy);
+  return (
+    abilityCount * DESKTOP_SHIP_ABILITY_BUTTON_SIZE
+    + Math.max(0, abilityCount - 1) * DESKTOP_SHIP_ABILITY_GAP
+    + DESKTOP_SHIP_ABILITY_PADDING
+  );
+}
+
 function ShipAbilityRail({
   mobile,
   inline = false,
@@ -227,6 +249,7 @@ function ShipAbilityRail({
   const abilityIconSize = mobile ? (menuLayout ? 34 : inline ? 40 : 32) : 46;
   const modes = { medkit: medkitMode, freeze: freezeMode, rage: rageMode, skeletonBarrel: skeletonBarrelMode };
   const handlers = { medkit: onMedkit, freeze: onFreeze, rage: onRage, skeletonBarrel: onSkeletonBarrel };
+  const desktopRailWidth = getDesktopShipAbilityRailWidth(cannonEnergy);
 
   const handleAbilityWheel = useCallback((event) => {
     if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
@@ -252,7 +275,9 @@ function ShipAbilityRail({
       } : {
         ...hud.abilityRail,
         gap: mobile ? 4 : 8,
-        width: mobile ? '100%' : 'min(540px, calc(55vw - 20px))',
+        width: mobile ? '100%' : desktopRailWidth,
+        maxWidth: mobile ? '100%' : 'calc(55vw - 20px)',
+        justifyContent: mobile ? 'flex-start' : 'flex-end',
       }}
       onWheel={inline ? undefined : handleAbilityWheel}
       onPointerDown={inline ? undefined : (event) => event.stopPropagation()}
@@ -401,32 +426,31 @@ function MobileShipAbilityMenu({
           />
         </div>
       )}
-      <div
-        style={{ ...hud.energyPill, ...hud.mobileDockEnergy }}
-        role="status"
-        aria-label={`${energy} energy available`}
+      <button
+        type="button"
+        style={{
+          ...hud.energyPill,
+          ...hud.mobileDockEnergy,
+          ...hud.mobileEnergyToggle,
+          ...(open || active ? hud.mobileEnergyToggleActive : {}),
+        }}
+        onClick={() => setOpen((value) => !value)}
+        title={`${energy} energy available. Open ship abilities`}
+        aria-label={`${energy} energy available. ${open ? 'Close' : 'Open'} ship abilities`}
+        aria-haspopup="menu"
+        aria-expanded={open}
       >
         <span style={{ ...hud.energyIcon, ...hud.energyIconMobile }}>
           <EnergyBoltIcon size={11} />
         </span>
         <span style={{ ...hud.energyValue, ...hud.energyValueMobile }}>{energy}</span>
-      </div>
-      <button
-        type="button"
-        style={{
-          ...hud.mobileAbilityToggle,
-          ...(open || active ? hud.mobileAbilityToggleActive : {}),
-        }}
-        onClick={() => setOpen((value) => !value)}
-        title="Ship abilities"
-        aria-label="Ship abilities"
-        aria-haspopup="menu"
-        aria-expanded={open}
-      >
-        <span style={hud.mobileAbilityToggleIcon}>
-          <EnergyBoltIcon size={20} />
-        </span>
-        <span aria-hidden="true" style={hud.mobileAbilityChevron} />
+        <span
+          aria-hidden="true"
+          style={{
+            ...hud.mobileAbilityChevron,
+            ...(open ? hud.mobileAbilityChevronOpen : {}),
+          }}
+        />
       </button>
     </div>
   );
@@ -521,6 +545,7 @@ function ManualAttackHUD({
   const troopScrollRef = useRef(null);
   const groups = fleetInfo?.troop_groups || [];
   const ready = !!fleetInfo?.ready;
+  const desktopAbilityRailWidth = getDesktopShipAbilityRailWidth(cannonEnergy);
 
   useLayoutEffect(() => {
     const scroller = troopScrollRef.current;
@@ -544,7 +569,12 @@ function ManualAttackHUD({
   return (
     <>
       <div style={{ ...hud.wrapTopRight, ...(mobile ? { top: 'calc(env(safe-area-inset-top, 0px) + 8px)', right: 'calc(env(safe-area-inset-right, 0px) + 8px)' } : {}) }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <div style={{
+          display: 'flex',
+          flexDirection: mobile ? 'column-reverse' : 'row',
+          alignItems: mobile ? 'flex-end' : 'center',
+          gap: mobile ? 5 : 10,
+        }}>
           {battleTimer != null && <div style={{ ...hud.timerPill, ...(mobile ? hud.timerPillMobile : {}), color: battleTimer <= 30 ? '#E53935' : '#5C3A21', border: `2px solid ${battleTimer <= 30 ? '#7f0000' : '#9f8759'}` }}>{Math.floor(battleTimer / 60)}:{String(battleTimer % 60).padStart(2, '0')}</div>}
           <button style={{ ...hud.homeBtn, ...(mobile ? hud.homeBtnMobile : {}) }} onClick={onSurrender} title="Surrender" aria-label="Surrender">
             <SurrenderFlagIcon size={mobile ? 24 : 30} />
@@ -555,7 +585,7 @@ function ManualAttackHUD({
         ...hud.wrapLeft,
         right: mobile
           ? 'calc(env(safe-area-inset-right, 0px) + 70px)'
-          : 'calc(min(540px, 55vw) + 40px)',
+          : `calc(min(${desktopAbilityRailWidth}px, calc(55vw - 20px)) + 40px)`,
         maxWidth: 'none',
         minWidth: 0,
         overflow: 'hidden',
@@ -1065,6 +1095,7 @@ const ShieldIcon = ({ size = 60 }) => (
 
 function ActionButtons({ onOpenBattleLog, onOpenBots }) {
   const { sendToGodot, setFuturesOpen } = useSend();
+  const { dex } = useDex();
   const {
     enemyMode,
     cannonMode,
@@ -1086,6 +1117,12 @@ function ActionButtons({ onOpenBattleLog, onOpenBots }) {
   const [serverCasualties, setServerCasualties] = useState(null);
   const [loadingCasualties, setLoadingCasualties] = useState(false);
   const [showTournament, setShowTournament] = useState(false);
+  const [showAttackSelector, setShowAttackSelector] = useState(false);
+  const [rankedTournaments, setRankedTournaments] = useState([]);
+  const [rankedTournamentsLoaded, setRankedTournamentsLoaded] = useState(false);
+  const [rankedTournamentsLoading, setRankedTournamentsLoading] = useState(false);
+  const [rankedTournamentsError, setRankedTournamentsError] = useState('');
+  const rankedTournamentsFetchedAt = useRef(0);
   const [showNftMint, setShowNftMint] = useState(false);
   const [nftMintInitial, setNftMintInitial] = useState(null);
   const resources = useResources();
@@ -1136,8 +1173,46 @@ function ActionButtons({ onOpenBattleLog, onOpenBots }) {
     return () => window.removeEventListener('clash-open-nft-shop', onOpenNftShop);
   }, []);
 
+  const loadRankedTournaments = useCallback(async ({ force = false } = {}) => {
+    if (!token) {
+      setRankedTournaments([]);
+      setRankedTournamentsLoaded(true);
+      return [];
+    }
+    if (!force && rankedTournamentsLoaded && Date.now() - rankedTournamentsFetchedAt.current < 30_000) {
+      return rankedTournaments;
+    }
+    setRankedTournamentsLoading(true);
+    setRankedTournamentsError('');
+    try {
+      const response = await fetch(`/api/tournaments/ranked-raids?dex=${encodeURIComponent(dex || '')}`, {
+        headers: { 'x-token': token },
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || 'Could not load ranked tournaments.');
+      const items = Array.isArray(body.tournaments) ? body.tournaments : [];
+      setRankedTournaments(items);
+      setRankedTournamentsLoaded(true);
+      rankedTournamentsFetchedAt.current = Date.now();
+      return items;
+    } catch (loadError) {
+      setRankedTournamentsError(loadError?.message || 'Could not load ranked tournaments.');
+      setRankedTournamentsLoaded(true);
+      return null;
+    } finally {
+      setRankedTournamentsLoading(false);
+    }
+  }, [token, dex, rankedTournaments, rankedTournamentsLoaded]);
+
+  useEffect(() => {
+    setRankedTournaments([]);
+    setRankedTournamentsLoaded(false);
+    rankedTournamentsFetchedAt.current = 0;
+    if (token) loadRankedTournaments({ force: true });
+  }, [token, dex]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const handleReturnHome  = useCallback(() => sendToGodot('return_home'),     [sendToGodot]);
-  const handleFindEnemy   = useCallback(() => {
+  const startCasualAttack = useCallback(() => {
     if (!canAffordAttack) {
       window.onGodotMessage?.({
         action: 'error',
@@ -1147,6 +1222,34 @@ function ActionButtons({ onOpenBattleLog, onOpenBots }) {
     }
     sendToGodot('find_enemy');
   }, [sendToGodot, canAffordAttack, attackCost]);
+  const handleFindEnemy = useCallback(async () => {
+    if (rankedTournamentsLoaded && rankedTournaments.length === 0 && !rankedTournamentsError) {
+      startCasualAttack();
+      return;
+    }
+    setShowAttackSelector(true);
+    if (!rankedTournamentsLoaded || Date.now() - rankedTournamentsFetchedAt.current >= 30_000) {
+      const items = await loadRankedTournaments({ force: true });
+      if (Array.isArray(items) && items.length === 0) {
+        setShowAttackSelector(false);
+        startCasualAttack();
+      }
+    }
+  }, [
+    loadRankedTournaments,
+    rankedTournaments.length,
+    rankedTournamentsError,
+    rankedTournamentsLoaded,
+    startCasualAttack,
+  ]);
+  const startRankedAttack = useCallback((tournament) => {
+    if (!canAffordAttack || !tournament?.id) {
+      if (!canAffordAttack) startCasualAttack();
+      return;
+    }
+    setShowAttackSelector(false);
+    sendToGodot('find_enemy', { tournament_id: tournament.id });
+  }, [canAffordAttack, sendToGodot, startCasualAttack]);
   const handleOpenShop    = useCallback(() => sendToGodot('open_shop'),        [sendToGodot]);
   const handleOpenTrade   = useCallback(() => setFuturesOpen(true),            [setFuturesOpen]);
   const handleShipCannon  = useCallback(() => sendToGodot('ship_cannon_mode'), [sendToGodot]);
@@ -1369,6 +1472,24 @@ function ActionButtons({ onOpenBattleLog, onOpenBots }) {
         </div>
       </div>
       {showTournament && <TournamentPanel onClose={() => setShowTournament(false)} />}
+      {showAttackSelector && (
+        <RankedAttackSelector
+          tournaments={rankedTournaments}
+          token={token}
+          attackCost={attackCost}
+          canAfford={canAffordAttack}
+          loading={rankedTournamentsLoading}
+          error={rankedTournamentsError}
+          activeDex={dex}
+          onClose={() => setShowAttackSelector(false)}
+          onCasual={() => {
+            setShowAttackSelector(false);
+            startCasualAttack();
+          }}
+          onRanked={startRankedAttack}
+          onRefresh={() => loadRankedTournaments({ force: true })}
+        />
+      )}
       {showNftMint && (
         <NftMintPanel
           initialView={nftMintInitial?.view}
@@ -1825,63 +1946,44 @@ const hud = {
     position: 'fixed',
     right: 'calc(env(safe-area-inset-right, 0px) + 8px)',
     bottom: 'calc(env(safe-area-inset-bottom, 0px) + 8px)',
-    width: 54,
+    width: 58,
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'stretch',
-    gap: 4,
     zIndex: 12,
     pointerEvents: 'all',
   },
   mobileDockEnergy: {
     minWidth: 0,
-    width: 54,
-    height: 32,
-    padding: '3px 6px',
+    width: 58,
+    height: 40,
+    padding: '4px',
     justifyContent: 'center',
-    gap: 4,
+    gap: 3,
     boxSizing: 'border-box',
   },
-  mobileAbilityToggle: {
-    width: 54,
-    height: 54,
-    padding: 0,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 5,
-    color: '#5C3A21',
-    background: 'linear-gradient(180deg, #fff6dc 0%, #ead9b2 100%)',
-    borderWidth: 2,
-    borderStyle: 'solid',
-    borderColor: '#9f8759',
-    borderRadius: 12,
-    boxShadow: '0 4px 10px rgba(0,0,0,0.22), inset 0 1px 0 rgba(255,255,255,0.5)',
+  mobileEnergyToggle: {
+    fontFamily: 'inherit',
     outline: 'none',
     cursor: 'pointer',
+    WebkitTapHighlightColor: 'transparent',
   },
-  mobileAbilityToggleActive: {
+  mobileEnergyToggleActive: {
     borderColor: '#d64817',
     boxShadow: '0 0 14px rgba(214,72,23,0.42), inset 0 1px 0 rgba(255,255,255,0.55)',
-  },
-  mobileAbilityToggleIcon: {
-    width: 30,
-    height: 30,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 9,
-    color: '#fff',
-    background: '#d64817',
-    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.3)',
   },
   mobileAbilityChevron: {
     width: 7,
     height: 7,
+    flex: '0 0 7px',
     borderTop: '2px solid #5C3A21',
     borderLeft: '2px solid #5C3A21',
     transform: 'rotate(45deg) translate(1px, 1px)',
     transformOrigin: 'center',
+    transition: 'transform 140ms ease',
+  },
+  mobileAbilityChevronOpen: {
+    transform: 'rotate(225deg) translate(1px, 1px)',
   },
   mobileAbilityPopover: {
     position: 'absolute',

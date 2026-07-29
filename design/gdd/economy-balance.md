@@ -32,12 +32,12 @@
 - TH6 Shark Trap damage is 2,400. It remains ground-only and is consumed by a
   rolling Mimic without damaging the Mimic.
 - Mimic Barrel unlocks at TH5.
-- Ice Golem unlocks at TH6. It uses ten ship slots, targets defenses before
+- Ice Golem unlocks at TH9. It uses ten ship slots, targets defenses before
   economy buildings, and freezes nearby defenses for seven seconds on death.
-- Main Ship progression reaches level 6 but remains capped at 45 troop slots.
-  Level 6 adds no capacity; it raises shared ability energy to 14 and unlocks
-  one 14-second Healing Field per battle. Starting energy by level is
-  4, 6, 8, 10, 12, 14.
+- Main Ship progression reaches level 10 but remains capped at 45 troop slots
+  from level 5 onward. Levels 6-10 raise shared ability energy and unlock
+  Healing Field, Freeze Orb, Rage Field, Tactical Reserve, and Skeleton Barrel.
+  Starting energy by level is 4, 6, 8, 10, 12, 14, 16, 18, 20, 22.
 - Main Ship upgrade costs are documented in
   `design/balance/main-ship-progression-2026-07-25.md`.
 - The canonical occupied-slot table and per-slot combat targets are recorded in
@@ -237,9 +237,11 @@ drop. Wood and ore are comfortably covered.
 **2026-06-21 implementation override:** all `TROOP_DEFS` entries now use
 `max_level = 7`. The `cost` array is indexed by *current* level:
 `cost[0]` = Lv1->Lv2, `cost[1]` = Lv2->Lv3, through `cost[5]` = Lv6->Lv7.
-Troop upgrade gates now follow Barn level: troop Lv2 requires Barn Lv2, Lv3 requires Barn
-Lv3, Lv4 requires Barn Lv4, and troop Lv5-Lv7 require Barn Lv5. The server enforces this
-in `upgradeTroop()` with `BARN_LEVEL_REQUIRED`.
+Troop upgrade gates require both the Barn and Town Hall. The Barn requirement remains:
+troop Lv2 requires Barn Lv2, Lv3 requires Barn Lv3, Lv4 requires Barn Lv4, and troop
+Lv5-Lv7 require Barn Lv5. In addition, the target troop level may never exceed the current
+Town Hall level. The server enforces these contracts with `BARN_LEVEL_REQUIRED` and
+`TOWN_HALL_LEVEL_REQUIRED`.
 
 | Troop | Lv1->2 | Lv2->3 | Lv3->4 | Lv4->5 | Lv5->6 | Lv6->7 | Total Lv1->7 |
 |-------|--------|--------|--------|--------|--------|--------|--------------|
@@ -560,10 +562,14 @@ tier in `TH_UNLOCK`, (3) add a `TROPHY_TABLE` row, (4) fix the stale server comm
 **Status:** NFT-backed heavy melee troop in `TROOP_DEFS`. It consumes **5 ship slots**
 and uses one owned NFT token per loaded root.
 
-At level 7 common rarity it has 11,400 HP and deals 1,110 damage every 0.90 seconds:
-2,280 HP and 246.7 DPS per occupied slot. It is more durable than a Knight per slot but
-remains a single melee body, so focus fire and pathing preserve counterplay. Epic and
-Legendary rarity scale this common table without reducing slot cost.
+At level 7 common rarity its authored table is 10,700 HP and 1,040 damage.
+After the shared `1.74x` same-TH curve it has 18,618 HP and deals 1,810 damage
+every 0.90 seconds: 3,723.6 HP and 402.1 DPS per occupied slot. It is more
+durable than a Knight per slot but remains a single melee body, so focus fire
+and pathing preserve counterplay. Epic and Legendary use normalized rarity
+ratios against Common: `1.23/1.20` and `1.25/1.20`, or +2.5% and +4.17% before
+integer rounding. Unrevealed is identical to Common and client-submitted
+rarity is never authoritative.
 
 ### 11.3 Mechanical Dragon - four-slot chain siege
 
@@ -573,10 +579,10 @@ at 65% cumulative falloff per jump.
 
 The four-slot revision raises per-unit HP by about 45%. Its authored attack cadence is
 fixed at 1.03 seconds across every level so progression never accelerates the large model
-into twitchy animation. Levels scale through HP and damage instead. At level 7 it has
-3,000 HP and deals 876 primary damage every 1.03 seconds. Its ideal three-target chain is
-`876 -> 569 -> 370`, or 440.5 DPS per slot; this stays below the level-7 Mage's
-442.9 DPS per slot while giving the dragon a distinct durable siege role.
+into twitchy animation. Levels scale through HP and damage instead. At level 7 the
+authoritative post-curve unit has 6,425 HP and deals 1,876 primary damage every
+1.03 seconds. Its ideal three-target chain remains bounded by the cumulative 65%
+falloff, while the dragon keeps a distinct durable siege role.
 
 The 45-slot level-5 ship can carry at most 11 Mechanical Dragons plus one standard
 one-slot troop. This prevents the stronger individual unit from increasing total
@@ -584,12 +590,13 @@ ship damage without a capacity trade-off.
 
 ### 11.4 Ice Golem - ten-slot defense vanguard
 
-**Status:** TH6 heavy ground troop. It consumes **10 ship slots**, costs **1,000
+**Status:** TH9 heavy ground troop. It consumes **10 ship slots**, costs **1,000
 gold** to load, and always selects the nearest living defensive building before
 considering economy buildings.
 
 Its attack animation keeps a fixed 1.42-second cadence at every level. The
-level-7 unit has 21,000 HP and 1,155 damage per strike. Its direct DPS per slot is
+authored level-7 unit has 21,840 HP and 1,200 damage per strike. After the shared
+level curve this is 39,312 HP and 2,160 damage. Its direct DPS per slot is
 deliberately below a same-level Knight because its tactical value comes from
 pathing into the defensive line and applying a seven-second death freeze in a
 0.90-unit radius.
@@ -599,21 +606,23 @@ mortars, tombstones and their guards, plus hidden shark-trap scans. Already
 fired projectiles continue. Repeated freezes refresh to the later expiry rather
 than stacking durations. Hidden traps receive no visual overlay.
 
-Four Ice Golems plus five normal troops fit the 45-slot ship. Mass Ice Golems
-remain inefficient in deterministic TH6 checks, preserving the vanguard role.
+Four Ice Golems plus five normal troops fit the 45-slot ship. Existing
+deterministic combat checks preserve the vanguard role; the unit now enters the
+roster at TH9.
 
 ### 11.5 Horror - twenty-slot evolution attrition troop
 
-**Status:** TH6 ground troop. It consumes **20 ship slots**, costs **2,000 gold**
+**Status:** TH10 ground troop. It consumes **20 ship slots**, costs **2,000 gold**
 to load, and evolves deterministically from one Horror into two Creepers, then
 from each Creeper into two terminal Lurkers. Only the loaded Horror is
 persistent inventory and only its death counts as a casualty.
 
-At level 7 the complete family has 37,931 effective HP, or 1,896.5 HP per ship
-slot, approximately matching a level-7 Knight's 1,900 HP per slot. Its phase
-DPS is `2,096.8 -> 1,902.1 -> 1,888.9`, so peak DPS per slot remains substantially
-below the Knight. The troop therefore trades burst damage for overkill
-resistance and additional target pressure without increasing raw ship power.
+At level 7 the complete post-curve family has 76,464 effective HP, or 3,823.2
+HP per ship slot, approximately matching a level-7 Knight's 3,737 HP per slot.
+Its phase DPS is approximately `4,227 -> 3,835 -> 3,811`, so peak DPS per slot
+remains substantially below the Knight. The troop therefore trades burst
+damage for overkill resistance and additional target pressure without
+increasing raw ship power.
 
 The server creates all six descendants from lethal combat events and records
 their generation and lineage in replay telemetry. Clients never submit split

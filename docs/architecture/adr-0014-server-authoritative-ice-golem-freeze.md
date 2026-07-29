@@ -10,7 +10,7 @@ Accepted
 
 ### Problem Statement
 Ice Golem must attack defensive buildings before economy buildings and freeze
-nearby defenses for three seconds when it dies. The browser needs an immediate,
+nearby defenses for seven seconds when it dies. The browser needs an immediate,
 readable ice effect, while replay verification must own targeting, freeze
 timing, damage, trophies, and rewards.
 
@@ -24,12 +24,12 @@ timing, damage, trophies, and rewards.
 ### Requirements
 - Target the nearest living defense while any targetable defense remains.
 - Fall back to the normal building search after all defenses are destroyed.
-- Freeze nearby defense actors for exactly three seconds at the lethal event.
+- Freeze nearby defense actors for exactly seven seconds at the lethal event.
 - Pause turret, archer, mage, mortar, skeleton, and shark-trap AI consistently.
 - Keep gameplay timing independent from particles, tweens, and animation length.
 
 ## Decision
-Ice Golem is a four-slot ground siege troop unlocked at Town Hall 6. Its target
+Ice Golem is a ten-slot ground siege troop unlocked at Town Hall 9. Its target
 priority is a deterministic tier applied before distance: turret, archer tower,
 mage tower, tombstone, and mortar are tier zero; all other buildings are tier
 one. A nearby skeleton guard may still interrupt as an immediate combat threat.
@@ -101,7 +101,7 @@ Ice Golem receives lethal damage
 
 ### Risks
 - **Client/server parity drift**: covered by focused target and freeze tests.
-- **Overpowered disruption**: limited by four ship slots, low DPS per slot, and
+- **Overpowered disruption**: limited by ten ship slots, low DPS per slot, and
   a fixed 0.90-unit radius.
 - **Overlay cost in dense bases**: frost rendering is capped at 24 batched boxes.
 
@@ -118,7 +118,8 @@ must be deployed together.
 
 ## Validation Criteria
 - A farther defense is selected before a closer storage building.
-- A level-1 smash deals 78 damage at 56% of the authored attack cycle.
+- A level-1 smash deals 160 damage after the shared level curve, at 56% of the
+  authored attack cycle.
 - Only freezable defenses inside 0.90 units receive a seven-second freeze.
 - Frozen turret and archer fire timers do not advance during the freeze.
 - Storage buildings receive no freeze state or overlay.

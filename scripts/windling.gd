@@ -24,7 +24,7 @@ const LEVEL_STATS: Dictionary = {
 	4: {"hp": 200, "damage": 44, "atk_speed": 0.90, "move_speed": 0.71},
 	5: {"hp": 250, "damage": 57, "atk_speed": 0.90, "move_speed": 0.73},
 	6: {"hp": 310, "damage": 73, "atk_speed": 0.90, "move_speed": 0.75},
-	7: {"hp": 380, "damage": 93, "atk_speed": 0.90, "move_speed": 0.77},
+	7: {"hp": 450, "damage": 110, "atk_speed": 0.90, "move_speed": 0.77},
 }
 
 const ANIM_FILES: Array[String] = [
@@ -78,9 +78,13 @@ func _init_stats() -> void:
 	anim_file_aliases = ANIM_ALIASES
 
 
-func activate() -> void:
+func _uses_troop_level_power_curve() -> bool:
+	return false
+
+
+func activate(refresh_dense_rendering: bool = true) -> void:
 	_ground_y = global_position.y
-	super.activate()
+	super.activate(refresh_dense_rendering)
 	if anim_player != null and anim_player.has_animation("Spawn_A"):
 		anim_player.play("Spawn_A", 0.04)
 	_apply_flight_height()

@@ -9,8 +9,12 @@ const FROST_PADDING: Vector3 = Vector3(0.035, 0.035, 0.035)
 const BURST_DURATION: float = 0.68
 const MAX_FROSTED_BUILDINGS: int = 24
 const SHARDS_PER_BUILDING: int = 4
+const THAW_WINDOW_SEC: float = 0.35
+const THAW_REFRESH_INTERVAL_SEC: float = 1.0 / 20.0
 
 var _active_frost: Dictionary = {}
+var _frost_layout_dirty := false
+var _thaw_refresh_elapsed := 0.0
 var _frost_multimesh: MultiMesh
 var _frost_instances: MultiMeshInstance3D
 var _frost_material: StandardMaterial3D
@@ -37,7 +41,7 @@ func _ready() -> void:
 	add_to_group("ice_freeze_vfx")
 	add_to_group("combat_ephemeral_vfx")
 	_build_frost_renderer()
-	set_process(true)
+	set_process(false)
 
 
 func show_freeze(origin: Vector3, radius: float, duration: float, affected: Array[Dictionary]) -> void:
@@ -55,12 +59,19 @@ func show_freeze(origin: Vector3, radius: float, duration: float, affected: Arra
 		current["node"] = weakref(target)
 		current["expires_msec"] = maxi(int(current.get("expires_msec", 0)), expires_msec)
 		current["bounds"] = _visual_bounds(target)
+		current["target_global_transform"] = target.global_transform
 		_active_frost[key] = current
-	_rebuild_frost_instances(now_msec)
+	_frost_layout_dirty = true
+	_flush_frost_layout(now_msec)
+	if not _active_frost.is_empty():
+		set_process(true)
 
 
 func clear_all() -> void:
 	_active_frost.clear()
+	_frost_layout_dirty = false
+	_thaw_refresh_elapsed = 0.0
+	set_process(false)
 	if _frost_multimesh:
 		_frost_multimesh.instance_count = 0
 	if _shard_multimesh:
@@ -70,20 +81,42 @@ func clear_all() -> void:
 			child.queue_free()
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
 	if _active_frost.is_empty():
+		set_process(false)
 		return
+	_thaw_refresh_elapsed += delta
+	var refresh_thaw_colors := _thaw_refresh_elapsed >= THAW_REFRESH_INTERVAL_SEC
+	if refresh_thaw_colors:
+		_thaw_refresh_elapsed = fmod(_thaw_refresh_elapsed, THAW_REFRESH_INTERVAL_SEC)
 	var now_msec := Time.get_ticks_msec()
-	var changed := false
+	var has_thawing_frost := false
 	for key in _active_frost.keys():
 		var entry: Dictionary = _active_frost[key]
 		var target_ref: WeakRef = entry.get("node", null)
-		var target: Variant = target_ref.get_ref() if target_ref else null
+		var target := target_ref.get_ref() as Node3D if target_ref else null
 		if not is_instance_valid(target) or now_msec >= int(entry.get("expires_msec", 0)):
 			_active_frost.erase(key)
-			changed = true
-	if changed or not _active_frost.is_empty():
-		_rebuild_frost_instances(now_msec)
+			_frost_layout_dirty = true
+			continue
+		var current_transform := target.global_transform
+		var previous_transform: Transform3D = entry.get(
+			"target_global_transform",
+			current_transform
+		)
+		if not current_transform.is_equal_approx(previous_transform):
+			entry["target_global_transform"] = current_transform
+			entry["bounds"] = _visual_bounds(target)
+			_active_frost[key] = entry
+			_frost_layout_dirty = true
+		if int(entry.get("expires_msec", 0)) - now_msec <= roundi(THAW_WINDOW_SEC * 1000.0):
+			has_thawing_frost = true
+	if _frost_layout_dirty:
+		_flush_frost_layout(now_msec)
+	elif refresh_thaw_colors and has_thawing_frost:
+		_refresh_frost_colors(now_msec)
+	if _active_frost.is_empty():
+		set_process(false)
 
 
 func _build_frost_renderer() -> void:
@@ -100,7 +133,9 @@ func _build_frost_renderer() -> void:
 	var cage_mesh := BoxMesh.new()
 	cage_mesh.size = Vector3.ONE
 	_frost_multimesh = MultiMesh.new()
-	_frost_multimesh.transform_format = MultiMesh.TRANSFORM_3D
+	_frost_multimesh.transform_format = (
+		MultiMesh.TRANSFORM_3D as MultiMesh.TransformFormat
+	)
 	_frost_multimesh.use_colors = true
 	_frost_multimesh.mesh = cage_mesh
 	_frost_multimesh.instance_count = 0
@@ -128,7 +163,9 @@ func _build_frost_renderer() -> void:
 	shard_mesh.radial_segments = 4
 	shard_mesh.rings = 1
 	_shard_multimesh = MultiMesh.new()
-	_shard_multimesh.transform_format = MultiMesh.TRANSFORM_3D
+	_shard_multimesh.transform_format = (
+		MultiMesh.TRANSFORM_3D as MultiMesh.TransformFormat
+	)
 	_shard_multimesh.use_colors = true
 	_shard_multimesh.mesh = shard_mesh
 	_shard_multimesh.instance_count = 0
@@ -156,12 +193,41 @@ func _rebuild_frost_instances(now_msec: int) -> void:
 		size.y = maxf(size.y, 0.14)
 		size.z = maxf(size.z, 0.12)
 		var center := bounds.get_center()
-		var transform := Transform3D(Basis.from_scale(size), center)
-		var remaining := maxf(0.0, float(int(entry.get("expires_msec", now_msec)) - now_msec) / 1000.0)
-		var thaw_alpha := clampf(remaining / 0.35, 0.0, 1.0)
-		_frost_multimesh.set_instance_transform(index, transform)
+		var frost_transform := Transform3D(Basis.from_scale(size), center)
+		var thaw_alpha := _thaw_alpha(entry, now_msec)
+		_frost_multimesh.set_instance_transform(index, frost_transform)
 		_frost_multimesh.set_instance_color(index, Color(0.52, 0.88, 1.0, 0.22 + thaw_alpha * 0.24))
 		_set_building_shards(index, bounds, size, thaw_alpha)
+
+
+func _flush_frost_layout(now_msec: int) -> void:
+	_rebuild_frost_instances(now_msec)
+	_frost_layout_dirty = false
+	_thaw_refresh_elapsed = 0.0
+
+
+func _refresh_frost_colors(now_msec: int) -> void:
+	if _frost_multimesh == null:
+		return
+	var keys := _active_frost.keys()
+	keys.sort()
+	var count := mini(keys.size(), MAX_FROSTED_BUILDINGS)
+	for index in range(count):
+		var entry: Dictionary = _active_frost[keys[index]]
+		var thaw_alpha := _thaw_alpha(entry, now_msec)
+		_frost_multimesh.set_instance_color(
+			index,
+			Color(0.52, 0.88, 1.0, 0.22 + thaw_alpha * 0.24)
+		)
+		_set_building_shard_colors(index, thaw_alpha)
+
+
+func _thaw_alpha(entry: Dictionary, now_msec: int) -> float:
+	var remaining := maxf(
+		0.0,
+		float(int(entry.get("expires_msec", now_msec)) - now_msec) / 1000.0
+	)
+	return clampf(remaining / THAW_WINDOW_SEC, 0.0, 1.0)
 
 
 func _set_building_shards(building_index: int, bounds: AABB, size: Vector3, thaw_alpha: float) -> void:
@@ -182,13 +248,22 @@ func _set_building_shards(building_index: int, bounds: AABB, size: Vector3, thaw
 		var basis := Basis(Vector3.UP, angle).scaled(
 			Vector3(width_scale, height_scale, width_scale)
 		)
-		var position := Vector3(
+		var shard_position := Vector3(
 			center.x + offsets[shard_index].x,
 			base_y + 0.12 * height_scale,
 			center.z + offsets[shard_index].y
 		)
 		var instance_index := building_index * SHARDS_PER_BUILDING + shard_index
-		_shard_multimesh.set_instance_transform(instance_index, Transform3D(basis, position))
+		_shard_multimesh.set_instance_transform(
+			instance_index,
+			Transform3D(basis, shard_position)
+		)
+	_set_building_shard_colors(building_index, thaw_alpha)
+
+
+func _set_building_shard_colors(building_index: int, thaw_alpha: float) -> void:
+	for shard_index in range(SHARDS_PER_BUILDING):
+		var instance_index := building_index * SHARDS_PER_BUILDING + shard_index
 		_shard_multimesh.set_instance_color(
 			instance_index,
 			Color(0.60, 0.94, 1.0, 0.38 + thaw_alpha * 0.48)

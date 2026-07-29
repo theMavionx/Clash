@@ -11,8 +11,8 @@ const PALETTE: Texture2D = preload("res://Model/Characters/pirate_archer/texture
 const MESH_COMBINER := preload("res://Model/Characters/skinned_mesh_combiner.gd")
 
 static var _shared_material: StandardMaterial3D = null
-static var _combined_character_mesh: ArrayMesh = null
-
+static var _combined_head_mesh: ArrayMesh = null
+static var _tower_combined_body_mesh: ArrayMesh = null
 var _body_animation_player: AnimationPlayer = null
 var _bow_animation_player: AnimationPlayer = null
 var _arrow_animation_player: AnimationPlayer = null
@@ -44,20 +44,46 @@ func _ready() -> void:
 			if is_selected:
 				_apply_character_material(body_mesh)
 
-	var head_visual := character.get_node_or_null("Skeleton3D/HeadAttachment/HeadPose")
-	if head_visual:
-		_apply_material_recursive(head_visual)
+	for part_data in [
+		{
+			"root": "Skeleton3D/HeadAttachment/HeadPose/HeadFemale",
+			"mesh": "Head02_Female",
+		},
+		{
+			"root": "Skeleton3D/HeadAttachment/HeadPose/Hair",
+			"mesh": "Hair08",
+		},
+		{
+			"root": "Skeleton3D/HeadAttachment/HeadPose/Eye",
+			"mesh": "Eye07",
+		},
+		{
+			"root": "Skeleton3D/HeadAttachment/HeadPose/Mouth",
+			"mesh": "Mouth02",
+		},
+		{
+			"root": "Skeleton3D/HeadAttachment/HeadPose/PiratePatch",
+			"mesh": "AC07_PiratePatch",
+		},
+		{
+			"root": "Skeleton3D/HeadAttachment/HeadPose/Ribbon",
+			"mesh": "AC09_Ribbon",
+		},
+	]:
+		var part_root := character.get_node_or_null(str(part_data.root))
+		if part_root != null:
+			_select_mesh_recursive(part_root, str(part_data.mesh))
 
 	var bow_visual := character.get_node_or_null("Skeleton3D/BowAttachment/BowPose")
 	if bow_visual:
-		_select_mesh_recursive(bow_visual, BOW_NAME)
+		_select_mesh_recursive(bow_visual, BOW_NAME, true)
 	_bow_attachment = character.get_node_or_null("Skeleton3D/BowAttachment") as Node3D
 
 	var arrow_visual := character.get_node_or_null("Skeleton3D/ArrowAttachment/ArrowPose")
 	if arrow_visual:
 		_arrow_visual_root = arrow_visual as Node3D
 		_arrow_base_rotation = _arrow_visual_root.quaternion
-		_select_mesh_recursive(arrow_visual, ARROW_NAME)
+		_select_mesh_recursive(arrow_visual, ARROW_NAME, true)
 		_set_arrow_visible(false)
 	_arrow_attachment = character.get_node_or_null("Skeleton3D/ArrowAttachment") as Node3D
 
@@ -68,17 +94,55 @@ func _ready() -> void:
 		"Skeleton3D/ArrowAttachment/ArrowPose/Arrow/AnimationPlayer"
 	) as AnimationPlayer
 	_set_weapon_players_manual()
-	_build_combined_character(character, skeleton)
+	if bool(character.get_meta("clash_tower_archer", false)):
+		_build_tower_character_parts(character, skeleton)
+	else:
+		_build_safe_character_parts(character, skeleton)
+	# BaseTroop can enter the crowd renderer before child _ready() callbacks
+	# resolve these attachments. Re-apply the current tier now so a late-loaded
+	# bow never remains visible over the batched body.
+	set_crowd_visual_active(true)
 
 
 func _process(_delta: float) -> void:
+	# Dense render tiers can be applied after this child finishes _ready().
+	# Catch that transition here instead of waiting for a successful crowd
+	# channel build; the nested weapon skeleton is unsafe to render in crowds.
+	if _is_mass_crowd_lod():
+		set_crowd_visual_active(true)
+		return
 	_sync_visual_state()
 
 
 func set_crowd_visual_active(active: bool) -> void:
-	set_process(active)
-	if active:
+	var mass_crowd_lod := _is_mass_crowd_lod()
+	set_process(active and not mass_crowd_lod)
+	if _bow_attachment != null:
+		# Nested bow skeletons stretch into dark lines when several animation
+		# leaders are pose-baked in a mass crowd. Small groups retain the full
+		# weapon; large groups read through their shared projectile arrows.
+		_bow_attachment.visible = active and not mass_crowd_lod
+	if _arrow_attachment != null:
+		_arrow_attachment.visible = active and not mass_crowd_lod
+	if mass_crowd_lod:
+		_set_arrow_visible(false)
+	elif active:
 		_sync_visual_state()
+	else:
+		# The hand arrow has its own animated skeleton and is not part of the
+		# crowd pose cache. Followers use the leader's body pose, so keeping
+		# their independently aligned arrows visible creates long streaks.
+		_set_arrow_visible(false)
+
+
+func _is_mass_crowd_lod() -> bool:
+	var troop := get_parent()
+	if troop == null:
+		return false
+	var raw_tier: Variant = troop.get("_dense_render_tier_applied")
+	if raw_tier == null:
+		return false
+	return int(raw_tier) >= 2
 
 
 func _sync_visual_state() -> void:
@@ -168,7 +232,11 @@ func _reset_weapon_animation(player: AnimationPlayer) -> void:
 	player.pause()
 
 
-func _select_mesh_recursive(node: Node, selected_name: String) -> void:
+func _select_mesh_recursive(
+	node: Node,
+	selected_name: String,
+	exclude_from_crowd: bool = false
+) -> void:
 	if node is MeshInstance3D:
 		var mesh_instance := node as MeshInstance3D
 		var is_selected := str(mesh_instance.name) == selected_name
@@ -176,8 +244,13 @@ func _select_mesh_recursive(node: Node, selected_name: String) -> void:
 		mesh_instance.set_meta("clash_keep_hidden", not is_selected)
 		if is_selected:
 			_apply_character_material(mesh_instance)
+			if exclude_from_crowd:
+				# Nested weapon skeletons cannot be safely baked through the
+				# character crowd-pose cache. Keep the selected weapon as a
+				# normal attachment while body and head parts are batched.
+				mesh_instance.set_meta("clash_crowd_ignore", true)
 	for child in node.get_children():
-		_select_mesh_recursive(child, selected_name)
+		_select_mesh_recursive(child, selected_name, exclude_from_crowd)
 
 
 func _apply_material_recursive(node: Node) -> void:
@@ -202,11 +275,14 @@ func _apply_character_material(mesh_instance: MeshInstance3D) -> void:
 	mesh_instance.extra_cull_margin = 0.75
 
 
-func _build_combined_character(character: Node3D, skeleton: Skeleton3D) -> void:
+func _build_safe_character_parts(character: Node3D, skeleton: Skeleton3D) -> void:
 	var body := skeleton.get_node_or_null(BODY_NAME) as MeshInstance3D
 	if body == null or body.mesh == null or body.skin == null:
 		return
-	var rigid_parts: Array[Dictionary] = []
+	var head_attachment := skeleton.get_node_or_null("HeadAttachment") as BoneAttachment3D
+	if head_attachment == null:
+		return
+	var rigid_parts: Array[MeshInstance3D] = []
 	for part_path in [
 		"HeadAttachment/HeadPose/HeadFemale/Head02_Female",
 		"HeadAttachment/HeadPose/Hair/Hair08",
@@ -218,34 +294,94 @@ func _build_combined_character(character: Node3D, skeleton: Skeleton3D) -> void:
 		var part := skeleton.get_node_or_null(part_path) as MeshInstance3D
 		if part == null or part.mesh == null:
 			return
-		rigid_parts.append({"mesh_instance": part, "bone": "head"})
+		rigid_parts.append(part)
 
-	if _combined_character_mesh == null:
-		_combined_character_mesh = MESH_COMBINER.bake(
-			skeleton,
-			body,
+	if _combined_head_mesh == null:
+		_combined_head_mesh = MESH_COMBINER.bake_rigid_parts(
+			head_attachment,
 			rigid_parts,
 			_shared_material,
-			"PirateArcherCombined"
+			"PirateArcherCombinedHead"
 		)
-	if _combined_character_mesh == null:
+	if _combined_head_mesh == null:
 		return
 
-	var combined := MeshInstance3D.new()
-	combined.name = "CombinedArcherMesh"
-	combined.mesh = _combined_character_mesh
-	combined.skin = body.skin
-	combined.skeleton = NodePath("..")
-	combined.extra_cull_margin = 0.75
-	combined.material_override = _shared_material
-	skeleton.add_child(combined)
-	combined.set_meta(
+	# The authored body keeps its valid skin. Combining rigid head geometry into
+	# that skin produced long vertex streaks when browser crowd poses were baked.
+	body.set_meta("clash_dense_lod_ignore", true)
+	var combined_head := MeshInstance3D.new()
+	combined_head.name = "CombinedArcherHead"
+	combined_head.mesh = _combined_head_mesh
+	combined_head.extra_cull_margin = 0.75
+	combined_head.material_override = _shared_material
+	head_attachment.add_child(combined_head)
+	combined_head.set_meta(
 		"clash_baked_parts",
 		PackedStringArray(
-			["body", "head", "hair", "eye", "mouth", "patch", "ribbon"]
+			["head", "hair", "eye", "mouth", "patch", "ribbon"]
 		)
 	)
-	var keep_nodes: Array[Node] = [combined]
+	var keep_nodes: Array[Node] = [body, head_attachment]
+	for attachment_name in ["BowAttachment", "ArrowAttachment"]:
+		var attachment := skeleton.get_node_or_null(attachment_name)
+		if attachment != null:
+			keep_nodes.append(attachment)
+	MESH_COMBINER.prune_modular_sources(skeleton, keep_nodes)
+	MESH_COMBINER.prune_mesh_variants(head_attachment, [combined_head])
+	var bow_mesh := skeleton.get_node_or_null(
+		"BowAttachment/BowPose/Bow/Bow_CTRL/Skeleton3D/Bow01"
+	) as MeshInstance3D
+	var arrow_mesh := skeleton.get_node_or_null(
+		"ArrowAttachment/ArrowPose/Arrow/Arrow_CTRL/Skeleton3D/Arrow01"
+	) as MeshInstance3D
+	if bow_mesh != null:
+		MESH_COMBINER.prune_mesh_variants(_bow_attachment, [bow_mesh])
+	if arrow_mesh != null:
+		MESH_COMBINER.prune_mesh_variants(_arrow_attachment, [arrow_mesh])
+	character.set_meta("clash_safe_archer_parts", true)
+
+
+func _build_tower_character_parts(
+	character: Node3D,
+	skeleton: Skeleton3D
+) -> void:
+	var body := skeleton.get_node_or_null(BODY_NAME) as MeshInstance3D
+	if body == null or body.mesh == null or body.skin == null:
+		return
+	var head_parts: Array[Dictionary] = []
+	for part_path in [
+		"HeadAttachment/HeadPose/HeadFemale/Head02_Female",
+		"HeadAttachment/HeadPose/Hair/Hair08",
+		"HeadAttachment/HeadPose/Eye/Eye07",
+		"HeadAttachment/HeadPose/Mouth/Mouth02",
+		"HeadAttachment/HeadPose/PiratePatch/AC07_PiratePatch",
+		"HeadAttachment/HeadPose/Ribbon/AC09_Ribbon",
+	]:
+		var part := skeleton.get_node_or_null(part_path) as MeshInstance3D
+		if part == null or part.mesh == null:
+			return
+		head_parts.append({
+			"mesh_instance": part,
+			"bone": "head",
+		})
+
+	if _tower_combined_body_mesh == null:
+		_tower_combined_body_mesh = MESH_COMBINER.bake(
+			skeleton,
+			body,
+			head_parts,
+			_shared_material,
+			"TowerArcherCombinedBody"
+		)
+	if _tower_combined_body_mesh == null:
+		_build_safe_character_parts(character, skeleton)
+		return
+
+	body.mesh = _tower_combined_body_mesh
+	body.material_override = _shared_material
+	body.extra_cull_margin = 0.75
+	body.set_meta("clash_dense_lod_ignore", true)
+	var keep_nodes: Array[Node] = [body]
 	for attachment_name in ["BowAttachment", "ArrowAttachment"]:
 		var attachment := skeleton.get_node_or_null(attachment_name)
 		if attachment != null:
@@ -261,7 +397,8 @@ func _build_combined_character(character: Node3D, skeleton: Skeleton3D) -> void:
 		MESH_COMBINER.prune_mesh_variants(_bow_attachment, [bow_mesh])
 	if arrow_mesh != null:
 		MESH_COMBINER.prune_mesh_variants(_arrow_attachment, [arrow_mesh])
-	character.set_meta("clash_combined_archer_mesh", true)
+	character.set_meta("clash_safe_archer_parts", true)
+	character.set_meta("clash_tower_archer_combined", true)
 
 
 func _find_skeleton(node: Node) -> Skeleton3D:

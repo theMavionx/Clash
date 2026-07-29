@@ -43,9 +43,13 @@ Shooter must not be a strict upgrade.
 | 2 | 1,650 | 150 | 450 | 1.75s |
 | 3 | 2,150 | 195 | 585 | 1.75s |
 | 4 | 2,800 | 280 | 840 | 1.75s |
-| 5 | 3,550 | 380 | 1,140 | 1.75s |
-| 6 | 4,450 | 510 | 1,530 | 1.75s |
-| 7 | 5,500 | 680 | 2,040 | 1.75s |
+| 5 | 3,905 | 418 | 1,254 | 1.75s |
+| 6 | 4,670 | 536 | 1,608 | 1.75s |
+| 7 | 6,700 | 825 | 2,475 | 1.75s |
+
+These are authored pre-curve values. The shared same-TH curve applies `1.80x`
+at level 7, producing 12,060 HP, 1,485 damage per pea, and 4,455 damage for a
+complete burst in authoritative combat.
 
 Upgrade costs use Gold and Wood:
 

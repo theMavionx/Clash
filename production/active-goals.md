@@ -89,6 +89,28 @@ Next checkpoint:
   was tuned from 22.1% attacker win rate to 57.8%; mixed TH2-TH4 simulation is
   56.9% across 3000 generated battles. See
   `production/reports/g002-full-balance-pass-2026-06-18.md`.
+- TH1-TH7 troop-progression checkpoint completed on 2026-07-28. Effective troop
+  level is capped by Town Hall, and the corrected same-TH/maxed 1,400-battle
+  sample records 62.1-69.5% attacker wins at TH1-TH4 and 49.5-53.7% at
+  TH5-TH7 with zero invalid replays. See
+  `production/reports/troop-town-hall-level-balance-check-2026-07-28.md`.
+- TH1-TH7 adversarial balance-lab checkpoint completed on 2026-07-29. The
+  production replay simulator now covers 300 organized defensive layouts, 500
+  population attack policies, 100 spawn mechanics, pure-unit stress cohorts,
+  and a separate 1,500-policy counter catalog.
+- TH5-TH7 offense checkpoint completed on 2026-07-29. Two independent
+  holdouts produce combined same-TH population win rates of 54.60% at TH5,
+  55.59% at TH6, and 55.39% at TH7. All 600 generated bases have a valid legal
+  counter, with zero final unbeaten, untested, invalid-only, or invalid cases.
+  The strict runner rejects any TH5+ tier outside 53-57% or any incomplete
+  breakability result. See
+  `production/reports/th5-th7-55pct-breakability-balance-check-2026-07-29.md`.
+- All-unit role checkpoint completed on 2026-07-29. Two strict actual-code
+  holdouts produce pooled policy win rates of 55.24% at TH5, 55.87% at TH6,
+  and 56.25% at TH7. Equal-slot probes cover all 12 active/currently authored
+  roles, NFT rarity lifts stay at 0.83-1.33 percentage points, and exhaustive
+  counter-search leaves 0/600 unbeaten bases with zero invalid replays. See
+  `production/reports/all-unit-role-utility-balance-check-2026-07-29.md`.
 - Remaining follow-up: decide whether economy max-out should target roughly 4, 8,
   or 12+ weeks; current live server pacing is about 102 days to full TH4 max before
   raid income.

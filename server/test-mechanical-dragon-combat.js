@@ -5,7 +5,10 @@ const assert = require('assert');
 const Module = require('module');
 const path = require('path');
 const { CANONICAL_GRID_CONFIGS } = require('./combat_grid_config');
-const { TROOP_STATS } = require('./combat_defs');
+const {
+  TROOP_LEVEL_POWER_MULTIPLIERS,
+  TROOP_STATS,
+} = require('./combat_defs');
 
 const BUILDING_DEFS = {
   target: { size: [1, 1], hp_levels: [5000] },
@@ -79,8 +82,10 @@ assert.deepEqual(
 );
 assert.deepEqual(
   mechanicalLevels.map(level => level.damage),
-  [106, 150, 218, 310, 449, 629, 876],
-  'Mechanical Dragon damage must own the removed attack-speed progression'
+  [106, 150, 218, 310, 449, 629, 957].map(
+    (damage, index) => Math.round(damage * TROOP_LEVEL_POWER_MULTIPLIERS[index]),
+  ),
+  'Mechanical Dragon effective damage must preserve the authored progression'
 );
 
 const firstAttackTime = result._trace.find(row => row.kind === 'troop_chain_lightning_hit')?.t;
@@ -90,7 +95,15 @@ const firstChain = result._trace.filter(
 
 assert.equal(firstChain.length, 3, 'mechanical dragon should hit one primary plus two chained buildings');
 assert.deepEqual(firstChain.map(row => row.jumpIndex), [0, 1, 2], 'jump indices must be stable');
-assert.deepEqual(firstChain.map(row => row.damage), [106, 69, 45], 'chain damage falloff must match Godot');
+const levelOneDamage = TROOP_STATS.mechanical_dragon[1].damage;
+const expectedChainDamage = [10000, 6500, 4225].map(
+  multiplierBps => Math.floor((levelOneDamage * multiplierBps + 5000) / 10000),
+);
+assert.deepEqual(
+  firstChain.map(row => row.damage),
+  expectedChainDamage,
+  'chain damage falloff must match Godot',
+);
 assert.equal(new Set(firstChain.map(row => row.targetId)).size, 3, 'a building must not repeat in one chain');
 assert.ok(firstChain.every(row => row.targetKind === 'building'), 'chain lightning only chains through buildings');
 

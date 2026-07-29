@@ -11,15 +11,15 @@ const COMMON_LEVEL_STATS: Dictionary = {
 	2: {"hp": 2320, "damage": 600, "atk_speed": 1.12},
 	3: {"hp": 3080, "damage": 840, "atk_speed": 1.0},
 	4: {"hp": 4000, "damage": 1115, "atk_speed": 0.90},
-	5: {"hp": 5100, "damage": 1470, "atk_speed": 0.82},
+	5: {"hp": 5049, "damage": 1455, "atk_speed": 0.82},
 	6: {"hp": 6440, "damage": 1920, "atk_speed": 0.76},
-	7: {"hp": 8000, "damage": 2500, "atk_speed": 0.70},
+	7: {"hp": 8740, "damage": 2732, "atk_speed": 0.70},
 }
 
 const NFT_RARITY_MULTIPLIERS: Dictionary = {
 	"common": 1.2,
-	"epic": 1.3,
-	"legendary": 1.5,
+	"epic": 1.23,
+	"legendary": 1.25,
 	"unrevealed": 1.2,
 }
 const MAX_TROOP_LEVEL: int = 7
@@ -86,6 +86,7 @@ static var _shared_fire_color_ramps: Dictionary = {}
 static var _shared_fire_color_ramp_textures: Dictionary = {}
 static var _shared_fire_particle_materials: Dictionary = {}
 static var _shared_skin_texture: Texture2D = null
+static var _shared_animation_library: AnimationLibrary = null
 
 
 func _init_stats() -> void:
@@ -149,8 +150,12 @@ static func _compute_dynamic_stats(dragon_level: int, levels: Dictionary, rarity
 func _setup_animations() -> void:
 	anim_player = AnimationPlayer.new()
 	anim_player.name = "FireDragonAnimProxy"
+	anim_player.set_meta("clash_troop_animation_managed", true)
 	add_child(anim_player)
 	anim_player.root_node = anim_player.get_path_to(self)
+	if _shared_animation_library == null:
+		_shared_animation_library = AnimationLibrary.new()
+	anim_player.add_animation_library("", _shared_animation_library)
 
 
 func _setup_weapons() -> void:
@@ -174,9 +179,9 @@ func _ready() -> void:
 	call_deferred("_build_fire_breath_vfx_pool")
 
 
-func activate() -> void:
+func activate(refresh_dense_rendering: bool = true) -> void:
 	_ground_y = global_position.y
-	super.activate()
+	super.activate(refresh_dense_rendering)
 	_sync_visual_state()
 	_apply_flight_height()
 
@@ -857,71 +862,71 @@ func _resolve_movement_y(_base_y: float) -> float:
 
 
 func _play_dragon_animation(animation_name: String, force_restart: bool = false) -> float:
-	var scene_path: String = str(ANIMATION_PATHS.get(animation_name, ""))
-	if scene_path == "":
+	if not _ensure_dragon_animation(animation_name):
 		push_warning("FireDragon: unknown animation '%s'" % animation_name)
 		return 0.0
 
 	if _current_dragon_animation == animation_name and is_instance_valid(anim_player):
-		return _play_first_imported_clip(anim_player, animation_name, force_restart)
-
-	var res: Resource = ResourceLoader.load(scene_path, "PackedScene")
-	if res == null:
-		push_warning("FireDragon: missing animation scene '%s'" % scene_path)
-		return 0.0
-
-	var old_model: Node = get_node_or_null("Model")
-	if old_model:
-		old_model.name = "ModelOld"
-		if old_model is Node3D:
-			(old_model as Node3D).visible = false
-		old_model.queue_free()
-
-	var animated_model: Node = (res as PackedScene).instantiate()
-	animated_model.name = "Model"
-	add_child(animated_model)
-	move_child(animated_model, 0)
-	_cached_fire_skeleton = null
-	_cached_fire_head_bone_idx = -2
+		return _play_cached_dragon_clip(animation_name, force_restart)
 
 	_current_dragon_animation = animation_name
-	_apply_skin()
-	_stabilize_render_meshes()
-	anim_player = _find_animation_player(animated_model)
-	if anim_player:
-		_current_animation_length = _play_first_imported_clip(anim_player, animation_name, true)
-		if state != State.INACTIVE:
-			_enable_animation_budget()
-		BaseTroop.report_render_diagnostic(self, "troop.fire_dragon.animation.%s" % animation_name, {
-			"animation": animation_name,
-			"force_restart": force_restart,
-			"length": snappedf(_current_animation_length, 0.001),
-			"skin": int(skin),
-			"rarity": nft_rarity,
-		})
-		return _current_animation_length
-	BaseTroop.report_render_diagnostic(self, "troop.fire_dragon.animation_missing_player.%s" % animation_name, {
+	_current_animation_length = _play_cached_dragon_clip(animation_name, true)
+	if state != State.INACTIVE:
+		_enable_animation_budget()
+	BaseTroop.report_render_diagnostic(self, "troop.fire_dragon.animation.%s" % animation_name, {
 		"animation": animation_name,
+		"force_restart": force_restart,
+		"length": snappedf(_current_animation_length, 0.001),
 		"skin": int(skin),
 		"rarity": nft_rarity,
 	})
-	return 0.0
+	return _current_animation_length
 
 
-func _play_first_imported_clip(player: AnimationPlayer, animation_name: String, force_restart: bool) -> float:
-	for clip_name in player.get_animation_list():
-		var clip_text: String = str(clip_name)
-		if clip_text == "RESET" or clip_text == "T-Pose":
-			continue
-		var animation: Animation = player.get_animation(clip_name)
-		if animation:
-			animation.loop_mode = _loop_mode_for(animation_name)
-			_current_animation_length = animation.length
-		if force_restart or str(player.current_animation) != clip_text or not player.is_playing():
-			player.stop()
-			player.play(clip_name)
-		return _current_animation_length
-	return 0.0
+func _ensure_dragon_animation(animation_name: String) -> bool:
+	if _shared_animation_library != null and _shared_animation_library.has_animation(animation_name):
+		return true
+	var scene_path: String = str(ANIMATION_PATHS.get(animation_name, ""))
+	if scene_path == "":
+		return false
+	var packed_scene := ResourceLoader.load(scene_path, "PackedScene") as PackedScene
+	if packed_scene == null:
+		push_warning("FireDragon: missing animation scene '%s'" % scene_path)
+		return false
+	var animation_root := packed_scene.instantiate()
+	var source_player := _find_animation_player(animation_root)
+	var source_animation: Animation = null
+	if source_player:
+		for source_name in source_player.get_animation_list():
+			if source_name == "RESET" or source_name == "T-Pose":
+				continue
+			source_animation = source_player.get_animation(source_name)
+			if source_animation:
+				break
+	if source_animation == null:
+		animation_root.free()
+		push_warning("FireDragon: no usable animation in '%s'" % scene_path)
+		return false
+	var animation := source_animation.duplicate() as Animation
+	animation.loop_mode = _loop_mode_for(animation_name)
+	for track_index in animation.get_track_count():
+		var source_path := str(animation.track_get_path(track_index))
+		if source_path != "" and not source_path.begins_with("Model/"):
+			animation.track_set_path(track_index, NodePath("Model/" + source_path))
+	_shared_animation_library.add_animation(animation_name, animation)
+	animation_root.free()
+	return true
+
+
+func _play_cached_dragon_clip(animation_name: String, force_restart: bool) -> float:
+	if not is_instance_valid(anim_player) or not anim_player.has_animation(animation_name):
+		return 0.0
+	var animation := anim_player.get_animation(animation_name)
+	_current_animation_length = animation.length if animation else 0.0
+	if force_restart or str(anim_player.current_animation) != animation_name or not anim_player.is_playing():
+		anim_player.stop()
+		anim_player.play(animation_name)
+	return _current_animation_length
 
 
 func _apply_skin() -> void:

@@ -8,6 +8,7 @@ const RIBBON_COUNT: int = 3
 const RIBBON_SEGMENTS: int = 8
 
 static var _material: StandardMaterial3D = null
+static var _ribbon_mesh_cache: Dictionary = {}
 
 
 func setup(
@@ -19,6 +20,7 @@ func setup(
 ) -> void:
 	top_level = true
 	add_to_group("wind_wave_vfx")
+	add_to_group("combat_ephemeral_vfx")
 	global_position = origin + Vector3(0.0, 0.018, 0.0)
 	var flat_direction := direction
 	flat_direction.y = 0.0
@@ -74,6 +76,14 @@ static func _get_material() -> StandardMaterial3D:
 
 
 static func _build_ribbon(length: float, half_width: float, ribbon_index: int) -> ArrayMesh:
+	var cache_key := "%d:%d:%d" % [
+		roundi(length * 1000.0),
+		roundi(half_width * 1000.0),
+		ribbon_index,
+	]
+	var cached_mesh := _ribbon_mesh_cache.get(cache_key) as ArrayMesh
+	if cached_mesh != null:
+		return cached_mesh
 	var vertices := PackedVector3Array()
 	var colors := PackedColorArray()
 	var indices := PackedInt32Array()
@@ -110,4 +120,5 @@ static func _build_ribbon(length: float, half_width: float, ribbon_index: int) -
 	arrays[Mesh.ARRAY_INDEX] = indices
 	var mesh := ArrayMesh.new()
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	_ribbon_mesh_cache[cache_key] = mesh
 	return mesh

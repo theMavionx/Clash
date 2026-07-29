@@ -190,8 +190,10 @@ try {
     assert.notEqual(after[resource], before[resource], `${resource} should change after a bot raid`);
   }
   assert.ok(result.loot.gold > 0 && result.loot.wood > 0 && result.loot.ore > 0, 'attacker must receive loot');
-  assert.equal(result.trophy_delta, 30, 'a bot victory should award the standard 30 trophies');
-  assert.equal(gameDb.getTrophies(attackerId), 30, 'bot trophies should be persisted for the attacker');
+  assert.equal(result.trophy_delta, 12, 'a TH2 bot target should award the TH2 trophy tier');
+  assert.equal(result.trophy_base, 12);
+  assert.equal(result.target_town_hall_level, 2);
+  assert.equal(gameDb.getTrophies(attackerId), 12, 'scaled bot trophies should be persisted for the attacker');
   const restoreEvent = gameDb.db.prepare(`
     SELECT source_type, gold_after, wood_after, ore_after
     FROM resource_delta_events
@@ -203,7 +205,35 @@ try {
     [after.gold, after.wood, after.ore],
   );
 
-  console.log(`[raid-bot-pool] PASS total=${templates.length} th2=30 th3=30 th4=25 th5=25 resources=varied trophies=30 materialized=true rerolled=true`);
+  const defeatAttackerId = 'raid-trophy-defeat-attacker';
+  const defeatDefenderId = 'raid-trophy-defeat-defender';
+  const defeatSessionId = 'raid-trophy-defeat-session';
+  gameDb.db.prepare(`
+    INSERT INTO players (id, name, token, gold, wood, ore, trophies, level)
+    VALUES (?, ?, ?, 0, 0, 0, 100, 4)
+  `).run(defeatAttackerId, 'DefeatAttacker', 'defeat-attacker-token');
+  gameDb.db.prepare(`
+    INSERT INTO players (id, name, token, gold, wood, ore, trophies, level)
+    VALUES (?, ?, ?, 0, 0, 0, 100, 4)
+  `).run(defeatDefenderId, 'DefeatDefender', 'defeat-defender-token');
+  const insertTh4 = gameDb.db.prepare(`
+    INSERT INTO buildings (player_id, type, level, grid_x, grid_z, grid_index, hp, max_hp)
+    VALUES (?, 'town_hall', 4, 11, 11, 0, 24000, 24000)
+  `);
+  insertTh4.run(defeatAttackerId);
+  insertTh4.run(defeatDefenderId);
+  gameDb.stmts.createBattleSession.run(
+    defeatSessionId,
+    defeatAttackerId,
+    defeatDefenderId,
+    '2099-01-01 00:00:00',
+  );
+  const defeatResult = gameDb.battleDefeat(defeatAttackerId, defeatDefenderId, defeatSessionId);
+  assert.equal(defeatResult.error, undefined, defeatResult.error);
+  assert.equal(gameDb.getTrophies(defeatAttackerId), 89, 'TH4 attack defeat should subtract 11 trophies');
+  assert.equal(gameDb.getTrophies(defeatDefenderId), 122, 'TH4 successful defense should award 22 trophies');
+
+  console.log(`[raid-bot-pool] PASS total=${templates.length} th2=30 th3=30 th4=25 th5=25 resources=varied victory=12 defeat=-11 defense=22 materialized=true rerolled=true`);
 } finally {
   gameDb.db.close();
   for (const suffix of ['', '-wal', '-shm']) fs.rmSync(`${dbPath}${suffix}`, { force: true });

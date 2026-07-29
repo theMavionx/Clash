@@ -1,9 +1,9 @@
 class_name BSFreezeSpell
 extends RefCounted
-## Main Ship level 6 freeze orb. The projectile lands on the selected ground
+## Main Ship level 7 freeze orb. The projectile lands on the selected ground
 ## point and disables defenses and armed traps inside its radius.
 
-const UNLOCK_SHIP_LEVEL: int = 6
+const UNLOCK_SHIP_LEVEL: int = 7
 const ENERGY_COST: int = 5
 const RADIUS: float = 0.95
 const DURATION_SEC: float = 6.0
@@ -25,7 +25,7 @@ func init(building_system: Node3D) -> BSFreezeSpell:
 
 
 func reset(ship_level: int = 1) -> void:
-	_ship_level = clampi(ship_level, 1, 6)
+	_ship_level = clampi(ship_level, 1, 10)
 	_freeze_used = false
 	_exit_freeze_mode()
 	_clear_projectiles()

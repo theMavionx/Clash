@@ -17,9 +17,9 @@ func _run() -> void:
 	var expected_position := fmod(TEST_SECONDS, 1.0)
 	var failures: Array[String] = []
 	for result in results:
-		var position := float(result.get("position", -1.0))
+		var playback_position := float(result.get("position", -1.0))
 		var signal_count := int(result.get("signal_count", -1))
-		if absf(position - expected_position) > (1.0 / TARGET_HZ + 0.001):
+		if absf(playback_position - expected_position) > (1.0 / TARGET_HZ + 0.001):
 			failures.append("animation time drifted beyond one visual sample: %s" % result)
 		if signal_count != 1:
 			failures.append("one-shot animation signal count is %d: %s" % [signal_count, result])

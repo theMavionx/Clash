@@ -19,12 +19,17 @@ const {
   RAGE_DROP,
   SKELETON_GUARD,
   SKELETON_BARREL,
+  TROOP_LEVEL_POWER_MULTIPLIERS,
   TROOP_SLOT_COSTS,
   TROOP_STATS,
+  NFT_RARITY_MULTIPLIERS,
   WIND_MAGE,
   WINDLING_LIFETIME_SEC,
   WINDLING_STATS,
+  computeNftTroopStats,
   computeNecromancerSkeletonStats,
+  resolveAuthoritativeNftRarity,
+  setBalanceLabNftStatScales,
 } = require('./combat_defs');
 
 const ROOT = path.resolve(__dirname, '..');
@@ -71,7 +76,11 @@ function parseNumberArrayConstant(source, name) {
     new RegExp(`const\\s+${name}(?:\\s*:\\s*Array\\[\\w+\\])?\\s*(?::=|=)\\s*\\[([^\\]]+)\\]`),
   );
   assert.ok(match, `missing client array constant ${name}`);
-  return match[1].split(',').map(value => Number(value.trim()));
+  return match[1]
+    .split(',')
+    .map(value => value.trim())
+    .filter(Boolean)
+    .map(Number);
 }
 
 function parseNumberArray(text, field) {
@@ -121,10 +130,11 @@ function assertTroopStats(relativePath, serverType, fields = {}, constantName = 
   const { source, stats } = parseLevelStats(relativePath, constantName);
   for (let level = 1; level <= 7; level++) {
     const server = TROOP_STATS[serverType][level];
+    const multiplier = TROOP_LEVEL_POWER_MULTIPLIERS[level - 1];
     assert.deepEqual(
       {
-        hp: stats[level].hp,
-        damage: stats[level].damage,
+        hp: Math.round(stats[level].hp * multiplier),
+        damage: Math.round(stats[level].damage * multiplier),
         atkSpeed: stats[level].atkSpeed,
       },
       {
@@ -165,6 +175,62 @@ function parseDictionaryRows(relativePath) {
   return rows;
 }
 
+function extractObject(source, marker, label = marker) {
+  const markerIndex = source.indexOf(marker);
+  assert.ok(markerIndex >= 0, `missing ${label}`);
+  const openIndex = source.indexOf('{', markerIndex + marker.length);
+  assert.ok(openIndex >= 0, `missing opening brace for ${label}`);
+  let depth = 0;
+  for (let index = openIndex; index < source.length; index++) {
+    if (source[index] === '{') depth++;
+    if (source[index] === '}') {
+      depth--;
+      if (depth === 0) return source.slice(openIndex + 1, index);
+    }
+  }
+  assert.fail(`missing closing brace for ${label}`);
+}
+
+function parseStringArrayDictionary(source, marker) {
+  const block = extractObject(source, marker);
+  const result = {};
+  for (const row of block.matchAll(/^\s*(?:"([^"]+)"|([a-z_]+)):\s*\[([^\]]*)\]/gm)) {
+    result[row[1] || row[2]] = toNumbers(row[3]);
+  }
+  return result;
+}
+
+function parseStringNumberDictionary(source, marker) {
+  const block = extractObject(source, marker);
+  const result = {};
+  for (const row of block.matchAll(/^\s*(?:"([^"]+)"|([a-z_]+)):\s*(\d+)\s*,?/gm)) {
+    result[row[1] || row[2]] = Number(row[3]);
+  }
+  return result;
+}
+
+function parseNumberDictionary(source, marker) {
+  const block = extractObject(source, marker);
+  const result = {};
+  for (const row of block.matchAll(/^\s*(\d+):\s*(\d+)\s*,?/gm)) {
+    result[Number(row[1])] = Number(row[2]);
+  }
+  return result;
+}
+
+function parseResourceLevelDictionary(source, marker) {
+  const block = extractObject(source, marker);
+  const result = {};
+  for (const row of block.matchAll(/^\s*(\d+):\s*\{([^}]*)\}\s*,?/gm)) {
+    const fields = {};
+    for (const field of row[2].matchAll(/(?:"([^"]+)"|([a-z_]+)):\s*(\d+)/g)) {
+      fields[field[1] || field[2]] = Number(field[3]);
+    }
+    result[Number(row[1])] = fields;
+  }
+  return result;
+}
+
 function assertDefenseStats(relativePath, serverType, fieldMap, expectedLevels) {
   const clientRows = parseDictionaryRows(relativePath);
   assert.equal(
@@ -183,6 +249,18 @@ function assertDefenseStats(relativePath, serverType, fieldMap, expectedLevels) 
     }
   }
 }
+
+const baseTroopSource = read('scripts/base_troop.gd');
+assert.deepEqual(
+  parseNumberArrayConstant(baseTroopSource, 'TROOP_LEVEL_POWER_MULTIPLIERS'),
+  TROOP_LEVEL_POWER_MULTIPLIERS,
+  'primary troop level power curve diverged',
+);
+assert.match(
+  baseTroopSource,
+  /func _ready\(\).*?[\r\n]+\s*_init_stats\(\)[\r\n]+\s*_apply_troop_level_power_curve\(\)/s,
+  'BaseTroop must apply the shared power curve after raw level stats',
+);
 
 assertTroopStats('scripts/knight.gd', 'knight');
 assertTroopStats('scripts/archer.gd', 'archer', {
@@ -211,6 +289,7 @@ assert.equal(
   parseNumberConstant(peaShooterSource, 'PROJECTILE_SPEED'),
   TROOP_STATS.pea_shooter[1].projSpeed,
 );
+const fireDragon = parseLevelStats('scripts/fire_dragon.gd', 'COMMON_LEVEL_STATS');
 assertTroopStats('scripts/fire_dragon.gd', 'fire_dragon', {}, 'COMMON_LEVEL_STATS');
 const windMageSource = assertTroopStats('scripts/wind_mage.gd', 'wind_mage', {
   move_speed: 'moveSpeed',
@@ -258,34 +337,87 @@ assert.equal(
 assert.match(windling.source, /unit_target_type\s*=\s*BaseTroop\.UNIT_TARGET_AIR/);
 assert.match(windling.source, /can_target_guards\s*=\s*false/);
 
-const demon = parseNestedLevelStats('scripts/demon_king.gd', 'NORMAL_TROOP_STATS', 'knight');
-const demonCombatWeight = parseNumberConstant(demon.source, 'DEMON_KING_COMBAT_WEIGHT');
-assert.equal(demonCombatWeight, TROOP_SLOT_COSTS.demon_king);
+const demon = parseLevelStats('scripts/demon_king.gd', 'COMMON_LEVEL_STATS');
+assertTroopStats('scripts/demon_king.gd', 'demon_king', {}, 'COMMON_LEVEL_STATS');
 assert.match(
   demon.source,
-  /float\(stat\.hp\)\s*\*\s*DEMON_KING_COMBAT_WEIGHT\s*\*\s*power_mult/,
-  'Demon King client HP must scale from Knight by combat weight and NFT rarity',
+  /float\(stat\.hp\)\s*\*\s*rarity_scale/,
+  'Demon King client HP must scale from canonical common stats by NFT rarity',
 );
 assert.match(
   demon.source,
-  /float\(stat\.damage\)\s*\*\s*DEMON_KING_COMBAT_WEIGHT\s*\*\s*power_mult/,
-  'Demon King client damage must scale from Knight by combat weight and NFT rarity',
+  /float\(stat\.damage\)\s*\*\s*rarity_scale/,
+  'Demon King client damage must scale from canonical common stats by NFT rarity',
 );
-for (let level = 1; level <= 7; level++) {
-  assert.deepEqual(
-    {
-      hp: Math.ceil(demon.stats[level].hp * demonCombatWeight * 1.2),
-      damage: Math.ceil(demon.stats[level].damage * demonCombatWeight * 1.2),
-      atkSpeed: demon.stats[level].atkSpeed,
-    },
-    {
-      hp: TROOP_STATS.demon_king[level].hp,
-      damage: TROOP_STATS.demon_king[level].damage,
-      atkSpeed: TROOP_STATS.demon_king[level].atkSpeed,
-    },
-    `demon_king level ${level} client/server combat stats diverged`,
-  );
+
+for (const source of [demon.source, fireDragon.source]) {
+  for (const [rarity, multiplier] of Object.entries(NFT_RARITY_MULTIPLIERS)) {
+    assert.match(
+      source,
+      new RegExp(`"${rarity}"\\s*:\\s*${String(multiplier).replace('.', '\\.')}`),
+      `${rarity} NFT multiplier must match the server`,
+    );
+  }
 }
+for (const [troopType, parsed] of Object.entries({
+  demon_king: demon,
+  fire_dragon: fireDragon,
+})) {
+  for (let level = 1; level <= 7; level++) {
+    for (const [rarity, rarityMultiplier] of Object.entries(NFT_RARITY_MULTIPLIERS)) {
+      const levelMultiplier = TROOP_LEVEL_POWER_MULTIPLIERS[level - 1];
+      const rarityScale = rarityMultiplier / NFT_RARITY_MULTIPLIERS.common;
+      const expected = {
+        hp: Math.round(Math.ceil(parsed.stats[level].hp * rarityScale) * levelMultiplier),
+        damage: Math.round(
+          Math.ceil(parsed.stats[level].damage * rarityScale) * levelMultiplier,
+        ),
+        atkSpeed: parsed.stats[level].atkSpeed,
+      };
+      const actual = computeNftTroopStats(
+        { [troopType]: level },
+        troopType,
+        rarity,
+        level,
+      );
+      assert.deepEqual(
+        {
+          hp: actual.hp,
+          damage: actual.damage,
+          atkSpeed: actual.atkSpeed,
+        },
+        expected,
+        `${troopType} level ${level} ${rarity} client/server rarity stats diverged`,
+      );
+    }
+  }
+}
+assert.equal(
+  resolveAuthoritativeNftRarity(null, 'legendary'),
+  'unrevealed',
+  'client rarity must not upgrade an unrevealed authoritative NFT',
+);
+assert.equal(resolveAuthoritativeNftRarity('epic', 'legendary'), 'epic');
+const nftLabBaseline = computeNftTroopStats(
+  { demon_king: 7 },
+  'demon_king',
+  'epic',
+  7,
+);
+setBalanceLabNftStatScales({ 7: 0.98 }, { demon_king: 0.97 });
+const nftLabScaled = computeNftTroopStats(
+  { demon_king: 7 },
+  'demon_king',
+  'epic',
+  7,
+);
+assert.equal(nftLabScaled.hp, Math.round(nftLabBaseline.hp * 0.98 * 0.97));
+assert.equal(
+  nftLabScaled.damage,
+  Math.round(nftLabBaseline.damage * 0.98 * 0.97),
+  'balance-lab offense scales must affect NFT troops as well as regular troops',
+);
+setBalanceLabNftStatScales();
 
 const mechanicalSource = assertTroopStats('scripts/mechanical_dragon.gd', 'mechanical_dragon', {
   move_speed: 'moveSpeed',
@@ -353,10 +485,11 @@ const horror = parseHorrorEvolutionStats();
 for (let level = 1; level <= 7; level++) {
   for (let stage = 0; stage <= HORROR_EVOLUTION.finalStage; stage++) {
     const server = HORROR_EVOLUTION.stages[stage][level];
+    const multiplier = TROOP_LEVEL_POWER_MULTIPLIERS[level - 1];
     assert.deepEqual(
       {
-        hp: horror.rows[level].hp[stage],
-        damage: horror.rows[level].damage[stage],
+        hp: Math.round(horror.rows[level].hp[stage] * multiplier),
+        damage: Math.round(horror.rows[level].damage[stage] * multiplier),
         atkSpeed: horror.rows[level].atkSpeed[stage],
       },
       {
@@ -531,11 +664,11 @@ const mechanicalStart = buildingSystem.indexOf('"MechanicalDragon": {', horrorSt
 assert.ok(necromancerStart >= 0 && horrorStart > necromancerStart, 'Necromancer client progression is missing');
 assert.ok(mechanicalStart > horrorStart, 'Horror client progression is missing');
 const necromancerDefinition = buildingSystem.slice(necromancerStart, horrorStart);
-assert.match(necromancerDefinition, /"min_town_hall_level":\s*6/);
+assert.match(necromancerDefinition, /"min_town_hall_level":\s*7/);
 assert.match(necromancerDefinition, new RegExp(`"slot_cost":\\s*${TROOP_SLOT_COSTS.necromancer}`));
 assert.match(buildingSystem, /"Necromancer":\s*1/);
 const horrorDefinition = buildingSystem.slice(horrorStart, mechanicalStart);
-assert.match(horrorDefinition, /"min_town_hall_level":\s*6/);
+assert.match(horrorDefinition, /"min_town_hall_level":\s*10/);
 assert.match(horrorDefinition, new RegExp(`"slot_cost":\\s*${TROOP_SLOT_COSTS.horror}`));
 assert.match(buildingSystem, /"Horror":\s*1/);
 
@@ -550,6 +683,9 @@ for (const eventKind of [
   'wind_mage_summon',
   'windling_despawn',
   'troop_split_spawn',
+  'defense_fire',
+  'defense_projectile_hit',
+  'defense_projectile_lost_target',
 ]) {
   assert.match(
     dbSource,
@@ -557,24 +693,29 @@ for (const eventKind of [
     `${eventKind} must survive compact server battle telemetry`,
   );
 }
+assert.match(
+  dbSource,
+  /defenseType:\s*event\.defenseType\s*\?\?\s*null/,
+  'compact replay telemetry must preserve Cannon defenseType identity',
+);
 
 assertDefenseStats('scripts/turret.gd', 'turret', {
   damage: 'damage',
   fire_rate: 'fireRate',
   detect_range: 'detectRange',
-}, 6);
+}, 7);
 assertDefenseStats('scripts/tower_archer.gd', 'archer_tower', {
   damage: 'damage',
   fire_rate: 'fireRate',
   detect_range: 'detectRange',
-}, 6);
+}, 7);
 assertDefenseStats('scripts/tower_mage.gd', 'mage_tower', {
   base_damage: 'baseDamage',
   max_damage: 'maxDamage',
   tick_rate: 'tickRate',
   ramp_time: 'rampTime',
   detect_range: 'detectRange',
-}, 6);
+}, 7);
 assertDefenseStats('scripts/tower_mortar.gd', 'mortar', {
   damage: 'damage',
   fire_rate: 'fireRate',
@@ -582,10 +723,62 @@ assertDefenseStats('scripts/tower_mortar.gd', 'mortar', {
   min_range: 'minRange',
   splash_radius: 'splashRadius',
 }, 4);
+assertDefenseStats('scripts/cannon.gd', 'cannon', {
+  damage: 'damage',
+  fire_rate: 'fireRate',
+  detect_range: 'detectRange',
+}, 7);
+assert.deepEqual(
+  {
+    turretL7Damage: DEFENSE_STATS.turret[7].damage,
+    archerTowerL7Damage: DEFENSE_STATS.archer_tower[7].damage,
+    mageTowerL7BaseDamage: DEFENSE_STATS.mage_tower[7].baseDamage,
+    mageTowerL7MaxDamage: DEFENSE_STATS.mage_tower[7].maxDamage,
+    mageTowerL7DamageAlias: DEFENSE_STATS.mage_tower[7].damage,
+    mortarL3Damage: DEFENSE_STATS.mortar[3].damage,
+    cannonL7Damage: DEFENSE_STATS.cannon[7].damage,
+    skeletonGuardL6Hp: SKELETON_GUARD.levels[6].hp,
+    skeletonGuardL6Damage: SKELETON_GUARD.levels[6].damage,
+  },
+  {
+    turretL7Damage: 315,
+    archerTowerL7Damage: 288,
+    mageTowerL7BaseDamage: 52,
+    mageTowerL7MaxDamage: 281,
+    mageTowerL7DamageAlias: 52,
+    mortarL3Damage: 185,
+    cannonL7Damage: 675,
+    skeletonGuardL6Hp: 1148,
+    skeletonGuardL6Damage: 131,
+  },
+  'TH7 defense calibration must remain an explicit server-authoritative contract',
+);
+assert.match(
+  buildingSystem,
+  /"cannon":\s*\{[\s\S]*?"damage_levels":\s*\[40,\s*100,\s*205,\s*305,\s*447,\s*506,\s*675\]/,
+  'Cannon upgrade UI damage rows must mirror runtime combat stats',
+);
+assert.equal(
+  (buildingSystem.match(/"test_damage_levels":\s*\[95,\s*135,\s*185,\s*245\]/g) || []).length,
+  2,
+  'both Mortar metadata mirrors must expose the calibrated L3 damage',
+);
+const cannonSource = read('scripts/cannon.gd');
+for (let level = 1; level <= 7; level++) {
+  assert.equal(
+    parseNumberConstant(cannonSource, 'PROJECTILE_SPEED'),
+    DEFENSE_STATS.cannon[level].projSpeed,
+    `Cannon level ${level} projectile speed diverged`,
+  );
+}
+assert.equal(parseNumberConstant(cannonSource, 'PROJECTILE_HIT_RADIUS'), 0.05);
+assert.equal(parseNumberConstant(cannonSource, 'TARGET_SEARCH_INTERVAL'), 0.15);
+assert.match(cannonSource, /const CAN_TARGET_GROUND:\s*bool\s*=\s*true/);
+assert.match(cannonSource, /const CAN_TARGET_AIR:\s*bool\s*=\s*false/);
 
 const guardRows = parseDictionaryRows('scripts/skeleton_guard.gd');
-assert.equal(Object.keys(guardRows).length, 5, 'client skeleton guard must define five levels');
-for (let level = 1; level <= 5; level++) {
+assert.equal(Object.keys(guardRows).length, 6, 'client skeleton guard must define six levels');
+for (let level = 1; level <= 6; level++) {
   assert.deepEqual(
     guardRows[level],
     {
@@ -599,11 +792,43 @@ for (let level = 1; level <= 5; level++) {
   );
 }
 
+const buildingSystemProgression = read('scripts/building_system.gd');
+assert.deepEqual(
+  parseStringNumberDictionary(buildingSystemProgression, 'const TH_UNLOCK'),
+  parseStringNumberDictionary(dbSource, 'const TH_UNLOCK'),
+  'Town Hall building unlock maps diverged',
+);
+assert.deepEqual(
+  parseStringArrayDictionary(buildingSystemProgression, 'const TH_MAX_COUNT'),
+  parseStringArrayDictionary(dbSource, 'const TH_MAX_COUNT'),
+  'Town Hall building count caps diverged',
+);
+assert.deepEqual(
+  parseStringArrayDictionary(buildingSystemProgression, 'const TH_MAX_LEVEL'),
+  parseStringArrayDictionary(dbSource, 'const TH_MAX_LEVEL'),
+  'Town Hall building level caps diverged',
+);
+assert.deepEqual(
+  parseNumberDictionary(buildingSystemProgression, 'const BUILDING_UPGRADE_COST_MULTIPLIERS'),
+  parseNumberDictionary(dbSource, 'const BUILDING_UPGRADE_COST_MULTIPLIERS'),
+  'building upgrade multipliers diverged',
+);
+assert.deepEqual(
+  parseResourceLevelDictionary(buildingSystemProgression, 'const TH_BASE_CAPACITY'),
+  parseResourceLevelDictionary(dbSource, 'const TH_BASE_CAPACITY'),
+  'Town Hall base capacities diverged',
+);
+assert.deepEqual(
+  parseResourceLevelDictionary(buildingSystemProgression, 'const STORAGE_CAPACITY'),
+  parseResourceLevelDictionary(dbSource, 'const STORAGE_CAPACITY'),
+  'Storage capacities diverged',
+);
+
 console.log(
   '[COMBAT_PARITY] PASS troops=knight,archer,mage,pea_shooter,wind_mage,windling,mimic,mechanical_dragon,ice_golem,necromancer,horror,demon_king,fire_dragon'
-  + ' summon=owner_bound,capped,expiring shark_trap=levels_1_to_6'
+  + ' summon=owner_bound,capped,expiring shark_trap=levels_1_to_7'
   + ' ship_slots=knight1,archer1,mage4,pea5,mimic6,mechanical4,demon5,ice10,fire10,wind_mage15,necromancer15,horror20'
   + ' tactical_constants=freeze,rage,skeleton_barrel'
-  + ' defenses=turret6,archer6,mage6,mortar4,guards5'
-  + ' telemetry=chain,freeze,trap,wind_wave,summon,split progression=th6_wind_mage_15_slots',
+  + ' defenses=turret7,archer7,mage7,mortar4,cannon7,guards6'
+  + ' telemetry=chain,freeze,trap,wind_wave,summon,split progression=th7_cannon',
 );

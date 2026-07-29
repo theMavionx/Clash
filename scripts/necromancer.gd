@@ -34,7 +34,7 @@ const NECROMANCER_LEVEL_STATS: Dictionary = {
 	4: {"hp": 5880, "damage": 1230, "atk_speed": 1.02},
 	5: {"hp": 7440, "damage": 1620, "atk_speed": 0.94},
 	6: {"hp": 9240, "damage": 2130, "atk_speed": 0.87},
-	7: {"hp": 11280, "damage": 2790, "atk_speed": 0.81},
+	7: {"hp": 20700, "damage": 5120, "atk_speed": 0.81},
 }
 
 const ANIM_FILES: Array[String] = [
@@ -114,9 +114,9 @@ func _setup_weapons() -> void:
 		staff.position = Vector3(-0.0593387, 0.0, -0.0283893)
 
 
-func activate() -> void:
+func activate(refresh_dense_rendering: bool = true) -> void:
 	var should_begin_initial_batch := state == State.INACTIVE
-	super.activate()
+	super.activate(refresh_dense_rendering)
 	if should_begin_initial_batch and state != State.INACTIVE:
 		_summon_respawn_timer = -1.0
 		_has_spawned_batch = false
@@ -186,6 +186,7 @@ func _begin_attack_cast() -> void:
 	if _attack_cast_tween != null and _attack_cast_tween.is_valid():
 		_attack_cast_tween.kill()
 	_attack_cast_tween = create_tween()
+	_attack_cast_tween.set_process_mode(Tween.TWEEN_PROCESS_PHYSICS)
 	_attack_cast_tween.tween_interval(ATTACK_RELEASE_DELAY)
 	_attack_cast_tween.tween_callback(_release_attack_projectile)
 
@@ -344,6 +345,7 @@ func _begin_summon() -> void:
 			SUMMON_ANIMATION_SPEED
 		)
 	_summon_cast_tween = create_tween()
+	_summon_cast_tween.set_process_mode(Tween.TWEEN_PROCESS_PHYSICS)
 	_summon_cast_tween.tween_interval(SUMMON_CAST_RELEASE_DELAY)
 	_summon_cast_tween.tween_callback(_release_summon)
 
@@ -422,7 +424,9 @@ func _spawn_skeleton(batch_index: int, batch_id: int) -> bool:
 	})
 
 	var rise_target := spawn_position
-	var rise_tween := skeleton.create_tween().set_parallel(true)
+	var rise_tween := skeleton.create_tween()
+	rise_tween.set_process_mode(Tween.TWEEN_PROCESS_PHYSICS)
+	rise_tween.set_parallel(true)
 	rise_tween.tween_property(skeleton, "global_position", rise_target, SUMMON_RISE_DURATION).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	rise_tween.tween_property(skeleton, "scale", Vector3.ONE * 0.09, SUMMON_RISE_DURATION).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	rise_tween.chain().tween_callback(func():
@@ -446,11 +450,15 @@ func _summon_forward_direction() -> Vector3:
 
 
 func _prune_summons() -> void:
-	var alive: Array[Node3D] = []
-	for summon in _summons:
+	var write_index: int = 0
+	for read_index in _summons.size():
+		var summon: Node3D = _summons[read_index]
 		if is_instance_valid(summon) and not bool(summon.get("_is_dead")) and not bool(summon.get("_despawning")):
-			alive.append(summon)
-	_summons = alive
+			if write_index != read_index:
+				_summons[write_index] = summon
+			write_index += 1
+	if write_index < _summons.size():
+		_summons.resize(write_index)
 
 
 func _cleanup_summons(reason: String) -> void:

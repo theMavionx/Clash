@@ -35,18 +35,25 @@ const LEVEL_STATS := {
 		"detect_range": 1.64,
 	},
 	5: {
-		"base_damage": 36,
-		"max_damage": 198,
+		"base_damage": 34,
+		"max_damage": 188,
 		"tick_rate": 0.12,
 		"ramp_time": 2.0,
 		"detect_range": 1.82,
 	},
 	6: {
-		"base_damage": 46,
-		"max_damage": 250,
+		"base_damage": 39,
+		"max_damage": 213,
 		"tick_rate": 0.11,
 		"ramp_time": 1.9,
 		"detect_range": 1.95,
+	},
+	7: {
+		"base_damage": 52,
+		"max_damage": 281,
+		"tick_rate": 0.10,
+		"ramp_time": 1.8,
+		"detect_range": 2.08,
 	},
 }
 
@@ -57,6 +64,7 @@ const LEVEL_STATS := {
 @export var retract_when_idle: bool = false
 
 const TARGET_SEARCH_INTERVAL: float = 0.15
+const VISUAL_UPDATE_INTERVAL: float = 1.0 / 30.0
 const CAN_TARGET_GROUND: bool = true
 const CAN_TARGET_AIR: bool = true
 const BEAM_START_Y: float = 0.36
@@ -66,6 +74,9 @@ const BEAM_GLOW_RADIUS_MIN: float = 0.030
 const BEAM_GLOW_RADIUS_MAX: float = 0.075
 const IMPACT_RADIUS_MIN: float = 0.045
 const IMPACT_RADIUS_MAX: float = 0.100
+const BEAM_MESH_HEIGHT: float = 1.0
+const BEAM_MESH_RADIUS: float = 1.0
+const IMPACT_MESH_RADIUS: float = 1.0
 const ATTACK_SFX_PATH := "res://Musik/base/MagikTowerAttack.mp3"
 const ATTACK_SFX_VOLUME_DB := -1.0
 const ATTACK_SFX_PITCH_JITTER := 0.04
@@ -85,6 +96,7 @@ var _damage_tick: float = 0.0
 var _freeze_remaining: float = 0.0
 var _charge: float = 0.0
 var _beam_ready: bool = false
+var _visual_update_timer: float = VISUAL_UPDATE_INTERVAL
 
 # Crystal animation (idle bob + spin, retract when no target, charge pulse).
 const CRYSTAL_BOB_FREQ: float = 0.8
@@ -208,7 +220,7 @@ func _make_beam_material(color: Color, energy: float) -> StandardMaterial3D:
 
 func _make_beam_cylinder(radius: float, mat: StandardMaterial3D) -> MeshInstance3D:
 	var mesh := CylinderMesh.new()
-	mesh.height = 0.1
+	mesh.height = BEAM_MESH_HEIGHT
 	mesh.top_radius = radius
 	mesh.bottom_radius = radius
 	mesh.radial_segments = 12
@@ -223,8 +235,8 @@ func _make_beam_cylinder(radius: float, mat: StandardMaterial3D) -> MeshInstance
 
 func _make_impact_sphere(mat: StandardMaterial3D) -> MeshInstance3D:
 	var mesh := SphereMesh.new()
-	mesh.radius = IMPACT_RADIUS_MIN
-	mesh.height = IMPACT_RADIUS_MIN * 2.0
+	mesh.radius = IMPACT_MESH_RADIUS
+	mesh.height = IMPACT_MESH_RADIUS * 2.0
 	mesh.radial_segments = 12
 	mesh.rings = 6
 	var node := MeshInstance3D.new()
@@ -256,6 +268,12 @@ func cleanup_defense_visuals() -> void:
 
 func _physics_process(delta: float) -> void:
 	delta = BaseTroop.combat_delta(delta)
+	_visual_update_timer += delta
+	var update_visuals := _visual_update_timer >= VISUAL_UPDATE_INTERVAL
+	var visual_delta := 0.0
+	if update_visuals:
+		visual_delta = _visual_update_timer
+		_visual_update_timer = fmod(_visual_update_timer, VISUAL_UPDATE_INTERVAL)
 	if not _beam_ready:
 		return
 	if _freeze_remaining > 0.0:
@@ -266,7 +284,8 @@ func _physics_process(delta: float) -> void:
 
 	if BaseTroop._get_troops_cached().size() == 0:
 		_drop_target()
-		_animate_crystal(delta)
+		if update_visuals:
+			_animate_crystal(visual_delta)
 		_hide_beam()
 		return
 
@@ -278,12 +297,14 @@ func _physics_process(delta: float) -> void:
 	if _target and BaseTroop.can_defense_target_troop(_target, CAN_TARGET_GROUND, CAN_TARGET_AIR):
 		_start_attack_sfx()
 		_process_beam_damage(delta)
-		_update_beam_visuals()
+		if update_visuals:
+			_update_beam_visuals()
 	else:
 		_drop_target()
 		_hide_beam()
 
-	_animate_crystal(delta)
+	if update_visuals:
+		_animate_crystal(visual_delta)
 
 
 func freeze_for(duration: float) -> void:
@@ -365,11 +386,15 @@ func _find_target() -> void:
 
 	var nearest_sq: float = detect_sq
 	var my_pos: Vector3 = global_position
-	for troop in BaseTroop._get_troops_cached():
+	var troops: Array = BaseTroop._get_troops_cached()
+	var troop_positions: PackedVector3Array = BaseTroop._get_troop_positions_cached()
+	for troop_index in range(troops.size()):
+		var troop: Variant = troops[troop_index]
 		if not BaseTroop.can_defense_target_troop(troop, CAN_TARGET_GROUND, CAN_TARGET_AIR):
 			continue
-		var dx: float = my_pos.x - troop.global_position.x
-		var dz: float = my_pos.z - troop.global_position.z
+		var troop_pos: Vector3 = troop_positions[troop_index]
+		var dx: float = my_pos.x - troop_pos.x
+		var dz: float = my_pos.z - troop_pos.z
 		var d_sq: float = dx * dx + dz * dz
 		if d_sq < nearest_sq:
 			nearest_sq = d_sq
@@ -416,10 +441,8 @@ func _update_beam_visuals() -> void:
 	_set_cylinder_between(_beam_core, from_pos, to_pos, core_radius)
 	_set_cylinder_between(_beam_glow, from_pos, to_pos, glow_radius)
 
-	var impact_mesh := _impact.mesh as SphereMesh
 	var impact_radius: float = lerpf(IMPACT_RADIUS_MIN, IMPACT_RADIUS_MAX, _charge) * (0.92 + pulse * 0.16)
-	impact_mesh.radius = impact_radius
-	impact_mesh.height = impact_radius * 2.0
+	_impact.scale = Vector3.ONE * (impact_radius / IMPACT_MESH_RADIUS)
 	_impact.global_position = to_pos
 	_impact.visible = true
 
@@ -456,18 +479,19 @@ func _set_cylinder_between(node: MeshInstance3D, from_pos: Vector3, to_pos: Vect
 		node.visible = false
 		return
 
-	var mesh := node.mesh as CylinderMesh
-	mesh.height = length
-	mesh.top_radius = radius
-	mesh.bottom_radius = radius
-
 	var y_axis: Vector3 = segment / length
 	var x_axis: Vector3 = y_axis.cross(Vector3.UP)
 	if x_axis.length_squared() < 0.0001:
 		x_axis = y_axis.cross(Vector3.RIGHT)
 	x_axis = x_axis.normalized()
 	var z_axis: Vector3 = x_axis.cross(y_axis).normalized()
-	node.global_transform = Transform3D(Basis(x_axis, y_axis, z_axis), from_pos + segment * 0.5)
+	var radius_scale := radius / BEAM_MESH_RADIUS
+	var beam_basis := Basis(
+		x_axis * radius_scale,
+		y_axis * (length / BEAM_MESH_HEIGHT),
+		z_axis * radius_scale
+	)
+	node.global_transform = Transform3D(beam_basis, from_pos + segment * 0.5)
 	node.visible = true
 
 

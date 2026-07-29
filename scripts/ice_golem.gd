@@ -29,7 +29,7 @@ const LEVEL_STATS: Dictionary = {
 	4: {"hp": 11125, "damage": 488, "atk_speed": 1.42},
 	5: {"hp": 14000, "damage": 658, "atk_speed": 1.42},
 	6: {"hp": 17250, "damage": 878, "atk_speed": 1.42},
-	7: {"hp": 21000, "damage": 1155, "atk_speed": 1.42},
+	7: {"hp": 21840, "damage": 1200, "atk_speed": 1.42},
 }
 
 const ANIM_FILES: Array[String] = [

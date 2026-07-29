@@ -1,7 +1,66 @@
 class_name WebRenderProfile
 extends Node
 
-const STABLE_WATER_MATERIAL: ShaderMaterial = preload("res://shaders/water_stable.tres")
+const PERFORMANCE_WATER_MATERIAL: ShaderMaterial = preload("res://shaders/water_fast.tres")
+const BUILDING_BASE_MULTIMESH_SHADER_CODE := """
+shader_type spatial;
+render_mode unshaded, blend_mix, depth_draw_opaque, cull_disabled;
+
+uniform vec4 base_color : source_color = vec4(0.25, 0.45, 0.15, 0.35);
+uniform vec4 line_color : source_color = vec4(0.5, 1.0, 0.5, 1.0);
+uniform float radius : hint_range(0.0, 0.5) = 0.22;
+uniform float blur : hint_range(0.0, 0.4) = 0.12;
+uniform float dash_ratio : hint_range(0.0, 1.0) = 0.35;
+varying flat vec2 building_params;
+
+float sd_rounded_box(vec2 p, vec2 b, float r) {
+	vec2 q = abs(p) - b + r;
+	return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - r;
+}
+
+void vertex() {
+	building_params = INSTANCE_CUSTOM.rg;
+}
+
+void fragment() {
+	float aspect_ratio = max(building_params.r, 0.001);
+	float dash_count = max(building_params.g, 1.0);
+	vec2 p = UV * 2.0 - 1.0;
+	vec2 corrected = p;
+	if (aspect_ratio > 1.0) {
+		corrected.x *= aspect_ratio;
+	} else {
+		corrected.y /= aspect_ratio;
+	}
+
+	vec2 box_half = vec2(0.88);
+	if (aspect_ratio > 1.0) {
+		box_half.x = 0.88 * aspect_ratio;
+	} else {
+		box_half.y = 0.88 / aspect_ratio;
+	}
+	float sdf = sd_rounded_box(corrected, box_half, radius);
+	float bleed = smoothstep(blur, -blur, sdf);
+	float vignette = smoothstep(-0.65, 0.0, sdf);
+	float footing = bleed * vignette;
+
+	vec4 col = base_color;
+	col.a *= footing;
+	float border_width = 0.022;
+	float border_line = smoothstep(border_width, 0.0, abs(sdf + border_width * 0.5));
+	if (border_line > 0.0) {
+		vec2 d = abs(corrected);
+		float p_pos = d.x > d.y
+			? corrected.y * sign(corrected.x)
+			: -corrected.x * sign(corrected.y);
+		if (fract(p_pos * dash_count) < dash_ratio) {
+			col = mix(col, line_color, border_line);
+		}
+	}
+	ALBEDO = col.rgb;
+	ALPHA = col.a;
+}
+"""
 const ISLAND_STATIC_BATCH: ArrayMesh = preload("res://generated/performance/pirate_island_static_batch.res")
 const ARCHER_TOWER_STATIC_BATCHES: Array[ArrayMesh] = [
 	preload("res://generated/performance/archer_tower_level_1_static_batch.res"),
@@ -67,6 +126,8 @@ const DEFAULT_WEB_ANIMATION_HZ := 20.0
 const DENSE_TROOP_ANIMATION_HZ := 10.0
 const DENSE_TROOP_THRESHOLD := 24
 const DENSITY_REFRESH_INTERVAL_SEC := 0.5
+const STATIC_BATCH_REBUILD_DEBOUNCE_SEC := 0.2
+const STATIC_SOURCE_POLL_INTERVAL_SEC := 0.1
 static var _optimized_materials: Dictionary = {}
 static var _optimized_batch_meshes: Dictionary = {}
 static var _runtime_material_batch_meshes: Dictionary = {}
@@ -74,9 +135,16 @@ static var _active_profile: WebRenderProfile
 
 var _static_batch_signature := ""
 var _static_batch_refresh_pending := false
-var _static_batch_refresh_delay_frames := 0
+var _static_batch_refresh_delay_remaining := 0.0
+var _static_source_poll_remaining := 0.0
 var _static_multimesh_container: Node3D
 var _static_multimesh_groups: Dictionary = {}
+var _static_multimesh_sync_dirty := false
+var _building_base_signature := ""
+var _building_base_multimesh: MultiMesh
+var _building_base_instance: MultiMeshInstance3D
+var _building_base_entries: Array[Dictionary] = []
+var _building_base_sync_dirty := false
 var _managed_animation_players: Dictionary = {}
 var _pending_animation_players: Array[WeakRef] = []
 var _animation_target_hz := DEFAULT_WEB_ANIMATION_HZ
@@ -111,11 +179,19 @@ func _process(_delta: float) -> void:
 		return
 	_register_pending_animation_players()
 	if _static_batch_refresh_pending:
-		_static_batch_refresh_delay_frames -= 1
-		if _static_batch_refresh_delay_frames <= 0:
+		_static_batch_refresh_delay_remaining -= _delta
+		if _static_batch_refresh_delay_remaining <= 0.0:
 			_static_batch_refresh_pending = false
-		_refresh_static_multimeshes()
-	_sync_static_multimesh_transforms()
+			_refresh_static_multimeshes()
+	_static_source_poll_remaining -= _delta
+	if _static_source_poll_remaining <= 0.0:
+		_static_source_poll_remaining = STATIC_SOURCE_POLL_INTERVAL_SEC
+		_poll_static_multimesh_source_changes()
+		_poll_building_base_source_changes()
+	if _static_multimesh_sync_dirty:
+		_sync_static_multimesh_transforms()
+	if _building_base_sync_dirty:
+		_sync_building_base_multimesh()
 	_density_refresh_remaining -= _delta
 	if _density_refresh_remaining <= 0.0:
 		_density_refresh_remaining = DENSITY_REFRESH_INTERVAL_SEC
@@ -125,7 +201,11 @@ func _process(_delta: float) -> void:
 
 func _schedule_static_multimesh_refresh() -> void:
 	_static_batch_refresh_pending = true
-	_static_batch_refresh_delay_frames = 2
+	_static_batch_refresh_delay_remaining = STATIC_BATCH_REBUILD_DEBOUNCE_SEC
+
+
+func _mark_static_multimesh_dirty() -> void:
+	_static_multimesh_sync_dirty = true
 
 
 func _resolve_web_animation_hz() -> float:
@@ -138,6 +218,8 @@ func _resolve_web_animation_hz() -> float:
 func _on_scene_node_added(node: Node) -> void:
 	if node is AnimationPlayer:
 		_pending_animation_players.append(weakref(node))
+	if node is MeshInstance3D and bool(node.get_meta("building_base", false)):
+		_schedule_static_multimesh_refresh()
 
 
 func _register_pending_animation_players() -> void:
@@ -264,6 +346,13 @@ func _apply_profile() -> void:
 	var scene_root := get_tree().current_scene
 	if scene_root == null:
 		return
+	var render_scale_text := _local_query_value("perf_render_scale")
+	if render_scale_text.is_valid_float():
+		get_viewport().scaling_3d_scale = clampf(
+			render_scale_text.to_float(),
+			0.5,
+			1.0
+		)
 	for environment_node in _find_nodes_of_type(scene_root, "WorldEnvironment"):
 		var world_environment := environment_node as WorldEnvironment
 		if world_environment == null or world_environment.environment == null:
@@ -290,6 +379,12 @@ func _apply_profile() -> void:
 	var water := get_node_or_null(water_path) as MeshInstance3D
 	if water != null:
 		_apply_web_water(water)
+		var water_material := water.material_override as ShaderMaterial
+		if (
+			water_material != null
+			and _local_query_value("perf_water_depth") == "off"
+		):
+			water_material.set_shader_parameter("use_depth_fade", false)
 	var island_visual := get_node_or_null(island_visual_path)
 	if island_visual != null:
 		apply_static_batch_for_web(island_visual, ISLAND_SOURCE_PATH)
@@ -298,7 +393,13 @@ func _apply_profile() -> void:
 	if _has_local_probe_options():
 		await get_tree().create_timer(8.0).timeout
 		_apply_local_probe_options(scene_root)
-	print("[WEB_RENDER_PROFILE] applied lighting=directional glow=off shadows=off water=lightweight")
+	print(
+		(
+			"[WEB_RENDER_PROFILE] applied lighting=directional glow=off "
+			+ "shadows=off water=lightweight render_scale=%.2f"
+		)
+		% get_viewport().scaling_3d_scale
+	)
 
 
 static func is_enabled() -> bool:
@@ -557,6 +658,7 @@ func _refresh_static_multimeshes() -> void:
 	var scene_root := get_tree().current_scene as Node3D
 	if scene_root == null:
 		return
+	_refresh_building_base_multimesh(scene_root)
 	var grouped: Dictionary = {}
 	for raw_batch in scene_root.find_children("WebStaticBatch", "MeshInstance3D", true, false):
 		var batch := raw_batch as MeshInstance3D
@@ -624,7 +726,9 @@ func _rebuild_static_multimeshes(scene_root: Node3D, grouped: Dictionary, sorted
 		if first_batch == null or not first_batch.mesh is ArrayMesh:
 			continue
 		var multimesh := MultiMesh.new()
-		multimesh.transform_format = MultiMesh.TRANSFORM_3D
+		multimesh.transform_format = (
+			MultiMesh.TRANSFORM_3D as MultiMesh.TransformFormat
+		)
 		multimesh.mesh = _get_vertex_lit_batch_mesh(first_batch.mesh as ArrayMesh)
 		var multimesh_instance := MultiMeshInstance3D.new()
 		multimesh_instance.name = "WebStaticMultiMesh_%d" % _static_multimesh_groups.size()
@@ -641,6 +745,9 @@ func _rebuild_static_multimeshes(scene_root: Node3D, grouped: Dictionary, sorted
 				runtime_entries.append({
 					"batch_ref": weakref(batch),
 					"owner_ref": weakref(owner_root),
+					"last_transform": batch.global_transform,
+					"last_visible": owner_root.is_visible_in_tree(),
+					"source_missing": false,
 				})
 		multimesh.instance_count = runtime_entries.size()
 		_static_multimesh_groups[key] = {
@@ -649,6 +756,7 @@ func _rebuild_static_multimeshes(scene_root: Node3D, grouped: Dictionary, sorted
 			"entries": runtime_entries,
 		}
 		grouped_instances += runtime_entries.size()
+	_mark_static_multimesh_dirty()
 	_sync_static_multimesh_transforms()
 	print(
 		"[WEB_STATIC_MULTIMESH] groups=%d instances=%d unique_batches=%d"
@@ -656,9 +764,181 @@ func _rebuild_static_multimeshes(scene_root: Node3D, grouped: Dictionary, sorted
 	)
 
 
+func _refresh_building_base_multimesh(scene_root: Node3D) -> void:
+	var candidates: Array[Dictionary] = []
+	var signature_parts: Array[String] = []
+	for raw_base in scene_root.find_children("BuildingBase", "MeshInstance3D", true, false):
+		var base := raw_base as MeshInstance3D
+		if base == null or base.is_queued_for_deletion() or not base.mesh is QuadMesh:
+			continue
+		var owner_root := base.get_parent() as Node3D
+		if owner_root == null or not owner_root.has_meta("building_type"):
+			continue
+		var quad := base.mesh as QuadMesh
+		var size := quad.size
+		var aspect_ratio := size.x / maxf(size.y, 0.001)
+		var dash_count := 2.0 * (size.x + size.y) * 6.0
+		candidates.append({
+			"base": base,
+			"owner": owner_root,
+			"size": size,
+			"aspect_ratio": aspect_ratio,
+			"dash_count": dash_count,
+		})
+		signature_parts.append(
+			"%d:%.4f:%.4f" % [base.get_instance_id(), size.x, size.y]
+		)
+	signature_parts.sort()
+	var next_signature := "|".join(signature_parts)
+	if next_signature == _building_base_signature:
+		return
+	_building_base_signature = next_signature
+
+	for entry in _building_base_entries:
+		var old_ref := entry.get("base_ref") as WeakRef
+		var old_base := old_ref.get_ref() as MeshInstance3D if old_ref != null else null
+		if is_instance_valid(old_base) and not old_base.is_queued_for_deletion():
+			old_base.visible = true
+	_building_base_entries.clear()
+
+	if candidates.size() < 2:
+		if is_instance_valid(_building_base_instance):
+			_building_base_instance.queue_free()
+		_building_base_instance = null
+		_building_base_multimesh = null
+		return
+
+	if _static_multimesh_container == null or not is_instance_valid(_static_multimesh_container):
+		_static_multimesh_container = Node3D.new()
+		_static_multimesh_container.name = "WebStaticMultiMeshes"
+		scene_root.add_child(_static_multimesh_container)
+	if is_instance_valid(_building_base_instance):
+		_building_base_instance.queue_free()
+
+	var material := ShaderMaterial.new()
+	var shader := Shader.new()
+	shader.code = BUILDING_BASE_MULTIMESH_SHADER_CODE
+	material.shader = shader
+	var unit_quad := QuadMesh.new()
+	unit_quad.size = Vector2.ONE
+	unit_quad.material = material
+
+	_building_base_multimesh = MultiMesh.new()
+	_building_base_multimesh.transform_format = (
+		MultiMesh.TRANSFORM_3D as MultiMesh.TransformFormat
+	)
+	_building_base_multimesh.use_custom_data = true
+	_building_base_multimesh.mesh = unit_quad
+	_building_base_multimesh.instance_count = candidates.size()
+
+	_building_base_instance = MultiMeshInstance3D.new()
+	_building_base_instance.name = "WebBuildingBases"
+	_building_base_instance.multimesh = _building_base_multimesh
+	_building_base_instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_static_multimesh_container.add_child(_building_base_instance)
+
+	for index in range(candidates.size()):
+		var candidate := candidates[index]
+		var base := candidate.get("base") as MeshInstance3D
+		var owner_root := candidate.get("owner") as Node3D
+		base.visible = false
+		_building_base_entries.append({
+			"base_ref": weakref(base),
+			"owner_ref": weakref(owner_root),
+			"size": candidate.get("size", Vector2.ONE),
+			"last_transform": base.global_transform,
+			"last_visible": owner_root.is_visible_in_tree(),
+			"source_missing": false,
+		})
+		_building_base_multimesh.set_instance_custom_data(
+			index,
+			Color(
+				float(candidate.get("aspect_ratio", 1.0)),
+				float(candidate.get("dash_count", 28.0)),
+				0.0,
+				0.0
+			)
+		)
+	_building_base_sync_dirty = true
+	_sync_building_base_multimesh()
+	print("[WEB_BUILDING_BASE_BATCH] instances=%d draw_calls=1" % candidates.size())
+
+
+func _sync_building_base_multimesh() -> void:
+	if (
+		_building_base_multimesh == null
+		or _static_multimesh_container == null
+		or not is_instance_valid(_static_multimesh_container)
+	):
+		return
+	_building_base_sync_dirty = false
+	var container_inverse := _static_multimesh_container.global_transform.affine_inverse()
+	var hidden_transform := Transform3D(Basis.from_scale(Vector3.ZERO), Vector3.ZERO)
+	for index in range(mini(
+		_building_base_multimesh.instance_count,
+		_building_base_entries.size()
+	)):
+		var entry := _building_base_entries[index]
+		var base_ref := entry.get("base_ref") as WeakRef
+		var owner_ref := entry.get("owner_ref") as WeakRef
+		var base := base_ref.get_ref() as MeshInstance3D if base_ref != null else null
+		var owner_root := owner_ref.get_ref() as Node3D if owner_ref != null else null
+		if (
+			is_instance_valid(base)
+			and is_instance_valid(owner_root)
+			and not base.is_queued_for_deletion()
+			and not owner_root.is_queued_for_deletion()
+			and owner_root.is_visible_in_tree()
+		):
+			var size: Vector2 = entry.get("size", Vector2.ONE)
+			var size_transform := Transform3D(
+				Basis.from_scale(Vector3(size.x, size.y, 1.0)),
+				Vector3.ZERO
+			)
+			_building_base_multimesh.set_instance_transform(
+				index,
+				container_inverse * base.global_transform * size_transform
+			)
+		else:
+			_building_base_multimesh.set_instance_transform(index, hidden_transform)
+
+
+func _poll_building_base_source_changes() -> void:
+	for entry in _building_base_entries:
+		var base_ref := entry.get("base_ref") as WeakRef
+		var owner_ref := entry.get("owner_ref") as WeakRef
+		var base := base_ref.get_ref() as MeshInstance3D if base_ref != null else null
+		var owner_root := owner_ref.get_ref() as Node3D if owner_ref != null else null
+		if (
+			not is_instance_valid(base)
+			or not is_instance_valid(owner_root)
+			or base.is_queued_for_deletion()
+			or owner_root.is_queued_for_deletion()
+		):
+			if not bool(entry.get("source_missing", false)):
+				entry["source_missing"] = true
+				_building_base_sync_dirty = true
+				_schedule_static_multimesh_refresh()
+			continue
+		var current_transform := base.global_transform
+		var current_visible := owner_root.is_visible_in_tree()
+		var previous_transform: Transform3D = entry.get("last_transform", current_transform)
+		var previous_visible := bool(entry.get("last_visible", current_visible))
+		if (
+			not current_transform.is_equal_approx(previous_transform)
+			or current_visible != previous_visible
+			or bool(entry.get("source_missing", false))
+		):
+			entry["last_transform"] = current_transform
+			entry["last_visible"] = current_visible
+			entry["source_missing"] = false
+			_building_base_sync_dirty = true
+
+
 func _sync_static_multimesh_transforms() -> void:
 	if _static_multimesh_container == null or not is_instance_valid(_static_multimesh_container):
 		return
+	_static_multimesh_sync_dirty = false
 	var container_inverse := _static_multimesh_container.global_transform.affine_inverse()
 	var hidden_transform := Transform3D(Basis.from_scale(Vector3.ZERO), Vector3.ZERO)
 	for group_data in _static_multimesh_groups.values():
@@ -684,8 +964,50 @@ func _sync_static_multimesh_transforms() -> void:
 				multimesh.set_instance_transform(index, hidden_transform)
 
 
+func _poll_static_multimesh_source_changes() -> void:
+	for group_data in _static_multimesh_groups.values():
+		var entries := group_data.get("entries", []) as Array
+		for raw_entry in entries:
+			var entry := raw_entry as Dictionary
+			var batch_ref := entry.get("batch_ref") as WeakRef
+			var owner_ref := entry.get("owner_ref") as WeakRef
+			var batch := (
+				batch_ref.get_ref() as MeshInstance3D
+				if batch_ref != null
+				else null
+			)
+			var owner_root := (
+				owner_ref.get_ref() as Node3D
+				if owner_ref != null
+				else null
+			)
+			if (
+				not is_instance_valid(batch)
+				or not is_instance_valid(owner_root)
+				or batch.is_queued_for_deletion()
+				or owner_root.is_queued_for_deletion()
+			):
+				if not bool(entry.get("source_missing", false)):
+					entry["source_missing"] = true
+					_mark_static_multimesh_dirty()
+				continue
+			var current_transform := batch.global_transform
+			var current_visible := owner_root.is_visible_in_tree()
+			var previous_transform: Transform3D = entry.get("last_transform", current_transform)
+			var previous_visible := bool(entry.get("last_visible", current_visible))
+			if (
+				not current_transform.is_equal_approx(previous_transform)
+				or current_visible != previous_visible
+				or bool(entry.get("source_missing", false))
+			):
+				entry["last_transform"] = current_transform
+				entry["last_visible"] = current_visible
+				entry["source_missing"] = false
+				_mark_static_multimesh_dirty()
+
+
 func _apply_web_water(water: MeshInstance3D) -> void:
-	var material := STABLE_WATER_MATERIAL.duplicate(true) as ShaderMaterial
+	var material := PERFORMANCE_WATER_MATERIAL.duplicate(true) as ShaderMaterial
 	water.material_override = material
 	if water.mesh is PlaneMesh:
 		var source_plane := water.mesh as PlaneMesh
@@ -707,6 +1029,8 @@ func _find_nodes_of_type(node: Node, type_name: String) -> Array[Node]:
 func _has_local_probe_options() -> bool:
 	return (
 		_local_query_value("perf_water") == "off"
+		or _local_query_value("perf_water_depth") == "off"
+		or _local_query_value("perf_render_scale").is_valid_float()
 		or _local_query_value("perf_animations") == "off"
 		or _local_query_value("perf_home_troops") == "off"
 		or _local_query_value("perf_building_process") == "off"

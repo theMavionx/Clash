@@ -1,15 +1,16 @@
 class_name BSSkeletonBarrel
 extends RefCounted
-## Main Ship level 6 siege projectile. It uses the island's authored wooden
+## Main Ship level 10 siege projectile. It uses the island's authored wooden
 ## barrel mesh, damages one selected building and releases four temporary
 ## attacker skeletons at the impact point.
 
-const UNLOCK_SHIP_LEVEL: int = 6
+const UNLOCK_SHIP_LEVEL: int = 10
 const ENERGY_COST: int = 8
 const IMPACT_DAMAGE: int = 650
 const FLIGHT_SEC: float = 1.6
 const SKELETON_COUNT: int = 4
-const BARREL_SCALE: float = 0.050
+const SKELETON_POOL_PREPARE_INTERVAL_SEC: float = 0.12
+const BARREL_SCALE: float = 0.065
 const ISLAND_SCENE: PackedScene = preload("res://Model/Island/pirate_island.glb")
 const SKELETON_MODEL: PackedScene = preload(
 	"res://Model/Characters/Skelet/characters/gltf/Skeleton_Minion.glb"
@@ -30,7 +31,11 @@ var _barrel_used: bool = false
 var _barrel_paused_attack: bool = false
 var _barrel_label: Label = null
 var _projectiles: Array[Dictionary] = []
+var _skeleton_pool: Array[Node3D] = []
+var _skeleton_pool_target: int = 0
+var _skeleton_pool_prepare_timer: float = 0.0
 var _summon_serial: int = 0
+var _summon_vfx: Node3D = null
 
 
 func init(building_system: Node3D) -> BSSkeletonBarrel:
@@ -40,11 +45,22 @@ func init(building_system: Node3D) -> BSSkeletonBarrel:
 
 
 func reset(ship_level: int = 1) -> void:
-	_ship_level = clampi(ship_level, 1, 6)
+	_ship_level = clampi(ship_level, 1, 10)
+	prepare_pool(_ship_level)
 	_barrel_used = false
 	_summon_serial = 0
 	_exit_barrel_mode()
 	_clear_projectiles()
+
+
+## Prepares inactive skeleton rigs over separate frames. The barrel impact can
+## then reveal and activate them without instantiating four animated GLBs in a
+## single combat frame.
+func prepare_pool(ship_level: int) -> void:
+	_ship_level = clampi(ship_level, 1, 10)
+	_skeleton_pool_target = SKELETON_COUNT if is_unlocked() else 0
+	_skeleton_pool_prepare_timer = 0.0
+	_prune_skeleton_pool()
 
 
 func is_unlocked() -> bool:
@@ -60,6 +76,7 @@ func energy_cost() -> int:
 
 
 func process(delta: float) -> void:
+	_process_skeleton_pool(delta)
 	for index in range(_projectiles.size() - 1, -1, -1):
 		var projectile: Dictionary = _projectiles[index]
 		var root: Node3D = projectile.get("root", null)
@@ -233,22 +250,23 @@ func _spawn_skeletons(target: Vector3) -> void:
 	var scene_root := bs.get_tree().current_scene
 	if scene_root == null:
 		return
-	var vfx := Node3D.new()
-	vfx.name = "SkeletonBarrelSummonVFX"
-	vfx.set_script(SUMMON_VFX_SCRIPT)
-	scene_root.add_child(vfx)
-	vfx.global_position = target + Vector3(0.0, 0.006, 0.0)
+	_ensure_summon_vfx(scene_root)
+	if is_instance_valid(_summon_vfx):
+		_summon_vfx.global_position = target + Vector3(0.0, 0.006, 0.0)
+		_summon_vfx.call("play_effect")
+	var spawned_skeletons: Array[Node3D] = []
+	var summon_tween := scene_root.create_tween().set_parallel(true)
+	summon_tween.set_process_mode(Tween.TWEEN_PROCESS_PHYSICS)
 	for index in range(SKELETON_COUNT):
 		var angle := TAU * float(index) / float(SKELETON_COUNT) + PI * 0.25
 		var spawn_position := target + Vector3(cos(angle), 0.0, sin(angle)) * 0.16
 		spawn_position = BaseTroop._clamp_to_island(spawn_position)
 		spawn_position.y = bs.grid_y
-		var skeleton := SKELETON_MODEL.instantiate() as Node3D
+		var skeleton := _acquire_skeleton(scene_root)
 		if skeleton == null:
 			continue
 		_summon_serial += 1
 		skeleton.name = "SkeletonBarrelSkeleton_%d" % _summon_serial
-		skeleton.set_script(SKELETON_SCRIPT)
 		skeleton.set("summon_index", _summon_serial)
 		skeleton.set_meta("summoned_unit", true)
 		skeleton.set_meta("skeleton_barrel_summon", true)
@@ -257,26 +275,116 @@ func _spawn_skeletons(target: Vector3) -> void:
 				"replay_order",
 				900000 + _summon_serial
 			)
-		scene_root.add_child(skeleton)
+		skeleton.process_mode = Node.PROCESS_MODE_DISABLED
+		skeleton.visible = true
 		skeleton.global_position = spawn_position - Vector3(0.0, 0.08, 0.0)
 		skeleton.scale = Vector3.ONE * 0.018
-		var tween := skeleton.create_tween().set_parallel(true)
-		tween.tween_property(
+		spawned_skeletons.append(skeleton)
+		summon_tween.tween_property(
 			skeleton,
 			"global_position",
 			spawn_position,
 			0.46
 		).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-		tween.tween_property(
+		summon_tween.tween_property(
 			skeleton,
 			"scale",
 			Vector3.ONE * 0.10,
 			0.46
 		).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-		tween.chain().tween_callback(func():
-			if is_instance_valid(skeleton):
-				skeleton.activate()
+	if not spawned_skeletons.is_empty():
+		summon_tween.chain().tween_callback(
+			_activate_skeleton_batch.bind(spawned_skeletons)
 		)
+
+
+func _activate_skeleton_batch(skeletons: Array[Node3D]) -> void:
+	for index in range(skeletons.size()):
+		var skeleton: Node3D = skeletons[index]
+		if is_instance_valid(skeleton):
+			skeleton.process_mode = Node.PROCESS_MODE_INHERIT
+			skeleton.activate(index == skeletons.size() - 1)
+
+
+func _process_skeleton_pool(delta: float) -> void:
+	if (
+		_barrel_used
+		or _skeleton_pool_target <= 0
+		or not is_instance_valid(bs)
+	):
+		return
+	_prune_skeleton_pool()
+	var scene_root := bs.get_tree().current_scene
+	if scene_root == null:
+		return
+	_ensure_summon_vfx(scene_root)
+	if _skeleton_pool.size() >= _skeleton_pool_target:
+		return
+	_skeleton_pool_prepare_timer -= delta
+	if _skeleton_pool_prepare_timer > 0.0:
+		return
+	var skeleton := _create_dormant_skeleton(scene_root)
+	if skeleton != null:
+		_skeleton_pool.append(skeleton)
+	_skeleton_pool_prepare_timer = SKELETON_POOL_PREPARE_INTERVAL_SEC
+
+
+func _create_dormant_skeleton(scene_root: Node) -> Node3D:
+	var skeleton := SKELETON_MODEL.instantiate() as Node3D
+	if skeleton == null:
+		return null
+	skeleton.name = "SkeletonBarrelSkeletonPool_%d" % _skeleton_pool.size()
+	skeleton.set_script(SKELETON_SCRIPT)
+	skeleton.visible = false
+	skeleton.process_mode = Node.PROCESS_MODE_DISABLED
+	scene_root.add_child(skeleton)
+	skeleton.prepare_activation_visuals()
+	skeleton.add_to_group("skeleton_barrel_pool")
+	skeleton.global_position = Vector3(0.0, -1000.0, 0.0)
+	return skeleton
+
+
+func _ensure_summon_vfx(scene_root: Node) -> void:
+	if is_instance_valid(_summon_vfx):
+		return
+	_summon_vfx = Node3D.new()
+	_summon_vfx.name = "SkeletonBarrelSummonVFXPool"
+	_summon_vfx.set_script(SUMMON_VFX_SCRIPT)
+	_summon_vfx.set("auto_play_on_ready", false)
+	_summon_vfx.set("recycle_on_finish", true)
+	scene_root.add_child(_summon_vfx)
+	_summon_vfx.global_position = Vector3(0.0, -1000.0, 0.0)
+
+
+func _acquire_skeleton(scene_root: Node) -> Node3D:
+	_prune_skeleton_pool()
+	var skeleton: Node3D = null
+	if not _skeleton_pool.is_empty():
+		skeleton = _skeleton_pool.pop_back()
+	else:
+		skeleton = _create_dormant_skeleton(scene_root)
+	if skeleton != null and skeleton.is_in_group("skeleton_barrel_pool"):
+		skeleton.remove_from_group("skeleton_barrel_pool")
+	return skeleton
+
+
+func _prune_skeleton_pool() -> void:
+	for index in range(_skeleton_pool.size() - 1, -1, -1):
+		if not is_instance_valid(_skeleton_pool[index]):
+			_skeleton_pool.remove_at(index)
+
+
+func dispose() -> void:
+	_clear_projectiles()
+	for skeleton in _skeleton_pool:
+		if is_instance_valid(skeleton):
+			skeleton.queue_free()
+	_skeleton_pool.clear()
+	_skeleton_pool_target = 0
+	if is_instance_valid(_summon_vfx):
+		_summon_vfx.queue_free()
+	_summon_vfx = null
+	bs = null
 
 
 func _record_action(building: Dictionary, target: Vector3) -> void:

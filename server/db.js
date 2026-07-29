@@ -7,6 +7,7 @@ const {
   TROOP_SLOT_COSTS,
   MAX_TROOPS,
   HORROR_EVOLUTION,
+  MAX_PLAYER_SHIP_LEVEL,
   PLAYER_SHIP_LEVELS,
   computeDemonKingStats,
   DEFENSE_STATS,
@@ -21,6 +22,8 @@ const {
   buildBotBaseTemplates,
   botResources,
 } = require('./matchmaking_defs');
+const rankedRaids = require('./ranked_raid_tournaments');
+const raidTrophies = require('./raid_trophy_progression');
 const uuidv4 = () => crypto.randomUUID();
 
 const DB_PATH = process.env.CLASH_MAIN_DB || path.join(__dirname, 'clash.db');
@@ -1711,6 +1714,11 @@ try {
 // idempotent pass is what makes clean installs safe before prepared statements
 // reference surrendered_at.
 try { db.exec(`ALTER TABLE battle_sessions ADD COLUMN surrendered_at TEXT`); } catch {}
+try {
+  rankedRaids.ensureRankedRaidSchema(db);
+} catch (e) {
+  console.warn('[db] ranked raid tournament migration:', e.message);
+}
 
 try {
   db.exec(`
@@ -2266,8 +2274,8 @@ try {
 // ---------- Resource Production Definitions ----------
 
 const PRODUCTION_DEFS = {
-  mine:    { resource: 'ore',  rate: [18, 33, 54, 81, 120, 170], max: [200, 400, 800, 1600, 3000, 5000] },    // per minute
-  sawmill: { resource: 'wood', rate: [24, 45, 72, 108, 160, 230], max: [250, 500, 1000, 2000, 3750, 6000] },
+  mine:    { resource: 'ore',  rate: [18, 33, 54, 81, 120, 170, 225], max: [200, 400, 800, 1600, 3000, 5000, 7500] },    // per minute
+  sawmill: { resource: 'wood', rate: [24, 45, 72, 108, 160, 230, 300], max: [250, 500, 1000, 2000, 3750, 6000, 9000] },
 };
 
 // ---------- Prepared Statements ----------
@@ -3140,6 +3148,13 @@ const stmts = {
     INSERT INTO battle_sessions (id, attacker_id, defender_id, reserved_until)
     VALUES (?, ?, ?, ?)
   `),
+  createRankedBattleSession: db.prepare(`
+    INSERT INTO battle_sessions (
+      id, attacker_id, defender_id, reserved_until,
+      tournament_id, tournament_day_utc, tournament_attack_index
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `),
   getBattleSession: db.prepare(`SELECT * FROM battle_sessions WHERE id = ?`),
   finishBattleSessionById: db.prepare(`
     UPDATE battle_sessions
@@ -3256,6 +3271,7 @@ const stmts = {
   getActiveTournamentForPlayer: db.prepare(`
     SELECT t.id AS tournament_id, t.dex, t.dex_scope, t.eligible_dexes, t.mode, t.seeker_only,
            COALESCE(t.event_kind, 'standard') AS event_kind,
+           COALESCE(t.battle_mode, 'casual') AS battle_mode,
            t.reward_config,
            p.team_dex,
            t.gold_boost, COALESCE(t.seeker_gold_boost, 1.0) AS seeker_gold_boost, t.trophy_boost,
@@ -3288,6 +3304,7 @@ const stmts = {
   getTournamentByIdForPlayer: db.prepare(`
     SELECT t.id AS tournament_id, t.dex, t.dex_scope, t.eligible_dexes, t.mode, t.seeker_only,
            COALESCE(t.event_kind, 'standard') AS event_kind,
+           COALESCE(t.battle_mode, 'casual') AS battle_mode,
            t.reward_config,
            p.team_dex,
            t.gold_boost, COALESCE(t.seeker_gold_boost, 1.0) AS seeker_gold_boost, t.trophy_boost,
@@ -3320,6 +3337,7 @@ const stmts = {
     WHERE p.player_id = ?
       AND p.left_at IS NULL
       AND COALESCE(t.event_kind, 'standard') = 'standard'
+      AND COALESCE(t.battle_mode, 'casual') != 'ranked_raids'
       AND COALESCE(t.mode, 'individual') = 'dex_vs_dex'
       AND COALESCE(t.attack_match_policy, 'all') != 'all'
       AND t.status = 'active'
@@ -3713,6 +3731,24 @@ function applyTrophyDelta(playerId, delta, opts = {}) {
   }
   const t = getPlayerActiveTournament(playerId);
   if (t) {
+    if (rankedRaids.isRankedRaidTournament(t)) {
+      const battleSessionId = opts.eventId || opts.battleSessionId || opts.battle_session_id || null;
+      const rankedContext = battleSessionId
+        ? rankedRaids.getRaidContext(db, battleSessionId)
+        : null;
+      if (rankedContext?.tournament_id === t.tournament_id) {
+        // Ranked raid trophies are finalized atomically from the verified
+        // battle result. Skipping the generic battle hook prevents a second
+        // credit and keeps attack/defense deltas in the same event ledger.
+        console.log(`[trophy] player=${playerId.slice(0,8)} RANKED t=${t.tournament_id} deferred_to_ranked_ledger`);
+        return;
+      }
+      // The player explicitly chose casual matchmaking while also enrolled
+      // in a ranked-enabled tournament. That battle belongs to the account
+      // ladder, not the tournament's capped raid score.
+      applyMainTrophyDelta(playerId, delta);
+      return;
+    }
     const boosted = delta > 0
       ? Math.round(delta * Number(t.trophy_boost || 1))
       : delta;
@@ -5664,40 +5700,43 @@ const TH_UNLOCK = {
   shark_trap: 3, // unlocked at TH3
   mage_tower: 4, // unlocked at TH4
   mortar:    5,  // unlocked at TH5
+  cannon:    7,  // unlocked at TH7
 };
 
-// Max count per building type PER TH level: { type: [th1, th2, th3, th4, th5, th6] }
+// Max count per building type PER TH level: { type: [th1, th2, th3, th4, th5, th6, th7] }
 const TH_MAX_COUNT = {
-  mine:         [1, 2, 3, 3, 4, 4],
-  sawmill:      [1, 2, 3, 3, 4, 4],
-  barn:         [1, 1, 1, 1, 1, 1],
-  altar:        [1, 1, 1, 1, 1, 1],
-  archer_tower: [1, 2, 3, 3, 3, 3],
-  tombstone:    [0, 1, 3, 3, 3, 3],  // unlocked at TH2
-  turret:       [0, 0, 3, 3, 3, 3],  // unlocked at TH3
-  shark_trap:   [0, 0, 1, 1, 2, 3],  // one at TH3, then +1 at TH5 and TH6
-  storage:      [0, 1, 2, 3, 3, 3],  // unlocked at TH2
-  mage_tower:   [0, 0, 0, 2, 2, 2],  // unlocked at TH4
-  mortar:       [0, 0, 0, 0, 1, 2],  // unlocked at TH5, second at TH6
-  town_hall:    [1, 1, 1, 1, 1, 1],
+  mine:         [1, 2, 3, 3, 4, 4, 4],
+  sawmill:      [1, 2, 3, 3, 4, 4, 4],
+  barn:         [1, 1, 1, 1, 1, 1, 1],
+  altar:        [1, 1, 1, 1, 1, 1, 1],
+  archer_tower: [1, 2, 3, 3, 3, 3, 3],
+  tombstone:    [0, 1, 3, 3, 3, 3, 3],  // unlocked at TH2
+  turret:       [0, 0, 3, 3, 3, 3, 3],  // unlocked at TH3
+  shark_trap:   [0, 0, 1, 1, 2, 3, 3],  // one at TH3, then +1 at TH5 and TH6
+  storage:      [0, 1, 2, 3, 3, 3, 3],  // unlocked at TH2
+  mage_tower:   [0, 0, 0, 2, 2, 2, 2],  // unlocked at TH4
+  mortar:       [0, 0, 0, 0, 1, 2, 2],  // unlocked at TH5, second at TH6
+  cannon:       [0, 0, 0, 0, 0, 0, 2],  // unlocked at TH7
+  town_hall:    [1, 1, 1, 1, 1, 1, 1],
 };
 
 // Maximum reachable building level at each Town Hall level. This is separate
 // from count unlocks because Mortar Lv2 and Tombstone Lv5 are TH6 content.
 const TH_MAX_LEVEL = {
-  town_hall:    [1, 2, 3, 4, 5, 6],
-  mine:         [1, 2, 3, 4, 5, 6],
-  sawmill:      [1, 2, 3, 4, 5, 6],
-  barn:         [1, 2, 3, 4, 5, 6],
-  storage:      [1, 2, 3, 4, 5, 6],
-  archer_tower: [1, 2, 3, 4, 5, 6],
-  turret:       [1, 2, 3, 4, 5, 6],
-  mage_tower:   [1, 2, 3, 4, 5, 6],
-  tombstone:    [1, 2, 3, 4, 4, 5],
-  mortar:       [1, 1, 1, 1, 1, 2],
-  shark_trap:   [1, 2, 3, 4, 5, 6],
-  port:         [1, 2, 3, 3, 3, 3],
-  altar:        [1, 1, 1, 1, 1, 1],
+  town_hall:    [1, 2, 3, 4, 5, 6, 7],
+  mine:         [1, 2, 3, 4, 5, 6, 7],
+  sawmill:      [1, 2, 3, 4, 5, 6, 7],
+  barn:         [1, 2, 3, 4, 5, 6, 7],
+  storage:      [1, 2, 3, 4, 5, 6, 7],
+  archer_tower: [1, 2, 3, 4, 5, 6, 7],
+  turret:       [1, 2, 3, 4, 5, 6, 7],
+  mage_tower:   [1, 2, 3, 4, 5, 6, 7],
+  tombstone:    [1, 2, 3, 4, 4, 5, 6],
+  mortar:       [1, 1, 1, 1, 1, 2, 3],
+  shark_trap:   [1, 2, 3, 4, 5, 6, 7],
+  cannon:       [1, 1, 1, 1, 1, 1, 7],
+  port:         [1, 2, 3, 3, 3, 3, 3],
+  altar:        [1, 1, 1, 1, 1, 1, 1],
 };
 
 function getBuildingMaxLevelForTownHall(type, townHallLevel) {
@@ -5718,12 +5757,13 @@ const TH_UPGRADE_REQUIRES = {
   3: ['mine', 'sawmill', 'barn', 'storage', 'tombstone', 'archer_tower', 'turret'],
   4: ['mine', 'sawmill', 'barn', 'storage', 'tombstone', 'archer_tower', 'turret', 'mage_tower'],
   5: ['mine', 'sawmill', 'barn', 'storage', 'tombstone', 'archer_tower', 'turret', 'mage_tower', 'mortar', 'shark_trap'],
+  6: ['mine', 'sawmill', 'barn', 'storage', 'tombstone', 'archer_tower', 'turret', 'mage_tower', 'mortar', 'shark_trap'],
 };
 
 const BUILDING_DEFS = {
   town_hall: {
-    size: [4, 4], max_level: 6,
-    hp_levels: [3500, 8000, 16000, 24000, 36000, 52000],
+    size: [4, 4], max_level: 7,
+    hp_levels: [3500, 8000, 16000, 24000, 36000, 52000, 72000],
     cost: { gold: 0, wood: 0, ore: 0 },
     upgrade_cost: {
       2: { gold: 800, wood: 2400, ore: 2000 },
@@ -5731,18 +5771,19 @@ const BUILDING_DEFS = {
       4: { gold: 10000, wood: 20000, ore: 17000 },
       5: { gold: 26000, wood: 52000, ore: 46000 },
       6: { gold: 48000, wood: 72000, ore: 66000 },
+      7: { gold: 70000, wood: 100000, ore: 92000 },
     },
     max_count: 1,
   },
   mine: {
-    size: [3, 3], max_level: 6,
-    hp_levels: [1200, 2200, 3800, 6000, 9000, 13000],
+    size: [3, 3], max_level: 7,
+    hp_levels: [1200, 2200, 3800, 6000, 9000, 13000, 18000],
     cost: { gold: 80, wood: 200, ore: 0 },
     max_count: 4,
   },
   barn: {
-    size: [4, 3], max_level: 6,
-    hp_levels: [2000, 3500, 6000, 9500, 14000, 20000],
+    size: [4, 3], max_level: 7,
+    hp_levels: [2000, 3500, 6000, 9500, 14000, 20000, 28000],
     cost: { gold: 140, wood: 350, ore: 280 },
     max_count: 1,
   },
@@ -5761,54 +5802,68 @@ const BUILDING_DEFS = {
     shop_sku: 'altar',
   },
   sawmill: {
-    size: [3, 3], max_level: 6,
-    hp_levels: [1200, 2200, 3800, 6000, 9000, 13000],
+    size: [3, 3], max_level: 7,
+    hp_levels: [1200, 2200, 3800, 6000, 9000, 13000, 18000],
     cost: { gold: 80, wood: 0, ore: 200 },
     max_count: 4,
   },
   turret: {
-    size: [2, 2], max_level: 6,
-    hp_levels: [900, 1600, 2800, 4500, 6800, 9000],
+    size: [2, 2], max_level: 7,
+    hp_levels: [900, 1600, 2800, 4500, 6800, 9000, 12000],
     cost: { gold: 220, wood: 700, ore: 580 },
     max_count: 6,
   },
   tombstone: {
-    size: [3, 3], max_level: 5,
-    hp_levels: [1000, 1500, 2000, 2700, 3600],
+    size: [3, 3], max_level: 6,
+    hp_levels: [1000, 1500, 2000, 2700, 3600, 4700],
     cost: { gold: 120, wood: 0, ore: 500 },
     max_count: 4,
   },
   storage: {
-    size: [4, 5], max_level: 6,
-    hp_levels: [1400, 2500, 4200, 6500, 9500, 13000],
+    size: [4, 5], max_level: 7,
+    hp_levels: [1400, 2500, 4200, 6500, 9500, 13000, 18000],
     cost: { gold: 140, wood: 550, ore: 0 },
     max_count: 4,
   },
   archer_tower: {
-    size: [3, 3], max_level: 6,
-    hp_levels: [800, 1500, 2500, 3800, 5600, 7800],
+    size: [3, 3], max_level: 7,
+    hp_levels: [800, 1500, 2500, 3800, 5600, 7800, 10200],
     cost: { gold: 180, wood: 650, ore: 0 },
     max_count: 4,
   },
   mage_tower: {
-    size: [3, 3], max_level: 6,
-    hp_levels: [700, 1200, 2000, 3100, 4600, 6300],
+    size: [3, 3], max_level: 7,
+    hp_levels: [700, 1200, 2000, 3100, 4600, 6300, 8300],
     cost: { gold: 800, wood: 0, ore: 1300 },
     max_count: 2,
   },
   mortar: {
-    size: [2, 2], max_level: 2,
-    hp_levels: [1700, 2400],
+    size: [2, 2], max_level: 3,
+    hp_levels: [1700, 2400, 3200],
     cost: { gold: 600, wood: 900, ore: 700 },
     max_count: 2,
   },
   shark_trap: {
-    size: [2, 2], max_level: 6,
-    hp_levels: [1, 1, 1, 1, 1, 1],
-    damage_levels: [500, 750, 1050, 1450, 2000, 2400],
+    size: [2, 2], max_level: 7,
+    hp_levels: [1, 1, 1, 1, 1, 1, 1],
+    damage_levels: [500, 750, 1050, 1450, 2000, 2400, 2900],
     cost: { gold: 300, wood: 800, ore: 650 },
     max_count: 3,
     non_targetable: true,
+  },
+  cannon: {
+    size: [3, 3], max_level: 7,
+    hp_levels: [3200, 3900, 4700, 5600, 6600, 7700, 9000],
+    cost: { gold: 6800, wood: 15500, ore: 13000 },
+    upgrade_cost: {
+      2: { gold: 9500, wood: 22000, ore: 18000 },
+      3: { gold: 14000, wood: 32000, ore: 27000 },
+      4: { gold: 20000, wood: 45000, ore: 38000 },
+      5: { gold: 29000, wood: 61000, ore: 52000 },
+      6: { gold: 41000, wood: 81000, ore: 69000 },
+      7: { gold: 56000, wood: 106000, ore: 90000 },
+    },
+    max_count: 2,
   },
 };
 
@@ -5818,6 +5873,7 @@ const BUILDING_UPGRADE_COST_MULTIPLIERS = {
   4: 5,
   5: 8,
   6: 12,
+  7: 17,
 };
 
 function getBuildingUpgradeCost(type, currentLevel) {
@@ -5825,7 +5881,7 @@ function getBuildingUpgradeCost(type, currentLevel) {
   if (!def) return { gold: 0, wood: 0, ore: 0 };
   const nextLevel = Number(currentLevel || 1) + 1;
   if (nextLevel > def.max_level) return { gold: 0, wood: 0, ore: 0 };
-  if (type === 'town_hall' && def.upgrade_cost?.[nextLevel]) {
+  if (def.upgrade_cost?.[nextLevel]) {
     return { ...def.upgrade_cost[nextLevel] };
   }
   const multiplier = BUILDING_UPGRADE_COST_MULTIPLIERS[nextLevel] || nextLevel;
@@ -6010,13 +6066,13 @@ function cleanupOldBotTargets() {
 }
 
 function virtualBotCandidatesForProfile(attackPower, profile) {
-  const attackerTh = Math.max(1, Math.min(6, Number(attackPower.town_hall_level || 1)));
+  const attackerTh = Math.max(1, Math.min(7, Number(attackPower.town_hall_level || 1)));
   const minTh = profile.recovery_level > 0 ? Math.max(1, attackerTh - 1) : Math.max(1, attackerTh - 1);
   const maxTh = profile.recovery_level > 0
     ? attackerTh
     : profile.selection_reason === 'strong_player'
-      ? Math.min(6, attackerTh + 1)
-      : Math.min(6, attackerTh + 1);
+      ? Math.min(7, attackerTh + 1)
+      : Math.min(7, attackerTh + 1);
   const allowedDifficulties = profile.recovery_level > 0
     ? new Set(['easy', 'normal'])
     : profile.selection_reason === 'strong_player'
@@ -6143,7 +6199,7 @@ const TROOP_DEFS = {
   },
   wind_mage: {
     max_level: 7,
-    min_town_hall_level: 6,
+    min_town_hall_level: 8,
     slot_cost: TROOP_SLOT_COSTS.wind_mage,
     buy_cost: 1500,
     cost: [
@@ -6157,7 +6213,7 @@ const TROOP_DEFS = {
   },
   necromancer: {
     max_level: 7,
-    min_town_hall_level: 6,
+    min_town_hall_level: 7,
     slot_cost: TROOP_SLOT_COSTS.necromancer,
     buy_cost: 1500,
     cost: [
@@ -6171,7 +6227,7 @@ const TROOP_DEFS = {
   },
   horror: {
     max_level: 7,
-    min_town_hall_level: 6,
+    min_town_hall_level: 10,
     slot_cost: TROOP_SLOT_COSTS.horror,
     buy_cost: 2000,
     cost: [
@@ -6262,7 +6318,7 @@ const TROOP_DEFS = {
   },
   ice_golem: {
     max_level: 7,
-    min_town_hall_level: 6,
+    min_town_hall_level: 9,
     slot_cost: TROOP_SLOT_COSTS.ice_golem,
     buy_cost: 1000,
     cost: [
@@ -6325,6 +6381,13 @@ function clampTroopLevelForType(troopType, level) {
   return Math.max(1, Math.min(maxLevel, Math.trunc(numericLevel)));
 }
 
+function getTroopLevelCapForTownHall(troopType, townHallLevel) {
+  const troopKey = normalizeTroopTypeKey(troopType);
+  const maxLevel = Math.max(1, Number(TROOP_DEFS[troopKey]?.max_level) || 1);
+  const normalizedTownHallLevel = Math.max(1, Math.trunc(Number(townHallLevel) || 1));
+  return Math.min(maxLevel, normalizedTownHallLevel);
+}
+
 function isTroopDisabled(troopType) {
   return DISABLED_TROOP_TYPES.has(normalizeTroopTypeKey(troopType));
 }
@@ -6383,7 +6446,7 @@ const ALTAR_SKILL_DEFS = {
   },
 };
 
-const DEFENSE_BUILDING_TYPES = new Set(['turret', 'archer_tower', 'archertower', 'archtower', 'mage_tower', 'tombstone', 'mortar', 'shark_trap']);
+const DEFENSE_BUILDING_TYPES = new Set(['turret', 'archer_tower', 'archertower', 'archtower', 'mage_tower', 'tombstone', 'mortar', 'shark_trap', 'cannon']);
 
 const DEMON_KING_UPGRADE_WINS = {
   2: 1000,
@@ -6404,21 +6467,21 @@ const GRID_SPECS = {
 
 // PvP trophy rewards — trophies only change from battles
 const TROPHY_WIN = 30;
-const TROPHY_LOSS = 15;  // defender loses this on defeat
 
 const TROPHY_TABLE = {
-  town_hall: [50, 120, 250, 450, 720, 1080],
-  mine:      [10, 25, 50, 90, 145, 220],
-  barn:      [10, 25, 50, 90, 145, 220],
+  town_hall: [50, 120, 250, 450, 720, 1080, 1520],
+  mine:      [10, 25, 50, 90, 145, 220, 315],
+  barn:      [10, 25, 50, 90, 145, 220, 315],
   port:      [15, 35, 70, 125, 195],
-  sawmill:   [10, 25, 50, 90, 145, 220],
-  turret:    [20, 45, 90, 160, 255, 380],
-  tombstone: [5, 10, 20, 40, 70],
-  storage:      [10, 25, 50, 90, 145, 220],
-  archer_tower: [15, 35, 70, 125, 200, 300],
-  mage_tower:   [20, 45, 90, 145, 225, 330],
+  sawmill:   [10, 25, 50, 90, 145, 220, 315],
+  turret:    [20, 45, 90, 160, 255, 380, 535],
+  tombstone: [5, 10, 20, 40, 70, 110],
+  storage:      [10, 25, 50, 90, 145, 220, 315],
+  archer_tower: [15, 35, 70, 125, 200, 300, 425],
+  mage_tower:   [20, 45, 90, 145, 225, 330, 460],
   mortar:       [30, 65, 125, 210],
-  shark_trap:   [25, 40, 60, 85, 115, 155],
+  shark_trap:   [25, 40, 60, 85, 115, 155, 205],
+  cannon:       [25, 45, 70, 105, 145, 190, 240],
 };
 
 // ---------- Helper Functions ----------
@@ -8085,6 +8148,7 @@ const TH_BASE_CAPACITY = {
   4: { gold: 12000, wood: 12000, ore: 12000 },
   5: { gold: 18000, wood: 18000, ore: 18000 },
   6: { gold: 25000, wood: 25000, ore: 25000 },
+  7: { gold: 35000, wood: 35000, ore: 35000 },
 };
 
 // Additional capacity per Storage building per level
@@ -8095,6 +8159,7 @@ const STORAGE_CAPACITY = {
   4: { gold: 14000, wood: 14000, ore: 14000 },
   5: { gold: 19000, wood: 19000, ore: 19000 },
   6: { gold: 27000, wood: 27000, ore: 27000 },
+  7: { gold: 36000, wood: 36000, ore: 36000 },
 };
 
 function getResourceCaps(playerId) {
@@ -8104,7 +8169,7 @@ function getResourceCaps(playerId) {
   for (const b of buildings) {
     if (b.type === 'town_hall') thLevel = b.level;
   }
-  const base = TH_BASE_CAPACITY[Math.min(thLevel, 6)] || TH_BASE_CAPACITY[1];
+  const base = TH_BASE_CAPACITY[Math.min(thLevel, 7)] || TH_BASE_CAPACITY[1];
   let maxGold = base.gold;
   let maxWood = base.wood;
   let maxOre = base.ore;
@@ -8681,11 +8746,17 @@ function getNftBackedTroopUpgradeStatus(playerId, troopType, options = {}) {
   const cfg = NFT_BACKED_TROOP_COLLECTIONS[troopKey];
   const def = TROOP_DEFS[troopKey];
   if (!cfg || !def) return null;
+  const currentTownHallLevel = getTownHallLevel(playerId);
+  const townHallLevelCap = getTroopLevelCapForTownHall(troopKey, currentTownHallLevel);
   const levels = stmts.getTroopLevels.all(playerId);
   const current = levels.find(t => t.troop_type === troopKey);
-  const currentLevel = current ? current.level : 1;
+  const currentLevel = Math.min(
+    current ? clampTroopLevelForType(troopKey, current.level) : 1,
+    townHallLevelCap,
+  );
   const nextLevel = currentLevel >= def.max_level ? null : currentLevel + 1;
   const barnGate = getTroopBarnGate(playerId, nextLevel);
+  const townHallReady = nextLevel == null || nextLevel <= currentTownHallLevel;
   const token = normalizeDemonKingBattleToken(options);
   const battleWins = token ? getCollectionBattleWins(playerId, cfg.collection, token.chain, token.tokenId) : 0;
   const ownedCount = listPlayerCollectionNfts(playerId, cfg.collection).length;
@@ -8695,13 +8766,14 @@ function getNftBackedTroopUpgradeStatus(playerId, troopType, options = {}) {
     label: cfg.label,
     current_level: currentLevel,
     max_level: def.max_level,
+    town_hall_level_cap: townHallLevelCap,
     next_level: nextLevel,
     current_barn_level: barnGate.current_barn_level,
     required_barn_level: barnGate.required_barn_level,
     barn_ready: barnGate.barn_ready,
-    current_town_hall_level: getTownHallLevel(playerId),
-    required_town_hall_level: null,
-    town_hall_ready: true,
+    current_town_hall_level: currentTownHallLevel,
+    required_town_hall_level: nextLevel,
+    town_hall_ready: townHallReady,
     owns_nft: ownedCount > 0,
     owned_nfts: ownedCount,
     cost: nextLevel ? def.cost[currentLevel - 1] : null,
@@ -8721,11 +8793,17 @@ function getDemonKingUpgradeStatus(playerId, options = {}) {
   const generic = getNftBackedTroopUpgradeStatus(playerId, 'demon_king', options);
   if (generic) return generic;
   const def = TROOP_DEFS.demon_king;
+  const currentTownHallLevel = getTownHallLevel(playerId);
+  const townHallLevelCap = getTroopLevelCapForTownHall('demon_king', currentTownHallLevel);
   const levels = stmts.getTroopLevels.all(playerId);
   const current = levels.find(t => t.troop_type === 'demon_king');
-  const currentLevel = current ? current.level : 1;
+  const currentLevel = Math.min(
+    current ? clampTroopLevelForType('demon_king', current.level) : 1,
+    townHallLevelCap,
+  );
   const nextLevel = currentLevel >= def.max_level ? null : currentLevel + 1;
   const barnGate = getTroopBarnGate(playerId, nextLevel);
+  const townHallReady = nextLevel == null || nextLevel <= currentTownHallLevel;
   const requiredWins = nextLevel ? demonKingRequiredWins(nextLevel) : null;
   const token = normalizeDemonKingBattleToken(options);
   const battleWins = token ? getDemonKingBattleWins(playerId, token.chain, token.tokenId) : 0;
@@ -8733,13 +8811,14 @@ function getDemonKingUpgradeStatus(playerId, options = {}) {
     troop_type: 'demon_king',
     current_level: currentLevel,
     max_level: def.max_level,
+    town_hall_level_cap: townHallLevelCap,
     next_level: nextLevel,
     current_barn_level: barnGate.current_barn_level,
     required_barn_level: barnGate.required_barn_level,
     barn_ready: barnGate.barn_ready,
-    current_town_hall_level: getTownHallLevel(playerId),
-    required_town_hall_level: null,
-    town_hall_ready: true,
+    current_town_hall_level: currentTownHallLevel,
+    required_town_hall_level: nextLevel,
+    town_hall_ready: townHallReady,
     battle_wins: battleWins,
     wins: battleWins,
     account_battle_wins: getBattleWins(playerId),
@@ -8780,7 +8859,11 @@ function upgradeTroop(playerId, troopType, options = {}) {
 
   const levels = stmts.getTroopLevels.all(playerId);
   const current = levels.find(t => normalizeTroopTypeKey(t.troop_type) === troopKey);
-  const currentLevel = current ? clampTroopLevelForType(troopKey, current.level) : 1;
+  const townHallLevelCap = getTroopLevelCapForTownHall(troopKey, currentTownHallLevel);
+  const currentLevel = Math.min(
+    current ? clampTroopLevelForType(troopKey, current.level) : 1,
+    townHallLevelCap,
+  );
   const expectedLevel = Number(options.expectedLevel ?? options.expected_level ?? options.currentLevel ?? options.current_level ?? 0);
   if (Number.isFinite(expectedLevel) && expectedLevel > 0 && expectedLevel !== currentLevel) {
     return {
@@ -8799,6 +8882,21 @@ function upgradeTroop(playerId, troopType, options = {}) {
   }
 
   const nextLevel = currentLevel + 1;
+  if (nextLevel > townHallLevelCap) {
+    return {
+      error: `Upgrade Town Hall to level ${nextLevel} to upgrade this troop to level ${nextLevel}`,
+      code: 'TOWN_HALL_LEVEL_REQUIRED',
+      status: 403,
+      troop_type: troopKey,
+      current_level: currentLevel,
+      next_level: nextLevel,
+      max_level: def.max_level,
+      town_hall_level_cap: townHallLevelCap,
+      current_town_hall_level: currentTownHallLevel,
+      required_town_hall_level: nextLevel,
+      town_hall_ready: false,
+    };
+  }
   const barnGate = getTroopBarnGate(playerId, nextLevel);
   if (!barnGate.barn_ready) {
     return {
@@ -8870,7 +8968,12 @@ function getTroopLevels(playerId) {
   }
   return ACTIVE_TROOP_TYPES.map((troopType) => ({
     troop_type: troopType,
-    level: clampTroopLevelForType(troopType, levelsByType[troopType]),
+    level: Math.min(
+      clampTroopLevelForType(troopType, levelsByType[troopType]),
+      getTroopLevelCapForTownHall(troopType, currentTownHallLevel),
+    ),
+    max_level: Math.max(1, Number(TROOP_DEFS[troopType]?.max_level) || 1),
+    town_hall_level_cap: getTroopLevelCapForTownHall(troopType, currentTownHallLevel),
     min_town_hall_level: Math.max(1, Number(TROOP_DEFS[troopType]?.min_town_hall_level) || 1),
     unlocked: currentTownHallLevel >= Math.max(1, Number(TROOP_DEFS[troopType]?.min_town_hall_level) || 1),
   }));
@@ -9281,6 +9384,11 @@ function defensePowerForBuilding(building) {
       + (Number(stats.detectRange) || 0) * 165
       + (Number(stats.splashRadius) || 0) * 360
       - (Number(stats.minRange) || 0) * 90;
+  }
+  if (type === 'cannon') {
+    const stats = DEFENSE_STATS.cannon[level] || DEFENSE_STATS.cannon[1];
+    const dps = (Number(stats.damage) || 0) / Math.max(0.1, Number(stats.fireRate) || 1);
+    return dps * 34 + (Number(stats.detectRange) || 0) * 175;
   }
   if (type === 'tombstone') {
     const stats = SKELETON_GUARD.levels?.[level] || SKELETON_GUARD;
@@ -9743,6 +9851,170 @@ function findEnemy(playerId) {
   })();
 }
 
+function findRankedEnemy(playerId, tournamentId) {
+  const player = stmts.getPlayerById.get(playerId);
+  if (!player) return { error: 'Player not found' };
+  const tid = Number(tournamentId);
+  if (!Number.isFinite(tid) || tid <= 0) return { error: 'Invalid ranked tournament' };
+
+  return db.transaction(() => {
+    const tournament = rankedRaids.getTournament(db, tid);
+    if (!tournament || !rankedRaids.isRankedRaidTournament(tournament)) {
+      return { error: 'Ranked raid tournament not found' };
+    }
+    if (!rankedRaids.tournamentIsLive(tournament, sqliteDateFromMs(Date.now()))) {
+      return {
+        error: tournament.paused_at
+          ? 'This ranked tournament is paused.'
+          : 'This ranked tournament is not live yet.',
+      };
+    }
+    const participant = rankedRaids.getParticipant(db, tid, playerId);
+    if (!participant) return { error: 'Join this ranked tournament before attacking.' };
+
+    stmts.expireBattleSessions.run();
+    stmts.cancelBattleSessionsForAttacker.run(playerId);
+    rankedRaids.cleanupStaleReservations(db, tid);
+
+    const config = rankedRaids.normalizeRankedRaidConfig(tournament);
+    const dayUtc = rankedRaids.utcDayKey();
+    const dayStats = rankedRaids.playerDayStats(db, tid, playerId, dayUtc);
+    if (dayStats.attacks_remaining <= 0) {
+      return {
+        error: `Daily ranked attack limit reached (${dayStats.attacks_used}/${dayStats.daily_attack_limit}).`,
+        ranked_tournament: {
+          id: tid,
+          tournament_id: tid,
+          name: tournament.name,
+          ...dayStats,
+        },
+      };
+    }
+
+    const attackCostGold = getAttackCost(playerId);
+    if (!canAfford(playerId, attackCostGold, 0, 0)) {
+      return {
+        error: `Not enough gold to attack. Need ${attackCostGold} gold.`,
+        status: 400,
+        attack_cost_gold: attackCostGold,
+        resources: getResources(playerId),
+      };
+    }
+
+    const attackPower = computeAttackPower(playerId);
+    const candidates = rankedRaids.listEligibleDefenders(db, tournament, playerId, dayUtc);
+    if (!candidates.length) {
+      return {
+        error: 'No ranked opponents are available right now. Their tournament shields or daily defense limits may still be active.',
+        ranked_tournament: {
+          id: tid,
+          tournament_id: tid,
+          name: tournament.name,
+          ...dayStats,
+        },
+      };
+    }
+
+    const attackerScore = Number(participant.trophies || 0);
+    const rankedCandidates = candidates
+      .map((candidate) => ({
+        ...candidate,
+        ranked_match_score:
+          Math.abs(Number(candidate.tournament_trophies || 0) - attackerScore)
+          + Math.abs(Number(candidate.town_hall_level || 1) - Number(attackPower.town_hall_level || 1)) * 40
+          + Number(candidate.ranked_defenses_today || 0) * 5
+          + Math.random() * 8,
+      }))
+      .sort((a, b) => a.ranked_match_score - b.ranked_match_score);
+    const pool = rankedCandidates.slice(0, Math.min(4, rankedCandidates.length));
+    const best = pool[Math.floor(Math.random() * pool.length)] || rankedCandidates[0];
+
+    repairAllBuildings(best.id);
+    const buildings = getPlayerBuildings(best.id);
+    const repairedBase = computeBasePowerFromBuildings(buildings);
+    const resources = getResources(best.id);
+    const sessionId = uuidv4();
+    const reservedUntil = sqliteDateFromMs(Date.now() + BATTLE_RESERVATION_MINUTES * 60_000);
+    const attackNumber = dayStats.attacks_used + 1;
+    const attackerResources = subtractResources(playerId, attackCostGold, 0, 0, {
+      sourceType: 'ranked_tournament_attack_cost',
+      metadata: {
+        tournament_id: tid,
+        tournament_name: tournament.name,
+        defender_id: best.id,
+        battle_session_id: sessionId,
+        day_utc: dayUtc,
+        attack_number: attackNumber,
+      },
+    });
+    if (attackerResources?.error) {
+      return {
+        error: 'Not enough gold to attack',
+        status: 400,
+        attack_cost_gold: attackCostGold,
+        resources: getResources(playerId),
+      };
+    }
+
+    stmts.createRankedBattleSession.run(
+      sessionId,
+      playerId,
+      best.id,
+      reservedUntil,
+      tid,
+      dayUtc,
+      attackNumber
+    );
+    const reservation = rankedRaids.reserveRankedRaid(db, {
+      battleSessionId: sessionId,
+      tournamentId: tid,
+      dayUtc,
+      attackerId: playerId,
+      defenderId: best.id,
+      dailyAttackLimit: config.daily_attack_limit,
+    });
+    if (!reservation.ok) throw new Error(reservation.error);
+
+    return {
+      id: best.id,
+      name: best.name,
+      trophies: Number(best.tournament_trophies || 0),
+      level: best.level,
+      is_bot: 0,
+      matchmaking: {
+        target_is_bot: false,
+        selection_reason: 'ranked_tournament_score_and_town_hall',
+        attack_power: attackPower.power,
+        base_power: repairedBase.power,
+        base_power_ratio: Number((repairedBase.power / Math.max(1, attackPower.power)).toFixed(4)),
+        live_candidate_count: candidates.length,
+      },
+      buildings,
+      resources,
+      attacker_resources: attackerResources,
+      attack_cost_gold: attackCostGold,
+      battle_session_id: sessionId,
+      battle_session_expires_at: reservedUntil,
+      ranked_tournament: {
+        id: tid,
+        tournament_id: tid,
+        name: tournament.name,
+        day_utc: dayUtc,
+        attack_number: attackNumber,
+        attacks_used: attackNumber,
+        attacks_remaining: Math.max(0, config.daily_attack_limit - attackNumber),
+        daily_attack_limit: config.daily_attack_limit,
+        shield_hours: config.shield_hours,
+        max_defenses_per_day: config.max_defenses_per_day,
+        altar_bonus_enabled: config.altar_bonus_enabled,
+      },
+      grid_config: CANONICAL_GRID_CONFIG,
+      grid_configs: CANONICAL_GRID_CONFIGS,
+      combat_grid_version: COMBAT_GRID_VERSION,
+    };
+  })();
+}
+
 function resolveNamedBattleTarget(playerId, rawTargetName) {
   const attacker = stmts.getPlayerById.get(playerId);
   if (!attacker) return { error: 'Player not found' };
@@ -10110,14 +10382,22 @@ const _markSurrenderTxn = db.transaction((attackerId, defenderId, sessionId = ''
     };
   }
   try { stmts.markRaidMatchmakingSurrender.run(session.id, attackerId); } catch {}
-  applyTrophyDelta(attackerId, -TROPHY_LOSS, { source: 'surrender', eventId: session.id });
+  const rankedResult = rankedRaids.cancelRankedRaid(db, session.id, 'surrendered');
+  const surrenderProfile = raidTrophies.trophyProfileForPlayer(db, attackerId);
+  if (!rankedResult) {
+    applyTrophyDelta(attackerId, -surrenderProfile.loss_trophies, {
+      source: 'surrender',
+      eventId: session.id,
+    });
+  }
   return {
     ok: true,
     stamped: true,
     already_surrendered: false,
-    trophy_delta: -TROPHY_LOSS,
+    trophy_delta: rankedResult ? 0 : -surrenderProfile.loss_trophies,
     trophies: stmts.getPlayerById.get(attackerId)?.trophies || 0,
     battle_session_id: session.id,
+    ranked_tournament: rankedResult,
   };
 });
 
@@ -10173,7 +10453,7 @@ function recalculateTrophies(playerId) {
     }
   }
   // Add troop level trophies (5 per troop level above 1)
-  const troops = stmts.getTroopLevels.all(playerId);
+  const troops = getTroopLevels(playerId);
   for (const t of troops) {
     if (t.level > 1) {
       total += (t.level - 1) * 5;
@@ -10395,7 +10675,7 @@ function migratePlayerShipSlotCosts(row) {
 }
 
 function playerShipCapacity(level, capacityOverride = 0) {
-  const normalizedLevel = Math.max(1, Math.min(6, Number(level) || 1));
+  const normalizedLevel = Math.max(1, Math.min(MAX_PLAYER_SHIP_LEVEL, Number(level) || 1));
   return Math.min(
     MAX_TROOPS,
     Math.max(
@@ -10418,7 +10698,7 @@ function playerShipLevelForCapacity(capacity) {
 
 function serializePlayerShip(row) {
   if (!row) return null;
-  const level = Math.max(1, Math.min(6, Number(row.level) || 1));
+  const level = Math.max(1, Math.min(MAX_PLAYER_SHIP_LEVEL, Number(row.level) || 1));
   const config = PLAYER_SHIP_LEVELS[level] || PLAYER_SHIP_LEVELS[1];
   return {
     id: 'main_ship',
@@ -10426,6 +10706,10 @@ function serializePlayerShip(row) {
     capacity: playerShipCapacity(level, row.capacity_override),
     energy: Number(config.energy || 4),
     medkit_unlocked: !!config.medkit_unlocked,
+    freeze_unlocked: !!config.freeze_unlocked,
+    rage_unlocked: !!config.rage_unlocked,
+    tactical_reserve_unlocked: !!config.tactical_reserve_unlocked,
+    skeleton_barrel_unlocked: !!config.skeleton_barrel_unlocked,
     troops: safeShipTroopArray(row.troops),
     troop_template: safeShipTroopArray(row.troop_template),
     slot_cost_version: Number(row.slot_cost_version || 1),
@@ -10523,7 +10807,7 @@ function updatePlayerShipTroops(playerId, troops, troopTemplate = undefined) {
 function upgradePlayerShip(playerId) {
   const ship = getPlayerShip(playerId);
   if (!ship) return { error: 'Player ship not found' };
-  if (ship.level >= 6) return { error: 'Ship is already at max level' };
+  if (ship.level >= MAX_PLAYER_SHIP_LEVEL) return { error: 'Ship is already at max level' };
   const nextLevel = ship.level + 1;
   const config = PLAYER_SHIP_LEVELS[nextLevel];
   const townHallLevel = getTownHallLevel(playerId);
@@ -10595,13 +10879,40 @@ function getPostRaidShieldHours(defenderId) {
 }
 
 function battleDefeat(attackerId, defenderId, battleSessionId = '') {
+  const rankedContext = rankedRaids.getRaidContext(db, battleSessionId);
+  if (rankedContext) {
+    return db.transaction(() => {
+      const sessionCheck = validateBattleSession(battleSessionId, attackerId, defenderId);
+      if (!sessionCheck.ok) return { error: sessionCheck.error };
+      const rankedResult = rankedRaids.finalizeRankedRaid(db, {
+        battleSessionId,
+        result: 'defeat',
+      });
+      finishBattleSession(battleSessionId, attackerId, defenderId, 'completed');
+      return {
+        attackerTrophies: stmts.getPlayerById.get(attackerId)?.trophies || 0,
+        defenderTrophies: stmts.getPlayerById.get(defenderId)?.trophies || 0,
+        trophy_delta: 0,
+        ranked_tournament: rankedResult,
+      };
+    })();
+  }
   const defenderIsBot = isBotPlayer(defenderId);
+  const trophyProfile = raidTrophies.trophyProfileForMatch(db, attackerId, defenderId);
   // Trophy deltas route through applyTrophyDelta so per-player tournament
   // freeze is honoured: a tournament-joined player's main `players.trophies`
   // stays put, and the delta is funneled (with optional positive-only
   // boost) into `tournament_participants.trophies` instead.
-  applyTrophyDelta(attackerId, -TROPHY_LOSS, { source: 'attack_loss', eventId: battleSessionId });
-  if (!defenderIsBot) applyTrophyDelta(defenderId,  TROPHY_WIN);
+  applyTrophyDelta(attackerId, -trophyProfile.attack_loss_trophies, {
+    source: 'attack_loss',
+    eventId: battleSessionId,
+  });
+  if (!defenderIsBot) {
+    applyTrophyDelta(defenderId, trophyProfile.defense_win_trophies, {
+      source: 'defense_win',
+      eventId: battleSessionId,
+    });
+  }
   finishBattleSession(battleSessionId, attackerId, defenderId, 'completed');
   // Return current main trophies for backwards-compat with callers that
   // displayed them in the response. For tournament-frozen players these
@@ -10616,17 +10927,20 @@ function battleDefeat(attackerId, defenderId, battleSessionId = '') {
 const _battleVictoryTxn = db.transaction((attackerId, defenderId, battleSessionId = '') => {
   const sessionCheck = validateBattleSession(battleSessionId, attackerId, defenderId);
   if (!sessionCheck.ok) return { error: sessionCheck.error };
+  const rankedContext = rankedRaids.getRaidContext(db, battleSessionId);
 
   // Check defender has no active shield
   const defender = stmts.getPlayerById.get(defenderId);
   if (!defender) return { error: 'Defender not found' };
-  if (defender.shield_until) {
+  if (!rankedContext && defender.shield_until) {
     const shieldEnd = new Date(defender.shield_until + 'Z');
     if (shieldEnd > new Date()) return { error: 'Defender is shielded' };
   }
 
   // Check cooldown — can't attack same player twice within cooldown
-  if (battleAttackCooldownInfo(defender, attackerId)) return { error: 'Already attacked this player recently' };
+  if (!rankedContext && battleAttackCooldownInfo(defender, attackerId)) {
+    return { error: 'Already attacked this player recently' };
+  }
 
   // Calculate loot — 30% of defender's resources (floored to whole numbers)
   const rewardProfile = getRaidRewardProfile(battleSessionId);
@@ -10703,22 +11017,38 @@ const _battleVictoryTxn = db.transaction((attackerId, defenderId, battleSessionI
 
   // Tournament admins can override post-raid shield length. Zero means
   // "no shield" while still stamping last_attacked_by/at for cooldowns.
-  const shieldHours = getPostRaidShieldHours(defenderId);
-  const shieldUntil = shieldHours > 0
-    ? new Date(Date.now() + shieldHours * 3600000).toISOString().replace('T', ' ').slice(0, 19)
-    : null;
-  stmts.setShield.run(shieldUntil, attackerId, defenderId);
+  if (!rankedContext) {
+    const shieldHours = getPostRaidShieldHours(defenderId);
+    const shieldUntil = shieldHours > 0
+      ? new Date(Date.now() + shieldHours * 3600000).toISOString().replace('T', ' ').slice(0, 19)
+      : null;
+    stmts.setShield.run(shieldUntil, attackerId, defenderId);
+  }
 
   // PvP trophies — attacker gains, defender loses. Routed through
   // applyTrophyDelta so a tournament-joined player has their main
   // trophies frozen and the delta credited (with boost on positive
   // delta) to their tournament_participants row instead.
   const trophyBonus = getAltarTrophyBonus(attackerId);
-  const trophyBase = TROPHY_WIN;
-  const attackerTrophyDelta = trophyBase + trophyBonus.bonus;
-  applyTrophyDelta(attackerId, attackerTrophyDelta, { source: 'attack_win', eventId: battleSessionId });
-  if (!rewardProfile.is_bot) {
-    applyTrophyDelta(defenderId, -TROPHY_LOSS, { source: 'defense_loss', eventId: battleSessionId });
+  const trophyProfile = raidTrophies.trophyProfileForMatch(db, attackerId, defenderId);
+  const trophyBase = trophyProfile.attack_win_trophies;
+  let attackerTrophyDelta = trophyBase + trophyBonus.bonus;
+  let rankedResult = null;
+  if (rankedContext) {
+    rankedResult = rankedRaids.finalizeRankedRaid(db, {
+      battleSessionId,
+      result: 'victory',
+      altarBonus: trophyBonus.bonus,
+    });
+    attackerTrophyDelta = Number(rankedResult?.attacker_trophy_delta || 0);
+  } else {
+    applyTrophyDelta(attackerId, attackerTrophyDelta, { source: 'attack_win', eventId: battleSessionId });
+    if (!rewardProfile.is_bot) {
+      applyTrophyDelta(defenderId, -trophyProfile.defense_loss_trophies, {
+        source: 'defense_loss',
+        eventId: battleSessionId,
+      });
+    }
   }
   stmts.incrementBattleWins.run(attackerId);
   finishBattleSession(battleSessionId, attackerId, defenderId, 'completed');
@@ -10732,8 +11062,10 @@ const _battleVictoryTxn = db.transaction((attackerId, defenderId, battleSessionI
     attacker_resources: getResources(attackerId),
     trophy_base: trophyBase,
     trophy_base_unmodified: TROPHY_WIN,
+    trophy_tier: trophyProfile.defender.trophy_tier,
+    target_town_hall_level: trophyProfile.defender.town_hall_level,
     trophy_target_multiplier: rewardProfile.trophy_multiplier,
-    trophy_bonus: trophyBonus.bonus,
+    trophy_bonus: rankedResult ? Number(rankedResult.altar_bonus || 0) : trophyBonus.bonus,
     trophy_bonus_level: trophyBonus.level,
     trophy_bonus_range: { min: trophyBonus.min, max: trophyBonus.max },
     trophy_delta: attackerTrophyDelta,
@@ -10744,6 +11076,7 @@ const _battleVictoryTxn = db.transaction((attackerId, defenderId, battleSessionI
     // counter took the increment); the futures/HUD UI reads tournament
     // standings via the dedicated /api/tournaments/:id/me endpoint.
     trophies: stmts.getPlayerById.get(attackerId)?.trophies || 0,
+    ranked_tournament: rankedResult,
   };
 });
 
@@ -10797,6 +11130,7 @@ function compactSimTrace(trace) {
     'guard_target_lost',
     'defense_fire',
     'defense_projectile_hit',
+    'defense_projectile_lost_target',
     'troop_projectile_lost_target',
     'cannon_fire',
     'cannon_hit',
@@ -10809,6 +11143,7 @@ function compactSimTrace(trace) {
       t: event.t,
       id: event.buildingId ?? event.guardId ?? event.troopId ?? null,
       type: event.type ?? event.targetType ?? null,
+      defenseType: event.defenseType ?? null,
       troop: event.troop ?? null,
       replayOrder: event.replayOrder ?? event.targetReplayOrder ?? event.sourceReplayOrder ?? null,
       targetId: event.targetId ?? event.target?.id ?? null,
@@ -11571,10 +11906,13 @@ module.exports = {
   stmts,
   BUILDING_DEFS,
   BUILDING_UPGRADE_COST_MULTIPLIERS,
+  PRODUCTION_DEFS,
   TH_UNLOCK,
   TH_MAX_COUNT,
   TH_MAX_LEVEL,
   TH_UPGRADE_REQUIRES,
+  TH_BASE_CAPACITY,
+  STORAGE_CAPACITY,
   getBuildingMaxLevelForTownHall,
   GRID_SPECS,
   TROOP_DEFS,
@@ -11663,12 +12001,14 @@ module.exports = {
   clearTownHallFlag,
   upgradeTroop,
   getTroopLevels,
+  getTroopLevelCapForTownHall,
   getTroopTownHallUnlock,
   upgradeAltarSkill,
   getAltarSkillLevels,
   getAltarBonusPct,
   applyAltarProsperityResourceBonus,
   findEnemy,
+  findRankedEnemy,
   inspectEnemyByName,
   findEnemyByName,
   listRevengeTargets,
@@ -11691,6 +12031,7 @@ module.exports = {
   updatePlayerShipTroops,
   upgradePlayerShip,
   playerShipCapacity,
+  MAX_PLAYER_SHIP_LEVEL,
   PLAYER_SHIP_LEVELS,
   TROOP_SLOT_COST_VERSION,
   buyShip,
@@ -11711,6 +12052,8 @@ module.exports = {
   // tournament_participants alongside the normal flow.
   getPlayerActiveTournament,
   getPlayerTournamentById,
+  rankedRaids,
+  raidTrophies,
   applyTrophyDelta,
   applyGoldReward,
   recordTournamentTrade,

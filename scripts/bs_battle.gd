@@ -163,8 +163,8 @@ func reset() -> void:
 func _ship_level_from_fleet(fleet: Array, fallback: int = 1) -> int:
 	for ship_value in fleet:
 		if ship_value is Dictionary:
-			return clampi(int(ship_value.get("level", fallback)), 1, 6)
-	return clampi(fallback, 1, 6)
+			return clampi(int(ship_value.get("level", fallback)), 1, 10)
+	return clampi(fallback, 1, 10)
 
 
 func _battle_elapsed_sec() -> float:
@@ -202,13 +202,13 @@ func _paid_casualty_counts(casualties: Dictionary = {}, use_pending_if_empty: bo
 		source = _pending_troop_death_counts
 	var counts: Dictionary = {}
 	for raw_name in source:
-		var name: String = str(raw_name).split(":")[0]
-		if name == "" or name == "DemonKing" or name == "FireDragon":
+		var troop_name: String = str(raw_name).split(":")[0]
+		if troop_name == "" or troop_name == "DemonKing" or troop_name == "FireDragon":
 			continue
 		var count: int = int(source.get(raw_name, 0))
 		if count <= 0:
 			continue
-		counts[name] = int(counts.get(name, 0)) + count
+		counts[troop_name] = int(counts.get(troop_name, 0)) + count
 	return counts
 
 
@@ -776,7 +776,7 @@ func _dispatch_battle_entry_switch(combat_warmup: Variant, warmup_already_waited
 
 ## Kicks off the enemy search flow. The cloud closes immediately; fleet
 ## snapshotting and scene preparation happen while the home island is covered.
-func _on_find_pressed() -> void:
+func _on_find_pressed(tournament_id: int = 0) -> void:
 	if is_viewing_enemy or _find_in_progress:
 		return
 	var entry_started_ticks: int = Time.get_ticks_msec()
@@ -816,7 +816,7 @@ func _on_find_pressed() -> void:
 	await _await_hidden_combat_warmup(combat_warmup)
 	if bs.find_button:
 		bs.find_button.text = "Searching..."
-	var result: Dictionary = await net.find_enemy()
+	var result: Dictionary = await net.find_enemy(tournament_id)
 	print("[BATTLE_ENTRY] find_enemy_done elapsed_ms=", Time.get_ticks_msec() - entry_started_ticks)
 	if bs.find_button:
 		bs.find_button.disabled = false
@@ -1642,9 +1642,9 @@ func _replay_troops_for_action(action: Dictionary) -> Array:
 	var raw_troops = action.get("troops", [])
 	if raw_troops is Array:
 		for troop in raw_troops:
-			var name: String = str(troop).strip_edges()
-			if name != "":
-				result.append(name)
+			var troop_name: String = str(troop).strip_edges()
+			if troop_name != "":
+				result.append(troop_name)
 	elif action.has("troopType"):
 		var legacy_name: String = str(action.get("troopType", "")).strip_edges()
 		if legacy_name != "":
@@ -1662,7 +1662,7 @@ func _replay_fleet_from_actions(actions: Array) -> Array:
 		var replay_ship_level: int = 1
 		for action in actions:
 			if str(action.get("type", "")) == "deploy_troop":
-				replay_ship_level = clampi(int(action.get("shipLevel", 1)), 1, 6)
+				replay_ship_level = clampi(int(action.get("shipLevel", 1)), 1, 10)
 				break
 		return [{"id": "replay_main_ship", "level": replay_ship_level, "capacity": manual_troops.size(), "troops": manual_troops}]
 	for action in actions:

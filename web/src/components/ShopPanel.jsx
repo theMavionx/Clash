@@ -12,6 +12,7 @@ import imgPort from '../assets/buildings/port.png';
 import imgSawmill from '../assets/buildings/sawmill.png';
 import imgTownHall from '../assets/buildings/townhall.png';
 import imgTurret from '../assets/buildings/turret.png';
+import imgCannon from '../assets/buildings/cannon.png';
 import imgTombstone from '../assets/buildings/tombstone.png';
 import imgArcherTower from '../assets/buildings/archertower.png';
 import imgStorage from '../assets/buildings/storage.png';
@@ -35,6 +36,7 @@ const DESC_MAP = {
   port: 'Deploy ships to attack',
   town_hall: 'Main building',
   turret: 'Shoots enemies',
+  cannon: 'Heavy ground defense',
   tombstone: 'Spawns skeletons',
   archtower: 'Ranged defense',
   archer_tower: 'Ranged defense',
@@ -50,6 +52,7 @@ const CATEGORY_MAP = {
   sawmill: 'Economy',
   barn: 'Military',
   turret: 'Defense',
+  cannon: 'Defense',
   tombstone: 'Defense',
   archtower: 'Defense',
   archer_tower: 'Defense',
@@ -69,6 +72,7 @@ const THUMBNAIL_MAP = {
   sawmill: imgSawmill,
   town_hall: imgTownHall,
   turret: imgTurret,
+  cannon: imgCannon,
   tombstone: imgTombstone,
   archtower: imgArcherTower,
   archer_tower: imgArcherTower,

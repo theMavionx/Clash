@@ -99,7 +99,7 @@ func reset(ship_level: int = 0) -> void:
 		var controller: Node = bs.get_node_or_null("../MainShipController")
 		if is_instance_valid(controller):
 			resolved_level = int(controller.get_meta("ship_level", 1))
-	resolved_level = clampi(resolved_level, 1, 6)
+	resolved_level = clampi(resolved_level, 1, 10)
 	_cannon_energy = int(bs._main_ship_energy_for_level(resolved_level)) if is_instance_valid(bs) else 4
 	_cannon_next_cost = 1
 	if is_instance_valid(bs):
@@ -136,6 +136,24 @@ func _stop_attack_ship_waves() -> void:
 		if tw and tw.is_valid():
 			tw.kill()
 	_attack_ship_wave_tweens.clear()
+
+
+func dispose() -> void:
+	_stop_attack_ship_waves()
+	for cannonball in _ship_cannonballs:
+		var cannonball_node = cannonball.get("node", null)
+		if is_instance_valid(cannonball_node):
+			cannonball_node.queue_free()
+	_ship_cannonballs.clear()
+	if is_instance_valid(_ship_flash):
+		_ship_flash.queue_free()
+	if is_instance_valid(_ship_explosion):
+		_ship_explosion.queue_free()
+	_ship_flash = null
+	_ship_explosion = null
+	_ship_flash_timer = 0.0
+	_ship_explosion_timer = 0.0
+	bs = null
 
 # ---------------------------------------------------------------------------
 # Muzzle flash

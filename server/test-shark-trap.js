@@ -5,6 +5,7 @@ const assert = require('assert');
 const Module = require('module');
 const path = require('path');
 const { CANONICAL_GRID_CONFIGS } = require('./combat_grid_config');
+const { TROOP_STATS } = require('./combat_defs');
 
 const BUILDING_DEFS = {
   town_hall: { size: [4, 4], hp_levels: [3500] },
@@ -88,7 +89,11 @@ const mimicEnd = mimic._troopEndState.find(row => row.type === 'mimic');
 assert.equal(mimic._sharkTrapsTriggered, 1, 'Mimic must consume the trap');
 assert.equal(mimic.casualties.Mimic || 0, 0, 'Mimic must not take trap damage');
 assert.ok(mimicEnd, 'Mimic should remain in the replay result');
-assert.equal(mimicEnd.hp, 300, 'Mimic HP must remain unchanged after trap activation');
+assert.equal(
+  mimicEnd.hp,
+  TROOP_STATS.mimic[1].hp,
+  'Mimic HP must remain unchanged after trap activation',
+);
 const mimicTrigger = mimic._trace.find(row => row.kind === 'shark_trap_trigger');
 assert.equal(mimicTrigger.trapImmune, true);
 assert.equal(mimicTrigger.damage, 0);
@@ -102,7 +107,11 @@ const demon = simulate(base(5), [deploy('DemonKing', 0)], { DemonKing: 5 });
 const demonEnd = demon._troopEndState.find(row => row.type === 'demon_king');
 assert.ok(demonEnd, 'Demon King should be present in the replay result');
 assert.equal(demon.casualties.DemonKing || 0, 0, 'level 5 trap must not instantly eliminate Demon King');
-assert.equal(demonEnd.hp, 1024, 'level 5 trap should deal 2000 damage to a 3024 HP common Demon King');
+assert.equal(
+  demonEnd.hp,
+  TROOP_STATS.demon_king[5].hp - BUILDING_DEFS.shark_trap.damage_levels[4],
+  'level 5 trap should subtract configured damage from the effective Demon King HP',
+);
 const demonTrigger = demon._trace.find(row => row.kind === 'shark_trap_trigger');
 assert.equal(demonTrigger.instantKill, false);
 assert.equal(demonTrigger.damage, 2000);
@@ -115,4 +124,7 @@ const twoTraps = simulate([
 assert.equal(twoTraps._sharkTrapsTriggered, 2, 'each trap should trigger independently');
 assert.equal(twoTraps.casualties.Knight, 2, 'two traps should eliminate two troops');
 
-console.log('[SHARK_TRAP_SERVER] PASS levels=1..6 mimic=consumed_immune air=ignored demon_hp=1024 two_traps=2');
+console.log(
+  `[SHARK_TRAP_SERVER] PASS levels=1..6 mimic=consumed_immune air=ignored `
+  + `demon_hp=${demonEnd.hp} two_traps=2`,
+);

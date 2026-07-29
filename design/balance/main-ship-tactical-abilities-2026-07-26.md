@@ -2,16 +2,17 @@
 
 **Date:** 2026-07-26
 **Status:** Implemented locally
-**Unlock:** Main Ship level 6
-**Shared starting energy:** 14
+**Progression:** Main Ship levels 6-10
+**Maximum shared starting energy:** 22
 
 ## Final Balance
 
-| Ability | Cost | Uses | Radius | Duration | Effect |
-|---|---:|---:|---:|---:|---|
-| Freeze Orb | 5 | 1 | 0.95 | 6s | Freezes defensive buildings and armed traps |
-| Rage Field | 7 | 1 | 0.82 | 9s | Paid troops gain x2 damage and x1.25 movement/attack speed |
-| Skeleton Barrel | 8 | 1 | Targeted | 18s skeleton lifetime | Deals 650 impact damage and summons 4 skeletons |
+| Ability | Ship level | Cost | Uses | Radius | Duration | Effect |
+|---|---:|---:|---:|---:|---:|---|
+| Healing Field | 6 | 6 | 1 | 0.72 | 14s | Heals paid troops inside the field |
+| Freeze Orb | 7 | 5 | 1 | 0.95 | 6s | Freezes defensive buildings and armed traps |
+| Rage Field | 8 | 7 | 1 | 0.82 | 9s | Paid troops gain x2 damage and x1.25 movement/attack speed |
+| Skeleton Barrel | 10 | 8 | 1 | Targeted | 18s skeleton lifetime | Deals 650 impact damage and summons 4 skeletons |
 
 Existing Cannon, Rally, and Medkit abilities continue to use the same shared
 energy pool. New ability costs are fixed and do not change the escalating Cannon
@@ -68,16 +69,16 @@ ground traps.
 
 ## Energy Decisions
 
-The 14 starting energy intentionally permits some combinations and blocks others:
+The level-based energy budget intentionally expands the number of available
+combinations without increasing troop capacity:
 
-| Combination | Cost | Result |
-|---|---:|---|
-| Freeze + Rage | 12 | Allowed, 2 energy remains |
-| Medkit + Freeze | 11 | Allowed, 3 energy remains |
-| Medkit + Rage | 13 | Allowed, 1 energy remains |
-| Freeze + Barrel | 13 | Allowed, 1 energy remains |
-| Rage + Barrel | 15 | Requires earned energy |
-| Medkit + Barrel | 14 | Uses the full starting pool |
+| Ship level | Energy | New option | Tactical result |
+|---:|---:|---|---|
+| 6 | 14 | Healing Field | Sustain plus limited cannon/rally reserve |
+| 7 | 16 | Freeze Orb | Healing + Freeze costs 11, leaving 5 |
+| 8 | 18 | Rage Field | Freeze + Rage costs 12, leaving 6 |
+| 9 | 20 | Tactical Reserve | Healing + Freeze + Rage costs 18 |
+| 10 | 22 | Skeleton Barrel | Rage + Barrel costs 15, leaving 7 |
 
 This makes Skeleton Barrel the largest commitment, Freeze the flexible control
 option, and Rage the highest-upside formation ability.

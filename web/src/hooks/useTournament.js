@@ -8,24 +8,29 @@
 // for the next poll tick.
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { usePlayer } from './useGodot';
+import { useDex } from '../contexts/DexContext';
 
 export function useTournament({ active = false, pollMs = 30000 } = {}) {
   const player = usePlayer();
   const token = player?.token;
+  const { dex } = useDex();
   const [me, setMe] = useState(null);
   const [loading, setLoading] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState(null);
   const tokenRef = useRef(token);
+  const dexRef = useRef(dex);
   tokenRef.current = token;
+  dexRef.current = dex;
 
   const refresh = useCallback(async () => {
     if (!token) return;
     setLoading(true);
     setError(null);
     const fetchToken = token;
+    const fetchDex = dex;
     try {
-      const res = await fetch('/api/tournaments/me', {
+      const res = await fetch(`/api/tournaments/me?dex=${encodeURIComponent(fetchDex || '')}`, {
         headers: { 'x-token': fetchToken },
       });
       if (!res.ok) throw new Error('failed to load tournament');
@@ -33,7 +38,7 @@ export function useTournament({ active = false, pollMs = 30000 } = {}) {
       // Stale-response guard: if the token changed while this was in flight
       // (account switch), drop the result so we don't paint Bob's tournament
       // state into Alice's UI.
-      if (tokenRef.current !== fetchToken) return;
+      if (tokenRef.current !== fetchToken || dexRef.current !== fetchDex) return;
       setMe(data);
       setLoaded(true);
     } catch (e) {
@@ -42,7 +47,7 @@ export function useTournament({ active = false, pollMs = 30000 } = {}) {
     } finally {
       setLoading(false);
     }
-  }, [token]);
+  }, [token, dex]);
 
   useEffect(() => {
     if (!active) return;
@@ -53,10 +58,11 @@ export function useTournament({ active = false, pollMs = 30000 } = {}) {
       return;
     }
     setLoaded(false);
+    setMe(null);
     refresh();
     const id = setInterval(refresh, pollMs);
     return () => clearInterval(id);
-  }, [active, token, pollMs, refresh]);
+  }, [active, token, dex, pollMs, refresh]);
 
   const join = useCallback(async (tournamentId, options = {}) => {
     if (!token) return false;
@@ -275,34 +281,39 @@ export function useTournamentDailyPoints(tournamentId, { active = false, pollMs 
 export function useTournamentHistory({ active = false } = {}) {
   const player = usePlayer();
   const token = player?.token;
+  const { dex } = useDex();
   const [items, setItems] = useState(null);
   const [loading, setLoading] = useState(false);
   const tokenRef = useRef(token);
+  const dexRef = useRef(dex);
   tokenRef.current = token;
+  dexRef.current = dex;
 
   const refresh = useCallback(async () => {
     if (!token) return;
     setLoading(true);
     const fetchToken = token;
+    const fetchDex = dex;
     try {
-      const res = await fetch('/api/tournaments/history?limit=20', {
+      const res = await fetch(`/api/tournaments/history?limit=20&dex=${encodeURIComponent(fetchDex || '')}`, {
         headers: { 'x-token': fetchToken },
       });
       if (!res.ok) throw new Error('failed');
       const data = await res.json();
-      if (tokenRef.current !== fetchToken) return;
+      if (tokenRef.current !== fetchToken || dexRef.current !== fetchDex) return;
       setItems(data.tournaments || []);
     } catch {
       /* keep last-known list on transient failure */
     } finally {
       setLoading(false);
     }
-  }, [token]);
+  }, [token, dex]);
 
   useEffect(() => {
     if (!active || !token) return;
+    setItems(null);
     refresh();
-  }, [active, token, refresh]);
+  }, [active, token, dex, refresh]);
 
   return { items, loading, refresh };
 }

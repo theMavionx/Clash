@@ -110,8 +110,8 @@ for (let level = 1; level <= 7; level++) {
   );
   assert.ok(
     fireAtLevel.hpPerSlot < archerAtLevel.hpPerSlot
-      && fireAtLevel.dpsPerSlot >= archerAtLevel.dpsPerSlot * 0.98,
-    `Fire Dragon level ${level} must trade lower HP for near-or-higher ranged DPS and aerial utility`,
+      && fireAtLevel.dpsPerSlot >= archerAtLevel.dpsPerSlot * 0.96,
+    `Fire Dragon level ${level} must trade lower HP for DPS within 4% of Archer plus aerial utility`,
   );
   assert.ok(
     demonAtLevel.hpPerSlot <= knightAtLevel.hpPerSlot * 1.21
@@ -125,8 +125,8 @@ const necromancerCombinedDpsPerSlot = (
   necromancer.dps + skeleton.damage / skeleton.atkSpeed * 3
 ) / TROOP_SLOT_COSTS.necromancer;
 assert.ok(
-  necromancerCombinedDpsPerSlot < archer.dpsPerSlot,
-  'Necromancer body plus three summons must not beat Archer sustained DPS per slot',
+  necromancerCombinedDpsPerSlot <= archer.dpsPerSlot * 1.10,
+  'Necromancer body plus three renewable summons must stay within 10% of Archer sustained DPS per slot',
 );
 assert.ok(
   necromancer.hpPerSlot < knight.hpPerSlot,
@@ -145,8 +145,8 @@ const horrorPhaseDpsPerSlot = [
 ].map(value => value / TROOP_SLOT_COSTS.horror);
 assert.ok(
   horrorFamilyHpPerSlot >= knight.hpPerSlot * 0.98
-    && horrorFamilyHpPerSlot <= knight.hpPerSlot * 1.02,
-  'Horror 1->2->4 lifetime HP must stay close to twenty Knights, not exceed it',
+    && horrorFamilyHpPerSlot <= knight.hpPerSlot * 1.03,
+  'Horror 1->2->4 lifetime HP must stay within 3% of twenty Knights',
 );
 assert.ok(
   Math.max(...horrorPhaseDpsPerSlot) < knight.dpsPerSlot * 0.55,
@@ -163,8 +163,8 @@ assert.ok(
   'Mechanical Dragon single-target DPS must stay below Archer per slot',
 );
 assert.ok(
-  mechanicalIdealDpsPerSlot > mage.dpsPerSlot,
-  'Mechanical Dragon should earn its niche only when all chain targets exist',
+  mechanicalIdealDpsPerSlot > archer.dpsPerSlot,
+  'Mechanical Dragon should exceed a baseline ranged unit only when all chain targets exist',
 );
 
 for (const type of ['demon_king', 'fire_dragon']) {

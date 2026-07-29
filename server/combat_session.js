@@ -64,6 +64,7 @@ const ICE_GOLEM_PRIORITY_DEFENSE_TYPES = new Set([
   'mage_tower',
   'tombstone',
   'mortar',
+  'cannon',
 ]);
 const ICE_GOLEM_FREEZABLE_DEFENSE_TYPES = new Set([
   ...ICE_GOLEM_PRIORITY_DEFENSE_TYPES,
@@ -216,9 +217,19 @@ function troopTargetType(troop) {
   return troop?.flying ? UNIT_TARGET_AIR : UNIT_TARGET_GROUND;
 }
 
+function isTroopUntargetableToDefenses(troop) {
+  if (!troop?.untargetableWhileRunning || troop._state !== 'running') {
+    return false;
+  }
+  return !(
+    troop.concealmentEndsOnAttack
+    && troop._defenseConcealmentBroken
+  );
+}
+
 function canDefenseTargetTroop(defense, troop) {
   if (!troop || troop.hp <= 0) return false;
-  if (troop.untargetableWhileRunning && troop._state === 'running') return false;
+  if (isTroopUntargetableToDefenses(troop)) return false;
   const minRange = Math.max(0, Number(defense?.minRange) || 0);
   if (
     minRange > 0
@@ -274,11 +285,9 @@ function computeAttackSlot(t, target, aliveTroops) {
   if (t._slotEvalTimer >= SLOT_EVAL_INTERVAL_SEC) {
     t._slotEvalTimer %= SLOT_EVAL_INTERVAL_SEC;
     const targetTroops = [];
-    const targetAngles = [];
     for (const other of aliveTroops) {
       if (other.hp <= 0 || other._currentTarget !== target) continue;
       targetTroops.push(other);
-      targetAngles.push(Math.atan2(other.x - target.x, other.z - target.z));
     }
     if (!t._currentTargetIsGuard && targetTroops.length > HIGH_DENSITY_TROOP_THRESHOLD) {
       const denseIndex = targetTroops.indexOf(t);
@@ -290,6 +299,9 @@ function computeAttackSlot(t, target, aliveTroops) {
         z: target.z + Math.cos(t._orbitAngle) * t.range * 0.95,
       };
     }
+    const targetAngles = targetTroops.map((other) => (
+      Math.atan2(other.x - target.x, other.z - target.z)
+    ));
     let bestAngle = myAngle;
     let bestMinDist = 0;
     for (const offset of ATTACK_SLOT_OFFSETS) {
@@ -457,6 +469,16 @@ function findNearestAlive(x, z, targets, options = {}) {
     if (options.filter && !options.filter(t)) continue;
     const dsq = distSq2d(x, z, t.x, t.z);
     if (dsq < bestDistSq) {
+      bestDistSq = dsq;
+      best = t;
+      continue;
+    }
+    if (
+      options.preferReplayOrderOnTie
+      && best
+      && Math.abs(dsq - bestDistSq) <= 1e-12
+      && finiteNumber(t.replayOrder, t.id) < finiteNumber(best.replayOrder, best.id)
+    ) {
       bestDistSq = dsq;
       best = t;
       continue;
@@ -661,7 +683,7 @@ function updateProjectiles(projectiles, phase = null, onHit = null, onLost = nul
       projectiles.splice(i, 1);
       continue;
     }
-    if (phase === 'defense' && tgt.untargetableWhileRunning && tgt._state === 'running') {
+    if (phase === 'defense' && isTroopUntargetableToDefenses(tgt)) {
       if (onLost) onLost(p, 'target_untargetable');
       projectiles.splice(i, 1);
       continue;
@@ -759,7 +781,7 @@ function verifyReplay({
   const sharkTraps = buildings
     .filter(b => b.type === 'shark_trap')
     .map(b => {
-      const damageLevels = BUILDING_DEFS.shark_trap?.damage_levels || [500, 750, 1050, 1450, 2000, 2400];
+      const damageLevels = BUILDING_DEFS.shark_trap?.damage_levels || [500, 750, 1050, 1450, 2000, 2400, 2900];
       const level = Math.max(1, Math.min(damageLevels.length, Number(b.level) || 1));
       return {
         buildingId: b.id,
@@ -2131,6 +2153,19 @@ function verifyReplay({
         _searchTimer: 0,
       });
     }
+    if (b.type === 'cannon') {
+      const s = DEFENSE_STATS.cannon[b.level] || DEFENSE_STATS.cannon[1];
+      defenses.push({
+        buildingId: b.id, type: 'cannon',
+        damage: wardDamage(s.damage), fireRate: s.fireRate, detectRange: s.detectRange,
+        projSpeed: s.projSpeed,
+        targetGround: true, targetAir: false,
+        x: b.x, z: b.z,
+        timer: 0, isAttacking: false, targetId: null,
+        frozenUntil: 0,
+        _searchTimer: 0,
+      });
+    }
     if (b.type === 'tombstone') {
       const guardCount = b.level || 1;
       const guardLevel = Math.max(1, Math.min(Object.keys(SKELETON_GUARD.levels || {}).length || 1, Number(b.level) || 1));
@@ -2635,7 +2670,12 @@ function verifyReplay({
           chainRadius: Math.max(0, Number(stats.chainRadius) || 0),
           chainFalloffBps: Math.max(0, Math.min(10000, Number(stats.chainFalloffBps) || 0)),
           trapImmune: !!stats.trapImmune,
+          trapImmuneDamageMultiplier: Math.max(
+            0,
+            Number(stats.trapImmuneDamageMultiplier) || 0,
+          ),
           untargetableWhileRunning: !!stats.untargetableWhileRunning,
+          concealmentEndsOnAttack: !!stats.concealmentEndsOnAttack,
           defensePriority: !!stats.defensePriority,
           deathFreezeRadius: Math.max(0, Number(stats.deathFreezeRadius) || 0),
           deathFreezeDuration: Math.max(0, Number(stats.deathFreezeDuration) || 0),
@@ -2647,6 +2687,7 @@ function verifyReplay({
           hitDone: false,
           _pendingTarget: null,
           _state: stats.untargetableWhileRunning ? 'running' : 'idle',
+          _defenseConcealmentBroken: false,
           _retargetCounter: 0,
           _sepCounter: 0,
           _slotEvalTimer: 0,
@@ -2919,7 +2960,17 @@ function verifyReplay({
       const hpBefore = target.hp;
       const trapImmune = !!target.trapImmune;
       const instantKill = !trapImmune && normalizeTroopTypeName(target.type) !== 'demon_king';
-      const appliedDamage = trapImmune ? 0 : (instantKill ? Math.max(1, target.hp) : trap.damage);
+      const appliedDamage = trapImmune
+        ? Math.max(
+          0,
+          Math.round(
+            trap.damage * Math.max(
+              0,
+              Number(target.trapImmuneDamageMultiplier) || 0,
+            ),
+          ),
+        )
+        : (instantKill ? Math.max(1, target.hp) : trap.damage);
       target.hp -= appliedDamage;
       trap.triggered = true;
       trap.troopId = target.id;
@@ -3094,7 +3145,10 @@ function verifyReplay({
 
       if (!currentTarget && d._searchTimer >= DEFENSE_SEARCH_SEC) {
         d._searchTimer = 0;
-        const near = findNearestAlive(d.x, d.z, aliveTroops, { filter: t => canDefenseTargetTroop(d, t) });
+        const near = findNearestAlive(d.x, d.z, aliveTroops, {
+          filter: t => canDefenseTargetTroop(d, t),
+          preferReplayOrderOnTie: true,
+        });
         traceEvent('defense_scan', {
           defenseType: d.type,
           buildingId: d.buildingId,
@@ -3139,7 +3193,8 @@ function verifyReplay({
 
       if (!d.isAttacking) {
         d.isAttacking = true;
-        // Turret: first shot instant (timer = fireRate). Archer Tower: full delay (timer = 0)
+        // Turret alone fires instantly. Cannon and the other projectile
+        // defenses acquire normally, then wait through their full first cycle.
         d.timer = d.type === 'turret' ? d.fireRate : 0;
       }
 
@@ -3515,6 +3570,23 @@ function verifyReplay({
         );
         if (rageBoosted) rageBoostedMoveTicks++;
         if (slotDist < 0.05 || targetDist <= t.range) {
+          if (
+            t.concealmentEndsOnAttack
+            && !t._defenseConcealmentBroken
+          ) {
+            t._defenseConcealmentBroken = true;
+            traceEvent('troop_defense_concealment_broken', {
+              troopId: t.id,
+              replayOrder: t.replayOrder ?? null,
+              troop: t.type,
+              target: traceEntityPayload(
+                target,
+                targetIsGuard ? 'guard' : 'building',
+              ),
+              x: round3(t.x),
+              z: round3(t.z),
+            });
+          }
           t._state = 'attacking';
           t.atkTimer = 0;
           t.hitDone = false;

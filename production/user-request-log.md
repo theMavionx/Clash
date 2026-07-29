@@ -1,4 +1,4 @@
-﻿# User Request Log
+# User Request Log
 
 Purpose: durable log of explicit user requests to Codex for this repository.
 
@@ -2033,3 +2033,62 @@ Follow-up:
 - Request: add the green Pea Shooter from `Polygonal Creatures Pack 2` as a new balanced attacking unit that fires green balls and occupies about five ship slots.
 - Scope: import only the required authored model, projectile, green material, and animations; implement a frame-synchronized three-pea burst in Godot and the authoritative server simulation; add Town Hall progression, five-slot capacity, 500-Gold loading cost, aliases, persistence, UI portrait, mobile-safe attack selection, replay telemetry, parity tests, and balance verification.
 - No commit, push, production deploy, or production database mutation requested.
+
+### UR-2026-07-28-CANNON6-MATERIAL-SCENE
+- Timestamp: 2026-07-28 Europe/Kyiv
+- Request: bind the six textures added beside `res://Model/cannon/Cannon6.glb` to the base and cannon meshes so the asset can be added to a Godot scene and tested; match the provided gray-and-gold reference.
+- Scope: create reusable materials for both mesh parts, create a ready-to-instance `Cannon6.tscn`, and verify texture bindings plus the rendered appearance in Godot 4.6.
+- No commit, push, or production deploy requested.
+
+### UR-2026-07-28-CANNON-LEVELS-ASSET-PACK
+- Timestamp: 2026-07-28 Europe/Kyiv
+- Request: rebuild the cannon assets from `C:\Users\Admin\Downloads\Cannons.rar` as ten clean per-level Godot scenes, follow the source README where meshes or textures are shared, remove the obsolete single-cannon folder, connect every authored texture, and address the art review that the shading is too smooth by changing the normals.
+- Scope: use the existing production turret as Level 1 because the archive starts at Cannon 2; create `Model/cannons/level_01` through `level_10`; keep base and barrel independently editable; configure solid, PBR, and emission materials according to the authored maps; add a reusable flat-normal scene post-import pipeline; audit all assets; and verify import, material bindings, geometry normals, and rendered appearance in Godot 4.6.
+- Verification: all ten scenes instantiate with two active mesh/material parts, all 43 textures resolve, 10,822 imported triangles have zero flat-normal mismatches, and an OpenGL Compatibility render pass confirms the complete visual progression including masked emission on Levels 8-10.
+- No commit, push, or production deploy requested.
+
+### UR-2026-07-28-CANNON10-TEXTURE-REVISION
+- Timestamp: 2026-07-28 Europe/Kyiv
+- Request: update Cannon Level 10 with the revised textures from `C:\Users\Admin\Downloads\Cannon10.rar`.
+- Scope: compare the follow-up archive against the installed Level 10 maps, replace the changed barrel albedo and metallic maps, retain the byte-identical base roughness and optional emission source, disable the obsolete purple barrel emission so it does not override the revised gold surface, and preserve the existing material/API structure.
+- Verification: both changed maps reimport in Godot 4.6; all ten scenes and materials still resolve; Level 10 retains zero flat-normal mismatches across 1,612 triangles; and the revised scene renders successfully in OpenGL Compatibility.
+- No commit, push, or production deploy requested.
+
+### UR-2026-07-28-CANNON-STRUCTURE-MATERIAL-CORRECTIONS
+- Timestamp: 2026-07-28 Europe/Kyiv
+- Request: Level 1 must be a Cannon building rather than the unrelated turret; extract the rooftop cannon and its texture from Town Hall 10; restore the visibly broken/missing bases on Levels 2-3 to match the supplied reference; and stop gold inserts from rendering nearly black.
+- Scope: export `Cannon1_001` and `Cannon1Base_001` from Town Hall 10 into a standalone two-mesh Level 1 GLB with a copied palette; scale its ready scene to the Level 2 footprint; use double-sided materials and the referenced brown solid base on Levels 2-3; and tune authored metallic maps to a stylized 0.35 strength on affected levels.
+- Verification: all ten standalone scenes resolve and render; Level 1 contains only the two extracted cannon meshes and no Town Hall dependency; Levels 2-3 show their complete wooden bases; the current 9,996 triangles have zero flat-normal mismatches; and OpenGL Compatibility previews confirm bright gold inserts on Levels 4 and 6-10.
+- No commit, push, or production deploy requested.
+
+### UR-2026-07-28-TH7-CANNON-COMBAT
+- Timestamp: 2026-07-28 Europe/Kyiv
+- Request: add Town Hall 7, advance every established upgradeable building line by one level, unlock the new Cannon defense, keep its base fixed while the barrel turns toward targets, launch a visible projectile, reuse the existing Turret VFX language, and animate the shot with readable Clash-style squash, recoil, and recovery; verify the motion frame by frame.
+- Scope: synchronize TH7 progression, limits, costs, stats, Cannon validation, combat simulation, replay telemetry, admin tools, and client/server parity; implement the Level 1 Cannon scene behavior with ground-only targeting, yaw-gated fire, pooled projectile/VFX, anticipation, squash/stretch, recoil, and impact feedback; preserve the existing API shapes.
+- Verification: focused Godot progression and Cannon behavior tests, Node client/server parity and combat tests, TH6/non-Cannon regression tests, Godot editor import/parse scan, Web production build, six rendered animation checkpoints, and deterministic TH6/TH7 balance simulations.
+- No commit, push, or production deploy requested.
+
+### UR-2026-07-28-CANNON-SEVEN-LEVELS
+- Timestamp: 2026-07-28 Europe/Kyiv
+- Request: allow Cannon to upgrade through seven levels immediately at Town Hall 7 and balance it at approximately the same power as Archer Tower; attacking units will be strengthened separately later.
+- Scope: connect the authored Cannon L1-L7 scenes, add level-specific muzzle anchors, HP/combat/trophy/price curves, allow L1-L7 under the TH7 gate, preserve two-Cannon count and existing API shapes, and target same-level Archer Tower DPS while retaining ground-only targeting and shorter high-level range.
+- Verification: real server upgrades from L1 through L7, L8 rejection, client/server stat parity, seven-scene Godot hierarchy checks, fixed-base yaw/recoil validation, projectile/freeze/ward/telemetry combat tests, TH6 regression, export manifest regeneration, and deterministic 288-match TH7 balance plus Cannon-fire ablation.
+- No commit, push, or production deploy requested.
+
+### UR-2026-07-29-MAIN-SHIP-LEVEL-10-ABILITIES
+- Timestamp: 2026-07-29 Europe/Kyiv
+- Request: extend Main Ship upgrades and tactical boost unlocks through Level 10; make boost availability depend on ship level while keeping troop capacity capped after Level 5.
+- Scope: define a meaningful Level 6-10 energy, cost, Town Hall, and ability-unlock progression; synchronize Godot, server authority, persistence/API payloads, and React ship UI; preserve the Level 5 capacity cap; verify upgrades, unlock gates, client/server parity, balance, and the local UI flow.
+- No commit, push, or production deploy requested.
+
+### UR-2026-07-29-RANKED-RAID-TOURNAMENTS
+- Timestamp: 2026-07-29 Europe/Kyiv
+- Request: add an optional ranked raid tournament where each player has a configurable number of counted attacks per UTC day (20 by default) and wins by net tournament trophies earned on offense minus trophies lost when their base is raided; support simultaneous independent tournaments.
+- Scope: add server-authoritative per-tournament/per-day raid accounting, defense caps, optional tournament shield duration, optional altar trophy bonus, preregistration, isolated leaderboards, admin settings, and a polished Casual Battle / Ranked Battle selector that appears only while a ranked tournament is available; create a local tournament and verify the complete browser flow with screenshots.
+- No commit, push, production deploy, or production database mutation requested.
+
+### UR-2026-07-29-AI-TOURNAMENT-BUILDER
+- Timestamp: 2026-07-29 Europe/Kyiv
+- Request: add an AI assistant to the tournament creation admin UI using the configured OpenRouter key, so an administrator can describe a tournament and receive a complete configuration; also support per-day volume targets and per-day rewards.
+- Scope: add a server-owned tournament planning prompt and schema, validated preview/apply API, model fallback, daily schedule persistence with backward compatibility, wizard UI for AI generation and manual day editing, local end-to-end browser verification, then commit, push, deploy, and verify production.
+- Production deployment explicitly requested after local verification.

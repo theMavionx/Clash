@@ -132,9 +132,9 @@ func cleanup_defense_visuals() -> void:
 
 func _clear_owned_projectiles() -> void:
 	for p in _pool:
-		var node: Node = p.get("node", null) as Node
-		if is_instance_valid(node):
-			node.queue_free()
+		var raw_node: Variant = p.get("node", null)
+		if is_instance_valid(raw_node):
+			(raw_node as Node).queue_free()
 	for fx in _active_fx:
 		if is_instance_valid(fx):
 			fx.queue_free()
@@ -166,7 +166,6 @@ func _physics_process(delta: float) -> void:
 	delta = BaseTroop.combat_delta(delta)
 	if not _pool_ready:
 		_build_pool()
-	_update_range_visuals()
 
 	_update_projectiles(delta)
 	if _freeze_remaining > 0.0:
@@ -216,11 +215,15 @@ func _find_target() -> void:
 	_target = null
 	var nearest_dist_sq: float = detect_sq
 	var my_pos: Vector3 = global_position
-	for troop in BaseTroop._get_troops_cached():
+	var troops: Array = BaseTroop._get_troops_cached()
+	var troop_positions: PackedVector3Array = BaseTroop._get_troop_positions_cached()
+	for troop_index in range(troops.size()):
+		var troop: Variant = troops[troop_index]
 		if not BaseTroop.can_defense_target_troop(troop, CAN_TARGET_GROUND, CAN_TARGET_AIR):
 			continue
-		var dx: float = my_pos.x - troop.global_position.x
-		var dz: float = my_pos.z - troop.global_position.z
+		var troop_pos: Vector3 = troop_positions[troop_index]
+		var dx: float = my_pos.x - troop_pos.x
+		var dz: float = my_pos.z - troop_pos.z
 		var d_sq: float = dx * dx + dz * dz
 		if d_sq < min_sq:
 			continue
@@ -229,19 +232,25 @@ func _find_target() -> void:
 			_target = troop
 
 
-func _fire_at_target(target: Node3D) -> void:
+func _fire_at_target(target: Variant) -> void:
 	if not _is_valid_mortar_target(target):
+		return
+	var target_node := target as Node3D
+	if target_node == null:
 		return
 	var p: Dictionary = _get_pooled_projectile()
 	if p.is_empty():
 		return
 
-	var start_pos: Vector3 = _muzzle_position(target.global_position)
-	var impact_pos: Vector3 = target.global_position
+	var start_pos: Vector3 = _muzzle_position(target_node.global_position)
+	var impact_pos: Vector3 = target_node.global_position
 	impact_pos.y = global_position.y + 0.03
 
-	var projectile: Node3D = p.get("node", null) as Node3D
-	if not is_instance_valid(projectile):
+	var raw_projectile: Variant = p.get("node", null)
+	if not is_instance_valid(raw_projectile):
+		return
+	var projectile := raw_projectile as Node3D
+	if projectile == null:
 		return
 	projectile.global_position = start_pos
 	projectile.scale = Vector3.ONE * PROJECTILE_SCALES[clampi(level - 1, 0, PROJECTILE_SCALES.size() - 1)]
@@ -249,7 +258,7 @@ func _fire_at_target(target: Node3D) -> void:
 	projectile.set_physics_process(false)
 
 	p.active = true
-	p.target = target
+	p.target = target_node
 	p.start_pos = start_pos
 	p.impact_pos = impact_pos
 	p.elapsed = 0.0
@@ -260,7 +269,7 @@ func _fire_at_target(target: Node3D) -> void:
 	_active.append(p)
 
 	_play_attack_sfx(start_pos)
-	_record_defense_telemetry("defense_fire", target, {
+	_record_defense_telemetry("defense_fire", target_node, {
 		"damage": damage,
 		"min_range": snappedf(min_range, 0.001),
 		"splash_radius": snappedf(splash_radius, 0.001),
@@ -273,13 +282,16 @@ func _fire_at_target(target: Node3D) -> void:
 	})
 
 
-func _is_valid_mortar_target(target: Node3D) -> bool:
+func _is_valid_mortar_target(target: Variant) -> bool:
 	if not is_instance_valid(target):
 		return false
-	if not BaseTroop.can_defense_target_troop(target, CAN_TARGET_GROUND, CAN_TARGET_AIR):
+	var target_node := target as Node3D
+	if target_node == null:
 		return false
-	var dx: float = global_position.x - target.global_position.x
-	var dz: float = global_position.z - target.global_position.z
+	if not BaseTroop.can_defense_target_troop(target_node, CAN_TARGET_GROUND, CAN_TARGET_AIR):
+		return false
+	var dx: float = global_position.x - target_node.global_position.x
+	var dz: float = global_position.z - target_node.global_position.z
 	var dist_sq: float = dx * dx + dz * dz
 	return dist_sq >= min_range * min_range and dist_sq <= detect_range * detect_range
 
@@ -288,8 +300,11 @@ func _update_projectiles(delta: float) -> void:
 	var i: int = _active.size() - 1
 	while i >= 0:
 		var p: Dictionary = _active[i]
-		var node: Node3D = p.get("node", null) as Node3D
-		if not is_instance_valid(node):
+		var raw_projectile_node: Variant = p.get("node", null)
+		var projectile_node: Node3D = null
+		if is_instance_valid(raw_projectile_node):
+			projectile_node = raw_projectile_node as Node3D
+		if projectile_node == null:
 			_active.remove_at(i)
 			i -= 1
 			continue
@@ -299,14 +314,9 @@ func _update_projectiles(delta: float) -> void:
 		var t: float = clampf(float(p.elapsed) / duration, 0.0, 1.0)
 		var start_pos: Vector3 = p.start_pos
 		var impact_pos: Vector3 = p.impact_pos
-		var prev_pos: Vector3 = node.global_position
 		var next_pos: Vector3 = start_pos.lerp(impact_pos, t)
 		next_pos.y += sin(t * PI) * float(p.arc_height)
-		node.global_position = next_pos
-
-		var dir: Vector3 = next_pos - prev_pos
-		if dir.length_squared() > 0.000001:
-			node.look_at(next_pos + dir.normalized(), Vector3.UP)
+		projectile_node.global_position = next_pos
 
 		if t >= 1.0:
 			_apply_splash(impact_pos, int(p.damage), float(p.radius))
@@ -320,11 +330,19 @@ func _update_projectiles(delta: float) -> void:
 func _apply_splash(impact_pos: Vector3, base_damage: int, radius: float) -> void:
 	var radius_sq: float = radius * radius
 	var hit_count: int = 0
-	for troop in BaseTroop._get_troops_cached():
+	# Splash damage can kill a troop and invalidate the shared combat caches
+	# while this loop is still running. Snapshot both aligned arrays so that a
+	# death cannot shrink the collection underneath the current projectile.
+	var troops: Array = BaseTroop._get_troops_cached().duplicate()
+	var troop_positions: PackedVector3Array = BaseTroop._get_troop_positions_cached().duplicate()
+	var snapshot_size: int = mini(troops.size(), troop_positions.size())
+	for troop_index in range(snapshot_size):
+		var troop: Variant = troops[troop_index]
 		if not BaseTroop.can_defense_target_troop(troop, CAN_TARGET_GROUND, CAN_TARGET_AIR):
 			continue
-		var dx: float = impact_pos.x - troop.global_position.x
-		var dz: float = impact_pos.z - troop.global_position.z
+		var troop_pos: Vector3 = troop_positions[troop_index]
+		var dx: float = impact_pos.x - troop_pos.x
+		var dz: float = impact_pos.z - troop_pos.z
 		var dist_sq: float = dx * dx + dz * dz
 		if dist_sq > radius_sq:
 			continue
@@ -414,9 +432,11 @@ func _get_pooled_projectile() -> Dictionary:
 func _return_to_pool(p: Dictionary) -> void:
 	p.active = false
 	p.target = null
-	var node: Node3D = p.get("node", null) as Node3D
-	if is_instance_valid(node):
-		node.visible = false
+	var raw_projectile_node: Variant = p.get("node", null)
+	if is_instance_valid(raw_projectile_node):
+		var projectile_node := raw_projectile_node as Node3D
+		if projectile_node != null:
+			projectile_node.visible = false
 	_pool_exhausted_warned = false
 
 

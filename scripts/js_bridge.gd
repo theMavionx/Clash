@@ -504,7 +504,8 @@ func _handle_react_action(action: String, data: Dictionary) -> void:
 				send_to_react("placement_started", {"building_id": bid})
 		"find_enemy":
 			if bs:
-				bs._on_find_pressed()
+				var tournament_id: int = int(data.get("tournament_id", 0)) if data is Dictionary else 0
+				bs._on_find_pressed(tournament_id)
 		"revenge_attack":
 			if bs and bs._battle and bs._battle.has_method("_on_revenge_pressed"):
 				bs._battle._on_revenge_pressed(int(data.get("battle_id", 0)))

@@ -9,9 +9,9 @@ const LEVEL_STATS := {
 	2: {"hp": 2400, "damage": 162, "atk_speed": 1.42},
 	3: {"hp": 3120, "damage": 216, "atk_speed": 1.34},
 	4: {"hp": 4080, "damage": 282, "atk_speed": 1.27},
-	5: {"hp": 5160, "damage": 366, "atk_speed": 1.20},
-	6: {"hp": 6360, "damage": 474, "atk_speed": 1.13},
-	7: {"hp": 7800, "damage": 612, "atk_speed": 1.06},
+	5: {"hp": 6244, "damage": 443, "atk_speed": 1.20},
+	6: {"hp": 9540, "damage": 711, "atk_speed": 1.13},
+	7: {"hp": 11200, "damage": 870, "atk_speed": 1.06},
 }
 
 const ANIM_FILES: Array[String] = [

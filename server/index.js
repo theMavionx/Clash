@@ -1777,7 +1777,7 @@ function renderBuildingTools() {
   const resourceBox = document.getElementById('localResourceRows');
   const trophyBox = document.getElementById('localTrophyRows');
   if (!maxBox || !rowsBox || !resourceBox || !trophyBox) return;
-  maxBox.innerHTML = [1, 2, 3, 4, 5, 6].map((level) =>
+  maxBox.innerHTML = [1, 2, 3, 4, 5, 6, 7].map((level) =>
     '<button class="btn" onclick="buildMaxVillage(' + level + ')">' + level + '</button>'
   ).join('');
   resourceBox.innerHTML = ADMIN_RESOURCE_TOOL_DEFS.map((def) => {
@@ -1872,11 +1872,11 @@ async function buildMaxVillage(level) {
 
 async function maxEverything() {
   if (!localToolsPlayer) return;
-  if (!confirm('Clear buildings, build max TH6 village, and fill all resources for ' + localToolsPlayer + '?')) return;
+  if (!confirm('Clear buildings, build max TH7 village, and fill all resources for ' + localToolsPlayer + '?')) return;
   setLocalToolsStatus('Building max village...');
   try {
     const village = await apiPost('/admin/players/' + encodeURIComponent(localToolsPlayer) + '/max-village', {
-      town_hall_level: 6,
+      town_hall_level: 7,
     });
     const resources = await apiPost('/admin/players/' + encodeURIComponent(localToolsPlayer) + '/add-resources', {
       gold: 999999999,

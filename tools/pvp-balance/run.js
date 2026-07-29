@@ -4,6 +4,7 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { UNIT_ROLE_REGISTRY } = require('./unit_roles');
 
 const DEFAULT_SEED = 42;
 const DEFAULT_BASE_COUNT = 144;
@@ -12,6 +13,9 @@ const DEFAULT_TARGET_WIN_RATE = 0.55;
 const DEFAULT_BAND = 0.08;
 const DEFAULT_MIN_GROUP_SIZE = 6;
 const DEFAULT_PROFILE = 'all';
+const ELITE_MIN_SAMPLES = 3;
+const BREAKABILITY_ADAPTIVE_ARMY_LIMIT = 3;
+const COUNTER_META_CONFIRMATION_CONTEXTS = 2;
 const ARCHETYPES = [
   'compact-core',
   'defense-ring',
@@ -25,6 +29,12 @@ const ARCHETYPES = [
   'trap-lanes',
   'corner-keep',
   'diamond',
+  'rear-keep',
+  'cannon-screen',
+  'crossfire',
+  'echelon-left',
+  'echelon-right',
+  'kill-corridor',
 ];
 const BASE_LEVEL_PROFILES = [
   'maxed',
@@ -33,16 +43,70 @@ const BASE_LEVEL_PROFILES = [
   'rushed-economy',
   'mixed',
 ];
+const ARCHETYPE_PROFILE_PHASE = Object.freeze({
+  'compact-core': 0,
+  'defense-ring': 1,
+  'layered-rings': 2,
+  'split-core': 3,
+  'southern-funnel': 4,
+  'resource-shield': 0,
+  'wide-spread': 1,
+  'asymmetric-left': 2,
+  'asymmetric-right': 2,
+  'trap-lanes': 3,
+  'corner-keep': 4,
+  diamond: 0,
+  'rear-keep': 1,
+  'cannon-screen': 2,
+  crossfire: 3,
+  'echelon-left': 4,
+  'echelon-right': 4,
+  'kill-corridor': 0,
+});
 const ATTACK_LEVEL_PROFILES = ['low', 'mid', 'maxed', 'mixed'];
-const SPAWN_PROFILES = [
+const SPAWN_FORMATIONS = [
   'wide-line',
-  'center-push',
+  'center-column',
   'left-flank',
   'right-flank',
   'dual-flank',
-  'staggered-waves',
+  'three-lane',
+  'diamond',
+  'vanguard-wedge',
+  'inverted-wedge',
+  'edge-sweep',
 ];
+const SPAWN_TIMINGS = ['burst', 'rapid', 'two-waves', 'three-waves', 'drip'];
+const DEPLOYMENT_ORDERS = ['roster-order', 'tank-front-support-rear'];
+const SPAWN_PROFILES = SPAWN_FORMATIONS.flatMap((formation) => (
+  SPAWN_TIMINGS.flatMap((timing) => (
+    DEPLOYMENT_ORDERS.map((order) => `${formation}__${timing}__${order}`)
+  ))
+));
+const TACTIC_PROFILES = [
+  'none',
+  'cannon-focus',
+  'cannon-rally',
+  'rally-core',
+  'freeze-defense',
+  'rage-entry',
+  'medkit-entry',
+  'skeleton-barrel',
+  'freeze-rage',
+  'freeze-barrel',
+  'cannon-medkit',
+  'rally-rage',
+];
+const NFT_RARITIES = ['common', 'epic', 'legendary', 'unrevealed'];
 const MATCHUP_OFFSETS = [0, 0, 0, -1, 1];
+const DEPLOYMENT_ROLE_BY_TROOP = Object.freeze(Object.fromEntries(
+  Object.entries(UNIT_ROLE_REGISTRY).map(([type, contract]) => [
+    type,
+    contract.role,
+  ]),
+));
+
+validateSpawnMechanicCatalog();
 
 const args = parseArgs(process.argv.slice(2));
 if (args.help) {
@@ -73,7 +137,18 @@ try {
   });
 } finally {
   if (gameDb?.db?.open) gameDb.db.close();
-  fs.rmSync(scratchDir, { recursive: true, force: true });
+  try {
+    fs.rmSync(scratchDir, { recursive: true, force: true });
+  } catch (cleanupError) {
+    // On Windows, a failed db module initialization can leave a native
+    // SQLite handle alive until process exit. Cleanup must never replace the
+    // actual schema/import error with a secondary EPERM.
+    if (args.verbose) {
+      console.warn(
+        `[balance-lab] scratch cleanup deferred: ${cleanupError.message}`,
+      );
+    }
+  }
 }
 
 function runBalanceLab({ repoRoot: root, gameDb: dbApi, combatDefs, verifyReplay, args: cli }) {
@@ -95,7 +170,122 @@ function runBalanceLab({ repoRoot: root, gameDb: dbApi, combatDefs, verifyReplay
   const catalogOnly = !!cli['catalog-only'];
   const verbose = !!cli.verbose;
   const exhaustive = !!cli.exhaustive;
+  const labOffenseScaleByLevel = Object.fromEntries(
+    [5, 6, 7].map((level) => [
+      level,
+      numberArg(cli[`lab-offense-scale-th${level}`], 1, 0.5, 2.0),
+    ]),
+  );
+  const labOffenseScaleByTroop = Object.fromEntries(
+    Object.keys(combatDefs.TROOP_STATS || {})
+      .map((type) => [
+        type,
+        numberArg(
+          cli[`lab-offense-scale-${type.replaceAll('_', '-')}`],
+          1,
+          0.5,
+          3.0,
+        ),
+      ])
+      .filter(([, scale]) => scale !== 1),
+  );
+  const labDefenseDamageScale = numberArg(
+    cli['lab-defense-damage-scale'],
+    1,
+    0.25,
+    1.5,
+  );
+  const labLateDefenseScale = numberArg(
+    cli['lab-late-defense-scale'],
+    1,
+    0.25,
+    1.5,
+  );
+  const labTh7DefenseScale = numberArg(
+    cli['lab-th7-defense-scale'],
+    1,
+    0.5,
+    1.5,
+  );
+  const labMimicRevealAfterAttack = !!cli['lab-mimic-reveal-after-attack'];
+  const labMimicTrapDamageScale = numberArg(
+    cli['lab-mimic-trap-damage-scale'],
+    0,
+    0,
+    1,
+  );
+  applyLabOffenseScales(
+    combatDefs,
+    labOffenseScaleByLevel,
+    labOffenseScaleByTroop,
+  );
+  applyLabDefenseDamageScale(combatDefs, labDefenseDamageScale);
+  applyLabLateDefenseScale(combatDefs, labLateDefenseScale);
+  applyLabTownHallDefenseScale(combatDefs, dbApi, 7, labTh7DefenseScale);
+  if (labMimicRevealAfterAttack) {
+    for (const stats of Object.values(combatDefs.TROOP_STATS?.mimic || {})) {
+      stats.concealmentEndsOnAttack = true;
+    }
+  }
+  if (labMimicTrapDamageScale > 0) {
+    for (const stats of Object.values(combatDefs.TROOP_STATS?.mimic || {})) {
+      stats.trapImmuneDamageMultiplier = labMimicTrapDamageScale;
+    }
+  }
+  const sameTownHallOnly = !!cli['same-th-only'];
+  const attackLevelProfile = resolveAttackLevelProfile(cli['attack-level-profile']);
+  const attackPolicyCount = catalogOnly
+    ? 0
+    : intArg(cli['attack-policies'], 0, 0, 100_000);
+  const adversarialRounds = catalogOnly
+    ? 0
+    : intArg(cli['adversarial-rounds'], 0, 0, 20);
+  const adversarialMatchesPerRound = intArg(
+    cli['adversarial-matches'],
+    500,
+    1,
+    100_000,
+  );
+  const breakabilityPoliciesPerTownHall = catalogOnly
+    ? 0
+    : intArg(cli['breakability-policies'], 0, 0, 50);
+  const breakabilityCalibrationBasesPerTownHall = catalogOnly
+    ? 0
+    : intArg(cli['breakability-calibration-bases'], 5, 1, 25);
+  const breakabilityNftRarity = strRarity(
+    cli['breakability-rarity'] || 'common',
+  );
+  const breakabilityCandidatePolicyCount = catalogOnly
+    ? 0
+    : intArg(
+      cli['breakability-candidate-policies'],
+      attackPolicyCount,
+      0,
+      100_000,
+    );
+  const unitUtilityBasesPerTroop = catalogOnly
+    ? 0
+    : intArg(cli['unit-utility-bases'], 0, 0, 1_000);
+  const requestedUnitUtilityTroops = new Set(
+    String(cli['unit-utility-troops'] || '')
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean),
+  );
+  const nftRarityProbeBasesPerTroop = catalogOnly
+    ? 0
+    : intArg(cli['nft-rarity-probe-bases'], 0, 0, 1_000);
+  const baseCounterMatches = catalogOnly
+    ? 0
+    : intArg(cli['base-counter-matches'], 0, 0, 1_000_000);
   const catalog = discoverCatalog(dbApi, combatDefs);
+  const unknownUtilityTroops = [...requestedUnitUtilityTroops]
+    .filter((type) => !catalog.troops.some((troop) => troop.type === type));
+  if (unknownUtilityTroops.length > 0) {
+    throw new Error(
+      `Unknown --unit-utility-troops values: ${unknownUtilityTroops.join(', ')}`,
+    );
+  }
   const townHalls = resolveTownHallProfile(
     String(cli.profile || DEFAULT_PROFILE),
     catalog.maxTownHall,
@@ -103,18 +293,43 @@ function runBalanceLab({ repoRoot: root, gameDb: dbApi, combatDefs, verifyReplay
   const requestedMatches = catalogOnly
     ? 0
     : intArg(cli.matches, DEFAULT_MATCHES, 1, 1_000_000);
+  const parityFixturePath = cli['dump-parity-fixtures']
+    ? path.resolve(root, String(cli['dump-parity-fixtures']))
+    : '';
   const maxScenarios = intArg(cli['max-scenarios'], 50_000, 1, 1_000_000);
-  const shipCapacity = discoverShipCapacity(dbApi, combatDefs);
+  const shipCapacities = discoverShipCapacities(dbApi, combatDefs, catalog.maxTownHall);
+  const shipCapacity = Math.max(...Object.values(shipCapacities));
   const startedAt = Date.now();
 
-  const bases = generateBaseCatalog({
-    count: baseCount,
-    seed,
-    townHalls,
-    catalog,
-    dbApi,
-    combatDefs,
-  });
+  const baseReportPath = cli['base-report']
+    ? path.resolve(root, String(cli['base-report']))
+    : '';
+  const requestedBaseIds = new Set(
+    String(cli['base-ids'] || '')
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean),
+  );
+  if (!baseReportPath && requestedBaseIds.size > 0) {
+    throw new Error('--base-ids requires --base-report.');
+  }
+  const bases = baseReportPath
+    ? loadBaseCatalogFromReport({
+      reportPath: baseReportPath,
+      townHalls,
+      requestedBaseIds,
+    })
+    : generateBaseCatalog({
+      count: baseCount,
+      seed,
+      townHalls,
+      catalog,
+      dbApi,
+      combatDefs,
+    });
+  if (bases.length === 0) {
+    throw new Error('Base catalog is empty after applying report/profile/id filters.');
+  }
   const baseValidation = validateBaseCatalog(bases, catalog, dbApi);
   if (baseValidation.errors.length > 0) {
     throw new Error(`Generated base validation failed:\n${baseValidation.errors.join('\n')}`);
@@ -122,9 +337,44 @@ function runBalanceLab({ repoRoot: root, gameDb: dbApi, combatDefs, verifyReplay
 
   const armiesByTownHall = new Map();
   for (let th = 1; th <= catalog.maxTownHall; th += 1) {
-    armiesByTownHall.set(th, generateArmyCatalog(th, catalog, shipCapacity, seed));
+    armiesByTownHall.set(
+      th,
+      generateArmyCatalog(th, catalog, shipCapacities[th], seed),
+    );
   }
   const allArmies = [...armiesByTownHall.values()].flat();
+  const attackPolicies = attackPolicyCount > 0
+    ? generateAttackPolicyCatalog({
+      count: attackPolicyCount,
+      townHalls,
+      armiesByTownHall,
+      combatDefs,
+      seed,
+      forcedLevelProfile: attackLevelProfile,
+    })
+    : [];
+  const breakabilityAttackPolicies = (
+    breakabilityPoliciesPerTownHall > 0
+    && breakabilityCandidatePolicyCount !== attackPolicyCount
+  )
+    ? generateAttackPolicyCatalog({
+      count: breakabilityCandidatePolicyCount,
+      townHalls,
+      armiesByTownHall,
+      combatDefs,
+      seed,
+      forcedLevelProfile: attackLevelProfile,
+    })
+    : attackPolicies;
+  if (adversarialRounds > 0 && attackPolicies.length === 0) {
+    throw new Error('--adversarial-rounds requires --attack-policies.');
+  }
+  if (breakabilityPoliciesPerTownHall > 0 && breakabilityAttackPolicies.length === 0) {
+    throw new Error(
+      '--breakability-policies requires --attack-policies or '
+      + '--breakability-candidate-policies.',
+    );
+  }
   const scenarioPlan = catalogOnly
     ? []
     : buildScenarioPlan({
@@ -135,18 +385,184 @@ function runBalanceLab({ repoRoot: root, gameDb: dbApi, combatDefs, verifyReplay
       exhaustive,
       maxScenarios,
       seed,
+      sameTownHallOnly,
+      attackLevelProfile,
+      attackPolicies,
     });
 
   const aggregate = createAggregate();
+  const evaluationRecords = [];
+  const evolution = [];
+  const parityFixtures = [];
   for (let index = 0; index < scenarioPlan.length; index += 1) {
     const scenario = scenarioPlan[index];
-    const result = runScenario(verifyReplay, combatDefs, scenario, verbose);
+    const actions = buildAttackActions(scenario, combatDefs);
+    const result = runScenario(verifyReplay, combatDefs, scenario, verbose, actions);
     recordScenario(aggregate, scenario, result);
+    evaluationRecords.push({ scenario, result });
+    if (parityFixturePath) {
+      const replayActions = [
+        {
+          type: 'battle_start',
+          t: 0,
+          battle_session_id: `balance-parity-${scenario.id}`,
+        },
+        ...actions,
+        {
+          type: 'battle_end',
+          t: result.durationSec,
+          result: result.resolvedResult.toLowerCase(),
+        },
+      ];
+      parityFixtures.push({
+        id: scenario.id,
+        attackerTownHall: scenario.attackerTownHall,
+        defenderTownHall: scenario.defenderTownHall,
+        matchup: scenario.matchup,
+        baseId: scenario.base.id,
+        armyId: scenario.army.id,
+        spawnProfile: scenario.spawnProfile,
+        attackLevelProfile: scenario.levelProfile,
+        attackPolicyId: scenario.policyId || '',
+        tactics: scenario.tactics,
+        attackerNftRarities: scenario.attackerNftRarities || {},
+        serverShipLevel: discoverShipLevelForTownHall(
+          combatDefs,
+          scenario.attackerTownHall,
+        ),
+        troopLevels: scenario.troopLevels,
+        defenderAltarLevels: scenario.defenderAltarLevels || {},
+        buildings: scenario.base.buildings,
+        actions: replayActions,
+        expected: result,
+      });
+    }
     if (verbose && ((index + 1) % 25 === 0 || index + 1 === scenarioPlan.length)) {
       console.log(`[balance] simulated ${index + 1}/${scenarioPlan.length}`);
     }
   }
 
+  for (let roundIndex = 0; roundIndex < adversarialRounds; roundIndex += 1) {
+    const round = roundIndex + 1;
+    const elitePolicies = selectEliteAttackPolicies(evaluationRecords, attackPolicies, townHalls);
+    const eliteBases = selectEliteBases(evaluationRecords, bases, townHalls);
+    const mutatedPolicies = ensureUniquePolicyMutations(
+      mutateElitePolicies({
+        elitePolicies,
+        armiesByTownHall,
+        combatDefs,
+        seed: hash32(seed, round, 0x41545441),
+        round,
+        forcedLevelProfile: attackLevelProfile,
+      }),
+      attackPolicies,
+    );
+    const mutatedBases = ensureUniqueBaseMutations(
+      mutateEliteBases({
+      eliteBases,
+      seed: hash32(seed, round, 0x44454645),
+      round,
+      }),
+      bases,
+    );
+    attackPolicies.push(...mutatedPolicies);
+    bases.push(...mutatedBases);
+    const roundScenarios = buildAdversarialScenarioPlan({
+      count: adversarialMatchesPerRound,
+      startIndex: scenarioPlan.length,
+      policies: [...elitePolicies, ...mutatedPolicies],
+      bases: [...eliteBases, ...mutatedBases],
+      catalog,
+      seed: hash32(seed, round, 0x524f554e),
+      round,
+    });
+    let roundWins = 0;
+    for (const scenario of roundScenarios) {
+      const actions = buildAttackActions(scenario, combatDefs);
+      const result = runScenario(verifyReplay, combatDefs, scenario, verbose, actions);
+      recordScenario(aggregate, scenario, result);
+      evaluationRecords.push({ scenario, result });
+      scenarioPlan.push(scenario);
+      if (result.win) roundWins += 1;
+    }
+    evolution.push({
+      round,
+      battles: roundScenarios.length,
+      attackerWinRate: rate(roundWins, roundScenarios.length),
+      elitePolicyIds: elitePolicies.map((policy) => policy.id),
+      eliteBaseIds: eliteBases.map((base) => base.id),
+      mutatedPolicyIds: mutatedPolicies.map((policy) => policy.id),
+      mutatedBaseIds: mutatedBases.map((base) => base.id),
+    });
+  }
+
+  const breakability = runBreakabilityProbe({
+    enabledPoliciesPerTownHall: breakabilityPoliciesPerTownHall,
+    calibrationBasesPerTownHall: breakabilityCalibrationBasesPerTownHall,
+    nftRarity: breakabilityNftRarity,
+    verifyReplay,
+    combatDefs,
+    evaluationRecords,
+    attackPolicies: breakabilityAttackPolicies,
+    bases,
+    townHalls,
+    catalog,
+    seed,
+    startIndex: scenarioPlan.length,
+    verbose,
+  });
+  const baseCounterMeta = runBaseCounterMetaProbe({
+    requestedBattles: baseCounterMatches,
+    verifyReplay,
+    combatDefs,
+    bases,
+    armiesByTownHall,
+    catalog,
+    seed,
+    startIndex: scenarioPlan.length + breakability.totalBattles,
+    verbose,
+  });
+  const unitUtility = runUnitUtilityProbe({
+    basesPerTroop: unitUtilityBasesPerTroop,
+    requestedTroops: requestedUnitUtilityTroops,
+    verifyReplay,
+    combatDefs,
+    bases,
+    catalog,
+    shipCapacities,
+    seed,
+    startIndex: (
+      scenarioPlan.length
+      + breakability.totalBattles
+      + baseCounterMeta.totalBattles
+    ),
+    verbose,
+  });
+  const nftRarityProbe = runNftRarityProbe({
+    basesPerTroop: nftRarityProbeBasesPerTroop,
+    verifyReplay,
+    combatDefs,
+    bases,
+    armiesByTownHall,
+    catalog,
+    seed,
+    startIndex: (
+      scenarioPlan.length
+      + breakability.totalBattles
+      + baseCounterMeta.totalBattles
+      + unitUtility.totalBattles
+    ),
+    verbose,
+  });
+
+  const finalBaseValidation = adversarialRounds > 0
+    ? validateBaseCatalog(bases, catalog, dbApi)
+    : baseValidation;
+  if (finalBaseValidation.errors.length > 0) {
+    throw new Error(
+      `Evolved base validation failed:\n${finalBaseValidation.errors.join('\n')}`,
+    );
+  }
   const statAudit = auditStats(catalog, combatDefs);
   const coverage = buildCoverage(catalog, bases, scenarioPlan);
   const balanceIssues = analyzeBalance({
@@ -157,17 +573,86 @@ function runBalanceLab({ repoRoot: root, gameDb: dbApi, combatDefs, verifyReplay
     band,
     minGroupSize,
   });
+  if (breakability.unbeatenBaseCount > 0) {
+    balanceIssues.push({
+      severity: 'critical',
+      code: 'unbreakable-base-probe',
+      message: `${breakability.unbeatenBaseCount}/${breakability.testedBaseCount} bases survived the sampled same-TH policy catalog plus exhaustive spawn/tactic search for up to ${BREAKABILITY_ADAPTIVE_ARMY_LIMIT} closest distinct ordered army templates at ${breakability.nftRarity} rarity.`,
+    });
+    balanceIssues.sort((a, b) => severityRank(a.severity) - severityRank(b.severity));
+  }
+  if (breakability.untestedBaseCount > 0) {
+    balanceIssues.push({
+      severity: 'critical',
+      code: 'breakability-coverage',
+      message: `${breakability.untestedBaseCount}/${breakability.generatedBaseCount} generated bases had no same-TH candidate policy battle.`,
+    });
+  }
+  balanceIssues.push(...analyzeUnitUtilityProbe(unitUtility));
+  balanceIssues.push(...analyzeNftRarityProbe(nftRarityProbe));
+  balanceIssues.push(...analyzeBaseCounterMetaProbe(baseCounterMeta));
+  balanceIssues.sort((a, b) => severityRank(a.severity) - severityRank(b.severity));
   const elapsedMs = Date.now() - startedAt;
   const config = {
     seed,
     profile: String(cli.profile || DEFAULT_PROFILE),
     townHalls,
-    requestedBaseCount: baseCount,
+    baseSource: baseReportPath ? 'report' : 'generated',
+    baseReportPath: baseReportPath
+      ? path.relative(root, baseReportPath).replaceAll('\\', '/')
+      : '',
+    requestedBaseIds: [...requestedBaseIds],
+    requestedBaseCount: baseReportPath ? bases.length : baseCount,
     generatedBaseCount: bases.length,
     requestedMatches,
     simulatedMatches: aggregate.overall.count,
     exhaustive,
+    sameTownHallOnly,
+    attackLevelProfile: attackLevelProfile || 'mixed-cycle',
+    attackPolicyCount: attackPolicies.length,
+    capacityFilledArmyCount: allArmies
+      .filter((army) => army.name.startsWith('core-') && army.name.endsWith('-filled'))
+      .length,
+    initialAttackPolicyCount: attackPolicyCount,
+    adversarialRounds,
+    adversarialMatchesPerRound,
+    breakabilityPoliciesPerTownHall,
+    breakabilityCalibrationBasesPerTownHall,
+    breakabilityNftRarity,
+    breakabilityCandidatePolicyCount: breakabilityAttackPolicies.length,
+    breakabilityAdaptiveArmyLimit: BREAKABILITY_ADAPTIVE_ARMY_LIMIT,
+    breakabilityBattles: breakability.totalBattles,
+    breakabilityUnbeatenBases: breakability.unbeatenBaseCount,
+    baseCounterMatches,
+    baseCounterBattles: baseCounterMeta.totalBattles,
+    baseCounterDiscoveryBattles: baseCounterMeta.discoveryBattles,
+    baseCounterCounterHoldoutBattles: baseCounterMeta.counterHoldoutBattles,
+    baseCounterUniversalHoldoutBattles: baseCounterMeta.universalHoldoutBattles,
+    baseCounterHardConfirmationBattles: baseCounterMeta.hardConfirmationBattles,
+    unitUtilityBasesPerTroop,
+    unitUtilityTroops: [...requestedUnitUtilityTroops],
+    unitUtilityBattles: unitUtility.totalBattles,
+    nftRarityProbeBasesPerTroop,
+    nftRarityProbeBattles: nftRarityProbe.totalBattles,
+    spawnMechanicCount: SPAWN_PROFILES.length,
+    spawnFormationCount: SPAWN_FORMATIONS.length,
+    spawnTimingCount: SPAWN_TIMINGS.length,
+    deploymentOrderCount: DEPLOYMENT_ORDERS.length,
+    pureUnitMatrixBattles: aggregate.byExperimentCohort.get('pure-unit-matrix')?.count || 0,
+    elitePolicyMinSamples: ELITE_MIN_SAMPLES,
+    adversarialPairing: 'balanced-latin-square',
+    unbeatenNonAdaptiveBases: [...aggregate.byNonAdaptiveBase.values()]
+      .filter((bucket) => bucket.count >= minGroupSize && bucket.wins === 0)
+      .length,
+    labOffenseScaleByLevel,
+    labOffenseScaleByTroop,
+    labDefenseDamageScale,
+    labLateDefenseScale,
+    labTh7DefenseScale,
+    labMimicRevealAfterAttack,
+    labMimicTrapDamageScale,
     shipCapacity,
+    shipCapacities,
     targetWinRate,
     band,
     elapsedMs,
@@ -177,12 +662,19 @@ function runBalanceLab({ repoRoot: root, gameDb: dbApi, combatDefs, verifyReplay
     config,
     catalog: serializableCatalog(catalog),
     coverage,
-    baseValidation,
+    baseValidation: finalBaseValidation,
     statAudit,
     balanceIssues,
     aggregate: serializeAggregate(aggregate),
     bases,
     armies: allArmies,
+    attackPolicies,
+    breakabilityAttackPolicies,
+    evolution,
+    breakability,
+    baseCounterMeta,
+    unitUtility,
+    nftRarityProbe,
   };
 
   const output = resolveOutputPaths(root, cli);
@@ -198,6 +690,20 @@ function runBalanceLab({ repoRoot: root, gameDb: dbApi, combatDefs, verifyReplay
     fs.mkdirSync(path.dirname(dumpPath), { recursive: true });
     fs.writeFileSync(dumpPath, `${JSON.stringify(bases, null, 2)}\n`, 'utf8');
   }
+  if (parityFixturePath) {
+    fs.mkdirSync(path.dirname(parityFixturePath), { recursive: true });
+    fs.writeFileSync(
+      parityFixturePath,
+      `${JSON.stringify({
+        generatedAt: new Date().toISOString(),
+        seed,
+        profile: String(cli.profile || DEFAULT_PROFILE),
+        scenarioCount: parityFixtures.length,
+        scenarios: parityFixtures,
+      }, null, 2)}\n`,
+      'utf8',
+    );
+  }
 
   const winRate = rate(aggregate.overall.wins, aggregate.overall.count);
   const criticalIssues = balanceIssues.filter((issue) => issue.severity === 'critical');
@@ -209,12 +715,51 @@ function runBalanceLab({ repoRoot: root, gameDb: dbApi, combatDefs, verifyReplay
       `Replay simulation: ${aggregate.overall.count} battles, `
       + `${pct(winRate)} attacker wins, ${aggregate.overall.invalid} invalid`,
     );
+    if (breakability.enabled) {
+      console.log(
+        `Breakability probe: ${breakability.totalBattles} battles, `
+        + `${breakability.unbeatenBaseCount} unbeaten, `
+        + `${breakability.untestedBaseCount} untested, `
+        + `${breakability.invalidOnlyBaseCount} invalid-only, `
+        + `${breakability.invalid} invalid`,
+      );
+    }
+    if (unitUtility.enabled) {
+      console.log(
+        `Unit utility: ${unitUtility.totalBattles} battles `
+        + `(${unitUtility.totalPairs} equal-input pairs), `
+        + `${unitUtility.invalid} invalid`,
+      );
+    }
+    if (baseCounterMeta.enabled) {
+      console.log(
+        `Base-counter meta: ${baseCounterMeta.totalBattles} battles, `
+        + `${baseCounterMeta.zeroCounterBaseCount} zero-counter bases, `
+        + `${pct(baseCounterMeta.diversity?.topCounterShare || 0)} top-family share, `
+        + `${baseCounterMeta.invalid} invalid`,
+      );
+    }
+    if (nftRarityProbe.enabled) {
+      console.log(
+        `NFT rarity probe: ${nftRarityProbe.totalBattles} battles, `
+        + `${nftRarityProbe.invalid} invalid`,
+      );
+    }
   }
   console.log(`Content: ${catalog.buildings.length} buildings, ${catalog.troops.length} active troops`);
   console.log(`Report: ${path.relative(root, output.markdown)}`);
   console.log(`Data: ${path.relative(root, output.json)}`);
 
-  if (aggregate.overall.invalid > 0 || criticalIssues.some((issue) => issue.code === 'coverage')) {
+  if (
+    aggregate.overall.invalid > 0
+    || breakability.invalid > 0
+    || baseCounterMeta.invalid > 0
+    || baseCounterMeta.missingDiscoveryCellCount > 0
+    || unitUtility.invalid > 0
+    || nftRarityProbe.invalid > 0
+    || breakability.untestedBaseCount > 0
+    || criticalIssues.some((issue) => issue.code === 'coverage')
+  ) {
     return 2;
   }
   if (cli.strict && criticalIssues.length > 0) return 3;
@@ -314,16 +859,39 @@ function buildingRole(type, combatDefs) {
   return 'utility';
 }
 
-function discoverShipCapacity(dbApi, combatDefs) {
-  const capacities = Object.values(dbApi.PLAYER_SHIP_LEVELS || {})
-    .map((entry) => Number(entry?.capacity))
-    .filter((value) => Number.isFinite(value) && value > 0);
-  return Math.max(
+function discoverShipCapacities(dbApi, combatDefs, maxTownHall) {
+  const levels = dbApi.PLAYER_SHIP_LEVELS || {};
+  const configuredLevels = Object.keys(levels)
+    .map(Number)
+    .filter(Number.isFinite)
+    .sort((a, b) => a - b);
+  const fallback = Math.max(
     1,
     Number(combatDefs.MAX_TROOPS) || 0,
     Number(combatDefs.MAX_SHIPS || 0) * Number(combatDefs.TROOPS_PER_SHIP || 0),
-    ...capacities,
   );
+  const capacities = {};
+  for (let townHall = 1; townHall <= maxTownHall; townHall += 1) {
+    const shipLevel = configuredLevels
+      .filter((level) => Math.max(1, Number(levels[level]?.town_hall) || level) <= townHall)
+      .at(-1);
+    capacities[townHall] = Math.max(
+      1,
+      Number(levels[shipLevel]?.capacity) || fallback,
+    );
+  }
+  return capacities;
+}
+
+function discoverShipLevelForTownHall(combatDefs, townHall) {
+  const levels = combatDefs.PLAYER_SHIP_LEVELS || {};
+  const configuredLevels = Object.keys(levels)
+    .map(Number)
+    .filter(Number.isFinite)
+    .sort((a, b) => a - b);
+  return configuredLevels
+    .filter((level) => Math.max(1, Number(levels[level]?.town_hall) || level) <= townHall)
+    .at(-1) || 1;
 }
 
 function resolveTownHallProfile(rawProfile, maxTownHall) {
@@ -347,6 +915,98 @@ function resolveTownHallProfile(rawProfile, maxTownHall) {
   throw new Error(`Unsupported profile "${rawProfile}". Use all, thN, or thN-thN.`);
 }
 
+function resolveAttackLevelProfile(rawProfile) {
+  if (!rawProfile) return '';
+  const normalized = String(rawProfile).trim().toLowerCase();
+  if (!ATTACK_LEVEL_PROFILES.includes(normalized)) {
+    throw new Error(
+      `Unsupported attack level profile "${rawProfile}". Use ${ATTACK_LEVEL_PROFILES.join(', ')}.`,
+    );
+  }
+  return normalized;
+}
+
+function applyLabOffenseScales(combatDefs, scaleByLevel, scaleByTroop) {
+  combatDefs.setBalanceLabNftStatScales?.(scaleByLevel, scaleByTroop);
+  for (const [type, levels] of Object.entries(combatDefs.TROOP_STATS || {})) {
+    for (const [rawLevel, stats] of Object.entries(levels || {})) {
+      const level = Number(rawLevel);
+      const levelScale = Number(scaleByLevel[level] || 1);
+      const troopScale = level >= 5 ? Number(scaleByTroop[type] || 1) : 1;
+      const scale = levelScale * troopScale;
+      if (scale === 1 || !stats) continue;
+      stats.hp = Math.max(1, Math.round(Number(stats.hp) * scale));
+      stats.damage = Math.max(1, Math.round(Number(stats.damage) * scale));
+    }
+  }
+}
+
+function applyLabDefenseDamageScale(combatDefs, scale) {
+  if (scale === 1) return;
+  for (const levels of Object.values(combatDefs.DEFENSE_STATS || {})) {
+    for (const stats of Object.values(levels || {})) {
+      if (!stats) continue;
+      for (const field of ['damage', 'baseDamage', 'maxDamage']) {
+        if (!Number.isFinite(Number(stats[field]))) continue;
+        stats[field] = Math.max(1, Math.round(Number(stats[field]) * scale));
+      }
+    }
+  }
+  for (const stats of Object.values(combatDefs.SKELETON_GUARD?.levels || {})) {
+    if (!stats) continue;
+    stats.damage = Math.max(1, Math.round(Number(stats.damage) * scale));
+  }
+}
+
+function applyLabLateDefenseScale(combatDefs, scale) {
+  if (scale === 1) return;
+  for (const levels of Object.values(combatDefs.DEFENSE_STATS || {})) {
+    for (const [rawLevel, stats] of Object.entries(levels || {})) {
+      if (Number(rawLevel) < 5 || !stats) continue;
+      for (const field of ['damage', 'baseDamage', 'maxDamage']) {
+        if (!Number.isFinite(Number(stats[field]))) continue;
+        stats[field] = Math.max(1, Math.round(Number(stats[field]) * scale));
+      }
+    }
+  }
+  for (const [rawLevel, stats] of Object.entries(
+    combatDefs.SKELETON_GUARD?.levels || {},
+  )) {
+    if (Number(rawLevel) < 5 || !stats) continue;
+    stats.hp = Math.max(1, Math.round(Number(stats.hp) * scale));
+    stats.damage = Math.max(1, Math.round(Number(stats.damage) * scale));
+  }
+}
+
+function applyLabTownHallDefenseScale(combatDefs, dbApi, townHall, scale) {
+  if (scale === 1) return;
+  for (const [type, levels] of Object.entries(combatDefs.DEFENSE_STATS || {})) {
+    const caps = dbApi.TH_MAX_LEVEL?.[type] || [];
+    const authoredMax = Math.max(
+      1,
+      ...Object.keys(levels || {}).map(Number).filter(Number.isFinite),
+    );
+    const level = Array.isArray(caps) && caps.length > 0
+      ? Number(caps[Math.min(caps.length - 1, townHall - 1)] || 1)
+      : Math.min(townHall, authoredMax);
+    const stats = levels?.[level];
+    if (!stats) continue;
+    for (const field of ['damage', 'baseDamage', 'maxDamage']) {
+      if (!Number.isFinite(Number(stats[field]))) continue;
+      stats[field] = Math.max(1, Math.round(Number(stats[field]) * scale));
+    }
+  }
+  const tombstoneCaps = dbApi.TH_MAX_LEVEL?.tombstone || [];
+  const guardLevel = Array.isArray(tombstoneCaps) && tombstoneCaps.length > 0
+    ? Number(tombstoneCaps[Math.min(tombstoneCaps.length - 1, townHall - 1)] || 1)
+    : townHall;
+  const guard = combatDefs.SKELETON_GUARD?.levels?.[guardLevel];
+  if (guard) {
+    guard.hp = Math.max(1, Math.round(Number(guard.hp) * scale));
+    guard.damage = Math.max(1, Math.round(Number(guard.damage) * scale));
+  }
+}
+
 function generateBaseCatalog({ count, seed, townHalls, catalog, dbApi, combatDefs }) {
   const bases = [];
   const signatures = new Set();
@@ -354,20 +1014,36 @@ function generateBaseCatalog({ count, seed, townHalls, catalog, dbApi, combatDef
   let attempt = 0;
   while (bases.length < count && attempt < maxAttempts) {
     const th = townHalls[attempt % townHalls.length];
-    const archetype = ARCHETYPES[attempt % ARCHETYPES.length];
+    const attemptWithinTownHall = Math.floor(attempt / townHalls.length);
+    const archetypeIndex = attemptWithinTownHall % ARCHETYPES.length;
+    const archetypeCycle = Math.floor(attemptWithinTownHall / ARCHETYPES.length);
+    const archetype = ARCHETYPES[archetypeIndex];
+    // Each archetype advances through the progression profiles independently.
+    // Mirrored archetypes share a phase, so left/right comparisons never
+    // accidentally compare maxed defenses with rushed-economy defenses.
+    const profilePhase = ARCHETYPE_PROFILE_PHASE[archetype] || 0;
     const levelProfile = BASE_LEVEL_PROFILES[
-      Math.floor(attempt / ARCHETYPES.length) % BASE_LEVEL_PROFILES.length
+      (profilePhase + archetypeCycle) % BASE_LEVEL_PROFILES.length
     ];
-    const base = generateBase({
-      th,
-      archetype,
-      levelProfile,
-      variation: attempt,
-      seed: hash32(seed, th, attempt),
-      catalog,
-      dbApi,
-      combatDefs,
-    });
+    let base = null;
+    try {
+      base = generateBase({
+        th,
+        archetype,
+        levelProfile,
+        variation: attempt,
+        seed: hash32(seed, th, attempt),
+        catalog,
+        dbApi,
+        combatDefs,
+      });
+    } catch (error) {
+      if (!String(error?.message || '').startsWith('No valid placement for ')) {
+        throw error;
+      }
+      attempt += 1;
+      continue;
+    }
     const signature = baseSignature(base);
     if (!signatures.has(signature)) {
       signatures.add(signature);
@@ -379,6 +1055,65 @@ function generateBaseCatalog({ count, seed, townHalls, catalog, dbApi, combatDef
   if (bases.length < count) {
     throw new Error(`Could only generate ${bases.length}/${count} unique valid bases.`);
   }
+  return bases;
+}
+
+function loadBaseCatalogFromReport({ reportPath, townHalls, requestedBaseIds }) {
+  if (!fs.existsSync(reportPath)) {
+    throw new Error(`Base report not found: ${reportPath}`);
+  }
+  const parsed = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
+  const reportBases = Array.isArray(parsed) ? parsed : parsed?.bases;
+  if (!Array.isArray(reportBases)) {
+    throw new Error(`Base report does not contain a bases array: ${reportPath}`);
+  }
+
+  const allowedTownHalls = new Set(townHalls.map(Number));
+  const requestedIds = new Set(requestedBaseIds || []);
+  const bases = reportBases.filter((base) => {
+    if (!allowedTownHalls.has(Number(base?.townHall))) return false;
+    return requestedIds.size === 0 || requestedIds.has(String(base?.id || ''));
+  });
+
+  if (requestedIds.size > 0) {
+    const loadedIds = new Set(bases.map((base) => String(base.id)));
+    const missingIds = [...requestedIds].filter((id) => !loadedIds.has(id));
+    if (missingIds.length > 0) {
+      throw new Error(
+        `Requested base IDs were not found in ${reportPath}: ${missingIds.join(', ')}`,
+      );
+    }
+  }
+  if (bases.length === 0) {
+    throw new Error(`No bases from ${reportPath} match the selected profile and IDs.`);
+  }
+
+  const seenBaseIds = new Set();
+  for (const base of bases) {
+    const baseId = String(base?.id ?? '').trim();
+    if (!baseId) {
+      throw new Error(`Imported base has an empty ID in ${reportPath}.`);
+    }
+    if (seenBaseIds.has(baseId)) {
+      throw new Error(`Imported base ID is duplicated in ${reportPath}: ${baseId}`);
+    }
+    seenBaseIds.add(baseId);
+
+    const seenBuildingIds = new Set();
+    for (const building of base.buildings || []) {
+      const buildingId = String(building?.id ?? '').trim();
+      if (!buildingId) {
+        throw new Error(`Base ${baseId} has a building with an empty ID.`);
+      }
+      if (seenBuildingIds.has(buildingId)) {
+        throw new Error(
+          `Base ${baseId} has duplicated building ID ${buildingId}.`,
+        );
+      }
+      seenBuildingIds.add(buildingId);
+    }
+  }
+
   return bases;
 }
 
@@ -562,12 +1297,15 @@ function archetypeContext(archetype, width, height, seed) {
     centerX,
     centerZ,
     coreX: centerX + jitterX,
-    coreZ: centerZ - 2 + jitterZ,
+    // Attackers enter from the southern/high-Z shore. Keep the Town Hall in
+    // the rear and let each archetype organize its defense screen in front.
+    coreZ: height * 0.22 + jitterZ * 0.45,
+    defenseFrontZ: height * 0.62,
     defenseRadius: Math.min(width, height) * 0.20,
     economyRadius: Math.min(width, height) * 0.36,
   };
   if (archetype === 'southern-funnel') {
-    context.coreZ = height * 0.36;
+    context.coreZ = height * 0.26;
     context.defenseRadius = height * 0.28;
   } else if (archetype === 'asymmetric-left') {
     context.coreX = width * 0.34;
@@ -577,8 +1315,24 @@ function archetypeContext(archetype, width, height, seed) {
     context.coreX = width * (noise01(seed, 3, 5) > 0.5 ? 0.30 : 0.70);
     context.coreZ = height * 0.30;
   } else if (archetype === 'split-core') {
-    context.coreZ = height * 0.40;
+    context.coreZ = height * 0.28;
+  } else if (archetype === 'rear-keep') {
+    context.coreZ = height * 0.14;
+    context.defenseFrontZ = height * 0.52;
+  } else if (archetype === 'cannon-screen') {
+    context.coreZ = height * 0.18;
+    context.defenseFrontZ = height * 0.72;
+  } else if (archetype === 'crossfire') {
+    context.coreZ = height * 0.20;
+    context.defenseFrontZ = height * 0.60;
+  } else if (archetype === 'echelon-left' || archetype === 'echelon-right') {
+    context.coreZ = height * 0.20;
+    context.defenseFrontZ = height * 0.64;
+  } else if (archetype === 'kill-corridor') {
+    context.coreZ = height * 0.18;
+    context.defenseFrontZ = height * 0.67;
   }
+  context.coreZ = clampInt(Math.round(context.coreZ), 3, Math.max(3, height - 8));
   return context;
 }
 
@@ -595,9 +1349,33 @@ function findBestPlacement({
 }) {
   const [sizeX, sizeZ] = item.size;
   const margin = 1;
+  const townHall = placed.find((building) => building.type === 'town_hall');
+  const townHallCenterZ = townHall
+    ? townHall.grid_z + (townHall.size?.[1] || 4) / 2
+    : null;
+  const townHallFrontZ = townHall
+    ? townHall.grid_z + (townHall.size?.[1] || 4)
+    : null;
   let best = null;
   for (let z = margin; z <= height - sizeZ - margin; z += 1) {
     for (let x = margin; x <= width - sizeX - margin; x += 1) {
+      // Attackers enter from high Z. The Town Hall must be the rearmost
+      // building and every armed defense must form a clearly separate screen
+      // in front of its forward edge.
+      if (
+        townHallCenterZ != null
+        && item.role !== 'core'
+        && z + sizeZ / 2 <= townHallCenterZ
+      ) {
+        continue;
+      }
+      if (
+        townHallFrontZ != null
+        && item.role === 'defense'
+        && z < townHallFrontZ
+      ) {
+        continue;
+      }
       if (!canPlace(occupancy, x, z, sizeX, sizeZ, gap)) continue;
       const score = placementScore({
         item,
@@ -665,6 +1443,10 @@ function placementScore({
     return score;
   }
 
+  if (item.role === 'defense') {
+    score += Math.abs(cz - context.defenseFrontZ) * 1.15;
+  }
+
   if (context.archetype === 'compact-core') {
     score += coreDistance * (item.role === 'defense' ? 4.5 : 2.7);
   } else if (context.archetype === 'defense-ring') {
@@ -708,6 +1490,35 @@ function placementScore({
     const diamond = Math.abs(cx - width / 2) + Math.abs(cz - height / 2);
     const target = item.role === 'defense' ? 7 : 12;
     score += Math.abs(diamond - target) * 3.2;
+  } else if (context.archetype === 'rear-keep') {
+    score += item.role === 'defense'
+      ? Math.abs(cz - context.defenseFrontZ) * 3.8 + Math.abs(cx - width / 2) * 0.35
+      : coreDistance * 1.8;
+  } else if (context.archetype === 'cannon-screen') {
+    score += item.role === 'defense'
+      ? Math.abs(cz - context.defenseFrontZ) * 5.0 - Math.abs(cx - width / 2) * 0.18
+      : coreDistance * 1.6;
+  } else if (context.archetype === 'crossfire') {
+    const leftPost = Math.hypot(cx - width * 0.28, cz - context.defenseFrontZ);
+    const rightPost = Math.hypot(cx - width * 0.72, cz - context.defenseFrontZ);
+    score += item.role === 'defense'
+      ? Math.min(leftPost, rightPost) * 4.2
+      : coreDistance * 1.7;
+  } else if (context.archetype === 'echelon-left' || context.archetype === 'echelon-right') {
+    const direction = context.archetype === 'echelon-left' ? -1 : 1;
+    const diagonalZ = context.defenseFrontZ + direction * (cx - width / 2) * 0.32;
+    score += item.role === 'defense'
+      ? Math.abs(cz - diagonalZ) * 4.0
+      : coreDistance * 1.7;
+  } else if (context.archetype === 'kill-corridor') {
+    const corridorEdge = width * 0.20;
+    const sideDistance = Math.min(
+      Math.abs(cx - (width / 2 - corridorEdge)),
+      Math.abs(cx - (width / 2 + corridorEdge)),
+    );
+    score += item.role === 'defense'
+      ? sideDistance * 4.0 + Math.abs(cz - context.defenseFrontZ) * 1.8
+      : coreDistance * 1.8;
   }
   if (item.role === 'defense') score += thDistance * 0.30;
   if (item.role === 'economy') score -= thDistance * 0.12;
@@ -817,6 +1628,21 @@ function validateBaseCatalog(bases, catalog, dbApi) {
       }
     }
     if (townHallCount !== 1) errors.push(`${base.id}: expected one Town Hall, got ${townHallCount}`);
+    const townHall = base.buildings.find((building) => building.type === 'town_hall');
+    if (townHall) {
+      const townHallCenterZ = townHall.grid_z + (townHall.size?.[1] || 4) / 2;
+      const townHallFrontZ = townHall.grid_z + (townHall.size?.[1] || 4);
+      for (const building of base.buildings) {
+        if (building === townHall) continue;
+        const centerZ = building.grid_z + (building.size?.[1] || 2) / 2;
+        if (centerZ <= townHallCenterZ) {
+          errors.push(`${base.id}: ${building.type} is behind the Town Hall backline`);
+        }
+        if (building.role === 'defense' && building.grid_z < townHallFrontZ) {
+          errors.push(`${base.id}: ${building.type} is not fully in front of the Town Hall`);
+        }
+      }
+    }
   }
   return {
     valid: errors.length === 0,
@@ -833,13 +1659,23 @@ function generateArmyCatalog(townHall, catalog, capacity, seed) {
   }
   const recipes = [];
   for (const troop of available) {
-    recipes.push(createArmy(
+    const pureArmy = createArmy(
       townHall,
       `pure-${troop.type}`,
       [troop.type],
       available,
       capacity,
-    ));
+    );
+    recipes.push(pureArmy);
+    if (pureArmy.units.length > 0 && pureArmy.slotsUsed < capacity) {
+      recipes.push(createCapacityFilledArmy({
+        townHall,
+        troop,
+        pureArmy,
+        available,
+        capacity,
+      }));
+    }
   }
   const melee = available.filter((troop) => troop.melee).map((troop) => troop.type);
   const ranged = available.filter((troop) => troop.ranged).map((troop) => troop.type);
@@ -850,7 +1686,7 @@ function generateArmyCatalog(townHall, catalog, capacity, seed) {
     .map((troop) => troop.type);
   const trapRunners = available.filter((troop) => troop.trapImmune).map((troop) => troop.type);
   const support = available
-    .filter((troop) => /necromancer|mage/.test(troop.type))
+    .filter((troop) => UNIT_ROLE_REGISTRY[troop.type]?.role === 'support')
     .map((troop) => troop.type);
   const patterns = [
     ['balanced', interleave(melee, ranged, available.map((troop) => troop.type))],
@@ -860,6 +1696,10 @@ function generateArmyCatalog(townHall, catalog, capacity, seed) {
     ['air-pressure', flying],
     ['support-mix', interleave(tanks, support, ranged)],
     ['trap-runner-mix', interleave(trapRunners, melee, ranged)],
+    [
+      'hero-necro-dragon-mages',
+      ['necromancer', 'demon_king', 'fire_dragon', 'mage', 'mage', 'knight'],
+    ],
   ];
   for (const [name, pattern] of patterns) {
     if (pattern.length === 0) continue;
@@ -886,6 +1726,161 @@ function generateArmyCatalog(townHall, catalog, capacity, seed) {
   }
   return [...unique.values()];
 }
+
+function createCapacityFilledArmy({
+  townHall,
+  troop,
+  pureArmy,
+  available,
+  capacity,
+}) {
+  const fillerPriority = new Map([
+    ['knight', 0],
+    ['archer', 1],
+  ]);
+  const fillers = [...available]
+    .filter((candidate) => candidate.type !== troop.type)
+    .sort((a, b) => (
+      (fillerPriority.get(a.type) ?? 10) - (fillerPriority.get(b.type) ?? 10)
+      || Number(a.slotCost) - Number(b.slotCost)
+      || a.type.localeCompare(b.type)
+    ));
+  const units = [...pureArmy.units];
+  let slotsUsed = Number(pureArmy.slotsUsed || 0);
+  let cursor = 0;
+  while (slotsUsed < capacity && fillers.length > 0) {
+    const remaining = capacity - slotsUsed;
+    let selectedIndex = -1;
+    for (let offset = 0; offset < fillers.length; offset += 1) {
+      const index = (cursor + offset) % fillers.length;
+      if (Number(fillers[index].slotCost) <= remaining) {
+        selectedIndex = index;
+        break;
+      }
+    }
+    if (selectedIndex < 0) break;
+    const filler = fillers[selectedIndex];
+    units.push(filler.type);
+    slotsUsed += Number(filler.slotCost);
+    cursor = (selectedIndex + 1) % fillers.length;
+  }
+  return {
+    id: `th${townHall}-core-${troop.type}-filled`,
+    townHall,
+    name: `core-${troop.type}-filled`,
+    units,
+    slotsUsed,
+    capacity,
+    utilization: round(slotsUsed / capacity, 4),
+  };
+}
+
+
+function generateAttackPolicyCatalog({
+  count,
+  townHalls,
+  armiesByTownHall,
+  combatDefs,
+  seed,
+  forcedLevelProfile,
+}) {
+  const policies = [];
+  const dimensionsByTownHall = new Map();
+  for (const townHall of townHalls) {
+    const armies = armiesByTownHall.get(townHall) || [];
+    const availableTactics = availableTacticProfiles(combatDefs, townHall);
+    const levelProfiles = forcedLevelProfile
+      ? [forcedLevelProfile]
+      : ATTACK_LEVEL_PROFILES;
+    const combinationCount = armies.length
+      * SPAWN_PROFILES.length
+      * levelProfiles.length
+      * availableTactics.length
+      * NFT_RARITIES.length;
+    if (combinationCount === 0) {
+      throw new Error(`No attack policy combinations are available for TH${townHall}.`);
+    }
+    dimensionsByTownHall.set(townHall, {
+      armies,
+      levelProfiles,
+      availableTactics,
+      combinationCount,
+      offset: hash32(seed, townHall, combinationCount) % combinationCount,
+      stride: coprimeStride(
+        combinationCount,
+        hash32(seed, townHall, 0x504f4c49),
+      ),
+    });
+  }
+  const cursorByTownHall = new Map(townHalls.map((townHall) => [townHall, 0]));
+  while (policies.length < count) {
+    let addedThisPass = 0;
+    for (const townHall of townHalls) {
+      if (policies.length >= count) break;
+      const dimensions = dimensionsByTownHall.get(townHall);
+      const cursor = cursorByTownHall.get(townHall) || 0;
+      if (!dimensions || cursor >= dimensions.combinationCount) continue;
+      let ordinal = (
+        dimensions.offset
+        + cursor * dimensions.stride
+      ) % dimensions.combinationCount;
+      const spawnProfile = SPAWN_PROFILES[ordinal % SPAWN_PROFILES.length];
+      ordinal = Math.floor(ordinal / SPAWN_PROFILES.length);
+      const army = dimensions.armies[ordinal % dimensions.armies.length];
+      ordinal = Math.floor(ordinal / dimensions.armies.length);
+      const levelProfile = dimensions.levelProfiles[
+        ordinal % dimensions.levelProfiles.length
+      ];
+      ordinal = Math.floor(ordinal / dimensions.levelProfiles.length);
+      const tactics = dimensions.availableTactics[
+        ordinal % dimensions.availableTactics.length
+      ];
+      ordinal = Math.floor(ordinal / dimensions.availableTactics.length);
+      const nftRarity = NFT_RARITIES[ordinal % NFT_RARITIES.length];
+      policies.push({
+        townHall,
+        army,
+        spawnProfile,
+        levelProfile,
+        tactics,
+        nftRarity,
+        id: `policy-${String(policies.length + 1).padStart(4, '0')}`,
+      });
+      cursorByTownHall.set(townHall, cursor + 1);
+      addedThisPass += 1;
+    }
+    if (addedThisPass === 0) break;
+  }
+  if (policies.length < count) {
+    throw new Error(`Could only generate ${policies.length}/${count} unique attack policies.`);
+  }
+  return policies;
+}
+
+function availableTacticProfiles(combatDefs, townHall) {
+  const shipLevel = discoverShipLevelForTownHall(combatDefs, townHall);
+  const shipConfig = combatDefs.PLAYER_SHIP_LEVELS?.[shipLevel] || {};
+  const unlocked = {
+    medkit: !!shipConfig.medkit_unlocked,
+    freeze: !!shipConfig.freeze_unlocked,
+    rage: !!shipConfig.rage_unlocked,
+    skeletonBarrel: !!shipConfig.skeleton_barrel_unlocked,
+  };
+  return TACTIC_PROFILES.filter((profile) => {
+    if (['medkit-entry', 'cannon-medkit'].includes(profile)) {
+      return unlocked.medkit;
+    }
+    if (profile === 'freeze-defense') return unlocked.freeze;
+    if (['rage-entry', 'rally-rage'].includes(profile)) return unlocked.rage;
+    if (profile === 'skeleton-barrel') return unlocked.skeletonBarrel;
+    if (profile === 'freeze-rage') return unlocked.freeze && unlocked.rage;
+    if (profile === 'freeze-barrel') {
+      return unlocked.freeze && unlocked.skeletonBarrel;
+    }
+    return true;
+  });
+}
+
 
 function createArmy(townHall, name, pattern, available, capacity) {
   const byType = new Map(available.map((troop) => [troop.type, troop]));
@@ -945,12 +1940,56 @@ function buildScenarioPlan({
   exhaustive,
   maxScenarios,
   seed,
+  sameTownHallOnly,
+  attackLevelProfile,
+  attackPolicies = [],
 }) {
   const scenarios = [];
+  if (attackPolicies.length > 0) {
+    const basesByTownHall = new Map();
+    for (const base of bases) {
+      if (!basesByTownHall.has(base.townHall)) basesByTownHall.set(base.townHall, []);
+      basesByTownHall.get(base.townHall).push(base);
+    }
+    appendPureUnitMatrixScenarios({
+      scenarios,
+      requestedMatches,
+      basesByTownHall,
+      armiesByTownHall,
+      catalog,
+      seed,
+    });
+    const pureMatrixCount = scenarios.length;
+    while (scenarios.length < requestedMatches) {
+      const index = scenarios.length;
+      const explorationIndex = index - pureMatrixCount;
+      const policy = attackPolicies[explorationIndex % attackPolicies.length];
+      const basePool = basesByTownHall.get(policy.townHall) || bases;
+      const policyCycle = Math.floor(explorationIndex / attackPolicies.length);
+      const base = basePool[
+        (explorationIndex * 17 + policyCycle * 29 + policy.townHall) % basePool.length
+      ];
+      scenarios.push(makeScenario({
+        index,
+        base,
+        attackerTh: policy.townHall,
+        army: policy.army,
+        spawnProfile: policy.spawnProfile,
+        levelProfile: policy.levelProfile,
+        tactics: policy.tactics,
+        policyId: policy.id,
+        nftRarity: policy.nftRarity,
+        catalog,
+        seed,
+        experimentCohort: 'policy-exploration',
+      }));
+    }
+    return scenarios;
+  }
   if (exhaustive) {
     outer:
     for (const base of bases) {
-      for (const offset of [-1, 0, 1]) {
+      for (const offset of sameTownHallOnly ? [0] : [-1, 0, 1]) {
         const attackerTh = clampInt(base.townHall + offset, 1, catalog.maxTownHall);
         for (const army of armiesByTownHall.get(attackerTh) || []) {
           for (const spawnProfile of SPAWN_PROFILES) {
@@ -960,7 +1999,7 @@ function buildScenarioPlan({
               attackerTh,
               army,
               spawnProfile,
-              levelProfile: ATTACK_LEVEL_PROFILES[
+              levelProfile: attackLevelProfile || ATTACK_LEVEL_PROFILES[
                 scenarios.length % ATTACK_LEVEL_PROFILES.length
               ],
               tactics: scenarios.length % 5 === 0 ? 'cannon-rally' : 'none',
@@ -975,6 +2014,8 @@ function buildScenarioPlan({
     return scenarios;
   }
   const sampledBases = shuffledCopy(bases, hash32(seed, 0x42415345));
+  const representedTownHalls = [...new Set(bases.map((base) => base.townHall))]
+    .sort((a, b) => a - b);
 
   for (
     let troopIndex = 0;
@@ -982,7 +2023,11 @@ function buildScenarioPlan({
     troopIndex += 1
   ) {
     const troop = catalog.troops[troopIndex];
-    const attackerTh = clampInt(troop.unlockTownHall, 1, catalog.maxTownHall);
+    const attackerTh = sameTownHallOnly
+      ? representedTownHalls.find((townHall) => townHall >= troop.unlockTownHall)
+        || representedTownHalls.at(-1)
+        || clampInt(troop.unlockTownHall, 1, catalog.maxTownHall)
+      : clampInt(troop.unlockTownHall, 1, catalog.maxTownHall);
     const basePool = bases.filter((candidate) => candidate.townHall === attackerTh);
     const base = (basePool.length > 0 ? basePool : bases)[troopIndex % Math.max(1, basePool.length || bases.length)];
     const armies = armiesByTownHall.get(attackerTh) || [];
@@ -994,7 +2039,8 @@ function buildScenarioPlan({
       attackerTh,
       army,
       spawnProfile: SPAWN_PROFILES[troopIndex % SPAWN_PROFILES.length],
-      levelProfile: ATTACK_LEVEL_PROFILES[troopIndex % ATTACK_LEVEL_PROFILES.length],
+      levelProfile: attackLevelProfile
+        || ATTACK_LEVEL_PROFILES[troopIndex % ATTACK_LEVEL_PROFILES.length],
       tactics: troopIndex % 5 === 0 ? 'cannon-rally' : 'none',
       catalog,
       seed,
@@ -1005,11 +2051,13 @@ function buildScenarioPlan({
     const index = scenarios.length;
     const sampledIndex = index - Math.min(catalog.troops.length, requestedMatches);
     const base = sampledBases[sampledIndex % sampledBases.length];
-    const attackerTh = clampInt(
-      base.townHall + MATCHUP_OFFSETS[sampledIndex % MATCHUP_OFFSETS.length],
-      1,
-      catalog.maxTownHall,
-    );
+    const attackerTh = sameTownHallOnly
+      ? base.townHall
+      : clampInt(
+        base.townHall + MATCHUP_OFFSETS[sampledIndex % MATCHUP_OFFSETS.length],
+        1,
+        catalog.maxTownHall,
+      );
     const armies = armiesByTownHall.get(attackerTh) || [];
     const cycle = Math.floor(sampledIndex / bases.length);
     const army = armies[(index * 7 + cycle * 5) % armies.length];
@@ -1019,7 +2067,7 @@ function buildScenarioPlan({
       attackerTh,
       army,
       spawnProfile: SPAWN_PROFILES[(index + cycle) % SPAWN_PROFILES.length],
-      levelProfile: ATTACK_LEVEL_PROFILES[
+      levelProfile: attackLevelProfile || ATTACK_LEVEL_PROFILES[
         (Math.floor(index / 2) + cycle) % ATTACK_LEVEL_PROFILES.length
       ],
       tactics: index % 5 === 0 ? 'cannon-rally' : 'none',
@@ -1030,6 +2078,62 @@ function buildScenarioPlan({
   return scenarios;
 }
 
+function eligiblePureArmyMatrix({ basesByTownHall, armiesByTownHall, catalog }) {
+  const rows = [];
+  const townHalls = [...basesByTownHall.keys()].sort((a, b) => a - b);
+  for (const townHall of townHalls) {
+    const armies = armiesByTownHall.get(townHall) || [];
+    for (const troop of catalog.troops) {
+      if (troop.unlockTownHall > townHall) continue;
+      const army = armies.find((candidate) => candidate.name === `pure-${troop.type}`);
+      if (!army) continue;
+      rows.push({ townHall, troop, army });
+    }
+  }
+  return rows;
+}
+
+function appendPureUnitMatrixScenarios({
+  scenarios,
+  requestedMatches,
+  basesByTownHall,
+  armiesByTownHall,
+  catalog,
+  seed,
+}) {
+  const rows = eligiblePureArmyMatrix({
+    basesByTownHall,
+    armiesByTownHall,
+    catalog,
+  });
+  for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+    const { townHall, army } = rows[rowIndex];
+    const townHallBases = [...(basesByTownHall.get(townHall) || [])]
+      .sort((a, b) => a.id.localeCompare(b.id));
+    for (let baseIndex = 0; baseIndex < townHallBases.length; baseIndex += 1) {
+      if (scenarios.length >= requestedMatches) return;
+      const base = townHallBases[
+        (baseIndex + hash32(seed, townHall, rowIndex)) % townHallBases.length
+      ];
+      const index = scenarios.length;
+      scenarios.push(makeScenario({
+        index,
+        base,
+        attackerTh: townHall,
+        army,
+        spawnProfile: SPAWN_PROFILES[index % SPAWN_PROFILES.length],
+        levelProfile: 'maxed',
+        tactics: 'none',
+        nftRarity: 'common',
+        defenderWard: 0,
+        experimentCohort: 'pure-unit-matrix',
+        catalog,
+        seed,
+      }));
+    }
+  }
+}
+
 function makeScenario({
   index,
   base,
@@ -1038,6 +2142,11 @@ function makeScenario({
   spawnProfile,
   levelProfile,
   tactics,
+  policyId = '',
+  nftRarity = 'common',
+  defenderWard = null,
+  experimentCohort = 'sampled',
+  troopLevelSeed = null,
   catalog,
   seed,
 }) {
@@ -1047,7 +2156,9 @@ function makeScenario({
       troop,
       attackerTh,
       levelProfile,
-      seed: hash32(seed, index, hashString(troop.type)),
+      seed: troopLevelSeed === null
+        ? hash32(seed, index, hashString(troop.type))
+        : hash32(troopLevelSeed, hashString(troop.type)),
     });
   }
   return {
@@ -1061,27 +2172,2602 @@ function makeScenario({
     spawnProfile,
     levelProfile,
     tactics,
+    policyId,
+    experimentCohort,
+    attackerNftRarities: {
+      demon_king: nftRarity,
+      fire_dragon: nftRarity,
+    },
+    defenderAltarLevels: {
+      prosperity: 0,
+      ward: defenderWard === null
+        ? (index + Number(base.variation || 0)) % 4
+        : clampInt(defenderWard, 0, 3),
+      glory: 0,
+    },
     troopLevels,
   };
 }
 
+function selectEliteAttackPolicies(
+  records,
+  policies,
+  townHalls,
+  perTownHall = 5,
+  minSamples = ELITE_MIN_SAMPLES,
+) {
+  const policyById = new Map(policies.map((policy) => [policy.id, policy]));
+  const grouped = groupEvaluationRecords(records, (record) => record.scenario.policyId);
+  const selected = [];
+  for (const townHall of townHalls) {
+    const ranked = [...grouped.entries()]
+      .filter(([id, bucket]) => (
+        id
+        && policyById.get(id)?.townHall === townHall
+        && bucket.count >= minSamples
+      ))
+      .sort((a, b) => (
+        attackEvaluationScore(b[1]) - attackEvaluationScore(a[1])
+        || a[0].localeCompare(b[0])
+      ))
+      .slice(0, perTownHall)
+      .map(([id]) => policyById.get(id));
+    selected.push(...ranked);
+  }
+  return selected;
+}
+
+function selectEliteBases(records, bases, townHalls, perTownHall = 5) {
+  const baseById = new Map(bases.map((base) => [base.id, base]));
+  const grouped = groupEvaluationRecords(records, (record) => record.scenario.base.id);
+  const selected = [];
+  for (const townHall of townHalls) {
+    const ranked = [...grouped.entries()]
+      .filter(([id, bucket]) => baseById.get(id)?.townHall === townHall && bucket.count >= 2)
+      .sort((a, b) => (
+        defenseEvaluationScore(b[1]) - defenseEvaluationScore(a[1])
+        || a[0].localeCompare(b[0])
+      ))
+      .slice(0, perTownHall)
+      .map(([id]) => baseById.get(id));
+    selected.push(...ranked);
+  }
+  return selected;
+}
+
+function groupEvaluationRecords(records, keyFor) {
+  const grouped = new Map();
+  for (const record of records) {
+    const key = keyFor(record);
+    if (!key) continue;
+    if (!grouped.has(key)) {
+      grouped.set(key, {
+        count: 0,
+        wins: 0,
+        destruction: 0,
+        townHallHp: 0,
+      });
+    }
+    const bucket = grouped.get(key);
+    bucket.count += 1;
+    bucket.wins += record.result.win ? 1 : 0;
+    bucket.destruction += rate(
+      record.result.buildingsDestroyed,
+      record.result.buildingCount,
+    );
+    bucket.townHallHp += Number(record.result.townHallHpPct || 0);
+  }
+  return grouped;
+}
+
+function attackEvaluationScore(bucket) {
+  return (
+    rate(bucket.wins, bucket.count) * 100
+    + avg(bucket.destruction, bucket.count) * 15
+    - avg(bucket.townHallHp, bucket.count) * 5
+  );
+}
+
+function defenseEvaluationScore(bucket) {
+  return (
+    (1 - rate(bucket.wins, bucket.count)) * 100
+    + avg(bucket.townHallHp, bucket.count) * 15
+    - avg(bucket.destruction, bucket.count) * 5
+  );
+}
+
+function mutateElitePolicies({
+  elitePolicies,
+  armiesByTownHall,
+  combatDefs,
+  seed,
+  round,
+  forcedLevelProfile,
+}) {
+  return elitePolicies.map((policy, index) => {
+    const armies = armiesByTownHall.get(policy.townHall) || [policy.army];
+    const armyIndex = Math.max(0, armies.findIndex((army) => army.id === policy.army.id));
+    const tactics = availableTacticProfiles(combatDefs, policy.townHall);
+    const tacticIndex = tactics.indexOf(policy.tactics);
+    const rarityIndex = NFT_RARITIES.indexOf(policy.nftRarity);
+    const mutationDimensions = [
+      'army',
+      'spawn',
+      'tactics',
+      'rarity',
+    ];
+    if (!forcedLevelProfile) mutationDimensions.push('level');
+    const mutationDimension = mutationDimensions[
+      hash32(seed, round, index) % mutationDimensions.length
+    ];
+    return {
+      id: `${policy.id}-r${round}-m${String(index + 1).padStart(2, '0')}`,
+      townHall: policy.townHall,
+      army: mutationDimension === 'army'
+        ? armies[(armyIndex + round + index + 1) % armies.length]
+        : policy.army,
+      spawnProfile: mutationDimension === 'spawn'
+        ? mutateSpawnProfile(
+          policy.spawnProfile,
+          hash32(seed, index, round),
+          round,
+        )
+        : policy.spawnProfile,
+      levelProfile: mutationDimension === 'level'
+        ? forcedLevelProfile || ATTACK_LEVEL_PROFILES[
+          (ATTACK_LEVEL_PROFILES.indexOf(policy.levelProfile) + round + 1)
+          % ATTACK_LEVEL_PROFILES.length
+        ]
+        : policy.levelProfile,
+      tactics: mutationDimension === 'tactics'
+        ? tactics[
+          (Math.max(0, tacticIndex) + round + (hash32(seed, index, 7) % 4) + 1)
+          % tactics.length
+        ]
+        : policy.tactics,
+      nftRarity: mutationDimension === 'rarity'
+        ? NFT_RARITIES[
+          (Math.max(0, rarityIndex) + round + 1) % NFT_RARITIES.length
+        ]
+        : policy.nftRarity,
+      parentId: policy.id,
+      mutationDimension,
+    };
+  });
+}
+
+function policySignature(policy) {
+  return [
+    policy.townHall,
+    policy.army?.id || '',
+    policy.spawnProfile,
+    policy.levelProfile,
+    policy.tactics,
+    policy.nftRarity,
+  ].join('|');
+}
+
+function ensureUniquePolicyMutations(candidates, existingPolicies) {
+  const used = new Set(existingPolicies.map(policySignature));
+  return candidates.map((candidate) => {
+    let unique = candidate;
+    if (used.has(policySignature(unique))) {
+      const peers = existingPolicies.filter(
+        (policy) => policy.townHall === candidate.townHall,
+      );
+      const optionsByDimension = {
+        army: [...new Map(
+          peers.map((policy) => [policy.army.id, policy.army]),
+        ).values()],
+        spawn: SPAWN_PROFILES,
+        level: [...new Set(peers.map((policy) => policy.levelProfile))],
+        tactics: [...new Set(peers.map((policy) => policy.tactics))],
+        rarity: NFT_RARITIES,
+      };
+      const propertyByDimension = {
+        army: 'army',
+        spawn: 'spawnProfile',
+        level: 'levelProfile',
+        tactics: 'tactics',
+        rarity: 'nftRarity',
+      };
+      const property = propertyByDimension[candidate.mutationDimension];
+      const options = optionsByDimension[candidate.mutationDimension] || [];
+      for (const option of options) {
+        const fallback = { ...candidate, [property]: option };
+        if (used.has(policySignature(fallback))) continue;
+        unique = fallback;
+        break;
+      }
+    }
+    const signature = policySignature(unique);
+    if (used.has(signature)) {
+      throw new Error(`Could not make policy mutation unique: ${candidate.id}`);
+    }
+    used.add(signature);
+    return unique;
+  });
+}
+
+function mutateSpawnProfile(profile, seed, round) {
+  const current = parseSpawnProfile(profile);
+  const dimension = hash32(seed, round, hashString(profile)) % 3;
+  const mutateDimension = (values, value, salt) => {
+    const currentIndex = Math.max(0, values.indexOf(value));
+    const offset = 1 + (hash32(seed, round, salt) % Math.max(1, values.length - 1));
+    return values[(currentIndex + offset) % values.length];
+  };
+  const mutated = {
+    ...current,
+    formation: dimension === 0
+      ? mutateDimension(SPAWN_FORMATIONS, current.formation, 11)
+      : current.formation,
+    timing: dimension === 1
+      ? mutateDimension(SPAWN_TIMINGS, current.timing, 17)
+      : current.timing,
+    order: dimension === 2
+      ? mutateDimension(DEPLOYMENT_ORDERS, current.order, 23)
+      : current.order,
+  };
+  return formatSpawnProfile(mutated);
+}
+
+function mutateEliteBases({ eliteBases, seed, round }) {
+  return eliteBases.map((base, index) => {
+    const mutated = {
+      ...base,
+      id: `${base.id}-r${round}-m${String(index + 1).padStart(2, '0')}`,
+      variation: Number(base.variation || 0) + round * 10_000 + index,
+      parentId: base.id,
+      buildings: base.buildings.map((building) => ({
+        ...building,
+        size: [...(building.size || [2, 2])],
+      })),
+    };
+    const defenses = mutated.buildings
+      .filter((building) => building.role === 'defense')
+      .sort((a, b) => a.grid_z - b.grid_z);
+    const shields = mutated.buildings
+      .filter((building) => !['defense', 'core', 'trap'].includes(building.role))
+      .sort((a, b) => b.grid_z - a.grid_z);
+    const start = hash32(seed, round, index);
+    for (let offset = 0; offset < defenses.length; offset += 1) {
+      const defense = defenses[(start + offset) % defenses.length];
+      const shield = shields.find((candidate) => (
+        candidate.size[0] === defense.size[0]
+        && candidate.size[1] === defense.size[1]
+        && candidate.grid_z > defense.grid_z
+      ));
+      if (!shield) continue;
+      [defense.grid_x, shield.grid_x] = [shield.grid_x, defense.grid_x];
+      [defense.grid_z, shield.grid_z] = [shield.grid_z, defense.grid_z];
+      break;
+    }
+    if (baseSignature(mutated) === baseSignature(base)) {
+      const maxX = Math.max(
+        ...mutated.buildings.map(
+          (building) => building.grid_x + (building.size?.[0] || 2),
+        ),
+      );
+      const minX = Math.min(...mutated.buildings.map((building) => building.grid_x));
+      const shiftX = maxX < 29 ? 1 : minX > 0 ? -1 : 0;
+      for (const building of mutated.buildings) building.grid_x += shiftX;
+    }
+    mutated.metrics = baseGeometryMetrics(mutated.buildings, 29, 27);
+    return mutated;
+  });
+}
+
+function ensureUniqueBaseMutations(candidates, existingBases) {
+  const used = new Set(existingBases.map(baseSignature));
+  const transforms = [];
+  for (const mirrorX of [false, true]) {
+    for (let dz = -2; dz <= 2; dz += 1) {
+      for (let dx = -3; dx <= 3; dx += 1) {
+        transforms.push({ mirrorX, dx, dz });
+      }
+    }
+  }
+  return candidates.map((candidate) => {
+    const sourceBuildings = candidate.buildings.map((building) => ({
+      ...building,
+      size: [...(building.size || [2, 2])],
+    }));
+    for (const transform of transforms) {
+      const buildings = sourceBuildings.map((building) => {
+        const sizeX = building.size[0];
+        const mirroredX = transform.mirrorX
+          ? 29 - building.grid_x - sizeX
+          : building.grid_x;
+        return {
+          ...building,
+          size: [...building.size],
+          grid_x: mirroredX + transform.dx,
+          grid_z: building.grid_z + transform.dz,
+        };
+      });
+      const inBounds = buildings.every((building) => (
+        building.grid_x >= 0
+        && building.grid_z >= 0
+        && building.grid_x + building.size[0] <= 29
+        && building.grid_z + building.size[1] <= 27
+      ));
+      if (!inBounds) continue;
+      const variant = {
+        ...candidate,
+        buildings,
+        metrics: baseGeometryMetrics(buildings, 29, 27),
+      };
+      const signature = baseSignature(variant);
+      if (used.has(signature)) continue;
+      used.add(signature);
+      return variant;
+    }
+    throw new Error(`Could not produce a unique in-bounds mutation for ${candidate.id}.`);
+  });
+}
+
+function buildAdversarialScenarioPlan({
+  count,
+  startIndex,
+  policies,
+  bases,
+  catalog,
+  seed,
+  round = 0,
+}) {
+  const townHalls = [...new Set(policies.map((policy) => policy.townHall))]
+    .sort((a, b) => a - b);
+  const policiesByTownHall = new Map();
+  const basesByTownHall = new Map();
+  for (const townHall of townHalls) {
+    policiesByTownHall.set(
+      townHall,
+      policies.filter((policy) => policy.townHall === townHall),
+    );
+    basesByTownHall.set(
+      townHall,
+      bases.filter((base) => base.townHall === townHall),
+    );
+  }
+  const scenarios = [];
+  const cursorByTownHall = new Map(townHalls.map((townHall) => [townHall, 0]));
+  for (let offset = 0; offset < count; offset += 1) {
+    const townHall = townHalls[offset % townHalls.length];
+    const policyPool = policiesByTownHall.get(townHall) || [];
+    const basePool = basesByTownHall.get(townHall) || [];
+    if (policyPool.length === 0 || basePool.length === 0) continue;
+    const index = startIndex + scenarios.length;
+    const pairCount = policyPool.length * basePool.length;
+    const localCursor = cursorByTownHall.get(townHall) || 0;
+    const policyOffset = hash32(seed, townHall, 29) % policyPool.length;
+    const baseOffset = hash32(seed, townHall, 37) % basePool.length;
+    const policyIndex = (localCursor + policyOffset) % policyPool.length;
+    const cycle = Math.floor(localCursor / policyPool.length);
+    const baseIndex = (
+      policyIndex
+      + cycle
+      + baseOffset
+    ) % basePool.length;
+    cursorByTownHall.set(townHall, localCursor + 1);
+    const policy = policyPool[policyIndex];
+    const base = basePool[baseIndex];
+    scenarios.push(makeScenario({
+      index,
+      base,
+      attackerTh: townHall,
+      army: policy.army,
+      spawnProfile: policy.spawnProfile,
+      levelProfile: policy.levelProfile,
+      tactics: policy.tactics,
+      policyId: policy.id,
+      nftRarity: policy.nftRarity,
+      catalog,
+      seed,
+      experimentCohort: `training-round-${round}`,
+    }));
+  }
+  return scenarios;
+}
+
+function runUnitUtilityProbe({
+  basesPerTroop,
+  requestedTroops,
+  verifyReplay,
+  combatDefs,
+  bases,
+  catalog,
+  shipCapacities,
+  seed,
+  startIndex,
+  verbose,
+}) {
+  if (basesPerTroop <= 0 || bases.length === 0) {
+    return {
+      enabled: false,
+      basesPerTroop: 0,
+      referenceTownHall: 0,
+      totalPairs: 0,
+      totalBattles: 0,
+      invalid: 0,
+      byTroop: {},
+      byRole: {},
+    };
+  }
+  const referenceTownHall = Math.max(...bases.map((base) => base.townHall));
+  const referenceBases = bases
+    .filter((base) => base.townHall === referenceTownHall)
+    .sort((a, b) => a.id.localeCompare(b.id));
+  const capacity = Number(shipCapacities[referenceTownHall])
+    || Math.max(...Object.values(shipCapacities));
+  const controlArmy = createStarterReferenceArmy(
+    referenceTownHall,
+    capacity,
+    catalog,
+  );
+  const byTroop = {};
+  let totalBattles = 0;
+  let invalid = 0;
+  const probeTroops = catalog.troops.filter((troop) => (
+    !requestedTroops
+    || requestedTroops.size === 0
+    || requestedTroops.has(troop.type)
+  ));
+
+  for (let troopIndex = 0; troopIndex < probeTroops.length; troopIndex += 1) {
+    const troop = probeTroops[troopIndex];
+    const selectedBases = selectProbeBases(
+      referenceBases,
+      basesPerTroop,
+      hash32(seed, troopIndex, 0x5554494c),
+    );
+    const candidateArmy = createUnitUtilityArmy({
+      troop,
+      townHall: Math.max(referenceTownHall, troop.unlockTownHall),
+      capacity,
+      catalog,
+    });
+    const bucket = createPairedUtilityBucket(
+      troop,
+      candidateArmy,
+      controlArmy,
+      referenceTownHall,
+    );
+    for (let pairIndex = 0; pairIndex < selectedBases.length; pairIndex += 1) {
+      const base = selectedBases[pairIndex];
+      const attackerTh = Math.max(referenceTownHall, troop.unlockTownHall);
+      const spawnProfile = SPAWN_PROFILES[
+        hash32(seed, troopIndex, pairIndex, 0x53504157) % SPAWN_PROFILES.length
+      ];
+      const troopLevelSeed = hash32(
+        seed,
+        hashString(base.id),
+        hashString(troop.type),
+        0x4c455645,
+      );
+      const common = {
+        base,
+        attackerTh,
+        spawnProfile,
+        levelProfile: 'maxed',
+        tactics: 'none',
+        nftRarity: 'common',
+        defenderWard: 0,
+        catalog,
+        seed,
+        troopLevelSeed,
+      };
+      const controlScenario = makeScenario({
+        ...common,
+        index: startIndex + totalBattles,
+        army: controlArmy,
+        policyId: `utility-${troop.type}-control-${pairIndex + 1}`,
+        experimentCohort: 'unit-utility-control',
+      });
+      const controlResult = runScenario(
+        verifyReplay,
+        combatDefs,
+        controlScenario,
+        verbose,
+      );
+      totalBattles += 1;
+      const candidateScenario = makeScenario({
+        ...common,
+        index: startIndex + totalBattles,
+        army: candidateArmy,
+        policyId: `utility-${troop.type}-candidate-${pairIndex + 1}`,
+        experimentCohort: 'unit-utility-candidate',
+      });
+      const candidateResult = runScenario(
+        verifyReplay,
+        combatDefs,
+        candidateScenario,
+        verbose,
+      );
+      totalBattles += 1;
+      if (!controlResult.valid) invalid += 1;
+      if (!candidateResult.valid) invalid += 1;
+      recordPairedUtilityResult(bucket, controlResult, candidateResult, base);
+    }
+    byTroop[troop.type] = finalizePairedUtilityBucket(bucket);
+  }
+
+  const byRoleBuckets = new Map();
+  for (const row of Object.values(byTroop)) {
+    if (!byRoleBuckets.has(row.role)) {
+      byRoleBuckets.set(row.role, {
+        pairs: 0,
+        validPairs: 0,
+        controlWins: 0,
+        candidateWins: 0,
+        gainedWins: 0,
+        lostWins: 0,
+        destructionDelta: 0,
+        townHallHpDelta: 0,
+      });
+    }
+    const role = byRoleBuckets.get(row.role);
+    role.pairs += row.pairs;
+    role.validPairs += row.validPairs;
+    role.controlWins += row.controlWins;
+    role.candidateWins += row.candidateWins;
+    role.gainedWins += row.gainedWins;
+    role.lostWins += row.lostWins;
+    role.destructionDelta += row.destructionDelta * row.validPairs;
+    role.townHallHpDelta += row.townHallHpDelta * row.validPairs;
+  }
+  const byRole = Object.fromEntries(
+    [...byRoleBuckets.entries()].map(([role, bucket]) => [
+      role,
+      {
+        ...bucket,
+        controlWinRate: rate(bucket.controlWins, bucket.validPairs),
+        candidateWinRate: rate(bucket.candidateWins, bucket.validPairs),
+        winRateDelta: rate(
+          bucket.candidateWins - bucket.controlWins,
+          bucket.validPairs,
+        ),
+        destructionDelta: avg(bucket.destructionDelta, bucket.validPairs),
+        townHallHpDelta: avg(bucket.townHallHpDelta, bucket.validPairs),
+      },
+    ]),
+  );
+  return {
+    enabled: true,
+    basesPerTroop: Math.min(basesPerTroop, referenceBases.length),
+    referenceTownHall,
+    referenceBaseCount: referenceBases.length,
+    projectedTroops: catalog.troops
+      .filter((troop) => (
+        probeTroops.includes(troop)
+        && troop.unlockTownHall > referenceTownHall
+      ))
+      .map((troop) => troop.type),
+    totalPairs: Object.values(byTroop)
+      .reduce((sum, row) => sum + row.pairs, 0),
+    totalBattles,
+    invalid,
+    byTroop,
+    byRole,
+  };
+}
+
+function createStarterReferenceArmy(townHall, capacity, catalog) {
+  const available = catalog.troops.filter((troop) => ['knight', 'archer'].includes(troop.type));
+  return createArmy(
+    townHall,
+    'utility-starter-control',
+    ['knight', 'archer'],
+    available,
+    capacity,
+  );
+}
+
+function createUnitUtilityArmy({ troop, townHall, capacity, catalog }) {
+  const byType = new Map(catalog.troops.map((entry) => [entry.type, entry]));
+  const slotCost = Math.max(1, Number(troop.slotCost) || 1);
+  let copies = Math.max(1, Math.round(15 / slotCost));
+  while (copies * slotCost > Math.min(20, capacity)) copies -= 1;
+  const units = Array.from({ length: Math.max(1, copies) }, () => troop.type);
+  let slotsUsed = units.length * slotCost;
+  const filler = ['knight', 'archer'];
+  let cursor = 0;
+  while (slotsUsed < capacity && cursor < capacity * 4) {
+    const type = filler[cursor % filler.length];
+    const cost = Number(byType.get(type)?.slotCost || 1);
+    if (slotsUsed + cost <= capacity) {
+      units.push(type);
+      slotsUsed += cost;
+    }
+    cursor += 1;
+  }
+  return {
+    id: `th${townHall}-utility-${troop.type}`,
+    townHall,
+    name: `utility-${troop.type}`,
+    units,
+    slotsUsed,
+    capacity,
+    utilization: round(slotsUsed / capacity, 4),
+    candidateCopies: copies,
+    candidateSlots: copies * slotCost,
+  };
+}
+
+function createPairedUtilityBucket(troop, candidateArmy, controlArmy, referenceTownHall) {
+  const roleEntry = UNIT_ROLE_REGISTRY[troop.type] || {};
+  return {
+    troop: troop.type,
+    role: roleEntry.role || 'damage',
+    access: roleEntry.access || 'regular',
+    mechanics: roleEntry.mechanics || [],
+    unlockTownHall: troop.unlockTownHall,
+    referenceTownHall,
+    slotCost: troop.slotCost,
+    candidateCopies: candidateArmy.candidateCopies,
+    candidateSlots: candidateArmy.candidateSlots,
+    controlArmy: controlArmy.name,
+    pairs: 0,
+    validPairs: 0,
+    invalidPairs: 0,
+    controlWins: 0,
+    candidateWins: 0,
+    gainedWins: 0,
+    lostWins: 0,
+    destructionDelta: 0,
+    townHallHpDelta: 0,
+    survivalDelta: 0,
+    summonDelta: 0,
+    evolutionDelta: 0,
+    trapTriggerDelta: 0,
+    byArchetype: {},
+  };
+}
+
+function recordPairedUtilityResult(bucket, control, candidate, base) {
+  bucket.pairs += 1;
+  if (!control.valid || !candidate.valid) {
+    bucket.invalidPairs += 1;
+    return;
+  }
+  bucket.validPairs += 1;
+  bucket.controlWins += control.win ? 1 : 0;
+  bucket.candidateWins += candidate.win ? 1 : 0;
+  if (!control.win && candidate.win) bucket.gainedWins += 1;
+  if (control.win && !candidate.win) bucket.lostWins += 1;
+  bucket.destructionDelta += (
+    rate(candidate.buildingsDestroyed, candidate.buildingCount)
+    - rate(control.buildingsDestroyed, control.buildingCount)
+  );
+  bucket.townHallHpDelta += (
+    Number(control.townHallHpPct || 0)
+    - Number(candidate.townHallHpPct || 0)
+  );
+  bucket.survivalDelta += (
+    rate(candidate.troopsAlive, candidate.troopsSpawned)
+    - rate(control.troopsAlive, control.troopsSpawned)
+  );
+  bucket.summonDelta += candidate.summonsSpawned - control.summonsSpawned;
+  bucket.evolutionDelta += (
+    candidate.evolutionChildrenSpawned - control.evolutionChildrenSpawned
+  );
+  bucket.trapTriggerDelta += (
+    candidate.sharkTrapsTriggered - control.sharkTrapsTriggered
+  );
+  const archetype = base.archetype;
+  if (!bucket.byArchetype[archetype]) {
+    bucket.byArchetype[archetype] = {
+      pairs: 0,
+      controlWins: 0,
+      candidateWins: 0,
+    };
+  }
+  bucket.byArchetype[archetype].pairs += 1;
+  bucket.byArchetype[archetype].controlWins += control.win ? 1 : 0;
+  bucket.byArchetype[archetype].candidateWins += candidate.win ? 1 : 0;
+}
+
+function finalizePairedUtilityBucket(bucket) {
+  const byArchetype = Object.fromEntries(
+    Object.entries(bucket.byArchetype).map(([archetype, row]) => [
+      archetype,
+      {
+        ...row,
+        controlWinRate: rate(row.controlWins, row.pairs),
+        candidateWinRate: rate(row.candidateWins, row.pairs),
+        winRateDelta: rate(row.candidateWins - row.controlWins, row.pairs),
+      },
+    ]),
+  );
+  return {
+    ...bucket,
+    projected: bucket.unlockTownHall > bucket.referenceTownHall,
+    controlWinRate: rate(bucket.controlWins, bucket.validPairs),
+    candidateWinRate: rate(bucket.candidateWins, bucket.validPairs),
+    winRateDelta: rate(
+      bucket.candidateWins - bucket.controlWins,
+      bucket.validPairs,
+    ),
+    netWinFlips: bucket.gainedWins - bucket.lostWins,
+    pairedWinRateInterval90: pairedDeltaInterval(
+      bucket.gainedWins,
+      bucket.lostWins,
+      bucket.validPairs,
+      1.6448536269514722,
+    ),
+    pairedWinRateInterval95: pairedDeltaInterval(
+      bucket.gainedWins,
+      bucket.lostWins,
+      bucket.validPairs,
+      1.959963984540054,
+    ),
+    destructionDelta: avg(bucket.destructionDelta, bucket.validPairs),
+    townHallHpDelta: avg(bucket.townHallHpDelta, bucket.validPairs),
+    survivalDelta: avg(bucket.survivalDelta, bucket.validPairs),
+    summonDelta: avg(bucket.summonDelta, bucket.validPairs),
+    evolutionDelta: avg(bucket.evolutionDelta, bucket.validPairs),
+    trapTriggerDelta: avg(bucket.trapTriggerDelta, bucket.validPairs),
+    byArchetype,
+  };
+}
+
+function pairedDeltaInterval(gainedWins, lostWins, validPairs, zScore) {
+  const count = Math.max(0, Number(validPairs) || 0);
+  const gained = Math.max(0, Number(gainedWins) || 0);
+  const lost = Math.max(0, Number(lostWins) || 0);
+  const delta = rate(gained - lost, count);
+  if (count <= 1) {
+    return { low: -1, high: 1, delta, standardError: 1 };
+  }
+  const discordant = gained + lost;
+  const variance = Math.max(
+    0,
+    (discordant - count * delta * delta) / (count - 1),
+  );
+  const standardError = Math.sqrt(variance / count);
+  return {
+    low: Math.max(-1, delta - zScore * standardError),
+    high: Math.min(1, delta + zScore * standardError),
+    delta,
+    standardError,
+  };
+}
+
+function analyzeUnitUtilityProbe(probe) {
+  if (!probe?.enabled) return [];
+  const issues = [];
+  for (const row of Object.values(probe.byTroop || {})) {
+    if (row.invalidPairs > 0) {
+      issues.push({
+        severity: 'critical',
+        code: 'unit-utility-invalid-pair',
+        message: `${row.troop} has ${row.invalidPairs}/${row.pairs} invalid equal-slot utility pairs.`,
+      });
+      continue;
+    }
+    if (row.validPairs < 90) {
+      issues.push({
+        severity: 'warning',
+        code: 'unit-utility-sample-size',
+        message: `${row.troop} has only ${row.validPairs} valid utility pairs; at least 90 per holdout seed are required.`,
+      });
+    }
+    const interval = row.pairedWinRateInterval95;
+    if (row.projected) {
+      if (interval.high < -0.20) {
+        issues.push({
+          severity: 'critical',
+          code: 'projected-unit-grossly-underpowered',
+          message: `${row.troop} projected utility is grossly weak versus the TH${probe.referenceTownHall} ceiling: ${pct(row.winRateDelta)} paired delta, 95% CI ${pct(interval.low)} to ${pct(interval.high)}.`,
+        });
+      } else if (interval.low > 0.20) {
+        issues.push({
+          severity: 'warning',
+          code: 'projected-unit-overtuning',
+          message: `${row.troop} projected utility may be overtuned versus the TH${probe.referenceTownHall} ceiling: ${pct(row.winRateDelta)} paired delta, 95% CI ${pct(interval.low)} to ${pct(interval.high)}.`,
+        });
+      }
+      continue;
+    }
+
+    const specialized = row.role === 'utility' || row.role === 'support';
+    const lowerMargin = specialized ? -0.125 : -0.10;
+    const upperMargin = specialized ? 0.15 : (row.access === 'nft' ? 0.15 : 0.10);
+    if (interval.high < lowerMargin) {
+      issues.push({
+        severity: 'critical',
+        code: 'underpowered-unit-utility',
+        message: `${row.troop} is below its role-aware equal-slot utility floor: ${pct(row.winRateDelta)} paired delta, 95% CI ${pct(interval.low)} to ${pct(interval.high)}.`,
+      });
+    } else if (interval.low > upperMargin) {
+      issues.push({
+        severity: row.access === 'nft' ? 'warning' : 'critical',
+        code: 'dominant-unit-utility',
+        message: `${row.troop} exceeds its role-aware equal-slot utility ceiling: ${pct(row.winRateDelta)} paired delta, 95% CI ${pct(interval.low)} to ${pct(interval.high)}.`,
+      });
+    } else if (
+      row.winRateDelta < lowerMargin
+      || row.winRateDelta > upperMargin
+    ) {
+      issues.push({
+        severity: 'warning',
+        code: 'unit-utility-inconclusive',
+        message: `${row.troop} point estimate ${pct(row.winRateDelta)} is outside its role-aware corridor, but the paired 95% CI ${pct(interval.low)} to ${pct(interval.high)} is inconclusive.`,
+      });
+    }
+  }
+  return issues;
+}
+
+function runNftRarityProbe({
+  basesPerTroop,
+  verifyReplay,
+  combatDefs,
+  bases,
+  armiesByTownHall,
+  catalog,
+  seed,
+  startIndex,
+  verbose,
+}) {
+  if (basesPerTroop <= 0 || bases.length === 0) {
+    return {
+      enabled: false,
+      basesPerTroop: 0,
+      totalBattles: 0,
+      invalid: 0,
+      byTroop: {},
+    };
+  }
+  const nftTypes = ['demon_king', 'fire_dragon']
+    .filter((type) => catalog.troops.some((troop) => troop.type === type));
+  const byTroop = {};
+  let totalBattles = 0;
+  let invalid = 0;
+  for (let troopIndex = 0; troopIndex < nftTypes.length; troopIndex += 1) {
+    const troopType = nftTypes[troopIndex];
+    const selectedBases = selectProbeBases(
+      [...bases].sort((a, b) => a.id.localeCompare(b.id)),
+      basesPerTroop,
+      hash32(seed, troopIndex, 0x4e465452),
+    );
+    const bucket = {
+      troop: troopType,
+      pairs: 0,
+      invalidPairs: 0,
+      byRarity: Object.fromEntries(
+        ['common', 'epic', 'legendary'].map((rarity) => [
+          rarity,
+          createBucket(),
+        ]),
+      ),
+      versusCommon: {
+        epic: { gainedWins: 0, lostWins: 0, validPairs: 0 },
+        legendary: { gainedWins: 0, lostWins: 0, validPairs: 0 },
+      },
+    };
+    for (let pairIndex = 0; pairIndex < selectedBases.length; pairIndex += 1) {
+      const base = selectedBases[pairIndex];
+      const army = (armiesByTownHall.get(base.townHall) || [])
+        .find((candidate) => candidate.name === `pure-${troopType}`);
+      if (!army) continue;
+      const spawnProfile = SPAWN_PROFILES[
+        hash32(seed, troopIndex, pairIndex, 0x52415245) % SPAWN_PROFILES.length
+      ];
+      const troopLevelSeed = hash32(
+        seed,
+        hashString(base.id),
+        hashString(troopType),
+        0x4e46544c,
+      );
+      const results = {};
+      for (const rarity of ['common', 'epic', 'legendary']) {
+        const scenario = makeScenario({
+          index: startIndex + totalBattles,
+          base,
+          attackerTh: base.townHall,
+          army,
+          spawnProfile,
+          levelProfile: 'maxed',
+          tactics: 'none',
+          policyId: `rarity-${troopType}-${rarity}-${pairIndex + 1}`,
+          nftRarity: rarity,
+          defenderWard: 0,
+          experimentCohort: 'nft-rarity-probe',
+          troopLevelSeed,
+          catalog,
+          seed,
+        });
+        const result = runScenario(verifyReplay, combatDefs, scenario, verbose);
+        totalBattles += 1;
+        if (!result.valid) invalid += 1;
+        results[rarity] = result;
+        recordBucket(bucket.byRarity[rarity], result);
+      }
+      bucket.pairs += 1;
+      for (const rarity of ['epic', 'legendary']) {
+        const common = results.common;
+        const rare = results[rarity];
+        if (!common.valid || !rare.valid) {
+          bucket.invalidPairs += 1;
+          continue;
+        }
+        const pair = bucket.versusCommon[rarity];
+        pair.validPairs += 1;
+        if (!common.win && rare.win) pair.gainedWins += 1;
+        if (common.win && !rare.win) pair.lostWins += 1;
+      }
+    }
+    for (const rarity of ['epic', 'legendary']) {
+      const common = bucket.byRarity.common;
+      const rare = bucket.byRarity[rarity];
+      const pair = bucket.versusCommon[rarity];
+      pair.commonWinRate = rate(common.validWins, common.validCount);
+      pair.rareWinRate = rate(rare.validWins, rare.validCount);
+      pair.winRateDelta = pair.rareWinRate - pair.commonWinRate;
+      pair.netWinFlips = pair.gainedWins - pair.lostWins;
+      pair.pairedWinRateInterval95 = pairedDeltaInterval(
+        pair.gainedWins,
+        pair.lostWins,
+        pair.validPairs,
+        1.959963984540054,
+      );
+    }
+    byTroop[troopType] = bucket;
+  }
+  return {
+    enabled: true,
+    basesPerTroop: Math.min(basesPerTroop, bases.length),
+    totalBattles,
+    invalid,
+    byTroop,
+  };
+}
+
+function analyzeNftRarityProbe(probe) {
+  if (!probe?.enabled) return [];
+  const issues = [];
+  const ceilings = {
+    epic: { pass: 0.05, hard: 0.075 },
+    legendary: { pass: 0.08, hard: 0.10 },
+  };
+  for (const row of Object.values(probe.byTroop || {})) {
+    if (row.invalidPairs > 0) {
+      issues.push({
+        severity: 'critical',
+        code: 'nft-rarity-invalid-pair',
+        message: `${row.troop} has ${row.invalidPairs} invalid paired rarity comparisons.`,
+      });
+    }
+    for (const rarity of ['epic', 'legendary']) {
+      const comparison = row.versusCommon?.[rarity];
+      if (!comparison || comparison.validPairs === 0) continue;
+      const interval = comparison.pairedWinRateInterval95;
+      const ceiling = ceilings[rarity];
+      if (comparison.lostWins > 0) {
+        issues.push({
+          severity: comparison.netWinFlips < 0 ? 'critical' : 'warning',
+          code: 'nft-rarity-outcome-reversal',
+          message: `${row.troop} ${rarity} lost ${comparison.lostWins} deterministic battles won by common, while gaining ${comparison.gainedWins}; stronger stats can alter target timing, so the aggregate paired direction remains authoritative.`,
+        });
+      }
+      if (interval.high < 0) {
+        issues.push({
+          severity: 'critical',
+          code: 'nft-rarity-underperforms-common',
+          message: `${row.troop} ${rarity} is statistically weaker than common: ${pct(comparison.winRateDelta)} lift, 95% CI ${pct(interval.low)} to ${pct(interval.high)}.`,
+        });
+      }
+      if (interval.low > ceiling.pass) {
+        issues.push({
+          severity: 'critical',
+          code: 'nft-rarity-pay-to-win',
+          message: `${row.troop} ${rarity} exceeds the paired rarity ceiling: ${pct(comparison.winRateDelta)} lift, 95% CI ${pct(interval.low)} to ${pct(interval.high)}.`,
+        });
+      } else if (
+        comparison.winRateDelta > ceiling.pass
+        || interval.high > ceiling.hard
+      ) {
+        issues.push({
+          severity: 'warning',
+          code: 'nft-rarity-ceiling-inconclusive',
+          message: `${row.troop} ${rarity} rarity lift is not yet conclusively inside the authored ceiling: ${pct(comparison.winRateDelta)}, 95% CI ${pct(interval.low)} to ${pct(interval.high)}.`,
+        });
+      }
+    }
+  }
+  return issues;
+}
+
+function runBaseCounterMetaProbe({
+  requestedBattles,
+  verifyReplay,
+  combatDefs,
+  bases,
+  armiesByTownHall,
+  catalog,
+  seed,
+  startIndex,
+  verbose,
+}) {
+  if (requestedBattles <= 0 || bases.length === 0) {
+    return {
+      enabled: false,
+      requestedBattles: 0,
+      totalBattles: 0,
+      discoveryBattles: 0,
+      counterHoldoutBattles: 0,
+      universalHoldoutBattles: 0,
+      hardConfirmationBattles: 0,
+      invalid: 0,
+      testedBaseCount: 0,
+      armyCountByTownHall: {},
+      availableArmyCountByTownHall: {},
+      missingDiscoveryCellCount: 0,
+      discoveryZeroCounterBaseCount: 0,
+      zeroCounterBaseCount: 0,
+      confirmedBreakabilityFailureCount: 0,
+      byCell: {},
+      byBase: {},
+      byArmy: {},
+      diversity: {},
+      diversityByTownHall: {},
+      diversityByLayoutFamily: {},
+      diversityByLevelProfile: {},
+      universalFamily: '',
+    };
+  }
+
+  const orderedBases = [...bases].sort((a, b) => a.id.localeCompare(b.id));
+  const selectedArmiesByTownHall = new Map();
+  const armyCountByTownHall = {};
+  const availableArmyCountByTownHall = {};
+  for (const townHall of [...new Set(orderedBases.map((base) => base.townHall))]) {
+    availableArmyCountByTownHall[`TH${townHall}`] = (
+      armiesByTownHall.get(townHall) || []
+    ).length;
+    const selected = selectBaseCounterMetaArmies(
+      armiesByTownHall.get(townHall) || [],
+      15,
+    );
+    if (selected.length < 15) {
+      throw new Error(
+        `Base-counter meta requires 15 distinct TH${townHall} armies; `
+        + `only ${selected.length} are available.`,
+      );
+    }
+    selectedArmiesByTownHall.set(townHall, selected);
+    armyCountByTownHall[`TH${townHall}`] = selected.length;
+  }
+
+  const requiredDiscoveryBattles = orderedBases.reduce(
+    (total, base) => (
+      total
+      + (selectedArmiesByTownHall.get(base.townHall)?.length || 0)
+        * COUNTER_META_CONFIRMATION_CONTEXTS
+    ),
+    0,
+  );
+  if (requestedBattles < requiredDiscoveryBattles) {
+    throw new Error(
+      `--base-counter-matches ${requestedBattles} is too small for the `
+      + `${requiredDiscoveryBattles}-battle paired discovery matrix.`,
+    );
+  }
+
+  const cells = new Map();
+  const cellIdsByBase = new Map(orderedBases.map((base) => [base.id, []]));
+  let totalBattles = 0;
+  let invalid = 0;
+  const phaseCounts = {
+    discovery: 0,
+    counterHoldout: 0,
+    universalHoldout: 0,
+    hardConfirmation: 0,
+  };
+
+  function execute(base, army, phase, contextOrdinal) {
+    const context = baseCounterMetaContext({
+      combatDefs,
+      base,
+      seed,
+      phase,
+      contextOrdinal,
+    });
+    const scenario = makeScenario({
+      index: startIndex + totalBattles,
+      base,
+      attackerTh: base.townHall,
+      army,
+      spawnProfile: context.spawnProfile,
+      levelProfile: 'maxed',
+      tactics: context.tactics,
+      policyId: `counter-meta-${phase}-${base.id}-${army.id}-${contextOrdinal}`,
+      nftRarity: 'common',
+      defenderWard: 0,
+      experimentCohort: 'base-counter-meta',
+      troopLevelSeed: hash32(
+        seed,
+        hashString(base.id),
+        hashString(army.id),
+        0x434d4554,
+      ),
+      catalog,
+      seed,
+    });
+    const result = runScenario(verifyReplay, combatDefs, scenario, verbose);
+    totalBattles += 1;
+    phaseCounts[phase] += 1;
+    if (!result.valid) invalid += 1;
+    const key = `${base.id}|${army.id}`;
+    if (!cells.has(key)) {
+      cells.set(key, createBaseCounterMetaCell(base, army));
+      cellIdsByBase.get(base.id).push(key);
+    }
+    recordBaseCounterMetaResult(cells.get(key), phase, result, context);
+  }
+
+  for (let contextOrdinal = 0; contextOrdinal < COUNTER_META_CONFIRMATION_CONTEXTS; contextOrdinal += 1) {
+    for (const base of orderedBases) {
+      for (const army of selectedArmiesByTownHall.get(base.townHall) || []) {
+        execute(base, army, 'discovery', contextOrdinal);
+      }
+    }
+  }
+
+  const rankedCellsByBase = new Map();
+  for (const base of orderedBases) {
+    rankedCellsByBase.set(
+      base.id,
+      rankBaseCounterMetaCells(
+        (cellIdsByBase.get(base.id) || []).map((key) => cells.get(key)),
+        ['discovery'],
+      ),
+    );
+  }
+
+  const universalFamily = selectUniversalCounterFamily(cells, orderedBases);
+  if (!universalFamily) {
+    throw new Error(
+      'Base-counter meta could not find one comparable army family represented at every Town Hall.',
+    );
+  }
+
+  for (let rank = 0; rank < 2 && totalBattles < requestedBattles; rank += 1) {
+    for (const base of orderedBases) {
+      if (totalBattles >= requestedBattles) break;
+      const cell = rankedCellsByBase.get(base.id)?.[rank];
+      if (cell) execute(base, cell.army, 'counterHoldout', 0);
+    }
+  }
+
+  for (const base of orderedBases) {
+    if (totalBattles >= requestedBattles) break;
+    const cell = (cellIdsByBase.get(base.id) || [])
+      .map((key) => cells.get(key))
+      .find((candidate) => candidate.army.name === universalFamily);
+    if (cell) execute(base, cell.army, 'universalHoldout', 0);
+  }
+
+  const hardestBases = [...orderedBases].sort((a, b) => {
+    const left = averageBaseCounterMetaUtility(rankedCellsByBase.get(a.id)?.[0], ['discovery']);
+    const right = averageBaseCounterMetaUtility(rankedCellsByBase.get(b.id)?.[0], ['discovery']);
+    return left - right || a.id.localeCompare(b.id);
+  });
+  let hardCursor = 0;
+  while (totalBattles < requestedBattles) {
+    const base = hardestBases[hardCursor % hardestBases.length];
+    const ranked = rankedCellsByBase.get(base.id) || [];
+    const hardRound = Math.floor(hardCursor / hardestBases.length);
+    const rank = hardRound === 0
+      ? 0
+      : 1 + ((hardRound - 1) % Math.max(1, ranked.length - 1));
+    const cell = ranked[rank % Math.max(1, ranked.length)];
+    if (!cell) break;
+    const contextOrdinal = hardRound;
+    execute(base, cell.army, 'hardConfirmation', contextOrdinal);
+    hardCursor += 1;
+  }
+
+  const missingDiscoveryCells = [...cells.values()]
+    .filter((cell) => cell.discovery.count !== COUNTER_META_CONFIRMATION_CONTEXTS);
+  const byBase = {};
+  const armyRows = new Map();
+  const topCounterCredits = new Map();
+  const creditsByTownHall = new Map();
+  const creditsByLayoutFamily = new Map();
+  const creditsByLevelProfile = new Map();
+  let zeroCounterBaseCount = 0;
+  let discoveryZeroCounterBaseCount = 0;
+  let confirmedBreakabilityFailureCount = 0;
+  let singleCounterBaseCount = 0;
+  let twoCounterBaseCount = 0;
+  let threeCounterBaseCount = 0;
+  let multiFamilyCounterBaseCount = 0;
+  let excessivelySoftBaseCount = 0;
+  let universalCounterForcingBaseCount = 0;
+  let universalRegretSum = 0;
+  let universalRegretCount = 0;
+
+  for (const base of orderedBases) {
+    const baseCells = (cellIdsByBase.get(base.id) || []).map((key) => cells.get(key));
+    const ranked = rankBaseCounterMetaCells(baseCells, ['discovery']);
+    const discoveryWinners = ranked.filter((cell) => cell.discovery.validWins > 0);
+    const robustDiscoveryWinners = ranked.filter((cell) => (
+      cell.discovery.validCount === COUNTER_META_CONFIRMATION_CONTEXTS
+      && cell.discovery.validWins === cell.discovery.validCount
+    ));
+    const allWinners = ranked.filter((cell) => cell.total.validWins > 0);
+    const topTwo = ranked.slice(0, 2);
+    const topTwoHoldoutWin = topTwo.some((cell) => cell.counterHoldout.validWins > 0);
+    const universalCell = baseCells.find((cell) => cell.army.name === universalFamily);
+    const universalDiscoveryWin = !!universalCell?.discovery.validWins;
+    const bestUtility = averageBaseCounterMetaUtility(ranked[0], ['discovery']);
+    const universalUtility = averageBaseCounterMetaUtility(universalCell, ['discovery']);
+    const regret = Math.max(0, bestUtility - universalUtility);
+    if (Number.isFinite(regret)) {
+      universalRegretSum += regret;
+      universalRegretCount += 1;
+    }
+    if (!universalDiscoveryWin && discoveryWinners.length > 0) {
+      universalCounterForcingBaseCount += 1;
+    }
+    if (allWinners.length === 0) zeroCounterBaseCount += 1;
+    if (discoveryWinners.length === 0) discoveryZeroCounterBaseCount += 1;
+    if (!topTwoHoldoutWin) confirmedBreakabilityFailureCount += 1;
+    if (discoveryWinners.length === 1) singleCounterBaseCount += 1;
+    if (discoveryWinners.length >= 2) twoCounterBaseCount += 1;
+    if (discoveryWinners.length >= 3) threeCounterBaseCount += 1;
+    if (new Set(discoveryWinners.map((cell) => cell.armyFamily)).size >= 2) {
+      multiFamilyCounterBaseCount += 1;
+    }
+    if (robustDiscoveryWinners.length >= 12) excessivelySoftBaseCount += 1;
+
+    const nearBestWinners = selectNearBestCounterCells(discoveryWinners, 0.03);
+    const credit = nearBestWinners.length > 0 ? 1 / nearBestWinners.length : 0;
+    for (const cell of nearBestWinners) {
+      addCounterMetaCredit(topCounterCredits, cell.army.name, credit);
+      const thKey = `TH${base.townHall}`;
+      if (!creditsByTownHall.has(thKey)) creditsByTownHall.set(thKey, new Map());
+      addCounterMetaCredit(creditsByTownHall.get(thKey), cell.army.name, credit);
+      const layoutKey = `${thKey}|${baseCounterMetaLayoutFamily(base.archetype)}`;
+      if (!creditsByLayoutFamily.has(layoutKey)) {
+        creditsByLayoutFamily.set(layoutKey, new Map());
+      }
+      addCounterMetaCredit(
+        creditsByLayoutFamily.get(layoutKey),
+        cell.army.name,
+        credit,
+      );
+      if (!creditsByLevelProfile.has(base.levelProfile)) {
+        creditsByLevelProfile.set(base.levelProfile, new Map());
+      }
+      addCounterMetaCredit(
+        creditsByLevelProfile.get(base.levelProfile),
+        cell.army.name,
+        credit,
+      );
+    }
+
+    for (const cell of baseCells) {
+      if (!armyRows.has(cell.army.name)) {
+        armyRows.set(cell.army.name, {
+          family: cell.army.name,
+          recipeFamily: cell.armyFamily,
+          townHalls: new Set(),
+          discoveryBasesTested: 0,
+          discoveryBasesWon: 0,
+          discoveryBattles: 0,
+          discoveryWins: 0,
+          discoveryUtility: 0,
+          topCounterCredit: 0,
+          counterHoldoutBattles: 0,
+          counterHoldoutWins: 0,
+          universalHoldoutBattles: 0,
+          universalHoldoutWins: 0,
+        });
+      }
+      const row = armyRows.get(cell.army.name);
+      row.townHalls.add(base.townHall);
+      row.discoveryBasesTested += 1;
+      if (cell.discovery.validWins > 0) row.discoveryBasesWon += 1;
+      row.discoveryBattles += cell.discovery.validCount;
+      row.discoveryWins += cell.discovery.validWins;
+      row.discoveryUtility += cell.discovery.utilitySum;
+      row.counterHoldoutBattles += cell.counterHoldout.validCount;
+      row.counterHoldoutWins += cell.counterHoldout.validWins;
+      row.universalHoldoutBattles += cell.universalHoldout.validCount;
+      row.universalHoldoutWins += cell.universalHoldout.validWins;
+    }
+
+    byBase[base.id] = {
+      id: base.id,
+      townHall: base.townHall,
+      archetype: base.archetype,
+      layoutFamily: baseCounterMetaLayoutFamily(base.archetype),
+      levelProfile: base.levelProfile,
+      discoveryArmyCount: baseCells.length,
+      discoveryValidBattleCount: baseCells.reduce(
+        (sum, cell) => sum + cell.discovery.validCount,
+        0,
+      ),
+      discoveryWinCount: baseCells.reduce(
+        (sum, cell) => sum + cell.discovery.validWins,
+        0,
+      ),
+      discoveryWinningArmyCount: discoveryWinners.length,
+      robustDiscoveryWinningArmyCount: robustDiscoveryWinners.length,
+      discoveryWinningRecipeFamilyCount: new Set(
+        discoveryWinners.map((cell) => cell.armyFamily),
+      ).size,
+      totalWinningArmyCount: allWinners.length,
+      topCounter: ranked[0]?.army.name || '',
+      runnerUpCounter: ranked[1]?.army.name || '',
+      nearBestCounters: nearBestWinners.map((cell) => cell.army.name),
+      bestDiscoveryUtility: bestUtility,
+      universalFamily,
+      universalDiscoveryWin,
+      universalDiscoveryUtility: universalUtility,
+      universalRegret: regret,
+      topTwoHoldoutWin,
+    };
+  }
+
+  for (const [family, credit] of topCounterCredits) {
+    if (armyRows.has(family)) armyRows.get(family).topCounterCredit = credit;
+  }
+  const totalTopCounterCredit = [...topCounterCredits.values()]
+    .reduce((sum, credit) => sum + Number(credit || 0), 0);
+  const byArmy = Object.fromEntries(
+    [...armyRows.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(
+      ([family, row]) => [
+        family,
+        {
+          ...row,
+          townHalls: [...row.townHalls].sort((a, b) => a - b),
+          discoveryBaseWinRate: rate(
+            row.discoveryBasesWon,
+            row.discoveryBasesTested,
+          ),
+          discoveryWinRate: rate(row.discoveryWins, row.discoveryBattles),
+          averageDiscoveryUtility: avg(
+            row.discoveryUtility,
+            row.discoveryBattles,
+          ),
+          topCounterShare: rate(row.topCounterCredit, totalTopCounterCredit),
+          topCounterBaseCoverageShare: rate(
+            row.topCounterCredit,
+            orderedBases.length,
+          ),
+          counterHoldoutWinRate: rate(
+            row.counterHoldoutWins,
+            row.counterHoldoutBattles,
+          ),
+          universalHoldoutWinRate: rate(
+            row.universalHoldoutWins,
+            row.universalHoldoutBattles,
+          ),
+        },
+      ],
+    ),
+  );
+
+  const diversity = counterMetaDiversitySummary(
+    topCounterCredits,
+    orderedBases.length,
+  );
+  diversity.singleCounterBaseCount = singleCounterBaseCount;
+  diversity.singleCounterBaseRate = rate(singleCounterBaseCount, orderedBases.length);
+  diversity.twoCounterBaseCount = twoCounterBaseCount;
+  diversity.twoCounterBaseRate = rate(twoCounterBaseCount, orderedBases.length);
+  diversity.threeCounterBaseCount = threeCounterBaseCount;
+  diversity.threeCounterBaseRate = rate(threeCounterBaseCount, orderedBases.length);
+  diversity.multiFamilyCounterBaseCount = multiFamilyCounterBaseCount;
+  diversity.multiFamilyCounterBaseRate = rate(
+    multiFamilyCounterBaseCount,
+    orderedBases.length,
+  );
+  diversity.excessivelySoftBaseCount = excessivelySoftBaseCount;
+  diversity.excessivelySoftBaseRate = rate(
+    excessivelySoftBaseCount,
+    orderedBases.length,
+  );
+  diversity.universalCounterForcingBaseCount = universalCounterForcingBaseCount;
+  diversity.universalCounterForcingBaseRate = rate(
+    universalCounterForcingBaseCount,
+    orderedBases.length,
+  );
+  diversity.meanUniversalRegret = avg(
+    universalRegretSum,
+    universalRegretCount,
+  );
+
+  const diversityByTownHall = Object.fromEntries(
+    [...creditsByTownHall.entries()].map(([key, credits]) => [
+      key,
+      counterMetaDiversitySummary(
+        credits,
+        orderedBases.filter((base) => `TH${base.townHall}` === key).length,
+      ),
+    ]),
+  );
+  const diversityByLayoutFamily = Object.fromEntries(
+    [...creditsByLayoutFamily.entries()].map(([key, credits]) => {
+      const [thKey, layoutFamily] = key.split('|');
+      return [
+        key,
+        counterMetaDiversitySummary(
+          credits,
+          orderedBases.filter((base) => (
+            `TH${base.townHall}` === thKey
+            && baseCounterMetaLayoutFamily(base.archetype) === layoutFamily
+          )).length,
+        ),
+      ];
+    }),
+  );
+  const diversityByLevelProfile = Object.fromEntries(
+    [...new Set(orderedBases.map((base) => base.levelProfile))]
+      .sort()
+      .map((levelProfile) => {
+        const rows = Object.values(byBase)
+          .filter((base) => base.levelProfile === levelProfile);
+        const summary = counterMetaDiversitySummary(
+          creditsByLevelProfile.get(levelProfile) || new Map(),
+          rows.length,
+        );
+        const discoveryValidBattleCount = rows.reduce(
+          (sum, base) => sum + base.discoveryValidBattleCount,
+          0,
+        );
+        const discoveryWinCount = rows.reduce(
+          (sum, base) => sum + base.discoveryWinCount,
+          0,
+        );
+        return [
+          levelProfile,
+          {
+            ...summary,
+            discoveryValidBattleCount,
+            discoveryWinCount,
+            discoveryWinRate: rate(
+              discoveryWinCount,
+              discoveryValidBattleCount,
+            ),
+            discoveryZeroCounterBaseCount: rows
+              .filter((base) => base.discoveryWinningArmyCount === 0).length,
+            totalZeroCounterBaseCount: rows
+              .filter((base) => base.totalWinningArmyCount === 0).length,
+            twoCounterBaseRate: rate(
+              rows.filter((base) => base.discoveryWinningArmyCount >= 2).length,
+              rows.length,
+            ),
+            threeCounterBaseRate: rate(
+              rows.filter((base) => base.discoveryWinningArmyCount >= 3).length,
+              rows.length,
+            ),
+            multiFamilyCounterBaseRate: rate(
+              rows.filter(
+                (base) => base.discoveryWinningRecipeFamilyCount >= 2,
+              ).length,
+              rows.length,
+            ),
+            excessivelySoftBaseCount: rows
+              .filter((base) => base.robustDiscoveryWinningArmyCount >= 12)
+              .length,
+            excessivelySoftBaseRate: rate(
+              rows.filter(
+                (base) => base.robustDiscoveryWinningArmyCount >= 12,
+              ).length,
+              rows.length,
+            ),
+          },
+        ];
+      }),
+  );
+
+  return {
+    enabled: true,
+    requestedBattles,
+    totalBattles,
+    discoveryBattles: phaseCounts.discovery,
+    counterHoldoutBattles: phaseCounts.counterHoldout,
+    universalHoldoutBattles: phaseCounts.universalHoldout,
+    hardConfirmationBattles: phaseCounts.hardConfirmation,
+    invalid,
+    testedBaseCount: orderedBases.length,
+    armyCountByTownHall,
+    availableArmyCountByTownHall,
+    discoveryContextsPerCell: COUNTER_META_CONFIRMATION_CONTEXTS,
+    expectedDiscoveryCellCount: requiredDiscoveryBattles
+      / COUNTER_META_CONFIRMATION_CONTEXTS,
+    missingDiscoveryCellCount: missingDiscoveryCells.length,
+    discoveryZeroCounterBaseCount,
+    zeroCounterBaseCount,
+    confirmedBreakabilityFailureCount,
+    universalFamily,
+    universalDiscoveryBaseWinRate: byArmy[universalFamily]?.discoveryBaseWinRate || 0,
+    universalHoldoutWinRate: byArmy[universalFamily]?.universalHoldoutWinRate || 0,
+    byCell: Object.fromEntries(
+      [...cells.entries()]
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([key, cell]) => {
+          const serializableCell = { ...cell };
+          delete serializableCell.army;
+          return [key, serializableCell];
+        }),
+    ),
+    byBase,
+    byArmy,
+    diversity,
+    diversityByTownHall,
+    diversityByLayoutFamily,
+    diversityByLevelProfile,
+  };
+}
+
+function selectBaseCounterMetaArmies(armies, limit) {
+  const byName = new Map(armies.map((army) => [army.name, army]));
+  const selected = [];
+  const selectedIds = new Set();
+  const add = (army, allowUnderfilled = false) => {
+    if (!army || selectedIds.has(army.id) || selected.length >= limit) return;
+    if (
+      !allowUnderfilled
+      && Number(army.slotsUsed || 0) < Number(army.capacity || 0)
+    ) return;
+    selected.push(army);
+    selectedIds.add(army.id);
+  };
+  for (const army of [...armies]
+    .filter((candidate) => candidate.name.startsWith('pure-'))
+    .sort((a, b) => a.name.localeCompare(b.name))) {
+    const troopType = army.name.slice('pure-'.length);
+    add(byName.get(`core-${troopType}-filled`) || army);
+  }
+  for (const name of [
+    'balanced',
+    'frontline-ranged',
+    'melee-pressure',
+    'ranged-pressure',
+    'air-pressure',
+    'support-mix',
+    'trap-runner-mix',
+    'hero-necro-dragon-mages',
+  ]) {
+    add(byName.get(name));
+  }
+  for (const army of [...armies]
+    .filter((candidate) => (
+      candidate.name.startsWith('core-')
+      && candidate.name.endsWith('-filled')
+    ))
+    .sort((a, b) => a.name.localeCompare(b.name))) {
+    add(army);
+  }
+  for (const army of [...armies].sort((a, b) => (
+    Number(b.utilization || 0) - Number(a.utilization || 0)
+    || a.name.localeCompare(b.name)
+  ))) {
+    add(army);
+  }
+  for (const army of [...armies].sort((a, b) => a.name.localeCompare(b.name))) {
+    add(army, true);
+  }
+  return selected;
+}
+
+function baseCounterMetaContext({
+  combatDefs,
+  base,
+  seed,
+  phase,
+  contextOrdinal,
+}) {
+  const baseSalt = hashString(base.id);
+  const tactics = availableTacticProfiles(combatDefs, base.townHall);
+  const contextCount = SPAWN_PROFILES.length * tactics.length;
+  const baseOffset = hash32(seed, baseSalt, 0x434f4e54) % contextCount;
+  const phaseOffset = {
+    discovery: 0,
+    counterHoldout: COUNTER_META_CONFIRMATION_CONTEXTS,
+    universalHoldout: COUNTER_META_CONFIRMATION_CONTEXTS + 1,
+    hardConfirmation: COUNTER_META_CONFIRMATION_CONTEXTS + 2,
+  }[phase] ?? 0;
+  const spawnProfilesPerFormation = (
+    SPAWN_TIMINGS.length * DEPLOYMENT_ORDERS.length
+  );
+  const contextStride = spawnProfilesPerFormation * tactics.length + 1;
+  const contextIndex = (
+    baseOffset
+    + (
+      phaseOffset
+      + Math.max(0, Number(contextOrdinal) || 0)
+    ) * contextStride
+  ) % contextCount;
+  return {
+    spawnProfile: SPAWN_PROFILES[
+      Math.floor(contextIndex / tactics.length) % SPAWN_PROFILES.length
+    ],
+    tactics: tactics[contextIndex % tactics.length],
+  };
+}
+
+function createBaseCounterMetaCell(base, army) {
+  return {
+    baseId: base.id,
+    townHall: base.townHall,
+    archetype: base.archetype,
+    layoutFamily: baseCounterMetaLayoutFamily(base.archetype),
+    armyId: army.id,
+    armyName: army.name,
+    armyFamily: baseCounterMetaArmyFamily(army),
+    army,
+    discovery: createBaseCounterMetaBucket(),
+    counterHoldout: createBaseCounterMetaBucket(),
+    universalHoldout: createBaseCounterMetaBucket(),
+    hardConfirmation: createBaseCounterMetaBucket(),
+    total: createBaseCounterMetaBucket(),
+  };
+}
+
+function createBaseCounterMetaBucket() {
+  return {
+    count: 0,
+    validCount: 0,
+    validWins: 0,
+    invalid: 0,
+    utilitySum: 0,
+    destructionSum: 0,
+    townHallDamageSum: 0,
+    survivalSum: 0,
+    bestAttempt: null,
+  };
+}
+
+function recordBaseCounterMetaResult(cell, phase, result, context) {
+  const phaseBucket = cell[phase];
+  recordBaseCounterMetaBucket(phaseBucket, result, context);
+  recordBaseCounterMetaBucket(cell.total, result, context);
+}
+
+function recordBaseCounterMetaBucket(bucket, result, context) {
+  bucket.count += 1;
+  if (!result.valid) {
+    bucket.invalid += 1;
+    return;
+  }
+  const destruction = rate(result.buildingsDestroyed, result.buildingCount);
+  const townHallDamage = 1 - Number(result.townHallHpPct || 0);
+  const survival = rate(result.troopsAlive, result.troopsSpawned);
+  const utility = (
+    (result.win ? 0.50 : 0)
+    + destruction * 0.25
+    + townHallDamage * 0.20
+    + survival * 0.05
+  );
+  bucket.validCount += 1;
+  if (result.win) bucket.validWins += 1;
+  bucket.utilitySum += utility;
+  bucket.destructionSum += destruction;
+  bucket.townHallDamageSum += townHallDamage;
+  bucket.survivalSum += survival;
+  const attempt = {
+    win: !!result.win,
+    utility,
+    destruction,
+    townHallDamage,
+    survival,
+    townHallHpPct: Number(result.townHallHpPct || 0),
+    durationSec: Number(result.durationSec || 0),
+    spawnProfile: context.spawnProfile,
+    tactics: context.tactics,
+  };
+  if (
+    !bucket.bestAttempt
+    || attempt.utility > bucket.bestAttempt.utility
+    || (
+      attempt.utility === bucket.bestAttempt.utility
+      && `${attempt.spawnProfile}|${attempt.tactics}`
+        .localeCompare(
+          `${bucket.bestAttempt.spawnProfile}|${bucket.bestAttempt.tactics}`,
+        ) < 0
+    )
+  ) {
+    bucket.bestAttempt = attempt;
+  }
+}
+
+function rankBaseCounterMetaCells(cells, phases) {
+  return [...cells].sort((a, b) => (
+    averageBaseCounterMetaUtility(b, phases)
+      - averageBaseCounterMetaUtility(a, phases)
+    || baseCounterMetaWinRate(b, phases) - baseCounterMetaWinRate(a, phases)
+    || a.army.id.localeCompare(b.army.id)
+  ));
+}
+
+function averageBaseCounterMetaUtility(cell, phases) {
+  if (!cell) return 0;
+  const totals = phases.reduce((value, phase) => ({
+    utility: value.utility + Number(cell[phase]?.utilitySum || 0),
+    count: value.count + Number(cell[phase]?.validCount || 0),
+  }), { utility: 0, count: 0 });
+  return avg(totals.utility, totals.count);
+}
+
+function baseCounterMetaWinRate(cell, phases) {
+  if (!cell) return 0;
+  const totals = phases.reduce((value, phase) => ({
+    wins: value.wins + Number(cell[phase]?.validWins || 0),
+    count: value.count + Number(cell[phase]?.validCount || 0),
+  }), { wins: 0, count: 0 });
+  return rate(totals.wins, totals.count);
+}
+
+function selectNearBestCounterCells(winningCells, margin) {
+  if (winningCells.length === 0) return [];
+  const ranked = rankBaseCounterMetaCells(winningCells, ['discovery']);
+  const best = averageBaseCounterMetaUtility(ranked[0], ['discovery']);
+  return ranked.filter(
+    (cell) => best - averageBaseCounterMetaUtility(cell, ['discovery']) <= margin,
+  );
+}
+
+function selectUniversalCounterFamily(cells, bases) {
+  const rows = new Map();
+  for (const cell of cells.values()) {
+    if (!rows.has(cell.army.name)) {
+      rows.set(cell.army.name, {
+        bases: new Set(),
+        basesWon: new Set(),
+        utility: 0,
+        battles: 0,
+      });
+    }
+    const row = rows.get(cell.army.name);
+    row.bases.add(cell.baseId);
+    if (cell.discovery.validWins > 0) row.basesWon.add(cell.baseId);
+    row.utility += cell.discovery.utilitySum;
+    row.battles += cell.discovery.validCount;
+  }
+  return [...rows.entries()]
+    .filter(([, row]) => row.bases.size === bases.length)
+    .sort((a, b) => (
+      b[1].basesWon.size - a[1].basesWon.size
+      || avg(b[1].utility, b[1].battles) - avg(a[1].utility, a[1].battles)
+      || a[0].localeCompare(b[0])
+    ))[0]?.[0] || '';
+}
+
+function addCounterMetaCredit(map, key, amount) {
+  map.set(key, Number(map.get(key) || 0) + Number(amount || 0));
+}
+
+function counterMetaDiversitySummary(credits, baseCount) {
+  const creditedBaseCount = [...credits.values()]
+    .reduce((sum, credit) => sum + Number(credit || 0), 0);
+  const ranked = [...credits.entries()]
+    .map(([family, credit]) => ({
+      family,
+      credit,
+      share: rate(credit, creditedBaseCount),
+      baseCoverageShare: rate(credit, baseCount),
+    }))
+    .sort((a, b) => b.credit - a.credit || a.family.localeCompare(b.family));
+  const hhi = ranked.reduce((sum, row) => sum + row.share * row.share, 0);
+  const entropy = ranked.reduce(
+    (sum, row) => (
+      row.share > 0 ? sum - row.share * Math.log(row.share) : sum
+    ),
+    0,
+  );
+  return {
+    baseCount,
+    creditedBaseCount,
+    creditedBaseRate: rate(creditedBaseCount, baseCount),
+    distinctTopCounterFamilies: ranked.length,
+    topCounterFamily: ranked[0]?.family || '',
+    topCounterShare: ranked[0]?.share || 0,
+    topThreeCounterShare: ranked.slice(0, 3)
+      .reduce((sum, row) => sum + row.share, 0),
+    hhi,
+    inverseHhiEffectiveFamilies: hhi > 0 ? 1 / hhi : 0,
+    shannonEntropy: entropy,
+    normalizedShannonEntropy: ranked.length > 1
+      ? entropy / Math.log(ranked.length)
+      : 0,
+    shannonEffectiveFamilies: Math.exp(entropy),
+    rankedFamilies: ranked,
+  };
+}
+
+function baseCounterMetaArmyFamily(army) {
+  const name = String(army?.name || '');
+  if (name.startsWith('pure-')) return name;
+  const filled = name.match(/^core-(.+)-filled$/);
+  if (filled) return `core-${filled[1]}`;
+  if (name.includes('trap') || name.includes('mimic')) return 'utility';
+  if (name.includes('support') || name.includes('necro')) return 'support';
+  if (name.includes('air') || name.includes('dragon')) return 'heavy-air';
+  if (name.includes('ranged')) return 'ranged';
+  if (name.includes('frontline') || name.includes('melee')) return 'frontline';
+  return 'mixed';
+}
+
+function baseCounterMetaLayoutFamily(archetype) {
+  if (['compact-core', 'defense-ring', 'layered-rings'].includes(archetype)) {
+    return 'core-rings';
+  }
+  if ([
+    'asymmetric-left',
+    'asymmetric-right',
+    'echelon-left',
+    'echelon-right',
+  ].includes(archetype)) {
+    return 'lateral-lanes';
+  }
+  if ([
+    'crossfire',
+    'kill-corridor',
+    'southern-funnel',
+    'trap-lanes',
+  ].includes(archetype)) {
+    return 'funnel-crossfire';
+  }
+  if (['diamond', 'split-core', 'wide-spread'].includes(archetype)) {
+    return 'distributed-core';
+  }
+  return 'keep-screen';
+}
+
+function analyzeBaseCounterMetaProbe(probe) {
+  if (!probe?.enabled) return [];
+  const issues = [];
+  if (probe.invalid > 0) {
+    issues.push({
+      severity: 'critical',
+      code: 'base-counter-invalid',
+      message: `${probe.invalid}/${probe.totalBattles} base-counter meta battles were invalid.`,
+    });
+  }
+  if (probe.missingDiscoveryCellCount > 0) {
+    issues.push({
+      severity: 'critical',
+      code: 'base-counter-matrix-coverage',
+      message: `${probe.missingDiscoveryCellCount}/${probe.expectedDiscoveryCellCount} base-army cells lack exactly two discovery contexts.`,
+    });
+  }
+  if (probe.zeroCounterBaseCount > 0) {
+    issues.push({
+      severity: 'warning',
+      code: 'base-counter-probe-no-win',
+      message: `${probe.zeroCounterBaseCount}/${probe.testedBaseCount} layouts have no observed win among the 15 selected compositions and their probe contexts; the separate adaptive breakability gate remains authoritative for counter existence.`,
+    });
+  }
+  if (probe.discoveryZeroCounterBaseCount > 0) {
+    issues.push({
+      severity: 'warning',
+      code: 'base-counter-discovery-no-win',
+      message: `${probe.discoveryZeroCounterBaseCount}/${probe.testedBaseCount} layouts have no win in the paired discovery matrix before any locked holdout.`,
+    });
+  }
+  if (probe.confirmedBreakabilityFailureCount > 0) {
+    issues.push({
+      severity: 'warning',
+      code: 'base-counter-holdout-failure',
+      message: `${probe.confirmedBreakabilityFailureCount}/${probe.testedBaseCount} layouts had neither locked top-two counter win on the unseen holdout deployment.`,
+    });
+  }
+  if (probe.universalDiscoveryBaseWinRate >= 1) {
+    issues.push({
+      severity: 'critical',
+      code: 'base-counter-universal-army',
+      message: `${probe.universalFamily} wins against every layout in the paired discovery matrix.`,
+    });
+  } else if (
+    probe.universalHoldoutWinRate > 0.70
+    || probe.universalDiscoveryBaseWinRate > 0.85
+  ) {
+    issues.push({
+      severity: 'critical',
+      code: 'base-counter-near-universal-army',
+      message: `${probe.universalFamily} is too universal: ${pct(probe.universalDiscoveryBaseWinRate)} discovery base coverage and ${pct(probe.universalHoldoutWinRate)} unseen-context wins.`,
+    });
+  } else if (
+    probe.universalHoldoutWinRate > 0.65
+    || probe.universalDiscoveryBaseWinRate > 0.80
+  ) {
+    issues.push({
+      severity: 'warning',
+      code: 'base-counter-universal-army-pressure',
+      message: `${probe.universalFamily} approaches the universal-counter ceiling: ${pct(probe.universalDiscoveryBaseWinRate)} discovery base coverage and ${pct(probe.universalHoldoutWinRate)} unseen-context wins.`,
+    });
+  }
+
+  const diversity = probe.diversity || {};
+  if (diversity.twoCounterBaseRate < 0.95) {
+    issues.push({
+      severity: 'warning',
+      code: 'base-counter-breadth',
+      message: `Only ${pct(diversity.twoCounterBaseRate)} of layouts have at least two distinct winning compositions; target is 95%.`,
+    });
+  }
+  if (
+    diversity.threeCounterBaseRate < 0.80
+    || diversity.multiFamilyCounterBaseRate < 0.80
+  ) {
+    issues.push({
+      severity: 'warning',
+      code: 'base-counter-strong-breadth',
+      message: `${pct(diversity.threeCounterBaseRate)} of layouts have three winning compositions and ${pct(diversity.multiFamilyCounterBaseRate)} have counters from two recipe families; both targets are 80%.`,
+    });
+  }
+  if (diversity.excessivelySoftBaseRate > 0.10) {
+    issues.push({
+      severity: 'warning',
+      code: 'base-counter-excessively-soft',
+      message: `${pct(diversity.excessivelySoftBaseRate)} of layouts lose to at least 12/15 selected compositions in both paired discovery contexts; ceiling is 10%. Review the level-profile strata before combat tuning.`,
+    });
+  } else if (diversity.excessivelySoftBaseCount > 0) {
+    issues.push({
+      severity: 'warning',
+      code: 'base-counter-soft-layouts',
+      message: `${diversity.excessivelySoftBaseCount} layouts lose to at least 12/15 selected compositions in both paired discovery contexts.`,
+    });
+  }
+  if (
+    diversity.topCounterShare > 0.30
+    || diversity.topThreeCounterShare > 0.65
+    || diversity.inverseHhiEffectiveFamilies < 5
+  ) {
+    issues.push({
+      severity: 'critical',
+      code: 'base-counter-meta-concentration',
+      message: `Counter concentration is excessive: top-1 ${pct(diversity.topCounterShare)}, top-3 ${pct(diversity.topThreeCounterShare)}, inverse-HHI effective families ${formatNumber(diversity.inverseHhiEffectiveFamilies)}.`,
+    });
+  } else if (
+    diversity.topCounterShare > 0.18
+    || diversity.topThreeCounterShare > 0.45
+    || diversity.inverseHhiEffectiveFamilies < 8
+  ) {
+    issues.push({
+      severity: 'warning',
+      code: 'base-counter-meta-diversity',
+      message: `Counter diversity misses the authored target: top-1 ${pct(diversity.topCounterShare)}, top-3 ${pct(diversity.topThreeCounterShare)}, inverse-HHI effective families ${formatNumber(diversity.inverseHhiEffectiveFamilies)}.`,
+    });
+  }
+  if (
+    diversity.universalCounterForcingBaseRate < 0.25
+    || diversity.meanUniversalRegret < 0.10
+  ) {
+    issues.push({
+      severity: 'warning',
+      code: 'base-counter-scouting-value',
+      message: `Only ${pct(diversity.universalCounterForcingBaseRate)} of layouts force the universal army to lose while another wins; mean base-specific regret is ${formatNumber(diversity.meanUniversalRegret)}.`,
+    });
+  }
+  for (const [townHall, row] of Object.entries(probe.diversityByTownHall || {})) {
+    if (row.topCounterShare > 0.30 || row.distinctTopCounterFamilies < 5) {
+      issues.push({
+        severity: 'critical',
+        code: 'base-counter-town-hall-concentration',
+        message: `${townHall} top counter ${row.topCounterFamily} owns ${pct(row.topCounterShare)} of near-best credit across only ${row.distinctTopCounterFamilies} families.`,
+      });
+    } else if (row.topCounterShare > 0.20 || row.topThreeCounterShare > 0.50) {
+      issues.push({
+        severity: 'warning',
+        code: 'base-counter-town-hall-diversity',
+        message: `${townHall} top-1/top-3 near-best concentration is ${pct(row.topCounterShare)}/${pct(row.topThreeCounterShare)}.`,
+      });
+    }
+  }
+  return issues;
+}
+
+function selectProbeBases(bases, requested, seed) {
+  if (bases.length === 0 || requested <= 0) return [];
+  const ordered = shuffledCopy(bases, seed);
+  return ordered.slice(0, Math.min(requested, ordered.length));
+}
+
+function runBreakabilityProbe({
+  enabledPoliciesPerTownHall,
+  calibrationBasesPerTownHall,
+  nftRarity,
+  verifyReplay,
+  combatDefs,
+  evaluationRecords,
+  attackPolicies,
+  bases,
+  townHalls,
+  catalog,
+  seed,
+  startIndex,
+  verbose,
+}) {
+  if (enabledPoliciesPerTownHall <= 0) {
+    return {
+      enabled: false,
+      policiesPerTownHall: 0,
+      nftRarity,
+      candidatePolicyCount: 0,
+      selectedPolicyIdsByTownHall: {},
+      calibrationBaseIdsByTownHall: {},
+      calibrationBattles: 0,
+      battles: 0,
+      rescueBattles: 0,
+      adaptiveRescueBattles: 0,
+      totalBattles: 0,
+      invalid: 0,
+      generatedBaseCount: 0,
+      testedBaseCount: 0,
+      untestedBaseCount: 0,
+      untestedBases: [],
+      invalidOnlyBaseCount: 0,
+      invalidOnlyBases: [],
+      initialUnbeatenBaseCount: 0,
+      rescuedBaseCount: 0,
+      focusedRescuedBaseCount: 0,
+      adaptiveRescuedBaseCount: 0,
+      rescuedBases: [],
+      adaptivePolicies: [],
+      unbeatenBaseCount: 0,
+      unbeatenBases: [],
+      byBase: {},
+      byPolicy: {},
+      calibrationByPolicy: {},
+      bestAttemptByBase: {},
+      bestAttemptByBaseArmy: {},
+    };
+  }
+  const calibrationBases = selectEliteBases(
+    evaluationRecords,
+    bases,
+    townHalls,
+    calibrationBasesPerTownHall,
+  );
+  const calibrationByPolicy = new Map();
+  const candidatePoliciesBySignature = new Map();
+  for (const policy of attackPolicies) {
+    const signature = breakabilityPolicySignature(policy);
+    if (!candidatePoliciesBySignature.has(signature)) {
+      candidatePoliciesBySignature.set(signature, policy);
+    }
+  }
+  const candidatePolicies = [...candidatePoliciesBySignature.values()];
+  let calibrationBattles = 0;
+  let calibrationInvalid = 0;
+  for (const base of calibrationBases) {
+    const candidates = candidatePolicies.filter(
+      (policy) => policy.townHall === base.townHall,
+    );
+    for (let policyIndex = 0; policyIndex < candidates.length; policyIndex += 1) {
+      const policy = candidates[policyIndex];
+      const scenario = makeScenario({
+        index: startIndex + calibrationBattles,
+        base,
+        attackerTh: base.townHall,
+        army: policy.army,
+        spawnProfile: policy.spawnProfile,
+        levelProfile: policy.levelProfile,
+        tactics: policy.tactics,
+        policyId: policy.id,
+        nftRarity,
+        defenderWard: 0,
+        experimentCohort: 'breakability-calibration',
+        troopLevelSeed: breakabilityPairSeed(seed, base, policy),
+        catalog,
+        seed: breakabilityPairSeed(seed, base, policy),
+      });
+      const result = runScenario(
+        verifyReplay,
+        combatDefs,
+        scenario,
+        verbose,
+        buildAttackActions(scenario, combatDefs),
+      );
+      recordBucket(mapBucket(calibrationByPolicy, policy.id), result);
+      calibrationBattles += 1;
+      if (!result.valid) calibrationInvalid += 1;
+    }
+  }
+  const policyById = new Map(candidatePolicies.map((policy) => [policy.id, policy]));
+  const selectedPolicies = townHalls.flatMap((townHall) => (
+    [...calibrationByPolicy.entries()]
+      .filter(([id, bucket]) => (
+        policyById.get(id)?.townHall === townHall
+          && bucket.validCount >= Math.min(
+          calibrationBasesPerTownHall,
+          calibrationBases.filter((base) => base.townHall === townHall).length,
+        )
+      ))
+      .sort((a, b) => (
+        breakabilityAttackScore(b[1]) - breakabilityAttackScore(a[1])
+        || a[0].localeCompare(b[0])
+      ))
+      .slice(0, enabledPoliciesPerTownHall)
+      .map(([id]) => policyById.get(id))
+  ));
+  const policiesByTownHall = new Map();
+  for (const townHall of townHalls) {
+    policiesByTownHall.set(
+      townHall,
+      selectedPolicies.filter((policy) => policy.townHall === townHall),
+    );
+  }
+  const byBase = new Map();
+  const byPolicy = new Map();
+  const bestAttemptByBase = new Map();
+  const bestAttemptByBaseArmy = new Map();
+  let battles = 0;
+  let invalid = 0;
+  const sortedBases = [...bases].sort((a, b) => a.id.localeCompare(b.id));
+  for (const base of sortedBases) {
+    const baseBucket = mapBucket(byBase, base.id);
+    const policyPool = policiesByTownHall.get(base.townHall) || [];
+    for (let policyIndex = 0; policyIndex < policyPool.length; policyIndex += 1) {
+      const policy = policyPool[policyIndex];
+      const scenario = makeScenario({
+        index: startIndex + calibrationBattles + battles,
+        base,
+        attackerTh: base.townHall,
+        army: policy.army,
+        spawnProfile: policy.spawnProfile,
+        levelProfile: policy.levelProfile,
+        tactics: policy.tactics,
+        policyId: policy.id,
+        nftRarity,
+        defenderWard: 0,
+        experimentCohort: 'breakability-probe',
+        troopLevelSeed: breakabilityPairSeed(seed, base, policy),
+        catalog,
+        seed: breakabilityPairSeed(seed, base, policy),
+      });
+      const result = runScenario(
+        verifyReplay,
+        combatDefs,
+        scenario,
+        verbose,
+        buildAttackActions(scenario, combatDefs),
+      );
+      recordBucket(baseBucket, result);
+      recordBucket(mapBucket(byPolicy, policy.id), result);
+      recordBestBreakabilityAttempt(
+        bestAttemptByBase,
+        base,
+        policy,
+        result,
+        'elite-gate',
+      );
+      recordBestBreakabilityAttempt(
+        bestAttemptByBaseArmy,
+        base,
+        policy,
+        result,
+        'elite-gate',
+        `${base.id}|${breakabilityArmySignature(policy)}`,
+      );
+      battles += 1;
+      if (!result.valid) invalid += 1;
+    }
+  }
+  const baseById = new Map(bases.map((base) => [base.id, base]));
+  const initialUnbeatenBaseEntries = [...byBase.entries()]
+    .filter(([, bucket]) => bucket.validWins === 0)
+    .sort((a, b) => a[0].localeCompare(b[0]));
+  let rescueBattles = 0;
+  let rescueInvalid = 0;
+  const rescuedBases = [];
+  for (const [baseId] of initialUnbeatenBaseEntries) {
+    const base = baseById.get(baseId);
+    if (!base) continue;
+    const selectedPolicyIds = new Set(
+      (policiesByTownHall.get(base.townHall) || []).map((policy) => policy.id),
+    );
+    const rescueCandidates = candidatePolicies
+      .filter((policy) => (
+        policy.townHall === base.townHall
+        && !selectedPolicyIds.has(policy.id)
+      ))
+      .sort((a, b) => (
+        breakabilityAttackScore(calibrationByPolicy.get(b.id) || createBucket())
+        - breakabilityAttackScore(calibrationByPolicy.get(a.id) || createBucket())
+        || a.id.localeCompare(b.id)
+      ));
+    for (let policyIndex = 0; policyIndex < rescueCandidates.length; policyIndex += 1) {
+      const policy = rescueCandidates[policyIndex];
+      const scenario = makeScenario({
+        index: startIndex + calibrationBattles + battles + rescueBattles,
+        base,
+        attackerTh: base.townHall,
+        army: policy.army,
+        spawnProfile: policy.spawnProfile,
+        levelProfile: policy.levelProfile,
+        tactics: policy.tactics,
+        policyId: policy.id,
+        nftRarity,
+        defenderWard: 0,
+        experimentCohort: 'breakability-rescue',
+        troopLevelSeed: breakabilityPairSeed(seed, base, policy),
+        catalog,
+        seed: breakabilityPairSeed(seed, base, policy),
+      });
+      const result = runScenario(
+        verifyReplay,
+        combatDefs,
+        scenario,
+        verbose,
+        buildAttackActions(scenario, combatDefs),
+      );
+      recordBucket(mapBucket(byBase, base.id), result);
+      recordBucket(mapBucket(byPolicy, policy.id), result);
+      recordBestBreakabilityAttempt(
+        bestAttemptByBase,
+        base,
+        policy,
+        result,
+        'focused-rescue',
+      );
+      recordBestBreakabilityAttempt(
+        bestAttemptByBaseArmy,
+        base,
+        policy,
+        result,
+        'focused-rescue',
+        `${base.id}|${breakabilityArmySignature(policy)}`,
+      );
+      rescueBattles += 1;
+      if (!result.valid) rescueInvalid += 1;
+      if (result.valid && result.win) {
+        rescuedBases.push({
+          id: base.id,
+          townHall: base.townHall,
+          archetype: base.archetype || '',
+          levelProfile: base.levelProfile || '',
+          policyId: policy.id,
+          rescueBattle: policyIndex + 1,
+          phase: 'candidate-rescue',
+        });
+        break;
+      }
+    }
+  }
+  let adaptiveRescueBattles = 0;
+  let adaptiveRescueInvalid = 0;
+  const adaptivePolicies = [];
+  const candidateSignatures = new Set(
+    candidatePolicies.map((policy) => breakabilityPolicySignature(policy)),
+  );
+  const candidateUnbeatenBaseIds = [...byBase.entries()]
+    .filter(([, bucket]) => bucket.validCount > 0 && bucket.validWins === 0)
+    .map(([baseId]) => baseId)
+    .sort((a, b) => a.localeCompare(b));
+  for (const baseId of candidateUnbeatenBaseIds) {
+    const base = baseById.get(baseId);
+    if (!base) continue;
+    const sourcePolicies = [...bestAttemptByBaseArmy.entries()]
+      .filter(([key]) => key.startsWith(`${baseId}|`))
+      .map(([, attempt]) => ({
+        attempt,
+        policy: policyById.get(attempt.policyId),
+      }))
+      .filter(({ policy }) => !!policy)
+      .sort((a, b) => (
+        b.attempt.score - a.attempt.score
+        || a.attempt.policyId.localeCompare(b.attempt.policyId)
+      ))
+      .slice(0, BREAKABILITY_ADAPTIVE_ARMY_LIMIT)
+      .map(({ policy }) => policy);
+    if (sourcePolicies.length === 0) continue;
+    let adaptiveAttempt = 0;
+    let adaptiveExecutedForBase = 0;
+    let resolved = false;
+    for (const sourcePolicy of sourcePolicies) {
+      const orderedTactics = [
+        sourcePolicy.tactics,
+        ...availableTacticProfiles(combatDefs, base.townHall)
+          .filter((tactics) => tactics !== sourcePolicy.tactics),
+      ];
+      const sourceSpawnId = sourcePolicy.spawnProfile?.id
+        || String(sourcePolicy.spawnProfile || '');
+      const orderedSpawns = [
+        sourcePolicy.spawnProfile,
+        ...SPAWN_PROFILES.filter((spawnProfile) => (
+          (spawnProfile?.id || String(spawnProfile || '')) !== sourceSpawnId
+        )),
+      ];
+      const adaptiveTroopLevelSeed = breakabilityPairSeed(
+        seed,
+        base,
+        sourcePolicy,
+      );
+      for (const tactics of orderedTactics) {
+        for (const spawnProfile of orderedSpawns) {
+          const policy = {
+            id: `adaptive-${base.id}-${String(adaptiveAttempt + 1).padStart(4, '0')}`,
+            townHall: base.townHall,
+            army: sourcePolicy.army,
+            spawnProfile,
+            levelProfile: sourcePolicy.levelProfile,
+            tactics,
+            nftRarity,
+          };
+          adaptiveAttempt += 1;
+          if (candidateSignatures.has(breakabilityPolicySignature(policy))) continue;
+          adaptiveExecutedForBase += 1;
+          adaptivePolicies.push(policy);
+          const scenario = makeScenario({
+            index: (
+              startIndex
+              + calibrationBattles
+              + battles
+              + rescueBattles
+              + adaptiveRescueBattles
+            ),
+            base,
+            attackerTh: base.townHall,
+            army: policy.army,
+            spawnProfile: policy.spawnProfile,
+            levelProfile: policy.levelProfile,
+            tactics: policy.tactics,
+            policyId: policy.id,
+            nftRarity,
+            defenderWard: 0,
+            experimentCohort: 'breakability-adaptive-rescue',
+            troopLevelSeed: adaptiveTroopLevelSeed,
+            catalog,
+            seed: breakabilityPairSeed(seed, base, policy),
+          });
+          const result = runScenario(
+            verifyReplay,
+            combatDefs,
+            scenario,
+            verbose,
+            buildAttackActions(scenario, combatDefs),
+          );
+          recordBucket(mapBucket(byBase, base.id), result);
+          recordBucket(mapBucket(byPolicy, policy.id), result);
+          recordBestBreakabilityAttempt(
+            bestAttemptByBase,
+            base,
+            policy,
+            result,
+            'adaptive-counter-search',
+          );
+          recordBestBreakabilityAttempt(
+            bestAttemptByBaseArmy,
+            base,
+            policy,
+            result,
+            'adaptive-counter-search',
+            `${base.id}|${breakabilityArmySignature(policy)}`,
+          );
+          adaptiveRescueBattles += 1;
+          if (!result.valid) adaptiveRescueInvalid += 1;
+          if (result.valid && result.win) {
+            rescuedBases.push({
+              id: base.id,
+              townHall: base.townHall,
+              archetype: base.archetype || '',
+              levelProfile: base.levelProfile || '',
+              policyId: policy.id,
+              rescueBattle: adaptiveExecutedForBase,
+              phase: 'adaptive-counter-search',
+            });
+            resolved = true;
+            break;
+          }
+        }
+        if (resolved) break;
+      }
+      if (resolved) break;
+    }
+  }
+  const unbeatenBases = [...byBase.entries()]
+    .filter(([, bucket]) => bucket.validCount > 0 && bucket.validWins === 0)
+    .map(([id, bucket]) => {
+      const base = baseById.get(id) || {};
+      return {
+        id,
+        townHall: base.townHall || 0,
+        archetype: base.archetype || '',
+        levelProfile: base.levelProfile || '',
+        battles: bucket.count,
+        validBattles: bucket.validCount,
+      };
+    });
+  const untestedBases = [...byBase.entries()]
+    .filter(([, bucket]) => bucket.count === 0)
+    .map(([id]) => {
+      const base = baseById.get(id) || {};
+      return {
+        id,
+        townHall: base.townHall || 0,
+        archetype: base.archetype || '',
+        levelProfile: base.levelProfile || '',
+      };
+    });
+  const invalidOnlyBases = [...byBase.entries()]
+    .filter(([, bucket]) => bucket.count > 0 && bucket.validCount === 0)
+    .map(([id, bucket]) => {
+      const base = baseById.get(id) || {};
+      return {
+        id,
+        townHall: base.townHall || 0,
+        archetype: base.archetype || '',
+        levelProfile: base.levelProfile || '',
+        battles: bucket.count,
+      };
+    });
+  const classifiedInitialBases = (
+    rescuedBases.length
+    + unbeatenBases.length
+    + untestedBases.length
+    + invalidOnlyBases.length
+  );
+  if (classifiedInitialBases !== initialUnbeatenBaseEntries.length) {
+    throw new Error(
+      'Breakability classification invariant failed: '
+      + `${initialUnbeatenBaseEntries.length} initial != `
+      + `${rescuedBases.length} rescued + ${unbeatenBases.length} unbeaten + `
+      + `${untestedBases.length} untested + ${invalidOnlyBases.length} invalid-only.`,
+    );
+  }
+  return {
+    enabled: true,
+    policiesPerTownHall: enabledPoliciesPerTownHall,
+    nftRarity,
+    candidatePolicyCount: candidatePolicies.length,
+    selectedPolicyIdsByTownHall: Object.fromEntries(
+      [...policiesByTownHall.entries()].map(([townHall, policies]) => [
+        `TH${townHall}`,
+        policies.map((policy) => policy.id),
+      ]),
+    ),
+    calibrationBaseIdsByTownHall: Object.fromEntries(
+      townHalls.map((townHall) => [
+        `TH${townHall}`,
+        calibrationBases
+          .filter((base) => base.townHall === townHall)
+          .map((base) => base.id),
+      ]),
+    ),
+    calibrationBattles,
+    battles,
+    rescueBattles,
+    adaptiveRescueBattles,
+    totalBattles: (
+      calibrationBattles
+      + battles
+      + rescueBattles
+      + adaptiveRescueBattles
+    ),
+    invalid: (
+      calibrationInvalid
+      + invalid
+      + rescueInvalid
+      + adaptiveRescueInvalid
+    ),
+    generatedBaseCount: bases.length,
+    testedBaseCount: bases.length - untestedBases.length - invalidOnlyBases.length,
+    untestedBaseCount: untestedBases.length,
+    untestedBases,
+    invalidOnlyBaseCount: invalidOnlyBases.length,
+    invalidOnlyBases,
+    initialUnbeatenBaseCount: initialUnbeatenBaseEntries.length,
+    rescuedBaseCount: rescuedBases.length,
+    focusedRescuedBaseCount: rescuedBases
+      .filter((base) => base.phase === 'candidate-rescue')
+      .length,
+    adaptiveRescuedBaseCount: rescuedBases
+      .filter((base) => base.phase === 'adaptive-counter-search')
+      .length,
+    rescuedBases,
+    adaptivePolicies,
+    unbeatenBaseCount: unbeatenBases.length,
+    unbeatenBases,
+    byBase: mapToObject(byBase),
+    byPolicy: mapToObject(byPolicy),
+    calibrationByPolicy: mapToObject(calibrationByPolicy),
+    bestAttemptByBase: mapToObject(bestAttemptByBase),
+    bestAttemptByBaseArmy: mapToObject(bestAttemptByBaseArmy),
+  };
+}
+
+function breakabilityAttackScore(bucket) {
+  return (
+    rate(bucket.validWins, bucket.validCount) * 100
+    + rate(bucket.validBuildingsDestroyed, bucket.validBuildingCount) * 15
+    - avg(bucket.validTownHallHpPct, bucket.validCount) * 5
+  );
+}
+
+function breakabilityArmySignature(policy) {
+  return policy.army?.units?.join(',') || policy.army?.id || '';
+}
+
+function breakabilityPolicySignature(policy) {
+  const spawnProfileId = policy.spawnProfile?.id
+    || String(policy.spawnProfile || '');
+  return [
+    policy.townHall,
+    breakabilityArmySignature(policy),
+    spawnProfileId,
+    policy.levelProfile,
+    policy.tactics,
+  ].join('|');
+}
+
+function breakabilityPairSeed(seed, base, policy) {
+  return hash32(
+    seed,
+    0x42524b4c,
+    hashString(base.id),
+    hashString(policy.id),
+  );
+}
+
+function recordBestBreakabilityAttempt(
+  bestAttemptByBase,
+  base,
+  policy,
+  result,
+  phase,
+  key = base.id,
+) {
+  if (!result.valid) return;
+  const destruction = rate(result.buildingsDestroyed, result.buildingCount);
+  const townHallHpPct = Number(result.townHallHpPct || 0);
+  const troopSurvival = rate(result.troopsAlive, result.troopsSpawned);
+  const score = (
+    (result.win ? 1_000_000 : 0)
+    + (1 - townHallHpPct) * 10_000
+    + destruction * 1_000
+    + troopSurvival * 100
+  );
+  const current = bestAttemptByBase.get(key);
+  if (
+    current
+    && (
+      current.score > score
+      || (current.score === score && current.policyId.localeCompare(policy.id) <= 0)
+    )
+  ) {
+    return;
+  }
+  bestAttemptByBase.set(key, {
+    policyId: policy.id,
+    phase,
+    score,
+    win: !!result.win,
+    destruction,
+    townHallHpPct,
+    troopsAlive: Number(result.troopsAlive || 0),
+    troopsSpawned: Number(result.troopsSpawned || 0),
+    durationSec: Number(result.durationSec || 0),
+  });
+}
+
 function attackLevelForProfile({ troop, attackerTh, levelProfile, seed }) {
-  const unlockedMax = Math.max(1, Math.min(troop.maxLevel, attackerTh + 1));
+  const unlockedMax = Math.max(1, Math.min(troop.maxLevel, attackerTh));
   if (levelProfile === 'low') return Math.max(1, unlockedMax - 2);
   if (levelProfile === 'mid') return Math.max(1, Math.ceil(unlockedMax * 0.65));
   if (levelProfile === 'maxed') return unlockedMax;
   return 1 + Math.floor(noise01(seed, attackerTh, troop.slotCost) * unlockedMax);
 }
 
-function runScenario(verifyReplay, combatDefs, scenario, verbose) {
-  const actions = buildAttackActions(scenario, combatDefs);
+function runScenario(verifyReplay, combatDefs, scenario, verbose, actions = null) {
+  const replayActions = actions || buildAttackActions(scenario, combatDefs);
   const simulation = withMutedConsole(!verbose, () => verifyReplay({
     defenderBuildings: scenario.base.buildings,
-    actions,
+    actions: replayActions,
     claimedResult: 'defeat',
     gridConfigs: combatDefs.CANONICAL_GRID_CONFIGS,
     serverTroopLevels: scenario.troopLevels,
-    serverNftRarities: {},
+    serverNftRarities: scenario.attackerNftRarities || {},
+    serverShipLevel: discoverShipLevelForTownHall(combatDefs, scenario.attackerTownHall),
+    defenderAltarLevels: scenario.defenderAltarLevels || {},
     debugTrace: false,
   }));
   return {
@@ -1105,74 +4791,296 @@ function runScenario(verifyReplay, combatDefs, scenario, verbose) {
 function buildAttackActions(scenario, combatDefs) {
   const attackGrid = combatDefs.CANONICAL_GRID_CONFIGS?.[2];
   if (!attackGrid) throw new Error('Attack grid 2 is missing from canonical combat config.');
-  const units = scenario.army.units;
+  const deployments = orderUnitsForSpawn(
+    scenario.army.units,
+    scenario.spawnProfile,
+  );
+  const shipLevel = discoverShipLevelForTownHall(
+    combatDefs,
+    scenario.attackerTownHall,
+  );
   const actions = [];
-  for (let index = 0; index < units.length; index += 1) {
+  for (let index = 0; index < deployments.length; index += 1) {
+    const deployment = deployments[index];
     const cell = spawnCellForProfile(
       scenario.spawnProfile,
       index,
-      units.length,
+      deployments.length,
       attackGrid,
+      deployment,
     );
     const point = gridToWorld(cell.x, cell.z, 1, 1, attackGrid);
     actions.push({
       type: 'deploy_troop',
-      troop: units[index],
-      troopLevel: scenario.troopLevels[units[index]] || 1,
+      troop: ['demon_king', 'fire_dragon'].includes(deployment.type)
+        ? `${deployment.type}:R${strRarity(
+          scenario.attackerNftRarities?.[deployment.type],
+        )}`
+        : deployment.type,
+      troopLevel: scenario.troopLevels[deployment.type] || 1,
+      shipLevel,
       x: point.x,
       z: point.z,
-      t: spawnTimeForProfile(scenario.spawnProfile, index),
+      t: spawnTimeForProfile(
+        scenario.spawnProfile,
+        index,
+        deployments.length,
+        deployment,
+      ),
       deploy_index: index,
     });
   }
-  if (scenario.tactics === 'cannon-rally') {
-    const highValue = scenario.base.buildings
-      .filter((building) => ['mortar', 'mage_tower', 'town_hall'].includes(building.type))
-      .slice(0, 3);
-    highValue.forEach((building, index) => {
+  const highValue = scenario.base.buildings
+    .filter((building) => (
+      ['mortar', 'mage_tower', 'cannon', 'archer_tower', 'turret', 'town_hall']
+        .includes(building.type)
+    ))
+    .sort((a, b) => (
+      ['mortar', 'mage_tower', 'cannon', 'archer_tower', 'turret', 'town_hall']
+        .indexOf(a.type)
+      - ['mortar', 'mage_tower', 'cannon', 'archer_tower', 'turret', 'town_hall']
+        .indexOf(b.type)
+    ));
+  const townHall = scenario.base.buildings.find((building) => building.type === 'town_hall');
+  const mainGrid = combatDefs.CANONICAL_GRID_CONFIGS?.[0];
+  const dangerPoint = highValue[0] && mainGrid
+    ? gridToWorld(
+      highValue[0].grid_x,
+      highValue[0].grid_z,
+      highValue[0].size?.[0] || 2,
+      highValue[0].size?.[1] || 2,
+      mainGrid,
+    )
+    : { x: actions[0]?.x || 0, z: actions[0]?.z || 0 };
+  const entryPoint = {
+    x: avg(actions.slice(0, 4).reduce((sum, action) => sum + action.x, 0), Math.min(4, actions.length)),
+    z: avg(actions.slice(0, 4).reduce((sum, action) => sum + action.z, 0), Math.min(4, actions.length)),
+  };
+
+  if (['cannon-focus', 'cannon-rally', 'cannon-medkit'].includes(scenario.tactics)) {
+    highValue.slice(0, scenario.tactics === 'cannon-focus' ? 2 : 1)
+      .forEach((building, index) => {
       actions.push({
         type: 'cannon_fire',
         buildingId: building.id,
         t: 0.25 + index * 1.05,
       });
     });
-    const townHall = scenario.base.buildings.find((building) => building.type === 'town_hall');
-    if (townHall) {
-      actions.push({
-        type: 'rally_drop',
-        buildingId: townHall.id,
-        t: 4,
-        flight_time: 0,
-      });
-    }
+  }
+  if (['cannon-rally', 'rally-core', 'rally-rage'].includes(scenario.tactics) && townHall) {
+    actions.push({
+      type: 'rally_drop',
+      buildingId: townHall.id,
+      t: 3.5,
+      flight_time: 0,
+    });
+  }
+  if (['freeze-defense', 'freeze-rage', 'freeze-barrel'].includes(scenario.tactics)) {
+    actions.push({ type: 'freeze_drop', ...dangerPoint, t: 0.55 });
+  }
+  if (['rage-entry', 'freeze-rage', 'rally-rage'].includes(scenario.tactics)) {
+    actions.push({ type: 'rage_drop', ...entryPoint, t: 0.65 });
+  }
+  if (['medkit-entry', 'cannon-medkit'].includes(scenario.tactics)) {
+    actions.push({ type: 'medkit_drop', ...entryPoint, t: 1.4 });
+  }
+  if (['skeleton-barrel', 'freeze-barrel'].includes(scenario.tactics) && highValue[0]) {
+    actions.push({
+      type: 'skeleton_barrel_fire',
+      buildingId: highValue[0].id,
+      t: 0.75,
+    });
   }
   return actions.sort((a, b) => Number(a.t || 0) - Number(b.t || 0));
 }
 
-function spawnCellForProfile(profile, index, count, grid) {
+function parseSpawnProfile(profile) {
+  const legacy = {
+    'wide-line': {
+      formation: 'wide-line',
+      timing: 'rapid',
+      order: 'roster-order',
+      legacyProfile: 'wide-line',
+    },
+    'center-push': {
+      formation: 'center-column',
+      timing: 'rapid',
+      order: 'roster-order',
+      legacyProfile: 'center-push',
+    },
+    'left-flank': {
+      formation: 'left-flank',
+      timing: 'rapid',
+      order: 'roster-order',
+      legacyProfile: 'left-flank',
+    },
+    'right-flank': {
+      formation: 'right-flank',
+      timing: 'rapid',
+      order: 'roster-order',
+      legacyProfile: 'right-flank',
+    },
+    'dual-flank': {
+      formation: 'dual-flank',
+      timing: 'rapid',
+      order: 'roster-order',
+      legacyProfile: 'dual-flank',
+    },
+    'staggered-waves': {
+      formation: 'wide-line',
+      timing: 'three-waves',
+      order: 'roster-order',
+      legacyProfile: 'staggered-waves',
+    },
+  };
+  if (legacy[profile]) return legacy[profile];
+  const [formation, timing, order] = String(profile || '').split('__');
+  if (
+    !SPAWN_FORMATIONS.includes(formation)
+    || !SPAWN_TIMINGS.includes(timing)
+    || !DEPLOYMENT_ORDERS.includes(order)
+  ) {
+    throw new Error(`Unknown spawn profile: ${profile}`);
+  }
+  return { formation, timing, order };
+}
+
+function formatSpawnProfile({ formation, timing, order }) {
+  return `${formation}__${timing}__${order}`;
+}
+
+function validateSpawnMechanicCatalog() {
+  if (SPAWN_PROFILES.length !== 100 || new Set(SPAWN_PROFILES).size !== 100) {
+    throw new Error(
+      `Spawn mechanic catalog must contain exactly 100 unique profiles; got ${SPAWN_PROFILES.length}.`,
+    );
+  }
+  const grid = { grid_width: 27, grid_height: 5 };
+  const roster = [
+    'mage',
+    'archer',
+    'knight',
+    'demon_king',
+    'necromancer',
+    'mimic',
+    'fire_dragon',
+    'pea_shooter',
+  ];
+  for (const profile of SPAWN_PROFILES) {
+    if (formatSpawnProfile(parseSpawnProfile(profile)) !== profile) {
+      throw new Error(`Spawn mechanic does not round-trip: ${profile}`);
+    }
+    for (const count of [1, 8, 23, 45]) {
+      const units = Array.from(
+        { length: count },
+        (_, index) => roster[index % roster.length],
+      );
+      const deployments = orderUnitsForSpawn(units, profile);
+      let previousTime = -Infinity;
+      for (let index = 0; index < deployments.length; index += 1) {
+        const cell = spawnCellForProfile(
+          profile,
+          index,
+          deployments.length,
+          grid,
+          deployments[index],
+        );
+        if (
+          cell.x < 0
+          || cell.x >= grid.grid_width
+          || cell.z < 0
+          || cell.z >= grid.grid_height
+        ) {
+          throw new Error(
+            `Spawn mechanic ${profile} emitted out-of-bounds cell ${cell.x},${cell.z}.`,
+          );
+        }
+        const time = spawnTimeForProfile(
+          profile,
+          index,
+          deployments.length,
+          deployments[index],
+        );
+        if (time < previousTime) {
+          throw new Error(
+            `Spawn mechanic ${profile} reverses deploy order at index ${index}.`,
+          );
+        }
+        previousTime = time;
+      }
+    }
+  }
+}
+
+function deploymentRole(type) {
+  return DEPLOYMENT_ROLE_BY_TROOP[type] || 'damage';
+}
+
+function orderUnitsForSpawn(units, profile) {
+  const { order } = parseSpawnProfile(profile);
+  const deployments = units.map((type, originalIndex) => ({
+    type,
+    originalIndex,
+    role: deploymentRole(type),
+  }));
+  if (order === 'tank-front-support-rear') {
+    const rolePriority = {
+      tank: 0,
+      attrition: 0,
+      frontline: 1,
+      utility: 1,
+      damage: 2,
+      support: 3,
+    };
+    deployments.sort((a, b) => (
+      (rolePriority[a.role] ?? 2) - (rolePriority[b.role] ?? 2)
+      || a.originalIndex - b.originalIndex
+    ));
+  }
+  const roleCounts = new Map();
+  for (const deployment of deployments) {
+    roleCounts.set(
+      deployment.role,
+      (roleCounts.get(deployment.role) || 0) + 1,
+    );
+  }
+  const roleCursors = new Map();
+  return deployments.map((deployment) => {
+    const roleIndex = roleCursors.get(deployment.role) || 0;
+    roleCursors.set(deployment.role, roleIndex + 1);
+    return {
+      ...deployment,
+      roleIndex,
+      roleCount: roleCounts.get(deployment.role) || 1,
+    };
+  });
+}
+
+function spawnCellForProfile(profile, index, count, grid, deployment = null) {
+  const { formation, order, legacyProfile } = parseSpawnProfile(profile);
   const width = Math.max(1, Math.trunc(Number(grid.grid_width) || 27));
   const height = Math.max(1, Math.trunc(Number(grid.grid_height) || 5));
   const safeX = (value) => clampInt(value, 0, width - 1);
   const safeZ = (value) => clampInt(value, 0, height - 1);
-  if (profile === 'center-push') {
+  if (legacyProfile === 'center-push') {
     return {
       x: safeX(Math.floor(width / 2) + (index % 5) - 2),
       z: safeZ(Math.floor(index / 15)),
     };
   }
-  if (profile === 'left-flank') {
+  if (legacyProfile === 'left-flank') {
     return {
       x: safeX(2 + (index % Math.max(2, Math.floor(width * 0.25)))),
       z: safeZ(Math.floor(index / 12)),
     };
   }
-  if (profile === 'right-flank') {
+  if (legacyProfile === 'right-flank') {
     return {
       x: safeX(width - 3 - (index % Math.max(2, Math.floor(width * 0.25)))),
       z: safeZ(Math.floor(index / 12)),
     };
   }
-  if (profile === 'dual-flank') {
+  if (legacyProfile === 'dual-flank') {
     const left = index % 2 === 0;
     const lane = Math.floor(index / 2) % Math.max(2, Math.floor(width * 0.20));
     return {
@@ -1180,7 +5088,7 @@ function spawnCellForProfile(profile, index, count, grid) {
       z: safeZ(Math.floor(index / 18)),
     };
   }
-  if (profile === 'staggered-waves') {
+  if (legacyProfile === 'staggered-waves') {
     const perWave = Math.max(1, Math.ceil(count / 3));
     const withinWave = index % perWave;
     return {
@@ -1188,17 +5096,118 @@ function spawnCellForProfile(profile, index, count, grid) {
       z: safeZ(Math.floor(index / perWave)),
     };
   }
-  return {
-    x: safeX(1 + Math.floor((index + 0.5) * (width - 2) / Math.max(1, count))),
-    z: safeZ(index % 2),
-  };
+  if (legacyProfile === 'wide-line') {
+    return {
+      x: safeX(1 + Math.floor((index + 0.5) * (width - 2) / Math.max(1, count))),
+      z: safeZ(index % 2),
+    };
+  }
+  const center = Math.floor(width / 2);
+  const normalized = (index + 0.5) / Math.max(1, count);
+  const flankWidth = Math.max(3, Math.floor(width * 0.28));
+  const row = Math.floor(index / Math.max(1, Math.ceil(count / height)));
+  const centerOffsets = [0, -1, 1, -2, 2, -3, 3, -4, 4];
+  let x = center;
+  let z = row;
+
+  if (formation === 'wide-line') {
+    x = 1 + Math.floor(normalized * Math.max(1, width - 2));
+    z = index % Math.min(2, height);
+  } else if (formation === 'center-column') {
+    x = center + centerOffsets[index % centerOffsets.length];
+    z = Math.floor(index / centerOffsets.length);
+  } else if (formation === 'left-flank') {
+    x = 1 + (index % flankWidth);
+    z = Math.floor(index / flankWidth);
+  } else if (formation === 'right-flank') {
+    x = width - 2 - (index % flankWidth);
+    z = Math.floor(index / flankWidth);
+  } else if (formation === 'dual-flank') {
+    const lane = Math.floor(index / 2) % flankWidth;
+    x = index % 2 === 0 ? 1 + lane : width - 2 - lane;
+    z = Math.floor(index / (flankWidth * 2));
+  } else if (formation === 'three-lane') {
+    const lanes = [
+      Math.floor(width * 0.18),
+      center,
+      Math.floor(width * 0.82),
+    ];
+    x = lanes[index % lanes.length]
+      + (Math.floor(index / lanes.length) % 3) - 1;
+    z = Math.floor(index / (lanes.length * 3));
+  } else if (formation === 'diamond') {
+    const diamondOffsets = [0, -2, 2, -4, 4, -6, 6, -3, 3];
+    x = center + diamondOffsets[index % diamondOffsets.length];
+    z = Math.floor(index / diamondOffsets.length)
+      + (index % diamondOffsets.length === 0 ? 0 : 1);
+  } else if (formation === 'vanguard-wedge') {
+    const wedgeRow = Math.floor(Math.sqrt(index));
+    const rowStart = wedgeRow * wedgeRow;
+    x = center + (index - rowStart) - wedgeRow;
+    z = wedgeRow;
+  } else if (formation === 'inverted-wedge') {
+    const reverseIndex = Math.max(0, count - index - 1);
+    const wedgeRow = Math.floor(Math.sqrt(reverseIndex));
+    const rowStart = wedgeRow * wedgeRow;
+    x = center + (reverseIndex - rowStart) - wedgeRow;
+    z = Math.max(0, height - 1 - wedgeRow);
+  } else if (formation === 'edge-sweep') {
+    const inward = Math.floor(index / 2) % Math.max(1, center - 1);
+    x = index % 2 === 0 ? 1 + inward : width - 2 - inward;
+    z = Math.floor(index / Math.max(2, width - 2));
+  }
+
+  if (order === 'tank-front-support-rear' && deployment) {
+    const roleDepth = {
+      tank: 0,
+      attrition: 0,
+      frontline: Math.min(1, height - 1),
+      utility: Math.min(1, height - 1),
+      damage: Math.max(0, height - 2),
+      support: height - 1,
+    };
+    const sameRoleSpread = deployment.roleCount > 1
+      ? deployment.roleIndex % 2
+      : 0;
+    z = (roleDepth[deployment.role] ?? z) + sameRoleSpread;
+  }
+  return { x: safeX(x), z: safeZ(z) };
 }
 
-function spawnTimeForProfile(profile, index) {
-  if (profile === 'staggered-waves') {
+function spawnTimeForProfile(profile, index, count, deployment = null) {
+  const { timing, order, legacyProfile } = parseSpawnProfile(profile);
+  if (legacyProfile === 'staggered-waves') {
     return round(Math.floor(index / 8) * 0.7 + (index % 8) * 0.08, 3);
   }
-  return round(index * 0.08, 3);
+  if (legacyProfile) return round(index * 0.08, 3);
+  let time = index * 0.08;
+  if (timing === 'burst') {
+    time = index * 0.02;
+  } else if (timing === 'rapid') {
+    time = index * 0.08;
+  } else if (timing === 'two-waves') {
+    const waveSize = Math.max(1, Math.ceil(count / 2));
+    const waveInterval = waveSize * 0.05 + 0.35;
+    time = Math.floor(index / waveSize) * waveInterval + (index % waveSize) * 0.05;
+  } else if (timing === 'three-waves') {
+    const waveSize = Math.max(1, Math.ceil(count / 3));
+    const waveInterval = waveSize * 0.05 + 0.35;
+    time = Math.floor(index / waveSize) * waveInterval + (index % waveSize) * 0.05;
+  } else if (timing === 'drip') {
+    time = index * 0.22;
+  }
+  if (order === 'tank-front-support-rear' && deployment) {
+    const roleDelay = {
+      tank: 0,
+      attrition: 0,
+      frontline: 0.12,
+      utility: 0.12,
+      damage: 0.32,
+      support: 0.52,
+    };
+    time += roleDelay[deployment.role] || 0;
+  }
+  return round(time, 3);
 }
 
 function gridToWorld(gridX, gridZ, sizeX, sizeZ, config) {
@@ -1229,9 +5238,36 @@ function createAggregate() {
     byBaseArchetype: new Map(),
     byBaseLevelProfile: new Map(),
     byArmy: new Map(),
+    byAttackPolicy: new Map(),
     bySpawnProfile: new Map(),
+    bySpawnProfileTownHall: new Map(),
+    bySpawnFormation: new Map(),
+    bySpawnTiming: new Map(),
+    byDeploymentOrder: new Map(),
+    byTactics: new Map(),
+    byNftRarity: new Map(),
+    byNftTroopRarity: new Map(),
+    byDefenderWard: new Map(),
     byAttackLevelProfile: new Map(),
+    byExperimentCohort: new Map(),
+    byCohortTactics: new Map(),
+    byCohortSpawnFormation: new Map(),
+    byCohortSpawnTiming: new Map(),
+    byCohortDeploymentOrder: new Map(),
+    byCohortTownHall: new Map(),
+    byCohortTroop: new Map(),
+    byCohortTroopTownHall: new Map(),
     byTroop: new Map(),
+    byTroopTownHall: new Map(),
+    byPureTroop: new Map(),
+    byPureTroopTownHall: new Map(),
+    byPureTroopBaseArchetype: new Map(),
+    byPureTroopTownHallBaseArchetype: new Map(),
+    byPureBase: new Map(),
+    byNonAdaptiveBase: new Map(),
+    byCohortBase: new Map(),
+    byBaseArchetypeTownHall: new Map(),
+    byArmyBaseArchetype: new Map(),
     byBase: new Map(),
     samples: [],
   };
@@ -1241,6 +5277,8 @@ function createBucket() {
   return {
     count: 0,
     wins: 0,
+    validCount: 0,
+    validWins: 0,
     invalid: 0,
     durationSec: 0,
     buildingsDestroyed: 0,
@@ -1252,6 +5290,9 @@ function createBucket() {
     sharkTrapsTriggered: 0,
     summonsSpawned: 0,
     evolutionChildrenSpawned: 0,
+    validBuildingsDestroyed: 0,
+    validBuildingCount: 0,
+    validTownHallHpPct: 0,
   };
 }
 
@@ -1267,13 +5308,151 @@ function recordScenario(aggregate, scenario, result) {
     result,
   );
   recordBucket(mapBucket(aggregate.byBaseArchetype, scenario.base.archetype), result);
+  recordBucket(
+    mapBucket(
+      aggregate.byBaseArchetypeTownHall,
+      `${scenario.base.archetype}|TH${scenario.defenderTownHall}`,
+    ),
+    result,
+  );
   recordBucket(mapBucket(aggregate.byBaseLevelProfile, scenario.base.levelProfile), result);
   recordBucket(mapBucket(aggregate.byArmy, scenario.army.name), result);
+  recordBucket(
+    mapBucket(
+      aggregate.byArmyBaseArchetype,
+      `${scenario.army.name}|${scenario.base.archetype}`,
+    ),
+    result,
+  );
+  if (scenario.policyId) {
+    recordBucket(mapBucket(aggregate.byAttackPolicy, scenario.policyId), result);
+  }
   recordBucket(mapBucket(aggregate.bySpawnProfile, scenario.spawnProfile), result);
+  recordBucket(
+    mapBucket(
+      aggregate.bySpawnProfileTownHall,
+      `TH${scenario.attackerTownHall}|${scenario.spawnProfile}`,
+    ),
+    result,
+  );
+  const spawn = parseSpawnProfile(scenario.spawnProfile);
+  recordBucket(mapBucket(aggregate.bySpawnFormation, spawn.formation), result);
+  recordBucket(mapBucket(aggregate.bySpawnTiming, spawn.timing), result);
+  recordBucket(mapBucket(aggregate.byDeploymentOrder, spawn.order), result);
+  recordBucket(mapBucket(aggregate.byTactics, scenario.tactics), result);
+  const nftTypes = [...new Set(scenario.army.units)]
+    .filter((type) => ['demon_king', 'fire_dragon'].includes(type));
+  for (const nftType of nftTypes) {
+    const rarity = strRarity(scenario.attackerNftRarities?.[nftType]);
+    recordBucket(mapBucket(aggregate.byNftRarity, rarity), result);
+    recordBucket(
+      mapBucket(aggregate.byNftTroopRarity, `${nftType}|${rarity}`),
+      result,
+    );
+  }
+  recordBucket(
+    mapBucket(
+      aggregate.byDefenderWard,
+      `ward-${Number(scenario.defenderAltarLevels?.ward || 0)}`,
+    ),
+    result,
+  );
   recordBucket(mapBucket(aggregate.byAttackLevelProfile, scenario.levelProfile), result);
+  recordBucket(
+    mapBucket(
+      aggregate.byExperimentCohort,
+      scenario.experimentCohort || 'sampled',
+    ),
+    result,
+  );
+  const cohort = scenario.experimentCohort || 'sampled';
+  recordBucket(
+    mapBucket(aggregate.byCohortTactics, `${cohort}|${scenario.tactics}`),
+    result,
+  );
+  recordBucket(
+    mapBucket(
+      aggregate.byCohortSpawnFormation,
+      `${cohort}|${spawn.formation}`,
+    ),
+    result,
+  );
+  recordBucket(
+    mapBucket(aggregate.byCohortSpawnTiming, `${cohort}|${spawn.timing}`),
+    result,
+  );
+  recordBucket(
+    mapBucket(
+      aggregate.byCohortDeploymentOrder,
+      `${cohort}|${spawn.order}`,
+    ),
+    result,
+  );
+  recordBucket(
+    mapBucket(
+      aggregate.byCohortTownHall,
+      `${cohort}|TH${scenario.attackerTownHall}`,
+    ),
+    result,
+  );
+  recordBucket(
+    mapBucket(aggregate.byCohortBase, `${cohort}|${scenario.base.id}`),
+    result,
+  );
+  if (['pure-unit-matrix', 'policy-exploration'].includes(cohort)) {
+    recordBucket(mapBucket(aggregate.byNonAdaptiveBase, scenario.base.id), result);
+  }
   recordBucket(mapBucket(aggregate.byBase, scenario.base.id), result);
-  for (const troopType of new Set(scenario.army.units)) {
+  const troopTypes = new Set(scenario.army.units);
+  for (const troopType of troopTypes) {
     recordBucket(mapBucket(aggregate.byTroop, troopType), result);
+    recordBucket(
+      mapBucket(aggregate.byCohortTroop, `${cohort}|${troopType}`),
+      result,
+    );
+    recordBucket(
+      mapBucket(
+        aggregate.byTroopTownHall,
+        `${troopType}|TH${scenario.attackerTownHall}`,
+      ),
+      result,
+    );
+    recordBucket(
+      mapBucket(
+        aggregate.byCohortTroopTownHall,
+        `${cohort}|${troopType}|TH${scenario.attackerTownHall}`,
+      ),
+      result,
+    );
+  }
+  if (
+    troopTypes.size === 1
+    && scenario.experimentCohort === 'pure-unit-matrix'
+  ) {
+    const troopType = [...troopTypes][0];
+    recordBucket(mapBucket(aggregate.byPureTroop, troopType), result);
+    recordBucket(
+      mapBucket(
+        aggregate.byPureTroopTownHall,
+        `${troopType}|TH${scenario.attackerTownHall}`,
+      ),
+      result,
+    );
+    recordBucket(
+      mapBucket(
+        aggregate.byPureTroopBaseArchetype,
+        `${troopType}|${scenario.base.archetype}`,
+      ),
+      result,
+    );
+    recordBucket(
+      mapBucket(
+        aggregate.byPureTroopTownHallBaseArchetype,
+        `${troopType}|TH${scenario.attackerTownHall}|${scenario.base.archetype}`,
+      ),
+      result,
+    );
+    recordBucket(mapBucket(aggregate.byPureBase, scenario.base.id), result);
   }
   if (aggregate.samples.length < 20) {
     aggregate.samples.push({
@@ -1283,6 +5462,10 @@ function recordScenario(aggregate, scenario, result) {
       army: scenario.army.name,
       spawnProfile: scenario.spawnProfile,
       attackLevelProfile: scenario.levelProfile,
+      attackPolicyId: scenario.policyId || '',
+      tactics: scenario.tactics,
+      nftRarity: strRarity(scenario.attackerNftRarities?.demon_king),
+      defenderWard: Number(scenario.defenderAltarLevels?.ward || 0),
       result,
     });
   }
@@ -1291,6 +5474,13 @@ function recordScenario(aggregate, scenario, result) {
 function recordBucket(bucket, result) {
   bucket.count += 1;
   if (result.win) bucket.wins += 1;
+  if (result.valid) {
+    bucket.validCount += 1;
+    if (result.win) bucket.validWins += 1;
+    bucket.validBuildingsDestroyed += Number(result.buildingsDestroyed || 0);
+    bucket.validBuildingCount += Number(result.buildingCount || 0);
+    bucket.validTownHallHpPct += Number(result.townHallHpPct || 0);
+  }
   if (!result.valid) bucket.invalid += 1;
   for (const key of [
     'durationSec',
@@ -1408,8 +5598,15 @@ function buildCoverage(catalog, bases, scenarios) {
   }
   const simulatedTroops = new Set();
   const simulatedBases = new Set();
+  const simulatedSpawnProfiles = new Set();
+  const spawnProfilesByTownHall = new Map();
   for (const scenario of scenarios) {
     simulatedBases.add(scenario.base.id);
+    simulatedSpawnProfiles.add(scenario.spawnProfile);
+    if (!spawnProfilesByTownHall.has(scenario.attackerTownHall)) {
+      spawnProfilesByTownHall.set(scenario.attackerTownHall, new Set());
+    }
+    spawnProfilesByTownHall.get(scenario.attackerTownHall).add(scenario.spawnProfile);
     for (const troop of scenario.army.units) simulatedTroops.add(troop);
   }
   const maxGeneratedTownHall = Math.max(1, ...generatedTownHalls);
@@ -1436,6 +5633,22 @@ function buildCoverage(catalog, bases, scenarios) {
     generatedTownHalls: [...generatedTownHalls].sort((a, b) => a - b),
     generatedBases: bases.length,
     simulatedBases: simulatedBases.size,
+    expectedSpawnProfiles: SPAWN_PROFILES,
+    simulatedSpawnProfiles: [...simulatedSpawnProfiles].sort(),
+    missingSpawnProfiles: scenarios.length === 0
+      ? []
+      : SPAWN_PROFILES.filter((profile) => !simulatedSpawnProfiles.has(profile)),
+    spawnProfilesByTownHall: Object.fromEntries(
+      [...spawnProfilesByTownHall.entries()]
+        .sort((a, b) => a[0] - b[0])
+        .map(([townHall, profiles]) => [
+          `TH${townHall}`,
+          {
+            count: profiles.size,
+            missing: SPAWN_PROFILES.filter((profile) => !profiles.has(profile)),
+          },
+        ]),
+    ),
   };
 }
 
@@ -1455,6 +5668,13 @@ function analyzeBalance({
       message: `Missing content coverage. Buildings: ${coverage.missingBuildings.join(', ') || 'none'}; troops: ${coverage.missingTroops.join(', ') || 'none'}.`,
     });
   }
+  if (coverage.missingSpawnProfiles.length > 0) {
+    issues.push({
+      severity: 'critical',
+      code: 'spawn-coverage',
+      message: `Missing ${coverage.missingSpawnProfiles.length}/${SPAWN_PROFILES.length} spawn mechanics in simulated coverage.`,
+    });
+  }
   if (aggregate.overall.invalid > 0) {
     issues.push({
       severity: 'critical',
@@ -1464,46 +5684,56 @@ function analyzeBalance({
   }
   if (aggregate.overall.count === 0) return issues;
 
-  const overallRate = rate(aggregate.overall.wins, aggregate.overall.count);
-  if (Math.abs(overallRate - targetWinRate) > band) {
+  const explorationBucket = aggregate.byExperimentCohort.get('policy-exploration')
+    || aggregate.overall;
+  const explorationRate = rate(explorationBucket.wins, explorationBucket.count);
+  if (Math.abs(explorationRate - targetWinRate) > band) {
     issues.push({
       severity: 'warning',
-      code: 'overall-win-rate',
-      message: `Overall attacker win rate ${pct(overallRate)} is outside ${pct(targetWinRate)} +/- ${pct(band)}.`,
+      code: 'policy-exploration-win-rate',
+      message: `Policy-exploration attacker win rate ${pct(explorationRate)} is outside ${pct(targetWinRate)} +/- ${pct(band)} across ${explorationBucket.count} samples. Adaptive training and controlled pure-unit battles are excluded.`,
     });
   }
-  collectBucketOutliers(
-    issues,
-    'matchup',
-    aggregate.byMatchup,
-    targetWinRate,
-    band,
-    minGroupSize,
+  const pureTotals = [...aggregate.byPureTroop.values()].reduce(
+    (totals, bucket) => ({
+      count: totals.count + bucket.count,
+      wins: totals.wins + bucket.wins,
+    }),
+    { count: 0, wins: 0 },
   );
+  const pureReference = rate(pureTotals.wins, pureTotals.count);
   collectBucketOutliers(
     issues,
-    'base-archetype',
-    aggregate.byBaseArchetype,
-    overallRate,
-    Math.max(0.12, band),
-    minGroupSize,
-  );
-  collectBucketOutliers(
-    issues,
-    'army',
-    aggregate.byArmy,
-    overallRate,
+    'pure-troop',
+    aggregate.byPureTroop,
+    pureReference,
     Math.max(0.15, band),
     minGroupSize,
   );
-  collectBucketOutliers(
-    issues,
-    'troop',
-    aggregate.byTroop,
-    overallRate,
-    Math.max(0.15, band),
-    minGroupSize,
-  );
+  for (const [troopType, bucket] of aggregate.byPureTroop) {
+    if (bucket.count < Math.max(20, minGroupSize)) continue;
+    const winRate = rate(bucket.wins, bucket.count);
+    if (winRate >= 0.8 || winRate <= 0.2) {
+      issues.push({
+        severity: 'warning',
+        code: winRate >= 0.8 ? 'degenerate-pure-army' : 'underpowered-pure-army',
+        message: `Pure ${troopType} armies have ${pct(winRate)} attacker wins across ${bucket.count} isolated samples.`,
+      });
+    }
+  }
+  for (const [key, bucket] of aggregate.byCohortTownHall) {
+    if (!key.startsWith('policy-exploration|') || bucket.count < minGroupSize) continue;
+    const townHall = Number(key.match(/TH(\d+)/)?.[1] || 0);
+    const expectedLow = townHall <= 4 ? 0.60 : targetWinRate - band;
+    const expectedHigh = townHall <= 4 ? 0.70 : targetWinRate + band;
+    const winRate = rate(bucket.wins, bucket.count);
+    if (winRate >= expectedLow && winRate <= expectedHigh) continue;
+    issues.push({
+      severity: townHall >= 5 ? 'critical' : 'warning',
+      code: 'town-hall-target-band',
+      message: `${key} has ${pct(winRate)} attacker wins across ${bucket.count} samples; authored target is ${pct(expectedLow)}-${pct(expectedHigh)}.`,
+    });
+  }
   for (const [baseId, bucket] of aggregate.byBase) {
     if (bucket.count < 2) continue;
     const winRate = rate(bucket.wins, bucket.count);
@@ -1514,6 +5744,14 @@ function analyzeBalance({
         message: `${baseId} has ${pct(winRate)} attacker wins across ${bucket.count} samples.`,
       });
     }
+  }
+  for (const [baseId, bucket] of aggregate.byNonAdaptiveBase) {
+    if (bucket.count < minGroupSize || bucket.wins > 0) continue;
+    issues.push({
+      severity: 'warning',
+      code: 'unbeaten-non-adaptive-base',
+      message: `${baseId} has 0 attacker wins across ${bucket.count} controlled/policy-exploration samples.`,
+    });
   }
   return issues.sort((a, b) => severityRank(a.severity) - severityRank(b.severity));
 }
@@ -1540,9 +5778,38 @@ function serializeAggregate(aggregate) {
     byBaseArchetype: mapToObject(aggregate.byBaseArchetype),
     byBaseLevelProfile: mapToObject(aggregate.byBaseLevelProfile),
     byArmy: mapToObject(aggregate.byArmy),
+    byAttackPolicy: mapToObject(aggregate.byAttackPolicy),
     bySpawnProfile: mapToObject(aggregate.bySpawnProfile),
+    bySpawnProfileTownHall: mapToObject(aggregate.bySpawnProfileTownHall),
+    bySpawnFormation: mapToObject(aggregate.bySpawnFormation),
+    bySpawnTiming: mapToObject(aggregate.bySpawnTiming),
+    byDeploymentOrder: mapToObject(aggregate.byDeploymentOrder),
+    byTactics: mapToObject(aggregate.byTactics),
+    byNftRarity: mapToObject(aggregate.byNftRarity),
+    byNftTroopRarity: mapToObject(aggregate.byNftTroopRarity),
+    byDefenderWard: mapToObject(aggregate.byDefenderWard),
     byAttackLevelProfile: mapToObject(aggregate.byAttackLevelProfile),
+    byExperimentCohort: mapToObject(aggregate.byExperimentCohort),
+    byCohortTactics: mapToObject(aggregate.byCohortTactics),
+    byCohortSpawnFormation: mapToObject(aggregate.byCohortSpawnFormation),
+    byCohortSpawnTiming: mapToObject(aggregate.byCohortSpawnTiming),
+    byCohortDeploymentOrder: mapToObject(aggregate.byCohortDeploymentOrder),
+    byCohortTownHall: mapToObject(aggregate.byCohortTownHall),
+    byCohortTroop: mapToObject(aggregate.byCohortTroop),
+    byCohortTroopTownHall: mapToObject(aggregate.byCohortTroopTownHall),
     byTroop: mapToObject(aggregate.byTroop),
+    byTroopTownHall: mapToObject(aggregate.byTroopTownHall),
+    byPureTroop: mapToObject(aggregate.byPureTroop),
+    byPureTroopTownHall: mapToObject(aggregate.byPureTroopTownHall),
+    byPureTroopBaseArchetype: mapToObject(aggregate.byPureTroopBaseArchetype),
+    byPureTroopTownHallBaseArchetype: mapToObject(
+      aggregate.byPureTroopTownHallBaseArchetype,
+    ),
+    byPureBase: mapToObject(aggregate.byPureBase),
+    byNonAdaptiveBase: mapToObject(aggregate.byNonAdaptiveBase),
+    byCohortBase: mapToObject(aggregate.byCohortBase),
+    byBaseArchetypeTownHall: mapToObject(aggregate.byBaseArchetypeTownHall),
+    byArmyBaseArchetype: mapToObject(aggregate.byArmyBaseArchetype),
     byBase: mapToObject(aggregate.byBase),
     samples: aggregate.samples,
   };
@@ -1558,7 +5825,18 @@ function serializableCatalog(catalog) {
 }
 
 function buildMarkdownReport(model, minGroupSize) {
-  const { config, catalog, coverage, statAudit, balanceIssues, aggregate } = model;
+  const {
+    config,
+    catalog,
+    coverage,
+    statAudit,
+    balanceIssues,
+    aggregate,
+    breakability,
+    baseCounterMeta,
+    unitUtility,
+    nftRarityProbe,
+  } = model;
   const overall = aggregate.overall;
   const lines = [];
   lines.push('# Clash Full-Game Balance Lab');
@@ -1566,9 +5844,32 @@ function buildMarkdownReport(model, minGroupSize) {
   lines.push(`**Generated:** ${model.generatedAt}`);
   lines.push(`**Seed:** ${config.seed}`);
   lines.push(`**Town Halls:** ${config.townHalls.map((th) => `TH${th}`).join(', ')}`);
-  lines.push(`**Unique generated bases:** ${config.generatedBaseCount}`);
-  lines.push(`**Replay simulations:** ${config.simulatedMatches}`);
+  lines.push(`**Unique ${config.baseSource === 'report' ? 'loaded' : 'generated'} bases:** ${config.generatedBaseCount}`);
+  if (config.baseSource === 'report') {
+    lines.push(`**Base report source:** \`${config.baseReportPath}\``);
+    lines.push(`**Selected base IDs:** ${config.requestedBaseIds.length > 0 ? config.requestedBaseIds.map(escapeMd).join(', ') : 'all matching profile'}`);
+  }
+  lines.push(`**Unique attack policies:** ${config.attackPolicyCount}`);
+  lines.push(`**Capacity-filled core army templates:** ${config.capacityFilledArmyCount || 0}`);
+  lines.push(`**Spawn mechanics:** ${config.spawnMechanicCount} (${config.spawnFormationCount} formations x ${config.spawnTimingCount} timings x ${config.deploymentOrderCount} role orders)`);
+  lines.push(`**Controlled pure-unit battles:** ${config.pureUnitMatrixBattles}`);
+  lines.push(`**Unbeaten non-adaptive bases (n >= ${minGroupSize}):** ${config.unbeatenNonAdaptiveBases}`);
+  lines.push(`**Breakability probe:** ${config.breakabilityBattles} calibration + gate + focused + adaptive rescue battles; ${config.breakabilityUnbeatenBases}/${breakability.testedBaseCount} valid-tested bases unbeaten; ${breakability.untestedBaseCount} untested; ${breakability.invalidOnlyBaseCount} invalid-only`);
+  lines.push(`**Adaptive breakability army breadth:** up to ${config.breakabilityAdaptiveArmyLimit || BREAKABILITY_ADAPTIVE_ARMY_LIMIT} closest distinct ordered army templates per unresolved base`);
+  lines.push(`**Base-counter response matrix:** ${config.baseCounterBattles || 0} battles; ${baseCounterMeta.testedBaseCount || 0} bases x 15 selected same-TH compositions x ${baseCounterMeta.discoveryContextsPerCell || 0} paired discovery contexts, plus locked holdouts`);
+  lines.push(`**Equal-slot unit utility probe:** ${config.unitUtilityBattles} battles`);
+  lines.push(`**Paired NFT rarity probe:** ${config.nftRarityProbeBattles} battles`);
+  lines.push(`**Lab offense scales:** ${Object.entries(config.labOffenseScaleByLevel || {}).map(([level, scale]) => `L${level}=${scale}x`).join(', ')}`);
+  lines.push(`**Lab late-tier troop scales:** ${Object.entries(config.labOffenseScaleByTroop || {}).map(([type, scale]) => `${type}=${scale}x`).join(', ') || 'none'}`);
+  lines.push(`**Lab defense damage scale:** ${config.labDefenseDamageScale || 1}x`);
+  lines.push(`**Lab L5+ defense/guard scale:** ${config.labLateDefenseScale || 1}x`);
+  lines.push(`**Lab TH7 defense/guard scale:** ${config.labTh7DefenseScale || 1}x`);
+  lines.push(`**Lab Mimic concealment ends on first attack:** ${config.labMimicRevealAfterAttack ? 'yes' : 'no'}`);
+  lines.push(`**Lab Mimic trap damage scale while immune:** ${config.labMimicTrapDamageScale || 0}x`);
+  lines.push(`**Balance replay simulations:** ${config.simulatedMatches}`);
   lines.push(`**Ship capacity used:** ${config.shipCapacity} slots`);
+  lines.push(`**Ship capacity by Town Hall:** ${Object.entries(config.shipCapacities).map(([th, capacity]) => `TH${th}=${capacity}`).join(', ')}`);
+  lines.push(`**Matchmaking mode:** ${config.sameTownHallOnly ? 'same Town Hall only' : 'TH -1 / same / TH +1 sample'}`);
   lines.push(`**Elapsed:** ${(config.elapsedMs / 1000).toFixed(1)}s`);
   lines.push('');
   lines.push('## Method');
@@ -1576,8 +5877,16 @@ function buildMarkdownReport(model, minGroupSize) {
   lines.push('- Uses the production `server/combat_session.js` replay simulator.');
   lines.push('- Reads current building, Town Hall, troop, level, slot, defense, and grid definitions.');
   lines.push('- Uses a temporary SQLite database and never reads or writes production player data.');
-  lines.push(`- Generates deterministic layouts across ${ARCHETYPES.length} logical base archetypes and ${BASE_LEVEL_PROFILES.length} progression profiles.`);
-  lines.push('- Samples base, army, level, matchup, deployment, cannon, and rally dimensions without requiring a full Cartesian run.');
+  lines.push(config.baseSource === 'report'
+    ? `- Replays the exact validated base catalog from \`${config.baseReportPath}\`; imported base and building IDs must be non-empty and unique.`
+    : `- Generates deterministic layouts across ${ARCHETYPES.length} logical base archetypes and ${BASE_LEVEL_PROFILES.length} progression profiles.`);
+  lines.push(`- Samples exactly ${SPAWN_PROFILES.length} deterministic spawn mechanics, ${TACTIC_PROFILES.length} tactical plans, troop levels, NFT rarity boosts, and defender Ward levels.`);
+  lines.push('- The controlled pure-unit matrix fixes tactics to none, rarity to common, Ward to 0, and troop level to the attacker Town Hall cap across all represented base archetypes.');
+  lines.push('- The base-counter response matrix fixes common rarity, Ward 0, maxed same-TH levels, and paired deployment contexts across 15 capacity-filled representative pure/mixed compositions per base. It ranks compositions by win, destruction, Town Hall damage, and survival, then replays the locked top-two and the strongest universal family on guaranteed distinct contexts. These battles are excluded from population win rate and do not replace the broader adaptive breakability search.');
+  lines.push('- The equal-slot utility probe replaces roughly 15-20 starter slots with each candidate role package on identical TH7 reference bases, spawn plans, levels, tactics, rarity, and Ward. TH8-TH10 troops are explicitly projections against the current TH7 defense ceiling.');
+  lines.push('- The NFT rarity probe changes only common/epic/legendary rarity on the same pure-NFT army, base, spawn, troop levels, tactics, and Ward.');
+  lines.push('- The remaining policy population explores mixed armies, boosts, abilities, formations, timing, and role ordering; adversarial rounds then mutate the strongest attacks and defenses.');
+  lines.push(`- Elite attack policies require at least ${config.elitePolicyMinSamples} exploration samples; each child mutates one policy dimension, and training uses balanced Latin-square attack/base pairing.`);
   lines.push('- Reusing the same seed makes before/after balance comparisons reproducible.');
   lines.push('');
   lines.push('## Content Discovery');
@@ -1586,6 +5895,8 @@ function buildMarkdownReport(model, minGroupSize) {
   lines.push(`- Active troops: ${catalog.troops.map((entry) => entry.type).join(', ')}`);
   lines.push(`- Building coverage: ${coverage.generatedBuildings.length}/${coverage.expectedBuildings.length}`);
   lines.push(`- Troop simulation coverage: ${coverage.simulatedTroops.length}/${coverage.expectedTroops.length}`);
+  lines.push(`- Spawn-mechanic coverage: ${coverage.simulatedSpawnProfiles.length}/${coverage.expectedSpawnProfiles.length}`);
+  lines.push(`- Spawn coverage by Town Hall: ${Object.entries(coverage.spawnProfilesByTownHall || {}).map(([th, value]) => `${th}=${value.count}/${SPAWN_PROFILES.length}`).join(', ')}`);
   lines.push(`- Bases exercised: ${coverage.simulatedBases}/${coverage.generatedBases}`);
   if (catalog.warnings.length > 0) {
     lines.push('');
@@ -1603,13 +5914,90 @@ function buildMarkdownReport(model, minGroupSize) {
     lines.push(overallMarkdownRow(overall));
   }
   lines.push('');
+  if (breakability.enabled) {
+    lines.push('## Base Breakability Gate');
+    lines.push('');
+    lines.push(`Attack policies were first calibrated against the strongest same-TH bases at ${breakability.nftRarity} NFT rarity. Each base was then attacked by up to ${breakability.policiesPerTownHall} best hard-base policies. Bases with no valid elite-gate win were tested against the remaining sampled same-TH policies until the first valid win or exhaustion of the candidate set. If a base still had no win, the lab selected up to ${BREAKABILITY_ADAPTIVE_ARMY_LIMIT} closest distinct ordered army templates and crossed each with every legal spawn mechanic and tactic, stopping at the first valid win. A rescue result proves existence of one deterministic legal counter-policy; it does not estimate that policy's population win probability. Final unbeaten bases exhausted every adaptive combination selected by this method. These probe battles do not affect the reported balance win rate.`);
+    lines.push('');
+    lines.push(`- Distinct candidate policies after rarity deduplication: ${breakability.candidatePolicyCount}`);
+    lines.push(`- Hard-base calibration battles: ${breakability.calibrationBattles}`);
+    lines.push(`- Full-catalog gate battles: ${breakability.battles}`);
+    lines.push(`- Focused rescue battles: ${breakability.rescueBattles}`);
+    lines.push(`- Adaptive counter-search battles: ${breakability.adaptiveRescueBattles}`);
+    lines.push(`- Without a valid win after elite gate: ${breakability.initialUnbeatenBaseCount}`);
+    lines.push(`- Resolved by remaining sampled policies: ${breakability.focusedRescuedBaseCount || 0}`);
+    lines.push(`- Resolved by adaptive counter-search: ${breakability.adaptiveRescuedBaseCount || 0}`);
+    lines.push(`- Total breakability battles: ${breakability.totalBattles}`);
+    lines.push(`- Invalid: ${breakability.invalid}`);
+    lines.push(`- Tested bases: ${breakability.testedBaseCount}/${breakability.generatedBaseCount}`);
+    lines.push(`- Untested bases: ${breakability.untestedBaseCount}`);
+    lines.push(`- Invalid-only bases: ${breakability.invalidOnlyBaseCount}`);
+    lines.push(`- Bases with zero successful attacks after full candidate search: ${breakability.unbeatenBaseCount}`);
+    if (breakability.rescuedBases.length > 0) {
+      lines.push('');
+      lines.push('| Rescued Base | TH | Archetype | Progression | Counter Policy | Phase | Rescue Attempt |');
+      lines.push('|---|---:|---|---|---|---|---:|');
+      for (const base of breakability.rescuedBases) {
+        lines.push(`| ${escapeMd(base.id)} | ${base.townHall} | ${escapeMd(base.archetype)} | ${escapeMd(base.levelProfile)} | ${escapeMd(base.policyId)} | ${escapeMd(base.phase || '')} | ${base.rescueBattle} |`);
+      }
+    }
+    if (breakability.unbeatenBases.length > 0) {
+      lines.push('');
+      lines.push('| Base | TH | Archetype | Progression | Valid Attacks | Closest Policy | TH HP Left | Destruction |');
+      lines.push('|---|---:|---|---|---:|---|---:|---:|');
+      for (const base of breakability.unbeatenBases) {
+        const closest = breakability.bestAttemptByBase?.[base.id] || {};
+        lines.push(`| ${escapeMd(base.id)} | ${base.townHall} | ${escapeMd(base.archetype)} | ${escapeMd(base.levelProfile)} | ${base.validBattles} | ${escapeMd(closest.policyId || '')} | ${pct(Number(closest.townHallHpPct || 0))} | ${pct(Number(closest.destruction || 0))} |`);
+      }
+    }
+    if (breakability.untestedBases.length > 0) {
+      lines.push('');
+      lines.push('| Untested Base | TH | Archetype | Progression |');
+      lines.push('|---|---:|---|---|');
+      for (const base of breakability.untestedBases) {
+        lines.push(`| ${escapeMd(base.id)} | ${base.townHall} | ${escapeMd(base.archetype)} | ${escapeMd(base.levelProfile)} |`);
+      }
+    }
+    if (breakability.invalidOnlyBases.length > 0) {
+      lines.push('');
+      lines.push('| Invalid-Only Base | TH | Archetype | Progression | Attempts |');
+      lines.push('|---|---:|---|---|---:|');
+      for (const base of breakability.invalidOnlyBases) {
+        lines.push(`| ${escapeMd(base.id)} | ${base.townHall} | ${escapeMd(base.archetype)} | ${escapeMd(base.levelProfile)} | ${base.battles} |`);
+      }
+    }
+    lines.push('');
+  }
+  appendBaseCounterMetaSection(lines, baseCounterMeta);
+  appendUnitUtilitySection(lines, unitUtility);
+  appendNftRarityProbeSection(lines, nftRarityProbe);
   appendBucketSection(lines, 'Town Hall Matchups', aggregate.byMatchup, minGroupSize);
   appendBucketSection(lines, 'Base Archetypes', aggregate.byBaseArchetype, minGroupSize);
+  appendBucketSection(lines, 'Base Archetypes by Town Hall', aggregate.byBaseArchetypeTownHall, minGroupSize);
   appendBucketSection(lines, 'Base Progression Profiles', aggregate.byBaseLevelProfile, minGroupSize);
+  appendBucketSection(lines, 'Experiment Cohorts', aggregate.byExperimentCohort, minGroupSize);
+  appendBucketSection(lines, 'Town Halls by Experiment Cohort', aggregate.byCohortTownHall, minGroupSize);
+  appendBucketSection(lines, 'Troop Presence by Experiment Cohort', aggregate.byCohortTroop, minGroupSize);
+  appendBucketSection(lines, 'Troop Presence by Cohort and Town Hall', aggregate.byCohortTroopTownHall, minGroupSize);
+  appendBucketSection(lines, 'Tactics by Experiment Cohort', aggregate.byCohortTactics, minGroupSize);
+  appendBucketSection(lines, 'Spawn Formations by Experiment Cohort', aggregate.byCohortSpawnFormation, minGroupSize);
+  appendBucketSection(lines, 'Spawn Timings by Experiment Cohort', aggregate.byCohortSpawnTiming, minGroupSize);
+  appendBucketSection(lines, 'Deployment Orders by Experiment Cohort', aggregate.byCohortDeploymentOrder, minGroupSize);
   appendBucketSection(lines, 'Army Policies', aggregate.byArmy, minGroupSize);
   appendBucketSection(lines, 'Spawn Policies', aggregate.bySpawnProfile, minGroupSize);
+  appendBucketSection(lines, 'Spawn Formations', aggregate.bySpawnFormation, minGroupSize);
+  appendBucketSection(lines, 'Spawn Timings', aggregate.bySpawnTiming, minGroupSize);
+  appendBucketSection(lines, 'Deployment Role Orders', aggregate.byDeploymentOrder, minGroupSize);
+  appendBucketSection(lines, 'Tactical Ability Policies', aggregate.byTactics, minGroupSize);
+  appendBucketSection(lines, 'NFT Rarity Boosts', aggregate.byNftRarity, minGroupSize);
+  appendBucketSection(lines, 'NFT Troops by Rarity', aggregate.byNftTroopRarity, minGroupSize);
+  appendBucketSection(lines, 'Defender Ward Boosts', aggregate.byDefenderWard, minGroupSize);
   appendBucketSection(lines, 'Attack Level Profiles', aggregate.byAttackLevelProfile, minGroupSize);
   appendBucketSection(lines, 'Troop Presence', aggregate.byTroop, minGroupSize);
+  appendCharacterSection(lines, 'Controlled Pure-Unit Performance', aggregate.byPureTroop, minGroupSize);
+  appendCharacterSection(lines, 'Controlled Pure-Unit Performance by Town Hall', aggregate.byPureTroopTownHall, minGroupSize);
+  appendCharacterSection(lines, 'Controlled Pure Units vs Base Archetypes', aggregate.byPureTroopBaseArchetype, minGroupSize);
+  appendTopPolicySections(lines, model, minGroupSize);
   lines.push('## Max-Level Troop Efficiency');
   lines.push('');
   lines.push('| Troop | Level | Slots | HP | Direct DPS | HP / Slot | Direct DPS / Slot | Notes |');
@@ -1650,9 +6038,271 @@ function buildMarkdownReport(model, minGroupSize) {
   return `${lines.join('\n')}\n`;
 }
 
+function appendBaseCounterMetaSection(lines, probe) {
+  if (!probe?.enabled) return;
+  const diversity = probe.diversity || {};
+  lines.push('## Base-Counter Response Matrix');
+  lines.push('');
+  lines.push(
+    `The probe compares 15 selected capacity-filled compositions per Town Hall under identical discovery contexts. Selection coverage: ${
+      Object.keys(probe.armyCountByTownHall || {}).map(
+        (townHall) => `${townHall}=${probe.armyCountByTownHall[townHall]}/${probe.availableArmyCountByTownHall?.[townHall] || probe.armyCountByTownHall[townHall]}`,
+      ).join(', ')
+    }. `
+    + 'Near-best compositions within 0.03 utility share counter credit, so ties do not manufacture a single winner.',
+  );
+  lines.push('');
+  lines.push(`- Discovery matrix: ${probe.discoveryBattles} battles`);
+  lines.push(`- Locked top-two counter holdout: ${probe.counterHoldoutBattles} battles`);
+  lines.push(`- Universal-family holdout: ${probe.universalHoldoutBattles} battles`);
+  lines.push(`- Hard-layout confirmation: ${probe.hardConfirmationBattles} battles`);
+  lines.push(`- Invalid battles: ${probe.invalid}`);
+  lines.push(`- Bases with no discovery-matrix win: ${probe.discoveryZeroCounterBaseCount}/${probe.testedBaseCount}`);
+  lines.push(`- Bases with no observed win in any probe phase: ${probe.zeroCounterBaseCount}/${probe.testedBaseCount}`);
+  lines.push(`- Bases where neither locked top-two counter won its holdout: ${probe.confirmedBreakabilityFailureCount}/${probe.testedBaseCount}`);
+  lines.push(`- Bases with at least two / three winning compositions: ${pct(diversity.twoCounterBaseRate)} / ${pct(diversity.threeCounterBaseRate)}`);
+  lines.push(`- Bases with winning counters from at least two recipe families: ${pct(diversity.multiFamilyCounterBaseRate)}`);
+  lines.push(`- Bases losing to at least 12/15 compositions in both discovery contexts: ${pct(diversity.excessivelySoftBaseRate)}`);
+  lines.push(`- Top-1 / top-3 near-best counter share: ${pct(diversity.topCounterShare)} / ${pct(diversity.topThreeCounterShare)}`);
+  lines.push(`- Counter-family effective count (inverse HHI / Shannon): ${formatNumber(diversity.inverseHhiEffectiveFamilies)} / ${formatNumber(diversity.shannonEffectiveFamilies)}`);
+  lines.push(`- Strongest universal family: ${escapeMd(probe.universalFamily)} — ${pct(probe.universalDiscoveryBaseWinRate)} discovery coverage, ${pct(probe.universalHoldoutWinRate)} unseen-context win rate`);
+  lines.push(`- Layouts forcing the universal family to lose while another composition wins: ${pct(diversity.universalCounterForcingBaseRate)}; mean universal regret ${formatNumber(diversity.meanUniversalRegret)}`);
+  lines.push('');
+  lines.push('| Defense Level Profile | Bases | Discovery WR | Discovery Zero-Counter | Total Zero-Counter | 2+ Counters | 3+ Counters | Multi-Family | Robust 12+/15 Losses |');
+  lines.push('|---|---:|---:|---:|---:|---:|---:|---:|---:|');
+  for (const [levelProfile, row] of Object.entries(probe.diversityByLevelProfile || {})
+    .sort((a, b) => a[0].localeCompare(b[0]))) {
+    lines.push(
+      `| ${escapeMd(levelProfile)} | ${row.baseCount} `
+      + `| ${pct(row.discoveryWinRate)} `
+      + `| ${row.discoveryZeroCounterBaseCount} `
+      + `| ${row.totalZeroCounterBaseCount} `
+      + `| ${pct(row.twoCounterBaseRate)} `
+      + `| ${pct(row.threeCounterBaseRate)} `
+      + `| ${pct(row.multiFamilyCounterBaseRate)} `
+      + `| ${pct(row.excessivelySoftBaseRate)} |`,
+    );
+  }
+  lines.push('');
+  lines.push('| Town Hall | Credited Bases | Counter Families | Top Counter | Top-1 Share | Top-3 Share | Effective Families |');
+  lines.push('|---|---:|---:|---|---:|---:|---:|');
+  for (const [townHall, row] of Object.entries(probe.diversityByTownHall || {})
+    .sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true }))) {
+    lines.push(
+      `| ${escapeMd(townHall)} | ${formatNumber(row.creditedBaseCount)} `
+      + `| ${row.distinctTopCounterFamilies} | ${escapeMd(row.topCounterFamily)} `
+      + `| ${pct(row.topCounterShare)} | ${pct(row.topThreeCounterShare)} `
+      + `| ${formatNumber(row.inverseHhiEffectiveFamilies)} |`,
+    );
+  }
+  lines.push('');
+  lines.push('| Composition | Recipe Family | TH Coverage | Discovery Base Coverage | Discovery WR | Near-Best Share (Credited Bases) | Locked Holdout | Universal Holdout |');
+  lines.push('|---|---|---|---:|---:|---:|---:|---:|');
+  for (const row of Object.values(probe.byArmy || {})
+    .sort((a, b) => (
+      b.topCounterShare - a.topCounterShare
+      || b.discoveryBaseWinRate - a.discoveryBaseWinRate
+      || a.family.localeCompare(b.family)
+    ))) {
+    const counterHoldout = row.counterHoldoutBattles > 0
+      ? `${row.counterHoldoutWins}/${row.counterHoldoutBattles} (${pct(row.counterHoldoutWinRate)})`
+      : 'N/A';
+    const universalHoldout = row.universalHoldoutBattles > 0
+      ? `${row.universalHoldoutWins}/${row.universalHoldoutBattles} (${pct(row.universalHoldoutWinRate)})`
+      : 'N/A';
+    lines.push(
+      `| ${escapeMd(row.family)} | ${escapeMd(row.recipeFamily)} `
+      + `| ${row.townHalls.map((townHall) => `TH${townHall}`).join(', ')} `
+      + `| ${pct(row.discoveryBaseWinRate)} | ${pct(row.discoveryWinRate)} `
+      + `| ${pct(row.topCounterShare)} | ${counterHoldout} `
+      + `| ${universalHoldout} |`,
+    );
+  }
+  const problemBases = Object.values(probe.byBase || {})
+    .filter((base) => base.totalWinningArmyCount === 0 || !base.topTwoHoldoutWin)
+    .sort((a, b) => (
+      a.totalWinningArmyCount - b.totalWinningArmyCount
+      || a.townHall - b.townHall
+      || a.id.localeCompare(b.id)
+    ));
+  if (problemBases.length > 0) {
+    lines.push('');
+    lines.push('| Hard Base | TH | Layout | Winners (All Probe Phases) | Discovery Recipe Families | Locked Top-Two Holdout | Best / Runner-up |');
+    lines.push('|---|---:|---|---:|---:|---|---|');
+    for (const base of problemBases.slice(0, 50)) {
+      lines.push(
+        `| ${escapeMd(base.id)} | ${base.townHall} `
+        + `| ${escapeMd(`${base.archetype} / ${base.levelProfile}`)} `
+        + `| ${base.totalWinningArmyCount} | ${base.discoveryWinningRecipeFamilyCount} `
+        + `| ${base.topTwoHoldoutWin ? 'win' : 'loss'} `
+        + `| ${escapeMd(`${base.topCounter} / ${base.runnerUpCounter}`)} |`,
+      );
+    }
+    if (problemBases.length > 50) {
+      lines.push(`| … | | ${problemBases.length - 50} additional hard bases are available in JSON | | | | |`);
+    }
+  }
+  lines.push('');
+}
+
+function appendUnitUtilitySection(lines, unitUtility) {
+  if (!unitUtility?.enabled) return;
+  lines.push('## Equal-Slot Unit Utility');
+  lines.push('');
+  lines.push(
+    `Reference defense: TH${unitUtility.referenceTownHall}. `
+    + `Projected future troops: ${unitUtility.projectedTroops.join(', ') || 'none'}.`,
+  );
+  lines.push('');
+  lines.push('| Troop | Role | Access | Unlock | Candidate Package | Pairs | Control WR | Candidate WR | Delta (95% paired CI) | Win Flips | Destruction Delta | TH Damage Delta | Mechanic Signal |');
+  lines.push('|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|');
+  for (const row of Object.values(unitUtility.byTroop || {})) {
+    const mechanicSignal = [
+      row.summonDelta ? `summons ${formatSigned(row.summonDelta)}` : '',
+      row.evolutionDelta ? `splits ${formatSigned(row.evolutionDelta)}` : '',
+      row.trapTriggerDelta ? `traps ${formatSigned(row.trapTriggerDelta)}` : '',
+    ].filter(Boolean).join(', ') || '-';
+    lines.push(
+      `| ${escapeMd(row.troop)}${row.projected ? ' (projected)' : ''} `
+      + `| ${escapeMd(row.role)} | ${escapeMd(row.access)} | TH${row.unlockTownHall} `
+      + `| ${row.candidateCopies} x / ${row.candidateSlots} slots `
+      + `| ${row.validPairs} | ${pct(row.controlWinRate)} `
+      + `| ${pct(row.candidateWinRate)} | ${formatSignedPct(row.winRateDelta)} `
+      + `(${formatSignedPct(row.pairedWinRateInterval95.low)} to ${formatSignedPct(row.pairedWinRateInterval95.high)}) `
+      + `| ${row.gainedWins}-${row.lostWins} `
+      + `| ${formatSignedPct(row.destructionDelta)} `
+      + `| ${formatSignedPct(row.townHallHpDelta)} `
+      + `| ${escapeMd(mechanicSignal)} |`,
+    );
+  }
+  lines.push('');
+  lines.push('Positive TH damage delta means the candidate left less Town Hall HP than the equal-slot starter control. A projected result compares the authored TH8-TH10 troop against today\'s TH7 defense ceiling and is not a future-tier win-rate claim.');
+  lines.push('');
+}
+
+function appendNftRarityProbeSection(lines, probe) {
+  if (!probe?.enabled) return;
+  lines.push('## Paired NFT Rarity Impact');
+  lines.push('');
+  lines.push('| Troop | Pairs | Common WR | Epic WR | Epic Delta (95% paired CI) | Legendary WR | Legendary Delta (95% paired CI) |');
+  lines.push('|---|---:|---:|---:|---:|---:|---:|');
+  for (const row of Object.values(probe.byTroop || {})) {
+    const common = row.byRarity.common;
+    const epic = row.versusCommon.epic;
+    const legendary = row.versusCommon.legendary;
+    lines.push(
+      `| ${escapeMd(row.troop)} | ${row.pairs} `
+      + `| ${pct(rate(common.validWins, common.validCount))} `
+      + `| ${pct(epic.rareWinRate)} | ${formatSignedPct(epic.winRateDelta)} `
+      + `(${formatSignedPct(epic.pairedWinRateInterval95.low)} to ${formatSignedPct(epic.pairedWinRateInterval95.high)}) `
+      + `| ${pct(legendary.rareWinRate)} `
+      + `| ${formatSignedPct(legendary.winRateDelta)} `
+      + `(${formatSignedPct(legendary.pairedWinRateInterval95.low)} to ${formatSignedPct(legendary.pairedWinRateInterval95.high)}) |`,
+    );
+  }
+  lines.push('');
+}
+
+function appendTopPolicySections(lines, model, minGroupSize) {
+  const policiesById = new Map(
+    (model.attackPolicies || []).map((policy) => [policy.id, policy]),
+  );
+  const attacks = Object.entries(model.aggregate.byAttackPolicy || {})
+    .filter(([, bucket]) => bucket.count >= Math.max(10, minGroupSize))
+    .sort((a, b) => (
+      wilsonInterval(b[1].wins, b[1].count).low
+        - wilsonInterval(a[1].wins, a[1].count).low
+      || rate(b[1].buildingsDestroyed, b[1].buildingCount)
+        - rate(a[1].buildingsDestroyed, a[1].buildingCount)
+      || a[0].localeCompare(b[0])
+    ))
+    .slice(0, 15);
+  if (attacks.length > 0) {
+    lines.push('## Best Attack Policies');
+    lines.push('');
+    lines.push('| Policy | TH | Army | Spawn | Tactics | Rarity | Battles | Win Rate | Destruction |');
+    lines.push('|---|---:|---|---|---|---|---:|---:|---:|');
+    for (const [id, bucket] of attacks) {
+      const policy = policiesById.get(id) || {};
+      lines.push(
+        `| ${id} | ${policy.townHall || '-'} | ${escapeMd(policy.army?.name || '')} `
+        + `| ${escapeMd(policy.spawnProfile || '')} | ${escapeMd(policy.tactics || '')} `
+        + `| ${escapeMd(policy.nftRarity || 'common')} | ${bucket.count} `
+        + `| ${pct(rate(bucket.wins, bucket.count))} `
+        + `| ${pct(rate(bucket.buildingsDestroyed, bucket.buildingCount))} |`,
+      );
+    }
+    lines.push('');
+  }
+
+  const bases = Object.entries(model.aggregate.byBase || {})
+    .filter(([, bucket]) => bucket.count >= Math.max(10, minGroupSize))
+    .sort((a, b) => (
+      wilsonInterval(a[1].wins, a[1].count).high
+        - wilsonInterval(b[1].wins, b[1].count).high
+      || avg(b[1].townHallHpPct, b[1].count) - avg(a[1].townHallHpPct, a[1].count)
+      || a[0].localeCompare(b[0])
+    ))
+    .slice(0, 15);
+  if (bases.length > 0) {
+    const basesById = new Map((model.bases || []).map((base) => [base.id, base]));
+    lines.push('## Strongest Defensive Bases');
+    lines.push('');
+    lines.push('| Base | TH | Formation | Progression | Battles | Attacker Win Rate | TH HP Left |');
+    lines.push('|---|---:|---|---|---:|---:|---:|');
+    for (const [id, bucket] of bases) {
+      const base = basesById.get(id) || {};
+      lines.push(
+        `| ${id} | ${base.townHall || '-'} | ${escapeMd(base.archetype || '')} `
+        + `| ${escapeMd(base.levelProfile || '')} | ${bucket.count} `
+        + `| ${pct(rate(bucket.wins, bucket.count))} `
+        + `| ${pct(avg(bucket.townHallHpPct, bucket.count))} |`,
+      );
+    }
+    lines.push('');
+  }
+  if ((model.evolution || []).length > 0) {
+    lines.push('## Adversarial Shield-vs-Sword Rounds');
+    lines.push('');
+    lines.push('| Round | Battles | Attacker Win Rate | Elite Attacks | Elite Bases | Mutated Attacks | Mutated Bases |');
+    lines.push('|---:|---:|---:|---:|---:|---:|---:|');
+    for (const round of model.evolution) {
+      lines.push(
+        `| ${round.round} | ${round.battles} | ${pct(round.attackerWinRate)} `
+        + `| ${round.elitePolicyIds.length} | ${round.eliteBaseIds.length} `
+        + `| ${round.mutatedPolicyIds.length} | ${round.mutatedBaseIds.length} |`,
+      );
+    }
+    lines.push('');
+  }
+}
+
+function appendCharacterSection(lines, title, rawBuckets, minGroupSize) {
+  const entries = Object.entries(rawBuckets || {})
+    .filter(([, bucket]) => bucket.count >= minGroupSize)
+    .sort((a, b) => a[0].localeCompare(b[0]));
+  if (entries.length === 0) return;
+  lines.push(`## ${title}`);
+  lines.push('');
+  lines.push('| Group | Battles | Win Rate | 95% CI | Avg Destruction | Avg TH HP Left | Troop Survival |');
+  lines.push('|---|---:|---:|---:|---:|---:|---:|');
+  for (const [name, bucket] of entries) {
+    const interval = wilsonInterval(bucket.wins, bucket.count);
+    lines.push(
+      `| ${escapeMd(name)} | ${bucket.count} `
+      + `| ${pct(rate(bucket.wins, bucket.count))} `
+      + `| ${pct(interval.low)}-${pct(interval.high)} `
+      + `| ${pct(rate(bucket.buildingsDestroyed, bucket.buildingCount))} `
+      + `| ${pct(avg(bucket.townHallHpPct, bucket.count))} `
+      + `| ${pct(rate(bucket.troopsAlive, bucket.troopsSpawned))} |`,
+    );
+  }
+  lines.push('');
+}
+
 function appendBucketSection(lines, title, rawBuckets, minGroupSize) {
   const entries = Object.entries(rawBuckets || {})
-    .filter(([, bucket]) => bucket.count >= Math.min(minGroupSize, 2))
+    .filter(([, bucket]) => bucket.count >= minGroupSize)
     .sort((a, b) => b[1].count - a[1].count || a[0].localeCompare(b[0]));
   if (entries.length === 0) return;
   lines.push(`## ${title}`);
@@ -1669,6 +6319,23 @@ function appendBucketSection(lines, title, rawBuckets, minGroupSize) {
     );
   }
   lines.push('');
+}
+
+function wilsonInterval(successes, total, z = 1.96) {
+  if (total <= 0) return { low: 0, high: 0 };
+  const p = successes / total;
+  const z2 = z * z;
+  const denominator = 1 + z2 / total;
+  const center = (p + z2 / (2 * total)) / denominator;
+  const margin = (
+    z
+    * Math.sqrt((p * (1 - p) + z2 / (4 * total)) / total)
+    / denominator
+  );
+  return {
+    low: Math.max(0, center - margin),
+    high: Math.min(1, center + margin),
+  };
 }
 
 function overallMarkdownRow(bucket) {
@@ -1731,11 +6398,63 @@ Usage:
 
 Core options:
   --bases <n>              Unique logical bases to generate. Default: ${DEFAULT_BASE_COUNT}
+  --base-report <path>     Reuse the exact base catalog stored in a JSON balance report.
+  --base-ids <csv>         Limit --base-report replay to the listed base IDs.
   --matches <n>            Replay simulations for sampled mode. Default: ${DEFAULT_MATCHES}
   --seed <n>               Deterministic random seed. Default: ${DEFAULT_SEED}
   --profile <range>        all, thN, or thN-thN. Default: ${DEFAULT_PROFILE}
   --catalog-only           Generate and validate content/bases without replay simulation.
   --exhaustive             Traverse base x matchup x army x deployment combinations.
+  --same-th-only           Simulate only equal Town Hall attacker/defender matchups.
+  --attack-level-profile <profile>
+                           Force low, mid, maxed, or mixed troop levels in every battle.
+  --attack-policies <n>    Generate an exact population of unique army/spawn/tactic/boost policies.
+  --lab-offense-scale-th5 <factor>
+  --lab-offense-scale-th6 <factor>
+  --lab-offense-scale-th7 <factor>
+                           Lab-only HP/damage scales for max-level offense search.
+  --lab-offense-scale-<troop> <factor>
+                           Lab-only L5+ HP/damage scale for one troop type
+                           (for example --lab-offense-scale-mage 1.5).
+  --lab-defense-damage-scale <factor>
+                           Lab-only damage scale for all defenses in the selected tiers.
+  --lab-late-defense-scale <factor>
+                           Lab-only damage scale for L5+ defenses and HP/damage
+                           scale for L5+ Skeleton Guards.
+  --lab-th7-defense-scale <factor>
+                           Lab-only damage scale for defenses at their TH7 cap,
+                           plus HP/damage for the TH7 Tombstone guard level.
+  --lab-mimic-reveal-after-attack
+                           Lab-only: Mimic becomes targetable during later movement
+                           after reaching its first attack state.
+  --lab-mimic-trap-damage-scale <factor>
+                           Lab-only: immune Mimics take this fraction of shark-trap
+                           level damage while remaining immune to instant defeat.
+  --adversarial-rounds <n> Select and mutate the strongest attacks and bases for N extra rounds.
+  --adversarial-matches <n>
+                           Battles per shield-vs-sword round. Default: 500.
+  --breakability-policies <n>
+                           Cross-check every base against the top N same-TH attack policies.
+                           Probe battles are reported separately and do not change balance WR.
+  --breakability-candidate-policies <n>
+                           Generate a separate, larger attack-policy catalog for the
+                           breakability gate without changing the main WR population.
+  --breakability-calibration-bases <n>
+                           Strong bases used to rank base-breaker policies. Default: 5.
+  --breakability-rarity <rarity>
+                           NFT rarity used by the breakability gate. Default: common.
+  --base-counter-matches <n>
+                           Run a separate controlled base x selected representative
+                           composition response matrix (does not replace breakability).
+                           For 300 bases, use 10000 battles (9000 paired discovery,
+                           600 locked top-two, 300 universal holdout, 100 hard confirmations).
+  --unit-utility-bases <n>
+                           Equal-slot paired starter-replacement bases per active troop.
+                           Future TH8-TH10 troops use the current TH7 defense ceiling.
+  --unit-utility-troops <csv>
+                           Limit the utility probe to named troop types.
+  --nft-rarity-probe-bases <n>
+                           Paired common/epic/legendary bases per NFT troop.
   --max-scenarios <n>      Safety cap for exhaustive mode. Default: 50000
 
 Analysis options:
@@ -1749,6 +6468,8 @@ Output options:
   --json <path>            JSON report path.
   --report-dir <path>      Default report directory.
   --dump-bases <path>      Also write only generated base layouts as JSON.
+  --dump-parity-fixtures <path>
+                           Write exact replay inputs and server outcomes for a Godot parity run.
   --verbose                Show replay verifier logs and progress.
   --help                   Show this help.
 
@@ -1756,6 +6477,8 @@ Examples:
   npm run pvp:balance -- --catalog-only --bases 144
   npm run pvp:balance -- --bases 144 --matches 300 --seed 42
   npm run pvp:balance -- --profile th5-th6 --matches 500
+  npm run pvp:balance -- --profile th1-th7 --same-th-only --bases 300 --attack-policies 500 --matches 3500 --adversarial-rounds 3
+  npm run pvp:balance -- --profile th5-th7 --same-th-only --bases 300 --matches 5000 --attack-policies 500 --base-counter-matches 10000
 `);
 }
 
@@ -1794,6 +6517,25 @@ function hash32(...values) {
     hash ^= hash >>> 13;
   }
   return hash >>> 0;
+}
+
+function greatestCommonDivisor(a, b) {
+  let left = Math.abs(Math.trunc(a));
+  let right = Math.abs(Math.trunc(b));
+  while (right !== 0) {
+    [left, right] = [right, left % right];
+  }
+  return left;
+}
+
+function coprimeStride(total, seed) {
+  if (total <= 1) return 1;
+  let candidate = 1 + (Math.abs(Math.trunc(seed)) % (total - 1));
+  while (greatestCommonDivisor(candidate, total) !== 1) {
+    candidate += 1;
+    if (candidate >= total) candidate = 1;
+  }
+  return candidate;
 }
 
 function noise01(...values) {
@@ -1846,6 +6588,11 @@ function avg(sum, count) {
   return Number(count) > 0 ? Number(sum) / Number(count) : 0;
 }
 
+function strRarity(value) {
+  const normalized = String(value || 'common').trim().toLowerCase();
+  return NFT_RARITIES.includes(normalized) ? normalized : 'common';
+}
+
 function median(values) {
   const sorted = values.filter(Number.isFinite).sort((a, b) => a - b);
   if (sorted.length === 0) return 0;
@@ -1857,6 +6604,16 @@ function median(values) {
 
 function pct(value) {
   return `${(Number(value || 0) * 100).toFixed(1)}%`;
+}
+
+function formatSignedPct(value) {
+  const numeric = Number(value || 0) * 100;
+  return `${numeric >= 0 ? '+' : ''}${numeric.toFixed(1)}%`;
+}
+
+function formatSigned(value) {
+  const numeric = Number(value || 0);
+  return `${numeric >= 0 ? '+' : ''}${numeric.toFixed(2)}`;
 }
 
 function round(value, digits = 3) {

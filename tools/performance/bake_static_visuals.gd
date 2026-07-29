@@ -28,6 +28,7 @@ const BAKE_CONFIGS: Array[Dictionary] = [
 		"source": "res://Model/Archer_towers/tower_1.glb",
 		"output": "res://generated/performance/archer_tower_level_1_static_batch.res",
 		"variant_level": 1,
+		"vertex_color_batch": true,
 	},
 	{
 		"source": "res://Model/Archer_towers/towerplus_2.fbx",
@@ -38,16 +39,19 @@ const BAKE_CONFIGS: Array[Dictionary] = [
 		"source": "res://Model/Archer_towers/3,4,5.glb",
 		"output": "res://generated/performance/archer_tower_level_3_static_batch.res",
 		"variant_level": 3,
+		"vertex_color_batch": true,
 	},
 	{
 		"source": "res://Model/Archer_towers/3,4,5.glb",
 		"output": "res://generated/performance/archer_tower_level_4_static_batch.res",
 		"variant_level": 4,
+		"vertex_color_batch": true,
 	},
 	{
 		"source": "res://Model/Archer_towers/3,4,5.glb",
 		"output": "res://generated/performance/archer_tower_level_5_static_batch.res",
 		"variant_level": 5,
+		"vertex_color_batch": true,
 	},
 	{
 		"source": "res://Model/Mine/1.glb",
@@ -288,7 +292,7 @@ func _bake(config: Dictionary) -> bool:
 			source_surfaces += 1
 			var indices := mesh.surface_get_arrays(surface_index)[Mesh.ARRAY_INDEX] as PackedInt32Array
 			if indices != null and not indices.is_empty():
-				source_triangles += indices.size() / 3
+				source_triangles += floori(float(indices.size()) / 3.0)
 
 	var batch_mesh := ArrayMesh.new()
 	for material_key in surface_tools.keys():
@@ -408,11 +412,11 @@ func _count_triangles(mesh: ArrayMesh) -> int:
 		var arrays := mesh.surface_get_arrays(surface_index)
 		var indices := arrays[Mesh.ARRAY_INDEX] as PackedInt32Array
 		if indices != null and not indices.is_empty():
-			triangles += indices.size() / 3
+			triangles += floori(float(indices.size()) / 3.0)
 		else:
 			var vertices := arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array
 			if vertices != null:
-				triangles += vertices.size() / 3
+				triangles += floori(float(vertices.size()) / 3.0)
 	return triangles
 
 
