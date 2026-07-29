@@ -2033,3 +2033,9 @@ Follow-up:
 - Request: add the green Pea Shooter from `Polygonal Creatures Pack 2` as a new balanced attacking unit that fires green balls and occupies about five ship slots.
 - Scope: import only the required authored model, projectile, green material, and animations; implement a frame-synchronized three-pea burst in Godot and the authoritative server simulation; add Town Hall progression, five-slot capacity, 500-Gold loading cost, aliases, persistence, UI portrait, mobile-safe attack selection, replay telemetry, parity tests, and balance verification.
 - No commit, push, production deploy, or production database mutation requested.
+
+### UR-2026-07-29-AI-TOURNAMENT-BUILDER
+- Timestamp: 2026-07-29 Europe/Kyiv
+- Request: add an AI assistant to the tournament creation admin UI using the configured OpenRouter key, so an administrator can describe a tournament and receive a complete configuration; also support per-day volume targets and per-day rewards.
+- Scope: add a server-owned tournament planning prompt and schema, validated preview/apply API, model fallback, daily schedule persistence with backward compatibility, wizard UI for AI generation and manual day editing, local end-to-end browser verification, then commit, push, deploy, and verify production.
+- Production deployment explicitly requested after local verification.

@@ -1941,6 +1941,10 @@ function TournamentWizard({ initial, onClose, onSaved }) {
   const [step, setStep] = useState(0);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
+  const [aiOpen, setAiOpen] = useState(!initial?.id);
+  const [aiPrompt, setAiPrompt] = useState('');
+  const [aiPlanning, setAiPlanning] = useState(false);
+  const [aiResult, setAiResult] = useState(null);
   const isEdit = !!initial?.id;
   const isLuckyRaider = form.event_kind === 'lucky_raider';
   const steps = isLuckyRaider
@@ -1969,6 +1973,39 @@ function TournamentWizard({ initial, onClose, onSaved }) {
     }
     setError('');
     setStep((value) => Math.min(steps.length - 1, value + 1));
+  }
+
+  async function planWithAi() {
+    const prompt = aiPrompt.trim();
+    if (prompt.length < 8) {
+      setError('Describe the tournament for AI in at least 8 characters.');
+      return;
+    }
+    setAiPlanning(true);
+    setError('');
+    setAiResult(null);
+    try {
+      const result = await adminPost('/admin/tournaments/ai/plan', {
+        prompt,
+        current_draft: formToTournamentBody(form),
+      });
+      if (!result?.draft || typeof result.draft !== 'object') throw new Error('AI returned no tournament draft');
+      setForm((previous) => tournamentToForm({
+        ...formToTournamentBody(previous),
+        ...result.draft,
+        status: previous.status,
+      }));
+      setAiResult({
+        model: result.model || '',
+        summary: result.summary || 'Tournament draft applied.',
+        warnings: Array.isArray(result.warnings) ? result.warnings : [],
+      });
+      setStep(0);
+    } catch (err) {
+      setError(err.message || 'AI tournament planning failed');
+    } finally {
+      setAiPlanning(false);
+    }
   }
 
   async function save() {
@@ -2003,6 +2040,40 @@ function TournamentWizard({ initial, onClose, onSaved }) {
           ))}
         </div>
         <div className="wizard-panel">
+          <div className={'tournament-ai-planner' + (aiOpen ? ' open' : '')}>
+            <button className="tournament-ai-toggle" onClick={() => setAiOpen((value) => !value)}>
+              <span>
+                <strong>AI Tournament Builder</strong>
+                <small>Describe the event. AI fills a reviewable draft but cannot save, activate, or pay rewards.</small>
+              </span>
+              <span aria-hidden="true">{aiOpen ? '-' : '+'}</span>
+            </button>
+            {aiOpen && (
+              <div className="tournament-ai-body">
+                <textarea
+                  className="admin-textarea tournament-ai-prompt"
+                  rows={4}
+                  value={aiPrompt}
+                  onChange={(event) => setAiPrompt(event.target.value)}
+                  placeholder="Example: Create a 7-day Ostium volume tournament starting tomorrow at 22:00 UTC. Each day has its own $25k player target and $100 prize pool for top 3; final pool $1,000 for top 10."
+                  disabled={aiPlanning}
+                />
+                <div className="tournament-ai-actions">
+                  <span className="admin-help">Generated values apply to this wizard only. Review every tab, then save normally.</span>
+                  <button className="admin-btn primary" onClick={planWithAi} disabled={aiPlanning || aiPrompt.trim().length < 8}>
+                    {aiPlanning ? 'Planning tournament...' : 'Generate and apply draft'}
+                  </button>
+                </div>
+                {aiResult && (
+                  <div className="tournament-ai-result">
+                    <strong>{aiResult.summary}</strong>
+                    {aiResult.model && <span>Model: {aiResult.model}</span>}
+                    {aiResult.warnings.map((warning, index) => <span key={index}>Review: {warning}</span>)}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
           {error && <div className="admin-error">{error}</div>}
           {!isLuckyRaider && step === 0 && <TournamentScheduleStep form={form} update={update} />}
           {!isLuckyRaider && step === 1 && <TournamentEligibilityStep form={form} update={update} />}
@@ -2515,6 +2586,7 @@ function TournamentRewardsStep({ form, update }) {
         subtitle="Daily pools, final rewards, and Lucky Daily Raider are additive to legacy volume tiers."
         value={form.reward_config}
         onChange={(reward_config) => update({ reward_config })}
+        tournamentDays={tournamentUtcDays(form, 60)}
         allowPreset
       />
       <div className="admin-card">
@@ -2558,7 +2630,15 @@ function TournamentRewardsStep({ form, update }) {
   );
 }
 
-function RewardScheduleEditor({ value, onChange, title = 'Reward Schedule', subtitle = '', allowPreset = false, luckyOnly = false }) {
+function RewardScheduleEditor({
+  value,
+  onChange,
+  title = 'Reward Schedule',
+  subtitle = '',
+  allowPreset = false,
+  luckyOnly = false,
+  tournamentDays = [],
+}) {
   const config = normalizeRewardConfig(value || {});
   const [manualWinnerDraft, setManualWinnerDraft] = useState('');
   function setConfig(next) {
@@ -2568,7 +2648,39 @@ function RewardScheduleEditor({ value, onChange, title = 'Reward Schedule', subt
     setConfig({ ...config, [key]: next });
   }
   function addPool(key, label) {
-    updateList(key, [...(config[key] || []), { enabled: true, label, top_n: key === 'daily_pools' ? 5 : 10, metric: 'points', rewards: [normalizeReward(rewardDefaults('money'))], payouts: [] }]);
+    const isDaily = key === 'daily_pools';
+    const assignedDays = new Set((config.daily_pools || []).map((pool) => pool.day_utc).filter(Boolean));
+    const nextDay = isDaily ? tournamentDays.find((day) => !assignedDays.has(day)) || '' : '';
+    updateList(key, [...(config[key] || []), {
+      enabled: true,
+      label: nextDay ? `Rewards ${nextDay}` : label,
+      ...(isDaily ? {
+        day_utc: nextDay,
+        volume_target_usd: 0,
+        volume_target_scope: 'player',
+      } : {}),
+      top_n: isDaily ? 5 : 10,
+      metric: 'points',
+      rewards: [normalizeReward(rewardDefaults('money'))],
+      payouts: [],
+    }]);
+  }
+  function addEveryTournamentDay() {
+    const existing = config.daily_pools || [];
+    const byDay = new Map(existing.filter((pool) => pool.day_utc).map((pool) => [pool.day_utc, pool]));
+    const generic = existing.filter((pool) => !pool.day_utc);
+    const generated = tournamentDays.map((day, index) => byDay.get(day) || {
+      enabled: true,
+      label: `Day ${index + 1}`,
+      day_utc: day,
+      volume_target_usd: 0,
+      volume_target_scope: 'player',
+      top_n: 5,
+      metric: 'points',
+      rewards: [normalizeReward(rewardDefaults('money'))],
+      payouts: [],
+    });
+    updateList('daily_pools', [...generic, ...generated]);
   }
   function updatePool(key, index, patch) {
     const next = [...(config[key] || [])];
@@ -2617,7 +2729,10 @@ function RewardScheduleEditor({ value, onChange, title = 'Reward Schedule', subt
           <>
             <div className="admin-toolbar">
               <strong>Daily pools</strong>
-              <button className="admin-btn" onClick={() => addPool('daily_pools', 'Daily Pool')}>Add daily pool</button>
+              <div className="admin-actions">
+                {!!tournamentDays.length && <button className="admin-btn" onClick={addEveryTournamentDay}>Create all {tournamentDays.length} days</button>}
+                <button className="admin-btn" onClick={() => addPool('daily_pools', 'Daily Pool')}>Add daily pool</button>
+              </div>
             </div>
             {(config.daily_pools || []).map((pool, index) => (
               <RewardSchedulePoolEditor
@@ -2626,6 +2741,8 @@ function RewardScheduleEditor({ value, onChange, title = 'Reward Schedule', subt
                 index={index}
                 updatePool={(idx, patch) => updatePool('daily_pools', idx, patch)}
                 removePool={(idx) => removePool('daily_pools', idx)}
+                daily
+                tournamentDays={tournamentDays}
               />
             ))}
             {!(config.daily_pools || []).length && <div className="admin-help">No daily reward pool configured.</div>}
@@ -2774,7 +2891,14 @@ function RewardScheduleEditor({ value, onChange, title = 'Reward Schedule', subt
   );
 }
 
-function RewardSchedulePoolEditor({ pool, index, updatePool, removePool }) {
+function RewardSchedulePoolEditor({
+  pool,
+  index,
+  updatePool,
+  removePool,
+  daily = false,
+  tournamentDays = [],
+}) {
   function update(patch) {
     updatePool(index, patch);
   }
@@ -2791,6 +2915,29 @@ function RewardSchedulePoolEditor({ pool, index, updatePool, removePool }) {
           <NumberField label="Top winners" value={pool.top_n || 5} onChange={(v) => update({ top_n: v })} />
             <label className="admin-field"><span className="admin-label">Metric</span><MetricSelect value={pool.metric || 'points'} onChange={(value) => update({ metric: value })} /></label>
         </div>
+        {daily && (
+          <div className="admin-form-grid three daily-reward-targets">
+            <label className="admin-field">
+              <span className="admin-label">Reward day UTC</span>
+              {tournamentDays.length ? (
+                <select className="admin-select" value={pool.day_utc || ''} onChange={(event) => update({ day_utc: event.target.value })}>
+                  <option value="">Every tournament day</option>
+                  {tournamentDays.map((day) => <option key={day} value={day}>{day}</option>)}
+                </select>
+              ) : (
+                <input className="admin-input" type="date" value={pool.day_utc || ''} onChange={(event) => update({ day_utc: event.target.value })} />
+              )}
+            </label>
+            <NumberField label="Daily volume target ($)" value={pool.volume_target_usd || 0} onChange={(value) => update({ volume_target_usd: value })} />
+            <label className="admin-field">
+              <span className="admin-label">Target applies to</span>
+              <select className="admin-select" value={pool.volume_target_scope || 'player'} onChange={(event) => update({ volume_target_scope: event.target.value })}>
+                <option value="player">Each player</option>
+                <option value="tournament">Whole tournament</option>
+              </select>
+            </label>
+          </div>
+        )}
         <RewardRowsEditor rewards={pool.rewards || []} onChange={(rewards) => update({ rewards })} />
       </div>
     </div>

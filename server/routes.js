@@ -10,6 +10,7 @@ const db = require('./db');
 const hermesClient = require('./hermes_client');
 const hermesJobs = require('./hermes_jobs');
 const logAiAnalyzer = require('./log_ai_analyzer');
+const tournamentAiBuilder = require('./tournament_ai_builder');
 const tasks = require('./tasks');
 const elfa = require('./elfa');
 const diag = require('./diag');
@@ -21758,10 +21759,14 @@ function normalizeTournamentPrizeTiers(input, { strict = false } = {}) {
   return tiers.sort((a, b) => a.volume_usd - b.volume_usd);
 }
 
-function normalizeRewardSchedulePool(raw = {}, index = 0, { strict = false, labelPrefix = 'Pool' } = {}) {
+function normalizeRewardSchedulePool(raw = {}, index = 0, {
+  strict = false,
+  labelPrefix = 'Pool',
+  daily = false,
+} = {}) {
   const rewards = normalizePrizeRewards(Array.isArray(raw.rewards) ? raw.rewards : [], null, { strict });
   const topN = Math.max(1, Math.min(100, Math.floor(Number(raw.top_n ?? raw.winners ?? 5) || 5)));
-  return {
+  const pool = {
     enabled: parseBool(raw.enabled ?? true),
     label: sanitizePrizeText(raw.label || raw.name || `${labelPrefix} ${index + 1}`, `${labelPrefix} ${index + 1}`),
     top_n: topN,
@@ -21770,6 +21775,27 @@ function normalizeRewardSchedulePool(raw = {}, index = 0, { strict = false, labe
     payouts: normalizePrizeRewardPayouts(raw.payouts || []),
     metric: normalizeTournamentTeamMetric(raw.metric || 'points', TOURNAMENT_POINTS_SORT),
   };
+  if (daily) {
+    const dayUtc = String(raw.day_utc || raw.day || raw.date || '').trim();
+    if (dayUtc && !/^\d{4}-\d{2}-\d{2}$/.test(dayUtc)) {
+      if (strict) throw new Error(`${pool.label} day_utc must use YYYY-MM-DD`);
+    }
+    const parsedDay = dayUtc ? Date.parse(`${dayUtc}T00:00:00Z`) : NaN;
+    if (dayUtc && !Number.isFinite(parsedDay) && strict) {
+      throw new Error(`${pool.label} day_utc is invalid`);
+    }
+    const targetScope = String(raw.volume_target_scope || raw.target_scope || 'player').trim().toLowerCase();
+    if (!['player', 'tournament'].includes(targetScope) && strict) {
+      throw new Error(`${pool.label} volume_target_scope must be player or tournament`);
+    }
+    pool.day_utc = Number.isFinite(parsedDay) ? dayUtc : '';
+    pool.volume_target_usd = Math.max(0, Math.min(
+      10_000_000_000,
+      sanitizePrizeNumber(raw.volume_target_usd ?? raw.daily_volume_target_usd ?? raw.volume_target, 0),
+    ));
+    pool.volume_target_scope = ['player', 'tournament'].includes(targetScope) ? targetScope : 'player';
+  }
+  return pool;
 }
 
 function normalizeRewardSchedulePools(input, opts = {}) {
@@ -21807,7 +21833,7 @@ function normalizeTournamentRewardConfig(input, { strict = false } = {}) {
   const maxTickets = Math.max(1, Math.min(100000, Math.floor(Number(luckyRaw.max_tickets || 20) || 20)));
   const manualWinners = normalizeLuckyRaiderManualWinners(luckyRaw.manual_winners ?? luckyRaw.manual_winner_ids ?? luckyRaw.manual_winners_text);
   return {
-    daily_pools: normalizeRewardSchedulePools(raw.daily_pools, { strict, labelPrefix: 'Daily pool' }),
+    daily_pools: normalizeRewardSchedulePools(raw.daily_pools, { strict, labelPrefix: 'Daily pool', daily: true }),
     final_pools: normalizeRewardSchedulePools(raw.final_pools, { strict, labelPrefix: 'Final pool' }),
     lucky_daily_raider: {
       enabled: parseBool(luckyRaw.enabled),
@@ -22681,8 +22707,14 @@ function tournamentLuckyRaiderState(t, viewerId = null) {
 
 function tournamentRewardScheduleState(t, viewerId = null) {
   const config = normalizeTournamentRewardConfig(t?.reward_config || {});
+  const currentDayUtc = tournamentDailyPoolCurrentDay(t);
   return {
     ...config,
+    current_day_utc: currentDayUtc,
+    daily_pools: config.daily_pools.map((pool) => ({
+      ...pool,
+      is_active: !pool.day_utc || pool.day_utc === currentDayUtc,
+    })),
     lucky_daily_raider: tournamentLuckyRaiderState(t, viewerId),
   };
 }
@@ -24370,6 +24402,25 @@ router.patch('/admin/lucky-raider/payouts/:id/destination', adminAuth, (req, res
   } catch (err) {
     console.warn('[admin lucky-raider payouts] destination update failed:', err?.message || err);
     res.status(400).json({ ok: false, error: (err?.message || 'Wallet update failed').slice(0, 180) });
+  }
+});
+
+router.post('/admin/tournaments/ai/plan', adminAuth, async (req, res) => {
+  try {
+    const result = await tournamentAiBuilder.generateTournamentDraft({
+      prompt: req.body?.prompt,
+      currentDraft: req.body?.current_draft,
+    });
+    res.json(result);
+  } catch (error) {
+    const status = Number(error?.status);
+    const responseStatus = Number.isInteger(status) && status >= 400 && status < 600 ? status : 500;
+    console.warn('[admin tournament ai] planning failed:', error?.message || error);
+    res.status(responseStatus).json({
+      ok: false,
+      error: String(error?.message || 'Tournament AI planning failed').slice(0, 240),
+      failures: Array.isArray(error?.failures) ? error.failures.slice(0, 10) : undefined,
+    });
   }
 });
 

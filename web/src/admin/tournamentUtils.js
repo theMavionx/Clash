@@ -243,8 +243,8 @@ export function defaultRewardConfig() {
   };
 }
 
-export function normalizeRewardSchedulePool(raw = {}, fallbackLabel = 'Reward pool') {
-  return {
+export function normalizeRewardSchedulePool(raw = {}, fallbackLabel = 'Reward pool', { daily = false } = {}) {
+  const pool = {
     enabled: raw.enabled !== false,
     label: String(raw.label || raw.name || fallbackLabel).slice(0, 80),
     top_n: Math.max(1, Math.min(100, Math.floor(Number(raw.top_n || raw.winners || 5) || 5))),
@@ -256,6 +256,18 @@ export function normalizeRewardSchedulePool(raw = {}, fallbackLabel = 'Reward po
     })).filter((p) => p.amount > 0) : [],
     metric: raw.metric || 'points',
   };
+  if (daily) {
+    const dayUtc = String(raw.day_utc || raw.day || raw.date || '').trim();
+    pool.day_utc = /^\d{4}-\d{2}-\d{2}$/.test(dayUtc) ? dayUtc : '';
+    pool.volume_target_usd = Math.max(0, Math.min(
+      10_000_000_000,
+      Number(raw.volume_target_usd ?? raw.daily_volume_target_usd ?? raw.volume_target) || 0,
+    ));
+    pool.volume_target_scope = ['player', 'tournament'].includes(raw.volume_target_scope)
+      ? raw.volume_target_scope
+      : 'player';
+  }
+  return pool;
 }
 
 export function normalizeRewardConfig(raw = {}) {
@@ -273,7 +285,7 @@ export function normalizeRewardConfig(raw = {}) {
   const maxTickets = Math.max(1, Math.min(100000, Math.floor(Number(lucky.max_tickets || base.lucky_daily_raider.max_tickets) || 20)));
   const manualWinners = normalizeLuckyRaiderManualWinners(lucky.manual_winners ?? lucky.manual_winner_ids ?? lucky.manual_winners_text);
   return {
-    daily_pools: (Array.isArray(source.daily_pools) ? source.daily_pools : []).map((pool, idx) => normalizeRewardSchedulePool(pool, `Daily pool ${idx + 1}`)),
+    daily_pools: (Array.isArray(source.daily_pools) ? source.daily_pools : []).map((pool, idx) => normalizeRewardSchedulePool(pool, `Daily pool ${idx + 1}`, { daily: true })),
     final_pools: (Array.isArray(source.final_pools) ? source.final_pools : []).map((pool, idx) => normalizeRewardSchedulePool(pool, `Final pool ${idx + 1}`)),
     lucky_daily_raider: {
       enabled: !!lucky.enabled,
