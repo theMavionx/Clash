@@ -30,16 +30,20 @@ const OSTIUM_RPC_URL = String(
   || '',
 ).trim();
 const DEFAULT_OSTIUM_SUBGRAPH_FALLBACK_URL = 'https://api.subgraph.ormilabs.com/api/public/67a599d5-c8d2-4cc4-9c4d-2975a97bc5d8/subgraphs/ost-prod/live/gn';
+const DEFAULT_OSTIUM_BUILDER_API_URL = 'https://builder.prod.bedrock.ostium.io';
 const OSTIUM_LOCAL_SUBGRAPH_PROXY_URL = `http://127.0.0.1:${process.env.FUTURES_PORT || 3999}/api/ostium/subgraph/gn`;
 const OSTIUM_SUBGRAPH_URL = String(process.env.OSTIUM_SUBGRAPH_URL || OSTIUM_LOCAL_SUBGRAPH_PROXY_URL).trim();
-const OSTIUM_BUILDER_API_URL = String(process.env.OSTIUM_BUILDER_API_URL || '').trim();
+const OSTIUM_BUILDER_API_URL = String(
+  process.env.OSTIUM_BUILDER_API_URL
+  || DEFAULT_OSTIUM_BUILDER_API_URL,
+).replace(/\/+$/u, '');
 const OSTIUM_METADATA_API_URL = String(
   process.env.OSTIUM_METADATA_API_URL
-  || 'https://metadata-backend.ostium.io',
+  || 'https://metadata-backend.prod.bedrock.ostium.io',
 ).replace(/\/+$/u, '');
 const OSTIUM_UPSTREAM_SUBGRAPH_URL = String(
   process.env.OSTIUM_UPSTREAM_SUBGRAPH_URL
-  || 'https://builder.ostium.io/v1/subgraph/gn',
+  || `${DEFAULT_OSTIUM_BUILDER_API_URL}/v1/subgraph/gn`,
 ).trim();
 const OSTIUM_UPSTREAM_SUBGRAPH_URLS = Array.from(new Set([
   OSTIUM_UPSTREAM_SUBGRAPH_URL,
@@ -551,7 +555,7 @@ function pairSymbolFromFeed(item) {
 }
 
 async function getBuilderPriceRowsFallback() {
-  const base = (OSTIUM_BUILDER_API_URL || 'https://builder.ostium.io').replace(/\/+$/u, '');
+  const base = OSTIUM_BUILDER_API_URL;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 8000);
   try {

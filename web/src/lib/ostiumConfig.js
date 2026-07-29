@@ -28,6 +28,11 @@ export const OSTIUM_ALCHEMY_WS_URL = (
   || import.meta.env.VITE_ARBITRUM_WS_URL
   || sameOriginWsUrl('/rpc/arb-alchemy-ws')
 );
+/** Ostium Bedrock builder price stream (live mid for Futures / TradingView). */
+export const OSTIUM_PRICE_STREAM_WS = (
+  import.meta.env.VITE_OSTIUM_PRICE_STREAM_WS
+  || 'wss://builder.prod.bedrock.ostium.io/v1/prices/stream'
+).trim();
 
 function sameOriginHttpUrl(pathOrUrl) {
   const value = String(pathOrUrl || '').trim();

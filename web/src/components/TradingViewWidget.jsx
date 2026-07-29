@@ -8,6 +8,7 @@ import {
   phoenixSymbol as normalizePhoenixSymbol,
 } from '../lib/phoenixClient';
 import { pacificaFetch } from '../lib/pacificaClient';
+import { OSTIUM_PRICE_STREAM_WS } from '../lib/ostiumConfig';
 
 // Pyth Benchmarks serves historical candles in TradingView UDF format for
 // every Pyth feed. Query it directly from the user's browser first so public
@@ -15,8 +16,6 @@ import { pacificaFetch } from '../lib/pacificaClient';
 // fallback for CORS/network failures or transient direct errors.
 const PYTH_HISTORY_API = '/api/futures/pyth/history';
 const PYTH_HISTORY_DIRECT_API = 'https://benchmarks.pyth.network/v1/shims/tradingview/history';
-const OSTIUM_PRICE_STREAM_WS = 'wss://builder.ostium.io/v1/prices/stream';
-
 const INTERVALS = [
   { label: '1m', value: '1m', ms: 2 * 60 * 60 * 1000, pyth: '1' },
   { label: '5m', value: '5m', ms: 12 * 60 * 60 * 1000, pyth: '5' },

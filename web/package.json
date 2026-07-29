@@ -35,7 +35,7 @@
     "@nadohq/shared": "0.15.0",
     "@nktkas/hyperliquid": "^0.32.2",
     "@onsol/tldparser": "^1.2.1",
-    "@ostium/builder-sdk": "^0.4.1",
+    "@ostium/builder-sdk": "^0.6.0",
     "@privy-io/react-auth": "^3.21.2",
     "@solana-mobile/wallet-adapter-mobile": "^2.2.8",
     "@solana-mobile/wallet-standard-mobile": "^0.5.2",
