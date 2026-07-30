@@ -5001,6 +5001,28 @@ router.post('/lighter/auth-token', auth, async (req, res) => {
   }
 });
 
+router.post('/lighter/referral/status', auth, async (req, res) => {
+  try {
+    res.json(await lighter.getReferralStatus(req.body || {}));
+  } catch (e) {
+    console.warn('[lighter] referral status failed:', e.message);
+    res.status(e.status || 400).json({ error: 'Failed to load Lighter referral status', detail: e.message });
+  }
+});
+
+router.post('/lighter/referral/use', auth, async (req, res) => {
+  try {
+    res.json(await lighter.useReferralCode(req.body || {}));
+  } catch (e) {
+    console.warn('[lighter] referral use failed:', e.message);
+    res.status(e.status || 400).json({
+      error: 'Failed to accept Clash Lighter referral',
+      detail: e.message,
+      code: e.data?.code || undefined,
+    });
+  }
+});
+
 router.post('/lighter/approve-integrator/prepare', auth, async (req, res) => {
   try {
     res.json(await lighter.prepareIntegratorApproval(req.body || {}));

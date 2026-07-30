@@ -2239,3 +2239,21 @@ Follow-up:
   bridge address/history calls were smoke-tested. Focused builder proof, reward eligibility,
   NFT rarity parity, MCP intent stress tests, Vite production build, and the full Deploy-mode
   repository check passed.
+
+### UR-2026-07-31-LIGHTER-REFERRAL-GATE
+
+- **Timestamp:** 2026-07-31 (Europe/Kyiv)
+- **Request:** Add the canonical Lighter referral link
+  `https://app.lighter.xyz/?referral=CLASHOFPERPS`, check whether each Lighter player already
+  has a referral, and require explicit acceptance of the Clash code only when no code exists.
+- **Protocol audit:** Lighter referrals are not Ethereum or L2 smart-contract transactions.
+  The current official integration uses authenticated REST state: `userReferrals.used_code`
+  for the linked code and `referral/use` to accept a code. Existing referral codes must be
+  preserved.
+- **Local result:** Added authenticated server status/use endpoints bound to the Lighter
+  account's L1 owner, a blocking frontend referral step before integrator approval/trading,
+  backend enforcement before every Lighter order creation, and the official Lighter
+  referral-page fallback. Focused tests cover empty-code acceptance, preservation of another
+  referrer, request encoding/signature compatibility, wallet/account mismatch rejection, and
+  the backend trading gate. The production web build, focused ESLint check, and Deploy-mode
+  repository check pass.

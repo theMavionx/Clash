@@ -17,6 +17,16 @@ const LIGHTER_BUILDER_FEE_BPS = Math.max(0, Number(
   || 1,
 ));
 const LIGHTER_BUILDER_FEE_VALUE = Math.round(LIGHTER_BUILDER_FEE_BPS * 100);
+const LIGHTER_REFERRAL_CODE = String(
+  process.env.LIGHTER_REFERRAL_CODE
+  || process.env.VITE_LIGHTER_REFERRAL_CODE
+  || 'CLASHOFPERPS',
+).trim().toUpperCase();
+const LIGHTER_REFERRAL_URL = `https://app.lighter.xyz/?referral=${encodeURIComponent(LIGHTER_REFERRAL_CODE)}`;
+// Lighter's production web app generates this compatibility token for
+// referral/use. It is not a wallet signature or a secret; account ownership is
+// authorized separately by the Lighter auth token.
+const LIGHTER_REFERRAL_SIGNATURE_SUFFIX = 'wP81zDNpES';
 const LIGHTER_REQUEST_TIMEOUT_MS = Math.max(1000, Math.min(20_000, Number(process.env.LIGHTER_TIMEOUT_MS || 8000)));
 const LIGHTER_PUBLIC_CACHE_TTL_MS = Math.max(1000, Math.min(60_000, Number(process.env.LIGHTER_PUBLIC_CACHE_TTL_MS || 12_000)));
 const LIGHTER_APPROVAL_TTL_DAYS = Math.max(1, Math.min(3650, Number(process.env.LIGHTER_APPROVAL_TTL_DAYS || 365)));
@@ -198,7 +208,10 @@ function runSigner(action, payload = {}) {
 
 async function request(path, options = {}) {
   const method = String(options.method || 'GET').toUpperCase();
-  const queryKey = method === 'GET' ? path : `${path}:${JSON.stringify(options.body || {})}`;
+  const bodyValue = options.form
+    ? new URLSearchParams(Object.entries(options.form).map(([key, value]) => [key, String(value ?? '')])).toString()
+    : JSON.stringify(options.body || {});
+  const queryKey = method === 'GET' ? path : `${path}:${bodyValue}`;
   const now = Date.now();
   if (method === 'GET') {
     const cached = cache.get(queryKey);
@@ -212,11 +225,11 @@ async function request(path, options = {}) {
       signal: ctrl.signal,
       headers: {
         accept: 'application/json',
-        'content-type': 'application/json',
+        'content-type': options.form ? 'application/x-www-form-urlencoded' : 'application/json',
         'user-agent': 'ClashOfPerps/1.0 lighter',
         ...(options.headers || {}),
       },
-      body: method === 'GET' ? undefined : JSON.stringify(options.body || {}),
+      body: method === 'GET' ? undefined : bodyValue,
     });
     const text = await res.text();
     let data = null;
@@ -238,6 +251,10 @@ async function request(path, options = {}) {
   } finally {
     clearTimeout(timer);
   }
+}
+
+function clearRequestCache(path) {
+  cache.delete(path);
 }
 
 function signerCredentials(input = {}) {
@@ -482,16 +499,20 @@ function isOpenLighterPosition(position) {
   return amount > 1e-12 && notional > 0.01;
 }
 
-async function getAccount({ accountIndex, l1Address } = {}) {
+async function getAccountRecord({ accountIndex, l1Address } = {}) {
   const index = Number(accountIndex);
   const hasIndex = Number.isInteger(index) && index >= 0;
   const address = String(l1Address || '').trim();
-  if (!hasIndex && !address) return { exists: false, account_configured: false };
+  if (!hasIndex && !address) return null;
   const qs = hasIndex
     ? `by=index&value=${encodeURIComponent(String(index))}`
     : `by=l1_address&value=${encodeURIComponent(address)}`;
   const data = await request(`/api/v1/account?${qs}`);
-  const acct = rows(data, 'accounts')[0] || null;
+  return rows(data, 'accounts')[0] || null;
+}
+
+async function getAccount({ accountIndex, l1Address } = {}) {
+  const acct = await getAccountRecord({ accountIndex, l1Address });
   if (!acct) return { exists: false };
   const assets = rows(acct.assets);
   const usdc = assets.find(a => String(a?.symbol || '').toUpperCase() === 'USDC') || {};
@@ -523,6 +544,127 @@ function accountIndexFromInput(input = {}) {
 function authHeader(input = {}) {
   const token = String(input.authToken || input.auth_token || input.readOnlyToken || input.read_only_token || '').trim();
   return token ? { authorization: token } : {};
+}
+
+function referralUseSignature(l1Address, referralCode = LIGHTER_REFERRAL_CODE) {
+  return Buffer.from(
+    `${String(l1Address || '').trim()}${String(referralCode || '').trim()}${LIGHTER_REFERRAL_SIGNATURE_SUFFIX}`,
+    'utf8',
+  ).toString('base64');
+}
+
+function normalizeReferralStatus(payload, account) {
+  const usedCode = String(payload?.used_code || '').trim();
+  return {
+    checked: true,
+    has_referral: usedCode.length > 0,
+    is_our_referral: usedCode.toUpperCase() === LIGHTER_REFERRAL_CODE,
+    used_code: usedCode,
+    referral_code: LIGHTER_REFERRAL_CODE,
+    referral_url: LIGHTER_REFERRAL_URL,
+    account_index: Number(account?.account_index ?? account?.index),
+    l1_address: String(account?.l1_address || ''),
+  };
+}
+
+function requireMatchingLighterOwner(account, expectedL1Address) {
+  const owner = String(account?.l1_address || '').trim();
+  const expected = String(expectedL1Address || '').trim();
+  if (!owner) {
+    throw Object.assign(new Error('Lighter account has no L1 owner address'), { status: 400 });
+  }
+  if (!expected) return owner;
+  try {
+    if (!isAddressEqual(getAddress(owner), getAddress(expected))) {
+      throw Object.assign(
+        new Error(`Lighter account belongs to ${owner}, not the connected wallet ${expected}.`),
+        { status: 409 },
+      );
+    }
+  } catch (err) {
+    if (err?.status) throw err;
+    throw Object.assign(new Error('Connected Lighter wallet address is invalid'), { status: 400 });
+  }
+  return owner;
+}
+
+async function getReferralStatus(input = {}) {
+  const accountIndex = accountIndexFromInput(input);
+  if (accountIndex == null) {
+    throw Object.assign(new Error('Lighter account_index required'), { status: 400 });
+  }
+  const headers = authHeader(input);
+  if (!headers.authorization) {
+    throw Object.assign(new Error('Lighter auth token required for referral status'), { status: 400 });
+  }
+  const account = await getAccountRecord({ accountIndex });
+  if (!account) {
+    throw Object.assign(new Error(`Lighter account ${accountIndex} was not found`), { status: 404 });
+  }
+  const owner = requireMatchingLighterOwner(
+    account,
+    input.l1Address || input.l1_address || input.wallet || input.address,
+  );
+  const path = `/api/v1/referral/userReferrals?l1_address=${encodeURIComponent(owner)}&limit=1`;
+  const data = await request(path, { headers });
+  return normalizeReferralStatus(data, account);
+}
+
+async function useReferralCode(input = {}) {
+  const initial = await getReferralStatus(input);
+  if (initial.has_referral) {
+    return {
+      ok: true,
+      applied: false,
+      already_linked: true,
+      referral_status: initial,
+    };
+  }
+
+  const headers = authHeader(input);
+  const owner = initial.l1_address;
+  let result;
+  try {
+    result = await request('/api/v1/referral/use', {
+      method: 'POST',
+      headers,
+      form: {
+        l1_address: owner,
+        referral_code: LIGHTER_REFERRAL_CODE,
+        discord: '',
+        telegram: '',
+        x: '',
+        signature: referralUseSignature(owner),
+      },
+    });
+  } catch (err) {
+    // A concurrent tab may have attached a code after our preflight. Re-read
+    // Lighter before surfacing "already used" as a failure.
+    if (Number(err?.data?.code) !== 41003) throw err;
+  }
+
+  const statusPath = `/api/v1/referral/userReferrals?l1_address=${encodeURIComponent(owner)}&limit=1`;
+  clearRequestCache(statusPath);
+  const referralStatus = await getReferralStatus(input);
+  return {
+    ok: referralStatus.has_referral,
+    applied: referralStatus.is_our_referral,
+    already_linked: referralStatus.has_referral && !referralStatus.is_our_referral,
+    pending: !referralStatus.has_referral,
+    result: result || null,
+    referral_status: referralStatus,
+  };
+}
+
+async function requireReferralForTrading(input = {}) {
+  const status = await getReferralStatus(input);
+  if (!status.has_referral) {
+    throw Object.assign(
+      new Error(`Accept a Lighter referral code before trading. Clash code: ${LIGHTER_REFERRAL_CODE}`),
+      { status: 403, code: 'LIGHTER_REFERRAL_REQUIRED', referral_status: status },
+    );
+  }
+  return status;
 }
 
 async function getTrades({ accountIndex, authToken, cursor = '', limit = 100, from = -1 } = {}) {
@@ -915,6 +1057,10 @@ async function createGroupedOrder({
 
 async function createOrder(input = {}) {
   const creds = signerCredentials(input);
+  await requireReferralForTrading({
+    ...input,
+    accountIndex: creds.account_index,
+  });
   const market = await getMarket(input.symbol ?? input.market_id ?? input.marketIndex);
   const baseAmount = integerScale(input.baseAmount ?? input.amount ?? input.qty, market.size_decimals);
   if (!baseAmount) throw Object.assign(new Error('Lighter order amount is too small'), { status: 400 });
@@ -1085,6 +1231,8 @@ function config() {
     builderFeeBps: LIGHTER_BUILDER_FEE_BPS,
     builderFeeValue: LIGHTER_BUILDER_FEE_VALUE,
     approvalTtlDays: LIGHTER_APPROVAL_TTL_DAYS,
+    referralCode: LIGHTER_REFERRAL_CODE,
+    referralUrl: LIGHTER_REFERRAL_URL,
   };
 }
 
@@ -1093,6 +1241,11 @@ module.exports = {
   getMarketInfo,
   getPrices,
   getAccount,
+  getReferralStatus,
+  useReferralCode,
+  requireReferralForTrading,
+  referralUseSignature,
+  normalizeReferralStatus,
   getActiveOrders,
   getTrades,
   importFillsForPlayer,

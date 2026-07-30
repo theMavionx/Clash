@@ -3542,7 +3542,9 @@ function FuturesPanel() {
     // subaccount yet) from "returning user" (subaccount on-chain but
     // delegation missing — usually after rejecting the delegate step).
     activationStep, isReady, setupVerified, subaccountAddr, gasSponsored, apiWalletAddr, inviteStatus, builderConfig, hotstuffSetupStatus,
-    bridgeDepositSourceChainId, setBridgeDepositSourceChainId, bridgeDepositSources, lighterNeedsIntegratorApproval, lighterCredentials, detectAccount: detectLighterAccount,
+    bridgeDepositSourceChainId, setBridgeDepositSourceChainId, bridgeDepositSources,
+    lighterNeedsIntegratorApproval, lighterNeedsReferral, lighterReferralChecking, lighterReferralStatus,
+    lighterCredentials, detectAccount: detectLighterAccount,
     registerBuilderCode,
     refresh: refreshTrading,
   } = trading;
@@ -3944,7 +3946,7 @@ function FuturesPanel() {
 
   useEffect(() => {
     if (dex !== 'lighter') return undefined;
-    if (setupVerified === true || lighterNeedsIntegratorApproval) return undefined;
+    if (setupVerified === true || lighterCredentials?.accountIndex != null) return undefined;
     if (!hasWallet || !/^0x[a-fA-F0-9]{40}$/.test(String(walletAddr || ''))) return undefined;
     if (lighterAccountIndexInput.trim()) return undefined;
     if (typeof detectLighterAccount !== 'function') return undefined;
@@ -3964,7 +3966,7 @@ function FuturesPanel() {
         if (!cancelled) setLighterAccountDetectStatus('error');
       });
     return () => { cancelled = true; };
-  }, [detectLighterAccount, dex, hasWallet, lighterAccountIndexInput, lighterNeedsIntegratorApproval, setupVerified, walletAddr]);
+  }, [detectLighterAccount, dex, hasWallet, lighterAccountIndexInput, lighterCredentials?.accountIndex, setupVerified, walletAddr]);
 
   // Share-trade modal — opened only on demand via the share button next to
   // open positions. Closing a trade should not interrupt the flow with an
@@ -6443,12 +6445,34 @@ function FuturesPanel() {
   // ==================== LIGHTER API KEY GATE ====================
   if (dex === 'lighter' && hasWallet && setupVerified !== true) {
     const isRunning = referralLinking || loading;
-    const showLighterCredentialForm = !lighterNeedsIntegratorApproval || lighterCredentialFormOpen;
+    const hasLighterCredentials = lighterCredentials?.accountIndex != null;
+    const showLighterCredentialForm = !hasLighterCredentials || lighterCredentialFormOpen;
     const lighterCanSave = showLighterCredentialForm
       && lighterAccountIndexInput.trim().length > 0
       && lighterApiKeyIndexInput.trim().length > 0
       && lighterApiPrivateKeyInput.trim().length > 0
       && !isRunning;
+    const lighterCredentialState = hasLighterCredentials ? 'done' : (isRunning ? 'active' : 'pending');
+    const lighterReferralState = hasReferrer === true
+      ? 'done'
+      : (hasLighterCredentials && (lighterReferralChecking || (isRunning && lighterNeedsReferral)))
+        ? 'active'
+        : 'pending';
+    const lighterIntegratorState = !lighterNeedsIntegratorApproval && hasLighterCredentials
+      ? 'done'
+      : (hasReferrer === true && isRunning)
+        ? 'active'
+        : 'pending';
+    const lighterGateTitle = lighterNeedsReferral
+      ? `Accept ${referralCode} referral`
+      : lighterReferralChecking && hasLighterCredentials
+        ? 'Checking Lighter referral'
+        : lighterNeedsIntegratorApproval && hasReferrer === true
+          ? 'Approve Clash integrator'
+          : 'Add Lighter API credentials';
+    const lighterGateSubtitle = lighterNeedsReferral
+      ? 'This Lighter account has no referral code. Accept the Clash code before trading unlocks; an existing code is always preserved.'
+      : 'Clash verifies your Lighter account, existing referral, and integrator approval before enabling orders.';
 
     return (
       <>
@@ -6470,9 +6494,9 @@ function FuturesPanel() {
             <div style={hlGateStyles.frame}>
               <div style={hlGateStyles.titleBlock}>
                 <span style={hlGateStyles.kicker}>{isRunning ? 'CONNECTING' : 'ACTION REQUIRED'}</span>
-                <span style={hlGateStyles.title}>Add Lighter API credentials</span>
+                <span style={hlGateStyles.title}>{lighterGateTitle}</span>
                 <span style={hlGateStyles.subtitle}>
-                  Create a Lighter API key with index above 3. Clash stores it encrypted in this browser and uses it only to sign your Lighter orders through the Clash integrator.
+                  {lighterGateSubtitle}
                 </span>
               </div>
               <ol style={hlGateStyles.stepList}>
@@ -6484,12 +6508,36 @@ function FuturesPanel() {
                   </span>
                 </li>
                 <li style={hlGateStyles.stepItem}>
-                  <span style={{ ...hlGateStyles.stepBubble, ...(isRunning ? hlGateStyles.stepBubble_active : hlGateStyles.stepBubble_pending) }}>
-                    {isRunning ? <span style={hlGateStyles.spinner} /> : 2}
+                  <span style={{ ...hlGateStyles.stepBubble, ...hlGateStyles[`stepBubble_${lighterCredentialState}`] }}>
+                    {lighterCredentialState === 'done' ? 'OK' : lighterCredentialState === 'active' ? <span style={hlGateStyles.spinner} /> : 2}
                   </span>
                   <span style={hlGateStyles.stepText}>
-                    <span style={{ ...hlGateStyles.stepLabel, ...(isRunning ? hlGateStyles.stepLabel_active : hlGateStyles.stepLabel_pending) }}>Verify API key</span>
+                    <span style={{ ...hlGateStyles.stepLabel, ...hlGateStyles[`stepLabel_${lighterCredentialState}`] }}>Verify API key</span>
                     <span style={hlGateStyles.stepHint}>The key is sent transiently to Clash only for signed Lighter requests.</span>
+                  </span>
+                </li>
+                <li style={hlGateStyles.stepItem}>
+                  <span style={{ ...hlGateStyles.stepBubble, ...hlGateStyles[`stepBubble_${lighterReferralState}`] }}>
+                    {lighterReferralState === 'done' ? 'OK' : lighterReferralState === 'active' ? <span style={hlGateStyles.spinner} /> : 3}
+                  </span>
+                  <span style={hlGateStyles.stepText}>
+                    <span style={{ ...hlGateStyles.stepLabel, ...hlGateStyles[`stepLabel_${lighterReferralState}`] }}>Verify referral code</span>
+                    <span style={hlGateStyles.stepHint}>
+                      {hasReferrer === true
+                        ? `Existing referral ${lighterReferralStatus?.used_code || ''} is accepted.`
+                        : lighterNeedsReferral
+                          ? `No referral found. Confirm ${referralCode} to continue.`
+                          : 'Clash reads used_code from Lighter without replacing an existing referral.'}
+                    </span>
+                  </span>
+                </li>
+                <li style={hlGateStyles.stepItem}>
+                  <span style={{ ...hlGateStyles.stepBubble, ...hlGateStyles[`stepBubble_${lighterIntegratorState}`] }}>
+                    {lighterIntegratorState === 'done' ? 'OK' : lighterIntegratorState === 'active' ? <span style={hlGateStyles.spinner} /> : 4}
+                  </span>
+                  <span style={hlGateStyles.stepText}>
+                    <span style={{ ...hlGateStyles.stepLabel, ...hlGateStyles[`stepLabel_${lighterIntegratorState}`] }}>Approve Clash integrator</span>
+                    <span style={hlGateStyles.stepHint}>Required for Clash-routed Lighter orders and builder-fee attribution.</span>
                   </span>
                 </li>
               </ol>
@@ -6537,7 +6585,53 @@ function FuturesPanel() {
                 </div>
               </div>
               )}
-              {lighterNeedsIntegratorApproval && (
+              {hasLighterCredentials && lighterReferralChecking && (
+                <div style={{fontSize: 12, fontWeight: 800, color: '#5C3A21', lineHeight: 1.35, border: '2px solid #d4c8b0', background: '#fffaf0', borderRadius: 12, padding: 12}}>
+                  Reading this wallet&apos;s current referral from Lighter. Trading remains locked until Lighter returns a confirmed <code>used_code</code>.
+                </div>
+              )}
+              {hasLighterCredentials && lighterNeedsReferral && (
+                <div style={{fontSize: 12, fontWeight: 800, color: '#5C3A21', lineHeight: 1.35, border: '2px solid #e0b44c', background: '#fff6d9', borderRadius: 12, padding: 12, display: 'flex', flexDirection: 'column', gap: 10}}>
+                  <span>No Lighter referral is attached to this wallet. Confirm <strong>{referralCode}</strong> before trading. Clash never replaces an existing referral.</span>
+                  <button
+                    type="button"
+                    style={{ ...hlGateStyles.secondaryBtn, padding: '9px 12px', fontSize: 12, alignSelf: 'stretch', background: '#fffaf0' }}
+                    disabled={isRunning}
+                    onClick={() => {
+                      if (typeof openReferralJoin === 'function') openReferralJoin();
+                      else window.open(referralUrl, '_blank', 'noopener,noreferrer');
+                    }}
+                  >
+                    Open official Lighter referral page
+                  </button>
+                </div>
+              )}
+              {hasLighterCredentials && lighterNeedsReferral && (
+                <button
+                  style={{ ...hlGateStyles.primaryBtn, ...(isRunning ? hlGateStyles.primaryBtnBusy : null) }}
+                  disabled={isRunning}
+                  onClick={async () => {
+                    if (typeof linkOurReferrer !== 'function') return;
+                    setReferralLinking(true);
+                    setLocalAlert('');
+                    try {
+                      const res = await linkOurReferrer();
+                      if (res?.referral_status?.has_referral) {
+                        setSuccessMsg(`Lighter referral ${res.referral_status.used_code || referralCode} confirmed.`);
+                      } else {
+                        setLocalAlert('Lighter has not confirmed the referral yet. Retry in a moment.');
+                      }
+                    } catch (e) {
+                      setLocalAlert(e?.message || String(e));
+                    } finally {
+                      setReferralLinking(false);
+                    }
+                  }}
+                >
+                  {isRunning ? 'Confirming referral...' : `Accept ${referralCode} referral ->`}
+                </button>
+              )}
+              {lighterNeedsIntegratorApproval && hasReferrer === true && (
                 <div style={{fontSize: 12, fontWeight: 800, color: '#5C3A21', lineHeight: 1.35, border: '2px solid #e0b44c', background: '#fff6d9', borderRadius: 12, padding: 12, display: 'flex', flexDirection: 'column', gap: 10}}>
                   <span>Lighter API key is saved. Approve the Clash integrator fee before trading unlocks.</span>
                   <button
@@ -6572,7 +6666,7 @@ function FuturesPanel() {
                   )}
                 </div>
               )}
-              {lighterNeedsIntegratorApproval && (
+              {lighterNeedsIntegratorApproval && hasReferrer === true && (
                 <button
                   style={{ ...hlGateStyles.primaryBtn, ...(isRunning ? hlGateStyles.primaryBtnBusy : null) }}
                   disabled={isRunning}
@@ -6609,14 +6703,19 @@ function FuturesPanel() {
                     else {
                       setLighterApiPrivateKeyInput('');
                       setLighterCredentialFormOpen(false);
-                      setSuccessMsg('Lighter API key verified and saved in this browser.');
-                      if (typeof approveIntegrator === 'function') {
+                      if (res?.referralStatusError) {
+                        setLocalAlert(`Lighter API key was saved, but referral verification failed: ${res.referralStatusError}`);
+                      } else if (res?.referralStatus?.has_referral !== true) {
+                        setSuccessMsg(`Lighter API key saved. Confirm the ${referralCode} referral to continue.`);
+                      } else if (typeof approveIntegrator === 'function') {
                         try {
                           await approveIntegrator(res);
                           setSuccessMsg('Lighter setup complete. Clash integrator fee approved.');
                         } catch (approveError) {
                           setLocalAlert(approveError?.message || 'Lighter API key saved. Approve Clash integrator before trading.');
                         }
+                      } else {
+                        setSuccessMsg('Lighter API key and referral verified.');
                       }
                     }
                   } catch (e) {

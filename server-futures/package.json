@@ -8,7 +8,8 @@
     "dev": "node --watch index.js",
     "test:decibel-tpsl": "node test-decibel-tpsl-builder.js",
     "test:gmtrade": "node test-gmtrade.js",
-    "test:katana-orders": "node test-katana-order-quantity.js"
+    "test:katana-orders": "node test-katana-order-quantity.js",
+    "test:lighter-referral": "node test-lighter-referral.js"
   },
   "type": "commonjs",
   "dependencies": {
