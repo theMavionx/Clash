@@ -10871,6 +10871,8 @@ function serializePlayerShip(row) {
     level,
     capacity: playerShipCapacity(level, row.capacity_override),
     energy: Number(config.energy || 4),
+    cannon_damage: Number(config.cannon_damage || 500),
+    cannon_base_cost: Number(config.cannon_base_cost || 1),
     medkit_unlocked: !!config.medkit_unlocked,
     freeze_unlocked: !!config.freeze_unlocked,
     rage_unlocked: !!config.rage_unlocked,

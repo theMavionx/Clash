@@ -621,36 +621,48 @@ const PLAYER_SHIP_LEVELS = Object.freeze({
   1: Object.freeze({
     capacity: 3,
     energy: 4,
+    cannon_damage: 500,
+    cannon_base_cost: 1,
     town_hall: 1,
     cost: Object.freeze({ gold: 0, wood: 0, ore: 0 }),
   }),
   2: Object.freeze({
     capacity: 12,
     energy: 6,
+    cannon_damage: 700,
+    cannon_base_cost: 1,
     town_hall: 2,
     cost: Object.freeze({ gold: 2000, wood: 4000, ore: 3400 }),
   }),
   3: Object.freeze({
     capacity: 27,
     energy: 8,
+    cannon_damage: 1100,
+    cannon_base_cost: 2,
     town_hall: 3,
     cost: Object.freeze({ gold: 3600, wood: 7200, ore: 6200 }),
   }),
   4: Object.freeze({
     capacity: 36,
     energy: 10,
+    cannon_damage: 1450,
+    cannon_base_cost: 2,
     town_hall: 4,
     cost: Object.freeze({ gold: 4800, wood: 9600, ore: 8200 }),
   }),
   5: Object.freeze({
     capacity: 45,
     energy: 12,
+    cannon_damage: 1800,
+    cannon_base_cost: 3,
     town_hall: 5,
     cost: Object.freeze({ gold: 6500, wood: 12800, ore: 11000 }),
   }),
   6: Object.freeze({
     capacity: 45,
     energy: 14,
+    cannon_damage: 2250,
+    cannon_base_cost: 3,
     town_hall: 6,
     medkit_unlocked: true,
     unlocks: Object.freeze(['Healing Field']),
@@ -659,6 +671,8 @@ const PLAYER_SHIP_LEVELS = Object.freeze({
   7: Object.freeze({
     capacity: 45,
     energy: 16,
+    cannon_damage: 2800,
+    cannon_base_cost: 4,
     town_hall: 7,
     medkit_unlocked: true,
     freeze_unlocked: true,
@@ -668,6 +682,8 @@ const PLAYER_SHIP_LEVELS = Object.freeze({
   8: Object.freeze({
     capacity: 45,
     energy: 18,
+    cannon_damage: 3400,
+    cannon_base_cost: 4,
     town_hall: 7,
     medkit_unlocked: true,
     freeze_unlocked: true,
@@ -678,6 +694,8 @@ const PLAYER_SHIP_LEVELS = Object.freeze({
   9: Object.freeze({
     capacity: 45,
     energy: 20,
+    cannon_damage: 4100,
+    cannon_base_cost: 5,
     town_hall: 7,
     medkit_unlocked: true,
     freeze_unlocked: true,
@@ -689,6 +707,8 @@ const PLAYER_SHIP_LEVELS = Object.freeze({
   10: Object.freeze({
     capacity: 45,
     energy: 22,
+    cannon_damage: 4900,
+    cannon_base_cost: 5,
     town_hall: 7,
     medkit_unlocked: true,
     freeze_unlocked: true,
@@ -709,16 +729,23 @@ function cannonInitialEnergyForShipLevel(level) {
   return playerShipLevelConfig(level).energy;
 }
 
+function cannonDamageForShipLevel(level) {
+  return playerShipLevelConfig(level).cannon_damage;
+}
+
 // Cannon, rally, and Main Ship tactical abilities share this energy pool.
 const CANNON_INITIAL_ENERGY = cannonInitialEnergyForShipLevel(1);
 const CANNON_ENERGY_PER_DESTROY = 2;
-const CANNON_DAMAGE = 500;
+const CANNON_DAMAGE = cannonDamageForShipLevel(1);
 const CANNON_RELOAD_SEC = 1.0;
 const CANNON_SPEED = 1.2;
 const CANNON_MIN_FLIGHT_SEC = 1.5;
 const CANNON_START_POS = { x: -0.15186018, y: 0.2418113, z: 5.3458157 };
 const CANNON_TARGET_Y = 0.05;
-function cannonShotCost(shotNumber) { return shotNumber; }
+function cannonShotCost(level, shotNumber) {
+  const baseCost = playerShipLevelConfig(level).cannon_base_cost;
+  return baseCost + Math.max(0, Math.trunc(Number(shotNumber) || 1) - 1);
+}
 
 // Tactical abilities share the ship energy pool. Every repeat use costs one
 // more energy, matching cannon and rally while keeping replay costs canonical.
@@ -734,6 +761,7 @@ function escalatingAbilityCost(baseCost, uses, increment = 1) {
 const MEDKIT_UNLOCK_SHIP_LEVEL = 6;
 const MEDKIT_ENERGY_COST = 6;
 const MEDKIT_ENERGY_COST_INCREMENT = 1;
+const MEDKIT_TRAVEL_SEC = 0.60;
 const MEDKIT_DURATION_SEC = 8.0;
 const MEDKIT_RADIUS = 0.72;
 const MEDKIT_TICK_SEC = 0.25;
@@ -747,8 +775,8 @@ const FREEZE_DROP = Object.freeze({
   energyCost: 5,
   costIncrement: 1,
   travelSec: 0.6,
-  radius: 0.95,
-  durationSec: 6.0,
+  radius: 0.80,
+  durationSec: 4.0,
 });
 
 const RAGE_DROP = Object.freeze({
@@ -756,6 +784,7 @@ const RAGE_DROP = Object.freeze({
   unlockShipLevel: 8,
   energyCost: 7,
   costIncrement: 1,
+  travelSec: 0.60,
   radius: 0.82,
   durationSec: 9.0,
   damageMultiplier: 2.0,
@@ -825,6 +854,7 @@ module.exports = {
   PLAYER_SHIP_LEVELS,
   playerShipLevelConfig,
   cannonInitialEnergyForShipLevel,
+  cannonDamageForShipLevel,
   CANNON_INITIAL_ENERGY,
   CANNON_ENERGY_PER_DESTROY,
   CANNON_DAMAGE,
@@ -838,6 +868,7 @@ module.exports = {
   MEDKIT_UNLOCK_SHIP_LEVEL,
   MEDKIT_ENERGY_COST,
   MEDKIT_ENERGY_COST_INCREMENT,
+  MEDKIT_TRAVEL_SEC,
   MEDKIT_DURATION_SEC,
   MEDKIT_RADIUS,
   MEDKIT_TICK_SEC,

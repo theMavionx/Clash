@@ -10,6 +10,7 @@ const MEDKIT_DURATION_SEC: float = 8.0
 const MEDKIT_RADIUS: float = 0.72
 const MEDKIT_TICK_SEC: float = 0.25
 const MEDKIT_HEAL_PER_TICK: int = 12
+const MEDKIT_FLIGHT_SEC: float = 0.60
 const MEDKIT_COLOR: Color = Color(0.18, 0.92, 0.42, 1.0)
 const MEDKIT_DISK_ALPHA_MIN: float = 0.32
 const MEDKIT_DISK_ALPHA_MAX: float = 0.44
@@ -20,6 +21,7 @@ var _medkit_mode: bool = false
 var _medkit_uses: int = 0
 var _medkit_paused_attack: bool = false
 var _medkit_label: Label = null
+var _projectiles: Array[Dictionary] = []
 var _active_zones: Array[Dictionary] = []
 var _simulation_time: float = 0.0
 var _last_heal_at_by_troop: Dictionary = {}
@@ -36,6 +38,7 @@ func reset(ship_level: int = 1) -> void:
 	_simulation_time = 0.0
 	_last_heal_at_by_troop.clear()
 	_exit_medkit_mode()
+	_clear_projectiles()
 	_clear_zones()
 
 
@@ -49,6 +52,7 @@ func energy_cost() -> int:
 
 func process(delta: float) -> void:
 	_simulation_time += delta
+	_process_projectiles(delta)
 	var heal_events: Array[Dictionary] = []
 	for index in range(_active_zones.size() - 1, -1, -1):
 		var zone: Dictionary = _active_zones[index]
@@ -146,7 +150,7 @@ func _drop_medkit(world_pos: Vector3) -> bool:
 	_medkit_uses += 1
 	var clamped_pos: Vector3 = BaseTroop._clamp_to_island(world_pos)
 	var pos := Vector3(clamped_pos.x, bs.grid_y + 0.012, clamped_pos.z)
-	_activate_zone(pos)
+	_launch_or_activate(pos, "manual")
 	if bs.is_viewing_enemy:
 		var elapsed: float = Time.get_ticks_msec() / 1000.0 - bs._battle_start_time
 		bs._battle_replay.append({
@@ -154,11 +158,13 @@ func _drop_medkit(world_pos: Vector3) -> bool:
 			"type": "medkit_drop",
 			"x": pos.x,
 			"z": pos.z,
+			"flight_time": MEDKIT_FLIGHT_SEC,
 		})
 	if bs.has_method("record_replay_telemetry"):
-		bs.record_replay_telemetry("medkit_drop", {
+		bs.record_replay_telemetry("medkit_fire", {
 			"x": snappedf(pos.x, 0.001),
 			"z": snappedf(pos.z, 0.001),
+			"flight_time": MEDKIT_FLIGHT_SEC,
 			"duration": MEDKIT_DURATION_SEC,
 			"source": "manual",
 		})
@@ -170,14 +176,100 @@ func replay_drop_medkit(world_pos: Vector3) -> void:
 	_medkit_uses += 1
 	var clamped_pos: Vector3 = BaseTroop._clamp_to_island(world_pos)
 	var pos := Vector3(clamped_pos.x, bs.grid_y + 0.012, clamped_pos.z)
-	_activate_zone(pos)
+	_launch_or_activate(pos, "replay")
 	if bs.has_method("record_replay_telemetry"):
-		bs.record_replay_telemetry("medkit_drop", {
+		bs.record_replay_telemetry("medkit_fire", {
 			"x": snappedf(pos.x, 0.001),
 			"z": snappedf(pos.z, 0.001),
+			"flight_time": MEDKIT_FLIGHT_SEC,
 			"duration": MEDKIT_DURATION_SEC,
 			"source": "replay",
 		})
+
+
+func _launch_or_activate(target: Vector3, source: String) -> void:
+	var ship: Node3D = bs._cannon._get_attack_ship() if bs._cannon else null
+	if not is_instance_valid(ship):
+		_activate_zone(target)
+		return
+	var scene_root := bs.get_tree().current_scene
+	if scene_root == null:
+		_activate_zone(target)
+		return
+	var root := _create_payload_visual()
+	scene_root.add_child(root)
+	var start := ship.global_position + Vector3(0.0, 0.19, 0.0)
+	root.global_position = start
+	_projectiles.append({
+		"root": root,
+		"start": start,
+		"target": target,
+		"age": 0.0,
+		"source": source,
+	})
+
+
+func _process_projectiles(delta: float) -> void:
+	for index in range(_projectiles.size() - 1, -1, -1):
+		var projectile: Dictionary = _projectiles[index]
+		var root: Node3D = projectile.get("root", null)
+		if not is_instance_valid(root):
+			_projectiles.remove_at(index)
+			continue
+		var age := float(projectile.get("age", 0.0)) + delta
+		projectile["age"] = age
+		var progress := clampf(age / MEDKIT_FLIGHT_SEC, 0.0, 1.0)
+		var start: Vector3 = projectile.get("start", Vector3.ZERO)
+		var target: Vector3 = projectile.get("target", Vector3.ZERO)
+		var flat := start.lerp(target, progress)
+		var arc_height := maxf(0.44, start.distance_to(target) * 0.22)
+		root.global_position = flat + Vector3(
+			0.0,
+			4.0 * arc_height * progress * (1.0 - progress),
+			0.0
+		)
+		root.rotate_x(delta * 4.8)
+		root.rotate_z(delta * 3.8)
+		if progress < 1.0:
+			continue
+		_activate_zone(target)
+		if bs.has_method("record_replay_telemetry"):
+			bs.record_replay_telemetry("medkit_impact", {
+				"x": snappedf(target.x, 0.001),
+				"z": snappedf(target.z, 0.001),
+				"duration": MEDKIT_DURATION_SEC,
+				"source": str(projectile.get("source", "manual")),
+			})
+		root.queue_free()
+		_projectiles.remove_at(index)
+
+
+func _create_payload_visual() -> Node3D:
+	var root := Node3D.new()
+	root.name = "MainShipMedkitPayload"
+	var body := MeshInstance3D.new()
+	var body_mesh := BoxMesh.new()
+	body_mesh.size = Vector3(0.14, 0.10, 0.12)
+	body.mesh = body_mesh
+	var body_mat := StandardMaterial3D.new()
+	body_mat.albedo_color = Color(0.90, 0.08, 0.06, 1.0)
+	body_mat.roughness = 0.52
+	body.material_override = body_mat
+	body.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	root.add_child(body)
+	var cross_mat := StandardMaterial3D.new()
+	cross_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	cross_mat.albedo_color = Color(1.0, 0.96, 0.86, 1.0)
+	for cross_size in [Vector3(0.075, 0.012, 0.026), Vector3(0.026, 0.012, 0.075)]:
+		var bar := MeshInstance3D.new()
+		var bar_mesh := BoxMesh.new()
+		bar_mesh.size = cross_size
+		bar.mesh = bar_mesh
+		bar.position.y = 0.056
+		bar.material_override = cross_mat
+		bar.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		root.add_child(bar)
+	return root
 
 
 func _heal_troops(center: Vector3, heal_time: float) -> void:
@@ -306,3 +398,11 @@ func _remove_zone(index: int) -> void:
 func _clear_zones() -> void:
 	for index in range(_active_zones.size() - 1, -1, -1):
 		_remove_zone(index)
+
+
+func _clear_projectiles() -> void:
+	for projectile in _projectiles:
+		var root: Node = projectile.get("root", null)
+		if is_instance_valid(root):
+			root.queue_free()
+	_projectiles.clear()

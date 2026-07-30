@@ -2048,6 +2048,10 @@ func _warmup_ship_freeze() -> void:
 
 func _warmup_ship_medkit() -> void:
 	var medkit := BSMedkit.new().init(self)
+	var payload: Node3D = medkit._create_payload_visual()
+	payload.name = "WarmupShipMedkitPayload"
+	payload.position = Vector3(-0.24, 0.10, 0.0)
+	add_child(payload)
 	medkit._activate_zone(Vector3.ZERO, self)
 	if not medkit._active_zones.is_empty():
 		medkit._pulse_zone(medkit._active_zones.back(), 0.85)
@@ -2059,6 +2063,10 @@ func _warmup_ship_medkit() -> void:
 
 func _warmup_ship_rage() -> void:
 	var rage := BSRageSpell.new().init(self)
+	var payload: Node3D = rage._create_payload_visual()
+	payload.name = "WarmupShipRagePayload"
+	payload.position = Vector3(0.24, 0.10, 0.0)
+	add_child(payload)
 	rage._activate_zone(Vector3.ZERO, self)
 	if not rage._active_zones.is_empty():
 		rage._pulse_zone(rage._active_zones.back(), 0.65)

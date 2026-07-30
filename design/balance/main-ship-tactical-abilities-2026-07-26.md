@@ -10,7 +10,7 @@
 | Ability | Ship level | First cost | Repeat cost | Radius | Duration | Effect |
 |---|---:|---:|---:|---:|---:|---|
 | Healing Field | 6 | 6 | +1 each use | 0.72 | 8s | Heals paid troops inside the field |
-| Freeze Orb | 7 | 5 | +1 each use | 0.95 | 6s | Freezes defensive buildings and armed traps |
+| Freeze Orb | 7 | 5 | +1 each use | 0.80 | 4s | Freezes defensive buildings and armed traps |
 | Rage Field | 8 | 7 | +1 each use | 0.82 | 9s | Paid troops gain x2 damage and x1.25 movement/attack speed |
 | Skeleton Barrel | 10 | 8 | +1 each use | Targeted | 18s skeleton lifetime | Deals 650 impact damage and summons 4 skeletons |
 
@@ -22,6 +22,17 @@ than its previous cast.
 Overlapping Healing Fields do not multiply healing frequency. A troop can
 receive at most one healing tick every 0.25 seconds regardless of how many
 fields overlap.
+
+Healing Field, Freeze Orb, Rage Field, Rally, Cannon, and Skeleton Barrel all
+launch visibly from the Main Ship. Healing, control, and boost durations begin
+only when their payload reaches the selected point.
+
+## Healing Field
+
+- Event: `medkit_drop`.
+- Client mode: `ship_medkit_mode`.
+- Supply-pod flight time: 0.6s.
+- Healing starts on impact, not when energy is spent.
 
 ## Freeze Orb
 
@@ -39,7 +50,8 @@ fields overlap.
 
 - Event: `rage_drop`.
 - Client mode: `ship_rage_mode`.
-- Placement is immediate.
+- Projectile flight time: 0.6s.
+- The field and its duration start on impact.
 - Damage multiplier: x2.
 - Movement and attack speed multiplier: x1.25.
 - The field checks eligibility every 0.2s and grants a 0.25s edge grace period.
@@ -94,7 +106,7 @@ grants additional energy and can extend these limits during a successful raid.
 1. The server validates ship level, canonical escalating cost, energy,
    coordinates, and the barrel target before mutating combat state.
 2. Rejected actions spend no energy and do not advance the use counter.
-3. Freeze is applied at projectile impact, not cast time.
+3. Healing, Freeze, and Rage are applied at projectile impact, not cast time.
 4. Replay events use the same event names and values as live combat.
 5. Pending projectile effects are included in combat completion checks.
 6. Temporary skeletons are deterministic and are removed at death, expiry, or

@@ -15,21 +15,31 @@ const MAX_PORT_SHIP_LEVEL: int = 3
 const MAX_PLAYER_SHIP_LEVEL: int = 10
 const BUILDING_CAMERA_FACING_YAW_DEGREES: float = 90.0
 const PLAYER_SHIP_LEVELS: Dictionary = {
-	1: {"capacity": 3, "energy": 4, "town_hall": 1, "cost": {}},
-	2: {"capacity": 12, "energy": 6, "town_hall": 2, "cost": {"gold": 2000, "wood": 4000, "ore": 3400}},
-	3: {"capacity": 27, "energy": 8, "town_hall": 3, "cost": {"gold": 3600, "wood": 7200, "ore": 6200}},
-	4: {"capacity": 36, "energy": 10, "town_hall": 4, "cost": {"gold": 4800, "wood": 9600, "ore": 8200}},
-	5: {"capacity": 45, "energy": 12, "town_hall": 5, "cost": {"gold": 6500, "wood": 12800, "ore": 11000}},
-	6: {"capacity": 45, "energy": 14, "town_hall": 6, "medkit_unlocked": true, "unlocks": ["Healing Field"], "cost": {"gold": 9000, "wood": 18000, "ore": 15500}},
-	7: {"capacity": 45, "energy": 16, "town_hall": 7, "medkit_unlocked": true, "freeze_unlocked": true, "unlocks": ["Freeze Orb"], "cost": {"gold": 12000, "wood": 24000, "ore": 21000}},
-	8: {"capacity": 45, "energy": 18, "town_hall": 7, "medkit_unlocked": true, "freeze_unlocked": true, "rage_unlocked": true, "unlocks": ["Rage Field"], "cost": {"gold": 16000, "wood": 32000, "ore": 28000}},
-	9: {"capacity": 45, "energy": 20, "town_hall": 7, "medkit_unlocked": true, "freeze_unlocked": true, "rage_unlocked": true, "tactical_reserve_unlocked": true, "unlocks": ["Tactical Reserve (+2 energy)"], "cost": {"gold": 21000, "wood": 42000, "ore": 36000}},
-	10: {"capacity": 45, "energy": 22, "town_hall": 7, "medkit_unlocked": true, "freeze_unlocked": true, "rage_unlocked": true, "tactical_reserve_unlocked": true, "skeleton_barrel_unlocked": true, "unlocks": ["Skeleton Barrel"], "cost": {"gold": 27000, "wood": 54000, "ore": 46000}},
+	1: {"capacity": 3, "energy": 4, "cannon_damage": 500, "cannon_base_cost": 1, "town_hall": 1, "cost": {}},
+	2: {"capacity": 12, "energy": 6, "cannon_damage": 700, "cannon_base_cost": 1, "town_hall": 2, "cost": {"gold": 2000, "wood": 4000, "ore": 3400}},
+	3: {"capacity": 27, "energy": 8, "cannon_damage": 1100, "cannon_base_cost": 2, "town_hall": 3, "cost": {"gold": 3600, "wood": 7200, "ore": 6200}},
+	4: {"capacity": 36, "energy": 10, "cannon_damage": 1450, "cannon_base_cost": 2, "town_hall": 4, "cost": {"gold": 4800, "wood": 9600, "ore": 8200}},
+	5: {"capacity": 45, "energy": 12, "cannon_damage": 1800, "cannon_base_cost": 3, "town_hall": 5, "cost": {"gold": 6500, "wood": 12800, "ore": 11000}},
+	6: {"capacity": 45, "energy": 14, "cannon_damage": 2250, "cannon_base_cost": 3, "town_hall": 6, "medkit_unlocked": true, "unlocks": ["Healing Field"], "cost": {"gold": 9000, "wood": 18000, "ore": 15500}},
+	7: {"capacity": 45, "energy": 16, "cannon_damage": 2800, "cannon_base_cost": 4, "town_hall": 7, "medkit_unlocked": true, "freeze_unlocked": true, "unlocks": ["Freeze Orb"], "cost": {"gold": 12000, "wood": 24000, "ore": 21000}},
+	8: {"capacity": 45, "energy": 18, "cannon_damage": 3400, "cannon_base_cost": 4, "town_hall": 7, "medkit_unlocked": true, "freeze_unlocked": true, "rage_unlocked": true, "unlocks": ["Rage Field"], "cost": {"gold": 16000, "wood": 32000, "ore": 28000}},
+	9: {"capacity": 45, "energy": 20, "cannon_damage": 4100, "cannon_base_cost": 5, "town_hall": 7, "medkit_unlocked": true, "freeze_unlocked": true, "rage_unlocked": true, "tactical_reserve_unlocked": true, "unlocks": ["Tactical Reserve (+2 energy)"], "cost": {"gold": 21000, "wood": 42000, "ore": 36000}},
+	10: {"capacity": 45, "energy": 22, "cannon_damage": 4900, "cannon_base_cost": 5, "town_hall": 7, "medkit_unlocked": true, "freeze_unlocked": true, "rage_unlocked": true, "tactical_reserve_unlocked": true, "skeleton_barrel_unlocked": true, "unlocks": ["Skeleton Barrel"], "cost": {"gold": 27000, "wood": 54000, "ore": 46000}},
 }
 
 func _main_ship_energy_for_level(level: int) -> int:
 	var normalized_level: int = clampi(level, 1, MAX_PLAYER_SHIP_LEVEL)
 	return int(PLAYER_SHIP_LEVELS.get(normalized_level, {}).get("energy", 4))
+
+
+func _main_ship_cannon_damage_for_level(level: int) -> int:
+	var normalized_level: int = clampi(level, 1, MAX_PLAYER_SHIP_LEVEL)
+	return int(PLAYER_SHIP_LEVELS.get(normalized_level, {}).get("cannon_damage", 500))
+
+
+func _main_ship_cannon_base_cost_for_level(level: int) -> int:
+	var normalized_level: int = clampi(level, 1, MAX_PLAYER_SHIP_LEVEL)
+	return int(PLAYER_SHIP_LEVELS.get(normalized_level, {}).get("cannon_base_cost", 1))
 
 
 func _main_ship_ability_labels(level: int) -> Array[String]:
@@ -6294,6 +6304,8 @@ func _send_main_ship_panel(ship: Dictionary) -> void:
 	var next_capacity: int = int(next_config.get("capacity", current_config.get("capacity", 45)))
 	var energy: int = int(ship.get("energy", PLAYER_SHIP_LEVELS.get(level, {}).get("energy", 4)))
 	var next_energy: int = int(next_config.get("energy", energy))
+	var cannon_damage: int = int(ship.get("cannon_damage", current_config.get("cannon_damage", 500)))
+	var cannon_base_cost: int = int(ship.get("cannon_base_cost", current_config.get("cannon_base_cost", 1)))
 	var medkit_unlocked: bool = bool(ship.get("medkit_unlocked", current_config.get("medkit_unlocked", false)))
 	var freeze_unlocked: bool = bool(ship.get("freeze_unlocked", current_config.get("freeze_unlocked", false)))
 	var rage_unlocked: bool = bool(ship.get("rage_unlocked", current_config.get("rage_unlocked", false)))
@@ -6312,6 +6324,10 @@ func _send_main_ship_panel(ship: Dictionary) -> void:
 		"ship_next_capacity": next_capacity,
 		"ship_energy": energy,
 		"ship_next_energy": next_energy,
+		"ship_cannon_damage": cannon_damage,
+		"ship_next_cannon_damage": int(next_config.get("cannon_damage", cannon_damage)),
+		"ship_cannon_base_cost": cannon_base_cost,
+		"ship_next_cannon_base_cost": int(next_config.get("cannon_base_cost", cannon_base_cost)),
 		"ship_medkit_unlocked": medkit_unlocked,
 		"ship_freeze_unlocked": freeze_unlocked,
 		"ship_rage_unlocked": rage_unlocked,
@@ -6428,12 +6444,18 @@ func _apply_main_ship_state_from_server(ship_data: Dictionary) -> void:
 		var current_config: Dictionary = PLAYER_SHIP_LEVELS.get(server_level, {})
 		var next_config: Dictionary = PLAYER_SHIP_LEVELS.get(server_level + 1, {}) if server_level < MAX_PLAYER_SHIP_LEVEL else {}
 		var server_energy: int = int(ship_data.get("energy", current_config.get("energy", 4)))
+		var server_cannon_damage: int = int(ship_data.get("cannon_damage", current_config.get("cannon_damage", 500)))
+		var server_cannon_base_cost: int = int(ship_data.get("cannon_base_cost", current_config.get("cannon_base_cost", 1)))
 		bridge.send_to_react("ship_updated", {
 			"ship_troops": server_troops,
 			"ship_level": server_level,
 			"ship_capacity": server_capacity,
 			"ship_energy": server_energy,
 			"ship_next_energy": int(next_config.get("energy", server_energy)),
+			"ship_cannon_damage": server_cannon_damage,
+			"ship_next_cannon_damage": int(next_config.get("cannon_damage", server_cannon_damage)),
+			"ship_cannon_base_cost": server_cannon_base_cost,
+			"ship_next_cannon_base_cost": int(next_config.get("cannon_base_cost", server_cannon_base_cost)),
 			"ship_medkit_unlocked": bool(ship_data.get("medkit_unlocked", current_config.get("medkit_unlocked", false))),
 			"ship_freeze_unlocked": bool(ship_data.get("freeze_unlocked", current_config.get("freeze_unlocked", false))),
 			"ship_rage_unlocked": bool(ship_data.get("rage_unlocked", current_config.get("rage_unlocked", false))),

@@ -48,6 +48,26 @@ time, and every individual upgrade cost fits within the TH7 resource caps.
 | 9 | 45 | 20 | Tactical Reserve |
 | 10 | 45 | 22 | Skeleton Barrel |
 
+### Cannon Progression
+
+| Ship level | First shot cost | Damage | Max starting-energy damage |
+|---:|---:|---:|---:|
+| 1 | 1 | 500 | 1,000 |
+| 2 | 1 | 700 | 2,100 |
+| 3 | 2 | 1,100 | 2,200 |
+| 4 | 2 | 1,450 | 4,350 |
+| 5 | 3 | 1,800 | 5,400 |
+| 6 | 3 | 2,250 | 6,750 |
+| 7 | 4 | 2,800 | 8,400 |
+| 8 | 4 | 3,400 | 10,200 |
+| 9 | 5 | 4,100 | 12,300 |
+| 10 | 5 | 4,900 | 14,700 |
+
+Each repeat shot costs one more energy. The ceiling uses starting energy only
+and excludes energy refunded by destroyed buildings. At level 7, one cannon
+hit removes roughly 23-34% of a maximum-level defensive building, so it is
+useful without becoming a one-shot substitute for troops.
+
 ### Repeat-Cast Curve At Level 10
 
 | Ability | First costs | Maximum casts from 22 starting energy |
@@ -70,5 +90,6 @@ the cumulative amount at once.
 
 ### Values That Need Attention
 
-No immediate numeric change is required. Revisit the L9 cost only if telemetry
-shows a materially lower upgrade conversion rate than L8 and L10.
+The cannon now scales with ship progression, while Freeze was reduced from
+6 seconds and 0.95 radius to 4 seconds and 0.80 radius. Revisit the L9 cost only
+if telemetry shows a materially lower upgrade conversion rate than L8 and L10.

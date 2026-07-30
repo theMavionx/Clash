@@ -21,6 +21,7 @@ var _ship_cannonballs: Array = []
 var _ship_cannon_cooldown: float = 0.0
 var _cannon_energy: int = 4
 var _cannon_next_cost: int = 1
+var _cannon_damage: int = 500
 var _attack_ship_wave_tweens: Array = []
 var _ship_flash: MeshInstance3D = null
 var _ship_flash_timer: float = 0.0
@@ -32,7 +33,6 @@ var _ship_flash_textures: Array = []
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-const SHIP_CANNON_DAMAGE: int = 500
 const SHIP_CANNON_SPEED: float = 1.2
 const SHIP_CANNON_HIT_SQ: float = 0.03 * 0.03
 const SHIP_CANNON_RELOAD: float = 1.0
@@ -101,7 +101,8 @@ func reset(ship_level: int = 0) -> void:
 			resolved_level = int(controller.get_meta("ship_level", 1))
 	resolved_level = clampi(resolved_level, 1, 10)
 	_cannon_energy = int(bs._main_ship_energy_for_level(resolved_level)) if is_instance_valid(bs) else 4
-	_cannon_next_cost = 1
+	_cannon_damage = int(bs._main_ship_cannon_damage_for_level(resolved_level)) if is_instance_valid(bs) else 500
+	_cannon_next_cost = int(bs._main_ship_cannon_base_cost_for_level(resolved_level)) if is_instance_valid(bs) else 1
 	if is_instance_valid(bs):
 		bs.call_deferred("_update_cannon_energy_ui")
 
@@ -447,7 +448,7 @@ func _update_ship_cannonballs(delta: float) -> void:
 		c.node.global_position = Vector3(flat_pos.x, flat_pos.y + arc_y, flat_pos.z)
 		if t >= 1.0:
 			var bdata: Dictionary = c.bdata
-			bdata["hp"] = max(0, bdata.get("hp", 0) - SHIP_CANNON_DAMAGE)
+			bdata["hp"] = max(0, bdata.get("hp", 0) - _cannon_damage)
 			if bdata["hp"] <= 0:
 				for building_sys in bs._building_systems:
 					if bdata in building_sys.placed_buildings:
@@ -499,6 +500,7 @@ func _update_cannon_energy_ui() -> void:
 		bridge.send_to_react("cannon_energy", {
 			"energy": _cannon_energy,
 			"next_cost": _cannon_next_cost,
+			"cannon_damage": _cannon_damage,
 			"rally_next_cost": rally_cost,
 			"medkit_cost": medkit_cost,
 			"medkit_unlocked": medkit_unlocked,

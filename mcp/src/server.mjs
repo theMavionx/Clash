@@ -1193,8 +1193,9 @@ function normalizeAiShipsPlan(rawShips, fleet) {
   return { plan };
 }
 
-function validateAiAttackEnergy(cannonShots = [], rallyMarker = null) {
-  let energy = combat.CANNON_INITIAL_ENERGY;
+function validateAiAttackEnergy(cannonShots = [], rallyMarker = null, shipLevel = 1) {
+  const normalizedShipLevel = Math.max(1, Math.trunc(Number(shipLevel) || 1));
+  let energy = combat.cannonInitialEnergyForShipLevel(normalizedShipLevel);
   let shotNumber = 0;
   const sorted = [
     ...cannonShots.map((shot, index) => ({ kind: 'shot', t: cannonShotTime(shot, index) })),
@@ -1211,7 +1212,7 @@ function validateAiAttackEnergy(cannonShots = [], rallyMarker = null) {
       lastShotT = item.t;
     }
     const cost = item.kind === 'shot'
-      ? combat.cannonShotCost(++shotNumber)
+      ? combat.cannonShotCost(normalizedShipLevel, ++shotNumber)
       : ++rallyCount;
     if (energy < cost) return { ok: false, error: `Not enough cannon energy for ${item.kind} at t=${item.t}` };
     energy -= cost;
@@ -3464,8 +3465,9 @@ function registerTools(server, session, agentKey, reqMeta = {}) {
         minimum_loaded_troops_before_attack: AI_ATTACK_MIN_TOTAL_TROOPS,
         default_attack_loadout: AI_ATTACK_DEFAULT_LOADOUT,
         fleet_preparation: 'execute_ai_attack_plan auto-reinforces ships and loads default troops before reserving cooldown; if fewer than the minimum troops remain loaded, it rejects the battle.',
-        cannon_initial_energy: combat.CANNON_INITIAL_ENERGY,
-        cannon_shot_cost: 'shot number: 1, 2, 3...',
+        cannon_initial_energy: combat.cannonInitialEnergyForShipLevel(game.getPlayerShip(playerId).level),
+        cannon_damage: combat.cannonDamageForShipLevel(game.getPlayerShip(playerId).level),
+        cannon_shot_cost: 'level-based base cost, then +1 energy per repeated shot',
         cannon_reload_sec: combat.CANNON_RELOAD_SEC,
         cannon_damage_timing: 'damage applies on cannonball impact, not at launch',
         cannon_targets: 'AI cannon shots should target defensive towers only: turret or archer_tower',
@@ -3567,7 +3569,12 @@ function registerTools(server, session, agentKey, reqMeta = {}) {
         game.finishBattleSession(enemy.battle_session_id, playerId, enemy.id, 'cancelled');
         return abortAiAttack(shipsPlan.error, { fleet, slots: buildAttackSlots() });
       }
-      const energyCheck = validateAiAttackEnergy(resolvedCannonShots, resolvedRallyMarker);
+      const playerShip = game.getPlayerShip(playerId);
+      const energyCheck = validateAiAttackEnergy(
+        resolvedCannonShots,
+        resolvedRallyMarker,
+        playerShip.level,
+      );
       if (!energyCheck.ok) {
         game.finishBattleSession(enemy.battle_session_id, playerId, enemy.id, 'cancelled');
         return abortAiAttack(energyCheck.error);
@@ -3653,6 +3660,7 @@ function registerTools(server, session, agentKey, reqMeta = {}) {
         gridConfig: combat.CANONICAL_GRID_CONFIG,
         gridConfigs: combat.CANONICAL_GRID_CONFIGS,
         serverTroopLevels,
+        serverShipLevel: playerShip.level,
         debugTrace: BATTLE_DEBUG_TRACE,
       });
       const finalResult = victoryCheck.valid ? 'victory' : 'defeat';
@@ -3665,6 +3673,7 @@ function registerTools(server, session, agentKey, reqMeta = {}) {
             gridConfig: combat.CANONICAL_GRID_CONFIG,
             gridConfigs: combat.CANONICAL_GRID_CONFIGS,
             serverTroopLevels,
+            serverShipLevel: playerShip.level,
             debugTrace: BATTLE_DEBUG_TRACE,
           });
       if (!verification.valid) {

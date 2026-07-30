@@ -17,11 +17,11 @@ const {
   WIND_MAGE, WINDLING_STATS, WINDLING_LIFETIME_SEC,
   windMageStableHash, windMageHashUnit,
   MAX_SHIPS, TROOPS_PER_SHIP, MAX_TROOPS, TIME_LIMIT_SEC, SAIL_DELAY_SEC,
-  CANNON_DAMAGE, cannonInitialEnergyForShipLevel, CANNON_ENERGY_PER_DESTROY,
+  cannonDamageForShipLevel, cannonInitialEnergyForShipLevel, CANNON_ENERGY_PER_DESTROY,
   CANNON_RELOAD_SEC, CANNON_SPEED, CANNON_MIN_FLIGHT_SEC,
   CANNON_START_POS, CANNON_TARGET_Y,
   MEDKIT_UNLOCK_SHIP_LEVEL, MEDKIT_ENERGY_COST, MEDKIT_ENERGY_COST_INCREMENT,
-  MEDKIT_DURATION_SEC, MEDKIT_RADIUS, MEDKIT_TICK_SEC,
+  MEDKIT_TRAVEL_SEC, MEDKIT_DURATION_SEC, MEDKIT_RADIUS, MEDKIT_TICK_SEC,
   MEDKIT_HEAL_PER_TICK,
   FREEZE_DROP, RAGE_DROP, SKELETON_BARREL, escalatingAbilityCost,
   cannonShotCost, VALID_TROOP_TYPES, normalizeNftRarity,
@@ -822,6 +822,7 @@ function verifyReplay({
   const pendingSkeletonBarrels = [];
 
   const authoritativeShipLevel = Math.max(1, Math.trunc(Number(serverShipLevel) || 1));
+  const cannonDamage = cannonDamageForShipLevel(authoritativeShipLevel);
   let cannonEnergy = cannonInitialEnergyForShipLevel(authoritativeShipLevel);
   let cannonShotsFired = 0;
   let cannonEventsIgnored = 0;
@@ -836,6 +837,7 @@ function verifyReplay({
   let medkitEventsIgnored = 0;
   let medkitHealingApplied = 0;
   let medkitHealTicks = 0;
+  const pendingMedkits = [];
   const activeMedkits = [];
   let freezeDropUses = 0;
   let freezeDropEventsAccepted = 0;
@@ -850,6 +852,7 @@ function verifyReplay({
   let rageBoostedAttacks = 0;
   let rageBonusDamageApplied = 0;
   let nextRageDropId = 1;
+  const pendingRageDrops = [];
   const activeRageDrops = [];
   let skeletonBarrelUses = 0;
   let skeletonBarrelEventsAccepted = 0;
@@ -2285,7 +2288,7 @@ function verifyReplay({
           });
           continue;
         }
-        const cost = cannonShotCost(cannonShotsFired + 1);
+        const cost = cannonShotCost(authoritativeShipLevel, cannonShotsFired + 1);
         if (cannonEnergy < cost) {
           cannonEventsIgnored++;
           traceEvent('cannon_ignored', {
@@ -2309,6 +2312,7 @@ function verifyReplay({
           traceEvent('cannon_fire', {
             shot: cannonShotsFired,
             cost,
+            damage: cannonDamage,
             energyAfter: cannonEnergy,
             target: traceEntityPayload(target, 'building'),
             actionTime: Math.round(actionTime * 1000) / 1000,
@@ -2410,20 +2414,22 @@ function verifyReplay({
         cannonEnergy -= medkitCost;
         medkitUses++;
         medkitEventsAccepted++;
-        activeMedkits.push({
+        const impactAt = actionTime + MEDKIT_TRAVEL_SEC;
+        pendingMedkits.push({
+          use: medkitUses,
+          cost: medkitCost,
           x: point.x,
           z: point.z,
-          startAt: actionTime,
-          nextTickAt: actionTime + MEDKIT_TICK_SEC,
-          expiresAt: actionTime + MEDKIT_DURATION_SEC,
+          time: impactAt,
         });
-        traceEvent('medkit_drop', {
+        traceEvent('medkit_fire', {
           use: medkitUses,
           cost: medkitCost,
           energyAfter: cannonEnergy,
           x: round3(point.x),
           z: round3(point.z),
-          expiresAt: round3(actionTime + MEDKIT_DURATION_SEC),
+          travelTime: MEDKIT_TRAVEL_SEC,
+          impactAt: round3(impactAt),
         });
       }
 
@@ -2522,28 +2528,22 @@ function verifyReplay({
         cannonEnergy -= rageDropCost;
         rageDropUses++;
         rageDropEventsAccepted++;
-        const field = {
-          id: nextRageDropId++,
+        const impactAt = actionTime + RAGE_DROP.travelSec;
+        pendingRageDrops.push({
+          use: rageDropUses,
+          cost: rageDropCost,
           x: pointResult.point.x,
           z: pointResult.point.z,
-          startAt: actionTime,
-          expiresAt: actionTime + RAGE_DROP.durationSec,
-        };
-        activeRageDrops.push(field);
-        traceEvent('rage_drop', {
-          fieldId: field.id,
+          time: impactAt,
+        });
+        traceEvent('rage_drop_fire', {
           use: rageDropUses,
           cost: rageDropCost,
           energyAfter: cannonEnergy,
-          x: round3(field.x),
-          z: round3(field.z),
-          radius: RAGE_DROP.radius,
-          duration: RAGE_DROP.durationSec,
-          graceSec: RAGE_DROP.graceSec,
-          damageMultiplier: RAGE_DROP.damageMultiplier,
-          attackSpeedMultiplier: RAGE_DROP.attackSpeedMultiplier,
-          moveSpeedMultiplier: RAGE_DROP.moveSpeedMultiplier,
-          expiresAt: round3(field.expiresAt),
+          x: round3(pointResult.point.x),
+          z: round3(pointResult.point.z),
+          travelTime: RAGE_DROP.travelSec,
+          impactAt: round3(impactAt),
         });
       }
 
@@ -2724,10 +2724,11 @@ function verifyReplay({
         const target = shot.target;
         if (target && target.hp > 0) {
           const hpBefore = target.hp;
-          target.hp -= CANNON_DAMAGE;
+          target.hp -= cannonDamage;
           traceEvent('cannon_hit', {
             buildingId: target.id,
             type: target.type,
+            damage: cannonDamage,
             target: traceEntityPayload(target, 'building'),
             hpBefore,
             hpAfter: target.hp,
@@ -2741,7 +2742,28 @@ function verifyReplay({
     }
 
     // ── Build alive lists ──
-    // Freeze Orbs and Skeleton Barrels use fixed authoritative travel times.
+    // Ship payloads use fixed authoritative travel times. Client payload
+    // timing is ignored, keeping visual and verified impacts in sync.
+    for (let i = pendingMedkits.length - 1; i >= 0; i--) {
+      if (pendingMedkits[i].time <= time + 1e-9) {
+        const impact = pendingMedkits.splice(i, 1)[0];
+        activeMedkits.push({
+          x: impact.x,
+          z: impact.z,
+          startAt: impact.time,
+          nextTickAt: impact.time + MEDKIT_TICK_SEC,
+          expiresAt: impact.time + MEDKIT_DURATION_SEC,
+        });
+        traceEvent('medkit_drop', {
+          use: impact.use,
+          cost: impact.cost,
+          x: round3(impact.x),
+          z: round3(impact.z),
+          expiresAt: round3(impact.time + MEDKIT_DURATION_SEC),
+        });
+      }
+    }
+
     // Client payload timing is ignored, keeping visual and verified impacts in sync.
     for (let i = pendingFreezeDrops.length - 1; i >= 0; i--) {
       if (pendingFreezeDrops[i].time <= time + 1e-9) {
@@ -2752,6 +2774,34 @@ function verifyReplay({
           impact.use,
           impact.cost,
         );
+      }
+    }
+
+    for (let i = pendingRageDrops.length - 1; i >= 0; i--) {
+      if (pendingRageDrops[i].time <= time + 1e-9) {
+        const impact = pendingRageDrops.splice(i, 1)[0];
+        const field = {
+          id: nextRageDropId++,
+          x: impact.x,
+          z: impact.z,
+          startAt: impact.time,
+          expiresAt: impact.time + RAGE_DROP.durationSec,
+        };
+        activeRageDrops.push(field);
+        traceEvent('rage_drop', {
+          fieldId: field.id,
+          use: impact.use,
+          cost: impact.cost,
+          x: round3(field.x),
+          z: round3(field.z),
+          radius: RAGE_DROP.radius,
+          duration: RAGE_DROP.durationSec,
+          graceSec: RAGE_DROP.graceSec,
+          damageMultiplier: RAGE_DROP.damageMultiplier,
+          attackSpeedMultiplier: RAGE_DROP.attackSpeedMultiplier,
+          moveSpeedMultiplier: RAGE_DROP.moveSpeedMultiplier,
+          expiresAt: round3(field.expiresAt),
+        });
       }
     }
 
@@ -3996,7 +4046,9 @@ function verifyReplay({
       !anyAlive
       && pendingSpawns.length === 0
       && pendingCannonballs.length === 0
+      && pendingMedkits.length === 0
       && pendingFreezeDrops.length === 0
+      && pendingRageDrops.length === 0
       && pendingSkeletonBarrels.length === 0
       && actionIdx >= sortedActions.length
     ) {
@@ -4056,6 +4108,7 @@ function verifyReplay({
     _medkitEventsIgnored: medkitEventsIgnored,
     _medkitHealingApplied: round3(medkitHealingApplied),
     _medkitHealTicks: medkitHealTicks,
+    _pendingMedkitsLeft: pendingMedkits.length,
     _activeMedkitsLeft: activeMedkits.length,
     _freezeDropUses: freezeDropUses,
     _freezeDropEventsAccepted: freezeDropEventsAccepted,
@@ -4070,6 +4123,7 @@ function verifyReplay({
     _rageBoostedMoveTicks: rageBoostedMoveTicks,
     _rageBoostedAttacks: rageBoostedAttacks,
     _rageBonusDamageApplied: round3(rageBonusDamageApplied),
+    _pendingRageDropsLeft: pendingRageDrops.length,
     _activeRageDropsLeft: activeRageDrops.length,
     _skeletonBarrelUses: skeletonBarrelUses,
     _skeletonBarrelEventsAccepted: skeletonBarrelEventsAccepted,

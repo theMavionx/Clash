@@ -6,10 +6,13 @@ const {
   CANONICAL_GRID_CONFIGS,
   FREEZE_DROP,
   MEDKIT_ENERGY_COST,
+  MEDKIT_TRAVEL_SEC,
   PLAYER_SHIP_LEVELS,
   RAGE_DROP,
   SKELETON_BARREL,
   TROOP_STATS,
+  cannonDamageForShipLevel,
+  cannonShotCost,
 } = require('./combat_defs');
 const { BUILDING_DEFS } = require('./db');
 
@@ -113,8 +116,16 @@ assert.deepEqual(
     energyCost: 5,
     costIncrement: 1,
     travelSec: 0.6,
-    radius: 0.95,
-    durationSec: 6,
+    radius: 0.80,
+    durationSec: 4,
+  },
+);
+assert.deepEqual(
+  {
+    travelSec: MEDKIT_TRAVEL_SEC,
+  },
+  {
+    travelSec: 0.6,
   },
 );
 assert.deepEqual(
@@ -122,6 +133,7 @@ assert.deepEqual(
     unlockShipLevel: RAGE_DROP.unlockShipLevel,
     energyCost: RAGE_DROP.energyCost,
     costIncrement: RAGE_DROP.costIncrement,
+    travelSec: RAGE_DROP.travelSec,
     radius: RAGE_DROP.radius,
     durationSec: RAGE_DROP.durationSec,
     damageMultiplier: RAGE_DROP.damageMultiplier,
@@ -133,6 +145,7 @@ assert.deepEqual(
     unlockShipLevel: 8,
     energyCost: 7,
     costIncrement: 1,
+    travelSec: 0.6,
     radius: 0.82,
     durationSec: 9,
     damageMultiplier: 2,
@@ -179,6 +192,41 @@ const validationBuildings = [
 const validationPoint = buildingPoint(validationBuildings[1]);
 const commonDeploy = deploy('Mimic', 7);
 
+const expectedCannonDamage = [500, 700, 1100, 1450, 1800, 2250, 2800, 3400, 4100, 4900];
+const expectedCannonBaseCost = [1, 1, 2, 2, 3, 3, 4, 4, 5, 5];
+for (let level = 1; level <= expectedCannonDamage.length; level += 1) {
+  assert.equal(cannonDamageForShipLevel(level), expectedCannonDamage[level - 1]);
+  assert.equal(cannonShotCost(level, 1), expectedCannonBaseCost[level - 1]);
+  assert.equal(cannonShotCost(level, 2), expectedCannonBaseCost[level - 1] + 1);
+  if (level > 1) {
+    assert.ok(
+      cannonDamageForShipLevel(level) > cannonDamageForShipLevel(level - 1),
+      `Main Ship level ${level} cannon damage must increase`,
+    );
+  }
+}
+
+const levelSevenCannon = simulate(validationBuildings, [
+  commonDeploy,
+  { type: 'cannon_fire', buildingId: 2, t: 0 },
+  { type: 'cannon_fire', buildingId: 2, t: 1.1 },
+  { type: 'cannon_fire', buildingId: 2, t: 2.2 },
+  { type: 'cannon_fire', buildingId: 2, t: 3.3 },
+], { shipLevel: 7 });
+assert.equal(levelSevenCannon._cannonShotsAccepted, 3);
+assert.equal(levelSevenCannon._cannonEventsIgnored, 1);
+assert.deepEqual(
+  levelSevenCannon._trace
+    .filter(row => row.kind === 'cannon_fire')
+    .map(row => ({ cost: row.cost, damage: row.damage })),
+  [
+    { cost: 4, damage: 2800 },
+    { cost: 5, damage: 2800 },
+    { cost: 6, damage: 2800 },
+  ],
+);
+assert.equal(levelSevenCannon._cannonEnergy, 1);
+
 const freezeDuplicate = simulate(validationBuildings, [
   commonDeploy,
   { type: FREEZE_DROP.actionType, ...validationPoint, t: 0 },
@@ -202,7 +250,7 @@ assert.equal(rageDuplicate._rageDropEventsAccepted, 2);
 assert.equal(rageDuplicate._rageDropEventsIgnored, 0);
 assert.deepEqual(
   rageDuplicate._trace
-    .filter(row => row.kind === 'rage_drop')
+    .filter(row => row.kind === 'rage_drop_fire')
     .map(row => row.cost),
   [7, 8],
 );
@@ -326,7 +374,7 @@ assert.equal(
       && row.t < freezeExpiresAt
   ),
   false,
-  'the frozen turret must not fire during the six-second effect',
+  'the frozen turret must not fire during the four-second effect',
 );
 assert.ok(
   freezeBaseline._trace.some(
@@ -344,7 +392,7 @@ assert.equal(
       && row.t < freezeExpiresAt
   ),
   false,
-  'the frozen armed trap must not trigger during the six-second effect',
+  'the frozen armed trap must not trigger during the four-second effect',
 );
 assert.ok(
   frozen._trace.some(
@@ -370,9 +418,17 @@ const boostedHits = raged._trace.filter(
     && row.troop === 'knight'
     && row.rageBoosted,
 );
+const rageFire = raged._trace.find(row => row.kind === 'rage_drop_fire');
+const rageImpact = raged._trace.find(row => row.kind === 'rage_drop');
+assert.ok(rageFire, 'rage must record the ship launch');
+assert.ok(rageImpact, 'rage must activate when the payload lands');
+assert.ok(
+  rageImpact.t >= RAGE_DROP.travelSec
+    && rageImpact.t <= RAGE_DROP.travelSec + 0.02,
+  'rage duration must begin after the payload flight',
+);
 assert.ok(boostedHits.length >= 2, 'a paid troop inside rage must land boosted attacks');
 assert.equal(boostedHits[0].damage, TROOP_STATS.knight[7].damage * 2);
-assert.ok(raged._rageBoostedMoveTicks > 0);
 assert.ok(raged._rageBoostedAttacks > 0);
 assert.ok(raged._rageBonusDamageApplied > 0);
 assert.ok(
@@ -398,6 +454,10 @@ const graceResult = simulate([graceTarget], [
   deploy('Knight', 7),
   { type: RAGE_DROP.actionType, ...gracePoint, t: 0 },
 ]);
+assert.ok(
+  graceResult._rageBoostedMoveTicks > 0,
+  'rage must accelerate a paid troop that is still moving when the payload lands',
+);
 const rageExit = graceResult._trace.find(
   row => row.kind === 'rage_exit' && row.troop === 'knight',
 );
@@ -574,6 +634,15 @@ const medkitIsolation = simulate(medkitIsolationBuildings, [
   { type: SKELETON_BARREL.actionType, buildingId: 301, t: 0 },
   { type: 'medkit_drop', ...medkitIsolationPoint, t: 0 },
 ]);
+const medkitFire = medkitIsolation._trace.find(row => row.kind === 'medkit_fire');
+const medkitImpact = medkitIsolation._trace.find(row => row.kind === 'medkit_drop');
+assert.ok(medkitFire, 'medkit must record the ship launch');
+assert.ok(medkitImpact, 'medkit field must activate when the payload lands');
+assert.ok(
+  medkitImpact.t >= MEDKIT_TRAVEL_SEC
+    && medkitImpact.t <= MEDKIT_TRAVEL_SEC + 0.02,
+  'medkit duration must begin after the payload flight',
+);
 assert.equal(medkitIsolation._medkitEventsAccepted, 1);
 assert.ok(
   medkitIsolation._trace.some(

@@ -12,6 +12,7 @@ const {
   MEDKIT_DURATION_SEC,
   MEDKIT_ENERGY_COST,
   MEDKIT_ENERGY_COST_INCREMENT,
+  MEDKIT_TRAVEL_SEC,
   MEDKIT_HEAL_PER_TICK,
   MEDKIT_RADIUS,
   MEDKIT_TICK_SEC,
@@ -540,6 +541,8 @@ for (const [level, config] of Object.entries(PLAYER_SHIP_LEVELS)) {
   assert.ok(line, `Main Ship client level ${level} progression is missing`);
   assert.match(line, new RegExp(`"capacity":\\s*${config.capacity}`));
   assert.match(line, new RegExp(`"energy":\\s*${config.energy}`));
+  assert.match(line, new RegExp(`"cannon_damage":\\s*${config.cannon_damage}`));
+  assert.match(line, new RegExp(`"cannon_base_cost":\\s*${config.cannon_base_cost}`));
   for (const [resource, amount] of Object.entries(config.cost)) {
     if (Number(level) === 1) continue;
     assert.match(line, new RegExp(`"${resource}":\\s*${amount}`));
@@ -550,6 +553,7 @@ for (const [name, expected] of Object.entries({
   MEDKIT_UNLOCK_SHIP_LEVEL,
   MEDKIT_ENERGY_COST,
   MEDKIT_ENERGY_COST_INCREMENT,
+  MEDKIT_FLIGHT_SEC: MEDKIT_TRAVEL_SEC,
   MEDKIT_DURATION_SEC,
   MEDKIT_RADIUS,
   MEDKIT_TICK_SEC,
@@ -582,6 +586,7 @@ for (const [name, expected] of Object.entries({
   UNLOCK_SHIP_LEVEL: RAGE_DROP.unlockShipLevel,
   ENERGY_COST: RAGE_DROP.energyCost,
   ENERGY_COST_INCREMENT: RAGE_DROP.costIncrement,
+  FLIGHT_SEC: RAGE_DROP.travelSec,
   RADIUS: RAGE_DROP.radius,
   DURATION_SEC: RAGE_DROP.durationSec,
   BOOST_GRACE_SEC: RAGE_DROP.graceSec,

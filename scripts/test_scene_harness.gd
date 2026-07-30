@@ -4190,8 +4190,12 @@ func _verify_test_ship_abilities() -> void:
 		return
 
 	var hp_before := int(target.get("hp", 0))
+	var cannon_cost_before := cannon._cannon_next_cost
 	cannon._fire_ship_cannon(target)
-	if cannon._cannon_energy != expected_energy - 1:
+	if (
+		cannon._cannon_energy != expected_energy - cannon_cost_before
+		or cannon._cannon_next_cost != cannon_cost_before + 1
+	):
 		push_error("[TEST_SHIP_ABILITIES] cannon did not consume energy")
 		get_tree().quit(1)
 		return
@@ -4212,6 +4216,21 @@ func _verify_test_ship_abilities() -> void:
 	reset_test_ship_abilities(false)
 	if not medkit._drop_medkit(target_position):
 		push_error("[TEST_SHIP_ABILITIES] medkit could not be placed")
+		get_tree().quit(1)
+		return
+	if medkit._projectiles.is_empty() or not medkit._active_zones.is_empty():
+		push_error("[TEST_SHIP_ABILITIES] medkit did not launch from the Main Ship")
+		get_tree().quit(1)
+		return
+	var medkit_wait := 0.0
+	while (
+		medkit._active_zones.is_empty()
+		and medkit_wait < BSMedkit.MEDKIT_FLIGHT_SEC + 1.0
+	):
+		await get_tree().process_frame
+		medkit_wait += get_process_delta_time()
+	if medkit._active_zones.is_empty() or not medkit._projectiles.is_empty():
+		push_error("[TEST_SHIP_ABILITIES] medkit field did not activate on impact")
 		get_tree().quit(1)
 		return
 	reset_test_ship_abilities(false)
@@ -4235,10 +4254,21 @@ func _verify_test_ship_abilities() -> void:
 		rage._rage_uses != 1
 		or rage._rage_mode
 		or cannon._cannon_energy != expected_energy - rage_cost
-		or rage._active_zones.is_empty()
-		or not is_instance_valid(rage._active_zones[0].get("root", null))
+		or rage._projectiles.is_empty()
+		or not rage._active_zones.is_empty()
 	):
-		push_error("[TEST_SHIP_ABILITIES] rage browser-style ground click was not applied")
+		push_error("[TEST_SHIP_ABILITIES] rage browser-style click did not launch")
+		get_tree().quit(1)
+		return
+	var rage_click_wait := 0.0
+	while (
+		rage._active_zones.is_empty()
+		and rage_click_wait < BSRageSpell.FLIGHT_SEC + 1.0
+	):
+		await get_tree().process_frame
+		rage_click_wait += get_process_delta_time()
+	if rage._active_zones.is_empty() or not rage._projectiles.is_empty():
+		push_error("[TEST_SHIP_ABILITIES] rage click did not activate on impact")
 		get_tree().quit(1)
 		return
 	reset_test_ship_abilities(false)
@@ -4246,6 +4276,13 @@ func _verify_test_ship_abilities() -> void:
 		push_error("[TEST_SHIP_ABILITIES] rage field could not be placed")
 		get_tree().quit(1)
 		return
+	var rage_wait := 0.0
+	while (
+		rage._active_zones.is_empty()
+		and rage_wait < BSRageSpell.FLIGHT_SEC + 1.0
+	):
+		await get_tree().process_frame
+		rage_wait += get_process_delta_time()
 	var rage_root: Node3D = (
 		rage._active_zones[0].get("root", null)
 		if not rage._active_zones.is_empty()

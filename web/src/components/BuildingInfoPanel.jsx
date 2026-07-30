@@ -1314,12 +1314,16 @@ function BuildingInfoPanel({ onOpenTroops }) {
       const capacity = Number(building.ship_capacity || 0);
       const loaded = Array.isArray(building.ship_troops) ? building.ship_troops.length : 0;
       const energy = Number(building.ship_energy || 4);
+      const cannonDamage = Number(building.ship_cannon_damage || 500);
+      const cannonCost = Number(building.ship_cannon_base_cost || 1);
       const unlockedAbilities = mainShipAbilityLabels(building);
       const leftContent = (
         <>
           <StatBox label="Troop Capacity" current={capacity} />
           <StatBox label="Loaded Slots" current={loaded} />
           <StatBox label="Battle Energy" current={energy} />
+          <StatBox label="Cannon Damage" current={cannonDamage.toLocaleString()} />
+          <StatBox label="First Cannon Cost" current={cannonCost} />
           <StatBox label="Tactical Abilities" current={`${unlockedAbilities.length} / 4`} />
           <StatBox label="Level" current={building.ship_level || building.level} />
         </>
@@ -1480,6 +1484,10 @@ function BuildingInfoPanel({ onOpenTroops }) {
       const nextCapacity = Number(building.ship_next_capacity || currentCapacity);
       const currentEnergy = Number(building.ship_energy || 4);
       const nextEnergy = Number(building.ship_next_energy || currentEnergy);
+      const currentCannonDamage = Number(building.ship_cannon_damage || 500);
+      const nextCannonDamage = Number(building.ship_next_cannon_damage || currentCannonDamage);
+      const currentCannonCost = Number(building.ship_cannon_base_cost || 1);
+      const nextCannonCost = Number(building.ship_next_cannon_base_cost || currentCannonCost);
       const nextUnlocks = Array.isArray(building.ship_next_unlocks)
         ? building.ship_next_unlocks.filter(Boolean)
         : [];
@@ -1488,6 +1496,8 @@ function BuildingInfoPanel({ onOpenTroops }) {
         <>
           <StatBox label="Troop Capacity" current={currentCapacity} upgradeTo={nextCapacity} />
           <StatBox label="Battle Energy" current={currentEnergy} upgradeTo={nextEnergy} />
+          <StatBox label="Cannon Damage" current={currentCannonDamage.toLocaleString()} upgradeTo={nextCannonDamage.toLocaleString()} />
+          <StatBox label="First Cannon Cost" current={currentCannonCost} upgradeTo={nextCannonCost} />
           <StatBox label="New Unlock" current={nextUnlocks.length > 0 ? nextUnlocks.join(', ') : 'Energy reserve'} />
           <StatBox label="Level" current={currentLevel} upgradeTo={currentLevel < maxLevel ? currentLevel + 1 : null} />
         </>
@@ -1711,6 +1721,10 @@ function BuildingInfoPanel({ onOpenTroops }) {
     const capacity = building.ship_capacity || shipLevel * 3;
     const shipEnergy = Number(building.ship_energy || 4);
     const nextShipEnergy = Number(building.ship_next_energy || shipEnergy);
+    const shipCannonDamage = Number(building.ship_cannon_damage || 500);
+    const nextShipCannonDamage = Number(building.ship_next_cannon_damage || shipCannonDamage);
+    const shipCannonCost = Number(building.ship_cannon_base_cost || 1);
+    const nextShipCannonCost = Number(building.ship_next_cannon_base_cost || shipCannonCost);
     const isMainShip = building.id === 'main_ship';
     const shipMaxLevel = Number(building.max_level || building.ship_max_level || 10);
     const shipUnlockedAbilities = mainShipAbilityLabels(building);
@@ -2030,6 +2044,12 @@ function BuildingInfoPanel({ onOpenTroops }) {
                 Capacity {capacity}{shipLevel >= 5 ? ' · MAX CAPACITY' : ` · Next ${Number(building.ship_next_capacity || capacity)}`}
                 <div style={{ color: '#6b552f', fontSize: isMobile ? 9 : 10, marginTop: 2 }}>
                   Battle energy {shipEnergy}{shipLevel < shipMaxLevel ? ` · Next ${nextShipEnergy}` : ' · MAX LEVEL'}
+                </div>
+                <div style={{ color: '#6b552f', fontSize: isMobile ? 9 : 10, marginTop: 2 }}>
+                  Cannon {shipCannonDamage.toLocaleString()} dmg · {shipCannonCost} energy
+                  {shipLevel < shipMaxLevel && (
+                    <> · Next {nextShipCannonDamage.toLocaleString()} dmg / {nextShipCannonCost} energy</>
+                  )}
                 </div>
                 {shipUnlockedAbilities.length > 0 && (
                   <div style={{ color: '#1c8b4d', fontSize: isMobile ? 9 : 10, marginTop: 2 }}>

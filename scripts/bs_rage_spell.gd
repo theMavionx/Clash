@@ -7,6 +7,7 @@ extends RefCounted
 const UNLOCK_SHIP_LEVEL: int = 8
 const ENERGY_COST: int = 7
 const ENERGY_COST_INCREMENT: int = 1
+const FLIGHT_SEC: float = 0.60
 const RADIUS: float = 0.82
 const DURATION_SEC: float = 9.0
 const APPLY_TICK_SEC: float = 0.20
@@ -26,6 +27,7 @@ var _rage_mode: bool = false
 var _rage_uses: int = 0
 var _rage_paused_attack: bool = false
 var _rage_label: Label = null
+var _projectiles: Array[Dictionary] = []
 var _active_zones: Array[Dictionary] = []
 
 
@@ -38,6 +40,7 @@ func reset(ship_level: int = 1) -> void:
 	_ship_level = clampi(ship_level, 1, 10)
 	_rage_uses = 0
 	_exit_rage_mode()
+	_clear_projectiles()
 	_clear_zones()
 
 
@@ -50,6 +53,7 @@ func energy_cost() -> int:
 
 
 func process(delta: float) -> void:
+	_process_projectiles(delta)
 	for index in range(_active_zones.size() - 1, -1, -1):
 		var zone: Dictionary = _active_zones[index]
 		var root: Node3D = zone.get("root", null)
@@ -128,7 +132,7 @@ func _drop_rage(world_pos: Vector3) -> bool:
 	_rage_uses += 1
 	var clamped := BaseTroop._clamp_to_island(world_pos)
 	var pos := Vector3(clamped.x, bs.grid_y + FIELD_GROUND_OFFSET, clamped.z)
-	_activate_zone(pos)
+	_launch_or_activate(pos, "manual")
 	_record_action(pos)
 	bs._cannon._update_cannon_energy_ui()
 	return true
@@ -137,11 +141,101 @@ func _drop_rage(world_pos: Vector3) -> bool:
 func replay_drop_rage(world_pos: Vector3) -> void:
 	_rage_uses += 1
 	var clamped := BaseTroop._clamp_to_island(world_pos)
-	_activate_zone(Vector3(
+	_launch_or_activate(Vector3(
 		clamped.x,
 		bs.grid_y + FIELD_GROUND_OFFSET,
 		clamped.z
-	))
+	), "replay")
+
+
+func _launch_or_activate(target: Vector3, source: String) -> void:
+	var ship: Node3D = bs._cannon._get_attack_ship() if bs._cannon else null
+	if not is_instance_valid(ship):
+		_activate_zone(target)
+		return
+	var scene_root := bs.get_tree().current_scene
+	if scene_root == null:
+		_activate_zone(target)
+		return
+	var root := _create_payload_visual()
+	scene_root.add_child(root)
+	var start := ship.global_position + Vector3(0.0, 0.19, 0.0)
+	root.global_position = start
+	_projectiles.append({
+		"root": root,
+		"start": start,
+		"target": target,
+		"age": 0.0,
+		"source": source,
+	})
+
+
+func _process_projectiles(delta: float) -> void:
+	for index in range(_projectiles.size() - 1, -1, -1):
+		var projectile: Dictionary = _projectiles[index]
+		var root: Node3D = projectile.get("root", null)
+		if not is_instance_valid(root):
+			_projectiles.remove_at(index)
+			continue
+		var age := float(projectile.get("age", 0.0)) + delta
+		projectile["age"] = age
+		var progress := clampf(age / FLIGHT_SEC, 0.0, 1.0)
+		var start: Vector3 = projectile.get("start", Vector3.ZERO)
+		var target: Vector3 = projectile.get("target", Vector3.ZERO)
+		var flat := start.lerp(target, progress)
+		var arc_height := maxf(0.44, start.distance_to(target) * 0.22)
+		root.global_position = flat + Vector3(
+			0.0,
+			4.0 * arc_height * progress * (1.0 - progress),
+			0.0
+		)
+		root.rotate_x(delta * 5.6)
+		root.rotate_z(delta * 4.2)
+		if progress < 1.0:
+			continue
+		_activate_zone(target)
+		if bs.has_method("record_replay_telemetry"):
+			bs.record_replay_telemetry("rage_impact", {
+				"x": snappedf(target.x, 0.001),
+				"z": snappedf(target.z, 0.001),
+				"duration": DURATION_SEC,
+				"source": str(projectile.get("source", "manual")),
+			})
+		root.queue_free()
+		_projectiles.remove_at(index)
+
+
+func _create_payload_visual() -> Node3D:
+	var root := Node3D.new()
+	root.name = "MainShipRagePayload"
+	var orb := MeshInstance3D.new()
+	var orb_mesh := SphereMesh.new()
+	orb_mesh.radius = 0.075
+	orb_mesh.height = 0.15
+	orb_mesh.radial_segments = 16
+	orb_mesh.rings = 8
+	orb.mesh = orb_mesh
+	var orb_mat := StandardMaterial3D.new()
+	orb_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	orb_mat.albedo_color = FIELD_COLOR
+	orb_mat.emission_enabled = true
+	orb_mat.emission = FIELD_COLOR
+	orb_mat.emission_energy_multiplier = 1.5
+	orb.material_override = orb_mat
+	orb.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	root.add_child(orb)
+	var ring := MeshInstance3D.new()
+	var ring_mesh := TorusMesh.new()
+	ring_mesh.inner_radius = 0.012
+	ring_mesh.outer_radius = 0.115
+	ring_mesh.rings = 20
+	ring_mesh.ring_segments = 8
+	ring.mesh = ring_mesh
+	ring.rotation_degrees.x = 90.0
+	ring.material_override = orb_mat
+	ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	root.add_child(ring)
+	return root
 
 
 func _boost_troops(center: Vector3, zone: Dictionary) -> void:
@@ -340,11 +434,13 @@ func _record_action(pos: Vector3) -> void:
 			"type": "rage_drop",
 			"x": pos.x,
 			"z": pos.z,
+			"flight_time": FLIGHT_SEC,
 		})
 	if bs.has_method("record_replay_telemetry"):
-		bs.record_replay_telemetry("rage_drop", {
+		bs.record_replay_telemetry("rage_fire", {
 			"x": snappedf(pos.x, 0.001),
 			"z": snappedf(pos.z, 0.001),
+			"flight_time": FLIGHT_SEC,
 			"radius": RADIUS,
 			"duration": DURATION_SEC,
 			"source": "manual",
@@ -377,3 +473,11 @@ func _remove_zone(index: int) -> void:
 func _clear_zones() -> void:
 	for index in range(_active_zones.size() - 1, -1, -1):
 		_remove_zone(index)
+
+
+func _clear_projectiles() -> void:
+	for projectile in _projectiles:
+		var root: Node = projectile.get("root", null)
+		if is_instance_valid(root):
+			root.queue_free()
+	_projectiles.clear()

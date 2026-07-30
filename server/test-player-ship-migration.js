@@ -45,21 +45,23 @@ assert.equal(gameDb.TROOP_DEFS.demon_king?.buy_cost, 0);
 assert.equal(gameDb.TROOP_DEFS.fire_dragon?.buy_cost, 0);
 
 const EXPECTED_SHIP_LEVELS = {
-  1: { capacity: 3, energy: 4, cost: { gold: 0, wood: 0, ore: 0 } },
-  2: { capacity: 12, energy: 6, cost: { gold: 2000, wood: 4000, ore: 3400 } },
-  3: { capacity: 27, energy: 8, cost: { gold: 3600, wood: 7200, ore: 6200 } },
-  4: { capacity: 36, energy: 10, cost: { gold: 4800, wood: 9600, ore: 8200 } },
-  5: { capacity: 45, energy: 12, cost: { gold: 6500, wood: 12800, ore: 11000 } },
-  6: { capacity: 45, energy: 14, cost: { gold: 9000, wood: 18000, ore: 15500 } },
-  7: { capacity: 45, energy: 16, cost: { gold: 12000, wood: 24000, ore: 21000 } },
-  8: { capacity: 45, energy: 18, cost: { gold: 16000, wood: 32000, ore: 28000 } },
-  9: { capacity: 45, energy: 20, cost: { gold: 21000, wood: 42000, ore: 36000 } },
-  10: { capacity: 45, energy: 22, cost: { gold: 27000, wood: 54000, ore: 46000 } },
+  1: { capacity: 3, energy: 4, cannonDamage: 500, cannonBaseCost: 1, cost: { gold: 0, wood: 0, ore: 0 } },
+  2: { capacity: 12, energy: 6, cannonDamage: 700, cannonBaseCost: 1, cost: { gold: 2000, wood: 4000, ore: 3400 } },
+  3: { capacity: 27, energy: 8, cannonDamage: 1100, cannonBaseCost: 2, cost: { gold: 3600, wood: 7200, ore: 6200 } },
+  4: { capacity: 36, energy: 10, cannonDamage: 1450, cannonBaseCost: 2, cost: { gold: 4800, wood: 9600, ore: 8200 } },
+  5: { capacity: 45, energy: 12, cannonDamage: 1800, cannonBaseCost: 3, cost: { gold: 6500, wood: 12800, ore: 11000 } },
+  6: { capacity: 45, energy: 14, cannonDamage: 2250, cannonBaseCost: 3, cost: { gold: 9000, wood: 18000, ore: 15500 } },
+  7: { capacity: 45, energy: 16, cannonDamage: 2800, cannonBaseCost: 4, cost: { gold: 12000, wood: 24000, ore: 21000 } },
+  8: { capacity: 45, energy: 18, cannonDamage: 3400, cannonBaseCost: 4, cost: { gold: 16000, wood: 32000, ore: 28000 } },
+  9: { capacity: 45, energy: 20, cannonDamage: 4100, cannonBaseCost: 5, cost: { gold: 21000, wood: 42000, ore: 36000 } },
+  10: { capacity: 45, energy: 22, cannonDamage: 4900, cannonBaseCost: 5, cost: { gold: 27000, wood: 54000, ore: 46000 } },
 };
 assert.equal(Object.keys(EXPECTED_SHIP_LEVELS).length, MAX_PLAYER_SHIP_LEVEL);
 for (const [level, expected] of Object.entries(EXPECTED_SHIP_LEVELS)) {
   assert.equal(PLAYER_SHIP_LEVELS[level].capacity, expected.capacity);
   assert.equal(PLAYER_SHIP_LEVELS[level].energy, expected.energy);
+  assert.equal(PLAYER_SHIP_LEVELS[level].cannon_damage, expected.cannonDamage);
+  assert.equal(PLAYER_SHIP_LEVELS[level].cannon_base_cost, expected.cannonBaseCost);
   assert.deepEqual(PLAYER_SHIP_LEVELS[level].cost, expected.cost);
   assert.equal(cannonInitialEnergyForShipLevel(level), expected.energy);
   assert.equal(gameDb.PLAYER_SHIP_LEVELS[level], PLAYER_SHIP_LEVELS[level]);
@@ -235,6 +237,8 @@ try {
     assert.equal(upgraded.ship.level, targetLevel);
     assert.equal(upgraded.ship.capacity, expected.capacity);
     assert.equal(upgraded.ship.energy, expected.energy);
+    assert.equal(upgraded.ship.cannon_damage, expected.cannonDamage);
+    assert.equal(upgraded.ship.cannon_base_cost, expected.cannonBaseCost);
     assert.equal(upgraded.ship.medkit_unlocked, targetLevel >= MEDKIT_UNLOCK_SHIP_LEVEL);
     assert.equal(upgraded.ship.freeze_unlocked, targetLevel >= FREEZE_DROP.unlockShipLevel);
     assert.equal(upgraded.ship.rage_unlocked, targetLevel >= RAGE_DROP.unlockShipLevel);
