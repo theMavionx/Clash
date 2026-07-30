@@ -3541,8 +3541,9 @@ function FuturesPanel() {
     // subaccountAddr lets the gate distinguish "fresh user" (no
     // subaccount yet) from "returning user" (subaccount on-chain but
     // delegation missing — usually after rejecting the delegate step).
-    activationStep, isReady, setupVerified, subaccountAddr, gasSponsored, apiWalletAddr, inviteStatus, hotstuffSetupStatus,
+    activationStep, isReady, setupVerified, subaccountAddr, gasSponsored, apiWalletAddr, inviteStatus, builderConfig, hotstuffSetupStatus,
     bridgeDepositSourceChainId, setBridgeDepositSourceChainId, bridgeDepositSources, lighterNeedsIntegratorApproval, lighterCredentials, detectAccount: detectLighterAccount,
+    registerBuilderCode,
     refresh: refreshTrading,
   } = trading;
   const openedSortedPositions = useOpenedSortedPositions(positions);
@@ -7952,16 +7953,35 @@ function FuturesPanel() {
     const isRunning = !!activationStep;
     const isChecking = setupVerified === null && !isRunning;
     const needsRisexCode = inviteStatus?.hasAccess === false;
-    const stepLabel = activationStep?.label || (isChecking ? 'Checking RISEx signer' : 'Register RISEx signer');
-    const risexSteps = needsRisexCode
+    const risexSignerReady = oneTapTrading?.signerReady === true;
+    const risexBuilderApproved = oneTapTrading?.builderApproved === true;
+    const risexBuilderRegistered = builderConfig?.registered === true && Number(builderConfig?.builder_id) > 0;
+    const risexBuilderRegistrationPending = builderConfig != null && !risexBuilderRegistered;
+    const canRegisterRisexBuilder = String(walletAddr || '').toLowerCase()
+      === String(builderConfig?.fee_recipient || '').toLowerCase();
+    const isRegisteringRisexBuilder = activationStep?.label === 'Register Clash builder code';
+    const runIncludesInvite = needsRisexCode || Number(activationStep?.total || 0) === 4;
+    const totalSteps = runIncludesInvite ? 4 : 3;
+    const stepLabel = activationStep?.label || (
+      isChecking
+        ? 'Checking RISEx setup'
+        : risexBuilderRegistrationPending
+          ? 'Register Clash builder code'
+        : risexSignerReady && !risexBuilderApproved
+          ? 'Approve Clash builder fee (1 bps)'
+          : 'Register RISEx signer'
+    );
+    const risexSteps = runIncludesInvite
       ? [
           { idx: 1, title: 'Redeem RISEx invite code' },
           { idx: 2, title: 'Sign RISEx signer registration' },
-          { idx: 3, title: 'Verify signer on RISEx mainnet' },
+          { idx: 3, title: 'Approve Clash builder fee (1 bps)' },
+          { idx: 4, title: 'Verify setup on RISEx mainnet' },
         ]
       : [
           { idx: 1, title: 'Sign RISEx signer registration' },
-          { idx: 2, title: 'Verify signer on RISEx mainnet' },
+          { idx: 2, title: 'Approve Clash builder fee (1 bps)' },
+          { idx: 3, title: 'Verify setup on RISEx mainnet' },
         ];
     return (
       <>
@@ -7983,20 +8003,61 @@ function FuturesPanel() {
             <div style={hlGateStyles.frame}>
               <div style={hlGateStyles.titleBlock}>
                 <img src={DEX_CONFIG.risex.logo} alt="" style={{width: 56, height: 56, objectFit: 'contain', alignSelf: 'center'}} />
-                <span style={hlGateStyles.kicker}>{isChecking ? 'CHECKING' : isRunning ? `STEP ${activationStep?.index || 1} OF ${activationStep?.total || 2}` : 'ACTION REQUIRED'}</span>
+                <span style={hlGateStyles.kicker}>{isChecking ? 'CHECKING' : isRunning ? `STEP ${activationStep?.index || 1} OF ${activationStep?.total || totalSteps}` : 'ACTION REQUIRED'}</span>
                 <span style={hlGateStyles.title}>{stepLabel}</span>
                 <span style={hlGateStyles.subtitle}>
-                  RISEx uses a dedicated browser signer for orders. Your wallet authorizes it once with an EIP-712 signature.
+                  RISEx uses a secure browser signer. Setup also approves the Clash builder fee at exactly 1 bps (0.01%) before orders can be placed.
                 </span>
               </div>
+              {risexBuilderRegistrationPending && (
+                <div style={{
+                  width: '100%',
+                  maxWidth: 420,
+                  padding: 12,
+                  border: '2px solid #d7b45b',
+                  background: '#fff5cf',
+                  boxShadow: '0 3px 0 #c69b3f',
+                  color: '#5c3a21',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 7,
+                }}>
+                  <strong style={{fontSize: 14}}>Clash builder code is not registered yet</strong>
+                  <span style={{fontSize: 11, lineHeight: 1.4, fontWeight: 700}}>
+                    Fee recipient {shortAddr(builderConfig?.fee_recipient)} will receive the canonical 1 bps fee. Trading stays locked until RISEx returns a builder ID.
+                  </span>
+                  {canRegisterRisexBuilder ? (
+                    <button
+                      style={{ ...hlGateStyles.primaryBtn, ...(loading ? hlGateStyles.primaryBtnBusy : null) }}
+                      disabled={loading}
+                      onClick={async () => {
+                        const res = await registerBuilderCode?.();
+                        if (res?.error) setLocalAlert(res.error);
+                        else setLocalAlert(null);
+                      }}
+                    >
+                      {loading ? 'Registering on RISE...' : 'Register Clash builder code'}
+                    </button>
+                  ) : (
+                    <span style={{fontSize: 11, lineHeight: 1.4, fontWeight: 800, color: '#9a6218'}}>
+                      Connect the Clash fee-recipient wallet to complete this one-time registration.
+                    </span>
+                  )}
+                </div>
+              )}
               <ol style={hlGateStyles.stepList}>
                 {risexSteps.map((s) => {
-                  const active = isRunning && Number(activationStep?.index || 1) === s.idx;
-                  const state = active ? 'active' : 'pending';
+                  const active = isRunning
+                    && !isRegisteringRisexBuilder
+                    && Number(activationStep?.index || 1) === s.idx;
+                  const inviteDone = s.title.includes('invite code') && !needsRisexCode;
+                  const signerDone = s.title.includes('signer registration') && risexSignerReady;
+                  const builderDone = s.title.includes('builder fee') && risexBuilderApproved;
+                  const state = active ? 'active' : (inviteDone || signerDone || builderDone) ? 'done' : 'pending';
                   return (
                     <li key={s.idx} style={hlGateStyles.stepItem}>
                       <span style={{ ...hlGateStyles.stepBubble, ...hlGateStyles[`stepBubble_${state}`] }}>
-                        {active ? <span style={hlGateStyles.spinner} /> : s.idx}
+                        {active ? <span style={hlGateStyles.spinner} /> : state === 'done' ? '\u2713' : s.idx}
                       </span>
                       <span style={hlGateStyles.stepText}>
                         <span style={{ ...hlGateStyles.stepLabel, ...hlGateStyles[`stepLabel_${state}`] }}>{s.title}</span>
@@ -8005,6 +8066,8 @@ function FuturesPanel() {
                             ? 'Sign a message to redeem access before trading.'
                             : s.title.includes('Sign')
                             ? 'Approve the wallet popup on RISE.'
+                            : s.title.includes('builder fee')
+                            ? `The browser signer caps Clash at 1 bps for builder #${builderConfig?.builder_id || 'pending'}.`
                             : 'The API checks the signer session before opening the panel.'}
                         </span>
                       </span>
@@ -8031,7 +8094,7 @@ function FuturesPanel() {
               )}
               <button
                 style={{ ...hlGateStyles.primaryBtn, ...((isChecking || loading) ? hlGateStyles.primaryBtnBusy : null) }}
-                disabled={isChecking || loading}
+                disabled={isChecking || loading || risexBuilderRegistrationPending}
                 onClick={async () => {
                   if (!activate) return;
                   const res = await activate({ inviteCode: risexInviteCode });

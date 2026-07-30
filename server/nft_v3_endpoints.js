@@ -23,6 +23,10 @@ const {
   solanaRpcUrls,
   withSolanaRpcFallback,
 } = require('./solana_rpc');
+const {
+  collectionMintRarity,
+  collectionMintRaritySeed,
+} = require('./nft_rarity');
 
 const NFT_ROOT = path.resolve(__dirname, '..', 'nft');
 const {
@@ -174,6 +178,59 @@ function collectionRarityLabelForTokenId(collectionSlug, chainKey, tokenId, lega
 
 function demonKingRarityLabelForTokenId(chainKey, tokenId, legacyLevel = 1) {
   return collectionRarityLabelForTokenId('demonking', chainKey, tokenId, legacyLevel);
+}
+
+function revealMissingSyncedCollectionRarities({
+  playerId,
+  collection,
+  wallet,
+  tokens = [],
+  source = 'ownership-sync',
+} = {}) {
+  const collectionKey = rarityCollectionDbKey(collection);
+  if (collectionKey !== 'dragon' || !playerId || !wallet) return [];
+  const seed = collectionMintRaritySeed(collectionKey);
+  const revealed = [];
+  for (const token of tokens) {
+    const chain = String(token?.chain || '').trim().toLowerCase();
+    const tokenId = nftTokenId(token);
+    if (!chain || !tokenId || gameDb.getNftRarity?.(collectionKey, chain, tokenId, { legacyLevel: 1 })) {
+      continue;
+    }
+    const txHash = String(token?.txHash || token?.tx_hash || '').trim();
+    const rarity = collectionMintRarity(collectionKey, chain, tokenId, {
+      tx: txHash,
+      buyer: wallet,
+      reservationId: '',
+    });
+    const snapshotHash = crypto.createHash('sha256').update([
+      collectionKey,
+      chain,
+      tokenId,
+      txHash,
+      wallet,
+      playerId,
+    ].join('|')).digest('hex');
+    const row = gameDb.upsertNftRarity?.({
+      collection: collectionKey,
+      chain,
+      tokenId,
+      rarity,
+      legacyLevel: 1,
+      ownerWallet: wallet,
+      playerId,
+      source: `${source}-rarity`,
+      revealSeed: seed,
+      snapshotHash,
+      metadata: {
+        tx: txHash || null,
+        player_nft_source: source,
+        player_nft_updated_at: token?.updatedAt || token?.updated_at || null,
+      },
+    });
+    if (row) revealed.push(row);
+  }
+  return revealed;
 }
 
 function bridgeSourceTokenId(sourceChain, burned = {}) {
@@ -1618,6 +1675,13 @@ async function syncNftOwnershipGroup(group = {}) {
     chains: successfulChains,
     source: 'daily-ownership-sync',
   }).filter((token) => successfulChains.includes(token.chain));
+  revealMissingSyncedCollectionRarities({
+    playerId,
+    collection: collectionKey,
+    wallet,
+    tokens: after,
+    source: 'daily-ownership-sync',
+  });
   return {
     playerId,
     collection: collectionKey,
@@ -2112,6 +2176,13 @@ function mountNftV3Endpoints(router, ctx) {
         chains: successfulChains,
         source: force ? 'force-sync' : 'sync',
       }).filter((token) => syncChains.includes(token.chain));
+      revealMissingSyncedCollectionRarities({
+        playerId: player.id,
+        collection: collectionSlug,
+        wallet,
+        tokens: boundTokens.filter((token) => successfulChains.includes(token.chain)),
+        source: force ? 'force-sync' : 'sync',
+      });
       const responseTokens = boundTokens.map((token) => {
         const scanned = scannedTokenByKey.get(`${String(token.chain || '').toLowerCase()}:${String(token.tokenId || '')}`) || {};
         return {

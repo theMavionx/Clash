@@ -2138,3 +2138,104 @@ Follow-up:
   existing Decibel implementation; distinguish embedded TP/SL fields, separate conditional
   orders, and atomic transaction batching. No live trades, source changes, commit, push,
   deploy, or production mutation requested.
+
+### UR-2026-07-30-DRAGON-REVEAL-RECOVERY
+
+- **Request:** Investigate why some Dragon NFTs remain `Unrevealed` and reveal the affected NFTs.
+- **Scope:** Audit production Dragon ownership, mint confirmation, rarity rows, and metadata
+  relay state; use the existing deterministic reveal seed to recover only verified missing
+  rarity records; verify the resulting production rarity and NFT ownership state.
+- **Production mutation:** Explicitly requested for the affected Dragon NFT rarity records.
+- **Result:** The five active missing rows across three players were deterministically revealed
+  with `clash-dragon-rarity-v1`: Arbitrum #26 Common, Arbitrum #27 Common, Base #15 Epic,
+  Base #16 Common, and Base #17 Common. Production backfill dry-run now reports `missing: 0`,
+  and the public rarity API returns all five records.
+- **Root cause:** Daily and forced ownership sync imported active Dragon ownership without the
+  mint-confirm rarity hook. A local source fix now shares the rarity formula and applies it
+  idempotently after both ownership-sync paths; it has not been committed or deployed.
+
+### UR-2026-07-30-RISEX-BUILDER-CODE
+
+- **Request:** Audit the current RiseX integration against the latest official builder-code
+  documentation, register fee recipient `0x39B36f1EDF2eF5a6f2e02991b3a85Fb356eB5005`,
+  and route Clash orders through that builder at 1 bps.
+- **Scope:** Verify current RiseX contracts and API schemas; query the builder registry before
+  registration; add the builder ID and the protocol-scaled 1 bps fee to every supported signed
+  order flow; add the required one-time trader builder-fee approval; and verify signing, server
+  forwarding, setup state, and fill attribution locally.
+- **Production mutation:** Permissionless on-chain builder registration was explicitly requested.
+- **No commit, push, or production deploy requested.**
+- **Result:** The current mainnet registry was audited and the Clash recipient is not registered
+  yet. The target wallet has a zero RISE gas balance, and no funded local signer was available,
+  so no registration transaction was broadcast. Locally, RiseX now resolves only active builder
+  records, enforces the canonical Clash builder ID and 1 bps (protocol value `100`) on market,
+  limit, and close orders, signs the documented V3 hash, performs the required one-time
+  builder-fee approval, and exposes an owner-only registration flow that verifies the registry
+  after the on-chain transaction. The market adapter was also updated for the current
+  `active`/`config.unlocked` schema so deprecated or locked markets cannot be selected, with
+  a read-only retry/cache path for intermittent market-metadata timeouts.
+
+### UR-2026-07-30-RISEX-BUILDER-READ-RETEST
+
+- **Timestamp:** 2026-07-30 22:56:43 +03:00 (Europe/Kyiv)
+- **Request:** Review the project and production deployment script, then independently retry
+  accessing the RiseX builder contract for fee recipient
+  `0x39B36f1EDF2eF5a6f2e02991b3a85Fb356eB5005` and determine whether obtaining the builder code
+  requires paying gas.
+- **Scope:** Read-only repository/deployment analysis and live RPC/API contract queries first;
+  do not commit, push, deploy, mutate production data, or broadcast a funded transaction unless
+  the owner explicitly approves it.
+- **Result:** The canonical `GET /v1/builders` registry still has no entry for the target
+  recipient. A direct RISE mainnet `eth_call` to FeeManager
+  `registerBuilderCode(0x39B3...5005)` succeeded read-only and simulated `builder_id=10`;
+  `eth_estimateGas` returned `78,954`, while the recipient wallet still has `0 wei` and nonce
+  `0`. Therefore reading/simulating does not cost gas, but persisting the permissionless builder
+  registration requires a signed on-chain transaction funded with native ETH on RISE.
+  Focused builder-proof and eligibility tests passed, as did the full local Deploy-mode repo
+  check (syntax, regressions, lint with pre-existing warnings, and production web build). No
+  transaction, commit, push, or deploy was performed.
+- **Remaining integration risk:** `RISEX_BUILDER_FEE_BPS` currently means protocol hundredths of
+  a basis point (`100 = 1 bps`) in `server-futures/risex.js`, but plain basis points
+  (`1 = 1 bps`) in `server/earnings.js`. The deploy script does not seed this variable. It must
+  be split or normalized before configuring it in production, otherwise trading or earnings
+  reporting will use the wrong scale.
+
+### UR-2026-07-31-RISEX-BRIDGE-AND-REGISTRATION
+
+- **Timestamp:** 2026-07-31 (Europe/Kyiv)
+- **Request:** Find a funded NFT/smart-contract deployer wallet in the project environment,
+  bridge ETH from Base or Arbitrum into RISE, and use it to register the RiseX builder fee
+  recipient `0x39B36f1EDF2eF5a6f2e02991b3a85Fb356eB5005`.
+- **Production mutation:** Explicitly approved Base-to-Ethereum bridging, the canonical
+  Ethereum-to-RISE deposit, and the on-chain builder registration.
+- **Result:** The NFT deployer funded Ethereum through Relay from Base, deposited `0.0001 ETH`
+  to RISE through the canonical L1 Standard Bridge, and registered active builder ID `10` for
+  the requested fee recipient. Direct FeeManager `getBuilderInfo(10)` returns the requested
+  recipient with `isActive=true`. Registration transaction:
+  `0x901fa967bc0780e6ccf3c57efe82756f5e3ea59d62ac029afc22bc77ca33b3d4`.
+- **Remaining external state:** The public `GET /v1/builders` response had not yet indexed
+  builder ID `10` immediately after the successful transaction.
+
+### UR-2026-07-31-MAIN-MERGE-PUSH-AND-PROD-DEPLOY
+
+- **Timestamp:** 2026-07-31 (Europe/Kyiv)
+- **Request:** "зроби коміт всіх змін і перейди на основну гілку мерджни все ... запуш все
+  на гітхаб і потім залий на прод всі апдейти які ми додали до райзх. також ще раз перевір
+  чи ти все парвильно зробив що авторизація правильно працює як в них в апі правильні
+  ендпоінти параметри і тд перевір то все виправ якщо треба коміт пуш деплой"
+- **Authorization:** Explicit approval to audit and fix the RiseX integration, commit all
+  current worktree changes, integrate them into `main`, push GitHub, and run the normal
+  production deployment workflow from `main`.
+- **Audit result:** Live mainnet Authorization typehashes match the implemented bitmap-nonce
+  EIP-712 structs. Order placement, cancellation, builder approval, signer registration, and
+  bridge payloads were narrowed to the current RISEx OpenAPI fields. Builder ID `10` is now
+  verified directly through FeeManager when the public builder list is not yet indexed, and
+  RISEx requests are restricted to the EVM wallet linked to the authenticated game account.
+  Bridge history was updated to the current `api.bridge.risechain.com` endpoint, and the
+  canonical protocol fee `100 = 1 bps` now has one consistent scale across routing, rewards,
+  and earnings analytics.
+- **Local verification:** Direct RISE calls confirm builder ID `10`, the configured recipient,
+  and `isActive=true`; current EIP-712 domain/system config/market schemas and Base/Arbitrum
+  bridge address/history calls were smoke-tested. Focused builder proof, reward eligibility,
+  NFT rarity parity, MCP intent stress tests, Vite production build, and the full Deploy-mode
+  repository check passed.

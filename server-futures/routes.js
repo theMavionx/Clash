@@ -3751,7 +3751,68 @@ function requireRisexOwner(req, res) {
     res.status(400).json({ error: 'account required (0x...)' });
     return null;
   }
+  const linkedWallet = risex.normalizeAddress(req.dexWallet || req.playerWallet);
+  if (!linkedWallet) {
+    res.status(409).json({
+      error: 'RISEx EVM wallet is not linked to this game account. Reconnect the wallet before using RISEx.',
+    });
+    return null;
+  }
+  if (account !== linkedWallet) {
+    res.status(403).json({
+      error: 'RISEx request account does not match the EVM wallet linked to this game account.',
+    });
+    return null;
+  }
   return { account };
+}
+
+function canonicalRisexPermit(value, account) {
+  const permit = value && typeof value === 'object' ? value : null;
+  if (!permit) throw new Error('RISEx permit is required');
+  const permitAccount = risex.normalizeAddress(permit.account);
+  const signer = risex.normalizeAddress(permit.signer);
+  const nonceAnchor = String(permit.nonce_anchor ?? '').trim();
+  const nonceBitmapIndex = Number(permit.nonce_bitmap_index);
+  const deadline = Number(permit.deadline);
+  const signature = String(permit.signature || '').trim();
+  if (permitAccount !== account) throw new Error('RISEx permit account mismatch');
+  if (!signer) throw new Error('RISEx permit signer is invalid');
+  if (!/^\d+$/u.test(nonceAnchor)) throw new Error('RISEx permit nonce_anchor is invalid');
+  if (!Number.isInteger(nonceBitmapIndex) || nonceBitmapIndex < 0 || nonceBitmapIndex > 255) {
+    throw new Error('RISEx permit nonce_bitmap_index is invalid');
+  }
+  if (!Number.isInteger(deadline) || deadline <= 0 || deadline > 0xffffffff) {
+    throw new Error('RISEx permit deadline is invalid');
+  }
+  if (!signature) throw new Error('RISEx permit signature is required');
+  return {
+    account,
+    signer,
+    nonce_anchor: nonceAnchor,
+    nonce_bitmap_index: nonceBitmapIndex,
+    deadline,
+    signature,
+  };
+}
+
+function risexUint(value, label, max, { allowZero = true } = {}) {
+  const number = Number(value);
+  const min = allowZero ? 0 : 1;
+  if (!Number.isInteger(number) || number < min || number > max) {
+    throw new Error(`${label} must be an integer between ${min} and ${max}`);
+  }
+  return number;
+}
+
+function risexUintString(value, label, max) {
+  const text = String(value ?? '').trim();
+  if (!/^\d+$/u.test(text)) throw new Error(`${label} must be an unsigned decimal string`);
+  const number = BigInt(text);
+  if (number < 0n || number > max) {
+    throw new Error(`${label} is outside its supported unsigned integer range`);
+  }
+  return text;
 }
 
 router.get('/risex/system-config', auth, async (req, res) => {
@@ -3761,6 +3822,18 @@ router.get('/risex/system-config', auth, async (req, res) => {
   } catch (e) {
     console.warn('[risex] system-config failed:', e.message);
     res.status(502).json({ error: 'Failed to load RISEx system config', detail: e.message });
+  }
+});
+
+router.get('/risex/builder-config', auth, async (req, res) => {
+  try {
+    const verified = requireRisexOwner(req, res);
+    if (!verified) return;
+    const force = String(req.query?.force || '') === '1';
+    res.json(await risex.getClashBuilderConfig({ force }));
+  } catch (e) {
+    console.warn('[risex] builder-config failed:', e.message);
+    res.status(502).json({ error: 'Failed to load RISEx builder configuration', detail: e.message });
   }
 });
 
@@ -3874,10 +3947,31 @@ router.post('/risex/register-signer', auth, async (req, res) => {
     if (invite && invite.has_access === false) {
       return res.status(403).json({ error: 'RISEx invite code required before signer registration', code: 'RISEX_INVITE_REQUIRED', invite });
     }
+    const message = String(req.body?.message || '');
+    const expiration = risexUintString(req.body?.expiration, 'expiration', 0xffffffffn);
+    const accountSignature = String(req.body?.account_signature || '');
+    const signerSignature = String(req.body?.signer_signature || '');
+    if (!message) return res.status(400).json({ error: 'RISEx signer registration message is required' });
+    if (!/^0x[0-9a-fA-F]{130}$/u.test(accountSignature)) {
+      return res.status(400).json({ error: 'RISEx account_signature must be a 65-byte hex signature' });
+    }
+    if (!/^0x[0-9a-fA-F]{130}$/u.test(signerSignature)) {
+      return res.status(400).json({ error: 'RISEx signer_signature must be a 65-byte hex signature' });
+    }
     try { await risex.acceptTerms(verified.account); } catch (termsError) {
       console.warn('[risex] accept terms before signer registration failed:', termsError.message);
     }
-    const result = await risex.registerSigner({ ...req.body, account: verified.account, signer });
+    const result = await risex.registerSigner({
+      account: verified.account,
+      signer,
+      message,
+      nonce_anchor: risexUintString(req.body?.nonce_anchor, 'nonce_anchor', 0xffffffffffffn),
+      expiration,
+      account_signature: accountSignature,
+      signer_signature: signerSignature,
+      nonce_bitmap_index: risexUint(req.body?.nonce_bitmap_index, 'nonce_bitmap_index', 207),
+      ...(req.body?.label ? { label: String(req.body.label) } : {}),
+    });
     res.json(result);
   } catch (e) {
     console.warn('[risex] register-signer failed:', e.message);
@@ -3885,21 +3979,87 @@ router.post('/risex/register-signer', auth, async (req, res) => {
   }
 });
 
+router.post('/risex/builder-fee/approve', auth, async (req, res) => {
+  try {
+    const verified = requireRisexOwner(req, res);
+    if (!verified) return;
+    const config = await risex.requireClashBuilderConfig();
+    const permit = canonicalRisexPermit(req.body?.permit, verified.account);
+    const requestedBuilderId = Number(req.body?.builder_id);
+    const requestedMaxFeeBps = Number(req.body?.max_fee_bps);
+    if (requestedBuilderId !== config.builder_id || requestedMaxFeeBps !== config.builder_fee_bps) {
+      return res.status(400).json({
+        error: 'RISEx builder approval must use the canonical Clash builder and 1 bps fee ceiling',
+        expected_builder_id: config.builder_id,
+        expected_max_fee_bps: config.builder_fee_bps,
+      });
+    }
+    const result = await risex.approveBuilderFee({
+      builder_id: config.builder_id,
+      max_fee_bps: config.builder_fee_bps,
+      permit,
+    });
+    res.json({
+      ...result,
+      builder_id: config.builder_id,
+      max_fee_bps: config.builder_fee_bps,
+      fee_recipient: config.fee_recipient,
+    });
+  } catch (e) {
+    console.warn('[risex] builder fee approval failed:', e.message);
+    res.status(400).json({
+      error: e.message || 'Failed to approve RISEx builder fee',
+      code: 'RISEX_BUILDER_FEE_APPROVAL_FAILED',
+    });
+  }
+});
+
 router.post('/risex/orders/place', auth, async (req, res) => {
   try {
     const verified = requireRisexOwner(req, res);
     if (!verified) return;
-    const { account: _account, ...payload } = req.body || {};
-    const result = await risex.placeOrder(payload);
+    const config = await risex.requireClashBuilderConfig();
+    const permit = canonicalRisexPermit(req.body?.permit, verified.account);
+    const requestedBuilderId = Number(req.body?.builder_id);
+    const requestedBuilderFeeBps = Number(req.body?.builder_fee_bps);
+    if (requestedBuilderId !== config.builder_id || requestedBuilderFeeBps !== config.builder_fee_bps) {
+      return res.status(400).json({
+        error: 'RISEx orders must use the canonical Clash builder code at 1 bps',
+        code: 'RISEX_BUILDER_REQUIRED',
+        expected_builder_id: config.builder_id,
+        expected_builder_fee_bps: config.builder_fee_bps,
+      });
+    }
+    const result = await risex.placeOrder({
+      market_id: risexUint(req.body?.market_id, 'market_id', 0xffff, { allowZero: false }),
+      size_steps: risexUint(req.body?.size_steps, 'size_steps', 0xffffffff, { allowZero: false }),
+      price_ticks: risexUint(req.body?.price_ticks, 'price_ticks', 0xffffff),
+      side: risexUint(req.body?.side, 'side', 1),
+      post_only: req.body?.post_only === true,
+      reduce_only: req.body?.reduce_only === true,
+      stp_mode: risexUint(req.body?.stp_mode, 'stp_mode', 2),
+      order_type: risexUint(req.body?.order_type, 'order_type', 1),
+      time_in_force: risexUint(req.body?.time_in_force, 'time_in_force', 3),
+      builder_id: config.builder_id,
+      builder_fee_bps: config.builder_fee_bps,
+      client_order_id: risexUintString(req.body?.client_order_id ?? '0', 'client_order_id', 0xffffffffffffffffn),
+      ttl_units: risexUint(req.body?.ttl_units ?? 0, 'ttl_units', 0xffff),
+      permit,
+    });
     res.json(result);
   } catch (e) {
     console.warn('[risex] place order failed:', e.message);
     const message = e.message || 'Failed to place RISEx order';
     const signerRejected = /SignerNotAuthorized|InvalidSignature|NotAuthorized|session key|signer/i.test(message);
+    const builderRejected = /builder|fee approval/i.test(message);
     res.status(400).json({
       error: message,
-      code: signerRejected ? 'RISEX_SIGNER_NOT_AUTHORIZED' : 'RISEX_ORDER_REJECTED',
-      retryable_setup: signerRejected,
+      code: signerRejected
+        ? 'RISEX_SIGNER_NOT_AUTHORIZED'
+        : builderRejected
+          ? 'RISEX_BUILDER_FEE_REJECTED'
+          : 'RISEX_ORDER_REJECTED',
+      retryable_setup: signerRejected || builderRejected,
     });
   }
 });
@@ -3908,8 +4068,15 @@ router.post('/risex/orders/cancel', auth, async (req, res) => {
   try {
     const verified = requireRisexOwner(req, res);
     if (!verified) return;
-    const { account: _account, ...payload } = req.body || {};
-    const result = await risex.cancelOrder(payload);
+    const orderId = String(req.body?.order_id || '').trim().toLowerCase();
+    if (!/^0x[0-9a-f]{48}$/u.test(orderId)) {
+      return res.status(400).json({ error: 'RISEx order_id must be a 24-byte composite hex OrderID' });
+    }
+    const result = await risex.cancelOrder({
+      market_id: risexUint(req.body?.market_id, 'market_id', 0xffff, { allowZero: false }),
+      order_id: orderId,
+      permit: canonicalRisexPermit(req.body?.permit, verified.account),
+    });
     res.json(result);
   } catch (e) {
     console.warn('[risex] cancel order failed:', e.message);

@@ -13,6 +13,10 @@ export const RISEX_API_BASE = String(import.meta.env.VITE_RISEX_API_URL || '').t
 export const RISEX_ROUTER_ADDRESS = '0xaadde0cea454f2bcb26f46ed54c5709b7bb34a7e';
 export const RISEX_AUTH_ADDRESS = '0x0d919daa3f12ae715744eb648c00066c5dbd66f0';
 export const RISEX_USDC_ADDRESS = '0xe436820ba0c69702c1d3e601d421c0ef38262739';
+export const RISEX_FEE_MANAGER_ADDRESS = '0x11541dc387b9C307043ea732127DF92b80bab52b';
+export const RISEX_BUILDER_FEE_RECIPIENT = '0x39B36f1EDF2eF5a6f2e02991b3a85Fb356eB5005';
+// RISEx uses hundredths of a basis point: 100 = 1 bps = 0.01%.
+export const RISEX_BUILDER_FEE_BPS = 100;
 export const RISEX_USDC_DECIMALS = 6;
 export const RISEX_BRIDGE_URL = String(import.meta.env.VITE_RISEX_BRIDGE_URL || 'https://www.rise.trade/en').trim();
 export const RISEX_DEFAULT_DEPOSIT_SOURCE_CHAIN_ID = Number(import.meta.env.VITE_RISEX_DEFAULT_DEPOSIT_SOURCE_CHAIN_ID || 42161);
@@ -65,6 +69,16 @@ export const RISEX_USDC_ABI = [
       { name: 'amount', type: 'uint256' },
     ],
     outputs: [{ type: 'bool' }],
+  },
+];
+
+export const RISEX_FEE_MANAGER_ABI = [
+  {
+    type: 'function',
+    name: 'registerBuilderCode',
+    stateMutability: 'nonpayable',
+    inputs: [{ name: 'feeRecipient', type: 'address' }],
+    outputs: [{ name: 'builderId', type: 'uint16' }],
   },
 ];
 

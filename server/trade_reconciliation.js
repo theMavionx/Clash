@@ -54,7 +54,7 @@ const VERIFIED_SOURCES_BY_DEX = {
   monad: ['perpl_api', 'perpl_ws'],
   phoenix: ['worker', 'tx'],
   hyperliquid: ['hyperliquid_api'],
-  risex: ['risex_api'],
+  risex: ['risex_builder_onchain'],
   nado: ['nado_api'],
   hibachi: ['hibachi_api'],
   hotstuff: ['hotstuff_api'],
@@ -261,11 +261,31 @@ function ostiumBuilderEligibilityClause() {
   )`;
 }
 
+function risexBuilderEligibilityClause() {
+  const proof = 'trade_history.proof_json';
+  const valid = `json_valid(COALESCE(${proof}, ''))`;
+  const json = path => `json_extract(${proof}, ${sqlQuote(path)})`;
+  return `(
+    ${valid}
+    AND ${json('$.source')} = 'risex_place_order_onchain'
+    AND CAST(${json('$.builder.verified')} AS INTEGER) = 1
+    AND CAST(${json('$.builder.builder_id')} AS INTEGER) > 0
+    AND CAST(${json('$.builder.builder_id')} AS INTEGER)
+      = CAST(${json('$.builder.expected_builder_id')} AS INTEGER)
+    AND CAST(${json('$.builder.builder_fee_bps')} AS INTEGER)
+      = CAST(${json('$.builder.expected_builder_fee_bps')} AS INTEGER)
+    AND CAST(${json('$.builder.builder_fee_bps')} AS INTEGER) = 100
+  )`;
+}
+
 function verifiedSourceClauseForDex(dex) {
   const normalizedDex = String(dex || '').toLowerCase();
   const sources = VERIFIED_SOURCES_BY_DEX[normalizedDex] || ['worker'];
   if (normalizedDex === 'ostium') {
     return `verified_source = ${sqlQuote(sources[0])} AND ${ostiumBuilderEligibilityClause()}`;
+  }
+  if (normalizedDex === 'risex') {
+    return `verified_source = ${sqlQuote(sources[0])} AND ${risexBuilderEligibilityClause()}`;
   }
   if (sources.length === 1) return `verified_source = ${sqlQuote(sources[0])}`;
   return `verified_source IN (${sources.map(sqlQuote).join(', ')})`;
@@ -581,6 +601,7 @@ module.exports = {
   walletChainType,
   canonicalWallet,
   resolveWalletForDex,
+  risexBuilderEligibilityClause,
   verifiedSourceClauseForDex,
   verifiedSourceWhereForDex,
   futuresDbReadonly,

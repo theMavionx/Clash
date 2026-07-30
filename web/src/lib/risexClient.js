@@ -13,8 +13,9 @@ import {
 } from './risexConfig';
 
 export const RISEX_SIGNER_STORAGE_PREFIX = 'clash_risex_signer_v1';
+export const RISEX_BUILDER_APPROVAL_STORAGE_PREFIX = 'clash_risex_builder_approval_v1';
 export const RISEX_REGISTER_MESSAGE = 'Registering signer for RISEx';
-export const RISEX_SIGNER_TTL_SECONDS = 30 * 24 * 60 * 60;
+export const RISEX_SIGNER_TTL_SECONDS = 365 * 24 * 60 * 60;
 export const RISEX_PERMIT_TTL_SECONDS = 300;
 export const RISEX_MIN_DEPOSIT_USDC = 1;
 
@@ -64,6 +65,7 @@ const MAX_BITMAP_INDEX = 207;
 const runtimeSignerCache = new Map();
 const ACTION_PLACE_ORDER_HASH = keccak256(stringToHex('RISE_PERPS_PLACE_ORDER_V1'));
 const ACTION_CANCEL_ORDER_HASH = keccak256(stringToHex('RISE_PERPS_CANCEL_ORDER_V1'));
+const ACTION_APPROVE_BUILDER_FEE_HASH = keccak256(stringToHex('RISE_APPROVE_BUILDER_FEE_V1'));
 const V3_FLAG_PERMIT = 1;
 const V3_FLAG_BUILDER = 2;
 const V3_FLAG_CLIENT_ID = 4;
@@ -71,6 +73,37 @@ const V3_FLAG_TTL = 16;
 
 export function isRisexAddress(addr) {
   return /^0x[0-9a-fA-F]{40}$/.test(String(addr || '').trim());
+}
+
+function builderApprovalStorageKey(account, builderId) {
+  return `${RISEX_BUILDER_APPROVAL_STORAGE_PREFIX}:${String(account || '').toLowerCase()}:${Number(builderId || 0)}`;
+}
+
+export function readRisexBuilderApproval(account, builderId, maxFeeBps) {
+  if (typeof window === 'undefined' || !isRisexAddress(account) || Number(builderId) <= 0) return false;
+  try {
+    const raw = window.localStorage.getItem(builderApprovalStorageKey(account, builderId));
+    if (!raw) return false;
+    const saved = JSON.parse(raw);
+    return Number(saved?.builder_id) === Number(builderId)
+      && Number(saved?.max_fee_bps) >= Number(maxFeeBps);
+  } catch {
+    return false;
+  }
+}
+
+export function rememberRisexBuilderApproval(account, builderId, maxFeeBps) {
+  if (typeof window === 'undefined' || !isRisexAddress(account) || Number(builderId) <= 0) return;
+  window.localStorage.setItem(builderApprovalStorageKey(account, builderId), JSON.stringify({
+    builder_id: Number(builderId),
+    max_fee_bps: Number(maxFeeBps),
+    approved_at_ms: Date.now(),
+  }));
+}
+
+export function forgetRisexBuilderApproval(account, builderId) {
+  if (typeof window === 'undefined' || !isRisexAddress(account) || Number(builderId) <= 0) return;
+  window.localStorage.removeItem(builderApprovalStorageKey(account, builderId));
 }
 
 export function normalizeRisexSymbol(value) {
@@ -149,6 +182,8 @@ export function normalizeRisexMarkets(rows = []) {
         m?.min_size,
         stepSize,
       ], stepSize);
+      const active = m?.active !== false && m?._risex?.active !== false;
+      const unlocked = m?.config?.unlocked !== false && m?._risex?.unlocked !== false;
       return {
         symbol,
         base: symbol,
@@ -167,11 +202,16 @@ export function normalizeRisexMarkets(rows = []) {
         volume_24h: Number(m?.volume_24h ?? m?.quote_volume_24h ?? m?.daily_volume ?? 0),
         open_interest: Number(m?.open_interest ?? 0),
         funding_rate: Number(m?.funding_rate ?? m?.current_funding_rate ?? 0),
-        _risex: { marketId, stepSize, stepPrice, raw: m },
+        _risex: { marketId, stepSize, stepPrice, active, unlocked, raw: m },
         _raw: m,
       };
     })
-    .filter(m => m.symbol && Number.isFinite(m.market_id));
+    .filter(
+      m => m.symbol
+        && Number.isFinite(m.market_id)
+        && m._risex.active
+        && m._risex.unlocked,
+    );
 }
 
 export function normalizeRisexPrices(markets = []) {
@@ -392,8 +432,22 @@ export async function createRisexRegisterPayload({
   label = 'clashofperps',
 }) {
   const expiresAt = Math.floor(Date.now() / 1000) + RISEX_SIGNER_TTL_SECONDS;
-  const nonceAnchor = Number(nonceState?.nonce_anchor || 0) + 1;
-  const nonceBitmap = 0;
+  let nonceAnchor = Number(nonceState?.nonce_anchor || 0);
+  let nonceBitmap = Number(
+    nonceState?.current_bitmap_index
+    ?? nonceState?.nonce_bitmap_index
+    ?? 0,
+  );
+  if (!Number.isInteger(nonceAnchor) || nonceAnchor < 0 || nonceAnchor > 0xffffffffffff) {
+    throw new Error('RISEx signer nonce anchor is invalid');
+  }
+  if (!Number.isInteger(nonceBitmap) || nonceBitmap < 0) {
+    throw new Error('RISEx signer nonce bitmap index is invalid');
+  }
+  if (nonceBitmap > MAX_BITMAP_INDEX) {
+    nonceAnchor += 1;
+    nonceBitmap = 0;
+  }
   const cleanDomain = risexDomain(domain);
   const message = {
     account,
@@ -427,7 +481,6 @@ export async function createRisexRegisterPayload({
     signer: signer.address,
     message: message.message,
     nonce_anchor: String(nonceAnchor),
-    nonce_bitmap: nonceBitmap,
     nonce_bitmap_index: nonceBitmap,
     expiration: String(expiresAt),
     account_signature: accountSignature,
@@ -500,14 +553,43 @@ export function encodeRisexOrder(orderParams) {
     price_ticks: orderParams.price_ticks ?? orderParams.price ?? 0,
     time_in_force: orderParams.time_in_force ?? orderParams.tif ?? 0,
     builder_id: orderParams.builder_id ?? 0,
+    builder_fee_bps: orderParams.builder_fee_bps ?? 0,
     client_order_id: orderParams.client_order_id ?? 0,
     ttl_units: orderParams.ttl_units ?? 0,
   };
+  const builderId = Number(p.builder_id);
+  if (builderId !== 0) {
+    const builderFeeBps = Number(p.builder_fee_bps);
+    if (!Number.isInteger(builderFeeBps) || builderFeeBps <= 0 || builderFeeBps > 65_535) {
+      throw new Error('RISEx builder fee must be a positive uint16 value');
+    }
+    const encodedV3 = encodeAbiParameters(
+      [
+        { type: 'bytes32' },
+        { type: 'uint8' },
+        { type: 'uint88' },
+        { type: 'uint16' },
+        { type: 'uint16' },
+        { type: 'uint64' },
+        { type: 'uint16' },
+      ],
+      [
+        ACTION_PLACE_ORDER_HASH,
+        encodeRisexHeaderFlags(p),
+        encodeRisexOrderData(p),
+        builderId,
+        builderFeeBps,
+        BigInt(p.client_order_id),
+        Number(p.ttl_units),
+      ],
+    );
+    return keccak256(encodedV3);
+  }
   const encoded = encodeAbiParameters(
     [
       { type: 'bytes32' },
       { type: 'uint8' },
-      { type: 'uint256' },
+      { type: 'uint88' },
       { type: 'uint16' },
       { type: 'uint64' },
       { type: 'uint16' },
@@ -524,14 +606,37 @@ export function encodeRisexOrder(orderParams) {
   return keccak256(encoded);
 }
 
+export function encodeRisexBuilderFeeApproval({ builderId, maxFeeBps }) {
+  const canonicalBuilderId = Number(builderId);
+  const canonicalMaxFeeBps = Number(maxFeeBps);
+  if (!Number.isInteger(canonicalBuilderId) || canonicalBuilderId <= 0 || canonicalBuilderId > 65_535) {
+    throw new Error('RISEx builder id must be a positive uint16 value');
+  }
+  if (!Number.isInteger(canonicalMaxFeeBps) || canonicalMaxFeeBps <= 0 || canonicalMaxFeeBps > 65_535) {
+    throw new Error('RISEx builder fee ceiling must be a positive uint16 value');
+  }
+  return keccak256(encodeAbiParameters(
+    [{ type: 'bytes32' }, { type: 'uint16' }, { type: 'uint16' }],
+    [ACTION_APPROVE_BUILDER_FEE_HASH, canonicalBuilderId, canonicalMaxFeeBps],
+  ));
+}
+
 export function encodeRisexCancelOrder(cancelParams) {
   const orderId = cancelParams?.resting_order_id ?? cancelParams?.order_id;
   if (orderId == null) {
     throw new Error('RISEx cancel needs resting_order_id from the open order');
   }
+  const marketId = Number(cancelParams.market_id);
+  const restingOrderId = BigInt(orderId);
+  if (!Number.isInteger(marketId) || marketId <= 0 || marketId > 0xffff) {
+    throw new Error('RISEx cancel market_id must be a positive uint16 value');
+  }
+  if (restingOrderId < 0n || restingOrderId > 0xffffffffffn) {
+    throw new Error('RISEx cancel resting_order_id must fit uint40');
+  }
   const encoded = encodeAbiParameters(
-    [{ type: 'bytes32' }, { type: 'uint256' }, { type: 'uint256' }],
-    [ACTION_CANCEL_ORDER_HASH, BigInt(cancelParams.market_id), BigInt(orderId)],
+    [{ type: 'bytes32' }, { type: 'uint16' }, { type: 'uint40' }],
+    [ACTION_CANCEL_ORDER_HASH, marketId, restingOrderId],
   );
   return keccak256(encoded);
 }
@@ -569,9 +674,8 @@ export async function createRisexPermit({
     account,
     signer: signer.address,
     nonce_anchor: String(nextAnchor),
-    nonce_bitmap: nonceBitmapIndex,
     nonce_bitmap_index: nonceBitmapIndex,
-    deadline: String(deadline),
+    deadline,
     signature: hexSignatureToBase64(rawSig),
   };
 }
@@ -599,6 +703,7 @@ export function buildRisexOrderParams({
   orderType = 'market',
   reduceOnly = false,
   postOnly = false,
+  builder,
 }) {
   if (!market) throw new Error('Select a valid RISEx market');
   const mark = Number(price || market.mark || market.mid || 0);
@@ -621,6 +726,14 @@ export function buildRisexOrderParams({
   const priceTicks = isLimit ? decimalStepCount(mark, stepPrice) : 0;
   const expiry = Math.floor(Date.now() / 1000) + (isLimit ? 24 * 60 * 60 : 5 * 60);
   const timeInForce = isLimit ? RISEX_TIF.GTC : RISEX_TIF.IOC;
+  const builderId = Number(builder?.builder_id);
+  const builderFeeBps = Number(builder?.builder_fee_bps);
+  if (!builder?.registered || !Number.isInteger(builderId) || builderId <= 0) {
+    throw new Error('Clash RISEx builder code is not registered yet');
+  }
+  if (!Number.isInteger(builderFeeBps) || builderFeeBps <= 0) {
+    throw new Error('Clash RISEx builder fee is unavailable');
+  }
   return {
     market_id: Number(market.market_id ?? market.pair_index),
     side: side === 'ask' || side === 'short' || side === 'sell' ? RISEX_SIDE.SHORT : RISEX_SIDE.LONG,
@@ -635,7 +748,8 @@ export function buildRisexOrderParams({
     expiry,
     ttl_units: 0,
     client_order_id: nextRisexClientOrderId(),
-    builder_id: 0,
+    builder_id: builderId,
+    builder_fee_bps: builderFeeBps,
   };
 }
 

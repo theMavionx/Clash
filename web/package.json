@@ -9,6 +9,7 @@
     "optimize:images": "node optimize-images.cjs",
     "watch": "node watch-export.js",
     "dev:all": "node watch-export.js & vite",
+    "test:risex-signing": "node test-risex-signing.mjs",
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview"

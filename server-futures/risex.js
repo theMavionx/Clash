@@ -1,7 +1,39 @@
 const RISEX_API = String(process.env.RISEX_API_URL || 'https://api.rise.trade').replace(/\/+$/u, '');
 const RISEX_BRIDGE_API = String(process.env.RISEX_BRIDGE_API_URL || 'https://www.rise.trade/api/bridge').replace(/\/+$/u, '');
+const RISEX_BRIDGE_HISTORY_API = String(
+  process.env.RISEX_BRIDGE_HISTORY_API_URL || 'https://api.bridge.risechain.com/v1/bridge',
+).replace(/\/+$/u, '');
 const RISEX_FILL_LOOKBACK_LIMIT = Math.max(10, Math.min(250, Number(process.env.RISEX_FILL_LOOKBACK_LIMIT || 100)));
 const RISEX_RISE_CHAIN_ID = 4153;
+const RISEX_BUILDER_FEE_RECIPIENT = String(
+  process.env.RISEX_BUILDER_FEE_RECIPIENT || '0x39B36f1EDF2eF5a6f2e02991b3a85Fb356eB5005',
+).trim().toLowerCase();
+const RISEX_BUILDER_ID = (() => {
+  const value = Number(process.env.RISEX_BUILDER_ID || 10);
+  return Number.isInteger(value) && value > 0 && value <= 65_535 ? value : 10;
+})();
+// RISEx denominates this field in hundredths of a basis point: 100 = 1 bps.
+const RISEX_BUILDER_FEE_BPS = 100;
+const RISEX_FEE_MANAGER_ADDRESS = String(
+  process.env.RISEX_FEE_MANAGER_ADDRESS || '0x11541dc387b9C307043ea732127DF92b80bab52b',
+).trim().toLowerCase();
+const RISEX_GET_BUILDER_INFO_SELECTOR = '0x18726b21';
+const RISEX_BUILDER_CACHE_MS = Math.max(
+  15_000,
+  Number(process.env.RISEX_BUILDER_CACHE_MS || 5 * 60_000),
+);
+const RISEX_ORDER_PROOF_CACHE_MS = Math.max(
+  15_000,
+  Number(process.env.RISEX_ORDER_PROOF_CACHE_MS || 10 * 60_000),
+);
+const RISEX_MARKET_CACHE_MS = Math.max(
+  15_000,
+  Number(process.env.RISEX_MARKET_CACHE_MS || 60_000),
+);
+const RISEX_PLACE_ORDER_TOPIC = '0x91b555b0d6e41c11a3e63bf27ce5de22d51f82ff6127a7aa895593945a344b5c';
+const RISEX_PLACE_ORDER_WORD_COUNT = 15;
+const RISEX_PLACE_ORDER_BUILDER_ID_WORD = 11;
+const RISEX_PLACE_ORDER_BUILDER_FEE_WORD = 14;
 const ERC20_BALANCE_OF_SELECTOR = '0x70a08231';
 const BASE_ALCHEMY_KEY = String(process.env.BASE_ALCHEMY_KEY || process.env.ALCHEMY_BASE_API_KEY || '').trim();
 const BASE_ALCHEMY_RPC = BASE_ALCHEMY_KEY
@@ -43,6 +75,10 @@ const RISEX_BRIDGE_CHAINS = Object.freeze({
     usdc: '0xe436820ba0c69702c1d3e601d421c0ef38262739',
   },
 });
+let clashBuilderCache = null;
+let marketInfoCache = null;
+let marketInfoPromise = null;
+const orderBuilderProofCache = new Map();
 
 function isEvmAddress(addr) {
   return /^0x[0-9a-fA-F]{40}$/.test(String(addr || '').trim());
@@ -120,10 +156,12 @@ function errorText(data, fallback = '') {
     || fallback;
 }
 
-async function apiRequest(path, { method = 'GET', body, signal } = {}) {
+async function apiRequest(path, { method = 'GET', body, signal, timeoutMs = 15_000 } = {}) {
   const url = `${RISEX_API}${path.startsWith('/') ? path : `/${path}`}`;
   const controller = signal ? null : new AbortController();
-  const timeout = controller ? setTimeout(() => controller.abort(), 15_000) : null;
+  const timeout = controller
+    ? setTimeout(() => controller.abort(), Math.max(1_000, Number(timeoutMs) || 15_000))
+    : null;
   try {
     const res = await fetch(url, {
       method,
@@ -145,6 +183,163 @@ async function apiRequest(path, { method = 'GET', body, signal } = {}) {
   } finally {
     if (timeout) clearTimeout(timeout);
   }
+}
+
+async function listBuilders() {
+  let data = null;
+  let lastError = null;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      data = await apiRequest('/v1/builders');
+      break;
+    } catch (error) {
+      lastError = error;
+      if (attempt === 0) await new Promise(resolve => setTimeout(resolve, 500));
+    }
+  }
+  if (data == null) throw lastError || new Error('RISEx builder registry is unavailable');
+  return rows(data, ['builders']).map((entry) => ({
+    builder_id: Number(entry?.builder_id ?? entry?.builderId ?? entry?.id),
+    fee_recipient: normalizeAddress(entry?.fee_recipient ?? entry?.feeRecipient),
+    is_active: entry?.is_active !== false && entry?.isActive !== false,
+    raw: entry,
+  })).filter(
+    entry => Number.isInteger(entry.builder_id)
+      && entry.builder_id > 0
+      && entry.fee_recipient
+      && entry.is_active,
+  );
+}
+
+function getBuilderInfoCallData(builderId) {
+  const value = Number(builderId);
+  if (!Number.isInteger(value) || value <= 0 || value > 65_535) {
+    throw new Error(`Invalid RISEx builder ID: ${builderId}`);
+  }
+  return `${RISEX_GET_BUILDER_INFO_SELECTOR}${value.toString(16).padStart(64, '0')}`;
+}
+
+function decodeBuilderInfoResult(result) {
+  const payload = String(result || '').replace(/^0x/u, '');
+  if (!/^[0-9a-fA-F]{128,}$/u.test(payload) || payload.length % 64 !== 0) {
+    throw new Error('RISEx FeeManager returned malformed builder info');
+  }
+  const feeRecipient = normalizeAddress(`0x${payload.slice(24, 64)}`);
+  const activeWord = BigInt(`0x${payload.slice(64, 128)}`);
+  if (activeWord !== 0n && activeWord !== 1n) {
+    throw new Error('RISEx FeeManager returned an invalid builder active flag');
+  }
+  return {
+    fee_recipient: feeRecipient,
+    is_active: activeWord === 1n,
+  };
+}
+
+async function getBuilderInfoOnchain(builderId = RISEX_BUILDER_ID) {
+  if (!isEvmAddress(RISEX_FEE_MANAGER_ADDRESS)) {
+    throw new Error('RISEX_FEE_MANAGER_ADDRESS is not a valid EVM address');
+  }
+  const data = getBuilderInfoCallData(builderId);
+  let lastError = null;
+  for (const rpcUrl of rpcUrlsForChain(RISEX_RISE_CHAIN_ID)) {
+    try {
+      const result = await rpcRequest(
+        rpcUrl,
+        'eth_call',
+        [{ to: RISEX_FEE_MANAGER_ADDRESS, data }, 'latest'],
+      );
+      return {
+        builder_id: Number(builderId),
+        ...decodeBuilderInfoResult(result),
+      };
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError || new Error('No RISE RPC is configured for RISEx builder verification');
+}
+
+async function getClashBuilderConfig({ force = false } = {}) {
+  const now = Date.now();
+  if (!force && clashBuilderCache && now - clashBuilderCache.fetched_at_ms < RISEX_BUILDER_CACHE_MS) {
+    return clashBuilderCache;
+  }
+  if (!isEvmAddress(RISEX_BUILDER_FEE_RECIPIENT)) {
+    throw new Error('RISEX_BUILDER_FEE_RECIPIENT is not a valid EVM address');
+  }
+  let builders = [];
+  let apiError = null;
+  try {
+    builders = await listBuilders();
+  } catch (error) {
+    apiError = error;
+  }
+  let registered = builders.find(
+    builder => builder.fee_recipient === RISEX_BUILDER_FEE_RECIPIENT,
+  ) || null;
+  let registrySource = registered ? 'risex_api' : null;
+  let onchainError = null;
+
+  // The public builder list can lag successful FeeManager registrations.
+  // Fall back to the canonical on-chain registry instead of treating an
+  // indexed-late builder as inactive and blocking every Clash order.
+  if (!registered) {
+    try {
+      const onchain = await getBuilderInfoOnchain(RISEX_BUILDER_ID);
+      if (
+        onchain.is_active
+        && onchain.fee_recipient === RISEX_BUILDER_FEE_RECIPIENT
+      ) {
+        registered = onchain;
+        registrySource = 'risex_onchain';
+      }
+    } catch (error) {
+      onchainError = error;
+    }
+  }
+
+  if (!registered && apiError && onchainError) {
+    if (!force && clashBuilderCache) {
+      return {
+        ...clashBuilderCache,
+        stale: true,
+        registry_error: [
+          `API: ${apiError?.message || String(apiError)}`,
+          `on-chain: ${onchainError?.message || String(onchainError)}`,
+        ].join('; '),
+      };
+    }
+    throw new Error(
+      `RISEx builder registry unavailable (API: ${apiError?.message || apiError}; `
+      + `on-chain: ${onchainError?.message || onchainError})`,
+    );
+  }
+
+  clashBuilderCache = {
+    registered: !!registered,
+    builder_id: registered?.builder_id || null,
+    builder_fee_bps: RISEX_BUILDER_FEE_BPS,
+    fee_recipient: RISEX_BUILDER_FEE_RECIPIENT,
+    registry_source: registrySource,
+    ...(apiError ? { registry_api_error: apiError?.message || String(apiError) } : {}),
+    ...(onchainError ? { registry_onchain_error: onchainError?.message || String(onchainError) } : {}),
+    fetched_at_ms: now,
+  };
+  return clashBuilderCache;
+}
+
+async function requireClashBuilderConfig({ force = false } = {}) {
+  const config = await getClashBuilderConfig({ force });
+  if (!config.registered || !config.builder_id) {
+    throw new Error(
+      `Clash RISEx builder is not registered for fee recipient ${RISEX_BUILDER_FEE_RECIPIENT}`,
+    );
+  }
+  return config;
+}
+
+async function approveBuilderFee(body) {
+  return apiRequest('/v1/orders/builder-fee/approve', { method: 'POST', body });
 }
 
 async function bridgeRequest(path, { method = 'GET', body, signal } = {}) {
@@ -206,6 +401,168 @@ async function rpcRequest(url, method, params) {
   return data?.result;
 }
 
+function parseCompositeOrderId(value) {
+  const match = /^0x([0-9a-f]{16})([0-9a-f]{16})([0-9a-f]{16})$/iu.exec(String(value || '').trim());
+  if (!match) return null;
+  return {
+    order_id: `0x${match[1]}${match[2]}${match[3]}`.toLowerCase(),
+    wide_order_id: BigInt(`0x${match[1]}`),
+    block_number: BigInt(`0x${match[2]}`),
+    log_index: BigInt(`0x${match[3]}`),
+  };
+}
+
+function hexQuantity(value) {
+  return `0x${BigInt(value).toString(16)}`;
+}
+
+function uintTopic(value) {
+  return `0x${BigInt(value).toString(16).padStart(64, '0')}`;
+}
+
+function addressTopic(value) {
+  const address = normalizeAddress(value);
+  if (!address) throw new Error(`Invalid indexed address: ${String(value || '')}`);
+  return `0x${address.slice(2).padStart(64, '0')}`;
+}
+
+function topicAddress(value) {
+  const clean = String(value || '').toLowerCase();
+  if (!/^0x[0-9a-f]{64}$/u.test(clean)) return null;
+  return normalizeAddress(`0x${clean.slice(-40)}`);
+}
+
+function decodeCompactUint32Word(word, label) {
+  const raw = BigInt(word);
+  if (raw < 0n || raw > 0xffffffffn) {
+    throw new Error(`${label} is outside the encoded uint32 range`);
+  }
+  if (raw <= 0xffffn) return Number(raw);
+  if ((raw & 0xffffffn) === 0n && (raw >> 24n) <= 0xffffn) {
+    return Number(raw >> 24n);
+  }
+  throw new Error(`${label} has an unsupported packed encoding`);
+}
+
+function decodePlaceOrderBuilderFields(log) {
+  const data = String(log?.data || '');
+  if (!/^0x[0-9a-f]+$/iu.test(data) || (data.length - 2) % 64 !== 0) {
+    throw new Error('PlaceOrder event data is malformed');
+  }
+  const words = [];
+  const payload = data.slice(2);
+  for (let offset = 0; offset < payload.length; offset += 64) {
+    words.push(BigInt(`0x${payload.slice(offset, offset + 64)}`));
+  }
+  if (words.length !== RISEX_PLACE_ORDER_WORD_COUNT) {
+    throw new Error(`Unexpected PlaceOrder event layout (${words.length} words)`);
+  }
+  return {
+    protocol: topicAddress(log?.topics?.[1]),
+    market_id: BigInt(log?.topics?.[2] || 0),
+    wide_order_id: BigInt(log?.topics?.[3] || 0),
+    builder_id: decodeCompactUint32Word(
+      words[RISEX_PLACE_ORDER_BUILDER_ID_WORD],
+      'PlaceOrder builder_id',
+    ),
+    builder_fee_bps: decodeCompactUint32Word(
+      words[RISEX_PLACE_ORDER_BUILDER_FEE_WORD],
+      'PlaceOrder builder_fee_bps',
+    ),
+  };
+}
+
+async function fetchPlaceOrderLog(order, marketId, systemConfig) {
+  const ordersManager = normalizeAddress(systemConfig?.addresses?.orders_manager);
+  const protocol = normalizeAddress(systemConfig?.addresses?.perps_manager);
+  if (!ordersManager || !protocol) {
+    throw new Error('RISEx system config is missing OrdersManager or PerpsManager');
+  }
+  const block = hexQuantity(order.block_number);
+  const filter = {
+    address: ordersManager,
+    fromBlock: block,
+    toBlock: block,
+    topics: [
+      RISEX_PLACE_ORDER_TOPIC,
+      addressTopic(protocol),
+      uintTopic(marketId),
+      uintTopic(order.wide_order_id),
+    ],
+  };
+  let lastError = null;
+  for (const rpcUrl of rpcUrlsForChain(RISEX_RISE_CHAIN_ID)) {
+    try {
+      const logs = await rpcRequest(rpcUrl, 'eth_getLogs', [filter]);
+      const exact = (Array.isArray(logs) ? logs : []).find(
+        log => BigInt(log?.logIndex || 0) === order.log_index,
+      );
+      if (!exact) {
+        throw new Error(
+          `PlaceOrder event not found at block ${order.block_number} log ${order.log_index}`,
+        );
+      }
+      return exact;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError || new Error('No RISE RPC configured for builder proof');
+}
+
+async function verifyFillBuilderProof(fill, builderConfig, systemConfig) {
+  const order = parseCompositeOrderId(fill?.order_id);
+  if (!order) return { eligible: false, reason: 'invalid_order_id' };
+  const marketId = Number(fill?.market_id ?? fill?.marketId ?? fill?.market);
+  if (!Number.isInteger(marketId) || marketId < 0) {
+    return { eligible: false, reason: 'invalid_market_id' };
+  }
+  const cacheKey = order.order_id;
+  const cached = orderBuilderProofCache.get(cacheKey);
+  if (cached && Date.now() - cached.cached_at_ms < RISEX_ORDER_PROOF_CACHE_MS) {
+    return cached.result;
+  }
+
+  const log = await fetchPlaceOrderLog(order, marketId, systemConfig);
+  const decoded = decodePlaceOrderBuilderFields(log);
+  const expectedProtocol = normalizeAddress(systemConfig?.addresses?.perps_manager);
+  let reason = null;
+  if (decoded.protocol !== expectedProtocol) reason = 'protocol_mismatch';
+  else if (decoded.market_id !== BigInt(marketId)) reason = 'market_mismatch';
+  else if (decoded.wide_order_id !== order.wide_order_id) reason = 'wide_order_id_mismatch';
+  else if (decoded.builder_id !== Number(builderConfig?.builder_id)) reason = 'builder_id_mismatch';
+  else if (decoded.builder_fee_bps !== Number(builderConfig?.builder_fee_bps)) reason = 'builder_fee_mismatch';
+
+  const result = {
+    eligible: reason == null,
+    reason,
+    proof: {
+      source: 'risex_place_order_onchain',
+      builder: {
+        verified: reason == null,
+        builder_id: decoded.builder_id,
+        expected_builder_id: Number(builderConfig?.builder_id),
+        builder_fee_bps: decoded.builder_fee_bps,
+        expected_builder_fee_bps: Number(builderConfig?.builder_fee_bps),
+        fee_recipient: builderConfig?.fee_recipient || null,
+      },
+      order: {
+        composite_order_id: order.order_id,
+        wide_order_id: order.wide_order_id.toString(),
+        block_number: order.block_number.toString(),
+        log_index: order.log_index.toString(),
+        placement_tx_hash: log?.transactionHash || null,
+        orders_manager: normalizeAddress(log?.address),
+        protocol: decoded.protocol,
+        market_id: marketId,
+      },
+      fill,
+    },
+  };
+  orderBuilderProofCache.set(cacheKey, { cached_at_ms: Date.now(), result });
+  return result;
+}
+
 async function readErc20Balance({ chainId, token, account }) {
   const cleanToken = normalizeAddress(token);
   const cleanAccount = normalizeAddress(account);
@@ -262,6 +619,8 @@ function symbolOf(value) {
 function normalizeMarket(m) {
   const cfg = m?.config || m;
   const state = m?.state || m;
+  const active = m?.active !== false;
+  const unlocked = cfg?.unlocked !== false;
   const marketId = Number(m?.market_id ?? m?.id);
   const symbol = symbolOf(
     m?.base_symbol
@@ -274,7 +633,7 @@ function normalizeMarket(m) {
     || m?.underlying
     || cfg?.name
   );
-  if (!Number.isFinite(marketId) || !symbol) return null;
+  if (!Number.isFinite(marketId) || !symbol || !active || !unlocked) return null;
   const mark = num(state?.mark_price ?? state?.mark ?? state?.index_price ?? state?.oracle_price ?? m?.mark_price);
   const stepSize = num(cfg?.step_size ?? m?.step_size, 0.000001);
   const stepPrice = num(cfg?.step_price ?? m?.step_price, mark >= 1000 ? 0.1 : 0.01);
@@ -296,7 +655,7 @@ function normalizeMarket(m) {
     volume_24h: num(state?.volume_24h ?? state?.quote_volume_24h ?? state?.daily_volume ?? m?.volume_24h ?? m?.quote_volume_24h),
     open_interest: num(state?.open_interest ?? m?.open_interest),
     funding_rate: num(state?.funding_rate ?? state?.current_funding_rate ?? m?.funding_rate ?? m?.current_funding_rate),
-    _risex: { marketId, stepSize, stepPrice, raw: m },
+    _risex: { marketId, stepSize, stepPrice, active, unlocked, raw: m },
     _raw: m,
   };
 }
@@ -459,11 +818,32 @@ async function getBridgeHistory(account, opts = {}) {
   const clean = normalizeAddress(account);
   if (!clean) throw new Error('account query param required (0x...)');
   const params = new URLSearchParams({
-    address: clean,
     limit: String(Math.max(1, Math.min(100, Number(opts.limit) || 20))),
     offset: String(Math.max(0, Number(opts.offset) || 0)),
+    tokenSymbol: 'usdc',
   });
-  return bridgeRequest(`/history?${params.toString()}`);
+  if (opts.sourceEid) params.set('srcEid', String(Number(opts.sourceEid)));
+  if (opts.destEid) params.set('dstEid', String(Number(opts.destEid)));
+  const url = `${RISEX_BRIDGE_HISTORY_API}/history/${encodeURIComponent(clean)}?${params.toString()}`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15_000);
+  try {
+    const res = await fetch(url, {
+      headers: { accept: 'application/json' },
+      signal: controller.signal,
+    });
+    const text = await res.text();
+    let data = null;
+    try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+    if (!res.ok) {
+      throw new Error(
+        `RISEx bridge history GET ${res.status}: ${errorText(data, text) || 'request failed'}`,
+      );
+    }
+    return data;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 async function getTransferHistory(account, opts = {}) {
@@ -476,9 +856,36 @@ async function getTransferHistory(account, opts = {}) {
   return apiRequest(`/v1/account/transfer-history?${params.toString()}`);
 }
 
-async function getMarketInfo() {
-  const payload = await apiRequest('/v1/markets');
-  return rows(payload, ['markets']).map(normalizeMarket).filter(Boolean);
+async function getMarketInfo({ force = false } = {}) {
+  const now = Date.now();
+  if (!force && marketInfoCache && now - marketInfoCache.fetched_at_ms < RISEX_MARKET_CACHE_MS) {
+    return marketInfoCache.markets;
+  }
+  if (!force && marketInfoPromise) return marketInfoPromise;
+
+  marketInfoPromise = (async () => {
+    let lastError = null;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const payload = await apiRequest('/v1/markets', { timeoutMs: 30_000 });
+        const markets = rows(payload, ['markets']).map(normalizeMarket).filter(Boolean);
+        if (!markets.length) throw new Error('RISEx returned no active unlocked markets');
+        marketInfoCache = { markets, fetched_at_ms: Date.now() };
+        return markets;
+      } catch (error) {
+        lastError = error;
+        if (attempt === 0) await new Promise(resolve => setTimeout(resolve, 500));
+      }
+    }
+    if (marketInfoCache?.markets?.length) return marketInfoCache.markets;
+    throw lastError || new Error('RISEx markets are unavailable');
+  })();
+
+  try {
+    return await marketInfoPromise;
+  } finally {
+    marketInfoPromise = null;
+  }
 }
 
 async function marketMap() {
@@ -642,7 +1049,11 @@ async function getAccountTradeHistory(address, { marketId, limit = RISEX_FILL_LO
 function fillTime(fill) {
   const raw = fill?.timestamp ?? fill?.time ?? fill?.created_at ?? fill?.createdAt;
   const n = Number(raw);
-  if (Number.isFinite(n) && n > 0) return n > 1e12 ? n : n * 1000;
+  if (Number.isFinite(n) && n > 0) {
+    if (n > 1e16) return Math.floor(n / 1e6);
+    if (n > 1e14) return Math.floor(n / 1e3);
+    return n > 1e11 ? Math.floor(n) : Math.floor(n * 1000);
+  }
   const parsed = Date.parse(raw || '');
   return Number.isFinite(parsed) ? parsed : 0;
 }
@@ -661,7 +1072,7 @@ function tradeKey(wallet, fill) {
   return `risex:${String(wallet).toLowerCase()}:${base || JSON.stringify(fill).slice(0, 120)}`;
 }
 
-function normalizeFill(wallet, fill, byMarket) {
+function normalizeFill(wallet, fill, byMarket, proof) {
   const marketId = Number(fill?.market_id ?? fill?.marketId ?? fill?.market);
   const market = byMarket.get(marketId);
   const symbol = symbolOf(fill?.symbol || fill?.market_symbol || market?.symbol);
@@ -675,6 +1086,7 @@ function normalizeFill(wallet, fill, byMarket) {
   if (!symbol || !Number.isFinite(notional) || notional < 1 || notional > 10_000_000) return null;
   const reduceOnly = fill?.reduce_only === true || fill?.reduceOnly === true || /close/i.test(String(fill?.direction || fill?.type || ''));
   const side = sideFromValue(fill?.side);
+  const createdAtMs = fillTime(fill);
   return {
     symbol,
     side: reduceOnly ? (side === 'bid' ? 'close_short' : 'close_long') : (side === 'bid' ? 'long' : 'short'),
@@ -686,8 +1098,11 @@ function normalizeFill(wallet, fill, byMarket) {
     status: 'filled',
     dex: 'risex',
     notional_usd: notional,
-    verifiedSource: 'risex_api',
+    verifiedSource: 'risex_builder_onchain',
     pnl: fill?.realized_pnl != null ? String(fill.realized_pnl) : null,
+    fee: fill?.fee != null ? String(fill.fee) : null,
+    proofJson: JSON.stringify(proof),
+    createdAt: createdAtMs > 0 ? new Date(createdAtMs).toISOString() : null,
   };
 }
 
@@ -695,6 +1110,24 @@ async function importFillsForPlayer(playerId, wallet, opts = {}) {
   const cleanWallet = normalizeAddress(wallet);
   if (!cleanWallet) return { ok: false, imported: 0, skipped: 0, total: 0, reason: 'invalid_evm_wallet' };
   const db = require('./db');
+  let builderConfig;
+  let systemConfig;
+  try {
+    [builderConfig, systemConfig] = await Promise.all([
+      requireClashBuilderConfig(),
+      getSystemConfig(),
+    ]);
+  } catch (error) {
+    return {
+      ok: false,
+      imported: 0,
+      adopted: 0,
+      skipped: 0,
+      total: 0,
+      reason: /not registered/i.test(error?.message || '') ? 'builder_not_registered' : 'builder_proof_unavailable',
+      error: error?.message || String(error),
+    };
+  }
   const attempts = Math.max(1, Math.min(6, Number(opts.attempts || 1)));
   const delayMs = Math.max(250, Math.min(5000, Number(opts.delayMs || 1500)));
   let fills = [];
@@ -712,20 +1145,51 @@ async function importFillsForPlayer(playerId, wallet, opts = {}) {
   let imported = 0;
   let adopted = 0;
   let skipped = 0;
+  const skipReasons = {};
+  const proofPromises = new Map();
   for (const fill of fills) {
-    const trade = normalizeFill(cleanWallet, fill, byMarket);
-    if (!trade) { skipped++; continue; }
+    const orderKey = String(fill?.order_id || '').toLowerCase();
+    if (!proofPromises.has(orderKey)) {
+      proofPromises.set(
+        orderKey,
+        verifyFillBuilderProof(fill, builderConfig, systemConfig)
+          .catch(error => ({ eligible: false, reason: 'proof_error', error: error?.message || String(error) })),
+      );
+    }
+    const verification = await proofPromises.get(orderKey);
+    if (!verification?.eligible) {
+      skipped++;
+      const reason = verification?.reason || 'builder_proof_failed';
+      skipReasons[reason] = (skipReasons[reason] || 0) + 1;
+      continue;
+    }
+    const trade = normalizeFill(cleanWallet, fill, byMarket, verification.proof);
+    if (!trade) {
+      skipped++;
+      skipReasons.invalid_fill = (skipReasons.invalid_fill || 0) + 1;
+      continue;
+    }
     try {
       const before = db.db.prepare('SELECT id, player_id FROM trade_history WHERE client_order_id = ?').get(trade.clientOrderId);
       if (before) {
-        if (before.player_id !== playerId) {
-          const moved = db.db.prepare(`
+        const refreshed = db.db.prepare(`
             UPDATE trade_history
-            SET player_id = ?
-            WHERE id = ? AND dex = 'risex' AND verified_source = 'risex_api'
-          `).run(playerId, before.id);
-          if (moved.changes > 0) adopted++;
-        }
+            SET player_id = ?,
+                verified_source = ?,
+                proof_json = ?,
+                fee = ?,
+                created_at = COALESCE(?, created_at)
+            WHERE id = ? AND dex = 'risex'
+              AND verified_source IN ('risex_api', 'risex_builder_onchain')
+          `).run(
+            playerId,
+            trade.verifiedSource,
+            trade.proofJson,
+            trade.fee,
+            trade.createdAt,
+            before.id,
+          );
+        if (refreshed.changes > 0 && before.player_id !== playerId) adopted++;
         skipped++;
         continue;
       }
@@ -739,17 +1203,38 @@ async function importFillsForPlayer(playerId, wallet, opts = {}) {
       }
     }
   }
-  return { ok: true, imported, adopted, skipped, total: fills.length };
+  return {
+    ok: true,
+    imported,
+    adopted,
+    skipped,
+    total: fills.length,
+    skipped_by_reason: skipReasons,
+    builder_id: builderConfig.builder_id,
+    builder_fee_bps: builderConfig.builder_fee_bps,
+  };
 }
 
 module.exports = {
   RISEX_API,
   RISEX_BRIDGE_API,
+  RISEX_BRIDGE_HISTORY_API,
   RISEX_BRIDGE_CHAINS,
+  RISEX_BUILDER_ID,
+  RISEX_BUILDER_FEE_RECIPIENT,
+  RISEX_BUILDER_FEE_BPS,
+  RISEX_FEE_MANAGER_ADDRESS,
   isEvmAddress,
   normalizeAddress,
   apiRequest,
   bridgeRequest,
+  listBuilders,
+  getBuilderInfoCallData,
+  decodeBuilderInfoResult,
+  getBuilderInfoOnchain,
+  getClashBuilderConfig,
+  requireClashBuilderConfig,
+  approveBuilderFee,
   getSystemConfig,
   getEip712Domain,
   getNonceState,
@@ -773,5 +1258,9 @@ module.exports = {
   getPositionsByAddress,
   getOrdersByAddress,
   getAccountTradeHistory,
+  fillTime,
+  parseCompositeOrderId,
+  decodePlaceOrderBuilderFields,
+  verifyFillBuilderProof,
   importFillsForPlayer,
 };

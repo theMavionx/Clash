@@ -44,6 +44,10 @@ const {
 } = require('./solana_rpc');
 const { normalizeConfirmedMintTxs, resolveEvmMintTokenIds } = require('./nft_mint_receipt');
 const { planDexAccountWalletUpdate } = require('./dex_account_selection');
+const {
+  collectionMintRarity,
+  collectionMintRaritySeed,
+} = require('./nft_rarity');
 
 const router = express.Router();
 
@@ -1820,34 +1824,6 @@ function bindMintedCollectionNftsToPlayer({ req, collection, player, chain, owne
     }
   }
   return bound;
-}
-
-function collectionMintRaritySeed(collection) {
-  const envKey = `NFT_${String(collection?.slug || '').toUpperCase()}_RARITY_REVEAL_SEED`;
-  return String(process.env[envKey] || process.env.NFT_RARITY_REVEAL_SEED || '').trim()
-    || `clash-${String(collection?.slug || 'collection')}-rarity-v1`;
-}
-
-function collectionMintRarity(collection, chain, tokenId, entropy = {}) {
-  const seed = collectionMintRaritySeed(collection);
-  const tx = String(entropy.tx || '').trim().toLowerCase();
-  const reservationId = String(entropy.reservationId || '').trim().toLowerCase();
-  const buyer = String(entropy.buyer || '').trim().toLowerCase();
-  const hash = crypto.createHash('sha256')
-    .update([
-      seed,
-      collection?.slug || 'collection',
-      String(chain || '').toLowerCase(),
-      String(tokenId),
-      tx,
-      reservationId,
-      buyer,
-    ].join('|'))
-    .digest('hex');
-  const bucket = Number.parseInt(hash.slice(0, 8), 16) / 0x100000000;
-  if (bucket < 0.10) return 'legendary';
-  if (bucket < 0.40) return 'epic';
-  return 'common';
 }
 
 function recordCollectionMintRarities(collection, confirmResult, options = {}) {

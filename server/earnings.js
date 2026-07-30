@@ -33,6 +33,7 @@ const {
   AptosApiKeyPool,
   keyPoolFromEnv,
 } = require('../server-futures/aptos-key-pool');
+const tradeRecon = require('./trade_reconciliation');
 
 async function fetchJson(url, opts = {}, timeoutMs = 10_000) {
   const ctrl = new AbortController();
@@ -2153,7 +2154,9 @@ const ANALYTICS_WINDOWS = [
   { key: 'all', label: 'All time', sqlite: null },
 ];
 
-const RISEX_BUILDER_FEE_BPS = Number(process.env.RISEX_BUILDER_FEE_BPS) || 0;
+// RISEx protocol value 100 is one conventional basis point. Keep analytics
+// fixed to the same canonical 1 bps enforced by order routing and rewards.
+const RISEX_BUILDER_FEE_BPS = 1;
 const FLASH_BUILDER_FEE_BPS = Number(process.env.FLASH_BUILDER_FEE_BPS || process.env.GMTRADE_BUILDER_FEE_BPS) || 0;
 
 function safeNumber(value) {
@@ -2202,7 +2205,7 @@ function tradeSourceWhereForAnalytics(dex) {
   if (dex === 'monad') return "verified_source IN ('perpl_api', 'perpl_ws')";
   if (dex === 'hyperliquid') return "verified_source = 'hyperliquid_api'";
   if (dex === 'grvt') return "verified_source = 'grvt_builder'";
-  if (dex === 'risex') return "verified_source = 'risex_api'";
+  if (dex === 'risex') return tradeRecon.verifiedSourceClauseForDex('risex');
   if (dex === 'nado') return "verified_source = 'nado_api'";
   if (dex === 'hibachi') return "verified_source = 'hibachi_api'";
   if (dex === 'hotstuff') return "verified_source = 'hotstuff_api'";
