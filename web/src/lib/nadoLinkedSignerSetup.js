@@ -2,7 +2,7 @@
  * Shared Nado linked-signer enable flow (Futures + Bots).
  */
 import { createNadoClient } from '@nadohq/client';
-import { createWalletClient, http } from 'viem';
+import { createWalletClient, getAddress, http } from 'viem';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import {
   INK_CHAIN_ID,
@@ -29,8 +29,44 @@ function createLinkedSignerWalletClient(record) {
   });
 }
 
+function checksumOwner(walletAddress) {
+  const raw = String(walletAddress || '').trim();
+  if (!raw) return '';
+  try {
+    return getAddress(raw);
+  } catch {
+    return raw.toLowerCase();
+  }
+}
+
+function rewriteChainIdError(err) {
+  const msg = String(err?.shortMessage || err?.message || err || '');
+  if (/chainId should be same as current chainId/i.test(msg) || (/chainId/i.test(msg) && /current chainId/i.test(msg))) {
+    return new Error(
+      `Nado requires Ink (chain ${INK_CHAIN_ID}). Switch your wallet to Ink and retry Setup & Sync.`,
+    );
+  }
+  return err instanceof Error ? err : new Error(msg);
+}
+
+async function assertProviderOnInk(walletClient) {
+  if (!walletClient?.request) return;
+  let hex;
+  try {
+    hex = await walletClient.request({ method: 'eth_chainId' });
+  } catch {
+    return;
+  }
+  const id = Number(hex);
+  if (Number.isFinite(id) && id !== INK_CHAIN_ID) {
+    throw new Error(
+      `Wallet is still on chain ${id}. Nado requires Ink (${INK_CHAIN_ID}). Switch network and retry.`,
+    );
+  }
+}
+
 function resolveWalletClients({ walletAddress, walletClient, publicClient, getWalletClient, getPublicClient }) {
-  const owner = String(walletAddress || '').trim().toLowerCase();
+  const owner = checksumOwner(walletAddress);
   // Prefer Ink-bound clients. BotsPanel often passes the default walletClient
   // which is Base (8453) — Nado linkSigner then throws chainId mismatch vs 57073.
   const inkWc = typeof getWalletClient === 'function' ? getWalletClient(INK_CHAIN_ID) : null;
@@ -69,46 +105,55 @@ async function getRemoteLinkedSigner(client, walletAddr) {
  * Enable Nado one-tap linked signer (wallet signs linkSigner if needed).
  */
 export async function ensureNadoLinkedSignerReady(ctx = {}) {
-  if (typeof ctx.ensureChain === 'function') {
-    await ctx.ensureChain(INK_CHAIN_ID);
-  }
-  // Re-resolve AFTER switch so getWalletClient sees Ink provider state.
-  const { owner, walletClient, publicClient } = resolveWalletClients(ctx);
-
-  const stored = readNadoLinkedSigner(owner);
-  if (stored) {
-    const linkedClient = createNadoClient(NADO_CHAIN_ENV, {
-      publicClient,
-      walletClient,
-      linkedSignerWalletClient: createLinkedSignerWalletClient(stored),
-    });
-    const remote = await getRemoteLinkedSigner(linkedClient, owner).catch(() => null);
-    if (nadoSignerAddress(remote?.signer) === stored.address) {
-      return { ok: true, wallet: owner };
+  try {
+    if (typeof ctx.ensureChain === 'function') {
+      await ctx.ensureChain(INK_CHAIN_ID);
     }
-  }
+    // Re-resolve AFTER switch so getWalletClient sees Ink provider state.
+    const { owner, walletClient, publicClient } = resolveWalletClients(ctx);
+    await assertProviderOnInk(walletClient);
 
-  const ownerClient = createNadoClient(NADO_CHAIN_ENV, { publicClient, walletClient });
-  const created = readNadoLinkedSigner(owner) || linkedSignerFromPrivateKey(generatePrivateKey());
-  const signerBytes32 = nadoAddressToBytes32(created.account.address);
-
-  let remote = await getRemoteLinkedSigner(ownerClient, owner).catch(() => null);
-  if (nadoSignerAddress(remote?.signer) !== created.address) {
-    await ownerClient.subaccount.linkSigner({
-      subaccountName: NADO_SUBACCOUNT_NAME,
-      signer: signerBytes32,
-    });
-    for (let i = 0; i < 6; i += 1) {
-      remote = await getRemoteLinkedSigner(ownerClient, owner).catch(() => null);
-      if (nadoSignerAddress(remote?.signer) === created.address) break;
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+    const stored = readNadoLinkedSigner(owner);
+    if (stored) {
+      const linkedClient = createNadoClient(NADO_CHAIN_ENV, {
+        publicClient,
+        walletClient,
+        linkedSignerWalletClient: createLinkedSignerWalletClient(stored),
+      });
+      const remote = await getRemoteLinkedSigner(linkedClient, owner).catch(() => null);
+      if (nadoSignerAddress(remote?.signer) === stored.address) {
+        return { ok: true, wallet: owner };
+      }
     }
-  }
 
-  if (nadoSignerAddress(remote?.signer) !== created.address) {
-    throw new Error('Nado linked signer was submitted but is not active yet. Wait a few seconds and retry.');
-  }
+    const ownerClient = createNadoClient(NADO_CHAIN_ENV, { publicClient, walletClient });
+    const created = readNadoLinkedSigner(owner) || linkedSignerFromPrivateKey(generatePrivateKey());
+    const signerBytes32 = nadoAddressToBytes32(created.account.address);
 
-  rememberNadoLinkedSigner(owner, created);
-  return { ok: true, wallet: owner };
+    let remote = await getRemoteLinkedSigner(ownerClient, owner).catch(() => null);
+    if (nadoSignerAddress(remote?.signer) !== created.address) {
+      try {
+        await ownerClient.subaccount.linkSigner({
+          subaccountName: NADO_SUBACCOUNT_NAME,
+          signer: signerBytes32,
+        });
+      } catch (err) {
+        throw rewriteChainIdError(err);
+      }
+      for (let i = 0; i < 6; i += 1) {
+        remote = await getRemoteLinkedSigner(ownerClient, owner).catch(() => null);
+        if (nadoSignerAddress(remote?.signer) === created.address) break;
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+    }
+
+    if (nadoSignerAddress(remote?.signer) !== created.address) {
+      throw new Error('Nado linked signer was submitted but is not active yet. Wait a few seconds and retry.');
+    }
+
+    rememberNadoLinkedSigner(owner, created);
+    return { ok: true, wallet: owner };
+  } catch (err) {
+    throw rewriteChainIdError(err);
+  }
 }

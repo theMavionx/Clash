@@ -38,6 +38,12 @@ import {
   classifyOstiumIssue,
 } from '../lib/ostiumBotUx';
 import {
+  describeNadoBotAction,
+  normalizeNadoErrorText,
+  NADO_MIN_ORDER_USD,
+  nadoMinDepositUsd,
+} from '../lib/nadoBotUx';
+import {
   AGGRESSIVE_VOLUME_SLIDER,
   formatVolumeUsd,
   impliedDailyVolumeFromSize,
@@ -437,10 +443,11 @@ const getBotConfigDetails = (id) => {
     return { tradeSize: 10, maxPosition: 100, preset: 'calm' };
   }
   if (key.includes('grvt')) return { tradeSize: 10, maxPosition: 100, preset: 'calm' };
+  if (key.includes('nado')) return { tradeSize: 100, maxPosition: 300, preset: 'calm' };
   if (key.includes('hyperliquid') && key.includes('symmetric_mm')) return { tradeSize: 10, maxPosition: 50, preset: 'aggressive' };
   if (key.includes('pacifica')) return { tradeSize: 50, maxPosition: 50, preset: 'calm' };
   if (key.includes('ostium')) return { tradeSize: 50, maxPosition: 500, preset: 'calm' };
-  if (key.includes('decibel')) return { tradeSize: 50, maxPosition: 150, preset: 'calm' };
+  if (key.includes('decibel')) return { tradeSize: 20, maxPosition: 60, preset: 'calm' };
   if (key.includes('avantis')) return { tradeSize: 2000, maxPosition: 20000, preset: 'calm' };
   if (key.includes('avantis')) return { tradeSize: 1500, maxPosition: 15000, preset: 'calm' };
   if (key.includes('mock')) return { tradeSize: 50, maxPosition: 500, preset: 'calm' };
@@ -570,6 +577,25 @@ const mapHandleToBot = (
       credsPauseReason: rt.creds_pause_reason || '',
     });
     lastAction = described.message;
+  } else if (exchangeKey === 'nado') {
+    const rejectFromBackoff = (Array.isArray(backoffSymbols) ? backoffSymbols : [])
+      .map((s) => s.last_reject_reason)
+      .find(Boolean);
+    const described = describeNadoBotAction({
+      quotes: openQuotes,
+      cycles,
+      availableUsd: typeof bal?.available === 'number' ? bal.available : null,
+      lastError: normalizeNadoErrorText(
+        rt.last_reject_reason || rejectFromBackoff || rt.creds_pause_reason || '',
+      ),
+      inBackoff,
+      backoffSymbols,
+      credsPaused: rt.creds_paused === true,
+      credsPauseReason: rt.creds_pause_reason || '',
+      tradeSizeUsd: Number.isFinite(tradeSize) ? tradeSize : null,
+      leverage: 10,
+    });
+    lastAction = described.message;
   } else if (inBackoff) {
     const parts = backoffSymbols.map(
       (s) => `${s.symbol} (~${s.pause_secs_remaining ?? '?'}s)`,
@@ -598,6 +624,12 @@ const mapHandleToBot = (
       lastAction = 'Ping Pong active — after fill bot drains position; low margin until close is normal';
     } else if (String(exchange).toUpperCase().includes('GRVT')) {
       lastAction = 'Bot runs but GRVT has 0 quotes — min ~$130/order; need margin + builder auth';
+    } else if (exchangeKey === 'nado') {
+      const avail = typeof bal?.available === 'number' ? bal.available : null;
+      const need = nadoMinDepositUsd(10);
+      lastAction = avail != null && avail < need
+        ? `Nado: 0 quotes — floor $${NADO_MIN_ORDER_USD}/order; free ≈$${avail.toFixed(2)} needs ≥~$${need} (venue min, not quota)`
+        : `Nado: 0 quotes — Trade Size ≥$${NADO_MIN_ORDER_USD} and free margin ≥~$${need} (venue floor, not quota)`;
     } else if (exchangeKey === 'katana') {
       lastAction = 'Katana: 0 quotes — reconnect API key/secret + one-tap signer from Launch New Bot';
     } else if (balFmt.tone === 'warn') {
@@ -1110,11 +1142,12 @@ function CalmPlanCard({ plan, onApply }) {
   );
 }
 
-function BotCard({ bot, expanded, onToggle, onStart, onStop }) {
+function BotCard({ bot, expanded, onToggle, onStart, onStop, onDelete }) {
   const type = getBotType(bot.type);
   const pnlKnown = bot.pnl != null && Number.isFinite(Number(bot.pnl));
   const pnlPositive = !pnlKnown || Number(bot.pnl) >= 0;
   const isRunning = bot.status === 'Running' || bot.status === 'Paused';
+  const canDelete = !isRunning && bot.status === 'Stopped';
   const statusStyle = bot.status === 'Running'
     ? S.statusRunning
     : bot.status === 'Paused'
@@ -1187,13 +1220,24 @@ function BotCard({ bot, expanded, onToggle, onStart, onStop }) {
               Stop Bot
             </button>
           ) : (
-            <button
-              type="button"
-              style={{ ...cartoonBtn('#43A047', '#2E7D32'), padding: '6px 14px', fontSize: 12, borderRadius: 8 }}
-              onClick={(e) => { e.stopPropagation(); onStart(bot.id); }}
-            >
-              ▶ Start Bot
-            </button>
+            <>
+              <button
+                type="button"
+                style={{ ...cartoonBtn('#43A047', '#2E7D32'), padding: '6px 14px', fontSize: 12, borderRadius: 8 }}
+                onClick={(e) => { e.stopPropagation(); onStart(bot.id); }}
+              >
+                ▶ Start Bot
+              </button>
+              {canDelete && onDelete ? (
+                <button
+                  type="button"
+                  style={{ ...cartoonBtn('#78909C', '#546E7A'), padding: '6px 14px', fontSize: 12, borderRadius: 8 }}
+                  onClick={(e) => { e.stopPropagation(); onDelete(bot.id); }}
+                >
+                  Delete
+                </button>
+              ) : null}
+            </>
           )}
         </div>
       )}
@@ -1294,13 +1338,24 @@ function BotCard({ bot, expanded, onToggle, onStart, onStop }) {
                 Stop Bot
               </button>
             ) : (
-              <button
-                type="button"
-                style={{ ...cartoonBtn('#43A047', '#2E7D32'), padding: '8px 16px', fontSize: 13, borderRadius: 10 }}
-                onClick={(e) => { e.stopPropagation(); onStart(bot.id); }}
-              >
-                Start Bot
-              </button>
+              <>
+                <button
+                  type="button"
+                  style={{ ...cartoonBtn('#43A047', '#2E7D32'), padding: '8px 16px', fontSize: 13, borderRadius: 10 }}
+                  onClick={(e) => { e.stopPropagation(); onStart(bot.id); }}
+                >
+                  Start Bot
+                </button>
+                {canDelete && onDelete ? (
+                  <button
+                    type="button"
+                    style={{ ...cartoonBtn('#78909C', '#546E7A'), padding: '8px 16px', fontSize: 13, borderRadius: 10 }}
+                    onClick={(e) => { e.stopPropagation(); onDelete(bot.id); }}
+                  >
+                    Delete config
+                  </button>
+                ) : null}
+              </>
             )}
           </div>
         </div>
@@ -2759,6 +2814,31 @@ function BotsPanel({ onClose }) {
       });
   }, [token, fetchInstances, appendHistory]);
 
+  const handleDeleteBot = useCallback((id) => {
+    if (!token) return;
+    if (!window.confirm('Delete saved bot config? The template stays in the list; you can Launch again.')) {
+      return;
+    }
+    fetch(botApiUrl(`/api/v1/strategies/${encodeURIComponent(id)}`), {
+      method: 'DELETE',
+      headers: botAuthHeaders(token),
+    })
+      .then((r) => r.json())
+      .then((res) => {
+        if (res?.data?.status === 'deleted') {
+          setNotice('Saved bot config deleted.');
+          appendHistory('Strategy deleted', getExchangeName(id), getBotType(parseStrategyInstanceId(id).kind).name);
+          fetchInstances();
+        } else {
+          setNotice(`Failed to delete bot: ${formatApiError(res?.error)}`);
+        }
+      })
+      .catch((err) => {
+        console.error('delete bot failed:', err);
+        setNotice('Network error deleting bot — check the configured bot endpoint.');
+      });
+  }, [token, fetchInstances, appendHistory]);
+
   const launchBot = useCallback(async () => {
     if (launching) return;
     if (!token || !selectedInstanceId) {
@@ -2772,6 +2852,31 @@ function BotsPanel({ onClose }) {
       setNotice(`Connect ${missing.map((e) => e.toUpperCase()).join(' + ')} in the Exchange step before launch.`);
       setLaunching(false);
       return;
+    }
+    if (parsed.exchanges.some((ex) => ex.toLowerCase() === 'nado')) {
+      const size = Number(tradeSize) || 0;
+      const avail = selectedFreeMarginUsd;
+      const need = nadoMinDepositUsd(10);
+      if (size > 0 && size < NADO_MIN_ORDER_USD) {
+        setNotice(
+          `Nado minimum order is $${NADO_MIN_ORDER_USD} notional (venue floor, not a quota). `
+          + `Raise Trade Size to ≥$${NADO_MIN_ORDER_USD} before Launch.`
+          + (avail != null && avail < need
+            ? ` Your free ≈$${Number(avail).toFixed(2)} also needs ≥~$${need} for dual-sided quotes.`
+            : ''),
+        );
+        setLaunching(false);
+        return;
+      }
+      if (avail != null && Number.isFinite(avail) && avail < need) {
+        setNotice(
+          `Nado needs ≥$${NADO_MIN_ORDER_USD}/order. Free ≈$${Number(avail).toFixed(2)} `
+          + `is below ~$${need} needed for dual-sided MM at 10×. `
+          + `Deposit USDC on Nado first — this is a venue minimum, not an API quota.`,
+        );
+        setLaunching(false);
+        return;
+      }
     }
     if (parsed.exchanges.some((ex) => ex.toLowerCase() === 'grvt')) {
       try {
@@ -2835,16 +2940,26 @@ function BotsPanel({ onClose }) {
       });
       const res = await startResponse.json();
       if (res?.data?.status !== 'started') {
-        setNotice(`Launch failed: ${formatApiError(res?.error)}`);
+        const errText = formatApiError(res?.error);
+        const marginHint = /margin|insufficient|balance|clearinghouse/i.test(errText)
+          ? ' Lower Trade size and Launch again — same market replaces params (does not clone a second bot).'
+          : '';
+        setNotice(`Launch failed: ${errText}.${marginHint}`);
         return;
       }
+      const evicted = Array.isArray(res?.data?.evicted_competitors)
+        ? res.data.evicted_competitors.length
+        : 0;
+      const evictNote = evicted > 0
+        ? ` Stopped ${evicted} competing Decibel bot(s) on the same wallet+market.`
+        : '';
 
       const cfgNote = cfgRes?.data?.updated
         ? (preset === 'aggressive'
           ? ` Config: ${formatVolumeUsd(dailyVolumeUsd)}/day target → $${tradeSize} trade @ ~${aggressivePlan?.avgLeverage || '?'}×, ~$${Math.round(aggressivePlan?.costPer1MUsd || 0)}/$1M.`
           : ` Config: $${tradeSize} trade, spread ${spreadBps} bps.`)
         : '';
-      setNotice(`Launched ${getBotType(selectedType).name} on ${getExchangeName(selectedInstanceId)} successfully!${cfgNote}`);
+      setNotice(`Launched ${getBotType(selectedType).name} on ${getExchangeName(selectedInstanceId)} successfully!${cfgNote}${evictNote}`);
       appendHistory('Strategy started', getExchangeName(selectedInstanceId), getBotType(selectedType).name);
       userCollapsedRef.current = false;
       setExpandedBotId(selectedInstanceId);
@@ -2858,7 +2973,7 @@ function BotsPanel({ onClose }) {
     } finally {
       setLaunching(false);
     }
-  }, [launching, selectedInstanceId, token, tradeSize, maxPosition, dailyVolumeUsd, aggressivePlan, preset, selectedType, fetchInstances, fetchOrderHistory, resetLaunch, syncedAccounts, appendHistory, authorizeGrvtBuilder, evmWallet, resolveEvmWallet]);
+  }, [launching, selectedInstanceId, token, tradeSize, maxPosition, dailyVolumeUsd, aggressivePlan, preset, selectedType, fetchInstances, fetchOrderHistory, resetLaunch, syncedAccounts, appendHistory, authorizeGrvtBuilder, evmWallet, resolveEvmWallet, selectedFreeMarginUsd]);
 
   // Real-time WebSocket updates via Clash game backend mediator
   const [wsConnected, setWsConnected] = useState(false);
@@ -3131,6 +3246,7 @@ function BotsPanel({ onClose }) {
                 onToggle={handleToggleBot}
                 onStart={handleStartBot}
                 onStop={handleStopBot}
+                onDelete={handleDeleteBot}
               />
             ))}
           </div>
@@ -3992,6 +4108,9 @@ function BotsPanel({ onClose }) {
               {preset === 'aggressive'
                 ? 'Pick Aggressive, set daily volume — we estimate deposit, leverage, and cost per $1M.'
                 : 'Calm: we size Trade Size / Max Position from your free margin. Default target $100k/day — if balance is too small we show the safe volume and deposit needed.'}
+              {selectedExchangeId === 'nado'
+                ? ` Nado floor: $${NADO_MIN_ORDER_USD} notional per order (venue minimum — not an API quota). Dual-sided MM needs ~$${nadoMinDepositUsd(10)}+ free USDC at 10×.`
+                : ''}
             </p>
           </div>
           {(sortedExchangeInstances.length > 1 || selectedExchangeId === 'decibel') && (
@@ -4116,6 +4235,27 @@ function BotsPanel({ onClose }) {
           <div>
             <h2 ref={stepHeadingRef} tabIndex={-1} style={S.stepTitle}>Review and Launch</h2>
             <p style={S.stepCopy}>Check your setup before starting the bot.</p>
+            {selectedExchangeId === 'nado' && (
+              <p style={{ ...S.stepCopy, color: '#B45309', marginTop: 6 }}>
+                {(() => {
+                  const need = nadoMinDepositUsd(10);
+                  const sizeOk = Number(tradeSize) >= NADO_MIN_ORDER_USD;
+                  const balOk = selectedFreeMarginUsd == null
+                    || !Number.isFinite(selectedFreeMarginUsd)
+                    || selectedFreeMarginUsd >= need;
+                  if (!sizeOk && !balOk) {
+                    return `Nado: Trade Size must be ≥$${NADO_MIN_ORDER_USD}, and free ≈$${Number(selectedFreeMarginUsd).toFixed(2)} needs ≥~$${need} for dual quotes (venue floor, not quota).`;
+                  }
+                  if (!sizeOk) {
+                    return `Nado: Trade Size $${tradeSize} is below the $${NADO_MIN_ORDER_USD} venue minimum — raise it before Launch.`;
+                  }
+                  if (!balOk) {
+                    return `Nado: free ≈$${Number(selectedFreeMarginUsd).toFixed(2)} is below ~$${need} needed for dual $${NADO_MIN_ORDER_USD} quotes — deposit USDC first.`;
+                  }
+                  return `Nado venue floor $${NADO_MIN_ORDER_USD}/order — size and balance look OK for Launch.`;
+                })()}
+              </p>
+            )}
           </div>
           <div style={S.reviewCard}>
             <div style={S.cardTop}>
@@ -4616,6 +4756,7 @@ const S = {
   collapsedActions: {
     display: 'flex',
     justifyContent: 'flex-end',
+    gap: 8,
     paddingTop: 2,
   },
   templateHint: {

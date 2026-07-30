@@ -34,6 +34,8 @@ const VENUE = {
   pacifica: { makerBps: 2, takerBps: 4, leverage: 10, maxLeverage: 50, sizeMax: AGGRESSIVE_ORDER_SIZE_ABS_MAX, rts: PACIFICA_ROUND_TRIPS_PER_DAY },
   hyperliquid: { makerBps: -2, takerBps: 5, leverage: 5, maxLeverage: 50, sizeMax: AGGRESSIVE_ORDER_SIZE_ABS_MAX, rts: ROUND_TRIPS_PER_DAY },
   grvt: { makerBps: -2, takerBps: 5, leverage: 5, maxLeverage: 50, sizeMax: AGGRESSIVE_ORDER_SIZE_ABS_MAX, rts: ROUND_TRIPS_PER_DAY },
+  // Live 2026-07: Nado gateway min_size ≈ $100 notional.
+  nado: { makerBps: 1, takerBps: 3, leverage: 10, maxLeverage: 50, sizeMax: AGGRESSIVE_ORDER_SIZE_ABS_MAX, rts: ROUND_TRIPS_PER_DAY, minOrderUsd: 100 },
   avantis: { makerBps: 3, takerBps: 6, leverage: 10, maxLeverage: 50, sizeMax: AGGRESSIVE_ORDER_SIZE_ABS_MAX, rts: ROUND_TRIPS_PER_DAY },
   default: { makerBps: 2, takerBps: 5, leverage: 10, maxLeverage: 50, sizeMax: AGGRESSIVE_ORDER_SIZE_ABS_MAX, rts: ROUND_TRIPS_PER_DAY },
 };
@@ -126,15 +128,44 @@ export function planAggressiveVolume({
   const sizeMax = v.sizeMax || AGGRESSIVE_ORDER_SIZE_ABS_MAX;
 
   let tradeSize = target > 0 ? target / (2 * rts) : 0;
-  tradeSize = snap(tradeSize, 5, sizeMax, 5);
+  const minOrder = Math.max(5, Number(v.minOrderUsd) || 5);
+  tradeSize = snap(tradeSize, minOrder, sizeMax, 5);
 
   // Dual-leg: available × lev × 0.85 / 2
   const avail = Math.max(0, Number(availableUsd) || 0);
   if (avail > 0) {
     const maxLeg = (avail * (v.leverage || 10) * 0.85) / 2;
-    if (maxLeg > 0 && tradeSize > maxLeg) {
-      tradeSize = snap(maxLeg, 5, sizeMax, 5);
+    if (maxLeg < minOrder) {
+      tradeSize = 0;
+    } else if (tradeSize > maxLeg) {
+      tradeSize = snap(maxLeg, minOrder, sizeMax, 5);
     }
+  }
+
+  if (tradeSize <= 0) {
+    const { costPer1M, feeBps, adverseBps } = estimateCostPer1M(exchangeId);
+    return {
+      dailyVolumeUsd: target,
+      roundTripsPerDay: rts,
+      tradeSizeUsd: 0,
+      maxPositionUsd: 0,
+      avgLeverage: v.leverage,
+      maxLeverage: v.maxLeverage,
+      leverageFixed: !!v.leverageFixed,
+      availableUsd: avail > 0 ? avail : null,
+      depositUsd: Math.ceil((2 * minOrder) / (0.85 * (v.leverage || 10))),
+      quoteMarginUsd: 0,
+      inventoryMarginUsd: 0,
+      costPer1MUsd: costPer1M,
+      feeBps,
+      adverseBps,
+      expectedDailyCostUsd: 0,
+      makerFeeBps: v.makerBps,
+      takerFeeBps: v.takerBps,
+      achievableVolumeUsd: 0,
+      capped: target > 0,
+      minOrderUsd: minOrder,
+    };
   }
 
   const invCeil = Math.max(sizeMax * INVENTORY_MULT, tradeSize * INVENTORY_MULT);
