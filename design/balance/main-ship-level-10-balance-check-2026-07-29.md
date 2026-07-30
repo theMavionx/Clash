@@ -22,12 +22,18 @@ time, and every individual upgrade cost fits within the TH7 resource caps.
 | Energy gain per level | 2 | 2 | None |
 | Active unlock spacing | 1-2 levels | L6, L7, L8, L10 | L9 is intentionally a reserve level |
 | Largest single resource cost | Below TH7 cap | 54,000 wood | None |
+| Healing duration | 6-10 seconds | 8 seconds | Reduced from 14 seconds |
+| Repeat cost growth | Positive escalation | +1 energy per use | Matches Cannon and Rally |
 
 ### Degenerate Strategies Found
 
 - No army-size power creep exists after level 5.
 - A level-10 ship cannot cast all four tactical abilities from starting energy:
   the total cost is 26 versus 22 starting energy.
+- Repeated casts are bounded by the shared energy pool: from 22 starting energy,
+  Healing Field and Freeze Orb allow three casts, while Rage Field and Skeleton
+  Barrel allow two.
+- Overlapping Healing Fields cannot multiply healing tick frequency.
 - Destroyed-building energy remains relevant for full ability combinations and
   repeated cannon or rally use.
 
@@ -41,6 +47,15 @@ time, and every individual upgrade cost fits within the TH7 resource caps.
 | 8 | 45 | 18 | Rage Field |
 | 9 | 45 | 20 | Tactical Reserve |
 | 10 | 45 | 22 | Skeleton Barrel |
+
+### Repeat-Cast Curve At Level 10
+
+| Ability | First costs | Maximum casts from 22 starting energy |
+|---|---|---:|
+| Healing Field | 6, 7, 8 | 3 |
+| Freeze Orb | 5, 6, 7 | 3 |
+| Rage Field | 7, 8 | 2 |
+| Skeleton Barrel | 8, 9 | 2 |
 
 The full level 1-10 ship sink is 101,900 gold, 203,600 wood, and 175,300 ore.
 Because this is paid across nine upgrades, it does not require a player to hold

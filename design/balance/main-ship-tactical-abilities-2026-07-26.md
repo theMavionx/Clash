@@ -7,28 +7,33 @@
 
 ## Final Balance
 
-| Ability | Ship level | Cost | Uses | Radius | Duration | Effect |
+| Ability | Ship level | First cost | Repeat cost | Radius | Duration | Effect |
 |---|---:|---:|---:|---:|---:|---|
-| Healing Field | 6 | 6 | 1 | 0.72 | 14s | Heals paid troops inside the field |
-| Freeze Orb | 7 | 5 | 1 | 0.95 | 6s | Freezes defensive buildings and armed traps |
-| Rage Field | 8 | 7 | 1 | 0.82 | 9s | Paid troops gain x2 damage and x1.25 movement/attack speed |
-| Skeleton Barrel | 10 | 8 | 1 | Targeted | 18s skeleton lifetime | Deals 650 impact damage and summons 4 skeletons |
+| Healing Field | 6 | 6 | +1 each use | 0.72 | 8s | Heals paid troops inside the field |
+| Freeze Orb | 7 | 5 | +1 each use | 0.95 | 6s | Freezes defensive buildings and armed traps |
+| Rage Field | 8 | 7 | +1 each use | 0.82 | 9s | Paid troops gain x2 damage and x1.25 movement/attack speed |
+| Skeleton Barrel | 10 | 8 | +1 each use | Targeted | 18s skeleton lifetime | Deals 650 impact damage and summons 4 skeletons |
 
-Existing Cannon, Rally, and Medkit abilities continue to use the same shared
-energy pool. New ability costs are fixed and do not change the escalating Cannon
-or Rally cost.
+All ship actions use the same shared energy pool. Cannon, Rally, Healing Field,
+Freeze Orb, Rage Field, and Skeleton Barrel can all be reused while enough
+energy remains. Every ability tracks its own use count and costs one more energy
+than its previous cast.
+
+Overlapping Healing Fields do not multiply healing frequency. A troop can
+receive at most one healing tick every 0.25 seconds regardless of how many
+fields overlap.
 
 ## Freeze Orb
 
 - Event: `freeze_drop`.
 - Client mode: `ship_freeze_mode`.
-- Projectile flight time: 0.9s.
+- Projectile flight time: 0.6s.
 - Affects Turret, Archer Tower, Mage Tower, Mortar, Tombstone, Shark Trap, and
   future entities tagged as defenses or armed traps.
 - Does not freeze existing Tombstone guards or attacking troops.
 - Does not deal direct damage.
 - Multiple freeze sources use the latest `frozen_until`; durations do not add.
-- Energy and the single use are consumed when the cast is accepted.
+- Energy and the next escalating use are consumed when the cast is accepted.
 
 ## Rage Field
 
@@ -48,7 +53,7 @@ or Rally cost.
 - Event: `skeleton_barrel_fire`.
 - Client mode: `ship_skeleton_barrel_mode`.
 - Must target a living building.
-- Projectile flight time: 0.9s.
+- Projectile flight time: 1.067s.
 - Impact damage: 650 to the selected building.
 - Reuses one mesh extracted from `Model/Island/pirate_island.glb` at runtime.
 - Summons 4 temporary ground skeletons around the impact point.
@@ -74,20 +79,21 @@ combinations without increasing troop capacity:
 
 | Ship level | Energy | New option | Tactical result |
 |---:|---:|---|---|
-| 6 | 14 | Healing Field | Sustain plus limited cannon/rally reserve |
-| 7 | 16 | Freeze Orb | Healing + Freeze costs 11, leaving 5 |
-| 8 | 18 | Rage Field | Freeze + Rage costs 12, leaving 6 |
-| 9 | 20 | Tactical Reserve | Healing + Freeze + Rage costs 18 |
-| 10 | 22 | Skeleton Barrel | Rage + Barrel costs 15, leaving 7 |
+| 6 | 14 | Healing Field | Two fields cost 13 total |
+| 7 | 16 | Freeze Orb | Two freezes cost 11; Healing + Freeze costs 11 |
+| 8 | 18 | Rage Field | Two rage fields cost 15 |
+| 9 | 20 | Tactical Reserve | More mixed casts or destruction-energy reserve |
+| 10 | 22 | Skeleton Barrel | Three heals or freezes; two rage fields or barrels |
 
 This makes Skeleton Barrel the largest commitment, Freeze the flexible control
-option, and Rage the highest-upside formation ability.
+option, and Rage the highest-upside formation ability. Destroying buildings
+grants additional energy and can extend these limits during a successful raid.
 
 ## Authoritative Rules
 
-1. The server validates ship level, remaining uses, energy, coordinates, and the
-   barrel target before mutating combat state.
-2. Rejected actions spend no energy and consume no use.
+1. The server validates ship level, canonical escalating cost, energy,
+   coordinates, and the barrel target before mutating combat state.
+2. Rejected actions spend no energy and do not advance the use counter.
 3. Freeze is applied at projectile impact, not cast time.
 4. Replay events use the same event names and values as live combat.
 5. Pending projectile effects are included in combat completion checks.

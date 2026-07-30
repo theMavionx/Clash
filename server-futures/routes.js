@@ -2256,6 +2256,28 @@ router.post('/decibel/orders/place', auth, async (req, res) => {
       attempts: orderType === 'market' ? 2 : 3,
       delayMs: 500,
     });
+    recordDecibelBuilderProof(req.playerId, verified.subaccount, orderPayload, result, orderType, side);
+    if (verification.terminal === true) {
+      console.warn('[decibel] order rejected after transaction confirmation', {
+        player: req.playerId,
+        market: orderPayload.marketName,
+        reduceOnly: !!orderPayload.isReduceOnly,
+        orderType,
+        code: verification.code,
+        reason: verification.reason,
+        total_ms: Date.now() - startedAt,
+        tx_ms: result?.timings?.total_ms,
+      });
+      return res.status(409).json({
+        ...result,
+        success: false,
+        error: verification.reason || 'Decibel rejected the order.',
+        code: verification.code || 'DECIBEL_ORDER_REJECTED',
+        clientOrderId: orderPayload.clientOrderId,
+        verified: false,
+        verification,
+      });
+    }
     if (!verification.verified) {
       console.warn('[decibel] order submitted but fast verification is pending', {
         player: req.playerId,
@@ -2268,7 +2290,6 @@ router.post('/decibel/orders/place', auth, async (req, res) => {
         tx_ms: result?.timings?.total_ms,
       });
     }
-    recordDecibelBuilderProof(req.playerId, verified.subaccount, orderPayload, result, orderType, side);
     console.log('[decibel] order placed', {
       player: req.playerId,
       market: orderPayload.marketName,

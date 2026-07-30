@@ -124,16 +124,12 @@ export function GodotProvider({ children }) {
     rallyNextCost: 1,
     medkitCost: 6,
     medkitUnlocked: false,
-    medkitUsed: false,
     freezeCost: 5,
     freezeUnlocked: false,
-    freezeUsed: false,
     rageCost: 7,
     rageUnlocked: false,
-    rageUsed: false,
     skeletonBarrelCost: 8,
     skeletonBarrelUnlocked: false,
-    skeletonBarrelUsed: false,
   });
   const [fleetInfo, setFleetInfo] = useState(null);
   // Fallback matches TH1 base capacity (server/db.js + building_system.gd).
@@ -343,16 +339,12 @@ export function GodotProvider({ children }) {
               rallyNextCost: 1,
               medkitCost: 6,
               medkitUnlocked: false,
-              medkitUsed: false,
               freezeCost: 5,
               freezeUnlocked: false,
-              freezeUsed: false,
               rageCost: 7,
               rageUnlocked: false,
-              rageUsed: false,
               skeletonBarrelCost: 8,
               skeletonBarrelUnlocked: false,
-              skeletonBarrelUsed: false,
             });
             setBattleResult(null);
             setCannonMode(false);
@@ -443,32 +435,24 @@ export function GodotProvider({ children }) {
             const rallyNextCost = data.rally_next_cost || 1;
             const medkitCost = data.medkit_cost || 6;
             const medkitUnlocked = !!data.medkit_unlocked;
-            const medkitUsed = !!data.medkit_used;
             const freezeCost = data.freeze_cost || 5;
             const freezeUnlocked = !!data.freeze_unlocked;
-            const freezeUsed = !!data.freeze_used;
             const rageCost = data.rage_cost || 7;
             const rageUnlocked = !!data.rage_unlocked;
-            const rageUsed = !!data.rage_used;
             const skeletonBarrelCost = data.skeleton_barrel_cost || 8;
             const skeletonBarrelUnlocked = !!data.skeleton_barrel_unlocked;
-            const skeletonBarrelUsed = !!data.skeleton_barrel_used;
             if (
               prev.energy === energy
               && prev.nextCost === nextCost
               && prev.rallyNextCost === rallyNextCost
               && prev.medkitCost === medkitCost
               && prev.medkitUnlocked === medkitUnlocked
-              && prev.medkitUsed === medkitUsed
               && prev.freezeCost === freezeCost
               && prev.freezeUnlocked === freezeUnlocked
-              && prev.freezeUsed === freezeUsed
               && prev.rageCost === rageCost
               && prev.rageUnlocked === rageUnlocked
-              && prev.rageUsed === rageUsed
               && prev.skeletonBarrelCost === skeletonBarrelCost
               && prev.skeletonBarrelUnlocked === skeletonBarrelUnlocked
-              && prev.skeletonBarrelUsed === skeletonBarrelUsed
             ) return prev;
             return {
               energy,
@@ -476,16 +460,12 @@ export function GodotProvider({ children }) {
               rallyNextCost,
               medkitCost,
               medkitUnlocked,
-              medkitUsed,
               freezeCost,
               freezeUnlocked,
-              freezeUsed,
               rageCost,
               rageUnlocked,
-              rageUsed,
               skeletonBarrelCost,
               skeletonBarrelUnlocked,
-              skeletonBarrelUsed,
             };
           });
           break;

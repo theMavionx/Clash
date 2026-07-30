@@ -68,7 +68,8 @@ var building_defs: Dictionary = {
 		"model_scale": 0.25,
 		"model_rotation_y": 270.0,
 		"hp_levels": [1200, 2200, 3800, 6000, 9000, 13000, 18000],
-		"cost": {"gold": 80, "wood": 200},
+		"cost": {"gold": 180, "wood": 500},
+		"upgrade_base_cost": {"gold": 220, "wood": 550},
 		"produces": "ore",
 		"produce_rate": [18, 33, 54, 81, 120, 170, 225],    # per minute per level
 		"produce_max": [200, 400, 800, 1600, 3000, 5000, 7500],  # max stored before collection
@@ -82,7 +83,8 @@ var building_defs: Dictionary = {
 		"scenes": ["res://Model/Barn/1.glb", "res://Model/Barn/2.glb", "res://Model/Barn/3.glb", "res://Model/Barn/3.glb", "res://Model/Barn/3.glb", "res://Model/Barn/3.glb", "res://Model/Barn/3.glb"],
 		"model_scale": 0.25,
 		"hp_levels": [2000, 3500, 6000, 9500, 14000, 20000, 28000],
-		"cost": {"gold": 140, "wood": 350, "ore": 280},
+		"cost": {"gold": 350, "wood": 900, "ore": 750},
+		"upgrade_base_cost": {"gold": 450, "wood": 1050, "ore": 900},
 		"max_count": 1,
 	},
 	"port": {
@@ -108,7 +110,8 @@ var building_defs: Dictionary = {
 		"scene": "res://Model/Sawmill/1.glb",
 		"model_scale": 0.1,
 		"hp_levels": [1200, 2200, 3800, 6000, 9000, 13000, 18000],
-		"cost": {"gold": 80, "ore": 200},
+		"cost": {"gold": 180, "ore": 500},
+		"upgrade_base_cost": {"gold": 220, "ore": 550},
 		"produces": "wood",
 		"produce_rate": [24, 45, 72, 108, 160, 230, 300],
 		"produce_max": [250, 500, 1000, 2000, 3750, 6000, 9000],
@@ -126,7 +129,7 @@ var building_defs: Dictionary = {
 		"is_main": true,
 		"max_count": 1,
 		"cost": {},
-		"upgrade_cost": {2: {"gold": 800, "wood": 2400, "ore": 2000}, 3: {"gold": 3000, "wood": 7000, "ore": 6000}, 4: {"gold": 10000, "wood": 20000, "ore": 17000}, 5: {"gold": 26000, "wood": 52000, "ore": 46000}, 6: {"gold": 48000, "wood": 72000, "ore": 66000}, 7: {"gold": 70000, "wood": 100000, "ore": 92000}},
+		"upgrade_cost": {2: {"gold": 1200, "wood": 4200, "ore": 3500}, 3: {"gold": 4000, "wood": 8500, "ore": 7500}, 4: {"gold": 12000, "wood": 22000, "ore": 19000}, 5: {"gold": 30000, "wood": 54000, "ore": 48000}, 6: {"gold": 55000, "wood": 75000, "ore": 68000}, 7: {"gold": 85000, "wood": 106000, "ore": 98000}},
 	},
 	"turret": {
 		"name": "Turret",
@@ -138,7 +141,8 @@ var building_defs: Dictionary = {
 		"model_scale": 0.25,
 		"model_scales": [0.2, 0.225, 0.25, 0.275, 0.3, 0.3, 0.3],
 		"hp_levels": [900, 1600, 2800, 4500, 6800, 9000, 12000],
-		"cost": {"gold": 220, "wood": 700, "ore": 580},
+		"cost": {"gold": 800, "wood": 2400, "ore": 2000},
+		"upgrade_base_cost": {"gold": 750, "wood": 2500, "ore": 2100},
 		"altar_ward_bonus": true,
 		"outline_aabb_include": ["Stand"],  # Only count Stand mesh for outline, ignore barrel
 	},
@@ -163,14 +167,14 @@ var building_defs: Dictionary = {
 		"model_rotation_y": 270.0,
 		"hp_levels": [3200, 3900, 4700, 5600, 6600, 7700, 9000],
 			"damage_levels": [40, 100, 205, 305, 447, 506, 675],
-		"cost": {"gold": 6800, "wood": 15500, "ore": 13000},
+		"cost": {"gold": 16000, "wood": 36000, "ore": 30000},
 		"upgrade_cost": {
-			2: {"gold": 9500, "wood": 22000, "ore": 18000},
-			3: {"gold": 14000, "wood": 32000, "ore": 27000},
-			4: {"gold": 20000, "wood": 45000, "ore": 38000},
-			5: {"gold": 29000, "wood": 61000, "ore": 52000},
-			6: {"gold": 41000, "wood": 81000, "ore": 69000},
-			7: {"gold": 56000, "wood": 106000, "ore": 90000},
+			2: {"gold": 24000, "wood": 52000, "ore": 44000},
+			3: {"gold": 35000, "wood": 70000, "ore": 60000},
+			4: {"gold": 48000, "wood": 90000, "ore": 76000},
+			5: {"gold": 65000, "wood": 110000, "ore": 92000},
+			6: {"gold": 83000, "wood": 128000, "ore": 108000},
+			7: {"gold": 105000, "wood": 142000, "ore": 125000},
 		},
 		"max_count": 2,
 		"altar_ward_bonus": true,
@@ -213,7 +217,8 @@ var building_defs: Dictionary = {
 		"model_scale": 0.3,
 		"model_offset": Vector3(0, 0, -0.04),
 		"hp_levels": [1400, 2500, 4200, 6500, 9500, 13000, 18000],
-		"cost": {"gold": 140, "wood": 550},
+		"cost": {"gold": 400, "wood": 1400},
+		"upgrade_base_cost": {"gold": 500, "wood": 1500},
 	},
 	"archer_tower": {
 		"name": "Archer Tower",
@@ -226,7 +231,8 @@ var building_defs: Dictionary = {
 		"model_offset": Vector3(0.11, 0, -0.02),
 		"model_offsets": [Vector3(0.11, 0, -0.02), Vector3(0.11, 0, -0.02), Vector3(0, 0, 0), Vector3(0, 0, 0), Vector3(0, 0, 0), Vector3(0, 0, 0), Vector3(0, 0, 0)],
 		"hp_levels": [800, 1500, 2500, 3800, 5600, 7800, 10200],
-		"cost": {"gold": 180, "wood": 650},
+		"cost": {"gold": 500, "wood": 1600},
+		"upgrade_base_cost": {"gold": 550, "wood": 1700},
 		"altar_ward_bonus": true,
 		"hp_bar_height": 0.5,
 		"tower_unit": {
@@ -248,7 +254,8 @@ var building_defs: Dictionary = {
 		"model_scale": 0.039,  # TARBO FBX scale (0.02 base +50%, then +30% size)
 		"model_rotation_y": 0.0,
 		"hp_levels": [700, 1200, 2000, 3100, 4600, 6300, 8300],
-		"cost": {"gold": 800, "ore": 1300},
+		"cost": {"gold": 2800, "ore": 5200},
+		"upgrade_base_cost": {"gold": 1600, "ore": 3000},
 		"max_count": 2,
 		"altar_ward_bonus": true,
 		"hp_bar_height": 0.5,
@@ -276,7 +283,11 @@ var building_defs: Dictionary = {
 		"model_scale": 0.032,
 		"model_rotation_y": 0.0,
 		"hp_levels": [1700, 2400, 3200],
-		"cost": {"gold": 600, "wood": 900, "ore": 700},
+		"cost": {"gold": 8000, "wood": 12000, "ore": 10000},
+		"upgrade_cost": {
+			2: {"gold": 24000, "wood": 36000, "ore": 30000},
+			3: {"gold": 55000, "wood": 82000, "ore": 68000},
+		},
 		"max_count": 2,
 		"altar_ward_bonus": true,
 		"hp_bar_height": 0.6,
@@ -310,7 +321,8 @@ var building_defs: Dictionary = {
 		"model_rotation_y": 0.0,
 		"hp_levels": [1, 1, 1, 1, 1, 1, 1],
 		"damage_levels": [500, 750, 1050, 1450, 2000, 2400, 2900],
-		"cost": {"gold": 300, "wood": 800, "ore": 650},
+		"cost": {"gold": 1800, "wood": 4800, "ore": 4000},
+		"upgrade_base_cost": {"gold": 1000, "wood": 2600, "ore": 2200},
 		"max_count": 3,
 		"no_outline": true,
 		"no_hp_bar": true,
@@ -326,7 +338,8 @@ var building_defs: Dictionary = {
 		"model_scale": 0.3,
 		"model_scales": [0.3, 0.3, 0.3, 0.1, 0.1, 0.1],
 		"hp_levels": [1000, 1500, 2000, 2700, 3600, 4700],
-		"cost": {"gold": 120, "ore": 500},
+		"cost": {"gold": 600, "ore": 2200},
+		"upgrade_base_cost": {"gold": 650, "ore": 2400},
 		"altar_ward_bonus": true,
 	},
 	"flag": {
@@ -354,11 +367,11 @@ var building_defs: Dictionary = {
 
 const BUILDING_UPGRADE_COST_MULTIPLIERS: Dictionary = {
 	2: 2,
-	3: 3,
-	4: 5,
-	5: 8,
-	6: 12,
-	7: 17,
+	3: 4,
+	4: 8,
+	5: 15,
+	6: 27,
+	7: 45,
 }
 
 # ── Resources ─────────────────────────────────────────────────
@@ -4904,7 +4917,7 @@ func _get_upgrade_cost(def: Dictionary, next_level: int) -> Dictionary:
 		var special_costs: Dictionary = def.get("upgrade_cost", {})
 		if special_costs.has(next_level):
 			return special_costs[next_level].duplicate()
-	var cost: Dictionary = def.get("cost", {})
+	var cost: Dictionary = def.get("upgrade_base_cost", def.get("cost", {}))
 	var result := {}
 	var multiplier: int = int(BUILDING_UPGRADE_COST_MULTIPLIERS.get(next_level, next_level))
 	for res_name in cost:

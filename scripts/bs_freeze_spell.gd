@@ -5,6 +5,7 @@ extends RefCounted
 
 const UNLOCK_SHIP_LEVEL: int = 7
 const ENERGY_COST: int = 5
+const ENERGY_COST_INCREMENT: int = 1
 const RADIUS: float = 0.95
 const DURATION_SEC: float = 6.0
 const FLIGHT_SEC: float = 0.6
@@ -13,7 +14,7 @@ const ORB_COLOR: Color = Color(0.26, 0.84, 1.0, 1.0)
 var bs: Node3D
 var _ship_level: int = 1
 var _freeze_mode: bool = false
-var _freeze_used: bool = false
+var _freeze_uses: int = 0
 var _freeze_paused_attack: bool = false
 var _freeze_label: Label = null
 var _projectiles: Array[Dictionary] = []
@@ -26,7 +27,7 @@ func init(building_system: Node3D) -> BSFreezeSpell:
 
 func reset(ship_level: int = 1) -> void:
 	_ship_level = clampi(ship_level, 1, 10)
-	_freeze_used = false
+	_freeze_uses = 0
 	_exit_freeze_mode()
 	_clear_projectiles()
 
@@ -35,12 +36,8 @@ func is_unlocked() -> bool:
 	return _ship_level >= UNLOCK_SHIP_LEVEL
 
 
-func is_used() -> bool:
-	return _freeze_used
-
-
 func energy_cost() -> int:
-	return ENERGY_COST
+	return ENERGY_COST + _freeze_uses * ENERGY_COST_INCREMENT
 
 
 func process(delta: float) -> void:
@@ -73,9 +70,8 @@ func process(delta: float) -> void:
 func _enter_freeze_mode() -> void:
 	if (
 		not is_unlocked()
-		or _freeze_used
 		or not bs._cannon
-		or bs._cannon._cannon_energy < ENERGY_COST
+		or bs._cannon._cannon_energy < energy_cost()
 	):
 		return
 	_cancel_other_modes()
@@ -122,15 +118,15 @@ func _exit_freeze_mode() -> void:
 func _drop_freeze(world_pos: Vector3) -> bool:
 	if (
 		not is_unlocked()
-		or _freeze_used
 		or not bs._cannon
-		or bs._cannon._cannon_energy < ENERGY_COST
+		or bs._cannon._cannon_energy < energy_cost()
 	):
 		return false
+	var cost := energy_cost()
 	var clamped := BaseTroop._clamp_to_island(world_pos)
 	var target := Vector3(clamped.x, bs.grid_y + 0.025, clamped.z)
-	bs._cannon._cannon_energy -= ENERGY_COST
-	_freeze_used = true
+	bs._cannon._cannon_energy -= cost
+	_freeze_uses += 1
 	_launch_or_apply(target, "manual")
 	_record_action(target)
 	bs._cannon._update_cannon_energy_ui()
@@ -138,7 +134,7 @@ func _drop_freeze(world_pos: Vector3) -> bool:
 
 
 func replay_drop_freeze(world_pos: Vector3) -> void:
-	_freeze_used = true
+	_freeze_uses += 1
 	var clamped := BaseTroop._clamp_to_island(world_pos)
 	var target := Vector3(clamped.x, bs.grid_y + 0.025, clamped.z)
 	_launch_or_apply(target, "replay")

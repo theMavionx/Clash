@@ -1417,6 +1417,33 @@ function orderEventLooksUnfilledIoc(event) {
   }
 }
 
+function orderEventRejectionReason(event) {
+  if (!event) return 'Decibel rejected or cancelled the order.';
+  const details = String(event.details || '').trim();
+  if (details) return details;
+  const cancellationReason = eventVariant(event.cancellationReason);
+  if (cancellationReason === 'POSITIONUPDATEVIOLATION') {
+    return 'Decibel rejected the order because the position update was invalid.';
+  }
+  if (cancellationReason) {
+    return `Decibel rejected the order: ${cancellationReason}.`;
+  }
+  const status = String(event.status || '').trim();
+  return status
+    ? `Decibel order was ${status.toLowerCase()}.`
+    : 'Decibel rejected or cancelled the order.';
+}
+
+function orderEventLooksRejected(event) {
+  if (!event) return false;
+  const text = [
+    event.status,
+    eventVariant(event.cancellationReason),
+    event.details,
+  ].filter(Boolean).join(' ').toLowerCase();
+  return /\b(cancel|cancelled|canceled|reject|rejected|abort|aborted|expire|expired|fail|failed)\b/.test(text);
+}
+
 function orderEventMatchesExpected(event, expected = {}) {
   if (!event) return false;
   const expectedMarket = normalizeAptosAddress(expected.marketAddr || '');
@@ -1435,6 +1462,9 @@ function orderEventMatchesExpected(event, expected = {}) {
 
 function orderEventHasFill(event) {
   if (!event) return false;
+  // Decibel emits CANCELLED with remaining_size=0 after removing an order from
+  // the book. That zero means "nothing remains open", not "the order filled".
+  if (orderEventLooksRejected(event)) return false;
   let hasSizeState = false;
   let unfilledIoc = false;
   try {
@@ -1464,13 +1494,6 @@ function orderEventHasFill(event) {
   return /\b(fill|filled|match|matched|execute|executed|partial)\b/.test(text);
 }
 
-function orderEventLooksRejected(event) {
-  if (!event) return false;
-  if (orderEventHasFill(event)) return false;
-  const text = `${event.status || ''} ${event.cancellationReason || ''} ${event.details || ''}`.toLowerCase();
-  return /\b(cancel|cancelled|canceled|reject|rejected|abort|aborted|expire|expired|fail|failed)\b/.test(text);
-}
-
 function verifyPlacedOrderFromTxEvents(orderEvents = [], expected = {}, isMarket = false) {
   const matching = orderEvents.filter((event) => orderEventMatchesExpected(event, expected));
   if (!matching.length) return null;
@@ -1485,22 +1508,29 @@ function verifyPlacedOrderFromTxEvents(orderEvents = [], expected = {}, isMarket
     };
   }
 
+  const rejected = matching.find(orderEventLooksRejected);
+  if (rejected) {
+    return {
+      verified: false,
+      terminal: true,
+      effect: 'tx_event_rejected',
+      code: 'DECIBEL_ORDER_REJECTED',
+      reason: orderEventRejectionReason(rejected),
+      attempts: 0,
+      order_event: rejected,
+      order_events: matching,
+    };
+  }
+
   const unfilledIoc = matching.find(orderEventLooksUnfilledIoc);
   if (unfilledIoc) {
     if (isMarket && !orderEventLooksRejected(unfilledIoc)) return null;
     return {
       verified: false,
+      terminal: true,
+      effect: 'tx_event_ioc_unfilled',
+      code: 'DECIBEL_IOC_UNFILLED',
       reason: 'Decibel acknowledged the IOC order transaction, but the order did not fill.',
-      attempts: 0,
-      order_events: matching,
-    };
-  }
-
-  const rejected = matching.find(orderEventLooksRejected);
-  if (rejected) {
-    return {
-      verified: false,
-      reason: rejected.cancellationReason || rejected.status || 'Decibel rejected or cancelled the order.',
       attempts: 0,
       order_events: matching,
     };
@@ -1607,6 +1637,7 @@ async function waitForPlacedOrderEffect(options = {}) {
   const unfilledIoc = orderEvents.some(orderEventLooksUnfilledIoc);
   return {
     verified: false,
+    terminal: false,
     reason: unfilledIoc
       ? 'Decibel acknowledged the IOC order transaction, but no matching fill was found before timeout.'
       : 'No matching Decibel position or open order was found after transaction confirmation.',
@@ -1657,6 +1688,10 @@ module.exports = {
   positionCollateralUsd,
   symbolFromMarket,
   __test: {
+    extractOrderEventsFromTransaction,
     extractTpslOrderEventsFromTransaction,
+    orderEventHasFill,
+    orderEventLooksRejected,
+    verifyPlacedOrderFromTxEvents,
   },
 };

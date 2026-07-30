@@ -720,12 +720,21 @@ const CANNON_START_POS = { x: -0.15186018, y: 0.2418113, z: 5.3458157 };
 const CANNON_TARGET_Y = 0.05;
 function cannonShotCost(shotNumber) { return shotNumber; }
 
-// Main Ship level 6 medkit. It shares cannon/rally energy and can be placed
-// once per battle. Healing is tick-based so browser FPS cannot change output.
+// Tactical abilities share the ship energy pool. Every repeat use costs one
+// more energy, matching cannon and rally while keeping replay costs canonical.
+function escalatingAbilityCost(baseCost, uses, increment = 1) {
+  const safeBase = Math.max(0, Math.trunc(Number(baseCost) || 0));
+  const safeUses = Math.max(0, Math.trunc(Number(uses) || 0));
+  const safeIncrement = Math.max(0, Math.trunc(Number(increment) || 0));
+  return safeBase + safeUses * safeIncrement;
+}
+
+// Main Ship level 6 medkit. Healing is tick-based so browser FPS cannot
+// change output, and overlapping fields cannot multiply a troop's tick rate.
 const MEDKIT_UNLOCK_SHIP_LEVEL = 6;
 const MEDKIT_ENERGY_COST = 6;
-const MEDKIT_MAX_USES = 1;
-const MEDKIT_DURATION_SEC = 14.0;
+const MEDKIT_ENERGY_COST_INCREMENT = 1;
+const MEDKIT_DURATION_SEC = 8.0;
 const MEDKIT_RADIUS = 0.72;
 const MEDKIT_TICK_SEC = 0.25;
 const MEDKIT_HEAL_PER_TICK = 12;
@@ -736,7 +745,7 @@ const FREEZE_DROP = Object.freeze({
   actionType: 'freeze_drop',
   unlockShipLevel: 7,
   energyCost: 5,
-  maxUses: 1,
+  costIncrement: 1,
   travelSec: 0.6,
   radius: 0.95,
   durationSec: 6.0,
@@ -746,7 +755,7 @@ const RAGE_DROP = Object.freeze({
   actionType: 'rage_drop',
   unlockShipLevel: 8,
   energyCost: 7,
-  maxUses: 1,
+  costIncrement: 1,
   radius: 0.82,
   durationSec: 9.0,
   damageMultiplier: 2.0,
@@ -759,7 +768,7 @@ const SKELETON_BARREL = Object.freeze({
   actionType: 'skeleton_barrel_fire',
   unlockShipLevel: 10,
   energyCost: 8,
-  maxUses: 1,
+  costIncrement: 1,
   travelSec: 1.067,
   impactDamage: 650,
   spawnCount: 4,
@@ -825,9 +834,10 @@ module.exports = {
   CANNON_START_POS,
   CANNON_TARGET_Y,
   cannonShotCost,
+  escalatingAbilityCost,
   MEDKIT_UNLOCK_SHIP_LEVEL,
   MEDKIT_ENERGY_COST,
-  MEDKIT_MAX_USES,
+  MEDKIT_ENERGY_COST_INCREMENT,
   MEDKIT_DURATION_SEC,
   MEDKIT_RADIUS,
   MEDKIT_TICK_SEC,

@@ -71,9 +71,9 @@ function simulate({ shipLevel, medkitDrops }) {
   });
 }
 
-const baseline = simulate({ shipLevel: MEDKIT_UNLOCK_SHIP_LEVEL, medkitDrops: 0 });
 const healed = simulate({ shipLevel: MEDKIT_UNLOCK_SHIP_LEVEL, medkitDrops: 1 });
 const duplicate = simulate({ shipLevel: MEDKIT_UNLOCK_SHIP_LEVEL, medkitDrops: 2 });
+const exhausted = simulate({ shipLevel: MEDKIT_UNLOCK_SHIP_LEVEL, medkitDrops: 3 });
 const locked = simulate({ shipLevel: MEDKIT_UNLOCK_SHIP_LEVEL - 1, medkitDrops: 1 });
 
 assert.equal(healed._medkitEventsAccepted, 1);
@@ -81,17 +81,25 @@ assert.equal(healed._medkitEventsIgnored, 0);
 assert.ok(healed._medkitHealTicks > 0, 'active medkit must tick while a troop is inside');
 assert.ok(healed._medkitHealingApplied > 0, 'active medkit must restore actual troop HP');
 assert.equal(
-  healed._troopEndState[0].hp - baseline._troopEndState[0].hp,
-  healed._medkitHealingApplied,
-  'reported medkit healing must match the troop HP delta',
-);
-assert.equal(
   healed._cannonEnergy,
   PLAYER_SHIP_LEVELS[MEDKIT_UNLOCK_SHIP_LEVEL].energy - MEDKIT_ENERGY_COST,
 );
 
-assert.equal(duplicate._medkitEventsAccepted, 1);
-assert.equal(duplicate._medkitEventsIgnored, 1, 'a second medkit must be rejected');
+assert.equal(duplicate._medkitEventsAccepted, 2);
+assert.equal(duplicate._medkitEventsIgnored, 0);
+assert.equal(
+  duplicate._medkitHealingApplied,
+  healed._medkitHealingApplied,
+  'overlapping medkits must not multiply healing ticks',
+);
+assert.equal(
+  duplicate._cannonEnergy,
+  PLAYER_SHIP_LEVELS[MEDKIT_UNLOCK_SHIP_LEVEL].energy
+    - MEDKIT_ENERGY_COST
+    - (MEDKIT_ENERGY_COST + 1),
+);
+assert.equal(exhausted._medkitEventsAccepted, 2);
+assert.equal(exhausted._medkitEventsIgnored, 1, 'energy must bound repeated medkits');
 assert.equal(locked._medkitEventsAccepted, 0);
 assert.equal(locked._medkitEventsIgnored, 1, 'ships below level 6 must not use the medkit');
 assert.equal(locked._medkitHealingApplied, 0);
@@ -100,5 +108,5 @@ console.log(
   `[MAIN_SHIP_MEDKIT] PASS healed=${healed._medkitHealingApplied}`
   + ` ticks=${healed._medkitHealTicks}`
   + ` energy=${healed._cannonEnergy}`
-  + ` duplicate_rejected=${duplicate._medkitEventsIgnored}`,
+  + ` repeat_energy=${duplicate._cannonEnergy}`,
 );

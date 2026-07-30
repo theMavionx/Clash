@@ -69,8 +69,8 @@ try {
     'mortar',
     'shark_trap',
   ]);
-  assert.deepEqual(gameDb.getBuildingUpgradeCost('mine', 5), { gold: 960, wood: 2400, ore: 0 });
-  assert.deepEqual(gameDb.getBuildingUpgradeCost('mortar', 1), { gold: 1200, wood: 1800, ore: 1400 });
+  assert.deepEqual(gameDb.getBuildingUpgradeCost('mine', 5), { gold: 5940, wood: 14850, ore: 0 });
+  assert.deepEqual(gameDb.getBuildingUpgradeCost('mortar', 1), { gold: 24000, wood: 36000, ore: 30000 });
   assert.deepEqual(gameDb.TH_MAX_COUNT.mortar.slice(0, 6), [0, 0, 0, 0, 1, 2]);
   assert.deepEqual(gameDb.TH_MAX_COUNT.shark_trap.slice(0, 6), [0, 0, 1, 1, 2, 3]);
   assert.equal(gameDb.getBuildingMaxLevelForTownHall('mortar', 5), 1);

@@ -21,7 +21,7 @@ import imgCannon from '../assets/buildings/cannon.png';
 import imgTombstone from '../assets/buildings/tombstone.png';
 import imgArcherTower from '../assets/buildings/archertower.png';
 import imgStorage from '../assets/buildings/storage.png';
-import imgShip from '../assets/buildings/shipsmall.png';
+import imgShip from '../assets/buildings/main_ship.png';
 import imgSharkTrap from '../assets/buildings/sharktrap.png';
 
 import knightImg from '../assets/units/knight.png';

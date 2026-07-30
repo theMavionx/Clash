@@ -309,6 +309,8 @@ func _ready() -> void:
 		call_deferred("_verify_camera_safety")
 	if OS.get_cmdline_user_args().has("--verify-stale-warmup-await"):
 		call_deferred("_verify_stale_warmup_await")
+	if OS.get_cmdline_user_args().has("--verify-cloud-warmup-barrier"):
+		call_deferred("_verify_cloud_warmup_barrier")
 	if OS.get_cmdline_user_args().has("--verify-defeat-reserve"):
 		call_deferred("_verify_defeat_reserve")
 	if OS.get_cmdline_user_args().has("--verify-hold-deployment"):
@@ -555,6 +557,33 @@ func _verify_stale_warmup_await() -> void:
 	await get_tree().process_frame
 	await battle._await_hidden_combat_warmup(stale_warmup, 0.01)
 	print("[STALE_WARMUP_TEST] PASS freed_object_was_ignored=true")
+	get_tree().quit()
+
+
+func _verify_cloud_warmup_barrier() -> void:
+	await get_tree().process_frame
+	var scene := get_tree().current_scene
+	var building_system := scene.get_node_or_null("BuildingSystem") if scene else null
+	var battle: BSBattle = building_system.get("_battle") if building_system else null
+	if battle == null:
+		push_error("Cloud warmup barrier test failed: BSBattle is missing.")
+		get_tree().quit(1)
+		return
+	var started_ticks := Time.get_ticks_msec()
+	var warmup: Node = battle._start_hidden_combat_warmup()
+	var completed: bool = await battle._finish_hidden_combat_warmup_under_cloud(
+		warmup,
+		"test_cloud_cover",
+		started_ticks
+	)
+	if not completed or not battle._is_hidden_combat_warmup_ready():
+		push_error("Cloud warmup barrier test failed: combat warmup remained incomplete.")
+		get_tree().quit(1)
+		return
+	print(
+		"[CLOUD_WARMUP_BARRIER_TEST] PASS completed=true elapsed_ms=",
+		Time.get_ticks_msec() - started_ticks
+	)
 	get_tree().quit()
 
 
@@ -1012,10 +1041,10 @@ func _create_test_ship_ability_hud() -> void:
 	utility_box.add_theme_constant_override("separation", 4)
 	row.add_child(utility_box)
 	var refill_button := _small_button("Refill", refill_test_ship_energy)
-	refill_button.tooltip_text = "Restore energy without resetting one-use abilities."
+	refill_button.tooltip_text = "Restore energy without resetting escalating ability costs."
 	utility_box.add_child(refill_button)
 	var reset_button := _small_button("Reset", reset_test_ship_abilities)
-	reset_button.tooltip_text = "Restore energy, costs, and all one-use abilities."
+	reset_button.tooltip_text = "Restore energy and every escalating ability cost."
 	utility_box.add_child(reset_button)
 
 	_refresh_test_ship_ability_hud()
@@ -1051,7 +1080,6 @@ func _test_ship_ability_state(ability_key: String) -> Dictionary:
 			"cost": 0,
 			"active": false,
 			"unlocked": false,
-			"used": false,
 		}
 	var cannon: BSCannon = bs.get("_cannon")
 	match ability_key:
@@ -1060,7 +1088,6 @@ func _test_ship_ability_state(ability_key: String) -> Dictionary:
 				"cost": cannon._cannon_next_cost,
 				"active": cannon._ship_cannon_mode,
 				"unlocked": true,
-				"used": false,
 			}
 		"rally":
 			var rally: BSRally = bs.get("_rally")
@@ -1068,7 +1095,6 @@ func _test_ship_ability_state(ability_key: String) -> Dictionary:
 				"cost": rally._rally_next_cost if rally else 1,
 				"active": rally._rally_mode if rally else false,
 				"unlocked": rally != null,
-				"used": false,
 			}
 		"medkit":
 			var medkit: BSMedkit = bs.get("_medkit")
@@ -1076,7 +1102,6 @@ func _test_ship_ability_state(ability_key: String) -> Dictionary:
 				"cost": medkit.energy_cost() if medkit else 6,
 				"active": medkit._medkit_mode if medkit else false,
 				"unlocked": medkit.is_unlocked() if medkit else false,
-				"used": medkit.is_used() if medkit else false,
 			}
 		"freeze":
 			var freeze: BSFreezeSpell = bs.get("_freeze")
@@ -1084,7 +1109,6 @@ func _test_ship_ability_state(ability_key: String) -> Dictionary:
 				"cost": freeze.energy_cost() if freeze else 5,
 				"active": freeze._freeze_mode if freeze else false,
 				"unlocked": freeze.is_unlocked() if freeze else false,
-				"used": freeze.is_used() if freeze else false,
 			}
 		"rage":
 			var rage: BSRageSpell = bs.get("_rage")
@@ -1092,7 +1116,6 @@ func _test_ship_ability_state(ability_key: String) -> Dictionary:
 				"cost": rage.energy_cost() if rage else 7,
 				"active": rage._rage_mode if rage else false,
 				"unlocked": rage.is_unlocked() if rage else false,
-				"used": rage.is_used() if rage else false,
 			}
 		"skeleton_barrel":
 			var barrel: BSSkeletonBarrel = bs.get("_skeleton_barrel")
@@ -1100,13 +1123,11 @@ func _test_ship_ability_state(ability_key: String) -> Dictionary:
 				"cost": barrel.energy_cost() if barrel else 8,
 				"active": barrel._barrel_mode if barrel else false,
 				"unlocked": barrel.is_unlocked() if barrel else false,
-				"used": barrel.is_used() if barrel else false,
 			}
 	return {
 		"cost": 0,
 		"active": false,
 		"unlocked": false,
-		"used": false,
 	}
 
 
@@ -1136,11 +1157,9 @@ func _refresh_test_ship_ability_hud() -> void:
 		var cost := int(state.get("cost", 0))
 		var active := bool(state.get("active", false))
 		var unlocked := bool(state.get("unlocked", false))
-		var used := bool(state.get("used", false))
 		var disabled := (
 			not attack_ready
 			or not unlocked
-			or used
 			or (not active and energy < cost)
 		)
 		button.disabled = disabled
@@ -1158,18 +1177,12 @@ func _refresh_test_ship_ability_hud() -> void:
 				ability_key,
 				ability_key
 			)
-		elif used:
-			button.text = "%s\nUSED" % TEST_SHIP_ABILITY_LABELS.get(
-				ability_key,
-				ability_key
-			)
 		button.button_pressed = active
 		button.tooltip_text = _test_ship_ability_tooltip(
 			ability_key,
 			cost,
 			active,
 			unlocked,
-			used,
 			attack_ready
 		)
 
@@ -1179,15 +1192,12 @@ func _test_ship_ability_tooltip(
 	cost: int,
 	active: bool,
 	unlocked: bool,
-	used: bool,
 	attack_ready: bool
 ) -> String:
 	if not attack_ready:
 		return "Start a test attack and wait for the Main Ship."
 	if not unlocked:
 		return "Requires Main Ship level 6."
-	if used:
-		return "This one-use ability has already been used in this test battle."
 	if active:
 		return "Cancel target selection."
 	var descriptions := {
@@ -4210,6 +4220,7 @@ func _verify_test_ship_abilities() -> void:
 		get_tree().quit(1)
 		return
 	reset_test_ship_abilities(false)
+	var rage_cost := rage.energy_cost()
 	rage._enter_rage_mode()
 	if not rage._rage_mode:
 		push_error("[TEST_SHIP_ABILITIES] rage targeting mode did not activate")
@@ -4221,10 +4232,11 @@ func _verify_test_ship_abilities() -> void:
 	rage_click.pressed = true
 	bs._unhandled_input(rage_click)
 	if (
-		not rage._rage_used
+		rage._rage_uses != 1
 		or rage._rage_mode
-		or cannon._cannon_energy != expected_energy - rage.energy_cost()
-		or not is_instance_valid(rage._active_zone.get("root", null))
+		or cannon._cannon_energy != expected_energy - rage_cost
+		or rage._active_zones.is_empty()
+		or not is_instance_valid(rage._active_zones[0].get("root", null))
 	):
 		push_error("[TEST_SHIP_ABILITIES] rage browser-style ground click was not applied")
 		get_tree().quit(1)
@@ -4234,7 +4246,11 @@ func _verify_test_ship_abilities() -> void:
 		push_error("[TEST_SHIP_ABILITIES] rage field could not be placed")
 		get_tree().quit(1)
 		return
-	var rage_root: Node3D = rage._active_zone.get("root", null)
+	var rage_root: Node3D = (
+		rage._active_zones[0].get("root", null)
+		if not rage._active_zones.is_empty()
+		else null
+	)
 	if not is_instance_valid(rage_root):
 		push_error("[TEST_SHIP_ABILITIES] rage field visual is missing")
 		get_tree().quit(1)

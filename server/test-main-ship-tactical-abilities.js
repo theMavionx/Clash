@@ -103,7 +103,7 @@ assert.deepEqual(
   {
     unlockShipLevel: FREEZE_DROP.unlockShipLevel,
     energyCost: FREEZE_DROP.energyCost,
-    maxUses: FREEZE_DROP.maxUses,
+    costIncrement: FREEZE_DROP.costIncrement,
     travelSec: FREEZE_DROP.travelSec,
     radius: FREEZE_DROP.radius,
     durationSec: FREEZE_DROP.durationSec,
@@ -111,8 +111,8 @@ assert.deepEqual(
   {
     unlockShipLevel: 7,
     energyCost: 5,
-    maxUses: 1,
-    travelSec: 0.9,
+    costIncrement: 1,
+    travelSec: 0.6,
     radius: 0.95,
     durationSec: 6,
   },
@@ -121,7 +121,7 @@ assert.deepEqual(
   {
     unlockShipLevel: RAGE_DROP.unlockShipLevel,
     energyCost: RAGE_DROP.energyCost,
-    maxUses: RAGE_DROP.maxUses,
+    costIncrement: RAGE_DROP.costIncrement,
     radius: RAGE_DROP.radius,
     durationSec: RAGE_DROP.durationSec,
     damageMultiplier: RAGE_DROP.damageMultiplier,
@@ -132,7 +132,7 @@ assert.deepEqual(
   {
     unlockShipLevel: 8,
     energyCost: 7,
-    maxUses: 1,
+    costIncrement: 1,
     radius: 0.82,
     durationSec: 9,
     damageMultiplier: 2,
@@ -145,7 +145,7 @@ assert.deepEqual(
   {
     unlockShipLevel: SKELETON_BARREL.unlockShipLevel,
     energyCost: SKELETON_BARREL.energyCost,
-    maxUses: SKELETON_BARREL.maxUses,
+    costIncrement: SKELETON_BARREL.costIncrement,
     travelSec: SKELETON_BARREL.travelSec,
     impactDamage: SKELETON_BARREL.impactDamage,
     spawnCount: SKELETON_BARREL.spawnCount,
@@ -155,8 +155,8 @@ assert.deepEqual(
   {
     unlockShipLevel: 10,
     energyCost: 8,
-    maxUses: 1,
-    travelSec: 1.6,
+    costIncrement: 1,
+    travelSec: 1.067,
     impactDamage: 650,
     spawnCount: 4,
     lifetimeSec: 18,
@@ -184,27 +184,42 @@ const freezeDuplicate = simulate(validationBuildings, [
   { type: FREEZE_DROP.actionType, ...validationPoint, t: 0 },
   { type: FREEZE_DROP.actionType, ...validationPoint, t: 0.1 },
 ]);
-assert.equal(freezeDuplicate._freezeDropEventsAccepted, 1);
-assert.equal(freezeDuplicate._freezeDropEventsIgnored, 1);
-assert.ok(traceReason(freezeDuplicate, 'freeze_drop_ignored', 'max_uses'));
+assert.equal(freezeDuplicate._freezeDropEventsAccepted, 2);
+assert.equal(freezeDuplicate._freezeDropEventsIgnored, 0);
+assert.deepEqual(
+  freezeDuplicate._trace
+    .filter(row => row.kind === 'freeze_drop_fire')
+    .map(row => row.cost),
+  [5, 6],
+);
 
 const rageDuplicate = simulate(validationBuildings, [
   commonDeploy,
   { type: RAGE_DROP.actionType, ...validationPoint, t: 0 },
   { type: RAGE_DROP.actionType, ...validationPoint, t: 0.1 },
 ]);
-assert.equal(rageDuplicate._rageDropEventsAccepted, 1);
-assert.equal(rageDuplicate._rageDropEventsIgnored, 1);
-assert.ok(traceReason(rageDuplicate, 'rage_drop_ignored', 'max_uses'));
+assert.equal(rageDuplicate._rageDropEventsAccepted, 2);
+assert.equal(rageDuplicate._rageDropEventsIgnored, 0);
+assert.deepEqual(
+  rageDuplicate._trace
+    .filter(row => row.kind === 'rage_drop')
+    .map(row => row.cost),
+  [7, 8],
+);
 
 const barrelDuplicate = simulate(validationBuildings, [
   commonDeploy,
   { type: SKELETON_BARREL.actionType, buildingId: 2, t: 0 },
   { type: SKELETON_BARREL.actionType, buildingId: 2, t: 0.1 },
 ]);
-assert.equal(barrelDuplicate._skeletonBarrelEventsAccepted, 1);
-assert.equal(barrelDuplicate._skeletonBarrelEventsIgnored, 1);
-assert.ok(traceReason(barrelDuplicate, 'skeleton_barrel_ignored', 'max_uses'));
+assert.equal(barrelDuplicate._skeletonBarrelEventsAccepted, 2);
+assert.equal(barrelDuplicate._skeletonBarrelEventsIgnored, 0);
+assert.deepEqual(
+  barrelDuplicate._trace
+    .filter(row => row.kind === 'skeleton_barrel_fire')
+    .map(row => row.cost),
+  [8, 9],
+);
 
 const locked = simulate(validationBuildings, [
   commonDeploy,
@@ -289,20 +304,26 @@ const frozen = simulate(freezeBuildings, [
 ]);
 const freezeEvent = frozen._trace.find(row => row.kind === 'freeze_drop');
 assert.ok(freezeEvent, 'freeze drop must emit accepted telemetry');
+const freezeStartsAt = freezeEvent.t;
+const freezeExpiresAt = freezeEvent.expiresAt;
 assert.deepEqual(freezeEvent.affectedGuardIds, []);
 assert.ok(freezeEvent.affectedDefenseIds.includes(20));
 assert.ok(freezeEvent.affectedTrapIds.includes(40));
 assert.equal(frozen._freezeDropGuardsAffected, 0);
 assert.ok(
-  freezeBaseline._trace.some(row => row.kind === 'defense_fire' && row.t >= 0.9 && row.t < 6.9),
+  freezeBaseline._trace.some(
+    row => row.kind === 'defense_fire'
+      && row.t >= freezeStartsAt
+      && row.t < freezeExpiresAt
+  ),
   'the unfrozen turret must fire during the comparison window',
 );
 assert.equal(
   frozen._trace.some(
     row => row.kind === 'defense_fire'
       && row.buildingId === 20
-      && row.t >= 0.9
-      && row.t < 6.9
+      && row.t >= freezeStartsAt
+      && row.t < freezeExpiresAt
   ),
   false,
   'the frozen turret must not fire during the six-second effect',
@@ -310,8 +331,8 @@ assert.equal(
 assert.ok(
   freezeBaseline._trace.some(
     row => row.kind === 'shark_trap_trigger'
-      && row.t >= 0.9
-      && row.t < 6.9
+      && row.t >= freezeStartsAt
+      && row.t < freezeExpiresAt
   ),
   'the unfrozen armed trap must trigger during the comparison window',
 );
@@ -319,8 +340,8 @@ assert.equal(
   frozen._trace.some(
     row => row.kind === 'shark_trap_trigger'
       && row.buildingId === 40
-      && row.t >= 0.9
-      && row.t < 6.9
+      && row.t >= freezeStartsAt
+      && row.t < freezeExpiresAt
   ),
   false,
   'the frozen armed trap must not trigger during the six-second effect',
@@ -328,8 +349,8 @@ assert.equal(
 assert.ok(
   frozen._trace.some(
     row => row.kind === 'guard_target_acquired'
-      && row.t >= 0.9
-      && row.t < 6.9
+      && row.t >= freezeStartsAt
+      && row.t < freezeExpiresAt
   ),
   'spawned tombstone guards must remain active during freeze drop',
 );
@@ -456,7 +477,11 @@ const barrelExpirations = barrelResult._trace.filter(
   row => row.kind === 'skeleton_barrel_skeleton_expired',
 );
 assert.equal(barrelFire.impactAt, SKELETON_BARREL.travelSec);
-assert.equal(barrelImpact.t, SKELETON_BARREL.travelSec);
+assert.ok(
+  barrelImpact.t >= SKELETON_BARREL.travelSec
+    && barrelImpact.t - SKELETON_BARREL.travelSec <= 0.02,
+  'barrel impact must resolve on the first simulation tick after its travel time',
+);
 assert.equal(barrelImpact.damage, SKELETON_BARREL.impactDamage);
 assert.equal(barrelImpact.hpBefore, 600);
 assert.equal(barrelImpact.hpAfter, 600 - SKELETON_BARREL.impactDamage);

@@ -486,21 +486,15 @@ func _update_cannon_energy_ui() -> void:
 		var rally_cost: int = bs._rally._rally_next_cost if bs._rally else 1
 		var medkit_cost: int = bs._medkit.energy_cost() if bs._medkit else 6
 		var medkit_unlocked: bool = bs._medkit.is_unlocked() if bs._medkit else false
-		var medkit_used: bool = bs._medkit.is_used() if bs._medkit else false
 		var freeze_cost: int = bs._freeze.energy_cost() if bs._freeze else 5
 		var freeze_unlocked: bool = bs._freeze.is_unlocked() if bs._freeze else false
-		var freeze_used: bool = bs._freeze.is_used() if bs._freeze else false
 		var rage_cost: int = bs._rage.energy_cost() if bs._rage else 7
 		var rage_unlocked: bool = bs._rage.is_unlocked() if bs._rage else false
-		var rage_used: bool = bs._rage.is_used() if bs._rage else false
 		var skeleton_barrel_cost: int = (
 			bs._skeleton_barrel.energy_cost() if bs._skeleton_barrel else 8
 		)
 		var skeleton_barrel_unlocked: bool = (
 			bs._skeleton_barrel.is_unlocked() if bs._skeleton_barrel else false
-		)
-		var skeleton_barrel_used: bool = (
-			bs._skeleton_barrel.is_used() if bs._skeleton_barrel else false
 		)
 		bridge.send_to_react("cannon_energy", {
 			"energy": _cannon_energy,
@@ -508,14 +502,10 @@ func _update_cannon_energy_ui() -> void:
 			"rally_next_cost": rally_cost,
 			"medkit_cost": medkit_cost,
 			"medkit_unlocked": medkit_unlocked,
-			"medkit_used": medkit_used,
 			"freeze_cost": freeze_cost,
 			"freeze_unlocked": freeze_unlocked,
-			"freeze_used": freeze_used,
 			"rage_cost": rage_cost,
 			"rage_unlocked": rage_unlocked,
-			"rage_used": rage_used,
 			"skeleton_barrel_cost": skeleton_barrel_cost,
 			"skeleton_barrel_unlocked": skeleton_barrel_unlocked,
-			"skeleton_barrel_used": skeleton_barrel_used,
 		})

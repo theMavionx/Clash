@@ -2093,14 +2093,48 @@ Follow-up:
 - Scope: add a server-owned tournament planning prompt and schema, validated preview/apply API, model fallback, daily schedule persistence with backward compatibility, wizard UI for AI generation and manual day editing, local end-to-end browser verification, then commit, push, deploy, and verify production.
 - Production deployment explicitly requested after local verification.
 
+### UR-2026-07-30-ADMIN-TROOP-BALANCE-ANALYTICS
+- Timestamp: 2026-07-30 Europe/Kyiv
+- Request: add admin statistics showing the most-used troops, common troop combinations, and their win rates so overpowered units and compositions can be identified for balance changes.
+- Scope: aggregate only server-accepted decided battle replays; report unit usage, exact army rosters, pair synergies, Town Hall splits, sample confidence, and win-rate deviation from the overall baseline; expose the analytics in the existing admin Stats panel without changing combat outcomes.
+- No commit, push, production deploy, or production database mutation requested.
 ### UR-2026-07-30-REMOVE-DANGO-INTEGRATION
 
-- **Request:** Remove the Dango exchange integration because the venue has shut down, then deploy the focused removal to production.
+- **Request:** Remove the Dango exchange integration because the venue has shut down.
 - **Scope:** Remove Dango from active exchange selection, registration, admin tournament creation,
   prefetch, trading runtime, futures API routes, reconciliation, rewards workers, and active
   earnings sources. Preserve historical database rows and retired architecture documentation.
-- **Status:** Completed and approved for production deployment.
+- **Status:** Completed locally.
 - **Verification:** Node syntax checks passed for the futures server, main
   server, earnings, tasks, reconciliation, and tournament builder. The full
   Vite production build passed. A live isolated futures-router smoke returned
   HTTP 410 with `DEX_RETIRED` for `dex=dango`. `git diff --check` passed.
+- **Deployment:** Not requested; no commit, push, deploy, or production DB
+  mutation performed.
+
+### UR-2026-07-30-IMPERIAL-INTEGRATION-OPTIONS
+
+- **Request:** Read the Imperial documentation at `https://docs.imperial.space/`, determine
+  whether Imperial requires a separately funded balance, and propose ways to connect it to
+  Clash's existing exchange, wallet, deposit, trading, rewards, and tournament integrations.
+- **Scope:** Documentation and repository architecture analysis only; compare viable custody,
+  funding, signing, bridge, API, fill-indexing, and UX approaches and recommend an implementation
+  path. No source integration, commit, push, deploy, or production mutation requested.
+
+### UR-2026-07-30-IMPERIAL-BUILDER-CODE-CLASH
+
+- **Request:** Check how the Imperial builder code `CLASH` works and verify its current
+  configuration.
+- **Scope:** Read-only inspection of Imperial's official builder API and OpenAPI contract;
+  determine activation state, builder fee, accounting/payout behavior, order attachment rules,
+  and implications for the Clash integration. No trading, registration, source integration,
+  commit, push, deploy, or production mutation requested.
+
+### UR-2026-07-30-DECIBEL-BULK-ORDER-TPSL-RESEARCH
+
+- **Request:** Check the current Decibel documentation to determine whether bulk orders can
+  include take-profit and stop-loss immediately, like ordinary trades.
+- **Scope:** Read-only official documentation/SDK/API research and comparison against Clash's
+  existing Decibel implementation; distinguish embedded TP/SL fields, separate conditional
+  orders, and atomic transaction batching. No live trades, source changes, commit, push,
+  deploy, or production mutation requested.

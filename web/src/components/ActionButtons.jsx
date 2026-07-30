@@ -9,7 +9,7 @@ import goldIcon from '../assets/resources/gold_bar.png';
 import mmBotIcon from '../assets/resources/mm-bot-icon.png';
 import tournamentIcon from '../assets/resources/tournament-icon.png';
 import buttonBg from '../assets/resources/file_00000000a6f87246844c6271b76cd436.png';
-import shipImg from '../assets/buildings/shipsmall.png';
+import shipImg from '../assets/buildings/main_ship.png';
 import medkitAbilityImg from '../assets/ui/medkit-ability.png';
 import freezeOrbAbilityImg from '../assets/ui/freeze-orb-ability.png';
 import rageFieldAbilityImg from '../assets/ui/rage-field-ability.png';
@@ -150,14 +150,13 @@ const EnergyBoltIcon = ({ size = 14 }) => (
   </svg>
 );
 
-const ONE_USE_SHIP_ABILITIES = [
+const REPEATABLE_SHIP_ABILITIES = [
   {
     key: 'medkit',
     label: 'Healing Field',
     image: medkitAbilityImg,
     costKey: 'medkitCost',
     unlockedKey: 'medkitUnlocked',
-    usedKey: 'medkitUsed',
     defaultCost: 6,
     activeStyle: 'medkitActive',
   },
@@ -167,7 +166,6 @@ const ONE_USE_SHIP_ABILITIES = [
     image: freezeOrbAbilityImg,
     costKey: 'freezeCost',
     unlockedKey: 'freezeUnlocked',
-    usedKey: 'freezeUsed',
     defaultCost: 5,
     activeStyle: 'freezeActive',
   },
@@ -177,7 +175,6 @@ const ONE_USE_SHIP_ABILITIES = [
     image: rageFieldAbilityImg,
     costKey: 'rageCost',
     unlockedKey: 'rageUnlocked',
-    usedKey: 'rageUsed',
     defaultCost: 7,
     activeStyle: 'rageActive',
   },
@@ -187,7 +184,6 @@ const ONE_USE_SHIP_ABILITIES = [
     image: skeletonBarrelAbilityImg,
     costKey: 'skeletonBarrelCost',
     unlockedKey: 'skeletonBarrelUnlocked',
-    usedKey: 'skeletonBarrelUsed',
     defaultCost: 8,
     activeStyle: 'skeletonBarrelActive',
   },
@@ -198,7 +194,7 @@ const DESKTOP_SHIP_ABILITY_GAP = 8;
 const DESKTOP_SHIP_ABILITY_PADDING = 4;
 
 function getVisibleShipAbilityCount(cannonEnergy) {
-  return 2 + ONE_USE_SHIP_ABILITIES.reduce(
+  return 2 + REPEATABLE_SHIP_ABILITIES.reduce(
     (count, ability) => count + (cannonEnergy?.[ability.unlockedKey] ? 1 : 0),
     0,
   );
@@ -306,16 +302,13 @@ function ShipAbilityRail({
         <RallyGrenadeIcon size={abilityIconSize} />
         {cannonEnergy && <div style={{ ...hud.cannonCostBadge, ...(mobile ? hud.cannonCostBadgeMobile : {}) }}>{rallyCost}<span style={hud.cannonCostIcon}><EnergyBoltIcon size={9} /></span></div>}
       </button>
-      {ONE_USE_SHIP_ABILITIES.map((ability) => {
+      {REPEATABLE_SHIP_ABILITIES.map((ability) => {
         if (!cannonEnergy?.[ability.unlockedKey]) return null;
         const active = !!modes[ability.key];
-        const used = !!cannonEnergy[ability.usedKey];
         const cost = cannonEnergy[ability.costKey] ?? ability.defaultCost;
-        const disabled = !active && (used || energy < cost);
+        const disabled = !active && energy < cost;
         const tooltip = active
           ? `Cancel ${ability.label}`
-          : used
-          ? `${ability.label} already used`
           : energy < cost
           ? `Need ${cost} energy for ${ability.label}`
           : ability.label;

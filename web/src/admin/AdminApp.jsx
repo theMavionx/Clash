@@ -3351,6 +3351,7 @@ function StatsPanel({ data }) {
   const playerRows = data.player_analytics?.players || [];
   const mm = data.matchmaking || {};
   const mmSummary = mm.summary || {};
+  const troopBalance = mm.troop_balance || {};
   const mmDecided = Number(mmSummary.decided_raids || 0);
   const mmRaids = Number(mmSummary.raids || 0);
   const mmRiskRows = mm.battle_risk_players || [];
@@ -3414,6 +3415,83 @@ function StatsPanel({ data }) {
               const active = (mm.active_bot_targets || []).find((target) => Number(target.th) === Number(row.th) && String(target.difficulty || '') === String(row.difficulty || ''));
               return [`TH ${row.th}`, row.difficulty, num(row.templates), num(active?.active_targets || 0)];
             })} />
+          </div>
+          <div className="admin-card" style={{ boxShadow: 'none' }}>
+            <div className="admin-card-head">
+              <div>
+                <div className="admin-card-title">Troop Balance Analytics</div>
+                <div className="admin-card-sub">
+                  Server-accepted decided battles only. {num(troopBalance.analyzed_battles || 0)} of {num(troopBalance.accepted_replays || 0)} accepted replays analyzed; overall win rate {formatPct(troopBalance.overall_win_rate)}.
+                  Summoned skeletons and split forms are excluded because they were not selected by the player. High/low win signals require at least {num(troopBalance.sample_thresholds?.directional || 10)} battles and show correlation, not proof of causation.
+                </div>
+              </div>
+              {troopBalance.capped ? <span className="admin-badge gold">Latest {num(troopBalance.replay_limit)} only</span> : <span className="admin-badge green">Complete window</span>}
+            </div>
+            <div className="admin-card-body admin-grid">
+              <div className="admin-grid two">
+                <CompactTable
+                  title="Unit Usage & Win Rate"
+                  subtitle="Battle share measures how often a unit appears; deployed is the actual number placed."
+                  columns={['Unit', 'Battles', 'Share', 'Deployed', 'Avg', 'Win rate', 'vs all', 'TH damage', 'Signal']}
+                  rows={(troopBalance.by_unit || []).map((row) => [
+                    row.label || row.troop_type,
+                    num(row.battles),
+                    formatPct(row.battle_share),
+                    num(row.units_deployed),
+                    Number(row.avg_deployed_per_battle || 0).toFixed(1),
+                    formatPct(row.win_rate),
+                    formatSignedPct(row.win_rate_delta),
+                    formatPct(row.avg_town_hall_damage),
+                    <TroopBalanceBadges row={row} />,
+                  ])}
+                />
+                <CompactTable
+                  title="Unit Pair Synergies"
+                  subtitle="Two selected troop types appearing in the same accepted battle."
+                  columns={['Pair', 'Battles', 'Share', 'Avg army', 'Win rate', 'vs all', 'Signal']}
+                  rows={(troopBalance.by_pair || []).map((row) => [
+                    row.label,
+                    num(row.battles),
+                    formatPct(row.battle_share),
+                    Number(row.avg_deployed_per_battle || 0).toFixed(1),
+                    formatPct(row.win_rate),
+                    formatSignedPct(row.win_rate_delta),
+                    <TroopBalanceBadges row={row} />,
+                  ])}
+                />
+              </div>
+              <div className="admin-grid two">
+                <CompactTable
+                  title="Exact Army Rosters"
+                  subtitle="Exact unique troop-type roster, regardless of deployment order."
+                  columns={['Roster', 'Battles', 'Share', 'Avg army', 'Win rate', 'vs all', 'Signal']}
+                  rows={(troopBalance.by_roster || []).map((row) => [
+                    row.label,
+                    num(row.battles),
+                    formatPct(row.battle_share),
+                    Number(row.avg_deployed_per_battle || 0).toFixed(1),
+                    formatPct(row.win_rate),
+                    formatSignedPct(row.win_rate_delta),
+                    <TroopBalanceBadges row={row} />,
+                  ])}
+                />
+                <CompactTable
+                  title="Unit Win Rate by Town Hall"
+                  subtitle="Win-rate deviation is measured against all analyzed armies at the same attacker TH."
+                  columns={['TH', 'Unit', 'Battles', 'TH share', 'Win rate', 'TH avg', 'vs TH', 'Signal']}
+                  rows={(troopBalance.by_unit_town_hall || []).map((row) => [
+                    `TH ${row.town_hall_level}`,
+                    row.label || row.troop_type,
+                    num(row.battles),
+                    formatPct(row.battle_share),
+                    formatPct(row.win_rate),
+                    formatPct(row.town_hall_win_rate),
+                    formatSignedPct(row.win_rate_delta),
+                    <TroopBalanceBadges row={row} />,
+                  ])}
+                />
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -5405,6 +5483,28 @@ function statusBadge(status) {
   return <span className={'admin-badge ' + tone}>{value}</span>;
 }
 
+function TroopBalanceBadges({ row }) {
+  const signal = String(row?.balance_signal || 'insufficient_sample');
+  const sample = String(row?.sample_status || 'low_sample');
+  const signalConfig = {
+    high_win: { tone: 'red', label: 'High win' },
+    low_win: { tone: 'gold', label: 'Low win' },
+    neutral: { tone: 'green', label: 'Neutral' },
+    insufficient_sample: { tone: 'off', label: 'Need data' },
+  }[signal] || { tone: 'off', label: signal };
+  const sampleConfig = {
+    reliable: { tone: 'blue', label: 'Reliable' },
+    directional: { tone: 'purple', label: 'Directional' },
+    low_sample: { tone: 'off', label: 'Low sample' },
+  }[sample] || { tone: 'off', label: sample };
+  return (
+    <div className="admin-filter-row" style={{ flexWrap: 'nowrap' }}>
+      <span className={'admin-badge ' + signalConfig.tone}>{signalConfig.label}</span>
+      <span className={'admin-badge ' + sampleConfig.tone}>{sampleConfig.label}</span>
+    </div>
+  );
+}
+
 function PresenceBadge({ player }) {
   if (player.banned_at) return <span className="admin-badge red">BANNED</span>;
   if (player.online) return <span className="admin-badge green">ONLINE</span>;
@@ -5672,6 +5772,13 @@ function formatPct(value, digits = 1) {
   const pct = Number(value) * 100;
   const fixed = pct.toFixed(digits);
   return `${fixed.replace(/\.0$/u, '')}%`;
+}
+
+function formatSignedPct(value, digits = 1) {
+  if (value == null || value === '' || Number.isNaN(Number(value))) return '-';
+  const numeric = Number(value);
+  const prefix = numeric > 0 ? '+' : '';
+  return `${prefix}${formatPct(numeric, digits)}`;
 }
 
 function ratioText(value) {

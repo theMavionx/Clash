@@ -20,10 +20,10 @@ const {
   CANNON_DAMAGE, cannonInitialEnergyForShipLevel, CANNON_ENERGY_PER_DESTROY,
   CANNON_RELOAD_SEC, CANNON_SPEED, CANNON_MIN_FLIGHT_SEC,
   CANNON_START_POS, CANNON_TARGET_Y,
-  MEDKIT_UNLOCK_SHIP_LEVEL, MEDKIT_ENERGY_COST, MEDKIT_MAX_USES,
+  MEDKIT_UNLOCK_SHIP_LEVEL, MEDKIT_ENERGY_COST, MEDKIT_ENERGY_COST_INCREMENT,
   MEDKIT_DURATION_SEC, MEDKIT_RADIUS, MEDKIT_TICK_SEC,
   MEDKIT_HEAL_PER_TICK,
-  FREEZE_DROP, RAGE_DROP, SKELETON_BARREL,
+  FREEZE_DROP, RAGE_DROP, SKELETON_BARREL, escalatingAbilityCost,
   cannonShotCost, VALID_TROOP_TYPES, normalizeNftRarity,
 } = require('./combat_defs');
 const { BUILDING_DEFS } = require('./db');
@@ -903,7 +903,7 @@ function verifyReplay({
     return { valid: true, point: { x: rawX, z: rawZ } };
   }
 
-  function applyFreezeDrop(point, actionTime) {
+  function applyFreezeDrop(point, actionTime, use, cost) {
     const frozenUntil = actionTime + FREEZE_DROP.durationSec;
     const affectedDefenseIds = [];
     const affectedTrapIds = [];
@@ -928,8 +928,8 @@ function verifyReplay({
     freezeDropDefensesAffected += affectedDefenseIds.length;
     freezeDropTrapsAffected += affectedTrapIds.length;
     traceEvent('freeze_drop', {
-      use: freezeDropUses,
-      cost: FREEZE_DROP.energyCost,
+      use,
+      cost,
       energyAfter: cannonEnergy,
       x: round3(point.x),
       z: round3(point.z),
@@ -2377,16 +2377,16 @@ function verifyReplay({
           traceEvent('medkit_ignored', { reason: 'locked', shipLevel: serverShipLevel });
           continue;
         }
-        if (medkitUses >= MEDKIT_MAX_USES) {
-          medkitEventsIgnored++;
-          traceEvent('medkit_ignored', { reason: 'max_uses', uses: medkitUses });
-          continue;
-        }
-        if (cannonEnergy < MEDKIT_ENERGY_COST) {
+        const medkitCost = escalatingAbilityCost(
+          MEDKIT_ENERGY_COST,
+          medkitUses,
+          MEDKIT_ENERGY_COST_INCREMENT,
+        );
+        if (cannonEnergy < medkitCost) {
           medkitEventsIgnored++;
           traceEvent('medkit_ignored', {
             reason: 'energy',
-            cost: MEDKIT_ENERGY_COST,
+            cost: medkitCost,
             energy: cannonEnergy,
           });
           continue;
@@ -2407,7 +2407,7 @@ function verifyReplay({
           { x: rawX, z: rawZ },
           1.05,
         );
-        cannonEnergy -= MEDKIT_ENERGY_COST;
+        cannonEnergy -= medkitCost;
         medkitUses++;
         medkitEventsAccepted++;
         activeMedkits.push({
@@ -2419,7 +2419,7 @@ function verifyReplay({
         });
         traceEvent('medkit_drop', {
           use: medkitUses,
-          cost: MEDKIT_ENERGY_COST,
+          cost: medkitCost,
           energyAfter: cannonEnergy,
           x: round3(point.x),
           z: round3(point.z),
@@ -2437,14 +2437,6 @@ function verifyReplay({
           });
           continue;
         }
-        if (freezeDropUses >= FREEZE_DROP.maxUses) {
-          freezeDropEventsIgnored++;
-          traceEvent('freeze_drop_ignored', {
-            reason: 'max_uses',
-            uses: freezeDropUses,
-          });
-          continue;
-        }
         const pointResult = validateTacticalPoint(act);
         if (!pointResult.valid) {
           freezeDropEventsIgnored++;
@@ -2455,29 +2447,35 @@ function verifyReplay({
           });
           continue;
         }
-        if (cannonEnergy < FREEZE_DROP.energyCost) {
+        const freezeDropCost = escalatingAbilityCost(
+          FREEZE_DROP.energyCost,
+          freezeDropUses,
+          FREEZE_DROP.costIncrement,
+        );
+        if (cannonEnergy < freezeDropCost) {
           freezeDropEventsIgnored++;
           traceEvent('freeze_drop_ignored', {
             reason: 'energy',
-            cost: FREEZE_DROP.energyCost,
+            cost: freezeDropCost,
             energy: cannonEnergy,
           });
           continue;
         }
 
-        cannonEnergy -= FREEZE_DROP.energyCost;
+        cannonEnergy -= freezeDropCost;
         freezeDropUses++;
         freezeDropEventsAccepted++;
         const impactAt = actionTime + FREEZE_DROP.travelSec;
         pendingFreezeDrops.push({
           use: freezeDropUses,
+          cost: freezeDropCost,
           time: impactAt,
           x: pointResult.point.x,
           z: pointResult.point.z,
         });
         traceEvent('freeze_drop_fire', {
           use: freezeDropUses,
-          cost: FREEZE_DROP.energyCost,
+          cost: freezeDropCost,
           energyAfter: cannonEnergy,
           x: round3(pointResult.point.x),
           z: round3(pointResult.point.z),
@@ -2496,14 +2494,6 @@ function verifyReplay({
           });
           continue;
         }
-        if (rageDropUses >= RAGE_DROP.maxUses) {
-          rageDropEventsIgnored++;
-          traceEvent('rage_drop_ignored', {
-            reason: 'max_uses',
-            uses: rageDropUses,
-          });
-          continue;
-        }
         const pointResult = validateTacticalPoint(act);
         if (!pointResult.valid) {
           rageDropEventsIgnored++;
@@ -2514,17 +2504,22 @@ function verifyReplay({
           });
           continue;
         }
-        if (cannonEnergy < RAGE_DROP.energyCost) {
+        const rageDropCost = escalatingAbilityCost(
+          RAGE_DROP.energyCost,
+          rageDropUses,
+          RAGE_DROP.costIncrement,
+        );
+        if (cannonEnergy < rageDropCost) {
           rageDropEventsIgnored++;
           traceEvent('rage_drop_ignored', {
             reason: 'energy',
-            cost: RAGE_DROP.energyCost,
+            cost: rageDropCost,
             energy: cannonEnergy,
           });
           continue;
         }
 
-        cannonEnergy -= RAGE_DROP.energyCost;
+        cannonEnergy -= rageDropCost;
         rageDropUses++;
         rageDropEventsAccepted++;
         const field = {
@@ -2538,7 +2533,7 @@ function verifyReplay({
         traceEvent('rage_drop', {
           fieldId: field.id,
           use: rageDropUses,
-          cost: RAGE_DROP.energyCost,
+          cost: rageDropCost,
           energyAfter: cannonEnergy,
           x: round3(field.x),
           z: round3(field.z),
@@ -2559,14 +2554,6 @@ function verifyReplay({
           traceEvent('skeleton_barrel_ignored', {
             reason: 'locked',
             shipLevel: authoritativeShipLevel,
-          });
-          continue;
-        }
-        if (skeletonBarrelUses >= SKELETON_BARREL.maxUses) {
-          skeletonBarrelEventsIgnored++;
-          traceEvent('skeleton_barrel_ignored', {
-            reason: 'max_uses',
-            uses: skeletonBarrelUses,
           });
           continue;
         }
@@ -2600,18 +2587,23 @@ function verifyReplay({
           });
           continue;
         }
-        if (cannonEnergy < SKELETON_BARREL.energyCost) {
+        const skeletonBarrelCost = escalatingAbilityCost(
+          SKELETON_BARREL.energyCost,
+          skeletonBarrelUses,
+          SKELETON_BARREL.costIncrement,
+        );
+        if (cannonEnergy < skeletonBarrelCost) {
           skeletonBarrelEventsIgnored++;
           traceEvent('skeleton_barrel_ignored', {
             reason: 'energy',
             buildingId: target?.id ?? null,
-            cost: SKELETON_BARREL.energyCost,
+            cost: skeletonBarrelCost,
             energy: cannonEnergy,
           });
           continue;
         }
 
-        cannonEnergy -= SKELETON_BARREL.energyCost;
+        cannonEnergy -= skeletonBarrelCost;
         skeletonBarrelUses++;
         skeletonBarrelEventsAccepted++;
         const impactAt = actionTime + SKELETON_BARREL.travelSec;
@@ -2624,7 +2616,7 @@ function verifyReplay({
         });
         traceEvent('skeleton_barrel_fire', {
           use: skeletonBarrelUses,
-          cost: SKELETON_BARREL.energyCost,
+          cost: skeletonBarrelCost,
           energyAfter: cannonEnergy,
           target: target ? traceEntityPayload(target, 'building') : null,
           x: round3(pointResult.point.x),
@@ -2754,7 +2746,12 @@ function verifyReplay({
     for (let i = pendingFreezeDrops.length - 1; i >= 0; i--) {
       if (pendingFreezeDrops[i].time <= time + 1e-9) {
         const impact = pendingFreezeDrops.splice(i, 1)[0];
-        applyFreezeDrop({ x: impact.x, z: impact.z }, impact.time);
+        applyFreezeDrop(
+          { x: impact.x, z: impact.z },
+          impact.time,
+          impact.use,
+          impact.cost,
+        );
       }
     }
 
@@ -2854,37 +2851,55 @@ function verifyReplay({
     // A medkit heals paid attacking troops that remain inside the field.
     // Summoned skeletons are deliberately excluded: they cost no ship space
     // and healing them would multiply the necromancer's free unit value.
-    for (let i = activeMedkits.length - 1; i >= 0; i--) {
-      const field = activeMedkits[i];
+    const dueMedkitTicks = [];
+    for (const field of activeMedkits) {
       while (
         field.nextTickAt <= time + 1e-9
         && field.nextTickAt <= field.expiresAt + 1e-9
       ) {
-        let healedThisTick = 0;
-        let troopsHealedThisTick = 0;
-        for (const troop of aliveTroops) {
-          if (troop.summoned || troop.medkitHealable === false) continue;
-          const maxHp = Math.max(1, finiteNumber(troop.maxHp, troop.hp));
-          if (troop.hp >= maxHp) continue;
-          if (distSq2d(troop.x, troop.z, field.x, field.z) > MEDKIT_RADIUS * MEDKIT_RADIUS) continue;
-          const hpBefore = troop.hp;
-          troop.hp = Math.min(maxHp, troop.hp + MEDKIT_HEAL_PER_TICK);
-          const healed = Math.max(0, troop.hp - hpBefore);
-          healedThisTick += healed;
-          if (healed > 0) troopsHealedThisTick++;
-        }
-        medkitHealTicks++;
-        medkitHealingApplied += healedThisTick;
-        if (healedThisTick > 0) {
-          traceEvent('medkit_tick', {
-            x: round3(field.x),
-            z: round3(field.z),
-            healed: round3(healedThisTick),
-            troops: troopsHealedThisTick,
-          });
-        }
+        dueMedkitTicks.push({
+          time: field.nextTickAt,
+          x: field.x,
+          z: field.z,
+        });
         field.nextTickAt += MEDKIT_TICK_SEC;
       }
+    }
+    dueMedkitTicks.sort((a, b) => a.time - b.time);
+    for (const tick of dueMedkitTicks) {
+      let healedThisTick = 0;
+      let troopsHealedThisTick = 0;
+      for (const troop of aliveTroops) {
+        if (troop.summoned || troop.medkitHealable === false) continue;
+        const maxHp = Math.max(1, finiteNumber(troop.maxHp, troop.hp));
+        if (troop.hp >= maxHp) continue;
+        if (distSq2d(troop.x, troop.z, tick.x, tick.z) > MEDKIT_RADIUS * MEDKIT_RADIUS) continue;
+        const lastHealAt = Number.isFinite(troop._lastMedkitHealAt)
+          ? troop._lastMedkitHealAt
+          : -Infinity;
+        if (tick.time - lastHealAt < MEDKIT_TICK_SEC - 1e-9) continue;
+        const hpBefore = troop.hp;
+        troop.hp = Math.min(maxHp, troop.hp + MEDKIT_HEAL_PER_TICK);
+        const healed = Math.max(0, troop.hp - hpBefore);
+        healedThisTick += healed;
+        if (healed > 0) {
+          troop._lastMedkitHealAt = tick.time;
+          troopsHealedThisTick++;
+        }
+      }
+      medkitHealTicks++;
+      medkitHealingApplied += healedThisTick;
+      if (healedThisTick > 0) {
+        traceEvent('medkit_tick', {
+          x: round3(tick.x),
+          z: round3(tick.z),
+          healed: round3(healedThisTick),
+          troops: troopsHealedThisTick,
+        });
+      }
+    }
+    for (let i = activeMedkits.length - 1; i >= 0; i--) {
+      const field = activeMedkits[i];
       if (time + 1e-9 >= field.expiresAt) {
         activeMedkits.splice(i, 1);
         traceEvent('medkit_expired', {

@@ -53,41 +53,41 @@ try {
   assert.deepEqual(gameDb.TH_MAX_LEVEL.port, [1, 2, 3, 3, 3, 3, 3]);
   assert.deepEqual(gameDb.TH_MAX_LEVEL.altar, [1, 1, 1, 1, 1, 1, 1]);
   assert.deepEqual(gameDb.TH_UPGRADE_REQUIRES[6], gameDb.TH_UPGRADE_REQUIRES[5]);
-  assert.equal(gameDb.BUILDING_UPGRADE_COST_MULTIPLIERS[7], 17);
+  assert.equal(gameDb.BUILDING_UPGRADE_COST_MULTIPLIERS[7], 45);
   assert.deepEqual(gameDb.getBuildingUpgradeCost('town_hall', 6), {
-    gold: 70000,
-    wood: 100000,
-    ore: 92000,
+    gold: 85000,
+    wood: 106000,
+    ore: 98000,
   });
   assert.deepEqual(gameDb.getBuildingUpgradeCost('mine', 6), {
-    gold: 1360,
-    wood: 3400,
+    gold: 9900,
+    wood: 24750,
     ore: 0,
   });
   assert.deepEqual(gameDb.BUILDING_DEFS.cannon, {
     size: [3, 3],
     max_level: 7,
     hp_levels: [3200, 3900, 4700, 5600, 6600, 7700, 9000],
-    cost: { gold: 6800, wood: 15500, ore: 13000 },
+    cost: { gold: 16000, wood: 36000, ore: 30000 },
     upgrade_cost: {
-      2: { gold: 9500, wood: 22000, ore: 18000 },
-      3: { gold: 14000, wood: 32000, ore: 27000 },
-      4: { gold: 20000, wood: 45000, ore: 38000 },
-      5: { gold: 29000, wood: 61000, ore: 52000 },
-      6: { gold: 41000, wood: 81000, ore: 69000 },
-      7: { gold: 56000, wood: 106000, ore: 90000 },
+      2: { gold: 24000, wood: 52000, ore: 44000 },
+      3: { gold: 35000, wood: 70000, ore: 60000 },
+      4: { gold: 48000, wood: 90000, ore: 76000 },
+      5: { gold: 65000, wood: 110000, ore: 92000 },
+      6: { gold: 83000, wood: 128000, ore: 108000 },
+      7: { gold: 105000, wood: 142000, ore: 125000 },
     },
     max_count: 2,
   });
   assert.deepEqual(gameDb.getBuildingUpgradeCost('cannon', 1), {
-    gold: 9500,
-    wood: 22000,
-    ore: 18000,
+    gold: 24000,
+    wood: 52000,
+    ore: 44000,
   });
   assert.deepEqual(gameDb.getBuildingUpgradeCost('cannon', 6), {
-    gold: 56000,
-    wood: 106000,
-    ore: 90000,
+    gold: 105000,
+    wood: 142000,
+    ore: 125000,
   });
   assert.deepEqual(gameDb.PRODUCTION_DEFS.mine.rate, [18, 33, 54, 81, 120, 170, 225]);
   assert.deepEqual(gameDb.PRODUCTION_DEFS.mine.max, [200, 400, 800, 1600, 3000, 5000, 7500]);
@@ -147,12 +147,18 @@ try {
   const th7Upgrade = gameDb.upgradeBuilding(playerId, townHallId);
   assert.equal(th7Upgrade.level, 7);
   assert.equal(th7Upgrade.hp, 72000);
-  assert.deepEqual(th7Upgrade.resources, { gold: 36000, wood: 6000, ore: 14000 });
+  assert.deepEqual(th7Upgrade.resources, { gold: 21000, wood: 0, ore: 8000 });
 
-  gameDb.db.prepare(
-    'UPDATE players SET gold = 116000, wood = 116000, ore = 116000 WHERE id = ?',
-  ).run(playerId);
   for (const storageId of storageIds) {
+    const capBeforeUpgrade = gameDb.getResourceCaps(playerId);
+    gameDb.db.prepare(
+      'UPDATE players SET gold = ?, wood = ?, ore = ? WHERE id = ?',
+    ).run(
+      capBeforeUpgrade.gold,
+      capBeforeUpgrade.wood,
+      capBeforeUpgrade.ore,
+      playerId,
+    );
     assert.equal(gameDb.upgradeBuilding(playerId, storageId).level, 7);
   }
   assert.deepEqual(gameDb.getResourceCaps(playerId), {
@@ -226,7 +232,7 @@ try {
   );
 
   console.log(
-    '[TH7_PROGRESSION] PASS cost=70000/100000/92000'
+    '[TH7_PROGRESSION] PASS cost=85000/106000/98000'
     + ' th6_capacity=106000 th7_capacity=143000 cannons=2xL7 port=3 altar=1',
   );
 } finally {

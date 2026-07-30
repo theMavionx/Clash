@@ -6,6 +6,7 @@ extends RefCounted
 
 const UNLOCK_SHIP_LEVEL: int = 10
 const ENERGY_COST: int = 8
+const ENERGY_COST_INCREMENT: int = 1
 const IMPACT_DAMAGE: int = 650
 const FLIGHT_SEC: float = 1.067
 const SKELETON_COUNT: int = 4
@@ -27,7 +28,7 @@ static var _barrel_mesh: Mesh = null
 var bs: Node3D
 var _ship_level: int = 1
 var _barrel_mode: bool = false
-var _barrel_used: bool = false
+var _barrel_uses: int = 0
 var _barrel_paused_attack: bool = false
 var _barrel_label: Label = null
 var _projectiles: Array[Dictionary] = []
@@ -47,7 +48,7 @@ func init(building_system: Node3D) -> BSSkeletonBarrel:
 func reset(ship_level: int = 1) -> void:
 	_ship_level = clampi(ship_level, 1, 10)
 	prepare_pool(_ship_level)
-	_barrel_used = false
+	_barrel_uses = 0
 	_summon_serial = 0
 	_exit_barrel_mode()
 	_clear_projectiles()
@@ -67,12 +68,8 @@ func is_unlocked() -> bool:
 	return _ship_level >= UNLOCK_SHIP_LEVEL
 
 
-func is_used() -> bool:
-	return _barrel_used
-
-
 func energy_cost() -> int:
-	return ENERGY_COST
+	return ENERGY_COST + _barrel_uses * ENERGY_COST_INCREMENT
 
 
 func process(delta: float) -> void:
@@ -110,9 +107,8 @@ func process(delta: float) -> void:
 func _enter_barrel_mode() -> void:
 	if (
 		not is_unlocked()
-		or _barrel_used
 		or not bs._cannon
-		or bs._cannon._cannon_energy < ENERGY_COST
+		or bs._cannon._cannon_energy < energy_cost()
 	):
 		return
 	_cancel_other_modes()
@@ -169,15 +165,15 @@ func fire_at_building(building: Dictionary) -> bool:
 func fire_at_target(building: Dictionary, target: Vector3) -> bool:
 	if (
 		not is_unlocked()
-		or _barrel_used
 		or not bs._cannon
-		or bs._cannon._cannon_energy < ENERGY_COST
+		or bs._cannon._cannon_energy < energy_cost()
 	):
 		return false
 	if target == Vector3.INF:
 		return false
-	bs._cannon._cannon_energy -= ENERGY_COST
-	_barrel_used = true
+	var cost := energy_cost()
+	bs._cannon._cannon_energy -= cost
+	_barrel_uses += 1
 	_launch_or_impact(building, target, "manual")
 	_record_action(building, target)
 	bs._cannon._update_cannon_energy_ui()
@@ -185,7 +181,7 @@ func fire_at_target(building: Dictionary, target: Vector3) -> bool:
 
 
 func replay_fire_at_building(building: Dictionary, fallback: Vector3) -> void:
-	_barrel_used = true
+	_barrel_uses += 1
 	var target := _building_position(building)
 	if target == Vector3.INF:
 		target = fallback
@@ -308,8 +304,7 @@ func _activate_skeleton_batch(skeletons: Array[Node3D]) -> void:
 
 func _process_skeleton_pool(delta: float) -> void:
 	if (
-		_barrel_used
-		or _skeleton_pool_target <= 0
+		_skeleton_pool_target <= 0
 		or not is_instance_valid(bs)
 	):
 		return

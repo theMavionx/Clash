@@ -104,6 +104,7 @@ const REPLAY_TELEMETRY_MAX_EVENTS: int = 2500
 const REPLAY_SYNC_FPS: int = 60
 const REPLAY_SYNC_MAX_PHYSICS_STEPS: int = 16
 const COMBAT_WARMUP_MAX_WAIT_SEC: float = 4.0
+const COMBAT_WARMUP_COVERED_MAX_WAIT_SEC: float = 30.0
 
 var _had_troops: bool = false
 var _skeleton_respawn_timer: float = 0.0
@@ -165,6 +166,22 @@ func _ship_level_from_fleet(fleet: Array, fallback: int = 1) -> int:
 		if ship_value is Dictionary:
 			return clampi(int(ship_value.get("level", fallback)), 1, 10)
 	return clampi(fallback, 1, 10)
+
+
+func _enemy_town_hall_level(info: Dictionary) -> int:
+	var building_level: int = 0
+	var buildings_value: Variant = info.get("buildings", [])
+	if buildings_value is Array:
+		for building_value in buildings_value:
+			if not building_value is Dictionary:
+				continue
+			if str(building_value.get("type", "")).to_lower() != "town_hall":
+				continue
+			building_level = maxi(building_level, int(building_value.get("level", 0)))
+	if building_level > 0:
+		return clampi(building_level, 1, 20)
+	var payload_level: int = int(info.get("town_hall_level", info.get("level", 1)))
+	return clampi(payload_level, 1, 20)
 
 
 func _battle_elapsed_sec() -> float:
@@ -670,7 +687,7 @@ func _start_hidden_combat_warmup() -> Node:
 	return script.start_combat_warmup(bs)
 
 
-func _await_hidden_combat_warmup(warmup: Variant, max_wait_sec: float = COMBAT_WARMUP_MAX_WAIT_SEC) -> void:
+func _await_hidden_combat_warmup(warmup: Variant, max_wait_sec: float = COMBAT_WARMUP_MAX_WAIT_SEC) -> bool:
 	# Combat warmup queues itself for deletion after its last render frame. An
 	# async fleet/network step can therefore leave this Variant holding a freed
 	# Object. Keep the boundary untyped so validity is checked before assigning
@@ -681,15 +698,76 @@ func _await_hidden_combat_warmup(warmup: Variant, max_wait_sec: float = COMBAT_W
 	if is_instance_valid(warmup) and warmup is Node:
 		safe_warmup = warmup
 	if safe_warmup == null:
-		return
+		return true
 	var waited: float = 0.0
 	while is_instance_valid(safe_warmup) and not bool(safe_warmup.get("_finished_emitted")) and waited < max_wait_sec:
 		await bs.get_tree().process_frame
 		waited += bs.get_process_delta_time()
 	if is_instance_valid(safe_warmup) and not bool(safe_warmup.get("_finished_emitted")):
 		print("[BATTLE_ENTRY] combat_warmup_continue_in_background wait_ms=", int(waited * 1000.0))
+		return false
 	else:
 		print("[BATTLE_ENTRY] combat_warmup_done wait_ms=", int(waited * 1000.0))
+		return true
+
+
+func _is_hidden_combat_warmup_ready() -> bool:
+	var script: Script = load("res://scripts/warmup.gd")
+	if script == null or not script.has_method("is_combat_warmup_ready"):
+		return false
+	return bool(script.call("is_combat_warmup_ready"))
+
+
+func _finish_hidden_combat_warmup_under_cloud(
+	warmup: Variant,
+	log_label: String,
+	started_ticks: int
+) -> bool:
+	if _is_hidden_combat_warmup_ready():
+		print(
+			"[BATTLE_ENTRY] ", log_label,
+			"_warmup_barrier_ready elapsed_ms=",
+			Time.get_ticks_msec() - started_ticks
+		)
+		return true
+	var safe_warmup: Node = null
+	if is_instance_valid(warmup) and warmup is Node:
+		safe_warmup = warmup
+	if safe_warmup == null:
+		safe_warmup = _start_hidden_combat_warmup()
+	if safe_warmup == null:
+		var ready_without_node := _is_hidden_combat_warmup_ready()
+		if not ready_without_node:
+			push_warning("Combat warmup barrier could not start a hidden warmup node")
+		return ready_without_node
+	var bridge: Node = bs._bridge if bs else null
+	if bridge:
+		bridge.send_to_react(
+			"cloud_transition",
+			{"visible": true, "message": "Preparing battle..."}
+		)
+	print(
+		"[BATTLE_ENTRY] ", log_label,
+		"_warmup_barrier_start elapsed_ms=",
+		Time.get_ticks_msec() - started_ticks
+	)
+	var completed := await _await_hidden_combat_warmup(
+		safe_warmup,
+		COMBAT_WARMUP_COVERED_MAX_WAIT_SEC
+	)
+	completed = completed or _is_hidden_combat_warmup_ready()
+	if completed:
+		print(
+			"[BATTLE_ENTRY] ", log_label,
+			"_warmup_barrier_done elapsed_ms=",
+			Time.get_ticks_msec() - started_ticks
+		)
+	else:
+		push_warning(
+			"Combat warmup did not finish under cloud cover after %.1f seconds"
+			% COMBAT_WARMUP_COVERED_MAX_WAIT_SEC
+		)
+	return completed
 
 
 func _await_signal_or_timeout(source: Object, signal_name: String, timeout_sec: float, log_label: String) -> bool:
@@ -760,7 +838,7 @@ func _watch_battle_entry_switch(seq: int, started_ticks: int, label: String) -> 
 
 func _run_battle_entry_switch(combat_warmup: Variant, warmup_already_waited: bool, seq: int, started_ticks: int, label: String) -> void:
 	var safe_warmup: Node = null
-	if combat_warmup is Node and is_instance_valid(combat_warmup):
+	if is_instance_valid(combat_warmup) and combat_warmup is Node:
 		safe_warmup = combat_warmup
 	print("[BATTLE_ENTRY] ", label, "_runner_start seq=", seq, " elapsed_ms=", Time.get_ticks_msec() - started_ticks, " warmup_valid=", safe_warmup != null, " enemy_has_buildings=", enemy_info.has("buildings"))
 	await _switch_to_enemy_island_covered(safe_warmup, warmup_already_waited)
@@ -770,7 +848,7 @@ func _run_battle_entry_switch(combat_warmup: Variant, warmup_already_waited: boo
 func _dispatch_battle_entry_switch(combat_warmup: Variant, warmup_already_waited: bool, started_ticks: int, label: String) -> void:
 	_battle_entry_switch_seq += 1
 	var seq: int = _battle_entry_switch_seq
-	print("[BATTLE_ENTRY] ", label, "_dispatch seq=", seq, " elapsed_ms=", Time.get_ticks_msec() - started_ticks, " warmup_already_waited=", warmup_already_waited, " warmup_valid=", combat_warmup is Node and is_instance_valid(combat_warmup))
+	print("[BATTLE_ENTRY] ", label, "_dispatch seq=", seq, " elapsed_ms=", Time.get_ticks_msec() - started_ticks, " warmup_already_waited=", warmup_already_waited, " warmup_valid=", is_instance_valid(combat_warmup) and combat_warmup is Node)
 	_run_battle_entry_switch(combat_warmup, warmup_already_waited, seq, started_ticks, label)
 	_watch_battle_entry_switch(seq, started_ticks, label)
 
@@ -1007,13 +1085,19 @@ func _switch_to_enemy_island() -> void:
 	var bridge = bs._bridge
 	if bridge:
 		var enemy_res: Dictionary = enemy_info.get("resources", {})
+		var loot_preview_value: Variant = enemy_info.get("loot_preview", {})
+		var loot_preview: Dictionary = loot_preview_value if loot_preview_value is Dictionary else {}
+		var enemy_town_hall_level: int = _enemy_town_hall_level(enemy_info)
 		bridge.send_to_react("enemy_mode", {
 			"active": true,
 			"name": enemy_info.get("name", "???"),
+			"level": enemy_town_hall_level,
+			"town_hall_level": enemy_town_hall_level,
 			"trophies": enemy_info.get("trophies", 0),
 			"gold": enemy_res.get("gold", 0),
 			"wood": enemy_res.get("wood", 0),
 			"ore": enemy_res.get("ore", 0),
+			"loot_preview": loot_preview,
 			"attack_cost_gold": enemy_info.get("attack_cost_gold", 0),
 		})
 	var bridge2 = bs._bridge
@@ -1023,7 +1107,11 @@ func _switch_to_enemy_island() -> void:
 	cloud.close()
 	await _await_cloud_cover_presented(cloud, "direct_switch_cloud_close", switch_started_ticks)
 	var combat_warmup: Node = _start_cloud_covered_combat_warmup("direct_switch", switch_started_ticks)
-	await _await_hidden_combat_warmup(combat_warmup)
+	await _finish_hidden_combat_warmup_under_cloud(
+		combat_warmup,
+		"direct_switch",
+		switch_started_ticks
+	)
 	if bs._cannon and bs._cannon.has_method("_preload_explosion_textures"):
 		bs._cannon._preload_explosion_textures()
 	for bsys in bs._building_systems:
@@ -1083,8 +1171,14 @@ func _switch_to_enemy_island() -> void:
 func _switch_to_enemy_island_covered(combat_warmup: Variant = null, warmup_already_waited: bool = false) -> void:
 	var switch_started_ticks: int = Time.get_ticks_msec()
 	var safe_warmup: Node = null
-	if combat_warmup is Node and is_instance_valid(combat_warmup):
+	if is_instance_valid(combat_warmup) and combat_warmup is Node:
 		safe_warmup = combat_warmup
+	if not warmup_already_waited or not _is_hidden_combat_warmup_ready():
+		await _finish_hidden_combat_warmup_under_cloud(
+			safe_warmup,
+			"covered_switch",
+			switch_started_ticks
+		)
 	var enemy_buildings_value: Variant = enemy_info.get("buildings", [])
 	var enemy_building_count: int = enemy_buildings_value.size() if enemy_buildings_value is Array else 0
 	print("[BATTLE_ENTRY] switch_start enemy=", str(enemy_info.get("name", "???")), " buildings=", enemy_building_count)
@@ -1141,21 +1235,23 @@ func _switch_to_enemy_island_covered(combat_warmup: Variant = null, warmup_alrea
 	var bridge = bs._bridge
 	if bridge:
 		var enemy_res: Dictionary = enemy_info.get("resources", {})
+		var loot_preview_value: Variant = enemy_info.get("loot_preview", {})
+		var loot_preview: Dictionary = loot_preview_value if loot_preview_value is Dictionary else {}
+		var enemy_town_hall_level: int = _enemy_town_hall_level(enemy_info)
 		bridge.send_to_react("enemy_mode", {
 			"active": true,
 			"name": enemy_info.get("name", "???"),
+			"level": enemy_town_hall_level,
+			"town_hall_level": enemy_town_hall_level,
 			"trophies": enemy_info.get("trophies", 0),
 			"gold": enemy_res.get("gold", 0),
 			"wood": enemy_res.get("wood", 0),
 			"ore": enemy_res.get("ore", 0),
+			"loot_preview": loot_preview,
 			"attack_cost_gold": enemy_info.get("attack_cost_gold", 0),
 		})
 	if bs._cannon and bs._cannon.has_method("_preload_explosion_textures"):
 		bs._cannon._preload_explosion_textures()
-	if not warmup_already_waited:
-		if safe_warmup == null:
-			safe_warmup = _start_hidden_combat_warmup()
-		await _await_hidden_combat_warmup(safe_warmup)
 	print("[BATTLE_ENTRY] switch_preload_done elapsed_ms=", Time.get_ticks_msec() - switch_started_ticks)
 	for bsys in bs.get_tree().get_nodes_in_group("building_systems"):
 		if bsys.has_method("_destroy_all_buildings"):
@@ -1787,9 +1883,12 @@ func _start_replay(replay_data: Array, buildings_snapshot: Array, attacker_name:
 	var bridge = bs._bridge
 	if bridge:
 		var live_agent_battle: bool = replay_label.to_upper() == "AI ONLINE BATTLE"
+		var replay_town_hall_level: int = _enemy_town_hall_level(enemy_info)
 		bridge.send_to_react("enemy_mode", {
 			"active": true,
 			"name": display_name_for_base,
+			"level": replay_town_hall_level,
+			"town_hall_level": replay_town_hall_level,
 			"trophies": 0,
 			"is_replay": true,
 			"live_agent_battle": live_agent_battle,
@@ -1811,7 +1910,11 @@ func _start_replay(replay_data: Array, buildings_snapshot: Array, attacker_name:
 	var replay_started_ticks: int = Time.get_ticks_msec()
 	await _await_cloud_cover_presented(cloud, "replay_cloud_close", replay_started_ticks)
 	var combat_warmup: Node = _start_cloud_covered_combat_warmup("replay", replay_started_ticks)
-	await _await_hidden_combat_warmup(combat_warmup)
+	await _finish_hidden_combat_warmup_under_cloud(
+		combat_warmup,
+		"replay",
+		replay_started_ticks
+	)
 	bs._cannon._preload_explosion_textures()
 	for bsys in bs._building_systems:
 		bsys._destroy_all_buildings()

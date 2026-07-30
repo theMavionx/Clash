@@ -894,6 +894,15 @@ async function hasTradingDelegation(sub, apiAddr) {
 }
 
 function assertWriteSuccess(result, label) {
+  if (result?.verification?.terminal === true) {
+    const error = new Error(
+      result?.verification?.reason
+      || result?.error
+      || `${label || 'Decibel transaction'} was rejected`,
+    );
+    error.code = result?.verification?.code || result?.code || 'DECIBEL_ORDER_REJECTED';
+    throw error;
+  }
   if (result?.success === false) {
     throw new Error(result.error || `${label || 'Decibel transaction'} failed`);
   }
@@ -3119,11 +3128,17 @@ function decodeTradeError(e, fallback) {
       if (/INSUFFICIENT_BALANCE_FOR_TRANSACTION_FEE|insufficient.*(?:gas|fee)/i.test(reason)) {
         return 'Decibel server signer ran out of APT for gas. Fund the server API wallet or enable gas sponsorship.';
       }
+      if (/not enough collateral|insufficient collateral|insufficient.*(?:margin|usdc|trading account)/i.test(reason)) {
+        return 'Not enough collateral to place order. Reduce the order size or deposit more USDC.';
+      }
       if (/insufficient/i.test(reason)) return 'Insufficient USDC in trading account';
       if (/EINVALID_TP_SL_SIZE|EINVALID_TP_SL_PARAMETERS|TP\/SL/i.test(reason)) {
         return 'Invalid Decibel TP/SL - check price direction and position size';
       }
-      if (/reject|cancel|denied/i.test(reason)) return 'Signature cancelled';
+      if (/(?:signature|wallet|user).*(?:reject|cancel|denied)|(?:reject|cancel|denied).*(?:signature|wallet|user)/i.test(reason)) {
+        return 'Signature cancelled';
+      }
+      if (/reject|cancel|denied/i.test(reason)) return String(reason);
       if (/slippage|price/i.test(reason)) return 'Price moved past slippage — widen slippage or retry';
       if (/builderFee must be/i.test(reason)) {
         return `Decibel builder fee config mismatch: ${String(reason)}`;

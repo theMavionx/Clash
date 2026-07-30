@@ -68,12 +68,12 @@ const VISUAL_UPDATE_INTERVAL: float = 1.0 / 30.0
 const CAN_TARGET_GROUND: bool = true
 const CAN_TARGET_AIR: bool = true
 const BEAM_START_Y: float = 0.36
-const BEAM_RADIUS_MIN: float = 0.010
-const BEAM_RADIUS_MAX: float = 0.030
-const BEAM_GLOW_RADIUS_MIN: float = 0.030
-const BEAM_GLOW_RADIUS_MAX: float = 0.075
-const IMPACT_RADIUS_MIN: float = 0.045
-const IMPACT_RADIUS_MAX: float = 0.100
+const BEAM_RADIUS_MIN: float = 0.006
+const BEAM_RADIUS_MAX: float = 0.012
+const BEAM_GLOW_RADIUS_MIN: float = 0.012
+const BEAM_GLOW_RADIUS_MAX: float = 0.025
+const IMPACT_RADIUS_MIN: float = 0.035
+const IMPACT_RADIUS_MAX: float = 0.065
 const BEAM_MESH_HEIGHT: float = 1.0
 const BEAM_MESH_RADIUS: float = 1.0
 const IMPACT_MESH_RADIUS: float = 1.0
@@ -196,8 +196,8 @@ func _build_beam_visuals() -> void:
 	_beam_core_mat = _make_beam_material(Color(0.45, 0.90, 1.0, 0.95), 4.0)
 	_impact_mat = _make_beam_material(Color(0.55, 0.85, 1.0, 0.85), 5.0)
 
-	_beam_glow = _make_beam_cylinder(BEAM_GLOW_RADIUS_MIN, _beam_glow_mat)
-	_beam_core = _make_beam_cylinder(BEAM_RADIUS_MIN, _beam_core_mat)
+	_beam_glow = _make_beam_cylinder(_beam_glow_mat)
+	_beam_core = _make_beam_cylinder(_beam_core_mat)
 	_impact = _make_impact_sphere(_impact_mat)
 
 	scene_root.add_child(_beam_glow)
@@ -218,11 +218,13 @@ func _make_beam_material(color: Color, energy: float) -> StandardMaterial3D:
 	return mat
 
 
-func _make_beam_cylinder(radius: float, mat: StandardMaterial3D) -> MeshInstance3D:
+func _make_beam_cylinder(mat: StandardMaterial3D) -> MeshInstance3D:
 	var mesh := CylinderMesh.new()
 	mesh.height = BEAM_MESH_HEIGHT
-	mesh.top_radius = radius
-	mesh.bottom_radius = radius
+	# Keep a unit-radius source mesh. _set_cylinder_between applies the
+	# world-space beam radius once when it builds the final basis.
+	mesh.top_radius = BEAM_MESH_RADIUS
+	mesh.bottom_radius = BEAM_MESH_RADIUS
 	mesh.radial_segments = 12
 	mesh.rings = 1
 	var node := MeshInstance3D.new()

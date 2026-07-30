@@ -1,8 +1,8 @@
 # Economy Balance Design Document
 
-**Version:** 2.1
+**Version:** 2.2
 **Author:** economy-designer
-**Date:** 2026-07-24
+**Date:** 2026-07-29
 **Status:** Synced to implementation (`server/db.js`, `server/routes.js`)
 
 > **v2.0 note:** All values in this document now reflect the *live code* in
@@ -17,12 +17,21 @@
 > this block is the canonical extension for Town Hall 6. Runtime values remain
 > authoritative in `server/db.js` and are mirrored by `scripts/building_system.gd`.
 
+> **v2.2 building-cost addendum:** Building construction and upgrade prices now
+> use the nonlinear progression defined in
+> `design/balance/building-cost-progression-2026-07-29.md`. Generic upgrade
+> multipliers for target levels 2-7 are `2x, 4x, 8x, 15x, 27x, 45x`, applied
+> to a dedicated `upgrade_base_cost`. Town Hall, Mortar, and Cannon use authored
+> per-level tables. This addendum supersedes the historical linear formulas and
+> cost tables later in this document.
+
 ### Town Hall 6 Progression
 
-- Town Hall 5 -> 6 costs 48,000 gold, 72,000 wood, and 66,000 ore.
+- Town Hall 5 -> 6 costs 55,000 gold, 75,000 wood, and 68,000 ore.
 - TH6 base resource capacity is 25,000 per resource. Three level-6 Storages add
   27,000 each, producing a 106,000 cap per resource.
-- Upgrade cost multipliers are 2x, 3x, 5x, 8x, and 12x for levels 2 through 6.
+- Generic upgrade cost multipliers are 2x, 4x, 8x, 15x, and 27x for levels 2
+  through 6.
 - Mine and Sawmill production extend to level 6: Mine 170 ore/min with a 5,000
   local cap; Sawmill 230 wood/min with a 6,000 local cap.
 - TH6 adds a third Shark Trap and a second Mortar.

@@ -18,6 +18,15 @@ function EnemyHeader() {
 
   const isReplay = !!enemyMode.is_replay;
   const compact = mobile && isReplay;
+  const townHallLevel = Math.max(
+    1,
+    Number(enemyMode.town_hall_level ?? enemyMode.level) || 1,
+  );
+  const reward = {
+    gold: rewardValue(enemyMode, 'gold'),
+    wood: rewardValue(enemyMode, 'wood'),
+    ore: rewardValue(enemyMode, 'ore'),
+  };
 
   return (
     <div style={compact ? { ...styles.container, ...styles.containerReplayMobile } : styles.container}>
@@ -26,7 +35,7 @@ function EnemyHeader() {
         <div style={styles.levelCircleContainer}>
           <div style={compact ? { ...styles.levelCircle, ...styles.levelCircleMobile } : styles.levelCircle}>
             <div style={compact ? { ...styles.innerSquare, borderRadius: 6 } : styles.innerSquare}>
-              <span style={compact ? { ...styles.levelText, ...styles.levelTextMobile } : styles.levelText}>{enemyMode.level || 1}</span>
+              <span style={compact ? { ...styles.levelText, ...styles.levelTextMobile } : styles.levelText}>{townHallLevel}</span>
             </div>
           </div>
         </div>
@@ -60,13 +69,13 @@ function EnemyHeader() {
       </div>
 
       {/* Rewards Section */}
-      {(enemyMode.gold > 0 || enemyMode.wood > 0 || enemyMode.ore > 0) && (
+      {(reward.gold > 0 || reward.wood > 0 || reward.ore > 0) && (
         <div style={styles.rewardsSection}>
           <div style={styles.rewardsTitle}>Victory Reward:</div>
           <div style={styles.resourceList}>
-            {enemyMode.gold > 0 && <ResourceRow icon={goldIcon} value={enemyMode.gold} />}
-            {enemyMode.wood > 0 && <ResourceRow icon={woodIcon} value={enemyMode.wood} />}
-            {enemyMode.ore > 0 && <ResourceRow icon={stoneIcon} value={enemyMode.ore} />}
+            {reward.gold > 0 && <ResourceRow icon={goldIcon} value={reward.gold} />}
+            {reward.wood > 0 && <ResourceRow icon={woodIcon} value={reward.wood} />}
+            {reward.ore > 0 && <ResourceRow icon={stoneIcon} value={reward.ore} />}
           </div>
         </div>
       )}
@@ -74,12 +83,17 @@ function EnemyHeader() {
   );
 }
 
+function rewardValue(enemyMode, resource) {
+  const preview = Number(enemyMode?.loot_preview?.[resource]);
+  if (Number.isFinite(preview)) return Math.max(0, Math.floor(preview));
+  return Math.max(0, Math.floor((Number(enemyMode?.[resource]) || 0) * LOOT_PERCENT));
+}
+
 function ResourceRow({ icon, value }) {
-  const loot = Math.floor(value * LOOT_PERCENT);
   return (
     <div style={styles.resourceRow}>
       <img src={icon} alt="" style={styles.resourceIcon} />
-      <span style={styles.resourceText}>{fmt(loot)}</span>
+      <span style={styles.resourceText}>{fmt(value)}</span>
     </div>
   );
 }

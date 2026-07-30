@@ -196,6 +196,11 @@ static func is_combat_profile_ready() -> bool:
 		and not is_instance_valid(_island_common_warmup_node)
 	)
 
+
+static func is_combat_warmup_ready() -> bool:
+	return _combat_warmup_done
+
+
 @export_enum("home", "startup_common", "startup_loadout_gpu", "combat_idle", "combat") var mode: String = "home"
 
 var _frames_left: int = HOME_WARMUP_FRAMES
@@ -460,6 +465,7 @@ func _process(_delta: float) -> void:
 			return
 		if (
 			_combat_idle_requested
+			and not _combat_warmup_done
 			and not _startup_loadout_gpu_warmup_done
 			and not _combat_requested_troops.is_empty()
 		):
@@ -2043,7 +2049,8 @@ func _warmup_ship_freeze() -> void:
 func _warmup_ship_medkit() -> void:
 	var medkit := BSMedkit.new().init(self)
 	medkit._activate_zone(Vector3.ZERO, self)
-	medkit._pulse_zone(0.85)
+	if not medkit._active_zones.is_empty():
+		medkit._pulse_zone(medkit._active_zones.back(), 0.85)
 	_warmup_troop_status_overlay(
 		TroopStatusBatch.EFFECT_HEAL,
 		"WarmupHealingStatusBody"
@@ -2053,7 +2060,8 @@ func _warmup_ship_medkit() -> void:
 func _warmup_ship_rage() -> void:
 	var rage := BSRageSpell.new().init(self)
 	rage._activate_zone(Vector3.ZERO, self)
-	rage._pulse_zone(0.65)
+	if not rage._active_zones.is_empty():
+		rage._pulse_zone(rage._active_zones.back(), 0.65)
 	_warmup_troop_status_overlay(
 		TroopStatusBatch.EFFECT_RAGE,
 		"WarmupRageStatusBody"
@@ -2450,8 +2458,8 @@ func _warmup_mage_tower() -> void:
 
 
 func _warmup_mage_tower_beam_visuals() -> void:
-	var glow := _make_mage_tower_beam_cylinder(0.030, _make_mage_tower_beam_material(Color(0.15, 0.65, 1.0, 0.30), 2.0))
-	var core := _make_mage_tower_beam_cylinder(0.010, _make_mage_tower_beam_material(Color(0.45, 0.90, 1.0, 0.95), 4.0))
+	var glow := _make_mage_tower_beam_cylinder(0.012, _make_mage_tower_beam_material(Color(0.15, 0.65, 1.0, 0.30), 2.0))
+	var core := _make_mage_tower_beam_cylinder(0.006, _make_mage_tower_beam_material(Color(0.45, 0.90, 1.0, 0.95), 4.0))
 	var impact := _make_mage_tower_impact_sphere(_make_mage_tower_beam_material(Color(0.55, 0.85, 1.0, 0.85), 5.0))
 	glow.position = Vector3(0.12, 0.0, 0.0)
 	core.position = Vector3(0.18, 0.0, 0.0)
@@ -2489,8 +2497,8 @@ func _make_mage_tower_beam_cylinder(radius: float, mat: StandardMaterial3D) -> M
 
 func _make_mage_tower_impact_sphere(mat: StandardMaterial3D) -> MeshInstance3D:
 	var mesh := SphereMesh.new()
-	mesh.radius = 0.045
-	mesh.height = 0.090
+	mesh.radius = 0.035
+	mesh.height = 0.070
 	mesh.radial_segments = 12
 	mesh.rings = 6
 	var node := MeshInstance3D.new()

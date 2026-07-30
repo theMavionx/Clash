@@ -1,18 +1,26 @@
 const crypto = require('crypto');
+const GENERATING_RAID_BOT_LAYOUTS =
+  String(process.env.CLASH_GENERATING_RAID_BOT_LAYOUTS || '') === '1';
+const HIGH_TIER_LAYOUT_CATALOG = GENERATING_RAID_BOT_LAYOUTS
+  ? {}
+  : require('./data/raid-bot-layouts-th6-th7.json');
 
 const MAIN_GRID_WIDTH = 29;
 const MAIN_GRID_HEIGHT = 27;
 const COAST_GRID_WIDTH = 27;
-const BOT_BASE_GENERATION = 'raid-recovery-v3';
+const BOT_BASE_GENERATION = 'raid-maxed-th5-th7-v4';
 
-// Keep the pool large enough to avoid repetitive targets while preserving a
-// deliberate difficulty mix at each progression tier.
+// Keep the pool large enough to avoid repetitive targets. Most targets are
+// hard so upgrading a base and army matters; the normal slice remains
+// available for recovery matchmaking without dropping the player's TH tier.
 const BOT_TEMPLATE_COUNTS_BY_TH = {
-  1: { easy: 8, normal: 8, hard: 8 },
-  2: { easy: 10, normal: 12, hard: 8 },
-  3: { easy: 8, normal: 14, hard: 8 },
-  4: { easy: 7, normal: 11, hard: 7 },
-  5: { easy: 50, normal: 50, hard: 50 },
+  1: { normal: 5, hard: 19 },
+  2: { normal: 6, hard: 24 },
+  3: { normal: 6, hard: 24 },
+  4: { normal: 5, hard: 20 },
+  5: { normal: 30, hard: 120 },
+  6: { normal: 60, hard: 240 },
+  7: { normal: 60, hard: 240 },
 };
 
 const MATCHMAKING_CONFIG = {
@@ -51,13 +59,19 @@ const MATCHMAKING_CONFIG = {
   },
 };
 
-const BOT_RESOURCES_BY_TH = {
-  1: { gold: 1000, wood: 1000, ore: 1000 },
-  2: { gold: 1120, wood: 1200, ore: 1160 },
-  3: { gold: 1300, wood: 1450, ore: 1380 },
-  4: { gold: 1500, wood: 1650, ore: 1580 },
-  5: { gold: 1700, wood: 1800, ore: 1750 },
-};
+const BOT_LOOT_REWARD_RANGE = Object.freeze({ min: 100, max: 2700 });
+const BOT_LOOT_BASE_PERCENT = 0.15;
+
+// Most raids stay useful without flooding the economy, while every bot tier
+// can still roll a rare high-value target. The values represent the reward
+// shown to the attacker, not the bot's internal resource stock.
+const BOT_LOOT_REWARD_BANDS = Object.freeze([
+  Object.freeze({ weight: 60, min: 100, max: 500 }),
+  Object.freeze({ weight: 25, min: 501, max: 1000 }),
+  Object.freeze({ weight: 10, min: 1001, max: 1700 }),
+  Object.freeze({ weight: 4, min: 1701, max: 2300 }),
+  Object.freeze({ weight: 1, min: 2301, max: 2700 }),
+]);
 
 const BOT_BUILDING_SIZES = {
   town_hall: [4, 4],
@@ -72,6 +86,7 @@ const BOT_BUILDING_SIZES = {
   mage_tower: [3, 3],
   mortar: [2, 2],
   shark_trap: [2, 2],
+  cannon: [3, 3],
 };
 
 const BOT_GRID_SPECS = {
@@ -370,6 +385,66 @@ const BASE_LAYOUTS = {
   },
 };
 
+const COMPETITIVE_BOT_MAX_LEVELS = {
+  5: {
+    town_hall: 5,
+    mine: 5,
+    sawmill: 5,
+    barn: 5,
+    storage: 5,
+    archer_tower: 5,
+    tombstone: 4,
+    turret: 5,
+    mage_tower: 5,
+    mortar: 1,
+    shark_trap: 5,
+  },
+  6: {
+    town_hall: 6,
+    mine: 6,
+    sawmill: 6,
+    barn: 6,
+    storage: 6,
+    archer_tower: 6,
+    tombstone: 5,
+    turret: 6,
+    mage_tower: 6,
+    mortar: 2,
+    shark_trap: 6,
+  },
+  7: {
+    town_hall: 7,
+    mine: 7,
+    sawmill: 7,
+    barn: 7,
+    storage: 7,
+    archer_tower: 7,
+    tombstone: 6,
+    turret: 7,
+    mage_tower: 7,
+    mortar: 3,
+    shark_trap: 7,
+    cannon: 7,
+  },
+};
+
+const COMPETITIVE_BOT_DEFENSE_TYPES = new Set([
+  'archer_tower',
+  'tombstone',
+  'turret',
+  'mage_tower',
+  'mortar',
+  'shark_trap',
+  'cannon',
+]);
+
+const COMPETITIVE_BOT_ECONOMY_TYPES = new Set([
+  'mine',
+  'sawmill',
+  'barn',
+  'storage',
+]);
+
 const PLAYER_LIKE_NAMES = [
   'ghost', 'www', 'egorble', 'papajshon', 'nick', 'volumer', 'luckier',
   '0xbro', 'onlywin', 'semlysak', 'idol', 'ggbet', '555gg',
@@ -399,6 +474,8 @@ const REQUESTED_PLAYER_NAMES_BY_TH = {
   3: ['nick', 'volumer', 'luckier'],
   4: ['0xbro', 'onlywin', 'semlysak'],
   5: ['idol', 'ggbet', '555gg'],
+  6: ['maverick', 'noctis', 'rainmaker', 'katsuro', 'solace'],
+  7: ['blackreef', 'northstar', 'wildcard', 'redline', 'seawolf'],
 };
 const REQUESTED_PLAYER_NAMES = new Set(Object.values(REQUESTED_PLAYER_NAMES_BY_TH).flat());
 const FALLBACK_PLAYER_NAMES = PLAYER_LIKE_NAMES.filter((name) => !REQUESTED_PLAYER_NAMES.has(name));
@@ -412,8 +489,26 @@ const GENERATED_NAME_ROOTS = [
   'milo', 'nash', 'niko', 'noah', 'odin', 'ollie', 'otto', 'paul', 'pax',
   'ray', 'rex', 'rico', 'rob', 'sam', 'sean', 'seth', 'sky', 'tom',
   'tony', 'trey', 'tron', 'vince', 'wade', 'will', 'xeno', 'zane', 'zen',
+  'aaron', 'adrian', 'amir', 'anton', 'armin', 'basil', 'beck', 'blake',
+  'boris', 'cal', 'cato', 'cedar', 'chris', 'cody', 'colt', 'dane',
+  'derek', 'dev', 'ed', 'emil', 'eric', 'evan', 'felix', 'gene', 'glen',
+  'grant', 'hank', 'isaac', 'jace', 'james', 'jamie', 'jason', 'jeff',
+  'jim', 'john', 'jonas', 'jules', 'kevin', 'kyle', 'lars', 'logan',
+  'lucas', 'mason', 'mika', 'milan', 'mitch', 'nate', 'neil', 'omar',
+  'pete', 'phil', 'quinn', 'ralf', 'ross', 'roy', 'ryan', 'scott',
+  'stan', 'steve', 'tate', 'theo', 'toby', 'troy', 'val', 'wes', 'zack',
 ];
-const GENERATED_NAME_SUFFIXES = ['', 'x', '7', '77', 'gg', 'win', 'sol', 'eth'];
+const GENERATED_NAME_SUFFIXES = [
+  '', 'x', '7', '77', 'gg', 'win', 'sol', 'eth',
+  'one', 'pro', 'tv', '13', '21', '47', '69', '88',
+];
+const GENERATED_PLAYER_NAMES = GENERATED_NAME_ROOTS
+  .flatMap((root) => GENERATED_NAME_SUFFIXES.map((suffix) => `${root}${suffix}`))
+  .sort((left, right) => {
+    const leftHash = crypto.createHash('sha256').update(`raid-name:${left}`).digest('hex');
+    const rightHash = crypto.createHash('sha256').update(`raid-name:${right}`).digest('hex');
+    return leftHash.localeCompare(rightHash);
+  });
 
 function b(type, level, gridX, gridZ, gridIndex = 0, extra = {}) {
   return { type, level, grid_x: gridX, grid_z: gridZ, grid_index: gridIndex, ...extra };
@@ -440,38 +535,76 @@ function transformBuilding(building, variant) {
   return next;
 }
 
-function seededResourceOffset(seed, resource, spread) {
+function seededBotLootReward(seed, resource) {
   const digest = crypto.createHash('sha256')
-    .update(`raid-resource:${seed}:${resource}`)
+    .update(`raid-loot-reward:${seed}:${resource}`)
     .digest();
-  return (digest.readUInt16BE(0) % (spread * 2 + 1)) - spread;
+  const totalWeight = BOT_LOOT_REWARD_BANDS.reduce((sum, band) => sum + band.weight, 0);
+  let weightedRoll = digest.readUInt16BE(0) % totalWeight;
+  let selectedBand = BOT_LOOT_REWARD_BANDS[BOT_LOOT_REWARD_BANDS.length - 1];
+  for (const band of BOT_LOOT_REWARD_BANDS) {
+    if (weightedRoll < band.weight) {
+      selectedBand = band;
+      break;
+    }
+    weightedRoll -= band.weight;
+  }
+  const width = selectedBand.max - selectedBand.min + 1;
+  return selectedBand.min + (digest.readUInt32BE(2) % width);
+}
+
+function botResourceStockForReward(reward, lootPercent) {
+  const target = clamp(
+    Math.floor(Number(reward) || 0),
+    BOT_LOOT_REWARD_RANGE.min,
+    BOT_LOOT_REWARD_RANGE.max,
+  );
+  const percent = Math.max(0.000001, Number(lootPercent) || BOT_LOOT_BASE_PERCENT);
+  let stock = Math.ceil(target / percent);
+  while (Math.floor(stock * percent) < target) stock += 1;
+  while (stock > 1 && Math.floor((stock - 1) * percent) >= target) stock -= 1;
+  return stock;
 }
 
 function botResources(th, difficulty, seed = '', previous = null) {
-  const base = BOT_RESOURCES_BY_TH[th] || BOT_RESOURCES_BY_TH[1];
-  const difficultyShift = difficulty === 'easy' ? -90 : difficulty === 'hard' ? 110 : 0;
+  const multiplier = MATCHMAKING_CONFIG.botLootMultiplier[difficulty]
+    || MATCHMAKING_CONFIG.botLootMultiplier.normal;
+  const lootPercent = BOT_LOOT_BASE_PERCENT * multiplier;
   const resources = {};
-  const used = new Set();
+  const usedStocks = new Set();
+  const usedRewards = new Set();
 
   for (const resource of ['gold', 'wood', 'ore']) {
-    const anchor = clamp(base[resource] + difficultyShift, 1100, 1900);
-    let amount = clamp(anchor + seededResourceOffset(seed, resource, 95), 1000, 2000);
-    while (used.has(amount) || (previous && amount === Number(previous[resource]))) {
-      amount = amount >= 2000 ? 1000 : amount + 1;
+    let reward = seededBotLootReward(`${th}:${difficulty}:${seed}`, resource);
+    let amount = botResourceStockForReward(reward, lootPercent);
+    while (
+      usedRewards.has(reward)
+      || usedStocks.has(amount)
+      || (previous && amount === Number(previous[resource]))
+    ) {
+      reward = reward >= BOT_LOOT_REWARD_RANGE.max
+        ? BOT_LOOT_REWARD_RANGE.min
+        : reward + 1;
+      amount = botResourceStockForReward(reward, lootPercent);
     }
     resources[resource] = amount;
-    used.add(amount);
+    usedRewards.add(reward);
+    usedStocks.add(amount);
   }
   return resources;
 }
 
+let botTemplateCache = null;
+
 function buildBotBaseTemplates() {
+  if (botTemplateCache) return botTemplateCache;
   const templates = [];
   let fallbackNameIndex = 0;
   const usedNames = new Set();
-  for (const th of Object.keys(BASE_LAYOUTS).map(Number)) {
+  for (const th of Object.keys(BOT_TEMPLATE_COUNTS_BY_TH).map(Number)) {
+    if (GENERATING_RAID_BOT_LAYOUTS && th >= 6) continue;
     let tierNameIndex = 0;
-    for (const difficulty of Object.keys(BASE_LAYOUTS[th])) {
+    for (const difficulty of Object.keys(BOT_TEMPLATE_COUNTS_BY_TH[th])) {
       const variantCount = BOT_TEMPLATE_COUNTS_BY_TH[th]?.[difficulty] || 0;
       for (let variant = 0; variant < variantCount; variant += 1) {
         const id = `bot-th${th}-${difficulty}-${variant + 1}`;
@@ -490,23 +623,120 @@ function buildBotBaseTemplates() {
           generation: BOT_BASE_GENERATION,
           resources: botResources(th, difficulty, id),
           trophies: th * 120 + (difficulty === 'easy' ? 0 : difficulty === 'normal' ? 40 : 90),
-          buildings: repairLayout(BASE_LAYOUTS[th][difficulty].map((building) => transformBuilding(building, variant))),
+          buildings: buildTemplateLayout(th, difficulty, tierNameIndex, variant),
         });
         tierNameIndex += 1;
       }
     }
   }
-  return templates;
+  botTemplateCache = templates;
+  return botTemplateCache;
+}
+
+function buildTemplateLayout(th, difficulty, tierLayoutIndex, variant) {
+  if (th < 6) {
+    const layout = repairLayout(
+      BASE_LAYOUTS[th][difficulty].map((building) => transformBuilding(building, variant)),
+    );
+    return applyCompetitiveBotLevels(layout, th, difficulty, variant);
+  }
+  const catalog = HIGH_TIER_LAYOUT_CATALOG[String(th)] || [];
+  const entry = catalog[tierLayoutIndex];
+  if (!entry || !Array.isArray(entry.buildings)) {
+    throw new Error(
+      `Missing generated TH${th} raid layout ${tierLayoutIndex + 1}/${catalog.length}`,
+    );
+  }
+  const layout = entry.buildings.map(([type, gridX, gridZ]) => b(
+    type,
+    competitiveBotMaxLevel(th, type),
+    gridX,
+    gridZ,
+  ));
+  return applyCompetitiveBotLevels(layout, th, difficulty, variant);
+}
+
+function competitiveBotMaxLevel(th, type) {
+  return Math.max(1, Number(COMPETITIVE_BOT_MAX_LEVELS[th]?.[type]) || 1);
+}
+
+function applyCompetitiveBotLevels(buildings, th, difficulty, variant) {
+  if (th < 5) return buildings;
+
+  const maxed = buildings.map((building) => ({
+    ...building,
+    level: competitiveBotMaxLevel(th, building.type),
+  }));
+  const variantNumber = Math.max(1, Number(variant) + 1);
+  const downgradeCount = difficulty === 'hard'
+    ? (variantNumber % 4 === 1 ? 1 : 0)
+    : variantNumber % 4 === 1
+      ? 0
+      : variantNumber % 4 === 0
+        ? 2
+        : 1;
+  if (downgradeCount <= 0) return maxed;
+
+  const rankedCandidates = maxed
+    .map((building, index) => ({
+      index,
+      building,
+      rank: crypto.createHash('sha256')
+        .update([
+          'raid-bot-level',
+          th,
+          difficulty,
+          variantNumber,
+          building.type,
+          building.grid_index || 0,
+          building.grid_x,
+          building.grid_z,
+        ].join(':'))
+        .digest('hex'),
+    }))
+    .filter(({ building }) => (
+      building.type !== 'town_hall'
+      && competitiveBotMaxLevel(th, building.type) > 1
+    ))
+    .sort((left, right) => left.rank.localeCompare(right.rank));
+
+  const economyCandidates = rankedCandidates.filter(({ building }) => (
+    COMPETITIVE_BOT_ECONOMY_TYPES.has(building.type)
+  ));
+  const defenseCandidates = rankedCandidates.filter(({ building }) => (
+    COMPETITIVE_BOT_DEFENSE_TYPES.has(building.type)
+  ));
+  const selected = [];
+
+  if (economyCandidates.length > 0) selected.push(economyCandidates[0]);
+  if (difficulty === 'normal' && downgradeCount > 1 && defenseCandidates.length > 0) {
+    selected.push(defenseCandidates[0]);
+  }
+  for (const candidate of rankedCandidates) {
+    if (selected.length >= downgradeCount) break;
+    if (selected.some((entry) => entry.index === candidate.index)) continue;
+    selected.push(candidate);
+  }
+
+  const downgradedIndices = new Set(
+    selected.slice(0, downgradeCount).map(({ index }) => index),
+  );
+  return maxed.map((building, index) => (
+    downgradedIndices.has(index)
+      ? { ...building, level: Math.max(1, building.level - 1) }
+      : building
+  ));
 }
 
 function fallbackPlayerName(index) {
   if (index < FALLBACK_PLAYER_NAMES.length) return FALLBACK_PLAYER_NAMES[index];
   const generatedIndex = index - FALLBACK_PLAYER_NAMES.length;
-  const root = GENERATED_NAME_ROOTS[generatedIndex % GENERATED_NAME_ROOTS.length];
-  const suffixIndex = Math.floor(generatedIndex / GENERATED_NAME_ROOTS.length);
-  const suffix = GENERATED_NAME_SUFFIXES[suffixIndex % GENERATED_NAME_SUFFIXES.length];
-  const cycle = Math.floor(suffixIndex / GENERATED_NAME_SUFFIXES.length);
-  return `${root}${suffix}${cycle > 0 ? cycle + 1 : ''}`.slice(0, 16);
+  if (generatedIndex >= GENERATED_PLAYER_NAMES.length) {
+    throw new Error(
+      `Raid bot name pool exhausted at ${generatedIndex}/${GENERATED_PLAYER_NAMES.length}`,
+    );
+  }
+  return GENERATED_PLAYER_NAMES[generatedIndex];
 }
 
 function nextFallbackPlayerName(index, usedNames) {
@@ -584,6 +814,7 @@ function clamp(value, min, max) {
 
 module.exports = {
   BOT_BASE_GENERATION,
+  BOT_LOOT_REWARD_RANGE,
   MATCHMAKING_CONFIG,
   buildBotBaseTemplates,
   botResources,

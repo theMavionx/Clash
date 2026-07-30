@@ -6,6 +6,7 @@ extends RefCounted
 
 const UNLOCK_SHIP_LEVEL: int = 8
 const ENERGY_COST: int = 7
+const ENERGY_COST_INCREMENT: int = 1
 const RADIUS: float = 0.82
 const DURATION_SEC: float = 9.0
 const APPLY_TICK_SEC: float = 0.20
@@ -22,10 +23,10 @@ const FIELD_SEGMENTS: int = 64
 var bs: Node3D
 var _ship_level: int = 1
 var _rage_mode: bool = false
-var _rage_used: bool = false
+var _rage_uses: int = 0
 var _rage_paused_attack: bool = false
 var _rage_label: Label = null
-var _active_zone: Dictionary = {}
+var _active_zones: Array[Dictionary] = []
 
 
 func init(building_system: Node3D) -> BSRageSpell:
@@ -35,48 +36,43 @@ func init(building_system: Node3D) -> BSRageSpell:
 
 func reset(ship_level: int = 1) -> void:
 	_ship_level = clampi(ship_level, 1, 10)
-	_rage_used = false
+	_rage_uses = 0
 	_exit_rage_mode()
-	_clear_zone()
+	_clear_zones()
 
 
 func is_unlocked() -> bool:
 	return _ship_level >= UNLOCK_SHIP_LEVEL
 
 
-func is_used() -> bool:
-	return _rage_used
-
-
 func energy_cost() -> int:
-	return ENERGY_COST
+	return ENERGY_COST + _rage_uses * ENERGY_COST_INCREMENT
 
 
 func process(delta: float) -> void:
-	if _active_zone.is_empty():
-		return
-	var root: Node3D = _active_zone.get("root", null)
-	if not is_instance_valid(root):
-		_active_zone.clear()
-		return
-	var age: float = float(_active_zone.get("age", 0.0)) + delta
-	var tick_accum: float = float(_active_zone.get("tick_accum", 0.0)) + delta
-	_active_zone["age"] = age
-	while tick_accum + 0.000001 >= APPLY_TICK_SEC:
-		tick_accum -= APPLY_TICK_SEC
-		_boost_troops(root.global_position)
-	_active_zone["tick_accum"] = tick_accum
-	_pulse_zone(age)
-	if age >= DURATION_SEC:
-		_clear_zone()
+	for index in range(_active_zones.size() - 1, -1, -1):
+		var zone: Dictionary = _active_zones[index]
+		var root: Node3D = zone.get("root", null)
+		if not is_instance_valid(root):
+			_active_zones.remove_at(index)
+			continue
+		var age: float = float(zone.get("age", 0.0)) + delta
+		var tick_accum: float = float(zone.get("tick_accum", 0.0)) + delta
+		zone["age"] = age
+		while tick_accum + 0.000001 >= APPLY_TICK_SEC:
+			tick_accum -= APPLY_TICK_SEC
+			_boost_troops(root.global_position, zone)
+		zone["tick_accum"] = tick_accum
+		_pulse_zone(zone, age)
+		if age >= DURATION_SEC:
+			_remove_zone(index)
 
 
 func _enter_rage_mode() -> void:
 	if (
 		not is_unlocked()
-		or _rage_used
 		or not bs._cannon
-		or bs._cannon._cannon_energy < ENERGY_COST
+		or bs._cannon._cannon_energy < energy_cost()
 	):
 		return
 	_cancel_other_modes()
@@ -123,13 +119,13 @@ func _exit_rage_mode() -> void:
 func _drop_rage(world_pos: Vector3) -> bool:
 	if (
 		not is_unlocked()
-		or _rage_used
 		or not bs._cannon
-		or bs._cannon._cannon_energy < ENERGY_COST
+		or bs._cannon._cannon_energy < energy_cost()
 	):
 		return false
-	bs._cannon._cannon_energy -= ENERGY_COST
-	_rage_used = true
+	var cost := energy_cost()
+	bs._cannon._cannon_energy -= cost
+	_rage_uses += 1
 	var clamped := BaseTroop._clamp_to_island(world_pos)
 	var pos := Vector3(clamped.x, bs.grid_y + FIELD_GROUND_OFFSET, clamped.z)
 	_activate_zone(pos)
@@ -139,7 +135,7 @@ func _drop_rage(world_pos: Vector3) -> bool:
 
 
 func replay_drop_rage(world_pos: Vector3) -> void:
-	_rage_used = true
+	_rage_uses += 1
 	var clamped := BaseTroop._clamp_to_island(world_pos)
 	_activate_zone(Vector3(
 		clamped.x,
@@ -148,7 +144,7 @@ func replay_drop_rage(world_pos: Vector3) -> void:
 	))
 
 
-func _boost_troops(center: Vector3) -> void:
+func _boost_troops(center: Vector3, zone: Dictionary) -> void:
 	var radius_sq := RADIUS * RADIUS
 	var boosted_count := 0
 	for troop_value in BaseTroop._get_troops_cached():
@@ -164,11 +160,10 @@ func _boost_troops(center: Vector3) -> void:
 			SPEED_MULTIPLIER
 		):
 			boosted_count += 1
-	_active_zone["last_boosted_count"] = boosted_count
+	zone["last_boosted_count"] = boosted_count
 
 
 func _activate_zone(pos: Vector3, visual_parent: Node = null) -> void:
-	_clear_zone()
 	var root := Node3D.new()
 	root.name = "MainShipRageField"
 	var parent: Node = visual_parent
@@ -233,7 +228,7 @@ func _activate_zone(pos: Vector3, visual_parent: Node = null) -> void:
 		rings.append(ring)
 		ring_mats.append(ring_mat)
 
-	_active_zone = {
+	_active_zones.append({
 		"root": root,
 		"disk_mat": disk_mat,
 		"rings": rings,
@@ -241,12 +236,12 @@ func _activate_zone(pos: Vector3, visual_parent: Node = null) -> void:
 		"age": 0.0,
 		"tick_accum": APPLY_TICK_SEC,
 		"last_boosted_count": 0,
-	}
+	})
 
 
-func _pulse_zone(age: float) -> void:
+func _pulse_zone(zone: Dictionary, age: float) -> void:
 	var pulse := 0.5 + 0.5 * sin(age * 5.2)
-	var disk_mat: StandardMaterial3D = _active_zone.get("disk_mat", null)
+	var disk_mat: StandardMaterial3D = zone.get("disk_mat", null)
 	if disk_mat:
 		disk_mat.albedo_color = Color(
 			FIELD_COLOR.r,
@@ -254,8 +249,8 @@ func _pulse_zone(age: float) -> void:
 			FIELD_COLOR.b,
 			lerpf(FIELD_DISK_ALPHA_MIN, FIELD_DISK_ALPHA_MAX, pulse)
 		)
-	var rings: Array = _active_zone.get("rings", [])
-	var ring_mats: Array = _active_zone.get("ring_mats", [])
+	var rings: Array = zone.get("rings", [])
+	var ring_mats: Array = zone.get("ring_mats", [])
 	for index in range(mini(rings.size(), ring_mats.size())):
 		var ring: MeshInstance3D = rings[index]
 		var ring_mat: StandardMaterial3D = ring_mats[index]
@@ -369,10 +364,16 @@ func _cancel_other_modes() -> void:
 		bs._skeleton_barrel._exit_barrel_mode()
 
 
-func _clear_zone() -> void:
-	if _active_zone.is_empty():
+func _remove_zone(index: int) -> void:
+	if index < 0 or index >= _active_zones.size():
 		return
-	var root: Node = _active_zone.get("root", null)
+	var zone: Dictionary = _active_zones[index]
+	var root: Node = zone.get("root", null)
 	if is_instance_valid(root):
 		root.queue_free()
-	_active_zone.clear()
+	_active_zones.remove_at(index)
+
+
+func _clear_zones() -> void:
+	for index in range(_active_zones.size() - 1, -1, -1):
+		_remove_zone(index)

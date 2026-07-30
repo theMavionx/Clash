@@ -4,29 +4,75 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { buildBotBaseTemplates, botResources } = require('./matchmaking_defs');
+const {
+  BOT_LOOT_REWARD_RANGE,
+  MATCHMAKING_CONFIG,
+  buildBotBaseTemplates,
+  botResources,
+} = require('./matchmaking_defs');
 
-const EXPECTED_BY_TH = { 1: 24, 2: 30, 3: 30, 4: 25, 5: 150 };
+const EXPECTED_BY_TH = {
+  1: 24, 2: 30, 3: 30, 4: 25, 5: 150, 6: 300, 7: 300,
+};
 const EXPECTED_BY_BUCKET = {
-  '2:easy': 10, '2:normal': 12, '2:hard': 8,
-  '3:easy': 8, '3:normal': 14, '3:hard': 8,
-  '4:easy': 7, '4:normal': 11, '4:hard': 7,
-  '5:easy': 50, '5:normal': 50, '5:hard': 50,
+  '1:normal': 5, '1:hard': 19,
+  '2:normal': 6, '2:hard': 24,
+  '3:normal': 6, '3:hard': 24,
+  '4:normal': 5, '4:hard': 20,
+  '5:normal': 30, '5:hard': 120,
+  '6:normal': 60, '6:hard': 240,
+  '7:normal': 60, '7:hard': 240,
 };
 const GRID_SPECS = { 0: [29, 27], 1: [27, 3], 2: [27, 5] };
 const BUILDING_SIZES = {
   town_hall: [4, 4], mine: [3, 3], barn: [4, 3], port: [4, 3],
   sawmill: [3, 3], turret: [2, 2], tombstone: [3, 3], storage: [4, 5],
-  archer_tower: [3, 3], mage_tower: [3, 3], mortar: [2, 2], shark_trap: [2, 2],
+  archer_tower: [3, 3], mage_tower: [3, 3], mortar: [2, 2],
+  shark_trap: [2, 2], cannon: [3, 3],
 };
 const MAX_LEVEL = {
-  town_hall: 5, mine: 5, barn: 5, port: 3, sawmill: 5, turret: 5,
-  tombstone: 4, storage: 5, archer_tower: 5, mage_tower: 5, mortar: 1, shark_trap: 5,
+  town_hall: 7, mine: 7, barn: 7, port: 3, sawmill: 7, turret: 7,
+  tombstone: 6, storage: 7, archer_tower: 7, mage_tower: 7,
+  mortar: 3, shark_trap: 7, cannon: 7,
 };
+const COMPETITIVE_BOT_MAX_LEVELS = {
+  5: {
+    town_hall: 5, mine: 5, sawmill: 5, barn: 5, storage: 5,
+    archer_tower: 5, tombstone: 4, turret: 5, mage_tower: 5,
+    mortar: 1, shark_trap: 5,
+  },
+  6: {
+    town_hall: 6, mine: 6, sawmill: 6, barn: 6, storage: 6,
+    archer_tower: 6, tombstone: 5, turret: 6, mage_tower: 6,
+    mortar: 2, shark_trap: 6,
+  },
+  7: {
+    town_hall: 7, mine: 7, sawmill: 7, barn: 7, storage: 7,
+    archer_tower: 7, tombstone: 6, turret: 7, mage_tower: 7,
+    mortar: 3, shark_trap: 7, cannon: 7,
+  },
+};
+const COMPETITIVE_BOT_DEFENSE_TYPES = new Set([
+  'archer_tower', 'tombstone', 'turret', 'mage_tower',
+  'mortar', 'shark_trap', 'cannon',
+]);
 const REQUIRED_PLAYER_LIKE_NAMES = [
   'ghost', 'www', 'egorble', 'papajshon', 'nick', 'volumer', 'luckier',
   '0xbro', 'onlywin', 'semlysak', 'idol', 'ggbet', '555gg',
+  'maverick', 'noctis', 'rainmaker', 'katsuro', 'solace',
+  'blackreef', 'northstar', 'wildcard', 'redline', 'seawolf',
 ];
+const BOT_LOOT_PERCENT = 0.15;
+
+function expectedBotLoot(resourceStock, lootMultiplier) {
+  return Math.min(
+    BOT_LOOT_REWARD_RANGE.max,
+    Math.max(
+      BOT_LOOT_REWARD_RANGE.min,
+      Math.floor(Number(resourceStock) * BOT_LOOT_PERCENT * Number(lootMultiplier)),
+    ),
+  );
+}
 
 function layoutSignature(template) {
   return template.buildings
@@ -66,7 +112,14 @@ for (const template of templates) {
   assert.equal(template.buildings.filter((building) => building.type === 'town_hall').length, 1);
   assert.equal(template.buildings.find((building) => building.type === 'town_hall').level, template.th);
   for (const amount of Object.values(template.resources)) {
-    assert.ok(amount >= 1000 && amount <= 2000, `${template.id} resource ${amount} is outside 1k-2k`);
+    const reward = expectedBotLoot(
+      amount,
+      MATCHMAKING_CONFIG.botLootMultiplier[template.difficulty],
+    );
+    assert.ok(
+      reward >= BOT_LOOT_REWARD_RANGE.min && reward <= BOT_LOOT_REWARD_RANGE.max,
+      `${template.id} reward ${reward} is outside the configured bot loot range`,
+    );
   }
   assert.equal(
     new Set(Object.values(template.resources)).size,
@@ -85,7 +138,7 @@ const templateNames = new Set(templates.map((template) => template.name));
 for (const name of REQUIRED_PLAYER_LIKE_NAMES) {
   assert.equal(templateNames.has(name), true, `requested player-like name ${name} should be in the pool`);
 }
-for (const th of [2, 3, 4, 5]) {
+for (const th of [2, 3, 4, 5, 6, 7]) {
   assert.equal(
     templates.some((template) => template.th === th && REQUIRED_PLAYER_LIKE_NAMES.includes(template.name)),
     true,
@@ -108,7 +161,38 @@ for (const resource of ['gold', 'wood', 'ore']) {
   );
 }
 
-for (const th of [2, 3, 4, 5]) {
+const sampledBotRewards = [];
+for (let index = 0; index < 4000; index += 1) {
+  const difficulty = ['easy', 'normal', 'hard'][index % 3];
+  const resources = botResources(
+    (index % 7) + 1,
+    difficulty,
+    `test-distribution-${index}`,
+  );
+  for (const stock of Object.values(resources)) {
+    sampledBotRewards.push(
+      expectedBotLoot(stock, MATCHMAKING_CONFIG.botLootMultiplier[difficulty]),
+    );
+  }
+}
+sampledBotRewards.sort((left, right) => left - right);
+const sampledMedian = sampledBotRewards[Math.floor(sampledBotRewards.length / 2)];
+const sampledJackpotRate = sampledBotRewards.filter(
+  (reward) => reward >= 2301,
+).length / sampledBotRewards.length;
+assert.equal(sampledBotRewards[0], BOT_LOOT_REWARD_RANGE.min);
+assert.ok(
+  sampledBotRewards[sampledBotRewards.length - 1] >= 2675,
+  'the deterministic pool should reach the upper end of the 2700 reward range',
+);
+assert.ok(sampledMedian >= 350 && sampledMedian <= 550, `unexpected bot loot median ${sampledMedian}`);
+assert.ok(
+  sampledJackpotRate >= 0.005 && sampledJackpotRate <= 0.02,
+  `unexpected high-value bot rate ${sampledJackpotRate}`,
+);
+assert.ok(new Set(sampledBotRewards).size >= 1500, 'bot loot should not cluster around a few values');
+
+for (const th of [2, 3, 4, 5, 6, 7]) {
   const signatures = templates.filter((template) => template.th === th).map(layoutSignature);
   assert.equal(new Set(signatures).size, signatures.length, `TH${th} layouts must be unique`);
 }
@@ -117,6 +201,74 @@ for (const template of templates.filter((entry) => entry.th === 5)) {
   assert.ok(template.buildings.some((building) => building.type === 'mortar'), `${template.id} needs a mortar`);
   assert.ok(template.buildings.some((building) => building.type === 'shark_trap'), `${template.id} needs a shark trap`);
   assert.equal(template.buildings.filter((building) => building.type === 'mage_tower').length, 2);
+}
+
+const competitiveTemplateStats = new Map();
+for (const template of templates.filter((entry) => entry.th >= 5)) {
+  let belowMaxCount = 0;
+  let defenseBelowMaxCount = 0;
+  for (const building of template.buildings) {
+    const maxLevel = COMPETITIVE_BOT_MAX_LEVELS[template.th][building.type];
+    assert.ok(maxLevel, `${template.id} is missing a TH${template.th} cap for ${building.type}`);
+    assert.ok(
+      building.level === maxLevel || building.level === Math.max(1, maxLevel - 1),
+      `${template.id} ${building.type} must be maxed or only one level below max`,
+    );
+    if (building.level < maxLevel) {
+      belowMaxCount += 1;
+      if (COMPETITIVE_BOT_DEFENSE_TYPES.has(building.type)) {
+        defenseBelowMaxCount += 1;
+      }
+    }
+  }
+  if (template.difficulty === 'hard') {
+    assert.ok(belowMaxCount <= 1, `${template.id} hard base has too many non-max buildings`);
+    assert.equal(
+      defenseBelowMaxCount,
+      0,
+      `${template.id} hard base must keep every defense at the TH cap`,
+    );
+  } else {
+    assert.ok(
+      belowMaxCount <= 2,
+      `${template.id} normal base should have no more than two non-max buildings`,
+    );
+    assert.ok(
+      defenseBelowMaxCount <= 1,
+      `${template.id} normal base should have at most one defense below max`,
+    );
+  }
+  const bucket = `${template.th}:${template.difficulty}`;
+  const stats = competitiveTemplateStats.get(bucket) || { total: 0, fullyMaxed: 0 };
+  stats.total += 1;
+  if (belowMaxCount === 0) stats.fullyMaxed += 1;
+  competitiveTemplateStats.set(bucket, stats);
+}
+for (const th of [5, 6, 7]) {
+  const hardStats = competitiveTemplateStats.get(`${th}:hard`);
+  const normalStats = competitiveTemplateStats.get(`${th}:normal`);
+  assert.ok(hardStats, `TH${th} hard stats should exist`);
+  assert.ok(normalStats, `TH${th} normal stats should exist`);
+  assert.ok(
+    hardStats.fullyMaxed / hardStats.total >= 0.70,
+    `at least 70% of TH${th} hard bases should be fully maxed`,
+  );
+  assert.ok(
+    normalStats.fullyMaxed / normalStats.total >= 0.20,
+    `at least 20% of TH${th} normal bases should be fully maxed`,
+  );
+}
+
+for (const template of templates.filter((entry) => entry.th >= 6)) {
+  assert.equal(template.buildings.filter((building) => building.type === 'archer_tower').length, 3);
+  assert.equal(template.buildings.filter((building) => building.type === 'tombstone').length, 3);
+  assert.equal(template.buildings.filter((building) => building.type === 'turret').length, 3);
+  assert.equal(template.buildings.filter((building) => building.type === 'mage_tower').length, 2);
+  assert.equal(template.buildings.filter((building) => building.type === 'mortar').length, 2);
+  assert.equal(template.buildings.filter((building) => building.type === 'shark_trap').length, 3);
+}
+for (const template of templates.filter((entry) => entry.th === 7)) {
+  assert.equal(template.buildings.filter((building) => building.type === 'cannon').length, 2);
 }
 
 const dbPath = path.join(os.tmpdir(), `clash-raid-bots-${process.pid}-${Date.now()}.db`);
@@ -140,7 +292,18 @@ try {
   assert.equal(/bot/i.test(match.name), false, 'materialized target should retain a player-like name');
   assert.equal(/_[0-9a-f]{4}$/i.test(match.name), false, 'materialized names should not expose session hashes');
   assert.ok(match.buildings.length > 0, 'materialized target must include a playable base');
-  for (const amount of Object.values(match.resources)) assert.ok(amount >= 1000 && amount <= 2000);
+  assert.equal(
+    match.town_hall_level,
+    match.buildings.find((building) => building.type === 'town_hall')?.level,
+    'materialized bot profile must expose the actual Town Hall level',
+  );
+  assert.equal(match.town_hall_level, 3, 'TH3 attacker must use the dedicated TH3 bot pool');
+  for (const amount of Object.values(match.loot_preview)) {
+    assert.ok(
+      amount >= BOT_LOOT_REWARD_RANGE.min && amount <= BOT_LOOT_REWARD_RANGE.max,
+      `materialized reward ${amount} is outside the configured bot loot range`,
+    );
+  }
   const materializedState = gameDb.db.prepare(`
     SELECT encounter_count, last_gold, last_wood, last_ore
     FROM raid_bot_template_state
@@ -186,18 +349,20 @@ try {
   assert.equal(th5Match.is_bot, 1, th5Match.error);
   const matchedTownHall = th5Match.buildings.find((building) => building.type === 'town_hall');
   assert.ok(matchedTownHall, 'TH5 match must contain a town hall');
-  assert.ok(
-    matchedTownHall.level >= 4,
-    `TH5 attacker must not be matched against TH${matchedTownHall.level}`,
+  assert.equal(
+    matchedTownHall.level,
+    5,
+    `TH5 attacker must receive a TH5 bot target, got TH${matchedTownHall.level}`,
   );
   assert.equal(
     th5Match.matchmaking.live_candidate_count,
     0,
     'all TH1 live candidates must be removed before scoring a TH5 match',
   );
-  assert.ok(
-    th5Match.matchmaking.bot_candidate_count >= 150,
-    'TH5 attacker should receive the expanded high-tier bot pool',
+  assert.equal(
+    th5Match.matchmaking.bot_candidate_count,
+    150,
+    'TH5 attacker should use the dedicated 150-target TH5 bot pool',
   );
   assert.equal(
     th5Match.matchmaking.selection_reason,
@@ -209,9 +374,150 @@ try {
     0,
     'trivial victories must not consume the competitive performance window',
   );
+  assert.equal(
+    th5Match.matchmaking.target_bot_difficulty,
+    'normal',
+    'a lightly loaded TH5 attacker should use the small normal recovery slice',
+  );
+  gameDb.db.prepare(`
+    UPDATE players
+    SET shield_until = datetime('now', '+1 day')
+    WHERE id = ?
+  `).run(th5FinderId);
+
+  const th7FinderId = 'raid-pool-th7-main-ship-fixture';
+  gameDb.db.prepare(`
+    INSERT INTO players (id, name, token, gold, wood, ore, trophies, level)
+    VALUES (?, ?, ?, 100000, 2000, 2000, 900, 7)
+  `).run(th7FinderId, 'Th7MainShipFixture', 'th7-main-ship-token');
+  gameDb.db.prepare(`
+    INSERT INTO buildings (player_id, type, level, grid_x, grid_z, grid_index, hp, max_hp)
+    VALUES (?, 'town_hall', 7, 11, 2, 0, 50000, 50000)
+  `).run(th7FinderId);
+  const packedTh7Army = [];
+  for (let unit = 0; unit < 9; unit += 1) {
+    packedTh7Army.push('pea_shooter', '_SLOT_FILLER_', '_SLOT_FILLER_', '_SLOT_FILLER_', '_SLOT_FILLER_');
+  }
+  gameDb.db.prepare(`
+    INSERT INTO player_ships (
+      player_id, level, troops, troop_template, slot_cost_version
+    ) VALUES (?, 5, ?, ?, ?)
+  `).run(
+    th7FinderId,
+    JSON.stringify(packedTh7Army),
+    JSON.stringify(packedTh7Army),
+    gameDb.TROOP_SLOT_COST_VERSION,
+  );
+  gameDb.db.prepare(`
+    INSERT INTO troop_levels (player_id, troop_type, level)
+    VALUES (?, 'pea_shooter', 7)
+  `).run(th7FinderId);
+  const th7Match = gameDb.findEnemy(th7FinderId);
+  assert.equal(th7Match.is_bot, 1, th7Match.error);
+  const th7MatchedTownHall = th7Match.buildings.find((building) => building.type === 'town_hall');
+  assert.ok(th7MatchedTownHall, 'TH7 match must contain a town hall');
+  assert.equal(
+    th7MatchedTownHall.level,
+    7,
+    `loaded TH7 attacker must receive a TH7 bot target, got TH${th7MatchedTownHall.level}`,
+  );
+  assert.equal(
+    th7Match.matchmaking.bot_candidate_count,
+    300,
+    'TH7 attacker should use the dedicated TH7 virtual target pool',
+  );
   assert.ok(
-    th5Match.matchmaking.base_power < 40000,
-    'the easy TH5 bot layout must remain beatable by a lightly loaded TH5 ship',
+    th7Match.matchmaking.attack_power > 100000,
+    'matchmaking power must include troops loaded into the authoritative main ship',
+  );
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const repeatedMatch = gameDb.findEnemy(th7FinderId);
+    assert.equal(
+      repeatedMatch.is_bot,
+      1,
+      repeatedMatch.error || JSON.stringify(repeatedMatch),
+    );
+    assert.equal(
+      repeatedMatch.town_hall_level,
+      7,
+      `TH7 bot selection attempt ${attempt + 1} fell back to TH${repeatedMatch.town_hall_level}`,
+    );
+  }
+  const insertCompetitiveLoss = gameDb.db.prepare(`
+    INSERT INTO raid_matchmaking (
+      battle_session_id, attacker_id, defender_id, result, base_power_ratio
+    ) VALUES (?, ?, ?, 'defeat', 0.90)
+  `);
+  for (let loss = 0; loss < 4; loss += 1) {
+    insertCompetitiveLoss.run(
+      `th7-recovery-loss-${loss}`,
+      th7FinderId,
+      `th7-recovery-target-${loss}`,
+    );
+  }
+  const recoveryTh7Match = gameDb.findEnemy(th7FinderId);
+  assert.equal(recoveryTh7Match.is_bot, 1, recoveryTh7Match.error);
+  assert.equal(recoveryTh7Match.matchmaking.selection_reason, 'recovery_strong');
+  assert.equal(
+    recoveryTh7Match.town_hall_level,
+    7,
+    'TH7 recovery matchmaking must lower bot difficulty without lowering Town Hall',
+  );
+  assert.equal(
+    recoveryTh7Match.matchmaking.bot_candidate_count,
+    60,
+    'TH7 recovery matchmaking should use the normal TH7 templates',
+  );
+
+  const packedTh7Knights = Array.from({ length: 45 }, () => 'knight');
+  gameDb.db.prepare(`
+    UPDATE player_ships
+    SET troops = ?, troop_template = ?, updated_at = datetime('now')
+    WHERE player_id = ?
+  `).run(
+    JSON.stringify(packedTh7Knights),
+    JSON.stringify(packedTh7Knights),
+    th7FinderId,
+  );
+  gameDb.db.prepare(`
+    INSERT INTO troop_levels (player_id, troop_type, level)
+    VALUES (?, 'knight', 7)
+  `).run(th7FinderId);
+  const maxedTh7Match = gameDb.findEnemy(th7FinderId);
+  assert.equal(maxedTh7Match.is_bot, 1, maxedTh7Match.error);
+  assert.equal(
+    maxedTh7Match.buildings.find((building) => building.type === 'town_hall')?.level,
+    7,
+    'a fully loaded TH7 attacker must be able to reach the new TH7 bot pool',
+  );
+  assert.equal(maxedTh7Match.town_hall_level, 7, 'TH7 bot profile must not fall back to TH1');
+  const frozenLootRow = gameDb.stmts.getBattleSession.get(maxedTh7Match.battle_session_id);
+  const frozenLoot = JSON.parse(frozenLootRow.loot_snapshot_json);
+  for (const resource of ['gold', 'wood', 'ore']) {
+    assert.equal(
+      maxedTh7Match.loot_preview[resource],
+      expectedBotLoot(
+        maxedTh7Match.resources[resource],
+        frozenLoot.loot_multiplier,
+      ),
+      `${resource} preview must use the exact bot reward profile`,
+    );
+  }
+  assert.deepEqual(
+    frozenLoot.award,
+    maxedTh7Match.loot_preview,
+    'the reward shown to the client must be frozen in the battle session',
+  );
+  const maxedTh7Victory = gameDb.battleVictory(
+    th7FinderId,
+    maxedTh7Match.id,
+    maxedTh7Match.battle_session_id,
+  );
+  assert.equal(maxedTh7Victory.success, true, maxedTh7Victory.error);
+  assert.deepEqual(
+    maxedTh7Victory.loot,
+    maxedTh7Match.loot_preview,
+    'the final bot payout must exactly match the preview shown during battle',
   );
 
   const attackerId = 'raid-bot-test-attacker';
@@ -248,7 +554,15 @@ try {
   assert.equal(result.target_is_bot, true);
   const after = gameDb.getResources(defenderId);
   for (const resource of ['gold', 'wood', 'ore']) {
-    assert.ok(after[resource] >= 1000 && after[resource] <= 2000, `${resource} should remain in the bot loot range`);
+    const restoredReward = expectedBotLoot(
+      after[resource],
+      MATCHMAKING_CONFIG.botLootMultiplier.normal,
+    );
+    assert.ok(
+      restoredReward >= BOT_LOOT_REWARD_RANGE.min
+        && restoredReward <= BOT_LOOT_REWARD_RANGE.max,
+      `${resource} restored reward ${restoredReward} should remain in the bot loot range`,
+    );
     assert.notEqual(after[resource], before[resource], `${resource} should change after a bot raid`);
   }
   assert.ok(result.loot.gold > 0 && result.loot.wood > 0 && result.loot.ore > 0, 'attacker must receive loot');
@@ -295,7 +609,7 @@ try {
   assert.equal(gameDb.getTrophies(defeatAttackerId), 89, 'TH4 attack defeat should subtract 11 trophies');
   assert.equal(gameDb.getTrophies(defeatDefenderId), 122, 'TH4 successful defense should award 22 trophies');
 
-  console.log(`[raid-bot-pool] PASS total=${templates.length} th2=30 th3=30 th4=25 th5=150 resources=varied victory=12 defeat=-11 defense=22 materialized=true rerolled=true`);
+  console.log(`[raid-bot-pool] PASS total=${templates.length} th2=30 th3=30 th4=25 th5=150 th6=300 th7=300 resources=varied main_ship=true victory=12 defeat=-11 defense=22 materialized=true rerolled=true`);
 } finally {
   gameDb.db.close();
   for (const suffix of ['', '-wal', '-shm']) fs.rmSync(`${dbPath}${suffix}`, { force: true });

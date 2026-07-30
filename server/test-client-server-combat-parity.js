@@ -11,6 +11,7 @@ const {
   NECROMANCER_SUMMON,
   MEDKIT_DURATION_SEC,
   MEDKIT_ENERGY_COST,
+  MEDKIT_ENERGY_COST_INCREMENT,
   MEDKIT_HEAL_PER_TICK,
   MEDKIT_RADIUS,
   MEDKIT_TICK_SEC,
@@ -548,6 +549,7 @@ const medkitClient = read('scripts/bs_medkit.gd');
 for (const [name, expected] of Object.entries({
   MEDKIT_UNLOCK_SHIP_LEVEL,
   MEDKIT_ENERGY_COST,
+  MEDKIT_ENERGY_COST_INCREMENT,
   MEDKIT_DURATION_SEC,
   MEDKIT_RADIUS,
   MEDKIT_TICK_SEC,
@@ -563,6 +565,7 @@ const freezeDropClient = read('scripts/bs_freeze_spell.gd');
 for (const [name, expected] of Object.entries({
   UNLOCK_SHIP_LEVEL: FREEZE_DROP.unlockShipLevel,
   ENERGY_COST: FREEZE_DROP.energyCost,
+  ENERGY_COST_INCREMENT: FREEZE_DROP.costIncrement,
   FLIGHT_SEC: FREEZE_DROP.travelSec,
   RADIUS: FREEZE_DROP.radius,
   DURATION_SEC: FREEZE_DROP.durationSec,
@@ -578,6 +581,7 @@ const rageDropClient = read('scripts/bs_rage_spell.gd');
 for (const [name, expected] of Object.entries({
   UNLOCK_SHIP_LEVEL: RAGE_DROP.unlockShipLevel,
   ENERGY_COST: RAGE_DROP.energyCost,
+  ENERGY_COST_INCREMENT: RAGE_DROP.costIncrement,
   RADIUS: RAGE_DROP.radius,
   DURATION_SEC: RAGE_DROP.durationSec,
   BOOST_GRACE_SEC: RAGE_DROP.graceSec,
@@ -596,6 +600,7 @@ const skeletonBarrelClient = read('scripts/bs_skeleton_barrel.gd');
 for (const [name, expected] of Object.entries({
   UNLOCK_SHIP_LEVEL: SKELETON_BARREL.unlockShipLevel,
   ENERGY_COST: SKELETON_BARREL.energyCost,
+  ENERGY_COST_INCREMENT: SKELETON_BARREL.costIncrement,
   FLIGHT_SEC: SKELETON_BARREL.travelSec,
   IMPACT_DAMAGE: SKELETON_BARREL.impactDamage,
   SKELETON_COUNT: SKELETON_BARREL.spawnCount,

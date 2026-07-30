@@ -112,6 +112,11 @@ const EXPLICIT_STATIC_INCLUDE_NAME_PARTS: Dictionary = {
 	"res://Model/Island/pirate_island.glb": ["barrel", "chest"],
 	"res://Model/Turret/scene.gltf": ["stand"],
 }
+const STATIC_BATCH_PRESERVED_DESCENDANTS: Dictionary = {
+	"res://Model/MageTower/1.fbx": ["crystal"],
+	"res://Model/MageTower/2.fbx": ["crystal"],
+	"res://Model/MageTower/3.fbx": ["crystal"],
+}
 const RUNTIME_SINGLE_MATERIAL_SOURCES: Dictionary = {
 	"res://Model/Altar/Models/Stylized_Altar_web.tscn": true,
 	"res://Model/MageTower/1.fbx": true,
@@ -422,6 +427,7 @@ static func apply_static_batch_for_web(root: Node, source_path: String, level: i
 	var batch_mesh := _resolve_static_batch(source_path, level)
 	if batch_mesh == null:
 		return false
+	_preserve_named_descendants(root, source_path)
 	var animated_roots := _collect_animated_roots(root)
 	var explicit_include_name_parts: Array = EXPLICIT_STATIC_INCLUDE_NAME_PARTS.get(source_path, [])
 	var hidden_meshes := 0
@@ -469,6 +475,40 @@ static func apply_static_batch_for_web(root: Node, source_path: String, level: i
 		% [source_path, level, hidden_meshes, hidden_surfaces, batch_mesh.get_surface_count()]
 	)
 	return true
+
+
+static func _preserve_named_descendants(root: Node, source_path: String) -> void:
+	var name_parts: Array = STATIC_BATCH_PRESERVED_DESCENDANTS.get(source_path, [])
+	if name_parts.is_empty():
+		return
+	var preserved_nodes: Array[Node3D] = []
+	for raw_node in root.find_children("*", "Node3D", true, false):
+		var node := raw_node as Node3D
+		if node == null or node.get_parent() == root:
+			continue
+		var lower_name := String(node.name).to_lower()
+		for raw_part in name_parts:
+			if lower_name.contains(str(raw_part).to_lower()):
+				preserved_nodes.append(node)
+				break
+	for node in preserved_nodes:
+		if not is_instance_valid(node) or node.get_parent() == root:
+			continue
+		var root_relative_transform := _transform_relative_to_ancestor(node, root)
+		node.owner = null
+		node.get_parent().remove_child(node)
+		root.add_child(node)
+		node.transform = root_relative_transform
+
+
+static func _transform_relative_to_ancestor(node: Node3D, ancestor: Node) -> Transform3D:
+	var result := node.transform
+	var current := node.get_parent()
+	while current != null and current != ancestor:
+		if current is Node3D:
+			result = (current as Node3D).transform * result
+		current = current.get_parent()
+	return result
 
 
 static func _resolve_static_batch(source_path: String, level: int) -> ArrayMesh:

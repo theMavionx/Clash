@@ -18,6 +18,7 @@ const {
   COMBAT_GRID_VERSION,
 } = require('./combat_grid_config');
 const {
+  BOT_LOOT_REWARD_RANGE,
   MATCHMAKING_CONFIG,
   buildBotBaseTemplates,
   botResources,
@@ -1714,6 +1715,7 @@ try {
 // idempotent pass is what makes clean installs safe before prepared statements
 // reference surrendered_at.
 try { db.exec(`ALTER TABLE battle_sessions ADD COLUMN surrendered_at TEXT`); } catch {}
+try { db.exec(`ALTER TABLE battle_sessions ADD COLUMN loot_snapshot_json TEXT`); } catch {}
 try {
   rankedRaids.ensureRankedRaidSchema(db);
 } catch (e) {
@@ -3153,6 +3155,11 @@ const stmts = {
   createBattleSession: db.prepare(`
     INSERT INTO battle_sessions (id, attacker_id, defender_id, reserved_until)
     VALUES (?, ?, ?, ?)
+  `),
+  setBattleSessionLootSnapshot: db.prepare(`
+    UPDATE battle_sessions
+    SET loot_snapshot_json = ?
+    WHERE id = ? AND attacker_id = ? AND defender_id = ? AND status = 'active'
   `),
   createRankedBattleSession: db.prepare(`
     INSERT INTO battle_sessions (
@@ -5772,25 +5779,27 @@ const BUILDING_DEFS = {
     hp_levels: [3500, 8000, 16000, 24000, 36000, 52000, 72000],
     cost: { gold: 0, wood: 0, ore: 0 },
     upgrade_cost: {
-      2: { gold: 800, wood: 2400, ore: 2000 },
-      3: { gold: 3000, wood: 7000, ore: 6000 },
-      4: { gold: 10000, wood: 20000, ore: 17000 },
-      5: { gold: 26000, wood: 52000, ore: 46000 },
-      6: { gold: 48000, wood: 72000, ore: 66000 },
-      7: { gold: 70000, wood: 100000, ore: 92000 },
+      2: { gold: 1200, wood: 4200, ore: 3500 },
+      3: { gold: 4000, wood: 8500, ore: 7500 },
+      4: { gold: 12000, wood: 22000, ore: 19000 },
+      5: { gold: 30000, wood: 54000, ore: 48000 },
+      6: { gold: 55000, wood: 75000, ore: 68000 },
+      7: { gold: 85000, wood: 106000, ore: 98000 },
     },
     max_count: 1,
   },
   mine: {
     size: [3, 3], max_level: 7,
     hp_levels: [1200, 2200, 3800, 6000, 9000, 13000, 18000],
-    cost: { gold: 80, wood: 200, ore: 0 },
+    cost: { gold: 180, wood: 500, ore: 0 },
+    upgrade_base_cost: { gold: 220, wood: 550, ore: 0 },
     max_count: 4,
   },
   barn: {
     size: [4, 3], max_level: 7,
     hp_levels: [2000, 3500, 6000, 9500, 14000, 20000, 28000],
-    cost: { gold: 140, wood: 350, ore: 280 },
+    cost: { gold: 350, wood: 900, ore: 750 },
+    upgrade_base_cost: { gold: 450, wood: 1050, ore: 900 },
     max_count: 1,
   },
   port: {
@@ -5810,64 +5819,75 @@ const BUILDING_DEFS = {
   sawmill: {
     size: [3, 3], max_level: 7,
     hp_levels: [1200, 2200, 3800, 6000, 9000, 13000, 18000],
-    cost: { gold: 80, wood: 0, ore: 200 },
+    cost: { gold: 180, wood: 0, ore: 500 },
+    upgrade_base_cost: { gold: 220, wood: 0, ore: 550 },
     max_count: 4,
   },
   turret: {
     size: [2, 2], max_level: 7,
     hp_levels: [900, 1600, 2800, 4500, 6800, 9000, 12000],
-    cost: { gold: 220, wood: 700, ore: 580 },
+    cost: { gold: 800, wood: 2400, ore: 2000 },
+    upgrade_base_cost: { gold: 750, wood: 2500, ore: 2100 },
     max_count: 6,
   },
   tombstone: {
     size: [3, 3], max_level: 6,
     hp_levels: [1000, 1500, 2000, 2700, 3600, 4700],
-    cost: { gold: 120, wood: 0, ore: 500 },
+    cost: { gold: 600, wood: 0, ore: 2200 },
+    upgrade_base_cost: { gold: 650, wood: 0, ore: 2400 },
     max_count: 4,
   },
   storage: {
     size: [4, 5], max_level: 7,
     hp_levels: [1400, 2500, 4200, 6500, 9500, 13000, 18000],
-    cost: { gold: 140, wood: 550, ore: 0 },
+    cost: { gold: 400, wood: 1400, ore: 0 },
+    upgrade_base_cost: { gold: 500, wood: 1500, ore: 0 },
     max_count: 4,
   },
   archer_tower: {
     size: [3, 3], max_level: 7,
     hp_levels: [800, 1500, 2500, 3800, 5600, 7800, 10200],
-    cost: { gold: 180, wood: 650, ore: 0 },
+    cost: { gold: 500, wood: 1600, ore: 0 },
+    upgrade_base_cost: { gold: 550, wood: 1700, ore: 0 },
     max_count: 4,
   },
   mage_tower: {
     size: [3, 3], max_level: 7,
     hp_levels: [700, 1200, 2000, 3100, 4600, 6300, 8300],
-    cost: { gold: 800, wood: 0, ore: 1300 },
+    cost: { gold: 2800, wood: 0, ore: 5200 },
+    upgrade_base_cost: { gold: 1600, wood: 0, ore: 3000 },
     max_count: 2,
   },
   mortar: {
     size: [2, 2], max_level: 3,
     hp_levels: [1700, 2400, 3200],
-    cost: { gold: 600, wood: 900, ore: 700 },
+    cost: { gold: 8000, wood: 12000, ore: 10000 },
+    upgrade_cost: {
+      2: { gold: 24000, wood: 36000, ore: 30000 },
+      3: { gold: 55000, wood: 82000, ore: 68000 },
+    },
     max_count: 2,
   },
   shark_trap: {
     size: [2, 2], max_level: 7,
     hp_levels: [1, 1, 1, 1, 1, 1, 1],
     damage_levels: [500, 750, 1050, 1450, 2000, 2400, 2900],
-    cost: { gold: 300, wood: 800, ore: 650 },
+    cost: { gold: 1800, wood: 4800, ore: 4000 },
+    upgrade_base_cost: { gold: 1000, wood: 2600, ore: 2200 },
     max_count: 3,
     non_targetable: true,
   },
   cannon: {
     size: [3, 3], max_level: 7,
     hp_levels: [3200, 3900, 4700, 5600, 6600, 7700, 9000],
-    cost: { gold: 6800, wood: 15500, ore: 13000 },
+    cost: { gold: 16000, wood: 36000, ore: 30000 },
     upgrade_cost: {
-      2: { gold: 9500, wood: 22000, ore: 18000 },
-      3: { gold: 14000, wood: 32000, ore: 27000 },
-      4: { gold: 20000, wood: 45000, ore: 38000 },
-      5: { gold: 29000, wood: 61000, ore: 52000 },
-      6: { gold: 41000, wood: 81000, ore: 69000 },
-      7: { gold: 56000, wood: 106000, ore: 90000 },
+      2: { gold: 24000, wood: 52000, ore: 44000 },
+      3: { gold: 35000, wood: 70000, ore: 60000 },
+      4: { gold: 48000, wood: 90000, ore: 76000 },
+      5: { gold: 65000, wood: 110000, ore: 92000 },
+      6: { gold: 83000, wood: 128000, ore: 108000 },
+      7: { gold: 105000, wood: 142000, ore: 125000 },
     },
     max_count: 2,
   },
@@ -5875,11 +5895,11 @@ const BUILDING_DEFS = {
 
 const BUILDING_UPGRADE_COST_MULTIPLIERS = {
   2: 2,
-  3: 3,
-  4: 5,
-  5: 8,
-  6: 12,
-  7: 17,
+  3: 4,
+  4: 8,
+  5: 15,
+  6: 27,
+  7: 45,
 };
 
 function getBuildingUpgradeCost(type, currentLevel) {
@@ -5891,10 +5911,11 @@ function getBuildingUpgradeCost(type, currentLevel) {
     return { ...def.upgrade_cost[nextLevel] };
   }
   const multiplier = BUILDING_UPGRADE_COST_MULTIPLIERS[nextLevel] || nextLevel;
+  const baseCost = def.upgrade_base_cost || def.cost;
   return {
-    gold: (def.cost.gold || 0) * multiplier,
-    wood: (def.cost.wood || 0) * multiplier,
-    ore: (def.cost.ore || 0) * multiplier,
+    gold: (baseCost.gold || 0) * multiplier,
+    wood: (baseCost.wood || 0) * multiplier,
+    ore: (baseCost.ore || 0) * multiplier,
   };
 }
 
@@ -6085,9 +6106,13 @@ function virtualBotCandidatesForProfile(attackPower, profile) {
     : profile.selection_reason === 'strong_player'
       ? new Set(['normal', 'hard'])
       : new Set(['easy', 'normal', 'hard']);
+  const exactTierTemplates = templates.filter((template) => template.th === attackerTh);
+  const tierTemplates = exactTierTemplates.length > 0
+    ? exactTierTemplates
+    : templates.filter((template) => template.th >= minTh && template.th <= maxTh);
 
-  return templates
-    .filter((template) => template.th >= minTh && template.th <= maxTh && allowedDifficulties.has(template.difficulty))
+  return tierTemplates
+    .filter((template) => allowedDifficulties.has(template.difficulty))
     .map((template) => {
       const base = computeBasePowerFromBuildings(template.buildings);
       return {
@@ -9335,19 +9360,17 @@ function troopPowerFromEntry(entry, levelMap) {
 
 function computeAttackPower(playerId) {
   const levels = troopLevelsObject(playerId);
-  const ports = stmts.getBuildings.all(playerId)
-    .filter((b) => b.type === 'port' && Number(b.has_ship) === 1);
+  const mainShip = getPlayerShip(playerId);
+  const troops = safeJsonArray(mainShip?.troops);
   let power = 0;
   let troopCount = 0;
   let shipCount = 0;
   let shipCapacity = 0;
-  for (const port of ports) {
-    const troops = safeJsonArray(port.ship_troops);
-    if (troops.length === 0) continue;
+  if (troops.length > 0) {
     shipCount += 1;
-    const portLevel = clampMatchNumber(port.level, 1, BUILDING_DEFS.port.max_level, 1);
-    shipCapacity += portLevel * 3;
-    power += 120 + portLevel * 90;
+    const shipLevel = clampMatchNumber(mainShip?.level, 1, MAX_PLAYER_SHIP_LEVEL, 1);
+    shipCapacity = Math.max(0, Number(mainShip?.capacity) || 0);
+    power += 120 + shipLevel * 90;
     for (const troop of troops) {
       if (String(troop || '') === '_SLOT_FILLER_') continue;
       const p = troopPowerFromEntry(troop, levels);
@@ -9646,6 +9669,79 @@ function getRaidRewardProfile(battleSessionId) {
   };
 }
 
+const LOOT_PERCENT = 0.15;
+
+function calculateRaidLootSnapshot(attackerId, defenderResources, rewardProfile = {}) {
+  const parsedMultiplier = Number(rewardProfile.loot_multiplier);
+  const lootMultiplier = Number.isFinite(parsedMultiplier)
+    ? Math.max(0, parsedMultiplier)
+    : 1;
+  const lootPercent = LOOT_PERCENT * lootMultiplier;
+  const base = {};
+  for (const resource of ['gold', 'wood', 'ore']) {
+    const available = Math.max(0, Math.floor(Number(defenderResources?.[resource]) || 0));
+    const calculated = Math.floor(available * lootPercent);
+    base[resource] = rewardProfile.is_bot && available > 0
+      ? Math.min(
+        available,
+        Math.max(
+          BOT_LOOT_REWARD_RANGE.min,
+          Math.min(BOT_LOOT_REWARD_RANGE.max, calculated),
+        ),
+      )
+      : calculated;
+  }
+  const boosted = applyAltarProsperityResourceBonus(attackerId, base);
+  return {
+    version: 1,
+    loot_percent: lootPercent,
+    loot_multiplier: lootMultiplier,
+    target_is_bot: !!rewardProfile.is_bot,
+    base: boosted.base,
+    award: {
+      gold: boosted.gold,
+      wood: boosted.wood,
+      ore: boosted.ore,
+    },
+    prosperity_bonus_pct: boosted.prosperity_bonus_pct,
+    prosperity_bonus: boosted.bonus,
+  };
+}
+
+function parseRaidLootSnapshot(rawSnapshot) {
+  if (!rawSnapshot) return null;
+  try {
+    const parsed = typeof rawSnapshot === 'string' ? JSON.parse(rawSnapshot) : rawSnapshot;
+    if (!parsed || Number(parsed.version) !== 1 || !parsed.base || !parsed.award) return null;
+    return {
+      ...parsed,
+      base: {
+        gold: Math.max(0, Math.floor(Number(parsed.base.gold) || 0)),
+        wood: Math.max(0, Math.floor(Number(parsed.base.wood) || 0)),
+        ore: Math.max(0, Math.floor(Number(parsed.base.ore) || 0)),
+      },
+      award: {
+        gold: Math.max(0, Math.floor(Number(parsed.award.gold) || 0)),
+        wood: Math.max(0, Math.floor(Number(parsed.award.wood) || 0)),
+        ore: Math.max(0, Math.floor(Number(parsed.award.ore) || 0)),
+      },
+    };
+  } catch {
+    return null;
+  }
+}
+
+function saveBattleLootSnapshot(sessionId, attackerId, defenderId, defenderResources, rewardProfile) {
+  const snapshot = calculateRaidLootSnapshot(attackerId, defenderResources, rewardProfile);
+  stmts.setBattleSessionLootSnapshot.run(
+    JSON.stringify(snapshot),
+    sessionId,
+    attackerId,
+    defenderId,
+  );
+  return snapshot;
+}
+
 function isBotPlayer(playerId) {
   if (!playerId) return false;
   return Number(stmts.getPlayerById.get(playerId)?.is_bot || 0) === 1;
@@ -9847,11 +9943,19 @@ function findEnemy(playerId) {
   } catch (e) {
     console.warn('[matchmaking] failed to record raid match:', e.message);
   }
+  const lootSnapshot = saveBattleLootSnapshot(
+    sessionId,
+    playerId,
+    best.id,
+    resources,
+    getRaidRewardProfile(sessionId),
+  );
   return {
     id: best.id,
     name: best.name,
     trophies: best.trophies,
     level: best.level,
+    town_hall_level: repairedBase.town_hall_level,
     is_bot: best.is_bot,
     matchmaking: {
       target_is_bot: best.is_bot,
@@ -9871,6 +9975,7 @@ function findEnemy(playerId) {
     },
     buildings,
     resources,
+    loot_preview: lootSnapshot.award,
     attacker_resources: attackerResources,
     attack_cost_gold: attackCostGold,
     battle_session_id: sessionId,
@@ -9999,6 +10104,13 @@ function findRankedEnemy(playerId, tournamentId) {
       dayUtc,
       attackNumber
     );
+    const lootSnapshot = saveBattleLootSnapshot(
+      sessionId,
+      playerId,
+      best.id,
+      resources,
+      { is_bot: false, loot_multiplier: 1 },
+    );
     const reservation = rankedRaids.reserveRankedRaid(db, {
       battleSessionId: sessionId,
       tournamentId: tid,
@@ -10014,6 +10126,7 @@ function findRankedEnemy(playerId, tournamentId) {
       name: best.name,
       trophies: Number(best.tournament_trophies || 0),
       level: best.level,
+      town_hall_level: repairedBase.town_hall_level,
       is_bot: 0,
       matchmaking: {
         target_is_bot: false,
@@ -10025,6 +10138,7 @@ function findRankedEnemy(playerId, tournamentId) {
       },
       buildings,
       resources,
+      loot_preview: lootSnapshot.award,
       attacker_resources: attackerResources,
       attack_cost_gold: attackCostGold,
       battle_session_id: sessionId,
@@ -10201,6 +10315,13 @@ function findEnemyByName(playerId, rawTargetName) {
       };
     }
     stmts.createBattleSession.run(sessionId, playerId, target.id, reservedUntil);
+    const lootSnapshot = saveBattleLootSnapshot(
+      sessionId,
+      playerId,
+      target.id,
+      resources,
+      { is_bot: false, loot_multiplier: 1 },
+    );
     return {
       targeted: true,
       requested_name: resolved.requested_name,
@@ -10208,8 +10329,10 @@ function findEnemyByName(playerId, rawTargetName) {
       name: target.name,
       trophies: target.trophies,
       level: target.level,
+      town_hall_level: getTownHallLevel(target.id),
       buildings,
       resources,
+      loot_preview: lootSnapshot.award,
       attacker_resources: attackerResources,
       normal_attack_cost_gold: normalAttackCostGold,
       targeted_attack_multiplier: TARGETED_ATTACK_COST_MULTIPLIER,
@@ -10351,6 +10474,13 @@ function startRevengeBattle(playerId, sourceBattleId) {
       };
     }
     stmts.createBattleSession.run(sessionId, playerId, target.id, reservedUntil);
+    const lootSnapshot = saveBattleLootSnapshot(
+      sessionId,
+      playerId,
+      target.id,
+      resources,
+      { is_bot: false, loot_multiplier: 1 },
+    );
     stmts.insertRevengeUse.run(playerId, target.id, battleId, sessionId);
 
     return {
@@ -10360,8 +10490,10 @@ function startRevengeBattle(playerId, sourceBattleId) {
       name: target.name,
       trophies: target.trophies,
       level: target.level,
+      town_hall_level: getTownHallLevel(target.id),
       buildings,
       resources,
+      loot_preview: lootSnapshot.award,
       attacker_resources: attackerResources,
       attack_cost_gold: attackCostGold,
       battle_session_id: sessionId,
@@ -10880,8 +11012,6 @@ function buyShip(playerId, buildingId) {
   return { success: true, resources: getResources(playerId) };
 }
 
-const LOOT_PERCENT = 0.15;
-
 const RAID_ATTACK_COST_GOLD = 300;
 const TARGETED_ATTACK_COST_MULTIPLIER = 1;
 
@@ -10976,18 +11106,27 @@ const _battleVictoryTxn = db.transaction((attackerId, defenderId, battleSessionI
     return { error: 'Already attacked this player recently' };
   }
 
-  // Calculate loot — 30% of defender's resources (floored to whole numbers)
+  // Calculate the exact reward that was shown when this battle was reserved.
   const rewardProfile = getRaidRewardProfile(battleSessionId);
-  const lootPercent = LOOT_PERCENT * rewardProfile.loot_multiplier;
-  const lootGold = Math.floor((defender.gold || 0) * lootPercent);
-  const lootWood = Math.floor((defender.wood || 0) * lootPercent);
-  const lootOre = Math.floor((defender.ore || 0) * lootPercent);
-
-  const boostedLoot = applyAltarProsperityResourceBonus(attackerId, {
-    gold: lootGold,
-    wood: lootWood,
-    ore: lootOre,
-  });
+  // The preview is frozen when matchmaking starts. Reusing it here keeps the
+  // bot reward shown during battle identical to the final payout.
+  const frozenLoot = parseRaidLootSnapshot(sessionCheck.session?.loot_snapshot_json)
+    || calculateRaidLootSnapshot(attackerId, defender, rewardProfile);
+  const lootGold = frozenLoot.base.gold;
+  const lootWood = frozenLoot.base.wood;
+  const lootOre = frozenLoot.base.ore;
+  const boostedLoot = {
+    gold: frozenLoot.award.gold,
+    wood: frozenLoot.award.wood,
+    ore: frozenLoot.award.ore,
+    base: frozenLoot.base,
+    bonus: frozenLoot.prosperity_bonus || {
+      gold: Math.max(0, frozenLoot.award.gold - frozenLoot.base.gold),
+      wood: Math.max(0, frozenLoot.award.wood - frozenLoot.base.wood),
+      ore: Math.max(0, frozenLoot.award.ore - frozenLoot.base.ore),
+    },
+    prosperity_bonus_pct: Number(frozenLoot.prosperity_bonus_pct) || 0,
+  };
 
   // Transfer resources. The defender loses the base raid loot; Prosperity
   // creates the extra resources for the attacker.
@@ -11811,6 +11950,332 @@ function getBattleRiskForPlayer(playerId) {
   };
 }
 
+const TROOP_BALANCE_LABELS = {
+  knight: 'Knight',
+  mage: 'Mage',
+  wind_mage: 'Wind Mage',
+  necromancer: 'Necromancer',
+  archer: 'Archer',
+  pea_shooter: 'Pea Shooter',
+  mimic: 'Barrel',
+  horror: 'Horror',
+  mechanical_dragon: 'Mechanical Dragon',
+  ice_golem: 'Ice Golem',
+  demon_king: 'Demon King',
+  fire_dragon: 'Fire Dragon',
+};
+
+function troopBalanceLabel(troopType) {
+  const key = normalizeTroopTypeKey(troopType);
+  if (TROOP_BALANCE_LABELS[key]) return TROOP_BALANCE_LABELS[key];
+  return key
+    .split('_')
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function replayActions(replayData) {
+  if (Array.isArray(replayData)) return replayData;
+  return Array.isArray(replayData?.actions) ? replayData.actions : [];
+}
+
+function replayDeployedTroops(replayData) {
+  const deployed = [];
+  for (const action of replayActions(replayData)) {
+    if (action?.type === 'deploy_troop') {
+      deployed.push(action.troop || action.troop_entry || action.troopType);
+      continue;
+    }
+    if (action?.type !== 'place_ship') continue;
+    if (Array.isArray(action.troops)) {
+      deployed.push(...action.troops);
+    } else {
+      deployed.push(action.troop || action.troop_entry || action.troopType);
+    }
+  }
+  return deployed
+    .map((troopType) => String(troopType || '').split(':')[0])
+    .map(normalizeTroopTypeKey)
+    .filter((troopType) => TROOP_DEFS[troopType] && !DISABLED_TROOP_TYPES.has(troopType));
+}
+
+function newTroopBalanceBucket(identity = {}) {
+  return {
+    ...identity,
+    battles: 0,
+    wins: 0,
+    losses: 0,
+    units_deployed: 0,
+    town_hall_damage_sum: 0,
+    town_hall_damage_samples: 0,
+    buildings_destroyed_sum: 0,
+    buildings_destroyed_samples: 0,
+    duration_sum: 0,
+    duration_samples: 0,
+  };
+}
+
+function addTroopBalanceBattle(bucket, battle, unitsDeployed) {
+  bucket.battles += 1;
+  bucket.wins += battle.result === 'victory' ? 1 : 0;
+  bucket.losses += battle.result === 'defeat' ? 1 : 0;
+  bucket.units_deployed += unitsDeployed;
+  if (Number.isFinite(battle.townHallDamage)) {
+    bucket.town_hall_damage_sum += battle.townHallDamage;
+    bucket.town_hall_damage_samples += 1;
+  }
+  if (Number.isFinite(battle.buildingsDestroyed)) {
+    bucket.buildings_destroyed_sum += battle.buildingsDestroyed;
+    bucket.buildings_destroyed_samples += 1;
+  }
+  if (Number.isFinite(battle.durationSec)) {
+    bucket.duration_sum += battle.durationSec;
+    bucket.duration_samples += 1;
+  }
+}
+
+function troopBalanceSampleStatus(battles) {
+  if (battles >= 30) return 'reliable';
+  if (battles >= 10) return 'directional';
+  return 'low_sample';
+}
+
+function troopBalanceSignal(battles, winRate, baselineWinRate) {
+  if (battles < 10 || !Number.isFinite(winRate) || !Number.isFinite(baselineWinRate)) {
+    return 'insufficient_sample';
+  }
+  const delta = winRate - baselineWinRate;
+  if (winRate >= 0.65 && delta >= 0.08) return 'high_win';
+  if (winRate <= 0.45 && delta <= -0.08) return 'low_win';
+  return 'neutral';
+}
+
+function roundedTroopMetric(value, digits = 6) {
+  return Number.isFinite(value) ? Number(value.toFixed(digits)) : null;
+}
+
+function finalizeTroopBalanceBucket(bucket, baselineWinRate, analyzedBattles) {
+  const battles = Number(bucket.battles) || 0;
+  const winRate = battles > 0 ? bucket.wins / battles : null;
+  return {
+    ...Object.fromEntries(
+      Object.entries(bucket).filter(([key]) => !key.endsWith('_sum') && !key.endsWith('_samples')),
+    ),
+    battle_share: analyzedBattles > 0 ? roundedTroopMetric(battles / analyzedBattles) : 0,
+    win_rate: roundedTroopMetric(winRate),
+    win_rate_delta: Number.isFinite(winRate) && Number.isFinite(baselineWinRate)
+      ? roundedTroopMetric(winRate - baselineWinRate)
+      : null,
+    avg_deployed_per_battle: battles > 0
+      ? roundedTroopMetric(bucket.units_deployed / battles, 2)
+      : 0,
+    avg_town_hall_damage: bucket.town_hall_damage_samples > 0
+      ? roundedTroopMetric(bucket.town_hall_damage_sum / bucket.town_hall_damage_samples)
+      : null,
+    avg_buildings_destroyed: bucket.buildings_destroyed_samples > 0
+      ? roundedTroopMetric(bucket.buildings_destroyed_sum / bucket.buildings_destroyed_samples, 2)
+      : null,
+    avg_duration_sec: bucket.duration_samples > 0
+      ? roundedTroopMetric(bucket.duration_sum / bucket.duration_samples, 2)
+      : null,
+    sample_status: troopBalanceSampleStatus(battles),
+    balance_signal: troopBalanceSignal(battles, winRate, baselineWinRate),
+  };
+}
+
+function getTroopBalanceAnalytics(days = 7, options = {}) {
+  const safeDays = Math.max(1, Math.min(90, Math.trunc(Number(days) || 7)));
+  const replayLimit = Math.max(100, Math.min(10_000, Math.trunc(Number(options.limit) || 5000)));
+  const windowParam = `-${safeDays} days`;
+  const acceptedReplayCount = Number(db.prepare(`
+    SELECT COUNT(*) AS n
+    FROM battle_replays
+    WHERE created_at > datetime('now', ?)
+      AND LOWER(COALESCE(verified_result, '')) IN ('accepted', 'victory')
+  `).get(windowParam)?.n || 0);
+  const rows = db.prepare(`
+    SELECT id, attacker_id, claimed_result, verified_result, replay_data,
+           sim_th_hp_pct, sim_buildings_destroyed, duration_sec, created_at
+    FROM battle_replays
+    WHERE created_at > datetime('now', ?)
+      AND LOWER(COALESCE(verified_result, '')) IN ('accepted', 'victory')
+    ORDER BY id DESC
+    LIMIT ?
+  `).all(windowParam, replayLimit);
+  const matchmakingRows = db.prepare(`
+    SELECT battle_session_id, result, attacker_th, defender_th
+    FROM raid_matchmaking
+    WHERE created_at > datetime('now', ?)
+      AND battle_session_id IS NOT NULL
+    ORDER BY id DESC
+    LIMIT ?
+  `).all(windowParam, Math.min(20_000, replayLimit * 2));
+  const matchmakingBySession = new Map(
+    matchmakingRows.map((row) => [normalizeBattleSessionId(row.battle_session_id), row]),
+  );
+  const unitBuckets = new Map();
+  const pairBuckets = new Map();
+  const rosterBuckets = new Map();
+  const unitTownHallBuckets = new Map();
+  const townHallTotals = new Map();
+  let parsedReplays = 0;
+  let invalidReplayJson = 0;
+  let skippedUndecided = 0;
+  let skippedNoTroops = 0;
+  let analyzedBattles = 0;
+  let wins = 0;
+  let losses = 0;
+
+  for (const row of rows) {
+    let replayData = null;
+    try {
+      replayData = JSON.parse(row.replay_data || 'null');
+      parsedReplays += 1;
+    } catch {
+      invalidReplayJson += 1;
+      continue;
+    }
+    const sessionId = battleSessionIdFromReplayData(replayData);
+    const matchmaking = sessionId ? matchmakingBySession.get(sessionId) : null;
+    const matchmakingResult = String(matchmaking?.result || '').toLowerCase();
+    const claimedResult = String(row.claimed_result || '').toLowerCase();
+    const result = matchmaking
+      ? (['victory', 'defeat'].includes(matchmakingResult) ? matchmakingResult : '')
+      : (['victory', 'defeat'].includes(claimedResult) ? claimedResult : '');
+    if (!result) {
+      skippedUndecided += 1;
+      continue;
+    }
+    const troops = replayDeployedTroops(replayData);
+    if (!troops.length) {
+      skippedNoTroops += 1;
+      continue;
+    }
+    const counts = new Map();
+    for (const troopType of troops) counts.set(troopType, (counts.get(troopType) || 0) + 1);
+    const roster = Array.from(counts.keys()).sort();
+    const townHallLevel = Math.max(0, Math.trunc(Number(matchmaking?.attacker_th) || 0));
+    const townHallHpPct = row.sim_th_hp_pct == null ? NaN : Number(row.sim_th_hp_pct);
+    const buildingsDestroyed = row.sim_buildings_destroyed == null
+      ? NaN
+      : Number(row.sim_buildings_destroyed);
+    const durationSec = row.duration_sec == null ? NaN : Number(row.duration_sec);
+    const battle = {
+      result,
+      townHallDamage: Number.isFinite(townHallHpPct)
+        ? Math.max(0, Math.min(1, 1 - townHallHpPct))
+        : null,
+      buildingsDestroyed: Number.isFinite(buildingsDestroyed) ? Math.max(0, buildingsDestroyed) : null,
+      durationSec: Number.isFinite(durationSec) && durationSec >= 0 ? durationSec : null,
+    };
+
+    analyzedBattles += 1;
+    wins += result === 'victory' ? 1 : 0;
+    losses += result === 'defeat' ? 1 : 0;
+    if (townHallLevel > 0) {
+      const total = townHallTotals.get(townHallLevel) || { battles: 0, wins: 0 };
+      total.battles += 1;
+      total.wins += result === 'victory' ? 1 : 0;
+      townHallTotals.set(townHallLevel, total);
+    }
+
+    for (const [troopType, deployedCount] of counts.entries()) {
+      if (!unitBuckets.has(troopType)) {
+        unitBuckets.set(troopType, newTroopBalanceBucket({
+          troop_type: troopType,
+          label: troopBalanceLabel(troopType),
+        }));
+      }
+      addTroopBalanceBattle(unitBuckets.get(troopType), battle, deployedCount);
+      if (townHallLevel > 0) {
+        const townHallKey = `${townHallLevel}:${troopType}`;
+        if (!unitTownHallBuckets.has(townHallKey)) {
+          unitTownHallBuckets.set(townHallKey, newTroopBalanceBucket({
+            town_hall_level: townHallLevel,
+            troop_type: troopType,
+            label: troopBalanceLabel(troopType),
+          }));
+        }
+        addTroopBalanceBattle(unitTownHallBuckets.get(townHallKey), battle, deployedCount);
+      }
+    }
+
+    for (let left = 0; left < roster.length; left += 1) {
+      for (let right = left + 1; right < roster.length; right += 1) {
+        const troopA = roster[left];
+        const troopB = roster[right];
+        const pairKey = `${troopA}+${troopB}`;
+        if (!pairBuckets.has(pairKey)) {
+          pairBuckets.set(pairKey, newTroopBalanceBucket({
+            troop_a: troopA,
+            troop_b: troopB,
+            label: `${troopBalanceLabel(troopA)} + ${troopBalanceLabel(troopB)}`,
+          }));
+        }
+        addTroopBalanceBattle(pairBuckets.get(pairKey), battle, troops.length);
+      }
+    }
+
+    const rosterKey = roster.join('+');
+    if (!rosterBuckets.has(rosterKey)) {
+      rosterBuckets.set(rosterKey, newTroopBalanceBucket({
+        roster,
+        label: roster.map(troopBalanceLabel).join(' + '),
+      }));
+    }
+    addTroopBalanceBattle(rosterBuckets.get(rosterKey), battle, troops.length);
+  }
+
+  const overallWinRate = analyzedBattles > 0 ? wins / analyzedBattles : null;
+  const byUnit = Array.from(unitBuckets.values())
+    .map((bucket) => finalizeTroopBalanceBucket(bucket, overallWinRate, analyzedBattles))
+    .sort((left, right) => right.battles - left.battles || right.units_deployed - left.units_deployed);
+  const byPair = Array.from(pairBuckets.values())
+    .map((bucket) => finalizeTroopBalanceBucket(bucket, overallWinRate, analyzedBattles))
+    .sort((left, right) => right.battles - left.battles || (right.win_rate || 0) - (left.win_rate || 0));
+  const byRoster = Array.from(rosterBuckets.values())
+    .map((bucket) => finalizeTroopBalanceBucket(bucket, overallWinRate, analyzedBattles))
+    .sort((left, right) => right.battles - left.battles || (right.win_rate || 0) - (left.win_rate || 0))
+    .slice(0, 100);
+  const byUnitTownHall = Array.from(unitTownHallBuckets.values())
+    .map((bucket) => {
+      const townHallTotal = townHallTotals.get(bucket.town_hall_level);
+      const townHallWinRate = townHallTotal?.battles > 0 ? townHallTotal.wins / townHallTotal.battles : null;
+      return {
+        ...finalizeTroopBalanceBucket(bucket, townHallWinRate, townHallTotal?.battles || 0),
+        town_hall_win_rate: roundedTroopMetric(townHallWinRate),
+      };
+    })
+    .sort((left, right) => left.town_hall_level - right.town_hall_level
+      || right.battles - left.battles
+      || left.label.localeCompare(right.label));
+
+  return {
+    days: safeDays,
+    accepted_replays: acceptedReplayCount,
+    loaded_replays: rows.length,
+    parsed_replays: parsedReplays,
+    analyzed_battles: analyzedBattles,
+    invalid_replay_json: invalidReplayJson,
+    skipped_undecided: skippedUndecided,
+    skipped_no_troops: skippedNoTroops,
+    capped: acceptedReplayCount > rows.length,
+    replay_limit: replayLimit,
+    wins,
+    losses,
+    overall_win_rate: roundedTroopMetric(overallWinRate),
+    sample_thresholds: {
+      directional: 10,
+      reliable: 30,
+    },
+    by_unit: byUnit,
+    by_pair: byPair,
+    by_roster: byRoster,
+    by_unit_town_hall: byUnitTownHall,
+  };
+}
+
 function getGlobalMatchmakingStats(days = 7) {
   const safeDays = Math.max(1, Math.min(90, Math.trunc(Number(days) || 7)));
   const params = [`-${safeDays} days`];
@@ -11927,6 +12392,7 @@ function getGlobalMatchmakingStats(days = 7) {
     captcha_required_count: battleRiskPlayers.length,
     bot_templates: botTemplateInventory,
     active_bot_targets: activeBotTargets,
+    troop_balance: getTroopBalanceAnalytics(safeDays),
   };
 }
 
@@ -12076,6 +12542,7 @@ module.exports = {
   finishBattleSession,
   getPlayerMatchmakingStats,
   getGlobalMatchmakingStats,
+  getTroopBalanceAnalytics,
   getBattleRiskPlayers,
   getBattleRiskForPlayer,
   BATTLE_RISK_THRESHOLDS,

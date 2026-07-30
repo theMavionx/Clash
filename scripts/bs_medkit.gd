@@ -1,11 +1,12 @@
-## Main Ship level 6 healing field. The ability shares energy with cannon and
-## rally, is usable once per battle, and records one deterministic replay event.
+## Main Ship level 6 healing field. The ability shares energy with the other
+## ship actions and gets one energy more expensive after each use.
 class_name BSMedkit
 extends RefCounted
 
 const MEDKIT_UNLOCK_SHIP_LEVEL: int = 6
 const MEDKIT_ENERGY_COST: int = 6
-const MEDKIT_DURATION_SEC: float = 14.0
+const MEDKIT_ENERGY_COST_INCREMENT: int = 1
+const MEDKIT_DURATION_SEC: float = 8.0
 const MEDKIT_RADIUS: float = 0.72
 const MEDKIT_TICK_SEC: float = 0.25
 const MEDKIT_HEAL_PER_TICK: int = 12
@@ -16,10 +17,12 @@ const MEDKIT_DISK_ALPHA_MAX: float = 0.44
 var bs: Node3D
 var _ship_level: int = 1
 var _medkit_mode: bool = false
-var _medkit_used: bool = false
+var _medkit_uses: int = 0
 var _medkit_paused_attack: bool = false
 var _medkit_label: Label = null
-var _active_zone: Dictionary = {}
+var _active_zones: Array[Dictionary] = []
+var _simulation_time: float = 0.0
+var _last_heal_at_by_troop: Dictionary = {}
 
 
 func init(building_system: Node3D) -> BSMedkit:
@@ -29,46 +32,59 @@ func init(building_system: Node3D) -> BSMedkit:
 
 func reset(ship_level: int = 1) -> void:
 	_ship_level = clampi(ship_level, 1, 10)
-	_medkit_used = false
+	_medkit_uses = 0
+	_simulation_time = 0.0
+	_last_heal_at_by_troop.clear()
 	_exit_medkit_mode()
-	_clear_zone()
+	_clear_zones()
 
 
 func is_unlocked() -> bool:
 	return _ship_level >= MEDKIT_UNLOCK_SHIP_LEVEL
 
 
-func is_used() -> bool:
-	return _medkit_used
-
-
 func energy_cost() -> int:
-	return MEDKIT_ENERGY_COST
+	return MEDKIT_ENERGY_COST + _medkit_uses * MEDKIT_ENERGY_COST_INCREMENT
 
 
 func process(delta: float) -> void:
-	if _active_zone.is_empty():
-		return
-	var root: Node3D = _active_zone.get("root", null)
-	if not is_instance_valid(root):
-		_active_zone.clear()
-		return
-	var age: float = float(_active_zone.get("age", 0.0)) + delta
-	var tick_accum: float = float(_active_zone.get("tick_accum", 0.0)) + delta
-	_active_zone["age"] = age
-	while tick_accum + 0.000001 >= MEDKIT_TICK_SEC:
-		tick_accum -= MEDKIT_TICK_SEC
-		_heal_troops(root.global_position)
-	_active_zone["tick_accum"] = tick_accum
-	_pulse_zone(age)
-	if age >= MEDKIT_DURATION_SEC:
-		_clear_zone()
+	_simulation_time += delta
+	var heal_events: Array[Dictionary] = []
+	for index in range(_active_zones.size() - 1, -1, -1):
+		var zone: Dictionary = _active_zones[index]
+		var root: Node3D = zone.get("root", null)
+		if not is_instance_valid(root):
+			_active_zones.remove_at(index)
+			continue
+		var age: float = float(zone.get("age", 0.0)) + delta
+		var tick_accum: float = float(zone.get("tick_accum", 0.0)) + delta
+		zone["age"] = age
+		while tick_accum + 0.000001 >= MEDKIT_TICK_SEC:
+			tick_accum -= MEDKIT_TICK_SEC
+			var tick_age := age - tick_accum
+			if tick_age <= MEDKIT_DURATION_SEC + 0.000001:
+				heal_events.append({
+					"time": _simulation_time - tick_accum,
+					"center": root.global_position,
+				})
+		zone["tick_accum"] = tick_accum
+		_pulse_zone(zone, age)
+		if age >= MEDKIT_DURATION_SEC:
+			_remove_zone(index)
+	heal_events.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		return float(a.get("time", 0.0)) < float(b.get("time", 0.0))
+	)
+	for event in heal_events:
+		_heal_troops(
+			event.get("center", Vector3.ZERO),
+			float(event.get("time", _simulation_time))
+		)
 
 
 func _enter_medkit_mode() -> void:
-	if not is_unlocked() or _medkit_used or not bs._cannon:
+	if not is_unlocked() or not bs._cannon:
 		return
-	if bs._cannon._cannon_energy < MEDKIT_ENERGY_COST:
+	if bs._cannon._cannon_energy < energy_cost():
 		return
 	if bs._cannon._ship_cannon_mode:
 		bs._cannon._exit_ship_cannon_mode()
@@ -121,12 +137,13 @@ func _exit_medkit_mode() -> void:
 
 
 func _drop_medkit(world_pos: Vector3) -> bool:
-	if not is_unlocked() or _medkit_used or not bs._cannon:
+	if not is_unlocked() or not bs._cannon:
 		return false
-	if bs._cannon._cannon_energy < MEDKIT_ENERGY_COST:
+	var cost := energy_cost()
+	if bs._cannon._cannon_energy < cost:
 		return false
-	bs._cannon._cannon_energy -= MEDKIT_ENERGY_COST
-	_medkit_used = true
+	bs._cannon._cannon_energy -= cost
+	_medkit_uses += 1
 	var clamped_pos: Vector3 = BaseTroop._clamp_to_island(world_pos)
 	var pos := Vector3(clamped_pos.x, bs.grid_y + 0.012, clamped_pos.z)
 	_activate_zone(pos)
@@ -150,7 +167,7 @@ func _drop_medkit(world_pos: Vector3) -> bool:
 
 
 func replay_drop_medkit(world_pos: Vector3) -> void:
-	_medkit_used = true
+	_medkit_uses += 1
 	var clamped_pos: Vector3 = BaseTroop._clamp_to_island(world_pos)
 	var pos := Vector3(clamped_pos.x, bs.grid_y + 0.012, clamped_pos.z)
 	_activate_zone(pos)
@@ -163,7 +180,7 @@ func replay_drop_medkit(world_pos: Vector3) -> void:
 		})
 
 
-func _heal_troops(center: Vector3) -> void:
+func _heal_troops(center: Vector3, heal_time: float) -> void:
 	var radius_sq: float = MEDKIT_RADIUS * MEDKIT_RADIUS
 	for troop_value in BaseTroop._get_troops_cached():
 		var troop: Node3D = troop_value as Node3D
@@ -175,7 +192,15 @@ func _heal_troops(center: Vector3) -> void:
 		if offset.x * offset.x + offset.z * offset.z > radius_sq:
 			continue
 		if troop.has_method("heal"):
+			var troop_id := troop.get_instance_id()
+			var last_heal_at := float(
+				_last_heal_at_by_troop.get(troop_id, -MEDKIT_TICK_SEC)
+			)
+			if heal_time - last_heal_at < MEDKIT_TICK_SEC - 0.000001:
+				continue
 			var healed_amount := int(troop.call("heal", MEDKIT_HEAL_PER_TICK))
+			if healed_amount > 0:
+				_last_heal_at_by_troop[troop_id] = heal_time
 			if (
 				healed_amount > 0
 				and troop.has_method("show_healing_feedback")
@@ -187,7 +212,6 @@ func _heal_troops(center: Vector3) -> void:
 
 
 func _activate_zone(pos: Vector3, visual_parent: Node = null) -> void:
-	_clear_zone()
 	var root := Node3D.new()
 	root.name = "MedkitHealingField"
 	var parent: Node = visual_parent
@@ -245,19 +269,19 @@ func _activate_zone(pos: Vector3, visual_parent: Node = null) -> void:
 		bar.material_override = cross_mat
 		root.add_child(bar)
 
-	_active_zone = {
+	_active_zones.append({
 		"root": root,
 		"disk_mat": disk_mat,
 		"ring_mat": ring_mat,
 		"age": 0.0,
 		"tick_accum": 0.0,
-	}
+	})
 
 
-func _pulse_zone(age: float) -> void:
+func _pulse_zone(zone: Dictionary, age: float) -> void:
 	var pulse: float = 0.5 + 0.5 * sin(age * 4.2)
-	var disk_mat: StandardMaterial3D = _active_zone.get("disk_mat", null)
-	var ring_mat: StandardMaterial3D = _active_zone.get("ring_mat", null)
+	var disk_mat: StandardMaterial3D = zone.get("disk_mat", null)
+	var ring_mat: StandardMaterial3D = zone.get("ring_mat", null)
 	if disk_mat:
 		disk_mat.albedo_color = Color(
 			MEDKIT_COLOR.r,
@@ -269,10 +293,16 @@ func _pulse_zone(age: float) -> void:
 		ring_mat.albedo_color = Color(MEDKIT_COLOR.r, MEDKIT_COLOR.g, MEDKIT_COLOR.b, 0.62 + pulse * 0.34)
 
 
-func _clear_zone() -> void:
-	if _active_zone.is_empty():
+func _remove_zone(index: int) -> void:
+	if index < 0 or index >= _active_zones.size():
 		return
-	var root: Node = _active_zone.get("root", null)
+	var zone: Dictionary = _active_zones[index]
+	var root: Node = zone.get("root", null)
 	if is_instance_valid(root):
 		root.queue_free()
-	_active_zone.clear()
+	_active_zones.remove_at(index)
+
+
+func _clear_zones() -> void:
+	for index in range(_active_zones.size() - 1, -1, -1):
+		_remove_zone(index)
