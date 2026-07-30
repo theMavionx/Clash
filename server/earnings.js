@@ -2123,33 +2123,12 @@ async function fetchLighterEarnings() {
   };
 }
 
-async function fetchDangoEarnings() {
-  const feeBps = Math.max(0, Number(process.env.DANGO_BUILDER_FEE_BPS || 0));
-  const local = readVerifiedFuturesDexStats('dango', 'dango_ws');
-  const estimated = local.volume_usd * (feeBps / 10000);
-  return {
-    ok: true,
-    earned_usd: 0,
-    estimated_fee_usd: roundUsd(estimated),
-    volume_usd: roundUsd(local.volume_usd),
-    volume_24h_usd: roundUsd(local.volume_24h_usd),
-    trades: local.trades,
-    trades_24h: local.trades_24h,
-    traders: local.traders,
-    fee_bps: feeBps,
-    latest_fill_at: local.latest_fill_at,
-    source_detail: 'dango_ws_verified_fills',
-    note: `Dango fills are indexed from Dango perpsEvents for game rewards. Exact Dango builder/referral earnings are not configured; local ${feeBps}bps volume estimate is shown only for comparison.`,
-  };
-}
-
 // Revenue analytics for admin: fast local stats by time window and by
 // tournament. Exact cumulative readers above stay authoritative where a DEX
 // exposes them; this section focuses on comparable volume x rate reporting.
 const ANALYTICS_DEXES = [
   { key: 'pacifica', label: 'Pacifica' },
   { key: 'decibel', label: 'Decibel' },
-  { key: 'dango', label: 'Dango' },
   { key: 'avantis', label: 'Avantis' },
   { key: 'gmx', label: 'GMX' },
   { key: 'ostium', label: 'Ostium' },
@@ -2220,7 +2199,6 @@ function decibelFeeBpsForDate(value) {
 
 function tradeSourceWhereForAnalytics(dex) {
   if (dex === 'decibel') return "verified_source IN ('decibel_fill', 'server')";
-  if (dex === 'dango') return "verified_source = 'dango_ws'";
   if (dex === 'monad') return "verified_source IN ('perpl_api', 'perpl_ws')";
   if (dex === 'hyperliquid') return "verified_source = 'hyperliquid_api'";
   if (dex === 'grvt') return "verified_source = 'grvt_builder'";
@@ -2815,7 +2793,6 @@ const FAILED_EARNINGS_META = {
 const EARNINGS_READER_CONFIG = {
   pacifica: { source: 'pacifica_builder_trades_sum', read: () => fetchPacificaEarnings() },
   decibel: { source: 'decibel_account_overview_fee_income', read: () => fetchDecibelEarnings() },
-  dango: { source: 'dango_ws_verified_fills', read: () => fetchDangoEarnings() },
   avantis: { source: 'avantis_code_owner_onchain_estimate_only', read: () => fetchAvantisEarnings() },
   gmx: { source: 'gmx_referral_tier_onchain_estimate_only', read: () => fetchGmxEarnings() },
   ostium: { source: 'arbitrum_usdc_balance_of_builder', read: ({ mainDb }) => fetchOstiumEarnings({ mainDb }) },
@@ -2835,7 +2812,6 @@ const EARNINGS_READER_CONFIG = {
 const EARNINGS_DEX_ORDER = [
   'pacifica',
   'decibel',
-  'dango',
   'avantis',
   'gmx',
   'ostium',

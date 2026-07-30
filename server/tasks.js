@@ -98,7 +98,6 @@ const TASK_START_TRADE_GRACE_MS = Math.max(0, Number(process.env.TASK_START_TRAD
 const FUTURES_TASK_DEXES = new Set([
   'avantis',
   'decibel',
-  'dango',
   'gmx',
   'ostium',
   'monad',

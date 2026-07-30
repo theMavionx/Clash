@@ -270,8 +270,12 @@ Latest local checkpoint:
 
 ## G-006 Dango Realtime Exchange Integration
 
-- Status: active
-- Priority: P0
+- Status: retired
+- Priority: none
+- Retirement note: Dango ceased operation. The selectable exchange, network
+  adapter, realtime worker, trading routes, reward import, and admin creation
+  paths were removed on 2026-07-30. Historical DB values remain supported for
+  audit and old tournament records.
 - Owner intent: add Dango as a full selectable futures exchange with fast
   WebSocket-backed fills so gold, quests, positions, orders, and tournament
   volume update without the long delays seen in polling-only integrations.

@@ -6,7 +6,6 @@ import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { usePacifica } from '../hooks/usePacifica';
 import { useAvantis } from '../hooks/useAvantis';
 import { useDecibel } from '../hooks/useDecibel';
-import { useDango } from '../hooks/useDango';
 import { useGmx } from '../hooks/useGmx';
 import { useMonad } from '../hooks/useMonad';
 import { usePhoenix } from '../hooks/usePhoenix';
@@ -95,7 +94,6 @@ const HOTSTUFF_FEE_BUFFER_RATE = 0.0001;
 const DEX_ERROR_LABELS = {
   avantis: 'Avantis',
   decibel: 'Decibel',
-  dango: 'Dango',
   flash: 'Flash',
   gmtrade: 'GMTrade',
   gmx: 'GMX',
@@ -116,7 +114,6 @@ const OPEN_TPSL_NATIVE_ORDER_ATTACH_DEXES = new Set(['avantis', 'decibel', 'flas
 const OPEN_TPSL_NATIVE_LIMIT_ATTACH_DEXES = new Set([...OPEN_TPSL_NATIVE_ORDER_ATTACH_DEXES, 'grvt', 'phoenix']);
 const OPEN_TPSL_POST_MARKET_DEXES = new Set([
   'decibel',
-  'dango',
   'gmx',
   'hotstuff',
   'hyperliquid',
@@ -963,15 +960,9 @@ function getPositionMetrics(pos, prices, leverageSettings = {}) {
   const isOstiumPosition = String(pos?.dex || '').toLowerCase() === 'ostium'
     || String(pos?.source || '').toLowerCase() === 'ostium'
     || String(pos?.pnl_source || '').toLowerCase() === 'ostium_api';
-  const isDangoPosition = String(pos?.dex || '').toLowerCase() === 'dango'
-    || String(pos?.source || '').toLowerCase() === 'dango'
-    || String(pos?.pnl_source || '').toLowerCase().startsWith('dango');
   const derivedPnl = markP ? (markP - entryP) * amt * (pos.side === 'bid' ? 1 : -1) : 0;
-  const dangoFunding = numOrNull(pos.unrealized_funding ?? pos.unrealizedFunding) || 0;
-  const rawPnlVal = isDangoPosition
-    ? (derivedPnl + dangoFunding)
-    : ((isHibachiPosition || isOstiumPosition) ? (providedPnl ?? 0) : (providedPnl ?? derivedPnl));
-  const pnlVal = isDust ? 0 : (isDangoPosition ? rawPnlVal : cleanSignedZero(rawPnlVal));
+  const rawPnlVal = (isHibachiPosition || isOstiumPosition) ? (providedPnl ?? 0) : (providedPnl ?? derivedPnl);
+  const pnlVal = isDust ? 0 : cleanSignedZero(rawPnlVal);
   const rawLev = displayLeverage(pos.leverage);
   const collateralLev = margin > 0 && posValueUsd > 0 ? Math.round((posValueUsd / margin) * 10) / 10 : null;
   const flashLev = isFlashPosition ? flashPositionDisplayLeverageStable(pos, posValueUsd, margin) : null;
@@ -1224,9 +1215,9 @@ function OrderPendingBadge() {
   );
 }
 
-const DANGO_PENDING_ACTION_TTL_MS = 120_000;
+const PENDING_ACTION_TTL_MS = 120_000;
 
-function dangoPhaseLabel(phase, fallback = 'Syncing...') {
+function pendingPhaseLabel(phase, fallback = 'Syncing...') {
   if (phase === 'preparing') return 'Preparing...';
   if (phase === 'signing') return 'Signing...';
   if (phase === 'confirming') return 'Confirming...';
@@ -1234,70 +1225,12 @@ function dangoPhaseLabel(phase, fallback = 'Syncing...') {
   return fallback;
 }
 
-function dangoPriceMatches(a, b) {
-  const left = Number(a);
-  const right = Number(b);
-  if (!Number.isFinite(left) || !Number.isFinite(right) || left <= 0 || right <= 0) return false;
-  return Math.abs(left - right) <= Math.max(0.01, Math.abs(right) * 0.00001);
-}
-
-function makeDangoPendingOrder(pos, kind, triggerPrice, phase, actionId) {
-  const price = Number(triggerPrice);
-  if (!Number.isFinite(price) || price <= 0) return null;
-  const symbol = String(pos?.symbol || pos?.s || '').toUpperCase();
-  const closeSide = positionCloseSide(pos);
-  return {
-    dex: 'dango',
-    symbol,
-    side: closeSide,
-    order_type: kind === 'tp' ? 'take_profit' : 'stop_loss',
-    type: kind === 'tp' ? 'take_profit' : 'stop_loss',
-    tpsl: kind === 'tp' ? 'take_profit' : 'stop_loss',
-    reduce_only: true,
-    amount: pos?.amount,
-    initial_amount: pos?.amount,
-    stop_price: String(price),
-    trigger_price: String(price),
-    price: String(price),
-    pair_index: pos?.pair_index,
-    pairIndex: pos?.pairIndex,
-    market_addr: pos?.market_addr,
-    position_id: pos?.position_id || pos?.positionId || pos?.id,
-    order_id: `dango-pending-${kind}-${actionId}`,
-    _optimistic: true,
-    _optimisticKey: `dango-pending-${kind}-${symbol}-${price}-${actionId}`,
-    _pendingPhase: phase,
-    _raw: { optimistic: true, phase },
-  };
-}
-
-function dangoPendingActionForPosition(actions, pos, kind) {
+function pendingActionForPosition(actions, pos, kind) {
   const key = positionStableKey(pos);
   return (actions || []).find(action => action.kind === kind && action.positionKey === key) || null;
 }
 
-function dangoPendingTpslConfirmed(action, orders) {
-  const expected = Array.isArray(action?.orders) ? action.orders : [];
-  if (!expected.length) return true;
-  return expected.every(pending => {
-    const pendingKind = orderTpslKind(pending);
-    const pendingPrice = orderTriggerPrice(pending);
-    const pendingSymbol = String(pending?.symbol || pending?.s || '').toUpperCase();
-    return (Array.isArray(orders) ? orders : []).some(order => {
-      if (isOrderPendingConfirmation(order)) return false;
-      const orderSymbol = String(order?.symbol || order?.s || '').toUpperCase();
-      if (pendingSymbol && orderSymbol && pendingSymbol !== orderSymbol) return false;
-      const displayType = orderDisplayType(order).toLowerCase();
-      const actualKind = orderTpslKind(order)
-        || (displayType.includes('profit') || displayType.includes('tp') ? 'tp' : '')
-        || (displayType.includes('stop') || displayType.includes('sl') ? 'sl' : '');
-      if (pendingKind && actualKind && pendingKind !== actualKind) return false;
-      return dangoPriceMatches(orderTriggerPrice(order), pendingPrice);
-    });
-  });
-}
-
-function dangoPendingCloseConfirmed(action, positions) {
+function pendingCloseConfirmed(action, positions) {
   const rows = Array.isArray(positions) ? positions : [];
   const originalKey = action?.positionKey || '';
   const current = rows.find(pos => positionStableKey(pos) === originalKey)
@@ -1826,54 +1759,6 @@ function orderStableKey(order, index) {
   const price = order?.price ?? order?.ip ?? order?.stop_price ?? order?.sp ?? order?.triggerPriceUi ?? order?.trigger_price_ui ?? '';
   const parts = [id, sym, side, type, pair, trade, price];
   return parts.some(part => part !== '' && part != null) ? parts.join('|') : `order:${index}`;
-}
-
-function dangoTradeVisibleSnapshot(positions, orders, symbol) {
-  const sym = String(symbol || '').toUpperCase();
-  const posRows = (Array.isArray(positions) ? positions : [])
-    .filter(pos => String(pos?.symbol || pos?.s || '').toUpperCase() === sym)
-    .map((pos, index) => {
-      const key = positionStableKey(pos) || `position:${index}:${String(pos?.side || '')}`;
-      return {
-        key,
-        amount: Number(pos?.amount ?? pos?.size ?? pos?.position ?? 0),
-        entry: Number(pos?.entry_price ?? pos?.entryPrice ?? 0),
-        side: String(pos?.side || pos?.d || '').toLowerCase(),
-      };
-    });
-  const orderRows = (Array.isArray(orders) ? orders : [])
-    .filter(order => String(order?.symbol || order?.s || '').toUpperCase() === sym)
-    .map((order, index) => {
-      const key = orderStableKey(order, index);
-      return {
-        key,
-        amount: Number(order?.amount ?? order?.size ?? 0),
-        price: Number(order?.price ?? order?.trigger_price ?? order?.stop_price ?? 0),
-        side: String(order?.side || order?.d || '').toLowerCase(),
-        type: String(order?.order_type || order?.type || '').toLowerCase(),
-      };
-    });
-  return {
-    positions: new Map(posRows.map(row => [row.key, row])),
-    orders: new Map(orderRows.map(row => [row.key, row])),
-  };
-}
-
-function dangoSnapshotChanged(before, after) {
-  if (!before || !after) return false;
-  for (const [key, row] of after.positions) {
-    const prev = before.positions.get(key);
-    if (!prev) return true;
-    if (Math.abs(Number(row.amount || 0) - Number(prev.amount || 0)) > 1e-9) return true;
-    if (Math.abs(Number(row.entry || 0) - Number(prev.entry || 0)) > 1e-6) return true;
-  }
-  for (const [key, row] of after.orders) {
-    const prev = before.orders.get(key);
-    if (!prev) return true;
-    if (Math.abs(Number(row.amount || 0) - Number(prev.amount || 0)) > 1e-9) return true;
-    if (Math.abs(Number(row.price || 0) - Number(prev.price || 0)) > 1e-6) return true;
-  }
-  return false;
 }
 
 function orderPositionSide(order) {
@@ -3359,7 +3244,7 @@ const BottomPanel = memo(function BottomPanel({
   filteredPositions, filteredOrders, orders, positions,
   prices, walletAddr, dataReady, leverageSettings,
   closePosition, cancelOrder, dex, loading, historyAccountAddr, markets,
-  dangoPendingActions = [], beginDangoPendingClose = () => null, removeDangoPendingAction = () => {},
+  pendingActions = [], beginPendingClose = () => null, removePendingAction = () => {},
 }) {
   const tpslOrders = Array.isArray(orders) ? orders : filteredOrders;
   // Avantis/Flash do not expose funding payments in the trading UI flow.
@@ -3421,7 +3306,7 @@ const BottomPanel = memo(function BottomPanel({
                   dustUsd,
                 } = getPositionMetrics(p, prices, leverageSettings);
                 const { tp, sl } = getPositionTpsl(p, tpslOrders);
-                const pendingClose = dangoPendingActionForPosition(dangoPendingActions, p, 'close');
+                const pendingClose = pendingActionForPosition(pendingActions, p, 'close');
                 return (
                   <tr key={positionStableKey(p) || i} style={S.tr}>
                     <td style={S.td}>{p.symbol}</td>
@@ -3443,7 +3328,7 @@ const BottomPanel = memo(function BottomPanel({
                         disabled={loading || !!pendingClose}
                         onClick={async () => {
                           const amount = dex === 'avantis' ? p.margin : p.amount;
-                          const pending = beginDangoPendingClose(p, amount, true);
+                          const pending = beginPendingClose(p, amount, true);
                           const result = await closePosition(
                             p.symbol,
                             p.side,
@@ -3451,11 +3336,9 @@ const BottomPanel = memo(function BottomPanel({
                             p.pair_index,
                             p.trade_index,
                             true,
-                            dex === 'dango'
-                              ? pending?.options
-                              : (dex === 'flash' ? { position: p, inputUsdUi: String(isDust ? dustUsd : tblPosValue) } : undefined),
+                            dex === 'flash' ? { position: p, inputUsdUi: String(isDust ? dustUsd : tblPosValue) } : undefined,
                           );
-                          if (result?.error && pending?.id) removeDangoPendingAction(pending.id);
+                          if (result?.error && pending?.id) removePendingAction(pending.id);
                         }}
                       >{pendingClose ? <ClosingButtonLabel text="" /> : loading ? <ClosingButtonLabel text="" /> : 'Close'}</button>
                     </td>
@@ -3589,7 +3472,6 @@ function FuturesPanel() {
   const pacificaHook = usePacifica();
   const avantisHook = useAvantis();
   const decibelHook = useDecibel();
-  const dangoHook = useDango();
   const gmxHook = useGmx();
   const monadHook = useMonad();
   const phoenixHook = usePhoenix();
@@ -3612,8 +3494,6 @@ function FuturesPanel() {
     ? avantisHook
     : dex === 'decibel'
     ? decibelHook
-    : dex === 'dango'
-    ? dangoHook
     : dex === 'gmx'
     ? gmxHook
     : dex === 'ostium'
@@ -3666,51 +3546,23 @@ function FuturesPanel() {
     refresh: refreshTrading,
   } = trading;
   const openedSortedPositions = useOpenedSortedPositions(positions);
-  const latestPositionsRef = useRef(positions);
-  const latestOrdersRef = useRef(orders);
-  useEffect(() => { latestPositionsRef.current = positions; }, [positions]);
-  useEffect(() => { latestOrdersRef.current = orders; }, [orders]);
-  const [dangoPendingActions, setDangoPendingActions] = useState([]);
-  const dangoPendingOrders = useMemo(
-    () => dangoPendingActions.flatMap(action => Array.isArray(action.orders) ? action.orders : []),
-    [dangoPendingActions],
-  );
-  const displayOrders = useMemo(
-    () => [...dangoPendingOrders, ...(Array.isArray(orders) ? orders : [])],
-    [dangoPendingOrders, orders],
-  );
+  const [pendingActions, setPendingActions] = useState([]);
+  const displayOrders = Array.isArray(orders) ? orders : [];
   const groupedDisplayOrders = useMemo(
     () => groupOrdersForList(displayOrders, positions),
     [displayOrders, positions],
   );
-  const updateDangoPendingAction = useCallback((id, patch) => {
-    setDangoPendingActions(current => current.map(action => (
-      action.id === id
-        ? {
-          ...action,
-          ...patch,
-          orders: Array.isArray(action.orders)
-            ? action.orders.map(order => ({
-              ...order,
-              _pendingPhase: patch.phase || order._pendingPhase,
-              _raw: { ...(order._raw || {}), phase: patch.phase || order?._raw?.phase },
-            }))
-            : action.orders,
-        }
-        : action
-    )));
+  const removePendingAction = useCallback((id) => {
+    setPendingActions(current => current.filter(action => action.id !== id));
   }, []);
-  const removeDangoPendingAction = useCallback((id) => {
-    setDangoPendingActions(current => current.filter(action => action.id !== id));
-  }, []);
-  const beginDangoPendingClose = useCallback((pos, amount, fullClose) => {
-    if (dex !== 'dango' && dex !== 'ostium') return null;
+  const beginPendingClose = useCallback((pos, amount, fullClose) => {
+    if (dex !== 'ostium') return null;
     const id = `${dex}-close-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const action = {
       id,
       kind: 'close',
       dex,
-      phase: dex === 'ostium' ? 'closing' : 'preparing',
+      phase: 'closing',
       createdAt: Date.now(),
       positionKey: positionStableKey(pos),
       symbol: String(pos?.symbol || pos?.s || '').toUpperCase(),
@@ -3720,57 +3572,22 @@ function FuturesPanel() {
       fullClose: !!fullClose,
       orders: [],
     };
-    setDangoPendingActions(current => [...current.filter(row => !(row.kind === 'close' && row.positionKey === action.positionKey)), action]);
-    if (dex === 'ostium') {
-      return { id, options: undefined };
-    }
-    return {
-      id,
-      options: {
-        onPhase: phase => updateDangoPendingAction(id, { phase }),
-      },
-    };
-  }, [dex, updateDangoPendingAction]);
-  const beginDangoPendingTpsl = useCallback((pos, tpPrice, slPrice) => {
-    if (dex !== 'dango') return null;
-    const id = `dango-tpsl-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const base = {
-      id,
-      kind: 'tpsl',
-      phase: 'preparing',
-      createdAt: Date.now(),
-      positionKey: positionStableKey(pos),
-      symbol: String(pos?.symbol || pos?.s || '').toUpperCase(),
-      side: positionOpenSide(pos),
-    };
-    const pendingOrders = [
-      makeDangoPendingOrder(pos, 'tp', tpPrice, base.phase, id),
-      makeDangoPendingOrder(pos, 'sl', slPrice, base.phase, id),
-    ].filter(Boolean);
-    if (!pendingOrders.length) return null;
-    const action = { ...base, orders: pendingOrders };
-    setDangoPendingActions(current => [...current.filter(row => !(row.kind === 'tpsl' && row.positionKey === action.positionKey)), action]);
-    return {
-      id,
-      options: {
-        onPhase: phase => updateDangoPendingAction(id, { phase }),
-      },
-    };
-  }, [dex, updateDangoPendingAction]);
+    setPendingActions(current => [...current.filter(row => !(row.kind === 'close' && row.positionKey === action.positionKey)), action]);
+    return { id, options: undefined };
+  }, [dex]);
   useEffect(() => {
-    if (dex !== 'dango' && dex !== 'ostium') {
-      setDangoPendingActions([]);
+    if (dex !== 'ostium') {
+      setPendingActions([]);
       return;
     }
     const now = Date.now();
-    setDangoPendingActions(current => current.filter(action => {
-      if (now - Number(action.createdAt || 0) > DANGO_PENDING_ACTION_TTL_MS) return false;
+    setPendingActions(current => current.filter(action => {
+      if (now - Number(action.createdAt || 0) > PENDING_ACTION_TTL_MS) return false;
       if (action.dex && action.dex !== dex) return false;
-      if (action.kind === 'tpsl') return !dangoPendingTpslConfirmed(action, orders);
-      if (action.kind === 'close') return !dangoPendingCloseConfirmed(action, positions);
+      if (action.kind === 'close') return !pendingCloseConfirmed(action, positions);
       return true;
     }));
-  }, [dex, positions, orders]);
+  }, [dex, positions]);
   // The trading hook owns the active signer. Do not treat a detected adapter
   // or a stored player wallet as "connected" unless the hook resolved the
   // address it will actually use for signing.
@@ -4020,7 +3837,7 @@ function FuturesPanel() {
     setSuccessMsg('Wallet close submitted.');
   }, [dex, executeOneTapWalletFallback]);
   const handleToggleOneTapTrading = useCallback(async () => {
-    if (dex !== 'hyperliquid' && dex !== 'nado' && dex !== 'katana' && dex !== 'flash' && dex !== 'ostium' && dex !== 'dango') return;
+    if (dex !== 'hyperliquid' && dex !== 'nado' && dex !== 'katana' && dex !== 'flash' && dex !== 'ostium') return;
     const dexLabel = dex === 'nado'
       ? 'Nado'
       : dex === 'katana'
@@ -4029,9 +3846,7 @@ function FuturesPanel() {
           ? 'Flash'
           : dex === 'ostium'
             ? 'Ostium'
-            : dex === 'dango'
-              ? 'Dango'
-              : 'Hyperliquid';
+            : 'Hyperliquid';
     if (oneTapTrading?.enabled) {
       const result = typeof setOneTapTradingEnabled === 'function'
         ? await setOneTapTradingEnabled(false)
@@ -4043,7 +3858,7 @@ function FuturesPanel() {
       setSuccessMsg(`One tap trading disabled. Opening a ${dexLabel} order will ask to enable it again.`);
       return;
     }
-    if (dex === 'katana' || dex === 'flash' || dex === 'ostium' || dex === 'dango') {
+    if (dex === 'katana' || dex === 'flash' || dex === 'ostium') {
       setReferralLinking(true);
       try {
         const result = typeof setOneTapTradingEnabled === 'function'
@@ -4485,12 +4300,6 @@ function FuturesPanel() {
   const flashMaxMargin = useMemo(() => (
     dex === 'flash' ? floorUsdCents(pacBalance) : pacBalance
   ), [dex, pacBalance]);
-  const dangoMinNotionalUsd = useMemo(() => {
-    if (dex !== 'dango') return 0;
-    const raw = currentMarket?.min_notional_usd ?? currentMarket?.min_order_size;
-    const value = Number(raw);
-    return Number.isFinite(value) && value > 0 ? value : 0;
-  }, [dex, currentMarket]);
   const sizePctMarginBase = dex === 'phoenix'
     ? phoenixMaxMargin
     : dex === 'pacifica'
@@ -4687,8 +4496,8 @@ function FuturesPanel() {
       );
       return;
     }
-    if (dex === 'decibel' || dex === 'dango') {
-      setLocalAlert(`${dex === 'dango' ? 'Dango' : 'Decibel'} currently uses cross margin only. Isolated margin is not available yet.`);
+    if (dex === 'decibel') {
+      setLocalAlert('Decibel currently uses cross margin only. Isolated margin is not available yet.');
       return;
     }
     if (dex === 'pacifica' && !pacAgent && bindAgent) {
@@ -4759,7 +4568,7 @@ function FuturesPanel() {
       setLeverageApi(symbol, v);
       return;
     }
-    if (dex === 'avantis' || dex === 'dango' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'grvt' || dex === 'flash') return;
+    if (dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'grvt' || dex === 'flash') return;
     // Pacifica leverage updates should use the agent key. If the user has
     // not enabled it yet, keep this UI-only and flush after auto-bind on
     // trade submit.
@@ -4786,35 +4595,6 @@ function FuturesPanel() {
   // second click can land between dispatch-1 and React committing the button's
   // `disabled` attribute. This ref flips synchronously in-callback.
   const tradeInFlight = useRef(false);
-  const waitForDangoTradeVisibility = useCallback(async ({ before, symbol: waitSymbol }) => {
-    if (dex !== 'dango') return true;
-    const delays = [0, 700, 1200, 1800, 2500, 3500, 5000, 7000, 9000, 12_000];
-    const deadline = Date.now() + 45_000;
-    let attempt = 0;
-    while (Date.now() < deadline) {
-      const delay = delays[Math.min(attempt, delays.length - 1)];
-      if (delay > 0) await new Promise(resolve => setTimeout(resolve, delay));
-      let after = dangoTradeVisibleSnapshot(latestPositionsRef.current, latestOrdersRef.current, waitSymbol);
-      if (dangoSnapshotChanged(before, after)) return true;
-      if (typeof refreshTrading === 'function') {
-        try {
-          const refreshed = await refreshTrading();
-          const snapshot = refreshed?.accountSnapshot;
-          after = dangoTradeVisibleSnapshot(
-            snapshot?.positions || latestPositionsRef.current,
-            snapshot?.orders || latestOrdersRef.current,
-            waitSymbol,
-          );
-          if (dangoSnapshotChanged(before, after)) return true;
-        } catch (e) {
-          console.warn('[Dango UI] refresh while waiting for trade visibility failed', e?.message || e);
-        }
-      }
-      attempt += 1;
-    }
-    return false;
-  }, [dex, refreshTrading]);
-
   const handleTrade = useCallback(async (side) => {
     if (tradeInFlight.current) return;
     tradeInFlight.current = true;
@@ -5089,21 +4869,6 @@ function FuturesPanel() {
             return;
           }
         }
-        if (dex === 'dango') {
-          if (dangoMinNotionalUsd > 0 && positionUsdc < dangoMinNotionalUsd) {
-            setLocalAlert(
-              `Dango requires a position >= $${dangoMinNotionalUsd.toFixed(2)}. Yours: $${positionUsdc.toFixed(2)}. Increase margin or leverage.`
-            );
-            return;
-          }
-          const requestedMargin = amountInUsdc
-            ? parseFloat(amount)
-            : (Number(leverage) > 0 ? positionUsdc / Number(leverage) : 0);
-          if (Number.isFinite(requestedMargin) && requestedMargin > pacBalance + 0.000001) {
-            setLocalAlert(`Dango available margin is $${pacBalance.toFixed(2)}. Lower margin or deposit more.`);
-            return;
-          }
-        }
       }
       // Bind before Pacifica account-settings. Direct wallet signatures from
       // some adapters can fail Pacifica verification on /account/leverage even
@@ -5159,9 +4924,6 @@ function FuturesPanel() {
       }
       setTradePhase('signing');
       let result;
-      const beforeDangoSnapshot = dex === 'dango'
-        ? dangoTradeVisibleSnapshot(latestPositionsRef.current, latestOrdersRef.current, symbol)
-        : null;
       const tradeOptions = {
         ...(Number.isFinite(positionUsdc) && positionUsdc > 0 ? { notional_usd: positionUsdc } : {}),
         ...(attachedTpsl?.options || {}),
@@ -5169,7 +4931,6 @@ function FuturesPanel() {
         ...(dex === 'gmtrade' && (currentMarket?.market_token || currentMarket?.marketToken)
           ? { market_token: currentMarket.market_token || currentMarket.marketToken }
           : {}),
-        ...(dex === 'dango' ? { onPhase: phase => setTradePhase(phase) } : {}),
       };
       if (dex === 'gmtrade') {
         const gmtradeOrderPrice = orderType === 'limit' ? parseFloat(limitPrice) : tradePrice;
@@ -5201,11 +4962,6 @@ function FuturesPanel() {
         return;
       }
       if (result && !result.error) {
-        let visible = true;
-        if (dex === 'dango') {
-          setTradePhase('indexing');
-          visible = await waitForDangoTradeVisibility({ before: beforeDangoSnapshot, symbol });
-        }
         let tpslWarning = '';
         const shouldPostAttachTpsl = attachedTpsl?.hasTpsl
           && orderType === 'market'
@@ -5228,7 +4984,6 @@ function FuturesPanel() {
             tradeHint,
             tpslAmount,
             marketHint,
-            dex === 'dango' ? { onPhase: phase => setTradePhase(phase) } : undefined,
           );
           if (tpslResult?.error) {
             tpslWarning = ` TP/SL failed: ${tpslResult.error}`;
@@ -5240,8 +4995,6 @@ function FuturesPanel() {
           ? result.info
           : dex === 'gmtrade' && result.status === 'submitted'
             ? `${side.toUpperCase()} ${symbol} submitted`
-            : dex === 'dango' && !visible
-            ? `${side.toUpperCase()} ${symbol} submitted. Dango is still syncing it.`
             : orderType === 'market'
             ? `${side.toUpperCase()} ${symbol} opened`
             : `${side.toUpperCase()} ${symbol} limit placed`;
@@ -5261,7 +5014,7 @@ function FuturesPanel() {
       setTradeBusy(false);
       setTradePhase(null);
     }
-  }, [amount, tokenAmount, positionUsdc, limitPrice, symbol, orderType, amountInUsdc, currentPrice, orderSizingPrice, currentMarket, placeMarketOrder, placeLimitOrder, leverage, leverageSettings, setLeverageApi, dex, pacAgent, bindAgent, bindingAgent, pacBalance, pacificaMaxMargin, ostiumMaxMargin, pacificaTakerFeeRate, phoenixTakerFeeRate, hotstuffTakerFeeRate, flashMaxMargin, positions, lotSize, hasWallet, setupVerified, lighterNeedsIntegratorApproval, flashMarketBlockReason, ostiumMarketBlockMessage, maxLev, marginModes, dangoMinNotionalUsd, waitForDangoTradeVisibility, resolveOpenTpslForSide, setTpsl]);
+  }, [amount, tokenAmount, positionUsdc, limitPrice, symbol, orderType, amountInUsdc, currentPrice, orderSizingPrice, currentMarket, placeMarketOrder, placeLimitOrder, leverage, leverageSettings, setLeverageApi, dex, pacAgent, bindAgent, bindingAgent, pacBalance, pacificaMaxMargin, ostiumMaxMargin, pacificaTakerFeeRate, phoenixTakerFeeRate, hotstuffTakerFeeRate, flashMaxMargin, positions, lotSize, hasWallet, setupVerified, lighterNeedsIntegratorApproval, flashMarketBlockReason, ostiumMarketBlockMessage, maxLev, marginModes, resolveOpenTpslForSide, setTpsl]);
 
   // ==================== TRADE CONTROLS (reusable) ====================
   // Symbol info bar — token + market data (above chart)
@@ -5345,7 +5098,7 @@ function FuturesPanel() {
           </>
         )}
         <div style={{marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: (isMobile || !fullscreen) ? 4 : 8, flexShrink: 0}}>
-          {dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'decibel' || dex === 'dango' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'katana' || dex === 'gmtrade' || dex === 'flash' || dex === 'lighter' ? (
+          {dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'decibel' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'katana' || dex === 'gmtrade' || dex === 'flash' || dex === 'lighter' ? (
             // Read-only badge for venues where the production margin mode is
             // not user-toggleable in our integration.
             <div
@@ -5356,8 +5109,6 @@ function FuturesPanel() {
                 ? 'Ostium uses isolated collateral per trade in this integration'
                 : dex === 'decibel'
                 ? 'Decibel currently uses cross margin; isolated margin is not available yet'
-                : dex === 'dango'
-                ? 'Dango currently uses cross margin in this integration'
                 : dex === 'monad'
                 ? 'Perpl uses isolated margin per position in this integration'
                 : dex === 'hyperliquid'
@@ -5376,10 +5127,10 @@ function FuturesPanel() {
                 ? 'Lighter margin mode is managed through the Lighter account settings in this integration'
                 : 'Avantis uses isolated margin per trade (no cross mode)'}
             >
-              <span style={{color: ((dex === 'decibel' || dex === 'dango' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'katana' || dex === 'lighter') ? '#4CAF50' : '#FF9800'), fontWeight: 900}}>
+              <span style={{color: ((dex === 'decibel' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'katana' || dex === 'lighter') ? '#4CAF50' : '#FF9800'), fontWeight: 900}}>
                 {dex === 'gmtrade'
                   ? 'Isolated'
-                  : (dex === 'decibel' || dex === 'dango' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'katana')
+                  : (dex === 'decibel' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'katana')
                   ? 'Cross'
                   : dex === 'lighter'
                   ? 'Cross'
@@ -5713,63 +5464,6 @@ function FuturesPanel() {
                   borderStyle: 'solid',
                   borderColor: enabled ? '#15803D' : '#b58b2a',
                   opacity: (busy || loading) ? 0.7 : 1,
-                }}
-              >
-                {busy ? '...' : enabled ? 'ON' : 'ENABLE'}
-              </button>
-            </div>
-          );
-        })()}
-
-        {dex === 'dango' && (() => {
-          const enabled = !!oneTapTrading?.approved;
-          const busy = !!referralLinking || !!loading;
-          const subtitle = enabled
-            ? `Signer ${oneTapTrading?.signer ? shortAddr(oneTapTrading.signer) : 'ready'} - browser signing session is on.`
-            : 'Enable browser signing session for Dango actions.';
-          return (
-            <div style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              gap: 8,
-              background: enabled ? 'rgba(22,163,74,0.10)' : 'rgba(249,115,22,0.08)',
-              borderWidth: 1,
-              borderStyle: 'solid',
-              borderColor: enabled ? 'rgba(22,163,74,0.35)' : 'rgba(249,115,22,0.30)',
-              borderRadius: 8,
-              padding: '7px 9px',
-            }}>
-              <div style={{display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0}}>
-                <span style={{fontSize: 11, fontWeight: 900, color: enabled ? '#166534' : '#7C2D12'}}>
-                  Dango one tap trading
-                </span>
-                <span style={{
-                  fontSize: 10,
-                  fontWeight: 700,
-                  color: '#8a7252',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                }}>
-                  {subtitle}
-                </span>
-              </div>
-              <button
-                type="button"
-                onClick={handleToggleOneTapTrading}
-                disabled={busy}
-                style={{
-                  ...S.btnSmall,
-                  flex: '0 0 auto',
-                  minWidth: 72,
-                  padding: '5px 10px',
-                  background: enabled ? '#16A34A' : '#fff6dc',
-                  color: enabled ? '#fff' : '#5C3A21',
-                  borderWidth: 2,
-                  borderStyle: 'solid',
-                  borderColor: enabled ? '#15803D' : '#b58b2a',
-                  opacity: busy ? 0.7 : 1,
                 }}
               >
                 {busy ? '...' : enabled ? 'ON' : 'ENABLE'}
@@ -8889,9 +8583,9 @@ function FuturesPanel() {
             cancelOrder={cancelOrder}
             dex={dex}
             loading={loading}
-            dangoPendingActions={dangoPendingActions}
-            beginDangoPendingClose={beginDangoPendingClose}
-            removeDangoPendingAction={removeDangoPendingAction}
+            pendingActions={pendingActions}
+            beginPendingClose={beginPendingClose}
+            removePendingAction={removePendingAction}
           />
         </div>
       );
@@ -8965,18 +8659,16 @@ function FuturesPanel() {
             };
             const handleClose = async () => {
               const amount = dex === 'avantis' ? parseFloat(pos.margin) : parseFloat(pos.amount);
-              const pending = beginDangoPendingClose(pos, amount, true);
+              const pending = beginPendingClose(pos, amount, true);
               const result = await closePosition(
                 pos.symbol, pos.side,
                 String(amount),
                 pos.pair_index, pos.trade_index, true,
-                dex === 'dango'
-                  ? pending?.options
-                  : (dex === 'flash' ? { position: pos, inputUsdUi: String(dustUsd || posValueUsd) } : undefined),
+                dex === 'flash' ? { position: pos, inputUsdUi: String(dustUsd || posValueUsd) } : undefined,
               );
-              if (result?.error && pending?.id) removeDangoPendingAction(pending.id);
+              if (result?.error && pending?.id) removePendingAction(pending.id);
             };
-            const pendingClose = dangoPendingActionForPosition(dangoPendingActions, pos, 'close');
+            const pendingClose = pendingActionForPosition(pendingActions, pos, 'close');
             return (
               <div key={positionStableKey(pos) || i} style={S.posCard}>
                 <div style={S.row}>
@@ -9017,7 +8709,7 @@ function FuturesPanel() {
                     disabled={loading || !!pendingClose}
                   >
                     {pendingClose
-                      ? <ClosingButtonLabel text={dangoPhaseLabel(pendingClose.phase, 'Closing position...')} />
+                      ? <ClosingButtonLabel text={pendingPhaseLabel(pendingClose.phase, 'Closing position...')} />
                       : loading ? <ClosingButtonLabel text="Closing position..." /> : (isDust ? 'Clean up dust' : 'Close position')}
                   </button>
                   <button
@@ -9065,17 +8757,15 @@ function FuturesPanel() {
           };
           const handleProClose = async (closeFraction) => {
             const amount = (dex === 'avantis' ? parseFloat(pos.margin) : parseFloat(pos.amount)) * closeFraction;
-            const pending = beginDangoPendingClose(pos, amount, closeFraction >= 1);
+            const pending = beginPendingClose(pos, amount, closeFraction >= 1);
             const result = await closePosition(
               pos.symbol, pos.side, String(amount),
               pos.pair_index, pos.trade_index, closeFraction >= 1,
-              dex === 'dango'
-                ? pending?.options
-                : (dex === 'flash' ? { position: pos, inputUsdUi: String((dustUsd || posValueUsd) * closeFraction) } : undefined),
+              dex === 'flash' ? { position: pos, inputUsdUi: String((dustUsd || posValueUsd) * closeFraction) } : undefined,
             );
-            if (result?.error && pending?.id) removeDangoPendingAction(pending.id);
+            if (result?.error && pending?.id) removePendingAction(pending.id);
           };
-          const pendingClose = dangoPendingActionForPosition(dangoPendingActions, pos, 'close');
+          const pendingClose = pendingActionForPosition(pendingActions, pos, 'close');
           return (
             <div key={positionStableKey(pos) || i} style={S.posCard}>
               <div style={S.row}>
@@ -9195,7 +8885,7 @@ function FuturesPanel() {
                   )}
                   <button style={{...S.btnRed, width: '100%'}} onClick={() => handleProClose(isDust ? 1 : closePct / 100)} disabled={loading || !!pendingClose}>
                     {pendingClose
-                      ? <ClosingButtonLabel text={dangoPhaseLabel(pendingClose.phase, 'Closing...')} />
+                      ? <ClosingButtonLabel text={pendingPhaseLabel(pendingClose.phase, 'Closing...')} />
                       : loading ? <ClosingButtonLabel /> : (isDust ? 'Clean up dust' : `Close ${closePct}%`)}
                   </button>
                 </div>
@@ -9217,8 +8907,8 @@ function FuturesPanel() {
                   pos={pos}
                   metrics={tpslMetrics}
                   ostiumTpMax={ostiumTpMax}
-                  busy={tpslBusy || !!dangoPendingActionForPosition(dangoPendingActions, pos, 'tpsl')}
-                  busyLabel={dangoPhaseLabel(dangoPendingActionForPosition(dangoPendingActions, pos, 'tpsl')?.phase, 'Setting...')}
+                  busy={tpslBusy}
+                  busyLabel="Setting..."
                   loading={loading}
                   hasChanges={hasTpslChanges}
                   onSubmit={async () => {
@@ -9232,11 +8922,9 @@ function FuturesPanel() {
                     }
                     if (!validateTpslBeforeSubmit({ dex, pos, tpPrice: changedTpPrice, slPrice: changedSlPrice, setLocalAlert })) return;
                     setTpslSubmittingPos(posKey);
-                    const pending = beginDangoPendingTpsl(pos, changedTpPrice, changedSlPrice);
                     try {
-                      const r = await setTpsl(pos.symbol, positionCloseSide(pos), changedTpPrice, changedSlPrice, pos.pair_index, pos.trade_index, pos.amount, pos.market_addr, pending?.options);
+                      const r = await setTpsl(pos.symbol, positionCloseSide(pos), changedTpPrice, changedSlPrice, pos.pair_index, pos.trade_index, pos.amount, pos.market_addr);
                     if (r?.error) {
-                      if (pending?.id) removeDangoPendingAction(pending.id);
                       setLocalAlert(r.error);
                       return;
                     }
@@ -9441,22 +9129,6 @@ function FuturesPanel() {
       if (typeof risexSourceBalance === 'number' && Number.isFinite(risexSourceBalance)) return `$${risexSourceBalance.toFixed(2)}`;
       if (risexSourceBalanceState === 'checking') return 'checking...';
       if (risexSourceBalanceState === 'error') return 'unavailable';
-      return '$--';
-    })();
-    const dangoDepositSource = Array.isArray(bridgeDepositSources)
-      ? bridgeDepositSources.find(chain => Number(chain.id) === 42161)
-      : null;
-    const dangoSourceBalance = dex === 'dango'
-      ? bridgeSourceBalances?.[Number(dangoDepositSource?.id || 42161)]
-      : null;
-    const dangoSourceBalanceState = dex === 'dango'
-      ? bridgeSourceBalanceStatus?.[Number(dangoDepositSource?.id || 42161)]?.status
-      : null;
-    const dangoSourceBalanceText = (() => {
-      if (dex !== 'dango') return '';
-      if (typeof dangoSourceBalance === 'number' && Number.isFinite(dangoSourceBalance)) return `$${dangoSourceBalance.toFixed(2)}`;
-      if (dangoSourceBalanceState === 'checking') return 'checking...';
-      if (dangoSourceBalanceState === 'error') return 'unavailable';
       return '$--';
     })();
     const depositActionBusy = ['preparing', 'switching', 'approving', 'signing', 'confirming', 'bridging', 'depositing']
@@ -10352,17 +10024,11 @@ function FuturesPanel() {
         })() : (
           <div style={S.fullCard}>
             <div style={S.row}>
-              <span style={{...S.label, color: '#4CAF50'}}>{dex === 'monad' ? 'Deposit AUSD' : dex === 'nado' ? `Deposit ${selectedNadoDepositAsset.label}` : dex === 'hotstuff' ? 'Hotstuff funding' : dex === 'grvt' ? 'Open GRVT Deposit' : dex === 'katana' ? 'Open Katana Deposit' : dex === 'dango' ? 'Dango Arbitrum deposit' : 'Deposit USDC'}</span>
+              <span style={{...S.label, color: '#4CAF50'}}>{dex === 'monad' ? 'Deposit AUSD' : dex === 'nado' ? `Deposit ${selectedNadoDepositAsset.label}` : dex === 'hotstuff' ? 'Hotstuff funding' : dex === 'grvt' ? 'Open GRVT Deposit' : dex === 'katana' ? 'Open Katana Deposit' : 'Deposit USDC'}</span>
               {dex === 'risex'
                 ? (
                   <span style={{...S.detail, color: '#15803D'}}>
                     {risexDepositSource?.name || 'Arbitrum'} USDC: {risexSourceBalanceText}
-                  </span>
-                )
-                : dex === 'dango'
-                ? (
-                  <span style={{...S.detail, color: '#15803D'}}>
-                    Arbitrum USDC: {dangoSourceBalanceText}
                   </span>
                 )
                 : dex === 'nado'
@@ -10502,7 +10168,7 @@ function FuturesPanel() {
                   do not have this fixed UI floor here (per-market minSize
                   matters for trading; deposits are free-form). */}
               <input type="number"
-                placeholder={dex === 'monad' ? 'Amount (AUSD)' : dex === 'pacifica' ? 'Min 10 USDC' : dex === 'nado' && !account?.exists ? `Min 5 ${selectedNadoDepositAsset.label}` : dex === 'nado' ? `Amount (${selectedNadoDepositAsset.label})` : dex === 'risex' ? 'Amount (USDC)' : dex === 'dango' ? 'Arbitrum USDC' : 'Amount (USDC)'}
+                placeholder={dex === 'monad' ? 'Amount (AUSD)' : dex === 'pacifica' ? 'Min 10 USDC' : dex === 'nado' && !account?.exists ? `Min 5 ${selectedNadoDepositAsset.label}` : dex === 'nado' ? `Amount (${selectedNadoDepositAsset.label})` : dex === 'risex' ? 'Amount (USDC)' : 'Amount (USDC)'}
                 value={depositAmt} onChange={e => setDepositAmt(e.target.value)}
                 style={{...S.input, flex: 3, minWidth: 0, padding: '8px 10px', fontSize: 13}} />
               <button style={{...S.depositBtn, flex: 1, whiteSpace: 'nowrap', padding: '8px 4px'}} onClick={async () => {
@@ -10530,10 +10196,6 @@ function FuturesPanel() {
                     return;
                   }
                 }
-                if (dex === 'dango' && typeof dangoSourceBalance === 'number' && Number.isFinite(dangoSourceBalance) && v > dangoSourceBalance + 0.000001) {
-                  setLocalAlert(`Arbitrum wallet has ${dangoSourceBalance.toFixed(2)} USDC`);
-                  return;
-                }
                 if (dex === 'nado' && Number.isFinite(selectedNadoWalletBalance) && v > selectedNadoWalletBalance + 0.000001) {
                   setLocalAlert(`Ink wallet has ${selectedNadoWalletBalance.toFixed(2)} ${selectedNadoDepositAsset.label}`);
                   return;
@@ -10541,14 +10203,7 @@ function FuturesPanel() {
                 const r = await depositToPacifica(depositAmt, dex === 'risex' ? { sourceChainId: risexDepositSource?.id } : dex === 'nado' ? { asset: selectedNadoDepositAsset.id } : undefined);
                 if (!r?.error) {
                   setDepositAmt('');
-                  if (r?.info) {
-                    if (dex === 'dango') {
-                      setLocalAlert(null);
-                      setSuccessMsg(r.info);
-                    } else {
-                      setLocalAlert(r.info);
-                    }
-                  }
+                  if (r?.info) setLocalAlert(r.info);
                 }
               }} disabled={loading || depositActionBusy}>
                 {depositButtonLabel}
@@ -10572,8 +10227,6 @@ function FuturesPanel() {
                 ? 'Opens GRVT deposit. Native in-game deposit needs GRVT bridge approval data or a GRVT-supported deposit-address API; the current builder API key is not enough for that.'
                 : dex === 'katana'
                 ? 'Opens Katana deposit. Katana deposits can be bridged from Arbitrum USDC through the official Stargate/Katana bridge flow.'
-                : dex === 'dango'
-                ? 'Bridges native USDC from your Arbitrum wallet to your Dango account through Dango Hyperlane. Needs a small ETH gas float; Dango balance can take a few minutes to update.'
                 : dex === 'risex'
                 ? (
                   <>
@@ -10638,8 +10291,6 @@ function FuturesPanel() {
                 ? 'Requests a Hyperliquid withdrawal to your connected Arbitrum address. Arrival usually takes a few minutes.'
                 : dex === 'decibel'
                 ? 'Withdraws from your Decibel trading subaccount back to your Aptos wallet.'
-                : dex === 'dango'
-                ? 'Withdrawals move USDC from Dango margin back to your Dango wallet. Your wallet signs the Dango transaction.'
                 : dex === 'monad'
                 ? 'Withdraws AUSD from Perpl back to your Monad wallet.'
                 : dex === 'phoenix'

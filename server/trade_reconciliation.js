@@ -10,7 +10,6 @@ const APTOS_WALLET_RE = /^0x[0-9a-fA-F]{1,64}$/;
 const FUTURES_REWARD_DEXES = new Set([
   'avantis',
   'decibel',
-  'dango',
   'gmx',
   'ostium',
   'monad',
@@ -34,7 +33,6 @@ const DEX_REQUIRED_CHAIN = {
   flash: 'solana',
   decibel: 'aptos',
   avantis: 'evm',
-  dango: 'evm',
   gmx: 'evm',
   ostium: 'evm',
   monad: 'evm',
@@ -51,7 +49,6 @@ const DEX_REQUIRED_CHAIN = {
 const VERIFIED_SOURCES_BY_DEX = {
   avantis: ['worker'],
   decibel: ['decibel_fill', 'server'],
-  dango: ['dango_ws'],
   gmx: ['worker', 'server'],
   ostium: ['ostium_api'],
   monad: ['perpl_api', 'perpl_ws'],
@@ -70,7 +67,6 @@ const VERIFIED_SOURCES_BY_DEX = {
 
 const USER_SCOPED_IMPORT_DEXES = new Set([
   'decibel',
-  'dango',
   'hyperliquid',
   'ostium',
   'gmtrade',
@@ -449,15 +445,6 @@ async function runDexAdapter(player, dex, wallet, opts = {}) {
       return { ok: false, skipped: 'adapter_missing', dex };
     }
     return { dex, ...(await decibelRewards.importRecentLimitFillsForPlayer(playerId, wallet)) };
-  }
-
-  if (dex === 'dango') {
-    const dango = require('../server-futures/dango');
-    if (!dango.isDangoAddress(wallet)) return { ok: false, skipped: 'invalid_dango_wallet', dex };
-    return {
-      dex,
-      ...(await dango.importRecentFillsForPlayer(playerId, wallet, futuresDbWritable().addTrade, { limit })),
-    };
   }
 
   if (dex === 'hyperliquid') {

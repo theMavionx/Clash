@@ -3971,7 +3971,6 @@ const TOURNAMENT_CREDIT_DEXES = new Set([
   'pacifica',
   'avantis',
   'decibel',
-  'dango',
   'gmx',
   'ostium',
   'monad',

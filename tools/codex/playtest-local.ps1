@@ -237,7 +237,7 @@ if ($SkipFutures) {
 } else {
     $futuresOut = Join-Path $LogDir "futures.out.log"
     $futuresErr = Join-Path $LogDir "futures.err.log"
-    $futuresCommand = "`$env:FUTURES_PORT='$FuturesPort'; `$env:DANGO_REALTIME_WORKER='0'; npm.cmd --prefix server-futures start"
+    $futuresCommand = "`$env:FUTURES_PORT='$FuturesPort'; npm.cmd --prefix server-futures start"
     $futuresProcess = Start-HiddenPowerShell -Name "local Clash futures server" -Command $futuresCommand -StdOut $futuresOut -StdErr $futuresErr
     Write-Host "Futures PID: $($futuresProcess.Id)"
     $startedProcesses += [pscustomobject]@{

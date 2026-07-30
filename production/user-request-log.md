@@ -2092,3 +2092,15 @@ Follow-up:
 - Request: add an AI assistant to the tournament creation admin UI using the configured OpenRouter key, so an administrator can describe a tournament and receive a complete configuration; also support per-day volume targets and per-day rewards.
 - Scope: add a server-owned tournament planning prompt and schema, validated preview/apply API, model fallback, daily schedule persistence with backward compatibility, wizard UI for AI generation and manual day editing, local end-to-end browser verification, then commit, push, deploy, and verify production.
 - Production deployment explicitly requested after local verification.
+
+### UR-2026-07-30-REMOVE-DANGO-INTEGRATION
+
+- **Request:** Remove the Dango exchange integration because the venue has shut down, then deploy the focused removal to production.
+- **Scope:** Remove Dango from active exchange selection, registration, admin tournament creation,
+  prefetch, trading runtime, futures API routes, reconciliation, rewards workers, and active
+  earnings sources. Preserve historical database rows and retired architecture documentation.
+- **Status:** Completed and approved for production deployment.
+- **Verification:** Node syntax checks passed for the futures server, main
+  server, earnings, tasks, reconciliation, and tournament builder. The full
+  Vite production build passed. A live isolated futures-router smoke returned
+  HTTP 410 with `DEX_RETIRED` for `dex=dango`. `git diff --check` passed.

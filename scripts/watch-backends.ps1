@@ -188,7 +188,6 @@ $services = @(
       GMX_REWARDS_WORKER = $(if ($FullWorkers) { '1' } else { '0' })
       HYPERLIQUID_REWARDS_WORKER = $(if ($FullWorkers) { '1' } else { '0' })
       HOTSTUFF_REWARDS_WORKER = $(if ($FullWorkers) { '1' } else { '0' })
-      DANGO_REALTIME_WORKER = $(if ($FullWorkers) { '1' } else { '0' })
       OSTIUM_BUILDER_ADDRESS = $(if ($env:OSTIUM_BUILDER_ADDRESS) { $env:OSTIUM_BUILDER_ADDRESS } else { '0xB36402e87a86206D3a114a98B53f31362291fe1B' })
       OSTIUM_BUILDER_FEE_BPS = $(if ($env:OSTIUM_BUILDER_FEE_BPS) { $env:OSTIUM_BUILDER_FEE_BPS } else { '2' })
       LIGHTER_PYTHON_BIN = $(if ($env:LIGHTER_PYTHON_BIN) { $env:LIGHTER_PYTHON_BIN } else { $DefaultLighterPythonBin })

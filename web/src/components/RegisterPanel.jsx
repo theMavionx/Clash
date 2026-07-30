@@ -575,7 +575,6 @@ function RegisterPanel() {
               ? `Joining ${
                   dex === 'avantis' ? 'Avantis' :
                   dex === 'decibel' ? 'Decibel' :
-                  dex === 'dango' ? 'Dango' :
                   dex === 'gmx' ? 'GMX' :
                   dex === 'ostium' ? 'Ostium' :
                   dex === 'monad' ? 'Perpl' :
@@ -649,7 +648,7 @@ function RegisterPanel() {
             />
           );
         }
-        if (dex === 'avantis' || dex === 'dango' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'lighter') {
+        if (dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'lighter') {
           return (
             <ConnectAvantis
               dex={dex}
@@ -697,7 +696,6 @@ function RegisterPanel() {
     if (state === 'need_name') return 'YOUR NAME';
     if (state === 'registering' || state === 'auto_connecting' || state === 'booting') return 'LOADING';
     if (dex === 'avantis') return 'AVANTIS LOGIN';
-    if (dex === 'dango') return 'DANGO LOGIN';
     if (dex === 'decibel') return 'DECIBEL LOGIN';
     if (dex === 'gmx') return 'GMX LOGIN';
     if (dex === 'ostium') return 'OSTIUM LOGIN';

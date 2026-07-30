@@ -8,7 +8,6 @@ const avantis = require('./avantis');
 const deposit = require('./deposit');
 const decibel = require('./decibel');
 const { executeDecibelTpslMutation } = require('./decibel-tpsl-lifecycle');
-const dango = require('./dango');
 const gmx = require('./gmx');
 const gmxRewards = require('./gmx-rewards-worker');
 const phoenixRewards = require('./phoenix-rewards-worker');
@@ -32,6 +31,20 @@ const bs58Module = require('bs58');
 const nacl = require('tweetnacl');
 
 const router = express.Router();
+
+router.use((req, res, next) => {
+  const requestedDex = String(
+    req.query?.dex || req.headers['x-dex'] || req.body?.dex || ''
+  ).trim().toLowerCase();
+  if (requestedDex === 'dango') {
+    return res.status(410).json({
+      error: 'Dango is no longer available because the exchange ceased operation.',
+      code: 'DEX_RETIRED',
+      dex: 'dango',
+    });
+  }
+  next();
+});
 const bs58 = bs58Module.default || bs58Module;
 const WALLET_AUTH_ACTION = 'wallet-auth';
 const WALLET_AUTH_MAX_AGE_MS = 10 * 60 * 1000;
@@ -895,7 +908,7 @@ function auth(req, res, next) {
   // Trust the SERVER-stored dex, not whatever the client asks for. The client
   // header/query is still useful as a best-effort sanity check: if it explicitly
   // asks for the wrong dex, reject so the UI can prompt the user to /set-dex.
-  const SUPPORTED_DEXES = new Set(['avantis', 'pacifica', 'decibel', 'dango', 'gmx', 'ostium', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash', 'lighter']);
+  const SUPPORTED_DEXES = new Set(['avantis', 'pacifica', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash', 'lighter']);
   const storedDex = SUPPORTED_DEXES.has(player.dex) ? player.dex : 'pacifica';
   const askedDex = (req.query.dex || req.headers['x-dex'] || storedDex).toLowerCase();
   const normalizedAsked = SUPPORTED_DEXES.has(askedDex) ? askedDex : 'pacifica';
@@ -920,7 +933,7 @@ function auth(req, res, next) {
   req.dexWallet = null;
   if (linkedForAsked?.wallet_address) {
     req.dexWallet = String(linkedForAsked.wallet_address || '').trim();
-  } else if ((req.dex === 'gmtrade' || req.dex === 'flash' || req.dex === 'hotstuff' || req.dex === 'dango') && playerDexAccountStmt) {
+  } else if ((req.dex === 'gmtrade' || req.dex === 'flash' || req.dex === 'hotstuff') && playerDexAccountStmt) {
     try {
       const linked = playerDexAccountStmt.get(player.id, req.dex);
       if (linked?.wallet_address) {
@@ -1120,7 +1133,7 @@ function flashBodyWallet(req) {
 // Get or create custodial wallet for player
 router.post('/wallet', auth, (req, res) => {
   try {
-    if (req.dex === 'avantis' || req.dex === 'gmx' || req.dex === 'ostium' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'hibachi' || req.dex === 'hotstuff' || req.dex === 'grvt' || req.dex === 'katana' || req.dex === 'gmtrade' || req.dex === 'flash' || req.dex === 'dango') {
+    if (req.dex === 'avantis' || req.dex === 'gmx' || req.dex === 'ostium' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'hibachi' || req.dex === 'hotstuff' || req.dex === 'grvt' || req.dex === 'katana' || req.dex === 'gmtrade' || req.dex === 'flash') {
       return res.status(410).json({
         error: `${req.dex} is self-custody. Connect the chain wallet in the client instead.`,
       });
@@ -1150,7 +1163,7 @@ router.post('/wallet', auth, (req, res) => {
 
 // Get wallet info (public key only — never expose secret)
 router.get('/wallet', auth, (req, res) => {
-  if (req.dex === 'avantis' || req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'hibachi' || req.dex === 'hotstuff' || req.dex === 'grvt' || req.dex === 'katana' || req.dex === 'gmtrade' || req.dex === 'flash' || req.dex === 'ostium' || req.dex === 'dango') {
+  if (req.dex === 'avantis' || req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'hibachi' || req.dex === 'hotstuff' || req.dex === 'grvt' || req.dex === 'katana' || req.dex === 'gmtrade' || req.dex === 'flash' || req.dex === 'ostium') {
     return res.status(410).json({
       error: `${req.dex} is self-custody. Connect the chain wallet in the client instead.`,
     });
@@ -1247,14 +1260,7 @@ router.get('/account', async (req, res) => {
       }
       return res.json(await flash.getOwnerSnapshot(address));
     }
-    // Pacifica (custodial) — keep legacy auth-gated flow.
-    if (dex === 'dango') {
-      const address = String(req.query.address || req.query.wallet || '').trim();
-      if (!dango.isDangoAddress(address)) {
-        return res.status(400).json({ error: 'address query param required (Dango 0x account)' });
-      }
-      return res.json(await dango.fetchAccount(address));
-    }
+    // Pacifica (custodial) - keep legacy auth-gated flow.
     return authGate(req, res, async () => {
       const wallet = db.getWallet(req.playerId, 'pacifica');
       if (!wallet) return res.status(404).json({ error: 'No wallet' });
@@ -1322,77 +1328,6 @@ function requireDecibelBuilderFee(req, res) {
     return null;
   }
   return { builderAddr, builderFee: DECIBEL_BUILDER_FEE_BPS };
-}
-
-function ensureDango(req, res) {
-  if (req.dex !== 'dango') {
-    res.status(409).json({
-      error: `Account is registered for '${req.dex}'. Switch DEX to dango before calling Dango endpoints.`,
-      stored_dex: req.dex,
-      requested_dex: 'dango',
-    });
-    return false;
-  }
-  return true;
-}
-
-function requireDangoAccount(req, res) {
-  if (!ensureDango(req, res)) return null;
-  const account = dango.normalizeDangoAddress(
-    req.body?.account
-    || req.body?.address
-    || req.query?.account
-    || req.query?.address
-    || req.dexWallet
-    || req.playerWallet
-  );
-  if (!account) {
-    res.status(400).json({ error: 'Dango account required' });
-    return null;
-  }
-  return account;
-}
-
-function dangoSignedTx(req) {
-  const tx = req.body?.signedTx || req.body?.tx || req.body?.transaction || (
-    req.body?.sender && Array.isArray(req.body?.msgs) && req.body?.data && req.body?.credential
-      ? req.body
-      : null
-  );
-  return tx && typeof tx === 'object' ? tx : null;
-}
-
-function dangoUnsignedTx(req) {
-  const tx = req.body?.unsignedTx || req.body?.tx || req.body?.transaction || (
-    req.body?.sender && Array.isArray(req.body?.msgs) && req.body?.data
-      ? req.body
-      : null
-  );
-  return tx && typeof tx === 'object' ? tx : null;
-}
-
-function dangoSignatureRequired(res, message, extra = {}) {
-  return res.status(428).json({
-    error: message,
-    code: 'DANGO_SIGNATURE_REQUIRED',
-    signing: 'Dango transactions require a browser-signed Tx or approved Dango session credential.',
-    ...extra,
-  });
-}
-
-function dangoMessageResponse(messageOrResult) {
-  const wrapped = messageOrResult
-    && typeof messageOrResult === 'object'
-    && Object.prototype.hasOwnProperty.call(messageOrResult, 'message')
-    && Object.prototype.hasOwnProperty.call(messageOrResult, 'funds');
-  const message = wrapped ? messageOrResult.message : messageOrResult;
-  const funds = wrapped ? messageOrResult.funds : {};
-  return {
-    message,
-    execute: dango.executeMessage(message, funds),
-    chain_id: dango.CHAIN_ID,
-    perps_contract: dango.PERPS_CONTRACT,
-  };
 }
 
 function decibelFieldString(row, keys) {
@@ -2506,332 +2441,6 @@ router.post('/decibel/leverage', auth, async (req, res) => {
   }
 });
 
-// ==================== DANGO ====================
-
-router.get('/dango/config', auth, async (req, res) => {
-  try {
-    if (!ensureDango(req, res)) return;
-    const linkedAccount = dango.normalizeDangoAddress(req.dexWallet || req.playerWallet);
-    const resolvedAccount = linkedAccount ? await dango.resolveAccountAddress(linkedAccount) : '';
-    res.json({
-      network: dango.NETWORK,
-      chain_id: dango.CHAIN_ID,
-      graphql_url: dango.GRAPHQL_URL,
-      rest_url: dango.REST_BASE,
-      graphql_ws_url: dango.GRAPHQL_WS_URL,
-      native_ws_url: dango.NATIVE_WS_URL,
-      perps_contract: dango.PERPS_CONTRACT,
-      account: resolvedAccount || linkedAccount,
-      linked_account: linkedAccount,
-      resolved_account: resolvedAccount || '',
-    });
-  } catch (e) {
-    res.status(500).json({ error: e.message || 'Failed to load Dango config' });
-  }
-});
-
-router.get('/dango/bridge/config', auth, async (req, res) => {
-  try {
-    if (!ensureDango(req, res)) return;
-    const account = dango.normalizeDangoAddress(
-      req.query?.account
-      || req.query?.address
-      || req.dexWallet
-      || req.playerWallet
-    );
-    if (!account) return res.status(400).json({ error: 'Dango account required' });
-    const config = await dango.fetchAppConfig();
-    const mailbox = config?.addresses?.hyperlane?.mailbox || config?.addresses?.mailbox;
-    if (!mailbox) return res.status(502).json({ error: 'Dango bridge mailbox is not configured' });
-    const mailboxConfig = await dango.queryApp({ config: {} }, { contract: mailbox });
-    const localDomain = Number(mailboxConfig?.local_domain ?? mailboxConfig?.localDomain);
-    if (!Number.isFinite(localDomain) || localDomain <= 0) {
-      return res.status(502).json({ error: 'Dango bridge local domain is unavailable' });
-    }
-    res.json({
-      network: dango.NETWORK,
-      account,
-      destination_domain: localDomain,
-      destination_chain: dango.CHAIN_ID,
-      mailbox,
-      gateway: config?.addresses?.gateway || '',
-      warp: config?.addresses?.warp || '',
-      source_chains: [
-        {
-          id: 42161,
-          key: 'arbitrum',
-          name: 'Arbitrum',
-          token: 'USDC',
-          token_address: '0xaf88d065e77c8cc2239327c5edb3a432268e5831',
-          token_decimals: 6,
-          router_address: '0x9d0ea335355da17ee89e50df43ab823416cf73d4',
-          protocol_fee_wei: '0',
-        },
-      ],
-    });
-  } catch (e) {
-    res.status(502).json({ error: e.message || 'Failed to load Dango bridge config' });
-  }
-});
-
-router.get('/dango/status', auth, async (req, res) => {
-  try {
-    if (!ensureDango(req, res)) return;
-    res.json(await dango.fetchStatus());
-  } catch (e) {
-    res.status(502).json({ error: e.message || 'Failed to load Dango status' });
-  }
-});
-
-router.get('/dango/markets', auth, async (req, res) => {
-  try {
-    if (!ensureDango(req, res)) return;
-    res.json(await dango.fetchMarkets());
-  } catch (e) {
-    res.status(502).json({ error: e.message || 'Failed to load Dango markets' });
-  }
-});
-
-router.get('/dango/prices', auth, async (req, res) => {
-  try {
-    if (!ensureDango(req, res)) return;
-    res.json(await dango.fetchMarketPrices());
-  } catch (e) {
-    res.status(502).json({ error: e.message || 'Failed to load Dango prices' });
-  }
-});
-
-router.get('/dango/account', auth, async (req, res) => {
-  try {
-    const account = requireDangoAccount(req, res);
-    if (!account) return;
-    res.json(await dango.fetchAccount(account));
-  } catch (e) {
-    res.status(502).json({ error: e.message || 'Failed to load Dango account' });
-  }
-});
-
-router.get('/dango/positions', auth, async (req, res) => {
-  try {
-    const account = requireDangoAccount(req, res);
-    if (!account) return;
-    res.json(await dango.fetchPositions(account));
-  } catch (e) {
-    res.status(502).json({ error: e.message || 'Failed to load Dango positions' });
-  }
-});
-
-router.get('/dango/orders', auth, async (req, res) => {
-  try {
-    const account = requireDangoAccount(req, res);
-    if (!account) return;
-    res.json(await dango.fetchOrders(account));
-  } catch (e) {
-    res.status(502).json({ error: e.message || 'Failed to load Dango orders' });
-  }
-});
-
-router.post('/dango/orders/message', auth, async (req, res) => {
-  try {
-    if (!ensureDango(req, res)) return;
-    const message = dango.submitOrderMessage(req.body || {});
-    res.json(dangoMessageResponse(message));
-  } catch (e) {
-    res.status(400).json({ error: e.message || 'Failed to build Dango order message' });
-  }
-});
-
-router.post('/dango/orders/place', auth, async (req, res) => {
-  try {
-    if (!ensureDango(req, res)) return;
-    const signedTx = dangoSignedTx(req);
-    if (!signedTx) {
-      let payload = null;
-      try { payload = dangoMessageResponse(dango.submitOrderMessage(req.body || {})); } catch {}
-      return dangoSignatureRequired(res, 'signedTx required to place a Dango order', payload || {});
-    }
-    const result = await dango.broadcastSignedTx(signedTx);
-    res.json({
-      success: true,
-      submitted: true,
-      reward_source: 'dango_ws',
-      result,
-    });
-  } catch (e) {
-    res.status(e.status || 502).json({ error: e.message || 'Failed to submit Dango order' });
-  }
-});
-
-router.post('/dango/orders/cancel-message', auth, async (req, res) => {
-  try {
-    if (!ensureDango(req, res)) return;
-    const message = dango.cancelOrderMessage(req.body || {});
-    res.json(dangoMessageResponse(message));
-  } catch (e) {
-    res.status(400).json({ error: e.message || 'Failed to build Dango cancel message' });
-  }
-});
-
-router.post('/dango/orders/cancel', auth, async (req, res) => {
-  try {
-    if (!ensureDango(req, res)) return;
-    const signedTx = dangoSignedTx(req);
-    if (!signedTx) {
-      let payload = null;
-      try { payload = dangoMessageResponse(dango.cancelOrderMessage(req.body || {})); } catch {}
-      return dangoSignatureRequired(res, 'signedTx required to cancel a Dango order', payload || {});
-    }
-    const result = await dango.broadcastSignedTx(signedTx);
-    res.json({ success: true, submitted: true, result });
-  } catch (e) {
-    res.status(e.status || 502).json({ error: e.message || 'Failed to cancel Dango order' });
-  }
-});
-
-router.post('/dango/margin/deposit-message', auth, async (req, res) => {
-  try {
-    if (!ensureDango(req, res)) return;
-    res.json(dangoMessageResponse(dango.depositMarginMessage(req.body || {})));
-  } catch (e) {
-    res.status(400).json({ error: e.message || 'Failed to build Dango deposit message' });
-  }
-});
-
-router.post('/dango/margin/deposit', auth, async (req, res) => {
-  try {
-    if (!ensureDango(req, res)) return;
-    const signedTx = dangoSignedTx(req);
-    if (!signedTx) {
-      let payload = null;
-      try { payload = dangoMessageResponse(dango.depositMarginMessage(req.body || {})); } catch {}
-      return dangoSignatureRequired(res, 'signedTx required to deposit Dango margin', payload || {});
-    }
-    const result = await dango.broadcastSignedTx(signedTx);
-    res.json({ success: true, submitted: true, result });
-  } catch (e) {
-    res.status(e.status || 502).json({ error: e.message || 'Failed to deposit Dango margin' });
-  }
-});
-
-router.post('/dango/margin/withdraw-message', auth, async (req, res) => {
-  try {
-    if (!ensureDango(req, res)) return;
-    res.json(dangoMessageResponse(dango.withdrawMarginMessage(req.body || {})));
-  } catch (e) {
-    res.status(400).json({ error: e.message || 'Failed to build Dango withdraw message' });
-  }
-});
-
-router.post('/dango/margin/withdraw', auth, async (req, res) => {
-  try {
-    if (!ensureDango(req, res)) return;
-    const signedTx = dangoSignedTx(req);
-    if (!signedTx) {
-      let payload = null;
-      try { payload = dangoMessageResponse(dango.withdrawMarginMessage(req.body || {})); } catch {}
-      return dangoSignatureRequired(res, 'signedTx required to withdraw Dango margin', payload || {});
-    }
-    const result = await dango.broadcastSignedTx(signedTx);
-    res.json({ success: true, submitted: true, result });
-  } catch (e) {
-    res.status(e.status || 502).json({ error: e.message || 'Failed to withdraw Dango margin' });
-  }
-});
-
-router.post('/dango/tpsl/message', auth, async (req, res) => {
-  try {
-    if (!ensureDango(req, res)) return;
-    res.json(dangoMessageResponse(dango.submitConditionalOrderMessage(req.body || {})));
-  } catch (e) {
-    res.status(400).json({ error: e.message || 'Failed to build Dango TP/SL message' });
-  }
-});
-
-router.post('/dango/tpsl/place', auth, async (req, res) => {
-  try {
-    if (!ensureDango(req, res)) return;
-    const signedTx = dangoSignedTx(req);
-    if (!signedTx) {
-      let payload = null;
-      try { payload = dangoMessageResponse(dango.submitConditionalOrderMessage(req.body || {})); } catch {}
-      return dangoSignatureRequired(res, 'signedTx required to place Dango TP/SL', payload || {});
-    }
-    const result = await dango.broadcastSignedTx(signedTx);
-    res.json({ success: true, submitted: true, result });
-  } catch (e) {
-    res.status(e.status || 502).json({ error: e.message || 'Failed to place Dango TP/SL' });
-  }
-});
-
-router.post('/dango/tpsl/cancel-message', auth, async (req, res) => {
-  try {
-    if (!ensureDango(req, res)) return;
-    res.json(dangoMessageResponse(dango.cancelConditionalOrderMessage(req.body || {})));
-  } catch (e) {
-    res.status(400).json({ error: e.message || 'Failed to build Dango TP/SL cancel message' });
-  }
-});
-
-router.post('/dango/tpsl/cancel', auth, async (req, res) => {
-  try {
-    if (!ensureDango(req, res)) return;
-    const signedTx = dangoSignedTx(req);
-    if (!signedTx) {
-      let payload = null;
-      try { payload = dangoMessageResponse(dango.cancelConditionalOrderMessage(req.body || {})); } catch {}
-      return dangoSignatureRequired(res, 'signedTx required to cancel Dango TP/SL', payload || {});
-    }
-    const result = await dango.broadcastSignedTx(signedTx);
-    res.json({ success: true, submitted: true, result });
-  } catch (e) {
-    res.status(e.status || 502).json({ error: e.message || 'Failed to cancel Dango TP/SL' });
-  }
-});
-
-router.post('/dango/tx/simulate', auth, async (req, res) => {
-  try {
-    if (!ensureDango(req, res)) return;
-    const tx = dangoUnsignedTx(req);
-    if (!tx || typeof tx !== 'object') return res.status(400).json({ error: 'tx object required' });
-    res.json(await dango.simulateTx(tx));
-  } catch (e) {
-    res.status(e.status || 502).json({ error: e.message || 'Failed to simulate Dango tx' });
-  }
-});
-
-router.post('/dango/tx/prepare', auth, async (req, res) => {
-  try {
-    if (!ensureDango(req, res)) return;
-    const body = req.body || {};
-    const linkedAccount = dango.normalizeDangoAddress(body.linkedAccount || body.linked_account || body.signer || body.owner || req.dexWallet || req.playerWallet || body.account);
-    const account = dango.normalizeDangoAddress(body.account || linkedAccount);
-    const action = body.action || body.intent || '';
-    const params = body.params && typeof body.params === 'object' ? body.params : body;
-    const sessionKey = String(body.sessionKey || body.session_key || params.sessionKey || params.session_key || '').trim();
-    const prepared = await dango.prepareSignedIntent({
-      account,
-      linkedAccount,
-      sessionKey,
-      action,
-      body: params,
-    });
-    res.json(prepared);
-  } catch (e) {
-    res.status(e.status || 502).json({ error: e.message || 'Failed to prepare Dango transaction' });
-  }
-});
-
-router.post('/dango/tx/broadcast', auth, async (req, res) => {
-  try {
-    if (!ensureDango(req, res)) return;
-    const signedTx = dangoSignedTx(req);
-    if (!signedTx) return dangoSignatureRequired(res, 'signedTx required to broadcast a Dango transaction');
-    res.json(await dango.broadcastSignedTx(signedTx));
-  } catch (e) {
-    res.status(e.status || 502).json({ error: e.message || 'Failed to broadcast Dango tx' });
-  }
-});
-
 // ==================== MARKET DATA ====================
 
 function hibachiErrorStatus(error, fallback = 502) {
@@ -2859,7 +2468,6 @@ router.get('/markets', async (req, res) => {
   try {
     const info = dex === 'avantis' ? await avantis.getMarketInfo()
       : dex === 'decibel' ? await decibel.fetchMarkets()
-      : dex === 'dango' ? await dango.fetchMarkets()
       : dex === 'gmx' ? await gmx.getMarketInfo()
       : dex === 'ostium' ? await ostium.getMarketInfo()
       : dex === 'hyperliquid' ? await hyperliquid.getMarketInfo()
@@ -2887,7 +2495,6 @@ router.get('/prices', async (req, res) => {
   try {
     const prices = dex === 'avantis' ? await avantis.getPrices()
       : dex === 'decibel' ? await decibel.fetchMarketPrices()
-      : dex === 'dango' ? await dango.fetchMarketPrices()
       : dex === 'gmx' ? await gmx.getPrices()
       : dex === 'ostium' ? await ostium.getPrices()
       : dex === 'hyperliquid' ? await hyperliquid.getPrices()
@@ -3211,14 +2818,6 @@ router.get('/positions', async (req, res) => {
       const positions = await flash.getPositionsByAddress(address);
       return res.json(positions);
     }
-    if (dex === 'dango') {
-      const address = String(req.query.address || req.query.wallet || '').trim();
-      if (!dango.isDangoAddress(address)) {
-        return res.status(400).json({ error: 'address query param required (Dango 0x account)' });
-      }
-      const positions = await dango.fetchPositions(address);
-      return res.json(positions);
-    }
     return authGate(req, res, async () => {
       const wallet = db.getWallet(req.playerId, 'pacifica');
       if (!wallet) return res.status(404).json({ error: 'No wallet' });
@@ -3323,14 +2922,6 @@ router.get('/orders', async (req, res) => {
       const orders = await flash.getOrdersByAddress(address);
       return res.json(orders);
     }
-    if (dex === 'dango') {
-      const address = String(req.query.address || req.query.wallet || '').trim();
-      if (!dango.isDangoAddress(address)) {
-        return res.status(400).json({ error: 'address query param required (Dango 0x account)' });
-      }
-      const orders = await dango.fetchOrders(address);
-      return res.json(orders);
-    }
     return authGate(req, res, async () => {
       const wallet = db.getWallet(req.playerId, 'pacifica');
       if (!wallet) return res.status(404).json({ error: 'No wallet' });
@@ -3345,7 +2936,7 @@ router.get('/orders', async (req, res) => {
 
 // Reject self-custody writes on legacy Pacifica server endpoints. These
 // venues sign in the browser or use their dedicated route groups.
-const CLIENT_SIGNED_DEXES = new Set(['avantis', 'decibel', 'dango', 'gmx', 'ostium', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash']);
+const CLIENT_SIGNED_DEXES = new Set(['avantis', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash']);
 
 function avantisMigratedGuard(req, res, next) {
   if (CLIENT_SIGNED_DEXES.has(req.dex)) {

@@ -24,7 +24,6 @@ Main current goals:
 3. Agent workflow, memory, hooks, skills, and deployment automation.
 4. Resource building upgrade content for Sawmill, Storage, and Mine.
 5. Mortar functionality and Town Hall 5 expansion with TH5 unlocks.
-6. Dango realtime exchange integration with WebSocket-backed trade credit.
 
 ## Git Notes
 
@@ -57,8 +56,9 @@ tools/codex/start-context.cmd -Full
 tools/codex/check-repo.cmd -Mode Quick
 ```
 
-Current execution focus: G-006 Dango Realtime Exchange Integration audit and
-foundation checkpoint complete.
+G-006 Dango Realtime Exchange Integration was retired on 2026-07-30 after the
+exchange ceased operation. Historical records remain readable, but Dango is no
+longer selectable and no Dango workers or API routes are started.
 
 Completed on 2026-07-05:
 

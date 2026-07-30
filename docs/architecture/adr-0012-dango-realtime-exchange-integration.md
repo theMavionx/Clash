@@ -1,7 +1,10 @@
 # ADR-0012: Dango Realtime Exchange Integration
 
 ## Status
-Accepted
+Retired
+
+Dango ceased operation, so the active integration was removed on 2026-07-30.
+Historical Dango trade and tournament rows remain readable for audit purposes.
 
 ## Date
 2026-07-05
