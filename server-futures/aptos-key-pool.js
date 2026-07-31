@@ -60,6 +60,7 @@ class AptosApiKeyPool {
     this.cooldownMs = Math.max(1000, Number(options.cooldownMs || DEFAULT_COOLDOWN_MS));
     this.now = typeof options.now === 'function' ? options.now : Date.now;
     this.logger = options.logger || console;
+    this.logPrefix = String(options.logPrefix || '[decibel]');
     this.cursor = 0;
     this.cooldownUntil = new Map();
   }
@@ -88,7 +89,7 @@ class AptosApiKeyPool {
   markLimited(index, label, error) {
     if (index < 0) return;
     this.cooldownUntil.set(index, this.now() + this.cooldownMs);
-    this.logger.warn?.('[decibel] Aptos API key rate-limited; rotating', {
+    this.logger.warn?.(`${this.logPrefix} Aptos API key rate-limited; rotating`, {
       operation: label,
       key_index: index + 1,
       key_count: this.keys.length,
@@ -117,6 +118,9 @@ class AptosApiKeyPool {
         if (!isRetryable(error)) throw error;
         this.markLimited(candidate.index, label, error);
       }
+    }
+    if (options.allowPublicFallback && this.keys.length) {
+      return operation('', -1);
     }
     throw lastError || new Error(`No Aptos API key available for ${label}`);
   }

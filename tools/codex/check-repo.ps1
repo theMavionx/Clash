@@ -20,9 +20,17 @@ $NodeFiles = @(
     "server/test-combat-grid-sync.js",
     "server/test-player-ship-migration.js",
     "server/test-client-server-combat-parity.js",
+    "server/aptos_api.js",
+    "server/test-aptos-api.js",
+    "server/bridge_helpers.js",
+    "server/custodial_marketplace.js",
+    "server/nft_v3_endpoints.js",
+    "server/earnings.js",
     "server/index.js",
     "server/routes.js",
     "server/db.js",
+    "server-futures/aptos-key-pool.js",
+    "server-futures/test-aptos-key-pool.js",
     "server-futures/index.js",
     "server-futures/routes.js",
     "server-futures/gmtrade.js",
@@ -33,6 +41,10 @@ Invoke-Step "combat grid snapshot" { node tools/combat-grid/generate-combat-grid
 Invoke-Step "combat grid regression" { node server/test-combat-grid-sync.js }
 Invoke-Step "player ship migration regression" { node server/test-player-ship-migration.js }
 Invoke-Step "client/server combat parity" { node server/test-client-server-combat-parity.js }
+Invoke-Step "shared Aptos API client" { node server/test-aptos-api.js }
+Invoke-Step "Aptos server key pool" { node server-futures/test-aptos-key-pool.js }
+Invoke-Step "Aptos browser key pool" { node scripts/verify-aptos-browser-key-pool.mjs }
+Invoke-Step "Aptos RPC routing" { node scripts/verify-aptos-rpc-routing.mjs }
 
 $CombatRegressionTests = @(
     "server/test-mimic-combat.js",

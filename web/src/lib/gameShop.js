@@ -2,6 +2,7 @@ import { BASE_CHAIN_ID, ERC20_ABI } from './avantisContract';
 import { ensureErc20Allowance } from './nftMint';
 import { addClientBreadcrumb, reportClientEvent } from './clientLogger';
 import { buildSolanaWalletTxOptions } from './solanaSeekerTx';
+import { waitForAptosTransaction } from './aptosRpc';
 
 const GAME_SHOP_CONFIG_CACHE_KEY = 'clash-game-shop-config-v1';
 const GAME_SHOP_CONFIG_CACHE_MAX_AGE_MS = 60 * 60 * 1000;
@@ -1023,19 +1024,12 @@ export async function buyAptosShopItem({ aptosWallet, buyer, token, sku, payment
     || submitResult?.signature;
   if (!txHash) throw new Error('Aptos tx submission returned no hash');
 
-  // Wait for transaction confirmation via the public Aptos fullnode.
-  // Adapter wallets typically don't expose a confirm helper, so we poll.
-  const fullnode = (typeof window !== 'undefined' && window.APTOS_FULLNODE)
-    || 'https://fullnode.mainnet.aptoslabs.com/v1';
-  for (let i = 0; i < 30; i++) {
-    const r = await fetch(`${fullnode}/transactions/by_hash/${txHash}`).catch(() => null);
-    if (r && r.ok) {
-      const data = await r.json().catch(() => null);
-      if (data?.success === true) break;
-      if (data?.success === false) throw new Error(`Aptos tx failed on-chain: ${data?.vm_status || 'unknown'}`);
-    }
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-  }
+  // Confirmation uses the shared Aptos key pool so shop redemption cannot
+  // stall behind one exhausted browser credential.
+  await waitForAptosTransaction(txHash, {
+    label: 'Aptos shop payment',
+    attempts: 30,
+  });
 
   const grant = await redeemAptosShopPurchase({
     token,

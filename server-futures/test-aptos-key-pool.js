@@ -38,6 +38,23 @@ async function main() {
   now += 11_000;
   assert.strictEqual(await pool.run('cooldown-expired', async key => key), 'third');
 
+  const publicAttempts = [];
+  const publicFallbackPool = new AptosApiKeyPool({
+    keys: ['limited'],
+    logger: { warn: () => {} },
+  });
+  const publicResult = await publicFallbackPool.run('public-fallback', async key => {
+    publicAttempts.push(key);
+    if (key) {
+      const error = new Error('MonthlyBudget cap reached');
+      error.status = 429;
+      throw error;
+    }
+    return 'public';
+  }, { allowPublicFallback: true });
+  assert.strictEqual(publicResult, 'public');
+  assert.deepStrictEqual(publicAttempts, ['limited', '']);
+
   const nonRetryable = new Error('bad request');
   nonRetryable.status = 400;
   await assert.rejects(

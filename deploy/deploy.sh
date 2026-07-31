@@ -500,6 +500,8 @@ prepare_shared_runtime() {
     ensure_env_default "NFT_SOLANA_PAYMENT_SYNC_INTERVAL_MS" "300000"
     ensure_env_default "NFT_SOLANA_PAYMENT_SYNC_MIN_CHANGE_BPS" "50"
     ensure_env_default "VITE_PRIVY_APP_ID" ""
+    ensure_env_default "APTOS_NODE_API_KEYS" ""
+    ensure_env_default "VITE_APTOS_NODE_API_KEYS" ""
     ensure_env_default "VITE_APTOS_NODE_API_KEY" ""
     ensure_env_default "VITE_ARBITRUM_RPC_URL" ""
     ensure_env_default "VITE_SOLANA_RPC_URL" ""

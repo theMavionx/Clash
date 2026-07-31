@@ -2,6 +2,7 @@
 //
 import { formatUnits } from 'viem';
 import { SOLANA_RPC_URLS, createSolanaConnection, solanaNonHeliusRpcUrls } from './solanaRpc';
+import { waitForAptosTransaction } from './aptosRpc';
 
 // Public API:
 //   fetchNftState(chain, tokenId)
@@ -655,21 +656,6 @@ function aptosHexVectorArg(hex) {
   return out;
 }
 
-async function waitForAptosTx(txHash) {
-  const fullnode = (typeof window !== 'undefined' && window.APTOS_FULLNODE)
-    || 'https://fullnode.mainnet.aptoslabs.com/v1';
-  for (let i = 0; i < 30; i += 1) {
-    const response = await fetch(`${fullnode}/transactions/by_hash/${txHash}`).catch(() => null);
-    if (response?.ok) {
-      const data = await response.json().catch(() => null);
-      if (data?.success === true) return data;
-      if (data?.success === false) throw new Error(`Aptos tx failed on-chain: ${data?.vm_status || 'unknown'}`);
-    }
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-  }
-  return null;
-}
-
 export async function fetchAptosUpgradeQuote({ owner, tokenId, tokenAddress, newLevel }) {
   return fetchUpgradeQuote({
     chain: 'aptos',
@@ -710,7 +696,10 @@ export async function upgradeAptosNft({ aptosWallet, owner, tokenId, tokenAddres
     || result?.transactionHash
     || result?.signature;
   if (!txHash) throw new Error('Aptos tx submission returned no hash');
-  const receipt = await waitForAptosTx(txHash);
+  const receipt = await waitForAptosTransaction(txHash, {
+    label: 'Aptos NFT upgrade',
+    attempts: 30,
+  });
   return { txHash, receipt, quote };
 }
 

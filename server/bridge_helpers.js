@@ -25,6 +25,10 @@ const {
   solanaRpcUrls,
   withSolanaRpcFallback,
 } = require('./solana_rpc');
+const {
+  aptosFullnodeUrl,
+  fetchWithAptosKeys,
+} = require('./aptos_api');
 
 const NFT_ROOT = path.resolve(__dirname, '..', 'nft');
 
@@ -179,9 +183,7 @@ function aptosAccount() {
 }
 
 function aptosFullnodeBase() {
-  return (process.env.NFT_APTOS_RPC_URL
-    || process.env.APTOS_RPC_URL
-    || 'https://fullnode.mainnet.aptoslabs.com').replace(/\/+$/, '');
+  return aptosFullnodeUrl().replace(/\/v1$/u, '');
 }
 
 // Verify an Aptos bridge-burn transaction. Returns { tokenAddress, owner,
@@ -195,9 +197,9 @@ async function verifyAptosBurnTx(txHash, options = {}) {
   const expectedType = expectedPublisher
     ? `${expectedPublisher}::${expectedModuleName}::BridgeBurnEvent`
     : null;
-  const url = `${aptosFullnodeBase()}/v1/transactions/by_hash/${txHash}`;
-  const r = await fetch(url, {
-    headers: process.env.APTOS_NODE_API_KEY ? { Authorization: `Bearer ${process.env.APTOS_NODE_API_KEY}` } : {},
+  const url = `${aptosFullnodeUrl()}/transactions/by_hash/${txHash}`;
+  const r = await fetchWithAptosKeys(url, { cache: 'no-store' }, {
+    label: 'Aptos bridge burn verification',
   });
   if (!r.ok) return { error: `Aptos REST ${r.status}` };
   const j = await r.json();

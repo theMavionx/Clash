@@ -30,9 +30,9 @@
 // --- Shared HTTP timeout helper. AbortController for fetch wrap so a
 // hanging public RPC can't block the admin response forever. ---
 const {
-  AptosApiKeyPool,
-  keyPoolFromEnv,
-} = require('../server-futures/aptos-key-pool');
+  aptosApiKeyPoolStatus,
+  fetchWithAptosKeys,
+} = require('./aptos_api');
 const tradeRecon = require('./trade_reconciliation');
 
 async function fetchJson(url, opts = {}, timeoutMs = 10_000) {
@@ -101,9 +101,6 @@ async function fetchPacificaEarnings() {
 const DECIBEL_REST = 'https://api.mainnet.aptoslabs.com/decibel';
 const DECIBEL_BUILDER_ADDR = '0xc82aea3965cd4f0731baf1e9a28cea65b0697911aea346577e6488d542653332';
 const DECIBEL_BUILDER_SUBACCOUNT = '0xfa4d46a481f5bc95de01a629ec95b7876e946ebe1e86374284d899ac4366984a';
-const DECIBEL_API_KEY_POOL = new AptosApiKeyPool({
-  keys: keyPoolFromEnv(process.env),
-});
 const DECIBEL_BUILDER_FEE_BPS = Number(
   process.env.DECIBEL_BUILDER_FEE_BPS
   || process.env.VITE_DECIBEL_BUILDER_FEE_BPS
@@ -111,7 +108,7 @@ const DECIBEL_BUILDER_FEE_BPS = Number(
 ) || 1;
 
 async function fetchDecibelEarnings() {
-  if (!DECIBEL_API_KEY_POOL.size) {
+  if (!aptosApiKeyPoolStatus().key_count) {
     return {
       earned_usd: 0, address: DECIBEL_BUILDER_ADDR,
       subaccount: DECIBEL_BUILDER_SUBACCOUNT,
@@ -120,12 +117,17 @@ async function fetchDecibelEarnings() {
     };
   }
   const url = `${DECIBEL_REST}/api/v1/account_overviews?account=${DECIBEL_BUILDER_SUBACCOUNT}`;
-  const data = await DECIBEL_API_KEY_POOL.run(
-    'admin earnings account_overviews',
-    apiKey => fetchJson(url, {
-      headers: { Authorization: `Bearer ${apiKey}` },
-    }),
-  );
+  const response = await fetchWithAptosKeys(url, {}, {
+    label: 'admin earnings account_overviews',
+    allowPublicFallback: false,
+  });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '');
+    const error = new Error(`HTTP ${response.status}${detail ? `: ${detail.slice(0, 240)}` : ''}`);
+    error.status = response.status;
+    throw error;
+  }
+  const data = await response.json();
   if (data?.status === 'notFound') {
     return {
       earned_usd: 0, address: DECIBEL_BUILDER_ADDR,

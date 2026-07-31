@@ -48,6 +48,13 @@ const {
   collectionMintRarity,
   collectionMintRaritySeed,
 } = require('./nft_rarity');
+const {
+  aptosFullnodeUrl: sharedAptosFullnodeUrl,
+  aptosIndexerUrl,
+  createAptosSdkConfig,
+  fetchWithAptosKeys,
+  runWithAptosKeys,
+} = require('./aptos_api');
 
 const router = express.Router();
 
@@ -333,14 +340,10 @@ function deserializeAptosWalletSignature(sdk, signatureHex, scheme) {
   return null;
 }
 
-function createAptosVerificationConfig(sdk) {
-  const { AptosConfig, Network } = sdk;
-  if (!AptosConfig) return null;
+function createAptosVerificationConfig(sdk, apiKey = '') {
+  if (!sdk?.AptosConfig) return null;
   try {
-    return new AptosConfig({
-      network: Network?.MAINNET || 'mainnet',
-      fullnode: aptosFullnode().replace(/\/$/, ''),
-    });
+    return createAptosSdkConfig(sdk, apiKey);
   } catch {
     return null;
   }
@@ -420,13 +423,17 @@ async function verifyAptosWalletAuthProof(wallet, message, issuedAt, proof) {
       return publicKey.verifySignature({ message: messageBytes, signature });
     } catch (syncError) {
       if (typeof publicKey.verifySignatureAsync !== 'function') throw syncError;
-      const aptosConfig = createAptosVerificationConfig(sdk);
-      if (!aptosConfig) throw syncError;
-      return await publicKey.verifySignatureAsync({
-        aptosConfig,
-        message: messageBytes,
-        signature,
-        options: { throwErrorWithReason: true },
+      return await runWithAptosKeys(async (apiKey) => {
+        const aptosConfig = createAptosVerificationConfig(sdk, apiKey);
+        if (!aptosConfig) throw syncError;
+        return publicKey.verifySignatureAsync({
+          aptosConfig,
+          message: messageBytes,
+          signature,
+          options: { throwErrorWithReason: true },
+        });
+      }, {
+        label: 'Aptos wallet auth proof verification',
       });
     }
   } catch (e) {
@@ -1486,12 +1493,17 @@ async function readCollectionAptosMintedCount(collection) {
   const dep = nftCollectionDeployment(collection.slug, 'aptos');
   if (!dep?.module) return null;
   try {
-    const { Aptos, AptosConfig, Network } = await import('@aptos-labs/ts-sdk');
-    const fullnode = process.env.NFT_APTOS_RPC_URL || process.env.APTOS_RPC_URL || 'https://fullnode.mainnet.aptoslabs.com/v1';
-    const aptos = new Aptos(new AptosConfig({ network: Network.MAINNET, fullnode }));
-    const result = await aptos.view({
-      payload: { function: `${dep.module}::current_supply`, functionArguments: [] },
-    });
+    const response = await fetchWithAptosKeys(`${sharedAptosFullnodeUrl()}/view`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        function: `${dep.module}::current_supply`,
+        type_arguments: [],
+        arguments: [],
+      }),
+    }, { label: `${collection.slug} Aptos supply` });
+    if (!response.ok) throw new Error(`Aptos supply view ${response.status}`);
+    const result = await response.json();
     return Number(result?.[0] || 0);
   } catch {
     return Number.isFinite(Number(dep.totalMinted)) ? Number(dep.totalMinted) : null;
@@ -2242,7 +2254,7 @@ async function readAptosNftLevelCached(tokenId) {
   const dep = nftAptosDeployment();
   if (dep?.collection && id >= 1 && id <= NFT_METADATA_MAX_TOKEN_ID) {
     try {
-      const indexerUrl = process.env.APTOS_INDEXER_URL || 'https://indexer.mainnet.aptoslabs.com/v1/graphql';
+      const indexerUrl = aptosIndexerUrl();
       const tokenName = `${process.env.NFT_NAME || 'Demon King'} #${id}`;
       const query = `query Q($collection:String!, $tokenName:String!) {
         current_token_datas_v2(
@@ -2253,12 +2265,11 @@ async function readAptosNftLevelCached(tokenId) {
         }
       }`;
       const headers = { 'content-type': 'application/json' };
-      if (process.env.APTOS_NODE_API_KEY) headers.Authorization = `Bearer ${process.env.APTOS_NODE_API_KEY}`;
-      const r = await fetch(indexerUrl, {
+      const r = await fetchWithAptosKeys(indexerUrl, {
         method: 'POST',
         headers,
         body: JSON.stringify({ query, variables: { collection: dep.collection, tokenName } }),
-      });
+      }, { label: 'Aptos NFT level metadata' });
       const j = await r.json().catch(() => null);
       const row = j?.data?.current_token_datas_v2?.[0] || null;
       if (row) level = parseAptosTokenLevel(row.token_properties);
@@ -2281,7 +2292,7 @@ async function readAptosNftRarityCached(tokenId) {
   const dep = nftAptosDeployment();
   if (dep?.collection && id >= 1 && id <= NFT_METADATA_MAX_TOKEN_ID) {
     try {
-      const indexerUrl = process.env.APTOS_INDEXER_URL || 'https://indexer.mainnet.aptoslabs.com/v1/graphql';
+      const indexerUrl = aptosIndexerUrl();
       const tokenName = `${process.env.NFT_NAME || 'Demon King'} #${id}`;
       const query = `query Q($collection:String!, $tokenName:String!) {
         current_token_datas_v2(
@@ -2292,12 +2303,11 @@ async function readAptosNftRarityCached(tokenId) {
         }
       }`;
       const headers = { 'content-type': 'application/json' };
-      if (process.env.APTOS_NODE_API_KEY) headers.Authorization = `Bearer ${process.env.APTOS_NODE_API_KEY}`;
-      const r = await fetch(indexerUrl, {
+      const r = await fetchWithAptosKeys(indexerUrl, {
         method: 'POST',
         headers,
         body: JSON.stringify({ query, variables: { collection: dep.collection, tokenName } }),
-      });
+      }, { label: 'Aptos NFT rarity metadata' });
       const j = await r.json().catch(() => null);
       const row = j?.data?.current_token_datas_v2?.[0] || null;
       if (row) rarity = parseAptosTokenRarity(row.token_properties);
@@ -4679,20 +4689,18 @@ async function readAptosNftMintedCount() {
   const collectionAddr = process.env.NFT_APTOS_COLLECTION || deployment.collection;
   const moduleAddr = deployment.module || (deployment.admin
     ? `${deployment.admin}::demon_king` : null);
-  const fullnode = process.env.NFT_APTOS_RPC_URL || aptosFullnode();
-  const apiKey = process.env.APTOS_NODE_API_KEY;
-  const headers = apiKey ? { Authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' }
-                          : { 'content-type': 'application/json' };
+  const fullnode = sharedAptosFullnodeUrl();
+  const headers = { 'content-type': 'application/json' };
 
   if (moduleAddr) {
     try {
-      const r = await fetch(`${fullnode}/view`, {
+      const r = await fetchWithAptosKeys(`${fullnode}/view`, {
         method: 'POST', headers,
         body: JSON.stringify({
           function: `${moduleAddr}::current_supply`,
           type_arguments: [], arguments: [],
         }),
-      });
+      }, { label: 'Aptos NFT current supply' });
       if (r.ok) {
         const arr = await r.json();
         const v = Array.isArray(arr) ? Number(arr[0]) : null;
@@ -4703,7 +4711,11 @@ async function readAptosNftMintedCount() {
 
   if (!collectionAddr) return null;
   try {
-    const r = await fetch(`${fullnode}/accounts/${collectionAddr}/resource/0x4::collection::ConcurrentSupply`, { headers });
+    const r = await fetchWithAptosKeys(
+      `${fullnode}/accounts/${collectionAddr}/resource/0x4::collection::ConcurrentSupply`,
+      { headers },
+      { label: 'Aptos NFT concurrent supply' },
+    );
     if (!r.ok) return null;
     const json = await r.json();
     const value = json?.data?.current_supply?.value;
@@ -8207,19 +8219,17 @@ router.post('/shop/evm/redeem', auth, async (req, res) => {
 
 // ---------- Game shop: Aptos (Decibel-side) USDC/APT transfer ----------
 
-const APTOS_FULLNODE_DEFAULT = 'https://fullnode.mainnet.aptoslabs.com/v1';
-
 function aptosFullnode() {
-  return process.env.GAME_SHOP_APTOS_FULLNODE
-    || process.env.APTOS_FULLNODE
-    || APTOS_FULLNODE_DEFAULT;
+  return sharedAptosFullnodeUrl();
 }
 
 async function aptosFetchTx(version) {
   const base = aptosFullnode().replace(/\/+$/, '');
-  const apiKey = process.env.APTOS_NODE_API_KEY || process.env.DECIBEL_API_KEY;
-  const headers = apiKey ? { Authorization: `Bearer ${apiKey}` } : {};
-  const r = await fetch(`${base}/transactions/by_hash/${version}`, { headers });
+  const r = await fetchWithAptosKeys(
+    `${base}/transactions/by_hash/${version}`,
+    { cache: 'no-store' },
+    { label: 'Aptos shop transaction verification' },
+  );
   if (!r.ok) return null;
   return r.json().catch(() => null);
 }

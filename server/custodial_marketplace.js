@@ -5,7 +5,6 @@ const {
   EVM_CHAINS,
   ALL_CHAINS,
   aptosAccount,
-  aptosFullnodeBase,
   buildSolanaBridgeMemo,
   deploymentOf,
   getSolanaBridgeAssetInfo,
@@ -20,6 +19,14 @@ const {
   solanaRpcUrls,
   withSolanaRpcFallback,
 } = require('./solana_rpc');
+const {
+  aptosFullnodeUrl,
+  aptosIndexerUrl,
+  createAptosSdkConfig,
+  fetchWithAptosKeys,
+  runWithAptosKeys,
+  waitForAptosTransaction,
+} = require('./aptos_api');
 
 const TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
 const BASE_USDC_TOKEN = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
@@ -1426,9 +1433,11 @@ async function verifyEvmNftDepositTx(order, txHash) {
 }
 
 async function aptosFetchTx(txHash) {
-  const apiKey = process.env.APTOS_NODE_API_KEY || process.env.DECIBEL_API_KEY;
-  const headers = apiKey ? { Authorization: `Bearer ${apiKey}` } : {};
-  const r = await fetch(`${aptosFullnodeBase()}/v1/transactions/by_hash/${txHash}`, { headers });
+  const r = await fetchWithAptosKeys(
+    `${aptosFullnodeUrl()}/transactions/by_hash/${txHash}`,
+    { cache: 'no-store' },
+    { label: 'Aptos marketplace transaction verification' },
+  );
   if (!r.ok) return null;
   return r.json().catch(() => null);
 }
@@ -1438,7 +1447,7 @@ async function verifyAptosAsset(assetId, expectedOwner) {
   if (!dep?.collection) throw httpError(503, 'Aptos NFT collection is not configured');
   const tokenAddress = normalizeAptosWallet(assetId, 'Aptos token address');
   const owner = normalizeAptosWallet(expectedOwner, 'Aptos owner');
-  const indexerUrl = process.env.APTOS_INDEXER_URL || 'https://indexer.mainnet.aptoslabs.com/v1/graphql';
+  const indexerUrl = aptosIndexerUrl();
   const query = `query Q($owner:String!, $token:String!) {
     current_token_ownerships_v2(
       where: {owner_address:{_eq:$owner}, token_data_id:{_eq:$token}, amount:{_gt:0}}
@@ -1449,12 +1458,11 @@ async function verifyAptosAsset(assetId, expectedOwner) {
     }
   }`;
   const headers = { 'content-type': 'application/json' };
-  if (process.env.APTOS_NODE_API_KEY) headers.Authorization = `Bearer ${process.env.APTOS_NODE_API_KEY}`;
-  const response = await fetch(indexerUrl, {
+  const response = await fetchWithAptosKeys(indexerUrl, {
     method: 'POST',
     headers,
     body: JSON.stringify({ query, variables: { owner, token: tokenAddress } }),
-  });
+  }, { label: 'Aptos marketplace NFT ownership' });
   const json = await response.json().catch(() => ({}));
   if (!response.ok || json?.errors?.length) {
     throw httpError(502, json?.errors?.[0]?.message || `Aptos indexer ${response.status}`);
@@ -1804,17 +1812,23 @@ async function transferAptosNft({ tokenAddress, to }) {
   const sdkPath = process.env.APTOS_SDK_PATH
     || require.resolve('@aptos-labs/ts-sdk', { paths: [require('path').join(__dirname, '..', 'server-futures', 'node_modules'), require('path').join(__dirname, '..', 'nft', 'node_modules')] });
   const sdk = require(sdkPath);
-  const aptos = new sdk.Aptos(new sdk.AptosConfig({ network: 'mainnet' }));
-  const tx = await aptos.transaction.build.simple({
-    sender: acc.accountAddress,
-    data: {
-      function: '0x1::object::transfer',
-      typeArguments: [APTOS_TOKEN_TYPE],
-      functionArguments: [normalizeAptosWallet(tokenAddress, 'Aptos token'), normalizeAptosWallet(to, 'Aptos recipient')],
-    },
+  const submitted = await runWithAptosKeys(async (apiKey) => {
+    const aptos = new sdk.Aptos(createAptosSdkConfig(sdk, apiKey));
+    const tx = await aptos.transaction.build.simple({
+      sender: acc.accountAddress,
+      data: {
+        function: '0x1::object::transfer',
+        typeArguments: [APTOS_TOKEN_TYPE],
+        functionArguments: [normalizeAptosWallet(tokenAddress, 'Aptos token'), normalizeAptosWallet(to, 'Aptos recipient')],
+      },
+    });
+    return aptos.signAndSubmitTransaction({ signer: acc, transaction: tx });
+  }, {
+    label: 'Aptos marketplace NFT transfer submission',
   });
-  const submitted = await aptos.signAndSubmitTransaction({ signer: acc, transaction: tx });
-  await aptos.waitForTransaction({ transactionHash: submitted.hash });
+  await waitForAptosTransaction(submitted.hash, {
+    label: 'Aptos marketplace NFT transfer',
+  });
   return submitted.hash;
 }
 
@@ -1856,16 +1870,22 @@ async function burnAptosForBridge({ order, destChain }) {
   const sdkPath = process.env.APTOS_SDK_PATH
     || require.resolve('@aptos-labs/ts-sdk', { paths: [require('path').join(__dirname, '..', 'server-futures', 'node_modules'), require('path').join(__dirname, '..', 'nft', 'node_modules')] });
   const sdk = require(sdkPath);
-  const aptos = new sdk.Aptos(new sdk.AptosConfig({ network: 'mainnet' }));
-  const tx = await aptos.transaction.build.simple({
-    sender: acc.accountAddress,
-    data: {
-      function: `${dep.module}::bridge_burn`,
-      functionArguments: [normalizeAptosWallet(order.asset_id, 'Aptos token'), String(CHAIN_IDS[destChain])],
-    },
+  const submitted = await runWithAptosKeys(async (apiKey) => {
+    const aptos = new sdk.Aptos(createAptosSdkConfig(sdk, apiKey));
+    const tx = await aptos.transaction.build.simple({
+      sender: acc.accountAddress,
+      data: {
+        function: `${dep.module}::bridge_burn`,
+        functionArguments: [normalizeAptosWallet(order.asset_id, 'Aptos token'), String(CHAIN_IDS[destChain])],
+      },
+    });
+    return aptos.signAndSubmitTransaction({ signer: acc, transaction: tx });
+  }, {
+    label: 'Aptos marketplace bridge burn submission',
   });
-  const submitted = await aptos.signAndSubmitTransaction({ signer: acc, transaction: tx });
-  await aptos.waitForTransaction({ transactionHash: submitted.hash });
+  await waitForAptosTransaction(submitted.hash, {
+    label: 'Aptos marketplace bridge burn',
+  });
   return submitted.hash;
 }
 
@@ -2192,17 +2212,23 @@ async function payoutAptosUsdc({ to, amount, ctx }) {
   const sdkPath = process.env.APTOS_SDK_PATH
     || require.resolve('@aptos-labs/ts-sdk', { paths: [require('path').join(__dirname, '..', 'server-futures', 'node_modules'), require('path').join(__dirname, '..', 'nft', 'node_modules')] });
   const sdk = require(sdkPath);
-  const aptos = new sdk.Aptos(new sdk.AptosConfig({ network: 'mainnet' }));
-  const tx = await aptos.transaction.build.simple({
-    sender: acc.accountAddress,
-    data: {
-      function: '0x1::primary_fungible_store::transfer',
-      typeArguments: ['0x1::fungible_asset::Metadata'],
-      functionArguments: [config.tokenAddress, normalizeAptosWallet(to, 'Seller payout wallet'), String(amount)],
-    },
+  const submitted = await runWithAptosKeys(async (apiKey) => {
+    const aptos = new sdk.Aptos(createAptosSdkConfig(sdk, apiKey));
+    const tx = await aptos.transaction.build.simple({
+      sender: acc.accountAddress,
+      data: {
+        function: '0x1::primary_fungible_store::transfer',
+        typeArguments: ['0x1::fungible_asset::Metadata'],
+        functionArguments: [config.tokenAddress, normalizeAptosWallet(to, 'Seller payout wallet'), String(amount)],
+      },
+    });
+    return aptos.signAndSubmitTransaction({ signer: acc, transaction: tx });
+  }, {
+    label: 'Aptos marketplace seller payout submission',
   });
-  const submitted = await aptos.signAndSubmitTransaction({ signer: acc, transaction: tx });
-  await aptos.waitForTransaction({ transactionHash: submitted.hash });
+  await waitForAptosTransaction(submitted.hash, {
+    label: 'Aptos marketplace seller payout',
+  });
   return submitted.hash;
 }
 

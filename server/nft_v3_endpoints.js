@@ -27,6 +27,14 @@ const {
   collectionMintRarity,
   collectionMintRaritySeed,
 } = require('./nft_rarity');
+const {
+  aptosFullnodeUrl,
+  aptosIndexerUrl,
+  createAptosSdkConfig,
+  fetchWithAptosKeys,
+  runWithAptosKeys,
+  waitForAptosTransaction,
+} = require('./aptos_api');
 
 const NFT_ROOT = path.resolve(__dirname, '..', 'nft');
 const {
@@ -1505,7 +1513,7 @@ async function listOwnedAptosCollectionNfts(collectionSlugRaw, ownerRaw, options
     return cached.body;
   }
 
-  const indexerUrl = process.env.APTOS_INDEXER_URL || 'https://indexer.mainnet.aptoslabs.com/v1/graphql';
+  const indexerUrl = aptosIndexerUrl();
   const query = `query Q($owner:String!, $collection:String!) {
     current_token_ownerships_v2(
       where: {owner_address:{_eq:$owner}, current_token_data:{collection_id:{_eq:$collection}}, amount:{_gt:0}}
@@ -1515,11 +1523,12 @@ async function listOwnedAptosCollectionNfts(collectionSlugRaw, ownerRaw, options
     }
   }`;
   const headers = { 'content-type': 'application/json' };
-  if (process.env.APTOS_NODE_API_KEY) headers.Authorization = `Bearer ${process.env.APTOS_NODE_API_KEY}`;
-  const response = await timeoutPromise(fetch(indexerUrl, {
+  const response = await timeoutPromise(fetchWithAptosKeys(indexerUrl, {
     method: 'POST',
     headers,
     body: JSON.stringify({ query, variables: { owner, collection: dep.collection } }),
+  }, {
+    label: `${collectionDisplayName(collectionSlug)} Aptos owner scan`,
   }), 12_000, `${collectionDisplayName(collectionSlug)} Aptos owner scan`);
   const json = await response.json().catch(() => ({}));
   if (!response.ok || json?.errors?.length) {
@@ -2746,44 +2755,6 @@ function mountNftV3Endpoints(router, ctx) {
         const ownedBody = decorateDemonKingOwnedBody(await listOwnedAptosDemonKingNfts(ownerRaw), chainKey);
         res.set('Cache-Control', 'public, max-age=10');
         return res.json(ownedBody);
-        const { deploymentOf, aptosFullnodeBase } = require('./bridge_helpers');
-        const dep = deploymentOf('aptos');
-        if (!dep?.collection) return res.status(503).json({ error: 'Aptos not deployed' });
-        if (!/^0x[0-9a-fA-F]{1,64}$/.test(ownerRaw)) return res.status(400).json({ error: 'Aptos address malformed' });
-        const owner = '0x' + ownerRaw.replace(/^0x/, '').padStart(64, '0').toLowerCase();
-        // Aptos indexer GraphQL — official mainnet endpoint.
-        const indexerUrl = process.env.APTOS_INDEXER_URL || 'https://indexer.mainnet.aptoslabs.com/v1/graphql';
-        const q = `query Q($owner:String!, $collection:String!) {
-          current_token_ownerships_v2(
-            where: {owner_address:{_eq:$owner}, current_token_data:{collection_id:{_eq:$collection}}, amount:{_gt:0}}
-          ) {
-            token_data_id
-            current_token_data { token_name token_properties }
-          }
-        }`;
-        const headers = { 'content-type':'application/json' };
-        if (process.env.APTOS_NODE_API_KEY) headers.Authorization = `Bearer ${process.env.APTOS_NODE_API_KEY}`;
-        const r = await fetch(indexerUrl, { method:'POST', headers,
-          body: JSON.stringify({ query: q, variables: { owner, collection: dep.collection } }) });
-        const j = await r.json();
-        const rows = j?.data?.current_token_ownerships_v2 || [];
-        const tokens = rows.map((row) => {
-          // Aptos token_properties is a JSON string from indexer; parse `level` if present.
-          let level = 1;
-          try {
-            const props = row.current_token_data?.token_properties;
-            const parsed = typeof props === 'string' ? JSON.parse(props) : props;
-            if (parsed?.level != null) level = Number(parsed.level);
-          } catch { /* ignore */ }
-          level = normalizeNftLevel(level);
-          return {
-            tokenAddress: row.token_data_id,
-            level,
-            imageUrl: nftLevelImageUrl(level, row.current_token_data?.token_name || 'aptos'),
-          };
-        });
-        res.set('Cache-Control', 'public, max-age=10');
-        return res.json({ chain: 'aptos', owner, collection: dep.collection, total: tokens.length, tokens });
       }
 
       // Solana path
@@ -3048,7 +3019,6 @@ function mountNftV3Endpoints(router, ctx) {
   const bridgeHelpers = require('./bridge_helpers');
   const { CHAIN_IDS, EVM_CHAINS, ALL_CHAINS, deploymentOf, normalizeBridgeCollectionSlug,
           normalizeAptosAddress,
-          aptosFullnodeBase,
           aptosAccount, signAptosBridgeReceipt, verifyAptosBurnTx,
           verifySolanaBurnTx, buildSourceRef,
           getSolanaBridgeAssetInfo, buildSolanaBridgeMemo,
@@ -3297,17 +3267,18 @@ function mountNftV3Endpoints(router, ctx) {
     const cached = _aptosBridgeFeeCache.get(cacheKey);
     if (cached && now - cached.at < 60_000) return cached.value;
 
-    const response = await timeoutPromise(fetch(`${aptosFullnodeBase()}/v1/view`, {
+    const response = await timeoutPromise(fetchWithAptosKeys(`${aptosFullnodeUrl()}/view`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        ...(process.env.APTOS_NODE_API_KEY ? { Authorization: `Bearer ${process.env.APTOS_NODE_API_KEY}` } : {}),
       },
       body: JSON.stringify({
         function: `${dep.module}::get_bridge_fee_octas`,
         type_arguments: [],
         arguments: [],
       }),
+    }, {
+      label: `${collectionSlug} Aptos bridge fee view`,
     }), 8_000, `${collectionSlug} Aptos bridge fee view`);
     const json = await response.json().catch(() => null);
     if (!response.ok) {
@@ -4448,23 +4419,29 @@ function mountNftV3Endpoints(router, ctx) {
                       path.join(__dirname, '..', 'nft', 'node_modules')],
             });
           const sdk = require(sdkPath);
-          const aptos = new sdk.Aptos(new sdk.AptosConfig({ network: 'mainnet' }));
-          const tx = await aptos.transaction.build.simple({
-            sender: aptosAccount().accountAddress,
-            data: {
-              function: `${aptosDeploy.module}::bridge_mint`,
-              functionArguments: [
-                destAddress, burned.level,
-                Array.from(Buffer.from(sourceRef.replace(/^0x/, ''), 'hex')),
-                Number(CHAIN_IDS.aptos), Number(deadline),
-                Array.from(Buffer.from(signature.replace(/^0x/, ''), 'hex')),
-              ],
-            },
+          const submitted = await runWithAptosKeys(async (apiKey) => {
+            const aptos = new sdk.Aptos(createAptosSdkConfig(sdk, apiKey));
+            const tx = await aptos.transaction.build.simple({
+              sender: aptosAccount().accountAddress,
+              data: {
+                function: `${aptosDeploy.module}::bridge_mint`,
+                functionArguments: [
+                  destAddress, burned.level,
+                  Array.from(Buffer.from(sourceRef.replace(/^0x/, ''), 'hex')),
+                  Number(CHAIN_IDS.aptos), Number(deadline),
+                  Array.from(Buffer.from(signature.replace(/^0x/, ''), 'hex')),
+                ],
+              },
+            });
+            return aptos.signAndSubmitTransaction({
+              signer: aptosAccount(), transaction: tx,
+            });
+          }, {
+            label: `${collectionSlug} Aptos bridge mint submission`,
           });
-          const submitted = await aptos.signAndSubmitTransaction({
-            signer: aptosAccount(), transaction: tx,
+          const aptosTx = await waitForAptosTransaction(submitted.hash, {
+            label: `${collectionSlug} Aptos bridge mint`,
           });
-          const aptosTx = await aptos.waitForTransaction({ transactionHash: submitted.hash });
           const mintEvent = aptosMintedEventFromTx(aptosTx);
           const aptosDestTokenIndex = mintEvent?.data?.token_index != null
             ? String(mintEvent.data.token_index)

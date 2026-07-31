@@ -1,6 +1,7 @@
 import { getAddress } from 'viem';
 import { reportClientEvent } from './clientLogger';
 import { buildSolanaWalletTxOptions, isSolanaMobileWalletAdapter, shortSolanaAddress } from './solanaSeekerTx';
+import { waitForAptosTransaction } from './aptosRpc';
 
 export const CUSTODIAL_EVM_CHAIN_IDS = {
   base: 8453,
@@ -308,21 +309,6 @@ async function ensureEvmChain(evmWallet, chainId) {
   });
 }
 
-async function waitForAptosTx(txHash, label = 'Aptos transaction') {
-  const fullnode = (typeof window !== 'undefined' && window.APTOS_FULLNODE)
-    || 'https://fullnode.mainnet.aptoslabs.com/v1';
-  for (let i = 0; i < 40; i += 1) {
-    const r = await fetch(`${fullnode}/transactions/by_hash/${txHash}`).catch(() => null);
-    if (r && r.ok) {
-      const data = await r.json().catch(() => null);
-      if (data?.success === true) return data;
-      if (data?.success === false) throw new Error(`${label} failed on-chain: ${data?.vm_status || 'unknown'}`);
-    }
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-  }
-  throw new Error(`${label} was submitted but confirmation timed out`);
-}
-
 function aptosSubmitHash(result) {
   return result?.hash || result?.txnHash || result?.transactionHash || result?.signature || result;
 }
@@ -571,7 +557,10 @@ export async function payCustodialOrderOnAptos({
   const txHash = aptosSubmitHash(result);
   if (!txHash) throw new Error('Aptos tx submission returned no hash');
   onProgress?.({ step: 'payment', status: 'submitted', order: intent.order, txHash });
-  await waitForAptosTx(txHash, 'Aptos marketplace payment');
+  await waitForAptosTransaction(txHash, {
+    label: 'Aptos marketplace payment',
+    attempts: 40,
+  });
   onProgress?.({ step: 'payment', status: 'complete', order: intent.order, txHash });
   onProgress?.({ step: 'transfer', status: 'active', order: intent.order, txHash });
   const confirmed = await confirmCustodialPayment({ token, orderId, txHash });
@@ -978,7 +967,10 @@ export async function depositAptosNftToCustody({
   });
   const txHash = aptosSubmitHash(result);
   if (!txHash) throw new Error('Aptos tx submission returned no hash');
-  await waitForAptosTx(txHash, 'Aptos marketplace NFT deposit');
+  await waitForAptosTransaction(txHash, {
+    label: 'Aptos marketplace NFT deposit',
+    attempts: 40,
+  });
   const confirmed = await confirmCustodialDeposit({ token, orderId: order.id, txHash });
   return { txHash, confirmed };
 }

@@ -77,7 +77,7 @@ export function createAptosBrowserKeyPool(keys, poolOptions = {}) {
         lastError = error;
         if (!isAptosBrowserKeyLimitError(error)) throw error;
         markLimited(candidate.index, cooldownMs);
-        logger.warn?.('[Decibel] Aptos browser API key limited; rotating', {
+        logger.warn?.('[Aptos] Browser API key limited; rotating', {
           operation: options.label || 'Aptos request',
           key_index: candidate.index + 1,
           key_count: normalizedKeys.length,
