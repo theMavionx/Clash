@@ -295,13 +295,13 @@ export default function RankedAttackSelector({
             <div className="ranked-attack-visual casual">
               <img className="ranked-attack-hero casual" src={attackIcon} alt="" />
               <span className="ranked-attack-status casual">Standard</span>
-            </div>
-            <div className="ranked-attack-content">
-              <div className="ranked-attack-heading">
+              <div className="ranked-attack-heading ranked-attack-casual-heading">
                 <span>Regular matchmaking</span>
                 <h3>Casual battle</h3>
                 <p>Raid for account trophies with standard matchmaking and shield rules.</p>
               </div>
+            </div>
+            <div className="ranked-attack-content casual">
               <button
                 type="button"
                 className="ranked-attack-casual-button"

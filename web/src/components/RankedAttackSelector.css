@@ -133,6 +133,10 @@
   box-shadow: inset 0 0 0 2px #ead8af, 0 4px 0 rgba(87, 56, 34, 0.22);
 }
 
+.ranked-attack-mode.casual {
+  grid-template-rows: minmax(320px, 1fr) auto;
+}
+
 .ranked-attack-mode.ranked {
   border-color: #7f6544;
 }
@@ -170,6 +174,7 @@
   width: 86%;
   height: 86%;
   filter: drop-shadow(0 7px 7px rgba(47, 57, 61, 0.24));
+  transform: translateY(-7%);
 }
 
 .ranked-attack-hero.tournament {
@@ -231,6 +236,10 @@
   padding: 13px;
 }
 
+.ranked-attack-content.casual {
+  background: #fff8e7;
+}
+
 .ranked-attack-heading > span {
   display: block;
   margin-bottom: 2px;
@@ -255,6 +264,30 @@
   font-size: 12px;
   font-weight: 750;
   line-height: 1.4;
+}
+
+.ranked-attack-casual-heading {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  left: 16px;
+  z-index: 1;
+  color: #fff;
+  text-shadow: 0 2px 0 rgba(65, 37, 12, 0.82), 0 0 8px rgba(65, 37, 12, 0.48);
+}
+
+.ranked-attack-casual-heading > span,
+.ranked-attack-casual-heading h3,
+.ranked-attack-casual-heading p {
+  color: inherit;
+}
+
+.ranked-attack-casual-heading h3 {
+  font-size: 25px;
+}
+
+.ranked-attack-casual-heading p {
+  max-width: 360px;
 }
 
 .ranked-attack-metrics {
@@ -484,14 +517,19 @@
     grid-template-rows: minmax(220px, auto);
   }
 
+  .ranked-attack-mode.casual {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(260px, 1fr) auto;
+  }
+
   .ranked-attack-visual {
     border-right: 3px solid #a98a58;
     border-bottom: 0;
   }
 
   .ranked-attack-hero.casual {
-    width: 100%;
-    height: 84%;
+    width: 86%;
+    height: 86%;
   }
 
   .ranked-attack-hero.tournament {
@@ -521,6 +559,20 @@
   .ranked-attack-content {
     gap: 8px;
     padding: 10px;
+  }
+
+  .ranked-attack-casual-heading {
+    right: 13px;
+    bottom: 13px;
+    left: 13px;
+  }
+
+  .ranked-attack-casual-heading h3 {
+    font-size: 22px;
+  }
+
+  .ranked-attack-casual-heading p {
+    font-size: 11px;
   }
 
   .ranked-attack-heading h3 {
@@ -553,8 +605,16 @@
     grid-template-columns: 92px minmax(0, 1fr);
   }
 
+  .ranked-attack-mode.casual {
+    grid-template-columns: 1fr;
+  }
+
   .ranked-attack-heading p {
     display: none;
+  }
+
+  .ranked-attack-casual-heading p {
+    display: block;
   }
 
   .ranked-attack-trading-strip {
