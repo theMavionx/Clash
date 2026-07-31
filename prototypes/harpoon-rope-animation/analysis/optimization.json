@@ -1,0 +1,272 @@
+{
+  "source": "C:\\Users\\Admin\\Downloads\\Clash-main\\Clash-main\\prototypes\\harpoon-rope-animation\\assets\\harpoon_turret_rigged.glb",
+  "output": "C:\\Users\\Admin\\Downloads\\Clash-main\\Clash-main\\prototypes\\harpoon-rope-animation\\assets\\harpoon_turret_rigged_lod.glb",
+  "source_bytes": 1842860,
+  "output_bytes": 1736452,
+  "total_triangles_before": 12492,
+  "total_triangles_after": 8814,
+  "triangle_reduction_percent": 29.443,
+  "file_reduction_percent": 5.774,
+  "mesh_object_count": 36,
+  "logical_nodes_preserved": {
+    "TurretYawPivot": true,
+    "HarpoonProjectile": true,
+    "RopeMuzzle": true,
+    "RopeHook": true,
+    "LaunchTarget": true
+  },
+  "objects": [
+    {
+      "name": "Harpoon001_HarpoonTurret_0",
+      "triangles_before": 264,
+      "triangles_after": 221,
+      "target_ratio": 0.84,
+      "actual_reduction_percent": 16.288
+    },
+    {
+      "name": "Harpoon002_HarpoonTurret_0",
+      "triangles_before": 288,
+      "triangles_after": 241,
+      "target_ratio": 0.84,
+      "actual_reduction_percent": 16.319
+    },
+    {
+      "name": "Harpoon029_HarpoonTurret_0",
+      "triangles_before": 120,
+      "triangles_after": 120,
+      "target_ratio": 1.0,
+      "actual_reduction_percent": 0.0
+    },
+    {
+      "name": "Harpoon030_HarpoonTurret_0",
+      "triangles_before": 384,
+      "triangles_after": 276,
+      "target_ratio": 0.72,
+      "actual_reduction_percent": 28.125
+    },
+    {
+      "name": "Harpoon033_HarpoonTurret_0",
+      "triangles_before": 432,
+      "triangles_after": 311,
+      "target_ratio": 0.72,
+      "actual_reduction_percent": 28.009
+    },
+    {
+      "name": "Harpoon035_HarpoonTurret_0",
+      "triangles_before": 300,
+      "triangles_after": 251,
+      "target_ratio": 0.84,
+      "actual_reduction_percent": 16.333
+    },
+    {
+      "name": "Harpoon003_HarpoonTurret_0",
+      "triangles_before": 48,
+      "triangles_after": 48,
+      "target_ratio": 1.0,
+      "actual_reduction_percent": 0.0
+    },
+    {
+      "name": "Harpoon004_HarpoonTurret_0",
+      "triangles_before": 360,
+      "triangles_after": 259,
+      "target_ratio": 0.72,
+      "actual_reduction_percent": 28.056
+    },
+    {
+      "name": "Harpoon006_HarpoonTurret_0",
+      "triangles_before": 316,
+      "triangles_after": 265,
+      "target_ratio": 0.84,
+      "actual_reduction_percent": 16.139
+    },
+    {
+      "name": "Harpoon007_HarpoonTurret_0",
+      "triangles_before": 96,
+      "triangles_after": 96,
+      "target_ratio": 1.0,
+      "actual_reduction_percent": 0.0
+    },
+    {
+      "name": "Harpoon008_HarpoonTurret_0",
+      "triangles_before": 30,
+      "triangles_after": 30,
+      "target_ratio": 1.0,
+      "actual_reduction_percent": 0.0
+    },
+    {
+      "name": "Harpoon009_HarpoonTurret_0",
+      "triangles_before": 532,
+      "triangles_after": 383,
+      "target_ratio": 0.72,
+      "actual_reduction_percent": 28.008
+    },
+    {
+      "name": "Harpoon010_HarpoonTurret_0",
+      "triangles_before": 520,
+      "triangles_after": 374,
+      "target_ratio": 0.72,
+      "actual_reduction_percent": 28.077
+    },
+    {
+      "name": "Harpoon011_HarpoonTurret_0",
+      "triangles_before": 384,
+      "triangles_after": 276,
+      "target_ratio": 0.72,
+      "actual_reduction_percent": 28.125
+    },
+    {
+      "name": "Harpoon012_HarpoonTurret_0",
+      "triangles_before": 2952,
+      "triangles_after": 1712,
+      "target_ratio": 0.58,
+      "actual_reduction_percent": 42.005
+    },
+    {
+      "name": "Harpoon018_HarpoonTurret_0",
+      "triangles_before": 60,
+      "triangles_after": 60,
+      "target_ratio": 1.0,
+      "actual_reduction_percent": 0.0
+    },
+    {
+      "name": "Harpoon019_HarpoonTurret_0",
+      "triangles_before": 376,
+      "triangles_after": 270,
+      "target_ratio": 0.72,
+      "actual_reduction_percent": 28.191
+    },
+    {
+      "name": "Harpoon020_HarpoonTurret_0",
+      "triangles_before": 576,
+      "triangles_after": 414,
+      "target_ratio": 0.72,
+      "actual_reduction_percent": 28.125
+    },
+    {
+      "name": "Harpoon021_HarpoonTurret_0",
+      "triangles_before": 480,
+      "triangles_after": 345,
+      "target_ratio": 0.72,
+      "actual_reduction_percent": 28.125
+    },
+    {
+      "name": "Harpoon022_HarpoonTurret_0",
+      "triangles_before": 216,
+      "triangles_after": 180,
+      "target_ratio": 0.84,
+      "actual_reduction_percent": 16.667
+    },
+    {
+      "name": "Harpoon023_HarpoonTurret_0",
+      "triangles_before": 44,
+      "triangles_after": 44,
+      "target_ratio": 1.0,
+      "actual_reduction_percent": 0.0
+    },
+    {
+      "name": "Harpoon024_HarpoonTurret_0",
+      "triangles_before": 264,
+      "triangles_after": 221,
+      "target_ratio": 0.84,
+      "actual_reduction_percent": 16.288
+    },
+    {
+      "name": "Harpoon025_HarpoonTurret_0",
+      "triangles_before": 264,
+      "triangles_after": 220,
+      "target_ratio": 0.84,
+      "actual_reduction_percent": 16.667
+    },
+    {
+      "name": "Harpoon026_HarpoonTurret_0",
+      "triangles_before": 12,
+      "triangles_after": 12,
+      "target_ratio": 1.0,
+      "actual_reduction_percent": 0.0
+    },
+    {
+      "name": "Harpoon027_HarpoonTurret_0",
+      "triangles_before": 12,
+      "triangles_after": 12,
+      "target_ratio": 1.0,
+      "actual_reduction_percent": 0.0
+    },
+    {
+      "name": "Harpoon028_HarpoonTurret_0",
+      "triangles_before": 912,
+      "triangles_after": 528,
+      "target_ratio": 0.58,
+      "actual_reduction_percent": 42.105
+    },
+    {
+      "name": "Harpoon038_HarpoonTurret_0",
+      "triangles_before": 452,
+      "triangles_after": 324,
+      "target_ratio": 0.72,
+      "actual_reduction_percent": 28.319
+    },
+    {
+      "name": "Harpoon039_HarpoonTurret_0",
+      "triangles_before": 48,
+      "triangles_after": 48,
+      "target_ratio": 1.0,
+      "actual_reduction_percent": 0.0
+    },
+    {
+      "name": "Harpoon040_HarpoonTurret_0",
+      "triangles_before": 912,
+      "triangles_after": 528,
+      "target_ratio": 0.58,
+      "actual_reduction_percent": 42.105
+    },
+    {
+      "name": "Harpoon048_HarpoonTurret_0",
+      "triangles_before": 12,
+      "triangles_after": 12,
+      "target_ratio": 1.0,
+      "actual_reduction_percent": 0.0
+    },
+    {
+      "name": "Harpoon049_HarpoonTurret_0",
+      "triangles_before": 96,
+      "triangles_after": 96,
+      "target_ratio": 1.0,
+      "actual_reduction_percent": 0.0
+    },
+    {
+      "name": "Harpoon050_HarpoonTurret_0",
+      "triangles_before": 44,
+      "triangles_after": 44,
+      "target_ratio": 1.0,
+      "actual_reduction_percent": 0.0
+    },
+    {
+      "name": "Harpoon051_HarpoonTurret_0",
+      "triangles_before": 40,
+      "triangles_after": 40,
+      "target_ratio": 1.0,
+      "actual_reduction_percent": 0.0
+    },
+    {
+      "name": "Harpoon005_HarpoonTurret_0",
+      "triangles_before": 72,
+      "triangles_after": 72,
+      "target_ratio": 1.0,
+      "actual_reduction_percent": 0.0
+    },
+    {
+      "name": "Harpoon013_HarpoonTurret_0",
+      "triangles_before": 288,
+      "triangles_after": 241,
+      "target_ratio": 0.84,
+      "actual_reduction_percent": 16.319
+    },
+    {
+      "name": "Harpoon017_HarpoonTurret_0",
+      "triangles_before": 286,
+      "triangles_after": 240,
+      "target_ratio": 0.84,
+      "actual_reduction_percent": 16.084
+    }
+  ]
+}

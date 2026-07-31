@@ -18,6 +18,10 @@ $NodeFiles = @(
     "tools/combat-grid/generate-combat-grid-config.cjs",
     "server/combat_grid_config.js",
     "server/test-combat-grid-sync.js",
+    "server/casualty_report.js",
+    "server/test-casualty-report.js",
+    "server/test-battle-result-idempotency.js",
+    "server/test-battle-casualty-http.js",
     "server/test-player-ship-migration.js",
     "server/test-client-server-combat-parity.js",
     "server/aptos_api.js",
@@ -39,6 +43,9 @@ $NodeFiles = @(
 
 Invoke-Step "combat grid snapshot" { node tools/combat-grid/generate-combat-grid-config.cjs --check }
 Invoke-Step "combat grid regression" { node server/test-combat-grid-sync.js }
+Invoke-Step "casualty report regression" { node server/test-casualty-report.js }
+Invoke-Step "battle result idempotency regression" { node server/test-battle-result-idempotency.js }
+Invoke-Step "battle casualty HTTP regression" { node server/test-battle-casualty-http.js }
 Invoke-Step "player ship migration regression" { node server/test-player-ship-migration.js }
 Invoke-Step "client/server combat parity" { node server/test-client-server-combat-parity.js }
 Invoke-Step "shared Aptos API client" { node server/test-aptos-api.js }

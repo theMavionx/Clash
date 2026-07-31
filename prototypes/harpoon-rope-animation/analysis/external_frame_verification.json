@@ -1,0 +1,157 @@
+{
+  "passed": true,
+  "frameByFrameImagesDecoded": 288,
+  "telemetrySamplesChecked": 286,
+  "variants": [
+    {
+      "name": "original",
+      "passed": true,
+      "godotVerificationPassed": true,
+      "telemetryFramesChecked": 143,
+      "movieFramesDecoded": 144,
+      "keyframesDecoded": 18,
+      "telemetrySequential": true,
+      "timeMonotonic": true,
+      "finiteValues": true,
+      "movieSequential": true,
+      "imagesValid": true,
+      "firstMovieFrame": "frame00000000.png",
+      "lastMovieFrame": "frame00000143.png"
+    },
+    {
+      "name": "lod",
+      "passed": true,
+      "godotVerificationPassed": true,
+      "telemetryFramesChecked": 143,
+      "movieFramesDecoded": 144,
+      "keyframesDecoded": 18,
+      "telemetrySequential": true,
+      "timeMonotonic": true,
+      "finiteValues": true,
+      "movieSequential": true,
+      "imagesValid": true,
+      "firstMovieFrame": "frame00000000.png",
+      "lastMovieFrame": "frame00000143.png"
+    }
+  ],
+  "lodVisualComparison": {
+    "keyframesCompared": 18,
+    "averagePsnrDb": 31.164633454670838,
+    "maximumMeanAbsoluteError": 0.8176915922619048,
+    "acceptanceThresholds": {
+      "minimumAveragePsnrDb": 30,
+      "maximumMeanAbsoluteError": 2
+    },
+    "frames": [
+      {
+        "keyframe": "00_yaw_start.png",
+        "meanAbsoluteError": 0.7962872023809524,
+        "meanSquaredError": 55.34975818452381,
+        "psnrDb": 30.69964633021847
+      },
+      {
+        "keyframe": "01_aim_start.png",
+        "meanAbsoluteError": 0.8176915922619048,
+        "meanSquaredError": 57.02182849702381,
+        "psnrDb": 30.5703922131721
+      },
+      {
+        "keyframe": "02_yaw_33.png",
+        "meanAbsoluteError": 0.7849944196428571,
+        "meanSquaredError": 55.09571986607143,
+        "psnrDb": 30.719624990532843
+      },
+      {
+        "keyframe": "03_yaw_66.png",
+        "meanAbsoluteError": 0.6627473958333333,
+        "meanSquaredError": 47.17404947916667,
+        "psnrDb": 31.393772026427417
+      },
+      {
+        "keyframe": "04_yaw_locked.png",
+        "meanAbsoluteError": 0.6726655505952381,
+        "meanSquaredError": 46.36896391369048,
+        "psnrDb": 31.46852968909869
+      },
+      {
+        "keyframe": "05_release.png",
+        "meanAbsoluteError": 0.6859375,
+        "meanSquaredError": 46.19931547619048,
+        "psnrDb": 31.484448200978367
+      },
+      {
+        "keyframe": "06_launch_33.png",
+        "meanAbsoluteError": 0.7283891369047619,
+        "meanSquaredError": 47.85431919642857,
+        "psnrDb": 31.33159218785972
+      },
+      {
+        "keyframe": "07_launch_66.png",
+        "meanAbsoluteError": 0.6905561755952381,
+        "meanSquaredError": 47.64590959821429,
+        "psnrDb": 31.35054738478576
+      },
+      {
+        "keyframe": "08_full_extension.png",
+        "meanAbsoluteError": 0.7060788690476191,
+        "meanSquaredError": 48.44680431547619,
+        "psnrDb": 31.27815225795417
+      },
+      {
+        "keyframe": "09_rope_tension.png",
+        "meanAbsoluteError": 0.7065234375,
+        "meanSquaredError": 48.559949776785714,
+        "psnrDb": 31.26802131970316
+      },
+      {
+        "keyframe": "10_retract_start.png",
+        "meanAbsoluteError": 0.7064322916666667,
+        "meanSquaredError": 48.39972470238095,
+        "psnrDb": 31.282374694833504
+      },
+      {
+        "keyframe": "11_retract_25.png",
+        "meanAbsoluteError": 0.6948195684523809,
+        "meanSquaredError": 47.34808965773809,
+        "psnrDb": 31.377778995526842
+      },
+      {
+        "keyframe": "12_retract_50.png",
+        "meanAbsoluteError": 0.7206305803571429,
+        "meanSquaredError": 47.54205543154762,
+        "psnrDb": 31.360024067975388
+      },
+      {
+        "keyframe": "13_retract_75.png",
+        "meanAbsoluteError": 0.7032924107142857,
+        "meanSquaredError": 47.59393601190476,
+        "psnrDb": 31.35528738490546
+      },
+      {
+        "keyframe": "14_returned.png",
+        "meanAbsoluteError": 0.6740252976190476,
+        "meanSquaredError": 45.65421130952381,
+        "psnrDb": 31.535995162565023
+      },
+      {
+        "keyframe": "15_yaw_return_50.png",
+        "meanAbsoluteError": 0.7285956101190476,
+        "meanSquaredError": 50.61603236607143,
+        "psnrDb": 31.0879226171013
+      },
+      {
+        "keyframe": "16_yaw_home.png",
+        "meanAbsoluteError": 0.7962872023809524,
+        "meanSquaredError": 55.34975818452381,
+        "psnrDb": 30.69964633021847
+      },
+      {
+        "keyframe": "17_settled.png",
+        "meanAbsoluteError": 0.7962872023809524,
+        "meanSquaredError": 55.34975818452381,
+        "psnrDb": 30.69964633021847
+      }
+    ],
+    "sideBySideImage": "C:\\Users\\Admin\\Downloads\\Clash-main\\Clash-main\\prototypes\\harpoon-rope-animation\\screenshots\\10_clean_yaw_original_vs_lod_full_extension.png"
+  }
+}

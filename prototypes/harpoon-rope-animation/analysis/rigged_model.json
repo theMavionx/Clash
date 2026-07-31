@@ -1,0 +1,78 @@
+{
+  "source": "C:\\Users\\Admin\\Downloads\\Clash-main\\Clash-main\\prototypes\\harpoon-rope-animation\\assets\\harpoon_turret_source.glb",
+  "output": "C:\\Users\\Admin\\Downloads\\Clash-main\\Clash-main\\prototypes\\harpoon-rope-animation\\assets\\harpoon_turret_rigged.glb",
+  "projectile_meshes": [
+    "Harpoon005_HarpoonTurret_0",
+    "Harpoon013_HarpoonTurret_0",
+    "Harpoon017_HarpoonTurret_0"
+  ],
+  "projectile_triangles": 646,
+  "removed_linkage_meshes": [
+    "Harpoon014_HarpoonTurret_0",
+    "Harpoon015_HarpoonTurret_0",
+    "Harpoon041_HarpoonTurret_0",
+    "Harpoon042_HarpoonTurret_0",
+    "Harpoon043_HarpoonTurret_0",
+    "Harpoon044_HarpoonTurret_0",
+    "Harpoon045_HarpoonTurret_0",
+    "Harpoon046_HarpoonTurret_0",
+    "Harpoon047_HarpoonTurret_0"
+  ],
+  "removed_linkage_triangles": 4750,
+  "static_base_nodes": [
+    "Harpoon001",
+    "Harpoon002",
+    "Harpoon029",
+    "Harpoon030",
+    "Harpoon033",
+    "Harpoon035"
+  ],
+  "rotating_root_nodes": [
+    "Harpoon003",
+    "Harpoon004",
+    "Harpoon006",
+    "Harpoon007",
+    "Harpoon008",
+    "Harpoon009",
+    "Harpoon010",
+    "Harpoon011",
+    "Harpoon012",
+    "Harpoon018",
+    "Harpoon019",
+    "Harpoon020",
+    "Harpoon021",
+    "Harpoon022",
+    "Harpoon023",
+    "Harpoon024",
+    "Harpoon025",
+    "Harpoon026",
+    "Harpoon027",
+    "Harpoon028",
+    "Harpoon038",
+    "Harpoon039",
+    "Harpoon040",
+    "Harpoon048",
+    "Harpoon049",
+    "Harpoon050",
+    "Harpoon051"
+  ],
+  "anchor_world_blender": [
+    -1.334498,
+    0.0,
+    2.991691
+  ],
+  "launch_target_world_blender": [
+    -7.334498,
+    0.0,
+    2.991691
+  ],
+  "logical_nodes": [
+    "TurretYawPivot",
+    "HarpoonProjectile",
+    "RopeMuzzle",
+    "RopeHook",
+    "LaunchTarget"
+  ],
+  "mesh_objects_after_cleanup": 36,
+  "output_bytes": 1842860
+}

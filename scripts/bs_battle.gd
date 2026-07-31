@@ -20,6 +20,7 @@ var _submit_result: Dictionary = {}
 var _submit_complete: bool = false
 var _pending_troop_death_keys: Dictionary = {}
 var _pending_troop_death_counts: Dictionary = {}
+var _final_troop_death_counts: Dictionary = {}
 var _troop_deaths_flushed: bool = false
 
 # ---------------------------------------------------------------------------
@@ -193,6 +194,7 @@ func _battle_elapsed_sec() -> float:
 func _reset_troop_death_reports() -> void:
 	_pending_troop_death_keys.clear()
 	_pending_troop_death_counts.clear()
+	_final_troop_death_counts.clear()
 	_troop_deaths_flushed = false
 
 
@@ -213,33 +215,27 @@ func record_troop_death_once(troop_name: String, troop_instance: int = 0, replay
 	return true
 
 
-func _paid_casualty_counts(casualties: Dictionary = {}, use_pending_if_empty: bool = false) -> Dictionary:
-	var source: Dictionary = casualties
-	if use_pending_if_empty and source.is_empty():
-		source = _pending_troop_death_counts
+func _paid_casualty_counts(casualties: Dictionary = {}) -> Dictionary:
 	var counts: Dictionary = {}
-	for raw_name in source:
+	for raw_name in casualties:
 		var troop_name: String = str(raw_name).split(":")[0]
 		if troop_name == "" or troop_name == "DemonKing" or troop_name == "FireDragon":
 			continue
-		var count: int = int(source.get(raw_name, 0))
+		var count: int = int(casualties.get(raw_name, 0))
 		if count <= 0:
 			continue
 		counts[troop_name] = int(counts.get(troop_name, 0)) + count
 	return counts
 
 
-func _actual_battle_casualties() -> Dictionary:
-	return _paid_casualty_counts(_pending_troop_death_counts)
-
-
-func _flush_troop_deaths_once(casualties: Dictionary = {}, use_pending_if_empty: bool = false) -> void:
-	if _troop_deaths_flushed:
-		return
-	_troop_deaths_flushed = true
-	# Casualties are reported once through battle_result.casualties after the
-	# server verifies the replay. Emitting per-troop UI events here made the
-	# React casualty counter vulnerable to duplicate visual counts.
+## Freezes the one authoritative client-side death ledger at match end.
+## Every terminal path submits this exact dictionary once through
+## /attack/result; no per-death network or React event participates.
+func _seal_troop_death_report() -> Dictionary:
+	if not _troop_deaths_flushed:
+		_final_troop_death_counts = _paid_casualty_counts(_pending_troop_death_counts)
+		_troop_deaths_flushed = true
+	return _final_troop_death_counts.duplicate(true)
 
 
 func _replay_wall_elapsed_sec() -> float:
@@ -1488,7 +1484,7 @@ func _on_town_hall_destroyed() -> void:
 	# Doing it here means we can kick off the server submit in parallel with
 	# the chain-destroy animation. Only actual death reports are submitted;
 	# delayed-spawn troops are not counted as lost.
-	var casualties_early: Dictionary = _actual_battle_casualties()
+	var casualties_early: Dictionary = _seal_troop_death_report()
 
 	# Fire the server submit in the background so its round-trip (1-3 s)
 	# overlaps with the chain-destroy animation + admire delay instead of
@@ -1599,7 +1595,6 @@ func _on_town_hall_destroyed() -> void:
 		var loot: Dictionary = result.get("loot", {})
 		var server_casualties: Dictionary = result.get("casualties", casualties_early)
 		if bridge:
-			_flush_troop_deaths_once(server_casualties)
 			if loot.get("gold", 0) > 0 or loot.get("wood", 0) > 0 or loot.get("ore", 0) > 0:
 				bridge.send_to_react("resources_add", {
 					"gold": loot.get("gold", 0),
@@ -1619,7 +1614,6 @@ func _on_town_hall_destroyed() -> void:
 			})
 		return
 	if bridge:
-		_flush_troop_deaths_once(casualties_early)
 		bridge.send_to_react("battle_result", {"type": "victory", "loot": {}, "casualties": casualties_early})
 
 
@@ -2320,32 +2314,8 @@ func check_defeat(delta: float) -> void:
 	var had_any_troops: bool = _had_troops
 	_had_troops = false
 	_skeleton_respawn_timer = 0.0
-
-	# Submit defeat
-	var net_def: Node = bs._net
-	var def_id: String = enemy_info.get("id", "")
-	var defeat_casualties: Dictionary = _actual_battle_casualties()
 	var defeat_reason: String = "All troops lost" if had_any_troops else "No troops deployed"
-	if net_def and net_def.has_token() and def_id != "" and not _victory_declared:
-		_begin_live_defeat()
-		var defeat_session_id: String = str(enemy_info.get("battle_session_id", ""))
-		var defeat_result: Dictionary = await net_def.submit_battle_result(def_id, _battle_replay, "defeat", defeat_casualties, defeat_session_id)
-		if not is_instance_valid(bs): return
-		# Apply authoritative post-casualty ship state from server
-		if defeat_result is Dictionary and defeat_result.has("ships"):
-			bs._apply_ships_from_server(defeat_result.get("ships", []))
-		if defeat_result is Dictionary and defeat_result.has("casualties"):
-			defeat_casualties = defeat_result.get("casualties", defeat_casualties)
-	elif not _victory_declared:
-		_begin_live_defeat()
-	if not is_instance_valid(bs): return
-	var audio = bs.get_node_or_null("/root/AudioManager")
-	if audio and audio.has_method("play_result"):
-		audio.play_result()
-	var bridge_def: Node = bs._bridge
-	if bridge_def:
-		_flush_troop_deaths_once(defeat_casualties)
-		bridge_def.send_to_react("battle_result", {"type": "defeat", "reason": defeat_reason, "casualties": defeat_casualties})
+	await _finish_live_defeat(defeat_reason)
 
 
 ## Forces a defeat — used when battle timer expires.
@@ -2355,7 +2325,16 @@ func _force_defeat(reason: String) -> void:
 		return
 	_had_troops = false
 	_skeleton_respawn_timer = 0.0
-	var defeat_casualties: Dictionary = _actual_battle_casualties()
+	await _finish_live_defeat(reason)
+
+
+## One terminal path for every live defeat. The final casualty dictionary is
+## sealed before cleanup, sent once with the replay, then replaced only by the
+## server's response to that same report.
+func _finish_live_defeat(reason: String) -> void:
+	if _victory_declared:
+		return
+	var defeat_casualties: Dictionary = _seal_troop_death_report()
 	_begin_live_defeat()
 	var audio = bs.get_node_or_null("/root/AudioManager")
 	if audio and audio.has_method("play_result"):
@@ -2365,10 +2344,35 @@ func _force_defeat(reason: String) -> void:
 	var def_id: String = enemy_info.get("id", "")
 	if net_def and net_def.has_token() and def_id != "":
 		var defeat_session_id: String = str(enemy_info.get("battle_session_id", ""))
-		net_def.submit_battle_result(def_id, _battle_replay, "defeat", defeat_casualties, defeat_session_id)
+		var defeat_result: Dictionary = await net_def.submit_battle_result(
+			def_id,
+			_battle_replay,
+			"defeat",
+			defeat_casualties,
+			defeat_session_id
+		)
+		if not is_instance_valid(bs):
+			return
+		if defeat_result.has("error"):
+			var bridge_error: Node = bs._bridge
+			if bridge_error:
+				var error_message: String = str(defeat_result.get("error", "Battle result was not recorded.")).strip_edges()
+				var error_reason: String = str(defeat_result.get("reason", "")).strip_edges()
+				if error_reason != "":
+					error_message = ("%s %s" % [error_message, error_reason]).strip_edges()
+				bridge_error.send_to_react("battle_result", {
+					"type": "error",
+					"title": "Battle not recorded",
+					"message": error_message,
+					"reason": error_message,
+				})
+			return
+		if defeat_result.has("ships"):
+			bs._apply_ships_from_server(defeat_result.get("ships", []))
+		if defeat_result.has("casualties") and defeat_result.get("casualties") is Dictionary:
+			defeat_casualties = defeat_result.get("casualties", defeat_casualties)
 	var bridge_def: Node = bs._bridge
 	if bridge_def:
-		_flush_troop_deaths_once(defeat_casualties)
 		bridge_def.send_to_react("battle_result", {"type": "defeat", "reason": reason, "casualties": defeat_casualties})
 
 

@@ -1,0 +1,40 @@
+{
+	"aim_yaw_monotonic": true,
+	"checks": {
+		"endpoints_attached": true,
+		"phases_complete": true,
+		"reached_target": true,
+		"rope_reached_target": true,
+		"sample_count_ok": true,
+		"screenshots_complete": true,
+		"static_base_stationary": true,
+		"yaw_range_complete": true
+	},
+	"expected_fps": 30,
+	"maximum_endpoint_error": 0.0,
+	"maximum_projectile_distance": 5.99999952316284,
+	"maximum_rope_length": 6.00239996612072,
+	"maximum_static_base_drift": 0.0,
+	"maximum_yaw_degrees": 28.0,
+	"minimum_yaw_degrees": -32.0,
+	"model_path": "res://assets/harpoon_turret_rigged.glb",
+	"observed_phases": [
+		"READY",
+		"AIMING",
+		"LOCKED",
+		"FIRING",
+		"ROPE TAUT",
+		"REELING IN",
+		"RETURNING",
+		"RESET"
+	],
+	"outbound_monotonic": true,
+	"passed": true,
+	"retract_monotonic": true,
+	"return_yaw_monotonic": true,
+	"sample_count": 143,
+	"screenshots_expected": 18,
+	"screenshots_written": 18,
+	"travel_distance": 6.0,
+	"variant": "original"
+}

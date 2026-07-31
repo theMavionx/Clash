@@ -1716,6 +1716,11 @@ try {
 // reference surrendered_at.
 try { db.exec(`ALTER TABLE battle_sessions ADD COLUMN surrendered_at TEXT`); } catch {}
 try { db.exec(`ALTER TABLE battle_sessions ADD COLUMN loot_snapshot_json TEXT`); } catch {}
+// Final battle settlement cache. The client submits one casualty report at
+// match end; caching the exact response by battle session makes a transport
+// retry idempotent instead of applying the same report a second time.
+try { db.exec(`ALTER TABLE battle_sessions ADD COLUMN casualty_report_json TEXT`); } catch {}
+try { db.exec(`ALTER TABLE battle_sessions ADD COLUMN result_response_json TEXT`); } catch {}
 try {
   rankedRaids.ensureRankedRaidSchema(db);
 } catch (e) {
@@ -3169,6 +3174,20 @@ const stmts = {
     VALUES (?, ?, ?, ?, ?, ?, ?)
   `),
   getBattleSession: db.prepare(`SELECT * FROM battle_sessions WHERE id = ?`),
+  getCompletedBattleResult: db.prepare(`
+    SELECT id, attacker_id, defender_id, casualty_report_json, result_response_json
+    FROM battle_sessions
+    WHERE id = ? AND attacker_id = ? AND defender_id = ? AND status = 'completed'
+    LIMIT 1
+  `),
+  saveCompletedBattleResult: db.prepare(`
+    UPDATE battle_sessions
+    SET casualty_report_json = ?,
+        result_response_json = ?
+    WHERE id = ? AND attacker_id = ? AND defender_id = ? AND status = 'completed'
+      AND casualty_report_json IS NULL
+      AND result_response_json IS NULL
+  `),
   finishBattleSessionById: db.prepare(`
     UPDATE battle_sessions
     SET status = ?, completed_at = datetime('now')
@@ -10609,6 +10628,41 @@ function finishBattleSession(sessionId, attackerId, defenderId, status = 'comple
   return stmts.finishBattleSessionsForPair.run(finalStatus, attackerId, defenderId);
 }
 
+function getCompletedBattleResult(sessionId, attackerId, defenderId) {
+  const normalized = normalizeBattleSessionId(sessionId);
+  if (!normalized) return null;
+  const row = stmts.getCompletedBattleResult.get(normalized, attackerId, defenderId);
+  if (!row || !row.casualty_report_json || !row.result_response_json) return null;
+  try {
+    return {
+      battle_session_id: row.id,
+      casualty_report_json: row.casualty_report_json,
+      response: JSON.parse(row.result_response_json),
+    };
+  } catch (error) {
+    console.warn('[battle-result] invalid cached response:', normalized, error.message);
+    return null;
+  }
+}
+
+function saveCompletedBattleResult(
+  sessionId,
+  attackerId,
+  defenderId,
+  casualtyReportJson,
+  response,
+) {
+  const normalized = normalizeBattleSessionId(sessionId);
+  if (!normalized) return { changes: 0 };
+  return stmts.saveCompletedBattleResult.run(
+    String(casualtyReportJson || '{}'),
+    JSON.stringify(response || {}),
+    normalized,
+    attackerId,
+    defenderId,
+  );
+}
+
 function recalculateTrophies(playerId) {
   const buildings = stmts.getBuildings.all(playerId);
   let total = 0;
@@ -11369,6 +11423,11 @@ function replaySimDebug(simResult) {
     troopsAlive: simResult._troopsAlive,
     guardsAlive: simResult._guardsAlive,
     casualties: simResult.casualties || {},
+    clientCasualties: simResult.clientCasualties || {},
+    resolvedCasualties: simResult.resolvedCasualties || {},
+    casualtySource: simResult.casualtySource || null,
+    casualtyReportVersion: simResult.casualtyReportVersion ?? null,
+    casualtyDifferences: simResult.casualtyDifferences || {},
     cannonShotsAccepted: simResult._cannonShotsAccepted,
     cannonEventsIgnored: simResult._cannonEventsIgnored,
     rallyEventsAccepted: simResult._rallyEventsAccepted,
@@ -12542,6 +12601,8 @@ module.exports = {
   markSurrender,
   validateBattleSession,
   finishBattleSession,
+  getCompletedBattleResult,
+  saveCompletedBattleResult,
   getPlayerMatchmakingStats,
   getGlobalMatchmakingStats,
   getTroopBalanceAnalytics,

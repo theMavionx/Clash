@@ -2257,3 +2257,69 @@ Follow-up:
   referrer, request encoding/signature compatibility, wallet/account mismatch rejection, and
   the backend trading gate. The production web build, focused ESLint check, and Deploy-mode
   repository check pass.
+
+### UR-2026-07-31-HARPOON-ROPE-ANIMATION-PROTOTYPE
+
+- **Timestamp:** 2026-07-31 11:07:49 +03:00 (Europe/Kyiv)
+- **Request:** Import `C:/Users/Admin/Downloads/harpoon_turret.glb` into an isolated Godot test
+  scene and determine whether the harpoon and rope can be animated. Capture screenshots at
+  each stage, inspect the animation frame by frame, use Blender to separate meshes if the
+  source is monolithic, and, if the animation works, test polygon reduction.
+- **Scope:** Prototype/test-scene work only. Preserve the original GLB, do not change production
+  gameplay scenes, and do not commit or push without separate owner approval.
+- **Result:** Confirmed that the GLB contains 45 separate mesh objects. Grouped the three
+  projectile meshes into a non-production rigged copy, implemented a 6 m harpoon launch,
+  procedural 24-segment rope, hold, retract, and reset cycle in an isolated Godot 4.6 project,
+  and captured deterministic 30 FPS output. Original and LOD variants each passed 111 rendered
+  frame checks plus 110 telemetry samples with attached endpoints and monotonic outbound/return
+  motion. A controlled LOD reduced geometry from 17,242 to 11,993 triangles (30.443%) and GLB
+  size by 7.299%; it is suitable for the gameplay camera but the full model remains preferable
+  for close-up/UI use. No production scene, commit, or push was performed.
+
+### UR-2026-07-31-HARPOON-CLEAN-YAW-PROTOTYPE
+
+- **Timestamp:** 2026-07-31 11:43:45 +03:00 (Europe/Kyiv)
+- **Request:** Remove the lower decorative rope/linkage and its attachment mechanism shown in
+  the supplied screenshots, add circular yaw rotation for the harpoon assembly around the
+  central pedestal pivot, and repeat the same frame-by-frame original/LOD verification.
+- **Scope:** Continue only in the isolated harpoon prototype, preserve the original GLB and
+  production scenes, remain on `main`, and do not commit or push without separate approval.
+- **Result:** Removed the complete 9-mesh lower linkage (4,750 triangles), kept the six-mesh
+  pedestal static, and grouped the upper assembly, projectile, rope attachments, and launch
+  direction under `TurretYawPivot`. Godot demonstrated a monotonic `-32°` to `+28°` aim,
+  6 m launch, rope hold, retract, and monotonic return yaw with zero static-base drift.
+  Original and LOD variants each passed 144 rendered frames, 143 telemetry samples, and 18
+  keyframe captures. The clean original has 12,492 triangles; the clean LOD has 8,814, a
+  48.881% reduction from the raw source. No production scene, commit, or push was performed.
+
+### UR-2026-07-31-SINGLE-END-OF-BATTLE-CASUALTY-REPORT
+
+- **Timestamp:** 2026-07-31 (Europe/Kyiv)
+- **Request:** Fix inflated casualty totals (for example, five or six dead Knights shown as
+  twenty) by stopping casualty updates from multiple sources and sending one final casualty
+  summary to the server at the end of the match.
+- **Scope:** Trace the complete Godot-to-server battle result path, make the final report
+  idempotent, preserve server validation, and verify that duplicate delivery cannot remove or
+  display the same casualties twice.
+- **Result:** Centralized live deaths in the main battle ledger, sealed one versioned casualty
+  report before every victory/defeat submission, made timeout defeats await the server, and
+  stopped strict replay simulation from replacing the reported totals. Completed responses are
+  cached by battle session so matching retries return the original result while conflicting
+  retries are rejected.
+- **Verification:** A strict HTTP regression reproduced `Godot=6 Knights` versus
+  `server simulation=20 Knights`; both defeat and victory applied/displayed exactly six.
+  Matching retries changed no troops, trophies, loot, or replay rows, and a changed retry
+  returned `409`. Focused Node tests, the Quick repository suite, and Godot 4.6 headless script
+  loading passed.
+
+### UR-2026-07-31-COMMIT-ALL-PUSH-AND-PROD-DEPLOY
+
+- **Timestamp:** 2026-07-31 (Europe/Kyiv)
+- **Request:** "знову коміт всіх змін і пуш на прод"
+- **Authorization:** Explicit approval to include every current worktree change on `main`,
+  commit it, push `origin/main`, and run the normal production deployment workflow.
+- **Included scope:** The isolated harpoon/rope/yaw prototype and its verification artifacts,
+  plus the single authoritative end-of-battle casualty report and idempotent server settlement.
+- **Required verification:** Full Deploy-mode repository check before publication, followed by
+  production release/service checks and a focused casualty-settlement regression against the
+  deployed release without mutating live player data.

@@ -1,0 +1,1751 @@
+{
+  "source": "C:\\Users\\Admin\\Downloads\\Clash-main\\Clash-main\\prototypes\\harpoon-rope-animation\\assets\\harpoon_turret_source.glb",
+  "file_bytes": 2086864,
+  "mesh_object_count": 45,
+  "armature_count": 0,
+  "empty_count": 48,
+  "animation_count": 0,
+  "animations": [],
+  "total_vertices": 14665,
+  "total_polygons": 17242,
+  "total_triangles": 17242,
+  "world_bounds_min": [
+    -3.959552,
+    -2.057773,
+    -0.53245
+  ],
+  "world_bounds_max": [
+    2.076066,
+    2.057773,
+    4.389455
+  ],
+  "objects": [
+    {
+      "name": "Harpoon001_HarpoonTurret_0",
+      "mesh_data": "Harpoon001_HarpoonTurret_0",
+      "parent": "Harpoon001",
+      "vertices": 275,
+      "edges": 533,
+      "polygons": 264,
+      "triangles": 264,
+      "materials": [
+        "HarpoonTurret"
+      ],
+      "dimensions": [
+        2.698159,
+        0.813638,
+        2.69816
+      ],
+      "world_bounds_min": [
+        -1.34908,
+        -1.34908,
+        -0.25023
+      ],
+      "world_bounds_max": [
+        1.34908,
+        1.34908,
+        0.563409
+      ],
+      "modifiers": []
+    },
+    {
+      "name": "Harpoon002_HarpoonTurret_0",
+      "mesh_data": "Harpoon002_HarpoonTurret_0",
+      "parent": "Harpoon002",
+      "vertices": 300,
+      "edges": 582,
+      "polygons": 288,
+      "triangles": 288,
+      "materials": [
+        "HarpoonTurret"
+      ],
+      "dimensions": [
+        2.30786,
+        0.654879,
+        2.30786
+      ],
+      "world_bounds_min": [
+        -1.15393,
+        -1.15393,
+        0.385116
+      ],
+      "world_bounds_max": [
+        1.15393,
+        1.15393,
+        1.039996
+      ],
+      "modifiers": []
+    },
+    {
+      "name": "Harpoon003_HarpoonTurret_0",
+      "mesh_data": "Harpoon003_HarpoonTurret_0",
+      "parent": "Harpoon003",
+      "vertices": 50,
+      "edges": 97,
+      "polygons": 48,
+      "triangles": 48,
+      "materials": [
+        "HarpoonTurret"
+      ],
+      "dimensions": [
+        1.283188,
+        0.676742,
+        0.676742
+      ],
+      "world_bounds_min": [
+        -1.438461,
+        -0.338371,
+        2.654783
+      ],
+      "world_bounds_max": [
+        -0.155273,
+        0.338371,
+        3.331525
+      ],
+      "modifiers": []
+    },
+    {
+      "name": "Harpoon004_HarpoonTurret_0",
+      "mesh_data": "Harpoon004_HarpoonTurret_0",
+      "parent": "Harpoon004",
+      "vertices": 375,
+      "edges": 727,
+      "polygons": 360,
+      "triangles": 360,
+      "materials": [
+        "HarpoonTurret"
+      ],
+      "dimensions": [
+        0.347649,
+        0.827986,
+        0.827986
+      ],
+      "world_bounds_min": [
+        -1.598558,
+        -0.413993,
+        2.579161
+      ],
+      "world_bounds_max": [
+        -1.25091,
+        0.413993,
+        3.407147
+      ],
+      "modifiers": []
+    },
+    {
+      "name": "Harpoon005_HarpoonTurret_0",
+      "mesh_data": "Harpoon005_HarpoonTurret_0",
+      "parent": "Harpoon005",
+      "vertices": 75,
+      "edges": 145,
+      "polygons": 72,
+      "triangles": 72,
+      "materials": [
+        "HarpoonTurret"
+      ],
+      "dimensions": [
+        1.795716,
+        0.23487,
+        0.23487
+      ],
+      "world_bounds_min": [
+        -3.130214,
+        -0.117435,
+        2.874257
+      ],
+      "world_bounds_max": [
+        -1.334498,
+        0.117435,
+        3.109126
+      ],
+      "modifiers": []
+    },
+    {
+      "name": "Harpoon006_HarpoonTurret_0",
+      "mesh_data": "Harpoon006_HarpoonTurret_0",
+      "parent": "Harpoon006",
+      "vertices": 312,
+      "edges": 605,
+      "polygons": 316,
+      "triangles": 316,
+      "materials": [
+        "HarpoonTurret"
+      ],
+      "dimensions": [
+        1.535914,
+        1.913413,
+        0.942846
+      ],
+      "world_bounds_min": [
+        -0.473772,
+        -0.471423,
+        1.666114
+      ],
+      "world_bounds_max": [
+        1.062142,
+        0.471423,
+        3.579528
+      ],
+      "modifiers": []
+    },
+    {
+      "name": "Harpoon007_HarpoonTurret_0",
+      "mesh_data": "Harpoon007_HarpoonTurret_0",
+      "parent": "Harpoon007",
+      "vertices": 100,
+      "edges": 194,
+      "polygons": 96,
+      "triangles": 96,
+      "materials": [
+        "HarpoonTurret"
+      ],
+      "dimensions": [
+        0.299749,
+        0.827986,
+        0.827986
+      ],
+      "world_bounds_min": [
+        -0.446048,
+        -0.413993,
+        2.579161
+      ],
+      "world_bounds_max": [
+        -0.146299,
+        0.413993,
+        3.407147
+      ],
+      "modifiers": []
+    },
+    {
+      "name": "Harpoon008_HarpoonTurret_0",
+      "mesh_data": "Harpoon008_HarpoonTurret_0",
+      "parent": "Harpoon008",
+      "vertices": 64,
+      "edges": 77,
+      "polygons": 30,
+      "triangles": 30,
+      "materials": [
+        "HarpoonTurret"
+      ],
+      "dimensions": [
+        0.845892,
+        0.236041,
+        0.696696
+      ],
+      "world_bounds_min": [
+        0.930297,
+        -0.348348,
+        2.742917
+      ],
+      "world_bounds_max": [
+        1.776189,
+        0.348348,
+        2.978958
+      ],
+      "modifiers": []
+    },
+    {
+      "name": "Harpoon009_HarpoonTurret_0",
+      "mesh_data": "Harpoon009_HarpoonTurret_0",
+      "parent": "Harpoon009",
+      "vertices": 580,
+      "edges": 1062,
+      "polygons": 532,
+      "triangles": 532,
+      "materials": [
+        "HarpoonTurret"
+      ],
+      "dimensions": [
+        1.177428,
+        1.453793,
+        3.873159
+      ],
+      "world_bounds_min": [
+        -1.13879,
+        -1.93658,
+        2.198035
+      ],
+      "world_bounds_max": [
+        0.038638,
+        1.936579,
+        3.651829
+      ],
+      "modifiers": []
+    },
+    {
+      "name": "Harpoon010_HarpoonTurret_0",
+      "mesh_data": "Harpoon010_HarpoonTurret_0",
+      "parent": "Harpoon010",
+      "vertices": 574,
+      "edges": 1060,
+      "polygons": 520,
+      "triangles": 520,
+      "materials": [
+        "HarpoonTurret"
+      ],
+      "dimensions": [
+        0.912975,
+        2.0339,
+        1.674091
+      ],
+      "world_bounds_min": [
+        -0.045312,
+        -0.837046,
+        1.737956
+      ],
+      "world_bounds_max": [
+        0.867663,
+        0.837046,
+        3.771857
+      ],
+      "modifiers": []
+    },
+    {
+      "name": "Harpoon011_HarpoonTurret_0",
+      "mesh_data": "Harpoon011_HarpoonTurret_0",
+      "parent": "Harpoon011",
+      "vertices": 400,
+      "edges": 776,
+      "polygons": 384,
+      "triangles": 384,
+      "materials": [
+        "HarpoonTurret"
+      ],
+      "dimensions": [
+        0.204048,
+        0.660349,
+        0.660349
+      ],
+      "world_bounds_min": [
+        -1.567747,
+        -0.330174,
+        3.729106
+      ],
+      "world_bounds_max": [
+        -1.3637,
+        0.330175,
+        4.389455
+      ],
+      "modifiers": []
+    },
+    {
+      "name": "Harpoon012_HarpoonTurret_0",
+      "mesh_data": "Harpoon012_HarpoonTurret_0",
+      "parent": "Harpoon012",
+      "vertices": 1703,
+      "edges": 4647,
+      "polygons": 2952,
+      "triangles": 2952,
+      "materials": [
+        "HarpoonTurret"
+      ],
+      "dimensions": [
+        0.739995,
+        0.739986,
+        0.815706
+      ],
+      "world_bounds_min": [
+        1.220005,
+        -0.422025,
+        3.012448
+      ],
+      "world_bounds_max": [
+        1.96,
+        0.393681,
+        3.752434
+      ],
+      "modifiers": []
+    },
+    {
+      "name": "Harpoon013_HarpoonTurret_0",
+      "mesh_data": "Harpoon013_HarpoonTurret_0",
+      "parent": "Harpoon013",
+      "vertices": 300,
+      "edges": 582,
+      "polygons": 288,
+      "triangles": 288,
+      "materials": [
+        "HarpoonTurret"
+      ],
+      "dimensions": [
+        1.146584,
+        0.403956,
+        0.403956
+      ],
+      "world_bounds_min": [
+        -3.053203,
+        -0.201978,
+        2.791176
+      ],
+      "world_bounds_max": [
+        -1.906619,
+        0.201978,
+        3.195132
+      ],
+      "modifiers": []
+    },
+    {
+      "name": "Harpoon014_HarpoonTurret_0",
+      "mesh_data": "Harpoon014_HarpoonTurret_0",
+      "parent": "Harpoon014",
+      "vertices": 64,
+      "edges": 77,
+      "polygons": 30,
+      "triangles": 30,
+      "materials": [
+        "HarpoonTurret"
+      ],
+      "dimensions": [
+        0.582536,
+        0.52461,
+        0.881963
+      ],
+      "world_bounds_min": [
+        -1.803554,
+        -0.440982,
+        -0.087944
+      ],
+      "world_bounds_max": [
+        -1.221018,
+        0.440982,
+        0.436666
+      ],
+      "modifiers": []
+    },
+    {
+      "name": "Harpoon015_HarpoonTurret_0",
+      "mesh_data": "Harpoon015_HarpoonTurret_0",
+      "parent": "Harpoon015",
+      "vertices": 364,
+      "edges": 986,
+      "polygons": 624,
+      "triangles": 624,
+      "materials": [
+        "HarpoonTurret"
+      ],
+      "dimensions": [
+        0.827104,
+        1.126607,
+        1.369437
+      ],
+      "world_bounds_min": [
+        -2.191473,
+        -0.684719,
+        0.058029
+      ],
+      "world_bounds_max": [
+        -1.364369,
+        0.684719,
+        1.184636
+      ],
+      "modifiers": []
+    },
+    {
+      "name": "Harpoon017_HarpoonTurret_0",
+      "mesh_data": "Harpoon017_HarpoonTurret_0",
+      "parent": "Harpoon017",
+      "vertices": 328,
+      "edges": 593,
+      "polygons": 286,
+      "triangles": 286,
+      "materials": [
+        "HarpoonTurret"
+      ],
+      "dimensions": [
+        1.668769,
+        1.349926,
+        1.349926
+      ],
+      "world_bounds_min": [
+        -3.959552,
+        -0.674963,
+        2.316728
+      ],
+      "world_bounds_max": [
+        -2.290783,
+        0.674963,
+        3.666655
+      ],
+      "modifiers": []
+    },
+    {
+      "name": "Harpoon018_HarpoonTurret_0",
+      "mesh_data": "Harpoon018_HarpoonTurret_0",
+      "parent": "Harpoon018",
+      "vertices": 96,
+      "edges": 138,
+      "polygons": 60,
+      "triangles": 60,
+      "materials": [
+        "HarpoonTurret"
+      ],
+      "dimensions": [
+        0.366321,
+        0.684578,
+        0.492115
+      ],
+      "world_bounds_min": [
+        -0.556895,
+        -0.246058,
+        1.746637
+      ],
+      "world_bounds_max": [
+        -0.190575,
+        0.246058,
+        2.431215
+      ],
+      "modifiers": []
+    },
+    {
+      "name": "Harpoon019_HarpoonTurret_0",
+      "mesh_data": "Harpoon019_HarpoonTurret_0",
+      "parent": "Harpoon019",
+      "vertices": 412,
+      "edges": 768,
+      "polygons": 376,
+      "triangles": 376,
+      "materials": [
+        "HarpoonTurret"
+      ],
+      "dimensions": [
+        0.885566,
+        1.081912,
+        1.317619
+      ],
+      "world_bounds_min": [
+        -0.247457,
+        -0.65881,
+        1.144747
+      ],
+      "world_bounds_max": [
+        0.638109,
+        0.65881,
+        2.22666
+      ],
+      "modifiers": []
+    },
+    {
+      "name": "Harpoon020_HarpoonTurret_0",
+      "mesh_data": "Harpoon020_HarpoonTurret_0",
+      "parent": "Harpoon020",
+      "vertices": 447,
+      "edges": 1016,
+      "polygons": 576,
+      "triangles": 576,
+      "materials": [
+        "HarpoonTurret"
+      ],
+      "dimensions": [
+        0.937253,
+        0.937253,
+        2.072117
+      ],
+      "world_bounds_min": [
+        1.091951,
+        -0.998394,
+        1.723333
+      ],
+      "world_bounds_max": [
+        2.029204,
+        1.073723,
+        2.660587
+      ],
+      "modifiers": []
+    },
+    {
+      "name": "Harpoon021_HarpoonTurret_0",
+      "mesh_data": "Harpoon021_HarpoonTurret_0",
+      "parent": "Harpoon021",
+      "vertices": 510,
+      "edges": 975,
+      "polygons": 480,
+      "triangles": 480,
+      "materials": [
+        "HarpoonTurret"
+      ],
+      "dimensions": [
+        1.030978,
+        1.030978,
+        1.059535
+      ],
+      "world_bounds_min": [
+        1.045089,
+        -0.529768,
+        1.676471
+      ],
+      "world_bounds_max": [
+        2.076066,
+        0.529768,
+        2.707449
+      ],
+      "modifiers": []
+    },
+    {
+      "name": "Harpoon022_HarpoonTurret_0",
+      "mesh_data": "Harpoon022_HarpoonTurret_0",
+      "parent": "Harpoon022",
+      "vertices": 130,
+      "edges": 345,
+      "polygons": 216,
+      "triangles": 216,
+      "materials": [
+        "HarpoonTurret"
+      ],
+      "dimensions": [
+        0.12,
+        0.868475,
+        1.359564
+      ],
+      "world_bounds_min": [
+        1.500577,
+        0.001962,
+        1.383484
+      ],
+      "world_bounds_max": [
+        1.620578,
+        1.361526,
+        2.25196
+      ],
+      "modifiers": []
+    },
+    {
+      "name": "Harpoon023_HarpoonTurret_0",
+      "mesh_data": "Harpoon023_HarpoonTurret_0",
+      "parent": "Harpoon023",
+      "vertices": 96,
+      "edges": 114,
+      "polygons": 44,
+      "triangles": 44,
+      "materials": [
+        "HarpoonTurret"
+      ],
+      "dimensions": [
+        0.299591,
+        0.299591,
+        0.299592
+      ],
+      "world_bounds_min": [
+        1.410782,
+        -0.147834,
+        1.293689
+      ],
+      "world_bounds_max": [
+        1.710373,
+        0.151758,
+        1.59328
+      ],
+      "modifiers": []
+    },
+    {
+      "name": "Harpoon024_HarpoonTurret_0",
+      "mesh_data": "Harpoon024_HarpoonTurret_0",
+      "parent": "Harpoon024",
+      "vertices": 159,
+      "edges": 422,
+      "polygons": 264,
+      "triangles": 264,
+      "materials": [
+        "HarpoonTurret"
+      ],
+      "dimensions": [
+        0.728105,
+        0.45872,
+        0.04
+      ],
+      "world_bounds_min": [
+        0.693844,
+        0.023431,
+        1.332734
+      ],
+      "world_bounds_max": [
+        1.421948,
+        0.063432,
+        1.791455
+      ],
+      "modifiers": []
+    },
+    {
+      "name": "Harpoon025_HarpoonTurret_0",
+      "mesh_data": "Harpoon025_HarpoonTurret_0",
+      "parent": "Harpoon025",
+      "vertices": 161,
+      "edges": 424,
+      "polygons": 264,
+      "triangles": 264,
+      "materials": [
+        "HarpoonTurret"
+      ],
+      "dimensions": [
+        0.725664,
+        0.454808,
+        0.04
+      ],
+      "world_bounds_min": [
+        0.74076,
+        -0.081241,
+        1.396455
+      ],
+      "world_bounds_max": [
+        1.466424,
+        -0.041241,
+        1.851263
+      ],
+      "modifiers": []
+    },
+    {
+      "name": "Harpoon026_HarpoonTurret_0",
+      "mesh_data": "Harpoon026_HarpoonTurret_0",
+      "parent": "Harpoon026",
+      "vertices": 14,
+      "edges": 25,
+      "polygons": 12,
+      "triangles": 12,
+      "materials": [
+        "HarpoonTurret"
+      ],
+      "dimensions": [
+        0.144561,
+        0.125193,
+        1.524479
+      ],
+      "world_bounds_min": [
+        0.3466,
+        -0.76224,
+        2.999666
+      ],
+      "world_bounds_max": [
+        0.49116,
+        0.76224,
+        3.124859
+      ],
+      "modifiers": []
+    },
+    {
+      "name": "Harpoon027_HarpoonTurret_0",
+      "mesh_data": "Harpoon027_HarpoonTurret_0",
+      "parent": "Harpoon027",
+      "vertices": 14,
+      "edges": 25,
+      "polygons": 12,
+      "triangles": 12,
+      "materials": [
+        "HarpoonTurret"
+      ],
+      "dimensions": [
+        0.211772,
+        0.1834,
+        1.563576
+      ],
+      "world_bounds_min": [
+        0.312994,
+        -0.781788,
+        1.900922
+      ],
+      "world_bounds_max": [
+        0.524766,
+        0.781788,
+        2.084322
+      ],
+      "modifiers": []
+    },
+    {
+      "name": "Harpoon028_HarpoonTurret_0",
+      "mesh_data": "Harpoon028_HarpoonTurret_0",
+      "parent": "Harpoon028",
+      "vertices": 780,
+      "edges": 1680,
+      "polygons": 912,
+      "triangles": 912,
+      "materials": [
+        "HarpoonTurret"
+      ],
+      "dimensions": [
+        0.464006,
+        1.451024,
+        2.014326
+      ],
+      "world_bounds_min": [
+        0.186877,
+        -0.990714,
+        1.843241
+      ],
+      "world_bounds_max": [
+        0.650883,
+        1.023613,
+        3.294266
+      ],
+      "modifiers": []
+    },
+    {
+      "name": "Harpoon029_HarpoonTurret_0",
+      "mesh_data": "Harpoon029_HarpoonTurret_0",
+      "parent": "Harpoon029",
+      "vertices": 121,
+      "edges": 240,
+      "polygons": 120,
+      "triangles": 120,
+      "materials": [
+        "HarpoonTurret"
+      ],
+      "dimensions": [
+        1.688329,
+        0.380004,
+        1.688329
+      ],
+      "world_bounds_min": [
+        -0.844164,
+        -0.844165,
+        0.705495
+      ],
+      "world_bounds_max": [
+        0.844164,
+        0.844164,
+        1.0855
+      ],
+      "modifiers": []
+    },
+    {
+      "name": "Harpoon030_HarpoonTurret_0",
+      "mesh_data": "Harpoon030_HarpoonTurret_0",
+      "parent": "Harpoon030",
+      "vertices": 392,
+      "edges": 768,
+      "polygons": 384,
+      "triangles": 384,
+      "materials": [
+        "HarpoonTurret"
+      ],
+      "dimensions": [
+        2.61605,
+        0.218314,
+        2.61605
+      ],
+      "world_bounds_min": [
+        -1.308025,
+        -1.308025,
+        -0.53245
+      ],
+      "world_bounds_max": [
+        1.308025,
+        1.308025,
+        -0.314135
+      ],
+      "modifiers": []
+    },
+    {
+      "name": "Harpoon033_HarpoonTurret_0",
+      "mesh_data": "Harpoon033_HarpoonTurret_0",
+      "parent": "Harpoon033",
+      "vertices": 648,
+      "edges": 968,
+      "polygons": 432,
+      "triangles": 432,
+      "materials": [
+        "HarpoonTurret"
+      ],
+      "dimensions": [
+        2.998268,
+        0.520935,
+        2.998268
+      ],
+      "world_bounds_min": [
+        -1.499134,
+        -1.499134,
+        -0.316113
+      ],
+      "world_bounds_max": [
+        1.499134,
+        1.499134,
+        0.204823
+      ],
+      "modifiers": []
+    },
+    {
+      "name": "Harpoon035_HarpoonTurret_0",
+      "mesh_data": "Harpoon035_HarpoonTurret_0",
+      "parent": "Harpoon035",
+      "vertices": 305,
+      "edges": 600,
+      "polygons": 300,
+      "triangles": 300,
+      "materials": [
+        "HarpoonTurret"
+      ],
+      "dimensions": [
+        2.442044,
+        0.071772,
+        2.442044
+      ],
+      "world_bounds_min": [
+        -1.221022,
+        -1.221022,
+        0.158163
+      ],
+      "world_bounds_max": [
+        1.221022,
+        1.221022,
+        0.229936
+      ],
+      "modifiers": []
+    },
+    {
+      "name": "Harpoon038_HarpoonTurret_0",
+      "mesh_data": "Harpoon038_HarpoonTurret_0",
+      "parent": "Harpoon038",
+      "vertices": 428,
+      "edges": 854,
+      "polygons": 452,
+      "triangles": 452,
+      "materials": [
+        "HarpoonTurret"
+      ],
+      "dimensions": [
+        1.415863,
+        0.183652,
+        4.115545
+      ],
+      "world_bounds_min": [
+        -1.25803,
+        -2.057773,
+        2.935665
+      ],
+      "world_bounds_max": [
+        0.157833,
+        2.057773,
+        3.119319
+      ],
+      "modifiers": []
+    },
+    {
+      "name": "Harpoon039_HarpoonTurret_0",
+      "mesh_data": "Harpoon039_HarpoonTurret_0",
+      "parent": "Harpoon039",
+      "vertices": 112,
+      "edges": 128,
+      "polygons": 48,
+      "triangles": 48,
+      "materials": [
+        "HarpoonTurret"
+      ],
+      "dimensions": [
+        0.059321,
+        0.134764,
+        0.384596
+      ],
+      "world_bounds_min": [
+        -0.604299,
+        -0.188823,
+        1.815828
+      ],
+      "world_bounds_max": [
+        -0.544978,
+        0.195773,
+        1.950593
+      ],
+      "modifiers": []
+    },
+    {
+      "name": "Harpoon040_HarpoonTurret_0",
+      "mesh_data": "Harpoon040_HarpoonTurret_0",
+      "parent": "Harpoon040",
+      "vertices": 914,
+      "edges": 1824,
+      "polygons": 912,
+      "triangles": 912,
+      "materials": [
+        "HarpoonTurret"
+      ],
+      "dimensions": [
+        0.85341,
+        0.853409,
+        1.290004
+      ],
+      "world_bounds_min": [
+        1.163031,
+        -0.645002,
+        2.984116
+      ],
+      "world_bounds_max": [
+        2.01644,
+        0.645002,
+        3.837526
+      ],
+      "modifiers": []
+    },
+    {
+      "name": "Harpoon041_HarpoonTurret_0",
+      "mesh_data": "Harpoon041_HarpoonTurret_0",
+      "parent": "Harpoon041",
+      "vertices": 1612,
+      "edges": 4413,
+      "polygons": 2808,
+      "triangles": 2808,
+      "materials": [
+        "HarpoonTurret"
+      ],
+      "dimensions": [
+        0.603281,
+        0.60867,
+        0.677586
+      ],
+      "world_bounds_min": [
+        -1.747895,
+        -0.318169,
+        0.7955
+      ],
+      "world_bounds_max": [
+        -1.144614,
+        0.359418,
+        1.40417
+      ],
+      "modifiers": []
+    },
+    {
+      "name": "Harpoon042_HarpoonTurret_0",
+      "mesh_data": "Harpoon042_HarpoonTurret_0",
+      "parent": "Harpoon042",
+      "vertices": 300,
+      "edges": 582,
+      "polygons": 288,
+      "triangles": 288,
+      "materials": [
+        "HarpoonTurret"
+      ],
+      "dimensions": [
+        0.317433,
+        0.317432,
+        0.070536
+      ],
+      "world_bounds_min": [
+        -2.264108,
+        -0.033404,
+        2.51001
+      ],
+      "world_bounds_max": [
+        -1.946675,
+        0.037132,
+        2.827442
+      ],
+      "modifiers": []
+    },
+    {
+      "name": "Harpoon043_HarpoonTurret_0",
+      "mesh_data": "Harpoon043_HarpoonTurret_0",
+      "parent": "Harpoon043",
+      "vertices": 182,
+      "edges": 468,
+      "polygons": 288,
+      "triangles": 288,
+      "materials": [
+        "HarpoonTurret"
+      ],
+      "dimensions": [
+        0.794253,
+        1.939409,
+        0.292608
+      ],
+      "world_bounds_min": [
+        -2.134097,
+        -0.242285,
+        0.571878
+      ],
+      "world_bounds_max": [
+        -1.339844,
+        0.050324,
+        2.511287
+      ],
+      "modifiers": []
+    },
+    {
+      "name": "Harpoon044_HarpoonTurret_0",
+      "mesh_data": "Harpoon044_HarpoonTurret_0",
+      "parent": "Harpoon044",
+      "vertices": 122,
+      "edges": 240,
+      "polygons": 120,
+      "triangles": 120,
+      "materials": [
+        "HarpoonTurret"
+      ],
+      "dimensions": [
+        0.364254,
+        0.364925,
+        0.970208
+      ],
+      "world_bounds_min": [
+        -1.620814,
+        -0.485104,
+        0.929113
+      ],
+      "world_bounds_max": [
+        -1.256561,
+        0.485104,
+        1.294039
+      ],
+      "modifiers": []
+    },
+    {
+      "name": "Harpoon045_HarpoonTurret_0",
+      "mesh_data": "Harpoon045_HarpoonTurret_0",
+      "parent": "Harpoon045",
+      "vertices": 446,
+      "edges": 870,
+      "polygons": 432,
+      "triangles": 432,
+      "materials": [
+        "HarpoonTurret"
+      ],
+      "dimensions": [
+        0.778535,
+        0.778535,
+        0.813595
+      ],
+      "world_bounds_min": [
+        -1.827955,
+        -0.406798,
+        0.722308
+      ],
+      "world_bounds_max": [
+        -1.04942,
+        0.406798,
+        1.500844
+      ],
+      "modifiers": []
+    },
+    {
+      "name": "Harpoon046_HarpoonTurret_0",
+      "mesh_data": "Harpoon046_HarpoonTurret_0",
+      "parent": "Harpoon046",
+      "vertices": 47,
+      "edges": 126,
+      "polygons": 80,
+      "triangles": 80,
+      "materials": [
+        "HarpoonTurret"
+      ],
+      "dimensions": [
+        0.166854,
+        0.196711,
+        0.231717
+      ],
+      "world_bounds_min": [
+        -2.187325,
+        -0.112345,
+        2.478105
+      ],
+      "world_bounds_max": [
+        -2.020472,
+        0.119372,
+        2.674816
+      ],
+      "modifiers": []
+    },
+    {
+      "name": "Harpoon047_HarpoonTurret_0",
+      "mesh_data": "Harpoon047_HarpoonTurret_0",
+      "parent": "Harpoon047",
+      "vertices": 47,
+      "edges": 126,
+      "polygons": 80,
+      "triangles": 80,
+      "materials": [
+        "HarpoonTurret"
+      ],
+      "dimensions": [
+        0.160438,
+        0.199984,
+        0.163132
+      ],
+      "world_bounds_min": [
+        -2.184117,
+        -0.078053,
+        2.476469
+      ],
+      "world_bounds_max": [
+        -2.023679,
+        0.085079,
+        2.676453
+      ],
+      "modifiers": []
+    },
+    {
+      "name": "Harpoon048_HarpoonTurret_0",
+      "mesh_data": "Harpoon048_HarpoonTurret_0",
+      "parent": "Harpoon048",
+      "vertices": 14,
+      "edges": 25,
+      "polygons": 12,
+      "triangles": 12,
+      "materials": [
+        "HarpoonTurret"
+      ],
+      "dimensions": [
+        0.14456,
+        0.480035,
+        0.125193
+      ],
+      "world_bounds_min": [
+        -1.544879,
+        -0.062596,
+        3.286575
+      ],
+      "world_bounds_max": [
+        -1.400319,
+        0.062597,
+        3.76661
+      ],
+      "modifiers": []
+    },
+    {
+      "name": "Harpoon049_HarpoonTurret_0",
+      "mesh_data": "Harpoon049_HarpoonTurret_0",
+      "parent": "Harpoon049",
+      "vertices": 118,
+      "edges": 203,
+      "polygons": 96,
+      "triangles": 96,
+      "materials": [
+        "HarpoonTurret"
+      ],
+      "dimensions": [
+        0.077512,
+        0.279579,
+        0.279579
+      ],
+      "world_bounds_min": [
+        -1.504479,
+        -0.139789,
+        3.919492
+      ],
+      "world_bounds_max": [
+        -1.426968,
+        0.139789,
+        4.19907
+      ],
+      "modifiers": []
+    },
+    {
+      "name": "Harpoon050_HarpoonTurret_0",
+      "mesh_data": "Harpoon050_HarpoonTurret_0",
+      "parent": "Harpoon050",
+      "vertices": 88,
+      "edges": 110,
+      "polygons": 44,
+      "triangles": 44,
+      "materials": [
+        "HarpoonTurret"
+      ],
+      "dimensions": [
+        0.056992,
+        0.466411,
+        0.465502
+      ],
+      "world_bounds_min": [
+        -1.491929,
+        -0.234569,
+        3.822893
+      ],
+      "world_bounds_max": [
+        -1.434937,
+        0.230933,
+        4.289305
+      ],
+      "modifiers": []
+    },
+    {
+      "name": "Harpoon051_HarpoonTurret_0",
+      "mesh_data": "Harpoon051_HarpoonTurret_0",
+      "parent": "Harpoon051",
+      "vertices": 86,
+      "edges": 104,
+      "polygons": 40,
+      "triangles": 40,
+      "materials": [
+        "HarpoonTurret"
+      ],
+      "dimensions": [
+        0.310388,
+        0.145835,
+        0.310388
+      ],
+      "world_bounds_min": [
+        -0.101816,
+        -0.161847,
+        1.261744
+      ],
+      "world_bounds_max": [
+        0.208572,
+        0.148541,
+        1.407579
+      ],
+      "modifiers": []
+    }
+  ],
+  "hierarchy": [
+    {
+      "name": "Sketchfab_model",
+      "type": "EMPTY",
+      "parent": null
+    },
+    {
+      "name": "HarpoonTurret.fbx",
+      "type": "EMPTY",
+      "parent": "Sketchfab_model"
+    },
+    {
+      "name": "RootNode",
+      "type": "EMPTY",
+      "parent": "HarpoonTurret.fbx"
+    },
+    {
+      "name": "Harpoon001",
+      "type": "EMPTY",
+      "parent": "RootNode"
+    },
+    {
+      "name": "Harpoon001_HarpoonTurret_0",
+      "type": "MESH",
+      "parent": "Harpoon001"
+    },
+    {
+      "name": "Harpoon002",
+      "type": "EMPTY",
+      "parent": "RootNode"
+    },
+    {
+      "name": "Harpoon002_HarpoonTurret_0",
+      "type": "MESH",
+      "parent": "Harpoon002"
+    },
+    {
+      "name": "Harpoon003",
+      "type": "EMPTY",
+      "parent": "RootNode"
+    },
+    {
+      "name": "Harpoon003_HarpoonTurret_0",
+      "type": "MESH",
+      "parent": "Harpoon003"
+    },
+    {
+      "name": "Harpoon004",
+      "type": "EMPTY",
+      "parent": "RootNode"
+    },
+    {
+      "name": "Harpoon004_HarpoonTurret_0",
+      "type": "MESH",
+      "parent": "Harpoon004"
+    },
+    {
+      "name": "Harpoon005",
+      "type": "EMPTY",
+      "parent": "RootNode"
+    },
+    {
+      "name": "Harpoon005_HarpoonTurret_0",
+      "type": "MESH",
+      "parent": "Harpoon005"
+    },
+    {
+      "name": "Harpoon006",
+      "type": "EMPTY",
+      "parent": "RootNode"
+    },
+    {
+      "name": "Harpoon006_HarpoonTurret_0",
+      "type": "MESH",
+      "parent": "Harpoon006"
+    },
+    {
+      "name": "Harpoon007",
+      "type": "EMPTY",
+      "parent": "RootNode"
+    },
+    {
+      "name": "Harpoon007_HarpoonTurret_0",
+      "type": "MESH",
+      "parent": "Harpoon007"
+    },
+    {
+      "name": "Harpoon008",
+      "type": "EMPTY",
+      "parent": "RootNode"
+    },
+    {
+      "name": "Harpoon008_HarpoonTurret_0",
+      "type": "MESH",
+      "parent": "Harpoon008"
+    },
+    {
+      "name": "Harpoon009",
+      "type": "EMPTY",
+      "parent": "RootNode"
+    },
+    {
+      "name": "Harpoon009_HarpoonTurret_0",
+      "type": "MESH",
+      "parent": "Harpoon009"
+    },
+    {
+      "name": "Harpoon010",
+      "type": "EMPTY",
+      "parent": "RootNode"
+    },
+    {
+      "name": "Harpoon010_HarpoonTurret_0",
+      "type": "MESH",
+      "parent": "Harpoon010"
+    },
+    {
+      "name": "Harpoon011",
+      "type": "EMPTY",
+      "parent": "RootNode"
+    },
+    {
+      "name": "Harpoon011_HarpoonTurret_0",
+      "type": "MESH",
+      "parent": "Harpoon011"
+    },
+    {
+      "name": "Harpoon012",
+      "type": "EMPTY",
+      "parent": "RootNode"
+    },
+    {
+      "name": "Harpoon012_HarpoonTurret_0",
+      "type": "MESH",
+      "parent": "Harpoon012"
+    },
+    {
+      "name": "Harpoon013",
+      "type": "EMPTY",
+      "parent": "RootNode"
+    },
+    {
+      "name": "Harpoon013_HarpoonTurret_0",
+      "type": "MESH",
+      "parent": "Harpoon013"
+    },
+    {
+      "name": "Harpoon014",
+      "type": "EMPTY",
+      "parent": "RootNode"
+    },
+    {
+      "name": "Harpoon014_HarpoonTurret_0",
+      "type": "MESH",
+      "parent": "Harpoon014"
+    },
+    {
+      "name": "Harpoon015",
+      "type": "EMPTY",
+      "parent": "RootNode"
+    },
+    {
+      "name": "Harpoon015_HarpoonTurret_0",
+      "type": "MESH",
+      "parent": "Harpoon015"
+    },
+    {
+      "name": "Harpoon017",
+      "type": "EMPTY",
+      "parent": "RootNode"
+    },
+    {
+      "name": "Harpoon017_HarpoonTurret_0",
+      "type": "MESH",
+      "parent": "Harpoon017"
+    },
+    {
+      "name": "Harpoon018",
+      "type": "EMPTY",
+      "parent": "RootNode"
+    },
+    {
+      "name": "Harpoon018_HarpoonTurret_0",
+      "type": "MESH",
+      "parent": "Harpoon018"
+    },
+    {
+      "name": "Harpoon019",
+      "type": "EMPTY",
+      "parent": "RootNode"
+    },
+    {
+      "name": "Harpoon019_HarpoonTurret_0",
+      "type": "MESH",
+      "parent": "Harpoon019"
+    },
+    {
+      "name": "Harpoon020",
+      "type": "EMPTY",
+      "parent": "RootNode"
+    },
+    {
+      "name": "Harpoon020_HarpoonTurret_0",
+      "type": "MESH",
+      "parent": "Harpoon020"
+    },
+    {
+      "name": "Harpoon021",
+      "type": "EMPTY",
+      "parent": "RootNode"
+    },
+    {
+      "name": "Harpoon021_HarpoonTurret_0",
+      "type": "MESH",
+      "parent": "Harpoon021"
+    },
+    {
+      "name": "Harpoon022",
+      "type": "EMPTY",
+      "parent": "RootNode"
+    },
+    {
+      "name": "Harpoon022_HarpoonTurret_0",
+      "type": "MESH",
+      "parent": "Harpoon022"
+    },
+    {
+      "name": "Harpoon023",
+      "type": "EMPTY",
+      "parent": "RootNode"
+    },
+    {
+      "name": "Harpoon023_HarpoonTurret_0",
+      "type": "MESH",
+      "parent": "Harpoon023"
+    },
+    {
+      "name": "Harpoon024",
+      "type": "EMPTY",
+      "parent": "RootNode"
+    },
+    {
+      "name": "Harpoon024_HarpoonTurret_0",
+      "type": "MESH",
+      "parent": "Harpoon024"
+    },
+    {
+      "name": "Harpoon025",
+      "type": "EMPTY",
+      "parent": "RootNode"
+    },
+    {
+      "name": "Harpoon025_HarpoonTurret_0",
+      "type": "MESH",
+      "parent": "Harpoon025"
+    },
+    {
+      "name": "Harpoon026",
+      "type": "EMPTY",
+      "parent": "RootNode"
+    },
+    {
+      "name": "Harpoon026_HarpoonTurret_0",
+      "type": "MESH",
+      "parent": "Harpoon026"
+    },
+    {
+      "name": "Harpoon027",
+      "type": "EMPTY",
+      "parent": "RootNode"
+    },
+    {
+      "name": "Harpoon027_HarpoonTurret_0",
+      "type": "MESH",
+      "parent": "Harpoon027"
+    },
+    {
+      "name": "Harpoon028",
+      "type": "EMPTY",
+      "parent": "RootNode"
+    },
+    {
+      "name": "Harpoon028_HarpoonTurret_0",
+      "type": "MESH",
+      "parent": "Harpoon028"
+    },
+    {
+      "name": "Harpoon029",
+      "type": "EMPTY",
+      "parent": "RootNode"
+    },
+    {
+      "name": "Harpoon029_HarpoonTurret_0",
+      "type": "MESH",
+      "parent": "Harpoon029"
+    },
+    {
+      "name": "Harpoon030",
+      "type": "EMPTY",
+      "parent": "RootNode"
+    },
+    {
+      "name": "Harpoon030_HarpoonTurret_0",
+      "type": "MESH",
+      "parent": "Harpoon030"
+    },
+    {
+      "name": "Harpoon033",
+      "type": "EMPTY",
+      "parent": "RootNode"
+    },
+    {
+      "name": "Harpoon033_HarpoonTurret_0",
+      "type": "MESH",
+      "parent": "Harpoon033"
+    },
+    {
+      "name": "Harpoon035",
+      "type": "EMPTY",
+      "parent": "RootNode"
+    },
+    {
+      "name": "Harpoon035_HarpoonTurret_0",
+      "type": "MESH",
+      "parent": "Harpoon035"
+    },
+    {
+      "name": "Harpoon038",
+      "type": "EMPTY",
+      "parent": "RootNode"
+    },
+    {
+      "name": "Harpoon038_HarpoonTurret_0",
+      "type": "MESH",
+      "parent": "Harpoon038"
+    },
+    {
+      "name": "Harpoon039",
+      "type": "EMPTY",
+      "parent": "RootNode"
+    },
+    {
+      "name": "Harpoon039_HarpoonTurret_0",
+      "type": "MESH",
+      "parent": "Harpoon039"
+    },
+    {
+      "name": "Harpoon040",
+      "type": "EMPTY",
+      "parent": "RootNode"
+    },
+    {
+      "name": "Harpoon040_HarpoonTurret_0",
+      "type": "MESH",
+      "parent": "Harpoon040"
+    },
+    {
+      "name": "Harpoon041",
+      "type": "EMPTY",
+      "parent": "RootNode"
+    },
+    {
+      "name": "Harpoon041_HarpoonTurret_0",
+      "type": "MESH",
+      "parent": "Harpoon041"
+    },
+    {
+      "name": "Harpoon042",
+      "type": "EMPTY",
+      "parent": "RootNode"
+    },
+    {
+      "name": "Harpoon042_HarpoonTurret_0",
+      "type": "MESH",
+      "parent": "Harpoon042"
+    },
+    {
+      "name": "Harpoon043",
+      "type": "EMPTY",
+      "parent": "RootNode"
+    },
+    {
+      "name": "Harpoon043_HarpoonTurret_0",
+      "type": "MESH",
+      "parent": "Harpoon043"
+    },
+    {
+      "name": "Harpoon044",
+      "type": "EMPTY",
+      "parent": "RootNode"
+    },
+    {
+      "name": "Harpoon044_HarpoonTurret_0",
+      "type": "MESH",
+      "parent": "Harpoon044"
+    },
+    {
+      "name": "Harpoon045",
+      "type": "EMPTY",
+      "parent": "RootNode"
+    },
+    {
+      "name": "Harpoon045_HarpoonTurret_0",
+      "type": "MESH",
+      "parent": "Harpoon045"
+    },
+    {
+      "name": "Harpoon046",
+      "type": "EMPTY",
+      "parent": "RootNode"
+    },
+    {
+      "name": "Harpoon046_HarpoonTurret_0",
+      "type": "MESH",
+      "parent": "Harpoon046"
+    },
+    {
+      "name": "Harpoon047",
+      "type": "EMPTY",
+      "parent": "RootNode"
+    },
+    {
+      "name": "Harpoon047_HarpoonTurret_0",
+      "type": "MESH",
+      "parent": "Harpoon047"
+    },
+    {
+      "name": "Harpoon048",
+      "type": "EMPTY",
+      "parent": "RootNode"
+    },
+    {
+      "name": "Harpoon048_HarpoonTurret_0",
+      "type": "MESH",
+      "parent": "Harpoon048"
+    },
+    {
+      "name": "Harpoon049",
+      "type": "EMPTY",
+      "parent": "RootNode"
+    },
+    {
+      "name": "Harpoon049_HarpoonTurret_0",
+      "type": "MESH",
+      "parent": "Harpoon049"
+    },
+    {
+      "name": "Harpoon050",
+      "type": "EMPTY",
+      "parent": "RootNode"
+    },
+    {
+      "name": "Harpoon050_HarpoonTurret_0",
+      "type": "MESH",
+      "parent": "Harpoon050"
+    },
+    {
+      "name": "Harpoon051",
+      "type": "EMPTY",
+      "parent": "RootNode"
+    },
+    {
+      "name": "Harpoon051_HarpoonTurret_0",
+      "type": "MESH",
+      "parent": "Harpoon051"
+    }
+  ]
+}

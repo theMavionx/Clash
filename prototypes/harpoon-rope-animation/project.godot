@@ -1,0 +1,24 @@
+; PROTOTYPE - NOT FOR PRODUCTION
+; Question: Can this harpoon turret be separated and animated with a visible rope in Godot?
+; Date: 2026-07-31
+
+config_version=5
+
+[application]
+
+config/name="Harpoon Rope Animation Prototype"
+run/main_scene="res://harpoon_rope_prototype.tscn"
+
+[display]
+
+window/size/viewport_width=1280
+window/size/viewport_height=720
+window/size/window_width_override=1280
+window/size/window_height_override=720
+window/stretch/mode="canvas_items"
+
+[rendering]
+
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
+environment/defaults/default_clear_color=Color(0.012, 0.02, 0.04, 1)

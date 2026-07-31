@@ -390,9 +390,6 @@ func remove_troop_group(building_id: int, slot: int, extra: Dictionary = {}) -> 
 func reinforce() -> Dictionary:
 	return await _http_post("/reinforce", {})
 
-func report_troop_death(troop_name: String) -> Dictionary:
-	return await _http_post("/troop-died", {"troop_name": troop_name})
-
 func get_ships() -> Dictionary:
 	return await _http_get("/ships")
 
@@ -452,11 +449,20 @@ func buy_ship(building_id: int) -> Dictionary:
 	return await _http_post("/buildings/%d/buy-ship" % building_id, {})
 
 func submit_battle_result(defender_id: String, actions: Array, result: String, casualties: Dictionary = {}, battle_session_id: String = "") -> Dictionary:
+	var final_casualties: Dictionary = casualties.duplicate(true)
 	var payload: Dictionary = {
 		"defender_id": defender_id,
 		"actions": actions,
 		"result": result,
-		"casualties": casualties,
+		# Keep the top-level field for one compatibility release. The server
+		# requires it to match the versioned end-of-match report exactly.
+		"casualties": final_casualties,
+		"casualty_report": {
+			"version": 1,
+			"report_id": battle_session_id,
+			"battle_session_id": battle_session_id,
+			"casualties": final_casualties,
+		},
 	}
 	if battle_session_id != "":
 		payload["battle_session_id"] = battle_session_id

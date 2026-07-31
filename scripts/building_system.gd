@@ -926,21 +926,32 @@ func record_replay_telemetry(kind: String, data: Dictionary = {}) -> void:
 			return
 
 
-func record_troop_death_once(troop_name: String, troop_instance: int = 0, replay_order: int = -1) -> bool:
-	if _battle and _battle.has_method("record_troop_death_once"):
-		if _battle.record_troop_death_once(troop_name, troop_instance, replay_order):
-			return true
+func _authoritative_live_battle_helper() -> BSBattle:
 	var systems: Array = _building_systems
 	if systems.is_empty() and is_inside_tree():
 		systems = get_tree().get_nodes_in_group("building_systems")
+	var fallback: BSBattle = null
 	for bs_node in systems:
-		if not is_instance_valid(bs_node) or bs_node == self:
+		if not is_instance_valid(bs_node):
 			continue
 		var battle_helper: BSBattle = bs_node.get("_battle")
-		if battle_helper and battle_helper.has_method("record_troop_death_once"):
-			if battle_helper.record_troop_death_once(troop_name, troop_instance, replay_order):
-				return true
-	return false
+		if battle_helper == null or battle_helper._replay_active or not battle_helper.is_viewing_enemy:
+			continue
+		if fallback == null:
+			fallback = battle_helper
+		# Only the UI/main grid owns the live match lifecycle and final
+		# /attack/result submission. Routing every death to this one helper
+		# prevents separate island-grid ledgers from diverging.
+		if bool(bs_node.get("create_ui")):
+			return battle_helper
+	return fallback
+
+
+func record_troop_death_once(troop_name: String, troop_instance: int = 0, replay_order: int = -1) -> bool:
+	var battle_helper: BSBattle = _authoritative_live_battle_helper()
+	if battle_helper == null:
+		return false
+	return battle_helper.record_troop_death_once(troop_name, troop_instance, replay_order)
 
 # ── Ship cannon (proxied to _cannon helper) ──────────────────
 var _ship_cannon_mode: bool:

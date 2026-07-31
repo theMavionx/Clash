@@ -5,6 +5,10 @@
 # All node_modules everywhere
 node_modules/
 
+# Python tool caches
+__pycache__/
+*.py[cod]
+
 # Server
 server/*.db
 server/*.db.backup-*

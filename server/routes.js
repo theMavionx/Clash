@@ -45,6 +45,11 @@ const {
 const { normalizeConfirmedMintTxs, resolveEvmMintTokenIds } = require('./nft_mint_receipt');
 const { planDexAccountWalletUpdate } = require('./dex_account_selection');
 const {
+  CasualtyReportError,
+  parseFinalCasualtyReport,
+  resolveFinalCasualties,
+} = require('./casualty_report');
+const {
   collectionMintRarity,
   collectionMintRaritySeed,
 } = require('./nft_rarity');
@@ -11866,6 +11871,7 @@ const TROOP_NAME_MAP = {
   firedragon: 'FireDragon',
   fire_dragon: 'FireDragon',
 };
+const KNOWN_TROOPS = new Set(Object.values(TROOP_NAME_MAP));
 function _troopBaseKey(name) {
   return String(name || '').split(':')[0].toLowerCase();
 }
@@ -12657,8 +12663,8 @@ function _applyCasualties(playerId, casualties) {
     db.updatePlayerShipTroops(playerId, filtered, ship.troop_template);
   }
 
-  // Defensive log: if any casualties weren't applied, /troop-died removed them first,
-  // or client's dict diverged from server state — worth noticing.
+  // Defensive log: if any casualties were not applied, the sealed final
+  // report diverged from the server-owned ship state and needs investigation.
   const leftover = Object.entries(remaining).filter(([, c]) => c > 0);
   if (leftover.length > 0) {
     console.log(`[CASUALTIES] Player ${playerId} had ${leftover.length} casualty types not applied (already removed or desync):`, leftover);
@@ -12701,9 +12707,75 @@ router.post('/attack/result', auth, (req, res) => {
   const submittedGridConfigs = battleStartAction?.grid_configs;
   const battleSessionId = String(battle_session_id || battleStartAction?.battle_session_id || '').trim();
   const gameActions = actions.filter(a => a.type !== 'battle_start');
+  let finalCasualtyReport;
+  try {
+    finalCasualtyReport = parseFinalCasualtyReport(req.body, {
+      battleSessionId,
+      normalizeTroopName: _normalizeTroopName,
+      isKnownTroop: troopName => KNOWN_TROOPS.has(troopName),
+      isPersistentCasualty: troopName => !_isNftBackedTroop(troopName),
+      maxTotal: MAX_TROOPS,
+    });
+  } catch (error) {
+    if (error instanceof CasualtyReportError) {
+      return res.status(error.status || 400).json({
+        error: error.message,
+        code: error.code,
+      });
+    }
+    throw error;
+  }
+
+  // A client may retry when the first HTTP response was lost. Return the
+  // cached settlement for the same immutable report instead of re-running
+  // rewards or removing troops again.
+  const cachedBattleResult = battleSessionId
+    ? db.getCompletedBattleResult(battleSessionId, req.player.id, defender_id)
+    : null;
+  if (cachedBattleResult) {
+    if (cachedBattleResult.casualty_report_json !== finalCasualtyReport.canonical) {
+      return res.status(409).json({
+        error: 'This battle session was already settled with a different casualty report',
+        code: 'CASUALTY_REPORT_ALREADY_SETTLED',
+      });
+    }
+    return res.json({
+      ...cachedBattleResult.response,
+      idempotent_replay: true,
+    });
+  }
+
   const releaseBattleSession = (status = 'cancelled') => {
     if (!battleSessionId) return;
     try { db.finishBattleSession(battleSessionId, req.player.id, defender_id, status); } catch {}
+  };
+  const cacheCompletedResponse = (payload) => {
+    if (!battleSessionId) return;
+    try {
+      const saved = db.saveCompletedBattleResult(
+        battleSessionId,
+        req.player.id,
+        defender_id,
+        finalCasualtyReport.canonical,
+        payload,
+      );
+      if (!saved?.changes) {
+        console.warn('[BATTLE] Completed result response was not cached', {
+          attacker: req.player.id,
+          defender: defender_id,
+          battleSessionId,
+        });
+      }
+    } catch (error) {
+      // Settlement has already happened. Do not turn a successful battle into
+      // a client error solely because the retry cache could not be written.
+      console.warn('[BATTLE] Failed to cache completed result response', {
+        attacker: req.player.id,
+        defender: defender_id,
+        battleSessionId,
+        error: error?.message || String(error),
+      });
+    }
   };
 
   const sessionCheck = db.validateBattleSession(battleSessionId, req.player.id, defender_id);
@@ -12855,27 +12927,35 @@ router.post('/attack/result', auth, (req, res) => {
   const serverResolvedResult = STRICT_BATTLE_REPLAY_VERIFICATION
     ? verificationResolvedResult
     : (claimedResult === 'victory' ? 'victory' : verificationResolvedResult);
-  const clientCasualties = (req.body?.casualties && typeof req.body.casualties === 'object')
-    ? req.body.casualties
-    : null;
-  const casualtySource = STRICT_BATTLE_REPLAY_VERIFICATION
-    ? 'server_sim_strict'
-    : (clientCasualties ? 'client_non_strict' : 'missing_client_non_strict');
-  const resolvedCasualties = STRICT_BATTLE_REPLAY_VERIFICATION
-    ? (verification.casualties || {})
-    : (clientCasualties || {});
-  const replayDebug = {
-    ...verification,
-    clientCasualties: clientCasualties || {},
+  // The replay simulation remains authoritative for the battle outcome.
+  // Persistent troop loss comes from exactly one sealed Godot report sent at
+  // match end. Using a second simulation as a casualty source produced large
+  // false totals whenever live and replay combat timing diverged.
+  const {
+    clientCasualties,
     resolvedCasualties,
     casualtySource,
+    casualtyDifferences,
+  } = resolveFinalCasualties(
+    finalCasualtyReport,
+    _paidCasualties(verification.casualties || {}),
+  );
+  const replayDebug = {
+    ...verification,
+    clientCasualties,
+    resolvedCasualties,
+    casualtySource,
+    casualtyReportVersion: finalCasualtyReport.version,
+    casualtyDifferences,
   };
-  if (!STRICT_BATTLE_REPLAY_VERIFICATION && !clientCasualties) {
-    console.warn('[BATTLE] Missing client casualties in non-strict mode; not applying server-sim casualties', {
+  if (Object.keys(casualtyDifferences).length > 0) {
+    console.warn('[BATTLE] Client/server casualty diagnostic mismatch', {
       attacker: req.player.id,
       defender: defender_id,
       battleSessionId,
+      reportedCasualties: clientCasualties,
       simCasualties: verification.casualties || {},
+      differences: casualtyDifferences,
     });
   }
 
@@ -12941,35 +13021,38 @@ router.post('/attack/result', auth, (req, res) => {
     } catch (err) {
       console.warn('[BATTLE] NFT troop win record failed:', err?.message || err);
     }
-    // Apply casualties exactly once from the authoritative replay result.
-    // /troop-died is now telemetry-only; mutating ships there caused double
-    // removal when the final replay result was submitted.
+    // Apply the sealed end-of-match casualty report exactly once.
+    // /troop-died is compatibility-only and never mutates ship state.
     const appliedCasualties = _applyCasualties(req.player.id, resolvedCasualties);
     // Return authoritative post-casualty ship state so client can sync immediately
-    return res.json({
+    const responsePayload = {
       ...battleResult,
       ships: _getShipsPayload(req.player.id),
       casualties: _paidCasualties(appliedCasualties),
       demon_king_nft_wins: demonKingNftWins,
       nft_troop_wins: nftTroopWins,
-    });
+    };
+    cacheCompletedResponse(responsePayload);
+    return res.json(responsePayload);
   }
 
   // Defeat — attacker loses trophies, defender gains
   const defeatResult = db.battleDefeat(req.player.id, defender_id, battleSessionId);
   db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'accepted', replayStatus === 'ACCEPTED' ? 'Defeat' : storedAcceptReason, null, replayDebug);
 
-  // Remove resolved casualties from attacker's ships. In non-strict mode this
-  // intentionally uses only the client result; server simulation is diagnostics.
+  // Remove the same sealed end-of-match casualties for defeats. The server
+  // simulation is diagnostic for troop loss in both replay verification modes.
   const appliedCasualties = _applyCasualties(req.player.id, resolvedCasualties);
 
-  res.json({
+  const responsePayload = {
     success: true,
     loot: { gold: 0, wood: 0, ore: 0 },
     trophies: defeatResult.attackerTrophies,
     ships: _getShipsPayload(req.player.id),
     casualties: _paidCasualties(appliedCasualties),
-  });
+  };
+  cacheCompletedResponse(responsePayload);
+  res.json(responsePayload);
 });
 
 // ==================== TROOPS ====================
@@ -13263,7 +13346,6 @@ const TROOP_BUY_COSTS = Object.freeze(Object.fromEntries([
   Math.max(0, Number(db.TROOP_DEFS[_serverTroopKey(name)]?.buy_cost) || 0),
 ])));
 const VALID_TROOPS = Object.keys(TROOP_BUY_COSTS);
-const KNOWN_TROOPS = new Set(Object.values(TROOP_NAME_MAP));
 function _troopBuyCost(name) {
   return TROOP_BUY_COSTS[_normalizeTroopName(name)] ?? 100;
 }
@@ -13718,11 +13800,8 @@ router.get('/ships', auth, (req, res) => {
   res.json({ ship, ships: ship ? [ship] : [] });
 });
 
-// Report a single troop death during battle. This endpoint is telemetry-only:
-// ship state is mutated once by /attack/result from the authoritative replay.
-// Older clients still call this endpoint, so keep accepting it without removing
-// troops. Mutating here caused duplicate reinforcement costs when /attack/result
-// later applied the same casualty again.
+// Legacy per-death endpoint retained only for cached clients. Current clients
+// never call it: ship state is mutated once by the final /attack/result report.
 const TROOP_DIED_RATE_WINDOW_MS = 1000;
 const TROOP_DIED_RATE_MAX = 120;
 const _troopDiedBuckets = new Map();
