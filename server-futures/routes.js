@@ -3837,6 +3837,26 @@ router.get('/risex/builder-config', auth, async (req, res) => {
   }
 });
 
+router.get('/risex/builder-fee/status', auth, async (req, res) => {
+  try {
+    const verified = requireRisexOwner(req, res);
+    if (!verified) return;
+    const config = await risex.requireClashBuilderConfig();
+    const force = String(req.query?.force || '') === '1';
+    res.json(await risex.getBuilderApprovalStatus(verified.account, {
+      builderId: config.builder_id,
+      requiredMaxFeeBps: config.builder_fee_bps,
+      force,
+    }));
+  } catch (e) {
+    console.warn('[risex] builder fee status failed:', e.message);
+    res.status(502).json({
+      error: 'Failed to verify RISEx builder approval on-chain',
+      detail: e.message,
+    });
+  }
+});
+
 router.get('/risex/eip712-domain', auth, async (req, res) => {
   try {
     if (req.dex !== 'risex') return res.status(409).json({ error: `Account is registered for '${req.dex}'. Switch DEX to risex.` });
@@ -3999,11 +4019,28 @@ router.post('/risex/builder-fee/approve', auth, async (req, res) => {
       max_fee_bps: config.builder_fee_bps,
       permit,
     });
+    const approvalTxHash = result?.tx_hash || result?.transaction_hash || result?.txHash;
+    const approval = await (
+      approvalTxHash
+        ? risex.verifyBuilderApprovalTransaction(verified.account, approvalTxHash, {
+          builderId: config.builder_id,
+          requiredMaxFeeBps: config.builder_fee_bps,
+        })
+        : risex.getBuilderApprovalStatus(verified.account, {
+          builderId: config.builder_id,
+          requiredMaxFeeBps: config.builder_fee_bps,
+          force: true,
+        })
+    ).catch((statusError) => ({
+      approved: false,
+      verification_error: statusError?.message || String(statusError),
+    }));
     res.json({
       ...result,
       builder_id: config.builder_id,
       max_fee_bps: config.builder_fee_bps,
       fee_recipient: config.fee_recipient,
+      approval,
     });
   } catch (e) {
     console.warn('[risex] builder fee approval failed:', e.message);

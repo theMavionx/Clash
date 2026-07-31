@@ -63,6 +63,70 @@ assert.throws(
   () => risex.getBuilderInfoCallData(65_536),
   /Invalid RISEx builder ID/,
 );
+assert.strictEqual(
+  risex.getUserIdCallData(FEE_RECIPIENT),
+  `0x2b956ff7${FEE_RECIPIENT.slice(2).padStart(64, '0')}`,
+);
+assert.strictEqual(
+  risex.getBuilderMaxFeeBpsCallData(2709, 10),
+  `0xeeb43af8${BigInt(2709).toString(16).padStart(64, '0')}${'a'.padStart(64, '0')}`,
+);
+assert.strictEqual(
+  risex.decodeAddressResult(
+    `0x${'1238991cac4e65902c08213e79909a9c813eebc3'.padStart(64, '0')}`,
+    'test',
+  ),
+  '0x1238991cac4e65902c08213e79909a9c813eebc3',
+);
+assert.strictEqual(
+  risex.decodeUintResult(`0x${BigInt(100).toString(16).padStart(64, '0')}`, 65_535, 'test'),
+  100,
+);
+assert.deepStrictEqual(
+  risex.decodeBuilderApprovalEventLog({
+    blockNumber: '0x110c386',
+    logIndex: '0x251',
+    transactionHash: `0x${'ae'.repeat(32)}`,
+    topics: [
+      '0x481214c985f009a837ac9f61b88ad1d32a7e25be02d470b8d6942d3629b288dc',
+      topic(2709),
+      topic(10),
+    ],
+    data: `0x${word(300)}${word(100)}`,
+  }),
+  {
+    user_id: 2709,
+    builder_id: 10,
+    old_max_fee_bps: 300,
+    new_max_fee_bps: 100,
+    block_number: '17875846',
+    log_index: '593',
+    transaction_hash: `0x${'ae'.repeat(32)}`,
+  },
+);
+
+const normalizedAccount = risex.normalizeBalance({
+  account: FEE_RECIPIENT,
+  summary: {
+    collateral_margin_balance: '11.070289812215977049',
+    cross_margin_balance: '10.901748350080388849',
+    free_collateral: '7.813834926621788999',
+    total_account_value: '10.901748350080388849',
+    usdc_balance: '11.070289812215977049',
+    total_unrealized_pnl: '-0.136754013535003766',
+    total_initial_margin: '3.08791342345859985',
+    total_maintenance_margin: '2.0586089489723999',
+    total_notional: '77.197835586464996233',
+    margin_usage: '0.283249376549388957',
+    account_leverage: '7.08123441373472393',
+    risk_level: 'NORMAL',
+  },
+});
+assert.strictEqual(Number(normalizedAccount.account_equity).toFixed(2), '10.90');
+assert.strictEqual(Number(normalizedAccount.available_to_spend).toFixed(2), '7.81');
+assert.strictEqual(Number(normalizedAccount.usdc_balance).toFixed(2), '11.07');
+assert.strictEqual(Number(normalizedAccount.total_margin_used).toFixed(2), '3.09');
+assert.notStrictEqual(normalizedAccount.account_equity, normalizedAccount.available_to_spend);
 
 const accepted = risex.decodePlaceOrderBuilderFields(placeOrderLog({
   builderId: 7,

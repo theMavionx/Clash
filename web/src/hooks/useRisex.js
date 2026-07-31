@@ -25,16 +25,13 @@ import {
   encodeRisexBuilderFeeApproval,
   encodeRisexCancelOrder,
   encodeRisexOrder,
-  forgetRisexBuilderApproval,
   forgetRisexSigner,
   getOrCreateRisexSigner,
   isRisexAddress,
   normalizeRisexInviteCode,
   normalizeRisexMarkets,
   normalizeRisexPrices,
-  readRisexBuilderApproval,
   readRisexSigner,
-  rememberRisexBuilderApproval,
   rememberRisexSigner,
   risexErrorMessage,
 } from '../lib/risexClient';
@@ -172,6 +169,14 @@ export function useRisex() {
       throw new Error('Clash RISEx builder fee must be exactly 1 bps');
     }
     return next;
+  }, [walletAddr, token, fetchJson, authHeaders]);
+
+  const fetchBuilderApprovalStatus = useCallback(async ({ force = false } = {}) => {
+    if (!walletAddr || !token) throw new Error('Game session is not ready. Reconnect your wallet.');
+    return fetchJson(
+      `/api/futures/risex/builder-fee/status?dex=risex&account=${walletAddr}${force ? '&force=1' : ''}`,
+      { headers: authHeaders({ 'Content-Type': undefined }) },
+    );
   }, [walletAddr, token, fetchJson, authHeaders]);
 
   const resolveBuilderConfig = useCallback(async () => {
@@ -503,11 +508,10 @@ export function useRisex() {
       if (signerReady) {
         try {
           currentBuilder = await fetchBuilderConfig();
-          builderApproved = readRisexBuilderApproval(
-            walletAddr,
-            currentBuilder.builder_id,
-            currentBuilder.builder_fee_bps,
-          );
+          const approval = await fetchBuilderApprovalStatus();
+          builderApproved = approval?.approved === true
+            && Number(approval?.builder_id) === Number(currentBuilder.builder_id)
+            && Number(approval?.current_max_fee_bps) >= Number(currentBuilder.builder_fee_bps);
         } catch (e) {
           builderError = e?.message || String(e);
         }
@@ -540,7 +544,15 @@ export function useRisex() {
       setSetupVerified(false);
       return { ready: false, status: next };
     }
-  }, [walletAddr, token, fetchJson, authHeaders, fetchInviteStatus, fetchBuilderConfig]);
+  }, [
+    walletAddr,
+    token,
+    fetchJson,
+    authHeaders,
+    fetchInviteStatus,
+    fetchBuilderConfig,
+    fetchBuilderApprovalStatus,
+  ]);
 
   const redeemInviteCode = useCallback(async (code) => {
     const canonicalCode = normalizeRisexInviteCode(code);
@@ -600,13 +612,22 @@ export function useRisex() {
         permit,
       }),
     });
-    rememberRisexBuilderApproval(
-      walletAddr,
-      config.builder_id,
-      config.builder_fee_bps,
-    );
-    return { ...result, builder: config };
-  }, [walletAddr, fetchBuilderConfig, fetchJson, authHeaders]);
+    let approval = result?.approval || null;
+    for (let attempt = 0; attempt < 8 && approval?.approved !== true; attempt += 1) {
+      await new Promise(resolve => setTimeout(resolve, attempt === 0 ? 250 : 1000));
+      approval = await fetchBuilderApprovalStatus({ force: true });
+    }
+    if (approval?.approved !== true) {
+      throw new Error('RISEx accepted the builder approval request, but the approval is not active on-chain yet');
+    }
+    return { ...result, approval, builder: config };
+  }, [
+    walletAddr,
+    fetchBuilderConfig,
+    fetchBuilderApprovalStatus,
+    fetchJson,
+    authHeaders,
+  ]);
 
   const fetchAccount = useCallback(async () => {
     if (!walletAddr) return;
@@ -760,11 +781,7 @@ export function useRisex() {
       }
 
       const config = verified.builder || await fetchBuilderConfig({ force: true });
-      const hasApproval = readRisexBuilderApproval(
-        walletAddr,
-        config.builder_id,
-        config.builder_fee_bps,
-      );
+      const hasApproval = verified.builderApproved === true;
       if (!hasApproval) {
         setActivationStep({
           index: setupOffset + 2,
@@ -816,9 +833,6 @@ export function useRisex() {
     if (checked.ready) return readRisexSigner(walletAddr);
     if (readRisexSigner(walletAddr) && !checked.signerReady) {
       forgetRisexSigner(walletAddr);
-      if (checked.builder?.builder_id) {
-        forgetRisexBuilderApproval(walletAddr, checked.builder.builder_id);
-      }
     }
     const activated = await activate();
     if (activated?.error) throw new Error(activated.error);
@@ -862,15 +876,12 @@ export function useRisex() {
         throw e;
       }
       if (builderRejected) {
-        const config = await fetchBuilderConfig({ force: true }).catch(() => builderConfig);
-        if (config?.builder_id) forgetRisexBuilderApproval(walletAddr, config.builder_id);
+        await fetchBuilderConfig({ force: true }).catch(() => builderConfig);
+        await fetchBuilderApprovalStatus({ force: true }).catch(() => null);
         console.warn('[useRisex] builder approval rejected by RISEx; re-approving', message);
       } else {
         console.warn('[useRisex] stale signer rejected by RISEx; clearing and re-registering', message);
         forgetRisexSigner(walletAddr);
-        if (builderConfig?.builder_id) {
-          forgetRisexBuilderApproval(walletAddr, builderConfig.builder_id);
-        }
       }
       setSetupVerified(false);
       setSignerState(null);
@@ -885,6 +896,7 @@ export function useRisex() {
     walletAddr,
     activate,
     fetchBuilderConfig,
+    fetchBuilderApprovalStatus,
     builderConfig,
   ]);
 

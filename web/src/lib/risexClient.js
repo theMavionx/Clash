@@ -13,7 +13,6 @@ import {
 } from './risexConfig';
 
 export const RISEX_SIGNER_STORAGE_PREFIX = 'clash_risex_signer_v1';
-export const RISEX_BUILDER_APPROVAL_STORAGE_PREFIX = 'clash_risex_builder_approval_v1';
 export const RISEX_REGISTER_MESSAGE = 'Registering signer for RISEx';
 export const RISEX_SIGNER_TTL_SECONDS = 365 * 24 * 60 * 60;
 export const RISEX_PERMIT_TTL_SECONDS = 300;
@@ -73,37 +72,6 @@ const V3_FLAG_TTL = 16;
 
 export function isRisexAddress(addr) {
   return /^0x[0-9a-fA-F]{40}$/.test(String(addr || '').trim());
-}
-
-function builderApprovalStorageKey(account, builderId) {
-  return `${RISEX_BUILDER_APPROVAL_STORAGE_PREFIX}:${String(account || '').toLowerCase()}:${Number(builderId || 0)}`;
-}
-
-export function readRisexBuilderApproval(account, builderId, maxFeeBps) {
-  if (typeof window === 'undefined' || !isRisexAddress(account) || Number(builderId) <= 0) return false;
-  try {
-    const raw = window.localStorage.getItem(builderApprovalStorageKey(account, builderId));
-    if (!raw) return false;
-    const saved = JSON.parse(raw);
-    return Number(saved?.builder_id) === Number(builderId)
-      && Number(saved?.max_fee_bps) >= Number(maxFeeBps);
-  } catch {
-    return false;
-  }
-}
-
-export function rememberRisexBuilderApproval(account, builderId, maxFeeBps) {
-  if (typeof window === 'undefined' || !isRisexAddress(account) || Number(builderId) <= 0) return;
-  window.localStorage.setItem(builderApprovalStorageKey(account, builderId), JSON.stringify({
-    builder_id: Number(builderId),
-    max_fee_bps: Number(maxFeeBps),
-    approved_at_ms: Date.now(),
-  }));
-}
-
-export function forgetRisexBuilderApproval(account, builderId) {
-  if (typeof window === 'undefined' || !isRisexAddress(account) || Number(builderId) <= 0) return;
-  window.localStorage.removeItem(builderApprovalStorageKey(account, builderId));
 }
 
 export function normalizeRisexSymbol(value) {

@@ -17,10 +17,25 @@ const RISEX_BUILDER_FEE_BPS = 100;
 const RISEX_FEE_MANAGER_ADDRESS = String(
   process.env.RISEX_FEE_MANAGER_ADDRESS || '0x11541dc387b9C307043ea732127DF92b80bab52b',
 ).trim().toLowerCase();
+const RISEX_EXPLORER_API = String(
+  process.env.RISEX_EXPLORER_API_URL || 'https://explorer.risechain.com/api',
+).trim();
+const RISEX_FEE_MANAGER_DEPLOYMENT_BLOCK = Math.max(
+  0,
+  Number(process.env.RISEX_FEE_MANAGER_DEPLOYMENT_BLOCK || 7_345_361),
+);
 const RISEX_GET_BUILDER_INFO_SELECTOR = '0x18726b21';
+const RISEX_GET_ACCOUNT_REGISTRY_SELECTOR = '0x0ab142ed';
+const RISEX_GET_USER_ID_SELECTOR = '0x2b956ff7';
+const RISEX_GET_BUILDER_MAX_FEE_BPS_SELECTOR = '0xeeb43af8';
+const RISEX_BUILDER_MAX_FEE_APPROVED_TOPIC = '0x481214c985f009a837ac9f61b88ad1d32a7e25be02d470b8d6942d3629b288dc';
 const RISEX_BUILDER_CACHE_MS = Math.max(
   15_000,
   Number(process.env.RISEX_BUILDER_CACHE_MS || 5 * 60_000),
+);
+const RISEX_BUILDER_APPROVAL_CACHE_MS = Math.max(
+  5_000,
+  Number(process.env.RISEX_BUILDER_APPROVAL_CACHE_MS || 15_000),
 );
 const RISEX_ORDER_PROOF_CACHE_MS = Math.max(
   15_000,
@@ -76,8 +91,11 @@ const RISEX_BRIDGE_CHAINS = Object.freeze({
   },
 });
 let clashBuilderCache = null;
+let accountRegistryCache = null;
 let marketInfoCache = null;
 let marketInfoPromise = null;
+const risexUserIdCache = new Map();
+const builderApprovalCache = new Map();
 const orderBuilderProofCache = new Map();
 
 function isEvmAddress(addr) {
@@ -219,6 +237,48 @@ function getBuilderInfoCallData(builderId) {
   return `${RISEX_GET_BUILDER_INFO_SELECTOR}${value.toString(16).padStart(64, '0')}`;
 }
 
+function getUserIdCallData(account) {
+  const clean = normalizeAddress(account);
+  if (!clean) throw new Error('RISEx account required (0x...)');
+  return `${RISEX_GET_USER_ID_SELECTOR}${clean.slice(2).padStart(64, '0')}`;
+}
+
+function getBuilderMaxFeeBpsCallData(userId, builderId) {
+  const canonicalUserId = Number(userId);
+  const canonicalBuilderId = Number(builderId);
+  if (!Number.isInteger(canonicalUserId) || canonicalUserId < 0 || canonicalUserId > 0xffffffff) {
+    throw new Error(`Invalid RISEx user ID: ${userId}`);
+  }
+  if (!Number.isInteger(canonicalBuilderId) || canonicalBuilderId <= 0 || canonicalBuilderId > 65_535) {
+    throw new Error(`Invalid RISEx builder ID: ${builderId}`);
+  }
+  return `${RISEX_GET_BUILDER_MAX_FEE_BPS_SELECTOR}`
+    + `${canonicalUserId.toString(16).padStart(64, '0')}`
+    + `${canonicalBuilderId.toString(16).padStart(64, '0')}`;
+}
+
+function decodeAddressResult(result, label) {
+  const payload = String(result || '').replace(/^0x/u, '');
+  if (!/^[0-9a-fA-F]{64}$/u.test(payload)) {
+    throw new Error(`RISEx ${label} returned malformed address data`);
+  }
+  const address = normalizeAddress(`0x${payload.slice(24)}`);
+  if (!address) throw new Error(`RISEx ${label} returned an invalid address`);
+  return address;
+}
+
+function decodeUintResult(result, max, label) {
+  const payload = String(result || '').replace(/^0x/u, '');
+  if (!/^[0-9a-fA-F]{64}$/u.test(payload)) {
+    throw new Error(`RISEx ${label} returned malformed integer data`);
+  }
+  const value = BigInt(`0x${payload}`);
+  if (value > BigInt(max)) {
+    throw new Error(`RISEx ${label} returned a value outside its supported range`);
+  }
+  return Number(value);
+}
+
 function decodeBuilderInfoResult(result) {
   const payload = String(result || '').replace(/^0x/u, '');
   if (!/^[0-9a-fA-F]{128,}$/u.test(payload) || payload.length % 64 !== 0) {
@@ -259,6 +319,238 @@ async function getBuilderInfoOnchain(builderId = RISEX_BUILDER_ID) {
   throw lastError || new Error('No RISE RPC is configured for RISEx builder verification');
 }
 
+async function riseEthCall(to, data, label) {
+  return riseRpcRequest('eth_call', [{ to, data }, 'latest'], label);
+}
+
+async function riseRpcRequest(method, params, label) {
+  let lastError = null;
+  for (const rpcUrl of rpcUrlsForChain(RISEX_RISE_CHAIN_ID)) {
+    try {
+      return await rpcRequest(rpcUrl, method, params);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError || new Error(`No RISE RPC is configured for ${label}`);
+}
+
+async function getFeeManagerAccountRegistry() {
+  if (accountRegistryCache) return accountRegistryCache;
+  const result = await riseEthCall(
+    RISEX_FEE_MANAGER_ADDRESS,
+    RISEX_GET_ACCOUNT_REGISTRY_SELECTOR,
+    'RISEx account registry lookup',
+  );
+  accountRegistryCache = decodeAddressResult(result, 'FeeManager account registry lookup');
+  return accountRegistryCache;
+}
+
+async function getRisexUserId(account) {
+  const clean = normalizeAddress(account);
+  if (!clean) throw new Error('RISEx account required (0x...)');
+  if (risexUserIdCache.has(clean)) return risexUserIdCache.get(clean);
+  const registry = await getFeeManagerAccountRegistry();
+  const result = await riseEthCall(
+    registry,
+    getUserIdCallData(clean),
+    'RISEx user ID lookup',
+  );
+  const userId = decodeUintResult(result, 0xffffffff, 'account registry user ID lookup');
+  risexUserIdCache.set(clean, userId);
+  return userId;
+}
+
+function decodeBuilderApprovalEventLog(log) {
+  const topics = Array.isArray(log?.topics) ? log.topics : [];
+  if (String(topics[0] || '').toLowerCase() !== RISEX_BUILDER_MAX_FEE_APPROVED_TOPIC) {
+    throw new Error('RISEx builder approval log has an unexpected event topic');
+  }
+  const data = String(log?.data || '').replace(/^0x/u, '');
+  if (!/^[0-9a-fA-F]{128}$/u.test(data)) {
+    throw new Error('RISEx builder approval log has malformed event data');
+  }
+  return {
+    user_id: decodeUintResult(topics[1], 0xffffffff, 'builder approval user ID'),
+    builder_id: decodeUintResult(topics[2], 65_535, 'builder approval builder ID'),
+    old_max_fee_bps: decodeUintResult(`0x${data.slice(0, 64)}`, 65_535, 'old builder fee approval'),
+    new_max_fee_bps: decodeUintResult(`0x${data.slice(64, 128)}`, 65_535, 'new builder fee approval'),
+    block_number: BigInt(log?.blockNumber || 0).toString(),
+    log_index: BigInt(log?.logIndex || 0).toString(),
+    transaction_hash: String(log?.transactionHash || '').toLowerCase(),
+  };
+}
+
+function builderApprovalEventIsLater(left, right) {
+  if (!right) return true;
+  const leftBlock = BigInt(left?.block_number || 0);
+  const rightBlock = BigInt(right?.block_number || 0);
+  if (leftBlock !== rightBlock) return leftBlock > rightBlock;
+  return BigInt(left?.log_index || 0) > BigInt(right?.log_index || 0);
+}
+
+async function findIndexedBuilderApprovalEvent(userId, builderId) {
+  const params = new URLSearchParams({
+    module: 'logs',
+    action: 'getLogs',
+    fromBlock: String(RISEX_FEE_MANAGER_DEPLOYMENT_BLOCK),
+    toBlock: 'latest',
+    address: RISEX_FEE_MANAGER_ADDRESS,
+    topic0: RISEX_BUILDER_MAX_FEE_APPROVED_TOPIC,
+    topic1: uintTopic(userId),
+    topic2: uintTopic(builderId),
+    topic0_1_opr: 'and',
+    topic0_2_opr: 'and',
+    topic1_2_opr: 'and',
+  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10_000);
+  try {
+    const response = await fetch(`${RISEX_EXPLORER_API}?${params}`, {
+      headers: { accept: 'application/json' },
+      signal: controller.signal,
+    });
+    const payload = await response.json().catch(() => null);
+    const rawLogs = Array.isArray(payload?.result) ? payload.result : [];
+    const noRecords = payload?.status === '0'
+      && /no (?:logs|records|transactions) found/i.test(String(payload?.message || payload?.result || ''));
+    if (!response.ok || (payload?.status === '0' && !noRecords)) {
+      throw new Error(
+        payload?.message
+        || payload?.result
+        || `RISE explorer log query failed (${response.status})`,
+      );
+    }
+    let latest = null;
+    for (const raw of rawLogs) {
+      const decoded = decodeBuilderApprovalEventLog(raw);
+      if (decoded.user_id !== userId || decoded.builder_id !== builderId) continue;
+      if (builderApprovalEventIsLater(decoded, latest)) latest = decoded;
+    }
+    return latest;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function getBuilderApprovalEventFromReceipt(transactionHash, userId, builderId) {
+  const hash = String(transactionHash || '').toLowerCase();
+  if (!/^0x[0-9a-f]{64}$/u.test(hash)) {
+    throw new Error('RISEx builder approval transaction hash is invalid');
+  }
+  const receipt = await riseRpcRequest(
+    'eth_getTransactionReceipt',
+    [hash],
+    'RISEx builder approval receipt verification',
+  );
+  if (!receipt || BigInt(receipt?.status || 0) !== 1n) {
+    throw new Error('RISEx builder approval transaction is not confirmed successfully');
+  }
+  let latest = null;
+  for (const log of Array.isArray(receipt?.logs) ? receipt.logs : []) {
+    if (normalizeAddress(log?.address) !== RISEX_FEE_MANAGER_ADDRESS) continue;
+    if (String(log?.topics?.[0] || '').toLowerCase() !== RISEX_BUILDER_MAX_FEE_APPROVED_TOPIC) continue;
+    const decoded = decodeBuilderApprovalEventLog(log);
+    if (decoded.user_id !== userId || decoded.builder_id !== builderId) continue;
+    if (builderApprovalEventIsLater(decoded, latest)) latest = decoded;
+  }
+  if (!latest) {
+    throw new Error('Confirmed RISEx transaction does not contain the expected builder approval event');
+  }
+  return latest;
+}
+
+async function readBuilderMaxFeeBps(userId, builderId) {
+  const result = await riseEthCall(
+    RISEX_FEE_MANAGER_ADDRESS,
+    getBuilderMaxFeeBpsCallData(userId, builderId),
+    'RISEx builder approval lookup',
+  );
+  return decodeUintResult(result, 65_535, 'builder fee approval lookup');
+}
+
+async function builderApprovalStatusFromEvent(account, userId, builderId, requiredMaxFeeBps, event) {
+  const currentMaxFeeBps = await readBuilderMaxFeeBps(userId, builderId);
+  const explicitlyApprovedMaxFeeBps = event?.new_max_fee_bps ?? null;
+  return {
+    account,
+    user_id: userId,
+    builder_id: builderId,
+    required_max_fee_bps: requiredMaxFeeBps,
+    current_max_fee_bps: currentMaxFeeBps,
+    explicit_max_fee_bps: explicitlyApprovedMaxFeeBps,
+    has_approval: !!event,
+    approved: !!event
+      && explicitlyApprovedMaxFeeBps >= requiredMaxFeeBps
+      && currentMaxFeeBps >= requiredMaxFeeBps,
+    source: event
+      ? 'risex_fee_manager_event_verified_onchain'
+      : 'risex_fee_manager_no_approval_event',
+    approval_event: event,
+    checked_at_ms: Date.now(),
+  };
+}
+
+async function getBuilderApprovalStatus(account, options = {}) {
+  const clean = normalizeAddress(account);
+  if (!clean) throw new Error('RISEx account required (0x...)');
+  const builderId = Number(options.builderId || RISEX_BUILDER_ID);
+  const requiredMaxFeeBps = Number(options.requiredMaxFeeBps || RISEX_BUILDER_FEE_BPS);
+  if (!Number.isInteger(requiredMaxFeeBps) || requiredMaxFeeBps <= 0 || requiredMaxFeeBps > 65_535) {
+    throw new Error(`Invalid RISEx builder fee ceiling: ${options.requiredMaxFeeBps}`);
+  }
+  const cacheKey = `${clean}:${builderId}:${requiredMaxFeeBps}`;
+  const cached = builderApprovalCache.get(cacheKey);
+  if (
+    options.force !== true
+    && cached
+    && Date.now() - cached.checked_at_ms < RISEX_BUILDER_APPROVAL_CACHE_MS
+  ) {
+    return cached;
+  }
+
+  const userId = await getRisexUserId(clean);
+  const indexedEvent = await findIndexedBuilderApprovalEvent(userId, builderId);
+  const onchainEvent = indexedEvent
+    ? await getBuilderApprovalEventFromReceipt(
+      indexedEvent.transaction_hash,
+      userId,
+      builderId,
+    )
+    : null;
+  const status = await builderApprovalStatusFromEvent(
+    clean,
+    userId,
+    builderId,
+    requiredMaxFeeBps,
+    onchainEvent,
+  );
+  builderApprovalCache.set(cacheKey, status);
+  return status;
+}
+
+async function verifyBuilderApprovalTransaction(account, transactionHash, options = {}) {
+  const clean = normalizeAddress(account);
+  if (!clean) throw new Error('RISEx account required (0x...)');
+  const builderId = Number(options.builderId || RISEX_BUILDER_ID);
+  const requiredMaxFeeBps = Number(options.requiredMaxFeeBps || RISEX_BUILDER_FEE_BPS);
+  const userId = await getRisexUserId(clean);
+  const event = await getBuilderApprovalEventFromReceipt(
+    transactionHash,
+    userId,
+    builderId,
+  );
+  const status = await builderApprovalStatusFromEvent(
+    clean,
+    userId,
+    builderId,
+    requiredMaxFeeBps,
+    event,
+  );
+  builderApprovalCache.set(`${clean}:${builderId}:${requiredMaxFeeBps}`, status);
+  return status;
+}
+
 async function getClashBuilderConfig({ force = false } = {}) {
   const now = Date.now();
   if (!force && clashBuilderCache && now - clashBuilderCache.fetched_at_ms < RISEX_BUILDER_CACHE_MS) {
@@ -274,55 +566,42 @@ async function getClashBuilderConfig({ force = false } = {}) {
   } catch (error) {
     apiError = error;
   }
-  let registered = builders.find(
-    builder => builder.fee_recipient === RISEX_BUILDER_FEE_RECIPIENT,
+  const indexed = builders.find(
+    builder => builder.builder_id === RISEX_BUILDER_ID
+      && builder.fee_recipient === RISEX_BUILDER_FEE_RECIPIENT,
   ) || null;
-  let registrySource = registered ? 'risex_api' : null;
+  let onchain = null;
   let onchainError = null;
-
-  // The public builder list can lag successful FeeManager registrations.
-  // Fall back to the canonical on-chain registry instead of treating an
-  // indexed-late builder as inactive and blocking every Clash order.
-  if (!registered) {
-    try {
-      const onchain = await getBuilderInfoOnchain(RISEX_BUILDER_ID);
-      if (
-        onchain.is_active
-        && onchain.fee_recipient === RISEX_BUILDER_FEE_RECIPIENT
-      ) {
-        registered = onchain;
-        registrySource = 'risex_onchain';
-      }
-    } catch (error) {
-      onchainError = error;
-    }
+  try {
+    onchain = await getBuilderInfoOnchain(RISEX_BUILDER_ID);
+  } catch (error) {
+    onchainError = error;
   }
-
-  if (!registered && apiError && onchainError) {
+  if (onchainError) {
     if (!force && clashBuilderCache) {
       return {
         ...clashBuilderCache,
         stale: true,
-        registry_error: [
-          `API: ${apiError?.message || String(apiError)}`,
-          `on-chain: ${onchainError?.message || String(onchainError)}`,
-        ].join('; '),
+        registry_error: `on-chain: ${onchainError?.message || String(onchainError)}`,
       };
     }
     throw new Error(
-      `RISEx builder registry unavailable (API: ${apiError?.message || apiError}; `
-      + `on-chain: ${onchainError?.message || onchainError})`,
+      `RISEx on-chain builder registry unavailable: ${onchainError?.message || onchainError}`,
     );
   }
+  const registered = onchain?.is_active === true
+    && onchain?.builder_id === RISEX_BUILDER_ID
+    && onchain?.fee_recipient === RISEX_BUILDER_FEE_RECIPIENT;
 
   clashBuilderCache = {
-    registered: !!registered,
-    builder_id: registered?.builder_id || null,
+    registered,
+    builder_id: registered ? RISEX_BUILDER_ID : null,
     builder_fee_bps: RISEX_BUILDER_FEE_BPS,
     fee_recipient: RISEX_BUILDER_FEE_RECIPIENT,
-    registry_source: registrySource,
+    registry_source: 'risex_onchain',
+    api_indexed: !!indexed,
+    onchain_builder: onchain,
     ...(apiError ? { registry_api_error: apiError?.message || String(apiError) } : {}),
-    ...(onchainError ? { registry_onchain_error: onchainError?.message || String(onchainError) } : {}),
     fetched_at_ms: now,
   };
   return clashBuilderCache;
@@ -907,17 +1186,64 @@ async function getPrices() {
 }
 
 function normalizeBalance(data) {
-  const balance = data?.balance || data || {};
-  const equity = num(balance?.margin_balance ?? balance?.account_equity ?? balance?.equity ?? balance?.total ?? balance);
-  const available = num(balance?.available_balance ?? balance?.available_to_spend ?? balance?.withdrawable ?? balance?.free ?? equity);
-  const marginUsed = num(balance?.initial_margin ?? balance?.maintenance_margin ?? balance?.margin_used ?? balance?.total_margin_used);
+  const balance = data?.summary || data?.balance || data || {};
+  const equity = num(
+    balance?.account_equity
+    ?? balance?.cross_margin_balance
+    ?? balance?.total_account_value
+    ?? balance?.margin_balance
+    ?? balance?.equity
+    ?? balance?.total
+    ?? balance,
+  );
+  const collateral = num(
+    balance?.usdc_balance
+    ?? balance?.collateral_margin_balance
+    ?? balance?.collateral_balance
+    ?? equity,
+  );
+  const available = num(
+    balance?.free_collateral
+    ?? balance?.free_cross_margin_balance
+    ?? balance?.available_balance
+    ?? balance?.available_to_spend
+    ?? balance?.withdrawable_usdc
+    ?? balance?.withdrawable
+    ?? balance?.free,
+  );
+  const withdrawable = num(
+    balance?.withdrawable_usdc
+    ?? balance?.available_to_withdraw
+    ?? balance?.free_collateral
+    ?? balance?.free_cross_margin_balance
+    ?? available,
+  );
+  const marginUsed = num(
+    balance?.total_initial_margin
+    ?? balance?.initial_margin
+    ?? balance?.margin_used
+    ?? balance?.total_margin_used,
+  );
   return {
     balance: String(equity),
     usdc: String(equity),
+    usdc_balance: String(collateral),
+    collateral_balance: String(collateral),
     account_equity: String(equity),
     available_to_spend: String(available),
-    available_to_withdraw: String(available),
+    available_to_withdraw: String(withdrawable),
     total_margin_used: String(marginUsed),
+    maintenance_margin: String(num(
+      balance?.total_maintenance_margin
+      ?? balance?.total_cross_maintenance_margin
+      ?? balance?.maintenance_margin,
+    )),
+    unrealized_pnl: String(num(balance?.total_unrealized_pnl ?? balance?.unrealized_pnl)),
+    total_notional: String(num(balance?.total_notional)),
+    margin_usage: String(num(balance?.margin_usage)),
+    account_leverage: String(num(balance?.account_leverage)),
+    risk_level: balance?.risk_level || null,
+    in_liquidation: balance?.in_liquidation === true,
     positions_count: Number(balance?.positions_count || 0),
     orders_count: Number(balance?.orders_count || 0),
     maker_fee: 0.0002,
@@ -929,14 +1255,8 @@ function normalizeBalance(data) {
 async function getAccountByAddress(address) {
   const clean = normalizeAddress(address);
   if (!clean) throw new Error('address query param required (0x...)');
-  try {
-    return normalizeBalance(await apiRequest(`/v1/account/cross-margin-balance?account=${clean}`));
-  } catch (e) {
-    if (/failed to get cross margin balance|not found|404/i.test(e.message || '')) {
-      return normalizeBalance({ balance: 0 });
-    }
-    throw e;
-  }
+  const portfolio = await apiRequest(`/v1/portfolio/details?account=${clean}`);
+  return normalizeBalance(portfolio);
 }
 
 function sideFromValue(value) {
@@ -1230,8 +1550,19 @@ module.exports = {
   bridgeRequest,
   listBuilders,
   getBuilderInfoCallData,
+  getUserIdCallData,
+  getBuilderMaxFeeBpsCallData,
+  decodeAddressResult,
+  decodeUintResult,
   decodeBuilderInfoResult,
   getBuilderInfoOnchain,
+  getFeeManagerAccountRegistry,
+  getRisexUserId,
+  decodeBuilderApprovalEventLog,
+  findIndexedBuilderApprovalEvent,
+  getBuilderApprovalEventFromReceipt,
+  getBuilderApprovalStatus,
+  verifyBuilderApprovalTransaction,
   getClashBuilderConfig,
   requireClashBuilderConfig,
   approveBuilderFee,
@@ -1254,6 +1585,7 @@ module.exports = {
   getTransferHistory,
   getMarketInfo,
   getPrices,
+  normalizeBalance,
   getAccountByAddress,
   getPositionsByAddress,
   getOrdersByAddress,
