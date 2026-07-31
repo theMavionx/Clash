@@ -1,6 +1,60 @@
 export const DECIBEL_ORDER_REST_REMOVAL_GRACE_MS = 20_000;
 export const DECIBEL_OPTIMISTIC_ORDER_TTL_MS = 90_000;
 
+function positiveNumberOrNull(value) {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+function triggerPriceFromCondition(condition) {
+  const matches = String(condition || '').match(/\d+(?:\.\d+)?/g);
+  if (!matches || !matches.length) return null;
+  return positiveNumberOrNull(matches[matches.length - 1]);
+}
+
+export function orderTypeText(order) {
+  return String(order?.order_type ?? order?.orderType ?? order?.ot ?? '');
+}
+
+export function tpslKindFromOrder(order) {
+  const text = `${orderTypeText(order)} ${order?.trigger_condition || order?.triggerCondition || ''}`.toLowerCase();
+  if (/\b(take\s*profit|take-profit|tp)\b/.test(text)) return 'tp';
+  if (/\b(stop\s*loss|stop-loss|stop|sl)\b/.test(text)) return 'sl';
+
+  // Optimistic TP/SL rows are created before Decibel returns its canonical
+  // order type. During that short window they may still be called "Trigger",
+  // so infer the leg from the explicit TP/SL fields. Restrict this fallback
+  // to TP/SL rows and require exactly one leg to avoid misclassifying a
+  // parent order that carries both attached values.
+  if (!(order?.is_tpsl ?? order?.isTpsl)) return null;
+  const hasTakeProfit = positiveNumberOrNull(
+    order?.take_profit
+      ?? order?.takeProfit
+      ?? order?.tp_trigger_price
+      ?? order?.tpTriggerPrice
+      ?? order?.tp,
+  ) != null;
+  const hasStopLoss = positiveNumberOrNull(
+    order?.stop_loss
+      ?? order?.stopLoss
+      ?? order?.sl_trigger_price
+      ?? order?.slTriggerPrice
+      ?? order?.sl,
+  ) != null;
+  if (hasTakeProfit && !hasStopLoss) return 'tp';
+  if (hasStopLoss && !hasTakeProfit) return 'sl';
+  return null;
+}
+
+export function tpslPriceFromOrder(order) {
+  const trigger = triggerPriceFromCondition(order?.trigger_condition ?? order?.triggerCondition);
+  return trigger
+    ?? positiveNumberOrNull(order?.take_profit ?? order?.takeProfit ?? order?.tp_trigger_price ?? order?.tpTriggerPrice ?? order?.tp)
+    ?? positiveNumberOrNull(order?.stop_loss ?? order?.stopLoss ?? order?.sl_trigger_price ?? order?.slTriggerPrice ?? order?.sl)
+    ?? positiveNumberOrNull(order?.stop_price ?? order?.stopPrice)
+    ?? positiveNumberOrNull(order?.price);
+}
+
 export function makeOptimisticDecibelOrder(fields = {}, now = Date.now()) {
   return {
     dex: 'decibel',
@@ -69,12 +123,58 @@ export function decibelOrdersEquivalentForOptimistic(pending, confirmed, helpers
   const pendingKind = tpslKindFromOrder(pending) || String(pending.order_type || '').toLowerCase();
   const confirmedKind = tpslKindFromOrder(confirmed) || String(confirmed.order_type || '').toLowerCase();
   if (pendingKind && confirmedKind && pendingKind !== confirmedKind) return false;
+  const pendingDirection = String(pending.order_direction || pending.orderDirection || '').trim().toLowerCase();
+  const confirmedDirection = String(confirmed.order_direction || confirmed.orderDirection || '').trim().toLowerCase();
+  if (pendingDirection && confirmedDirection && pendingDirection !== confirmedDirection) return false;
+  const pendingAmount = Number(pending.amount ?? pending.initial_amount ?? 0);
+  const confirmedAmount = Number(confirmed.amount ?? confirmed.initial_amount ?? 0);
+  if (pendingAmount > 0 && confirmedAmount > 0) {
+    const amountTolerance = Math.max(1e-9, pendingAmount * 0.00001);
+    if (Math.abs(pendingAmount - confirmedAmount) > amountTolerance) return false;
+  }
   const pendingPrice = Number(tpslPriceFromOrder(pending) ?? pending.price ?? 0);
   const confirmedPrice = Number(tpslPriceFromOrder(confirmed) ?? confirmed.price ?? 0);
   if (pendingPrice > 0 && confirmedPrice > 0) {
     return Math.abs(pendingPrice - confirmedPrice) <= Math.max(0.01, pendingPrice * 0.00001);
   }
   return true;
+}
+
+export function removeDecibelTpslOrdersForClosedPosition(
+  orders = [],
+  {
+    symbol = '',
+    marketAddr = '',
+    closingLong = null,
+  } = {},
+  helpers = {},
+) {
+  const sameAddress = helpers.sameAddress || ((a, b) => String(a || '').toLowerCase() === String(b || '').toLowerCase());
+  const kindFromOrder = helpers.tpslKindFromOrder || tpslKindFromOrder;
+  const targetSymbol = String(symbol || '').toUpperCase();
+  const removed = [];
+  const remaining = (Array.isArray(orders) ? orders : []).filter(order => {
+    const kind = kindFromOrder(order);
+    if (!kind && !(order?.is_tpsl ?? order?.isTpsl)) return true;
+    if (targetSymbol && String(order?.symbol || '').toUpperCase() !== targetSymbol) return true;
+    const orderMarket = order?.market_addr || order?.marketAddr || order?.market || '';
+    if (marketAddr && orderMarket && !sameAddress(marketAddr, orderMarket)) return true;
+
+    if (typeof closingLong === 'boolean') {
+      const direction = String(order?.order_direction || order?.orderDirection || '').toLowerCase();
+      if (direction.includes('close long') && !closingLong) return true;
+      if (direction.includes('close short') && closingLong) return true;
+      if (!direction) {
+        const side = String(order?.side || '').toLowerCase();
+        const expectedSide = closingLong ? 'ask' : 'bid';
+        if (side && side !== expectedSide) return true;
+      }
+    }
+
+    removed.push(order);
+    return false;
+  });
+  return { orders: remaining, removed };
 }
 
 export function mergeDecibelOrderSnapshot({

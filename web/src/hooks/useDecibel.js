@@ -33,6 +33,10 @@ import {
   decibelOrderStateKey,
   makeOptimisticDecibelOrder,
   mergeDecibelOrderSnapshot,
+  orderTypeText,
+  removeDecibelTpslOrdersForClosedPosition,
+  tpslKindFromOrder,
+  tpslPriceFromOrder,
 } from '../lib/decibelOrderState';
 import {
   aptosFetchOptionsForKey,
@@ -363,31 +367,6 @@ function normalizeMaybeChainPrice(value, market) {
   return Number.isInteger(n) && n >= threshold ? priceFromChainUnits(n, market) : n;
 }
 
-function triggerPriceFromCondition(condition) {
-  const matches = String(condition || '').match(/\d+(?:\.\d+)?/g);
-  if (!matches || !matches.length) return null;
-  return positiveNumberOrNull(matches[matches.length - 1]);
-}
-
-function orderTypeText(order) {
-  return String(order?.order_type ?? order?.orderType ?? order?.ot ?? '');
-}
-
-function tpslKindFromOrder(order) {
-  const text = `${orderTypeText(order)} ${order?.trigger_condition || order?.triggerCondition || ''}`.toLowerCase();
-  if (/\b(take\s*profit|take-profit|tp)\b/.test(text)) return 'tp';
-  if (/\b(stop\s*loss|stop-loss|stop|sl)\b/.test(text)) return 'sl';
-  return null;
-}
-
-function tpslPriceFromOrder(order) {
-  const trigger = triggerPriceFromCondition(order?.trigger_condition ?? order?.triggerCondition);
-  return trigger
-    ?? positiveNumberOrNull(order?.take_profit ?? order?.takeProfit ?? order?.tp)
-    ?? positiveNumberOrNull(order?.stop_loss ?? order?.stopLoss ?? order?.sl)
-    ?? positiveNumberOrNull(order?.price);
-}
-
 // Reads APT balance for an Aptos address as raw octa (1 APT = 1e8 octa).
 // Uses the FA `primary_fungible_store::balance` view with metadata 0xa,
 // which is correct for both legacy CoinStore and FA-only wallets after
@@ -511,7 +490,7 @@ function normalizeOrder(o, markets) {
   const sizeRaw = o.remaining_size ?? o.orig_size ?? o.size_delta ?? o.size ?? o.amount ?? o.initial_amount ?? 0;
   const type = orderTypeText(o) || (o.isTrigger || o.is_trigger ? 'STOP_LIMIT' : 'LIMIT');
   const kind = tpslKindFromOrder({ ...o, order_type: type });
-  const triggerPrice = kind ? tpslPriceFromOrder(o) : null;
+  const triggerPrice = kind ? normalizeMaybeChainPrice(tpslPriceFromOrder(o), m) : null;
   const attachedTakeProfit = kind === 'tp'
     ? triggerPrice
     : normalizeMaybeChainPrice(o.tp_trigger_price ?? o.tpTriggerPrice ?? o.take_profit ?? o.takeProfit ?? o.tp, m);
@@ -1592,7 +1571,64 @@ export function useDecibel() {
     return removed.length;
   }, []);
 
-  const pollDecibelStateAfterWrite = useCallback(({ symbol, mode = 'position-refresh', expectedTpslKinds = [] } = {}) => {
+  const clearClosedPositionState = useCallback(({
+    symbol,
+    marketAddr = '',
+    closingLong = null,
+    reason = 'position-closed',
+  } = {}) => {
+    const target = String(symbol || '').toUpperCase();
+    const pruned = removeDecibelTpslOrdersForClosedPosition(
+      ordersRef.current || [],
+      { symbol: target, marketAddr, closingLong },
+      {
+        sameAddress: sameAptosAddress,
+        tpslKindFromOrder,
+      },
+    );
+    for (const order of pruned.removed) {
+      const key = decibelOrderStateKey(order);
+      if (key) orderSeenMetaRef.current.delete(key);
+    }
+    if (pruned.removed.length) {
+      ordersRef.current = pruned.orders;
+      setOrders(pruned.orders);
+    }
+
+    const nextPositions = (positionsRef.current || []).filter(position => {
+      if (target && String(position?.symbol || '').toUpperCase() !== target) return true;
+      if (marketAddr && position?.market_addr && !sameAptosAddress(marketAddr, position.market_addr)) return true;
+      if (typeof closingLong === 'boolean') {
+        const positionLong = String(position?.side || '').toLowerCase() === 'bid';
+        if (positionLong !== closingLong) return true;
+      }
+      return false;
+    });
+    const removedPositions = Math.max(0, (positionsRef.current || []).length - nextPositions.length);
+    if (removedPositions) {
+      positionsRef.current = nextPositions;
+      setPositions(nextPositions);
+      window._openPositionsCount = nextPositions.length;
+    }
+    D.log('cleared closed position state', {
+      reason,
+      symbol: target || null,
+      removed_positions: removedPositions,
+      removed_tpsl_orders: pruned.removed.length,
+    });
+    return {
+      removedPositions,
+      removedTpslOrders: pruned.removed.length,
+    };
+  }, []);
+
+  const pollDecibelStateAfterWrite = useCallback(({
+    symbol,
+    mode = 'position-refresh',
+    expectedTpslKinds = [],
+    marketAddr = '',
+    closingLong = null,
+  } = {}) => {
     if (!address) return;
     const target = String(symbol || '').toUpperCase();
     const expectedKinds = Array.from(new Set(
@@ -1604,7 +1640,15 @@ export function useDecibel() {
     D.log('post-write poll start', { poll_id: pollId, mode, symbol: target || null, expected_tpsl: expectedKinds });
 
     const targetPositions = (rows) => (Array.isArray(rows) ? rows : [])
-      .filter(p => !target || String(p?.symbol || '').toUpperCase() === target);
+      .filter(position => {
+        if (target && String(position?.symbol || '').toUpperCase() !== target) return false;
+        if (marketAddr && position?.market_addr && !sameAptosAddress(marketAddr, position.market_addr)) return false;
+        if (typeof closingLong === 'boolean') {
+          const positionLong = String(position?.side || '').toLowerCase() === 'bid';
+          if (positionLong !== closingLong) return false;
+        }
+        return true;
+      });
     const targetOrders = (rows) => (Array.isArray(rows) ? rows : [])
       .filter(o => !target || String(o?.symbol || o?.s || '').toUpperCase() === target);
     const targetOpenOrders = (rows) => targetOrders(rows)
@@ -1645,7 +1689,8 @@ export function useDecibel() {
           fetchBalance(),
         ]);
 
-        const nextPositions = positionsResult.status === 'fulfilled' && Array.isArray(positionsResult.value)
+        const positionsReadSucceeded = positionsResult.status === 'fulfilled' && Array.isArray(positionsResult.value);
+        const nextPositions = positionsReadSucceeded
           ? positionsResult.value
           : positionsRef.current;
         const matchingPositions = targetPositions(nextPositions);
@@ -1684,6 +1729,21 @@ export function useDecibel() {
           D.log('post-write poll stop: position found', { poll_id: pollId, symbol: target || null, iteration: i });
           return;
         }
+        if (mode === 'position-close' && positionsReadSucceeded && matchingPositions.length === 0) {
+          const cleared = clearClosedPositionState({
+            symbol: target,
+            marketAddr,
+            closingLong,
+            reason: `post-write:${mode}`,
+          });
+          D.log('post-write poll stop: position closed', {
+            poll_id: pollId,
+            symbol: target || null,
+            iteration: i,
+            ...cleared,
+          });
+          return;
+        }
         if (mode === 'order-open' && matchingOpenOrders.some(o => !o?._optimistic || !o?._stale_in_latest_snapshot)) {
           D.log('post-write poll stop: open order found', { poll_id: pollId, symbol: target || null, iteration: i });
           return;
@@ -1704,7 +1764,7 @@ export function useDecibel() {
       }
       D.log('post-write poll exhausted', { poll_id: pollId, mode, symbol: target || null });
     })();
-  }, [address, clearFilledOptimisticOpenOrders, fetchAccount, fetchBalance, fetchOrders, fetchPositions]);
+  }, [address, clearClosedPositionState, clearFilledOptimisticOpenOrders, fetchAccount, fetchBalance, fetchOrders, fetchPositions]);
 
   // ───── Builder fee linkage ─────
   // We treat builder approvals as a one-shot on-chain cap, but require it to
@@ -2355,6 +2415,7 @@ export function useDecibel() {
         verify_attempts: result?.verification?.attempts,
       });
       const txHash = assertWriteSuccess(result, 'Close order');
+      const closeSettled = result?.verification?.effect === 'position_closed';
       const dedupKey = `decibel:close:${address.toLowerCase()}:${market.market_name}:${result?.orderId || Date.now()}`;
       void reportTrade({
         tx_hash: txHash, symbol,
@@ -2362,13 +2423,26 @@ export function useDecibel() {
         amount: amt, leverage: 1, order_type: 'close', dedup_key: dedupKey,
       });
 
-      pollDecibelStateAfterWrite({ symbol, mode: 'position-refresh' });
+      if (closeSettled) {
+        clearClosedPositionState({
+          symbol,
+          marketAddr: market.market_addr,
+          closingLong,
+          reason: 'close-verification',
+        });
+      }
+      pollDecibelStateAfterWrite({
+        symbol,
+        mode: 'position-close',
+        marketAddr: market.market_addr,
+        closingLong,
+      });
       scheduleClaim(500);
       scheduleClaim(3_000);
       return {
         tx_hash: txHash,
-        status: result?.verification?.effect === 'position_closed' ? 'closed' : 'submitted',
-        close_settled: result?.verification?.effect === 'position_closed',
+        status: closeSettled ? 'closed' : 'submitted',
+        close_settled: closeSettled,
       };
     } catch (e) {
       const msg = decodeTradeError(e, 'Close failed');
@@ -2378,7 +2452,7 @@ export function useDecibel() {
       closeInFlightRef.current.delete(closeLockKey);
       setLoading(false);
     }
-  }, [requireServerSigner, address, ensureSubaccount, builderFields, reportTrade, pollDecibelStateAfterWrite, scheduleClaim, placeOrderOnServer]);
+  }, [requireServerSigner, address, ensureSubaccount, builderFields, reportTrade, clearClosedPositionState, pollDecibelStateAfterWrite, scheduleClaim, placeOrderOnServer]);
 
   const cancelOrder = useCallback(async (symbol, orderId) => {
     try {
@@ -2491,9 +2565,10 @@ export function useDecibel() {
           amount: sizeHuman,
           price: tp,
           stop_price: tp,
-          order_type: 'Trigger',
+          order_type: 'Take Profit Limit',
           reduce_only: true,
           is_tpsl: true,
+          trigger_condition: isLong ? `Price above ${tp}` : `Price below ${tp}`,
           order_direction: isLong ? 'Close Long' : 'Close Short',
           take_profit: tp,
           market_addr: market.market_addr,
@@ -2513,9 +2588,10 @@ export function useDecibel() {
           amount: sizeHuman,
           price: sl,
           stop_price: sl,
-          order_type: 'Trigger',
+          order_type: 'Stop Limit',
           reduce_only: true,
           is_tpsl: true,
+          trigger_condition: isLong ? `Price below ${sl}` : `Price above ${sl}`,
           order_direction: isLong ? 'Close Long' : 'Close Short',
           stop_loss: sl,
           market_addr: market.market_addr,
