@@ -8,6 +8,7 @@ import { FuturesModeProvider, useFuturesMode } from './contexts/FuturesModeConte
 import { EvmWalletProvider, useEvmWallet } from './contexts/EvmWalletContext';
 import { AptosWalletAdapterProvider } from '@aptos-labs/wallet-adapter-react';
 import { Network } from '@aptos-labs/ts-sdk';
+import { getPreferredAptosApiKey } from './lib/aptosBrowserKeyPool';
 import { AptosWalletProvider, useAptosWallet } from './contexts/AptosWalletContext';
 import { useFarcaster } from './hooks/useFarcaster';
 import { usePreloadPanelAssets } from './hooks/usePreloadPanelAssets';
@@ -462,8 +463,8 @@ export default function App() {
             autoConnect={true}
             dappConfig={{
               network: Network.MAINNET,
-              aptosApiKeys: import.meta.env.VITE_APTOS_NODE_API_KEY
-                ? { mainnet: import.meta.env.VITE_APTOS_NODE_API_KEY }
+              aptosApiKeys: getPreferredAptosApiKey()
+                ? { mainnet: getPreferredAptosApiKey() }
                 : undefined,
             }}
             onError={(e) => console.warn('[aptos-adapter]', e?.message || e)}

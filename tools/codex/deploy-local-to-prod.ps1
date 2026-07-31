@@ -10,6 +10,25 @@ $ErrorActionPreference = "Stop"
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 Set-Location $RepoRoot
 
+# Load local operator credentials from a gitignored env file. Explicit process
+# variables keep precedence for CI and one-off operator sessions.
+$DeployEnvFile = Join-Path $PSScriptRoot ".env.deploy"
+if (Test-Path -LiteralPath $DeployEnvFile) {
+    foreach ($line in Get-Content -LiteralPath $DeployEnvFile) {
+        $match = [regex]::Match($line, "^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$")
+        if (-not $match.Success) { continue }
+        $name = $match.Groups[1].Value
+        if (-not [string]::IsNullOrEmpty([Environment]::GetEnvironmentVariable($name, "Process"))) { continue }
+        $value = $match.Groups[2].Value
+        $doubleQuoted = $value.StartsWith('"') -and $value.EndsWith('"')
+        $singleQuoted = $value.StartsWith("'") -and $value.EndsWith("'")
+        if ($doubleQuoted -or $singleQuoted) {
+            $value = $value.Substring(1, $value.Length - 2)
+        }
+        [Environment]::SetEnvironmentVariable($name, $value, "Process")
+    }
+}
+
 Write-Host "== Deploy preflight =="
 git fetch origin --prune
 git status --short --branch

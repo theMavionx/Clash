@@ -34,6 +34,11 @@ import {
   makeOptimisticDecibelOrder,
   mergeDecibelOrderSnapshot,
 } from '../lib/decibelOrderState';
+import {
+  aptosFetchOptionsForKey,
+  fetchWithAptosBrowserKeys,
+  runWithAptosBrowserKeys,
+} from '../lib/aptosBrowserKeyPool';
 
 // Move function paths for the calls we route through Petra (one-time or
 // ownership-related). Verified against `@decibeltrade/sdk/dist/write.js`
@@ -97,18 +102,6 @@ const TIME_IN_FORCE = Object.freeze({
 // deposits/withdrawals and any USD-denominated balance read.
 const USDC_DECIMALS = 6;
 
-function aptosApiKey() {
-  return (typeof import.meta !== 'undefined' && import.meta.env?.VITE_APTOS_NODE_API_KEY) || '';
-}
-
-function aptosJsonHeaders() {
-  const key = aptosApiKey();
-  return {
-    'Content-Type': 'application/json',
-    ...(key ? { Authorization: `Bearer ${key}` } : {}),
-  };
-}
-
 async function aptosView(functionId, args = [], typeArguments = []) {
   const token = window._playerToken;
   if (token) {
@@ -138,14 +131,17 @@ async function aptosView(functionId, args = [], typeArguments = []) {
       D.warn('server Aptos view unavailable; using direct fallback', error?.message || error);
     }
   }
-  const r = await fetch(`${APTOS_FULLNODE}/view`, {
+  const r = await fetchWithAptosBrowserKeys(`${APTOS_FULLNODE}/view`, {
     method: 'POST',
-    headers: aptosJsonHeaders(),
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       function: functionId,
       type_arguments: typeArguments,
       arguments: args,
     }),
+  }, {
+    label: `Aptos view ${functionId}`,
+    allowPublicFallback: true,
   });
   if (!r.ok) {
     const body = await r.text().catch(() => '');
@@ -179,31 +175,34 @@ function isAbortLikeError(e) {
 }
 
 async function withAbortableRead(factory, ms, label) {
-  if (typeof AbortController === 'undefined') {
-    return withTimeout(factory({}), ms, label);
-  }
-  const controller = new AbortController();
-  let timedOut = false;
-  let timer = null;
-  const timeout = new Promise((_, reject) => {
-    timer = setTimeout(() => {
-      timedOut = true;
-      controller.abort();
-      reject(timeoutError(ms, label));
-    }, ms);
-  });
-  try {
-    return await Promise.race([
-      factory({ signal: controller.signal }),
-      timeout,
-    ]);
-  } catch (e) {
-    if (timedOut || isAbortLikeError(e)) throw timeoutError(ms, label);
-    throw e;
-  } finally {
-    if (timer) clearTimeout(timer);
-    if (!timedOut) controller.abort();
-  }
+  return runWithAptosBrowserKeys(async apiKey => {
+    const fetchOptions = aptosFetchOptionsForKey({}, apiKey);
+    if (typeof AbortController === 'undefined') {
+      return withTimeout(factory(fetchOptions), ms, label);
+    }
+    const controller = new AbortController();
+    let timedOut = false;
+    let timer = null;
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+        reject(timeoutError(ms, label));
+      }, ms);
+    });
+    try {
+      return await Promise.race([
+        factory({ ...fetchOptions, signal: controller.signal }),
+        timeout,
+      ]);
+    } catch (e) {
+      if (timedOut || isAbortLikeError(e)) throw timeoutError(ms, label);
+      throw e;
+    } finally {
+      if (timer) clearTimeout(timer);
+      if (!timedOut) controller.abort();
+    }
+  }, { label });
 }
 
 function txHashFrom(response) {
@@ -220,9 +219,11 @@ async function waitForAptosTransaction(hash, label = 'transaction') {
   let lastStatus = null;
   while (Date.now() < deadline) {
     try {
-      const r = await fetch(`${APTOS_FULLNODE}/transactions/by_hash/${hash}`, {
-        headers: aptosJsonHeaders(),
-      });
+      const r = await fetchWithAptosBrowserKeys(
+        `${APTOS_FULLNODE}/transactions/by_hash/${hash}`,
+        {},
+        { label: `${label} status`, allowPublicFallback: true },
+      );
       if (r.ok) {
         const tx = await r.json();
         lastStatus = tx?.vm_status || tx?.type || null;
@@ -1574,14 +1575,17 @@ export function useDecibel() {
     // 0xbae207...46f3b. NOT bridged USDC variants (LZ/Wh) which Decibel
     // can't accept anyway.
     try {
-      const r = await fetch(`${APTOS_FULLNODE}/view`, {
+      const r = await fetchWithAptosBrowserKeys(`${APTOS_FULLNODE}/view`, {
         method: 'POST',
-        headers: aptosJsonHeaders(),
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           function: '0x1::primary_fungible_store::balance',
           type_arguments: ['0x1::fungible_asset::Metadata'],
           arguments: [address, DECIBEL_USDC_MAINNET],
         }),
+      }, {
+        label: 'Aptos wallet USDC balance',
+        allowPublicFallback: true,
       });
       if (r.ok) {
         const j = await r.json();
@@ -1599,14 +1603,17 @@ export function useDecibel() {
     // the legacy `coin::CoinStore<AptosCoin>` resource is missing on most
     // CEX-funded wallets — probing it was just 404 console noise.
     try {
-      const r = await fetch(`${APTOS_FULLNODE}/view`, {
+      const r = await fetchWithAptosBrowserKeys(`${APTOS_FULLNODE}/view`, {
         method: 'POST',
-        headers: aptosJsonHeaders(),
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           function: '0x1::primary_fungible_store::balance',
           type_arguments: ['0x1::fungible_asset::Metadata'],
           arguments: [address, '0xa'],
         }),
+      }, {
+        label: 'Aptos wallet APT balance',
+        allowPublicFallback: true,
       });
       if (r.ok) {
         const j = await r.json();
@@ -1830,7 +1837,14 @@ export function useDecibel() {
       D.step('preflight: redeeming referral code', REFERRAL_CODE, 'for', address);
       try {
         const read = await getReadClient();
-        await read.referrals.redeemCode({ referralCode: REFERRAL_CODE, account: address });
+        await withAbortableRead(
+          fetchOptions => read.referrals.redeemCode(
+            { referralCode: REFERRAL_CODE, account: address },
+            { fetchOptions },
+          ),
+          READ_TIMEOUT_MS,
+          'referral-redeem',
+        );
         D.log('referral redeem: OK');
       } catch (e) {
         D.warn('referral redeem (non-fatal):', e?.message || e);

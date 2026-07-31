@@ -1,3 +1,5 @@
+import { getPreferredAptosApiKey } from './aptosBrowserKeyPool';
+
 // Decibel Perp DEX integration constants and SDK factories.
 //
 // Decibel runs on Aptos mainnet. The SDK is split into a read client (no
@@ -60,12 +62,10 @@ export function isBuilderConfigured() {
 // ───── Network / SDK config ───────────────────────────────────────────────
 
 // Aptos mainnet fullnode. Public free tier — fine for low-volume read
-// traffic from a few hundred concurrent players. Set VITE_APTOS_NODE_API_KEY
-// in `.env` to upgrade to authenticated rate limits without code changes.
+// traffic from a few hundred concurrent players. The plural env variable is
+// the rotating pool; the legacy singular variable remains an extra fallback.
 const APTOS_FULLNODE = 'https://fullnode.mainnet.aptoslabs.com/v1';
-const APTOS_NODE_API_KEY = (typeof import.meta !== 'undefined' && import.meta.env)
-  ? (import.meta.env.VITE_APTOS_NODE_API_KEY || undefined)
-  : undefined;
+const APTOS_NODE_API_KEY = getPreferredAptosApiKey() || undefined;
 const APTOS_GAS_STATION_API_KEY = (typeof import.meta !== 'undefined' && import.meta.env)
   ? (import.meta.env.VITE_APTOS_GAS_STATION_API_KEY
     || import.meta.env.VITE_DECIBEL_GAS_STATION_API_KEY
@@ -136,10 +136,12 @@ export async function getReadClient() {
   if (_readClient) return _readClient;
   const sdk = await _loadSdk();
   const cfg = await _buildConfig();
-  // Pass `nodeApiKey` via the second-arg options bag, per docs.
+  // Read requests inject a rotating API key through fetchOptions. Keeping the
+  // reader itself keyless lets a 429 retry use another key without rebuilding
+  // the full SDK object.
   _readClient = new sdk.DecibelReadDex(
     cfg,
-    APTOS_NODE_API_KEY ? { nodeApiKey: APTOS_NODE_API_KEY } : undefined,
+    undefined,
   );
   return _readClient;
 }
