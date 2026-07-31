@@ -19,6 +19,7 @@ const {
 } = require('./combat_grid_config');
 const {
   BOT_LOOT_REWARD_RANGE,
+  CHALLENGE_BOT_ARCHETYPES,
   MATCHMAKING_CONFIG,
   buildBotBaseTemplates,
   botResources,
@@ -3287,7 +3288,7 @@ const stmts = {
     FROM raid_matchmaking
     WHERE attacker_id = ?
       AND result IN ('victory', 'defeat')
-    ORDER BY created_at DESC
+    ORDER BY created_at DESC, id DESC
     LIMIT ?
   `),
   recentBattleReplayResults: db.prepare(`
@@ -3295,7 +3296,7 @@ const stmts = {
     FROM battle_replays
     WHERE attacker_id = ?
       AND lower(COALESCE(verified_result, '')) IN ('accepted', 'victory')
-    ORDER BY created_at DESC
+    ORDER BY created_at DESC, id DESC
     LIMIT ?
   `),
 
@@ -5732,10 +5733,12 @@ const TH_UNLOCK = {
   shark_trap: 3, // unlocked at TH3
   mage_tower: 4, // unlocked at TH4
   mortar:    5,  // unlocked at TH5
+  harpoon:   6,  // unlocked at TH6
   cannon:    7,  // unlocked at TH7
 };
 
-// Max count per building type PER TH level: { type: [th1, th2, th3, th4, th5, th6, th7] }
+// Max count per building type per TH level. Individual tables may include future
+// Town Hall gates beyond the current playable TH7 and clamp to their last entry.
 const TH_MAX_COUNT = {
   mine:         [1, 2, 3, 3, 4, 4, 4],
   sawmill:      [1, 2, 3, 3, 4, 4, 4],
@@ -5748,12 +5751,13 @@ const TH_MAX_COUNT = {
   storage:      [0, 1, 2, 3, 3, 3, 3],  // unlocked at TH2
   mage_tower:   [0, 0, 0, 2, 2, 2, 2],  // unlocked at TH4
   mortar:       [0, 0, 0, 0, 1, 2, 2],  // unlocked at TH5, second at TH6
+  harpoon:      [0, 0, 0, 0, 0, 1, 1, 2], // one at TH6-TH7, second at TH8
   cannon:       [0, 0, 0, 0, 0, 0, 2],  // unlocked at TH7
   town_hall:    [1, 1, 1, 1, 1, 1, 1],
 };
 
 // Maximum reachable building level at each Town Hall level. This is separate
-// from count unlocks because Mortar Lv2 and Tombstone Lv5 are TH6 content.
+// from count unlocks because Mortar L5 and Harpoon L6 are TH6 content.
 const TH_MAX_LEVEL = {
   town_hall:    [1, 2, 3, 4, 5, 6, 7],
   mine:         [1, 2, 3, 4, 5, 6, 7],
@@ -5764,7 +5768,8 @@ const TH_MAX_LEVEL = {
   turret:       [1, 2, 3, 4, 5, 6, 7],
   mage_tower:   [1, 2, 3, 4, 5, 6, 7],
   tombstone:    [1, 2, 3, 4, 4, 5, 6],
-  mortar:       [1, 1, 1, 1, 1, 2, 3],
+  mortar:       [1, 1, 1, 1, 5, 6, 7],
+  harpoon:      [1, 1, 1, 1, 1, 6, 7, 8],
   shark_trap:   [1, 2, 3, 4, 5, 6, 7],
   cannon:       [1, 1, 1, 1, 1, 1, 7],
   port:         [1, 2, 3, 3, 3, 3, 3],
@@ -5878,12 +5883,31 @@ const BUILDING_DEFS = {
     max_count: 2,
   },
   mortar: {
-    size: [2, 2], max_level: 3,
-    hp_levels: [1700, 2400, 3200],
+    size: [2, 2], max_level: 7,
+    hp_levels: [1700, 2400, 3200, 4100, 5200, 6500, 8100],
     cost: { gold: 8000, wood: 12000, ore: 10000 },
     upgrade_cost: {
-      2: { gold: 24000, wood: 36000, ore: 30000 },
-      3: { gold: 55000, wood: 82000, ore: 68000 },
+      2: { gold: 14000, wood: 22000, ore: 18000 },
+      3: { gold: 24000, wood: 36000, ore: 30000 },
+      4: { gold: 38000, wood: 54000, ore: 46000 },
+      5: { gold: 52000, wood: 72000, ore: 62000 },
+      6: { gold: 68000, wood: 96000, ore: 82000 },
+      7: { gold: 92000, wood: 132000, ore: 112000 },
+    },
+    max_count: 2,
+  },
+  harpoon: {
+    size: [2, 2], max_level: 8,
+    hp_levels: [1800, 2300, 2900, 3600, 4400, 5200, 7200, 8800],
+    cost: { gold: 12000, wood: 22000, ore: 18000 },
+    upgrade_cost: {
+      2: { gold: 20000, wood: 42000, ore: 35000 },
+      3: { gold: 30000, wood: 56000, ore: 47000 },
+      4: { gold: 41000, wood: 70000, ore: 59000 },
+      5: { gold: 54000, wood: 84000, ore: 71000 },
+      6: { gold: 68000, wood: 98000, ore: 83000 },
+      7: { gold: 86000, wood: 122000, ore: 104000 },
+      8: { gold: 108000, wood: 142000, ore: 124000 },
     },
     max_count: 2,
   },
@@ -6111,6 +6135,49 @@ function cleanupOldBotTargets() {
   }
 }
 
+const CHALLENGE_BOT_ARCHETYPE_SET = new Set(CHALLENGE_BOT_ARCHETYPES);
+const strongestHardBotPowerByTownHall = new Map();
+
+function botTemplatesForMatchmakingProfile(tierTemplates, profile) {
+  if (profile.recovery_level > 0) {
+    const normal = tierTemplates.filter((template) => template.difficulty === 'normal');
+    const hard = tierTemplates.filter((template) => template.difficulty === 'hard');
+    return normal.length > 0 ? normal : hard;
+  }
+
+  if (profile.selection_reason === 'strong_player') {
+    const hard = tierTemplates.filter((template) => template.difficulty === 'hard');
+    const normal = tierTemplates.filter((template) => template.difficulty === 'normal');
+    const challengePool = hard.length > 0 ? hard : normal;
+    const preferred = challengePool.filter((template) => (
+      template.th < 6 || CHALLENGE_BOT_ARCHETYPE_SET.has(template.archetype)
+    ));
+    return preferred.length > 0 ? preferred : challengePool;
+  }
+
+  return tierTemplates;
+}
+
+function preferredChallengeTownHall(attackPower, profile, maxTownHall = 7) {
+  const attackerTh = Math.max(1, Math.min(maxTownHall, Number(attackPower.town_hall_level) || 1));
+  if (profile.selection_reason !== 'strong_player' || attackerTh >= maxTownHall) return attackerTh;
+  if (!strongestHardBotPowerByTownHall.has(attackerTh)) {
+    const strongest = buildBotBaseTemplates()
+      .filter((template) => template.th === attackerTh && template.difficulty === 'hard')
+      .reduce(
+        (highest, template) => Math.max(highest, computeBasePowerFromBuildings(template.buildings).power),
+        0,
+      );
+    strongestHardBotPowerByTownHall.set(attackerTh, strongest);
+  }
+  const strongestSameTierPower = strongestHardBotPowerByTownHall.get(attackerTh) || 0;
+  const strongestSameTierRatio = strongestSameTierPower / Math.max(1, attackPower.power);
+  return strongestSameTierPower > 0
+    && strongestSameTierRatio < MATCHMAKING_CONFIG.hardRatio.min
+    ? Math.min(maxTownHall, attackerTh + 1)
+    : attackerTh;
+}
+
 function virtualBotCandidatesForProfile(attackPower, profile) {
   const attackerTh = Math.max(1, Math.min(7, Number(attackPower.town_hall_level || 1)));
   const templates = buildBotBaseTemplates();
@@ -6120,18 +6187,17 @@ function virtualBotCandidatesForProfile(attackPower, profile) {
     : MATCHMAKING_CONFIG.maxTownHallGapBelow;
   const minTh = Math.max(1, attackerTh - maxGapBelow);
   const maxTh = Math.min(maxTemplateTh, attackerTh + MATCHMAKING_CONFIG.maxTownHallGapAbove);
-  const allowedDifficulties = profile.recovery_level > 0
-    ? new Set(['easy', 'normal'])
-    : profile.selection_reason === 'strong_player'
-      ? new Set(['normal', 'hard'])
-      : new Set(['easy', 'normal', 'hard']);
-  const exactTierTemplates = templates.filter((template) => template.th === attackerTh);
+  // If even the strongest same-tier base is below the configured hard band, a
+  // proven strong player moves up by one bot tier. A newly upgraded or
+  // struggling player always stays on the normal same-TH/recovery path.
+  const botTargetTh = preferredChallengeTownHall(attackPower, profile, maxTemplateTh);
+  const exactTierTemplates = templates.filter((template) => template.th === botTargetTh);
   const tierTemplates = exactTierTemplates.length > 0
     ? exactTierTemplates
     : templates.filter((template) => template.th >= minTh && template.th <= maxTh);
+  const profileTemplates = botTemplatesForMatchmakingProfile(tierTemplates, profile);
 
-  return tierTemplates
-    .filter((template) => allowedDifficulties.has(template.difficulty))
+  return profileTemplates
     .map((template) => {
       const base = computeBasePowerFromBuildings(template.buildings);
       return {
@@ -6143,6 +6209,7 @@ function virtualBotCandidatesForProfile(attackPower, profile) {
         is_virtual_bot: true,
         bot_template_id: template.id,
         bot_difficulty: template.difficulty,
+        bot_archetype: template.archetype,
         bot_variant: template.variant,
         bot_generation: template.generation,
         bot_template: template,
@@ -6211,6 +6278,7 @@ function materializeBotTarget(candidate, sessionId) {
     is_bot: 1,
     is_virtual_bot: false,
     bot_difficulty: template.difficulty,
+    bot_archetype: template.archetype,
     bot_variant: template.variant,
     bot_generation: template.generation,
     bot_template_id: template.id,
@@ -6498,7 +6566,7 @@ const ALTAR_SKILL_DEFS = {
   },
 };
 
-const DEFENSE_BUILDING_TYPES = new Set(['turret', 'archer_tower', 'archertower', 'archtower', 'mage_tower', 'tombstone', 'mortar', 'shark_trap', 'cannon']);
+const DEFENSE_BUILDING_TYPES = new Set(['turret', 'archer_tower', 'archertower', 'archtower', 'mage_tower', 'tombstone', 'mortar', 'harpoon', 'shark_trap', 'cannon']);
 
 const DEMON_KING_UPGRADE_WINS = {
   2: 1000,
@@ -6531,7 +6599,8 @@ const TROPHY_TABLE = {
   storage:      [10, 25, 50, 90, 145, 220, 315],
   archer_tower: [15, 35, 70, 125, 200, 300, 425],
   mage_tower:   [20, 45, 90, 145, 225, 330, 460],
-  mortar:       [30, 65, 125, 210],
+  mortar:       [30, 65, 125, 210, 315, 440, 580],
+  harpoon:      [20, 35, 55, 80, 110, 145, 190, 240],
   shark_trap:   [25, 40, 60, 85, 115, 155, 205],
   cannon:       [25, 45, 70, 105, 145, 190, 240],
 };
@@ -9383,6 +9452,7 @@ function computeAttackPower(playerId) {
   const troops = safeJsonArray(mainShip?.troops);
   let power = 0;
   let troopCount = 0;
+  let highestTroopLevel = 1;
   let shipCount = 0;
   let shipCapacity = 0;
   if (troops.length > 0) {
@@ -9395,6 +9465,11 @@ function computeAttackPower(playerId) {
       const p = troopPowerFromEntry(troop, levels);
       if (p <= 0) continue;
       troopCount += 1;
+      const troopType = normalizeMatchTroopType(troop);
+      highestTroopLevel = Math.max(
+        highestTroopLevel,
+        matchTroopEntryLevel(troop, levels[troopType] || 1),
+      );
       power += p;
     }
   }
@@ -9404,6 +9479,7 @@ function computeAttackPower(playerId) {
     power: Math.max(1, Math.round(power)),
     town_hall_level: thLevel,
     troop_count: troopCount,
+    highest_troop_level: highestTroopLevel,
     ship_count: shipCount,
     ship_capacity: shipCapacity,
   };
@@ -9434,6 +9510,14 @@ function defensePowerForBuilding(building) {
       + (Number(stats.detectRange) || 0) * 165
       + (Number(stats.splashRadius) || 0) * 360
       - (Number(stats.minRange) || 0) * 90;
+  }
+  if (type === 'harpoon') {
+    const stats = DEFENSE_STATS.harpoon[level] || DEFENSE_STATS.harpoon[1];
+    const dps = (Number(stats.damage) || 0) / Math.max(0.1, Number(stats.fireRate) || 1);
+    const controlUptime = (Number(stats.pullDuration) || 0) / Math.max(0.1, Number(stats.fireRate) || 1);
+    return dps * 26
+      + (Number(stats.detectRange) || 0) * 160
+      + (Number(stats.pullSpeed) || 0) * controlUptime * 620;
   }
   if (type === 'cannon') {
     const stats = DEFENSE_STATS.cannon[level] || DEFENSE_STATS.cannon[1];
@@ -9568,7 +9652,7 @@ function matchmakingProfileForPlayer(playerId, attackPower) {
 
   if (recoveryLevel >= 2) {
     ratioBand = MATCHMAKING_CONFIG.easyRatio;
-    difficulty = 'easy';
+    difficulty = 'normal';
     botBias = -0.20;
     liveBias = 0.10;
     selectionReason = 'recovery_strong';
@@ -9578,15 +9662,15 @@ function matchmakingProfileForPlayer(playerId, attackPower) {
       target: (MATCHMAKING_CONFIG.easyRatio.target + MATCHMAKING_CONFIG.normalRatio.target) / 2,
       max: MATCHMAKING_CONFIG.normalRatio.max,
     };
-    difficulty = 'easy';
+    difficulty = 'normal';
     botBias = -0.08;
     liveBias = 0.04;
     selectionReason = 'recovery_soft';
   } else if (recent.raids >= 5 && rate != null && rate > MATCHMAKING_CONFIG.strongPlayerSuccessRate) {
     ratioBand = MATCHMAKING_CONFIG.hardRatio;
     difficulty = 'hard';
-    botBias = 0.18;
-    liveBias = -0.04;
+    botBias = -0.04;
+    liveBias = 0.08;
     selectionReason = 'strong_player';
   }
 
@@ -9855,21 +9939,34 @@ function findEnemy(playerId) {
   const profile = matchmakingProfileForPlayer(playerId, attackPower);
   const rawCandidates = stmts.findEnemyCandidates.all(playerId, playerId, playerId, playerId);
   const matchFilter = filterTournamentAttackCandidates(playerId, rawCandidates);
-  const liveCandidates = filterCandidatesByTownHall(
+  const townHallFilteredLiveCandidates = filterCandidatesByTownHall(
     matchFilter.candidates,
     attackPower.town_hall_level,
   );
+  const preferredTargetTh = preferredChallengeTownHall(attackPower, profile);
+  const liveCandidates = preferredTargetTh > attackPower.town_hall_level
+    ? townHallFilteredLiveCandidates.filter((candidate) => (
+      Math.max(1, Number(candidate.defender_th || candidate.level) || 1) >= preferredTargetTh
+    ))
+    : townHallFilteredLiveCandidates;
   const includeBots = raidBotTargetsEnabled()
     && botCandidatesAllowedForTournament(matchFilter)
     && (
       profile.recovery_level > 0
+      || profile.selection_reason === 'strong_player'
       || liveCandidates.length < MATCHMAKING_CONFIG.minLiveCandidatesBeforeBots
       || attackPower.town_hall_level >= 3
     );
   const botCandidates = includeBots
     ? virtualBotCandidatesForProfile(attackPower, profile)
     : [];
-  const candidates = [...liveCandidates, ...botCandidates];
+  // A proven strong attacker must stay in the validated hard challenge pool.
+  // Leaving live bases in the weighted draw made the intended correction
+  // probabilistic and allowed high-win-rate players to keep farming them.
+  const selectableLiveCandidates = profile.selection_reason === 'strong_player'
+    ? []
+    : liveCandidates;
+  const candidates = [...selectableLiveCandidates, ...botCandidates];
   // Friendly user-facing message — same wording for "everybody is shielded"
   // and "no real bases registered yet" because from the player's POV they
   // both mean the same thing: come back later.
@@ -9979,6 +10076,7 @@ function findEnemy(playerId) {
     matchmaking: {
       target_is_bot: best.is_bot,
       target_bot_difficulty: best.bot_difficulty || null,
+      target_bot_archetype: best.bot_archetype || null,
       difficulty_bucket: difficultyBucket,
       selection_reason: profile.selection_reason,
       recovery_level: profile.recovery_level,
@@ -9986,6 +10084,7 @@ function findEnemy(playerId) {
       recent_raid_count: profile.raids,
       consecutive_losses: profile.consecutive_losses,
       attack_power: attackPower.power,
+      attack_highest_troop_level: attackPower.highest_troop_level,
       base_power: repairedBase.power,
       base_power_ratio: Number(basePowerRatio.toFixed(4)),
       live_candidate_count: liveCandidates.length,
@@ -11360,6 +11459,14 @@ function compactSimTrace(trace) {
     'defense_fire',
     'defense_projectile_hit',
     'defense_projectile_lost_target',
+    'harpoon_lock',
+    'harpoon_lock_cancel',
+    'harpoon_fire',
+    'harpoon_projectile_lost',
+    'harpoon_impact',
+    'harpoon_pull_start',
+    'harpoon_pull_end',
+    'harpoon_release',
     'troop_projectile_lost_target',
     'cannon_fire',
     'cannon_hit',
@@ -11371,12 +11478,12 @@ function compactSimTrace(trace) {
       kind: event.kind,
       t: event.t,
       id: event.buildingId ?? event.guardId ?? event.troopId ?? null,
-      type: event.type ?? event.targetType ?? null,
+      type: event.type ?? event.targetType ?? event.targetTroop ?? null,
       defenseType: event.defenseType ?? null,
       troop: event.troop ?? null,
       replayOrder: event.replayOrder ?? event.targetReplayOrder ?? event.sourceReplayOrder ?? null,
-      targetId: event.targetId ?? event.target?.id ?? null,
-      targetType: event.targetType ?? event.target?.type ?? null,
+      targetId: event.targetId ?? event.targetTroopId ?? event.target?.id ?? null,
+      targetType: event.targetType ?? event.targetTroop ?? event.target?.type ?? null,
       hp: event.hp ?? event.hpAfter ?? event.hp_after ?? event.target?.hp ?? null,
       damage: event.damage ?? null,
       reason: event.reason ?? null,
@@ -11392,6 +11499,11 @@ function compactSimTrace(trace) {
       jumpIndex: event.jumpIndex ?? null,
       radius: event.radius ?? null,
       duration: event.duration ?? null,
+      tick: event.tick ?? null,
+      fireTick: event.fireTick ?? null,
+      durationTicks: event.durationTicks ?? null,
+      finalDistance: event.finalDistance ?? null,
+      immunityUntilTick: event.immunityUntilTick ?? null,
       affectedBuildingIds: event.affectedBuildingIds ?? null,
       instantKill: event.instantKill ?? null,
       trapImmune: event.trapImmune ?? null,

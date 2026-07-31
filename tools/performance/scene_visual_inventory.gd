@@ -92,12 +92,12 @@ func _inspect_scene(path: String) -> Dictionary:
 	var resource := load(path)
 	if not resource is PackedScene:
 		return {}
-	var root := (resource as PackedScene).instantiate()
-	if root == null:
+	var scene_root := (resource as PackedScene).instantiate()
+	if scene_root == null:
 		return {}
 
 	var animated_roots: Array[Node] = []
-	var animation_players := root.find_children("*", "AnimationPlayer", true, false)
+	var animation_players := scene_root.find_children("*", "AnimationPlayer", true, false)
 	var animation_count := 0
 	for raw_player in animation_players:
 		var player := raw_player as AnimationPlayer
@@ -124,7 +124,7 @@ func _inspect_scene(path: String) -> Dictionary:
 					if target != null and not animated_roots.has(target):
 						animated_roots.append(target)
 
-	var mesh_nodes := root.find_children("*", "MeshInstance3D", true, false)
+	var mesh_nodes := scene_root.find_children("*", "MeshInstance3D", true, false)
 	var surfaces := 0
 	var animated_meshes := 0
 	var skeleton_meshes := 0
@@ -149,11 +149,11 @@ func _inspect_scene(path: String) -> Dictionary:
 			named_dynamic_meshes += 1
 		if animated or skeleton_bound or named_dynamic:
 			if dynamic_examples.size() < 8:
-				dynamic_examples.append(String(root.get_path_to(mesh_instance)))
+				dynamic_examples.append(String(scene_root.get_path_to(mesh_instance)))
 		else:
 			static_candidates += 1
 			if static_examples.size() < 8:
-				static_examples.append(String(root.get_path_to(mesh_instance)))
+				static_examples.append(String(scene_root.get_path_to(mesh_instance)))
 
 	var report := {
 		"path": path,
@@ -168,7 +168,7 @@ func _inspect_scene(path: String) -> Dictionary:
 		"dynamic_examples": dynamic_examples,
 		"static_examples": static_examples,
 	}
-	root.free()
+	scene_root.free()
 	return report
 
 

@@ -93,8 +93,8 @@ func activate(refresh_dense_rendering: bool = true) -> void:
 func _physics_process(delta: float) -> void:
 	if _despawning or _is_dead:
 		return
-	var owner: Object = owner_wind_mage.get_ref() if owner_wind_mage != null else null
-	if not is_instance_valid(owner) or bool(owner.get("_is_dead")):
+	var summoner: Object = owner_wind_mage.get_ref() if owner_wind_mage != null else null
+	if not is_instance_valid(summoner) or bool(summoner.get("_is_dead")):
 		despawn("owner_cleanup")
 		return
 	var combat_step := BaseTroop.combat_delta(delta)

@@ -289,14 +289,26 @@ var building_defs: Dictionary = {
 			"res://Model/Mortar/mortar_lvl2.fbx",
 			"res://Model/Mortar/mortar_lvl3.fbx",
 			"res://Model/Mortar/mortar_lvl4.fbx",
+			"res://Model/Mortar/mortar_lvl4.fbx",
+			"res://Model/Mortar/mortar_lvl4.fbx",
+			"res://Model/Mortar/mortar_lvl4.fbx",
 		],
 		"model_scale": 0.032,
 		"model_rotation_y": 0.0,
-		"hp_levels": [1700, 2400, 3200],
+		"hp_levels": [1700, 2400, 3200, 4100, 5200, 6500, 8100],
+		"damage_levels": [95, 135, 185, 245, 300, 370, 460],
+		"range_levels": [1.433, 1.600, 1.767, 1.933, 2.100, 2.250, 2.400],
+		"min_range_levels": [0.70, 0.75, 0.80, 0.82, 0.82, 0.80, 0.78],
+		"splash_radius_levels": [0.30, 0.34, 0.38, 0.42, 0.45, 0.49, 0.52],
+		"reload_levels": [2.40, 2.25, 2.10, 1.95, 1.90, 1.80, 1.70],
 		"cost": {"gold": 8000, "wood": 12000, "ore": 10000},
 		"upgrade_cost": {
-			2: {"gold": 24000, "wood": 36000, "ore": 30000},
-			3: {"gold": 55000, "wood": 82000, "ore": 68000},
+			2: {"gold": 14000, "wood": 22000, "ore": 18000},
+			3: {"gold": 24000, "wood": 36000, "ore": 30000},
+			4: {"gold": 38000, "wood": 54000, "ore": 46000},
+			5: {"gold": 52000, "wood": 72000, "ore": 62000},
+			6: {"gold": 68000, "wood": 96000, "ore": 82000},
+			7: {"gold": 92000, "wood": 132000, "ore": 112000},
 		},
 		"max_count": 2,
 		"altar_ward_bonus": true,
@@ -308,17 +320,53 @@ var building_defs: Dictionary = {
 			"res://Model/Mortar/mortar_lvl2_construction.fbx",
 			"res://Model/Mortar/mortar_lvl3_construction.fbx",
 			"res://Model/Mortar/mortar_lvl4_construction.fbx",
+			"res://Model/Mortar/mortar_lvl4_construction.fbx",
+			"res://Model/Mortar/mortar_lvl4_construction.fbx",
+			"res://Model/Mortar/mortar_lvl4_construction.fbx",
 		],
 		"projectile_scenes": [
 			"res://Model/Mortar/mortar_lvl1_projectile.fbx",
 			"res://Model/Mortar/mortar_lvl2_projectile.fbx",
 			"res://Model/Mortar/mortar_lvl3_projectile.fbx",
 			"res://Model/Mortar/mortar_lvl4_projectile.fbx",
+			"res://Model/Mortar/mortar_lvl4_projectile.fbx",
+			"res://Model/Mortar/mortar_lvl4_projectile.fbx",
+			"res://Model/Mortar/mortar_lvl4_projectile.fbx",
 		],
-		"test_damage": 245,
-		"test_damage_levels": [95, 135, 185, 245],
-		"test_range": 2.90,
-		"test_reload_sec": 1.95,
+		"test_damage": 460,
+		"test_damage_levels": [95, 135, 185, 245, 300, 370, 460],
+		"test_range": 2.40,
+		"test_reload_sec": 1.70,
+	},
+	"harpoon": {
+		"name": "Harpoon",
+		"cells": Vector2i(2, 2),
+		"footprint_extra": 0.35,
+		"color": Color(0.20, 0.42, 0.48, 0.5),
+		"height": 0.50,
+		"scene": "res://Model/Harpoon/HarpoonDefense.tscn",
+		"model_scale": 0.0625,
+		"hp_levels": [1800, 2300, 2900, 3600, 4400, 5200, 7200, 8800],
+		"damage_levels": [45, 55, 65, 75, 88, 100, 140, 165],
+		"range_levels": [1.20, 1.27, 1.34, 1.41, 1.48, 1.55, 1.70, 1.78],
+		"pull_speed_levels": [0.85, 0.92, 0.99, 1.06, 1.13, 1.20, 1.40, 1.48],
+		"reload_sec": 7.00,
+		"pull_duration_sec": 0.80,
+		"stop_distance": 0.60,
+		"target_type": "air",
+		"cost": {"gold": 12000, "wood": 22000, "ore": 18000},
+		"upgrade_cost": {
+			2: {"gold": 20000, "wood": 42000, "ore": 35000},
+			3: {"gold": 30000, "wood": 56000, "ore": 47000},
+			4: {"gold": 41000, "wood": 70000, "ore": 59000},
+			5: {"gold": 54000, "wood": 84000, "ore": 71000},
+			6: {"gold": 68000, "wood": 98000, "ore": 83000},
+			7: {"gold": 86000, "wood": 122000, "ore": 104000},
+			8: {"gold": 108000, "wood": 142000, "ore": 124000},
+		},
+		"max_count": 2,
+		"altar_ward_bonus": true,
+		"hp_bar_height": 0.55,
 	},
 	"shark_trap": {
 		"name": "Shark Trap",
@@ -453,10 +501,12 @@ const TH_UNLOCK: Dictionary = {
 	"shark_trap": 3,
 	"mage_tower": 4,
 	"mortar": 5,
+	"harpoon": 6,
 	"cannon": 7,
 }
 
-# Max count per building per TH level: [th1, th2, th3, th4, th5, th6, th7]
+# Max count per building per TH level. Individual tables may include future
+# Town Hall gates beyond the current playable TH7 and clamp to their last entry.
 const TH_MAX_COUNT: Dictionary = {
 	"mine": [1, 2, 3, 3, 4, 4, 4],
 	"sawmill": [1, 2, 3, 3, 4, 4, 4],
@@ -469,6 +519,7 @@ const TH_MAX_COUNT: Dictionary = {
 	"storage": [0, 1, 2, 3, 3, 3, 3],
 	"mage_tower": [0, 0, 0, 2, 2, 2, 2],
 	"mortar": [0, 0, 0, 0, 1, 2, 2],
+	"harpoon": [0, 0, 0, 0, 0, 1, 1, 2], # one at TH6-TH7, second at TH8
 	"cannon": [0, 0, 0, 0, 0, 0, 2],
 	"town_hall": [1, 1, 1, 1, 1, 1, 1],
 }
@@ -483,7 +534,8 @@ const TH_MAX_LEVEL: Dictionary = {
 	"turret": [1, 2, 3, 4, 5, 6, 7],
 	"mage_tower": [1, 2, 3, 4, 5, 6, 7],
 	"tombstone": [1, 2, 3, 4, 4, 5, 6],
-	"mortar": [1, 1, 1, 1, 1, 2, 3],
+	"mortar": [1, 1, 1, 1, 5, 6, 7],
+	"harpoon": [1, 1, 1, 1, 1, 6, 7, 8],
 	"shark_trap": [1, 2, 3, 4, 5, 6, 7],
 	"cannon": [1, 1, 1, 1, 1, 1, 7],
 	"port": [1, 2, 3, 3, 3, 3, 3],
@@ -691,7 +743,6 @@ var shop_unlocks: Dictionary = {}
 # ── Selection State ───────────────────────────────────────────
 var selected_building: Dictionary = {}
 var _home_player_flag_url: String = ""
-var _cel_shader: Shader
 
 # ── Scene / Script preload cache ─────────────────────────────
 ## Preloaded PackedScene resources keyed by path — populated once on first
@@ -702,6 +753,7 @@ static var _turret_script_res: Script = null
 static var _cannon_script_res: Script = null
 static var _mage_tower_script_res: Script = null
 static var _mortar_script_res: Script = null
+static var _harpoon_script_res: Script = null
 static var _shark_trap_script_res: Script = null
 static var _altar_effect_script_res: Script = null
 static var _town_hall_flag_texture_cache: Dictionary = {}
@@ -782,6 +834,11 @@ func _attach_building_defense_script(node: Node3D, building_type: String) -> voi
 			_mortar_script_res = _load_script_resource("res://scripts/tower_mortar.gd")
 		if _mortar_script_res:
 			node.set_script(_mortar_script_res)
+	elif building_type == "harpoon":
+		if _harpoon_script_res == null:
+			_harpoon_script_res = _load_script_resource("res://scripts/tower_harpoon.gd")
+		if _harpoon_script_res:
+			node.set_script(_harpoon_script_res)
 	elif building_type == "shark_trap":
 		if _shark_trap_script_res == null:
 			_shark_trap_script_res = _load_script_resource("res://scripts/shark_trap.gd")
@@ -789,9 +846,13 @@ func _attach_building_defense_script(node: Node3D, building_type: String) -> voi
 			node.set_script(_shark_trap_script_res)
 
 # ── Ship node cache ───────────────────────────────────────────
+@warning_ignore("unused_private_class_variable")
 var _water_y: float = 0.0
+@warning_ignore("unused_private_class_variable")
 var _saved_ship_transforms: Array = []
+@warning_ignore("unused_private_class_variable")
 var _saved_port_ships: Array = []
+@warning_ignore("unused_private_class_variable")
 var _home_troops: Array = []
 var _initial_load_done: bool = false
 var _idle_combat_warmup_request_started: bool = false
@@ -811,11 +872,10 @@ static var _building_aabb_precompute_done: bool = false
 # ── UI ────────────────────────────────────────────────────────
 var canvas: CanvasLayer
 var world_ui_canvas: CanvasLayer
+@warning_ignore("unused_private_class_variable")
 var _react_resource_positions: Dictionary = {}  # {gold: {x, y}, wood: {x, y}, ore: {x, y}}
 var build_button: Button
 var attack_button: Button
-var _search_tween: Tween
-var _is_searching: bool = false
 var shop_panel: PanelContainer
 var is_shop_open: bool = false
 var wood_label: Label
@@ -888,10 +948,12 @@ var enemy_info: Dictionary:
 	get: return _battle.enemy_info if _battle else {}
 	set(v):
 		if _battle: _battle.enemy_info = v
+@warning_ignore("unused_private_class_variable")
 var _battle_replay: Array:
 	get: return _battle._battle_replay if _battle else []
 	set(v):
 		if _battle: _battle._battle_replay = v
+@warning_ignore("unused_private_class_variable")
 var _battle_start_time: float:
 	get: return _battle._battle_start_time if _battle else 0.0
 	set(v):
@@ -1245,10 +1307,18 @@ func _register_test_only_buildings() -> void:
 			"res://Model/Mortar/mortar_lvl2.fbx",
 			"res://Model/Mortar/mortar_lvl3.fbx",
 			"res://Model/Mortar/mortar_lvl4.fbx",
+			"res://Model/Mortar/mortar_lvl4.fbx",
+			"res://Model/Mortar/mortar_lvl4.fbx",
+			"res://Model/Mortar/mortar_lvl4.fbx",
 		],
 		"model_scale": 0.032,
 		"model_rotation_y": 0.0,
-		"hp_levels": [1700],
+		"hp_levels": [1700, 2400, 3200, 4100, 5200, 6500, 8100],
+		"damage_levels": [95, 135, 185, 245, 300, 370, 460],
+		"range_levels": [1.433, 1.600, 1.767, 1.933, 2.100, 2.250, 2.400],
+		"min_range_levels": [0.70, 0.75, 0.80, 0.82, 0.82, 0.80, 0.78],
+		"splash_radius_levels": [0.30, 0.34, 0.38, 0.42, 0.45, 0.49, 0.52],
+		"reload_levels": [2.40, 2.25, 2.10, 1.95, 1.90, 1.80, 1.70],
 		"cost": {"gold": 600, "wood": 900, "ore": 700},
 		"altar_ward_bonus": true,
 		"test_only": true,
@@ -1260,17 +1330,23 @@ func _register_test_only_buildings() -> void:
 			"res://Model/Mortar/mortar_lvl2_construction.fbx",
 			"res://Model/Mortar/mortar_lvl3_construction.fbx",
 			"res://Model/Mortar/mortar_lvl4_construction.fbx",
+			"res://Model/Mortar/mortar_lvl4_construction.fbx",
+			"res://Model/Mortar/mortar_lvl4_construction.fbx",
+			"res://Model/Mortar/mortar_lvl4_construction.fbx",
 		],
 		"projectile_scenes": [
 			"res://Model/Mortar/mortar_lvl1_projectile.fbx",
 			"res://Model/Mortar/mortar_lvl2_projectile.fbx",
-			"res://Model/Mortar/mortar_lvl2_projectile.fbx",
-			"res://Model/Mortar/mortar_lvl2_projectile.fbx",
+			"res://Model/Mortar/mortar_lvl3_projectile.fbx",
+			"res://Model/Mortar/mortar_lvl4_projectile.fbx",
+			"res://Model/Mortar/mortar_lvl4_projectile.fbx",
+			"res://Model/Mortar/mortar_lvl4_projectile.fbx",
+			"res://Model/Mortar/mortar_lvl4_projectile.fbx",
 		],
-		"test_damage": 245,
-		"test_damage_levels": [95, 135, 185, 245],
-		"test_range": 2.90,
-		"test_reload_sec": 1.95,
+		"test_damage": 460,
+		"test_damage_levels": [95, 135, 185, 245, 300, 370, 460],
+		"test_range": 2.40,
+		"test_reload_sec": 1.70,
 	}
 
 
@@ -1601,9 +1677,9 @@ func _apply_agent_upgrade_troop(payload: Dictionary) -> void:
 	if raw_type == "":
 		return
 	var local_name: String = raw_type.capitalize()
-	for name in troop_levels.keys():
-		if str(name).to_lower() == raw_type.to_lower():
-			local_name = str(name)
+	for troop_name in troop_levels.keys():
+		if str(troop_name).to_lower() == raw_type.to_lower():
+			local_name = str(troop_name)
 			break
 	troop_levels[local_name] = int(payload.get("level", troop_levels.get(local_name, 1)))
 	if payload.has("resources"):
@@ -1712,7 +1788,7 @@ func _get_all_mesh_instances(node: Node) -> Array:
 	return result
 
 
-func _apply_cel_shader(node: Node) -> void:
+func _apply_cel_shader(_node: Node) -> void:
 	# Disabled to prevent unwanted white/red highlights
 	# from the cel shader on the original textures.
 	return
@@ -1751,15 +1827,15 @@ func _apply_archer_tower_level_visuals(model: Node, level: int) -> void:
 	_set_archer_tower_extra_visible(model, show_target, ["RootNode.001", "Cylinder.003"], ["White", "Celing"])
 
 
-func _set_archer_tower_extra_visible(root: Node, is_visible: bool, node_names: Array[String], material_markers: Array[String]) -> void:
+func _set_archer_tower_extra_visible(root: Node, should_be_visible: bool, node_names: Array[String], material_markers: Array[String]) -> void:
 	if root == null:
 		return
 	if root is Node3D:
 		var node_3d := root as Node3D
 		if node_names.has(str(root.name)) or _mesh_uses_material_marker(root, material_markers):
-			node_3d.visible = is_visible
+			node_3d.visible = should_be_visible
 	for child in root.get_children():
-		_set_archer_tower_extra_visible(child, is_visible, node_names, material_markers)
+		_set_archer_tower_extra_visible(child, should_be_visible, node_names, material_markers)
 
 
 func _mesh_uses_material_marker(node: Node, markers: Array[String]) -> bool:
@@ -3672,6 +3748,8 @@ func _preload_building_scenes() -> void:
 		_mage_tower_script_res = _load_script_resource("res://scripts/tower_mage.gd")
 	if _mortar_script_res == null:
 		_mortar_script_res = _load_script_resource("res://scripts/tower_mortar.gd")
+	if _harpoon_script_res == null:
+		_harpoon_script_res = _load_script_resource("res://scripts/tower_harpoon.gd")
 
 
 ## Build cache key for a building type at a specific level.
@@ -4509,6 +4587,21 @@ func _select_building(b: Dictionary) -> void:
 		var damage_levels: Array = def.get("damage_levels", [])
 		var current_damage: int = int(damage_levels[clampi(level - 1, 0, damage_levels.size() - 1)]) if not damage_levels.is_empty() else 0
 		var next_damage: int = int(damage_levels[clampi(level, 0, damage_levels.size() - 1)]) if not damage_levels.is_empty() else current_damage
+		var range_levels: Array = def.get("range_levels", [])
+		var current_range: float = float(range_levels[clampi(level - 1, 0, range_levels.size() - 1)]) if not range_levels.is_empty() else 0.0
+		var next_range: float = float(range_levels[clampi(level, 0, range_levels.size() - 1)]) if not range_levels.is_empty() else current_range
+		var min_range_levels: Array = def.get("min_range_levels", [])
+		var current_min_range: float = float(min_range_levels[clampi(level - 1, 0, min_range_levels.size() - 1)]) if not min_range_levels.is_empty() else 0.0
+		var next_min_range: float = float(min_range_levels[clampi(level, 0, min_range_levels.size() - 1)]) if not min_range_levels.is_empty() else current_min_range
+		var splash_radius_levels: Array = def.get("splash_radius_levels", [])
+		var current_splash_radius: float = float(splash_radius_levels[clampi(level - 1, 0, splash_radius_levels.size() - 1)]) if not splash_radius_levels.is_empty() else 0.0
+		var next_splash_radius: float = float(splash_radius_levels[clampi(level, 0, splash_radius_levels.size() - 1)]) if not splash_radius_levels.is_empty() else current_splash_radius
+		var reload_levels: Array = def.get("reload_levels", [])
+		var current_reload: float = float(reload_levels[clampi(level - 1, 0, reload_levels.size() - 1)]) if not reload_levels.is_empty() else float(def.get("reload_sec", 0.0))
+		var next_reload: float = float(reload_levels[clampi(level, 0, reload_levels.size() - 1)]) if not reload_levels.is_empty() else current_reload
+		var pull_speed_levels: Array = def.get("pull_speed_levels", [])
+		var current_pull_speed: float = float(pull_speed_levels[clampi(level - 1, 0, pull_speed_levels.size() - 1)]) if not pull_speed_levels.is_empty() else 0.0
+		var next_pull_speed: float = float(pull_speed_levels[clampi(level, 0, pull_speed_levels.size() - 1)]) if not pull_speed_levels.is_empty() else current_pull_speed
 		var bs_has_ship = false
 		var bs_ship_level: int = 0
 		var bs_ship_troops: Array = []
@@ -4526,6 +4619,21 @@ func _select_building(b: Dictionary) -> void:
 			"next_hp": next_hp,
 			"damage": current_damage,
 			"next_damage": next_damage,
+			"detect_range": current_range,
+			"range": current_range,
+			"next_range": next_range,
+			"next_detect_range": next_range,
+			"min_range": current_min_range,
+			"next_min_range": next_min_range,
+			"splash_radius": current_splash_radius,
+			"next_splash_radius": next_splash_radius,
+			"reload_sec": current_reload,
+			"next_reload_sec": next_reload,
+			"pull_speed": current_pull_speed,
+			"next_pull_speed": next_pull_speed,
+			"pull_duration_sec": float(def.get("pull_duration_sec", 0.0)),
+			"stop_distance": float(def.get("stop_distance", 0.0)),
+			"target_type": str(def.get("target_type", "")),
 			"upgrade_cost": upgrade_cost,
 			"is_enemy": is_viewing_enemy,
 			"is_barn": b.id == "barn",
@@ -4544,7 +4652,7 @@ func _select_building(b: Dictionary) -> void:
 
 	# Range indicator for defense buildings
 	_hide_range_indicator()
-	var defense_ids = ["turret", "cannon", "tombstone", "archtower", "archer_tower", "archertower", "mage_tower"]
+	var defense_ids = ["turret", "cannon", "tombstone", "archtower", "archer_tower", "archertower", "mage_tower", "harpoon"]
 	if b.id in defense_ids and is_instance_valid(b.get("node", null)):
 		var bnode = b["node"]
 		var r: float = 1.0
@@ -4656,18 +4764,18 @@ func _deselect_building() -> void:
 		cam.zoom_blocked = false
 
 
-func _set_mortar_range_visuals_for_selected(visible: bool) -> void:
+func _set_mortar_range_visuals_for_selected(should_be_visible: bool) -> void:
 	if selected_building.size() == 0:
 		return
-	_set_mortar_range_visuals_for_building(selected_building, visible)
+	_set_mortar_range_visuals_for_building(selected_building, should_be_visible)
 
 
-func _set_mortar_range_visuals_for_building(b: Dictionary, visible: bool) -> void:
+func _set_mortar_range_visuals_for_building(b: Dictionary, should_be_visible: bool) -> void:
 	if b.get("id", "") != "mortar":
 		return
 	var bnode: Node = b.get("node", null)
 	if is_instance_valid(bnode) and bnode.has_method("set_range_visuals_visible"):
-		bnode.call("set_range_visuals_visible", visible)
+		bnode.call("set_range_visuals_visible", should_be_visible)
 
 
 func _upgrade_selected() -> void:
@@ -5036,7 +5144,7 @@ func _update_upgrade_cost_label(def: Dictionary, current_level: int) -> void:
 	building_panel_cost.text = "Upgrade: " + "  ".join(parts)
 
 
-func _refresh_altar_skills_panel(level: int, hp: int, max_hp: int) -> void:
+func _refresh_altar_skills_panel(_level: int, hp: int, max_hp: int) -> void:
 	if not building_panel_altar_skills:
 		return
 	if building_panel_upgrade_btn:
@@ -5091,15 +5199,15 @@ func _create_altar_skill_tab(skill_id: String) -> Control:
 	header.add_theme_color_override("font_color", Color(0.95, 0.88, 0.55))
 	tab.add_child(header)
 
-	var grid = GridContainer.new()
-	grid.columns = 3
-	grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	grid.add_theme_constant_override("h_separation", 8)
-	grid.add_theme_constant_override("v_separation", 8)
-	tab.add_child(grid)
+	var skill_grid = GridContainer.new()
+	skill_grid.columns = 3
+	skill_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	skill_grid.add_theme_constant_override("h_separation", 8)
+	skill_grid.add_theme_constant_override("v_separation", 8)
+	tab.add_child(skill_grid)
 
 	for i in range(3):
-		grid.add_child(_create_altar_level_card(skill_id, i + 1))
+		skill_grid.add_child(_create_altar_level_card(skill_id, i + 1))
 
 	var next_level: int = current_level + 1
 	var upgrade_btn = Button.new()
@@ -5503,6 +5611,11 @@ func _apply_building_runtime_level(b: Dictionary) -> void:
 		node.set_level(lvl)
 	if is_instance_valid(node) and node.has_method("set_ward_bonus_pct"):
 		node.set_ward_bonus_pct(ward_pct)
+	if is_instance_valid(node) and node.has_method("set_spawn_facing_global"):
+		# Face the real troop deployment zone (AttackSystem/shipPlane), not the
+		# defended building-grid center. This is a one-time spawn heading; combat
+		# retains the last tracked yaw afterward.
+		node.set_spawn_facing_global(_get_defense_spawn_facing_global())
 	var tower_unit: Node = b.get("tower_unit_node", null)
 	if is_instance_valid(tower_unit) and tower_unit.has_method("set_level"):
 		tower_unit.set_level(lvl)
@@ -5511,6 +5624,19 @@ func _apply_building_runtime_level(b: Dictionary) -> void:
 	for skel in b.get("skeletons", []):
 		if is_instance_valid(skel) and skel.has_method("set_ward_bonus_pct"):
 			skel.set_ward_bonus_pct(ward_pct)
+
+
+func _get_defense_spawn_facing_global() -> Vector3:
+	var attack_system := get_node_or_null("../AttackSystem") as Node3D
+	if attack_system != null:
+		var attack_plane_path: NodePath = attack_system.get("grid_plane_path") as NodePath
+		if not attack_plane_path.is_empty():
+			var attack_plane := attack_system.get_node_or_null(attack_plane_path) as Node3D
+			if attack_plane != null:
+				return attack_plane.global_position
+	# Non-combat tooling may instantiate BuildingSystem without AttackSystem.
+	# Its own grid center is the deterministic fallback, never a fixed world yaw.
+	return to_global(Vector3.ZERO)
 
 
 func _apply_building_level_visuals_for_test(b: Dictionary, def: Dictionary) -> void:
@@ -6433,7 +6559,7 @@ func _reinforce_troops() -> void:
 					})
 
 ## Legacy live-death hook. Casualties are applied once from /attack/result.
-func _on_troop_died(troop_name: String) -> void:
+func _on_troop_died(_troop_name: String) -> void:
 	return
 
 
@@ -6857,9 +6983,9 @@ func _refresh_troop_levels_from_server() -> void:
 	var net = _net
 	if not net or not net.has_token():
 		# No server — just send local levels
-		var bridge = _bridge
-		if bridge:
-			bridge.send_to_react("troop_levels", troop_levels)
+		var local_bridge = _bridge
+		if local_bridge:
+			local_bridge.send_to_react("troop_levels", troop_levels)
 		return
 	var server_troops = await net.get_troops()
 	if server_troops is Array:
@@ -7488,12 +7614,12 @@ func _update_move_indicator(center: Vector3, sx: float, sz: float, valid: bool) 
 		var qm = QuadMesh.new()
 		_move_indicator = MeshInstance3D.new()
 		_move_indicator.mesh = qm
-		var mat = StandardMaterial3D.new()
-		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-		mat.render_priority = 3
-		_move_indicator.material_override = mat
+		var created_material = StandardMaterial3D.new()
+		created_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		created_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		created_material.cull_mode = BaseMaterial3D.CULL_DISABLED
+		created_material.render_priority = 3
+		_move_indicator.material_override = created_material
 		add_child(_move_indicator)
 	(_move_indicator.mesh as QuadMesh).size = Vector2(sx, sz)
 	_move_indicator.rotation.x = -PI * 0.5

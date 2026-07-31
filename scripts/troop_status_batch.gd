@@ -24,12 +24,12 @@ var _rage_material: ShaderMaterial = null
 var _heal_material: ShaderMaterial = null
 
 
-static func get_for_scene(owner: Node) -> TroopStatusBatch:
-	if owner == null or owner.get_tree() == null:
+static func get_for_scene(context_node: Node) -> TroopStatusBatch:
+	if context_node == null or context_node.get_tree() == null:
 		return null
-	var scene_root: Node = owner.get_tree().current_scene
+	var scene_root: Node = context_node.get_tree().current_scene
 	if scene_root == null:
-		scene_root = owner.get_tree().root
+		scene_root = context_node.get_tree().root
 	var scene_id := int(scene_root.get_instance_id())
 	var cached: Variant = _scene_managers.get(scene_id)
 	if cached is TroopStatusBatch and is_instance_valid(cached):

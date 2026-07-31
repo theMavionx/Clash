@@ -37,6 +37,13 @@ const TOWER_PROJECTILE_SPAWN_Y = 0.05;
 const TOWER_TARGET_AIM_Y = 0.05;
 const TURRET_PROJECTILE_SPAWN_Y = 0.18;
 const TURRET_TARGET_AIM_Y = 0.2;
+const HARPOON_HIT_DIST_SQ = 0.0009;
+const HARPOON_SEARCH_TICKS = 9;
+const HARPOON_RELOAD_TICKS = 420;
+const HARPOON_PULL_TICKS = 48;
+const HARPOON_WINDUP_TICKS = 27;
+const HARPOON_IMMUNITY_TICKS = 90;
+const HARPOON_YAW_TOLERANCE_RAD = 2 * Math.PI / 180;
 
 // ---------- Config ----------
 
@@ -64,6 +71,7 @@ const ICE_GOLEM_PRIORITY_DEFENSE_TYPES = new Set([
   'mage_tower',
   'tombstone',
   'mortar',
+  'harpoon',
   'cannon',
 ]);
 const ICE_GOLEM_FREEZABLE_DEFENSE_TYPES = new Set([
@@ -778,6 +786,7 @@ function verifyReplay({
   const troops = [];
   const guards = [];
   const defenses = [];
+  const harpoons = [];
   const sharkTraps = buildings
     .filter(b => b.type === 'shark_trap')
     .map(b => {
@@ -864,6 +873,7 @@ function verifyReplay({
   const trace = [];
   let traceDropped = 0;
   let time = 0;
+  let combatTick = 0;
   let simulationEndReason = 'battle_timeout';
 
   function traceEvent(kind, data = {}) {
@@ -877,6 +887,361 @@ function verifyReplay({
       t: Math.round(time * 100) / 100,
       ...data,
     });
+  }
+
+  function stableHarpoonTroopOrder(troop) {
+    const replayOrder = Number(troop?.replayOrder);
+    if (Number.isFinite(replayOrder)) return replayOrder;
+    const troopId = Number(troop?.id);
+    return Number.isFinite(troopId) ? troopId : Number.MAX_SAFE_INTEGER;
+  }
+
+  function shortestAngleDelta(from, to) {
+    let delta = (to - from) % (Math.PI * 2);
+    if (delta > Math.PI) delta -= Math.PI * 2;
+    if (delta < -Math.PI) delta += Math.PI * 2;
+    return delta;
+  }
+
+  function harpoonTargetById(targetId) {
+    if (targetId == null) return null;
+    return troops.find(troop => troop.id === targetId) || null;
+  }
+
+  function harpoonTargetValid(defense, troop, options = {}) {
+    if (!troop || troop.hp <= 0 || troop.flying !== true) return false;
+    if (!canDefenseTargetTroop(defense, troop)) return false;
+    const reservation = troop._harpoonReservedBy ?? null;
+    if (reservation != null && reservation !== defense.buildingId) return false;
+    if (!options.allowImmunity && Number(troop._harpoonImmuneUntilTick || 0) > combatTick) {
+      return false;
+    }
+    const maxRange = Number.isFinite(options.maxRange)
+      ? options.maxRange
+      : defense.detectRange;
+    return distSq2d(defense.x, defense.z, troop.x, troop.z) <= maxRange * maxRange + 1e-12;
+  }
+
+  function findHarpoonTarget(defense, aliveTroops) {
+    let best = null;
+    let bestDistSq = Infinity;
+    let bestOrder = Number.MAX_SAFE_INTEGER;
+    for (const troop of aliveTroops) {
+      if (!harpoonTargetValid(defense, troop)) continue;
+      const distanceSq = distSq2d(defense.x, defense.z, troop.x, troop.z);
+      const order = stableHarpoonTroopOrder(troop);
+      if (
+        distanceSq < bestDistSq - 1e-12
+        || (Math.abs(distanceSq - bestDistSq) <= 1e-12 && order < bestOrder)
+      ) {
+        best = troop;
+        bestDistSq = distanceSq;
+        bestOrder = order;
+      }
+    }
+    return best;
+  }
+
+  function harpoonTraceTarget(defense, troop, extra = {}) {
+    return {
+      buildingId: defense.buildingId,
+      defenseType: 'harpoon',
+      level: defense.level,
+      targetTroopId: troop?.id ?? null,
+      targetTroop: troop?.type ?? null,
+      replayOrder: troop?.replayOrder ?? null,
+      tick: combatTick,
+      x: troop ? round3(troop.x) : null,
+      z: troop ? round3(troop.z) : null,
+      ...extra,
+    };
+  }
+
+  function reserveHarpoonTarget(defense, troop) {
+    if (!harpoonTargetValid(defense, troop)) return false;
+    if (troop._harpoonReservedBy != null && troop._harpoonReservedBy !== defense.buildingId) {
+      return false;
+    }
+    troop._harpoonReservedBy = defense.buildingId;
+    defense.reservedTargetId = troop.id;
+    return true;
+  }
+
+  function releaseHarpoonTarget(defense, troop, reason, grantImmunity) {
+    if (troop && troop._harpoonReservedBy === defense.buildingId) {
+      troop._harpoonReservedBy = null;
+    }
+    if (troop && troop._harpoonPulledBy === defense.buildingId) {
+      troop._harpoonPulledBy = null;
+    }
+    let immunityUntilTick = null;
+    if (grantImmunity && troop && troop.hp > 0) {
+      immunityUntilTick = combatTick + HARPOON_IMMUNITY_TICKS;
+      troop._harpoonImmuneUntilTick = Math.max(
+        Number(troop._harpoonImmuneUntilTick) || 0,
+        immunityUntilTick,
+      );
+    }
+    traceEvent('harpoon_release', harpoonTraceTarget(defense, troop, {
+      reason,
+      immunityUntilTick,
+    }));
+    defense.reservedTargetId = null;
+    defense.trackedTargetId = null;
+    defense.projectile = null;
+    defense.pull = null;
+    defense.windupTicks = 0;
+    defense.impactSucceeded = false;
+    defense.state = defense.disabled ? 'disabled' : 'tracking';
+  }
+
+  function cancelHarpoonWindup(defense, reason) {
+    const target = harpoonTargetById(defense.reservedTargetId);
+    traceEvent('harpoon_lock_cancel', harpoonTraceTarget(defense, target, { reason }));
+    releaseHarpoonTarget(defense, target, reason, false);
+  }
+
+  function loseHarpoonProjectile(defense, reason) {
+    const target = harpoonTargetById(defense.reservedTargetId);
+    traceEvent('harpoon_projectile_lost', harpoonTraceTarget(defense, target, {
+      reason,
+      projectileX: defense.projectile ? round3(defense.projectile.x) : null,
+      projectileZ: defense.projectile ? round3(defense.projectile.z) : null,
+      reloadReadyTick: defense.reloadReadyTick,
+    }));
+    releaseHarpoonTarget(defense, target, reason, false);
+  }
+
+  function endHarpoonPull(defense, reason) {
+    const target = harpoonTargetById(defense.reservedTargetId);
+    const pull = defense.pull;
+    traceEvent('harpoon_pull_end', harpoonTraceTarget(defense, target, {
+      reason,
+      startDistance: pull ? round3(pull.startDistance) : null,
+      finalDistance: target
+        ? round3(dist2d(defense.x, defense.z, target.x, target.z))
+        : null,
+      durationTicks: pull?.ticks ?? 0,
+      finalX: target ? round3(target.x) : null,
+      finalZ: target ? round3(target.z) : null,
+    }));
+    releaseHarpoonTarget(defense, target, reason, defense.impactSucceeded === true);
+  }
+
+  function interruptHarpoon(defense, reason, permanent = false) {
+    if (!defense || defense.disabled) return;
+    if (permanent) defense.disabled = true;
+    if (defense.state === 'windup') {
+      cancelHarpoonWindup(defense, reason);
+      return;
+    }
+    if (defense.state === 'projectile') {
+      loseHarpoonProjectile(defense, reason);
+      return;
+    }
+    if (defense.state === 'pull') {
+      endHarpoonPull(defense, reason);
+      return;
+    }
+    defense.trackedTargetId = null;
+    defense.state = defense.disabled ? 'disabled' : 'tracking';
+  }
+
+  function updateHarpoonYaw(defense, target) {
+    if (!target) return Infinity;
+    const desiredYaw = Math.atan2(target.x - defense.x, target.z - defense.z);
+    const delta = shortestAngleDelta(defense.currentYaw, desiredYaw);
+    const maxStep = Number(defense.yawSpeedDeg || 120) * Math.PI / 180 * TICK_DT;
+    defense.currentYaw += Math.sign(delta) * Math.min(Math.abs(delta), maxStep);
+    return Math.abs(shortestAngleDelta(defense.currentYaw, desiredYaw));
+  }
+
+  function fireHarpoon(defense, target) {
+    defense.state = 'projectile';
+    defense.windupTicks = 0;
+    defense.lastFireTick = combatTick;
+    defense.reloadReadyTick = combatTick + HARPOON_RELOAD_TICKS;
+    defense.projectile = {
+      x: defense.x,
+      z: defense.z,
+      targetId: target.id,
+    };
+    traceEvent('harpoon_fire', harpoonTraceTarget(defense, target, {
+      fireTick: combatTick,
+      reloadReadyTick: defense.reloadReadyTick,
+      projectileX: round3(defense.x),
+      projectileZ: round3(defense.z),
+      range: defense.detectRange,
+      damage: defense.damage,
+    }));
+  }
+
+  function applyHarpoonPullTick(defense) {
+    const target = harpoonTargetById(defense.reservedTargetId);
+    const maxRange = defense.detectRange + 0.25;
+    if (!harpoonTargetValid(defense, target, { allowImmunity: true, maxRange })) {
+      endHarpoonPull(defense, !target || target.hp <= 0 ? 'target_dead_or_missing' : 'target_invalid');
+      return;
+    }
+    const dx = defense.x - target.x;
+    const dz = defense.z - target.z;
+    const distance = Math.sqrt(dx * dx + dz * dz);
+    if (distance <= defense.stopDistance + 1e-12) {
+      endHarpoonPull(defense, 'stop_ring');
+      return;
+    }
+    const step = Math.min(defense.pullSpeed * TICK_DT, distance - defense.stopDistance);
+    const intended = {
+      x: target.x + (dx / distance) * step,
+      z: target.z + (dz / distance) * step,
+    };
+    const legal = clampWorldPointToGridUnion(movementGridConfigs, intended, 1.05);
+    const beforeDistance = distance;
+    target.x = legal.x;
+    target.z = legal.z;
+    const afterDistance = dist2d(defense.x, defense.z, target.x, target.z);
+    defense.pull.ticks += 1;
+    if (beforeDistance - afterDistance <= 1e-12) {
+      defense.pull.noProgressTicks += 1;
+    } else {
+      defense.pull.noProgressTicks = 0;
+    }
+    if (afterDistance <= defense.stopDistance + 1e-9) {
+      endHarpoonPull(defense, 'stop_ring');
+    } else if (defense.pull.noProgressTicks >= 2) {
+      endHarpoonPull(defense, 'combat_bounds');
+    } else if (defense.pull.ticks >= HARPOON_PULL_TICKS) {
+      endHarpoonPull(defense, 'duration');
+    }
+  }
+
+  function impactHarpoon(defense, target) {
+    const hpBefore = target.hp;
+    target.hp -= defense.damage;
+    defense.impactSucceeded = true;
+    defense.projectile = null;
+    traceEvent('harpoon_impact', harpoonTraceTarget(defense, target, {
+      damage: defense.damage,
+      baseDamage: defense.baseDamage,
+      hpBefore,
+      hpAfter: target.hp,
+      impactX: round3(target.x),
+      impactZ: round3(target.z),
+    }));
+    if (target.hp <= 0) {
+      handleTroopDeath(target, 'harpoon_impact', defense.damage);
+      releaseHarpoonTarget(defense, target, 'impact_kill', false);
+      return;
+    }
+    const distance = dist2d(defense.x, defense.z, target.x, target.z);
+    if (distance <= defense.stopDistance + 1e-12) {
+      releaseHarpoonTarget(defense, target, 'already_inside_stop_ring', true);
+      return;
+    }
+    defense.state = 'pull';
+    defense.pull = {
+      targetId: target.id,
+      startDistance: distance,
+      ticks: 0,
+      noProgressTicks: 0,
+    };
+    target._harpoonPulledBy = defense.buildingId;
+    traceEvent('harpoon_pull_start', harpoonTraceTarget(defense, target, {
+      startDistance: round3(distance),
+      pullSpeed: defense.pullSpeed,
+      stopDistance: defense.stopDistance,
+      durationCapTicks: HARPOON_PULL_TICKS,
+    }));
+    applyHarpoonPullTick(defense);
+  }
+
+  function updateHarpoonProjectile(defense) {
+    const target = harpoonTargetById(defense.reservedTargetId);
+    const maxRange = defense.detectRange + 0.25;
+    if (!harpoonTargetValid(defense, target, { allowImmunity: true, maxRange })) {
+      loseHarpoonProjectile(defense, !target || target.hp <= 0 ? 'target_dead_or_missing' : 'target_invalid');
+      return;
+    }
+    const projectile = defense.projectile;
+    const dx = target.x - projectile.x;
+    const dz = target.z - projectile.z;
+    const distance = Math.sqrt(dx * dx + dz * dz);
+    if (distance > 0) {
+      const step = Math.min(defense.projSpeed * TICK_DT, distance);
+      projectile.x += (dx / distance) * step;
+      projectile.z += (dz / distance) * step;
+    }
+    if (distSq2d(projectile.x, projectile.z, target.x, target.z) <= HARPOON_HIT_DIST_SQ) {
+      impactHarpoon(defense, target);
+    }
+  }
+
+  function updateHarpoon(defense, aliveTroops) {
+    if (defense.disabled) return;
+    const owner = buildings.find(building => building.id === defense.buildingId);
+    if (!owner || owner.hp <= 0) {
+      interruptHarpoon(defense, 'building_destroyed', true);
+      return;
+    }
+    const frozen = (Number(defense.frozenUntil) || 0) > time;
+    if (frozen && ['windup', 'projectile', 'pull'].includes(defense.state)) {
+      interruptHarpoon(defense, 'freeze');
+    }
+    if (defense.state === 'projectile') {
+      updateHarpoonProjectile(defense);
+      return;
+    }
+    if (defense.state === 'pull') {
+      applyHarpoonPullTick(defense);
+      return;
+    }
+    if (defense.state === 'windup') {
+      const target = harpoonTargetById(defense.reservedTargetId);
+      if (!harpoonTargetValid(defense, target, { allowImmunity: true })) {
+        cancelHarpoonWindup(defense, 'target_invalid');
+        return;
+      }
+      const yawError = updateHarpoonYaw(defense, target);
+      if (frozen) {
+        cancelHarpoonWindup(defense, 'freeze');
+      } else if (yawError <= HARPOON_YAW_TOLERANCE_RAD + 1e-12) {
+        defense.windupTicks += 1;
+        if (
+          defense.windupTicks >= HARPOON_WINDUP_TICKS
+          && combatTick >= defense.reloadReadyTick
+        ) {
+          fireHarpoon(defense, target);
+        }
+      } else {
+        defense.windupTicks = 0;
+      }
+      return;
+    }
+
+    defense.searchTicks += 1;
+    let tracked = harpoonTargetById(defense.trackedTargetId);
+    if (!harpoonTargetValid(defense, tracked)) {
+      tracked = null;
+      defense.trackedTargetId = null;
+    }
+    if (defense.searchTicks >= HARPOON_SEARCH_TICKS) {
+      defense.searchTicks = 0;
+      tracked = findHarpoonTarget(defense, aliveTroops);
+      defense.trackedTargetId = tracked?.id ?? null;
+    }
+    if (!tracked) return;
+    const yawError = updateHarpoonYaw(defense, tracked);
+    if (frozen) return;
+    if (combatTick < defense.reloadReadyTick - HARPOON_WINDUP_TICKS) return;
+    if (yawError > HARPOON_YAW_TOLERANCE_RAD + 1e-12) return;
+    if (!reserveHarpoonTarget(defense, tracked)) return;
+    defense.state = 'windup';
+    defense.windupTicks = 0;
+    traceEvent('harpoon_lock', harpoonTraceTarget(defense, tracked, {
+      yawErrorDeg: round3(yawError * 180 / Math.PI),
+      reloadReadyTick: defense.reloadReadyTick,
+      windupTicks: HARPOON_WINDUP_TICKS,
+    }));
   }
 
   function validateTacticalPoint(action) {
@@ -917,6 +1282,7 @@ function verifyReplay({
       if (!building || building.hp <= 0) continue;
       if (distSq2d(point.x, point.z, defense.x, defense.z) > radiusSq) continue;
       defense.frozenUntil = Math.max(Number(defense.frozenUntil) || 0, frozenUntil);
+      if (defense.type === 'harpoon') interruptHarpoon(defense, 'freeze');
       affectedDefenseIds.push(defense.buildingId);
     }
     for (const trap of sharkTraps) {
@@ -1045,6 +1411,7 @@ function verifyReplay({
       for (const defense of defenses) {
         if (defense.buildingId !== building.id) continue;
         defense.frozenUntil = Math.max(Number(defense.frozenUntil) || 0, frozenUntil);
+        if (defense.type === 'harpoon') interruptHarpoon(defense, 'freeze');
       }
       for (const trap of sharkTraps) {
         if (trap.buildingId !== building.id) continue;
@@ -2156,6 +2523,48 @@ function verifyReplay({
         _searchTimer: 0,
       });
     }
+    if (b.type === 'harpoon') {
+      const harpoonLevel = Math.max(
+        1,
+        Math.min(Number(b.level) || 1, Object.keys(DEFENSE_STATS.harpoon).length),
+      );
+      const s = DEFENSE_STATS.harpoon[harpoonLevel] || DEFENSE_STATS.harpoon[1];
+      const harpoon = {
+        buildingId: b.id,
+        type: 'harpoon',
+        level: harpoonLevel,
+        damage: wardDamage(s.damage),
+        baseDamage: s.damage,
+        fireRate: s.fireRate,
+        detectRange: s.detectRange,
+        projSpeed: s.projSpeed,
+        pullSpeed: s.pullSpeed,
+        pullDuration: s.pullDuration,
+        stopDistance: s.stopDistance,
+        windup: s.windup,
+        immunity: s.immunity,
+        yawSpeedDeg: s.yawSpeedDeg,
+        targetGround: false,
+        targetAir: true,
+        x: b.x,
+        z: b.z,
+        frozenUntil: 0,
+        state: 'tracking',
+        trackedTargetId: null,
+        reservedTargetId: null,
+        projectile: null,
+        pull: null,
+        currentYaw: 0,
+        searchTicks: 0,
+        windupTicks: 0,
+        reloadReadyTick: 0,
+        lastFireTick: null,
+        impactSucceeded: false,
+        disabled: false,
+      };
+      defenses.push(harpoon);
+      harpoons.push(harpoon);
+    }
     if (b.type === 'cannon') {
       const s = DEFENSE_STATS.cannon[b.level] || DEFENSE_STATS.cannon[1];
       defenses.push({
@@ -2204,6 +2613,13 @@ function verifyReplay({
       }
     }
   }
+
+  harpoons.sort((left, right) => {
+    const leftId = Number(left.buildingId);
+    const rightId = Number(right.buildingId);
+    if (Number.isFinite(leftId) && Number.isFinite(rightId)) return leftId - rightId;
+    return String(left.buildingId).localeCompare(String(right.buildingId));
+  });
 
   const sortedActions = actions
     .filter(a => a && a.type !== 'battle_start')
@@ -3164,6 +3580,7 @@ function verifyReplay({
 
     // ── Defense AI (turrets + archer towers) ──
     for (const d of defenses) {
+      if (d.type === 'harpoon') continue;
       const bld = buildings.find(b => b.id === d.buildingId);
       if (!bld || bld.hp <= 0) continue;
       if ((Number(d.frozenUntil) || 0) > time) continue;
@@ -3610,12 +4027,23 @@ function verifyReplay({
       const targetDistSq = distSq2d(t.x, t.z, target.x, target.z);
       const targetDist = Math.sqrt(targetDistSq);
 
-      if (t._state === 'attacking' && targetDist > t.range * 2.0) {
+      if (
+        t._state === 'attacking'
+        && t._harpoonPulledBy == null
+        && targetDist > t.range * 2.0
+      ) {
         t._state = 'running';
         t.burstShotIndex = 0;
       }
 
       if (t._state !== 'attacking') {
+        // A Harpoon suppresses voluntary horizontal movement only. Targeting,
+        // timers, already-spawned projectiles, and an attack already in its
+        // attacking state keep advancing normally.
+        if (t._harpoonPulledBy != null) {
+          cannonEnergy += updateTroopProjectilesFor(t);
+          continue;
+        }
         const myAngle = Math.atan2(t.x - target.x, t.z - target.z);
         const slot = computeAttackSlot(t, target, aliveTroops);
         const slotDx = slot.x - t.x;
@@ -3943,6 +4371,13 @@ function verifyReplay({
 
     }
 
+    // Harpoon control resolves after troop AI so an active pull can suppress
+    // voluntary movement and then apply one deterministic radial XZ step.
+    // Stable building order makes same-tick reservation conflicts replay-safe.
+    for (const harpoon of harpoons) {
+      updateHarpoon(harpoon, aliveTroops);
+    }
+
     // Dead ranged troops clear their own projectile pools in Godot take_damage().
     clearDeadOwnerProjectiles(projectiles, 'troop', traceTroopProjectileLost);
 
@@ -4057,6 +4492,7 @@ function verifyReplay({
     }
 
     time += TICK_DT;
+    combatTick += 1;
   }
 
   despawnAllSummons(simulationEndReason);
@@ -4157,6 +4593,16 @@ function verifyReplay({
     _traceDropped: traceDropped,
     casualties,
     _buildingHPs: buildings.map(b => ({ type: b.type, id: b.id, hp: b.hp, maxHp: b.maxHp })),
+    _harpoonDetails: harpoons.map(harpoon => ({
+      buildingId: harpoon.buildingId,
+      level: harpoon.level,
+      state: harpoon.state,
+      lastFireTick: harpoon.lastFireTick,
+      reloadReadyTick: harpoon.reloadReadyTick,
+      trackedTargetId: harpoon.trackedTargetId,
+      reservedTargetId: harpoon.reservedTargetId,
+      currentYaw: round3(harpoon.currentYaw),
+    })),
     _troopEndState: troops.map(t => ({ id: t.id, type: t.type, hp: t.hp, maxHp: t.maxHp, summoned: !!t.summoned, summonSource: t.summonSource ?? null, summonSequence: t.summonSequence ?? null, spawnedAt: t.spawnedAt ?? null, temporary: !!t.temporary, expiresAt: t.expiresAt ?? null, evolutionChild: !!t.evolutionChild, evolutionStage: t.evolutionStage ?? 0, evolutionLineage: t.evolutionLineage ?? 0, summonOwnerId: t.summonOwnerId ?? null, x: Math.round(t.x*100)/100, z: Math.round(t.z*100)/100, state: t._state, target: traceEntityPayload(t._currentTarget, t._currentTargetIsGuard ? 'guard' : 'building') })),
     _aliveTroopDetails: troops.filter(t => t.hp > 0).map(t => ({
       id: t.id,

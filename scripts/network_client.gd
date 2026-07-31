@@ -2,11 +2,15 @@ extends Node
 ## Singleton (autoload) — communicates with the Node.js server.
 ## Add to Project > Autoload as "Net"
 
+@warning_ignore("unused_signal")
 signal connected
+@warning_ignore("unused_signal")
 signal disconnected
 signal auth_ok(player_data: Dictionary)
+@warning_ignore("unused_signal")
 signal auth_failed(reason: String)
 signal resources_updated(res: Dictionary)
+@warning_ignore("unused_signal")
 signal state_updated(state: Dictionary)
 signal building_placed(data: Dictionary)
 signal building_upgraded(data: Dictionary)
@@ -203,13 +207,13 @@ func has_token() -> bool:
 
 # ── Registration ──────────────────────────────────────────────
 
-func register(player_name: String, wallet: String = "", dex: String = "", fid: int = 0, auth_proof: Dictionary = {}, referral_code: String = "") -> Dictionary:
+func register(player_name: String, wallet_address: String = "", dex: String = "", fid: int = 0, auth_proof: Dictionary = {}, referral_code: String = "") -> Dictionary:
 	var http = HTTPRequest.new()
 	add_child(http)
 	var headers = ["Content-Type: application/json"]
 	var data = {"name": player_name}
-	if wallet != "":
-		data["wallet"] = wallet
+	if wallet_address != "":
+		data["wallet"] = wallet_address
 	if dex != "":
 		data["dex"] = dex
 	if referral_code.strip_edges() != "":
@@ -257,7 +261,7 @@ func login() -> Dictionary:
 
 # ── Login by wallet (recover account after cache clear) ───────
 
-func login_by_wallet(wallet: String, dex: String = "", auth_proof: Dictionary = {}) -> Dictionary:
+func login_by_wallet(wallet_address: String, dex: String = "", auth_proof: Dictionary = {}) -> Dictionary:
 	var http = HTTPRequest.new()
 	add_child(http)
 	var headers = ["Content-Type: application/json"]
@@ -265,7 +269,7 @@ func login_by_wallet(wallet: String, dex: String = "", auth_proof: Dictionary = 
 	# server needs `dex` to return the right account. Empty `dex` falls
 	# back to the legacy wallet-only lookup (highest-trophy account on
 	# any DEX) for back-compat with old clients during the deploy window.
-	var payload = {"wallet": wallet}
+	var payload = {"wallet": wallet_address}
 	if dex != "":
 		payload["dex"] = dex
 	if auth_proof.size() > 0:
@@ -572,9 +576,9 @@ func _http_post(endpoint: String, body: Dictionary) -> Dictionary:
 	return _parse_response(result)
 
 func _parse_response(result: Array) -> Variant:
-	var result_code = result[0]
+	var _result_code = result[0]
 	var response_code = result[1]
-	var resp_headers = result[2]
+	var _response_headers = result[2]
 	var body_bytes: PackedByteArray = result[3]
 	if body_bytes.size() == 0:
 		return {"error": "Empty response", "code": response_code}

@@ -87,8 +87,8 @@ func _setup_weapons() -> void:
 func _physics_process(delta: float) -> void:
 	if _despawning or _is_dead:
 		return
-	var owner: Object = owner_necromancer.get_ref() if owner_necromancer != null else null
-	if not is_instance_valid(owner) or bool(owner.get("_is_dead")):
+	var summoner: Object = owner_necromancer.get_ref() if owner_necromancer != null else null
+	if not is_instance_valid(summoner) or bool(summoner.get("_is_dead")):
 		despawn("owner_cleanup")
 		return
 	super._physics_process(delta)

@@ -291,6 +291,13 @@ func _ready() -> void:
 		call_deferred("_capture_resource_collection_feedback")
 	if OS.get_cmdline_user_args().has("--capture-th6-village"):
 		call_deferred("_capture_th6_village")
+	if (
+		OS.get_cmdline_user_args().has("--verify-harpoon-main-scene")
+		or OS.get_cmdline_user_args().has("--capture-harpoon-main-scene")
+	):
+		call_deferred("_verify_harpoon_main_scene")
+	if OS.get_cmdline_user_args().has("--capture-harpoon-spawn-facing"):
+		call_deferred("_capture_harpoon_spawn_facing")
 	if OS.get_cmdline_user_args().has("--verify-test-scene-parity"):
 		call_deferred("_verify_test_scene_parity")
 	if OS.get_cmdline_user_args().has("--verify-test-scene-mixed-combat"):
@@ -567,6 +574,22 @@ func _verify_cloud_warmup_barrier() -> void:
 	var battle: BSBattle = building_system.get("_battle") if building_system else null
 	if battle == null:
 		push_error("Cloud warmup barrier test failed: BSBattle is missing.")
+		get_tree().quit(1)
+		return
+	var signal_probe := Node.new()
+	signal_probe.add_user_signal("completed")
+	building_system.add_child(signal_probe)
+	var signal_started_ticks := Time.get_ticks_msec()
+	signal_probe.call_deferred("emit_signal", &"completed")
+	var signal_completed: bool = await battle._await_signal_or_timeout(
+		signal_probe,
+		"completed",
+		0.5,
+		"test_signal_capture"
+	)
+	signal_probe.queue_free()
+	if not signal_completed or Time.get_ticks_msec() - signal_started_ticks >= 500:
+		push_error("Cloud warmup barrier test failed: signal completion timed out.")
 		get_tree().quit(1)
 		return
 	var started_ticks := Time.get_ticks_msec()
@@ -3328,9 +3351,9 @@ func _capture_single_ship_combat_test() -> void:
 		Vector2(0.30, 0.10),
 		Vector2(0.62, -0.10),
 	]
-	var basis := attack_plane.global_transform.basis
-	var axis_x := basis.x.normalized()
-	var axis_z := basis.z.normalized()
+	var attack_plane_basis := attack_plane.global_transform.basis
+	var axis_x := attack_plane_basis.x.normalized()
+	var axis_z := attack_plane_basis.z.normalized()
 	for local_offset in offsets:
 		if attack._army_entries.is_empty():
 			break
@@ -3998,6 +4021,265 @@ func _capture_th6_village() -> void:
 		output_path,
 	])
 	get_tree().quit()
+
+
+func _verify_harpoon_main_scene() -> void:
+	var failures: Array[String] = []
+	print("[HARPOON_MAIN_SCENE] START")
+	var attack_plane := get_node_or_null("../Island/shipPlane") as Node3D
+	if attack_plane == null:
+		push_error("[HARPOON_MAIN_SCENE] attack deployment plane is missing")
+		get_tree().quit(1)
+		return
+	var capture_enabled := (
+		OS.get_cmdline_user_args().has("--capture-harpoon-main-scene")
+		and DisplayServer.get_name() != "headless"
+	)
+	var capture_dir := ProjectSettings.globalize_path(
+		"res://artifacts/harpoon-main-scene"
+	)
+	if capture_enabled:
+		DirAccess.make_dir_recursive_absolute(capture_dir)
+
+	var main_bs := _building_system_for_grid("main")
+	if main_bs == null:
+		push_error("[HARPOON_MAIN_SCENE] main BuildingSystem is missing")
+		get_tree().quit(1)
+		return
+	var expected_caps := {5: 1, 6: 6, 7: 7, 8: 8}
+	for town_hall_level in expected_caps:
+		var actual_cap := int(main_bs._get_building_max_level_for_th(
+			"harpoon",
+			town_hall_level
+		))
+		if actual_cap != int(expected_caps[town_hall_level]):
+			failures.append(
+				"TH%d Harpoon cap expected %d, got %d"
+				% [town_hall_level, int(expected_caps[town_hall_level]), actual_cap]
+			)
+
+	for town_hall_level in [6, 7]:
+		print("[HARPOON_MAIN_SCENE] BUILD_START th=%d" % town_hall_level)
+		await build_max_village_for_town_hall(town_hall_level, 731 + town_hall_level)
+		print("[HARPOON_MAIN_SCENE] BUILD_DONE th=%d" % town_hall_level)
+		await get_tree().create_timer(0.75).timeout
+		var harpoons: Array[Dictionary] = []
+		for raw_bs in get_tree().get_nodes_in_group("building_systems"):
+			if not ("placed_buildings" in raw_bs):
+				continue
+			for building: Dictionary in raw_bs.placed_buildings:
+				if str(building.get("id", "")) == "harpoon":
+					harpoons.append(building)
+		if harpoons.size() != 1:
+			failures.append(
+				"TH%d expected exactly one Harpoon, found %d"
+				% [town_hall_level, harpoons.size()]
+			)
+			continue
+
+		var harpoon := harpoons[0]
+		var expected_level: int = int(town_hall_level)
+		if town_hall_level == 7:
+			var harpoon_def: Dictionary = main_bs.building_defs.get("harpoon", {})
+			_set_building_level_immediate(main_bs, harpoon, harpoon_def, 6)
+			await _set_building_level_for_test(main_bs, harpoon, harpoon_def, 7)
+			await get_tree().create_timer(0.15).timeout
+		var actual_level := int(harpoon.get("level", 0))
+		if actual_level != expected_level:
+			failures.append(
+				"TH%d Harpoon expected L%d, got L%d"
+				% [town_hall_level, expected_level, actual_level]
+			)
+		var building_node := harpoon.get("node", null) as Node3D
+		if building_node == null:
+			failures.append("TH%d Harpoon building node is missing" % town_hall_level)
+			continue
+		var visual_model := main_bs._get_building_visual_model(building_node) as Node3D
+		if visual_model == null:
+			failures.append("TH%d Harpoon visual wrapper is missing" % town_hall_level)
+			continue
+		var static_base := visual_model.get_node_or_null("StaticBase") as Node3D
+		var static_bounds := _world_mesh_aabb(static_base)
+		var horizontal_span := maxf(static_bounds.size.x, static_bounds.size.z)
+		var facing_error_degrees := 0.0
+		if static_base == null or horizontal_span < 0.15:
+			failures.append(
+				"TH%d Harpoon static mesh collapsed (span %.3f)"
+				% [town_hall_level, horizontal_span]
+			)
+		if not building_node.has_method("set_level"):
+			failures.append("TH%d Harpoon runtime script is missing" % town_hall_level)
+		elif int(building_node.get("level")) != expected_level:
+			failures.append(
+				"TH%d Harpoon runtime expected L%d, got L%d"
+				% [town_hall_level, expected_level, int(building_node.get("level"))]
+			)
+		var yaw_pivot := visual_model.get_node_or_null("TurretYawPivot") as Node3D
+		if yaw_pivot == null:
+			failures.append("TH%d Harpoon yaw pivot is missing" % town_hall_level)
+		else:
+			var forward := yaw_pivot.global_basis * Vector3.LEFT
+			forward.y = 0.0
+			var toward_attack_zone: Vector3 = attack_plane.global_position - yaw_pivot.global_position
+			toward_attack_zone.y = 0.0
+			if forward.length_squared() <= 0.0000001 or toward_attack_zone.length_squared() <= 0.0000001:
+				failures.append("TH%d Harpoon spawn-facing direction is degenerate" % town_hall_level)
+			else:
+				facing_error_degrees = rad_to_deg(
+					forward.normalized().angle_to(toward_attack_zone.normalized())
+				)
+				if facing_error_degrees > 2.0:
+					failures.append(
+						"TH%d Harpoon faces %.3f degrees away from the combat-zone center"
+						% [town_hall_level, facing_error_degrees]
+					)
+
+		print(
+			"[HARPOON_MAIN_SCENE] TH%d L%d span=%.3f facing_error_deg=%.3f node_scale=%s"
+			% [town_hall_level, actual_level, horizontal_span, facing_error_degrees, str(building_node.scale)]
+		)
+		if capture_enabled:
+			await _capture_harpoon_main_scene_frame(
+				building_node,
+				capture_dir.path_join("harpoon_th%d_l%d.png" % [town_hall_level, actual_level])
+			)
+
+	if not failures.is_empty():
+		for failure in failures:
+			push_error("[HARPOON_MAIN_SCENE] " + failure)
+		get_tree().quit(1)
+		return
+	print("[HARPOON_MAIN_SCENE] PASS th6=L6 th7=L7 future_th8_cap=L8 zero_scale_spawn=visible")
+	get_tree().quit(0)
+
+
+func _capture_harpoon_main_scene_frame(building_node: Node3D, output_path: String) -> void:
+	if _panel:
+		_panel.visible = false
+	if get_tree().current_scene:
+		_hide_capture_canvas_items(get_tree().current_scene)
+	var previous_visibility: Dictionary = {}
+	for raw_bs in get_tree().get_nodes_in_group("building_systems"):
+		if not ("placed_buildings" in raw_bs):
+			continue
+		for building: Dictionary in raw_bs.placed_buildings:
+			var candidate := building.get("node", null) as Node3D
+			if candidate == null:
+				continue
+			previous_visibility[candidate] = candidate.visible
+			candidate.visible = candidate == building_node
+	var old_camera := get_viewport().get_camera_3d()
+	if old_camera:
+		old_camera.current = false
+	var camera := Camera3D.new()
+	camera.name = "HarpoonMainSceneCaptureCamera"
+	camera.projection = Camera3D.PROJECTION_ORTHOGONAL
+	camera.size = 0.82
+	get_tree().current_scene.add_child(camera)
+	var center := building_node.global_position + Vector3(0.0, 0.14, 0.0)
+	camera.global_position = center + Vector3(0.62, 0.50, 0.72)
+	camera.look_at(center, Vector3.UP)
+	camera.current = true
+	await RenderingServer.frame_post_draw
+	var error := get_viewport().get_texture().get_image().save_png(output_path)
+	if error != OK:
+		push_error("[HARPOON_MAIN_SCENE] capture failed: " + error_string(error))
+	else:
+		print("[HARPOON_MAIN_SCENE] CAPTURE ", output_path)
+	camera.queue_free()
+	for raw_node in previous_visibility:
+		var node := raw_node as Node3D
+		if is_instance_valid(node):
+			node.visible = bool(previous_visibility[raw_node])
+	if old_camera and is_instance_valid(old_camera):
+		old_camera.current = true
+
+
+func _capture_harpoon_spawn_facing() -> void:
+	if DisplayServer.get_name() == "headless":
+		push_error("[HARPOON_SPAWN_FACING] rendered display is required")
+		get_tree().quit(1)
+		return
+	var main_bs := _building_system_for_grid("main")
+	if main_bs == null:
+		push_error("[HARPOON_SPAWN_FACING] main BuildingSystem is missing")
+		get_tree().quit(1)
+		return
+	reset_sandbox()
+	await get_tree().process_frame
+	var def: Dictionary = main_bs.building_defs.get("harpoon", {})
+	var grid_pos := Vector2i(floori(float(main_bs.grid_width) / 2.0) - 1, 1)
+	main_bs._spawn_building_locally("harpoon", grid_pos, def, -1)
+	await get_tree().create_timer(0.75).timeout
+	var building := _last_building_at(main_bs, "harpoon", grid_pos)
+	var building_node := building.get("node", null) as Node3D
+	if building_node == null:
+		push_error("[HARPOON_SPAWN_FACING] Harpoon did not spawn")
+		get_tree().quit(1)
+		return
+	var visual_model := main_bs._get_building_visual_model(building_node) as Node3D
+	var yaw_pivot := (
+		visual_model.get_node_or_null("TurretYawPivot") as Node3D
+		if visual_model != null
+		else null
+	)
+	if yaw_pivot == null:
+		push_error("[HARPOON_SPAWN_FACING] yaw pivot is missing")
+		get_tree().quit(1)
+		return
+	var forward := yaw_pivot.global_basis * Vector3.LEFT
+	forward.y = 0.0
+	var attack_plane := get_node_or_null("../Island/shipPlane") as Node3D
+	if attack_plane == null:
+		push_error("[HARPOON_SPAWN_FACING] attack deployment plane is missing")
+		get_tree().quit(1)
+		return
+	var toward_attack_zone: Vector3 = attack_plane.global_position - yaw_pivot.global_position
+	toward_attack_zone.y = 0.0
+	var facing_error := rad_to_deg(
+		forward.normalized().angle_to(toward_attack_zone.normalized())
+	)
+	if facing_error > 2.0:
+		push_error(
+			"[HARPOON_SPAWN_FACING] misses combat-zone center by %.3f degrees"
+			% facing_error
+		)
+		get_tree().quit(1)
+		return
+	if _panel:
+		_panel.visible = false
+	if get_tree().current_scene:
+		_hide_capture_canvas_items(get_tree().current_scene)
+	var old_camera := get_viewport().get_camera_3d()
+	if old_camera:
+		old_camera.current = false
+	var camera := Camera3D.new()
+	camera.name = "HarpoonSpawnFacingCamera"
+	camera.projection = Camera3D.PROJECTION_ORTHOGONAL
+	camera.size = 3.35
+	get_tree().current_scene.add_child(camera)
+	var framing_center := building_node.global_position.lerp(attack_plane.global_position, 0.42)
+	framing_center.y += 0.10
+	camera.global_position = framing_center + Vector3(0.0, 3.6, 2.65)
+	camera.look_at(framing_center, Vector3.UP)
+	camera.current = true
+	await RenderingServer.frame_post_draw
+	var output_path := ProjectSettings.globalize_path(
+		"res://artifacts/harpoon-main-scene/harpoon_spawn_facing_attack_zone.png"
+	)
+	var error := get_viewport().get_texture().get_image().save_png(output_path)
+	if error != OK:
+		push_error("[HARPOON_SPAWN_FACING] capture failed: " + error_string(error))
+		get_tree().quit(1)
+		return
+	camera.queue_free()
+	if old_camera and is_instance_valid(old_camera):
+		old_camera.current = true
+	print(
+		"[HARPOON_SPAWN_FACING] PASS grid=%s facing_error_deg=%.3f capture=%s"
+		% [str(grid_pos), facing_error, output_path]
+	)
+	get_tree().quit(0)
 
 
 func _verify_test_scene_mixed_combat() -> void:
@@ -5267,10 +5549,11 @@ func run_th6_browser_matrix_profile() -> void:
 		await get_tree().process_frame
 		_prepare_profile_buildings()
 		_prepare_test_battle([])
-		if disable_defense_physics:
-			_set_profile_defense_physics(false)
-		elif not defense_only_script.is_empty():
-			_set_profile_defense_only(defense_only_script)
+		# Keep the measured army intact while the delayed spawn queue drains.
+		# Previously active defenses killed units before their profile-only HP was
+		# raised, so identical scenarios sampled anywhere from 42 to 45 troops.
+		_set_profile_defense_physics(false)
+		_set_profile_guard_physics(false)
 		_test_attack_ship_level = 6
 		reset_test_ship_abilities(false)
 
@@ -5296,6 +5579,10 @@ func run_th6_browser_matrix_profile() -> void:
 				continue
 			troop.set("max_hp", 50000000)
 			troop.set("hp", 50000000)
+		_set_profile_defense_physics(not disable_defense_physics)
+		_set_profile_guard_physics(true)
+		if not disable_defense_physics and not defense_only_script.is_empty():
+			_set_profile_defense_only(defense_only_script)
 		var ability_results := _apply_th6_profile_abilities(
 			scenario.get("abilities", []),
 			spawn_center
@@ -5312,6 +5599,9 @@ func run_th6_browser_matrix_profile() -> void:
 		metrics["active_troops"] = get_tree().get_nodes_in_group(
 			"troops"
 		).size()
+		metrics["sample_valid"] = (
+			int(metrics["active_troops"]) == troop_names.size()
+		)
 		metrics["active_guards"] = get_tree().get_nodes_in_group(
 			"skeleton_guards"
 		).size()
@@ -5400,7 +5690,11 @@ func run_th6_bottleneck_profile() -> void:
 		await get_tree().process_frame
 		_prepare_profile_buildings()
 		_prepare_test_battle([])
-		_set_profile_defense_physics(true)
+		# Spawn under a frozen defense state, then enable the mode only after all
+		# troops are invulnerable. This makes every A/B sample use the requested
+		# 45-unit workload instead of a defense-dependent survivor count.
+		_set_profile_defense_physics(false)
+		_set_profile_guard_physics(false)
 		BaseTroop.profile_dense_separation_interval = int(
 			mode.get("separation_interval", 0)
 		)
@@ -5434,6 +5728,8 @@ func run_th6_bottleneck_profile() -> void:
 				troop.set_physics_process(false)
 			if bool(mode.get("no_visuals", false)):
 				troop.visible = false
+		_set_profile_defense_physics(true)
+		_set_profile_guard_physics(true)
 		var crowd_batch := get_tree().current_scene.get_node_or_null(
 			"TroopCrowdBatch"
 		) as Node3D
@@ -5454,9 +5750,13 @@ func run_th6_bottleneck_profile() -> void:
 			)
 		)
 		metrics["name"] = mode_name
+		metrics["requested_troops"] = KNIGHT_SWARM_PROFILE_COUNT
 		metrics["active_troops"] = get_tree().get_nodes_in_group(
 			"troops"
 		).size()
+		metrics["sample_valid"] = (
+			int(metrics["active_troops"]) == KNIGHT_SWARM_PROFILE_COUNT
+		)
 		results.append(metrics)
 		print(
 			"[TH6_BOTTLENECK] end mode=",
@@ -5488,6 +5788,12 @@ func run_th6_bottleneck_profile() -> void:
 			"modes": results,
 		})
 	)
+	if OS.get_cmdline_user_args().has("--auto-th6-bottleneck-profile"):
+		# Let queued combat nodes release before exiting and avoid keeping a
+		# completed one-mode sample alive until an external --quit-after limit.
+		await get_tree().process_frame
+		await get_tree().process_frame
+		get_tree().quit()
 
 
 func run_th6_defense_breakdown_profile() -> void:
@@ -5528,12 +5834,8 @@ func run_th6_defense_breakdown_profile() -> void:
 		await get_tree().process_frame
 		_prepare_profile_buildings()
 		_prepare_test_battle([])
-		if script_path == "none":
-			_set_profile_defense_physics(false)
-		elif script_path.is_empty():
-			_set_profile_defense_physics(true)
-		else:
-			_set_profile_defense_only(script_path)
+		_set_profile_defense_physics(false)
+		_set_profile_guard_physics(false)
 
 		var troop_names: Array[String] = []
 		for _troop_index in KNIGHT_SWARM_PROFILE_COUNT:
@@ -5553,12 +5855,26 @@ func run_th6_defense_breakdown_profile() -> void:
 				continue
 			troop.set("max_hp", 50000000)
 			troop.set("hp", 50000000)
+		_set_profile_guard_physics(true)
+		if script_path == "none":
+			_set_profile_defense_physics(false)
+		elif script_path.is_empty():
+			_set_profile_defense_physics(true)
+		else:
+			_set_profile_defense_only(script_path)
 		await get_tree().create_timer(0.35).timeout
 		var metrics := await _sample_fps_profile(
 			"th6_defense_%s" % mode_name,
 			TH6_BOTTLENECK_PROFILE_SAMPLE_SEC
 		)
 		metrics["name"] = mode_name
+		metrics["requested_troops"] = KNIGHT_SWARM_PROFILE_COUNT
+		metrics["active_troops"] = get_tree().get_nodes_in_group(
+			"troops"
+		).size()
+		metrics["sample_valid"] = (
+			int(metrics["active_troops"]) == KNIGHT_SWARM_PROFILE_COUNT
+		)
 		results.append(metrics)
 		print(
 			"[TH6_DEFENSE_BREAKDOWN] end mode=",

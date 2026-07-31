@@ -134,7 +134,7 @@ try {
     }
   }
 
-  for (const type of ['mortar', 'cannon']) {
+  for (const type of ['mortar', 'harpoon', 'cannon']) {
     const def = gameDb.BUILDING_DEFS[type];
     assert.ok(def.upgrade_cost, `${type} must use an authored late-game cost table`);
     const clientSection = clientBuildingSection(type);

@@ -1,0 +1,57 @@
+[gd_scene load_steps=7 format=3]
+
+[ext_resource type="Script" path="res://Model/Harpoon/harpoon_defense_visual.gd" id="1_script"]
+[ext_resource type="PackedScene" path="res://Model/Harpoon/harpoon_turret_lod_no_sight.glb" id="2_model"]
+
+[sub_resource type="TorusMesh" id="TorusMesh_stop_ring"]
+inner_radius = 0.94
+outer_radius = 1.0
+rings = 32
+ring_segments = 6
+
+[sub_resource type="StandardMaterial3D" id="Material_stop_ring"]
+transparency = 1
+albedo_color = Color(1, 0.38, 0.12, 0.72)
+emission_enabled = true
+emission = Color(1, 0.18, 0.04, 1)
+emission_energy_multiplier = 1.35
+shading_mode = 0
+
+[sub_resource type="SphereMesh" id="SphereMesh_reload"]
+radius = 0.08
+height = 0.16
+radial_segments = 12
+rings = 6
+
+[sub_resource type="StandardMaterial3D" id="Material_reload"]
+albedo_color = Color(0.388, 0.839, 0.522, 1)
+
+[node name="HarpoonDefense" type="Node3D"]
+script = ExtResource("1_script")
+
+[node name="StaticBase" type="Node3D" parent="."]
+
+[node name="TurretYawPivot" type="Node3D" parent="."]
+
+[node name="HarpoonProjectile" type="Node3D" parent="TurretYawPivot"]
+
+[node name="HookSocket" type="Marker3D" parent="TurretYawPivot/HarpoonProjectile"]
+
+[node name="MuzzleSocket" type="Marker3D" parent="TurretYawPivot"]
+
+[node name="ReloadIndicator" type="MeshInstance3D" parent="TurretYawPivot"]
+position = Vector3(0, 0.42, 0)
+mesh = SubResource("SphereMesh_reload")
+material_override = SubResource("Material_reload")
+cast_shadow = 0
+
+[node name="RopeMesh" type="MeshInstance3D" parent="."]
+visible = false
+
+[node name="StopRing" type="MeshInstance3D" parent="."]
+visible = false
+mesh = SubResource("TorusMesh_stop_ring")
+material_override = SubResource("Material_stop_ring")
+cast_shadow = 0
+
+[node name="ModelSource" parent="." instance=ExtResource("2_model")]

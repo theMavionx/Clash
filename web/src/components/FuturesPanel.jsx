@@ -124,6 +124,7 @@ const OPEN_TPSL_POST_MARKET_DEXES = new Set([
   'ostium',
   'pacifica',
   'phoenix',
+  'risex',
   'grvt',
   'gmtrade',
   'hibachi',
@@ -10403,10 +10404,10 @@ function FuturesPanel() {
         )}
 
         {/* Withdraw card. Avantis & GMX are non-custodial → no withdraw.
-            Pacifica shows when there's something to take out. Decibel ALWAYS
-            shows it so the user sees the action exists from day one (button
-            disables when available=0 instead of hiding the whole card). */}
-        {dex !== 'avantis' && dex !== 'gmx' && dex !== 'ostium' && dex !== 'risex' && dex !== 'hibachi' && dex !== 'katana' && dex !== 'gmtrade' && dex !== 'hotstuff' && (dex === 'decibel' || dex === 'hyperliquid' || dex === 'nado' || dex === 'flash' || available > 0) && (
+            Pacifica shows when there's something to take out. Decibel and
+            RISEx always show the action from day one (the button disables at
+            available=0 instead of hiding the whole card). */}
+        {dex !== 'avantis' && dex !== 'gmx' && dex !== 'ostium' && dex !== 'hibachi' && dex !== 'katana' && dex !== 'gmtrade' && dex !== 'hotstuff' && (dex === 'decibel' || dex === 'risex' || dex === 'hyperliquid' || dex === 'nado' || dex === 'flash' || available > 0) && (
           <div style={S.fullCard}>
             <div style={S.row}>
               <span style={{...S.label, color: '#9945FF'}}>{dex === 'monad' ? 'Withdraw AUSD' : dex === 'nado' ? 'Withdraw USDt0' : 'Withdraw USDC'}</span>
@@ -10451,6 +10452,8 @@ function FuturesPanel() {
             <span style={{fontSize: 10, color: '#a3906a', fontWeight: 700}}>
               {dex === 'hyperliquid'
                 ? 'Requests a Hyperliquid withdrawal to your connected Arbitrum address. Arrival usually takes a few minutes.'
+                : dex === 'risex'
+                ? 'Withdraws USDC from RISEx directly to your connected RISE wallet through the official CollateralManager contract. Requires RISE ETH for gas.'
                 : dex === 'decibel'
                 ? 'Withdraws from your Decibel trading subaccount back to your Aptos wallet.'
                 : dex === 'monad'

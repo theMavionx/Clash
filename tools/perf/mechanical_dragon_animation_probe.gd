@@ -76,7 +76,7 @@ func _run_probe() -> void:
 		frame_image.convert(Image.FORMAT_RGBA8)
 		var destination := Vector2i(
 			(sample_index % SHEET_COLUMNS) * FRAME_SIZE.x,
-			(sample_index / SHEET_COLUMNS) * FRAME_SIZE.y
+			floori(float(sample_index) / float(SHEET_COLUMNS)) * FRAME_SIZE.y
 		)
 		sheet.blit_rect(
 			frame_image,

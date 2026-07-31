@@ -285,9 +285,9 @@ func _is_inside_attack_grid(point: Vector3, clearance: float) -> bool:
 	var local_aabb := _attack_grid.get_aabb()
 	var local_center := local_aabb.get_center()
 	var world_center := _attack_grid.global_transform * local_center
-	var basis := _attack_grid.global_transform.basis
-	var axis_x := Vector2(basis.x.x, basis.x.z)
-	var axis_z := Vector2(basis.z.x, basis.z.z)
+	var attack_grid_basis := _attack_grid.global_transform.basis
+	var axis_x := Vector2(attack_grid_basis.x.x, attack_grid_basis.x.z)
+	var axis_z := Vector2(attack_grid_basis.z.x, attack_grid_basis.z.z)
 	var scale_x := axis_x.length()
 	var scale_z := axis_z.length()
 	if scale_x <= 0.0001 or scale_z <= 0.0001:

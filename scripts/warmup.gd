@@ -784,11 +784,11 @@ func _run_profiled_callable_step(step: String, callback: Callable) -> void:
 	var started := Time.get_ticks_msec()
 	print("[WARMUP_PROFILE] step_start step=", step, " total_ms=", started - _started_ticks)
 	callback.call()
-	var finished := Time.get_ticks_msec()
+	var finished_ticks := Time.get_ticks_msec()
 	print(
 		"[WARMUP_PROFILE] step_done step=", step,
-		" step_ms=", finished - started,
-		" total_ms=", finished - _started_ticks
+		" step_ms=", finished_ticks - started,
+		" total_ms=", finished_ticks - _started_ticks
 	)
 
 
@@ -840,11 +840,11 @@ func _run_profiled_combat_step(step: String, method_name: StringName) -> void:
 		" total_ms=", started - _started_ticks
 	)
 	call(method_name)
-	var finished := Time.get_ticks_msec()
+	var finished_ticks := Time.get_ticks_msec()
 	print(
 		"[WARMUP_PROFILE] step_done step=", step,
-		" step_ms=", finished - started,
-		" total_ms=", finished - _started_ticks
+		" step_ms=", finished_ticks - started,
+		" total_ms=", finished_ticks - _started_ticks
 	)
 
 
@@ -955,10 +955,8 @@ func _prewarm_weapon_scenes() -> void:
 		"res://Model/Characters/Assets/bow_withString.gltf",
 		"res://Model/Characters/Assets/arrow_bow.gltf",
 	]
-	var loaded := 0
 	for path in WEAPON_PATHS:
-		if ResourceLoader.load(path, "PackedScene") != null:
-			loaded += 1
+		ResourceLoader.load(path, "PackedScene")
 
 
 ## Parses every troop rig's GLB set into a cached AnimationLibrary. Covers the
@@ -1624,10 +1622,8 @@ func _warmup_demon_king() -> void:
 		"res://Model/Characters/Animations/DemonKing/DemonKing_WalkLFT.fbx",
 		"res://Model/Characters/Animations/DemonKing/DemonKing_WalkRGT.fbx",
 	]
-	var loaded_anims := 0
 	for path in DEMON_ANIM_FILES:
-		if ResourceLoader.load(path, "PackedScene") != null:
-			loaded_anims += 1
+		ResourceLoader.load(path, "PackedScene")
 
 
 ## FireDragon keeps one skinned model and lazily caches imported clips. Load
@@ -2009,7 +2005,7 @@ func _warmup_cannon_billboard_frames(
 		billboard.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		billboard.position = Vector3(
 			(float(texture_index % 8) - 3.5) * 0.025,
-			0.08 + float(texture_index / 8) * 0.025,
+			0.08 + (float(texture_index) / 8.0) * 0.025,
 			0.01
 		)
 		billboard.scale = Vector3.ONE * 0.035
@@ -2535,7 +2531,6 @@ func _warmup_flag_glb() -> void:
 ## placement" no longer stalls on shader compile for the ship-hull variant.
 func _warmup_ship_glbs() -> void:
 	AttackSystem._preload_ship_resources()
-	var spawned := 0
 	for i in range(AttackSystem._ship_model_cache.size()):
 		var ship_res: Resource = AttackSystem._ship_model_cache[i]
 		if ship_res == null:
@@ -2545,7 +2540,6 @@ func _warmup_ship_glbs() -> void:
 		inst.scale = Vector3(1.0, 1.0, 1.0)
 		_force_shadow_casting(inst)
 		add_child(inst)
-		spawned += 1
 
 
 func _warmup_building_destruction() -> void:

@@ -245,7 +245,7 @@ func _set_building_shards(building_index: int, bounds: AABB, size: Vector3, thaw
 	]
 	for shard_index in range(SHARDS_PER_BUILDING):
 		var angle := PI * (0.17 + float(shard_index) * 0.43)
-		var basis := Basis(Vector3.UP, angle).scaled(
+		var shard_basis := Basis(Vector3.UP, angle).scaled(
 			Vector3(width_scale, height_scale, width_scale)
 		)
 		var shard_position := Vector3(
@@ -256,7 +256,7 @@ func _set_building_shards(building_index: int, bounds: AABB, size: Vector3, thaw
 		var instance_index := building_index * SHARDS_PER_BUILDING + shard_index
 		_shard_multimesh.set_instance_transform(
 			instance_index,
-			Transform3D(basis, shard_position)
+			Transform3D(shard_basis, shard_position)
 		)
 	_set_building_shard_colors(building_index, thaw_alpha)
 

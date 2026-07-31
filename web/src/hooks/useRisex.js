@@ -10,6 +10,8 @@ import {
   RISEX_BRIDGE_CHAINS,
   RISEX_BUILDER_FEE_BPS,
   RISEX_BUILDER_FEE_RECIPIENT,
+  RISEX_COLLATERAL_MANAGER_ABI,
+  RISEX_COLLATERAL_MANAGER_ADDRESS,
   RISEX_DEFAULT_DEPOSIT_SOURCE_CHAIN_ID,
   RISEX_FEE_MANAGER_ABI,
   RISEX_FEE_MANAGER_ADDRESS,
@@ -19,9 +21,12 @@ import {
 } from '../lib/risexConfig';
 import {
   buildRisexOrderParams,
+  createRisexCancelTpslPayload,
   createRisexInviteRedeemPayload,
   createRisexPermit,
+  createRisexPermitSinglePayload,
   createRisexRegisterPayload,
+  createRisexTpslOrderPayload,
   encodeRisexBuilderFeeApproval,
   encodeRisexCancelOrder,
   encodeRisexOrder,
@@ -629,6 +634,70 @@ export function useRisex() {
     authHeaders,
   ]);
 
+  const ensureTpslAllowance = useCallback(async () => {
+    if (!walletAddr) throw new Error('Connect your EVM wallet first');
+    if (!token) throw new Error('Game session is not ready. Reconnect your wallet.');
+    const statusPath = `/api/futures/risex/tpsl/allowance-status?dex=risex&account=${walletAddr}`;
+    const current = await fetchJson(statusPath, {
+      headers: authHeaders({ 'Content-Type': undefined }),
+    }).catch(() => null);
+    const now = Math.floor(Date.now() / 1000);
+    if (String(current?.status || '').toLowerCase() === 'active' && Number(current?.allowance_expiry || 0) > now) {
+      return { active: true, ...current };
+    }
+    if (typeof ensureChain === 'function') await ensureChain(RISE_CHAIN_ID);
+    const walletClient = typeof getWalletClient === 'function'
+      ? (getWalletClient(RISE_CHAIN_ID) || getWalletClient())
+      : null;
+    if (!walletClient && !provider?.request) throw new Error('EVM wallet signer is not ready');
+    const [config, domain, nonceState] = await Promise.all([
+      fetchJson('/api/futures/risex/system-config?dex=risex', {
+        headers: authHeaders({ 'Content-Type': undefined }),
+      }),
+      fetchJson('/api/futures/risex/eip712-domain?dex=risex', {
+        headers: authHeaders({ 'Content-Type': undefined }),
+      }),
+      fetchJson(`/api/futures/risex/nonce-state?dex=risex&account=${walletAddr}`, {
+        headers: authHeaders({ 'Content-Type': undefined }),
+      }),
+    ]);
+    const operator = config?.addresses?.operator_hub;
+    if (!isRisexAddress(operator)) throw new Error('RISEx OperatorHub is unavailable');
+    const payload = await createRisexPermitSinglePayload({
+      account: walletAddr,
+      operator,
+      domain,
+      nonceState,
+      provider,
+      walletClient,
+    });
+    await fetchJson('/api/futures/risex/tpsl/allowance/approve?dex=risex', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify(payload),
+    });
+    let refreshed = null;
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      if (attempt > 0) await new Promise(resolve => setTimeout(resolve, 750));
+      refreshed = await fetchJson(statusPath, {
+        headers: authHeaders({ 'Content-Type': undefined }),
+      }).catch(() => null);
+      if (String(refreshed?.status || '').toLowerCase() === 'active') break;
+    }
+    if (String(refreshed?.status || '').toLowerCase() !== 'active') {
+      throw new Error('RISEx accepted the TP/SL allowance, but it is not active yet');
+    }
+    return { active: true, ...refreshed };
+  }, [
+    walletAddr,
+    token,
+    fetchJson,
+    authHeaders,
+    ensureChain,
+    getWalletClient,
+    provider,
+  ]);
+
   const fetchAccount = useCallback(async () => {
     if (!walletAddr) return;
     if (!token) {
@@ -726,7 +795,7 @@ export function useRisex() {
       let invite = await fetchInviteStatus();
       const needsInvite = invite && invite.hasAccess === false;
       const inviteCode = normalizeRisexInviteCode(opts?.inviteCode || '');
-      const totalSteps = needsInvite ? 4 : 3;
+      const totalSteps = needsInvite ? 5 : 4;
       const setupOffset = needsInvite ? 1 : 0;
       if (needsInvite) {
         if (!inviteCode) throw new Error('Enter your RISEx invite code first');
@@ -794,6 +863,13 @@ export function useRisex() {
       setActivationStep({
         index: setupOffset + 3,
         total: totalSteps,
+        label: 'Enable RISEx TP/SL triggers',
+      });
+      await ensureTpslAllowance();
+
+      setActivationStep({
+        index: setupOffset + 4,
+        total: totalSteps,
         label: 'Verify RISEx setup',
       });
       verified = await refreshSignerStatus();
@@ -824,6 +900,7 @@ export function useRisex() {
     refreshSignerStatus,
     fetchBuilderConfig,
     approveBuilderFee,
+    ensureTpslAllowance,
   ]);
 
   const ensureReady = useCallback(async () => {
@@ -840,6 +917,24 @@ export function useRisex() {
     if (!signer) throw new Error('RISEx signer is not available');
     return signer;
   }, [walletAddr, walletMismatch, refreshSignerStatus, activate]);
+
+  const submitTpslCancel = useCallback(async (orderId, suppliedSigner = null) => {
+    const signer = suppliedSigner || await ensureReady();
+    const domain = await fetchJson('/api/futures/risex/eip712-domain?dex=risex', {
+      headers: authHeaders({ 'Content-Type': undefined }),
+    });
+    const payload = await createRisexCancelTpslPayload({
+      account: walletAddr,
+      signer,
+      domain,
+      orderId,
+    });
+    return fetchJson('/api/futures/risex/orders/tpsl/cancel?dex=risex', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify(payload),
+    });
+  }, [ensureReady, fetchJson, authHeaders, walletAddr]);
 
   const placeOrder = useCallback(async (orderParams) => {
     const submit = async () => {
@@ -1100,6 +1195,11 @@ export function useRisex() {
         || String(o?._raw?.order_id ?? '') === String(orderId)
         || String(o?._raw?.resting_order_id ?? '') === String(orderId)
       );
+      if (match?._risex_tpsl === true || match?.is_tpsl === true || match?._raw?.stop_type) {
+        const result = await submitTpslCancel(match?.order_id ?? match?._raw?.order_id ?? orderId, signer);
+        await fetchAccount();
+        return { success: true, ...result };
+      }
       const restingOrderId = match?.resting_order_id ?? match?._raw?.resting_order_id ?? orderId;
       const publicOrderId = match?._raw?.order_id ?? match?.order_id ?? orderId;
       const [domain, nonceState] = await Promise.all([
@@ -1137,7 +1237,7 @@ export function useRisex() {
     } finally {
       setLoading(false);
     }
-  }, [ensureReady, orders, findMarket, fetchJson, authHeaders, walletAddr, fetchAccount]);
+  }, [ensureReady, orders, findMarket, submitTpslCancel, fetchJson, authHeaders, walletAddr, fetchAccount]);
 
   const depositToPacifica = useCallback(async (amount, opts = {}) => {
     const amountText = String(amount ?? '').trim();
@@ -1301,15 +1401,195 @@ export function useRisex() {
     readBridgeSourceUsdc,
   ]);
 
-  const withdraw = useCallback(async () => {
-    const msg = 'RISEx withdrawal is not wired in Clash yet. Use the official RISEx app for withdrawals.';
-    setError(msg);
-    return { error: msg };
-  }, []);
+  const withdraw = useCallback(async (amount) => {
+    setLoading(true);
+    setError(null);
+    try {
+      if (!walletAddr) throw new Error('Connect your EVM wallet first');
+      if (walletMismatch) throw new Error('Connected wallet does not match your registered RISEx wallet');
+      const amountText = String(amount ?? '').trim();
+      const amountNumber = Number(amountText);
+      const withdrawable = num(account?.available_to_withdraw);
+      if (!Number.isFinite(amountNumber) || amountNumber <= 0) throw new Error('Enter a positive USDC amount');
+      if (amountNumber > withdrawable + 0.000001) {
+        throw new Error(`Maximum RISEx withdrawal is ${withdrawable.toFixed(2)} USDC`);
+      }
+      if (typeof ensureChain === 'function') await ensureChain(RISE_CHAIN_ID);
+      const walletClient = typeof getWalletClient === 'function'
+        ? (getWalletClient(RISE_CHAIN_ID) || getWalletClient())
+        : null;
+      if (!walletClient?.writeContract) throw new Error('Connected wallet cannot submit a RISEx withdrawal');
+      const config = await fetchJson('/api/futures/risex/system-config?dex=risex', {
+        headers: authHeaders({ 'Content-Type': undefined }),
+      });
+      const collateralManager = config?.addresses?.collateral_manager || RISEX_COLLATERAL_MANAGER_ADDRESS;
+      const usdc = config?.addresses?.usdc || RISEX_USDC_ADDRESS;
+      if (!isRisexAddress(collateralManager) || !isRisexAddress(usdc)) {
+        throw new Error('RISEx collateral contract configuration is unavailable');
+      }
+      const amountUnits = parseUnits(amountText, RISEX_USDC_DECIMALS);
+      const txHash = await walletClient.writeContract({
+        account: walletAddr,
+        address: collateralManager,
+        abi: RISEX_COLLATERAL_MANAGER_ABI,
+        functionName: 'withdraw',
+        args: [walletAddr, usdc, amountUnits],
+      });
+      let receipt = null;
+      const publicClient = typeof getPublicClient === 'function' ? getPublicClient(RISE_CHAIN_ID) : null;
+      try {
+        receipt = await publicClient?.waitForTransactionReceipt?.({ hash: txHash, timeout: 60_000 });
+      } catch (receiptError) {
+        console.warn('[useRisex] withdrawal receipt wait:', receiptError?.message || receiptError);
+      }
+      if (receipt?.status === 'reverted') throw new Error('RISEx withdrawal transaction reverted');
+      let pendingAmount = 0n;
+      if (receipt && publicClient?.readContract) {
+        try {
+          const pending = await publicClient.readContract({
+            address: collateralManager,
+            abi: RISEX_COLLATERAL_MANAGER_ABI,
+            functionName: 'getPendingWithdrawal',
+            args: [walletAddr, usdc],
+          });
+          pendingAmount = BigInt(pending?.amount ?? pending?.[0] ?? 0);
+        } catch (pendingError) {
+          console.warn('[useRisex] pending withdrawal read:', pendingError?.message || pendingError);
+        }
+      }
+      await Promise.all([
+        fetchAccount(),
+        readWalletUsdc().then(setWalletUsdc).catch(() => null),
+      ]);
+      if (!receipt) setTimeout(fetchAccount, 10_000);
+      return {
+        success: true,
+        txHash,
+        pending: !receipt || pendingAmount > 0n,
+        info: pendingAmount > 0n
+          ? `RISEx queued ${formatUnits(pendingAmount, RISEX_USDC_DECIMALS)} USDC for release after its safety window.`
+          : receipt
+            ? `${amountText} USDC withdrawn from RISEx to your RISE wallet.`
+            : `RISEx withdrawal submitted (${txHash.slice(0, 10)}...). Balance will refresh after confirmation.`,
+      };
+    } catch (e) {
+      const msg = risexErrorMessage(e, 'RISEx withdrawal failed');
+      setError(msg);
+      return { error: msg };
+    } finally {
+      setLoading(false);
+    }
+  }, [
+    walletAddr,
+    walletMismatch,
+    account?.available_to_withdraw,
+    ensureChain,
+    getWalletClient,
+    getPublicClient,
+    fetchJson,
+    authHeaders,
+    fetchAccount,
+    readWalletUsdc,
+  ]);
 
   const setLeverage = useCallback(async () => ({ success: true }), []);
   const setMarginMode = useCallback(async () => ({ success: true }), []);
-  const setTpsl = useCallback(async () => ({ error: 'RISEx TP/SL is not wired yet' }), []);
+  const setTpsl = useCallback(async (symbol, side, takeProfit, stopLoss, pairIndex, _tradeIndex, amountBase) => {
+    setLoading(true);
+    setError(null);
+    try {
+      if (takeProfit == null && stopLoss == null) throw new Error('Enter a new RISEx TP or SL trigger price');
+      const signer = await ensureReady();
+      await ensureTpslAllowance();
+      let market = findMarket(symbol);
+      if (!market) {
+        await fetchMarkets();
+        market = findMarket(symbol);
+      }
+      const marketId = Number(pairIndex ?? market?.market_id ?? market?.pair_index);
+      if (!Number.isInteger(marketId) || marketId <= 0) throw new Error('RISEx market is unavailable');
+      const matchingPosition = (positions || []).find(position =>
+        Number(position?.pair_index) === marketId
+        || String(position?.symbol || '').toUpperCase() === String(symbol || '').toUpperCase()
+      );
+      const size = String(amountBase ?? matchingPosition?.amount ?? '').trim();
+      if (!(Number(size) > 0)) throw new Error('RISEx position size is unavailable');
+      const domain = await fetchJson('/api/futures/risex/eip712-domain?dex=risex', {
+        headers: authHeaders({ 'Content-Type': undefined }),
+      });
+      const placed = [];
+      const cancellationWarnings = [];
+      const placeLeg = async (stopType, stopPrice) => {
+        if (stopPrice == null) return;
+        const prior = (orders || []).filter(order => {
+          const orderMarketId = Number(order?.pair_index ?? order?._raw?.market_id);
+          const orderStopType = String(order?.stop_type ?? order?._raw?.stop_type ?? '').toUpperCase();
+          return orderMarketId === marketId && orderStopType === stopType;
+        });
+        const payload = await createRisexTpslOrderPayload({
+          account: walletAddr,
+          signer,
+          domain,
+          params: {
+            market_id: marketId,
+            side,
+            size,
+            stop_type: stopType,
+            order_type: 'MARKET',
+            stop_price: String(stopPrice),
+            limit_price: '0',
+            stop_price_option: 'MARK_PRICE',
+            tif: 'FOK',
+            size_percent_bps: 10_000,
+          },
+        });
+        const result = await fetchJson('/api/futures/risex/orders/tpsl?dex=risex', {
+          method: 'POST',
+          headers: authHeaders(),
+          body: JSON.stringify(payload),
+        });
+        placed.push({ stopType, result });
+        for (const oldOrder of prior) {
+          const oldOrderId = oldOrder?.order_id ?? oldOrder?._raw?.order_id;
+          if (!oldOrderId || String(oldOrderId) === String(result?.order_id)) continue;
+          try {
+            await submitTpslCancel(oldOrderId, signer);
+          } catch (cancelError) {
+            cancellationWarnings.push(`${stopType}: ${risexErrorMessage(cancelError, 'old trigger remains active')}`);
+          }
+        }
+      };
+      await placeLeg('TAKE_PROFIT', takeProfit);
+      await placeLeg('STOP_LOSS', stopLoss);
+      await fetchAccount();
+      return {
+        success: true,
+        orders: placed,
+        warnings: cancellationWarnings,
+        info: cancellationWarnings.length
+          ? 'New RISEx TP/SL is active, but an older trigger could not be cancelled. Review Open Orders.'
+          : 'RISEx TP/SL triggers are active.',
+      };
+    } catch (e) {
+      const msg = risexErrorMessage(e, 'RISEx TP/SL setup failed');
+      setError(msg);
+      return { error: msg };
+    } finally {
+      setLoading(false);
+    }
+  }, [
+    ensureReady,
+    ensureTpslAllowance,
+    findMarket,
+    fetchMarkets,
+    positions,
+    orders,
+    fetchJson,
+    authHeaders,
+    walletAddr,
+    submitTpslCancel,
+    fetchAccount,
+  ]);
 
   return {
     connected: !!walletAddr,

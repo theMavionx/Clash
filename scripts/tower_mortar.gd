@@ -3,17 +3,20 @@ extends Node3D
 ## Fires a slow arcing cannonball at ground troops and deals splash damage.
 
 const LEVEL_STATS := {
-	1: {"damage": 95, "fire_rate": 2.40, "detect_range": 1.433, "min_range": 0.70, "splash_radius": 0.22, "travel_time": 0.82},
-	2: {"damage": 135, "fire_rate": 2.25, "detect_range": 1.600, "min_range": 0.75, "splash_radius": 0.26, "travel_time": 0.78},
-	3: {"damage": 185, "fire_rate": 2.10, "detect_range": 1.767, "min_range": 0.80, "splash_radius": 0.30, "travel_time": 0.74},
-	4: {"damage": 245, "fire_rate": 1.95, "detect_range": 1.933, "min_range": 0.85, "splash_radius": 0.34, "travel_time": 0.70},
+	1: {"damage": 95, "fire_rate": 2.40, "detect_range": 1.433, "min_range": 0.70, "splash_radius": 0.30, "travel_time": 0.82},
+	2: {"damage": 135, "fire_rate": 2.25, "detect_range": 1.600, "min_range": 0.75, "splash_radius": 0.34, "travel_time": 0.78},
+	3: {"damage": 185, "fire_rate": 2.10, "detect_range": 1.767, "min_range": 0.80, "splash_radius": 0.38, "travel_time": 0.74},
+	4: {"damage": 245, "fire_rate": 1.95, "detect_range": 1.933, "min_range": 0.82, "splash_radius": 0.42, "travel_time": 0.70},
+	5: {"damage": 300, "fire_rate": 1.90, "detect_range": 2.100, "min_range": 0.82, "splash_radius": 0.45, "travel_time": 0.66},
+	6: {"damage": 370, "fire_rate": 1.80, "detect_range": 2.250, "min_range": 0.80, "splash_radius": 0.49, "travel_time": 0.62},
+	7: {"damage": 460, "fire_rate": 1.70, "detect_range": 2.400, "min_range": 0.78, "splash_radius": 0.52, "travel_time": 0.58},
 }
 
 const PROJECTILE_SCENE: String = "res://Model/Mortar/mortar_lvl2_projectile.fbx"
 const PROJECTILE_POOL_SIZE: int = 8
-const PROJECTILE_SCALES: Array[float] = [0.030, 0.034, 0.038, 0.042]
-const MUZZLE_HEIGHTS: Array[float] = [0.22, 0.25, 0.28, 0.31]
-const ARC_HEIGHTS: Array[float] = [0.50, 0.57, 0.65, 0.74]
+const PROJECTILE_SCALES: Array[float] = [0.030, 0.034, 0.038, 0.042, 0.046, 0.050, 0.054]
+const MUZZLE_HEIGHTS: Array[float] = [0.22, 0.25, 0.28, 0.31, 0.31, 0.31, 0.31]
+const ARC_HEIGHTS: Array[float] = [0.50, 0.57, 0.65, 0.74, 0.82, 0.90, 0.98]
 const TARGET_SEARCH_INTERVAL: float = 0.15
 const IMPACT_FX_DURATION: float = 0.32
 const ATTACK_SFX_PATHS: Array[String] = [
@@ -93,9 +96,9 @@ func set_ward_bonus_pct(pct: int) -> void:
 	_apply_stats()
 
 
-func set_range_visuals_visible(visible: bool) -> void:
-	_range_visuals_visible = visible
-	if visible and (not is_instance_valid(_range_outer_node) or not is_instance_valid(_range_dead_node) or not is_instance_valid(_range_edge_node)):
+func set_range_visuals_visible(should_be_visible: bool) -> void:
+	_range_visuals_visible = should_be_visible
+	if should_be_visible and (not is_instance_valid(_range_outer_node) or not is_instance_valid(_range_dead_node) or not is_instance_valid(_range_edge_node)):
 		_setup_range_visuals()
 	_update_range_visuals()
 

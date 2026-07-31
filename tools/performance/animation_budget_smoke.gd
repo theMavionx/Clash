@@ -34,10 +34,10 @@ func _run() -> void:
 
 
 func _simulate(render_fps: float) -> Dictionary:
-	var root := Node3D.new()
-	get_root().add_child(root)
+	var simulation_root := Node3D.new()
+	get_root().add_child(simulation_root)
 	var visual := Node3D.new()
-	root.add_child(visual)
+	simulation_root.add_child(visual)
 	var player := AnimationPlayer.new()
 	visual.add_child(player)
 
@@ -81,6 +81,6 @@ func _simulate(render_fps: float) -> Dictionary:
 		"signal_count": finished_count[0],
 	}
 	profile.free()
-	root.queue_free()
+	simulation_root.queue_free()
 	await process_frame
 	return result

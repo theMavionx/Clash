@@ -2323,3 +2323,186 @@ Follow-up:
 - **Required verification:** Full Deploy-mode repository check before publication, followed by
   production release/service checks and a focused casualty-settlement regression against the
   deployed release without mutating live player data.
+
+### UR-2026-07-31-BUG-AND-PERFORMANCE-AUDIT
+
+- **Timestamp:** 2026-07-31 (Europe/Kyiv)
+- **Request:** "пошукай ще баги попрацюй наж оптимізацією"
+- **Scope:** Run an evidence-driven bug and performance audit across the current game client,
+  backend, and web integration; reproduce concrete issues, optimize measured hotspots, and
+  verify behavior locally. Do not commit, push, or deploy without a separate owner approval.
+- **Result:** Fixed invalid 42–44-unit TH6 profile samples, reduced dense client-only separation
+  refreshes from 15 Hz to 10 Hz, added fair incremental Hyperliquid reward polling with global
+  429 cooldown and single-flight ticks, and made Hermes job batch claims atomic with bounded
+  SQLite busy handling.
+- **Verification:** Valid non-headless 45/45 TH6 sample reached median 59.995 FPS, 3.95 ms
+  physics and 17.863 ms p95 frame time. Focused worker tests, Godot import, combat parity, and
+  the full Quick repository regression suite passed. Changes remain local and undeployed.
+
+### UR-2026-07-31-DAILY-WIN-RATE-BALANCE-AUDIT
+
+- **Timestamp:** 2026-07-31 (Europe/Kyiv)
+- **Request:** "передививсь вінрейт гравців за останній день якщо він великий розберись чому прийми якісь міри сам протестуй баланс"
+- **Scope:** Read production raid outcomes for the trailing 24 hours, validate the sample and
+  segment it by player/base/match type, identify the cause of any material win-rate excess,
+  implement a narrowly justified balance correction if needed, and verify it in local combat
+  simulations. No commit, push, deployment, or production database mutation is authorized.
+- **Owner clarification:** Do not add easy bases or weakened recovery defenses. The final
+  matchmaking catalog must remain competitive `normal`/`hard`, with strong players routed to
+  the hardest validated layouts and, only when needed, at most one Town Hall above.
+
+### UR-2026-07-31-HARPOON-AIR-PULL-DEFENSE
+
+- **Timestamp:** 2026-07-31 15:52:21 +03:00 (Europe/Kyiv)
+- **Request:** Make the harpoon defense target only nearby airborne units, deal low damage,
+  pull them closer without dragging them directly onto the tower, and use a 7-second reload.
+- **Scope:** Design first under the combat-team workflow, then implement in the test combat
+  path after owner approval of the concrete rules. Preserve production scenes and do not
+  commit, push, deploy, or change production data without separate approval.
+
+### UR-2026-07-31-HARPOON-TH6-PRODUCTION-INTEGRATION
+
+- **Timestamp:** 2026-07-31 16:08 +03:00 (Europe/Kyiv)
+- **Request:** Add the Harpoon as a Town Hall 6 defense, integrate it across Godot and server
+  code so it is ready to use, scale it consistently with other bases/buildings, optimize the
+  physics and targeting accuracy, and validate the complete launch/rope/pull animation against
+  a flying dragon in a Godot test scene while fixing discovered defects.
+- **Scope:** Full local client/server implementation and verification on the existing `main`
+  worktree after combat architecture approval. Preserve concurrent unrelated edits. No commit,
+  push, deployment, or production-data mutation is authorized by this request.
+
+### UR-2026-07-31-HARPOON-TESTMAIN-SPAWN-AND-TH-LEVELS
+
+- **Timestamp:** 2026-07-31 17:00 +03:00 (Europe/Kyiv)
+- **Request:** Fix the Harpoon model not appearing after placement in the main Godot test
+  scene and make Harpoon upgrades follow the player's Town Hall level.
+- **Evidence:** The owner supplied a placement screenshot showing only the footprint and a
+  Godot debugger screenshot repeatedly reporting `det == 0` from
+  `harpoon_defense_visual.gd::_bind_optimized_model()`.
+- **Scope:** Replace global-transform reparenting with scale-independent local-space binding,
+  add a zero-scale construction-spawn regression, verify TestMain TH6=L1 and TH7=L2, and
+  preserve the existing client/server Town Hall upgrade gates. No commit, push, deployment,
+  or production-data mutation is authorized.
+
+### UR-2026-07-31-HARPOON-SPAWN-FACING
+
+- **Timestamp:** 2026-07-31 (Europe/Kyiv)
+- **Request:** Make the spawned Harpoon point inward toward the attack/combat area instead of
+  facing away from the playable field.
+- **Evidence:** The owner supplied a TestMain screenshot with the Harpoon placed near the upper
+  edge of the base and its loaded projectile facing away from the open combat area.
+- **Scope:** Derive idle facing from the owning BuildingSystem grid center rather than a fixed
+  world yaw, preserve target-driven aiming and retract stability, verify spawn and TH7 upgrade
+  orientation within two degrees, and capture the corrected TestMain result. No commit, push,
+  deployment, or production-data mutation is authorized.
+
+### UR-2026-07-31-GODOT-WARNING-CLEANUP
+
+- **Timestamp:** 2026-07-31 (Europe/Kyiv)
+- **Request:** Fix all remaining Godot errors and warnings visible in the editor diagnostics.
+- **Evidence:** The owner supplied a diagnostics screenshot showing unused locals, integer
+  division, base-class member shadowing, enum/integer assignment, built-in function shadowing,
+  and related GDScript reload warnings.
+- **Scope:** Capture a file-and-line warning inventory, correct root causes without disabling
+  diagnostics or changing intended gameplay, and verify the editor plus representative TestMain
+  and combat flows. Preserve concurrent work. No commit, push, deployment, or production-data
+  mutation is authorized.
+
+### UR-2026-07-31-MORTAR-TOWN-HALL-PROGRESSION
+
+- **Timestamp:** 2026-07-31 (Europe/Kyiv)
+- **Request:** Make Mortar scale with the player's Town Hall because its level and combat impact
+  fall far behind the rest of the defense roster.
+- **Scope:** Replace the TH5/TH6/TH7 Mortar caps of L1/L2/L3 with L5/L6/L7, create a complete
+  seven-level HP, damage, range, reload, splash, price, trophy, UI, bot-base, and server/client
+  parity contract, then validate progression and real combat balance locally. Reuse the authored
+  L4 visual for L5-L7 until new visual variants exist. No commit, push, deployment, or production
+  database mutation is authorized.
+
+### UR-2026-07-31-HARPOON-TH8-COUNT-AND-SIGHT-OPTIMIZATION
+
+- **Timestamp:** 2026-07-31 (Europe/Kyiv)
+- **Request:** Remove the Harpoon's decorative sight for optimization, unlock exactly one
+  Harpoon at TH6, and unlock the second Harpoon at TH8 instead of during the current TH6-TH7
+  progression.
+- **Scope:** Produce a no-sight runtime model without touching the projectile, rope spool, or
+  aiming mechanics; synchronize the future-safe TH count gate on Godot and server; keep TH6
+  and TH7 at one building; update tests and design contracts; verify locally. No commit, push,
+  deployment, or production-data mutation is authorized.
+- **Result:** Runtime sight assembly removed (428 triangles, eight imported nodes and four mesh
+  instances); TH6/TH7 enforce one Harpoon and a synthetic authoritative TH8 placement accepts
+  exactly two. Full Godot combat animation, TestMain, performance and server regressions pass.
+
+### UR-2026-07-31-HARPOON-TOWN-HALL-LEVEL-PROGRESSION
+
+- **Timestamp:** 2026-07-31 (Europe/Kyiv)
+- **Request:** Replace the Harpoon's temporary two-level progression with a balanced level curve
+  that tracks Town Hall progression.
+- **Scope:** Author and synchronize Harpoon L1-L8 HP, impact damage, targeting range, pull speed,
+  upgrade prices, trophy weight, Town Hall caps, bot caps, UI payloads, and combat definitions.
+  TH6 must cap at L6, TH7 at L7, and the future TH8 gate at L8; placement count remains one at
+  TH6-TH7 and two at TH8. Preserve the validated TH6/TH7 endpoint strength, run deterministic
+  before/after balance simulations plus Godot/server progression and combat checks, and document
+  remaining TH8 launch risk. No commit, push, deployment, or production database mutation is
+  authorized.
+- **Result:** Harpoon now upgrades through L6 at TH6, L7 at TH7, and future L8 at TH8 while the
+  count remains one/one/two. L6-L7 retain the previously validated combat endpoints; L1-L5 and
+  L8 add monotonic HP/damage/range/pull progression, all authored prices fit their storage
+  ceilings, and trophy/bot/UI/server/client data are synchronized. Focused server and Godot
+  runtime checks plus the web build pass. The same-seed 1,200-battle holdout is 53.00% attacker
+  wins versus 52.58% before, with zero invalid battles. Full two-Harpoon TH8 balance is deferred
+  until TH8 is playable; full TestMain headless startup did not reach the scene harness, while
+  isolated progression, combat, animation, and performance probes passed.
+
+### UR-2026-07-31-HARPOON-PERSISTENT-FACING
+
+- **Timestamp:** 2026-07-31 (Europe/Kyiv)
+- **Request:** Fix the Harpoon facing the wrong direction in the test scene and stop it from
+  rotating back after it has already aimed elsewhere; investigate the remaining Harpoon bugs.
+- **Root cause:** Spawn logic aimed at the defended building-grid center instead of the real
+  `AttackSystem/shipPlane` troop deployment zone, the construction-facing retry could give up
+  while the building transform was still singular, and targetless tracking continuously wrote
+  a home yaw after combat.
+- **Scope:** Resolve spawn yaw from the actual deployment plane, make construction-safe facing
+  retry until the transform is valid, give combat permanent yaw ownership after the first valid
+  target, add zero-scale and heading-retention regressions, rerender the complete animation, and
+  preserve all combat/balance behavior. No commit, push, deployment, or production-data mutation
+  is authorized.
+
+### UR-2026-07-31-HARPOON-WINDUP-VERIFICATION
+
+- **Timestamp:** 2026-07-31 23:35 (Europe/Kyiv)
+- **Request:** "перевір чи є прогрів гарпуна якщо ні то додай"
+- **Scope:** Verify that Harpoon has a real pre-fire wind-up on both the Godot client and the
+  authoritative server simulation, and add focused regression coverage if the timing is not
+  already protected. No commit, push, deployment, or production-data mutation is authorized.
+- **Result:** The existing 27-tick / 0.45-second wind-up was confirmed on client and server;
+  exact lock-to-fire timing assertions were added and pass.
+
+### UR-2026-07-31-FULL-COMMIT-EXPORT-PRODUCTION-DEPLOY
+
+- **Timestamp:** 2026-07-31 23:40 (Europe/Kyiv)
+- **Request:** "зроби коміт всіх змін навіть не твоїх свіжий експорт годот запуш перевір чи
+  немає конфіліктів бо щось страшне показує зараз мільйон строчок не закомічених то щось не то
+  певно і деплой на прод перевір що все працює найновіша версія на місці і все ок"
+- **Scope:** Audit the complete dirty worktree, protect secrets and exclude generated caches,
+  generate a fresh production Godot web export, run release checks, commit all safe changes,
+  synchronize and push `main`, deploy with the repository production workflow, then verify the
+  deployed revision and critical production flows. Commit, push, and production deployment are
+  explicitly authorized for this request.
+
+### UR-2026-07-31-HARPOON-EXPORT-RUNTIME-VERIFICATION
+
+- **Timestamp:** 2026-07-31 23:46 (Europe/Kyiv)
+- **Request:** "протестуй сам гарпун що з ним не так чому не працює в ексорті виправ якщо щл"
+- **Scope:** Diagnose the Harpoon-specific Godot export failure, correct the underlying export
+  boundary or runtime issue, then exercise the real Harpoon client flow from lock and wind-up
+  through launch, impact, pull, release, and reload before production deployment.
+
+### UR-2026-07-31-HARPOON-LOCAL-BROWSER-SCREENSHOTS
+
+- **Timestamp:** 2026-07-31 23:48 (Europe/Kyiv)
+- **Request:** "і зі скрінами в браузері перевір там можна без авторизації локально заходити"
+- **Scope:** Start the local no-auth game flow against the fresh Godot export, verify the
+  Harpoon through the rendered browser UI, and retain screenshots as release evidence before
+  deploying the same revision to production.

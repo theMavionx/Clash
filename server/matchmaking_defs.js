@@ -8,11 +8,11 @@ const HIGH_TIER_LAYOUT_CATALOG = GENERATING_RAID_BOT_LAYOUTS
 const MAIN_GRID_WIDTH = 29;
 const MAIN_GRID_HEIGHT = 27;
 const COAST_GRID_WIDTH = 27;
-const BOT_BASE_GENERATION = 'raid-maxed-th5-th7-v4';
+const BOT_BASE_GENERATION = 'raid-hard-geometry-v5';
 
-// Keep the pool large enough to avoid repetitive targets. Most targets are
-// hard so upgrading a base and army matters; the normal slice remains
-// available for recovery matchmaking without dropping the player's TH tier.
+// All generated raid targets remain competitive normal/hard bases. Matchmaking
+// adapts by selecting tougher geometry or raising the target tier, never by
+// creating an intentionally weakened easy-defense catalog.
 const BOT_TEMPLATE_COUNTS_BY_TH = {
   1: { normal: 5, hard: 19 },
   2: { normal: 6, hard: 24 },
@@ -22,6 +22,15 @@ const BOT_TEMPLATE_COUNTS_BY_TH = {
   6: { normal: 60, hard: 240 },
   7: { normal: 60, hard: 240 },
 };
+
+// The deterministic balance lab and production outcomes agree that geometry
+// materially changes difficulty even when building counts and levels match.
+// Strong players get layouts that resist optimized attacks while regular and
+// recovery players continue to face competitive normal bases.
+const CHALLENGE_BOT_ARCHETYPES = Object.freeze([
+  'corner-keep',
+  'rear-keep',
+]);
 
 const MATCHMAKING_CONFIG = {
   targetSuccessRate: 0.57,
@@ -86,6 +95,7 @@ const BOT_BUILDING_SIZES = {
   mage_tower: [3, 3],
   mortar: [2, 2],
   shark_trap: [2, 2],
+  harpoon: [2, 2],
   cannon: [3, 3],
 };
 
@@ -396,7 +406,7 @@ const COMPETITIVE_BOT_MAX_LEVELS = {
     tombstone: 4,
     turret: 5,
     mage_tower: 5,
-    mortar: 1,
+    mortar: 5,
     shark_trap: 5,
   },
   6: {
@@ -409,8 +419,9 @@ const COMPETITIVE_BOT_MAX_LEVELS = {
     tombstone: 5,
     turret: 6,
     mage_tower: 6,
-    mortar: 2,
+    mortar: 6,
     shark_trap: 6,
+    harpoon: 6,
   },
   7: {
     town_hall: 7,
@@ -422,8 +433,9 @@ const COMPETITIVE_BOT_MAX_LEVELS = {
     tombstone: 6,
     turret: 7,
     mage_tower: 7,
-    mortar: 3,
+    mortar: 7,
     shark_trap: 7,
+    harpoon: 7,
     cannon: 7,
   },
 };
@@ -435,6 +447,7 @@ const COMPETITIVE_BOT_DEFENSE_TYPES = new Set([
   'mage_tower',
   'mortar',
   'shark_trap',
+  'harpoon',
   'cannon',
 ]);
 
@@ -619,11 +632,12 @@ function buildBotBaseTemplates() {
           name,
           th,
           difficulty,
+          archetype: botTemplateArchetype(th, difficulty, variant),
           variant: variant + 1,
           generation: BOT_BASE_GENERATION,
           resources: botResources(th, difficulty, id),
           trophies: th * 120 + (difficulty === 'easy' ? 0 : difficulty === 'normal' ? 40 : 90),
-          buildings: buildTemplateLayout(th, difficulty, tierNameIndex, variant),
+          buildings: buildTemplateLayout(th, difficulty, variant),
         });
         tierNameIndex += 1;
       }
@@ -633,20 +647,34 @@ function buildBotBaseTemplates() {
   return botTemplateCache;
 }
 
-function buildTemplateLayout(th, difficulty, tierLayoutIndex, variant) {
+function highTierLayoutIndex(th, difficulty, variant) {
+  const normalCount = Number(BOT_TEMPLATE_COUNTS_BY_TH[th]?.normal) || 0;
+  return difficulty === 'hard' ? normalCount + variant : variant;
+}
+
+function highTierLayoutEntry(th, difficulty, variant) {
+  const catalog = HIGH_TIER_LAYOUT_CATALOG[String(th)] || [];
+  const index = highTierLayoutIndex(th, difficulty, variant);
+  const entry = catalog[index];
+  if (!entry || !Array.isArray(entry.buildings)) {
+    throw new Error(`Missing generated TH${th} raid layout ${index + 1}/${catalog.length}`);
+  }
+  return entry;
+}
+
+function botTemplateArchetype(th, difficulty, variant) {
+  if (th < 6) return `th${th}-static`;
+  return String(highTierLayoutEntry(th, difficulty, variant).archetype || 'unknown');
+}
+
+function buildTemplateLayout(th, difficulty, variant) {
   if (th < 6) {
     const layout = repairLayout(
       BASE_LAYOUTS[th][difficulty].map((building) => transformBuilding(building, variant)),
     );
     return applyCompetitiveBotLevels(layout, th, difficulty, variant);
   }
-  const catalog = HIGH_TIER_LAYOUT_CATALOG[String(th)] || [];
-  const entry = catalog[tierLayoutIndex];
-  if (!entry || !Array.isArray(entry.buildings)) {
-    throw new Error(
-      `Missing generated TH${th} raid layout ${tierLayoutIndex + 1}/${catalog.length}`,
-    );
-  }
+  const entry = highTierLayoutEntry(th, difficulty, variant);
   const layout = entry.buildings.map(([type, gridX, gridZ]) => b(
     type,
     competitiveBotMaxLevel(th, type),
@@ -815,6 +843,7 @@ function clamp(value, min, max) {
 module.exports = {
   BOT_BASE_GENERATION,
   BOT_LOOT_REWARD_RANGE,
+  CHALLENGE_BOT_ARCHETYPES,
   MATCHMAKING_CONFIG,
   buildBotBaseTemplates,
   botResources,

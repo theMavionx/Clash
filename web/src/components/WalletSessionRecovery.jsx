@@ -39,6 +39,29 @@ function dexPicked() {
   try { return localStorage.getItem(DEX_PICKED_KEY) === '1'; } catch { return true; }
 }
 
+function isLocalGuestSession(player) {
+  if (typeof window === 'undefined') return false;
+  const host = String(window.location?.hostname || '').toLowerCase();
+  if (!['localhost', '127.0.0.1', '::1', '[::1]'].includes(host)) return false;
+
+  let guestRequested = false;
+  let guestMarker = false;
+  try {
+    const guest = new URL(window.location.href).searchParams.get('guest');
+    guestRequested = ['1', 'true', 'new'].includes(String(guest || '').toLowerCase());
+    guestMarker = !!localStorage.getItem('clash.localGuest');
+  } catch {
+    // Player identity below remains a safe local-only fallback.
+  }
+
+  const wallet = String(player?.wallet || '');
+  const name = String(player?.name || player?.player_name || '');
+  return guestRequested
+    || guestMarker
+    || wallet.startsWith('local_guest_')
+    || name.startsWith('Guest_');
+}
+
 export default function WalletSessionRecovery() {
   const { dex } = useDex();
   const player = usePlayer();
@@ -72,9 +95,11 @@ export default function WalletSessionRecovery() {
   const playerId = player?.player_id || player?.id || player?.player_name || 'player';
   const linkedWallet = player?.wallet || null;
   const repairKey = `${playerId}:${dex}`;
+  const localGuestSession = isLocalGuestSession(player);
   const needsRepair = !!sessionToken
     && !ui?.showRegister
     && dexPicked()
+    && !localGuestSession
     && !liveWallet;
 
   const openSolanaConnect = useCallback(() => {

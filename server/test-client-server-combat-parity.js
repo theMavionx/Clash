@@ -696,6 +696,14 @@ for (const eventKind of [
   'defense_fire',
   'defense_projectile_hit',
   'defense_projectile_lost_target',
+  'harpoon_lock',
+  'harpoon_lock_cancel',
+  'harpoon_fire',
+  'harpoon_projectile_lost',
+  'harpoon_impact',
+  'harpoon_pull_start',
+  'harpoon_pull_end',
+  'harpoon_release',
 ]) {
   assert.match(
     dbSource,
@@ -732,12 +740,33 @@ assertDefenseStats('scripts/tower_mortar.gd', 'mortar', {
   detect_range: 'detectRange',
   min_range: 'minRange',
   splash_radius: 'splashRadius',
-}, 4);
+}, 7);
 assertDefenseStats('scripts/cannon.gd', 'cannon', {
   damage: 'damage',
   fire_rate: 'fireRate',
   detect_range: 'detectRange',
 }, 7);
+const harpoonSource = read('scripts/tower_harpoon.gd');
+const harpoonRows = parseDictionaryRows('scripts/tower_harpoon.gd');
+assert.equal(Object.keys(harpoonRows).length, 8, 'Harpoon client must define all eight levels');
+for (let level = 1; level <= 8; level++) {
+  assert.deepEqual(
+    harpoonRows[level],
+    {
+      damage: DEFENSE_STATS.harpoon[level].damage,
+      detect_range: DEFENSE_STATS.harpoon[level].detectRange,
+      pull_speed: DEFENSE_STATS.harpoon[level].pullSpeed,
+      pull_duration_ticks: Math.round(DEFENSE_STATS.harpoon[level].pullDuration * 60),
+    },
+    `harpoon level ${level} client/server stats diverged`,
+  );
+}
+assert.equal(parseNumberConstant(harpoonSource, 'TARGET_SCAN_TICKS'), 9);
+assert.equal(parseNumberConstant(harpoonSource, 'WINDUP_TICKS'), 27);
+assert.equal(parseNumberConstant(harpoonSource, 'RELOAD_TICKS'), 420);
+assert.equal(parseNumberConstant(harpoonSource, 'IMMUNITY_TICKS'), 90);
+assert.equal(parseNumberConstant(harpoonSource, 'PROJECTILE_SPEED'), DEFENSE_STATS.harpoon[1].projSpeed);
+assert.equal(parseNumberConstant(harpoonSource, 'STOP_DISTANCE'), DEFENSE_STATS.harpoon[1].stopDistance);
 assert.deepEqual(
   {
     turretL7Damage: DEFENSE_STATS.turret[7].damage,
@@ -769,9 +798,9 @@ assert.match(
   'Cannon upgrade UI damage rows must mirror runtime combat stats',
 );
 assert.equal(
-  (buildingSystem.match(/"test_damage_levels":\s*\[95,\s*135,\s*185,\s*245\]/g) || []).length,
+  (buildingSystem.match(/"test_damage_levels":\s*\[95,\s*135,\s*185,\s*245,\s*300,\s*370,\s*460\]/g) || []).length,
   2,
-  'both Mortar metadata mirrors must expose the calibrated L3 damage',
+  'both Mortar metadata mirrors must expose all seven calibrated damage levels',
 );
 const cannonSource = read('scripts/cannon.gd');
 for (let level = 1; level <= 7; level++) {
@@ -839,6 +868,6 @@ console.log(
   + ' summon=owner_bound,capped,expiring shark_trap=levels_1_to_7'
   + ' ship_slots=knight1,archer1,mage4,pea5,mimic6,mechanical4,demon5,ice10,fire10,wind_mage15,necromancer15,horror20'
   + ' tactical_constants=freeze,rage,skeleton_barrel'
-  + ' defenses=turret7,archer7,mage7,mortar4,cannon7,guards6'
+  + ' defenses=turret7,archer7,mage7,mortar7,harpoon8,cannon7,guards6'
   + ' telemetry=chain,freeze,trap,wind_wave,summon,split progression=th7_cannon',
 );

@@ -217,15 +217,15 @@ func _bake(config: Dictionary) -> bool:
 	if packed_scene == null:
 		push_error("[STATIC_BATCH] source failed to load: %s" % source_path)
 		return false
-	var root := packed_scene.instantiate() as Node3D
-	if root == null:
+	var source_root := packed_scene.instantiate() as Node3D
+	if source_root == null:
 		push_error("[STATIC_BATCH] source failed to instantiate: %s" % source_path)
 		return false
-	get_root().add_child(root)
+	get_root().add_child(source_root)
 	if variant_level > 0:
-		_apply_archer_tower_level_visuals(root, variant_level)
+		_apply_archer_tower_level_visuals(source_root, variant_level)
 
-	var animated_roots := _collect_animated_roots(root)
+	var animated_roots := _collect_animated_roots(source_root)
 	var surface_tools: Dictionary = {}
 	var materials: Dictionary = {}
 	var source_meshes := 0
@@ -233,20 +233,20 @@ func _bake(config: Dictionary) -> bool:
 	var source_triangles := 0
 	var source_aabb := AABB()
 	var has_source_aabb := false
-	for raw_mesh in root.find_children("*", "MeshInstance3D", true, false):
+	for raw_mesh in source_root.find_children("*", "MeshInstance3D", true, false):
 		var mesh_instance := raw_mesh as MeshInstance3D
 		if (
-			not _matches_explicit_static_include(mesh_instance, include_name_parts, root)
-			and not _is_static_candidate(mesh_instance, animated_roots, root)
+			not _matches_explicit_static_include(mesh_instance, include_name_parts, source_root)
+			and not _is_static_candidate(mesh_instance, animated_roots, source_root)
 		):
 			continue
-		if not _is_effectively_visible(mesh_instance, root):
+		if not _is_effectively_visible(mesh_instance, source_root):
 			continue
 		var mesh := mesh_instance.mesh
 		if mesh == null:
 			continue
 		source_meshes += 1
-		var local_transform := root.global_transform.affine_inverse() * mesh_instance.global_transform
+		var local_transform := source_root.global_transform.affine_inverse() * mesh_instance.global_transform
 		var transformed_aabb: AABB = local_transform * mesh.get_aabb()
 		if has_source_aabb:
 			source_aabb = source_aabb.merge(transformed_aabb)
@@ -259,11 +259,13 @@ func _bake(config: Dictionary) -> bool:
 			var material := mesh_instance.get_surface_override_material(surface_index)
 			if material == null:
 				material = mesh.surface_get_material(surface_index)
-			var material_key: Variant = (
-				"vertex_color_flat"
-				if vertex_color_batch
-				else (0 if material == null else material.get_instance_id())
-			)
+			var material_key: Variant
+			if vertex_color_batch:
+				material_key = "vertex_color_flat"
+			elif material == null:
+				material_key = 0
+			else:
+				material_key = material.get_instance_id()
 			var surface_tool := surface_tools.get(material_key) as SurfaceTool
 			if surface_tool == null:
 				surface_tool = SurfaceTool.new()
@@ -285,7 +287,7 @@ func _bake(config: Dictionary) -> bool:
 						"[STATIC_BATCH] vertex-color append failed source=%s surface=%d"
 						% [source_path, surface_index]
 					)
-					root.queue_free()
+					source_root.queue_free()
 					return false
 			else:
 				surface_tool.append_from(mesh, surface_index, local_transform)
@@ -305,7 +307,7 @@ func _bake(config: Dictionary) -> bool:
 		surface_tool.commit(batch_mesh)
 	if batch_mesh.get_surface_count() == 0:
 		push_error("[STATIC_BATCH] no surfaces generated for %s" % source_path)
-		root.queue_free()
+		source_root.queue_free()
 		return false
 	var batch_aabb := batch_mesh.get_aabb()
 	var batch_triangles := _count_triangles(batch_mesh)
@@ -314,10 +316,10 @@ func _bake(config: Dictionary) -> bool:
 			"[STATIC_BATCH] triangle mismatch source=%s source_triangles=%d batch_triangles=%d"
 			% [source_path, source_triangles, batch_triangles]
 		)
-		root.queue_free()
+		source_root.queue_free()
 		return false
 	var save_error := ResourceSaver.save(batch_mesh, output_path)
-	root.queue_free()
+	source_root.queue_free()
 	if save_error != OK:
 		push_error("[STATIC_BATCH] failed to save %s: %s" % [output_path, error_string(save_error)])
 		return false
@@ -420,9 +422,9 @@ func _count_triangles(mesh: ArrayMesh) -> int:
 	return triangles
 
 
-func _collect_animated_roots(root: Node) -> Array[Node]:
+func _collect_animated_roots(scene_root: Node) -> Array[Node]:
 	var result: Array[Node] = []
-	for raw_player in root.find_children("*", "AnimationPlayer", true, false):
+	for raw_player in scene_root.find_children("*", "AnimationPlayer", true, false):
 		var player := raw_player as AnimationPlayer
 		if player == null:
 			continue
@@ -484,12 +486,12 @@ func _has_skeleton_ancestor(node: Node) -> bool:
 	return false
 
 
-func _is_effectively_visible(node: Node3D, root: Node) -> bool:
+func _is_effectively_visible(node: Node3D, scene_root: Node) -> bool:
 	var current: Node = node
 	while current != null:
 		if current is Node3D and not (current as Node3D).visible:
 			return false
-		if current == root:
+		if current == scene_root:
 			break
 		current = current.get_parent()
 	return true
@@ -502,13 +504,13 @@ func _apply_archer_tower_level_visuals(model: Node, level: int) -> void:
 	_set_archer_tower_extra_visible(model, show_target, ["RootNode.001", "Cylinder.003"], ["White", "Celing"])
 
 
-func _set_archer_tower_extra_visible(root: Node, is_visible: bool, node_names: Array[String], material_markers: Array[String]) -> void:
-	if root is Node3D:
-		var node_3d := root as Node3D
-		if node_names.has(str(root.name)) or _mesh_uses_material_marker(root, material_markers):
-			node_3d.visible = is_visible
-	for child in root.get_children():
-		_set_archer_tower_extra_visible(child, is_visible, node_names, material_markers)
+func _set_archer_tower_extra_visible(scene_root: Node, should_be_visible: bool, node_names: Array[String], material_markers: Array[String]) -> void:
+	if scene_root is Node3D:
+		var node_3d := scene_root as Node3D
+		if node_names.has(str(scene_root.name)) or _mesh_uses_material_marker(scene_root, material_markers):
+			node_3d.visible = should_be_visible
+	for child in scene_root.get_children():
+		_set_archer_tower_extra_visible(child, should_be_visible, node_names, material_markers)
 
 
 func _mesh_uses_material_marker(node: Node, markers: Array[String]) -> bool:

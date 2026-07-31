@@ -22,6 +22,46 @@ export const RISEX_SIDE = Object.freeze({ LONG: 0, SHORT: 1 });
 export const RISEX_ORDER_TYPE = Object.freeze({ MARKET: 0, LIMIT: 1 });
 export const RISEX_TIF = Object.freeze({ GTC: 0, GTT: 1, FOK: 2, IOC: 3 });
 export const RISEX_STP = Object.freeze({ EXPIRE_MAKER: 0, EXPIRE_TAKER: 1, EXPIRE_BOTH: 2 });
+export const RISEX_TPSL_STOP_TYPE = Object.freeze({ TAKE_PROFIT: 'TAKE_PROFIT', STOP_LOSS: 'STOP_LOSS' });
+export const RISEX_TPSL_PRICE_OPTION = Object.freeze({ LAST_TRADED_PRICE: 'LAST_TRADED_PRICE', MARK_PRICE: 'MARK_PRICE' });
+export const RISEX_TPSL_MAX_BUDGET = (1n << 96n) - 1n;
+export const RISEX_TPSL_ALLOWANCE_TTL_SECONDS = 365 * 24 * 60 * 60;
+
+export const PERMIT_SINGLE_TYPES = {
+  PermitSingle: [
+    { name: 'account', type: 'address' },
+    { name: 'operator', type: 'address' },
+    { name: 'budget', type: 'uint96' },
+    { name: 'allowanceExpiry', type: 'uint32' },
+    { name: 'nonceAnchor', type: 'uint48' },
+    { name: 'nonceBitmap', type: 'uint8' },
+  ],
+};
+
+export const PLACE_TPSL_ORDER_TYPES = {
+  PlaceTpslOrder: [
+    { name: 'account', type: 'address' },
+    { name: 'marketId', type: 'uint64' },
+    { name: 'side', type: 'uint8' },
+    { name: 'size', type: 'string' },
+    { name: 'stopType', type: 'uint8' },
+    { name: 'stopPrice', type: 'string' },
+    { name: 'limitPrice', type: 'string' },
+    { name: 'orderType', type: 'uint8' },
+    { name: 'stopPriceOption', type: 'uint8' },
+    { name: 'tif', type: 'uint8' },
+    { name: 'deadline', type: 'uint32' },
+    { name: 'sizePercentBps', type: 'uint32' },
+  ],
+};
+
+export const CANCEL_TPSL_ORDER_TYPES = {
+  CancelTpslOrder: [
+    { name: 'account', type: 'address' },
+    { name: 'orderId', type: 'string' },
+    { name: 'deadline', type: 'uint32' },
+  ],
+};
 
 export const REGISTER_SIGNER_TYPES = {
   RegisterSigner: [
@@ -388,6 +428,195 @@ function hexSignatureToBase64(signature) {
   const BufferCtor = globalThis.Buffer;
   if (BufferCtor?.from) return BufferCtor.from(bytes).toString('base64');
   throw new Error('Base64 encoder is not available');
+}
+
+function nextRisexNonceFields(nonceState) {
+  let nonceAnchor = Number(nonceState?.nonce_anchor || 0);
+  let nonceBitmap = Number(
+    nonceState?.current_bitmap_index
+    ?? nonceState?.nonce_bitmap_index
+    ?? 0,
+  );
+  if (!Number.isInteger(nonceAnchor) || nonceAnchor < 0 || nonceAnchor > 0xffffffffffff) {
+    throw new Error('RISEx nonce anchor is invalid');
+  }
+  if (!Number.isInteger(nonceBitmap) || nonceBitmap < 0) {
+    throw new Error('RISEx nonce bitmap index is invalid');
+  }
+  if (nonceBitmap > MAX_BITMAP_INDEX) {
+    nonceAnchor += 1;
+    nonceBitmap = 0;
+  }
+  return { nonceAnchor, nonceBitmap };
+}
+
+function canonicalPositiveDecimal(value, label) {
+  const raw = String(value ?? '').trim();
+  const n = Number(raw);
+  if (!raw || !Number.isFinite(n) || n <= 0) throw new Error(`${label} must be positive`);
+  const expanded = /e/iu.test(raw) ? n.toFixed(18) : raw;
+  const canonical = expanded
+    .replace(/^\+/u, '')
+    .replace(/^(\d+)\.(\d*?)0+$/u, '$1.$2')
+    .replace(/\.$/u, '');
+  if (!/^\d+(?:\.\d+)?$/u.test(canonical) || Number(canonical) <= 0) {
+    throw new Error(`${label} must be a decimal string`);
+  }
+  return canonical;
+}
+
+function risexTpslSide(value) {
+  const side = String(value ?? '').trim().toLowerCase();
+  return side === 'ask' || side === 'sell' || side === 'short' || side === '1'
+    ? RISEX_SIDE.SHORT
+    : RISEX_SIDE.LONG;
+}
+
+function risexTpslEnumValues(params) {
+  const stopType = String(params.stop_type || '').toUpperCase();
+  const orderType = String(params.order_type || 'MARKET').toUpperCase();
+  const stopPriceOption = String(params.stop_price_option || 'MARK_PRICE').toUpperCase();
+  const tif = String(params.tif || (orderType === 'LIMIT' ? 'GTC' : 'FOK')).toUpperCase();
+  const stopTypeValue = stopType === RISEX_TPSL_STOP_TYPE.STOP_LOSS ? 1 : 0;
+  const orderTypeValue = orderType === 'LIMIT' ? 1 : 0;
+  const priceOptionValue = stopPriceOption === RISEX_TPSL_PRICE_OPTION.MARK_PRICE ? 1 : 0;
+  const tifValue = RISEX_TIF[tif];
+  if (![RISEX_TPSL_STOP_TYPE.TAKE_PROFIT, RISEX_TPSL_STOP_TYPE.STOP_LOSS].includes(stopType)) {
+    throw new Error('RISEx TP/SL stop type is invalid');
+  }
+  if (!['MARKET', 'LIMIT'].includes(orderType)) throw new Error('RISEx TP/SL order type is invalid');
+  if (!Object.values(RISEX_TPSL_PRICE_OPTION).includes(stopPriceOption)) {
+    throw new Error('RISEx TP/SL price option is invalid');
+  }
+  if (!Number.isInteger(tifValue)) throw new Error('RISEx TP/SL time in force is invalid');
+  return {
+    stopType,
+    stopTypeValue,
+    orderType,
+    orderTypeValue,
+    stopPriceOption,
+    priceOptionValue,
+    tif,
+    tifValue,
+  };
+}
+
+export async function createRisexPermitSinglePayload({
+  account,
+  operator,
+  domain,
+  nonceState,
+  provider,
+  walletClient,
+}) {
+  if (!isRisexAddress(account) || !isRisexAddress(operator)) {
+    throw new Error('RISEx allowance account or operator is invalid');
+  }
+  const { nonceAnchor, nonceBitmap } = nextRisexNonceFields(nonceState);
+  const allowanceExpiry = Math.floor(Date.now() / 1000) + RISEX_TPSL_ALLOWANCE_TTL_SECONDS;
+  const message = {
+    account,
+    operator,
+    budget: RISEX_TPSL_MAX_BUDGET,
+    allowanceExpiry,
+    nonceAnchor,
+    nonceBitmap,
+  };
+  const signature = fixSignatureV(await signTypedDataCompat({
+    provider,
+    walletClient,
+    account,
+    domain: risexDomain(domain),
+    types: PERMIT_SINGLE_TYPES,
+    primaryType: 'PermitSingle',
+    message,
+  }));
+  return {
+    account,
+    operator,
+    budget: RISEX_TPSL_MAX_BUDGET.toString(),
+    allowance_expiry: allowanceExpiry,
+    nonce_anchor: String(nonceAnchor),
+    nonce_bitmap_index: nonceBitmap,
+    signature,
+  };
+}
+
+export async function createRisexTpslOrderPayload({ account, signer, domain, params }) {
+  if (!isRisexAddress(account) || !signer?.account || !isRisexAddress(signer.address)) {
+    throw new Error('RISEx TP/SL signer is unavailable');
+  }
+  const marketId = Number(params?.market_id);
+  if (!Number.isInteger(marketId) || marketId <= 0) throw new Error('RISEx TP/SL market is invalid');
+  const size = canonicalPositiveDecimal(params?.size, 'RISEx TP/SL size');
+  const stopPrice = canonicalPositiveDecimal(params?.stop_price, 'RISEx TP/SL stop price');
+  const sizePercentBps = Number(params?.size_percent_bps ?? 10_000);
+  if (!Number.isInteger(sizePercentBps) || sizePercentBps < 0 || sizePercentBps > 10_000) {
+    throw new Error('RISEx TP/SL size percent is invalid');
+  }
+  const side = risexTpslSide(params?.side);
+  const values = risexTpslEnumValues(params || {});
+  const limitPrice = values.orderType === 'LIMIT'
+    ? canonicalPositiveDecimal(params?.limit_price, 'RISEx TP/SL limit price')
+    : '0';
+  const deadline = Math.floor(Date.now() / 1000) + RISEX_PERMIT_TTL_SECONDS;
+  const rawSignature = fixSignatureV(await signer.account.signTypedData({
+    domain: risexDomain(domain),
+    types: PLACE_TPSL_ORDER_TYPES,
+    primaryType: 'PlaceTpslOrder',
+    message: {
+      account,
+      marketId: BigInt(marketId),
+      side,
+      size,
+      stopType: values.stopTypeValue,
+      stopPrice,
+      limitPrice,
+      orderType: values.orderTypeValue,
+      stopPriceOption: values.priceOptionValue,
+      tif: values.tifValue,
+      deadline,
+      sizePercentBps,
+    },
+  }));
+  return {
+    account,
+    market_id: marketId,
+    side,
+    size,
+    stop_type: values.stopType,
+    order_type: values.orderType,
+    stop_price: stopPrice,
+    limit_price: limitPrice,
+    stop_price_option: values.stopPriceOption,
+    tif: values.tif,
+    signer: signer.address,
+    signature: hexSignatureToBase64(rawSignature),
+    deadline,
+    size_percent_bps: sizePercentBps,
+  };
+}
+
+export async function createRisexCancelTpslPayload({ account, signer, domain, orderId }) {
+  const cleanOrderId = String(orderId || '').trim();
+  if (!isRisexAddress(account) || !signer?.account || !isRisexAddress(signer.address)) {
+    throw new Error('RISEx TP/SL signer is unavailable');
+  }
+  if (!cleanOrderId) throw new Error('RISEx TP/SL order id is missing');
+  const deadline = Math.floor(Date.now() / 1000) + RISEX_PERMIT_TTL_SECONDS;
+  const rawSignature = fixSignatureV(await signer.account.signTypedData({
+    domain: risexDomain(domain),
+    types: CANCEL_TPSL_ORDER_TYPES,
+    primaryType: 'CancelTpslOrder',
+    message: { account, orderId: cleanOrderId, deadline },
+  }));
+  return {
+    account,
+    order_id: cleanOrderId,
+    signer: signer.address,
+    signature: hexSignatureToBase64(rawSignature),
+    deadline,
+  };
 }
 
 export async function createRisexRegisterPayload({

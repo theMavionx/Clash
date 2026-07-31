@@ -6,6 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const {
   BOT_LOOT_REWARD_RANGE,
+  CHALLENGE_BOT_ARCHETYPES,
   MATCHMAKING_CONFIG,
   buildBotBaseTemplates,
   botResources,
@@ -28,33 +29,33 @@ const BUILDING_SIZES = {
   town_hall: [4, 4], mine: [3, 3], barn: [4, 3], port: [4, 3],
   sawmill: [3, 3], turret: [2, 2], tombstone: [3, 3], storage: [4, 5],
   archer_tower: [3, 3], mage_tower: [3, 3], mortar: [2, 2],
-  shark_trap: [2, 2], cannon: [3, 3],
+  shark_trap: [2, 2], harpoon: [2, 2], cannon: [3, 3],
 };
 const MAX_LEVEL = {
   town_hall: 7, mine: 7, barn: 7, port: 3, sawmill: 7, turret: 7,
   tombstone: 6, storage: 7, archer_tower: 7, mage_tower: 7,
-  mortar: 3, shark_trap: 7, cannon: 7,
+  mortar: 7, shark_trap: 7, harpoon: 8, cannon: 7,
 };
 const COMPETITIVE_BOT_MAX_LEVELS = {
   5: {
     town_hall: 5, mine: 5, sawmill: 5, barn: 5, storage: 5,
     archer_tower: 5, tombstone: 4, turret: 5, mage_tower: 5,
-    mortar: 1, shark_trap: 5,
+    mortar: 5, shark_trap: 5,
   },
   6: {
     town_hall: 6, mine: 6, sawmill: 6, barn: 6, storage: 6,
     archer_tower: 6, tombstone: 5, turret: 6, mage_tower: 6,
-    mortar: 2, shark_trap: 6,
+    mortar: 6, shark_trap: 6, harpoon: 6,
   },
   7: {
     town_hall: 7, mine: 7, sawmill: 7, barn: 7, storage: 7,
     archer_tower: 7, tombstone: 6, turret: 7, mage_tower: 7,
-    mortar: 3, shark_trap: 7, cannon: 7,
+    mortar: 7, shark_trap: 7, harpoon: 7, cannon: 7,
   },
 };
 const COMPETITIVE_BOT_DEFENSE_TYPES = new Set([
   'archer_tower', 'tombstone', 'turret', 'mage_tower',
-  'mortar', 'shark_trap', 'cannon',
+  'mortar', 'shark_trap', 'harpoon', 'cannon',
 ]);
 const REQUIRED_PLAYER_LIKE_NAMES = [
   'ghost', 'www', 'egorble', 'papajshon', 'nick', 'volumer', 'luckier',
@@ -106,11 +107,22 @@ const templates = buildBotBaseTemplates();
 const byTh = {};
 const byBucket = {};
 for (const template of templates) {
+  assert.ok(
+    template.difficulty === 'normal' || template.difficulty === 'hard',
+    `${template.id} must not expose an easy raid target`,
+  );
   byTh[template.th] = (byTh[template.th] || 0) + 1;
   const bucket = `${template.th}:${template.difficulty}`;
   byBucket[bucket] = (byBucket[bucket] || 0) + 1;
   assert.equal(template.buildings.filter((building) => building.type === 'town_hall').length, 1);
   assert.equal(template.buildings.find((building) => building.type === 'town_hall').level, template.th);
+  if (template.th >= 6) {
+    assert.equal(
+      template.buildings.filter((building) => building.type === 'harpoon').length,
+      1,
+      `${template.id} must contain exactly one Harpoon`,
+    );
+  }
   for (const amount of Object.values(template.resources)) {
     const reward = expectedBotLoot(
       amount,
@@ -163,7 +175,7 @@ for (const resource of ['gold', 'wood', 'ore']) {
 
 const sampledBotRewards = [];
 for (let index = 0; index < 4000; index += 1) {
-  const difficulty = ['easy', 'normal', 'hard'][index % 3];
+  const difficulty = ['normal', 'hard'][index % 2];
   const resources = botResources(
     (index % 7) + 1,
     difficulty,
@@ -362,7 +374,7 @@ try {
   assert.equal(
     th5Match.matchmaking.bot_candidate_count,
     150,
-    'TH5 attacker should use the dedicated 150-target TH5 bot pool',
+    'TH5 attacker should use the complete dedicated TH5 bot pool',
   );
   assert.equal(
     th5Match.matchmaking.selection_reason,
@@ -374,16 +386,116 @@ try {
     0,
     'trivial victories must not consume the competitive performance window',
   );
-  assert.equal(
-    th5Match.matchmaking.target_bot_difficulty,
-    'normal',
-    'a lightly loaded TH5 attacker should use the small normal recovery slice',
+  assert.ok(
+    th5Match.matchmaking.target_bot_difficulty === 'normal'
+      || th5Match.matchmaking.target_bot_difficulty === 'hard',
+    'a regular TH5 army must receive a competitive normal/hard target, never an easy target',
   );
   gameDb.db.prepare(`
     UPDATE players
     SET shield_until = datetime('now', '+1 day')
     WHERE id = ?
   `).run(th5FinderId);
+
+  const overleveledTh5Id = 'raid-pool-overleveled-th5-fixture';
+  gameDb.db.prepare(`
+    INSERT INTO players (id, name, token, gold, wood, ore, trophies, level)
+    VALUES (?, ?, ?, 100000, 2000, 2000, 0, 5)
+  `).run(overleveledTh5Id, 'OverlevelTh5', 'overlevel-th5-token');
+  gameDb.db.prepare(`
+    INSERT INTO buildings (player_id, type, level, grid_x, grid_z, grid_index, hp, max_hp)
+    VALUES (?, 'town_hall', 5, 11, 11, 0, 36000, 36000)
+  `).run(overleveledTh5Id);
+  const packedOverleveledArmy = [
+    'DemonKing:base:balance-fixture:Repic',
+    ...Array.from({ length: 4 }, () => '_SLOT_FILLER_'),
+  ];
+  for (let dragon = 0; dragon < 4; dragon += 1) {
+    packedOverleveledArmy.push(
+      `FireDragon:base:balance-fixture-${dragon}:Repic`,
+      ...Array.from({ length: 9 }, () => '_SLOT_FILLER_'),
+    );
+  }
+  gameDb.db.prepare(`
+    INSERT INTO player_ships (player_id, level, troops, troop_template, slot_cost_version)
+    VALUES (?, 5, ?, ?, ?)
+  `).run(
+    overleveledTh5Id,
+    JSON.stringify(packedOverleveledArmy),
+    JSON.stringify(packedOverleveledArmy),
+    gameDb.TROOP_SLOT_COST_VERSION,
+  );
+  gameDb.db.prepare(`
+    INSERT INTO troop_levels (player_id, troop_type, level)
+    VALUES (?, 'demon_king', 7), (?, 'fire_dragon', 7)
+  `).run(overleveledTh5Id, overleveledTh5Id);
+  for (let win = 0; win < 5; win += 1) {
+    gameDb.db.prepare(`
+      INSERT INTO raid_matchmaking (
+        battle_session_id, attacker_id, defender_id, result, base_power_ratio
+      ) VALUES (?, ?, ?, 'victory', 0.90)
+    `).run(`overlevel-th5-win-${win}`, overleveledTh5Id, `overlevel-th5-target-${win}`);
+  }
+  const overleveledTh5Match = gameDb.findEnemy(overleveledTh5Id);
+  assert.equal(overleveledTh5Match.is_bot, 1, overleveledTh5Match.error);
+  assert.equal(overleveledTh5Match.matchmaking.selection_reason, 'strong_player');
+  assert.equal(
+    overleveledTh5Match.matchmaking.attack_highest_troop_level,
+    5,
+    'matchmaking power must use the TH5 troop-level cap even for legacy level rows',
+  );
+  assert.equal(
+    overleveledTh5Match.town_hall_level,
+    6,
+    'a proven strong TH5 army above the same-tier hard band should move up only one bot tier',
+  );
+  assert.equal(overleveledTh5Match.matchmaking.target_bot_difficulty, 'hard');
+  assert.ok(
+    CHALLENGE_BOT_ARCHETYPES.includes(overleveledTh5Match.matchmaking.target_bot_archetype),
+    `unexpected overlevel challenge archetype ${overleveledTh5Match.matchmaking.target_bot_archetype}`,
+  );
+  gameDb.db.prepare(`
+    UPDATE players SET shield_until = datetime('now', '+1 day') WHERE id = ?
+  `).run(overleveledTh5Id);
+
+  const strongTh2Id = 'raid-pool-strong-th2-fixture';
+  gameDb.db.prepare(`
+    INSERT INTO players (id, name, token, gold, wood, ore, trophies, level)
+    VALUES (?, ?, ?, 100000, 2000, 2000, 0, 2)
+  `).run(strongTh2Id, 'StrongTh2', 'strong-th2-token');
+  gameDb.db.prepare(`
+    INSERT INTO buildings (player_id, type, level, grid_x, grid_z, grid_index, hp, max_hp)
+    VALUES (?, 'town_hall', 2, 11, 11, 0, 8000, 8000)
+  `).run(strongTh2Id);
+  const strongTh2Army = Array.from({ length: 12 }, () => 'knight');
+  gameDb.db.prepare(`
+    INSERT INTO player_ships (player_id, level, troops, troop_template, slot_cost_version)
+    VALUES (?, 2, ?, ?, ?)
+  `).run(
+    strongTh2Id,
+    JSON.stringify(strongTh2Army),
+    JSON.stringify(strongTh2Army),
+    gameDb.TROOP_SLOT_COST_VERSION,
+  );
+  gameDb.db.prepare(`
+    INSERT INTO troop_levels (player_id, troop_type, level)
+    VALUES (?, 'knight', 2)
+  `).run(strongTh2Id);
+  for (let win = 0; win < 5; win += 1) {
+    gameDb.db.prepare(`
+      INSERT INTO raid_matchmaking (
+        battle_session_id, attacker_id, defender_id, result, base_power_ratio
+      ) VALUES (?, ?, ?, 'victory', 0.90)
+    `).run(`strong-th2-win-${win}`, strongTh2Id, `strong-th2-target-${win}`);
+  }
+  const strongTh2Match = gameDb.findEnemy(strongTh2Id);
+  assert.equal(strongTh2Match.matchmaking.selection_reason, 'strong_player');
+  assert.equal(
+    strongTh2Match.is_bot,
+    1,
+    'strong early-game players should enter the controlled hard bot pool even when live targets are plentiful',
+  );
+  assert.equal(strongTh2Match.matchmaking.target_bot_difficulty, 'hard');
 
   const th7FinderId = 'raid-pool-th7-main-ship-fixture';
   gameDb.db.prepare(`
@@ -443,6 +555,30 @@ try {
       `TH7 bot selection attempt ${attempt + 1} fell back to TH${repeatedMatch.town_hall_level}`,
     );
   }
+  for (let win = 0; win < 5; win += 1) {
+    gameDb.db.prepare(`
+      INSERT INTO raid_matchmaking (
+        battle_session_id, attacker_id, defender_id, result, base_power_ratio
+      ) VALUES (?, ?, ?, 'victory', 0.90)
+    `).run(`th7-strong-win-${win}`, th7FinderId, `th7-strong-target-${win}`);
+  }
+  const strongTh7Match = gameDb.findEnemy(th7FinderId);
+  assert.equal(strongTh7Match.is_bot, 1, strongTh7Match.error);
+  assert.equal(strongTh7Match.matchmaking.selection_reason, 'strong_player');
+  assert.equal(strongTh7Match.matchmaking.target_bot_difficulty, 'hard');
+  assert.ok(
+    CHALLENGE_BOT_ARCHETYPES.includes(strongTh7Match.matchmaking.target_bot_archetype),
+    `unexpected TH7 challenge archetype ${strongTh7Match.matchmaking.target_bot_archetype}`,
+  );
+  assert.equal(
+    strongTh7Match.matchmaking.bot_candidate_count,
+    templates.filter((template) => (
+      template.th === 7
+      && template.difficulty === 'hard'
+      && CHALLENGE_BOT_ARCHETYPES.includes(template.archetype)
+    )).length,
+    'strong TH7 matchmaking should exclude empirically weak hard layouts',
+  );
   const insertCompetitiveLoss = gameDb.db.prepare(`
     INSERT INTO raid_matchmaking (
       battle_session_id, attacker_id, defender_id, result, base_power_ratio
@@ -458,15 +594,16 @@ try {
   const recoveryTh7Match = gameDb.findEnemy(th7FinderId);
   assert.equal(recoveryTh7Match.is_bot, 1, recoveryTh7Match.error);
   assert.equal(recoveryTh7Match.matchmaking.selection_reason, 'recovery_strong');
+  assert.equal(recoveryTh7Match.matchmaking.target_bot_difficulty, 'normal');
   assert.equal(
     recoveryTh7Match.town_hall_level,
     7,
-    'TH7 recovery matchmaking must lower bot difficulty without lowering Town Hall',
+    'TH7 recovery matchmaking must stay in the competitive normal pool at the same Town Hall',
   );
   assert.equal(
     recoveryTh7Match.matchmaking.bot_candidate_count,
     60,
-    'TH7 recovery matchmaking should use the normal TH7 templates',
+    'TH7 recovery should use the complete competitive normal pool, never an easy pool',
   );
 
   const packedTh7Knights = Array.from({ length: 45 }, () => 'knight');
@@ -609,7 +746,7 @@ try {
   assert.equal(gameDb.getTrophies(defeatAttackerId), 89, 'TH4 attack defeat should subtract 11 trophies');
   assert.equal(gameDb.getTrophies(defeatDefenderId), 122, 'TH4 successful defense should award 22 trophies');
 
-  console.log(`[raid-bot-pool] PASS total=${templates.length} th2=30 th3=30 th4=25 th5=150 th6=300 th7=300 resources=varied main_ship=true victory=12 defeat=-11 defense=22 materialized=true rerolled=true`);
+  console.log(`[raid-bot-pool] PASS total=${templates.length} th2=30 th3=30 th4=25 th5=150 th6=300 th7=300 resources=varied main_ship=true adaptive=true victory=12 defeat=-11 defense=22 materialized=true rerolled=true`);
 } finally {
   gameDb.db.close();
   for (const suffix of ['', '-wal', '-shm']) fs.rmSync(`${dbPath}${suffix}`, { force: true });

@@ -27,7 +27,7 @@ Town Hall 7 extends every established, upgradeable building line by one level an
 | Turret | 7 | 12,000 | 315 damage, 0.21 s interval, 1.62 range |
 | Archer Tower | 7 | 10,200 | 288 damage, 0.32 s interval, 2.30 range |
 | Mage Tower | 7 | 8,300 | 52–281 damage/tick, 0.10 s tick, 1.8 s ramp, 2.08 range |
-| Mortar | 3 | 3,200 | Existing L3 profile: 185 splash damage, 2.10 s interval, 0.80–1.767 range |
+| Mortar | 7 | 8,100 | 460 splash damage, 1.70 s interval, 0.78–2.40 range, 0.52 splash radius |
 | Tombstone | 6 | 4,700 | Six L6 guards; 1,148 HP and 131 damage per guard |
 | Shark Trap | 7 | 1 | 2,900 trigger damage |
 | Cannon | 7 | 9,000 | 675 damage, 0.75 s interval, 2.00 range |
@@ -107,7 +107,7 @@ The barrel should feel heavy: a small anticipation stretch, sharp backward kick,
 ## 6. Acceptance criteria
 
 - TH6 can upgrade to TH7 only after its existing required building families are ready and can pay 70k/100k/92k from legal TH6 capacity.
-- Client and server both cap main lines and Cannon at L7, Mortar at L3, Tombstone at L6, Port at L3, and Altar at L1 for TH7.
+- Client and server both cap main lines, Mortar, and Cannon at L7, Tombstone at L6, Port at L3, and Altar at L1 for TH7.
 - A third Cannon and any Cannon before TH7 are rejected server-side.
 - A newly built Cannon can be upgraded sequentially from L1 through L7 without another Town Hall upgrade, and every step uses its authored model, HP, combat stats, and explicit price.
 - Against a stationary ground target at 1.4 units, the base transform remains constant, the barrel yaws, the muzzle flash and projectile appear, one L7 hit removes 675 HP before ward bonus, the projectile disappears cleanly without a post-hit effect, and the next shot observes the 0.75 s cadence.

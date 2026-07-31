@@ -3815,6 +3815,26 @@ function risexUintString(value, label, max) {
   return text;
 }
 
+function risexDecimalString(value, label, { allowZero = false } = {}) {
+  const text = String(value ?? '').trim();
+  if (!/^\d+(?:\.\d+)?$/u.test(text)) throw new Error(`${label} must be a decimal string`);
+  const number = Number(text);
+  if (!Number.isFinite(number) || (allowZero ? number < 0 : number <= 0)) {
+    throw new Error(`${label} must be ${allowZero ? 'non-negative' : 'positive'}`);
+  }
+  return text;
+}
+
+function canonicalRisexTpslSignature(value) {
+  const signature = String(value || '').trim();
+  let bytes = null;
+  try { bytes = Buffer.from(signature, 'base64'); } catch { bytes = null; }
+  if (!signature || bytes?.length !== 65 || bytes.toString('base64') !== signature) {
+    throw new Error('RISEx TP/SL signature must be a 65-byte base64 signature');
+  }
+  return signature;
+}
+
 router.get('/risex/system-config', auth, async (req, res) => {
   try {
     if (req.dex !== 'risex') return res.status(409).json({ error: `Account is registered for '${req.dex}'. Switch DEX to risex.` });
@@ -3899,6 +3919,59 @@ router.get('/risex/session-key-status', auth, async (req, res) => {
   } catch (e) {
     console.warn('[risex] session-key-status failed:', e.message);
     res.status(502).json({ error: 'Failed to verify RISEx signer', detail: e.message });
+  }
+});
+
+router.get('/risex/tpsl/allowance-status', auth, async (req, res) => {
+  try {
+    const verified = requireRisexOwner(req, res);
+    if (!verified) return;
+    res.json(await risex.getAllowanceStatus(verified.account));
+  } catch (e) {
+    console.warn('[risex] TP/SL allowance status failed:', e.message);
+    res.status(502).json({ error: 'Failed to verify RISEx TP/SL allowance', detail: e.message });
+  }
+});
+
+router.post('/risex/tpsl/allowance/approve', auth, async (req, res) => {
+  try {
+    const verified = requireRisexOwner(req, res);
+    if (!verified) return;
+    const existing = await risex.getAllowanceStatus(verified.account).catch(() => null);
+    const existingExpiry = Number(existing?.allowance_expiry || 0);
+    if (String(existing?.status || '').toLowerCase() === 'active' && existingExpiry > Math.floor(Date.now() / 1000)) {
+      return res.json({ ok: true, already_active: true, ...existing });
+    }
+    const config = await risex.getSystemConfig();
+    const operator = risex.normalizeAddress(config?.addresses?.operator_hub);
+    if (!operator) throw new Error('RISEx system config is missing OperatorHub');
+    if (risex.normalizeAddress(req.body?.operator) !== operator) {
+      return res.status(400).json({ error: 'RISEx TP/SL allowance operator does not match OperatorHub' });
+    }
+    const budget = risexUintString(req.body?.budget, 'budget', (1n << 96n) - 1n);
+    if (BigInt(budget) !== (1n << 96n) - 1n) {
+      return res.status(400).json({ error: 'RISEx TP/SL allowance must use the official uint96 maximum budget' });
+    }
+    const allowanceExpiry = risexUint(req.body?.allowance_expiry, 'allowance_expiry', 0xffffffff, { allowZero: false });
+    if (allowanceExpiry <= Math.floor(Date.now() / 1000)) {
+      return res.status(400).json({ error: 'RISEx TP/SL allowance expiry must be in the future' });
+    }
+    const signature = String(req.body?.signature || '').trim();
+    if (!/^0x[0-9a-fA-F]{130}$/u.test(signature)) {
+      return res.status(400).json({ error: 'RISEx TP/SL allowance signature must be a 65-byte hex signature' });
+    }
+    res.json(await risex.approveSingle({
+      account: verified.account,
+      operator,
+      budget,
+      allowance_expiry: allowanceExpiry,
+      nonce_anchor: risexUintString(req.body?.nonce_anchor, 'nonce_anchor', 0xffffffffffffn),
+      nonce_bitmap_index: risexUint(req.body?.nonce_bitmap_index, 'nonce_bitmap_index', 207),
+      signature,
+    }));
+  } catch (e) {
+    console.warn('[risex] TP/SL allowance approval failed:', e.message);
+    res.status(400).json({ error: e.message || 'Failed to approve RISEx TP/SL allowance' });
   }
 });
 
@@ -4118,6 +4191,69 @@ router.post('/risex/orders/cancel', auth, async (req, res) => {
   } catch (e) {
     console.warn('[risex] cancel order failed:', e.message);
     res.status(400).json({ error: e.message || 'Failed to cancel RISEx order' });
+  }
+});
+
+router.post('/risex/orders/tpsl', auth, async (req, res) => {
+  try {
+    const verified = requireRisexOwner(req, res);
+    if (!verified) return;
+    const stopType = String(req.body?.stop_type || '').toUpperCase();
+    const orderType = String(req.body?.order_type || '').toUpperCase();
+    const stopPriceOption = String(req.body?.stop_price_option || '').toUpperCase();
+    const tif = String(req.body?.tif || '').toUpperCase();
+    if (!['TAKE_PROFIT', 'STOP_LOSS'].includes(stopType)) throw new Error('RISEx TP/SL stop_type is invalid');
+    if (!['MARKET', 'LIMIT'].includes(orderType)) throw new Error('RISEx TP/SL order_type is invalid');
+    if (!['LAST_TRADED_PRICE', 'MARK_PRICE'].includes(stopPriceOption)) throw new Error('RISEx TP/SL stop_price_option is invalid');
+    if (!['GTC', 'GTT', 'FOK', 'IOC'].includes(tif)) throw new Error('RISEx TP/SL tif is invalid');
+    const deadline = risexUint(req.body?.deadline, 'deadline', 0xffffffff, { allowZero: false });
+    if (deadline <= Math.floor(Date.now() / 1000) - 30) throw new Error('RISEx TP/SL signature deadline has expired');
+    const limitPrice = risexDecimalString(req.body?.limit_price, 'limit_price', { allowZero: true });
+    if (orderType === 'LIMIT' && Number(limitPrice) <= 0) throw new Error('RISEx limit TP/SL needs a positive limit_price');
+    const signer = risex.normalizeAddress(req.body?.signer);
+    if (!signer) throw new Error('RISEx TP/SL signer is invalid');
+    res.json(await risex.placeTpslOrder({
+      account: verified.account,
+      market_id: risexUint(req.body?.market_id, 'market_id', Number.MAX_SAFE_INTEGER, { allowZero: false }),
+      side: risexUint(req.body?.side, 'side', 1),
+      size: risexDecimalString(req.body?.size, 'size'),
+      stop_type: stopType,
+      order_type: orderType,
+      stop_price: risexDecimalString(req.body?.stop_price, 'stop_price'),
+      limit_price: limitPrice,
+      stop_price_option: stopPriceOption,
+      tif,
+      signer,
+      signature: canonicalRisexTpslSignature(req.body?.signature),
+      deadline,
+      size_percent_bps: risexUint(req.body?.size_percent_bps, 'size_percent_bps', 10_000),
+    }));
+  } catch (e) {
+    console.warn('[risex] place TP/SL order failed:', e.message);
+    res.status(400).json({ error: e.message || 'Failed to place RISEx TP/SL order' });
+  }
+});
+
+router.post('/risex/orders/tpsl/cancel', auth, async (req, res) => {
+  try {
+    const verified = requireRisexOwner(req, res);
+    if (!verified) return;
+    const orderId = String(req.body?.order_id || '').trim();
+    if (!orderId || orderId.length > 256) throw new Error('RISEx TP/SL order_id is invalid');
+    const deadline = risexUint(req.body?.deadline, 'deadline', 0xffffffff, { allowZero: false });
+    if (deadline <= Math.floor(Date.now() / 1000) - 30) throw new Error('RISEx TP/SL cancel signature deadline has expired');
+    const signer = risex.normalizeAddress(req.body?.signer);
+    if (!signer) throw new Error('RISEx TP/SL signer is invalid');
+    res.json(await risex.cancelTpslOrder({
+      account: verified.account,
+      order_id: orderId,
+      signer,
+      signature: canonicalRisexTpslSignature(req.body?.signature),
+      deadline,
+    }));
+  } catch (e) {
+    console.warn('[risex] cancel TP/SL order failed:', e.message);
+    res.status(400).json({ error: e.message || 'Failed to cancel RISEx TP/SL order' });
   }
 });
 

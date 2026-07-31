@@ -193,8 +193,8 @@ func _fit_portrait(source: Image) -> Image:
 	)
 	output.fill(Color.TRANSPARENT)
 	var destination := Vector2i(
-		(OUTPUT_SIZE.x - fitted_size.x) / 2,
-		(OUTPUT_SIZE.y - fitted_size.y) / 2
+		floori(float(OUTPUT_SIZE.x - fitted_size.x) / 2.0),
+		floori(float(OUTPUT_SIZE.y - fitted_size.y) / 2.0)
 	)
 	output.blit_rect(
 		cropped,

@@ -179,7 +179,7 @@ func _build_triangle_arrays(
 		if source_size == 0:
 			result[array_slot] = source_values
 			continue
-		var values_per_vertex: int = source_size / vertices.size()
+		var values_per_vertex: int = floori(float(source_size) / float(vertices.size()))
 		var output_values: Variant = source_values.duplicate()
 		output_values.resize(0)
 		for triangle_index in triangle_indices:

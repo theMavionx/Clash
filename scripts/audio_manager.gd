@@ -54,12 +54,21 @@ var _ambient_tween: Tween
 var _music_enabled: bool = true
 var _sound_enabled: bool = true
 var _sfx_token: int = 0
+var _headless_audio_disabled: bool = false
 
 
 func _ready() -> void:
 	WebLoadLogger.report("autoload_audio_ready_start")
 	randomize()
 	process_mode = Node.PROCESS_MODE_ALWAYS
+	# Headless verification has no audible output, while starting an MP3
+	# playback object keeps the stream alive until the audio thread shuts down.
+	# Avoid creating native players there so test processes exit without false
+	# ObjectDB/resource-leak diagnostics.
+	_headless_audio_disabled = DisplayServer.get_name() == "headless"
+	if _headless_audio_disabled:
+		WebLoadLogger.report("autoload_audio_ready_done")
+		return
 	_apply_master_mute()
 	for i in range(2):
 		var music_player := AudioStreamPlayer.new()
@@ -106,7 +115,7 @@ func _exit_tree() -> void:
 
 
 func play_loading() -> void:
-	if not _music_enabled:
+	if _headless_audio_disabled or not _music_enabled:
 		return
 	if OS.has_feature("web"):
 		_current_state = "loading"
@@ -118,7 +127,7 @@ func play_loading() -> void:
 
 
 func play_base() -> void:
-	if not _music_enabled:
+	if _headless_audio_disabled or not _music_enabled:
 		return
 	if OS.has_feature("web"):
 		_set_current_music_state("base", BASE_TRACK, true)
@@ -130,7 +139,7 @@ func play_base() -> void:
 
 
 func play_pre_attack() -> void:
-	if not _music_enabled:
+	if _headless_audio_disabled or not _music_enabled:
 		return
 	if OS.has_feature("web"):
 		_set_current_music_state("pre_attack", PRE_ATTACK_TRACK, true)
@@ -142,7 +151,7 @@ func play_pre_attack() -> void:
 
 
 func play_fight() -> void:
-	if not _music_enabled:
+	if _headless_audio_disabled or not _music_enabled:
 		return
 	if _current_state == "fight":
 		return
@@ -162,7 +171,7 @@ func play_fight() -> void:
 
 
 func play_result() -> void:
-	if not _music_enabled:
+	if _headless_audio_disabled or not _music_enabled:
 		return
 	if OS.has_feature("web"):
 		_set_current_music_state("result", RESULT_TRACK, false)
@@ -336,7 +345,7 @@ func _stop_base_ambient() -> void:
 
 
 func _play_sfx(path: String, volume_db: float = SFX_VOLUME_DB, from_position: float = 0.0) -> AudioStreamPlayer:
-	if not _sound_enabled:
+	if _headless_audio_disabled or not _sound_enabled:
 		return null
 	var stream: AudioStream = load(path) as AudioStream
 	if stream == null:
@@ -415,7 +424,7 @@ func _wake_music_after_user_gesture() -> void:
 
 
 func _restart_current_music() -> void:
-	if _current_track_path == "":
+	if _headless_audio_disabled or _current_track_path == "":
 		return
 	if OS.has_feature("web"):
 		match _current_state:

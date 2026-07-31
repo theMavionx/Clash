@@ -269,8 +269,10 @@ function runNow(playerId, jobId) {
   return { ok: true, job: getJob(playerId, jobId) };
 }
 
-function claimDueJobs(workerId, limit = 5) {
-  const now = nowSql();
+// Claiming is one atomic write. The old per-row autocommit loop could claim
+// the first job, hit SQLITE_BUSY on a later row, and strand the first job under
+// a ten-minute lease even though the worker never received it.
+const claimDueJobsTransaction = db.db.transaction((workerId, limit, now) => {
   const rows = db.db.prepare(`
     SELECT *
     FROM hermes_jobs
@@ -296,6 +298,14 @@ function claimDueJobs(workerId, limit = 5) {
     if (info.changes) claimed.push(publicJob({ ...row, locked_by: workerId }));
   }
   return claimed;
+});
+
+function claimDueJobs(workerId, limit = 5) {
+  return claimDueJobsTransaction(
+    workerId,
+    Math.max(1, Math.min(20, Math.floor(Number(limit) || 5))),
+    nowSql(),
+  );
 }
 
 function expireOldJobs() {

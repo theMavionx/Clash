@@ -1022,6 +1022,38 @@ async function cancelOrder(body) {
   return apiRequest('/v1/orders/cancel', { method: 'POST', body });
 }
 
+async function getAllowanceStatus(account) {
+  const clean = normalizeAddress(account);
+  if (!clean) throw new Error('account query param required (0x...)');
+  return apiRequest(`/v1/auth/allowance-status?account=${encodeURIComponent(clean)}`);
+}
+
+async function approveSingle(body) {
+  return apiRequest('/v1/auth/approve-single', { method: 'POST', body });
+}
+
+async function getTpslOrders(account, opts = {}) {
+  const clean = normalizeAddress(account);
+  if (!clean) throw new Error('account query param required (0x...)');
+  const params = new URLSearchParams({
+    account: clean,
+    status: String(opts.status || 'ACCEPTED').toUpperCase(),
+    page: String(Math.max(1, Number(opts.page) || 1)),
+    limit: String(Math.max(1, Math.min(100, Number(opts.limit) || 100))),
+  });
+  if (opts.marketId != null) params.set('market_id', String(Number(opts.marketId)));
+  if (opts.stopType) params.set('stop_type', String(opts.stopType).toUpperCase());
+  return apiRequest(`/v1/orders/tpsl?${params.toString()}`);
+}
+
+async function placeTpslOrder(body) {
+  return apiRequest('/v1/orders/tpsl', { method: 'POST', body });
+}
+
+async function cancelTpslOrder(body) {
+  return apiRequest('/v1/orders/tpsl/cancel', { method: 'POST', body });
+}
+
 async function getBridgeDepositAddress({ account, sourceChainId = 42161, destChainId = RISEX_RISE_CHAIN_ID } = {}) {
   const clean = normalizeAddress(account);
   if (!clean) throw new Error('account required (0x...)');
@@ -1347,14 +1379,48 @@ function normalizeOrder(o, byMarket) {
   };
 }
 
+function normalizeTpslOrder(o, byMarket) {
+  const marketId = Number(o?.market_id ?? o?.marketId ?? o?.market);
+  const market = byMarket.get(marketId);
+  const symbol = symbolOf(o?.symbol || o?.market_symbol || market?.symbol);
+  const stopPrice = fixed18(o?.stop_price ?? o?.stopPrice ?? o?.trigger_price ?? o?.triggerPrice);
+  const stopType = String(o?.stop_type ?? o?.stopType ?? '').toUpperCase();
+  if (!symbol || !(stopPrice > 0) || !['TAKE_PROFIT', 'STOP_LOSS'].includes(stopType)) return null;
+  const amount = Math.abs(fixed18(o?.size ?? o?.quantity));
+  return {
+    symbol,
+    side: sideFromValue(o?.side),
+    amount: String(amount),
+    initial_amount: String(amount),
+    price: String(stopPrice),
+    stop_price: String(stopPrice),
+    trigger_price: String(stopPrice),
+    order_id: o?.order_id ?? o?.id,
+    resting_order_id: null,
+    order_type: stopType,
+    stop_type: stopType,
+    tif: o?.tif ?? null,
+    reduce_only: true,
+    is_tpsl: true,
+    pair_index: marketId,
+    trade_index: null,
+    status: o?.status ?? null,
+    _risex_tpsl: true,
+    _raw: o,
+  };
+}
+
 async function getOrdersByAddress(address) {
   const clean = normalizeAddress(address);
   if (!clean) throw new Error('address query param required (0x...)');
-  const [payload, byMarket] = await Promise.all([
+  const [payload, tpslPayload, byMarket] = await Promise.all([
     apiRequest(`/v1/orders/open?account=${clean}`).catch(() => ({ orders: [] })),
+    getTpslOrders(clean, { status: 'ACCEPTED' }).catch(() => ({ orders: [] })),
     marketMap(),
   ]);
-  return rows(payload, ['orders']).map(o => normalizeOrder(o, byMarket)).filter(Boolean);
+  const regular = rows(payload, ['orders']).map(o => normalizeOrder(o, byMarket)).filter(Boolean);
+  const tpsl = rows(tpslPayload, ['orders']).map(o => normalizeTpslOrder(o, byMarket)).filter(Boolean);
+  return [...regular, ...tpsl];
 }
 
 async function getAccountTradeHistory(address, { marketId, limit = RISEX_FILL_LOOKBACK_LIMIT } = {}) {
@@ -1577,6 +1643,11 @@ module.exports = {
   acceptTerms,
   placeOrder,
   cancelOrder,
+  getAllowanceStatus,
+  approveSingle,
+  getTpslOrders,
+  placeTpslOrder,
+  cancelTpslOrder,
   getBridgeDepositAddress,
   getBridgeSourceUsdcBalance,
   processBridgeDeposit,
@@ -1588,6 +1659,7 @@ module.exports = {
   normalizeBalance,
   getAccountByAddress,
   getPositionsByAddress,
+  normalizeTpslOrder,
   getOrdersByAddress,
   getAccountTradeHistory,
   fillTime,

@@ -111,7 +111,7 @@ func _run_necromancer_probe() -> void:
 				"[WARMUP_PROBE] skeleton appearance animation was not exercised: expected=%s actual=%s"
 				% [
 					expected_animation,
-					player.current_animation if player != null else "missing",
+					str(player.current_animation) if player != null else "missing",
 				]
 			)
 			quit(1)

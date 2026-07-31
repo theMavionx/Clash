@@ -1326,7 +1326,7 @@ func _base_troop_spawn_pos(stop_pos: Vector3) -> Vector3:
 
 ## Deploys the troops loaded on this fleet ship.
 ## Each troop is spawned by name from TROOP_DEFS, staggered by troop_spawn_delay.
-func _deploy_troops_from_ship(ship_pos: Vector3, sail_dir: Vector3, ship_idx: int) -> void:
+func _deploy_troops_from_ship(ship_pos: Vector3, _sail_dir: Vector3, ship_idx: int) -> void:
 	if ship_idx >= _fleet.size():
 		return
 	var ship_data: Dictionary = _fleet[ship_idx]

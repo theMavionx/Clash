@@ -13,6 +13,7 @@ export const RISEX_API_BASE = String(import.meta.env.VITE_RISEX_API_URL || '').t
 export const RISEX_ROUTER_ADDRESS = '0xaadde0cea454f2bcb26f46ed54c5709b7bb34a7e';
 export const RISEX_AUTH_ADDRESS = '0x0d919daa3f12ae715744eb648c00066c5dbd66f0';
 export const RISEX_USDC_ADDRESS = '0xe436820ba0c69702c1d3e601d421c0ef38262739';
+export const RISEX_COLLATERAL_MANAGER_ADDRESS = '0x2c03c7d7e2974c6599b6b108879109281ef3f818';
 export const RISEX_FEE_MANAGER_ADDRESS = '0x11541dc387b9C307043ea732127DF92b80bab52b';
 export const RISEX_BUILDER_FEE_RECIPIENT = '0x39B36f1EDF2eF5a6f2e02991b3a85Fb356eB5005';
 // RISEx uses hundredths of a basis point: 100 = 1 bps = 0.01%.
@@ -79,6 +80,37 @@ export const RISEX_FEE_MANAGER_ABI = [
     stateMutability: 'nonpayable',
     inputs: [{ name: 'feeRecipient', type: 'address' }],
     outputs: [{ name: 'builderId', type: 'uint16' }],
+  },
+];
+
+export const RISEX_COLLATERAL_MANAGER_ABI = [
+  {
+    type: 'function',
+    name: 'withdraw',
+    stateMutability: 'nonpayable',
+    inputs: [
+      { name: 'to', type: 'address' },
+      { name: 'token', type: 'address' },
+      { name: 'amount', type: 'uint256' },
+    ],
+    outputs: [],
+  },
+  {
+    type: 'function',
+    name: 'getPendingWithdrawal',
+    stateMutability: 'view',
+    inputs: [
+      { name: 'account', type: 'address' },
+      { name: 'token', type: 'address' },
+    ],
+    outputs: [{
+      name: '',
+      type: 'tuple',
+      components: [
+        { name: 'amount', type: 'uint128' },
+        { name: 'requestedAt', type: 'uint64' },
+      ],
+    }],
   },
 ];
 

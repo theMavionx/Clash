@@ -89,7 +89,7 @@ func _run_probe() -> void:
 
 	if not _verify_stage_animations(root_horror, 0):
 		return
-	if not await _verify_bite_contact(root_horror, 0):
+	if not _verify_bite_contact(root_horror, 0):
 		return
 	if not await _capture_generation("root_1", [root_horror]):
 		return
@@ -104,7 +104,7 @@ func _run_probe() -> void:
 		return
 	if not await _capture_generation("medium_2", medium_generation):
 		return
-	if not await _verify_bite_contact(medium_generation[0], 1):
+	if not _verify_bite_contact(medium_generation[0], 1):
 		return
 
 	for medium in medium_generation:
@@ -118,7 +118,7 @@ func _run_probe() -> void:
 		return
 	if not await _capture_generation("small_4", small_generation):
 		return
-	if not await _verify_bite_contact(small_generation[0], 2):
+	if not _verify_bite_contact(small_generation[0], 2):
 		return
 
 	var split_event_count := _building_system.telemetry.filter(

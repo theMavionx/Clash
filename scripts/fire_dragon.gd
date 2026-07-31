@@ -971,7 +971,7 @@ func _find_animation_player(node: Node) -> AnimationPlayer:
 	return null
 
 
-func _loop_mode_for(animation_name: String) -> int:
+func _loop_mode_for(animation_name: String) -> Animation.LoopMode:
 	var lower_name: String = animation_name.to_lower()
 	if lower_name.findn("idle") != -1 \
 			or lower_name.findn("run") != -1 \

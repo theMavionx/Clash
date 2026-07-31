@@ -5,6 +5,7 @@ import { createServer } from 'vite';
 import {
   encodeAbiParameters,
   keccak256,
+  recoverTypedDataAddress,
   stringToHex,
 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
@@ -118,6 +119,101 @@ try {
   assert.equal(permit.nonce_bitmap_index, 7);
   assert.equal(typeof permit.deadline, 'number');
   assert.equal('nonce_bitmap' in permit, false);
+
+  const single = await risex.createRisexPermitSinglePayload({
+    account: owner.address,
+    operator: '0xf665aba90b6ac7515d50b12fcb4f350136726734',
+    domain,
+    nonceState: { nonce_anchor: '8', current_bitmap_index: 7 },
+    walletClient,
+  });
+  assert.equal(single.budget, ((1n << 96n) - 1n).toString());
+  assert.equal(single.nonce_anchor, '8');
+  assert.equal(single.nonce_bitmap_index, 7);
+  assert.equal(
+    (await recoverTypedDataAddress({
+      domain: risex.risexDomain(domain),
+      types: risex.PERMIT_SINGLE_TYPES,
+      primaryType: 'PermitSingle',
+      message: {
+        account: owner.address,
+        operator: single.operator,
+        budget: BigInt(single.budget),
+        allowanceExpiry: single.allowance_expiry,
+        nonceAnchor: 8,
+        nonceBitmap: 7,
+      },
+      signature: single.signature,
+    })).toLowerCase(),
+    owner.address.toLowerCase(),
+  );
+
+  const tpsl = await risex.createRisexTpslOrderPayload({
+    account: owner.address,
+    signer,
+    domain,
+    params: {
+      market_id: 1,
+      side: 'ask',
+      size: '0.0149',
+      stop_type: 'TAKE_PROFIT',
+      order_type: 'MARKET',
+      stop_price: '64828',
+      limit_price: '0',
+      stop_price_option: 'MARK_PRICE',
+      tif: 'FOK',
+      size_percent_bps: 10_000,
+    },
+  });
+  assert.equal(tpsl.side, 1);
+  assert.equal(tpsl.stop_type, 'TAKE_PROFIT');
+  assert.equal(tpsl.signature.length, 88);
+  const tpslSignature = `0x${Buffer.from(tpsl.signature, 'base64').toString('hex')}`;
+  assert.equal(
+    (await recoverTypedDataAddress({
+      domain: risex.risexDomain(domain),
+      types: risex.PLACE_TPSL_ORDER_TYPES,
+      primaryType: 'PlaceTpslOrder',
+      message: {
+        account: owner.address,
+        marketId: 1n,
+        side: 1,
+        size: '0.0149',
+        stopType: 0,
+        stopPrice: '64828',
+        limitPrice: '0',
+        orderType: 0,
+        stopPriceOption: 1,
+        tif: 2,
+        deadline: tpsl.deadline,
+        sizePercentBps: 10_000,
+      },
+      signature: tpslSignature,
+    })).toLowerCase(),
+    signer.address.toLowerCase(),
+  );
+
+  const cancelTpsl = await risex.createRisexCancelTpslPayload({
+    account: owner.address,
+    signer,
+    domain,
+    orderId: 'test-tpsl-order-id',
+  });
+  const cancelTpslSignature = `0x${Buffer.from(cancelTpsl.signature, 'base64').toString('hex')}`;
+  assert.equal(
+    (await recoverTypedDataAddress({
+      domain: risex.risexDomain(domain),
+      types: risex.CANCEL_TPSL_ORDER_TYPES,
+      primaryType: 'CancelTpslOrder',
+      message: {
+        account: owner.address,
+        orderId: cancelTpsl.order_id,
+        deadline: cancelTpsl.deadline,
+      },
+      signature: cancelTpslSignature,
+    })).toLowerCase(),
+    signer.address.toLowerCase(),
+  );
 
   console.log('RISEx signing compatibility tests passed');
 } finally {

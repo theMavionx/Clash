@@ -187,7 +187,13 @@ func _discover_visual_nodes() -> void:
 	if _base != null:
 		var barrel_name := str(_base.name).trim_suffix("Base")
 		_barrel = _find_node_by_name(_base, barrel_name)
-	_muzzle = _find_node_by_name(self, "CannonMuzzle") as Marker3D
+	# During a level swap the previous model can remain queued for deletion
+	# until the end of the frame. Searching from `self` could then pair the new
+	# barrel with the old model's muzzle. Constrain the lookup to the selected
+	# barrel so all three visual nodes always belong to one authored hierarchy.
+	_muzzle = null
+	if _barrel != null:
+		_muzzle = _find_node_by_name(_barrel, "CannonMuzzle") as Marker3D
 	if _base == null or _barrel == null or _muzzle == null:
 		if not _missing_nodes_warned:
 			_missing_nodes_warned = true

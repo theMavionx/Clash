@@ -8,7 +8,16 @@ const WORKER_ID = `${os.hostname()}:${process.pid}:${Date.now()}`;
 const POLL_MS = Math.max(5_000, Math.min(300_000, Number(process.env.CLASH_HERMES_JOBS_POLL_MS || 30_000)));
 const BATCH_SIZE = Math.max(1, Math.min(20, Number(process.env.CLASH_HERMES_JOBS_BATCH_SIZE || 3)));
 const RUN_TIMEOUT_MS = Math.max(60_000, Math.min(600_000, Number(process.env.CLASH_HERMES_JOBS_RUN_TIMEOUT_MS || 240_000)));
+const DB_BUSY_TIMEOUT_RAW = Number(process.env.CLASH_HERMES_JOBS_DB_BUSY_TIMEOUT_MS || 15_000);
+const DB_BUSY_TIMEOUT_MS = Number.isFinite(DB_BUSY_TIMEOUT_RAW)
+  ? Math.max(1_000, Math.min(30_000, DB_BUSY_TIMEOUT_RAW))
+  : 15_000;
+const DB_BUSY_RETRY_DELAYS_MS = [100, 300, 900];
 const JOBS_ENABLED = process.env.CLASH_HERMES_JOBS_ENABLED !== '0' && db.AI_MCP_AGENT_ACCESS_ENABLED;
+
+// The job runner is a separate process writing the same WAL database as the
+// API. Let SQLite wait for short writers instead of failing immediately.
+db.db.pragma(`busy_timeout = ${Math.floor(DB_BUSY_TIMEOUT_MS)}`);
 
 function preview(value, max = 1000) {
   return String(value || '').replace(/\s+/g, ' ').trim().slice(0, max);
@@ -111,6 +120,31 @@ async function runWithTimeout(promise, timeoutMs) {
     ]);
   } finally {
     if (timer) clearTimeout(timer);
+  }
+}
+
+function isSqliteBusy(error) {
+  return error?.code === 'SQLITE_BUSY'
+    || /database is (?:locked|busy)/i.test(String(error?.message || error || ''));
+}
+
+async function withSqliteBusyRetry(operation, options = {}) {
+  const delays = Array.isArray(options.delays) ? options.delays : DB_BUSY_RETRY_DELAYS_MS;
+  const wait = options.sleep || ((ms) => new Promise(resolve => setTimeout(resolve, ms)));
+  const warn = options.warn || ((payload) => console.warn(JSON.stringify(payload)));
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      if (!isSqliteBusy(error) || attempt >= delays.length) throw error;
+      const retryDelayMs = Math.max(0, Number(delays[attempt]) || 0);
+      warn({
+        event: 'hermes_jobs_db_busy_retry',
+        attempt: attempt + 1,
+        retry_delay_ms: retryDelayMs,
+      });
+      if (retryDelayMs > 0) await wait(retryDelayMs);
+    }
   }
 }
 
@@ -262,8 +296,10 @@ let stopping = false;
 
 async function tick() {
   if (!JOBS_ENABLED || stopping) return;
-  hermesJobs.expireOldJobs();
-  const jobs = hermesJobs.claimDueJobs(WORKER_ID, BATCH_SIZE);
+  const jobs = await withSqliteBusyRetry(() => {
+    hermesJobs.expireOldJobs();
+    return hermesJobs.claimDueJobs(WORKER_ID, BATCH_SIZE);
+  });
   for (const job of jobs) {
     if (stopping) break;
     await executeJob(job);
@@ -295,4 +331,6 @@ if (require.main === module) {
 module.exports = {
   executeJob,
   tick,
+  isSqliteBusy,
+  withSqliteBusyRetry,
 };

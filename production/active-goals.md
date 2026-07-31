@@ -111,6 +111,26 @@ Next checkpoint:
   roles, NFT rarity lifts stay at 0.83-1.33 percentage points, and exhaustive
   counter-search leaves 0/600 unbeaten bases with zero invalid replays. See
   `production/reports/all-unit-role-utility-balance-check-2026-07-29.md`.
+- Owner-approved Harpoon progression checkpoint completed on 2026-07-31: keep
+  exactly one Harpoon at TH6 and TH7, reserve the second-building unlock for
+  TH8, and remove the non-functional authored sight assembly from the runtime
+  model. Client/server placement, Godot animation, TestMain and performance
+  regressions pass. TH8 combat balance remains a launch gate because the
+  playable Town Hall progression currently ends at TH7.
+- Harpoon full-level progression rebalance completed on 2026-07-31: the
+  temporary L1/L2 cap is now a complete L1-L8 curve with Town Hall caps TH6=L6,
+  TH7=L7, and future TH8=L8. Playable endpoint strength is preserved, authored
+  prices are monotonic and storage-safe, bot caps and trophy weights are synced,
+  and client/server combat parity passes. The same-seed 1,200-battle holdout
+  moved attacker win rate only +0.42 percentage points to 53.00% with zero
+  invalid battles. Two-L8-Harpoon TH8 balance remains a launch gate. The focused
+  Godot progression/combat/animation/performance probes pass; full TestMain did
+  not enter its scene harness after startup warmup in a 10-minute headless run.
+- Harpoon facing follow-up completed on 2026-07-31: spawn yaw now resolves the
+  actual `AttackSystem/shipPlane` troop deployment zone and survives the
+  zero-scale construction tween. Once a real air target owns yaw, target loss,
+  retract, reload, ready, and upgrade paths retain the last combat heading;
+  targetless simulation no longer rotates the upper assembly back home.
 - Remaining follow-up: decide whether economy max-out should target roughly 4, 8,
   or 12+ weeks; current live server pacing is about 102 days to full TH4 max before
   raid income.
@@ -242,8 +262,8 @@ Acceptance criteria:
   Mage Tower must be implemented before it can be leveled.
 - Mortar can be built/unlocked at TH5 and works in actual combat, not only as a
   static model.
-- TH5 unlocks exactly one Mortar and caps it at level 1 until a later approved
-  progression pass adds higher Mortar levels.
+- TH5 unlocks exactly one Mortar and allows it to reach L5; TH6 adds the second
+  Mortar and raises the cap to L6; TH7 raises both to L7.
 - TH5 increases Mine, Sawmill, and Storage count limits by one each.
 - Mortar is testable locally through the normal local playtest/admin flow.
 - Mortar and TH5 values are included in the balance pass before production deploy.
@@ -267,6 +287,15 @@ Latest local checkpoint:
   while the Mortar is selected.
 - Godot CLI was not available from PATH, so live editor verification still needs
   a manual local playtest.
+
+Owner-approved progression follow-up (2026-07-31):
+
+- The later progression pass is now approved: Mortar caps at L5/L6/L7 for
+  TH5/TH6/TH7 respectively, matching the Town Hall tier instead of lagging at
+  L1/L2/L3.
+- The seven-level server/client stat curve, authored upgrade costs, bot-base
+  caps, UI stat presentation, and local verification supersede the older L1-L3
+  checkpoint above.
 
 ## G-006 Dango Realtime Exchange Integration
 

@@ -102,7 +102,87 @@ assert.equal(worker.sideFromFill({ dir: '', side: 'B' }), 'long');
   assert.equal(proof.verification_mode, 'legacy_builder_fee_and_approval');
   assert.equal(proof.fill.tid, officialFill.tid);
 
-  console.log('hyperliquid rewards attribution tests passed');
+  const pollRows = [
+    { id: 'player-a', wallet: '0x1111111111111111111111111111111111111111' },
+    { id: 'player-b', wallet: '0x2222222222222222222222222222222222222222' },
+    { id: 'player-c', wallet: '0x3333333333333333333333333333333333333333' },
+  ];
+  const fakeMainDb = {
+    prepare(sql) {
+      assert.match(sql, /ORDER BY p\.id ASC/);
+      return { all: () => pollRows };
+    },
+  };
+  const pollState = worker.createPollState();
+  const polled = [];
+  const lookbacks = [];
+  const importPlayerFills = async (playerId, _wallet, options) => {
+    polled.push(playerId);
+    lookbacks.push({ playerId, lookbackMs: options.lookbackMs });
+    return { imported: 1 };
+  };
+  const firstBatch = await worker.pollOnce(fakeMainDb, {
+    state: pollState,
+    maxWalletsPerTick: 2,
+    requestSpacingMs: 0,
+    importPlayerFills,
+  });
+  assert.equal(firstBatch, 2);
+  assert.deepEqual(polled, ['player-a', 'player-b']);
+  assert.equal(pollState.cursor, 2);
+
+  const secondBatch = await worker.pollOnce(fakeMainDb, {
+    state: pollState,
+    maxWalletsPerTick: 2,
+    requestSpacingMs: 0,
+    importPlayerFills,
+  });
+  assert.equal(secondBatch, 2);
+  assert.deepEqual(polled, ['player-a', 'player-b', 'player-c', 'player-a']);
+  assert.equal(pollState.cursor, 1);
+  assert(
+    lookbacks[3].lookbackMs < lookbacks[0].lookbackMs,
+    'repeat wallet polls must use an incremental overlap instead of re-fetching seven days',
+  );
+  assert(lookbacks[3].lookbackMs >= 5 * 60 * 1000);
+
+  let fakeNow = 1_000;
+  const limitedState = worker.createPollState();
+  let limitedCalls = 0;
+  const oldWarn = console.warn;
+  console.warn = () => {};
+  try {
+    await worker.pollOnce(fakeMainDb, {
+      state: limitedState,
+      nowMs: () => fakeNow,
+      maxWalletsPerTick: 3,
+      requestSpacingMs: 0,
+      importPlayerFills: async () => {
+        limitedCalls += 1;
+        throw new Error('Hyperliquid info 429: Too many requests');
+      },
+    });
+    assert.equal(limitedCalls, 1, 'a 429 must stop the batch instead of hammering the remaining wallets');
+    assert.equal(limitedState.cursor, 0, 'the rate-limited wallet must be retried after cooldown');
+    assert(limitedState.cooldownUntil > fakeNow);
+
+    fakeNow += 1_000;
+    await worker.pollOnce(fakeMainDb, {
+      state: limitedState,
+      nowMs: () => fakeNow,
+      maxWalletsPerTick: 3,
+      requestSpacingMs: 0,
+      importPlayerFills: async () => {
+        limitedCalls += 1;
+        return { imported: 0 };
+      },
+    });
+    assert.equal(limitedCalls, 1, 'polling must stay silent during the global 429 cooldown');
+  } finally {
+    console.warn = oldWarn;
+  }
+
+  console.log('hyperliquid rewards attribution, batching, and rate-limit tests passed');
 })().finally(() => {
   try { db.db.close(); } catch {}
   fs.rmSync(tempDir, { recursive: true, force: true });

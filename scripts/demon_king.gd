@@ -408,7 +408,7 @@ static func _add_canonical_aliases(lib: AnimationLibrary) -> void:
 ## Decide loop mode by clip name. Cyclic motion AND post-battle cheering loop
 ## linearly; single-trigger combat anims are one-shot so they don't replay
 ## while we wait for the next attack_timer cycle.
-static func _loop_mode_for(clip_name: String) -> int:
+static func _loop_mode_for(clip_name: String) -> Animation.LoopMode:
 	var lower: String = clip_name.to_lower()
 	if lower.findn("run") != -1 \
 		or lower.findn("walk") != -1 \

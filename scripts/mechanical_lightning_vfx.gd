@@ -111,7 +111,7 @@ func _build_paths(
 	side = side.normalized()
 	var lift: Vector3 = side.cross(forward).normalized()
 	var amplitude: float = clampf(length * 0.065, 0.018, 0.062)
-	var seed: float = float(jump_index * 37 + variant_index * 71 + 11)
+	var noise_phase: float = float(jump_index * 37 + variant_index * 71 + 11)
 
 	var main_path := PackedVector3Array()
 	for point_index in range(MAIN_SEGMENTS + 1):
@@ -120,10 +120,10 @@ func _build_paths(
 		if point_index > 0 and point_index < MAIN_SEGMENTS:
 			var envelope: float = sin(t * PI)
 			var lateral: float = (
-				sin(seed + float(point_index) * 2.31)
-				+ sin(seed * 0.37 + float(point_index) * 5.17) * 0.42
+				sin(noise_phase + float(point_index) * 2.31)
+				+ sin(noise_phase * 0.37 + float(point_index) * 5.17) * 0.42
 			)
-			var vertical: float = cos(seed * 0.61 + float(point_index) * 3.73)
+			var vertical: float = cos(noise_phase * 0.61 + float(point_index) * 3.73)
 			point += side * lateral * amplitude * envelope
 			point += lift * vertical * amplitude * 0.56 * envelope
 		main_path.append(point)
@@ -149,10 +149,10 @@ func _build_paths(
 			if branch_point_index > 0 and branch_point_index < BRANCH_SEGMENTS:
 				var branch_envelope: float = sin(branch_t * PI)
 				branch_point += side * sin(
-					seed + float(branch_index * 19 + branch_point_index * 13)
+					noise_phase + float(branch_index * 19 + branch_point_index * 13)
 				) * amplitude * 0.42 * branch_envelope
 				branch_point += lift * cos(
-					seed + float(branch_index * 11 + branch_point_index * 7)
+					noise_phase + float(branch_index * 11 + branch_point_index * 7)
 				) * amplitude * 0.28 * branch_envelope
 			branch_path.append(branch_point)
 		paths.append(branch_path)

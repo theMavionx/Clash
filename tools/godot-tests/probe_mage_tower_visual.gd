@@ -1,6 +1,6 @@
 extends SceneTree
 
-const WebRenderProfile := preload("res://scripts/web_render_profile.gd")
+const WEB_RENDER_PROFILE_SCRIPT := preload("res://scripts/web_render_profile.gd")
 const MageTowerScript := preload("res://scripts/tower_mage.gd")
 
 const TOWER_SCENES: Array[String] = [
@@ -27,17 +27,17 @@ func _probe_scene(scene_path: String) -> void:
 	if packed == null:
 		push_error("[MAGE_TOWER_PROBE] load_failed path=%s" % scene_path)
 		return
-	var root := packed.instantiate() as Node3D
-	if root == null:
+	var tower_root := packed.instantiate() as Node3D
+	if tower_root == null:
 		push_error("[MAGE_TOWER_PROBE] instantiate_failed path=%s" % scene_path)
 		return
-	get_root().add_child(root)
+	get_root().add_child(tower_root)
 	print("[MAGE_TOWER_PROBE] before path=%s" % scene_path)
-	_print_visual_tree(root, root)
-	var applied := WebRenderProfile.apply_static_batch_for_web(root, scene_path)
+	_print_visual_tree(tower_root, tower_root)
+	var applied := WEB_RENDER_PROFILE_SCRIPT.apply_static_batch_for_web(tower_root, scene_path)
 	print("[MAGE_TOWER_PROBE] after path=%s applied=%s" % [scene_path, applied])
-	_print_visual_tree(root, root)
-	root.free()
+	_print_visual_tree(tower_root, tower_root)
+	tower_root.free()
 
 
 func _probe_runtime_lifecycle(scene_path: String) -> void:
@@ -53,7 +53,7 @@ func _probe_runtime_lifecycle(scene_path: String) -> void:
 	model.scale = Vector3.ONE * 0.039
 	model.set_meta("building_visual_model", true)
 	tower.add_child(model)
-	WebRenderProfile.apply_static_batch_for_web(model, scene_path)
+	WEB_RENDER_PROFILE_SCRIPT.apply_static_batch_for_web(model, scene_path)
 	scene_root.add_child(tower)
 	tower.call("set_level", 1)
 	for _frame in range(30):
@@ -129,7 +129,7 @@ func _render_visual_regression(scene_path: String) -> void:
 	model.set_meta("building_visual_model", true)
 	_apply_runtime_material(model)
 	scene_root.add_child(model)
-	WebRenderProfile.apply_static_batch_for_web(model, scene_path)
+	WEB_RENDER_PROFILE_SCRIPT.apply_static_batch_for_web(model, scene_path)
 
 	for _frame in range(3):
 		await process_frame
@@ -164,14 +164,14 @@ func _render_visual_regression(scene_path: String) -> void:
 	viewport.free()
 
 
-func _apply_runtime_material(root: Node) -> void:
+func _apply_runtime_material(scene_root: Node) -> void:
 	var material := StandardMaterial3D.new()
 	material.albedo_texture = load("res://Model/MageTower/mage_tower_albedo.png") as Texture2D
 	material.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
 	material.emission_enabled = true
 	material.emission_texture = load("res://Model/MageTower/mage_tower_emit.png") as Texture2D
 	material.emission_energy_multiplier = 1.2
-	for raw_mesh in root.find_children("*", "MeshInstance3D", true, false):
+	for raw_mesh in scene_root.find_children("*", "MeshInstance3D", true, false):
 		var mesh_instance := raw_mesh as MeshInstance3D
 		for surface_index in range(mesh_instance.mesh.get_surface_count()):
 			mesh_instance.set_surface_override_material(surface_index, material)
@@ -240,15 +240,15 @@ func _set_cylinder_between(
 	node.visible = true
 
 
-func _print_visual_tree(root: Node3D, current: Node) -> void:
+func _print_visual_tree(scene_root: Node3D, current: Node) -> void:
 	if current is MeshInstance3D:
 		var mesh_instance := current as MeshInstance3D
-		var local_transform := _transform_relative_to_ancestor(mesh_instance, root)
+		var local_transform := _transform_relative_to_ancestor(mesh_instance, scene_root)
 		var local_aabb := local_transform * mesh_instance.get_aabb()
 		print(
 			"[MAGE_TOWER_VISUAL] path=%s visible=%s position=%s scale=%s aabb_pos=%s aabb_size=%s surfaces=%d"
 			% [
-				str(root.get_path_to(mesh_instance)),
+				str(scene_root.get_path_to(mesh_instance)),
 				"%s tree=%s" % [mesh_instance.visible, mesh_instance.is_visible_in_tree()],
 				mesh_instance.position,
 				mesh_instance.scale,
@@ -258,7 +258,7 @@ func _print_visual_tree(root: Node3D, current: Node) -> void:
 			]
 		)
 	for child in current.get_children():
-		_print_visual_tree(root, child)
+		_print_visual_tree(scene_root, child)
 
 
 func _transform_relative_to_ancestor(node: Node3D, ancestor: Node) -> Transform3D:

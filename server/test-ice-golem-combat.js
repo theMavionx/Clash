@@ -13,6 +13,7 @@ const BUILDING_DEFS = {
   turret: { size: [2, 2], hp_levels: [5000, 5000, 5000, 5000, 5000, 5000] },
   archer_tower: { size: [2, 2], hp_levels: [5000, 5000, 5000, 5000, 5000, 5000] },
   tombstone: { size: [2, 2], hp_levels: [5000, 5000, 5000, 5000, 5000, 5000] },
+  harpoon: { size: [2, 2], hp_levels: [5200, 7200] },
 };
 
 function loadVerifierWithoutDb() {
@@ -68,7 +69,7 @@ function simulate(defenderBuildings, actions, levels) {
 const priorityResult = simulate([
   building(1, 'town_hall', 4, 3),
   building(2, 'storage', 12, 22),
-  building(3, 'turret', 17, 22),
+  building(3, 'harpoon', 17, 22),
 ], [
   deploy('IceGolem', 12),
 ], { IceGolem: 1, ice_golem: 1 });
@@ -79,8 +80,8 @@ const firstIceTarget = priorityResult._trace.find(
 assert.ok(firstIceTarget, 'Ice Golem must acquire a target');
 assert.equal(
   firstIceTarget.targetType,
-  'turret',
-  'Ice Golem must ignore a nearer storage while a defensive building is alive'
+  'harpoon',
+  'Ice Golem must ignore a nearer storage while a Harpoon defense is alive'
 );
 
 const guardEngagementResult = simulate([
@@ -108,6 +109,7 @@ try {
   freezeResult = simulate([
     building(10, 'town_hall', 4, 3),
     building(20, 'turret', 12, 22, 6),
+    building(25, 'harpoon', 14, 22, 1),
     building(30, 'archer_tower', 15, 22, 6),
   ], [
     deploy('IceGolem', 12, 0, 1),
@@ -122,10 +124,11 @@ assert.ok(freeze, 'Ice Golem death must emit a deterministic freeze event');
 assert.equal(freeze.duration, 7, 'freeze duration must be exactly seven seconds');
 assert.equal(freeze.radius, 0.9, 'freeze radius must match the expanded client radius');
 assert.ok(freeze.affectedBuildingIds.length > 0, 'at least one nearby defense must be frozen');
+assert.ok(freeze.affectedBuildingIds.includes(25), 'a nearby Harpoon must be in the freeze allowlist');
 
 for (const buildingId of freeze.affectedBuildingIds) {
   const fireDuringFreeze = freezeResult._trace.find(row =>
-    row.kind === 'defense_fire'
+    (row.kind === 'defense_fire' || row.kind === 'harpoon_fire')
     && row.buildingId === buildingId
     && row.t > freeze.t
     && row.t < freeze.t + freeze.duration - 1 / 60

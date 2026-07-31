@@ -369,8 +369,8 @@ func _base_seed() -> int:
 	return int(get_meta("replay_order", 1))
 
 
-static func _stable_hash(seed: int, cast_serial: int, salt: int) -> int:
-	var value := seed * 73856093
+static func _stable_hash(seed_value: int, cast_serial: int, salt: int) -> int:
+	var value := seed_value * 73856093
 	value = value ^ (cast_serial * 19349663)
 	value = value ^ (salt * 83492791)
 	value = int((value ^ (value >> 13)) * 1274126177)

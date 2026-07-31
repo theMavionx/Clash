@@ -25,6 +25,11 @@
 > per-level tables. This addendum supersedes the historical linear formulas and
 > cost tables later in this document.
 
+> **v2.3 Mortar progression addendum:** Mortar now has seven real combat/HP
+> levels. It unlocks at TH5 with a cap of L5, then reaches L6 at TH6 and L7 at
+> TH7. Levels 5-7 use the authored level-4 model until additional visual variants
+> are supplied; this does not affect authoritative combat values.
+
 ### Town Hall 6 Progression
 
 - Town Hall 5 -> 6 costs 55,000 gold, 75,000 wood, and 68,000 ore.
@@ -36,7 +41,7 @@
   local cap; Sawmill 230 wood/min with a 6,000 local cap.
 - TH6 adds a third Shark Trap and a second Mortar.
 - Regular progression buildings gain one reachable level. Tombstone reaches
-  level 5, Mortar reaches level 2, and Shark Trap reaches level 6. Port remains
+  level 5, Mortar reaches level 6, and Shark Trap reaches level 6. Port remains
   capped at level 3 and Altar remains capped at level 1.
 - TH6 Shark Trap damage is 2,400. It remains ground-only and is consumed by a
   rolling Mimic without damaging the Mimic.

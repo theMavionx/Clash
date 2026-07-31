@@ -24,6 +24,9 @@ $NodeFiles = @(
     "server/test-battle-casualty-http.js",
     "server/test-player-ship-migration.js",
     "server/test-client-server-combat-parity.js",
+    "server/hermes_jobs.js",
+    "server/hermes_jobs_worker.js",
+    "server/test-hermes-jobs-worker.js",
     "server/aptos_api.js",
     "server/test-aptos-api.js",
     "server/bridge_helpers.js",
@@ -35,6 +38,8 @@ $NodeFiles = @(
     "server/db.js",
     "server-futures/aptos-key-pool.js",
     "server-futures/test-aptos-key-pool.js",
+    "server-futures/hyperliquid-rewards-worker.js",
+    "server-futures/test-hyperliquid-rewards-worker.js",
     "server-futures/index.js",
     "server-futures/routes.js",
     "server-futures/gmtrade.js",
@@ -52,6 +57,8 @@ Invoke-Step "shared Aptos API client" { node server/test-aptos-api.js }
 Invoke-Step "Aptos server key pool" { node server-futures/test-aptos-key-pool.js }
 Invoke-Step "Aptos browser key pool" { node scripts/verify-aptos-browser-key-pool.mjs }
 Invoke-Step "Aptos RPC routing" { node scripts/verify-aptos-rpc-routing.mjs }
+Invoke-Step "Hyperliquid rewards worker" { node server-futures/test-hyperliquid-rewards-worker.js }
+Invoke-Step "Hermes jobs worker" { node server/test-hermes-jobs-worker.js }
 
 $CombatRegressionTests = @(
     "server/test-mimic-combat.js",

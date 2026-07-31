@@ -1,7 +1,6 @@
 extends Node
 ## Root game manager — manages the Island view.
 
-var _transitioning := false
 var _visibility_cb: JavaScriptObject = null
 
 # ── Node refs ──

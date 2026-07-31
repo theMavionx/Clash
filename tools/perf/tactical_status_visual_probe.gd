@@ -36,7 +36,7 @@ func _run_probe() -> void:
 	heal_knight.hp = maxi(1, heal_knight.max_hp - 40)
 	BaseTroop.invalidate_troops_cache()
 	var medkit := BSMedkit.new()
-	medkit._heal_troops(heal_knight.global_position)
+	medkit._heal_troops(heal_knight.global_position, 0.0)
 	if heal_knight.hp <= heal_knight.max_hp - 40:
 		_fail("medkit did not restore HP")
 		return
@@ -57,21 +57,25 @@ func _run_probe() -> void:
 		_fail("healing coating was not applied to troop meshes")
 		return
 
-	await RenderingServer.frame_post_draw
-	DirAccess.make_dir_recursive_absolute(
-		ProjectSettings.globalize_path("res://.codex-artifacts")
-	)
-	var image := get_viewport().get_texture().get_image()
-	var error := image.save_png(OUTPUT_PATH)
-	if error != OK:
-		_fail("capture failed: %s" % error_string(error))
-		return
+	var capture_result := OUTPUT_PATH
+	if DisplayServer.get_name() == "headless":
+		capture_result = "skipped(headless)"
+	else:
+		await RenderingServer.frame_post_draw
+		DirAccess.make_dir_recursive_absolute(
+			ProjectSettings.globalize_path("res://.codex-artifacts")
+		)
+		var image := get_viewport().get_texture().get_image()
+		var error := image.save_png(OUTPUT_PATH)
+		if error != OK:
+			_fail("capture failed: %s" % error_string(error))
+			return
 	print(
 		"[TACTICAL_STATUS_VISUAL] PASS rage=%d heal=%d capture=%s"
 		% [
 			batch.active_count(TroopStatusBatch.EFFECT_RAGE),
 			batch.active_count(TroopStatusBatch.EFFECT_HEAL),
-			OUTPUT_PATH,
+			capture_result,
 		]
 	)
 
@@ -135,14 +139,14 @@ func _build_stage() -> void:
 	light.shadow_enabled = false
 	add_child(light)
 
-	var floor := MeshInstance3D.new()
+	var ground_plane := MeshInstance3D.new()
 	var floor_mesh := PlaneMesh.new()
 	floor_mesh.size = Vector2(2.2, 1.4)
-	floor.mesh = floor_mesh
+	ground_plane.mesh = floor_mesh
 	var floor_material := StandardMaterial3D.new()
 	floor_material.albedo_color = Color("#91c94c")
-	floor.material_override = floor_material
-	add_child(floor)
+	ground_plane.material_override = floor_material
+	add_child(ground_plane)
 
 	var camera := Camera3D.new()
 	camera.projection = Camera3D.PROJECTION_ORTHOGONAL

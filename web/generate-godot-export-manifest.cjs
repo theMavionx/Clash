@@ -17,6 +17,17 @@ const scanFileExcludes = new Set([
   'res://scenes/TestMain.tscn',
   'res://scripts/test_scene_harness.gd',
 ]);
+// Keep editor/test/web-only resources out of the production PCK. The `web/`
+// tree is hidden from Godot with `.gdignore`, so following a test helper's
+// thumbnail path into that tree creates an unloadable ext_resource during
+// export. Nested test scripts are likewise not part of Main.tscn runtime.
+const resourceExcludePrefixes = [
+  'res://prototypes/',
+  'res://scenes/tests/',
+  'res://scripts/tests/',
+  'res://tools/',
+  'res://web/',
+];
 // Long music is played by React/HTMLAudio on web. Keeping these tracks in the
 // Godot web export manifest makes some browsers decode large audio buffers
 // during startup, which can stall the loader for minutes on memory-constrained
@@ -83,6 +94,12 @@ function ensureGodotIgnores() {
 
 function existsAsResource(resPath) {
   return fs.existsSync(resToFs(resPath));
+}
+
+function shouldExcludeResource(resPath) {
+  return scanFileExcludes.has(resPath)
+    || forceIncludeScriptExcludes.has(resPath)
+    || resourceExcludePrefixes.some((prefix) => resPath.startsWith(prefix));
 }
 
 function expandPattern(resPath) {
@@ -219,6 +236,7 @@ for (const file of files) {
     if (resPath.startsWith('res://.godot/')) continue;
     if (resPath.startsWith('res://addons/godot_mcp/')) continue;
     for (const expanded of expandPattern(resPath)) {
+      if (shouldExcludeResource(expanded)) continue;
       if (webHtmlAudioResources.has(expanded)) continue;
       if (existsAsResource(expanded)) refs.add(expanded);
     }
@@ -234,7 +252,7 @@ for (const dir of forceIncludeScriptRoots) {
   for (const file of walk(abs)) {
     if (path.extname(file) !== '.gd') continue;
     const resPath = fsToRes(file);
-    if (forceIncludeScriptExcludes.has(resPath)) continue;
+    if (shouldExcludeResource(resPath)) continue;
     refs.add(resPath);
   }
 }
@@ -267,6 +285,7 @@ while (textDependencyQueue.length > 0) {
     if (dependency.startsWith('res://.godot/')) continue;
     if (dependency.startsWith('res://addons/godot_mcp/')) continue;
     for (const expanded of expandPattern(dependency)) {
+      if (shouldExcludeResource(expanded)) continue;
       if (webHtmlAudioResources.has(expanded) || !existsAsResource(expanded)) continue;
       if (!refs.has(expanded)) {
         refs.add(expanded);

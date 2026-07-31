@@ -56,12 +56,12 @@ var _profile_total_usec: int = 0
 var _profile_max_usec: int = 0
 
 
-static func get_for_scene(owner: Node) -> TroopCrowdBatch:
-	if owner == null or owner.get_tree() == null:
+static func get_for_scene(context_node: Node) -> TroopCrowdBatch:
+	if context_node == null or context_node.get_tree() == null:
 		return null
-	var scene_root: Node = owner.get_tree().current_scene
+	var scene_root: Node = context_node.get_tree().current_scene
 	if scene_root == null:
-		scene_root = owner.get_tree().root
+		scene_root = context_node.get_tree().root
 	var scene_id: int = scene_root.get_instance_id()
 	var cached: Variant = _scene_managers.get(scene_id)
 	if cached is TroopCrowdBatch and is_instance_valid(cached):
@@ -669,6 +669,25 @@ func _bake_pose_mesh(part: MeshInstance3D) -> Mesh:
 		return null
 	var pose_mesh: ArrayMesh = null
 	if part.skin != null:
+		# Some modular/static attachments carry a Skin resource even though their
+		# imported skeleton path no longer resolves after composition. Godot logs
+		# an engine error if pose baking is attempted without a registered,
+		# populated Skeleton3D, so reject those parts before crossing the API.
+		var skeleton := part.get_node_or_null(part.skeleton) as Skeleton3D
+		if (
+			part.skeleton.is_empty()
+			or skeleton == null
+			or not skeleton.is_inside_tree()
+			or skeleton.get_bone_count() <= 0
+			or part.skin.get_bind_count() <= 0
+		):
+			return null
+		var skin_reference := part.get_skin_reference()
+		if (
+			skin_reference == null
+			or not skin_reference.get_skeleton().is_valid()
+		):
+			return null
 		pose_mesh = part.bake_mesh_from_current_skeleton_pose()
 	elif part.mesh is ArrayMesh:
 		pose_mesh = (part.mesh as ArrayMesh).duplicate() as ArrayMesh

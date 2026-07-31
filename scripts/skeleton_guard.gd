@@ -518,7 +518,7 @@ func _flat_distance(a: Vector3, b: Vector3) -> float:
 
 # ── Separation & building avoidance (same logic as BaseTroop) ─
 
-func _compute_separation(move_dir: Vector3, delta: float) -> Vector3:
+func _compute_separation(_move_dir: Vector3, delta: float) -> Vector3:
 	_sep_counter += 1
 	if _sep_counter % 3 != 0:
 		return _last_separation

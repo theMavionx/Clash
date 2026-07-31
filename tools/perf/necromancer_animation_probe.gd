@@ -112,7 +112,7 @@ func _capture_animation(
 			Rect2i(Vector2i.ZERO, FRAME_SIZE),
 			Vector2i(
 				(sample_index % SHEET_COLUMNS) * FRAME_SIZE.x,
-				(sample_index / SHEET_COLUMNS) * FRAME_SIZE.y
+				floori(float(sample_index) / float(SHEET_COLUMNS)) * FRAME_SIZE.y
 			)
 		)
 

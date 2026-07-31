@@ -1,6 +1,8 @@
 extends SceneTree
 
 const BuildingSystemScript := preload("res://scripts/building_system.gd")
+const MortarScript := preload("res://scripts/tower_mortar.gd")
+const HarpoonScript := preload("res://scripts/tower_harpoon.gd")
 
 var _failures: Array[String] = []
 
@@ -12,12 +14,14 @@ func _initialize() -> void:
 	_expect(BuildingSystemScript.TH_UNLOCK.get("cannon", 0) == 7, "Cannon must unlock at TH7.")
 	_expect(BuildingSystemScript.TH_MAX_COUNT.get("cannon", []) == [0, 0, 0, 0, 0, 0, 2], "TH7 must allow exactly two Cannons.")
 	_expect(BuildingSystemScript.TH_MAX_LEVEL.get("town_hall", []) == [1, 2, 3, 4, 5, 6, 7], "Town Hall caps must extend to L7.")
-	_expect(BuildingSystemScript.TH_MAX_LEVEL.get("mortar", []) == [1, 1, 1, 1, 1, 2, 3], "Mortar must reach L3 at TH7.")
+	_expect(BuildingSystemScript.TH_MAX_LEVEL.get("mortar", []) == [1, 1, 1, 1, 5, 6, 7], "Mortar must match the TH5-TH7 level cap.")
+	_expect(BuildingSystemScript.TH_MAX_COUNT.get("harpoon", []) == [0, 0, 0, 0, 0, 1, 1, 2], "Harpoon count must stay at one through TH7 and rise to two at TH8.")
+	_expect(BuildingSystemScript.TH_MAX_LEVEL.get("harpoon", []) == [1, 1, 1, 1, 1, 6, 7, 8], "Harpoon level must track TH6-TH8.")
 	_expect(BuildingSystemScript.TH_MAX_LEVEL.get("tombstone", []) == [1, 2, 3, 4, 4, 5, 6], "Tombstone must reach L6 at TH7.")
 	_expect(BuildingSystemScript.TH_MAX_LEVEL.get("cannon", []) == [1, 1, 1, 1, 1, 1, 7], "Cannon must reach L7 immediately at TH7.")
 	_expect(BuildingSystemScript.TH_MAX_LEVEL.get("port", []).back() == 3, "Port must remain capped at L3.")
 	_expect(BuildingSystemScript.TH_MAX_LEVEL.get("altar", []).back() == 1, "Altar must remain capped at L1.")
-	_expect(BuildingSystemScript.BUILDING_UPGRADE_COST_MULTIPLIERS.get(7, 0) == 17, "L7 upgrade multiplier must be 17.")
+	_expect(BuildingSystemScript.BUILDING_UPGRADE_COST_MULTIPLIERS.get(7, 0) == 45, "L7 upgrade multiplier must be 45.")
 	_expect(BuildingSystemScript.TH_BASE_CAPACITY.get(7, {}).get("gold", 0) == 35000, "TH7 base capacity must be 35,000.")
 	_expect(BuildingSystemScript.STORAGE_CAPACITY.get(7, {}).get("gold", 0) == 36000, "Storage L7 capacity must be 36,000.")
 	_expect(35000 + 3 * 36000 == 143000, "TH7 plus three L7 Storages must hold 143,000.")
@@ -25,23 +29,52 @@ func _initialize() -> void:
 	var town_hall: Dictionary = defs.get("town_hall", {})
 	_expect(town_hall.get("hp_levels", []).size() == 7, "Town Hall must define seven HP levels.")
 	_expect(town_hall.get("hp_levels", []).back() == 72000, "Town Hall L7 HP must be 72,000.")
-	_expect(town_hall.get("upgrade_cost", {}).get(7, {}) == {"gold": 70000, "wood": 100000, "ore": 92000}, "TH7 cost must match the design contract.")
+	_expect(town_hall.get("upgrade_cost", {}).get(7, {}) == {"gold": 85000, "wood": 106000, "ore": 98000}, "TH7 cost must match the design contract.")
 	_expect(town_hall.get("scenes", []).back() == "res://Model/Town_Hall/Town Hall Level 7.glb", "Town Hall L7 must use the authored model.")
 
 	for building_id in ["mine", "sawmill", "barn", "storage", "turret", "archer_tower", "mage_tower", "shark_trap"]:
 		_expect(defs.get(building_id, {}).get("hp_levels", []).size() == 7, "%s must define an L7 HP value." % building_id)
-	_expect(defs.get("mortar", {}).get("hp_levels", []).size() == 3, "Mortar must define L3 HP.")
+	var mortar: Dictionary = defs.get("mortar", {})
+	_expect(mortar.get("hp_levels", []) == [1700, 2400, 3200, 4100, 5200, 6500, 8100], "Mortar must define the approved seven-level HP curve.")
+	_expect(mortar.get("damage_levels", []) == [95, 135, 185, 245, 300, 370, 460], "Mortar must define the approved seven-level damage curve.")
+	_expect(mortar.get("splash_radius_levels", []) == [0.30, 0.34, 0.38, 0.42, 0.45, 0.49, 0.52], "Mortar splash must grow across all seven levels.")
+	_expect(mortar.get("scenes", []).size() == 7, "Mortar must resolve a visual for every level.")
+	var mortar_runtime: Node = MortarScript.new()
+	mortar_runtime.set_level(7)
+	_expect(mortar_runtime.damage == 460, "Mortar L7 runtime damage must be 460.")
+	_expect(is_equal_approx(mortar_runtime.detect_range, 2.40), "Mortar L7 runtime range must be 2.40.")
+	_expect(is_equal_approx(mortar_runtime.splash_radius, 0.52), "Mortar L7 runtime splash radius must be 0.52.")
+	_expect(is_equal_approx(mortar_runtime.fire_rate, 1.70), "Mortar L7 runtime reload must be 1.70 seconds.")
+	mortar_runtime.free()
 	_expect(defs.get("tombstone", {}).get("hp_levels", []).size() == 6, "Tombstone must define L6 HP.")
+
+	var harpoon: Dictionary = defs.get("harpoon", {})
+	_expect(harpoon.get("hp_levels", []) == [1800, 2300, 2900, 3600, 4400, 5200, 7200, 8800], "Harpoon must define the approved eight-level HP curve.")
+	_expect(harpoon.get("damage_levels", []) == [45, 55, 65, 75, 88, 100, 140, 165], "Harpoon must define the approved eight-level damage curve.")
+	_expect(harpoon.get("range_levels", []) == [1.20, 1.27, 1.34, 1.41, 1.48, 1.55, 1.70, 1.78], "Harpoon range must grow across all eight levels.")
+	_expect(harpoon.get("pull_speed_levels", []) == [0.85, 0.92, 0.99, 1.06, 1.13, 1.20, 1.40, 1.48], "Harpoon pull speed must grow across all eight levels.")
+	_expect(harpoon.get("upgrade_cost", {}).get(8, {}) == {"gold": 108000, "wood": 142000, "ore": 124000}, "Harpoon L8 cost must fit the established late-game capacity ceiling.")
+	var harpoon_runtime: Node = HarpoonScript.new()
+	harpoon_runtime.set_level(6)
+	_expect(harpoon_runtime.damage == 100, "Harpoon L6 must preserve the validated TH6 impact damage.")
+	_expect(is_equal_approx(harpoon_runtime.detect_range, 1.55), "Harpoon L6 must preserve the validated TH6 range.")
+	harpoon_runtime.set_level(7)
+	_expect(harpoon_runtime.damage == 140, "Harpoon L7 must preserve the validated TH7 impact damage.")
+	_expect(is_equal_approx(harpoon_runtime.pull_speed, 1.40), "Harpoon L7 must preserve the validated TH7 pull speed.")
+	harpoon_runtime.set_level(8)
+	_expect(harpoon_runtime.damage == 165, "Harpoon L8 impact damage must remain utility-first.")
+	_expect(is_equal_approx(harpoon_runtime.detect_range, 1.78), "Harpoon L8 range must be 1.78.")
+	harpoon_runtime.free()
 
 	var cannon: Dictionary = defs.get("cannon", {})
 	_expect(not cannon.is_empty(), "Cannon building definition is missing.")
 	_expect(cannon.get("cells", Vector2i.ZERO) == Vector2i(3, 3), "Cannon footprint must be 3x3.")
 	_expect(cannon.get("hp_levels", []) == [3200, 3900, 4700, 5600, 6600, 7700, 9000], "Cannon must define the approved seven-level HP curve.")
 	_expect(cannon.get("damage_levels", []) == [40, 100, 205, 305, 447, 506, 675], "Cannon must define the approved seven-level damage curve.")
-	_expect(cannon.get("cost", {}) == {"gold": 6800, "wood": 15500, "ore": 13000}, "Cannon build cost must match the design contract.")
+	_expect(cannon.get("cost", {}) == {"gold": 16000, "wood": 36000, "ore": 30000}, "Cannon build cost must match the design contract.")
 	_expect(
 		cannon.get("upgrade_cost", {}).get(7, {})
-		== {"gold": 56000, "wood": 106000, "ore": 90000},
+		== {"gold": 105000, "wood": 142000, "ore": 125000},
 		"Cannon L7 upgrade cost must fit TH7 capacity.",
 	)
 	_expect(cannon.get("scenes", []).size() == 7, "Cannon must expose seven visual levels.")

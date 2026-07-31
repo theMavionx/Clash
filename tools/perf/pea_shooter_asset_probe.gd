@@ -27,10 +27,10 @@ func _probe_asset(asset_path: String) -> void:
 	if packed == null:
 		push_error("PEA_ASSET_PROBE load_failed path=%s" % asset_path)
 		return
-	var root := packed.instantiate()
-	print("PEA_ASSET_PROBE asset=%s root=%s" % [asset_path, root.name])
-	_probe_node(root, 0)
-	root.free()
+	var asset_root := packed.instantiate()
+	print("PEA_ASSET_PROBE asset=%s root=%s" % [asset_path, asset_root.name])
+	_probe_node(asset_root, 0)
+	asset_root.free()
 
 
 func _probe_node(node: Node, depth: int) -> void:

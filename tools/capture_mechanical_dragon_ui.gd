@@ -147,8 +147,8 @@ func _fit_portrait(source: Image) -> Image:
 	var output := Image.create_empty(OUTPUT_SIZE.x, OUTPUT_SIZE.y, false, Image.FORMAT_RGBA8)
 	output.fill(Color.TRANSPARENT)
 	var destination := Vector2i(
-		(OUTPUT_SIZE.x - fitted_size.x) / 2,
-		(OUTPUT_SIZE.y - fitted_size.y) / 2
+		floori(float(OUTPUT_SIZE.x - fitted_size.x) / 2.0),
+		floori(float(OUTPUT_SIZE.y - fitted_size.y) / 2.0)
 	)
 	output.blit_rect(cropped, Rect2i(Vector2i.ZERO, fitted_size), destination)
 	return output

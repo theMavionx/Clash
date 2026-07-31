@@ -45,7 +45,8 @@ try {
     turret: 6,
     mage_tower: 6,
     tombstone: 5,
-    mortar: 2,
+    mortar: 6,
+    harpoon: 6,
     shark_trap: 6,
     port: 3,
     altar: 1,
@@ -70,11 +71,35 @@ try {
     'shark_trap',
   ]);
   assert.deepEqual(gameDb.getBuildingUpgradeCost('mine', 5), { gold: 5940, wood: 14850, ore: 0 });
-  assert.deepEqual(gameDb.getBuildingUpgradeCost('mortar', 1), { gold: 24000, wood: 36000, ore: 30000 });
+  assert.deepEqual(gameDb.getBuildingUpgradeCost('mortar', 5), { gold: 68000, wood: 96000, ore: 82000 });
   assert.deepEqual(gameDb.TH_MAX_COUNT.mortar.slice(0, 6), [0, 0, 0, 0, 1, 2]);
+  assert.equal(gameDb.TH_UNLOCK.harpoon, 6);
+  assert.deepEqual(gameDb.TH_MAX_COUNT.harpoon, [0, 0, 0, 0, 0, 1, 1, 2]);
+  assert.deepEqual(gameDb.TH_MAX_LEVEL.harpoon, [1, 1, 1, 1, 1, 6, 7, 8]);
+  assert.deepEqual(gameDb.BUILDING_DEFS.harpoon, {
+    size: [2, 2],
+    max_level: 8,
+    hp_levels: [1800, 2300, 2900, 3600, 4400, 5200, 7200, 8800],
+    cost: { gold: 12000, wood: 22000, ore: 18000 },
+    upgrade_cost: {
+      2: { gold: 20000, wood: 42000, ore: 35000 },
+      3: { gold: 30000, wood: 56000, ore: 47000 },
+      4: { gold: 41000, wood: 70000, ore: 59000 },
+      5: { gold: 54000, wood: 84000, ore: 71000 },
+      6: { gold: 68000, wood: 98000, ore: 83000 },
+      7: { gold: 86000, wood: 122000, ore: 104000 },
+      8: { gold: 108000, wood: 142000, ore: 124000 },
+    },
+    max_count: 2,
+  });
+  assert.deepEqual(gameDb.getBuildingUpgradeCost('harpoon', 1), {
+    gold: 20000,
+    wood: 42000,
+    ore: 35000,
+  });
   assert.deepEqual(gameDb.TH_MAX_COUNT.shark_trap.slice(0, 6), [0, 0, 1, 1, 2, 3]);
-  assert.equal(gameDb.getBuildingMaxLevelForTownHall('mortar', 5), 1);
-  assert.equal(gameDb.getBuildingMaxLevelForTownHall('mortar', 6), 2);
+  assert.equal(gameDb.getBuildingMaxLevelForTownHall('mortar', 5), 5);
+  assert.equal(gameDb.getBuildingMaxLevelForTownHall('mortar', 6), 6);
   assert.equal(gameDb.getBuildingMaxLevelForTownHall('tombstone', 5), 4);
   assert.equal(gameDb.getBuildingMaxLevelForTownHall('tombstone', 6), 5);
   assert.equal(gameDb.getBuildingMaxLevelForTownHall('mine', 6), 6);
@@ -92,7 +117,7 @@ try {
   insertBuilding(playerId, 'archer_tower', 5, 0, 6);
   insertBuilding(playerId, 'turret', 5, 5, 6);
   insertBuilding(playerId, 'mage_tower', 5, 9, 6);
-  const mortarId = insertBuilding(playerId, 'mortar', 1, 14, 6);
+  const mortarId = insertBuilding(playerId, 'mortar', 5, 14, 6);
   insertBuilding(playerId, 'shark_trap', 5, 18, 6);
 
   gameDb.db.prepare('UPDATE buildings SET level = 4 WHERE id = ?').run(townHallId);
@@ -111,7 +136,7 @@ try {
   assert.equal(townHallUpgrade.level, 6);
   assert.equal(townHallUpgrade.hp, 52000);
 
-  assert.equal(gameDb.upgradeBuilding(playerId, mortarId).level, 2);
+  assert.equal(gameDb.upgradeBuilding(playerId, mortarId).level, 6);
   assert.equal(gameDb.upgradeBuilding(playerId, tombstoneId).level, 5);
   assert.equal(gameDb.upgradeBuilding(playerId, mineId).level, 6);
   assert.equal(gameDb.upgradeBuilding(playerId, storageId).level, 6);
@@ -129,6 +154,40 @@ try {
   assert.equal(gameDb.placeBuilding(playerId, 'shark_trap', 21, 11).type, 'shark_trap');
   assert.match(gameDb.placeBuilding(playerId, 'shark_trap', 24, 11).error, /Maximum 3 shark_trap/);
 
+  const resourcesBeforeHarpoon = gameDb.db.prepare(
+    'SELECT gold, wood, ore FROM players WHERE id = ?',
+  ).get(playerId);
+  const firstHarpoon = gameDb.placeBuilding(playerId, 'harpoon', 0, 12);
+  assert.equal(firstHarpoon.type, 'harpoon');
+  assert.equal(firstHarpoon.level, 1);
+  assert.equal(firstHarpoon.max_hp, 1800);
+  const resourcesAfterHarpoon = gameDb.db.prepare(
+    'SELECT gold, wood, ore FROM players WHERE id = ?',
+  ).get(playerId);
+  assert.equal(resourcesBeforeHarpoon.gold - resourcesAfterHarpoon.gold, 12000);
+  assert.equal(resourcesBeforeHarpoon.wood - resourcesAfterHarpoon.wood, 22000);
+  assert.equal(resourcesBeforeHarpoon.ore - resourcesAfterHarpoon.ore, 18000);
+  assert.match(
+    gameDb.placeBuilding(playerId, 'harpoon', 3, 12).error,
+    /Maximum 1 harpoon at Town Hall level 6/,
+  );
+  for (let nextLevel = 2; nextLevel <= 6; nextLevel++) {
+    const cost = gameDb.getBuildingUpgradeCost('harpoon', nextLevel - 1);
+    for (const resource of ['gold', 'wood', 'ore']) {
+      assert.ok(cost[resource] <= 106000, `Harpoon L${nextLevel} ${resource} must fit TH6 capacity`);
+    }
+    gameDb.db.prepare(
+      'UPDATE players SET gold = 106000, wood = 106000, ore = 106000 WHERE id = ?',
+    ).run(playerId);
+    const upgraded = gameDb.upgradeBuilding(playerId, firstHarpoon.id);
+    assert.equal(upgraded.level, nextLevel, `Harpoon must upgrade to L${nextLevel} at TH6`);
+    assert.equal(upgraded.max_hp, gameDb.BUILDING_DEFS.harpoon.hp_levels[nextLevel - 1]);
+  }
+  assert.match(gameDb.upgradeBuilding(playerId, firstHarpoon.id).error, /Town Hall to level 7/);
+
+  gameDb.db.prepare(
+    'UPDATE players SET gold = 106000, wood = 106000, ore = 106000 WHERE id = ?',
+  ).run(playerId);
   gameDb.db.prepare('UPDATE player_ships SET level = 5, capacity_override = 0 WHERE player_id = ?').run(playerId);
   assert.equal(gameDb.getPlayerShip(playerId).capacity, 45);
   const levelSixShip = gameDb.upgradePlayerShip(playerId);
@@ -224,7 +283,7 @@ try {
   );
   assert.equal(fullShipReplay.resolvedResult, 'victory');
 
-  console.log('[TH6_PROGRESSION] PASS th6=true mortars=2 shark_traps=3 mimic_th=5 ship_capacity=45 manual_deploy=45 mechanical_dragons=11 ice_golem_locked_until_th9=true necromancer_locked_until_th7=true');
+  console.log('[TH6_PROGRESSION] PASS th6=true harpoon=1xL6 mortar_cap=L6 mortars=2 shark_traps=3 mimic_th=5 ship_capacity=45 manual_deploy=45 mechanical_dragons=11 ice_golem_locked_until_th9=true necromancer_locked_until_th7=true');
 } finally {
   gameDb.db.close();
   for (const suffix of ['', '-wal', '-shm']) {

@@ -248,7 +248,9 @@ func _run_probe() -> void:
 	print(
 		"[NECROMANCER_COMBAT] PASS projectile_damage=", necromancer_damage,
 		" skeleton_damage=", skeleton_damage,
-		" summon_batches=", summon_events.size() / Necromancer.SUMMON_BATCH_SIZE,
+		" summon_batches=", floori(
+			float(summon_events.size()) / float(Necromancer.SUMMON_BATCH_SIZE)
+		),
 		" summon_count=", summon_events.size(),
 		" respawn_delay=", Necromancer.SUMMON_RESPAWN_DELAY,
 		" attack_release_frame=", Necromancer.ATTACK_RELEASE_FRAME,

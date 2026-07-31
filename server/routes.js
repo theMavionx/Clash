@@ -18946,6 +18946,7 @@ const ADMIN_MAX_VILLAGE_BUILD_ORDER = [
   'mage_tower',
   'mortar',
   'cannon',
+  'harpoon',
   'port',
 ];
 

@@ -49,6 +49,15 @@ var target_bs: Node = null
 var target_guard: Node3D = null
 var attack_timer: float = 0.0
 
+# Harpoon control is combat-ephemeral. Stable authored order keys arbitrate
+# same-tick reservations; instance IDs are deliberately never used here.
+const HARPOON_OWNER_NONE: int = 2147483647
+var _harpoon_reservation_owner: int = HARPOON_OWNER_NONE
+var _harpoon_reservation_committed: bool = false
+var _harpoon_pull_owner: int = HARPOON_OWNER_NONE
+var _harpoon_immunity_ticks: int = 0
+var _harpoon_immunity_started_frame: int = -1
+
 var anim_player: AnimationPlayer
 var anim_files: Array = []
 var anim_file_aliases: Dictionary = {}
@@ -282,7 +291,11 @@ const RETARGET_INTERVAL_SEC: float = 10.0 / 60.0
 const SLOT_EVAL_INTERVAL_SEC: float = 6.0 / 60.0
 const REPLAY_COMBAT_DELTA: float = 1.0 / 60.0
 const HIGH_DENSITY_TROOP_THRESHOLD: int = 24
-const HIGH_DENSITY_SEPARATION_INTERVAL: int = 4
+# Dense crowds keep applying the cached steering vector every physics tick;
+# only the spatial-hash refresh runs at 10 Hz. The 45-knight TH6 profile
+# reduced physics cost and p95 frame time without changing combat damage,
+# which the server does not derive from client-side allied push-apart.
+const HIGH_DENSITY_SEPARATION_INTERVAL: int = 6
 const HIGH_DENSITY_ATTACK_SEPARATION_INTERVAL: int = 12
 const NORMAL_TROOP_ANIMATION_HZ: float = 30.0
 const DENSE_TROOP_ANIMATION_HZ: float = 10.0
@@ -472,6 +485,104 @@ static func can_defense_target_troop(troop: Variant, can_target_ground: bool, ca
 
 func is_air_unit() -> bool:
 	return unit_target_type == UNIT_TARGET_AIR
+
+
+func can_be_targeted_by_harpoon(owner_order: int) -> bool:
+	if not is_air_unit() or _is_dead or hp <= 0 or _harpoon_immunity_ticks > 0:
+		return false
+	if _harpoon_reservation_owner == HARPOON_OWNER_NONE:
+		return true
+	if _harpoon_reservation_owner == owner_order:
+		return true
+	return not _harpoon_reservation_committed and owner_order < _harpoon_reservation_owner
+
+
+func try_reserve_harpoon(owner_order: int) -> bool:
+	if not can_be_targeted_by_harpoon(owner_order):
+		return false
+	if _harpoon_reservation_owner != owner_order:
+		_harpoon_reservation_owner = owner_order
+		_harpoon_reservation_committed = false
+		_harpoon_pull_owner = HARPOON_OWNER_NONE
+	return true
+
+
+func has_harpoon_reservation(owner_order: int) -> bool:
+	return _harpoon_reservation_owner == owner_order
+
+
+func commit_harpoon_reservation(owner_order: int) -> bool:
+	if _harpoon_reservation_owner != owner_order:
+		return false
+	_harpoon_reservation_committed = true
+	return true
+
+
+func begin_harpoon_pull(owner_order: int) -> bool:
+	if not commit_harpoon_reservation(owner_order):
+		return false
+	_harpoon_pull_owner = owner_order
+	return true
+
+
+func is_harpoon_pull_active() -> bool:
+	return _harpoon_pull_owner != HARPOON_OWNER_NONE
+
+
+func release_harpoon(owner_order: int, immunity_ticks: int = 0) -> bool:
+	if _harpoon_reservation_owner != owner_order:
+		return false
+	_harpoon_reservation_owner = HARPOON_OWNER_NONE
+	_harpoon_reservation_committed = false
+	_harpoon_pull_owner = HARPOON_OWNER_NONE
+	if immunity_ticks > 0 and not _is_dead and hp > 0:
+		_harpoon_immunity_ticks = maxi(_harpoon_immunity_ticks, immunity_ticks)
+		_harpoon_immunity_started_frame = Engine.get_physics_frames()
+	return true
+
+
+func get_harpoon_control_debug() -> Dictionary:
+	return {
+		"reservation_owner": _harpoon_reservation_owner,
+		"reservation_committed": _harpoon_reservation_committed,
+		"pull_owner": _harpoon_pull_owner,
+		"immunity_ticks": _harpoon_immunity_ticks,
+	}
+
+
+## Applies one authoritative XZ-only pull step and returns actual movement.
+## A negative result means the caller no longer owns the pull.
+func apply_harpoon_pull_step(
+	owner_order: int,
+	anchor: Vector3,
+	pull_speed: float,
+	delta: float,
+	stop_distance: float
+) -> float:
+	if _harpoon_pull_owner != owner_order or _harpoon_reservation_owner != owner_order:
+		return -1.0
+	var before := global_position
+	var toward := Vector3(anchor.x - before.x, 0.0, anchor.z - before.z)
+	var distance_sq := toward.length_squared()
+	var safe_stop := maxf(0.0, stop_distance)
+	if distance_sq <= safe_stop * safe_stop or distance_sq <= 0.00000001:
+		return 0.0
+	var distance := sqrt(distance_sq)
+	var step := minf(maxf(0.0, pull_speed) * maxf(0.0, delta), distance - safe_stop)
+	if step <= 0.0:
+		return 0.0
+	var next_position := before + toward * (step / distance)
+	next_position = _clamp_to_island(next_position)
+	next_position.y = before.y
+	var moved := Vector2(next_position.x - before.x, next_position.z - before.z).length()
+	if moved > 0.0000001:
+		global_position = next_position
+		# Later defenses in the same fixed tick must observe the pulled position.
+		_cached_troop_positions.clear()
+		_troop_positions_cache_frame = -1
+		_troop_spatial_buckets.clear()
+		_troop_spatial_cache_frame = -1
+	return moved
 
 
 static func _troop_order_key(troop: Node) -> int:
@@ -1074,6 +1185,11 @@ func _reset_animation_budget_phase(dense: bool) -> void:
 func _physics_process(delta: float) -> void:
 	var profile_started_usec: int = Time.get_ticks_usec() if _ai_profile_enabled else 0
 	_advance_animation_budget(delta)
+	if (
+		_harpoon_immunity_ticks > 0
+		and Engine.get_physics_frames() > _harpoon_immunity_started_frame
+	):
+		_harpoon_immunity_ticks -= 1
 	if _is_dead or state == State.INACTIVE or state == State.VICTORY:
 		return
 	var profile_animation_usec: int = (
@@ -1947,10 +2063,10 @@ func tactical_status_radius() -> float:
 ## Applies the same level-based shark trap damage as the server replay. A
 ## surviving heavy troop stays active; a lethal hit keeps a short visual shell
 ## so the bite and disappearance remain readable.
-func damage_by_shark_trap(damage: int, visual_duration: float = 0.68) -> bool:
+func damage_by_shark_trap(trap_damage: int, visual_duration: float = 0.68) -> bool:
 	if _is_dead:
 		return false
-	var applied_damage := maxi(1, damage)
+	var applied_damage := maxi(1, trap_damage)
 	var hp_before := hp
 	hp = maxi(0, hp - applied_damage)
 	_record_replay_telemetry("shark_trap_damage", {
@@ -2612,6 +2728,11 @@ func _move_to_target(delta: float) -> void:
 	if not _has_valid_target():
 		_find_next_target()
 		return
+	# Forced Harpoon movement is applied by the defense at fixed 60 Hz. Keep
+	# targeting/attack state alive but suppress voluntary movement, separation,
+	# orbit and standoff correction until the rope releases.
+	if is_harpoon_pull_active():
+		return
 
 	var target_pos = _get_target_position()
 	var diff = Vector3(target_pos.x - global_position.x, 0, target_pos.z - global_position.z)
@@ -2728,7 +2849,7 @@ func _do_attack(delta: float) -> void:
 	var to_target = target_pos - global_position
 	to_target.y = 0
 	var dist_to_target = to_target.length()
-	if dist_to_target > attack_range * 2.0:
+	if dist_to_target > attack_range * 2.0 and not is_harpoon_pull_active():
 		state = State.RUNNING
 		if anim_player.has_animation("Running_A"):
 			anim_player.play("Running_A")
@@ -2740,7 +2861,7 @@ func _do_attack(delta: float) -> void:
 		_face_move_direction(face_dir)
 
 	# Light separation while attacking — but never push beyond attack range
-	if separation_force > 0.0:
+	if separation_force > 0.0 and not is_harpoon_pull_active():
 		var sep = _get_separation()
 		if sep.length() > 0.001:
 			var new_pos = global_position + sep * separation_force * delta * 0.3
@@ -3007,12 +3128,15 @@ static func report_render_diagnostic(root: Node, tag: String, extra: Dictionary 
 
 
 static func _render_diag_payload(root: Node, tag: String, extra: Dictionary) -> Dictionary:
+	var root_visible: Variant = null
+	if _object_has_property(root, "visible"):
+		root_visible = bool(root.get("visible"))
 	var payload: Dictionary = {
 		"tag": tag,
 		"root_name": str(root.name),
 		"root_class": root.get_class(),
 		"root_path": str(root.get_path()) if root.is_inside_tree() else "",
-		"root_visible": bool(root.get("visible")) if _object_has_property(root, "visible") else null,
+		"root_visible": root_visible,
 		"child_count": root.get_child_count(),
 		"mesh_count": 0,
 		"visible_mesh_count": 0,
@@ -3042,13 +3166,22 @@ static func _collect_render_diag_recursive(node: Node, payload: Dictionary) -> v
 			payload["visible_particle_count"] = int(payload.get("visible_particle_count", 0)) + 1
 		var particles: Array = payload.get("particles", [])
 		if particles.size() < RENDER_DIAG_MAX_PARTICLES:
+			var particle_visible: Variant = null
+			var particle_emitting: Variant = null
+			var particle_amount: Variant = null
+			if _object_has_property(node, "visible"):
+				particle_visible = bool(node.get("visible"))
+			if _object_has_property(node, "emitting"):
+				particle_emitting = bool(node.get("emitting"))
+			if _object_has_property(node, "amount"):
+				particle_amount = int(node.get("amount"))
 			particles.append({
 				"name": str(node.name),
 				"path": str(node.get_path()) if node.is_inside_tree() else "",
 				"class": node.get_class(),
-				"visible": bool(node.get("visible")) if _object_has_property(node, "visible") else null,
-				"emitting": bool(node.get("emitting")) if _object_has_property(node, "emitting") else null,
-				"amount": int(node.get("amount")) if _object_has_property(node, "amount") else null,
+				"visible": particle_visible,
+				"emitting": particle_emitting,
+				"amount": particle_amount,
 			})
 			payload["particles"] = particles
 	for child in node.get_children():

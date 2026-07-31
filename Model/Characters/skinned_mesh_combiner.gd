@@ -529,16 +529,16 @@ static func _skin_bind_for_bone(
 	return -1
 
 
-static func _skins_are_compatible(reference: Skin, candidate: Skin) -> bool:
-	if reference == null or candidate == null:
+static func _skins_are_compatible(reference_skin: Skin, candidate: Skin) -> bool:
+	if reference_skin == null or candidate == null:
 		return false
-	if reference.get_bind_count() != candidate.get_bind_count():
+	if reference_skin.get_bind_count() != candidate.get_bind_count():
 		return false
-	for bind_index in range(reference.get_bind_count()):
+	for bind_index in range(reference_skin.get_bind_count()):
 		if (
-			reference.get_bind_bone(bind_index) != candidate.get_bind_bone(bind_index)
-			or reference.get_bind_name(bind_index) != candidate.get_bind_name(bind_index)
-			or not reference.get_bind_pose(bind_index).is_equal_approx(
+			reference_skin.get_bind_bone(bind_index) != candidate.get_bind_bone(bind_index)
+			or reference_skin.get_bind_name(bind_index) != candidate.get_bind_name(bind_index)
+			or not reference_skin.get_bind_pose(bind_index).is_equal_approx(
 				candidate.get_bind_pose(bind_index)
 			)
 		):

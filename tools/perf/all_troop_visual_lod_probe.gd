@@ -12,6 +12,7 @@ const MIN_FRAME_MARGIN_PX: int = 4
 
 class DummySummoner:
 	extends Node3D
+	@warning_ignore("unused_private_class_variable")
 	var _is_dead: bool = false
 
 

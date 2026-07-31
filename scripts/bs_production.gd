@@ -84,7 +84,6 @@ func _read_react_resource_target(res_type: String, fallback: Vector2) -> Vector2
 ## Advance stored resources for every production building by one second's worth
 ## of output.  Call once per second (e.g. from a 1-second Timer signal).
 func _tick_production() -> void:
-	var any_ready := false
 	for b in bs.placed_buildings:
 		var def: Dictionary = bs.building_defs.get(b.id, {})
 		if not def.has("produces"):
@@ -102,8 +101,6 @@ func _tick_production() -> void:
 		var stored: float       = b.get("stored", 0.0)
 		stored = minf(stored + rate_per_sec, max_stored)
 		b["stored"] = stored
-		if stored >= 1.0:
-			any_ready = true
 
 # ── Collect-icon HUD ───────────────────────────────────────────
 
@@ -166,7 +163,7 @@ func _update_collect_icons() -> void:
 				icon.visible = false
 
 ## Build the TextureButton collect-icon and add it to world_ui_canvas.
-func _create_collect_icon(b: Dictionary, building_node: Node3D, def: Dictionary) -> Control:
+func _create_collect_icon(b: Dictionary, _building_node: Node3D, def: Dictionary) -> Control:
 	var btn := TextureButton.new()
 	btn.custom_minimum_size = Vector2(56, 56)
 	btn.size                = Vector2(56, 56)

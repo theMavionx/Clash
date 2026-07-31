@@ -68,13 +68,19 @@ hard upper bound.
 | 6 | 55,000 | 75,000 | 68,000 | 75,000 |
 | 7 | 85,000 | 106,000 | 98,000 | 106,000 |
 
-Mortar unlocks late and has only three levels, so it uses an authored table:
+Mortar unlocks at TH5 and now follows the Town Hall cap through level 7. Its
+authored table keeps levels 2-5 payable inside the 75,000-per-resource TH5
+capacity, level 6 inside TH6 capacity, and level 7 inside TH7 capacity:
 
 | Mortar level | Gold | Wood | Ore |
 |---:|---:|---:|---:|
 | Place level 1 | 8,000 | 12,000 | 10,000 |
-| 2 | 24,000 | 36,000 | 30,000 |
-| 3 | 55,000 | 82,000 | 68,000 |
+| 2 | 14,000 | 22,000 | 18,000 |
+| 3 | 24,000 | 36,000 | 30,000 |
+| 4 | 38,000 | 54,000 | 46,000 |
+| 5 | 52,000 | 72,000 | 62,000 |
+| 6 | 68,000 | 96,000 | 82,000 |
+| 7 | 92,000 | 132,000 | 112,000 |
 
 Cannon unlocks at TH7 and must remain payable inside the 143,000 cap:
 
@@ -87,6 +93,22 @@ Cannon unlocks at TH7 and must remain payable inside the 143,000 cap:
 | 5 | 65,000 | 110,000 | 92,000 |
 | 6 | 83,000 | 128,000 | 108,000 |
 | 7 | 105,000 | 142,000 | 125,000 |
+
+Harpoon unlocks at TH6 and follows the Town Hall level cap through the
+future TH8 tier. Levels 2-6 fit the 106,000-per-resource TH6 ceiling. Levels
+7-8 fit the established 143,000 late-game ceiling; the TH8 economy must
+revalidate the L8 ceiling before TH8 becomes playable:
+
+| Harpoon level | Gold | Wood | Ore |
+|---:|---:|---:|---:|
+| Place level 1 | 12,000 | 22,000 | 18,000 |
+| 2 | 20,000 | 42,000 | 35,000 |
+| 3 | 30,000 | 56,000 | 47,000 |
+| 4 | 41,000 | 70,000 | 59,000 |
+| 5 | 54,000 | 84,000 | 71,000 |
+| 6 | 68,000 | 98,000 | 83,000 |
+| 7 | 86,000 | 122,000 | 104,000 |
+| 8 | 108,000 | 142,000 | 124,000 |
 
 ## Progression Contracts
 

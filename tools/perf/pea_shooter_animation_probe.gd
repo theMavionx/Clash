@@ -128,14 +128,14 @@ func _add_stage() -> void:
 	key_light.light_energy = 1.05
 	add_child(key_light)
 
-	var floor := MeshInstance3D.new()
+	var ground_plane := MeshInstance3D.new()
 	var plane := PlaneMesh.new()
 	plane.size = Vector2(4.0, 4.0)
-	floor.mesh = plane
+	ground_plane.mesh = plane
 	var floor_material := StandardMaterial3D.new()
 	floor_material.albedo_color = Color("#d9f2a5")
-	floor.material_override = floor_material
-	add_child(floor)
+	ground_plane.material_override = floor_material
+	add_child(ground_plane)
 
 	var camera := Camera3D.new()
 	camera.fov = 28.0

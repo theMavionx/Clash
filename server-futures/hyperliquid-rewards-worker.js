@@ -9,8 +9,44 @@ const path = require('path');
 const db = require('./db');
 const hyperliquid = require('./hyperliquid');
 
+function boundedNumber(value, fallback, min, max) {
+  const parsed = Number(value);
+  const safe = Number.isFinite(parsed) ? parsed : fallback;
+  return Math.max(min, Math.min(max, safe));
+}
+
 const POLL_MS = Number(process.env.HYPERLIQUID_REWARDS_POLL_MS || 2 * 60 * 1000);
 const LOOKBACK_MS = Number(process.env.HYPERLIQUID_REWARDS_LOOKBACK_MS || 7 * 24 * 60 * 60 * 1000);
+const MAX_WALLETS_PER_TICK = Math.floor(boundedNumber(
+  process.env.HYPERLIQUID_REWARDS_MAX_WALLETS_PER_TICK,
+  8,
+  1,
+  100,
+));
+const REQUEST_SPACING_MS = Math.floor(boundedNumber(
+  process.env.HYPERLIQUID_REWARDS_REQUEST_SPACING_MS,
+  500,
+  0,
+  10_000,
+));
+const INCREMENTAL_OVERLAP_MS = Math.floor(boundedNumber(
+  process.env.HYPERLIQUID_REWARDS_INCREMENTAL_OVERLAP_MS,
+  5 * 60 * 1000,
+  30_000,
+  60 * 60 * 1000,
+));
+const RATE_LIMIT_BACKOFF_INITIAL_MS = Math.max(POLL_MS, boundedNumber(
+  process.env.HYPERLIQUID_REWARDS_429_BACKOFF_MS,
+  5 * 60 * 1000,
+  POLL_MS,
+  30 * 60 * 1000,
+));
+const RATE_LIMIT_BACKOFF_MAX_MS = boundedNumber(
+  process.env.HYPERLIQUID_REWARDS_429_BACKOFF_MAX_MS,
+  30 * 60 * 1000,
+  RATE_LIMIT_BACKOFF_INITIAL_MS,
+  2 * 60 * 60 * 1000,
+);
 const MAIN_DB_PATH = process.env.CLASH_MAIN_DB
   || path.join(__dirname, '..', 'server', 'clash.db');
 const HYPERLIQUID_BUILDER_ADDRESS = String(
@@ -23,6 +59,24 @@ const HYPERLIQUID_BUILDER_FEE_TENTH_BPS = Math.max(
   Math.min(1000, Math.floor(Number(process.env.HYPERLIQUID_BUILDER_FEE_TENTH_BPS || 10) || 10)),
 );
 const HYPERLIQUID_CLOID_PREFIX = '0x434f5001';
+const defaultPollState = createPollState();
+
+function createPollState() {
+  return {
+    cursor: 0,
+    cooldownUntil: 0,
+    rateLimitBackoffMs: RATE_LIMIT_BACKOFF_INITIAL_MS,
+    walletLastPollAt: new Map(),
+  };
+}
+
+function isRateLimitError(error) {
+  return /(?:\b429\b|rate[ -]?limit)/i.test(String(error?.message || error || ''));
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
 function fillTimeMs(fill) {
   const n = Number(fill?.time ?? fill?.timestamp ?? 0);
@@ -294,7 +348,19 @@ async function importFillsForPlayer(playerId, wallet, opts = {}) {
   };
 }
 
-async function pollOnce(mainDb) {
+async function pollOnce(mainDb, opts = {}) {
+  const state = opts.state || defaultPollState;
+  const nowMs = typeof opts.nowMs === 'function' ? opts.nowMs : Date.now;
+  const importPlayerFills = opts.importPlayerFills || importFillsForPlayer;
+  const wait = opts.sleep || sleep;
+  const maxWalletsPerTick = Math.max(
+    1,
+    Math.min(100, Math.floor(Number(opts.maxWalletsPerTick ?? MAX_WALLETS_PER_TICK) || 1)),
+  );
+  const requestSpacingMs = Math.max(
+    0,
+    Math.min(10_000, Math.floor(Number(opts.requestSpacingMs ?? REQUEST_SPACING_MS) || 0)),
+  );
   const rows = mainDb.prepare(
     `SELECT DISTINCT p.id, COALESCE(NULLIF(pda.wallet_address, ''), p.wallet) AS wallet
        FROM players p
@@ -302,19 +368,63 @@ async function pollOnce(mainDb) {
          ON pda.player_id = p.id AND pda.dex = 'hyperliquid'
       WHERE (p.dex = 'hyperliquid' OR pda.dex = 'hyperliquid')
         AND COALESCE(NULLIF(pda.wallet_address, ''), p.wallet) IS NOT NULL
-        AND COALESCE(NULLIF(pda.wallet_address, ''), p.wallet) != ''`
+        AND COALESCE(NULLIF(pda.wallet_address, ''), p.wallet) != ''
+      ORDER BY p.id ASC`
   ).all();
-  if (!rows.length) return 0;
+  const validRows = rows.filter(row => hyperliquid.isEvmAddress(String(row.wallet || '').trim()));
+  if (!validRows.length) {
+    state.cursor = 0;
+    return 0;
+  }
+  if (Number(state.cooldownUntil || 0) > nowMs()) return 0;
+
+  const startCursor = ((Number(state.cursor || 0) % validRows.length) + validRows.length) % validRows.length;
+  const batchSize = Math.min(validRows.length, maxWalletsPerTick);
   let inserted = 0;
-  for (const row of rows) {
+  let attempted = 0;
+  let rateLimited = false;
+  for (let offset = 0; offset < batchSize; offset += 1) {
+    const rowIndex = (startCursor + offset) % validRows.length;
+    const row = validRows[rowIndex];
     const wallet = String(row.wallet || '').trim();
-    if (!hyperliquid.isEvmAddress(wallet)) continue;
+    const requestStartedAt = nowMs();
+    const walletKey = wallet.toLowerCase();
+    const previousPollAt = Number(state.walletLastPollAt?.get(walletKey) || 0);
+    const lookbackMs = previousPollAt > 0
+      ? Math.min(
+        LOOKBACK_MS,
+        Math.max(INCREMENTAL_OVERLAP_MS, requestStartedAt - previousPollAt + INCREMENTAL_OVERLAP_MS),
+      )
+      : LOOKBACK_MS;
     try {
-      const result = await importFillsForPlayer(row.id, wallet);
+      const result = await importPlayerFills(row.id, wallet, { lookbackMs });
       inserted += result.imported || 0;
+      state.walletLastPollAt?.set(walletKey, requestStartedAt);
     } catch (e) {
+      if (isRateLimitError(e)) {
+        const backoffMs = Math.max(
+          RATE_LIMIT_BACKOFF_INITIAL_MS,
+          Number(state.rateLimitBackoffMs || RATE_LIMIT_BACKOFF_INITIAL_MS),
+        );
+        state.cursor = rowIndex;
+        state.cooldownUntil = nowMs() + backoffMs;
+        state.rateLimitBackoffMs = Math.min(RATE_LIMIT_BACKOFF_MAX_MS, backoffMs * 2);
+        rateLimited = true;
+        console.warn(
+          `[hyperliquid-rewards-worker] rate limited; pausing wallet reads for ${Math.ceil(backoffMs / 1000)}s`,
+        );
+        break;
+      }
       console.warn(`[hyperliquid-rewards-worker] fill fetch failed for ${wallet.slice(0, 10)}:`, e.message);
     }
+    attempted += 1;
+    state.cursor = (rowIndex + 1) % validRows.length;
+    if (offset < batchSize - 1 && requestSpacingMs > 0) await wait(requestSpacingMs);
+  }
+  if (!rateLimited) {
+    state.cooldownUntil = 0;
+    state.rateLimitBackoffMs = RATE_LIMIT_BACKOFF_INITIAL_MS;
+    if (attempted === 0) state.cursor = startCursor;
   }
   return inserted;
 }
@@ -328,23 +438,32 @@ function start() {
     console.error('[hyperliquid-rewards-worker] Cannot open main DB:', e.message, '- worker disabled.');
     return;
   }
+  let tickInFlight = false;
   const tick = async () => {
+    if (tickInFlight) return;
+    tickInFlight = true;
     try {
       const n = await pollOnce(mainDb);
       if (n > 0) console.log(`[hyperliquid-rewards-worker] Recorded ${n} Hyperliquid trade row(s)`);
     } catch (e) {
       console.error('[hyperliquid-rewards-worker] tick failed:', e?.message || e);
+    } finally {
+      tickInFlight = false;
     }
   };
   tick();
   const iv = setInterval(tick, POLL_MS);
   iv.unref?.();
-  console.log(`[hyperliquid-rewards-worker] started (polling every ${POLL_MS / 1000}s)`);
+  console.log(
+    `[hyperliquid-rewards-worker] started (poll=${POLL_MS / 1000}s, batch=${MAX_WALLETS_PER_TICK}, spacing=${REQUEST_SPACING_MS}ms)`,
+  );
 }
 
 module.exports = {
   start,
   pollOnce,
+  createPollState,
+  isRateLimitError,
   importFillsForPlayer,
   normalizeFill,
   sideFromFill,

@@ -33,7 +33,8 @@ try {
     turret: 7,
     mage_tower: 7,
     tombstone: 6,
-    mortar: 3,
+    mortar: 7,
+    harpoon: 7,
     shark_trap: 7,
     cannon: 7,
     port: 3,
@@ -50,6 +51,8 @@ try {
   assert.equal(gameDb.TH_UNLOCK.cannon, 7);
   assert.deepEqual(gameDb.TH_MAX_COUNT.cannon, [0, 0, 0, 0, 0, 0, 2]);
   assert.deepEqual(gameDb.TH_MAX_LEVEL.cannon, [1, 1, 1, 1, 1, 1, 7]);
+  assert.deepEqual(gameDb.TH_MAX_COUNT.harpoon, [0, 0, 0, 0, 0, 1, 1, 2]);
+  assert.deepEqual(gameDb.TH_MAX_LEVEL.harpoon, [1, 1, 1, 1, 1, 6, 7, 8]);
   assert.deepEqual(gameDb.TH_MAX_LEVEL.port, [1, 2, 3, 3, 3, 3, 3]);
   assert.deepEqual(gameDb.TH_MAX_LEVEL.altar, [1, 1, 1, 1, 1, 1, 1]);
   assert.deepEqual(gameDb.TH_UPGRADE_REQUIRES[6], gameDb.TH_UPGRADE_REQUIRES[5]);
@@ -100,6 +103,8 @@ try {
   assert.deepEqual(gameDb.TROPHY_TABLE.turret, [20, 45, 90, 160, 255, 380, 535]);
   assert.deepEqual(gameDb.TROPHY_TABLE.archer_tower, [15, 35, 70, 125, 200, 300, 425]);
   assert.deepEqual(gameDb.TROPHY_TABLE.mage_tower, [20, 45, 90, 145, 225, 330, 460]);
+  assert.deepEqual(gameDb.TROPHY_TABLE.mortar, [30, 65, 125, 210, 315, 440, 580]);
+  assert.deepEqual(gameDb.TROPHY_TABLE.harpoon, [20, 35, 55, 80, 110, 145, 190, 240]);
   assert.deepEqual(gameDb.TROPHY_TABLE.tombstone, [5, 10, 20, 40, 70, 110]);
   assert.deepEqual(gameDb.TROPHY_TABLE.shark_trap, [25, 40, 60, 85, 115, 155, 205]);
 
@@ -118,8 +123,9 @@ try {
   insertBuilding(playerId, 'archer_tower', 6, 9, 7);
   const turretId = insertBuilding(playerId, 'turret', 5, 13, 7);
   insertBuilding(playerId, 'mage_tower', 6, 16, 7);
-  insertBuilding(playerId, 'mortar', 2, 20, 7);
+  const mortarId = insertBuilding(playerId, 'mortar', 6, 20, 7);
   insertBuilding(playerId, 'shark_trap', 6, 23, 7);
+  const harpoonId = insertBuilding(playerId, 'harpoon', 6, 0, 12);
 
   assert.deepEqual(gameDb.getResourceCaps(playerId), {
     gold: 106000,
@@ -149,6 +155,24 @@ try {
   assert.equal(th7Upgrade.hp, 72000);
   assert.deepEqual(th7Upgrade.resources, { gold: 21000, wood: 0, ore: 8000 });
 
+  gameDb.db.prepare(
+    'UPDATE players SET gold = 143000, wood = 143000, ore = 143000 WHERE id = ?',
+  ).run(playerId);
+  const harpoonUpgrade = gameDb.upgradeBuilding(playerId, harpoonId);
+  assert.equal(harpoonUpgrade.level, 7);
+  assert.equal(harpoonUpgrade.max_hp, 7200);
+  assert.deepEqual(harpoonUpgrade.resources, { gold: 57000, wood: 21000, ore: 39000 });
+  assert.match(gameDb.upgradeBuilding(playerId, harpoonId).error, /Town Hall to level 8/);
+
+  gameDb.db.prepare(
+    'UPDATE players SET gold = 143000, wood = 143000, ore = 143000 WHERE id = ?',
+  ).run(playerId);
+  const mortarUpgrade = gameDb.upgradeBuilding(playerId, mortarId);
+  assert.equal(mortarUpgrade.level, 7);
+  assert.equal(mortarUpgrade.max_hp, 8100);
+  assert.deepEqual(mortarUpgrade.resources, { gold: 51000, wood: 11000, ore: 31000 });
+  assert.match(gameDb.upgradeBuilding(playerId, mortarId).error, /Already at max level/);
+
   for (const storageId of storageIds) {
     const capBeforeUpgrade = gameDb.getResourceCaps(playerId);
     gameDb.db.prepare(
@@ -166,6 +190,36 @@ try {
     wood: 143000,
     ore: 143000,
   });
+
+  gameDb.db.prepare(
+    'UPDATE players SET gold = 143000, wood = 143000, ore = 143000 WHERE id = ?',
+  ).run(playerId);
+  assert.match(
+    gameDb.placeBuilding(playerId, 'harpoon', 4, 12).error,
+    /Maximum 1 harpoon at Town Hall level 7/,
+  );
+  gameDb.db.prepare(
+    'UPDATE buildings SET level = 8 WHERE id = ?',
+  ).run(townHallId);
+  gameDb.db.prepare(
+    'UPDATE players SET gold = 143000, wood = 143000, ore = 143000 WHERE id = ?',
+  ).run(playerId);
+  const harpoonL8 = gameDb.upgradeBuilding(playerId, harpoonId);
+  assert.equal(harpoonL8.level, 8);
+  assert.equal(harpoonL8.max_hp, 8800);
+  assert.deepEqual(harpoonL8.resources, { gold: 35000, wood: 1000, ore: 19000 });
+  assert.match(gameDb.upgradeBuilding(playerId, harpoonId).error, /Already at max level/);
+  gameDb.db.prepare(
+    'UPDATE players SET gold = 143000, wood = 143000, ore = 143000 WHERE id = ?',
+  ).run(playerId);
+  const secondHarpoon = gameDb.placeBuilding(playerId, 'harpoon', 4, 12);
+  assert.equal(secondHarpoon.type, 'harpoon');
+  assert.equal(secondHarpoon.level, 1);
+  assert.equal(secondHarpoon.max_hp, 1800);
+  assert.match(
+    gameDb.placeBuilding(playerId, 'harpoon', 8, 12).error,
+    /Maximum 2 harpoon at Town Hall level 8/,
+  );
 
   const cannonPlayer = gameDb.registerPlayer(`th7_cannon_${Date.now()}`);
   const cannonPlayerId = cannonPlayer.id;
@@ -219,7 +273,11 @@ try {
   );
 
   const routesSource = fs.readFileSync(path.join(__dirname, 'routes.js'), 'utf8');
-  assert.match(routesSource, /ADMIN_MAX_VILLAGE_BUILD_ORDER[\s\S]*?'cannon'/);
+  assert.match(
+    routesSource,
+    /ADMIN_MAX_VILLAGE_BUILD_ORDER[\s\S]*?'cannon'[\s\S]*?'harpoon'[\s\S]*?'port'/,
+    'admin max-village must include the TH6+ Harpoon before Port placement',
+  );
   assert.match(
     routesSource,
     /townHallLevel\s*=\s*Math\.max\(1,\s*Math\.min\(7,/,
@@ -233,7 +291,8 @@ try {
 
   console.log(
     '[TH7_PROGRESSION] PASS cost=85000/106000/98000'
-    + ' th6_capacity=106000 th7_capacity=143000 cannons=2xL7 port=3 altar=1',
+    + ' th6_capacity=106000 th7_capacity=143000 mortar=L7 harpoon=L8_synthetic'
+    + ' harpoon_count=TH6:1/TH7:1/TH8:2 cannons=2xL7 port=3 altar=1',
   );
 } finally {
   gameDb.db.close();

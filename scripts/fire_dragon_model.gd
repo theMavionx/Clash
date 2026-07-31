@@ -126,7 +126,7 @@ func _play_first_imported_clip(player: AnimationPlayer, animation_name: String) 
 		return
 
 
-func _loop_mode_for(animation_name: String) -> int:
+func _loop_mode_for(animation_name: String) -> Animation.LoopMode:
 	var lower_name := animation_name.to_lower()
 	if lower_name.findn("idle") != -1 \
 			or lower_name.findn("run") != -1 \

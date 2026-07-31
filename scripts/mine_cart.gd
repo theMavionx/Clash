@@ -129,10 +129,10 @@ func _compute_endpoints() -> void:
 	# out. Just compute the start by sliding back along the long axis by
 	# the full rail length, mirroring the overhang on the opposite end.
 	var rail_mid: float = (rail_lo + rail_hi) * 0.5
-	var sign: float = 1.0 if cart_center[long_axis] >= rail_mid else -1.0
+	var direction_sign: float = 1.0 if cart_center[long_axis] >= rail_mid else -1.0
 	_end_pos = _cart.position
 	_start_pos = _cart.position
-	_start_pos[long_axis] = _cart.position[long_axis] - sign * rail_length
+	_start_pos[long_axis] = _cart.position[long_axis] - direction_sign * rail_length
 
 # Merge AABB of every MeshInstance3D under `node`, expressed in `parent`'s
 # local frame. Used to compare positions of subtrees that live in the same

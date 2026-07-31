@@ -549,19 +549,6 @@ func _send_replay_telemetry() -> void:
 	# light. Keep the recorder helpers intact so we can re-enable diagnostics
 	# later without touching combat logic.
 	return
-	if not bs or not bs._bridge:
-		return
-	_reconcile_replay_destroyed_building_telemetry()
-	var info: Dictionary = _replay_info()
-	info.attacker_name = _replay_attacker_name
-	info.replay_label = _replay_label
-	info.actual_elapsed = snappedf(_replay_elapsed, 0.01)
-	info.actual_wall_elapsed = snappedf(_replay_wall_elapsed_sec(), 0.01)
-	bs._bridge.send_to_react("replay_telemetry", {
-		"replay": info,
-		"summary": _replay_telemetry_summary(),
-		"events": _replay_telemetry,
-	})
 
 
 func _queue_free_once(value) -> void:
@@ -770,17 +757,19 @@ func _await_signal_or_timeout(source: Object, signal_name: String, timeout_sec: 
 	if source == null or not is_instance_valid(source) or not source.has_signal(signal_name):
 		print("[BATTLE_ENTRY] ", log_label, "_missing_signal")
 		return false
-	var done: bool = false
+	var completion_state := {"done": false}
 	var on_done := func() -> void:
-		done = true
+		completion_state.done = true
 	source.connect(signal_name, on_done, CONNECT_ONE_SHOT)
 	var waited: float = 0.0
-	while not done and waited < timeout_sec:
+	while not bool(completion_state.done) and waited < timeout_sec:
 		await bs.get_tree().process_frame
 		waited += bs.get_process_delta_time()
-	if done:
+	if bool(completion_state.done):
 		print("[BATTLE_ENTRY] ", log_label, "_done wait_ms=", int(waited * 1000.0))
 		return true
+	if is_instance_valid(source) and source.is_connected(signal_name, on_done):
+		source.disconnect(signal_name, on_done)
 	print("[BATTLE_ENTRY] ", log_label, "_timeout wait_ms=", int(waited * 1000.0))
 	return false
 
@@ -1020,7 +1009,7 @@ func _restore_ships_and_troops() -> void:
 			troop.visible = true
 			troop.set_process(true)
 			if "state" in troop:
-				troop.state = 0
+				troop.state = BaseTroop.State.RUNNING
 
 
 ## Switches to the enemy island with a full cloud-close transition.

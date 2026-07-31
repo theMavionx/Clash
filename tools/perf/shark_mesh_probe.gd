@@ -4,10 +4,10 @@ const SHARK_SCENE := preload("res://Model/Shark/Shark.glb")
 
 
 func _initialize() -> void:
-	var root := SHARK_SCENE.instantiate()
-	get_root().add_child(root)
+	var shark_root := SHARK_SCENE.instantiate()
+	get_root().add_child(shark_root)
 	var rows: Array[Dictionary] = []
-	for raw_mesh in root.find_children("*", "MeshInstance3D", true, false):
+	for raw_mesh in shark_root.find_children("*", "MeshInstance3D", true, false):
 		var mesh_instance := raw_mesh as MeshInstance3D
 		if mesh_instance == null or mesh_instance.mesh == null:
 			continue

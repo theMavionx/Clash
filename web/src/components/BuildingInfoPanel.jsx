@@ -32,6 +32,7 @@ import imgShip from '../assets/buildings/main_ship.png';
 import imgMageTower from '../assets/buildings/magetower.png';
 import imgMortar from '../assets/buildings/mortar.png';
 import imgSharkTrap from '../assets/buildings/sharktrap.png';
+import imgHarpoon from '../assets/buildings/harpoon.png';
 import imgAltar from '../assets/units/altar.png';
 
 import knightImg from '../assets/units/knight.png';
@@ -154,6 +155,7 @@ const THUMBNAIL_MAP = {
   mage_tower: imgMageTower,
   mortar: imgMortar,
   shark_trap: imgSharkTrap,
+  harpoon: imgHarpoon,
   storage: imgStorage,
   altar: imgAltar,
   main_ship: imgShip,
@@ -185,6 +187,7 @@ const DESC_MAP = {
   mage_tower: 'Casts splash magic at groups of enemy troops.',
   mortar: 'Long-range splash defense with a minimum firing range.',
   shark_trap: 'A hidden 2 x 2 trap that eliminates the first ordinary ground troop. Higher levels deal more damage to Demon King.',
+  harpoon: 'An air-only control defense that damages and pulls one flying enemy into a defensive kill zone.',
   residence: 'Residences produce gold.',
 };
 
@@ -1349,6 +1352,25 @@ function BuildingInfoPanel({ onOpenTroops }) {
         <StatBox label="Damage" current={building.damage} />
         <StatBox label="Level" current={building.level} />
       </>
+    ) : building.id === 'mortar' ? (
+      <>
+        <StatBox label="Splash Damage" current={building.damage} />
+        <StatBox label="Range" current={Number(building.detect_range || 0).toFixed(2)} />
+        <StatBox label="Minimum Range" current={Number(building.min_range || 0).toFixed(2)} />
+        <StatBox label="Splash Radius" current={Number(building.splash_radius || 0).toFixed(2)} />
+        <StatBox label="Reload" current={`${Number(building.reload_sec || 0).toFixed(2)} s`} />
+        <StatBox label="Health" current={building.max_hp} />
+        <StatBox label="Level" current={building.level} />
+      </>
+    ) : building.id === 'harpoon' ? (
+      <>
+        <StatBox label="Impact Damage" current={building.damage} />
+        <StatBox label="Range" current={Number(building.detect_range || 0).toFixed(2)} />
+        <StatBox label="Pull Speed" current={Number(building.pull_speed || 0).toFixed(2)} />
+        <StatBox label="Reload" current={`${Number(building.reload_sec || 7).toFixed(2)} s`} />
+        <StatBox label="Health" current={building.max_hp} />
+        <StatBox label="Level" current={building.level} />
+      </>
     ) : building.id === 'cannon' ? (
       <>
         <StatBox label="Damage" current={building.damage} />
@@ -1520,6 +1542,49 @@ function BuildingInfoPanel({ onOpenTroops }) {
     const leftContent = building.id === 'shark_trap' ? (
       <>
         <StatBox label="Damage" current={building.damage} upgradeTo={building.next_damage} />
+        <StatBox label="Level" current={building.level} upgradeTo={building.level + 1} />
+      </>
+    ) : building.id === 'mortar' ? (
+      <>
+        <StatBox label="Splash Damage" current={building.damage} upgradeTo={building.next_damage} />
+        <StatBox
+          label="Range"
+          current={Number(building.detect_range || 0).toFixed(2)}
+          upgradeTo={Number(building.next_detect_range || building.detect_range || 0).toFixed(2)}
+        />
+        <StatBox
+          label="Minimum Range"
+          current={Number(building.min_range || 0).toFixed(2)}
+          upgradeTo={Number(building.next_min_range || building.min_range || 0).toFixed(2)}
+        />
+        <StatBox
+          label="Splash Radius"
+          current={Number(building.splash_radius || 0).toFixed(2)}
+          upgradeTo={Number(building.next_splash_radius || building.splash_radius || 0).toFixed(2)}
+        />
+        <StatBox
+          label="Reload"
+          current={`${Number(building.reload_sec || 0).toFixed(2)} s`}
+          upgradeTo={`${Number(building.next_reload_sec || building.reload_sec || 0).toFixed(2)} s`}
+        />
+        <StatBox label="Health" current={building.max_hp} upgradeTo={building.next_hp} />
+        <StatBox label="Level" current={building.level} upgradeTo={building.level + 1} />
+      </>
+    ) : building.id === 'harpoon' ? (
+      <>
+        <StatBox label="Impact Damage" current={building.damage} upgradeTo={building.next_damage} />
+        <StatBox
+          label="Range"
+          current={Number(building.detect_range || 0).toFixed(2)}
+          upgradeTo={Number(building.next_detect_range || building.detect_range || 0).toFixed(2)}
+        />
+        <StatBox
+          label="Pull Speed"
+          current={Number(building.pull_speed || 0).toFixed(2)}
+          upgradeTo={Number(building.next_pull_speed || building.pull_speed || 0).toFixed(2)}
+        />
+        <StatBox label="Reload" current={`${Number(building.reload_sec || 7).toFixed(2)} s`} />
+        <StatBox label="Health" current={building.max_hp} upgradeTo={building.next_hp} />
         <StatBox label="Level" current={building.level} upgradeTo={building.level + 1} />
       </>
     ) : building.id === 'cannon' ? (
