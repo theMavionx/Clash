@@ -103,34 +103,6 @@ const TIME_IN_FORCE = Object.freeze({
 const USDC_DECIMALS = 6;
 
 async function aptosView(functionId, args = [], typeArguments = []) {
-  const token = window._playerToken;
-  if (token) {
-    try {
-      const serverResponse = await fetch(`${FUTURES_API}/decibel/aptos-view`, {
-        method: 'POST',
-        cache: 'no-store',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-dex': 'decibel',
-          'x-token': token,
-        },
-        body: JSON.stringify({
-          function: functionId,
-          type_arguments: typeArguments,
-          arguments: args,
-        }),
-      });
-      if (serverResponse.ok) return serverResponse.json();
-      const detail = await serverResponse.text().catch(() => '');
-      D.warn('server Aptos view failed; using direct fallback', {
-        function: functionId,
-        status: serverResponse.status,
-        detail: detail.slice(0, 160),
-      });
-    } catch (error) {
-      D.warn('server Aptos view unavailable; using direct fallback', error?.message || error);
-    }
-  }
   const r = await fetchWithAptosBrowserKeys(`${APTOS_FULLNODE}/view`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -895,15 +867,6 @@ async function hasTradingDelegation(sub, apiAddr) {
 }
 
 function assertWriteSuccess(result, label) {
-  if (result?.verification?.terminal === true) {
-    const error = new Error(
-      result?.verification?.reason
-      || result?.error
-      || `${label || 'Decibel transaction'} was rejected`,
-    );
-    error.code = result?.verification?.code || result?.code || 'DECIBEL_ORDER_REJECTED';
-    throw error;
-  }
   if (result?.success === false) {
     throw new Error(result.error || `${label || 'Decibel transaction'} failed`);
   }
@@ -1255,18 +1218,12 @@ export function useDecibel() {
 
   const fetchMarkets = useCallback(async () => {
     try {
-      let list;
-      try {
-        list = await decibelServerRequest('/markets', null, 'GET');
-      } catch (serverError) {
-        D.warn('fetchMarkets server read failed; using direct SDK fallback:', serverError?.message || serverError);
-        const read = await getReadClient();
-        list = await withAbortableRead(
-          fetchOptions => read.markets.getAll({ fetchOptions }),
-          READ_TIMEOUT_MS,
-          'markets',
-        );
-      }
+      const read = await getReadClient();
+      const list = await withAbortableRead(
+        fetchOptions => read.markets.getAll({ fetchOptions }),
+        READ_TIMEOUT_MS,
+        'markets',
+      );
       const arr = Array.isArray(list) ? list : (list?.data || []);
       const norm = arr.map((m, i) => normalizeMarket(m, i));
       D.log(`fetchMarkets: ${norm.length} markets loaded`);
@@ -1278,28 +1235,22 @@ export function useDecibel() {
     } catch (e) {
       D.warn('fetchMarkets failed:', e?.message || e);
     }
-  }, [applyPriceRows, decibelServerRequest]);
+  }, [applyPriceRows]);
 
   const fetchPrices = useCallback(async () => {
     try {
-      let list;
-      try {
-        list = await decibelServerRequest('/prices', null, 'GET');
-      } catch (serverError) {
-        D.warn('fetchPrices server read failed; using direct SDK fallback:', serverError?.message || serverError);
-        const read = await getReadClient();
-        list = await withAbortableRead(
-          fetchOptions => read.marketPrices.getAll({ fetchOptions }),
-          READ_TIMEOUT_MS,
-          'prices',
-        );
-      }
+      const read = await getReadClient();
+      const list = await withAbortableRead(
+        fetchOptions => read.marketPrices.getAll({ fetchOptions }),
+        READ_TIMEOUT_MS,
+        'prices',
+      );
       const arr = Array.isArray(list) ? list : (list?.data || []);
       applyPriceRows(arr);
     } catch (e) {
       D.warn('fetchPrices failed:', e?.message || e);
     }
-  }, [applyPriceRows, decibelServerRequest]);
+  }, [applyPriceRows]);
 
   // Resolves the user's primary subaccount address.
   //
@@ -1332,28 +1283,18 @@ export function useDecibel() {
         return cached;
       }
       D.log('ensureSubaccount: derived', derived, '— probing on-chain…');
+      const read = await getReadClient();
       let exists = false;
       try {
-        const acct = await decibelServerRequest(
-          `/account?owner=${encodeURIComponent(address)}&subaccountAddr=${encodeURIComponent(derived)}`,
-          null,
-          'GET',
+        const acct = await withAbortableRead(
+          fetchOptions => read.accountOverview.getByAddr({ subAddr: derived, fetchOptions }),
+          READ_TIMEOUT_MS,
+          'subaccount-probe',
         );
         exists = !!acct && typeof acct === 'object';
-      } catch (serverError) {
-        D.warn('ensureSubaccount server probe failed; using direct SDK fallback:', serverError?.message || serverError);
-        try {
-          const read = await getReadClient();
-          const acct = await withAbortableRead(
-            fetchOptions => read.accountOverview.getByAddr({ subAddr: derived, fetchOptions }),
-            READ_TIMEOUT_MS,
-            'subaccount-probe',
-          );
-          exists = !!acct && typeof acct === 'object';
-        } catch (e) {
-          D.log('ensureSubaccount: probe failed (subaccount not created yet)', e?.message || e);
-          exists = false;
-        }
+      } catch (e) {
+        D.log('ensureSubaccount: probe failed (subaccount not created yet)', e?.message || e);
+        exists = false;
       }
       if (exists) {
         D.log('ensureSubaccount: subaccount confirmed ✓', derived);
@@ -1367,7 +1308,7 @@ export function useDecibel() {
       D.warn('ensureSubaccount fatal:', e?.message || e);
       return null;
     }
-  }, [address, subaccountAddr, decibelServerRequest]);
+  }, [address, subaccountAddr]);
 
   // accountOverview is per-SUBACCOUNT, not per-master. Calling it with the
   // master address returns an empty/error response, which the previous
@@ -1393,22 +1334,12 @@ export function useDecibel() {
           accountFetchRef.current.nextAllowedAt = 0;
           return null;
         }
-        let acct;
-        try {
-          acct = await decibelServerRequest(
-            `/account?owner=${encodeURIComponent(address)}&subaccountAddr=${encodeURIComponent(sub)}`,
-            null,
-            'GET',
-          );
-        } catch (serverError) {
-          D.warn('fetchAccount server read failed; using direct SDK fallback:', serverError?.message || serverError);
-          const read = await getReadClient();
-          acct = await withAbortableRead(
-            fetchOptions => read.accountOverview.getByAddr({ subAddr: sub, fetchOptions }),
-            ACCOUNT_READ_TIMEOUT_MS,
-            'account',
-          );
-        }
+        const read = await getReadClient();
+        const acct = await withAbortableRead(
+          fetchOptions => read.accountOverview.getByAddr({ subAddr: sub, fetchOptions }),
+          ACCOUNT_READ_TIMEOUT_MS,
+          'account'
+        );
         if (walletGenRef.current !== gen) return null;
         accountFetchRef.current.failCount = 0;
         accountFetchRef.current.nextAllowedAt = 0;
@@ -1459,7 +1390,7 @@ export function useDecibel() {
       }
     });
     return run;
-  }, [address, ensureSubaccount, decibelServerRequest]);
+  }, [address, ensureSubaccount]);
 
   // Mirror the most recent positions list into a ref so callbacks like
   // setMarginMode can read current state without inflating their dep
@@ -1478,18 +1409,18 @@ export function useDecibel() {
         return [];
       }
       let list;
-      let source = 'server';
+      let source = 'direct-sdk';
       try {
-        list = await decibelServerRequest(`/positions?subaccountAddr=${encodeURIComponent(sub)}`, null, 'GET');
-      } catch (serverError) {
-        D.warn('fetchPositions server read failed; using direct SDK fallback:', serverError?.message || serverError);
-        source = 'direct-sdk-fallback';
         const read = await getReadClient();
         list = await withAbortableRead(
           fetchOptions => read.userPositions.getByAddr({ subAddr: sub, fetchOptions }),
           READ_TIMEOUT_MS,
-          'positions',
+          'positions'
         );
+      } catch (readError) {
+        D.warn('fetchPositions direct Decibel read failed; falling back to server:', readError?.message || readError);
+        source = 'server-fallback';
+        list = await decibelServerRequest(`/positions?subaccountAddr=${encodeURIComponent(sub)}`, null, 'GET');
       }
       const raw = Array.isArray(list) ? list : (list?.data || []);
       const norm = mergeTpslOrdersIntoPositions(
@@ -3142,17 +3073,11 @@ function decodeTradeError(e, fallback) {
       if (/INSUFFICIENT_BALANCE_FOR_TRANSACTION_FEE|insufficient.*(?:gas|fee)/i.test(reason)) {
         return 'Decibel server signer ran out of APT for gas. Fund the server API wallet or enable gas sponsorship.';
       }
-      if (/not enough collateral|insufficient collateral|insufficient.*(?:margin|usdc|trading account)/i.test(reason)) {
-        return 'Not enough collateral to place order. Reduce the order size or deposit more USDC.';
-      }
       if (/insufficient/i.test(reason)) return 'Insufficient USDC in trading account';
       if (/EINVALID_TP_SL_SIZE|EINVALID_TP_SL_PARAMETERS|TP\/SL/i.test(reason)) {
         return 'Invalid Decibel TP/SL - check price direction and position size';
       }
-      if (/(?:signature|wallet|user).*(?:reject|cancel|denied)|(?:reject|cancel|denied).*(?:signature|wallet|user)/i.test(reason)) {
-        return 'Signature cancelled';
-      }
-      if (/reject|cancel|denied/i.test(reason)) return String(reason);
+      if (/reject|cancel|denied/i.test(reason)) return 'Signature cancelled';
       if (/slippage|price/i.test(reason)) return 'Price moved past slippage — widen slippage or retry';
       if (/builderFee must be/i.test(reason)) {
         return `Decibel builder fee config mismatch: ${String(reason)}`;

@@ -2,6 +2,7 @@
  * Read exchange credentials already provisioned by the Futures / game wallet flows
  * and package them for Phantom Bots `POST /api/v1/accounts`.
  */
+import { getAddress } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import {
   migratePlainLocalStorageCredential,
@@ -388,6 +389,7 @@ export function saveRisexSessionSigner(privateKey, wallet) {
       exchange: 'risex',
       main_wallet: owner,
       signer_mode: 'browser_session',
+      api_secret: 'browser_session',
       session_address: session.address,
     },
     hint: 'RISEx session key',
@@ -438,14 +440,25 @@ export async function saveKatanaBotCredentials({ apiKey, apiSecret, wallet, oneT
   };
 }
 
+function checksumEvmAddress(addr) {
+  const raw = String(addr || '').trim();
+  if (!raw) return '';
+  try {
+    return getAddress(raw);
+  } catch {
+    return raw;
+  }
+}
+
 /** Save Nado linked signer private key for Bots. */
 export function saveNadoLinkedSigner(privateKey, wallet) {
   const pk = normalizePk(privateKey);
   if (!isPrivateKey(pk)) throw new Error('Invalid Nado linked signer key (0x + 64 hex).');
-  const owner = String(wallet || '').trim().toLowerCase();
-  if (!isEvmAddress(owner)) throw new Error('Nado owner wallet required.');
+  const ownerKey = String(wallet || '').trim().toLowerCase();
+  if (!isEvmAddress(ownerKey)) throw new Error('Nado owner wallet required.');
+  const ownerWallet = checksumEvmAddress(wallet);
   const account = privateKeyToAccount(pk);
-  const key = `${NADO_LINKED_PREFIX}:${owner}`;
+  const key = `${NADO_LINKED_PREFIX}:${ownerKey}`;
   const payload = JSON.stringify({
     privateKey: pk,
     address: account.address.toLowerCase(),
@@ -468,7 +481,7 @@ export function saveNadoLinkedSigner(privateKey, wallet) {
     metadata: {
       source: 'manual_linked_signer',
       exchange: 'nado',
-      owner_wallet: owner,
+      owner_wallet: ownerWallet,
       linked_signer: account.address.toLowerCase(),
       signer_mode: 'linked_only',
       api_secret: 'linked_only',
@@ -532,7 +545,7 @@ function readNadoLinkedSigner(owner) {
 }
 
 /** Temporarily disabled in Bots — broken auth or needs access codes. Flash is fully retired (hidden). */
-export const BOTS_DISABLED_EXCHANGES = ['gmx', 'gmtrade', 'perpl', 'phoenix', 'risex', 'flash'];
+export const BOTS_DISABLED_EXCHANGES = ['gmx', 'gmtrade', 'perpl', 'phoenix', 'flash'];
 
 /** Exchanges Bots can sync from game-local credential storage. */
 export const GAME_WALLET_EXCHANGES = [
@@ -544,6 +557,7 @@ export const GAME_WALLET_EXCHANGES = [
   'hibachi',
   'katana',
   'nado',
+  'risex',
   'pacifica',
   'decibel',
 ];
@@ -572,7 +586,6 @@ export const UNSUPPORTED_GAME_WALLET_EXCHANGES = [
   { id: 'gmtrade', label: 'GMTrade', reason: 'temporarily disabled — not working' },
   { id: 'perpl', label: 'Perpl', reason: 'temporarily disabled — delegate auth required' },
   { id: 'phoenix', label: 'Phoenix', reason: 'temporarily disabled — one-tap via foreign wallet not working' },
-  { id: 'risex', label: 'RISEx', reason: 'temporarily disabled — access codes required' },
   { id: 'mock', label: 'Mock', reason: 'dev tests only' },
 ];
 
@@ -957,6 +970,7 @@ export async function gatherGameCredentials(exchangeId, player, ctx = {}) {
             exchange: ex,
             main_wallet: w,
             signer_mode: 'browser_session',
+            api_secret: 'browser_session',
             session_address: session.address,
           },
           hint: 'RISEx session key (registered in game)',
@@ -1021,7 +1035,7 @@ export async function gatherGameCredentials(exchangeId, player, ctx = {}) {
           metadata: {
             source: 'game_linked_signer',
             exchange: ex,
-            owner_wallet: w,
+            owner_wallet: checksumEvmAddress(w),
             linked_signer: linked.address,
             signer_mode: 'linked_only',
             api_secret: 'linked_only',
