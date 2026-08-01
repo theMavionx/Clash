@@ -7,6 +7,15 @@ function splitKeys(value) {
     .filter(Boolean);
 }
 
+export function collectAptosBrowserKeys(env = {}) {
+  return [...new Set([
+    ...splitKeys(env.VITE_APTOS_NODE_API_KEYS),
+    ...splitKeys(env.VITE_APTOS_NODE_API_KEY),
+    ...splitKeys(env.VITE_DECIBEL_API_KEYS),
+    ...splitKeys(env.VITE_DECIBEL_API_KEY),
+  ])];
+}
+
 const VITE_ENV = (typeof import.meta !== 'undefined' && import.meta.env)
   ? import.meta.env
   : {};
@@ -113,10 +122,7 @@ export function createAptosBrowserKeyPool(keys, poolOptions = {}) {
   };
 }
 
-const browserKeyPool = createAptosBrowserKeyPool([
-  ...splitKeys(VITE_ENV.VITE_APTOS_NODE_API_KEYS),
-  ...splitKeys(VITE_ENV.VITE_APTOS_NODE_API_KEY),
-]);
+const browserKeyPool = createAptosBrowserKeyPool(collectAptosBrowserKeys(VITE_ENV));
 
 export async function runWithAptosBrowserKeys(operation, options = {}) {
   return browserKeyPool.run(operation, options);

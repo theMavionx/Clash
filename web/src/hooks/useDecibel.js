@@ -152,9 +152,10 @@ function isAbortLikeError(e) {
 
 async function withAbortableRead(factory, ms, label) {
   return runWithAptosBrowserKeys(async apiKey => {
+    const read = await getReadClient(apiKey);
     const fetchOptions = aptosFetchOptionsForKey({}, apiKey);
     if (typeof AbortController === 'undefined') {
-      return withTimeout(factory(fetchOptions), ms, label);
+      return withTimeout(factory(read, fetchOptions), ms, label);
     }
     const controller = new AbortController();
     let timedOut = false;
@@ -168,7 +169,7 @@ async function withAbortableRead(factory, ms, label) {
     });
     try {
       return await Promise.race([
-        factory({ ...fetchOptions, signal: controller.signal }),
+        factory(read, { ...fetchOptions, signal: controller.signal }),
         timeout,
       ]);
     } catch (e) {
@@ -813,9 +814,8 @@ async function fetchTradingDelegationOnChain(sub, apiAddr) {
 }
 
 async function fetchDelegations(sub) {
-  const read = await getReadClient();
   const list = await withAbortableRead(
-    fetchOptions => read.delegations.getAll({ subAddr: sub, fetchOptions }),
+    (read, fetchOptions) => read.delegations.getAll({ subAddr: sub, fetchOptions }),
     READ_TIMEOUT_MS,
     'delegations',
   );
@@ -1070,10 +1070,9 @@ export function useDecibel() {
     try {
       // Fast path — REST `/api/v1/subaccounts?owner=<master>`. If indexed,
       // returns the canonical subaccount the contract knows about.
-      const read = await getReadClient();
       try {
         const list = await withAbortableRead(
-          fetchOptions => read.userSubaccounts.getByAddr({ ownerAddr: BUILDER_ADDR, fetchOptions }),
+          (read, fetchOptions) => read.userSubaccounts.getByAddr({ ownerAddr: BUILDER_ADDR, fetchOptions }),
           READ_TIMEOUT_MS,
           'builder-subaccounts'
         );
@@ -1098,7 +1097,7 @@ export function useDecibel() {
       D.log('resolveBuilderSubaccount: derived', derived, '— verifying on-chain…');
       try {
         const acct = await withAbortableRead(
-          fetchOptions => read.accountOverview.getByAddr({ subAddr: derived, fetchOptions }),
+          (read, fetchOptions) => read.accountOverview.getByAddr({ subAddr: derived, fetchOptions }),
           READ_TIMEOUT_MS,
           'builder-overview'
         );
@@ -1197,9 +1196,8 @@ export function useDecibel() {
 
   const fetchMarkets = useCallback(async () => {
     try {
-      const read = await getReadClient();
       const list = await withAbortableRead(
-        fetchOptions => read.markets.getAll({ fetchOptions }),
+        (read, fetchOptions) => read.markets.getAll({ fetchOptions }),
         READ_TIMEOUT_MS,
         'markets',
       );
@@ -1218,9 +1216,8 @@ export function useDecibel() {
 
   const fetchPrices = useCallback(async () => {
     try {
-      const read = await getReadClient();
       const list = await withAbortableRead(
-        fetchOptions => read.marketPrices.getAll({ fetchOptions }),
+        (read, fetchOptions) => read.marketPrices.getAll({ fetchOptions }),
         READ_TIMEOUT_MS,
         'prices',
       );
@@ -1262,11 +1259,10 @@ export function useDecibel() {
         return cached;
       }
       D.log('ensureSubaccount: derived', derived, '— probing on-chain…');
-      const read = await getReadClient();
       let exists = false;
       try {
         const acct = await withAbortableRead(
-          fetchOptions => read.accountOverview.getByAddr({ subAddr: derived, fetchOptions }),
+          (read, fetchOptions) => read.accountOverview.getByAddr({ subAddr: derived, fetchOptions }),
           READ_TIMEOUT_MS,
           'subaccount-probe',
         );
@@ -1313,9 +1309,8 @@ export function useDecibel() {
           accountFetchRef.current.nextAllowedAt = 0;
           return null;
         }
-        const read = await getReadClient();
         const acct = await withAbortableRead(
-          fetchOptions => read.accountOverview.getByAddr({ subAddr: sub, fetchOptions }),
+          (read, fetchOptions) => read.accountOverview.getByAddr({ subAddr: sub, fetchOptions }),
           ACCOUNT_READ_TIMEOUT_MS,
           'account'
         );
@@ -1390,9 +1385,8 @@ export function useDecibel() {
       let list;
       let source = 'direct-sdk';
       try {
-        const read = await getReadClient();
         list = await withAbortableRead(
-          fetchOptions => read.userPositions.getByAddr({ subAddr: sub, fetchOptions }),
+          (read, fetchOptions) => read.userPositions.getByAddr({ subAddr: sub, fetchOptions }),
           READ_TIMEOUT_MS,
           'positions'
         );
@@ -1447,9 +1441,8 @@ export function useDecibel() {
       } catch (serverError) {
         D.warn('fetchOrders server Decibel read failed; falling back to direct SDK:', serverError?.message || serverError);
         source = 'direct-sdk-fallback';
-        const read = await getReadClient();
         list = await withAbortableRead(
-          fetchOptions => read.userOpenOrders.getByAddr({ subAddr: sub, fetchOptions }),
+          (read, fetchOptions) => read.userOpenOrders.getByAddr({ subAddr: sub, fetchOptions }),
           READ_TIMEOUT_MS,
           'orders'
         );
@@ -1827,9 +1820,8 @@ export function useDecibel() {
       // ───── Pre-flight ─────
       D.step('preflight: redeeming referral code', REFERRAL_CODE, 'for', address);
       try {
-        const read = await getReadClient();
         await withAbortableRead(
-          fetchOptions => read.referrals.redeemCode(
+          (read, fetchOptions) => read.referrals.redeemCode(
             { referralCode: REFERRAL_CODE, account: address },
             { fetchOptions },
           ),

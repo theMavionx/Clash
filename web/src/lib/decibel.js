@@ -95,10 +95,12 @@ export const DECIBEL_USDC_MAINNET =
 // Aptos mainnet chain identifier.
 export const APTOS_CHAIN_ID = 1;
 
-// Cached singletons. Re-creating SDK clients per render churns the
-// internal Aptos provider's HTTP keep-alive and breaks WebSocket
-// subscriptions. We build them once and share across the app.
-let _readClient = null;
+// Cached readers, one per browser API key. A reader stores `nodeApiKey` in
+// its internal REST/Aptos dependencies, so sharing one keyless singleton
+// silently turns every SDK read into an anonymous request. Keeping a small
+// keyed cache preserves connection/client reuse while still allowing the
+// browser pool to rotate on 401/403/429.
+const _readClients = new Map();
 let _sdkModule = null;
 
 // Lazy import — the SDK is ~250 KB gz and we shouldn't pull it for
@@ -132,18 +134,18 @@ async function _buildConfig() {
 
 // Read-only client. Safe to call without a connected wallet — used for
 // markets, prices, public account state by address.
-export async function getReadClient() {
-  if (_readClient) return _readClient;
+export async function getReadClient(apiKey = getPreferredAptosApiKey()) {
+  const normalizedApiKey = String(apiKey || '').trim();
+  const cacheKey = normalizedApiKey || '__anonymous__';
+  if (_readClients.has(cacheKey)) return _readClients.get(cacheKey);
   const sdk = await _loadSdk();
   const cfg = await _buildConfig();
-  // Read requests inject a rotating API key through fetchOptions. Keeping the
-  // reader itself keyless lets a 429 retry use another key without rebuilding
-  // the full SDK object.
-  _readClient = new sdk.DecibelReadDex(
+  const reader = new sdk.DecibelReadDex(
     cfg,
-    undefined,
+    normalizedApiKey ? { nodeApiKey: normalizedApiKey } : undefined,
   );
-  return _readClient;
+  _readClients.set(cacheKey, reader);
+  return reader;
 }
 
 // Write client factory for environments that own an Ed25519Account-shape

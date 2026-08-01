@@ -1,8 +1,20 @@
 import assert from 'node:assert/strict';
 import {
+  aptosFetchOptionsForKey,
+  collectAptosBrowserKeys,
   createAptosBrowserKeyPool,
   isAptosBrowserKeyLimitError,
 } from '../web/src/lib/aptosBrowserKeyPool.js';
+
+assert.deepEqual(collectAptosBrowserKeys({
+  VITE_APTOS_NODE_API_KEYS: 'first,second',
+  VITE_APTOS_NODE_API_KEY: 'third',
+  VITE_DECIBEL_API_KEYS: 'second;fourth',
+  VITE_DECIBEL_API_KEY: 'fifth',
+}), ['first', 'second', 'third', 'fourth', 'fifth']);
+
+const fetchOptions = aptosFetchOptionsForKey({}, 'browser-key');
+assert.equal(fetchOptions.headers.get('Authorization'), 'Bearer browser-key');
 
 let now = 1_000;
 const warnings = [];

@@ -266,6 +266,24 @@ first_env_file_value() {
     done
 }
 
+merge_env_key_pool() {
+    local name raw normalized key
+    local combined=""
+    for name in "$@"; do
+        raw="$(env_file_value "$name")"
+        normalized="${raw//,/ }"
+        normalized="${normalized//;/ }"
+        for key in $normalized; do
+            [ -n "$key" ] || continue
+            case ",$combined," in
+                *",$key,"*) ;;
+                *) combined="${combined:+$combined,}$key" ;;
+            esac
+        done
+    done
+    printf '%s' "$combined"
+}
+
 sed_escape_replacement() {
     printf '%s' "$1" | sed -e 's/[\/&|]/\\&/g'
 }
@@ -305,6 +323,22 @@ load_vite_env_for_build() {
                 ;;
         esac
     done < "$ENV_FILE"
+
+    # Decibel reads run in the browser by design. Build one de-duplicated pool
+    # from both public Vite names and the server-side legacy names so a release
+    # cannot accidentally ship anonymous SDK requests just because only
+    # DECIBEL_API_KEYS was maintained by the operator.
+    local aptos_browser_pool aptos_browser_key_count
+    aptos_browser_pool="$(merge_env_key_pool \
+        VITE_APTOS_NODE_API_KEYS VITE_APTOS_NODE_API_KEY \
+        VITE_DECIBEL_API_KEYS VITE_DECIBEL_API_KEY \
+        APTOS_NODE_API_KEYS APTOS_NODE_API_KEY \
+        DECIBEL_API_KEYS DECIBEL_API_KEY)"
+    if [ -n "$aptos_browser_pool" ]; then
+        export VITE_APTOS_NODE_API_KEYS="$aptos_browser_pool"
+        aptos_browser_key_count="$(printf '%s' "$aptos_browser_pool" | tr ',' '\n' | awk 'NF { count++ } END { print count + 0 }')"
+        log "Prepared $aptos_browser_key_count Aptos browser API key(s) for frontend build"
+    fi
 
     if [ "$count" -gt 0 ]; then
         log "Loaded $count Vite build env key(s): ${loaded_keys[*]}"

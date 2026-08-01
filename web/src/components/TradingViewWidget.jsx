@@ -2,6 +2,10 @@ import { memo, useEffect, useRef, useState } from 'react';
 import { createChart, CandlestickSeries, LineSeries } from 'lightweight-charts';
 import { getReadClient } from '../lib/decibel';
 import {
+  aptosFetchOptionsForKey,
+  runWithAptosBrowserKeys,
+} from '../lib/aptosBrowserKeyPool';
+import {
   createPhoenixPublicWsClient,
   phoenixCandlesRoute,
   phoenixFetch,
@@ -401,17 +405,20 @@ function pendingOrderLineKey(order, price, label) {
 }
 
 async function fetchDecibelCandles(symbol, interval, startMs, endMs) {
-  const read = await getReadClient();
-  const rows = await read.candlesticks.getByName({
-    marketName: decibelMarketName(symbol),
-    interval: DECIBEL_INTERVALS[interval] || '5m',
-    startTime: startMs,
-    endTime: endMs,
-    hideOutliers: true,
-  });
-  const candles = normalizeDecibelCandles(Array.isArray(rows) ? rows : []);
-  if (!candles.length) throw new Error('No Decibel candles');
-  return candles;
+  return runWithAptosBrowserKeys(async apiKey => {
+    const read = await getReadClient(apiKey);
+    const rows = await read.candlesticks.getByName({
+      marketName: decibelMarketName(symbol),
+      interval: DECIBEL_INTERVALS[interval] || '5m',
+      startTime: startMs,
+      endTime: endMs,
+      hideOutliers: true,
+      fetchOptions: aptosFetchOptionsForKey({}, apiKey),
+    });
+    const candles = normalizeDecibelCandles(Array.isArray(rows) ? rows : []);
+    if (!candles.length) throw new Error('No Decibel candles');
+    return candles;
+  }, { label: 'Decibel candlesticks' });
 }
 
 function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], orders = [], currentPrice, chartOverlay, dex = 'pacifica' }) {
