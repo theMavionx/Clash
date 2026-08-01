@@ -851,7 +851,7 @@ copy_source_to_release() {
     [ -f "$flamethrower_config" ] \
         || die "Missing versioned gameplay config: $flamethrower_config"
     mkdir -p "$RELEASE_DIR/shared/gameplay"
-    install -m 0644 "$flamethrower_config" \
+    install -p -m 0644 "$flamethrower_config" \
         "$RELEASE_DIR/shared/gameplay/flamethrower-defense.v1.json"
 
     log "Generating server combat grid snapshot from deployed Godot scene..."
