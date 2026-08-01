@@ -6173,6 +6173,7 @@ function cleanupOldBotTargets() {
     const result = db.prepare(`
       DELETE FROM players
       WHERE COALESCE(is_bot, 0) = 1
+        AND id NOT LIKE 'bot-ranked-%'
         AND NOT EXISTS (
           SELECT 1 FROM battle_sessions s
           WHERE s.defender_id = players.id
@@ -6276,6 +6277,41 @@ function virtualBotCandidatesForProfile(attackPower, profile) {
     });
 }
 
+function rankedBotPlayerId(templateId) {
+  const cleanTemplateId = String(templateId || '').trim();
+  if (!/^bot-th[1-7]-(?:normal|hard)-\d+$/.test(cleanTemplateId)) {
+    throw new Error('Invalid ranked bot template id');
+  }
+  return `bot-ranked-${cleanTemplateId}`;
+}
+
+function virtualRankedBotCandidates(townHallLevel) {
+  const defenderTh = Math.max(1, Math.min(7, Math.trunc(Number(townHallLevel) || 1)));
+  return buildBotBaseTemplates()
+    .filter((template) => template.th === defenderTh)
+    .map((template) => {
+      const base = computeBasePowerFromBuildings(template.buildings);
+      return {
+        id: rankedBotPlayerId(template.id),
+        name: template.name,
+        trophies: template.trophies,
+        level: template.th,
+        is_bot: 1,
+        is_virtual_bot: true,
+        is_tournament_participant: 0,
+        bot_template_id: template.id,
+        bot_difficulty: template.difficulty,
+        bot_archetype: template.archetype,
+        bot_variant: template.variant,
+        bot_generation: template.generation,
+        bot_template: template,
+        base_power: base.power,
+        defender_th: base.town_hall_level,
+        ranked_defenses_today: 0,
+      };
+    });
+}
+
 function materializeBotTarget(candidate, sessionId) {
   const template = candidate.bot_template || botTemplateById(candidate.bot_template_id || candidate.id);
   if (!template) throw new Error('Bot template not found');
@@ -6323,6 +6359,92 @@ function materializeBotTarget(candidate, sessionId) {
       maxHp,
       maxHp,
       building.has_ship ? 1 : 0
+    );
+  }
+
+  return {
+    ...candidate,
+    id: botId,
+    name: botName,
+    trophies: template.trophies,
+    level: template.th,
+    is_bot: 1,
+    is_virtual_bot: false,
+    bot_difficulty: template.difficulty,
+    bot_archetype: template.archetype,
+    bot_variant: template.variant,
+    bot_generation: template.generation,
+    bot_template_id: template.id,
+  };
+}
+
+function materializeRankedBotTarget(candidate) {
+  const template = candidate.bot_template || botTemplateById(candidate.bot_template_id);
+  if (!template) throw new Error('Ranked bot template not found');
+  const botId = rankedBotPlayerId(template.id);
+  const existing = stmts.getPlayerById.get(botId);
+  const botName = existing?.name || botMaterializedName(template.name, `ranked:${template.id}`);
+  const resources = nextBotMaterializationResources(template, `ranked:${template.id}`);
+
+  if (!existing) {
+    db.prepare(`
+      INSERT INTO players (
+        id, name, token, gold, wood, ore, trophies, level,
+        is_bot, bot_difficulty, bot_variant, bot_generation,
+        shield_until, last_attacked_by, last_attacked_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, NULL, NULL, NULL)
+    `).run(
+      botId,
+      botName,
+      botMaterializedToken(template.id, 'ranked-pool'),
+      resources.gold,
+      resources.wood,
+      resources.ore,
+      template.trophies,
+      template.th,
+      template.difficulty,
+      template.variant,
+      template.generation,
+    );
+  } else {
+    db.prepare(`
+      UPDATE players
+         SET gold = ?, wood = ?, ore = ?, trophies = ?, level = ?,
+             is_bot = 1, bot_difficulty = ?, bot_variant = ?, bot_generation = ?,
+             shield_until = NULL, last_attacked_by = NULL, last_attacked_at = NULL
+       WHERE id = ?
+    `).run(
+      resources.gold,
+      resources.wood,
+      resources.ore,
+      template.trophies,
+      template.th,
+      template.difficulty,
+      template.variant,
+      template.generation,
+      botId,
+    );
+    db.prepare('DELETE FROM buildings WHERE player_id = ?').run(botId);
+  }
+
+  const insertBuilding = db.prepare(`
+    INSERT INTO buildings (
+      player_id, type, level, grid_x, grid_z, grid_index,
+      hp, max_hp, has_ship, ship_troops, ship_troops_template
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', '[]')
+  `);
+  for (const building of template.buildings) {
+    const maxHp = botBuildingHp(building.type, building.level);
+    insertBuilding.run(
+      botId,
+      building.type,
+      building.level,
+      building.grid_x,
+      building.grid_z,
+      building.grid_index || 0,
+      maxHp,
+      maxHp,
+      building.has_ship ? 1 : 0,
     );
   }
 
@@ -9800,7 +9922,23 @@ function botCandidatesAllowedForTournament(matchFilter) {
 function getRaidRewardProfile(battleSessionId) {
   const sid = normalizeBattleSessionId(battleSessionId);
   const row = sid ? stmts.getRaidMatchmakingBySession.get(sid) : null;
-  if (!row || Number(row.target_is_bot || 0) !== 1) {
+  if (!row) {
+    const session = sid ? stmts.getBattleSession.get(sid) : null;
+    const defender = session?.defender_id ? stmts.getPlayerById.get(session.defender_id) : null;
+    if (Number(defender?.is_bot || 0) === 1) {
+      const difficulty = String(defender.bot_difficulty || 'normal');
+      return {
+        is_bot: true,
+        loot_multiplier: MATCHMAKING_CONFIG.botLootMultiplier[difficulty]
+          || MATCHMAKING_CONFIG.botLootMultiplier.normal,
+        trophy_multiplier: 1,
+        matchmaking: null,
+        reason: 'ranked_bot_pool',
+      };
+    }
+    return { is_bot: false, loot_multiplier: 1, trophy_multiplier: 1, matchmaking: null };
+  }
+  if (Number(row.target_is_bot || 0) !== 1) {
     return { is_bot: false, loot_multiplier: 1, trophy_multiplier: 1, matchmaking: row || null };
   }
   const reason = String(row.selection_reason || '');
@@ -10213,13 +10351,29 @@ function findRankedEnemy(playerId, tournamentId) {
     }
 
     const attackPower = computeAttackPower(playerId);
-    const candidates = rankedRaids.listEligibleDefenders(db, tournament, playerId, {
+    const liveCandidates = rankedRaids.listEligibleDefenders(db, tournament, playerId, {
       dayUtc,
       townHallLevel: attackPower.town_hall_level,
     });
+    const matchedDefenderIds = new Set(db.prepare(`
+      SELECT defender_id
+        FROM tournament_ranked_raids
+       WHERE tournament_id = ? AND day_utc = ? AND attacker_id = ?
+    `).all(tid, dayUtc, playerId).map((row) => row.defender_id));
+    const activeDefenderIds = new Set(db.prepare(`
+      SELECT defender_id
+        FROM battle_sessions
+       WHERE status = 'active' AND reserved_until > datetime('now')
+    `).all().map((row) => row.defender_id));
+    const botCandidates = raidBotTargetsEnabled()
+      ? virtualRankedBotCandidates(attackPower.town_hall_level).filter((candidate) => (
+        !matchedDefenderIds.has(candidate.id) && !activeDefenderIds.has(candidate.id)
+      ))
+      : [];
+    const candidates = [...liveCandidates, ...botCandidates];
     if (!candidates.length) {
       return {
-        error: `No global player base at Town Hall ${attackPower.town_hall_level} is available right now.`,
+        error: `No new Town Hall ${attackPower.town_hall_level} ranked base is available right now.`,
         ranked_tournament: {
           id: tid,
           tournament_id: tid,
@@ -10232,7 +10386,12 @@ function findRankedEnemy(playerId, tournamentId) {
     const nowSql = sqliteDateFromMs(Date.now());
     const rankedCandidates = candidates
       .map((candidate) => {
-        const basePower = computeBasePower(candidate.id);
+        const basePower = candidate.is_virtual_bot
+          ? {
+              power: Number(candidate.base_power || 1),
+              town_hall_level: Number(candidate.defender_th || candidate.level || 1),
+            }
+          : computeBasePower(candidate.id);
         const basePowerRatio = basePower.power / Math.max(1, attackPower.power);
         return {
           ...candidate,
@@ -10253,17 +10412,24 @@ function findRankedEnemy(playerId, tournamentId) {
     const unshieldedCandidates = rankedCandidates.filter((candidate) => (
       !candidate.ranked_shield_active && !candidate.global_shield_active
     ));
-    const selectableCandidates = unshieldedCandidates.length > 0
-      ? unshieldedCandidates
-      : rankedCandidates;
-    const pool = selectableCandidates.slice(0, Math.min(4, selectableCandidates.length));
-    const best = pool[Math.floor(Math.random() * pool.length)] || selectableCandidates[0];
+    // Ranked raids use a separate daily-repeat rule, so a casual/ranked shield
+    // is informational here and never removes an otherwise valid exact-TH base.
+    const selectableCandidates = rankedCandidates;
+    const pool = selectableCandidates.slice(
+      0,
+      Math.min(MATCHMAKING_CONFIG.candidatePoolSize, selectableCandidates.length),
+    );
+    let best = pool[Math.floor(Math.random() * pool.length)] || selectableCandidates[0];
+
+    const sessionId = uuidv4();
+    if (best.is_virtual_bot) {
+      best = materializeRankedBotTarget(best);
+    }
 
     repairAllBuildings(best.id);
     const buildings = getPlayerBuildings(best.id);
     const repairedBase = computeBasePowerFromBuildings(buildings);
     const resources = getResources(best.id);
-    const sessionId = uuidv4();
     const reservedUntil = sqliteDateFromMs(Date.now() + BATTLE_RESERVATION_MINUTES * 60_000);
     const attackNumber = dayStats.attacks_used + 1;
     const attackerResources = subtractResources(playerId, attackCostGold, 0, 0, {
@@ -10300,7 +10466,7 @@ function findRankedEnemy(playerId, tournamentId) {
       playerId,
       best.id,
       resources,
-      { is_bot: false, loot_multiplier: 1 },
+      getRaidRewardProfile(sessionId),
     );
     const reservation = rankedRaids.reserveRankedRaid(db, {
       battleSessionId: sessionId,
@@ -10318,16 +10484,20 @@ function findRankedEnemy(playerId, tournamentId) {
       trophies: Number(best.trophies || 0),
       level: best.level,
       town_hall_level: repairedBase.town_hall_level,
-      is_bot: 0,
+      is_bot: best.is_bot ? 1 : 0,
       matchmaking: {
-        target_is_bot: false,
+        target_is_bot: !!best.is_bot,
+        target_bot_difficulty: best.bot_difficulty || null,
+        target_bot_archetype: best.bot_archetype || null,
         selection_reason: 'ranked_global_exact_town_hall',
         attack_power: attackPower.power,
         base_power: repairedBase.power,
         base_power_ratio: Number((repairedBase.power / Math.max(1, attackPower.power)).toFixed(4)),
-        live_candidate_count: candidates.length,
+        live_candidate_count: liveCandidates.length,
+        bot_candidate_count: botCandidates.length,
         unshielded_candidate_count: unshieldedCandidates.length,
-        shield_fallback_used: unshieldedCandidates.length === 0,
+        shield_fallback_used: !!best.ranked_shield_active || !!best.global_shield_active,
+        shield_ignored_for_ranked: true,
       },
       buildings,
       resources,

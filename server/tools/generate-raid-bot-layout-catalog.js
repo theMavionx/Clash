@@ -18,7 +18,7 @@ const scratchDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clash-raid-bot-layouts
 const scratchCatalog = path.join(scratchDir, 'catalog.json');
 const scratchReport = path.join(scratchDir, 'report.md');
 const scratchData = path.join(scratchDir, 'report.json');
-const layoutsPerTownHall = 300;
+const layoutsByTownHall = { 5: 450, 6: 900, 7: 900 };
 
 try {
   const result = spawnSync(
@@ -27,9 +27,9 @@ try {
       balanceTool,
       '--catalog-only',
       '--profile',
-      'th6-th7',
+      'th5-th7',
       '--bases',
-      '720',
+      '3240',
       '--seed',
       '729',
       '--dump-bases',
@@ -57,7 +57,8 @@ try {
 
   const generated = JSON.parse(fs.readFileSync(scratchCatalog, 'utf8'));
   const compact = {};
-  for (const townHall of [6, 7]) {
+  for (const townHall of [5, 6, 7]) {
+    const layoutsPerTownHall = layoutsByTownHall[townHall];
     compact[townHall] = generated
       .filter((base) => Number(base.townHall) === townHall)
       .slice(0, layoutsPerTownHall)
@@ -81,7 +82,7 @@ try {
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
   fs.writeFileSync(outputPath, `${JSON.stringify(compact)}\n`, 'utf8');
   console.log(
-    `Wrote ${layoutsPerTownHall} TH6 and ${layoutsPerTownHall} TH7 layouts to ${outputPath}`,
+    `Wrote TH5=${layoutsByTownHall[5]}, TH6=${layoutsByTownHall[6]}, and TH7=${layoutsByTownHall[7]} layouts to ${outputPath}`,
   );
 } finally {
   fs.rmSync(scratchDir, { recursive: true, force: true });

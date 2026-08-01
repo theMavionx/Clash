@@ -13,16 +13,16 @@ const {
 } = require('./matchmaking_defs');
 
 const EXPECTED_BY_TH = {
-  1: 24, 2: 30, 3: 30, 4: 25, 5: 150, 6: 300, 7: 300,
+  1: 72, 2: 90, 3: 90, 4: 75, 5: 450, 6: 900, 7: 900,
 };
 const EXPECTED_BY_BUCKET = {
-  '1:normal': 5, '1:hard': 19,
-  '2:normal': 6, '2:hard': 24,
-  '3:normal': 6, '3:hard': 24,
-  '4:normal': 5, '4:hard': 20,
-  '5:normal': 30, '5:hard': 120,
-  '6:normal': 60, '6:hard': 240,
-  '7:normal': 60, '7:hard': 240,
+  '1:normal': 15, '1:hard': 57,
+  '2:normal': 18, '2:hard': 72,
+  '3:normal': 18, '3:hard': 72,
+  '4:normal': 15, '4:hard': 60,
+  '5:normal': 90, '5:hard': 360,
+  '6:normal': 180, '6:hard': 720,
+  '7:normal': 180, '7:hard': 720,
 };
 const GRID_SPECS = { 0: [29, 27], 1: [27, 3], 2: [27, 5] };
 const BUILDING_SIZES = {
@@ -373,7 +373,7 @@ try {
   );
   assert.equal(
     th5Match.matchmaking.bot_candidate_count,
-    150,
+    450,
     'TH5 attacker should use the complete dedicated TH5 bot pool',
   );
   assert.equal(
@@ -535,7 +535,7 @@ try {
   );
   assert.equal(
     th7Match.matchmaking.bot_candidate_count,
-    300,
+    900,
     'TH7 attacker should use the dedicated TH7 virtual target pool',
   );
   assert.ok(
@@ -602,7 +602,7 @@ try {
   );
   assert.equal(
     recoveryTh7Match.matchmaking.bot_candidate_count,
-    60,
+    180,
     'TH7 recovery should use the complete competitive normal pool, never an easy pool',
   );
 
@@ -746,7 +746,7 @@ try {
   assert.equal(gameDb.getTrophies(defeatAttackerId), 89, 'TH4 attack defeat should subtract 11 trophies');
   assert.equal(gameDb.getTrophies(defeatDefenderId), 122, 'TH4 successful defense should award 22 trophies');
 
-  console.log(`[raid-bot-pool] PASS total=${templates.length} th2=30 th3=30 th4=25 th5=150 th6=300 th7=300 resources=varied main_ship=true adaptive=true victory=12 defeat=-11 defense=22 materialized=true rerolled=true`);
+  console.log(`[raid-bot-pool] PASS total=${templates.length} th2=90 th3=90 th4=75 th5=450 th6=900 th7=900 resources=varied main_ship=true adaptive=true victory=12 defeat=-11 defense=22 materialized=true rerolled=true`);
 } finally {
   gameDb.db.close();
   for (const suffix of ['', '-wal', '-shm']) fs.rmSync(`${dbPath}${suffix}`, { force: true });

@@ -8,19 +8,19 @@ const HIGH_TIER_LAYOUT_CATALOG = GENERATING_RAID_BOT_LAYOUTS
 const MAIN_GRID_WIDTH = 29;
 const MAIN_GRID_HEIGHT = 27;
 const COAST_GRID_WIDTH = 27;
-const BOT_BASE_GENERATION = 'raid-hard-geometry-v5';
+const BOT_BASE_GENERATION = 'raid-hard-geometry-v6';
 
 // All generated raid targets remain competitive normal/hard bases. Matchmaking
 // adapts by selecting tougher geometry or raising the target tier, never by
 // creating an intentionally weakened easy-defense catalog.
 const BOT_TEMPLATE_COUNTS_BY_TH = {
-  1: { normal: 5, hard: 19 },
-  2: { normal: 6, hard: 24 },
-  3: { normal: 6, hard: 24 },
-  4: { normal: 5, hard: 20 },
-  5: { normal: 30, hard: 120 },
-  6: { normal: 60, hard: 240 },
-  7: { normal: 60, hard: 240 },
+  1: { normal: 15, hard: 57 },
+  2: { normal: 18, hard: 72 },
+  3: { normal: 18, hard: 72 },
+  4: { normal: 15, hard: 60 },
+  5: { normal: 90, hard: 360 },
+  6: { normal: 180, hard: 720 },
+  7: { normal: 180, hard: 720 },
 };
 
 // The deterministic balance lab and production outcomes agree that geometry
@@ -663,12 +663,12 @@ function highTierLayoutEntry(th, difficulty, variant) {
 }
 
 function botTemplateArchetype(th, difficulty, variant) {
-  if (th < 6) return `th${th}-static`;
+  if (th < 5) return `th${th}-static`;
   return String(highTierLayoutEntry(th, difficulty, variant).archetype || 'unknown');
 }
 
 function buildTemplateLayout(th, difficulty, variant) {
-  if (th < 6) {
+  if (th < 5) {
     const layout = repairLayout(
       BASE_LAYOUTS[th][difficulty].map((building) => transformBuilding(building, variant)),
     );
@@ -759,12 +759,11 @@ function applyCompetitiveBotLevels(buildings, th, difficulty, variant) {
 function fallbackPlayerName(index) {
   if (index < FALLBACK_PLAYER_NAMES.length) return FALLBACK_PLAYER_NAMES[index];
   const generatedIndex = index - FALLBACK_PLAYER_NAMES.length;
-  if (generatedIndex >= GENERATED_PLAYER_NAMES.length) {
-    throw new Error(
-      `Raid bot name pool exhausted at ${generatedIndex}/${GENERATED_PLAYER_NAMES.length}`,
-    );
-  }
-  return GENERATED_PLAYER_NAMES[generatedIndex];
+  if (generatedIndex < GENERATED_PLAYER_NAMES.length) return GENERATED_PLAYER_NAMES[generatedIndex];
+  const overflowIndex = generatedIndex - GENERATED_PLAYER_NAMES.length;
+  const root = GENERATED_NAME_ROOTS[overflowIndex % GENERATED_NAME_ROOTS.length];
+  const numericSuffix = 100 + Math.floor(overflowIndex / GENERATED_NAME_ROOTS.length);
+  return `${root}${numericSuffix}`;
 }
 
 function nextFallbackPlayerName(index, usedNames) {

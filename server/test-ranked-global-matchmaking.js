@@ -9,6 +9,7 @@ const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clash-ranked-global-'));
 process.env.CLASH_MAIN_DB = path.join(tempDir, 'clash.db');
 process.env.TOURNAMENT_DAILY_POOL_SCHEDULER = '0';
 process.env.LUCKY_RAIDER_PAYOUT_WORKER = '0';
+process.env.CLASH_RAID_BOT_TARGETS_ENABLED = '0';
 
 const game = require('./db');
 
@@ -80,7 +81,7 @@ try {
   const exhaustedDistinctPool = game.findRankedEnemy('attacker', tournamentId);
   assert.match(
     exhaustedDistinctPool.error,
-    /No global player base at Town Hall 7/i,
+    /No new Town Hall 7 ranked base/i,
     'ranked matchmaking must not repeat either TH7 defender within the same UTC day',
   );
   const matchedDefenders = game.db.prepare(`
@@ -90,6 +91,40 @@ try {
      ORDER BY defender_id
   `).all(tournamentId).map((row) => row.defender_id);
   assert.deepEqual(matchedDefenders, ['same-shielded', 'same-unshielded']);
+
+  process.env.CLASH_RAID_BOT_TARGETS_ENABLED = '1';
+  const rankedBot = game.findRankedEnemy('attacker', tournamentId);
+  assert.equal(rankedBot.error, undefined);
+  assert.equal(rankedBot.is_bot, 1);
+  assert.match(rankedBot.id, /^bot-ranked-bot-th7-(?:normal|hard)-\d+$/);
+  assert.equal(rankedBot.town_hall_level, 7);
+  assert.equal(rankedBot.matchmaking.target_is_bot, true);
+  assert.equal(rankedBot.matchmaking.bot_candidate_count, 900);
+  assert.equal(rankedBot.matchmaking.shield_ignored_for_ranked, true);
+  const rankedBotVictory = game.battleVictory(
+    'attacker',
+    rankedBot.id,
+    rankedBot.battle_session_id,
+  );
+  assert.equal(rankedBotVictory.success, true, rankedBotVictory.error);
+  assert.equal(rankedBotVictory.target_is_bot, true);
+  assert.ok(rankedBotVictory.ranked_tournament, 'ranked bot victory must settle in the ranked ledger');
+
+  const rankedBotIds = new Set([rankedBot.id]);
+  for (let index = 0; index < 5; index += 1) {
+    const nextBot = game.findRankedEnemy('attacker', tournamentId);
+    assert.equal(nextBot.error, undefined);
+    assert.equal(nextBot.is_bot, 1);
+    assert.equal(nextBot.town_hall_level, 7);
+    assert.equal(rankedBotIds.has(nextBot.id), false, 'ranked bot templates must not repeat in one UTC day');
+    rankedBotIds.add(nextBot.id);
+    game.db.prepare(`
+      UPDATE battle_sessions
+         SET status = 'cancelled'
+       WHERE id = ?
+    `).run(nextBot.battle_session_id);
+  }
+  assert.equal(rankedBotIds.size, 6);
 
   console.log('ranked global exact-TH matchmaking tests: PASS');
 } finally {
