@@ -33,6 +33,8 @@ import imgMageTower from '../assets/buildings/magetower.png';
 import imgMortar from '../assets/buildings/mortar.png';
 import imgSharkTrap from '../assets/buildings/sharktrap.png';
 import imgHarpoon from '../assets/buildings/harpoon.png';
+import imgAirBomb from '../assets/buildings/air_bomb.png';
+import imgFlamethrower from '../assets/buildings/flamethrower.png';
 import imgAltar from '../assets/units/altar.png';
 
 import knightImg from '../assets/units/knight.png';
@@ -156,6 +158,8 @@ const THUMBNAIL_MAP = {
   mortar: imgMortar,
   shark_trap: imgSharkTrap,
   harpoon: imgHarpoon,
+  air_bomb: imgAirBomb,
+  flamethrower: imgFlamethrower,
   storage: imgStorage,
   altar: imgAltar,
   main_ship: imgShip,
@@ -166,6 +170,13 @@ const THUMBNAIL_STYLE_MAP = {
     left: '53%',
     top: '50%',
     transform: 'translate(-50%, -50%) scale(1.2)',
+    transformOrigin: 'center center',
+    objectPosition: 'center center',
+  },
+  air_bomb: {
+    left: '50%',
+    top: '50%',
+    transform: 'translate(-50%, -50%) scale(0.9)',
     transformOrigin: 'center center',
     objectPosition: 'center center',
   },
@@ -188,6 +199,8 @@ const DESC_MAP = {
   mortar: 'Long-range splash defense with a minimum firing range.',
   shark_trap: 'A hidden 2 x 2 trap that eliminates the first ordinary ground troop. Higher levels deal more damage to Demon King.',
   harpoon: 'An air-only control defense that damages and pulls one flying enemy into a defensive kill zone.',
+  air_bomb: 'Launches one homing balloon bomb at a time and damages flying enemies in the impact radius.',
+  flamethrower: 'A fixed directional defense that burns every ground enemy inside its 50 degree cone. Rotate it to cover the attack approach.',
   residence: 'Residences produce gold.',
 };
 
@@ -1371,6 +1384,28 @@ function BuildingInfoPanel({ onOpenTroops }) {
         <StatBox label="Health" current={building.max_hp} />
         <StatBox label="Level" current={building.level} />
       </>
+    ) : building.id === 'air_bomb' ? (
+      <>
+        <StatBox label="Air Splash Damage" current={building.damage} />
+        <StatBox label="Range" current={Number(building.detect_range || 0).toFixed(2)} />
+        <StatBox label="Splash Radius" current={Number(building.splash_radius || 0).toFixed(2)} />
+        <StatBox label="Reload" current={`${Number(building.reload_sec || 4.5).toFixed(2)} s`} />
+        <StatBox label="Targets" current="Air only" />
+        <StatBox label="Health" current={building.max_hp} />
+        <StatBox label="Level" current={building.level} />
+      </>
+    ) : building.id === 'flamethrower' ? (
+      <>
+        <StatBox label="Damage / Tick" current={building.damage} />
+        <StatBox label="Ticks / Stream" current={building.damage_ticks_per_stream || 3} />
+        <StatBox label="Range" current={Number(building.detect_range || 0).toFixed(2)} />
+        <StatBox label="Attack Cone" current={`${Number(building.cone_degrees || 50).toFixed(0)}°`} />
+        <StatBox label="Cycle" current={`${Number(building.reload_sec || 1.5).toFixed(2)} s`} />
+        <StatBox label="Facing" current={`Step ${Number(building.facing_step || 0) + 1}/24`} />
+        <StatBox label="Targets" current="Ground only" />
+        <StatBox label="Health" current={building.max_hp} />
+        <StatBox label="Level" current={building.level} />
+      </>
     ) : building.id === 'cannon' ? (
       <>
         <StatBox label="Damage" current={building.damage} />
@@ -1397,9 +1432,18 @@ function BuildingInfoPanel({ onOpenTroops }) {
            </>
          )}
          <h3 style={styles.sectionTitle}>Status</h3>
-         <div style={{...styles.reqBoxMax, padding: 16, background: 'rgba(0, 0, 0, 0.05)', borderRadius: 16, border: '1px solid rgba(0, 0, 0, 0.1)', boxShadow: 'inset 0 1px 2px rgba(255,255,255,0.5)'}}>
-           <span style={{color: '#377d9f', fontSize: 16, fontWeight: 800}}>Functional</span>
-         </div>
+          <div style={{...styles.reqBoxMax, padding: 16, background: 'rgba(0, 0, 0, 0.05)', borderRadius: 16, border: '1px solid rgba(0, 0, 0, 0.1)', boxShadow: 'inset 0 1px 2px rgba(255,255,255,0.5)'}}>
+            <span style={{color: '#377d9f', fontSize: 16, fontWeight: 800}}>Functional</span>
+          </div>
+          {building.id === 'flamethrower' && !building.is_enemy && (
+            <button
+              type="button"
+              style={{ ...styles.actionBtn, width: '100%', marginTop: 12 }}
+              onClick={() => sendToGodot('start_flamethrower_facing_edit')}
+            >
+              Edit Attack Direction
+            </button>
+          )}
       </>
     );
     return renderModal(building.name.toUpperCase(), building.level, leftContent, buildingImg, rightContent, null, null);
@@ -1584,6 +1628,33 @@ function BuildingInfoPanel({ onOpenTroops }) {
           upgradeTo={Number(building.next_pull_speed || building.pull_speed || 0).toFixed(2)}
         />
         <StatBox label="Reload" current={`${Number(building.reload_sec || 7).toFixed(2)} s`} />
+        <StatBox label="Health" current={building.max_hp} upgradeTo={building.next_hp} />
+        <StatBox label="Level" current={building.level} upgradeTo={building.level + 1} />
+      </>
+    ) : building.id === 'air_bomb' ? (
+      <>
+        <StatBox label="Air Splash Damage" current={building.damage} upgradeTo={building.next_damage} />
+        <StatBox
+          label="Range"
+          current={Number(building.detect_range || 0).toFixed(2)}
+          upgradeTo={Number(building.next_detect_range || building.detect_range || 0).toFixed(2)}
+        />
+        <StatBox label="Splash Radius" current={Number(building.splash_radius || 0).toFixed(2)} />
+        <StatBox label="Reload" current={`${Number(building.reload_sec || 4.5).toFixed(2)} s`} />
+        <StatBox label="Health" current={building.max_hp} upgradeTo={building.next_hp} />
+        <StatBox label="Level" current={building.level} upgradeTo={building.level + 1} />
+      </>
+    ) : building.id === 'flamethrower' ? (
+      <>
+        <StatBox label="Damage / Tick" current={building.damage} upgradeTo={building.next_damage} />
+        <StatBox
+          label="Range"
+          current={Number(building.detect_range || 0).toFixed(2)}
+          upgradeTo={Number(building.next_detect_range || building.detect_range || 0).toFixed(2)}
+        />
+        <StatBox label="Attack Cone" current={`${Number(building.cone_degrees || 50).toFixed(0)}°`} />
+        <StatBox label="Ticks / Stream" current={building.damage_ticks_per_stream || 3} />
+        <StatBox label="Cycle" current={`${Number(building.reload_sec || 1.5).toFixed(2)} s`} />
         <StatBox label="Health" current={building.max_hp} upgradeTo={building.next_hp} />
         <StatBox label="Level" current={building.level} upgradeTo={building.level + 1} />
       </>

@@ -303,6 +303,44 @@ Owner-approved progression follow-up (2026-07-31):
   caps, UI stat presentation, and local verification supersede the older L1-L3
   checkpoint above.
 
+## G-007 Town Hall 9 Air Bomb Defense
+
+- Status: active
+- Priority: P0
+- Owner intent: add two Town Hall 9 anti-air defenses from the supplied
+  `AirBombBase.rar`. Each shot is one rigid payload made from both balloons, the
+  suspension rig, and one barrel bomb; the full payload rises vertically, homes
+  toward an air troop, resolves air-only splash damage, and then reloads.
+
+Scope:
+
+- Import and audit the model and PBR textures under a dedicated `Model/air_bomb/`
+  folder.
+- Apply the base owner's resolved flag texture to both balloon meshes through the
+  same cache/fallback path as the Town Hall flag and main ship sails.
+- Add mirrored Godot/server building definitions, TH9 count and level gates,
+  placement/upgrades, save/load, enemy snapshots, bot layouts, UI and exports.
+- Implement deterministic fixed-tick homing, air-only radial damage, reload,
+  Freeze/destruction behavior, replay telemetry and client/server parity.
+- Verify the complete launch/flight/impact/reload sequence frame-by-frame and at
+  10, 20, 30, 60 and 120 render FPS, then run asset and balance audits.
+
+Current checkpoint:
+
+- Local implementation and verification are complete on `codex/building-assets`:
+  client/server fixed-tick flight, full-payload visuals, shared owner flag,
+  air-only splash, Freeze/owner-destruction behavior, TH9 limit of two, UI,
+  Godot import/export, frame captures, render-FPS parity, focused regressions,
+  and the live TH5-TH7 balance regression suite complete without invalid
+  simulations.
+- Launch remains gated because the playable progression currently ends at TH7.
+  Air Bomb data is intentionally unreachable through TH8 and becomes available
+  only when the separately scoped TH8/TH9 progression, economy, and bot content
+  are approved. Reimport on documented Godot 4.6.1 is also still required; the
+  local verifier is Godot 4.6.0 stable.
+- No commit, push, deployment, or production database mutation is authorized by
+  the current request.
+
 ## G-006 Dango Realtime Exchange Integration
 
 - Status: retired

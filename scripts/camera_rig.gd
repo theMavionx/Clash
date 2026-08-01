@@ -98,6 +98,7 @@ func _ready() -> void:
 
 func _unhandled_input(event: InputEvent) -> void:
 	var bs_busy: bool = _is_building_system_busy()
+	var flamethrower_facing_active := _is_flamethrower_facing_active()
 
 	# ── Mouse Button Events ──────────────────────────────────────
 	if event is InputEventMouseButton:
@@ -112,7 +113,9 @@ func _unhandled_input(event: InputEvent) -> void:
 				_mark_user_camera_input()
 
 		# Scroll wheel → zoom in/out (always allowed)
-		if mb.pressed and not zoom_blocked:
+		# The wheel rotates the directional defense while its editor is open.
+		# Pinch zoom remains available for touch navigation.
+		if mb.pressed and not zoom_blocked and not flamethrower_facing_active:
 			if mb.button_index == MOUSE_BUTTON_WHEEL_UP:
 				_target_zoom = maxf(_target_zoom - zoom_speed, min_zoom)
 				_mark_user_camera_input()
@@ -234,6 +237,22 @@ func _is_building_system_busy() -> bool:
 			return true
 		if "_is_moving" in bs and bs._is_moving:
 			return true
+		if (
+			bs.has_method("is_flamethrower_facing_editor_active")
+			and bool(bs.call("is_flamethrower_facing_editor_active"))
+		):
+			return true
+	return false
+
+
+func _is_flamethrower_facing_active() -> bool:
+	for bs in get_tree().get_nodes_in_group("building_systems"):
+		if (
+			is_instance_valid(bs)
+			and bs.has_method("is_flamethrower_facing_editor_active")
+			and bool(bs.call("is_flamethrower_facing_editor_active"))
+		):
+			return true
 	return false
 
 
@@ -296,6 +315,7 @@ func _apply_zoom_distance() -> void:
 func _process(delta_raw: float) -> void:
 	var delta = minf(delta_raw, 0.1)
 	var safe_min_zoom := _effective_min_zoom()
+	var flamethrower_facing_active := _is_flamethrower_facing_active()
 	# ── WASD movement ────────────────────────────────────────────
 	var move_dir := Vector3.ZERO
 	if Input.is_key_pressed(KEY_W):
@@ -336,10 +356,10 @@ func _process(delta_raw: float) -> void:
 			_target_position.y = 0.0
 
 	# ── Q/E zoom ─────────────────────────────────────────────────
-	if Input.is_key_pressed(KEY_E):
+	if not flamethrower_facing_active and Input.is_key_pressed(KEY_E):
 		_mark_user_camera_input()
 		_target_zoom = maxf(_target_zoom - zoom_speed * delta * 3.0, safe_min_zoom)
-	if Input.is_key_pressed(KEY_Q):
+	if not flamethrower_facing_active and Input.is_key_pressed(KEY_Q):
 		_mark_user_camera_input()
 		_target_zoom = minf(_target_zoom + zoom_speed * delta * 3.0, max_zoom)
 

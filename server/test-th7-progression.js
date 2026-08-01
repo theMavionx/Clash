@@ -75,6 +75,7 @@ try {
     );
   }
 
+  assert.equal(gameDb.LIVE_TOWN_HALL_CAP, 7);
   assert.equal(gameDb.TH_UNLOCK.cannon, 7);
   assert.deepEqual(gameDb.TH_MAX_COUNT.cannon, [0, 0, 0, 0, 0, 0, 2]);
   assert.deepEqual(gameDb.TH_MAX_LEVEL.cannon, [1, 1, 1, 1, 1, 1, 7]);
@@ -188,6 +189,18 @@ try {
   assert.equal(th7Upgrade.level, 7);
   assert.equal(th7Upgrade.hp, 51193);
   assert.deepEqual(th7Upgrade.resources, { gold: 21000, wood: 0, ore: 8000 });
+
+  const lockedTh8Upgrade = gameDb.upgradeBuilding(playerId, townHallId);
+  assert.equal(lockedTh8Upgrade.code, 'TOWN_HALL_LEVEL_NOT_LIVE');
+  assert.equal(lockedTh8Upgrade.current_town_hall_level, 7);
+  assert.equal(lockedTh8Upgrade.target_town_hall_level, 8);
+  assert.equal(lockedTh8Upgrade.live_town_hall_cap, 7);
+  assert.match(lockedTh8Upgrade.error, /Town Hall level 8 is not live yet/);
+  assert.deepEqual(
+    gameDb.getResources(playerId),
+    { gold: 21000, wood: 0, ore: 8000 },
+    'blocked TH8 upgrade must not spend resources',
+  );
 
   gameDb.db.prepare(
     'UPDATE players SET gold = 143000, wood = 143000, ore = 143000 WHERE id = ?',
@@ -335,6 +348,13 @@ try {
     routesSource,
     /port:\s*\[1,\s*2,\s*3,\s*3,\s*3,\s*3,\s*3\]/,
     'admin max-village must preserve Port L3 at TH7',
+  );
+  const buildingSystemSource = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'building_system.gd'), 'utf8');
+  assert.match(buildingSystemSource, /const LIVE_TOWN_HALL_CAP:\s*int\s*=\s*7/);
+  assert.match(
+    buildingSystemSource,
+    /bid == "town_hall" and level >= LIVE_TOWN_HALL_CAP/,
+    'Godot must block the same future Town Hall level before sending an upgrade request',
   );
 
   console.log(

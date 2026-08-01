@@ -1224,6 +1224,32 @@ async function fetchTradeHistory(subaccountAddr, options = {}) {
   }
 }
 
+// Decibel keeps market-maker bulk orders in a separate ledger from regular
+// order/trade history. A strategy that quotes through
+// `place_bulk_orders_to_subaccount` therefore never appears in
+// `fetchOrderHistory()` even after its resting liquidity is filled. Read the
+// dedicated feed so reward reconciliation can account for those confirmed
+// maker fills without trusting Phantom's process-local volume counters.
+async function fetchBulkOrderFills(subaccountAddr, options = {}) {
+  if (!subaccountAddr) return [];
+  try {
+    return await fetchDecibelRows('bulk_order_fills', {
+      account: subaccountAddr,
+      market: options.market,
+      sequence_number: options.sequenceNumber ?? options.sequence_number,
+      start_sequence_number: options.startSequenceNumber ?? options.start_sequence_number,
+      end_sequence_number: options.endSequenceNumber ?? options.end_sequence_number,
+      asset_type: options.assetType || options.asset_type || 'perp',
+      limit: options.limit,
+      offset: options.offset,
+    });
+  } catch {
+    // Keep regular trade reconciliation available during a temporary bulk
+    // endpoint outage. The same fill will be retried on the next poll/claim.
+    return [];
+  }
+}
+
 // Builds the canonical (market, side) key we use to dedupe positions
 // across polling ticks. The market is identified by address, side by the
 // sign of `size` (positive = long, negative = short).
@@ -1679,6 +1705,7 @@ module.exports = {
   fetchOpenOrders,
   fetchOrderHistory,
   fetchTradeHistory,
+  fetchBulkOrderFills,
   waitForPlacedOrderEffect,
   tradeKey,
   positionMarket,

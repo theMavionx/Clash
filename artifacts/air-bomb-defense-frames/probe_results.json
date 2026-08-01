@@ -1,0 +1,56 @@
+{
+	"bounds": {
+		"position": [
+			-0.173579037189484,
+			0.0,
+			-0.171784967184067
+		],
+		"size": [
+			0.35747230052948,
+			0.534465432167053,
+			0.319656312465668
+		]
+	},
+	"capture_count": 16,
+	"compatibility_sides_share_payload": true,
+	"engine": {
+		"build": "official",
+		"hash": "89cea143987d564363e15d207438530651d943ac",
+		"hex": 263680,
+		"major": 4,
+		"minor": 6,
+		"patch": 0,
+		"status": "stable",
+		"string": "4.6-stable (official)",
+		"timestamp": 0
+	},
+	"failures": [],
+	"loaded_building_triangles": 2604,
+	"loaded_draw_surfaces": 5,
+	"payload_meshes": [
+		"Circle",
+		"Cube_024",
+		"Bombs_001",
+		"Bombs_002"
+	],
+	"payload_muzzle": [
+		0.00515709351748228,
+		0.292203664779663,
+		-0.0068742148578167
+	],
+	"projectile_triangles": 1272,
+	"runtime_paths": [
+		"ModelRoot/Base/AirBombBase",
+		"ModelRoot/PayloadAssembly/Circle",
+		"ModelRoot/PayloadAssembly/Cube_024",
+		"ModelRoot/PayloadAssembly/Bombs_001",
+		"ModelRoot/PayloadAssembly/Bombs_002",
+		"ModelRoot/PayloadMuzzle"
+	],
+	"scene": "res://Model/air_bomb/air_bomb.tscn",
+	"static_meshes": [
+		"AirBombBase"
+	],
+	"status": "pass",
+	"thumbnail": "res://Model/air_bomb/air_bomb_thumbnail.png"
+}

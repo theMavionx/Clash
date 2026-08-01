@@ -100,6 +100,7 @@ export function GodotProvider({ children }) {
   const [buildingDefs, setBuildingDefs] = useState({ buildings: {}, troops: {}, placed_counts: {} });
   const [troopLevels, setTroopLevels] = useState({});
   const [selectedBuilding, setSelectedBuilding] = useState(null);
+  const [flamethrowerFacingEditor, setFlamethrowerFacingEditor] = useState({ active: false });
   const [shopOpen, setShopOpen] = useState(false);
   const [enemyMode, setEnemyMode] = useState({ active: false });
   const [error, setError] = useState(null);
@@ -325,6 +326,9 @@ export function GodotProvider({ children }) {
         case 'building_deselected':
           setSelectedBuilding(null);
           break;
+        case 'flamethrower_facing_editor':
+          setFlamethrowerFacingEditor(data?.active ? data : { active: false });
+          break;
         case 'shop_toggled':
           setShopOpen(data.open);
           break;
@@ -489,10 +493,11 @@ export function GodotProvider({ children }) {
             const th_level = data.level || 1, th_progress = data.progress || 0, th_progress_total = data.progress_total || 0;
             const th_unlock = data.unlock || {};
             const th_max_counts = data.max_counts || {};
+            const th_live_cap = Number(data.live_cap) || 7;
             const sameUnlocks = JSON.stringify(prev.th_unlock || {}) === JSON.stringify(th_unlock);
             const sameMaxCounts = JSON.stringify(prev.th_max_counts || {}) === JSON.stringify(th_max_counts);
-            if (prev.th_level === th_level && prev.th_progress === th_progress && prev.th_progress_total === th_progress_total && sameUnlocks && sameMaxCounts) return prev;
-            return { ...prev, th_level, th_unlock: data.unlock || {}, th_max_counts: data.max_counts || {}, th_progress, th_progress_total };
+            if (prev.th_level === th_level && prev.th_live_cap === th_live_cap && prev.th_progress === th_progress && prev.th_progress_total === th_progress_total && sameUnlocks && sameMaxCounts) return prev;
+            return { ...prev, th_level, th_live_cap, th_unlock: data.unlock || {}, th_max_counts: data.max_counts || {}, th_progress, th_progress_total };
           });
           break;
         case 'error':
@@ -574,8 +579,8 @@ export function GodotProvider({ children }) {
     selectedBuilding,
   }), [selectedBuilding]);
   const uiCtx = useMemo(() => ({
-    ready, shopOpen, enemyMode, error, showRegister, collectibles, cloudVisible, cloudMessage, futuresOpen, cannonMode, rallyMode, medkitMode, freezeMode, rageMode, skeletonBarrelMode, selectedTroopIdx, battleResult, setBattleResult, cannonEnergy, fleetInfo, pendingCasualties, setPendingCasualties, battleTimer
-  }), [ready, shopOpen, enemyMode, error, showRegister, collectibles, cloudVisible, cloudMessage, futuresOpen, cannonMode, rallyMode, medkitMode, freezeMode, rageMode, skeletonBarrelMode, selectedTroopIdx, battleResult, cannonEnergy, fleetInfo, pendingCasualties, battleTimer]);
+    ready, shopOpen, enemyMode, error, showRegister, collectibles, cloudVisible, cloudMessage, futuresOpen, cannonMode, rallyMode, medkitMode, freezeMode, rageMode, skeletonBarrelMode, selectedTroopIdx, battleResult, setBattleResult, cannonEnergy, fleetInfo, pendingCasualties, setPendingCasualties, battleTimer, flamethrowerFacingEditor
+  }), [ready, shopOpen, enemyMode, error, showRegister, collectibles, cloudVisible, cloudMessage, futuresOpen, cannonMode, rallyMode, medkitMode, freezeMode, rageMode, skeletonBarrelMode, selectedTroopIdx, battleResult, cannonEnergy, fleetInfo, pendingCasualties, battleTimer, flamethrowerFacingEditor]);
   const tutorialCtx = useMemo(() => ({
     tutorialFlags, tutorialPhase, setTutorialFlags, setTutorialPhase
   }), [tutorialFlags, tutorialPhase]);

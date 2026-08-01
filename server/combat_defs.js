@@ -8,6 +8,10 @@ const {
   CANONICAL_GRID_CONFIG,
   CANONICAL_GRID_CONFIGS,
 } = require('./combat_grid_config');
+const {
+  COMBAT_RULES: FLAMETHROWER_COMBAT_RULES,
+  DEFENSE_LEVELS: FLAMETHROWER_DEFENSE_LEVELS,
+} = require('./flamethrower_config');
 
 const MAX_TROOP_LEVEL = 7;
 
@@ -485,6 +489,9 @@ function windMageHashUnit(hashValue) {
 
 // Defense building stats: turrets fire bullets, archer towers fire arrows.
 const DEFENSE_STATS = {
+  // Town Hall 8 Flamethrower Defense GDD. Values are adapted from the
+  // canonical shared JSON; do not duplicate its ten level rows here.
+  flamethrower: FLAMETHROWER_DEFENSE_LEVELS,
   turret: {
     1: { damage: 35, fireRate: 0.70, detectRange: 0.90, projSpeed: 4.0 },
     2: { damage: 74, fireRate: 0.70, detectRange: 1.05, projSpeed: 4.0 },
@@ -691,6 +698,20 @@ const DEFENSE_STATS = {
     5: { damage: 233, fireRate: 2.40, detectRange: 2.100, minRange: 0.82, travelTime: 0.66, splashRadius: 0.45 },
     6: { damage: 240, fireRate: 2.40, detectRange: 2.250, minRange: 0.80, travelTime: 0.62, splashRadius: 0.49 },
     7: { damage: 294, fireRate: 2.40, detectRange: 2.400, minRange: 0.78, travelTime: 0.58, splashRadius: 0.52 },
+  },
+  // Air Bomb Defense (design/gdd/air-bomb-defense.md). These values are
+  // intentionally expressed as fixed-tick-friendly constants so the server
+  // verifier and Godot replay implementation can share an exact contract.
+  air_bomb: {
+    1: { damage: 140,  fireRate: 4.50, detectRange: 2.25, splashRadius: 0.31, projSpeed: 1.19, turnSpeedDeg: 240, hitRadius: 0.10, riseTicks: 21, maxLifetimeTicks: 144, reloadTicks: 270, scanTicks: 9 },
+    2: { damage: 220,  fireRate: 4.50, detectRange: 2.30, splashRadius: 0.31, projSpeed: 1.19, turnSpeedDeg: 240, hitRadius: 0.10, riseTicks: 21, maxLifetimeTicks: 144, reloadTicks: 270, scanTicks: 9 },
+    3: { damage: 330,  fireRate: 4.50, detectRange: 2.35, splashRadius: 0.31, projSpeed: 1.19, turnSpeedDeg: 240, hitRadius: 0.10, riseTicks: 21, maxLifetimeTicks: 144, reloadTicks: 270, scanTicks: 9 },
+    4: { damage: 480,  fireRate: 4.50, detectRange: 2.40, splashRadius: 0.31, projSpeed: 1.19, turnSpeedDeg: 240, hitRadius: 0.10, riseTicks: 21, maxLifetimeTicks: 144, reloadTicks: 270, scanTicks: 9 },
+    5: { damage: 680,  fireRate: 4.50, detectRange: 2.45, splashRadius: 0.31, projSpeed: 1.19, turnSpeedDeg: 240, hitRadius: 0.10, riseTicks: 21, maxLifetimeTicks: 144, reloadTicks: 270, scanTicks: 9 },
+    6: { damage: 920,  fireRate: 4.50, detectRange: 2.50, splashRadius: 0.31, projSpeed: 1.19, turnSpeedDeg: 240, hitRadius: 0.10, riseTicks: 21, maxLifetimeTicks: 144, reloadTicks: 270, scanTicks: 9 },
+    7: { damage: 1200, fireRate: 4.50, detectRange: 2.55, splashRadius: 0.31, projSpeed: 1.19, turnSpeedDeg: 240, hitRadius: 0.10, riseTicks: 21, maxLifetimeTicks: 144, reloadTicks: 270, scanTicks: 9 },
+    8: { damage: 1520, fireRate: 4.50, detectRange: 2.60, splashRadius: 0.31, projSpeed: 1.19, turnSpeedDeg: 240, hitRadius: 0.10, riseTicks: 21, maxLifetimeTicks: 144, reloadTicks: 270, scanTicks: 9 },
+    9: { damage: 1880, fireRate: 4.50, detectRange: 2.65, splashRadius: 0.31, projSpeed: 1.19, turnSpeedDeg: 240, hitRadius: 0.10, riseTicks: 21, maxLifetimeTicks: 144, reloadTicks: 270, scanTicks: 9 },
   },
   cannon: {
     1: { damage: 40, fireRate: 1.60, detectRange: 1.35, projSpeed: 3.2 },
@@ -1026,6 +1047,7 @@ module.exports = {
   NFT_RARITY_MULTIPLIERS,
   setBalanceLabNftStatScales,
   DEFENSE_STATS,
+  FLAMETHROWER_COMBAT_RULES,
   SKELETON_GUARD,
   NECROMANCER_SUMMON,
   HORROR_EVOLUTION,

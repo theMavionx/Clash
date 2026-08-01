@@ -27,6 +27,7 @@ const {
   COMBAT_GRID_VERSION,
   isWorldPointInsideGrid,
 } = require('./combat_grid_config');
+const { parseCombatSnapshot } = require('./combat_snapshot');
 const tradeRecon = require('./trade_reconciliation');
 const { loadIncrementalTournamentTrades } = require('./tournament_trade_sync');
 const luckyRaiderPayouts = require('./lucky_raider_payouts');
@@ -11749,7 +11750,10 @@ router.post('/resources/set', adminAuth, (req, res) => {
 
 // List all player buildings
 router.get('/buildings', auth, (req, res) => {
-  res.json(db.getPlayerBuildings(req.player.id));
+  res.json({
+    buildings: db.getPlayerBuildings(req.player.id),
+    layout_revision: db.getPlayerLayoutRevision(req.player.id),
+  });
 });
 
 // Place a building
@@ -11759,7 +11763,14 @@ router.get('/buildings', auth, (req, res) => {
 // could be abused for defensive "hiding" or resource-locking exploits.
 const GRID_MAX_COORD = 40; // generous ceiling; real grids are ≤20 per axis
 router.post('/buildings/place', auth, (req, res) => {
-  const { type, grid_x, grid_z, grid_index = 0 } = req.body;
+  const {
+    type,
+    grid_x,
+    grid_z,
+    grid_index = 0,
+    facing_step = null,
+    expected_layout_revision = null,
+  } = req.body;
   if (!type || grid_x == null || grid_z == null) {
     return res.status(400).json({ error: 'type, grid_x, grid_z are required' });
   }
@@ -11772,8 +11783,16 @@ router.post('/buildings/place', auth, (req, res) => {
   if (!Number.isInteger(grid_index) || ![0, 1, 2].includes(grid_index)) {
     return res.status(400).json({ error: 'grid_index must be 0, 1, or 2' });
   }
-  const result = db.placeBuilding(req.player.id, type, grid_x, grid_z, grid_index);
-  if (result.error) return res.status(400).json(result);
+  const result = db.placeBuilding(
+    req.player.id,
+    type,
+    grid_x,
+    grid_z,
+    grid_index,
+    facing_step,
+    expected_layout_revision,
+  );
+  if (result.error) return res.status(result.status || 400).json(result);
   res.json(result);
 });
 
@@ -11796,8 +11815,8 @@ router.get('/buildings/production', auth, (req, res) => {
 router.post('/buildings/:id/upgrade', auth, (req, res) => {
   const buildingId = parseInt(req.params.id, 10);
   if (isNaN(buildingId)) return res.status(400).json({ error: 'Invalid building ID' });
-  const result = db.upgradeBuilding(req.player.id, buildingId);
-  if (result.error) return res.status(400).json(result);
+  const result = db.upgradeBuilding(req.player.id, buildingId, req.body?.expected_layout_revision ?? null);
+  if (result.error) return res.status(result.status || 400).json(result);
   res.json(result);
 });
 
@@ -11815,9 +11834,32 @@ router.post('/buildings/:id/move', auth, (req, res) => {
   if (grid_index != null && (!Number.isInteger(grid_index) || ![0, 1, 2].includes(grid_index))) {
     return res.status(400).json({ error: 'grid_index must be 0, 1, or 2' });
   }
-  const result = db.moveBuilding(req.player.id, buildingId, grid_x, grid_z, grid_index);
-  if (result.error) return res.status(result.error === 'Building not found' ? 404 : 400).json(result);
+  const result = db.moveBuilding(
+    req.player.id,
+    buildingId,
+    grid_x,
+    grid_z,
+    grid_index,
+    req.body?.expected_layout_revision ?? null,
+  );
+  if (result.error) return res.status(result.status || (result.error === 'Building not found' ? 404 : 400)).json(result);
   res.json(result);
+});
+
+router.post('/buildings/:id/facing', auth, (req, res) => {
+  const buildingId = Number(req.params.id);
+  if (!Number.isSafeInteger(buildingId) || buildingId <= 0) {
+    return res.status(400).json({ error: 'Invalid building ID' });
+  }
+  const result = db.setBuildingFacing(
+    req.player.id,
+    buildingId,
+    req.body?.facing_step,
+    req.body?.expected_layout_revision,
+    req.body?.method,
+  );
+  if (result.error) return res.status(result.status || 400).json(result);
+  return res.json(result);
 });
 
 // Buy a ship at a port
@@ -11833,8 +11875,12 @@ router.post('/buildings/:id/buy-ship', auth, (req, res) => {
 router.delete('/buildings/:id', auth, (req, res) => {
   const buildingId = parseInt(req.params.id, 10);
   if (isNaN(buildingId)) return res.status(400).json({ error: 'Invalid building ID' });
-  const result = db.removeBuilding(req.player.id, buildingId);
-  if (result.error) return res.status(404).json(result);
+  const headerRevision = req.get('If-Match');
+  const expectedRevision = req.body?.expected_layout_revision
+    ?? req.query?.expected_layout_revision
+    ?? (headerRevision == null || headerRevision === '' ? null : Number(String(headerRevision).replace(/^W\//, '').replaceAll('"', '')));
+  const result = db.removeBuilding(req.player.id, buildingId, expectedRevision);
+  if (result.error) return res.status(result.status || 404).json(result);
   res.json(result);
 });
 
@@ -12695,11 +12741,6 @@ router.post('/attack/result', auth, (req, res) => {
   if (!actions || !Array.isArray(actions)) return res.status(400).json({ error: 'actions replay required' });
   if (!claimedResult) return res.status(400).json({ error: 'result required (victory/defeat)' });
 
-  const defenderBuildings = db.getPlayerBuildings(defender_id);
-  if (!defenderBuildings || defenderBuildings.length === 0) {
-    return res.status(400).json({ error: 'Defender has no buildings' });
-  }
-
   // Keep the submitted scene metadata for diagnostics. Verification always
   // uses the generated server snapshot so clients cannot redefine valid bounds.
   const battleStartAction = actions.find(a => a.type === 'battle_start');
@@ -12780,8 +12821,62 @@ router.post('/attack/result', auth, (req, res) => {
 
   const sessionCheck = db.validateBattleSession(battleSessionId, req.player.id, defender_id);
   if (!sessionCheck.ok) {
-    db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'error', sessionCheck.error, null, null);
+    db.storeReplay(req.player.id, defender_id, actions, [], claimedResult, 'error', sessionCheck.error, null, null);
     return res.status(409).json({ error: sessionCheck.error });
+  }
+
+  let combatSnapshot = null;
+  let defenderBuildings = null;
+  let defenderAltarLevels = null;
+  if (sessionCheck.session?.combat_snapshot_json) {
+    try {
+      combatSnapshot = parseCombatSnapshot(sessionCheck.session.combat_snapshot_json);
+      if (combatSnapshot.defender_id !== defender_id) {
+        throw new Error('snapshot defender does not match battle session');
+      }
+      if (
+        Number(sessionCheck.session.combat_snapshot_version) !== combatSnapshot.schema_version
+        || Number(sessionCheck.session.layout_revision) !== combatSnapshot.layout_revision
+        || sessionCheck.session.combat_rules_version !== combatSnapshot.combat_rules_version
+      ) {
+        throw new Error('snapshot metadata columns do not match snapshot payload');
+      }
+      defenderBuildings = combatSnapshot.buildings.map(building => ({ ...building }));
+      defenderAltarLevels = { ...combatSnapshot.altar_levels };
+    } catch (error) {
+      releaseBattleSession('cancelled');
+      db.storeReplay(
+        req.player.id,
+        defender_id,
+        actions,
+        [],
+        claimedResult,
+        'error',
+        `Invalid immutable combat snapshot: ${error.message}`,
+        null,
+        null,
+      );
+      return res.status(409).json({
+        error: 'Battle snapshot is invalid. Find an enemy again.',
+        code: 'invalid_combat_snapshot',
+      });
+    }
+  } else {
+    // Compatibility is intentionally limited to old non-Flamethrower
+    // sessions. Directional combat may never fall back to mutable live data.
+    defenderBuildings = db.getPlayerBuildings(defender_id);
+    if (defenderBuildings.some(building => building.type === 'flamethrower')) {
+      releaseBattleSession('cancelled');
+      return res.status(409).json({
+        error: 'This battle requires an immutable combat snapshot. Find an enemy again.',
+        code: 'combat_snapshot_required',
+      });
+    }
+    defenderAltarLevels = db.getAltarSkillLevels(defender_id);
+  }
+  if (!defenderBuildings || defenderBuildings.length === 0) {
+    releaseBattleSession('cancelled');
+    return res.status(400).json({ error: 'Defender has no buildings' });
   }
 
   // Basic validation
@@ -12909,7 +13004,9 @@ router.post('/attack/result', auth, (req, res) => {
     serverTroopLevels,
     serverShipLevel: _playerShipState(req.player.id)?.level || 1,
     serverNftRarities,
-    defenderAltarLevels: db.getAltarSkillLevels(defender_id),
+    defenderAltarLevels,
+    combatSnapshotVersion: combatSnapshot?.schema_version ?? null,
+    combatRulesVersion: combatSnapshot?.combat_rules_version ?? null,
     debugTrace: BATTLE_DEBUG_TRACE,
   });
 
@@ -12942,6 +13039,10 @@ router.post('/attack/result', auth, (req, res) => {
   );
   const replayDebug = {
     ...verification,
+    combatSnapshotVersion: combatSnapshot?.schema_version ?? null,
+    combatRulesVersion: combatSnapshot?.combat_rules_version ?? null,
+    facingTableVersion: combatSnapshot?.facing_table_version ?? null,
+    layoutRevision: combatSnapshot?.layout_revision ?? null,
     clientCasualties,
     resolvedCasualties,
     casualtySource,
@@ -17256,7 +17357,7 @@ function adminBuildPlayerProfile(player) {
   const lastSeenAgeMs = lastSeenMs ? now - lastSeenMs : Infinity;
 
   const buildings = adminSafeAll(
-    'SELECT id, type, level, grid_x, grid_z, grid_index, hp, max_hp, has_ship, ship_troops, ship_troops_template, created_at FROM buildings WHERE player_id = ? ORDER BY grid_index, type, level DESC, id',
+    'SELECT id, type, level, grid_x, grid_z, grid_index, hp, max_hp, facing_step, has_ship, ship_troops, ship_troops_template, created_at FROM buildings WHERE player_id = ? ORDER BY grid_index, type, level DESC, id',
     [playerId]
   ).map((row) => ({
     ...row,
@@ -17489,6 +17590,7 @@ function adminBuildPlayerProfile(player) {
       resources: { gold: player.gold, wood: player.wood, ore: player.ore },
       trophies: player.trophies,
       level: player.level,
+      layout_revision: Number(player.layout_revision || 0),
       shield_until: player.shield_until || null,
       shield_active: player.shield_until && adminProfileSqlMs(player.shield_until) > now,
       battle_wins: player.battle_wins || 0,
@@ -18824,7 +18926,7 @@ router.post('/admin/players/:name/reset', adminAuth, (req, res) => {
   const player = db.db.prepare('SELECT id FROM players WHERE name = ? AND COALESCE(is_bot, 0) = 0').get(req.params.name);
   if (!player) return res.status(404).json({ error: 'Player not found' });
   db.db.prepare('DELETE FROM buildings WHERE player_id = ?').run(player.id);
-  db.db.prepare('UPDATE players SET gold = 4000, wood = 4000, ore = 4000, trophies = 0 WHERE id = ?').run(player.id);
+  db.db.prepare('UPDATE players SET gold = 4000, wood = 4000, ore = 4000, trophies = 0, layout_revision = layout_revision + 1 WHERE id = ?').run(player.id);
   db.db.prepare('UPDATE troop_levels SET level = 1 WHERE player_id = ?').run(player.id);
   try { db.db.prepare('DELETE FROM trading_rewards WHERE player_id = ?').run(player.id); } catch {}
   try { db.db.prepare('DELETE FROM player_trades WHERE player_id = ?').run(player.id); } catch {}
@@ -18971,7 +19073,21 @@ function adminBuildingMaxLevel(type, def) {
   return Number(def?.max_level) || 1;
 }
 
-function adminInsertBuilding(playerId, type, level, requestedGridIndex = null) {
+function adminFacingForBuilding(type, gridX, gridZ, gridIndex, rawFacingStep = null) {
+  if (type !== 'flamethrower') {
+    if (rawFacingStep != null) return { error: 'facing_step is only valid for flamethrower' };
+    return { facing_step: null };
+  }
+  if (rawFacingStep == null) {
+    return { facing_step: db.flamethrowerDefaultFacingStep(gridX, gridZ, gridIndex) };
+  }
+  if (!Number.isInteger(rawFacingStep) || rawFacingStep < 0 || rawFacingStep > 23) {
+    return { error: 'facing_step must be an integer in [0, 23]' };
+  }
+  return { facing_step: rawFacingStep };
+}
+
+function adminInsertBuilding(playerId, type, level, requestedGridIndex = null, rawFacingStep = null) {
   const def = db.BUILDING_DEFS[type];
   if (!def) return { error: `Unknown building type: ${type}` };
   const slot = adminFindBuildingSlot(playerId, type, requestedGridIndex);
@@ -18982,10 +19098,13 @@ function adminInsertBuilding(playerId, type, level, requestedGridIndex = null) {
   const purchaseGranted = def.requires_purchase
     ? adminGrantUtilityPurchase(playerId, def.shop_sku || type)
     : false;
+  const facing = adminFacingForBuilding(type, slot.grid_x, slot.grid_z, slot.grid_index, rawFacingStep);
+  if (facing.error) return facing;
   const insert = db.db.prepare(`
-    INSERT INTO buildings (player_id, type, level, grid_x, grid_z, grid_index, hp, max_hp, has_ship)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
-  `).run(playerId, type, targetLevel, slot.grid_x, slot.grid_z, slot.grid_index, maxHp, maxHp);
+    INSERT INTO buildings (player_id, type, level, grid_x, grid_z, grid_index, hp, max_hp, facing_step, has_ship)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+  `).run(playerId, type, targetLevel, slot.grid_x, slot.grid_z, slot.grid_index, maxHp, maxHp, facing.facing_step);
+  db.db.prepare('UPDATE players SET layout_revision = layout_revision + 1 WHERE id = ?').run(playerId);
   const building = db.db.prepare('SELECT * FROM buildings WHERE id = ?').get(insert.lastInsertRowid);
   return { building, purchase_granted: purchaseGranted };
 }
@@ -19016,7 +19135,13 @@ router.post('/admin/players/:name/add-building', adminAuth, (req, res) => {
     let building;
     let purchaseGranted = false;
     if (autoSlot) {
-      const inserted = adminInsertBuilding(player.id, type, Number(req.body?.level || 1), gridIndex);
+      const inserted = adminInsertBuilding(
+        player.id,
+        type,
+        Number(req.body?.level || 1),
+        gridIndex,
+        req.body?.facing_step ?? null,
+      );
       if (inserted.error) return res.status(400).json({ error: inserted.error });
       building = inserted.building;
       purchaseGranted = inserted.purchase_granted;
@@ -19037,10 +19162,13 @@ router.post('/admin/players/:name/add-building', adminAuth, (req, res) => {
       purchaseGranted = def.requires_purchase && req.body?.grant_purchase !== false
         ? adminGrantUtilityPurchase(player.id, def.shop_sku || type)
         : false;
+      const facing = adminFacingForBuilding(type, gridX, gridZ, gridIndex, req.body?.facing_step ?? null);
+      if (facing.error) return res.status(400).json(facing);
       const insert = db.db.prepare(`
-        INSERT INTO buildings (player_id, type, level, grid_x, grid_z, grid_index, hp, max_hp, has_ship)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
-      `).run(player.id, type, level, gridX, gridZ, gridIndex, maxHp, maxHp);
+        INSERT INTO buildings (player_id, type, level, grid_x, grid_z, grid_index, hp, max_hp, facing_step, has_ship)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+      `).run(player.id, type, level, gridX, gridZ, gridIndex, maxHp, maxHp, facing.facing_step);
+      db.db.prepare('UPDATE players SET layout_revision = layout_revision + 1 WHERE id = ?').run(player.id);
       building = db.db.prepare('SELECT * FROM buildings WHERE id = ?').get(insert.lastInsertRowid);
     }
 

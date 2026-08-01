@@ -4,9 +4,9 @@
 // Each DEX has a different settlement story; we use the most authoritative
 // public source per-DEX rather than a one-size-fits-all approach:
 //
-//   Pacifica  — sum `builder_fee` across every trade tagged with our code
-//               via /api/v1/builder/trades (Pacifica reports our exact
-//               USDC rebate per trade; cumulative, paginated).
+//   Pacifica  — sum `fees_all_time` from the builder-code leaderboard.
+//               Pacifica pre-aggregates the same builder fees per referred
+//               wallet, avoiding a full paginated history scan on every read.
 //   GMX       — Goldsky subgraph `affiliateStats(period: total)` for our
 //               affiliate address: totalRebateUsd − discountUsd. This is
 //               the authoritative number GMX's own /referrals page reads.
@@ -59,15 +59,15 @@ function isRateLimitError(err) {
 }
 
 // ── Pacifica ──────────────────────────────────────────────────────────────
-// Public REST. Cursor-paginated. We walk until `has_more=false` or the
-// hard PAGE_CAP guard trips (defensive against an unbounded loop if
-// Pacifica ever changes the cursor semantics). With ~50 trades/page and
-// thousands of trades this is still <1s but we cache aggressively.
+// Public REST. The leaderboard endpoint returns all referred wallets with
+// cumulative builder fees in one response. Keep the cursor-paginated trade
+// history as a correctness fallback if that aggregate is temporarily absent
+// or Pacifica returns a malformed leaderboard response.
 const PACIFICA_API = 'https://api.pacifica.fi/api/v1';
 const PACIFICA_BUILDER_CODE = 'clashofperps';
-const PACIFICA_PAGE_CAP = 200; // 200 × 50 = 10 000 trades — safety bound
+const PACIFICA_PAGE_CAP = 200; // 200 × 100 = 20 000 trades — safety bound
 
-async function fetchPacificaEarnings() {
+async function fetchPacificaTradeHistoryEarnings() {
   let total = 0;
   let trades = 0;
   let cursor = null;
@@ -84,7 +84,54 @@ async function fetchPacificaEarnings() {
     if (!r?.has_more || !r?.next_cursor) break;
     cursor = r.next_cursor;
   }
-  return { earned_usd: total, trades, currency: 'USDC' };
+  return {
+    earned_usd: total,
+    trades,
+    currency: 'USDC',
+    model: 'pacifica_builder_trades_sum',
+    source_detail: 'pacifica_builder_trades_sum_fallback',
+  };
+}
+
+async function fetchPacificaEarnings() {
+  const qs = new URLSearchParams({ builder_code: PACIFICA_BUILDER_CODE });
+  try {
+    const response = await fetchJson(
+      `${PACIFICA_API}/leaderboard/builder_code?${qs.toString()}`,
+      {},
+      5_000,
+    );
+    if (!Array.isArray(response?.data)) {
+      throw new Error('Pacifica builder leaderboard returned no data array');
+    }
+
+    let total = 0;
+    let volume = 0;
+    for (const row of response.data) {
+      const fee = Number(row?.fees_all_time);
+      if (!Number.isFinite(fee)) {
+        throw new Error('Pacifica builder leaderboard returned an invalid fees_all_time value');
+      }
+      total += fee;
+      const rowVolume = Number(row?.volume_all_time);
+      if (Number.isFinite(rowVolume)) volume += rowVolume;
+    }
+
+    return {
+      earned_usd: total,
+      volume_usd: volume,
+      traded_referrals: response.data.length,
+      currency: 'USDC',
+      model: 'pacifica_builder_leaderboard_fee_sum',
+      source_detail: 'pacifica_builder_leaderboard_fees_all_time_sum',
+    };
+  } catch (leaderboardError) {
+    const fallback = await fetchPacificaTradeHistoryEarnings();
+    return {
+      ...fallback,
+      aggregate_fallback_reason: String(leaderboardError?.message || leaderboardError).slice(0, 240),
+    };
+  }
 }
 
 // ── Decibel (Aptos) ───────────────────────────────────────────────────────
@@ -1827,7 +1874,11 @@ function readHotstuffLocalStats() {
   }
 }
 
-function readVerifiedFuturesDexStats(dex, verifiedSource, { earnedFeeWhere = null } = {}) {
+function readVerifiedFuturesDexStats(
+  dex,
+  verifiedSource,
+  { earnedFeeWhere = null, earnedRatePpm = null, rowWhere = null } = {},
+) {
   const Db = loadSqlite();
   if (!Db || !FS.existsSync(FUTURES_DB)) {
     return {
@@ -1867,9 +1918,13 @@ function readVerifiedFuturesDexStats(dex, verifiedSource, { earnedFeeWhere = nul
       END
     `;
     const feeExpr = "ABS(CAST(COALESCE(NULLIF(fee, ''), '0') AS REAL))";
-    const earnedExpr = earnedFeeWhere
-      ? `CASE WHEN ${earnedFeeWhere} THEN ${feeExpr} ELSE 0 END`
-      : '0';
+    const canonicalEarnedRatePpm = Number(earnedRatePpm);
+    const earnedExpr = Number.isFinite(canonicalEarnedRatePpm) && canonicalEarnedRatePpm >= 0
+      ? `((${volumeExpr}) * ${canonicalEarnedRatePpm} / 1000000.0)`
+      : earnedFeeWhere
+        ? `CASE WHEN ${earnedFeeWhere} THEN ${feeExpr} ELSE 0 END`
+        : '0';
+    const rowFilterSql = rowWhere ? `AND (${rowWhere})` : '';
     const summary = fdb.prepare(`
       SELECT COUNT(*) AS trades,
              COUNT(DISTINCT player_id) AS traders,
@@ -1881,6 +1936,7 @@ function readVerifiedFuturesDexStats(dex, verifiedSource, { earnedFeeWhere = nul
       WHERE dex = ?
         AND status = 'filled'
         AND verified_source IN (${sourceSql})
+        ${rowFilterSql}
     `).get(dex, ...sources) || {};
     const recent = fdb.prepare(`
       SELECT COUNT(*) AS trades,
@@ -1891,6 +1947,7 @@ function readVerifiedFuturesDexStats(dex, verifiedSource, { earnedFeeWhere = nul
       WHERE dex = ?
         AND status = 'filled'
         AND verified_source IN (${sourceSql})
+        ${rowFilterSql}
         AND created_at > datetime('now', '-24 hours')
     `).get(dex, ...sources) || {};
     const proofs = fdb.prepare(`
@@ -1900,6 +1957,7 @@ function readVerifiedFuturesDexStats(dex, verifiedSource, { earnedFeeWhere = nul
       WHERE dex = ?
         AND status = 'filled'
         AND verified_source IN (${sourceSql})
+        ${rowFilterSql}
       ORDER BY created_at DESC
       LIMIT 20
     `).all(dex, ...sources).map(row => ({
@@ -1945,6 +2003,86 @@ function readVerifiedFuturesDexStats(dex, verifiedSource, { earnedFeeWhere = nul
   } finally {
     if (fdb) fdb.close();
   }
+}
+
+async function fetchRisexEarnings() {
+  const risex = require('../server-futures/risex');
+  const builderConfig = await risex.getClashBuilderConfig({ force: true });
+  const builderId = Number(builderConfig?.builder_id || risex.RISEX_BUILDER_ID);
+  const builderFeePpm = Number(
+    builderConfig?.builder_fee_bps || risex.RISEX_BUILDER_FEE_BPS,
+  );
+  const feeRecipient = String(
+    builderConfig?.fee_recipient || risex.RISEX_BUILDER_FEE_RECIPIENT || '',
+  ).trim().toLowerCase();
+  const validConfig = builderConfig?.registered === true
+    && Number.isInteger(builderId)
+    && builderId > 0
+    && Number.isInteger(builderFeePpm)
+    && builderFeePpm > 0
+    && /^0x[0-9a-f]{40}$/u.test(feeRecipient);
+
+  if (!validConfig) {
+    return {
+      earned_usd: 0,
+      currency: 'USDC (RISE)',
+      address: feeRecipient || null,
+      builder_id: Number.isInteger(builderId) && builderId > 0 ? builderId : null,
+      builder_fee_ppm: Number.isInteger(builderFeePpm) ? builderFeePpm : null,
+      onchain_registered: false,
+      model: 'risex_builder_not_registered',
+      source_detail: 'risex_onchain_builder_registry',
+      note: 'The configured RISEx builder is not active on-chain, so no earnings are counted.',
+    };
+  }
+
+  // RISEx currently exposes builder registration and per-user approval, but
+  // not a cumulative public builder-earnings endpoint. Every imported RISEx
+  // fill carries the PlaceOrder log decoded from chain, including builder ID,
+  // fee rate, and fee recipient. Count only rows whose proof exactly matches
+  // the currently active Clash builder configuration; self-consistent proofs
+  // for another builder must never leak into this card.
+  const proof = "COALESCE(proof_json, '')";
+  const json = path => `json_extract(${proof}, '${path}')`;
+  const rowWhere = `
+    json_valid(${proof})
+    AND ${json('$.source')} = 'risex_place_order_onchain'
+    AND CAST(${json('$.builder.verified')} AS INTEGER) = 1
+    AND CAST(${json('$.builder.builder_id')} AS INTEGER) = ${builderId}
+    AND CAST(${json('$.builder.expected_builder_id')} AS INTEGER) = ${builderId}
+    AND CAST(${json('$.builder.builder_fee_bps')} AS INTEGER) = ${builderFeePpm}
+    AND CAST(${json('$.builder.expected_builder_fee_bps')} AS INTEGER) = ${builderFeePpm}
+    AND lower(COALESCE(${json('$.builder.fee_recipient')}, '')) = '${feeRecipient}'
+  `;
+  const local = readVerifiedFuturesDexStats(
+    'risex',
+    'risex_builder_onchain',
+    { earnedRatePpm: builderFeePpm, rowWhere },
+  );
+  const conventionalBps = builderFeePpm / 100;
+  return {
+    earned_usd: local.earned_usd,
+    earned_24h_usd: local.earned_24h_usd,
+    currency: 'USDC (RISE)',
+    address: feeRecipient,
+    builder_id: builderId,
+    builder_fee_ppm: builderFeePpm,
+    builder_fee_bps: conventionalBps,
+    builder_fee_pct: conventionalBps / 100,
+    volume_usd: local.volume_usd,
+    volume_24h_usd: local.volume_24h_usd,
+    trades: local.trades,
+    trades_24h: local.trades_24h,
+    traders: local.traders,
+    latest_fill_at: local.latest_fill_at,
+    recent_proofs: local.recent_proofs,
+    onchain_registered: true,
+    api_indexed: builderConfig?.api_indexed === true,
+    registry_source: builderConfig?.registry_source || 'risex_onchain',
+    model: 'risex_onchain_builder_verified_fills_exact',
+    source_detail: 'risex_builder_10_place_order_proof',
+    note: `Exact earnings from locally indexed RISEx fills whose on-chain PlaceOrder proof matches builder #${builderId}, ${feeRecipient}, and ${builderFeePpm} ppm (${conventionalBps} bps). RISEx does not currently expose a cumulative public builder-earnings endpoint, so fills not yet imported into Clash are not included.`,
+  };
 }
 
 function localVerifiedBuilderEarnings({ dex, verifiedSource, currency, feeBps, sourceDetail, proofSource = null, note }) {
@@ -2158,7 +2296,7 @@ const ANALYTICS_WINDOWS = [
 
 // RISEx protocol value 100 is one conventional basis point. Keep analytics
 // fixed to the same canonical 1 bps enforced by order routing and rewards.
-const RISEX_BUILDER_FEE_BPS = 1;
+const RISEX_BUILDER_FEE_CONVENTIONAL_BPS = 1;
 const FLASH_BUILDER_FEE_BPS = Number(process.env.FLASH_BUILDER_FEE_BPS || process.env.GMTRADE_BUILDER_FEE_BPS) || 0;
 
 function safeNumber(value) {
@@ -2327,7 +2465,7 @@ function revenueModelForDex(dex, dateForRate = null) {
     };
   }
   if (dex === 'risex') {
-    const bps = Math.max(0, RISEX_BUILDER_FEE_BPS);
+    const bps = Math.max(0, RISEX_BUILDER_FEE_CONVENTIONAL_BPS);
     return {
       configured: bps > 0,
       rate: bps / 10000,
@@ -2793,10 +2931,15 @@ const FAILED_EARNINGS_META = {
     subaccount: DECIBEL_BUILDER_SUBACCOUNT,
     currency: 'USDC (Aptos)',
   },
+  risex: {
+    address: '0x39b36f1edf2ef5a6f2e02991b3a85fb356eb5005',
+    builder_id: 10,
+    currency: 'USDC (RISE)',
+  },
 };
 
 const EARNINGS_READER_CONFIG = {
-  pacifica: { source: 'pacifica_builder_trades_sum', read: () => fetchPacificaEarnings() },
+  pacifica: { source: 'pacifica_builder_leaderboard_fee_sum', read: () => fetchPacificaEarnings() },
   decibel: { source: 'decibel_account_overview_fee_income', read: () => fetchDecibelEarnings() },
   avantis: { source: 'avantis_code_owner_onchain_estimate_only', read: () => fetchAvantisEarnings() },
   gmx: { source: 'gmx_referral_tier_onchain_estimate_only', read: () => fetchGmxEarnings() },
@@ -2805,6 +2948,7 @@ const EARNINGS_READER_CONFIG = {
   monad: { source: 'perpl_builder_fee_not_configured', read: () => fetchPerplEarnings() },
   hyperliquid: { source: 'hyperliquid_referral_builder_rewards', read: () => fetchHyperliquidEarnings() },
   grvt: { source: 'grvt_builder_fill_history', read: () => fetchGrvtEarnings() },
+  risex: { source: 'risex_builder_10_place_order_proof', read: () => fetchRisexEarnings() },
   nado: { source: 'nado_indexer_match_builder_fee', read: () => fetchNadoEarnings() },
   hotstuff: { source: 'hotstuff_api_fills_broker_fee', read: () => fetchHotstuffEarnings() },
   hibachi: { source: 'hibachi_api_activity_builder_fee_unverified', read: () => fetchHibachiEarnings() },
@@ -2824,6 +2968,7 @@ const EARNINGS_DEX_ORDER = [
   'monad',
   'hyperliquid',
   'grvt',
+  'risex',
   'nado',
   'hotstuff',
   'hibachi',
@@ -2963,4 +3108,11 @@ async function fetchAllEarnings({ force = false, mainDb = null } = {}) {
   return { ...out, cached: false, age_ms: 0 };
 }
 
-module.exports = { fetchAllEarnings, fetchEarningsDex, fetchRevenueAnalytics };
+module.exports = {
+  fetchAllEarnings,
+  fetchEarningsDex,
+  fetchRevenueAnalytics,
+  _test: {
+    earningsDexOrder: () => [...EARNINGS_DEX_ORDER],
+  },
+};

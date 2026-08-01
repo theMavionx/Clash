@@ -4,6 +4,7 @@ import PlayerInfo from './PlayerInfo';
 import ActionButtons from './ActionButtons';
 import ShopPanel from './ShopPanel';
 import BuildingInfoPanel from './BuildingInfoPanel';
+import FlamethrowerFacingControls from './FlamethrowerFacingControls';
 import BarnPanel from './BarnPanel';
 import RegisterPanel from './RegisterPanel';
 import ErrorToast from './ErrorToast';
@@ -547,6 +548,7 @@ export default function GameUI() {
       ) : !enemyMode?.active && selectedBuilding ? (
         <BuildingInfoPanel onOpenTroops={handleOpenTroops} />
       ) : null}
+      <FlamethrowerFacingControls />
     </div>
   );
 }

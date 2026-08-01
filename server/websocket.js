@@ -181,22 +181,44 @@ function handleMessage(ws, playerId, msg) {
       break;
 
     case 'place_building':
-      result = db.placeBuilding(playerId, msg.building_type, msg.grid_x, msg.grid_z, msg.grid_index || 0);
+      result = db.placeBuilding(
+        playerId,
+        msg.building_type,
+        msg.grid_x,
+        msg.grid_z,
+        msg.grid_index || 0,
+        msg.facing_step ?? null,
+        msg.expected_layout_revision ?? null,
+      );
       ws.send(JSON.stringify({ type: 'building_placed', data: result }));
       break;
 
     case 'upgrade_building':
-      result = db.upgradeBuilding(playerId, msg.building_id);
+      result = db.upgradeBuilding(playerId, msg.building_id, msg.expected_layout_revision ?? null);
       ws.send(JSON.stringify({ type: 'building_upgraded', data: result }));
       break;
 
     case 'remove_building':
-      result = db.removeBuilding(playerId, msg.building_id);
+      result = db.removeBuilding(playerId, msg.building_id, msg.expected_layout_revision ?? null);
       ws.send(JSON.stringify({ type: 'building_removed', data: result }));
       break;
 
+    case 'set_building_facing':
+      result = db.setBuildingFacing(
+        playerId,
+        msg.building_id,
+        msg.facing_step,
+        msg.expected_layout_revision,
+        msg.method,
+      );
+      ws.send(JSON.stringify({ type: 'building_facing_set', data: result }));
+      break;
+
     case 'get_buildings':
-      result = db.getPlayerBuildings(playerId);
+      result = {
+        buildings: db.getPlayerBuildings(playerId),
+        layout_revision: db.getPlayerLayoutRevision(playerId),
+      };
       ws.send(JSON.stringify({ type: 'buildings', data: result }));
       break;
 

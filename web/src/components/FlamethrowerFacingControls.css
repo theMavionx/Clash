@@ -1,0 +1,137 @@
+.flamethrower-facing-dock {
+  position: fixed;
+  left: max(12px, env(safe-area-inset-left, 0px));
+  right: max(12px, env(safe-area-inset-right, 0px));
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
+  z-index: 95;
+  width: auto;
+  max-width: 430px;
+  margin-inline: auto;
+  box-sizing: border-box;
+  padding: 12px;
+  border: 3px solid #b74b19;
+  border-radius: 16px;
+  background: linear-gradient(180deg, #3e2723, #24140c);
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.45);
+  color: #fff3d3;
+  text-align: center;
+  pointer-events: auto;
+  touch-action: manipulation;
+  font-family: Inter, "Segoe UI", sans-serif;
+}
+
+.flamethrower-facing-header,
+.flamethrower-facing-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.flamethrower-facing-header {
+  justify-content: space-between;
+}
+
+.flamethrower-facing-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 16px;
+  font-weight: 900;
+  text-align: left;
+}
+
+.flamethrower-facing-angle {
+  flex-shrink: 0;
+  color: #ffc16b;
+  font-size: 14px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.flamethrower-facing-row {
+  justify-content: center;
+  margin-top: 8px;
+}
+
+.flamethrower-facing-button {
+  min-height: 56px;
+  padding: 8px;
+  border: 2px solid #4b2b16;
+  border-radius: 10px;
+  color: #2a1608;
+  font-size: 15px;
+  font-weight: 800;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.flamethrower-facing-button:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+
+.flamethrower-facing-button:active:not(:disabled) {
+  filter: brightness(0.88);
+}
+
+.flamethrower-facing-button:focus-visible {
+  outline: 3px solid #fff3d3;
+  outline-offset: 2px;
+}
+
+.flamethrower-facing-button:disabled {
+  border-color: #40342c;
+  background: #59483b;
+  color: #d8cfc4;
+  cursor: not-allowed;
+}
+
+.flamethrower-facing-rotate {
+  flex: 1;
+  min-width: 72px;
+  min-height: 64px;
+  background: #ffb340;
+}
+
+.flamethrower-facing-reset {
+  flex: 1.35;
+  min-width: 96px;
+  background: #f6d69e;
+}
+
+.flamethrower-facing-cancel {
+  flex: 1;
+  background: #d7c5a8;
+}
+
+.flamethrower-facing-confirm {
+  flex: 1.6;
+  background: #73d758;
+}
+
+.flamethrower-facing-confirm.is-pending:disabled {
+  border-color: #4b2b16;
+  background: #b58a44;
+  color: #2a1608;
+}
+
+@media (min-width: 340px) {
+  .flamethrower-facing-reset {
+    min-width: 112px;
+  }
+}
+
+@media (min-width: 600px) {
+  .flamethrower-facing-dock {
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 18px);
+  }
+
+  .flamethrower-facing-title {
+    font-size: 17px;
+  }
+
+  .flamethrower-facing-angle {
+    font-size: 15px;
+  }
+}

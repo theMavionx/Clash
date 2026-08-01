@@ -16,7 +16,14 @@ const {
 const {
   CANONICAL_GRID_CONFIGS,
   COMBAT_GRID_VERSION,
+  gridLocalPointToWorld,
 } = require('./combat_grid_config');
+const flamethrower = require('./flamethrower_config');
+const {
+  COMBAT_SNAPSHOT_VERSION,
+  createCombatSnapshot,
+  serializeCombatSnapshot,
+} = require('./combat_snapshot');
 const {
   BOT_LOOT_REWARD_RANGE,
   CHALLENGE_BOT_ARCHETYPES,
@@ -104,6 +111,10 @@ try { db.exec(`ALTER TABLE players ADD COLUMN wallet TEXT`); } catch {}
 try { db.exec(`ALTER TABLE buildings ADD COLUMN has_ship INTEGER NOT NULL DEFAULT 0`); } catch {}
 try { db.exec(`ALTER TABLE buildings ADD COLUMN ship_troops TEXT NOT NULL DEFAULT '[]'`); } catch {}
 try { db.exec(`ALTER TABLE buildings ADD COLUMN ship_troops_template TEXT NOT NULL DEFAULT '[]'`); } catch {}
+// Flamethrower Defense: facing is nullable for every legacy/non-directional
+// building. New Flamethrower rows are validated by the application boundary.
+try { db.exec(`ALTER TABLE buildings ADD COLUMN facing_step INTEGER CHECK (facing_step IS NULL OR (facing_step >= 0 AND facing_step < 24))`); } catch {}
+try { db.exec(`ALTER TABLE players ADD COLUMN layout_revision INTEGER NOT NULL DEFAULT 0`); } catch {}
 try { db.exec(`ALTER TABLE player_ships ADD COLUMN slot_cost_version INTEGER NOT NULL DEFAULT 1`); } catch {}
 // Shield: protects from attacks after being raided
 try { db.exec(`ALTER TABLE players ADD COLUMN shield_until TEXT`); } catch {}
@@ -1723,6 +1734,10 @@ try { db.exec(`ALTER TABLE battle_sessions ADD COLUMN loot_snapshot_json TEXT`);
 // retry idempotent instead of applying the same report a second time.
 try { db.exec(`ALTER TABLE battle_sessions ADD COLUMN casualty_report_json TEXT`); } catch {}
 try { db.exec(`ALTER TABLE battle_sessions ADD COLUMN result_response_json TEXT`); } catch {}
+try { db.exec(`ALTER TABLE battle_sessions ADD COLUMN combat_snapshot_json TEXT`); } catch {}
+try { db.exec(`ALTER TABLE battle_sessions ADD COLUMN combat_snapshot_version INTEGER`); } catch {}
+try { db.exec(`ALTER TABLE battle_sessions ADD COLUMN layout_revision INTEGER`); } catch {}
+try { db.exec(`ALTER TABLE battle_sessions ADD COLUMN combat_rules_version TEXT`); } catch {}
 try {
   rankedRaids.ensureRankedRaidSchema(db);
 } catch (e) {
@@ -2601,11 +2616,15 @@ const stmts = {
 
   // Buildings
   placeBuilding: db.prepare(`
-    INSERT INTO buildings (player_id, type, level, grid_x, grid_z, grid_index, hp, max_hp)
-    VALUES (?, ?, 1, ?, ?, ?, ?, ?)
+    INSERT INTO buildings (player_id, type, level, grid_x, grid_z, grid_index, hp, max_hp, facing_step)
+    VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?)
   `),
   getBuildings: db.prepare(`SELECT * FROM buildings WHERE player_id = ?`),
   getBuildingById: db.prepare(`SELECT * FROM buildings WHERE id = ? AND player_id = ?`),
+  getPlayerLayoutRevision: db.prepare(`SELECT layout_revision FROM players WHERE id = ?`),
+  bumpPlayerLayoutRevision: db.prepare(`
+    UPDATE players SET layout_revision = layout_revision + 1 WHERE id = ?
+  `),
   getTownHallFlag: db.prepare(`
     SELECT player_id, image_url, image_path, image_sha256, mime_type, purchase_id, tx_hash, updated_at
     FROM player_town_hall_flags
@@ -2649,6 +2668,7 @@ const stmts = {
   `),
   moveBuilding: db.prepare(`UPDATE buildings SET grid_x = ?, grid_z = ?, grid_index = ? WHERE id = ? AND player_id = ?`),
   removeBuilding: db.prepare(`DELETE FROM buildings WHERE id = ? AND player_id = ?`),
+  setBuildingFacing: db.prepare(`UPDATE buildings SET facing_step = ? WHERE id = ? AND player_id = ?`),
   updateBuildingHp: db.prepare(`UPDATE buildings SET hp = ? WHERE id = ? AND player_id = ?`),
 
   // Troop levels
@@ -3167,6 +3187,14 @@ const stmts = {
     UPDATE battle_sessions
     SET loot_snapshot_json = ?
     WHERE id = ? AND attacker_id = ? AND defender_id = ? AND status = 'active'
+  `),
+  setBattleSessionCombatSnapshot: db.prepare(`
+    UPDATE battle_sessions
+    SET combat_snapshot_json = ?,
+        combat_snapshot_version = ?,
+        layout_revision = ?,
+        combat_rules_version = ?
+    WHERE id = ? AND defender_id = ? AND status = 'active'
   `),
   createRankedBattleSession: db.prepare(`
     INSERT INTO battle_sessions (
@@ -5726,6 +5754,10 @@ function seedTournamentDailyPoolBaseline(tournamentId) {
 // ---------- Building Definitions (mirroring Godot) ----------
 
 // ---------- Town Hall Progression System ----------
+// Future TH8+ building data may be present for development and deterministic
+// fixtures, but player progression remains gated until its live rollout.
+const LIVE_TOWN_HALL_CAP = 7;
+
 // Buildings unlocked per TH level. Not listed = available from TH1.
 const TH_UNLOCK = {
   storage:   2,  // unlocked at TH2
@@ -5736,6 +5768,8 @@ const TH_UNLOCK = {
   mortar:    5,  // unlocked at TH5
   harpoon:   6,  // unlocked at TH6
   cannon:    7,  // unlocked at TH7
+  flamethrower: flamethrower.BUILDING.unlock_th,
+  air_bomb:  9,  // data-ready at TH9; live Town Hall progression remains capped below it
 };
 
 // Max count per building type per TH level. Individual tables may include future
@@ -5754,6 +5788,8 @@ const TH_MAX_COUNT = {
   mortar:       [0, 0, 0, 0, 1, 2, 2],  // unlocked at TH5, second at TH6
   harpoon:      [0, 0, 0, 0, 0, 1, 1, 2], // one at TH6-TH7, second at TH8
   cannon:       [0, 0, 0, 0, 0, 0, 2],  // unlocked at TH7
+  flamethrower: flamethrower.BUILDING.max_count_by_th,
+  air_bomb:     [0, 0, 0, 0, 0, 0, 0, 0, 2], // exactly two at TH9
   town_hall:    [1, 1, 1, 1, 1, 1, 1],
 };
 
@@ -5773,6 +5809,8 @@ const TH_MAX_LEVEL = {
   harpoon:      [1, 1, 1, 1, 1, 6, 7, 8],
   shark_trap:   [1, 2, 3, 4, 5, 6, 7],
   cannon:       [1, 1, 1, 1, 1, 1, 7],
+  flamethrower: flamethrower.BUILDING.max_level_by_th,
+  air_bomb:     [1, 1, 1, 1, 1, 1, 1, 1, 9],
   port:         [1, 2, 3, 3, 3, 3, 3],
   altar:        [1, 1, 1, 1, 1, 1, 1],
 };
@@ -5788,8 +5826,9 @@ function getBuildingMaxLevelForTownHall(type, townHallLevel) {
 }
 
 const BUILDING_DEFS = {
+  flamethrower: flamethrower.buildingDefinition(),
   town_hall: {
-    size: [4, 4], max_level: 7,
+    size: [4, 4], max_level: LIVE_TOWN_HALL_CAP,
     hp_levels: [3500, 8000, 16000, 24000, 30848, 41200, 51193],
     cost: { gold: 0, wood: 0, ore: 0 },
     upgrade_cost: {
@@ -5898,6 +5937,25 @@ const BUILDING_DEFS = {
       6: { gold: 68000, wood: 98000, ore: 83000 },
       7: { gold: 86000, wood: 122000, ore: 104000 },
       8: { gold: 108000, wood: 142000, ore: 124000 },
+    },
+    max_count: 2,
+  },
+  // Air Bomb Defense (design/gdd/air-bomb-defense.md). Costs are the
+  // owner-approved provisional TH9 curve and must be revalidated when the
+  // authoritative TH9 storage economy is promoted.
+  air_bomb: {
+    size: [3, 3], max_level: 9,
+    hp_levels: [3200, 4000, 5000, 6200, 7600, 9200, 11000, 13000, 15200],
+    cost: { gold: 18000, wood: 48000, ore: 40000 },
+    upgrade_cost: {
+      2: { gold: 28000, wood: 62000, ore: 52000 },
+      3: { gold: 40000, wood: 78000, ore: 66000 },
+      4: { gold: 54000, wood: 94000, ore: 80000 },
+      5: { gold: 70000, wood: 110000, ore: 94000 },
+      6: { gold: 88000, wood: 126000, ore: 108000 },
+      7: { gold: 108000, wood: 138000, ore: 120000 },
+      8: { gold: 126000, wood: 142000, ore: 132000 },
+      9: { gold: 140000, wood: 143000, ore: 142000 },
     },
     max_count: 2,
   },
@@ -6755,7 +6813,7 @@ const ALTAR_SKILL_DEFS = {
   },
 };
 
-const DEFENSE_BUILDING_TYPES = new Set(['turret', 'archer_tower', 'archertower', 'archtower', 'mage_tower', 'tombstone', 'mortar', 'harpoon', 'shark_trap', 'cannon']);
+const DEFENSE_BUILDING_TYPES = new Set(['turret', 'archer_tower', 'archertower', 'archtower', 'mage_tower', 'tombstone', 'mortar', 'harpoon', 'flamethrower', 'air_bomb', 'shark_trap', 'cannon']);
 
 const DEMON_KING_UPGRADE_WINS = {
   2: 1000,
@@ -6790,6 +6848,7 @@ const TROPHY_TABLE = {
   mage_tower:   [20, 45, 90, 145, 225, 330, 460],
   mortar:       [30, 65, 125, 210, 315, 440, 580],
   harpoon:      [20, 35, 55, 80, 110, 145, 190, 240],
+  air_bomb:     [30, 55, 90, 135, 190, 250, 320, 400, 490],
   shark_trap:   [25, 40, 60, 85, 115, 155, 205],
   cannon:       [25, 45, 70, 105, 145, 190, 240],
 };
@@ -8784,7 +8843,108 @@ function getBuildingUnlocks(playerId) {
   };
 }
 
-function placeBuilding(playerId, type, gridX, gridZ, gridIndex = 0) {
+function getPlayerLayoutRevision(playerId) {
+  const row = stmts.getPlayerLayoutRevision.get(playerId);
+  return Math.max(0, Math.trunc(Number(row?.layout_revision) || 0));
+}
+
+function layoutRevisionConflict(playerId, expectedRevision) {
+  const currentRevision = getPlayerLayoutRevision(playerId);
+  if (expectedRevision == null) return null;
+  if (!Number.isInteger(expectedRevision) || expectedRevision < 0) {
+    return {
+      error: 'expected_layout_revision must be a non-negative integer',
+      code: 'invalid_layout_revision',
+      status: 400,
+      layout_revision: currentRevision,
+    };
+  }
+  if (expectedRevision === currentRevision) return null;
+  return {
+    error: 'Layout changed on another client. Reload the canonical base.',
+    code: 'layout_revision_conflict',
+    status: 409,
+    layout_revision: currentRevision,
+    buildings: getPlayerBuildings(playerId),
+  };
+}
+
+function bumpPlayerLayoutRevision(playerId) {
+  stmts.bumpPlayerLayoutRevision.run(playerId);
+  return getPlayerLayoutRevision(playerId);
+}
+
+function buildingWorldCenter(gridX, gridZ, gridIndex, footprint) {
+  const grid = CANONICAL_GRID_CONFIGS[Number(gridIndex)] || CANONICAL_GRID_CONFIGS[0];
+  if (!grid) throw new Error(`Missing canonical grid ${gridIndex}`);
+  const width = Number(footprint?.[0]) || 1;
+  const height = Number(footprint?.[1]) || 1;
+  const localX = -grid.grid_extent_x / 2 + Number(gridX) * grid.cell_size + width * grid.cell_size / 2;
+  const localZ = -grid.grid_extent_z / 2 + Number(gridZ) * grid.cell_size + height * grid.cell_size / 2;
+  return gridLocalPointToWorld(grid, localX, localZ);
+}
+
+function flamethrowerDefaultFacingStep(gridX, gridZ, gridIndex = 0) {
+  const center = buildingWorldCenter(gridX, gridZ, gridIndex, flamethrower.BUILDING.footprint);
+  const approach = CANONICAL_GRID_CONFIGS[2];
+  if (!approach) throw new Error('Missing canonical attack-approach grid 2');
+  return flamethrower.nearestStepToward(center, {
+    x: approach.grid_center_x,
+    z: approach.grid_center_z,
+  });
+}
+
+function migrateLegacyFlamethrowerFacings() {
+  const legacyRows = db.prepare(`
+    SELECT id, player_id, grid_x, grid_z, grid_index
+    FROM buildings
+    WHERE type = ? AND facing_step IS NULL
+    ORDER BY player_id, id
+  `).all(flamethrower.BUILDING.id);
+  if (legacyRows.length === 0) return { migrated: 0, players: 0 };
+
+  const updateFacing = db.prepare(`
+    UPDATE buildings
+    SET facing_step = ?
+    WHERE id = ? AND player_id = ? AND type = ? AND facing_step IS NULL
+  `);
+  const bumpRevision = db.prepare(`
+    UPDATE players SET layout_revision = layout_revision + 1 WHERE id = ?
+  `);
+  const migrate = db.transaction((rows) => {
+    const changedPlayers = new Set();
+    let migrated = 0;
+    for (const row of rows) {
+      const defaultStep = flamethrowerDefaultFacingStep(
+        row.grid_x,
+        row.grid_z,
+        row.grid_index,
+      );
+      const result = updateFacing.run(defaultStep, row.id, row.player_id, flamethrower.BUILDING.id);
+      if (result.changes > 0) {
+        migrated += result.changes;
+        changedPlayers.add(row.player_id);
+      }
+    }
+    for (const playerId of changedPlayers) bumpRevision.run(playerId);
+    return { migrated, players: changedPlayers.size };
+  });
+  return migrate(legacyRows);
+}
+
+// `facing_step` was introduced as nullable so non-directional buildings stay
+// untouched. Old Flamethrower rows must not silently become step 0 in Godot:
+// backfill them once toward the same attack-approach center used by Harpoon.
+try {
+  const migration = migrateLegacyFlamethrowerFacings();
+  if (migration.migrated > 0) {
+    console.log(`[db] migrated ${migration.migrated} legacy Flamethrower facing row(s) for ${migration.players} player(s)`);
+  }
+} catch (error) {
+  console.warn('[db] Flamethrower facing migration warning:', error.message);
+}
+
+function _placeBuilding(playerId, type, gridX, gridZ, gridIndex = 0, facingStep = null) {
   if (type === 'port') return { error: 'Ports were replaced by the player main ship' };
   const def = BUILDING_DEFS[type];
   if (!def) return { error: `Unknown building type: ${type}` };
@@ -8825,6 +8985,22 @@ function placeBuilding(playerId, type, gridX, gridZ, gridIndex = 0) {
     }
   }
 
+  let canonicalFacing = null;
+  let facingSource = null;
+  if (type === flamethrower.BUILDING.id) {
+    if (facingStep == null) {
+      canonicalFacing = flamethrowerDefaultFacingStep(gridX, gridZ, gridIndex);
+      facingSource = 'default';
+    } else if (!flamethrower.isValidFacingStep(facingStep)) {
+      return { error: 'facing_step must be an integer in [0, 23]', code: 'invalid_facing_step', status: 400 };
+    } else {
+      canonicalFacing = facingStep;
+      facingSource = 'player';
+    }
+  } else if (facingStep != null) {
+    return { error: 'facing_step is only valid for flamethrower', code: 'invalid_facing_type', status: 400 };
+  }
+
   // Check resources
   const cost = def.cost;
   if (!canAfford(playerId, cost.gold, cost.wood, cost.ore)) {
@@ -8838,27 +9014,53 @@ function placeBuilding(playerId, type, gridX, gridZ, gridIndex = 0) {
   });
 
   const hp = def.hp_levels[0];
-  const info = stmts.placeBuilding.run(playerId, type, gridX, gridZ, gridIndex, hp, hp);
+  const info = stmts.placeBuilding.run(playerId, type, gridX, gridZ, gridIndex, hp, hp, canonicalFacing);
   return {
     id: info.lastInsertRowid,
     type, level: 1, grid_x: gridX, grid_z: gridZ, grid_index: gridIndex,
     hp, max_hp: hp,
+    facing_step: canonicalFacing,
+    facing_source: facingSource,
+    facing_table_version: canonicalFacing == null ? null : flamethrower.CONFIG.facing_table_version,
     resources: getResources(playerId),
   };
 }
 
-function upgradeBuilding(playerId, buildingId) {
+const _placeBuildingTxn = db.transaction((playerId, type, gridX, gridZ, gridIndex, facingStep, expectedRevision) => {
+  const conflict = layoutRevisionConflict(playerId, expectedRevision);
+  if (conflict) return conflict;
+  const result = _placeBuilding(playerId, type, gridX, gridZ, gridIndex, facingStep);
+  if (result.error) return result;
+  result.layout_revision = bumpPlayerLayoutRevision(playerId);
+  return result;
+});
+
+function placeBuilding(playerId, type, gridX, gridZ, gridIndex = 0, facingStep = null, expectedRevision = null) {
+  return _placeBuildingTxn(playerId, type, gridX, gridZ, gridIndex, facingStep, expectedRevision);
+}
+
+function _upgradeBuilding(playerId, buildingId) {
   const building = stmts.getBuildingById.get(buildingId, playerId);
   if (!building) return { error: 'Building not found' };
 
   const def = BUILDING_DEFS[building.type];
   if (!def) return { error: 'Unknown building type' };
 
+  const nextLevel = building.level + 1;
+  if (building.type === 'town_hall' && nextLevel > LIVE_TOWN_HALL_CAP) {
+    return {
+      error: `Town Hall level ${nextLevel} is not live yet`,
+      code: 'TOWN_HALL_LEVEL_NOT_LIVE',
+      current_town_hall_level: building.level,
+      target_town_hall_level: nextLevel,
+      live_town_hall_cap: LIVE_TOWN_HALL_CAP,
+    };
+  }
+
   if (building.level >= def.max_level) {
     return { error: 'Already at max level' };
   }
 
-  const nextLevel = building.level + 1;
   const thLevel = getTownHallLevel(playerId);
 
   // Town Hall upgrade — require every available slot at the current tier cap.
@@ -8877,7 +9079,13 @@ function upgradeBuilding(playerId, buildingId) {
     const maxLevelForTownHall = getBuildingMaxLevelForTownHall(building.type, thLevel);
     if (nextLevel > maxLevelForTownHall) {
       const requiredTownHall = Array.from(
-        { length: Math.max(1, BUILDING_DEFS.town_hall.max_level) },
+        {
+          length: Math.max(
+            1,
+            BUILDING_DEFS.town_hall.max_level,
+            TH_MAX_LEVEL[building.type]?.length || 0,
+          ),
+        },
         (_, index) => index + 1,
       ).find((level) => getBuildingMaxLevelForTownHall(building.type, level) >= nextLevel);
       return { error: `Upgrade Town Hall to level ${requiredTownHall || nextLevel} first` };
@@ -8902,18 +9110,45 @@ function upgradeBuilding(playerId, buildingId) {
   return {
     id: buildingId, type: building.type, level: nextLevel,
     hp: newHp, max_hp: newHp, cost,
+    facing_step: building.facing_step,
     resources: getResources(playerId),
   };
 }
 
-function removeBuilding(playerId, buildingId) {
+const _upgradeBuildingTxn = db.transaction((playerId, buildingId, expectedRevision) => {
+  const conflict = layoutRevisionConflict(playerId, expectedRevision);
+  if (conflict) return conflict;
+  const result = _upgradeBuilding(playerId, buildingId);
+  if (result.error) return result;
+  result.layout_revision = bumpPlayerLayoutRevision(playerId);
+  return result;
+});
+
+function upgradeBuilding(playerId, buildingId, expectedRevision = null) {
+  return _upgradeBuildingTxn(playerId, buildingId, expectedRevision);
+}
+
+function _removeBuilding(playerId, buildingId) {
   const building = stmts.getBuildingById.get(buildingId, playerId);
   if (!building) return { error: 'Building not found' };
   stmts.removeBuilding.run(buildingId, playerId);
   return { removed: buildingId, type: building.type };
 }
 
-function moveBuilding(playerId, buildingId, gridX, gridZ, gridIndex = null) {
+const _removeBuildingTxn = db.transaction((playerId, buildingId, expectedRevision) => {
+  const conflict = layoutRevisionConflict(playerId, expectedRevision);
+  if (conflict) return conflict;
+  const result = _removeBuilding(playerId, buildingId);
+  if (result.error) return result;
+  result.layout_revision = bumpPlayerLayoutRevision(playerId);
+  return result;
+});
+
+function removeBuilding(playerId, buildingId, expectedRevision = null) {
+  return _removeBuildingTxn(playerId, buildingId, expectedRevision);
+}
+
+function _moveBuilding(playerId, buildingId, gridX, gridZ, gridIndex = null) {
   const building = stmts.getBuildingById.get(buildingId, playerId);
   if (!building) return { error: 'Building not found' };
   const nextGridIndex = gridIndex == null ? (building.grid_index || 0) : Number(gridIndex);
@@ -8928,15 +9163,95 @@ function moveBuilding(playerId, buildingId, gridX, gridZ, gridIndex = null) {
     grid_x: gridX,
     grid_z: gridZ,
     grid_index: nextGridIndex,
+    facing_step: building.facing_step,
     resources: getResources(playerId),
   };
+}
+
+const _moveBuildingTxn = db.transaction((playerId, buildingId, gridX, gridZ, gridIndex, expectedRevision) => {
+  const conflict = layoutRevisionConflict(playerId, expectedRevision);
+  if (conflict) return conflict;
+  const result = _moveBuilding(playerId, buildingId, gridX, gridZ, gridIndex);
+  if (result.error) return result;
+  result.layout_revision = bumpPlayerLayoutRevision(playerId);
+  return result;
+});
+
+function moveBuilding(playerId, buildingId, gridX, gridZ, gridIndex = null, expectedRevision = null) {
+  return _moveBuildingTxn(playerId, buildingId, gridX, gridZ, gridIndex, expectedRevision);
+}
+
+const FLAMETHROWER_FACING_METHODS = new Set([
+  'step_left',
+  'step_right',
+  'drag_snap',
+  'reset',
+  'admin',
+  'migration',
+]);
+
+const _setBuildingFacingTxn = db.transaction((playerId, buildingId, facingStep, expectedRevision, method) => {
+  const conflict = layoutRevisionConflict(playerId, expectedRevision);
+  if (conflict) return conflict;
+  if (expectedRevision == null) {
+    return {
+      error: 'expected_layout_revision is required for Flamethrower facing changes',
+      code: 'layout_revision_required',
+      status: 400,
+      layout_revision: getPlayerLayoutRevision(playerId),
+    };
+  }
+  if (!flamethrower.isValidFacingStep(facingStep)) {
+    return { error: 'facing_step must be an integer in [0, 23]', code: 'invalid_facing_step', status: 400 };
+  }
+  const normalizedMethod = String(method || '').trim();
+  if (!FLAMETHROWER_FACING_METHODS.has(normalizedMethod)) {
+    return { error: 'method is not an allowed facing edit method', code: 'invalid_facing_method', status: 400 };
+  }
+  const building = stmts.getBuildingById.get(buildingId, playerId);
+  if (!building) return { error: 'Building not found', status: 404 };
+  if (building.type !== flamethrower.BUILDING.id) {
+    return { error: 'Only Flamethrower buildings have editable facing', code: 'invalid_facing_type', status: 400 };
+  }
+  if (!flamethrower.isValidFacingStep(building.facing_step)) {
+    return { error: 'Stored Flamethrower facing is invalid; migration is required', code: 'invalid_stored_facing', status: 409 };
+  }
+  const oldFacingStep = building.facing_step;
+  if (oldFacingStep !== facingStep) stmts.setBuildingFacing.run(facingStep, buildingId, playerId);
+  const layoutRevision = oldFacingStep === facingStep
+    ? getPlayerLayoutRevision(playerId)
+    : bumpPlayerLayoutRevision(playerId);
+  return {
+    success: true,
+    id: building.id,
+    type: building.type,
+    level: building.level,
+    grid_x: building.grid_x,
+    grid_z: building.grid_z,
+    grid_index: building.grid_index,
+    hp: building.hp,
+    max_hp: building.max_hp,
+    old_facing_step: oldFacingStep,
+    facing_step: facingStep,
+    facing_table_version: flamethrower.CONFIG.facing_table_version,
+    method: normalizedMethod,
+    layout_revision: layoutRevision,
+  };
+});
+
+function setBuildingFacing(playerId, buildingId, facingStep, expectedRevision, method) {
+  return _setBuildingFacingTxn(playerId, buildingId, facingStep, expectedRevision, method);
 }
 
 function getPlayerBuildings(playerId) {
   return decorateBuildingsForPlayer(
     playerId,
     stmts.getBuildings.all(playerId).filter((building) => building.type !== 'port'),
-  );
+  ).map((building) => (
+    building.type === flamethrower.BUILDING.id
+      ? { ...building, facing_table_version: flamethrower.CONFIG.facing_table_version }
+      : building
+  ));
 }
 
 function getTownHallFlag(playerId) {
@@ -9707,6 +10022,13 @@ function defensePowerForBuilding(building) {
       + (Number(stats.detectRange) || 0) * 160
       + (Number(stats.pullSpeed) || 0) * controlUptime * 620;
   }
+  if (type === 'air_bomb') {
+    const stats = DEFENSE_STATS.air_bomb[level] || DEFENSE_STATS.air_bomb[1];
+    const dps = (Number(stats.damage) || 0) / Math.max(0.1, Number(stats.fireRate) || 1);
+    return dps * 28
+      + (Number(stats.detectRange) || 0) * 170
+      + (Number(stats.splashRadius) || 0) * 420;
+  }
   if (type === 'cannon') {
     const stats = DEFENSE_STATS.cannon[level] || DEFENSE_STATS.cannon[1];
     const dps = (Number(stats.damage) || 0) / Math.max(0.1, Number(stats.fireRate) || 1);
@@ -10049,6 +10371,36 @@ function saveBattleLootSnapshot(sessionId, attackerId, defenderId, defenderResou
   return snapshot;
 }
 
+function createAndStoreCombatSnapshot(sessionId, defenderId, buildings = null) {
+  const canonicalBuildings = Array.isArray(buildings) ? buildings : getPlayerBuildings(defenderId);
+  const snapshot = createCombatSnapshot({
+    defenderId,
+    layoutRevision: getPlayerLayoutRevision(defenderId),
+    buildings: canonicalBuildings,
+    altarLevels: getAltarSkillLevels(defenderId),
+  });
+  const saved = stmts.setBattleSessionCombatSnapshot.run(
+    serializeCombatSnapshot(snapshot),
+    COMBAT_SNAPSHOT_VERSION,
+    snapshot.layout_revision,
+    snapshot.combat_rules_version,
+    sessionId,
+    defenderId,
+  );
+  if (saved.changes !== 1) throw new Error(`Failed to persist combat snapshot for session ${sessionId}`);
+  return snapshot;
+}
+
+function combatSnapshotResponse(snapshot) {
+  return {
+    buildings: snapshot.buildings,
+    combat_snapshot_version: snapshot.schema_version,
+    combat_rules_version: snapshot.combat_rules_version,
+    facing_table_version: snapshot.facing_table_version,
+    layout_revision: snapshot.layout_revision,
+  };
+}
+
 function isBotPlayer(playerId) {
   if (!playerId) return false;
   return Number(stmts.getPlayerById.get(playerId)?.is_bot || 0) === 1;
@@ -10236,6 +10588,7 @@ function findEnemy(playerId) {
     };
   }
   stmts.createBattleSession.run(sessionId, playerId, best.id, reservedUntil);
+  const combatSnapshot = createAndStoreCombatSnapshot(sessionId, best.id, buildings);
   try {
     stmts.insertRaidMatchmaking.run(
       sessionId,
@@ -10293,7 +10646,7 @@ function findEnemy(playerId) {
       bot_candidate_count: botCandidates.length,
       target_success_rate: MATCHMAKING_CONFIG.targetSuccessRate,
     },
-    buildings,
+    ...combatSnapshotResponse(combatSnapshot),
     resources,
     loot_preview: lootSnapshot.award,
     attacker_resources: attackerResources,
@@ -10471,6 +10824,7 @@ function findRankedEnemy(playerId, tournamentId) {
       dayUtc,
       attackNumber
     );
+    const combatSnapshot = createAndStoreCombatSnapshot(sessionId, best.id, buildings);
     const lootSnapshot = saveBattleLootSnapshot(
       sessionId,
       playerId,
@@ -10509,7 +10863,7 @@ function findRankedEnemy(playerId, tournamentId) {
         shield_fallback_used: !!best.ranked_shield_active || !!best.global_shield_active,
         shield_ignored_for_ranked: true,
       },
-      buildings,
+      ...combatSnapshotResponse(combatSnapshot),
       resources,
       loot_preview: lootSnapshot.award,
       attacker_resources: attackerResources,
@@ -10689,6 +11043,7 @@ function findEnemyByName(playerId, rawTargetName) {
       };
     }
     stmts.createBattleSession.run(sessionId, playerId, target.id, reservedUntil);
+    const combatSnapshot = createAndStoreCombatSnapshot(sessionId, target.id, buildings);
     const lootSnapshot = saveBattleLootSnapshot(
       sessionId,
       playerId,
@@ -10704,7 +11059,7 @@ function findEnemyByName(playerId, rawTargetName) {
       trophies: target.trophies,
       level: target.level,
       town_hall_level: getTownHallLevel(target.id),
-      buildings,
+      ...combatSnapshotResponse(combatSnapshot),
       resources,
       loot_preview: lootSnapshot.award,
       attacker_resources: attackerResources,
@@ -10848,6 +11203,7 @@ function startRevengeBattle(playerId, sourceBattleId) {
       };
     }
     stmts.createBattleSession.run(sessionId, playerId, target.id, reservedUntil);
+    const combatSnapshot = createAndStoreCombatSnapshot(sessionId, target.id, buildings);
     const lootSnapshot = saveBattleLootSnapshot(
       sessionId,
       playerId,
@@ -10865,7 +11221,7 @@ function startRevengeBattle(playerId, sourceBattleId) {
       trophies: target.trophies,
       level: target.level,
       town_hall_level: getTownHallLevel(target.id),
-      buildings,
+      ...combatSnapshotResponse(combatSnapshot),
       resources,
       loot_preview: lootSnapshot.award,
       attacker_resources: attackerResources,
@@ -11723,6 +12079,20 @@ function compactSimTrace(trace) {
     'harpoon_pull_start',
     'harpoon_pull_end',
     'harpoon_release',
+    'air_bomb_fire',
+    'air_bomb_target_lost',
+    'air_bomb_retarget',
+    'air_bomb_rise_complete',
+    'air_bomb_impact',
+    'air_bomb_splash_hit',
+    'air_bomb_reload_ready',
+    'air_bomb_cleanup',
+    'flamethrower_prime_start',
+    'flamethrower_prime_cancel',
+    'flamethrower_stream_start',
+    'flamethrower_damage_tick',
+    'flamethrower_stream_end',
+    'flamethrower_cooldown_ready',
     'troop_projectile_lost_target',
     'cannon_fire',
     'cannon_hit',
@@ -11760,6 +12130,42 @@ function compactSimTrace(trace) {
       durationTicks: event.durationTicks ?? null,
       finalDistance: event.finalDistance ?? null,
       immunityUntilTick: event.immunityUntilTick ?? null,
+      buildingOrder: event.buildingOrder ?? null,
+      launchTick: event.launchTick ?? null,
+      reloadReadyTick: event.reloadReadyTick ?? null,
+      ageTicks: event.ageTicks ?? null,
+      flightAgeTicks: event.flightAgeTicks ?? null,
+      riseTicks: event.riseTicks ?? null,
+      projectileId: event.projectileId ?? null,
+      retargetCount: event.retargetCount ?? null,
+      retargetRange: event.retargetRange ?? null,
+      retargetDistanceSq: event.retargetDistanceSq ?? null,
+      previousTargetId: event.previousTargetTroopId ?? null,
+      previousTargetType: event.previousTargetTroop ?? null,
+      previousTargetReplayOrder: event.previousTargetReplayOrder ?? null,
+      phase: event.phase ?? null,
+      ammoSide: event.ammoSide ?? null,
+      heading: event.heading ?? null,
+      impactX: event.impactX ?? null,
+      impactZ: event.impactZ ?? null,
+      splashRadius: event.splashRadius ?? null,
+      multiplier: event.multiplier ?? null,
+      appliedDamage: event.appliedDamage ?? null,
+      affectedUnits: event.affectedUnits ?? null,
+      facingStep: event.facingStep ?? null,
+      streamIndex: event.streamIndex ?? null,
+      streamStartTick: event.streamStartTick ?? event.startTick ?? null,
+      streamEndTick: event.streamEndTick ?? event.endTick ?? null,
+      primeReadyTick: event.primeReadyTick ?? null,
+      readyTick: event.readyTick ?? null,
+      offset: event.offset ?? null,
+      hitIds: event.hitIds ?? null,
+      hitTypes: event.hitTypes ?? null,
+      replayOrders: event.replayOrders ?? null,
+      hitCount: event.hitCount ?? null,
+      totalDamage: event.totalDamage ?? null,
+      kills: event.kills ?? null,
+      empty: event.empty ?? null,
       affectedBuildingIds: event.affectedBuildingIds ?? null,
       instantKill: event.instantKill ?? null,
       trapImmune: event.trapImmune ?? null,
@@ -11808,6 +12214,9 @@ function replaySimDebug(simResult) {
     aliveGuardDetails: simResult._aliveGuardDetails || [],
     traceImportant: compactSimTrace(simResult._trace || []),
     trace: simResult._trace || [],
+    combatSnapshotVersion: simResult._combatSnapshotVersion ?? simResult.combatSnapshotVersion ?? null,
+    combatRulesVersion: simResult._combatRulesVersion ?? simResult.combatRulesVersion ?? null,
+    flamethrowerDetails: simResult._flamethrowerDetails || [],
   };
   const text = JSON.stringify(debug);
   const max = Number(process.env.CLASH_SIM_DEBUG_MAX_BYTES || 2_000_000);
@@ -12839,6 +13248,7 @@ module.exports = {
   TH_UNLOCK,
   TH_MAX_COUNT,
   TH_MAX_LEVEL,
+  LIVE_TOWN_HALL_CAP,
   TH_UPGRADE_REQUIRES,
   TH_BASE_CAPACITY,
   STORAGE_CAPACITY,
@@ -12922,10 +13332,14 @@ module.exports = {
   getBuildingUpgradeCost,
   canPlaceBuildingAt,
   findOpenBuildingSlots,
+  getPlayerLayoutRevision,
+  flamethrowerDefaultFacingStep,
+  migrateLegacyFlamethrowerFacings,
   placeBuilding,
   upgradeBuilding,
   moveBuilding,
   removeBuilding,
+  setBuildingFacing,
   getPlayerBuildings,
   getTownHallFlag,
   getUnconsumedTownHallFlagPurchase,
@@ -12971,6 +13385,7 @@ module.exports = {
   battleDefeat,
   markSurrender,
   validateBattleSession,
+  createAndStoreCombatSnapshot,
   finishBattleSession,
   getCompletedBattleResult,
   saveCompletedBattleResult,

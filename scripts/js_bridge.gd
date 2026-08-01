@@ -364,6 +364,8 @@ func _clear_local_web_auth(net: Node) -> void:
 	net.display_name = ""
 	net.trophies = 0
 	net.wallet = ""
+	if "layout_revision" in net:
+		net.layout_revision = 0
 	var cfg = ConfigFile.new()
 	cfg.save("user://auth.cfg")
 	if net.has_method("_clear_web_auth_fallback"):
@@ -502,6 +504,31 @@ func _handle_react_action(action: String, data: Dictionary) -> void:
 				bs._start_placement(bid)
 				send_to_react("shop_toggled", {"open": false})
 				send_to_react("placement_started", {"building_id": bid})
+		"start_flamethrower_facing_edit":
+			var active_flamethrower_bs = _get_active_flamethrower_building_system()
+			if active_flamethrower_bs and active_flamethrower_bs.has_method("_start_flamethrower_facing_edit"):
+				active_flamethrower_bs._start_flamethrower_facing_edit()
+		"flamethrower_facing_step":
+			var facing_bs = _get_active_flamethrower_building_system()
+			if facing_bs and facing_bs.has_method("_flamethrower_preview_step"):
+				var direction := int(data.get("direction", 0))
+				if direction != 0:
+					facing_bs._flamethrower_preview_step(
+						-1 if direction < 0 else 1,
+						"step_left" if direction < 0 else "step_right"
+					)
+		"flamethrower_facing_reset":
+			var reset_bs = _get_active_flamethrower_building_system()
+			if reset_bs and reset_bs.has_method("_reset_flamethrower_facing_preview"):
+				reset_bs._reset_flamethrower_facing_preview()
+		"flamethrower_facing_confirm":
+			var confirm_bs = _get_active_flamethrower_building_system()
+			if confirm_bs and confirm_bs.has_method("_confirm_flamethrower_facing"):
+				confirm_bs._confirm_flamethrower_facing()
+		"flamethrower_facing_cancel":
+			var cancel_bs = _get_active_flamethrower_building_system()
+			if cancel_bs and cancel_bs.has_method("_cancel_flamethrower_facing"):
+				cancel_bs._cancel_flamethrower_facing()
 		"find_enemy":
 			if bs:
 				var tournament_id: int = int(data.get("tournament_id", 0)) if data is Dictionary else 0
@@ -1010,6 +1037,25 @@ func _get_active_building_system() -> Node:
 		if is_instance_valid(s) and "selected_building" in s and s.selected_building.size() > 0:
 			return s
 	return _get_building_system()
+
+
+func _get_active_flamethrower_building_system() -> Node:
+	# Placement can be active without a selected building. Prefer that exact
+	# grid so React's 15-degree controls never rotate a different grid's ghost.
+	var systems = _bs_cache
+	if systems.is_empty():
+		_refresh_cache()
+		systems = _bs_cache
+	for system in systems:
+		if (
+			is_instance_valid(system)
+			and "is_placing" in system
+			and bool(system.is_placing)
+			and "current_building_id" in system
+			and str(system.current_building_id) == "flamethrower"
+		):
+			return system
+	return _get_active_building_system()
 
 
 var _island_paused := false

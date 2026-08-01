@@ -28,6 +28,7 @@ var player_id: String = ""
 var display_name: String = ""
 var trophies: int = 0
 var wallet: String = ""
+var layout_revision: int = 0
 
 const WEB_AUTH_STORAGE_KEY = "clash_game_auth_v1"
 const WEB_MANUAL_RECONNECT_KEY = "clash_manual_reconnect_required"
@@ -91,6 +92,7 @@ func _clear_saved_auth() -> void:
 	display_name = ""
 	trophies = 0
 	wallet = ""
+	layout_revision = 0
 	var cfg = ConfigFile.new()
 	cfg.save("user://auth.cfg")
 	_clear_web_auth_fallback()
@@ -101,6 +103,7 @@ func _clear_native_auth_preserving_web() -> void:
 	display_name = ""
 	trophies = 0
 	wallet = ""
+	layout_revision = 0
 	var cfg = ConfigFile.new()
 	cfg.save("user://auth.cfg")
 
@@ -242,6 +245,7 @@ func register(player_name: String, wallet_address: String = "", dex: String = ""
 		display_name = _safe_str(response.get("name"))
 		trophies = _safe_int(response.get("trophies"))
 		self.wallet = _safe_str(response.get("wallet"))
+		_update_layout_revision(response)
 		_save_token()
 		auth_ok.emit(response)
 	return response
@@ -255,6 +259,7 @@ func login() -> Dictionary:
 		display_name = _safe_str(response.get("name"))
 		trophies = _safe_int(response.get("trophies"))
 		wallet = _safe_str(response.get("wallet"))
+		_update_layout_revision(response)
 		_save_token()
 		auth_ok.emit(response)
 	return response
@@ -291,6 +296,7 @@ func login_by_wallet(wallet_address: String, dex: String = "", auth_proof: Dicti
 		display_name = _safe_str(response.get("name"))
 		trophies = _safe_int(response.get("trophies"))
 		self.wallet = _safe_str(response.get("wallet"))
+		_update_layout_revision(response)
 		_save_token()
 		auth_ok.emit(response)
 	return response
@@ -336,13 +342,32 @@ func get_buildings() -> Array:
 	var response = await _http_get("/buildings")
 	if response is Array:
 		return response
+	if response is Dictionary:
+		layout_revision = maxi(0, int(response.get("layout_revision", layout_revision)))
+		var rows: Variant = response.get("buildings", [])
+		if rows is Array:
+			return rows
 	return []
 
-func place_building(type: String, grid_x: int, grid_z: int, grid_index: int = 0) -> Dictionary:
-	var response = await _http_post("/buildings/place", {
-		"type": type, "grid_x": grid_x, "grid_z": grid_z, "grid_index": grid_index
-	})
+func place_building(
+	type: String,
+	grid_x: int,
+	grid_z: int,
+	grid_index: int = 0,
+	facing_step: Variant = null
+) -> Dictionary:
+	var payload := {
+		"type": type,
+		"grid_x": grid_x,
+		"grid_z": grid_z,
+		"grid_index": grid_index,
+		"expected_layout_revision": layout_revision,
+	}
+	if facing_step != null:
+		payload["facing_step"] = int(facing_step)
+	var response = await _http_post("/buildings/place", payload)
 	if not response.has("error"):
+		_update_layout_revision(response)
 		building_placed.emit(response)
 	return response
 
@@ -353,8 +378,11 @@ func get_production_status() -> Variant:
 	return await _http_get("/buildings/production")
 
 func upgrade_building(building_id: int) -> Dictionary:
-	var response = await _http_post("/buildings/%d/upgrade" % building_id, {})
+	var response = await _http_post("/buildings/%d/upgrade" % building_id, {
+		"expected_layout_revision": layout_revision,
+	})
 	if not response.has("error"):
+		_update_layout_revision(response)
 		building_upgraded.emit(response)
 	return response
 
@@ -446,8 +474,31 @@ func link_wallet(w: String) -> void:
 	elif response.get("success", false):
 		wallet = w
 
-func move_building(building_id: int, grid_x: int, grid_z: int) -> Dictionary:
-	return await _http_post("/buildings/%d/move" % building_id, {"grid_x": grid_x, "grid_z": grid_z})
+func move_building(building_id: int, grid_x: int, grid_z: int, grid_index: Variant = null) -> Dictionary:
+	var payload := {
+		"grid_x": grid_x,
+		"grid_z": grid_z,
+		"expected_layout_revision": layout_revision,
+	}
+	if grid_index != null:
+		payload["grid_index"] = int(grid_index)
+	var response := await _http_post("/buildings/%d/move" % building_id, payload)
+	if not response.has("error"):
+		_update_layout_revision(response)
+	return response
+
+
+func set_building_facing(building_id: int, facing_step: int, method: String) -> Dictionary:
+	var response := await _http_post("/buildings/%d/facing" % building_id, {
+		"facing_step": facing_step,
+		"expected_layout_revision": layout_revision,
+		"method": method,
+	})
+	# Conflict responses carry the canonical revision and building snapshot.
+	# Advance the local CAS token even when the mutation itself was rejected.
+	if response.has("layout_revision"):
+		_update_layout_revision(response)
+	return response
 
 func buy_ship(building_id: int) -> Dictionary:
 	return await _http_post("/buildings/%d/buy-ship" % building_id, {})
@@ -486,14 +537,24 @@ func submit_surrender(defender_id: String, battle_session_id: String = "") -> Di
 func remove_building(building_id: int) -> Dictionary:
 	var http = HTTPRequest.new()
 	add_child(http)
-	var headers = ["Content-Type: application/json", "x-token: " + token]
+	var headers = [
+		"Content-Type: application/json",
+		"x-token: " + token,
+		"If-Match: \"%d\"" % layout_revision,
+	]
 	http.request(SERVER_URL + "/buildings/%d" % building_id, headers, HTTPClient.METHOD_DELETE)
 	var result = await http.request_completed
 	http.queue_free()
 	var response = _parse_response(result)
 	if not response.has("error"):
+		_update_layout_revision(response)
 		building_removed.emit(response)
 	return response
+
+
+func _update_layout_revision(response: Dictionary) -> void:
+	if response.has("layout_revision"):
+		layout_revision = maxi(0, int(response.get("layout_revision", layout_revision)))
 
 # ── Troops ────────────────────────────────────────────────────
 

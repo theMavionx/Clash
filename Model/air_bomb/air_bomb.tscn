@@ -1,0 +1,19 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://Model/air_bomb/air_bomb_visual.gd" id="1_script"]
+[ext_resource type="PackedScene" path="res://Model/air_bomb/air_bomb.glb" id="2_model"]
+
+[node name="AirBomb" type="Node3D"]
+script = ExtResource("1_script")
+
+[node name="ModelRoot" type="Node3D" parent="."]
+position = Vector3(0.01117377, 0, -0.02590641)
+scale = Vector3(0.035, 0.035, 0.035)
+
+[node name="Base" type="Node3D" parent="ModelRoot"]
+
+[node name="PayloadAssembly" type="Node3D" parent="ModelRoot"]
+
+[node name="PayloadMuzzle" type="Marker3D" parent="ModelRoot"]
+
+[node name="ModelSource" parent="ModelRoot" instance=ExtResource("2_model")]

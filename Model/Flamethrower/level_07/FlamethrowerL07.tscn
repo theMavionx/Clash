@@ -1,0 +1,22 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="PackedScene" path="res://Model/Flamethrower/level_07/flamethrower_l07.glb" id="1_model"]
+[ext_resource type="Material" path="res://Model/Flamethrower/level_07/flamethrower_l07_material.tres" id="2_material"]
+
+[node name="FlamethrowerVisual" type="Node3D"]
+metadata/gameplay_forward = Vector3(0, 0, -1)
+metadata/normalized_horizontal_span = 0.36
+
+[node name="SourceModel" parent="." instance=ExtResource("1_model")]
+scale = Vector3(0.061016939, 0.061016939, 0.061016939)
+
+[node name="Flamethrower7" parent="SourceModel" index="0"]
+surface_material_override/0 = ExtResource("2_material")
+
+[node name="MuzzleSocket" type="Marker3D" parent="."]
+position = Vector3(0, 0.07902, -0.169)
+
+[node name="FacingArrowSocket" type="Marker3D" parent="."]
+position = Vector3(0, 0.025, -0.2)
+
+[editable path="SourceModel"]

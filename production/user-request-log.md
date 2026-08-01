@@ -2632,3 +2632,13 @@ Follow-up:
   Futures trading-header layout correction; commit all safe changes, integrate them into `main`,
   push GitHub, deploy through the repository's standard production workflow, and verify the live
   revision and health. Commit, push, merge, and production deployment are explicitly authorized.
+
+### UR-2026-08-02-COMMIT-DEPLOY-VERIFY-ALL
+
+- **Timestamp:** 2026-08-02 (Europe/Kyiv)
+- **Request:** "зроби коміт всіх змін і деплой на прод перевір що все ок що всі сервіси онлайн що в годоті 0 помилок і ти нічого не зламав"
+- **Scope:** Verify the entire current worktree with Godot, backend, trading-integration, and web
+  checks; resolve demonstrated release regressions; commit every intended change, integrate and
+  push `main`, deploy through the standard production workflow, then verify the live revision,
+  service health, public endpoints, and recent production logs. Commit, push, merge, and production
+  deployment are explicitly authorized.

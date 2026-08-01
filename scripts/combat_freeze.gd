@@ -9,6 +9,8 @@ const TARGETABLE_DEFENSE_IDS: Dictionary = {
 	"tombstone": true,
 	"mortar": true,
 	"harpoon": true,
+	"air_bomb": true,
+	"flamethrower": true,
 }
 const FREEZABLE_DEFENSE_IDS: Dictionary = {
 	"turret": true,
@@ -17,6 +19,8 @@ const FREEZABLE_DEFENSE_IDS: Dictionary = {
 	"tombstone": true,
 	"mortar": true,
 	"harpoon": true,
+	"air_bomb": true,
+	"flamethrower": true,
 	"shark_trap": true,
 }
 

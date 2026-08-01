@@ -4583,6 +4583,9 @@ async function loadEarnings(force) {
             : '';
           return '<span style="color:#9ca3af;font-size:11px">exact builderRewards' + unclaimed + claimed + estimate + '</span>';
         }
+        if (d.model === 'pacifica_builder_leaderboard_fee_sum') {
+          return '<span style="color:#9ca3af;font-size:11px">' + Number(d.traded_referrals || 0).toLocaleString() + ' referral wallet(s) · $' + Number(d.volume_usd || 0).toFixed(0) + ' all-time volume</span>';
+        }
         if (d.model === 'nado_indexer_builder_fee_exact') {
           const estimate = Number.isFinite(Number(d.estimated_fee_usd))
             ? ' / local estimate $' + Number(d.estimated_fee_usd).toFixed(4)

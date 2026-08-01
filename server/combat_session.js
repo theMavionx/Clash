@@ -28,6 +28,7 @@ const {
   cannonShotCost, VALID_TROOP_TYPES, normalizeNftRarity,
 } = require('./combat_defs');
 const { BUILDING_DEFS } = require('./db');
+const flamethrower = require('./flamethrower_config');
 const {
   clampWorldPointToGrid,
   clampWorldPointToGridUnion,
@@ -45,6 +46,9 @@ const HARPOON_PULL_TICKS = 48;
 const HARPOON_WINDUP_TICKS = 27;
 const HARPOON_IMMUNITY_TICKS = 90;
 const HARPOON_YAW_TOLERANCE_RAD = 2 * Math.PI / 180;
+const AIR_BOMB_TICK_RATE = 60;
+const AIR_BOMB_SPLASH_EDGE_EPSILON = 1e-6;
+const AIR_BOMB_TARGET_TIE_EPSILON = 1e-9;
 
 // ---------- Config ----------
 
@@ -71,6 +75,8 @@ const ICE_GOLEM_PRIORITY_DEFENSE_TYPES = new Set([
   'tombstone',
   'mortar',
   'harpoon',
+  'flamethrower',
+  'air_bomb',
   'cannon',
 ]);
 const ICE_GOLEM_FREEZABLE_DEFENSE_TYPES = new Set([
@@ -78,6 +84,46 @@ const ICE_GOLEM_FREEZABLE_DEFENSE_TYPES = new Set([
   'shark_trap',
 ]);
 const TRACE_MAX_EVENTS = Math.max(100, Number(process.env.CLASH_SIM_TRACE_MAX || 20000));
+const FLAMETHROWER_STATE = Object.freeze({
+  READY: 'ready',
+  COOLDOWN: 'cooldown',
+  PRIMING: 'priming',
+  FIRING: 'firing',
+  FROZEN: 'frozen',
+  DISABLED: 'disabled',
+});
+const FLAMETHROWER_TRANSITIONS = Object.freeze({
+  [FLAMETHROWER_STATE.READY]: new Set([
+    FLAMETHROWER_STATE.PRIMING,
+    FLAMETHROWER_STATE.FROZEN,
+    FLAMETHROWER_STATE.DISABLED,
+  ]),
+  [FLAMETHROWER_STATE.COOLDOWN]: new Set([
+    FLAMETHROWER_STATE.READY,
+    FLAMETHROWER_STATE.PRIMING,
+    FLAMETHROWER_STATE.FROZEN,
+    FLAMETHROWER_STATE.DISABLED,
+  ]),
+  [FLAMETHROWER_STATE.PRIMING]: new Set([
+    FLAMETHROWER_STATE.READY,
+    FLAMETHROWER_STATE.COOLDOWN,
+    FLAMETHROWER_STATE.FIRING,
+    FLAMETHROWER_STATE.FROZEN,
+    FLAMETHROWER_STATE.DISABLED,
+  ]),
+  [FLAMETHROWER_STATE.FIRING]: new Set([
+    FLAMETHROWER_STATE.READY,
+    FLAMETHROWER_STATE.COOLDOWN,
+    FLAMETHROWER_STATE.FROZEN,
+    FLAMETHROWER_STATE.DISABLED,
+  ]),
+  [FLAMETHROWER_STATE.FROZEN]: new Set([
+    FLAMETHROWER_STATE.READY,
+    FLAMETHROWER_STATE.COOLDOWN,
+    FLAMETHROWER_STATE.DISABLED,
+  ]),
+  [FLAMETHROWER_STATE.DISABLED]: new Set(),
+});
 const TROOP_NAMES = {
   knight: 'Knight',
   mage: 'Mage',
@@ -880,6 +926,8 @@ function verifyReplay({
   serverShipLevel = 1,
   serverNftRarities = {},
   defenderAltarLevels = {},
+  combatSnapshotVersion = null,
+  combatRulesVersion = null,
   debugTrace = false,
 }) {
   const gridConfigMap = normalizeGridConfigs(gridConfig, gridConfigs);
@@ -890,12 +938,28 @@ function verifyReplay({
   if (!actions || !Array.isArray(actions)) {
     return { valid: false, reason: 'No actions' };
   }
+  const hasFlamethrower = defenderBuildings.some(building => building?.type === flamethrower.BUILDING.id);
+  if (hasFlamethrower) {
+    if (Number(combatSnapshotVersion) !== 2) {
+      return { valid: false, reason: 'Flamethrower requires combat snapshot version 2' };
+    }
+    if (combatRulesVersion !== flamethrower.CONFIG.combat_rules_version) {
+      return { valid: false, reason: 'Missing or unsupported Flamethrower combat rules version' };
+    }
+    const invalidFacing = defenderBuildings.find(building => (
+      building?.type === flamethrower.BUILDING.id
+      && !flamethrower.isValidFacingStep(building.facing_step)
+    ));
+    if (invalidFacing) {
+      return { valid: false, reason: `Flamethrower ${invalidFacing.id} has invalid facing_step` };
+    }
+  }
   const movementGridConfigs = [gridConfigMap['0'], gridConfigMap['2']]
     .filter(isValidGridConfig);
   if (movementGridConfigs.length === 0) movementGridConfigs.push(defaultGridConfig);
 
   // Init buildings with world coordinates
-  const buildings = defenderBuildings.map(b => {
+  const buildings = defenderBuildings.map((b, buildingOrder) => {
     const def = BUILDING_DEFS[b.type];
     const size = def?.size || [2, 2];
     const gridIndex = b.grid_index ?? b.gridIndex ?? 0;
@@ -904,11 +968,20 @@ function verifyReplay({
     return {
       id: b.id, type: b.type, level: b.level,
       hp: b.hp, maxHp: b.max_hp,
+      buildingOrder: Number.isFinite(Number(b.id)) ? Number(b.id) : buildingOrder,
+      isUpgrading: !!(b.is_upgrading || b.isUpgrading),
+      isUnderConstruction: !!(
+        b.is_under_construction
+        || b.isUnderConstruction
+        || b.under_construction
+        || b.underConstruction
+      ),
       gridIndex,
       x: pos.x, z: pos.z,
       sizeX: size[0], sizeZ: size[1],
       cellSize: gc.cell_size,
       gridRotation: gc.grid_rotation,
+      facingStep: b.facing_step ?? null,
       avoidRadius: Math.max(size[0], size[1]) * gc.cell_size * 0.5 + 0.06,
     };
   });
@@ -917,6 +990,8 @@ function verifyReplay({
   const guards = [];
   const defenses = [];
   const harpoons = [];
+  const flamethrowers = [];
+  const airBombs = [];
   const sharkTraps = buildings
     .filter(b => b.type === 'shark_trap')
     .map(b => {
@@ -940,11 +1015,13 @@ function verifyReplay({
     .sort((a, b) => Number(a.buildingId) - Number(b.buildingId));
   const projectiles = [];
   const mortarProjectiles = [];
+  const airBombProjectiles = [];
   let townHallId = null;
   const wardLevel = Math.max(0, Math.min(3, Number(defenderAltarLevels?.ward) || 0));
   const wardPct = [0, 5, 10, 15][wardLevel] || 0;
   const wardDamage = (damage) => Math.ceil((Number(damage) || 0) * (1 + wardPct / 100));
   let nextTroopId = 0;
+  let nextAirBombProjectileId = 1;
   let shipsPlaced = 0;
   let troopsManuallyDeployed = 0;
   let deployedTroopsSpawned = 0;
@@ -1020,7 +1097,7 @@ function verifyReplay({
     });
   }
 
-  function stableHarpoonTroopOrder(troop) {
+  function stableTroopReplayOrder(troop) {
     const replayOrder = Number(troop?.replayOrder);
     if (Number.isFinite(replayOrder)) return replayOrder;
     const troopId = Number(troop?.id);
@@ -1060,7 +1137,7 @@ function verifyReplay({
     for (const troop of aliveTroops) {
       if (!harpoonTargetValid(defense, troop)) continue;
       const distanceSq = distSq2d(defense.x, defense.z, troop.x, troop.z);
-      const order = stableHarpoonTroopOrder(troop);
+      const order = stableTroopReplayOrder(troop);
       if (
         distanceSq < bestDistSq - 1e-12
         || (Math.abs(distanceSq - bestDistSq) <= 1e-12 && order < bestOrder)
@@ -1373,6 +1450,675 @@ function verifyReplay({
       reloadReadyTick: defense.reloadReadyTick,
       windupTicks: HARPOON_WINDUP_TICKS,
     }));
+  }
+
+  // Dedicated fixed-tick Air Bomb simulation implementing
+  // design/gdd/air-bomb-defense.md. It deliberately does not use the generic
+  // homing projectile pool: target loss, owner loss, segment collision,
+  // limited turning, and air-only splash all have different authority rules.
+  function compareStableTroops(left, right) {
+    const orderDelta = stableTroopReplayOrder(left) - stableTroopReplayOrder(right);
+    if (orderDelta !== 0) return orderDelta;
+    const leftId = Number(left?.id);
+    const rightId = Number(right?.id);
+    if (Number.isFinite(leftId) && Number.isFinite(rightId)) return leftId - rightId;
+    return String(left?.id ?? '').localeCompare(String(right?.id ?? ''));
+  }
+
+  function airBombTargetValid(troop) {
+    return !!(
+      troop
+      && troop.hp > 0
+      && troop.flying === true
+      && !isTroopUntargetableToDefenses(troop)
+    );
+  }
+
+  function findAirBombTargetFromPosition(originX, originZ, range, candidates) {
+    const rangeSq = range * range;
+    let best = null;
+    let bestDistanceSq = Infinity;
+    for (const troop of candidates) {
+      if (!airBombTargetValid(troop)) continue;
+      const distanceSq = distSq2d(originX, originZ, troop.x, troop.z);
+      if (distanceSq > rangeSq + AIR_BOMB_TARGET_TIE_EPSILON) continue;
+      if (
+        distanceSq < bestDistanceSq - AIR_BOMB_TARGET_TIE_EPSILON
+        || (
+          Math.abs(distanceSq - bestDistanceSq) <= AIR_BOMB_TARGET_TIE_EPSILON
+          && (!best || compareStableTroops(troop, best) < 0)
+        )
+      ) {
+        best = troop;
+        bestDistanceSq = distanceSq;
+      }
+    }
+    return best;
+  }
+
+  function findAirBombTarget(defense, aliveTroops) {
+    return findAirBombTargetFromPosition(
+      defense.x,
+      defense.z,
+      defense.detectRange,
+      aliveTroops,
+    );
+  }
+
+  function findAirBombRetarget(projectile) {
+    return findAirBombTargetFromPosition(
+      projectile.x,
+      projectile.z,
+      projectile.retargetRange,
+      troops,
+    );
+  }
+
+  function segmentIntersectsHorizontalCircle(startX, startZ, endX, endZ, centerX, centerZ, radius) {
+    const segmentX = endX - startX;
+    const segmentZ = endZ - startZ;
+    const lengthSq = segmentX * segmentX + segmentZ * segmentZ;
+    let amount = 0;
+    if (lengthSq > 1e-18) {
+      amount = clamp(
+        ((centerX - startX) * segmentX + (centerZ - startZ) * segmentZ) / lengthSq,
+        0,
+        1,
+      );
+    }
+    const closestX = startX + segmentX * amount;
+    const closestZ = startZ + segmentZ * amount;
+    return distSq2d(closestX, closestZ, centerX, centerZ) <= radius * radius + 1e-12;
+  }
+
+  function airBombTracePayload(projectile, extra = {}) {
+    return {
+      defenseType: 'air_bomb',
+      projectileId: projectile.projectileId,
+      buildingId: projectile.buildingId,
+      buildingOrder: projectile.buildingOrder,
+      level: projectile.level,
+      targetTroopId: projectile.targetTroopId,
+      targetTroop: projectile.targetTroop,
+      replayOrder: projectile.targetReplayOrder,
+      targetReplayOrder: projectile.targetReplayOrder,
+      launchTick: projectile.launchTick,
+      tick: combatTick,
+      ageTicks: projectile.ageTicks,
+      flightAgeTicks: projectile.flightAgeTicks,
+      riseTicks: projectile.riseTicks,
+      phase: projectile.riseRemainingTicks > 0 ? 'rise' : 'homing',
+      projectileX: round3(projectile.x),
+      projectileZ: round3(projectile.z),
+      heading: Math.round(projectile.heading * 1000000) / 1000000,
+      damage: projectile.damage,
+      splashRadius: projectile.splashRadius,
+      retargetRange: projectile.retargetRange,
+      retargetCount: projectile.retargetCount,
+      ammoSide: projectile.ammoSide,
+      ...extra,
+    };
+  }
+
+  function cleanupAirBombProjectile(projectile, reason) {
+    const defense = projectile.ownerDefense;
+    if (defense?.activeProjectileId === projectile.projectileId) {
+      defense.activeProjectileId = null;
+    }
+    traceEvent('air_bomb_cleanup', airBombTracePayload(projectile, {
+      reason,
+      impacted: reason === 'impact',
+      targetLost: projectile.targetLost,
+    }));
+  }
+
+  function impactAirBombProjectile(projectile) {
+    const impactX = projectile.x;
+    const impactZ = projectile.z;
+    const radius = projectile.splashRadius;
+    const affected = [];
+    const candidates = troops
+      .filter(troop => troop.hp > 0 && troop.flying === true)
+      .sort(compareStableTroops);
+
+    for (const troop of candidates) {
+      const distance = dist2d(impactX, impactZ, troop.x, troop.z);
+      if (distance > radius + AIR_BOMB_SPLASH_EDGE_EPSILON) continue;
+      const multiplier = 1 - 0.5 * clamp(distance / Math.max(radius, 0.001), 0, 1);
+      // Suppress representational noise at authored boundaries (for example
+      // exactly R/2 or R) without changing mathematical ceiling semantics.
+      const appliedDamage = Math.ceil(projectile.damage * multiplier - 1e-9);
+      const hpBefore = troop.hp;
+      troop.hp -= appliedDamage;
+      affected.push({
+        troop,
+        targetTroopId: troop.id,
+        targetTroop: troop.type,
+        replayOrder: troop.replayOrder ?? null,
+        distance,
+        multiplier,
+        appliedDamage,
+        hpBefore,
+        hpAfter: troop.hp,
+      });
+    }
+
+    traceEvent('air_bomb_impact', airBombTracePayload(projectile, {
+      impactX: round3(impactX),
+      impactZ: round3(impactZ),
+      hitCount: affected.length,
+      affectedUnits: affected.map(hit => ({
+        targetTroopId: hit.targetTroopId,
+        targetTroop: hit.targetTroop,
+        replayOrder: hit.replayOrder,
+        distance: round3(hit.distance),
+        multiplier: Math.round(hit.multiplier * 1000000) / 1000000,
+        appliedDamage: hit.appliedDamage,
+        hpBefore: hit.hpBefore,
+        hpAfter: hit.hpAfter,
+      })),
+    }));
+
+    for (const hit of affected) {
+      traceEvent('air_bomb_splash_hit', airBombTracePayload(projectile, {
+        targetTroopId: hit.targetTroopId,
+        targetTroop: hit.targetTroop,
+        replayOrder: hit.replayOrder,
+        targetReplayOrder: hit.replayOrder,
+        impactX: round3(impactX),
+        impactZ: round3(impactZ),
+        distance: round3(hit.distance),
+        multiplier: Math.round(hit.multiplier * 1000000) / 1000000,
+        appliedDamage: hit.appliedDamage,
+        hpBefore: hit.hpBefore,
+        hpAfter: hit.hpAfter,
+        x: round3(hit.troop.x),
+        z: round3(hit.troop.z),
+      }));
+      if (hit.hpAfter <= 0) {
+        handleTroopDeath(hit.troop, 'air_bomb_splash', hit.appliedDamage);
+      }
+    }
+  }
+
+  function updateAirBombProjectiles() {
+    const remaining = [];
+    for (const projectile of airBombProjectiles) {
+      let target = projectile.targetRef;
+      if (!airBombTargetValid(target)) {
+        const previousTargetTroopId = projectile.targetTroopId;
+        const previousTargetTroop = projectile.targetTroop;
+        const previousTargetReplayOrder = projectile.targetReplayOrder;
+        projectile.targetLost = true;
+        traceEvent('air_bomb_target_lost', airBombTracePayload(projectile, {
+          reason: 'target_dead_or_invalid',
+          previousTargetTroopId,
+          previousTargetTroop,
+          previousTargetReplayOrder,
+        }));
+
+        const replacement = findAirBombRetarget(projectile);
+        if (!replacement) {
+          projectile.targetRef = null;
+          cleanupAirBombProjectile(projectile, 'no_retarget_candidate');
+          continue;
+        }
+
+        projectile.targetRef = replacement;
+        projectile.targetTroopId = replacement.id;
+        projectile.targetTroop = replacement.type;
+        projectile.targetReplayOrder = replacement.replayOrder ?? null;
+        projectile.retargetCount += 1;
+        target = replacement;
+        traceEvent('air_bomb_retarget', airBombTracePayload(projectile, {
+          previousTargetTroopId,
+          previousTargetTroop,
+          previousTargetReplayOrder,
+        }));
+      }
+
+      if (projectile.riseRemainingTicks > 0) {
+        projectile.riseRemainingTicks -= 1;
+        projectile.ageTicks += 1;
+        if (projectile.riseRemainingTicks === 0) {
+          traceEvent('air_bomb_rise_complete', airBombTracePayload(projectile));
+        }
+        remaining.push(projectile);
+        continue;
+      }
+
+      const desiredHeading = Math.atan2(target.z - projectile.z, target.x - projectile.x);
+      const headingDelta = shortestAngleDelta(projectile.heading, desiredHeading);
+      const turnStep = projectile.turnSpeedDeg * Math.PI / 180 / AIR_BOMB_TICK_RATE;
+      projectile.heading += Math.sign(headingDelta) * Math.min(Math.abs(headingDelta), turnStep);
+
+      const startX = projectile.x;
+      const startZ = projectile.z;
+      const movement = projectile.speed / AIR_BOMB_TICK_RATE;
+      const endX = startX + Math.cos(projectile.heading) * movement;
+      const endZ = startZ + Math.sin(projectile.heading) * movement;
+      projectile.x = endX;
+      projectile.z = endZ;
+      projectile.ageTicks += 1;
+      projectile.flightAgeTicks += 1;
+
+      if (
+        segmentIntersectsHorizontalCircle(
+          startX,
+          startZ,
+          endX,
+          endZ,
+          target.x,
+          target.z,
+          projectile.hitRadius,
+        )
+      ) {
+        // Collision is authored by the segment test; snap the authoritative
+        // blast center to the intercepted target so the primary unit receives
+        // the documented center damage and render interpolation cannot skew it.
+        projectile.x = target.x;
+        projectile.z = target.z;
+        impactAirBombProjectile(projectile);
+        cleanupAirBombProjectile(projectile, 'impact');
+        continue;
+      }
+
+      if (projectile.flightAgeTicks >= projectile.maxLifetimeTicks) {
+        cleanupAirBombProjectile(projectile, 'max_lifetime');
+        continue;
+      }
+      remaining.push(projectile);
+    }
+    airBombProjectiles.splice(0, airBombProjectiles.length, ...remaining);
+  }
+
+  function fireAirBomb(defense, target) {
+    const heading = Math.atan2(target.z - defense.z, target.x - defense.x);
+    const ammoSide = 0;
+    defense.lastFireTick = combatTick;
+    defense.reloadReadyTick = combatTick + defense.reloadTicks;
+    defense.reloadReadyEmitted = false;
+    defense.targetId = target.id;
+    const projectile = {
+      projectileId: nextAirBombProjectileId++,
+      ownerDefense: defense,
+      buildingId: defense.buildingId,
+      buildingOrder: defense.buildingOrder,
+      level: defense.level,
+      targetRef: target,
+      targetTroopId: target.id,
+      targetTroop: target.type,
+      targetReplayOrder: target.replayOrder ?? null,
+      launchTick: combatTick,
+      x: defense.x,
+      z: defense.z,
+      heading,
+      ageTicks: 0,
+      flightAgeTicks: 0,
+      riseTicks: defense.riseTicks,
+      riseRemainingTicks: defense.riseTicks,
+      speed: defense.projSpeed,
+      turnSpeedDeg: defense.turnSpeedDeg,
+      hitRadius: defense.hitRadius,
+      maxLifetimeTicks: defense.maxLifetimeTicks,
+      retargetRange: defense.detectRange,
+      damage: defense.damage,
+      splashRadius: defense.splashRadius,
+      ammoSide,
+      targetLost: false,
+      retargetCount: 0,
+    };
+    defense.activeProjectileId = projectile.projectileId;
+    airBombProjectiles.push(projectile);
+    traceEvent('air_bomb_fire', airBombTracePayload(projectile, {
+      range: defense.detectRange,
+      reloadReadyTick: defense.reloadReadyTick,
+    }));
+  }
+
+  function updateAirBombDefenses(aliveTroops) {
+    for (const defense of airBombs) {
+      const owner = buildings.find(building => building.id === defense.buildingId);
+      if (!owner || owner.hp <= 0 || owner.isUpgrading || owner.isUnderConstruction) continue;
+
+      if (
+        defense.lastFireTick != null
+        && !defense.reloadReadyEmitted
+        && combatTick >= defense.reloadReadyTick
+      ) {
+        defense.reloadReadyEmitted = true;
+        traceEvent('air_bomb_reload_ready', {
+          defenseType: 'air_bomb',
+          buildingId: defense.buildingId,
+          buildingOrder: defense.buildingOrder,
+          level: defense.level,
+          tick: combatTick,
+          launchTick: defense.lastFireTick,
+          reloadReadyTick: defense.reloadReadyTick,
+          ammoSide: 0,
+        });
+      }
+
+      const frozen = (Number(defense.frozenUntil) || 0) > time;
+      if (combatTick >= defense.nextScanTick) {
+        defense.nextScanTick = combatTick + defense.scanTicks;
+        if (!frozen) {
+          defense.targetId = findAirBombTarget(defense, aliveTroops)?.id ?? null;
+        }
+      }
+      if (frozen || defense.activeProjectileId != null || combatTick < defense.reloadReadyTick) {
+        continue;
+      }
+
+      const target = aliveTroops.find(troop => troop.id === defense.targetId) || null;
+      if (!airBombTargetValid(target)) {
+        defense.targetId = null;
+        continue;
+      }
+      const inRange = (
+        distSq2d(defense.x, defense.z, target.x, target.z)
+        <= defense.detectRange * defense.detectRange + AIR_BOMB_TARGET_TIE_EPSILON
+      );
+      if (!inRange) {
+        defense.targetId = null;
+        continue;
+      }
+      fireAirBomb(defense, target);
+    }
+  }
+
+  function transitionFlamethrower(defense, nextState) {
+    if (defense.state === nextState) return;
+    const allowed = FLAMETHROWER_TRANSITIONS[defense.state];
+    if (!allowed?.has(nextState)) {
+      throw new Error(`Invalid Flamethrower transition ${defense.state} -> ${nextState}`);
+    }
+    defense.state = nextState;
+  }
+
+  function flamethrowerEligibleTroops(defense, aliveTroops) {
+    return aliveTroops
+      .filter(troop => (
+        troop
+        && troop.hp > 0
+        && troop._state !== 'dead'
+        && troop.active !== false
+        && troop.hostile !== false
+        && canDefenseTargetTroop({ targetGround: true, targetAir: false }, troop)
+        && flamethrower.isPointInCone(
+          { x: defense.x, z: defense.z },
+          defense.forwardXZ,
+          defense.range,
+          { x: troop.x, z: troop.z },
+        )
+      ))
+      .sort(compareStableTroops);
+  }
+
+  function flamethrowerStreamEnd(defense, reason) {
+    if (defense.state !== FLAMETHROWER_STATE.FIRING) return;
+    traceEvent('flamethrower_stream_end', {
+      defenseType: 'flamethrower',
+      buildingId: defense.buildingId,
+      buildingOrder: defense.buildingOrder,
+      level: defense.level,
+      tick: combatTick,
+      streamIndex: defense.streamIndex,
+      startTick: defense.streamStartTick,
+      endTick: defense.streamEndTick,
+      readyTick: defense.nextStreamReadyTick,
+      reason,
+      scheduledTicks: flamethrower.COMBAT_RULES.damage_offsets.length,
+      resolvedTicks: defense.resolvedDamageOffsets.size,
+      uniqueTargets: Array.from(defense.uniqueTargets).sort((left, right) => String(left).localeCompare(String(right))),
+      damage: defense.streamDamage,
+      kills: defense.streamKills,
+    });
+    transitionFlamethrower(
+      defense,
+      combatTick >= defense.nextStreamReadyTick
+        ? FLAMETHROWER_STATE.READY
+        : FLAMETHROWER_STATE.COOLDOWN,
+    );
+    defense.nextScanTick = Math.max(
+      combatTick,
+      defense.nextStreamReadyTick - flamethrower.COMBAT_RULES.prime_ticks,
+    );
+  }
+
+  function cancelFlamethrowerPrime(defense, reason, nextState = null) {
+    if (defense.state !== FLAMETHROWER_STATE.PRIMING) return;
+    traceEvent('flamethrower_prime_cancel', {
+      defenseType: 'flamethrower',
+      buildingId: defense.buildingId,
+      buildingOrder: defense.buildingOrder,
+      level: defense.level,
+      facingStep: defense.facingStep,
+      tick: combatTick,
+      primeStartTick: defense.primeStartTick,
+      primeReadyTick: defense.primeReadyTick,
+      reason,
+    });
+    transitionFlamethrower(
+      defense,
+      nextState || (
+        combatTick >= defense.nextStreamReadyTick
+          ? FLAMETHROWER_STATE.READY
+          : FLAMETHROWER_STATE.COOLDOWN
+      ),
+    );
+  }
+
+  function interruptFlamethrower(defense, reason, permanent = false) {
+    if (!defense || defense.state === FLAMETHROWER_STATE.DISABLED) return;
+    if (defense.state === FLAMETHROWER_STATE.PRIMING) {
+      cancelFlamethrowerPrime(
+        defense,
+        reason,
+        permanent ? FLAMETHROWER_STATE.DISABLED : FLAMETHROWER_STATE.FROZEN,
+      );
+    } else if (defense.state === FLAMETHROWER_STATE.FIRING) {
+      flamethrowerStreamEnd(defense, reason);
+      if (permanent) transitionFlamethrower(defense, FLAMETHROWER_STATE.DISABLED);
+      else transitionFlamethrower(defense, FLAMETHROWER_STATE.FROZEN);
+    } else {
+      transitionFlamethrower(
+        defense,
+        permanent ? FLAMETHROWER_STATE.DISABLED : FLAMETHROWER_STATE.FROZEN,
+      );
+    }
+    if (permanent) defense.permanentlyDisabled = true;
+  }
+
+  function resolveFlamethrowerDamageTick(defense, aliveTroops, offset) {
+    if (defense.resolvedDamageOffsets.has(offset)) return;
+    defense.resolvedDamageOffsets.add(offset);
+    const eligible = flamethrowerEligibleTroops(defense, aliveTroops);
+    const hits = eligible.map(troop => {
+      const hpBefore = troop.hp;
+      troop.hp -= defense.damage;
+      defense.uniqueTargets.add(troop.id);
+      defense.streamDamage += defense.damage;
+      return {
+        troop,
+        hpBefore,
+        hpAfter: troop.hp,
+        killed: troop.hp <= 0,
+      };
+    });
+    const kills = [];
+    for (const hit of hits) {
+      if (!hit.killed) continue;
+      kills.push(hit.troop.id);
+      defense.streamKills += 1;
+      handleTroopDeath(hit.troop, 'flamethrower_damage_tick', defense.damage);
+    }
+    traceEvent('flamethrower_damage_tick', {
+      defenseType: 'flamethrower',
+      buildingId: defense.buildingId,
+      buildingOrder: defense.buildingOrder,
+      level: defense.level,
+      facingStep: defense.facingStep,
+      tick: combatTick,
+      streamIndex: defense.streamIndex,
+      streamStartTick: defense.streamStartTick,
+      offset,
+      damage: defense.damage,
+      baseDamage: defense.baseTickDamage,
+      wardBonusPct: wardPct,
+      hitIds: hits.map(hit => hit.troop.id),
+      hitTypes: hits.map(hit => hit.troop.type),
+      replayOrders: hits.map(hit => hit.troop.replayOrder ?? null),
+      hitCount: hits.length,
+      totalDamage: hits.length * defense.damage,
+      kills,
+      empty: hits.length === 0,
+    });
+  }
+
+  function startFlamethrowerStream(defense, aliveTroops) {
+    transitionFlamethrower(defense, FLAMETHROWER_STATE.FIRING);
+    defense.streamStartTick = combatTick;
+    defense.streamEndTick = combatTick + flamethrower.COMBAT_RULES.stream_ticks;
+    defense.nextStreamReadyTick = combatTick + flamethrower.COMBAT_RULES.cycle_ticks;
+    defense.cooldownReadyEmitted = false;
+    defense.streamIndex += 1;
+    defense.resolvedDamageOffsets = new Set();
+    defense.uniqueTargets = new Set();
+    defense.streamDamage = 0;
+    defense.streamKills = 0;
+    const trigger = flamethrowerEligibleTroops(defense, aliveTroops)[0] || null;
+    traceEvent('flamethrower_stream_start', {
+      defenseType: 'flamethrower',
+      buildingId: defense.buildingId,
+      buildingOrder: defense.buildingOrder,
+      level: defense.level,
+      facingStep: defense.facingStep,
+      tick: combatTick,
+      streamIndex: defense.streamIndex,
+      startTick: defense.streamStartTick,
+      endTick: defense.streamEndTick,
+      readyTick: defense.nextStreamReadyTick,
+      range: defense.range,
+      damage: defense.damage,
+      baseDamage: defense.baseTickDamage,
+      wardBonusPct: wardPct,
+      triggerTroopId: trigger?.id ?? null,
+      triggerReplayOrder: trigger?.replayOrder ?? null,
+    });
+    resolveFlamethrowerDamageTick(defense, aliveTroops, 0);
+  }
+
+  function updateFlamethrowerDefense(defense, aliveTroops) {
+    if (defense.state === FLAMETHROWER_STATE.DISABLED) return;
+    const owner = buildings.find(building => building.id === defense.buildingId);
+    if (!owner || owner.hp <= 0 || owner.isUpgrading || owner.isUnderConstruction) {
+      interruptFlamethrower(defense, owner?.hp <= 0 ? 'destroyed' : 'inactive', true);
+      return;
+    }
+
+    defense.frozenUntilTick = Math.max(
+      defense.frozenUntilTick,
+      Math.ceil((Number(defense.frozenUntil) || 0) * flamethrower.COMBAT_RULES.tick_rate - 1e-9),
+    );
+    const frozen = combatTick < defense.frozenUntilTick;
+    if (frozen) {
+      if (defense.state !== FLAMETHROWER_STATE.FROZEN) {
+        interruptFlamethrower(defense, 'freeze', false);
+      }
+      return;
+    }
+    if (defense.state === FLAMETHROWER_STATE.FROZEN) {
+      transitionFlamethrower(
+        defense,
+        combatTick >= defense.nextStreamReadyTick
+          ? FLAMETHROWER_STATE.READY
+          : FLAMETHROWER_STATE.COOLDOWN,
+      );
+      defense.nextScanTick = combatTick;
+    }
+
+    if (
+      !defense.cooldownReadyEmitted
+      && defense.nextStreamReadyTick > 0
+      && combatTick >= defense.nextStreamReadyTick
+    ) {
+      defense.cooldownReadyEmitted = true;
+      traceEvent('flamethrower_cooldown_ready', {
+        defenseType: 'flamethrower',
+        buildingId: defense.buildingId,
+        buildingOrder: defense.buildingOrder,
+        level: defense.level,
+        tick: combatTick,
+        readyTick: defense.nextStreamReadyTick,
+      });
+      if (defense.state === FLAMETHROWER_STATE.COOLDOWN) {
+        transitionFlamethrower(defense, FLAMETHROWER_STATE.READY);
+      }
+    }
+
+    if (defense.state === FLAMETHROWER_STATE.PRIMING) {
+      const eligible = flamethrowerEligibleTroops(defense, aliveTroops);
+      if (eligible.length === 0) {
+        cancelFlamethrowerPrime(defense, 'empty');
+        return;
+      }
+      if (combatTick >= Math.max(defense.primeReadyTick, defense.nextStreamReadyTick)) {
+        startFlamethrowerStream(defense, aliveTroops);
+      }
+      return;
+    }
+
+    if (defense.state === FLAMETHROWER_STATE.FIRING) {
+      if (combatTick >= defense.streamEndTick) {
+        flamethrowerStreamEnd(defense, 'completed');
+        return;
+      }
+      const offset = combatTick - defense.streamStartTick;
+      if (flamethrower.COMBAT_RULES.damage_offsets.includes(offset)) {
+        resolveFlamethrowerDamageTick(defense, aliveTroops, offset);
+      }
+      return;
+    }
+
+    const scanAllowed = (
+      defense.state === FLAMETHROWER_STATE.READY
+      || (
+        defense.state === FLAMETHROWER_STATE.COOLDOWN
+        && combatTick >= defense.nextStreamReadyTick - flamethrower.COMBAT_RULES.prime_ticks
+      )
+    );
+    if (!scanAllowed || combatTick < defense.nextScanTick) return;
+    defense.nextScanTick = combatTick + flamethrower.COMBAT_RULES.scan_ticks;
+    const eligible = flamethrowerEligibleTroops(defense, aliveTroops);
+    if (eligible.length === 0) return;
+    transitionFlamethrower(defense, FLAMETHROWER_STATE.PRIMING);
+    defense.primeStartTick = combatTick;
+    defense.primeReadyTick = combatTick + flamethrower.COMBAT_RULES.prime_ticks;
+    traceEvent('flamethrower_prime_start', {
+      defenseType: 'flamethrower',
+      buildingId: defense.buildingId,
+      buildingOrder: defense.buildingOrder,
+      level: defense.level,
+      facingStep: defense.facingStep,
+      tick: combatTick,
+      primeReadyTick: defense.primeReadyTick,
+      readyTick: defense.nextStreamReadyTick,
+      triggerTroopId: eligible[0].id,
+      triggerReplayOrder: eligible[0].replayOrder ?? null,
+      range: defense.range,
+      halfAngleDegrees: flamethrower.COMBAT_RULES.full_cone_degrees / 2,
+    });
+  }
+
+  function updateFlamethrowerDefenses(aliveTroops) {
+    for (const defense of flamethrowers) updateFlamethrowerDefense(defense, aliveTroops);
+  }
+
+  function stopFlamethrowerDefenses(reason) {
+    for (const defense of flamethrowers) {
+      interruptFlamethrower(defense, reason, true);
+    }
   }
 
   function validateTacticalPoint(action) {
@@ -2670,6 +3416,82 @@ function verifyReplay({
         _searchTimer: 0,
       });
     }
+    if (b.type === 'flamethrower') {
+      const flameLevel = Math.max(1, Math.min(flamethrower.LEVELS.length, Number(b.level) || 1));
+      const stats = flamethrower.levelStats(flameLevel);
+      const defense = {
+        buildingId: b.id,
+        buildingOrder: b.buildingOrder,
+        type: 'flamethrower',
+        level: flameLevel,
+        x: b.x,
+        z: b.z,
+        facingStep: b.facingStep,
+        forwardXZ: flamethrower.forwardForStep(b.facingStep),
+        range: stats.range,
+        baseTickDamage: stats.tick_damage,
+        damage: flamethrower.effectiveTickDamage(flameLevel, wardPct),
+        targetGround: true,
+        targetAir: false,
+        state: FLAMETHROWER_STATE.READY,
+        nextScanTick: 0,
+        primeStartTick: null,
+        primeReadyTick: null,
+        streamStartTick: null,
+        streamEndTick: null,
+        nextStreamReadyTick: 0,
+        streamIndex: 0,
+        resolvedDamageOffsets: new Set(),
+        uniqueTargets: new Set(),
+        streamDamage: 0,
+        streamKills: 0,
+        frozenUntil: 0,
+        frozenUntilTick: 0,
+        cooldownReadyEmitted: true,
+        permanentlyDisabled: false,
+      };
+      defenses.push(defense);
+      flamethrowers.push(defense);
+    }
+    if (b.type === 'air_bomb') {
+      const airBombLevel = Math.max(
+        1,
+        Math.min(Number(b.level) || 1, Object.keys(DEFENSE_STATS.air_bomb).length),
+      );
+      const s = DEFENSE_STATS.air_bomb[airBombLevel] || DEFENSE_STATS.air_bomb[1];
+      const airBomb = {
+        buildingId: b.id,
+        buildingOrder: b.buildingOrder,
+        type: 'air_bomb',
+        level: airBombLevel,
+        damage: wardDamage(s.damage),
+        baseDamage: s.damage,
+        fireRate: s.fireRate,
+        detectRange: s.detectRange,
+        splashRadius: s.splashRadius,
+        projSpeed: s.projSpeed,
+        turnSpeedDeg: s.turnSpeedDeg,
+        hitRadius: s.hitRadius,
+        riseTicks: s.riseTicks,
+        maxLifetimeTicks: s.maxLifetimeTicks,
+        reloadTicks: s.reloadTicks,
+        scanTicks: s.scanTicks,
+        targetGround: false,
+        targetAir: true,
+        x: b.x,
+        z: b.z,
+        frozenUntil: 0,
+        nextScanTick: 0,
+        reloadReadyTick: 0,
+        reloadReadyEmitted: true,
+        lastFireTick: null,
+        targetId: null,
+        activeProjectileId: null,
+        nextAmmoSide: 0,
+      };
+      defenses.push(airBomb);
+      airBombs.push(airBomb);
+    }
     if (b.type === 'harpoon') {
       const harpoonLevel = Math.max(
         1,
@@ -2762,6 +3584,24 @@ function verifyReplay({
   }
 
   harpoons.sort((left, right) => {
+    const leftId = Number(left.buildingId);
+    const rightId = Number(right.buildingId);
+    if (Number.isFinite(leftId) && Number.isFinite(rightId)) return leftId - rightId;
+    return String(left.buildingId).localeCompare(String(right.buildingId));
+  });
+  airBombs.sort((left, right) => {
+    if (left.buildingOrder !== right.buildingOrder) {
+      return left.buildingOrder - right.buildingOrder;
+    }
+    const leftId = Number(left.buildingId);
+    const rightId = Number(right.buildingId);
+    if (Number.isFinite(leftId) && Number.isFinite(rightId)) return leftId - rightId;
+    return String(left.buildingId).localeCompare(String(right.buildingId));
+  });
+  flamethrowers.sort((left, right) => {
+    if (left.buildingOrder !== right.buildingOrder) {
+      return left.buildingOrder - right.buildingOrder;
+    }
     const leftId = Number(left.buildingId);
     const rightId = Number(right.buildingId);
     if (Number.isFinite(leftId) && Number.isFinite(rightId)) return leftId - rightId;
@@ -3579,6 +4419,7 @@ function verifyReplay({
     const townHallBeforeDefensePhase = buildings.find(b => b.id === townHallId);
     if (townHallBeforeDefensePhase && townHallBeforeDefensePhase.hp <= 0) {
       simulationEndReason = 'town_hall_destroyed';
+      stopFlamethrowerDefenses('battle_end');
       break;
     }
 
@@ -3733,6 +4574,23 @@ function verifyReplay({
       }
     }
 
+    // Committed Air Bomb projectiles resolve independently from their owner.
+    // Existing projectiles move before this tick's acquisition/launch edge so
+    // a newly fired bomb begins movement on the following 60 Hz tick.
+    updateAirBombProjectiles();
+    for (let troopIndex = aliveTroops.length - 1; troopIndex >= 0; troopIndex--) {
+      if (aliveTroops[troopIndex].hp <= 0) aliveTroops.splice(troopIndex, 1);
+    }
+    updateAirBombDefenses(aliveTroops);
+
+    // Approved deterministic defense order: traps and committed mortar/Air
+    // Bomb work resolve first, then fixed-facing Flamethrower pulses, then
+    // ordinary projectile/generic defenses.
+    updateFlamethrowerDefenses(aliveTroops);
+    for (let troopIndex = aliveTroops.length - 1; troopIndex >= 0; troopIndex--) {
+      if (aliveTroops[troopIndex].hp <= 0) aliveTroops.splice(troopIndex, 1);
+    }
+
     // Existing tower bullets move before a defense can fire a new shot,
     // matching turret.gd / tower_archer.gd process order.
     cannonEnergy += updateProjectiles(projectiles, 'defense', (p, target, hpBefore, hpAfter) => {
@@ -3803,7 +4661,7 @@ function verifyReplay({
 
     // ── Defense AI (turrets + archer towers) ──
     for (const d of defenses) {
-      if (d.type === 'harpoon') continue;
+      if (d.type === 'harpoon' || d.type === 'air_bomb' || d.type === 'flamethrower') continue;
       const bld = buildings.find(b => b.id === d.buildingId);
       if (!bld || bld.hp <= 0) continue;
       if ((Number(d.frozenUntil) || 0) > time) continue;
@@ -4725,6 +5583,7 @@ function verifyReplay({
       && pendingFreezeDrops.length === 0
       && pendingRageDrops.length === 0
       && pendingSkeletonBarrels.length === 0
+      && airBombProjectiles.length === 0
       && actionIdx >= sortedActions.length
     ) {
       simulationEndReason = 'attackers_eliminated';
@@ -4735,6 +5594,9 @@ function verifyReplay({
     combatTick += 1;
   }
 
+  stopFlamethrowerDefenses(
+    simulationEndReason === 'town_hall_destroyed' ? 'battle_end' : simulationEndReason,
+  );
   despawnAllSummons(simulationEndReason);
 
   // ── Evaluate ──
@@ -4773,6 +5635,7 @@ function verifyReplay({
     _guardsAlive: guards.filter(g => g.hp > 0).length,
     _totalProjectilesFired: projectiles.length,
     _pendingMortarProjectilesLeft: mortarProjectiles.length,
+    _pendingAirBombProjectilesLeft: airBombProjectiles.length,
     _pendingSpawnsLeft: pendingSpawns.length,
     _pendingCannonballsLeft: pendingCannonballs.length,
     _cannonShotsAccepted: cannonShotsFired,
@@ -4844,6 +5707,35 @@ function verifyReplay({
       reservedTargetId: harpoon.reservedTargetId,
       currentYaw: round3(harpoon.currentYaw),
     })),
+    _airBombDetails: airBombs.map(airBomb => ({
+      buildingId: airBomb.buildingId,
+      buildingOrder: airBomb.buildingOrder,
+      level: airBomb.level,
+      lastFireTick: airBomb.lastFireTick,
+      reloadReadyTick: airBomb.reloadReadyTick,
+      nextScanTick: airBomb.nextScanTick,
+      targetId: airBomb.targetId,
+      activeProjectileId: airBomb.activeProjectileId,
+      nextAmmoSide: airBomb.nextAmmoSide,
+    })),
+    _flamethrowerDetails: flamethrowers.map(defense => ({
+      buildingId: defense.buildingId,
+      buildingOrder: defense.buildingOrder,
+      level: defense.level,
+      facingStep: defense.facingStep,
+      state: defense.state,
+      nextScanTick: defense.nextScanTick,
+      primeStartTick: defense.primeStartTick,
+      primeReadyTick: defense.primeReadyTick,
+      streamStartTick: defense.streamStartTick,
+      streamEndTick: defense.streamEndTick,
+      nextStreamReadyTick: defense.nextStreamReadyTick,
+      streamIndex: defense.streamIndex,
+      frozenUntilTick: defense.frozenUntilTick,
+      permanentlyDisabled: defense.permanentlyDisabled,
+    })),
+    _combatSnapshotVersion: combatSnapshotVersion,
+    _combatRulesVersion: combatRulesVersion,
     _troopEndState: troops.map(t => ({ id: t.id, type: t.type, hp: t.hp, maxHp: t.maxHp, summoned: !!t.summoned, summonSource: t.summonSource ?? null, summonSequence: t.summonSequence ?? null, spawnedAt: t.spawnedAt ?? null, temporary: !!t.temporary, expiresAt: t.expiresAt ?? null, evolutionChild: !!t.evolutionChild, evolutionStage: t.evolutionStage ?? 0, evolutionLineage: t.evolutionLineage ?? 0, summonOwnerId: t.summonOwnerId ?? null, x: Math.round(t.x*100)/100, z: Math.round(t.z*100)/100, state: t._state, target: traceEntityPayload(t._currentTarget, t._currentTargetIsGuard ? 'guard' : 'building') })),
     _aliveTroopDetails: troops.filter(t => t.hp > 0).map(t => ({
       id: t.id,

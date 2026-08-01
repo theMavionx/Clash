@@ -4,6 +4,8 @@ extends Node3D
 ## Grid-based building system (Clash of Clans style)
 ## Grid is aligned to the gridPlane node in the scene
 
+const FLAMETHROWER_FACING_CONTROLS_SCRIPT = preload("res://scripts/flamethrower_facing_controls.gd")
+
 const ALTAR_MODEL_SCENE_PATH: String = "res://Model/Altar/Models/Stylized_Altar_web.tscn"
 const ALTAR_MODEL_SCENE = preload(ALTAR_MODEL_SCENE_PATH)
 const TOWN_HALL_LEVEL_6_SCENE_PATH: String = "res://Model/Town_Hall/Town Hall Level 6.glb"
@@ -368,6 +370,85 @@ var building_defs: Dictionary = {
 		"altar_ward_bonus": true,
 		"hp_bar_height": 0.55,
 	},
+	"air_bomb": {
+		"name": "Air Bomb",
+		"cells": Vector2i(3, 3),
+		"footprint_extra": 0.35,
+		"color": Color(0.74, 0.29, 0.12, 0.5),
+		"height": 0.56,
+		"scene": "res://Model/air_bomb/air_bomb.tscn",
+		"model_scale": 1.0,
+		"hp_levels": [3200, 4000, 5000, 6200, 7600, 9200, 11000, 13000, 15200],
+		"damage_levels": [140, 220, 330, 480, 680, 920, 1200, 1520, 1880],
+		"range_levels": [2.25, 2.30, 2.35, 2.40, 2.45, 2.50, 2.55, 2.60, 2.65],
+		"splash_radius_levels": [0.31, 0.31, 0.31, 0.31, 0.31, 0.31, 0.31, 0.31, 0.31],
+		"reload_levels": [4.50, 4.50, 4.50, 4.50, 4.50, 4.50, 4.50, 4.50, 4.50],
+		"target_type": "air",
+		"cost": {"gold": 18000, "wood": 48000, "ore": 40000},
+		"upgrade_cost": {
+			2: {"gold": 28000, "wood": 62000, "ore": 52000},
+			3: {"gold": 40000, "wood": 78000, "ore": 66000},
+			4: {"gold": 54000, "wood": 94000, "ore": 80000},
+			5: {"gold": 70000, "wood": 110000, "ore": 94000},
+			6: {"gold": 88000, "wood": 126000, "ore": 108000},
+			7: {"gold": 108000, "wood": 138000, "ore": 120000},
+			8: {"gold": 126000, "wood": 142000, "ore": 132000},
+			9: {"gold": 140000, "wood": 143000, "ore": 142000},
+		},
+		"max_count": 2,
+		"altar_ward_bonus": true,
+		"hp_bar_height": 0.80,
+	},
+	"flamethrower": {
+		"name": "Flamethrower",
+		"cells": Vector2i(3, 3),
+		"footprint_extra": 0.35,
+		"color": Color(0.72, 0.24, 0.06, 0.5),
+		"height": 0.64,
+		"scene": "res://Model/Flamethrower/level_01/FlamethrowerL01.tscn",
+		"scenes": [
+			"res://Model/Flamethrower/level_01/FlamethrowerL01.tscn",
+			"res://Model/Flamethrower/level_02/FlamethrowerL02.tscn",
+			"res://Model/Flamethrower/level_03/FlamethrowerL03.tscn",
+			"res://Model/Flamethrower/level_04/FlamethrowerL04.tscn",
+			"res://Model/Flamethrower/level_05/FlamethrowerL05.tscn",
+			"res://Model/Flamethrower/level_06/FlamethrowerL06.tscn",
+			"res://Model/Flamethrower/level_07/FlamethrowerL07.tscn",
+			"res://Model/Flamethrower/level_08/FlamethrowerL08.tscn",
+			"res://Model/Flamethrower/level_09/FlamethrowerL09.tscn",
+			"res://Model/Flamethrower/level_10/FlamethrowerL10.tscn",
+		],
+		"model_scale": 1.0,
+		"model_rotation_y": 0.0,
+		# Directional wrappers are authored with local -Z as gameplay forward.
+		# They must not inherit the presentation-only camera-facing yaw used by
+		# legacy non-directional building models.
+		"apply_camera_facing_yaw": false,
+		"hp_levels": [2600, 3350, 4250, 5300, 6500, 7850, 9300, 10900, 12650, 14600],
+		"damage_levels": [58, 78, 105, 137, 172, 210, 250, 295, 345, 400],
+		"range_levels": [1.20, 1.28, 1.36, 1.44, 1.52, 1.60, 1.68, 1.78, 1.86, 1.95],
+		"reload_levels": [1.50, 1.50, 1.50, 1.50, 1.50, 1.50, 1.50, 1.50, 1.50, 1.50],
+		"cone_degrees": 50.0,
+		"damage_ticks_per_stream": 3,
+		"stream_duration_sec": 0.75,
+		"prime_duration_sec": 0.30,
+		"target_type": "ground",
+		"cost": {"gold": 18000, "wood": 40000, "ore": 34000},
+		"upgrade_cost": {
+			2: {"gold": 26000, "wood": 54000, "ore": 45000},
+			3: {"gold": 36000, "wood": 70000, "ore": 58000},
+			4: {"gold": 48000, "wood": 86000, "ore": 72000},
+			5: {"gold": 63000, "wood": 104000, "ore": 87000},
+			6: {"gold": 80000, "wood": 120000, "ore": 101000},
+			7: {"gold": 98000, "wood": 134000, "ore": 115000},
+			8: {"gold": 118000, "wood": 142000, "ore": 126000},
+			9: {"gold": 142000, "wood": 170000, "ore": 150000},
+			10: {"gold": 170000, "wood": 202000, "ore": 180000},
+		},
+		"max_count": 2,
+		"altar_ward_bonus": true,
+		"hp_bar_height": 0.82,
+	},
 	"shark_trap": {
 		"name": "Shark Trap",
 		"cells": Vector2i(2, 2),
@@ -494,6 +575,10 @@ func _send_resource_caps() -> void:
 		bridge.send_to_react("resource_caps", caps)
 
 # ── Town Hall Progression (mirrors server/db.js) ─────────────
+## TH8+ content can stay registered for development and future fixtures, but
+## normal player progression remains capped here until the live rollout.
+const LIVE_TOWN_HALL_CAP: int = 7
+
 const TH_UNLOCK: Dictionary = {
 	"storage": 2,
 	"tombstone": 2,
@@ -503,6 +588,8 @@ const TH_UNLOCK: Dictionary = {
 	"mortar": 5,
 	"harpoon": 6,
 	"cannon": 7,
+	"air_bomb": 9,
+	"flamethrower": 8,
 }
 
 # Max count per building per TH level. Individual tables may include future
@@ -521,6 +608,8 @@ const TH_MAX_COUNT: Dictionary = {
 	"mortar": [0, 0, 0, 0, 1, 2, 2],
 	"harpoon": [0, 0, 0, 0, 0, 1, 1, 2], # one at TH6-TH7, second at TH8
 	"cannon": [0, 0, 0, 0, 0, 0, 2],
+	"air_bomb": [0, 0, 0, 0, 0, 0, 0, 0, 2],
+	"flamethrower": [0, 0, 0, 0, 0, 0, 0, 1, 1, 2],
 	"town_hall": [1, 1, 1, 1, 1, 1, 1],
 }
 
@@ -538,6 +627,8 @@ const TH_MAX_LEVEL: Dictionary = {
 	"harpoon": [1, 1, 1, 1, 1, 6, 7, 8],
 	"shark_trap": [1, 2, 3, 4, 5, 6, 7],
 	"cannon": [1, 1, 1, 1, 1, 1, 7],
+	"air_bomb": [1, 1, 1, 1, 1, 1, 1, 1, 9],
+	"flamethrower": [1, 1, 1, 1, 1, 1, 1, 8, 9, 10],
 	"port": [1, 2, 3, 3, 3, 3, 3],
 	"altar": [1, 1, 1, 1, 1, 1, 1],
 }
@@ -777,6 +868,15 @@ var ghost_material: StandardMaterial3D = null
 var current_grid_pos: Vector2i = Vector2i.ZERO
 var grid_visual: MeshInstance3D = null
 var shop_unlocks: Dictionary = {}
+var _flamethrower_facing_step := 0
+var _flamethrower_placement_user_rotated := false
+var _flamethrower_facing_editor: FlamethrowerFacingEditor = null
+var _flamethrower_facing_building: Dictionary = {}
+var _flamethrower_facing_method := "drag_snap"
+var _flamethrower_range_visual: FlamethrowerFacingEditor = null
+var _flamethrower_placement_cell_locked := false
+var _flamethrower_facing_request_pending := false
+var _flamethrower_native_controls: CanvasLayer = null
 
 # ── Selection State ───────────────────────────────────────────
 var selected_building: Dictionary = {}
@@ -792,6 +892,8 @@ static var _cannon_script_res: Script = null
 static var _mage_tower_script_res: Script = null
 static var _mortar_script_res: Script = null
 static var _harpoon_script_res: Script = null
+static var _air_bomb_script_res: Script = null
+static var _flamethrower_script_res: Script = null
 static var _shark_trap_script_res: Script = null
 static var _altar_effect_script_res: Script = null
 static var _town_hall_flag_texture_cache: Dictionary = {}
@@ -877,6 +979,16 @@ func _attach_building_defense_script(node: Node3D, building_type: String) -> voi
 			_harpoon_script_res = _load_script_resource("res://scripts/tower_harpoon.gd")
 		if _harpoon_script_res:
 			node.set_script(_harpoon_script_res)
+	elif building_type == "air_bomb":
+		if _air_bomb_script_res == null:
+			_air_bomb_script_res = _load_script_resource("res://scripts/tower_air_bomb.gd")
+		if _air_bomb_script_res:
+			node.set_script(_air_bomb_script_res)
+	elif building_type == "flamethrower":
+		if _flamethrower_script_res == null:
+			_flamethrower_script_res = _load_script_resource("res://scripts/tower_flamethrower.gd")
+		if _flamethrower_script_res:
+			node.set_script(_flamethrower_script_res)
 	elif building_type == "shark_trap":
 		if _shark_trap_script_res == null:
 			_shark_trap_script_res = _load_script_resource("res://scripts/shark_trap.gd")
@@ -927,6 +1039,7 @@ var building_panel_hp: Label
 var building_panel_hp_bar: ProgressBar
 var building_panel_cost: Label
 var building_panel_upgrade_btn: Button
+var building_panel_facing_btn: Button
 var building_panel_altar_skills: VBoxContainer
 
 # Lv3 costs stay under the TH5 75K storage cap; see design/gdd/economy-balance.md section 5.3.
@@ -1447,6 +1560,8 @@ func _ready() -> void:
 		allowed_buildings = PackedStringArray(["flag"])
 	if create_ui:
 		_create_ui()
+		if not OS.has_feature("web"):
+			_ensure_flamethrower_native_controls()
 		_create_building_panel()
 		_create_barn_panel()
 		_create_port_panel()
@@ -1608,12 +1723,21 @@ func _apply_agent_place_building(payload: Dictionary) -> void:
 	if not building_defs.has(building_id):
 		return
 	var gp := Vector2i(int(building.get("grid_x", 0)), int(building.get("grid_z", 0)))
-	_spawn_building_locally(building_id, gp, building_defs[building_id], sid)
+	_spawn_building_locally(
+		building_id,
+		gp,
+		building_defs[building_id],
+		sid,
+		int(building.get("facing_step", 0))
+	)
 	var b: Dictionary = _find_building_by_server_id(sid)
 	if not b.is_empty():
 		b["level"] = int(building.get("level", b.get("level", 1)))
 		b["hp"] = int(building.get("hp", b.get("hp", 1)))
 		b["max_hp"] = int(building.get("max_hp", b.get("max_hp", b.get("hp", 1))))
+		if building_id == "flamethrower":
+			b["facing_step"] = int(building.get("facing_step", b.get("facing_step", 0)))
+			_apply_building_runtime_level(b)
 		if building_id == "port" and int(building.get("has_ship", 0)) == 1:
 			var pnode: Node3D = b.get("node", null)
 			if is_instance_valid(pnode):
@@ -1970,6 +2094,15 @@ func _apply_town_hall_flag_material_recursive(node: Node, texture: Texture2D) ->
 		_apply_town_hall_flag_material_recursive(child, texture)
 
 
+func _apply_player_flag_texture_to_model(model: Node, texture: Texture2D) -> void:
+	if not is_instance_valid(model) or texture == null:
+		return
+	if model.has_method("apply_player_flag_texture"):
+		model.call("apply_player_flag_texture", texture)
+		return
+	_apply_town_hall_flag_material_recursive(model, texture)
+
+
 func _clear_town_hall_flag_material_recursive(node: Node) -> void:
 	if node is MeshInstance3D:
 		var mi := node as MeshInstance3D
@@ -2008,7 +2141,7 @@ func _finish_town_hall_flag_request(url: String, texture: Texture2D) -> void:
 		return
 	for model in models:
 		if is_instance_valid(model):
-			_apply_town_hall_flag_material_recursive(model, texture)
+			_apply_player_flag_texture_to_model(model, texture)
 	for controller in ship_controllers:
 		if is_instance_valid(controller) and controller.has_method("apply_player_flag_texture"):
 			controller.apply_player_flag_texture(url, texture)
@@ -2069,11 +2202,11 @@ func _apply_town_hall_flag_url(model: Node, raw_url: String) -> void:
 	if url == "":
 		# Imported Town Hall models use a white placeholder for the flag.
 		# Standard means the same Clash flag shown on the main ship.
-		_apply_town_hall_flag_material_recursive(model, DEFAULT_TOWN_HALL_FLAG_TEXTURE)
+		_apply_player_flag_texture_to_model(model, DEFAULT_TOWN_HALL_FLAG_TEXTURE)
 		return
 	var cached: Texture2D = _town_hall_flag_texture_cache.get(url, null)
 	if cached != null:
-		_apply_town_hall_flag_material_recursive(model, cached)
+		_apply_player_flag_texture_to_model(model, cached)
 		return
 	var models: Array = _town_hall_flag_pending_models.get(url, [])
 	models.append(model)
@@ -2082,7 +2215,7 @@ func _apply_town_hall_flag_url(model: Node, raw_url: String) -> void:
 
 
 func _apply_town_hall_flag_to_building_data(building: Dictionary) -> void:
-	if building.get("id", "") != "town_hall":
+	if building.get("id", "") not in ["town_hall", "air_bomb"]:
 		return
 	var node: Node3D = building.get("node", null)
 	if not is_instance_valid(node):
@@ -2466,6 +2599,16 @@ func _create_building_panel() -> void:
 	_style_button(building_panel_upgrade_btn, Color(0.2, 0.5, 0.3), Color(0.25, 0.6, 0.35))
 	building_panel_upgrade_btn.pressed.connect(_upgrade_selected)
 	bp_vbox.add_child(building_panel_upgrade_btn)
+
+	building_panel_facing_btn = Button.new()
+	building_panel_facing_btn.name = "FlamethrowerFacingButton"
+	building_panel_facing_btn.text = tr("Edit attack direction")
+	building_panel_facing_btn.tooltip_text = tr("Aim the Flamethrower with on-screen controls")
+	building_panel_facing_btn.custom_minimum_size = Vector2(0, 56)
+	building_panel_facing_btn.visible = false
+	_style_button(building_panel_facing_btn, Color("b74b19"), Color("d45b20"))
+	building_panel_facing_btn.pressed.connect(_start_flamethrower_facing_edit)
+	bp_vbox.add_child(building_panel_facing_btn)
 
 	building_panel_altar_skills = VBoxContainer.new()
 	building_panel_altar_skills.visible = false
@@ -2951,7 +3094,7 @@ func _server_buildings_signature(server_buildings: Array) -> String:
 	for b in server_buildings:
 		if int(b.get("grid_index", 0)) != my_grid_index:
 			continue
-		parts.append("%s:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s" % [
+		parts.append("%s:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s" % [
 			str(b.get("id", "")),
 			str(b.get("type", "")),
 			str(b.get("level", 1)),
@@ -2964,6 +3107,7 @@ func _server_buildings_signature(server_buildings: Array) -> String:
 			str(b.get("ship_troops", "")),
 			str(b.get("grid_index", 0)),
 			str(b.get("town_hall_flag_url", b.get("flag_url", ""))),
+			str(b.get("facing_step", "")),
 		])
 	parts.sort()
 	return "%s|%s" % [player_key, "|".join(PackedStringArray(parts))]
@@ -2987,6 +3131,15 @@ func _load_buildings_from_server(server_buildings: Array) -> void:
 	for b in server_buildings:
 		if b.get("grid_index", 0) == my_grid_index:
 			my_buildings.append(b)
+	var base_owner_flag_url := ""
+	for building_value in my_buildings:
+		if str(building_value.get("type", "")) != "town_hall":
+			continue
+		base_owner_flag_url = str(building_value.get(
+			"town_hall_flag_url",
+			building_value.get("flag_url", "")
+		)).strip_edges()
+		break
 	_report_web_loading_progress(93, "home_scene_filtered", {"grid_buildings": my_buildings.size()})
 	# Reset the ships counter before walking the new account's buildings.
 	# Without this, logging out of Alice (3 ports with ships → owned_ships=3)
@@ -3025,6 +3178,13 @@ func _load_buildings_from_server(server_buildings: Array) -> void:
 		var max_hp: int = b.get("max_hp", hp)
 		var gp = Vector2i(b["grid_x"], b["grid_z"])
 		var server_id: int = b.get("id", -1)
+		var facing_step: int = int(b.get("facing_step", 0))
+		var building_flag_url := str(b.get(
+			"town_hall_flag_url",
+			b.get("flag_url", base_owner_flag_url)
+		)).strip_edges()
+		if building_flag_url == "":
+			building_flag_url = base_owner_flag_url
 
 		# Mark grid cells as occupied
 		for x in range(def.cells.x):
@@ -3043,6 +3203,11 @@ func _load_buildings_from_server(server_buildings: Array) -> void:
 		var node = Node3D.new()
 		node.set_meta("building_type", building_type)
 		node.set_meta("server_id", server_id)
+		if building_type == "flamethrower":
+			if not FlamethrowerConfig.is_valid_facing_step(facing_step):
+				push_error("Server returned invalid Flamethrower facing_step for building %d" % server_id)
+				facing_step = 0
+			node.set_meta("facing_step", facing_step)
 		
 		# Add base shadow/outline (using precise AABB) — skip for no_outline buildings
 		if not def.get("no_outline", false):
@@ -3078,8 +3243,8 @@ func _load_buildings_from_server(server_buildings: Array) -> void:
 				node.add_child(model)
 				_apply_cel_shader(model)
 				_apply_building_albedo(model, def)
-				if building_type == "town_hall":
-					_apply_town_hall_flag_url(model, str(b.get("town_hall_flag_url", b.get("flag_url", ""))))
+				if building_type in ["town_hall", "air_bomb"]:
+					_apply_town_hall_flag_url(model, building_flag_url)
 				if building_type == "archer_tower":
 					_apply_archer_tower_level_visuals(model, level)
 				_apply_web_render_profile(model, scene_path, level)
@@ -3093,6 +3258,8 @@ func _load_buildings_from_server(server_buildings: Array) -> void:
 		local_pos.y = 0
 		node.position = local_pos
 		add_child(node)
+		if building_type == "flamethrower":
+			node.set_facing_step(facing_step)
 
 		# HP bar
 		var hp_bar_data = _create_building_hp_bar(node, def)
@@ -3111,7 +3278,8 @@ func _load_buildings_from_server(server_buildings: Array) -> void:
 			"hp_fill": hp_bar_data.fill,
 			"server_id": server_id,
 			"stored": stored,
-			"town_hall_flag_url": str(b.get("town_hall_flag_url", b.get("flag_url", ""))),
+			"town_hall_flag_url": building_flag_url,
+			"facing_step": facing_step if building_type == "flamethrower" else null,
 		}
 		if node and b_data.town_hall_flag_url != "":
 			node.set_meta("town_hall_flag_url", b_data.town_hall_flag_url)
@@ -3200,7 +3368,7 @@ func _sync_react_buildings() -> void:
 				for lvl_i in range(1, max_level_for_type + 1):
 					if blvl >= lvl_i:
 						done_req += 1
-		bridge.send_to_react("th_info", {"level": th_lvl, "unlock": TH_UNLOCK, "max_counts": max_counts, "progress": done_req, "progress_total": total_req})
+		bridge.send_to_react("th_info", {"level": th_lvl, "live_cap": LIVE_TOWN_HALL_CAP, "unlock": TH_UNLOCK, "max_counts": max_counts, "progress": done_req, "progress_total": total_req})
 
 
 func _set_player_town_hall_flag(raw_url: String) -> void:
@@ -3211,7 +3379,7 @@ func _set_player_town_hall_flag(raw_url: String) -> void:
 		if not is_instance_valid(bs):
 			continue
 		for b in bs.placed_buildings:
-			if b.get("id", "") != "town_hall":
+			if b.get("id", "") not in ["town_hall", "air_bomb"]:
 				continue
 			b["town_hall_flag_url"] = url
 			b["flag_url"] = url
@@ -3226,7 +3394,7 @@ func _set_player_town_hall_flag(raw_url: String) -> void:
 			changed = true
 	if changed:
 		_sync_react_buildings()
-		if selected_building.get("id", "") == "town_hall":
+		if selected_building.get("id", "") in ["town_hall", "air_bomb"]:
 			selected_building["town_hall_flag_url"] = url
 			_select_building(selected_building)
 
@@ -3551,6 +3719,10 @@ func _begin_placement(building_id: String) -> void:
 		return
 	is_placing = true
 	current_building_id = building_id
+	_flamethrower_placement_user_rotated = false
+	_flamethrower_placement_cell_locked = false
+	_flamethrower_facing_request_pending = false
+	_flamethrower_facing_step = 0
 	if build_button:
 		build_button.visible = false
 	_create_ghost()
@@ -3628,7 +3800,16 @@ func _create_ghost() -> void:
 			ghost.add_child(model)
 			_apply_cel_shader(model)
 			_apply_building_albedo(model, def)
+			if current_building_id in ["town_hall", "air_bomb"]:
+				_apply_town_hall_flag_url(model, _home_player_flag_url)
 	add_child(ghost)
+	if current_building_id == "flamethrower":
+		# A freshly created ghost has no trustworthy cell yet. Keep it hidden
+		# until the pointer/touch ray resolves, so a tap cannot lock cell (0, 0)
+		# together with the temporary step-0 heading.
+		ghost.visible = false
+		_begin_flamethrower_editor(ghost, _flamethrower_facing_step, float(def.range_levels[0]), {})
+		_update_ghost()
 
 
 func _create_box_placeholder(def: Dictionary) -> Node3D:
@@ -3787,6 +3968,10 @@ func _preload_building_scenes() -> void:
 		_mortar_script_res = _load_script_resource("res://scripts/tower_mortar.gd")
 	if _harpoon_script_res == null:
 		_harpoon_script_res = _load_script_resource("res://scripts/tower_harpoon.gd")
+	if _air_bomb_script_res == null:
+		_air_bomb_script_res = _load_script_resource("res://scripts/tower_air_bomb.gd")
+	if _flamethrower_script_res == null:
+		_flamethrower_script_res = _load_script_resource("res://scripts/tower_flamethrower.gd")
 
 
 ## Build cache key for a building type at a specific level.
@@ -3941,16 +4126,56 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 
 	if is_placing:
-		if event is InputEventMouseMotion:
+		if event is InputEventMouseMotion and not _flamethrower_placement_cell_locked:
 			_update_ghost()
+		elif event is InputEventScreenDrag and not _flamethrower_placement_cell_locked:
+			_update_ghost((event as InputEventScreenDrag).position)
 
 		if event is InputEventMouseButton and event.pressed:
-			if event.button_index == MOUSE_BUTTON_LEFT:
-				if _try_place_building():
+			if current_building_id == "flamethrower" and event.button_index == MOUSE_BUTTON_WHEEL_UP:
+				_flamethrower_preview_step(-1, "step_left")
+				get_viewport().set_input_as_handled()
+			elif current_building_id == "flamethrower" and event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+				_flamethrower_preview_step(1, "step_right")
+				get_viewport().set_input_as_handled()
+			elif event.button_index == MOUSE_BUTTON_LEFT:
+				if current_building_id == "flamethrower":
+					# Refresh from this exact click. Touch/web placement is allowed to
+					# arrive without a preceding mouse-motion event.
+					_update_ghost((event as InputEventMouseButton).position)
+					if _lock_flamethrower_placement_cell():
+						get_viewport().set_input_as_handled()
+				elif _try_place_building():
 					get_viewport().set_input_as_handled()
 					_cancel_all_placement()
 			elif event.button_index == MOUSE_BUTTON_RIGHT:
 				_cancel_all_placement()
+				get_viewport().set_input_as_handled()
+		elif (
+			event is InputEventScreenTouch
+			and event.pressed
+			and current_building_id == "flamethrower"
+		):
+			_update_ghost((event as InputEventScreenTouch).position)
+			if _lock_flamethrower_placement_cell():
+				get_viewport().set_input_as_handled()
+		elif (
+			event is InputEventKey
+			and event.pressed
+			and not event.echo
+			and current_building_id == "flamethrower"
+			# React owns keyboard shortcuts in web builds. Handling the same
+			# DOM key in Godot as well can advance two 15-degree steps.
+			and not OS.has_feature("web")
+		):
+			if event.keycode == KEY_Q:
+				_flamethrower_preview_step(-1, "step_left")
+				get_viewport().set_input_as_handled()
+			elif event.keycode == KEY_E:
+				_flamethrower_preview_step(1, "step_right")
+				get_viewport().set_input_as_handled()
+			elif event.keycode == KEY_R:
+				_reset_flamethrower_facing_preview()
 				get_viewport().set_input_as_handled()
 		return
 
@@ -4194,11 +4419,17 @@ func _is_in_grid(local_pos: Vector3) -> bool:
 	return local_pos.x >= -half_x and local_pos.x <= half_x and local_pos.z >= -half_z and local_pos.z <= half_z
 
 
-func _update_ghost() -> void:
+func _update_ghost(screen_position: Variant = null) -> void:
 	if ghost == null:
 		return
+	if current_building_id == "flamethrower" and _flamethrower_placement_cell_locked:
+		return
 
-	var local_hit = _get_mouse_local()
+	var local_hit: Vector3 = (
+		_get_screen_local(screen_position as Vector2)
+		if screen_position is Vector2
+		else _get_mouse_local()
+	)
 	if local_hit == Vector3.INF:
 		ghost.visible = false
 		return
@@ -4220,6 +4451,9 @@ func _update_ghost() -> void:
 	local_pos.z += (def.cells.y * cell_size) / 2.0
 	local_pos.y = 0
 	ghost.position = local_pos
+	if current_building_id == "flamethrower" and not _flamethrower_placement_user_rotated:
+		if _apply_flamethrower_attack_facing():
+			_emit_flamethrower_facing_editor("placement")
 
 	if _can_place(gp, def.cells):
 		ghost_material.albedo_color = Color(0, 0.8, 0, 0.4)
@@ -4239,6 +4473,27 @@ func _can_place(pos: Vector2i, size: Vector2i) -> bool:
 	return true
 
 
+func _lock_flamethrower_placement_cell() -> bool:
+	if (
+		current_building_id != "flamethrower"
+		or _flamethrower_placement_cell_locked
+		or _flamethrower_facing_request_pending
+		or not is_instance_valid(ghost)
+		or not ghost.visible
+	):
+		return false
+	var def: Dictionary = building_defs.get("flamethrower", {})
+	if def.is_empty() or not _can_place(current_grid_pos, def.cells):
+		return false
+	# Match Harpoon's spawn target even when this was a click/tap with no prior
+	# pointer motion. Preserve a deliberate manual angle instead.
+	if not _flamethrower_placement_user_rotated:
+		_apply_flamethrower_attack_facing()
+	_flamethrower_placement_cell_locked = true
+	_emit_flamethrower_facing_editor("placement")
+	return true
+
+
 func _set_grid_occupied(gp: Vector2i, size: Vector2i, occupied: bool) -> void:
 	for x in range(size.x):
 		for z in range(size.y):
@@ -4252,18 +4507,31 @@ func _set_grid_occupied(gp: Vector2i, size: Vector2i, occupied: bool) -> void:
 
 
 func _try_place_building() -> bool:
-	if not ghost or not ghost.visible:
+	var request := _prepare_current_placement_request()
+	if request.is_empty():
 		return false
-	var def = building_defs[current_building_id]
+	_request_place_building(
+		str(request.id),
+		request.grid_pos,
+		request.def,
+		_flamethrower_facing_step
+	)
+	return true
 
+
+func _prepare_current_placement_request() -> Dictionary:
+	if not is_instance_valid(ghost) or not ghost.visible:
+		return {}
+	var def: Dictionary = building_defs.get(current_building_id, {})
+	if def.is_empty():
+		return {}
 	if not test_mode and current_building_id != "town_hall" and not _has_town_hall():
 		_show_error("Build Town Hall first!")
-		return false
-
+		return {}
 	if not _can_place(current_grid_pos, def.cells):
-		return false
+		return {}
 
-	# Check max_count limit (e.g. Town Hall = 1) — bypassed in test_mode
+	# Check max_count limit (e.g. Town Hall = 1) — bypassed in test_mode.
 	if not test_mode:
 		var max_count: int = -1
 		if TH_MAX_COUNT.has(current_building_id):
@@ -4272,53 +4540,71 @@ func _try_place_building() -> bool:
 		elif def.has("max_count"):
 			max_count = int(def.max_count)
 		if max_count >= 0:
-			var count: int = 0
-			for bs in _building_systems:
-				for b in bs.placed_buildings:
-					if b.get("id", "") == current_building_id:
+			var count := 0
+			for building_system in _building_systems:
+				for building in building_system.placed_buildings:
+					if building.get("id", "") == current_building_id:
 						count += 1
 			if count >= max_count:
 				print("Max %s limit reached (%d)" % [def.name, max_count])
-				return false
+				return {}
 
-	# Save placement params before async call
-	var place_id = current_building_id
-	var place_pos = current_grid_pos
-	var place_def = def
-
-	# Ask server first
-	_request_place_building(place_id, place_pos, place_def)
-	return true
+	return {
+		"id": current_building_id,
+		"grid_pos": current_grid_pos,
+		"def": def,
+	}
 
 
-func _request_place_building(building_id: String, grid_pos: Vector2i, def: Dictionary) -> void:
+func _request_place_building(
+	building_id: String,
+	grid_pos: Vector2i,
+	def: Dictionary,
+	facing_step: int = 0
+) -> bool:
 	var net = _net
 	if not net or not net.has_token():
 		if test_mode:
-			_spawn_building_locally(building_id, grid_pos, def, -1)
+			_spawn_building_locally(building_id, grid_pos, def, -1, facing_step)
+			return true
 		else:
 			_block_without_server("build")
-		return
+		return false
 
 	_server_busy = true
-	var result = await net.place_building(building_id, grid_pos.x, grid_pos.y, _get_grid_index())
+	var facing_payload: Variant = facing_step if building_id == "flamethrower" else null
+	var result = await net.place_building(
+		building_id,
+		grid_pos.x,
+		grid_pos.y,
+		_get_grid_index(),
+		facing_payload
+	)
 	_server_busy = false
 	if result.has("error"):
 		_show_error(str(result.error))
-		return
+		return false
 
 	# Server OK — place locally
 	var server_id: int = result.get("id", -1)
-	_spawn_building_locally(building_id, grid_pos, def, server_id)
+	var canonical_facing: int = int(result.get("facing_step", facing_step))
+	_spawn_building_locally(building_id, grid_pos, def, server_id, canonical_facing)
 
 	if result.has("trophies"):
 		net.trophies = result["trophies"]
 		_update_player_name_label()
 	if result.has("resources"):
 		_apply_resources_from_server(result["resources"])
+	return true
 
 
-func _spawn_building_locally(building_id: String, grid_pos: Vector2i, def: Dictionary, server_id: int) -> void:
+func _spawn_building_locally(
+	building_id: String,
+	grid_pos: Vector2i,
+	def: Dictionary,
+	server_id: int,
+	facing_step: int = 0
+) -> void:
 	# Mark grid
 	_set_grid_occupied(grid_pos, def.cells, true)
 
@@ -4329,6 +4615,9 @@ func _spawn_building_locally(building_id: String, grid_pos: Vector2i, def: Dicti
 	current_building_id = prev_id
 	building.set_meta("building_type", building_id)
 	building.set_meta("server_id", server_id)
+	if building_id == "flamethrower":
+		facing_step = FlamethrowerConfig.normalize_preview_step(facing_step)
+		building.set_meta("facing_step", facing_step)
 
 	var sx = def.cells.x * cell_size
 	var sz = def.cells.y * cell_size
@@ -4347,6 +4636,8 @@ func _spawn_building_locally(building_id: String, grid_pos: Vector2i, def: Dicti
 	# -----------------------
 
 	add_child(building)
+	if building_id == "flamethrower" and building.has_method("set_facing_step"):
+		building.set_facing_step(facing_step)
 	var max_hp = _get_hp_for(def, 1)
 	var hp_bar_data = _create_building_hp_bar(building, def)
 	var b_data := {
@@ -4360,8 +4651,12 @@ func _spawn_building_locally(building_id: String, grid_pos: Vector2i, def: Dicti
 		"hp_fill": hp_bar_data.fill,
 		"server_id": server_id,
 		"stored": 0.0,
+		"town_hall_flag_url": _home_player_flag_url if building_id in ["town_hall", "air_bomb"] else "",
+		"facing_step": facing_step if building_id == "flamethrower" else null,
 	}
 	placed_buildings.append(b_data)
+	if building_id in ["town_hall", "air_bomb"]:
+		_apply_town_hall_flag_to_building_data(b_data)
 	_apply_building_runtime_level(b_data)
 	_sync_react_buildings()
 
@@ -4382,6 +4677,8 @@ func _cancel_placement() -> void:
 	if _is_moving:
 		_cancel_move(false)
 	is_placing = false
+	_flamethrower_placement_cell_locked = false
+	_flamethrower_facing_request_pending = false
 	current_building_id = ""
 	if build_button:
 		build_button.visible = true
@@ -4390,9 +4687,248 @@ func _cancel_placement() -> void:
 	if ghost:
 		ghost.queue_free()
 		ghost = null
+	_end_flamethrower_editor(false)
+
+
+func _begin_flamethrower_editor(
+	root: Node3D,
+	saved_step: int,
+	range_value: float,
+	building: Dictionary
+) -> void:
+	_end_flamethrower_editor(false)
+	_flamethrower_facing_editor = FlamethrowerFacingEditor.new()
+	_flamethrower_facing_editor.name = "FlamethrowerFacingEditor"
+	add_child(_flamethrower_facing_editor)
+	_flamethrower_facing_building = building
+	_flamethrower_facing_step = FlamethrowerConfig.normalize_preview_step(saved_step)
+	_flamethrower_facing_method = "drag_snap"
+	_flamethrower_facing_request_pending = false
+	_flamethrower_facing_editor.begin(root, _flamethrower_facing_step, range_value)
+	_emit_flamethrower_facing_editor("placement" if building.is_empty() else "edit")
+
+
+func _start_flamethrower_facing_edit() -> void:
+	if is_viewing_enemy or _server_busy or selected_building.is_empty():
+		return
+	if str(selected_building.get("id", "")) != "flamethrower":
+		return
+	var root := selected_building.get("node", null) as Node3D
+	if not is_instance_valid(root):
+		return
+	var def: Dictionary = building_defs.get("flamethrower", {})
+	var level := int(selected_building.get("level", 1))
+	var ranges: Array = def.get("range_levels", [])
+	var range_value := float(ranges[clampi(level - 1, 0, ranges.size() - 1)]) if not ranges.is_empty() else 1.2
+	_hide_range_indicator()
+	_hide_move_arrows()
+	if building_panel:
+		building_panel.visible = false
+	_begin_flamethrower_editor(
+		root,
+		int(selected_building.get("facing_step", 0)),
+		range_value,
+		selected_building
+	)
+
+
+func _flamethrower_preview_step(delta: int, method: String = "drag_snap") -> void:
+	if (
+		not is_instance_valid(_flamethrower_facing_editor)
+		or _flamethrower_facing_request_pending
+	):
+		return
+	_flamethrower_facing_step = FlamethrowerConfig.normalize_preview_step(
+		_flamethrower_facing_editor.preview_step + delta
+	)
+	_flamethrower_facing_method = method
+	if is_placing:
+		_flamethrower_placement_user_rotated = true
+	_flamethrower_facing_editor.set_preview_step(_flamethrower_facing_step)
+	_emit_flamethrower_facing_editor("placement" if _flamethrower_facing_building.is_empty() else "edit")
+
+
+func _reset_flamethrower_facing_preview() -> void:
+	if (
+		not is_instance_valid(_flamethrower_facing_editor)
+		or _flamethrower_facing_request_pending
+	):
+		return
+	_flamethrower_facing_method = "reset"
+	if is_placing:
+		# Reset restores automatic approach tracking while the ghost is moving.
+		_flamethrower_placement_user_rotated = false
+	_apply_flamethrower_attack_facing()
+	_emit_flamethrower_facing_editor("placement" if _flamethrower_facing_building.is_empty() else "edit")
+
+
+func _apply_flamethrower_attack_facing() -> bool:
+	if not is_instance_valid(_flamethrower_facing_editor):
+		return false
+	var target_root := _flamethrower_facing_editor.target_root
+	if not is_instance_valid(target_root):
+		return false
+	_flamethrower_facing_step = FlamethrowerConfig.nearest_step_toward(
+		target_root.global_position,
+		_get_defense_spawn_facing_global()
+	)
+	_flamethrower_facing_editor.set_preview_step(_flamethrower_facing_step)
+	return true
+
+
+func is_flamethrower_facing_editor_active() -> bool:
+	return (
+		is_instance_valid(_flamethrower_facing_editor)
+		and _flamethrower_facing_editor.visible
+	)
+
+
+func _confirm_flamethrower_facing() -> void:
+	if not is_instance_valid(_flamethrower_facing_editor) or _flamethrower_facing_request_pending:
+		return
+	_flamethrower_facing_step = _flamethrower_facing_editor.preview_step
+	if _flamethrower_facing_building.is_empty():
+		if not _flamethrower_placement_cell_locked:
+			return
+		await _submit_flamethrower_placement()
+		return
+	var building := _flamethrower_facing_building
+	var root := building.get("node", null) as Node3D
+	var previous_step := int(building.get("facing_step", 0))
+	if not test_mode:
+		var net = _net
+		if not net or not net.has_token():
+			_show_error("Network unavailable; Flamethrower direction was not saved")
+			_cancel_flamethrower_facing()
+			return
+		var server_id := int(building.get("server_id", -1))
+		if server_id < 0:
+			_show_error("Flamethrower is not synced to the server")
+			_cancel_flamethrower_facing()
+			return
+		_flamethrower_facing_request_pending = true
+		_server_busy = true
+		_emit_flamethrower_facing_editor("edit")
+		var result: Dictionary = await net.set_building_facing(
+			server_id,
+			_flamethrower_facing_step,
+			_flamethrower_facing_method
+		)
+		_server_busy = false
+		_flamethrower_facing_request_pending = false
+		if result.has("error"):
+			_show_error(str(result.error))
+			if str(result.get("code", "")) == "layout_revision_conflict":
+				_end_flamethrower_editor(false)
+				var refreshed_building := _resync_flamethrower_layout_conflict(server_id, result)
+				_sync_react_buildings()
+				if not refreshed_building.is_empty():
+					_select_building(refreshed_building)
+			else:
+				_flamethrower_facing_step = previous_step
+				_cancel_flamethrower_facing()
+			return
+		_flamethrower_facing_step = int(result.get("facing_step", _flamethrower_facing_step))
+	building["facing_step"] = _flamethrower_facing_step
+	if is_instance_valid(root):
+		root.set_meta("facing_step", _flamethrower_facing_step)
+		if root.has_method("set_facing_step"):
+			root.set_facing_step(_flamethrower_facing_step)
+	_end_flamethrower_editor(true)
+	_sync_react_buildings()
+	_select_building(building)
+
+
+func _submit_flamethrower_placement() -> void:
+	var request := _prepare_current_placement_request()
+	if request.is_empty():
+		return
+	_flamethrower_facing_request_pending = true
+	_emit_flamethrower_facing_editor("placement")
+	var placed := await _request_place_building(
+		str(request.id),
+		request.grid_pos,
+		request.def,
+		_flamethrower_facing_step
+	)
+	_flamethrower_facing_request_pending = false
+	if placed:
+		_cancel_all_placement()
+	elif is_instance_valid(_flamethrower_facing_editor):
+		# Keep the locked cell and manual preview intact so the player can retry.
+		_emit_flamethrower_facing_editor("placement")
+
+
+func _resync_flamethrower_layout_conflict(server_id: int, result: Dictionary) -> Dictionary:
+	var canonical_buildings: Variant = result.get("buildings", null)
+	if not (canonical_buildings is Array):
+		return {}
+	for building_system in _building_systems:
+		if is_instance_valid(building_system) and building_system.has_method("_load_buildings_from_server"):
+			building_system._load_buildings_from_server(canonical_buildings)
+	return _find_building_by_server_id(server_id)
+
+
+func _cancel_flamethrower_facing() -> void:
+	if _flamethrower_facing_request_pending:
+		return
+	var building := _flamethrower_facing_building
+	_end_flamethrower_editor(false)
+	if not building.is_empty() and selected_building == building:
+		_select_building(building)
+
+
+func _ensure_flamethrower_native_controls() -> void:
+	if OS.has_feature("web") or not create_ui or is_instance_valid(_flamethrower_native_controls):
+		return
+	_flamethrower_native_controls = FLAMETHROWER_FACING_CONTROLS_SCRIPT.new()
+	_flamethrower_native_controls.name = "FlamethrowerFacingControls"
+	add_child(_flamethrower_native_controls)
+	_flamethrower_native_controls.step_requested.connect(_flamethrower_preview_step)
+	_flamethrower_native_controls.reset_requested.connect(_reset_flamethrower_facing_preview)
+	_flamethrower_native_controls.cancel_requested.connect(_cancel_flamethrower_facing)
+	_flamethrower_native_controls.confirm_requested.connect(_confirm_flamethrower_facing)
+
+
+func _end_flamethrower_editor(commit: bool) -> void:
+	if is_instance_valid(_flamethrower_facing_editor):
+		if commit:
+			_flamethrower_facing_editor.confirm()
+		else:
+			_flamethrower_facing_editor.cancel()
+		_flamethrower_facing_editor.queue_free()
+	_flamethrower_facing_editor = null
+	_flamethrower_facing_building = {}
+	_flamethrower_facing_request_pending = false
+	var inactive_state := {"active": false}
+	if is_instance_valid(_flamethrower_native_controls):
+		_flamethrower_native_controls.set_editor_state(inactive_state)
+	if _bridge:
+		_bridge.send_to_react("flamethrower_facing_editor", inactive_state)
+
+
+func _emit_flamethrower_facing_editor(mode: String) -> void:
+	if not is_instance_valid(_flamethrower_facing_editor):
+		return
+	var editor_state := {
+		"active": true,
+		"mode": mode,
+		"step": _flamethrower_facing_editor.preview_step,
+		"degrees": _flamethrower_facing_editor.preview_step * 15,
+		"server_id": int(_flamethrower_facing_building.get("server_id", -1)),
+		"cell_locked": _flamethrower_placement_cell_locked if mode == "placement" else true,
+		"pending": _flamethrower_facing_request_pending,
+		"controls": {"left": "Q", "right": "E", "reset": "R"},
+	}
+	if is_instance_valid(_flamethrower_native_controls):
+		_flamethrower_native_controls.set_editor_state(editor_state)
+	if _bridge:
+		_bridge.send_to_react("flamethrower_facing_editor", editor_state)
 
 
 func _destroy_all_buildings() -> void:
+	_end_flamethrower_editor(false)
+	_show_flamethrower_range_visual({}, false)
 	for b in placed_buildings:
 		# Free skeleton guards attached to tombstones
 		if b.get("id", "") == "tombstone":
@@ -4605,6 +5141,7 @@ func _find_ship_barrel_target_from_screen(screen_pos: Vector2) -> Dictionary:
 
 func _select_building(b: Dictionary) -> void:
 	_set_mortar_range_visuals_for_selected(false)
+	_show_flamethrower_range_visual({}, false)
 	selected_building = b
 	var def = building_defs[b.id]
 	var level = b.get("level", 1)
@@ -4671,6 +5208,11 @@ func _select_building(b: Dictionary) -> void:
 			"pull_duration_sec": float(def.get("pull_duration_sec", 0.0)),
 			"stop_distance": float(def.get("stop_distance", 0.0)),
 			"target_type": str(def.get("target_type", "")),
+			"facing_step": int(b.get("facing_step", 0)) if b.id == "flamethrower" else null,
+			"cone_degrees": float(def.get("cone_degrees", 0.0)),
+			"damage_ticks_per_stream": int(def.get("damage_ticks_per_stream", 0)),
+			"stream_duration_sec": float(def.get("stream_duration_sec", 0.0)),
+			"prime_duration_sec": float(def.get("prime_duration_sec", 0.0)),
 			"upgrade_cost": upgrade_cost,
 			"is_enemy": is_viewing_enemy,
 			"is_barn": b.id == "barn",
@@ -4689,7 +5231,7 @@ func _select_building(b: Dictionary) -> void:
 
 	# Range indicator for defense buildings
 	_hide_range_indicator()
-	var defense_ids = ["turret", "cannon", "tombstone", "archtower", "archer_tower", "archertower", "mage_tower", "harpoon"]
+	var defense_ids = ["turret", "cannon", "tombstone", "archtower", "archer_tower", "archertower", "mage_tower", "harpoon", "air_bomb"]
 	if b.id in defense_ids and is_instance_valid(b.get("node", null)):
 		var bnode = b["node"]
 		var r: float = 1.0
@@ -4698,6 +5240,8 @@ func _select_building(b: Dictionary) -> void:
 		_show_range_indicator(bnode.global_position, r)
 	elif b.id == "mortar":
 		_set_mortar_range_visuals_for_building(b, true)
+	elif b.id == "flamethrower":
+		_show_flamethrower_range_visual(b, true)
 
 	# Move arrows (own island only)
 	if not is_viewing_enemy:
@@ -4718,6 +5262,8 @@ func _select_building(b: Dictionary) -> void:
 			building_panel_cost.visible = false
 		if building_panel_upgrade_btn:
 			building_panel_upgrade_btn.visible = false
+		if building_panel_facing_btn:
+			building_panel_facing_btn.visible = false
 		if building_panel_altar_skills:
 			building_panel_altar_skills.visible = false
 		if building_panel:
@@ -4753,6 +5299,12 @@ func _select_building(b: Dictionary) -> void:
 			building_panel.offset_right = 320
 			building_panel.offset_top = -540
 			building_panel.offset_bottom = -20
+		elif b.id == "flamethrower":
+			building_panel.custom_minimum_size = Vector2(400, 350)
+			building_panel.offset_left = -200
+			building_panel.offset_right = 200
+			building_panel.offset_top = -370
+			building_panel.offset_bottom = -20
 		else:
 			building_panel.custom_minimum_size = Vector2(400, 280)
 			building_panel.offset_left = -200
@@ -4771,6 +5323,8 @@ func _select_building(b: Dictionary) -> void:
 		building_panel_cost.visible = true
 	if building_panel_upgrade_btn:
 		building_panel_upgrade_btn.visible = true
+	if building_panel_facing_btn:
+		building_panel_facing_btn.visible = b.id == "flamethrower"
 	_update_upgrade_cost_label(def, level)
 	if building_panel_altar_skills:
 		building_panel_altar_skills.visible = false
@@ -4784,6 +5338,8 @@ func _deselect_building() -> void:
 	if _is_moving:
 		_cancel_move(false)
 	_set_mortar_range_visuals_for_selected(false)
+	_show_flamethrower_range_visual({}, false)
+	_end_flamethrower_editor(false)
 	selected_building = {}
 	_hide_range_indicator()
 	_hide_move_arrows()
@@ -4815,6 +5371,27 @@ func _set_mortar_range_visuals_for_building(b: Dictionary, should_be_visible: bo
 		bnode.call("set_range_visuals_visible", should_be_visible)
 
 
+func _show_flamethrower_range_visual(b: Dictionary, should_be_visible: bool) -> void:
+	if not should_be_visible or b.get("id", "") != "flamethrower":
+		if is_instance_valid(_flamethrower_range_visual):
+			_flamethrower_range_visual.queue_free()
+		_flamethrower_range_visual = null
+		return
+	var root := b.get("node", null) as Node3D
+	if not is_instance_valid(root):
+		return
+	var def: Dictionary = building_defs.get("flamethrower", {})
+	var ranges: Array = def.get("range_levels", [])
+	var level := int(b.get("level", 1))
+	var range_value := float(ranges[clampi(level - 1, 0, ranges.size() - 1)]) if not ranges.is_empty() else 1.2
+	if is_instance_valid(_flamethrower_range_visual):
+		_flamethrower_range_visual.queue_free()
+	_flamethrower_range_visual = FlamethrowerFacingEditor.new()
+	_flamethrower_range_visual.name = "FlamethrowerSelectionSector"
+	add_child(_flamethrower_range_visual)
+	_flamethrower_range_visual.begin(root, int(b.get("facing_step", 0)), range_value)
+
+
 func _upgrade_selected() -> void:
 	if selected_building.size() == 0 or _server_busy:
 		return
@@ -4822,10 +5399,13 @@ func _upgrade_selected() -> void:
 		return
 	var def = building_defs[selected_building.id]
 	var level = selected_building.get("level", 1)
+	var bid: String = selected_building.get("id", "")
+	if not test_mode and bid == "town_hall" and level >= LIVE_TOWN_HALL_CAP:
+		_show_error("Town Hall level %d is not live yet" % (level + 1))
+		return
 	var max_level = def.hp_levels.size() if def.has("hp_levels") else 3
 	if level >= max_level:
 		return
-	var bid: String = selected_building.get("id", "")
 	var th_level: int = _get_th_level()
 	# TH upgrade — check required buildings (bypassed in test_mode)
 	if not test_mode:
@@ -4974,6 +5554,8 @@ func _run_upgrade_sequence(b: Dictionary, def: Dictionary, server_new_level: int
 		var scene_res = _get_packed_scene_resource(scene_path)
 		if scene_res:
 			for child in model.get_children():
+				if child.has_meta("building_runtime_persistent"):
+					continue
 				child.queue_free()
 			# Recreate building base outline for the new level's model
 			var cache_key = _aabb_cache_key(b.id, b.level)
@@ -4995,7 +5577,7 @@ func _run_upgrade_sequence(b: Dictionary, def: Dictionary, server_new_level: int
 				new_model.position = def.get("model_offset", Vector3.ZERO)
 			model.add_child(new_model)
 			_apply_building_albedo(new_model, def)
-			if b.id == "town_hall":
+			if b.id in ["town_hall", "air_bomb"]:
 				_apply_town_hall_flag_url(new_model, str(b.get("town_hall_flag_url", "")))
 			if b.id == "archer_tower":
 				_apply_archer_tower_level_visuals(new_model, b.level)
@@ -5101,7 +5683,10 @@ func _get_model_scale(def: Dictionary, level: int = 1) -> float:
 
 
 func _get_model_rotation_y(def: Dictionary) -> float:
-	return float(def.get("model_rotation_y", 270.0)) + BUILDING_CAMERA_FACING_YAW_DEGREES
+	var authored_rotation := float(def.get("model_rotation_y", 270.0))
+	if not bool(def.get("apply_camera_facing_yaw", true)):
+		return authored_rotation
+	return authored_rotation + BUILDING_CAMERA_FACING_YAW_DEGREES
 
 
 func _apply_web_render_profile(model: Node, scene_path: String, level: int) -> void:
@@ -5648,11 +6233,15 @@ func _apply_building_runtime_level(b: Dictionary) -> void:
 		node.set_level(lvl)
 	if is_instance_valid(node) and node.has_method("set_ward_bonus_pct"):
 		node.set_ward_bonus_pct(ward_pct)
+	if str(b.get("id", "")) == "flamethrower" and is_instance_valid(node) and node.has_method("set_facing_step"):
+		node.set_facing_step(int(b.get("facing_step", 0)))
 	if is_instance_valid(node) and node.has_method("set_spawn_facing_global"):
 		# Face the real troop deployment zone (AttackSystem/shipPlane), not the
 		# defended building-grid center. This is a one-time spawn heading; combat
 		# retains the last tracked yaw afterward.
 		node.set_spawn_facing_global(_get_defense_spawn_facing_global())
+	if is_instance_valid(node) and node.has_method("rebind_visuals"):
+		node.rebind_visuals()
 	var tower_unit: Node = b.get("tower_unit_node", null)
 	if is_instance_valid(tower_unit) and tower_unit.has_method("set_level"):
 		tower_unit.set_level(lvl)
@@ -5691,6 +6280,8 @@ func _apply_building_level_visuals_for_test(b: Dictionary, def: Dictionary) -> v
 		var scene_res := _load_packed_scene_resource(scene_path)
 		if scene_res:
 			for child in node.get_children():
+				if child.has_meta("building_runtime_persistent"):
+					continue
 				child.queue_free()
 			var cache_key = _aabb_cache_key(building_id, lvl)
 			if not _building_aabb_cache.has(cache_key):
@@ -5715,7 +6306,7 @@ func _apply_building_level_visuals_for_test(b: Dictionary, def: Dictionary) -> v
 			node.add_child(model)
 			_apply_cel_shader(model)
 			_apply_building_albedo(model, def)
-			if building_id == "town_hall":
+			if building_id in ["town_hall", "air_bomb"]:
 				_apply_town_hall_flag_url(model, str(b.get("town_hall_flag_url", "")))
 			if building_id == "archer_tower":
 				_apply_archer_tower_level_visuals(model, lvl)

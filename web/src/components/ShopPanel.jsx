@@ -20,6 +20,8 @@ import imgMageTower from '../assets/buildings/magetower.png';
 import imgMortar from '../assets/buildings/mortar.png';
 import imgSharkTrap from '../assets/buildings/sharktrap.png';
 import imgHarpoon from '../assets/buildings/harpoon.png';
+import imgAirBomb from '../assets/buildings/air_bomb.png';
+import imgFlamethrower from '../assets/buildings/flamethrower.png';
 import imgAltar from '../assets/units/altar.png';
 
 const ALTAR_PRICE_LABEL = '$15.00';
@@ -46,6 +48,8 @@ const DESC_MAP = {
   mortar: 'Long-range splash defense',
   shark_trap: 'Eliminates one ground troop; damages Demon King',
   harpoon: 'Hooks and pulls nearby flying enemies',
+  air_bomb: 'Homing anti-air bomb with splash damage',
+  flamethrower: 'Fixed 50 degree ground flame cone',
   altar: 'Onchain base boost',
 };
 
@@ -63,6 +67,8 @@ const CATEGORY_MAP = {
   mortar: 'Defense',
   shark_trap: 'Defense',
   harpoon: 'Defense',
+  air_bomb: 'Defense',
+  flamethrower: 'Defense',
   altar: 'Economy',
   port: 'Military',
   town_hall: 'Economy',
@@ -84,6 +90,8 @@ const THUMBNAIL_MAP = {
   mortar: imgMortar,
   shark_trap: imgSharkTrap,
   harpoon: imgHarpoon,
+  air_bomb: imgAirBomb,
+  flamethrower: imgFlamethrower,
   storage: imgStorage,
   altar: imgAltar,
 };
@@ -98,6 +106,8 @@ const THUMBNAIL_SCALE_MAP = {
   mortar: 1.15,
   shark_trap: 1.18,
   harpoon: 1.12,
+  air_bomb: 0.9,
+  flamethrower: 1.08,
   altar: 1.28,
 };
 

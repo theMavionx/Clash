@@ -33,6 +33,7 @@ const {
   resolveAuthoritativeNftRarity,
   setBalanceLabNftStatScales,
 } = require('./combat_defs');
+const flamethrowerConfig = require('./flamethrower_config');
 
 const ROOT = path.resolve(__dirname, '..');
 
@@ -762,7 +763,7 @@ for (const [troopType, levels] of Object.entries(TROOP_STATS)) {
     );
   }
 }
-for (const defenseType of ['turret', 'archer_tower', 'mage_tower', 'mortar', 'cannon', 'harpoon']) {
+for (const defenseType of ['turret', 'archer_tower', 'mage_tower', 'mortar', 'cannon', 'harpoon', 'air_bomb']) {
   const levels = DEFENSE_STATS[defenseType];
   const baseline = levels[1].tickRate || levels[1].fireRate;
   for (const [level, stats] of Object.entries(levels)) {
@@ -802,6 +803,36 @@ assert.equal(parseNumberConstant(harpoonSource, 'RELOAD_TICKS'), 420);
 assert.equal(parseNumberConstant(harpoonSource, 'IMMUNITY_TICKS'), 90);
 assert.equal(parseNumberConstant(harpoonSource, 'PROJECTILE_SPEED'), DEFENSE_STATS.harpoon[1].projSpeed);
 assert.equal(parseNumberConstant(harpoonSource, 'STOP_DISTANCE'), DEFENSE_STATS.harpoon[1].stopDistance);
+const airBombTowerSource = read('scripts/tower_air_bomb.gd');
+const airBombProjectileSource = read('scripts/air_bomb_projectile.gd');
+const airBombRows = parseDictionaryRows('scripts/tower_air_bomb.gd');
+assert.equal(Object.keys(airBombRows).length, 9, 'Air Bomb client must define all nine levels');
+for (let level = 1; level <= 9; level++) {
+  assert.deepEqual(
+    airBombRows[level],
+    {
+      damage: DEFENSE_STATS.air_bomb[level].damage,
+      detect_range: DEFENSE_STATS.air_bomb[level].detectRange,
+    },
+    `air_bomb level ${level} client/server stats diverged`,
+  );
+}
+assert.equal(parseNumberConstant(airBombTowerSource, 'TARGET_SCAN_TICKS'), DEFENSE_STATS.air_bomb[1].scanTicks);
+assert.equal(parseNumberConstant(airBombTowerSource, 'RELOAD_TICKS'), DEFENSE_STATS.air_bomb[1].reloadTicks);
+assert.equal(parseNumberConstant(airBombTowerSource, 'SPLASH_RADIUS'), DEFENSE_STATS.air_bomb[1].splashRadius);
+assert.equal(parseNumberConstant(airBombProjectileSource, 'RISE_TICKS'), DEFENSE_STATS.air_bomb[1].riseTicks);
+assert.equal(parseNumberConstant(airBombProjectileSource, 'MAX_HOMING_TICKS'), DEFENSE_STATS.air_bomb[1].maxLifetimeTicks);
+assert.equal(DEFENSE_STATS.air_bomb[1].splashRadius, 0.31, 'Air Bomb authoritative splash radius must remain locked');
+assert.equal(DEFENSE_STATS.air_bomb[1].projSpeed, 1.19, 'Air Bomb authoritative homing speed must remain locked');
+assert.equal(parseNumberConstant(airBombProjectileSource, 'PROJECTILE_SPEED'), DEFENSE_STATS.air_bomb[1].projSpeed);
+assert.equal(parseNumberConstant(airBombProjectileSource, 'HIT_RADIUS'), DEFENSE_STATS.air_bomb[1].hitRadius);
+assert.match(airBombProjectileSource, /TURN_RADIANS_PER_TICK:\s*float\s*=\s*deg_to_rad\(4\.0\)/);
+assert.equal(DEFENSE_STATS.air_bomb[1].turnSpeedDeg / 60, 4);
+assert.match(airBombProjectileSource, /_retarget_range:\s*float/, 'Air Bomb client must snapshot launch-time retarget range');
+assert.match(airBombTowerSource, /SPLASH_RADIUS,\s*\n\s*detect_range,/, 'Air Bomb tower must pass its launch-time range to the projectile');
+assert.match(sharkFallback, /retargetRange:\s*defense\.detectRange/, 'Air Bomb server must snapshot the same launch-time range');
+assert.match(sharkFallback, /cleanupAirBombProjectile\(projectile, 'no_retarget_candidate'\)/, 'Air Bomb server must harmlessly clean up when no replacement exists');
+assert.match(dbSource, /'air_bomb_retarget'/, 'Air Bomb retarget telemetry must survive compact replay traces');
 assert.deepEqual(
   {
     turretL7Damage: DEFENSE_STATS.turret[7].damage,
@@ -867,19 +898,34 @@ for (let level = 1; level <= 6; level++) {
 }
 
 const buildingSystemProgression = read('scripts/building_system.gd');
+const serverTownHallUnlock = parseStringNumberDictionary(dbSource, 'const TH_UNLOCK');
+const serverTownHallCount = parseStringArrayDictionary(dbSource, 'const TH_MAX_COUNT');
+const serverTownHallLevel = parseStringArrayDictionary(dbSource, 'const TH_MAX_LEVEL');
+assert.equal(parseNumberConstant(dbSource, 'LIVE_TOWN_HALL_CAP'), 7);
+assert.equal(
+  parseNumberConstant(buildingSystemProgression, 'LIVE_TOWN_HALL_CAP'),
+  parseNumberConstant(dbSource, 'LIVE_TOWN_HALL_CAP'),
+  'live Town Hall cap diverged between Godot and server',
+);
+assert.match(dbSource, /flamethrower:\s*flamethrower\.BUILDING\.unlock_th/);
+assert.match(dbSource, /flamethrower:\s*flamethrower\.BUILDING\.max_count_by_th/);
+assert.match(dbSource, /flamethrower:\s*flamethrower\.BUILDING\.max_level_by_th/);
+serverTownHallUnlock.flamethrower = flamethrowerConfig.BUILDING.unlock_th;
+serverTownHallCount.flamethrower = [...flamethrowerConfig.BUILDING.max_count_by_th];
+serverTownHallLevel.flamethrower = [...flamethrowerConfig.BUILDING.max_level_by_th];
 assert.deepEqual(
   parseStringNumberDictionary(buildingSystemProgression, 'const TH_UNLOCK'),
-  parseStringNumberDictionary(dbSource, 'const TH_UNLOCK'),
+  serverTownHallUnlock,
   'Town Hall building unlock maps diverged',
 );
 assert.deepEqual(
   parseStringArrayDictionary(buildingSystemProgression, 'const TH_MAX_COUNT'),
-  parseStringArrayDictionary(dbSource, 'const TH_MAX_COUNT'),
+  serverTownHallCount,
   'Town Hall building count caps diverged',
 );
 assert.deepEqual(
   parseStringArrayDictionary(buildingSystemProgression, 'const TH_MAX_LEVEL'),
-  parseStringArrayDictionary(dbSource, 'const TH_MAX_LEVEL'),
+  serverTownHallLevel,
   'Town Hall building level caps diverged',
 );
 assert.deepEqual(
@@ -903,6 +949,6 @@ console.log(
   + ' summon=owner_bound,capped,expiring shark_trap=levels_1_to_7'
   + ' ship_slots=knight1,archer1,mage6,pea5,mimic8,mechanical5,demon6,ice11,fire11,wind_mage18,necromancer18,horror22'
   + ' tactical_constants=freeze,rage,skeleton_barrel'
-  + ' defenses=turret7,archer7,mage7,mortar7,harpoon8,cannon7,guards6'
+  + ' defenses=turret7,archer7,mage7,mortar7,harpoon8,air_bomb9,cannon7,guards6'
   + ' telemetry=chain,freeze,trap,wind_wave,summon,split progression=th7_cannon',
 );

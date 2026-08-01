@@ -1,0 +1,313 @@
+{
+	"date": "2026-08-02",
+	"errors": [],
+	"levels": [
+		{
+			"gameplay_forward": [
+				0.0,
+				0.0,
+				-1.0
+			],
+			"glb": "res://Model/Flamethrower/level_01/flamethrower_l01.glb",
+			"glb_sha256": "de25c763f19247f9e7a93e399f020ba484f4e4e7d4d33dfebbd9c910c0d2a585",
+			"level": 1,
+			"material": "res://Model/Flamethrower/level_01/flamethrower_l01_material.tres",
+			"mesh_instances": 1,
+			"metallic_mode": "texture",
+			"muzzle_position": [
+				-0.0303799994289875,
+				0.106299996376038,
+				-0.119000002741814
+			],
+			"normalized_min_y": 0.0000000023283064365387,
+			"normalized_size": [
+				0.360000014305115,
+				0.22989647090435,
+				0.357493966817856
+			],
+			"scale": 0.0624807476997375,
+			"surfaces": 1,
+			"triangles": 3256,
+			"wrapper": "res://Model/Flamethrower/level_01/FlamethrowerL01.tscn"
+		},
+		{
+			"gameplay_forward": [
+				0.0,
+				0.0,
+				-1.0
+			],
+			"glb": "res://Model/Flamethrower/level_02/flamethrower_l02.glb",
+			"glb_sha256": "682afe9a193054f2da3e8ebf8d32cf04e700f51cb8a1819748629e8ffe07fe6d",
+			"level": 2,
+			"material": "res://Model/Flamethrower/level_02/flamethrower_l02_material.tres",
+			"mesh_instances": 1,
+			"metallic_mode": "texture",
+			"muzzle_position": [
+				-0.0303799994289875,
+				0.106299996376038,
+				-0.142499998211861
+			],
+			"normalized_min_y": 0.0000000023283064365387,
+			"normalized_size": [
+				0.360000014305115,
+				0.22989647090435,
+				0.357493966817856
+			],
+			"scale": 0.0624807476997375,
+			"surfaces": 1,
+			"triangles": 2824,
+			"wrapper": "res://Model/Flamethrower/level_02/FlamethrowerL02.tscn"
+		},
+		{
+			"gameplay_forward": [
+				0.0,
+				0.0,
+				-1.0
+			],
+			"glb": "res://Model/Flamethrower/level_03/flamethrower_l03.glb",
+			"glb_sha256": "e03a2a942c9ded3229c84b2c50281a220e6b5448b4ec563e53f3094e482043e0",
+			"level": 3,
+			"material": "res://Model/Flamethrower/level_03/flamethrower_l03_material.tres",
+			"mesh_instances": 1,
+			"metallic_mode": "texture",
+			"muzzle_position": [
+				-0.029389999806881,
+				0.090659998357296,
+				-0.136700004339218
+			],
+			"normalized_min_y": 0.0,
+			"normalized_size": [
+				0.35999995470047,
+				0.210201308131218,
+				0.35999995470047
+			],
+			"scale": 0.0604026727378368,
+			"surfaces": 1,
+			"triangles": 2412,
+			"wrapper": "res://Model/Flamethrower/level_03/FlamethrowerL03.tscn"
+		},
+		{
+			"gameplay_forward": [
+				0.0,
+				0.0,
+				-1.0
+			],
+			"glb": "res://Model/Flamethrower/level_04/flamethrower_l04.glb",
+			"glb_sha256": "0346e434b904aac3e104f78ee319bd0956d235da2b4d7ea5b8a873009a9db26d",
+			"level": 4,
+			"material": "res://Model/Flamethrower/level_04/flamethrower_l04_material.tres",
+			"mesh_instances": 1,
+			"metallic_mode": "texture",
+			"muzzle_position": [
+				-0.00559000018984079,
+				0.0791999995708466,
+				-0.160300001502037
+			],
+			"normalized_min_y": 0.0,
+			"normalized_size": [
+				0.35999995470047,
+				0.201042488217354,
+				0.35999995470047
+			],
+			"scale": 0.0604026727378368,
+			"surfaces": 1,
+			"triangles": 2490,
+			"wrapper": "res://Model/Flamethrower/level_04/FlamethrowerL04.tscn"
+		},
+		{
+			"gameplay_forward": [
+				0.0,
+				0.0,
+				-1.0
+			],
+			"glb": "res://Model/Flamethrower/level_05/flamethrower_l05.glb",
+			"glb_sha256": "4ffcec2afde8f2b73258759cd4a43fec3ca7aebe9a1322902c3c3ecf0ed69b57",
+			"level": 5,
+			"material": "res://Model/Flamethrower/level_05/flamethrower_l05_material.tres",
+			"mesh_instances": 1,
+			"metallic_mode": "texture",
+			"muzzle_position": [
+				0.00106000003870577,
+				0.0837199985980988,
+				-0.160300001502037
+			],
+			"normalized_min_y": 0.0,
+			"normalized_size": [
+				0.359999984502792,
+				0.201042488217354,
+				0.359999984502792
+			],
+			"scale": 0.0604026727378368,
+			"surfaces": 1,
+			"triangles": 2714,
+			"wrapper": "res://Model/Flamethrower/level_05/FlamethrowerL05.tscn"
+		},
+		{
+			"gameplay_forward": [
+				0.0,
+				0.0,
+				-1.0
+			],
+			"glb": "res://Model/Flamethrower/level_06/flamethrower_l06.glb",
+			"glb_sha256": "013880852d63d08886858fa6f24c5c8b5891950640174dcb474f0e9e18d6a65c",
+			"level": 6,
+			"material": "res://Model/Flamethrower/level_06/flamethrower_l06_material.tres",
+			"mesh_instances": 1,
+			"metallic_mode": "scalar_0",
+			"muzzle_position": [
+				0.0,
+				0.0790200009942055,
+				-0.119999997317791
+			],
+			"normalized_min_y": 0.0,
+			"normalized_size": [
+				0.360000014305115,
+				0.183557361364365,
+				0.360000014305115
+			],
+			"scale": 0.0610169395804405,
+			"surfaces": 1,
+			"triangles": 4100,
+			"wrapper": "res://Model/Flamethrower/level_06/FlamethrowerL06.tscn"
+		},
+		{
+			"gameplay_forward": [
+				0.0,
+				0.0,
+				-1.0
+			],
+			"glb": "res://Model/Flamethrower/level_07/flamethrower_l07.glb",
+			"glb_sha256": "3dff7f7c26b25b44bd4e938246267b3701d5faae26064101dff5aa23ef80635c",
+			"level": 7,
+			"material": "res://Model/Flamethrower/level_07/flamethrower_l07_material.tres",
+			"mesh_instances": 1,
+			"metallic_mode": "scalar_0",
+			"muzzle_position": [
+				0.0,
+				0.0790200009942055,
+				-0.168999999761581
+			],
+			"normalized_min_y": 0.0,
+			"normalized_size": [
+				0.360000014305115,
+				0.183557361364365,
+				0.360000014305115
+			],
+			"scale": 0.0610169395804405,
+			"surfaces": 1,
+			"triangles": 4080,
+			"wrapper": "res://Model/Flamethrower/level_07/FlamethrowerL07.tscn"
+		},
+		{
+			"gameplay_forward": [
+				0.0,
+				0.0,
+				-1.0
+			],
+			"glb": "res://Model/Flamethrower/level_08/flamethrower_l08.glb",
+			"glb_sha256": "ff73ee883bb13806472ceb84cf6e36c43a9454849cf2b8de9ef308f7fab56667",
+			"level": 8,
+			"material": "res://Model/Flamethrower/level_08/flamethrower_l08_material.tres",
+			"mesh_instances": 1,
+			"metallic_mode": "scalar_0",
+			"muzzle_position": [
+				0.0,
+				0.0790200009942055,
+				-0.168999999761581
+			],
+			"normalized_min_y": 0.0,
+			"normalized_size": [
+				0.360000014305115,
+				0.184619069099426,
+				0.360000014305115
+			],
+			"scale": 0.0610169395804405,
+			"surfaces": 1,
+			"triangles": 4112,
+			"wrapper": "res://Model/Flamethrower/level_08/FlamethrowerL08.tscn"
+		},
+		{
+			"gameplay_forward": [
+				0.0,
+				0.0,
+				-1.0
+			],
+			"glb": "res://Model/Flamethrower/level_09/flamethrower_l09.glb",
+			"glb_sha256": "100be1b28c630844c134289a3f01eda1cf5604cf64251cc4c0d8ee72da71b3e2",
+			"level": 9,
+			"material": "res://Model/Flamethrower/level_09/flamethrower_l09_material.tres",
+			"mesh_instances": 1,
+			"metallic_mode": "scalar_0",
+			"muzzle_position": [
+				0.00249999994412065,
+				0.099200002849102,
+				-0.153999999165535
+			],
+			"normalized_min_y": 0.0,
+			"normalized_size": [
+				0.360000014305115,
+				0.202757254242897,
+				0.360000014305115
+			],
+			"scale": 0.0610169395804405,
+			"surfaces": 1,
+			"triangles": 3938,
+			"wrapper": "res://Model/Flamethrower/level_09/FlamethrowerL09.tscn"
+		},
+		{
+			"gameplay_forward": [
+				0.0,
+				0.0,
+				-1.0
+			],
+			"glb": "res://Model/Flamethrower/level_10/flamethrower_l10.glb",
+			"glb_sha256": "d5b868b73117817a149d99d4ed753812ca7d58cb57e1d9f6ba2943a34f3ebbd9",
+			"level": 10,
+			"material": "res://Model/Flamethrower/level_10/flamethrower_l10_material.tres",
+			"mesh_instances": 1,
+			"metallic_mode": "scalar_0",
+			"muzzle_position": [
+				0.00249999994412065,
+				0.099200002849102,
+				-0.153999999165535
+			],
+			"normalized_min_y": 0.0,
+			"normalized_size": [
+				0.360000014305115,
+				0.222946375608444,
+				0.360000014305115
+			],
+			"scale": 0.0610169395804405,
+			"surfaces": 1,
+			"triangles": 3850,
+			"wrapper": "res://Model/Flamethrower/level_10/FlamethrowerL10.tscn"
+		}
+	],
+	"performance": {
+		"draw_calls_per_instance": 1,
+		"maximum_triangles_per_instance": 4112,
+		"overdraw_layers": 1,
+		"particles": "none in asset wrappers",
+		"source_texture_count": 22,
+		"texture_import": "VRAM compressed with mipmaps",
+		"worst_case_all_textures_rgba8_with_mips_mib": 29.333
+	},
+	"requirements": {
+		"collision_physics_navigation": "none",
+		"gameplay_forward": [
+			0.0,
+			0.0,
+			-1.0
+		],
+		"level_02_shares_level_01_maps": true,
+		"levels_06_10_metallic": "scalar_0_no_texture",
+		"normalized_dominant_span": 0.36,
+		"texture_dimensions": [
+			512,
+			512
+		]
+	},
+	"status": "PASS",
+	"total_asset_files_scanned": 84,
+	"total_triangles": 33776
+}
