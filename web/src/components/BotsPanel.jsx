@@ -593,7 +593,7 @@ const mapHandleToBot = (
       credsPaused: rt.creds_paused === true,
       credsPauseReason: rt.creds_pause_reason || '',
       tradeSizeUsd: Number.isFinite(tradeSize) ? tradeSize : null,
-      leverage: 10,
+      leverage: 20,
     });
     lastAction = described.message;
   } else if (inBackoff) {
@@ -626,16 +626,32 @@ const mapHandleToBot = (
       lastAction = 'Bot runs but GRVT has 0 quotes — min ~$130/order; need margin + builder auth';
     } else if (exchangeKey === 'nado') {
       const avail = typeof bal?.available === 'number' ? bal.available : null;
-      const need = nadoMinDepositUsd(10);
+      const need = nadoMinDepositUsd(20);
       lastAction = avail != null && avail < need
         ? `Nado: 0 quotes — floor $${NADO_MIN_ORDER_USD}/order; free ≈$${avail.toFixed(2)} needs ≥~$${need} (venue min, not quota)`
         : `Nado: 0 quotes — Trade Size ≥$${NADO_MIN_ORDER_USD} and free margin ≥~$${need} (venue floor, not quota)`;
     } else if (exchangeKey === 'katana') {
       lastAction = 'Katana: 0 quotes — reconnect API key/secret + one-tap signer from Launch New Bot';
+    } else if (exchangeKey === 'decibel') {
+      const avail = typeof bal?.available === 'number' ? bal.available : null;
+      const why = normalizeOstiumErrorText(
+        rt.last_reject_reason
+        || backoffSymbols.map((s) => s.last_reject_reason).find(Boolean)
+        || '',
+      );
+      if (why) {
+        lastAction = `Decibel 0 quotes — ${shortenError(why, 140)}`;
+      } else if (avail != null && avail < 1) {
+        lastAction = `Decibel: free margin ≈$${avail.toFixed(2)} — deposit USDC (venue min ~$10/leg; bot raises lev up to 40×)`;
+      } else if (avail != null) {
+        lastAction = `Decibel: 0 quotes with free ≈$${avail.toFixed(2)} — check Trade Size ≥$10, open halt, or wait one cycle (bot may quote one side on micro deposit)`;
+      } else {
+        lastAction = 'Decibel: 0 quotes — Trade Size ≥$10, free USDC on trader wallet, lev up to 40×';
+      }
     } else if (balFmt.tone === 'warn') {
       lastAction = 'Bot runs but account balance is $0 — deposit margin before quoting';
     } else {
-      lastAction = `Bot runs but ${exchange} has 0 quotes — check margin (≥venue min×2), size, leverage`;
+      lastAction = `Bot runs but ${exchange} has 0 quotes — check margin, size, leverage`;
     }
   } else {
     lastAction = 'Worker spawned, waiting for first cycle';
@@ -2856,7 +2872,7 @@ function BotsPanel({ onClose }) {
     if (parsed.exchanges.some((ex) => ex.toLowerCase() === 'nado')) {
       const size = Number(tradeSize) || 0;
       const avail = selectedFreeMarginUsd;
-      const need = nadoMinDepositUsd(10);
+      const need = nadoMinDepositUsd(20);
       if (size > 0 && size < NADO_MIN_ORDER_USD) {
         setNotice(
           `Nado minimum order is $${NADO_MIN_ORDER_USD} notional (venue floor, not a quota). `
@@ -4109,7 +4125,7 @@ function BotsPanel({ onClose }) {
                 ? 'Pick Aggressive, set daily volume — we estimate deposit, leverage, and cost per $1M.'
                 : 'Calm: we size Trade Size / Max Position from your free margin. Default target $100k/day — if balance is too small we show the safe volume and deposit needed.'}
               {selectedExchangeId === 'nado'
-                ? ` Nado floor: $${NADO_MIN_ORDER_USD} notional per order (venue minimum — not an API quota). Dual-sided MM needs ~$${nadoMinDepositUsd(10)}+ free USDC at 10×.`
+                ? ` Nado floor: $${NADO_MIN_ORDER_USD} notional per order (venue minimum — not an API quota). Dual-sided MM needs ~$${nadoMinDepositUsd(20)}+ free USDC at up to 20×.`
                 : ''}
             </p>
           </div>
@@ -4238,7 +4254,7 @@ function BotsPanel({ onClose }) {
             {selectedExchangeId === 'nado' && (
               <p style={{ ...S.stepCopy, color: '#B45309', marginTop: 6 }}>
                 {(() => {
-                  const need = nadoMinDepositUsd(10);
+                  const need = nadoMinDepositUsd(20);
                   const sizeOk = Number(tradeSize) >= NADO_MIN_ORDER_USD;
                   const balOk = selectedFreeMarginUsd == null
                     || !Number.isFinite(selectedFreeMarginUsd)

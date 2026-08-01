@@ -27,15 +27,15 @@ export function normalizeNadoErrorText(raw) {
  * Approx free margin needed for dual-sided MM at venue min notional.
  * Mirror of calmVolumePlan depositForTradeSizeUsd(100) at planning leverage.
  */
-export function nadoMinDepositUsd(leverage = 10) {
-  const lev = Math.max(1, Number(leverage) || 10);
+export function nadoMinDepositUsd(leverage = 20) {
+  const lev = Math.max(1, Number(leverage) || 20);
   return Math.ceil((NADO_MIN_ORDER_USD * 2) / (0.85 * lev));
 }
 
 /**
  * Classify Nado bot failures into { code, title, hint, tone }.
  */
-export function classifyNadoIssue(rawError, { availableUsd = null, leverage = 10 } = {}) {
+export function classifyNadoIssue(rawError, { availableUsd = null, leverage = 20 } = {}) {
   const text = normalizeNadoErrorText(rawError);
   const lower = text.toLowerCase();
   const avail = availableUsd != null && Number.isFinite(Number(availableUsd))

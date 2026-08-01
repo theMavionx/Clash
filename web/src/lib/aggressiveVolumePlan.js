@@ -27,18 +27,42 @@ const MAKER_SHARE = 1 - TAKER_SHARE;
 /** Extra bps for inventory bleed / adverse selection on Aggressive. */
 const ADVERSE_BPS = 0.5;
 
-/** Per-venue fee + planning leverage (not venue max — safer MM defaults). */
+/** Per-venue fee + planning leverage. Runtime may raise toward maxLeverage. */
 const VENUE = {
-  decibel: { makerBps: 1, takerBps: 4, leverage: 10, maxLeverage: 10, sizeMax: AGGRESSIVE_ORDER_SIZE_ABS_MAX, rts: DECIBEL_ROUND_TRIPS_PER_DAY, leverageFixed: true },
+  // Bot MM cap 20× (venue 40×); raise-lev when deposit is tight.
+  decibel: { makerBps: 1, takerBps: 4, leverage: 10, maxLeverage: 20, sizeMax: AGGRESSIVE_ORDER_SIZE_ABS_MAX, rts: DECIBEL_ROUND_TRIPS_PER_DAY },
   ostium: { makerBps: 5, takerBps: 8, leverage: 10, maxLeverage: 50, sizeMax: AGGRESSIVE_ORDER_SIZE_ABS_MAX, rts: ROUND_TRIPS_PER_DAY },
   pacifica: { makerBps: 2, takerBps: 4, leverage: 10, maxLeverage: 50, sizeMax: AGGRESSIVE_ORDER_SIZE_ABS_MAX, rts: PACIFICA_ROUND_TRIPS_PER_DAY },
-  hyperliquid: { makerBps: -2, takerBps: 5, leverage: 5, maxLeverage: 50, sizeMax: AGGRESSIVE_ORDER_SIZE_ABS_MAX, rts: ROUND_TRIPS_PER_DAY },
-  grvt: { makerBps: -2, takerBps: 5, leverage: 5, maxLeverage: 50, sizeMax: AGGRESSIVE_ORDER_SIZE_ABS_MAX, rts: ROUND_TRIPS_PER_DAY },
+  hyperliquid: { makerBps: -2, takerBps: 5, leverage: 10, maxLeverage: 25, sizeMax: AGGRESSIVE_ORDER_SIZE_ABS_MAX, rts: ROUND_TRIPS_PER_DAY },
+  grvt: { makerBps: -2, takerBps: 5, leverage: 10, maxLeverage: 25, sizeMax: AGGRESSIVE_ORDER_SIZE_ABS_MAX, rts: ROUND_TRIPS_PER_DAY },
   // Live 2026-07: Nado gateway min_size ≈ $100 notional.
-  nado: { makerBps: 1, takerBps: 3, leverage: 10, maxLeverage: 50, sizeMax: AGGRESSIVE_ORDER_SIZE_ABS_MAX, rts: ROUND_TRIPS_PER_DAY, minOrderUsd: 100 },
+  nado: { makerBps: 1, takerBps: 3, leverage: 10, maxLeverage: 20, sizeMax: AGGRESSIVE_ORDER_SIZE_ABS_MAX, rts: ROUND_TRIPS_PER_DAY, minOrderUsd: 100 },
+  risex: { makerBps: 2, takerBps: 5, leverage: 10, maxLeverage: 25, sizeMax: AGGRESSIVE_ORDER_SIZE_ABS_MAX, rts: ROUND_TRIPS_PER_DAY },
   avantis: { makerBps: 3, takerBps: 6, leverage: 10, maxLeverage: 50, sizeMax: AGGRESSIVE_ORDER_SIZE_ABS_MAX, rts: ROUND_TRIPS_PER_DAY },
-  default: { makerBps: 2, takerBps: 5, leverage: 10, maxLeverage: 50, sizeMax: AGGRESSIVE_ORDER_SIZE_ABS_MAX, rts: ROUND_TRIPS_PER_DAY },
+  default: { makerBps: 2, takerBps: 5, leverage: 10, maxLeverage: 20, sizeMax: AGGRESSIVE_ORDER_SIZE_ABS_MAX, rts: ROUND_TRIPS_PER_DAY },
 };
+
+/** Dual-leg max notional per side: available × lev × 0.85 / 2 */
+export function dualLegMaxNotionalUsd(availableUsd, leverage) {
+  const avail = Math.max(0, Number(availableUsd) || 0);
+  const lev = Math.max(1, Number(leverage) || 1);
+  return (avail * lev * 0.85) / 2;
+}
+
+/**
+ * Raise leverage so dual-leg target fits free margin (mirrors Rust leverage_for_dual_leg).
+ */
+export function leverageForDualLeg(availableUsd, requestedLegUsd, minLegUsd, requestedLev, maxLev) {
+  const avail = Math.max(0, Number(availableUsd) || 0);
+  const maxL = Math.max(1, Math.floor(Number(maxLev) || 1));
+  const req = Math.min(maxL, Math.max(1, Math.floor(Number(requestedLev) || 1)));
+  if (avail <= 0) return req;
+  const target = Math.max(0, Number(requestedLegUsd) || 0, Number(minLegUsd) || 0);
+  if (target <= 0) return req;
+  if (dualLegMaxNotionalUsd(avail, req) + 0.0001 >= target) return req;
+  const need = Math.ceil((2 * target) / (avail * 0.85));
+  return Math.min(maxL, Math.max(req, need));
+}
 
 export const AGGRESSIVE_VOLUME_SLIDER = {
   min: 25_000,
@@ -131,10 +155,13 @@ export function planAggressiveVolume({
   const minOrder = Math.max(5, Number(v.minOrderUsd) || 5);
   tradeSize = snap(tradeSize, minOrder, sizeMax, 5);
 
-  // Dual-leg: available × lev × 0.85 / 2
+  // Raise leverage toward max before shrinking size (small deposits).
   const avail = Math.max(0, Number(availableUsd) || 0);
+  let leverage = Math.max(1, v.leverage || 10);
+  const maxLev = Math.max(leverage, v.maxLeverage || leverage);
   if (avail > 0) {
-    const maxLeg = (avail * (v.leverage || 10) * 0.85) / 2;
+    leverage = leverageForDualLeg(avail, tradeSize, minOrder, leverage, maxLev);
+    const maxLeg = dualLegMaxNotionalUsd(avail, leverage);
     if (maxLeg < minOrder) {
       tradeSize = 0;
     } else if (tradeSize > maxLeg) {
@@ -144,16 +171,17 @@ export function planAggressiveVolume({
 
   if (tradeSize <= 0) {
     const { costPer1M, feeBps, adverseBps } = estimateCostPer1M(exchangeId);
+    const depositLev = leverageForDualLeg(avail || 1, minOrder, minOrder, v.leverage || 10, maxLev);
     return {
       dailyVolumeUsd: target,
       roundTripsPerDay: rts,
       tradeSizeUsd: 0,
       maxPositionUsd: 0,
-      avgLeverage: v.leverage,
-      maxLeverage: v.maxLeverage,
-      leverageFixed: !!v.leverageFixed,
+      avgLeverage: depositLev,
+      maxLeverage: maxLev,
+      leverageFixed: false,
       availableUsd: avail > 0 ? avail : null,
-      depositUsd: Math.ceil((2 * minOrder) / (0.85 * (v.leverage || 10))),
+      depositUsd: Math.ceil((2 * minOrder) / (0.85 * depositLev)),
       quoteMarginUsd: 0,
       inventoryMarginUsd: 0,
       costPer1MUsd: costPer1M,
@@ -175,7 +203,6 @@ export function planAggressiveVolume({
     maxPosition = snap(tradeSize * 2, 50, invCeil, 50);
   }
 
-  const leverage = v.leverage;
   const quoteMarginUsd = (2 * tradeSize) / leverage;
   const inventoryMarginUsd = maxPosition / leverage;
   const depositUsd = Math.ceil(Math.max(quoteMarginUsd, inventoryMarginUsd) * SAFETY_BUFFER);
@@ -192,8 +219,8 @@ export function planAggressiveVolume({
     tradeSizeUsd: tradeSize,
     maxPositionUsd: maxPosition,
     avgLeverage: leverage,
-    maxLeverage: v.maxLeverage,
-    leverageFixed: !!v.leverageFixed,
+    maxLeverage: maxLev,
+    leverageFixed: false,
     availableUsd: avail > 0 ? avail : null,
     depositUsd,
     quoteMarginUsd,
