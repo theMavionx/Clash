@@ -72,6 +72,25 @@ try {
   assert.equal(unshieldedPreferred.matchmaking.shield_fallback_used, false);
   assert.equal(unshieldedPreferred.matchmaking.unshielded_candidate_count, 1);
 
+  game.db.prepare(`
+    UPDATE battle_sessions
+       SET status = 'cancelled'
+     WHERE id = ?
+  `).run(unshieldedPreferred.battle_session_id);
+  const exhaustedDistinctPool = game.findRankedEnemy('attacker', tournamentId);
+  assert.match(
+    exhaustedDistinctPool.error,
+    /No global player base at Town Hall 7/i,
+    'ranked matchmaking must not repeat either TH7 defender within the same UTC day',
+  );
+  const matchedDefenders = game.db.prepare(`
+    SELECT DISTINCT defender_id
+      FROM tournament_ranked_raids
+     WHERE tournament_id = ? AND attacker_id = 'attacker'
+     ORDER BY defender_id
+  `).all(tournamentId).map((row) => row.defender_id);
+  assert.deepEqual(matchedDefenders, ['same-shielded', 'same-unshielded']);
+
   console.log('ranked global exact-TH matchmaking tests: PASS');
 } finally {
   game.db.close();
