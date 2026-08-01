@@ -13,7 +13,7 @@ const BUILDING_DEFS = {
   turret: { size: [2, 2], hp_levels: [5000, 5000, 5000, 5000, 5000, 5000] },
   archer_tower: { size: [2, 2], hp_levels: [5000, 5000, 5000, 5000, 5000, 5000] },
   tombstone: { size: [2, 2], hp_levels: [5000, 5000, 5000, 5000, 5000, 5000] },
-  harpoon: { size: [2, 2], hp_levels: [5200, 7200] },
+  harpoon: { size: [2, 2], hp_levels: [7200, 10000] },
 };
 
 function loadVerifierWithoutDb() {

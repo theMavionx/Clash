@@ -5786,17 +5786,6 @@ function getBuildingMaxLevelForTownHall(type, townHallLevel) {
   return Math.max(1, Math.min(defMax, Number(levels[index]) || 1));
 }
 
-// Required building families to upgrade Town Hall. Each family must have at
-// least one building at the maximum level reachable before the upgrade.
-const TH_UPGRADE_REQUIRES = {
-  1: ['mine', 'sawmill', 'barn'],
-  2: ['mine', 'sawmill', 'barn', 'storage', 'tombstone', 'archer_tower'],
-  3: ['mine', 'sawmill', 'barn', 'storage', 'tombstone', 'archer_tower', 'turret'],
-  4: ['mine', 'sawmill', 'barn', 'storage', 'tombstone', 'archer_tower', 'turret', 'mage_tower'],
-  5: ['mine', 'sawmill', 'barn', 'storage', 'tombstone', 'archer_tower', 'turret', 'mage_tower', 'mortar', 'shark_trap'],
-  6: ['mine', 'sawmill', 'barn', 'storage', 'tombstone', 'archer_tower', 'turret', 'mage_tower', 'mortar', 'shark_trap'],
-};
-
 const BUILDING_DEFS = {
   town_hall: {
     size: [4, 4], max_level: 7,
@@ -5898,7 +5887,7 @@ const BUILDING_DEFS = {
   },
   harpoon: {
     size: [2, 2], max_level: 8,
-    hp_levels: [1800, 2300, 2900, 3600, 4400, 5200, 7200, 8800],
+    hp_levels: [1800, 2400, 3200, 4300, 5600, 7200, 10000, 12000],
     cost: { gold: 12000, wood: 22000, ore: 18000 },
     upgrade_cost: {
       2: { gold: 20000, wood: 42000, ore: 35000 },
@@ -5935,6 +5924,74 @@ const BUILDING_DEFS = {
     max_count: 2,
   },
 };
+
+// Town Hall readiness is derived from the same count/level tables that govern
+// placement and upgrades. This keeps newly introduced buildings (for example
+// Harpoon at TH6) in the gate automatically and prevents a single maxed copy
+// from satisfying a multi-building family. Optional paid buildings must never
+// block the core progression path.
+function getTownHallUpgradeRequirements(townHallLevel) {
+  const maxTownHallLevel = Math.max(1, Number(BUILDING_DEFS.town_hall?.max_level) || 1);
+  const thLevel = Math.max(1, Math.min(maxTownHallLevel, Math.trunc(Number(townHallLevel) || 1)));
+  const requirements = [];
+  for (const [type, limits] of Object.entries(TH_MAX_COUNT)) {
+    const def = BUILDING_DEFS[type];
+    if (type === 'town_hall' || !def || def.requires_purchase || !Array.isArray(limits)) continue;
+    const index = Math.max(0, Math.min(limits.length - 1, thLevel - 1));
+    const count = Math.max(0, Math.trunc(Number(limits[index]) || 0));
+    if (count <= 0) continue;
+    requirements.push({
+      type,
+      count,
+      level: getBuildingMaxLevelForTownHall(type, thLevel),
+    });
+  }
+  return requirements;
+}
+
+const TH_UPGRADE_REQUIRES = Object.freeze(Object.fromEntries(
+  Array.from(
+    { length: Math.max(0, Number(BUILDING_DEFS.town_hall.max_level) - 1) },
+    (_, index) => {
+      const townHallLevel = index + 1;
+      return [
+        townHallLevel,
+        Object.freeze(getTownHallUpgradeRequirements(townHallLevel).map((requirement) => requirement.type)),
+      ];
+    },
+  ),
+));
+
+function getTownHallUpgradeBlockers(playerId, townHallLevel, buildings = null) {
+  const allBuildings = Array.isArray(buildings) ? buildings : stmts.getBuildings.all(playerId);
+  const blockers = [];
+  for (const requirement of getTownHallUpgradeRequirements(townHallLevel)) {
+    const matching = allBuildings.filter((building) => building.type === requirement.type);
+    const maxedCount = matching.filter(
+      (building) => Number(building.level) >= requirement.level,
+    ).length;
+    if (maxedCount >= requirement.count) continue;
+    blockers.push({
+      ...requirement,
+      owned_count: Math.min(requirement.count, matching.length),
+      maxed_count: Math.min(requirement.count, maxedCount),
+      missing_count: Math.max(0, requirement.count - matching.length),
+      underleveled_count: Math.max(0, Math.min(requirement.count, matching.length) - maxedCount),
+    });
+  }
+  return blockers;
+}
+
+function formatTownHallUpgradeBlockers(blockers) {
+  return blockers.map((blocker) => {
+    const label = String(blocker.type || '')
+      .split('_')
+      .filter(Boolean)
+      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(' ');
+    return `${label} ${blocker.maxed_count}/${blocker.count} at Lv${blocker.level}`;
+  }).join(', ');
+}
 
 const BUILDING_UPGRADE_COST_MULTIPLIERS = {
   2: 2,
@@ -8672,18 +8729,17 @@ function upgradeBuilding(playerId, buildingId) {
   const nextLevel = building.level + 1;
   const thLevel = getTownHallLevel(playerId);
 
-  // Town Hall upgrade — check required buildings up to their own cap.
+  // Town Hall upgrade — require every available slot at the current tier cap.
   if (building.type === 'town_hall') {
-    const required = TH_UPGRADE_REQUIRES[building.level];
-    if (required) {
-      const allBuildings = stmts.getBuildings.all(playerId);
-      for (const reqType of required) {
-        const requiredLevel = getBuildingMaxLevelForTownHall(reqType, building.level);
-        const found = allBuildings.find(b => b.type === reqType && b.level >= requiredLevel);
-        if (!found) {
-          return { error: `Upgrade all ${reqType} to level ${requiredLevel} first` };
-        }
-      }
+    const blockers = getTownHallUpgradeBlockers(playerId, building.level);
+    if (blockers.length > 0) {
+      return {
+        error: `Max all current Town Hall buildings first: ${formatTownHallUpgradeBlockers(blockers)}`,
+        code: 'TOWN_HALL_BUILDINGS_NOT_MAXED',
+        current_town_hall_level: building.level,
+        target_town_hall_level: nextLevel,
+        blockers,
+      };
     }
   } else {
     const maxLevelForTownHall = getBuildingMaxLevelForTownHall(building.type, thLevel);
@@ -9857,14 +9913,12 @@ function getBaseStrength(playerId) {
   for (const b of buildings) {
     if (b.type === 'town_hall') { thLevel = b.level; break; }
   }
-  // Count building slots filled and leveled (same logic as client progress bar)
+  // Count building slots filled and leveled (same source as the client gate).
   let total = 0, done = 0;
-  for (const type in TH_MAX_COUNT) {
-    if (type === 'town_hall') continue;
-    const limits = TH_MAX_COUNT[type];
-    const maxAtTh = limits[Math.min(thLevel - 1, limits.length - 1)] || 0;
-    if (maxAtTh <= 0) continue;
-    const maxLevelForType = getBuildingMaxLevelForTownHall(type, thLevel);
+  for (const requirement of getTownHallUpgradeRequirements(thLevel)) {
+    const type = requirement.type;
+    const maxAtTh = requirement.count;
+    const maxLevelForType = requirement.level;
     for (let s = 0; s < maxAtTh; s++) {
       for (let l = 1; l <= maxLevelForType; l++) total++;
     }
@@ -10159,10 +10213,13 @@ function findRankedEnemy(playerId, tournamentId) {
     }
 
     const attackPower = computeAttackPower(playerId);
-    const candidates = rankedRaids.listEligibleDefenders(db, tournament, playerId, dayUtc);
+    const candidates = rankedRaids.listEligibleDefenders(db, tournament, playerId, {
+      dayUtc,
+      townHallLevel: attackPower.town_hall_level,
+    });
     if (!candidates.length) {
       return {
-        error: 'No ranked opponents are available right now. Their tournament shields or daily defense limits may still be active.',
+        error: `No global player base at Town Hall ${attackPower.town_hall_level} is available right now.`,
         ranked_tournament: {
           id: tid,
           tournament_id: tid,
@@ -10172,19 +10229,35 @@ function findRankedEnemy(playerId, tournamentId) {
       };
     }
 
-    const attackerScore = Number(participant.trophies || 0);
+    const nowSql = sqliteDateFromMs(Date.now());
     const rankedCandidates = candidates
-      .map((candidate) => ({
-        ...candidate,
-        ranked_match_score:
-          Math.abs(Number(candidate.tournament_trophies || 0) - attackerScore)
-          + Math.abs(Number(candidate.town_hall_level || 1) - Number(attackPower.town_hall_level || 1)) * 40
-          + Number(candidate.ranked_defenses_today || 0) * 5
-          + Math.random() * 8,
-      }))
+      .map((candidate) => {
+        const basePower = computeBasePower(candidate.id);
+        const basePowerRatio = basePower.power / Math.max(1, attackPower.power);
+        return {
+          ...candidate,
+          candidate_base_power: basePower.power,
+          candidate_base_power_ratio: basePowerRatio,
+          ranked_shield_active: !!candidate.ranked_shield_until
+            && String(candidate.ranked_shield_until) > nowSql,
+          global_shield_active: !!candidate.shield_until
+            && String(candidate.shield_until) > nowSql,
+          ranked_match_score:
+            Math.abs(basePowerRatio - MATCHMAKING_CONFIG.normalRatio.target) * 100
+            + Math.abs(Number(candidate.trophies || 0) - Number(player.trophies || 0)) * 0.01
+            + Number(candidate.ranked_defenses_today || 0) * 5
+            + Math.random() * 8,
+        };
+      })
       .sort((a, b) => a.ranked_match_score - b.ranked_match_score);
-    const pool = rankedCandidates.slice(0, Math.min(4, rankedCandidates.length));
-    const best = pool[Math.floor(Math.random() * pool.length)] || rankedCandidates[0];
+    const unshieldedCandidates = rankedCandidates.filter((candidate) => (
+      !candidate.ranked_shield_active && !candidate.global_shield_active
+    ));
+    const selectableCandidates = unshieldedCandidates.length > 0
+      ? unshieldedCandidates
+      : rankedCandidates;
+    const pool = selectableCandidates.slice(0, Math.min(4, selectableCandidates.length));
+    const best = pool[Math.floor(Math.random() * pool.length)] || selectableCandidates[0];
 
     repairAllBuildings(best.id);
     const buildings = getPlayerBuildings(best.id);
@@ -10242,17 +10315,19 @@ function findRankedEnemy(playerId, tournamentId) {
     return {
       id: best.id,
       name: best.name,
-      trophies: Number(best.tournament_trophies || 0),
+      trophies: Number(best.trophies || 0),
       level: best.level,
       town_hall_level: repairedBase.town_hall_level,
       is_bot: 0,
       matchmaking: {
         target_is_bot: false,
-        selection_reason: 'ranked_tournament_score_and_town_hall',
+        selection_reason: 'ranked_global_exact_town_hall',
         attack_power: attackPower.power,
         base_power: repairedBase.power,
         base_power_ratio: Number((repairedBase.power / Math.max(1, attackPower.power)).toFixed(4)),
         live_candidate_count: candidates.length,
+        unshielded_candidate_count: unshieldedCandidates.length,
+        shield_fallback_used: unshieldedCandidates.length === 0,
       },
       buildings,
       resources,
@@ -10273,6 +10348,7 @@ function findRankedEnemy(playerId, tournamentId) {
         shield_hours: config.shield_hours,
         max_defenses_per_day: config.max_defenses_per_day,
         altar_bonus_enabled: config.altar_bonus_enabled,
+        defender_is_participant: Number(best.is_tournament_participant || 0) === 1,
       },
       grid_config: CANONICAL_GRID_CONFIG,
       grid_configs: CANONICAL_GRID_CONFIGS,
@@ -12587,6 +12663,8 @@ module.exports = {
   TH_BASE_CAPACITY,
   STORAGE_CAPACITY,
   getBuildingMaxLevelForTownHall,
+  getTownHallUpgradeRequirements,
+  getTownHallUpgradeBlockers,
   GRID_SPECS,
   TROOP_DEFS,
   DISABLED_TROOP_TYPES,

@@ -1,6 +1,6 @@
 # Economy Balance Design Document
 
-**Version:** 2.2
+**Version:** 2.4
 **Author:** economy-designer
 **Date:** 2026-07-29
 **Status:** Synced to implementation (`server/db.js`, `server/routes.js`)
@@ -29,6 +29,13 @@
 > levels. It unlocks at TH5 with a cap of L5, then reaches L6 at TH6 and L7 at
 > TH7. Levels 5-7 use the authored level-4 model until additional visual variants
 > are supplied; this does not affect authoritative combat values.
+
+> **v2.4 complete-village gate:** A Town Hall can advance only when every normal
+> building slot available at the current Town Hall exists and has reached that
+> tier's `TH_MAX_LEVEL`. Required counts and levels are derived from
+> `TH_MAX_COUNT` and `TH_MAX_LEVEL`; a single maxed copy no longer satisfies a
+> multi-building family. Optional on-chain purchases such as Altar never block
+> core Town Hall progression, and the retired Port is not part of the gate.
 
 ### Town Hall 6 Progression
 
@@ -376,7 +383,7 @@ stop producing until collected.
 | Raiding | `battleVictory()` in db.js | `LOOT_PERCENT = 0.15` |
 | Building costs | `BUILDING_DEFS` in db.js | `upgradeBuilding()` uses `base * level` |
 | Troop costs | `TROOP_DEFS` in db.js | `upgradeTroop()` uses `cost[currentLevel - 1]` |
-| TH upgrade requirements | `TH_UPGRADE_REQUIRES` in db.js | Prereq buildings, see 7.5 |
+| TH upgrade requirements | `getTownHallUpgradeRequirements()` in db.js | Complete-village count and level gate, see 7.5 |
 | Ship purchase | `SHIP_COST_GOLD = 500` in `bs_port.gd` / `building_system.gd` | Per-port |
 
 ---
@@ -444,13 +451,11 @@ SHIP_COST_GOLD    = 500;  // (GDScript: bs_port.gd / building_system.gd)
 
 ### 7.5 Town Hall Gating (`db.js`)
 
-```javascript
-TH_UNLOCK          = { storage: 2, tombstone: 2, turret: 3 };
-TH_UPGRADE_REQUIRES = {
-  1: ['mine', 'sawmill', 'barn', 'port'],
-  2: ['mine', 'sawmill', 'barn', 'port', 'storage', 'tombstone', 'archer_tower'],
-};
-```
+`getTownHallUpgradeRequirements(townHallLevel)` derives each requirement from
+`TH_MAX_COUNT` and `TH_MAX_LEVEL`. For every non-premium type with a positive
+count at the current tier, all permitted slots must be built and each must be at
+the current Town Hall's level cap. `upgradeBuilding()` is the authoritative gate
+and returns structured `TOWN_HALL_BUILDINGS_NOT_MAXED` blockers for the client.
 
 ### 7.6 Sensitivity Table
 
@@ -522,7 +527,8 @@ the original target, apply the Section 7.6 gold-income lever.
 
 7. **Storage gate is discoverable:** Players approaching TH3 without sufficient capacity
    must receive a clear cap error, guiding them to build Storage. Enforced by
-   `getResourceCaps()` and the `TH_UPGRADE_REQUIRES` check in `upgradeBuilding()`.
+   `getResourceCaps()` and the structured `getTownHallUpgradeBlockers()` check in
+   `upgradeBuilding()`.
 
 ---
 

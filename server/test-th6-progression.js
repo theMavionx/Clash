@@ -34,6 +34,33 @@ function insertBuilding(playerId, type, level, gridX, gridZ) {
   return Number(info.lastInsertRowid);
 }
 
+function completeTownHallRequirements(playerId, townHallLevel) {
+  let nextCoordinate = 100;
+  for (const requirement of gameDb.getTownHallUpgradeRequirements(townHallLevel)) {
+    const rows = gameDb.db.prepare(`
+      SELECT id FROM buildings
+      WHERE player_id = ? AND type = ?
+      ORDER BY id
+    `).all(playerId, requirement.type);
+    const hp = gameDb.BUILDING_DEFS[requirement.type].hp_levels[requirement.level - 1];
+    for (const row of rows.slice(0, requirement.count)) {
+      gameDb.db.prepare(
+        'UPDATE buildings SET level = ?, hp = ?, max_hp = ? WHERE id = ?',
+      ).run(requirement.level, hp, hp, row.id);
+    }
+    for (let index = rows.length; index < requirement.count; index++) {
+      insertBuilding(
+        playerId,
+        requirement.type,
+        requirement.level,
+        nextCoordinate,
+        nextCoordinate,
+      );
+      nextCoordinate += 1;
+    }
+  }
+}
+
 try {
   const expectedTh6Levels = {
     town_hall: 6,
@@ -62,13 +89,13 @@ try {
     'mine',
     'sawmill',
     'barn',
-    'storage',
-    'tombstone',
     'archer_tower',
+    'tombstone',
     'turret',
+    'shark_trap',
+    'storage',
     'mage_tower',
     'mortar',
-    'shark_trap',
   ]);
   assert.deepEqual(gameDb.getBuildingUpgradeCost('mine', 5), { gold: 5940, wood: 14850, ore: 0 });
   assert.deepEqual(gameDb.getBuildingUpgradeCost('mortar', 5), { gold: 68000, wood: 96000, ore: 82000 });
@@ -79,7 +106,7 @@ try {
   assert.deepEqual(gameDb.BUILDING_DEFS.harpoon, {
     size: [2, 2],
     max_level: 8,
-    hp_levels: [1800, 2300, 2900, 3600, 4400, 5200, 7200, 8800],
+    hp_levels: [1800, 2400, 3200, 4300, 5600, 7200, 10000, 12000],
     cost: { gold: 12000, wood: 22000, ore: 18000 },
     upgrade_cost: {
       2: { gold: 20000, wood: 42000, ore: 35000 },
@@ -132,6 +159,7 @@ try {
   assert.match(gameDb.upgradeBuilding(playerId, tombstoneId).error, /Town Hall to level 6/);
   assert.match(gameDb.upgradeBuilding(playerId, mineId).error, /Town Hall to level 6/);
 
+  completeTownHallRequirements(playerId, 5);
   const townHallUpgrade = gameDb.upgradeBuilding(playerId, townHallId);
   assert.equal(townHallUpgrade.level, 6);
   assert.equal(townHallUpgrade.hp, 52000);
@@ -141,9 +169,9 @@ try {
   assert.equal(gameDb.upgradeBuilding(playerId, mineId).level, 6);
   assert.equal(gameDb.upgradeBuilding(playerId, storageId).level, 6);
   assert.deepEqual(gameDb.getResourceCaps(playerId), {
-    gold: 52000,
-    wood: 52000,
-    ore: 52000,
+    gold: 90000,
+    wood: 90000,
+    ore: 90000,
   });
 
   const secondMortar = gameDb.placeBuilding(playerId, 'mortar', 22, 6);
@@ -151,8 +179,7 @@ try {
   assert.match(gameDb.placeBuilding(playerId, 'mortar', 22, 11).error, /Maximum 2 mortar/);
 
   assert.equal(gameDb.placeBuilding(playerId, 'shark_trap', 18, 11).type, 'shark_trap');
-  assert.equal(gameDb.placeBuilding(playerId, 'shark_trap', 21, 11).type, 'shark_trap');
-  assert.match(gameDb.placeBuilding(playerId, 'shark_trap', 24, 11).error, /Maximum 3 shark_trap/);
+  assert.match(gameDb.placeBuilding(playerId, 'shark_trap', 21, 11).error, /Maximum 3 shark_trap/);
 
   const resourcesBeforeHarpoon = gameDb.db.prepare(
     'SELECT gold, wood, ore FROM players WHERE id = ?',

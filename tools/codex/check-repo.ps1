@@ -23,6 +23,10 @@ $NodeFiles = @(
     "server/test-battle-result-idempotency.js",
     "server/test-battle-casualty-http.js",
     "server/test-player-ship-migration.js",
+    "server/test-town-hall-complete-village-gate.js",
+    "server/ranked_raid_tournaments.js",
+    "server/test-ranked-raid-tournaments.js",
+    "server/test-ranked-global-matchmaking.js",
     "server/test-client-server-combat-parity.js",
     "server/hermes_jobs.js",
     "server/hermes_jobs_worker.js",
@@ -52,6 +56,9 @@ Invoke-Step "casualty report regression" { node server/test-casualty-report.js }
 Invoke-Step "battle result idempotency regression" { node server/test-battle-result-idempotency.js }
 Invoke-Step "battle casualty HTTP regression" { node server/test-battle-casualty-http.js }
 Invoke-Step "player ship migration regression" { node server/test-player-ship-migration.js }
+Invoke-Step "Town Hall complete-village gate" { node server/test-town-hall-complete-village-gate.js }
+Invoke-Step "ranked raid tournament rules" { node server/test-ranked-raid-tournaments.js }
+Invoke-Step "ranked global exact-TH matchmaking" { node server/test-ranked-global-matchmaking.js }
 Invoke-Step "client/server combat parity" { node server/test-client-server-combat-parity.js }
 Invoke-Step "shared Aptos API client" { node server/test-aptos-api.js }
 Invoke-Step "Aptos server key pool" { node server-futures/test-aptos-key-pool.js }

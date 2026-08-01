@@ -19,37 +19,37 @@ const LEVEL_STATS: Dictionary = {
 	},
 	3: {
 		"damage": 65,
-		"detect_range": 1.34,
+		"detect_range": 1.45,
 		"pull_speed": 0.99,
 		"pull_duration_ticks": 48,
 	},
 	4: {
 		"damage": 75,
-		"detect_range": 1.41,
+		"detect_range": 1.64,
 		"pull_speed": 1.06,
 		"pull_duration_ticks": 48,
 	},
 	5: {
 		"damage": 88,
-		"detect_range": 1.48,
+		"detect_range": 1.82,
 		"pull_speed": 1.13,
 		"pull_duration_ticks": 48,
 	},
 	6: {
 		"damage": 100,
-		"detect_range": 1.55,
+		"detect_range": 1.95,
 		"pull_speed": 1.20,
 		"pull_duration_ticks": 48,
 	},
 	7: {
 		"damage": 140,
-		"detect_range": 1.70,
+		"detect_range": 2.08,
 		"pull_speed": 1.40,
 		"pull_duration_ticks": 48,
 	},
 	8: {
 		"damage": 165,
-		"detect_range": 1.78,
+		"detect_range": 2.20,
 		"pull_speed": 1.48,
 		"pull_duration_ticks": 48,
 	},
@@ -93,7 +93,7 @@ enum HarpoonState {
 	DISABLED,
 }
 
-@export var detect_range: float = 1.55
+@export var detect_range: float = 1.95
 
 var level: int = 1
 var damage: int = 100

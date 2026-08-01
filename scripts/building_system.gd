@@ -346,9 +346,9 @@ var building_defs: Dictionary = {
 		"height": 0.50,
 		"scene": "res://Model/Harpoon/HarpoonDefense.tscn",
 		"model_scale": 0.0625,
-		"hp_levels": [1800, 2300, 2900, 3600, 4400, 5200, 7200, 8800],
+		"hp_levels": [1800, 2400, 3200, 4300, 5600, 7200, 10000, 12000],
 		"damage_levels": [45, 55, 65, 75, 88, 100, 140, 165],
-		"range_levels": [1.20, 1.27, 1.34, 1.41, 1.48, 1.55, 1.70, 1.78],
+		"range_levels": [1.20, 1.27, 1.45, 1.64, 1.82, 1.95, 2.08, 2.20],
 		"pull_speed_levels": [0.85, 0.92, 0.99, 1.06, 1.13, 1.20, 1.40, 1.48],
 		"reload_sec": 7.00,
 		"pull_duration_sec": 0.80,
@@ -542,15 +542,6 @@ const TH_MAX_LEVEL: Dictionary = {
 	"altar": [1, 1, 1, 1, 1, 1, 1],
 }
 
-const TH_UPGRADE_REQUIRES: Dictionary = {
-	1: ["mine", "sawmill", "barn"],
-	2: ["mine", "sawmill", "barn", "storage", "tombstone", "archer_tower"],
-	3: ["mine", "sawmill", "barn", "storage", "tombstone", "archer_tower", "turret"],
-	4: ["mine", "sawmill", "barn", "storage", "tombstone", "archer_tower", "turret", "mage_tower"],
-	5: ["mine", "sawmill", "barn", "storage", "tombstone", "archer_tower", "turret", "mage_tower", "mortar", "shark_trap"],
-	6: ["mine", "sawmill", "barn", "storage", "tombstone", "archer_tower", "turret", "mage_tower", "mortar", "shark_trap"],
-}
-
 func _get_building_max_level_for_th(building_id: String, th_level: int) -> int:
 	var def: Dictionary = building_defs.get(building_id, {})
 	var hp_levels: Array = def.get("hp_levels", [])
@@ -560,6 +551,32 @@ func _get_building_max_level_for_th(building_id: String, th_level: int) -> int:
 		return mini(definition_max, maxi(1, th_level))
 	var index: int = clampi(th_level - 1, 0, levels.size() - 1)
 	return clampi(int(levels[index]), 1, definition_max)
+
+
+func _get_th_upgrade_requirements(th_level: int) -> Array:
+	## Derive the gate from the same tables used for placement and level caps.
+	## Optional paid buildings are intentionally excluded from core progression.
+	var requirements: Array = []
+	for building_id_value in TH_MAX_COUNT:
+		var building_id: String = str(building_id_value)
+		if building_id == "town_hall" or not building_defs.has(building_id):
+			continue
+		var def: Dictionary = building_defs.get(building_id, {})
+		if bool(def.get("requires_purchase", false)):
+			continue
+		var limits: Array = TH_MAX_COUNT.get(building_id, [])
+		if limits.is_empty():
+			continue
+		var index: int = clampi(th_level - 1, 0, limits.size() - 1)
+		var required_count: int = maxi(0, int(limits[index]))
+		if required_count <= 0:
+			continue
+		requirements.append({
+			"type": building_id,
+			"count": required_count,
+			"level": _get_building_max_level_for_th(building_id, th_level),
+		})
+	return requirements
 
 func _get_th_level() -> int:
 	for bs in _building_systems:
@@ -625,25 +642,46 @@ func _has_required_purchase(building_id: String) -> bool:
 	return bool(shop_unlocks.get(building_id, false)) or bool(shop_unlocks.get(sku, false))
 
 func _can_upgrade_th() -> Dictionary:
-	## Returns {"can": bool, "missing": []} for TH upgrade readiness
+	## Every available building slot must exist at the current Town Hall cap.
 	if test_mode:
-		return {"can": true, "missing": []}
+		return {"can": true, "missing": [], "blockers": []}
 	var th_level: int = _get_th_level()
-	var required: Array = TH_UPGRADE_REQUIRES.get(th_level, [])
 	var missing: Array = []
-	for req_type in required:
-		var required_level: int = _get_building_max_level_for_th(req_type, th_level)
-		var found: bool = false
+	var blockers: Array = []
+	for requirement_value in _get_th_upgrade_requirements(th_level):
+		var requirement: Dictionary = requirement_value
+		var req_type: String = str(requirement.get("type", ""))
+		var required_count: int = int(requirement.get("count", 0))
+		var required_level: int = int(requirement.get("level", 1))
+		var owned_count: int = 0
+		var maxed_count: int = 0
 		for bs in _building_systems:
 			for b in bs.placed_buildings:
-				if b.get("id", "") == req_type and b.get("level", 1) >= required_level:
-					found = true
-					break
-			if found:
-				break
-		if not found:
-			missing.append(req_type)
-	return {"can": missing.is_empty(), "missing": missing}
+				if b.get("id", "") != req_type:
+					continue
+				owned_count += 1
+				if int(b.get("level", 1)) >= required_level:
+					maxed_count += 1
+		if maxed_count >= required_count:
+			continue
+		var def: Dictionary = building_defs.get(req_type, {})
+		var display_name: String = str(def.get("name", req_type.capitalize()))
+		missing.append("%s %d/%d at Lv.%d" % [
+			display_name,
+			mini(maxed_count, required_count),
+			required_count,
+			required_level,
+		])
+		blockers.append({
+			"type": req_type,
+			"count": required_count,
+			"level": required_level,
+			"owned_count": mini(owned_count, required_count),
+			"maxed_count": mini(maxed_count, required_count),
+			"missing_count": maxi(0, required_count - owned_count),
+			"underleveled_count": maxi(0, mini(owned_count, required_count) - maxed_count),
+		})
+	return {"can": missing.is_empty(), "missing": missing, "blockers": blockers}
 
 const BUILDING_BASE_SHADER = """
 shader_type spatial;
@@ -3131,20 +3169,15 @@ func _sync_react_buildings() -> void:
 			var limits: Array = TH_MAX_COUNT[key]
 			var idx: int = clampi(th_lvl - 1, 0, limits.size() - 1)
 			max_counts[key] = limits[idx]
-		# Calculate TH upgrade progress — count each building and each level as a step
-		# e.g. TH1→2 needs mine×1 + sawmill×1 + barn×1 + port×1 = 4 buildings to BUILD (4 steps)
-		# Plus all max_count buildings at each level = more granular progress
+		# Calculate TH upgrade progress from the exact same complete-village
+		# requirements as the upgrade button. Each required slot and level is a step.
 		var total_req: int = 0
 		var done_req: int = 0
-		# Count all building slots for current TH level
-		for btype in TH_MAX_COUNT:
-			if btype == "town_hall":
-				continue
-			var limits_arr: Array = TH_MAX_COUNT[btype]
-			var max_at_th: int = limits_arr[clampi(th_lvl - 1, 0, limits_arr.size() - 1)]
-			if max_at_th <= 0:
-				continue
-			var max_level_for_type: int = _get_building_max_level_for_th(btype, th_lvl)
+		for requirement_value in _get_th_upgrade_requirements(th_lvl):
+			var requirement: Dictionary = requirement_value
+			var btype: String = str(requirement.get("type", ""))
+			var max_at_th: int = int(requirement.get("count", 0))
+			var max_level_for_type: int = int(requirement.get("level", 1))
 			# Each slot × each reachable level = steps. Some TH4 unlocks, like
 			# Mage Tower, intentionally do not upgrade to TH4.
 			for slot_i in max_at_th:

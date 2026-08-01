@@ -9,7 +9,7 @@ const { DEFENSE_STATS, FREEZE_DROP, TROOP_STATS } = require('./combat_defs');
 
 const BUILDING_DEFS = {
   town_hall: { size: [4, 4], hp_levels: [100000] },
-  harpoon: { size: [2, 2], hp_levels: [1800, 2300, 2900, 3600, 4400, 5200, 7200, 8800] },
+  harpoon: { size: [2, 2], hp_levels: [1800, 2400, 3200, 4300, 5600, 7200, 10000, 12000] },
   storage: { size: [2, 2], hp_levels: [100000] },
 };
 
@@ -83,6 +83,8 @@ function simulate(defenderBuildings, actions, options = {}) {
       knight: 1,
       MechanicalDragon: 1,
       mechanical_dragon: 1,
+      FireDragon: options.fireDragonLevel ?? 7,
+      fire_dragon: options.fireDragonLevel ?? 7,
     },
     serverShipLevel: options.shipLevel ?? 7,
     defenderAltarLevels: options.altar || {},
@@ -96,16 +98,22 @@ function events(result, kind, buildingId = null) {
   ));
 }
 
+function directHitsOnBuilding(result, buildingId) {
+  return result._trace.filter((row) => (
+    row.kind === 'troop_ranged_direct_hit' && row.targetId === buildingId
+  ));
+}
+
 try {
   const expectedHarpoonCurve = [
     { damage: 45, detectRange: 1.20, pullSpeed: 0.85 },
     { damage: 55, detectRange: 1.27, pullSpeed: 0.92 },
-    { damage: 65, detectRange: 1.34, pullSpeed: 0.99 },
-    { damage: 75, detectRange: 1.41, pullSpeed: 1.06 },
-    { damage: 88, detectRange: 1.48, pullSpeed: 1.13 },
-    { damage: 100, detectRange: 1.55, pullSpeed: 1.20 },
-    { damage: 140, detectRange: 1.70, pullSpeed: 1.40 },
-    { damage: 165, detectRange: 1.78, pullSpeed: 1.48 },
+    { damage: 65, detectRange: 1.45, pullSpeed: 0.99 },
+    { damage: 75, detectRange: 1.64, pullSpeed: 1.06 },
+    { damage: 88, detectRange: 1.82, pullSpeed: 1.13 },
+    { damage: 100, detectRange: 1.95, pullSpeed: 1.20 },
+    { damage: 140, detectRange: 2.08, pullSpeed: 1.40 },
+    { damage: 165, detectRange: 2.20, pullSpeed: 1.48 },
   ];
   for (let index = 0; index < expectedHarpoonCurve.length; index++) {
     assert.deepEqual(DEFENSE_STATS.harpoon[index + 1], {
@@ -138,11 +146,33 @@ try {
   // close enough to its lower edge for authored range-boundary assertions.
   const harpoonL6 = building(20, 'harpoon', 12, 17, 6);
   const harpoonPoint = gridToWorld(12, 17, 2, 2, CANONICAL_GRID_CONFIGS[0]);
-  const fullRangeL6 = { x: harpoonPoint.x, z: harpoonPoint.z + 1.50 };
+  const nearRangeL6 = { x: harpoonPoint.x, z: harpoonPoint.z + 1.50 };
+
+  const fireDragonL6 = simulate(
+    [townHall, harpoonL6],
+    [deploy('FireDragon', harpoonPoint.x, harpoonPoint.z + 0.68, 18, 6)],
+    { fireDragonLevel: 6 },
+  );
+  const fireDragonL6Hits = directHitsOnBuilding(fireDragonL6, 20);
+  assert.equal(fireDragonL6Hits.length, 3, 'a common L6 Fire Dragon must need three direct hits');
+  assert.equal(fireDragonL6Hits[0].damage, 3091);
+  assert.ok(fireDragonL6Hits[1].hpAfter > 0, 'Harpoon L6 must survive the second direct hit');
+  assert.ok(fireDragonL6Hits[2].hpAfter <= 0, 'Harpoon L6 must still fall on the third direct hit');
+
+  const harpoonL7Ttk = building(26, 'harpoon', 12, 17, 7);
+  const fireDragonL7 = simulate(
+    [townHall, harpoonL7Ttk],
+    [deploy('FireDragon', harpoonPoint.x, harpoonPoint.z + 0.68, 19, 7)],
+  );
+  const fireDragonL7Hits = directHitsOnBuilding(fireDragonL7, 26);
+  assert.equal(fireDragonL7Hits.length, 3, 'a common L7 Fire Dragon must need three direct hits');
+  assert.equal(fireDragonL7Hits[0].damage, 4754);
+  assert.ok(fireDragonL7Hits[1].hpAfter > 0, 'Harpoon L7 must survive the second direct hit');
+  assert.ok(fireDragonL7Hits[2].hpAfter <= 0, 'Harpoon L7 must still fall on the third direct hit');
 
   const groundOnly = simulate(
     [townHall, harpoonL6],
-    [deploy('Knight', fullRangeL6.x, fullRangeL6.z, 0)],
+    [deploy('Knight', nearRangeL6.x, nearRangeL6.z, 0)],
   );
   assert.equal(events(groundOnly, 'harpoon_lock').length, 0, 'ground troops must never be locked');
   assert.equal(events(groundOnly, 'harpoon_fire').length, 0, 'ground troops must never consume a shot');
@@ -151,7 +181,7 @@ try {
     [townHall, harpoonL6],
     [
       deploy('Knight', harpoonPoint.x, harpoonPoint.z + 0.40, 0),
-      deploy('MechanicalDragon', fullRangeL6.x, fullRangeL6.z, 1),
+      deploy('MechanicalDragon', nearRangeL6.x, nearRangeL6.z, 1),
     ],
   );
   const firstMixedLock = events(mixed, 'harpoon_lock')[0];
@@ -161,7 +191,7 @@ try {
 
   const l6 = simulate(
     [townHall, harpoonL6],
-    [deploy('MechanicalDragon', fullRangeL6.x, fullRangeL6.z, 3)],
+    [deploy('MechanicalDragon', nearRangeL6.x, nearRangeL6.z, 3)],
   );
   const impacts = events(l6, 'harpoon_impact', 20);
   const pullEnds = events(l6, 'harpoon_pull_end', 20);
@@ -185,13 +215,24 @@ try {
   assert.ok(nextLock.tick >= firstRelease.immunityUntilTick, '90-tick immunity must block early re-lock');
   const l6Repeat = simulate(
     [townHall, harpoonL6],
-    [deploy('MechanicalDragon', fullRangeL6.x, fullRangeL6.z, 3)],
+    [deploy('MechanicalDragon', nearRangeL6.x, nearRangeL6.z, 3)],
   );
   assert.deepEqual(
     l6Repeat._trace.filter(row => row.kind.startsWith('harpoon_')),
     l6._trace.filter(row => row.kind.startsWith('harpoon_')),
     'identical authoritative inputs must produce an identical Harpoon trace',
   );
+
+  const fullRangeL6 = { x: harpoonPoint.x, z: harpoonPoint.z + 1.95 };
+  const l6FullRange = simulate(
+    [townHall, harpoonL6],
+    [deploy('MechanicalDragon', fullRangeL6.x, fullRangeL6.z, 20)],
+  );
+  const l6FullRangePullEnd = events(l6FullRange, 'harpoon_pull_end', 20)[0];
+  assert.ok(events(l6FullRange, 'harpoon_impact', 20)[0], 'L6 must engage at Mage Tower range');
+  assert.equal(l6FullRangePullEnd.reason, 'duration');
+  assert.equal(l6FullRangePullEnd.durationTicks, 48);
+  assert.ok(Math.abs(l6FullRangePullEnd.finalDistance - 0.99) <= 0.001);
 
   const stationaryDragon = { ...TROOP_STATS.mechanical_dragon[1] };
   Object.assign(TROOP_STATS.mechanical_dragon[1], {
@@ -201,7 +242,7 @@ try {
   });
   const attackDuringPull = simulate(
     [townHall, harpoonL6, building(24, 'storage', 12, 25, 1)],
-    [deploy('MechanicalDragon', fullRangeL6.x, fullRangeL6.z, 13)],
+    [deploy('MechanicalDragon', nearRangeL6.x, nearRangeL6.z, 13)],
   );
   Object.assign(TROOP_STATS.mechanical_dragon[1], stationaryDragon);
   const activePullStart = events(attackDuringPull, 'harpoon_pull_start', 20)[0];
@@ -221,14 +262,14 @@ try {
   const tie = simulate(
     [townHall, harpoonL6],
     [
-      deploy('MechanicalDragon', fullRangeL6.x, fullRangeL6.z, 9),
-      deploy('MechanicalDragon', fullRangeL6.x, fullRangeL6.z, 4),
+      deploy('MechanicalDragon', nearRangeL6.x, nearRangeL6.z, 9),
+      deploy('MechanicalDragon', nearRangeL6.x, nearRangeL6.z, 4),
     ],
   );
   assert.equal(events(tie, 'harpoon_lock')[0].replayOrder, 4, 'equal distance must use replay order');
 
   const harpoonL7 = building(21, 'harpoon', 12, 17, 7);
-  const fullRangeL7 = { x: harpoonPoint.x, z: harpoonPoint.z + 1.70 };
+  const fullRangeL7 = { x: harpoonPoint.x, z: harpoonPoint.z + 2.08 };
   const l7Ward = simulate(
     [townHall, harpoonL7],
     [deploy('MechanicalDragon', fullRangeL7.x, fullRangeL7.z, 5)],
@@ -237,11 +278,12 @@ try {
   const l7Impact = events(l7Ward, 'harpoon_impact', 21)[0];
   const l7PullEnd = events(l7Ward, 'harpoon_pull_end', 21)[0];
   assert.equal(l7Impact.damage, 161, 'L7 maximum Ward uses ceiling rounding');
-  assert.equal(l7PullEnd.durationTicks, 48, 'L7 full range must reach the ring within 48 ticks');
-  assert.ok(Math.abs(l7PullEnd.finalDistance - 0.6) <= 0.001);
+  assert.equal(l7PullEnd.reason, 'duration', 'L7 full-range pull must use the fixed duration cap');
+  assert.equal(l7PullEnd.durationTicks, 48);
+  assert.ok(Math.abs(l7PullEnd.finalDistance - 0.96) <= 0.001);
 
   const harpoonL8 = building(25, 'harpoon', 12, 17, 8);
-  const fullRangeL8 = { x: harpoonPoint.x, z: harpoonPoint.z + 1.78 };
+  const fullRangeL8 = { x: harpoonPoint.x, z: harpoonPoint.z + 2.20 };
   const l8 = simulate(
     [townHall, harpoonL8],
     [deploy('MechanicalDragon', fullRangeL8.x, fullRangeL8.z, 17)],
@@ -249,8 +291,9 @@ try {
   const l8Impact = events(l8, 'harpoon_impact', 25)[0];
   const l8PullEnd = events(l8, 'harpoon_pull_end', 25)[0];
   assert.equal(l8Impact.damage, 165, 'authoritative combat must resolve the future L8 row');
-  assert.equal(l8PullEnd.durationTicks, 48, 'L8 full range must reach the ring within 48 ticks');
-  assert.ok(Math.abs(l8PullEnd.finalDistance - 0.6) <= 0.001);
+  assert.equal(l8PullEnd.reason, 'duration', 'L8 full-range pull must use the fixed duration cap');
+  assert.equal(l8PullEnd.durationTicks, 48);
+  assert.ok(Math.abs(l8PullEnd.finalDistance - 1.016) <= 0.001);
 
   const closeHarpoon = building(23, 'harpoon', 12, 23, 6);
   const closeHarpoonPoint = gridToWorld(12, 23, 2, 2, CANONICAL_GRID_CONFIGS[0]);
@@ -284,7 +327,7 @@ try {
   const frozen = simulate(
     [townHall, harpoonL6],
     [
-      deploy('MechanicalDragon', fullRangeL6.x, fullRangeL6.z, 10),
+      deploy('MechanicalDragon', nearRangeL6.x, nearRangeL6.z, 10),
       { type: FREEZE_DROP.actionType, x: harpoonPoint.x, z: harpoonPoint.z, t: 1.05 },
     ],
     { shipLevel: 7 },
@@ -321,7 +364,7 @@ try {
   const frozenProjectile = simulate(
     [townHall, harpoonL6],
     [
-      deploy('MechanicalDragon', fullRangeL6.x, fullRangeL6.z, 15),
+      deploy('MechanicalDragon', nearRangeL6.x, nearRangeL6.z, 15),
       { type: FREEZE_DROP.actionType, x: harpoonPoint.x, z: harpoonPoint.z, t: 0.10 },
     ],
     { shipLevel: 7 },
@@ -340,7 +383,7 @@ try {
   const forgedImpact = simulate(
     [townHall, harpoonL6],
     [
-      deploy('MechanicalDragon', fullRangeL6.x, fullRangeL6.z, 16),
+      deploy('MechanicalDragon', nearRangeL6.x, nearRangeL6.z, 16),
       { type: 'harpoon_impact', buildingId: 20, damage: 999999, t: 0.10 },
     ],
   );
@@ -352,14 +395,14 @@ try {
 
   Object.assign(TROOP_STATS.mechanical_dragon[1], {
     hp: 5000,
-    damage: 6000,
+    damage: 8000,
     atkSpeed: 2.0,
     moveSpeed: 0,
     range: 1.60,
   });
   const destroyed = simulate(
     [townHall, harpoonL6],
-    [deploy('MechanicalDragon', fullRangeL6.x, fullRangeL6.z, 11)],
+    [deploy('MechanicalDragon', nearRangeL6.x, nearRangeL6.z, 11)],
   );
   const destroyedPull = events(destroyed, 'harpoon_pull_end', 20)
     .find(row => row.reason === 'building_destroyed');
@@ -369,7 +412,7 @@ try {
 
   const legacy = simulate(
     [townHall],
-    [deploy('MechanicalDragon', fullRangeL6.x, fullRangeL6.z, 12)],
+    [deploy('MechanicalDragon', nearRangeL6.x, nearRangeL6.z, 12)],
   );
   assert.equal(legacy._harpoonDetails.length, 0, 'legacy snapshots without Harpoon remain valid');
   assert.equal(legacy.valid, true);
@@ -381,6 +424,7 @@ try {
     + ` l8_pull_ticks=${l8PullEnd.durationTicks}`
     + ` windup_ticks=${fires[0].fireTick - locks[0].tick}`
     + ` cadence_ticks=${fires[1].fireTick - fires[0].fireTick}`
+    + ` fire_dragon_ttk=L6:${fireDragonL6Hits.length}/L7:${fireDragonL7Hits.length}`
     + ` ward_damage=${l7Impact.damage}`
     + ` freeze_release_tick=${freezeRelease.tick}`,
   );

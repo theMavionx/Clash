@@ -12,6 +12,9 @@ function createFixture() {
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       dex TEXT,
+      trophies INTEGER NOT NULL DEFAULT 500,
+      level INTEGER NOT NULL DEFAULT 1,
+      shield_until TEXT,
       is_bot INTEGER NOT NULL DEFAULT 0
     );
     CREATE TABLE buildings (
@@ -65,8 +68,23 @@ function createFixture() {
 
   db.prepare('INSERT INTO players (id, name, dex) VALUES (?, ?, ?)').run('attacker', 'Attacker', 'ostium');
   db.prepare('INSERT INTO players (id, name, dex) VALUES (?, ?, ?)').run('defender', 'Defender', 'ostium');
+  db.prepare(`
+    INSERT INTO players (id, name, dex, shield_until)
+    VALUES ('global-same-th', 'Global Same TH', 'ostium', '2099-01-01 00:00:00')
+  `).run();
+  db.prepare(`
+    INSERT INTO players (id, name, dex)
+    VALUES ('global-wrong-th', 'Global Wrong TH', 'ostium')
+  `).run();
+  db.prepare(`
+    INSERT INTO players (id, name, dex, is_bot)
+    VALUES ('global-bot', 'Global Bot', 'ostium', 1)
+  `).run();
   db.prepare(`INSERT INTO buildings (player_id, type, level) VALUES (?, 'town_hall', 5)`).run('attacker');
   db.prepare(`INSERT INTO buildings (player_id, type, level) VALUES (?, 'town_hall', 5)`).run('defender');
+  db.prepare(`INSERT INTO buildings (player_id, type, level) VALUES ('global-same-th', 'town_hall', 5)`).run();
+  db.prepare(`INSERT INTO buildings (player_id, type, level) VALUES ('global-wrong-th', 'town_hall', 1)`).run();
+  db.prepare(`INSERT INTO buildings (player_id, type, level) VALUES ('global-bot', 'town_hall', 5)`).run();
   const insertTournament = db.prepare(`
     INSERT INTO tournaments (
       id, name, dex, status, start_at, end_at, battle_mode,
@@ -77,31 +95,34 @@ function createFixture() {
   `);
   insertTournament.run(1, 'Ranked Alpha', 2, 0);
   insertTournament.run(2, 'Ranked Beta', 0, 1);
+  insertTournament.run(3, 'Ranked Global', 0, 0);
   const insertParticipant = db.prepare(`
     INSERT INTO tournament_participants (tournament_id, player_id)
     VALUES (?, ?)
   `);
-  for (const tournamentId of [1, 2]) {
+  for (const tournamentId of [1, 2, 3]) {
     insertParticipant.run(tournamentId, 'attacker');
+  }
+  for (const tournamentId of [1, 2]) {
     insertParticipant.run(tournamentId, 'defender');
   }
   return db;
 }
 
-function reserve(db, sessionId, tournamentId, attackNumber) {
+function reserve(db, sessionId, tournamentId, attackNumber, defenderId = 'defender') {
   const dayUtc = '2026-07-29';
   db.prepare(`
     INSERT INTO battle_sessions (
       id, attacker_id, defender_id, status, reserved_until,
       tournament_id, tournament_day_utc, tournament_attack_index
-    ) VALUES (?, 'attacker', 'defender', 'active', '2099-01-01 00:00:00', ?, ?, ?)
-  `).run(sessionId, tournamentId, dayUtc, attackNumber);
+    ) VALUES (?, 'attacker', ?, 'active', '2099-01-01 00:00:00', ?, ?, ?)
+  `).run(sessionId, defenderId, tournamentId, dayUtc, attackNumber);
   return rankedRaids.reserveRankedRaid(db, {
     battleSessionId: sessionId,
     tournamentId,
     dayUtc,
     attackerId: 'attacker',
-    defenderId: 'defender',
+    defenderId,
     dailyAttackLimit: 2,
   });
 }
@@ -109,6 +130,23 @@ function reserve(db, sessionId, tournamentId, attackNumber) {
 function run() {
   const db = createFixture();
   try {
+    rankedRaids.setRankedShield(db, 3, 'global-same-th', 24);
+    const globalCandidates = rankedRaids.listEligibleDefenders(
+      db,
+      rankedRaids.getTournament(db, 3),
+      'attacker',
+      { dayUtc: '2026-07-29', townHallLevel: 5 },
+    );
+    assert.deepEqual(
+      globalCandidates.map((row) => row.id).sort(),
+      ['defender', 'global-same-th'],
+      'ranked search must use the global human pool but keep exact Town Hall parity',
+    );
+    const shieldedGlobal = globalCandidates.find((row) => row.id === 'global-same-th');
+    assert.equal(shieldedGlobal.is_tournament_participant, 0);
+    assert.ok(shieldedGlobal.shield_until, 'global shield must be visible but not exclude the base');
+    assert.ok(shieldedGlobal.ranked_shield_until, 'ranked shield must be visible but not exclude the base');
+
     assert.match(
       rankedRaids.validateRankedRaidConfig({
         battle_mode: 'ranked_raids',
@@ -210,6 +248,29 @@ function run() {
     assert.equal(betaLowTownHall.attacker_trophy_delta, 22, 'TH2 target pays 12 base plus enabled altar');
     assert.equal(betaLowTownHall.defender_trophy_delta, -6);
     assert.equal(betaLowTownHall.target_town_hall_level, 2);
+
+    assert.equal(
+      reserve(db, 'global-1', 3, 1, 'global-same-th').ok,
+      true,
+      'a shielded non-participant from the exact-TH global pool can be reserved',
+    );
+    const globalResult = rankedRaids.finalizeRankedRaid(db, {
+      battleSessionId: 'global-1',
+      result: 'victory',
+    });
+    assert.equal(globalResult.attacker_trophy_delta, 30);
+    assert.equal(globalResult.defender_trophy_delta, 0);
+    assert.equal(globalResult.defender_is_participant, false);
+    assert.equal(
+      db.prepare(`SELECT COUNT(*) AS count FROM tournament_participants WHERE tournament_id = 3 AND player_id = 'global-same-th'`).get().count,
+      0,
+      'global defenders must not be silently enrolled in the tournament',
+    );
+    assert.deepEqual(
+      db.prepare(`SELECT player_id, source FROM tournament_daily_activity WHERE tournament_id = 3 ORDER BY source`).all(),
+      [{ player_id: 'attacker', source: 'ranked_raid_attack' }],
+      'only the participant attacker contributes to tournament activity',
+    );
 
     const alphaBoard = rankedRaids.leaderboardPreview(db, 1, 2);
     assert.deepEqual(alphaBoard.map((row) => row.player_id), ['attacker', 'defender']);

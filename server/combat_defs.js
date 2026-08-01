@@ -452,7 +452,7 @@ const DEFENSE_STATS = {
     3: {
       damage: 65,
       fireRate: 7.0,
-      detectRange: 1.34,
+      detectRange: 1.45,
       projSpeed: 4.0,
       pullSpeed: 0.99,
       pullDuration: 0.80,
@@ -464,7 +464,7 @@ const DEFENSE_STATS = {
     4: {
       damage: 75,
       fireRate: 7.0,
-      detectRange: 1.41,
+      detectRange: 1.64,
       projSpeed: 4.0,
       pullSpeed: 1.06,
       pullDuration: 0.80,
@@ -476,7 +476,7 @@ const DEFENSE_STATS = {
     5: {
       damage: 88,
       fireRate: 7.0,
-      detectRange: 1.48,
+      detectRange: 1.82,
       projSpeed: 4.0,
       pullSpeed: 1.13,
       pullDuration: 0.80,
@@ -488,7 +488,7 @@ const DEFENSE_STATS = {
     6: {
       damage: 100,
       fireRate: 7.0,
-      detectRange: 1.55,
+      detectRange: 1.95,
       projSpeed: 4.0,
       pullSpeed: 1.20,
       pullDuration: 0.80,
@@ -500,7 +500,7 @@ const DEFENSE_STATS = {
     7: {
       damage: 140,
       fireRate: 7.0,
-      detectRange: 1.70,
+      detectRange: 2.08,
       projSpeed: 4.0,
       pullSpeed: 1.40,
       pullDuration: 0.80,
@@ -512,7 +512,7 @@ const DEFENSE_STATS = {
     8: {
       damage: 165,
       fireRate: 7.0,
-      detectRange: 1.78,
+      detectRange: 2.20,
       projSpeed: 4.0,
       pullSpeed: 1.48,
       pullDuration: 0.80,

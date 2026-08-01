@@ -1,7 +1,7 @@
 # ADR-0016: Tournament-Scoped Ranked Raid Ledger
 
 ## Status
-Accepted
+Accepted — amended 2026-08-01 for global exact-TH defender matchmaking
 
 ## Date
 2026-07-29
@@ -20,11 +20,14 @@ or scores.
 - Battle outcomes remain server-authoritative and replay-verified.
 - Match reservation, result submission, surrender, and retry paths must be idempotent.
 - Tournament shields must not alter the player's normal village shield.
+- A ranked attacker must never receive a lower or higher Town Hall merely because the participant
+  pool is small.
 - SQLite is the production source of truth.
 
 ### Requirements
 - Cap ranked attacks independently by tournament, player, and UTC day.
-- Cap incoming attacks and apply shields independently by tournament.
+- Cap incoming attacks independently by tournament. Tournament and normal shields are matchmaking
+  preferences, not hard exclusions, so an exact-TH ranked battle remains available.
 - Keep aggregate defender capacity sufficient for every participant to spend the configured
   attack quota; a finite defense cap cannot be lower than the attack cap.
 - Track offense and defense trophy deltas with a complete audit trail.
@@ -37,6 +40,13 @@ Reserve the daily attack slot atomically when matchmaking reserves the defender.
 same row once after the server validates the submitted battle result. Maintain tournament
 shields in a separate tournament/player state table.
 
+Ranked defenders come from the global human-player pool, not only
+`tournament_participants`. The query requires exact Town Hall equality, limits the candidate set to
+100, and ranks candidates by base-power fit, global trophy proximity, and current tournament defense
+load. Unshielded exact-TH bases are preferred; shielded exact-TH bases are the fallback. A global
+non-participant defender is never enrolled automatically, never loses tournament trophies, and does
+not write a tournament defense-activity row.
+
 The leaderboard's materialized total remains in `tournament_participants.trophies` for
 compatibility with existing tournament views. The ranked ledger is the auditable source used
 to explain and rebuild that total.
@@ -47,7 +57,7 @@ Attack selector
       |
       | tournament_id
       v
-ranked matchmaking transaction
+ranked global exact-TH matchmaking transaction
   | reserve battle_session
   | reserve tournament_ranked_raids slot
   v
@@ -55,9 +65,11 @@ server-authoritative battle verification
   |
   | idempotent finalize by battle_session_id
   v
-tournament_ranked_raids ----> tournament_participants.trophies
+tournament_ranked_raids ----> attacker tournament_participants.trophies
               |
-              +-------------> tournament_ranked_player_state.shield_until
+              +-------------> participant defender score (when present)
+              |
+              +-------------> tournament_ranked_player_state.shield_until (soft preference)
 ```
 
 ### Key Interfaces
@@ -88,10 +100,13 @@ tournament_ranked_raids ----> tournament_participants.trophies
 - Quotas, defense caps, and shields are independent across simultaneous tournaments.
 - Existing casual and trading tournament paths remain unchanged.
 - Repeated result submissions cannot double-credit trophies.
+- Small tournament participation no longer forces cross-TH matches or blocks ranked attacks when a
+  valid same-TH global base exists.
 
 ### Negative
 - A reserved or surrendered attack consumes a daily slot to prevent opponent-shopping abuse.
 - Ranked events default to equal attack and defense caps (20/20); `0` keeps defenses unlimited.
+- Ranked shields no longer guarantee immunity when every exact-TH global candidate is shielded.
 - Materialized leaderboard totals require reconciliation support if manually edited.
 - Additional indexes and rows are written for ranked raids.
 
@@ -100,11 +115,12 @@ tournament_ranked_raids ----> tournament_participants.trophies
   expired while keeping the slot consumed by policy.
 - Concurrent finalization could race; the transaction and `status = 'reserved'` predicate make
   the transition single-use.
-- Admin configuration could create no available defenders; UI exposes shield and defense-cap
-  values, and matchmaking returns a specific availability error.
+- A Town Hall tier with no global human defender under the configured defense cap can still have no
+  target; matchmaking reports the exact missing Town Hall instead of falling down to another tier.
 
 ## Performance Implications
-- **CPU**: Indexed per-player/day counts are small and bounded.
+- **CPU**: Indexed per-player/day counts are small and bounded. Global selection samples at most 100
+  exact-TH candidates before base-power scoring.
 - **Memory**: No meaningful persistent process memory increase.
 - **Load Time**: One lightweight ranked-event request is prefetched when the game session starts.
 - **Network**: One additional authenticated request, cached client-side for 30 seconds.
@@ -118,6 +134,10 @@ battle is reclassified.
 - Two simultaneous tournaments maintain independent attack counters and scores.
 - The configured daily limit cannot be exceeded under concurrent requests.
 - Victory, defeat, surrender, and duplicate result submission produce deterministic totals.
+- A participant attacker can reserve an exact-TH non-participant global defender.
+- A highest-tier attacker never receives a low-tier defender; a shielded exact-TH defender is used
+  only when no unshielded exact-TH defender is available.
+- Non-participant defenders receive no tournament score or tournament activity mutation.
 - Casual attack behavior is unchanged when no ranked tournament exists.
 - Admin and mobile attack-selection flows pass browser smoke tests.
 

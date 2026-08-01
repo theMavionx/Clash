@@ -3,13 +3,13 @@
 > **Status:** Production specification with future-safe TH8 progression
 > **Owner decisions:** air-only targeting, low impact damage, inward pull with a safe standoff, exactly 7.00 seconds reload
 > **Progression scope:** Town Hall 6-8 count gates, Harpoon levels 1-8
-> **Last updated:** 2026-07-31
+> **Last updated:** 2026-08-01
 
 ## 1. Overview
 
 Harpoon is a 2x2, single-target control defense unlocked at Town Hall 6. It attacks only hostile units whose canonical movement class is `air`, deals deliberately low impact damage, and reels the target toward the Harpoon without ever placing it on the building. It exists to disrupt an air push and expose one nearby flyer to the rest of the base, not to replace Archer Tower as an anti-air damage source. One Harpoon is allowed at TH6-TH7 and the second unlocks at TH8. The level cap tracks the late-game Town Hall: L6 at TH6, L7 at TH7, and L8 at TH8.
 
-The specification includes the complete production contract: progression, targeting, damage, forced movement, deterministic replay, counterplay, telemetry, and client/server parity. L6 and L7 intentionally preserve the previously validated TH6/TH7 endpoint strength; L1-L5 create the missing upgrade journey and L8 is deliberately conservative because TH8 also unlocks a second Harpoon.
+The specification includes the complete production contract: progression, targeting, damage, forced movement, deterministic replay, counterplay, telemetry, and client/server parity. The L6/L7 durability and range reflect the current owner-directed endpoint tuning; L1-L5 create the upgrade journey and L8 remains conservative because TH8 also unlocks a second Harpoon.
 
 ## 2. Player Fantasy
 
@@ -24,13 +24,13 @@ The canonical building key is `harpoon` and the player-facing name is `Harpoon`.
 | Level | TH required | HP | Gold | Wood | Ore | Impact | Range | Pull speed |
 |---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | 1 | 6 | 1,800 | 12,000 | 22,000 | 18,000 | 45 | 1.20 | 0.85 |
-| 2 | 6 | 2,300 | 20,000 | 42,000 | 35,000 | 55 | 1.27 | 0.92 |
-| 3 | 6 | 2,900 | 30,000 | 56,000 | 47,000 | 65 | 1.34 | 0.99 |
-| 4 | 6 | 3,600 | 41,000 | 70,000 | 59,000 | 75 | 1.41 | 1.06 |
-| 5 | 6 | 4,400 | 54,000 | 84,000 | 71,000 | 88 | 1.48 | 1.13 |
-| 6 | 6 | 5,200 | 68,000 | 98,000 | 83,000 | 100 | 1.55 | 1.20 |
-| 7 | 7 | 7,200 | 86,000 | 122,000 | 104,000 | 140 | 1.70 | 1.40 |
-| 8 | 8 | 8,800 | 108,000 | 142,000 | 124,000 | 165 | 1.78 | 1.48 |
+| 2 | 6 | 2,400 | 20,000 | 42,000 | 35,000 | 55 | 1.27 | 0.92 |
+| 3 | 6 | 3,200 | 30,000 | 56,000 | 47,000 | 65 | 1.45 | 0.99 |
+| 4 | 6 | 4,300 | 41,000 | 70,000 | 59,000 | 75 | 1.64 | 1.06 |
+| 5 | 6 | 5,600 | 54,000 | 84,000 | 71,000 | 88 | 1.82 | 1.13 |
+| 6 | 6 | 7,200 | 68,000 | 98,000 | 83,000 | 100 | 1.95 | 1.20 |
+| 7 | 7 | 10,000 | 86,000 | 122,000 | 104,000 | 140 | 2.08 | 1.40 |
+| 8 | 8 | 12,000 | 108,000 | 142,000 | 124,000 | 165 | 2.20 | 1.48 |
 
 Reload is 7.00 seconds, pull duration cap is 0.80 seconds, and stop distance is 0.60 at every level.
 
@@ -39,11 +39,11 @@ Reload is 7.00 seconds, pull duration cap is 0.80 seconds, and stop distance is 
 - Level cap: L6 at TH6, L7 at TH7, and L8 from TH8 onward. A second Harpoon before TH8, L7 at TH6, and L8 at TH7 are invalid.
 - The Altar ward increases Harpoon impact damage by the normal defense rule, using ceiling rounding. It does not increase range, pull speed, duration, or control immunity.
 - The construction price sits above Mortar L1 (8,000/12,000/10,000) and below Cannon L1 (16,000/36,000/30,000). Every L2-L6 upgrade fits the established 106,000-per-resource TH6 ceiling. L7 and the future-safe L8 price each fit the current 143,000 late-game ceiling; the TH8 economy must revalidate that assumption before TH8 launch.
-- Harpoon is not added retroactively to the TH6-to-TH7 prerequisite list in Phase 1. Existing TH6 accounts must not become progression-blocked solely because this defense was introduced.
+- Harpoon L6 is part of the complete-village TH6-to-TH7 gate. This follows the owner-approved rule that every normal building slot available at the current Town Hall must be built and maxed; optional Altar remains excluded.
 - Placement and upgrades use authored prices rather than the generic building multiplier.
 - While under construction or upgrading, Harpoon follows the existing inactive-defense contract.
 
-At the validated endpoints, HP remains 5,200 at L6 and 7,200 at L7. Ground troops can therefore remove the utility defense without being attacked by it.
+At the playable endpoints, HP is 7,200 at L6 and 10,000 at L7. This keeps Harpoon just below the same-tier Archer Tower (7,800/10,200) and Turret (9,000/12,000), while making a common same-level Fire Dragon require three clean direct hits instead of two. Ground troops can still remove the utility defense without being attacked by it.
 
 ## 4. Detailed Rules
 
@@ -133,12 +133,12 @@ Where:
 |---|---|---|
 | `H` | Harpoon XZ center | Valid building position |
 | `T` | target XZ center | Valid combat position |
-| `R` | search range | 1.20 L1 through 1.78 L8 |
+| `R` | search range | 1.20 L1 through 2.20 L8 |
 | `S` | stop distance | 0.60 |
 | `P` | pull speed | 0.85 L1 through 1.48 L8 |
 | `Dmax` | maximum pull duration | 0.80 s |
 
-Example: an L6 Harpoon hits at 1.50 distance. It must cover `1.50 - 0.60 = 0.90` units. At 1.20 units/s it reaches the stop ring in `0.90 / 1.20 = 0.75 s`, below the duration cap. An L7 hit at its full 1.70 range covers 1.10 units in about 0.786 seconds. Every authored level can travel from its full range to the stop ring within the 0.80-second cap; L8 requires about 0.797 seconds.
+Example: an L6 Harpoon hit at 1.50 distance still reaches the stop ring in 0.75 seconds. A target caught at the new full 1.95 range instead moves the same maximum 0.96 units during the fixed 0.80-second pull and finishes at distance 0.99. L7 and L8 full-range catches finish at approximately 0.96 and 1.016 respectively. Increasing search range therefore expands engagement coverage without secretly increasing pull speed, displacement per cycle, or control uptime.
 
 ### Control ceiling
 
@@ -161,13 +161,29 @@ Using current authoritative same-level common stats:
 
 This preserves the owner's low-damage intent. The closest Windling can deliberately absorb a cycle, but a same-tier Windling is not one-shot before or after the current maximum ward bonus.
 
+### Current building-survivability relationship
+
+Direct-hit damage below includes the authoritative same-level troop power multiplier.
+
+| Matchup | Harpoon HP | Damage per hit | Direct hits to destroy |
+|---|---:|---:|---:|
+| TH6/L6 Fire Dragon | 7,200 | 3,091 | 3 |
+| TH6/L6 Mechanical Dragon | 7,200 | 1,013 | 8 |
+| TH7/L7 Fire Dragon | 10,000 | 4,754 | 3 |
+| TH7/L7 Mechanical Dragon | 10,000 | 1,665 | 7 |
+
+The Fire Dragon remains a fast counter and still destroys Harpoon before its
+seven-second reload can complete. The survivability change only removes the
+two-hit failure case; it does not let Harpoon permanently control a Dragon or
+replace the sturdier general-purpose defenses.
+
 ## 6. Counterplay And Fairness
 
 - **Spread or stagger air deployment:** one Harpoon controls only one reserved target and reloads for seven seconds.
 - **Bait with a cheaper flyer:** nearest-target priority lets Windlings or another air body absorb the hook.
 - **Use ground pressure:** Harpoon cannot attack ground units and has lower HP than the main same-tier direct-fire defenses.
 - **Freeze or destroy it:** Freeze breaks an active rope and prevents launch; destroying the building immediately releases the target.
-- **Attack from outside its short range:** 1.55-1.70 at the playable L6-L7 endpoints is below the L6-L7 Archer Tower ranges of 2.15-2.30.
+- **Attack from outside the defended arc:** the playable 1.95-2.08 range now matches Mage Tower at L6-L7 but remains below the same-tier Archer Tower ranges of 2.15-2.30. Layout orientation and a seven-second reload still leave approach windows.
 - **Read the wind-up:** the 0.45-second lock presentation, rotating head, launched harpoon, taut rope, stop ring, and reload state must communicate what happened.
 - The decorative upper sight is intentionally omitted from the runtime LOD. It has no targeting role; removing its four meshes reduces rendering work without changing aim readability.
 - **Persistent combat facing:** on spawn, the upper assembly faces the real troop deployment zone from `AttackSystem/shipPlane`, not the center of the defended building grid. Construction may begin at zero scale, so this one-time heading waits until the transform is invertible. A valid air target then owns yaw; after that target is lost, retract completes, or reload ends, the upper assembly preserves its last combat heading instead of returning to a home angle. The static base never rotates.
@@ -222,7 +238,7 @@ All values must live in mirrored external/client-server defense data, not scatte
 | Knob | Category | Baseline | Safe test range | Failure outside range |
 |---|---|---:|---:|---|
 | Base damage L6/L7/L8 | Curve | 100 / 140 / 165 | 85-120 / 120-160 / 145-180 | Too high turns control into burst; too low makes impact unreadable. |
-| Search range L6/L7/L8 | Feel | 1.55 / 1.70 / 1.78 | 1.45-1.65 / 1.60-1.78 / 1.70-1.85 | Too high denies air approach; too low rarely activates. |
+| Search range L6/L7/L8 | Feel | 1.95 / 2.08 / 2.20 | 1.85-2.05 / 1.98-2.18 / 2.10-2.30 | Too high denies air approach; too low rarely activates. |
 | Reload | Gate | 7.00 s | 7.00 s fixed for Phase 1 | Owner-defined identity; do not level-scale. |
 | Stop distance | Feel | 0.60 | 0.55-0.70 | Too low overlaps the tower; too high creates little displacement. |
 | Pull speed L6/L7/L8 | Feel | 1.20 / 1.40 / 1.48 | 1.10-1.55 | Too low cannot reach the ring; too high reads as teleportation. |
@@ -239,28 +255,29 @@ Damage, range, pull strength, and durability are the level-growth knobs. Reload 
 ### Functional and progression
 
 1. TH1-5 cannot build Harpoon. TH6 can build exactly one and upgrade it through L6; TH7 can upgrade it to L7 but still allows only one building; TH8 can upgrade to L8 and build the second Harpoon. A second Harpoon before TH8, L7 at TH6, and L8 at TH7 are rejected by the server and client UI.
-2. Placement and all seven upgrades deduct the authored L1-L8 prices exactly; HP follows 1,800/2,300/2,900/3,600/4,400/5,200/7,200/8,800 only after completion.
-3. Adding Harpoon does not invalidate existing TH6-to-TH7 progression or old defender/replay snapshots.
+2. Placement and all seven upgrades deduct the authored L1-L8 prices exactly; HP follows 1,800/2,400/3,200/4,300/5,600/7,200/10,000/12,000 only after completion.
+3. The live TH6-to-TH7 complete-village gate requires one L6 Harpoon. Old defender/replay snapshots without Harpoon remain valid and deterministic.
 4. Client definitions, server definitions, shop, max-village, competitive bot caps, defensive scoring, export content, and level UI expose identical L1-L8 data.
 
 ### Combat behavior
 
 5. With equidistant ground and air units, Harpoon selects only air. Fire Dragon, Mechanical Dragon, and Windling are valid; Knight, Archer, guards, and buildings are invalid.
 6. Nearest-air selection and replay-order ties match client/server. Two Harpoons in a test-only fixture reserve different targets; one target never has two ropes.
-7. An L6 hit at 1.50 distance deals exactly 100 base damage and stops the target at 0.60 after 45 ticks (0.75 s), never closer. L7 and L8 full-range hits reach 0.60 within 48 ticks; L8 deals exactly 165 base damage.
+7. An L6 hit at 1.50 distance deals exactly 100 base damage and stops the target at 0.60 after 45 ticks (0.75 s), never closer. At the expanded full range, L7 and L8 use all 48 pull ticks and finish near 0.96 and 1.016 respectively; L8 deals exactly 165 base damage.
 8. A target already within 0.60 takes impact damage but is not displaced.
 9. The pulled unit cannot voluntarily move horizontally but may complete an already-due attack. It remains classified as air and resumes normal AI after release.
 10. Continuous valid targeting produces launch timestamps no closer than 420 ticks; an already tracked/aimed target permits the next launch exactly at tick 420. First fire does not wait through an initial reload.
 11. Target death, range break, Harpoon destruction, Freeze, upgrade state, and scene cleanup each remove projectile/rope/reservation without duplicate damage or leaked nodes.
 12. Successful release applies 90 ticks of immunity. Failed pre-impact shots do not.
+13. An unboosted common L6 or L7 Fire Dragon requires exactly three direct hits to destroy a same-level full-HP Harpoon; the second hit leaves it alive and the third remains lethal.
 
 ### Determinism and balance
 
-13. The same defender snapshot and deployment actions produce identical target IDs, HP, casualties, launch ticks, pull-end reasons, and target X/Z within 0.001 in Godot and the authoritative server.
-14. Normal, low-FPS, and headless replay runs produce the same outcomes; all required Harpoon telemetry events are present and no client event can forge damage or displacement.
-15. Frame captures cover Ready, wind-up, fire, projectile flight, impact, taut rope, mid-pull, stop ring, retract, reload, interrupted rope, and settled state; the static base has zero drift and rope endpoints remain attached. A spawned Harpoon faces the `AttackSystem/shipPlane` deployment center within 2 degrees from any legal placement, including the zero-scale construction path. After targeting, 90 or more targetless simulation ticks, retract, reload, ready, Freeze recovery, and level changes preserve the latest combat heading.
-16. A 300-layout/500-attack TH6-TH7 balance matrix has zero invalid replays. Adding one max-level Harpoon changes ground/mixed-army win rate by no more than 3 percentage points, reduces specialized all-air win rate by a target 5-12 points (hard ceiling 15), and preserves at least one legal 45-slot winning TH6 composition against a maxed TH6 defense.
-17. Focused regression tests for Archer Tower, Turret, Mortar, Cannon, Freeze, Fire Dragon, Mechanical Dragon, Windlings, building upgrades, and old replays continue to pass.
+14. The same defender snapshot and deployment actions produce identical target IDs, HP, casualties, launch ticks, pull-end reasons, and target X/Z within 0.001 in Godot and the authoritative server.
+15. Normal, low-FPS, and headless replay runs produce the same outcomes; all required Harpoon telemetry events are present and no client event can forge damage or displacement.
+16. Frame captures cover Ready, wind-up, fire, projectile flight, impact, taut rope, mid-pull, stop ring, retract, reload, interrupted rope, and settled state; the static base has zero drift and rope endpoints remain attached. A spawned Harpoon faces the `AttackSystem/shipPlane` deployment center within 2 degrees from any legal placement, including the zero-scale construction path. After targeting, 90 or more targetless simulation ticks, retract, reload, ready, Freeze recovery, and level changes preserve the latest combat heading.
+17. A 300-layout/500-attack TH6-TH7 balance matrix has zero invalid replays. Adding one max-level Harpoon changes ground/mixed-army win rate by no more than 3 percentage points, reduces specialized all-air win rate by a target 5-12 points (hard ceiling 15), and preserves at least one legal 45-slot winning TH6 composition against a maxed TH6 defense.
+18. Focused regression tests for Archer Tower, Turret, Mortar, Cannon, Freeze, Fire Dragon, Mechanical Dragon, Windlings, building upgrades, and old replays continue to pass.
 
 ## 12. Open Questions And Launch Gates
 

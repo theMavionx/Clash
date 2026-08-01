@@ -2506,3 +2506,72 @@ Follow-up:
 - **Scope:** Start the local no-auth game flow against the fresh Godot export, verify the
   Harpoon through the rendered browser UI, and retain screenshots as release evidence before
   deploying the same revision to production.
+
+### UR-2026-08-01-TOWN-HALL-COMPLETE-VILLAGE-GATE
+
+- **Timestamp:** 2026-08-01 (Europe/Kyiv)
+- **Request:** "перевір чи є в нас залежності - поки всі будівлі не зробиш апгрейд не має пускати на наступний таунхол а в нас зараз це якось криво працює"
+- **Scope:** Audit and correct the Town Hall progression dependency so the authoritative server
+  blocks the next Town Hall level until every building available at the current tier exists at
+  its required count and is upgraded to the current Town Hall cap. Keep the client explanation
+  synchronized, return actionable missing-building details, and cover the gate with progression
+  regressions. No commit, push, deployment, or production-data mutation is authorized.
+- **Result:** Replaced the one-building-per-family check with a count-and-level gate derived from
+  the canonical progression tables. Client progress, client blockers, authoritative server
+  blockers, and matchmaking base progress now share the same normal-building requirements;
+  optional Altar and retired Port remain non-blocking. TH1/TH2/TH6 server regressions, TH6/TH7
+  progression tests, the Godot gate probe, web build, Quick repo check, and local balance suite pass.
+
+### UR-2026-08-01-HARPOON-FIRE-DRAGON-SURVIVABILITY
+
+- **Timestamp:** 2026-08-01 (Europe/Kyiv)
+- **Request:** "у гарпуна дуже мало хп якось два удара дракона і він знищенний тобто будівля безкорисна виходить майже"
+- **Scope:** Audit Harpoon durability against both Dragon families at equal levels, raise the HP
+  curve only where the defense is a survivability outlier, preserve its low damage/control cadence,
+  and prove the resulting time-to-kill in the authoritative server simulation. No commit, push,
+  deployment, or production-data mutation is authorized.
+- **Result:** Raised only the Harpoon HP curve to
+  `1,800/2,400/3,200/4,300/5,600/7,200/10,000/12,000`. Authoritative same-level simulations now
+  require three direct Fire Dragon hits at both L6 and L7 (previously two), while Mechanical Dragon
+  needs eight and seven hits respectively. Damage, range, pull, reload, and target rules are
+  unchanged. Harpoon, Ice Golem, TH6/TH7 progression, client/server parity, Godot progression, Quick
+  repo, and 300-match same-TH balance checks pass with zero invalid battles.
+
+### UR-2026-08-01-HARPOON-MAGE-TOWER-RANGE
+
+- **Timestamp:** 2026-08-01 (Europe/Kyiv)
+- **Request:** "у гарпуна радіус дії зроби побільше десь як в маг тавера"
+- **Scope:** Increase Harpoon search coverage to approximately the same-level Mage Tower range,
+  mirror the curve between Godot and the authoritative server, preserve pull speed/duration so this
+  remains a one-axis range adjustment, and rerun Harpoon/parity/balance regressions. No commit, push,
+  deployment, or production-data mutation is authorized.
+- **Result:** Raised the Harpoon range curve to `1.20/1.27/1.45/1.64/1.82/1.95/2.08/2.20`,
+  matching Mage Tower at L3-L7 without reducing the already-longer L1-L2 values. Pull speed,
+  duration, damage, reload, and immunity remain unchanged. Authoritative server, Godot client,
+  client/server parity, Quick repo, and 300-match same-TH balance regressions pass; the hard-base
+  attacker win rate moved only 0.3 percentage points (29.3% to 29.0%) with zero invalid battles.
+
+### UR-2026-08-01-RANKED-GLOBAL-EXACT-TH-MATCHMAKING
+
+- **Timestamp:** 2026-08-01 (Europe/Kyiv)
+- **Request:** "якщо ранговий турнір проходить то всерівно підбирало гравців по потрібному таун холу з глобального пошуку а не тільки з гравців які в турнірі участь приймають"; "якщо в мене останній рівень тх то мені не має кидати 1 лвл ... можеш шукати гравця навіть в якого є щит"
+- **Scope:** Replace the participant-only ranked defender pool with the global human-player pool,
+  require exact Town Hall parity, prefer similar base power within that tier, prefer unshielded
+  defenders but fall back to shielded bases, and prevent non-participant defenders from being
+  enrolled in or debited by tournament scoring. No commit, push, deployment, or production-data
+  mutation is authorized.
+- **Result:** Ranked matchmaking now queries up to 100 global human bases at exactly the attacker's
+  Town Hall, scores same-tier candidates by base-power and global trophy proximity, and uses a
+  shielded exact-TH base only when no unshielded exact-TH base is available. Non-participant
+  defenders receive no tournament score mutation or activity row. Unit, direct DB integration, and
+  tournament HTTP regressions pass.
+
+### UR-2026-08-01-COMMIT-AND-PRODUCTION-DEPLOY
+
+- **Timestamp:** 2026-08-01 (Europe/Kyiv)
+- **Request:** "коміт деплой на прод"
+- **Scope:** Re-audit the reviewed Town Hall gate, Harpoon survivability/range, and ranked global
+  exact-Town-Hall matchmaking changes; run the repository release checks; commit the complete safe
+  worktree; integrate and push `main`; deploy through the repository's standard production wrapper;
+  and verify the deployed revision and critical production health. Commit, push, and production
+  deployment are explicitly authorized for this request.

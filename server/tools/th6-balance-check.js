@@ -334,8 +334,8 @@ try {
     mageTowerInitial: Number((DEFENSE_STATS.mage_tower[6].baseDamage / DEFENSE_STATS.mage_tower[6].tickRate).toFixed(1)),
     mageTowerMaximum: Number((DEFENSE_STATS.mage_tower[6].maxDamage / DEFENSE_STATS.mage_tower[6].tickRate).toFixed(1)),
     mortar: Number((DEFENSE_STATS.mortar[2].damage / DEFENSE_STATS.mortar[2].fireRate).toFixed(1)),
-    harpoonImpact: Number((DEFENSE_STATS.harpoon[1].damage / DEFENSE_STATS.harpoon[1].fireRate).toFixed(1)),
-    harpoonControlUptimePct: Number((DEFENSE_STATS.harpoon[1].pullDuration / DEFENSE_STATS.harpoon[1].fireRate * 100).toFixed(2)),
+    harpoonImpact: Number((DEFENSE_STATS.harpoon[6].damage / DEFENSE_STATS.harpoon[6].fireRate).toFixed(1)),
+    harpoonControlUptimePct: Number((DEFENSE_STATS.harpoon[6].pullDuration / DEFENSE_STATS.harpoon[6].fireRate * 100).toFixed(2)),
     skeletonGuard: Number((SKELETON_GUARD.levels[5].damage / SKELETON_GUARD.levels[5].atkSpeed).toFixed(1)),
   };
   const level7AttackDps = Object.fromEntries(

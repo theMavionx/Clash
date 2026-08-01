@@ -141,11 +141,11 @@ func _run_probe() -> void:
 	tower.set_level(7)
 	tower.set_ward_bonus_pct(15)
 	_expect(tower.damage == 161, "L7 ward damage uses ceiling rounding", failures)
-	_expect(is_equal_approx(tower.detect_range, 1.70), "L7 range is 1.70", failures)
+	_expect(is_equal_approx(tower.detect_range, 2.08), "L7 range matches Mage Tower at 2.08", failures)
 	_expect(is_equal_approx(tower.pull_speed, 1.40), "L7 pull speed is 1.40", failures)
 	tower.set_level(8)
 	_expect(tower.damage == 190, "L8 Ward damage uses ceiling rounding", failures)
-	_expect(is_equal_approx(tower.detect_range, 1.78), "L8 range is 1.78", failures)
+	_expect(is_equal_approx(tower.detect_range, 2.20), "L8 range extends to 2.20", failures)
 	_expect(is_equal_approx(tower.pull_speed, 1.48), "L8 pull speed is 1.48", failures)
 
 	var wrapper_scene := load("res://Model/Harpoon/HarpoonDefense.tscn") as PackedScene

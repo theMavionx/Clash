@@ -258,12 +258,16 @@ function setRankedShield(db, tournamentId, playerId, hours) {
   return shieldUntil;
 }
 
-function listEligibleDefenders(db, tournament, attackerId, dayUtc = utcDayKey()) {
+function listEligibleDefenders(db, tournament, attackerId, options = {}) {
   const config = normalizeRankedRaidConfig(tournament);
+  const dayUtc = options.dayUtc || utcDayKey();
+  const townHallLevel = Math.max(1, Math.trunc(Number(options.townHallLevel) || 1));
   return db.prepare(`
     SELECT
       p.*,
       tp.trophies AS tournament_trophies,
+      CASE WHEN tp.player_id IS NULL THEN 0 ELSE 1 END AS is_tournament_participant,
+      state.shield_until AS ranked_shield_until,
       COALESCE((
         SELECT MAX(level) FROM buildings th
          WHERE th.player_id = p.id AND th.type = 'town_hall'
@@ -275,19 +279,17 @@ function listEligibleDefenders(db, tournament, attackerId, dayUtc = utcDayKey())
            AND defenses.day_utc = ?
            AND defenses.defender_id = p.id
       ), 0) AS ranked_defenses_today
-    FROM tournament_participants tp
-    JOIN players p ON p.id = tp.player_id
+    FROM players p
+    LEFT JOIN tournament_participants tp
+      ON tp.tournament_id = ? AND tp.player_id = p.id AND tp.left_at IS NULL
     LEFT JOIN tournament_ranked_player_state state
-      ON state.tournament_id = tp.tournament_id AND state.player_id = tp.player_id
-    WHERE tp.tournament_id = ?
-      AND tp.left_at IS NULL
-      AND p.id != ?
+      ON state.tournament_id = ? AND state.player_id = p.id
+    WHERE p.id != ?
       AND COALESCE(p.is_bot, 0) = 0
-      AND EXISTS (
-        SELECT 1 FROM buildings th
+      AND COALESCE((
+        SELECT MAX(level) FROM buildings th
          WHERE th.player_id = p.id AND th.type = 'town_hall'
-      )
-      AND (state.shield_until IS NULL OR state.shield_until <= datetime('now'))
+      ), 0) = ?
       AND (
         ? = 0
         OR (
@@ -305,11 +307,15 @@ function listEligibleDefenders(db, tournament, attackerId, dayUtc = utcDayKey())
            AND active_session.status = 'active'
            AND active_session.reserved_until > datetime('now')
       )
+    ORDER BY RANDOM()
+    LIMIT 100
   `).all(
     tournament.id,
     dayUtc,
     tournament.id,
+    tournament.id,
     attackerId,
+    townHallLevel,
     config.max_defenses_per_day,
     tournament.id,
     dayUtc,
@@ -383,10 +389,11 @@ function finalizeRankedRaid(db, {
   const safeAltarBonus = isVictory && config.altar_bonus_enabled
     ? Math.max(0, Math.floor(Number(altarBonus) || 0))
     : 0;
+  const defenderIsParticipant = !!getParticipant(db, raid.tournament_id, raid.defender_id);
   const attackerDelta = isVictory
     ? trophyProfile.attack_win_trophies + safeAltarBonus
     : 0;
-  const defenderDelta = isVictory
+  const defenderDelta = isVictory && defenderIsParticipant
     ? -trophyProfile.defense_loss_trophies
     : 0;
   db.transaction(() => {
@@ -435,15 +442,17 @@ function finalizeRankedRaid(db, {
       participantDex.get(raid.tournament_id, raid.attacker_id)?.dex || null,
       attackerDelta
     );
-    insertDailyActivity.run(
-      raid.tournament_id,
-      raid.day_utc,
-      raid.defender_id,
-      'ranked_raid_defense',
-      `${battleSessionId}:defender`,
-      participantDex.get(raid.tournament_id, raid.defender_id)?.dex || null,
-      defenderDelta
-    );
+    if (defenderIsParticipant) {
+      insertDailyActivity.run(
+        raid.tournament_id,
+        raid.day_utc,
+        raid.defender_id,
+        'ranked_raid_defense',
+        `${battleSessionId}:defender`,
+        participantDex.get(raid.tournament_id, raid.defender_id)?.dex || null,
+        defenderDelta
+      );
+    }
     if (isVictory) {
       setRankedShield(db, raid.tournament_id, raid.defender_id, config.shield_hours);
     }
@@ -459,6 +468,7 @@ function finalizeRankedRaid(db, {
     target_town_hall_level: trophyProfile.defender.town_hall_level,
     base_win_trophies: trophyProfile.attack_win_trophies,
     defense_loss_trophies: trophyProfile.defense_loss_trophies,
+    defender_is_participant: defenderIsParticipant,
     attack_number: raid.attack_number,
     day_utc: raid.day_utc,
     attacker_day: playerDayStats(db, raid.tournament_id, raid.attacker_id, raid.day_utc),
@@ -513,6 +523,7 @@ module.exports = {
   getParticipant,
   playerDayStats,
   getRankedShield,
+  setRankedShield,
   listEligibleDefenders,
   reserveRankedRaid,
   getRaidContext,

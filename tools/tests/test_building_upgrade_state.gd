@@ -33,14 +33,36 @@ func _init() -> void:
 	building_system._building_systems = [building_system]
 	building_system.placed_buildings.append({"id": "town_hall", "level": 2})
 	building_system.placed_buildings.append(port)
-	for required_type in ["mine", "sawmill", "barn", "storage", "tombstone", "archer_tower"]:
-		building_system.placed_buildings.append({"id": required_type, "level": 2})
-	var th_check: Dictionary = building_system._can_upgrade_th()
-	if not bool(th_check.get("can", false)):
-		push_error("Town Hall 2 remained blocked after the Port 2 upgrade")
+	for requirement_value in building_system._get_th_upgrade_requirements(2):
+		var requirement: Dictionary = requirement_value
+		var required_type: String = str(requirement.get("type", ""))
+		var required_count: int = int(requirement.get("count", 0))
+		if required_type == "mine":
+			required_count -= 1
+		for _slot in required_count:
+			building_system.placed_buildings.append({
+				"id": required_type,
+				"level": int(requirement.get("level", 1)),
+			})
+
+	var incomplete_check: Dictionary = building_system._can_upgrade_th()
+	if bool(incomplete_check.get("can", true)):
+		push_error("Town Hall 2 accepted only one of the two required Mines")
+		quit(1)
+		return
+	var blockers: Array = incomplete_check.get("blockers", [])
+	if blockers.size() != 1 or int(blockers[0].get("maxed_count", -1)) != 1:
+		push_error("Town Hall 2 did not report the exact missing Mine slot")
 		quit(1)
 		return
 
-	print("PASS: Port upgrade state is immediate and Town Hall progression is unblocked")
+	building_system.placed_buildings.append({"id": "mine", "level": 2})
+	var th_check: Dictionary = building_system._can_upgrade_th()
+	if not bool(th_check.get("can", false)):
+		push_error("Town Hall 2 remained blocked after every required slot reached level 2")
+		quit(1)
+		return
+
+	print("PASS: building upgrade state is immediate and complete-village TH gating is exact")
 	building_system.free()
 	quit(0)
