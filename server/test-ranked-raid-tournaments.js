@@ -68,6 +68,7 @@ function createFixture() {
 
   db.prepare('INSERT INTO players (id, name, dex) VALUES (?, ?, ?)').run('attacker', 'Attacker', 'ostium');
   db.prepare('INSERT INTO players (id, name, dex) VALUES (?, ?, ?)').run('defender', 'Defender', 'ostium');
+  db.prepare('INSERT INTO players (id, name, dex) VALUES (?, ?, ?)').run('defender-2', 'Defender Two', 'ostium');
   db.prepare(`
     INSERT INTO players (id, name, dex, shield_until)
     VALUES ('global-same-th', 'Global Same TH', 'ostium', '2099-01-01 00:00:00')
@@ -82,6 +83,7 @@ function createFixture() {
   `).run();
   db.prepare(`INSERT INTO buildings (player_id, type, level) VALUES (?, 'town_hall', 5)`).run('attacker');
   db.prepare(`INSERT INTO buildings (player_id, type, level) VALUES (?, 'town_hall', 5)`).run('defender');
+  db.prepare(`INSERT INTO buildings (player_id, type, level) VALUES (?, 'town_hall', 5)`).run('defender-2');
   db.prepare(`INSERT INTO buildings (player_id, type, level) VALUES ('global-same-th', 'town_hall', 5)`).run();
   db.prepare(`INSERT INTO buildings (player_id, type, level) VALUES ('global-wrong-th', 'town_hall', 1)`).run();
   db.prepare(`INSERT INTO buildings (player_id, type, level) VALUES ('global-bot', 'town_hall', 5)`).run();
@@ -105,6 +107,7 @@ function createFixture() {
   }
   for (const tournamentId of [1, 2]) {
     insertParticipant.run(tournamentId, 'defender');
+    insertParticipant.run(tournamentId, 'defender-2');
   }
   return db;
 }
@@ -139,7 +142,7 @@ function run() {
     );
     assert.deepEqual(
       globalCandidates.map((row) => row.id).sort(),
-      ['defender', 'global-same-th'],
+      ['defender', 'defender-2', 'global-same-th'],
       'ranked search must use the global human pool but keep exact Town Hall parity',
     );
     const shieldedGlobal = globalCandidates.find((row) => row.id === 'global-same-th');
@@ -201,6 +204,7 @@ function run() {
     assert.deepEqual(alphaScores, [
       { player_id: 'attacker', trophies: 30 },
       { player_id: 'defender', trophies: -15 },
+      { player_id: 'defender-2', trophies: 0 },
     ], 'idempotent finalization must not double-credit');
     const alphaActivity = db.prepare(`
       SELECT player_id, source, trophies, dex
@@ -213,7 +217,7 @@ function run() {
       { player_id: 'defender', source: 'ranked_raid_defense', trophies: -15, dex: 'ostium' },
     ], 'ranked raid results must feed the shared daily tournament ledger once');
 
-    assert.equal(reserve(db, 'alpha-2', 1, 2).ok, true);
+    assert.equal(reserve(db, 'alpha-2', 1, 2, 'defender-2').ok, true);
     rankedRaids.cancelRankedRaid(db, 'alpha-2');
     assert.equal(reserve(db, 'alpha-3', 1, 3).ok, false, 'daily attack cap must include surrendered attacks');
     const alphaDay = rankedRaids.playerDayStats(db, 1, 'attacker', '2026-07-29');
@@ -236,9 +240,9 @@ function run() {
     db.prepare(`
       UPDATE buildings
          SET level = 2
-       WHERE player_id = 'defender' AND type = 'town_hall'
+       WHERE player_id = 'defender-2' AND type = 'town_hall'
     `).run();
-    assert.equal(reserve(db, 'beta-2', 2, 2).ok, true);
+    assert.equal(reserve(db, 'beta-2', 2, 2, 'defender-2').ok, true);
     const betaLowTownHall = rankedRaids.finalizeRankedRaid(db, {
       battleSessionId: 'beta-2',
       result: 'victory',
@@ -253,6 +257,19 @@ function run() {
       reserve(db, 'global-1', 3, 1, 'global-same-th').ok,
       true,
       'a shielded non-participant from the exact-TH global pool can be reserved',
+    );
+    const repeatedGlobal = reserve(db, 'global-repeat', 3, 2, 'global-same-th');
+    assert.equal(repeatedGlobal.ok, false);
+    assert.match(repeatedGlobal.error, /already matched today/i);
+    const nextGlobalCandidates = rankedRaids.listEligibleDefenders(
+      db,
+      rankedRaids.getTournament(db, 3),
+      'attacker',
+      { dayUtc: '2026-07-29', townHallLevel: 5 },
+    );
+    assert.ok(
+      !nextGlobalCandidates.some((row) => row.id === 'global-same-th'),
+      'ranked search must not offer the same defender to one attacker twice per UTC day',
     );
     const globalResult = rankedRaids.finalizeRankedRaid(db, {
       battleSessionId: 'global-1',
@@ -273,7 +290,7 @@ function run() {
     );
 
     const alphaBoard = rankedRaids.leaderboardPreview(db, 1, 2);
-    assert.deepEqual(alphaBoard.map((row) => row.player_id), ['attacker', 'defender']);
+    assert.deepEqual(alphaBoard.map((row) => row.player_id), ['attacker', 'defender-2']);
     console.log('ranked raid tournament tests: PASS');
   } finally {
     db.close();

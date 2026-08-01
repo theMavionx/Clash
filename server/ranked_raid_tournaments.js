@@ -302,6 +302,14 @@ function listEligibleDefenders(db, tournament, attackerId, options = {}) {
       )
       AND NOT EXISTS (
         SELECT 1
+          FROM tournament_ranked_raids previous_match
+         WHERE previous_match.tournament_id = ?
+           AND previous_match.day_utc = ?
+           AND previous_match.attacker_id = ?
+           AND previous_match.defender_id = p.id
+      )
+      AND NOT EXISTS (
+        SELECT 1
           FROM battle_sessions active_session
          WHERE active_session.defender_id = p.id
            AND active_session.status = 'active'
@@ -319,7 +327,10 @@ function listEligibleDefenders(db, tournament, attackerId, options = {}) {
     config.max_defenses_per_day,
     tournament.id,
     dayUtc,
-    config.max_defenses_per_day
+    config.max_defenses_per_day,
+    tournament.id,
+    dayUtc,
+    attackerId
   );
 }
 
@@ -338,6 +349,18 @@ function reserveRankedRaid(db, {
   `).get(tournamentId, dayUtc, attackerId)?.count || 0;
   if (used >= dailyAttackLimit) {
     return { ok: false, error: `Daily ranked attack limit reached (${dailyAttackLimit}/${dailyAttackLimit}).` };
+  }
+  const previousMatch = db.prepare(`
+    SELECT 1
+      FROM tournament_ranked_raids
+     WHERE tournament_id = ?
+       AND day_utc = ?
+       AND attacker_id = ?
+       AND defender_id = ?
+     LIMIT 1
+  `).get(tournamentId, dayUtc, attackerId, defenderId);
+  if (previousMatch) {
+    return { ok: false, error: 'This ranked defender was already matched today.' };
   }
   const attackNumber = used + 1;
   db.prepare(`
