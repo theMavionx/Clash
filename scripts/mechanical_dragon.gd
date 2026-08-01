@@ -1,5 +1,5 @@
 extends BaseTroop
-## Mechanical Dragon is a four-slot flying siege troop unlocked at Town Hall 6.
+## Mechanical Dragon is a five-slot flying siege troop unlocked at Town Hall 6.
 ## Its primary lightning strike chains to the two nearest living buildings.
 ## Chain selection and damage are mirrored by server/combat_session.js.
 

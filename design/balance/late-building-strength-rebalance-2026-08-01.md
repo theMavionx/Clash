@@ -54,6 +54,13 @@ pool and makes ranked challenge bases directly reproducible in the balance lab.
 
 ## Final verification
 
+The broader cohort below records the original late-building checkpoint. It is
+superseded for release by the real-combat/FPS pass after movement-parity and
+slot-capacity corrections. The release cohorts are TH5 55.1%, TH6 53.7%, TH7
+56.6% (56.3% combined over 1,800 battles), with Digger at 53.9% over 800
+battles and zero invalid results. See
+`production/reports/th5-th7-real-combat-fps-balance-2026-08-01.md`.
+
 All results below use final production values with no lab multipliers, maxed equal-TH
 attack levels, deterministic attack-policy populations, and zero invalid battles.
 

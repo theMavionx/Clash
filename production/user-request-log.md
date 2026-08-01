@@ -2595,3 +2595,40 @@ Follow-up:
   validate the production Digger layout separately, preserve troop and defense attack cadence,
   run deterministic replay simulations plus focused progression/combat checks, commit and push
   the verified balance changes, and deploy them to production through the standard workflow.
+
+### UR-2026-08-01-GODOT-SERVER-REAL-BASE-PARITY
+
+- **Timestamp:** 2026-08-01 (Europe/Kyiv)
+- **Request:** "проведи ще більш реальін тести побудуй ці бази на тестовій сцені годота і порівняй резульати базу дігера і інші бази ботів чи з сервером сходяться вони чи ні"
+- **Scope:** Recreate the production Digger layout and representative ranked TH5–TH7 bot layouts
+  in a Godot test scene, replay equivalent attacks through the Godot and authoritative server
+  combat implementations, compare outcomes and combat telemetry, and fix only demonstrated
+  parity defects. No commit, push, deployment, or production-data mutation is authorized.
+
+### UR-2026-08-01-FIX-COMBAT-PARITY-AND-FPS-INDEPENDENCE
+
+- **Timestamp:** 2026-08-01 (Europe/Kyiv)
+- **Request:** "от виправляй серверний скрипт і все інше так щоб не було з цим проблем і чітко все працювало. щоб від фпс нічого не залежало"
+- **Scope:** Correct demonstrated drift between the authoritative Node replay verifier and the
+  real Godot `TestMain` combat implementation, make combat advance on a fixed simulation clock
+  rather than render FPS, and verify identical seeded outcomes at 30, 60, and 120 render FPS.
+  No commit, push, deployment, or production-data mutation is authorized by this follow-up.
+
+### UR-2026-08-01-VERIFY-COMBAT-AT-10-AND-20-FPS
+
+- **Timestamp:** 2026-08-01 (Europe/Kyiv)
+- **Request:** "ти ще тестуй з 10 20 фпс"
+- **Scope:** Extend the real Godot/server parity verification to 10 and 20 render FPS, compare
+  full seeded battle outcomes against the 60 FPS reference, and fix demonstrated simulation-time
+  dependencies. No commit, push, deployment, or production-data mutation is authorized by this
+  follow-up.
+
+### UR-2026-08-01-COMMIT-PUSH-DEPLOY-ALL-LATEST
+
+- **Timestamp:** 2026-08-01 18:32 (Europe/Kyiv)
+- **Request:** "всі зміни коміт пуш  деплой на прод"
+- **Scope:** Review and verify the complete current worktree, including the fixed-step Godot/server
+  combat parity work, TH5-TH7 balance and progression updates, ranked matchmaking changes, and the
+  Futures trading-header layout correction; commit all safe changes, integrate them into `main`,
+  push GitHub, deploy through the repository's standard production workflow, and verify the live
+  revision and health. Commit, push, merge, and production deployment are explicitly authorized.

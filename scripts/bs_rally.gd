@@ -102,7 +102,7 @@ func process(delta: float) -> void:
 	# Time-based visual expiry. The marker disappears, but BaseTroop keeps the
 	# resolved rally target as a sticky command until that target dies or a new
 	# marker is dropped.
-	if Time.get_ticks_msec() >= BaseTroop._rally_expire_msec:
+	if Engine.get_physics_frames() >= BaseTroop._rally_expire_physics_frame:
 		_clear_marker()
 
 
@@ -209,7 +209,7 @@ func _drop_rally(world_pos: Vector3) -> bool:
 	# Replay log stays at launch time so action order remains chronological;
 	# future replay viewers can delay the marker by `flight_time`.
 	if bs.is_viewing_enemy:
-		var t: float = Time.get_ticks_msec() / 1000.0 - bs._battle_start_time
+		var t: float = bs.get_battle_elapsed_sec()
 		bs._battle_replay.append({"t": t, "type": "rally_drop", "x": pos.x, "z": pos.z, "flight_time": flight_time})
 	return true
 

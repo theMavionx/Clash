@@ -22,6 +22,8 @@ func _run() -> void:
 	var output_path: String = str(options.get("out", "")).strip_edges()
 	var run_label: String = str(options.get("run-label", "")).strip_edges()
 	var requested_render_fps: int = maxi(0, int(options.get("render-fps", 0)))
+	if requested_render_fps > 0:
+		Engine.max_fps = requested_render_fps
 	if fixture_path.is_empty():
 		push_error("[SERVER_GODOT_PARITY] Missing --fixtures=<absolute JSON path>.")
 		quit(1)
@@ -31,6 +33,18 @@ func _run() -> void:
 
 	var fixture_data := _read_json_file(fixture_path)
 	var scenarios: Array = fixture_data.get("scenarios", [])
+	var requested_case_ids: PackedStringArray = str(
+		options.get("case-ids", "")
+	).split(",", false)
+	if not requested_case_ids.is_empty():
+		var filtered_scenarios: Array = []
+		for raw_scenario in scenarios:
+			if (
+				raw_scenario is Dictionary
+				and str(raw_scenario.get("id", "")) in requested_case_ids
+			):
+				filtered_scenarios.append(raw_scenario)
+		scenarios = filtered_scenarios
 	if scenarios.is_empty():
 		push_error("[SERVER_GODOT_PARITY] Fixture file has no scenarios: %s" % fixture_path)
 		quit(1)
@@ -132,7 +146,7 @@ func _run() -> void:
 			output_path,
 		]
 	)
-	quit(0)
+	quit(1 if int(summary.get("failedCases", 0)) > 0 else 0)
 
 
 func _destroy_test_scene() -> void:
@@ -159,6 +173,11 @@ func _run_case(
 	var battle: Variant = main_building_system.get("_battle")
 	if battle == null:
 		return _failed_case(scenario, "Main BSBattle is missing.")
+	var building_schema_error := _validate_scenario_buildings(
+		scenario.get("buildings", [])
+	)
+	if not building_schema_error.is_empty():
+		return _failed_case(scenario, building_schema_error)
 	battle.call("reset")
 	battle.call("_lock_replay_clock")
 
@@ -195,6 +214,11 @@ func _run_case(
 				"glory": int(altar_levels.get("glory", 0)),
 			}
 		)
+	var loaded_building_error := _validate_loaded_buildings(
+		scenario.get("buildings", [])
+	)
+	if not loaded_building_error.is_empty():
+		return _failed_case(scenario, loaded_building_error)
 
 	var troop_levels: Dictionary = scenario.get("troopLevels", {})
 	for raw_type in troop_levels:
@@ -232,12 +256,16 @@ func _run_case(
 		}
 	)
 
-	var initial_ids: Dictionary = {}
+	var initial_buildings: Dictionary = {}
 	for raw_building in scenario.get("buildings", []):
 		if raw_building is Dictionary:
-			initial_ids[int(raw_building.get("id", -1))] = str(
-				raw_building.get("type", "")
-			)
+			initial_buildings[int(raw_building.get("id", -1))] = {
+				"type": str(raw_building.get("type", "")),
+				"maxHp": maxi(
+					1,
+					int(raw_building.get("max_hp", raw_building.get("hp", 1)))
+				),
+			}
 
 	battle.call("_replay_playback")
 	var frames_elapsed := 0
@@ -267,7 +295,7 @@ func _run_case(
 			break
 
 	var observed := _capture_observed_result(
-		initial_ids,
+		initial_buildings,
 		float(battle.get("_replay_elapsed")),
 		godot_result
 	)
@@ -293,6 +321,47 @@ func _run_case(
 	return _compare_case(scenario, observed)
 
 
+func _validate_scenario_buildings(raw_buildings: Variant) -> String:
+	if not raw_buildings is Array or raw_buildings.is_empty():
+		return "Scenario has no buildings."
+	var ids: Dictionary = {}
+	for raw_building in raw_buildings:
+		if not raw_building is Dictionary:
+			return "Scenario contains a non-dictionary building."
+		var id_value: Variant = raw_building.get("id", null)
+		if not (id_value is int or id_value is float):
+			return "Building ID must match the production integer API shape: %s" % [
+				str(id_value)
+			]
+		var server_id := int(id_value)
+		if ids.has(server_id):
+			return "Scenario contains duplicate building ID %d." % server_id
+		ids[server_id] = true
+	return ""
+
+
+func _validate_loaded_buildings(raw_buildings: Array) -> String:
+	var expected_ids: Dictionary = {}
+	for raw_building in raw_buildings:
+		if raw_building is Dictionary:
+			expected_ids[int(raw_building.get("id", -1))] = true
+	var loaded_ids: Dictionary = {}
+	for raw_system in get_nodes_in_group("building_systems"):
+		var building_system: Node = raw_system
+		if not is_instance_valid(building_system):
+			continue
+		for raw_building in building_system.get("placed_buildings"):
+			if raw_building is Dictionary:
+				loaded_ids[int(raw_building.get("server_id", -1))] = true
+	for server_id in expected_ids:
+		if not loaded_ids.has(server_id):
+			return (
+				"Godot loaded %d/%d unique production buildings; missing ID %d."
+				% [loaded_ids.size(), expected_ids.size(), int(server_id)]
+			)
+	return ""
+
+
 func _reset_ship_abilities(building_system: Node, ship_level: int) -> void:
 	for property_name in [
 		"_cannon",
@@ -312,11 +381,20 @@ func _reset_ship_abilities(building_system: Node, ship_level: int) -> void:
 
 
 func _capture_observed_result(
-	initial_ids: Dictionary,
+	initial_buildings: Dictionary,
 	duration_sec: float,
 	godot_result: String
 ) -> Dictionary:
 	var alive_ids: Dictionary = {}
+	var building_end_state: Dictionary = {}
+	for server_id in initial_buildings:
+		var initial: Dictionary = initial_buildings[server_id]
+		building_end_state[int(server_id)] = {
+			"id": int(server_id),
+			"type": str(initial.get("type", "")),
+			"hp": 0,
+			"maxHp": maxi(1, int(initial.get("maxHp", 1))),
+		}
 	var town_hall_hp := 0
 	var town_hall_max_hp := 1
 	for raw_system in get_nodes_in_group("building_systems"):
@@ -328,15 +406,46 @@ func _capture_observed_result(
 				continue
 			var server_id := int(raw_building.get("server_id", -1))
 			var hp := maxi(0, int(raw_building.get("hp", 0)))
+			building_end_state[server_id] = {
+				"id": server_id,
+				"type": str(raw_building.get("id", "")),
+				"hp": hp,
+				"maxHp": maxi(1, int(raw_building.get("max_hp", 1))),
+			}
 			if hp > 0:
 				alive_ids[server_id] = true
 			if str(raw_building.get("id", "")) == "town_hall":
 				town_hall_hp = hp
 				town_hall_max_hp = maxi(1, int(raw_building.get("max_hp", 1)))
 	var destroyed := 0
-	for server_id in initial_ids:
+	for server_id in initial_buildings:
 		if not alive_ids.has(server_id):
 			destroyed += 1
+	var building_hps: Array[Dictionary] = []
+	var sorted_building_ids: Array = building_end_state.keys()
+	sorted_building_ids.sort()
+	for server_id in sorted_building_ids:
+		building_hps.append(building_end_state[server_id])
+	var troop_end_state: Array[Dictionary] = []
+	for troop in get_nodes_in_group("troops"):
+		if not BaseTroop.is_live_troop(troop):
+			continue
+		var troop_type := str(troop.name)
+		if troop.has_method("_get_troop_name"):
+			troop_type = str(troop.call("_get_troop_name"))
+		var troop_position: Vector3 = troop.global_position
+		troop_end_state.append({
+			"replayOrder": int(troop.get_meta("replay_order", -1)),
+			"type": troop_type,
+			"hp": int(troop.get("hp")),
+			"maxHp": int(troop.get("max_hp")),
+			"x": snappedf(troop_position.x, 0.001),
+			"z": snappedf(troop_position.z, 0.001),
+			"state": int(troop.get("state")),
+		})
+	troop_end_state.sort_custom(func(left, right):
+		return int(left.get("replayOrder", -1)) < int(right.get("replayOrder", -1))
+	)
 	return {
 		"godotResult": godot_result,
 		"durationSec": snappedf(duration_sec, 0.001),
@@ -346,6 +455,8 @@ func _capture_observed_result(
 			0.0001
 		),
 		"troopsAlive": _live_troop_count(),
+		"buildingHPs": building_hps,
+		"troopEndState": troop_end_state,
 	}
 
 
@@ -365,12 +476,19 @@ func _telemetry_summary(raw_events: Variant) -> Dictionary:
 			"building_destroyed",
 			"defense_fire",
 			"defense_projectile_hit",
+			"defense_splash_hit",
+			"defense_beam_tick",
+			"guard_melee_hit",
+			"troop_melee_hit",
+			"troop_projectile_fire",
+			"troop_projectile_hit",
+			"troop_projectile_lost_target",
 			"shark_trap_trigger",
 			"necromancer_summon",
 			"wind_mage_summon",
 			"troop_split_spawn",
 			"replay_outcome_detected",
-		] and important_events.size() < 300:
+		] and important_events.size() < 1000:
 			important_events.append(raw_event.duplicate(true))
 	return {
 		"eventCount": events.size(),
@@ -450,8 +568,11 @@ func _summarize(results: Array[Dictionary]) -> Dictionary:
 	var town_hall_error_sum := 0.0
 	var destroyed_error_sum := 0.0
 	var duration_error_sum := 0.0
+	var failed_cases := 0
 	var by_matchup: Dictionary = {}
 	for result in results:
+		if str(result.get("godotResult", "")) in ["error", "timeout"]:
+			failed_cases += 1
 		if bool(result.get("outcomeMatch", false)):
 			outcome_matches += 1
 		if bool(result.get("strictMatch", false)):
@@ -496,6 +617,7 @@ func _summarize(results: Array[Dictionary]) -> Dictionary:
 			destroyed_error_sum / float(cases) if cases > 0 else 0.0
 		),
 		"durationMaeSec": duration_error_sum / float(cases) if cases > 0 else 0.0,
+		"failedCases": failed_cases,
 		"byMatchup": by_matchup,
 	}
 
@@ -546,6 +668,8 @@ func _parse_options(arguments: PackedStringArray) -> Dictionary:
 			options["run-label"] = text.trim_prefix("--run-label=")
 		elif text.begins_with("--render-fps="):
 			options["render-fps"] = text.trim_prefix("--render-fps=")
+		elif text.begins_with("--case-ids="):
+			options["case-ids"] = text.trim_prefix("--case-ids=")
 	return options
 
 

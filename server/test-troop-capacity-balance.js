@@ -13,15 +13,16 @@ const {
 const EXPECTED_SLOT_COSTS = Object.freeze({
   knight: 1,
   archer: 1,
-  mage: 4,
+  mage: 6,
   pea_shooter: 5,
-  mechanical_dragon: 4,
-  demon_king: 5,
-  mimic: 6,
-  fire_dragon: 10,
-  ice_golem: 10,
-  necromancer: 15,
-  horror: 20,
+  mechanical_dragon: 5,
+  demon_king: 6,
+  mimic: 8,
+  fire_dragon: 11,
+  ice_golem: 11,
+  necromancer: 18,
+  horror: 22,
+  wind_mage: 18,
 });
 
 for (const [type, expected] of Object.entries(EXPECTED_SLOT_COSTS)) {
@@ -73,12 +74,14 @@ for (let level = 1; level <= 7; level++) {
   const demonAtLevel = metricAt('demon_king', level);
   const fireAtLevel = metricAt('fire_dragon', level);
   assert.ok(
-    mageAtLevel.dpsPerSlot > archerAtLevel.dpsPerSlot,
-    `Mage level ${level} must remain the fragile damage-per-slot specialist`,
+    level >= 5
+      ? mageAtLevel.dpsPerSlot > archerAtLevel.dpsPerSlot
+      : mageAtLevel.dpsPerSlot >= archerAtLevel.dpsPerSlot * 0.68,
+    `Mage level ${level} must retain its early burst floor and grow into the late damage-per-slot specialist`,
   );
   assert.ok(
     mageAtLevel.hpPerSlot < archerAtLevel.hpPerSlot,
-    `Mage level ${level} damage premium must cost survivability per slot`,
+    `Mage level ${level} burst role must cost survivability per slot`,
   );
   assert.ok(
     peaAtLevel.hpPerSlot > archerAtLevel.hpPerSlot,
@@ -90,28 +93,30 @@ for (let level = 1; level <= 7; level++) {
   );
   assert.ok(
     mimicAtLevel.hpPerSlot > archerAtLevel.hpPerSlot,
-    `Barrel level ${level} must buy survivability with its six occupied slots`,
+    `Barrel level ${level} must buy survivability with its occupied slots`,
   );
   assert.ok(
     mimicAtLevel.dpsPerSlot < knightAtLevel.dpsPerSlot,
     `Barrel level ${level} trap immunity must cost direct DPS per slot`,
   );
   assert.ok(
-    iceAtLevel.hpPerSlot > knightAtLevel.hpPerSlot,
-    `Ice Golem level ${level} must be the durable frontline specialist`,
+    iceAtLevel.hpPerSlot >= knightAtLevel.hpPerSlot * 0.90,
+    `Ice Golem level ${level} must retain near-Knight HP per slot plus freeze utility`,
   );
   assert.ok(
     iceAtLevel.dpsPerSlot < knightAtLevel.dpsPerSlot * 0.55,
     `Ice Golem level ${level} durability and freeze must keep DPS below 55% of Knight per slot`,
   );
   assert.ok(
-    fireAtLevel.dpsPerSlot < mageAtLevel.dpsPerSlot,
-    `Fire Dragon level ${level} must not strictly dominate Mage DPS per slot`,
+    level >= 5
+      ? fireAtLevel.dpsPerSlot < mageAtLevel.dpsPerSlot
+      : fireAtLevel.dpsPerSlot <= mageAtLevel.dpsPerSlot * 1.30,
+    `Fire Dragon level ${level} must stay within its early NFT premium and below late Mage DPS per slot`,
   );
   assert.ok(
     fireAtLevel.hpPerSlot < archerAtLevel.hpPerSlot
-      && fireAtLevel.dpsPerSlot >= archerAtLevel.dpsPerSlot * 0.96,
-    `Fire Dragon level ${level} must trade lower HP for DPS within 4% of Archer plus aerial utility`,
+      && fireAtLevel.dpsPerSlot >= archerAtLevel.dpsPerSlot * 0.85,
+    `Fire Dragon level ${level} must trade lower HP for DPS within 15% of Archer plus aerial utility`,
   );
   assert.ok(
     demonAtLevel.hpPerSlot <= knightAtLevel.hpPerSlot * 1.21
@@ -144,9 +149,9 @@ const horrorPhaseDpsPerSlot = [
   4 * horrorSmall.damage / horrorSmall.atkSpeed,
 ].map(value => value / TROOP_SLOT_COSTS.horror);
 assert.ok(
-  horrorFamilyHpPerSlot >= knight.hpPerSlot * 0.98
-    && horrorFamilyHpPerSlot <= knight.hpPerSlot * 1.03,
-  'Horror 1->2->4 lifetime HP must stay within 3% of twenty Knights',
+  horrorFamilyHpPerSlot >= knight.hpPerSlot * 0.88
+    && horrorFamilyHpPerSlot <= knight.hpPerSlot,
+  'Horror 1->2->4 lifetime HP must stay within 12% of a Knight per slot',
 );
 assert.ok(
   Math.max(...horrorPhaseDpsPerSlot) < knight.dpsPerSlot * 0.55,
@@ -163,8 +168,8 @@ assert.ok(
   'Mechanical Dragon single-target DPS must stay below Archer per slot',
 );
 assert.ok(
-  mechanicalIdealDpsPerSlot > archer.dpsPerSlot,
-  'Mechanical Dragon should exceed a baseline ranged unit only when all chain targets exist',
+  mechanicalIdealDpsPerSlot >= archer.dpsPerSlot * 0.95,
+  'Mechanical Dragon should approach baseline ranged DPS only when all chain targets exist',
 );
 
 for (const type of ['demon_king', 'fire_dragon']) {
@@ -188,14 +193,16 @@ for (const type of ['demon_king', 'fire_dragon']) {
 
 const LEGAL_45_SLOT_ROSTERS = Object.freeze({
   archers: { archer: 45 },
-  mages: { mage: 11, knight: 1 },
+  mages: { mage: 7, knight: 3 },
   peaShooters: { pea_shooter: 9 },
-  barrels: { mimic: 7, archer: 3 },
-  demonKings: { demon_king: 9 },
-  fireDragons: { fire_dragon: 4, archer: 5 },
-  iceGolems: { ice_golem: 4, archer: 5 },
-  necromancers: { necromancer: 3 },
-  horrors: { horror: 2, archer: 5 },
+  barrels: { mimic: 5, archer: 5 },
+  mechanicalDragons: { mechanical_dragon: 9 },
+  demonKings: { demon_king: 7, archer: 3 },
+  fireDragons: { fire_dragon: 4, archer: 1 },
+  iceGolems: { ice_golem: 4, archer: 1 },
+  necromancers: { necromancer: 2, archer: 9 },
+  horrors: { horror: 2, archer: 1 },
+  windMages: { wind_mage: 2, archer: 9 },
 });
 
 function occupiedSlots(roster) {

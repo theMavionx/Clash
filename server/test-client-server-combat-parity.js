@@ -901,7 +901,7 @@ assert.deepEqual(
 console.log(
   '[COMBAT_PARITY] PASS troops=knight,archer,mage,pea_shooter,wind_mage,windling,mimic,mechanical_dragon,ice_golem,necromancer,horror,demon_king,fire_dragon'
   + ' summon=owner_bound,capped,expiring shark_trap=levels_1_to_7'
-  + ' ship_slots=knight1,archer1,mage4,pea5,mimic6,mechanical4,demon5,ice10,fire10,wind_mage15,necromancer15,horror20'
+  + ' ship_slots=knight1,archer1,mage6,pea5,mimic8,mechanical5,demon6,ice11,fire11,wind_mage18,necromancer18,horror22'
   + ' tactical_constants=freeze,rage,skeleton_barrel'
   + ' defenses=turret7,archer7,mage7,mortar7,harpoon8,cannon7,guards6'
   + ' telemetry=chain,freeze,trap,wind_wave,summon,split progression=th7_cannon',

@@ -125,7 +125,7 @@ static var _troop_body_material_cache: Dictionary = {}
 ## the same focus, including troops that spawn after the marker faded.
 static var _rally_active: bool = false
 static var _rally_pos: Vector3 = Vector3.ZERO
-static var _rally_expire_msec: int = 0
+static var _rally_expire_physics_frame: int = 0
 static var _rally_target_building: Dictionary = {}
 static var _rally_target_bs: Node = null
 static var _rally_target_guard: Node3D = null
@@ -133,20 +133,26 @@ static var _rally_target_guard: Node3D = null
 static func set_rally(pos: Vector3, duration_sec: float) -> Dictionary:
 	_rally_active = true
 	_rally_pos = pos
-	_rally_expire_msec = Time.get_ticks_msec() + int(duration_sec * 1000.0)
+	var duration_frames := ceili(
+		maxf(0.0, duration_sec) * float(Engine.physics_ticks_per_second)
+	)
+	_rally_expire_physics_frame = Engine.get_physics_frames() + duration_frames
 	_resolve_rally_target(pos)
 	_apply_rally_to_active_troops()
 	return get_rally_debug_payload(pos)
 
 static func clear_rally() -> void:
 	_rally_active = false
-	_rally_expire_msec = 0
+	_rally_expire_physics_frame = 0
 	_rally_target_building = {}
 	_rally_target_bs = null
 	_rally_target_guard = null
 
 static func _is_rally_live() -> bool:
-	return _rally_active and Time.get_ticks_msec() < _rally_expire_msec
+	return (
+		_rally_active
+		and Engine.get_physics_frames() < _rally_expire_physics_frame
+	)
 
 static func _resolve_rally_target(pos: Vector3) -> void:
 	_rally_target_building = {}
@@ -2649,7 +2655,6 @@ func _compute_dense_troop_separation(self_pos: Vector3, troops: Array) -> Vector
 		ceili(separation_radius / DENSE_SPATIAL_CELL_SIZE)
 	)
 	var sep_sq: float = separation_radius * separation_radius
-	var self_id: int = int(get_instance_id())
 	for cell_z in range(center_cell.y - cell_radius, center_cell.y + cell_radius + 1):
 		for cell_x in range(center_cell.x - cell_radius, center_cell.x + cell_radius + 1):
 			var cell := Vector2i(cell_x, cell_z)
@@ -2671,12 +2676,16 @@ func _compute_dense_troop_separation(self_pos: Vector3, troops: Array) -> Vector
 				if d_sq < 0.000001:
 					# Held spawn can put several troops at the exact same point.
 					# Give each pair an opposite deterministic escape direction.
-					var other_id: int = int(other.get_instance_id())
-					var low_id: int = mini(self_id, other_id)
-					var high_id: int = maxi(self_id, other_id)
-					var pair_seed: int = (low_id * 73856093) ^ (high_id * 19349663)
-					var pair_angle: float = float(posmod(pair_seed, 3600)) * TAU / 3600.0
-					var pair_sign: float = 1.0 if self_id < other_id else -1.0
+					var own_order: int = _troop_order_key(self)
+					var other_order: int = _troop_order_key(other)
+					var low_order: int = mini(own_order, other_order)
+					var high_order: int = maxi(own_order, other_order)
+					var pair_seed: int = posmod(
+						low_order * 93 + high_order * 193,
+						3600
+					)
+					var pair_angle: float = float(pair_seed) * TAU / 3600.0
+					var pair_sign: float = 1.0 if own_order < other_order else -1.0
 					push.x += cos(pair_angle) * pair_sign
 					push.z += sin(pair_angle) * pair_sign
 					continue
@@ -2803,8 +2812,8 @@ func _get_separation() -> Vector3:
 		return Vector3.ZERO
 
 	# Dense swarms reuse the same short-range push for a few extra fixed ticks.
-	# The server does not simulate allied troop push-apart, so this only affects
-	# client-side crowd readability and cannot change validated combat damage.
+	# The authoritative simulator mirrors this bounded attack separation profile;
+	# keep the client movement deterministic so replay damage stays comparable.
 	var troops = _get_troops_cached()
 	var separation_interval: int = (
 		HIGH_DENSITY_ATTACK_SEPARATION_INTERVAL

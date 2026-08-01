@@ -186,9 +186,10 @@ func _enemy_town_hall_level(info: Dictionary) -> int:
 
 
 func _battle_elapsed_sec() -> float:
-	if _battle_start_time <= 0.0:
-		return maxf(0.0, _battle_timer)
-	return maxf(0.0, (Time.get_ticks_msec() / 1000.0) - _battle_start_time)
+	# This is the authoritative live-combat clock. It advances only from
+	# BuildingSystem._physics_process and remains readable after the active flag
+	# is cleared so battle_end receives the exact final simulation timestamp.
+	return maxf(0.0, _battle_timer)
 
 
 func _reset_troop_death_reports() -> void:
@@ -381,6 +382,11 @@ func _stop_attacker_combat_after_town_hall_destroyed(play_victory: bool = true) 
 	for troop in bs.get_tree().get_nodes_in_group("troops"):
 		if not is_instance_valid(troop):
 			continue
+		# Seal result-affecting AI on the lethal Town Hall physics tick. At low
+		# render FPS several physics steps can run before the coroutine resumes
+		# after its process_frame await; state/animation presentation happens
+		# later, but no troop may land another hit in that window.
+		troop.set_physics_process(false)
 		if play_victory:
 			if troop.has_method("_play_victory"):
 				troop.call("_play_victory")

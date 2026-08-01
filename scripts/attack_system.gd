@@ -792,7 +792,7 @@ func _try_deploy_selected_troop(hit: Vector3) -> bool:
 		return false
 	_army_entries.remove_at(entry_index)
 	if bs_ref and bs_ref.is_viewing_enemy:
-		var t: float = Time.get_ticks_msec() / 1000.0 - bs_ref._battle_start_time
+		var t: float = bs_ref.get_battle_elapsed_sec()
 		bs_ref._battle_replay.append({
 			"t": t,
 			"type": "deploy_troop",
@@ -929,7 +929,7 @@ func _try_place_ship(hit: Vector3) -> bool:
 	var bs: Node = get_node_or_null("../BuildingSystem")
 	var ship_data: Dictionary = _fleet[ship_idx]
 	if bs and bs.is_viewing_enemy:
-		var t: float = Time.get_ticks_msec() / 1000.0 - bs._battle_start_time
+		var t: float = bs.get_battle_elapsed_sec()
 		# Log the ACTUAL troop spawn position (post-sail), not the raw click
 		# target. The server's verifyReplay spawns troops at these coords, so
 		# they need to match where the game actually places them — otherwise

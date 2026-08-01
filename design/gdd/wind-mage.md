@@ -10,8 +10,8 @@ single-target damage.
 ## Army Economy
 
 - Unlock: Town Hall 8
-- Ship capacity: 15 slots
-- Training cost: 1,500 gold (100 gold per occupied slot)
+- Ship capacity: 18 slots
+- Training cost: 1,800 gold (100 gold per occupied slot)
 - Upgrade levels: 1-7
 - Windlings do not occupy ship slots and are not paid casualties.
 
@@ -84,7 +84,7 @@ positions inside the corridor.
 - Targets outside the corridor take no wave damage.
 - A cast creates two or three Windlings and never exceeds six per caster.
 - Windlings cannot attack guards and do not become casualties.
-- The unit is available from Town Hall 8 for 15 ship slots in every ship,
+- The unit is available from Town Hall 8 for 18 ship slots in every ship,
   upgrade, casualty, replay, and mobile attack UI.
 - The mobile attack roster scrolls horizontally without covering battle HUD
   controls.

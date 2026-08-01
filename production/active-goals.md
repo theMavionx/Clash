@@ -105,6 +105,12 @@ Next checkpoint:
   The strict runner rejects any TH5+ tier outside 53-57% or any incomplete
   breakability result. See
   `production/reports/th5-th7-55pct-breakability-balance-check-2026-07-29.md`.
+- TH5-TH7 real-combat/FPS checkpoint completed locally on 2026-08-01. The production Digger
+  layout measures 53.9% attacker wins over 800 replays; selected ranked cohorts measure
+  TH5 55.1%, TH6 53.7%, and TH7 56.6%, with 56.3% combined over 1,800 battles. Sixteen real
+  `TestMain` scenarios have identical core results at 10/20/60 FPS. The owner authorized this
+  checkpoint for the 2026-08-01 production release. See
+  `production/reports/th5-th7-real-combat-fps-balance-2026-08-01.md`.
 - All-unit role checkpoint completed on 2026-07-29. Two strict actual-code
   holdouts produce pooled policy win rates of 55.24% at TH5, 55.87% at TH6,
   and 56.25% at TH7. Equal-slot probes cover all 12 active/currently authored

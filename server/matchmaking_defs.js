@@ -29,8 +29,19 @@ const BOT_TEMPLATE_COUNTS_BY_TH = {
 // recovery players continue to face competitive normal bases.
 const CHALLENGE_BOT_ARCHETYPES = Object.freeze([
   'corner-keep',
-  'rear-keep',
+  'asymmetric-left',
 ]);
+
+// Ranked raids use the same-TH geometry cohort that landed closest to the
+// target band in the production-parity balance population. The selected
+// archetype has 20 deterministic TH5 layouts, 40 TH6 layouts, and 37 TH7
+// layouts, so the
+// daily no-repeat rule still has headroom without mixing in softer layouts.
+const RANKED_CHALLENGE_BOT_ARCHETYPES_BY_TH = Object.freeze({
+  5: Object.freeze(['asymmetric-left']),
+  6: Object.freeze(['asymmetric-left']),
+  7: Object.freeze(['corner-keep']),
+});
 
 const MATCHMAKING_CONFIG = {
   targetSuccessRate: 0.57,
@@ -843,6 +854,7 @@ module.exports = {
   BOT_BASE_GENERATION,
   BOT_LOOT_REWARD_RANGE,
   CHALLENGE_BOT_ARCHETYPES,
+  RANKED_CHALLENGE_BOT_ARCHETYPES_BY_TH,
   MATCHMAKING_CONFIG,
   buildBotBaseTemplates,
   botResources,

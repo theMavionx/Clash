@@ -12,6 +12,29 @@ process.env.LUCKY_RAIDER_PAYOUT_WORKER = '0';
 process.env.CLASH_RAID_BOT_TARGETS_ENABLED = '0';
 
 const game = require('./db');
+const {
+  RANKED_CHALLENGE_BOT_ARCHETYPES_BY_TH,
+  buildBotBaseTemplates,
+} = require('./matchmaking_defs');
+
+for (const [townHall, expectedArchetype] of [
+  [5, 'asymmetric-left'],
+  [6, 'asymmetric-left'],
+  [7, 'corner-keep'],
+]) {
+  assert.deepEqual(RANKED_CHALLENGE_BOT_ARCHETYPES_BY_TH[townHall], [expectedArchetype]);
+  const rankedTemplates = buildBotBaseTemplates().filter((template) => (
+    template.th === townHall
+    && template.difficulty === 'hard'
+    && RANKED_CHALLENGE_BOT_ARCHETYPES_BY_TH[townHall].includes(template.archetype)
+  ));
+  const expectedTemplateCount = { 5: 20, 6: 40, 7: 37 }[townHall];
+  assert.equal(
+    rankedTemplates.length,
+    expectedTemplateCount,
+    `TH${townHall} must retain ${expectedTemplateCount} tuned ranked bot layouts`,
+  );
+}
 
 function insertPlayer(id, name, token, trophies, shieldUntil = null) {
   game.db.prepare(`
@@ -100,12 +123,14 @@ try {
   assert.equal(rankedBot.town_hall_level, 7);
   assert.equal(rankedBot.matchmaking.target_is_bot, true);
   assert.ok(
-    rankedBot.matchmaking.bot_candidate_count >= 70
-      && rankedBot.matchmaking.bot_candidate_count <= 80,
-    `ranked challenge pool should expose most of its 80 templates, got ${rankedBot.matchmaking.bot_candidate_count}`,
+    rankedBot.matchmaking.bot_candidate_count >= 35
+      && rankedBot.matchmaking.bot_candidate_count <= 40,
+    `ranked challenge pool should expose most of its 40 tuned templates, got ${rankedBot.matchmaking.bot_candidate_count}`,
   );
   assert.ok(
-    ['corner-keep', 'rear-keep'].includes(rankedBot.matchmaking.target_bot_archetype),
+    RANKED_CHALLENGE_BOT_ARCHETYPES_BY_TH[7].includes(
+      rankedBot.matchmaking.target_bot_archetype,
+    ),
     `ranked bot must use a validated challenge geometry, got ${rankedBot.matchmaking.target_bot_archetype}`,
   );
   assert.equal(rankedBot.matchmaking.shield_ignored_for_ranked, true);

@@ -53,7 +53,7 @@
 - TH6 Shark Trap damage is 2,400. It remains ground-only and is consumed by a
   rolling Mimic without damaging the Mimic.
 - Mimic Barrel unlocks at TH5.
-- Ice Golem unlocks at TH9. It uses ten ship slots, targets defenses before
+- Ice Golem unlocks at TH9. It uses eleven ship slots, targets defenses before
   economy buildings, and freezes nearby defenses for seven seconds on death.
 - Main Ship progression reaches level 10 but remains capped at 45 troop slots
   from level 5 onward. Levels 6-10 raise shared ability energy and unlock
@@ -275,7 +275,7 @@ Town Hall level. The server enforces these contracts with `BARN_LEVEL_REQUIRED` 
 | Fire Dragon | 250G+250O | 500G+500O | 1000G+1000O | 2000G+2000O | 3600G+3600O | 6000G+6000O | **13350G+13350O** |
 | **Totals** | - | - | - | - | - | - | **69445G + 16620W + 50075O** |
 
-Demon King and Fire Dragon remain NFT-backed troops, but now occupy 5 and 10 slots,
+Demon King and Fire Dragon remain NFT-backed troops, but now occupy 6 and 11 slots,
 respectively. Both have server-side `TROOP_DEFS` entries and common-rarity combat tables;
 Epic and Legendary rarity scale those tables without changing occupied slots.
 
@@ -291,14 +291,14 @@ the data but is never charged, since `max_level = 3`.)
 | Archer | 150G + 150W | 350G + 350W | **500G + 500W** | gold/wood |
 | Ranger | 120G + 120W | 250G + 250W | **370G + 370W** | gold/wood |
 | **Totals** | — | — | **2,520G + 870W + 1,550O** | — |
-| Demon King | — | — | **NFT-backed** | premium, 5 ship slots |
+| Demon King | — | — | **NFT-backed** | premium, 6 ship slots |
 
 (The unused `cost[2]` entries are: Knight 600G+500O, Mage 1000G+1000O,
 Barbarian 700G+700O, Archer 700G+700W, Ranger 500G+500W.)
 
 **NFT troops:** Demon King and Fire Dragon are present in `TROOP_DEFS`, but loading them
 does not charge synthetic gold because ownership is represented by the NFT inventory.
-They consume 5 and 10 ship slots and use the same level progression as ordinary troops.
+They consume 6 and 11 ship slots and use the same level progression as ordinary troops.
 See the current per-slot analysis in
 `design/balance/troop-capacity-rebalance-2026-07-25.md`.
 
@@ -432,8 +432,8 @@ barbarian: { cost: [{ gold: 150, ore: 150 }, { gold: 350, ore: 350 }, { gold:  7
 archer:    { cost: [{ gold: 150, wood: 150 }, { gold: 350, wood: 350 }, { gold: 700, wood: 700 }] },
 ranger:    { cost: [{ gold: 120, wood: 120 }, { gold: 250, wood: 250 }, { gold: 500, wood: 500 }] },
 // NFT-backed troop roots are server-defined and have no synthetic load cost:
-demon_king: { max_level: 7, slot_cost: 5, buy_cost: 0 },
-fire_dragon: { max_level: 7, slot_cost: 10, buy_cost: 0 },
+demon_king: { max_level: 7, slot_cost: 6, buy_cost: 0 },
+fire_dragon: { max_level: 7, slot_cost: 11, buy_cost: 0 },
 ```
 
 ### 7.4 Production & Storage (`db.js`)
@@ -579,44 +579,44 @@ tier in `TH_UNLOCK`, (3) add a `TROPHY_TABLE` row, (4) fix the stale server comm
 
 ### 11.2 Demon King — `demon_king.gd`
 
-**Status:** NFT-backed heavy melee troop in `TROOP_DEFS`. It consumes **5 ship slots**
+**Status:** NFT-backed heavy melee troop in `TROOP_DEFS`. It consumes **6 ship slots**
 and uses one owned NFT token per loaded root.
 
 At level 7 common rarity its authored table is 10,700 HP and 1,618 damage.
 After the shared `1.74x` same-TH curve it has 18,618 HP and deals 2,815 damage
-every fixed 1.40 seconds: 3,723.6 HP and 402.1 DPS per occupied slot. It is more
+every fixed 1.40 seconds: 3,103.0 HP and 335.1 DPS per occupied slot. It is more
 durable than a Knight per slot but remains a single melee body, so focus fire
 and pathing preserve counterplay. Epic and Legendary use normalized rarity
 ratios against Common: `1.23/1.20` and `1.25/1.20`, or +2.5% and +4.17% before
 integer rounding. Unrevealed is identical to Common and client-submitted
 rarity is never authoritative.
 
-### 11.3 Mechanical Dragon - four-slot chain siege
+### 11.3 Mechanical Dragon - five-slot chain siege
 
-**Status:** TH6 heavy flying troop. It consumes **4 ship slots**, costs **400 gold** to
+**Status:** TH6 heavy flying troop. It consumes **5 ship slots**, costs **500 gold** to
 load, and chains each attack from the primary building to at most two nearby buildings
 at 65% cumulative falloff per jump.
 
-The four-slot revision raises per-unit HP by about 45%. Its authored attack cadence is
-fixed at 1.03 seconds across every level so progression never accelerates the large model
-into twitchy animation. Levels scale through HP and damage instead. At level 7 the
-authoritative post-curve unit has 6,425 HP and deals 1,876 primary damage every
+Its authored attack cadence is fixed at 1.03 seconds across every level so progression
+never accelerates the large model into twitchy animation. Levels scale through HP and
+damage instead. At level 7 the authoritative post-curve unit has 5,704 HP and deals
+1,665 primary damage every
 1.03 seconds. Its ideal three-target chain remains bounded by the cumulative 65%
 falloff, while the dragon keeps a distinct durable siege role.
 
-The 45-slot level-5 ship can carry at most 11 Mechanical Dragons plus one standard
-one-slot troop. This prevents the stronger individual unit from increasing total
-ship damage without a capacity trade-off.
+The 45-slot level-5 ship can carry at most 9 Mechanical Dragons. This prevents
+the stronger individual unit from increasing total ship damage without a
+capacity trade-off.
 
-### 11.4 Ice Golem - ten-slot defense vanguard
+### 11.4 Ice Golem - eleven-slot defense vanguard
 
-**Status:** TH9 heavy ground troop. It consumes **10 ship slots**, costs **1,000
+**Status:** TH9 heavy ground troop. It consumes **11 ship slots**, costs **1,100
 gold** to load, and always selects the nearest living defensive building before
 considering economy buildings.
 
 Its attack animation keeps a fixed 1.42-second cadence at every level. The
-authored level-7 unit has 21,840 HP and 1,200 damage per strike. After the shared
-level curve this is 39,312 HP and 2,160 damage. Its direct DPS per slot is
+authoritative post-curve level-7 unit has 38,002 HP and 2,088 damage per strike.
+Its direct DPS per slot is
 deliberately below a same-level Knight because its tactical value comes from
 pathing into the defensive line and applying a seven-second death freeze in a
 0.90-unit radius.
@@ -626,20 +626,20 @@ mortars, tombstones and their guards, plus hidden shark-trap scans. Already
 fired projectiles continue. Repeated freezes refresh to the later expiry rather
 than stacking durations. Hidden traps receive no visual overlay.
 
-Four Ice Golems plus five normal troops fit the 45-slot ship. Existing
+Four Ice Golems plus one normal troop fit the 45-slot ship. Existing
 deterministic combat checks preserve the vanguard role; the unit now enters the
 roster at TH9.
 
-### 11.5 Horror - twenty-slot evolution attrition troop
+### 11.5 Horror - twenty-two-slot evolution attrition troop
 
-**Status:** TH10 ground troop. It consumes **20 ship slots**, costs **2,000 gold**
+**Status:** TH10 ground troop. It consumes **22 ship slots**, costs **2,200 gold**
 to load, and evolves deterministically from one Horror into two Creepers, then
 from each Creeper into two terminal Lurkers. Only the loaded Horror is
 persistent inventory and only its death counts as a casualty.
 
-At level 7 the complete post-curve family has 76,464 effective HP, or 3,823.2
-HP per ship slot, approximately matching a level-7 Knight's 3,737 HP per slot.
-Its phase DPS is approximately `4,227 -> 3,835 -> 3,811`, so peak DPS per slot
+At level 7 the complete post-curve family has 73,917 effective HP, or 3,359.9
+HP per ship slot, approximately matching a level-7 Knight's durability per slot.
+Its phase DPS is approximately `4,086.3 -> 3,708.3 -> 3,683.3`, so peak DPS per slot
 remains substantially below the Knight. The troop therefore trades burst
 damage for overkill resistance and additional target pressure without
 increasing raw ship power.

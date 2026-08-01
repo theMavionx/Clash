@@ -998,6 +998,10 @@ var _battle_start_time: float:
 		if _battle: _battle._battle_start_time = v
 var find_button: Button
 
+
+func get_battle_elapsed_sec() -> float:
+	return _battle._battle_elapsed_sec() if _battle else 0.0
+
 # ── Replay playback (proxied to _battle helper) ──────────────
 var _replay_active: bool:
 	get: return _battle._replay_active if _battle else false
@@ -1128,8 +1132,8 @@ var troop_defs: Dictionary = {
 		"model": "res://Model/Characters/pirate_mage/pirate_mage.tscn",
 		"script": "res://scripts/mage.gd",
 		"min_town_hall_level": 3,
-		"slot_cost": 4,
-		"buy_cost": 400,
+		"slot_cost": 6,
+		"buy_cost": 600,
 		"max_level": 7,
 		"costs": {
 			1: {"gold": 250, "ore": 250},
@@ -1178,8 +1182,8 @@ var troop_defs: Dictionary = {
 		"model": "res://Model/Characters/MimicBarrel/MimicBarrel.fbx",
 		"script": "res://scripts/mimic.gd",
 		"min_town_hall_level": 5,
-		"slot_cost": 6,
-		"buy_cost": 600,
+		"slot_cost": 8,
+		"buy_cost": 800,
 		"max_level": 7,
 		"costs": {
 			1: {"gold": 175, "wood": 175},
@@ -1195,8 +1199,8 @@ var troop_defs: Dictionary = {
 		"model": "res://Model/Characters/Necromancer/Necromancer.fbx",
 		"script": "res://scripts/necromancer.gd",
 		"min_town_hall_level": 7,
-		"slot_cost": 15,
-		"buy_cost": 1500,
+		"slot_cost": 18,
+		"buy_cost": 1800,
 		"max_level": 7,
 		"costs": {
 			1: {"gold": 250, "ore": 250},
@@ -1212,8 +1216,8 @@ var troop_defs: Dictionary = {
 		"model": "res://Model/Characters/HorrorEvolution/horror.fbx",
 		"script": "res://scripts/horror_evolution.gd",
 		"min_town_hall_level": 10,
-		"slot_cost": 20,
-		"buy_cost": 2000,
+		"slot_cost": 22,
+		"buy_cost": 2200,
 		"max_level": 7,
 		"costs": {
 			1: {"gold": 375, "ore": 375},
@@ -1229,8 +1233,8 @@ var troop_defs: Dictionary = {
 		"model": "res://Model/Characters/MechanicalDragon/MechanicalDragon.fbx",
 		"script": "res://scripts/mechanical_dragon.gd",
 		"min_town_hall_level": 6,
-		"slot_cost": 4,
-		"buy_cost": 400,
+		"slot_cost": 5,
+		"buy_cost": 500,
 		"max_level": 7,
 		"costs": {
 			1: {"gold": 500, "ore": 500},
@@ -1246,8 +1250,8 @@ var troop_defs: Dictionary = {
 		"model": "res://Model/Characters/IceGolem/IceGolem.fbx",
 		"script": "res://scripts/ice_golem.gd",
 		"min_town_hall_level": 9,
-		"slot_cost": 10,
-		"buy_cost": 1000,
+		"slot_cost": 11,
+		"buy_cost": 1100,
 		"max_level": 7,
 		"costs": {
 			1: {"gold": 500, "ore": 500},
@@ -1263,8 +1267,8 @@ var troop_defs: Dictionary = {
 		"model": "res://Model/Characters/WindMage/WindMage.fbx",
 		"script": "res://scripts/wind_mage.gd",
 		"min_town_hall_level": 8,
-		"slot_cost": 15,
-		"buy_cost": 1500,
+		"slot_cost": 18,
+		"buy_cost": 1800,
 		"max_level": 7,
 		"costs": {
 			1: {"gold": 250, "ore": 250},
@@ -1279,7 +1283,7 @@ var troop_defs: Dictionary = {
 		"display": "Demon King (Heavy Boss)",
 		"model": "res://Model/Characters/Model/DemonKing_Body.fbx",
 		"script": "res://scripts/demon_king.gd",
-		"slot_cost": 5,
+		"slot_cost": 6,
 		"buy_cost": 0,                 # NFT-backed; loading is free and reusable
 		"max_level": 7,
 		"costs": {
@@ -1295,7 +1299,7 @@ var troop_defs: Dictionary = {
 		"display": "Fire Dragon (Flying Boss)",
 		"model": "res://Model/Characters/FireDragon/FireDragon.tscn",
 		"script": "res://scripts/fire_dragon.gd",
-		"slot_cost": 10,
+		"slot_cost": 11,
 		"buy_cost": 0,
 		"max_level": 7,
 		"costs": {

@@ -88,17 +88,13 @@ API on 2026-08-01. The replay preserves all 33 non-Port buildings, including
 the live backline placements, and validates grid bounds, overlap, TH caps, and
 the single Town Hall contract.
 
-- Population sample: 2,500 max-level TH7 attacks, 352 wins (14.1%), 0 invalid.
-- Breakability search: 4,000 common-rarity candidate policies plus a 30-policy
-  hard-base gate; 4,030 probe battles, 0 invalid, 0 unbeaten bases.
-- All 30 selected hard-base policies destroyed the Town Hall. This base is very
-  difficult for an arbitrary attack, but it is not mechanically unbreakable.
-- Reproducible common-rarity counter: 11 L7 Mechanical Dragons + 1 L7 Knight,
-  45/45 slots, vanguard wedge, rapid deployment, roster order, Rally Core.
-  Town Hall reached 0 HP in 18.1 seconds; 9 buildings were destroyed and two
-  troops survived.
-- A common-rarity alternative using 11 L7 Mechanical Dragons, left-flank rapid
-  deployment, tank-first order, and Rally Core also won in 24.1 seconds.
+- The final 800-policy production sample records 53.9% attacker wins and zero
+  invalid battles after the late-building and legal-capacity pass.
+- Slot-cost migration version 3 permits at most nine L7 Mechanical Dragons in
+  a 45-slot ship; the previous 11-dragon counter is no longer a legal roster.
+- Digger remains a hard gate but is neither mechanically unbreakable nor
+  dependent on an over-capacity composition. The reproducible evidence is in
+  `production/reports/th5-th7-real-combat-fps-balance-2026-08-01.md`.
 
 ## Verification gates
 

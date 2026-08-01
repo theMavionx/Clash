@@ -5069,12 +5069,15 @@ function FuturesPanel() {
       ? 'Signing...'
       : 'Preparing...';
 
+  const compactSymbolBar = isMobile || !fullscreen;
   const renderSymbolBar = () => (
     <>
-      <div style={{...S.symbolBar, ...(fullscreen ? {background: '#e8dfc8', borderBottom: '3px solid #d4c8b0'} : {})}}>
-        <button style={{...S.symbolBtn, padding: '6px 10px', gap: 6, whiteSpace: 'nowrap', flexShrink: 0}} onClick={() => setShowSymbolPicker(!showSymbolPicker)} data-nodrag>
-          <TokenIcon sym={baseSymbolForIcon(currentMarket, symbol)} size={20} />
-          <span style={{fontSize: 15, fontWeight: 900}}>{symbol}</span>
+      <div style={{...S.symbolBar, ...(compactSymbolBar ? S.symbolBarCompact : {}), ...(fullscreen ? {background: '#e8dfc8', borderBottom: '3px solid #d4c8b0'} : {})}}>
+        <button style={{...S.symbolBtn, ...(compactSymbolBar ? S.symbolBtnCompact : {}), padding: compactSymbolBar ? '6px 8px' : '6px 10px', gap: compactSymbolBar ? 5 : 6, whiteSpace: 'nowrap'}} onClick={() => setShowSymbolPicker(!showSymbolPicker)} data-nodrag>
+          <span style={{display: 'inline-flex', flexShrink: 0}}>
+            <TokenIcon sym={baseSymbolForIcon(currentMarket, symbol)} size={20} />
+          </span>
+          <span style={{fontSize: 15, fontWeight: 900, flexShrink: 0}}>{symbol}</span>
           {(() => {
             const loaded = elfaSignals && Object.keys(elfaSignals).length > 0;
             if (!loaded) return null;
@@ -5088,8 +5091,8 @@ function FuturesPanel() {
               </span>
             );
           })()}
-          {!isMobile && !fullscreen && currentPrice && <span style={{fontSize: 13, color: '#5C3A21', fontWeight: 700}}>${fmtPrice(parseFloat(currentPrice))}</span>}
-          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="6 9 12 15 18 9"/></svg>
+          {!isMobile && !fullscreen && currentPrice && <span style={{...S.symbolPriceCompact, fontSize: 13, color: '#5C3A21', fontWeight: 700}}>${fmtPrice(parseFloat(currentPrice))}</span>}
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" style={{flexShrink: 0}}><polyline points="6 9 12 15 18 9"/></svg>
         </button>
         {fullscreen && !isMobile && (
           <>
@@ -5101,12 +5104,12 @@ function FuturesPanel() {
             <div style={{...S.infoCell, ...(dex === 'ostium' ? S.infoCellWide : null)}}><span style={S.infoCellLabel}>{fundingInfoLabel}</span><span style={{...S.infoCellValue, ...(dex === 'ostium' ? S.infoCellValueCompact : null), color: fundingColor}}>{fundingText}</span></div>
           </>
         )}
-        <div style={{marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: (isMobile || !fullscreen) ? 4 : 8, flexShrink: 0}}>
+        <div style={{...S.symbolBarActions, ...(compactSymbolBar ? S.symbolBarActionsCompact : {}), gap: compactSymbolBar ? 4 : 8}}>
           {dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'decibel' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'katana' || dex === 'gmtrade' || dex === 'flash' || dex === 'lighter' ? (
             // Read-only badge for venues where the production margin mode is
             // not user-toggleable in our integration.
             <div
-              style={{...S.marginSwapBtn, padding: '6px 10px', fontSize: 12, gap: 4, cursor: 'default', opacity: 0.85}}
+              style={{...S.marginSwapBtn, padding: compactSymbolBar ? '6px 8px' : '6px 10px', fontSize: 12, gap: 4, cursor: 'default', opacity: 0.85}}
               title={dex === 'gmx'
                 ? 'GMX V2 uses isolated margin per position (no cross mode)'
                 : dex === 'ostium'
@@ -5145,7 +5148,7 @@ function FuturesPanel() {
             <button
               style={{
                 ...S.marginSwapBtn,
-                padding: '6px 10px',
+                padding: compactSymbolBar ? '6px 8px' : '6px 10px',
                 fontSize: 12,
                 gap: 4,
                 opacity: marginModeLocked ? 0.65 : 1,
@@ -5172,6 +5175,7 @@ function FuturesPanel() {
           <div
             style={{
               ...S.balanceSummary,
+              ...(compactSymbolBar ? S.balanceSummaryCompact : {}),
               ...(isMobile ? S.balanceSummaryMobile : {}),
             }}
             role="group"
@@ -5183,7 +5187,7 @@ function FuturesPanel() {
               ? 'Loading trading account balance'
               : `Balance: $${headerAccountValue.toFixed(2)} total account value\nFree: $${pacBalance.toFixed(2)} available for new trades`}
           >
-            <div style={{...S.balanceMetric, ...(isMobile ? S.balanceMetricMobile : {})}}>
+            <div style={{...S.balanceMetric, ...(compactSymbolBar ? S.balanceMetricCompact : {}), ...(isMobile ? S.balanceMetricMobile : {})}}>
               <span style={S.balanceMetricLabel}>Balance</span>
               <span style={S.balanceMetricValue}>
                 {balanceCheckPending ? (
@@ -5195,7 +5199,7 @@ function FuturesPanel() {
               </span>
             </div>
             <span style={S.balanceDivider} aria-hidden="true" />
-            <div style={{...S.balanceMetric, ...(isMobile ? S.balanceMetricMobile : {})}}>
+            <div style={{...S.balanceMetric, ...(compactSymbolBar ? S.balanceMetricCompact : {}), ...(isMobile ? S.balanceMetricMobile : {})}}>
               <span style={S.balanceMetricLabel}>Free</span>
               <span style={{
                 ...S.balanceMetricValue,
@@ -11026,6 +11030,10 @@ const S = {
     background: 'transparent', flexShrink: 0,
     overflowX: 'auto', scrollbarWidth: 'none', minHeight: 0,
   },
+  symbolBarCompact: {
+    gap: 6, padding: '4px 8px', justifyContent: 'space-between',
+    overflowX: 'hidden',
+  },
   infoCell: { display: 'flex', flexDirection: 'column', gap: 0, width: 90, flexShrink: 0 },
   infoCellWide: { width: 118 },
   infoCellLabel: { fontSize: 9, fontWeight: 700, color: '#a3906a', textTransform: 'uppercase', lineHeight: 1 },
@@ -11242,11 +11250,26 @@ const S = {
     display: 'flex', alignItems: 'center', gap: 6, padding: '5px 10px',
     background: '#e8dfc8', border: '3px solid #d4c8b0', borderRadius: 10, cursor: 'pointer', color: '#333',
   },
+  symbolBtnCompact: {
+    flex: '0 1 auto', minWidth: 0, overflow: 'hidden', boxSizing: 'border-box',
+  },
+  symbolPriceCompact: {
+    flex: '1 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis',
+  },
+  symbolBarActions: {
+    marginLeft: 'auto', display: 'flex', alignItems: 'center', flexShrink: 0,
+  },
+  symbolBarActionsCompact: {
+    marginLeft: 0, minWidth: 0,
+  },
   balanceSummary: {
     display: 'flex', alignItems: 'stretch', flexShrink: 0,
     minWidth: 142, padding: '4px 7px',
     background: '#e8dfc8', border: '2px solid #d4c8b0', borderRadius: 8,
     boxSizing: 'border-box',
+  },
+  balanceSummaryCompact: {
+    minWidth: 134, padding: '4px',
   },
   balanceSummaryMobile: {
     minWidth: 116,
@@ -11255,6 +11278,9 @@ const S = {
   balanceMetric: {
     display: 'flex', flexDirection: 'column', alignItems: 'flex-end', justifyContent: 'center',
     minWidth: 56, padding: '0 4px',
+  },
+  balanceMetricCompact: {
+    minWidth: 52, padding: '0 3px',
   },
   balanceMetricMobile: {
     minWidth: 46,

@@ -181,10 +181,7 @@ func _apply_freeze(target: Vector3, source: String) -> void:
 
 func _record_action(target: Vector3) -> void:
 	if bs.is_viewing_enemy:
-		var elapsed: float = (
-			float(Time.get_ticks_msec()) / 1000.0
-			- float(bs._battle_start_time)
-		)
+		var elapsed: float = bs.get_battle_elapsed_sec()
 		bs._battle_replay.append({
 			"t": elapsed,
 			"type": "freeze_drop",

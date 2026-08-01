@@ -385,10 +385,7 @@ func dispose() -> void:
 func _record_action(building: Dictionary, target: Vector3) -> void:
 	var building_id := int(building.get("server_id", -1))
 	if bs.is_viewing_enemy:
-		var elapsed: float = (
-			float(Time.get_ticks_msec()) / 1000.0
-			- float(bs._battle_start_time)
-		)
+		var elapsed: float = bs.get_battle_elapsed_sec()
 		bs._battle_replay.append({
 			"t": elapsed,
 			"type": "skeleton_barrel_fire",

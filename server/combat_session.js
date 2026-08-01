@@ -14,6 +14,7 @@
 const {
   TROOP_STATS, TROOP_SLOT_COSTS, computeNftTroopStats, DEFENSE_STATS, SKELETON_GUARD,
   NECROMANCER_SUMMON, computeNecromancerSkeletonStats, HORROR_EVOLUTION,
+  NECROMANCER_ATTACK_RELEASE_SEC, troopMovementProfile,
   WIND_MAGE, WINDLING_STATS, WINDLING_LIFETIME_SEC,
   windMageStableHash, windMageHashUnit,
   MAX_SHIPS, TROOPS_PER_SHIP, MAX_TROOPS, TIME_LIMIT_SEC, SAIL_DELAY_SEC,
@@ -55,8 +56,6 @@ const GUARD_THREAT_MULT = 1.5;     // Troops switch to guards within range * 1.5
 const TROOP_SPAWN_DELAY = 0.2;     // Seconds between each troop from same ship
 const RETARGET_INTERVAL = 10;      // Frames between target re-evaluation (matches client)
 const DEFENSE_SEARCH_SEC = 0.15;   // Target search interval for defenses (matches client)
-const SEPARATION_RADIUS = 0.0;     // BaseTroop combat scripts default to no push-apart
-const SEPARATION_FORCE = 0.0;      // Keep server movement aligned with client defaults
 const RALLY_MAX_FLIGHT_SEC = 8.0;  // Sanity cap for client-recorded grenade flight time
 const TARGET_SWITCH_MIN_ADVANTAGE = 0.08;
 const GUARD_TARGET_TIE_DIST = 0.02;
@@ -152,7 +151,7 @@ function isNftBackedTroopType(troopType) {
 }
 
 function troopPassesThroughFriendlyUnits(troop) {
-  return normalizeTroopTypeName(troop?.type) === 'demon_king';
+  return !!troop?.passThroughFriendlyUnits;
 }
 
 function troopEntryLevel(name) {
@@ -350,27 +349,69 @@ function checkStuck(t, myAngle) {
   t._stuckTimer = 0;
 }
 
+function stableTroopOrder(troop) {
+  return Number.isFinite(Number(troop?.replayOrder))
+    ? Math.trunc(Number(troop.replayOrder))
+    : Math.trunc(Number(troop?.id) || 0);
+}
+
+function exactOverlapPush(troop, other) {
+  const ownOrder = stableTroopOrder(troop);
+  const otherOrder = stableTroopOrder(other);
+  const lowOrder = Math.min(ownOrder, otherOrder);
+  const highOrder = Math.max(ownOrder, otherOrder);
+  const angleIndex = ((lowOrder * 93 + highOrder * 193) % 3600 + 3600) % 3600;
+  const angle = angleIndex * Math.PI * 2 / 3600;
+  const sign = ownOrder < otherOrder ? 1 : -1;
+  return { x: Math.cos(angle) * sign, z: Math.sin(angle) * sign };
+}
+
+function computeFriendlySeparation(t, aliveTroops, separationRadius) {
+  if (troopPassesThroughFriendlyUnits(t) || separationRadius <= 0) {
+    return { x: 0, z: 0 };
+  }
+  let x = 0;
+  let z = 0;
+  const radiusSq = separationRadius * separationRadius;
+  const dense = aliveTroops.length > HIGH_DENSITY_TROOP_THRESHOLD;
+  for (const other of aliveTroops) {
+    if (other === t || other.hp <= 0) continue;
+    const dx = t.x - other.x;
+    const dz = t.z - other.z;
+    const distSq = dx * dx + dz * dz;
+    if (distSq > radiusSq) continue;
+    if (distSq < 0.000001) {
+      if (dense) {
+        const push = exactOverlapPush(t, other);
+        x += push.x;
+        z += push.z;
+      }
+      continue;
+    }
+    const distance = Math.sqrt(distSq);
+    const weight = (separationRadius - distance) / (separationRadius * distance);
+    x += dx * weight;
+    z += dz * weight;
+  }
+  return { x, z };
+}
+
 function applyMovementSteering(t, moveX, moveZ, target, aliveTroops, aliveGuards, aliveBuildings, movementGridConfigs) {
   let sepX = 0;
   let sepZ = 0;
-  const sepRangeSq = SEPARATION_RADIUS * SEPARATION_RADIUS * 4.0;
+  const separationRadius = Math.max(0, Number(t.separationRadius) || 0);
+  const separationForce = Math.max(0, Number(t.separationForce) || 0);
+  const sepRangeSq = separationRadius * separationRadius * 4.0;
+  const dense = aliveTroops.length > HIGH_DENSITY_TROOP_THRESHOLD;
+  if (dense) {
+    t._moveSepCounter = ((t._moveSepCounter || 0) + 1) % 6;
+  }
+  const recomputeSeparation = !dense || t._moveSepCounter === 0;
 
-  if (SEPARATION_RADIUS > 0 && SEPARATION_FORCE > 0) {
-    if (!troopPassesThroughFriendlyUnits(t)) {
-      for (const other of aliveTroops) {
-        if (other === t || other.hp <= 0) continue;
-        const ox = other.x - t.x;
-        const oz = other.z - t.z;
-        const dsq = ox * ox + oz * oz;
-        if (dsq > sepRangeSq || dsq < 0.000001) continue;
-        const d = Math.sqrt(dsq);
-        if (d < SEPARATION_RADIUS) {
-          const push = (SEPARATION_RADIUS - d) / SEPARATION_RADIUS;
-          sepX -= (ox / d) * push;
-          sepZ -= (oz / d) * push;
-        }
-      }
-    }
+  if (separationRadius > 0 && separationForce > 0 && recomputeSeparation) {
+    const friendly = computeFriendlySeparation(t, aliveTroops, separationRadius);
+    sepX += friendly.x;
+    sepZ += friendly.z;
 
     for (const guard of aliveGuards) {
       if (guard === target || guard.hp <= 0) continue;
@@ -379,10 +420,28 @@ function applyMovementSteering(t, moveX, moveZ, target, aliveTroops, aliveGuards
       const dsq = gx * gx + gz * gz;
       if (dsq > sepRangeSq || dsq < 0.000001) continue;
       const d = Math.sqrt(dsq);
-      if (d < SEPARATION_RADIUS) {
-        const push = ((SEPARATION_RADIUS - d) / SEPARATION_RADIUS) * 0.5;
+      if (d < separationRadius) {
+        const push = ((separationRadius - d) / separationRadius) * 0.5;
         sepX -= (gx / d) * push;
         sepZ -= (gz / d) * push;
+      }
+
+      const moveLength = Math.sqrt(moveX * moveX + moveZ * moveZ);
+      if (d < separationRadius * 2.0 && moveLength > 0.0001) {
+        const forwardX = moveX / moveLength;
+        const forwardZ = moveZ / moveLength;
+        const lateralX = -forwardZ;
+        const lateralZ = forwardX;
+        const guardDirX = gx / d;
+        const guardDirZ = gz / d;
+        const ahead = guardDirX * forwardX + guardDirZ * forwardZ;
+        if (ahead > 0.15) {
+          const side = guardDirX * lateralX + guardDirZ * lateralZ;
+          const strength = ahead * (1 - d / (separationRadius * 2.0)) * 0.65;
+          const sign = side >= 0 ? -1 : 1;
+          sepX += lateralX * strength * sign;
+          sepZ += lateralZ * strength * sign;
+        }
       }
     }
 
@@ -398,13 +457,84 @@ function applyMovementSteering(t, moveX, moveZ, target, aliveTroops, aliveGuards
         sepZ += (bz / d) * push;
       }
     }
+    t._lastMoveSeparationX = sepX;
+    t._lastMoveSeparationZ = sepZ;
+  } else if (dense) {
+    sepX = Number(t._lastMoveSeparationX) || 0;
+    sepZ = Number(t._lastMoveSeparationZ) || 0;
   }
 
-  t.x += moveX + sepX * SEPARATION_FORCE * TICK_DT * 3.0;
-  t.z += moveZ + sepZ * SEPARATION_FORCE * TICK_DT * 3.0;
+  t.x += moveX + sepX * separationForce * TICK_DT * 3.0;
+  t.z += moveZ + sepZ * separationForce * TICK_DT * 3.0;
   const clamped = clampWorldPointToGridUnion(movementGridConfigs, t, 1.05);
   t.x = clamped.x;
   t.z = clamped.z;
+}
+
+function applyTroopAttackSeparation(t, target, aliveTroops, movementGridConfigs) {
+  const separationRadius = Math.max(0, Number(t.separationRadius) || 0);
+  const separationForce = Math.max(0, Number(t.separationForce) || 0);
+  if (
+    troopPassesThroughFriendlyUnits(t)
+    || separationRadius <= 0
+    || separationForce <= 0
+  ) {
+    t._lastAttackSeparationX = 0;
+    t._lastAttackSeparationZ = 0;
+    return;
+  }
+  const dense = aliveTroops.length > HIGH_DENSITY_TROOP_THRESHOLD;
+  const interval = dense ? 12 : 3;
+  t._sepCounter = (t._sepCounter || 0) + 1;
+  let sepX = Number(t._lastAttackSeparationX) || 0;
+  let sepZ = Number(t._lastAttackSeparationZ) || 0;
+  if (t._sepCounter % interval === 0) {
+    const separation = computeFriendlySeparation(t, aliveTroops, separationRadius);
+    sepX = separation.x;
+    sepZ = separation.z;
+    t._lastAttackSeparationX = sepX;
+    t._lastAttackSeparationZ = sepZ;
+  }
+  if (sepX * sepX + sepZ * sepZ <= 0.000001) return;
+  const nextX = t.x + sepX * separationForce * TICK_DT * 0.3;
+  const nextZ = t.z + sepZ * separationForce * TICK_DT * 0.3;
+  if (dist2d(nextX, nextZ, target.x, target.z) >= t.range * 1.2) return;
+  const clamped = clampWorldPointToGridUnion(
+    movementGridConfigs,
+    { x: nextX, z: nextZ },
+    1.05,
+  );
+  t.x = clamped.x;
+  t.z = clamped.z;
+}
+
+function initialAttackTimer(troop) {
+  const troopType = normalizeTroopTypeName(troop?.type);
+  if (
+    troopType === 'horror'
+    || troopType === 'ice_golem'
+    || troopType === 'mechanical_dragon'
+    || troopType === 'pea_shooter'
+    || troopType === 'wind_mage'
+    || troopType === 'windling'
+  ) {
+    return 0;
+  }
+  if (troop?.melee || troop?.directHit) {
+    return troop.atkSpeed * (troop.hitDelay || 0.4);
+  }
+  // Mage/Archer fire immediately on entering range. Ranger and Necromancer
+  // start their release-delay phase immediately, matching their Godot scripts.
+  return troop.atkSpeed;
+}
+
+function enterTroopAttackState(troop) {
+  troop._state = 'attacking';
+  troop.atkTimer = initialAttackTimer(troop);
+  troop.hitTimer = 0;
+  troop.hitPending = false;
+  troop.hitDone = false;
+  troop.burstShotIndex = 0;
 }
 
 function computeGuardSeparation(g, aliveTroops) {
@@ -809,6 +939,7 @@ function verifyReplay({
     })
     .sort((a, b) => Number(a.buildingId) - Number(b.buildingId));
   const projectiles = [];
+  const mortarProjectiles = [];
   let townHallId = null;
   const wardLevel = Math.max(0, Math.min(3, Number(defenderAltarLevels?.ward) || 0));
   const wardPct = [0, 5, 10, 15][wardLevel] || 0;
@@ -1545,6 +1676,7 @@ function verifyReplay({
         replayOrder,
         type: 'horror',
         level,
+        ...troopMovementProfile('horror', nextStage),
         hp: stats.hp,
         maxHp: stats.hp,
         damage: stats.damage,
@@ -1576,6 +1708,9 @@ function verifyReplay({
         _state: 'idle',
         _retargetCounter: 0,
         _sepCounter: 0,
+        _moveSepCounter: 0,
+        _lastMoveSeparationX: 0,
+        _lastMoveSeparationZ: 0,
         _slotEvalTimer: 0,
         _orbitAngle: 0,
         _stuckTimer: 0,
@@ -1974,6 +2109,7 @@ function verifyReplay({
       replayOrder: 1000000 + troopId,
       type: 'necromancer_skeleton',
       level: owner.level,
+      ...troopMovementProfile('necromancer_skeleton', 0),
       hp: stats.hp,
       maxHp: stats.hp,
       damage: stats.damage,
@@ -2005,6 +2141,9 @@ function verifyReplay({
       _state: 'idle',
       _retargetCounter: 0,
       _sepCounter: 0,
+      _moveSepCounter: 0,
+      _lastMoveSeparationX: 0,
+      _lastMoveSeparationZ: 0,
       _slotEvalTimer: 0,
       _orbitAngle: 0,
       _stuckTimer: 0,
@@ -2131,6 +2270,7 @@ function verifyReplay({
       replayOrder: ownerReplayOrder * 1000 + sequence,
       type: 'windling',
       level,
+      ...troopMovementProfile('windling', 0),
       hp: stats.hp,
       maxHp: stats.hp,
       damage: stats.damage,
@@ -2162,6 +2302,9 @@ function verifyReplay({
       _state: 'idle',
       _retargetCounter: 0,
       _sepCounter: 0,
+      _moveSepCounter: 0,
+      _lastMoveSeparationX: 0,
+      _lastMoveSeparationZ: 0,
       _slotEvalTimer: 0,
       _orbitAngle: 0,
       _stuckTimer: 0,
@@ -2364,6 +2507,7 @@ function verifyReplay({
       replayOrder: 900001 + spawnIndex,
       type: 'skeleton_barrel_skeleton',
       level: 1,
+      ...troopMovementProfile('skeleton_barrel_skeleton', 0),
       hp: stats.hp,
       maxHp: stats.hp,
       damage: stats.damage,
@@ -2395,6 +2539,9 @@ function verifyReplay({
       _state: 'idle',
       _retargetCounter: 0,
       _sepCounter: 0,
+      _moveSepCounter: 0,
+      _lastMoveSeparationX: 0,
+      _lastMoveSeparationZ: 0,
       _slotEvalTimer: 0,
       _orbitAngle: 0,
       _stuckTimer: 0,
@@ -2514,7 +2661,7 @@ function verifyReplay({
         buildingId: b.id, type: 'mortar',
         damage: wardDamage(s.damage), fireRate: s.fireRate, detectRange: s.detectRange,
         minRange: s.minRange,
-        projSpeed: s.projSpeed,
+        travelTime: s.travelTime,
         splashRadius: s.splashRadius,
         targetGround: true, targetAir: false,
         x: b.x, z: b.z,
@@ -3058,6 +3205,7 @@ function verifyReplay({
           ? defaultGridConfig
           : (gridConfigMap[String(sp.gridIndex)] || defaultGridConfig);
         const spawnPos = clampWorldPointToGrid(spawnGridConfig, { x: sp.x, z: sp.z }, 1.05);
+        const movementProfile = troopMovementProfile(sp.troopType, 0);
         troops.push({
           id: troopId,
           replayOrder: sp.replayOrder,
@@ -3088,8 +3236,14 @@ function verifyReplay({
           deathFreezeRadius: Math.max(0, Number(stats.deathFreezeRadius) || 0),
           deathFreezeDuration: Math.max(0, Number(stats.deathFreezeDuration) || 0),
           buildingOnly: !!stats.buildingOnly,
+          separationRadius: movementProfile.separationRadius,
+          separationForce: movementProfile.separationForce,
+          passThroughFriendlyUnits: movementProfile.passThroughFriendlyUnits,
           targetType: stats.flying ? UNIT_TARGET_AIR : UNIT_TARGET_GROUND,
-          hitDelay: stats.hitDelay || 0, shootDelay: stats.shootDelay || 0,
+          hitDelay: stats.hitDelay || 0,
+          shootDelay: sp.troopType === 'necromancer'
+            ? NECROMANCER_ATTACK_RELEASE_SEC / stats.atkSpeed
+            : (stats.shootDelay || 0),
           x: spawnPos.x, z: spawnPos.z,
           atkTimer: 0, hitPending: false, hitTimer: 0,
           hitDone: false,
@@ -3098,6 +3252,9 @@ function verifyReplay({
           _defenseConcealmentBroken: false,
           _retargetCounter: 0,
           _sepCounter: 0,
+          _moveSepCounter: 0,
+          _lastMoveSeparationX: 0,
+          _lastMoveSeparationZ: 0,
           _slotEvalTimer: 0,
           _orbitAngle: 0,
           _stuckTimer: 0,
@@ -3519,6 +3676,63 @@ function verifyReplay({
       rallyFocus = null;
     }
 
+    // Mortar shells use a fixed impact point and travel duration. Resolve
+    // existing shells before defenses fire this tick, matching
+    // tower_mortar.gd::_physics_process(). The original target is deliberately
+    // irrelevant once a shell has launched.
+    for (let i = mortarProjectiles.length - 1; i >= 0; i--) {
+      const p = mortarProjectiles[i];
+      if (p.impactAt > time + 1e-9) continue;
+      mortarProjectiles.splice(i, 1);
+
+      const radius = Math.max(0, Number(p.splashRadius) || 0);
+      const radiusSq = radius * radius;
+      let hitCount = 0;
+      const impactSnapshot = aliveTroops.slice();
+      for (const troop of impactSnapshot) {
+        if (!canDefenseTargetTroop({ targetGround: true, targetAir: false }, troop)) continue;
+        const dx = p.impactX - troop.x;
+        const dz = p.impactZ - troop.z;
+        const distanceSq = dx * dx + dz * dz;
+        if (distanceSq > radiusSq) continue;
+        const distance = Math.sqrt(distanceSq);
+        const distanceRatio = Math.min(1, distance / Math.max(radius, 0.001));
+        const damage = Math.max(1, Math.round(p.damage * (1 - 0.45 * distanceRatio)));
+        const hpBefore = troop.hp;
+        troop.hp -= damage;
+        hitCount++;
+        traceEvent('defense_splash_hit', {
+          defenseType: 'mortar',
+          buildingId: p.buildingId,
+          targetTroopId: troop.id,
+          replayOrder: troop.replayOrder ?? null,
+          targetTroop: troop.type,
+          damage,
+          hpBefore,
+          hpAfter: troop.hp,
+          impactX: round3(p.impactX),
+          impactZ: round3(p.impactZ),
+          splashRadius: radius,
+          distance: round3(distance),
+          x: round3(troop.x),
+          z: round3(troop.z),
+        });
+        if (troop.hp <= 0) handleTroopDeath(troop, 'defense_splash', damage);
+      }
+      traceEvent('defense_projectile_hit', {
+        defenseType: 'mortar',
+        buildingId: p.buildingId,
+        damage: p.damage,
+        hitCount,
+        impactX: round3(p.impactX),
+        impactZ: round3(p.impactZ),
+        splashRadius: radius,
+      });
+      for (let troopIndex = aliveTroops.length - 1; troopIndex >= 0; troopIndex--) {
+        if (aliveTroops[troopIndex].hp <= 0) aliveTroops.splice(troopIndex, 1);
+      }
+    }
+
     // Existing tower bullets move before a defense can fire a new shot,
     // matching turret.gd / tower_archer.gd process order.
     cannonEnergy += updateProjectiles(projectiles, 'defense', (p, target, hpBefore, hpAfter) => {
@@ -3684,9 +3898,9 @@ function verifyReplay({
 
       if (!d.isAttacking) {
         d.isAttacking = true;
-        // Turret alone fires instantly. Cannon and the other projectile
-        // defenses acquire normally, then wait through their full first cycle.
-        d.timer = d.type === 'turret' ? d.fireRate : 0;
+        // Turret and mortar explicitly prime their timer on acquisition in
+        // Godot. Cannon and archer tower wait through their first full cycle.
+        d.timer = (d.type === 'turret' || d.type === 'mortar') ? d.fireRate : 0;
       }
 
       if (d.type === 'mage_tower' && d.beam) {
@@ -3731,18 +3945,29 @@ function verifyReplay({
       d.timer += TICK_DT;
       if (d.timer >= d.fireRate) {
         d.timer -= d.fireRate;
-        projectiles.push({
-          x: d.x, z: d.z,
-          y: d.type === 'turret' ? TURRET_PROJECTILE_SPAWN_Y : TOWER_PROJECTILE_SPAWN_Y,
-          targetY: d.type === 'turret' ? TURRET_TARGET_AIM_Y : TOWER_TARGET_AIM_Y,
-          phase: 'defense',
-          defenseType: d.type,
-          ownerRef: bld,
-          targetRef: currentTarget, speed: d.projSpeed, damage: d.damage,
-          splashRadius: d.splashRadius || 0,
-          isBuilding: false,
-          hitDistSq: d.type === 'turret' ? TURRET_HIT_DIST_SQ : PROJ_HIT_DIST_SQ,
-        });
+        if (d.type === 'mortar') {
+          mortarProjectiles.push({
+            buildingId: d.buildingId,
+            impactAt: time + Math.max(TICK_DT, Number(d.travelTime) || TICK_DT),
+            impactX: currentTarget.x,
+            impactZ: currentTarget.z,
+            damage: d.damage,
+            splashRadius: d.splashRadius || 0,
+          });
+        } else {
+          projectiles.push({
+            x: d.x, z: d.z,
+            y: d.type === 'turret' ? TURRET_PROJECTILE_SPAWN_Y : TOWER_PROJECTILE_SPAWN_Y,
+            targetY: d.type === 'turret' ? TURRET_TARGET_AIM_Y : TOWER_TARGET_AIM_Y,
+            phase: 'defense',
+            defenseType: d.type,
+            ownerRef: bld,
+            targetRef: currentTarget, speed: d.projSpeed, damage: d.damage,
+            splashRadius: d.splashRadius || 0,
+            isBuilding: false,
+            hitDistSq: d.type === 'turret' ? TURRET_HIT_DIST_SQ : PROJ_HIT_DIST_SQ,
+          });
+        }
         traceEvent('defense_fire', {
           defenseType: d.type,
           buildingId: d.buildingId,
@@ -3751,8 +3976,11 @@ function verifyReplay({
           targetTroop: currentTarget.type,
           targetHp: currentTarget.hp,
           minRange: d.minRange ?? 0,
+          travelTime: d.type === 'mortar' ? d.travelTime : undefined,
           projectileX: round3(d.x),
           projectileZ: round3(d.z),
+          impactX: d.type === 'mortar' ? round3(currentTarget.x) : undefined,
+          impactZ: d.type === 'mortar' ? round3(currentTarget.z) : undefined,
           target: traceEntityPayload(currentTarget, 'troop'),
           x: Math.round(currentTarget.x * 1000) / 1000,
           z: Math.round(currentTarget.z * 1000) / 1000,
@@ -4089,10 +4317,7 @@ function verifyReplay({
               z: round3(t.z),
             });
           }
-          t._state = 'attacking';
-          t.atkTimer = 0;
-          t.hitDone = false;
-          t.burstShotIndex = 0;
+          enterTroopAttackState(t);
           cannonEnergy += updateTroopProjectilesFor(t);
           continue;
         }
@@ -4101,6 +4326,12 @@ function verifyReplay({
         continue;
       }
 
+      applyTroopAttackSeparation(
+        t,
+        target,
+        aliveTroops,
+        movementGridConfigs,
+      );
       t.atkTimer += TICK_DT;
 
       if (t.type === 'wind_mage') {
@@ -4541,6 +4772,7 @@ function verifyReplay({
     _troopsAlive: troops.filter(t => t.hp > 0).length,
     _guardsAlive: guards.filter(g => g.hp > 0).length,
     _totalProjectilesFired: projectiles.length,
+    _pendingMortarProjectilesLeft: mortarProjectiles.length,
     _pendingSpawnsLeft: pendingSpawns.length,
     _pendingCannonballsLeft: pendingCannonballs.length,
     _cannonShotsAccepted: cannonShotsFired,

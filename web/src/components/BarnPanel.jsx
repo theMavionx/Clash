@@ -213,54 +213,54 @@ const TROOP_STATS = {
     display: "Knight",
     stats: {
       1: { hp: 450, damage: 38, atk_speed: 1.4 },
-      2: { hp: 600, damage: 50, atk_speed: 1.3 },
-      3: { hp: 780, damage: 66, atk_speed: 1.2 },
-      4: { hp: 1000, damage: 86, atk_speed: 1.1 },
-      5: { hp: 1260, damage: 112, atk_speed: 1.02 },
-      6: { hp: 1560, damage: 145, atk_speed: 0.96 },
-      7: { hp: 1900, damage: 185, atk_speed: 0.9 },
+      2: { hp: 600, damage: 54, atk_speed: 1.4 },
+      3: { hp: 780, damage: 77, atk_speed: 1.4 },
+      4: { hp: 1000, damage: 109, atk_speed: 1.4 },
+      5: { hp: 1248, damage: 152, atk_speed: 1.4 },
+      6: { hp: 1716, damage: 232, atk_speed: 1.4 },
+      7: { hp: 2076, damage: 314, atk_speed: 1.4 },
     },
-    maxStats: { hp: 1900, damage: 185, atk_speed: 1.4 }
+    maxStats: { hp: 2076, damage: 314, atk_speed: 1.4 }
   },
   Mage: {
     display: "Mage",
-    trait: "Burst Mage: high ranged damage with low HP per slot. Uses 4 ship slots.",
+    trait: "Burst Mage: high ranged damage with low HP per slot. Uses 6 ship slots.",
     stats: {
       1: { hp: 450, damage: 203, atk_speed: 1.25 },
-      2: { hp: 600, damage: 259, atk_speed: 1.12 },
-      3: { hp: 795, damage: 364, atk_speed: 1.0 },
-      4: { hp: 1035, damage: 483, atk_speed: 0.9 },
-      5: { hp: 1320, damage: 637, atk_speed: 0.82 },
-      6: { hp: 1665, damage: 833, atk_speed: 0.76 },
-      7: { hp: 2070, damage: 1085, atk_speed: 0.7 },
+      2: { hp: 600, damage: 289, atk_speed: 1.25 },
+      3: { hp: 795, damage: 455, atk_speed: 1.25 },
+      4: { hp: 1035, damage: 671, atk_speed: 1.25 },
+      5: { hp: 2430, damage: 1655, atk_speed: 1.25 },
+      6: { hp: 2830, damage: 2329, atk_speed: 1.25 },
+      7: { hp: 4554, damage: 4263, atk_speed: 1.25 },
     },
-    maxStats: { hp: 2070, damage: 1085, atk_speed: 1.25 }
+    maxStats: { hp: 4554, damage: 4263, atk_speed: 1.25 }
   },
   Barbarian: {
     display: "Barbarian",
     stats: {
       1: { hp: 240, damage: 24, atk_speed: 0.6 },
-      2: { hp: 320, damage: 32, atk_speed: 0.55 },
-      3: { hp: 420, damage: 43, atk_speed: 0.5 },
-      4: { hp: 550, damage: 57, atk_speed: 0.46 },
-      5: { hp: 705, damage: 75, atk_speed: 0.42 },
-      6: { hp: 880, damage: 97, atk_speed: 0.39 },
-      7: { hp: 1080, damage: 124, atk_speed: 0.36 },
+      2: { hp: 320, damage: 35, atk_speed: 0.6 },
+      3: { hp: 420, damage: 52, atk_speed: 0.6 },
+      4: { hp: 550, damage: 74, atk_speed: 0.6 },
+      5: { hp: 705, damage: 107, atk_speed: 0.6 },
+      6: { hp: 880, damage: 149, atk_speed: 0.6 },
+      7: { hp: 1080, damage: 207, atk_speed: 0.6 },
     },
-    maxStats: { hp: 1080, damage: 124, atk_speed: 0.6 }
+    maxStats: { hp: 1080, damage: 207, atk_speed: 0.6 }
   },
   Archer: {
     display: "Archer",
     stats: {
       1: { hp: 210, damage: 40, atk_speed: 1.05 },
-      2: { hp: 280, damage: 51, atk_speed: 0.95 },
-      3: { hp: 310, damage: 58, atk_speed: 0.85 },
-      4: { hp: 425, damage: 82, atk_speed: 0.78 },
-      5: { hp: 540, damage: 108, atk_speed: 0.72 },
-      6: { hp: 680, damage: 140, atk_speed: 0.67 },
-      7: { hp: 840, damage: 180, atk_speed: 0.62 },
+      2: { hp: 280, damage: 56, atk_speed: 1.05 },
+      3: { hp: 310, damage: 72, atk_speed: 1.05 },
+      4: { hp: 425, damage: 110, atk_speed: 1.05 },
+      5: { hp: 624, damage: 182, atk_speed: 1.05 },
+      6: { hp: 750, damage: 241, atk_speed: 1.05 },
+      7: { hp: 1164, damage: 423, atk_speed: 1.05 },
     },
-    maxStats: { hp: 840, damage: 180, atk_speed: 1.05 }
+    maxStats: { hp: 1164, damage: 423, atk_speed: 1.05 }
   },
   PeaShooter: {
     display: "Pea Shooter",
@@ -268,45 +268,45 @@ const TROOP_STATS = {
     stats: {
       1: { hp: 1250, damage: 110, atk_speed: 1.75 },
       2: { hp: 1650, damage: 150, atk_speed: 1.75 },
-      3: { hp: 2150, damage: 205, atk_speed: 1.75 },
+      3: { hp: 2150, damage: 195, atk_speed: 1.75 },
       4: { hp: 2800, damage: 280, atk_speed: 1.75 },
-      5: { hp: 3550, damage: 380, atk_speed: 1.75 },
-      6: { hp: 4450, damage: 510, atk_speed: 1.75 },
-      7: { hp: 5500, damage: 680, atk_speed: 1.75 },
+      5: { hp: 3905, damage: 418, atk_speed: 1.75 },
+      6: { hp: 4670, damage: 536, atk_speed: 1.75 },
+      7: { hp: 6700, damage: 825, atk_speed: 1.75 },
     },
-    maxStats: { hp: 5500, damage: 680, atk_speed: 1.75 }
+    maxStats: { hp: 6700, damage: 825, atk_speed: 1.75 }
   },
   Mimic: {
     display: "Barrel",
-    trait: "Trap Runner: defenses ignore it while rolling. Traps trigger without damage. Uses 6 ship slots.",
+    trait: "Trap Runner: defenses ignore it while rolling. Traps trigger without damage. Uses 8 ship slots.",
     stats: {
       1: { hp: 1800, damage: 120, atk_speed: 1.5 },
-      2: { hp: 2400, damage: 162, atk_speed: 1.42 },
-      3: { hp: 3120, damage: 216, atk_speed: 1.34 },
-      4: { hp: 4080, damage: 282, atk_speed: 1.27 },
-      5: { hp: 5160, damage: 366, atk_speed: 1.2 },
-      6: { hp: 6360, damage: 474, atk_speed: 1.13 },
-      7: { hp: 7800, damage: 612, atk_speed: 1.06 },
+      2: { hp: 2400, damage: 171, atk_speed: 1.5 },
+      3: { hp: 3120, damage: 242, atk_speed: 1.5 },
+      4: { hp: 4080, damage: 333, atk_speed: 1.5 },
+      5: { hp: 6244, damage: 554, atk_speed: 1.5 },
+      6: { hp: 9540, damage: 944, atk_speed: 1.5 },
+      7: { hp: 11200, damage: 1231, atk_speed: 1.5 },
     },
-    maxStats: { hp: 7800, damage: 612, atk_speed: 1.5 }
+    maxStats: { hp: 11200, damage: 1231, atk_speed: 1.5 }
   },
   Necromancer: {
     display: "Necromancer",
-    trait: "Grave Caller: ranged green magic and up to 3 renewable skeleton summons. Uses 15 ship slots.",
+    trait: "Grave Caller: ranged green magic and up to 3 renewable skeleton summons. Uses 18 ship slots.",
     stats: {
       1: { hp: 2640, damage: 510, atk_speed: 1.35 },
-      2: { hp: 3480, damage: 660, atk_speed: 1.23 },
-      3: { hp: 4560, damage: 930, atk_speed: 1.12 },
-      4: { hp: 5880, damage: 1230, atk_speed: 1.02 },
-      5: { hp: 7440, damage: 1620, atk_speed: 0.94 },
-      6: { hp: 9240, damage: 2130, atk_speed: 0.87 },
-      7: { hp: 11280, damage: 2790, atk_speed: 0.81 },
+      2: { hp: 3480, damage: 724, atk_speed: 1.35 },
+      3: { hp: 4560, damage: 1121, atk_speed: 1.35 },
+      4: { hp: 5880, damage: 1628, atk_speed: 1.35 },
+      5: { hp: 7440, damage: 2327, atk_speed: 1.35 },
+      6: { hp: 9240, damage: 3305, atk_speed: 1.35 },
+      7: { hp: 20700, damage: 8533, atk_speed: 1.35 },
     },
-    maxStats: { hp: 11280, damage: 2790, atk_speed: 1.35 }
+    maxStats: { hp: 20700, damage: 8533, atk_speed: 1.35 }
   },
   WindMage: {
     display: "Wind Mage",
-    trait: "Wind Corridor: sweeps a wide lane and summons temporary Windlings.",
+    trait: "Wind Corridor: sweeps a wide lane and summons temporary Windlings. Uses 18 ship slots.",
     stats: {
       1: { hp: 2200, damage: 430, atk_speed: 2.20 },
       2: { hp: 2900, damage: 560, atk_speed: 2.20 },
@@ -314,13 +314,13 @@ const TROOP_STATS = {
       4: { hp: 4900, damage: 980, atk_speed: 2.20 },
       5: { hp: 6200, damage: 1280, atk_speed: 2.20 },
       6: { hp: 7700, damage: 1660, atk_speed: 2.20 },
-      7: { hp: 9400, damage: 2140, atk_speed: 2.20 },
+      7: { hp: 12000, damage: 3000, atk_speed: 2.20 },
     },
-    maxStats: { hp: 9400, damage: 2140, atk_speed: 2.20 }
+    maxStats: { hp: 12000, damage: 3000, atk_speed: 2.20 }
   },
   Horror: {
     display: "Horror",
-    trait: "Brood Evolution: uses 20 ship slots. On death it splits into 2 Creepers; each Creeper splits into 2 Lurkers.",
+    trait: "Brood Evolution: uses 22 ship slots. On death it splits into 2 Creepers; each Creeper splits into 2 Lurkers.",
     stats: {
       1: { hp: 4533, damage: 453, atk_speed: 1.24 },
       2: { hp: 5967, damage: 607, atk_speed: 1.24 },
@@ -334,7 +334,7 @@ const TROOP_STATS = {
   },
   MechanicalDragon: {
     display: "Mechanical Dragon",
-    trait: "Chain Siege: lightning jumps to 2 nearby buildings for 65% and 42% damage. Heavy flying unit, uses 4 ship slots.",
+    trait: "Chain Siege: lightning jumps to 2 nearby buildings for 65% and 42% damage. Heavy flying unit, uses 5 ship slots.",
     stats: {
       1: { hp: 700, damage: 106, atk_speed: 1.03 },
       2: { hp: 920, damage: 150, atk_speed: 1.03 },
@@ -342,13 +342,13 @@ const TROOP_STATS = {
       4: { hp: 1550, damage: 310, atk_speed: 1.03 },
       5: { hp: 1970, damage: 449, atk_speed: 1.03 },
       6: { hp: 2450, damage: 629, atk_speed: 1.03 },
-      7: { hp: 3000, damage: 876, atk_speed: 1.03 },
+      7: { hp: 3278, damage: 957, atk_speed: 1.03 },
     },
-    maxStats: { hp: 3000, damage: 876, atk_speed: 1.03 }
+    maxStats: { hp: 3278, damage: 957, atk_speed: 1.03 }
   },
   IceGolem: {
     display: "Ice Golem",
-    trait: "Frozen Vanguard: attacks defenses first. On death, freezes nearby defenses for 7 seconds. Uses 10 ship slots.",
+    trait: "Frozen Vanguard: attacks defenses first. On death, freezes nearby defenses for 7 seconds. Uses 11 ship slots.",
     stats: {
       1: { hp: 5250, damage: 195, atk_speed: 1.42 },
       2: { hp: 6750, damage: 263, atk_speed: 1.42 },
@@ -356,50 +356,50 @@ const TROOP_STATS = {
       4: { hp: 11125, damage: 488, atk_speed: 1.42 },
       5: { hp: 14000, damage: 658, atk_speed: 1.42 },
       6: { hp: 17250, damage: 878, atk_speed: 1.42 },
-      7: { hp: 21000, damage: 1155, atk_speed: 1.42 },
+      7: { hp: 21840, damage: 1200, atk_speed: 1.42 },
     },
-    maxStats: { hp: 21000, damage: 1155, atk_speed: 1.42 }
+    maxStats: { hp: 21840, damage: 1200, atk_speed: 1.42 }
   },
   Ranger: {
     display: "Ranger",
     stats: {
       1: { hp: 250, damage: 34, atk_speed: 1.0 },
-      2: { hp: 330, damage: 45, atk_speed: 0.92 },
-      3: { hp: 430, damage: 60, atk_speed: 0.83 },
-      4: { hp: 560, damage: 80, atk_speed: 0.76 },
-      5: { hp: 710, damage: 106, atk_speed: 0.7 },
-      6: { hp: 890, damage: 140, atk_speed: 0.65 },
-      7: { hp: 1100, damage: 182, atk_speed: 0.6 },
+      2: { hp: 330, damage: 49, atk_speed: 1.0 },
+      3: { hp: 430, damage: 72, atk_speed: 1.0 },
+      4: { hp: 560, damage: 105, atk_speed: 1.0 },
+      5: { hp: 710, damage: 151, atk_speed: 1.0 },
+      6: { hp: 890, damage: 215, atk_speed: 1.0 },
+      7: { hp: 1100, damage: 303, atk_speed: 1.0 },
     },
-    maxStats: { hp: 1100, damage: 182, atk_speed: 1.0 }
+    maxStats: { hp: 1100, damage: 303, atk_speed: 1.0 }
   },
   DemonKing: {
     display: "Demon King",
-    trait: "Heavy Boss: premium melee durability and reach. Uses 5 ship slots.",
+    trait: "Heavy Boss: premium melee durability and reach. Uses 6 ship slots.",
     stats: {
       1: { hp: 2700, damage: 228, atk_speed: 1.4 },
-      2: { hp: 3600, damage: 300, atk_speed: 1.3 },
-      3: { hp: 4680, damage: 396, atk_speed: 1.2 },
-      4: { hp: 6000, damage: 516, atk_speed: 1.1 },
-      5: { hp: 7560, damage: 672, atk_speed: 1.02 },
-      6: { hp: 9360, damage: 870, atk_speed: 0.96 },
-      7: { hp: 11400, damage: 1110, atk_speed: 0.9 },
+      2: { hp: 3600, damage: 323, atk_speed: 1.4 },
+      3: { hp: 4680, damage: 462, atk_speed: 1.4 },
+      4: { hp: 6000, damage: 657, atk_speed: 1.4 },
+      5: { hp: 6800, damage: 837, atk_speed: 1.4 },
+      6: { hp: 9000, damage: 1240, atk_speed: 1.4 },
+      7: { hp: 10700, damage: 1618, atk_speed: 1.4 },
     },
-    maxStats: { hp: 11400, damage: 1110, atk_speed: 1.4 }
+    maxStats: { hp: 10700, damage: 1618, atk_speed: 1.4 }
   },
   FireDragon: {
     display: "Dragon",
-    trait: "Flying Boss: ranged fire ignores ground traps. Uses 10 ship slots.",
+    trait: "Flying Boss: ranged fire ignores ground traps. Uses 11 ship slots.",
     stats: {
       1: { hp: 1750, damage: 470, atk_speed: 1.25 },
-      2: { hp: 2320, damage: 600, atk_speed: 1.12 },
-      3: { hp: 3080, damage: 840, atk_speed: 1.0 },
-      4: { hp: 4000, damage: 1115, atk_speed: 0.9 },
-      5: { hp: 5100, damage: 1470, atk_speed: 0.82 },
-      6: { hp: 6440, damage: 1920, atk_speed: 0.76 },
-      7: { hp: 8000, damage: 2500, atk_speed: 0.7 },
+      2: { hp: 2320, damage: 670, atk_speed: 1.25 },
+      3: { hp: 3080, damage: 1050, atk_speed: 1.25 },
+      4: { hp: 4000, damage: 1549, atk_speed: 1.25 },
+      5: { hp: 5049, damage: 2218, atk_speed: 1.25 },
+      6: { hp: 6440, damage: 3158, atk_speed: 1.25 },
+      7: { hp: 8740, damage: 4879, atk_speed: 1.25 },
     },
-    maxStats: { hp: 8000, damage: 2500, atk_speed: 1.25 }
+    maxStats: { hp: 8740, damage: 4879, atk_speed: 1.25 }
   }
 };
 

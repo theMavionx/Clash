@@ -83,6 +83,13 @@ try {
     const dps = stats.damage / stats.fireRate;
     assert.ok(dps > previousDps, `Mortar L${level} DPS must improve monotonically`);
     assert.ok(stats.splashRadius >= (DEFENSE_STATS.mortar[level - 1]?.splashRadius || 0));
+    assert.ok(stats.travelTime > 0, `Mortar L${level} must declare a fixed travel time`);
+    if (level > 1) {
+      assert.ok(
+        stats.travelTime < DEFENSE_STATS.mortar[level - 1].travelTime,
+        `Mortar L${level} travel time must improve monotonically`,
+      );
+    }
     previousDps = dps;
   }
 
@@ -105,10 +112,14 @@ try {
   const splashHits = clustered._trace.filter(row => row.kind === 'defense_splash_hit' && row.defenseType === 'mortar');
 
   assert.ok(fires.length >= 2, 'Mortar must sustain fire against valid ground targets');
-  assert.ok(directHits.length >= 1, 'Mortar projectile must hit its primary target');
+  assert.ok(directHits.length >= 1, 'Mortar projectile must resolve at its fixed impact point');
   assert.ok(splashHits.length >= 2, 'L7 splash must reach both troops at the standard 0.40 formation step');
   assert.equal(directHits[0].damage, 294);
-  assert.equal(directHits[0].hpBefore - directHits[0].hpAfter, 294);
+  assert.ok(directHits[0].hitCount >= 1, 'Mortar impact must report affected troops');
+  assert.ok(
+    directHits[0].t - fires[0].t >= 0.57 && directHits[0].t - fires[0].t <= 0.60,
+    `Mortar L7 shell must use the fixed 0.58 second flight, got ${directHits[0].t - fires[0].t}`,
+  );
   assert.ok(
     fires[1].t - fires[0].t >= 2.39 && fires[1].t - fires[0].t <= 2.42,
     `Mortar L7 cadence must remain fixed at 2.40 seconds, got ${fires[1].t - fires[0].t}`,

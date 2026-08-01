@@ -4,7 +4,7 @@
 
 Pea Shooter is a compact mid-game ranged troop built from the authored
 `Polygonal Pea Shooter` model and a lightweight pooled projectile. It fills the space between a
-fragile one-slot Archer and a four-slot Mage:
+fragile one-slot Archer and a six-slot Mage:
 
 - five occupied ship slots;
 - 500 Gold to load, following the global 100 Gold per occupied slot rule;

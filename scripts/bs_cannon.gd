@@ -386,7 +386,7 @@ func _fire_ship_cannon(bdata: Dictionary) -> void:
 	# Record cannon fire in battle replay
 	var server_id: int = bdata.get("server_id", -1)
 	if bs.is_viewing_enemy and server_id >= 0:
-		var t: float = Time.get_ticks_msec() / 1000.0 - bs._battle_start_time
+		var t: float = bs.get_battle_elapsed_sec()
 		bs._battle_replay.append({"t": t, "type": "cannon_fire", "buildingId": server_id})
 	# Deduct cannon energy
 	_cannon_energy -= _cannon_next_cost

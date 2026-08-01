@@ -28,11 +28,11 @@ contract will expose the assigned troop without another roster rebalance.
 
 ## Design Rationale
 
-- TH6 introduces Mechanical Dragon as a four-slot flying siege unit.
+- TH6 introduces Mechanical Dragon as a five-slot flying siege unit.
 - TH7 adds Necromancer after players have learned heavy-unit composition.
-  Its fifteen-slot summon gameplay is a larger complexity step.
+  Its eighteen-slot summon gameplay is a larger complexity step.
 - TH8 adds Wind Mage and its corridor positioning plus temporary Windlings.
-- TH9 adds Ice Golem as a ten-slot defensive vanguard and a late-game
+- TH9 adds Ice Golem as an eleven-slot defensive vanguard and a late-game
   composition anchor.
 - TH10 adds Horror, the most expensive and mechanically complex regular unit,
   with a deterministic `1 -> 2 -> 4` evolution family.

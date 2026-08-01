@@ -186,7 +186,7 @@ try {
   const overCapShip = gameDb.ensurePlayerShip(overCapPlayerId);
   assert.equal(overCapShip.level, 5);
   assert.equal(overCapShip.capacity, 45, 'legacy fleets must respect the authoritative Main Ship cap');
-  assert.equal(overCapShip.troops.length, 36);
+  assert.equal(overCapShip.troops.length, 42);
   assert.equal(
     gameDb.db.prepare('SELECT capacity_override FROM player_ships WHERE player_id = ?').get(overCapPlayerId).capacity_override,
     0,
@@ -266,12 +266,45 @@ try {
   assert.equal(refundedShip.capacity, 12);
   assert.deepEqual(refundedShip.troops, packTroops(['Mage:1', 'Knight:1']));
   assert.deepEqual(refundedShip.troop_template, packTroops(['Mage:1', 'Knight:1']));
-  assert.equal(gameDb.getResources(refundPlayerId).gold, 6000, 'overflow Horror must refund its 2000 gold recruitment cost');
+  assert.equal(gameDb.getResources(refundPlayerId).gold, 6000, 'overflow Horror refund must respect the player resource cap');
   const refundMigration = JSON.parse(gameDb.db.prepare(
     'SELECT migration_json FROM player_ships WHERE player_id = ?',
   ).get(refundPlayerId).migration_json).slot_cost_migration;
   assert.deepEqual(refundMigration.removed_units, ['horror']);
-  assert.equal(refundMigration.refund_gold, 2000);
+  assert.equal(refundMigration.refund_gold, 2200);
+
+  const v2RebalancePlayerId = 'slot-v2-to-v3-rebalance-player';
+  insertPlayer(v2RebalancePlayerId, 'slot_v2_to_v3_rebalance');
+  const v2PackedTroops = [
+    ...Array.from({ length: 7 }, () => ['Mage:7', ...Array(3).fill(SLOT_FILLER)]).flat(),
+    ...Array.from({ length: 2 }, () => ['Mimic:7', ...Array(5).fill(SLOT_FILLER)]).flat(),
+    'MechanicalDragon:7', ...Array(3).fill(SLOT_FILLER),
+  ];
+  gameDb.db.prepare(`
+    INSERT INTO player_ships
+      (player_id, level, troops, troop_template, capacity_override, migration_json, slot_cost_version)
+    VALUES (?, 5, ?, ?, 0, '{}', 2)
+  `).run(
+    v2RebalancePlayerId,
+    JSON.stringify(v2PackedTroops),
+    JSON.stringify(v2PackedTroops),
+  );
+  const v3Ship = gameDb.ensurePlayerShip(v2RebalancePlayerId);
+  assert.equal(v3Ship.slot_cost_version, 3);
+  assert.deepEqual(v3Ship.troops, packTroops(Array(7).fill('Mage:7')));
+  assert.deepEqual(v3Ship.troop_template, packTroops(Array(7).fill('Mage:7')));
+  assert.equal(
+    gameDb.getResources(v2RebalancePlayerId).gold,
+    6000,
+    'v3 migration refund must respect the player resource cap',
+  );
+  const v3Migration = JSON.parse(gameDb.db.prepare(
+    'SELECT migration_json FROM player_ships WHERE player_id = ?',
+  ).get(v2RebalancePlayerId).migration_json).slot_cost_migration;
+  assert.equal(v3Migration.from_version, 2);
+  assert.equal(v3Migration.to_version, 3);
+  assert.deepEqual(v3Migration.removed_units, ['mimic', 'mimic', 'mechanical_dragon']);
+  assert.equal(v3Migration.refund_gold, 2100);
 
   const nftPlayerId = 'slot-rebalance-nft-player';
   insertPlayer(nftPlayerId, 'slot_rebalance_nft');
@@ -290,7 +323,7 @@ try {
   assert.deepEqual(nftShip.troops, packTroops([dragonEntry]));
   assert.equal(gameDb.getResources(nftPlayerId).gold, 4000, 'overflow NFT must never be sold for gold');
 
-  console.log('[player-ship-migration] PASS legacy_ports=5 capacity=45 legacy_over_cap=54 capped=45 stale_v2_healed=true slots=36 refund=2000 nft_unloaded=true idempotent=true');
+  console.log('[player-ship-migration] PASS legacy_ports=5 capacity=45 legacy_over_cap=48 capped=45 packed_slots=42 stale_v2_healed=true refund=2200 v2_to_v3_refund=2100 nft_unloaded=true idempotent=true');
 } finally {
   gameDb.db.close();
   for (const suffix of ['', '-wal', '-shm']) {

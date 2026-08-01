@@ -198,6 +198,21 @@ function runBalanceLab({
       ])
       .filter(([, scale]) => scale !== 1),
   );
+  const labSlotCostByTroop = Object.fromEntries(
+    Object.keys(combatDefs.TROOP_STATS || {})
+      .map((type) => [
+        type,
+        intArg(
+          cli[`lab-slot-cost-${type.replaceAll('_', '-')}`],
+          Number(dbApi.TROOP_DEFS?.[type]?.slot_cost) || 1,
+          1,
+          45,
+        ),
+      ])
+      .filter(([type, cost]) => (
+        cost !== (Number(dbApi.TROOP_DEFS?.[type]?.slot_cost) || 1)
+      )),
+  );
   const labDefenseDamageScale = numberArg(
     cli['lab-defense-damage-scale'],
     1,
@@ -246,6 +261,11 @@ function runBalanceLab({
     labOffenseScaleByLevel,
     labOffenseScaleByTroop,
   );
+  for (const [type, slotCost] of Object.entries(labSlotCostByTroop)) {
+    if (dbApi.TROOP_DEFS?.[type]) {
+      dbApi.TROOP_DEFS[type].slot_cost = slotCost;
+    }
+  }
   applyLabDefenseDamageScale(combatDefs, labDefenseDamageScale);
   applyLabLateDefenseDamageScale(combatDefs, labLateDefenseDamageScale);
   applyLabLateDefenseScale(combatDefs, labLateDefenseScale);
@@ -324,6 +344,12 @@ function runBalanceLab({
   const parityFixturePath = cli['dump-parity-fixtures']
     ? path.resolve(root, String(cli['dump-parity-fixtures']))
     : '';
+  const parityFixtureCount = intArg(
+    cli['parity-fixture-count'],
+    0,
+    0,
+    10_000,
+  );
   const maxScenarios = intArg(cli['max-scenarios'], 50_000, 1, 1_000_000);
   const shipCapacities = discoverShipCapacities(dbApi, combatDefs, catalog.maxTownHall);
   const shipCapacity = Math.max(...Object.values(shipCapacities));
@@ -462,7 +488,14 @@ function runBalanceLab({
   for (let index = 0; index < scenarioPlan.length; index += 1) {
     const scenario = scenarioPlan[index];
     const actions = buildAttackActions(scenario, combatDefs);
-    const result = runScenario(verifyReplay, combatDefs, scenario, verbose, actions);
+    const result = runScenario(
+      verifyReplay,
+      combatDefs,
+      scenario,
+      verbose,
+      actions,
+      !!parityFixturePath,
+    );
     recordScenario(aggregate, scenario, result);
     evaluationRecords.push({ scenario, result });
     if (parityFixturePath) {
@@ -716,6 +749,7 @@ function runBalanceLab({
       .length,
     labOffenseScaleByLevel,
     labOffenseScaleByTroop,
+    labSlotCostByTroop,
     labDefenseDamageScale,
     labBuildingHpScale,
     labBuildingHpMinLevel,
@@ -765,6 +799,11 @@ function runBalanceLab({
     fs.writeFileSync(dumpPath, `${JSON.stringify(bases, null, 2)}\n`, 'utf8');
   }
   if (parityFixturePath) {
+    const selectedParityFixtures = selectParityFixtures(
+      parityFixtures,
+      parityFixtureCount,
+      seed,
+    );
     fs.mkdirSync(path.dirname(parityFixturePath), { recursive: true });
     fs.writeFileSync(
       parityFixturePath,
@@ -772,8 +811,10 @@ function runBalanceLab({
         generatedAt: new Date().toISOString(),
         seed,
         profile: String(cli.profile || DEFAULT_PROFILE),
-        scenarioCount: parityFixtures.length,
-        scenarios: parityFixtures,
+        sourceScenarioCount: parityFixtures.length,
+        scenarioCount: selectedParityFixtures.length,
+        selection: parityFixtureCount > 0 ? 'matchup-outcome-diversity' : 'all',
+        scenarios: selectedParityFixtures,
       }, null, 2)}\n`,
       'utf8',
     );
@@ -1263,7 +1304,11 @@ function loadMatchmakingBotCatalog({ templates, townHalls, difficulty, combatDef
       generation: String(template.generation || ''),
       buildings: (template.buildings || []).map((building, index) => ({
         ...building,
-        id: `${template.id}-building-${index + 1}`,
+        // Ranked bots are materialized into SQLite in template order, where
+        // buildings receive integer row IDs. Use the same relative integer
+        // ordering in parity fixtures so Godot exercises its production API
+        // shape and deterministic target tie-breaking.
+        id: index + 1,
         role: buildingRole(building.type, combatDefs),
         hp: 1,
         max_hp: 1,
@@ -4916,7 +4961,14 @@ function attackLevelForProfile({ troop, attackerTh, levelProfile, seed }) {
   return 1 + Math.floor(noise01(seed, attackerTh, troop.slotCost) * unlockedMax);
 }
 
-function runScenario(verifyReplay, combatDefs, scenario, verbose, actions = null) {
+function runScenario(
+  verifyReplay,
+  combatDefs,
+  scenario,
+  verbose,
+  actions = null,
+  includeParityDiagnostics = false,
+) {
   const replayActions = actions || buildAttackActions(scenario, combatDefs);
   const simulation = withMutedConsole(!verbose, () => verifyReplay({
     defenderBuildings: scenario.base.buildings,
@@ -4929,6 +4981,23 @@ function runScenario(verifyReplay, combatDefs, scenario, verbose, actions = null
     defenderAltarLevels: scenario.defenderAltarLevels || {},
     debugTrace: false,
   }));
+  const parityDiagnostics = includeParityDiagnostics
+    ? {
+        simulationEndReason: String(simulation._simulationEndReason || ''),
+        buildingHPs: Array.isArray(simulation._buildingHPs)
+          ? simulation._buildingHPs.map((building) => ({ ...building }))
+          : [],
+        troopEndState: Array.isArray(simulation._troopEndState)
+          ? simulation._troopEndState.map((troop) => ({ ...troop }))
+          : [],
+        aliveTroopDetails: Array.isArray(simulation._aliveTroopDetails)
+          ? simulation._aliveTroopDetails.map((troop) => ({ ...troop }))
+          : [],
+        aliveGuardDetails: Array.isArray(simulation._aliveGuardDetails)
+          ? simulation._aliveGuardDetails.map((guard) => ({ ...guard }))
+          : [],
+      }
+    : {};
   return {
     valid: !!simulation.valid,
     reason: String(simulation.reason || ''),
@@ -4944,6 +5013,7 @@ function runScenario(verifyReplay, combatDefs, scenario, verbose, actions = null
     sharkTrapsTriggered: Number(simulation._sharkTrapsTriggered || 0),
     summonsSpawned: Number(simulation._summonsSpawned || 0),
     evolutionChildrenSpawned: Number(simulation._evolutionChildrenSpawned || 0),
+    ...parityDiagnostics,
   };
 }
 
@@ -6021,6 +6091,7 @@ function buildMarkdownReport(model, minGroupSize) {
   lines.push(`**Paired NFT rarity probe:** ${config.nftRarityProbeBattles} battles`);
   lines.push(`**Lab offense scales:** ${Object.entries(config.labOffenseScaleByLevel || {}).map(([level, scale]) => `L${level}=${scale}x`).join(', ')}`);
   lines.push(`**Lab late-tier troop scales:** ${Object.entries(config.labOffenseScaleByTroop || {}).map(([type, scale]) => `${type}=${scale}x`).join(', ') || 'none'}`);
+  lines.push(`**Lab troop slot costs:** ${Object.entries(config.labSlotCostByTroop || {}).map(([type, cost]) => `${type}=${cost}`).join(', ') || 'canonical'}`);
   lines.push(`**Lab defense damage scale:** ${config.labDefenseDamageScale || 1}x`);
   lines.push(`**Lab targetable building HP scale:** ${config.labBuildingHpScale || 1}x from L${config.labBuildingHpMinLevel || 1}`);
   lines.push(`**Lab L5+ defense/guard scale:** ${config.labLateDefenseScale || 1}x`);
@@ -6511,6 +6582,77 @@ function overallMarkdownRow(bucket) {
   );
 }
 
+function selectParityFixtures(fixtures, requestedCount, seed) {
+  const limit = Math.max(0, Math.trunc(Number(requestedCount) || 0));
+  if (limit === 0 || limit >= fixtures.length) return [...fixtures];
+
+  const groups = new Map();
+  for (const fixture of fixtures) {
+    const outcome = String(fixture?.expected?.resolvedResult || 'unknown').toLowerCase();
+    const key = `${fixture?.matchup || 'unknown'}|${outcome}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(fixture);
+  }
+
+  const orderedGroups = [...groups.entries()]
+    .map(([key, values]) => ({
+      key,
+      values: shuffledCopy(values, hash32(seed, hashString(key), 0x50415249)),
+    }))
+    .sort((left, right) => (
+      hash32(seed, hashString(left.key)) - hash32(seed, hashString(right.key))
+    ));
+  const selected = [];
+  const selectedIds = new Set();
+  const seenBases = new Set();
+  const seenArmies = new Set();
+  const seenSpawns = new Set();
+  const seenTactics = new Set();
+
+  const noveltyScore = (fixture) => {
+    const baseId = String(fixture?.baseId || '');
+    const armyId = String(fixture?.armyId || '');
+    const spawn = String(fixture?.spawnProfile || '');
+    const tactics = String(fixture?.tactics || '');
+    return (
+      (seenBases.has(baseId) ? 0 : 1_000_000)
+      + (seenArmies.has(armyId) ? 0 : 100_000)
+      + (seenSpawns.has(spawn) ? 0 : 10_000)
+      + (seenTactics.has(tactics) ? 0 : 1_000)
+      + (hash32(seed, hashString(fixture?.id || '')) % 1_000)
+    );
+  };
+
+  while (selected.length < limit) {
+    let addedThisRound = false;
+    for (const group of orderedGroups) {
+      let best = null;
+      let bestScore = -1;
+      for (const fixture of group.values) {
+        const fixtureId = String(fixture?.id || '');
+        if (selectedIds.has(fixtureId)) continue;
+        const score = noveltyScore(fixture);
+        if (score > bestScore) {
+          best = fixture;
+          bestScore = score;
+        }
+      }
+      if (!best) continue;
+      selected.push(best);
+      selectedIds.add(String(best.id || ''));
+      seenBases.add(String(best.baseId || ''));
+      seenArmies.add(String(best.armyId || ''));
+      seenSpawns.add(String(best.spawnProfile || ''));
+      seenTactics.add(String(best.tactics || ''));
+      addedThisRound = true;
+      if (selected.length >= limit) break;
+    }
+    if (!addedThisRound) break;
+  }
+
+  return selected;
+}
+
 function resolveOutputPaths(root, cli) {
   const reportDir = path.resolve(root, String(cli['report-dir'] || 'tools/pvp-balance/reports'));
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -6587,6 +6729,9 @@ Core options:
   --lab-offense-scale-<troop> <factor>
                            Lab-only L5+ HP/damage scale for one troop type
                            (for example --lab-offense-scale-mage 1.5).
+  --lab-slot-cost-<troop> <slots>
+                           Lab-only occupied ship slots for army composition
+                           search (for example --lab-slot-cost-mage 7).
   --lab-defense-damage-scale <factor>
                            Lab-only damage scale for all defenses in the selected tiers.
   --lab-building-hp-scale <factor>
@@ -6648,6 +6793,9 @@ Output options:
   --dump-bases <path>      Also write only generated base layouts as JSON.
   --dump-parity-fixtures <path>
                            Write exact replay inputs and server outcomes for a Godot parity run.
+  --parity-fixture-count <n>
+                           Deterministically select N diverse parity fixtures from the full
+                           simulated population. Zero keeps every fixture. Default: 0.
   --verbose                Show replay verifier logs and progress.
   --help                   Show this help.
 

@@ -15,19 +15,19 @@ const MAX_TROOP_LEVEL = 7;
 // the same values and parity tests fail when the two surfaces drift.
 const TROOP_SLOT_COSTS = Object.freeze({
   knight: 1,
-  mage: 4,
-  wind_mage: 15,
-  necromancer: 15,
+  mage: 6,
+  wind_mage: 18,
+  necromancer: 18,
   barbarian: 1,
   archer: 1,
   pea_shooter: 5,
   ranger: 1,
-  mimic: 6,
-  horror: 20,
-  mechanical_dragon: 4,
-  ice_golem: 10,
-  demon_king: 5,
-  fire_dragon: 10,
+  mimic: 8,
+  horror: 22,
+  mechanical_dragon: 5,
+  ice_golem: 11,
+  demon_king: 6,
+  fire_dragon: 11,
 });
 
 // One deployed Horror evolves through two deterministic child generations.
@@ -209,6 +209,85 @@ const TROOP_LEVEL_POWER_MULTIPLIERS = Object.freeze([
   1.61,
   1.74,
 ]);
+
+// Result-affecting movement values mirror BaseTroop and troop overrides.
+// They belong in the authoritative contract because allied/obstacle separation
+// changes which defense acquires a unit and when a unit reaches attack range.
+const DEFAULT_TROOP_MOVEMENT_PROFILE = Object.freeze({
+  separationRadius: 0.14,
+  separationForce: 0.60,
+  passThroughFriendlyUnits: false,
+});
+
+const TROOP_MOVEMENT_PROFILES = Object.freeze({
+  demon_king: Object.freeze({
+    separationRadius: 0.14,
+    separationForce: 0.60,
+    passThroughFriendlyUnits: true,
+  }),
+  fire_dragon: Object.freeze({
+    separationRadius: 0.18,
+    separationForce: 0.60,
+    passThroughFriendlyUnits: false,
+  }),
+  mechanical_dragon: Object.freeze({
+    separationRadius: 0.18,
+    separationForce: 0.55,
+    passThroughFriendlyUnits: false,
+  }),
+  ice_golem: Object.freeze({
+    separationRadius: 0.20,
+    separationForce: 0.72,
+    passThroughFriendlyUnits: true,
+  }),
+  necromancer: Object.freeze({
+    separationRadius: 0.14,
+    separationForce: 0.55,
+    passThroughFriendlyUnits: false,
+  }),
+  pea_shooter: Object.freeze({
+    separationRadius: 0.15,
+    separationForce: 0.48,
+    passThroughFriendlyUnits: false,
+  }),
+  wind_mage: Object.freeze({
+    separationRadius: 0.15,
+    separationForce: 0.48,
+    passThroughFriendlyUnits: false,
+  }),
+  windling: Object.freeze({
+    separationRadius: 0.075,
+    separationForce: 0.42,
+    passThroughFriendlyUnits: false,
+  }),
+  necromancer_skeleton: Object.freeze({
+    separationRadius: 0.10,
+    separationForce: 0.50,
+    passThroughFriendlyUnits: false,
+  }),
+  skeleton_barrel_skeleton: Object.freeze({
+    separationRadius: 0.10,
+    separationForce: 0.50,
+    passThroughFriendlyUnits: false,
+  }),
+});
+
+function troopMovementProfile(troopType, evolutionStage = 0) {
+  if (String(troopType || '') === 'horror') {
+    const stage = Math.max(0, Math.min(2, Math.trunc(Number(evolutionStage) || 0)));
+    return {
+      separationRadius: [0.21, 0.15, 0.10][stage],
+      separationForce: 0.66,
+      passThroughFriendlyUnits: stage >= 1,
+    };
+  }
+  return TROOP_MOVEMENT_PROFILES[troopType] || DEFAULT_TROOP_MOVEMENT_PROFILE;
+}
+
+// Necromancer releases its projectile on authored animation frame 10 at 30
+// FPS. The server schedules the same fixed delay; visual tween timing is not
+// allowed to move combat damage between simulation ticks.
+const NECROMANCER_ATTACK_RELEASE_SEC = 10 / 30;
 
 function troopLevelPowerMultiplier(level) {
   const index = Math.max(
@@ -602,13 +681,16 @@ const DEFENSE_STATS = {
     },
   },
   mortar: {
-    1: { damage: 95, fireRate: 2.40, detectRange: 1.433, minRange: 0.70, projSpeed: 3.0, splashRadius: 0.30 },
-    2: { damage: 108, fireRate: 2.40, detectRange: 1.600, minRange: 0.75, projSpeed: 3.2, splashRadius: 0.34 },
-    3: { damage: 158, fireRate: 2.40, detectRange: 1.767, minRange: 0.80, projSpeed: 3.4, splashRadius: 0.38 },
-    4: { damage: 227, fireRate: 2.40, detectRange: 1.933, minRange: 0.82, projSpeed: 3.6, splashRadius: 0.42 },
-    5: { damage: 233, fireRate: 2.40, detectRange: 2.100, minRange: 0.82, projSpeed: 3.8, splashRadius: 0.45 },
-    6: { damage: 240, fireRate: 2.40, detectRange: 2.250, minRange: 0.80, projSpeed: 4.0, splashRadius: 0.49 },
-    7: { damage: 294, fireRate: 2.40, detectRange: 2.400, minRange: 0.78, projSpeed: 4.2, splashRadius: 0.52 },
+    // Mortar shells are not homing projectiles. The client snapshots the
+    // target position at launch and detonates at that point after this fixed
+    // travel time, even when the original target moves or dies first.
+    1: { damage: 95, fireRate: 2.40, detectRange: 1.433, minRange: 0.70, travelTime: 0.82, splashRadius: 0.30 },
+    2: { damage: 108, fireRate: 2.40, detectRange: 1.600, minRange: 0.75, travelTime: 0.78, splashRadius: 0.34 },
+    3: { damage: 158, fireRate: 2.40, detectRange: 1.767, minRange: 0.80, travelTime: 0.74, splashRadius: 0.38 },
+    4: { damage: 227, fireRate: 2.40, detectRange: 1.933, minRange: 0.82, travelTime: 0.70, splashRadius: 0.42 },
+    5: { damage: 233, fireRate: 2.40, detectRange: 2.100, minRange: 0.82, travelTime: 0.66, splashRadius: 0.45 },
+    6: { damage: 240, fireRate: 2.40, detectRange: 2.250, minRange: 0.80, travelTime: 0.62, splashRadius: 0.49 },
+    7: { damage: 294, fireRate: 2.40, detectRange: 2.400, minRange: 0.78, travelTime: 0.58, splashRadius: 0.52 },
   },
   cannon: {
     1: { damage: 40, fireRate: 1.60, detectRange: 1.35, projSpeed: 3.2 },
@@ -928,6 +1010,10 @@ module.exports = {
   TROOP_STATS,
   TROOP_LEVEL_POWER_MULTIPLIERS,
   troopLevelPowerMultiplier,
+  DEFAULT_TROOP_MOVEMENT_PROFILE,
+  TROOP_MOVEMENT_PROFILES,
+  troopMovementProfile,
+  NECROMANCER_ATTACK_RELEASE_SEC,
   WIND_MAGE,
   WINDLING_STATS,
   WINDLING_LIFETIME_SEC,

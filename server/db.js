@@ -20,6 +20,7 @@ const {
 const {
   BOT_LOOT_REWARD_RANGE,
   CHALLENGE_BOT_ARCHETYPES,
+  RANKED_CHALLENGE_BOT_ARCHETYPES_BY_TH,
   MATCHMAKING_CONFIG,
   buildBotBaseTemplates,
   botResources,
@@ -6289,9 +6290,12 @@ function virtualRankedBotCandidates(townHallLevel) {
   const defenderTh = Math.max(1, Math.min(7, Math.trunc(Number(townHallLevel) || 1)));
   const exactTier = buildBotBaseTemplates()
     .filter((template) => template.th === defenderTh);
+  const rankedChallengeArchetypes = new Set(
+    RANKED_CHALLENGE_BOT_ARCHETYPES_BY_TH[defenderTh] || CHALLENGE_BOT_ARCHETYPES,
+  );
   const challengePool = exactTier.filter((template) => (
     template.difficulty === 'hard'
-    && (defenderTh < 5 || CHALLENGE_BOT_ARCHETYPE_SET.has(template.archetype))
+    && (defenderTh < 5 || rankedChallengeArchetypes.has(template.archetype))
   ));
   const rankedPool = challengePool.length > 0 ? challengePool : exactTier;
   return rankedPool
@@ -6492,7 +6496,7 @@ const TROOP_DEFS = {
     max_level: 7,
     min_town_hall_level: 3,
     slot_cost: TROOP_SLOT_COSTS.mage,
-    buy_cost: 400,
+    buy_cost: 600,
     cost: [
       { gold: 250, wood: 0, ore: 250 },
       { gold: 500, wood: 0, ore: 500 },
@@ -6506,7 +6510,7 @@ const TROOP_DEFS = {
     max_level: 7,
     min_town_hall_level: 8,
     slot_cost: TROOP_SLOT_COSTS.wind_mage,
-    buy_cost: 1500,
+    buy_cost: 1800,
     cost: [
       { gold: 250, wood: 0, ore: 250 },
       { gold: 500, wood: 0, ore: 500 },
@@ -6520,7 +6524,7 @@ const TROOP_DEFS = {
     max_level: 7,
     min_town_hall_level: 7,
     slot_cost: TROOP_SLOT_COSTS.necromancer,
-    buy_cost: 1500,
+    buy_cost: 1800,
     cost: [
       { gold: 250, wood: 0, ore: 250 },
       { gold: 500, wood: 0, ore: 500 },
@@ -6534,7 +6538,7 @@ const TROOP_DEFS = {
     max_level: 7,
     min_town_hall_level: 10,
     slot_cost: TROOP_SLOT_COSTS.horror,
-    buy_cost: 2000,
+    buy_cost: 2200,
     cost: [
       { gold: 375, wood: 0, ore: 375 },
       { gold: 750, wood: 0, ore: 750 },
@@ -6597,7 +6601,7 @@ const TROOP_DEFS = {
     max_level: 7,
     min_town_hall_level: 5,
     slot_cost: TROOP_SLOT_COSTS.mimic,
-    buy_cost: 600,
+    buy_cost: 800,
     cost: [
       { gold: 175, wood: 175, ore: 0 },
       { gold: 350, wood: 350, ore: 0 },
@@ -6611,7 +6615,7 @@ const TROOP_DEFS = {
     max_level: 7,
     min_town_hall_level: 6,
     slot_cost: TROOP_SLOT_COSTS.mechanical_dragon,
-    buy_cost: 400,
+    buy_cost: 500,
     cost: [
       { gold: 500, wood: 0, ore: 500 },
       { gold: 1000, wood: 0, ore: 1000 },
@@ -6625,7 +6629,7 @@ const TROOP_DEFS = {
     max_level: 7,
     min_town_hall_level: 9,
     slot_cost: TROOP_SLOT_COSTS.ice_golem,
-    buy_cost: 1000,
+    buy_cost: 1100,
     cost: [
       { gold: 500, wood: 0, ore: 500 },
       { gold: 1000, wood: 0, ore: 1000 },
@@ -11095,7 +11099,7 @@ function repairAllBuildings(playerId) {
 }
 
 const SHIP_COST_GOLD = 250;
-const TROOP_SLOT_COST_VERSION = 2;
+const TROOP_SLOT_COST_VERSION = 3;
 const SHIP_SLOT_FILLER = '_SLOT_FILLER_';
 
 function safeShipTroopArray(raw) {

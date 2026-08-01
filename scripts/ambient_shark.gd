@@ -129,8 +129,11 @@ func _has_installed_shark_trap() -> bool:
 	for building in _main_system.placed_buildings:
 		if str(building.get("id", "")) != "shark_trap":
 			continue
-		var node: Node = building.get("node", null)
-		if is_instance_valid(node):
+		# A building can remain in the data array for one deferred-free frame.
+		# Keep the value untyped until validity is checked; assigning a freed
+		# Object directly to a typed Node raises before is_instance_valid() runs.
+		var raw_node: Variant = building.get("node", null)
+		if is_instance_valid(raw_node):
 			return true
 	return false
 

@@ -152,7 +152,7 @@ func _drop_medkit(world_pos: Vector3) -> bool:
 	var pos := Vector3(clamped_pos.x, bs.grid_y + 0.012, clamped_pos.z)
 	_launch_or_activate(pos, "manual")
 	if bs.is_viewing_enemy:
-		var elapsed: float = Time.get_ticks_msec() / 1000.0 - bs._battle_start_time
+		var elapsed: float = bs.get_battle_elapsed_sec()
 		bs._battle_replay.append({
 			"t": elapsed,
 			"type": "medkit_drop",
