@@ -2575,3 +2575,14 @@ Follow-up:
   worktree; integrate and push `main`; deploy through the repository's standard production wrapper;
   and verify the deployed revision and critical production health. Commit, push, and production
   deployment are explicitly authorized for this request.
+
+### UR-2026-08-01-FULL-BALANCE-TRAP-PRODUCTION-DEPLOY
+
+- **Timestamp:** 2026-08-01 13:52 (Europe/Kyiv)
+- **Request:** "зроби коміт всіх змін і деплой на прод"
+- **Scope:** Include the complete current worktree: fixed troop/defense combat cadence, TH7 balance
+  documentation and tests, the owner-edited Godot grid and ranked-card styling, production-layout
+  balance tooling, and Shark Trap Town Hall-victory cleanup. Regenerate the combat-grid snapshot,
+  run deployment checks, commit all changes, fast-forward `main`, push GitHub, deploy the fresh
+  Godot/server/web revision to production, and verify the deployed commit and health. Commit, push,
+  merge, and production deployment are explicitly authorized for this request.

@@ -26,12 +26,12 @@ var _pool_ready: bool = false
 
 const LEVEL_STATS = {
 	1: {"hp": 450, "damage": 203, "atk_speed": 1.25},
-	2: {"hp": 600, "damage": 259, "atk_speed": 1.12},
-	3: {"hp": 795, "damage": 364, "atk_speed": 1.0},
-	4: {"hp": 1035, "damage": 483, "atk_speed": 0.90},
-	5: {"hp": 2430, "damage": 1086, "atk_speed": 0.82},
-	6: {"hp": 2830, "damage": 1416, "atk_speed": 0.76},
-	7: {"hp": 4554, "damage": 2387, "atk_speed": 0.70},
+	2: {"hp": 600, "damage": 289, "atk_speed": 1.25},
+	3: {"hp": 795, "damage": 455, "atk_speed": 1.25},
+	4: {"hp": 1035, "damage": 671, "atk_speed": 1.25},
+	5: {"hp": 2430, "damage": 1655, "atk_speed": 1.25},
+	6: {"hp": 2830, "damage": 2329, "atk_speed": 1.25},
+	7: {"hp": 4554, "damage": 4263, "atk_speed": 1.25},
 }
 
 ## Sets hp, damage, atk_speed, move_speed, attack_range, attack_anim, and anim_files

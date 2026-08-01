@@ -25,11 +25,11 @@ const ANIM_FILES: Array[String] = [
 const LEVEL_STATS: Dictionary = {
 	1: {"hp": 108, "damage": 13, "atk_speed": 1.29, "move_speed": 0.46},
 	2: {"hp": 108, "damage": 13, "atk_speed": 1.29, "move_speed": 0.46},
-	3: {"hp": 156, "damage": 21, "atk_speed": 1.11, "move_speed": 0.52},
-	4: {"hp": 186, "damage": 25, "atk_speed": 1.05, "move_speed": 0.54},
-	5: {"hp": 246, "damage": 34, "atk_speed": 0.96, "move_speed": 0.58},
-	6: {"hp": 299, "damage": 41, "atk_speed": 0.90, "move_speed": 0.60},
-	7: {"hp": 299, "damage": 41, "atk_speed": 0.90, "move_speed": 0.60},
+	3: {"hp": 156, "damage": 19, "atk_speed": 1.29, "move_speed": 0.52},
+	4: {"hp": 186, "damage": 23, "atk_speed": 1.29, "move_speed": 0.54},
+	5: {"hp": 246, "damage": 34, "atk_speed": 1.29, "move_speed": 0.58},
+	6: {"hp": 299, "damage": 44, "atk_speed": 1.29, "move_speed": 0.60},
+	7: {"hp": 299, "damage": 44, "atk_speed": 1.29, "move_speed": 0.60},
 }
 
 static var _body_material: StandardMaterial3D = null

@@ -4,12 +4,12 @@ extends Node3D
 
 const LEVEL_STATS := {
 	1: {"damage": 95, "fire_rate": 2.40, "detect_range": 1.433, "min_range": 0.70, "splash_radius": 0.30, "travel_time": 0.82},
-	2: {"damage": 135, "fire_rate": 2.25, "detect_range": 1.600, "min_range": 0.75, "splash_radius": 0.34, "travel_time": 0.78},
-	3: {"damage": 185, "fire_rate": 2.10, "detect_range": 1.767, "min_range": 0.80, "splash_radius": 0.38, "travel_time": 0.74},
-	4: {"damage": 245, "fire_rate": 1.95, "detect_range": 1.933, "min_range": 0.82, "splash_radius": 0.42, "travel_time": 0.70},
-	5: {"damage": 300, "fire_rate": 1.90, "detect_range": 2.100, "min_range": 0.82, "splash_radius": 0.45, "travel_time": 0.66},
-	6: {"damage": 370, "fire_rate": 1.80, "detect_range": 2.250, "min_range": 0.80, "splash_radius": 0.49, "travel_time": 0.62},
-	7: {"damage": 460, "fire_rate": 1.70, "detect_range": 2.400, "min_range": 0.78, "splash_radius": 0.52, "travel_time": 0.58},
+	2: {"damage": 108, "fire_rate": 2.40, "detect_range": 1.600, "min_range": 0.75, "splash_radius": 0.34, "travel_time": 0.78},
+	3: {"damage": 158, "fire_rate": 2.40, "detect_range": 1.767, "min_range": 0.80, "splash_radius": 0.38, "travel_time": 0.74},
+	4: {"damage": 227, "fire_rate": 2.40, "detect_range": 1.933, "min_range": 0.82, "splash_radius": 0.42, "travel_time": 0.70},
+	5: {"damage": 284, "fire_rate": 2.40, "detect_range": 2.100, "min_range": 0.82, "splash_radius": 0.45, "travel_time": 0.66},
+	6: {"damage": 370, "fire_rate": 2.40, "detect_range": 2.250, "min_range": 0.80, "splash_radius": 0.49, "travel_time": 0.62},
+	7: {"damage": 487, "fire_rate": 2.40, "detect_range": 2.400, "min_range": 0.78, "splash_radius": 0.52, "travel_time": 0.58},
 }
 
 const PROJECTILE_SCENE: String = "res://Model/Mortar/mortar_lvl2_projectile.fbx"

@@ -15,12 +15,12 @@ assert.deepEqual(
 
 const expectedKnight = {
   1: { hp: 369, damage: 31 },
-  2: { hp: 492, damage: 41 },
-  3: { hp: 936, damage: 79 },
-  4: { hp: 1850, damage: 159 },
-  5: { hp: 2097, damage: 186 },
-  6: { hp: 2763, damage: 256 },
-  7: { hp: 3612, damage: 351 },
+  2: { hp: 492, damage: 44 },
+  3: { hp: 936, damage: 92 },
+  4: { hp: 1850, damage: 202 },
+  5: { hp: 2097, damage: 255 },
+  6: { hp: 2763, damage: 374 },
+  7: { hp: 3612, damage: 546 },
 };
 
 for (let level = 1; level <= 7; level += 1) {
@@ -30,9 +30,9 @@ for (let level = 1; level <= 7; level += 1) {
 }
 
 assert.equal(TROOP_STATS.archer[7].hp, 2025);
-assert.equal(TROOP_STATS.archer[7].damage, 435);
+assert.equal(TROOP_STATS.archer[7].damage, 736);
 assert.equal(TROOP_STATS.mimic[7].hp, 19488);
-assert.equal(TROOP_STATS.mimic[7].damage, 1514);
+assert.equal(TROOP_STATS.mimic[7].damage, 2142);
 
 for (const [troopType, levels] of Object.entries(TROOP_STATS)) {
   let previousHp = 0;

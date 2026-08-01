@@ -20,12 +20,12 @@ extends BaseTroop
 
 const COMMON_LEVEL_STATS: Dictionary = {
 	1: {"hp": 2700, "damage": 228, "atk_speed": 1.40},
-	2: {"hp": 3600, "damage": 300, "atk_speed": 1.30},
-	3: {"hp": 4680, "damage": 396, "atk_speed": 1.20},
-	4: {"hp": 6000, "damage": 516, "atk_speed": 1.10},
-	5: {"hp": 6800, "damage": 610, "atk_speed": 1.02},
-	6: {"hp": 9000, "damage": 850, "atk_speed": 0.96},
-	7: {"hp": 10700, "damage": 1040, "atk_speed": 0.90},
+	2: {"hp": 3600, "damage": 323, "atk_speed": 1.40},
+	3: {"hp": 4680, "damage": 462, "atk_speed": 1.40},
+	4: {"hp": 6000, "damage": 657, "atk_speed": 1.40},
+	5: {"hp": 6800, "damage": 837, "atk_speed": 1.40},
+	6: {"hp": 9000, "damage": 1240, "atk_speed": 1.40},
+	7: {"hp": 10700, "damage": 1618, "atk_speed": 1.40},
 }
 
 const NFT_RARITY_MULTIPLIERS: Dictionary = {

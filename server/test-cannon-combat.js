@@ -124,11 +124,11 @@ try {
     'Cannon first shot must wait through normal acquisition and its full fire interval',
   );
   assert.ok(
-    fires[1].t - fires[0].t >= 0.74 && fires[1].t - fires[0].t <= 0.77,
-    `Cannon L7 cadence must remain 0.75 seconds, got ${fires[1].t - fires[0].t}`,
+    fires[1].t - fires[0].t >= 1.59 && fires[1].t - fires[0].t <= 1.62,
+    `Cannon L7 cadence must remain fixed at 1.60 seconds, got ${fires[1].t - fires[0].t}`,
   );
-  assert.equal(hits[0].damage, 675);
-  assert.equal(hits[0].hpBefore - hits[0].hpAfter, 675);
+  assert.equal(hits[0].damage, 1080);
+  assert.equal(hits[0].hpBefore - hits[0].hpAfter, 1080);
   assert.ok(hits[0].hitDistSq <= 0.0025, 'Cannon hit must use the shared 0.05 hit radius');
 
   const repeated = simulate(stationaryBuildings, stationaryActions);
@@ -138,7 +138,7 @@ try {
   const wardedHit = warded._trace.find(
     row => row.kind === 'defense_projectile_hit' && row.defenseType === 'cannon',
   );
-  assert.equal(wardedHit.damage, 709, 'Ward L1 skill must increase Cannon L7 damage by five percent with ceil rounding');
+  assert.equal(wardedHit.damage, 1134, 'Ward L1 skill must increase Cannon L7 damage by five percent with ceil rounding');
 
   Object.assign(TROOP_STATS.mechanical_dragon[1], {
     hp: 5000,
@@ -224,7 +224,7 @@ try {
 
   Object.assign(TROOP_STATS.knight[1], {
     hp: 5000,
-    damage: 10000,
+    damage: 1000,
     atkSpeed: 0.25,
     moveSpeed: 0.7,
     range: 0.24,

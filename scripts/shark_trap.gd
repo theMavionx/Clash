@@ -30,6 +30,7 @@ var _bite_target_local := Vector3.ZERO
 var _bite_target: Node3D = null
 var _combat_concealed: bool = false
 var _freeze_remaining: float = 0.0
+var _battle_ended: bool = false
 
 
 func _ready() -> void:
@@ -54,6 +55,8 @@ func _ready() -> void:
 
 
 func _process(_delta: float) -> void:
+	if _battle_ended:
+		return
 	if _bite_tracking and is_instance_valid(_visual_model):
 		if is_instance_valid(_bite_target):
 			_bite_target_local = to_local(_bite_target.global_position)
@@ -72,7 +75,7 @@ func set_ward_bonus_pct(_pct: int) -> void:
 
 
 func _physics_process(delta: float) -> void:
-	if _spent or not is_instance_valid(_bs):
+	if _battle_ended or _spent or not is_instance_valid(_bs):
 		return
 	delta = BaseTroop.combat_delta(delta)
 	if _freeze_remaining > 0.0:
@@ -91,6 +94,27 @@ func _physics_process(delta: float) -> void:
 
 func freeze_for(duration: float) -> void:
 	_freeze_remaining = maxf(_freeze_remaining, maxf(0.0, duration))
+
+
+## Ends trap combat without consuming or detonating it. Town Hall victory uses
+## this before the generic building-destruction cascade, so an armed trap can
+## neither find a late target nor continue a bite presentation after the battle
+## has already been won.
+func deactivate_after_battle_end() -> void:
+	if _battle_ended:
+		return
+	_battle_ended = true
+	_bite_tracking = false
+	_bite_target = null
+	set_process(false)
+	set_physics_process(false)
+	if is_instance_valid(_preview_player):
+		_preview_player.stop()
+	if is_instance_valid(_visual_model):
+		_visual_model.visible = false
+	if is_instance_valid(_water_marker):
+		_water_marker.visible = false
+	set_meta("trap_neutralized_after_battle_end", true)
 
 
 func _is_enemy_battle() -> bool:
@@ -355,7 +379,7 @@ func _find_trigger_target() -> Node3D:
 
 
 func _trigger(target: Node3D) -> void:
-	if _spent or not is_instance_valid(target):
+	if _battle_ended or _spent or not is_instance_valid(target):
 		return
 	_spent = true
 	set_meta("trap_spent", true)
@@ -403,7 +427,7 @@ static func _is_demon_king(target: Node) -> bool:
 
 
 func _play_bite_effect(target: Node3D, target_local: Vector3) -> void:
-	if not is_instance_valid(_visual_model):
+	if _battle_ended or not is_instance_valid(_visual_model):
 		return
 	_visual_model.visible = true
 	_visual_model.position = _head_hidden_position
@@ -426,18 +450,20 @@ func _play_bite_effect(target: Node3D, target_local: Vector3) -> void:
 	var rise := create_tween()
 	rise.tween_property(_visual_model, "position:y", bite_rest_position.y + BITE_EXTRA_HEIGHT, RISE_DURATION).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	await rise.finished
-	if not is_instance_valid(_visual_model):
+	if _battle_ended or not is_instance_valid(_visual_model):
 		return
 	var post_rise_correction := _align_visual_head_to_local_target(target_local)
 	bite_hidden_position += post_rise_correction
 	await get_tree().create_timer(BITE_HOLD_DURATION).timeout
-	if not is_instance_valid(_visual_model):
+	if _battle_ended or not is_instance_valid(_visual_model):
 		return
 	var sink := create_tween()
 	sink.tween_property(_visual_model, "position:y", bite_hidden_position.y, SINK_DURATION).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
 	if is_instance_valid(_water_marker):
 		sink.parallel().tween_property(_water_marker, "scale", Vector3.ZERO, SINK_DURATION)
 	await sink.finished
+	if _battle_ended:
+		return
 	_bite_tracking = false
 	_bite_target = null
 	set_process(false)

@@ -304,6 +304,10 @@ function runBalanceLab({ repoRoot: root, gameDb: dbApi, combatDefs, verifyReplay
   const baseReportPath = cli['base-report']
     ? path.resolve(root, String(cli['base-report']))
     : '';
+  const allowProductionLayout = !!cli['allow-production-layout'];
+  if (allowProductionLayout && !baseReportPath) {
+    throw new Error('--allow-production-layout requires --base-report.');
+  }
   const requestedBaseIds = new Set(
     String(cli['base-ids'] || '')
       .split(',')
@@ -330,7 +334,9 @@ function runBalanceLab({ repoRoot: root, gameDb: dbApi, combatDefs, verifyReplay
   if (bases.length === 0) {
     throw new Error('Base catalog is empty after applying report/profile/id filters.');
   }
-  const baseValidation = validateBaseCatalog(bases, catalog, dbApi);
+  const baseValidation = validateBaseCatalog(bases, catalog, dbApi, {
+    allowProductionLayout,
+  });
   if (baseValidation.errors.length > 0) {
     throw new Error(`Generated base validation failed:\n${baseValidation.errors.join('\n')}`);
   }
@@ -556,7 +562,7 @@ function runBalanceLab({ repoRoot: root, gameDb: dbApi, combatDefs, verifyReplay
   });
 
   const finalBaseValidation = adversarialRounds > 0
-    ? validateBaseCatalog(bases, catalog, dbApi)
+    ? validateBaseCatalog(bases, catalog, dbApi, { allowProductionLayout })
     : baseValidation;
   if (finalBaseValidation.errors.length > 0) {
     throw new Error(
@@ -598,6 +604,7 @@ function runBalanceLab({ repoRoot: root, gameDb: dbApi, combatDefs, verifyReplay
     profile: String(cli.profile || DEFAULT_PROFILE),
     townHalls,
     baseSource: baseReportPath ? 'report' : 'generated',
+    allowProductionLayout,
     baseReportPath: baseReportPath
       ? path.relative(root, baseReportPath).replaceAll('\\', '/')
       : '',
@@ -1581,7 +1588,12 @@ function baseSignature(base) {
     .join('|');
 }
 
-function validateBaseCatalog(bases, catalog, dbApi) {
+function validateBaseCatalog(
+  bases,
+  catalog,
+  dbApi,
+  { allowProductionLayout = false } = {},
+) {
   const errors = [];
   const warnings = [...catalog.warnings];
   const signatures = new Set();
@@ -1629,7 +1641,7 @@ function validateBaseCatalog(bases, catalog, dbApi) {
     }
     if (townHallCount !== 1) errors.push(`${base.id}: expected one Town Hall, got ${townHallCount}`);
     const townHall = base.buildings.find((building) => building.type === 'town_hall');
-    if (townHall) {
+    if (townHall && !allowProductionLayout) {
       const townHallCenterZ = townHall.grid_z + (townHall.size?.[1] || 4) / 2;
       const townHallFrontZ = townHall.grid_z + (townHall.size?.[1] || 4);
       for (const building of base.buildings) {
@@ -5848,6 +5860,7 @@ function buildMarkdownReport(model, minGroupSize) {
   if (config.baseSource === 'report') {
     lines.push(`**Base report source:** \`${config.baseReportPath}\``);
     lines.push(`**Selected base IDs:** ${config.requestedBaseIds.length > 0 ? config.requestedBaseIds.map(escapeMd).join(', ') : 'all matching profile'}`);
+    lines.push(`**Production layout rules:** ${config.allowProductionLayout ? 'exact live placement (backline allowed)' : 'generated-base front-line constraints'}`);
   }
   lines.push(`**Unique attack policies:** ${config.attackPolicyCount}`);
   lines.push(`**Capacity-filled core army templates:** ${config.capacityFilledArmyCount || 0}`);
@@ -5878,7 +5891,7 @@ function buildMarkdownReport(model, minGroupSize) {
   lines.push('- Reads current building, Town Hall, troop, level, slot, defense, and grid definitions.');
   lines.push('- Uses a temporary SQLite database and never reads or writes production player data.');
   lines.push(config.baseSource === 'report'
-    ? `- Replays the exact validated base catalog from \`${config.baseReportPath}\`; imported base and building IDs must be non-empty and unique.`
+    ? `- Replays the exact validated base catalog from \`${config.baseReportPath}\`; imported base and building IDs must be non-empty and unique.${config.allowProductionLayout ? ' Live backline placement is preserved while grid bounds, overlaps, Town Hall count, and TH level caps remain validated.' : ''}`
     : `- Generates deterministic layouts across ${ARCHETYPES.length} logical base archetypes and ${BASE_LEVEL_PROFILES.length} progression profiles.`);
   lines.push(`- Samples exactly ${SPAWN_PROFILES.length} deterministic spawn mechanics, ${TACTIC_PROFILES.length} tactical plans, troop levels, NFT rarity boosts, and defender Ward levels.`);
   lines.push('- The controlled pure-unit matrix fixes tactics to none, rarity to common, Ward to 0, and troop level to the attacker Town Hall cap across all represented base archetypes.');
@@ -6400,6 +6413,9 @@ Core options:
   --bases <n>              Unique logical bases to generate. Default: ${DEFAULT_BASE_COUNT}
   --base-report <path>     Reuse the exact base catalog stored in a JSON balance report.
   --base-ids <csv>         Limit --base-report replay to the listed base IDs.
+  --allow-production-layout
+                           Preserve exact live backline placement in a base report while
+                           still validating bounds, overlaps, Town Hall count, and level caps.
   --matches <n>            Replay simulations for sampled mode. Default: ${DEFAULT_MATCHES}
   --seed <n>               Deterministic random seed. Default: ${DEFAULT_SEED}
   --profile <range>        all, thN, or thN-thN. Default: ${DEFAULT_PROFILE}

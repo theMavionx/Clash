@@ -154,10 +154,10 @@ try {
     { fireDragonLevel: 6 },
   );
   const fireDragonL6Hits = directHitsOnBuilding(fireDragonL6, 20);
-  assert.equal(fireDragonL6Hits.length, 3, 'a common L6 Fire Dragon must need three direct hits');
-  assert.equal(fireDragonL6Hits[0].damage, 3091);
-  assert.ok(fireDragonL6Hits[1].hpAfter > 0, 'Harpoon L6 must survive the second direct hit');
-  assert.ok(fireDragonL6Hits[2].hpAfter <= 0, 'Harpoon L6 must still fall on the third direct hit');
+  assert.equal(fireDragonL6Hits.length, 2, 'a fixed-cadence common L6 Fire Dragon must need two stronger direct hits');
+  assert.equal(fireDragonL6Hits[0].damage, 5084);
+  assert.ok(fireDragonL6Hits[0].hpAfter > 0, 'Harpoon L6 must survive the first direct hit');
+  assert.ok(fireDragonL6Hits[1].hpAfter <= 0, 'Harpoon L6 must fall on the second direct hit');
 
   const harpoonL7Ttk = building(26, 'harpoon', 12, 17, 7);
   const fireDragonL7 = simulate(
@@ -165,10 +165,10 @@ try {
     [deploy('FireDragon', harpoonPoint.x, harpoonPoint.z + 0.68, 19, 7)],
   );
   const fireDragonL7Hits = directHitsOnBuilding(fireDragonL7, 26);
-  assert.equal(fireDragonL7Hits.length, 3, 'a common L7 Fire Dragon must need three direct hits');
-  assert.equal(fireDragonL7Hits[0].damage, 4754);
-  assert.ok(fireDragonL7Hits[1].hpAfter > 0, 'Harpoon L7 must survive the second direct hit');
-  assert.ok(fireDragonL7Hits[2].hpAfter <= 0, 'Harpoon L7 must still fall on the third direct hit');
+  assert.equal(fireDragonL7Hits.length, 2, 'a fixed-cadence common L7 Fire Dragon must need two stronger direct hits');
+  assert.equal(fireDragonL7Hits[0].damage, 8489);
+  assert.ok(fireDragonL7Hits[0].hpAfter > 0, 'Harpoon L7 must survive the first direct hit');
+  assert.ok(fireDragonL7Hits[1].hpAfter <= 0, 'Harpoon L7 must fall on the second direct hit');
 
   const groundOnly = simulate(
     [townHall, harpoonL6],

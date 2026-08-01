@@ -286,8 +286,8 @@ func _run() -> void:
 	cannon.set_ward_bonus_pct(0)
 	_expect(cannon.damage == 40, "clearing ward bonus did not restore L1 damage")
 	cannon.set_level(7)
-	_expect(cannon.damage == 675, "L7 Cannon damage is not 675")
-	_expect(is_equal_approx(cannon.fire_rate, 0.75), "L7 Cannon fire interval is not 0.75")
+	_expect(cannon.damage == 1080, "L7 Cannon damage is not 1080")
+	_expect(is_equal_approx(cannon.fire_rate, 1.60), "L7 Cannon fire interval is not the fixed 1.60 seconds")
 	_expect(is_equal_approx(cannon.detect_range, 2.00), "L7 Cannon range is not 2.00")
 
 	if cannon._attack_sfx_player != null:

@@ -265,7 +265,13 @@ assert.match(
 );
 
 assertTroopStats('scripts/knight.gd', 'knight');
+assertTroopStats('scripts/barbarian.gd', 'barbarian');
 assertTroopStats('scripts/archer.gd', 'archer', {
+  move_speed: 'moveSpeed',
+  attack_range: 'range',
+  projectile_fly_speed: 'projSpeed',
+});
+assertTroopStats('scripts/ranger.gd', 'ranger', {
   move_speed: 'moveSpeed',
   attack_range: 'range',
   projectile_fly_speed: 'projSpeed',
@@ -746,6 +752,35 @@ assertDefenseStats('scripts/cannon.gd', 'cannon', {
   fire_rate: 'fireRate',
   detect_range: 'detectRange',
 }, 7);
+for (const [troopType, levels] of Object.entries(TROOP_STATS)) {
+  const baseline = levels[1].atkSpeed;
+  for (const [level, stats] of Object.entries(levels)) {
+    assert.equal(
+      stats.atkSpeed,
+      baseline,
+      `${troopType} L${level} must not gain attack speed from upgrading`,
+    );
+  }
+}
+for (const defenseType of ['turret', 'archer_tower', 'mage_tower', 'mortar', 'cannon', 'harpoon']) {
+  const levels = DEFENSE_STATS[defenseType];
+  const baseline = levels[1].tickRate || levels[1].fireRate;
+  for (const [level, stats] of Object.entries(levels)) {
+    assert.equal(
+      stats.tickRate || stats.fireRate,
+      baseline,
+      `${defenseType} L${level} must not gain attack speed from upgrading`,
+    );
+  }
+}
+for (const [level, stats] of Object.entries(SKELETON_GUARD.levels)) {
+  assert.equal(stats.atkSpeed, SKELETON_GUARD.levels[1].atkSpeed, `Tombstone guard L${level} cadence changed`);
+}
+assert.deepEqual(
+  Object.values(DEFENSE_STATS.mage_tower).map((stats) => stats.detectRange),
+  [1.05, 1.15, 1.25, 1.35, 1.45, 1.55, 1.65],
+  'Mage Tower range must stay on the reduced compact coverage curve',
+);
 const harpoonSource = read('scripts/tower_harpoon.gd');
 const harpoonRows = parseDictionaryRows('scripts/tower_harpoon.gd');
 assert.equal(Object.keys(harpoonRows).length, 8, 'Harpoon client must define all eight levels');
@@ -780,25 +815,25 @@ assert.deepEqual(
     skeletonGuardL6Damage: SKELETON_GUARD.levels[6].damage,
   },
   {
-    turretL7Damage: 315,
-    archerTowerL7Damage: 288,
-    mageTowerL7BaseDamage: 52,
-    mageTowerL7MaxDamage: 281,
-    mageTowerL7DamageAlias: 52,
-    mortarL3Damage: 185,
-    cannonL7Damage: 675,
+    turretL7Damage: 788,
+    archerTowerL7Damage: 675,
+    mageTowerL7BaseDamage: 98,
+    mageTowerL7MaxDamage: 527,
+    mageTowerL7DamageAlias: 98,
+    mortarL3Damage: 158,
+    cannonL7Damage: 1080,
     skeletonGuardL6Hp: 1148,
-    skeletonGuardL6Damage: 131,
+    skeletonGuardL6Damage: 149,
   },
   'TH7 defense calibration must remain an explicit server-authoritative contract',
 );
 assert.match(
   buildingSystem,
-  /"cannon":\s*\{[\s\S]*?"damage_levels":\s*\[40,\s*100,\s*205,\s*305,\s*447,\s*506,\s*675\]/,
+  /"cannon":\s*\{[\s\S]*?"damage_levels":\s*\[40,\s*109,\s*259,\s*431,\s*631,\s*759,\s*1080\]/,
   'Cannon upgrade UI damage rows must mirror runtime combat stats',
 );
 assert.equal(
-  (buildingSystem.match(/"test_damage_levels":\s*\[95,\s*135,\s*185,\s*245,\s*300,\s*370,\s*460\]/g) || []).length,
+  (buildingSystem.match(/"test_damage_levels":\s*\[95,\s*108,\s*158,\s*227,\s*284,\s*370,\s*487\]/g) || []).length,
   2,
   'both Mortar metadata mirrors must expose all seven calibrated damage levels',
 );

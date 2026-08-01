@@ -12,12 +12,12 @@ var _hit_this_swing: bool = false
 
 const LEVEL_STATS = {
 	1: {"hp": 450, "damage": 38, "atk_speed": 1.40},
-	2: {"hp": 600, "damage": 50, "atk_speed": 1.30},
-	3: {"hp": 780, "damage": 66, "atk_speed": 1.20},
-	4: {"hp": 1000, "damage": 86, "atk_speed": 1.10},
-	5: {"hp": 1248, "damage": 111, "atk_speed": 1.02},
-	6: {"hp": 1716, "damage": 159, "atk_speed": 0.96},
-	7: {"hp": 2076, "damage": 202, "atk_speed": 0.90},
+	2: {"hp": 600, "damage": 54, "atk_speed": 1.40},
+	3: {"hp": 780, "damage": 77, "atk_speed": 1.40},
+	4: {"hp": 1000, "damage": 109, "atk_speed": 1.40},
+	5: {"hp": 1248, "damage": 152, "atk_speed": 1.40},
+	6: {"hp": 1716, "damage": 232, "atk_speed": 1.40},
+	7: {"hp": 2076, "damage": 314, "atk_speed": 1.40},
 }
 
 ## Sets hp, damage, atk_speed, move_speed, attack_range, attack_anim, and anim_files

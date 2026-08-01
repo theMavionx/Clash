@@ -7,12 +7,12 @@ extends Node3D
 
 const LEVEL_STATS := {
 	1: {"damage": 40, "fire_rate": 1.60, "detect_range": 1.35},
-	2: {"damage": 100, "fire_rate": 1.10, "detect_range": 1.45},
-	3: {"damage": 205, "fire_rate": 0.95, "detect_range": 1.55},
-	4: {"damage": 305, "fire_rate": 0.85, "detect_range": 1.65},
-	5: {"damage": 447, "fire_rate": 0.85, "detect_range": 1.75},
-	6: {"damage": 506, "fire_rate": 0.80, "detect_range": 1.85},
-	7: {"damage": 675, "fire_rate": 0.75, "detect_range": 2.00},
+	2: {"damage": 109, "fire_rate": 1.60, "detect_range": 1.45},
+	3: {"damage": 259, "fire_rate": 1.60, "detect_range": 1.55},
+	4: {"damage": 431, "fire_rate": 1.60, "detect_range": 1.65},
+	5: {"damage": 631, "fire_rate": 1.60, "detect_range": 1.75},
+	6: {"damage": 759, "fire_rate": 1.60, "detect_range": 1.85},
+	7: {"damage": 1080, "fire_rate": 1.60, "detect_range": 2.00},
 }
 
 const PROJECTILE_SPEED: float = 3.2
@@ -75,6 +75,9 @@ var _barrel_yaw: float = 0.0
 var _barrel_yaw_error: float = INF
 var _visuals_ready: bool = false
 var _missing_nodes_warned: bool = false
+var _spawn_facing_global: Vector3 = Vector3.ZERO
+var _has_spawn_facing: bool = false
+var _spawn_facing_apply_pending: bool = false
 
 var _presentation_active: bool = false
 var _presentation_elapsed: float = 0.0
@@ -161,6 +164,16 @@ func set_ward_bonus_pct(pct: int) -> void:
 	_apply_stats()
 
 
+## Gives the idle barrel a deterministic spawn heading toward the actual troop
+## deployment zone. Combat yaw remains relative to the authored rest transform
+## and retains the last tracked target after acquisition begins.
+func set_spawn_facing_global(target_global_position: Vector3) -> void:
+	_spawn_facing_global = target_global_position
+	_has_spawn_facing = true
+	if not _apply_spawn_facing_if_ready():
+		_queue_spawn_facing_apply()
+
+
 func freeze_for(duration: float) -> void:
 	_freeze_remaining = maxf(_freeze_remaining, maxf(0.0, duration))
 	if _freeze_remaining > 0.0:
@@ -222,6 +235,60 @@ func _discover_visual_nodes() -> void:
 	_missing_nodes_warned = false
 	_visuals_ready = true
 	_apply_barrel_visual(0.0, Vector3.ONE)
+	if _has_spawn_facing:
+		_queue_spawn_facing_apply()
+
+
+func _queue_spawn_facing_apply() -> void:
+	if _spawn_facing_apply_pending or not is_inside_tree() or not _has_spawn_facing:
+		return
+	_spawn_facing_apply_pending = true
+	call_deferred("_apply_spawn_facing_when_ready")
+
+
+func _apply_spawn_facing_when_ready() -> void:
+	# Level swaps and construction tweens can briefly leave the new barrel or
+	# its inherited basis unavailable. Retry for a few rendered frames instead
+	# of baking a world yaw that can drift when the island/grid transform moves.
+	for _attempt in range(6):
+		if _apply_spawn_facing_if_ready():
+			break
+		if not is_inside_tree():
+			break
+		await get_tree().process_frame
+	_spawn_facing_apply_pending = false
+
+
+func _apply_spawn_facing_if_ready() -> bool:
+	if not _has_spawn_facing or not _visuals_ready or not is_instance_valid(_barrel):
+		return false
+	var parent := _barrel.get_parent_node_3d()
+	if parent == null:
+		return false
+	var parent_basis := parent.global_transform.basis
+	if absf(parent_basis.determinant()) <= 0.000001:
+		return false
+	var world_direction := _spawn_facing_global - _barrel.global_position
+	world_direction.y = 0.0
+	if world_direction.length_squared() <= 0.000001:
+		return false
+	var local_direction := parent_basis.inverse() * world_direction.normalized()
+	local_direction.y = 0.0
+	if local_direction.length_squared() <= 0.000001:
+		return false
+	local_direction = local_direction.normalized()
+
+	var rest_forward_parent: Vector3 = _barrel_rest_transform.basis * _barrel_forward_local
+	rest_forward_parent.y = 0.0
+	if rest_forward_parent.length_squared() <= 0.000001:
+		return false
+	rest_forward_parent = rest_forward_parent.normalized()
+	var rest_angle := atan2(rest_forward_parent.x, rest_forward_parent.z)
+	var desired_angle := atan2(local_direction.x, local_direction.z)
+	_barrel_yaw = wrapf(desired_angle - rest_angle, -PI, PI)
+	_barrel_yaw_error = 0.0
+	_apply_current_presentation_pose()
+	return true
 
 
 func _find_target() -> void:

@@ -18,12 +18,12 @@ const CAN_TARGET_AIR: bool = true
 
 const LEVEL_STATS = {
 	1: {"damage": 25, "fire_rate": 1.0, "detect_range": 1.10},
-	2: {"damage": 62, "fire_rate": 0.68, "detect_range": 1.32},
-	3: {"damage": 112, "fire_rate": 0.52, "detect_range": 1.55},
-	4: {"damage": 158, "fire_rate": 0.44, "detect_range": 1.78},
-	5: {"damage": 200, "fire_rate": 0.38, "detect_range": 2.00},
-	6: {"damage": 221, "fire_rate": 0.35, "detect_range": 2.15},
-	7: {"damage": 288, "fire_rate": 0.32, "detect_range": 2.30},
+	2: {"damage": 68, "fire_rate": 1.0, "detect_range": 1.32},
+	3: {"damage": 161, "fire_rate": 1.0, "detect_range": 1.55},
+	4: {"damage": 269, "fire_rate": 1.0, "detect_range": 1.78},
+	5: {"damage": 395, "fire_rate": 1.0, "detect_range": 2.00},
+	6: {"damage": 473, "fire_rate": 1.0, "detect_range": 2.15},
+	7: {"damage": 675, "fire_rate": 1.0, "detect_range": 2.30},
 }
 
 enum State { IDLE, ATTACKING, VICTORY }

@@ -62,7 +62,7 @@ transform = Transform3D(0.048, 0, 0, 0, 0.04, 0, 0, 0, 0.048, 0.304064, -0.30356
 metadata/_edit_lock_ = true
 
 [node name="gridPlane" type="MeshInstance3D" parent="Island" unique_id=2081397116]
-transform = Transform3D(0.016776502, 0, 3.9599705, 0, 0.10000002, 0, -4.253302, 0, 0.015619505, 0.30954075, 0.071223736, 1.6492015)
+transform = Transform3D(0.01577737, 0, 3.7239707, 0, 0.094, 0, -3.9999685, 0, 0.014688732, 0.37811226, 0.071223736, 1.5428009)
 mesh = SubResource("BoxMesh_r0du0")
 
 [node name="shipPlane" type="MeshInstance3D" parent="Island" unique_id=1227187679]

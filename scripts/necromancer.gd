@@ -29,12 +29,12 @@ const STAFF_SCENE: String = "res://Model/Characters/Necromancer/NecromancerStaff
 
 const NECROMANCER_LEVEL_STATS: Dictionary = {
 	1: {"hp": 2640, "damage": 510, "atk_speed": 1.35},
-	2: {"hp": 3480, "damage": 660, "atk_speed": 1.23},
-	3: {"hp": 4560, "damage": 930, "atk_speed": 1.12},
-	4: {"hp": 5880, "damage": 1230, "atk_speed": 1.02},
-	5: {"hp": 7440, "damage": 1620, "atk_speed": 0.94},
-	6: {"hp": 9240, "damage": 2130, "atk_speed": 0.87},
-	7: {"hp": 20700, "damage": 5120, "atk_speed": 0.81},
+	2: {"hp": 3480, "damage": 724, "atk_speed": 1.35},
+	3: {"hp": 4560, "damage": 1121, "atk_speed": 1.35},
+	4: {"hp": 5880, "damage": 1628, "atk_speed": 1.35},
+	5: {"hp": 7440, "damage": 2327, "atk_speed": 1.35},
+	6: {"hp": 9240, "damage": 3305, "atk_speed": 1.35},
+	7: {"hp": 20700, "damage": 8533, "atk_speed": 1.35},
 }
 
 const ANIM_FILES: Array[String] = [

@@ -107,11 +107,11 @@ try {
   assert.ok(fires.length >= 2, 'Mortar must sustain fire against valid ground targets');
   assert.ok(directHits.length >= 1, 'Mortar projectile must hit its primary target');
   assert.ok(splashHits.length >= 2, 'L7 splash must reach both troops at the standard 0.40 formation step');
-  assert.equal(directHits[0].damage, 460);
-  assert.equal(directHits[0].hpBefore - directHits[0].hpAfter, 460);
+  assert.equal(directHits[0].damage, 487);
+  assert.equal(directHits[0].hpBefore - directHits[0].hpAfter, 487);
   assert.ok(
-    fires[1].t - fires[0].t >= 1.69 && fires[1].t - fires[0].t <= 1.72,
-    `Mortar L7 cadence must remain 1.70 seconds, got ${fires[1].t - fires[0].t}`,
+    fires[1].t - fires[0].t >= 2.39 && fires[1].t - fires[0].t <= 2.42,
+    `Mortar L7 cadence must remain fixed at 2.40 seconds, got ${fires[1].t - fires[0].t}`,
   );
   assert.ok(
     splashHits.some(row => row.distance >= 0.39 && row.distance <= 0.41 && row.damage >= 300),

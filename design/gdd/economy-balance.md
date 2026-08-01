@@ -582,9 +582,9 @@ tier in `TH_UNLOCK`, (3) add a `TROPHY_TABLE` row, (4) fix the stale server comm
 **Status:** NFT-backed heavy melee troop in `TROOP_DEFS`. It consumes **5 ship slots**
 and uses one owned NFT token per loaded root.
 
-At level 7 common rarity its authored table is 10,700 HP and 1,040 damage.
-After the shared `1.74x` same-TH curve it has 18,618 HP and deals 1,810 damage
-every 0.90 seconds: 3,723.6 HP and 402.1 DPS per occupied slot. It is more
+At level 7 common rarity its authored table is 10,700 HP and 1,618 damage.
+After the shared `1.74x` same-TH curve it has 18,618 HP and deals 2,815 damage
+every fixed 1.40 seconds: 3,723.6 HP and 402.1 DPS per occupied slot. It is more
 durable than a Knight per slot but remains a single melee body, so focus fire
 and pathing preserve counterplay. Epic and Legendary use normalized rarity
 ratios against Common: `1.23/1.20` and `1.25/1.20`, or +2.5% and +4.17% before

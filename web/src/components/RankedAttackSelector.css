@@ -272,14 +272,22 @@
   bottom: 16px;
   left: 16px;
   z-index: 1;
-  color: #fff;
-  text-shadow: 0 2px 0 rgba(65, 37, 12, 0.82), 0 0 8px rgba(65, 37, 12, 0.48);
+  color: #432b1d;
+  text-shadow:
+    -1px -1px 0 rgba(255, 248, 231, 0.96),
+    1px -1px 0 rgba(255, 248, 231, 0.96),
+    -1px 1px 0 rgba(255, 248, 231, 0.96),
+    1px 1px 0 rgba(255, 248, 231, 0.96),
+    0 2px 2px rgba(255, 248, 231, 0.72);
 }
 
-.ranked-attack-casual-heading > span,
 .ranked-attack-casual-heading h3,
 .ranked-attack-casual-heading p {
   color: inherit;
+}
+
+.ranked-attack-casual-heading > span {
+  color: #8f5108;
 }
 
 .ranked-attack-casual-heading h3 {

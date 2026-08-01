@@ -29,11 +29,11 @@ static var _combined_body_mesh: ArrayMesh = null
 
 const LEVEL_STATS: Dictionary = {
 	1: {"hp": 360, "damage": 38, "atk_speed": 0.86, "move_speed": 0.46, "detection_radius": 0.95},
-	2: {"hp": 520, "damage": 60, "atk_speed": 0.74, "move_speed": 0.52, "detection_radius": 1.10},
-	3: {"hp": 620, "damage": 72, "atk_speed": 0.70, "move_speed": 0.54, "detection_radius": 1.25},
-	4: {"hp": 820, "damage": 96, "atk_speed": 0.64, "move_speed": 0.58, "detection_radius": 1.40},
-	5: {"hp": 998, "damage": 116, "atk_speed": 0.60, "move_speed": 0.60, "detection_radius": 1.52},
-	6: {"hp": 1148, "damage": 131, "atk_speed": 0.57, "move_speed": 0.62, "detection_radius": 1.62},
+	2: {"hp": 520, "damage": 53, "atk_speed": 0.86, "move_speed": 0.52, "detection_radius": 1.10},
+	3: {"hp": 620, "damage": 66, "atk_speed": 0.86, "move_speed": 0.54, "detection_radius": 1.25},
+	4: {"hp": 820, "damage": 97, "atk_speed": 0.86, "move_speed": 0.58, "detection_radius": 1.40},
+	5: {"hp": 998, "damage": 125, "atk_speed": 0.86, "move_speed": 0.60, "detection_radius": 1.52},
+	6: {"hp": 1148, "damage": 149, "atk_speed": 0.86, "move_speed": 0.62, "detection_radius": 1.62},
 }
 
 var level: int = 2

@@ -144,7 +144,7 @@ Example: an L6 Harpoon hit at 1.50 distance still reaches the stop ring in 0.75 
 
 `maximum_nominal_control_uptime = Dmax / reload = 0.80 / 7.00 = 11.43%`
 
-Actual uptime is lower when a target starts closer, the shot misses, or the rope is interrupted. Damage DPS before ward rises from 6.43 at L1 to 14.29 at L6, 20.00 at L7, and 23.57 at L8, intentionally tiny beside current same-tier Archer Tower DPS (about 631 at L6 and 900 at L7).
+Actual uptime is lower when a target starts closer, the shot misses, or the rope is interrupted. Damage DPS before ward rises from 6.43 at L1 to 14.29 at L6, 20.00 at L7, and 23.57 at L8, intentionally tiny beside current same-tier Archer Tower DPS (473 at L6 and 675 at L7).
 
 ### Current troop-health relationship
 
@@ -183,7 +183,7 @@ replace the sturdier general-purpose defenses.
 - **Bait with a cheaper flyer:** nearest-target priority lets Windlings or another air body absorb the hook.
 - **Use ground pressure:** Harpoon cannot attack ground units and has lower HP than the main same-tier direct-fire defenses.
 - **Freeze or destroy it:** Freeze breaks an active rope and prevents launch; destroying the building immediately releases the target.
-- **Attack from outside the defended arc:** the playable 1.95-2.08 range now matches Mage Tower at L6-L7 but remains below the same-tier Archer Tower ranges of 2.15-2.30. Layout orientation and a seven-second reload still leave approach windows.
+- **Attack from outside the defended arc:** the playable 1.95-2.08 range exceeds the compact Mage Tower L6-L7 ranges of 1.55-1.65 but remains below the same-tier Archer Tower ranges of 2.15-2.30. Layout orientation and a seven-second reload still leave approach windows.
 - **Read the wind-up:** the 0.45-second lock presentation, rotating head, launched harpoon, taut rope, stop ring, and reload state must communicate what happened.
 - The decorative upper sight is intentionally omitted from the runtime LOD. It has no targeting role; removing its four meshes reduces rendering work without changing aim readability.
 - **Persistent combat facing:** on spawn, the upper assembly faces the real troop deployment zone from `AttackSystem/shipPlane`, not the center of the defended building grid. Construction may begin at zero scale, so this one-time heading waits until the transform is invertible. A valid air target then owns yaw; after that target is lost, retract completes, or reload ends, the upper assembly preserves its last combat heading instead of returning to a home angle. The static base never rotates.
@@ -269,7 +269,7 @@ Damage, range, pull strength, and durability are the level-growth knobs. Reload 
 10. Continuous valid targeting produces launch timestamps no closer than 420 ticks; an already tracked/aimed target permits the next launch exactly at tick 420. First fire does not wait through an initial reload.
 11. Target death, range break, Harpoon destruction, Freeze, upgrade state, and scene cleanup each remove projectile/rope/reservation without duplicate damage or leaked nodes.
 12. Successful release applies 90 ticks of immunity. Failed pre-impact shots do not.
-13. An unboosted common L6 or L7 Fire Dragon requires exactly three direct hits to destroy a same-level full-HP Harpoon; the second hit leaves it alive and the third remains lethal.
+13. An unboosted fixed-cadence common L6 or L7 Fire Dragon requires exactly two stronger direct hits to destroy a same-level full-HP Harpoon; the first hit leaves it alive and the second remains lethal.
 
 ### Determinism and balance
 

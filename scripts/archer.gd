@@ -61,12 +61,12 @@ func _set_dense_render_tier(render_tier: int) -> void:
 
 const LEVEL_STATS = {
 	1: {"hp": 210, "damage": 40, "atk_speed": 1.05},
-	2: {"hp": 280, "damage": 51, "atk_speed": 0.95},
-	3: {"hp": 310, "damage": 58, "atk_speed": 0.85},
-	4: {"hp": 425, "damage": 82, "atk_speed": 0.78},
-	5: {"hp": 624, "damage": 125, "atk_speed": 0.72},
-	6: {"hp": 750, "damage": 154, "atk_speed": 0.67},
-	7: {"hp": 1164, "damage": 250, "atk_speed": 0.62},
+	2: {"hp": 280, "damage": 56, "atk_speed": 1.05},
+	3: {"hp": 310, "damage": 72, "atk_speed": 1.05},
+	4: {"hp": 425, "damage": 110, "atk_speed": 1.05},
+	5: {"hp": 624, "damage": 182, "atk_speed": 1.05},
+	6: {"hp": 750, "damage": 241, "atk_speed": 1.05},
+	7: {"hp": 1164, "damage": 423, "atk_speed": 1.05},
 }
 
 ## Sets hp, damage, atk_speed, move_speed, attack_range, attack_anim, and anim_files

@@ -601,12 +601,32 @@ func _stop_combat_node(node: Node) -> void:
 		_stop_combat_node(child)
 
 
+func _neutralize_shark_trap_after_town_hall_destroyed(b: Dictionary) -> void:
+	var trap_node: Node = b.get("node", null)
+	if is_instance_valid(trap_node):
+		if trap_node.has_method("deactivate_after_battle_end"):
+			trap_node.call("deactivate_after_battle_end")
+		else:
+			_stop_combat_node(trap_node)
+		# Traps are concealed in attacker view. Remove the neutralized runtime
+		# node silently so clearing placed_buildings cannot orphan it, but never
+		# route it through the explosion/ruins pipeline.
+		_queue_free_once(trap_node)
+	var hp_bar: Variant = b.get("hp_bar", null)
+	_queue_free_once(hp_bar)
+	var icon: Variant = b.get("_collect_icon", null)
+	_queue_free_once(icon)
+
+
 func _stop_defensive_combat_after_town_hall_destroyed() -> void:
 	if not is_instance_valid(bs):
 		return
 	for bsys in bs._building_systems:
 		for b in bsys.placed_buildings:
 			var bid: String = str(b.get("id", ""))
+			if bid == "shark_trap":
+				_neutralize_shark_trap_after_town_hall_destroyed(b)
+				continue
 			if not (bid in ["turret", "archer_tower", "tombstone", "mage_tower", "mortar"]):
 				continue
 			var bnode: Node = b.get("node", null)
@@ -1429,6 +1449,10 @@ const CHAIN_DESTROY_DELAY: float = 0.6  ## seconds between each building explosi
 const VICTORY_ADMIRE_DELAY: float = 2.5  ## seconds to hold on the ruined island before opening the victory modal
 const REPLAY_OUTCOME_POLL_INTERVAL: float = 0.1
 
+
+static func _should_chain_destroy_building(building_id: String) -> bool:
+	return building_id != "town_hall" and building_id != "shark_trap"
+
 func _on_town_hall_destroyed() -> void:
 	if _victory_declared:
 		return
@@ -1455,11 +1479,12 @@ func _on_town_hall_destroyed() -> void:
 			else:
 				troop.state = troop.State.VICTORY
 
-	# 2. Collect remaining ALIVE buildings (skip TH and already-destroyed ones)
+	# 2. Collect remaining ALIVE buildings. Town Hall is already gone; Shark
+	# Traps were silently neutralized above and never join the explosion cascade.
 	var remaining: Array = []
 	for bsys in bs._building_systems:
 		for b in bsys.placed_buildings:
-			if b.get("id", "") == "town_hall":
+			if not _should_chain_destroy_building(str(b.get("id", ""))):
 				continue
 			if not is_instance_valid(b.get("node")):
 				continue
@@ -1634,7 +1659,7 @@ func _on_replay_town_hall_destroyed() -> void:
 	var remaining: Array = []
 	for bsys in bs._building_systems:
 		for b in bsys.placed_buildings:
-			if b.get("id", "") == "town_hall":
+			if not _should_chain_destroy_building(str(b.get("id", ""))):
 				continue
 			if not is_instance_valid(b.get("node")):
 				continue

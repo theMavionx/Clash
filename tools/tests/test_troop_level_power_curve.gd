@@ -7,7 +7,7 @@ const NECROMANCER_SKELETON_SCRIPT := preload("res://scripts/necromancer_skeleton
 const HORROR_SCRIPT := preload("res://scripts/horror_evolution.gd")
 
 const EXPECTED_KNIGHT_HP: Array[int] = [369, 492, 936, 1850, 2097, 2763, 3612]
-const EXPECTED_KNIGHT_DAMAGE: Array[int] = [31, 41, 79, 159, 186, 256, 351]
+const EXPECTED_KNIGHT_DAMAGE: Array[int] = [31, 44, 92, 202, 255, 374, 546]
 
 
 func _init() -> void:
@@ -31,7 +31,7 @@ func _init() -> void:
 	archer._init_stats()
 	archer._apply_troop_level_power_curve()
 	assert(archer.hp == 2025, "Level-7 Archer HP balance regression")
-	assert(archer.damage == 435, "Level-7 Archer damage balance regression")
+	assert(archer.damage == 736, "Level-7 Archer damage balance regression")
 	archer.free()
 
 	var mimic = MIMIC_SCRIPT.new()
@@ -39,7 +39,7 @@ func _init() -> void:
 	mimic._init_stats()
 	mimic._apply_troop_level_power_curve()
 	assert(mimic.hp == 19488, "Level-7 Mimic HP balance regression")
-	assert(mimic.damage == 1514, "Level-7 Mimic damage balance regression")
+	assert(mimic.damage == 2142, "Level-7 Mimic damage balance regression")
 	mimic.free()
 
 	var summon = NECROMANCER_SKELETON_SCRIPT.new()

@@ -24,12 +24,12 @@ var _shot_this_cycle: bool = false
 
 const LEVEL_STATS = {
 	1: {"hp": 250, "damage": 34, "atk_speed": 1.0},
-	2: {"hp": 330, "damage": 45, "atk_speed": 0.92},
-	3: {"hp": 430, "damage": 60, "atk_speed": 0.83},
-	4: {"hp": 560, "damage": 80, "atk_speed": 0.76},
-	5: {"hp": 710, "damage": 106, "atk_speed": 0.70},
-	6: {"hp": 890, "damage": 140, "atk_speed": 0.65},
-	7: {"hp": 1100, "damage": 182, "atk_speed": 0.60},
+	2: {"hp": 330, "damage": 49, "atk_speed": 1.0},
+	3: {"hp": 430, "damage": 72, "atk_speed": 1.0},
+	4: {"hp": 560, "damage": 105, "atk_speed": 1.0},
+	5: {"hp": 710, "damage": 151, "atk_speed": 1.0},
+	6: {"hp": 890, "damage": 215, "atk_speed": 1.0},
+	7: {"hp": 1100, "damage": 303, "atk_speed": 1.0},
 }
 
 ## Sets hp, damage, atk_speed, move_speed, attack_range, attack_anim, and anim_files

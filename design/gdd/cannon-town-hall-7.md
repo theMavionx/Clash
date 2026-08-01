@@ -24,13 +24,13 @@ Town Hall 7 extends every established, upgradeable building line by one level an
 | Barn | 7 | 28,000 | Existing non-production behavior |
 | Sawmill | 7 | 18,000 | 300 wood/minute; 9,000 internal capacity |
 | Storage | 7 | 18,000 | +36,000 capacity per resource |
-| Turret | 7 | 12,000 | 315 damage, 0.21 s interval, 1.62 range |
-| Archer Tower | 7 | 10,200 | 288 damage, 0.32 s interval, 2.30 range |
-| Mage Tower | 7 | 8,300 | 52–281 damage/tick, 0.10 s tick, 1.8 s ramp, 2.08 range |
-| Mortar | 7 | 8,100 | 460 splash damage, 1.70 s interval, 0.78–2.40 range, 0.52 splash radius |
-| Tombstone | 6 | 4,700 | Six L6 guards; 1,148 HP and 131 damage per guard |
+| Turret | 7 | 12,000 | 788 damage, fixed 0.70 s interval, 1.62 range |
+| Archer Tower | 7 | 10,200 | 675 damage, fixed 1.00 s interval, 2.30 range |
+| Mage Tower | 7 | 8,300 | 98–527 damage/tick, fixed 0.25 s tick, 1.8 s ramp, 1.65 range |
+| Mortar | 7 | 8,100 | 487 splash damage, fixed 2.40 s interval, 0.78–2.40 range, 0.52 splash radius |
+| Tombstone | 6 | 4,700 | Six L6 guards; 1,148 HP and 149 damage per guard |
 | Shark Trap | 7 | 1 | 2,900 trigger damage |
-| Cannon | 7 | 9,000 | 675 damage, 0.75 s interval, 2.00 range |
+| Cannon | 7 | 9,000 | 1,080 damage, fixed 1.60 s interval, 2.00 range |
 
 Port remains L3 and Altar remains L1. Their UI and API must not expose placeholder TH7 levels.
 
@@ -48,18 +48,21 @@ Existing TH6 limits are preserved: Mine 4, Sawmill 4, Barn 1, Storage 3, Turret 
 - The barrel rotates on local Y at up to 240 degrees/second using the shortest angular path. The authored base transform never changes.
 - All Cannon levels unlock together at TH7; the normal sequential upgrade order still applies.
 - Projectile speed is 3.2 units/second and hit radius is 0.05 at every level.
+- Combat upgrades never improve attack cadence. Troops and defenses keep their
+  level-one interval at every level; HP, damage, range, and authored utility are
+  the progression knobs.
 - Existing projectile semantics remain authoritative: a projectile whose target becomes invalid despawns without damage; each projectile applies damage at most once.
 - While upgrading, Cannon follows the existing building-upgrade inactivity contract.
 
 | Level | HP | Damage | Interval | Range | DPS |
 |---:|---:|---:|---:|---:|---:|
 | 1 | 3,200 | 40 | 1.60 s | 1.35 | 25.0 |
-| 2 | 3,900 | 100 | 1.10 s | 1.45 | 90.9 |
-| 3 | 4,700 | 205 | 0.95 s | 1.55 | 215.8 |
-| 4 | 5,600 | 305 | 0.85 s | 1.65 | 358.8 |
-| 5 | 6,600 | 447 | 0.85 s | 1.75 | 525.9 |
-| 6 | 7,700 | 506 | 0.80 s | 1.85 | 632.5 |
-| 7 | 9,000 | 675 | 0.75 s | 2.00 | 900.0 |
+| 2 | 3,900 | 109 | 1.60 s | 1.45 | 68.1 |
+| 3 | 4,700 | 259 | 1.60 s | 1.55 | 161.9 |
+| 4 | 5,600 | 431 | 1.60 s | 1.65 | 269.4 |
+| 5 | 6,600 | 631 | 1.60 s | 1.75 | 394.4 |
+| 6 | 7,700 | 759 | 1.60 s | 1.85 | 474.4 |
+| 7 | 9,000 | 1,080 | 1.60 s | 2.00 | 675.0 |
 
 Cannon trades air targeting and Archer Tower's longer high-level range for
 heavier single-hit burst and greater durability. The final win-rate
@@ -110,7 +113,7 @@ The barrel should feel heavy: a small anticipation stretch, sharp backward kick,
 - Client and server both cap main lines, Mortar, and Cannon at L7, Tombstone at L6, Port at L3, and Altar at L1 for TH7.
 - A third Cannon and any Cannon before TH7 are rejected server-side.
 - A newly built Cannon can be upgraded sequentially from L1 through L7 without another Town Hall upgrade, and every step uses its authored model, HP, combat stats, and explicit price.
-- Against a stationary ground target at 1.4 units, the base transform remains constant, the barrel yaws, the muzzle flash and projectile appear, one L7 hit removes 675 HP before ward bonus, the projectile disappears cleanly without a post-hit effect, and the next shot observes the 0.75 s cadence.
+- Against a stationary ground target at 1.4 units, the base transform remains constant, the barrel yaws, the muzzle flash and projectile appear, one L7 hit removes 1,080 HP before ward bonus, the projectile disappears cleanly without a post-hit effect, and the next shot observes the fixed 1.60 s cadence.
 - The nearest air troop is ignored.
 - Captures at anticipation, fire, recoil peak, recovery, projectile flight, and the clean field state after a hit prove the animation is readable and stable.
 - The same behavior is verified at headless simulation level and client scene level; replay trace identifies Cannon fire and hit events as `defenseType: cannon`.

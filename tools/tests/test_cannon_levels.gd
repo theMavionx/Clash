@@ -15,12 +15,12 @@ const EXPECTED_BUILDING_SCALES: Array[float] = [
 ]
 const EXPECTED_STATS: Dictionary = {
 	1: {"damage": 40, "fire_rate": 1.60, "detect_range": 1.35},
-	2: {"damage": 100, "fire_rate": 1.10, "detect_range": 1.45},
-	3: {"damage": 205, "fire_rate": 0.95, "detect_range": 1.55},
-	4: {"damage": 305, "fire_rate": 0.85, "detect_range": 1.65},
-	5: {"damage": 447, "fire_rate": 0.85, "detect_range": 1.75},
-	6: {"damage": 506, "fire_rate": 0.80, "detect_range": 1.85},
-	7: {"damage": 675, "fire_rate": 0.75, "detect_range": 2.00},
+	2: {"damage": 109, "fire_rate": 1.60, "detect_range": 1.45},
+	3: {"damage": 259, "fire_rate": 1.60, "detect_range": 1.55},
+	4: {"damage": 431, "fire_rate": 1.60, "detect_range": 1.65},
+	5: {"damage": 631, "fire_rate": 1.60, "detect_range": 1.75},
+	6: {"damage": 759, "fire_rate": 1.60, "detect_range": 1.85},
+	7: {"damage": 1080, "fire_rate": 1.60, "detect_range": 2.00},
 }
 
 var _failures: Array[String] = []
@@ -100,6 +100,8 @@ func _run() -> void:
 		await process_frame
 		cannon.set_level(level)
 		await process_frame
+		await process_frame
+		cannon.set_spawn_facing_global(attack_zone_center)
 		await process_frame
 		cannon.set_physics_process(false)
 

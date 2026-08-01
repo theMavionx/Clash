@@ -3416,6 +3416,15 @@ function verifyReplay({
       owner._nextSummonAt = null;
     }
 
+    // A ship impact can destroy the Town Hall before this tick reaches the
+    // defensive phase. Match the client victory boundary: once that happens,
+    // armed traps and defenses get no final same-tick activation.
+    const townHallBeforeDefensePhase = buildings.find(b => b.id === townHallId);
+    if (townHallBeforeDefensePhase && townHallBeforeDefensePhase.hp <= 0) {
+      simulationEndReason = 'town_hall_destroyed';
+      break;
+    }
+
     // Traps resolve before defenses and movement. Each trap eliminates one
     // ordinary ground troop; Demon King takes level-scaled damage, while an
     // immune troop still consumes the trap but takes no damage.

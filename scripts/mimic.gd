@@ -6,12 +6,12 @@ const ALBEDO_TEXTURE := preload("res://Model/Characters/MimicBarrel/Textures/mim
 
 const LEVEL_STATS := {
 	1: {"hp": 1800, "damage": 120, "atk_speed": 1.50},
-	2: {"hp": 2400, "damage": 162, "atk_speed": 1.42},
-	3: {"hp": 3120, "damage": 216, "atk_speed": 1.34},
-	4: {"hp": 4080, "damage": 282, "atk_speed": 1.27},
-	5: {"hp": 6244, "damage": 443, "atk_speed": 1.20},
-	6: {"hp": 9540, "damage": 711, "atk_speed": 1.13},
-	7: {"hp": 11200, "damage": 870, "atk_speed": 1.06},
+	2: {"hp": 2400, "damage": 171, "atk_speed": 1.50},
+	3: {"hp": 3120, "damage": 242, "atk_speed": 1.50},
+	4: {"hp": 4080, "damage": 333, "atk_speed": 1.50},
+	5: {"hp": 6244, "damage": 554, "atk_speed": 1.50},
+	6: {"hp": 9540, "damage": 944, "atk_speed": 1.50},
+	7: {"hp": 11200, "damage": 1231, "atk_speed": 1.50},
 }
 
 const ANIM_FILES: Array[String] = [

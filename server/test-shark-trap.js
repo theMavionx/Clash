@@ -5,7 +5,13 @@ const assert = require('assert');
 const Module = require('module');
 const path = require('path');
 const { CANONICAL_GRID_CONFIGS } = require('./combat_grid_config');
-const { TROOP_STATS } = require('./combat_defs');
+const {
+  CANNON_MIN_FLIGHT_SEC,
+  CANNON_SPEED,
+  CANNON_START_POS,
+  CANNON_TARGET_Y,
+  TROOP_STATS,
+} = require('./combat_defs');
 
 const BUILDING_DEFS = {
   town_hall: { size: [4, 4], hp_levels: [3500] },
@@ -55,13 +61,19 @@ function deploy(troop, attackGridX, t = 0) {
   return { type: 'deploy_troop', troop, troopLevel: 1, x: point.x, z: point.z, t };
 }
 
-function simulate(defenderBuildings, actions, serverTroopLevels = { Knight: 1, Mimic: 1, FireDragon: 1 }) {
+function simulate(
+  defenderBuildings,
+  actions,
+  serverTroopLevels = { Knight: 1, Mimic: 1, FireDragon: 1 },
+  serverShipLevel = 1,
+) {
   return loadVerifierWithoutDb()({
     defenderBuildings,
     actions,
     claimedResult: 'defeat',
     gridConfigs: CANONICAL_GRID_CONFIGS,
     serverTroopLevels,
+    serverShipLevel,
     debugTrace: true,
   });
 }
@@ -124,7 +136,36 @@ const twoTraps = simulate([
 assert.equal(twoTraps._sharkTrapsTriggered, 2, 'each trap should trigger independently');
 assert.equal(twoTraps.casualties.Knight, 2, 'two traps should eliminate two troops');
 
+const shipVictoryTownHall = building(1, 'town_hall', 11, 7);
+shipVictoryTownHall.hp = 1;
+shipVictoryTownHall.max_hp = 1;
+const shipVictoryTownHallPoint = gridToWorld(11, 7, 4, 4, CANONICAL_GRID_CONFIGS[0]);
+const shipVictoryCannonDistance = Math.hypot(
+  shipVictoryTownHallPoint.x - CANNON_START_POS.x,
+  CANNON_TARGET_Y - CANNON_START_POS.y,
+  shipVictoryTownHallPoint.z - CANNON_START_POS.z,
+);
+const shipVictoryImpactAt = Math.max(
+  shipVictoryCannonDistance / CANNON_SPEED,
+  CANNON_MIN_FLIGHT_SEC,
+);
+const shipVictory = simulate([
+  shipVictoryTownHall,
+  building(2, 'shark_trap', 3, 25),
+], [
+  { type: 'cannon_fire', buildingId: 1, t: 0 },
+  // Spawns on the same authoritative tick as the cannon impact. Before
+  // the victory-boundary fix this armed trap killed the Knight after the Town
+  // Hall had already reached zero HP.
+  deploy('Knight', 0, shipVictoryImpactAt - 0.08),
+]);
+assert.equal(shipVictory._simulationEndReason, 'town_hall_destroyed');
+assert.equal(shipVictory._sharkTrapsTriggered, 0, 'Town Hall victory must neutralize armed traps immediately');
+assert.equal(shipVictory.casualties.Knight || 0, 0, 'a trap cannot create a casualty after Town Hall victory');
+assert.ok(shipVictory._trace.some(row => row.kind === 'cannon_hit' && row.buildingId === 1));
+assert.equal(shipVictory._trace.some(row => row.kind === 'shark_trap_trigger'), false);
+
 console.log(
   `[SHARK_TRAP_SERVER] PASS levels=1..6 mimic=consumed_immune air=ignored `
-  + `demon_hp=${demonEnd.hp} two_traps=2`,
+  + `demon_hp=${demonEnd.hp} two_traps=2 post_th_triggers=0`,
 );

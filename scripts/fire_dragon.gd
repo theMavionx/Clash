@@ -8,12 +8,12 @@ enum DragonSkin { BLACK }
 
 const COMMON_LEVEL_STATS: Dictionary = {
 	1: {"hp": 1750, "damage": 470, "atk_speed": 1.25},
-	2: {"hp": 2320, "damage": 600, "atk_speed": 1.12},
-	3: {"hp": 3080, "damage": 840, "atk_speed": 1.0},
-	4: {"hp": 4000, "damage": 1115, "atk_speed": 0.90},
-	5: {"hp": 5049, "damage": 1455, "atk_speed": 0.82},
-	6: {"hp": 6440, "damage": 1920, "atk_speed": 0.76},
-	7: {"hp": 8740, "damage": 2732, "atk_speed": 0.70},
+	2: {"hp": 2320, "damage": 670, "atk_speed": 1.25},
+	3: {"hp": 3080, "damage": 1050, "atk_speed": 1.25},
+	4: {"hp": 4000, "damage": 1549, "atk_speed": 1.25},
+	5: {"hp": 5049, "damage": 2218, "atk_speed": 1.25},
+	6: {"hp": 6440, "damage": 3158, "atk_speed": 1.25},
+	7: {"hp": 8740, "damage": 4879, "atk_speed": 1.25},
 }
 
 const NFT_RARITY_MULTIPLIERS: Dictionary = {
