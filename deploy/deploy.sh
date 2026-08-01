@@ -51,6 +51,7 @@ export NPM_CONFIG_CACHE="$NPM_CACHE_DIR"
 
 BOOTSTRAPPED_LEGACY_DBS=0
 SWITCHED=0
+PREVIOUS_CURRENT_REAL=""
 LOCK_DIR=""
 PM2_ROOT_HOME="/root/.pm2"
 
@@ -179,7 +180,8 @@ detect_godot_changes() {
         shaders \
         Model \
         textures \
-        assets; then
+        assets \
+        shared/gameplay; then
         GODOT_CHANGED=0
         log "No Godot-visible git changes since $previous_sha; Godot runtime will be reused."
     else
@@ -842,6 +844,16 @@ copy_source_to_release() {
         --exclude='shared' \
         "$SOURCE_DIR/" "$RELEASE_DIR/"
 
+    # The top-level shared directory contains mutable production state and is
+    # deliberately excluded above. This versioned gameplay contract is the one
+    # immutable exception required by both the Node and Godot runtimes.
+    local flamethrower_config="$SOURCE_DIR/shared/gameplay/flamethrower-defense.v1.json"
+    [ -f "$flamethrower_config" ] \
+        || die "Missing versioned gameplay config: $flamethrower_config"
+    mkdir -p "$RELEASE_DIR/shared/gameplay"
+    install -m 0644 "$flamethrower_config" \
+        "$RELEASE_DIR/shared/gameplay/flamethrower-defense.v1.json"
+
     log "Generating server combat grid snapshot from deployed Godot scene..."
     node "$RELEASE_DIR/tools/combat-grid/generate-combat-grid-config.cjs" \
         --scene "$RELEASE_DIR/scenes/Main.tscn" \
@@ -869,12 +881,13 @@ validate_godot_export_freshness() {
         "$RELEASE_DIR/Model"
         "$RELEASE_DIR/textures"
         "$RELEASE_DIR/assets"
+        "$RELEASE_DIR/shared/gameplay"
     )
 
     stale_source="$(
         find "${paths[@]}" \
             -type f \
-            \( -name '*.gd' -o -name '*.tscn' -o -name '*.tres' -o -name '*.res' -o -name '*.glb' -o -name '*.gltf' -o -name '*.png' -o -name '*.jpg' -o -name '*.jpeg' -o -name '*.webp' -o -name 'project.godot' -o -name 'export_presets.cfg' \) \
+            \( -name '*.gd' -o -name '*.tscn' -o -name '*.tres' -o -name '*.res' -o -name '*.glb' -o -name '*.gltf' -o -name '*.png' -o -name '*.jpg' -o -name '*.jpeg' -o -name '*.webp' -o -name '*.json' -o -name 'project.godot' -o -name 'export_presets.cfg' \) \
             -newer "$export_pck" \
             -print -quit 2>/dev/null || true
     )"
@@ -1150,6 +1163,8 @@ validate_release() {
     [ -f "$WEB_DIST/godot/Work.wasm" ] || die "Missing web/dist/godot/Work.wasm"
     [ -f "$WEB_DIST/godot/Work.js" ] || die "Missing web/dist/godot/Work.js"
     [ -f "$WEB_DIST/godot/godot-runtime-manifest.json" ] || die "Missing web/dist/godot/godot-runtime-manifest.json"
+    [ -f "$RELEASE_DIR/shared/gameplay/flamethrower-defense.v1.json" ] \
+        || die "Missing shared Flamethrower gameplay config in release"
     node --check "$SERVER_DIR/db.js"
     node --check "$SERVER_DIR/routes.js"
     if [ -f "$MCP_DIR/src/server.mjs" ]; then
@@ -1159,6 +1174,36 @@ validate_release() {
     if [ -f "$FUTURES_DIR/index.js" ]; then
         node --check "$FUTURES_DIR/index.js"
     fi
+}
+
+verify_runtime_services() {
+    log "Verifying PM2 processes and local health endpoints..."
+    local attempt
+    for attempt in $(seq 1 30); do
+        if pm2_root jlist | node -e '
+let raw = "";
+process.stdin.on("data", chunk => { raw += chunk; });
+process.stdin.on("end", () => {
+  const processes = JSON.parse(raw);
+  const required = ["clash-api", "clash-hermes-jobs", "clash-futures", "clash-mcp"];
+  const states = new Map(processes.map(item => [item.name, item.pm2_env && item.pm2_env.status]));
+  const failed = required.filter(name => states.get(name) !== "online");
+  if (failed.length) {
+    console.error("PM2 services not online: " + failed.map(name => `${name}=${states.get(name) || "missing"}`).join(", "));
+    process.exit(1);
+  }
+});' \
+            && curl -fsS --max-time 5 http://127.0.0.1:4000/api/online >/dev/null \
+            && curl -fsS --max-time 5 http://127.0.0.1:3999/ >/dev/null \
+            && curl -fsS --max-time 5 http://127.0.0.1:4100/health >/dev/null; then
+            log "Runtime verification passed."
+            return 0
+        fi
+        sleep 1
+    done
+
+    pm2_root status || true
+    return 1
 }
 
 stop_services_for_database_backup() {
@@ -1202,9 +1247,23 @@ sync_legacy_databases_before_switch() {
 switch_current_release() {
     log "[7/9] Switching current symlink atomically..."
     local tmp_link="$DEPLOY_ROOT/.current.new"
+    PREVIOUS_CURRENT_REAL="$(readlink -f "$CURRENT_LINK" 2>/dev/null || true)"
     ln -sfn "$RELEASE_DIR" "$tmp_link"
     mv -Tf "$tmp_link" "$CURRENT_LINK"
     SWITCHED=1
+}
+
+rollback_current_release() {
+    if [ -z "$PREVIOUS_CURRENT_REAL" ] || [ ! -d "$PREVIOUS_CURRENT_REAL" ]; then
+        log "ERROR: No previous release is available for rollback."
+        return 1
+    fi
+
+    log "Rolling current symlink back to $PREVIOUS_CURRENT_REAL..."
+    local rollback_link="$DEPLOY_ROOT/.current.rollback"
+    ln -sfn "$PREVIOUS_CURRENT_REAL" "$rollback_link"
+    mv -Tf "$rollback_link" "$CURRENT_LINK"
+    SWITCHED=0
 }
 
 purge_cloudflare_godot_cache() {
@@ -1884,7 +1943,12 @@ cleanup_old_releases() {
 
         rm -rf "$release"
         log "Removed old release $(basename "$release")"
-    done < <(find "$RELEASES_DIR" -mindepth 1 -maxdepth 1 -type d -printf '%f\t%p\n' | sort -r | cut -f2-)
+    done < <(
+        { find "$RELEASES_DIR" -mindepth 1 -maxdepth 1 -type d -printf '%f\t%p\n' \
+            | grep -E '^[0-9]{14}-' || true; } \
+            | sort -r \
+            | cut -f2-
+    )
 }
 
 main() {
@@ -1905,7 +1969,15 @@ main() {
     sync_legacy_databases_before_switch
     switch_current_release
     write_nginx_config
-    restart_services
+    if ! { restart_services && verify_runtime_services; }; then
+        log "ERROR: New release failed runtime verification."
+        if rollback_current_release; then
+            restart_services || true
+            verify_runtime_services \
+                || log "ERROR: Previous release also failed runtime verification after rollback."
+        fi
+        die "Runtime service verification failed; the new release was not accepted"
+    fi
     purge_cloudflare_godot_cache
     cleanup_old_releases
 

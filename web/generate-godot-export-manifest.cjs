@@ -92,8 +92,14 @@ function ensureGodotIgnores() {
   }
 }
 
-function existsAsResource(resPath) {
-  return fs.existsSync(resToFs(resPath));
+function existsAsLoadableResource(resPath) {
+  const filePath = resToFs(resPath);
+  if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) return false;
+
+  // Raw runtime data is copied into the PCK by export_presets.cfg's
+  // include_filter. It must not be registered in a ResourcePreloader because
+  // Godot has no ResourceFormatLoader for JSON (and rejects the whole scene).
+  return path.extname(filePath).toLowerCase() !== '.json';
 }
 
 function shouldExcludeResource(resPath) {
@@ -179,7 +185,7 @@ function textureDepsForScene(resPath) {
   const deps = [];
   const filePath = resToFs(resPath);
   const ext = path.extname(filePath).toLowerCase();
-  if (!sceneExts.has(ext) || !fs.existsSync(filePath)) return deps;
+  if (!sceneExts.has(ext) || !fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) return deps;
 
   try {
     if (ext === '.gltf') {
@@ -205,7 +211,7 @@ function textureDepsForScene(resPath) {
         }
       } else {
         const extracted = ensureEmbeddedGlbImage(filePath, parsed, image, index);
-        if (extracted && existsAsResource(extracted)) deps.push(extracted);
+        if (extracted && existsAsLoadableResource(extracted)) deps.push(extracted);
       }
     }
   } catch (e) {
@@ -238,7 +244,7 @@ for (const file of files) {
     for (const expanded of expandPattern(resPath)) {
       if (shouldExcludeResource(expanded)) continue;
       if (webHtmlAudioResources.has(expanded)) continue;
-      if (existsAsResource(expanded)) refs.add(expanded);
+      if (existsAsLoadableResource(expanded)) refs.add(expanded);
     }
   }
 }
@@ -286,7 +292,7 @@ while (textDependencyQueue.length > 0) {
     if (dependency.startsWith('res://addons/godot_mcp/')) continue;
     for (const expanded of expandPattern(dependency)) {
       if (shouldExcludeResource(expanded)) continue;
-      if (webHtmlAudioResources.has(expanded) || !existsAsResource(expanded)) continue;
+      if (webHtmlAudioResources.has(expanded) || !existsAsLoadableResource(expanded)) continue;
       if (!refs.has(expanded)) {
         refs.add(expanded);
         textDependencyQueue.push(expanded);

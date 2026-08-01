@@ -40,6 +40,33 @@ function Invoke-NativeChecked {
   if ($exitCode -ne 0) { throw "$FailureMessage with exit code $exitCode" }
 }
 
+function Invoke-GodotExportChecked {
+  param(
+    [Parameter(Mandatory = $true)][string]$FilePath,
+    [Parameter(Mandatory = $true)][string[]]$Arguments
+  )
+
+  # Godot can return exit code 0 after resource parse/export errors. Capture its
+  # complete output and reject error diagnostics as well as a non-zero exit.
+  $previousErrorActionPreference = $ErrorActionPreference
+  try {
+    $ErrorActionPreference = "Continue"
+    $output = @(& $FilePath @Arguments 2>&1)
+    $exitCode = $LASTEXITCODE
+  } finally {
+    $ErrorActionPreference = $previousErrorActionPreference
+  }
+
+  $output | ForEach-Object { Write-Host $_ }
+  $diagnosticErrors = @($output | ForEach-Object { "$_" } | Where-Object {
+    $_ -match '^\s*(SCRIPT )?ERROR:' -or $_ -match 'Failed to listen on port'
+  })
+  if ($exitCode -ne 0) { throw "Godot export failed with exit code $exitCode" }
+  if ($diagnosticErrors.Count -gt 0) {
+    throw "Godot export emitted $($diagnosticErrors.Count) error diagnostic(s) despite exit code 0"
+  }
+}
+
 function Resolve-GodotExe {
   param([string]$Preferred)
   if ($Preferred -and (Test-Path $Preferred)) { return $Preferred }
@@ -68,7 +95,8 @@ function Get-GodotChangedFiles {
     "shaders",
     "Model",
     "textures",
-    "assets"
+    "assets",
+    "shared/gameplay"
   )
   $diff = git diff --name-only "$BaseRef..$HeadRef" -- $pathspecs 2>$null
   if ($LASTEXITCODE -ne 0) { return @("__diff_failed__") }
@@ -121,11 +149,17 @@ try {
 
     Write-Host "==> Generating Godot export manifest"
     node (Join-Path $webDir "generate-godot-export-manifest.cjs")
+    if ($LASTEXITCODE -ne 0) { throw "Godot export manifest failed with exit code $LASTEXITCODE" }
 
     Write-Host "==> Exporting Godot Web release"
     New-Item -ItemType Directory -Force -Path $localGodotDir | Out-Null
-    & $GodotExe --headless --path $repoRoot --export-release "Web" $exportHtml
-    if ($LASTEXITCODE -ne 0) { throw "Godot export failed with exit code $LASTEXITCODE" }
+    Get-ChildItem -LiteralPath $localGodotDir -Filter "Work.*" -File -ErrorAction SilentlyContinue | Remove-Item -Force
+    Invoke-GodotExportChecked -FilePath $GodotExe -Arguments @(
+      "--headless",
+      "--recovery-mode",
+      "--path", "$repoRoot",
+      "--export-release", "Web", "$exportHtml"
+    )
     if (-not (Test-Path (Join-Path $localGodotDir "Work.pck"))) { throw "Godot export did not produce Work.pck" }
 
     Write-Host "==> Writing Godot runtime manifest"

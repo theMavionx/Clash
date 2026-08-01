@@ -105,7 +105,10 @@ nft/move/**/.aptos/
 # They are created by deploy/deploy.sh and must not be copied back into git.
 /current
 /releases/
-/shared/
+/shared/*
+!/shared/gameplay/
+/shared/gameplay/*
+!/shared/gameplay/flamethrower-defense.v1.json
 
 # Android signing keystore + the password file living next to it.
 # CRITICAL: leaking either == anyone can sign updates impersonating us

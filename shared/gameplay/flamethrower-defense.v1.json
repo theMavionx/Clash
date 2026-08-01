@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "combat_rules_version": "flamethrower-v1",
+  "facing_table_version": 1,
+  "building": {
+    "id": "flamethrower",
+    "footprint": [3, 3],
+    "unlock_th": 8,
+    "max_count_by_th": [0, 0, 0, 0, 0, 0, 0, 1, 1, 2],
+    "max_level_by_th": [1, 1, 1, 1, 1, 1, 1, 8, 9, 10]
+  },
+  "combat": {
+    "tick_rate": 60,
+    "scan_ticks": 9,
+    "prime_ticks": 18,
+    "stream_ticks": 45,
+    "damage_offsets": [0, 15, 30],
+    "cycle_ticks": 90,
+    "full_cone_degrees": 50,
+    "half_angle_cos_sq": 0.8213938048432696,
+    "cone_boundary_epsilon": 0.000000001,
+    "center_epsilon": 0.000001,
+    "target_class": "ground"
+  },
+  "facing_vectors_xz": [
+    [0.0, -1.0],
+    [0.258819045, -0.965925826],
+    [0.5, -0.866025404],
+    [0.707106781, -0.707106781],
+    [0.866025404, -0.5],
+    [0.965925826, -0.258819045],
+    [1.0, 0.0],
+    [0.965925826, 0.258819045],
+    [0.866025404, 0.5],
+    [0.707106781, 0.707106781],
+    [0.5, 0.866025404],
+    [0.258819045, 0.965925826],
+    [0.0, 1.0],
+    [-0.258819045, 0.965925826],
+    [-0.5, 0.866025404],
+    [-0.707106781, 0.707106781],
+    [-0.866025404, 0.5],
+    [-0.965925826, 0.258819045],
+    [-1.0, 0.0],
+    [-0.965925826, -0.258819045],
+    [-0.866025404, -0.5],
+    [-0.707106781, -0.707106781],
+    [-0.5, -0.866025404],
+    [-0.258819045, -0.965925826]
+  ],
+  "levels": [
+    {"level": 1, "town_hall": 8, "hp": 2600, "tick_damage": 58, "range": 1.20, "cost": {"gold": 18000, "wood": 40000, "ore": 34000}},
+    {"level": 2, "town_hall": 8, "hp": 3350, "tick_damage": 78, "range": 1.28, "cost": {"gold": 26000, "wood": 54000, "ore": 45000}},
+    {"level": 3, "town_hall": 8, "hp": 4250, "tick_damage": 105, "range": 1.36, "cost": {"gold": 36000, "wood": 70000, "ore": 58000}},
+    {"level": 4, "town_hall": 8, "hp": 5300, "tick_damage": 137, "range": 1.44, "cost": {"gold": 48000, "wood": 86000, "ore": 72000}},
+    {"level": 5, "town_hall": 8, "hp": 6500, "tick_damage": 172, "range": 1.52, "cost": {"gold": 63000, "wood": 104000, "ore": 87000}},
+    {"level": 6, "town_hall": 8, "hp": 7850, "tick_damage": 210, "range": 1.60, "cost": {"gold": 80000, "wood": 120000, "ore": 101000}},
+    {"level": 7, "town_hall": 8, "hp": 9300, "tick_damage": 250, "range": 1.68, "cost": {"gold": 98000, "wood": 134000, "ore": 115000}},
+    {"level": 8, "town_hall": 8, "hp": 10900, "tick_damage": 295, "range": 1.78, "cost": {"gold": 118000, "wood": 142000, "ore": 126000}},
+    {"level": 9, "town_hall": 9, "hp": 12650, "tick_damage": 345, "range": 1.86, "cost": {"gold": 142000, "wood": 170000, "ore": 150000}},
+    {"level": 10, "town_hall": 10, "hp": 14600, "tick_damage": 400, "range": 1.95, "cost": {"gold": 170000, "wood": 202000, "ore": 180000}}
+  ]
+}
