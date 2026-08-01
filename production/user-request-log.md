@@ -2586,3 +2586,12 @@ Follow-up:
   run deployment checks, commit all changes, fast-forward `main`, push GitHub, deploy the fresh
   Godot/server/web revision to production, and verify the deployed commit and health. Commit, push,
   merge, and production deployment are explicitly authorized for this request.
+
+### UR-2026-08-01-TH5-TH7-55-PERCENT-BALANCE
+
+- **Timestamp:** 2026-08-01 (Europe/Kyiv)
+- **Request:** "доводь до 55% перемоги і закидай на прод"; "на 5-6 лвл теж глянь"
+- **Scope:** Rebalance the actual hard ranked matchmaking pools for Town Hall 5, 6, and 7,
+  validate the production Digger layout separately, preserve troop and defense attack cadence,
+  run deterministic replay simulations plus focused progression/combat checks, commit and push
+  the verified balance changes, and deploy them to production through the standard workflow.

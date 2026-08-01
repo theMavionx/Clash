@@ -7,9 +7,9 @@ const LEVEL_STATS = {
 	2: {"damage": 74, "fire_rate": 0.70, "detect_range": 1.05},
 	3: {"damage": 188, "fire_rate": 0.70, "detect_range": 1.18},
 	4: {"damage": 308, "fire_rate": 0.70, "detect_range": 1.30},
-	5: {"damage": 460, "fire_rate": 0.70, "detect_range": 1.42},
-	6: {"damage": 553, "fire_rate": 0.70, "detect_range": 1.52},
-	7: {"damage": 788, "fire_rate": 0.70, "detect_range": 1.62},
+	5: {"damage": 318, "fire_rate": 0.70, "detect_range": 1.42},
+	6: {"damage": 364, "fire_rate": 0.70, "detect_range": 1.52},
+	7: {"damage": 453, "fire_rate": 0.70, "detect_range": 1.62},
 }
 
 const MUZZLE_FLASH_FRAMES: Array[String] = [

@@ -9,7 +9,7 @@ const { DEFENSE_STATS, TROOP_STATS } = require('./combat_defs');
 
 const BUILDING_DEFS = {
   town_hall: { size: [4, 4], hp_levels: [5000] },
-  cannon: { size: [3, 3], hp_levels: [3200, 3900, 4700, 5600, 6600, 7700, 9000] },
+  cannon: { size: [3, 3], hp_levels: [3200, 3900, 4700, 5600, 6148, 6742, 7141] },
 };
 
 function loadVerifierWithoutDb() {
@@ -127,8 +127,8 @@ try {
     fires[1].t - fires[0].t >= 1.59 && fires[1].t - fires[0].t <= 1.62,
     `Cannon L7 cadence must remain fixed at 1.60 seconds, got ${fires[1].t - fires[0].t}`,
   );
-  assert.equal(hits[0].damage, 1080);
-  assert.equal(hits[0].hpBefore - hits[0].hpAfter, 1080);
+  assert.equal(hits[0].damage, 620);
+  assert.equal(hits[0].hpBefore - hits[0].hpAfter, 620);
   assert.ok(hits[0].hitDistSq <= 0.0025, 'Cannon hit must use the shared 0.05 hit radius');
 
   const repeated = simulate(stationaryBuildings, stationaryActions);
@@ -138,7 +138,7 @@ try {
   const wardedHit = warded._trace.find(
     row => row.kind === 'defense_projectile_hit' && row.defenseType === 'cannon',
   );
-  assert.equal(wardedHit.damage, 1134, 'Ward L1 skill must increase Cannon L7 damage by five percent with ceil rounding');
+  assert.equal(wardedHit.damage, 651, 'Ward L1 skill must increase Cannon L7 damage by five percent with ceil rounding');
 
   Object.assign(TROOP_STATS.mechanical_dragon[1], {
     hp: 5000,
@@ -166,7 +166,7 @@ try {
   const tieFire = tie._trace.find(row => row.kind === 'defense_fire' && row.defenseType === 'cannon');
   assert.equal(tieFire.replayOrder, 2, 'equal-distance Cannon targets must use the lower stable replay order');
 
-  Object.assign(TROOP_STATS.knight[1], { hp: 675, moveSpeed: 0 });
+  Object.assign(TROOP_STATS.knight[1], { hp: 500, moveSpeed: 0 });
   const doubleCannon = simulate([
     building(1, 'town_hall', 0, 0),
     cannonBuilding,
@@ -189,7 +189,7 @@ try {
     'two simultaneous Cannon projectiles may apply damage to a one-hit target only once',
   );
 
-  Object.assign(TROOP_STATS.ice_golem[1], { hp: 675, moveSpeed: 0 });
+  Object.assign(TROOP_STATS.ice_golem[1], { hp: 500, moveSpeed: 0 });
   Object.assign(TROOP_STATS.knight[1], { hp: 5000, moveSpeed: 0 });
   const freezeCannon = building(2, 'cannon', 12, 21);
   const freezeBackup = { x: attackWorld.x + 0.4, z: attackWorld.z };

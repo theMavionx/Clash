@@ -21,9 +21,9 @@ const LEVEL_STATS = {
 	2: {"damage": 68, "fire_rate": 1.0, "detect_range": 1.32},
 	3: {"damage": 161, "fire_rate": 1.0, "detect_range": 1.55},
 	4: {"damage": 269, "fire_rate": 1.0, "detect_range": 1.78},
-	5: {"damage": 395, "fire_rate": 1.0, "detect_range": 2.00},
-	6: {"damage": 473, "fire_rate": 1.0, "detect_range": 2.15},
-	7: {"damage": 675, "fire_rate": 1.0, "detect_range": 2.30},
+	5: {"damage": 276, "fire_rate": 1.0, "detect_range": 2.00},
+	6: {"damage": 315, "fire_rate": 1.0, "detect_range": 2.15},
+	7: {"damage": 388, "fire_rate": 1.0, "detect_range": 2.30},
 }
 
 enum State { IDLE, ATTACKING, VICTORY }

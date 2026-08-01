@@ -5789,7 +5789,7 @@ function getBuildingMaxLevelForTownHall(type, townHallLevel) {
 const BUILDING_DEFS = {
   town_hall: {
     size: [4, 4], max_level: 7,
-    hp_levels: [3500, 8000, 16000, 24000, 36000, 52000, 72000],
+    hp_levels: [3500, 8000, 16000, 24000, 30848, 41200, 51193],
     cost: { gold: 0, wood: 0, ore: 0 },
     upgrade_cost: {
       2: { gold: 1200, wood: 4200, ore: 3500 },
@@ -5803,14 +5803,14 @@ const BUILDING_DEFS = {
   },
   mine: {
     size: [3, 3], max_level: 7,
-    hp_levels: [1200, 2200, 3800, 6000, 9000, 13000, 18000],
+    hp_levels: [1200, 2200, 3800, 6000, 7712, 10302, 12798],
     cost: { gold: 180, wood: 500, ore: 0 },
     upgrade_base_cost: { gold: 220, wood: 550, ore: 0 },
     max_count: 4,
   },
   barn: {
     size: [4, 3], max_level: 7,
-    hp_levels: [2000, 3500, 6000, 9500, 14000, 20000, 28000],
+    hp_levels: [2000, 3500, 6000, 9500, 12132, 16094, 19908],
     cost: { gold: 350, wood: 900, ore: 750 },
     upgrade_base_cost: { gold: 450, wood: 1050, ore: 900 },
     max_count: 1,
@@ -5831,49 +5831,49 @@ const BUILDING_DEFS = {
   },
   sawmill: {
     size: [3, 3], max_level: 7,
-    hp_levels: [1200, 2200, 3800, 6000, 9000, 13000, 18000],
+    hp_levels: [1200, 2200, 3800, 6000, 7712, 10302, 12798],
     cost: { gold: 180, wood: 0, ore: 500 },
     upgrade_base_cost: { gold: 220, wood: 0, ore: 550 },
     max_count: 4,
   },
   turret: {
     size: [2, 2], max_level: 7,
-    hp_levels: [900, 1600, 2800, 4500, 6800, 9000, 12000],
+    hp_levels: [900, 1600, 2800, 4500, 5558, 7137, 8532],
     cost: { gold: 800, wood: 2400, ore: 2000 },
     upgrade_base_cost: { gold: 750, wood: 2500, ore: 2100 },
     max_count: 6,
   },
   tombstone: {
     size: [3, 3], max_level: 6,
-    hp_levels: [1000, 1500, 2000, 2700, 3600, 4700],
+    hp_levels: [1000, 1500, 2000, 2700, 2956, 3418],
     cost: { gold: 600, wood: 0, ore: 2200 },
     upgrade_base_cost: { gold: 650, wood: 0, ore: 2400 },
     max_count: 4,
   },
   storage: {
     size: [4, 5], max_level: 7,
-    hp_levels: [1400, 2500, 4200, 6500, 9500, 13000, 18000],
+    hp_levels: [1400, 2500, 4200, 6500, 8136, 10575, 12798],
     cost: { gold: 400, wood: 1400, ore: 0 },
     upgrade_base_cost: { gold: 500, wood: 1500, ore: 0 },
     max_count: 4,
   },
   archer_tower: {
     size: [3, 3], max_level: 7,
-    hp_levels: [800, 1500, 2500, 3800, 5600, 7800, 10200],
+    hp_levels: [800, 1500, 2500, 3800, 4703, 6051, 7252],
     cost: { gold: 500, wood: 1600, ore: 0 },
     upgrade_base_cost: { gold: 550, wood: 1700, ore: 0 },
     max_count: 4,
   },
   mage_tower: {
     size: [3, 3], max_level: 7,
-    hp_levels: [700, 1200, 2000, 3100, 4600, 6300, 8300],
+    hp_levels: [700, 1200, 2000, 3100, 3837, 4939, 5901],
     cost: { gold: 2800, wood: 0, ore: 5200 },
     upgrade_base_cost: { gold: 1600, wood: 0, ore: 3000 },
     max_count: 2,
   },
   mortar: {
     size: [2, 2], max_level: 7,
-    hp_levels: [1700, 2400, 3200, 4100, 5200, 6500, 8100],
+    hp_levels: [1700, 2400, 3200, 4100, 4580, 5324, 6019],
     cost: { gold: 8000, wood: 12000, ore: 10000 },
     upgrade_cost: {
       2: { gold: 14000, wood: 22000, ore: 18000 },
@@ -5887,7 +5887,7 @@ const BUILDING_DEFS = {
   },
   harpoon: {
     size: [2, 2], max_level: 8,
-    hp_levels: [1800, 2400, 3200, 4300, 5600, 7200, 10000, 12000],
+    hp_levels: [1800, 2400, 3200, 4300, 5600, 6756, 10201, 12000],
     cost: { gold: 12000, wood: 22000, ore: 18000 },
     upgrade_cost: {
       2: { gold: 20000, wood: 42000, ore: 35000 },
@@ -5911,7 +5911,7 @@ const BUILDING_DEFS = {
   },
   cannon: {
     size: [3, 3], max_level: 7,
-    hp_levels: [3200, 3900, 4700, 5600, 6600, 7700, 9000],
+    hp_levels: [3200, 3900, 4700, 5600, 6148, 6742, 7141],
     cost: { gold: 16000, wood: 36000, ore: 30000 },
     upgrade_cost: {
       2: { gold: 24000, wood: 52000, ore: 44000 },
@@ -6019,12 +6019,10 @@ function getBuildingUpgradeCost(type, currentLevel) {
   };
 }
 
-function normalizeTownHallHpRows() {
-  const hpLevels = BUILDING_DEFS.town_hall?.hp_levels || [];
+function normalizeBuildingHpRows() {
   const rows = db.prepare(`
-    SELECT id, level, hp, max_hp
+    SELECT id, type, level, hp, max_hp
     FROM buildings
-    WHERE type = 'town_hall'
   `).all();
   const update = db.prepare(`
     UPDATE buildings SET hp = ?, max_hp = ? WHERE id = ?
@@ -6033,6 +6031,8 @@ function normalizeTownHallHpRows() {
 
   const tx = db.transaction(() => {
     for (const row of rows) {
+      const hpLevels = BUILDING_DEFS[row.type]?.hp_levels || [];
+      if (hpLevels.length === 0) continue;
       const level = Math.max(1, Math.min(hpLevels.length, Number(row.level) || 1));
       const nextMaxHp = hpLevels[level - 1];
       if (!nextMaxHp || Number(row.max_hp) === nextMaxHp) continue;
@@ -6048,11 +6048,11 @@ function normalizeTownHallHpRows() {
   tx();
 
   if (updated > 0) {
-    console.log(`[db] normalized Town Hall HP for ${updated} building row(s)`);
+    console.log(`[db] normalized authored HP for ${updated} building row(s)`);
   }
 }
 
-normalizeTownHallHpRows();
+normalizeBuildingHpRows();
 
 function normalizePortLevelRows() {
   const def = BUILDING_DEFS.port;
@@ -6287,8 +6287,14 @@ function rankedBotPlayerId(templateId) {
 
 function virtualRankedBotCandidates(townHallLevel) {
   const defenderTh = Math.max(1, Math.min(7, Math.trunc(Number(townHallLevel) || 1)));
-  return buildBotBaseTemplates()
-    .filter((template) => template.th === defenderTh)
+  const exactTier = buildBotBaseTemplates()
+    .filter((template) => template.th === defenderTh);
+  const challengePool = exactTier.filter((template) => (
+    template.difficulty === 'hard'
+    && (defenderTh < 5 || CHALLENGE_BOT_ARCHETYPE_SET.has(template.archetype))
+  ));
+  const rankedPool = challengePool.length > 0 ? challengePool : exactTier;
+  return rankedPool
     .map((template) => {
       const base = computeBasePowerFromBuildings(template.buildings);
       return {
@@ -12835,6 +12841,7 @@ module.exports = {
   getBuildingMaxLevelForTownHall,
   getTownHallUpgradeRequirements,
   getTownHallUpgradeBlockers,
+  normalizeBuildingHpRows,
   GRID_SPECS,
   TROOP_DEFS,
   DISABLED_TROOP_TYPES,

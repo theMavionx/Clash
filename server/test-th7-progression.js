@@ -100,7 +100,7 @@ try {
   assert.deepEqual(gameDb.BUILDING_DEFS.cannon, {
     size: [3, 3],
     max_level: 7,
-    hp_levels: [3200, 3900, 4700, 5600, 6600, 7700, 9000],
+    hp_levels: [3200, 3900, 4700, 5600, 6148, 6742, 7141],
     cost: { gold: 16000, wood: 36000, ore: 30000 },
     upgrade_cost: {
       2: { gold: 24000, wood: 52000, ore: 44000 },
@@ -186,7 +186,7 @@ try {
 
   const th7Upgrade = gameDb.upgradeBuilding(playerId, townHallId);
   assert.equal(th7Upgrade.level, 7);
-  assert.equal(th7Upgrade.hp, 72000);
+  assert.equal(th7Upgrade.hp, 51193);
   assert.deepEqual(th7Upgrade.resources, { gold: 21000, wood: 0, ore: 8000 });
 
   gameDb.db.prepare(
@@ -194,7 +194,7 @@ try {
   ).run(playerId);
   const harpoonUpgrade = gameDb.upgradeBuilding(playerId, harpoonId);
   assert.equal(harpoonUpgrade.level, 7);
-  assert.equal(harpoonUpgrade.max_hp, 10000);
+  assert.equal(harpoonUpgrade.max_hp, 10201);
   assert.deepEqual(harpoonUpgrade.resources, { gold: 57000, wood: 21000, ore: 39000 });
   assert.match(gameDb.upgradeBuilding(playerId, harpoonId).error, /Town Hall to level 8/);
 
@@ -203,7 +203,7 @@ try {
   ).run(playerId);
   const mortarUpgrade = gameDb.upgradeBuilding(playerId, mortarId);
   assert.equal(mortarUpgrade.level, 7);
-  assert.equal(mortarUpgrade.max_hp, 8100);
+  assert.equal(mortarUpgrade.max_hp, 6019);
   assert.deepEqual(mortarUpgrade.resources, { gold: 51000, wood: 11000, ore: 31000 });
   assert.match(gameDb.upgradeBuilding(playerId, mortarId).error, /Already at max level/);
 
@@ -268,7 +268,7 @@ try {
     /unlocks at Town Hall level 7/,
   );
   gameDb.db.prepare(
-    'UPDATE buildings SET level = 7, hp = 72000, max_hp = 72000 WHERE id = ?',
+    'UPDATE buildings SET level = 7, hp = 51193, max_hp = 51193 WHERE id = ?',
   ).run(cannonTownHallId);
   const firstCannon = gameDb.placeBuilding(cannonPlayerId, 'cannon', 0, 10);
   assert.equal(firstCannon.type, 'cannon');
@@ -304,6 +304,20 @@ try {
   assert.match(
     gameDb.upgradeBuilding(cannonPlayerId, firstCannon.id).error,
     /Already at max level/,
+  );
+
+  const staleMineId = insertBuilding(cannonPlayerId, 'mine', 7, 200, 200);
+  gameDb.db.prepare(
+    'UPDATE buildings SET hp = 9000, max_hp = 18000 WHERE id = ?',
+  ).run(staleMineId);
+  gameDb.normalizeBuildingHpRows();
+  const normalizedMine = gameDb.db.prepare(
+    'SELECT hp, max_hp FROM buildings WHERE id = ?',
+  ).get(staleMineId);
+  assert.deepEqual(
+    normalizedMine,
+    { hp: 6399, max_hp: 12798 },
+    'late-building HP migration must preserve the current health percentage',
   );
 
   const routesSource = fs.readFileSync(path.join(__dirname, 'routes.js'), 'utf8');

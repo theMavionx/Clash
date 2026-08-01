@@ -9,7 +9,7 @@ const { DEFENSE_STATS, TROOP_STATS } = require('./combat_defs');
 
 const BUILDING_DEFS = {
   town_hall: { size: [4, 4], hp_levels: [100000] },
-  mortar: { size: [2, 2], hp_levels: [1700, 2400, 3200, 4100, 5200, 6500, 8100] },
+  mortar: { size: [2, 2], hp_levels: [1700, 2400, 3200, 4100, 4580, 5324, 6019] },
 };
 
 function loadVerifierWithoutDb() {
@@ -107,14 +107,14 @@ try {
   assert.ok(fires.length >= 2, 'Mortar must sustain fire against valid ground targets');
   assert.ok(directHits.length >= 1, 'Mortar projectile must hit its primary target');
   assert.ok(splashHits.length >= 2, 'L7 splash must reach both troops at the standard 0.40 formation step');
-  assert.equal(directHits[0].damage, 487);
-  assert.equal(directHits[0].hpBefore - directHits[0].hpAfter, 487);
+  assert.equal(directHits[0].damage, 294);
+  assert.equal(directHits[0].hpBefore - directHits[0].hpAfter, 294);
   assert.ok(
     fires[1].t - fires[0].t >= 2.39 && fires[1].t - fires[0].t <= 2.42,
     `Mortar L7 cadence must remain fixed at 2.40 seconds, got ${fires[1].t - fires[0].t}`,
   );
   assert.ok(
-    splashHits.some(row => row.distance >= 0.39 && row.distance <= 0.41 && row.damage >= 300),
+    splashHits.some(row => row.distance >= 0.39 && row.distance <= 0.41 && row.damage >= 160),
     'a troop 0.40 away must receive useful falloff damage',
   );
 

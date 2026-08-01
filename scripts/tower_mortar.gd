@@ -7,9 +7,9 @@ const LEVEL_STATS := {
 	2: {"damage": 108, "fire_rate": 2.40, "detect_range": 1.600, "min_range": 0.75, "splash_radius": 0.34, "travel_time": 0.78},
 	3: {"damage": 158, "fire_rate": 2.40, "detect_range": 1.767, "min_range": 0.80, "splash_radius": 0.38, "travel_time": 0.74},
 	4: {"damage": 227, "fire_rate": 2.40, "detect_range": 1.933, "min_range": 0.82, "splash_radius": 0.42, "travel_time": 0.70},
-	5: {"damage": 284, "fire_rate": 2.40, "detect_range": 2.100, "min_range": 0.82, "splash_radius": 0.45, "travel_time": 0.66},
-	6: {"damage": 370, "fire_rate": 2.40, "detect_range": 2.250, "min_range": 0.80, "splash_radius": 0.49, "travel_time": 0.62},
-	7: {"damage": 487, "fire_rate": 2.40, "detect_range": 2.400, "min_range": 0.78, "splash_radius": 0.52, "travel_time": 0.58},
+	5: {"damage": 233, "fire_rate": 2.40, "detect_range": 2.100, "min_range": 0.82, "splash_radius": 0.45, "travel_time": 0.66},
+	6: {"damage": 240, "fire_rate": 2.40, "detect_range": 2.250, "min_range": 0.80, "splash_radius": 0.49, "travel_time": 0.62},
+	7: {"damage": 294, "fire_rate": 2.40, "detect_range": 2.400, "min_range": 0.78, "splash_radius": 0.52, "travel_time": 0.58},
 }
 
 const PROJECTILE_SCENE: String = "res://Model/Mortar/mortar_lvl2_projectile.fbx"

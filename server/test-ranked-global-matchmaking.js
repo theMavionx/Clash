@@ -96,10 +96,18 @@ try {
   const rankedBot = game.findRankedEnemy('attacker', tournamentId);
   assert.equal(rankedBot.error, undefined);
   assert.equal(rankedBot.is_bot, 1);
-  assert.match(rankedBot.id, /^bot-ranked-bot-th7-(?:normal|hard)-\d+$/);
+  assert.match(rankedBot.id, /^bot-ranked-bot-th7-hard-\d+$/);
   assert.equal(rankedBot.town_hall_level, 7);
   assert.equal(rankedBot.matchmaking.target_is_bot, true);
-  assert.equal(rankedBot.matchmaking.bot_candidate_count, 900);
+  assert.ok(
+    rankedBot.matchmaking.bot_candidate_count >= 70
+      && rankedBot.matchmaking.bot_candidate_count <= 80,
+    `ranked challenge pool should expose most of its 80 templates, got ${rankedBot.matchmaking.bot_candidate_count}`,
+  );
+  assert.ok(
+    ['corner-keep', 'rear-keep'].includes(rankedBot.matchmaking.target_bot_archetype),
+    `ranked bot must use a validated challenge geometry, got ${rankedBot.matchmaking.target_bot_archetype}`,
+  );
   assert.equal(rankedBot.matchmaking.shield_ignored_for_ranked, true);
   const rankedBotVictory = game.battleVictory(
     'attacker',

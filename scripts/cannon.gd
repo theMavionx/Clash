@@ -10,9 +10,9 @@ const LEVEL_STATS := {
 	2: {"damage": 109, "fire_rate": 1.60, "detect_range": 1.45},
 	3: {"damage": 259, "fire_rate": 1.60, "detect_range": 1.55},
 	4: {"damage": 431, "fire_rate": 1.60, "detect_range": 1.65},
-	5: {"damage": 631, "fire_rate": 1.60, "detect_range": 1.75},
-	6: {"damage": 759, "fire_rate": 1.60, "detect_range": 1.85},
-	7: {"damage": 1080, "fire_rate": 1.60, "detect_range": 2.00},
+	5: {"damage": 510, "fire_rate": 1.60, "detect_range": 1.75},
+	6: {"damage": 577, "fire_rate": 1.60, "detect_range": 1.85},
+	7: {"damage": 620, "fire_rate": 1.60, "detect_range": 2.00},
 }
 
 const PROJECTILE_SPEED: float = 3.2

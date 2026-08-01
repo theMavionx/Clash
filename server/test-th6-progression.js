@@ -106,7 +106,7 @@ try {
   assert.deepEqual(gameDb.BUILDING_DEFS.harpoon, {
     size: [2, 2],
     max_level: 8,
-    hp_levels: [1800, 2400, 3200, 4300, 5600, 7200, 10000, 12000],
+    hp_levels: [1800, 2400, 3200, 4300, 5600, 6756, 10201, 12000],
     cost: { gold: 12000, wood: 22000, ore: 18000 },
     upgrade_cost: {
       2: { gold: 20000, wood: 42000, ore: 35000 },
@@ -162,7 +162,7 @@ try {
   completeTownHallRequirements(playerId, 5);
   const townHallUpgrade = gameDb.upgradeBuilding(playerId, townHallId);
   assert.equal(townHallUpgrade.level, 6);
-  assert.equal(townHallUpgrade.hp, 52000);
+  assert.equal(townHallUpgrade.hp, 41200);
 
   assert.equal(gameDb.upgradeBuilding(playerId, mortarId).level, 6);
   assert.equal(gameDb.upgradeBuilding(playerId, tombstoneId).level, 5);

@@ -815,13 +815,13 @@ assert.deepEqual(
     skeletonGuardL6Damage: SKELETON_GUARD.levels[6].damage,
   },
   {
-    turretL7Damage: 788,
-    archerTowerL7Damage: 675,
-    mageTowerL7BaseDamage: 98,
-    mageTowerL7MaxDamage: 527,
-    mageTowerL7DamageAlias: 98,
+    turretL7Damage: 453,
+    archerTowerL7Damage: 388,
+    mageTowerL7BaseDamage: 57,
+    mageTowerL7MaxDamage: 303,
+    mageTowerL7DamageAlias: 57,
     mortarL3Damage: 158,
-    cannonL7Damage: 1080,
+    cannonL7Damage: 620,
     skeletonGuardL6Hp: 1148,
     skeletonGuardL6Damage: 149,
   },
@@ -829,11 +829,11 @@ assert.deepEqual(
 );
 assert.match(
   buildingSystem,
-  /"cannon":\s*\{[\s\S]*?"damage_levels":\s*\[40,\s*109,\s*259,\s*431,\s*631,\s*759,\s*1080\]/,
+  /"cannon":\s*\{[\s\S]*?"damage_levels":\s*\[40,\s*109,\s*259,\s*431,\s*510,\s*577,\s*620\]/,
   'Cannon upgrade UI damage rows must mirror runtime combat stats',
 );
 assert.equal(
-  (buildingSystem.match(/"test_damage_levels":\s*\[95,\s*108,\s*158,\s*227,\s*284,\s*370,\s*487\]/g) || []).length,
+  (buildingSystem.match(/"test_damage_levels":\s*\[95,\s*108,\s*158,\s*227,\s*233,\s*240,\s*294\]/g) || []).length,
   2,
   'both Mortar metadata mirrors must expose all seven calibrated damage levels',
 );

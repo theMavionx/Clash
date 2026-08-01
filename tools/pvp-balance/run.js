@@ -125,7 +125,8 @@ try {
     const dbModule = require('../../server/db');
     const combatDefs = require('../../server/combat_defs');
     const { verifyReplay } = require('../../server/combat_session');
-    return { gameDb: dbModule, combatDefs, verifyReplay };
+    const { buildBotBaseTemplates } = require('../../server/matchmaking_defs');
+    return { gameDb: dbModule, combatDefs, verifyReplay, buildBotBaseTemplates };
   });
   gameDb = loaded.gameDb;
   process.exitCode = runBalanceLab({
@@ -133,6 +134,7 @@ try {
     gameDb: loaded.gameDb,
     combatDefs: loaded.combatDefs,
     verifyReplay: loaded.verifyReplay,
+    buildBotBaseTemplates: loaded.buildBotBaseTemplates,
     args,
   });
 } finally {
@@ -151,7 +153,14 @@ try {
   }
 }
 
-function runBalanceLab({ repoRoot: root, gameDb: dbApi, combatDefs, verifyReplay, args: cli }) {
+function runBalanceLab({
+  repoRoot: root,
+  gameDb: dbApi,
+  combatDefs,
+  verifyReplay,
+  buildBotBaseTemplates,
+  args: cli,
+}) {
   const seed = intArg(cli.seed, DEFAULT_SEED, 1, 0xffffffff);
   const baseCount = intArg(cli.bases ?? cli['base-count'], DEFAULT_BASE_COUNT, 1, 10_000);
   const targetWinRate = numberArg(
@@ -195,8 +204,26 @@ function runBalanceLab({ repoRoot: root, gameDb: dbApi, combatDefs, verifyReplay
     0.25,
     1.5,
   );
+  const labBuildingHpScale = numberArg(
+    cli['lab-building-hp-scale'],
+    1,
+    0.25,
+    1.5,
+  );
+  const labBuildingHpMinLevel = intArg(
+    cli['lab-building-hp-min-level'],
+    1,
+    1,
+    99,
+  );
   const labLateDefenseScale = numberArg(
     cli['lab-late-defense-scale'],
+    1,
+    0.25,
+    1.5,
+  );
+  const labLateDefenseDamageScale = numberArg(
+    cli['lab-late-defense-damage-scale'],
     1,
     0.25,
     1.5,
@@ -220,6 +247,7 @@ function runBalanceLab({ repoRoot: root, gameDb: dbApi, combatDefs, verifyReplay
     labOffenseScaleByTroop,
   );
   applyLabDefenseDamageScale(combatDefs, labDefenseDamageScale);
+  applyLabLateDefenseDamageScale(combatDefs, labLateDefenseDamageScale);
   applyLabLateDefenseScale(combatDefs, labLateDefenseScale);
   applyLabTownHallDefenseScale(combatDefs, dbApi, 7, labTh7DefenseScale);
   if (labMimicRevealAfterAttack) {
@@ -304,9 +332,17 @@ function runBalanceLab({ repoRoot: root, gameDb: dbApi, combatDefs, verifyReplay
   const baseReportPath = cli['base-report']
     ? path.resolve(root, String(cli['base-report']))
     : '';
-  const allowProductionLayout = !!cli['allow-production-layout'];
-  if (allowProductionLayout && !baseReportPath) {
-    throw new Error('--allow-production-layout requires --base-report.');
+  const botTemplateDifficulty = resolveBotTemplateDifficulty(
+    cli['bot-template-difficulty'],
+  );
+  if (baseReportPath && botTemplateDifficulty) {
+    throw new Error('--base-report and --bot-template-difficulty cannot be combined.');
+  }
+  const allowProductionLayout = !!cli['allow-production-layout'] || !!botTemplateDifficulty;
+  if (cli['allow-production-layout'] && !baseReportPath && !botTemplateDifficulty) {
+    throw new Error(
+      '--allow-production-layout requires --base-report or --bot-template-difficulty.',
+    );
   }
   const requestedBaseIds = new Set(
     String(cli['base-ids'] || '')
@@ -314,10 +350,23 @@ function runBalanceLab({ repoRoot: root, gameDb: dbApi, combatDefs, verifyReplay
       .map((value) => value.trim())
       .filter(Boolean),
   );
-  if (!baseReportPath && requestedBaseIds.size > 0) {
-    throw new Error('--base-ids requires --base-report.');
+  const requestedBaseArchetypes = new Set(
+    String(cli['base-archetypes'] || '')
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean),
+  );
+  if (!baseReportPath && !botTemplateDifficulty && requestedBaseIds.size > 0) {
+    throw new Error('--base-ids requires --base-report or --bot-template-difficulty.');
   }
-  const bases = baseReportPath
+  const loadedBases = botTemplateDifficulty
+    ? loadMatchmakingBotCatalog({
+      templates: buildBotBaseTemplates(),
+      townHalls,
+      difficulty: botTemplateDifficulty,
+      combatDefs,
+    })
+    : baseReportPath
     ? loadBaseCatalogFromReport({
       reportPath: baseReportPath,
       townHalls,
@@ -331,15 +380,25 @@ function runBalanceLab({ repoRoot: root, gameDb: dbApi, combatDefs, verifyReplay
       dbApi,
       combatDefs,
     });
+  const bases = loadedBases.filter((base) => (
+    (requestedBaseIds.size === 0 || requestedBaseIds.has(String(base.id || '')))
+    && (
+      requestedBaseArchetypes.size === 0
+      || requestedBaseArchetypes.has(String(base.archetype || ''))
+    )
+  ));
   if (bases.length === 0) {
     throw new Error('Base catalog is empty after applying report/profile/id filters.');
   }
+  const normalizeBaseHp = !!cli['normalize-base-hp'] || !!botTemplateDifficulty;
+  if (normalizeBaseHp) normalizeBaseHpToDefinitions(bases, dbApi);
   const baseValidation = validateBaseCatalog(bases, catalog, dbApi, {
     allowProductionLayout,
   });
   if (baseValidation.errors.length > 0) {
     throw new Error(`Generated base validation failed:\n${baseValidation.errors.join('\n')}`);
   }
+  applyLabBuildingHpScale(bases, labBuildingHpScale, labBuildingHpMinLevel);
 
   const armiesByTownHall = new Map();
   for (let th = 1; th <= catalog.maxTownHall; th += 1) {
@@ -603,13 +662,17 @@ function runBalanceLab({ repoRoot: root, gameDb: dbApi, combatDefs, verifyReplay
     seed,
     profile: String(cli.profile || DEFAULT_PROFILE),
     townHalls,
-    baseSource: baseReportPath ? 'report' : 'generated',
+    baseSource: botTemplateDifficulty
+      ? `matchmaking-${botTemplateDifficulty}`
+      : baseReportPath ? 'report' : 'generated',
+    botTemplateDifficulty,
     allowProductionLayout,
     baseReportPath: baseReportPath
       ? path.relative(root, baseReportPath).replaceAll('\\', '/')
       : '',
     requestedBaseIds: [...requestedBaseIds],
-    requestedBaseCount: baseReportPath ? bases.length : baseCount,
+    requestedBaseArchetypes: [...requestedBaseArchetypes],
+    requestedBaseCount: (baseReportPath || botTemplateDifficulty) ? bases.length : baseCount,
     generatedBaseCount: bases.length,
     requestedMatches,
     simulatedMatches: aggregate.overall.count,
@@ -654,10 +717,14 @@ function runBalanceLab({ repoRoot: root, gameDb: dbApi, combatDefs, verifyReplay
     labOffenseScaleByLevel,
     labOffenseScaleByTroop,
     labDefenseDamageScale,
+    labBuildingHpScale,
+    labBuildingHpMinLevel,
     labLateDefenseScale,
+    labLateDefenseDamageScale,
     labTh7DefenseScale,
     labMimicRevealAfterAttack,
     labMimicTrapDamageScale,
+    normalizeBaseHp,
     shipCapacity,
     shipCapacities,
     targetWinRate,
@@ -933,6 +1000,17 @@ function resolveAttackLevelProfile(rawProfile) {
   return normalized;
 }
 
+function resolveBotTemplateDifficulty(rawDifficulty) {
+  if (!rawDifficulty) return '';
+  const normalized = String(rawDifficulty).trim().toLowerCase();
+  if (!['normal', 'hard', 'all'].includes(normalized)) {
+    throw new Error(
+      `Unsupported bot template difficulty "${rawDifficulty}". Use normal, hard, or all.`,
+    );
+  }
+  return normalized;
+}
+
 function applyLabOffenseScales(combatDefs, scaleByLevel, scaleByTroop) {
   combatDefs.setBalanceLabNftStatScales?.(scaleByLevel, scaleByTroop);
   for (const [type, levels] of Object.entries(combatDefs.TROOP_STATS || {})) {
@@ -965,6 +1043,37 @@ function applyLabDefenseDamageScale(combatDefs, scale) {
   }
 }
 
+function applyLabBuildingHpScale(bases, scale, minLevel = 1) {
+  if (scale === 1) return;
+  for (const base of bases || []) {
+    for (const building of base?.buildings || []) {
+      if (building?.type === 'shark_trap') continue;
+      if (Number(building?.level || 1) < minLevel) continue;
+      const maxHp = Number(building?.max_hp);
+      const hp = Number(building?.hp);
+      if (!Number.isFinite(maxHp) || maxHp <= 1) continue;
+      const hpRatio = Number.isFinite(hp)
+        ? Math.max(0, Math.min(1, hp / maxHp))
+        : 1;
+      building.max_hp = Math.max(1, Math.round(maxHp * scale));
+      building.hp = Math.max(0, Math.round(building.max_hp * hpRatio));
+    }
+  }
+}
+
+function normalizeBaseHpToDefinitions(bases, dbApi) {
+  for (const base of bases || []) {
+    for (const building of base?.buildings || []) {
+      const levels = dbApi.BUILDING_DEFS?.[building?.type]?.hp_levels || [];
+      if (levels.length === 0) continue;
+      const level = Math.max(1, Math.min(levels.length, Number(building.level) || 1));
+      const maxHp = Math.max(1, Number(levels[level - 1]) || 1);
+      building.max_hp = maxHp;
+      building.hp = maxHp;
+    }
+  }
+}
+
 function applyLabLateDefenseScale(combatDefs, scale) {
   if (scale === 1) return;
   for (const levels of Object.values(combatDefs.DEFENSE_STATS || {})) {
@@ -982,6 +1091,19 @@ function applyLabLateDefenseScale(combatDefs, scale) {
     if (Number(rawLevel) < 5 || !stats) continue;
     stats.hp = Math.max(1, Math.round(Number(stats.hp) * scale));
     stats.damage = Math.max(1, Math.round(Number(stats.damage) * scale));
+  }
+}
+
+function applyLabLateDefenseDamageScale(combatDefs, scale) {
+  if (scale === 1) return;
+  for (const levels of Object.values(combatDefs.DEFENSE_STATS || {})) {
+    for (const [rawLevel, stats] of Object.entries(levels || {})) {
+      if (Number(rawLevel) < 5 || !stats) continue;
+      for (const field of ['damage', 'baseDamage', 'maxDamage']) {
+        if (!Number.isFinite(Number(stats[field]))) continue;
+        stats[field] = Math.max(1, Math.round(Number(stats[field]) * scale));
+      }
+    }
   }
 }
 
@@ -1122,6 +1244,31 @@ function loadBaseCatalogFromReport({ reportPath, townHalls, requestedBaseIds }) 
   }
 
   return bases;
+}
+
+function loadMatchmakingBotCatalog({ templates, townHalls, difficulty, combatDefs }) {
+  const allowedTownHalls = new Set(townHalls.map(Number));
+  return (templates || [])
+    .filter((template) => (
+      allowedTownHalls.has(Number(template?.th))
+      && (difficulty === 'all' || template?.difficulty === difficulty)
+    ))
+    .map((template) => ({
+      id: String(template.id),
+      townHall: Number(template.th),
+      archetype: String(template.archetype || 'matchmaking'),
+      levelProfile: template.difficulty === 'hard' ? 'maxed' : 'mixed',
+      variation: Number(template.variant) || 0,
+      difficulty: String(template.difficulty || ''),
+      generation: String(template.generation || ''),
+      buildings: (template.buildings || []).map((building, index) => ({
+        ...building,
+        id: `${template.id}-building-${index + 1}`,
+        role: buildingRole(building.type, combatDefs),
+        hp: 1,
+        max_hp: 1,
+      })),
+    }));
 }
 
 function generateBase({
@@ -5875,10 +6022,13 @@ function buildMarkdownReport(model, minGroupSize) {
   lines.push(`**Lab offense scales:** ${Object.entries(config.labOffenseScaleByLevel || {}).map(([level, scale]) => `L${level}=${scale}x`).join(', ')}`);
   lines.push(`**Lab late-tier troop scales:** ${Object.entries(config.labOffenseScaleByTroop || {}).map(([type, scale]) => `${type}=${scale}x`).join(', ') || 'none'}`);
   lines.push(`**Lab defense damage scale:** ${config.labDefenseDamageScale || 1}x`);
+  lines.push(`**Lab targetable building HP scale:** ${config.labBuildingHpScale || 1}x from L${config.labBuildingHpMinLevel || 1}`);
   lines.push(`**Lab L5+ defense/guard scale:** ${config.labLateDefenseScale || 1}x`);
+  lines.push(`**Lab L5+ defense damage-only scale:** ${config.labLateDefenseDamageScale || 1}x`);
   lines.push(`**Lab TH7 defense/guard scale:** ${config.labTh7DefenseScale || 1}x`);
   lines.push(`**Lab Mimic concealment ends on first attack:** ${config.labMimicRevealAfterAttack ? 'yes' : 'no'}`);
   lines.push(`**Lab Mimic trap damage scale while immune:** ${config.labMimicTrapDamageScale || 0}x`);
+  lines.push(`**Imported base HP normalized to current definitions:** ${config.normalizeBaseHp ? 'yes' : 'no'}`);
   lines.push(`**Balance replay simulations:** ${config.simulatedMatches}`);
   lines.push(`**Ship capacity used:** ${config.shipCapacity} slots`);
   lines.push(`**Ship capacity by Town Hall:** ${Object.entries(config.shipCapacities).map(([th, capacity]) => `TH${th}=${capacity}`).join(', ')}`);
@@ -6413,9 +6563,14 @@ Core options:
   --bases <n>              Unique logical bases to generate. Default: ${DEFAULT_BASE_COUNT}
   --base-report <path>     Reuse the exact base catalog stored in a JSON balance report.
   --base-ids <csv>         Limit --base-report replay to the listed base IDs.
+  --base-archetypes <csv>  Limit imported, generated, or bot-template bases by archetype.
+  --bot-template-difficulty <normal|hard|all>
+                           Replay the current in-code matchmaking bot pool directly.
   --allow-production-layout
                            Preserve exact live backline placement in a base report while
                            still validating bounds, overlaps, Town Hall count, and level caps.
+  --normalize-base-hp      Replace imported HP with current authored values while preserving
+                           the exact layout and building levels.
   --matches <n>            Replay simulations for sampled mode. Default: ${DEFAULT_MATCHES}
   --seed <n>               Deterministic random seed. Default: ${DEFAULT_SEED}
   --profile <range>        all, thN, or thN-thN. Default: ${DEFAULT_PROFILE}
@@ -6434,9 +6589,16 @@ Core options:
                            (for example --lab-offense-scale-mage 1.5).
   --lab-defense-damage-scale <factor>
                            Lab-only damage scale for all defenses in the selected tiers.
+  --lab-building-hp-scale <factor>
+                           Lab-only HP scale for targetable buildings after catalog
+                           validation; shark traps are not changed.
+  --lab-building-hp-min-level <n>
+                           Minimum building level affected by the lab HP scale.
   --lab-late-defense-scale <factor>
                            Lab-only damage scale for L5+ defenses and HP/damage
                            scale for L5+ Skeleton Guards.
+  --lab-late-defense-damage-scale <factor>
+                           Lab-only L5+ defense damage scale without changing guards.
   --lab-th7-defense-scale <factor>
                            Lab-only damage scale for defenses at their TH7 cap,
                            plus HP/damage for the TH7 Tombstone guard level.

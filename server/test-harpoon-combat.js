@@ -9,7 +9,7 @@ const { DEFENSE_STATS, FREEZE_DROP, TROOP_STATS } = require('./combat_defs');
 
 const BUILDING_DEFS = {
   town_hall: { size: [4, 4], hp_levels: [100000] },
-  harpoon: { size: [2, 2], hp_levels: [1800, 2400, 3200, 4300, 5600, 7200, 10000, 12000] },
+  harpoon: { size: [2, 2], hp_levels: [1800, 2400, 3200, 4300, 5600, 6756, 10201, 12000] },
   storage: { size: [2, 2], hp_levels: [100000] },
 };
 
@@ -110,10 +110,10 @@ try {
     { damage: 55, detectRange: 1.27, pullSpeed: 0.92 },
     { damage: 65, detectRange: 1.45, pullSpeed: 0.99 },
     { damage: 75, detectRange: 1.64, pullSpeed: 1.06 },
-    { damage: 88, detectRange: 1.82, pullSpeed: 1.13 },
-    { damage: 100, detectRange: 1.95, pullSpeed: 1.20 },
-    { damage: 140, detectRange: 2.08, pullSpeed: 1.40 },
-    { damage: 165, detectRange: 2.20, pullSpeed: 1.48 },
+    { damage: 77, detectRange: 1.82, pullSpeed: 1.13 },
+    { damage: 82, detectRange: 1.95, pullSpeed: 1.20 },
+    { damage: 98, detectRange: 2.08, pullSpeed: 1.40 },
+    { damage: 100, detectRange: 2.20, pullSpeed: 1.48 },
   ];
   for (let index = 0; index < expectedHarpoonCurve.length; index++) {
     assert.deepEqual(DEFENSE_STATS.harpoon[index + 1], {
@@ -198,8 +198,8 @@ try {
   const fires = events(l6, 'harpoon_fire', 20);
   const locks = events(l6, 'harpoon_lock', 20);
   assert.ok(impacts.length >= 2, 'continuous valid targeting must produce repeated impacts');
-  assert.equal(impacts[0].damage, 100);
-  assert.equal(impacts[0].hpBefore - impacts[0].hpAfter, 100, 'impact damage must apply exactly once');
+  assert.equal(impacts[0].damage, 82);
+  assert.equal(impacts[0].hpBefore - impacts[0].hpAfter, 82, 'impact damage must apply exactly once');
   assert.equal(pullEnds[0].reason, 'stop_ring');
   assert.equal(pullEnds[0].durationTicks, 45, 'L6 at distance 1.50 must reach the ring in 45 pull ticks');
   assert.ok(Math.abs(pullEnds[0].finalDistance - 0.6) <= 0.001);
@@ -277,7 +277,7 @@ try {
   );
   const l7Impact = events(l7Ward, 'harpoon_impact', 21)[0];
   const l7PullEnd = events(l7Ward, 'harpoon_pull_end', 21)[0];
-  assert.equal(l7Impact.damage, 161, 'L7 maximum Ward uses ceiling rounding');
+  assert.equal(l7Impact.damage, 113, 'L7 maximum Ward uses ceiling rounding');
   assert.equal(l7PullEnd.reason, 'duration', 'L7 full-range pull must use the fixed duration cap');
   assert.equal(l7PullEnd.durationTicks, 48);
   assert.ok(Math.abs(l7PullEnd.finalDistance - 0.96) <= 0.001);
@@ -290,7 +290,7 @@ try {
   );
   const l8Impact = events(l8, 'harpoon_impact', 25)[0];
   const l8PullEnd = events(l8, 'harpoon_pull_end', 25)[0];
-  assert.equal(l8Impact.damage, 165, 'authoritative combat must resolve the future L8 row');
+  assert.equal(l8Impact.damage, 100, 'authoritative combat must resolve the future L8 row');
   assert.equal(l8PullEnd.reason, 'duration', 'L8 full-range pull must use the fixed duration cap');
   assert.equal(l8PullEnd.durationTicks, 48);
   assert.ok(Math.abs(l8PullEnd.finalDistance - 1.016) <= 0.001);
@@ -301,7 +301,7 @@ try {
     [townHall, closeHarpoon],
     [deploy('MechanicalDragon', closeHarpoonPoint.x, closeHarpoonPoint.z + 0.55, 6)],
   );
-  assert.equal(events(inside, 'harpoon_impact', 23)[0].damage, 100);
+  assert.equal(events(inside, 'harpoon_impact', 23)[0].damage, 82);
   assert.equal(events(inside, 'harpoon_pull_start', 23).length, 0);
   assert.equal(events(inside, 'harpoon_release', 23)[0].reason, 'already_inside_stop_ring');
 
@@ -389,7 +389,7 @@ try {
   );
   assert.equal(
     events(forgedImpact, 'harpoon_impact', 20)[0].damage,
-    100,
+    82,
     'client-authored Harpoon events must be ignored in favor of reconstructed server damage',
   );
 
