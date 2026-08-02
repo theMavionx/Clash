@@ -22,9 +22,9 @@ upgrade availability, and UI lock state.
 | 9 | Ice Golem |
 | 10 | Horror |
 
-Town Hall 8 through 10 gates are intentionally data-ready before those Town
-Hall upgrades exist. When those levels are implemented, the existing gate
-contract will expose the assigned troop without another roster rebalance.
+Town Hall 8 and 9 gates are playable. Town Hall 10 remains data-ready; the
+existing gate contract will expose Horror without another roster rebalance
+when TH10 is promoted.
 
 ## Design Rationale
 
@@ -54,8 +54,9 @@ progression remain separate contracts.
 - Server: `server/db.js` validates recruitment, ship loading, swapping, and
   troop upgrades.
 - The effective troop level may never exceed the current Town Hall level.
-  TH5 therefore exposes at most troop Lv5, TH6 at most Lv6, and TH7 at most
-  Lv7, even when a legacy database row contains a higher value.
+  TH5 therefore exposes at most troop Lv5, TH6 at most Lv6, TH7 at most Lv7,
+  TH8 at most Lv8, and TH9 at most Lv9, even when a legacy database row
+  contains a higher value.
 - Existing over-levelled rows are preserved non-destructively. Combat, API
   responses, matchmaking power, and upgrade status use the effective capped
   level; the stored value becomes effective only after the Town Hall reaches

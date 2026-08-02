@@ -102,7 +102,7 @@ func _validate_level(level: int) -> void:
 		return
 	var normalized_art_forward := (source_model.transform.basis * Vector3.FORWARD).normalized()
 	if not normalized_art_forward.is_equal_approx(Vector3.FORWARD):
-		_fail("L%s SourceModel must preserve the authored -Z barrel direction; got %s" % [tag, normalized_art_forward])
+		_fail("L%s SourceModel must preserve the authored -Z barrel; got %s" % [tag, normalized_art_forward])
 	var source_scale: Vector3 = source_model.scale
 	if not is_equal_approx(source_scale.x, source_scale.y) or not is_equal_approx(source_scale.x, source_scale.z):
 		_fail("L%s SourceModel scale must be uniform: %s" % [tag, source_scale])
@@ -403,7 +403,7 @@ func _write_audit_files() -> void:
 	markdown.append("")
 	markdown.append("## Socket note")
 	markdown.append("")
-	markdown.append("Sockets sit approximately 0.008 world units beyond the visually identified front nozzle planes. SourceModel preserves the authored -Z barrel direction; a 180-degree child rotation is forbidden because it visually reverses the barrel relative to combat and the facing sector. L1/L2 have asymmetric authored assemblies, so their X offsets are intentional and should be rechecked if VFX plume width changes.")
+	markdown.append("Sockets sit approximately 0.008 world units beyond the visually identified front nozzle planes. The source GLBs author the visible barrel along local +Z, so SourceModel must rotate 180 degrees to normalize that nozzle to wrapper/gameplay -Z. L1/L2 have asymmetric authored assemblies, so their X offsets are intentional and should be rechecked if VFX plume width changes.")
 	if not _errors.is_empty():
 		markdown.append("")
 		markdown.append("## Errors")

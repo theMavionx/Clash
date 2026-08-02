@@ -43,6 +43,7 @@ var _water_fps_elapsed: float = 0.0
 var _water_fps_min: float = INF
 var _water_fps_max: float = 0.0
 var _water_variant_key: String = "quality"
+var _spawn_request_active: bool = false
 
 const TEST_ATTACK_PREFERRED_ORDER: Array[String] = [
 	"Knight",
@@ -298,6 +299,10 @@ func _ready() -> void:
 		call_deferred("_verify_harpoon_main_scene")
 	if OS.get_cmdline_user_args().has("--capture-harpoon-spawn-facing"):
 		call_deferred("_capture_harpoon_spawn_facing")
+	if OS.get_cmdline_user_args().has("--verify-flamethrower-test-main"):
+		call_deferred("_verify_flamethrower_test_main")
+	if OS.get_cmdline_user_args().has("--verify-test-main-interactions"):
+		call_deferred("_verify_test_main_interactions")
 	if OS.get_cmdline_user_args().has("--verify-test-scene-parity"):
 		call_deferred("_verify_test_scene_parity")
 	if OS.get_cmdline_user_args().has("--verify-test-scene-mixed-combat"):
@@ -354,6 +359,7 @@ func _exit_tree() -> void:
 
 func _process(delta: float) -> void:
 	_update_water_lab_fps(delta)
+	_sync_test_overlay_reserve()
 	if not is_instance_valid(_test_ship_ability_hud) or not _test_ship_ability_hud.is_visible_in_tree():
 		return
 	_test_ship_ability_refresh_elapsed += delta
@@ -1071,6 +1077,24 @@ func _create_test_ship_ability_hud() -> void:
 	utility_box.add_child(reset_button)
 
 	_refresh_test_ship_ability_hud()
+	call_deferred("_sync_test_overlay_reserve")
+
+
+func _sync_test_overlay_reserve() -> void:
+	var reserved_bottom := 0.0
+	if is_instance_valid(_test_ship_ability_hud) and _test_ship_ability_hud.is_visible_in_tree():
+		var viewport_height := get_viewport().get_visible_rect().size.y
+		var hud_rect := _test_ship_ability_hud.get_global_rect()
+		if hud_rect.size.y > 0.0:
+			reserved_bottom = maxf(0.0, viewport_height - hud_rect.position.y)
+	for raw_bs in get_tree().get_nodes_in_group("building_systems"):
+		var bs: Node = raw_bs
+		if (
+			is_instance_valid(bs)
+			and bool(bs.get("create_ui"))
+			and bs.has_method("set_external_bottom_ui_reserve")
+		):
+			bs.set_external_bottom_ui_reserve(reserved_bottom)
 
 
 func _test_combat_building_system() -> Node:
@@ -3753,6 +3777,9 @@ func spawn_ship_level(target_level: int) -> void:
 
 
 func spawn_building_level(building_id: String, target_level: int) -> bool:
+	if _spawn_request_active:
+		_set_status("Please wait for the current building to finish spawning.")
+		return false
 	if building_id == "":
 		_set_status("Choose a building first.")
 		return false
@@ -3763,16 +3790,20 @@ func spawn_building_level(building_id: String, target_level: int) -> bool:
 	if not bs.building_defs.has(building_id):
 		_set_status("Unknown building: " + building_id)
 		return false
+	_spawn_request_active = true
+	_finish_test_building_interactions()
 	var def: Dictionary = bs.building_defs[building_id]
 	var grid_pos: Vector2i = _random_free_grid_pos(bs, def)
 	if grid_pos == Vector2i(-1, -1):
 		_set_status("No free place for " + building_id + ". Clear space or reset.")
+		_spawn_request_active = false
 		return false
 	bs._spawn_building_locally(building_id, grid_pos, def, -1)
 	await get_tree().process_frame
 	var b: Dictionary = _last_building_at(bs, building_id, grid_pos)
 	if b.is_empty():
 		_set_status("Spawn failed for " + building_id + ".")
+		_spawn_request_active = false
 		return false
 	target_level = clampi(target_level, 1, _max_level_for_def(def))
 	await _set_building_level_for_test(bs, b, def, target_level)
@@ -3780,8 +3811,24 @@ func spawn_building_level(building_id: String, target_level: int) -> bool:
 		_configure_test_ship(bs, b, mini(target_level, 3))
 	bs._sync_react_buildings()
 	bs._select_building(b)
+	if building_id == "flamethrower" and bs.has_method("_start_flamethrower_facing_edit"):
+		# TestMain is an authoring/playtest surface: open the tap controls
+		# immediately so a freshly spawned directional defense can be rotated.
+		bs._start_flamethrower_facing_edit()
 	_set_status("Spawned %s level %d." % [def.get("name", building_id), target_level])
+	_spawn_request_active = false
 	return true
+
+
+func _finish_test_building_interactions() -> void:
+	for raw_bs in get_tree().get_nodes_in_group("building_systems"):
+		var building_system: Node = raw_bs
+		if not is_instance_valid(building_system):
+			continue
+		if building_system.has_method("_cancel_placement"):
+			building_system._cancel_placement()
+		if building_system.has_method("_deselect_building"):
+			building_system._deselect_building()
 
 
 func duplicate_selected_building() -> void:
@@ -4279,6 +4326,525 @@ func _capture_harpoon_spawn_facing() -> void:
 		"[HARPOON_SPAWN_FACING] PASS grid=%s facing_error_deg=%.3f capture=%s"
 		% [str(grid_pos), facing_error, output_path]
 	)
+	get_tree().quit(0)
+
+
+func _verify_flamethrower_test_main() -> void:
+	if DisplayServer.get_name() == "headless":
+		push_error("[FLAMETHROWER_TEST_MAIN] rendered display is required")
+		get_tree().quit(1)
+		return
+	get_window().size = Vector2i(1345, 387)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	var main_bs := _building_system_for_grid("main")
+	if main_bs == null:
+		push_error("[FLAMETHROWER_TEST_MAIN] main BuildingSystem is missing")
+		get_tree().quit(1)
+		return
+	reset_sandbox()
+	await get_tree().process_frame
+	seed(8022026)
+	if not await spawn_building_level("flamethrower", 8):
+		push_error("[FLAMETHROWER_TEST_MAIN] level 8 Flamethrower did not spawn")
+		get_tree().quit(1)
+		return
+	# The production local-spawn path uses a 0.4 s scale-in tween. Wait for that
+	# exact path to settle before deriving facing vectors from the global basis.
+	await get_tree().create_timer(0.45).timeout
+	await get_tree().process_frame
+	var building: Dictionary = main_bs.selected_building
+	var building_node := building.get("node", null) as Node3D
+	var editor := main_bs.get("_flamethrower_facing_editor") as FlamethrowerFacingEditor
+	var native_controls := main_bs.get("_flamethrower_native_controls") as FlamethrowerFacingControls
+	if building_node == null or editor == null or native_controls == null or not editor.visible:
+		push_error("[FLAMETHROWER_TEST_MAIN] spawn did not open the native tap editor")
+		get_tree().quit(1)
+		return
+	if is_instance_valid(main_bs.get("_flamethrower_range_visual")):
+		push_error("[FLAMETHROWER_TEST_MAIN] passive selection sector remained visible under the direction editor")
+		get_tree().quit(1)
+		return
+	var attack_target: Vector3 = main_bs._get_defense_spawn_facing_global()
+	var expected_spawn_step := FlamethrowerConfig.nearest_step_toward(
+		building_node.global_position,
+		attack_target
+	)
+	if int(building.get("facing_step", -1)) != expected_spawn_step:
+		push_error(
+			"[FLAMETHROWER_TEST_MAIN] auto-facing step %d, expected %d"
+			% [int(building.get("facing_step", -1)), expected_spawn_step]
+		)
+		get_tree().quit(1)
+		return
+	if not _flamethrower_visuals_match_step(building_node, editor, expected_spawn_step):
+		push_error("[FLAMETHROWER_TEST_MAIN] model and sector disagree after spawn")
+		get_tree().quit(1)
+		return
+
+	if _panel:
+		_panel.visible = false
+	_sync_test_overlay_reserve()
+	await get_tree().process_frame
+	var facing_dock := native_controls.get_node_or_null("Root/Dock") as Control
+	if (
+		is_instance_valid(_test_ship_ability_hud)
+		and (
+			facing_dock == null
+			or facing_dock.get_global_rect().end.y
+			> _test_ship_ability_hud.get_global_rect().position.y - 8.0
+		)
+	):
+		push_error("[FLAMETHROWER_TEST_MAIN] direction controls overlap the ship boost panel")
+		get_tree().quit(1)
+		return
+	var output_dir := ProjectSettings.globalize_path("res://artifacts/flamethrower-test-main")
+	DirAccess.make_dir_recursive_absolute(output_dir)
+	var old_camera := get_viewport().get_camera_3d()
+	if old_camera:
+		old_camera.current = false
+	var camera := Camera3D.new()
+	camera.name = "FlamethrowerTestMainCamera"
+	camera.projection = Camera3D.PROJECTION_ORTHOGONAL
+	camera.size = 3.25
+	get_tree().current_scene.add_child(camera)
+	var framing_center := building_node.global_position
+	framing_center.y += 0.10
+	camera.global_position = framing_center + Vector3(1.75, 2.65, 2.40)
+	camera.look_at(framing_center + Vector3(0.0, 0.0, -0.35), Vector3.UP)
+	camera.current = true
+	var spawn_capture := output_dir.path_join("01_spawn_faces_landing.png")
+	if not await _capture_flamethrower_test_main_frame(spawn_capture):
+		get_tree().quit(1)
+		return
+
+	var right_button := native_controls.get_node_or_null(
+		"Root/Dock/Content/AimButtons/RightButton"
+	) as Button
+	if right_button == null:
+		push_error("[FLAMETHROWER_TEST_MAIN] right tap button is missing")
+		get_tree().quit(1)
+		return
+	await _click_test_main_control(right_button)
+	var rotated_step := posmod(expected_spawn_step + 1, FlamethrowerConfig.FACING_COUNT)
+	if editor.preview_step != rotated_step or not _flamethrower_visuals_match_step(
+		building_node,
+		editor,
+		rotated_step
+	):
+		push_error("[FLAMETHROWER_TEST_MAIN] right tap did not rotate model and sector together")
+		get_tree().quit(1)
+		return
+	var rotated_capture := output_dir.path_join("02_rotated_by_tap.png")
+	if not await _capture_flamethrower_test_main_frame(rotated_capture):
+		get_tree().quit(1)
+		return
+
+	var face_landing_button := native_controls.get_node_or_null(
+		"Root/Dock/Content/AimButtons/FaceLandingButton"
+	) as Button
+	var confirm_button := native_controls.get_node_or_null(
+		"Root/Dock/Content/ActionButtons/ConfirmButton"
+	) as Button
+	if face_landing_button == null or confirm_button == null:
+		push_error("[FLAMETHROWER_TEST_MAIN] reset/confirm tap buttons are missing")
+		get_tree().quit(1)
+		return
+	await _click_test_main_control(face_landing_button)
+	if editor.preview_step != expected_spawn_step or not _flamethrower_visuals_match_step(
+		building_node,
+		editor,
+		expected_spawn_step
+	):
+		push_error("[FLAMETHROWER_TEST_MAIN] Face landing did not restore the deployment heading")
+		get_tree().quit(1)
+		return
+	var reset_capture := output_dir.path_join("03_reset_to_landing.png")
+	if not await _capture_flamethrower_test_main_frame(reset_capture):
+		get_tree().quit(1)
+		return
+	await _click_test_main_control(confirm_button)
+	await get_tree().process_frame
+	if (
+		int(building.get("facing_step", -1)) != expected_spawn_step
+		or main_bs.is_flamethrower_facing_editor_active()
+	):
+		push_error("[FLAMETHROWER_TEST_MAIN] confirmed tap direction was not persisted")
+		get_tree().quit(1)
+		return
+	_sync_test_overlay_reserve()
+	await get_tree().process_frame
+	var building_panel := main_bs.get("building_panel") as Control
+	if (
+		building_panel == null
+		or not building_panel.visible
+		or (
+			is_instance_valid(_test_ship_ability_hud)
+			and building_panel.get_global_rect().end.y
+			> _test_ship_ability_hud.get_global_rect().position.y - 8.0
+		)
+	):
+		push_error("[FLAMETHROWER_TEST_MAIN] building panel overlaps the ship boost panel")
+		get_tree().quit(1)
+		return
+	var panel_capture := output_dir.path_join("04_building_panel_above_boosts.png")
+	if not await _capture_flamethrower_test_main_frame(panel_capture):
+		get_tree().quit(1)
+		return
+
+	# Final production-scene evidence deliberately removes UI chrome and starts
+	# the pooled runtime stream from the real socket. This verifies the visible
+	# nozzle, attack sector, and emission origin together instead of comparing
+	# direction vectors alone.
+	var muzzle := building_node.find_child("MuzzleSocket", true, false) as Node3D
+	var runtime_vfx := building_node.find_child("FlamethrowerVfxPool", true, false) as Node3D
+	var expected_vfx_offset := Vector3(0.0, 0.0, -0.14)
+	if (
+		muzzle == null
+		or runtime_vfx == null
+		or runtime_vfx.get_parent() != muzzle
+		or not runtime_vfx.position.is_equal_approx(expected_vfx_offset)
+	):
+		push_error("[FLAMETHROWER_TEST_MAIN] runtime VFX is not at the strict-sector MuzzleSocket offset")
+		get_tree().quit(1)
+		return
+	var capture_sector := main_bs.get("_flamethrower_range_visual") as FlamethrowerFacingEditor
+	if capture_sector == null or not capture_sector.visible:
+		push_error("[FLAMETHROWER_TEST_MAIN] confirmed selection sector is missing for muzzle capture")
+		get_tree().quit(1)
+		return
+	_hide_capture_canvas_items(get_tree().current_scene)
+	camera.size = 1.10
+	var capture_forward_2d := FlamethrowerConfig.forward_for_step(expected_spawn_step)
+	var capture_forward := Vector3(capture_forward_2d.x, 0.0, capture_forward_2d.y)
+	var capture_right := Vector3(capture_forward.z, 0.0, -capture_forward.x)
+	camera.global_position = framing_center + capture_right * 0.95 + capture_forward * 0.60 + Vector3.UP * 1.35
+	camera.look_at(framing_center + capture_forward * 0.42 + Vector3.UP * 0.03, Vector3.UP)
+	building_node.call("_set_stream_visual", true)
+	for _frame: int in range(24):
+		await get_tree().process_frame
+	var muzzle_capture := output_dir.path_join("05_runtime_muzzle_emission.png")
+	if not await _capture_flamethrower_test_main_frame(muzzle_capture):
+		get_tree().quit(1)
+		return
+	building_node.call("_set_stream_visual", false, "cleanup")
+	camera.queue_free()
+	if old_camera and is_instance_valid(old_camera):
+		old_camera.current = true
+	await get_tree().process_frame
+	print(
+		"[FLAMETHROWER_TEST_MAIN] PASS spawn_step=%d rotated_step=%d captures=%s"
+		% [expected_spawn_step, rotated_step, output_dir]
+	)
+	# TestMain also starts the normal asynchronous GPU warmup. Let its current
+	# render slice release temporary textures before the automated runner exits.
+	await get_tree().create_timer(0.5).timeout
+	get_tree().quit(0)
+
+
+func _flamethrower_visuals_match_step(
+	building_node: Node3D,
+	editor: FlamethrowerFacingEditor,
+	step: int
+) -> bool:
+	var source_model := building_node.find_child("SourceModel", true, false) as Node3D
+	var muzzle := building_node.find_child("MuzzleSocket", true, false) as Node3D
+	if source_model == null or muzzle == null or editor == null:
+		return false
+	var expected := FlamethrowerConfig.forward_for_step(step)
+	var model_forward_3d := source_model.global_transform.basis * Vector3.FORWARD
+	var muzzle_forward_3d := -muzzle.global_transform.basis.z
+	var sector_forward_3d := -editor.global_transform.basis.z
+	var model_forward := Vector2(model_forward_3d.x, model_forward_3d.z).normalized()
+	var muzzle_forward := Vector2(muzzle_forward_3d.x, muzzle_forward_3d.z).normalized()
+	var sector_forward := Vector2(sector_forward_3d.x, sector_forward_3d.z).normalized()
+	var matches := (
+		model_forward.is_equal_approx(expected)
+		and muzzle_forward.is_equal_approx(expected)
+		and sector_forward.is_equal_approx(expected)
+	)
+	if not matches:
+		print(
+			"[FLAMETHROWER_TEST_MAIN] facing diagnostic step=%d expected=%s model=%s muzzle=%s sector=%s root_yaw=%.4f source_yaw=%.4f"
+			% [
+				step,
+				str(expected),
+				str(model_forward),
+				str(muzzle_forward),
+				str(sector_forward),
+				building_node.global_rotation.y,
+				source_model.rotation.y,
+			]
+		)
+	return matches
+
+
+func _capture_flamethrower_test_main_frame(output_path: String) -> bool:
+	for _frame in range(4):
+		await get_tree().process_frame
+	await RenderingServer.frame_post_draw
+	var error := get_viewport().get_texture().get_image().save_png(output_path)
+	if error != OK:
+		push_error(
+			"[FLAMETHROWER_TEST_MAIN] capture failed %s: %s"
+			% [output_path, error_string(error)]
+		)
+		return false
+	return true
+
+
+func _click_test_main_control(control: Control) -> void:
+	var click_position := control.get_global_rect().get_center()
+	var motion := InputEventMouseMotion.new()
+	motion.position = click_position
+	motion.global_position = click_position
+	Input.parse_input_event(motion)
+	await get_tree().process_frame
+	for is_pressed in [true, false]:
+		var click := InputEventMouseButton.new()
+		click.button_index = MOUSE_BUTTON_LEFT
+		click.pressed = is_pressed
+		click.position = click_position
+		click.global_position = click_position
+		Input.parse_input_event(click)
+		await get_tree().process_frame
+
+
+func _send_test_main_world_pointer(building: Dictionary, use_touch: bool) -> bool:
+	var camera := get_viewport().get_camera_3d()
+	var building_node := building.get("node", null) as Node3D
+	if camera == null or not is_instance_valid(building_node):
+		return false
+	var screen_position := camera.unproject_position(building_node.global_position)
+	if not get_viewport().get_visible_rect().has_point(screen_position):
+		return false
+	if use_touch:
+		for is_pressed in [true, false]:
+			var touch := InputEventScreenTouch.new()
+			touch.device = 0
+			touch.index = 0
+			touch.position = screen_position
+			touch.pressed = is_pressed
+			Input.parse_input_event(touch)
+			await get_tree().process_frame
+	else:
+		var motion := InputEventMouseMotion.new()
+		motion.device = 0
+		motion.position = screen_position
+		motion.global_position = screen_position
+		Input.parse_input_event(motion)
+		await get_tree().process_frame
+		for is_pressed in [true, false]:
+			var click := InputEventMouseButton.new()
+			click.device = 0
+			click.button_index = MOUSE_BUTTON_LEFT
+			click.pressed = is_pressed
+			click.position = screen_position
+			click.global_position = screen_position
+			Input.parse_input_event(click)
+			await get_tree().process_frame
+	return true
+
+
+func _capture_test_main_interaction(output_path: String) -> bool:
+	for _frame in range(3):
+		await get_tree().process_frame
+	await RenderingServer.frame_post_draw
+	var error := get_viewport().get_texture().get_image().save_png(output_path)
+	if error != OK:
+		push_error(
+			"[TEST_MAIN_INTERACTIONS] capture failed %s: %s"
+			% [output_path, error_string(error)]
+		)
+		return false
+	return true
+
+
+func _verify_test_main_interactions() -> void:
+	if DisplayServer.get_name() == "headless":
+		push_error("[TEST_MAIN_INTERACTIONS] rendered display is required")
+		get_tree().quit(1)
+		return
+	get_window().size = Vector2i(1280, 720)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	var main_bs := _building_system_for_grid("main")
+	if main_bs == null:
+		push_error("[TEST_MAIN_INTERACTIONS] main BuildingSystem is missing")
+		get_tree().quit(1)
+		return
+	reset_sandbox()
+	await get_tree().process_frame
+	if _panel:
+		_panel.visible = false
+	if is_instance_valid(_test_ship_ability_hud):
+		_test_ship_ability_hud.visible = false
+	seed(2082026)
+
+	if not await spawn_building_level("flamethrower", 8):
+		push_error("[TEST_MAIN_INTERACTIONS] Flamethrower spawn failed")
+		get_tree().quit(1)
+		return
+	var flamethrower: Dictionary = main_bs.selected_building
+	if not main_bs.is_flamethrower_facing_editor_active():
+		push_error("[TEST_MAIN_INTERACTIONS] Flamethrower editor did not open")
+		get_tree().quit(1)
+		return
+	if not await spawn_building_level("cannon", 1):
+		push_error("[TEST_MAIN_INTERACTIONS] Cannon spawn failed after direction edit")
+		get_tree().quit(1)
+		return
+	var cannon: Dictionary = main_bs.selected_building
+	if (
+		main_bs.is_flamethrower_facing_editor_active()
+		or bool(main_bs.get("_is_moving"))
+		or bool(main_bs.get("is_placing"))
+		or str(cannon.get("id", "")) != "cannon"
+	):
+		push_error("[TEST_MAIN_INTERACTIONS] spawning Cannon left a stale interaction state")
+		get_tree().quit(1)
+		return
+
+	main_bs._start_move(cannon)
+	if not bool(main_bs.get("_is_moving")):
+		push_error("[TEST_MAIN_INTERACTIONS] move setup failed")
+		get_tree().quit(1)
+		return
+	if not await spawn_building_level("mine", 1):
+		push_error("[TEST_MAIN_INTERACTIONS] Mine spawn failed while old move was active")
+		get_tree().quit(1)
+		return
+	var mine: Dictionary = main_bs.selected_building
+	if (
+		bool(main_bs.get("_is_moving"))
+		or bool(main_bs.get("is_placing"))
+		or main_bs.is_flamethrower_facing_editor_active()
+		or str(mine.get("id", "")) != "mine"
+	):
+		push_error("[TEST_MAIN_INTERACTIONS] spawn did not release the previous move state")
+		get_tree().quit(1)
+		return
+
+	main_bs._select_building(flamethrower)
+	main_bs._start_flamethrower_facing_edit()
+	main_bs._select_building(cannon)
+	if main_bs.is_flamethrower_facing_editor_active():
+		push_error("[TEST_MAIN_INTERACTIONS] selection switch left the direction editor active")
+		get_tree().quit(1)
+		return
+	main_bs._deselect_building()
+	if not await _send_test_main_world_pointer(cannon, false):
+		push_error("[TEST_MAIN_INTERACTIONS] Cannon could not be projected for mouse input")
+		get_tree().quit(1)
+		return
+	if main_bs.selected_building.get("node", null) != cannon.get("node", null):
+		push_error("[TEST_MAIN_INTERACTIONS] mouse click did not select Cannon")
+		get_tree().quit(1)
+		return
+	var building_panel := main_bs.get("building_panel") as Control
+	if is_instance_valid(building_panel):
+		building_panel.visible = false
+	if not await _send_test_main_world_pointer(mine, true):
+		push_error("[TEST_MAIN_INTERACTIONS] Mine could not be projected for touch input")
+		get_tree().quit(1)
+		return
+	if (
+		main_bs.selected_building.get("node", null) != mine.get("node", null)
+		or bool(main_bs.get("_is_moving"))
+	):
+		push_error("[TEST_MAIN_INTERACTIONS] touch did not select Mine cleanly")
+		get_tree().quit(1)
+		return
+
+	var output_dir := ProjectSettings.globalize_path("res://artifacts/test-main-interactions")
+	DirAccess.make_dir_recursive_absolute(output_dir)
+	var selection_capture := output_dir.path_join("01_touch_selected_building.png")
+	if not await _capture_test_main_interaction(selection_capture):
+		get_tree().quit(1)
+		return
+
+	main_bs._deselect_building()
+	var cannon_def: Dictionary = main_bs.building_defs.get("cannon", {})
+	var touch_place_gp: Vector2i = _random_free_grid_pos(main_bs, cannon_def)
+	if touch_place_gp == Vector2i(-1, -1):
+		push_error("[TEST_MAIN_INTERACTIONS] no free tile for touch placement")
+		get_tree().quit(1)
+		return
+	var touch_place_local: Vector3 = main_bs._grid_to_local(touch_place_gp)
+	touch_place_local.x += float(cannon_def.cells.x) * float(main_bs.cell_size) * 0.5
+	touch_place_local.z += float(cannon_def.cells.y) * float(main_bs.cell_size) * 0.5
+	var touch_place_screen := get_viewport().get_camera_3d().unproject_position(
+		main_bs.to_global(touch_place_local)
+	)
+	var building_count_before: int = main_bs.placed_buildings.size()
+	main_bs._start_placement("cannon")
+	for is_pressed in [true, false]:
+		var placement_touch := InputEventScreenTouch.new()
+		placement_touch.device = 0
+		placement_touch.index = 0
+		placement_touch.position = touch_place_screen
+		placement_touch.pressed = is_pressed
+		Input.parse_input_event(placement_touch)
+		await get_tree().process_frame
+	var touch_placed_cannon: Dictionary = (
+		main_bs.placed_buildings.back()
+		if main_bs.placed_buildings.size() == building_count_before + 1
+		else {}
+	)
+	if (
+		main_bs.placed_buildings.size() != building_count_before + 1
+		or touch_placed_cannon.is_empty()
+		or str(touch_placed_cannon.get("id", "")) != "cannon"
+		or bool(main_bs.get("is_placing"))
+	):
+		push_error(
+			"[TEST_MAIN_INTERACTIONS] touch placement did not finish cleanly "
+			+ "count=%d expected=%d found=%s placing=%s ghost=%s screen=%s"
+			% [
+				main_bs.placed_buildings.size(),
+				building_count_before + 1,
+				str(not touch_placed_cannon.is_empty()),
+				str(main_bs.get("is_placing")),
+				str(is_instance_valid(main_bs.get("ghost"))),
+				str(touch_place_screen),
+			]
+		)
+		get_tree().quit(1)
+		return
+	if not await _send_test_main_world_pointer(touch_placed_cannon, true):
+		push_error("[TEST_MAIN_INTERACTIONS] placed Cannon could not receive a follow-up tap")
+		get_tree().quit(1)
+		return
+	if (
+		main_bs.selected_building.get("node", null) != touch_placed_cannon.get("node", null)
+		or bool(main_bs.get("_is_moving"))
+	):
+		push_error("[TEST_MAIN_INTERACTIONS] building was not selectable after touch placement")
+		get_tree().quit(1)
+		return
+	var placement_capture := output_dir.path_join("02_touch_placed_and_selected.png")
+	if not await _capture_test_main_interaction(placement_capture):
+		get_tree().quit(1)
+		return
+
+	main_bs._start_move(touch_placed_cannon)
+	reset_sandbox()
+	await get_tree().process_frame
+	for raw_bs in get_tree().get_nodes_in_group("building_systems"):
+		var building_system: Node = raw_bs
+		if (
+			bool(building_system.get("_is_moving"))
+			or bool(building_system.get("is_placing"))
+			or not (building_system.get("selected_building") as Dictionary).is_empty()
+		):
+			push_error("[TEST_MAIN_INTERACTIONS] reset left a stale building interaction")
+			get_tree().quit(1)
+			return
+	print(
+		"[TEST_MAIN_INTERACTIONS] PASS mouse_select=true touch_select=true "
+		+ "touch_place=true spawn_switch=true move_reset=true captures=" + output_dir
+	)
+	await get_tree().create_timer(0.3).timeout
 	get_tree().quit(0)
 
 

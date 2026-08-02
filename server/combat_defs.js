@@ -9,11 +9,12 @@ const {
   CANONICAL_GRID_CONFIGS,
 } = require('./combat_grid_config');
 const {
+  CONFIG: FLAMETHROWER_CONFIG,
   COMBAT_RULES: FLAMETHROWER_COMBAT_RULES,
   DEFENSE_LEVELS: FLAMETHROWER_DEFENSE_LEVELS,
 } = require('./flamethrower_config');
 
-const MAX_TROOP_LEVEL = 7;
+const MAX_TROOP_LEVEL = 9;
 
 // Canonical occupied ship slots per deployed troop. Client loadout code keeps
 // the same values and parity tests fail when the two surfaces drift.
@@ -212,6 +213,8 @@ const TROOP_LEVEL_POWER_MULTIPLIERS = Object.freeze([
   1.68,
   1.61,
   1.74,
+  1.96,
+  2.60,
 ]);
 
 // Result-affecting movement values mirror BaseTroop and troop overrides.
@@ -299,6 +302,16 @@ function troopLevelPowerMultiplier(level) {
     Math.min(TROOP_LEVEL_POWER_MULTIPLIERS.length - 1, (Number(level) || 1) - 1),
   );
   return TROOP_LEVEL_POWER_MULTIPLIERS[index];
+}
+
+// TH8-TH9 preserve every troop's authored cadence and movement profile. Raw
+// L7 rows are deliberately carried forward; the shared level-power curve is
+// the only HP/damage growth source, which keeps client/server parity simple
+// and prevents hidden attack-speed creep at higher Town Halls.
+for (const [troopType, levels] of Object.entries(TROOP_STATS)) {
+  if (['horror', 'barbarian', 'ranger'].includes(troopType) || !levels?.[7]) continue;
+  if (!levels[8]) levels[8] = { ...levels[7] };
+  if (!levels[9]) levels[9] = { ...levels[7] };
 }
 
 // Preserve the authored pre-curve common NFT tables. Rarity is applied before
@@ -465,6 +478,8 @@ const WINDLING_STATS = Object.freeze({
   5: Object.freeze({ hp: 250, damage: 57, atkSpeed: 0.90, moveSpeed: 0.73, range: 0.42, melee: true, hitDelay: 0.48, flying: true, buildingOnly: true }),
   6: Object.freeze({ hp: 310, damage: 73, atkSpeed: 0.90, moveSpeed: 0.75, range: 0.42, melee: true, hitDelay: 0.48, flying: true, buildingOnly: true }),
   7: Object.freeze({ hp: 450, damage: 110, atkSpeed: 0.90, moveSpeed: 0.77, range: 0.42, melee: true, hitDelay: 0.48, flying: true, buildingOnly: true }),
+  8: Object.freeze({ hp: 510, damage: 124, atkSpeed: 0.90, moveSpeed: 0.77, range: 0.42, melee: true, hitDelay: 0.48, flying: true, buildingOnly: true }),
+  9: Object.freeze({ hp: 575, damage: 140, atkSpeed: 0.90, moveSpeed: 0.77, range: 0.42, melee: true, hitDelay: 0.48, flying: true, buildingOnly: true }),
 });
 
 const WINDLING_LIFETIME_SEC = 8.0;
@@ -500,6 +515,8 @@ const DEFENSE_STATS = {
     5: { damage: 318, fireRate: 0.70, detectRange: 1.42, projSpeed: 4.0 },
     6: { damage: 364, fireRate: 0.70, detectRange: 1.52, projSpeed: 4.0 },
     7: { damage: 453, fireRate: 0.70, detectRange: 1.62, projSpeed: 4.0 },
+    8: { damage: 515, fireRate: 0.70, detectRange: 1.70, projSpeed: 4.0 },
+    9: { damage: 585, fireRate: 0.70, detectRange: 1.78, projSpeed: 4.0 },
   },
   archer_tower: {
     1: { damage: 25, fireRate: 1.0,  detectRange: 1.10, projSpeed: 2.5 },
@@ -509,6 +526,8 @@ const DEFENSE_STATS = {
     5: { damage: 276, fireRate: 1.0, detectRange: 2.00, projSpeed: 2.5 },
     6: { damage: 315, fireRate: 1.0, detectRange: 2.15, projSpeed: 2.5 },
     7: { damage: 388, fireRate: 1.0, detectRange: 2.30, projSpeed: 2.5 },
+    8: { damage: 440, fireRate: 1.0, detectRange: 2.40, projSpeed: 2.5 },
+    9: { damage: 500, fireRate: 1.0, detectRange: 2.50, projSpeed: 2.5 },
   },
   harpoon: {
     1: {
@@ -620,6 +639,8 @@ const DEFENSE_STATS = {
       fireRate: 0.25,
       projSpeed: 0,
     },
+    8: { beam: true, baseDamage: 64, maxDamage: 340, tickRate: 0.25, rampTime: 1.8, detectRange: 1.73, damage: 64, fireRate: 0.25, projSpeed: 0 },
+    9: { beam: true, baseDamage: 72, maxDamage: 382, tickRate: 0.25, rampTime: 1.8, detectRange: 1.80, damage: 72, fireRate: 0.25, projSpeed: 0 },
     2: {
       beam: true,
       baseDamage: 11,
@@ -698,6 +719,8 @@ const DEFENSE_STATS = {
     5: { damage: 233, fireRate: 2.40, detectRange: 2.100, minRange: 0.82, travelTime: 0.66, splashRadius: 0.45 },
     6: { damage: 240, fireRate: 2.40, detectRange: 2.250, minRange: 0.80, travelTime: 0.62, splashRadius: 0.49 },
     7: { damage: 294, fireRate: 2.40, detectRange: 2.400, minRange: 0.78, travelTime: 0.58, splashRadius: 0.52 },
+    8: { damage: 330, fireRate: 2.40, detectRange: 2.500, minRange: 0.78, travelTime: 0.58, splashRadius: 0.54 },
+    9: { damage: 370, fireRate: 2.40, detectRange: 2.600, minRange: 0.78, travelTime: 0.58, splashRadius: 0.56 },
   },
   // Air Bomb Defense (design/gdd/air-bomb-defense.md). These values are
   // intentionally expressed as fixed-tick-friendly constants so the server
@@ -721,6 +744,8 @@ const DEFENSE_STATS = {
     5: { damage: 510, fireRate: 1.60, detectRange: 1.75, projSpeed: 3.2 },
     6: { damage: 577, fireRate: 1.60, detectRange: 1.85, projSpeed: 3.2 },
     7: { damage: 620, fireRate: 1.60, detectRange: 2.00, projSpeed: 3.2 },
+    8: { damage: 690, fireRate: 1.60, detectRange: 2.08, projSpeed: 3.2 },
+    9: { damage: 760, fireRate: 1.60, detectRange: 2.16, projSpeed: 3.2 },
   },
 };
 
@@ -733,6 +758,8 @@ const SKELETON_GUARD = {
     4: { hp: 820, damage: 97, atkSpeed: 0.86, moveSpeed: 0.58, detectionRadius: 1.40 },
     5: { hp: 998,  damage: 125, atkSpeed: 0.86, moveSpeed: 0.60, detectionRadius: 1.52 },
     6: { hp: 1148, damage: 149, atkSpeed: 0.86, moveSpeed: 0.62, detectionRadius: 1.62 },
+    7: { hp: 1320, damage: 170, atkSpeed: 0.86, moveSpeed: 0.62, detectionRadius: 1.70 },
+    8: { hp: 1510, damage: 194, atkSpeed: 0.86, moveSpeed: 0.62, detectionRadius: 1.78 },
   },
   hp: 520,
   damage: 53,
@@ -764,6 +791,8 @@ const NECROMANCER_SUMMON = {
     5: 4,
     6: 5,
     7: 5,
+    8: 7,
+    9: 8,
   },
   hpMultiplierBps: 3000,
   damageMultiplierBps: 3500,
@@ -888,7 +917,7 @@ const PLAYER_SHIP_LEVELS = Object.freeze({
     energy: 18,
     cannon_damage: 3400,
     cannon_base_cost: 4,
-    town_hall: 7,
+    town_hall: 8,
     medkit_unlocked: true,
     freeze_unlocked: true,
     rage_unlocked: true,
@@ -900,7 +929,7 @@ const PLAYER_SHIP_LEVELS = Object.freeze({
     energy: 20,
     cannon_damage: 4100,
     cannon_base_cost: 5,
-    town_hall: 7,
+    town_hall: 9,
     medkit_unlocked: true,
     freeze_unlocked: true,
     rage_unlocked: true,
@@ -913,7 +942,7 @@ const PLAYER_SHIP_LEVELS = Object.freeze({
     energy: 22,
     cannon_damage: 4900,
     cannon_base_cost: 5,
-    town_hall: 7,
+    town_hall: 10,
     medkit_unlocked: true,
     freeze_unlocked: true,
     rage_unlocked: true,
@@ -1048,6 +1077,7 @@ module.exports = {
   setBalanceLabNftStatScales,
   DEFENSE_STATS,
   FLAMETHROWER_COMBAT_RULES,
+  FLAMETHROWER_COMBAT_RULES_VERSION: FLAMETHROWER_CONFIG.combat_rules_version,
   SKELETON_GUARD,
   NECROMANCER_SUMMON,
   HORROR_EVOLUTION,

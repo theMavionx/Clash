@@ -55,6 +55,20 @@ const LEVEL_STATS := {
 		"ramp_time": 1.8,
 		"detect_range": 1.65,
 	},
+	8: {
+		"base_damage": 64,
+		"max_damage": 340,
+		"tick_rate": 0.25,
+		"ramp_time": 1.8,
+		"detect_range": 1.73,
+	},
+	9: {
+		"base_damage": 72,
+		"max_damage": 382,
+		"tick_rate": 0.25,
+		"ramp_time": 1.8,
+		"detect_range": 1.80,
+	},
 }
 
 @export var detect_range: float = 1.05

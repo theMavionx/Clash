@@ -61,6 +61,7 @@ func _run_probe() -> void:
 	await _probe_freeze_commit(failures)
 	await _probe_facing_editor(failures)
 	await _probe_placement_facing_lifecycle(failures)
+	await _probe_nullable_server_facing(failures)
 	await _probe_native_edit_entry(failures)
 	await _probe_placement_retry_lifecycle(failures)
 	await _probe_camera_input_ownership(failures)
@@ -77,6 +78,18 @@ func _run_probe() -> void:
 
 func _probe_shared_config(failures: Array[String]) -> void:
 	_expect(FlamethrowerConfig.ensure_loaded(), "shared JSON loads and validates", failures)
+	var combat_rules := FlamethrowerConfig.combat()
+	_expect(int(combat_rules.get("stream_ticks", 0)) == 60, "stream remains active for the approved 1.0 seconds", failures)
+	var configured_offsets: Array = combat_rules.get("damage_offsets", [])
+	_expect(
+		configured_offsets.size() == 3
+			and int(configured_offsets[0]) == 0
+			and int(configured_offsets[1]) == 15
+			and int(configured_offsets[2]) == 30,
+		"longer stream keeps exactly three damage ticks",
+		failures
+	)
+	_expect(int(combat_rules.get("cycle_ticks", 0)) == 90, "longer stream keeps the 1.5 second attack cycle", failures)
 	var level_8 := FlamethrowerConfig.level_stats(8)
 	_expect(int(level_8.get("hp", 0)) == 10900, "L8 HP is shared-config authoritative", failures)
 	_expect(int(level_8.get("damage_per_tick", 0)) == 295, "L8 tick damage is adapted from tick_damage", failures)
@@ -114,7 +127,9 @@ func _probe_all_level_orientations(failures: Array[String]) -> void:
 			if not is_instance_valid(source_model):
 				failures.append("L%s step %d missing SourceModel" % [tag, step])
 			else:
-				var art_forward_3d := -source_model.global_transform.basis.z
+				# Raw GLBs already author the visible nozzle along local -Z. The
+				# wrapper must preserve that axis instead of rotating the art backward.
+				var art_forward_3d := source_model.global_transform.basis * Vector3.FORWARD
 				var art_forward := Vector2(art_forward_3d.x, art_forward_3d.z).normalized()
 				if not art_forward.is_equal_approx(expected):
 					failures.append("L%s step %d visible barrel forward %s, expected %s" % [tag, step, art_forward, expected])
@@ -151,7 +166,9 @@ func _probe_cone_and_cadence(failures: Array[String]) -> void:
 	tower.connect("flamethrower_event", func(kind: String, payload: Dictionary) -> void:
 		events.append({"kind": kind, "payload": payload.duplicate(true)})
 	)
-	for _tick in range(64):
+	var combat_rules := FlamethrowerConfig.combat()
+	var first_stream_end_tick := int(combat_rules.get("prime_ticks", 18)) + int(combat_rules.get("stream_ticks", 60))
+	for _tick in range(first_stream_end_tick + 1):
 		tower._simulation_step()
 	var damage_events := events.filter(func(row: Dictionary) -> bool: return row.kind == "flamethrower_damage_tick")
 	var offsets: Array[int] = []
@@ -163,13 +180,76 @@ func _probe_cone_and_cadence(failures: Array[String]) -> void:
 	_expect(outside.hp == 10000, "target outside 50 degree cone receives no damage", failures)
 	_expect(air.hp == 10000, "air target inside cone is ignored", failures)
 	var snapshot: Dictionary = tower.get_debug_snapshot()
-	_expect(int(snapshot.get("stream_start_tick", -2)) == -1, "first stream is closed at tick 63", failures)
-	_expect(int(snapshot.get("next_stream_ready_tick", -1)) == 108, "cycle commits next start at tick 108", failures)
+	_expect(int(snapshot.get("stream_start_tick", -2)) == -1, "first stream is closed at tick %d" % first_stream_end_tick, failures)
+	var expected_next_stream_tick := int(combat_rules.get("prime_ticks", 18)) + int(combat_rules.get("cycle_ticks", 90))
+	_expect(int(snapshot.get("next_stream_ready_tick", -1)) == expected_next_stream_tick, "cycle commits next start at tick %d" % expected_next_stream_tick, failures)
 	var vfx: Dictionary = snapshot.get("vfx", {})
-	_expect(int(vfx.get("persistent_nodes", 0)) == 2, "VFX uses two persistent particle nodes", failures)
-	_expect(int(vfx.get("particle_capacity", 0)) <= 64, "desktop VFX particle budget stays at or below 64", failures)
+	_expect(not bool(vfx.get("active", true)), "completed stream stops producing new flame particles", failures)
+	_expect(bool(vfx.get("draining", false)), "completed stream preserves already emitted flame particles", failures)
+	_expect(not bool(vfx.get("emitting", true)), "tail drains without new particle emission", failures)
+	_expect(bool(vfx.get("tail_visible", false)), "draining flame remains visible after combat stream end", failures)
+	_expect(
+		float(vfx.get("full_range_travel_duration", 99.0)) < float(combat_rules.get("stream_ticks", 60)) / float(combat_rules.get("tick_rate", 60)),
+		"flame front reaches full range before the combat stream closes",
+		failures
+	)
+	_expect(int(vfx.get("persistent_nodes", 0)) == 2, "VFX keeps one Dragon emitter plus one cohesive sector core", failures)
+	_expect(int(vfx.get("particle_capacity", 0)) == 96, "single emitter stays within the cohesive 96-particle tower budget", failures)
+	_expect(int(vfx.get("flame_particle_capacity", 0)) == 96, "visible emitter has enough density to fill the attack sector", failures)
+	_expect(int(vfx.get("outer_flame_particle_capacity", -1)) == 0, "tower-specific outer layer is removed", failures)
+	_expect(int(vfx.get("visible_flame_layers", 0)) == 2, "Dragon detail stays connected by one procedural flame core", failures)
+	_expect(bool(vfx.get("dragon_material_profile", false)), "tower keeps the Dragon texture and material profile", failures)
+	_expect(is_zero_approx(float(vfx.get("emission_explosiveness", -1.0))), "sustained stream emits continuously instead of in separated Dragon bursts", failures)
+	_expect(is_zero_approx(float(vfx.get("emission_randomness", 1.0))), "continuous sector stream spaces adjacent Dragon cards evenly", failures)
+	_expect(is_zero_approx(float(vfx.get("lifetime_randomness", 1.0))), "all flame cards terminate on one range boundary", failures)
+	_expect(float(vfx.get("minimum_terminal_range_fraction", 0.0)) >= 1.0, "every flame card reaches the complete sector range", failures)
+	_expect(float(vfx.get("minimum_particle_scale", 0.0)) >= 0.72, "terminal flame cards cannot collapse into small dots", failures)
+	_expect(bool(vfx.get("velocity_aligned", false)), "flame cards keep their long axis inside the attack cone", failures)
 	_expect(bool(vfx.get("fire_dragon_profile", false)), "VFX uses the Fire Dragon breath profile", failures)
-	_expect(not bool(vfx.get("geometric_stream_core", true)), "VFX has no beam-like geometric stream core", failures)
+	_expect(
+		is_equal_approx(float(vfx.get("visual_spread_degrees", 0.0)), 17.5),
+		"particle centers leave enough margin for their cards to remain inside the 25 degree half-cone",
+		failures
+	)
+	_expect(
+		is_equal_approx(float(vfx.get("visual_width_scale", 0.0)), 0.65 * 1.65),
+		"tower widens the cohesive Dragon plume without widening its spread",
+		failures
+	)
+	_expect(
+		is_equal_approx(float(vfx.get("visual_flatness", 0.0)), 1.0),
+		"flame directions remain on the ground attack plane",
+		failures
+	)
+	_expect(
+		float(vfx.get("taper_start_scale", 1.0)) <= 0.001
+			and float(vfx.get("taper_quarter_scale", 1.0)) <= 0.016
+			and float(vfx.get("taper_half_scale", 1.0)) <= 0.125
+			and float(vfx.get("taper_three_quarter_scale", 1.0)) <= 0.422
+			and is_equal_approx(float(vfx.get("taper_end_scale", 0.0)), 1.0),
+		"flame stays tightly tapered near the nozzle and reaches full width only at the sector edge",
+		failures
+	)
+	_expect(
+		float(vfx.get("emission_radius_scale", 1.0)) <= 0.006,
+		"particle birth radius cannot cross the narrow sector apex",
+		failures
+	)
+	_expect(
+		int(vfx.get("color_ramp_points", 0)) == 5
+			and bool(vfx.get("neutral_process_tint", false)),
+		"single flame layer keeps a visible terminal orange/red band before final fade",
+		failures
+	)
+	_expect(
+		bool(vfx.get("geometric_stream_core", false))
+			and bool(vfx.get("cohesive_stream_core", false))
+			and float(vfx.get("core_half_angle_degrees", 99.0)) <= 17.5
+			and float(vfx.get("core_drain_cutoff", 1.0)) <= 0.84
+			and float(vfx.get("particle_detail_end_fraction", 1.0)) <= 0.94,
+		"animated sector core connects the plume without crossing the damage cone or shrinking into a final dot",
+		failures
+	)
 	_expect(int(vfx.get("dynamic_lights", -1)) == 0, "VFX creates no attack lights or ground glow", failures)
 	_expect(tower.get_node_or_null("FlamethrowerAudioPresenter") != null, "three-channel audio presenter is persistent on root", failures)
 	var vfx_node: Node = tower.find_child("FlamethrowerVfxPool", true, false) as Node
@@ -183,7 +263,7 @@ func _probe_cone_and_cadence(failures: Array[String]) -> void:
 	if is_instance_valid(vfx_node):
 		for child: Node in vfx_node.get_children():
 			repeated_child_ids.append(child.get_instance_id())
-	_expect(pooled_child_ids.size() == 2 and repeated_child_ids == pooled_child_ids, "repeated streams reuse the same two particle nodes", failures)
+	_expect(pooled_child_ids.size() == 2 and repeated_child_ids == pooled_child_ids, "repeated streams reuse the same Dragon-detail and cohesive-core nodes", failures)
 	await _free_fixture(fixture)
 
 
@@ -265,6 +345,39 @@ func _probe_facing_editor(failures: Array[String]) -> void:
 	var confirmed := editor.confirm()
 	_expect(confirmed == 23, "left rotation wraps from step 0 to step 23", failures)
 	_expect(is_equal_approx(root_node.global_rotation.y, TAU / 24.0), "confirmed wrapped yaw remains on root", failures)
+
+	# TestMain upgrades briefly scale the building root to zero. The direction
+	# must still be stored relative to the rotated island grid at that instant.
+	var rotated_grid := Node3D.new()
+	rotated_grid.rotation.y = -0.0828
+	fixture.add_child(rotated_grid)
+	var zero_scale_root := Node3D.new()
+	zero_scale_root.scale = Vector3.ZERO
+	rotated_grid.add_child(zero_scale_root)
+	var zero_scale_editor := FlamethrowerFacingEditor.new()
+	rotated_grid.add_child(zero_scale_editor)
+	zero_scale_editor.begin(zero_scale_root, 12, 1.2)
+	zero_scale_root.scale = Vector3.ONE
+	var zero_scale_forward_3d := -zero_scale_root.global_transform.basis.z
+	var zero_scale_forward := Vector2(zero_scale_forward_3d.x, zero_scale_forward_3d.z).normalized()
+	_expect(
+		zero_scale_forward.is_equal_approx(FlamethrowerConfig.forward_for_step(12)),
+		"zero-scale editor preview survives the rotated island grid",
+		failures
+	)
+	var zero_scale_tower: Variant = _make_tower(102, 0)
+	zero_scale_tower.scale = Vector3.ZERO
+	rotated_grid.add_child(zero_scale_tower)
+	zero_scale_tower.set_physics_process(false)
+	zero_scale_tower.set_facing_step(12)
+	zero_scale_tower.scale = Vector3.ONE
+	var tower_forward_3d: Vector3 = -zero_scale_tower.global_transform.basis.z
+	var tower_forward := Vector2(tower_forward_3d.x, tower_forward_3d.z).normalized()
+	_expect(
+		tower_forward.is_equal_approx(FlamethrowerConfig.forward_for_step(12)),
+		"zero-scale tower facing survives the rotated island grid",
+		failures
+	)
 	await _free_fixture(fixture)
 
 
@@ -504,6 +617,48 @@ func _probe_placement_retry_lifecycle(failures: Array[String]) -> void:
 	await _free_fixture(fixture)
 
 
+func _probe_nullable_server_facing(failures: Array[String]) -> void:
+	var fixture := _new_fixture("FlamethrowerNullableServerFacingProbe")
+	var grid_plane := MeshInstance3D.new()
+	grid_plane.name = "gridPlane"
+	grid_plane.scale = Vector3(4.0, 0.1, 4.0)
+	grid_plane.mesh = BoxMesh.new()
+	fixture.add_child(grid_plane)
+	var building_system := BuildingSystem.new()
+	building_system.name = "BuildingSystem"
+	building_system.create_ui = false
+	building_system.test_mode = true
+	building_system.grid_plane_path = NodePath("../gridPlane")
+	fixture.add_child(building_system)
+	await process_frame
+	await process_frame
+	var flamethrower_def: Dictionary = building_system.building_defs.get("flamethrower", {})
+	var level := 8
+	var hp := building_system._get_hp_for(flamethrower_def, level)
+	building_system._load_buildings_from_server([{
+		"id": 98001,
+		"type": "flamethrower",
+		"level": level,
+		"hp": hp,
+		"max_hp": hp,
+		"grid_x": 10,
+		"grid_z": 10,
+		"grid_index": 0,
+		"facing_step": null,
+	}])
+	_expect(building_system.placed_buildings.size() == 1, "server state with null facing still spawns the Flamethrower", failures)
+	if building_system.placed_buildings.size() == 1:
+		var loaded: Dictionary = building_system.placed_buildings[0]
+		_expect(int(loaded.get("facing_step", -1)) == 0, "null server facing normalizes to canonical step zero", failures)
+		var loaded_node: Node3D = loaded.get("node") as Node3D
+		_expect(
+			is_instance_valid(loaded_node) and int(loaded_node.get_meta("facing_step", -1)) == 0,
+			"spawned Flamethrower receives the normalized facing step",
+			failures
+		)
+	await _free_fixture(fixture)
+
+
 func _probe_building_integration(failures: Array[String]) -> void:
 	var file := FileAccess.open("res://scripts/building_system.gd", FileAccess.READ)
 	var source := file.get_as_text() if file != null else ""
@@ -525,6 +680,21 @@ func _probe_building_integration(failures: Array[String]) -> void:
 	var flamethrower_def: Dictionary = building_system.building_defs.get("flamethrower", {})
 	_expect(not bool(flamethrower_def.get("apply_camera_facing_yaw", true)), "directional wrapper opts out of camera-facing yaw", failures)
 	_expect(is_zero_approx(building_system._get_model_rotation_y(flamethrower_def)), "wrapper local -Z stays aligned with canonical root -Z", failures)
+	_expect(
+		building_system._parse_flamethrower_facing_step(null) == 0,
+		"nullable server facing falls back without calling int(null)",
+		failures
+	)
+	_expect(
+		building_system._parse_flamethrower_facing_step("7") == 7,
+		"numeric server facing strings normalize to an integer step",
+		failures
+	)
+	_expect(
+		building_system._flamethrower_facing_payload("cannon", 3) == null,
+		"non-directional building payloads retain a null facing value",
+		failures
+	)
 	building_system.free()
 
 

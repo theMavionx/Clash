@@ -699,6 +699,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
   const [troopActionPending, setTroopActionPending] = useState(null);
   const [troopInfo, setTroopInfo] = useState(null);
   const [localTroops, setLocalTroops] = useState(null);
+  const shipActionPendingRef = useRef(false);
   const [demonKingNfts, setDemonKingNfts] = useState([]);
   const [demonKingNftLoading, setDemonKingNftLoading] = useState(false);
   const [demonKingNftError, setDemonKingNftError] = useState(null);
@@ -773,13 +774,21 @@ function BuildingInfoPanel({ onOpenTroops }) {
   // leaves optimistic state visible forever.
   const serverTroopsKey = `${building?.server_id ?? building?.id ?? ''}:${building?.ship_troops ? building.ship_troops.join('|') : ''}:${building?.ship_update_nonce || 0}`;
   useEffect(() => {
+    shipActionPendingRef.current = false;
     setLocalTroops(null);
     setTroopActionPending(null);
   }, [serverTroopsKey]);
 
   useEffect(() => {
     if (!troopActionPending) return undefined;
-    const timeout = window.setTimeout(() => setTroopActionPending(null), 10000);
+    const timeout = window.setTimeout(() => {
+      // A one-way bridge call can be accepted by JavaScript while Godot has no
+      // valid action target. Never leave an unconfirmed roster painted as if it
+      // were stored on the server.
+      shipActionPendingRef.current = false;
+      setLocalTroops(null);
+      setTroopActionPending(null);
+    }, 10000);
     return () => window.clearTimeout(timeout);
   }, [troopActionPending]);
 
@@ -1906,6 +1915,20 @@ function BuildingInfoPanel({ onOpenTroops }) {
       return keys;
     };
     const currentShipId = building.server_id ?? building.id;
+    const dispatchShipAction = (action, payload, optimisticTroops, pendingKind) => {
+      if (shipActionPendingRef.current) return false;
+      shipActionPendingRef.current = true;
+      setLocalTroops(optimisticTroops);
+      setTroopActionPending(pendingKind);
+      const sent = sendToGodot(action, { ...payload, ship_id: currentShipId });
+      if (!sent) {
+        shipActionPendingRef.current = false;
+        setLocalTroops(null);
+        setTroopActionPending(null);
+        return false;
+      }
+      return true;
+    };
     const fleetShipTroops = Array.isArray(building.fleet_ship_troops) ? building.fleet_ship_troops : [];
     const loadedNftKeysForBase = (base) => new Set([
       ...nftKeysFromTroops(shipTroops, base, selectedSpan),
@@ -1968,6 +1991,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
     );
 
     const handleLoadTroop = (name) => {
+      if (shipActionPendingRef.current) return;
       const base = troopBaseName(name);
       const slotCost = troopSlotCost(name);
       if (swapSlot === null && shipTroops.length + slotCost > capacity) return;
@@ -1977,23 +2001,35 @@ function BuildingInfoPanel({ onOpenTroops }) {
         if (!placement) return;
         if (placement.mode === 'append') {
           const nextTroops = [...shipTroops, ...replacement];
-          setLocalTroops(nextTroops);
-          sendToGodot('load_troop', { troop_name: name, nft_owner: nftBackedTroopConfig(base) ? nftOwnerForEntry(name) : undefined });
+          if (!dispatchShipAction(
+            'load_troop',
+            { troop_name: name, nft_owner: nftBackedTroopConfig(base) ? nftOwnerForEntry(name) : undefined },
+            nextTroops,
+            'load',
+          )) return;
           setSwapSlot(null);
           setTroopAction(null);
           return;
         }
         const updated = [...shipTroops];
         updated.splice(placement.start, placement.end - placement.start, ...replacement);
-        setLocalTroops(updated);
-        sendToGodot('swap_troop', { slot: swapSlot, troop_name: name, nft_owner: nftBackedTroopConfig(base) ? nftOwnerForEntry(name) : undefined });
+        if (!dispatchShipAction(
+          'swap_troop',
+          { slot: swapSlot, troop_name: name, nft_owner: nftBackedTroopConfig(base) ? nftOwnerForEntry(name) : undefined },
+          updated,
+          'swap',
+        )) return;
         const replacementGroup = loadedTroopGroupForSlot(loadedTroopGroups(updated), placement.start);
         setSwapSlot(replacementGroup?.start ?? null);
         setTroopAction(replacementGroup ? { key: replacementGroup.key, base: replacementGroup.base } : null);
       } else {
         const nextTroops = [...shipTroops, ...replacement];
-        setLocalTroops(nextTroops);
-        sendToGodot('load_troop', { troop_name: name, nft_owner: nftBackedTroopConfig(base) ? nftOwnerForEntry(name) : undefined });
+        dispatchShipAction(
+          'load_troop',
+          { troop_name: name, nft_owner: nftBackedTroopConfig(base) ? nftOwnerForEntry(name) : undefined },
+          nextTroops,
+          'load',
+        );
       }
     };
 
@@ -2104,7 +2140,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
     };
 
     const handleRemoveTroop = () => {
-      if (!selectedGroup || troopActionPending) return;
+      if (!selectedGroup || troopActionPending || shipActionPendingRef.current) return;
       const span = selectedSpan
         && selectedGroup.spans.some((item) => item.start === selectedSpan.start)
         ? selectedSpan
@@ -2112,26 +2148,23 @@ function BuildingInfoPanel({ onOpenTroops }) {
       if (!span) return;
       const updated = [...shipTroops];
       updated.splice(span.start, span.end - span.start);
-      setLocalTroops(updated);
-      setTroopActionPending('one');
-      sendToGodot('remove_troop', { slot: span.start });
+      if (!dispatchShipAction('remove_troop', { slot: span.start }, updated, 'one')) return;
       const remainingGroup = loadedTroopGroups(updated).find((group) => group.key === selectedGroup.key);
       setSwapSlot(remainingGroup?.start ?? null);
     };
 
     const handleRemoveTroopGroup = () => {
-      if (!selectedGroup || troopActionPending) return;
+      if (!selectedGroup || troopActionPending || shipActionPendingRef.current) return;
       const updated = [...shipTroops];
       [...selectedGroup.spans]
         .sort((a, b) => b.start - a.start)
         .forEach((span) => updated.splice(span.start, span.end - span.start));
-      setLocalTroops(updated);
-      setTroopActionPending('all');
-      sendToGodot('remove_troop_group', { slot: selectedGroup.start });
+      if (!dispatchShipAction('remove_troop_group', { slot: selectedGroup.start }, updated, 'all')) return;
       setSwapSlot(null);
     };
 
     const canPlaceTroop = (name) => {
+      if (troopActionPending || shipActionPendingRef.current) return false;
       if (swapSlot === null) return shipTroops.length + troopSlotCost(name) <= capacity;
       return !!troopSwapPlacement(shipTroops, swapSlot, name, capacity);
     };

@@ -3,7 +3,9 @@ extends Node3D
 const TOWER_SCRIPT: Script = preload("res://scripts/tower_flamethrower.gd")
 const LEVEL_08_VISUAL: PackedScene = preload("res://Model/Flamethrower/level_08/FlamethrowerL08.tscn")
 const OUTPUT_DIR := "res://artifacts/flamethrower-combat-frames"
-const LAST_CAPTURE_TICK := 63
+const STREAM_END_TICK := 78
+const LAST_CAPTURE_FRAME := 124
+const KEYFRAME_PREVIEW_SIZE := Vector2i(384, 216)
 
 
 class VisualTroop extends Node3D:
@@ -32,6 +34,7 @@ var _event_rows: Array[Dictionary] = []
 var _ground_targets: Array[VisualTroop] = []
 var _air_target: VisualTroop = null
 var _failures: Array[String] = []
+var _completion_vfx_snapshot: Dictionary = {}
 
 
 func _ready() -> void:
@@ -52,8 +55,14 @@ func _ready() -> void:
 	BaseTroop.invalidate_combat_lists()
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(OUTPUT_DIR))
 	_clear_previous_evidence()
-	for _index: int in range(LAST_CAPTURE_TICK + 1):
+	for _index: int in range(STREAM_END_TICK + 1):
 		_tower.call("_simulation_step")
+		_refresh_overlay()
+		await get_tree().process_frame
+		RenderingServer.force_draw(false)
+		_capture_tick(_index)
+	_completion_vfx_snapshot = (_tower.call("get_debug_snapshot") as Dictionary).get("vfx", {}).duplicate(true)
+	for _index: int in range(STREAM_END_TICK + 1, LAST_CAPTURE_FRAME + 1):
 		_refresh_overlay()
 		await get_tree().process_frame
 		RenderingServer.force_draw(false)
@@ -62,7 +71,7 @@ func _ready() -> void:
 	_write_report()
 	_write_keyframe_strip()
 	if _failures.is_empty():
-		print("FLAMETHROWER_VISUAL_TEST_PASS frames=%d" % (LAST_CAPTURE_TICK + 1))
+		print("FLAMETHROWER_VISUAL_TEST_PASS frames=%d" % (LAST_CAPTURE_FRAME + 1))
 		get_tree().quit(0)
 	else:
 		for failure: String in _failures:
@@ -245,9 +254,18 @@ func _validate_result() -> void:
 		_failures.append("air target took damage: HP %d" % _air_target.hp)
 	var snapshot: Dictionary = _tower.call("get_debug_snapshot")
 	if str(snapshot.get("state", "")) != "COOLDOWN":
-		_failures.append("tick 63 state is not COOLDOWN")
+		_failures.append("tick 78 state is not COOLDOWN")
 	if int(snapshot.get("next_stream_ready_tick", -1)) != 108:
 		_failures.append("absolute ready tick is not 108")
+	if not bool(_completion_vfx_snapshot.get("draining", false)):
+		_failures.append("completed stream did not preserve its emitted flame tail")
+	if bool(_completion_vfx_snapshot.get("emitting", true)):
+		_failures.append("completed stream kept emitting new particles during tail drain")
+	if not bool(_completion_vfx_snapshot.get("tail_visible", false)):
+		_failures.append("emitted flame tail was hidden at stream completion")
+	var final_vfx: Dictionary = snapshot.get("vfx", {})
+	if bool(final_vfx.get("draining", true)) or bool(final_vfx.get("tail_visible", true)):
+		_failures.append("emitted flame tail did not finish draining after its particle lifetime")
 	var muzzle := _tower.find_child("MuzzleSocket", true, false) as Node3D
 	if not is_instance_valid(muzzle):
 		_failures.append("runtime MuzzleSocket is missing")
@@ -260,15 +278,27 @@ func _validate_result() -> void:
 		var vfx := muzzle.get_node_or_null("FlamethrowerVfxPool")
 		if not is_instance_valid(vfx):
 			_failures.append("VFX is not bound to the current production MuzzleSocket")
+		else:
+			var expected_start_offset := 0.14
+			if not is_equal_approx(vfx.position.z, -expected_start_offset):
+				_failures.append("VFX does not keep its strict-sector forward start offset")
+			var muzzle_forward_offset := (muzzle.global_position - _tower.global_position).dot(Vector3.FORWARD)
+			var expected_visual_length := 1.78 - muzzle_forward_offset - expected_start_offset
+			var vfx_metrics: Dictionary = vfx.call("get_pool_metrics")
+			if not is_equal_approx(float(vfx_metrics.get("visual_length", 0.0)), expected_visual_length):
+				_failures.append("VFX length does not stop at the damage-sector range")
 
 
 func _write_report() -> void:
 	var report := {
 		"status": "PASS" if _failures.is_empty() else "FAIL",
-		"frames": LAST_CAPTURE_TICK + 1,
+		"frames": LAST_CAPTURE_FRAME + 1,
+		"simulation_ticks": STREAM_END_TICK + 1,
+		"tail_capture_frames": LAST_CAPTURE_FRAME - STREAM_END_TICK,
 		"level": 8,
 		"facing_step": 0,
 		"expected_damage_offsets": [0, 15, 30],
+		"expected_stream_ticks": 60,
 		"ground_hp": [_ground_targets[0].hp, _ground_targets[1].hp, _ground_targets[2].hp],
 		"air_hp": _air_target.hp,
 		"events": _event_rows,
@@ -287,7 +317,12 @@ func _write_keyframe_strip() -> void:
 		"frame_018_firing.png",
 		"frame_033_firing.png",
 		"frame_048_firing.png",
-		"frame_063_cooldown.png",
+		"frame_063_firing.png",
+		"frame_077_firing.png",
+		"frame_078_cooldown.png",
+		"frame_094_cooldown.png",
+		"frame_110_cooldown.png",
+		"frame_124_cooldown.png",
 	]
 	var images: Array[Image] = []
 	for file_name: String in file_names:
@@ -296,6 +331,11 @@ func _write_keyframe_strip() -> void:
 		if load_error != OK:
 			_failures.append("could not load keyframe %s: %s" % [file_name, error_string(load_error)])
 			return
+		frame.resize(
+			KEYFRAME_PREVIEW_SIZE.x,
+			KEYFRAME_PREVIEW_SIZE.y,
+			Image.INTERPOLATE_LANCZOS
+		)
 		images.append(frame)
 	var first := images[0]
 	var strip := Image.create(first.get_width() * images.size(), first.get_height(), false, first.get_format())
@@ -305,7 +345,7 @@ func _write_keyframe_strip() -> void:
 			Rect2i(Vector2i.ZERO, images[index].get_size()),
 			Vector2i(first.get_width() * index, 0)
 		)
-	var save_error := strip.save_png(ProjectSettings.globalize_path("%s/flamethrower_keyframes.png" % OUTPUT_DIR))
+	var save_error := strip.save_png(ProjectSettings.globalize_path("%s/flamethrower_cohesive_terminal_keyframes.png" % OUTPUT_DIR))
 	if save_error != OK:
 		_failures.append("could not save keyframe strip: %s" % error_string(save_error))
 

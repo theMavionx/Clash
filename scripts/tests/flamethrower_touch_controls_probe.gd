@@ -39,6 +39,14 @@ func _run() -> void:
 	_check(face_landing.custom_minimum_size.x >= 112 and face_landing.custom_minimum_size.y >= 56, "Face landing tap target is at least 112x56")
 	_check(right.custom_minimum_size == Vector2(72, 64), "right tap target is at least 72x64")
 	_check(cancel.custom_minimum_size.y >= 56 and confirm.custom_minimum_size.y >= 56, "action tap targets are at least 56px high")
+	controls.set_reserved_bottom_space(106.0)
+	await process_frame
+	_check(
+		dock.get_global_rect().end.y <= float(root.size.y) - 106.0 - 11.0,
+		"dock stays above an external bottom HUD reserve"
+	)
+	controls.set_reserved_bottom_space(0.0)
+	await process_frame
 
 	controls.set_editor_state({
 		"active": true,

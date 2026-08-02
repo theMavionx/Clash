@@ -28,6 +28,7 @@ var _cancel_button: Button
 var _confirm_button: Button
 var _last_activation_msec := -ACTIVATION_DEDUP_MSEC
 var _last_action := ""
+var _reserved_bottom_space := 0.0
 
 
 func _ready() -> void:
@@ -73,6 +74,11 @@ func set_editor_state(state: Dictionary) -> void:
 	_right_button.disabled = pending
 	_cancel_button.disabled = pending
 	_confirm_button.disabled = pending or not cell_locked
+
+
+func set_reserved_bottom_space(pixels: float) -> void:
+	_reserved_bottom_space = maxf(0.0, pixels)
+	_layout_dock()
 
 
 func _build_controls() -> void:
@@ -274,8 +280,9 @@ func _layout_dock() -> void:
 	_panel.anchor_bottom = 1.0
 	_panel.offset_left = dock_left
 	_panel.offset_right = dock_left + dock_width
-	_panel.offset_top = -(dock_height + bottom_margin + safe_insets.w)
-	_panel.offset_bottom = -(bottom_margin + safe_insets.w)
+	var reserved_bottom := bottom_margin + safe_insets.w + _reserved_bottom_space
+	_panel.offset_top = -(dock_height + reserved_bottom)
+	_panel.offset_bottom = -reserved_bottom
 
 
 func _safe_area_insets(viewport_size: Vector2) -> Vector4:

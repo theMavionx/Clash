@@ -4447,9 +4447,25 @@ function EarningsPanel({ data, reload }) {
       const row = result.row || result[key] || result;
       setLocalData((prev) => {
         const prevEarnings = prev?.earnings || {};
+        const resolvedDex = result.dex || key;
+        const previousHistory = prevEarnings.snapshot_history || {};
+        const incomingHistory = result.snapshot_history || null;
+        const mergedHistory = incomingHistory ? {
+          ...previousHistory,
+          ...incomingHistory,
+          dexes: {
+            ...(previousHistory.dexes || {}),
+            ...(incomingHistory.dexes || {}),
+          },
+          daily: [
+            ...(previousHistory.daily || []).filter((entry) => entry.dex !== resolvedDex),
+            ...(incomingHistory.daily || []),
+          ].sort((a, b) => String(b.date || '').localeCompare(String(a.date || ''))),
+        } : previousHistory;
         const nextEarnings = {
           ...prevEarnings,
-          [result.dex || key]: { dex: result.dex || key, ...row },
+          [resolvedDex]: { dex: resolvedDex, ...row },
+          snapshot_history: mergedHistory,
           last_updated: result.last_updated || new Date().toISOString(),
           cached: false,
           age_ms: 0,
@@ -4471,7 +4487,6 @@ function EarningsPanel({ data, reload }) {
   const revenue = localData?.revenue || {};
   const revenueWindows = Array.isArray(revenue.windows) ? revenue.windows : [];
   const windowAll = revenueWindows.find((row) => row.key === 'all') || revenueWindows[revenueWindows.length - 1] || {};
-  const windowD30 = revenueWindows.find((row) => row.key === 'd30' || row.key === '30d') || {};
   const byDex = windowAll.dexes || revenue.dexes || revenue.by_dex || earnings.dexes || earnings.by_dex || {};
   const exactEarningsRows = Object.entries(earnings)
     .filter(([, value]) => value && typeof value === 'object' && ('earned_usd' in value || value.ok === false || 'error' in value))
@@ -4479,15 +4494,34 @@ function EarningsPanel({ data, reload }) {
   const exactTotalUsd = Number.isFinite(Number(earnings.total_usd))
     ? Number(earnings.total_usd)
     : exactEarningsRows.reduce((sum, row) => sum + (Number(row.earned_usd) || 0), 0);
+  const snapshotHistory = earnings.snapshot_history || {};
+  const snapshotDexes = snapshotHistory.dexes || {};
+  const snapshotWindows = snapshotHistory.windows || {};
+  const snapshotDailyRows = (snapshotHistory.daily || [])
+    .filter((row) => Number(row.snapshot_count || 0) > 0)
+    .slice(0, 30 * Math.max(1, exactEarningsRows.length));
+  const snapshotWindowRows = exactEarningsRows.map((row) => {
+    const snapshot = snapshotDexes[row.dex] || {};
+    const d30 = snapshot.d30 || {};
+    return [
+      DEX_LABELS[row.dex] || row.dex,
+      snapshot.d1?.snapshot_count ? fmtMaybeUsd(snapshot.d1.earned_usd) : '-',
+      snapshot.d7?.snapshot_count ? fmtMaybeUsd(snapshot.d7.earned_usd) : '-',
+      d30.snapshot_count ? fmtMaybeUsd(d30.earned_usd) : '-',
+      d30.snapshot_count || 0,
+      d30.complete ? <span className="admin-badge green">complete</span> : <span className="admin-badge gold">collecting</span>,
+      fmtTime(snapshot.last_snapshot_at),
+    ];
+  });
   const tournaments = revenue.tournaments || revenue.by_tournament || [];
   return (
     <div className="admin-grid">
       <StatsGrid stats={[
         { label: 'Exact earned', value: fmtMaybeUsd(exactTotalUsd), tone: 'gold' },
-        { label: 'Exact sources', value: num(exactEarningsRows.length), tone: 'green' },
-        { label: '30d local volume', value: fmtMaybeUsd(windowD30.total_volume_usd ?? earnings.volume_30d_usd), tone: 'blue' },
-        { label: 'All local volume', value: fmtMaybeUsd(windowAll.total_volume_usd ?? earnings.volume_all_usd), tone: 'blue' },
-        { label: '30d local trades', value: num(windowD30.total_trades || 0), tone: 'blue' },
+        { label: 'Snapshot 24h', value: Object.keys(snapshotDexes).length ? fmtMaybeUsd(snapshotWindows.d1?.earned_usd) : '-', tone: 'green' },
+        { label: 'Snapshot 7d', value: Object.keys(snapshotDexes).length ? fmtMaybeUsd(snapshotWindows.d7?.earned_usd) : '-', tone: 'green' },
+        { label: 'Snapshot 30d', value: Object.keys(snapshotDexes).length ? fmtMaybeUsd(snapshotWindows.d30?.earned_usd) : '-', tone: 'green' },
+        { label: 'Snapshot sources', value: num(Object.keys(snapshotDexes).length), tone: 'blue' },
       ]} />
       {refreshMessage && <div className="admin-card-sub">{refreshMessage}</div>}
       <div className="earnings-card-grid">
@@ -4495,11 +4529,31 @@ function EarningsPanel({ data, reload }) {
           <EarningsDexCard
             key={row.dex}
             row={row}
+            snapshot={snapshotDexes[row.dex] || null}
             refreshing={refreshingDex === row.dex}
             onRefresh={() => refreshDex(row.dex)}
           />
         ))}
       </div>
+      <CompactTable
+        title="Snapshot Earnings Windows"
+        subtitle="Only positive deltas between stored cumulative snapshots. Live values and local volume estimates are excluded."
+        columns={['DEX', '24h', '7d', '30d', '30d samples', 'Coverage', 'Latest snapshot']}
+        rows={snapshotWindowRows}
+      />
+      <CompactTable
+        title="Daily Snapshot Records (30 days)"
+        subtitle="UTC daily earnings reconstructed only from stored snapshots. A reset means claim, withdrawal, or a provider counter decrease and never subtracts income."
+        columns={['UTC day', 'DEX', 'Earned', 'Closing cumulative', 'Snapshots', 'Resets']}
+        rows={snapshotDailyRows.map((row) => [
+          row.date,
+          DEX_LABELS[row.dex] || row.dex,
+          fmtMaybeUsd(row.earned_usd),
+          row.closing_cumulative_usd == null ? '-' : fmtMaybeUsd(row.closing_cumulative_usd),
+          row.snapshot_count || 0,
+          row.reset_count || 0,
+        ])}
+      />
       <div className="admin-grid two">
         <CompactTable title="DEX Local Model" subtitle={`Local volume x configured rate analytics for comparison only. Updated ${fmtTime(revenue.last_updated)}.`} columns={['DEX', 'Estimated fee', 'Volume', 'Trades', 'Model', 'Configured']} rows={normalizeDexRows(byDex).map((row) => [DEX_LABELS[row.dex] || row.dex || '-', fmtMaybeUsd(row.estimated_fee_usd ?? row.fee_usd), fmtMaybeUsd(row.volume_usd ?? row.total_volume_usd), row.trades || row.trades_count || 0, row.rate_label || row.model || row.source_detail || '-', row.configured === false ? <span className="admin-badge off">no</span> : <span className="admin-badge green">yes</span>])} />
         <CompactTable title="Tournament Local Model" subtitle="Tournament volume attribution using configured fee models. Not exact provider earnings." columns={['Tournament', 'DEX', 'Players', 'Volume', 'Estimated fee']} rows={(tournaments || []).slice(0, 80).map((row) => [row.name || `#${row.tournament_id || row.id}`, DEX_LABELS[row.dex] || row.dex || '-', row.players || '-', fmtMaybeUsd(row.volume_usd), fmtMaybeUsd(row.estimated_fee_usd)])} />
@@ -4513,7 +4567,7 @@ function EarningsPanel({ data, reload }) {
   );
 }
 
-function EarningsDexCard({ row, refreshing = false, onRefresh }) {
+function EarningsDexCard({ row, snapshot = null, refreshing = false, onRefresh }) {
   const accent = dexAccent(row.dex);
   const earned = fmtUsd(Number(row.earned_usd || 0), 4);
   const trades = row.trades ?? row.local_trades ?? row.matched_events ?? row.transfer_events ?? null;
@@ -4548,6 +4602,18 @@ function EarningsDexCard({ row, refreshing = false, onRefresh }) {
         </div>
       </div>
       <div className="earnings-amount">{earned}</div>
+      <div className="earnings-window-grid">
+        {[
+          ['24h', snapshot?.d1],
+          ['7d', snapshot?.d7],
+          ['30d', snapshot?.d30],
+        ].map(([label, value]) => (
+          <div className="earnings-window" key={label}>
+            <span>{label}</span>
+            <strong>{value?.snapshot_count ? fmtUsd(Number(value.earned_usd || 0), 4) : '-'}</strong>
+          </div>
+        ))}
+      </div>
       <div className="earnings-meta">
         {address ? <span className="admin-mono">{short(address, 10, 5)}</span> : null}
         {extra.map((item) => <span key={item}>{item}</span>)}

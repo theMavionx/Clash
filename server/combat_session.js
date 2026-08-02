@@ -995,7 +995,7 @@ function verifyReplay({
   const sharkTraps = buildings
     .filter(b => b.type === 'shark_trap')
     .map(b => {
-      const damageLevels = BUILDING_DEFS.shark_trap?.damage_levels || [500, 750, 1050, 1450, 2000, 2400, 2900];
+      const damageLevels = BUILDING_DEFS.shark_trap?.damage_levels || [500, 750, 1050, 1450, 2000, 2400, 2900, 3400, 3900];
       const level = Math.max(1, Math.min(damageLevels.length, Number(b.level) || 1));
       return {
         buildingId: b.id,

@@ -3,7 +3,7 @@ extends BaseTroop
 ## Short-lived airborne summon created by Wind Mage. Windlings are real
 ## defense targets, but consume no capacity and never become casualties.
 
-const MAX_TROOP_LEVEL: int = 7
+const MAX_TROOP_LEVEL: int = 9
 const LIFETIME: float = 8.0
 const FLIGHT_HEIGHT: float = 0.15
 const FLIGHT_BOB_HEIGHT: float = 0.012
@@ -25,6 +25,8 @@ const LEVEL_STATS: Dictionary = {
 	5: {"hp": 250, "damage": 57, "atk_speed": 0.90, "move_speed": 0.73},
 	6: {"hp": 310, "damage": 73, "atk_speed": 0.90, "move_speed": 0.75},
 	7: {"hp": 450, "damage": 110, "atk_speed": 0.90, "move_speed": 0.77},
+	8: {"hp": 510, "damage": 124, "atk_speed": 0.90, "move_speed": 0.77},
+	9: {"hp": 575, "damage": 140, "atk_speed": 0.90, "move_speed": 0.77},
 }
 
 const ANIM_FILES: Array[String] = [

@@ -12,6 +12,8 @@ const LEVEL_STATS := {
 	5: {"hp": 6244, "damage": 554, "atk_speed": 1.50},
 	6: {"hp": 9540, "damage": 944, "atk_speed": 1.50},
 	7: {"hp": 11200, "damage": 1231, "atk_speed": 1.50},
+	8: {"hp": 11200, "damage": 1231, "atk_speed": 1.50},
+	9: {"hp": 11200, "damage": 1231, "atk_speed": 1.50},
 }
 
 const ANIM_FILES: Array[String] = [

@@ -30,6 +30,8 @@ const LEVEL_STATS: Dictionary = {
 	5: {"hp": 246, "damage": 34, "atk_speed": 1.29, "move_speed": 0.58},
 	6: {"hp": 299, "damage": 44, "atk_speed": 1.29, "move_speed": 0.60},
 	7: {"hp": 299, "damage": 44, "atk_speed": 1.29, "move_speed": 0.60},
+	8: {"hp": 396, "damage": 60, "atk_speed": 1.29, "move_speed": 0.62},
+	9: {"hp": 453, "damage": 68, "atk_speed": 1.29, "move_speed": 0.62},
 }
 
 static var _body_material: StandardMaterial3D = null

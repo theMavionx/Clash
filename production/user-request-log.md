@@ -2642,3 +2642,59 @@ Follow-up:
   push `main`, deploy through the standard production workflow, then verify the live revision,
   service health, public endpoints, and recent production logs. Commit, push, merge, and production
   deployment are explicitly authorized.
+
+### UR-2026-08-02-CLASHBOT-DECIBEL-DAY1-VOLUME
+
+- **Timestamp:** 2026-08-02 10:18 (Europe/Kyiv)
+- **Request:** "зарахуй clashbot обєм децибел в турінр за перший день я там бота вмикав"
+- **Scope:** Audit Decibel/MM-bot fills for player `clashbot` during the first UTC day of the
+  applicable tournament, determine the verified but uncredited builder-routed volume, then apply
+  an idempotent production tournament-credit correction and verify daily activity and leaderboard
+  totals. Production-data mutation is explicitly authorized only for this scoped correction.
+
+### UR-2026-08-02-CLASHBOT-GROUND-ARMY-BALANCE-AUDIT
+
+- **Timestamp:** 2026-08-02 20:11 (Europe/Kyiv)
+- **Request:** "передививсь баланс, там суто наземними юнітами виграти нереально, тільки драконами мортира дуже жорстка і всі інші пушки і тд так само спробуй одними бочкаи чи будь якими іншими нащемними комбінаціями виграти битви мої останні clashbot на проді"
+- **Scope:** Read the latest production battle replays for player `Clashbot`, identify the actual
+  defensive and pathfinding causes of ground-army losses, reconstruct the attacked bases locally,
+  and run ground-only Barrel and mixed-army simulations against them. This request authorizes
+  read-only production analysis and local balance testing, but no production-data mutation,
+  commit, push, deployment, or balance-value change.
+
+### UR-2026-08-02-SKELETON-GUARD-LATE-WAVE-REACQUIRE
+
+- **Timestamp:** 2026-08-02 20:42 (Europe/Kyiv)
+- **Request:** "скелети тупі завісають часто. я от пізніше спавню персонажів і вони тупо стоять"
+- **Scope:** Reproduce and fix the client Tombstone skeleton-guard state transition where guards
+  enter a terminal victory animation after the current wave dies and fail to acquire troops from a
+  later deployment wave. Preserve authoritative server targeting behavior, add a focused late-wave
+  regression probe, and verify the behavior locally. No commit, push, or deployment was requested.
+
+### UR-2026-08-02-MAIN-SHIP-ROSTER-TARGETING
+
+- **Timestamp:** 2026-08-02 20:46 (Europe/Kyiv)
+- **Request:** "там є от баг я міняю персонажів в кораблі а в мене все ще пі шутер хоча я вибирав 5 лучниць"
+- **Scope:** Trace the Main Ship roster edit from the React troop picker through the Godot bridge
+  and authoritative `/ship/*` API, fix cross-grid action misrouting and unconfirmed optimistic
+  state, and verify that replacing Pea Shooter with five Archers is persisted and used by battle.
+  No commit, push, deployment, or production-data mutation was requested.
+
+### UR-2026-08-02-TH8-TH9-PROGRESSION-EXPANSION
+
+- **Timestamp:** 2026-08-02 21:17 (Europe/Kyiv)
+- **Request:** "давай додамо 8 і 9 лвл таун хола в нас там як раз є ейр дефенс і флейм сровер. можеш також додати ще трохи пасток, додати ще одну пушку і маг тавер. далі то все діло тестуй вирівнюй рівні юнітів щоб пропорційно ставали сильніше і зберігався баланс+-"
+- **Scope:** Enable playable Town Hall 8 and 9 progression across client and authoritative server,
+  activate the existing TH8 Flamethrower and TH9 Air Bomb content, extend coherent defense/trap
+  count limits, and author synchronized TH8-TH9 troop/defense/economy progression. Verify with
+  focused Godot/server tests plus deterministic TH7-TH9 balance simulations. No commit, push,
+  deployment, or production-data mutation was requested.
+
+### UR-2026-08-02-COMMIT-PUSH-ALL-CURRENT-CHANGES
+
+- **Timestamp:** 2026-08-02 21:24 (Europe/Kyiv)
+- **Request:** "зроби коміт і пуш всіх змін"
+- **Scope:** After the active TH8-TH9 implementation and local verification are complete, stage
+  every current workspace change (including pre-existing owner/agent work), create one intentional
+  commit on the current branch, verify remote divergence/conflicts, and push that branch. This
+  authorizes commit and push, but not merge, deployment, or production-data mutation.

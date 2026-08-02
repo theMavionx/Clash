@@ -75,14 +75,14 @@ try {
     );
   }
 
-  assert.equal(gameDb.LIVE_TOWN_HALL_CAP, 7);
+  assert.equal(gameDb.LIVE_TOWN_HALL_CAP, 9);
   assert.equal(gameDb.TH_UNLOCK.cannon, 7);
-  assert.deepEqual(gameDb.TH_MAX_COUNT.cannon, [0, 0, 0, 0, 0, 0, 2]);
-  assert.deepEqual(gameDb.TH_MAX_LEVEL.cannon, [1, 1, 1, 1, 1, 1, 7]);
-  assert.deepEqual(gameDb.TH_MAX_COUNT.harpoon, [0, 0, 0, 0, 0, 1, 1, 2]);
-  assert.deepEqual(gameDb.TH_MAX_LEVEL.harpoon, [1, 1, 1, 1, 1, 6, 7, 8]);
-  assert.deepEqual(gameDb.TH_MAX_LEVEL.port, [1, 2, 3, 3, 3, 3, 3]);
-  assert.deepEqual(gameDb.TH_MAX_LEVEL.altar, [1, 1, 1, 1, 1, 1, 1]);
+  assert.deepEqual(gameDb.TH_MAX_COUNT.cannon, [0, 0, 0, 0, 0, 0, 2, 3, 3]);
+  assert.deepEqual(gameDb.TH_MAX_LEVEL.cannon, [1, 1, 1, 1, 1, 1, 7, 8, 9]);
+  assert.deepEqual(gameDb.TH_MAX_COUNT.harpoon, [0, 0, 0, 0, 0, 1, 1, 2, 2]);
+  assert.deepEqual(gameDb.TH_MAX_LEVEL.harpoon, [1, 1, 1, 1, 1, 6, 7, 8, 8]);
+  assert.deepEqual(gameDb.TH_MAX_LEVEL.port, [1, 2, 3, 3, 3, 3, 3, 3, 3]);
+  assert.deepEqual(gameDb.TH_MAX_LEVEL.altar, [1, 1, 1, 1, 1, 1, 1, 1, 1]);
   assert.deepEqual(
     gameDb.TH_UPGRADE_REQUIRES[6],
     [...gameDb.TH_UPGRADE_REQUIRES[5], 'harpoon'],
@@ -100,8 +100,8 @@ try {
   });
   assert.deepEqual(gameDb.BUILDING_DEFS.cannon, {
     size: [3, 3],
-    max_level: 7,
-    hp_levels: [3200, 3900, 4700, 5600, 6148, 6742, 7141],
+    max_level: 9,
+    hp_levels: [3200, 3900, 4700, 5600, 6148, 6742, 7141, 8200, 9400],
     cost: { gold: 16000, wood: 36000, ore: 30000 },
     upgrade_cost: {
       2: { gold: 24000, wood: 52000, ore: 44000 },
@@ -110,6 +110,8 @@ try {
       5: { gold: 65000, wood: 110000, ore: 92000 },
       6: { gold: 83000, wood: 128000, ore: 108000 },
       7: { gold: 105000, wood: 142000, ore: 125000 },
+      8: { gold: 130000, wood: 175000, ore: 150000 },
+      9: { gold: 155000, wood: 210000, ore: 185000 },
     },
     max_count: 2,
   });
@@ -123,21 +125,21 @@ try {
     wood: 142000,
     ore: 125000,
   });
-  assert.deepEqual(gameDb.PRODUCTION_DEFS.mine.rate, [18, 33, 54, 81, 120, 170, 225]);
-  assert.deepEqual(gameDb.PRODUCTION_DEFS.mine.max, [200, 400, 800, 1600, 3000, 5000, 7500]);
-  assert.deepEqual(gameDb.PRODUCTION_DEFS.sawmill.rate, [24, 45, 72, 108, 160, 230, 300]);
-  assert.deepEqual(gameDb.PRODUCTION_DEFS.sawmill.max, [250, 500, 1000, 2000, 3750, 6000, 9000]);
+  assert.deepEqual(gameDb.PRODUCTION_DEFS.mine.rate, [18, 33, 54, 81, 120, 170, 225, 295, 375]);
+  assert.deepEqual(gameDb.PRODUCTION_DEFS.mine.max, [200, 400, 800, 1600, 3000, 5000, 7500, 10500, 14000]);
+  assert.deepEqual(gameDb.PRODUCTION_DEFS.sawmill.rate, [24, 45, 72, 108, 160, 230, 300, 390, 500]);
+  assert.deepEqual(gameDb.PRODUCTION_DEFS.sawmill.max, [250, 500, 1000, 2000, 3750, 6000, 9000, 12000, 16000]);
   assert.deepEqual(gameDb.TH_BASE_CAPACITY[7], { gold: 35000, wood: 35000, ore: 35000 });
   assert.deepEqual(gameDb.STORAGE_CAPACITY[7], { gold: 36000, wood: 36000, ore: 36000 });
-  assert.deepEqual(gameDb.TROPHY_TABLE.cannon, [25, 45, 70, 105, 145, 190, 240]);
-  assert.deepEqual(gameDb.TROPHY_TABLE.town_hall, [50, 120, 250, 450, 720, 1080, 1520]);
-  assert.deepEqual(gameDb.TROPHY_TABLE.turret, [20, 45, 90, 160, 255, 380, 535]);
-  assert.deepEqual(gameDb.TROPHY_TABLE.archer_tower, [15, 35, 70, 125, 200, 300, 425]);
-  assert.deepEqual(gameDb.TROPHY_TABLE.mage_tower, [20, 45, 90, 145, 225, 330, 460]);
-  assert.deepEqual(gameDb.TROPHY_TABLE.mortar, [30, 65, 125, 210, 315, 440, 580]);
+  assert.deepEqual(gameDb.TROPHY_TABLE.cannon.slice(0, 7), [25, 45, 70, 105, 145, 190, 240]);
+  assert.deepEqual(gameDb.TROPHY_TABLE.town_hall.slice(0, 7), [50, 120, 250, 450, 720, 1080, 1520]);
+  assert.deepEqual(gameDb.TROPHY_TABLE.turret.slice(0, 7), [20, 45, 90, 160, 255, 380, 535]);
+  assert.deepEqual(gameDb.TROPHY_TABLE.archer_tower.slice(0, 7), [15, 35, 70, 125, 200, 300, 425]);
+  assert.deepEqual(gameDb.TROPHY_TABLE.mage_tower.slice(0, 7), [20, 45, 90, 145, 225, 330, 460]);
+  assert.deepEqual(gameDb.TROPHY_TABLE.mortar.slice(0, 7), [30, 65, 125, 210, 315, 440, 580]);
   assert.deepEqual(gameDb.TROPHY_TABLE.harpoon, [20, 35, 55, 80, 110, 145, 190, 240]);
-  assert.deepEqual(gameDb.TROPHY_TABLE.tombstone, [5, 10, 20, 40, 70, 110]);
-  assert.deepEqual(gameDb.TROPHY_TABLE.shark_trap, [25, 40, 60, 85, 115, 155, 205]);
+  assert.deepEqual(gameDb.TROPHY_TABLE.tombstone.slice(0, 6), [5, 10, 20, 40, 70, 110]);
+  assert.deepEqual(gameDb.TROPHY_TABLE.shark_trap.slice(0, 7), [25, 40, 60, 85, 115, 155, 205]);
 
   const player = gameDb.registerPlayer(`th7_progression_${Date.now()}`);
   const playerId = player.id;
@@ -191,11 +193,7 @@ try {
   assert.deepEqual(th7Upgrade.resources, { gold: 21000, wood: 0, ore: 8000 });
 
   const lockedTh8Upgrade = gameDb.upgradeBuilding(playerId, townHallId);
-  assert.equal(lockedTh8Upgrade.code, 'TOWN_HALL_LEVEL_NOT_LIVE');
-  assert.equal(lockedTh8Upgrade.current_town_hall_level, 7);
-  assert.equal(lockedTh8Upgrade.target_town_hall_level, 8);
-  assert.equal(lockedTh8Upgrade.live_town_hall_cap, 7);
-  assert.match(lockedTh8Upgrade.error, /Town Hall level 8 is not live yet/);
+  assert.ok(lockedTh8Upgrade.error, 'TH8 must still require completed TH7 progression and resources');
   assert.deepEqual(
     gameDb.getResources(playerId),
     { gold: 21000, wood: 0, ore: 8000 },
@@ -218,7 +216,7 @@ try {
   assert.equal(mortarUpgrade.level, 7);
   assert.equal(mortarUpgrade.max_hp, 6019);
   assert.deepEqual(mortarUpgrade.resources, { gold: 51000, wood: 11000, ore: 31000 });
-  assert.match(gameDb.upgradeBuilding(playerId, mortarId).error, /Already at max level/);
+  assert.match(gameDb.upgradeBuilding(playerId, mortarId).error, /Town Hall to level 8/);
 
   for (const storageId of storageIds) {
     const capBeforeUpgrade = gameDb.getResourceCaps(playerId);
@@ -316,7 +314,7 @@ try {
   ).run(cannonPlayerId);
   assert.match(
     gameDb.upgradeBuilding(cannonPlayerId, firstCannon.id).error,
-    /Already at max level/,
+    /Town Hall to level 8/,
   );
 
   const staleMineId = insertBuilding(cannonPlayerId, 'mine', 7, 200, 200);
@@ -341,16 +339,16 @@ try {
   );
   assert.match(
     routesSource,
-    /townHallLevel\s*=\s*Math\.max\(1,\s*Math\.min\(7,/,
-    'admin max-village Town Hall clamp must reach TH7',
+    /townHallLevel\s*=\s*Math\.max\(1,\s*Math\.min\(db\.LIVE_TOWN_HALL_CAP \|\| 9,/,
+    'admin max-village Town Hall clamp must use the live cap',
   );
   assert.match(
     routesSource,
-    /port:\s*\[1,\s*2,\s*3,\s*3,\s*3,\s*3,\s*3\]/,
+    /port:\s*\[1,\s*2,\s*3,\s*3,\s*3,\s*3,\s*3,\s*3,\s*3\]/,
     'admin max-village must preserve Port L3 at TH7',
   );
   const buildingSystemSource = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'building_system.gd'), 'utf8');
-  assert.match(buildingSystemSource, /const LIVE_TOWN_HALL_CAP:\s*int\s*=\s*7/);
+  assert.match(buildingSystemSource, /const LIVE_TOWN_HALL_CAP:\s*int\s*=\s*9/);
   assert.match(
     buildingSystemSource,
     /bid == "town_hall" and level >= LIVE_TOWN_HALL_CAP/,

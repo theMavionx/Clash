@@ -1,8 +1,9 @@
-# Air Bomb provisional balance audit
+# Air Bomb production balance audit
 
-> Status: CONCERNS - implementation curve is internally consistent, but live
-> TH9 armies/economy do not exist yet, so this is not a production balance lock.
-> Updated: 2026-08-01
+> Status: PASS WITH MONITORING - TH9 economy, armies and bot layouts are live,
+> and the deterministic TH8-TH9 matrix lands at 55.1% for TH9 with zero invalid
+> replays. Monitor real clumped-air and multi-NFT cohorts.
+> Updated: 2026-08-02
 
 ## Invariants checked
 
@@ -47,20 +48,19 @@ Bombs can punish a clump materially, but one building cannot quickly erase a
 same-tier tank flyer. The 0.35-second vertical lift adds readable reaction time
 without changing the fixed 4.5-second cadence.
 
-## Risks and launch gate
+## Risks and monitoring
 
-- There are no authoritative TH9 troop levels, storage capacities, bot layouts
-  or target win-rate bands yet. L8-L9 costs and combat values are provisional.
+- Authoritative TH9 troop levels, storage capacity and 900 bot layouts now
+  exist. L8-L9 costs fit the legal resource ceiling.
 - Splash value depends strongly on real deployment spacing; isolated-fixture
   DPS cannot establish the intended win-rate effect.
 - Projectile-centered retargeting can select a replacement outside the original
   building-centered coverage circle when the bomb is already near its edge.
   Lifetime and one-impact limits bound that extension, but staggered-air live
   telemetry should be compared before and after this behavior ships at TH9.
-- Before live TH9 promotion, run split, staggered, clumped swarm, tank-air,
-  mixed, Freeze and ground-only matrices against two Air Bombs and all other
-  legal TH9 defenses. Lock values only after those runs meet the future TH9
-  win-rate target.
+- Continue comparing split, staggered, clumped swarm, tank-air, mixed, Freeze
+  and ground-only telemetry after launch; the deterministic matrix already
+  exercises the legal TH9 defense inventory and all 100 spawn mechanics.
 
-Current verdict: safe to keep data-ready behind the unreachable TH9 gate; not
-approved for widening the live Town Hall cap.
+Current verdict: approved as part of the playable TH9 progression. TH9 reached
+55.1% attacker wins over 675 same-tier simulations with zero invalid replays.

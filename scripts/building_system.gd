@@ -24,9 +24,9 @@ const PLAYER_SHIP_LEVELS: Dictionary = {
 	5: {"capacity": 45, "energy": 12, "cannon_damage": 1800, "cannon_base_cost": 3, "town_hall": 5, "cost": {"gold": 6500, "wood": 12800, "ore": 11000}},
 	6: {"capacity": 45, "energy": 14, "cannon_damage": 2250, "cannon_base_cost": 3, "town_hall": 6, "medkit_unlocked": true, "unlocks": ["Healing Field"], "cost": {"gold": 9000, "wood": 18000, "ore": 15500}},
 	7: {"capacity": 45, "energy": 16, "cannon_damage": 2800, "cannon_base_cost": 4, "town_hall": 7, "medkit_unlocked": true, "freeze_unlocked": true, "unlocks": ["Freeze Orb"], "cost": {"gold": 12000, "wood": 24000, "ore": 21000}},
-	8: {"capacity": 45, "energy": 18, "cannon_damage": 3400, "cannon_base_cost": 4, "town_hall": 7, "medkit_unlocked": true, "freeze_unlocked": true, "rage_unlocked": true, "unlocks": ["Rage Field"], "cost": {"gold": 16000, "wood": 32000, "ore": 28000}},
-	9: {"capacity": 45, "energy": 20, "cannon_damage": 4100, "cannon_base_cost": 5, "town_hall": 7, "medkit_unlocked": true, "freeze_unlocked": true, "rage_unlocked": true, "tactical_reserve_unlocked": true, "unlocks": ["Tactical Reserve (+2 energy)"], "cost": {"gold": 21000, "wood": 42000, "ore": 36000}},
-	10: {"capacity": 45, "energy": 22, "cannon_damage": 4900, "cannon_base_cost": 5, "town_hall": 7, "medkit_unlocked": true, "freeze_unlocked": true, "rage_unlocked": true, "tactical_reserve_unlocked": true, "skeleton_barrel_unlocked": true, "unlocks": ["Skeleton Barrel"], "cost": {"gold": 27000, "wood": 54000, "ore": 46000}},
+	8: {"capacity": 45, "energy": 18, "cannon_damage": 3400, "cannon_base_cost": 4, "town_hall": 8, "medkit_unlocked": true, "freeze_unlocked": true, "rage_unlocked": true, "unlocks": ["Rage Field"], "cost": {"gold": 16000, "wood": 32000, "ore": 28000}},
+	9: {"capacity": 45, "energy": 20, "cannon_damage": 4100, "cannon_base_cost": 5, "town_hall": 9, "medkit_unlocked": true, "freeze_unlocked": true, "rage_unlocked": true, "tactical_reserve_unlocked": true, "unlocks": ["Tactical Reserve (+2 energy)"], "cost": {"gold": 21000, "wood": 42000, "ore": 36000}},
+	10: {"capacity": 45, "energy": 22, "cannon_damage": 4900, "cannon_base_cost": 5, "town_hall": 10, "medkit_unlocked": true, "freeze_unlocked": true, "rage_unlocked": true, "tactical_reserve_unlocked": true, "skeleton_barrel_unlocked": true, "unlocks": ["Skeleton Barrel"], "cost": {"gold": 27000, "wood": 54000, "ore": 46000}},
 }
 
 func _main_ship_energy_for_level(level: int) -> int:
@@ -79,12 +79,12 @@ var building_defs: Dictionary = {
 		"scene": "res://Model/Mine/1.glb",
 		"model_scale": 0.25,
 		"model_rotation_y": 270.0,
-		"hp_levels": [1200, 2200, 3800, 6000, 7712, 10302, 12798],
+		"hp_levels": [1200, 2200, 3800, 6000, 7712, 10302, 12798, 14900, 17200],
 		"cost": {"gold": 180, "wood": 500},
 		"upgrade_base_cost": {"gold": 220, "wood": 550},
 		"produces": "ore",
-		"produce_rate": [18, 33, 54, 81, 120, 170, 225],    # per minute per level
-		"produce_max": [200, 400, 800, 1600, 3000, 5000, 7500],  # max stored before collection
+		"produce_rate": [18, 33, 54, 81, 120, 170, 225, 295, 375],    # per minute per level
+		"produce_max": [200, 400, 800, 1600, 3000, 5000, 7500, 10500, 14000],  # max stored before collection
 	},
 	"barn": {
 		"name": "Barn",
@@ -92,9 +92,9 @@ var building_defs: Dictionary = {
 		"color": Color(0.6, 0.25, 0.2, 0.5),
 		"height": 0.4,
 		"scene": "res://Model/Barn/1.glb",
-		"scenes": ["res://Model/Barn/1.glb", "res://Model/Barn/2.glb", "res://Model/Barn/3.glb", "res://Model/Barn/3.glb", "res://Model/Barn/3.glb", "res://Model/Barn/3.glb", "res://Model/Barn/3.glb"],
+		"scenes": ["res://Model/Barn/1.glb", "res://Model/Barn/2.glb", "res://Model/Barn/3.glb", "res://Model/Barn/3.glb", "res://Model/Barn/3.glb", "res://Model/Barn/3.glb", "res://Model/Barn/3.glb", "res://Model/Barn/3.glb", "res://Model/Barn/3.glb"],
 		"model_scale": 0.25,
-		"hp_levels": [2000, 3500, 6000, 9500, 12132, 16094, 19908],
+		"hp_levels": [2000, 3500, 6000, 9500, 12132, 16094, 19908, 23200, 26800],
 		"cost": {"gold": 350, "wood": 900, "ore": 750},
 		"upgrade_base_cost": {"gold": 450, "wood": 1050, "ore": 900},
 		"max_count": 1,
@@ -121,12 +121,12 @@ var building_defs: Dictionary = {
 		"height": 0.35,
 		"scene": "res://Model/Sawmill/1.glb",
 		"model_scale": 0.1,
-		"hp_levels": [1200, 2200, 3800, 6000, 7712, 10302, 12798],
+		"hp_levels": [1200, 2200, 3800, 6000, 7712, 10302, 12798, 14900, 17200],
 		"cost": {"gold": 180, "ore": 500},
 		"upgrade_base_cost": {"gold": 220, "ore": 550},
 		"produces": "wood",
-		"produce_rate": [24, 45, 72, 108, 160, 230, 300],
-		"produce_max": [250, 500, 1000, 2000, 3750, 6000, 9000],
+		"produce_rate": [24, 45, 72, 108, 160, 230, 300, 390, 500],
+		"produce_max": [250, 500, 1000, 2000, 3750, 6000, 9000, 12000, 16000],
 	},
 	"town_hall": {
 		"name": "Town Hall",
@@ -135,13 +135,13 @@ var building_defs: Dictionary = {
 		"color": Color(0.7, 0.55, 0.2, 0.5),
 		"height": 0.5,
 		"scene": "res://Model/Town_Hall/Town Hall Level 1.glb",
-		"scenes": ["res://Model/Town_Hall/Town Hall Level 1.glb", "res://Model/Town_Hall/Town Hall Level 2.glb", "res://Model/Town_Hall/Town Hall Level 3.glb", "res://Model/Town_Hall/Town Hall Level 4.glb", "res://Model/Town_Hall/Town Hall Level 5.glb", "res://Model/Town_Hall/Town Hall Level 6.glb", "res://Model/Town_Hall/Town Hall Level 7.glb"],
+		"scenes": ["res://Model/Town_Hall/Town Hall Level 1.glb", "res://Model/Town_Hall/Town Hall Level 2.glb", "res://Model/Town_Hall/Town Hall Level 3.glb", "res://Model/Town_Hall/Town Hall Level 4.glb", "res://Model/Town_Hall/Town Hall Level 5.glb", "res://Model/Town_Hall/Town Hall Level 6.glb", "res://Model/Town_Hall/Town Hall Level 7.glb", "res://Model/Town_Hall/Town Hall Level 8.glb", "res://Model/Town_Hall/Town Hall Level 9.glb"],
 		"model_scale": 0.05,
-		"hp_levels": [3500, 8000, 16000, 24000, 30848, 41200, 51193],
+		"hp_levels": [3500, 8000, 16000, 24000, 30848, 41200, 51193, 63000, 76000],
 		"is_main": true,
 		"max_count": 1,
 		"cost": {},
-		"upgrade_cost": {2: {"gold": 1200, "wood": 4200, "ore": 3500}, 3: {"gold": 4000, "wood": 8500, "ore": 7500}, 4: {"gold": 12000, "wood": 22000, "ore": 19000}, 5: {"gold": 30000, "wood": 54000, "ore": 48000}, 6: {"gold": 55000, "wood": 75000, "ore": 68000}, 7: {"gold": 85000, "wood": 106000, "ore": 98000}},
+		"upgrade_cost": {2: {"gold": 1200, "wood": 4200, "ore": 3500}, 3: {"gold": 4000, "wood": 8500, "ore": 7500}, 4: {"gold": 12000, "wood": 22000, "ore": 19000}, 5: {"gold": 30000, "wood": 54000, "ore": 48000}, 6: {"gold": 55000, "wood": 75000, "ore": 68000}, 7: {"gold": 85000, "wood": 106000, "ore": 98000}, 8: {"gold": 120000, "wood": 140000, "ore": 130000}, 9: {"gold": 175000, "wood": 220000, "ore": 200000}},
 	},
 	"turret": {
 		"name": "Turret",
@@ -151,8 +151,8 @@ var building_defs: Dictionary = {
 		"height": 0.45,
 		"scene": "res://Model/Turret/scene.gltf",
 		"model_scale": 0.25,
-		"model_scales": [0.2, 0.225, 0.25, 0.275, 0.3, 0.3, 0.3],
-		"hp_levels": [900, 1600, 2800, 4500, 5558, 7137, 8532],
+		"model_scales": [0.2, 0.225, 0.25, 0.275, 0.3, 0.3, 0.3, 0.3, 0.3],
+		"hp_levels": [900, 1600, 2800, 4500, 5558, 7137, 8532, 9900, 11400],
 		"cost": {"gold": 800, "wood": 2400, "ore": 2000},
 		"upgrade_base_cost": {"gold": 750, "wood": 2500, "ore": 2100},
 		"altar_ward_bonus": true,
@@ -173,12 +173,14 @@ var building_defs: Dictionary = {
 			"res://Model/cannons/level_05/cannon_level_05.tscn",
 			"res://Model/cannons/level_06/cannon_level_06.tscn",
 			"res://Model/cannons/level_07/cannon_level_07.tscn",
+			"res://Model/cannons/level_07/cannon_level_07.tscn",
+			"res://Model/cannons/level_07/cannon_level_07.tscn",
 		],
 		"model_scale": 0.125,
-		"model_scales": [0.125, 0.12, 0.125, 0.105, 0.105, 0.10, 0.10],
+		"model_scales": [0.125, 0.12, 0.125, 0.105, 0.105, 0.10, 0.10, 0.10, 0.10],
 		"model_rotation_y": 270.0,
-		"hp_levels": [3200, 3900, 4700, 5600, 6148, 6742, 7141],
-		"damage_levels": [40, 109, 259, 431, 510, 577, 620],
+		"hp_levels": [3200, 3900, 4700, 5600, 6148, 6742, 7141, 8200, 9400],
+		"damage_levels": [40, 109, 259, 431, 510, 577, 620, 690, 760],
 		"cost": {"gold": 16000, "wood": 36000, "ore": 30000},
 		"upgrade_cost": {
 			2: {"gold": 24000, "wood": 52000, "ore": 44000},
@@ -187,6 +189,8 @@ var building_defs: Dictionary = {
 			5: {"gold": 65000, "wood": 110000, "ore": 92000},
 			6: {"gold": 83000, "wood": 128000, "ore": 108000},
 			7: {"gold": 105000, "wood": 142000, "ore": 125000},
+			8: {"gold": 130000, "wood": 175000, "ore": 150000},
+			9: {"gold": 155000, "wood": 210000, "ore": 185000},
 		},
 		"max_count": 2,
 		"altar_ward_bonus": true,
@@ -198,6 +202,8 @@ var building_defs: Dictionary = {
 			"Cannon4Base",
 			"Cannon5Base",
 			"Cannon6Base",
+			"Cannon7Base",
+			"Cannon7Base",
 			"Cannon7Base",
 		],
 	},
@@ -225,10 +231,10 @@ var building_defs: Dictionary = {
 		"color": Color(0.5, 0.4, 0.3, 0.5),
 		"height": 0.35,
 		"scene": "res://Model/Storage/Storage shed_1.glb",
-		"scenes": ["res://Model/Storage/Storage shed_1.glb", "res://Model/Storage/Storage House_2.glb", "res://Model/Storage/Business Building_3.glb", "res://Model/Storage/Business Building_3.glb", "res://Model/Storage/Business Building_3.glb", "res://Model/Storage/Business Building_3.glb", "res://Model/Storage/Business Building_3.glb"],
+		"scenes": ["res://Model/Storage/Storage shed_1.glb", "res://Model/Storage/Storage House_2.glb", "res://Model/Storage/Business Building_3.glb", "res://Model/Storage/Business Building_3.glb", "res://Model/Storage/Business Building_3.glb", "res://Model/Storage/Business Building_3.glb", "res://Model/Storage/Business Building_3.glb", "res://Model/Storage/Business Building_3.glb", "res://Model/Storage/Business Building_3.glb"],
 		"model_scale": 0.3,
 		"model_offset": Vector3(0, 0, -0.04),
-		"hp_levels": [1400, 2500, 4200, 6500, 8136, 10575, 12798],
+		"hp_levels": [1400, 2500, 4200, 6500, 8136, 10575, 12798, 14900, 17200],
 		"cost": {"gold": 400, "wood": 1400},
 		"upgrade_base_cost": {"gold": 500, "wood": 1500},
 	},
@@ -238,11 +244,11 @@ var building_defs: Dictionary = {
 		"color": Color(0.5, 0.45, 0.55, 0.5),
 		"height": 0.45,
 		"scene": "res://Model/Archer_towers/tower_1.glb",
-		"scenes": ["res://Model/Archer_towers/tower_1.glb", "res://Model/Archer_towers/towerplus_2.fbx", "res://Model/Archer_towers/3,4,5.glb", "res://Model/Archer_towers/3,4,5.glb", "res://Model/Archer_towers/3,4,5.glb", "res://Model/Archer_towers/3,4,5.glb", "res://Model/Archer_towers/3,4,5.glb"],
+		"scenes": ["res://Model/Archer_towers/tower_1.glb", "res://Model/Archer_towers/towerplus_2.fbx", "res://Model/Archer_towers/3,4,5.glb", "res://Model/Archer_towers/3,4,5.glb", "res://Model/Archer_towers/3,4,5.glb", "res://Model/Archer_towers/3,4,5.glb", "res://Model/Archer_towers/3,4,5.glb", "res://Model/Archer_towers/3,4,5.glb", "res://Model/Archer_towers/3,4,5.glb"],
 		"model_scale": 0.03,
 		"model_offset": Vector3(0.11, 0, -0.02),
-		"model_offsets": [Vector3(0.11, 0, -0.02), Vector3(0.11, 0, -0.02), Vector3(0, 0, 0), Vector3(0, 0, 0), Vector3(0, 0, 0), Vector3(0, 0, 0), Vector3(0, 0, 0)],
-		"hp_levels": [800, 1500, 2500, 3800, 4703, 6051, 7252],
+		"model_offsets": [Vector3(0.11, 0, -0.02), Vector3(0.11, 0, -0.02), Vector3(0, 0, 0), Vector3(0, 0, 0), Vector3(0, 0, 0), Vector3(0, 0, 0), Vector3(0, 0, 0), Vector3(0, 0, 0), Vector3(0, 0, 0)],
+		"hp_levels": [800, 1500, 2500, 3800, 4703, 6051, 7252, 8400, 9700],
 		"cost": {"gold": 500, "wood": 1600},
 		"upgrade_base_cost": {"gold": 550, "wood": 1700},
 		"altar_ward_bonus": true,
@@ -262,10 +268,10 @@ var building_defs: Dictionary = {
 		"color": Color(0.55, 0.3, 0.7, 0.5),  # purple magic theme
 		"height": 0.5,
 		"scene": "res://Model/MageTower/1.fbx",
-		"scenes": ["res://Model/MageTower/1.fbx", "res://Model/MageTower/2.fbx", "res://Model/MageTower/3.fbx", "res://Model/MageTower/3.fbx", "res://Model/MageTower/3.fbx", "res://Model/MageTower/3.fbx", "res://Model/MageTower/3.fbx"],
+		"scenes": ["res://Model/MageTower/1.fbx", "res://Model/MageTower/2.fbx", "res://Model/MageTower/3.fbx", "res://Model/MageTower/3.fbx", "res://Model/MageTower/3.fbx", "res://Model/MageTower/3.fbx", "res://Model/MageTower/3.fbx", "res://Model/MageTower/3.fbx", "res://Model/MageTower/3.fbx"],
 		"model_scale": 0.039,  # TARBO FBX scale (0.02 base +50%, then +30% size)
 		"model_rotation_y": 0.0,
-		"hp_levels": [700, 1200, 2000, 3100, 3837, 4939, 5901],
+		"hp_levels": [700, 1200, 2000, 3100, 3837, 4939, 5901, 6850, 7900],
 		"cost": {"gold": 2800, "ore": 5200},
 		"upgrade_base_cost": {"gold": 1600, "ore": 3000},
 		"max_count": 2,
@@ -294,15 +300,19 @@ var building_defs: Dictionary = {
 			"res://Model/Mortar/mortar_lvl4.fbx",
 			"res://Model/Mortar/mortar_lvl4.fbx",
 			"res://Model/Mortar/mortar_lvl4.fbx",
+			"res://Model/Mortar/mortar_lvl4.fbx",
+			"res://Model/Mortar/mortar_lvl4.fbx",
+			"res://Model/Mortar/mortar_lvl4.fbx",
+			"res://Model/Mortar/mortar_lvl4.fbx",
 		],
 		"model_scale": 0.032,
 		"model_rotation_y": 0.0,
-		"hp_levels": [1700, 2400, 3200, 4100, 4580, 5324, 6019],
-		"damage_levels": [95, 108, 158, 227, 233, 240, 294],
-		"range_levels": [1.433, 1.600, 1.767, 1.933, 2.100, 2.250, 2.400],
-		"min_range_levels": [0.70, 0.75, 0.80, 0.82, 0.82, 0.80, 0.78],
-		"splash_radius_levels": [0.30, 0.34, 0.38, 0.42, 0.45, 0.49, 0.52],
-		"reload_levels": [2.40, 2.40, 2.40, 2.40, 2.40, 2.40, 2.40],
+		"hp_levels": [1700, 2400, 3200, 4100, 4580, 5324, 6019, 6900, 7900],
+		"damage_levels": [95, 108, 158, 227, 233, 240, 294, 330, 370],
+		"range_levels": [1.433, 1.600, 1.767, 1.933, 2.100, 2.250, 2.400, 2.500, 2.600],
+		"min_range_levels": [0.70, 0.75, 0.80, 0.82, 0.82, 0.80, 0.78, 0.78, 0.78],
+		"splash_radius_levels": [0.30, 0.34, 0.38, 0.42, 0.45, 0.49, 0.52, 0.54, 0.56],
+		"reload_levels": [2.40, 2.40, 2.40, 2.40, 2.40, 2.40, 2.40, 2.40, 2.40],
 		"cost": {"gold": 8000, "wood": 12000, "ore": 10000},
 		"upgrade_cost": {
 			2: {"gold": 14000, "wood": 22000, "ore": 18000},
@@ -311,6 +321,8 @@ var building_defs: Dictionary = {
 			5: {"gold": 52000, "wood": 72000, "ore": 62000},
 			6: {"gold": 68000, "wood": 96000, "ore": 82000},
 			7: {"gold": 92000, "wood": 132000, "ore": 112000},
+			8: {"gold": 118000, "wood": 165000, "ore": 140000},
+			9: {"gold": 145000, "wood": 205000, "ore": 175000},
 		},
 		"max_count": 2,
 		"altar_ward_bonus": true,
@@ -325,6 +337,8 @@ var building_defs: Dictionary = {
 			"res://Model/Mortar/mortar_lvl4_construction.fbx",
 			"res://Model/Mortar/mortar_lvl4_construction.fbx",
 			"res://Model/Mortar/mortar_lvl4_construction.fbx",
+			"res://Model/Mortar/mortar_lvl4_construction.fbx",
+			"res://Model/Mortar/mortar_lvl4_construction.fbx",
 		],
 		"projectile_scenes": [
 			"res://Model/Mortar/mortar_lvl1_projectile.fbx",
@@ -334,10 +348,12 @@ var building_defs: Dictionary = {
 			"res://Model/Mortar/mortar_lvl4_projectile.fbx",
 			"res://Model/Mortar/mortar_lvl4_projectile.fbx",
 			"res://Model/Mortar/mortar_lvl4_projectile.fbx",
+			"res://Model/Mortar/mortar_lvl4_projectile.fbx",
+			"res://Model/Mortar/mortar_lvl4_projectile.fbx",
 		],
 		"test_damage": 294,
-		"test_damage_levels": [95, 108, 158, 227, 233, 240, 294],
-		"test_range": 2.40,
+		"test_damage_levels": [95, 108, 158, 227, 233, 240, 294, 330, 370],
+		"test_range": 2.60,
 		"test_reload_sec": 2.40,
 	},
 	"harpoon": {
@@ -430,7 +446,7 @@ var building_defs: Dictionary = {
 		"reload_levels": [1.50, 1.50, 1.50, 1.50, 1.50, 1.50, 1.50, 1.50, 1.50, 1.50],
 		"cone_degrees": 50.0,
 		"damage_ticks_per_stream": 3,
-		"stream_duration_sec": 0.75,
+		"stream_duration_sec": 1.0,
 		"prime_duration_sec": 0.30,
 		"target_type": "ground",
 		"cost": {"gold": 18000, "wood": 40000, "ore": 34000},
@@ -458,8 +474,8 @@ var building_defs: Dictionary = {
 		"model_scale": 0.055,
 		"model_offset": Vector3(0, -0.05, 0),
 		"model_rotation_y": 0.0,
-		"hp_levels": [1, 1, 1, 1, 1, 1, 1],
-		"damage_levels": [500, 750, 1050, 1450, 2000, 2400, 2900],
+		"hp_levels": [1, 1, 1, 1, 1, 1, 1, 1, 1],
+		"damage_levels": [500, 750, 1050, 1450, 2000, 2400, 2900, 3400, 3900],
 		"cost": {"gold": 1800, "wood": 4800, "ore": 4000},
 		"upgrade_base_cost": {"gold": 1000, "wood": 2600, "ore": 2200},
 		"max_count": 3,
@@ -473,10 +489,10 @@ var building_defs: Dictionary = {
 		"color": Color(0.4, 0.4, 0.45, 0.5),
 		"height": 0.3,
 		"scene": "res://Model/Tombstone/GLB format/1.glb",
-		"scenes": ["res://Model/Tombstone/GLB format/1.glb", "res://Model/Tombstone/GLB format/2.glb", "res://Model/Tombstone/GLB format/3.glb", "res://Model/Tombstone/GLB format/4.glb", "res://Model/Tombstone/GLB format/4.glb", "res://Model/Tombstone/GLB format/4.glb"],
+		"scenes": ["res://Model/Tombstone/GLB format/1.glb", "res://Model/Tombstone/GLB format/2.glb", "res://Model/Tombstone/GLB format/3.glb", "res://Model/Tombstone/GLB format/4.glb", "res://Model/Tombstone/GLB format/4.glb", "res://Model/Tombstone/GLB format/4.glb", "res://Model/Tombstone/GLB format/4.glb", "res://Model/Tombstone/GLB format/4.glb"],
 		"model_scale": 0.3,
-		"model_scales": [0.3, 0.3, 0.3, 0.1, 0.1, 0.1],
-		"hp_levels": [1000, 1500, 2000, 2700, 2956, 3418],
+		"model_scales": [0.3, 0.3, 0.3, 0.1, 0.1, 0.1, 0.1, 0.1],
+		"hp_levels": [1000, 1500, 2000, 2700, 2956, 3418, 4200, 5000],
 		"cost": {"gold": 600, "ore": 2200},
 		"upgrade_base_cost": {"gold": 650, "ore": 2400},
 		"altar_ward_bonus": true,
@@ -511,6 +527,8 @@ const BUILDING_UPGRADE_COST_MULTIPLIERS: Dictionary = {
 	5: 15,
 	6: 27,
 	7: 45,
+	8: 70,
+	9: 100,
 }
 
 # ── Resources ─────────────────────────────────────────────────
@@ -537,6 +555,8 @@ const TH_BASE_CAPACITY: Dictionary = {
 	5: {"gold": 18000, "wood": 18000, "ore": 18000},
 	6: {"gold": 25000, "wood": 25000, "ore": 25000},
 	7: {"gold": 35000, "wood": 35000, "ore": 35000},
+	8: {"gold": 50000, "wood": 50000, "ore": 50000},
+	9: {"gold": 55000, "wood": 55000, "ore": 55000},
 }
 const STORAGE_CAPACITY: Dictionary = {
 	1: {"gold": 2000, "wood": 2000, "ore": 2000},
@@ -546,6 +566,8 @@ const STORAGE_CAPACITY: Dictionary = {
 	5: {"gold": 19000, "wood": 19000, "ore": 19000},
 	6: {"gold": 27000, "wood": 27000, "ore": 27000},
 	7: {"gold": 36000, "wood": 36000, "ore": 36000},
+	8: {"gold": 45000, "wood": 45000, "ore": 45000},
+	9: {"gold": 55000, "wood": 55000, "ore": 55000},
 }
 
 func _get_resource_caps() -> Dictionary:
@@ -575,9 +597,8 @@ func _send_resource_caps() -> void:
 		bridge.send_to_react("resource_caps", caps)
 
 # ── Town Hall Progression (mirrors server/db.js) ─────────────
-## TH8+ content can stay registered for development and future fixtures, but
-## normal player progression remains capped here until the live rollout.
-const LIVE_TOWN_HALL_CAP: int = 7
+## TH8 and TH9 are playable. TH10 assets remain data-ready behind this cap.
+const LIVE_TOWN_HALL_CAP: int = 9
 
 const TH_UNLOCK: Dictionary = {
 	"storage": 2,
@@ -595,42 +616,42 @@ const TH_UNLOCK: Dictionary = {
 # Max count per building per TH level. Individual tables may include future
 # Town Hall gates beyond the current playable TH7 and clamp to their last entry.
 const TH_MAX_COUNT: Dictionary = {
-	"mine": [1, 2, 3, 3, 4, 4, 4],
-	"sawmill": [1, 2, 3, 3, 4, 4, 4],
-	"barn": [1, 1, 1, 1, 1, 1, 1],
-	"altar": [1, 1, 1, 1, 1, 1, 1],
-	"archer_tower": [1, 2, 3, 3, 3, 3, 3],
-	"tombstone": [0, 1, 3, 3, 3, 3, 3],
-	"turret": [0, 0, 3, 3, 3, 3, 3],
-	"shark_trap": [0, 0, 1, 1, 2, 3, 3],
-	"storage": [0, 1, 2, 3, 3, 3, 3],
-	"mage_tower": [0, 0, 0, 2, 2, 2, 2],
-	"mortar": [0, 0, 0, 0, 1, 2, 2],
-	"harpoon": [0, 0, 0, 0, 0, 1, 1, 2], # one at TH6-TH7, second at TH8
-	"cannon": [0, 0, 0, 0, 0, 0, 2],
+	"mine": [1, 2, 3, 3, 4, 4, 4, 4, 4],
+	"sawmill": [1, 2, 3, 3, 4, 4, 4, 4, 4],
+	"barn": [1, 1, 1, 1, 1, 1, 1, 1, 1],
+	"altar": [1, 1, 1, 1, 1, 1, 1, 1, 1],
+	"archer_tower": [1, 2, 3, 3, 3, 3, 3, 3, 3],
+	"tombstone": [0, 1, 3, 3, 3, 3, 3, 3, 3],
+	"turret": [0, 0, 3, 3, 3, 3, 3, 3, 3],
+	"shark_trap": [0, 0, 1, 1, 2, 3, 3, 4, 5],
+	"storage": [0, 1, 2, 3, 3, 3, 3, 4, 4],
+	"mage_tower": [0, 0, 0, 2, 2, 2, 2, 3, 3],
+	"mortar": [0, 0, 0, 0, 1, 2, 2, 2, 2],
+	"harpoon": [0, 0, 0, 0, 0, 1, 1, 2, 2], # one at TH6-TH7, second at TH8
+	"cannon": [0, 0, 0, 0, 0, 0, 2, 3, 3],
 	"air_bomb": [0, 0, 0, 0, 0, 0, 0, 0, 2],
 	"flamethrower": [0, 0, 0, 0, 0, 0, 0, 1, 1, 2],
-	"town_hall": [1, 1, 1, 1, 1, 1, 1],
+	"town_hall": [1, 1, 1, 1, 1, 1, 1, 1, 1],
 }
 
 const TH_MAX_LEVEL: Dictionary = {
-	"town_hall": [1, 2, 3, 4, 5, 6, 7],
-	"mine": [1, 2, 3, 4, 5, 6, 7],
-	"sawmill": [1, 2, 3, 4, 5, 6, 7],
-	"barn": [1, 2, 3, 4, 5, 6, 7],
-	"storage": [1, 2, 3, 4, 5, 6, 7],
-	"archer_tower": [1, 2, 3, 4, 5, 6, 7],
-	"turret": [1, 2, 3, 4, 5, 6, 7],
-	"mage_tower": [1, 2, 3, 4, 5, 6, 7],
-	"tombstone": [1, 2, 3, 4, 4, 5, 6],
-	"mortar": [1, 1, 1, 1, 5, 6, 7],
-	"harpoon": [1, 1, 1, 1, 1, 6, 7, 8],
-	"shark_trap": [1, 2, 3, 4, 5, 6, 7],
-	"cannon": [1, 1, 1, 1, 1, 1, 7],
+	"town_hall": [1, 2, 3, 4, 5, 6, 7, 8, 9],
+	"mine": [1, 2, 3, 4, 5, 6, 7, 8, 9],
+	"sawmill": [1, 2, 3, 4, 5, 6, 7, 8, 9],
+	"barn": [1, 2, 3, 4, 5, 6, 7, 8, 9],
+	"storage": [1, 2, 3, 4, 5, 6, 7, 8, 9],
+	"archer_tower": [1, 2, 3, 4, 5, 6, 7, 8, 9],
+	"turret": [1, 2, 3, 4, 5, 6, 7, 8, 9],
+	"mage_tower": [1, 2, 3, 4, 5, 6, 7, 8, 9],
+	"tombstone": [1, 2, 3, 4, 4, 5, 6, 7, 8],
+	"mortar": [1, 1, 1, 1, 5, 6, 7, 8, 9],
+	"harpoon": [1, 1, 1, 1, 1, 6, 7, 8, 8],
+	"shark_trap": [1, 2, 3, 4, 5, 6, 7, 8, 9],
+	"cannon": [1, 1, 1, 1, 1, 1, 7, 8, 9],
 	"air_bomb": [1, 1, 1, 1, 1, 1, 1, 1, 9],
 	"flamethrower": [1, 1, 1, 1, 1, 1, 1, 8, 9, 10],
-	"port": [1, 2, 3, 3, 3, 3, 3],
-	"altar": [1, 1, 1, 1, 1, 1, 1],
+	"port": [1, 2, 3, 3, 3, 3, 3, 3, 3],
+	"altar": [1, 1, 1, 1, 1, 1, 1, 1, 1],
 }
 
 func _get_building_max_level_for_th(building_id: String, th_level: int) -> int:
@@ -1041,6 +1062,10 @@ var building_panel_cost: Label
 var building_panel_upgrade_btn: Button
 var building_panel_facing_btn: Button
 var building_panel_altar_skills: VBoxContainer
+var _building_panel_margin: MarginContainer
+var _building_panel_vbox: VBoxContainer
+var _building_panel_action_grid: GridContainer
+var _external_bottom_ui_reserve := 0.0
 
 # Lv3 costs stay under the TH5 75K storage cap; see design/gdd/economy-balance.md section 5.3.
 const ALTAR_SKILL_DEFS: Dictionary = {
@@ -1230,7 +1255,7 @@ var troop_defs: Dictionary = {
 		"script": "res://scripts/knight.gd",
 		"slot_cost": 1,
 		"buy_cost": 100,
-		"max_level": 7,
+		"max_level": 9,
 		"costs": {
 			1: {"gold": 150, "ore": 125},
 			2: {"gold": 300, "ore": 250},
@@ -1238,6 +1263,8 @@ var troop_defs: Dictionary = {
 			4: {"gold": 1200, "ore": 1000},
 			5: {"gold": 2200, "ore": 1800},
 			6: {"gold": 3800, "ore": 3200},
+			7: {"gold": 6200, "ore": 5200},
+			8: {"gold": 9500, "ore": 8000},
 		}
 	},
 	"Mage": {
@@ -1247,7 +1274,7 @@ var troop_defs: Dictionary = {
 		"min_town_hall_level": 3,
 		"slot_cost": 6,
 		"buy_cost": 600,
-		"max_level": 7,
+		"max_level": 9,
 		"costs": {
 			1: {"gold": 250, "ore": 250},
 			2: {"gold": 500, "ore": 500},
@@ -1255,6 +1282,8 @@ var troop_defs: Dictionary = {
 			4: {"gold": 2000, "ore": 2000},
 			5: {"gold": 3600, "ore": 3600},
 			6: {"gold": 6000, "ore": 6000},
+			7: {"gold": 9500, "ore": 9500},
+			8: {"gold": 14500, "ore": 14500},
 		}
 	},
 	"Archer": {
@@ -1263,7 +1292,7 @@ var troop_defs: Dictionary = {
 		"script": "res://scripts/archer.gd",
 		"slot_cost": 1,
 		"buy_cost": 100,
-		"max_level": 7,
+		"max_level": 9,
 		"costs": {
 			1: {"gold": 175, "wood": 175},
 			2: {"gold": 350, "wood": 350},
@@ -1271,6 +1300,8 @@ var troop_defs: Dictionary = {
 			4: {"gold": 1400, "wood": 1400},
 			5: {"gold": 2600, "wood": 2600},
 			6: {"gold": 4400, "wood": 4400},
+			7: {"gold": 7000, "wood": 7000},
+			8: {"gold": 11000, "wood": 11000},
 		}
 	},
 	"PeaShooter": {
@@ -1280,7 +1311,7 @@ var troop_defs: Dictionary = {
 		"min_town_hall_level": 4,
 		"slot_cost": 5,
 		"buy_cost": 500,
-		"max_level": 7,
+		"max_level": 9,
 		"costs": {
 			1: {"gold": 300, "wood": 300},
 			2: {"gold": 600, "wood": 600},
@@ -1288,6 +1319,8 @@ var troop_defs: Dictionary = {
 			4: {"gold": 2400, "wood": 2400},
 			5: {"gold": 4200, "wood": 4200},
 			6: {"gold": 7000, "wood": 7000},
+			7: {"gold": 11000, "wood": 11000},
+			8: {"gold": 16500, "wood": 16500},
 		}
 	},
 	"Mimic": {
@@ -1297,7 +1330,7 @@ var troop_defs: Dictionary = {
 		"min_town_hall_level": 5,
 		"slot_cost": 8,
 		"buy_cost": 800,
-		"max_level": 7,
+		"max_level": 9,
 		"costs": {
 			1: {"gold": 175, "wood": 175},
 			2: {"gold": 350, "wood": 350},
@@ -1305,6 +1338,8 @@ var troop_defs: Dictionary = {
 			4: {"gold": 1400, "wood": 1400},
 			5: {"gold": 2600, "wood": 2600},
 			6: {"gold": 4400, "wood": 4400},
+			7: {"gold": 7000, "wood": 7000},
+			8: {"gold": 11000, "wood": 11000},
 		}
 	},
 	"Necromancer": {
@@ -1314,7 +1349,7 @@ var troop_defs: Dictionary = {
 		"min_town_hall_level": 7,
 		"slot_cost": 18,
 		"buy_cost": 1800,
-		"max_level": 7,
+		"max_level": 9,
 		"costs": {
 			1: {"gold": 250, "ore": 250},
 			2: {"gold": 500, "ore": 500},
@@ -1322,6 +1357,8 @@ var troop_defs: Dictionary = {
 			4: {"gold": 2000, "ore": 2000},
 			5: {"gold": 3600, "ore": 3600},
 			6: {"gold": 6000, "ore": 6000},
+			7: {"gold": 9500, "ore": 9500},
+			8: {"gold": 14500, "ore": 14500},
 		}
 	},
 	"Horror": {
@@ -1348,7 +1385,7 @@ var troop_defs: Dictionary = {
 		"min_town_hall_level": 6,
 		"slot_cost": 5,
 		"buy_cost": 500,
-		"max_level": 7,
+		"max_level": 9,
 		"costs": {
 			1: {"gold": 500, "ore": 500},
 			2: {"gold": 1000, "ore": 1000},
@@ -1356,6 +1393,8 @@ var troop_defs: Dictionary = {
 			4: {"gold": 4000, "ore": 4000},
 			5: {"gold": 7200, "ore": 7200},
 			6: {"gold": 12000, "ore": 12000},
+			7: {"gold": 18000, "ore": 18000},
+			8: {"gold": 28000, "ore": 28000},
 		}
 	},
 	"IceGolem": {
@@ -1365,7 +1404,7 @@ var troop_defs: Dictionary = {
 		"min_town_hall_level": 9,
 		"slot_cost": 11,
 		"buy_cost": 1100,
-		"max_level": 7,
+		"max_level": 9,
 		"costs": {
 			1: {"gold": 500, "ore": 500},
 			2: {"gold": 1000, "ore": 1000},
@@ -1373,6 +1412,8 @@ var troop_defs: Dictionary = {
 			4: {"gold": 4000, "ore": 4000},
 			5: {"gold": 7200, "ore": 7200},
 			6: {"gold": 12000, "ore": 12000},
+			7: {"gold": 18000, "ore": 18000},
+			8: {"gold": 28000, "ore": 28000},
 		}
 	},
 	"WindMage": {
@@ -1382,7 +1423,7 @@ var troop_defs: Dictionary = {
 		"min_town_hall_level": 8,
 		"slot_cost": 18,
 		"buy_cost": 1800,
-		"max_level": 7,
+		"max_level": 9,
 		"costs": {
 			1: {"gold": 250, "ore": 250},
 			2: {"gold": 500, "ore": 500},
@@ -1390,6 +1431,8 @@ var troop_defs: Dictionary = {
 			4: {"gold": 2000, "ore": 2000},
 			5: {"gold": 3600, "ore": 3600},
 			6: {"gold": 6000, "ore": 6000},
+			7: {"gold": 9500, "ore": 9500},
+			8: {"gold": 14500, "ore": 14500},
 		}
 	},
 	"DemonKing": {
@@ -1398,7 +1441,7 @@ var troop_defs: Dictionary = {
 		"script": "res://scripts/demon_king.gd",
 		"slot_cost": 6,
 		"buy_cost": 0,                 # NFT-backed; loading is free and reusable
-		"max_level": 7,
+		"max_level": 9,
 		"costs": {
 			1: {"gold": 150, "ore": 125},
 			2: {"gold": 300, "ore": 250},
@@ -1406,6 +1449,8 @@ var troop_defs: Dictionary = {
 			4: {"gold": 1200, "ore": 1000},
 			5: {"gold": 2200, "ore": 1800},
 			6: {"gold": 3800, "ore": 3200},
+			7: {"gold": 6200, "ore": 5200},
+			8: {"gold": 9500, "ore": 8000},
 		}
 	},
 	"FireDragon": {
@@ -1414,7 +1459,7 @@ var troop_defs: Dictionary = {
 		"script": "res://scripts/fire_dragon.gd",
 		"slot_cost": 11,
 		"buy_cost": 0,
-		"max_level": 7,
+		"max_level": 9,
 		"costs": {
 			1: {"gold": 250, "ore": 250},
 			2: {"gold": 500, "ore": 500},
@@ -1422,6 +1467,8 @@ var troop_defs: Dictionary = {
 			4: {"gold": 2000, "ore": 2000},
 			5: {"gold": 3600, "ore": 3600},
 			6: {"gold": 6000, "ore": 6000},
+			7: {"gold": 9500, "ore": 9500},
+			8: {"gold": 14500, "ore": 14500},
 		}
 	},
 }
@@ -1468,12 +1515,12 @@ func _register_test_only_buildings() -> void:
 		],
 		"model_scale": 0.032,
 		"model_rotation_y": 0.0,
-		"hp_levels": [1700, 2400, 3200, 4100, 4580, 5324, 6019],
-		"damage_levels": [95, 108, 158, 227, 233, 240, 294],
-		"range_levels": [1.433, 1.600, 1.767, 1.933, 2.100, 2.250, 2.400],
-		"min_range_levels": [0.70, 0.75, 0.80, 0.82, 0.82, 0.80, 0.78],
-		"splash_radius_levels": [0.30, 0.34, 0.38, 0.42, 0.45, 0.49, 0.52],
-		"reload_levels": [2.40, 2.40, 2.40, 2.40, 2.40, 2.40, 2.40],
+		"hp_levels": [1700, 2400, 3200, 4100, 4580, 5324, 6019, 6900, 7900],
+		"damage_levels": [95, 108, 158, 227, 233, 240, 294, 330, 370],
+		"range_levels": [1.433, 1.600, 1.767, 1.933, 2.100, 2.250, 2.400, 2.500, 2.600],
+		"min_range_levels": [0.70, 0.75, 0.80, 0.82, 0.82, 0.80, 0.78, 0.78, 0.78],
+		"splash_radius_levels": [0.30, 0.34, 0.38, 0.42, 0.45, 0.49, 0.52, 0.54, 0.56],
+		"reload_levels": [2.40, 2.40, 2.40, 2.40, 2.40, 2.40, 2.40, 2.40, 2.40],
 		"cost": {"gold": 600, "wood": 900, "ore": 700},
 		"altar_ward_bonus": true,
 		"test_only": true,
@@ -1488,6 +1535,8 @@ func _register_test_only_buildings() -> void:
 			"res://Model/Mortar/mortar_lvl4_construction.fbx",
 			"res://Model/Mortar/mortar_lvl4_construction.fbx",
 			"res://Model/Mortar/mortar_lvl4_construction.fbx",
+			"res://Model/Mortar/mortar_lvl4_construction.fbx",
+			"res://Model/Mortar/mortar_lvl4_construction.fbx",
 		],
 		"projectile_scenes": [
 			"res://Model/Mortar/mortar_lvl1_projectile.fbx",
@@ -1497,10 +1546,12 @@ func _register_test_only_buildings() -> void:
 			"res://Model/Mortar/mortar_lvl4_projectile.fbx",
 			"res://Model/Mortar/mortar_lvl4_projectile.fbx",
 			"res://Model/Mortar/mortar_lvl4_projectile.fbx",
+			"res://Model/Mortar/mortar_lvl4_projectile.fbx",
+			"res://Model/Mortar/mortar_lvl4_projectile.fbx",
 		],
 		"test_damage": 294,
-		"test_damage_levels": [95, 108, 158, 227, 233, 240, 294],
-		"test_range": 2.40,
+		"test_damage_levels": [95, 108, 158, 227, 233, 240, 294, 330, 370],
+		"test_range": 2.60,
 		"test_reload_sec": 2.40,
 	}
 
@@ -2542,27 +2593,31 @@ func _create_building_panel() -> void:
 	building_panel.anchor_right = 0.5
 	building_panel.anchor_top = 1.0
 	building_panel.anchor_bottom = 1.0
+	# Keep the lower edge fixed above any reserved HUD. If dynamic contents need
+	# more than the requested compact height, expand upward instead of into it.
+	building_panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	building_panel.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	building_panel.offset_left = -200
 	building_panel.offset_right = 200
 	building_panel.offset_top = -300
 	building_panel.offset_bottom = -20
 	canvas.add_child(building_panel)
 
-	var bp_margin = MarginContainer.new()
-	bp_margin.add_theme_constant_override("margin_left", 16)
-	bp_margin.add_theme_constant_override("margin_right", 16)
-	bp_margin.add_theme_constant_override("margin_top", 12)
-	bp_margin.add_theme_constant_override("margin_bottom", 12)
-	building_panel.add_child(bp_margin)
+	_building_panel_margin = MarginContainer.new()
+	_building_panel_margin.add_theme_constant_override("margin_left", 16)
+	_building_panel_margin.add_theme_constant_override("margin_right", 16)
+	_building_panel_margin.add_theme_constant_override("margin_top", 12)
+	_building_panel_margin.add_theme_constant_override("margin_bottom", 12)
+	building_panel.add_child(_building_panel_margin)
 
-	var bp_vbox = VBoxContainer.new()
-	bp_vbox.add_theme_constant_override("separation", 10)
-	bp_margin.add_child(bp_vbox)
+	_building_panel_vbox = VBoxContainer.new()
+	_building_panel_vbox.add_theme_constant_override("separation", 10)
+	_building_panel_margin.add_child(_building_panel_vbox)
 
 	building_panel_title = Label.new()
 	building_panel_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	building_panel_title.add_theme_color_override("font_color", Color.WHITE)
-	bp_vbox.add_child(building_panel_title)
+	_building_panel_vbox.add_child(building_panel_title)
 
 	# HP bar
 	building_panel_hp_bar = ProgressBar.new()
@@ -2578,43 +2633,100 @@ func _create_building_panel() -> void:
 	bar_fill.set_corner_radius_all(4)
 	building_panel_hp_bar.add_theme_stylebox_override("fill", bar_fill)
 	building_panel_hp_bar.show_percentage = false
-	bp_vbox.add_child(building_panel_hp_bar)
+	_building_panel_vbox.add_child(building_panel_hp_bar)
 
 	# HP label
 	building_panel_hp = Label.new()
 	building_panel_hp.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	building_panel_hp.add_theme_color_override("font_color", Color(0.7, 0.9, 0.7))
-	bp_vbox.add_child(building_panel_hp)
+	_building_panel_vbox.add_child(building_panel_hp)
 
 	# Upgrade cost label
 	building_panel_cost = Label.new()
 	building_panel_cost.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	building_panel_cost.add_theme_color_override("font_color", Color(0.9, 0.8, 0.4))
 	building_panel_cost.add_theme_font_size_override("font_size", 13)
-	bp_vbox.add_child(building_panel_cost)
+	_building_panel_vbox.add_child(building_panel_cost)
+
+	_building_panel_action_grid = GridContainer.new()
+	_building_panel_action_grid.columns = 1
+	_building_panel_action_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_building_panel_action_grid.add_theme_constant_override("h_separation", 8)
+	_building_panel_action_grid.add_theme_constant_override("v_separation", 8)
+	_building_panel_vbox.add_child(_building_panel_action_grid)
 
 	building_panel_upgrade_btn = Button.new()
 	building_panel_upgrade_btn.text = "Upgrade"
 	building_panel_upgrade_btn.custom_minimum_size = Vector2(0, 80)
+	building_panel_upgrade_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_style_button(building_panel_upgrade_btn, Color(0.2, 0.5, 0.3), Color(0.25, 0.6, 0.35))
 	building_panel_upgrade_btn.pressed.connect(_upgrade_selected)
-	bp_vbox.add_child(building_panel_upgrade_btn)
+	_building_panel_action_grid.add_child(building_panel_upgrade_btn)
 
 	building_panel_facing_btn = Button.new()
 	building_panel_facing_btn.name = "FlamethrowerFacingButton"
 	building_panel_facing_btn.text = tr("Edit attack direction")
 	building_panel_facing_btn.tooltip_text = tr("Aim the Flamethrower with on-screen controls")
 	building_panel_facing_btn.custom_minimum_size = Vector2(0, 56)
+	building_panel_facing_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	building_panel_facing_btn.visible = false
 	_style_button(building_panel_facing_btn, Color("b74b19"), Color("d45b20"))
 	building_panel_facing_btn.pressed.connect(_start_flamethrower_facing_edit)
-	bp_vbox.add_child(building_panel_facing_btn)
+	_building_panel_action_grid.add_child(building_panel_facing_btn)
 
 	building_panel_altar_skills = VBoxContainer.new()
 	building_panel_altar_skills.visible = false
 	building_panel_altar_skills.add_theme_constant_override("separation", 8)
 	building_panel_altar_skills.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	bp_vbox.add_child(building_panel_altar_skills)
+	_building_panel_vbox.add_child(building_panel_altar_skills)
+	if not get_viewport().size_changed.is_connected(_layout_building_panel):
+		get_viewport().size_changed.connect(_layout_building_panel)
+	_layout_building_panel()
+
+
+func set_external_bottom_ui_reserve(pixels: float) -> void:
+	var normalized := maxf(0.0, pixels)
+	if not is_equal_approx(_external_bottom_ui_reserve, normalized):
+		_external_bottom_ui_reserve = normalized
+		_layout_building_panel()
+	if is_instance_valid(_flamethrower_native_controls):
+		_flamethrower_native_controls.set_reserved_bottom_space(normalized)
+
+
+func _layout_building_panel() -> void:
+	if not is_instance_valid(building_panel):
+		return
+	var viewport_size := get_viewport().get_visible_rect().size
+	var building_id := str(selected_building.get("id", ""))
+	var compact := _external_bottom_ui_reserve > 0.0 or viewport_size.y < 560.0
+	var panel_width := 640.0 if building_id == "altar" else 400.0
+	var panel_height := 500.0 if building_id == "altar" else (350.0 if building_id == "flamethrower" else 280.0)
+	if compact:
+		panel_height = 380.0 if building_id == "altar" else (170.0 if building_id == "flamethrower" else 195.0)
+	panel_width = minf(panel_width, maxf(240.0, viewport_size.x - 24.0))
+	var bottom_gap := maxf(20.0, _external_bottom_ui_reserve + 8.0)
+	building_panel.custom_minimum_size = Vector2(panel_width, panel_height)
+	building_panel.offset_left = -panel_width * 0.5
+	building_panel.offset_right = panel_width * 0.5
+	building_panel.offset_top = -(bottom_gap + panel_height)
+	building_panel.offset_bottom = -bottom_gap
+	if is_instance_valid(_building_panel_margin):
+		var horizontal_margin := 10 if compact else 16
+		var vertical_margin := 6 if compact else 12
+		_building_panel_margin.add_theme_constant_override("margin_left", horizontal_margin)
+		_building_panel_margin.add_theme_constant_override("margin_right", horizontal_margin)
+		_building_panel_margin.add_theme_constant_override("margin_top", vertical_margin)
+		_building_panel_margin.add_theme_constant_override("margin_bottom", vertical_margin)
+	if is_instance_valid(_building_panel_vbox):
+		_building_panel_vbox.add_theme_constant_override("separation", 4 if compact else 10)
+	if is_instance_valid(_building_panel_action_grid):
+		_building_panel_action_grid.columns = 2 if compact and building_id == "flamethrower" else 1
+	if is_instance_valid(building_panel_upgrade_btn):
+		building_panel_upgrade_btn.custom_minimum_size.y = 56.0 if compact else 80.0
+	if is_instance_valid(building_panel_facing_btn):
+		building_panel_facing_btn.custom_minimum_size.y = 56.0
+	if is_instance_valid(building_panel_hp_bar):
+		building_panel_hp_bar.custom_minimum_size.y = 18.0 if compact else 24.0
 
 
 func _style_button(btn: Button, normal_color: Color, hover_color: Color) -> void:
@@ -3113,6 +3225,24 @@ func _server_buildings_signature(server_buildings: Array) -> String:
 	return "%s|%s" % [player_key, "|".join(PackedStringArray(parts))]
 
 
+func _parse_flamethrower_facing_step(value: Variant, fallback: int = 0) -> int:
+	if value is int:
+		return value
+	if value is float and is_finite(value):
+		return int(value)
+	if value is String or value is StringName:
+		var text := str(value).strip_edges()
+		if text.is_valid_int():
+			return text.to_int()
+	return fallback
+
+
+func _flamethrower_facing_payload(building_type: String, value: Variant) -> Variant:
+	if building_type != "flamethrower":
+		return null
+	return _parse_flamethrower_facing_step(value)
+
+
 func _load_buildings_from_server(server_buildings: Array) -> void:
 	var state_signature := _server_buildings_signature(server_buildings)
 	var now := Time.get_ticks_msec()
@@ -3178,7 +3308,7 @@ func _load_buildings_from_server(server_buildings: Array) -> void:
 		var max_hp: int = b.get("max_hp", hp)
 		var gp = Vector2i(b["grid_x"], b["grid_z"])
 		var server_id: int = b.get("id", -1)
-		var facing_step: int = int(b.get("facing_step", 0))
+		var facing_step := _parse_flamethrower_facing_step(b.get("facing_step", null))
 		var building_flag_url := str(b.get(
 			"town_hall_flag_url",
 			b.get("flag_url", base_owner_flag_url)
@@ -3279,7 +3409,7 @@ func _load_buildings_from_server(server_buildings: Array) -> void:
 			"server_id": server_id,
 			"stored": stored,
 			"town_hall_flag_url": building_flag_url,
-			"facing_step": facing_step if building_type == "flamethrower" else null,
+			"facing_step": _flamethrower_facing_payload(building_type, facing_step),
 		}
 		if node and b_data.town_hall_flag_url != "":
 			node.set_meta("town_hall_flag_url", b_data.town_hall_flag_url)
@@ -4111,18 +4241,33 @@ func _unhandled_input(event: InputEvent) -> void:
 	# In enemy mode, only the main UI grid handles all input
 	if is_viewing_enemy and not create_ui:
 		return
+	# Godot emits a second mouse event for every real touchscreen event by
+	# default. Touch is handled explicitly below, so processing the emulated
+	# copy would select once and immediately enter move mode on the same tap.
+	if (
+		(event is InputEventMouseButton or event is InputEventMouseMotion)
+		and event.device == InputEvent.DEVICE_ID_EMULATION
+	):
+		return
 
 	# Move mode
 	if _is_moving:
 		if event is InputEventMouseMotion:
-			_update_move_building()
+			_update_move_building((event as InputEventMouseMotion).position)
+		elif event is InputEventScreenDrag:
+			_update_move_building((event as InputEventScreenDrag).position)
 		if event is InputEventMouseButton and event.pressed:
 			if event.button_index == MOUSE_BUTTON_LEFT:
+				_update_move_building((event as InputEventMouseButton).position)
 				_confirm_move()
 				get_viewport().set_input_as_handled()
 			elif event.button_index == MOUSE_BUTTON_RIGHT:
 				_cancel_move()
 				get_viewport().set_input_as_handled()
+		elif event is InputEventScreenTouch and event.pressed:
+			_update_move_building((event as InputEventScreenTouch).position)
+			_confirm_move()
+			get_viewport().set_input_as_handled()
 		return
 
 	if is_placing:
@@ -4151,14 +4296,14 @@ func _unhandled_input(event: InputEvent) -> void:
 			elif event.button_index == MOUSE_BUTTON_RIGHT:
 				_cancel_all_placement()
 				get_viewport().set_input_as_handled()
-		elif (
-			event is InputEventScreenTouch
-			and event.pressed
-			and current_building_id == "flamethrower"
-		):
+		elif event is InputEventScreenTouch and event.pressed:
 			_update_ghost((event as InputEventScreenTouch).position)
-			if _lock_flamethrower_placement_cell():
+			if current_building_id == "flamethrower":
+				if _lock_flamethrower_placement_cell():
+					get_viewport().set_input_as_handled()
+			elif _try_place_building():
 				get_viewport().set_input_as_handled()
+				_cancel_all_placement()
 		elif (
 			event is InputEventKey
 			and event.pressed
@@ -4226,6 +4371,18 @@ func _unhandled_input(event: InputEvent) -> void:
 				get_viewport().set_input_as_handled()
 				return
 			_exit_ship_cannon_mode()
+			get_viewport().set_input_as_handled()
+			return
+		elif _ship_rally_mode:
+			for rally_bs in _building_systems:
+				var rally_local_hit: Vector3 = rally_bs._get_screen_local(touch.position)
+				if rally_local_hit != Vector3.INF:
+					var rally_world_hit: Vector3 = rally_bs.to_global(rally_local_hit)
+					if _rally and _rally._drop_rally(rally_world_hit):
+						_exit_ship_rally_mode()
+					get_viewport().set_input_as_handled()
+					return
+			_exit_ship_rally_mode()
 			get_viewport().set_input_as_handled()
 			return
 		elif _check_ship_cannon_click(touch.position):
@@ -4344,15 +4501,20 @@ func _unhandled_input(event: InputEvent) -> void:
 	# Click on placed building — disabled during attack mode to prevent misclicks
 	if is_viewing_enemy:
 		return
+	var pointer_position := Vector2.INF
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		pointer_position = (event as InputEventMouseButton).position
+	elif event is InputEventScreenTouch and event.pressed:
+		pointer_position = (event as InputEventScreenTouch).position
+	if pointer_position != Vector2.INF:
 		# Check ship click FIRST (before buildings) — ship is near port and can overlap
 		if not is_viewing_enemy:
-			var ship_port = _find_ship_at_click(event.position)
+			var ship_port = _find_ship_at_click(pointer_position)
 			if ship_port.size() > 0:
 				_show_ship_panel(ship_port)
 				get_viewport().set_input_as_handled()
 				return
-		var local_hit = _get_mouse_local()
+		var local_hit = _get_screen_local(pointer_position)
 		if local_hit != Vector3.INF:
 			var gp = _local_to_grid(local_hit)
 			var found = _find_building_at(gp)
@@ -4572,7 +4734,7 @@ func _request_place_building(
 		return false
 
 	_server_busy = true
-	var facing_payload: Variant = facing_step if building_id == "flamethrower" else null
+	var facing_payload: Variant = _flamethrower_facing_payload(building_id, facing_step)
 	var result = await net.place_building(
 		building_id,
 		grid_pos.x,
@@ -4603,7 +4765,7 @@ func _spawn_building_locally(
 	grid_pos: Vector2i,
 	def: Dictionary,
 	server_id: int,
-	facing_step: int = 0
+	facing_step: int = -1
 ) -> void:
 	# Mark grid
 	_set_grid_occupied(grid_pos, def.cells, true)
@@ -4615,9 +4777,6 @@ func _spawn_building_locally(
 	current_building_id = prev_id
 	building.set_meta("building_type", building_id)
 	building.set_meta("server_id", server_id)
-	if building_id == "flamethrower":
-		facing_step = FlamethrowerConfig.normalize_preview_step(facing_step)
-		building.set_meta("facing_step", facing_step)
 
 	var sx = def.cells.x * cell_size
 	var sz = def.cells.y * cell_size
@@ -4626,6 +4785,13 @@ func _spawn_building_locally(
 	local_pos.z += sz / 2.0
 	local_pos.y = 0
 	building.position = local_pos
+	if building_id == "flamethrower":
+		if not FlamethrowerConfig.is_valid_facing_step(facing_step):
+			facing_step = FlamethrowerConfig.nearest_step_toward(
+				to_global(local_pos),
+				_get_defense_spawn_facing_global()
+			)
+		building.set_meta("facing_step", facing_step)
 	
 	# --- Build Animation ---
 	building.scale = Vector3.ZERO
@@ -4652,7 +4818,7 @@ func _spawn_building_locally(
 		"server_id": server_id,
 		"stored": 0.0,
 		"town_hall_flag_url": _home_player_flag_url if building_id in ["town_hall", "air_bomb"] else "",
-		"facing_step": facing_step if building_id == "flamethrower" else null,
+		"facing_step": _flamethrower_facing_payload(building_id, facing_step),
 	}
 	placed_buildings.append(b_data)
 	if building_id in ["town_hall", "air_bomb"]:
@@ -4696,6 +4862,10 @@ func _begin_flamethrower_editor(
 	range_value: float,
 	building: Dictionary
 ) -> void:
+	# Selection owns a passive sector, while the editor owns the rotating
+	# preview. Never leave both owners visible: otherwise the passive sector
+	# remains at the saved angle and looks like a stale strip after each tap.
+	_show_flamethrower_range_visual({}, false)
 	_end_flamethrower_editor(false)
 	_flamethrower_facing_editor = FlamethrowerFacingEditor.new()
 	_flamethrower_facing_editor.name = "FlamethrowerFacingEditor"
@@ -4884,6 +5054,7 @@ func _ensure_flamethrower_native_controls() -> void:
 	_flamethrower_native_controls = FLAMETHROWER_FACING_CONTROLS_SCRIPT.new()
 	_flamethrower_native_controls.name = "FlamethrowerFacingControls"
 	add_child(_flamethrower_native_controls)
+	_flamethrower_native_controls.set_reserved_bottom_space(_external_bottom_ui_reserve)
 	_flamethrower_native_controls.step_requested.connect(_flamethrower_preview_step)
 	_flamethrower_native_controls.reset_requested.connect(_reset_flamethrower_facing_preview)
 	_flamethrower_native_controls.cancel_requested.connect(_cancel_flamethrower_facing)
@@ -4927,7 +5098,10 @@ func _emit_flamethrower_facing_editor(mode: String) -> void:
 
 
 func _destroy_all_buildings() -> void:
-	_end_flamethrower_editor(false)
+	# Reload/reset must not leave an input mode pointing at nodes that are about
+	# to be freed. Cancelling first also restores cells released by move mode.
+	_cancel_placement()
+	_deselect_building()
 	_show_flamethrower_range_visual({}, false)
 	for b in placed_buildings:
 		# Free skeleton guards attached to tombstones
@@ -5139,7 +5313,35 @@ func _find_ship_barrel_target_from_screen(screen_pos: Vector2) -> Dictionary:
 		return {"building": {}, "position": world_hit}
 	return {}
 
+func _clear_selection_for_switch(next_building: Dictionary) -> void:
+	var current_node: Node = selected_building.get("node", null)
+	var next_node: Node = next_building.get("node", null)
+	if is_instance_valid(current_node) and current_node == next_node:
+		return
+	# TestMain can select a freshly spawned building directly from its UI while
+	# the previous one is moving or its facing editor is open. Finish that old
+	# interaction before replacing selected_building; otherwise move input keeps
+	# operating on the new dictionary with the old building's grid reservation.
+	if _is_moving:
+		_cancel_move(false)
+	_set_mortar_range_visuals_for_selected(false)
+	_show_flamethrower_range_visual({}, false)
+	_end_flamethrower_editor(false)
+	_hide_range_indicator()
+	_hide_move_arrows()
+	if building_panel:
+		building_panel.visible = false
+	if barn_panel:
+		barn_panel.visible = false
+	if port_panel:
+		port_panel.visible = false
+	var camera_rig = get_node_or_null("/root/IslandScene/CameraRig")
+	if camera_rig:
+		camera_rig.zoom_blocked = false
+
+
 func _select_building(b: Dictionary) -> void:
+	_clear_selection_for_switch(b)
 	_set_mortar_range_visuals_for_selected(false)
 	_show_flamethrower_range_visual({}, false)
 	selected_building = b
@@ -5208,7 +5410,7 @@ func _select_building(b: Dictionary) -> void:
 			"pull_duration_sec": float(def.get("pull_duration_sec", 0.0)),
 			"stop_distance": float(def.get("stop_distance", 0.0)),
 			"target_type": str(def.get("target_type", "")),
-			"facing_step": int(b.get("facing_step", 0)) if b.id == "flamethrower" else null,
+			"facing_step": _flamethrower_facing_payload(str(b.id), b.get("facing_step", null)),
 			"cone_degrees": float(def.get("cone_degrees", 0.0)),
 			"damage_ticks_per_stream": int(def.get("damage_ticks_per_stream", 0)),
 			"stream_duration_sec": float(def.get("stream_duration_sec", 0.0)),
@@ -5267,6 +5469,7 @@ func _select_building(b: Dictionary) -> void:
 		if building_panel_altar_skills:
 			building_panel_altar_skills.visible = false
 		if building_panel:
+			_layout_building_panel()
 			building_panel.visible = true
 		return
 
@@ -5292,26 +5495,6 @@ func _select_building(b: Dictionary) -> void:
 			cam.zoom_blocked = true
 		return
 
-	if building_panel:
-		if b.id == "altar":
-			building_panel.custom_minimum_size = Vector2(640, 500)
-			building_panel.offset_left = -320
-			building_panel.offset_right = 320
-			building_panel.offset_top = -540
-			building_panel.offset_bottom = -20
-		elif b.id == "flamethrower":
-			building_panel.custom_minimum_size = Vector2(400, 350)
-			building_panel.offset_left = -200
-			building_panel.offset_right = 200
-			building_panel.offset_top = -370
-			building_panel.offset_bottom = -20
-		else:
-			building_panel.custom_minimum_size = Vector2(400, 280)
-			building_panel.offset_left = -200
-			building_panel.offset_right = 200
-			building_panel.offset_top = -300
-			building_panel.offset_bottom = -20
-
 	if building_panel_title:
 		building_panel_title.text = "%s (Lv. %d)" % [def.name, level]
 	if building_panel_hp:
@@ -5331,6 +5514,7 @@ func _select_building(b: Dictionary) -> void:
 	if b.id == "altar":
 		_refresh_altar_skills_panel(level, hp, max_hp)
 	if building_panel:
+		_layout_building_panel()
 		building_panel.visible = true
 
 
@@ -5374,6 +5558,7 @@ func _set_mortar_range_visuals_for_building(b: Dictionary, should_be_visible: bo
 func _show_flamethrower_range_visual(b: Dictionary, should_be_visible: bool) -> void:
 	if not should_be_visible or b.get("id", "") != "flamethrower":
 		if is_instance_valid(_flamethrower_range_visual):
+			_flamethrower_range_visual.visible = false
 			_flamethrower_range_visual.queue_free()
 		_flamethrower_range_visual = null
 		return
@@ -5385,6 +5570,7 @@ func _show_flamethrower_range_visual(b: Dictionary, should_be_visible: bool) -> 
 	var level := int(b.get("level", 1))
 	var range_value := float(ranges[clampi(level - 1, 0, ranges.size() - 1)]) if not ranges.is_empty() else 1.2
 	if is_instance_valid(_flamethrower_range_visual):
+		_flamethrower_range_visual.visible = false
 		_flamethrower_range_visual.queue_free()
 	_flamethrower_range_visual = FlamethrowerFacingEditor.new()
 	_flamethrower_range_visual.name = "FlamethrowerSelectionSector"
@@ -7122,8 +7308,15 @@ func _buy_ship_level(ship_lvl: int) -> void:
 	_port._buy_ship_level(ship_lvl)
 
 
+func _is_main_ship_action_target(extra: Dictionary = {}) -> bool:
+	var requested_id: String = str(extra.get("ship_id", extra.get("server_id", ""))).strip_edges()
+	if requested_id != "":
+		return requested_id == "main_ship"
+	return selected_building.get("id") == "main_ship"
+
+
 func _load_troop_to_ship(troop_name: String, extra: Dictionary = {}) -> void:
-	if selected_building.get("id") == "main_ship":
+	if _is_main_ship_action_target(extra):
 		var result: Dictionary = await _net.load_troop_to_player_ship(troop_name, extra)
 		_apply_main_ship_action_result(result)
 		return
@@ -7142,6 +7335,9 @@ func _apply_main_ship_action_result(result: Dictionary) -> void:
 		return
 	if result.has("error"):
 		_show_error(str(result.get("error", "Main ship update failed")))
+		var cached_state: Dictionary = _main_ship_cached_action_state()
+		if not cached_state.is_empty():
+			_apply_main_ship_state_from_server(cached_state)
 		return
 	if result.has("resources"):
 		_apply_resources_from_server(result.resources)
@@ -7152,6 +7348,29 @@ func _apply_main_ship_action_result(result: Dictionary) -> void:
 	var ship: Dictionary = ship_value
 	_send_main_ship_panel(ship)
 	_apply_main_ship_state_from_server(ship)
+
+
+func _main_ship_cached_action_state() -> Dictionary:
+	var controller: Node = get_node_or_null("../MainShipController")
+	if not is_instance_valid(controller):
+		return {}
+	var level: int = clampi(int(controller.get_meta("ship_level", 1)), 1, MAX_PLAYER_SHIP_LEVEL)
+	var troops_value: Variant = controller.get_meta("ship_troops", [])
+	var troops: Array = troops_value.duplicate(true) if troops_value is Array else []
+	var config: Dictionary = PLAYER_SHIP_LEVELS.get(level, {})
+	return {
+		"id": "main_ship",
+		"level": level,
+		"capacity": maxi(troops.size(), int(controller.get_meta("ship_capacity", config.get("capacity", 3)))),
+		"troops": troops,
+		"energy": int(config.get("energy", 4)),
+		"cannon_damage": int(config.get("cannon_damage", 500)),
+		"cannon_base_cost": int(config.get("cannon_base_cost", 1)),
+		"medkit_unlocked": bool(config.get("medkit_unlocked", false)),
+		"freeze_unlocked": bool(config.get("freeze_unlocked", false)),
+		"rage_unlocked": bool(config.get("rage_unlocked", false)),
+		"skeleton_barrel_unlocked": bool(config.get("skeleton_barrel_unlocked", false)),
+	}
 
 func _reinforce_troops() -> void:
 	# Refill all ships with troops that were lost in battle
@@ -7263,21 +7482,21 @@ func _apply_ships_from_server(ships: Array) -> void:
 						pnode.set_meta("ship_level", server_level)
 
 func _swap_troop_on_ship(slot: int, troop_name: String, extra: Dictionary = {}) -> void:
-	if selected_building.get("id") == "main_ship":
+	if _is_main_ship_action_target(extra):
 		var result: Dictionary = await _net.swap_troop_on_player_ship(slot, troop_name, extra)
 		_apply_main_ship_action_result(result)
 		return
 	_port._swap_troop_on_ship(slot, troop_name, extra)
 
-func _remove_troop_from_ship(slot: int) -> void:
-	if selected_building.get("id") == "main_ship":
+func _remove_troop_from_ship(slot: int, extra: Dictionary = {}) -> void:
+	if _is_main_ship_action_target(extra):
 		var result: Dictionary = await _net.remove_troop_from_player_ship(slot)
 		_apply_main_ship_action_result(result)
 		return
 	_port._remove_troop_from_ship(slot)
 
-func _remove_troop_group_from_ship(slot: int) -> void:
-	if selected_building.get("id") == "main_ship":
+func _remove_troop_group_from_ship(slot: int, extra: Dictionary = {}) -> void:
+	if _is_main_ship_action_target(extra):
 		var result: Dictionary = await _net.remove_troop_group_from_player_ship(slot)
 		_apply_main_ship_action_result(result)
 		return
@@ -8208,12 +8427,16 @@ func _start_move(b: Dictionary) -> void:
 	_update_move_building()
 
 
-func _update_move_building() -> void:
+func _update_move_building(screen_position: Variant = null) -> void:
 	var b = selected_building
 	if b.size() == 0 or not is_instance_valid(b.get("node", null)):
 		return
 	var def = building_defs[b.id]
-	var local_hit = _get_mouse_local()
+	var local_hit: Vector3 = (
+		_get_screen_local(screen_position as Vector2)
+		if screen_position is Vector2
+		else _get_mouse_local()
+	)
 	if local_hit == Vector3.INF:
 		return
 	var gp = _local_to_grid(local_hit)

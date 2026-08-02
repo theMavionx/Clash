@@ -3,7 +3,7 @@ extends BaseTroop
 ## Its primary lightning strike chains to the two nearest living buildings.
 ## Chain selection and damage are mirrored by server/combat_session.js.
 
-const MAX_TROOP_LEVEL: int = 7
+const MAX_TROOP_LEVEL: int = 9
 const CHAIN_JUMPS: int = 2
 const CHAIN_RADIUS: float = 0.62
 const CHAIN_FALLOFF_BPS: int = 6500
@@ -34,6 +34,8 @@ const LEVEL_STATS: Dictionary = {
 	5: {"hp": 1970, "damage": 449, "atk_speed": 1.03},
 	6: {"hp": 2450, "damage": 629, "atk_speed": 1.03},
 	7: {"hp": 3278, "damage": 957, "atk_speed": 1.03},
+	8: {"hp": 3278, "damage": 957, "atk_speed": 1.03},
+	9: {"hp": 3278, "damage": 957, "atk_speed": 1.03},
 }
 
 const ANIM_FILES: Array[String] = [

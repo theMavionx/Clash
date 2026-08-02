@@ -40,6 +40,8 @@ const TROOP_LEVEL_POWER_MULTIPLIERS: Array[float] = [
 	1.68,
 	1.61,
 	1.74,
+	1.96,
+	2.60,
 ]
 
 enum State { INACTIVE, IDLE, RUNNING, ATTACKING, VICTORY }

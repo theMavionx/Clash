@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://cdv7pc25ah6ja"
-path="res://.godot/imported/frame_063_cooldown.png-83a60f997d42a520c44bda341f17de90.ctex"
+uid="uid://c673agm8yu23v"
+path="res://.godot/imported/frame_082_cooldown.png-adf350a48e5e9184185e604307059194.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://artifacts/flamethrower-combat-frames/frame_063_cooldown.png"
-dest_files=["res://.godot/imported/frame_063_cooldown.png-83a60f997d42a520c44bda341f17de90.ctex"]
+source_file="res://artifacts/flamethrower-combat-frames/frame_082_cooldown.png"
+dest_files=["res://.godot/imported/frame_082_cooldown.png-adf350a48e5e9184185e604307059194.ctex"]
 
 [params]
 

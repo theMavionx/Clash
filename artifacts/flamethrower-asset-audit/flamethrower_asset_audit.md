@@ -42,4 +42,4 @@
 
 ## Socket note
 
-Sockets sit approximately 0.008 world units beyond the visually identified front nozzle planes. SourceModel preserves the authored -Z barrel direction; a 180-degree child rotation is forbidden because it visually reverses the barrel relative to combat and the facing sector. L1/L2 have asymmetric authored assemblies, so their X offsets are intentional and should be rechecked if VFX plume width changes.
+Sockets sit approximately 0.008 world units beyond the visually identified front nozzle planes. The source GLBs author the visible barrel along local +Z, so SourceModel must rotate 180 degrees to normalize that nozzle to wrapper/gameplay -Z. L1/L2 have asymmetric authored assemblies, so their X offsets are intentional and should be rechecked if VFX plume width changes.

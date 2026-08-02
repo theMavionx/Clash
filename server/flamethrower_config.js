@@ -58,7 +58,7 @@ function validateConfig(config) {
   }
   invariant(combat.tick_rate === 60, 'combat.tick_rate must be 60');
   invariant(combat.scan_ticks === 9 && combat.prime_ticks === 18, 'scan/prime cadence must be 9/18 ticks');
-  invariant(combat.stream_ticks === 45 && combat.cycle_ticks === 90, 'stream/cycle cadence must be 45/90 ticks');
+  invariant(combat.stream_ticks === 60 && combat.cycle_ticks === 90, 'stream/cycle cadence must be 60/90 ticks');
   invariant(Array.isArray(combat.damage_offsets) && combat.damage_offsets.length === 3, 'combat.damage_offsets must contain three ticks');
   invariant(combat.damage_offsets.every((value, index, values) => (
     Number.isInteger(value)

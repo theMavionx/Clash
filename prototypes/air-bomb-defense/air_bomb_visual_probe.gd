@@ -26,6 +26,8 @@ const EXPECTED_PAYLOAD_MESHES: PackedStringArray = [
 var _capture_directory: String = DEFAULT_CAPTURE_DIRECTORY
 var _thumbnail_path: String = DEFAULT_THUMBNAIL_PATH
 var _flag_texture_path: String = ""
+var _attack_zone_target: Vector3 = Vector3.ZERO
+var _has_attack_zone_target: bool = false
 var _failure_messages: PackedStringArray = []
 
 
@@ -37,7 +39,20 @@ func _ready() -> void:
 			_thumbnail_path = argument.get_slice("=", 1)
 		elif argument.begins_with("--flag-texture="):
 			_flag_texture_path = argument.get_slice("=", 1)
-	camera.look_at_from_position(Vector3(1.575, 1.085, 0.665), Vector3(0.0, 0.329, 0.0))
+		elif argument.begins_with("--attack-zone-target="):
+			var target_parts := argument.get_slice("=", 1).split(",")
+			if target_parts.size() == 2:
+				_attack_zone_target = Vector3(
+					target_parts[0].to_float(),
+					0.0,
+					target_parts[1].to_float(),
+				)
+				_has_attack_zone_target = true
+	if _has_attack_zone_target:
+		air_bomb.call("set_attack_zone_facing_global", _attack_zone_target)
+		_face_camera_from_attack_zone(_attack_zone_target)
+	else:
+		camera.look_at_from_position(Vector3(1.575, 1.085, 0.665), Vector3(0.0, 0.329, 0.0))
 	call_deferred("_run_probe")
 
 
@@ -185,15 +200,24 @@ func _validate_materials_before_flag(
 	var balloon_material_a := balloon_a.material_override as StandardMaterial3D
 	var balloon_material_b := balloon_b.material_override as StandardMaterial3D
 	_expect(base_material != null, "Static base material override is missing")
-	_expect(base_material == barrel_material, "Carried Circle barrel lost base PBR material")
+	_expect(barrel_material != null, "Carried Circle barrel material is missing")
+	_expect(base_material != barrel_material, "Orange Circle barrel incorrectly shares the launcher material")
 	_expect(base_material == bridle_material, "Carried Cube_024 bridle lost base PBR material")
 	_expect(balloon_material_a != null and balloon_material_b != null, "Balloon material is missing")
 	if base_material != null:
 		_expect(base_material.albedo_texture != null, "Base albedo texture is missing")
+		_expect(base_material.albedo_color.is_equal_approx(Color(0.85, 0.85, 0.85, 1.0)), "Base tint no longer matches the supplied off-white and brown reference")
 		_expect(is_zero_approx(base_material.metallic), "Base is still metallic instead of cannon-like painted material")
 		_expect(is_equal_approx(base_material.roughness, 0.82), "Base matte roughness does not match the cannon")
 		_expect(base_material.metallic_texture == null, "Base still samples the glossy metallic map")
 		_expect(base_material.roughness_texture == null, "Base still samples the glossy roughness map")
+	if barrel_material != null and base_material != null:
+		_expect(barrel_material.albedo_texture != null, "Orange carried-bomb albedo is missing")
+		_expect(barrel_material.albedo_texture != base_material.albedo_texture, "Circle barrel still samples the gray launcher albedo")
+		_expect(is_zero_approx(barrel_material.metallic), "Carried bomb is still metallic")
+		_expect(is_equal_approx(barrel_material.roughness, 0.82), "Carried bomb lost its matte roughness")
+		_expect(barrel_material.metallic_texture == null, "Carried bomb still samples the metallic map")
+		_expect(barrel_material.roughness_texture == null, "Carried bomb still samples the roughness map")
 	if balloon_material_a != null and balloon_material_b != null:
 		_expect(balloon_material_a == balloon_material_b, "Balloons do not share one local material")
 		_expect(balloon_material_a.albedo_texture != null, "Default balloon albedo is missing")
@@ -201,8 +225,8 @@ func _validate_materials_before_flag(
 		_expect(is_equal_approx(balloon_material_a.roughness, 0.82), "Balloons do not use the matte cannon roughness")
 		_expect(balloon_material_a.metallic_texture == null, "Balloons still sample the metallic map")
 		_expect(balloon_material_a.roughness_texture == null, "Balloons still sample the roughness map")
-		_expect(balloon_material_a.uv1_scale.is_equal_approx(Vector3.ONE), "Planar flag UVs still use a runtime scale")
-		_expect(balloon_material_a.uv1_offset.is_equal_approx(Vector3.ZERO), "Planar flag UVs still use a runtime offset")
+		_expect(balloon_material_a.uv1_scale.is_equal_approx(Vector3(1.4, 1.4, 1.0)), "Balloon logo overscan scale is incorrect")
+		_expect(balloon_material_a.uv1_offset.is_equal_approx(Vector3(-0.2, -0.2, 0.0)), "Balloon logo overscan is not centered")
 		_expect(not balloon_material_a.texture_repeat, "Planar flag unexpectedly repeats across a seam")
 		_expect(balloon_material_a.texture_filter == BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS, "Flag filtering differs from ship sails")
 	_validate_planar_uvs(balloon_a)
@@ -234,9 +258,9 @@ func _validate_flag_isolation(
 
 func _validate_bounds() -> void:
 	var bounds := _combined_mesh_bounds(air_bomb)
-	_expect(bounds.size.x >= 0.34 and bounds.size.x <= 0.37, "Normalized X size is out of budget: %s" % bounds.size.x)
+	_expect(bounds.size.x >= 0.30 and bounds.size.x <= 0.33, "Rotated X size is out of budget: %s" % bounds.size.x)
 	_expect(bounds.size.y >= 0.52 and bounds.size.y <= 0.55, "Normalized Y size is out of budget: %s" % bounds.size.y)
-	_expect(bounds.size.z >= 0.30 and bounds.size.z <= 0.33, "Normalized Z size is out of budget: %s" % bounds.size.z)
+	_expect(bounds.size.z >= 0.34 and bounds.size.z <= 0.37, "Rotated Z size is out of budget: %s" % bounds.size.z)
 	_expect(absf(bounds.position.y) <= 0.002, "Model base is not on Y=0: %s" % bounds.position.y)
 
 
@@ -266,7 +290,7 @@ func _validate_projectile(projectile: Node3D, compatibility_side: int) -> void:
 	_expect(triangle_count == 1272, "Complete payload triangle count changed: %d" % triangle_count)
 	_expect(_draw_surface_count(projectile) == 4, "Projectile draw-surface count changed")
 	var bounds := _combined_mesh_bounds(projectile)
-	_expect(bounds.size.x <= 0.38 and bounds.size.y <= 0.52 and bounds.size.z <= 0.34, "Payload is not production-scaled: %s" % bounds.size)
+	_expect(bounds.size.x <= 0.34 and bounds.size.y <= 0.52 and bounds.size.z <= 0.38, "Rotated payload is not production-scaled: %s" % bounds.size)
 	_expect(bounds.get_center().distance_to(projectile.global_position) <= 0.01, "Payload visible geometry is not centered on its origin")
 
 
@@ -343,6 +367,21 @@ func _set_camera_yaw(yaw_degrees: float) -> void:
 	var horizontal := Vector3(offset.x, 0.0, offset.z)
 	horizontal = Basis(Vector3.UP, deg_to_rad(yaw_degrees)) * horizontal
 	camera.look_at_from_position(target + horizontal + Vector3.UP * offset.y, target)
+
+
+func _face_camera_from_attack_zone(attack_zone_target: Vector3) -> void:
+	var target := Vector3(0.0, 0.329, 0.0)
+	var direction := attack_zone_target - air_bomb.global_position
+	direction.y = 0.0
+	if direction.length_squared() <= 0.0000001:
+		direction = Vector3.BACK
+	direction = direction.normalized()
+	var canonical_offset := Vector3(1.575, 1.085, 0.665) - target
+	var horizontal_distance := Vector2(canonical_offset.x, canonical_offset.z).length()
+	camera.look_at_from_position(
+		target + direction * horizontal_distance + Vector3.UP * canonical_offset.y,
+		target,
+	)
 
 
 func _capture(file_name: String) -> void:

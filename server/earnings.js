@@ -2988,6 +2988,307 @@ function normalizeEarningsDex(value) {
   return EARNINGS_DEX_ALIASES[key] || key;
 }
 
+const EARNINGS_SNAPSHOT_HISTORY_DAYS = 30;
+const EARNINGS_SNAPSHOT_RETENTION_DAYS = Math.max(
+  EARNINGS_SNAPSHOT_HISTORY_DAYS + 2,
+  Math.min(90, Number(process.env.EARNINGS_SNAPSHOT_RETENTION_DAYS) || 35),
+);
+const EARNINGS_SNAPSHOT_INTERVAL_MS = Math.max(
+  5 * 60 * 1000,
+  Math.min(24 * 60 * 60 * 1000, Number(process.env.EARNINGS_SNAPSHOT_INTERVAL_MS) || 60 * 60 * 1000),
+);
+const EARNINGS_SNAPSHOT_INITIAL_DELAY_MS = Math.max(
+  1_000,
+  Math.min(5 * 60 * 1000, Number(process.env.EARNINGS_SNAPSHOT_INITIAL_DELAY_MS) || 20_000),
+);
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+let _earningsSnapshotInterval = null;
+let _earningsSnapshotInitialTimer = null;
+let _earningsSnapshotCaptureRunning = false;
+
+function ensureEarningsSnapshots(mainDb) {
+  if (!mainDb) return;
+  mainDb.exec(`
+    CREATE TABLE IF NOT EXISTS earnings_snapshots (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      dex TEXT NOT NULL,
+      bucket_utc TEXT NOT NULL,
+      captured_at TEXT NOT NULL,
+      cumulative_earned_usd REAL NOT NULL CHECK(cumulative_earned_usd >= 0),
+      currency TEXT,
+      source TEXT,
+      source_detail TEXT,
+      model TEXT,
+      metadata_json TEXT NOT NULL DEFAULT '{}',
+      UNIQUE(dex, bucket_utc)
+    );
+    CREATE INDEX IF NOT EXISTS idx_earnings_snapshots_dex_captured
+      ON earnings_snapshots(dex, captured_at);
+    CREATE INDEX IF NOT EXISTS idx_earnings_snapshots_captured
+      ON earnings_snapshots(captured_at);
+  `);
+}
+
+function earningsSnapshotIso(value = new Date()) {
+  const date = value instanceof Date ? new Date(value.getTime()) : new Date(value);
+  if (!Number.isFinite(date.getTime())) throw new Error('Invalid earnings snapshot timestamp');
+  return date.toISOString();
+}
+
+function earningsSnapshotBucket(value = new Date()) {
+  const date = new Date(earningsSnapshotIso(value));
+  date.setUTCMinutes(0, 0, 0);
+  return date.toISOString();
+}
+
+function earningsSnapshotEligible(row) {
+  const cumulative = Number(row?.earned_usd);
+  return !!row
+    && row.ok === true
+    && Number.isFinite(cumulative)
+    && cumulative >= 0
+    && row.stale !== true
+    && row.exact_unavailable !== true;
+}
+
+function recordEarningsSnapshots(mainDb, rows, capturedAt = new Date()) {
+  if (!mainDb || !rows) return { recorded: 0, skipped: EARNINGS_DEX_ORDER.length };
+  ensureEarningsSnapshots(mainDb);
+  const capturedIso = earningsSnapshotIso(capturedAt);
+  const bucketUtc = earningsSnapshotBucket(capturedAt);
+  const insert = mainDb.prepare(`
+    INSERT INTO earnings_snapshots (
+      dex, bucket_utc, captured_at, cumulative_earned_usd,
+      currency, source, source_detail, model, metadata_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(dex, bucket_utc) DO UPDATE SET
+      captured_at = excluded.captured_at,
+      cumulative_earned_usd = excluded.cumulative_earned_usd,
+      currency = excluded.currency,
+      source = excluded.source,
+      source_detail = excluded.source_detail,
+      model = excluded.model,
+      metadata_json = excluded.metadata_json
+  `);
+  let recorded = 0;
+  let skipped = 0;
+  mainDb.transaction(() => {
+    for (const dex of EARNINGS_DEX_ORDER) {
+      const row = rows[dex];
+      if (!earningsSnapshotEligible(row)) {
+        skipped += 1;
+        continue;
+      }
+      const metadata = {
+        address: row.address || null,
+        subaccount: row.subaccount || null,
+        builder_id: row.builder_id ?? null,
+        withdrawable_usd: Number.isFinite(Number(row.withdrawable_usd)) ? Number(row.withdrawable_usd) : null,
+      };
+      insert.run(
+        dex,
+        bucketUtc,
+        capturedIso,
+        Number(row.earned_usd),
+        row.currency || null,
+        row.source || null,
+        row.source_detail || null,
+        row.model || null,
+        JSON.stringify(metadata),
+      );
+      recorded += 1;
+    }
+    mainDb.prepare(`
+      DELETE FROM earnings_snapshots
+      WHERE unixepoch(captured_at) < unixepoch(?, ?)
+    `).run(capturedIso, `-${EARNINGS_SNAPSHOT_RETENTION_DAYS} days`);
+  })();
+  return { recorded, skipped, captured_at: capturedIso, bucket_utc: bucketUtc };
+}
+
+function utcDayKey(value) {
+  return earningsSnapshotIso(value).slice(0, 10);
+}
+
+function summarizeEarningsSnapshotDex(dex, rows, nowMs, days) {
+  const timeline = rows
+    .map((row) => ({
+      ...row,
+      captured_ms: Date.parse(row.captured_at),
+      cumulative_earned_usd: safeNumber(row.cumulative_earned_usd),
+    }))
+    .filter((row) => Number.isFinite(row.captured_ms) && row.captured_ms <= nowMs)
+    .sort((a, b) => a.captured_ms - b.captured_ms || safeNumber(a.id) - safeNumber(b.id));
+  const deltas = [];
+  for (let index = 1; index < timeline.length; index += 1) {
+    const previous = timeline[index - 1];
+    const current = timeline[index];
+    const rawDelta = current.cumulative_earned_usd - previous.cumulative_earned_usd;
+    deltas.push({
+      captured_ms: current.captured_ms,
+      captured_at: current.captured_at,
+      earned_usd: roundUsd(Math.max(0, rawDelta)),
+      reset: rawDelta < -0.000001,
+    });
+  }
+
+  const summarizeWindow = (windowDays) => {
+    const cutoffMs = nowMs - windowDays * DAY_MS;
+    const baseline = [...timeline].reverse().find((row) => row.captured_ms <= cutoffMs) || null;
+    const samples = timeline.filter((row) => row.captured_ms > cutoffMs);
+    const windowDeltas = deltas.filter((row) => row.captured_ms > cutoffMs);
+    return {
+      earned_usd: roundUsd(windowDeltas.reduce((sum, row) => sum + row.earned_usd, 0)),
+      snapshot_count: samples.length,
+      reset_count: windowDeltas.filter((row) => row.reset).length,
+      baseline_at: baseline?.captured_at || null,
+      complete: !!baseline && samples.length > 0,
+    };
+  };
+
+  const dailyByDate = new Map();
+  for (let offset = days - 1; offset >= 0; offset -= 1) {
+    const date = new Date(nowMs);
+    date.setUTCHours(0, 0, 0, 0);
+    date.setUTCDate(date.getUTCDate() - offset);
+    dailyByDate.set(utcDayKey(date), {
+      date: utcDayKey(date),
+      dex,
+      earned_usd: 0,
+      snapshot_count: 0,
+      reset_count: 0,
+      closing_cumulative_usd: null,
+      last_snapshot_at: null,
+    });
+  }
+  for (const row of timeline) {
+    const date = utcDayKey(row.captured_at);
+    const daily = dailyByDate.get(date);
+    if (!daily) continue;
+    daily.snapshot_count += 1;
+    daily.closing_cumulative_usd = roundUsd(row.cumulative_earned_usd);
+    daily.last_snapshot_at = row.captured_at;
+  }
+  for (const row of deltas) {
+    const date = utcDayKey(row.captured_at);
+    const daily = dailyByDate.get(date);
+    if (!daily) continue;
+    daily.earned_usd = roundUsd(daily.earned_usd + row.earned_usd);
+    if (row.reset) daily.reset_count += 1;
+  }
+
+  const latest = timeline[timeline.length - 1] || null;
+  return {
+    dex,
+    d1: summarizeWindow(1),
+    d7: summarizeWindow(7),
+    d30: summarizeWindow(Math.min(30, days)),
+    current_cumulative_usd: latest ? roundUsd(latest.cumulative_earned_usd) : null,
+    last_snapshot_at: latest?.captured_at || null,
+    source: latest?.source || null,
+    source_detail: latest?.source_detail || null,
+    currency: latest?.currency || null,
+    stored_snapshot_count: timeline.length,
+    daily: Array.from(dailyByDate.values()),
+  };
+}
+
+function readEarningsSnapshotHistory(mainDb, { days = EARNINGS_SNAPSHOT_HISTORY_DAYS, now = new Date(), dex = null } = {}) {
+  const clampedDays = Math.max(1, Math.min(EARNINGS_SNAPSHOT_HISTORY_DAYS, Number(days) || EARNINGS_SNAPSHOT_HISTORY_DAYS));
+  const nowIso = earningsSnapshotIso(now);
+  const nowMs = Date.parse(nowIso);
+  const cutoffIso = new Date(nowMs - clampedDays * DAY_MS).toISOString();
+  const dexes = dex ? [normalizeEarningsDex(dex)] : EARNINGS_DEX_ORDER;
+  const empty = {
+    method: 'positive_delta_of_cumulative_snapshots',
+    days: clampedDays,
+    generated_at: nowIso,
+    windows: {
+      d1: { earned_usd: 0, snapshot_count: 0 },
+      d7: { earned_usd: 0, snapshot_count: 0 },
+      d30: { earned_usd: 0, snapshot_count: 0 },
+    },
+    dexes: {},
+    daily: [],
+    note: 'Only stored cumulative earnings snapshots are used. Positive deltas are income; decreases are treated as claim/withdraw/reset events and never as negative income.',
+  };
+  if (!mainDb) return empty;
+  ensureEarningsSnapshots(mainDb);
+  const baselineQuery = mainDb.prepare(`
+    SELECT * FROM earnings_snapshots
+    WHERE dex = ? AND unixepoch(captured_at) <= unixepoch(?)
+    ORDER BY unixepoch(captured_at) DESC, id DESC
+    LIMIT 1
+  `);
+  const recentQuery = mainDb.prepare(`
+    SELECT * FROM earnings_snapshots
+    WHERE dex = ?
+      AND unixepoch(captured_at) > unixepoch(?)
+      AND unixepoch(captured_at) <= unixepoch(?)
+    ORDER BY unixepoch(captured_at), id
+  `);
+  for (const key of dexes) {
+    if (!EARNINGS_READER_CONFIG[key]) continue;
+    const baseline = baselineQuery.get(key, cutoffIso) || null;
+    const recent = recentQuery.all(key, cutoffIso, nowIso);
+    const rows = baseline ? [baseline, ...recent.filter((row) => row.id !== baseline.id)] : recent;
+    const summary = summarizeEarningsSnapshotDex(key, rows, nowMs, clampedDays);
+    empty.dexes[key] = summary;
+    for (const windowKey of ['d1', 'd7', 'd30']) {
+      empty.windows[windowKey].earned_usd = roundUsd(
+        empty.windows[windowKey].earned_usd + summary[windowKey].earned_usd,
+      );
+      empty.windows[windowKey].snapshot_count += summary[windowKey].snapshot_count;
+    }
+    empty.daily.push(...summary.daily);
+  }
+  empty.daily.sort((a, b) => b.date.localeCompare(a.date) || EARNINGS_DEX_ORDER.indexOf(a.dex) - EARNINGS_DEX_ORDER.indexOf(b.dex));
+  return empty;
+}
+
+async function captureScheduledEarningsSnapshot(mainDb) {
+  if (!mainDb || _earningsSnapshotCaptureRunning) return null;
+  _earningsSnapshotCaptureRunning = true;
+  try {
+    const result = await fetchAllEarnings({ force: true, mainDb });
+    const recorded = Object.values(result.snapshot_history?.dexes || {})
+      .filter((row) => row.last_snapshot_at === result.last_updated).length;
+    console.log(`[earnings-snapshots] capture complete (${recorded || 'hourly'} current rows)`);
+    return result;
+  } catch (error) {
+    console.warn('[earnings-snapshots] capture failed:', error?.message || error);
+    return null;
+  } finally {
+    _earningsSnapshotCaptureRunning = false;
+  }
+}
+
+function startEarningsSnapshotScheduler({ mainDb } = {}) {
+  if (!mainDb || process.env.EARNINGS_SNAPSHOT_SCHEDULER === '0') return null;
+  ensureEarningsSnapshots(mainDb);
+  if (_earningsSnapshotInterval) return _earningsSnapshotInterval;
+  _earningsSnapshotInitialTimer = setTimeout(
+    () => captureScheduledEarningsSnapshot(mainDb),
+    EARNINGS_SNAPSHOT_INITIAL_DELAY_MS,
+  );
+  _earningsSnapshotInterval = setInterval(
+    () => captureScheduledEarningsSnapshot(mainDb),
+    EARNINGS_SNAPSHOT_INTERVAL_MS,
+  );
+  _earningsSnapshotInitialTimer.unref?.();
+  _earningsSnapshotInterval.unref?.();
+  console.log(`[earnings-snapshots] scheduled every ${Math.round(EARNINGS_SNAPSHOT_INTERVAL_MS / 60000)} minute(s)`);
+  return _earningsSnapshotInterval;
+}
+
+function stopEarningsSnapshotScheduler() {
+  if (_earningsSnapshotInitialTimer) clearTimeout(_earningsSnapshotInitialTimer);
+  if (_earningsSnapshotInterval) clearInterval(_earningsSnapshotInterval);
+  _earningsSnapshotInitialTimer = null;
+  _earningsSnapshotInterval = null;
+}
+
 function wrapEarningsResult(label, settledOrValue) {
   if (settledOrValue?.status === 'fulfilled') {
     return {
@@ -3068,6 +3369,7 @@ async function fetchEarningsDex(dex, { force = false, mainDb = null } = {}) {
       last_updated: _cache.last_updated || new Date(_cacheAt).toISOString(),
       cached: true,
       age_ms: now - _cacheAt,
+      snapshot_history: readEarningsSnapshotHistory(mainDb, { dex: label }),
     };
   }
   const row = await readEarningsDex(label, { mainDb });
@@ -3080,19 +3382,26 @@ async function fetchEarningsDex(dex, { force = false, mainDb = null } = {}) {
     };
     _cacheAt = now;
   }
+  recordEarningsSnapshots(mainDb, { [label]: row }, new Date(now));
   return {
     dex: label,
     row,
     last_updated: new Date(now).toISOString(),
     cached: false,
     age_ms: 0,
+    snapshot_history: readEarningsSnapshotHistory(mainDb, { dex: label, now: new Date(now) }),
   };
 }
 
 async function fetchAllEarnings({ force = false, mainDb = null } = {}) {
   const now = Date.now();
   if (!force && _cache && now - _cacheAt < CACHE_TTL_MS) {
-    return { ..._cache, cached: true, age_ms: now - _cacheAt };
+    return {
+      ..._cache,
+      cached: true,
+      age_ms: now - _cacheAt,
+      snapshot_history: readEarningsSnapshotHistory(mainDb, { now: new Date(now) }),
+    };
   }
   const entries = await Promise.all(EARNINGS_DEX_ORDER.map(async (label) => ([
     label,
@@ -3105,14 +3414,27 @@ async function fetchAllEarnings({ force = false, mainDb = null } = {}) {
   out.total_usd = earningsTotalUsd(out);
   _cache = out;
   _cacheAt = now;
-  return { ...out, cached: false, age_ms: 0 };
+  recordEarningsSnapshots(mainDb, out, new Date(now));
+  return {
+    ...out,
+    cached: false,
+    age_ms: 0,
+    snapshot_history: readEarningsSnapshotHistory(mainDb, { now: new Date(now) }),
+  };
 }
 
 module.exports = {
   fetchAllEarnings,
   fetchEarningsDex,
   fetchRevenueAnalytics,
+  readEarningsSnapshotHistory,
+  startEarningsSnapshotScheduler,
+  stopEarningsSnapshotScheduler,
   _test: {
     earningsDexOrder: () => [...EARNINGS_DEX_ORDER],
+    ensureEarningsSnapshots,
+    earningsSnapshotBucket,
+    recordEarningsSnapshots,
+    readEarningsSnapshotHistory,
   },
 };

@@ -283,7 +283,7 @@ try {
   });
   assert.equal(oldNonFlame.valid, true, 'legacy non-Flamethrower replay remains accepted');
 
-  console.log('[FLAMETHROWER_COMBAT] PASS ground_only=true 18/45/0,15,30/90=true AoE45=true ward/freeze/destruction=true');
+  console.log('[FLAMETHROWER_COMBAT] PASS ground_only=true 18/60/0,15,30/90=true AoE45=true ward/freeze/destruction=true');
 } finally {
   Object.assign(TROOP_STATS.knight[1], originalKnight);
   Object.assign(TROOP_STATS.mechanical_dragon[1], originalMechanicalDragon);

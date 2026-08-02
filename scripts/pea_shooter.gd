@@ -3,7 +3,7 @@ extends BaseTroop
 ## Five-slot ranged troop that fires three independently simulated green peas
 ## during one authored combo animation.
 
-const MAX_TROOP_LEVEL: int = 7
+const MAX_TROOP_LEVEL: int = 9
 const BURST_COUNT: int = 3
 const BURST_PHASES: Array[float] = [0.22, 0.50, 0.78]
 const PROJECTILE_SPEED: float = 2.15
@@ -24,6 +24,8 @@ const LEVEL_STATS: Dictionary = {
 	5: {"hp": 3905, "damage": 418, "atk_speed": 1.75},
 	6: {"hp": 4670, "damage": 536, "atk_speed": 1.75},
 	7: {"hp": 6700, "damage": 825, "atk_speed": 1.75},
+	8: {"hp": 6700, "damage": 825, "atk_speed": 1.75},
+	9: {"hp": 6700, "damage": 825, "atk_speed": 1.75},
 }
 
 const ANIM_FILES: Array[String] = [

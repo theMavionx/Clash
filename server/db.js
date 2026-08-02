@@ -2298,8 +2298,8 @@ try {
 // ---------- Resource Production Definitions ----------
 
 const PRODUCTION_DEFS = {
-  mine:    { resource: 'ore',  rate: [18, 33, 54, 81, 120, 170, 225], max: [200, 400, 800, 1600, 3000, 5000, 7500] },    // per minute
-  sawmill: { resource: 'wood', rate: [24, 45, 72, 108, 160, 230, 300], max: [250, 500, 1000, 2000, 3750, 6000, 9000] },
+  mine:    { resource: 'ore',  rate: [18, 33, 54, 81, 120, 170, 225, 295, 375], max: [200, 400, 800, 1600, 3000, 5000, 7500, 10500, 14000] },    // per minute
+  sawmill: { resource: 'wood', rate: [24, 45, 72, 108, 160, 230, 300, 390, 500], max: [250, 500, 1000, 2000, 3750, 6000, 9000, 12000, 16000] },
 };
 
 // ---------- Prepared Statements ----------
@@ -5754,9 +5754,8 @@ function seedTournamentDailyPoolBaseline(tournamentId) {
 // ---------- Building Definitions (mirroring Godot) ----------
 
 // ---------- Town Hall Progression System ----------
-// Future TH8+ building data may be present for development and deterministic
-// fixtures, but player progression remains gated until its live rollout.
-const LIVE_TOWN_HALL_CAP = 7;
+// TH8 and TH9 are playable. TH10 assets remain data-ready behind this cap.
+const LIVE_TOWN_HALL_CAP = 9;
 
 // Buildings unlocked per TH level. Not listed = available from TH1.
 const TH_UNLOCK = {
@@ -5769,50 +5768,50 @@ const TH_UNLOCK = {
   harpoon:   6,  // unlocked at TH6
   cannon:    7,  // unlocked at TH7
   flamethrower: flamethrower.BUILDING.unlock_th,
-  air_bomb:  9,  // data-ready at TH9; live Town Hall progression remains capped below it
+  air_bomb:  9,  // two Air Bomb defenses unlock with playable TH9
 };
 
 // Max count per building type per TH level. Individual tables may include future
-// Town Hall gates beyond the current playable TH7 and clamp to their last entry.
+// Town Hall gates through the current playable TH9 and clamp to their last entry.
 const TH_MAX_COUNT = {
-  mine:         [1, 2, 3, 3, 4, 4, 4],
-  sawmill:      [1, 2, 3, 3, 4, 4, 4],
-  barn:         [1, 1, 1, 1, 1, 1, 1],
-  altar:        [1, 1, 1, 1, 1, 1, 1],
-  archer_tower: [1, 2, 3, 3, 3, 3, 3],
-  tombstone:    [0, 1, 3, 3, 3, 3, 3],  // unlocked at TH2
-  turret:       [0, 0, 3, 3, 3, 3, 3],  // unlocked at TH3
-  shark_trap:   [0, 0, 1, 1, 2, 3, 3],  // one at TH3, then +1 at TH5 and TH6
-  storage:      [0, 1, 2, 3, 3, 3, 3],  // unlocked at TH2
-  mage_tower:   [0, 0, 0, 2, 2, 2, 2],  // unlocked at TH4
-  mortar:       [0, 0, 0, 0, 1, 2, 2],  // unlocked at TH5, second at TH6
-  harpoon:      [0, 0, 0, 0, 0, 1, 1, 2], // one at TH6-TH7, second at TH8
-  cannon:       [0, 0, 0, 0, 0, 0, 2],  // unlocked at TH7
+  mine:         [1, 2, 3, 3, 4, 4, 4, 4, 4],
+  sawmill:      [1, 2, 3, 3, 4, 4, 4, 4, 4],
+  barn:         [1, 1, 1, 1, 1, 1, 1, 1, 1],
+  altar:        [1, 1, 1, 1, 1, 1, 1, 1, 1],
+  archer_tower: [1, 2, 3, 3, 3, 3, 3, 3, 3],
+  tombstone:    [0, 1, 3, 3, 3, 3, 3, 3, 3],  // unlocked at TH2
+  turret:       [0, 0, 3, 3, 3, 3, 3, 3, 3],  // unlocked at TH3
+  shark_trap:   [0, 0, 1, 1, 2, 3, 3, 4, 5],  // extra traps at TH8 and TH9
+  storage:      [0, 1, 2, 3, 3, 3, 3, 4, 4],  // fourth Storage supports TH8+ costs
+  mage_tower:   [0, 0, 0, 2, 2, 2, 2, 3, 3],  // third Mage Tower at TH8
+  mortar:       [0, 0, 0, 0, 1, 2, 2, 2, 2],  // unlocked at TH5, second at TH6
+  harpoon:      [0, 0, 0, 0, 0, 1, 1, 2, 2], // one at TH6-TH7, second at TH8
+  cannon:       [0, 0, 0, 0, 0, 0, 2, 3, 3],  // third Cannon at TH8
   flamethrower: flamethrower.BUILDING.max_count_by_th,
   air_bomb:     [0, 0, 0, 0, 0, 0, 0, 0, 2], // exactly two at TH9
-  town_hall:    [1, 1, 1, 1, 1, 1, 1],
+  town_hall:    [1, 1, 1, 1, 1, 1, 1, 1, 1],
 };
 
 // Maximum reachable building level at each Town Hall level. This is separate
 // from count unlocks because Mortar L5 and Harpoon L6 are TH6 content.
 const TH_MAX_LEVEL = {
-  town_hall:    [1, 2, 3, 4, 5, 6, 7],
-  mine:         [1, 2, 3, 4, 5, 6, 7],
-  sawmill:      [1, 2, 3, 4, 5, 6, 7],
-  barn:         [1, 2, 3, 4, 5, 6, 7],
-  storage:      [1, 2, 3, 4, 5, 6, 7],
-  archer_tower: [1, 2, 3, 4, 5, 6, 7],
-  turret:       [1, 2, 3, 4, 5, 6, 7],
-  mage_tower:   [1, 2, 3, 4, 5, 6, 7],
-  tombstone:    [1, 2, 3, 4, 4, 5, 6],
-  mortar:       [1, 1, 1, 1, 5, 6, 7],
-  harpoon:      [1, 1, 1, 1, 1, 6, 7, 8],
-  shark_trap:   [1, 2, 3, 4, 5, 6, 7],
-  cannon:       [1, 1, 1, 1, 1, 1, 7],
+  town_hall:    [1, 2, 3, 4, 5, 6, 7, 8, 9],
+  mine:         [1, 2, 3, 4, 5, 6, 7, 8, 9],
+  sawmill:      [1, 2, 3, 4, 5, 6, 7, 8, 9],
+  barn:         [1, 2, 3, 4, 5, 6, 7, 8, 9],
+  storage:      [1, 2, 3, 4, 5, 6, 7, 8, 9],
+  archer_tower: [1, 2, 3, 4, 5, 6, 7, 8, 9],
+  turret:       [1, 2, 3, 4, 5, 6, 7, 8, 9],
+  mage_tower:   [1, 2, 3, 4, 5, 6, 7, 8, 9],
+  tombstone:    [1, 2, 3, 4, 4, 5, 6, 7, 8],
+  mortar:       [1, 1, 1, 1, 5, 6, 7, 8, 9],
+  harpoon:      [1, 1, 1, 1, 1, 6, 7, 8, 8],
+  shark_trap:   [1, 2, 3, 4, 5, 6, 7, 8, 9],
+  cannon:       [1, 1, 1, 1, 1, 1, 7, 8, 9],
   flamethrower: flamethrower.BUILDING.max_level_by_th,
   air_bomb:     [1, 1, 1, 1, 1, 1, 1, 1, 9],
-  port:         [1, 2, 3, 3, 3, 3, 3],
-  altar:        [1, 1, 1, 1, 1, 1, 1],
+  port:         [1, 2, 3, 3, 3, 3, 3, 3, 3],
+  altar:        [1, 1, 1, 1, 1, 1, 1, 1, 1],
 };
 
 function getBuildingMaxLevelForTownHall(type, townHallLevel) {
@@ -5829,7 +5828,7 @@ const BUILDING_DEFS = {
   flamethrower: flamethrower.buildingDefinition(),
   town_hall: {
     size: [4, 4], max_level: LIVE_TOWN_HALL_CAP,
-    hp_levels: [3500, 8000, 16000, 24000, 30848, 41200, 51193],
+    hp_levels: [3500, 8000, 16000, 24000, 30848, 41200, 51193, 63000, 76000],
     cost: { gold: 0, wood: 0, ore: 0 },
     upgrade_cost: {
       2: { gold: 1200, wood: 4200, ore: 3500 },
@@ -5838,19 +5837,21 @@ const BUILDING_DEFS = {
       5: { gold: 30000, wood: 54000, ore: 48000 },
       6: { gold: 55000, wood: 75000, ore: 68000 },
       7: { gold: 85000, wood: 106000, ore: 98000 },
+      8: { gold: 120000, wood: 140000, ore: 130000 },
+      9: { gold: 175000, wood: 220000, ore: 200000 },
     },
     max_count: 1,
   },
   mine: {
-    size: [3, 3], max_level: 7,
-    hp_levels: [1200, 2200, 3800, 6000, 7712, 10302, 12798],
+    size: [3, 3], max_level: 9,
+    hp_levels: [1200, 2200, 3800, 6000, 7712, 10302, 12798, 14900, 17200],
     cost: { gold: 180, wood: 500, ore: 0 },
     upgrade_base_cost: { gold: 220, wood: 550, ore: 0 },
     max_count: 4,
   },
   barn: {
-    size: [4, 3], max_level: 7,
-    hp_levels: [2000, 3500, 6000, 9500, 12132, 16094, 19908],
+    size: [4, 3], max_level: 9,
+    hp_levels: [2000, 3500, 6000, 9500, 12132, 16094, 19908, 23200, 26800],
     cost: { gold: 350, wood: 900, ore: 750 },
     upgrade_base_cost: { gold: 450, wood: 1050, ore: 900 },
     max_count: 1,
@@ -5870,50 +5871,50 @@ const BUILDING_DEFS = {
     shop_sku: 'altar',
   },
   sawmill: {
-    size: [3, 3], max_level: 7,
-    hp_levels: [1200, 2200, 3800, 6000, 7712, 10302, 12798],
+    size: [3, 3], max_level: 9,
+    hp_levels: [1200, 2200, 3800, 6000, 7712, 10302, 12798, 14900, 17200],
     cost: { gold: 180, wood: 0, ore: 500 },
     upgrade_base_cost: { gold: 220, wood: 0, ore: 550 },
     max_count: 4,
   },
   turret: {
-    size: [2, 2], max_level: 7,
-    hp_levels: [900, 1600, 2800, 4500, 5558, 7137, 8532],
+    size: [2, 2], max_level: 9,
+    hp_levels: [900, 1600, 2800, 4500, 5558, 7137, 8532, 9900, 11400],
     cost: { gold: 800, wood: 2400, ore: 2000 },
     upgrade_base_cost: { gold: 750, wood: 2500, ore: 2100 },
     max_count: 6,
   },
   tombstone: {
-    size: [3, 3], max_level: 6,
-    hp_levels: [1000, 1500, 2000, 2700, 2956, 3418],
+    size: [3, 3], max_level: 8,
+    hp_levels: [1000, 1500, 2000, 2700, 2956, 3418, 4200, 5000],
     cost: { gold: 600, wood: 0, ore: 2200 },
     upgrade_base_cost: { gold: 650, wood: 0, ore: 2400 },
     max_count: 4,
   },
   storage: {
-    size: [4, 5], max_level: 7,
-    hp_levels: [1400, 2500, 4200, 6500, 8136, 10575, 12798],
+    size: [4, 5], max_level: 9,
+    hp_levels: [1400, 2500, 4200, 6500, 8136, 10575, 12798, 14900, 17200],
     cost: { gold: 400, wood: 1400, ore: 0 },
     upgrade_base_cost: { gold: 500, wood: 1500, ore: 0 },
     max_count: 4,
   },
   archer_tower: {
-    size: [3, 3], max_level: 7,
-    hp_levels: [800, 1500, 2500, 3800, 4703, 6051, 7252],
+    size: [3, 3], max_level: 9,
+    hp_levels: [800, 1500, 2500, 3800, 4703, 6051, 7252, 8400, 9700],
     cost: { gold: 500, wood: 1600, ore: 0 },
     upgrade_base_cost: { gold: 550, wood: 1700, ore: 0 },
     max_count: 4,
   },
   mage_tower: {
-    size: [3, 3], max_level: 7,
-    hp_levels: [700, 1200, 2000, 3100, 3837, 4939, 5901],
+    size: [3, 3], max_level: 9,
+    hp_levels: [700, 1200, 2000, 3100, 3837, 4939, 5901, 6850, 7900],
     cost: { gold: 2800, wood: 0, ore: 5200 },
     upgrade_base_cost: { gold: 1600, wood: 0, ore: 3000 },
     max_count: 2,
   },
   mortar: {
-    size: [2, 2], max_level: 7,
-    hp_levels: [1700, 2400, 3200, 4100, 4580, 5324, 6019],
+    size: [2, 2], max_level: 9,
+    hp_levels: [1700, 2400, 3200, 4100, 4580, 5324, 6019, 6900, 7900],
     cost: { gold: 8000, wood: 12000, ore: 10000 },
     upgrade_cost: {
       2: { gold: 14000, wood: 22000, ore: 18000 },
@@ -5922,6 +5923,8 @@ const BUILDING_DEFS = {
       5: { gold: 52000, wood: 72000, ore: 62000 },
       6: { gold: 68000, wood: 96000, ore: 82000 },
       7: { gold: 92000, wood: 132000, ore: 112000 },
+      8: { gold: 118000, wood: 165000, ore: 140000 },
+      9: { gold: 145000, wood: 205000, ore: 175000 },
     },
     max_count: 2,
   },
@@ -5960,17 +5963,17 @@ const BUILDING_DEFS = {
     max_count: 2,
   },
   shark_trap: {
-    size: [2, 2], max_level: 7,
-    hp_levels: [1, 1, 1, 1, 1, 1, 1],
-    damage_levels: [500, 750, 1050, 1450, 2000, 2400, 2900],
+    size: [2, 2], max_level: 9,
+    hp_levels: [1, 1, 1, 1, 1, 1, 1, 1, 1],
+    damage_levels: [500, 750, 1050, 1450, 2000, 2400, 2900, 3400, 3900],
     cost: { gold: 1800, wood: 4800, ore: 4000 },
     upgrade_base_cost: { gold: 1000, wood: 2600, ore: 2200 },
     max_count: 3,
     non_targetable: true,
   },
   cannon: {
-    size: [3, 3], max_level: 7,
-    hp_levels: [3200, 3900, 4700, 5600, 6148, 6742, 7141],
+    size: [3, 3], max_level: 9,
+    hp_levels: [3200, 3900, 4700, 5600, 6148, 6742, 7141, 8200, 9400],
     cost: { gold: 16000, wood: 36000, ore: 30000 },
     upgrade_cost: {
       2: { gold: 24000, wood: 52000, ore: 44000 },
@@ -5979,6 +5982,8 @@ const BUILDING_DEFS = {
       5: { gold: 65000, wood: 110000, ore: 92000 },
       6: { gold: 83000, wood: 128000, ore: 108000 },
       7: { gold: 105000, wood: 142000, ore: 125000 },
+      8: { gold: 130000, wood: 175000, ore: 150000 },
+      9: { gold: 155000, wood: 210000, ore: 185000 },
     },
     max_count: 2,
   },
@@ -6059,6 +6064,8 @@ const BUILDING_UPGRADE_COST_MULTIPLIERS = {
   5: 15,
   6: 27,
   7: 45,
+  8: 70,
+  9: 100,
 };
 
 function getBuildingUpgradeCost(type, currentLevel) {
@@ -6296,7 +6303,7 @@ function preferredChallengeTownHall(attackPower, profile, maxTownHall = 7) {
 }
 
 function virtualBotCandidatesForProfile(attackPower, profile) {
-  const attackerTh = Math.max(1, Math.min(7, Number(attackPower.town_hall_level || 1)));
+  const attackerTh = Math.max(1, Math.min(LIVE_TOWN_HALL_CAP, Number(attackPower.town_hall_level || 1)));
   const templates = buildBotBaseTemplates();
   const maxTemplateTh = templates.reduce((highest, template) => Math.max(highest, template.th), 1);
   const maxGapBelow = attackerTh >= 6
@@ -6338,14 +6345,14 @@ function virtualBotCandidatesForProfile(attackPower, profile) {
 
 function rankedBotPlayerId(templateId) {
   const cleanTemplateId = String(templateId || '').trim();
-  if (!/^bot-th[1-7]-(?:normal|hard)-\d+$/.test(cleanTemplateId)) {
+  if (!/^bot-th[1-9]-(?:normal|hard)-\d+$/.test(cleanTemplateId)) {
     throw new Error('Invalid ranked bot template id');
   }
   return `bot-ranked-${cleanTemplateId}`;
 }
 
 function virtualRankedBotCandidates(townHallLevel) {
-  const defenderTh = Math.max(1, Math.min(7, Math.trunc(Number(townHallLevel) || 1)));
+  const defenderTh = Math.max(1, Math.min(LIVE_TOWN_HALL_CAP, Math.trunc(Number(townHallLevel) || 1)));
   const exactTier = buildBotBaseTemplates()
     .filter((template) => template.th === defenderTh);
   const rankedChallengeArchetypes = new Set(
@@ -6397,8 +6404,8 @@ function materializeBotTarget(candidate, sessionId) {
   const insertBuilding = db.prepare(`
     INSERT INTO buildings (
       player_id, type, level, grid_x, grid_z, grid_index,
-      hp, max_hp, has_ship, ship_troops, ship_troops_template
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', '[]')
+      hp, max_hp, facing_step, has_ship, ship_troops, ship_troops_template
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', '[]')
   `);
 
   insertBot.run(
@@ -6426,6 +6433,7 @@ function materializeBotTarget(candidate, sessionId) {
       building.grid_index || 0,
       maxHp,
       maxHp,
+      building.type === 'flamethrower' ? Number(building.facing_step ?? 0) : null,
       building.has_ship ? 1 : 0
     );
   }
@@ -6498,8 +6506,8 @@ function materializeRankedBotTarget(candidate) {
   const insertBuilding = db.prepare(`
     INSERT INTO buildings (
       player_id, type, level, grid_x, grid_z, grid_index,
-      hp, max_hp, has_ship, ship_troops, ship_troops_template
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', '[]')
+      hp, max_hp, facing_step, has_ship, ship_troops, ship_troops_template
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', '[]')
   `);
   for (const building of template.buildings) {
     const maxHp = botBuildingHp(building.type, building.level);
@@ -6512,6 +6520,7 @@ function materializeRankedBotTarget(candidate) {
       building.grid_index || 0,
       maxHp,
       maxHp,
+      building.type === 'flamethrower' ? Number(building.facing_step ?? 0) : null,
       building.has_ship ? 1 : 0,
     );
   }
@@ -6538,7 +6547,7 @@ cleanupOldBotTargets();
 
 const TROOP_DEFS = {
   knight: {
-    max_level: 7,
+    max_level: 9,
     slot_cost: TROOP_SLOT_COSTS.knight,
     buy_cost: 100,
     cost: [
@@ -6548,10 +6557,12 @@ const TROOP_DEFS = {
       { gold: 1200, wood: 0, ore: 1000 },
       { gold: 2200, wood: 0, ore: 1800 },
       { gold: 3800, wood: 0, ore: 3200 },
+      { gold: 6200, wood: 0, ore: 5200 },
+      { gold: 9500, wood: 0, ore: 8000 },
     ],
   },
   mage: {
-    max_level: 7,
+    max_level: 9,
     min_town_hall_level: 3,
     slot_cost: TROOP_SLOT_COSTS.mage,
     buy_cost: 600,
@@ -6562,10 +6573,12 @@ const TROOP_DEFS = {
       { gold: 2000, wood: 0, ore: 2000 },
       { gold: 3600, wood: 0, ore: 3600 },
       { gold: 6000, wood: 0, ore: 6000 },
+      { gold: 9500, wood: 0, ore: 9500 },
+      { gold: 14500, wood: 0, ore: 14500 },
     ],
   },
   wind_mage: {
-    max_level: 7,
+    max_level: 9,
     min_town_hall_level: 8,
     slot_cost: TROOP_SLOT_COSTS.wind_mage,
     buy_cost: 1800,
@@ -6576,10 +6589,12 @@ const TROOP_DEFS = {
       { gold: 2000, wood: 0, ore: 2000 },
       { gold: 3600, wood: 0, ore: 3600 },
       { gold: 6000, wood: 0, ore: 6000 },
+      { gold: 9500, wood: 0, ore: 9500 },
+      { gold: 14500, wood: 0, ore: 14500 },
     ],
   },
   necromancer: {
-    max_level: 7,
+    max_level: 9,
     min_town_hall_level: 7,
     slot_cost: TROOP_SLOT_COSTS.necromancer,
     buy_cost: 1800,
@@ -6590,6 +6605,8 @@ const TROOP_DEFS = {
       { gold: 2000, wood: 0, ore: 2000 },
       { gold: 3600, wood: 0, ore: 3600 },
       { gold: 6000, wood: 0, ore: 6000 },
+      { gold: 9500, wood: 0, ore: 9500 },
+      { gold: 14500, wood: 0, ore: 14500 },
     ],
   },
   horror: {
@@ -6618,7 +6635,7 @@ const TROOP_DEFS = {
     ],
   },
   archer: {
-    max_level: 7,
+    max_level: 9,
     slot_cost: TROOP_SLOT_COSTS.archer,
     buy_cost: 100,
     cost: [
@@ -6628,10 +6645,12 @@ const TROOP_DEFS = {
       { gold: 1400, wood: 1400, ore: 0 },
       { gold: 2600, wood: 2600, ore: 0 },
       { gold: 4400, wood: 4400, ore: 0 },
+      { gold: 7000, wood: 7000, ore: 0 },
+      { gold: 11000, wood: 11000, ore: 0 },
     ],
   },
   pea_shooter: {
-    max_level: 7,
+    max_level: 9,
     min_town_hall_level: 4,
     slot_cost: TROOP_SLOT_COSTS.pea_shooter,
     buy_cost: 500,
@@ -6642,6 +6661,8 @@ const TROOP_DEFS = {
       { gold: 2400, wood: 2400, ore: 0 },
       { gold: 4200, wood: 4200, ore: 0 },
       { gold: 7000, wood: 7000, ore: 0 },
+      { gold: 11000, wood: 11000, ore: 0 },
+      { gold: 16500, wood: 16500, ore: 0 },
     ],
   },
   ranger: {
@@ -6656,7 +6677,7 @@ const TROOP_DEFS = {
     ],
   },
   mimic: {
-    max_level: 7,
+    max_level: 9,
     min_town_hall_level: 5,
     slot_cost: TROOP_SLOT_COSTS.mimic,
     buy_cost: 800,
@@ -6667,10 +6688,12 @@ const TROOP_DEFS = {
       { gold: 1400, wood: 1400, ore: 0 },
       { gold: 2600, wood: 2600, ore: 0 },
       { gold: 4400, wood: 4400, ore: 0 },
+      { gold: 7000, wood: 7000, ore: 0 },
+      { gold: 11000, wood: 11000, ore: 0 },
     ],
   },
   mechanical_dragon: {
-    max_level: 7,
+    max_level: 9,
     min_town_hall_level: 6,
     slot_cost: TROOP_SLOT_COSTS.mechanical_dragon,
     buy_cost: 500,
@@ -6681,10 +6704,12 @@ const TROOP_DEFS = {
       { gold: 4000, wood: 0, ore: 4000 },
       { gold: 7200, wood: 0, ore: 7200 },
       { gold: 12000, wood: 0, ore: 12000 },
+      { gold: 18000, wood: 0, ore: 18000 },
+      { gold: 28000, wood: 0, ore: 28000 },
     ],
   },
   ice_golem: {
-    max_level: 7,
+    max_level: 9,
     min_town_hall_level: 9,
     slot_cost: TROOP_SLOT_COSTS.ice_golem,
     buy_cost: 1100,
@@ -6695,10 +6720,12 @@ const TROOP_DEFS = {
       { gold: 4000, wood: 0, ore: 4000 },
       { gold: 7200, wood: 0, ore: 7200 },
       { gold: 12000, wood: 0, ore: 12000 },
+      { gold: 18000, wood: 0, ore: 18000 },
+      { gold: 28000, wood: 0, ore: 28000 },
     ],
   },
   demon_king: {
-    max_level: 7,
+    max_level: 9,
     slot_cost: TROOP_SLOT_COSTS.demon_king,
     buy_cost: 0,
     cost: [
@@ -6708,10 +6735,12 @@ const TROOP_DEFS = {
       { gold: 1200, wood: 0, ore: 1000 },
       { gold: 2200, wood: 0, ore: 1800 },
       { gold: 3800, wood: 0, ore: 3200 },
+      { gold: 6200, wood: 0, ore: 5200 },
+      { gold: 9500, wood: 0, ore: 8000 },
     ],
   },
   fire_dragon: {
-    max_level: 7,
+    max_level: 9,
     slot_cost: TROOP_SLOT_COSTS.fire_dragon,
     buy_cost: 0,
     cost: [
@@ -6721,6 +6750,8 @@ const TROOP_DEFS = {
       { gold: 2000, wood: 0, ore: 2000 },
       { gold: 3600, wood: 0, ore: 3600 },
       { gold: 6000, wood: 0, ore: 6000 },
+      { gold: 9500, wood: 0, ore: 9500 },
+      { gold: 14500, wood: 0, ore: 14500 },
     ],
   },
 };
@@ -6836,21 +6867,22 @@ const GRID_SPECS = {
 const TROPHY_WIN = 30;
 
 const TROPHY_TABLE = {
-  town_hall: [50, 120, 250, 450, 720, 1080, 1520],
-  mine:      [10, 25, 50, 90, 145, 220, 315],
-  barn:      [10, 25, 50, 90, 145, 220, 315],
+  town_hall: [50, 120, 250, 450, 720, 1080, 1520, 2050, 2650],
+  mine:      [10, 25, 50, 90, 145, 220, 315, 430, 565],
+  barn:      [10, 25, 50, 90, 145, 220, 315, 430, 565],
   port:      [15, 35, 70, 125, 195],
-  sawmill:   [10, 25, 50, 90, 145, 220, 315],
-  turret:    [20, 45, 90, 160, 255, 380, 535],
-  tombstone: [5, 10, 20, 40, 70, 110],
-  storage:      [10, 25, 50, 90, 145, 220, 315],
-  archer_tower: [15, 35, 70, 125, 200, 300, 425],
-  mage_tower:   [20, 45, 90, 145, 225, 330, 460],
-  mortar:       [30, 65, 125, 210, 315, 440, 580],
+  sawmill:   [10, 25, 50, 90, 145, 220, 315, 430, 565],
+  turret:    [20, 45, 90, 160, 255, 380, 535, 720, 930],
+  tombstone: [5, 10, 20, 40, 70, 110, 160, 220],
+  storage:      [10, 25, 50, 90, 145, 220, 315, 430, 565],
+  archer_tower: [15, 35, 70, 125, 200, 300, 425, 570, 750],
+  mage_tower:   [20, 45, 90, 145, 225, 330, 460, 620, 810],
+  mortar:       [30, 65, 125, 210, 315, 440, 580, 750, 950],
   harpoon:      [20, 35, 55, 80, 110, 145, 190, 240],
   air_bomb:     [30, 55, 90, 135, 190, 250, 320, 400, 490],
-  shark_trap:   [25, 40, 60, 85, 115, 155, 205],
-  cannon:       [25, 45, 70, 105, 145, 190, 240],
+  flamethrower: [30, 55, 90, 135, 190, 250, 320, 400, 490, 590],
+  shark_trap:   [25, 40, 60, 85, 115, 155, 205, 270, 345],
+  cannon:       [25, 45, 70, 105, 145, 190, 240, 305, 380],
 };
 
 // ---------- Helper Functions ----------
@@ -8518,6 +8550,8 @@ const TH_BASE_CAPACITY = {
   5: { gold: 18000, wood: 18000, ore: 18000 },
   6: { gold: 25000, wood: 25000, ore: 25000 },
   7: { gold: 35000, wood: 35000, ore: 35000 },
+  8: { gold: 50000, wood: 50000, ore: 50000 },
+  9: { gold: 55000, wood: 55000, ore: 55000 },
 };
 
 // Additional capacity per Storage building per level
@@ -8529,6 +8563,8 @@ const STORAGE_CAPACITY = {
   5: { gold: 19000, wood: 19000, ore: 19000 },
   6: { gold: 27000, wood: 27000, ore: 27000 },
   7: { gold: 36000, wood: 36000, ore: 36000 },
+  8: { gold: 45000, wood: 45000, ore: 45000 },
+  9: { gold: 55000, wood: 55000, ore: 55000 },
 };
 
 function getResourceCaps(playerId) {
@@ -8538,7 +8574,7 @@ function getResourceCaps(playerId) {
   for (const b of buildings) {
     if (b.type === 'town_hall') thLevel = b.level;
   }
-  const base = TH_BASE_CAPACITY[Math.min(thLevel, 7)] || TH_BASE_CAPACITY[1];
+  const base = TH_BASE_CAPACITY[Math.min(thLevel, LIVE_TOWN_HALL_CAP)] || TH_BASE_CAPACITY[1];
   let maxGold = base.gold;
   let maxWood = base.wood;
   let maxOre = base.ore;

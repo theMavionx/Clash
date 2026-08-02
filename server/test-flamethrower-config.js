@@ -93,4 +93,4 @@ assert.equal(flame.effectiveTickDamage(8, 5), 310);
 assert.equal(Object.isFrozen(flame.CONFIG), true);
 assert.equal(Object.isFrozen(flame.LEVELS[0].cost), true);
 
-console.log('[FLAMETHROWER_CONFIG] PASS rows=10 facings=24 cone=50 cadence=9/18/45/0,15,30/90');
+console.log('[FLAMETHROWER_CONFIG] PASS rows=10 facings=24 cone=50 cadence=9/18/60/0,15,30/90');

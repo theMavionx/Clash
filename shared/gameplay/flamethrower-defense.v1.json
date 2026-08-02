@@ -13,7 +13,7 @@
     "tick_rate": 60,
     "scan_ticks": 9,
     "prime_ticks": 18,
-    "stream_ticks": 45,
+    "stream_ticks": 60,
     "damage_offsets": [0, 15, 30],
     "cycle_ticks": 90,
     "full_cone_degrees": 50,

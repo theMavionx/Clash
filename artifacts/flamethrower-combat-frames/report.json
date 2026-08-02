@@ -33,7 +33,7 @@
 				"next_stream_ready_tick": 108,
 				"range": 1.78,
 				"server_id": 8001,
-				"stream_end_tick": 63,
+				"stream_end_tick": 78,
 				"stream_index": 1,
 				"stream_start_tick": 18,
 				"tick": 18
@@ -52,9 +52,9 @@
 				"facing_step": 0,
 				"hit_count": 3,
 				"hit_ids": [
-					68149053503,
-					68232939588,
-					68316825673
+					68434266176,
+					68518152261,
+					68602038346
 				],
 				"kills": [],
 				"level": 8,
@@ -79,9 +79,9 @@
 				"facing_step": 0,
 				"hit_count": 3,
 				"hit_ids": [
-					68149053503,
-					68232939588,
-					68316825673
+					68434266176,
+					68518152261,
+					68602038346
 				],
 				"kills": [],
 				"level": 8,
@@ -106,9 +106,9 @@
 				"facing_step": 0,
 				"hit_count": 3,
 				"hit_ids": [
-					68149053503,
-					68232939588,
-					68316825673
+					68434266176,
+					68518152261,
+					68602038346
 				],
 				"kills": [],
 				"level": 8,
@@ -138,7 +138,7 @@
 				"server_id": 8001,
 				"stream_index": 1,
 				"stream_start_tick": 18,
-				"tick": 63,
+				"tick": 78,
 				"unique_targets": 3
 			}
 		}
@@ -148,14 +148,17 @@
 		15,
 		30
 	],
+	"expected_stream_ticks": 60,
 	"facing_step": 0,
 	"failures": [],
-	"frames": 64,
+	"frames": 125,
 	"ground_hp": [
 		3115,
 		3115,
 		3115
 	],
 	"level": 8,
-	"status": "PASS"
+	"simulation_ticks": 79,
+	"status": "PASS",
+	"tail_capture_frames": 46
 }

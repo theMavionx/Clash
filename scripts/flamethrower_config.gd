@@ -96,6 +96,23 @@ static func global_yaw_for_step(step: int) -> float:
 	return -TAU * float(normalize_preview_step(step)) / float(FACING_COUNT)
 
 
+static func apply_global_yaw(node: Node3D, yaw: float) -> void:
+	# Assign through local rotation so directional buildings can be aimed while
+	# their spawn/upgrade scale tween is at Vector3.ZERO. Godot cannot reliably
+	# decompose a zero-scale global basis for a global_rotation assignment.
+	var parent_yaw := 0.0
+	var parent_3d := node.get_parent() as Node3D
+	if is_instance_valid(parent_3d):
+		var parent_forward_3d := -parent_3d.global_transform.basis.z
+		var parent_forward := Vector2(parent_forward_3d.x, parent_forward_3d.z)
+		if parent_forward.length_squared() > 0.000000000001:
+			parent_forward = parent_forward.normalized()
+			parent_yaw = atan2(-parent_forward.x, -parent_forward.y)
+	var local_rotation := node.rotation
+	local_rotation.y = wrapf(yaw - parent_yaw, -PI, PI)
+	node.rotation = local_rotation
+
+
 static func nearest_step_toward(origin: Vector3, target: Vector3) -> int:
 	var delta := Vector2(target.x - origin.x, target.z - origin.z)
 	if delta.length_squared() <= 0.000000000001:

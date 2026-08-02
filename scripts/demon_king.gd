@@ -26,6 +26,8 @@ const COMMON_LEVEL_STATS: Dictionary = {
 	5: {"hp": 6800, "damage": 837, "atk_speed": 1.40},
 	6: {"hp": 9000, "damage": 1240, "atk_speed": 1.40},
 	7: {"hp": 10700, "damage": 1618, "atk_speed": 1.40},
+	8: {"hp": 10700, "damage": 1618, "atk_speed": 1.40},
+	9: {"hp": 10700, "damage": 1618, "atk_speed": 1.40},
 }
 
 const NFT_RARITY_MULTIPLIERS: Dictionary = {
@@ -34,7 +36,7 @@ const NFT_RARITY_MULTIPLIERS: Dictionary = {
 	"legendary": 1.25,
 	"unrevealed": 1.2,
 }
-const MAX_TROOP_LEVEL: int = 7
+const MAX_TROOP_LEVEL: int = 9
 
 const DEMON_ANIM_FILES: Array = [
 	"res://Model/Characters/Animations/DemonKing/DemonKing_Attack01.fbx",

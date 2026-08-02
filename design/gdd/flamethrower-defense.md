@@ -1,7 +1,7 @@
 # Flamethrower Defense — Implemented Baseline
 
 Status: implemented and automatically verified
-Updated: 2026-08-01
+Updated: 2026-08-02
 Rules version: `flamethrower-v1`
 
 ## Role
@@ -17,7 +17,7 @@ The authoritative machine-readable configuration is `shared/gameplay/flamethrowe
 - Second building unlocks at TH10.
 - Maximum counts by TH8/TH9/TH10: 1/1/2.
 - Maximum levels by TH8/TH9/TH10: 8/9/10.
-- Normal project progression currently ends at TH7. The TH8–10 rules are data-ready and tested through fixtures; live acquisition becomes available when TH8 progression is enabled.
+- Playable progression now reaches TH9. The first Flamethrower is acquired at TH8 and upgrades to L9 at TH9; TH10/L10 remains data-ready behind the live cap.
 
 | Level | TH | HP | Damage per tick | Range | Gold | Wood | Ore |
 |---:|---:|---:|---:|---:|---:|---:|---:|
@@ -50,7 +50,7 @@ Combat is deterministic at 60 ticks per second:
 |---|---:|
 | Scan | 9 ticks |
 | Prime | 18 ticks |
-| Stream | 45 ticks |
+| Stream | 60 ticks (1.0 second) |
 | Damage pulses | stream offsets 0, 15, 30 |
 | Full cycle | 90 ticks |
 
@@ -61,8 +61,8 @@ Ward mitigation is applied to each pulse using ceiling rounding. Freeze immediat
 ## Presentation and Assets
 
 - Ten model wrappers exist at `Model/Flamethrower/level_01` through `level_10`.
-- Every wrapper exposes `SourceModel`, `MuzzleSocket`, and `FacingArrowSocket` with local negative Z as forward. The raw art's positive-Z barrel is normalized by a 180-degree rotation on `SourceModel` only; the wrapper root and sockets remain canonical.
-- Fire presentation uses two persistent particle nodes: the Fire Dragon-profile plume and its pooled secondary trail. Dynamic attack lights and the full-range geometric core are disabled, so the attack never illuminates the ground. The stream uses the Dragon texture, additive billboard material, width, velocity, lifetime, particle density, and fade profile without allocating nodes per shot. The plume emits continuously only for the 45-tick Flamethrower stream.
+- Every wrapper exposes `SourceModel`, `MuzzleSocket`, and `FacingArrowSocket` with local negative Z as forward. The raw art already places its visible nozzle along negative Z, so `SourceModel` preserves its authored rotation; the wrapper root and sockets remain canonical.
+- Fire presentation combines one visible emitter using the Fire Dragon's additive texture/material with a very low-opacity procedural sector core. The core is an animated dark-orange flame surface rather than a solid beam: it occupies only the inner `17.5`-degree half-angle, is clipped by the same tapered sector geometry, and exists solely to keep the terminal plume connected beneath the Dragon detail cards. The Flamethrower uses 96 particles and `1.65x` Dragon billboard width. The cards fill the reserved edge margin so the combined plume visually occupies, but does not intentionally exceed, the `25`-degree damage half-cone. The emitter birth radius is only `0.006x` beam width. Its linearly interpolated, cubic-style size profile grows from `0.001` at the nozzle through `0.016`, `0.125`, and `0.422` at normalized ages `0.25`, `0.50`, and `0.75`, reaching `1.0` only at the far end. This strongly suppresses card width near the cone apex while preserving full width at range, and linear tangent modes prevent interpolation overshoot. The visual origin starts `0.14` units forward of `MuzzleSocket`; VFX length subtracts both the wrapper's root-to-muzzle forward offset and this start offset from combat range. This compensates for the screen-space parallax between the elevated nozzle and the ground-sector edge, keeps the first visible card inside the cone, and leaves the last card at the damage-sector range instead of beyond it. Unlike the Dragon's freely rotating burst cards, the sustained tower cards align their long axis to velocity and use only `±12` degrees of angle plus `±22` degrees/second angular motion. Tower velocity and lifetime are deterministic at the terminal boundary, so every card reaches the complete visual range together instead of producing early fragments. Random card scale is constrained to `0.72x–1.0x`, while the taper curve still makes the nozzle narrow. Dragon cards fade out by `94%` of travel; the procedural flame surface carries only the final `6%` to the range boundary, eliminating isolated terminal sprites without reading as a filled attack-sector sheet. The process tint is neutral so the ramp is not multiplied by a second yellow tint and washed out. Because the tower sustains the emitter for a 60-tick stream instead of playing one short Dragon burst, emission explosiveness and timing randomness are both `0.0`, producing even overlap without a warmup burst. Normal completion stops new particle emission and advances the core's rear edge with the draining plume; the final `16%` sliver is removed as one mass instead of degenerating into isolated dots. Dynamic attack lights remain disabled. Freeze, destruction, and cleanup still interrupt immediately.
 - Audio uses three persistent 3D players and existing project sounds for prime, loop, and impact events.
 - Level 4 uses the corrected deterministic material set.
 - The source archive contains no metallic, normal, or AO maps for levels 6–10. Those levels keep the real base/roughness sources and receive deterministic steel-blue material tinting; missing maps are not fabricated.
@@ -86,4 +86,4 @@ The implemented baseline is accepted when:
 6. Freeze, Ward, destruction cleanup, and cooldown behavior match the deterministic timeline.
 7. Web production build, Godot headless probes, server persistence/snapshot/combat tests, and client-server parity tests pass.
 
-Automated verification covers all conditions above. Remaining release checks are manual observation at multiple frame rates, browser/touch interaction, concurrent TH10 buildings, live L1-to-L10 model swaps, and normal TH8 progression once that progression exists.
+Automated verification covers all conditions above, including normal TH8 progression and TH8–TH9 server-authoritative combat. Remaining release checks are manual browser/touch observation and concurrent TH10/L10 behavior when TH10 is promoted.

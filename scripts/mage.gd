@@ -32,6 +32,8 @@ const LEVEL_STATS = {
 	5: {"hp": 2430, "damage": 1655, "atk_speed": 1.25},
 	6: {"hp": 2830, "damage": 2329, "atk_speed": 1.25},
 	7: {"hp": 4554, "damage": 4263, "atk_speed": 1.25},
+	8: {"hp": 4554, "damage": 4263, "atk_speed": 1.25},
+	9: {"hp": 4554, "damage": 4263, "atk_speed": 1.25},
 }
 
 ## Sets hp, damage, atk_speed, move_speed, attack_range, attack_anim, and anim_files

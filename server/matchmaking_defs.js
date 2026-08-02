@@ -1,9 +1,11 @@
 const crypto = require('crypto');
+const flamethrower = require('./flamethrower_config');
+const { CANONICAL_GRID_CONFIGS, gridLocalPointToWorld } = require('./combat_grid_config');
 const GENERATING_RAID_BOT_LAYOUTS =
   String(process.env.CLASH_GENERATING_RAID_BOT_LAYOUTS || '') === '1';
 const HIGH_TIER_LAYOUT_CATALOG = GENERATING_RAID_BOT_LAYOUTS
   ? {}
-  : require('./data/raid-bot-layouts-th6-th7.json');
+  : require('./data/raid-bot-layouts-th6-th7.json'); // catalog now spans TH5-TH9
 
 const MAIN_GRID_WIDTH = 29;
 const MAIN_GRID_HEIGHT = 27;
@@ -21,6 +23,8 @@ const BOT_TEMPLATE_COUNTS_BY_TH = {
   5: { normal: 90, hard: 360 },
   6: { normal: 180, hard: 720 },
   7: { normal: 180, hard: 720 },
+  8: { normal: 180, hard: 720 },
+  9: { normal: 180, hard: 720 },
 };
 
 // The deterministic balance lab and production outcomes agree that geometry
@@ -41,6 +45,8 @@ const RANKED_CHALLENGE_BOT_ARCHETYPES_BY_TH = Object.freeze({
   5: Object.freeze(['asymmetric-left']),
   6: Object.freeze(['asymmetric-left']),
   7: Object.freeze(['corner-keep']),
+  8: Object.freeze(['corner-keep']),
+  9: Object.freeze(['corner-keep']),
 });
 
 const MATCHMAKING_CONFIG = {
@@ -108,6 +114,8 @@ const BOT_BUILDING_SIZES = {
   shark_trap: [2, 2],
   harpoon: [2, 2],
   cannon: [3, 3],
+  flamethrower: [3, 3],
+  air_bomb: [3, 3],
 };
 
 const BOT_GRID_SPECS = {
@@ -449,6 +457,39 @@ const COMPETITIVE_BOT_MAX_LEVELS = {
     harpoon: 7,
     cannon: 7,
   },
+  8: {
+    town_hall: 8,
+    mine: 8,
+    sawmill: 8,
+    barn: 8,
+    storage: 8,
+    archer_tower: 8,
+    tombstone: 7,
+    turret: 8,
+    mage_tower: 8,
+    mortar: 8,
+    shark_trap: 8,
+    harpoon: 8,
+    cannon: 8,
+    flamethrower: 8,
+  },
+  9: {
+    town_hall: 9,
+    mine: 9,
+    sawmill: 9,
+    barn: 9,
+    storage: 9,
+    archer_tower: 9,
+    tombstone: 8,
+    turret: 9,
+    mage_tower: 9,
+    mortar: 9,
+    shark_trap: 9,
+    harpoon: 8,
+    cannon: 9,
+    flamethrower: 9,
+    air_bomb: 9,
+  },
 };
 
 const COMPETITIVE_BOT_DEFENSE_TYPES = new Set([
@@ -460,6 +501,8 @@ const COMPETITIVE_BOT_DEFENSE_TYPES = new Set([
   'shark_trap',
   'harpoon',
   'cannon',
+  'flamethrower',
+  'air_bomb',
 ]);
 
 const COMPETITIVE_BOT_ECONOMY_TYPES = new Set([
@@ -535,7 +578,30 @@ const GENERATED_PLAYER_NAMES = GENERATED_NAME_ROOTS
   });
 
 function b(type, level, gridX, gridZ, gridIndex = 0, extra = {}) {
-  return { type, level, grid_x: gridX, grid_z: gridZ, grid_index: gridIndex, ...extra };
+  return {
+    type,
+    level,
+    grid_x: gridX,
+    grid_z: gridZ,
+    grid_index: gridIndex,
+    ...(type === 'flamethrower' ? {
+      facing_step: botFlamethrowerFacingStep(gridX, gridZ, gridIndex),
+    } : {}),
+    ...extra,
+  };
+}
+
+function botFlamethrowerFacingStep(gridX, gridZ, gridIndex = 0) {
+  const grid = CANONICAL_GRID_CONFIGS[gridIndex] || CANONICAL_GRID_CONFIGS[0];
+  const approach = CANONICAL_GRID_CONFIGS[2];
+  const [width, height] = flamethrower.BUILDING.footprint;
+  const localX = -grid.grid_extent_x / 2 + Number(gridX) * grid.cell_size + width * grid.cell_size / 2;
+  const localZ = -grid.grid_extent_z / 2 + Number(gridZ) * grid.cell_size + height * grid.cell_size / 2;
+  const center = gridLocalPointToWorld(grid, localX, localZ);
+  return flamethrower.nearestStepToward(center, {
+    x: approach.grid_center_x,
+    z: approach.grid_center_z,
+  });
 }
 
 function transformBuilding(building, variant) {

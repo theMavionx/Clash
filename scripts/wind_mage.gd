@@ -3,7 +3,7 @@ extends BaseTroop
 ## Fifteen-slot late-game control troop. A synchronized wind slash damages a
 ## long widening corridor and releases a bounded pack of short-lived Windlings.
 
-const MAX_TROOP_LEVEL: int = 7
+const MAX_TROOP_LEVEL: int = 9
 const BPS_DENOMINATOR: int = 10000
 const SECONDARY_DAMAGE_BPS: int = 5000
 const MAX_SECONDARY_TARGETS: int = 4
@@ -39,6 +39,8 @@ const LEVEL_STATS: Dictionary = {
 	5: {"hp": 6200, "damage": 1280, "atk_speed": 2.20},
 	6: {"hp": 7700, "damage": 1660, "atk_speed": 2.20},
 	7: {"hp": 12000, "damage": 3000, "atk_speed": 2.20},
+	8: {"hp": 12000, "damage": 3000, "atk_speed": 2.20},
+	9: {"hp": 12000, "damage": 3000, "atk_speed": 2.20},
 }
 
 const ANIM_FILES: Array[String] = [

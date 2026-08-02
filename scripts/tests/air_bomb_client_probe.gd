@@ -35,6 +35,11 @@ func _run_probe() -> void:
 	await _probe_tower_payload_flow(failures)
 
 	BaseTroop.invalidate_combat_lists()
+	# Flush deferred frees at very low fixed FPS before SceneTree shutdown so
+	# the probe distinguishes real leaks from end-of-process cleanup timing.
+	await process_frame
+	await process_frame
+	await process_frame
 	if failures.is_empty():
 		print("AIR_BOMB_CLIENT_PROBE_PASS")
 		quit(0)
@@ -306,10 +311,17 @@ func _probe_visual_contract(failures: Array[String]) -> void:
 	var carried_barrel := visual.find_child("Circle", true, false) as MeshInstance3D
 	var carried_bridle := visual.find_child("Cube_024", true, false) as MeshInstance3D
 	var static_base := visual.find_child("AirBombBase", true, false) as MeshInstance3D
+	var model_root := visual.get_node_or_null("ModelRoot") as Node3D
 	_expect(payload_assembly != null, "visual exposes one complete payload assembly", failures)
 	_expect(left_mesh != null and right_mesh != null, "visual binds both authored balloon meshes", failures)
 	_expect(carried_barrel != null and carried_bridle != null, "payload includes carried barrel and suspension bridle", failures)
 	_expect(static_base != null, "visual binds the authored static launcher", failures)
+	_expect(model_root != null and is_equal_approx(model_root.rotation_degrees.y, 90.0), "authored launcher and barrel keep their +90-degree presentation yaw", failures)
+	var initial_left_mesh := left_mesh.mesh
+	visual.set_attack_zone_facing_global(visual.global_position + Vector3.BACK * 3.0)
+	var resolved_facing: Vector3 = visual.get_flag_facing_global()
+	_expect(resolved_facing.dot(Vector3.BACK) >= 0.999, "balloon logos face the supplied attack-zone direction", failures)
+	_expect(left_mesh.mesh != initial_left_mesh, "attack-zone facing rebuilds the scene-local balloon UVs", failures)
 	var left_uv_summary := _mesh_uv_summary(left_mesh.mesh)
 	var right_uv_summary := _mesh_uv_summary(right_mesh.mesh)
 	_expect(bool(left_uv_summary.get("finite", false)), "left planar balloon UVs are finite", failures)
@@ -321,13 +333,21 @@ func _probe_visual_contract(failures: Array[String]) -> void:
 	_expect(int(left_uv_summary.get("surface_count", 0)) == 1, "left planar UV rebuild keeps one draw surface", failures)
 	_expect(int(right_uv_summary.get("surface_count", 0)) == 1, "right planar UV rebuild keeps one draw surface", failures)
 	var base_material := static_base.material_override as StandardMaterial3D
+	var carried_bomb_material := carried_barrel.material_override as StandardMaterial3D
+	var bridle_material := carried_bridle.material_override as StandardMaterial3D
 	var balloon_material := left_mesh.material_override as StandardMaterial3D
+	_expect(base_material != null and base_material.albedo_color.is_equal_approx(Color(0.85, 0.85, 0.85, 1.0)), "Air Bomb preserves its authored off-white/wood base palette", failures)
 	_expect(base_material != null and is_zero_approx(base_material.metallic), "Air Bomb launcher is non-metallic like the cannon", failures)
 	_expect(base_material != null and is_equal_approx(base_material.roughness, 0.82), "Air Bomb launcher matches cannon matte roughness", failures)
 	_expect(base_material != null and base_material.metallic_texture == null and base_material.roughness_texture == null, "launcher does not sample glossy PBR maps", failures)
 	_expect(balloon_material != null and is_zero_approx(balloon_material.metallic), "balloons are non-metallic", failures)
 	_expect(balloon_material != null and is_equal_approx(balloon_material.roughness, 0.82), "balloons use matte cannon-like roughness", failures)
 	_expect(balloon_material != null and balloon_material.metallic_texture == null and balloon_material.roughness_texture == null, "balloons do not sample glossy PBR maps", failures)
+	_expect(carried_bomb_material != null and carried_bomb_material != base_material, "orange carried bomb has an isolated material", failures)
+	_expect(carried_bomb_material != null and carried_bomb_material.albedo_texture != null, "orange carried bomb keeps the supplied bomb texture", failures)
+	_expect(carried_bomb_material != null and carried_bomb_material.albedo_texture != base_material.albedo_texture, "carried bomb no longer samples the gray launcher texture", failures)
+	_expect(carried_bomb_material != null and is_zero_approx(carried_bomb_material.metallic) and is_equal_approx(carried_bomb_material.roughness, 0.82), "carried bomb uses the matte reference treatment", failures)
+	_expect(bridle_material == base_material, "pale suspension bridle shares the launcher material", failures)
 	var flag_image := Image.create(2, 2, false, Image.FORMAT_RGBA8)
 	flag_image.fill(Color(0.2, 0.7, 1.0, 1.0))
 	var flag_texture := ImageTexture.create_from_image(flag_image)
@@ -335,8 +355,9 @@ func _probe_visual_contract(failures: Array[String]) -> void:
 	var applied_flag := (left_mesh.material_override as StandardMaterial3D).albedo_texture
 	_expect(applied_flag == flag_texture, "left balloon uses the original sharp player flag texture", failures)
 	_expect((right_mesh.material_override as StandardMaterial3D).albedo_texture == flag_texture, "right balloon shares the original player flag texture", failures)
-	_expect((left_mesh.material_override as StandardMaterial3D).uv1_scale.is_equal_approx(Vector3.ONE), "planar balloon UVs need no runtime stretching", failures)
-	_expect((left_mesh.material_override as StandardMaterial3D).uv1_offset.is_equal_approx(Vector3.ZERO), "planar balloon UVs need no runtime offset", failures)
+	_expect((carried_barrel.material_override as StandardMaterial3D).albedo_texture != flag_texture, "player flag does not overwrite the orange carried bomb", failures)
+	_expect((left_mesh.material_override as StandardMaterial3D).uv1_scale.is_equal_approx(Vector3(1.4, 1.4, 1.0)), "centered overscan reduces the balloon logo footprint", failures)
+	_expect((left_mesh.material_override as StandardMaterial3D).uv1_offset.is_equal_approx(Vector3(-0.2, -0.2, 0.0)), "balloon flag overscan remains centered", failures)
 	_expect(not (left_mesh.material_override as StandardMaterial3D).texture_repeat, "planar flag clamps instead of wrapping across a sphere seam", failures)
 	_expect((left_mesh.material_override as StandardMaterial3D).texture_filter == BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS, "planar flag uses the same mipmapped filtering as ship sails", failures)
 	var flag_service: Variant = Node3D.new()
@@ -363,9 +384,11 @@ func _probe_visual_contract(failures: Array[String]) -> void:
 		_expect(visual_projectile.find_child("Cube_024", true, false) != null, "projectile carries suspension bridle", failures)
 		var projectile_left := visual_projectile.find_child("Bombs_001", true, false) as MeshInstance3D
 		var projectile_right := visual_projectile.find_child("Bombs_002", true, false) as MeshInstance3D
+		var projectile_barrel := visual_projectile.find_child("Circle", true, false) as MeshInstance3D
 		_expect(projectile_left.mesh == left_mesh.mesh, "flying payload reuses the prepared left planar mesh", failures)
 		_expect(projectile_right.mesh == right_mesh.mesh, "flying payload reuses the prepared right planar mesh", failures)
 		_expect(projectile_left.material_override == left_mesh.material_override, "flying payload reuses the matte flag material", failures)
+		_expect(projectile_barrel != null and projectile_barrel.material_override == carried_barrel.material_override, "flying payload preserves the separate orange bomb material", failures)
 		visual_projectile.free()
 	visual.reset_visual_state()
 	_expect(payload_assembly.visible, "visual reset restores the complete payload", failures)
@@ -388,6 +411,7 @@ func _probe_building_integration(failures: Array[String]) -> void:
 	var defense_node := Node3D.new()
 	building_system._attach_building_defense_script(defense_node, "air_bomb")
 	_expect(defense_node.get_script() == TowerScript, "BuildingSystem attaches TowerAirBomb runtime", failures)
+	_expect(defense_node.has_method("set_spawn_facing_global"), "Air Bomb accepts BuildingSystem shipPlane facing", failures)
 	defense_node.free()
 	building_system.free()
 
@@ -402,9 +426,25 @@ func _probe_tower_payload_flow(failures: Array[String]) -> void:
 	var visual := VisualScene.instantiate()
 	tower.add_child(visual)
 	fixture.add_child(tower)
+	tower.set_physics_process(false)
 	await process_frame
 	await process_frame
 	tower._bind_visual_controller()
+	tower.scale = Vector3.ZERO
+	tower.set_spawn_facing_global(Vector3.BACK * 3.0)
+	tower.scale = Vector3.ONE
+	await process_frame
+	var delegated_facing: Vector3 = visual.get_flag_facing_global()
+	_expect(delegated_facing.dot(Vector3.BACK) >= 0.999, "tower forwards shipPlane facing after the scale-from-zero spawn", failures)
+	tower.position = Vector3(1.0, 0.0, 0.0)
+	await process_frame
+	var moved_expected: Vector3 = (
+		Vector3.BACK * 3.0 - (tower as Node3D).global_position
+	).normalized()
+	var moved_facing: Vector3 = visual.get_flag_facing_global()
+	_expect(moved_facing.dot(moved_expected) >= 0.999, "moving Air Bomb refreshes its logo toward the same shipPlane", failures)
+	tower.position = Vector3.ZERO
+	await process_frame
 	BaseTroop.invalidate_combat_lists()
 	var reload_events: Array[int] = [0]
 	tower.connect("air_bomb_event", func(kind: String, _payload: Dictionary) -> void:
@@ -473,7 +513,10 @@ func _probe_tower_payload_flow(failures: Array[String]) -> void:
 	_expect(loaded_payload.visible, "complete two-balloon payload returns after reload", failures)
 	_expect(tower.get_node_or_null("AirBombLaunchSfx") != null, "launch audio is configured", failures)
 	_expect(ResourceLoader.exists(projectile.IMPACT_SFX_PATH, "AudioStream"), "impact audio resource is configured", failures)
-	await create_timer(projectile.IMPACT_FX_LIFETIME_SECONDS + 0.05).timeout
+	# Tween callbacks are observed on the next processed frame. Allow one
+	# 10-FPS frame plus a small scheduling margin without changing the authored
+	# 0.24-second VFX lifetime itself.
+	await create_timer(projectile.IMPACT_FX_LIFETIME_SECONDS + 0.15).timeout
 	_expect(fixture.get_node_or_null("AirBombImpactFx") == null, "impact VFX self-cleans after its deterministic lifetime", failures)
 	await _free_fixture(fixture)
 

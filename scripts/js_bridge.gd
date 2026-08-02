@@ -643,7 +643,7 @@ func _handle_react_action(action: String, data: Dictionary) -> void:
 			if active_bt:
 				active_bt._buy_troop(data.get("troop_name", ""))
 		"load_troop":
-			var active_lt = _get_active_building_system()
+			var active_lt = _get_ship_action_building_system(data)
 			if active_lt:
 				active_lt._load_troop_to_ship(data.get("troop_name", ""), data)
 		"reinforce":
@@ -651,17 +651,17 @@ func _handle_react_action(action: String, data: Dictionary) -> void:
 			if active_rf:
 				active_rf._reinforce_troops()
 		"swap_troop":
-			var active_st = _get_active_building_system()
+			var active_st = _get_ship_action_building_system(data)
 			if active_st:
 				active_st._swap_troop_on_ship(int(data.get("slot", 0)), data.get("troop_name", ""), data)
 		"remove_troop":
-			var active_rt = _get_active_building_system()
+			var active_rt = _get_ship_action_building_system(data)
 			if active_rt:
-				active_rt._remove_troop_from_ship(int(data.get("slot", 0)))
+				active_rt._remove_troop_from_ship(int(data.get("slot", 0)), data)
 		"remove_troop_group":
-			var active_rtg = _get_active_building_system()
+			var active_rtg = _get_ship_action_building_system(data)
 			if active_rtg:
-				active_rtg._remove_troop_group_from_ship(int(data.get("slot", 0)))
+				active_rtg._remove_troop_group_from_ship(int(data.get("slot", 0)), data)
 		"set_sound_enabled":
 			var audio = get_node_or_null("/root/AudioManager")
 			if audio and audio.has_method("set_sound_enabled"):
@@ -1037,6 +1037,28 @@ func _get_active_building_system() -> Node:
 		if is_instance_valid(s) and "selected_building" in s and s.selected_building.size() > 0:
 			return s
 	return _get_building_system()
+
+
+func _get_ship_action_building_system(data: Dictionary) -> Node:
+	var target_id: String = str(data.get("ship_id", data.get("server_id", ""))).strip_edges()
+	var systems: Array = _bs_cache
+	if systems.is_empty():
+		_refresh_cache()
+		systems = _bs_cache
+	if target_id != "":
+		for system in systems:
+			if not is_instance_valid(system) or "selected_building" not in system:
+				continue
+			var selected: Dictionary = system.selected_building
+			var selected_id: String = str(selected.get("server_id", selected.get("id", ""))).strip_edges()
+			if selected_id == target_id:
+				return system
+	# Main Ship actions are target-addressed in BuildingSystem as well, so the
+	# main grid remains a safe fallback even when another grid kept a stale
+	# selected_building dictionary.
+	if target_id == "main_ship":
+		return _get_building_system()
+	return _get_active_building_system()
 
 
 func _get_active_flamethrower_building_system() -> Node:

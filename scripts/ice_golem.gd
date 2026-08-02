@@ -2,7 +2,7 @@ extends BaseTroop
 ## Ten-slot ground siege tank. It destroys defensive buildings first, then
 ## falls back to normal target selection. Its death freezes nearby defenses.
 
-const MAX_TROOP_LEVEL: int = 7
+const MAX_TROOP_LEVEL: int = 9
 const FREEZE_RADIUS: float = 0.90
 const FREEZE_DURATION: float = 7.0
 const HIT_ANIM_NORMALIZED: float = 0.56
@@ -30,6 +30,8 @@ const LEVEL_STATS: Dictionary = {
 	5: {"hp": 14000, "damage": 658, "atk_speed": 1.42},
 	6: {"hp": 17250, "damage": 878, "atk_speed": 1.42},
 	7: {"hp": 21840, "damage": 1200, "atk_speed": 1.42},
+	8: {"hp": 21840, "damage": 1200, "atk_speed": 1.42},
+	9: {"hp": 21840, "damage": 1200, "atk_speed": 1.42},
 }
 
 const ANIM_FILES: Array[String] = [

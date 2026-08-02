@@ -140,6 +140,12 @@ Next checkpoint:
 - Remaining follow-up: decide whether economy max-out should target roughly 4, 8,
   or 12+ weeks; current live server pacing is about 102 days to full TH4 max before
   raid income.
+- TH8-TH9 progression checkpoint completed locally on 2026-08-02. Client/server
+  cap, storage-safe economy, building/trap counts, Flamethrower/Air Bomb gates,
+  troop L8/L9 power, max-village support and 900-layout bot cohorts are mirrored.
+  The final 1,500-battle same-TH matrix produced TH8 55.4%, TH9 55.1%, 55.3%
+  combined and zero invalid replays; see
+  `design/balance/th8-th9-progression-2026-08-02.md`.
 
 ## G-003 Agent Workflow, Memory, And Deploy Automation
 
@@ -333,13 +339,12 @@ Current checkpoint:
   Godot import/export, frame captures, render-FPS parity, focused regressions,
   and the live TH5-TH7 balance regression suite complete without invalid
   simulations.
-- Launch remains gated because the playable progression currently ends at TH7.
-  Air Bomb data is intentionally unreachable through TH8 and becomes available
-  only when the separately scoped TH8/TH9 progression, economy, and bot content
-  are approved. Reimport on documented Godot 4.6.1 is also still required; the
-  local verifier is Godot 4.6.0 stable.
-- No commit, push, deployment, or production database mutation is authorized by
-  the current request.
+- The TH8/TH9 implementation gate is cleared locally: TH9 exposes exactly two
+  Air Bombs, legal economy, L9 troops, valid snapshot-v2 bot battles, and a
+  55.1% same-tier attacker win rate with zero invalid replays.
+- Owner authorized committing and pushing all current workspace changes on
+  2026-08-02. Production deployment and production database mutation remain
+  outside this request.
 
 ## G-006 Dango Realtime Exchange Integration
 

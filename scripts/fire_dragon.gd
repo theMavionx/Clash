@@ -14,6 +14,8 @@ const COMMON_LEVEL_STATS: Dictionary = {
 	5: {"hp": 5049, "damage": 2218, "atk_speed": 1.25},
 	6: {"hp": 6440, "damage": 3158, "atk_speed": 1.25},
 	7: {"hp": 8740, "damage": 4879, "atk_speed": 1.25},
+	8: {"hp": 8740, "damage": 4879, "atk_speed": 1.25},
+	9: {"hp": 8740, "damage": 4879, "atk_speed": 1.25},
 }
 
 const NFT_RARITY_MULTIPLIERS: Dictionary = {
@@ -22,7 +24,7 @@ const NFT_RARITY_MULTIPLIERS: Dictionary = {
 	"legendary": 1.25,
 	"unrevealed": 1.2,
 }
-const MAX_TROOP_LEVEL: int = 7
+const MAX_TROOP_LEVEL: int = 9
 
 const ANIMATION_PATHS: Dictionary = {
 	"bite_attack": "res://Model/Characters/FireDragon/Animations/fire_dragon_bite_attack.fbx",

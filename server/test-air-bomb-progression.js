@@ -24,7 +24,7 @@ function insertBuilding(playerId, type, level, gridX, gridZ) {
 
 function refill(playerId) {
   gameDb.db.prepare(
-    'UPDATE players SET gold = 143000, wood = 143000, ore = 143000 WHERE id = ?',
+    'UPDATE players SET gold = 275000, wood = 275000, ore = 275000 WHERE id = ?',
   ).run(playerId);
 }
 
@@ -60,8 +60,8 @@ try {
     const cost = gameDb.getBuildingUpgradeCost('air_bomb', currentLevel);
     assert.deepEqual(cost, expectedDefinition.upgrade_cost[currentLevel + 1]);
     assert.ok(
-      ['gold', 'wood', 'ore'].every(resource => cost[resource] <= 143000),
-      `provisional Air Bomb L${currentLevel + 1} cost must fit the current future-safe capacity ceiling`,
+      ['gold', 'wood', 'ore'].every(resource => cost[resource] <= 275000),
+      `Air Bomb L${currentLevel + 1} cost must fit the live TH9 resource capacity`,
     );
   }
 
@@ -115,7 +115,7 @@ try {
 
   console.log(
     '[AIR_BOMB_PROGRESSION] PASS unlock=TH9 count=2 levels=1-9'
-    + ' hp=3200-15200 provisional_costs_fit=143000 trophies=30-490',
+    + ' hp=3200-15200 costs_fit_th9_capacity=275000 trophies=30-490',
   );
 } finally {
   gameDb.db.close();

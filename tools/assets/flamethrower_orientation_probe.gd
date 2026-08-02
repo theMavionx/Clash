@@ -53,7 +53,7 @@ func _build_stage() -> void:
 	title.add_theme_color_override("font_color", Color("f7ead2"))
 	root.add_child(title)
 	var legend := Label.new()
-	legend.text = "LEFT: corrected production wrapper    RIGHT: legacy 180-degree reversal\nCYAN sphere = production MuzzleSocket    ORANGE = gameplay/emission -Z    MAGENTA = opposite +Z"
+	legend.text = "LEFT: production wrapper (authored -Z nozzle preserved)    RIGHT: deliberately reversed 180-degree regression reference\nCYAN sphere = production MuzzleSocket    ORANGE = gameplay/emission -Z    MAGENTA = opposite +Z"
 	legend.position = Vector2(26.0, 58.0)
 	legend.add_theme_font_size_override("font_size", 18)
 	legend.add_theme_color_override("font_color", Color("d8e5ec"))
@@ -77,12 +77,12 @@ func _add_comparison(world: Node3D, level: int, base_position: Vector3) -> void:
 	world.add_child(production)
 	_add_axis_markers(production, true)
 
-	var legacy_reversed := packed.instantiate() as Node3D
-	legacy_reversed.position = base_position + Vector3(0.135, 0.0, -0.47)
-	var source_model := legacy_reversed.get_node("SourceModel") as Node3D
-	source_model.rotation.y = PI
-	world.add_child(legacy_reversed)
-	_add_axis_markers(legacy_reversed, false)
+	var reversed_reference := packed.instantiate() as Node3D
+	reversed_reference.position = base_position + Vector3(0.135, 0.0, -0.47)
+	var source_model := reversed_reference.get_node("SourceModel") as Node3D
+	source_model.rotation = Vector3(0.0, PI, 0.0)
+	world.add_child(reversed_reference)
+	_add_axis_markers(reversed_reference, false)
 
 	var label := Label3D.new()
 	label.text = "L%s" % tag

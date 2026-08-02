@@ -8,6 +8,7 @@ const MAX_FIXED_STEPS_PER_FRAME := 8
 const TARGET_TIE_EPSILON := 0.000000001
 const VFX_SCRIPT: Script = preload("res://scripts/fire_stream_vfx_pool.gd")
 const AUDIO_SCRIPT: Script = preload("res://scripts/flamethrower_audio_presenter.gd")
+const VFX_FORWARD_START_OFFSET := 0.14
 
 enum FlameState {
 	READY,
@@ -69,7 +70,7 @@ func set_level(value: int) -> void:
 	level = clampi(value, 1, 10)
 	_apply_stats()
 	if is_instance_valid(_vfx):
-		_vfx.configure_length(detect_range)
+		_configure_vfx_geometry()
 
 
 func set_ward_bonus_pct(value: int) -> void:
@@ -86,9 +87,10 @@ func set_facing_step(value: int, allow_preview: bool = false) -> void:
 	facing_step = value
 	set_meta("facing_step", facing_step)
 	if is_inside_tree():
-		var next_rotation := global_rotation
-		next_rotation.y = FlamethrowerConfig.global_yaw_for_step(facing_step)
-		global_rotation = next_rotation
+		FlamethrowerConfig.apply_global_yaw(
+			self,
+			FlamethrowerConfig.global_yaw_for_step(facing_step)
+		)
 
 
 func set_range_visuals_visible(_should_be_visible: bool) -> void:
@@ -255,7 +257,7 @@ func _start_stream() -> void:
 	var rules := FlamethrowerConfig.combat()
 	_stream_index += 1
 	_stream_start_tick = _sim_tick
-	_stream_end_tick = _stream_start_tick + int(rules.get("stream_ticks", 45))
+	_stream_end_tick = _stream_start_tick + int(rules.get("stream_ticks", 60))
 	_next_stream_ready_tick = _stream_start_tick + int(rules.get("cycle_ticks", 90))
 	_resolved_damage_mask = 0
 	_stream_damage = 0
@@ -381,8 +383,31 @@ func _bind_visuals() -> void:
 		else:
 			add_child(_vfx)
 			_vfx.position = Vector3(0.0, 0.35, -0.12)
-	_vfx.configure_length(detect_range)
+	_configure_vfx_geometry()
 	_vfx.set_stream_active(_state == FlameState.FIRING)
+
+
+func _configure_vfx_geometry() -> void:
+	if not is_instance_valid(_vfx):
+		return
+	var muzzle_forward_offset := 0.0
+	if is_instance_valid(_muzzle_socket):
+		var forward := -global_transform.basis.z
+		forward.y = 0.0
+		if forward.length_squared() > 0.0001:
+			forward = forward.normalized()
+			muzzle_forward_offset = maxf(
+				0.0,
+				(_muzzle_socket.global_position - global_position).dot(forward)
+			)
+		_vfx.position = Vector3(0.0, 0.0, -VFX_FORWARD_START_OFFSET)
+	else:
+		muzzle_forward_offset = maxf(0.0, -_vfx.position.z)
+	var remaining_range := maxf(
+		0.05,
+		detect_range - muzzle_forward_offset - VFX_FORWARD_START_OFFSET
+	)
+	_vfx.configure_length(remaining_range)
 
 
 func _bind_audio() -> void:
@@ -408,8 +433,10 @@ func _set_stream_visual(active: bool, reason: String = "") -> void:
 	if not is_instance_valid(_vfx):
 		return
 	if active:
-		_vfx.configure_length(detect_range)
+		_configure_vfx_geometry()
 		_vfx.set_stream_active(true)
+	elif reason == "complete":
+		_vfx.finish_stream()
 	else:
 		_vfx.interrupt(reason)
 

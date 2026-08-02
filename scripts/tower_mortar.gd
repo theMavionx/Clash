@@ -10,6 +10,8 @@ const LEVEL_STATS := {
 	5: {"damage": 233, "fire_rate": 2.40, "detect_range": 2.100, "min_range": 0.82, "splash_radius": 0.45, "travel_time": 0.66},
 	6: {"damage": 240, "fire_rate": 2.40, "detect_range": 2.250, "min_range": 0.80, "splash_radius": 0.49, "travel_time": 0.62},
 	7: {"damage": 294, "fire_rate": 2.40, "detect_range": 2.400, "min_range": 0.78, "splash_radius": 0.52, "travel_time": 0.58},
+	8: {"damage": 330, "fire_rate": 2.40, "detect_range": 2.500, "min_range": 0.78, "splash_radius": 0.54, "travel_time": 0.58},
+	9: {"damage": 370, "fire_rate": 2.40, "detect_range": 2.600, "min_range": 0.78, "splash_radius": 0.56, "travel_time": 0.58},
 }
 
 const PROJECTILE_SCENE: String = "res://Model/Mortar/mortar_lvl2_projectile.fbx"

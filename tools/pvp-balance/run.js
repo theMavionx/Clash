@@ -180,7 +180,7 @@ function runBalanceLab({
   const verbose = !!cli.verbose;
   const exhaustive = !!cli.exhaustive;
   const labOffenseScaleByLevel = Object.fromEntries(
-    [5, 6, 7].map((level) => [
+    [5, 6, 7, 8, 9].map((level) => [
       level,
       numberArg(cli[`lab-offense-scale-th${level}`], 1, 0.5, 2.0),
     ]),
@@ -1384,6 +1384,13 @@ function generateBase({
       max_hp: item.hp,
       role: item.role,
       size: [...item.size],
+      ...(item.type === 'flamethrower' ? {
+        facing_step: dbApi.flamethrowerDefaultFacingStep(
+          selected.x,
+          selected.z,
+          0,
+        ),
+      } : {}),
     });
   }
   return {
@@ -4979,6 +4986,8 @@ function runScenario(
     serverNftRarities: scenario.attackerNftRarities || {},
     serverShipLevel: discoverShipLevelForTownHall(combatDefs, scenario.attackerTownHall),
     defenderAltarLevels: scenario.defenderAltarLevels || {},
+    combatSnapshotVersion: 2,
+    combatRulesVersion: combatDefs.FLAMETHROWER_COMBAT_RULES_VERSION,
     debugTrace: false,
   }));
   const parityDiagnostics = includeParityDiagnostics

@@ -4,7 +4,7 @@ class_name Necromancer
 ## consume most of one late-game army, while the owner remains vulnerable.
 ## up to three weak, owner-bound skeletons add pressure and distraction.
 
-const MAX_TROOP_LEVEL: int = 7
+const MAX_TROOP_LEVEL: int = 9
 const SUMMON_BATCH_SIZE: int = 3
 const MAX_ACTIVE_SUMMONS: int = 3
 const SUMMON_RESPAWN_DELAY: float = 2.5
@@ -35,6 +35,8 @@ const NECROMANCER_LEVEL_STATS: Dictionary = {
 	5: {"hp": 7440, "damage": 2327, "atk_speed": 1.35},
 	6: {"hp": 9240, "damage": 3305, "atk_speed": 1.35},
 	7: {"hp": 20700, "damage": 8533, "atk_speed": 1.35},
+	8: {"hp": 20700, "damage": 8533, "atk_speed": 1.35},
+	9: {"hp": 20700, "damage": 8533, "atk_speed": 1.35},
 }
 
 const ANIM_FILES: Array[String] = [

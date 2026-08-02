@@ -104,11 +104,9 @@ func _apply_preview(should_emit: bool) -> void:
 	if not is_instance_valid(target_root):
 		return
 	var yaw := FlamethrowerConfig.global_yaw_for_step(preview_step)
-	var root_rotation := target_root.global_rotation
-	root_rotation.y = yaw
-	target_root.global_rotation = root_rotation
+	FlamethrowerConfig.apply_global_yaw(target_root, yaw)
 	global_position = target_root.global_position + Vector3(0.0, 0.025, 0.0)
-	global_rotation = Vector3(0.0, yaw, 0.0)
+	FlamethrowerConfig.apply_global_yaw(self, yaw)
 	if should_emit:
 		preview_changed.emit(preview_step)
 

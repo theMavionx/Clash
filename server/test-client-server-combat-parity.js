@@ -18,6 +18,7 @@ const {
   MEDKIT_TICK_SEC,
   MEDKIT_UNLOCK_SHIP_LEVEL,
   PLAYER_SHIP_LEVELS,
+  MAX_TROOP_LEVEL,
   RAGE_DROP,
   SKELETON_GUARD,
   SKELETON_BARREL,
@@ -41,7 +42,7 @@ function read(relativePath) {
   return fs.readFileSync(path.join(ROOT, relativePath), 'utf8');
 }
 
-function parseLevelStats(relativePath, constantName = 'LEVEL_STATS') {
+function parseLevelStats(relativePath, constantName = 'LEVEL_STATS', expectedLevels = MAX_TROOP_LEVEL) {
   const source = read(relativePath);
   const block = source.match(new RegExp(
     `const ${constantName}(?:\\s*:\\s*Dictionary)?\\s*(?::=|=)\\s*\\{([\\s\\S]*?)^\\}`,
@@ -58,7 +59,7 @@ function parseLevelStats(relativePath, constantName = 'LEVEL_STATS') {
       moveSpeed: row[5] == null ? undefined : Number(row[5]),
     };
   }
-  assert.equal(Object.keys(result).length, 7, `${relativePath} must define all seven troop levels`);
+  assert.equal(Object.keys(result).length, expectedLevels, `${relativePath} must define all expected troop levels`);
   return { source, stats: result };
 }
 
@@ -130,8 +131,9 @@ function parseNestedLevelStats(relativePath, dictionaryName, troopName) {
 }
 
 function assertTroopStats(relativePath, serverType, fields = {}, constantName = 'LEVEL_STATS') {
-  const { source, stats } = parseLevelStats(relativePath, constantName);
-  for (let level = 1; level <= 7; level++) {
+  const expectedLevels = Object.keys(TROOP_STATS[serverType]).length;
+  const { source, stats } = parseLevelStats(relativePath, constantName, expectedLevels);
+  for (let level = 1; level <= expectedLevels; level++) {
     const server = TROOP_STATS[serverType][level];
     const multiplier = TROOP_LEVEL_POWER_MULTIPLIERS[level - 1];
     assert.deepEqual(
@@ -325,7 +327,7 @@ for (const [name, expected] of Object.entries({
 assert.match(windMageSource, /can_target_guards\s*=\s*false/);
 
 const windling = parseLevelStats('scripts/windling.gd');
-for (let level = 1; level <= 7; level++) {
+for (let level = 1; level <= MAX_TROOP_LEVEL; level++) {
   assert.deepEqual(
     windling.stats[level],
     {
@@ -372,7 +374,7 @@ for (const [troopType, parsed] of Object.entries({
   demon_king: demon,
   fire_dragon: fireDragon,
 })) {
-  for (let level = 1; level <= 7; level++) {
+  for (let level = 1; level <= MAX_TROOP_LEVEL; level++) {
     for (const [rarity, rarityMultiplier] of Object.entries(NFT_RARITY_MULTIPLIERS)) {
       const levelMultiplier = TROOP_LEVEL_POWER_MULTIPLIERS[level - 1];
       const rarityScale = rarityMultiplier / NFT_RARITY_MULTIPLIERS.common;
@@ -514,7 +516,7 @@ assert.equal(parseNumberConstant(horror.source, 'CHILDREN_PER_SPLIT'), HORROR_EV
 assert.equal(parseNumberConstant(horror.source, 'FINAL_STAGE'), HORROR_EVOLUTION.finalStage);
 
 const skeleton = parseLevelStats('scripts/necromancer_skeleton.gd');
-for (let level = 1; level <= 7; level++) {
+for (let level = 1; level <= MAX_TROOP_LEVEL; level++) {
   const server = computeNecromancerSkeletonStats(level);
   assert.deepEqual(
     skeleton.stats[level],
@@ -728,31 +730,31 @@ assertDefenseStats('scripts/turret.gd', 'turret', {
   damage: 'damage',
   fire_rate: 'fireRate',
   detect_range: 'detectRange',
-}, 7);
+}, 9);
 assertDefenseStats('scripts/tower_archer.gd', 'archer_tower', {
   damage: 'damage',
   fire_rate: 'fireRate',
   detect_range: 'detectRange',
-}, 7);
+}, 9);
 assertDefenseStats('scripts/tower_mage.gd', 'mage_tower', {
   base_damage: 'baseDamage',
   max_damage: 'maxDamage',
   tick_rate: 'tickRate',
   ramp_time: 'rampTime',
   detect_range: 'detectRange',
-}, 7);
+}, 9);
 assertDefenseStats('scripts/tower_mortar.gd', 'mortar', {
   damage: 'damage',
   fire_rate: 'fireRate',
   detect_range: 'detectRange',
   min_range: 'minRange',
   splash_radius: 'splashRadius',
-}, 7);
+}, 9);
 assertDefenseStats('scripts/cannon.gd', 'cannon', {
   damage: 'damage',
   fire_rate: 'fireRate',
   detect_range: 'detectRange',
-}, 7);
+}, 9);
 for (const [troopType, levels] of Object.entries(TROOP_STATS)) {
   const baseline = levels[1].atkSpeed;
   for (const [level, stats] of Object.entries(levels)) {
@@ -779,7 +781,7 @@ for (const [level, stats] of Object.entries(SKELETON_GUARD.levels)) {
 }
 assert.deepEqual(
   Object.values(DEFENSE_STATS.mage_tower).map((stats) => stats.detectRange),
-  [1.05, 1.15, 1.25, 1.35, 1.45, 1.55, 1.65],
+  [1.05, 1.15, 1.25, 1.35, 1.45, 1.55, 1.65, 1.73, 1.8],
   'Mage Tower range must stay on the reduced compact coverage curve',
 );
 const harpoonSource = read('scripts/tower_harpoon.gd');
@@ -860,16 +862,16 @@ assert.deepEqual(
 );
 assert.match(
   buildingSystem,
-  /"cannon":\s*\{[\s\S]*?"damage_levels":\s*\[40,\s*109,\s*259,\s*431,\s*510,\s*577,\s*620\]/,
+  /"cannon":\s*\{[\s\S]*?"damage_levels":\s*\[40,\s*109,\s*259,\s*431,\s*510,\s*577,\s*620,\s*690,\s*760\]/,
   'Cannon upgrade UI damage rows must mirror runtime combat stats',
 );
 assert.equal(
-  (buildingSystem.match(/"test_damage_levels":\s*\[95,\s*108,\s*158,\s*227,\s*233,\s*240,\s*294\]/g) || []).length,
+  (buildingSystem.match(/"test_damage_levels":\s*\[95,\s*108,\s*158,\s*227,\s*233,\s*240,\s*294,\s*330,\s*370\]/g) || []).length,
   2,
-  'both Mortar metadata mirrors must expose all seven calibrated damage levels',
+  'both Mortar metadata mirrors must expose all nine calibrated damage levels',
 );
 const cannonSource = read('scripts/cannon.gd');
-for (let level = 1; level <= 7; level++) {
+for (let level = 1; level <= 9; level++) {
   assert.equal(
     parseNumberConstant(cannonSource, 'PROJECTILE_SPEED'),
     DEFENSE_STATS.cannon[level].projSpeed,
@@ -882,8 +884,8 @@ assert.match(cannonSource, /const CAN_TARGET_GROUND:\s*bool\s*=\s*true/);
 assert.match(cannonSource, /const CAN_TARGET_AIR:\s*bool\s*=\s*false/);
 
 const guardRows = parseDictionaryRows('scripts/skeleton_guard.gd');
-assert.equal(Object.keys(guardRows).length, 6, 'client skeleton guard must define six levels');
-for (let level = 1; level <= 6; level++) {
+assert.equal(Object.keys(guardRows).length, 8, 'client skeleton guard must define eight levels');
+for (let level = 1; level <= 8; level++) {
   assert.deepEqual(
     guardRows[level],
     {
@@ -901,7 +903,7 @@ const buildingSystemProgression = read('scripts/building_system.gd');
 const serverTownHallUnlock = parseStringNumberDictionary(dbSource, 'const TH_UNLOCK');
 const serverTownHallCount = parseStringArrayDictionary(dbSource, 'const TH_MAX_COUNT');
 const serverTownHallLevel = parseStringArrayDictionary(dbSource, 'const TH_MAX_LEVEL');
-assert.equal(parseNumberConstant(dbSource, 'LIVE_TOWN_HALL_CAP'), 7);
+assert.equal(parseNumberConstant(dbSource, 'LIVE_TOWN_HALL_CAP'), 9);
 assert.equal(
   parseNumberConstant(buildingSystemProgression, 'LIVE_TOWN_HALL_CAP'),
   parseNumberConstant(dbSource, 'LIVE_TOWN_HALL_CAP'),
@@ -946,9 +948,9 @@ assert.deepEqual(
 
 console.log(
   '[COMBAT_PARITY] PASS troops=knight,archer,mage,pea_shooter,wind_mage,windling,mimic,mechanical_dragon,ice_golem,necromancer,horror,demon_king,fire_dragon'
-  + ' summon=owner_bound,capped,expiring shark_trap=levels_1_to_7'
+  + ' summon=owner_bound,capped,expiring shark_trap=levels_1_to_9'
   + ' ship_slots=knight1,archer1,mage6,pea5,mimic8,mechanical5,demon6,ice11,fire11,wind_mage18,necromancer18,horror22'
   + ' tactical_constants=freeze,rage,skeleton_barrel'
-  + ' defenses=turret7,archer7,mage7,mortar7,harpoon8,air_bomb9,cannon7,guards6'
-  + ' telemetry=chain,freeze,trap,wind_wave,summon,split progression=th7_cannon',
+  + ' defenses=turret9,archer9,mage9,mortar9,harpoon8,air_bomb9,cannon9,guards8'
+  + ' telemetry=chain,freeze,trap,wind_wave,summon,split progression=th9',
 );

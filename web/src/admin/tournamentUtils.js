@@ -573,5 +573,8 @@ export function fmtUsd(value, maxDigits = 0) {
 
 export function fmtTime(value) {
   if (!value) return '-';
-  return new Date(String(value).replace(' ', 'T') + 'Z').toLocaleString();
+  const normalized = String(value).trim().replace(' ', 'T');
+  const timestamp = /(?:Z|[+-]\d{2}:\d{2})$/iu.test(normalized) ? normalized : `${normalized}Z`;
+  const date = new Date(timestamp);
+  return Number.isNaN(date.getTime()) ? '-' : date.toLocaleString();
 }

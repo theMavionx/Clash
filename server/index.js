@@ -27,6 +27,8 @@ const express = require('express');
 const cors = require('cors');
 const http = require('http');
 const { router } = require('./routes');
+const clashDb = require('./db');
+const earnings = require('./earnings');
 const { startDailyLogAiScheduler } = require('./log_ai_analyzer');
 const { setupWebSocket, getOnlinePlayers } = require('./websocket');
 
@@ -1029,6 +1031,20 @@ app.get('/api/admin/panel', (req, res) => {
     <div class="stats" id="earningsTotals"></div>
     <div id="earningsCards" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;margin-top:8px"></div>
     <div id="earningsMeta" style="color:#6b7280;font-size:12px;margin-top:14px"></div>
+    <h3 style="color:#f59e0b;font-size:16px;margin:24px 0 10px">Snapshot Earnings (stored values only)</h3>
+    <div style="overflow:auto;margin-top:10px">
+      <table style="font-size:12px;min-width:820px"><thead><tr>
+        <th>DEX</th><th>24h</th><th>7d</th><th>30d</th><th>30d samples</th><th>Coverage</th><th>Latest</th>
+      </tr></thead><tbody id="earningsSnapshotBody"></tbody></table>
+    </div>
+    <details style="margin-top:12px">
+      <summary style="color:#cbd5e1;cursor:pointer">Daily snapshot records for the last 30 UTC days</summary>
+      <div style="overflow:auto;margin-top:10px;max-height:420px">
+        <table style="font-size:12px;min-width:720px"><thead><tr>
+          <th>UTC day</th><th>DEX</th><th>Earned</th><th>Closing cumulative</th><th>Snapshots</th><th>Resets</th>
+        </tr></thead><tbody id="earningsSnapshotDailyBody"></tbody></table>
+      </div>
+    </details>
     <h3 style="color:#f59e0b;font-size:16px;margin:24px 0 10px">Revenue by Exchange</h3>
     <div class="stats" id="revenueAnalyticsTotals"></div>
     <div style="overflow:auto;margin-top:10px">
@@ -4541,6 +4557,7 @@ async function loadEarnings(force) {
       ['monad',    'Perpl',    '#c4b5fd', '#8b5cf6'],
       ['hyperliquid', 'Hyperliquid', '#86efac', '#16a34a'],
       ['grvt',     'GRVT',     '#5eead4', '#14b8a6'],
+      ['risex',    'RISE',     '#c084fc', '#9333ea'],
       ['nado',     'Nado',     '#67e8f9', '#00b8d9'],
       ['hibachi',  'Hibachi',  '#f87171', '#dc2626'],
       ['hotstuff', 'Hotstuff', '#fca5a5', '#ef4444'],
@@ -4550,10 +4567,44 @@ async function loadEarnings(force) {
       ['lighter',  'Lighter',  '#7dd3fc', '#38bdf8'],
     ];
     const total = Number(data.total_usd) || 0;
+    const snapshotHistory = data.snapshot_history || {};
+    const snapshotDexes = snapshotHistory.dexes || {};
+    const snapshotWindows = snapshotHistory.windows || {};
+    const snapshotUsd = (window) => window && Number(window.snapshot_count) > 0
+      ? '$' + Number(window.earned_usd || 0).toFixed(4)
+      : '—';
     document.getElementById('earningsTotals').innerHTML =
-      '<div class="stat" style="min-width:200px"><div class="v">$' + total.toFixed(2) + '</div><div class="l">Total net earned</div></div>';
+      '<div class="stat" style="min-width:200px"><div class="v">$' + total.toFixed(2) + '</div><div class="l">Total net earned</div></div>' +
+      '<div class="stat"><div class="v">' + snapshotUsd(snapshotWindows.d1) + '</div><div class="l">Snapshot 24h</div></div>' +
+      '<div class="stat"><div class="v">' + snapshotUsd(snapshotWindows.d7) + '</div><div class="l">Snapshot 7d</div></div>' +
+      '<div class="stat"><div class="v">' + snapshotUsd(snapshotWindows.d30) + '</div><div class="l">Snapshot 30d</div></div>';
+    document.getElementById('earningsSnapshotBody').innerHTML = dexes.map(([k, label]) => {
+      const row = snapshotDexes[k] || {};
+      const coverage = row.d30?.complete ? 'complete' : 'collecting';
+      return '<tr>' +
+        '<td><strong>' + esc(label) + '</strong></td>' +
+        '<td>' + snapshotUsd(row.d1) + '</td>' +
+        '<td>' + snapshotUsd(row.d7) + '</td>' +
+        '<td>' + snapshotUsd(row.d30) + '</td>' +
+        '<td>' + Number(row.d30?.snapshot_count || 0).toLocaleString() + '</td>' +
+        '<td><span class="badge">' + coverage + '</span></td>' +
+        '<td style="color:#94a3b8;font-size:11px">' + esc(row.last_snapshot_at || '—') + '</td>' +
+        '</tr>';
+    }).join('');
+    document.getElementById('earningsSnapshotDailyBody').innerHTML = (snapshotHistory.daily || [])
+      .filter((row) => Number(row.snapshot_count || 0) > 0)
+      .map((row) => '<tr>' +
+        '<td class="mono">' + esc(row.date || '') + '</td>' +
+        '<td>' + esc(String(row.dex || '').toUpperCase()) + '</td>' +
+        '<td style="color:#4ade80;font-weight:700">$' + Number(row.earned_usd || 0).toFixed(4) + '</td>' +
+        '<td>$' + Number(row.closing_cumulative_usd || 0).toFixed(4) + '</td>' +
+        '<td>' + Number(row.snapshot_count || 0).toLocaleString() + '</td>' +
+        '<td>' + Number(row.reset_count || 0).toLocaleString() + '</td>' +
+        '</tr>')
+      .join('') || '<tr><td colspan="6" style="color:#6b7280;text-align:center;padding:18px">Snapshots are collecting</td></tr>';
     document.getElementById('earningsCards').innerHTML = dexes.map(([k, label, color, border]) => {
       const d = data[k] || {};
+      const snapshot = snapshotDexes[k] || {};
       const ok = d.ok;
       const v = ok && Number.isFinite(d.earned_usd) ? '$' + d.earned_usd.toFixed(4) : '—';
       const addrLine = ok && d.address
@@ -4653,6 +4704,11 @@ async function loadEarnings(force) {
         +   '<div style="font-size:11px;color:#6b7280">' + esc(d.currency || '') + '</div>'
         + '</div>'
         + '<div style="font-size:28px;font-weight:800;color:' + color + '">' + v + '</div>'
+        + '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:10px">'
+        +   '<div style="background:#0f172a;padding:7px;text-align:center;border-radius:6px"><small style="color:#6b7280">24h</small><br><strong>' + snapshotUsd(snapshot.d1) + '</strong></div>'
+        +   '<div style="background:#0f172a;padding:7px;text-align:center;border-radius:6px"><small style="color:#6b7280">7d</small><br><strong>' + snapshotUsd(snapshot.d7) + '</strong></div>'
+        +   '<div style="background:#0f172a;padding:7px;text-align:center;border-radius:6px"><small style="color:#6b7280">30d</small><br><strong>' + snapshotUsd(snapshot.d30) + '</strong></div>'
+        + '</div>'
         + '<div style="margin-top:8px;display:flex;justify-content:space-between;gap:8px;align-items:baseline">' + addrLine + tradeLine + '</div>'
         + noteLine + errLine
         + '</div>';
@@ -5439,6 +5495,7 @@ server.on('upgrade', (request, socket, head) => {
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`Clash server running on http://127.0.0.1:${PORT}`);
   console.log(`WebSocket available at ws://127.0.0.1:${PORT}/ws`);
+  earnings.startEarningsSnapshotScheduler({ mainDb: clashDb.db });
 
   // Marketplace event indexer. Polls each chain for Listed/Cancelled/Sold
   // events and writes them into marketplace_listings.
@@ -5499,6 +5556,9 @@ for (const sig of ['SIGINT', 'SIGTERM']) {
     try {
       const { stopBridgeRetryWorker } = require('./bridge_retry_worker');
       stopBridgeRetryWorker();
+    } catch { /* ignore */ }
+    try {
+      earnings.stopEarningsSnapshotScheduler();
     } catch { /* ignore */ }
     process.exit(0);
   });

@@ -5,13 +5,22 @@ extends Node3D
 ## The authored payload is one assembly: both balloons, suspension bridle, and barrel.
 
 const RELOAD_PAYLOAD_DROP_MODEL_UNITS: float = 0.32
-# Production keeps a fixed yaw around the island. Projecting the owner flag onto
-# this model-space plane presents one complete, readable emblem instead of
-# wrapping it around the authored spherical UV seam. Back-facing vertices flip U
-# so the reverse side remains readable as well.
-const BALLOON_FLAG_VIEW_AXIS_MODEL: Vector3 = Vector3(0.921, 0.0, 0.389)
-const BALLOON_FLAG_HORIZONTAL_AXIS_MODEL: Vector3 = Vector3(0.389, 0.0, -0.921)
+# Standalone previews use the historical camera-facing projection. Production
+# replaces it with the per-building direction toward the troop deployment zone,
+# presenting one readable emblem instead of wrapping it around the spherical UV
+# seam. Back-facing vertices flip U so the reverse side remains readable as well.
+# ModelRoot presents the supplied launcher with a +90-degree authored yaw. These
+# inverse-rotated fallback axes keep standalone previews on the historical view;
+# production still rebuilds them independently toward the real attack zone.
+const DEFAULT_BALLOON_FLAG_VIEW_AXIS_MODEL: Vector3 = Vector3(-0.389, 0.0, 0.921)
+const DEFAULT_BALLOON_FLAG_HORIZONTAL_AXIS_MODEL: Vector3 = Vector3(0.921, 0.0, 0.389)
 const BALLOON_FLAG_UV_PADDING: float = 0.045
+# Overscan keeps the complete flag centered while reducing the logo footprint on
+# the curved balloon. With clamped sampling the area outside the flag extends its
+# edge colors instead of wrapping or allocating a downscaled texture copy.
+const BALLOON_FLAG_TEXTURE_SCALE: float = 1.4
+const BALLOON_FLAG_TEXTURE_OFFSET: float = (1.0 - BALLOON_FLAG_TEXTURE_SCALE) * 0.5
+const BASE_ALBEDO_TINT: Color = Color(0.85, 0.85, 0.85, 1.0)
 const MATTE_ROUGHNESS: float = 0.82
 
 const BASE_MATERIAL_SOURCE: StandardMaterial3D = preload(
@@ -28,6 +37,7 @@ const AMMO_MATERIAL_SOURCE: StandardMaterial3D = preload(
 @onready var model_source: Node3D = $ModelRoot/ModelSource
 
 var _base_material: StandardMaterial3D
+var _carried_bomb_material: StandardMaterial3D
 var _ammo_material: StandardMaterial3D
 var _static_base_mesh: MeshInstance3D
 var _payload_meshes: Array[MeshInstance3D] = []
@@ -38,10 +48,16 @@ var _payload_visual_center: Vector3 = Vector3.ZERO
 var _payload_loaded: bool = true
 var _reload_progress: float = 1.0
 var _pending_flag_texture: Texture2D
+var _pending_attack_zone_global: Vector3 = Vector3.ZERO
+var _has_pending_attack_zone: bool = false
 var _model_bound: bool = false
+var _balloon_flag_view_axis_model: Vector3 = DEFAULT_BALLOON_FLAG_VIEW_AXIS_MODEL
+var _balloon_flag_horizontal_axis_model: Vector3 = DEFAULT_BALLOON_FLAG_HORIZONTAL_AXIS_MODEL
+var _balloon_source_meshes: Array[ArrayMesh] = []
 
 
 func _ready() -> void:
+	set_process(false)
 	_bind_imported_model()
 	_prepare_balloon_flag_meshes()
 	_prepare_materials()
@@ -50,6 +66,14 @@ func _ready() -> void:
 	if _pending_flag_texture != null:
 		_apply_flag_texture(_pending_flag_texture)
 		_pending_flag_texture = null
+	_apply_pending_attack_zone_facing()
+
+
+func _process(_delta: float) -> void:
+	# Building placement begins at scale zero. Wait only until the build tween has
+	# produced an invertible transform, then rebuild the two scene-local UV meshes
+	# once and return to a process-free presentation node.
+	_apply_pending_attack_zone_facing()
 
 
 ## Applies an already-resolved owner flag texture to the two balloon meshes only.
@@ -61,6 +85,25 @@ func apply_player_flag_texture(texture: Texture2D) -> void:
 		_pending_flag_texture = texture
 		return
 	_apply_flag_texture(texture)
+
+
+## Faces the balloon emblems toward the real troop deployment zone while the
+## launcher itself stays fixed. Safe to call during the scale-from-zero build tween.
+func set_attack_zone_facing_global(target_global_position: Vector3) -> void:
+	if not target_global_position.is_finite():
+		return
+	_pending_attack_zone_global = target_global_position
+	_has_pending_attack_zone = true
+	_apply_pending_attack_zone_facing()
+
+
+## Exposes the resolved world-space emblem direction for focused integration tests.
+func get_flag_facing_global() -> Vector3:
+	if not _model_bound or not is_inside_tree():
+		return Vector3.ZERO
+	var facing := model_root.global_transform.basis * _balloon_flag_view_axis_model
+	facing.y = 0.0
+	return facing.normalized() if facing.length_squared() > 0.0000001 else Vector3.ZERO
 
 
 ## Returns one detached, production-scaled projectile containing the complete
@@ -165,15 +208,21 @@ func _bind_imported_model() -> void:
 
 func _prepare_materials() -> void:
 	_base_material = BASE_MATERIAL_SOURCE.duplicate(true) as StandardMaterial3D
+	# The source GLB has no embedded material slots. Circle is the orange bomb/barrel
+	# from the supplied reference, while the two balloon meshes only share its
+	# source map until an owner flag replaces their albedo at runtime.
+	_carried_bomb_material = AMMO_MATERIAL_SOURCE.duplicate(true) as StandardMaterial3D
 	_ammo_material = AMMO_MATERIAL_SOURCE.duplicate(true) as StandardMaterial3D
-	assert(_base_material != null, "Air Bomb base PBR material failed to duplicate")
-	assert(_ammo_material != null, "Air Bomb balloon PBR material failed to duplicate")
+	assert(_base_material != null, "Air Bomb base material failed to duplicate")
+	assert(_carried_bomb_material != null, "Air Bomb carried-bomb material failed to duplicate")
+	assert(_ammo_material != null, "Air Bomb balloon material failed to duplicate")
 	_base_material.resource_local_to_scene = true
+	_carried_bomb_material.resource_local_to_scene = true
 	_ammo_material.resource_local_to_scene = true
 	# Match the early cannon's painted, matte presentation. The source metallic
 	# maps made the entire defense mirror-black under the island lights and also
 	# destroyed the black/orange flag contrast.
-	for material in [_base_material, _ammo_material]:
+	for material in [_base_material, _carried_bomb_material, _ammo_material]:
 		material.metallic = 0.0
 		material.metallic_texture = null
 		material.roughness = MATTE_ROUGHNESS
@@ -182,10 +231,24 @@ func _prepare_materials() -> void:
 		material.texture_repeat = false
 		material.uv1_scale = Vector3.ONE
 		material.uv1_offset = Vector3.ZERO
+	# Retain the authored off-white frame and brown wood without restoring the
+	# source metallic glare. The slight neutral factor preserves face contrast in
+	# the island's bright key light while staying close to the supplied render.
+	_base_material.albedo_color = BASE_ALBEDO_TINT
+	_ammo_material.uv1_scale = Vector3(
+		BALLOON_FLAG_TEXTURE_SCALE,
+		BALLOON_FLAG_TEXTURE_SCALE,
+		1.0,
+	)
+	_ammo_material.uv1_offset = Vector3(
+		BALLOON_FLAG_TEXTURE_OFFSET,
+		BALLOON_FLAG_TEXTURE_OFFSET,
+		0.0,
+	)
 	_static_base_mesh.material_override = _base_material
-	# Circle is the carried barrel/harness and Cube_024 is its bridle. They retain
-	# the supplied base PBR maps even though they travel with the balloon payload.
-	_payload_meshes[0].material_override = _base_material
+	# Circle is the orange bomb/barrel. Cube_024 is the pale suspension bridle and
+	# therefore remains on the launcher material from the supplied reference.
+	_payload_meshes[0].material_override = _carried_bomb_material
 	_payload_meshes[1].material_override = _base_material
 	for balloon_mesh in _balloon_meshes:
 		balloon_mesh.material_override = _ammo_material
@@ -193,17 +256,27 @@ func _prepare_materials() -> void:
 
 func _apply_flag_texture(texture: Texture2D) -> void:
 	_ammo_material.albedo_color = Color.WHITE
-	# Ship sails use the uploaded texture directly. The planar balloon UVs now do
-	# the fitting, so allocating and downscaling a 30% intermediate canvas would
-	# only blur the logo and waste per-building texture memory.
+	# Ship sails use the uploaded texture directly. Centered material overscan
+	# reduces the logo footprint without resampling the source, so the balloon
+	# keeps the sharp cached texture and adds no per-building allocation.
 	_ammo_material.albedo_texture = texture
 	for balloon_mesh in _balloon_meshes:
 		balloon_mesh.material_override = _ammo_material
 
 
 func _prepare_balloon_flag_meshes() -> void:
-	for balloon_mesh in _balloon_meshes:
-		var source_mesh := balloon_mesh.mesh as ArrayMesh
+	if _balloon_source_meshes.is_empty():
+		for balloon_mesh in _balloon_meshes:
+			var source_mesh := balloon_mesh.mesh as ArrayMesh
+			assert(source_mesh != null, "Air Bomb balloon mesh must remain an ArrayMesh")
+			_balloon_source_meshes.append(source_mesh)
+	assert(
+		_balloon_source_meshes.size() == _balloon_meshes.size(),
+		"Air Bomb balloon source-mesh cache lost parity",
+	)
+	for balloon_index in _balloon_meshes.size():
+		var balloon_mesh := _balloon_meshes[balloon_index]
+		var source_mesh := _balloon_source_meshes[balloon_index]
 		assert(source_mesh != null, "Air Bomb balloon mesh must remain an ArrayMesh")
 		assert(
 			source_mesh.get_blend_shape_count() == 0,
@@ -259,7 +332,7 @@ func _build_balloon_planar_uvs(
 	for vertex_index in vertices.size():
 		var model_vertex := mesh_to_model * vertices[vertex_index]
 		var point := Vector2(
-			model_vertex.dot(BALLOON_FLAG_HORIZONTAL_AXIS_MODEL),
+			model_vertex.dot(_balloon_flag_horizontal_axis_model),
 			model_vertex.y,
 		)
 		projected[vertex_index] = point
@@ -279,10 +352,45 @@ func _build_balloon_planar_uvs(
 			0.5 - centered.y * usable_scale,
 		)
 		var model_normal := (normal_to_model * normals[vertex_index]).normalized()
-		if model_normal.dot(BALLOON_FLAG_VIEW_AXIS_MODEL) < 0.0:
+		if model_normal.dot(_balloon_flag_view_axis_model) < 0.0:
 			uv.x = 1.0 - uv.x
 		result[vertex_index] = uv.clamp(Vector2.ZERO, Vector2.ONE)
 	return result
+
+
+func _apply_pending_attack_zone_facing() -> void:
+	if not _has_pending_attack_zone or not _model_bound or not is_inside_tree():
+		set_process(false)
+		return
+	var model_basis := model_root.global_transform.basis
+	if absf(model_basis.determinant()) <= 0.000000001:
+		set_process(true)
+		return
+	var global_direction := _pending_attack_zone_global - model_root.global_position
+	global_direction.y = 0.0
+	if global_direction.length_squared() <= 0.0000001:
+		_has_pending_attack_zone = false
+		set_process(false)
+		return
+	var model_direction := model_basis.inverse() * global_direction
+	model_direction.y = 0.0
+	if model_direction.length_squared() <= 0.0000001:
+		set_process(true)
+		return
+	model_direction = model_direction.normalized()
+	var direction_changed := (
+		_balloon_flag_view_axis_model.dot(model_direction) < 0.999999
+	)
+	_balloon_flag_view_axis_model = model_direction
+	_balloon_flag_horizontal_axis_model = Vector3(
+		model_direction.z,
+		0.0,
+		-model_direction.x,
+	).normalized()
+	_has_pending_attack_zone = false
+	set_process(false)
+	if direction_changed:
+		_prepare_balloon_flag_meshes()
 
 
 func _set_reload_progress_internal(progress: float) -> void:

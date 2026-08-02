@@ -34,6 +34,8 @@ const LEVEL_STATS: Dictionary = {
 	4: {"hp": 820, "damage": 97, "atk_speed": 0.86, "move_speed": 0.58, "detection_radius": 1.40},
 	5: {"hp": 998, "damage": 125, "atk_speed": 0.86, "move_speed": 0.60, "detection_radius": 1.52},
 	6: {"hp": 1148, "damage": 149, "atk_speed": 0.86, "move_speed": 0.62, "detection_radius": 1.62},
+	7: {"hp": 1320, "damage": 170, "atk_speed": 0.86, "move_speed": 0.62, "detection_radius": 1.70},
+	8: {"hp": 1510, "damage": 194, "atk_speed": 0.86, "move_speed": 0.62, "detection_radius": 1.78},
 }
 
 var level: int = 2
@@ -180,7 +182,7 @@ func _physics_process(delta: float) -> void:
 		State.ATTACK:
 			_do_attack(delta)
 		State.VICTORY:
-			pass
+			_do_victory_watch()
 		State.RELOCATE:
 			_do_relocate(delta)
 
@@ -462,6 +464,22 @@ func _play_victory() -> void:
 		anim_player.play("Cheering")
 	elif anim_player and anim_player.has_animation("Idle_A"):
 		anim_player.play("Idle_A")
+
+
+## Victory is only a presentation state for the currently exhausted wave.
+## The attacker can still deploy reserved troops later, so guards must keep
+## watching their Tombstone radius instead of treating the state as terminal.
+func _do_victory_watch() -> void:
+	var enemy: Node3D = _find_nearest_enemy()
+	if enemy == null:
+		return
+	_target_troop = enemy
+	_attack_timer = 0.0
+	_hit_this_swing = false
+	_record_replay_telemetry("guard_target_acquired", _troop_target_payload(enemy))
+	state = State.CHASE
+	if anim_player and anim_player.has_animation("Running_A"):
+		anim_player.play("Running_A")
 
 
 # ── Enemy detection ───────────────────────────────────────────

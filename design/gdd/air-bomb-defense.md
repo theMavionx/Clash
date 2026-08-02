@@ -14,8 +14,8 @@ Ground troops are never valid targets and never receive splash damage.
 
 The canonical building key is `air_bomb`. TH1-8 allow zero Air Bombs; TH9 allows
 exactly two. A new Air Bomb starts at level 1 and may be upgraded through level 9
-at TH9, matching the established Cannon unlock convention. The feature remains
-data-ready and hidden until TH9 itself is playable.
+at TH9, matching the established Cannon unlock convention. TH9 is now playable,
+so both Air Bomb placements and their L1–L9 upgrade path are live.
 
 ## 2. Intended role
 
@@ -102,10 +102,10 @@ Let `d` be horizontal distance from an air unit to the authoritative impact poin
 The center takes full damage and the outer edge takes 50%. Units outside `R`
 take zero. Ground troops take zero even when geometrically inside the blast.
 
-## 5. Provisional level curve
+## 5. Production level curve
 
-These numbers are starting values for the required TH9 simulation pass, not a
-production balance promise.
+These values are the TH9 starting curve validated by the deterministic TH8–TH9
+simulation pass.
 
 | Level | HP | Damage | Range | Radius | Reload | Gold | Wood | Ore |
 |---:|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -123,8 +123,7 @@ Damage and HP are the primary level-growth knobs. Search range grows slowly.
 Reload and radius are fixed so the defense never gains hidden attack-speed
 scaling and players can learn one stable timing.
 
-These mirrored client/server costs remain provisional until legal TH9 storage
-capacity and construction durations become authoritative.
+These mirrored client/server costs fit the legal TH9 storage ceiling.
 
 ## 6. Visual and material contract
 
@@ -211,8 +210,8 @@ building is first verified in a dedicated combat scene and `TestMain.tscn`.
 ## 10. Launch gates
 
 - Projectile Option B was selected by the owner on 2026-08-01.
-- TH9 economy, troop curves and bot layouts must be authored before live TH9
-  promotion; current costs are provisional and the live Town Hall cap is unchanged.
+- TH9 economy, troop curves and a 900-layout bot cohort are authored and verified.
+  The live Town Hall cap is 9; TH10 content remains unreachable.
 - Asset UV verification proves the shared flag texture is readable on both
   balloon meshes; otherwise those meshes must be split/re-UVed rather than
   applying the flag to unrelated hardware.

@@ -50,14 +50,32 @@ var _next_ammo_side: int = 0 # compatibility key; the single assembly is always 
 var _active_projectile: WeakRef = null
 var _visual_controller: Node = null
 var _launch_sfx_player: AudioStreamPlayer3D = null
+var _spawn_facing_global: Vector3 = Vector3.ZERO
+var _has_spawn_facing: bool = false
+var _last_spawn_facing_origin: Vector3 = Vector3.ZERO
+var _has_last_spawn_facing_origin: bool = false
+var _spawn_facing_refresh_queued: bool = false
 
 
 func _ready() -> void:
+	set_notify_transform(true)
 	process_physics_priority = -10
 	_owner_order = _stable_owner_order()
 	_apply_stats()
 	_setup_launch_sfx()
 	call_deferred("_bind_visual_controller")
+
+
+func _notification(what: int) -> void:
+	if (
+		what != NOTIFICATION_TRANSFORM_CHANGED
+		or not _has_spawn_facing
+		or _spawn_facing_refresh_queued
+		or not is_inside_tree()
+	):
+		return
+	_spawn_facing_refresh_queued = true
+	call_deferred("_refresh_spawn_facing_after_transform")
 
 
 func set_level(value: int) -> void:
@@ -80,6 +98,17 @@ func freeze_for(duration: float) -> void:
 func set_range_visuals_visible(_should_be_visible: bool) -> void:
 	# BuildingSystem draws the shared selection ring from `detect_range`.
 	pass
+
+
+## BuildingSystem supplies the real shipPlane center for every defense. Air Bomb
+## keeps its launcher fixed and uses this heading only to present the owner logo.
+func set_spawn_facing_global(target_global_position: Vector3) -> void:
+	if not target_global_position.is_finite():
+		return
+	_spawn_facing_global = target_global_position
+	_has_spawn_facing = true
+	_has_last_spawn_facing_origin = false
+	_apply_spawn_facing_to_visual()
 
 
 func _play_victory() -> void:
@@ -360,9 +389,34 @@ func _record_event(kind: String, extra: Dictionary = {}) -> void:
 func _bind_visual_controller() -> void:
 	_visual_controller = _find_visual_controller(self)
 	if is_instance_valid(_visual_controller):
+		_apply_spawn_facing_to_visual()
 		if _visual_controller.has_method("reset_visual_state"):
 			_visual_controller.call("reset_visual_state")
 		_set_ammo_loaded(0, _sim_tick >= _reload_ready_tick)
+
+
+func _apply_spawn_facing_to_visual() -> void:
+	if (
+		not _has_spawn_facing
+		or not is_instance_valid(_visual_controller)
+		or not _visual_controller.has_method("set_attack_zone_facing_global")
+	):
+		return
+	_visual_controller.call("set_attack_zone_facing_global", _spawn_facing_global)
+	_last_spawn_facing_origin = global_position
+	_has_last_spawn_facing_origin = true
+
+
+func _refresh_spawn_facing_after_transform() -> void:
+	_spawn_facing_refresh_queued = false
+	if not _has_spawn_facing or not is_inside_tree():
+		return
+	if (
+		_has_last_spawn_facing_origin
+		and global_position.distance_squared_to(_last_spawn_facing_origin) <= 0.00000001
+	):
+		return
+	_apply_spawn_facing_to_visual()
 
 
 func _find_visual_controller(root: Node) -> Node:

@@ -19049,14 +19049,16 @@ const ADMIN_MAX_VILLAGE_BUILD_ORDER = [
   'mortar',
   'cannon',
   'harpoon',
+  'flamethrower',
+  'air_bomb',
   'port',
 ];
 
 const ADMIN_TH_MAX_COUNT = {
   ...db.TH_MAX_COUNT,
   // Legacy ports remain admin-visible for old accounts, but Port building
-  // progression remains capped at level 3 through TH7.
-  port: [1, 2, 3, 3, 3, 3, 3],
+  // progression remains capped at level 3 through TH9.
+  port: [1, 2, 3, 3, 3, 3, 3, 3, 3],
 };
 
 function adminMaxBuildingCountForTh(type, townHallLevel) {
@@ -19188,7 +19190,7 @@ router.post('/admin/players/:name/max-village', adminAuth, (req, res) => {
   try {
     const player = db.db.prepare('SELECT id, name FROM players WHERE name = ? AND COALESCE(is_bot, 0) = 0').get(req.params.name);
     if (!player) return res.status(404).json({ error: 'Player not found' });
-    const townHallLevel = Math.max(1, Math.min(7, Math.floor(Number(req.body?.town_hall_level || req.body?.level || 1))));
+    const townHallLevel = Math.max(1, Math.min(db.LIVE_TOWN_HALL_CAP || 9, Math.floor(Number(req.body?.town_hall_level || req.body?.level || 1))));
     const result = db.db.transaction(() => {
       db.db.prepare('DELETE FROM buildings WHERE player_id = ?').run(player.id);
       const added = [];
@@ -26379,6 +26381,20 @@ router.get('/admin/earnings', adminAuth, async (req, res) => {
 
 // ─────────────────────────────────────────────────────────────────────
 // Admin: local revenue analytics by DEX window and by tournament.
+// Snapshot-only earnings history. Window amounts are positive changes between
+// stored cumulative observations; live provider values and local volume models
+// are never substituted into these 1d/7d/30d totals.
+router.get('/admin/earnings-history', adminAuth, (req, res) => {
+  try {
+    const days = Math.max(1, Math.min(30, parseInt(req.query.days, 10) || 30));
+    const dex = req.query.dex ? String(req.query.dex) : null;
+    res.json(earnings.readEarningsSnapshotHistory(db.db, { days, dex }));
+  } catch (e) {
+    console.warn('[earnings] snapshot history failed:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 router.get('/admin/earnings/:dex', adminAuth, async (req, res) => {
   try {
     const data = await earnings.fetchEarningsDex(req.params.dex, {
