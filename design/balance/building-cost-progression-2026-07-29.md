@@ -94,10 +94,10 @@ Cannon unlocks at TH7 and must remain payable inside the 143,000 cap:
 | 6 | 83,000 | 128,000 | 108,000 |
 | 7 | 105,000 | 142,000 | 125,000 |
 
-Harpoon unlocks at TH6 and follows the Town Hall level cap through the
-future TH8 tier. Levels 2-6 fit the 106,000-per-resource TH6 ceiling. Levels
-7-8 fit the established 143,000 late-game ceiling; the TH8 economy must
-revalidate the L8 ceiling before TH8 becomes playable:
+Harpoon unlocks at TH6 and follows the Town Hall level cap through live TH9.
+Levels 2-6 fit the 106,000-per-resource TH6 ceiling, levels 7-8 fit the
+143,000 TH7 ceiling, and level 9 fits the 230,000 TH8 ceiling available before
+the Town Hall 9 upgrade:
 
 | Harpoon level | Gold | Wood | Ore |
 |---:|---:|---:|---:|
@@ -109,6 +109,7 @@ revalidate the L8 ceiling before TH8 becomes playable:
 | 6 | 68,000 | 98,000 | 83,000 |
 | 7 | 86,000 | 122,000 | 104,000 |
 | 8 | 108,000 | 142,000 | 124,000 |
+| 9 | 135,000 | 185,000 | 160,000 |
 
 ## Progression Contracts
 

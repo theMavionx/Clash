@@ -485,7 +485,7 @@ const COMPETITIVE_BOT_MAX_LEVELS = {
     mage_tower: 9,
     mortar: 9,
     shark_trap: 9,
-    harpoon: 8,
+    harpoon: 9,
     cannon: 9,
     flamethrower: 9,
     air_bomb: 9,

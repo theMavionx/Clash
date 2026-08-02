@@ -102,11 +102,11 @@ try {
   assert.deepEqual(gameDb.TH_MAX_COUNT.mortar.slice(0, 6), [0, 0, 0, 0, 1, 2]);
   assert.equal(gameDb.TH_UNLOCK.harpoon, 6);
   assert.deepEqual(gameDb.TH_MAX_COUNT.harpoon, [0, 0, 0, 0, 0, 1, 1, 2, 2]);
-  assert.deepEqual(gameDb.TH_MAX_LEVEL.harpoon, [1, 1, 1, 1, 1, 6, 7, 8, 8]);
+  assert.deepEqual(gameDb.TH_MAX_LEVEL.harpoon, [1, 1, 1, 1, 1, 6, 7, 8, 9]);
   assert.deepEqual(gameDb.BUILDING_DEFS.harpoon, {
     size: [2, 2],
-    max_level: 8,
-    hp_levels: [1800, 2400, 3200, 4300, 5600, 6756, 10201, 12000],
+    max_level: 9,
+    hp_levels: [1800, 2400, 3200, 4300, 5600, 6756, 10201, 12000, 13800],
     cost: { gold: 12000, wood: 22000, ore: 18000 },
     upgrade_cost: {
       2: { gold: 20000, wood: 42000, ore: 35000 },
@@ -116,6 +116,7 @@ try {
       6: { gold: 68000, wood: 98000, ore: 83000 },
       7: { gold: 86000, wood: 122000, ore: 104000 },
       8: { gold: 108000, wood: 142000, ore: 124000 },
+      9: { gold: 135000, wood: 185000, ore: 160000 },
     },
     max_count: 2,
   });

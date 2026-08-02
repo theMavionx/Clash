@@ -11,8 +11,8 @@ Deterministic report: `artifacts/pvp-balance/th8-th9-progression-2026-08-02.md`
   Mage Tower, a fourth Shark Trap, and a fourth Storage.
 - TH9 unlocks exactly two Air Bomb defenses and a fifth Shark Trap.
 - Flamethrower is capped at L8/L9 at TH8/TH9. Air Bomb is capped at L9 at TH9.
-- Core buildings reach L8/L9. Tombstone reaches L7/L8; Harpoon reaches L8 and
-  then holds; Port remains L3.
+- Core buildings reach L8/L9. Tombstone reaches L7/L8; Harpoon reaches L8/L9;
+  Port remains L3.
 - Wind Mage unlocks at TH8 and Ice Golem at TH9. Playable troops reach the
   same level as their Town Hall, while Horror remains locked behind TH10.
   Reaching each troop level also requires the Barn at that same level, so the

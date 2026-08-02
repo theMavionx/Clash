@@ -37,7 +37,7 @@ const BUILDING_SIZES = {
 const MAX_LEVEL = {
   town_hall: 9, mine: 9, barn: 9, port: 3, sawmill: 9, turret: 9,
   tombstone: 8, storage: 9, archer_tower: 9, mage_tower: 9,
-  mortar: 9, shark_trap: 9, harpoon: 8, cannon: 9, flamethrower: 9, air_bomb: 9,
+  mortar: 9, shark_trap: 9, harpoon: 9, cannon: 9, flamethrower: 9, air_bomb: 9,
 };
 const COMPETITIVE_BOT_MAX_LEVELS = {
   5: {
@@ -63,7 +63,7 @@ const COMPETITIVE_BOT_MAX_LEVELS = {
   9: {
     town_hall: 9, mine: 9, sawmill: 9, barn: 9, storage: 9,
     archer_tower: 9, tombstone: 8, turret: 9, mage_tower: 9,
-    mortar: 9, shark_trap: 9, harpoon: 8, cannon: 9, flamethrower: 9, air_bomb: 9,
+    mortar: 9, shark_trap: 9, harpoon: 9, cannon: 9, flamethrower: 9, air_bomb: 9,
   },
 };
 const COMPETITIVE_BOT_DEFENSE_TYPES = new Set([

@@ -52,7 +52,12 @@ try {
   assert.deepEqual(gameDb.TH_MAX_COUNT.shark_trap.slice(6, 9), [3, 4, 5]);
   assert.equal(gameDb.getBuildingMaxLevelForTownHall('flamethrower', 8), 8);
   assert.equal(gameDb.getBuildingMaxLevelForTownHall('air_bomb', 9), 9);
+  assert.equal(gameDb.getBuildingMaxLevelForTownHall('harpoon', 8), 8);
+  assert.equal(gameDb.getBuildingMaxLevelForTownHall('harpoon', 9), 9);
   assert.equal(gameDb.getBuildingMaxLevelForTownHall('tombstone', 9), 8);
+  assert.deepEqual(gameDb.getBuildingUpgradeCost('harpoon', 8), {
+    gold: 135000, wood: 185000, ore: 160000,
+  });
   assert.deepEqual(gameDb.getBuildingUpgradeCost('town_hall', 7), {
     gold: 120000, wood: 140000, ore: 130000,
   });
@@ -91,6 +96,23 @@ try {
   assert.equal(th9.max_hp, 76000);
   assert.deepEqual(th9.resources, { gold: 55000, wood: 10000, ore: 30000 });
 
+  const harpoons = gameDb.db.prepare(`
+    SELECT id, level FROM buildings
+     WHERE player_id = ? AND type = 'harpoon'
+     ORDER BY id
+  `).all(player.id);
+  assert.equal(harpoons.length, 2);
+  assert.equal(harpoons.every((building) => building.level === 8), true);
+  for (const harpoon of harpoons) {
+    gameDb.db.prepare(
+      'UPDATE players SET gold = 230000, wood = 230000, ore = 230000 WHERE id = ?',
+    ).run(player.id);
+    const upgraded = gameDb.upgradeBuilding(player.id, harpoon.id);
+    assert.equal(upgraded.level, 9);
+    assert.equal(upgraded.max_hp, 13800);
+    assert.deepEqual(upgraded.resources, { gold: 95000, wood: 45000, ore: 70000 });
+  }
+
   const blockedTh10 = gameDb.upgradeBuilding(player.id, townHallId);
   assert.equal(blockedTh10.code, 'TOWN_HALL_LEVEL_NOT_LIVE');
   assert.equal(blockedTh10.live_town_hall_cap, 9);
@@ -117,7 +139,7 @@ try {
   assert.equal(battleSession.combat_snapshot_version, 2);
   assert.equal(battleSession.combat_rules_version, 'flamethrower-v1');
 
-  console.log('[TH8_TH9_PROGRESSION] PASS th8=flamethrower+expanded_defenses th9=2_air_bombs bot_snapshot=v2 cap=9');
+  console.log('[TH8_TH9_PROGRESSION] PASS th8=flamethrower+expanded_defenses th9=2_air_bombs+2xL9_harpoon bot_snapshot=v2 cap=9');
 } finally {
   gameDb.db.close();
   for (const suffix of ['', '-wal', '-shm']) fs.rmSync(`${dbPath}${suffix}`, { force: true });

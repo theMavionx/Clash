@@ -9,7 +9,7 @@ const { DEFENSE_STATS, FREEZE_DROP, TROOP_STATS } = require('./combat_defs');
 
 const BUILDING_DEFS = {
   town_hall: { size: [4, 4], hp_levels: [100000] },
-  harpoon: { size: [2, 2], hp_levels: [1800, 2400, 3200, 4300, 5600, 6756, 10201, 12000] },
+  harpoon: { size: [2, 2], hp_levels: [1800, 2400, 3200, 4300, 5600, 6756, 10201, 12000, 13800] },
   storage: { size: [2, 2], hp_levels: [100000] },
 };
 
@@ -114,6 +114,7 @@ try {
     { damage: 82, detectRange: 1.95, pullSpeed: 1.20 },
     { damage: 98, detectRange: 2.08, pullSpeed: 1.40 },
     { damage: 100, detectRange: 2.20, pullSpeed: 1.48 },
+    { damage: 112, detectRange: 2.30, pullSpeed: 1.55 },
   ];
   for (let index = 0; index < expectedHarpoonCurve.length; index++) {
     assert.deepEqual(DEFENSE_STATS.harpoon[index + 1], {
@@ -295,6 +296,24 @@ try {
   assert.equal(l8PullEnd.durationTicks, 48);
   assert.ok(Math.abs(l8PullEnd.finalDistance - 1.016) <= 0.001);
 
+  const harpoonL9 = building(27, 'harpoon', 12, 12, 9);
+  const harpoonL9Point = gridToWorld(12, 12, 2, 2, CANONICAL_GRID_CONFIGS[0]);
+  const fullRangeL9 = { x: harpoonL9Point.x, z: harpoonL9Point.z + 2.30 };
+  const l9Ward = simulate(
+    [townHall, harpoonL9],
+    [deploy('MechanicalDragon', fullRangeL9.x, fullRangeL9.z, 20)],
+    { altar: { ward: 3 } },
+  );
+  const l9Impact = events(l9Ward, 'harpoon_impact', 27)[0];
+  const l9PullEnd = events(l9Ward, 'harpoon_pull_end', 27)[0];
+  assert.equal(l9Impact.damage, 129, 'L9 maximum Ward uses ceiling rounding');
+  assert.equal(l9PullEnd.reason, 'duration', 'L9 full-range pull must preserve the fixed duration cap');
+  assert.equal(l9PullEnd.durationTicks, 48);
+  assert.ok(
+    Math.abs(l9PullEnd.finalDistance - 1.06) <= 0.001,
+    `L9 full-range final distance was ${l9PullEnd.finalDistance}`,
+  );
+
   const closeHarpoon = building(23, 'harpoon', 12, 23, 6);
   const closeHarpoonPoint = gridToWorld(12, 23, 2, 2, CANONICAL_GRID_CONFIGS[0]);
   const inside = simulate(
@@ -422,6 +441,7 @@ try {
     + ` l6_pull_ticks=${pullEnds[0].durationTicks}`
     + ` l7_pull_ticks=${l7PullEnd.durationTicks}`
     + ` l8_pull_ticks=${l8PullEnd.durationTicks}`
+    + ` l9_pull_ticks=${l9PullEnd.durationTicks}`
     + ` windup_ticks=${fires[0].fireTick - locks[0].tick}`
     + ` cadence_ticks=${fires[1].fireTick - fires[0].fireTick}`
     + ` fire_dragon_ttk=L6:${fireDragonL6Hits.length}/L7:${fireDragonL7Hits.length}`

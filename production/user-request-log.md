@@ -2751,3 +2751,13 @@ Follow-up:
   exact revision; and verify production services plus credited totals. Commit,
   push, deployment, and the narrowly scoped volume backfill are explicitly
   authorized. No branch merge is authorized by this request.
+
+## UR-2026-08-03-HARPOON-L9-PROGRESSION
+
+- Request: fix the production progression issue where a maxed Town Hall 9
+  account still showed Harpoon level 8 as the maximum.
+- Scope: add a real L9 Harpoon tier across client, server, replay, competitive
+  bots, progression UI data, costs, trophy scoring, tests, and documentation;
+  keep the seven-second attack cadence fixed; validate the change against the
+  prior 1,500-battle TH8-TH9 balance baseline; then release it and upgrade the
+  two Harpoons on the already-maxed production `clashbot` account to L9.

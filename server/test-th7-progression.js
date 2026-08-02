@@ -80,7 +80,7 @@ try {
   assert.deepEqual(gameDb.TH_MAX_COUNT.cannon, [0, 0, 0, 0, 0, 0, 2, 3, 3]);
   assert.deepEqual(gameDb.TH_MAX_LEVEL.cannon, [1, 1, 1, 1, 1, 1, 7, 8, 9]);
   assert.deepEqual(gameDb.TH_MAX_COUNT.harpoon, [0, 0, 0, 0, 0, 1, 1, 2, 2]);
-  assert.deepEqual(gameDb.TH_MAX_LEVEL.harpoon, [1, 1, 1, 1, 1, 6, 7, 8, 8]);
+  assert.deepEqual(gameDb.TH_MAX_LEVEL.harpoon, [1, 1, 1, 1, 1, 6, 7, 8, 9]);
   assert.deepEqual(gameDb.TH_MAX_LEVEL.port, [1, 2, 3, 3, 3, 3, 3, 3, 3]);
   assert.deepEqual(gameDb.TH_MAX_LEVEL.altar, [1, 1, 1, 1, 1, 1, 1, 1, 1]);
   assert.deepEqual(
@@ -137,7 +137,7 @@ try {
   assert.deepEqual(gameDb.TROPHY_TABLE.archer_tower.slice(0, 7), [15, 35, 70, 125, 200, 300, 425]);
   assert.deepEqual(gameDb.TROPHY_TABLE.mage_tower.slice(0, 7), [20, 45, 90, 145, 225, 330, 460]);
   assert.deepEqual(gameDb.TROPHY_TABLE.mortar.slice(0, 7), [30, 65, 125, 210, 315, 440, 580]);
-  assert.deepEqual(gameDb.TROPHY_TABLE.harpoon, [20, 35, 55, 80, 110, 145, 190, 240]);
+  assert.deepEqual(gameDb.TROPHY_TABLE.harpoon, [20, 35, 55, 80, 110, 145, 190, 240, 300]);
   assert.deepEqual(gameDb.TROPHY_TABLE.tombstone.slice(0, 6), [5, 10, 20, 40, 70, 110]);
   assert.deepEqual(gameDb.TROPHY_TABLE.shark_trap.slice(0, 7), [25, 40, 60, 85, 115, 155, 205]);
 
@@ -253,7 +253,7 @@ try {
   assert.equal(harpoonL8.level, 8);
   assert.equal(harpoonL8.max_hp, 12000);
   assert.deepEqual(harpoonL8.resources, { gold: 35000, wood: 1000, ore: 19000 });
-  assert.match(gameDb.upgradeBuilding(playerId, harpoonId).error, /Already at max level/);
+  assert.match(gameDb.upgradeBuilding(playerId, harpoonId).error, /Town Hall to level 9/);
   gameDb.db.prepare(
     'UPDATE players SET gold = 143000, wood = 143000, ore = 143000 WHERE id = ?',
   ).run(playerId);

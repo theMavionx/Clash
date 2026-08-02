@@ -786,7 +786,7 @@ assert.deepEqual(
 );
 const harpoonSource = read('scripts/tower_harpoon.gd');
 const harpoonRows = parseDictionaryRows('scripts/tower_harpoon.gd');
-assert.equal(Object.keys(harpoonRows).length, 8, 'Harpoon client must define all eight levels');
+assert.equal(Object.keys(harpoonRows).length, 9, 'Harpoon client must define all nine levels');
 for (let level = 1; level <= 8; level++) {
   assert.deepEqual(
     harpoonRows[level],
@@ -951,6 +951,6 @@ console.log(
   + ' summon=owner_bound,capped,expiring shark_trap=levels_1_to_9'
   + ' ship_slots=knight1,archer1,mage6,pea5,mimic8,mechanical5,demon6,ice11,fire11,wind_mage18,necromancer18,horror22'
   + ' tactical_constants=freeze,rage,skeleton_barrel'
-  + ' defenses=turret9,archer9,mage9,mortar9,harpoon8,air_bomb9,cannon9,guards8'
+  + ' defenses=turret9,archer9,mage9,mortar9,harpoon9,air_bomb9,cannon9,guards8'
   + ' telemetry=chain,freeze,trap,wind_wave,summon,split progression=th9',
 );

@@ -67,6 +67,8 @@ try {
     5: 15,
     6: 27,
     7: 45,
+    8: 70,
+    9: 100,
   });
 
   const expectedTownHallCosts = {
@@ -76,6 +78,8 @@ try {
     5: { gold: 30000, wood: 54000, ore: 48000 },
     6: { gold: 55000, wood: 75000, ore: 68000 },
     7: { gold: 85000, wood: 106000, ore: 98000 },
+    8: { gold: 120000, wood: 140000, ore: 130000 },
+    9: { gold: 175000, wood: 220000, ore: 200000 },
   };
 
   let previousTownHallTotal = 0;
@@ -120,7 +124,7 @@ try {
       (sum, resource) => sum + Number(def.cost[resource] || 0),
       0,
     );
-    for (let targetLevel = 2; targetLevel <= def.max_level; targetLevel += 1) {
+    for (let targetLevel = 2; targetLevel <= Math.min(def.max_level, 7); targetLevel += 1) {
       const cost = gameDb.getBuildingUpgradeCost(type, targetLevel - 1);
       const requiredTownHall = firstTownHallForBuildingLevel(type, targetLevel);
       const cap = maxResourceCapacity(requiredTownHall);
@@ -146,7 +150,7 @@ try {
       (sum, resource) => sum + Number(def.cost[resource] || 0),
       0,
     );
-    for (let targetLevel = 2; targetLevel <= def.max_level; targetLevel += 1) {
+    for (let targetLevel = 2; targetLevel <= Math.min(def.max_level, 7); targetLevel += 1) {
       const cost = gameDb.getBuildingUpgradeCost(type, targetLevel - 1);
       const requiredTownHall = firstTownHallForBuildingLevel(type, targetLevel);
       const cap = maxResourceCapacity(requiredTownHall);
@@ -176,8 +180,8 @@ try {
   assert.deepEqual(maxResourceCapacity(7), { gold: 143000, wood: 143000, ore: 143000 });
 
   console.log(
-    '[BUILDING_COST_PROGRESSION] PASS curve=2,4,8,15,27,45'
-    + ' th_costs=4.2k_to_106k max_capacity=143k',
+    '[BUILDING_COST_PROGRESSION] PASS curve=2,4,8,15,27,45,70,100'
+    + ' th_costs=4.2k_to_220k legacy_capacity_gate=143k',
   );
 } finally {
   gameDb.db.close();

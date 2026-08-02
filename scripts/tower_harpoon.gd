@@ -53,6 +53,12 @@ const LEVEL_STATS: Dictionary = {
 		"pull_speed": 1.48,
 		"pull_duration_ticks": 48,
 	},
+	9: {
+		"damage": 112,
+		"detect_range": 2.30,
+		"pull_speed": 1.55,
+		"pull_duration_ticks": 48,
+	},
 }
 
 const FIXED_DELTA: float = 1.0 / 60.0

@@ -626,6 +626,18 @@ const DEFENSE_STATS = {
       immunity: 1.50,
       yawSpeedDeg: 120,
     },
+    9: {
+      damage: 112,
+      fireRate: 7.0,
+      detectRange: 2.30,
+      projSpeed: 4.0,
+      pullSpeed: 1.55,
+      pullDuration: 0.80,
+      stopDistance: 0.60,
+      windup: 0.45,
+      immunity: 1.50,
+      yawSpeedDeg: 120,
+    },
   },
   mage_tower: {
     1: {
