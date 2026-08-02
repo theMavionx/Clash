@@ -1,7 +1,7 @@
 import { memo, useCallback, useState, useEffect, useMemo, useRef } from 'react';
 import { useWallet as useSolWallet } from '@solana/wallet-adapter-react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
-import { useBuildingDefs, usePlayer, useResources, useSend, useSelectedBuilding } from '../hooks/useGodot';
+import { useBuildingDefs, usePlayer, useResources, useSend, useSelectedBuilding, useUI } from '../hooks/useGodot';
 import { useLayout } from '../hooks/useIsMobile';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { useAptosWallet } from '../contexts/AptosWalletContext';
@@ -665,6 +665,7 @@ async function prepareTownHallFlagImage(file) {
 function BuildingInfoPanel({ onOpenTroops }) {
   const { sendToGodot } = useSend();
   const { selectedBuilding: building } = useSelectedBuilding();
+  const { flamethrowerFacingEditor } = useUI();
   const player = usePlayer();
   const resources = useResources();
   const { buildingDefs } = useBuildingDefs();
@@ -1091,7 +1092,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
     }
   }, [applyTownHallFlagLocal, flagBusy, player?.token]);
 
-  if (!building) return null;
+  if (!building || flamethrowerFacingEditor?.active) return null;
 
   const isMaxLevel = building.level >= building.max_level;
   const upgHealth = Math.floor(Number(building.max_hp || 0) * 0.2);
@@ -1163,6 +1164,27 @@ function BuildingInfoPanel({ onOpenTroops }) {
           <svg width={isMobile ? 32 : 38} height={isMobile ? 32 : 38} viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
             <path d="M5 22V4"></path>
             <path d="M5 4h12l-2 4 2 4H5"></path>
+          </svg>
+        </button>
+      )}
+
+      {building.id === 'flamethrower' && !building.is_enemy && (
+        <button
+          type="button"
+          style={{ ...styles.circleBtn, ...styles.btnFacing, ...isMobile && { width: 56, height: 56 } }}
+          onClick={() => sendToGodot('start_flamethrower_facing_edit')}
+          title="Edit Attack Direction"
+          aria-label="Edit Flamethrower attack direction"
+          onMouseOver={e => e.currentTarget.style.transform = 'scale(1.05)'}
+          onMouseOut={e => e.currentTarget.style.transform = 'scale(1)'}
+          onMouseDown={e => e.currentTarget.style.transform = 'scale(0.95)'}
+          onMouseUp={e => e.currentTarget.style.transform = 'scale(1.05)'}
+        >
+          <svg width={isMobile ? 34 : 42} height={isMobile ? 34 : 42} viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M4 12a8 8 0 0 1 13.7-5.6L20 8.7" />
+            <path d="M20 4v4.7h-4.7" />
+            <path d="M20 12a8 8 0 0 1-13.7 5.6L4 15.3" />
+            <path d="M4 20v-4.7h4.7" />
           </svg>
         </button>
       )}
@@ -2734,6 +2756,11 @@ const styles = {
   },
   btnFlag: {
     background: 'linear-gradient(180deg, #ff9148, #d44a18)',
+    textShadow: '0 2px 2px rgba(0,0,0,0.4)',
+    boxShadow: '0 6px 0 rgba(99, 39, 15, 0.55), 0 10px 18px rgba(0,0,0,0.45), inset 0 2px 0 rgba(255,255,255,0.38)',
+  },
+  btnFacing: {
+    background: 'linear-gradient(180deg, #ff9148, #c94a1a)',
     textShadow: '0 2px 2px rgba(0,0,0,0.4)',
     boxShadow: '0 6px 0 rgba(99, 39, 15, 0.55), 0 10px 18px rgba(0,0,0,0.45), inset 0 2px 0 rgba(255,255,255,0.38)',
   },

@@ -2772,3 +2772,9 @@ Follow-up:
   movement, and detection, keep Necromancer summons unchanged, add regression
   probes and client/server parity gates, and compare deterministic TH7-TH9
   balance before and after. Work remains on owner-requested `main`.
+
+## UR-2026-08-03-FLAMETHROWER-LIVE-CAP-REACT-FACING
+
+- Timestamp: 2026-08-03 02:41 (Europe/Kyiv)
+- Request: "у флейм сровера показує апгрейд на 10 лвл якого немає також додай редагування кута через реакт"
+- Scope: stop React from offering Flamethrower level 10 while live progression caps it at level 9; expose and verify React-based attack-direction editing through the existing authoritative Godot/server `facing_step` flow; work on `main`.

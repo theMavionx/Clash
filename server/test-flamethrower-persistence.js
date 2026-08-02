@@ -38,6 +38,8 @@ try {
   assert.equal(game.TH_UNLOCK.flamethrower, 8);
   assert.deepEqual(game.TH_MAX_COUNT.flamethrower, [0, 0, 0, 0, 0, 0, 0, 1, 1, 2]);
   assert.deepEqual(game.TH_MAX_LEVEL.flamethrower, [1, 1, 1, 1, 1, 1, 1, 8, 9, 10]);
+  assert.equal(game.LIVE_TOWN_HALL_CAP, 9);
+  assert.equal(game.getBuildingMaxLevelForTownHall('flamethrower', game.LIVE_TOWN_HALL_CAP), 9);
 
   const player = game.registerPlayer(`flame_persistence_${Date.now()}`);
   insertBuilding(player.id, 'town_hall', 8, 0, 0);

@@ -666,6 +666,13 @@ func _get_building_max_level_for_th(building_id: String, th_level: int) -> int:
 	return clampi(int(levels[index]), 1, definition_max)
 
 
+func _get_live_building_max_level(building_id: String) -> int:
+	# Definitions may contain future Town Hall rows for authoring and combat
+	# compatibility. Player-facing upgrade UI must stop at the highest level
+	# reachable by the current live Town Hall cap.
+	return _get_building_max_level_for_th(building_id, LIVE_TOWN_HALL_CAP)
+
+
 func _get_th_upgrade_requirements(th_level: int) -> Array:
 	## Derive the gate from the same tables used for placement and level caps.
 	## Optional paid buildings are intentionally excluded from core progression.
@@ -5350,7 +5357,8 @@ func _select_building(b: Dictionary) -> void:
 	var level = b.get("level", 1)
 	var hp = b.get("hp", _get_hp_for(def, level))
 	var max_hp = b.get("max_hp", hp)
-	var max_level = def.hp_levels.size() if def.has("hp_levels") else 3
+	var definition_max_level: int = def.hp_levels.size() if def.has("hp_levels") else 3
+	var max_level: int = mini(definition_max_level, _get_live_building_max_level(str(b.id)))
 	# Send to React
 	var bridge = _bridge
 	if bridge:
@@ -5506,10 +5514,10 @@ func _select_building(b: Dictionary) -> void:
 	if building_panel_cost:
 		building_panel_cost.visible = true
 	if building_panel_upgrade_btn:
-		building_panel_upgrade_btn.visible = true
+		building_panel_upgrade_btn.visible = level < max_level
 	if building_panel_facing_btn:
 		building_panel_facing_btn.visible = b.id == "flamethrower"
-	_update_upgrade_cost_label(def, level)
+	_update_upgrade_cost_label(def, level, max_level)
 	if building_panel_altar_skills:
 		building_panel_altar_skills.visible = false
 	if b.id == "altar":
@@ -5732,7 +5740,7 @@ func _run_upgrade_sequence(b: Dictionary, def: Dictionary, server_new_level: int
 		if building_panel_hp_bar:
 			building_panel_hp_bar.max_value = new_max_hp
 			building_panel_hp_bar.value = new_max_hp
-		_update_upgrade_cost_label(def, b.level)
+		_update_upgrade_cost_label(def, b.level, _get_live_building_max_level(str(b.id)))
 		
 	# Swap model if scenes array exists
 	if def.has("scenes"):
@@ -5932,10 +5940,11 @@ func _auto_center_model(model: Node3D) -> void:
 	model.position.z -= center.z * model.scale.z
 
 
-func _update_upgrade_cost_label(def: Dictionary, current_level: int) -> void:
+func _update_upgrade_cost_label(def: Dictionary, current_level: int, level_cap: int = -1) -> void:
 	if not building_panel_cost:
 		return
-	var max_level = def.hp_levels.size() if def.has("hp_levels") else 3
+	var definition_max_level: int = def.hp_levels.size() if def.has("hp_levels") else 3
+	var max_level: int = definition_max_level if level_cap < 1 else mini(definition_max_level, level_cap)
 	if current_level >= max_level:
 		building_panel_cost.text = "MAX LEVEL"
 		return
