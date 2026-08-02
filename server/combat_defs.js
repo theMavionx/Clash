@@ -763,15 +763,19 @@ const DEFENSE_STATS = {
 
 // Skeleton guards spawned by tombstone buildings
 const SKELETON_GUARD = {
+  maxActivePerTombstone: 5,
   levels: {
     1: { hp: 360, damage: 38, atkSpeed: 0.86, moveSpeed: 0.46, detectionRadius: 0.95 },
     2: { hp: 520, damage: 53, atkSpeed: 0.86, moveSpeed: 0.52, detectionRadius: 1.10 },
     3: { hp: 620, damage: 66, atkSpeed: 0.86, moveSpeed: 0.54, detectionRadius: 1.25 },
     4: { hp: 820, damage: 97, atkSpeed: 0.86, moveSpeed: 0.58, detectionRadius: 1.40 },
     5: { hp: 998,  damage: 125, atkSpeed: 0.86, moveSpeed: 0.60, detectionRadius: 1.52 },
-    6: { hp: 1148, damage: 149, atkSpeed: 0.86, moveSpeed: 0.62, detectionRadius: 1.62 },
-    7: { hp: 1320, damage: 170, atkSpeed: 0.86, moveSpeed: 0.62, detectionRadius: 1.70 },
-    8: { hp: 1510, damage: 194, atkSpeed: 0.86, moveSpeed: 0.62, detectionRadius: 1.78 },
+    // L6+ no longer adds bodies. Five stronger guards preserve the previous
+    // Tombstone-wide HP/damage budget while cadence, movement, and detection
+    // remain fixed at their L5 values.
+    6: { hp: 1378, damage: 179, atkSpeed: 0.86, moveSpeed: 0.60, detectionRadius: 1.52 },
+    7: { hp: 1848, damage: 238, atkSpeed: 0.86, moveSpeed: 0.60, detectionRadius: 1.52 },
+    8: { hp: 2416, damage: 310, atkSpeed: 0.86, moveSpeed: 0.60, detectionRadius: 1.52 },
   },
   hp: 520,
   damage: 53,
@@ -785,9 +789,10 @@ const SKELETON_GUARD = {
   hitDistance: 0.2,
 };
 
-// Necromancer summons reuse the current tombstone-skeleton progression as
-// their source of truth, then apply weaker melee-minion multipliers. Like
-// tombstone guards, they are owner-bound and are removed with their spawner.
+// Necromancer summons keep their own source curve, then apply weaker melee-
+// minion multipliers. This deliberately isolates the troop from Tombstone's
+// post-L5 five-body rebalance. Like Tombstone guards, summons are owner-bound
+// and are removed with their spawner.
 const NECROMANCER_SUMMON = {
   initialDelay: 0.375,
   respawnDelay: 2.5,
@@ -806,6 +811,16 @@ const NECROMANCER_SUMMON = {
     8: 7,
     9: 8,
   },
+  sourceGuardLevels: {
+    1: { hp: 360, damage: 38, atkSpeed: 0.86, moveSpeed: 0.46 },
+    2: { hp: 520, damage: 53, atkSpeed: 0.86, moveSpeed: 0.52 },
+    3: { hp: 620, damage: 66, atkSpeed: 0.86, moveSpeed: 0.54 },
+    4: { hp: 820, damage: 97, atkSpeed: 0.86, moveSpeed: 0.58 },
+    5: { hp: 998, damage: 125, atkSpeed: 0.86, moveSpeed: 0.60 },
+    6: { hp: 1148, damage: 149, atkSpeed: 0.86, moveSpeed: 0.62 },
+    7: { hp: 1320, damage: 170, atkSpeed: 0.86, moveSpeed: 0.62 },
+    8: { hp: 1510, damage: 194, atkSpeed: 0.86, moveSpeed: 0.62 },
+  },
   hpMultiplierBps: 3000,
   damageMultiplierBps: 3500,
   attackSpeedMultiplierBps: 15000,
@@ -821,7 +836,8 @@ function scaleByBps(value, multiplierBps, minimum = 0) {
 function computeNecromancerSkeletonStats(necromancerLevel = 1) {
   const level = clampInt(necromancerLevel, 1, MAX_TROOP_LEVEL);
   const guardLevel = NECROMANCER_SUMMON.guardLevelByNecromancerLevel[level] || 1;
-  const guardStats = SKELETON_GUARD.levels[guardLevel] || SKELETON_GUARD.levels[1];
+  const guardStats = NECROMANCER_SUMMON.sourceGuardLevels[guardLevel]
+    || NECROMANCER_SUMMON.sourceGuardLevels[1];
   return {
     hp: scaleByBps(guardStats.hp, NECROMANCER_SUMMON.hpMultiplierBps, 1),
     damage: scaleByBps(guardStats.damage, NECROMANCER_SUMMON.damageMultiplierBps, 1),

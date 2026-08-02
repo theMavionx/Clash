@@ -779,6 +779,36 @@ for (const defenseType of ['turret', 'archer_tower', 'mage_tower', 'mortar', 'ca
 for (const [level, stats] of Object.entries(SKELETON_GUARD.levels)) {
   assert.equal(stats.atkSpeed, SKELETON_GUARD.levels[1].atkSpeed, `Tombstone guard L${level} cadence changed`);
 }
+assert.equal(SKELETON_GUARD.maxActivePerTombstone, 5, 'Tombstone must cap active guards at five');
+for (let level = 6; level <= 8; level++) {
+  assert.equal(
+    SKELETON_GUARD.levels[level].moveSpeed,
+    SKELETON_GUARD.levels[5].moveSpeed,
+    `Tombstone guard L${level} must not gain movement speed after the five-guard cap`,
+  );
+  assert.equal(
+    SKELETON_GUARD.levels[level].detectionRadius,
+    SKELETON_GUARD.levels[5].detectionRadius,
+    `Tombstone guard L${level} must not gain detection radius after the five-guard cap`,
+  );
+}
+const previousLateTierBudgets = {
+  6: { hp: 6888, damage: 894 },
+  7: { hp: 9240, damage: 1190 },
+  8: { hp: 12080, damage: 1552 },
+};
+for (let level = 6; level <= 8; level++) {
+  const current = SKELETON_GUARD.levels[level];
+  const prior = previousLateTierBudgets[level];
+  assert.ok(
+    Math.abs(current.hp * SKELETON_GUARD.maxActivePerTombstone - prior.hp) <= 2,
+    `Tombstone L${level} aggregate guard HP budget drifted during body-count consolidation`,
+  );
+  assert.ok(
+    Math.abs(current.damage * SKELETON_GUARD.maxActivePerTombstone - prior.damage) <= 2,
+    `Tombstone L${level} aggregate guard damage budget drifted during body-count consolidation`,
+  );
+}
 assert.deepEqual(
   Object.values(DEFENSE_STATS.mage_tower).map((stats) => stats.detectRange),
   [1.05, 1.15, 1.25, 1.35, 1.45, 1.55, 1.65, 1.73, 1.8],
@@ -855,8 +885,8 @@ assert.deepEqual(
     mageTowerL7DamageAlias: 57,
     mortarL3Damage: 158,
     cannonL7Damage: 620,
-    skeletonGuardL6Hp: 1148,
-    skeletonGuardL6Damage: 149,
+    skeletonGuardL6Hp: 1378,
+    skeletonGuardL6Damage: 179,
   },
   'TH7 defense calibration must remain an explicit server-authoritative contract',
 );
@@ -898,6 +928,21 @@ for (let level = 1; level <= 8; level++) {
     `skeleton guard level ${level} client/server stats diverged`,
   );
 }
+assert.equal(
+  parseNumberConstant(buildingSystem, 'TOMBSTONE_MAX_ACTIVE_SKELETONS'),
+  SKELETON_GUARD.maxActivePerTombstone,
+  'Godot and server Tombstone guard caps diverged',
+);
+assert.match(
+  buildingSystem,
+  /var target_count:\s*int\s*=\s*tombstone_skeleton_count_for_level\(guard_level\)/,
+  'Godot Tombstone spawning must derive body count from the capped helper',
+);
+assert.match(
+  buildingSystem,
+  /alive\[i\]\.set_level\(guard_level\)/,
+  'Godot Tombstone guards must keep building level stats after body count reaches five',
+);
 
 const buildingSystemProgression = read('scripts/building_system.gd');
 const serverTownHallUnlock = parseStringNumberDictionary(dbSource, 'const TH_UNLOCK');

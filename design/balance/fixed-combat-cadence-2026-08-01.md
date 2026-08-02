@@ -50,6 +50,11 @@ production tables reproduced 772/1,600 wins (48.3%) with 0 invalid battles.
 
 Harpoon was already fixed at 7.00 seconds and remains unchanged.
 
+> 2026-08-03 progression note: the five-active-guard Tombstone cap supersedes
+> the current L6 per-guard hit shown in this historical cadence table. L6 now
+> uses 179 damage at the same fixed 0.86 s interval; see
+> `design/gdd/tombstone-defense.md` for the authoritative live curve.
+
 ### Troops whose L7 cadence changed
 
 | Troop | Old L7 interval | Fixed interval | Old → new raw hit | Sustained DPS |

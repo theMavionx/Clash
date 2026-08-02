@@ -28,7 +28,7 @@ Town Hall 7 extends every established, upgradeable building line by one level an
 | Archer Tower | 7 | 10,200 | 675 damage, fixed 1.00 s interval, 2.30 range |
 | Mage Tower | 7 | 8,300 | 98–527 damage/tick, fixed 0.25 s tick, 1.8 s ramp, 1.65 range |
 | Mortar | 7 | 8,100 | 487 splash damage, fixed 2.40 s interval, 0.78–2.40 range, 0.52 splash radius |
-| Tombstone | 6 | 4,700 | Six L6 guards; 1,148 HP and 149 damage per guard |
+| Tombstone | 6 | 3,418 | Five L6 guards; 1,378 HP and 179 damage per guard |
 | Shark Trap | 7 | 1 | 2,900 trigger damage |
 | Cannon | 7 | 9,000 | 1,080 damage, fixed 1.60 s interval, 2.00 range |
 

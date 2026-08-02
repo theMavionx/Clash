@@ -2761,3 +2761,14 @@ Follow-up:
   keep the seven-second attack cadence fixed; validate the change against the
   prior 1,500-battle TH8-TH9 balance baseline; then release it and upgrade the
   two Harpoons on the already-maxed production `clashbot` account to L9.
+
+## UR-2026-08-03-TOMBSTONE-FIVE-GUARD-CAP
+
+- Request: cap each Tombstone at five skeletons; after the fifth skeleton,
+  upgrades should improve only skeleton HP and damage, then verify balance.
+- Scope: separate guard body count from stat level on the Godot client and
+  authoritative server replay, preserve the previous late-tier aggregate
+  Tombstone combat budget inside five stronger guards, freeze post-L5 cadence,
+  movement, and detection, keep Necromancer summons unchanged, add regression
+  probes and client/server parity gates, and compare deterministic TH7-TH9
+  balance before and after. Work remains on owner-requested `main`.

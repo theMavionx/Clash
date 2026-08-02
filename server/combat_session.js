@@ -3548,8 +3548,8 @@ function verifyReplay({
       });
     }
     if (b.type === 'tombstone') {
-      const guardCount = b.level || 1;
       const guardLevel = Math.max(1, Math.min(Object.keys(SKELETON_GUARD.levels || {}).length || 1, Number(b.level) || 1));
+      const guardCount = Math.min(SKELETON_GUARD.maxActivePerTombstone, guardLevel);
       const guardStats = SKELETON_GUARD.levels?.[guardLevel] || SKELETON_GUARD;
       for (let i = 0; i < guardCount; i++) {
         const angle = (Math.PI * 2 * i) / guardCount;

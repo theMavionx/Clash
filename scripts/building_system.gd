@@ -6410,6 +6410,7 @@ func _sink_ship(ship: Node3D) -> void:
 const SKELETON_MODEL = "res://Model/Characters/Skelet/characters/gltf/Skeleton_Minion.glb"
 const SKELETON_SCRIPT = "res://scripts/skeleton_guard.gd"
 const SKELETON_SCALE = 0.1
+const TOMBSTONE_MAX_ACTIVE_SKELETONS: int = 5
 const TOWER_ARCHER_SCRIPT_PATH = "res://scripts/tower_archer.gd"
 
 func _apply_building_runtime_level(b: Dictionary) -> void:
@@ -6595,11 +6596,17 @@ func _tombstone_skeleton_offset(index: int, target_count: int) -> Vector3:
 	return Vector3(cos(angle) * radius, 0, sin(angle) * radius)
 
 
-func _spawn_tombstone_skeletons(b: Dictionary, target_count: int, reposition_existing: bool = true) -> void:
+static func tombstone_skeleton_count_for_level(tombstone_level: int) -> int:
+	return clampi(tombstone_level, 1, TOMBSTONE_MAX_ACTIVE_SKELETONS)
+
+
+func _spawn_tombstone_skeletons(b: Dictionary, tombstone_level: int, reposition_existing: bool = true) -> void:
 	var tomb_node: Node3D = b.get("node", null)
 	if not is_instance_valid(tomb_node):
 		b["skeletons"] = []
 		return
+	var guard_level: int = clampi(tombstone_level, 1, SkeletonGuard.LEVEL_STATS.size())
+	var target_count: int = tombstone_skeleton_count_for_level(guard_level)
 	# Keep alive skeletons, remove invalid references
 	var alive: Array = []
 	for skel in b.get("skeletons", []):
@@ -6641,7 +6648,7 @@ func _spawn_tombstone_skeletons(b: Dictionary, target_count: int, reposition_exi
 	for i in range(alive.size()):
 		if is_instance_valid(alive[i]):
 			if alive[i].has_method("set_level"):
-				alive[i].set_level(target_count)
+				alive[i].set_level(guard_level)
 			if alive[i].has_method("set_ward_bonus_pct"):
 				alive[i].set_ward_bonus_pct(_get_altar_skill_bonus_pct("ward"))
 			alive[i].tombstone_pos = tomb_pos
@@ -8516,12 +8523,13 @@ func _confirm_move() -> void:
 		_spawn_tombstone_skeletons(b, b.get("level", 1), false)
 		var tomb_world = b["node"].global_position
 		var skeletons: Array = b.get("skeletons", [])
+		var skeleton_count: int = tombstone_skeleton_count_for_level(int(b.get("level", 1)))
 		for i in range(skeletons.size()):
 			var skel = skeletons[i]
 			if not is_instance_valid(skel):
 				continue
 			if skel in existing_skeletons and skel.has_method("relocate_to"):
-				skel.relocate_to(tomb_world, tomb_world + _tombstone_skeleton_offset(i, int(b.get("level", 1))), 0.0)
+				skel.relocate_to(tomb_world, tomb_world + _tombstone_skeleton_offset(i, skeleton_count), 0.0)
 			else:
 				skel.tombstone_pos = tomb_world
 				skel.global_rotation = Vector3.ZERO
