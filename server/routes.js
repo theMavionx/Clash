@@ -29,7 +29,10 @@ const {
 } = require('./combat_grid_config');
 const { parseCombatSnapshot } = require('./combat_snapshot');
 const tradeRecon = require('./trade_reconciliation');
-const { loadIncrementalTournamentTrades } = require('./tournament_trade_sync');
+const {
+  loadIncrementalTournamentTrades,
+  decibelBulkTradeIdFromRow,
+} = require('./tournament_trade_sync');
 const luckyRaiderPayouts = require('./lucky_raider_payouts');
 const { broadcastToPlayer, consumePendingAgentEvents } = require('./websocket');
 const {
@@ -23238,7 +23241,28 @@ function syncFuturesTournamentRows(playerId, dex, opts = {}) {
       maxRows: process.env.TOURNAMENT_TRADE_SYNC_MAX_ROWS || 10_000,
       fallbackOverlapRows: process.env.TOURNAMENT_TRADE_SYNC_FALLBACK_OVERLAP || 100,
     });
-    const main = db.recordTournamentTradeRows(playerId, incremental.rows, {
+    let tournamentRows = incremental.rows;
+    let legacyBulkRows = 0;
+    if (normalizedDex === 'decibel') {
+      // A one-time production correction predates the durable futures import
+      // and is keyed by Decibel's on-chain bulk fill id. When the worker later
+      // imports those same fills into trade_history, keep the existing credit
+      // as the canonical row instead of counting it a second time under the
+      // trade_history source. New bulk fills have no legacy credit and flow
+      // through the normal rewards, quest, gold, and tournament pipeline.
+      const legacyBulkIds = new Set(
+        db.listTournamentTradeCreditIds(tournamentId, 'decibel_bulk_fill', playerId),
+      );
+      if (legacyBulkIds.size) {
+        tournamentRows = incremental.rows.filter((row) => {
+          const bulkTradeId = decibelBulkTradeIdFromRow(row);
+          const duplicate = bulkTradeId && legacyBulkIds.has(bulkTradeId);
+          if (duplicate) legacyBulkRows++;
+          return !duplicate;
+        });
+      }
+    }
+    const main = db.recordTournamentTradeRows(playerId, tournamentRows, {
       tournamentId,
       source: 'trade_history',
       dex: normalizedDex,
@@ -23260,6 +23284,8 @@ function syncFuturesTournamentRows(playerId, dex, opts = {}) {
     return {
       ok: true,
       rows: incremental.rows.length,
+      credited_rows_considered: tournamentRows.length,
+      legacy_bulk_rows_skipped: legacyBulkRows,
       new_rows: incremental.newRows,
       reconciled_rows: incremental.reconciledRows,
       bootstrap: !state,

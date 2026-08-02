@@ -127,7 +127,11 @@ const RUNTIME_SINGLE_MATERIAL_SOURCES: Dictionary = {
 	"res://Model/Mortar/mortar_lvl3.fbx": true,
 	"res://Model/Mortar/mortar_lvl4.fbx": true,
 }
-const DEFAULT_WEB_ANIMATION_HZ := 20.0
+# Full TH9 villages with both Air Bomb defenses cross the browser frame budget
+# at both 20 Hz and 15 Hz. Ten is the highest locally profiled cadence that keeps
+# the complete 42-building guest scene at 56-60 FPS while the renderer remains
+# at its normal 60 FPS. Combat crowds use this same validated ceiling below.
+const DEFAULT_WEB_ANIMATION_HZ := 10.0
 const DENSE_TROOP_ANIMATION_HZ := 10.0
 const DENSE_TROOP_THRESHOLD := 24
 const DENSITY_REFRESH_INTERVAL_SEC := 0.5

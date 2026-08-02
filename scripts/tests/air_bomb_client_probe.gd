@@ -20,6 +20,58 @@ class ProbeTroop extends BaseTroop:
 		return probe_name
 
 
+class ProbeCameraRig extends Node:
+	var trauma_calls: int = 0
+	var last_trauma: float = 0.0
+
+	func add_trauma(amount: float) -> void:
+		trauma_calls += 1
+		last_trauma = amount
+
+
+func _probe_camera_shake_runtime(failures: Array[String]) -> void:
+	var fixture := _new_fixture("AirBombCameraShakeProbe")
+	var rig: Variant = Node3D.new()
+	rig.name = "CameraRig"
+	rig.set_script(load("res://scripts/camera_rig.gd"))
+	var pitch_pivot := Node3D.new()
+	pitch_pivot.name = "PitchPivot"
+	var camera := Camera3D.new()
+	camera.name = "Camera3D"
+	camera.position.z = 4.0
+	pitch_pivot.add_child(camera)
+	rig.add_child(pitch_pivot)
+	fixture.add_child(rig)
+	await process_frame
+
+	var projectile: Variant = Node3D.new()
+	projectile.set_script(ProjectileScript)
+	fixture.add_child(projectile)
+	projectile._shake_camera_on_impact()
+	_expect(
+		is_equal_approx(float(rig._shake_trauma), projectile.IMPACT_CAMERA_TRAUMA),
+		"impact gives the production CameraRig the configured trauma",
+		failures
+	)
+	rig._process(1.0 / 60.0)
+	var shake_offset := Vector2(camera.position.x, camera.position.y)
+	_expect(
+		shake_offset.length_squared() > 0.0,
+		"production CameraRig applies a visible local-XY shake offset",
+		failures
+	)
+	for _frame in range(30):
+		rig._process(1.0 / 60.0)
+	_expect(
+		is_zero_approx(float(rig._shake_trauma))
+		and Vector2(camera.position.x, camera.position.y).is_zero_approx(),
+		"Air Bomb shake fully decays without leaving a camera offset",
+		failures
+	)
+	projectile.free()
+	await _free_fixture(fixture)
+
+
 func _initialize() -> void:
 	call_deferred("_run_probe")
 
@@ -33,6 +85,7 @@ func _run_probe() -> void:
 	_probe_building_integration(failures)
 	await _probe_visual_contract(failures)
 	await _probe_tower_payload_flow(failures)
+	await _probe_camera_shake_runtime(failures)
 
 	BaseTroop.invalidate_combat_lists()
 	# Flush deferred frees at very low fixed FPS before SceneTree shutdown so
@@ -318,10 +371,12 @@ func _probe_visual_contract(failures: Array[String]) -> void:
 	_expect(static_base != null, "visual binds the authored static launcher", failures)
 	_expect(model_root != null and is_equal_approx(model_root.rotation_degrees.y, 90.0), "authored launcher and barrel keep their +90-degree presentation yaw", failures)
 	var initial_left_mesh := left_mesh.mesh
+	var initial_left_basis := left_mesh.transform.basis
 	visual.set_attack_zone_facing_global(visual.global_position + Vector3.BACK * 3.0)
 	var resolved_facing: Vector3 = visual.get_flag_facing_global()
 	_expect(resolved_facing.dot(Vector3.BACK) >= 0.999, "balloon logos face the supplied attack-zone direction", failures)
-	_expect(left_mesh.mesh != initial_left_mesh, "attack-zone facing rebuilds the scene-local balloon UVs", failures)
+	_expect(left_mesh.mesh == initial_left_mesh, "attack-zone facing reuses the prepared scene-local balloon mesh", failures)
+	_expect(not left_mesh.transform.basis.is_equal_approx(initial_left_basis), "attack-zone facing rotates the balloon presentation basis", failures)
 	var left_uv_summary := _mesh_uv_summary(left_mesh.mesh)
 	var right_uv_summary := _mesh_uv_summary(right_mesh.mesh)
 	_expect(bool(left_uv_summary.get("finite", false)), "left planar balloon UVs are finite", failures)
@@ -418,6 +473,10 @@ func _probe_building_integration(failures: Array[String]) -> void:
 
 func _probe_tower_payload_flow(failures: Array[String]) -> void:
 	var fixture := _new_fixture("AirBombTowerPayloadProbe")
+	var camera_rig := ProbeCameraRig.new()
+	camera_rig.name = "CameraRig"
+	camera_rig.add_to_group("camera_rigs")
+	fixture.add_child(camera_rig)
 	var target := _make_troop("payload_target", BaseTroop.UNIT_TARGET_AIR, Vector3(1.0, 0.4, 0.0), 40)
 	fixture.add_child(target)
 	target.state = BaseTroop.State.INACTIVE
@@ -482,6 +541,12 @@ func _probe_tower_payload_flow(failures: Array[String]) -> void:
 			failures
 		)
 	_expect(target.hp == target_hp - 140, "integrated full payload reaches and damages its air target", failures)
+	_expect(camera_rig.trauma_calls == 1, "impact emits exactly one camera shake", failures)
+	_expect(
+		is_equal_approx(camera_rig.last_trauma, projectile.IMPACT_CAMERA_TRAUMA),
+		"impact uses the authored Air Bomb trauma amount",
+		failures
+	)
 	var impact_fx := fixture.get_node_or_null("AirBombImpactFx") as Node3D
 	_expect(impact_fx != null, "impact spawns the compact air-pressure VFX", failures)
 	if impact_fx != null:

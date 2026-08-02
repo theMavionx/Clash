@@ -82,7 +82,7 @@ assert.deepEqual(
 );
 assert.deepEqual(
   mechanicalLevels.map(level => level.damage),
-  [106, 150, 218, 310, 449, 629, 957].map(
+  [106, 150, 218, 310, 449, 629, 957, 957, 957].map(
     (damage, index) => Math.round(damage * TROOP_LEVEL_POWER_MULTIPLIERS[index]),
   ),
   'Mechanical Dragon effective damage must preserve the authored progression'

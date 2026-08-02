@@ -201,11 +201,10 @@ function demonKingDisplayLabel(token, tokens = []) {
   return text ? `#${text}` : '';
 }
 
-const MAX_TROOP_LEVEL = 7;
+const MAX_TROOP_LEVEL = 9;
 
 function requiredBarnLevelForTroopLevel(level) {
-  const nextLevel = Math.max(1, Math.trunc(Number(level) || 1));
-  return nextLevel >= 5 ? 5 : nextLevel;
+  return Math.max(1, Math.trunc(Number(level) || 1));
 }
 
 const TROOP_STATS = {
@@ -498,6 +497,19 @@ function troopLevelFromMap(levels = {}, troopName, fallbackLevel = 1) {
   return clampLevel(fallbackLevel, 1, MAX_TROOP_LEVEL);
 }
 
+function troopStatsAtOrBelow(name, level) {
+  const statsByLevel = TROOP_STATS[name]?.stats || {};
+  const requestedLevel = clampLevel(level, 1, MAX_TROOP_LEVEL);
+  if (statsByLevel[requestedLevel]) return statsByLevel[requestedLevel];
+  const authoredLevel = Math.max(
+    1,
+    ...Object.keys(statsByLevel)
+      .map((key) => Number(key))
+      .filter((value) => Number.isFinite(value) && value <= requestedLevel),
+  );
+  return statsByLevel[authoredLevel] || null;
+}
+
 function rarityMultiplier(rarity) {
   const key = normalizeNftRarity(rarity || 'common');
   return NFT_RARITY_MULTIPLIERS[key] || NFT_RARITY_MULTIPLIERS.common;
@@ -505,8 +517,8 @@ function rarityMultiplier(rarity) {
 
 function computeNftTroopStats(name, level, troopLevels = {}, rarity = 'common') {
   const sharedLevel = troopLevelFromMap(troopLevels, name, level);
-  const stats = TROOP_STATS[name]?.stats?.[sharedLevel] || TROOP_STATS[name]?.stats?.[1];
-  if (!stats) return TROOP_STATS[name]?.stats?.[clampLevel(level, 1, MAX_TROOP_LEVEL)];
+  const stats = troopStatsAtOrBelow(name, sharedLevel) || troopStatsAtOrBelow(name, level);
+  if (!stats) return null;
   const mult = rarityMultiplier(rarity) / NFT_RARITY_MULTIPLIERS.common;
   return {
     hp: Math.ceil((Number(stats.hp) || 0) * mult),
@@ -517,7 +529,7 @@ function computeNftTroopStats(name, level, troopLevels = {}, rarity = 'common') 
 
 function getTroopStats(name, level, troopLevels = {}, rarity = 'common') {
   if (NFT_REFERENCE_TROOPS.has(name)) return computeNftTroopStats(name, level, troopLevels, rarity);
-  return TROOP_STATS[name]?.stats?.[level];
+  return troopStatsAtOrBelow(name, level);
 }
 
 function getTroopMaxStats(name, troopLevels = {}, rarity = 'common') {

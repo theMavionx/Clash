@@ -3,7 +3,7 @@
 ## Summary
 
 - Status: **PASS**
-- Total asset files scanned: 84
+- Total asset files scanned: 86
 - Levels: 10
 - Total source triangles: 33776
 - Naming violations: 0 (PascalCase wrapper names follow the project scene convention)

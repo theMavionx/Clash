@@ -20,6 +20,7 @@ const Database = require('better-sqlite3');
 const path = require('path');
 const db = require('./db');
 const decibel = require('./decibel');
+const decibelBulkRewards = require('./decibel-bulk-rewards');
 
 const POLL_MS = 2 * 60 * 1000; // 2 minutes
 // Record every economically non-zero verified fill. Gold farming protection
@@ -557,41 +558,63 @@ async function importRecentLimitFillsForPlayer(playerId, ownerAddr) {
   return { ...stats, subaccount: subAddr };
 }
 
+async function importRecentBulkFillsForPlayer(playerId, subaccountAddr, options = {}) {
+  const subAddr = decibel.normalizeAptosAddress(subaccountAddr);
+  if (!playerId || !/^0x[0-9a-f]{64}$/.test(subAddr)) {
+    return { imported: 0, skipped: 'missing_player_or_decibel_subaccount' };
+  }
+  return decibelBulkRewards.recordRecentBulkFills(playerId, subAddr, options);
+}
+
 async function pollOnce(mainDb) {
   const rows = mainDb.prepare(
     `SELECT DISTINCT p.id, COALESCE(NULLIF(pda.wallet_address, ''), p.wallet) AS wallet
        FROM players p
        LEFT JOIN player_dex_accounts pda
          ON pda.player_id = p.id AND pda.dex = 'decibel'
-      WHERE (p.dex = 'decibel' OR pda.dex = 'decibel')
-        AND COALESCE(NULLIF(pda.wallet_address, ''), p.wallet) IS NOT NULL
-        AND COALESCE(NULLIF(pda.wallet_address, ''), p.wallet) != ''`
+      WHERE (p.dex = 'decibel' OR pda.dex = 'decibel')`
   ).all();
   if (!rows.length) return 0;
 
   let creditsQueued = 0;
   for (const row of rows) {
-    const addr = String(row.wallet).toLowerCase();
+    const addr = String(row.wallet || '').toLowerCase();
     // Aptos addresses are "0x" + up to 64 hex. Reject anything that
     // doesn't look like one so a stray Solana / EVM row doesn't waste a
     // round-trip.
-    if (!/^0x[0-9a-f]{1,64}$/.test(addr)) continue;
-
-    // Decibel positions are keyed by SUBACCOUNT address, not master wallet.
-    // Resolve once (cached), then fetch positions for that subaccount.
-    // If the player hasn't created a subaccount yet (no Activate step run),
-    // skip cleanly until they have one.
-    const subAddr = await resolveSubaccount(addr);
-    if (!subAddr) continue;
-    try {
-      creditsQueued += await recordRecentLimitFills(row.id, subAddr);
-    } catch (e) {
-      console.warn(`[decibel-rewards-worker] limit fill history failed for ${addr.slice(0, 10)}:`, e.message);
+    let subAddr = '';
+    if (/^0x[0-9a-f]{1,64}$/.test(addr)) {
+      // Decibel positions are keyed by SUBACCOUNT address, not master wallet.
+      // Resolve a browser-owned Aptos master wallet first. Many MM-bot users
+      // authenticate to Clash with an EVM wallet, so this lookup can be empty.
+      subAddr = await resolveSubaccount(addr);
     }
-    const positions = await decibel.fetchAccountPositions(subAddr);
+    if (!subAddr) {
+      // Phantom is authoritative for the bot's Decibel subaccount. The
+      // trusted localhost endpoint is tenant-scoped by the Clash player id;
+      // no exchange secret is returned or logged here.
+      subAddr = await decibelBulkRewards.resolvePhantomDecibelSubaccount(row.id);
+    }
+    if (!subAddr) continue;
+    const trackingAddr = decibel.normalizeAptosAddress(subAddr);
+    try {
+      const bulk = await decibelBulkRewards.recordRecentBulkFills(row.id, trackingAddr);
+      creditsQueued += Number(bulk.imported || 0) + Number(bulk.updated || 0);
+      if (bulk.imported || bulk.updated || bulk.rejected) {
+        console.log(`[decibel-bulk-reconcile] player=${String(row.id).slice(0, 8)} fetched=${bulk.fetched} eligible=${bulk.eligible} verified=${bulk.verified} inserted=${bulk.imported} updated=${bulk.updated} existing=${bulk.existing} rejected=${bulk.rejected} volume_usd=${bulk.volume_usd}`);
+      }
+    } catch (e) {
+      console.warn(`[decibel-rewards-worker] bulk fill history failed for player=${String(row.id).slice(0, 8)}:`, e.message);
+    }
+    try {
+      creditsQueued += await recordRecentLimitFills(row.id, trackingAddr);
+    } catch (e) {
+      console.warn(`[decibel-rewards-worker] limit fill history failed for player=${String(row.id).slice(0, 8)}:`, e.message);
+    }
+    const positions = await decibel.fetchAccountPositions(trackingAddr);
     const currentKeys = new Set(positions.map(decibel.tradeKey));
-    const richPrev = seenOpenTrades.get(addr) instanceof Map
-      ? seenOpenTrades.get(addr)
+    const richPrev = seenOpenTrades.get(trackingAddr) instanceof Map
+      ? seenOpenTrades.get(trackingAddr)
       : new Map();
 
     // ── Detect new opens ──
@@ -613,7 +636,7 @@ async function pollOnce(mainDb) {
       const entryPrice = Number(p?.entry_price ?? p?.entryPrice ?? 0);
       const sizeAbs = Math.abs(Number(p?.size ?? 0));
 
-      const openKey = `decibel:open:${addr}:${market}:${isLong ? 'L' : 'S'}`;
+      const openKey = `decibel:open:${trackingAddr}:${market}:${isLong ? 'L' : 'S'}`;
       if (Number.isFinite(notional) && notional >= MIN_RECORDED_NOTIONAL_USD) {
         try {
           db.addTrade(row.id, {
@@ -653,7 +676,7 @@ async function pollOnce(mainDb) {
       // Don't mutate richPrev — keep the prior positions as still-open so
       // the next poll can confirm the real state instead of writing a
       // burst of phantom closes.
-      seenOpenTrades.set(addr, richPrev);
+      seenOpenTrades.set(trackingAddr, richPrev);
       continue;
     }
     for (const k of Array.from(richPrev.keys())) {
@@ -661,7 +684,7 @@ async function pollOnce(mainDb) {
       const info = richPrev.get(k);
       richPrev.delete(k);
       if (!info || !Number.isFinite(info.notional) || info.notional < MIN_RECORDED_NOTIONAL_USD) continue;
-      const closeKey = `decibel:close:${addr}:${info.market}:${info.isLong ? 'L' : 'S'}`;
+      const closeKey = `decibel:close:${trackingAddr}:${info.market}:${info.isLong ? 'L' : 'S'}`;
       const closeSide = info.side === 'long' ? 'close_long' : 'close_short';
       // Best-effort PnL estimate: sizeAbs * (mark - entry), signed.
       // Mark is fetched from /api/v1/markets (10-min cached, so this is
@@ -704,7 +727,7 @@ async function pollOnce(mainDb) {
       }
     }
 
-    seenOpenTrades.set(addr, richPrev);
+    seenOpenTrades.set(trackingAddr, richPrev);
   }
   return creditsQueued;
 }
@@ -735,4 +758,9 @@ function start() {
   console.log(`[decibel-rewards-worker] started, polling every ${POLL_MS / 1000} s`);
 }
 
-module.exports = { start, pollOnce, importRecentLimitFillsForPlayer };
+module.exports = {
+  start,
+  pollOnce,
+  importRecentLimitFillsForPlayer,
+  importRecentBulkFillsForPlayer,
+};

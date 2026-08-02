@@ -65,6 +65,10 @@ progression remain separate contracts.
   maintain a duplicate hardcoded schedule.
 - A locked request returns `TOWN_HALL_LEVEL_REQUIRED` with current and required
   Town Hall levels.
+- Every troop upgrade also requires a Barn whose level matches the target troop
+  level. Barn Lv5 therefore permits upgrades only through troop Lv5; Lv6-Lv9
+  require Barn Lv6-Lv9 respectively. A Barn-locked request returns
+  `BARN_LEVEL_REQUIRED` with the current and required Barn levels.
 
 The effective primary-troop HP/damage curve and its validated same-TH win-rate
 bands are documented in

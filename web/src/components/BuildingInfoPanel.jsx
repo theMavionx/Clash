@@ -176,7 +176,7 @@ const THUMBNAIL_STYLE_MAP = {
   air_bomb: {
     left: '50%',
     top: '50%',
-    transform: 'translate(-50%, -50%) scale(0.9)',
+    transform: 'translate(-50%, -50%) scale(1.08)',
     transformOrigin: 'center center',
     objectPosition: 'center center',
   },

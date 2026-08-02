@@ -2,7 +2,17 @@
 
 const assert = require('assert');
 const Database = require('better-sqlite3');
-const { loadIncrementalTournamentTrades } = require('./tournament_trade_sync');
+const {
+  loadIncrementalTournamentTrades,
+  decibelBulkTradeIdFromRow,
+} = require('./tournament_trade_sync');
+
+assert.strictEqual(decibelBulkTradeIdFromRow({
+  proof_json: JSON.stringify({ source: 'decibel_bulk_fill', bulk_trade_id: '123456789' }),
+}), '123456789');
+assert.strictEqual(decibelBulkTradeIdFromRow({
+  proof_json: JSON.stringify({ source: 'decibel_trade_history_reconciliation', bulk_trade_id: '123456789' }),
+}), '');
 
 const fdb = new Database(':memory:');
 fdb.exec(`
@@ -17,6 +27,8 @@ fdb.exec(`
     pnl TEXT,
     status TEXT NOT NULL,
     verified_source TEXT NOT NULL,
+    client_order_id TEXT,
+    proof_json TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   );

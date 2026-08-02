@@ -227,8 +227,8 @@ try {
   gameDb.db.prepare(`
     INSERT INTO buildings
       (player_id, type, level, grid_x, grid_z, grid_index, hp, max_hp)
-    VALUES (?, 'town_hall', 7, 0, 0, 1, 1, 1)
-  `).run(upgradePlayerId);
+    VALUES (?, 'town_hall', ?, 0, 0, 1, 1, 1)
+  `).run(upgradePlayerId, PLAYER_SHIP_LEVELS[MAX_PLAYER_SHIP_LEVEL].town_hall);
   let expectedResources = { gold: 500000, wood: 500000, ore: 500000 };
   for (let targetLevel = 2; targetLevel <= MAX_PLAYER_SHIP_LEVEL; targetLevel += 1) {
     const expected = EXPECTED_SHIP_LEVELS[targetLevel];

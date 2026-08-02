@@ -61,9 +61,10 @@ Use `-Full` when you need full active-goal detail.
 - Collaborators can commit directly to `main` if they have write/admin access.
 - Pull-request prompts appear when someone pushes to a non-main branch that is ahead of `main`.
 - `production/active-goals.md` is the source of truth for what the user wants next.
-- Troop upgrades are intended to reach Lv7: Lv5-Lv7 require Town Hall Lv5, server `TROOP_DEFS`
-  are authoritative, and matching stats must stay in sync across `server/combat_defs.js`,
-  `scripts/*troop*.gd`, and `web/src/components/BarnPanel.jsx`.
+- Troop upgrades are intended to track both progression buildings exactly: target troop LvN
+  requires both Town Hall LvN and Barn LvN. Playable troops currently reach Lv9; server
+  `TROOP_DEFS` is authoritative, and matching stats must stay in sync across
+  `server/combat_defs.js`, `scripts/*troop*.gd`, and `web/src/components/BarnPanel.jsx`.
 
 ## Risky Areas
 

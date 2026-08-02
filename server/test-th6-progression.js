@@ -101,8 +101,8 @@ try {
   assert.deepEqual(gameDb.getBuildingUpgradeCost('mortar', 5), { gold: 68000, wood: 96000, ore: 82000 });
   assert.deepEqual(gameDb.TH_MAX_COUNT.mortar.slice(0, 6), [0, 0, 0, 0, 1, 2]);
   assert.equal(gameDb.TH_UNLOCK.harpoon, 6);
-  assert.deepEqual(gameDb.TH_MAX_COUNT.harpoon, [0, 0, 0, 0, 0, 1, 1, 2]);
-  assert.deepEqual(gameDb.TH_MAX_LEVEL.harpoon, [1, 1, 1, 1, 1, 6, 7, 8]);
+  assert.deepEqual(gameDb.TH_MAX_COUNT.harpoon, [0, 0, 0, 0, 0, 1, 1, 2, 2]);
+  assert.deepEqual(gameDb.TH_MAX_LEVEL.harpoon, [1, 1, 1, 1, 1, 6, 7, 8, 8]);
   assert.deepEqual(gameDb.BUILDING_DEFS.harpoon, {
     size: [2, 2],
     max_level: 8,

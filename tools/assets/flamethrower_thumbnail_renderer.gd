@@ -7,7 +7,10 @@ extends SceneTree
 const VISUAL: PackedScene = preload(
 	"res://Model/Flamethrower/level_01/FlamethrowerL01.tscn"
 )
-const OUTPUT_PATH := "res://web/src/assets/buildings/flamethrower.png"
+const OUTPUT_PATHS: PackedStringArray = [
+	"res://web/src/assets/buildings/flamethrower.png",
+	"res://Model/Flamethrower/flamethrower_thumbnail.png",
+]
 const ICON_SIZE := Vector2i(512, 512)
 const GAMEPLAY_FORWARD := Vector3.FORWARD
 const VIEW_DIRECTION := Vector3(1.12, 0.78, -1.42)
@@ -61,13 +64,14 @@ func _render() -> void:
 		_fail("viewport capture returned an empty image; use the native renderer")
 		return
 	image.convert(Image.FORMAT_RGBA8)
-	var save_error := image.save_png(ProjectSettings.globalize_path(OUTPUT_PATH))
-	if save_error != OK:
-		_fail("failed to save PNG: %s" % error_string(save_error))
-		return
+	for output_path: String in OUTPUT_PATHS:
+		var save_error := image.save_png(ProjectSettings.globalize_path(output_path))
+		if save_error != OK:
+			_fail("failed to save %s: %s" % [output_path, error_string(save_error)])
+			return
 	print(
 		"FLAMETHROWER_THUMBNAIL_PASS path=%s size=%dx%d forward=-Z alpha=%s"
-		% [OUTPUT_PATH, image.get_width(), image.get_height(), str(image.detect_alpha())]
+		% [OUTPUT_PATHS[0], image.get_width(), image.get_height(), str(image.detect_alpha())]
 	)
 	quit(0)
 
@@ -78,9 +82,9 @@ func _add_environment(stage: Node3D) -> void:
 	environment.background_mode = Environment.BG_COLOR
 	environment.background_color = Color(0.0, 0.0, 0.0, 0.0)
 	environment.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	environment.ambient_light_color = Color("d9e6ea")
-	environment.ambient_light_energy = 0.68
-	environment.tonemap_mode = Environment.TONE_MAPPER_FILMIC
+	environment.ambient_light_color = Color("e7edf0")
+	environment.ambient_light_energy = 1.62
+	environment.tonemap_mode = Environment.TONE_MAPPER_LINEAR
 	environment_node.environment = environment
 	stage.add_child(environment_node)
 
@@ -89,15 +93,21 @@ func _add_lights(stage: Node3D) -> void:
 	var key_light := DirectionalLight3D.new()
 	key_light.rotation_degrees = Vector3(-49.0, -31.0, 0.0)
 	key_light.light_color = Color("ffd6a1")
-	key_light.light_energy = 1.18
+	key_light.light_energy = 2.20
 	key_light.shadow_enabled = false
 	stage.add_child(key_light)
 	var fill_light := DirectionalLight3D.new()
 	fill_light.rotation_degrees = Vector3(-24.0, 142.0, 0.0)
 	fill_light.light_color = Color("76c5ff")
-	fill_light.light_energy = 0.48
+	fill_light.light_energy = 1.08
 	fill_light.shadow_enabled = false
 	stage.add_child(fill_light)
+	var rim_light := DirectionalLight3D.new()
+	rim_light.rotation_degrees = Vector3(-18.0, 224.0, 0.0)
+	rim_light.light_color = Color("ff944f")
+	rim_light.light_energy = 0.62
+	rim_light.shadow_enabled = false
+	stage.add_child(rim_light)
 
 
 func _validate_forward_contract(visual: Node3D, bounds: AABB) -> bool:

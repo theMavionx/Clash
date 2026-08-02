@@ -11,7 +11,11 @@ Set-Location $RepoRoot
 function Invoke-Step($Name, [scriptblock]$Command) {
     Write-Host ""
     Write-Host "== $Name =="
+    $global:LASTEXITCODE = 0
     & $Command
+    if ($LASTEXITCODE -ne 0) {
+        throw "$Name failed with exit code $LASTEXITCODE"
+    }
 }
 
 $NodeFiles = @(
@@ -40,13 +44,19 @@ $NodeFiles = @(
     "server/index.js",
     "server/routes.js",
     "server/db.js",
+    "server/tournament_trade_sync.js",
+    "server/test-tournament-trade-cursor.js",
     "server-futures/aptos-key-pool.js",
     "server-futures/test-aptos-key-pool.js",
     "server-futures/hyperliquid-rewards-worker.js",
     "server-futures/test-hyperliquid-rewards-worker.js",
+    "server-futures/decibel-bulk-rewards.js",
+    "server-futures/decibel-rewards-worker.js",
+    "server-futures/test-decibel-bulk-rewards.js",
     "server-futures/index.js",
     "server-futures/routes.js",
     "server-futures/gmtrade.js",
+    "deploy/reconcile-decibel-bulk-volume.js",
     "mcp/src/server.mjs"
 )
 
@@ -65,6 +75,8 @@ Invoke-Step "Aptos server key pool" { node server-futures/test-aptos-key-pool.js
 Invoke-Step "Aptos browser key pool" { node scripts/verify-aptos-browser-key-pool.mjs }
 Invoke-Step "Aptos RPC routing" { node scripts/verify-aptos-rpc-routing.mjs }
 Invoke-Step "Hyperliquid rewards worker" { node server-futures/test-hyperliquid-rewards-worker.js }
+Invoke-Step "Decibel bulk rewards worker" { node server-futures/test-decibel-bulk-rewards.js }
+Invoke-Step "Tournament trade cursor" { node server/test-tournament-trade-cursor.js }
 Invoke-Step "Hermes jobs worker" { node server/test-hermes-jobs-worker.js }
 
 $CombatRegressionTests = @(

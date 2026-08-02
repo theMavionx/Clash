@@ -15,6 +15,8 @@ Deterministic report: `artifacts/pvp-balance/th8-th9-progression-2026-08-02.md`
   then holds; Port remains L3.
 - Wind Mage unlocks at TH8 and Ice Golem at TH9. Playable troops reach the
   same level as their Town Hall, while Horror remains locked behind TH10.
+  Reaching each troop level also requires the Barn at that same level, so the
+  TH8 and TH9 troop tiers require Barn Lv8 and Lv9 respectively.
 - All troop and defense attack cadences remain constant. Late-tier growth is
   expressed through HP, damage, and modest range increases only.
 
@@ -68,4 +70,3 @@ roles and are not expected to succeed as homogeneous armies.
 - Raid bot catalog: 900 unique layouts at TH8 and 900 at TH9; PASS.
 - Air Bomb and Flamethrower client probes at fixed 10 and 20 FPS: PASS.
 - Godot 4.6 headless project scan: PASS.
-

@@ -5,9 +5,7 @@ extends SceneTree
 ## emblem is readable in the shop instead of being presented edge-on.
 
 const VISUAL: PackedScene = preload("res://Model/air_bomb/air_bomb.tscn")
-const FLAG_TEXTURE: Texture2D = preload(
-	"res://Model/Town_Hall/Town Hall Level 1_FlagTexture2.png"
-)
+const FLAG_TEXTURE_PATH := "res://Model/Town_Hall/Town Hall Level 1_FlagTexture2.png"
 const OUTPUT_PATHS: PackedStringArray = [
 	"res://web/src/assets/buildings/air_bomb.png",
 	"res://Model/air_bomb/air_bomb_thumbnail.png",
@@ -38,7 +36,11 @@ func _render() -> void:
 	stage.add_child(visual)
 	await process_frame
 	await process_frame
-	visual.call("apply_player_flag_texture", FLAG_TEXTURE)
+	var flag_texture := _load_source_texture(FLAG_TEXTURE_PATH)
+	if flag_texture == null:
+		_fail("failed to load the current default flag source")
+		return
+	visual.call("apply_player_flag_texture", flag_texture)
 	await process_frame
 
 	var bounds := _combined_global_aabb(visual)
@@ -73,6 +75,17 @@ func _render() -> void:
 		% [OUTPUT_PATHS[0], image.get_width(), image.get_height(), str(image.detect_alpha())]
 	)
 	quit(0)
+
+
+func _load_source_texture(resource_path: String) -> Texture2D:
+	# Thumbnail generation must use the current source PNG instead of a possibly
+	# stale editor import cache. This keeps the UI portrait synchronized with a
+	# newly replaced default flag before the next full export/reimport.
+	var image := Image.new()
+	var load_error := image.load(ProjectSettings.globalize_path(resource_path))
+	if load_error != OK or image.is_empty():
+		return null
+	return ImageTexture.create_from_image(image)
 
 
 func _add_environment(stage: Node3D) -> void:

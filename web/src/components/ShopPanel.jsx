@@ -106,7 +106,7 @@ const THUMBNAIL_SCALE_MAP = {
   mortar: 1.15,
   shark_trap: 1.18,
   harpoon: 1.12,
-  air_bomb: 0.9,
+  air_bomb: 1.08,
   flamethrower: 1.08,
   altar: 1.28,
 };

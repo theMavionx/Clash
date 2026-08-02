@@ -642,6 +642,15 @@ function getTrades(playerId) {
   return stmts.getTrades.all(playerId);
 }
 
+function getTradeByClientOrderId(playerId, dex, clientOrderId) {
+  if (!playerId || !dex || !clientOrderId) return null;
+  return stmts.getTradeByClientOrderId.get(
+    String(playerId),
+    String(dex).toLowerCase(),
+    String(clientOrderId),
+  ) || null;
+}
+
 function upsertPendingGmtradeTradeReport({ playerId, wallet, signature, body }) {
   if (!playerId || !wallet || !signature) return { changes: 0 };
   const safeBody = body && typeof body === 'object' ? body : {};
@@ -689,6 +698,7 @@ module.exports = {
   getDexWorkerState,
   setDexWorkerState,
   getTrades,
+  getTradeByClientOrderId,
   upsertPendingGmtradeTradeReport,
   listPendingGmtradeTradeReports,
   markPendingGmtradeTradeReportAttempt,

@@ -7821,9 +7821,7 @@ func _troop_unlock_error(troop_name: String) -> String:
 
 
 func _required_barn_level_for_troop_level(troop_level: int) -> int:
-	if troop_level >= 5:
-		return 5
-	return clampi(troop_level, 1, 4)
+	return maxi(1, troop_level)
 
 
 func _refresh_troop_levels_from_server() -> void:

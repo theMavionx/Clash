@@ -20,6 +20,7 @@ const IMPACT_FX_LIFETIME_SECONDS: float = 0.24
 const IMPACT_DEBRIS_COUNT: int = 5
 
 const IMPACT_SFX_PATH: String = "res://Musik/sound_effects/Mortar/mortar_impact.mp3"
+const IMPACT_CAMERA_TRAUMA: float = 0.35
 
 var _target: Node3D = null
 var _target_instance: int = 0
@@ -282,7 +283,17 @@ func _impact() -> void:
 	})
 	_spawn_impact_fx(impact_position)
 	_play_impact_sfx(impact_position)
+	_shake_camera_on_impact()
 	_finish("impact", true)
+
+
+func _shake_camera_on_impact() -> void:
+	var scene_tree := get_tree()
+	if scene_tree == null:
+		return
+	var camera_rig := scene_tree.get_first_node_in_group("camera_rigs")
+	if camera_rig != null and camera_rig.has_method("add_trauma"):
+		camera_rig.call("add_trauma", IMPACT_CAMERA_TRAUMA)
 
 
 func _apply_air_splash(impact_position: Vector3) -> int:

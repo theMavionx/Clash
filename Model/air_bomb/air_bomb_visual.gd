@@ -125,7 +125,13 @@ func create_projectile_visual(ammo_side: int) -> Node3D:
 			push_error("AirBombVisual: failed to duplicate complete payload")
 			return null
 		projectile.add_child(mesh_copy)
-		var centered_transform := _payload_mesh_rest_transforms[mesh_index]
+		# Balloon emblems are oriented by rotating their prepared low-poly mesh,
+		# so the detached projectile must inherit the current presentation basis.
+		# Convert from PayloadAssembly-local back into ModelRoot-local space before
+		# centering the complete payload around the projectile root.
+		var centered_transform := (
+			_payload_rest_transform * _payload_meshes[mesh_index].transform
+		)
 		centered_transform.origin -= _payload_visual_center
 		mesh_copy.transform = centered_transform
 		mesh_copy.visible = true
@@ -136,6 +142,12 @@ func create_projectile_visual(ammo_side: int) -> Node3D:
 ## compatibility aliases and can never expose only one balloon.
 func set_ammo_loaded(ammo_side: int, loaded: bool) -> void:
 	if not _validate_compatibility_side(ammo_side) or not _model_bound:
+		return
+	# The tower asks again on every fixed simulation tick after reload. Avoid
+	# invalidating the complete four-mesh payload subtree when the loaded state
+	# has not changed; two TH9 defenses otherwise turn an idle presentation
+	# update into sustained render-thread work.
+	if _payload_loaded == loaded and payload_assembly.visible == loaded:
 		return
 	_payload_loaded = loaded
 	_set_reload_progress_internal(1.0 if loaded else 0.0)
@@ -378,9 +390,7 @@ func _apply_pending_attack_zone_facing() -> void:
 		set_process(true)
 		return
 	model_direction = model_direction.normalized()
-	var direction_changed := (
-		_balloon_flag_view_axis_model.dot(model_direction) < 0.999999
-	)
+	var direction_changed := _balloon_flag_view_axis_model.dot(model_direction) < 0.999999
 	_balloon_flag_view_axis_model = model_direction
 	_balloon_flag_horizontal_axis_model = Vector3(
 		model_direction.z,
@@ -390,10 +400,33 @@ func _apply_pending_attack_zone_facing() -> void:
 	_has_pending_attack_zone = false
 	set_process(false)
 	if direction_changed:
-		_prepare_balloon_flag_meshes()
+		_rotate_balloon_logos_to_direction(model_direction)
+
+
+## The planar UVs are authored once from the stable default projection. Turning
+## the two nearly spherical balloon meshes then presents that projection toward
+## the attack zone without rebuilding ArrayMesh vertex buffers for every placed
+## defense. Besides avoiding duplicate GPU resources, this prevents edge-facing
+## projections from taking an anomalously expensive browser render path.
+func _rotate_balloon_logos_to_direction(model_direction: Vector3) -> void:
+	var yaw_delta := DEFAULT_BALLOON_FLAG_VIEW_AXIS_MODEL.signed_angle_to(
+		model_direction,
+		Vector3.UP,
+	)
+	var yaw_basis := Basis(Vector3.UP, yaw_delta)
+	var payload_rest_inverse := _payload_rest_transform.affine_inverse()
+	for balloon_mesh in _balloon_meshes:
+		var payload_index := _payload_meshes.find(balloon_mesh)
+		if payload_index < 0 or payload_index >= _payload_mesh_rest_transforms.size():
+			continue
+		var desired_model_transform := _payload_mesh_rest_transforms[payload_index]
+		desired_model_transform.basis = yaw_basis * desired_model_transform.basis
+		balloon_mesh.transform = payload_rest_inverse * desired_model_transform
 
 
 func _set_reload_progress_internal(progress: float) -> void:
+	if is_equal_approx(_reload_progress, progress):
+		return
 	_reload_progress = progress
 	var eased_progress := smoothstep(0.0, 1.0, progress)
 	var payload_transform := _payload_rest_transform

@@ -6792,7 +6792,6 @@ function isTroopDisabled(troopType) {
 
 function getTroopLevelBarnRequirement(level) {
   const nextLevel = Math.max(1, Math.trunc(Number(level) || 1));
-  if (nextLevel >= 5) return 5;
   return nextLevel;
 }
 

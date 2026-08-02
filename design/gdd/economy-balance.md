@@ -255,13 +255,13 @@ drop. Wood and ore are comfortably covered.
 
 ### 4.2 Live Troop Costs (`TROOP_DEFS.cost`)
 
-**2026-06-21 implementation override:** all `TROOP_DEFS` entries now use
-`max_level = 7`. The `cost` array is indexed by *current* level:
-`cost[0]` = Lv1->Lv2, `cost[1]` = Lv2->Lv3, through `cost[5]` = Lv6->Lv7.
-Troop upgrade gates require both the Barn and Town Hall. The Barn requirement remains:
-troop Lv2 requires Barn Lv2, Lv3 requires Barn Lv3, Lv4 requires Barn Lv4, and troop
-Lv5-Lv7 require Barn Lv5. In addition, the target troop level may never exceed the current
-Town Hall level. The server enforces these contracts with `BARN_LEVEL_REQUIRED` and
+**2026-08-03 implementation override:** playable `TROOP_DEFS` entries support
+Town Hall progression through Lv9. The `cost` array is indexed by *current* level:
+`cost[0]` = Lv1->Lv2 through `cost[7]` = Lv8->Lv9. Troop upgrade gates require
+both the Barn and Town Hall to match the target level: troop Lv2 requires Barn Lv2,
+Lv3 requires Barn Lv3, and so on through troop Lv9 requiring Barn Lv9. The target
+troop level may also never exceed the current Town Hall level. The server enforces
+these independent contracts with `BARN_LEVEL_REQUIRED` and
 `TOWN_HALL_LEVEL_REQUIRED`.
 
 | Troop | Lv1->2 | Lv2->3 | Lv3->4 | Lv4->5 | Lv5->6 | Lv6->7 | Total Lv1->7 |
