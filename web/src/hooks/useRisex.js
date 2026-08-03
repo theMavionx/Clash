@@ -148,10 +148,14 @@ export function useRisex() {
 
   const normalizeInviteStatus = useCallback((data) => {
     if (!data) return null;
-    const statusText = String(data.status || data.status_text || '').toLowerCase();
-    const hasAccess = data.has_access != null
-      ? data.has_access === true
-      : (data.redeemed === true || /\b(active|approved|redeemed|access|enabled)\b/u.test(statusText));
+    const statusText = String(data.status || data.status_text || data.invite_status || '').toLowerCase();
+    // PENDING / redeemed / trading evidence from server ⇒ no invite code UI.
+    const implied = data.redeemed === true
+      || data.access_evidence
+      || /\b(pending|active|approved|redeemed|access|enabled|exists|whitelisted)\b/u.test(statusText);
+    const hasAccess = data.has_access === true || implied
+      ? true
+      : (data.has_access === false ? false : null);
     return { ...data, hasAccess };
   }, []);
 
@@ -168,8 +172,10 @@ export function useRisex() {
       setInviteStatus(next);
       return next;
     } catch (e) {
+      // Unknown ≠ denied. Showing the code box on network blips forced already-onboarded
+      // traders to hunt for an invite they no longer need.
       const msg = risexErrorMessage(e, 'Could not verify RISEx invite access');
-      const next = { hasAccess: false, error: msg };
+      const next = { hasAccess: null, error: msg, unknown: true };
       setInviteStatus(next);
       return next;
     }
@@ -372,6 +378,30 @@ export function useRisex() {
       setSetupVerified(false);
       return { ready: false };
     }
+    // Prefer live session proof over flaky invite/check. If the user already
+    // authorized a Clash signer and can trade, skip the invite-code gate.
+    const signer = readRisexSigner(walletAddr);
+    if (signer) {
+      try {
+        const status = await fetchJson(`/api/futures/risex/session-key-status?dex=risex&account=${walletAddr}&signer=${signer.address}`, {
+          headers: authHeaders({ 'Content-Type': undefined }),
+        });
+        if (signerStatusOk(status)) {
+          setInviteStatus((prev) => (
+            prev?.hasAccess === false
+              ? { ...prev, hasAccess: true, inferredFromSession: true }
+              : prev
+          ));
+          const next = { signer: signer.address, approved: true, userCanApprove: false, raw: status };
+          setSignerState(next);
+          setSetupVerified(true);
+          return { ready: true, status: next };
+        }
+      } catch (e) {
+        console.warn('[useRisex] signer status:', e?.message || e);
+      }
+    }
+
     const invite = await fetchInviteStatus().catch(() => null);
     if (invite && invite.hasAccess === false) {
       const status = { signer: null, approved: false, userCanApprove: false, inviteRequired: true };
@@ -379,7 +409,6 @@ export function useRisex() {
       setSetupVerified(false);
       return { ready: false, status, invite };
     }
-    const signer = readRisexSigner(walletAddr);
     if (!signer) {
       const status = { signer: null, approved: false, userCanApprove: true };
       setSignerState(status);
@@ -521,7 +550,7 @@ export function useRisex() {
       if (!token) throw new Error('Game session is not ready. Reconnect your wallet.');
       if (typeof ensureChain === 'function') await ensureChain(RISE_CHAIN_ID);
       let invite = await fetchInviteStatus();
-      const needsInvite = invite && invite.hasAccess === false;
+      let needsInvite = invite && invite.hasAccess === false;
       const inviteCode = normalizeRisexInviteCode(opts?.inviteCode || '');
       const totalSteps = needsInvite ? 3 : 2;
       if (needsInvite) {
@@ -549,11 +578,22 @@ export function useRisex() {
         walletClient,
       });
       setActivationStep({ index: needsInvite ? 3 : 2, total: totalSteps, label: 'Confirm RISEx setup' });
-      await fetchJson('/api/futures/risex/register-signer?dex=risex', {
-        method: 'POST',
-        headers: authHeaders(),
-        body: JSON.stringify(payload),
-      });
+      try {
+        await fetchJson('/api/futures/risex/register-signer?dex=risex', {
+          method: 'POST',
+          headers: authHeaders(),
+          body: JSON.stringify(payload),
+        });
+      } catch (regErr) {
+        const regMsg = risexErrorMessage(regErr, 'RISEx signer registration failed');
+        // Server thought access was OK (or unknown) but RISEx still wants an invite —
+        // only then surface the code field.
+        if (/RISEX_INVITE_REQUIRED|invite code required/i.test(regMsg)) {
+          setInviteStatus((prev) => ({ ...(prev || {}), hasAccess: false, error: regMsg }));
+          needsInvite = true;
+        }
+        throw regErr;
+      }
       rememberRisexSigner(walletAddr, signer);
       let verified = { ready: false };
       for (let i = 0; i < 5; i += 1) {

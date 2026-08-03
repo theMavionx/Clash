@@ -335,19 +335,53 @@ async function registerSigner(body) {
   return apiRequest('/v1/auth/register-signer', { method: 'POST', body });
 }
 
+function inviteStatusImpliesAccess(check, accountInfo) {
+  const status = String(accountInfo?.status || check?.status || check?.invite_status || '').toLowerCase();
+  // PENDING = already redeemed / waiting activation — do NOT re-ask for a code.
+  // Live: invite/check often reports has_access=false + status PENDING for traders
+  // who already use RISEx on the native site.
+  return /\b(pending|active|approved|redeemed|access|enabled|exists|whitelisted)\b/u.test(status);
+}
+
 function inviteHasAccess(check, accountInfo) {
   if (accountInfo?.has_access === true || check?.has_access === true) return true;
-  // RISEx mainnet can return `status: PENDING` for an already-redeemed
-  // account while `/v1/invite/redeem` rejects a second attempt with
-  // "account already exists for this address". For Clash setup that is
-  // enough to continue to signer registration; the downstream RISEx auth
-  // endpoint will still be the source of truth if the account truly cannot
-  // trade yet.
   if (check?.redeemed === true || accountInfo?.redeemed === true) return true;
+  if (inviteStatusImpliesAccess(check, accountInfo)) return true;
+  const errBlob = `${check?.error || ''} ${accountInfo?.error || ''}`.toLowerCase();
+  if (/account already exists|already redeemed|already has access|already registered/i.test(errBlob)) {
+    return true;
+  }
   if (accountInfo?.has_access != null) return accountInfo.has_access === true;
   if (check?.has_access != null) return check.has_access === true;
-  const status = String(accountInfo?.status || check?.status || '').toLowerCase();
-  return /\b(active|approved|redeemed|access|enabled)\b/u.test(status);
+  return false;
+}
+
+/** Secondary proof the wallet is already onboarded on RISEx (no invite code needed). */
+async function inferAccessFromTradingEvidence(account) {
+  const clean = normalizeAddress(account);
+  if (!clean) return { has_access: false, evidence: null };
+  try {
+    const [signers, positions, orders] = await Promise.all([
+      getSigners(clean).catch(() => null),
+      getPositionsByAddress(clean).catch(() => []),
+      getOrdersByAddress(clean).catch(() => []),
+    ]);
+    const signerRows = Array.isArray(signers)
+      ? signers
+      : (Array.isArray(signers?.signers) ? signers.signers : []);
+    if (signerRows.length > 0) {
+      return { has_access: true, evidence: 'existing_signers' };
+    }
+    if (Array.isArray(positions) && positions.length > 0) {
+      return { has_access: true, evidence: 'open_positions' };
+    }
+    if (Array.isArray(orders) && orders.length > 0) {
+      return { has_access: true, evidence: 'open_orders' };
+    }
+  } catch (e) {
+    console.warn('[risex] access evidence probe failed:', e?.message || e);
+  }
+  return { has_access: false, evidence: null };
 }
 
 async function getInviteStatus(account) {
@@ -357,11 +391,24 @@ async function getInviteStatus(account) {
     apiRequest(`/v1/invite/check/${clean}`).catch(e => ({ error: e.message })),
     apiRequest(`/v1/invite/account/${clean}`).catch(e => ({ error: e.message })),
   ]);
+  let hasAccess = inviteHasAccess(check, accountInfo);
+  let accessEvidence = hasAccess
+    ? (inviteStatusImpliesAccess(check, accountInfo) ? 'invite_status' : 'invite_flags')
+    : null;
+  // Invite API flakes: false/empty while the wallet already trades on rise.trade.
+  if (!hasAccess) {
+    const inferred = await inferAccessFromTradingEvidence(clean);
+    if (inferred.has_access) {
+      hasAccess = true;
+      accessEvidence = inferred.evidence;
+    }
+  }
   return {
     ...check,
     ...accountInfo,
-    redeemed: check?.redeemed === true,
-    has_access: inviteHasAccess(check, accountInfo),
+    redeemed: check?.redeemed === true || accountInfo?.redeemed === true || hasAccess,
+    has_access: hasAccess,
+    access_evidence: accessEvidence,
     check_error: check?.error || null,
     account_error: accountInfo?.error || null,
   };
@@ -757,6 +804,8 @@ module.exports = {
   getSessionKeyStatus,
   registerSigner,
   getInviteStatus,
+  inviteHasAccess,
+  inferAccessFromTradingEvidence,
   redeemInvite,
   acceptTerms,
   placeOrder,
