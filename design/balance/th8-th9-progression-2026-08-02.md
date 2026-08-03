@@ -70,3 +70,23 @@ roles and are not expected to succeed as homogeneous armies.
 - Raid bot catalog: 900 unique layouts at TH8 and 900 at TH9; PASS.
 - Air Bomb and Flamethrower client probes at fixed 10 and 20 FPS: PASS.
 - Godot 4.6 headless project scan: PASS.
+
+## Ranked bot availability follow-up — 2026-08-03
+
+The authored catalog was healthy, but ranked matchmaking exposed only the
+`corner-keep` hard archetype at TH8 and TH9. The generated catalog contains 23
+TH8 corner-keep layouts and only one TH9 corner-keep layout, so the per-attacker
+daily no-repeat rule could exhaust TH9 after a single ranked attack.
+
+Ranked TH8 and TH9 matchmaking now exposes all 18 authored hard archetypes and
+all 720 hard layouts at the attacker's exact Town Hall. Normal/easy layouts are
+still excluded, shields remain informational for ranked attacks, and a defender
+ID still cannot repeat for the same attacker during one UTC day.
+
+The production replay simulator checked the complete hard catalogs with maxed
+same-TH attackers, 360 attack policies, all 100 spawn mechanics, and zero
+invalid battles. TH9 landed at 57.0% attacker wins over 2,400 battles. TH8's
+hard-only challenge cohort landed at 43.2%; this remains intentionally tougher
+than the broad progression population because the owner explicitly requested
+hard ranked bases rather than easy recovery layouts. Monitor live TH8 ranked
+outcomes before changing combat stats or admitting softer templates.

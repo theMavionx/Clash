@@ -41,7 +41,6 @@ var _freeze_remaining: float = 0.0
 var _target: Node3D = null
 var _target_search_timer: float = 0.0
 var _idle_rotation_y: float = 0.0
-var _had_enemies: bool = false
 
 var anim_player: AnimationPlayer = null
 var _pool: Array[Dictionary] = []
@@ -142,17 +141,12 @@ func _physics_process(delta: float) -> void:
 	# The shared cache already excludes dead, freed, and inactive troops.
 	var troops_alive: int = BaseTroop._get_troops_cached().size()
 
-	# All enemies killed after battle — victory!
-	if _had_enemies and troops_alive == 0 and _active.size() == 0:
-		_play_victory()
-		return
+	# A temporarily empty field is not a battle victory. Manual deployment can
+	# leave a long gap between waves, so only the battle controller may enter the
+	# terminal VICTORY state via `_play_victory()`.
 
-	if troops_alive > 0:
-		_had_enemies = true
-
-	# No enemies — stay idle
 	if troops_alive == 0 and _active.size() == 0:
-		_target = null
+		_enter_idle_wait()
 		return
 
 	if not _pool_ready:
@@ -198,6 +192,22 @@ func _physics_process(delta: float) -> void:
 			rotation_degrees.y = _idle_rotation_y
 			if anim_player and anim_player.has_animation("Idle_A"):
 				anim_player.play("Idle_A")
+
+
+func _enter_idle_wait() -> void:
+	_target = null
+	state = State.IDLE
+	_fire_timer = 0.0
+	# Make the next deployed wave eligible for acquisition on its first combat
+	# tick instead of adding another target-search interval to the player pause.
+	_target_search_timer = TARGET_SEARCH_INTERVAL
+	rotation_degrees.y = _idle_rotation_y
+	if (
+		anim_player
+		and anim_player.has_animation("Idle_A")
+		and anim_player.current_animation != "Idle_A"
+	):
+		anim_player.play("Idle_A")
 
 
 func freeze_for(duration: float) -> void:

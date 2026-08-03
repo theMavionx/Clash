@@ -44,6 +44,111 @@ var _water_fps_min: float = INF
 var _water_fps_max: float = 0.0
 var _water_variant_key: String = "quality"
 var _spawn_request_active: bool = false
+var _camera_variant_label: Label
+var _camera_variant_index: int = 9
+
+const CAMERA_VARIANTS: Array[Dictionary] = [
+	{
+		"name": "Current Wide",
+		"family": "Baseline",
+		"projection": "perspective",
+		"pitch": 55.0,
+		"fov": 58.0,
+		"zoom": 7.3,
+		"focus": Vector3.ZERO,
+		"description": "Current production framing: widest view and the most empty ocean.",
+	},
+	{
+		"name": "CoC Balanced",
+		"family": "Clash-like",
+		"projection": "perspective",
+		"pitch": 58.0,
+		"fov": 42.0,
+		"zoom": 8.0,
+		"focus": Vector3.ZERO,
+		"description": "Narrower lens and higher pitch; the base fills about 80% of the frame.",
+	},
+	{
+		"name": "CoC Close",
+		"family": "Clash-like",
+		"projection": "perspective",
+		"pitch": 60.0,
+		"fov": 38.0,
+		"zoom": 8.7,
+		"focus": Vector3(0.0, 0.0, -0.10),
+		"description": "Dense telephoto-isometric look with larger buildings and little dead space.",
+	},
+	{
+		"name": "CoC Overview",
+		"family": "Clash-like",
+		"projection": "perspective",
+		"pitch": 64.0,
+		"fov": 46.0,
+		"zoom": 8.5,
+		"focus": Vector3.ZERO,
+		"description": "Higher tactical angle; preserves the full layout while reducing ocean.",
+	},
+	{
+		"name": "Boom Tactical",
+		"family": "Beach-like",
+		"projection": "perspective",
+		"pitch": 51.0,
+		"fov": 38.0,
+		"zoom": 7.8,
+		"focus": Vector3(0.30, 0.0, 0.35),
+		"description": "Lower Boom Beach-style angle, biased toward the landing shore and dock.",
+	},
+	{
+		"name": "Boom Wide",
+		"family": "Beach-like",
+		"projection": "perspective",
+		"pitch": 49.0,
+		"fov": 44.0,
+		"zoom": 7.0,
+		"focus": Vector3(0.35, 0.0, 0.45),
+		"description": "More shoreline context while keeping the island larger than the baseline.",
+	},
+	{
+		"name": "Classic Ortho",
+		"family": "Isometric",
+		"projection": "orthogonal",
+		"pitch": 56.0,
+		"size": 6.7,
+		"zoom": 8.0,
+		"focus": Vector3.ZERO,
+		"description": "Orthographic strategy-board view: stable building scale and clean planning.",
+	},
+	{
+		"name": "Close Ortho",
+		"family": "Isometric",
+		"projection": "orthogonal",
+		"pitch": 60.0,
+		"size": 5.9,
+		"zoom": 8.0,
+		"focus": Vector3(0.0, 0.0, -0.10),
+		"description": "Tight orthographic framing with the largest readable building silhouettes.",
+	},
+	{
+		"name": "Cinematic Low",
+		"family": "Cinematic",
+		"projection": "perspective",
+		"pitch": 44.0,
+		"fov": 34.0,
+		"zoom": 7.5,
+		"focus": Vector3(0.25, 0.0, 0.35),
+		"description": "Lowest dramatic angle; strongest depth and cliffs, weakest layout overview.",
+	},
+	{
+		"name": "Dense Island",
+		"family": "Extreme",
+		"projection": "perspective",
+		"pitch": 57.0,
+		"fov": 32.0,
+		"zoom": 8.8,
+		"focus": Vector3.ZERO,
+		"description": "Maximum base presence; intentionally tight to test safe framing limits.",
+	},
+]
 
 const TEST_ATTACK_PREFERRED_ORDER: Array[String] = [
 	"Knight",
@@ -264,6 +369,7 @@ func _ready() -> void:
 	_create_test_ship_ability_hud()
 	call_deferred("_populate_spawn_list")
 	call_deferred("_set_status", "Scene ready. F1 panel, 1 build random village.")
+	call_deferred("apply_camera_variant", _camera_variant_index)
 	if OS.get_cmdline_args().has("--capture-demon-colors"):
 		call_deferred("_capture_demon_king_color_test")
 	if OS.get_cmdline_user_args().has("--capture-attack-grid"):
@@ -319,6 +425,10 @@ func _ready() -> void:
 		call_deferred("_capture_main_ship_flag_orientation")
 	if OS.get_cmdline_user_args().has("--verify-camera-safety"):
 		call_deferred("_verify_camera_safety")
+	if OS.get_cmdline_user_args().has("--verify-camera-swipe-smoothing"):
+		call_deferred("_verify_camera_swipe_smoothing")
+	if OS.get_cmdline_user_args().has("--capture-camera-variants"):
+		call_deferred("_capture_camera_variants")
 	if OS.get_cmdline_user_args().has("--verify-stale-warmup-await"):
 		call_deferred("_verify_stale_warmup_await")
 	if OS.get_cmdline_user_args().has("--verify-cloud-warmup-barrier"):
@@ -709,6 +819,218 @@ func _verify_camera_safety() -> void:
 	get_tree().quit()
 
 
+func _verify_camera_swipe_smoothing() -> void:
+	await get_tree().process_frame
+	await get_tree().physics_frame
+	_finish_test_building_interactions()
+	var scene := get_tree().current_scene
+	var rig: Node3D = scene.get_node_or_null("CameraRig") as Node3D if scene else null
+	var pivot: Node3D = rig.get_node_or_null("PitchPivot") as Node3D if rig else null
+	var camera: Camera3D = pivot.get_node_or_null("Camera3D") as Camera3D if pivot else null
+	if rig == null or camera == null:
+		push_error("Camera swipe smoothing test failed: camera hierarchy is missing.")
+		get_tree().quit(1)
+		return
+
+	rig.set_process(false)
+	rig.global_position = Vector3.ZERO
+	rig.set("_target_position", Vector3.ZERO)
+	rig.set("_touch_pan_velocity", Vector3.ZERO)
+	rig.set("_touch_inertia_velocity", Vector3.ZERO)
+	rig.set("_touch_points", {})
+	rig.set("_touch_start", {})
+	rig.set("_is_dragging_touch", false)
+
+	var touch_position := Vector2(640.0, 360.0)
+	var press := InputEventScreenTouch.new()
+	press.index = 17
+	press.position = touch_position
+	press.pressed = true
+	rig.call("_unhandled_input", press)
+
+	var previous_position := rig.global_position
+	var largest_frame_step := 0.0
+	for _drag_frame in range(8):
+		var drag := InputEventScreenDrag.new()
+		drag.index = 17
+		drag.relative = Vector2(28.0, 4.0)
+		drag.velocity = Vector2(900.0, 125.0)
+		touch_position += drag.relative
+		drag.position = touch_position
+		rig.call("_unhandled_input", drag)
+		rig.call("_process", 1.0 / 60.0)
+		var frame_step := rig.global_position.distance_to(previous_position)
+		largest_frame_step = maxf(largest_frame_step, frame_step)
+		previous_position = rig.global_position
+
+	var target_at_release: Vector3 = rig.get("_target_position")
+	var release := InputEventScreenTouch.new()
+	release.index = 17
+	release.position = touch_position
+	release.pressed = false
+	rig.call("_unhandled_input", release)
+	var inertia_at_release: Vector3 = rig.get("_touch_inertia_velocity")
+
+	for _coast_frame in range(30):
+		rig.call("_process", 1.0 / 60.0)
+		var frame_step := rig.global_position.distance_to(previous_position)
+		largest_frame_step = maxf(largest_frame_step, frame_step)
+		previous_position = rig.global_position
+	var target_after_coast: Vector3 = rig.get("_target_position")
+
+	for _settle_frame in range(120):
+		rig.call("_process", 1.0 / 60.0)
+	var settled_inertia: Vector3 = rig.get("_touch_inertia_velocity")
+	var pan_min: Vector3 = rig.get("pan_limit_min")
+	var pan_max: Vector3 = rig.get("pan_limit_max")
+
+	if target_at_release.x >= -0.5:
+		push_error("Camera swipe smoothing test failed: swipe did not pan the camera.")
+		get_tree().quit(1)
+		return
+	if inertia_at_release.length() <= 0.1:
+		push_error("Camera swipe smoothing test failed: release inertia was not created.")
+		get_tree().quit(1)
+		return
+	if target_after_coast.distance_to(target_at_release) <= 0.08:
+		push_error("Camera swipe smoothing test failed: camera did not coast after release.")
+		get_tree().quit(1)
+		return
+	if largest_frame_step > 0.35:
+		push_error("Camera swipe smoothing test failed: frame jump %.3f is too large." % largest_frame_step)
+		get_tree().quit(1)
+		return
+	if settled_inertia != Vector3.ZERO:
+		push_error("Camera swipe smoothing test failed: inertia did not settle.")
+		get_tree().quit(1)
+		return
+	if (
+		rig.global_position.x < minf(pan_min.x, pan_max.x) - 0.001
+		or rig.global_position.x > maxf(pan_min.x, pan_max.x) + 0.001
+		or rig.global_position.z < minf(pan_min.z, pan_max.z) - 0.001
+		or rig.global_position.z > maxf(pan_min.z, pan_max.z) + 0.001
+	):
+		push_error("Camera swipe smoothing test failed: camera escaped pan bounds.")
+		get_tree().quit(1)
+		return
+
+	print("[CAMERA_SWIPE_SMOOTHING] PASS release_speed=%.3f coast=%.3f max_frame_step=%.3f settled=true" % [
+		inertia_at_release.length(),
+		target_after_coast.distance_to(target_at_release),
+		largest_frame_step,
+	])
+	get_tree().quit()
+
+
+func _capture_camera_variants() -> void:
+	if DisplayServer.get_name() == "headless":
+		push_error("Camera variant capture requires a rendered Godot run.")
+		get_tree().quit(1)
+		return
+
+	await get_tree().process_frame
+	await build_max_village_for_town_hall(
+		_max_supported_town_hall_level(),
+		8032026
+	)
+	_finish_test_building_interactions()
+	if is_instance_valid(_panel):
+		_panel.visible = false
+	if is_instance_valid(_test_ship_ability_hud):
+		_test_ship_ability_hud.visible = false
+	await get_tree().create_timer(1.25).timeout
+
+	var output_dir := "res://artifacts/camera-variants"
+	for argument in OS.get_cmdline_user_args():
+		if argument.begins_with("--camera-variants-out="):
+			output_dir = argument.trim_prefix("--camera-variants-out=")
+	var output_dir_absolute := ProjectSettings.globalize_path(output_dir)
+	var directory_error := DirAccess.make_dir_recursive_absolute(output_dir_absolute)
+	if directory_error != OK:
+		push_error("Camera variant capture could not create %s: %s" % [
+			output_dir,
+			error_string(directory_error),
+		])
+		get_tree().quit(1)
+		return
+
+	var scene := get_tree().current_scene
+	var rig: Node3D = scene.get_node_or_null("CameraRig") as Node3D if scene else null
+	var pivot: Node3D = rig.get_node_or_null("PitchPivot") as Node3D if rig else null
+	var camera: Camera3D = pivot.get_node_or_null("Camera3D") as Camera3D if pivot else null
+	if rig == null or pivot == null or camera == null:
+		push_error("Camera variant capture failed: camera hierarchy is missing.")
+		get_tree().quit(1)
+		return
+
+	var captured_count := 0
+	for variant_index in range(CAMERA_VARIANTS.size()):
+		apply_camera_variant(variant_index)
+		for _frame in range(4):
+			await get_tree().process_frame
+		var variant: Dictionary = CAMERA_VARIANTS[variant_index]
+		var expected_pitch: float = float(variant.get("pitch", 55.0))
+		var expected_zoom: float = float(variant.get("zoom", 7.3))
+		if not is_equal_approx(float(rig.get("camera_pitch")), expected_pitch):
+			push_error("Camera variant %d pitch did not persist." % [variant_index + 1])
+			get_tree().quit(1)
+			return
+		if not is_equal_approx(camera.position.z, expected_zoom):
+			push_error("Camera variant %d zoom did not persist: %.3f vs %.3f." % [
+				variant_index + 1,
+				camera.position.z,
+				expected_zoom,
+			])
+			get_tree().quit(1)
+			return
+		if camera.global_position.y < float(rig.get("minimum_camera_height")) - 0.001:
+			push_error("Camera variant %d violates minimum camera height." % [variant_index + 1])
+			get_tree().quit(1)
+			return
+		var orthogonal := str(variant.get("projection", "perspective")) == "orthogonal"
+		if orthogonal != (camera.projection == Camera3D.PROJECTION_ORTHOGONAL):
+			push_error("Camera variant %d projection did not persist." % [variant_index + 1])
+			get_tree().quit(1)
+			return
+		if orthogonal and not is_equal_approx(camera.size, float(variant.get("size", 6.7))):
+			push_error("Camera variant %d orthographic size did not persist." % [variant_index + 1])
+			get_tree().quit(1)
+			return
+		if not orthogonal and not is_equal_approx(camera.fov, float(variant.get("fov", 58.0))):
+			push_error("Camera variant %d FOV did not persist." % [variant_index + 1])
+			get_tree().quit(1)
+			return
+
+		await RenderingServer.frame_post_draw
+		var filename := "%02d_%s.png" % [
+			variant_index + 1,
+			_camera_variant_slug(str(variant.get("name", "camera"))),
+		]
+		var output_path := output_dir.path_join(filename)
+		var image := get_viewport().get_texture().get_image()
+		var capture_error := image.save_png(output_path)
+		if capture_error != OK:
+			push_error("Camera variant %d capture failed: %s" % [
+				variant_index + 1,
+				error_string(capture_error),
+			])
+			get_tree().quit(1)
+			return
+		captured_count += 1
+		print("[CAMERA_VARIANT_FRAME] %02d %s capture=%s" % [
+			variant_index + 1,
+			str(variant.get("name", "Camera")),
+			output_path,
+		])
+
+	print("[CAMERA_VARIANTS] PASS count=%d output=%s" % [captured_count, output_dir])
+	get_tree().quit()
+
+
+func _camera_variant_slug(value: String) -> String:
+	return value.to_lower().replace(" ", "-")
+
+
 func _unhandled_input(event: InputEvent) -> void:
 	if not (event is InputEventKey):
 		return
@@ -788,6 +1110,7 @@ func _create_panel() -> void:
 	vbox.add_child(_status)
 
 	_add_water_lab_controls(vbox)
+	_add_camera_lab_controls(vbox)
 
 	var max_label := Label.new()
 	max_label.text = "Max Village by Town Hall"
@@ -834,6 +1157,126 @@ func _create_panel() -> void:
 	hint.text = "Hotkeys: F1 panel, 1 build random village, 2 clear all, 3 toggle music, arrows speed."
 	hint.add_theme_font_size_override("font_size", 15)
 	vbox.add_child(hint)
+
+
+func _add_camera_lab_controls(parent: VBoxContainer) -> void:
+	var separator := HSeparator.new()
+	parent.add_child(separator)
+
+	var heading := Label.new()
+	heading.text = "Camera Lab - 10 variants"
+	heading.add_theme_font_size_override("font_size", 17)
+	parent.add_child(heading)
+
+	var build_button := _button(
+		"Build TH%d Camera Showcase" % _max_supported_town_hall_level(),
+		build_camera_showcase_village
+	)
+	build_button.tooltip_text = (
+		"Build the same deterministic max-level village used for all camera comparisons."
+	)
+	parent.add_child(build_button)
+
+	var grid := GridContainer.new()
+	grid.columns = 2
+	grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	grid.add_theme_constant_override("h_separation", 6)
+	grid.add_theme_constant_override("v_separation", 6)
+	parent.add_child(grid)
+	for variant_index in range(CAMERA_VARIANTS.size()):
+		var variant: Dictionary = CAMERA_VARIANTS[variant_index]
+		var button := Button.new()
+		button.text = "%d. %s" % [variant_index + 1, str(variant.get("name", "Camera"))]
+		button.custom_minimum_size = Vector2(0, 40)
+		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		button.add_theme_font_size_override("font_size", 14)
+		button.tooltip_text = str(variant.get("description", ""))
+		button.pressed.connect(Callable(self, "apply_camera_variant").bind(variant_index))
+		grid.add_child(button)
+
+	_camera_variant_label = Label.new()
+	_camera_variant_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_camera_variant_label.add_theme_font_size_override("font_size", 14)
+	parent.add_child(_camera_variant_label)
+	_refresh_camera_variant_label()
+
+	var note := Label.new()
+	note.text = "TestMain only. Click a numbered preset; normal pan and zoom remain enabled."
+	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	note.add_theme_font_size_override("font_size", 13)
+	note.modulate = Color(0.78, 0.84, 0.90)
+	parent.add_child(note)
+
+
+func apply_camera_variant(variant_index: int) -> void:
+	var scene := get_tree().current_scene
+	var rig: Node3D = scene.get_node_or_null("CameraRig") as Node3D if scene else null
+	var pivot: Node3D = rig.get_node_or_null("PitchPivot") as Node3D if rig else null
+	var camera: Camera3D = pivot.get_node_or_null("Camera3D") as Camera3D if pivot else null
+	if rig == null or pivot == null or camera == null:
+		_set_status("Camera variant failed: CameraRig/PitchPivot/Camera3D is missing.")
+		return
+
+	_camera_variant_index = clampi(variant_index, 0, CAMERA_VARIANTS.size() - 1)
+	var variant: Dictionary = CAMERA_VARIANTS[_camera_variant_index]
+	var pitch: float = float(variant.get("pitch", 55.0))
+	var zoom: float = float(variant.get("zoom", 7.3))
+	var focus: Vector3 = variant.get("focus", Vector3.ZERO)
+
+	# Keep the camera rig authoritative so touch, mouse drag and wheel/pinch zoom
+	# continue from the selected preset instead of snapping back on the next frame.
+	rig.set("camera_pitch", pitch)
+	rig.set("max_zoom", maxf(10.0, zoom + 0.5))
+	rig.global_position = focus
+	rig.set("_target_position", focus)
+	rig.set("_target_zoom", zoom)
+	rig.set("_current_zoom", zoom)
+	rig.call("_apply_zoom_distance")
+	rig.rotation_degrees.y = 0.0
+	pivot.rotation_degrees.x = -pitch
+
+	if str(variant.get("projection", "perspective")) == "orthogonal":
+		camera.projection = Camera3D.PROJECTION_ORTHOGONAL
+		camera.size = float(variant.get("size", 6.7))
+	else:
+		camera.projection = Camera3D.PROJECTION_PERSPECTIVE
+		camera.fov = float(variant.get("fov", 58.0))
+	camera.current = true
+
+	_refresh_camera_variant_label()
+	_set_status("Camera %d/10: %s." % [
+		_camera_variant_index + 1,
+		str(variant.get("name", "Camera")),
+	])
+
+
+func _refresh_camera_variant_label() -> void:
+	if not is_instance_valid(_camera_variant_label) or CAMERA_VARIANTS.is_empty():
+		return
+	var variant: Dictionary = CAMERA_VARIANTS[
+		clampi(_camera_variant_index, 0, CAMERA_VARIANTS.size() - 1)
+	]
+	var lens_text := "FOV %.0f / boom %.1f" % [
+		float(variant.get("fov", 58.0)),
+		float(variant.get("zoom", 7.3)),
+	]
+	if str(variant.get("projection", "perspective")) == "orthogonal":
+		lens_text = "ortho size %.1f" % float(variant.get("size", 6.7))
+	_camera_variant_label.text = "%d/10 %s | %s | pitch %.0f\n%s" % [
+		_camera_variant_index + 1,
+		str(variant.get("name", "Camera")),
+		lens_text,
+		float(variant.get("pitch", 55.0)),
+		str(variant.get("description", "")),
+	]
+
+
+func build_camera_showcase_village() -> void:
+	var town_hall_level := _max_supported_town_hall_level()
+	await build_max_village_for_town_hall(town_hall_level, 8032026)
+	_finish_test_building_interactions()
+	apply_camera_variant(_camera_variant_index)
+	_set_status("TH%d camera showcase ready. Compare buttons 1-10." % town_hall_level)
 
 
 func _add_water_lab_controls(parent: VBoxContainer) -> void:

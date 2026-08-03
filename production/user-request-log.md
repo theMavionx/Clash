@@ -2809,3 +2809,18 @@ Follow-up:
 - Request: "ну і зроби так щоб таких траблів більше не було"
 - Scope: replace fragile per-order Decibel volume aggregation with an exact, idempotent fill ledger; include partial, Market, IOC, limit, and trigger fills; preserve 128-bit identifiers without SQLite precision loss; add regression coverage and production verification so temporary polling/API failures can be reconciled without missing or duplicating tournament volume.
 - Audit result: $137,387.693947 of proven missing tournament volume was added across two fixed-cutoff, backed-up, idempotent corrections. The durable exact-fill ledger owns all Decibel fills after `2026-08-03T07:27:55.375Z`.
+
+## UR-2026-08-03-RANKED-TH8-TH9-BOT-POOL
+
+- Timestamp: 2026-08-03 11:00 (Europe/Kyiv)
+- Request: add roughly 100 more ranked bots, especially at Town Hall 8 and 9,
+  because Town Hall 9 matchmaking reports that no bases remain; finish the
+  Archer Tower work, include all current camera/Godot workspace changes, commit,
+  push `main`, and deploy the complete release to production.
+- Scope: audit the production ranked ledger and authored bot inventory; preserve
+  exact-Town-Hall matching, hard-only bases, shield fallback and the one-defender-
+  per-attacker-per-UTC-day rule; expand the effective TH8/TH9 ranked inventory
+  without fabricating weak database rows; verify balance, match materialization,
+  non-repetition, Archer Tower late-wave behavior, the camera build, and the
+  production release. Commit, push, full Godot export and deployment are
+  explicitly authorized, including the owner's existing camera workspace edits.

@@ -36,17 +36,41 @@ const CHALLENGE_BOT_ARCHETYPES = Object.freeze([
   'asymmetric-left',
 ]);
 
+const HIGH_TIER_BOT_ARCHETYPES = Object.freeze([
+  'compact-core',
+  'defense-ring',
+  'layered-rings',
+  'split-core',
+  'southern-funnel',
+  'resource-shield',
+  'wide-spread',
+  'asymmetric-left',
+  'asymmetric-right',
+  'trap-lanes',
+  'corner-keep',
+  'diamond',
+  'rear-keep',
+  'cannon-screen',
+  'crossfire',
+  'echelon-left',
+  'echelon-right',
+  'kill-corridor',
+]);
+
 // Ranked raids use the same-TH geometry cohort that landed closest to the
 // target band in the production-parity balance population. The selected
 // archetype has 20 deterministic TH5 layouts, 40 TH6 layouts, and 37 TH7
-// layouts, so the
-// daily no-repeat rule still has headroom without mixing in softer layouts.
+// layouts. TH8 and TH9 need the complete hard geometry catalog: restricting
+// those tiers to corner-keep left only 23 and 1 candidates respectively even
+// though 720 unique hard bases already existed for each tier. The full TH9
+// hard catalog validated at 57.0% attacker wins; no normal/easy templates are
+// admitted, and the per-attacker daily no-repeat rule still applies by ID.
 const RANKED_CHALLENGE_BOT_ARCHETYPES_BY_TH = Object.freeze({
   5: Object.freeze(['asymmetric-left']),
   6: Object.freeze(['asymmetric-left']),
   7: Object.freeze(['corner-keep']),
-  8: Object.freeze(['corner-keep']),
-  9: Object.freeze(['corner-keep']),
+  8: HIGH_TIER_BOT_ARCHETYPES,
+  9: HIGH_TIER_BOT_ARCHETYPES,
 });
 
 const MATCHMAKING_CONFIG = {
@@ -920,6 +944,7 @@ module.exports = {
   BOT_BASE_GENERATION,
   BOT_LOOT_REWARD_RANGE,
   CHALLENGE_BOT_ARCHETYPES,
+  HIGH_TIER_BOT_ARCHETYPES,
   RANKED_CHALLENGE_BOT_ARCHETYPES_BY_TH,
   MATCHMAKING_CONFIG,
   buildBotBaseTemplates,

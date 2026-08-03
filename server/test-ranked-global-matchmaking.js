@@ -13,6 +13,7 @@ process.env.CLASH_RAID_BOT_TARGETS_ENABLED = '0';
 
 const game = require('./db');
 const {
+  HIGH_TIER_BOT_ARCHETYPES,
   RANKED_CHALLENGE_BOT_ARCHETYPES_BY_TH,
   buildBotBaseTemplates,
 } = require('./matchmaking_defs');
@@ -33,6 +34,28 @@ for (const [townHall, expectedArchetype] of [
     rankedTemplates.length,
     expectedTemplateCount,
     `TH${townHall} must retain ${expectedTemplateCount} tuned ranked bot layouts`,
+  );
+}
+
+for (const townHall of [8, 9]) {
+  assert.deepEqual(
+    RANKED_CHALLENGE_BOT_ARCHETYPES_BY_TH[townHall],
+    HIGH_TIER_BOT_ARCHETYPES,
+  );
+  const rankedTemplates = buildBotBaseTemplates().filter((template) => (
+    template.th === townHall
+    && template.difficulty === 'hard'
+    && RANKED_CHALLENGE_BOT_ARCHETYPES_BY_TH[townHall].includes(template.archetype)
+  ));
+  assert.equal(
+    rankedTemplates.length,
+    720,
+    `TH${townHall} ranked matchmaking must expose all 720 unique hard layouts`,
+  );
+  assert.equal(
+    new Set(rankedTemplates.map((template) => template.archetype)).size,
+    HIGH_TIER_BOT_ARCHETYPES.length,
+    `TH${townHall} ranked layouts must cover every authored high-tier archetype`,
   );
 }
 
@@ -158,6 +181,42 @@ try {
     `).run(nextBot.battle_session_id);
   }
   assert.equal(rankedBotIds.size, 6);
+
+  for (const townHall of [8, 9]) {
+    const highTierAttackerId = `attacker-th${townHall}`;
+    insertPlayer(
+      highTierAttackerId,
+      `Ranked TH${townHall} Attacker`,
+      `ranked-th${townHall}-attacker-token`,
+      townHall * 120,
+    );
+    insertTownHall(highTierAttackerId, townHall, townHall + 4);
+    game.db.prepare(`
+      INSERT INTO tournament_participants (tournament_id, player_id)
+      VALUES (?, ?)
+    `).run(tournamentId, highTierAttackerId);
+
+    const highTierBotIds = new Set();
+    for (let index = 0; index < 3; index += 1) {
+      const highTierBot = game.findRankedEnemy(highTierAttackerId, tournamentId);
+      assert.equal(highTierBot.error, undefined);
+      assert.equal(highTierBot.is_bot, 1);
+      assert.equal(highTierBot.town_hall_level, townHall);
+      assert.equal(highTierBot.matchmaking.bot_candidate_count, 720 - index);
+      assert.equal(
+        highTierBotIds.has(highTierBot.id),
+        false,
+        `TH${townHall} ranked bots must not repeat for one attacker in a UTC day`,
+      );
+      highTierBotIds.add(highTierBot.id);
+      game.db.prepare(`
+        UPDATE battle_sessions
+           SET status = 'cancelled'
+         WHERE id = ?
+      `).run(highTierBot.battle_session_id);
+    }
+    assert.equal(highTierBotIds.size, 3);
+  }
 
   console.log('ranked global exact-TH matchmaking tests: PASS');
 } finally {

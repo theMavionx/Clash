@@ -18,6 +18,18 @@ function Invoke-Step($Name, [scriptblock]$Command) {
     }
 }
 
+function Resolve-GodotExe {
+    $Candidates = @(
+        $env:GODOT_EXE,
+        "C:\Users\Admin\Downloads\Godot_v4.6.1-stable_win64.exe\Godot_v4.6.1-stable_win64_console.exe",
+        "C:\Users\Admin\Downloads\Godot_v4.6-stable_win64.exe\Godot_v4.6-stable_win64_console.exe",
+        (Join-Path $RepoRoot ".tmp-godot\engine\Godot_v4.6.1-stable_win64_console.exe")
+    )
+    return ($Candidates | Where-Object {
+        -not [string]::IsNullOrWhiteSpace($_) -and (Test-Path -LiteralPath $_)
+    } | Select-Object -First 1)
+}
+
 $NodeFiles = @(
     "tools/combat-grid/generate-combat-grid-config.cjs",
     "server/combat_grid_config.js",
@@ -109,6 +121,16 @@ if ($Mode -in @("Full", "Deploy")) {
 }
 
 if ($Mode -eq "Deploy") {
+    $GodotExe = Resolve-GodotExe
+    if (-not $GodotExe) {
+        throw "Godot 4.6.1 executable not found; cannot run the Archer Tower late-wave deploy gate."
+    }
+    Invoke-Step "Archer Tower late-wave Godot regression" {
+        & $GodotExe --headless --path $RepoRoot --script res://scripts/tests/tower_archer_late_wave_probe.gd
+    }
+    Invoke-Step "camera swipe smoothing Godot regression" {
+        & $GodotExe --headless --path $RepoRoot res://scenes/TestMain.tscn -- --verify-camera-swipe-smoothing
+    }
     if (Test-Path "web/package.json") {
         Invoke-Step "web build" { npm.cmd --prefix web run build }
     }

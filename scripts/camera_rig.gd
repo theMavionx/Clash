@@ -10,6 +10,16 @@ extends Node3D
 @export var pan_speed: float = 0.010
 ## Touch pan speed (slower — fingers naturally produce larger relative deltas)
 @export var touch_pan_speed: float = 0.006
+## Lower follow rate for touch drags. This removes event-to-event stepping without
+## making mouse navigation feel heavy.
+@export_range(1.0, 12.0, 0.1) var touch_smoothing: float = 4.2
+## Portion of the filtered swipe velocity preserved after the finger is lifted.
+@export_range(0.0, 1.0, 0.05) var touch_inertia_strength: float = 0.45
+## Exponential braking applied to swipe inertia every second.
+@export_range(1.0, 20.0, 0.1) var touch_inertia_decay: float = 7.0
+## World-space speed cap prevents a noisy touch sample from throwing the camera.
+@export_range(0.5, 15.0, 0.1) var touch_inertia_max_speed: float = 6.0
+@export_range(0.001, 0.2, 0.001) var touch_inertia_stop_speed: float = 0.025
 ## How fast the camera moves with WASD keys
 @export var key_pan_speed: float = 3.0
 ## How fast the camera zooms with scroll wheel
@@ -61,6 +71,8 @@ var _touch_points: Dictionary = {}      # touch_index -> Vector2 current positio
 var _touch_start: Dictionary = {}        # touch_index -> Vector2 start position
 var _is_dragging_touch: bool = false     # exceeded tap_threshold this gesture
 var _last_pinch_distance: float = 0.0
+var _touch_pan_velocity: Vector3 = Vector3.ZERO
+var _touch_inertia_velocity: Vector3 = Vector3.ZERO
 
 var _shake_trauma: float = 0.0
 const SHAKE_MAX_OFFSET: float = 0.035
@@ -150,16 +162,29 @@ func _unhandled_input(event: InputEvent) -> void:
 		var st := event as InputEventScreenTouch
 		_mark_user_camera_input()
 		if st.pressed:
+			# A new gesture takes ownership immediately and cancels the tail of
+			# the previous swipe.
+			_touch_pan_velocity = Vector3.ZERO
+			_touch_inertia_velocity = Vector3.ZERO
 			_touch_points[st.index] = st.position
 			_touch_start[st.index] = st.position
 			_is_panning = false  # disable mouse pan — touch handles it
 		else:
+			var ended_drag := _is_dragging_touch
 			_touch_points.erase(st.index)
 			_touch_start.erase(st.index)
 			if _touch_points.is_empty():
+				if ended_drag and not bs_busy:
+					_touch_inertia_velocity = (
+						_touch_pan_velocity * touch_inertia_strength
+					).limit_length(touch_inertia_max_speed)
+				else:
+					_touch_inertia_velocity = Vector3.ZERO
+				_touch_pan_velocity = Vector3.ZERO
 				_is_dragging_touch = false
 				_last_pinch_distance = 0.0
 			elif _touch_points.size() < 2:
+				_touch_pan_velocity = Vector3.ZERO
 				_last_pinch_distance = 0.0
 
 	if event is InputEventScreenDrag:
@@ -171,6 +196,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		# Zooms toward the pinch midpoint (not screen center) so it feels natural.
 		if _touch_points.size() >= 2 and not zoom_blocked:
 			_is_dragging_touch = true
+			_touch_pan_velocity = Vector3.ZERO
+			_touch_inertia_velocity = Vector3.ZERO
 			var points := _touch_points.values()
 			var p0: Vector2 = points[0]
 			var p1: Vector2 = points[1]
@@ -205,9 +232,23 @@ func _unhandled_input(event: InputEvent) -> void:
 				var right := Vector3(1.0, 0.0, 0.0)
 				var forward := Vector3(0.0, 0.0, 1.0)
 				var zoom_factor := _current_zoom * 0.2
-				_target_position -= right * sd.relative.x * touch_pan_speed * zoom_factor
-				_target_position -= forward * sd.relative.y * touch_pan_speed * zoom_factor
+				var world_delta := (
+					-right * sd.relative.x * touch_pan_speed * zoom_factor
+					-forward * sd.relative.y * touch_pan_speed * zoom_factor
+				)
+				_target_position += world_delta
 				_target_position.y = 0.0
+
+				# Convert pixels/second with the same scale as relative movement so
+				# release inertia remains stable across frame rates.
+				var raw_world_velocity := Vector3(
+					-sd.velocity.x,
+					0.0,
+					-sd.velocity.y
+				) * touch_pan_speed * zoom_factor
+				raw_world_velocity = raw_world_velocity.limit_length(touch_inertia_max_speed)
+				_touch_pan_velocity = _touch_pan_velocity.lerp(raw_world_velocity, 0.35)
+				_touch_inertia_velocity = Vector3.ZERO
 				get_viewport().set_input_as_handled()
 
 
@@ -265,6 +306,8 @@ func _mark_user_camera_input() -> void:
 func is_user_camera_interacting(quiet_msec: int = 700) -> bool:
 	if _is_panning or _is_dragging_touch or not _touch_points.is_empty():
 		return true
+	if _touch_inertia_velocity.length() > touch_inertia_stop_speed:
+		return true
 	if Time.get_ticks_msec() - _last_user_camera_input_ticks < maxi(0, quiet_msec):
 		return true
 	if global_position.distance_squared_to(_target_position) > 0.000025:
@@ -316,6 +359,19 @@ func _process(delta_raw: float) -> void:
 	var delta = minf(delta_raw, 0.1)
 	var safe_min_zoom := _effective_min_zoom()
 	var flamethrower_facing_active := _is_flamethrower_facing_active()
+	var building_system_busy := _is_building_system_busy()
+
+	# Continue a released swipe at render-frame cadence, then brake it
+	# exponentially. Placement, rotation and pinch gestures cancel inertia so
+	# camera motion cannot fight an interaction owned by another system.
+	if building_system_busy or _touch_points.size() >= 2:
+		_touch_inertia_velocity = Vector3.ZERO
+	elif _touch_points.is_empty() and _touch_inertia_velocity.length() > touch_inertia_stop_speed:
+		_target_position += _touch_inertia_velocity * delta
+		_target_position.y = 0.0
+		_touch_inertia_velocity *= exp(-touch_inertia_decay * delta)
+		if _touch_inertia_velocity.length() <= touch_inertia_stop_speed:
+			_touch_inertia_velocity = Vector3.ZERO
 	# ── WASD movement ────────────────────────────────────────────
 	var move_dir := Vector3.ZERO
 	if Input.is_key_pressed(KEY_W):
@@ -333,7 +389,7 @@ func _process(delta_raw: float) -> void:
 		_target_position.y = 0.0
 
 	# ── Edge-pan when dragging building near screen edge ─────────
-	if _is_building_system_busy() and _touch_points.size() == 1:
+	if building_system_busy and _touch_points.size() == 1:
 		var screen_size: Vector2 = get_viewport().get_visible_rect().size
 		var finger_pos: Vector2 = _touch_points.values()[0]
 		var edge_x: float = screen_size.x * edge_zone_pct
@@ -371,7 +427,10 @@ func _process(delta_raw: float) -> void:
 	_target_position = _clamp_pan_position(_target_position)
 	_target_zoom = clampf(_target_zoom, safe_min_zoom, max_zoom)
 
-	var t = 1.0 - exp(-smoothing * delta)
+	var pan_smoothing := touch_smoothing if (
+		_is_dragging_touch or _touch_inertia_velocity != Vector3.ZERO
+	) else smoothing
+	var t = 1.0 - exp(-pan_smoothing * delta)
 
 	# Smoothly interpolate position (pan)
 	global_position = _clamp_pan_position(global_position.lerp(_target_position, t))
