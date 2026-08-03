@@ -36,6 +36,7 @@ import imgHarpoon from '../assets/buildings/harpoon.png';
 import imgAirBomb from '../assets/buildings/air_bomb.png';
 import imgFlamethrower from '../assets/buildings/flamethrower.png';
 import imgAltar from '../assets/units/altar.png';
+import defaultTownHallFlagImg from '../../../Model/Town_Hall/Pirate_Flag_Default.png';
 
 import knightImg from '../assets/units/knight.png';
 import mageImg from '../assets/units/mage.png';
@@ -1513,7 +1514,11 @@ function BuildingInfoPanel({ onOpenTroops }) {
                 disabled={flagBusy}
               >
                 <div style={styles.flagDefaultThumb}>
-                  <span style={styles.flagDefaultMark}>II</span>
+                  <img
+                    src={defaultTownHallFlagImg}
+                    alt="Standard pirate Town Hall flag"
+                    style={styles.flagDefaultImage}
+                  />
                 </div>
                 <div style={styles.flagLibraryTitle}>Standard</div>
                 <div style={styles.flagLibrarySub}>{hasCustomFlag ? 'Restore original' : 'Current flag'}</div>
@@ -3510,20 +3515,19 @@ const styles = {
     width: 84,
     height: 84,
     borderRadius: 9,
-    background: 'linear-gradient(135deg, #ff6d22 0%, #f24d13 100%)',
+    background: '#050305',
     border: '2px solid rgba(109,74,46,0.24)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    boxShadow: 'inset 0 2px 0 rgba(255,255,255,0.25)',
+    boxShadow: 'inset 0 2px 0 rgba(255,255,255,0.12)',
+    overflow: 'hidden',
   },
-  flagDefaultMark: {
-    color: '#111',
-    fontSize: 46,
-    fontWeight: 1000,
-    lineHeight: 1,
-    fontFamily: 'Georgia, serif',
-    transform: 'scaleX(1.35)',
+  flagDefaultImage: {
+    width: '100%',
+    height: '100%',
+    objectFit: 'cover',
+    display: 'block',
   },
   flagLibraryTitle: {
     fontSize: 14,

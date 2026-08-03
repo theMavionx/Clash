@@ -2778,3 +2778,9 @@ Follow-up:
 - Timestamp: 2026-08-03 02:41 (Europe/Kyiv)
 - Request: "у флейм сровера показує апгрейд на 10 лвл якого немає також додай редагування кута через реакт"
 - Scope: stop React from offering Flamethrower level 10 while live progression caps it at level 9; expose and verify React-based attack-direction editing through the existing authoritative Godot/server `facing_step` flow; work on `main`.
+
+## UR-2026-08-03-STANDARD-PIRATE-FLAG-PREVIEW
+
+- Timestamp: 2026-08-03 03:13 (Europe/Kyiv)
+- Request: "тут ще досі старий стандарт флег"
+- Scope: replace the stale hard-coded orange `II` thumbnail in the React Town Hall flag library with the same canonical pirate flag texture used by the live Town Hall model, then verify the actual browser UI.
