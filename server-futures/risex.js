@@ -3,7 +3,7 @@ const RISEX_BRIDGE_API = String(process.env.RISEX_BRIDGE_API_URL || 'https://www
 const RISEX_BRIDGE_HISTORY_API = String(
   process.env.RISEX_BRIDGE_HISTORY_API_URL || 'https://api.bridge.risechain.com/v1/bridge',
 ).replace(/\/+$/u, '');
-const RISEX_FILL_LOOKBACK_LIMIT = Math.max(10, Math.min(250, Number(process.env.RISEX_FILL_LOOKBACK_LIMIT || 100)));
+const RISEX_FILL_LOOKBACK_LIMIT = Math.max(10, Math.min(1000, Number(process.env.RISEX_FILL_LOOKBACK_LIMIT || 100)));
 const RISEX_RISE_CHAIN_ID = 4153;
 const RISEX_BUILDER_FEE_RECIPIENT = String(
   process.env.RISEX_BUILDER_FEE_RECIPIENT || '0x39B36f1EDF2eF5a6f2e02991b3a85Fb356eB5005',
@@ -92,6 +92,8 @@ const RISEX_BRIDGE_CHAINS = Object.freeze({
 });
 let clashBuilderCache = null;
 let accountRegistryCache = null;
+let systemConfigCache = null;
+let systemConfigPromise = null;
 let marketInfoCache = null;
 let marketInfoPromise = null;
 const risexUserIdCache = new Map();
@@ -665,19 +667,29 @@ function balanceOfCallData(account) {
   return `${ERC20_BALANCE_OF_SELECTOR}${clean.slice(2).padStart(64, '0')}`;
 }
 
-async function rpcRequest(url, method, params) {
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { accept: 'application/json', 'content-type': 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method, params }),
-  });
-  const text = await res.text();
-  let data = null;
-  try { data = text ? JSON.parse(text) : null; } catch { data = null; }
-  if (!res.ok || data?.error) {
-    throw new Error(data?.error?.message || text || `RPC ${method} failed (${res.status})`);
+async function rpcRequest(url, method, params, { timeoutMs = 10_000 } = {}) {
+  const controller = new AbortController();
+  const timeout = setTimeout(
+    () => controller.abort(),
+    Math.max(1_000, Math.min(30_000, Number(timeoutMs) || 10_000)),
+  );
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { accept: 'application/json', 'content-type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method, params }),
+      signal: controller.signal,
+    });
+    const text = await res.text();
+    let data = null;
+    try { data = text ? JSON.parse(text) : null; } catch { data = null; }
+    if (!res.ok || data?.error) {
+      throw new Error(data?.error?.message || text || `RPC ${method} failed (${res.status})`);
+    }
+    return data?.result;
+  } finally {
+    clearTimeout(timeout);
   }
-  return data?.result;
 }
 
 function parseCompositeOrderId(value) {
@@ -796,7 +808,13 @@ async function verifyFillBuilderProof(fill, builderConfig, systemConfig) {
   if (!Number.isInteger(marketId) || marketId < 0) {
     return { eligible: false, reason: 'invalid_market_id' };
   }
-  const cacheKey = order.order_id;
+  const cacheKey = [
+    order.order_id,
+    marketId,
+    Number(builderConfig?.builder_id || 0),
+    Number(builderConfig?.builder_fee_bps || 0),
+    normalizeAddress(builderConfig?.fee_recipient) || '',
+  ].join(':');
   const cached = orderBuilderProofCache.get(cacheKey);
   if (cached && Date.now() - cached.cached_at_ms < RISEX_ORDER_PROOF_CACHE_MS) {
     return cached.result;
@@ -839,6 +857,80 @@ async function verifyFillBuilderProof(fill, builderConfig, systemConfig) {
     },
   };
   orderBuilderProofCache.set(cacheKey, { cached_at_ms: Date.now(), result });
+  return result;
+}
+
+function persistedBuilderProof(dbModule, fill, builderConfig) {
+  const order = parseCompositeOrderId(fill?.order_id);
+  const marketId = Number(fill?.market_id ?? fill?.marketId ?? fill?.market);
+  const builderId = Number(builderConfig?.builder_id);
+  const builderFeeBps = Number(builderConfig?.builder_fee_bps);
+  const feeRecipient = normalizeAddress(builderConfig?.fee_recipient);
+  if (!order || !Number.isInteger(marketId) || marketId < 0
+    || !Number.isInteger(builderId) || !Number.isInteger(builderFeeBps) || !feeRecipient) {
+    return null;
+  }
+  try {
+    const row = dbModule.db.prepare(`
+      SELECT result_json
+      FROM risex_order_builder_proofs
+      WHERE order_id = ?
+        AND market_id = ?
+        AND builder_id = ?
+        AND builder_fee_bps = ?
+        AND fee_recipient = ?
+      LIMIT 1
+    `).get(order.order_id, marketId, builderId, builderFeeBps, feeRecipient);
+    if (!row?.result_json) return null;
+    const parsed = JSON.parse(row.result_json);
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function storePersistedBuilderProof(dbModule, fill, builderConfig, result) {
+  const order = parseCompositeOrderId(fill?.order_id);
+  const marketId = Number(fill?.market_id ?? fill?.marketId ?? fill?.market);
+  const builderId = Number(builderConfig?.builder_id);
+  const builderFeeBps = Number(builderConfig?.builder_fee_bps);
+  const feeRecipient = normalizeAddress(builderConfig?.fee_recipient);
+  if (!order || !Number.isInteger(marketId) || marketId < 0
+    || !Number.isInteger(builderId) || !Number.isInteger(builderFeeBps) || !feeRecipient
+    || !result || typeof result !== 'object') {
+    return;
+  }
+  try {
+    dbModule.db.prepare(`
+      INSERT INTO risex_order_builder_proofs (
+        order_id, market_id, builder_id, builder_fee_bps, fee_recipient,
+        eligible, reason, result_json, checked_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      ON CONFLICT(order_id, market_id, builder_id, builder_fee_bps, fee_recipient) DO UPDATE SET
+        eligible = excluded.eligible,
+        reason = excluded.reason,
+        result_json = excluded.result_json,
+        checked_at = excluded.checked_at
+    `).run(
+      order.order_id,
+      marketId,
+      builderId,
+      builderFeeBps,
+      feeRecipient,
+      result.eligible ? 1 : 0,
+      result.reason || null,
+      JSON.stringify(result),
+    );
+  } catch (error) {
+    console.warn('[risex] failed to persist builder proof:', error?.message || error);
+  }
+}
+
+async function verifyFillBuilderProofCached(fill, builderConfig, systemConfig, dbModule) {
+  const persisted = persistedBuilderProof(dbModule, fill, builderConfig);
+  if (persisted) return persisted;
+  const result = await verifyFillBuilderProof(fill, builderConfig, systemConfig);
+  storePersistedBuilderProof(dbModule, fill, builderConfig, result);
   return result;
 }
 
@@ -939,8 +1031,21 @@ function normalizeMarket(m) {
   };
 }
 
-async function getSystemConfig() {
-  return apiRequest('/v1/system/config');
+async function getSystemConfig({ force = false } = {}) {
+  const fresh = systemConfigCache
+    && Date.now() - systemConfigCache.cached_at_ms < RISEX_MARKET_CACHE_MS;
+  if (!force && fresh) return systemConfigCache.value;
+  if (!force && systemConfigPromise) return systemConfigPromise;
+
+  systemConfigPromise = apiRequest('/v1/system/config')
+    .then((value) => {
+      systemConfigCache = { value, cached_at_ms: Date.now() };
+      return value;
+    })
+    .finally(() => {
+      systemConfigPromise = null;
+    });
+  return systemConfigPromise;
 }
 
 async function getEip712Domain() {
@@ -1423,13 +1528,61 @@ async function getOrdersByAddress(address) {
   return [...regular, ...tpsl];
 }
 
-async function getAccountTradeHistory(address, { marketId, limit = RISEX_FILL_LOOKBACK_LIMIT } = {}) {
+async function getAccountTradeHistory(address, {
+  marketId,
+  limit = RISEX_FILL_LOOKBACK_LIMIT,
+  page = 1,
+  maxPages = 1,
+  startTime,
+  endTime,
+  sortedBy = '-time',
+  timeoutMs = 15_000,
+} = {}) {
   const clean = normalizeAddress(address);
   if (!clean) throw new Error('wallet required (0x...)');
-  let path = `/v1/trade-history?account=${clean}&limit=${Math.max(1, Math.min(250, Number(limit) || RISEX_FILL_LOOKBACK_LIMIT))}`;
-  if (marketId != null) path += `&market_id=${encodeURIComponent(marketId)}`;
-  const payload = await apiRequest(path);
-  return rows(payload, ['fills', 'trades']);
+  const pageLimit = Math.max(1, Math.min(1000, Number(limit) || RISEX_FILL_LOOKBACK_LIMIT));
+  const pageCount = Math.max(1, Math.min(25, Number(maxPages) || 1));
+  let nextPage = Math.max(1, Number(page) || 1);
+  const collected = [];
+  const seen = new Set();
+
+  for (let index = 0; index < pageCount; index += 1) {
+    const qs = new URLSearchParams({
+      account: clean,
+      limit: String(pageLimit),
+      page: String(nextPage),
+      sorted_by: sortedBy === 'time' ? 'time' : '-time',
+    });
+    if (marketId != null) qs.set('market_id', String(marketId));
+    if (startTime != null && startTime !== '') qs.set('start_time', String(startTime));
+    if (endTime != null && endTime !== '') qs.set('end_time', String(endTime));
+    const payload = await apiRequest(`/v1/trade-history?${qs.toString()}`, { timeoutMs });
+    const pageRows = rows(payload, ['fills', 'trades']);
+    for (const fill of pageRows) {
+      // A trade id is normally unique, but keep execution details in the key as
+      // well so pagination cannot collapse two partial executions of the same
+      // maker/taker order pair.
+      const key = [
+        fill?.id,
+        fill?.fill_id,
+        fill?.trade_id,
+        fill?.order_id,
+        fill?.timestamp ?? fill?.time ?? fill?.created_at ?? fill?.createdAt,
+        fill?.market_id,
+        fill?.price,
+        fill?.size,
+        fill?.blockchain_data?.tx_hash,
+        fill?.blockchain_data?.log_index,
+      ].filter(value => value !== undefined && value !== null && value !== '').join(':')
+        || JSON.stringify(fill).slice(0, 240);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      collected.push(fill);
+    }
+    if (payload?.has_next_page !== true || !pageRows.length) break;
+    nextPage = Number(payload?.page || nextPage) + 1;
+  }
+  return collected;
 }
 
 function fillTime(fill) {
@@ -1446,6 +1599,7 @@ function fillTime(fill) {
 
 function tradeKey(wallet, fill) {
   const base = [
+    fill?.id,
     fill?.fill_id,
     fill?.trade_id,
     fill?.order_id,
@@ -1456,6 +1610,32 @@ function tradeKey(wallet, fill) {
     fill?.size,
   ].filter(v => v !== undefined && v !== null && v !== '').join(':');
   return `risex:${String(wallet).toLowerCase()}:${base || JSON.stringify(fill).slice(0, 120)}`;
+}
+
+function tradeKeyCandidates(wallet, fill) {
+  const cleanWallet = String(wallet || '').toLowerCase();
+  const canonical = tradeKey(cleanWallet, fill);
+  const values = [canonical];
+  const withoutTradeId = [
+    fill?.fill_id,
+    fill?.trade_id,
+    fill?.order_id,
+    fill?.client_order_id,
+    fillTime(fill),
+    fill?.market_id,
+    fill?.price,
+    fill?.size,
+  ].filter(v => v !== undefined && v !== null && v !== '').join(':');
+  if (withoutTradeId) values.push(`risex:${cleanWallet}:${withoutTradeId}`);
+  const legacy = [
+    fill?.order_id,
+    fill?.timestamp ?? fill?.time ?? fill?.created_at ?? fill?.createdAt,
+    fill?.market_id,
+    fill?.price,
+    fill?.size,
+  ].filter(v => v !== undefined && v !== null && v !== '').join(':');
+  if (legacy) values.push(`risex:${cleanWallet}:${legacy}`);
+  return [...new Set(values)];
 }
 
 function normalizeFill(wallet, fill, byMarket, proof) {
@@ -1487,15 +1667,101 @@ function normalizeFill(wallet, fill, byMarket, proof) {
     verifiedSource: 'risex_builder_onchain',
     pnl: fill?.realized_pnl != null ? String(fill.realized_pnl) : null,
     fee: fill?.fee != null ? String(fill.fee) : null,
-    proofJson: JSON.stringify(proof),
+    proofJson: proof ? JSON.stringify(proof) : null,
     createdAt: createdAtMs > 0 ? new Date(createdAtMs).toISOString() : null,
   };
+}
+
+function findExistingImportedFill(dbModule, playerId, wallet, fill, trade) {
+  const candidates = tradeKeyCandidates(wallet, fill);
+  if (candidates.length) {
+    const placeholders = candidates.map(() => '?').join(', ');
+    const exact = dbModule.db.prepare(`
+      SELECT id, player_id, verified_source, proof_json, client_order_id
+      FROM trade_history
+      WHERE dex = 'risex' AND client_order_id IN (${placeholders})
+      ORDER BY CASE WHEN verified_source = 'risex_builder_onchain' THEN 0 ELSE 1 END, id DESC
+      LIMIT 1
+    `).get(...candidates);
+    if (exact) return exact;
+  }
+
+  if (trade?.orderId == null || trade?.orderId === '') return null;
+  const amount = Number(trade.amount);
+  const price = Number(trade.price);
+  if (!Number.isFinite(amount) || !Number.isFinite(price)) return null;
+  return dbModule.db.prepare(`
+    SELECT id, player_id, verified_source, proof_json, client_order_id
+    FROM trade_history
+    WHERE dex = 'risex'
+      AND player_id = ?
+      AND CAST(order_id AS TEXT) = ?
+      AND ABS(CAST(amount AS REAL) - ?) <= MAX(0.000000000001, ABS(?) * 0.000000001)
+      AND ABS(CAST(price AS REAL) - ?) <= MAX(0.000000001, ABS(?) * 0.000000001)
+    ORDER BY CASE WHEN verified_source = 'risex_builder_onchain' THEN 0 ELSE 1 END, id DESC
+    LIMIT 1
+  `).get(String(playerId), String(trade.orderId), amount, amount, price, price) || null;
+}
+
+function existingFillHasCurrentBuilderProof(row, builderConfig) {
+  if (row?.verified_source !== 'risex_builder_onchain' || !row?.proof_json) return false;
+  try {
+    const proof = JSON.parse(row.proof_json);
+    return proof?.source === 'risex_place_order_onchain'
+      && proof?.builder?.verified === true
+      && Number(proof?.builder?.builder_id) === Number(builderConfig?.builder_id)
+      && Number(proof?.builder?.builder_fee_bps) === Number(builderConfig?.builder_fee_bps)
+      && normalizeAddress(proof?.builder?.fee_recipient) === normalizeAddress(builderConfig?.fee_recipient);
+  } catch {
+    return false;
+  }
 }
 
 async function importFillsForPlayer(playerId, wallet, opts = {}) {
   const cleanWallet = normalizeAddress(wallet);
   if (!cleanWallet) return { ok: false, imported: 0, skipped: 0, total: 0, reason: 'invalid_evm_wallet' };
   const db = require('./db');
+  const attempts = Math.max(1, Math.min(6, Number(opts.attempts || 1)));
+  const delayMs = Math.max(250, Math.min(5000, Number(opts.delayMs || 1500)));
+  let fills = [];
+  let byMarket = new Map();
+  let fetchError = null;
+  for (let i = 0; i < attempts; i += 1) {
+    try {
+      [fills, byMarket] = await Promise.all([
+        getAccountTradeHistory(cleanWallet, {
+          limit: opts.limit || RISEX_FILL_LOOKBACK_LIMIT,
+          maxPages: opts.maxPages || 1,
+          startTime: opts.startTime,
+          endTime: opts.endTime,
+          timeoutMs: opts.timeoutMs || 15_000,
+        }),
+        marketMap(),
+      ]);
+      fetchError = null;
+    } catch (error) {
+      fetchError = error;
+      fills = [];
+      byMarket = new Map();
+    }
+    if (Array.isArray(fills) && fills.length) break;
+    if (i < attempts - 1) await new Promise(r => setTimeout(r, delayMs));
+  }
+  if (!Array.isArray(fills)) fills = [];
+
+  if (fetchError) {
+    return {
+      ok: false,
+      imported: 0,
+      upgraded: 0,
+      adopted: 0,
+      skipped: 0,
+      total: 0,
+      reason: 'trade_history_unavailable',
+      error: fetchError?.message || String(fetchError),
+    };
+  }
+
   let builderConfig;
   let systemConfig;
   try {
@@ -1507,38 +1773,51 @@ async function importFillsForPlayer(playerId, wallet, opts = {}) {
     return {
       ok: false,
       imported: 0,
+      upgraded: 0,
       adopted: 0,
       skipped: 0,
-      total: 0,
+      total: fills.length,
       reason: /not registered/i.test(error?.message || '') ? 'builder_not_registered' : 'builder_proof_unavailable',
       error: error?.message || String(error),
     };
   }
-  const attempts = Math.max(1, Math.min(6, Number(opts.attempts || 1)));
-  const delayMs = Math.max(250, Math.min(5000, Number(opts.delayMs || 1500)));
-  let fills = [];
-  let byMarket = new Map();
-  for (let i = 0; i < attempts; i += 1) {
-    [fills, byMarket] = await Promise.all([
-      getAccountTradeHistory(cleanWallet, { limit: opts.limit || RISEX_FILL_LOOKBACK_LIMIT }).catch(() => []),
-      marketMap().catch(() => new Map()),
-    ]);
-    if (Array.isArray(fills) && fills.length) break;
-    if (i < attempts - 1) await new Promise(r => setTimeout(r, delayMs));
-  }
-  if (!Array.isArray(fills)) fills = [];
 
   let imported = 0;
+  let upgraded = 0;
   let adopted = 0;
   let skipped = 0;
   const skipReasons = {};
   const proofPromises = new Map();
   for (const fill of fills) {
-    const orderKey = String(fill?.order_id || '').toLowerCase();
+    const candidate = normalizeFill(cleanWallet, fill, byMarket, null);
+    if (!candidate) {
+      skipped++;
+      skipReasons.invalid_fill = (skipReasons.invalid_fill || 0) + 1;
+      continue;
+    }
+
+    let before = null;
+    try {
+      before = findExistingImportedFill(db, playerId, cleanWallet, fill, candidate);
+    } catch (error) {
+      console.warn('[risex] existing fill lookup failed:', error?.message || error);
+    }
+    if (existingFillHasCurrentBuilderProof(before, builderConfig)) {
+      skipped++;
+      skipReasons.already_verified = (skipReasons.already_verified || 0) + 1;
+      continue;
+    }
+    if (before && opts.verifyLegacy === false) {
+      skipped++;
+      skipReasons.legacy_deferred = (skipReasons.legacy_deferred || 0) + 1;
+      continue;
+    }
+
+    const orderKey = `${String(fill?.order_id || '').toLowerCase()}:${Number(fill?.market_id ?? fill?.marketId ?? fill?.market)}`;
     if (!proofPromises.has(orderKey)) {
       proofPromises.set(
         orderKey,
-        verifyFillBuilderProof(fill, builderConfig, systemConfig)
+        verifyFillBuilderProofCached(fill, builderConfig, systemConfig, db)
           .catch(error => ({ eligible: false, reason: 'proof_error', error: error?.message || String(error) })),
       );
     }
@@ -1550,13 +1829,7 @@ async function importFillsForPlayer(playerId, wallet, opts = {}) {
       continue;
     }
     const trade = normalizeFill(cleanWallet, fill, byMarket, verification.proof);
-    if (!trade) {
-      skipped++;
-      skipReasons.invalid_fill = (skipReasons.invalid_fill || 0) + 1;
-      continue;
-    }
     try {
-      const before = db.db.prepare('SELECT id, player_id FROM trade_history WHERE client_order_id = ?').get(trade.clientOrderId);
       if (before) {
         const refreshed = db.db.prepare(`
             UPDATE trade_history
@@ -1575,8 +1848,13 @@ async function importFillsForPlayer(playerId, wallet, opts = {}) {
             trade.createdAt,
             before.id,
           );
-        if (refreshed.changes > 0 && before.player_id !== playerId) adopted++;
-        skipped++;
+        if (refreshed.changes > 0) {
+          if (before.player_id !== playerId) adopted++;
+          else upgraded++;
+        } else {
+          skipped++;
+          skipReasons.already_verified = (skipReasons.already_verified || 0) + 1;
+        }
         continue;
       }
       const r = db.addTrade(playerId, trade);
@@ -1592,6 +1870,7 @@ async function importFillsForPlayer(playerId, wallet, opts = {}) {
   return {
     ok: true,
     imported,
+    upgraded,
     adopted,
     skipped,
     total: fills.length,
@@ -1663,8 +1942,12 @@ module.exports = {
   getOrdersByAddress,
   getAccountTradeHistory,
   fillTime,
+  tradeKey,
+  tradeKeyCandidates,
+  findExistingImportedFill,
   parseCompositeOrderId,
   decodePlaceOrderBuilderFields,
   verifyFillBuilderProof,
+  verifyFillBuilderProofCached,
   importFillsForPlayer,
 };

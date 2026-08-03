@@ -13,6 +13,7 @@ const worker = require('./decibel-rewards-worker');
 const futuresDb = require('./db');
 
 const SUBACCOUNT = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+const OTHER_SUBACCOUNT = '0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc';
 const MARKET = '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
 const BUILDER = '0xfa4d46a481f5bc95de01a629ec95b7876e946ebe1e86374284d899ac4366984a';
 const ORDER_ID = '170141604320468511508532641516952223744';
@@ -140,8 +141,8 @@ async function main() {
 
   const saved = [...store.rows.values()].map((row) => row.trade);
   assert.deepEqual(saved.map((row) => row.clientOrderId).sort(), [
-    'decibel:trade-fill:1001',
-    'decibel:trade-fill:1002',
+    `decibel:fill:${SUBACCOUNT}:1001`,
+    `decibel:fill:${SUBACCOUNT}:1002`,
   ]);
   assert.deepEqual(saved.map((row) => row.notional_usd).sort((a, b) => a - b), [30, 50]);
   for (const row of saved) {
@@ -162,6 +163,37 @@ async function main() {
   assert.equal(second.imported, 0);
   assert.equal(second.updated, 0);
   assert.equal(store.rows.size, 2);
+
+  const dryRunStore = fakeStore();
+  const dryRun = await worker.__test.recordRecentLimitFills('player-dry', SUBACCOUNT, {
+    details: true,
+    dryRun: true,
+    tradeDb: dryRunStore,
+    decibelClient: client,
+    cutoverMs: 1_000,
+    scanToMs: 2_050,
+  });
+  assert.equal(dryRun.would_import, 1);
+  assert.equal(dryRun.imported, 0);
+  assert.equal(dryRun.after_scan_window, 1);
+  assert.equal(dryRunStore.rows.size, 0, 'dry-run must not write trade rows');
+
+  const legacyServerStore = fakeStore();
+  legacyServerStore.rows.set(
+    `player-legacy:decibel:decibel:trade-fill:1001`,
+    { id: 1, verified_source: 'server' },
+  );
+  const legacyServer = await worker.__test.recordRecentLimitFills('player-legacy', SUBACCOUNT, {
+    details: true,
+    tradeDb: legacyServerStore,
+    decibelClient: {
+      ...client,
+      async fetchTradeHistory() { return [tradeFill('1001', 2_000, 0.5, 100)]; },
+    },
+    cutoverMs: 1_000,
+  });
+  assert.equal(legacyServer.existing, 1, 'legacy server-verified fills remain creditable and are not duplicated');
+  assert.equal(legacyServer.imported, 0);
 
   const directStore = fakeStore({ withProof: false });
   const directClient = {
@@ -205,6 +237,40 @@ async function main() {
   const directProof = JSON.parse([...directStore.rows.values()][0].trade.proofJson);
   assert.equal(directProof.verification, 'aptos_trade_event');
   assert.equal(directProof.builder, BUILDER);
+
+  const unmatchedStore = fakeStore({ withProof: false });
+  const unmatchedClient = {
+    async fetchOrderHistory() { return []; },
+    async fetchTradeHistory() { return [tradeFill('2501', 3_500, 0.1, 250)]; },
+    async fetchMarkets() { return [{ market: MARKET, market_name: 'BTC-USD' }]; },
+    async fetchAptosJsonPath(pathname) {
+      assert.equal(pathname, 'transactions/by_version/7001');
+      return {
+        hash: '0xunmatchedfillproof',
+        events: [{
+          type: '0x1::perp_positions::TradeEvent',
+          data: {
+            fill_id: '2501',
+            account: SUBACCOUNT,
+            market: { vec: [MARKET] },
+            order_id: ORDER_ID,
+            client_order_id: 'client-market-1',
+            fee: '5000',
+            builder_code: { vec: [{ builder: BUILDER, fees: '100' }] },
+          },
+        }],
+      };
+    },
+  };
+  const unmatched = await worker.__test.recordRecentLimitFills('player-unmatched', SUBACCOUNT, {
+    details: true,
+    tradeDb: unmatchedStore,
+    decibelClient: unmatchedClient,
+    cutoverMs: 1_000,
+    nowMs: 4_000,
+  });
+  assert.equal(unmatched.imported, 1, 'on-chain TradeEvent recovers a fill absent from order history');
+  assert.equal(unmatched.verified, 1);
 
   const pagedStore = fakeStore();
   const pagedTrades = [
@@ -314,8 +380,8 @@ async function main() {
       ORDER BY client_order_id
     `).all();
     assert.deepEqual(routeRows.map((row) => row.client_order_id), [
-      'decibel:trade-fill:4001',
-      'decibel:trade-fill:4002',
+      `decibel:fill:${SUBACCOUNT}:4001`,
+      `decibel:fill:${SUBACCOUNT}:4002`,
     ]);
     assert.deepEqual(routeRows.map((row) => row.notional_usd), [20, 30]);
     assert.ok(routeRows.every((row) => row.order_id == null));
@@ -336,6 +402,37 @@ async function main() {
     );
     assert.equal(routeRepeat.inserted, 0);
     assert.equal(routeRepeat.updated, 0);
+
+    const counterpartyResult = await routes.__test.recordDecibelActualFills(
+      'player-route-counterparty',
+      OTHER_SUBACCOUNT,
+      {
+        clientOrderId: 'client-market-1',
+        builderAddr: BUILDER,
+        builderFee: 1,
+        symbol: 'BTC',
+      },
+      { transactionHash: '0xroute-counterparty' },
+      'market',
+      'long',
+    );
+    assert.equal(counterpartyResult.inserted, 2);
+    const sharedFillRows = futuresDb.db.prepare(`
+      SELECT player_id, client_order_id
+      FROM trade_history
+      WHERE client_order_id LIKE '%:4001'
+      ORDER BY player_id
+    `).all();
+    assert.deepEqual(sharedFillRows, [
+      {
+        player_id: 'player-route',
+        client_order_id: `decibel:fill:${SUBACCOUNT}:4001`,
+      },
+      {
+        player_id: 'player-route-counterparty',
+        client_order_id: `decibel:fill:${OTHER_SUBACCOUNT}:4001`,
+      },
+    ]);
   } finally {
     decibel.fetchTradeHistory = originalFetchTradeHistory;
   }

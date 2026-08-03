@@ -12,6 +12,9 @@ const decibel = require(path.join(APP_ROOT, 'server-futures', 'decibel'));
 const {
   allowedBuilderAddresses,
 } = require(path.join(APP_ROOT, 'server-futures', 'decibel-bulk-rewards'));
+const {
+  normalizeFillId,
+} = require(path.join(APP_ROOT, 'server-futures', 'decibel-fill-identity'));
 console.log = auditOutput;
 
 const PAGE_SIZE = 100;
@@ -52,7 +55,13 @@ function fillNotional(row) {
 }
 
 function exactFillId(row) {
-  return String(row?.trade_id ?? row?.fill_id ?? row?.id ?? '').trim();
+  return normalizeFillId(row?.trade_id ?? row?.fill_id ?? row?.id);
+}
+
+function scopedFillId(subaccount, fillId) {
+  const account = normalizeSubaccount(subaccount);
+  const id = normalizeFillId(fillId);
+  return account && id ? `${account}:${id}` : '';
 }
 
 function exactOrderId(row) {
@@ -90,7 +99,7 @@ function verifyTradeEvent(tx, fill, allowedBuilders) {
   const event = events.find((candidate) => {
     if (!String(candidate?.type || '').includes('::perp_positions::TradeEvent')) return false;
     const data = candidate?.data || {};
-    if (String(data.fill_id ?? '') !== fill.trade_id) return false;
+    if (normalizeFillId(data.fill_id) !== fill.trade_id) return false;
     if (normalizeSubaccount(data.account) !== fill.subaccount) return false;
     const eventMarket = normalizeSubaccount(vectorValue(data.market));
     return !fill.market || !eventMarket || eventMarket === fill.market;
@@ -126,7 +135,7 @@ async function verifyUnresolvedFills(unresolved, allowedBuilders, concurrency = 
       const fill = rows[cursor++];
       const version = String(fill.transaction_version || '').trim();
       if (!/^\d+$/u.test(version)) {
-        outcomes.set(fill.trade_id, { verified: false, reason: 'transaction_version_missing' });
+        outcomes.set(fill.identity, { verified: false, reason: 'transaction_version_missing' });
         continue;
       }
       try {
@@ -134,10 +143,10 @@ async function verifyUnresolvedFills(unresolved, allowedBuilders, concurrency = 
           txCache.set(version, decibel.fetchAptosJsonPath(`transactions/by_version/${version}`));
         }
         const tx = await txCache.get(version);
-        outcomes.set(fill.trade_id, verifyTradeEvent(tx, fill, allowedBuilders));
+        outcomes.set(fill.identity, verifyTradeEvent(tx, fill, allowedBuilders));
       } catch (error) {
         txCache.delete(version);
-        outcomes.set(fill.trade_id, { verified: false, reason: `transaction_fetch_failed:${error?.status || 'unknown'}` });
+        outcomes.set(fill.identity, { verified: false, reason: `transaction_fetch_failed:${error?.status || 'unknown'}` });
       }
     }
   }
@@ -204,9 +213,9 @@ function loadVerifiedBulkIds(futuresDb, playerId, allowedBuilders) {
     const proof = parseJson(row.proof_json);
     const builder = normalizeSubaccount(proof?.builder);
     const subaccount = normalizeSubaccount(proof?.subaccount);
-    const fillId = String(proof?.bulk_trade_id || '').trim();
+    const fillId = normalizeFillId(proof?.bulk_trade_id);
     if (!fillId || !subaccount || !allowedBuilders.has(builder) || Number(proof?.builder_fee_bps) <= 0) continue;
-    ids.add(fillId);
+    ids.add(scopedFillId(subaccount, fillId));
     subaccounts.add(subaccount);
   }
   return { ids, subaccounts };
@@ -284,7 +293,11 @@ async function auditParticipant(context, participant) {
   } = context;
   const startMs = laterMs(tournament.start_at, participant.joined_at);
   const participantCutoffMs = Math.min(Date.now(), cutoffMs);
-  const endMs = Math.min(participantCutoffMs, sqlDateMs(tournament.end_at) || participantCutoffMs);
+  const endMs = Math.min(
+    participantCutoffMs,
+    sqlDateMs(tournament.end_at) || participantCutoffMs,
+    sqlDateMs(participant.left_at) || participantCutoffMs,
+  );
   const proofIndex = loadProofIndex(futuresDb, participant.player_id, allowedBuilders);
   const verifiedBulk = loadVerifiedBulkIds(futuresDb, participant.player_id, allowedBuilders);
   const subaccounts = new Set([...proofIndex.subaccounts, ...verifiedBulk.subaccounts]);
@@ -317,20 +330,22 @@ async function auditParticipant(context, participant) {
     ]);
     for (const bulk of bulkRows) {
       const fillId = exactFillId(bulk);
-      if (fillId) upstreamBulkIds.add(fillId);
+      if (fillId) upstreamBulkIds.add(scopedFillId(subaccount, fillId));
     }
     for (const fill of trades) {
       const fillId = exactFillId(fill);
+      const identity = scopedFillId(subaccount, fillId);
       const notional = fillNotional(fill);
-      if (!fillId || !notional || expected.has(fillId) || unresolved.has(fillId)) continue;
-      const isBulk = upstreamBulkIds.has(fillId);
+      if (!identity || !notional || expected.has(identity) || unresolved.has(identity)) continue;
+      const isBulk = upstreamBulkIds.has(identity);
       const exactProof = proofIndex.byOrder.get(`${subaccount}:${exactOrderId(fill)}`)
         || proofIndex.byClient.get(`${subaccount}:${exactClientOrderId(fill)}`)
         || null;
       const proven = isBulk
-        ? verifiedBulk.ids.has(fillId) || legacyBulkIds.has(fillId)
+        ? verifiedBulk.ids.has(identity) || legacyBulkIds.has(fillId)
         : Boolean(exactProof);
       const row = {
+        identity,
         trade_id: fillId,
         subaccount,
         order_id: exactOrderId(fill) || null,
@@ -341,7 +356,7 @@ async function auditParticipant(context, participant) {
         kind: isBulk ? 'bulk' : 'order',
         market: normalizeSubaccount(fill?.market),
       };
-      (proven ? expected : unresolved).set(fillId, row);
+      (proven ? expected : unresolved).set(identity, row);
     }
   }
 
@@ -350,12 +365,12 @@ async function auditParticipant(context, participant) {
   const unresolvedReasons = {};
   let onChainVerifiedFills = 0;
   let onChainVerifiedVolume = 0;
-  for (const [fillId, outcome] of onChainOutcomes) {
-    const fill = unresolved.get(fillId);
+  for (const [identity, outcome] of onChainOutcomes) {
+    const fill = unresolved.get(identity);
     if (!fill) continue;
     if (outcome?.verified) {
-      unresolved.delete(fillId);
-      expected.set(fillId, {
+      unresolved.delete(identity);
+      expected.set(identity, {
         ...fill,
         proof: 'aptos_trade_event',
         builder: outcome.builder,
@@ -391,6 +406,7 @@ async function auditParticipant(context, participant) {
     player_id: participant.player_id,
     player_name: participant.player_name,
     joined_at: participant.joined_at,
+    left_at: participant.left_at || null,
     cutoff_at: new Date(participantCutoffMs).toISOString(),
     subaccounts: [...subaccounts],
     upstream: {
@@ -415,6 +431,9 @@ async function auditParticipant(context, participant) {
     classification: Math.abs(provenDeltaAfterKnownDedupe) < 0.01
       ? (unresolved.size ? 'matches_proven_but_has_unresolved_fills' : 'matches')
       : (provenDeltaAfterKnownDedupe > 0 ? 'missing_proven_volume' : 'credited_above_proven_volume'),
+    ...(process.argv.includes('--include-fill-details') ? {
+      proven_fill_details: [...expected.values()],
+    } : {}),
     unresolved_sample: [...unresolved.values()].slice(0, 10),
   };
 }
@@ -435,13 +454,13 @@ async function main() {
   `).get(tournamentId);
   if (!tournament) throw new Error(`Decibel tournament ${tournamentId} not found`);
   let participants = mainDb.prepare(`
-    SELECT tp.player_id, tp.joined_at, p.name AS player_name, p.wallet,
+    SELECT tp.player_id, tp.joined_at, tp.left_at, p.name AS player_name, p.wallet,
            pda.wallet_address
     FROM tournament_participants tp
     JOIN players p ON p.id = tp.player_id
     LEFT JOIN player_dex_accounts pda
       ON pda.player_id = p.id AND pda.dex = 'decibel'
-    WHERE tp.tournament_id = ? AND tp.left_at IS NULL
+    WHERE tp.tournament_id = ?
     ORDER BY lower(p.name), tp.player_id
   `).all(tournamentId);
   const playerFilter = new Set(String(argValue('--players') || '')

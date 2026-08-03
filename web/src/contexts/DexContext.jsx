@@ -14,6 +14,23 @@ const DexContext = createContext(null);
 const STORAGE_KEY = 'clash_dex';
 
 export const DEX_CONFIG = {
+  bulk: {
+    id: 'bulk',
+    label: 'BULK',
+    shortLabel: 'BULK',
+    emoji: 'BULK',
+    // Official v0.1.2 repository wordmark. Keep the canonical remote asset
+    // until Bulk publishes a stable standalone icon package.
+    logo: 'https://raw.githubusercontent.com/Bulk-trade/bulk-client/v0.1.2/bulkclient.png',
+    logoIsWordmark: true,
+    color: '#1B1B18',
+    colorDark: '#11110F',
+    colorLight: 'rgba(27,27,24,0.12)',
+    borderColor: '#383832',
+    chain: 'Solana',
+    chainShort: 'SOL',
+    description: 'High-performance perps on Solana',
+  },
   pacifica: {
     id: 'pacifica',
     label: 'PACIFICA',
@@ -286,6 +303,7 @@ export const DEX_CONFIG = {
 };
 
 export const DEX_ORDER = [
+  'bulk',
   'lighter',
   'flash',
   'gmtrade',
@@ -311,7 +329,7 @@ export function isDexAvailableInContext(dexId, { isInFrame = false, isSolanaMobi
   // Vault holds a Solana keypair, and Mobile Wallet Adapter is Solana-native.
   // Base/Arbitrum/Aptos/Monad signing would either dead-end or fall through
   // to a non-native wallet flow.
-  if (isSolanaMobile && dexId !== 'pacifica' && dexId !== 'phoenix' && dexId !== 'gmtrade' && dexId !== 'flash') return false;
+  if (isSolanaMobile && dexId !== 'pacifica' && dexId !== 'phoenix' && dexId !== 'gmtrade' && dexId !== 'flash' && dexId !== 'bulk') return false;
   // Farcaster mini apps expose Solana and, on some clients, EVM providers.
   // Aptos wallet-standard providers such as Petra are not available there, so
   // Decibel would leave users stuck on an impossible connect step.
@@ -405,7 +423,7 @@ export function DexProvider({ children }) {
         // this a stale /api/state response from account A could land under
         // account B's context and reset the DEX selector to the wrong value.
         if (cancelled) return;
-        if (j.dex === 'pacifica' || j.dex === 'avantis' || j.dex === 'decibel' || j.dex === 'gmx' || j.dex === 'ostium' || j.dex === 'monad' || j.dex === 'phoenix' || j.dex === 'hyperliquid' || j.dex === 'risex' || j.dex === 'nado' || j.dex === 'hibachi' || j.dex === 'hotstuff' || j.dex === 'grvt' || j.dex === 'katana' || j.dex === 'gmtrade' || j.dex === 'flash' || j.dex === 'lighter') {
+        if (j.dex === 'pacifica' || j.dex === 'avantis' || j.dex === 'decibel' || j.dex === 'gmx' || j.dex === 'ostium' || j.dex === 'monad' || j.dex === 'phoenix' || j.dex === 'hyperliquid' || j.dex === 'risex' || j.dex === 'nado' || j.dex === 'hibachi' || j.dex === 'hotstuff' || j.dex === 'grvt' || j.dex === 'katana' || j.dex === 'gmtrade' || j.dex === 'flash' || j.dex === 'lighter' || j.dex === 'bulk') {
           // Compare against current React state, not localStorage — localStorage
           // was the previous account's setting and we want the authoritative
           // server value for THIS token to win even if it matches what's
@@ -442,7 +460,7 @@ export function DexServerSync() {
         if (cancelled || !r.ok) return;
         const j = await r.json();
         if (cancelled) return;
-        if (j.dex === 'pacifica' || j.dex === 'avantis' || j.dex === 'decibel' || j.dex === 'gmx' || j.dex === 'ostium' || j.dex === 'monad' || j.dex === 'phoenix' || j.dex === 'hyperliquid' || j.dex === 'risex' || j.dex === 'nado' || j.dex === 'hibachi' || j.dex === 'hotstuff' || j.dex === 'grvt' || j.dex === 'katana' || j.dex === 'gmtrade' || j.dex === 'flash' || j.dex === 'lighter') {
+        if (j.dex === 'pacifica' || j.dex === 'avantis' || j.dex === 'decibel' || j.dex === 'gmx' || j.dex === 'ostium' || j.dex === 'monad' || j.dex === 'phoenix' || j.dex === 'hyperliquid' || j.dex === 'risex' || j.dex === 'nado' || j.dex === 'hibachi' || j.dex === 'hotstuff' || j.dex === 'grvt' || j.dex === 'katana' || j.dex === 'gmtrade' || j.dex === 'flash' || j.dex === 'lighter' || j.dex === 'bulk') {
           writeLastPlayerDexPreference({ ...player, token }, j.dex);
           setDex(j.dex);
         }
@@ -471,7 +489,9 @@ export function DexBadge({ dexId, size = 'sm' }) {
   const isLg = size === 'lg';
   // Wordmarks are wide, so we cap their height a bit smaller than icon-only
   // logos to keep them in scale with the surrounding UI.
-  const logoH = cfg.logoIsWordmark ? (isLg ? 12 : 10) : (isLg ? 16 : 13);
+  const logoH = cfg.id === 'bulk'
+    ? (isLg ? 18 : 15)
+    : (cfg.logoIsWordmark ? (isLg ? 12 : 10) : (isLg ? 16 : 13));
 
   return (
     <img
@@ -480,8 +500,8 @@ export function DexBadge({ dexId, size = 'sm' }) {
       title={cfg.label}
       style={{
         height: logoH,
-        width: 'auto',
-        objectFit: 'contain',
+        width: cfg.id === 'bulk' ? (isLg ? 64 : 52) : 'auto',
+        objectFit: cfg.id === 'bulk' ? 'cover' : 'contain',
         flexShrink: 0,
         userSelect: 'none',
         verticalAlign: 'middle',
@@ -514,9 +534,9 @@ export function PoweredBy({ dexId, inverted = false }) {
         src={cfg.logo}
         alt={cfg.label}
         style={{
-          height: 16,
-          width: 'auto',
-          objectFit: 'contain',
+          height: cfg.id === 'bulk' ? 18 : 16,
+          width: cfg.id === 'bulk' ? 64 : 'auto',
+          objectFit: cfg.id === 'bulk' ? 'cover' : 'contain',
           filter: cfg.id === 'avantis'
             ? (inverted ? avantisLightFilter : 'none') // white on dark, tinted on light
             : 'none',

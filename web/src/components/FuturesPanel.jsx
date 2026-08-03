@@ -19,6 +19,7 @@ import { useKatana } from '../hooks/useKatana';
 import { useGmtrade } from '../hooks/useGmtrade';
 import { useFlash } from '../hooks/useFlash';
 import { useLighter } from '../hooks/useLighter';
+import { useBulk } from '../hooks/useBulk';
 import { useOstium } from '../hooks/useOstium';
 import { RISEX_BRIDGE_CHAINS } from '../lib/risexConfig';
 import { useDex, DEX_CONFIG } from '../contexts/DexContext';
@@ -46,6 +47,7 @@ import { GOLD_REWARD_PANEL_TOAST_STYLE } from './goldRewardToastStyles';
 import { openSolanaWallet } from '../lib/solanaWalletUi';
 import { setClientActivity } from '../lib/updateCoordinator';
 import { reportClientEvent } from '../lib/clientLogger';
+import { resolveOrderDisplayMetrics } from '../lib/orderDisplayMetrics';
 import {
   ostiumMaxTakeProfitPrice,
   validateOstiumStopLossDirection,
@@ -109,8 +111,9 @@ const DEX_ERROR_LABELS = {
   pacifica: 'Pacifica',
   phoenix: 'Phoenix',
   risex: 'RISEx',
+  bulk: 'Bulk',
 };
-const OPEN_TPSL_NATIVE_ORDER_ATTACH_DEXES = new Set(['avantis', 'decibel', 'flash', 'gmx', 'hibachi', 'hotstuff', 'hyperliquid', 'katana', 'lighter', 'nado', 'ostium', 'pacifica']);
+const OPEN_TPSL_NATIVE_ORDER_ATTACH_DEXES = new Set(['avantis', 'bulk', 'decibel', 'flash', 'gmx', 'hibachi', 'hotstuff', 'hyperliquid', 'katana', 'lighter', 'nado', 'ostium', 'pacifica']);
 const OPEN_TPSL_NATIVE_LIMIT_ATTACH_DEXES = new Set([...OPEN_TPSL_NATIVE_ORDER_ATTACH_DEXES, 'grvt', 'phoenix']);
 const OPEN_TPSL_POST_MARKET_DEXES = new Set([
   'decibel',
@@ -1141,7 +1144,14 @@ function orderDisplayType(order, positions = []) {
     if (inferred === 'tp') return 'TAKE PROFIT';
     if (inferred === 'sl') return 'STOP LOSS';
   }
-  return (order?.order_type || order?.ot || (stopPrice > 0 ? 'trigger' : 'limit')).toUpperCase().replace(/_/g, ' ');
+  const rawType = order?.order_type ?? order?.orderType ?? order?.ot ?? order?.type;
+  // Several SDKs expose enum ordinals (Phoenix currently returns `1`) rather
+  // than a human label. Open orders with no trigger are limit orders; never
+  // leak the protocol enum into the player-facing badge.
+  const normalizedType = rawType == null || /^\d+$/u.test(String(rawType).trim())
+    ? (stopPrice > 0 ? 'trigger' : 'limit')
+    : String(rawType);
+  return normalizedType.toUpperCase().replace(/_/g, ' ');
 }
 
 function orderDisplayPrice(order) {
@@ -1247,14 +1257,6 @@ function pendingCloseConfirmed(action, positions) {
   return beforeAmount > 0 && currentAmount < beforeAmount - 1e-9;
 }
 
-function orderUsdValue(...values) {
-  for (const value of values) {
-    const n = numOrNull(value);
-    if (n != null && n > 0) return n;
-  }
-  return null;
-}
-
 function formatOrderUsd(value) {
   const n = numOrNull(value);
   return n != null && n > 0 ? `$${fmtAmount(n)}` : null;
@@ -1275,6 +1277,19 @@ function orderMatchesPosition(order, pos) {
   const orderPair = order?.pair_index ?? order?.pairIndex ?? order?._raw?.instrument_id;
   const posPair = pos?.pair_index ?? pos?.pairIndex ?? pos?._raw?.instrument_id;
   return orderPair != null && posPair != null && Number(orderPair) === Number(posPair);
+}
+
+function orderCardMetrics(order, positions, price, leverage) {
+  const matchingPosition = (Array.isArray(positions) ? positions : [])
+    .find(position => orderMatchesPosition(order, position)) || null;
+  return resolveOrderDisplayMetrics({ order, position: matchingPosition, price, leverage });
+}
+
+function formatOrderBaseAmount(metrics, symbol) {
+  if (metrics?.baseAmount != null) {
+    return `${fmtAmount(metrics.baseAmount)}${symbol ? ` ${symbol}` : ''}`;
+  }
+  return metrics?.fullPosition ? 'Full position' : '—';
 }
 
 function inferTpslKindFromPosition(order, pos, triggerPrice) {
@@ -3008,19 +3023,11 @@ const OrdersList = memo(function OrdersList({ orders, cancelOrder, positions = [
         const sym = o.symbol || o.s;
         const side = o.side || o.d;
         const price = orderDisplayPrice(o);
-        const rawAmt = o.initial_amount || o.amount || o.a;
-        const amt = parseFloat(rawAmt || 0) > 0 ? fmtAmount(rawAmt) : 'Full position';
         const type = orderDisplayType(o, positions);
         const priceLabel = orderPriceDetailLabel(o, type);
         const leverageValue = orderDisplayLeverage(o, leverageSettings[sym]);
-        const marginUsd = orderUsdValue(o.margin, o.margin_usd, o.marginUsd, o.collateral_usd, o.collateralUsd);
-        const notionalUsd = orderUsdValue(
-          o.notional_usd,
-          o.notionalUsd,
-          o.position_size_usd,
-          o.positionSizeUsd,
-          marginUsd != null && leverageValue != null ? marginUsd * leverageValue : null,
-        );
+        const metrics = orderCardMetrics(o, positions, price, leverageValue);
+        const amountLabel = formatOrderBaseAmount(metrics, sym);
         const isBid = orderPositionSide(o) === 'bid' || side === 'bid';
         const sideLabel = orderSideLabel(o);
         const isTP = type.includes('TAKE') || type.includes('TP');
@@ -3046,12 +3053,9 @@ const OrdersList = memo(function OrdersList({ orders, cancelOrder, positions = [
             </div>
             <div style={{...S.row, justifyContent: 'flex-start', flexWrap: 'wrap', gap: '4px 10px'}}>
               <span style={S.detail}>{priceLabel}: {formatOrderPrice(price)}</span>
-              {marginUsd != null ? (
-                <span style={S.detail}>Margin: {formatOrderUsd(marginUsd)}</span>
-              ) : (
-                <span style={S.detail}>Amount: {amt}</span>
-              )}
-              {notionalUsd != null ? <span style={S.detail}>Size: {formatOrderUsd(notionalUsd)}</span> : null}
+              <span style={S.detail}>Amount: {amountLabel}</span>
+              {metrics.marginUsd != null ? <span style={S.detail}>Margin: {formatOrderUsd(metrics.marginUsd)}</span> : null}
+              {metrics.notionalUsd != null ? <span style={S.detail}>Size: {formatOrderUsd(metrics.notionalUsd)}</span> : null}
               {leverageValue != null ? <span style={S.detail}>Lev: {leverageValue}x</span> : null}
             </div>
             <AttachedTpslSummary order={o} />
@@ -3486,6 +3490,7 @@ function FuturesPanel() {
   const gmtradeHook = useGmtrade();
   const flashHook = useFlash();
   const lighterHook = useLighter();
+  const bulkHook = useBulk();
   const ostiumHook = useOstium();
   // Aptos wallet handle — used for the "Connect Petra" CTA on the Decibel
   // pre-connect screen. Lives outside the trading hooks because the
@@ -3523,6 +3528,8 @@ function FuturesPanel() {
     ? flashHook
     : dex === 'lighter'
     ? lighterHook
+    : dex === 'bulk'
+    ? bulkHook
     : pacificaHook;
   const {
     walletAddr, account, positions, orders, prices, markets, walletUsdc, spotUsdc, leverageSettings = {}, marginModes = {}, marginModeDetails = {}, dataReady, accountReady,
@@ -3604,7 +3611,7 @@ function FuturesPanel() {
     accountReady === false
     || (account == null && walletUsdc == null)
   );
-  const isSolanaDex = dex === 'pacifica' || dex === 'phoenix' || dex === 'gmtrade' || dex === 'flash';
+  const isSolanaDex = dex === 'pacifica' || dex === 'phoenix' || dex === 'gmtrade' || dex === 'flash' || dex === 'bulk';
   const [solanaWalletGrace, setSolanaWalletGrace] = useState(true);
   useEffect(() => {
     if (!isSolanaDex || hasWallet) {
@@ -4641,7 +4648,7 @@ function FuturesPanel() {
       const phoenixMarginPrice = dex === 'phoenix'
         ? (Number(currentPrice) > 0 ? Number(currentPrice) : tradePrice)
         : tradePrice;
-      const isCollateralDex = dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'gmtrade' || dex === 'flash';
+      const isCollateralDex = dex === 'avantis' || dex === 'bulk' || dex === 'decibel' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'gmtrade' || dex === 'flash';
       const attachedTpsl = resolveOpenTpslForSide(side);
       if (!attachedTpsl?.ok) return;
       if (attachedTpsl?.hasTpsl && orderType === 'limit' && !OPEN_TPSL_NATIVE_LIMIT_ATTACH_DEXES.has(dex)) {
@@ -4899,7 +4906,7 @@ function FuturesPanel() {
       // executes against whatever leverage was last persisted (e.g. 40× from
       // a previous session even though the slider shows 20×). Avantis/GMX
       // take leverage per-trade in the place-order call, so no pre-flush.
-      if (dex === 'pacifica' || dex === 'decibel' || dex === 'hotstuff' || dex === 'lighter') {
+      if (dex === 'pacifica' || dex === 'bulk' || dex === 'decibel' || dex === 'hotstuff' || dex === 'lighter') {
         if (levTimerRef.current) {
           clearTimeout(levTimerRef.current);
           levTimerRef.current = null;
@@ -5105,7 +5112,7 @@ function FuturesPanel() {
           </>
         )}
         <div style={{...S.symbolBarActions, ...(compactSymbolBar ? S.symbolBarActionsCompact : {}), gap: compactSymbolBar ? 4 : 8}}>
-          {dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'decibel' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'katana' || dex === 'gmtrade' || dex === 'flash' || dex === 'lighter' ? (
+          {dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'decibel' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'katana' || dex === 'gmtrade' || dex === 'flash' || dex === 'lighter' || dex === 'bulk' ? (
             // Read-only badge for venues where the production margin mode is
             // not user-toggleable in our integration.
             <div
@@ -5132,14 +5139,16 @@ function FuturesPanel() {
                 ? 'GMTrade uses isolated collateral per Solana position account'
                 : dex === 'lighter'
                 ? 'Lighter margin mode is managed through the Lighter account settings in this integration'
+                : dex === 'bulk'
+                ? 'Bulk cross margin and leverage are managed by your signed account settings'
                 : 'Avantis uses isolated margin per trade (no cross mode)'}
             >
-              <span style={{color: ((dex === 'decibel' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'katana' || dex === 'lighter') ? '#4CAF50' : '#FF9800'), fontWeight: 900}}>
+              <span style={{color: ((dex === 'decibel' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'katana' || dex === 'lighter' || dex === 'bulk') ? '#4CAF50' : '#FF9800'), fontWeight: 900}}>
                 {dex === 'gmtrade'
                   ? 'Isolated'
                   : (dex === 'decibel' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'katana')
                   ? 'Cross'
-                  : dex === 'lighter'
+                  : dex === 'lighter' || dex === 'bulk'
                   ? 'Cross'
                   : 'Isolated'}
               </span>
@@ -5805,7 +5814,37 @@ function FuturesPanel() {
             </button>
           </div>
           <div style={{...S.body, alignItems: 'center', justifyContent: 'center', gap: 20}}>
-            {dex === 'gmtrade' ? (
+            {dex === 'bulk' ? (
+              <>
+                <div style={{
+                  width: 170, height: 72, borderRadius: 16,
+                  background: '#1B1B18', border: '4px solid #383832',
+                  boxShadow: '0 5px 0 #11110F, 0 8px 16px rgba(0,0,0,0.25)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
+                }}>
+                  <img src={DEX_CONFIG.bulk.logo} alt="Bulk" style={{width: 158, height: 46, objectFit: 'cover'}} />
+                </div>
+                <div style={{color: '#5C3A21', fontSize: 18, fontWeight: 900, textAlign: 'center'}}>
+                  Connect your Solana wallet
+                </div>
+                <div style={{color: '#8a7252', fontSize: 12, fontWeight: 600, textAlign: 'center', maxWidth: 310, lineHeight: 1.45}}>
+                  Bulk is in closed beta. Connect the wallet you will fund on Bulk; Clash signs every action locally and never receives your private key.
+                </div>
+                {renderPrivyEmailButton('#383832', '#11110F')}
+                <button
+                  style={{...cartoonBtn('#383832', '#11110F'), padding: '14px 32px'}}
+                  onClick={openSolanaConnect}
+                >
+                  CONNECT SOLANA WALLET
+                </button>
+                <button
+                  style={{...cartoonBtn('#EAB308', '#A16207'), padding: '11px 24px'}}
+                  onClick={() => window.open('https://early.bulk.trade/deposit?ref=clashofperps', '_blank', 'noopener,noreferrer')}
+                >
+                  JOIN BULK WITH CLASH REFERRAL
+                </button>
+              </>
+            ) : dex === 'gmtrade' ? (
               <>
                 <div style={{
                   width: 80, height: 80, borderRadius: '50%',
@@ -6443,6 +6482,62 @@ function FuturesPanel() {
           onConnected={handleEvmConnected}
           targetChain={evmConnectChain}
         />
+      </>
+    );
+  }
+
+  // ==================== BULK BUILDER APPROVAL GATE ====================
+  if (dex === 'bulk' && hasWallet && setupVerified !== true) {
+    const isChecking = setupVerified === null || loading;
+    const isRunning = Boolean(activationStep);
+    return (
+      <>
+        <style>{animCSS}</style>
+        <div ref={panelRef} className={fullscreen ? 'futures-fullscreen' : ''} style={{
+          ...(fullscreen ? S.containerFull : S.container),
+          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '4px solid #d4c8b0' } : {}),
+          transform: (fullscreen || isMobile) ? undefined : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
+        }}>
+          <div style={S.header} onPointerDown={handlePointerDown}>
+            <span style={S.headerTitle}>Bulk setup</span>
+            <button data-nodrag onClick={handleClose} style={S.closeBtn}>×</button>
+          </div>
+          <div style={{...S.body, alignItems: 'center', justifyContent: 'center', gap: 18, padding: 28}}>
+            <div style={{width: 210, height: 82, borderRadius: 16, background: '#1B1B18', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center'}}>
+              <img src={DEX_CONFIG.bulk.logo} alt="Bulk" style={{width: 198, height: 58, objectFit: 'cover'}} />
+            </div>
+            <div style={{color: '#5C3A21', fontSize: 21, fontWeight: 900, textAlign: 'center'}}>
+              {isChecking ? 'Checking your Bulk account' : 'Approve Clash builder routing'}
+            </div>
+            <div style={{color: '#8a7252', fontSize: 13, fontWeight: 650, textAlign: 'center', maxWidth: 390, lineHeight: 1.5}}>
+              Bulk requires a one-time signed approval for the Clash builder address. Every later market or limit order is independently signed by this wallet and includes the same builder routing.
+            </div>
+            {error && !isChecking && (
+              <div style={{color: '#991B1B', background: '#FEE2E2', border: '2px solid #FCA5A5', borderRadius: 10, padding: '10px 14px', fontSize: 12, fontWeight: 750, maxWidth: 410}}>
+                {error}
+              </div>
+            )}
+            <button
+              disabled={isChecking || isRunning}
+              style={{...cartoonBtn(isChecking || isRunning ? '#A8A29E' : '#383832', isChecking || isRunning ? '#78716C' : '#11110F'), padding: '14px 30px', minWidth: 250}}
+              onClick={async () => {
+                const result = await registerBuilderCode?.();
+                if (result?.error) setLocalAlert(result.error);
+              }}
+            >
+              {isChecking ? 'CHECKING…' : isRunning ? 'SIGNING…' : 'APPROVE BUILDER & CONTINUE'}
+            </button>
+            <button
+              style={{...cartoonBtn('#EAB308', '#A16207'), padding: '11px 24px'}}
+              onClick={() => openReferralJoin?.()}
+            >
+              DEPOSIT WITH CLASH REFERRAL
+            </button>
+            <div style={{color: '#8a7252', fontSize: 11, fontWeight: 700, textAlign: 'center', maxWidth: 420, wordBreak: 'break-all'}}>
+              Builder: {builderConfig?.address || 'Drvzmh5iRfHRuKHgmm6Q77CqxhqvsXaLvrKkfMP8qci9'} · {builderConfig?.fee_bps || 1} bps
+            </div>
+          </div>
+        </div>
       </>
     );
   }
@@ -8699,18 +8794,18 @@ function FuturesPanel() {
             <div style={{flex: `0 0 ${chartPct}%`, maxWidth: `${chartPct}%`, minHeight: 0, overflow: 'hidden', position: 'relative'}}>
               <TradingViewWidget symbol={symbol} pythSymbol={currentMarket?.pyth_symbol} positions={positions} orders={displayOrders} currentPrice={currentPrice} chartOverlay={explainBadge} dex={dex} />
             </div>
-            {(dex === 'pacifica' || dex === 'phoenix') && (
+            {(dex === 'pacifica' || dex === 'phoenix' || dex === 'decibel' || dex === 'bulk') && (
               <>
                 {/* Drag handle: chart ↔ orderbook */}
                 <div style={S.dragHandleV} onMouseDown={dragChart} />
                 <div style={{flex: `0 0 ${obWidth}px`, minHeight: 0, overflow: 'hidden'}}>
-                  {/* OrderBook hits Pacifica's REST API directly. Avantis uses
-                      its own SDK (no public order book), Decibel pushes
-                      orderbook via WebSocket and we don't render that yet —
-                      gate strictly to Pacifica until those are wired. */}
+                  {/* Decibel paints an authenticated snapshot first, then
+                      follows its live depth WebSocket with key failover. */}
                   <OrderBook
                     symbol={symbol}
                     dex={dex}
+                    marketName={currentMarket?.market_name}
+                    marketAddr={currentMarket?.market_addr}
                     priceStep={orderBookStep}
                     onPriceStepChange={setOrderBookStep}
                     onTopOfBookChange={setTopOfBook}
@@ -9136,19 +9231,11 @@ function FuturesPanel() {
           const sym = o.symbol || o.s;
           const side = o.side || o.d;
           const price = orderDisplayPrice(o);
-          const rawAmt = o.initial_amount || o.amount || o.a;
-          const amt = parseFloat(rawAmt || 0) > 0 ? fmtAmount(rawAmt) : 'Full position';
           const type = orderDisplayType(o, positions);
           const priceLabel = orderPriceDetailLabel(o, type);
           const leverageValue = orderDisplayLeverage(o, leverageSettings[sym]);
-          const marginUsd = orderUsdValue(o.margin, o.margin_usd, o.marginUsd, o.collateral_usd, o.collateralUsd);
-          const notionalUsd = orderUsdValue(
-            o.notional_usd,
-            o.notionalUsd,
-            o.position_size_usd,
-            o.positionSizeUsd,
-            marginUsd != null && leverageValue != null ? marginUsd * leverageValue : null,
-          );
+          const metrics = orderCardMetrics(o, positions, price, leverageValue);
+          const amountLabel = formatOrderBaseAmount(metrics, sym);
           const isBid = orderPositionSide(o) === 'bid' || side === 'bid';
           const sideLabel = orderSideLabel(o);
           const isTP = type.includes('TAKE') || type.includes('TP');
@@ -9181,12 +9268,9 @@ function FuturesPanel() {
               </div>
               <div style={{...S.row, justifyContent: 'flex-start', flexWrap: 'wrap', gap: '4px 10px'}}>
                 <span style={S.detail}>{priceLabel}: {formatOrderPrice(price)}</span>
-                {marginUsd != null ? (
-                  <span style={S.detail}>Margin: {formatOrderUsd(marginUsd)}</span>
-                ) : (
-                  <span style={S.detail}>Amount: {amt}</span>
-                )}
-              {notionalUsd != null ? <span style={S.detail}>Size: {formatOrderUsd(notionalUsd)}</span> : null}
+                <span style={S.detail}>Amount: {amountLabel}</span>
+                {metrics.marginUsd != null ? <span style={S.detail}>Margin: {formatOrderUsd(metrics.marginUsd)}</span> : null}
+                {metrics.notionalUsd != null ? <span style={S.detail}>Size: {formatOrderUsd(metrics.notionalUsd)}</span> : null}
               {leverageValue != null ? <span style={S.detail}>Lev: {leverageValue}x</span> : null}
             </div>
             <AttachedTpslSummary order={o} />
@@ -10291,6 +10375,28 @@ function FuturesPanel() {
                   {loading ? '...' : 'Open Katana Deposit'}
                 </button>
               </div>
+            ) : dex === 'bulk' ? (
+              <div style={{display: 'flex', flexDirection: 'column', gap: 8}}>
+                <div style={{
+                  background: 'rgba(17,24,39,0.07)',
+                  border: '1px solid rgba(17,24,39,0.22)',
+                  borderRadius: 8,
+                  padding: '8px 10px',
+                  fontSize: 11,
+                  lineHeight: 1.4,
+                  color: '#5C3A21',
+                  fontWeight: 750,
+                }}>
+                  Bulk funding is currently handled by the closed-beta deposit page. The Clash referral is included automatically.
+                </div>
+                <button
+                  style={{...S.depositBtn, width: '100%', whiteSpace: 'nowrap', padding: '9px 10px'}}
+                  onClick={() => openReferralJoin?.()}
+                  disabled={loading}
+                >
+                  {loading ? '...' : 'Open Bulk Deposit'}
+                </button>
+              </div>
             ) : (
             <div style={{display: 'flex', gap: 6, alignItems: 'stretch'}}>
               {dex === 'risex' && (
@@ -10394,6 +10500,8 @@ function FuturesPanel() {
                 ? 'Opens GRVT deposit. Native in-game deposit needs GRVT bridge approval data or a GRVT-supported deposit-address API; the current builder API key is not enough for that.'
                 : dex === 'katana'
                 ? 'Opens Katana deposit. Katana deposits can be bridged from Arbitrum USDC through the official Stargate/Katana bridge flow.'
+                : dex === 'bulk'
+                ? 'Opens the Bulk closed-beta deposit page with the Clash referral code already applied.'
                 : dex === 'risex'
                 ? (
                   <>

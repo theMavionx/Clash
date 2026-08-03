@@ -10,6 +10,7 @@
     "watch": "node watch-export.js",
     "dev:all": "node watch-export.js & vite",
     "test:risex-signing": "node test-risex-signing.mjs",
+    "test:order-display": "node test-order-display-metrics.mjs",
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview"

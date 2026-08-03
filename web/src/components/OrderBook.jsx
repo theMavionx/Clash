@@ -1,8 +1,10 @@
 import { memo, useState, useEffect, useMemo, useRef } from 'react';
 import { createPhoenixPublicWsClient, phoenixSymbol } from '../lib/phoenixClient';
 import { PACIFICA_WS_URL, pacificaFetch } from '../lib/pacificaClient';
+import { startDecibelOrderBook } from '../lib/decibelOrderBook';
 
 const PRICE_STEPS = [0.01, 0.02, 0.1, 1];
+const FUTURES_API = import.meta.env.VITE_FUTURES_API || '/api/futures';
 
 function decimalsForStep(step) {
   const n = Number(step);
@@ -72,6 +74,14 @@ function normalizePhoenixBook(update) {
   };
 }
 
+function normalizeBulkBook(payload) {
+  const data = payload?.data || payload;
+  return {
+    bids: normalizePhoenixLevels(data?.bids),
+    asks: normalizePhoenixLevels(data?.asks),
+  };
+}
+
 function normalizePacificaBookPayload(payload) {
   const levels = payload?.data?.l || payload?.l;
   if (!Array.isArray(levels)) return null;
@@ -82,11 +92,57 @@ function normalizePacificaBookPayload(payload) {
   };
 }
 
-function OrderBook({ symbol = 'BTC', dex = 'pacifica', priceStep = 0.01, onPriceStepChange, onTopOfBookChange }) {
+function OrderBook({
+  symbol = 'BTC',
+  dex = 'pacifica',
+  marketName = '',
+  marketAddr = '',
+  priceStep = 0.01,
+  onPriceStepChange,
+  onTopOfBookChange,
+}) {
   const [book, setBook] = useState({ bids: [], asks: [] });
   const wsRef = useRef(null);
 
   useEffect(() => {
+    if (dex === 'bulk') {
+      let cancelled = false;
+      const controller = new AbortController();
+      const load = async () => {
+        try {
+          const params = new URLSearchParams({ dex: 'bulk', symbol, limit: '25' });
+          const response = await fetch(`${FUTURES_API}/orderbook?${params.toString()}`, { signal: controller.signal });
+          const json = await response.json().catch(() => null);
+          if (!response.ok) throw new Error(json?.detail || json?.error || `Bulk order book ${response.status}`);
+          if (!cancelled) setBook(normalizeBulkBook(json));
+        } catch (error) {
+          if (!cancelled && error?.name !== 'AbortError') console.warn('[Bulk] order book snapshot failed', error?.message || error);
+        }
+      };
+      load();
+      const timer = window.setInterval(load, 3_000);
+      return () => {
+        cancelled = true;
+        controller.abort();
+        window.clearInterval(timer);
+      };
+    }
+
+    if (dex === 'decibel') {
+      const stop = startDecibelOrderBook({
+        symbol,
+        marketName,
+        marketAddr,
+        onData: setBook,
+        onError: error => console.warn('[Decibel] order book stream failed', error?.message || error),
+      });
+      wsRef.current = stop;
+      return () => {
+        stop();
+        if (wsRef.current === stop) wsRef.current = null;
+      };
+    }
+
     if (dex === 'phoenix') {
       let cancelled = false;
       let flushTimer = null;
@@ -186,7 +242,7 @@ function OrderBook({ symbol = 'BTC', dex = 'pacifica', priceStep = 0.01, onPrice
       clearTimeout(throttleTimer);
       if (ws) { ws.onclose = null; ws.onerror = null; ws.close(); }
     };
-  }, [symbol, dex]);
+  }, [symbol, dex, marketName, marketAddr]);
 
   useEffect(() => {
     if (typeof onTopOfBookChange !== 'function') return;

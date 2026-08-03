@@ -124,6 +124,46 @@ db.exec(`
     updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
+  -- Persistent RISEx order attribution cache.  A PlaceOrder proof is shared
+  -- by every partial fill of the same order, and negative proofs (builder=0
+  -- or another builder) are just as important to cache as positive ones.
+  -- Without this table every earnings refresh re-reads the same chain log.
+  CREATE TABLE IF NOT EXISTS risex_order_builder_proofs (
+    order_id        TEXT NOT NULL,
+    market_id       INTEGER NOT NULL,
+    builder_id      INTEGER NOT NULL,
+    builder_fee_bps INTEGER NOT NULL,
+    fee_recipient   TEXT NOT NULL,
+    eligible        INTEGER NOT NULL CHECK (eligible IN (0, 1)),
+    reason          TEXT,
+    result_json     TEXT NOT NULL,
+    checked_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (order_id, market_id, builder_id, builder_fee_bps, fee_recipient)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_risex_builder_proofs_checked
+    ON risex_order_builder_proofs(checked_at);
+
+  CREATE TABLE IF NOT EXISTS bulk_order_builder_proofs (
+    order_id        TEXT PRIMARY KEY,
+    player_id       TEXT NOT NULL,
+    account         TEXT NOT NULL,
+    symbol          TEXT NOT NULL,
+    side            TEXT NOT NULL,
+    builder_address TEXT NOT NULL,
+    builder_fee_bps INTEGER NOT NULL,
+    nonce           TEXT NOT NULL,
+    action_index    INTEGER NOT NULL,
+    signature       TEXT NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'submitted',
+    response_json   TEXT,
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_bulk_builder_proofs_player_account
+    ON bulk_order_builder_proofs(player_id, account, created_at);
+
   CREATE TABLE IF NOT EXISTS gmtrade_pending_trade_reports (
     signature       TEXT PRIMARY KEY,
     player_id       TEXT NOT NULL,

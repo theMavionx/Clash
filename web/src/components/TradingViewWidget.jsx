@@ -206,6 +206,24 @@ function normalizePhoenixCandle(row) {
     : null;
 }
 
+function normalizeBulkCandle(row) {
+  if (!row) return null;
+  const next = {
+    time: unixSeconds(row.time ?? row.t ?? row.openTime ?? row.open_time ?? row.timestamp),
+    open: Number(row.open ?? row.o ?? row[1]),
+    high: Number(row.high ?? row.h ?? row[2]),
+    low: Number(row.low ?? row.l ?? row[3]),
+    close: Number(row.close ?? row.c ?? row[4]),
+  };
+  return next.time
+    && Number.isFinite(next.open)
+    && Number.isFinite(next.high)
+    && Number.isFinite(next.low)
+    && Number.isFinite(next.close)
+    ? next
+    : null;
+}
+
 function ostiumStreamPair(symbol) {
   const raw = String(symbol || '').toUpperCase().trim();
   if (!raw) return '';
@@ -544,7 +562,19 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
       const start = now - tf.ms;
       try {
         let candles = [];
-        if (dex === 'phoenix') {
+        if (dex === 'bulk') {
+          try {
+            const params = new URLSearchParams({ symbol, interval, limit: '500' });
+            const response = await fetch(`/api/futures/bulk/candles?${params.toString()}`);
+            const json = await response.json().catch(() => null);
+            if (!response.ok) throw new Error(json?.detail || json?.error || `Bulk candles ${response.status}`);
+            const rows = Array.isArray(json) ? json : Array.isArray(json?.data) ? json.data : [];
+            candles = rows.map(normalizeBulkCandle).filter(Boolean).sort((a, b) => a.time - b.time);
+          } catch {
+            candles = await loadPythCandles(tf, now, start).catch(() => []);
+          }
+          if (cancelled) return;
+        } else if (dex === 'phoenix') {
           try {
             const json = await phoenixFetch(phoenixCandlesRoute(symbol, { timeframe: interval, limit: 500 }));
             const rows = Array.isArray(json) ? json : Array.isArray(json?.data) ? json.data : Array.isArray(json?.value) ? json.value : [];

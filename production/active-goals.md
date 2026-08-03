@@ -7,7 +7,7 @@ Status legend: `active`, `blocked`, `done`, `paused`.
 
 ## G-001 PvP Arena Bots And Matchmaking
 
-- Status: active
+- Status: implemented locally; ready for owner-reviewed release
 - Priority: P0
 - Owner intent: normal players should win around 55-58% of PvP arena matches.
 - Core idea: if a player loses too much, match them with an easier bot/opponent; if they win too much, match them with a stronger bot/player.
@@ -345,6 +345,38 @@ Current checkpoint:
 - Owner authorized committing and pushing all current workspace changes on
   2026-08-02. Production deployment and production database mutation remain
   outside this request.
+
+## G-008 Bulk Trade Integration
+
+- Status: active
+- Priority: P0
+- Owner intent: add Bulk Trade as a complete self-custody Solana futures venue
+  before its closed beta opens, including Clash builder attribution and the
+  `clashofperps` referral deposit route.
+
+Scope:
+
+- Bulk v0.1.2 public market/account reads, order book and candles.
+- Browser Ed25519 signing for market, limit, cancel, leverage, TP/SL and builder
+  approval actions; no player private keys on Clash servers.
+- Builder recipient `Drvzmh5iRfHRuKHgmm6Q77CqxhqvsXaLvrKkfMP8qci9` on every
+  eligible order, with server-side signature and payload verification.
+- Verified fill import for gold, quests and tournament volume, scoped by account
+  and order id so counterparties cannot collide.
+- Bulk referral/deposit link, official branding, DEX picker and earnings snapshot.
+
+Current checkpoint:
+
+- Official v0.1.2 Rust/Python SDK and live mainnet read endpoints were audited.
+  The exact Bulk binary wire format, browser Ed25519 signing, builder approval,
+  per-order builder tuple, proof-gated fills, rewards/tournaments, earnings,
+  referral flow, DEX selection and trading UI are implemented locally.
+- Deterministic wire, adapter, signed-order/fill-attribution, earnings, schema and
+  tournament regression suites pass; the production web bundle builds and the
+  Bulk registration/login flow was visually verified in a local browser.
+- Live public market/ticker/candle reads work. A real funded account/order could
+  not be exercised while Bulk remains closed beta, and no production mutation,
+  commit, push or deployment is authorized by this goal.
 
 ## G-006 Dango Realtime Exchange Integration
 

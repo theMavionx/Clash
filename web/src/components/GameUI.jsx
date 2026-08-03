@@ -149,8 +149,18 @@ function VenuePickerOverlay({ isSolanaMobile, onPick }) {
                 }}
                 onClick={() => onPick(cfg.id)}
               >
-                <span style={venueStyles.logoWrap}>
-                  <img src={cfg.logo} alt={cfg.label} style={venueStyles.logo} />
+                <span style={{
+                  ...venueStyles.logoWrap,
+                  ...(cfg.id === 'bulk' ? venueStyles.bulkLogoWrap : null),
+                }}>
+                  <img
+                    src={cfg.logo}
+                    alt={cfg.label}
+                    style={{
+                      ...venueStyles.logo,
+                      ...(cfg.id === 'bulk' ? venueStyles.bulkLogo : null),
+                    }}
+                  />
                 </span>
                 <span style={venueStyles.cardText}>
                   <strong>{cfg.label}</strong>
@@ -632,6 +642,21 @@ const venueStyles = {
     maxHeight: 32,
     objectFit: 'contain',
     filter: 'drop-shadow(0 2px 0 rgba(0,0,0,0.35))',
+  },
+  // Bulk publishes a 2:1 wordmark rather than a square icon. Giving it a
+  // matching slot keeps the official mark legible instead of shrinking it
+  // into the square logo footprint used by the other venues.
+  bulkLogoWrap: {
+    width: 96,
+    height: 40,
+    overflow: 'hidden',
+  },
+  bulkLogo: {
+    width: 96,
+    height: 32,
+    maxWidth: 96,
+    maxHeight: 32,
+    objectFit: 'cover',
   },
   cardText: {
     display: 'flex',

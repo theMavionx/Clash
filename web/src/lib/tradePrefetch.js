@@ -356,6 +356,15 @@ function buildDexSpecificRequests({ dex, token, walletAddress, signal }) {
     return requests;
   }
 
+  if (dex === 'bulk') {
+    addPrefetchRequest(requests, futuresUrl('/bulk/config'), { headers, signal });
+    if (address) {
+      addPrefetchRequest(requests, futuresUrl(`/bulk/account?address=${encoded(address)}`), { headers, signal });
+      addPrefetchRequest(requests, futuresUrl(`/bulk/builder-status?address=${encoded(address)}`), { headers, signal });
+    }
+    return requests;
+  }
+
   if (dex === 'katana') {
     addPrefetchRequest(requests, futuresUrl('/katana/health'), { headers, signal });
     return requests;

@@ -86,9 +86,9 @@ function DexPicker({ onPick, isInFrame, isSolanaMobile }) {
                   src={cfg.logo}
                   alt={cfg.label}
                   style={{
-                    height: cfg.logoIsWordmark ? 24 : 28,
-                    width: 'auto',
-                    objectFit: 'contain',
+                    height: cfg.id === 'bulk' ? 32 : (cfg.logoIsWordmark ? 24 : 28),
+                    width: cfg.id === 'bulk' ? 110 : 'auto',
+                    objectFit: cfg.id === 'bulk' ? 'cover' : 'contain',
                     objectPosition: 'left center',
                     filter: 'drop-shadow(0 2px 0 rgba(0,0,0,0.35))',
                   }}
@@ -161,9 +161,9 @@ function DexBadge({ dex, onChange }) {
           src={cfg.logo}
           alt={cfg.label}
           style={{
-            height: cfg.logoIsWordmark ? 12 : 14,
-            width: 'auto',
-            objectFit: 'contain',
+            height: cfg.id === 'bulk' ? 15 : (cfg.logoIsWordmark ? 12 : 14),
+            width: cfg.id === 'bulk' ? 52 : 'auto',
+            objectFit: cfg.id === 'bulk' ? 'cover' : 'contain',
             filter: 'drop-shadow(0 1px 0 rgba(0,0,0,0.35))',
           }}
         />
@@ -275,8 +275,10 @@ function ContinueAccount({ wallet, name, error, onContinue }) {
 }
 
 function ConnectPacifica({ onOpenWalletModal, onPrivyLogin, privyEnabled, privyAuthed, dex = 'pacifica' }) {
-  const venue = dex === 'flash' ? 'FLASH TRADE' : dex === 'gmtrade' ? 'GMTRADE' : dex === 'phoenix' ? 'PHOENIX' : 'PACIFICA';
-  const connectCopy = dex === 'gmtrade'
+  const venue = dex === 'bulk' ? 'BULK' : dex === 'flash' ? 'FLASH TRADE' : dex === 'gmtrade' ? 'GMTRADE' : dex === 'phoenix' ? 'PHOENIX' : 'PACIFICA';
+  const connectCopy = dex === 'bulk'
+    ? 'Connect your Solana wallet to start playing. Bulk orders are signed by your own wallet, include the Clash builder code, and never expose your private key.'
+    : dex === 'gmtrade'
     ? 'Connect your Solana wallet to start playing. Please accept our referral code in Clash to receive a GMTrade fee discount. Trades are signed by your own wallet - we never hold your keys.'
     : dex === 'flash'
       ? 'Connect your Solana wallet to start playing. Flash Trade transactions are built by the Flash v2 transaction builder and signed by your own wallet - we never hold your keys.'
@@ -710,6 +712,7 @@ function RegisterPanel() {
     if (dex === 'lighter') return 'LIGHTER LOGIN';
     if (dex === 'gmtrade') return 'GMTRADE LOGIN';
     if (dex === 'flash') return 'FLASH TRADE LOGIN';
+    if (dex === 'bulk') return 'BULK LOGIN';
     if (dex === 'phoenix') return 'PHOENIX LOGIN';
     return 'PACIFICA LOGIN';
   })();

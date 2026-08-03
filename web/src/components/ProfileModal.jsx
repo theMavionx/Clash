@@ -18,6 +18,7 @@ import { useGrvt } from '../hooks/useGrvt';
 import { useKatana } from '../hooks/useKatana';
 import { useLighter } from '../hooks/useLighter';
 import { useOstium } from '../hooks/useOstium';
+import { useBulk } from '../hooks/useBulk';
 import { useDex, DEX_CONFIG } from '../contexts/DexContext';
 import { useFuturesMode } from '../contexts/FuturesModeContext';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
@@ -92,6 +93,7 @@ function ProfileModal({ onClose }) {
   const katanaHook = useKatana();
   const lighterHook = useLighter();
   const ostiumHook = useOstium();
+  const bulkHook = useBulk();
   const tradingHook = dex === 'avantis'
     ? avantisHook
     : dex === 'decibel'
@@ -120,6 +122,8 @@ function ProfileModal({ onClose }) {
     ? katanaHook
     : dex === 'lighter'
     ? lighterHook
+    : dex === 'bulk'
+    ? bulkHook
     : pacificaHook;
   const { account, walletAddr } = tradingHook;
   const [tradingStats, setTradingStats] = useState(null);
@@ -784,9 +788,9 @@ function ProfileModal({ onClose }) {
                     src={cfg.logo}
                     alt={cfg.label}
                     style={{
-                      height: cfg.logoIsWordmark ? 22 : 26,
-                      width: 'auto',
-                      objectFit: 'contain',
+                      height: cfg.id === 'bulk' ? 28 : (cfg.logoIsWordmark ? 22 : 26),
+                      width: cfg.id === 'bulk' ? 96 : 'auto',
+                      objectFit: cfg.id === 'bulk' ? 'cover' : 'contain',
                       filter: 'drop-shadow(0 2px 0 rgba(0,0,0,0.35))',
                     }}
                   />

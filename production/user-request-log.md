@@ -2831,3 +2831,45 @@ Follow-up:
 - **Scope:** Reduce direct touch-pan distance and release inertia, slightly reduce mouse-drag sensitivity for web pointer parity, and enforce bounded swipe distance in the Godot deploy regression.
 - **Production authorization:** The owner explicitly requested commit, push, and production deployment in the current conversation.
 - **Verification:** Run the real `TestMain.tscn` touch gesture at production camera zoom and the full Deploy repository gate before release.
+
+## UR-2026-08-03-BULK-TRADE-INTEGRATION
+
+- Timestamp: 2026-08-03 19:48 (Europe/Kyiv)
+- Request: fully integrate Bulk Trade using `bulk-client` v0.1.2, the Clash
+  builder address `Drvzmh5iRfHRuKHgmm6Q77CqxhqvsXaLvrKkfMP8qci9`, and the
+  referral deposit URL `https://early.bulk.trade/deposit?ref=clashofperps`;
+  include Bulk branding from an official online source and test everything
+  that is possible while the exchange remains in closed beta.
+- Scope: verify the published SDK/API and signing model; add Bulk as a complete
+  futures provider across account setup, deposits/referral, market/account
+  reads, orders, positions, fills, builder attribution, rewards/tournaments,
+  earnings/admin history, and React UI; use deterministic mocks for beta-gated
+  write paths and clearly report any live checks that Bulk's closed beta blocks.
+- Result: implemented locally against the version-pinned v0.1.2 protocol. Live
+  public reads return 20 markets and current BTC market data; exact wire/signing,
+  builder enforcement, proof-linked fill attribution, earnings/schema/tournament
+  regressions and the production web build pass. The Bulk picker and Solana login
+  were visually checked in-browser with the official v0.1.2 wordmark. No funded
+  beta order, production mutation, commit, push or deployment was performed.
+
+## UR-2026-08-03-ORDER-CARD-METRICS
+
+- Timestamp: 2026-08-03 20:53 (Europe/Kyiv)
+- Request: ensure order cards show the actual order amount, USD size and related
+  metrics consistently across every supported futures exchange instead of
+  incorrectly falling back to `Full position`.
+- Result: added venue-neutral amount/notional/margin derivation for all 18 DEX
+  schemas, position-size fallback only for genuine reduce-only full-position
+  orders, Phoenix `initialSizeLots` support, and human labels for numeric order
+  enums. Fixture tests, lint, production web build and 500px/360px visual layout
+  checks pass locally. No commit, push or production deployment was requested.
+
+## UR-2026-08-03-FUTURES-INTEGRATION-PRODUCTION-RELEASE
+
+- Timestamp: 2026-08-03 21:08 (Europe/Kyiv)
+- Request: "роби коміт всіх змін пуш і деплой на прод"
+- Scope: audit and commit the complete current `main` workspace, push it to
+  `origin/main`, run the repository Deploy gate, deploy with the canonical
+  atomic production workflow, and verify the live services and futures APIs.
+- Production authorization: the owner explicitly approved committing all
+  current workspace changes, pushing `main`, and deploying them to production.

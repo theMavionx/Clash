@@ -112,6 +112,7 @@ const FUTURES_TASK_DEXES = new Set([
   'gmtrade',
   'flash',
   'lighter',
+  'bulk',
 ]);
 
 function parseParams(p) {
@@ -536,7 +537,7 @@ function resolveWallet(player) {
 
 function walletMatchesDex(dex, wallet) {
   if (dex === 'decibel') return isAptosWallet(wallet);
-  if (dex === 'pacifica' || dex === 'phoenix' || dex === 'gmtrade' || dex === 'flash') return isSolanaWallet(wallet);
+  if (dex === 'pacifica' || dex === 'phoenix' || dex === 'gmtrade' || dex === 'flash' || dex === 'bulk') return isSolanaWallet(wallet);
   if (
     dex === 'avantis' ||
     dex === 'gmx' ||
@@ -577,7 +578,7 @@ function resolveWalletForDex(player, dex) {
   try {
     const chainType = normalizedDex === 'decibel'
       ? 'aptos'
-      : (normalizedDex === 'pacifica' || normalizedDex === 'phoenix' || normalizedDex === 'gmtrade' || normalizedDex === 'flash')
+      : (normalizedDex === 'pacifica' || normalizedDex === 'phoenix' || normalizedDex === 'gmtrade' || normalizedDex === 'flash' || normalizedDex === 'bulk')
         ? 'solana'
         : 'evm';
     const walletRow = db.db.prepare(
@@ -718,7 +719,7 @@ async function fetchWalletTrades(player, opts = {}) {
     // spend seconds in unrelated RPC backfills and make /tasks time out before
     // the freshly imported Lighter fills are counted.
     const forcedDex = requestedTaskDex(opts);
-    const dexes = opts.singleDex || dexFilter === 'lighter' || forcedDex
+    const dexes = opts.singleDex || dexFilter === 'lighter' || dexFilter === 'bulk' || forcedDex
       ? [dexFilter]
       : getTaskFuturesDexes(player, opts.dex);
     const batches = [];

@@ -60,7 +60,7 @@ const WALLET_AUTH_PROOF_TIMEOUT_MS = 20000;
 const WALLET_AUTH_ACTION = 'wallet-auth';
 const PRIVY_ENABLED = !!import.meta.env.VITE_PRIVY_APP_ID;
 const EVM_AUTH_DEXES = new Set(['avantis', 'gmx', 'ostium', 'monad', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'lighter']);
-const SOLANA_AUTH_DEXES = new Set(['pacifica', 'phoenix', 'gmtrade', 'flash']);
+const SOLANA_AUTH_DEXES = new Set(['pacifica', 'phoenix', 'gmtrade', 'flash', 'bulk']);
 // How long to wait for an auto-resolver to produce a candidate before
 // revealing the manual-connect CTAs. Keeps the spinner short when the
 // user isn't authenticated anywhere; keeps the "Joining…" UX intact when

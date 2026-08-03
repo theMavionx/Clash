@@ -1778,6 +1778,10 @@ const LIGHTER_BUILDER_FEE_BPS = Math.max(0, Number(
   || process.env.VITE_LIGHTER_BUILDER_FEE_BPS
   || 1,
 )) || 1;
+const BULK_BUILDER_ADDRESS = String(
+  process.env.BULK_BUILDER_ADDRESS || 'Drvzmh5iRfHRuKHgmm6Q77CqxhqvsXaLvrKkfMP8qci9',
+).trim();
+const BULK_BUILDER_FEE_BPS = Math.max(1, Math.min(15, Number(process.env.BULK_BUILDER_FEE_BPS || 1)));
 
 function readHotstuffLocalStats() {
   const Db = loadSqlite();
@@ -2005,7 +2009,137 @@ function readVerifiedFuturesDexStats(
   }
 }
 
-async function fetchRisexEarnings() {
+const RISEX_EARNINGS_REFRESH_MAX_WALLETS = Math.max(
+  1,
+  Math.min(200, Number(process.env.RISEX_EARNINGS_REFRESH_MAX_WALLETS) || 64),
+);
+const RISEX_EARNINGS_REFRESH_CONCURRENCY = Math.max(
+  1,
+  Math.min(12, Number(process.env.RISEX_EARNINGS_REFRESH_CONCURRENCY) || 8),
+);
+const RISEX_EARNINGS_REFRESH_BUDGET_MS = Math.max(
+  1_000,
+  Math.min(10_000, Number(process.env.RISEX_EARNINGS_REFRESH_BUDGET_MS) || 7_000),
+);
+let risexEarningsRefreshCursor = 0;
+let risexEarningsRefreshPromise = null;
+
+function listLinkedRisexAccounts(mainDb, feeRecipient) {
+  if (!mainDb) return [];
+  try {
+    const rows = mainDb.prepare(`
+      SELECT player_id, wallet_address, status, updated_at
+      FROM player_dex_accounts
+      WHERE dex = 'risex'
+        AND status = 'ready'
+        AND wallet_address IS NOT NULL
+        AND wallet_address != ''
+      ORDER BY CASE WHEN lower(wallet_address) = lower(?) THEN 0 ELSE 1 END,
+               updated_at DESC,
+               id DESC
+    `).all(feeRecipient);
+    const deduped = new Map();
+    for (const row of rows) {
+      const wallet = String(row?.wallet_address || '').trim().toLowerCase();
+      if (!/^0x[0-9a-f]{40}$/u.test(wallet) || deduped.has(wallet)) continue;
+      deduped.set(wallet, {
+        player_id: String(row.player_id),
+        wallet,
+        updated_at: row.updated_at || null,
+      });
+    }
+    return [...deduped.values()];
+  } catch (error) {
+    return [{ error: error?.message || String(error) }];
+  }
+}
+
+async function refreshRisexEarningsIndex({ mainDb, risex, feeRecipient }) {
+  const linked = listLinkedRisexAccounts(mainDb, feeRecipient);
+  if (!linked.length) {
+    return { attempted_wallets: 0, imported: 0, upgraded: 0, errors: 0, available_wallets: 0 };
+  }
+  if (linked[0]?.error) {
+    return {
+      attempted_wallets: 0,
+      imported: 0,
+      upgraded: 0,
+      errors: 1,
+      available_wallets: 0,
+      error: linked[0].error,
+    };
+  }
+  if (risexEarningsRefreshPromise) return risexEarningsRefreshPromise;
+
+  const recipient = linked.find(row => row.wallet === feeRecipient) || null;
+  const remaining = linked.filter(row => row !== recipient);
+  const capacity = Math.max(0, RISEX_EARNINGS_REFRESH_MAX_WALLETS - (recipient ? 1 : 0));
+  const rotated = remaining.length
+    ? [...remaining.slice(risexEarningsRefreshCursor), ...remaining.slice(0, risexEarningsRefreshCursor)]
+    : [];
+  const selected = [...(recipient ? [recipient] : []), ...rotated.slice(0, capacity)];
+  if (remaining.length && capacity > 0) {
+    risexEarningsRefreshCursor = (risexEarningsRefreshCursor + Math.min(capacity, remaining.length)) % remaining.length;
+  }
+
+  risexEarningsRefreshPromise = (async () => {
+    const startedAt = Date.now();
+    const summary = {
+      attempted_wallets: 0,
+      imported: 0,
+      upgraded: 0,
+      adopted: 0,
+      errors: 0,
+      available_wallets: linked.length,
+      deferred_wallets: Math.max(0, linked.length - selected.length),
+    };
+    const importAccount = account => risex.importFillsForPlayer(
+      account.player_id,
+      account.wallet,
+      {
+        attempts: 1,
+        limit: 250,
+        maxPages: 1,
+        timeoutMs: Math.min(3_500, RISEX_EARNINGS_REFRESH_BUDGET_MS),
+        verifyLegacy: false,
+      },
+    ).catch(error => ({ ok: false, error: error?.message || String(error) }));
+    const recordResults = (batch, results) => {
+      summary.attempted_wallets += batch.length;
+      for (const result of results) {
+        summary.imported += Number(result?.imported || 0);
+        summary.upgraded += Number(result?.upgraded || 0);
+        summary.adopted += Number(result?.adopted || 0);
+        if (result?.ok === false) summary.errors += 1;
+      }
+    };
+
+    // Refresh the fee-recipient account first and alone. A slow unrelated
+    // account must not delay the wallet most likely to contain builder fills.
+    let offset = 0;
+    if (recipient && selected[0] === recipient) {
+      recordResults([recipient], [await importAccount(recipient)]);
+      offset = 1;
+    }
+
+    for (; offset < selected.length; offset += RISEX_EARNINGS_REFRESH_CONCURRENCY) {
+      if (Date.now() - startedAt >= RISEX_EARNINGS_REFRESH_BUDGET_MS) {
+        summary.deferred_wallets += selected.length - offset;
+        break;
+      }
+      const batch = selected.slice(offset, offset + RISEX_EARNINGS_REFRESH_CONCURRENCY);
+      const results = await Promise.all(batch.map(importAccount));
+      recordResults(batch, results);
+    }
+    summary.duration_ms = Date.now() - startedAt;
+    return summary;
+  })().finally(() => {
+    risexEarningsRefreshPromise = null;
+  });
+  return risexEarningsRefreshPromise;
+}
+
+async function fetchRisexEarnings({ mainDb = null } = {}) {
   const risex = require('../server-futures/risex');
   const builderConfig = await risex.getClashBuilderConfig({ force: true });
   const builderId = Number(builderConfig?.builder_id || risex.RISEX_BUILDER_ID);
@@ -2036,6 +2170,18 @@ async function fetchRisexEarnings() {
     };
   }
 
+  // Refresh recent fills before reading the aggregate.  This is deliberately
+  // bounded so one slow RISEx wallet cannot hold the whole earnings dashboard.
+  // Existing legacy rows are skipped here; their old builder=0 history must
+  // not be relabelled merely because builder #10 is active today.
+  const [refresh, recipientBalance] = await Promise.all([
+    refreshRisexEarningsIndex({ mainDb, risex, feeRecipient }),
+    typeof risex.getBridgeSourceUsdcBalance === 'function'
+      ? risex.getBridgeSourceUsdcBalance(feeRecipient, { sourceChainId: 4153 })
+        .catch(error => ({ error: error?.message || String(error) }))
+      : Promise.resolve({ error: 'RISEx fee-recipient balance reader unavailable' }),
+  ]);
+
   // RISEx currently exposes builder registration and per-user approval, but
   // not a cumulative public builder-earnings endpoint. Every imported RISEx
   // fill carries the PlaceOrder log decoded from chain, including builder ID,
@@ -2061,8 +2207,16 @@ async function fetchRisexEarnings() {
   );
   const conventionalBps = builderFeePpm / 100;
   return {
-    earned_usd: local.earned_usd,
-    earned_24h_usd: local.earned_24h_usd,
+    // PlaceOrder + fill history proves attribution and volume, but RISEx does
+    // not publish the cumulative amount actually paid to the fee recipient.
+    // Keep this out of total exact earnings and expose it as an estimate.
+    earned_usd: 0,
+    earned_24h_usd: 0,
+    estimated_fee_usd: local.earned_usd,
+    estimated_fee_24h_usd: local.earned_24h_usd,
+    snapshot_value_kind: 'estimate',
+    snapshot_cumulative_usd: local.earned_usd,
+    exact_unavailable: true,
     currency: 'USDC (RISE)',
     address: feeRecipient,
     builder_id: builderId,
@@ -2076,12 +2230,17 @@ async function fetchRisexEarnings() {
     traders: local.traders,
     latest_fill_at: local.latest_fill_at,
     recent_proofs: local.recent_proofs,
+    fee_recipient_wallet_usdc: Number.isFinite(Number(recipientBalance?.balance_usdc))
+      ? Number(recipientBalance.balance_usdc)
+      : null,
+    fee_recipient_wallet_balance_error: recipientBalance?.error || null,
+    refresh,
     onchain_registered: true,
     api_indexed: builderConfig?.api_indexed === true,
     registry_source: builderConfig?.registry_source || 'risex_onchain',
-    model: 'risex_onchain_builder_verified_fills_exact',
+    model: 'risex_onchain_attributed_volume_estimate',
     source_detail: 'risex_builder_10_place_order_proof',
-    note: `Exact earnings from locally indexed RISEx fills whose on-chain PlaceOrder proof matches builder #${builderId}, ${feeRecipient}, and ${builderFeePpm} ppm (${conventionalBps} bps). RISEx does not currently expose a cumulative public builder-earnings endpoint, so fills not yet imported into Clash are not included.`,
+    note: `Estimated builder fee from $${local.volume_usd.toFixed(2)} of executed RISEx fills whose on-chain PlaceOrder proof matches builder #${builderId}, ${feeRecipient}, and ${builderFeePpm} ppm (${conventionalBps} bps). Calculation: attributed volume x ${conventionalBps} bps = $${local.earned_usd.toFixed(4)}. RISEx does not expose a cumulative public builder-earnings endpoint, so this is not labelled exact; Refresh imports recent fills from linked RISEx wallets before recalculating. The fee-recipient wallet's USDC balance is shown only as a control and is not counted as earnings.`,
   };
 }
 
@@ -2264,6 +2423,37 @@ async function fetchLighterEarnings() {
   };
 }
 
+async function fetchBulkEarnings() {
+  const expectedAddress = BULK_BUILDER_ADDRESS.replace(/'/g, "''");
+  const proofWhere = `
+    json_valid(COALESCE(proof_json, ''))
+    AND json_extract(proof_json, '$.source') = 'bulk_v0_1_2_signed_order'
+    AND CAST(json_extract(proof_json, '$.builder.verified') AS INTEGER) = 1
+    AND json_extract(proof_json, '$.builder.address') = '${expectedAddress}'
+    AND CAST(json_extract(proof_json, '$.builder.fee_bps') AS INTEGER) = ${BULK_BUILDER_FEE_BPS}
+  `;
+  const local = readVerifiedFuturesDexStats('bulk', 'bulk_builder_signed', { rowWhere: proofWhere });
+  const estimated = local.volume_usd * (BULK_BUILDER_FEE_BPS / 10000);
+  return {
+    earned_usd: 0,
+    currency: 'USDC (Bulk/Solana)',
+    address: BULK_BUILDER_ADDRESS,
+    volume_usd: local.volume_usd,
+    volume_24h_usd: local.volume_24h_usd,
+    trades: local.trades,
+    trades_24h: local.trades_24h,
+    traders: local.traders,
+    estimated_fee_usd: roundUsd(estimated),
+    builder_fee_bps: BULK_BUILDER_FEE_BPS,
+    builder_fee_pct: BULK_BUILDER_FEE_BPS / 100,
+    latest_fill_at: local.latest_fill_at,
+    recent_proofs: local.recent_proofs,
+    model: 'bulk_signed_builder_volume_estimate',
+    source_detail: 'bulk_v0_1_2_signed_order_proof',
+    note: `Bulk fills count only when their stored v0.1.2 signed-order proof matches ${BULK_BUILDER_ADDRESS} at ${BULK_BUILDER_FEE_BPS} bps. Bulk does not expose cumulative public builder earnings during closed beta, so $${roundUsd(estimated).toFixed(4)} is shown as an estimate and is not added to exact total earned.`,
+  };
+}
+
 // Revenue analytics for admin: fast local stats by time window and by
 // tournament. Exact cumulative readers above stay authoritative where a DEX
 // exposes them; this section focuses on comparable volume x rate reporting.
@@ -2285,6 +2475,7 @@ const ANALYTICS_DEXES = [
   { key: 'gmtrade', label: 'GMTrade' },
   { key: 'flash', label: 'Flash Trade' },
   { key: 'lighter', label: 'Lighter' },
+  { key: 'bulk', label: 'Bulk' },
 ];
 
 const ANALYTICS_WINDOWS = [
@@ -2353,6 +2544,7 @@ function tradeSourceWhereForAnalytics(dex) {
   if (dex === 'gmtrade') return "verified_source IN ('gmtrade_tx', 'gmtrade_position_after_tx', 'gmtrade_close_tx_client_notional')";
   if (dex === 'flash') return "verified_source = 'flash_tx'";
   if (dex === 'lighter') return "verified_source = 'lighter_integrator'";
+  if (dex === 'bulk') return tradeRecon.verifiedSourceClauseForDex('bulk');
   if (dex === 'phoenix') return "verified_source IN ('worker', 'tx')";
   if (dex === 'gmx') return "verified_source IN ('worker', 'client', 'server')";
   if (dex === 'ostium') return "verified_source = 'ostium_api'";
@@ -2545,6 +2737,19 @@ function revenueModelForDex(dex, dateForRate = null) {
       integrator_account_index: LIGHTER_INTEGRATOR_ACCOUNT_INDEX,
       model: bps > 0 ? 'single_builder_fee' : 'builder_fee_not_configured',
       source_detail: bps > 0 ? 'local_volume_x_lighter_bps' : 'lighter_integrator_not_configured',
+    };
+  }
+  if (dex === 'bulk') {
+    const bps = BULK_BUILDER_FEE_BPS;
+    return {
+      configured: true,
+      rate: bps / 10000,
+      rate_label: `${bps} bps signed builder estimate`,
+      builder_fee_bps: bps,
+      builder_fee_pct: bps / 100,
+      address: BULK_BUILDER_ADDRESS,
+      model: 'bulk_signed_builder_volume_estimate',
+      source_detail: 'bulk_v0_1_2_signed_order_proof',
     };
   }
   if (dex === 'hibachi') {
@@ -2936,6 +3141,10 @@ const FAILED_EARNINGS_META = {
     builder_id: 10,
     currency: 'USDC (RISE)',
   },
+  bulk: {
+    address: BULK_BUILDER_ADDRESS,
+    currency: 'USDC (Bulk/Solana)',
+  },
 };
 
 const EARNINGS_READER_CONFIG = {
@@ -2948,7 +3157,7 @@ const EARNINGS_READER_CONFIG = {
   monad: { source: 'perpl_builder_fee_not_configured', read: () => fetchPerplEarnings() },
   hyperliquid: { source: 'hyperliquid_referral_builder_rewards', read: () => fetchHyperliquidEarnings() },
   grvt: { source: 'grvt_builder_fill_history', read: () => fetchGrvtEarnings() },
-  risex: { source: 'risex_builder_10_place_order_proof', read: () => fetchRisexEarnings() },
+  risex: { source: 'risex_builder_10_place_order_proof', read: ({ mainDb }) => fetchRisexEarnings({ mainDb }) },
   nado: { source: 'nado_indexer_match_builder_fee', read: () => fetchNadoEarnings() },
   hotstuff: { source: 'hotstuff_api_fills_broker_fee', read: () => fetchHotstuffEarnings() },
   hibachi: { source: 'hibachi_api_activity_builder_fee_unverified', read: () => fetchHibachiEarnings() },
@@ -2956,6 +3165,7 @@ const EARNINGS_READER_CONFIG = {
   gmtrade: { source: 'gmtrade_verified_tx_local_estimate', read: () => fetchGmtradeEarnings() },
   flash: { source: 'flash_v2_verified_tx_local_estimate', read: () => fetchFlashEarnings() },
   lighter: { source: 'lighter_integrator_fills_fee_sum', read: () => fetchLighterEarnings() },
+  bulk: { source: 'bulk_v0_1_2_signed_order_proof', read: () => fetchBulkEarnings() },
 };
 
 const EARNINGS_DEX_ORDER = [
@@ -2976,6 +3186,7 @@ const EARNINGS_DEX_ORDER = [
   'gmtrade',
   'flash',
   'lighter',
+  'bulk',
 ];
 
 const EARNINGS_DEX_ALIASES = {
@@ -3016,6 +3227,7 @@ function ensureEarningsSnapshots(mainDb) {
       bucket_utc TEXT NOT NULL,
       captured_at TEXT NOT NULL,
       cumulative_earned_usd REAL NOT NULL CHECK(cumulative_earned_usd >= 0),
+      value_kind TEXT NOT NULL DEFAULT 'exact' CHECK(value_kind IN ('exact', 'estimate')),
       currency TEXT,
       source TEXT,
       source_detail TEXT,
@@ -3028,6 +3240,11 @@ function ensureEarningsSnapshots(mainDb) {
     CREATE INDEX IF NOT EXISTS idx_earnings_snapshots_captured
       ON earnings_snapshots(captured_at);
   `);
+  try { mainDb.exec("ALTER TABLE earnings_snapshots ADD COLUMN value_kind TEXT NOT NULL DEFAULT 'exact'"); } catch {}
+  // RISEx has never exposed a cumulative payout endpoint. Historical rows
+  // were attributed-volume fee estimates even when the old UI called them
+  // exact, so preserve their deltas while correcting their classification.
+  try { mainDb.exec("UPDATE earnings_snapshots SET value_kind = 'estimate' WHERE dex = 'risex'"); } catch {}
 }
 
 function earningsSnapshotIso(value = new Date()) {
@@ -3052,6 +3269,21 @@ function earningsSnapshotEligible(row) {
     && row.exact_unavailable !== true;
 }
 
+function earningsSnapshotValue(dex, row) {
+  const requestedKind = String(row?.snapshot_value_kind || '').toLowerCase();
+  if (requestedKind === 'estimate') {
+    const cumulative = Number(row?.snapshot_cumulative_usd ?? row?.estimated_fee_usd);
+    return row?.ok === true
+      && Number.isFinite(cumulative)
+      && cumulative >= 0
+      && row?.stale !== true
+      ? { cumulative, valueKind: 'estimate' }
+      : null;
+  }
+  if (!earningsSnapshotEligible(row)) return null;
+  return { cumulative: Number(row.earned_usd), valueKind: 'exact' };
+}
+
 function recordEarningsSnapshots(mainDb, rows, capturedAt = new Date()) {
   if (!mainDb || !rows) return { recorded: 0, skipped: EARNINGS_DEX_ORDER.length };
   ensureEarningsSnapshots(mainDb);
@@ -3060,11 +3292,12 @@ function recordEarningsSnapshots(mainDb, rows, capturedAt = new Date()) {
   const insert = mainDb.prepare(`
     INSERT INTO earnings_snapshots (
       dex, bucket_utc, captured_at, cumulative_earned_usd,
-      currency, source, source_detail, model, metadata_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      value_kind, currency, source, source_detail, model, metadata_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(dex, bucket_utc) DO UPDATE SET
       captured_at = excluded.captured_at,
       cumulative_earned_usd = excluded.cumulative_earned_usd,
+      value_kind = excluded.value_kind,
       currency = excluded.currency,
       source = excluded.source,
       source_detail = excluded.source_detail,
@@ -3076,7 +3309,8 @@ function recordEarningsSnapshots(mainDb, rows, capturedAt = new Date()) {
   mainDb.transaction(() => {
     for (const dex of EARNINGS_DEX_ORDER) {
       const row = rows[dex];
-      if (!earningsSnapshotEligible(row)) {
+      const snapshot = earningsSnapshotValue(dex, row);
+      if (!snapshot) {
         skipped += 1;
         continue;
       }
@@ -3090,7 +3324,8 @@ function recordEarningsSnapshots(mainDb, rows, capturedAt = new Date()) {
         dex,
         bucketUtc,
         capturedIso,
-        Number(row.earned_usd),
+        snapshot.cumulative,
+        snapshot.valueKind,
         row.currency || null,
         row.source || null,
         row.source_detail || null,
@@ -3117,6 +3352,7 @@ function summarizeEarningsSnapshotDex(dex, rows, nowMs, days) {
       ...row,
       captured_ms: Date.parse(row.captured_at),
       cumulative_earned_usd: safeNumber(row.cumulative_earned_usd),
+      value_kind: String(row.value_kind || 'exact') === 'estimate' ? 'estimate' : 'exact',
     }))
     .filter((row) => Number.isFinite(row.captured_ms) && row.captured_ms <= nowMs)
     .sort((a, b) => a.captured_ms - b.captured_ms || safeNumber(a.id) - safeNumber(b.id));
@@ -3140,6 +3376,7 @@ function summarizeEarningsSnapshotDex(dex, rows, nowMs, days) {
     const windowDeltas = deltas.filter((row) => row.captured_ms > cutoffMs);
     return {
       earned_usd: roundUsd(windowDeltas.reduce((sum, row) => sum + row.earned_usd, 0)),
+      value_kind: timeline[timeline.length - 1]?.value_kind || 'exact',
       snapshot_count: samples.length,
       reset_count: windowDeltas.filter((row) => row.reset).length,
       baseline_at: baseline?.captured_at || null,
@@ -3160,6 +3397,7 @@ function summarizeEarningsSnapshotDex(dex, rows, nowMs, days) {
       reset_count: 0,
       closing_cumulative_usd: null,
       last_snapshot_at: null,
+      value_kind: 'exact',
     });
   }
   for (const row of timeline) {
@@ -3167,6 +3405,7 @@ function summarizeEarningsSnapshotDex(dex, rows, nowMs, days) {
     const daily = dailyByDate.get(date);
     if (!daily) continue;
     daily.snapshot_count += 1;
+    daily.value_kind = row.value_kind;
     daily.closing_cumulative_usd = roundUsd(row.cumulative_earned_usd);
     daily.last_snapshot_at = row.captured_at;
   }
@@ -3189,6 +3428,7 @@ function summarizeEarningsSnapshotDex(dex, rows, nowMs, days) {
     source: latest?.source || null,
     source_detail: latest?.source_detail || null,
     currency: latest?.currency || null,
+    value_kind: latest?.value_kind || 'exact',
     stored_snapshot_count: timeline.length,
     daily: Array.from(dailyByDate.values()),
   };
@@ -3205,9 +3445,9 @@ function readEarningsSnapshotHistory(mainDb, { days = EARNINGS_SNAPSHOT_HISTORY_
     days: clampedDays,
     generated_at: nowIso,
     windows: {
-      d1: { earned_usd: 0, snapshot_count: 0 },
-      d7: { earned_usd: 0, snapshot_count: 0 },
-      d30: { earned_usd: 0, snapshot_count: 0 },
+      d1: { earned_usd: 0, estimated_usd: 0, snapshot_count: 0 },
+      d7: { earned_usd: 0, estimated_usd: 0, snapshot_count: 0 },
+      d30: { earned_usd: 0, estimated_usd: 0, snapshot_count: 0 },
     },
     dexes: {},
     daily: [],
@@ -3236,8 +3476,9 @@ function readEarningsSnapshotHistory(mainDb, { days = EARNINGS_SNAPSHOT_HISTORY_
     const summary = summarizeEarningsSnapshotDex(key, rows, nowMs, clampedDays);
     empty.dexes[key] = summary;
     for (const windowKey of ['d1', 'd7', 'd30']) {
-      empty.windows[windowKey].earned_usd = roundUsd(
-        empty.windows[windowKey].earned_usd + summary[windowKey].earned_usd,
+      const target = summary[windowKey].value_kind === 'estimate' ? 'estimated_usd' : 'earned_usd';
+      empty.windows[windowKey][target] = roundUsd(
+        empty.windows[windowKey][target] + summary[windowKey].earned_usd,
       );
       empty.windows[windowKey].snapshot_count += summary[windowKey].snapshot_count;
     }

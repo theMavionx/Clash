@@ -92,6 +92,18 @@ try {
   assert.strictEqual(conflict.credited_rows, 0);
   assert.strictEqual(conflict.updated_rows, 0);
 
+  db.db.prepare(`
+    UPDATE tournament_participants SET left_at = '2026-07-16 00:00:00'
+    WHERE tournament_id = ? AND player_id = 'a'
+  `).run(tournamentId);
+  const afterLeave = db.recordTournamentTradeRows('a', [{
+    id: 'fill-after-leave',
+    dex: 'ostium',
+    notional_usd: 999,
+    created_at: '2026-07-17 00:00:00',
+  }], { tournamentId, source: 'trade_history' });
+  assert.strictEqual(afterLeave.credited_rows, 0, 'historical reconciliation stops at participant left_at');
+
   const participant = db.db.prepare(`
     SELECT trades_count, volume_usd, pnl_usd
     FROM tournament_participants WHERE tournament_id = ? AND player_id = 'a'

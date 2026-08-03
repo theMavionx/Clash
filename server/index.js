@@ -1545,6 +1545,7 @@ function renderPlayers() {
   const gmtCount    = players.filter(p => p.dex === 'gmtrade').length;
   const flsCount    = players.filter(p => p.dex === 'flash').length;
   const ltrCount    = players.filter(p => p.dex === 'lighter').length;
+  const blkCount    = players.filter(p => p.dex === 'bulk').length;
   const katCount   = players.filter(p => p.dex === 'katana').length;
   const noDex      = players.filter(p => !p.dex).length;
   // Heartbeat-based presence — counted client-side from /admin/players
@@ -1574,6 +1575,7 @@ function renderPlayers() {
     '<div class="stat" style="border-color:#0f766e"><div class="v" style="color:#5eead4;font-size:22px">' + gmtCount + '</div><div class="l">GMTrade</div></div>' +
     '<div class="stat" style="border-color:#eab308"><div class="v" style="color:#fde047;font-size:22px">' + flsCount + '</div><div class="l">Flash</div></div>' +
     '<div class="stat" style="border-color:#38bdf8"><div class="v" style="color:#7dd3fc;font-size:22px">' + ltrCount + '</div><div class="l">Lighter</div></div>' +
+    '<div class="stat" style="border-color:#e5e7eb"><div class="v" style="color:#f8fafc;font-size:22px">' + blkCount + '</div><div class="l">Bulk</div></div>' +
     (noDex > 0 ? '<div class="stat"><div class="v" style="font-size:18px;color:#9ca3af">' + noDex + '</div><div class="l">No DEX set</div></div>' : '') +
     '<div class="stat"><div class="v">' + shielded + '</div><div class="l">Shielded</div></div>' +
     '<div class="stat"><div class="v">' + players.reduce((s,p) => s + p.buildings_count, 0) + '</div><div class="l">Buildings</div></div>' +
@@ -1598,6 +1600,7 @@ function renderPlayers() {
     if (d === 'gmtrade') return '<span class="badge" style="background:#0f766e;color:#ccfbf1">GMT</span>';
     if (d === 'flash') return '<span class="badge" style="background:#713f12;color:#fef3c7">FLS</span>';
     if (d === 'lighter') return '<span class="badge" style="background:#0c4a6e;color:#bae6fd">LTR</span>';
+    if (d === 'bulk') return '<span class="badge" style="background:#111827;color:#f8fafc">BLK</span>';
     return '<span class="badge badge-off">—</span>';
   }
   function statusBadge(p) {
@@ -2722,6 +2725,7 @@ async function loadStats() {
     const gmtCount = (byDex.find(x => x.dex === 'gmtrade') || {}).n || 0;
     const flsCount = (byDex.find(x => x.dex === 'flash') || {}).n || 0;
     const ltrCount = (byDex.find(x => x.dex === 'lighter') || {}).n || 0;
+    const blkCount = (byDex.find(x => x.dex === 'bulk') || {}).n || 0;
     const noneCount = (byDex.find(x => x.dex === 'unknown') || {}).n || 0;
     const pacRew = rewardsMap.pacifica || {};
     const avtRew = rewardsMap.avantis  || {};
@@ -2740,6 +2744,7 @@ async function loadStats() {
     const gmtRew = rewardsMap.gmtrade || {};
     const flsRew = rewardsMap.flash || {};
     const ltrRew = rewardsMap.lighter || {};
+    const blkRew = rewardsMap.bulk || {};
     document.getElementById('dexStats').innerHTML =
       dexCard('pacifica', 'Pacifica · Solana', '#7C3AED', pacCount, pacRew.total_gold || 0, pacRew.total_volume || 0, activityLines('pacifica')) +
       dexCard('avantis',  'Avantis · Base',    '#0EA5E9', avtCount, avtRew.total_gold || 0, avtRew.total_volume || 0, activityLines('avantis')) +
@@ -2758,6 +2763,7 @@ async function loadStats() {
       dexCard('gmtrade',   'GMTrade',           '#0f766e', gmtCount, gmtRew.total_gold || 0, gmtRew.total_volume || 0, activityLines('gmtrade')) +
       dexCard('flash',     'Flash Trade',       '#eab308', flsCount, flsRew.total_gold || 0, flsRew.total_volume || 0, activityLines('flash')) +
       dexCard('lighter',   'Lighter',           '#38bdf8', ltrCount, ltrRew.total_gold || 0, ltrRew.total_volume || 0, activityLines('lighter')) +
+      dexCard('bulk',      'Bulk',              '#e5e7eb', blkCount, blkRew.total_gold || 0, blkRew.total_volume || 0, activityLines('bulk')) +
       (noneCount > 0 ? '<div style="flex:1;min-width:180px;background:#1f2937;border:1px dashed #6b7280;border-radius:12px;padding:16px;display:flex;align-items:center;justify-content:center"><div style="text-align:center"><div style="font-size:28px;font-weight:800;color:#9ca3af">' + noneCount + '</div><div style="font-size:11px;color:#6b7280;margin-top:4px">No DEX set<br/>(legacy accounts)</div></div></div>' : '');
 
     const grvtBuilder = dex.grvt_builder || {};
@@ -2940,6 +2946,7 @@ async function loadStats() {
       if (d === 'gmtrade') return '<span class="badge" style="background:#0f766e;color:#ccfbf1">GMT</span>';
       if (d === 'flash') return '<span class="badge" style="background:#713f12;color:#fef3c7">FLS</span>';
       if (d === 'lighter') return '<span class="badge" style="background:#0c4a6e;color:#bae6fd">LTR</span>';
+      if (d === 'bulk') return '<span class="badge" style="background:#111827;color:#f8fafc">BLK</span>';
       return '<span class="badge badge-off">—</span>';
     }
     document.getElementById('topPlayersBody').innerHTML = (s.topPlayers||[]).map(p =>
@@ -3193,6 +3200,7 @@ const TOURNAMENT_DEX_LABELS_ADMIN = {
   gmtrade: 'GMTrade',
   flash: 'Flash Trade',
   lighter: 'Lighter',
+  bulk: 'Bulk',
 };
 const TOURNAMENT_TEAM_METRIC_LABELS_ADMIN = {
   volume_usd: 'Volume',
@@ -4482,6 +4490,7 @@ function renderRevenueAnalytics(data) {
     { key: 'gmtrade', label: 'GMTrade' },
     { key: 'flash', label: 'Flash Trade' },
     { key: 'lighter', label: 'Lighter' },
+    { key: 'bulk', label: 'Bulk' },
   ];
   const windowKeys = ['24h', '7d', '30d', 'all'];
   const revenueCell = (row) => {
@@ -4565,13 +4574,14 @@ async function loadEarnings(force) {
       ['gmtrade',  'GMTrade',  '#5eead4', '#0f766e'],
       ['flash',    'Flash Trade', '#fde047', '#eab308'],
       ['lighter',  'Lighter',  '#7dd3fc', '#38bdf8'],
+      ['bulk',     'Bulk',     '#f8fafc', '#111827'],
     ];
     const total = Number(data.total_usd) || 0;
     const snapshotHistory = data.snapshot_history || {};
     const snapshotDexes = snapshotHistory.dexes || {};
     const snapshotWindows = snapshotHistory.windows || {};
     const snapshotUsd = (window) => window && Number(window.snapshot_count) > 0
-      ? '$' + Number(window.earned_usd || 0).toFixed(4)
+      ? (window.value_kind === 'estimate' ? '~$' : '$') + Number(window.earned_usd || 0).toFixed(4)
       : '—';
     document.getElementById('earningsTotals').innerHTML =
       '<div class="stat" style="min-width:200px"><div class="v">$' + total.toFixed(2) + '</div><div class="l">Total net earned</div></div>' +
@@ -4596,8 +4606,8 @@ async function loadEarnings(force) {
       .map((row) => '<tr>' +
         '<td class="mono">' + esc(row.date || '') + '</td>' +
         '<td>' + esc(String(row.dex || '').toUpperCase()) + '</td>' +
-        '<td style="color:#4ade80;font-weight:700">$' + Number(row.earned_usd || 0).toFixed(4) + '</td>' +
-        '<td>$' + Number(row.closing_cumulative_usd || 0).toFixed(4) + '</td>' +
+        '<td style="color:#4ade80;font-weight:700">' + (row.value_kind === 'estimate' ? '~$' : '$') + Number(row.earned_usd || 0).toFixed(4) + '</td>' +
+        '<td>' + (row.value_kind === 'estimate' ? '~$' : '$') + Number(row.closing_cumulative_usd || 0).toFixed(4) + '</td>' +
         '<td>' + Number(row.snapshot_count || 0).toLocaleString() + '</td>' +
         '<td>' + Number(row.reset_count || 0).toLocaleString() + '</td>' +
         '</tr>')
@@ -4606,12 +4616,31 @@ async function loadEarnings(force) {
       const d = data[k] || {};
       const snapshot = snapshotDexes[k] || {};
       const ok = d.ok;
-      const v = ok && Number.isFinite(d.earned_usd) ? '$' + d.earned_usd.toFixed(4) : '—';
+      const risexEstimate = d.model === 'risex_onchain_attributed_volume_estimate'
+        && Number.isFinite(Number(d.estimated_fee_usd));
+      const displayedEarnings = risexEstimate ? Number(d.estimated_fee_usd) : Number(d.earned_usd);
+      const v = ok && Number.isFinite(displayedEarnings) ? '$' + displayedEarnings.toFixed(4) : '—';
+      const valueKindLine = risexEstimate
+        ? '<div style="font-size:10px;color:#fbbf24;font-weight:700;text-transform:uppercase;letter-spacing:.4px">on-chain attributed estimate</div>'
+        : '';
       const addrLine = ok && d.address
         ? '<code class="mono" style="color:#94a3b8;font-size:10px">' + esc(d.address.slice(0, 10) + '…' + d.address.slice(-4)) + '</code>'
         : '';
       const subLine = (() => {
         if (!ok) return '';
+        if (d.model === 'risex_onchain_attributed_volume_estimate') {
+          const refresh = d.refresh || {};
+          const synced = Number(refresh.imported || 0) + Number(refresh.upgraded || 0);
+          const refreshText = Number(refresh.attempted_wallets || 0) > 0
+            ? ' / refreshed ' + Number(refresh.attempted_wallets) + ' wallet(s)' + (synced > 0 ? ', +' + synced + ' fill(s)' : '')
+            : '';
+          const walletControl = Number.isFinite(Number(d.fee_recipient_wallet_usdc))
+            ? ' / fee wallet $' + Number(d.fee_recipient_wallet_usdc).toFixed(4) + ' USDC'
+            : '';
+          return '<span style="color:#9ca3af;font-size:11px">builder #' + esc(String(d.builder_id || ''))
+            + ' / ' + Number(d.trades || 0) + ' verified fill(s) / $' + Number(d.volume_usd || 0).toFixed(2)
+            + ' attributed vol x ' + Number(d.builder_fee_pct || 0) + '%' + walletControl + refreshText + '</span>';
+        }
         if (d.model === 'onchain_collateral_transfers') {
           const transfers = Number(d.transfer_events || 0);
           const estimate = Number.isFinite(Number(d.estimated_fee_usd))
@@ -4704,6 +4733,7 @@ async function loadEarnings(force) {
         +   '<div style="font-size:11px;color:#6b7280">' + esc(d.currency || '') + '</div>'
         + '</div>'
         + '<div style="font-size:28px;font-weight:800;color:' + color + '">' + v + '</div>'
+        + valueKindLine
         + '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:10px">'
         +   '<div style="background:#0f172a;padding:7px;text-align:center;border-radius:6px"><small style="color:#6b7280">24h</small><br><strong>' + snapshotUsd(snapshot.d1) + '</strong></div>'
         +   '<div style="background:#0f172a;padding:7px;text-align:center;border-radius:6px"><small style="color:#6b7280">7d</small><br><strong>' + snapshotUsd(snapshot.d7) + '</strong></div>'

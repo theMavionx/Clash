@@ -1036,6 +1036,14 @@ function firstFinite(...values) {
   return null;
 }
 
+function firstNonZeroFinite(...values) {
+  for (const value of values) {
+    const n = finiteNumber(value);
+    if (n != null && n !== 0) return n;
+  }
+  return null;
+}
+
 function tokenAmountValue(value) {
   if (value == null) return null;
   if (typeof value === 'number' || typeof value === 'string' || typeof value === 'bigint') {
@@ -1967,26 +1975,32 @@ function phoenixOrderPriceUsd(order, market) {
 
 function phoenixOrderSizeUnits(order, market) {
   const lotDecimals = Number(market?._phoenixBaseLotsDecimals ?? 4);
-  const lots = firstFinite(
+  const lots = firstNonZeroFinite(
     order?.sizeRemainingLots,
     order?.size_remaining_lots,
+    order?.initialSizeLots,
+    order?.initial_size_lots,
     order?.tradeSizeRemainingLots,
     order?.trade_size_remaining_lots,
     order?._raw?.sizeRemainingLots,
     order?._raw?.size_remaining_lots,
+    order?._raw?.initialSizeLots,
+    order?._raw?.initial_size_lots,
     order?._raw?.tradeSizeRemainingLots,
     order?._raw?.trade_size_remaining_lots,
   );
-  return firstFinite(
+  return firstNonZeroFinite(
     order?.sizeRemainingUnits,
     order?.size_remaining_units,
     tokenAmountValue(order?.tradeSizeRemaining),
     tokenAmountValue(order?.initialTradeSize),
+    tokenAmountValue(order?.initialSize),
     tokenAmountValue(order?.size),
     order?._raw?.sizeRemainingUnits,
     order?._raw?.size_remaining_units,
     tokenAmountValue(order?._raw?.tradeSizeRemaining),
     tokenAmountValue(order?._raw?.initialTradeSize),
+    tokenAmountValue(order?._raw?.initialSize),
     tokenAmountValue(order?._raw?.size),
     lots != null ? Number(lots) / 10 ** lotDecimals : null,
     0,

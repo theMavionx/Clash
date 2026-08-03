@@ -24,6 +24,7 @@ const FUTURES_REWARD_DEXES = new Set([
   'gmtrade',
   'flash',
   'lighter',
+  'bulk',
 ]);
 
 const DEX_REQUIRED_CHAIN = {
@@ -31,6 +32,7 @@ const DEX_REQUIRED_CHAIN = {
   phoenix: 'solana',
   gmtrade: 'solana',
   flash: 'solana',
+  bulk: 'solana',
   decibel: 'aptos',
   avantis: 'evm',
   gmx: 'evm',
@@ -63,6 +65,7 @@ const VERIFIED_SOURCES_BY_DEX = {
   gmtrade: ['gmtrade_tx', 'gmtrade_position_after_tx', 'gmtrade_close_tx_client_notional'],
   flash: ['flash_tx'],
   lighter: ['lighter_integrator'],
+  bulk: ['bulk_builder_signed'],
 };
 
 const USER_SCOPED_IMPORT_DEXES = new Set([
@@ -77,6 +80,7 @@ const USER_SCOPED_IMPORT_DEXES = new Set([
   'katana',
   'grvt',
   'lighter',
+  'bulk',
 ]);
 
 const CREDENTIAL_SCOPED_IMPORT_DEXES = new Set([
@@ -278,6 +282,23 @@ function risexBuilderEligibilityClause() {
   )`;
 }
 
+function bulkBuilderEligibilityClause() {
+  const proof = 'trade_history.proof_json';
+  const valid = `json_valid(COALESCE(${proof}, ''))`;
+  const json = path => `json_extract(${proof}, ${sqlQuote(path)})`;
+  const address = sqlQuote(String(
+    process.env.BULK_BUILDER_ADDRESS || 'Drvzmh5iRfHRuKHgmm6Q77CqxhqvsXaLvrKkfMP8qci9',
+  ).trim());
+  const feeBps = Math.max(1, Math.min(15, Number(process.env.BULK_BUILDER_FEE_BPS || 1)));
+  return `(
+    ${valid}
+    AND ${json('$.source')} = 'bulk_v0_1_2_signed_order'
+    AND CAST(${json('$.builder.verified')} AS INTEGER) = 1
+    AND ${json('$.builder.address')} = ${address}
+    AND CAST(${json('$.builder.fee_bps')} AS INTEGER) = ${feeBps}
+  )`;
+}
+
 function verifiedSourceClauseForDex(dex) {
   const normalizedDex = String(dex || '').toLowerCase();
   const sources = VERIFIED_SOURCES_BY_DEX[normalizedDex] || ['worker'];
@@ -286,6 +307,9 @@ function verifiedSourceClauseForDex(dex) {
   }
   if (normalizedDex === 'risex') {
     return `verified_source = ${sqlQuote(sources[0])} AND ${risexBuilderEligibilityClause()}`;
+  }
+  if (normalizedDex === 'bulk') {
+    return `verified_source = ${sqlQuote(sources[0])} AND ${bulkBuilderEligibilityClause()}`;
   }
   if (sources.length === 1) return `verified_source = ${sqlQuote(sources[0])}`;
   return `verified_source IN (${sources.map(sqlQuote).join(', ')})`;
@@ -504,6 +528,11 @@ async function runDexAdapter(player, dex, wallet, opts = {}) {
   if (dex === 'risex') {
     const risex = require('../server-futures/risex');
     return { dex, ...(await risex.importFillsForPlayer(playerId, wallet, { limit })) };
+  }
+
+  if (dex === 'bulk') {
+    const bulk = require('../server-futures/bulk');
+    return { dex, ...(await bulk.importFillsForPlayer(playerId, wallet, { limit })) };
   }
 
   if (dex === 'hibachi') {

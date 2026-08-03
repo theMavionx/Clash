@@ -1,6 +1,10 @@
 'use strict';
 
 const decibel = require('./decibel');
+const {
+  decibelFillClientOrderId,
+  findExistingDecibelFill,
+} = require('./decibel-fill-identity');
 
 const DEFAULT_DECIBEL_BUILDER_SUBACCOUNT =
   '0xfa4d46a481f5bc95de01a629ec95b7876e946ebe1e86374284d899ac4366984a';
@@ -208,9 +212,8 @@ async function recordRecentBulkFills(playerId, subaccount, options = {}) {
   };
 
   for (const fill of fills) {
-    const clientOrderId = `decibel:bulk-fill:${fill.tradeId}`;
-    if (typeof store.getTradeByClientOrderId === 'function'
-      && store.getTradeByClientOrderId(playerId, 'decibel', clientOrderId)) {
+    const clientOrderId = decibelFillClientOrderId(normalizedSubaccount, fill.tradeId);
+    if (findExistingDecibelFill(store, playerId, normalizedSubaccount, fill.tradeId)) {
       stats.existing++;
       stats.volume_usd += fill.notionalUsd;
       continue;

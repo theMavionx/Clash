@@ -1,4 +1,5 @@
 const assert = require('assert');
+const Database = require('better-sqlite3');
 
 const risex = require('./risex');
 
@@ -155,5 +156,53 @@ assert.strictEqual(wrongFee.builder_fee_bps, 99);
 assert.strictEqual(risex.fillTime({ time: '1779165204383119000' }), 1779165204383);
 assert.strictEqual(risex.fillTime({ time: '1779165204383' }), 1779165204383);
 assert.strictEqual(risex.fillTime({ time: '1779165204' }), 1779165204000);
+
+const fill = {
+  id: 'maker-order-taker-order',
+  order_id: SAMPLE_ORDER_ID,
+  client_order_id: '1865589932173430200',
+  market_id: '1',
+  price: '76700.8',
+  size: '0.000777',
+  time: '1779165204383119000',
+};
+const keys = risex.tradeKeyCandidates(FEE_RECIPIENT, fill);
+assert(keys[0].includes('maker-order-taker-order'), 'canonical RISEx key uses the API trade id');
+assert(
+  keys.includes(`risex:${FEE_RECIPIENT}:${SAMPLE_ORDER_ID}:1779165204383119000:1:76700.8:0.000777`),
+  'known legacy RISEx key remains discoverable',
+);
+
+const memoryDb = new Database(':memory:');
+memoryDb.exec(`
+  CREATE TABLE trade_history (
+    id INTEGER PRIMARY KEY,
+    player_id TEXT,
+    dex TEXT,
+    amount TEXT,
+    price TEXT,
+    order_id TEXT,
+    client_order_id TEXT,
+    verified_source TEXT,
+    proof_json TEXT
+  );
+`);
+memoryDb.prepare(`
+  INSERT INTO trade_history (
+    id, player_id, dex, amount, price, order_id, client_order_id, verified_source, proof_json
+  ) VALUES (1, 'player-1', 'risex', '0.000777', '76700.8', ?, ?, 'risex_api', NULL)
+`).run(
+  SAMPLE_ORDER_ID,
+  `risex:${FEE_RECIPIENT}:${SAMPLE_ORDER_ID}:1779165204383119000:1:76700.8:0.000777`,
+);
+const existing = risex.findExistingImportedFill(
+  { db: memoryDb },
+  'player-1',
+  FEE_RECIPIENT,
+  fill,
+  { orderId: SAMPLE_ORDER_ID, amount: '0.000777', price: '76700.8' },
+);
+assert.strictEqual(existing?.id, 1, 'legacy imported fill is adopted instead of duplicated');
+memoryDb.close();
 
 console.log('RISEx builder proof decoding tests passed');

@@ -43,6 +43,10 @@ import {
   fetchWithAptosBrowserKeys,
   runWithAptosBrowserKeys,
 } from '../lib/aptosBrowserKeyPool';
+import {
+  mergeDecibelMarketStats,
+  normalizeDecibelMarketData,
+} from '../lib/decibelMarketData';
 
 // Move function paths for the calls we route through Petra (one-time or
 // ownership-related). Verified against `@decibeltrade/sdk/dist/write.js`
@@ -86,6 +90,7 @@ const READ_TIMEOUT_MS = 8_000;
 const ACCOUNT_READ_TIMEOUT_MS = READ_TIMEOUT_MS;
 const DECIBEL_STATE_POLL_MS = 45_000;
 const DECIBEL_PRICE_POLL_MS = 15_000;
+const DECIBEL_CONTEXT_POLL_MS = 60_000;
 const ACCOUNT_WARN_THROTTLE_MS = 60_000;
 const ACCOUNT_BACKOFF_BASE_MS = 10_000;
 const ACCOUNT_BACKOFF_MAX_MS = 60_000;
@@ -613,25 +618,13 @@ function normalizeMarket(raw, idx) {
   };
 }
 
-function normalizePrice(p, markets) {
+function normalizePrice(p, markets, contexts) {
   // Decibel `/api/v1/prices` returns rows keyed by `market` (= market_addr),
   // NOT `marketName`. We resolve the market by address to derive the
   // symbol, then take `mark_px` etc. directly — these come from the API
   // already in human-readable form (e.g. `40.495` for HYPE), NOT chain
   // units. So no `priceFromChainUnits` divide here.
-  const addr = p.market || p.market_addr || p.marketAddr || '';
-  const name = p.marketName || p.market_name || p.name || '';
-  const m = findMarket(markets, addr) || findMarket(markets, name);
-  const symbol = m
-    ? m.symbol
-    : String(name || '').split(/[-/]/)[0].toUpperCase();
-  const mark = Number(p.mark_px ?? p.markPrice ?? p.mark_price ?? p.mid_px ?? p.oracle_px ?? p.price ?? 0);
-  const yest = Number(p.yesterday_px ?? p.yesterdayPrice ?? p.yesterday_price ?? p.openPrice24h ?? p.open_price_24h ?? 0);
-  return {
-    symbol,
-    mark: String(mark),
-    yesterday_price: String(yest),
-  };
+  return normalizeDecibelMarketData(p, markets, contexts);
 }
 
 // ───── Verbose logging ────────────────────────────────────────────────────
@@ -907,6 +900,7 @@ export function useDecibel() {
   const marketsRef = useRef([]);
   const pricesRef = useRef([]);
   const rawPricesRef = useRef([]);
+  const rawContextsRef = useRef([]);
   const subaccountRef = useRef(null);
   const positionsRef = useRef([]);
   const ordersRef = useRef([]);
@@ -1181,7 +1175,7 @@ export function useDecibel() {
     const raw = Array.isArray(rows) ? rows : [];
     if (!raw.length) return [];
     rawPricesRef.current = raw;
-    const norm = raw.map(p => normalizePrice(p, marketsRef.current));
+    const norm = raw.map(p => normalizePrice(p, marketsRef.current, rawContextsRef.current));
     setPrices(prev => {
       const byKey = new Map((prev || []).map(p => [p.symbol, p]));
       for (const p of norm) {
@@ -1191,8 +1185,21 @@ export function useDecibel() {
       pricesRef.current = next;
       return next;
     });
+    setMarkets(prev => {
+      const next = mergeDecibelMarketStats(prev, norm);
+      marketsRef.current = next;
+      return next;
+    });
     return norm;
   }, []);
+
+  const applyContextRows = useCallback((rows) => {
+    const raw = Array.isArray(rows) ? rows : [];
+    if (!raw.length) return [];
+    rawContextsRef.current = raw;
+    if (rawPricesRef.current.length) applyPriceRows(rawPricesRef.current);
+    return raw;
+  }, [applyPriceRows]);
 
   const fetchMarkets = useCallback(async () => {
     try {
@@ -1227,6 +1234,20 @@ export function useDecibel() {
       D.warn('fetchPrices failed:', e?.message || e);
     }
   }, [applyPriceRows]);
+
+  const fetchMarketContexts = useCallback(async () => {
+    try {
+      const list = await withAbortableRead(
+        (read, fetchOptions) => read.marketContexts.getAll({ fetchOptions }),
+        READ_TIMEOUT_MS,
+        'asset contexts',
+      );
+      const arr = Array.isArray(list) ? list : (list?.data || []);
+      applyContextRows(arr);
+    } catch (e) {
+      D.warn('fetchMarketContexts failed:', e?.message || e);
+    }
+  }, [applyContextRows]);
 
   // Resolves the user's primary subaccount address.
   //
@@ -2898,6 +2919,17 @@ export function useDecibel() {
   // network calls + Aptos node API quota burn. Same pattern usePacifica
   // and useGmx already use.
   useEffect(() => { if (isActiveDex) fetchMarkets(); }, [isActiveDex, fetchMarkets]);
+
+  useEffect(() => {
+    if (!isActiveDex) return undefined;
+    const tick = () => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      fetchMarketContexts();
+    };
+    tick();
+    const interval = setInterval(tick, DECIBEL_CONTEXT_POLL_MS);
+    return () => clearInterval(interval);
+  }, [isActiveDex, fetchMarketContexts]);
 
   useEffect(() => {
     if (!address || !isActiveDex) return;

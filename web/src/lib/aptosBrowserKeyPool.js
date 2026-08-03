@@ -86,13 +86,15 @@ export function createAptosBrowserKeyPool(keys, poolOptions = {}) {
         lastError = error;
         if (!isAptosBrowserKeyLimitError(error)) throw error;
         markLimited(candidate.index, cooldownMs);
-        logger.warn?.('[Aptos] Browser API key limited; rotating', {
-          operation: options.label || 'Aptos request',
-          key_index: candidate.index + 1,
-          key_count: normalizedKeys.length,
-          status: errorStatus(error) || undefined,
-          cooldown_ms: cooldownMs,
-        });
+        if (candidate.index >= 0) {
+          logger.warn?.('[Aptos] Browser API key limited; rotating', {
+            operation: options.label || 'Aptos request',
+            key_index: candidate.index + 1,
+            key_count: normalizedKeys.length,
+            status: errorStatus(error) || undefined,
+            cooldown_ms: cooldownMs,
+          });
+        }
       }
     }
     if (options.allowPublicFallback && normalizedKeys.length) {

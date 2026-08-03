@@ -1,14 +1,20 @@
 // Decibel rewards worker: periodically reconciles every authoritative fill
-// into `trade_history`. Regular fills use the immutable exchange trade id as
-// their ledger key; bulk market-maker fills are handled by the dedicated bulk
-// reconciler. A persisted high-water mark plus overlap makes API outages and
-// process restarts catch up instead of silently dropping tournament volume.
+// into `trade_history`. Every regular or bulk fill uses the subaccount-scoped
+// immutable exchange trade id as its ledger key. Scoping is required because
+// Decibel exposes the same trade id to both counterparties. A persisted
+// high-water mark plus overlap makes API outages and process restarts catch up
+// instead of silently dropping tournament volume.
 
 const Database = require('better-sqlite3');
 const path = require('path');
 const db = require('./db');
 const decibel = require('./decibel');
 const decibelBulkRewards = require('./decibel-bulk-rewards');
+const {
+  decibelFillClientOrderId,
+  findExistingDecibelFill,
+  isCreditableDecibelFill,
+} = require('./decibel-fill-identity');
 
 const POLL_MS = 2 * 60 * 1000; // 2 minutes
 // Record every economically non-zero verified fill. Gold farming protection
@@ -484,10 +490,17 @@ function exactFillScanWindow(store, subAddr, opts = {}) {
   ));
   const safeCursorMs = Number.isFinite(cursorMs) && cursorMs >= cutoverMs ? cursorMs : cutoverMs;
   const overlapMs = Math.max(0, Number(opts.overlapMs ?? DECIBEL_EXACT_FILL_OVERLAP_MS));
+  const explicitScanFromMs = Number(opts.scanFromMs);
+  const explicitScanToMs = Number(opts.scanToMs);
   return {
     cutoverMs,
     cursorMs: safeCursorMs,
-    scanFromMs: Math.max(cutoverMs, safeCursorMs - overlapMs),
+    scanFromMs: Number.isFinite(explicitScanFromMs) && explicitScanFromMs > 0
+      ? Math.max(cutoverMs, explicitScanFromMs)
+      : Math.max(cutoverMs, safeCursorMs - overlapMs),
+    scanToMs: Number.isFinite(explicitScanToMs) && explicitScanToMs > 0
+      ? explicitScanToMs
+      : Number(opts.nowMs || Date.now()),
   };
 }
 
@@ -594,11 +607,17 @@ async function recordRecentLimitFills(playerId, subAddr, opts = {}) {
     cutover_ms: window.cutoverMs,
     cursor_ms: window.cursorMs,
     scan_from_ms: window.scanFromMs,
+    scan_to_ms: window.scanToMs,
     before_cutover: 0,
     before_scan_window: 0,
+    after_scan_window: 0,
     missing_fill_id: 0,
     missing_fill_time: tradePages.missingTimestamps,
     existing: 0,
+    existing_volume_usd: 0,
+    eligible_volume_usd: 0,
+    imported_volume_usd: 0,
+    would_import: 0,
     rejected: 0,
     retryable: 0,
     cursor_advanced: false,
@@ -618,6 +637,10 @@ async function recordRecentLimitFills(playerId, subAddr, opts = {}) {
       stats.before_scan_window++;
       continue;
     }
+    if (fillTimeMs > stats.scan_to_ms) {
+      stats.after_scan_window++;
+      continue;
+    }
     const fillId = tradeFillId(fill);
     if (!fillId) {
       stats.missing_fill_id++;
@@ -629,11 +652,13 @@ async function recordRecentLimitFills(playerId, subAddr, opts = {}) {
     const sizeAbs = Math.abs(Number(fill?.size ?? fill?.filled_size ?? fill?.base_size ?? 0));
     const notional = Number.isFinite(price) && Number.isFinite(sizeAbs) ? price * sizeAbs : 0;
     if (!Number.isFinite(notional) || notional < MIN_RECORDED_NOTIONAL_USD) continue;
+    stats.eligible_volume_usd += notional;
 
-    const clientOrderId = `decibel:trade-fill:${fillId}`;
-    const existing = store.getTradeByClientOrderId(playerId, 'decibel', clientOrderId);
-    if (existing?.verified_source === 'decibel_fill') {
+    const clientOrderId = decibelFillClientOrderId(subAddr, fillId);
+    const existing = findExistingDecibelFill(store, playerId, subAddr, fillId);
+    if (isCreditableDecibelFill(existing)) {
       stats.existing++;
+      stats.existing_volume_usd += notional;
       continue;
     }
 
@@ -652,11 +677,6 @@ async function recordRecentLimitFills(playerId, subAddr, opts = {}) {
     const orderKey = fillKeys.find((key) => rewardOrderKeySet.has(key)) || '';
     const order = orderKey ? rewardOrderByKey.get(orderKey) || null : null;
     matchingKey ||= orderKey || fillKeys[0] || '';
-    // Bulk maker fills also appear in regular trade_history. Only accept a
-    // regular fill when it is tied to our stored order proof or a matching
-    // non-bulk order-history row; the bulk worker owns all other maker fills.
-    if (!proof && !order) continue;
-
     if (!proof && order) {
       try {
         proof = await proofFromOrderTx(playerId, subAddr, order, marketMap, store, client);
@@ -665,6 +685,11 @@ async function recordRecentLimitFills(playerId, subAddr, opts = {}) {
       }
     }
     if (proof && !isAllowedStoredOrderProof(proof, subAddr)) proof = null;
+    // A fill may be absent from the short order-history window (or originate
+    // from the MM bulk path). The TradeEvent is authoritative, so verify it
+    // on-chain instead of silently discarding otherwise-unmatched volume.
+    // The shared subaccount-scoped fill key deduplicates regular and bulk
+    // reconcilers regardless of which one observes the execution first.
     if (!proof) {
       try {
         const fillProof = await proofFromFillTx(fill, subAddr, client);
@@ -685,6 +710,12 @@ async function recordRecentLimitFills(playerId, subAddr, opts = {}) {
     }
     stats.matched++;
     if (matchingKey) proofByKey.set(matchingKey, proof);
+    stats.verified++;
+    if (opts.dryRun) {
+      stats.would_import++;
+      stats.imported_volume_usd += notional;
+      continue;
+    }
     const side = sideFromFill(fill);
     const fee = Number(fill?.fee_amount ?? fill?.fee ?? 0);
     const proofJson = JSON.stringify({
@@ -729,10 +760,13 @@ async function recordRecentLimitFills(playerId, subAddr, opts = {}) {
     });
     stats.imported += Number(r.inserted || 0);
     stats.updated += Number(r.updated || 0);
-    stats.verified++;
+    if (Number(r.inserted || 0) + Number(r.updated || 0) > 0) {
+      stats.imported_volume_usd += notional;
+    }
   }
 
-  const cursorCanAdvance = !stats.truncated
+  const cursorCanAdvance = opts.advanceCursor !== false
+    && !stats.truncated
     && !stats.order_history_failed
     && stats.retryable === 0
     && stats.missing_fill_id === 0

@@ -47,6 +47,19 @@ function main() {
   record(db, 'decibel', '2026-07-31T12:00:00.000Z', 10);
   record(db, 'decibel', '2026-08-02T12:00:00.000Z', 11);
 
+  record(db, 'risex', '2026-07-31T12:00:00.000Z', 0, {
+    estimated_fee_usd: 0.1,
+    snapshot_value_kind: 'estimate',
+    snapshot_cumulative_usd: 0.1,
+    exact_unavailable: true,
+  });
+  record(db, 'risex', '2026-08-02T12:00:00.000Z', 0, {
+    estimated_fee_usd: 0.2,
+    snapshot_value_kind: 'estimate',
+    snapshot_cumulative_usd: 0.2,
+    exact_unavailable: true,
+  });
+
   const skipped = recordEarningsSnapshots(db, {
     risex: row(99, { stale: true }),
   }, now);
@@ -55,6 +68,7 @@ function main() {
   const history = readEarningsSnapshotHistory(db, { days: 30, now });
   const pacifica = history.dexes.pacifica;
   const decibel = history.dexes.decibel;
+  const risex = history.dexes.risex;
 
   assert.equal(pacifica.current_cumulative_usd, 8);
   assert.equal(pacifica.d1.earned_usd, 6);
@@ -78,9 +92,16 @@ function main() {
   assert.equal(decibel.d1.earned_usd, 1);
   assert.equal(decibel.d7.earned_usd, 1);
   assert.equal(decibel.d30.earned_usd, 1);
+  assert.equal(risex.d1.earned_usd, 0.1);
+  assert.equal(risex.d30.earned_usd, 0.1);
+  assert.equal(risex.d30.value_kind, 'estimate');
+  assert.equal(risex.current_cumulative_usd, 0.2);
   assert.equal(history.windows.d1.earned_usd, 7);
   assert.equal(history.windows.d7.earned_usd, 16);
   assert.equal(history.windows.d30.earned_usd, 16);
+  assert.equal(history.windows.d1.estimated_usd, 0.1);
+  assert.equal(history.windows.d7.estimated_usd, 0.1);
+  assert.equal(history.windows.d30.estimated_usd, 0.1);
   assert.equal(history.method, 'positive_delta_of_cumulative_snapshots');
   assert.equal(history.daily.length, 30 * earnings._test.earningsDexOrder().length);
 

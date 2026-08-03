@@ -7,6 +7,11 @@ const pacifica = require('./pacifica');
 const avantis = require('./avantis');
 const deposit = require('./deposit');
 const decibel = require('./decibel');
+const {
+  decibelFillClientOrderId,
+  findExistingDecibelFill,
+  isCreditableDecibelFill,
+} = require('./decibel-fill-identity');
 const { executeDecibelTpslMutation } = require('./decibel-tpsl-lifecycle');
 const gmx = require('./gmx');
 const gmxRewards = require('./gmx-rewards-worker');
@@ -23,6 +28,7 @@ const katana = require('./katana');
 const gmtrade = require('./gmtrade');
 const flash = require('./flash');
 const lighter = require('./lighter');
+const bulk = require('./bulk');
 const ostium = require('./ostium');
 const { createPublicClient, decodeFunctionData, formatUnits, http } = require('viem');
 const { base } = require('viem/chains');
@@ -908,7 +914,7 @@ function auth(req, res, next) {
   // Trust the SERVER-stored dex, not whatever the client asks for. The client
   // header/query is still useful as a best-effort sanity check: if it explicitly
   // asks for the wrong dex, reject so the UI can prompt the user to /set-dex.
-  const SUPPORTED_DEXES = new Set(['avantis', 'pacifica', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash', 'lighter']);
+  const SUPPORTED_DEXES = new Set(['avantis', 'pacifica', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash', 'lighter', 'bulk']);
   const storedDex = SUPPORTED_DEXES.has(player.dex) ? player.dex : 'pacifica';
   const askedDex = (req.query.dex || req.headers['x-dex'] || storedDex).toLowerCase();
   const normalizedAsked = SUPPORTED_DEXES.has(askedDex) ? askedDex : 'pacifica';
@@ -1133,7 +1139,7 @@ function flashBodyWallet(req) {
 // Get or create custodial wallet for player
 router.post('/wallet', auth, (req, res) => {
   try {
-    if (req.dex === 'avantis' || req.dex === 'gmx' || req.dex === 'ostium' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'hibachi' || req.dex === 'hotstuff' || req.dex === 'grvt' || req.dex === 'katana' || req.dex === 'gmtrade' || req.dex === 'flash') {
+    if (req.dex === 'avantis' || req.dex === 'gmx' || req.dex === 'ostium' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'hibachi' || req.dex === 'hotstuff' || req.dex === 'grvt' || req.dex === 'katana' || req.dex === 'gmtrade' || req.dex === 'flash' || req.dex === 'bulk') {
       return res.status(410).json({
         error: `${req.dex} is self-custody. Connect the chain wallet in the client instead.`,
       });
@@ -1163,7 +1169,7 @@ router.post('/wallet', auth, (req, res) => {
 
 // Get wallet info (public key only — never expose secret)
 router.get('/wallet', auth, (req, res) => {
-  if (req.dex === 'avantis' || req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'hibachi' || req.dex === 'hotstuff' || req.dex === 'grvt' || req.dex === 'katana' || req.dex === 'gmtrade' || req.dex === 'flash' || req.dex === 'ostium') {
+  if (req.dex === 'avantis' || req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'hibachi' || req.dex === 'hotstuff' || req.dex === 'grvt' || req.dex === 'katana' || req.dex === 'gmtrade' || req.dex === 'flash' || req.dex === 'ostium' || req.dex === 'bulk') {
     return res.status(410).json({
       error: `${req.dex} is self-custody. Connect the chain wallet in the client instead.`,
     });
@@ -1259,6 +1265,13 @@ router.get('/account', async (req, res) => {
         return res.status(400).json({ error: 'address query param required (Solana wallet)' });
       }
       return res.json(await flash.getOwnerSnapshot(address));
+    }
+    if (dex === 'bulk') {
+      const address = String(req.query.address || req.query.wallet || '').trim();
+      if (!bulk.isSolanaAddress(address)) {
+        return res.status(400).json({ error: 'address query param required (Solana wallet)' });
+      }
+      return res.json(await bulk.getAccount(address));
     }
     // Pacifica (custodial) - keep legacy auth-gated flow.
     return authGate(req, res, async () => {
@@ -1424,7 +1437,13 @@ async function recordDecibelActualFills(playerId, subaccount, orderPayload, txRe
       // this fill once Decibel's indexer exposes the complete row.
       continue;
     }
-    const clientOrderId = `decibel:trade-fill:${fillId}`;
+    const clientOrderId = decibelFillClientOrderId(subaccount, fillId);
+    const existing = findExistingDecibelFill(db, playerId, subaccount, fillId);
+    if (isCreditableDecibelFill(existing)) {
+      rows++;
+      volume += notional;
+      continue;
+    }
     const info = db.upsertVerifiedTrade(playerId, {
       symbol: decibelFillSymbol(
         fill,
@@ -2495,6 +2514,7 @@ router.get('/markets', async (req, res) => {
       : dex === 'gmtrade' ? await gmtrade.getMarketInfo()
       : dex === 'flash' ? await flash.getMarketInfo()
       : dex === 'lighter' ? await lighter.getMarketInfo()
+      : dex === 'bulk' ? await bulk.getMarkets()
       : await pacifica.getMarketInfo();
     res.json(info);
   } catch (e) {
@@ -2522,6 +2542,7 @@ router.get('/prices', async (req, res) => {
       : dex === 'gmtrade' ? await gmtrade.getPrices()
       : dex === 'flash' ? await flash.getPrices()
       : dex === 'lighter' ? await lighter.getPrices()
+      : dex === 'bulk' ? await bulk.getPrices()
       : await pacifica.getPrices();
     res.json(prices);
   } catch (e) {
@@ -2541,6 +2562,8 @@ router.get('/orderbook', async (req, res) => {
       ? await gmtrade.getOrderbook(symbol, limit || 25)
       : dex === 'katana'
       ? await katana.getOrderbook(symbol, limit || 25, level || agg_level || 2)
+      : dex === 'bulk'
+      ? await bulk.getOrderBook(symbol, { nlevels: limit || 25, aggregation: agg_level })
       : await pacifica.getOrderbook(symbol, agg_level);
     res.json(book);
   } catch (e) {
@@ -2833,6 +2856,14 @@ router.get('/positions', async (req, res) => {
       const positions = await flash.getPositionsByAddress(address);
       return res.json(positions);
     }
+    if (dex === 'bulk') {
+      const address = String(req.query.address || req.query.wallet || '').trim();
+      if (!bulk.isSolanaAddress(address)) {
+        return res.status(400).json({ error: 'address query param required' });
+      }
+      const account = await bulk.getAccount(address);
+      return res.json(Array.isArray(account?.positions) ? account.positions : []);
+    }
     return authGate(req, res, async () => {
       const wallet = db.getWallet(req.playerId, 'pacifica');
       if (!wallet) return res.status(404).json({ error: 'No wallet' });
@@ -2937,6 +2968,13 @@ router.get('/orders', async (req, res) => {
       const orders = await flash.getOrdersByAddress(address);
       return res.json(orders);
     }
+    if (dex === 'bulk') {
+      const address = String(req.query.address || req.query.wallet || '').trim();
+      if (!bulk.isSolanaAddress(address)) {
+        return res.status(400).json({ error: 'address query param required' });
+      }
+      return res.json(await bulk.getOpenOrders(address));
+    }
     return authGate(req, res, async () => {
       const wallet = db.getWallet(req.playerId, 'pacifica');
       if (!wallet) return res.status(404).json({ error: 'No wallet' });
@@ -2951,7 +2989,7 @@ router.get('/orders', async (req, res) => {
 
 // Reject self-custody writes on legacy Pacifica server endpoints. These
 // venues sign in the browser or use their dedicated route groups.
-const CLIENT_SIGNED_DEXES = new Set(['avantis', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash']);
+const CLIENT_SIGNED_DEXES = new Set(['avantis', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash', 'bulk']);
 
 function avantisMigratedGuard(req, res, next) {
   if (CLIENT_SIGNED_DEXES.has(req.dex)) {
@@ -5135,6 +5173,104 @@ router.post('/ostium/import-fills', auth, async (req, res) => {
   }
 });
 
+function requireBulkDex(req, res) {
+  if (req.dex === 'bulk') return true;
+  res.status(409).json({
+    error: `Account is registered for '${req.dex}'. Switch DEX to bulk before calling Bulk endpoints.`,
+    stored_dex: req.dex,
+    requested_dex: 'bulk',
+  });
+  return false;
+}
+
+function bulkLinkedWallet(req, source = null) {
+  const requested = String(source || '').trim();
+  const linked = String(req.dexWallet || req.playerWallet || '').trim();
+  if (!bulk.isSolanaAddress(linked)) {
+    throw Object.assign(new Error('Bulk Solana wallet is not linked to this game account.'), { status: 409 });
+  }
+  if (requested && requested !== linked) {
+    throw Object.assign(new Error('Bulk request wallet does not match the linked game account.'), { status: 403 });
+  }
+  return linked;
+}
+
+router.get('/bulk/config', (_req, res) => {
+  res.set('Cache-Control', 'public, max-age=300');
+  res.json(bulk.config());
+});
+
+router.get('/bulk/ticker', async (req, res) => {
+  try {
+    res.set('Cache-Control', 'public, max-age=2');
+    res.json(await bulk.getTicker(req.query.symbol));
+  } catch (e) {
+    res.status(e.status || 502).json({ error: 'Failed to load Bulk ticker', detail: e.message });
+  }
+});
+
+router.get('/bulk/candles', async (req, res) => {
+  try {
+    res.set('Cache-Control', 'public, max-age=10');
+    res.json(await bulk.getKlines(req.query.symbol, req.query || {}));
+  } catch (e) {
+    res.status(e.status || 502).json({ error: 'Failed to load Bulk candles', detail: e.message });
+  }
+});
+
+router.get('/bulk/account', auth, async (req, res) => {
+  if (!requireBulkDex(req, res)) return;
+  try {
+    const account = bulkLinkedWallet(req, req.query.account || req.query.address || req.query.wallet);
+    res.json(await bulk.getAccount(account));
+  } catch (e) {
+    res.status(e.status || 502).json({ error: 'Failed to load Bulk account', detail: e.message });
+  }
+});
+
+router.get('/bulk/builder-status', auth, async (req, res) => {
+  if (!requireBulkDex(req, res)) return;
+  try {
+    const account = bulkLinkedWallet(req, req.query.account || req.query.address || req.query.wallet);
+    res.json(await bulk.getBuilderStatus(account));
+  } catch (e) {
+    res.status(e.status || 502).json({ error: 'Failed to verify Bulk builder approval', detail: e.message });
+  }
+});
+
+router.post('/bulk/prepare', auth, (req, res) => {
+  if (!requireBulkDex(req, res)) return;
+  try {
+    const account = bulkLinkedWallet(req, req.body?.account || req.body?.wallet);
+    res.set('Cache-Control', 'no-store');
+    res.json(bulk.prepareTransaction(account, req.body || {}));
+  } catch (e) {
+    res.status(e.status || 400).json({ error: 'Failed to prepare Bulk transaction', detail: e.message });
+  }
+});
+
+router.post('/bulk/submit', auth, async (req, res) => {
+  if (!requireBulkDex(req, res)) return;
+  try {
+    const transaction = req.body?.transaction || req.body;
+    const account = bulkLinkedWallet(req, transaction?.account);
+    res.set('Cache-Control', 'no-store');
+    res.json(await bulk.submitTransaction(req.playerId, account, transaction));
+  } catch (e) {
+    res.status(e.status || 502).json({ error: 'Failed to submit Bulk transaction', detail: e.message, data: e.data || undefined });
+  }
+});
+
+router.post('/bulk/import-fills', auth, async (req, res) => {
+  if (!requireBulkDex(req, res)) return;
+  try {
+    const account = bulkLinkedWallet(req, req.body?.account || req.body?.wallet);
+    res.json(await bulk.importFillsForPlayer(req.playerId, account, { limit: req.body?.limit }));
+  } catch (e) {
+    res.status(e.status || 502).json({ error: 'Failed to import Bulk fills', detail: e.message });
+  }
+});
+
 router.get('/lighter/config', async (_req, res) => {
   res.json(lighter.config());
 });
@@ -5879,7 +6015,7 @@ router.get('/deposits', auth, (req, res) => {
 // Get USDC & native balance on custodial wallet
 const balanceCache = new Map();
 router.get('/balance', auth, async (req, res) => {
-  if (req.dex === 'gmx' || req.dex === 'ostium' || req.dex === 'monad' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'hibachi' || req.dex === 'katana' || req.dex === 'gmtrade' || req.dex === 'flash') {
+  if (req.dex === 'gmx' || req.dex === 'ostium' || req.dex === 'monad' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'hibachi' || req.dex === 'katana' || req.dex === 'gmtrade' || req.dex === 'flash' || req.dex === 'bulk') {
     return res.status(410).json({ error: `${req.dex} balances are read directly by the client wallet.` });
   }
   const wallet = db.getWallet(req.playerId, req.dex);
