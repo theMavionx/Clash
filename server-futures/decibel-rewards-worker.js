@@ -1,20 +1,8 @@
-// Decibel rewards worker — periodic polling of Decibel REST for all
-// registered Decibel traders. Detects newly-opened and newly-closed
-// positions and writes verified rows into `trade_history` so /claim-gold
-// can credit gold by volume.
-//
-// Mirrors the avantis-rewards-worker contract:
-//   • read-only by public address (Aptos master wallet stored in
-//     players.wallet for dex='decibel')
-//   • computes notional from Decibel's signed human `size` × `entry_price`
-//   • emits two trade rows per position lifecycle (open + close) with
-//     deterministic dedup keys: `decibel:open:<addr>:<market>:<side>` and
-//     `decibel:close:<addr>:<market>:<side>`. UNIQUE partial index in
-//     futures.db dedupes against client-side reportTrade.
-//
-// Polling cadence: 2 minutes — same as Avantis. Slightly faster than
-// Decibel's indexer ingest time (~30 s) so we don't miss flash-closed
-// positions, but slow enough not to hammer their public API.
+// Decibel rewards worker: periodically reconciles every authoritative fill
+// into `trade_history`. Regular fills use the immutable exchange trade id as
+// their ledger key; bulk market-maker fills are handled by the dedicated bulk
+// reconciler. A persisted high-water mark plus overlap makes API outages and
+// process restarts catch up instead of silently dropping tournament volume.
 
 const Database = require('better-sqlite3');
 const path = require('path');
@@ -28,14 +16,24 @@ const POLL_MS = 2 * 60 * 1000; // 2 minutes
 // below $10. Keeping this floor low lets position quests count tiny but real
 // meme-market fills such as CHIP without paying gold for them.
 const MIN_RECORDED_NOTIONAL_USD = 0.000001;
-const DECIBEL_LIMIT_FILL_LOOKBACK = Math.max(
-  50,
-  Math.min(500, Number(process.env.DECIBEL_LIMIT_FILL_LOOKBACK || 250))
+const DECIBEL_EXACT_FILL_PAGE_SIZE = Math.max(
+  25,
+  Math.min(100, Number(process.env.DECIBEL_EXACT_FILL_PAGE_SIZE || 100))
+);
+const DECIBEL_EXACT_FILL_MAX_PAGES = Math.max(
+  1,
+  Math.min(50, Number(process.env.DECIBEL_EXACT_FILL_MAX_PAGES || 20))
+);
+const DECIBEL_EXACT_FILL_OVERLAP_MS = Math.max(
+  60_000,
+  Math.min(60 * 60_000, Number(process.env.DECIBEL_EXACT_FILL_OVERLAP_MS || 30 * 60_000))
 );
 // Per-wallet reconciliation diagnostics are intentionally opt-in. With many
 // linked accounts this used to write thousands of large lines per hour and
 // grew the PM2 logs into gigabytes without helping normal operations.
 const DECIBEL_RECONCILE_DEBUG = String(process.env.DECIBEL_RECONCILE_DEBUG || '0') !== '0';
+const DECIBEL_EXACT_FILL_CUTOVER_KEY = 'exact_fill_v2_cutover_ms';
+const DECIBEL_EXACT_FILL_CURSOR_PREFIX = 'exact_fill_v2_cursor_ms:';
 
 const MAIN_DB_PATH = process.env.CLASH_MAIN_DB
   || path.join(__dirname, '..', 'server', 'clash.db');
@@ -193,29 +191,37 @@ function shortAddr(addr) {
   return s.length > 16 ? `${s.slice(0, 10)}...${s.slice(-6)}` : s;
 }
 
-function proofForOrderKey(key) {
+function proofForOrderKey(key, store = db) {
   const raw = String(key || '');
   if (raw.startsWith('order:')) {
-    return db.getDecibelOrderProof({ orderId: raw.slice('order:'.length) });
+    return store.getDecibelOrderProof({ orderId: raw.slice('order:'.length) });
   }
   if (raw.startsWith('client:')) {
-    return db.getDecibelOrderProof({ clientOrderId: raw.slice('client:'.length) });
+    return store.getDecibelOrderProof({ clientOrderId: raw.slice('client:'.length) });
   }
   return null;
 }
 
-function orderIdFromMatchingKey(key) {
-  const raw = String(key || '');
-  return raw.startsWith('order:') ? raw.slice('order:'.length) : '';
+function isAllowedStoredOrderProof(proof, subAddr) {
+  if (!proof) return false;
+  const proofSubaccount = decibel.normalizeAptosAddress(proof.subaccount || '');
+  const wantedSubaccount = decibel.normalizeAptosAddress(subAddr);
+  const builderAddr = decibel.normalizeAptosAddress(proof.builder_addr || '');
+  return proofSubaccount === wantedSubaccount
+    && DECIBEL_ALLOWED_BUILDER_ADDRS.has(builderAddr)
+    && Number(proof.builder_fee_bps) > 0;
 }
 
-async function fetchAptosTxByVersion(version) {
+async function fetchAptosTxByVersion(version, client = decibel) {
   const raw = String(version || '').trim();
   if (!/^\d+$/.test(raw)) return null;
-  if (aptosTxCache.has(raw)) return aptosTxCache.get(raw);
-  const tx = await decibel.fetchAptosJsonPath(`transactions/by_version/${raw}`);
-  if (aptosTxCache.size > 500) aptosTxCache.clear();
-  aptosTxCache.set(raw, tx);
+  const cacheKey = client === decibel ? raw : null;
+  if (cacheKey && aptosTxCache.has(cacheKey)) return aptosTxCache.get(cacheKey);
+  const tx = await client.fetchAptosJsonPath(`transactions/by_version/${raw}`);
+  if (cacheKey) {
+    if (aptosTxCache.size > 500) aptosTxCache.clear();
+    aptosTxCache.set(cacheKey, tx);
+  }
   return tx;
 }
 
@@ -268,10 +274,61 @@ function builderProofFromTradeEvent(event) {
   };
 }
 
-async function proofFromOrderTx(playerId, subAddr, order, marketMap) {
+function verifyExactFillTradeEvent(tx, fill, subAddr) {
+  const fillId = tradeFillId(fill);
+  const wantedSubaccount = decibel.normalizeAptosAddress(subAddr);
+  const wantedMarket = marketAddress(fill);
+  const event = (Array.isArray(tx?.events) ? tx.events : []).find((candidate) => {
+    if (!String(candidate?.type || '').includes('::perp_positions::TradeEvent')) return false;
+    const data = candidate?.data || {};
+    if (String(data.fill_id ?? '') !== fillId) return false;
+    if (decibel.normalizeAptosAddress(data.account || '') !== wantedSubaccount) return false;
+    const eventMarket = decibel.normalizeAptosAddress(vectorValue(data.market));
+    return !wantedMarket || !eventMarket || eventMarket === wantedMarket;
+  });
+  if (!event) return { verified: false, reason: 'matching_trade_event_missing' };
+
+  const direct = event?.data?.builder_code?.vec?.[0] || null;
+  const distributed = event?.data?.fee_distribution?.builder_or_referrer_fees?.vec?.[0] || null;
+  const builderAddr = decibel.normalizeAptosAddress(
+    direct?.builder || direct?.address || distributed?.builder || distributed?.address || ''
+  );
+  const chainFee = Number(direct?.fees);
+  const distributedFee = Number(distributed?.fees);
+  const hasPositiveBuilderFee = (Number.isFinite(chainFee) && chainFee > 0)
+    || (Number.isFinite(distributedFee) && distributedFee > 0);
+  if (!builderAddr || !DECIBEL_ALLOWED_BUILDER_ADDRS.has(builderAddr)) {
+    return { verified: false, reason: 'different_builder', builder_addr: builderAddr || null };
+  }
+  if (!hasPositiveBuilderFee) {
+    return { verified: false, reason: 'builder_fee_missing', builder_addr: builderAddr };
+  }
+  const eventFee = Number(event?.data?.fee);
+  return {
+    verified: true,
+    builder_addr: builderAddr,
+    builder_fee_bps: Number.isFinite(chainFee) && chainFee > 0
+      ? chainFee / DECIBEL_BUILDER_CHAIN_UNITS_PER_BPS
+      : null,
+    builder_distributed_fee: Number.isFinite(distributedFee) ? distributedFee : null,
+    fee_usd: Number.isFinite(eventFee) ? eventFee / 1e6 : null,
+    tx_hash: String(tx?.hash || '') || null,
+  };
+}
+
+async function proofFromFillTx(fill, subAddr, client = decibel) {
+  const version = fieldString(fill, ['transaction_version', 'transactionVersion']);
+  if (!/^\d+$/.test(version)) {
+    return { verified: false, retryable: true, reason: 'transaction_version_missing' };
+  }
+  const tx = await fetchAptosTxByVersion(version, client);
+  return verifyExactFillTradeEvent(tx, fill, subAddr);
+}
+
+async function proofFromOrderTx(playerId, subAddr, order, marketMap, store = db, client = decibel) {
   const version = txVersionFromOrder(order);
   if (!version) return null;
-  const tx = await fetchAptosTxByVersion(version);
+  const tx = await fetchAptosTxByVersion(version, client);
   const payload = tx?.payload || {};
   const args = Array.isArray(payload.arguments) ? payload.arguments : [];
   const tradeEvent = findMatchingTradeEvent(tx, order, subAddr);
@@ -310,14 +367,14 @@ async function proofFromOrderTx(playerId, subAddr, order, marketMap) {
     order_id: orderId || null,
     client_order_id: orderClientId || null,
   });
-  db.recordDecibelOrderProof({
+  store.recordDecibelOrderProof({
     playerId,
     subaccount: subAddr,
     orderId: orderId || null,
     clientOrderId: orderClientId || null,
     symbol: symbolFromFill(order, marketMap),
     side: sideFromFill(order),
-    orderType: isTriggerOrTpSlOrder(order) ? 'trigger' : 'limit',
+    orderType: rewardOrderType(order, sideFromFill(order)),
     marketName: fieldString(market || order, ['market_name', 'marketName', 'symbol']) || null,
     marketAddr: txMarket || orderMarket || null,
     builderAddr,
@@ -325,7 +382,7 @@ async function proofFromOrderTx(playerId, subAddr, order, marketMap) {
     txHash: tx?.hash || null,
     proofJson,
   });
-  return db.getDecibelOrderProof({ orderId, clientOrderId: orderClientId }) || {
+  return store.getDecibelOrderProof({ orderId, clientOrderId: orderClientId }) || {
     id: null,
     builder_addr: builderAddr,
     builder_fee_bps: builderFeeBps,
@@ -336,16 +393,21 @@ async function proofFromOrderTx(playerId, subAddr, order, marketMap) {
   };
 }
 
-function isFilledLimitOrder(row) {
+function isFilledRewardOrder(row) {
   const status = fieldString(row, ['status', 'order_status', 'orderStatus', 'state']).toLowerCase();
-  if (status && !status.includes('fill')) return false;
+  if (!status.includes('fill')) return false;
   const type = fieldString(row, ['order_type', 'orderType', 'type']).toLowerCase();
-  const isTriggerOrTpSl = isTriggerOrTpSlOrder(row);
-  if ((type.includes('market') || type.includes('ioc')) && !isTriggerOrTpSl) return false;
-  if (type.includes('limit')) return true;
-  if (isTriggerOrTpSl) return true;
+  if (type.includes('limit') || type.includes('market') || type.includes('ioc')) return true;
+  if (isTriggerOrTpSlOrder(row)) return true;
   const tif = fieldString(row, ['time_in_force', 'timeInForce', 'tif']).toLowerCase();
   return tif.includes('good') || tif.includes('gtc');
+}
+
+function rewardOrderType(order, side) {
+  if (String(side || '').startsWith('close_')) return 'close';
+  if (isTriggerOrTpSlOrder(order)) return 'trigger';
+  const type = fieldString(order, ['order_type', 'orderType', 'type']).toLowerCase();
+  return type.includes('market') || type.includes('ioc') ? 'market' : 'limit';
 }
 
 function marketAddress(row) {
@@ -354,8 +416,8 @@ function marketAddress(row) {
   return normalized && normalized.startsWith('0x') ? normalized : '';
 }
 
-async function marketsByAddress() {
-  const markets = await decibel.fetchMarkets();
+async function marketsByAddress(client = decibel) {
+  const markets = await client.fetchMarkets();
   const byAddr = new Map();
   for (const market of markets) {
     const addr = marketAddress(market);
@@ -390,67 +452,120 @@ function fillPnl(row) {
   return Number.isFinite(raw) ? raw : 0;
 }
 
-function aggregateLimitFills(trades, limitOrderKeySet, limitOrderByKey, marketMap) {
-  const groups = new Map();
-  for (const fill of Array.isArray(trades) ? trades : []) {
-    const keys = orderKeys(fill);
-    const matchingKey = Array.from(keys).find(k => limitOrderKeySet.has(k));
-    if (!matchingKey) continue;
+function tradeFillId(row) {
+  return fieldString(row, ['trade_id', 'tradeId', 'fill_id', 'fillId', 'id']);
+}
 
-    const price = Number(fill?.price ?? fill?.fill_price ?? fill?.avg_price ?? 0);
-    const sizeAbs = Math.abs(Number(fill?.size ?? fill?.filled_size ?? fill?.base_size ?? 0));
-    const notional = Number.isFinite(price) && Number.isFinite(sizeAbs) ? price * sizeAbs : 0;
-    if (!Number.isFinite(notional) || notional < MIN_RECORDED_NOTIONAL_USD) continue;
+function tradeFillTimeMs(row) {
+  const value = Number(row?.transaction_unix_ms ?? row?.transactionUnixMs ?? row?.unix_ms ?? 0);
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
 
-    const side = sideFromFill(fill);
-    const key = `${matchingKey}:${side}`;
-    const matchedOrderId = orderIdFromMatchingKey(matchingKey);
-    const current = groups.get(key) || {
-      key,
-      proofKey: matchingKey,
-      order: limitOrderByKey?.get(matchingKey) || null,
-      symbol: symbolFromFill(fill, marketMap),
-      side,
-      orderId: matchedOrderId || fieldString(fill, ['order_id', 'orderId', 'orderID']) || matchingKey,
-      clientOrderId: `decibel:limit-fill:${matchingKey}:${side}`,
-      sizeAbs: 0,
-      notional: 0,
-      weightedPrice: 0,
-      pnl: 0,
-      fee: 0,
-    };
-    current.sizeAbs += sizeAbs;
-    current.notional += notional;
-    current.weightedPrice += price * sizeAbs;
-    current.pnl += fillPnl(fill);
-    const fee = Number(fill?.fee_amount ?? fill?.fee ?? 0);
-    if (Number.isFinite(fee)) current.fee += fee;
-    groups.set(key, current);
+function exactFillCutoverMs(store = db, opts = {}) {
+  const explicit = Number(opts.cutoverMs ?? process.env.DECIBEL_EXACT_FILL_CUTOVER_MS);
+  if (Number.isFinite(explicit) && explicit > 0) return explicit;
+  const stored = Number(store.getDexWorkerState('decibel', DECIBEL_EXACT_FILL_CUTOVER_KEY, 0));
+  if (Number.isFinite(stored) && stored > 0) return stored;
+  const initialized = Number(opts.nowMs || Date.now());
+  store.setDexWorkerState('decibel', DECIBEL_EXACT_FILL_CUTOVER_KEY, String(initialized));
+  return initialized;
+}
+
+function exactFillCursorKey(subAddr) {
+  return `${DECIBEL_EXACT_FILL_CURSOR_PREFIX}${decibel.normalizeAptosAddress(subAddr)}`;
+}
+
+function exactFillScanWindow(store, subAddr, opts = {}) {
+  const cutoverMs = exactFillCutoverMs(store, opts);
+  const cursorMs = Number(store.getDexWorkerState(
+    'decibel',
+    exactFillCursorKey(subAddr),
+    cutoverMs,
+  ));
+  const safeCursorMs = Number.isFinite(cursorMs) && cursorMs >= cutoverMs ? cursorMs : cutoverMs;
+  const overlapMs = Math.max(0, Number(opts.overlapMs ?? DECIBEL_EXACT_FILL_OVERLAP_MS));
+  return {
+    cutoverMs,
+    cursorMs: safeCursorMs,
+    scanFromMs: Math.max(cutoverMs, safeCursorMs - overlapMs),
+  };
+}
+
+async function fetchTradePagesSince(client, subAddr, sinceMs, opts = {}) {
+  const pageSize = Math.max(1, Math.min(100, Number(opts.pageSize || DECIBEL_EXACT_FILL_PAGE_SIZE)));
+  const maxPages = Math.max(1, Math.min(50, Number(opts.maxPages || DECIBEL_EXACT_FILL_MAX_PAGES)));
+  const rows = [];
+  let pages = 0;
+  let reachedBoundary = false;
+  let lastPageWasFull = false;
+  let missingTimestamps = 0;
+  for (let pageIndex = 0; pageIndex < maxPages; pageIndex++) {
+    const page = await client.fetchTradeHistory(subAddr, {
+      limit: pageSize,
+      offset: pageIndex * pageSize,
+      sortDir: 'DESC',
+      throwOnError: true,
+    });
+    if (!Array.isArray(page)) throw new Error('Decibel trade_history returned a non-array page');
+    pages++;
+    if (!page.length) {
+      reachedBoundary = true;
+      lastPageWasFull = false;
+      break;
+    }
+    lastPageWasFull = page.length === pageSize;
+    rows.push(...page);
+    const times = page.map(tradeFillTimeMs).filter(Number.isFinite);
+    missingTimestamps += page.length - times.length;
+    if (page.length < pageSize || (times.length && Math.min(...times) < sinceMs)) {
+      reachedBoundary = true;
+      break;
+    }
   }
-  return Array.from(groups.values()).filter(g => g.notional >= MIN_RECORDED_NOTIONAL_USD);
+  return {
+    rows,
+    pages,
+    missingTimestamps,
+    truncated: !reachedBoundary && lastPageWasFull,
+  };
 }
 
 async function recordRecentLimitFills(playerId, subAddr, opts = {}) {
-  const [orders, trades, marketMap] = await Promise.all([
-    decibel.fetchOrderHistory(subAddr, { limit: DECIBEL_LIMIT_FILL_LOOKBACK, sortDir: 'DESC' }),
-    decibel.fetchTradeHistory(subAddr, { limit: DECIBEL_LIMIT_FILL_LOOKBACK, sortDir: 'DESC' }),
-    marketsByAddress(),
+  const store = opts.tradeDb || db;
+  const client = opts.decibelClient || decibel;
+  const window = exactFillScanWindow(store, subAddr, opts);
+  let orderHistoryFailed = false;
+  const [orders, tradePages, marketMap] = await Promise.all([
+    client.fetchOrderHistory(subAddr, {
+      limit: DECIBEL_EXACT_FILL_PAGE_SIZE,
+      sortDir: 'DESC',
+      throwOnError: true,
+    }).catch((error) => {
+      orderHistoryFailed = true;
+      if (DECIBEL_RECONCILE_DEBUG) {
+        console.warn(`[decibel-reconcile] order history unavailable for ${shortAddr(subAddr)}: ${error?.message || error}`);
+      }
+      return [];
+    }),
+    fetchTradePagesSince(client, subAddr, window.scanFromMs, opts),
+    marketsByAddress(client),
   ]);
+  const trades = tradePages.rows;
   const filledOrders = Array.isArray(orders)
     ? orders.filter((order) => {
       const status = fieldString(order, ['status', 'order_status', 'orderStatus', 'state']).toLowerCase();
-      return !status || status.includes('fill');
+      return status.includes('fill');
     })
     : [];
-  const limitOrderKeySet = new Set();
-  const limitOrderByKey = new Map();
+  const rewardOrderKeySet = new Set();
+  const rewardOrderByKey = new Map();
   let eligibleOrderCount = 0;
   for (const order of Array.isArray(orders) ? orders : []) {
-    if (!isFilledLimitOrder(order)) continue;
+    if (!isFilledRewardOrder(order)) continue;
     eligibleOrderCount++;
     for (const key of orderKeys(order)) {
-      limitOrderKeySet.add(key);
-      if (!limitOrderByKey.has(key)) limitOrderByKey.set(key, order);
+      rewardOrderKeySet.add(key);
+      if (!rewardOrderByKey.has(key)) rewardOrderByKey.set(key, order);
     }
   }
   let tradeRowsWithKeys = 0;
@@ -459,7 +574,7 @@ async function recordRecentLimitFills(playerId, subAddr, opts = {}) {
     const keys = orderKeys(trade);
     if (!keys.size) continue;
     tradeRowsWithKeys++;
-    if (!Array.from(keys).some((key) => limitOrderKeySet.has(key))) unmatchedTradeRows++;
+    if (!Array.from(keys).some((key) => rewardOrderKeySet.has(key))) unmatchedTradeRows++;
   }
   const stats = {
     imported: 0,
@@ -470,82 +585,169 @@ async function recordRecentLimitFills(playerId, subAddr, opts = {}) {
     orders: Array.isArray(orders) ? orders.length : 0,
     filled_orders: filledOrders.length,
     eligible_orders: eligibleOrderCount,
-    eligible_order_keys: limitOrderKeySet.size,
+    eligible_order_keys: rewardOrderKeySet.size,
     trades: Array.isArray(trades) ? trades.length : 0,
     trade_rows_with_keys: tradeRowsWithKeys,
     unmatched_trade_rows: unmatchedTradeRows,
-    lookback: DECIBEL_LIMIT_FILL_LOOKBACK,
+    pages: tradePages.pages,
+    truncated: tradePages.truncated,
+    cutover_ms: window.cutoverMs,
+    cursor_ms: window.cursorMs,
+    scan_from_ms: window.scanFromMs,
+    before_cutover: 0,
+    before_scan_window: 0,
+    missing_fill_id: 0,
+    missing_fill_time: tradePages.missingTimestamps,
+    existing: 0,
+    rejected: 0,
+    retryable: 0,
+    cursor_advanced: false,
+    order_history_failed: orderHistoryFailed,
   };
-  if (!limitOrderKeySet.size) {
-    if (DECIBEL_RECONCILE_DEBUG) {
-      console.log(`[decibel-reconcile] player=${playerId} sub=${shortAddr(subAddr)} no eligible filled limit/tpsl orders orders=${stats.orders} filled_orders=${stats.filled_orders} trades=${stats.trades} trade_rows_with_keys=${stats.trade_rows_with_keys} kinds=${JSON.stringify(countKinds(orders))}`);
-    }
-    return opts.details ? stats : 0;
-  }
 
-  const aggregatedFills = aggregateLimitFills(trades, limitOrderKeySet, limitOrderByKey, marketMap);
-  stats.matched = aggregatedFills.length;
-  for (const fill of aggregatedFills) {
-    const avgPrice = fill.sizeAbs > 0 ? fill.weightedPrice / fill.sizeAbs : 0;
-    const isClose = String(fill.side || '').startsWith('close_');
-    let proof = proofForOrderKey(fill.proofKey);
-    if (!proof && fill.order) {
-      try {
-        proof = await proofFromOrderTx(playerId, subAddr, fill.order, marketMap);
-      } catch (e) {
-        console.warn(`[decibel-rewards-worker] on-chain proof failed for ${fill.proofKey}:`, e.message);
+  const proofByKey = new Map();
+  const seenFillIds = new Set();
+  for (const fill of Array.isArray(trades) ? trades : []) {
+    const fillTimeMs = tradeFillTimeMs(fill);
+    if (!fillTimeMs) continue;
+    if (fillTimeMs < stats.cutover_ms) {
+      stats.before_cutover++;
+      continue;
+    }
+    if (fillTimeMs < stats.scan_from_ms) {
+      stats.before_scan_window++;
+      continue;
+    }
+    const fillId = tradeFillId(fill);
+    if (!fillId) {
+      stats.missing_fill_id++;
+      continue;
+    }
+    if (seenFillIds.has(fillId)) continue;
+    seenFillIds.add(fillId);
+    const price = Number(fill?.price ?? fill?.fill_price ?? fill?.avg_price ?? 0);
+    const sizeAbs = Math.abs(Number(fill?.size ?? fill?.filled_size ?? fill?.base_size ?? 0));
+    const notional = Number.isFinite(price) && Number.isFinite(sizeAbs) ? price * sizeAbs : 0;
+    if (!Number.isFinite(notional) || notional < MIN_RECORDED_NOTIONAL_USD) continue;
+
+    const clientOrderId = `decibel:trade-fill:${fillId}`;
+    const existing = store.getTradeByClientOrderId(playerId, 'decibel', clientOrderId);
+    if (existing?.verified_source === 'decibel_fill') {
+      stats.existing++;
+      continue;
+    }
+
+    const fillKeys = Array.from(orderKeys(fill));
+    let matchingKey = '';
+    let proof = null;
+    for (const key of fillKeys) {
+      const candidate = proofByKey.has(key) ? proofByKey.get(key) : proofForOrderKey(key, store);
+      proofByKey.set(key, candidate || null);
+      if (isAllowedStoredOrderProof(candidate, subAddr)) {
+        matchingKey = key;
+        proof = candidate;
+        break;
       }
     }
-    const proofJson = proof ? JSON.stringify({
-      source: 'decibel_trade_history_reconciliation',
+    const orderKey = fillKeys.find((key) => rewardOrderKeySet.has(key)) || '';
+    const order = orderKey ? rewardOrderByKey.get(orderKey) || null : null;
+    matchingKey ||= orderKey || fillKeys[0] || '';
+    // Bulk maker fills also appear in regular trade_history. Only accept a
+    // regular fill when it is tied to our stored order proof or a matching
+    // non-bulk order-history row; the bulk worker owns all other maker fills.
+    if (!proof && !order) continue;
+
+    if (!proof && order) {
+      try {
+        proof = await proofFromOrderTx(playerId, subAddr, order, marketMap, store, client);
+      } catch (e) {
+        console.warn(`[decibel-rewards-worker] on-chain proof failed for ${matchingKey}:`, e.message);
+      }
+    }
+    if (proof && !isAllowedStoredOrderProof(proof, subAddr)) proof = null;
+    if (!proof) {
+      try {
+        const fillProof = await proofFromFillTx(fill, subAddr, client);
+        if (fillProof.verified) {
+          proof = fillProof;
+        } else if (fillProof.retryable) {
+          stats.retryable++;
+          continue;
+        } else {
+          stats.rejected++;
+          continue;
+        }
+      } catch (error) {
+        stats.retryable++;
+        console.warn(`[decibel-rewards-worker] fill transaction unavailable trade_id=${fillId}:`, error?.message || error);
+        continue;
+      }
+    }
+    stats.matched++;
+    if (matchingKey) proofByKey.set(matchingKey, proof);
+    const side = sideFromFill(fill);
+    const fee = Number(fill?.fee_amount ?? fill?.fee ?? 0);
+    const proofJson = JSON.stringify({
+      source: 'decibel_trade_fill_v2',
+      trade_id: fillId,
       builder: proof.builder_addr,
-      builder_fee_bps: proof.builder_fee_bps,
+      builder_fee_bps: proof.builder_fee_bps ?? null,
+      builder_distributed_fee: proof.builder_distributed_fee ?? null,
       subaccount: subAddr,
-      matched_key: fill.proofKey,
+      matched_key: matchingKey || null,
       proof_id: proof.id || null,
-      original_client_order_id: proof.client_order_id,
-      original_order_id: proof.order_id,
+      original_client_order_id: proof.client_order_id
+        || fieldString(fill, ['client_order_id', 'clientOrderId', 'clientOrderID'])
+        || null,
+      original_order_id: proof.order_id
+        || fieldString(fill, ['order_id', 'orderId', 'orderID'])
+        || null,
       order_tx_hash: proof.tx_hash,
       order_proof_json: proof.proof_json || null,
-    }) : null;
-    const r = db.addTrade(playerId, {
-      symbol: fill.symbol,
-      side: fill.side,
-      orderType: isClose ? 'close' : 'limit',
-      amount: String(fill.sizeAbs),
-      price: Number.isFinite(avgPrice) && avgPrice > 0 ? String(avgPrice) : null,
-      orderId: fill.orderId,
-      clientOrderId: fill.clientOrderId,
+      transaction_version: fieldString(fill, ['transaction_version', 'transactionVersion']) || null,
+      transaction_unix_ms: fillTimeMs,
+      verification: proof.proof_json ? 'stored_order_proof' : 'aptos_trade_event',
+    });
+    const r = store.upsertVerifiedTrade(playerId, {
+      symbol: symbolFromFill(fill, marketMap),
+      side,
+      orderType: proof.order_type || (order ? rewardOrderType(order, side) : 'market'),
+      amount: String(sizeAbs),
+      price: String(price),
+      // Decibel order ids exceed SQLite's exact INTEGER range. The canonical
+      // string remains in client_order_id/proof_json; do not coerce it to REAL.
+      orderId: null,
+      clientOrderId,
       status: 'filled',
       dex: 'decibel',
-      notional_usd: fill.notional,
-      verifiedSource: proof ? 'decibel_fill' : 'worker',
-      pnl: isClose && Number.isFinite(fill.pnl) ? fill.pnl : null,
-      fee: fill.fee,
+      notional_usd: notional,
+      verifiedSource: 'decibel_fill',
+      pnl: String(side).startsWith('close_') ? fillPnl(fill) : null,
+      fee: Number.isFinite(fee) ? fee : (proof.fee_usd ?? null),
       proofJson,
+      createdAt: new Date(fillTimeMs).toISOString(),
     });
-    stats.imported += r.changes || 0;
-    if (proof) {
-      stats.verified++;
-      const upgrade = db.upgradeDecibelWorkerTradeByClient({
-        clientOrderId: fill.clientOrderId,
-        proofJson,
-        fee: fill.fee,
-      });
-      const orderUpgrade = db.upgradeDecibelWorkerTradeByOrder({
-        orderId: fill.orderId,
-        proofJson,
-        fee: fill.fee,
-      });
-      stats.updated += (upgrade.changes || 0) + (orderUpgrade.changes || 0);
-    } else {
-      stats.unverified++;
-    }
+    stats.imported += Number(r.inserted || 0);
+    stats.updated += Number(r.updated || 0);
+    stats.verified++;
+  }
+
+  const cursorCanAdvance = !stats.truncated
+    && !stats.order_history_failed
+    && stats.retryable === 0
+    && stats.missing_fill_id === 0
+    && stats.missing_fill_time === 0;
+  if (cursorCanAdvance) {
+    const nowMs = Number(opts.nowMs || Date.now());
+    store.setDexWorkerState('decibel', exactFillCursorKey(subAddr), String(nowMs));
+    stats.cursor_advanced = true;
+  } else {
+    console.warn(`[decibel-reconcile] cursor held player=${String(playerId).slice(0, 8)} sub=${shortAddr(subAddr)} truncated=${stats.truncated} order_history_failed=${stats.order_history_failed} retryable=${stats.retryable} missing_fill_id=${stats.missing_fill_id} missing_fill_time=${stats.missing_fill_time}`);
   }
   if (DECIBEL_RECONCILE_DEBUG) {
-    console.log(`[decibel-reconcile] player=${playerId} sub=${shortAddr(subAddr)} orders=${stats.orders} filled_orders=${stats.filled_orders} eligible_orders=${stats.eligible_orders} eligible_order_keys=${stats.eligible_order_keys} trades=${stats.trades} trade_rows_with_keys=${stats.trade_rows_with_keys} unmatched_trade_rows=${stats.unmatched_trade_rows} matched=${stats.matched} inserted=${stats.imported} updated=${stats.updated} verified=${stats.verified} unverified=${stats.unverified} kinds=${JSON.stringify(countKinds(orders))}`);
+    console.log(`[decibel-reconcile] player=${playerId} sub=${shortAddr(subAddr)} pages=${stats.pages} truncated=${stats.truncated} orders=${stats.orders} filled_orders=${stats.filled_orders} eligible_orders=${stats.eligible_orders} trades=${stats.trades} matched=${stats.matched} existing=${stats.existing} inserted=${stats.imported} updated=${stats.updated} verified=${stats.verified} rejected=${stats.rejected} retryable=${stats.retryable} cursor_advanced=${stats.cursor_advanced} kinds=${JSON.stringify(countKinds(orders))}`);
   }
-  return opts.details ? stats : stats.imported;
+  return opts.details ? stats : stats.imported + stats.updated;
 }
 
 async function importRecentLimitFillsForPlayer(playerId, ownerAddr) {
@@ -736,6 +938,7 @@ async function pollOnce(mainDb) {
 }
 
 function start() {
+  const exactFillCutover = exactFillCutoverMs(db);
   let mainDb;
   try {
     mainDb = new Database(MAIN_DB_PATH, { readonly: true, fileMustExist: true });
@@ -768,7 +971,7 @@ function start() {
   // initial burst. After that, fire every POLL_MS.
   setTimeout(tick, 30_000);
   setInterval(tick, POLL_MS);
-  console.log(`[decibel-rewards-worker] started, polling every ${POLL_MS / 1000} s`);
+  console.log(`[decibel-rewards-worker] started, polling every ${POLL_MS / 1000} s, exact-fill cutover=${new Date(exactFillCutover).toISOString()}`);
 }
 
 module.exports = {
@@ -776,4 +979,13 @@ module.exports = {
   pollOnce,
   importRecentLimitFillsForPlayer,
   importRecentBulkFillsForPlayer,
+  __test: {
+    isFilledRewardOrder,
+    rewardOrderType,
+    orderKeys,
+    tradeFillId,
+    tradeFillTimeMs,
+    exactFillCutoverMs,
+    recordRecentLimitFills,
+  },
 };

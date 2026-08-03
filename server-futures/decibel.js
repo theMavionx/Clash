@@ -1205,7 +1205,8 @@ async function fetchOrderHistory(subaccountAddr, options = {}) {
       offset: options.offset,
       sort_dir: options.sortDir || options.sort_dir,
     });
-  } catch {
+  } catch (error) {
+    if (options.throwOnError) throw error;
     return [];
   }
 }
@@ -1219,7 +1220,8 @@ async function fetchTradeHistory(subaccountAddr, options = {}) {
       offset: options.offset,
       sort_dir: options.sortDir || options.sort_dir,
     });
-  } catch {
+  } catch (error) {
+    if (options.throwOnError) throw error;
     return [];
   }
 }
@@ -1243,9 +1245,10 @@ async function fetchBulkOrderFills(subaccountAddr, options = {}) {
       limit: options.limit,
       offset: options.offset,
     });
-  } catch {
+  } catch (error) {
     // Keep regular trade reconciliation available during a temporary bulk
     // endpoint outage. The same fill will be retried on the next poll/claim.
+    if (options.throwOnError) throw error;
     return [];
   }
 }

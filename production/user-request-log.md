@@ -2790,3 +2790,22 @@ Follow-up:
 - Timestamp: 2026-08-03 08:16 (Europe/Kyiv)
 - Request: "треба оптимізовувати то все діло по трохи перевір чи можна клеш фючерс зменшити трохи що там так багато памят ще займає"
 - Scope: measure `clash-futures` CPU and memory on the production VPS, identify the responsible workers/caches or polling loops, then implement and verify only evidence-backed low-risk reductions on `main`.
+
+## UR-2026-08-03-CLASHBOT-ARCHERS-STOP-FIRING
+
+- Timestamp: 2026-08-03 08:44 (Europe/Kyiv)
+- Request: "передивись останню атаку клеш бот лучниці перестали стріляти"
+- Scope: inspect the latest production battle replay for `clashbot`, compare client actions and server combat telemetry for Archer targeting/fire events, reproduce the stalled state locally, and identify the root cause before changing combat behavior.
+
+## UR-2026-08-03-DECIBEL-TOURNAMENT-VOLUME-RECONCILIATION
+
+- Timestamp: 2026-08-03 09:00 (Europe/Kyiv)
+- Request: audit the active Decibel tournament volume for every participant, verify Zoro's report that only about half of the real volume was credited, add any proven missing volume to affected players, identify and fix the systemic cause, then return to the Archer Tower investigation.
+- Scope: compare immutable tournament snapshots and credited quest/tournament volume against authoritative Decibel account fills for the exact tournament window and mapped subaccounts; produce a per-player discrepancy report; apply only idempotent, auditable production corrections; verify totals before and after; then correct the ingestion path without duplicating previously credited volume.
+
+## UR-2026-08-03-DECIBEL-VOLUME-DURABILITY
+
+- Timestamp: 2026-08-03 10:13 (Europe/Kyiv)
+- Request: "ну і зроби так щоб таких траблів більше не було"
+- Scope: replace fragile per-order Decibel volume aggregation with an exact, idempotent fill ledger; include partial, Market, IOC, limit, and trigger fills; preserve 128-bit identifiers without SQLite precision loss; add regression coverage and production verification so temporary polling/API failures can be reconciled without missing or duplicating tournament volume.
+- Audit result: $137,387.693947 of proven missing tournament volume was added across two fixed-cutoff, backed-up, idempotent corrections. The durable exact-fill ledger owns all Decibel fills after `2026-08-03T07:27:55.375Z`.

@@ -1399,82 +1399,76 @@ async function recordDecibelActualFills(playerId, subaccount, orderPayload, txRe
   const fills = await fetchDecibelFillsForOrder(subaccount, orderPayload, txResult);
   if (!fills.length) return { inserted: 0, rows: 0, volume_usd: 0, reason: 'no_actual_fills' };
 
-  const grouped = new Map();
+  let inserted = 0;
+  let updated = 0;
+  let volume = 0;
+  let rows = 0;
   for (const fill of fills) {
     const notional = decibelFillNotional(fill);
     if (!Number.isFinite(notional) || notional < DECIBEL_MIN_RECORDED_NOTIONAL_USD) continue;
+    if (notional > DECIBEL_MAX_REWARD_NOTIONAL_USD) {
+      console.log(`[decibel] actual fill row skipped: notional ${notional.toFixed(6)} outside recorded range`);
+      continue;
+    }
+    const fillId = decibelFieldString(fill, ['trade_id', 'tradeId', 'fill_id', 'fillId', 'id']);
+    if (!fillId) continue;
     const side = decibelFillSide(fill, sideFallback);
-    const key = side;
-    const current = grouped.get(key) || {
-      fills: [],
-      side,
+    const size = Math.abs(Number(fill?.size ?? fill?.filled_size ?? fill?.base_size ?? 0));
+    const price = Number(fill?.price ?? fill?.fill_price ?? fill?.avg_price ?? 0);
+    const fee = Number(fill?.fee_amount ?? fill?.fee ?? 0);
+    const pnl = decibelFillPnl(fill);
+    const transactionUnixMs = Number(fill?.transaction_unix_ms ?? fill?.transactionUnixMs ?? fill?.unix_ms ?? 0);
+    if (!Number.isFinite(transactionUnixMs) || transactionUnixMs <= 0) {
+      // Do not stamp a fill with server receipt time: tournament boundaries
+      // must use the exchange execution time. The persistent worker retries
+      // this fill once Decibel's indexer exposes the complete row.
+      continue;
+    }
+    const clientOrderId = `decibel:trade-fill:${fillId}`;
+    const info = db.upsertVerifiedTrade(playerId, {
       symbol: decibelFillSymbol(
         fill,
         orderPayload?.symbol || orderPayload?.rewardSymbol || orderPayload?.marketName || orderPayload?.market_name,
       ),
-      amount: 0,
-      notional: 0,
-      weightedPrice: 0,
-      fee: 0,
-      pnl: 0,
-      hasPnl: false,
-    };
-    const size = Math.abs(Number(fill?.size ?? fill?.filled_size ?? fill?.base_size ?? 0));
-    const price = Number(fill?.price ?? fill?.fill_price ?? fill?.avg_price ?? 0);
-    current.amount += Number.isFinite(size) ? size : 0;
-    current.notional += notional;
-    current.weightedPrice += Number.isFinite(price) && Number.isFinite(size) ? price * size : 0;
-    const fee = Number(fill?.fee_amount ?? fill?.fee ?? 0);
-    if (Number.isFinite(fee)) current.fee += fee;
-    const pnl = decibelFillPnl(fill);
-    if (pnl != null) {
-      current.pnl += pnl;
-      current.hasPnl = true;
-    }
-    current.fills.push(fill);
-    grouped.set(key, current);
-  }
-
-  let inserted = 0;
-  let volume = 0;
-  for (const row of grouped.values()) {
-    if (row.notional > DECIBEL_MAX_REWARD_NOTIONAL_USD) {
-      console.log(`[decibel] actual fill row skipped: notional ${row.notional.toFixed(6)} outside recorded range`);
-      continue;
-    }
-    const avgPrice = row.amount > 0 ? row.weightedPrice / row.amount : 0;
-    const clientOrderId = `decibel:fill:${orderPayload.clientOrderId}:${row.side}`;
-    const info = db.addTrade(playerId, {
-      symbol: row.symbol,
-      side: row.side,
-      orderType: String(row.side || '').startsWith('close_') ? 'close' : orderType,
-      amount: String(row.amount),
-      price: Number.isFinite(avgPrice) && avgPrice > 0 ? String(avgPrice) : null,
-      orderId: txResult?.transactionHash || txResult?.hash || txResult?.orderId || null,
+      side,
+      orderType: String(side || '').startsWith('close_') ? 'close' : orderType,
+      amount: String(size),
+      price: Number.isFinite(price) && price > 0 ? String(price) : null,
+      // Exact Decibel order/fill ids are retained as strings below. Avoid the
+      // legacy order_id column, whose numeric affinity loses 128-bit precision.
+      orderId: null,
       clientOrderId,
       status: 'filled',
       dex: 'decibel',
-      notional_usd: row.notional,
+      notional_usd: notional,
       verifiedSource: 'decibel_fill',
-      pnl: row.hasPnl ? row.pnl : null,
-      fee: row.fee,
+      pnl,
+      fee: Number.isFinite(fee) ? fee : null,
       proofJson: JSON.stringify({
-        source: 'decibel_trade_history',
+        source: 'decibel_trade_fill_v2',
+        trade_id: fillId,
         builder: orderPayload.builderAddr,
         builder_fee_bps: orderPayload.builderFee,
         subaccount,
-        symbol: row.symbol,
+        symbol: decibelFillSymbol(
+          fill,
+          orderPayload?.symbol || orderPayload?.rewardSymbol || orderPayload?.marketName || orderPayload?.market_name,
+        ),
         market_name: orderPayload.marketName || orderPayload.market_name || null,
         original_client_order_id: orderPayload.clientOrderId,
+        original_order_id: decibelFieldString(fill, ['order_id', 'orderId', 'orderID']) || null,
         transaction_hash: txResult?.transactionHash || txResult?.hash || null,
-        fill_count: row.fills.length,
-        fills: row.fills,
+        transaction_version: decibelFieldString(fill, ['transaction_version', 'transactionVersion']) || null,
+        transaction_unix_ms: transactionUnixMs,
       }),
+      createdAt: new Date(transactionUnixMs).toISOString(),
     });
-    inserted += info.changes || 0;
-    volume += row.notional;
+    inserted += Number(info.inserted || 0);
+    updated += Number(info.updated || 0);
+    volume += notional;
+    rows++;
   }
-  return { inserted, rows: grouped.size, volume_usd: volume };
+  return { inserted, updated, rows, volume_usd: volume };
 }
 
 function decibelTxHash(result) {
@@ -6020,5 +6014,9 @@ router.post('/activate', auth, avantisMigratedGuard, async (req, res) => {
     res.status(500).json({ error: e.message || 'Activation failed' });
   }
 });
+
+router.__test = {
+  recordDecibelActualFills,
+};
 
 module.exports = router;

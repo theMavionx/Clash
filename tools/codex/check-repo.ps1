@@ -52,6 +52,7 @@ $NodeFiles = @(
     "server-futures/test-hyperliquid-rewards-worker.js",
     "server-futures/decibel-bulk-rewards.js",
     "server-futures/decibel-rewards-worker.js",
+    "server-futures/test-decibel-exact-fill-reconciliation.js",
     "server-futures/test-decibel-bulk-rewards.js",
     "server-futures/index.js",
     "server-futures/routes.js",
@@ -76,6 +77,7 @@ Invoke-Step "Aptos browser key pool" { node scripts/verify-aptos-browser-key-poo
 Invoke-Step "Aptos RPC routing" { node scripts/verify-aptos-rpc-routing.mjs }
 Invoke-Step "Hyperliquid rewards worker" { node server-futures/test-hyperliquid-rewards-worker.js }
 Invoke-Step "Decibel bulk rewards worker" { node server-futures/test-decibel-bulk-rewards.js }
+Invoke-Step "Decibel exact-fill reconciliation" { node server-futures/test-decibel-exact-fill-reconciliation.js }
 Invoke-Step "Tournament trade cursor" { node server/test-tournament-trade-cursor.js }
 Invoke-Step "Hermes jobs worker" { node server/test-hermes-jobs-worker.js }
 
