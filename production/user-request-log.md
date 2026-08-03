@@ -2784,3 +2784,9 @@ Follow-up:
 - Timestamp: 2026-08-03 03:13 (Europe/Kyiv)
 - Request: "тут ще досі старий стандарт флег"
 - Scope: replace the stale hard-coded orange `II` thumbnail in the React Town Hall flag library with the same canonical pirate flag texture used by the live Town Hall model, then verify the actual browser UI.
+
+## UR-2026-08-03-CLASH-FUTURES-PERFORMANCE-PROFILE
+
+- Timestamp: 2026-08-03 08:16 (Europe/Kyiv)
+- Request: "треба оптимізовувати то все діло по трохи перевір чи можна клеш фючерс зменшити трохи що там так багато памят ще займає"
+- Scope: measure `clash-futures` CPU and memory on the production VPS, identify the responsible workers/caches or polling loops, then implement and verify only evidence-backed low-risk reductions on `main`.

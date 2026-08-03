@@ -204,6 +204,18 @@ try {
 // Index for /claim-gold lookup — main server reads WHERE player_id=? AND dex=? AND id>? frequently.
 try { db.exec("CREATE INDEX IF NOT EXISTS idx_trade_history_player_dex ON trade_history(player_id, dex, id)"); } catch {}
 try { db.exec("CREATE INDEX IF NOT EXISTS idx_trade_history_player_dex_updated ON trade_history(player_id, dex, updated_at, id)"); } catch {}
+// Exchange reconciliation frequently upgrades an already-recorded fill by
+// its exchange order id. Without this composite index SQLite can only narrow
+// the lookup by `dex`, then has to visit every trade row for that venue (more
+// than 85k Decibel rows in production at the time this index was added).
+// Keep dex first because order ids are exchange-scoped rather than globally
+// unique, and retain the partial predicate so rows without an order id do not
+// inflate the index.
+try {
+  db.exec("CREATE INDEX IF NOT EXISTS idx_trade_history_dex_order_id ON trade_history(dex, order_id) WHERE order_id IS NOT NULL");
+} catch (e) {
+  console.warn('[futures.db] exchange order lookup index warning:', e.message);
+}
 // Admin analytics filters every venue by dex/status, then either a time
 // window or player. Keep those scans bounded as trade history grows.
 try { db.exec("CREATE INDEX IF NOT EXISTS idx_trade_history_dex_status_created ON trade_history(dex, status, created_at)"); } catch {}

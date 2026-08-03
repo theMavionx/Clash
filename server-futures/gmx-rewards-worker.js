@@ -97,6 +97,7 @@ function marketSymbol(marketsByAddr, addr) {
 const lastSeenAt = new Map();
 const lastSeenIds = new Map();
 const referralCache = new Map();
+const GMX_REFERRAL_DEBUG = String(process.env.GMX_REFERRAL_DEBUG || '0') !== '0';
 let publicClient = null;
 
 function isEvmAddress(value) {
@@ -132,7 +133,7 @@ async function hasClashGmxReferral(wallet) {
   const code = String(Array.isArray(result) ? result[0] : result || '').toLowerCase();
   const ok = code === GMX_REFERRAL_CODE_BYTES32.toLowerCase();
   referralCache.set(key, { at: Date.now(), ok, code });
-  if (!ok) {
+  if (!ok && GMX_REFERRAL_DEBUG) {
     console.log(`[gmx-rewards-worker] skipping ${key}: referral code is ${code || 'unset'}, expected ${GMX_REFERRAL_CODE}`);
   }
   return ok;

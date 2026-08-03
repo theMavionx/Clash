@@ -32,7 +32,10 @@ const DECIBEL_LIMIT_FILL_LOOKBACK = Math.max(
   50,
   Math.min(500, Number(process.env.DECIBEL_LIMIT_FILL_LOOKBACK || 250))
 );
-const DECIBEL_RECONCILE_DEBUG = String(process.env.DECIBEL_RECONCILE_DEBUG || '1') !== '0';
+// Per-wallet reconciliation diagnostics are intentionally opt-in. With many
+// linked accounts this used to write thousands of large lines per hour and
+// grew the PM2 logs into gigabytes without helping normal operations.
+const DECIBEL_RECONCILE_DEBUG = String(process.env.DECIBEL_RECONCILE_DEBUG || '0') !== '0';
 
 const MAIN_DB_PATH = process.env.CLASH_MAIN_DB
   || path.join(__dirname, '..', 'server', 'clash.db');
@@ -742,12 +745,22 @@ function start() {
     return;
   }
 
+  let tickInFlight = false;
   const tick = async () => {
+    if (tickInFlight) {
+      if (DECIBEL_RECONCILE_DEBUG) {
+        console.warn('[decibel-rewards-worker] skipped overlapping tick');
+      }
+      return;
+    }
+    tickInFlight = true;
     try {
       const n = await pollOnce(mainDb);
       if (n > 0) console.log(`[decibel-rewards-worker] Recorded ${n} Decibel trade row(s)`);
     } catch (e) {
       console.error('[decibel-rewards-worker] tick failed:', e?.message || e);
+    } finally {
+      tickInFlight = false;
     }
   };
 
