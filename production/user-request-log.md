@@ -2824,3 +2824,10 @@ Follow-up:
   non-repetition, Archer Tower late-wave behavior, the camera build, and the
   production release. Commit, push, full Godot export and deployment are
   explicitly authorized, including the owner's existing camera workspace edits.
+
+## UR-2026-08-03-CAMERA-SWIPE-SLOWDOWN
+
+- **Request:** Slow down camera movement during swipe gestures after validating the previous camera release on production.
+- **Scope:** Reduce direct touch-pan distance and release inertia, slightly reduce mouse-drag sensitivity for web pointer parity, and enforce bounded swipe distance in the Godot deploy regression.
+- **Production authorization:** The owner explicitly requested commit, push, and production deployment in the current conversation.
+- **Verification:** Run the real `TestMain.tscn` touch gesture at production camera zoom and the full Deploy repository gate before release.

@@ -864,6 +864,7 @@ func _verify_camera_swipe_smoothing() -> void:
 		previous_position = rig.global_position
 
 	var target_at_release: Vector3 = rig.get("_target_position")
+	var drag_distance := target_at_release.distance_to(Vector3.ZERO)
 	var release := InputEventScreenTouch.new()
 	release.index = 17
 	release.position = touch_position
@@ -877,6 +878,7 @@ func _verify_camera_swipe_smoothing() -> void:
 		largest_frame_step = maxf(largest_frame_step, frame_step)
 		previous_position = rig.global_position
 	var target_after_coast: Vector3 = rig.get("_target_position")
+	var coast_distance := target_after_coast.distance_to(target_at_release)
 
 	for _settle_frame in range(120):
 		rig.call("_process", 1.0 / 60.0)
@@ -888,12 +890,29 @@ func _verify_camera_swipe_smoothing() -> void:
 		push_error("Camera swipe smoothing test failed: swipe did not pan the camera.")
 		get_tree().quit(1)
 		return
+	if drag_distance < 0.9 or drag_distance > 1.65:
+		push_error(
+			"Camera swipe smoothing test failed: 224px swipe moved %.3f world units; expected 0.9..1.65."
+			% drag_distance
+		)
+		get_tree().quit(1)
+		return
 	if inertia_at_release.length() <= 0.1:
 		push_error("Camera swipe smoothing test failed: release inertia was not created.")
 		get_tree().quit(1)
 		return
-	if target_after_coast.distance_to(target_at_release) <= 0.08:
-		push_error("Camera swipe smoothing test failed: camera did not coast after release.")
+	if inertia_at_release.length() > 1.1:
+		push_error(
+			"Camera swipe smoothing test failed: release speed %.3f is too fast."
+			% inertia_at_release.length()
+		)
+		get_tree().quit(1)
+		return
+	if coast_distance < 0.04 or coast_distance > 0.18:
+		push_error(
+			"Camera swipe smoothing test failed: coast %.3f must stay in 0.04..0.18."
+			% coast_distance
+		)
 		get_tree().quit(1)
 		return
 	if largest_frame_step > 0.35:
@@ -914,9 +933,10 @@ func _verify_camera_swipe_smoothing() -> void:
 		get_tree().quit(1)
 		return
 
-	print("[CAMERA_SWIPE_SMOOTHING] PASS release_speed=%.3f coast=%.3f max_frame_step=%.3f settled=true" % [
+	print("[CAMERA_SWIPE_SMOOTHING] PASS drag=%.3f release_speed=%.3f coast=%.3f max_frame_step=%.3f settled=true" % [
+		drag_distance,
 		inertia_at_release.length(),
-		target_after_coast.distance_to(target_at_release),
+		coast_distance,
 		largest_frame_step,
 	])
 	get_tree().quit()

@@ -7,18 +7,18 @@ extends Node3D
 
 # ── Camera Settings ──────────────────────────────────────────────
 ## How fast the camera pans when dragging (scaled by zoom level)
-@export var pan_speed: float = 0.010
+@export var pan_speed: float = 0.007
 ## Touch pan speed (slower — fingers naturally produce larger relative deltas)
-@export var touch_pan_speed: float = 0.006
+@export var touch_pan_speed: float = 0.0035
 ## Lower follow rate for touch drags. This removes event-to-event stepping without
 ## making mouse navigation feel heavy.
 @export_range(1.0, 12.0, 0.1) var touch_smoothing: float = 4.2
 ## Portion of the filtered swipe velocity preserved after the finger is lifted.
-@export_range(0.0, 1.0, 0.05) var touch_inertia_strength: float = 0.45
+@export_range(0.0, 1.0, 0.05) var touch_inertia_strength: float = 0.30
 ## Exponential braking applied to swipe inertia every second.
-@export_range(1.0, 20.0, 0.1) var touch_inertia_decay: float = 7.0
+@export_range(1.0, 20.0, 0.1) var touch_inertia_decay: float = 8.5
 ## World-space speed cap prevents a noisy touch sample from throwing the camera.
-@export_range(0.5, 15.0, 0.1) var touch_inertia_max_speed: float = 6.0
+@export_range(0.5, 15.0, 0.1) var touch_inertia_max_speed: float = 3.5
 @export_range(0.001, 0.2, 0.001) var touch_inertia_stop_speed: float = 0.025
 ## How fast the camera moves with WASD keys
 @export var key_pan_speed: float = 3.0
