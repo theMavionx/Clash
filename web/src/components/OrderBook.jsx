@@ -2,6 +2,7 @@ import { memo, useState, useEffect, useMemo, useRef } from 'react';
 import { createPhoenixPublicWsClient, phoenixSymbol } from '../lib/phoenixClient';
 import { PACIFICA_WS_URL, pacificaFetch } from '../lib/pacificaClient';
 import { startDecibelOrderBook } from '../lib/decibelOrderBook';
+import { normalizeBulkOrderBook } from '../lib/bulkClient';
 
 const PRICE_STEPS = [0.01, 0.02, 0.1, 1];
 const FUTURES_API = import.meta.env.VITE_FUTURES_API || '/api/futures';
@@ -74,14 +75,6 @@ function normalizePhoenixBook(update) {
   };
 }
 
-function normalizeBulkBook(payload) {
-  const data = payload?.data || payload;
-  return {
-    bids: normalizePhoenixLevels(data?.bids),
-    asks: normalizePhoenixLevels(data?.asks),
-  };
-}
-
 function normalizePacificaBookPayload(payload) {
   const levels = payload?.data?.l || payload?.l;
   if (!Array.isArray(levels)) return null;
@@ -114,7 +107,7 @@ function OrderBook({
           const response = await fetch(`${FUTURES_API}/orderbook?${params.toString()}`, { signal: controller.signal });
           const json = await response.json().catch(() => null);
           if (!response.ok) throw new Error(json?.detail || json?.error || `Bulk order book ${response.status}`);
-          if (!cancelled) setBook(normalizeBulkBook(json));
+          if (!cancelled) setBook(normalizeBulkOrderBook(json));
         } catch (error) {
           if (!cancelled && error?.name !== 'AbortError') console.warn('[Bulk] order book snapshot failed', error?.message || error);
         }

@@ -3540,7 +3540,7 @@ function FuturesPanel() {
     closePosition, depositToPacifica, withdraw, activate, disconnect, setTpsl, setMarginMode, moveSpotToPerp, switchToRise, switchToInk,
     oneTapWalletFallback, executeOneTapWalletFallback, clearOneTapWalletFallback,
     // Avantis-only — undefined on the Pacifica branch.
-    hasReferrer, linkOurReferrer, oneTapTrading, setOneTapTradingEnabled, connectPerpl, openReferralJoin, approveIntegrator, referralCode, referralUrl, walletMismatch, registeredEvmWallet,
+    hasReferrer, linkOurReferrer, oneTapTrading, setOneTapTradingEnabled, connectPerpl, openReferralJoin, approveIntegrator, referralCode, referralUrl, referralTermsUrl, walletMismatch, registeredEvmWallet,
     // Pacifica agent-wallet — undefined on Avantis (Pacifica-only feature)
     pacAgent, bindAgent, bindingAgent, bindAgentError, forgetAgentLocally, revokeAgentOnServer,
     // Decibel-only — drives the blocking activation modal + gate screen.
@@ -3736,8 +3736,20 @@ function FuturesPanel() {
   const handleLinkReferrer = useCallback(async () => {
     if (!linkOurReferrer || referralLinking) return;
     setReferralLinking(true);
-    try { await linkOurReferrer(); } finally { setReferralLinking(false); }
-  }, [linkOurReferrer, referralLinking]);
+    setLocalAlert(null);
+    try {
+      const result = await linkOurReferrer();
+      if (result?.error) setLocalAlert(result.error);
+      else if (dex === 'nado') {
+        setSuccessMsg(result?.already_linked
+          ? 'This Nado wallet already has a referral.'
+          : `Nado referral ${referralCode || '13z8hnl'} confirmed.`);
+      }
+      return result;
+    } finally {
+      setReferralLinking(false);
+    }
+  }, [dex, linkOurReferrer, referralCode, referralLinking]);
   const handleDismissReferral = useCallback(() => {
     setReferralDismissed(true);
     if (referralDismissKey) {
@@ -3752,7 +3764,7 @@ function FuturesPanel() {
   // can stay false after a partial activation. Keep the banner for
   // Avantis only.
   const showReferralBanner =
-    dex === 'hyperliquid'
+    (dex === 'hyperliquid' || dex === 'nado')
     && !!walletAddr && hasReferrer === false && !referralDismissed;
   const handleEvmConnected = useCallback(({ address, walletName, provider, rdns }) => {
     setEvmModalOpen(false);
@@ -10744,12 +10756,32 @@ function FuturesPanel() {
               <span style={{display: 'block'}}>
                 {dex === 'decibel'
                   ? 'Activate trading on Decibel'
+                  : dex === 'nado'
+                  ? 'Add the Clash referral on Nado'
                   : dex === 'hyperliquid'
                   ? (oneTapTrading?.approved ? 'One tap trading is ready' : 'Enable Hyperliquid one tap trading')
                   : 'Unlock 5% off every Avantis trade'}
               </span>
               <span style={{fontSize: 10, fontWeight: 700, color: '#8a6914'}}>
-                {dex === 'hyperliquid'
+                {dex === 'nado'
+                  ? (
+                    <>
+                      Sign the exact message for code {referralCode || '13z8hnl'}; Clash verifies it through Nado&apos;s referral API.
+                      {referralTermsUrl && (
+                        <>
+                          {' '}By accepting, you agree to the{' '}
+                          <a
+                            href={referralTermsUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            onClick={event => event.stopPropagation()}
+                            style={{color: '#6d4f08', textDecoration: 'underline'}}
+                          >Nado referral terms</a>.
+                        </>
+                      )}
+                    </>
+                  )
+                  : dex === 'hyperliquid'
                   ? 'Optional: one Arbitrum signature approves a local agent so future orders do not hit wallet chainId errors.'
                   : dex === 'decibel'
                   ? 'One Petra signature — sets up an api wallet so trades sign silently.'
@@ -10770,7 +10802,7 @@ function FuturesPanel() {
                 whiteSpace: 'nowrap',
               }}
             >
-              {referralLinking ? 'SIGNING...' : (dex === 'decibel' ? 'ACTIVATE' : dex === 'hyperliquid' ? 'ENABLE' : 'UNLOCK')}
+              {referralLinking ? 'SIGNING...' : (dex === 'decibel' ? 'ACTIVATE' : dex === 'nado' ? 'ACCEPT' : dex === 'hyperliquid' ? 'ENABLE' : 'UNLOCK')}
             </button>
             <button
               data-nodrag

@@ -108,6 +108,7 @@ async function getMarkets() {
       market_id: row.symbol,
       min_order_size: Number(row.lotSize || 0),
       min_notional: Number(row.minNotional || 0),
+      min_notional_usd: Number(row.minNotional || 0),
       max_leverage: Number(row.maxLeverage || 1),
       tick_size: Number(row.tickSize || 0),
       lot_size: Number(row.lotSize || 0),
@@ -171,7 +172,8 @@ async function getKlines(symbol, opts = {}) {
 async function getOrderBook(symbol, opts = {}) {
   return request('/l2book', {
     query: {
-      type: 'l2Book',
+      // The live API treats this discriminator as case-sensitive.
+      type: 'l2book',
       coin: apiSymbol(symbol),
       nlevels: Math.max(1, Math.min(100, Number(opts.nlevels || 20))),
       aggregation: opts.aggregation,
@@ -329,6 +331,8 @@ function verifyTransaction(transaction) {
 
 function responseStatuses(payload) {
   return payload?.data?.payload?.response?.data?.statuses
+    || payload?.response?.data?.statuses
+    || payload?.data?.response?.data?.statuses
     || payload?.payload?.response?.data?.statuses
     || payload?.statuses
     || [];
@@ -339,7 +343,7 @@ function responseRejection(payload) {
     if (!status || typeof status !== 'object') continue;
     if (status.error) return status.error?.message || status.error;
     const key = Object.keys(status)[0] || '';
-    if (/^(rejected|error|failed)$/i.test(key)) {
+    if (/^(rejected|error|failed)/i.test(key)) {
       return status[key]?.message || status[key]?.reason || key;
     }
   }
@@ -396,9 +400,13 @@ async function submitTransaction(playerId, linkedAccount, transaction) {
     }
   }
   const upstream = await request('/order', { method: 'POST', body: transaction });
+  // Persist the server-verified builder proof before surfacing a mixed batch
+  // rejection. Bulk returns one status per action; an entry order may be
+  // accepted even if a later conditional action is rejected. A persisted proof
+  // alone never earns rewards -- import still requires a matching real fill.
+  const orderIds = persistSubmittedProofs(playerId, transaction, upstream);
   const rejected = responseRejection(upstream);
   if (rejected) throw error(`Bulk rejected the signed action: ${rejected}`, 422, upstream);
-  const orderIds = persistSubmittedProofs(playerId, transaction, upstream);
   return { success: true, upstream, order_ids: orderIds };
 }
 
@@ -514,6 +522,8 @@ module.exports = {
   normalizeSymbol,
   prepareTransaction,
   request,
+  responseRejection,
+  responseStatuses,
   submitTransaction,
   verifyTransaction,
 };

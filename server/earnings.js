@@ -1388,11 +1388,13 @@ async function fetchHyperliquidEarnings() {
   };
 }
 
-// Nado (Ink): exact builder fees from Nado indexer match events.
-// Orders carry builderId/builderFeeRate in the packed appendix; the indexer
-// exposes the resulting builder_fee per match event, keyed by the on-chain
-// Nado submission index. We scope the scan to locally indexed Clash Nado
-// fills so the admin number matches our app-attributed trading activity.
+// Nado (Ink): exact cumulative builder fees from Nado archive orders.
+//
+// Do not scope earnings to local trade_history rows. Browser imports and MM
+// bot fills can lag (or never visit the browser import endpoint), while the
+// archive is authoritative and exposes the cumulative builder_fee on every
+// matched order. A persistent index lets us scan every registered Nado wallet
+// without repeating the full history or exceeding the archive weight limit.
 const NADO_INDEXER_URL = (
   process.env.NADO_INDEXER_URL
   || process.env.VITE_NADO_INDEXER_URL
@@ -1416,8 +1418,42 @@ const NADO_BUILDER_FEE_RATE = Number(
 ) || 10;
 const NADO_BUILDER_FEE_BPS = Number(process.env.NADO_BUILDER_FEE_BPS)
   || (NADO_BUILDER_FEE_RATE / 10);
-const NADO_MATCH_PAGE_LIMIT = Math.max(10, Math.min(250, Number(process.env.NADO_MATCH_PAGE_LIMIT || 100)));
-const NADO_MATCH_PAGE_CAP = Math.max(1, Math.min(25, Number(process.env.NADO_MATCH_PAGE_CAP || 8)));
+const NADO_ORDER_RECENT_LIMIT = Math.max(10, Math.min(250, Number(process.env.NADO_ORDER_RECENT_LIMIT || 50)));
+const NADO_ORDER_BACKFILL_LIMIT = Math.max(100, Math.min(500, Number(process.env.NADO_ORDER_BACKFILL_LIMIT || 500)));
+const NADO_ARCHIVE_WEIGHT_BUDGET = Math.max(100, Math.min(380, Number(process.env.NADO_ARCHIVE_WEIGHT_BUDGET || 350)));
+const NADO_MAX_BACKFILL_PAGES_PER_REFRESH = Math.max(
+  1,
+  Math.min(10, Number(process.env.NADO_MAX_BACKFILL_PAGES_PER_REFRESH || 6)),
+);
+const NADO_ARCHIVE_CONCURRENCY = Math.max(1, Math.min(20, Number(process.env.NADO_ARCHIVE_CONCURRENCY || 10)));
+const NADO_ARCHIVE_REQUEST_TIMEOUT_MS = Math.max(
+  2_000,
+  Math.min(10_000, Number(process.env.NADO_ARCHIVE_REQUEST_TIMEOUT_MS || 6_000)),
+);
+const NADO_EARNINGS_SYNC_INTERVAL_MS = Math.max(
+  60_000,
+  Math.min(60 * 60 * 1000, Number(process.env.NADO_EARNINGS_SYNC_INTERVAL_MS || 5 * 60 * 1000)),
+);
+const NADO_EARNINGS_SYNC_INITIAL_DELAY_MS = Math.max(
+  1_000,
+  Math.min(60_000, Number(process.env.NADO_EARNINGS_SYNC_INITIAL_DELAY_MS || 8_000)),
+);
+const NADO_ARCHIVE_RATE_WINDOW_MS = Math.max(
+  0,
+  Math.min(20_000, Number(process.env.NADO_ARCHIVE_RATE_WINDOW_MS ?? 10_500)),
+);
+const NADO_EARNINGS_CATCHUP_PASSES = Math.max(
+  1,
+  Math.min(6, Number(process.env.NADO_EARNINGS_CATCHUP_PASSES || 6)),
+);
+const NADO_BUILDER_LAUNCH_TIMESTAMP = Math.floor(Number(
+  process.env.NADO_BUILDER_LAUNCH_TIMESTAMP
+  || Date.parse('2026-02-12T00:00:00Z') / 1000,
+));
+const NADO_REGISTRATION_LOOKBACK_SECONDS = Math.max(
+  0,
+  Math.min(7 * 24 * 60 * 60, Number(process.env.NADO_REGISTRATION_LOOKBACK_SECONDS || 24 * 60 * 60)),
+);
 
 function nadoUnpackBuilderAppendix(appendix) {
   try {
@@ -1467,7 +1503,7 @@ function readNadoTrackedFills() {
     fdb = new Db(FUTURES_DB, { readonly: true, fileMustExist: true });
     try { fdb.pragma('journal_mode = WAL'); } catch {}
     const rows = fdb.prepare(`
-      SELECT client_order_id, notional_usd
+      SELECT client_order_id, notional_usd, created_at
       FROM trade_history
       WHERE dex = 'nado'
         AND status = 'filled'
@@ -1481,13 +1517,28 @@ function readNadoTrackedFills() {
       if (!m) continue;
       const wallet = m[1].toLowerCase();
       const digest = String(m[2] || '').toLowerCase();
-      if (!byWallet.has(wallet)) byWallet.set(wallet, new Set());
-      if (digest) byWallet.get(wallet).add(digest);
+      if (!byWallet.has(wallet)) byWallet.set(wallet, {
+        digests: new Set(),
+        volume_usd: 0,
+        trades: 0,
+        first_seen_at: null,
+      });
+      const trackedWallet = byWallet.get(wallet);
+      if (digest) trackedWallet.digests.add(digest);
+      trackedWallet.volume_usd += safeNumber(row?.notional_usd);
+      trackedWallet.trades++;
+      const createdAt = nadoDateTimestamp(row?.created_at);
+      if (createdAt && (!trackedWallet.first_seen_at || createdAt < trackedWallet.first_seen_at)) {
+        trackedWallet.first_seen_at = createdAt;
+      }
     }
     return {
-      wallets: Array.from(byWallet, ([wallet, digests]) => ({
+      wallets: Array.from(byWallet, ([wallet, info]) => ({
         wallet,
-        digests: Array.from(digests),
+        digests: Array.from(info.digests),
+        volume_usd: roundUsd(info.volume_usd),
+        trades: info.trades,
+        first_seen_at: info.first_seen_at,
       })),
       volume_usd: roundUsd(volume),
       trades: rows.length,
@@ -1502,110 +1553,676 @@ function readNadoTrackedFills() {
 async function nadoIndexerQuery(body) {
   return fetchJson(NADO_INDEXER_URL, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept-Encoding': 'gzip, br, deflate',
+    },
     body: JSON.stringify(body),
-  }, 12_000);
+  }, NADO_ARCHIVE_REQUEST_TIMEOUT_MS);
 }
 
-async function fetchNadoWalletBuilderMatches(walletInfo) {
-  const subaccount = nadoSubaccountHex(walletInfo.wallet);
-  const wantedDigests = new Set((walletInfo.digests || []).map(d => String(d).toLowerCase()));
-  if (!subaccount || wantedDigests.size <= 0) return [];
+function ensureNadoEarningsIndex(mainDb) {
+  if (!mainDb) return;
+  mainDb.exec(`
+    CREATE TABLE IF NOT EXISTS nado_builder_fee_orders (
+      order_key               TEXT PRIMARY KEY,
+      wallet_address          TEXT NOT NULL,
+      subaccount              TEXT NOT NULL,
+      digest                  TEXT NOT NULL,
+      submission_idx          TEXT,
+      last_fill_submission_idx TEXT,
+      builder_id              INTEGER NOT NULL,
+      builder_fee_rate        INTEGER NOT NULL DEFAULT 0,
+      builder_fee_raw         TEXT NOT NULL,
+      builder_fee_usd         REAL NOT NULL DEFAULT 0,
+      quote_filled_raw        TEXT,
+      volume_usd              REAL NOT NULL DEFAULT 0,
+      first_fill_timestamp    INTEGER,
+      last_fill_timestamp     INTEGER,
+      indexed_at              TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at              TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_nado_builder_orders_wallet
+      ON nado_builder_fee_orders(wallet_address, last_fill_submission_idx);
+    CREATE INDEX IF NOT EXISTS idx_nado_builder_orders_builder
+      ON nado_builder_fee_orders(builder_id, last_fill_timestamp);
 
-  const out = [];
-  const seen = new Set();
-  let cursor = null;
-  const foundDigests = new Set();
-  for (let page = 0; page < NADO_MATCH_PAGE_CAP; page += 1) {
-    const params = {
-      subaccounts: [subaccount],
-      limit: NADO_MATCH_PAGE_LIMIT,
+    CREATE TABLE IF NOT EXISTS nado_earnings_sync_state (
+      subaccount               TEXT PRIMARY KEY,
+      wallet_address           TEXT NOT NULL,
+      newest_submission_idx    TEXT,
+      scan_after_timestamp     INTEGER NOT NULL DEFAULT 0,
+      forward_cursor_idx       TEXT,
+      forward_stop_idx         TEXT,
+      backfill_cursor_idx      TEXT,
+      backfill_complete        INTEGER NOT NULL DEFAULT 0,
+      pages_fetched            INTEGER NOT NULL DEFAULT 0,
+      orders_seen              INTEGER NOT NULL DEFAULT 0,
+      builder_orders_indexed   INTEGER NOT NULL DEFAULT 0,
+      last_error               TEXT,
+      last_synced_at           TEXT,
+      created_at               TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at               TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_nado_earnings_sync_pending
+      ON nado_earnings_sync_state(backfill_complete, updated_at);
+  `);
+  try {
+    mainDb.exec('ALTER TABLE nado_earnings_sync_state ADD COLUMN scan_after_timestamp INTEGER NOT NULL DEFAULT 0');
+  } catch {}
+}
+
+function nadoSubmissionIdx(value) {
+  const text = String(value ?? '').trim();
+  return /^\d+$/.test(text) ? text : '';
+}
+
+function compareNadoIdx(a, b) {
+  const left = nadoSubmissionIdx(a);
+  const right = nadoSubmissionIdx(b);
+  if (!left && !right) return 0;
+  if (!left) return -1;
+  if (!right) return 1;
+  const l = BigInt(left);
+  const r = BigInt(right);
+  return l < r ? -1 : l > r ? 1 : 0;
+}
+
+function minNadoIdx(rows) {
+  return (rows || []).reduce((min, row) => {
+    const idx = nadoSubmissionIdx(row?.submission_idx ?? row?.submissionIndex);
+    return idx && (!min || compareNadoIdx(idx, min) < 0) ? idx : min;
+  }, '');
+}
+
+function maxNadoIdx(rows) {
+  return (rows || []).reduce((max, row) => {
+    const idx = nadoSubmissionIdx(
+      row?.last_fill_submission_idx
+      ?? row?.lastFillSubmissionIdx
+      ?? row?.submission_idx
+      ?? row?.submissionIndex,
+    );
+    return idx && (!max || compareNadoIdx(idx, max) > 0) ? idx : max;
+  }, '');
+}
+
+function nadoDateTimestamp(value) {
+  if (value == null || value === '') return null;
+  if (typeof value === 'number') return nadoOrderTimestamp(value);
+  const text = String(value).trim();
+  if (/^\d+$/.test(text)) return nadoOrderTimestamp(text);
+  const normalized = /(?:Z|[+-]\d\d:?\d\d)$/i.test(text) ? text : `${text.replace(' ', 'T')}Z`;
+  const ms = Date.parse(normalized);
+  return Number.isFinite(ms) ? Math.floor(ms / 1000) : null;
+}
+
+function minNadoOrderTimestamp(rows) {
+  return (rows || []).reduce((min, row) => {
+    const timestamp = nadoOrderTimestamp(
+      row?.last_fill_timestamp
+      ?? row?.lastFillTimestamp
+      ?? row?.first_fill_timestamp
+      ?? row?.firstFillTimestamp,
+    );
+    return timestamp && (!min || timestamp < min) ? timestamp : min;
+  }, null);
+}
+
+function registeredNadoWallets(mainDb, tracked = readNadoTrackedFills()) {
+  const byWallet = new Map();
+  const add = (wallet, source, playerId = null, registeredAt = null) => {
+    const clean = String(wallet || '').trim().toLowerCase();
+    if (!/^0x[0-9a-f]{40}$/.test(clean)) return;
+    const current = byWallet.get(clean) || {
+      wallet: clean,
+      sources: new Set(),
+      player_ids: new Set(),
+      registered_at: null,
     };
-    if (cursor) params.idx = cursor;
-    const payload = await nadoIndexerQuery({ matches: params });
-    const matches = Array.isArray(payload?.matches) ? payload.matches : [];
-    const txByIdx = new Map((Array.isArray(payload?.txs) ? payload.txs : [])
-      .map(tx => [String(tx?.submission_idx || ''), tx]));
-    if (!matches.length) break;
-
-    for (const match of matches) {
-      const idx = String(match?.submission_idx || '');
-      const digest = String(match?.digest || '').toLowerCase();
-      const key = `${idx}:${digest}:${match?.base_filled || ''}:${match?.quote_filled || ''}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      if (!wantedDigests.has(digest)) continue;
-      const builder = nadoUnpackBuilderAppendix(match?.order?.appendix);
-      if (!builder || builder.builderId !== NADO_BUILDER_ID) continue;
-      const builderFeeRaw = String(match?.builder_fee || '0');
-      if (nadoRawX18ToNumber(builderFeeRaw) <= 0) continue;
-      foundDigests.add(digest);
-      out.push({
-        wallet: walletInfo.wallet,
-        digest,
-        submission_idx: idx,
-        timestamp: txByIdx.get(idx)?.timestamp || null,
-        tx_type: txByIdx.get(idx)?.tx ? Object.keys(txByIdx.get(idx).tx)[0] : null,
-        builder_fee_raw: builderFeeRaw,
-        builder_fee_usd: nadoRawX18ToNumber(builderFeeRaw),
-        builder_id: builder.builderId,
-        builder_fee_rate: builder.builderFeeRate,
-      });
+    current.sources.add(source);
+    if (playerId) current.player_ids.add(String(playerId));
+    const timestamp = nadoDateTimestamp(registeredAt);
+    if (timestamp && (!current.registered_at || timestamp < current.registered_at)) {
+      current.registered_at = timestamp;
     }
+    byWallet.set(clean, current);
+  };
 
-    const lastIdx = String(matches[matches.length - 1]?.submission_idx || '');
-    if (!lastIdx || lastIdx === cursor) break;
-    cursor = lastIdx;
-    if (foundDigests.size >= wantedDigests.size) break;
+  if (mainDb) {
+    try {
+      for (const row of mainDb.prepare(`
+        SELECT player_id, wallet_address, status, created_at
+        FROM player_dex_accounts
+        WHERE dex = 'nado' AND wallet_address IS NOT NULL AND wallet_address != ''
+      `).all()) {
+        // Historical/disconnected registrations stay in scope: any builder
+        // fee they already generated still belongs to Clash cumulatively.
+        add(row.wallet_address, `player_dex_accounts:${row.status || 'unknown'}`, row.player_id, row.created_at);
+      }
+    } catch {}
+    try {
+      for (const row of mainDb.prepare(`
+        SELECT id AS player_id, wallet, created_at
+        FROM players
+        WHERE dex = 'nado' AND wallet IS NOT NULL AND wallet != ''
+      `).all()) {
+        add(row.wallet, 'players.dex', row.player_id, row.created_at);
+      }
+    } catch {}
   }
+  for (const row of tracked.wallets || []) {
+    add(row.wallet, 'local_trade_history', null, row.first_seen_at);
+  }
+
+  const priority = new Map((tracked.wallets || []).map(row => [
+    String(row.wallet || '').toLowerCase(),
+    safeNumber(row.volume_usd),
+  ]));
+  return Array.from(byWallet.values())
+    .map(row => ({
+      wallet: row.wallet,
+      subaccount: nadoSubaccountHex(row.wallet),
+      sources: Array.from(row.sources).sort(),
+      player_ids: Array.from(row.player_ids).sort(),
+      registered_at: row.registered_at,
+      scan_after_timestamp: Math.max(
+        NADO_BUILDER_LAUNCH_TIMESTAMP,
+        row.registered_at ? row.registered_at - NADO_REGISTRATION_LOOKBACK_SECONDS : 0,
+      ),
+      priority_volume_usd: priority.get(row.wallet) || 0,
+    }))
+    .filter(row => row.subaccount)
+    .sort((a, b) => b.priority_volume_usd - a.priority_volume_usd || a.wallet.localeCompare(b.wallet));
+}
+
+async function nadoOrdersPage(subaccount, { limit, idx = null } = {}) {
+  const params = {
+    subaccounts: [subaccount],
+    limit: Math.max(1, Math.min(500, Number(limit) || NADO_ORDER_RECENT_LIMIT)),
+  };
+  if (idx) params.idx = String(idx);
+  const payload = await nadoIndexerQuery({ orders: params });
+  return Array.isArray(payload?.orders) ? payload.orders : [];
+}
+
+function nadoOrderTimestamp(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.floor(n > 10_000_000_000 ? n / 1000 : n);
+}
+
+function indexNadoOrderPage(mainDb, walletInfo, rows) {
+  const upsert = mainDb.prepare(`
+    INSERT INTO nado_builder_fee_orders (
+      order_key, wallet_address, subaccount, digest, submission_idx,
+      last_fill_submission_idx, builder_id, builder_fee_rate,
+      builder_fee_raw, builder_fee_usd, quote_filled_raw, volume_usd,
+      first_fill_timestamp, last_fill_timestamp, indexed_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+    ON CONFLICT(order_key) DO UPDATE SET
+      wallet_address = excluded.wallet_address,
+      submission_idx = excluded.submission_idx,
+      last_fill_submission_idx = excluded.last_fill_submission_idx,
+      builder_id = excluded.builder_id,
+      builder_fee_rate = excluded.builder_fee_rate,
+      builder_fee_raw = excluded.builder_fee_raw,
+      builder_fee_usd = excluded.builder_fee_usd,
+      quote_filled_raw = excluded.quote_filled_raw,
+      volume_usd = excluded.volume_usd,
+      first_fill_timestamp = excluded.first_fill_timestamp,
+      last_fill_timestamp = excluded.last_fill_timestamp,
+      updated_at = datetime('now')
+  `);
+  let builderOrders = 0;
+  const write = mainDb.transaction(() => {
+    for (const order of rows || []) {
+      const digest = String(order?.digest || '').trim().toLowerCase();
+      if (!/^0x[0-9a-f]{64}$/.test(digest)) continue;
+      const builder = nadoUnpackBuilderAppendix(order?.appendix);
+      if (!builder || builder.builderId !== NADO_BUILDER_ID) continue;
+      const builderFeeRaw = String(order?.builder_fee ?? order?.builderFee ?? '0');
+      const builderFeeUsd = nadoRawX18ToNumber(builderFeeRaw);
+      if (!Number.isFinite(builderFeeUsd) || builderFeeUsd <= 0) continue;
+      const lastFillTimestamp = nadoOrderTimestamp(order?.last_fill_timestamp ?? order?.lastFillTimestamp);
+      if (
+        lastFillTimestamp
+        && walletInfo.scan_after_timestamp
+        && lastFillTimestamp < walletInfo.scan_after_timestamp
+      ) continue;
+      const quoteFilledRaw = String(order?.quote_filled ?? order?.quoteFilled ?? '0');
+      const volumeUsd = Math.abs(nadoRawX18ToNumber(quoteFilledRaw));
+      const orderSubaccount = String(order?.subaccount || walletInfo.subaccount).toLowerCase();
+      const orderKey = `${orderSubaccount}:${digest}`;
+      upsert.run(
+        orderKey,
+        walletInfo.wallet,
+        orderSubaccount,
+        digest,
+        nadoSubmissionIdx(order?.submission_idx ?? order?.submissionIndex) || null,
+        nadoSubmissionIdx(order?.last_fill_submission_idx ?? order?.lastFillSubmissionIdx) || null,
+        builder.builderId,
+        builder.builderFeeRate,
+        builderFeeRaw,
+        builderFeeUsd,
+        quoteFilledRaw,
+        Number.isFinite(volumeUsd) ? volumeUsd : 0,
+        nadoOrderTimestamp(order?.first_fill_timestamp ?? order?.firstFillTimestamp),
+        lastFillTimestamp,
+      );
+      builderOrders++;
+    }
+  });
+  write();
+  return builderOrders;
+}
+
+function readNadoSyncState(mainDb, subaccount) {
+  return mainDb.prepare('SELECT * FROM nado_earnings_sync_state WHERE subaccount = ?').get(subaccount) || null;
+}
+
+function writeNadoSyncState(mainDb, walletInfo, state, delta = {}) {
+  mainDb.prepare(`
+    INSERT INTO nado_earnings_sync_state (
+      subaccount, wallet_address, newest_submission_idx, scan_after_timestamp,
+      forward_cursor_idx, forward_stop_idx, backfill_cursor_idx,
+      backfill_complete, pages_fetched, orders_seen, builder_orders_indexed,
+      last_error, last_synced_at, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'), datetime('now'))
+    ON CONFLICT(subaccount) DO UPDATE SET
+      wallet_address = excluded.wallet_address,
+      newest_submission_idx = excluded.newest_submission_idx,
+      scan_after_timestamp = excluded.scan_after_timestamp,
+      forward_cursor_idx = excluded.forward_cursor_idx,
+      forward_stop_idx = excluded.forward_stop_idx,
+      backfill_cursor_idx = excluded.backfill_cursor_idx,
+      backfill_complete = excluded.backfill_complete,
+      pages_fetched = nado_earnings_sync_state.pages_fetched + excluded.pages_fetched,
+      orders_seen = nado_earnings_sync_state.orders_seen + excluded.orders_seen,
+      builder_orders_indexed = nado_earnings_sync_state.builder_orders_indexed + excluded.builder_orders_indexed,
+      last_error = excluded.last_error,
+      last_synced_at = datetime('now'),
+      updated_at = datetime('now')
+  `).run(
+    walletInfo.subaccount,
+    walletInfo.wallet,
+    state.newest_submission_idx || null,
+    Number(state.scan_after_timestamp ?? walletInfo.scan_after_timestamp ?? 0),
+    state.forward_cursor_idx || null,
+    state.forward_stop_idx || null,
+    state.backfill_cursor_idx || null,
+    state.backfill_complete ? 1 : 0,
+    Number(delta.pages_fetched || 0),
+    Number(delta.orders_seen || 0),
+    Number(delta.builder_orders_indexed || 0),
+    state.last_error || null,
+  );
+  return readNadoSyncState(mainDb, walletInfo.subaccount);
+}
+
+async function mapWithConcurrency(values, concurrency, fn) {
+  const out = new Array(values.length);
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(concurrency, values.length) }, async () => {
+    while (cursor < values.length) {
+      const index = cursor++;
+      try {
+        out[index] = { status: 'fulfilled', value: await fn(values[index], index) };
+      } catch (reason) {
+        out[index] = { status: 'rejected', reason };
+      }
+    }
+  });
+  await Promise.all(workers);
   return out;
 }
 
-async function fetchNadoEarnings() {
+let nadoEarningsSyncPromise = null;
+let nadoNextSyncAllowedAt = 0;
+
+function currentNadoSyncStats(mainDb, extra = {}) {
+  ensureNadoEarningsIndex(mainDb);
+  const wallets = registeredNadoWallets(mainDb);
+  const currentSubaccounts = new Set(wallets.map(row => row.subaccount));
+  const states = mainDb.prepare('SELECT * FROM nado_earnings_sync_state').all()
+    .filter(row => currentSubaccounts.has(row.subaccount));
+  const pendingBackfills = wallets.length - states.filter(row => (
+    !row.forward_cursor_idx && Number(row.backfill_complete || 0) === 1
+  )).length;
+  const failedStates = states.filter(row => row.last_error).length;
+  return {
+    registered_wallets: wallets.length,
+    recent_pages: 0,
+    continuation_pages: 0,
+    orders_seen: 0,
+    builder_orders_indexed: 0,
+    failed_wallets: 0,
+    archive_weight_budget: NADO_ARCHIVE_WEIGHT_BUDGET,
+    pending_backfills: pendingBackfills,
+    failed_states: failedStates,
+    sync_complete: pendingBackfills === 0 && failedStates === 0,
+    ...extra,
+  };
+}
+
+async function syncNadoEarningsIndexInner(mainDb) {
+  ensureNadoEarningsIndex(mainDb);
   const tracked = readNadoTrackedFills();
-  const estimated = tracked.volume_usd * (NADO_BUILDER_FEE_BPS / 10000);
-  if (!tracked.wallets.length) {
+  const wallets = registeredNadoWallets(mainDb, tracked);
+  const stats = {
+    registered_wallets: wallets.length,
+    recent_pages: 0,
+    continuation_pages: 0,
+    orders_seen: 0,
+    builder_orders_indexed: 0,
+    failed_wallets: 0,
+    archive_weight_budget: NADO_ARCHIVE_WEIGHT_BUDGET,
+  };
+  if (!wallets.length) {
     return {
+      ...stats,
+      pending_backfills: 0,
+      failed_states: 0,
+      sync_complete: true,
+    };
+  }
+
+  const previousBySubaccount = new Map(wallets.map(row => [row.subaccount, readNadoSyncState(mainDb, row.subaccount)]));
+  const failedThisRefresh = new Set();
+  const recentResults = await mapWithConcurrency(wallets, NADO_ARCHIVE_CONCURRENCY, async (walletInfo) => ({
+    walletInfo,
+    rows: await nadoOrdersPage(walletInfo.subaccount, { limit: NADO_ORDER_RECENT_LIMIT }),
+  }));
+
+  for (let i = 0; i < recentResults.length; i += 1) {
+    const result = recentResults[i];
+    const walletInfo = wallets[i];
+    const previous = previousBySubaccount.get(walletInfo.subaccount);
+    if (result.status === 'rejected') {
+      stats.failed_wallets++;
+      failedThisRefresh.add(walletInfo.subaccount);
+      writeNadoSyncState(mainDb, walletInfo, {
+        ...(previous || {}),
+        scan_after_timestamp: walletInfo.scan_after_timestamp,
+        backfill_complete: Number(previous?.backfill_complete || 0) === 1,
+        last_error: String(result.reason?.message || result.reason || 'archive request failed').slice(0, 240),
+      });
+      continue;
+    }
+    const rows = result.value.rows;
+    const builderOrders = indexNadoOrderPage(mainDb, walletInfo, rows);
+    stats.recent_pages++;
+    stats.orders_seen += rows.length;
+    stats.builder_orders_indexed += builderOrders;
+    const newest = maxNadoIdx(rows);
+    const oldest = minNadoIdx(rows);
+    const oldestTimestamp = minNadoOrderTimestamp(rows);
+    const reachedScanStart = !!(
+      oldestTimestamp
+      && walletInfo.scan_after_timestamp
+      && oldestTimestamp <= walletInfo.scan_after_timestamp
+    );
+    const state = previous ? { ...previous } : {
+      newest_submission_idx: null,
+      scan_after_timestamp: walletInfo.scan_after_timestamp,
+      forward_cursor_idx: null,
+      forward_stop_idx: null,
+      backfill_cursor_idx: null,
+      backfill_complete: 0,
+    };
+    const previousNewest = nadoSubmissionIdx(previous?.newest_submission_idx);
+    const previousScanAfter = Number(previous?.scan_after_timestamp || 0);
+    const scanExpanded = !!(
+      previousScanAfter
+      && walletInfo.scan_after_timestamp < previousScanAfter
+    );
+    state.scan_after_timestamp = walletInfo.scan_after_timestamp;
+    if (newest && (!previousNewest || compareNadoIdx(newest, previousNewest) > 0)) {
+      state.newest_submission_idx = newest;
+    }
+    if (!previousNewest || scanExpanded) {
+      state.backfill_complete = (rows.length < NADO_ORDER_RECENT_LIMIT || reachedScanStart) ? 1 : 0;
+      state.backfill_cursor_idx = state.backfill_complete ? null : oldest;
+    } else if (previousNewest && newest && compareNadoIdx(newest, previousNewest) > 0) {
+      const reachedPreviousNewest = rows.some(row => (
+        compareNadoIdx(row?.submission_idx ?? row?.submissionIndex, previousNewest) <= 0
+      ));
+      if (!reachedPreviousNewest && rows.length >= NADO_ORDER_RECENT_LIMIT && oldest) {
+        state.forward_cursor_idx = oldest;
+        state.forward_stop_idx = previousNewest;
+      } else {
+        state.forward_cursor_idx = null;
+        state.forward_stop_idx = null;
+      }
+    }
+    state.last_error = null;
+    writeNadoSyncState(mainDb, walletInfo, state, {
+      pages_fetched: 1,
+      orders_seen: rows.length,
+      builder_orders_indexed: builderOrders,
+    });
+  }
+
+  const recentWeight = wallets.length * (2 + NADO_ORDER_RECENT_LIMIT / 20);
+  const continuationWeight = 2 + NADO_ORDER_BACKFILL_LIMIT / 20;
+  const weightCapacity = Math.max(0, Math.floor((NADO_ARCHIVE_WEIGHT_BUDGET - recentWeight) / continuationWeight));
+  const continuationCapacity = Math.min(NADO_MAX_BACKFILL_PAGES_PER_REFRESH, weightCapacity);
+  const pendingRows = () => wallets
+    .map(walletInfo => ({ walletInfo, state: readNadoSyncState(mainDb, walletInfo.subaccount) }))
+    .filter(row => (
+      row.state
+      && !failedThisRefresh.has(row.walletInfo.subaccount)
+      && (row.state.forward_cursor_idx || Number(row.state.backfill_complete || 0) !== 1)
+    ))
+    .sort((a, b) => (
+      Number(!!b.state.forward_cursor_idx) - Number(!!a.state.forward_cursor_idx)
+      || b.walletInfo.priority_volume_usd - a.walletInfo.priority_volume_usd
+      || String(a.state.updated_at || '').localeCompare(String(b.state.updated_at || ''))
+    ));
+
+  let continuationRemaining = continuationCapacity;
+  while (continuationRemaining > 0) {
+    // Recompute after every batch. If only one high-volume bot wallet remains,
+    // it can consume the unused page budget in this same rate-limit window.
+    const pending = pendingRows().slice(0, Math.min(
+      continuationRemaining,
+      3,
+      NADO_ARCHIVE_CONCURRENCY,
+    ));
+    if (!pending.length) break;
+    const continuationResults = await mapWithConcurrency(pending, pending.length, async ({ walletInfo, state }) => {
+      const mode = state.forward_cursor_idx ? 'forward' : 'backfill';
+      const cursorIdx = mode === 'forward' ? state.forward_cursor_idx : state.backfill_cursor_idx;
+      return {
+        walletInfo,
+        state,
+        mode,
+        cursorIdx,
+        rows: await nadoOrdersPage(walletInfo.subaccount, {
+          limit: NADO_ORDER_BACKFILL_LIMIT,
+          idx: cursorIdx,
+        }),
+      };
+    });
+    continuationRemaining -= pending.length;
+
+    for (let i = 0; i < continuationResults.length; i += 1) {
+      const result = continuationResults[i];
+      const pendingRow = pending[i];
+      if (result.status === 'rejected') {
+        stats.failed_wallets++;
+        failedThisRefresh.add(pendingRow.walletInfo.subaccount);
+        writeNadoSyncState(mainDb, pendingRow.walletInfo, {
+          ...pendingRow.state,
+          backfill_complete: Number(pendingRow.state.backfill_complete || 0) === 1,
+          last_error: String(result.reason?.message || result.reason || 'archive continuation failed').slice(0, 240),
+        });
+        continue;
+      }
+      const { walletInfo, mode, cursorIdx, rows } = result.value;
+      const builderOrders = indexNadoOrderPage(mainDb, walletInfo, rows);
+      stats.continuation_pages++;
+      stats.orders_seen += rows.length;
+      stats.builder_orders_indexed += builderOrders;
+      const oldest = minNadoIdx(rows);
+      const state = { ...readNadoSyncState(mainDb, walletInfo.subaccount), last_error: null };
+      const exhausted = rows.length < NADO_ORDER_BACKFILL_LIMIT || !oldest;
+      const oldestTimestamp = minNadoOrderTimestamp(rows);
+      const reachedScanStart = !!(
+        oldestTimestamp
+        && walletInfo.scan_after_timestamp
+        && oldestTimestamp <= walletInfo.scan_after_timestamp
+      );
+      const stalled = oldest && cursorIdx && compareNadoIdx(oldest, cursorIdx) >= 0;
+      if (mode === 'forward') {
+        const stopIdx = nadoSubmissionIdx(state.forward_stop_idx);
+        const reachedStop = stopIdx && rows.some(row => (
+          compareNadoIdx(row?.submission_idx ?? row?.submissionIndex, stopIdx) <= 0
+        ));
+        if (exhausted || reachedStop) {
+          state.forward_cursor_idx = null;
+          state.forward_stop_idx = null;
+        } else if (stalled) {
+          state.last_error = 'forward_cursor_stalled';
+        } else {
+          state.forward_cursor_idx = oldest;
+        }
+      } else if (exhausted || reachedScanStart) {
+        state.backfill_complete = 1;
+        state.backfill_cursor_idx = null;
+      } else if (stalled) {
+        state.last_error = 'backfill_cursor_stalled';
+      } else {
+        state.backfill_cursor_idx = oldest;
+      }
+      writeNadoSyncState(mainDb, walletInfo, state, {
+        pages_fetched: 1,
+        orders_seen: rows.length,
+        builder_orders_indexed: builderOrders,
+      });
+    }
+  }
+
+  const currentSubaccounts = new Set(wallets.map(row => row.subaccount));
+  const states = mainDb.prepare('SELECT * FROM nado_earnings_sync_state').all()
+    .filter(row => currentSubaccounts.has(row.subaccount));
+  stats.pending_backfills = states.filter(row => (
+    row.forward_cursor_idx || Number(row.backfill_complete || 0) !== 1
+  )).length;
+  stats.failed_states = states.filter(row => row.last_error).length;
+  stats.sync_complete = stats.pending_backfills === 0 && stats.failed_wallets === 0 && stats.failed_states === 0;
+  return stats;
+}
+
+async function syncNadoEarningsIndex(mainDb, { waitForRateWindow = false } = {}) {
+  if (!mainDb) return null;
+  if (nadoEarningsSyncPromise) return nadoEarningsSyncPromise;
+  const waitMs = Math.max(0, nadoNextSyncAllowedAt - Date.now());
+  if (waitMs > 0) {
+    if (!waitForRateWindow) {
+      return currentNadoSyncStats(mainDb, {
+        rate_window_deferred: true,
+        retry_after_ms: waitMs,
+      });
+    }
+    await new Promise(resolve => setTimeout(resolve, waitMs));
+    if (nadoEarningsSyncPromise) return nadoEarningsSyncPromise;
+  }
+  nadoEarningsSyncPromise = syncNadoEarningsIndexInner(mainDb);
+  try {
+    const result = await nadoEarningsSyncPromise;
+    nadoNextSyncAllowedAt = Date.now() + NADO_ARCHIVE_RATE_WINDOW_MS;
+    return result;
+  } finally {
+    nadoEarningsSyncPromise = null;
+  }
+}
+
+function readNadoIndexedEarnings(mainDb) {
+  ensureNadoEarningsIndex(mainDb);
+  const aggregate = mainDb.prepare(`
+    SELECT COUNT(*) AS trades,
+           COUNT(DISTINCT wallet_address) AS traders,
+           COALESCE(SUM(builder_fee_usd), 0) AS earned_usd,
+           COALESCE(SUM(volume_usd), 0) AS volume_usd,
+           MAX(last_fill_timestamp) AS latest_fill_timestamp
+    FROM nado_builder_fee_orders
+    WHERE builder_id = ?
+  `).get(NADO_BUILDER_ID);
+  const latest = mainDb.prepare(`
+    SELECT wallet_address, digest, submission_idx, last_fill_submission_idx,
+           builder_fee_usd, volume_usd, last_fill_timestamp, builder_fee_rate
+    FROM nado_builder_fee_orders
+    WHERE builder_id = ?
+    ORDER BY CAST(COALESCE(last_fill_submission_idx, submission_idx, '0') AS INTEGER) DESC
+    LIMIT 1
+  `).get(NADO_BUILDER_ID) || null;
+  return { ...aggregate, latest };
+}
+
+async function fetchNadoEarnings({ mainDb = null } = {}) {
+  const tracked = readNadoTrackedFills();
+  if (!mainDb) {
+    const estimated = tracked.volume_usd * (NADO_BUILDER_FEE_BPS / 10000);
+    return {
+      ok: true,
       earned_usd: 0,
       currency: 'USDt0 (Ink)',
       volume_usd: tracked.volume_usd,
       trades: tracked.trades,
       estimated_fee_usd: roundUsd(estimated),
+      exact_unavailable: true,
       builder_id: NADO_BUILDER_ID,
       builder_fee_rate: NADO_BUILDER_FEE_RATE,
       builder_fee_bps: NADO_BUILDER_FEE_BPS,
       builder_fee_pct: NADO_BUILDER_FEE_BPS / 100,
-      model: 'nado_indexer_builder_fee_exact',
-      source_detail: 'nado_indexer_match_builder_fee',
-      note: 'No locally indexed Nado fills yet, so there are no builder-fee match events to verify.',
+      model: 'nado_archive_builder_fee_exact',
+      source_detail: 'nado_archive_orders_builder_fee',
+      note: 'Nado archive earnings require the main database so registered wallets and persistent sync cursors are available.',
     };
   }
 
-  const settled = await Promise.allSettled(tracked.wallets.map(fetchNadoWalletBuilderMatches));
-  const matches = settled.flatMap(r => (r.status === 'fulfilled' ? r.value : []));
-  const earned = matches.reduce((sum, row) => sum + safeNumber(row.builder_fee_usd), 0);
-  const latest = matches.slice().sort((a, b) => Number(b.submission_idx || 0) - Number(a.submission_idx || 0))[0] || null;
-  const failures = settled.filter(r => r.status === 'rejected').length;
+  const refresh = await syncNadoEarningsIndex(mainDb);
+  const indexed = readNadoIndexedEarnings(mainDb);
+  const earned = safeNumber(indexed.earned_usd);
+  const volume = safeNumber(indexed.volume_usd);
+  const estimated = volume * (NADO_BUILDER_FEE_BPS / 10000);
+  const syncComplete = refresh?.sync_complete === true;
+  const noteSuffix = syncComplete
+    ? 'Archive backfill is complete.'
+    : `Archive backfill is still converging (${Number(refresh?.pending_backfills || 0)} wallet(s) pending, ${Number(refresh?.failed_wallets || 0)} request failure(s)); partial values are not written to earnings snapshots.`;
   return {
     ok: true,
     earned_usd: roundUsd(earned),
     currency: 'USDt0 (Ink)',
-    volume_usd: tracked.volume_usd,
-    trades: tracked.trades,
-    matched_events: matches.length,
-    indexed_wallets: tracked.wallets.length,
+    volume_usd: roundUsd(volume),
+    trades: Number(indexed.trades || 0),
+    traders: Number(indexed.traders || 0),
+    matched_orders: Number(indexed.trades || 0),
+    indexed_wallets: Number(indexed.traders || 0),
+    registered_wallets: Number(refresh?.registered_wallets || 0),
     estimated_fee_usd: roundUsd(estimated),
     builder_id: NADO_BUILDER_ID,
     builder_fee_rate: NADO_BUILDER_FEE_RATE,
     builder_fee_bps: NADO_BUILDER_FEE_BPS,
     builder_fee_pct: NADO_BUILDER_FEE_BPS / 100,
-    latest_submission_idx: latest?.submission_idx || null,
-    latest_tx_type: latest?.tx_type || null,
-    sample_fills: matches.slice(0, 5),
-    partial_failures: failures,
-    model: 'nado_indexer_builder_fee_exact',
-    source_detail: 'nado_indexer_match_builder_fee',
-    note: `Exact Nado indexer builder_fee from on-chain match events where packed order appendix has builderId=${NADO_BUILDER_ID} and feeRate=${NADO_BUILDER_FEE_RATE} (0.1 bps units). Local volume x ${NADO_BUILDER_FEE_BPS}bps estimate is shown only for comparison.`,
+    latest_submission_idx: indexed.latest?.last_fill_submission_idx || indexed.latest?.submission_idx || null,
+    latest_fill_timestamp: indexed.latest_fill_timestamp || null,
+    sample_fills: indexed.latest ? [{
+      wallet: indexed.latest.wallet_address,
+      digest: indexed.latest.digest,
+      submission_idx: indexed.latest.last_fill_submission_idx || indexed.latest.submission_idx,
+      builder_fee_usd: roundUsd(indexed.latest.builder_fee_usd),
+      volume_usd: roundUsd(indexed.latest.volume_usd),
+      builder_fee_rate: indexed.latest.builder_fee_rate,
+    }] : [],
+    partial_failures: Number(refresh?.failed_wallets || 0),
+    sync_complete: syncComplete,
+    exact_unavailable: !syncComplete,
+    refresh,
+    model: 'nado_archive_builder_fee_exact',
+    source_detail: 'nado_archive_orders_builder_fee',
+    note: `Exact cumulative Nado archive order builder_fee for builderId=${NADO_BUILDER_ID}, across every wallet ever registered for Nado in Clash. It does not depend on browser imports or local MM-bot fills. ${noteSuffix}`,
   };
 }
 
@@ -3141,6 +3758,10 @@ const FAILED_EARNINGS_META = {
     builder_id: 10,
     currency: 'USDC (RISE)',
   },
+  nado: {
+    builder_id: NADO_BUILDER_ID,
+    currency: 'USDt0 (Ink)',
+  },
   bulk: {
     address: BULK_BUILDER_ADDRESS,
     currency: 'USDC (Bulk/Solana)',
@@ -3158,7 +3779,7 @@ const EARNINGS_READER_CONFIG = {
   hyperliquid: { source: 'hyperliquid_referral_builder_rewards', read: () => fetchHyperliquidEarnings() },
   grvt: { source: 'grvt_builder_fill_history', read: () => fetchGrvtEarnings() },
   risex: { source: 'risex_builder_10_place_order_proof', read: ({ mainDb }) => fetchRisexEarnings({ mainDb }) },
-  nado: { source: 'nado_indexer_match_builder_fee', read: () => fetchNadoEarnings() },
+  nado: { source: 'nado_archive_orders_builder_fee', read: ({ mainDb }) => fetchNadoEarnings({ mainDb }) },
   hotstuff: { source: 'hotstuff_api_fills_broker_fee', read: () => fetchHotstuffEarnings() },
   hibachi: { source: 'hibachi_api_activity_builder_fee_unverified', read: () => fetchHibachiEarnings() },
   katana: { source: 'katana_builder_fee_exact_or_estimate', read: () => fetchKatanaEarnings() },
@@ -3217,6 +3838,57 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 let _earningsSnapshotInterval = null;
 let _earningsSnapshotInitialTimer = null;
 let _earningsSnapshotCaptureRunning = false;
+let _nadoEarningsSyncInterval = null;
+let _nadoEarningsSyncInitialTimer = null;
+let _nadoEarningsScheduledRunPromise = null;
+
+async function runScheduledNadoEarningsSync(mainDb) {
+  if (!mainDb) return null;
+  if (_nadoEarningsScheduledRunPromise) return _nadoEarningsScheduledRunPromise;
+  _nadoEarningsScheduledRunPromise = (async () => {
+    let result = null;
+    for (let pass = 1; pass <= NADO_EARNINGS_CATCHUP_PASSES; pass += 1) {
+      result = await syncNadoEarningsIndex(mainDb, { waitForRateWindow: true });
+      console.log(`[nado-earnings] archive sync pass=${pass} wallets=${Number(result?.registered_wallets || 0)} pages=${Number(result?.recent_pages || 0) + Number(result?.continuation_pages || 0)} indexed=${Number(result?.builder_orders_indexed || 0)} pending=${Number(result?.pending_backfills || 0)} failures=${Number(result?.failed_wallets || 0)}`);
+      if (result?.sync_complete) break;
+    }
+    return result;
+  })();
+  try {
+    return await _nadoEarningsScheduledRunPromise;
+  } catch (error) {
+    console.warn('[nado-earnings] scheduled archive sync failed:', error?.message || error);
+    return null;
+  } finally {
+    _nadoEarningsScheduledRunPromise = null;
+  }
+}
+
+function startNadoEarningsSyncScheduler(mainDb) {
+  if (!mainDb || process.env.NADO_EARNINGS_SYNC_SCHEDULER === '0') return null;
+  ensureNadoEarningsIndex(mainDb);
+  if (_nadoEarningsSyncInterval) return _nadoEarningsSyncInterval;
+  _nadoEarningsSyncInitialTimer = setTimeout(
+    () => runScheduledNadoEarningsSync(mainDb),
+    NADO_EARNINGS_SYNC_INITIAL_DELAY_MS,
+  );
+  _nadoEarningsSyncInterval = setInterval(
+    () => runScheduledNadoEarningsSync(mainDb),
+    NADO_EARNINGS_SYNC_INTERVAL_MS,
+  );
+  _nadoEarningsSyncInitialTimer.unref?.();
+  _nadoEarningsSyncInterval.unref?.();
+  console.log(`[nado-earnings] archive sync scheduled every ${Math.round(NADO_EARNINGS_SYNC_INTERVAL_MS / 60000)} minute(s)`);
+  return _nadoEarningsSyncInterval;
+}
+
+function stopNadoEarningsSyncScheduler() {
+  if (_nadoEarningsSyncInitialTimer) clearTimeout(_nadoEarningsSyncInitialTimer);
+  if (_nadoEarningsSyncInterval) clearInterval(_nadoEarningsSyncInterval);
+  _nadoEarningsSyncInitialTimer = null;
+  _nadoEarningsSyncInterval = null;
+  _nadoEarningsScheduledRunPromise = null;
+}
 
 function ensureEarningsSnapshots(mainDb) {
   if (!mainDb) return;
@@ -3361,11 +4033,18 @@ function summarizeEarningsSnapshotDex(dex, rows, nowMs, days) {
     const previous = timeline[index - 1];
     const current = timeline[index];
     const rawDelta = current.cumulative_earned_usd - previous.cumulative_earned_usd;
+    // The archive reader replaces Nado's old local-fill-scoped cumulative
+    // value. Its first larger total is a corrected baseline, not income earned
+    // during the migration hour. Subsequent archive-to-archive deltas are real.
+    const sourceMigration = dex === 'nado'
+      && current.model === 'nado_archive_builder_fee_exact'
+      && previous.model !== current.model;
     deltas.push({
       captured_ms: current.captured_ms,
       captured_at: current.captured_at,
-      earned_usd: roundUsd(Math.max(0, rawDelta)),
-      reset: rawDelta < -0.000001,
+      earned_usd: sourceMigration ? 0 : roundUsd(Math.max(0, rawDelta)),
+      reset: !sourceMigration && rawDelta < -0.000001,
+      migration: sourceMigration,
     });
   }
 
@@ -3379,6 +4058,7 @@ function summarizeEarningsSnapshotDex(dex, rows, nowMs, days) {
       value_kind: timeline[timeline.length - 1]?.value_kind || 'exact',
       snapshot_count: samples.length,
       reset_count: windowDeltas.filter((row) => row.reset).length,
+      migration_count: windowDeltas.filter((row) => row.migration).length,
       baseline_at: baseline?.captured_at || null,
       complete: !!baseline && samples.length > 0,
     };
@@ -3395,6 +4075,7 @@ function summarizeEarningsSnapshotDex(dex, rows, nowMs, days) {
       earned_usd: 0,
       snapshot_count: 0,
       reset_count: 0,
+      migration_count: 0,
       closing_cumulative_usd: null,
       last_snapshot_at: null,
       value_kind: 'exact',
@@ -3415,6 +4096,7 @@ function summarizeEarningsSnapshotDex(dex, rows, nowMs, days) {
     if (!daily) continue;
     daily.earned_usd = roundUsd(daily.earned_usd + row.earned_usd);
     if (row.reset) daily.reset_count += 1;
+    if (row.migration) daily.migration_count += 1;
   }
 
   const latest = timeline[timeline.length - 1] || null;
@@ -3451,7 +4133,7 @@ function readEarningsSnapshotHistory(mainDb, { days = EARNINGS_SNAPSHOT_HISTORY_
     },
     dexes: {},
     daily: [],
-    note: 'Only stored cumulative earnings snapshots are used. Positive deltas are income; decreases are treated as claim/withdraw/reset events and never as negative income.',
+    note: 'Only stored cumulative earnings snapshots are used. Positive deltas are income; decreases are treated as claim/withdraw/reset events and never as negative income. Reader-model migrations establish a new baseline and are not counted as earnings.',
   };
   if (!mainDb) return empty;
   ensureEarningsSnapshots(mainDb);
@@ -3508,6 +4190,7 @@ async function captureScheduledEarningsSnapshot(mainDb) {
 function startEarningsSnapshotScheduler({ mainDb } = {}) {
   if (!mainDb || process.env.EARNINGS_SNAPSHOT_SCHEDULER === '0') return null;
   ensureEarningsSnapshots(mainDb);
+  startNadoEarningsSyncScheduler(mainDb);
   if (_earningsSnapshotInterval) return _earningsSnapshotInterval;
   _earningsSnapshotInitialTimer = setTimeout(
     () => captureScheduledEarningsSnapshot(mainDb),
@@ -3528,6 +4211,7 @@ function stopEarningsSnapshotScheduler() {
   if (_earningsSnapshotInterval) clearInterval(_earningsSnapshotInterval);
   _earningsSnapshotInitialTimer = null;
   _earningsSnapshotInterval = null;
+  stopNadoEarningsSyncScheduler();
 }
 
 function wrapEarningsResult(label, settledOrValue) {
@@ -3677,5 +4361,11 @@ module.exports = {
     earningsSnapshotBucket,
     recordEarningsSnapshots,
     readEarningsSnapshotHistory,
+    ensureNadoEarningsIndex,
+    registeredNadoWallets,
+    syncNadoEarningsIndex,
+    readNadoIndexedEarnings,
+    nadoUnpackBuilderAppendix,
+    nadoSubaccountHex,
   },
 };

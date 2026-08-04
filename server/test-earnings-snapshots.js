@@ -47,6 +47,19 @@ function main() {
   record(db, 'decibel', '2026-07-31T12:00:00.000Z', 10);
   record(db, 'decibel', '2026-08-02T12:00:00.000Z', 11);
 
+  record(db, 'nado', '2026-07-31T12:00:00.000Z', 5.4, {
+    model: 'nado_indexer_builder_fee_exact',
+  });
+  record(db, 'nado', '2026-08-01T12:00:00.000Z', 6, {
+    model: 'nado_indexer_builder_fee_exact',
+  });
+  record(db, 'nado', '2026-08-02T10:00:00.000Z', 12, {
+    model: 'nado_archive_builder_fee_exact',
+  });
+  record(db, 'nado', '2026-08-02T12:00:00.000Z', 12.1, {
+    model: 'nado_archive_builder_fee_exact',
+  });
+
   record(db, 'risex', '2026-07-31T12:00:00.000Z', 0, {
     estimated_fee_usd: 0.1,
     snapshot_value_kind: 'estimate',
@@ -68,6 +81,7 @@ function main() {
   const history = readEarningsSnapshotHistory(db, { days: 30, now });
   const pacifica = history.dexes.pacifica;
   const decibel = history.dexes.decibel;
+  const nado = history.dexes.nado;
   const risex = history.dexes.risex;
 
   assert.equal(pacifica.current_cumulative_usd, 8);
@@ -92,13 +106,17 @@ function main() {
   assert.equal(decibel.d1.earned_usd, 1);
   assert.equal(decibel.d7.earned_usd, 1);
   assert.equal(decibel.d30.earned_usd, 1);
+  assert.equal(nado.d1.earned_usd, 0.1, 'archive baseline correction must not look like same-day income');
+  assert.equal(nado.d7.earned_usd, 0.7);
+  assert.equal(nado.d30.earned_usd, 0.7);
+  assert.equal(nado.d1.migration_count, 1);
   assert.equal(risex.d1.earned_usd, 0.1);
   assert.equal(risex.d30.earned_usd, 0.1);
   assert.equal(risex.d30.value_kind, 'estimate');
   assert.equal(risex.current_cumulative_usd, 0.2);
-  assert.equal(history.windows.d1.earned_usd, 7);
-  assert.equal(history.windows.d7.earned_usd, 16);
-  assert.equal(history.windows.d30.earned_usd, 16);
+  assert.equal(history.windows.d1.earned_usd, 7.1);
+  assert.equal(history.windows.d7.earned_usd, 16.7);
+  assert.equal(history.windows.d30.earned_usd, 16.7);
   assert.equal(history.windows.d1.estimated_usd, 0.1);
   assert.equal(history.windows.d7.estimated_usd, 0.1);
   assert.equal(history.windows.d30.estimated_usd, 0.1);

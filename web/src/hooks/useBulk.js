@@ -31,6 +31,8 @@ function symbolOf(value) {
 
 function orderError(data, fallback) {
   const statuses = data?.upstream?.data?.payload?.response?.data?.statuses
+    || data?.upstream?.response?.data?.statuses
+    || data?.upstream?.data?.response?.data?.statuses
     || data?.upstream?.payload?.response?.data?.statuses
     || data?.upstream?.statuses
     || [];
@@ -257,9 +259,25 @@ export function useBulk() {
       ? Number(options.notional_usd)
       : Number(margin) * Math.max(1, Number(leverage) || 1);
     if (!(mark > 0) || !(notional > 0)) throw new Error('Bulk price or order size is unavailable.');
-    const lot = Number(markets.find(row => symbolOf(row.symbol) === symbolOf(symbol))?.lot_size || 1e-8);
+    const market = markets.find(row => symbolOf(row.symbol) === symbolOf(symbol));
+    const lot = Number(market?.lot_size || 1e-8);
     const size = Math.floor((notional / mark) / lot + 1e-9) * lot;
     if (!(size > 0)) throw new Error('Bulk order is below this market lot size.');
+    const roundedNotional = size * mark;
+    const minimumNotional = Number(
+      market?.min_notional_usd
+      ?? market?.min_notional
+      ?? market?.minNotional
+      ?? 0,
+    );
+    if (options.reduce_only !== true
+      && Number.isFinite(minimumNotional)
+      && minimumNotional > 0
+      && roundedNotional + 1e-9 < minimumNotional) {
+      throw new Error(
+        `Bulk requires at least $${minimumNotional.toFixed(2)} notional on ${symbolOf(symbol)}. Increase margin or leverage.`,
+      );
+    }
     return size.toFixed(8).replace(/0+$/, '').replace(/\.$/, '');
   }, [markets, priceFor]);
 

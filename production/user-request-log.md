@@ -2873,3 +2873,100 @@ Follow-up:
   atomic production workflow, and verify the live services and futures APIs.
 - Production authorization: the owner explicitly approved committing all
   current workspace changes, pushing `main`, and deploying them to production.
+
+## UR-2026-08-03-CLASHBOT-DECIBEL-TROPHY-ADJUSTMENT
+
+- Timestamp: 2026-08-03 21:27 (Europe/Kyiv)
+- Request: "Clashbot додай мені 10 перемог в турнірі децибел за сьогодні ну тобто +300 кубків"
+- Scope: resolve the exact production `Clashbot` player and active Decibel
+  tournament, back up the production database, apply one auditable `+300`
+  tournament-trophy adjustment for the current UTC day, and verify the
+  participant and daily-activity totals after the mutation.
+- Production authorization: the owner explicitly requested this production
+  tournament score adjustment in the current conversation.
+
+## UR-2026-08-03-CLASHBOT-DAILY-TROPHY-VISIBILITY
+
+- Timestamp: 2026-08-03 21:43 (Europe/Kyiv)
+- Request: "Clashbot (you) 60 trophies | $62 746 vol | 0 gold показує що за сьогодні плюс 60 токо"
+- Scope: reconcile the manual `+300` trophy adjustment with tournament #24's
+  custom `21:59 UTC` daily-pool boundary, move the existing idempotent ledger
+  event to the currently displayed round without changing the total twice,
+  and verify the public production leaderboard shows `360` daily trophies and
+  keeps `630` total trophies.
+
+## UR-2026-08-04-BULK-LAUNCH-READINESS-AUDIT
+
+- Timestamp: 2026-08-04 00:21 (Europe/Kyiv)
+- Request: "перевір ще раз булк звір з документацією на скільки все чітко по пркиладах і так само чи готово прям все до використання коли буде запуск і так далі"
+- Scope: compare the complete Bulk Trade integration against the latest
+  official client release, protocol documentation, SDK source and examples;
+  audit reads, browser signing, order submission/cancellation, builder routing,
+  account/position/order/fill handling, rewards and UI wiring; run deterministic
+  and live public checks; report exact launch readiness and remaining blockers
+  without mutating production or exchange state.
+
+## UR-2026-08-04-NADO-REFERRAL-VERIFICATION
+
+- Timestamp: 2026-08-04 (Europe/Kyiv)
+- Request: add the Nado referral `https://app.nado.xyz?join=13z8hnl` like the
+  Pacifica flow, and verify through the official API or on-chain state whether
+  the referral can be attached and checked before trading.
+- Scope: audit the official Nado API, contracts and pinned SDK; compare the
+  existing Pacifica and Nado flows; implement a truthful local referral
+  activation/verification gate if supported; run focused local tests and the
+  production web build. No commit, push or production deployment requested.
+- Result: implemented the current Nado/Fuul signed referral flow for code
+  `13z8hnl`, including terms acceptance, post-signature API verification and a
+  legacy Ink `referralCodes(address)` read that prevents overwriting an existing
+  different referral. Added the optional referral code to the first Nado
+  deposit after a successful link. Live read-only smoke confirmed the code is
+  available, the API responds, and the Ink contract read works. Focused request
+  tests, ESLint (0 errors) and the production web build passed; the real wallet
+  signature was intentionally left for the owner's explicit in-app action.
+
+## UR-2026-08-04-BULK-LAUNCH-READINESS-COMPLETION
+
+- Timestamp: 2026-08-04 (Europe/Kyiv)
+- Request: finish the pending Bulk Trade launch-readiness work after the Nado
+  referral integration.
+- Scope: re-audit the existing Bulk v0.1.2 integration against the signed tag,
+  current official API documentation and live public endpoints; fix concrete
+  read/write/UI gaps; run deterministic, live read-only and browser checks.
+  A real exchange signature/order, commit, push and production deployment were
+  not requested.
+- Result: completed locally. Fixed the case-sensitive live L2 request, normalized
+  the current `levels: [bids, asks]` payload and named beta variants, added the
+  official HTTP status path and prefix-safe rejection handling, and rejected
+  below-minimum orders before wallet signing. Live read-only checks returned
+  markets, prices, candles and populated bid/ask levels. Bulk wire, adapter,
+  response-shape, proof/fill attribution, earnings/schema/tournament regressions,
+  focused ESLint, server syntax checks and the production web build all pass.
+  The local browser shows the Bulk picker and Solana login flow. The remaining
+  funded order/cancel smoke requires a beta-enabled funded wallet and was not
+  performed; no production mutation, commit, push or deployment was made.
+
+## UR-2026-08-04-CLASHBOT-DAY4-TROPHIES
+
+- Timestamp: 2026-08-04 17:15 (Europe/Kyiv)
+- Request: "показує а 4 день тільки 120 трофеїв чомусь"
+- Scope: audit tournament #24 daily-pool day boundaries and Clashbot's 15
+  explicitly granted Decibel attack wins; correct only their day attribution if
+  necessary, without double-counting total trophies or wins, and verify the
+  production daily-points output.
+- Result: confirmed the tournament's `21:59 UTC` boundary made `2026-08-03`
+  round 4 while the 15 owner-grant rows had been attributed to future round 5
+  (`2026-08-04`). Moved exactly those 15 idempotent rows to round 4 and renamed
+  their audit IDs; no participant/player totals were incremented again. The
+  production public daily-points API now reports Clashbot at 570 trophies for
+  round 4 (existing 120 + granted 450), 1065 tournament trophies total, and 46
+  account battle wins.
+
+## UR-2026-08-04-DEPLOY-ALL-CURRENT-CHANGES
+
+- Timestamp: 2026-08-04 18:11 (Europe/Kyiv)
+- Request: "залий всі зміни на прод"
+- Scope: review and verify the complete current `main` worktree, commit every
+  tracked and untracked project change, push `main`, run the repository's
+  production deployment workflow, and verify the deployed revision plus public
+  service/API health.

@@ -4666,14 +4666,19 @@ async function loadEarnings(force) {
         if (d.model === 'pacifica_builder_leaderboard_fee_sum') {
           return '<span style="color:#9ca3af;font-size:11px">' + Number(d.traded_referrals || 0).toLocaleString() + ' referral wallet(s) · $' + Number(d.volume_usd || 0).toFixed(0) + ' all-time volume</span>';
         }
-        if (d.model === 'nado_indexer_builder_fee_exact') {
+        if (d.model === 'nado_indexer_builder_fee_exact' || d.model === 'nado_archive_builder_fee_exact') {
           const estimate = Number.isFinite(Number(d.estimated_fee_usd))
-            ? ' / local estimate $' + Number(d.estimated_fee_usd).toFixed(4)
+            ? ' / fee-rate check $' + Number(d.estimated_fee_usd).toFixed(4)
             : '';
           const latest = d.latest_submission_idx
             ? ' / last idx ' + esc(String(d.latest_submission_idx))
             : '';
-          return '<span style="color:#9ca3af;font-size:11px">builder #' + esc(String(d.builder_id || '')) + ' / ' + (d.matched_events || 0) + ' indexed fill(s) / ' + (d.indexed_wallets || 0) + ' wallet(s)' + latest + estimate + '</span>';
+          const progress = d.sync_complete === false
+            ? ' / syncing ' + Number(d.refresh?.pending_backfills || 0) + ' wallet(s)'
+            : '';
+          const orders = Number(d.matched_orders ?? d.matched_events ?? d.trades ?? 0);
+          const wallets = Number(d.registered_wallets ?? d.indexed_wallets ?? 0);
+          return '<span style="color:#9ca3af;font-size:11px">builder #' + esc(String(d.builder_id || '')) + ' / ' + orders + ' indexed order(s) / ' + wallets + ' registered wallet(s)' + progress + latest + estimate + '</span>';
         }
         if (d.model === 'grvt_builder_fill_history') {
           const estimate = Number.isFinite(Number(d.estimated_fee_usd))

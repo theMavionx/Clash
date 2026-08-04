@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createNadoClient } from '@nadohq/client';
-import { getOrderNonce } from '@nadohq/shared';
+import { getOrderNonce, NADO_ABIS, NADO_DEPLOYMENTS } from '@nadohq/shared';
 import { createWalletClient, formatUnits, http, parseUnits, zeroAddress } from 'viem';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { useDex } from '../contexts/DexContext';
@@ -27,6 +27,16 @@ import {
   normalizeNadoMarkets,
   normalizeNadoPrices,
 } from '../lib/nadoClient';
+import {
+  NADO_REFERRAL_CODE,
+  NADO_REFERRAL_URL,
+  acceptNadoReferralTerms,
+  applyNadoReferralCode,
+  fetchNadoReferralCodeAvailability,
+  fetchNadoReferralStatus,
+  fetchNadoReferralTermsStatus,
+  nadoReferralSignatureMessage,
+} from '../lib/nadoReferral';
 
 const POLL_INTERVAL_MS = 45_000;
 const NADO_REFRESH_BACKOFF_MS = 60_000;
@@ -341,6 +351,7 @@ export function useNado() {
   const [goldEarned, setGoldEarned] = useState(null);
   const [setupVerified, setSetupVerified] = useState(null);
   const [linkedSignerState, setLinkedSignerState] = useState({ enabled: false, approved: false, signer: null });
+  const [referralStatus, setReferralStatus] = useState(null);
 
   const marketsRef = useRef([]);
   const triggerOrdersRef = useRef([]);
@@ -352,10 +363,12 @@ export function useNado() {
   const refreshWarnRef = useRef({});
   const claimGoldRef = useRef(null);
   const importFillsRef = useRef(null);
+  const referralWalletRef = useRef(null);
 
   const registeredWallet = registeredDexWallet(player, 'nado', 'evm');
   const registeredEvmWallet = isNadoAddress(registeredWallet) ? registeredWallet.toLowerCase() : null;
   const activeEvmWallet = walletAddr ? String(walletAddr).toLowerCase() : null;
+  referralWalletRef.current = activeEvmWallet;
   const walletMismatch = false;
 
   const token = useMemo(() => (
@@ -424,6 +437,67 @@ export function useNado() {
       ...(linkedSignerWalletClient ? { linkedSignerWalletClient } : {}),
     });
   }, [getPublicClient, getWalletClient]);
+
+  const readOnchainReferralCode = useCallback(async () => {
+    if (!walletAddr || typeof getPublicClient !== 'function') return '';
+    const publicClient = getPublicClient(INK_CHAIN_ID);
+    const code = await publicClient.readContract({
+      address: NADO_DEPLOYMENTS[NADO_CHAIN_ENV].endpoint,
+      abi: NADO_ABIS.endpoint,
+      functionName: 'referralCodes',
+      args: [walletAddr],
+    });
+    return String(code || '').trim();
+  }, [walletAddr, getPublicClient]);
+
+  const refreshReferralStatus = useCallback(async () => {
+    if (!walletAddr) {
+      setReferralStatus(null);
+      return { has_referrer: false, referred: false, onchain_code: '' };
+    }
+    const expectedWallet = String(walletAddr).toLowerCase();
+    setReferralStatus(previous => ({ ...(previous || {}), wallet: expectedWallet, checking: true }));
+    const [fuulResult, termsResult, onchainResult] = await Promise.allSettled([
+      fetchNadoReferralStatus(walletAddr),
+      fetchNadoReferralTermsStatus(walletAddr),
+      readOnchainReferralCode(),
+    ]);
+    const fuulKnown = fuulResult.status === 'fulfilled';
+    const referred = fuulKnown && fuulResult.value?.referred === true;
+    const onchainCode = onchainResult.status === 'fulfilled'
+      ? String(onchainResult.value || '').trim()
+      : '';
+    const onchainIsOurCode = onchainCode.toLowerCase() === NADO_REFERRAL_CODE.toLowerCase();
+    // If this wallet used our legacy on-chain code, still migrate it into
+    // Nado's current Fuul referral registry. Never overwrite another code.
+    const hasReferrer = fuulKnown
+      ? referred || (!!onchainCode && !onchainIsOurCode)
+      : (onchainCode ? true : null);
+    const terms = termsResult.status === 'fulfilled' ? termsResult.value : null;
+    const next = {
+      wallet: expectedWallet,
+      checking: false,
+      has_referrer: hasReferrer,
+      referred,
+      onchain_code: onchainCode,
+      code: onchainCode || null,
+      source: referred ? 'fuul_api' : onchainCode ? 'ink_contract' : fuulKnown ? 'fuul_api' : 'unavailable',
+      terms_accepted: terms?.terms_accepted === true,
+      terms_acceptance_required: terms?.terms_acceptance_required === true,
+      terms_document_url: terms?.terms_document_url || null,
+      fuul_error: fuulResult.status === 'rejected' ? nadoErrorMessage(fuulResult.reason) : null,
+      onchain_error: onchainResult.status === 'rejected' ? nadoErrorMessage(onchainResult.reason) : null,
+    };
+    if (referralWalletRef.current !== expectedWallet) return { ...next, stale: true };
+    setReferralStatus(previous => ({
+      ...next,
+      linked_our_referral: previous?.linked_our_referral === true && hasReferrer === true,
+    }));
+    if (!fuulKnown && onchainResult.status === 'rejected') {
+      console.warn('[useNado] referral verification unavailable:', next.fuul_error, next.onchain_error);
+    }
+    return next;
+  }, [walletAddr, readOnchainReferralCode]);
 
   const replaceTriggerOrders = useCallback((rows = []) => {
     const next = (Array.isArray(rows) ? rows : []).filter(o => o?.order_id || o?.digest);
@@ -656,6 +730,17 @@ export function useNado() {
   }, [isActiveDex, fetchMarkets]);
 
   useEffect(() => {
+    if (!walletAddr) {
+      setReferralStatus(null);
+      return;
+    }
+    if (!isActiveDex) return;
+    refreshReferralStatus().catch((e) => {
+      console.warn('[useNado] referral status refresh:', nadoErrorMessage(e));
+    });
+  }, [isActiveDex, walletAddr, refreshReferralStatus]);
+
+  useEffect(() => {
     if (!isActiveDex) return undefined;
     const tick = () => {
       fetchPrices();
@@ -683,6 +768,7 @@ export function useNado() {
     setWalletUsdc(null);
     replaceTriggerOrders([]);
     setSetupVerified(false);
+    setReferralStatus(null);
     setWalletUsdcStatus({
       status: 'idle',
       message: 'Connect wallet to check Ink stablecoin balances',
@@ -812,6 +898,80 @@ export function useNado() {
       setLoading(false);
     }
   }, [enableLinkedSigner, fetchTriggerOrdersFromNado, fetchAccount]);
+
+  const linkOurReferrer = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      await ensureReady();
+      const current = await refreshReferralStatus();
+      if (current?.has_referrer === true) {
+        return {
+          success: true,
+          already_linked: true,
+          code: current.onchain_code || null,
+          source: current.source,
+        };
+      }
+
+      const availability = await fetchNadoReferralCodeAvailability(NADO_REFERRAL_CODE);
+      if (availability?.available !== true) {
+        throw new Error(`Nado referral code ${NADO_REFERRAL_CODE} is not available`);
+      }
+
+      const terms = await fetchNadoReferralTermsStatus(walletAddr);
+      if (terms?.terms_acceptance_required === true && terms?.terms_accepted !== true) {
+        await acceptNadoReferralTerms(walletAddr);
+      }
+
+      const walletClient = typeof getWalletClient === 'function' ? getWalletClient(INK_CHAIN_ID) : null;
+      if (!walletClient?.signMessage) throw new Error('Nado wallet signer is not ready');
+      const message = nadoReferralSignatureMessage(NADO_REFERRAL_CODE);
+      const signature = await walletClient.signMessage({ account: walletAddr, message });
+      await applyNadoReferralCode({
+        address: walletAddr,
+        signature,
+        chainId: Number(walletClient.chain?.id || INK_CHAIN_ID),
+        code: NADO_REFERRAL_CODE,
+      });
+
+      let verified = null;
+      for (let attempt = 0; attempt < 6; attempt += 1) {
+        verified = await fetchNadoReferralStatus(walletAddr);
+        if (verified?.referred === true) break;
+        if (attempt < 5) await new Promise(resolve => setTimeout(resolve, 600));
+      }
+      if (verified?.referred !== true) {
+        throw new Error('Nado accepted the referral request but did not verify it yet. Retry in a few seconds.');
+      }
+
+      const refreshed = await refreshReferralStatus();
+      const confirmed = {
+        ...refreshed,
+        has_referrer: true,
+        referred: true,
+        code: NADO_REFERRAL_CODE,
+        linked_our_referral: true,
+        source: 'fuul_api',
+        terms_document_url: terms?.terms_document_url || refreshed?.terms_document_url || null,
+      };
+      if (referralWalletRef.current === String(walletAddr).toLowerCase()) {
+        setReferralStatus(confirmed);
+      }
+      return { success: true, code: NADO_REFERRAL_CODE, referral: confirmed };
+    } catch (e) {
+      const msg = nadoErrorMessage(e, 'Nado referral activation failed');
+      setError(msg);
+      return { error: msg };
+    } finally {
+      setLoading(false);
+    }
+  }, [walletAddr, ensureReady, refreshReferralStatus, getWalletClient]);
+
+  const openReferralJoin = useCallback(() => {
+    if (typeof window !== 'undefined') window.open(NADO_REFERRAL_URL, '_blank', 'noopener,noreferrer');
+    return NADO_REFERRAL_URL;
+  }, []);
 
   const setNadoOneTapTradingEnabled = useCallback(async (enabled = true) => {
     if (enabled === false) return disableLinkedSigner();
@@ -1212,9 +1372,14 @@ export function useNado() {
         subaccountName: NADO_SUBACCOUNT_NAME,
         productId: asset.productId,
         amount: parsed,
+        ...(referralStatus?.linked_our_referral === true && !referralStatus?.onchain_code
+          ? { referralCode: NADO_REFERRAL_CODE }
+          : {}),
       });
       await fetchAccount();
+      await refreshReferralStatus();
       setTimeout(fetchAccount, 10_000);
+      setTimeout(refreshReferralStatus, 10_000);
       return { success: true, txHash, info: `Nado ${asset.label} deposit submitted on Ink. Balance can take a few moments to refresh.` };
     } catch (e) {
       const msg = nadoErrorMessage(e, 'Nado deposit failed');
@@ -1223,7 +1388,7 @@ export function useNado() {
     } finally {
       setLoading(false);
     }
-  }, [walletAddr, ensureReady, createClient, fetchAccount]);
+  }, [walletAddr, ensureReady, createClient, fetchAccount, referralStatus, refreshReferralStatus]);
 
   const switchToInk = useCallback(async () => {
     await ensureReady();
@@ -1418,7 +1583,13 @@ export function useNado() {
     registeredEvmWallet,
     oneTapTrading: linkedSignerState,
     setOneTapTradingEnabled: setNadoOneTapTradingEnabled,
-    hasReferrer: setupVerified === true,
-    linkOurReferrer: activate,
+    hasReferrer: referralStatus?.has_referrer ?? null,
+    linkOurReferrer,
+    referralStatus,
+    referralCode: NADO_REFERRAL_CODE,
+    referralUrl: NADO_REFERRAL_URL,
+    referralTermsUrl: referralStatus?.terms_document_url || null,
+    openReferralJoin,
+    refreshReferralStatus,
   };
 }

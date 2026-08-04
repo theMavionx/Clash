@@ -46,7 +46,7 @@ Next checkpoint:
 
 ## G-002 Full Game Balance Pass
 
-- Status: active
+- Status: complete (external funded smoke pending Bulk beta access)
 - Priority: P0
 - Owner intent: rebalance all tunable game parameters so the game is playable, fair,
   and still supports monetization.
@@ -377,6 +377,18 @@ Current checkpoint:
 - Live public market/ticker/candle reads work. A real funded account/order could
   not be exercised while Bulk remains closed beta, and no production mutation,
   commit, push or deployment is authorized by this goal.
+- 2026-08-04 continuation audit found and fixed two launch blockers that the
+  deterministic write tests did not cover: the live L2 snapshot requires
+  lowercase `l2book` and returns `[bids, asks]` under `levels`, while the
+  official HTTP write response stores statuses under `response.data.statuses`.
+  Both live and named beta order-book shapes are normalized, prefixed rejection
+  statuses cannot be mistaken for submitted orders, and market minimum notional
+  is enforced before wallet signing.
+- Live read-only verification now returns markets, prices, candles and populated
+  bid/ask levels. Focused Bulk tests, proof/fill attribution regressions, ESLint,
+  server syntax checks and the production web build pass. The only remaining
+  launch check is one funded order/cancel against Bulk after beta access opens;
+  it is an external smoke test rather than unfinished integration code.
 
 ## G-006 Dango Realtime Exchange Integration
 
