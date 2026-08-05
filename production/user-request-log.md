@@ -2970,3 +2970,42 @@ Follow-up:
   tracked and untracked project change, push `main`, run the repository's
   production deployment workflow, and verify the deployed revision plus public
   service/API health.
+
+## UR-2026-08-05-CLASHBOT-DECIBEL-100-TROPHIES
+
+- Timestamp: 2026-08-05 12:19 (Europe/Kyiv)
+- Request: "додай мені за сьогодні 100 кубків децибел клеш бот"
+- Scope: add exactly 100 tournament trophies to Clashbot for the current logical
+  day of the active Decibel tournament using one idempotent owner adjustment;
+  do not fabricate attack rows or alter trading volume/gold, and verify the
+  production daily leaderboard and participant total.
+- Result: added one idempotent `owner_manual_trophy_adjustment` for tournament
+  #24 round 5 (`2026-08-04`, cutoff `21:59 UTC`). Production daily-points now
+  reports exactly 100 Clashbot trophies for the current round, while tournament
+  trophies moved from 1065 to 1165. Main account trophies, battle wins, trading
+  volume and gold were not modified by the adjustment.
+
+## UR-2026-08-05-BULK-LOGO-REPLACEMENT
+
+- Timestamp: 2026-08-05 12:33 (Europe/Kyiv)
+- Request: "ось лого булк трейда зміни"
+- Scope: replace the remote Bulk v0.1.2 wordmark with the owner-provided square
+  eight-point star asset everywhere Bulk appears; remove wordmark-specific crop
+  rules, preserve the image aspect ratio, and verify the production web build.
+- Result: copied the supplied 400x400 PNG to `web/src/assets/bulk.png`, wired it
+  through shared `DEX_CONFIG`, and removed Bulk-only wordmark sizing/cropping in
+  the venue picker, badges, registration/profile cards and setup screens. Web
+  lint completed with no errors and the production build passed. Local browser
+  verification covered the real DEX picker and Bulk login; the logo rendered
+  from the local asset at a square aspect ratio with `object-fit: contain`.
+
+## UR-2026-08-05-RESTORE-DEX-EARNINGS-HISTORY
+
+- Timestamp: 2026-08-05 12:41 (Europe/Kyiv)
+- Request: "ми там додавали щоб показувало дейлі заробітко по кодій біржі за 7 і за 30 днів то діло з проду пропало"
+- Scope: audit the deployed earnings snapshot API, stored production snapshots,
+  and admin Earnings rendering; restore the per-exchange 24h/7d/30d and daily
+  snapshot-only earnings display without substituting live estimates.
+- Follow-up authorization: "продовжуй потім всі зміни закидай на прод" — after
+  verification, commit every current project change, push `main`, deploy the
+  atomic release, and verify the live production UI and services.

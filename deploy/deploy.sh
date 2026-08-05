@@ -1159,6 +1159,9 @@ slim_runtime_release() {
 validate_release() {
     log "[6/9] Validating release..."
     [ -f "$WEB_DIST/index.html" ] || die "Missing web/dist/index.html"
+    [ -f "$WEB_DIST/admin.html" ] || die "Missing web/dist/admin.html"
+    grep -Rqs --include='admin-*.js' 'earnings-snapshot-history' "$WEB_DIST/assets" \
+        || die "Admin bundle is missing the snapshot earnings history UI"
     [ -f "$WEB_DIST/godot/Work.pck" ] || die "Missing web/dist/godot/Work.pck"
     [ -f "$WEB_DIST/godot/Work.wasm" ] || die "Missing web/dist/godot/Work.wasm"
     [ -f "$WEB_DIST/godot/Work.js" ] || die "Missing web/dist/godot/Work.js"

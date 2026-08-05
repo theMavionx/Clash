@@ -5829,12 +5829,12 @@ function FuturesPanel() {
             {dex === 'bulk' ? (
               <>
                 <div style={{
-                  width: 170, height: 72, borderRadius: 16,
+                  width: 96, height: 96, borderRadius: 16,
                   background: '#1B1B18', border: '4px solid #383832',
                   boxShadow: '0 5px 0 #11110F, 0 8px 16px rgba(0,0,0,0.25)',
                   display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
                 }}>
-                  <img src={DEX_CONFIG.bulk.logo} alt="Bulk" style={{width: 158, height: 46, objectFit: 'cover'}} />
+                  <img src={DEX_CONFIG.bulk.logo} alt="Bulk" style={{width: 82, height: 82, objectFit: 'contain'}} />
                 </div>
                 <div style={{color: '#5C3A21', fontSize: 18, fontWeight: 900, textAlign: 'center'}}>
                   Connect your Solana wallet
@@ -6515,8 +6515,8 @@ function FuturesPanel() {
             <button data-nodrag onClick={handleClose} style={S.closeBtn}>×</button>
           </div>
           <div style={{...S.body, alignItems: 'center', justifyContent: 'center', gap: 18, padding: 28}}>
-            <div style={{width: 210, height: 82, borderRadius: 16, background: '#1B1B18', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center'}}>
-              <img src={DEX_CONFIG.bulk.logo} alt="Bulk" style={{width: 198, height: 58, objectFit: 'cover'}} />
+            <div style={{width: 112, height: 112, borderRadius: 16, background: '#1B1B18', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center'}}>
+              <img src={DEX_CONFIG.bulk.logo} alt="Bulk" style={{width: 98, height: 98, objectFit: 'contain'}} />
             </div>
             <div style={{color: '#5C3A21', fontSize: 21, fontWeight: 900, textAlign: 'center'}}>
               {isChecking ? 'Checking your Bulk account' : 'Approve Clash builder routing'}

@@ -86,9 +86,9 @@ function DexPicker({ onPick, isInFrame, isSolanaMobile }) {
                   src={cfg.logo}
                   alt={cfg.label}
                   style={{
-                    height: cfg.id === 'bulk' ? 32 : (cfg.logoIsWordmark ? 24 : 28),
-                    width: cfg.id === 'bulk' ? 110 : 'auto',
-                    objectFit: cfg.id === 'bulk' ? 'cover' : 'contain',
+                    height: cfg.logoIsWordmark ? 24 : 28,
+                    width: 'auto',
+                    objectFit: 'contain',
                     objectPosition: 'left center',
                     filter: 'drop-shadow(0 2px 0 rgba(0,0,0,0.35))',
                   }}
@@ -161,9 +161,9 @@ function DexBadge({ dex, onChange }) {
           src={cfg.logo}
           alt={cfg.label}
           style={{
-            height: cfg.id === 'bulk' ? 15 : (cfg.logoIsWordmark ? 12 : 14),
-            width: cfg.id === 'bulk' ? 52 : 'auto',
-            objectFit: cfg.id === 'bulk' ? 'cover' : 'contain',
+            height: cfg.logoIsWordmark ? 12 : 14,
+            width: 'auto',
+            objectFit: 'contain',
             filter: 'drop-shadow(0 1px 0 rgba(0,0,0,0.35))',
           }}
         />

@@ -788,9 +788,9 @@ function ProfileModal({ onClose }) {
                     src={cfg.logo}
                     alt={cfg.label}
                     style={{
-                      height: cfg.id === 'bulk' ? 28 : (cfg.logoIsWordmark ? 22 : 26),
-                      width: cfg.id === 'bulk' ? 96 : 'auto',
-                      objectFit: cfg.id === 'bulk' ? 'cover' : 'contain',
+                      height: cfg.logoIsWordmark ? 22 : 26,
+                      width: 'auto',
+                      objectFit: 'contain',
                       filter: 'drop-shadow(0 2px 0 rgba(0,0,0,0.35))',
                     }}
                   />

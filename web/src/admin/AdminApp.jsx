@@ -4515,7 +4515,7 @@ function EarningsPanel({ data, reload }) {
   });
   const tournaments = revenue.tournaments || revenue.by_tournament || [];
   return (
-    <div className="admin-grid">
+    <div className="admin-grid" data-admin-feature="earnings-snapshot-history">
       <StatsGrid stats={[
         { label: 'Exact earned', value: fmtMaybeUsd(exactTotalUsd), tone: 'gold' },
         { label: 'Snapshot 24h', value: Object.keys(snapshotDexes).length ? fmtMaybeUsd(snapshotWindows.d1?.earned_usd) : '-', tone: 'green' },

@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
+import bulkLogo from '../assets/bulk.png';
 import pacificaLogo from '../assets/pacifica.png';
 import avantisLogo from '../assets/avantis.svg';
 // Decibel uses the project favicon (yellow square with the brand mark) as its
@@ -19,10 +20,10 @@ export const DEX_CONFIG = {
     label: 'BULK',
     shortLabel: 'BULK',
     emoji: 'BULK',
-    // Official v0.1.2 repository wordmark. Keep the canonical remote asset
-    // until Bulk publishes a stable standalone icon package.
-    logo: 'https://raw.githubusercontent.com/Bulk-trade/bulk-client/v0.1.2/bulkclient.png',
-    logoIsWordmark: true,
+    // Owner-provided standalone Bulk star. Keep this local so every picker and
+    // setup screen renders the same mark without depending on GitHub uptime.
+    logo: bulkLogo,
+    logoIsWordmark: false,
     color: '#1B1B18',
     colorDark: '#11110F',
     colorLight: 'rgba(27,27,24,0.12)',
@@ -489,9 +490,7 @@ export function DexBadge({ dexId, size = 'sm' }) {
   const isLg = size === 'lg';
   // Wordmarks are wide, so we cap their height a bit smaller than icon-only
   // logos to keep them in scale with the surrounding UI.
-  const logoH = cfg.id === 'bulk'
-    ? (isLg ? 18 : 15)
-    : (cfg.logoIsWordmark ? (isLg ? 12 : 10) : (isLg ? 16 : 13));
+  const logoH = cfg.logoIsWordmark ? (isLg ? 12 : 10) : (isLg ? 16 : 13);
 
   return (
     <img
@@ -500,8 +499,8 @@ export function DexBadge({ dexId, size = 'sm' }) {
       title={cfg.label}
       style={{
         height: logoH,
-        width: cfg.id === 'bulk' ? (isLg ? 64 : 52) : 'auto',
-        objectFit: cfg.id === 'bulk' ? 'cover' : 'contain',
+        width: 'auto',
+        objectFit: 'contain',
         flexShrink: 0,
         userSelect: 'none',
         verticalAlign: 'middle',
