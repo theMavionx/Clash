@@ -37,11 +37,14 @@ import {
   phoenixCanSessionSignInstructions,
 } from '../lib/phoenixOneTap';
 import {
+  calculatePhoenixGrossPositionPnl,
   calculatePhoenixNetPositionPnl,
+  normalizePhoenixSignedQuoteLots,
   PHOENIX_DEFAULT_TAKER_FEE_RATE,
   phoenixEffectiveTakerFeeRate,
   phoenixMarketMakerFeeRate,
   phoenixMarketTakerFeeRate,
+  phoenixPositionDisplayMetrics,
   sumPhoenixGrossPositionPnl,
 } from '../lib/phoenixPositionMetrics';
 
@@ -1080,15 +1083,6 @@ function quoteLotsToUsd(value) {
   return n / 10 ** USDC_DECIMALS;
 }
 
-function negateIntegerString(value) {
-  try {
-    return String(-BigInt(value ?? '0'));
-  } catch {
-    const n = Number(value || 0);
-    return Number.isFinite(n) ? String(-Math.trunc(n)) : '0';
-  }
-}
-
 function toRawUsdc(amount) {
   const n = Number(amount);
   if (!Number.isFinite(n) || n <= 0) throw new Error('Enter a positive USDC amount');
@@ -1591,7 +1585,7 @@ function buildPhoenixMarginInputsFromSnapshot(authority, traderPdaIndex, subacco
               basePositionLots: String(position.basePositionLots ?? '0'),
               virtualQuotePositionLots: String(position.virtualQuotePositionLots ?? '0'),
               entryPriceTicks: String(position.entryPriceTicks ?? '0'),
-              unsettledFundingQuoteLots: negateIntegerString(position.unsettledFundingQuoteLots ?? '0'),
+              unsettledFundingQuoteLots: normalizePhoenixSignedQuoteLots(position.unsettledFundingQuoteLots),
               accumulatedFundingQuoteLots: String(position.accumulatedFundingQuoteLots ?? '0'),
             } : undefined,
             limitOrders: orders.map(order => ({
@@ -2109,13 +2103,22 @@ function positionFromSnapshot(p, marketsBySymbol, collateral, subaccountIndex = 
   const amount = Math.abs(rawBase);
   const entry = firstFinite(p?.entryPriceUsd, p?.entryPrice, ticksToUsd(p?.entryPriceTicks, m)) || 0;
   const price = Number(m?._mark || entry || 0);
-  const notional = amount * (entry || price || 0);
-  const margin = collateral > 0 ? Math.min(collateral, notional) : 0;
+  const entryNotional = amount * (entry || price || 0);
+  const positionValue = amount * (price || entry || 0);
   const directTakeProfitPrice = activeTriggerPrice(p?.takeProfitTriggers, m);
   const directStopLossPrice = activeTriggerPrice(p?.stopLossTriggers, m);
   const conditionalTakeProfitPrice = activeTriggerPrice(p?.conditionalTakeProfitTriggers, m);
   const conditionalStopLossPrice = activeTriggerPrice(p?.conditionalStopLossTriggers, m);
   const grossPnl = (price && entry) ? (price - entry) * amount * (rawBase >= 0 ? 1 : -1) : 0;
+  const isIsolated = Number(subaccountIndex) > 0;
+  const displayMetrics = phoenixPositionDisplayMetrics({
+    isIsolated,
+    positionValue,
+    accountCollateral: collateral,
+    portfolioValue: isIsolated ? Number(collateral || 0) + grossPnl : null,
+    grossPnlUsd: grossPnl,
+  });
+  const margin = displayMetrics.margin;
   const feeRate = phoenixEffectiveTakerFeeRate({
     market: m,
     takerFeeMultiplier: feeContext.takerFeeMultiplier,
@@ -2134,28 +2137,36 @@ function positionFromSnapshot(p, marketsBySymbol, collateral, subaccountIndex = 
     symbol,
     side: rawBase >= 0 ? 'bid' : 'ask',
     amount,
-    size_usd: notional,
+    size_usd: positionValue || entryNotional,
     entry_price: entry || price,
     mark_price: price || entry,
     liquidation_price: null,
     margin,
-    leverage: margin > 0 ? Math.max(1, Math.round((notional / margin) * 10) / 10) : null,
+    leverage: displayMetrics.leverage,
+    effective_leverage: displayMetrics.leverage,
+    risk_initial_margin: displayMetrics.positionInitialMargin,
+    portfolio_equity: displayMetrics.equity,
     pnl_usd: pnl.netPnlUsd,
     pnl_pct: pnl.pnlPct,
     pnl_gross_usd: pnl.grossPnlUsd,
+    pnl_gross_pct: displayMetrics.grossPnlPct,
     opening_fee_usd: pnl.openingFeeUsd,
     closing_fee_usd: pnl.closingFeeUsd,
     trading_fee_usd: pnl.totalFeeUsd,
     trading_fee_rate: pnl.feeRate,
     trading_fee_source: 'phoenix_current_taker_plus_flight_estimate',
     pnl_includes_fees: true,
-    is_isolated: Number(subaccountIndex) > 0,
+    is_isolated: isIsolated,
     take_profit_price: directTakeProfitPrice ?? conditionalTakeProfitPrice,
     stop_loss_price: directStopLossPrice ?? conditionalStopLossPrice,
     market_addr: m?.market_addr || null,
     pair_index: null,
     trade_index: null,
     _phoenixSubaccountIndex: Number(subaccountIndex) || 0,
+    _phoenixVirtualQuotePositionUsd: quoteLotsToUsd(p?.virtualQuotePositionLots),
+    _phoenixPositionInitialMargin: displayMetrics.positionInitialMargin,
+    _phoenixAccountCollateral: displayMetrics.accountCollateral,
+    _phoenixEquityBeforePnlUsd: displayMetrics.equityBeforePnl,
     _phoenixDirectTakeProfitPrice: directTakeProfitPrice,
     _phoenixDirectStopLossPrice: directStopLossPrice,
     _raw: p,
@@ -2189,7 +2200,7 @@ function positionFromTraderView(vp, traderView, snapshotRow, marketsBySymbol, fe
   const signedPositionValue = firstFinite(tokenAmountValue(vp?.positionValue), amount * (mark || entry || 0)) || 0;
   const positionValue = Math.abs(signedPositionValue);
   const accountCollateral = collateralForTraderView(traderView);
-  const margin = firstFinite(
+  const positionInitialMargin = firstFinite(
     tokenAmountValue(vp?.positionInitialMargin),
     tokenAmountValue(vp?.initialMargin),
     tokenAmountValue(traderView?.initialMargin),
@@ -2206,6 +2217,19 @@ function positionFromTraderView(vp, traderView, snapshotRow, marketsBySymbol, fe
   const conditionalTakeProfitPrice = activeTriggerPrice(snapshotRow?.conditionalTakeProfitTriggers, m);
   const conditionalStopLossPrice = activeTriggerPrice(snapshotRow?.conditionalStopLossTriggers, m);
   const subaccountIndex = Number(traderView?.traderSubaccountIndex) || 0;
+  const isIsolated = subaccountIndex > 0;
+  const displayMetrics = phoenixPositionDisplayMetrics({
+    isIsolated,
+    positionValue,
+    positionInitialMargin,
+    accountCollateral,
+    portfolioValue: firstFinite(
+      tokenAmountValue(traderView?.portfolioValue),
+      tokenAmountValue(traderView?.effectiveCollateral),
+    ),
+    grossPnlUsd: grossPnl,
+  });
+  const margin = displayMetrics.margin;
   const feeRate = phoenixEffectiveTakerFeeRate({
     market: m,
     takerFeeMultiplier: traderView?.takerFeeOverrideMultiplier ?? feeContext.takerFeeMultiplier,
@@ -2230,17 +2254,21 @@ function positionFromTraderView(vp, traderView, snapshotRow, marketsBySymbol, fe
     mark_price: mark || entry,
     liquidation_price: tokenAmountValue(vp?.liquidationPrice),
     margin,
-    leverage: margin > 0 && positionValue > 0 ? Math.round((positionValue / margin) * 10) / 10 : null,
+    leverage: displayMetrics.leverage,
+    effective_leverage: displayMetrics.leverage,
+    risk_initial_margin: displayMetrics.positionInitialMargin,
+    portfolio_equity: displayMetrics.equity,
     pnl_usd: pnl.netPnlUsd,
     pnl_pct: pnl.pnlPct,
     pnl_gross_usd: pnl.grossPnlUsd,
+    pnl_gross_pct: displayMetrics.grossPnlPct,
     opening_fee_usd: pnl.openingFeeUsd,
     closing_fee_usd: pnl.closingFeeUsd,
     trading_fee_usd: pnl.totalFeeUsd,
     trading_fee_rate: pnl.feeRate,
     trading_fee_source: 'phoenix_current_taker_plus_flight_estimate',
     pnl_includes_fees: true,
-    is_isolated: Number(subaccountIndex) > 0,
+    is_isolated: isIsolated,
     take_profit_price: directTakeProfitPrice ?? conditionalTakeProfitPrice,
     stop_loss_price: directStopLossPrice ?? conditionalStopLossPrice,
     market_addr: m?.market_addr || null,
@@ -2249,6 +2277,11 @@ function positionFromTraderView(vp, traderView, snapshotRow, marketsBySymbol, fe
     _phoenixSubaccountIndex: Number(subaccountIndex) || 0,
     _phoenixAuthority: traderView?.authority || null,
     _phoenixAccountCollateral: accountCollateral,
+    _phoenixVirtualQuotePositionUsd: snapshotRow?.virtualQuotePositionLots != null
+      ? quoteLotsToUsd(snapshotRow.virtualQuotePositionLots)
+      : null,
+    _phoenixPositionInitialMargin: displayMetrics.positionInitialMargin,
+    _phoenixEquityBeforePnlUsd: displayMetrics.equityBeforePnl,
     _phoenixDirectTakeProfitPrice: directTakeProfitPrice,
     _phoenixDirectStopLossPrice: directStopLossPrice,
     _raw: snapshotRow || vp,
@@ -2265,15 +2298,27 @@ function phoenixUiPositionKey(position) {
   ].join(':');
 }
 
-function mergeSnapshotPositionMargin(position, marketMargin, previousPosition = null) {
+function mergeSnapshotPositionMargin(position, marketMargin, subaccountMargin, previousPosition = null) {
   if (!position || !marketMargin) {
     return previousPosition?.liquidation_price
       ? { ...position, liquidation_price: previousPosition.liquidation_price }
       : position;
   }
-  const margin = quoteLotsToUsd(marketMargin.positionInitialMarginQuoteLots ?? marketMargin.initialMarginQuoteLots);
+  const positionInitialMargin = quoteLotsToUsd(marketMargin.positionInitialMarginQuoteLots ?? marketMargin.initialMarginQuoteLots);
   const pnl = quoteLotsToUsd(marketMargin.unrealizedPnlQuoteLots);
   const positionValue = Math.abs(quoteLotsToUsd(marketMargin.positionValueQuoteLots));
+  const accountMargin = subaccountMargin?.margin || {};
+  const accountCollateral = quoteLotsToUsd(accountMargin.collateralBalanceQuoteLots);
+  const portfolioValue = quoteLotsToUsd(accountMargin.portfolioValueQuoteLots);
+  const displayMetrics = phoenixPositionDisplayMetrics({
+    isIsolated: !!position.is_isolated,
+    positionValue: positionValue > 0 ? positionValue : position.size_usd,
+    positionInitialMargin,
+    accountCollateral: accountCollateral > 0 ? accountCollateral : position._phoenixAccountCollateral,
+    portfolioValue: portfolioValue > 0 ? portfolioValue : null,
+    grossPnlUsd: pnl,
+  });
+  const margin = displayMetrics.margin || position.margin;
   const netPnl = calculatePhoenixNetPositionPnl({
     side: position.side,
     amount: position.amount,
@@ -2290,13 +2335,20 @@ function mergeSnapshotPositionMargin(position, marketMargin, previousPosition = 
     pnl_usd: netPnl.netPnlUsd,
     pnl_pct: netPnl.pnlPct,
     pnl_gross_usd: netPnl.grossPnlUsd,
+    pnl_gross_pct: displayMetrics.grossPnlPct,
     opening_fee_usd: netPnl.openingFeeUsd,
     closing_fee_usd: netPnl.closingFeeUsd,
     trading_fee_usd: netPnl.totalFeeUsd,
     pnl_includes_fees: true,
-    leverage: margin > 0 && positionValue > 0 ? Math.round((positionValue / margin) * 10) / 10 : position.leverage,
+    leverage: displayMetrics.leverage ?? position.leverage,
+    effective_leverage: displayMetrics.leverage ?? position.effective_leverage ?? position.leverage,
+    risk_initial_margin: displayMetrics.positionInitialMargin,
+    portfolio_equity: displayMetrics.equity,
     liquidation_price: previousPosition?.liquidation_price ?? position.liquidation_price,
     _phoenixMargin: marketMargin,
+    _phoenixPositionInitialMargin: displayMetrics.positionInitialMargin,
+    _phoenixAccountCollateral: displayMetrics.accountCollateral,
+    _phoenixEquityBeforePnlUsd: displayMetrics.equityBeforePnl,
   };
   return next;
 }
@@ -2308,8 +2360,13 @@ function phoenixLivePositionPnl(position, markPrice) {
   if (!Number.isFinite(mark) || mark <= 0 || !Number.isFinite(entry) || entry <= 0 || !Number.isFinite(amount) || amount <= 0) {
     return null;
   }
-  const side = String(position?.side || '').toLowerCase() === 'ask' ? -1 : 1;
-  const grossPnl = (mark - entry) * amount * side;
+  const grossPnl = calculatePhoenixGrossPositionPnl({
+    side: position?.side,
+    amount,
+    entryPrice: entry,
+    markPrice: mark,
+    virtualQuotePositionUsd: position?._phoenixVirtualQuotePositionUsd,
+  });
   const margin = Number(position?.margin || 0);
   const pnl = calculatePhoenixNetPositionPnl({
     side: position?.side,
@@ -2320,6 +2377,11 @@ function phoenixLivePositionPnl(position, markPrice) {
     grossPnlUsd: grossPnl,
     feeRate: position?.trading_fee_rate,
   });
+  const sizeUsd = amount * mark;
+  const liveEquity = Number(position?._phoenixEquityBeforePnlUsd) + pnl.grossPnlUsd;
+  const leverage = position?.is_isolated && Number.isFinite(liveEquity) && liveEquity > 0
+    ? Math.round((sizeUsd / liveEquity) * 10) / 10
+    : position?.leverage;
   return {
     mark,
     pnl: pnl.netPnlUsd,
@@ -2328,7 +2390,9 @@ function phoenixLivePositionPnl(position, markPrice) {
     openingFee: pnl.openingFeeUsd,
     closingFee: pnl.closingFeeUsd,
     totalFee: pnl.totalFeeUsd,
-    sizeUsd: amount * mark,
+    sizeUsd,
+    leverage,
+    grossPnlPct: margin > 0 ? (pnl.grossPnlUsd / margin) * 100 : null,
   };
 }
 
@@ -2364,6 +2428,7 @@ function applyPhoenixLivePricesToPositions(rows, priceRows) {
       pnl_usd: live.pnl,
       pnl_pct: live.pnlPct,
       pnl_gross_usd: live.grossPnl,
+      pnl_gross_pct: live.grossPnlPct,
       opening_fee_usd: live.openingFee,
       closing_fee_usd: live.closingFee,
       trading_fee_usd: live.totalFee,
@@ -2371,6 +2436,8 @@ function applyPhoenixLivePricesToPositions(rows, priceRows) {
       pnl_includes_fees: true,
       pnl_source: 'phoenix_market_stats_ws',
       pnl_pct_source: 'phoenix_market_stats_ws',
+      leverage: live.leverage ?? position.leverage,
+      effective_leverage: live.leverage ?? position.effective_leverage ?? position.leverage,
       _phoenixLivePriceAt: Date.now(),
     };
   });
@@ -4059,6 +4126,7 @@ export function usePhoenix() {
           const merged = mergeSnapshotPositionMargin(
             position,
             marketMarginBySymbol.get(position.symbol),
+            subMargin,
             previousByKey.get(phoenixUiPositionKey(position))
           );
           return merged ? { ...merged, _phoenixAuthority: authority } : null;

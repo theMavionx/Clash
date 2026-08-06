@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
 import {
+  calculatePhoenixGrossPositionPnl,
   calculatePhoenixNetPositionPnl,
+  normalizePhoenixSignedQuoteLots,
   phoenixEffectiveTakerFeeRate,
   phoenixMarketMakerFeeRate,
   phoenixMarketTakerFeeRate,
+  phoenixPositionDisplayMetrics,
   sumPhoenixGrossPositionPnl,
 } from './src/lib/phoenixPositionMetrics.js';
 
@@ -24,6 +27,10 @@ closeTo(phoenixEffectiveTakerFeeRate({
   takerFeeMultiplier: 1,
   builderFeeRate: 0.0001,
 }), 0.00045);
+
+assert.equal(normalizePhoenixSignedQuoteLots('30800'), '30800');
+assert.equal(normalizePhoenixSignedQuoteLots('-30800'), '-30800');
+assert.equal(normalizePhoenixSignedQuoteLots(null), '0');
 
 const flatLong = calculatePhoenixNetPositionPnl({
   side: 'bid',
@@ -81,5 +88,42 @@ closeTo(sumPhoenixGrossPositionPnl([
   { pnl_gross_usd: 1, pnl_usd: 0.979 },
   { pnl_gross_usd: -2, pnl_usd: -2.021 },
 ]), -1);
+
+// Ameer Pirate's live on-chain BTC isolated position. Phoenix reports a 40x
+// protocol margin requirement, but its UI shows leverage against current
+// isolated equity and ROE against the funded collateral.
+const isolatedBtc = phoenixPositionDisplayMetrics({
+  isIsolated: true,
+  positionValue: 4963.189,
+  positionInitialMargin: 124.079725,
+  accountCollateral: 509.283663,
+  portfolioValue: 474.951863,
+  grossPnlUsd: -34.301,
+});
+closeTo(isolatedBtc.margin, 509.283663);
+closeTo(isolatedBtc.leverage, 10.4);
+closeTo(isolatedBtc.grossPnlPct, (-34.301 / 509.283663) * 100);
+closeTo(isolatedBtc.equityBeforePnl, 509.252863);
+closeTo(isolatedBtc.positionInitialMargin, 124.079725);
+
+const crossRiskMargin = phoenixPositionDisplayMetrics({
+  positionValue: 1015.9075,
+  positionInitialMargin: 101.59075,
+  accountCollateral: 690.932429,
+  portfolioValue: 673.211674,
+  grossPnlUsd: -17.6624,
+});
+closeTo(crossRiskMargin.margin, 101.59075);
+closeTo(crossRiskMargin.leverage, 10);
+
+// Exact Phoenix cost basis comes from the signed virtual quote position, not
+// the rounded entry-price label. This remains exact as WS marks move.
+closeTo(calculatePhoenixGrossPositionPnl({
+  side: 'bid',
+  amount: 0.077,
+  entryPrice: 64902,
+  markPrice: 64457,
+  virtualQuotePositionUsd: -4997.49,
+}), -34.301);
 
 console.log('Phoenix position fee/PnL regression checks passed.');

@@ -3096,3 +3096,25 @@ Follow-up:
   camera safety and swipe-smoothing checks passed, a fresh web export completed,
   the repository Quick suite passed, and the local build was visually checked
   at a 844x390 mobile landscape viewport with the wider framing and HUD intact.
+
+## UR-2026-08-06-PHOENIX-ISOLATED-POSITION-PARITY
+
+- Timestamp: 2026-08-06 (Europe/Kyiv)
+- Request: audit the mismatched Clash/Phoenix screenshots for wallet
+  `BVd1uvJXqKwZrqaRMfFmJrTuDBMVtw2BiqwVWpjoyXn5` (Ameer Pirate), correct the
+  position metrics, test against the live on-chain-backed Phoenix view, commit,
+  push and deploy every current change to production.
+- Root cause: Clash treated Phoenix `positionInitialMargin` (the protocol risk
+  requirement at the market's maximum risk tier) as the user's funded isolated
+  margin. That converted a roughly 10x isolated position into a false 40x
+  display and inflated ROE. The REST snapshot fallback also inverted the signed
+  `unsettledFundingQuoteLots` value before calling the official SDK calculator.
+- Result: isolated positions now keep funded collateral, current portfolio
+  equity and protocol risk margin as separate fields; leverage is displayed
+  against current isolated equity, gross ROE against funded collateral, and
+  liquidation price remains authoritative. Live gross PnL follows Phoenix's
+  signed virtual quote cost basis rather than rounded entry-price arithmetic.
+  Share cards use Phoenix gross uPnL/ROE as their primary venue-compatible
+  figures and retain the Clash estimated net result after opening/closing fees
+  on a clearly labelled second line. The captured on-chain fixture and live
+  trader endpoint both reconcile the target wallet without sending a trade.

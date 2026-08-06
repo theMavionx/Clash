@@ -1028,6 +1028,31 @@ function positionPnlFeeTitle(pnlFees) {
   return `${pnlFees.estimated ? 'Estimated net PnL' : 'Net PnL'}: ${parts.join(', ')}`;
 }
 
+function openPositionShareSnapshot({ dex, pos, leverage, entryPrice, markPrice, margin, netPnlUsd, netPnlPct, pnlFees, isDust }) {
+  const venue = String(dex || '').toLowerCase();
+  const phoenixGross = venue === 'phoenix' && !isDust;
+  const grossPnlUsd = cleanSignedZero(Number(pnlFees?.grossPnlUsd || 0));
+  const grossPnlPct = margin > 0 ? (grossPnlUsd / margin) * 100 : Number(netPnlPct || 0);
+  return {
+    symbol: pos.symbol,
+    side: pos.side === 'bid' ? 'long' : 'short',
+    leverage: isDust ? 0 : leverage,
+    entryPrice,
+    exitPrice: markPrice,
+    // Phoenix's primary open-position metric matches the venue uPnL/ROE.
+    // Keep our fee-aware estimate as an explicit second line so the share
+    // card reconciles with Phoenix without hiding expected close costs.
+    pnlUsd: phoenixGross ? grossPnlUsd : netPnlUsd,
+    pnlPct: phoenixGross ? grossPnlPct : netPnlPct,
+    ...(phoenixGross ? {
+      netPnlUsd,
+      netPnlPct,
+      estimatedFeesUsd: Number(pnlFees?.totalFeeUsd || 0),
+    } : {}),
+    isOpen: true,
+  };
+}
+
 function formatCloseAmountLabel(pos, closePct, posValueUsd, isDust, dustUsd) {
   if (isDust) return `$${Number(dustUsd || 0).toFixed(2)}`;
   const amount = (numOrNull(pos?.amount) || 0) * (Number(closePct) || 0) / 100;
@@ -8970,16 +8995,18 @@ function FuturesPanel() {
             // Snapshot of the open trade for the manual share button.
             // Stored as a plain object so the image generator does not depend
             // on live positions[] mutating after a close.
-            const snapshot = {
-              symbol: pos.symbol,
-              side: pos.side === 'bid' ? 'long' : 'short',
-              leverage: isDust ? 0 : setLev,
+            const snapshot = openPositionShareSnapshot({
+              dex,
+              pos,
+              leverage: setLev,
               entryPrice: entryP,
-              exitPrice: markP,
-              pnlUsd: pnlVal,
-              pnlPct: pnlPct,
-              isOpen: true,
-            };
+              markPrice: markP,
+              margin,
+              netPnlUsd: pnlVal,
+              netPnlPct: pnlPct,
+              pnlFees,
+              isDust,
+            });
             const handleClose = async () => {
               const amount = dex === 'avantis' ? parseFloat(pos.margin) : parseFloat(pos.amount);
               const pending = beginPendingClose(pos, amount, true);
@@ -9068,16 +9095,18 @@ function FuturesPanel() {
           // Pro path — same open-trade snapshot pattern as Basic. Captured
           // once per render so a later positions[] mutation can't blank out
           // the image when the user taps Share.
-          const proSnapshot = {
-            symbol: pos.symbol,
-            side: pos.side === 'bid' ? 'long' : 'short',
-            leverage: isDust ? 0 : setLev,
+          const proSnapshot = openPositionShareSnapshot({
+            dex,
+            pos,
+            leverage: setLev,
             entryPrice: entryP,
-            exitPrice: markP,
-            pnlUsd: pnlVal,
-            pnlPct: pnlPct,
-            isOpen: true,
-          };
+            markPrice: markP,
+            margin,
+            netPnlUsd: pnlVal,
+            netPnlPct: pnlPct,
+            pnlFees,
+            isDust,
+          });
           const handleProClose = async (closeFraction) => {
             const amount = (dex === 'avantis' ? parseFloat(pos.margin) : parseFloat(pos.amount)) * closeFraction;
             const pending = beginPendingClose(pos, amount, closeFraction >= 1);
