@@ -86,7 +86,7 @@ environment = SubResource("Environment_cm0pq")
 
 [node name="CameraRig" type="Node3D" parent="." unique_id=56277757]
 script = ExtResource("2_cam")
-max_zoom = 10.0
+max_zoom = 13.0
 pan_limit_min = Vector3(-3, 0, -3)
 pan_limit_max = Vector3(3, 0, 3)
 camera_pitch = 57.0

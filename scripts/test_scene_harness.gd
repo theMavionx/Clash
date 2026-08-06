@@ -748,6 +748,13 @@ func _verify_camera_safety() -> void:
 	var safe_min_zoom: float = float(rig.call("_effective_min_zoom"))
 	var max_camera_zoom: float = float(rig.get("max_zoom"))
 	var minimum_height: float = float(rig.get("minimum_camera_height"))
+	if max_camera_zoom < 13.0:
+		push_error(
+			"Camera safety test failed: production zoom-out limit %.3f is below the mobile framing requirement."
+			% max_camera_zoom
+		)
+		get_tree().quit(1)
+		return
 	var positions: Array[Vector3] = [
 		Vector3(pan_min.x, 0.0, pan_min.z),
 		Vector3(pan_min.x, 0.0, pan_max.z),
@@ -782,12 +789,19 @@ func _verify_camera_safety() -> void:
 	rig.call("_apply_zoom_distance")
 	var previous_camera_position := camera.global_position
 	var largest_frame_step := 0.0
+	# The boom covers a proportionally longer arc at wider supported zooms.
+	# Preserve the original 1-unit guard through zoom 10, then scale only the
+	# synthetic corner-to-corner + full-zoom transition allowance.
+	var allowed_frame_step := maxf(1.0, max_camera_zoom * 0.085)
 	for frame in range(120):
 		rig.call("_process", 1.0 / 60.0)
 		var frame_step := camera.global_position.distance_to(previous_camera_position)
 		largest_frame_step = maxf(largest_frame_step, frame_step)
-		if frame_step > 1.0:
-			push_error("Camera safety test failed: frame %d jumped %.3f world units." % [frame, frame_step])
+		if frame_step > allowed_frame_step:
+			push_error(
+				"Camera safety test failed: frame %d jumped %.3f world units (allowed %.3f)."
+				% [frame, frame_step, allowed_frame_step]
+			)
 			get_tree().quit(1)
 			return
 		if camera.global_position.y < minimum_height - 0.001:
@@ -810,12 +824,20 @@ func _verify_camera_safety() -> void:
 	for text in OS.get_cmdline_user_args():
 		if text.begins_with("--camera-capture-out="):
 			output_path = text.trim_prefix("--camera-capture-out=")
-	var err := get_viewport().get_texture().get_image().save_png(output_path)
-	if err != OK:
-		push_error("Camera safety capture failed: %s" % error_string(err))
-		get_tree().quit(1)
-		return
-	print("[CAMERA_SAFETY_TEST] PASS checks=%d min_zoom=%.3f min_height=%.3f max_frame_step=%.3f capture=%s" % [checks, safe_min_zoom, minimum_height, largest_frame_step, output_path])
+	if DisplayServer.get_name() == "headless":
+		output_path = "skipped-headless"
+	else:
+		var viewport_image := get_viewport().get_texture().get_image()
+		if viewport_image == null:
+			push_error("Camera safety capture failed: viewport image is unavailable.")
+			get_tree().quit(1)
+			return
+		var err := viewport_image.save_png(output_path)
+		if err != OK:
+			push_error("Camera safety capture failed: %s" % error_string(err))
+			get_tree().quit(1)
+			return
+	print("[CAMERA_SAFETY_TEST] PASS checks=%d min_zoom=%.3f max_zoom=%.3f min_height=%.3f max_frame_step=%.3f capture=%s" % [checks, safe_min_zoom, max_camera_zoom, minimum_height, largest_frame_step, output_path])
 	get_tree().quit()
 
 
@@ -1246,7 +1268,10 @@ func apply_camera_variant(variant_index: int) -> void:
 	# Keep the camera rig authoritative so touch, mouse drag and wheel/pinch zoom
 	# continue from the selected preset instead of snapping back on the next frame.
 	rig.set("camera_pitch", pitch)
-	rig.set("max_zoom", maxf(10.0, zoom + 0.5))
+	# Camera presets may widen the range for their own framing, but must never
+	# shrink the production zoom-out limit before safety/mobile gesture tests.
+	var configured_max_zoom: float = float(rig.get("max_zoom"))
+	rig.set("max_zoom", maxf(configured_max_zoom, zoom + 0.5))
 	rig.global_position = focus
 	rig.set("_target_position", focus)
 	rig.set("_target_zoom", zoom)

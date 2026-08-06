@@ -3069,3 +3069,30 @@ Follow-up:
   labels values as Net and exposes the fee breakdown in a tooltip. Regression
   fixtures cover all 18 venues, including zero-fee Lighter and special
   Phoenix/GMX/Flash paths.
+
+## UR-2026-08-06-PHOENIX-DELEGATED-FLIGHT-AUDIT
+
+- Timestamp: 2026-08-06 (Europe/Kyiv)
+- Request: investigate Ellipsis Labs GitHub and other authoritative sources to
+  determine whether Phoenix Flight now supports builder-routed orders signed by
+  a delegated `positionAuthority` browser signer.
+- Result: the real `AuthorizedTransferCollateral` position-authority path exists
+  in upstream sync PRs starting with Rise TypeScript v0.4.73, but remains
+  unmerged/unpublished through the open v0.5.3 PR. Stable npm v0.4.67 still
+  passes delegated market orders through without Flight routing, and the
+  mainnet Flight program was last upgraded before the fix appeared.
+
+## UR-2026-08-06-MOBILE-CAMERA-ZOOM-OUT
+
+- Timestamp: 2026-08-06 (Europe/Kyiv)
+- Request: "зроби щоб камеру можна було віддаляти більше бо на телефоні не
+  дуже зручно зараз і далі коміт деплой на прод"
+- Scope: extend the production island camera's farthest zoom for more usable
+  mobile framing, verify camera bounds/gestures and the web export in a mobile
+  viewport, then commit, push and deploy the verified change to production.
+- Result: raised the production maximum zoom from 10 to 13, preserved that
+  limit across the test-scene camera presets, and strengthened the camera
+  regression harness for the wider boom arc and headless verification. Godot
+  camera safety and swipe-smoothing checks passed, a fresh web export completed,
+  the repository Quick suite passed, and the local build was visually checked
+  at a 844x390 mobile landscape viewport with the wider framing and HUD intact.
