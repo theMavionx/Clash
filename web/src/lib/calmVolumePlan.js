@@ -115,7 +115,7 @@ export function planCalmFromBalance({
   let hint;
   const minDeposit = depositForTradeSizeUsd(minOrder, exchangeId);
   if (avail == null) {
-    hint = `Connect balance to size from free margin. Without balance we cannot claim volume. ${levNote}`;
+    hint = `Connect balance to calculate margin from free balance. Without balance we cannot claim volume. ${levNote}`;
   } else if (tradeSizeUsd < minOrder) {
     hint =
       minOrder >= 100
@@ -124,7 +124,7 @@ export function planCalmFromBalance({
   } else if (hitsTarget) {
     hint = `Balance supports ~${formatVolumeUsd(achievableDailyVolumeUsd)}/day at dual-leg margin (${rts} RT/day model). ${levNote}`;
   } else {
-    hint = `Honest ceiling ~${formatVolumeUsd(achievableDailyVolumeUsd)}/day (${rts} RT × size). Need ~$${depositForTargetUsd} free for ${formatVolumeUsd(target)} (shortfall ~$${Math.ceil(shortfall)}). ${levNote}`;
+    hint = `Honest ceiling ~${formatVolumeUsd(achievableDailyVolumeUsd)}/day (${rts} RT × margin). Need ~$${depositForTargetUsd} free for ${formatVolumeUsd(target)} (shortfall ~$${Math.ceil(shortfall)}). ${levNote}`;
   }
 
   return {

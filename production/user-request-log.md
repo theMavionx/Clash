@@ -3118,3 +3118,21 @@ Follow-up:
   figures and retain the Clash estimated net result after opening/closing fees
   on a clearly labelled second line. The captured on-chain fixture and live
   trader endpoint both reconcile the target wallet without sending a trade.
+
+## UR-2026-08-06-RISEX-BUILDER-ATTRIBUTION-AUDIT
+
+- Timestamp: 2026-08-06 19:36 (Europe/Kyiv)
+- Request: "перевір райзх мм бота чи всюди там білдер код стоїть бо мені ніби мало комісій приходить перевір мій акаунт clashbot чи всі угоди з білдер кодом"
+- Scope: audit every RiseX market-making order path for Clash builder-code
+  attribution and compare it with the actual fills/earnings visible for the
+  `clashbot` account; perform read-only checks and do not submit orders or
+  mutate production data.
+
+## UR-2026-08-06-BOT-MARGIN-LABEL
+
+- Timestamp: 2026-08-06 19:54 (Europe/Kyiv)
+- Request: "замість сайзу пиши маржа в угодах коли бота налаштовуєш"
+- Scope: rename the bot-configuration user-facing Trade Size/Size terminology
+  to Margin consistently in settings, plans, review, bot cards, and related
+  guidance; keep the existing sizing calculations and backend payload fields
+  unchanged.

@@ -629,7 +629,7 @@ const mapHandleToBot = (
       const need = nadoMinDepositUsd(20);
       lastAction = avail != null && avail < need
         ? `Nado: 0 quotes — floor $${NADO_MIN_ORDER_USD}/order; free ≈$${avail.toFixed(2)} needs ≥~$${need} (venue min, not quota)`
-        : `Nado: 0 quotes — Trade Size ≥$${NADO_MIN_ORDER_USD} and free margin ≥~$${need} (venue floor, not quota)`;
+        : `Nado: 0 quotes — Margin ≥$${NADO_MIN_ORDER_USD} and free margin ≥~$${need} (venue floor, not quota)`;
     } else if (exchangeKey === 'katana') {
       lastAction = 'Katana: 0 quotes — reconnect API key/secret + one-tap signer from Launch New Bot';
     } else if (exchangeKey === 'decibel') {
@@ -644,14 +644,14 @@ const mapHandleToBot = (
       } else if (avail != null && avail < 1) {
         lastAction = `Decibel: free margin ≈$${avail.toFixed(2)} — deposit USDC (venue min ~$10/leg; bot raises lev up to 40×)`;
       } else if (avail != null) {
-        lastAction = `Decibel: 0 quotes with free ≈$${avail.toFixed(2)} — check Trade Size ≥$10, open halt, or wait one cycle (bot may quote one side on micro deposit)`;
+        lastAction = `Decibel: 0 quotes with free ≈$${avail.toFixed(2)} — check Margin ≥$10, open halt, or wait one cycle (bot may quote one side on micro deposit)`;
       } else {
-        lastAction = 'Decibel: 0 quotes — Trade Size ≥$10, free USDC on trader wallet, lev up to 40×';
+        lastAction = 'Decibel: 0 quotes — Margin ≥$10, free USDC on trader wallet, lev up to 40×';
       }
     } else if (balFmt.tone === 'warn') {
       lastAction = 'Bot runs but account balance is $0 — deposit margin before quoting';
     } else {
-      lastAction = `Bot runs but ${exchange} has 0 quotes — check margin, size, leverage`;
+      lastAction = `Bot runs but ${exchange} has 0 quotes — check free margin, configured margin, and leverage`;
     }
   } else {
     lastAction = 'Worker spawned, waiting for first cycle';
@@ -1061,7 +1061,7 @@ function AggressivePlanCard({ plan, liveCostPer1M }) {
           <strong style={S.aggressivePlanVal}>{costLabel}</strong>
         </div>
         <div style={S.aggressivePlanCell}>
-          <span style={S.aggressivePlanKey}>Trade size</span>
+          <span style={S.aggressivePlanKey}>Margin</span>
           <strong style={S.aggressivePlanVal}>{money(plan.tradeSizeUsd)}</strong>
         </div>
         <div style={S.aggressivePlanCell}>
@@ -1085,16 +1085,16 @@ function AggressivePlanCard({ plan, liveCostPer1M }) {
         </div>
       </div>
       <p style={S.aggressivePlanHint}>
-        Model: ~{plan.roundTripsPerDay} round-trips/day → size = volume ÷ (2×RTs).
+        Model: ~{plan.roundTripsPerDay} round-trips/day → margin = volume ÷ (2×RTs).
         Deposit covers dual quotes + inventory at {plan.avgLeverage}×
         {plan.maxLeverage != null ? ` (cap ${plan.maxLeverage}×)` : ''}.
         {plan.leverageFixed ? ' Venue bot leverage is fixed (not adaptive).' : ' Adaptive raise toward cap if margin is tight.'}
         Cost mixes maker/taker fees + ~{plan.adverseBps} bps bleed (1 bps ≈ $100/$1M).
         {plan.capped
-          ? ` Target exceeds venue cadence — honest ceiling ~${formatVolumeUsd(plan.achievableVolumeUsd)} (raise size/deposit or lower target).`
+          ? ` Target exceeds venue cadence — honest ceiling ~${formatVolumeUsd(plan.achievableVolumeUsd)} (raise margin/deposit or lower target).`
           : ''}
         {plan.availableUsd == null && Number(plan.dailyVolumeUsd) > 100_000
-          ? ' Connect balance so size is clamped to free margin — without it the target is uncapped planning only.'
+          ? ' Connect balance so configured margin is clamped to available funds — without it the target is uncapped planning only.'
           : ''}
       </p>
     </div>
@@ -1106,7 +1106,7 @@ function CalmPlanCard({ plan, onApply }) {
   const tone = plan.hitsTarget ? '#2E7D32' : '#B45309';
   return (
     <div style={S.aggressivePlanCard}>
-      <span style={S.label}>Calm size from balance</span>
+      <span style={S.label}>Calm margin from balance</span>
       <div style={S.aggressivePlanGrid}>
         <div style={S.aggressivePlanCell}>
           <span style={S.aggressivePlanKey}>Your free</span>
@@ -1115,7 +1115,7 @@ function CalmPlanCard({ plan, onApply }) {
           </strong>
         </div>
         <div style={S.aggressivePlanCell}>
-          <span style={S.aggressivePlanKey}>Safe trade</span>
+          <span style={S.aggressivePlanKey}>Safe margin</span>
           <strong style={S.aggressivePlanVal}>{money(plan.tradeSizeUsd)}</strong>
         </div>
         <div style={S.aggressivePlanCell}>
@@ -1200,7 +1200,7 @@ function BotCard({ bot, expanded, onToggle, onStart, onStop, onDelete }) {
             </strong>
           </div>
           <div style={S.metric}>
-            <span style={S.metricLabel}>Margin</span>
+            <span style={S.metricLabel}>Free Margin</span>
             <strong style={{
               ...S.metricValue,
               color: bot.balanceTone === 'error' ? colors.short
@@ -1210,7 +1210,7 @@ function BotCard({ bot, expanded, onToggle, onStart, onStop, onDelete }) {
             </strong>
           </div>
           <div style={S.metric}>
-            <span style={S.metricLabel}>Trade Size</span>
+            <span style={S.metricLabel}>Margin</span>
             <strong style={S.metricValue}>{money(bot.tradeSize)}</strong>
           </div>
         </div>
@@ -1268,7 +1268,7 @@ function BotCard({ bot, expanded, onToggle, onStart, onStop, onDelete }) {
             <div style={S.detailCard}>
               <span style={S.metricLabel}>Account</span>
               <div style={S.detailRows}>
-                <span>Margin <strong>{bot.balanceLabel || '—'}</strong></span>
+                <span>Free Margin <strong>{bot.balanceLabel || '—'}</strong></span>
                 {bot.balanceDetail ? (
                   <span style={{ fontSize: 11, color: '#6b5340' }}>{bot.balanceDetail}</span>
                 ) : null}
@@ -2876,7 +2876,7 @@ function BotsPanel({ onClose }) {
       if (size > 0 && size < NADO_MIN_ORDER_USD) {
         setNotice(
           `Nado minimum order is $${NADO_MIN_ORDER_USD} notional (venue floor, not a quota). `
-          + `Raise Trade Size to ≥$${NADO_MIN_ORDER_USD} before Launch.`
+          + `Raise Margin to ≥$${NADO_MIN_ORDER_USD} before Launch.`
           + (avail != null && avail < need
             ? ` Your free ≈$${Number(avail).toFixed(2)} also needs ≥~$${need} for dual-sided quotes.`
             : ''),
@@ -2958,7 +2958,7 @@ function BotsPanel({ onClose }) {
       if (res?.data?.status !== 'started') {
         const errText = formatApiError(res?.error);
         const marginHint = /margin|insufficient|balance|clearinghouse/i.test(errText)
-          ? ' Lower Trade size and Launch again — same market replaces params (does not clone a second bot).'
+          ? ' Lower Margin and Launch again — same market replaces params (does not clone a second bot).'
           : '';
         setNotice(`Launch failed: ${errText}.${marginHint}`);
         return;
@@ -2972,8 +2972,8 @@ function BotsPanel({ onClose }) {
 
       const cfgNote = cfgRes?.data?.updated
         ? (preset === 'aggressive'
-          ? ` Config: ${formatVolumeUsd(dailyVolumeUsd)}/day target → $${tradeSize} trade @ ~${aggressivePlan?.avgLeverage || '?'}×, ~$${Math.round(aggressivePlan?.costPer1MUsd || 0)}/$1M.`
-          : ` Config: $${tradeSize} trade, spread ${spreadBps} bps.`)
+          ? ` Config: ${formatVolumeUsd(dailyVolumeUsd)}/day target → $${tradeSize} margin @ ~${aggressivePlan?.avgLeverage || '?'}×, ~$${Math.round(aggressivePlan?.costPer1MUsd || 0)}/$1M.`
+          : ` Config: $${tradeSize} margin, spread ${spreadBps} bps.`)
         : '';
       setNotice(`Launched ${getBotType(selectedType).name} on ${getExchangeName(selectedInstanceId)} successfully!${cfgNote}${evictNote}`);
       appendHistory('Strategy started', getExchangeName(selectedInstanceId), getBotType(selectedType).name);
@@ -4123,7 +4123,7 @@ function BotsPanel({ onClose }) {
             <p style={S.stepCopy}>
               {preset === 'aggressive'
                 ? 'Pick Aggressive, set daily volume — we estimate deposit, leverage, and cost per $1M.'
-                : 'Calm: we size Trade Size / Max Position from your free margin. Default target $100k/day — if balance is too small we show the safe volume and deposit needed.'}
+                : 'Calm: we set Margin / Max Position from your free balance. Default target $100k/day — if balance is too small we show the safe volume and deposit needed.'}
               {selectedExchangeId === 'nado'
                 ? ` Nado floor: $${NADO_MIN_ORDER_USD} notional per order (venue minimum — not an API quota). Dual-sided MM needs ~$${nadoMinDepositUsd(20)}+ free USDC at up to 20×.`
                 : ''}
@@ -4215,7 +4215,7 @@ function BotsPanel({ onClose }) {
               />
               <CalmPlanCard plan={calmPlan} onApply={() => applyCalmPlan()} />
               <SliderField
-                label="Trade Size"
+                label="Margin"
                 min={5}
                 max={500}
                 step={5}
@@ -4260,15 +4260,15 @@ function BotsPanel({ onClose }) {
                     || !Number.isFinite(selectedFreeMarginUsd)
                     || selectedFreeMarginUsd >= need;
                   if (!sizeOk && !balOk) {
-                    return `Nado: Trade Size must be ≥$${NADO_MIN_ORDER_USD}, and free ≈$${Number(selectedFreeMarginUsd).toFixed(2)} needs ≥~$${need} for dual quotes (venue floor, not quota).`;
+                    return `Nado: Margin must be ≥$${NADO_MIN_ORDER_USD}, and free ≈$${Number(selectedFreeMarginUsd).toFixed(2)} needs ≥~$${need} for dual quotes (venue floor, not quota).`;
                   }
                   if (!sizeOk) {
-                    return `Nado: Trade Size $${tradeSize} is below the $${NADO_MIN_ORDER_USD} venue minimum — raise it before Launch.`;
+                    return `Nado: Margin $${tradeSize} is below the $${NADO_MIN_ORDER_USD} venue minimum — raise it before Launch.`;
                   }
                   if (!balOk) {
                     return `Nado: free ≈$${Number(selectedFreeMarginUsd).toFixed(2)} is below ~$${need} needed for dual $${NADO_MIN_ORDER_USD} quotes — deposit USDC first.`;
                   }
-                  return `Nado venue floor $${NADO_MIN_ORDER_USD}/order — size and balance look OK for Launch.`;
+                  return `Nado venue floor $${NADO_MIN_ORDER_USD}/order — margin and balance look OK for Launch.`;
                 })()}
               </p>
             )}
@@ -4293,7 +4293,7 @@ function BotsPanel({ onClose }) {
                   <span>Deposit (est.) <strong>{money(aggressivePlan?.depositUsd || 0)}</strong></span>
                   <span>Avg leverage <strong>{aggressivePlan?.avgLeverage || '—'}×</strong></span>
                   <span>Cost / $1M <strong>~${Math.round(aggressivePlan?.costPer1MUsd || 0)}</strong></span>
-                  <span>Trade Size <strong>{money(tradeSize)}</strong></span>
+                  <span>Margin <strong>{money(tradeSize)}</strong></span>
                   <span>Max position <strong>{money(maxPosition)}</strong></span>
                 </>
               ) : (
@@ -4301,7 +4301,7 @@ function BotsPanel({ onClose }) {
                   <span>Volume wish <strong>{formatVolumeUsd(calmTargetVolumeUsd)}</strong></span>
                   <span>Safe volume/day <strong>{formatVolumeUsd(calmPlan?.achievableDailyVolumeUsd || 0)}</strong></span>
                   <span>Need for target <strong>{money(calmPlan?.depositForTargetUsd || 0)}</strong></span>
-                  <span>Trade Size <strong>{money(tradeSize)}</strong></span>
+                  <span>Margin <strong>{money(tradeSize)}</strong></span>
                   <span>Maximum Position <strong>{money(maxPosition)}</strong></span>
                 </>
               )}

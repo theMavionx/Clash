@@ -57,7 +57,7 @@ export function classifyNadoIssue(rawError, { availableUsd = null, leverage = 20
       title: `Nado minimum order is $${NADO_MIN_ORDER_USD}`,
       hint:
         `Each quote must be ≥$${NADO_MIN_ORDER_USD} notional (venue floor, not an API quota).`
-        + ` Raise Trade Size to ≥$${NADO_MIN_ORDER_USD} in Bot Settings.`
+        + ` Raise Margin to ≥$${NADO_MIN_ORDER_USD} in Bot Settings.`
         + balHint
         + (avail != null && avail < need
           ? ` Deposit ≥$${need} USDC to Nado, then Launch again.`
@@ -159,7 +159,7 @@ export function describeNadoBotAction(ctx = {}) {
       tone: 'warn',
       message:
         `Paused${parts ? ` (${parts})` : ''} after rejected orders. `
-        + `Nado needs ≥$${NADO_MIN_ORDER_USD}/order — check Trade Size and free USDC (not an API quota).`,
+        + `Nado needs ≥$${NADO_MIN_ORDER_USD}/order — check Margin and free USDC (not an API quota).`,
     };
   }
 
@@ -171,8 +171,8 @@ export function describeNadoBotAction(ctx = {}) {
     return {
       tone: 'warn',
       message:
-        `Trade Size $${size} is below Nado’s $${NADO_MIN_ORDER_USD} minimum notional. `
-        + `Raise Trade Size in Bot Settings (venue floor, not a quota).`,
+        `Margin $${size} is below Nado’s $${NADO_MIN_ORDER_USD} minimum notional. `
+        + `Raise Margin in Bot Settings (venue floor, not a quota).`,
     };
   }
 
@@ -197,7 +197,7 @@ export function describeNadoBotAction(ctx = {}) {
     return {
       tone: 'info',
       message:
-        `Bot runs but Nado has 0 quotes — need Trade Size ≥$${NADO_MIN_ORDER_USD} `
+        `Bot runs but Nado has 0 quotes — need Margin ≥$${NADO_MIN_ORDER_USD} `
         + `and free margin ≥~$${need} (venue min, not quota).`,
     };
   }

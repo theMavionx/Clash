@@ -112,7 +112,7 @@ export function classifyOstiumIssue(rawError, gasStatus = null) {
       tone: 'warn',
       title: 'Not enough free USDC on trader',
       hint:
-        'Deposit USDC to the connected trader wallet (not the delegate). Dual-sided quotes need ≥ $5 × 2 = $10 free collateral. Lower Trade Size or top up, then Start again.',
+        'Deposit USDC to the connected trader wallet (not the delegate). Dual-sided quotes need ≥ $5 × 2 = $10 free collateral. Lower Margin or top up, then Start again.',
     };
   }
 
@@ -203,7 +203,7 @@ export function describeOstiumBotAction(ctx = {}) {
       tone: 'warn',
       message:
         `Paused${parts ? ` (${parts})` : ''} after rejected orders. `
-        + 'Check one-tap gas (Top up), USDC on trader, and Trade Size — then wait for cooldown.',
+        + 'Check one-tap gas (Top up), USDC on trader, and Margin — then wait for cooldown.',
     };
   }
 
