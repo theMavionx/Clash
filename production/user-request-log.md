@@ -3039,3 +3039,10 @@ Follow-up:
 - Scope: commit the verified Phoenix net-PnL/liquidation-price update on `main`,
   push it to GitHub, deploy it through the repository production workflow, and
   verify the live release and production services.
+- Result: Phoenix commit `9c745059` was pushed and atomically released as
+  `20260806063648-9c745059`. Browser verification exposed that the clean
+  temporary checkout's private root mode had been preserved by `rsync -a`, so
+  nginx could not traverse the active release and returned 404. Access to the
+  exact active release was restored, public/origin root checks returned 200,
+  and the deploy workflow was updated to normalize every immutable release
+  root to mode 0755 without relaxing sensitive file permissions.

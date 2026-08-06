@@ -844,6 +844,14 @@ copy_source_to_release() {
         --exclude='shared' \
         "$SOURCE_DIR/" "$RELEASE_DIR/"
 
+    # rsync -a also copies the source directory mode onto the destination
+    # directory. Operator-created clean checkouts (for example mktemp clones)
+    # commonly use mode 0700, which would make the otherwise valid release
+    # unreadable by nginx's www-data user after the current symlink switches.
+    # Normalize only the immutable release root; sensitive files keep their
+    # own restrictive modes.
+    chmod 755 "$RELEASE_DIR"
+
     # The top-level shared directory contains mutable production state and is
     # deliberately excluded above. This versioned gameplay contract is the one
     # immutable exception required by both the Node and Godot runtimes.
