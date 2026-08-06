@@ -96,6 +96,7 @@ const ACCOUNT_BACKOFF_BASE_MS = 10_000;
 const ACCOUNT_BACKOFF_MAX_MS = 60_000;
 const TX_WAIT_TIMEOUT_MS = 45_000;
 const APTOS_FULLNODE = 'https://fullnode.mainnet.aptoslabs.com/v1';
+const DECIBEL_HTTP = 'https://api.mainnet.aptoslabs.com/decibel';
 const FUTURES_API = '/api/futures';
 const DECIBEL_REWARD_CLAIM_DELAY_MS = 1_500;
 const DECIBEL_POST_WRITE_REFRESH_DELAYS_MS = [0, 250, 750, 1_500, 2_500, 4_000, 6_500, 9_500, 14_000];
@@ -185,6 +186,23 @@ async function withAbortableRead(factory, ms, label) {
       if (!timedOut) controller.abort();
     }
   }, { label });
+}
+
+async function fetchDecibelUserFeeRates(account) {
+  if (!account) return null;
+  const response = await withTimeout(fetchWithAptosBrowserKeys(
+    `${DECIBEL_HTTP}/api/v1/user_fee_rates?account=${encodeURIComponent(account)}`,
+    { headers: { accept: 'application/json' }, cache: 'no-store' },
+    { label: 'Decibel user fee rates', allowPublicFallback: false },
+  ), READ_TIMEOUT_MS, 'Decibel user fee rates');
+  if (!response.ok) {
+    const body = await response.text().catch(() => '');
+    const error = new Error(`Decibel user fee rates failed: ${response.status} ${body || response.statusText}`);
+    error.status = response.status;
+    throw error;
+  }
+  const data = await response.json();
+  return data && typeof data === 'object' ? data : null;
 }
 
 function txHashFrom(response) {
@@ -1330,11 +1348,24 @@ export function useDecibel() {
           accountFetchRef.current.nextAllowedAt = 0;
           return null;
         }
-        const acct = await withAbortableRead(
-          (read, fetchOptions) => read.accountOverview.getByAddr({ subAddr: sub, fetchOptions }),
-          ACCOUNT_READ_TIMEOUT_MS,
-          'account'
-        );
+        const [accountOverview, feeInfo] = await Promise.all([
+          withAbortableRead(
+            (read, fetchOptions) => read.accountOverview.getByAddr({ subAddr: sub, fetchOptions }),
+            ACCOUNT_READ_TIMEOUT_MS,
+            'account'
+          ),
+          fetchDecibelUserFeeRates(sub).catch((feeError) => {
+            D.warn('fetchAccount: user fee tier unavailable; using base-tier estimate', feeError?.message || feeError);
+            return null;
+          }),
+        ]);
+        const acct = feeInfo ? {
+          ...accountOverview,
+          maker_fee: feeInfo.user_maker_rate,
+          taker_fee: feeInfo.user_taker_rate,
+          fee_tier: feeInfo.fee_tier,
+          fee_info: feeInfo,
+        } : accountOverview;
         if (walletGenRef.current !== gen) return null;
         accountFetchRef.current.failCount = 0;
         accountFetchRef.current.nextAllowedAt = 0;

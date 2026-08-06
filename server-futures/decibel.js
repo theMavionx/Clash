@@ -986,7 +986,7 @@ async function fetchDecibelRows(path, query = {}) {
       if (Array.isArray(j?.data?.items)) return j.data.items;
       // Decibel returns account_overviews as one object, while the other
       // read endpoints return arrays. Preserve the rows contract for callers.
-      if (path === 'account_overviews' && j && typeof j === 'object') return [j];
+      if ((path === 'account_overviews' || path === 'user_fee_rates') && j && typeof j === 'object') return [j];
       return [];
     } catch (err) {
       lastError = err;
@@ -1176,6 +1176,17 @@ async function fetchAccountOverview(subaccountAddr, options = {}) {
       volume_window: options.volumeWindow,
       include_performance: options.includePerformance ? 'true' : undefined,
     });
+    return rows[0] || null;
+  } catch (error) {
+    if (Number(error?.status) === 404) return null;
+    throw error;
+  }
+}
+
+async function fetchUserFeeRates(subaccountAddr) {
+  if (!subaccountAddr) return null;
+  try {
+    const rows = await fetchDecibelRows('user_fee_rates', { account: subaccountAddr });
     return rows[0] || null;
   } catch (error) {
     if (Number(error?.status) === 404) return null;
@@ -1705,6 +1716,7 @@ module.exports = {
   fetchUserSubaccounts,
   fetchAccountPositions,
   fetchAccountOverview,
+  fetchUserFeeRates,
   fetchOpenOrders,
   fetchOrderHistory,
   fetchTradeHistory,

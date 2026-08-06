@@ -1698,9 +1698,20 @@ router.get('/decibel/account', auth, async (req, res) => {
   try {
     const verified = await requireDecibelOwnerAndSubaccount(req, res);
     if (!verified) return;
-    const account = await decibel.fetchAccountOverview(verified.subaccount);
+    const [account, fees] = await Promise.all([
+      decibel.fetchAccountOverview(verified.subaccount),
+      decibel.fetchUserFeeRates(verified.subaccount).catch(() => null),
+    ]);
     if (!account) return res.status(404).json({ error: 'Decibel account not found' });
-    res.json(account);
+    res.json({
+      ...account,
+      ...(fees ? {
+        maker_fee: fees.user_maker_rate,
+        taker_fee: fees.user_taker_rate,
+        fee_tier: fees.fee_tier,
+        fee_info: fees,
+      } : {}),
+    });
   } catch (e) {
     res.status(e.status || 502).json({ error: e.message || 'Failed to read Decibel account' });
   }

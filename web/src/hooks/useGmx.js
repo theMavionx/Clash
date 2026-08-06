@@ -197,6 +197,10 @@ function normalizePosition(p, marketMap) {
   if ((amount == null || !Number.isFinite(amount)) && sizeUsd != null && entryPrice && entryPrice > 0) {
     amount = sizeUsd / entryPrice;
   }
+  const grossPnlUsd = fmtUsd(p?.pnl ?? p?.pnlUsd);
+  const pnlAfterPendingFeesUsd = fmtUsd(p?.pnlAfterFees);
+  const closingFeeUsd = fmtUsd(p?.closingFeeUsd);
+  const closingPriceImpactUsd = fmtUsd(p?.closePriceImpactDeltaUsd ?? p?.netPriceImapctDeltaUsd);
   return {
     symbol,
     side: p?.isLong ? 'bid' : 'ask',
@@ -216,7 +220,15 @@ function normalizePosition(p, marketMap) {
     // V2 uses `pnl`; V1 PositionInfo has the same name. Older code paths
     // expected `pnlUsd` — not present in either. Read `pnl` and fall
     // through if the SDK ever renames.
-    pnl_usd: fmtUsd(p?.pnl ?? p?.pnlAfterFees ?? p?.pnlUsd),
+    pnl_usd: grossPnlUsd,
+    pnl_gross_usd: grossPnlUsd,
+    pnl_after_pending_fees_usd: pnlAfterPendingFeesUsd,
+    pending_position_fees_usd: grossPnlUsd != null && pnlAfterPendingFeesUsd != null
+      ? Math.max(0, grossPnlUsd - pnlAfterPendingFeesUsd)
+      : null,
+    closing_fee_usd: closingFeeUsd,
+    closing_price_impact_usd: closingPriceImpactUsd,
+    pnl_source: 'gmx_sdk_position_info',
     market_addr: p?.marketAddress,
     // Cross-DEX close-handler fields. Avantis uses these on-chain; GMX
     // doesn't (we resolve by symbol+side), but FuturesPanel passes them

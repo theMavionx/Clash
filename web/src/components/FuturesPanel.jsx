@@ -48,6 +48,7 @@ import { openSolanaWallet } from '../lib/solanaWalletUi';
 import { setClientActivity } from '../lib/updateCoordinator';
 import { reportClientEvent } from '../lib/clientLogger';
 import { resolveOrderDisplayMetrics } from '../lib/orderDisplayMetrics';
+import { calculateFeeAwarePositionPnl, findPositionMarket } from '../lib/positionPnlMetrics';
 import {
   ostiumMaxTakeProfitPrice,
   validateOstiumStopLossDirection,
@@ -918,7 +919,7 @@ function flashPositionDisplayLeverageStable(pos, posValueUsd, margin) {
   return rawLev && rawLev > 0 ? rawLev : null;
 }
 
-function getPositionMetrics(pos, prices, leverageSettings = {}) {
+function getPositionMetrics(pos, prices, leverageSettings = {}, feeContext = {}) {
   const priceRow = prices.find(p => p.symbol === pos.symbol);
   const priceRowMark = numOrNull(priceRow?.mark ?? priceRow?.mark_price ?? priceRow?.price);
   const isDust = !!pos?._flashDust;
@@ -952,9 +953,11 @@ function getPositionMetrics(pos, prices, leverageSettings = {}) {
     : (markP ? amt * markP : amt * entryP);
   const dustUsd = numOrNull(pos._flashDustUsd ?? pos.inputUsdUi ?? pos.sizeUsdUi ?? pos.size_usd) || posValueUsd || 0;
   const providedPnl = numOrNull(
-    pos.pnl_usd
+    pos.pnl_gross_usd
+      ?? pos.gross_pnl_usd
+      ?? pos.pnl_without_fees_usd
       ?? pos.pnlWithoutFeeUsdUi
-      ?? pos.pnlWithFeeUsdUi
+      ?? pos.pnl_usd
       ?? pos.unrealized_pnl
       ?? pos.unrealizedPnL
       ?? pos.pnl
@@ -966,7 +969,19 @@ function getPositionMetrics(pos, prices, leverageSettings = {}) {
     || String(pos?.pnl_source || '').toLowerCase() === 'ostium_api';
   const derivedPnl = markP ? (markP - entryP) * amt * (pos.side === 'bid' ? 1 : -1) : 0;
   const rawPnlVal = (isHibachiPosition || isOstiumPosition) ? (providedPnl ?? 0) : (providedPnl ?? derivedPnl);
-  const pnlVal = isDust ? 0 : cleanSignedZero(rawPnlVal);
+  const pnlFees = calculateFeeAwarePositionPnl({
+    dex: feeContext?.dex,
+    position: pos,
+    market: findPositionMarket(feeContext?.markets, pos),
+    account: feeContext?.account,
+    grossPnlUsd: rawPnlVal,
+    amount: amt,
+    entryPrice: entryP,
+    markPrice: markP,
+    margin,
+    positionValueUsd: posValueUsd,
+  });
+  const pnlVal = isDust ? 0 : cleanSignedZero(pnlFees.netPnlUsd);
   const rawLev = displayLeverage(pos.leverage);
   const collateralLev = margin > 0 && posValueUsd > 0 ? Math.round((posValueUsd / margin) * 10) / 10 : null;
   const flashLev = isFlashPosition ? flashPositionDisplayLeverageStable(pos, posValueUsd, margin) : null;
@@ -985,12 +1000,32 @@ function getPositionMetrics(pos, prices, leverageSettings = {}) {
     : null;
   const pctMargin = hibachiInitialMargin && hibachiInitialMargin > 0 ? hibachiInitialMargin : margin;
   const marginPct = pctMargin > 0 ? (pnlVal / pctMargin) * 100 : null;
-  const pnlPct = isDust ? 0 : (preserveProvidedPct
-    ? (rawProvidedPct ?? 0)
-    : (providedPct ?? (pricePct ?? (marginPct ?? 0))));
+  const pnlPct = isDust ? 0 : (pnlFees.feeAdjusted && marginPct != null
+    ? marginPct
+    : (preserveProvidedPct
+      ? (rawProvidedPct ?? 0)
+      : (providedPct ?? (pricePct ?? (marginPct ?? 0)))));
   const pnlDirection = isDust ? 1 : signedMetricDirection(pnlVal, pnlPct);
   const pnlColor = pnlDirection >= 0 ? '#4CAF50' : '#E53935';
-  return { entryP, markP, amt, margin, pnlVal, setLev, posValueUsd, pnlPct, pnlDirection, pnlColor, isDust, dustUsd };
+  return { entryP, markP, amt, margin, pnlVal, setLev, posValueUsd, pnlPct, pnlDirection, pnlColor, isDust, dustUsd, pnlFees };
+}
+
+function positionPnlFeeTitle(pnlFees) {
+  if (!pnlFees?.feeAdjusted) return undefined;
+  const money = value => `$${Math.abs(Number(value) || 0).toFixed(4)}`;
+  const parts = [
+    `Gross ${Number(pnlFees.grossPnlUsd || 0) >= 0 ? '+' : '-'}${money(pnlFees.grossPnlUsd)}`,
+    `opening fee ${money(pnlFees.openingFeeUsd)}`,
+    `closing fee ${money(pnlFees.closingFeeUsd)}`,
+  ];
+  if (Number(pnlFees.otherFeeUsd || 0) > 0.0000001) {
+    parts.push(`accrued fees ${money(pnlFees.otherFeeUsd)}`);
+  }
+  if (Math.abs(Number(pnlFees.closePriceImpactUsd || 0)) > 0.0000001) {
+    const impact = Number(pnlFees.closePriceImpactUsd);
+    parts.push(`close price impact ${impact >= 0 ? '+' : '-'}${money(impact)}`);
+  }
+  return `${pnlFees.estimated ? 'Estimated net PnL' : 'Net PnL'}: ${parts.join(', ')}`;
 }
 
 function formatCloseAmountLabel(pos, closePct, posValueUsd, isDust, dustUsd) {
@@ -3070,6 +3105,7 @@ const OrdersList = memo(function OrdersList({ orders, cancelOrder, positions = [
 const PositionsList = memo(function PositionsList({
   positions, orders, prices, dataReady, leverageSettings, marginModes, loading, error,
   closePosition, setTpsl, clearError, isBasic, dex, setLocalAlert = () => {}, setSuccessMsg = () => {},
+  markets = [], account = null,
 }) {
   const [expandedPos, setExpandedPos] = useState(null);
   const [closePct, setClosePct] = useState(100);
@@ -3092,7 +3128,12 @@ const PositionsList = memo(function PositionsList({
   return (
     <div style={{display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'flex-start'}}>
       {positions.map((pos, i) => {
-        const { entryP, markP, amt, margin, pnlVal, setLev, posValueUsd, pnlPct, pnlDirection, pnlColor, isDust, dustUsd } = getPositionMetrics(pos, prices, leverageSettings);
+        const { entryP, markP, amt, margin, pnlVal, setLev, posValueUsd, pnlPct, pnlDirection, pnlColor, isDust, dustUsd, pnlFees } = getPositionMetrics(
+          pos,
+          prices,
+          leverageSettings,
+          { dex, markets, account },
+        );
         const tpslMetrics = { entryP, markP, amt, margin, setLev, posValueUsd };
         const posKey = `${pos.symbol}-${pos.side}`;
         const expanded = expandedPos?.startsWith(posKey) ? expandedPos.split(':')[1] : null;
@@ -3130,8 +3171,8 @@ const PositionsList = memo(function PositionsList({
             </div>
             <div style={S.row}>
               <span style={S.detail}>Mark: {markP ? `$${markP.toLocaleString()}` : '—'}</span>
-              <span style={{fontSize: 14, fontWeight: 900, color: pnlColor}}>
-                {formatSignedPnlUsd(pnlVal)} {!isDust && `(${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%)`}
+              <span style={{fontSize: 14, fontWeight: 900, color: pnlColor}} title={positionPnlFeeTitle(pnlFees)}>
+                {pnlFees.feeAdjusted ? 'Net ' : ''}{formatSignedPnlUsd(pnlVal)} {!isDust && `(${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%)`}
               </span>
             </div>
             <PositionTpslRow pos={pos} orders={orders} />
@@ -3249,6 +3290,7 @@ const BottomPanel = memo(function BottomPanel({
   filteredPositions, filteredOrders, orders, positions,
   prices, walletAddr, dataReady, leverageSettings,
   closePosition, cancelOrder, dex, loading, historyAccountAddr, markets,
+  account,
   pendingActions = [], beginPendingClose = () => null, removePendingAction = () => {},
 }) {
   const tpslOrders = Array.isArray(orders) ? orders : filteredOrders;
@@ -3294,8 +3336,8 @@ const BottomPanel = memo(function BottomPanel({
             <table style={S.table}>
               <thead><tr>
                 <th style={S.th}>Symbol</th><th style={S.th}>Side</th><th style={S.th}>Size</th>
-                <th style={S.th}>Entry</th><th style={S.th}>Mark</th><th style={S.th}>PnL</th>
-                <th style={S.th}>PnL %</th><th style={S.th}>TP / SL</th><th style={S.th}>Lev</th><th style={S.th}></th>
+                <th style={S.th}>Entry</th><th style={S.th}>Mark</th><th style={S.th}>Net PnL</th>
+                <th style={S.th}>Net PnL %</th><th style={S.th}>TP / SL</th><th style={S.th}>Lev</th><th style={S.th}></th>
               </tr></thead>
               <tbody>{filteredPositions.map((p, i) => {
                 const {
@@ -3309,7 +3351,8 @@ const BottomPanel = memo(function BottomPanel({
                   pnlColor,
                   isDust,
                   dustUsd,
-                } = getPositionMetrics(p, prices, leverageSettings);
+                  pnlFees,
+                } = getPositionMetrics(p, prices, leverageSettings, { dex, markets, account });
                 const { tp, sl } = getPositionTpsl(p, tpslOrders);
                 const pendingClose = pendingActionForPosition(pendingActions, p, 'close');
                 return (
@@ -3319,8 +3362,8 @@ const BottomPanel = memo(function BottomPanel({
                     <td style={S.td}>{isDust ? 'Dust' : p.amount} <span style={{color: '#a3906a', fontSize: 11}}>(${(isDust ? dustUsd : tblPosValue).toFixed(2)})</span></td>
                     <td style={S.td}>${fmtPrice(entryPrice)}</td>
                     <td style={S.td}>{markPrice ? `$${fmtPrice(markPrice)}` : '—'}</td>
-                    <td style={{...S.td, color: pnlColor, fontWeight: 900}}>{formatSignedPnlUsd(pnlVal)}</td>
-                    <td style={{...S.td, color: pnlColor, fontWeight: 900}}>{isDust ? '-' : `${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%`}</td>
+                    <td style={{...S.td, color: pnlColor, fontWeight: 900}} title={positionPnlFeeTitle(pnlFees)}>{pnlFees.feeAdjusted ? 'Net ' : ''}{formatSignedPnlUsd(pnlVal)}</td>
+                    <td style={{...S.td, color: pnlColor, fontWeight: 900}} title={positionPnlFeeTitle(pnlFees)}>{isDust ? '-' : `${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%`}</td>
                     <td style={S.td}>
                       <span style={{color: tp ? '#4CAF50' : '#a3906a', fontWeight: 800}}>TP {tp ? `$${fmtPrice(tp)}` : '-'}</span>
                       <span style={{color: '#a3906a'}}> / </span>
@@ -8851,6 +8894,7 @@ function FuturesPanel() {
             walletAddr={walletAddr}
             historyAccountAddr={(dex === 'decibel' || dex === 'grvt') ? subaccountAddr : walletAddr}
             markets={markets}
+            account={account}
             dataReady={dataReady}
             leverageSettings={leverageSettings}
             closePosition={closePosition}
@@ -8899,7 +8943,12 @@ function FuturesPanel() {
       // `align-items` for column flex) gives a clean uniform list.
       <div style={{display: 'flex', flexDirection: 'column', gap: 8}}>
         {openedSortedPositions.map((pos, i) => {
-          const { entryP, markP, margin, pnlVal, setLev, posValueUsd, pnlPct, pnlDirection, pnlColor, isDust, dustUsd } = getPositionMetrics(pos, prices, leverageSettings);
+          const { entryP, markP, margin, pnlVal, setLev, posValueUsd, pnlPct, pnlDirection, pnlColor, isDust, dustUsd, pnlFees } = getPositionMetrics(
+            pos,
+            prices,
+            leverageSettings,
+            { dex, markets, account },
+          );
           const amt = numOrNull(pos.amount) || 0;
           const tpslMetrics = { entryP, markP, amt, margin, setLev, posValueUsd };
           const posKey = `${pos.symbol}-${pos.side}`;
@@ -8969,8 +9018,8 @@ function FuturesPanel() {
                   <span style={{
                     fontSize: 18, fontWeight: 900, color: pnlColor,
                     fontVariantNumeric: 'tabular-nums',
-                  }}>
-                    {formatSignedPnlUsd(pnlVal)}
+                  }} title={positionPnlFeeTitle(pnlFees)}>
+                    {pnlFees.feeAdjusted ? 'Net ' : ''}{formatSignedPnlUsd(pnlVal)}
                   </span>
                 </div>
 
@@ -9067,11 +9116,9 @@ function FuturesPanel() {
                 <span style={S.detail}>Mark: ${fmtPrice(markP)}</span>
                 <span
                   style={{fontSize: 14, fontWeight: 900, color: pnlColor}}
-                  title={dex === 'phoenix' && pos.pnl_includes_fees
-                    ? `Net PnL after estimated opening ($${Number(pos.opening_fee_usd || 0).toFixed(4)}) and closing ($${Number(pos.closing_fee_usd || 0).toFixed(4)}) trade fees`
-                    : undefined}
+                  title={positionPnlFeeTitle(pnlFees)}
                 >
-                  {dex === 'phoenix' && pos.pnl_includes_fees ? 'Net ' : ''}{formatSignedPnlUsd(pnlVal)} {!isDust && `(${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%)`}
+                  {pnlFees.feeAdjusted ? 'Net ' : ''}{formatSignedPnlUsd(pnlVal)} {!isDust && `(${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%)`}
                 </span>
               </div>
               {/* Liquidation price row — visible on every venue that ships

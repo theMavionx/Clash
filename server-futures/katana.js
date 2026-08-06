@@ -295,6 +295,8 @@ function normalizeMarket(row) {
     next_funding_rate: num(row.currentFundingRate ?? row.lastFundingRate),
     volume_24h: num(row.quoteVolume ?? row.volume24h),
     open_interest: num(row.openInterest ?? row.open_interest),
+    maker_fee: num(row.makerFeeRate ?? row.maker_fee_rate),
+    taker_fee: num(row.takerFeeRate ?? row.taker_fee_rate),
     _raw: row,
   };
 }

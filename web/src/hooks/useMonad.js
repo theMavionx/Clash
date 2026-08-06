@@ -204,6 +204,13 @@ function normalizeMarkets(ctx) {
       price_decimals: priceDecimals,
       size_decimals: sizeDecimals,
       initial_margin_bps: initialMarginBps,
+      // Perpl encodes trade fees in millionths (690 = 0.00069 = 6.9 bps).
+      // Preserve both the wire value and the normalized decimal so the
+      // shared position PnL path can use the live market schedule.
+      maker_fee_micros: Number(cfg.maker_fee || 0),
+      taker_fee_micros: Number(cfg.taker_fee || 0),
+      maker_fee: Number(cfg.maker_fee || 0) / 1_000_000,
+      taker_fee: Number(cfg.taker_fee || 0) / 1_000_000,
       _raw: m,
     };
     markets.push(market);

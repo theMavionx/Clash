@@ -223,6 +223,8 @@ async function fetchMarketInfoFresh() {
       volume_24h: 0,
       open_interest: rawToString(product.openInterest || 0),
       funding_rate: 0,
+      maker_fee: num(s.makerFeeRate, 0.0001),
+      taker_fee: num(s.takerFeeRate, 0.00035),
       isolated_only: !!s.isolatedOnly,
       _nado: {
         productId,

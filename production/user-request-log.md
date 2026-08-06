@@ -3046,3 +3046,26 @@ Follow-up:
   exact active release was restored, public/origin root checks returned 200,
   and the deploy workflow was updated to normalize every immutable release
   root to mode 0755 without relaxing sensitive file permissions.
+
+## UR-2026-08-06-ALL-DEX-NET-PNL
+
+- Timestamp: 2026-08-06 (Europe/Kyiv)
+- Request: "і треба для всіх бірж зробити щоб воно враховувало пнл з комісіями бор зараз то не так працює"
+- Scope: extend the Phoenix fee-aware position PnL fix to every venue exposed
+  by `FuturesPanel`; preserve account equity semantics; prefer live account or
+  market fee tiers; include additional builder/integrator fees only where Clash
+  orders actually charge them; retain conservative documented fallbacks when
+  a venue does not expose the user's live tier; commit, push and production
+  deployment remain part of the immediately preceding release instruction.
+- Result: implemented a shared open-position contract for all 18 venues:
+  gross mark PnL minus the paid opening trade cost and estimated current closing
+  cost. Phoenix keeps its explicit Flight fee calculation; GMX uses SDK pending
+  fees, closing fee and close-price impact; Flash keeps its live exit/borrow
+  fees; Decibel now reads `user_fee_rates` through the existing six-key browser
+  failover and server fallback; Perpl, Katana and Nado preserve live market fee
+  fields. Pacifica also includes the separate 2 bps `clashofperps` builder fee,
+  verified from its current public builder fills. Account equity is unchanged
+  to avoid charging an already-debited opening fee twice. The position UI now
+  labels values as Net and exposes the fee breakdown in a tooltip. Regression
+  fixtures cover all 18 venues, including zero-fee Lighter and special
+  Phoenix/GMX/Flash paths.
