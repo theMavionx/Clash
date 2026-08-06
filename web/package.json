@@ -13,6 +13,7 @@
     "test:order-display": "node test-order-display-metrics.mjs",
     "test:bulk-client": "node test-bulk-client.mjs",
     "test:nado-referral": "node test-nado-referral.mjs",
+    "test:phoenix-position": "node test-phoenix-position-metrics.mjs",
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview"

@@ -3009,3 +3009,33 @@ Follow-up:
 - Follow-up authorization: "продовжуй потім всі зміни закидай на прод" — after
   verification, commit every current project change, push `main`, deploy the
   atomic release, and verify the live production UI and services.
+
+## UR-2026-08-06-PHOENIX-NET-PNL-AND-LIQUIDATION
+
+- Timestamp: 2026-08-06 08:59 (Europe/Kyiv)
+- Request: Phoenix Flight position PnL must include the trade opening and
+  closing fees (not the gas fee), and Phoenix positions must show their
+  liquidation price.
+- Scope: audit the Phoenix account/position response, local risk reconciliation
+  and shared futures UI; use authoritative venue fields where available, make
+  fee treatment explicit and non-duplicating, add focused regression coverage,
+  and verify locally. Commit, push and production deployment were not requested
+  for this change.
+- Result: Phoenix position cards now show net PnL after estimated opening and
+  closing trade fees using the SDK market taker fee, trader fee multiplier and
+  the Flight builder fee read on-chain. Account equity continues to track gross
+  unrealized PnL so the already-paid opening fee is not deducted twice. Missing
+  liquidation prices are reconciled through the official signature-free
+  Hawkeye on-chain view and preserved across subsequent trader snapshots.
+  Focused fee/PnL tests, ESLint (0 errors) and the production web build passed.
+  Live read-only SDK checks confirmed the active 2 bps Flight builder fee and a
+  successfully decoded Hawkeye liquidation response. No commit, push or deploy
+  was performed.
+
+## UR-2026-08-06-PHOENIX-RELEASE
+
+- Timestamp: 2026-08-06 09:24 (Europe/Kyiv)
+- Request: "і відразу заливай оновлення на прод коміт пуш деплой"
+- Scope: commit the verified Phoenix net-PnL/liquidation-price update on `main`,
+  push it to GitHub, deploy it through the repository production workflow, and
+  verify the live release and production services.

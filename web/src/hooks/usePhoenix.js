@@ -36,6 +36,14 @@ import {
   oneTapOrderWithinPolicy,
   phoenixCanSessionSignInstructions,
 } from '../lib/phoenixOneTap';
+import {
+  calculatePhoenixNetPositionPnl,
+  PHOENIX_DEFAULT_TAKER_FEE_RATE,
+  phoenixEffectiveTakerFeeRate,
+  phoenixMarketMakerFeeRate,
+  phoenixMarketTakerFeeRate,
+  sumPhoenixGrossPositionPnl,
+} from '../lib/phoenixPositionMetrics';
 
 const GAME_API = import.meta.env.VITE_GAME_API || '/api';
 const FUTURES_API = import.meta.env.VITE_FUTURES_API || '/api/futures';
@@ -55,7 +63,6 @@ const PHOENIX_TRADER_STATE_POST_TX_REST_FALLBACK_MS = 8_000;
 const PHOENIX_UNREGISTERED_RETRY_MS = 10 * 60_000;
 const PHOENIX_WITHDRAW_RISK_BUFFER_USDC = 0.01;
 const PHOENIX_ORDER_COMPUTE_UNIT_LIMIT = 1_000_000;
-const PHOENIX_DEFAULT_TAKER_FEE_RATE = 0.00035;
 const PHOENIX_ISOLATED_FEE_BUFFER_RATE = 0.0001;
 const PHOENIX_ISOLATED_TRANSFER_BUFFER_USDC = 0.005;
 const PHOENIX_CONDITIONAL_ORDER_CAPACITY = 16;
@@ -71,6 +78,7 @@ const PHOENIX_DEFAULT_REFERRAL_CODE = import.meta.env.VITE_PHOENIX_DEFAULT_REFER
 const PHOENIX_ACCESS_CACHE_PREFIX = 'clash:phoenix:access:v1';
 const PHOENIX_SETUP_CACHE_PREFIX = 'clash:phoenix:setup:v1';
 const PHOENIX_MARGIN_MODE_CACHE_PREFIX = 'clash:phoenix:margin-mode:v1';
+const PHOENIX_BUILDER_FEE_CACHE_PREFIX = 'clash:phoenix:builder-fee:v1';
 const PHOENIX_ACCESS_CACHE_TTL_MS = 365 * 24 * 60 * 60 * 1000;
 const PHOENIX_PROGRAM_ID = 'EtrnLzgbS7nMMy5fbD42kXiUzGg8XQzJ972Xtk1cjWih';
 const LIGHTHOUSE_PROGRAM_ID = 'L2TExMFKdjpN9kozasaurPirfHy9P8sbXoAN1qA3S95';
@@ -869,6 +877,13 @@ function writePhoenixCache(prefix, wallet, data = {}) {
   } catch {}
 }
 
+function cachedPhoenixBuilderFeeRate() {
+  const rate = Number(
+    readPhoenixCache(PHOENIX_BUILDER_FEE_CACHE_PREFIX, PHOENIX_FLIGHT_BUILDER_AUTHORITY)?.feeRate,
+  );
+  return Number.isFinite(rate) && rate >= 0 ? rate : 0;
+}
+
 function clearPhoenixCache(prefix, wallet) {
   const key = phoenixCacheKey(prefix, wallet);
   if (!key || typeof window === 'undefined') return;
@@ -1178,8 +1193,7 @@ function phoenixMarginCapabilities(market) {
 }
 
 function phoenixTakerFeeRate(market) {
-  const fee = Number(market?.taker_fee ?? market?._phoenix?.takerFee ?? market?._phoenix?.fees?.takerFee);
-  return Number.isFinite(fee) && fee >= 0 ? fee : PHOENIX_DEFAULT_TAKER_FEE_RATE;
+  return phoenixMarketTakerFeeRate(market, PHOENIX_DEFAULT_TAKER_FEE_RATE);
 }
 
 function phoenixRequiredIsolatedTransferUsdc({ baseUnits, priceUsd, leverage, market }) {
@@ -1439,8 +1453,8 @@ function normalizeMarket(m) {
     supports_isolated_margin: marginCaps.supports_isolated_margin,
     default_margin_mode: marginCaps.default_margin_mode,
     margin_capabilities: marginCaps,
-    maker_fee: Number(m?.makerFee ?? m?.fees?.makerFee ?? 0.00005),
-    taker_fee: Number(m?.takerFee ?? m?.fees?.takerFee ?? 0.00035),
+    maker_fee: phoenixMarketMakerFeeRate(m),
+    taker_fee: phoenixMarketTakerFeeRate(m),
     funding_rate: phoenixFundingToDecimal(m),
     next_funding_rate: phoenixFundingToDecimal(m),
     volume_24h: 0,
@@ -2083,7 +2097,7 @@ function phoenixTraderWithdrawableCollateral(traderView, fallbackCollateral = 0,
   return Math.max(0, effectiveCollateral - initialMargin);
 }
 
-function positionFromSnapshot(p, marketsBySymbol, collateral, subaccountIndex = 0) {
+function positionFromSnapshot(p, marketsBySymbol, collateral, subaccountIndex = 0, feeContext = {}) {
   const symbol = phoenixSymbol(p?.symbol);
   if (!symbol) return null;
   const m = marketsBySymbol.current[symbol];
@@ -2101,6 +2115,21 @@ function positionFromSnapshot(p, marketsBySymbol, collateral, subaccountIndex = 
   const directStopLossPrice = activeTriggerPrice(p?.stopLossTriggers, m);
   const conditionalTakeProfitPrice = activeTriggerPrice(p?.conditionalTakeProfitTriggers, m);
   const conditionalStopLossPrice = activeTriggerPrice(p?.conditionalStopLossTriggers, m);
+  const grossPnl = (price && entry) ? (price - entry) * amount * (rawBase >= 0 ? 1 : -1) : 0;
+  const feeRate = phoenixEffectiveTakerFeeRate({
+    market: m,
+    takerFeeMultiplier: feeContext.takerFeeMultiplier,
+    builderFeeRate: feeContext.builderFeeRate,
+  });
+  const pnl = calculatePhoenixNetPositionPnl({
+    side: rawBase >= 0 ? 'bid' : 'ask',
+    amount,
+    entryPrice: entry || price,
+    markPrice: price || entry,
+    margin,
+    grossPnlUsd: grossPnl,
+    feeRate,
+  });
   return {
     symbol,
     side: rawBase >= 0 ? 'bid' : 'ask',
@@ -2111,7 +2140,15 @@ function positionFromSnapshot(p, marketsBySymbol, collateral, subaccountIndex = 
     liquidation_price: null,
     margin,
     leverage: margin > 0 ? Math.max(1, Math.round((notional / margin) * 10) / 10) : null,
-    pnl_usd: (price && entry) ? (price - entry) * amount * (rawBase >= 0 ? 1 : -1) : 0,
+    pnl_usd: pnl.netPnlUsd,
+    pnl_pct: pnl.pnlPct,
+    pnl_gross_usd: pnl.grossPnlUsd,
+    opening_fee_usd: pnl.openingFeeUsd,
+    closing_fee_usd: pnl.closingFeeUsd,
+    trading_fee_usd: pnl.totalFeeUsd,
+    trading_fee_rate: pnl.feeRate,
+    trading_fee_source: 'phoenix_current_taker_plus_flight_estimate',
+    pnl_includes_fees: true,
     is_isolated: Number(subaccountIndex) > 0,
     take_profit_price: directTakeProfitPrice ?? conditionalTakeProfitPrice,
     stop_loss_price: directStopLossPrice ?? conditionalStopLossPrice,
@@ -2125,7 +2162,7 @@ function positionFromSnapshot(p, marketsBySymbol, collateral, subaccountIndex = 
   };
 }
 
-function positionFromTraderView(vp, traderView, snapshotRow, marketsBySymbol) {
+function positionFromTraderView(vp, traderView, snapshotRow, marketsBySymbol, feeContext = {}) {
   const symbol = phoenixSymbol(vp?.symbol);
   if (!symbol) return null;
   const m = marketsBySymbol.current[symbol];
@@ -2146,8 +2183,8 @@ function positionFromTraderView(vp, traderView, snapshotRow, marketsBySymbol) {
     snapshotRow?.entryPriceUsd,
     ticksToUsd(snapshotRow?.entryPriceTicks, m)
   ) || 0;
-  const pnl = firstFinite(tokenAmountValue(vp?.unrealizedPnl), 0) || 0;
-  const derivedMark = entry > 0 && amount > 0 ? entry + (pnl / amount) * sideSign : 0;
+  const grossPnl = firstFinite(tokenAmountValue(vp?.unrealizedPnl), 0) || 0;
+  const derivedMark = entry > 0 && amount > 0 ? entry + (grossPnl / amount) * sideSign : 0;
   const mark = firstFinite(derivedMark > 0 ? derivedMark : null, m?._mark, entry) || 0;
   const signedPositionValue = firstFinite(tokenAmountValue(vp?.positionValue), amount * (mark || entry || 0)) || 0;
   const positionValue = Math.abs(signedPositionValue);
@@ -2169,9 +2206,20 @@ function positionFromTraderView(vp, traderView, snapshotRow, marketsBySymbol) {
   const conditionalTakeProfitPrice = activeTriggerPrice(snapshotRow?.conditionalTakeProfitTriggers, m);
   const conditionalStopLossPrice = activeTriggerPrice(snapshotRow?.conditionalStopLossTriggers, m);
   const subaccountIndex = Number(traderView?.traderSubaccountIndex) || 0;
-  const pnlPct = margin > 0 ? (pnl / margin) * 100 : (
-    entry > 0 && mark > 0 ? ((mark - entry) / entry * 100 * sideSign) : 0
-  );
+  const feeRate = phoenixEffectiveTakerFeeRate({
+    market: m,
+    takerFeeMultiplier: traderView?.takerFeeOverrideMultiplier ?? feeContext.takerFeeMultiplier,
+    builderFeeRate: feeContext.builderFeeRate,
+  });
+  const pnl = calculatePhoenixNetPositionPnl({
+    side: sideSign >= 0 ? 'bid' : 'ask',
+    amount,
+    entryPrice: entry || mark,
+    markPrice: mark || entry,
+    margin,
+    grossPnlUsd: grossPnl,
+    feeRate,
+  });
 
   return {
     symbol,
@@ -2183,8 +2231,15 @@ function positionFromTraderView(vp, traderView, snapshotRow, marketsBySymbol) {
     liquidation_price: tokenAmountValue(vp?.liquidationPrice),
     margin,
     leverage: margin > 0 && positionValue > 0 ? Math.round((positionValue / margin) * 10) / 10 : null,
-    pnl_usd: pnl,
-    pnl_pct: pnlPct,
+    pnl_usd: pnl.netPnlUsd,
+    pnl_pct: pnl.pnlPct,
+    pnl_gross_usd: pnl.grossPnlUsd,
+    opening_fee_usd: pnl.openingFeeUsd,
+    closing_fee_usd: pnl.closingFeeUsd,
+    trading_fee_usd: pnl.totalFeeUsd,
+    trading_fee_rate: pnl.feeRate,
+    trading_fee_source: 'phoenix_current_taker_plus_flight_estimate',
+    pnl_includes_fees: true,
     is_isolated: Number(subaccountIndex) > 0,
     take_profit_price: directTakeProfitPrice ?? conditionalTakeProfitPrice,
     stop_loss_price: directStopLossPrice ?? conditionalStopLossPrice,
@@ -2219,12 +2274,26 @@ function mergeSnapshotPositionMargin(position, marketMargin, previousPosition = 
   const margin = quoteLotsToUsd(marketMargin.positionInitialMarginQuoteLots ?? marketMargin.initialMarginQuoteLots);
   const pnl = quoteLotsToUsd(marketMargin.unrealizedPnlQuoteLots);
   const positionValue = Math.abs(quoteLotsToUsd(marketMargin.positionValueQuoteLots));
+  const netPnl = calculatePhoenixNetPositionPnl({
+    side: position.side,
+    amount: position.amount,
+    entryPrice: position.entry_price,
+    markPrice: position.mark_price,
+    margin: margin > 0 ? margin : position.margin,
+    grossPnlUsd: pnl,
+    feeRate: position.trading_fee_rate,
+  });
   const next = {
     ...position,
     size_usd: positionValue > 0 ? positionValue : position.size_usd,
     margin: margin > 0 ? margin : position.margin,
-    pnl_usd: pnl,
-    pnl_pct: margin > 0 ? (pnl / margin) * 100 : position.pnl_pct,
+    pnl_usd: netPnl.netPnlUsd,
+    pnl_pct: netPnl.pnlPct,
+    pnl_gross_usd: netPnl.grossPnlUsd,
+    opening_fee_usd: netPnl.openingFeeUsd,
+    closing_fee_usd: netPnl.closingFeeUsd,
+    trading_fee_usd: netPnl.totalFeeUsd,
+    pnl_includes_fees: true,
     leverage: margin > 0 && positionValue > 0 ? Math.round((positionValue / margin) * 10) / 10 : position.leverage,
     liquidation_price: previousPosition?.liquidation_price ?? position.liquidation_price,
     _phoenixMargin: marketMargin,
@@ -2240,14 +2309,25 @@ function phoenixLivePositionPnl(position, markPrice) {
     return null;
   }
   const side = String(position?.side || '').toLowerCase() === 'ask' ? -1 : 1;
-  const pnl = (mark - entry) * amount * side;
+  const grossPnl = (mark - entry) * amount * side;
   const margin = Number(position?.margin || 0);
+  const pnl = calculatePhoenixNetPositionPnl({
+    side: position?.side,
+    amount,
+    entryPrice: entry,
+    markPrice: mark,
+    margin,
+    grossPnlUsd: grossPnl,
+    feeRate: position?.trading_fee_rate,
+  });
   return {
     mark,
-    pnl: Math.abs(pnl) < 0.0000001 ? 0 : pnl,
-    pnlPct: margin > 0 ? (pnl / margin) * 100 : (
-      entry > 0 ? ((mark - entry) / entry) * 100 * side : Number(position?.pnl_pct || 0)
-    ),
+    pnl: pnl.netPnlUsd,
+    pnlPct: pnl.pnlPct,
+    grossPnl: pnl.grossPnlUsd,
+    openingFee: pnl.openingFeeUsd,
+    closingFee: pnl.closingFeeUsd,
+    totalFee: pnl.totalFeeUsd,
     sizeUsd: amount * mark,
   };
 }
@@ -2283,16 +2363,18 @@ function applyPhoenixLivePricesToPositions(rows, priceRows) {
       size_usd: live.sizeUsd > 0 ? live.sizeUsd : position.size_usd,
       pnl_usd: live.pnl,
       pnl_pct: live.pnlPct,
+      pnl_gross_usd: live.grossPnl,
+      opening_fee_usd: live.openingFee,
+      closing_fee_usd: live.closingFee,
+      trading_fee_usd: live.totalFee,
+      trading_fee_source: 'phoenix_current_taker_plus_flight_estimate',
+      pnl_includes_fees: true,
       pnl_source: 'phoenix_market_stats_ws',
       pnl_pct_source: 'phoenix_market_stats_ws',
       _phoenixLivePriceAt: Date.now(),
     };
   });
   return changed ? next : list;
-}
-
-function phoenixPositionsPnl(rows) {
-  return (Array.isArray(rows) ? rows : []).reduce((sum, row) => sum + Number(row?.pnl_usd || 0), 0);
 }
 
 function ordersFromSnapshot(group, marketsBySymbol, subaccountIndex = 0) {
@@ -2437,6 +2519,7 @@ export function usePhoenix() {
   const [error, setError] = useState(null);
   const [goldEarned, setGoldEarned] = useState(null);
   const [oneTapTrading, setOneTapTrading] = useState(disabledPhoenixOneTapState);
+  const [phoenixBuilderFeeRate, setPhoenixBuilderFeeRate] = useState(cachedPhoenixBuilderFeeRate);
   const activeEmbeddedOneTapSession = useMemo(() => {
     if (PHOENIX_ONE_TAP_DISABLED) return null;
     if (!walletAddr || walletMismatch) return null;
@@ -2498,6 +2581,35 @@ export function usePhoenix() {
   }, [walletAddr]);
 
   const client = getPhoenixClient(connection?.rpcEndpoint);
+  useEffect(() => {
+    let cancelled = false;
+    if (!isActiveDex) return undefined;
+    if (!isPhoenixFlightEnabled() || !PHOENIX_FLIGHT_BUILDER_AUTHORITY) {
+      setPhoenixBuilderFeeRate(0);
+      return undefined;
+    }
+    (async () => {
+      try {
+        const builderState = await flight.fetchBuilderState({
+          client: client.rpc.accounts,
+          authority: PHOENIX_FLIGHT_BUILDER_AUTHORITY,
+          phoenixProgramAddress: client.pda.getProgramAddress(),
+        });
+        if (cancelled) return;
+        const feeBps = builderState?.isActive ? Number(builderState?.feeBps ?? 0) : 0;
+        const feeRate = Number.isFinite(feeBps) && feeBps >= 0 ? feeBps / 10_000 : 0;
+        setPhoenixBuilderFeeRate(feeRate);
+        writePhoenixCache(PHOENIX_BUILDER_FEE_CACHE_PREFIX, PHOENIX_FLIGHT_BUILDER_AUTHORITY, { feeRate });
+      } catch (builderFeeError) {
+        if (cancelled) return;
+        console.warn('[Phoenix] on-chain Flight builder fee read failed', builderFeeError?.message || builderFeeError);
+        // Preserve the last successful on-chain value during a transient RPC
+        // failure instead of silently dropping the Flight fee from net PnL.
+        setPhoenixBuilderFeeRate(previous => previous || cachedPhoenixBuilderFeeRate());
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [client, isActiveDex]);
   const phoenixRestSources = useMemo(() => {
     const rows = phoenixApiEndpointCandidates().map(source => ({
       ...source,
@@ -2687,6 +2799,67 @@ export function usePhoenix() {
       }
     }
   }, [connection?.rpcEndpoint, disposeTransactionClient, phoenixTradingAuthority]);
+
+  const refreshPhoenixLiquidationPrices = useCallback(async (authority, rows) => {
+    const targets = (Array.isArray(rows) ? rows : [])
+      .filter(position => position && !(Number(position.liquidation_price) > 0));
+    if (!authority || !targets.length) return [];
+
+    const riskClient = await getTransactionClient(false, { disableFlight: true });
+    if (!riskClient?.rpc?.available || !riskClient?.rpc?.hawkeye?.viewLiquidationPrice) {
+      throw new Error('Phoenix Hawkeye liquidation-price view is unavailable');
+    }
+    const settled = await Promise.allSettled(targets.map(async position => {
+      const symbol = phoenixSymbol(position.symbol);
+      const market = marketsBySymbolRef.current[symbol];
+      if (!symbol || !market) throw new Error(`Missing Phoenix market metadata for ${symbol || 'position'}`);
+      const simulation = await riskClient.rpc.hawkeye.viewLiquidationPrice({
+        authority,
+        traderPdaIndex: 0,
+        traderSubaccountIndex: Number(position._phoenixSubaccountIndex) || 0,
+        symbol,
+      });
+      if (simulation?.err) {
+        const reason = typeof simulation.err === 'string'
+          ? simulation.err
+          : simulation.err?.message || simulation.err?.name || 'unknown simulation error';
+        throw new Error(`Hawkeye simulation failed for ${symbol}: ${reason}`);
+      }
+      const risk = simulation?.returnData?.decoded;
+      const liquidationPrice = ticksToUsd(risk?.liquidationPriceTicks, market);
+      if (!(liquidationPrice > 0)) {
+        throw new Error(`Hawkeye returned no liquidation price for ${symbol} (${risk?.status?.label || 'unknown'})`);
+      }
+      return {
+        key: phoenixUiPositionKey(position),
+        liquidationPrice,
+        status: risk?.status?.label || null,
+      };
+    }));
+    const updates = new Map();
+    const errors = [];
+    for (const result of settled) {
+      if (result.status === 'fulfilled') updates.set(result.value.key, result.value);
+      else errors.push(result.reason?.message || String(result.reason));
+    }
+    if (updates.size) {
+      setPhoenixPositions(previous => previous.map(position => {
+        const update = updates.get(phoenixUiPositionKey(position));
+        if (!update) return position;
+        return {
+          ...position,
+          liquidation_price: update.liquidationPrice,
+          liquidation_price_source: 'phoenix_hawkeye_onchain',
+          _phoenixLiquidationStatus: update.status,
+          _phoenixLiquidationReadAt: Date.now(),
+        };
+      }));
+    }
+    if (errors.length) {
+      console.warn('[Phoenix] liquidation-price reconciliation incomplete', errors.slice(0, 4));
+    }
+    return Array.from(updates.values());
+  }, [getTransactionClient, setPhoenixPositions]);
 
   const buildCollateralIxs = useCallback(async (txClient, amount, direction, authority) => {
     await txClient.exchange?.ready?.();
@@ -3564,8 +3737,10 @@ export function usePhoenix() {
   const applyLivePositionPrices = useCallback((priceRows) => {
     const livePositions = applyPhoenixLivePricesToPositions(positionsRef.current, priceRows);
     if (livePositions === positionsRef.current) return;
-    const oldPnl = phoenixPositionsPnl(positionsRef.current);
-    const newPnl = phoenixPositionsPnl(livePositions);
+    // Phoenix collateral already includes fees charged on entry. Account
+    // equity follows gross unrealized PnL, while cards show fee-adjusted PnL.
+    const oldPnl = sumPhoenixGrossPositionPnl(positionsRef.current);
+    const newPnl = sumPhoenixGrossPositionPnl(livePositions);
     const pnlDelta = newPnl - oldPnl;
     positionsRef.current = livePositions;
     setPositions(livePositions);
@@ -3861,6 +4036,10 @@ export function usePhoenix() {
     const marginBySubaccount = new Map(
       (marginResult?.subaccounts || []).map(row => [Number(row?.subaccountIndex) || 0, row])
     );
+    const feeContext = {
+      takerFeeMultiplier: snapshot?.takerFeeOverrideMultiplier ?? 1,
+      builderFeeRate: phoenixBuilderFeeRate,
+    };
     const previousByKey = new Map(
       positionsRef.current.map(position => [phoenixUiPositionKey(position), position])
     );
@@ -3875,7 +4054,7 @@ export function usePhoenix() {
       );
       return (sub?.positions || [])
         .map(row => {
-          const position = positionFromSnapshot(row, marketsBySymbolRef, collateral, subIndex);
+          const position = positionFromSnapshot(row, marketsBySymbolRef, collateral, subIndex, feeContext);
           if (!position) return null;
           const merged = mergeSnapshotPositionMargin(
             position,
@@ -3904,7 +4083,7 @@ export function usePhoenix() {
       ? marginResult.subaccounts.reduce((sum, sub) => sum + quoteLotsToUsd(sub?.margin?.portfolioValueQuoteLots), 0)
       : Math.max(0,
         subaccounts.reduce((sum, sub) => sum + quoteLotsToUsd(sub?.collateral), 0)
-        + positionsFromSnapshot.reduce((sum, position) => sum + Number(position.pnl_usd || 0), 0)
+        + sumPhoenixGrossPositionPnl(positionsFromSnapshot)
       );
     const crossCollateral = crossMargin
       ? quoteLotsToUsd(crossMargin?.margin?.collateralBalanceQuoteLots)
@@ -4009,13 +4188,13 @@ export function usePhoenix() {
     if (needsRiskReconcile && Date.now() - lastTraderStateRiskRestAtRef.current > PHOENIX_TRADER_STATE_REST_FALLBACK_MS) {
       lastTraderStateRiskRestAtRef.current = Date.now();
       setTimeout(() => {
-        refreshTraderStateRef.current?.({ force: true }).catch(error => {
-          console.warn('[Phoenix] trader risk REST reconcile failed', error?.message || error);
+        refreshPhoenixLiquidationPrices(authority, positionsFromSnapshot).catch(error => {
+          console.warn('[Phoenix] on-chain liquidation-price reconcile failed', error?.message || error);
         });
       }, 0);
     }
     return setupReady;
-  }, [setPhoenixAccount, setPhoenixOrders, setPhoenixPositions, walletAddr]);
+  }, [phoenixBuilderFeeRate, refreshPhoenixLiquidationPrices, setPhoenixAccount, setPhoenixOrders, setPhoenixPositions, walletAddr]);
 
   useEffect(() => {
     if (!isActiveDex || !walletAddr || walletMismatch) return undefined;
@@ -4286,7 +4465,8 @@ export function usePhoenix() {
               row,
               trader,
               snapshotRowsByKey.get(`${subIndex}:${phoenixSymbol(row?.symbol)}`),
-              marketsBySymbolRef
+              marketsBySymbolRef,
+              { builderFeeRate: phoenixBuilderFeeRate },
             ))
             .filter(Boolean);
         });
@@ -4295,7 +4475,10 @@ export function usePhoenix() {
           const subIndex = Number(sub?.subaccountIndex) || 0;
           const collateral = parseMaybeUsdc(sub?.collateral);
           return (sub?.positions || [])
-            .map(p => positionFromSnapshot(p, marketsBySymbolRef, collateral, subIndex))
+            .map(p => positionFromSnapshot(p, marketsBySymbolRef, collateral, subIndex, {
+              takerFeeMultiplier: viewState?.snapshot?.takerFeeOverrideMultiplier ?? 1,
+              builderFeeRate: phoenixBuilderFeeRate,
+            }))
             .filter(Boolean);
         });
       const optimisticNow = Date.now();
@@ -4337,14 +4520,14 @@ export function usePhoenix() {
       ];
       const notional = pos.reduce((sum, p) => sum + Number(p.size_usd || 0), 0);
       const marginUsed = pos.reduce((sum, p) => sum + Number(p.margin || 0), 0);
-      const pnl = pos.reduce((sum, p) => sum + Number(p.pnl_usd || 0), 0);
+      const grossPnl = sumPhoenixGrossPositionPnl(pos);
       const crossView = viewTraders.find(t => Number(t?.traderSubaccountIndex) === 0) || viewTraders[0] || null;
       const crossCollateral = firstFinite(tokenAmountValue(crossView?.collateralBalance), parseMaybeUsdc(cross?.collateral)) || 0;
       const totalCollateral = viewTraders.length
         ? viewTraders.reduce((sum, t) => sum + collateralForTraderView(t), 0)
         : subaccounts.reduce((sum, s) => sum + parseMaybeUsdc(s?.collateral), 0);
       const equityFromView = viewTraders.reduce((sum, t) => sum + (tokenAmountValue(t?.portfolioValue) || 0), 0);
-      const equity = Math.max(0, equityFromView > 0 ? equityFromView : totalCollateral + pnl);
+      const equity = Math.max(0, equityFromView > 0 ? equityFromView : totalCollateral + grossPnl);
       const crossMarginUsed = pos
         .filter(p => !p.is_isolated)
         .reduce((sum, p) => sum + Number(p.margin || 0), 0);
@@ -4504,7 +4687,7 @@ export function usePhoenix() {
         refreshTraderStateInFlightRef.current = null;
       }
     }
-  }, [applyTraderSnapshotState, getTraderStateViewWithFallback, isActiveDex, phoenixDisplayAuthority, setPhoenixAccount, setPhoenixOrders, setPhoenixPositions, walletAddr, walletMismatch]);
+  }, [applyTraderSnapshotState, getTraderStateViewWithFallback, isActiveDex, phoenixBuilderFeeRate, phoenixDisplayAuthority, setPhoenixAccount, setPhoenixOrders, setPhoenixPositions, walletAddr, walletMismatch]);
 
   useEffect(() => {
     refreshTraderStateRef.current = refreshTraderState;

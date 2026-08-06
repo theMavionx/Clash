@@ -9065,8 +9065,13 @@ function FuturesPanel() {
               </div>
               <div style={S.row}>
                 <span style={S.detail}>Mark: ${fmtPrice(markP)}</span>
-                <span style={{fontSize: 14, fontWeight: 900, color: pnlColor}}>
-                  {formatSignedPnlUsd(pnlVal)} {!isDust && `(${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%)`}
+                <span
+                  style={{fontSize: 14, fontWeight: 900, color: pnlColor}}
+                  title={dex === 'phoenix' && pos.pnl_includes_fees
+                    ? `Net PnL after estimated opening ($${Number(pos.opening_fee_usd || 0).toFixed(4)}) and closing ($${Number(pos.closing_fee_usd || 0).toFixed(4)}) trade fees`
+                    : undefined}
+                >
+                  {dex === 'phoenix' && pos.pnl_includes_fees ? 'Net ' : ''}{formatSignedPnlUsd(pnlVal)} {!isDust && `(${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%)`}
                 </span>
               </div>
               {/* Liquidation price row — visible on every venue that ships
