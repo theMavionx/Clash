@@ -409,3 +409,44 @@ export function calculateFeeAwarePositionPnl({
     pnlPct: collateral > 0 ? net / collateral * 100 : null,
   };
 }
+
+// Most Clash venues use the fee-aware net estimate as the primary open-position
+// metric. Phoenix's own position table instead presents gross mark-to-market
+// uPnL/ROE. Keep the accounting contract above unchanged, but provide one
+// presentation contract so every live Clash layout can match Phoenix while
+// retaining the estimated round-trip result as a clearly labelled secondary
+// figure.
+export function positionPnlPresentation({
+  dex,
+  isDust = false,
+  margin = 0,
+  netPnlUsd,
+  netPnlPct,
+  pnlFees = {},
+} = {}) {
+  const venue = String(dex || '').trim().toLowerCase();
+  const collateral = Math.max(0, finiteNumber(margin) ?? 0);
+  const netUsd = cleanZero(firstFinite(netPnlUsd, pnlFees?.netPnlUsd, 0) ?? 0);
+  const resolvedNetPct = isDust ? 0 : (firstFinite(
+    netPnlPct,
+    collateral > 0 ? (netUsd / collateral) * 100 : 0,
+  ) ?? 0);
+  const grossUsd = cleanZero(firstFinite(pnlFees?.grossPnlUsd, netUsd) ?? netUsd);
+  const grossPct = isDust ? 0 : (
+    collateral > 0 ? (grossUsd / collateral) * 100 : resolvedNetPct
+  );
+  const usesVenueGross = venue === 'phoenix' && !isDust;
+  const showsSecondaryNet = usesVenueGross && !!pnlFees?.feeAdjusted;
+
+  return {
+    usesVenueGross,
+    primaryLabel: usesVenueGross ? 'PnL' : (pnlFees?.feeAdjusted ? 'Net' : 'PnL'),
+    primaryPnlUsd: usesVenueGross ? grossUsd : netUsd,
+    primaryPnlPct: usesVenueGross ? grossPct : resolvedNetPct,
+    secondaryLabel: showsSecondaryNet
+      ? (pnlFees?.estimated ? 'Est. net after fees' : 'Net after fees')
+      : null,
+    secondaryNetPnlUsd: showsSecondaryNet ? netUsd : null,
+    secondaryNetPnlPct: showsSecondaryNet ? resolvedNetPct : null,
+  };
+}

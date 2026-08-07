@@ -82,8 +82,9 @@ const authoritativeGross = calculatePhoenixNetPositionPnl({
 closeTo(authoritativeGross.grossPnlUsd, -2);
 closeTo(authoritativeGross.netPnlUsd, -2.021);
 
-// Entry fees are already deducted from Phoenix collateral. Position cards use
-// net PnL, but account equity must only move with gross unrealized PnL.
+// Entry fees are already deducted from Phoenix collateral. Fee-aware net PnL
+// remains available for the secondary live-card line, but account equity and
+// the venue-compatible primary PnL must move with gross unrealized PnL only.
 closeTo(sumPhoenixGrossPositionPnl([
   { pnl_gross_usd: 1, pnl_usd: 0.979 },
   { pnl_gross_usd: -2, pnl_usd: -2.021 },

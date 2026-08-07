@@ -3136,3 +3136,50 @@ Follow-up:
   to Margin consistently in settings, plans, review, bot cards, and related
   guidance; keep the existing sizing calculations and backend payload fields
   unchanged.
+
+## UR-2026-08-06-CLASHBOT-DECIBEL-200-TROPHIES
+
+- Timestamp: 2026-08-06 22:22 (Europe/Kyiv)
+- Request: "додай мені 200 кубків на цей лень в турікі децибел"
+- Scope: add exactly 200 tournament trophies to Clashbot for the current
+  logical day of the active Decibel tournament using one idempotent owner
+  adjustment; do not fabricate attacks or modify trading volume, gold, main
+  account trophies, or battle wins, and verify production totals afterward.
+- Result: created one idempotent `owner_manual_trophy_adjustment` for Decibel
+  tournament #24 round 6 (`2026-08-05`, window ending `2026-08-06 21:59 UTC`).
+  Clashbot now has exactly 200 trophies for the current round and 1365 stored
+  tournament trophies total. The public daily-points API and leaderboard both
+  reflect the change; volume, trades, gold, main trophies and battle wins were
+  left unchanged. A pre-change SQLite backup was retained on the VPS.
+
+## UR-2026-08-07-PHOENIX-PNL-PARITY-RECHECK
+
+- Timestamp: 2026-08-07 11:04 (Europe/Kyiv)
+- Request: "still pnl isn't matching on clash of perps and phoenix перевір то саме"
+- Scope: re-audit the same live Phoenix BTC isolated position against the
+  Clash position card, reconcile gross PnL, fee-adjusted PnL, ROE, margin and
+  authoritative on-chain position inputs, and identify whether the mismatch is
+  calculation, labelling, stale deployment, or data-source related. Read-only
+  production checks only; do not submit orders or mutate production data.
+- Result: the direct Phoenix API and the production Clash proxy returned the
+  same isolated BTC position for Ameer Pirate, and production serves release
+  `20260806164612-46e8b48e`. The mismatch is a presentation mismatch, not stale
+  or incorrect position data: Phoenix displays gross uPnL, while the Clash live
+  position card displays estimated net PnL after both the paid opening fee and
+  an estimated closing fee. At the screenshot mark of `$64,403`, the exact
+  Phoenix cost basis gives `-$35.2915` gross; the effective fee rate is 5.15 bps
+  per leg (3.5 bps taker x 0.9 account multiplier + active 2 bps Flight builder),
+  producing `$7.1890` combined fees and exactly `-$42.4805 (-5.9576%)` net as
+  shown by Clash. Share cards already use venue-compatible gross Phoenix PnL,
+  but live/basic/table position cards still use the cross-venue net metric.
+  No trades, production data, code, commit, push or deployment were changed.
+
+## UR-2026-08-07-PHOENIX-LIVE-PNL-PARITY-DEPLOY
+
+- Timestamp: 2026-08-07 13:07 (Europe/Kyiv)
+- Request: "змінюй тоді і заливай на прод"
+- Scope: make every live Phoenix position layout use Phoenix-compatible gross
+  uPnL/ROE as its primary metric, retain the Clash estimated net-after-fees
+  result as a clearly labelled secondary line, add regression coverage, verify
+  the web UI, then commit, push `main`, deploy through the repository production
+  workflow, and smoke-test the deployed release without submitting a trade.

@@ -3,6 +3,7 @@ import {
   FEE_AWARE_POSITION_DEXES,
   calculateFeeAwarePositionPnl,
   findPositionMarket,
+  positionPnlPresentation,
   resolvePositionFeeRates,
 } from './src/lib/positionPnlMetrics.js';
 
@@ -61,6 +62,39 @@ const phoenix = calculateFeeAwarePositionPnl({
 });
 approx(phoenix.netPnlUsd, 19.6, 'Phoenix keeps adapter net PnL');
 approx(phoenix.totalFeeUsd, 0.4, 'Phoenix explicit fees');
+
+const phoenixPresentation = positionPnlPresentation({
+  dex: 'phoenix',
+  margin: 713.043897,
+  netPnlUsd: -42.480472138,
+  netPnlPct: -5.9576236914,
+  pnlFees: {
+    feeAdjusted: true,
+    estimated: true,
+    grossPnlUsd: -35.2915,
+    netPnlUsd: -42.480472138,
+    totalFeeUsd: 7.188972138,
+  },
+});
+assert.equal(phoenixPresentation.usesVenueGross, true, 'Phoenix live cards use venue gross PnL');
+assert.equal(phoenixPresentation.primaryLabel, 'PnL');
+approx(phoenixPresentation.primaryPnlUsd, -35.2915, 'Phoenix primary gross PnL');
+approx(phoenixPresentation.primaryPnlPct, -4.9494147764, 'Phoenix primary gross ROE');
+assert.equal(phoenixPresentation.secondaryLabel, 'Est. net after fees');
+approx(phoenixPresentation.secondaryNetPnlUsd, -42.480472138, 'Phoenix secondary net PnL');
+approx(phoenixPresentation.secondaryNetPnlPct, -5.9576236914, 'Phoenix secondary net ROE');
+
+const risexPresentation = positionPnlPresentation({
+  dex: 'risex',
+  margin: 100,
+  netPnlUsd: 19.6,
+  netPnlPct: 19.6,
+  pnlFees: phoenix,
+});
+assert.equal(risexPresentation.usesVenueGross, false, 'other venues keep net PnL primary');
+assert.equal(risexPresentation.primaryLabel, 'Net');
+approx(risexPresentation.primaryPnlUsd, 19.6, 'other venue primary net PnL');
+assert.equal(risexPresentation.secondaryNetPnlUsd, null, 'other venue has no duplicate secondary net');
 
 const gmx = calculateFeeAwarePositionPnl({
   dex: 'gmx',
