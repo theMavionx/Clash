@@ -9203,7 +9203,7 @@ function normalizeStoredClientLog(row) {
   if (/\/api\/futures\/lighter\/account.*-> 401/.test(message)) {
     return { ...row, level: 'debug', source: 'fetch.expected_http_status' };
   }
-  if (/\/rpc\/solana(?:[-/?]|$).*-> (?:429|5\d\d)/.test(message)) {
+  if (/\/rpc\/solana(?:[-/?][^\s]*)?\s+->\s+(?:429|5\d\d)\b/.test(message)) {
     return { ...row, level: 'debug', source: 'fetch.rpc_fallback' };
   }
   if (message.includes('godot.render_diagnostic')
