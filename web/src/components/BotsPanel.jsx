@@ -32,6 +32,7 @@ import { botApiUrl, botAuthHeaders, botWsUrl, fetchBotApiJson, botApiPathCandida
 import { registeredDexWallet } from '../lib/playerDexAccounts';
 import { topUpOstiumDelegateGas, refreshOstiumOneTapStatus } from '../lib/ostiumOneTapSetup';
 import { OSTIUM_CHAIN_ID } from '../lib/ostiumConfig';
+import { reportExchangeBalanceSnapshots } from '../lib/exchangeBalanceTelemetry';
 import {
   describeOstiumBotAction,
   normalizeOstiumErrorText,
@@ -1844,6 +1845,20 @@ function BotsPanel({ onClose }) {
 
   const applyPortfolioPayload = useCallback((data) => {
     if (!data) return;
+    const balanceSnapshots = (data.exchanges || []).flatMap((row) => {
+      const equity = parseDecimalField(row.balance?.equity_usd);
+      const available = parseDecimalField(row.balance?.available_margin_usd);
+      if (equity == null && available == null) return [];
+      return [{
+        dex: row.exchange,
+        balance_usd: equity ?? available,
+        available_usd: available,
+        source: 'mm_bot_portfolio',
+      }];
+    });
+    if (balanceSnapshots.length) {
+      reportExchangeBalanceSnapshots(balanceSnapshots, { token });
+    }
     setExchangeBalances((prev) => {
       const map = { ...prev };
       for (const row of data.exchanges || []) {
@@ -1904,7 +1919,7 @@ function BotsPanel({ onClose }) {
     if (cost != null && Number.isFinite(cost)) {
       setCostPer1MUsd(cost);
     }
-  }, []);
+  }, [token]);
 
   const fetchExchangeBalanceFallback = useCallback(async (exchanges) => {
     if (!token || !Array.isArray(exchanges) || exchanges.length === 0) return;
@@ -1966,6 +1981,18 @@ function BotsPanel({ onClose }) {
       if (row.equity != null) totalEquity += row.equity;
     }
     if (Object.keys(map).length === 0) return;
+    const balanceSnapshots = Object.entries(map).flatMap(([ex, row]) => {
+      if (row.equity == null && row.available == null) return [];
+      return [{
+        dex: ex,
+        balance_usd: row.equity ?? row.available,
+        available_usd: row.available,
+        source: 'mm_bot_balance_fallback',
+      }];
+    });
+    if (balanceSnapshots.length) {
+      reportExchangeBalanceSnapshots(balanceSnapshots, { token });
+    }
     setExchangeBalances((prev) => {
       const next = { ...prev };
       for (const [ex, incoming] of Object.entries(map)) {

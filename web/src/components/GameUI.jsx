@@ -184,6 +184,7 @@ export default function GameUI() {
   const seekerMarkRef = useRef('');
   const guideAudioMutedRef = useRef(false);
   const guideAudioRestoreTimerRef = useRef(null);
+  const venueSelectionRef = useRef({ id: 0, controller: null });
   useAgentActions();
 
   const [showTroops, setShowTroops] = useState(false);
@@ -258,50 +259,71 @@ export default function GameUI() {
     const token = player?.token || (typeof window !== 'undefined' ? window._playerToken : null);
     const previousDex = dex || player?.dex || 'pacifica';
     const preferenceOwner = { ...player, token };
+    venueSelectionRef.current.controller?.abort();
+    const requestId = venueSelectionRef.current.id + 1;
+    venueSelectionRef.current = { id: requestId, controller: null };
+    setDex(nextDex);
+    writeLastPlayerDexPreference(preferenceOwner, nextDex);
+    try { localStorage.setItem('clash_dex_picked', '1'); } catch {}
+    setShowVenuePicker(false);
+    if (nextDex === previousDex) return;
     if (!token) {
-      setDex(nextDex);
-      writeLastPlayerDexPreference(preferenceOwner, nextDex);
-      try { localStorage.setItem('clash_dex_picked', '1'); } catch {}
-      setShowVenuePicker(false);
       return;
     }
+    const controller = new AbortController();
+    venueSelectionRef.current = { id: requestId, controller };
+    const timeout = setTimeout(() => controller.abort(), 12_000);
     try {
       const response = await fetch(`/api/players/dex-accounts/${encodeURIComponent(nextDex)}/select`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-token': token },
         body: JSON.stringify({}),
+        signal: controller.signal,
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
         throw new Error(data?.error || `Could not switch DEX (${response.status})`);
       }
+      if (venueSelectionRef.current.id !== requestId) return;
       const serverDex = data?.player?.dex || data?.dex || nextDex;
       const playerPatch = data?.player && typeof data.player === 'object'
         ? { ...data.player, ...(data?.token ? { token: data.token } : {}) }
         : { dex: serverDex, ...(data?.token ? { token: data.token } : {}) };
       setDex(serverDex);
       writeLastPlayerDexPreference(preferenceOwner, serverDex);
-      try { localStorage.setItem('clash_dex_picked', '1'); } catch {}
       window.onGodotMessage?.({ action: 'state', data: playerPatch });
-      setShowVenuePicker(false);
       addClientBreadcrumb('venue_picker.select_success', {
         dex: serverDex,
         switched_account: !!data?.switched_account,
       });
     } catch (err) {
+      if (venueSelectionRef.current.id !== requestId) return;
       setDex(previousDex);
       writeLastPlayerDexPreference(preferenceOwner, previousDex);
+      setShowVenuePicker(true);
+      const message = controller.signal.aborted
+        ? 'DEX switch timed out. Please try again.'
+        : (err?.message || 'Could not switch DEX. Try again.');
       addClientBreadcrumb('venue_picker.select_failed', {
         requestedDex: nextDex,
         previousDex,
-        message: err?.message || String(err || ''),
+        message,
       }, 'warn');
       window.onGodotMessage?.({
         action: 'error',
-        data: { message: err?.message || 'Could not switch DEX. Try again.' },
+        data: { message },
       });
+    } finally {
+      clearTimeout(timeout);
+      if (venueSelectionRef.current.id === requestId) {
+        venueSelectionRef.current = { id: requestId, controller: null };
+      }
     }
   }, [dex, player, setDex]);
+
+  useEffect(() => () => {
+    venueSelectionRef.current.controller?.abort();
+  }, []);
 
   useEffect(() => {
     const openVenuePicker = (event) => {

@@ -161,7 +161,8 @@ const SIMPLE_LOADERS = {
   earnings: () => Promise.all([
     adminGet('/admin/earnings'),
     adminGet('/admin/revenue-analytics').catch((error) => ({ error: error.message })),
-  ]).then(([earnings, revenue]) => ({ earnings, revenue })),
+    adminGet('/admin/exchange-balances?days=30&limit=2000').catch((error) => ({ error: error.message })),
+  ]).then(([earnings, revenue, exchangeBalances]) => ({ earnings, revenue, exchangeBalances })),
   referrals: () => adminGet('/admin/referrals'),
   shop: () => Promise.all([
     adminGet('/admin/shop'),
@@ -4514,6 +4515,11 @@ function EarningsPanel({ data, reload }) {
     ];
   });
   const tournaments = revenue.tournaments || revenue.by_tournament || [];
+  const balanceMetrics = localData?.exchangeBalances || {};
+  const balanceSummary = balanceMetrics.summary || {};
+  const balanceDexRows = Array.isArray(balanceMetrics.by_dex) ? balanceMetrics.by_dex : [];
+  const balancePlayerRows = Array.isArray(balanceMetrics.by_player) ? balanceMetrics.by_player : [];
+  const balanceAccountRows = Array.isArray(balanceMetrics.accounts) ? balanceMetrics.accounts : [];
   return (
     <div className="admin-grid" data-admin-feature="earnings-snapshot-history">
       <StatsGrid stats={[
@@ -4552,6 +4558,71 @@ function EarningsPanel({ data, reload }) {
           row.closing_cumulative_usd == null ? '-' : fmtMaybeUsd(row.closing_cumulative_usd),
           row.snapshot_count || 0,
           row.reset_count || 0,
+        ])}
+      />
+      <div className="admin-card">
+        <div className="admin-card-head">
+          <div>
+            <div className="admin-card-title">Player Exchange Balances</div>
+            <div className="admin-card-sub">
+              Last account equity observed by the authenticated trading UI or MM-bot portfolio in the past {balanceMetrics.max_age_days || 30} days. Averages exclude zero balances; these values are telemetry, not provider-audited accounting. Updated {fmtTime(balanceMetrics.generated_at)}.
+            </div>
+          </div>
+          {balanceMetrics.error ? <span className="admin-badge red">API error</span> : <span className="admin-badge blue">client observed</span>}
+        </div>
+        <div className="admin-card-body admin-grid">
+          {balanceMetrics.error ? <div className="admin-error">{balanceMetrics.error}</div> : null}
+          <StatsGrid stats={[
+            { label: 'Total balance > 0', value: fmtMaybeUsd(balanceSummary.total_positive_balance_usd), tone: 'gold' },
+            { label: 'Players > 0', value: num(balanceSummary.positive_players), tone: 'green' },
+            { label: 'Avg player > 0', value: fmtMaybeUsd(balanceSummary.average_positive_player_usd), tone: 'green' },
+            { label: 'Accounts > 0', value: num(balanceSummary.positive_accounts), tone: 'blue' },
+            { label: 'Avg account > 0', value: fmtMaybeUsd(balanceSummary.average_positive_account_usd), tone: 'blue' },
+            { label: 'Fresh accounts 24h', value: `${num(balanceSummary.fresh_24h_accounts)} / ${num(balanceSummary.tracked_accounts)}`, tone: 'purple' },
+          ]} />
+        </div>
+      </div>
+      <CompactTable
+        title="Balances by Exchange"
+        subtitle="Positive totals and averages from each player's latest observed account equity. Zero-balance accounts remain visible in the tracked count."
+        columns={['DEX', 'Tracked', '> 0', 'Total > 0', 'Avg > 0', 'Max', 'Fresh 24h', 'Latest']}
+        rows={balanceDexRows.map((row) => [
+          DEX_LABELS[row.dex] || row.dex,
+          num(row.tracked_accounts),
+          num(row.positive_accounts),
+          fmtMaybeUsd(row.total_positive_balance_usd),
+          fmtMaybeUsd(row.average_positive_balance_usd),
+          fmtMaybeUsd(row.max_balance_usd),
+          `${num(row.fresh_24h_accounts)} / ${num(row.tracked_accounts)}`,
+          fmtTime(row.latest_observed_at),
+        ])}
+      />
+      <CompactTable
+        title="Balances by Player"
+        subtitle="Who has funds and on which exchanges. Total is the sum of the latest observed equity per DEX."
+        columns={['Player', 'Total', 'Free', 'DEXes > 0', 'Exchange balances', 'Latest']}
+        rows={balancePlayerRows.map((row) => [
+          row.player_name || short(row.player_id),
+          fmtMaybeUsd(row.total_balance_usd),
+          fmtMaybeUsd(row.total_available_usd),
+          `${num(row.positive_dexes)} / ${num(row.tracked_dexes)}`,
+          (row.dexes || []).map((item) => `${DEX_LABELS[item.dex] || item.dex}: ${fmtMaybeUsd(item.balance_usd)}`).join(' · ') || '-',
+          fmtTime(row.latest_observed_at),
+        ])}
+      />
+      <CompactTable
+        title="Latest Player / Exchange Accounts"
+        subtitle={`Detailed latest snapshot, including linked wallet, collection source, and freshness. Showing up to ${num(balanceMetrics.account_limit || 2000)} accounts.`}
+        columns={['Player', 'DEX', 'Balance', 'Free', 'Wallet', 'Source', 'Observed', 'Fresh']}
+        rows={balanceAccountRows.map((row) => [
+          row.player_name || short(row.player_id),
+          DEX_LABELS[row.dex] || row.dex,
+          fmtMaybeUsd(row.balance_usd),
+          row.available_usd == null ? '-' : fmtMaybeUsd(row.available_usd),
+          <span className="admin-mono">{short(row.wallet_address, 10, 5)}</span>,
+          row.source || '-',
+          fmtTime(row.observed_at),
+          row.fresh_24h ? <span className="admin-badge green">24h</span> : <span className="admin-badge gold">stale</span>,
         ])}
       />
       <div className="admin-grid two">

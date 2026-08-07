@@ -10,6 +10,57 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { usePlayer } from './useGodot';
 import { useDex } from '../contexts/DexContext';
 
+const TOURNAMENT_REQUEST_TIMEOUT_MS = 12_000;
+const TOURNAMENT_CACHE_TTL_MS = 30_000;
+const TOURNAMENT_CACHE_MAX_ENTRIES = 100;
+const tournamentResponseCache = new Map();
+
+function readTournamentCache(key) {
+  const entry = tournamentResponseCache.get(key);
+  if (!entry || Date.now() - entry.storedAt > TOURNAMENT_CACHE_TTL_MS) return null;
+  return entry.data;
+}
+
+function writeTournamentCache(key, data) {
+  tournamentResponseCache.delete(key);
+  tournamentResponseCache.set(key, { data, storedAt: Date.now() });
+  while (tournamentResponseCache.size > TOURNAMENT_CACHE_MAX_ENTRIES) {
+    tournamentResponseCache.delete(tournamentResponseCache.keys().next().value);
+  }
+}
+
+function deleteTournamentCache(key) {
+  tournamentResponseCache.delete(key);
+}
+
+function cancelTournamentRequest(requestRef) {
+  requestRef.current?.controller?.abort();
+  requestRef.current = null;
+}
+
+function fetchTournamentJson(requestRef, key, url, options = {}) {
+  const active = requestRef.current;
+  if (active?.key === key && active.promise) return active.promise;
+  active?.controller?.abort();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), TOURNAMENT_REQUEST_TIMEOUT_MS);
+  let trackedPromise;
+  const request = fetch(url, {
+    ...options,
+    cache: 'no-store',
+    signal: controller.signal,
+  }).then(async (response) => {
+    if (!response.ok) throw new Error(`tournament request failed (${response.status})`);
+    return response.json();
+  });
+  trackedPromise = request.finally(() => {
+    clearTimeout(timeout);
+    if (requestRef.current?.promise === trackedPromise) requestRef.current = null;
+  });
+  requestRef.current = { key, controller, promise: trackedPromise };
+  return trackedPromise;
+}
+
 export function useTournament({ active = false, pollMs = 30000 } = {}) {
   const player = usePlayer();
   const token = player?.token;
@@ -20,8 +71,10 @@ export function useTournament({ active = false, pollMs = 30000 } = {}) {
   const [error, setError] = useState(null);
   const tokenRef = useRef(token);
   const dexRef = useRef(dex);
+  const requestRef = useRef(null);
   tokenRef.current = token;
   dexRef.current = dex;
+  const cacheKey = `me:${player?.id || player?.player_id || 'session'}:${dex || ''}`;
 
   const refresh = useCallback(async () => {
     if (!token) return;
@@ -30,24 +83,24 @@ export function useTournament({ active = false, pollMs = 30000 } = {}) {
     const fetchToken = token;
     const fetchDex = dex;
     try {
-      const res = await fetch(`/api/tournaments/me?dex=${encodeURIComponent(fetchDex || '')}`, {
+      const data = await fetchTournamentJson(requestRef, cacheKey, `/api/tournaments/me?dex=${encodeURIComponent(fetchDex || '')}`, {
         headers: { 'x-token': fetchToken },
       });
-      if (!res.ok) throw new Error('failed to load tournament');
-      const data = await res.json();
       // Stale-response guard: if the token changed while this was in flight
       // (account switch), drop the result so we don't paint Bob's tournament
       // state into Alice's UI.
       if (tokenRef.current !== fetchToken || dexRef.current !== fetchDex) return;
+      writeTournamentCache(cacheKey, data);
       setMe(data);
       setLoaded(true);
     } catch (e) {
+      if (tokenRef.current !== fetchToken || dexRef.current !== fetchDex) return;
       setError(e.message || 'error');
       setLoaded(true);
     } finally {
-      setLoading(false);
+      if (tokenRef.current === fetchToken && dexRef.current === fetchDex) setLoading(false);
     }
-  }, [token, dex]);
+  }, [token, dex, cacheKey]);
 
   useEffect(() => {
     if (!active) return;
@@ -57,12 +110,16 @@ export function useTournament({ active = false, pollMs = 30000 } = {}) {
       setLoaded(false);
       return;
     }
-    setLoaded(false);
-    setMe(null);
+    const cached = readTournamentCache(cacheKey);
+    setLoaded(!!cached);
+    setMe(cached);
     refresh();
     const id = setInterval(refresh, pollMs);
-    return () => clearInterval(id);
-  }, [active, token, dex, pollMs, refresh]);
+    return () => {
+      clearInterval(id);
+      cancelTournamentRequest(requestRef);
+    };
+  }, [active, token, dex, pollMs, refresh, cacheKey]);
 
   const join = useCallback(async (tournamentId, options = {}) => {
     if (!token) return false;
@@ -77,9 +134,11 @@ export function useTournament({ active = false, pollMs = 30000 } = {}) {
     });
     let data = null;
     try { data = await res.json(); } catch {}
+    cancelTournamentRequest(requestRef);
+    deleteTournamentCache(cacheKey);
     await refresh();
     return { ok: res.ok, ...(data || {}) };
-  }, [token, refresh]);
+  }, [token, refresh, cacheKey]);
 
   const updateRewardWallet = useCallback(async (tournamentId, rewardWalletEvm, options = {}) => {
     if (!token) return { ok: false, error: 'not authenticated' };
@@ -94,9 +153,11 @@ export function useTournament({ active = false, pollMs = 30000 } = {}) {
     });
     let data = null;
     try { data = await res.json(); } catch {}
+    cancelTournamentRequest(requestRef);
+    deleteTournamentCache(cacheKey);
     await refresh();
     return { ok: res.ok, ...(data || {}) };
-  }, [token, refresh]);
+  }, [token, refresh, cacheKey]);
 
   const leave = useCallback(async (tournamentId) => {
     if (!token) return false;
@@ -105,9 +166,11 @@ export function useTournament({ active = false, pollMs = 30000 } = {}) {
       headers: { 'x-token': token },
     });
     const ok = res.ok;
+    cancelTournamentRequest(requestRef);
+    deleteTournamentCache(cacheKey);
     await refresh();
     return ok;
-  }, [token, refresh]);
+  }, [token, refresh, cacheKey]);
 
   return { me, loading, loaded, error, refresh, join, leave, updateRewardWallet };
 }
@@ -120,7 +183,9 @@ export function useLuckyRaider({ active = false, pollMs = 30000 } = {}) {
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState(null);
   const tokenRef = useRef(token);
+  const requestRef = useRef(null);
   tokenRef.current = token;
+  const cacheKey = `lucky:${player?.id || player?.player_id || 'session'}`;
 
   const refresh = useCallback(async () => {
     if (!token) return;
@@ -128,21 +193,21 @@ export function useLuckyRaider({ active = false, pollMs = 30000 } = {}) {
     setError(null);
     const fetchToken = token;
     try {
-      const res = await fetch('/api/tournaments/lucky-raider', {
+      const data = await fetchTournamentJson(requestRef, cacheKey, '/api/tournaments/lucky-raider', {
         headers: { 'x-token': fetchToken },
       });
-      if (!res.ok) throw new Error('failed to load lucky raider');
-      const data = await res.json();
       if (tokenRef.current !== fetchToken) return;
+      writeTournamentCache(cacheKey, data);
       setMe(data);
       setLoaded(true);
     } catch (e) {
+      if (tokenRef.current !== fetchToken) return;
       setError(e.message || 'error');
       setLoaded(true);
     } finally {
-      setLoading(false);
+      if (tokenRef.current === fetchToken) setLoading(false);
     }
-  }, [token]);
+  }, [token, cacheKey]);
 
   useEffect(() => {
     if (!active) return;
@@ -152,11 +217,16 @@ export function useLuckyRaider({ active = false, pollMs = 30000 } = {}) {
       setLoaded(false);
       return;
     }
-    setLoaded(false);
+    const cached = readTournamentCache(cacheKey);
+    setLoaded(!!cached);
+    setMe(cached);
     refresh();
     const id = setInterval(refresh, pollMs);
-    return () => clearInterval(id);
-  }, [active, token, pollMs, refresh]);
+    return () => {
+      clearInterval(id);
+      cancelTournamentRequest(requestRef);
+    };
+  }, [active, token, pollMs, refresh, cacheKey]);
 
   const updateRewardWallet = useCallback(async (tournamentId, rewardWalletEvm, options = {}) => {
     if (!token) return { ok: false, error: 'not authenticated' };
@@ -171,9 +241,11 @@ export function useLuckyRaider({ active = false, pollMs = 30000 } = {}) {
     });
     let data = null;
     try { data = await res.json(); } catch {}
+    cancelTournamentRequest(requestRef);
+    deleteTournamentCache(cacheKey);
     await refresh();
     return { ok: res.ok, ...(data || {}) };
-  }, [token, refresh]);
+  }, [token, refresh, cacheKey]);
 
   return { me, loading, loaded, error, refresh, updateRewardWallet };
 }
@@ -189,8 +261,11 @@ export function useTournamentLeaderboard(tournamentId, { active = false, pollMs 
   const [loading, setLoading] = useState(false);
   const idRef = useRef(tournamentId);
   const tokenRef = useRef(token);
+  const requestRef = useRef(null);
   idRef.current = tournamentId;
   tokenRef.current = token;
+  const viewerKey = player?.id || player?.player_id || 'public';
+  const cacheKey = `leaderboard:${tournamentId || ''}:${viewerKey}`;
 
   const refresh = useCallback(async () => {
     if (!tournamentId) return;
@@ -198,27 +273,31 @@ export function useTournamentLeaderboard(tournamentId, { active = false, pollMs 
     const fetchId = tournamentId;
     const fetchToken = token;
     try {
-      const res = await fetch(`/api/tournaments/${fetchId}/leaderboard?limit=50`, {
+      const data = await fetchTournamentJson(requestRef, cacheKey, `/api/tournaments/${fetchId}/leaderboard?limit=50`, {
         headers: fetchToken ? { 'x-token': fetchToken } : {},
       });
-      if (!res.ok) throw new Error('failed');
-      const data = await res.json();
       // Stale-response guard for tournament-id swaps.
       if (idRef.current !== fetchId || tokenRef.current !== fetchToken) return;
+      writeTournamentCache(cacheKey, data);
       setBoard(data);
     } catch {
       /* keep last-known board on transient failure */
     } finally {
-      setLoading(false);
+      if (idRef.current === fetchId && tokenRef.current === fetchToken) setLoading(false);
     }
-  }, [tournamentId, token]);
+  }, [tournamentId, token, cacheKey]);
 
   useEffect(() => {
     if (!active || !tournamentId) return;
+    const cached = readTournamentCache(cacheKey);
+    setBoard(cached);
     refresh();
     const id = setInterval(refresh, pollMs);
-    return () => clearInterval(id);
-  }, [active, tournamentId, pollMs, refresh]);
+    return () => {
+      clearInterval(id);
+      cancelTournamentRequest(requestRef);
+    };
+  }, [active, tournamentId, pollMs, refresh, cacheKey]);
 
   return { board, loading, refresh };
 }
@@ -230,8 +309,12 @@ export function useTournamentDailyPoints(tournamentId, { active = false, pollMs 
   const [loading, setLoading] = useState(false);
   const idRef = useRef(tournamentId);
   const tokenRef = useRef(token);
+  const requestRef = useRef(null);
   idRef.current = tournamentId;
   tokenRef.current = token;
+  const boundedLimit = Math.max(1, Math.min(60, Number(limit) || 7));
+  const viewerKey = player?.id || player?.player_id || 'public';
+  const cacheKey = `daily:${tournamentId || ''}:${boundedLimit}:${viewerKey}`;
 
   const refresh = useCallback(async () => {
     if (!tournamentId) return;
@@ -239,30 +322,30 @@ export function useTournamentDailyPoints(tournamentId, { active = false, pollMs 
     const fetchId = tournamentId;
     const fetchToken = token;
     try {
-      const res = await fetch(`/api/tournaments/${fetchId}/daily-points?limit=${Math.max(1, Math.min(60, Number(limit) || 7))}`, {
+      const data = await fetchTournamentJson(requestRef, cacheKey, `/api/tournaments/${fetchId}/daily-points?limit=${boundedLimit}`, {
         headers: fetchToken ? { 'x-token': fetchToken } : {},
       });
-      if (!res.ok) throw new Error('failed');
-      const data = await res.json();
       if (idRef.current !== fetchId || tokenRef.current !== fetchToken) return;
+      writeTournamentCache(cacheKey, data);
       setDaily(data);
     } catch {
       /* keep last-known daily stats on transient failure */
     } finally {
-      setLoading(false);
+      if (idRef.current === fetchId && tokenRef.current === fetchToken) setLoading(false);
     }
-  }, [tournamentId, token, limit]);
+  }, [tournamentId, token, boundedLimit, cacheKey]);
 
   useEffect(() => {
     if (!active || !tournamentId) return;
+    const cached = readTournamentCache(cacheKey);
+    setDaily(cached);
     refresh();
     const id = setInterval(refresh, pollMs);
-    return () => clearInterval(id);
-  }, [active, tournamentId, pollMs, refresh]);
-
-  useEffect(() => {
-    setDaily(null);
-  }, [tournamentId]);
+    return () => {
+      clearInterval(id);
+      cancelTournamentRequest(requestRef);
+    };
+  }, [active, tournamentId, pollMs, refresh, cacheKey]);
 
   useEffect(() => {
     if (!active || tournamentId) return;
@@ -286,8 +369,10 @@ export function useTournamentHistory({ active = false } = {}) {
   const [loading, setLoading] = useState(false);
   const tokenRef = useRef(token);
   const dexRef = useRef(dex);
+  const requestRef = useRef(null);
   tokenRef.current = token;
   dexRef.current = dex;
+  const cacheKey = `history:${player?.id || player?.player_id || 'session'}:${dex || ''}`;
 
   const refresh = useCallback(async () => {
     if (!token) return;
@@ -295,25 +380,26 @@ export function useTournamentHistory({ active = false } = {}) {
     const fetchToken = token;
     const fetchDex = dex;
     try {
-      const res = await fetch(`/api/tournaments/history?limit=20&dex=${encodeURIComponent(fetchDex || '')}`, {
+      const data = await fetchTournamentJson(requestRef, cacheKey, `/api/tournaments/history?limit=20&dex=${encodeURIComponent(fetchDex || '')}`, {
         headers: { 'x-token': fetchToken },
       });
-      if (!res.ok) throw new Error('failed');
-      const data = await res.json();
       if (tokenRef.current !== fetchToken || dexRef.current !== fetchDex) return;
+      writeTournamentCache(cacheKey, data);
       setItems(data.tournaments || []);
     } catch {
       /* keep last-known list on transient failure */
     } finally {
-      setLoading(false);
+      if (tokenRef.current === fetchToken && dexRef.current === fetchDex) setLoading(false);
     }
-  }, [token, dex]);
+  }, [token, dex, cacheKey]);
 
   useEffect(() => {
     if (!active || !token) return;
-    setItems(null);
+    const cached = readTournamentCache(cacheKey);
+    setItems(cached?.tournaments || null);
     refresh();
-  }, [active, token, dex, refresh]);
+    return () => cancelTournamentRequest(requestRef);
+  }, [active, token, dex, refresh, cacheKey]);
 
   return { items, loading, refresh };
 }

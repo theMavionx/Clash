@@ -15,6 +15,7 @@ const tasks = require('./tasks');
 const elfa = require('./elfa');
 const diag = require('./diag');
 const earnings = require('./earnings');
+const exchangeBalanceMetrics = require('./exchange_balance_metrics');
 const {
   MAX_SHIPS,
   MAX_TROOPS,
@@ -9673,6 +9674,31 @@ router.post('/players/set-dex', auth, (req, res) => {
   res.json({ success: true, dex });
 });
 
+// Store the most recent account equity already observed by the authenticated
+// trading UI or MM-bot portfolio. This deliberately does not poll exchange
+// APIs: clients reuse their normalized account reads, preventing this admin
+// metric from consuming provider rate limits. Timestamps are server-owned so
+// a client cannot make stale balances look current.
+router.post('/exchange-balances/snapshot', auth, (req, res) => {
+  try {
+    const snapshots = Array.isArray(req.body?.snapshots)
+      ? req.body.snapshots
+      : (req.body?.snapshot || req.body);
+    const result = exchangeBalanceMetrics.recordExchangeBalanceSnapshots(
+      db.db,
+      req.player.id,
+      snapshots,
+    );
+    if (!result.stored) {
+      return res.status(400).json({ error: 'No supported exchange balance snapshots' });
+    }
+    res.json({ ok: true, ...result });
+  } catch (e) {
+    console.warn('[exchange-balances] snapshot failed:', e.message);
+    res.status(500).json({ error: 'Failed to store exchange balance snapshot' });
+  }
+});
+
 function normalizeSeekerText(value, max = 128) {
   if (value === null || value === undefined) return '';
   return String(value).trim().replace(/[\x00-\x1F\x7F]/g, '').slice(0, max);
@@ -11651,8 +11677,22 @@ router.post('/players/dex-accounts/:dex/select', auth, (req, res) => {
       requested_dex: dex,
     });
   }
-  const state = db.getFullPlayerState(req.player.id);
-  res.json({ ok: true, dex, switched_account: false, token: req.player.token, player: state });
+  // Same-player DEX selection only changes the active venue. Returning the
+  // full game state here used to repair/read every building, ship, troop,
+  // entitlement and referral before the picker could close. The client
+  // already owns that state, so send the narrow patch it actually needs.
+  res.json({
+    ok: true,
+    dex,
+    switched_account: false,
+    token: req.player.token,
+    player: {
+      id: req.player.id,
+      name: req.player.name,
+      wallet: req.player.wallet || null,
+      dex,
+    },
+  });
 });
 
 router.post('/players/dex-accounts/:dex/link', auth, (req, res) => {
@@ -23278,8 +23318,8 @@ function syncFuturesTournamentRows(playerId, dex, opts = {}) {
       endAt,
       state,
       creditedTradeIds,
-      pageSize: process.env.TOURNAMENT_TRADE_SYNC_PAGE_SIZE || 500,
-      maxRows: process.env.TOURNAMENT_TRADE_SYNC_MAX_ROWS || 10_000,
+      pageSize: opts.pageSize || process.env.TOURNAMENT_TRADE_SYNC_PAGE_SIZE || 500,
+      maxRows: opts.maxRows || process.env.TOURNAMENT_TRADE_SYNC_MAX_ROWS || 10_000,
       fallbackOverlapRows: process.env.TOURNAMENT_TRADE_SYNC_FALLBACK_OVERLAP || 100,
     });
     let tournamentRows = incremental.rows;
@@ -23470,6 +23510,138 @@ function syncFuturesTournamentParticipants(tournament, opts = {}) {
   return summary;
 }
 
+// Public tournament reads must never synchronously scan every participant's
+// futures history. The old request path could process 500 participants with
+// up to 10k fills each inside one long transaction, blocking Node's event
+// loop long enough for Cloudflare to return 524. This cooperative runner
+// processes bounded cursor pages and yields between every participant/DEX.
+const tournamentCooperativeSyncJobs = new Map();
+const tournamentCooperativeSyncStartedAt = new Map();
+
+function tournamentEventLoopYield() {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
+function syncFuturesTournamentParticipantsCooperatively(tournament, opts = {}) {
+  const t = tournament && typeof tournament === 'object'
+    ? tournament
+    : db.db.prepare('SELECT * FROM tournaments WHERE id = ?').get(parseInt(tournament, 10));
+  if (!t?.id) return Promise.resolve({ ok: true, skipped: true });
+  if (t.paused_at) return Promise.resolve({ ok: true, skipped: 'paused' });
+  if (opts.liveOnly !== false && tournamentPhase(t) !== 'live') {
+    return Promise.resolve({ ok: true, skipped: 'not_live' });
+  }
+
+  const cacheKey = `${t.id}:cooperative`;
+  const activeJob = tournamentCooperativeSyncJobs.get(cacheKey);
+  if (activeJob) return activeJob;
+  const nowMs = Date.now();
+  const cooldownMs = Math.max(5000, Number(process.env.TOURNAMENT_GLOBAL_SYNC_COOLDOWN_MS || 45000));
+  const previousStartedAt = tournamentCooperativeSyncStartedAt.get(cacheKey) || 0;
+  if (!opts.force && nowMs - previousStartedAt < cooldownMs) {
+    return Promise.resolve({ ok: true, skipped: 'cooldown' });
+  }
+  tournamentCooperativeSyncStartedAt.set(cacheKey, nowMs);
+
+  const limit = Math.max(1, Math.min(1000, Number(opts.limit || process.env.TOURNAMENT_GLOBAL_SYNC_LIMIT || 500)));
+  const maxRows = Math.max(50, Math.min(2000, Number(opts.maxRows || process.env.TOURNAMENT_BACKGROUND_SYNC_MAX_ROWS || 500)));
+  const pageSize = Math.max(25, Math.min(maxRows, Number(opts.pageSize || process.env.TOURNAMENT_BACKGROUND_SYNC_PAGE_SIZE || 250)));
+  let trackedJob;
+  const startedAt = Date.now();
+  const task = (async () => {
+    // Always let the originating HTTP request finish before the first futures
+    // DB read, even when this job was queued from a public endpoint.
+    await tournamentEventLoopYield();
+    const participants = db.db.prepare(`
+      SELECT tp.player_id, tp.team_dex, p.dex AS player_dex
+      FROM tournament_participants tp
+      JOIN players p ON p.id = tp.player_id
+      WHERE tp.tournament_id = ? AND tp.left_at IS NULL
+      ORDER BY tp.last_activity_at DESC, tp.joined_at DESC
+      LIMIT ?
+    `).all(t.id, limit);
+    const summary = {
+      ok: true,
+      tournament_id: t.id,
+      players: participants.length,
+      rows: 0,
+      inserted: 0,
+      updated: 0,
+      dex_updated: 0,
+      pnl_delta_usd: 0,
+      activity_events: 0,
+      failed: 0,
+      skipped: 0,
+      by_dex: {},
+      mode: 'cooperative',
+      max_step_ms: 0,
+    };
+    for (const participant of participants) {
+      const syncDexes = tournamentParticipantSyncDexes(t, participant);
+      if (!syncDexes.length) {
+        summary.skipped++;
+        continue;
+      }
+      for (const syncDex of syncDexes) {
+        await tournamentEventLoopYield();
+        const stepStartedAt = Date.now();
+        if (!summary.by_dex[syncDex]) {
+          summary.by_dex[syncDex] = { players: 0, rows: 0, inserted: 0, updated: 0, dex_updated: 0, pnl_delta_usd: 0, activity_events: 0, failed: 0 };
+        }
+        summary.by_dex[syncDex].players++;
+        const result = syncFuturesTournamentRows(participant.player_id, syncDex, {
+          tournamentId: t.id,
+          maxRows,
+          pageSize,
+        });
+        summary.max_step_ms = Math.max(summary.max_step_ms, Date.now() - stepStartedAt);
+        if (!result?.ok) {
+          summary.failed++;
+          summary.by_dex[syncDex].failed++;
+          continue;
+        }
+        const rows = Number(result.rows || 0);
+        const inserted = Number(result.main?.inserted || result.main?.credited_rows || 0);
+        const updated = Number(result.main?.updated_rows || 0);
+        const dexUpdated = Number(result.main?.dex_updated_rows || 0);
+        const pnlDelta = Number(result.main?.pnl_delta_usd || 0);
+        const activityEvents = Number(result.main?.activity_events || result.main?.credited_rows || 0);
+        summary.rows += rows;
+        summary.inserted += inserted;
+        summary.updated += updated;
+        summary.dex_updated += dexUpdated;
+        summary.pnl_delta_usd += pnlDelta;
+        summary.activity_events += activityEvents;
+        summary.by_dex[syncDex].rows += rows;
+        summary.by_dex[syncDex].inserted += inserted;
+        summary.by_dex[syncDex].updated += updated;
+        summary.by_dex[syncDex].dex_updated += dexUpdated;
+        summary.by_dex[syncDex].pnl_delta_usd += pnlDelta;
+        summary.by_dex[syncDex].activity_events += activityEvents;
+      }
+    }
+    summary.ok = summary.failed === 0;
+    summary.duration_ms = Date.now() - startedAt;
+    if (summary.inserted || summary.updated || summary.dex_updated || summary.failed || summary.duration_ms >= 1000) {
+      console.log('[tournament-sync] cooperative', JSON.stringify(summary));
+    }
+    return summary;
+  })();
+  trackedJob = task.finally(() => {
+    if (tournamentCooperativeSyncJobs.get(cacheKey) === trackedJob) {
+      tournamentCooperativeSyncJobs.delete(cacheKey);
+    }
+  });
+  tournamentCooperativeSyncJobs.set(cacheKey, trackedJob);
+  return trackedJob;
+}
+
+function queueFuturesTournamentParticipantSync(tournament, opts = {}) {
+  syncFuturesTournamentParticipantsCooperatively(tournament, opts).catch((err) => {
+    console.warn(`[tournament-sync] background tournament=${tournament?.id || tournament}:`, err?.message || err);
+  });
+}
+
 // List all live tournaments visible to players (active, not yet ended).
 // We show every DEX's tournaments — the client filters/sorts by the
 // player's own DEX. Admin gets full list (incl. drafts) via the admin
@@ -23604,16 +23776,7 @@ router.get('/tournaments/lucky-raider', auth, (req, res) => {
     me = ensureLuckyRaiderParticipant(t, req.player);
   }
   if (me && me.left_at === null && tournamentPhase(t) === 'live' && isTournamentForDex(t, req.player.dex)) {
-    const sync = syncFuturesTournamentRowsForParticipant(req.player.id, t, {
-      player_dex: req.player.dex,
-      team_dex: me.team_dex,
-    }, { tournamentId: t.id });
-    if (sync?.ok && Number(sync.main?.credited_rows || sync.main?.inserted || 0) > 0) {
-      me = db.db.prepare(`
-        SELECT * FROM tournament_participants
-        WHERE tournament_id = ? AND player_id = ?
-      `).get(t.id, req.player.id);
-    }
+    queueFuturesTournamentParticipantSync(t);
   }
   const pub = tournamentRowToPublic(t);
   const rewardSchedule = tournamentRewardScheduleState(t, req.player.id);
@@ -23700,13 +23863,7 @@ router.get('/tournaments/me', auth, (req, res) => {
     WHERE tournament_id = ? AND player_id = ?
   `).get(t.id, req.player.id);
   if (me && me.left_at === null && pub.phase === 'live') {
-    const sync = syncFuturesTournamentRows(req.player.id, dex, { tournamentId: t.id });
-    if (sync?.ok && ((sync.main?.credited_rows || 0) > 0 || (sync.pnl?.credited_rows || 0) > 0)) {
-      me = db.db.prepare(`
-        SELECT * FROM tournament_participants
-        WHERE tournament_id = ? AND player_id = ?
-      `).get(t.id, req.player.id);
-    }
+    queueFuturesTournamentParticipantSync(t);
   }
   let comboMeScore = null;
   if (me && (isTournamentPointsSort(t.sort_by) || tournamentUsesDailyPool(t))) {
@@ -23915,11 +24072,9 @@ router.post('/tournaments/:id/join', auth, (req, res) => {
         last_activity_at = datetime('now')
     `).run(tid, req.player.id, teamDex, rewardWallet, twitter.handle);
   }
-  const sync = phase === 'live'
-    ? syncFuturesTournamentRows(req.player.id, req.player.dex, { tournamentId: tid })
-    : null;
+  if (phase === 'live') queueFuturesTournamentParticipantSync(t);
   console.log(`[tournament ${tid} join] player=${req.player.name} (${req.player.dex}) phase=${phase} -> JOINED ${t.name}`);
-  res.json({ ok: true, joined: true, phase, sync: sync ? { ok: !!sync.ok } : null });
+  res.json({ ok: true, joined: true, phase, sync: phase === 'live' ? { queued: true } : null });
 });
 
 // Add or repair the CLASH payout address for an already-registered player.
@@ -24459,23 +24614,13 @@ router.get('/tournaments/:id/daily-points', (req, res) => {
   if (!tournamentUsesDailyPool(t)) {
     return res.json({ tournament: tournamentRowToPublic(t), my_player_id: null, days: [] });
   }
-  try { syncFuturesTournamentParticipants(t); } catch {}
+  queueFuturesTournamentParticipantSync(t);
 
   let viewer = null;
   const token = req.headers['x-token'];
   if (typeof token === 'string' && token.length > 10) {
     try { viewer = db.authenticatePlayer(token); } catch {}
   }
-  if (viewer && tournamentPhase(t) === 'live' && isTournamentForDex(t, viewer.dex)) {
-    const participant = db.db.prepare(`
-      SELECT left_at FROM tournament_participants
-      WHERE tournament_id = ? AND player_id = ?
-    `).get(tid, viewer.id);
-    if (participant && participant.left_at === null) {
-      try { syncFuturesTournamentRows(viewer.id, viewer.dex, { tournamentId: tid }); } catch {}
-    }
-  }
-
   const totalVolumeUsd = tournamentTotalVolumeUsd(tid);
   const limit = Math.max(1, Math.min(60, parseInt(req.query.limit, 10) || 7));
   const excludedPauseDays = db.getTournamentExcludedDailyPoolDays(t);
@@ -24495,20 +24640,11 @@ router.get('/tournaments/:id/leaderboard', (req, res) => {
   if (!Number.isFinite(tid)) return res.status(400).json({ error: 'invalid id' });
   const t = db.db.prepare('SELECT * FROM tournaments WHERE id = ?').get(tid);
   if (!t) return res.status(404).json({ error: 'tournament not found' });
-  try { syncFuturesTournamentParticipants(t); } catch {}
+  queueFuturesTournamentParticipantSync(t);
   let viewer = null;
   const token = req.headers['x-token'];
   if (typeof token === 'string' && token.length > 10) {
     try { viewer = db.authenticatePlayer(token); } catch {}
-  }
-  if (viewer && tournamentPhase(t) === 'live' && isTournamentForDex(t, viewer.dex)) {
-    const participant = db.db.prepare(`
-      SELECT left_at FROM tournament_participants
-      WHERE tournament_id = ? AND player_id = ?
-    `).get(tid, viewer.id);
-    if (participant && participant.left_at === null) {
-      try { syncFuturesTournamentRows(viewer.id, viewer.dex, { tournamentId: tid }); } catch {}
-    }
   }
   // Whitelist sort columns to defend against future schema drift.
   const sortBy = normalizeTournamentSort(t.sort_by);
@@ -25643,7 +25779,11 @@ router.get('/admin/tournaments/:id/daily-points', adminAuth, (req, res) => {
   if (!Number.isFinite(tid)) return res.status(400).json({ error: 'invalid id' });
   const t = db.db.prepare('SELECT * FROM tournaments WHERE id = ?').get(tid);
   if (!t) return res.status(404).json({ error: 'tournament not found' });
-  try { syncFuturesTournamentParticipants(t, { force: String(req.query.sync || '') === '1' }); } catch {}
+  if (String(req.query.sync || '') === '1') {
+    try { syncFuturesTournamentParticipants(t, { force: true }); } catch {}
+  } else {
+    queueFuturesTournamentParticipantSync(t);
+  }
   const limit = Math.max(1, Math.min(60, parseInt(req.query.limit, 10) || 14));
   try {
     const firstDay = tournamentDailyPoolFirstDay(t);
@@ -25822,8 +25962,9 @@ router.delete('/admin/tournaments/:id', adminAuth, (req, res) => {
 });
 
 let tournamentDailyPoolTimer = null;
+let tournamentDailyPoolSweepRunning = false;
 
-function syncTournamentAwardInputs() {
+async function syncTournamentAwardInputs() {
   const rows = db.db.prepare(`
     SELECT *
       FROM tournaments
@@ -25840,7 +25981,7 @@ function syncTournamentAwardInputs() {
     try { usesLucky = !!normalizeTournamentRewardConfig(t.reward_config || {}).lucky_daily_raider.enabled; } catch {}
     if (!tournamentUsesDailyPool(t) && !usesLucky) continue;
     try {
-      const summary = syncFuturesTournamentParticipants(t);
+      const summary = await syncFuturesTournamentParticipantsCooperatively(t);
       const skippedReason = typeof summary?.skipped === 'string' ? summary.skipped : null;
       if (summary && !skippedReason && (summary.rows || summary.inserted || summary.failed)) {
         summaries.push(summary);
@@ -25853,8 +25994,10 @@ function syncTournamentAwardInputs() {
 }
 
 async function runTournamentDailyPoolSweep(label = 'timer') {
+  if (tournamentDailyPoolSweepRunning) return;
+  tournamentDailyPoolSweepRunning = true;
   try {
-    const syncSummaries = syncTournamentAwardInputs();
+    const syncSummaries = await syncTournamentAwardInputs();
     const result = db.awardPendingTournamentDailyPools({
       maxDays: Math.max(1, Math.min(60, Number(process.env.TOURNAMENT_DAILY_POOL_MAX_DAYS || 14))),
     });
@@ -25864,6 +26007,8 @@ async function runTournamentDailyPoolSweep(label = 'timer') {
     await luckyRaiderPayouts.runLuckyRaiderPayoutSweep(`daily-pool:${label}`);
   } catch (err) {
     console.warn('[tournament daily-pool] sweep failed:', err?.message || err);
+  } finally {
+    tournamentDailyPoolSweepRunning = false;
   }
 }
 
@@ -26451,6 +26596,21 @@ router.get('/admin/earnings', adminAuth, async (req, res) => {
     res.json(data);
   } catch (e) {
     console.warn('[earnings] aggregate failed:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Latest client-observed exchange balances. Values are operational telemetry,
+// not reward or accounting inputs; every row includes its observation time so
+// admins can distinguish current balances from stale ones.
+router.get('/admin/exchange-balances', adminAuth, (req, res) => {
+  try {
+    res.json(exchangeBalanceMetrics.readExchangeBalanceMetrics(db.db, {
+      days: req.query.days,
+      limit: req.query.limit,
+    }));
+  } catch (e) {
+    console.warn('[exchange-balances] metrics failed:', e.message);
     res.status(500).json({ error: e.message });
   }
 });

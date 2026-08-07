@@ -88,6 +88,10 @@ backups/
 # stay out of commits.
 tools/flash/
 
+# Owner-only Phoenix Digger copy trader. The entire folder is local because it
+# contains a hot-wallet environment file and runtime trade state.
+/phoenix-copy-trader/
+
 # Aptos CLI binary downloaded locally for Move publishing (~130MB)
 tools/aptos-cli/
 

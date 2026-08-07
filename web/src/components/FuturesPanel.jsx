@@ -47,6 +47,7 @@ import { GOLD_REWARD_PANEL_TOAST_STYLE } from './goldRewardToastStyles';
 import { openSolanaWallet } from '../lib/solanaWalletUi';
 import { setClientActivity } from '../lib/updateCoordinator';
 import { reportClientEvent } from '../lib/clientLogger';
+import { reportExchangeBalanceSnapshots } from '../lib/exchangeBalanceTelemetry';
 import { resolveOrderDisplayMetrics } from '../lib/orderDisplayMetrics';
 import {
   calculateFeeAwarePositionPnl,
@@ -4366,6 +4367,31 @@ function FuturesPanel() {
   // equity while still returning available margin, so keep the header total
   // internally consistent until the complete snapshot arrives.
   const headerAccountValue = Math.max(pacAccountValue, pacBalance);
+  useEffect(() => {
+    const hasObservedAccount = Boolean(walletAddr) && !loading && (
+      accountReady === true
+      || (dataReady && account && typeof account === 'object')
+      || (dataReady && walletUsdc != null && Number.isFinite(Number(walletUsdc)))
+    );
+    if (!hasObservedAccount) return;
+    reportExchangeBalanceSnapshots({
+      dex,
+      balance_usd: headerAccountValue,
+      available_usd: pacBalance,
+      wallet_address: walletAddr,
+      source: 'trading_ui',
+    });
+  }, [
+    dex,
+    headerAccountValue,
+    pacBalance,
+    walletAddr,
+    walletUsdc,
+    account,
+    accountReady,
+    dataReady,
+    loading,
+  ]);
   const currentMarket = useMemo(() => markets.find(m => m.symbol === symbol || marketDisplaySymbol(m) === symbol), [markets, symbol]);
   const currentMarginDetail = marginModeDetails?.[symbol] || currentMarket?.margin_capabilities || {};
   const currentMarginModes = Array.isArray(currentMarket?.margin_modes)

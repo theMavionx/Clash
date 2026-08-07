@@ -3209,3 +3209,21 @@ Follow-up:
   with cooldown instead of repeated 500 polling, and remove confirmed Godot
   warmup material-lifecycle and Fire Dragon VFX-pool warning sources. Verify
   the server, web build, Godot project and production release before handoff.
+
+## UR-2026-08-07-PHOENIX-DIGGER-LOCAL-COPY-TRADER
+
+- Timestamp: 2026-08-07 17:08 (Europe/Kyiv)
+- Request: "це взагалі окремо від проекта просто папку створи і всю її в гітігнор додай просто код торгівлі з проекта візьми на фенікс щоб швидше було"; use Digger authority `2A2CqUYm1w4i9o25ap5bTZDSSW4kRx5nNpUykSxDcVoe`, let the owner place a private key in a local `.env`, automatically copy Digger's Phoenix trades with the owner's fixed margin, and preserve the Clash Flight builder code.
+- Scope: create a completely gitignored local `phoenix-copy-trader/` runtime, reuse the project's Rise/Flight market-order path and builder authority, persist fill idempotency locally, default to dry-run, and verify without submitting a live transaction.
+- Follow-up: "для рпс юзай алчемі з апі ключем нашим" — use the existing project Alchemy Solana key for copy-trader RPC traffic without copying or logging the secret.
+- Follow-up: "зроби щоб там була сід фраза а не приватник" — replace raw private-key configuration with a BIP-39 mnemonic, standard Solana derivation path, and optional expected-wallet verification; never log or copy the mnemonic.
+- Follow-up: "я поставив в енв сід фразу тестуй маржу використовуй як в нього у відсотковому співвідношені просто" — verify the configured mnemonic wallet through a signed no-send simulation and replace fixed-dollar sizing with proportional collateral scaling against Digger.
+- Follow-up: "не тест а відразу запускай" — the owner explicitly authorized live execution. Confirm Digger has no active Phoenix position before launch, keep the existing proportional-collateral sizing and safety ceilings, switch the local ignored runtime to live mode, and start the watcher without replaying historical fills.
+- Follow-up: "перевір щоб бот то все правильно враховував і додавав теж" — validate consecutive Digger position additions, reductions, reversals, and closes against the full public history; require every confirmed copy order to fill the complete calculated delta so partial/zero fills cannot corrupt the optimistic follower-position state; restart the live watcher with the verified version.
+- Follow-up: "перевір щоб в еквіваленті % до його маржи відкривав угоди" — verify live sizing preserves Digger's position-notional-to-collateral percentage using current leader and follower collateral, with unavoidable market lot rounding always applied downward so follower exposure does not exceed the proportional target.
+
+## UR-2026-08-08-DEX-TOURNAMENT-LATENCY-DEPLOY
+
+- Timestamp: 2026-08-08 00:00 (Europe/Kyiv)
+- Request: "купа багів знайшов при зміні бірди вона змінюється не моментально часто це займає якийсь час до цього це було моментально. також дані по турніру часто дуже довго грузять теж"; follow-up: "Failed to load resource: the server responded with a status of 524 ()"; deploy approval: "виправ то все діло і коміт пуш деплой на прод".
+- Scope: make in-game DEX selection immediate and race-safe, remove full-state hydration from same-player venue switches, move global tournament trade synchronization out of public HTTP request paths into bounded cooperative background work, prevent overlapping award sweeps and client polls, add short-lived player-scoped tournament caching and timeouts, verify locally under concurrent requests and in the browser, then commit and push `main`, deploy through the canonical production workflow, and verify the live release across a full scheduler interval.
