@@ -53,6 +53,7 @@ func _ready() -> void:
 	JavaScriptBridge.get_interface("window").set("_godotFpsVisibilityCb", visibility_cb)
 	JavaScriptBridge.eval("""
 		(function() {
+			window.dispatchEvent(new CustomEvent('clash-godot-bridge-ready'));
 			if (window.__clashFpsVisibilityHandler) {
 				document.removeEventListener('visibilitychange', window.__clashFpsVisibilityHandler);
 			}

@@ -38,6 +38,7 @@ const SKIN_TEXTURE_PATH: String = "res://Model/Characters/FireDragon/Textures/fi
 
 var animation_player: AnimationPlayer = null
 static var _shared_skin_texture: Texture2D = null
+static var _shared_body_material: StandardMaterial3D = null
 
 
 func _ready() -> void:
@@ -68,13 +69,16 @@ func play_dragon_animation(animation_name: String) -> void:
 	var old_model := get_node_or_null("Model")
 	if old_model:
 		remove_child(old_model)
-		old_model.free()
+		old_model.queue_free()
 
 	var animated_model := (res as PackedScene).instantiate()
 	animated_model.name = "Model"
+	# Imported animation scenes can briefly expose null surface materials.
+	# Assign the final skin while the model is still off-tree so the renderer
+	# never observes a mesh before its material RID exists.
+	_assign_material_recursive(animated_model, _make_body_material())
 	add_child(animated_model)
 	move_child(animated_model, 0)
-	_apply_skin()
 
 	animation_player = _find_animation_player(animated_model)
 	if animation_player:
@@ -82,11 +86,16 @@ func play_dragon_animation(animation_name: String) -> void:
 
 
 func _apply_skin() -> void:
-	var body_material := StandardMaterial3D.new()
-	body_material.albedo_texture = _get_skin_texture()
-	body_material.roughness = 0.8
-	body_material.cull_mode = BaseMaterial3D.CULL_DISABLED
-	_assign_material_recursive(self, body_material)
+	_assign_material_recursive(self, _make_body_material())
+
+
+func _make_body_material() -> StandardMaterial3D:
+	if _shared_body_material == null:
+		_shared_body_material = StandardMaterial3D.new()
+		_shared_body_material.albedo_texture = _get_skin_texture()
+		_shared_body_material.roughness = 0.8
+		_shared_body_material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	return _shared_body_material
 
 
 func _get_skin_texture() -> Texture2D:

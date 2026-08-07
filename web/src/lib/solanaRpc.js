@@ -411,7 +411,7 @@ function jsonRpcMethodNames(body) {
 
 function logSolanaRpcFallback(fromUrl, toUrl, detail = {}) {
   if (!toUrl || typeof console === 'undefined') return;
-  console.warn('[Solana RPC fallback] retrying', {
+  console.info('[Solana RPC fallback] retrying', {
     from: solanaRpcHost(fromUrl),
     to: solanaRpcHost(toUrl),
     ...detail,
@@ -465,12 +465,21 @@ async function solanaRpcFallbackFetch(urls, _input, init = {}) {
 }
 
 export function solanaRpcFallbackUrls(preferredUrl = '', urls = SOLANA_RPC_URLS) {
-  return [
+  const candidates = uniqueSolanaRpcUrls([
     preferredUrl,
     ...(urls || []),
-    SAME_ORIGIN_SOLANA_RPC_URL,
     SAME_ORIGIN_SOLANA_ALCHEMY_URL,
-  ].filter((url, index, list) => url && list.indexOf(url) === index);
+    SAME_ORIGIN_SOLANA_RPC_URL,
+  ]);
+  const alchemy = candidates.filter(url => sameOriginSolanaRpcPath(url) === '/rpc/solana-alchemy');
+  const helius = candidates.filter(url => (
+    sameOriginSolanaRpcPath(url) === '/rpc/solana' || isHeliusSolanaRpcUrl(url)
+  ));
+  const preferred = candidates.filter(url => !alchemy.includes(url) && !helius.includes(url));
+  // Keep explicit healthy endpoints first, then the paid Alchemy proxy, and
+  // use quota-limited Helius only as the final provider. This also repairs
+  // callers that still pass `/rpc/solana` as their preferred legacy URL.
+  return uniqueSolanaRpcUrls([...preferred, ...alchemy, ...helius]);
 }
 
 export function createSolanaFallbackConnection(ConnectionCtor, urls = SOLANA_RPC_URLS, commitmentOrConfig = 'confirmed') {

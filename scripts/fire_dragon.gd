@@ -78,7 +78,6 @@ var _flight_time: float = 0.0
 var _hit_this_swing: bool = false
 var _breath_vfx_pool: Array = []
 var _breath_vfx_pool_ready: bool = false
-var _breath_vfx_pool_exhausted_warned: bool = false
 var _cached_fire_skeleton: Skeleton3D = null
 var _cached_fire_head_bone_idx: int = -2
 var player_troop_levels: Dictionary = {}
@@ -431,6 +430,7 @@ func _make_fire_breath_vfx_slot(root_parent: Node) -> Dictionary:
 		"cleanup_tween": null,
 		"light_tween": null,
 		"active": false,
+		"activated_at_ms": 0,
 	}
 	_return_fire_breath_vfx_slot(slot)
 	return slot
@@ -439,19 +439,30 @@ func _make_fire_breath_vfx_slot(root_parent: Node) -> Dictionary:
 func _get_fire_breath_vfx_slot(root_parent: Node) -> Dictionary:
 	if not _breath_vfx_pool_ready:
 		_build_fire_breath_vfx_pool()
+	var oldest_active_slot: Dictionary = {}
+	var oldest_activation_ms: int = 9223372036854775807
 	for slot in _breath_vfx_pool:
-		if slot is Dictionary and not bool(slot.get("active", false)):
-			var holder := slot.get("holder") as Node3D
-			if is_instance_valid(holder) and root_parent != null and holder.get_parent() != root_parent:
+		if not (slot is Dictionary):
+			continue
+		var holder := slot.get("holder") as Node3D
+		if not is_instance_valid(holder):
+			continue
+		if not bool(slot.get("active", false)):
+			if root_parent != null and holder.get_parent() != root_parent:
 				var old_parent := holder.get_parent()
 				if old_parent != null:
 					old_parent.remove_child(holder)
 				root_parent.add_child(holder)
-			_breath_vfx_pool_exhausted_warned = false
 			return slot
-	if not _breath_vfx_pool_exhausted_warned:
-		_breath_vfx_pool_exhausted_warned = true
-		push_warning("FireDragon: breath VFX pool exhausted (POOL_SIZE=%d); expanding one slot." % FIRE_BREATH_POOL_SIZE)
+		var activated_at_ms := int(slot.get("activated_at_ms", 0))
+		if activated_at_ms < oldest_activation_ms:
+			oldest_activation_ms = activated_at_ms
+			oldest_active_slot = slot
+	# Replay acceleration can request a new visual before all four previous
+	# particle bursts finish. Recycle the oldest visual instead of allocating
+	# unbounded particle nodes or emitting a warning on every fast replay.
+	if not oldest_active_slot.is_empty():
+		return oldest_active_slot
 	if root_parent != null:
 		var slot := _make_fire_breath_vfx_slot(root_parent)
 		_breath_vfx_pool.append(slot)
@@ -465,6 +476,7 @@ func _activate_fire_breath_vfx_slot(slot: Dictionary, holder_name: String, mouth
 		return
 	_kill_fire_breath_slot_tweens(slot)
 	slot["active"] = true
+	slot["activated_at_ms"] = Time.get_ticks_msec()
 	holder.name = holder_name
 	holder.visible = true
 	_configure_flame_particle_entry(slot.get("flame") as Dictionary, mouth_pos, dir, side, normal, length, beam_width)
@@ -703,6 +715,7 @@ func _return_fire_breath_vfx_slot(slot: Dictionary) -> void:
 		if is_instance_valid(light):
 			light.light_energy = 0.0
 	slot["active"] = false
+	slot["activated_at_ms"] = 0
 
 
 func _kill_fire_breath_slot_tweens(slot: Dictionary) -> void:

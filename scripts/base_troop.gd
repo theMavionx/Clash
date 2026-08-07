@@ -3285,16 +3285,17 @@ static func _emit_web_render_diagnostic(payload: Dictionary) -> void:
 (function(){
   try {
     var payload = %s;
+	var level = Number(payload.mesh_count || 0) > 0 && Number(payload.visible_mesh_count || 0) === 0 ? 'warn' : 'info';
     if (window.__clashReportClientEvent) {
 	  window.__clashReportClientEvent('godot.render_diagnostic', payload, {
 		source: 'godot.render',
-		level: 'warn',
-        flush: true
+		level: level,
+		flush: level === 'warn'
       });
     } else {
-	  console.warn('[godot.render_diagnostic]', payload);
+	  (level === 'warn' ? console.warn : console.info)('[godot.render_diagnostic]', payload);
       if (window.__clashLogBreadcrumb) {
-		window.__clashLogBreadcrumb('godot.render_diagnostic', payload, 'warn');
+		window.__clashLogBreadcrumb('godot.render_diagnostic', payload, level);
       }
     }
   } catch (e) {

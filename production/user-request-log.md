@@ -3196,3 +3196,16 @@ Follow-up:
   browser fallback plus a price-only market-open reference fallback, add
   regression tests, then commit, push, deploy, and verify production without
   submitting a trade.
+
+## UR-2026-08-07-CLIENT-OPERATIONS-RELIABILITY
+
+- Timestamp: 2026-08-07 14:24 (Europe/Kyiv)
+- Request: audit recent production client logs and AI analysis, then "виправляй все".
+- Scope: restore daily operational reports when OpenRouter is unavailable,
+  count the complete reporting window instead of capped evidence samples,
+  reduce duplicate/expected browser noise without hiding actionable errors,
+  make Solana RPC routing fail over between Alchemy and Helius on 429/5xx,
+  represent Bulk closed-beta account reads as an explicit unavailable state
+  with cooldown instead of repeated 500 polling, and remove confirmed Godot
+  warmup material-lifecycle and Fire Dragon VFX-pool warning sources. Verify
+  the server, web build, Godot project and production release before handoff.

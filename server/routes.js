@@ -9173,6 +9173,26 @@ function normalizeStoredClientLog(row) {
   if (message.includes('/api/nft/demon-king/sync failed: signal is aborted')) {
     return { ...row, level: 'debug', source: 'fetch.aborted' };
   }
+  if (/AudioContext was not allowed to start|user didn't interact with the document first/i.test(message)) {
+    return null;
+  }
+  if (message.includes('[godot] bridge not ready for action ui_overlay')) {
+    return { ...row, level: 'debug', source: 'godot.startup' };
+  }
+  if (message.includes('/api/futures/decibel/signer -> 401')) {
+    return { ...row, level: 'debug', source: 'fetch.expected_http_status' };
+  }
+  if (/\/api\/(?:v1\/exchanges|v1\/bot\/exchanges|futures)\/flash\/balance.*-> 404/.test(message)) {
+    return { ...row, level: 'debug', source: 'fetch.expected_http_status' };
+  }
+  if (/\/api\/futures\/bulk\/(?:account|builder-status).*-> 409/.test(message)) {
+    return { ...row, level: 'debug', source: 'fetch.expected_http_status' };
+  }
+  if (message.includes('godot.render_diagnostic')
+    && !message.includes('zero_visible')
+    && /meshes\s+\d+\/\d+/.test(message)) {
+    return { ...row, level: 'info', source: 'godot.render.healthy' };
+  }
   return row;
 }
 

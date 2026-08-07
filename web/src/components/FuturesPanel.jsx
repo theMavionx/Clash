@@ -3700,7 +3700,7 @@ function FuturesPanel() {
     // subaccountAddr lets the gate distinguish "fresh user" (no
     // subaccount yet) from "returning user" (subaccount on-chain but
     // delegation missing — usually after rejecting the delegate step).
-    activationStep, isReady, setupVerified, subaccountAddr, gasSponsored, apiWalletAddr, inviteStatus, builderConfig, hotstuffSetupStatus,
+    activationStep, isReady, setupVerified, serviceAvailability, subaccountAddr, gasSponsored, apiWalletAddr, inviteStatus, builderConfig, hotstuffSetupStatus,
     bridgeDepositSourceChainId, setBridgeDepositSourceChainId, bridgeDepositSources,
     lighterNeedsIntegratorApproval, lighterNeedsReferral, lighterReferralChecking, lighterReferralStatus,
     lighterCredentials, detectAccount: detectLighterAccount,
@@ -6651,7 +6651,8 @@ function FuturesPanel() {
 
   // ==================== BULK BUILDER APPROVAL GATE ====================
   if (dex === 'bulk' && hasWallet && setupVerified !== true) {
-    const isChecking = setupVerified === null || loading;
+    const bulkUnavailable = serviceAvailability?.available === false;
+    const isChecking = !bulkUnavailable && (setupVerified === null || loading);
     const isRunning = Boolean(activationStep);
     return (
       <>
@@ -6670,10 +6671,12 @@ function FuturesPanel() {
               <img src={DEX_CONFIG.bulk.logo} alt="Bulk" style={{width: 98, height: 98, objectFit: 'contain'}} />
             </div>
             <div style={{color: '#5C3A21', fontSize: 21, fontWeight: 900, textAlign: 'center'}}>
-              {isChecking ? 'Checking your Bulk account' : 'Approve Clash builder routing'}
+              {bulkUnavailable ? 'Bulk closed beta' : isChecking ? 'Checking your Bulk account' : 'Approve Clash builder routing'}
             </div>
             <div style={{color: '#8a7252', fontSize: 13, fontWeight: 650, textAlign: 'center', maxWidth: 390, lineHeight: 1.5}}>
-              Bulk requires a one-time signed approval for the Clash builder address. Every later market or limit order is independently signed by this wallet and includes the same builder routing.
+              {bulkUnavailable
+                ? (serviceAvailability?.message || 'Bulk account trading is not available during the closed beta. You can still join through the Clash referral below.')
+                : 'Bulk requires a one-time signed approval for the Clash builder address. Every later market or limit order is independently signed by this wallet and includes the same builder routing.'}
             </div>
             {error && !isChecking && (
               <div style={{color: '#991B1B', background: '#FEE2E2', border: '2px solid #FCA5A5', borderRadius: 10, padding: '10px 14px', fontSize: 12, fontWeight: 750, maxWidth: 410}}>
@@ -6681,14 +6684,14 @@ function FuturesPanel() {
               </div>
             )}
             <button
-              disabled={isChecking || isRunning}
-              style={{...cartoonBtn(isChecking || isRunning ? '#A8A29E' : '#383832', isChecking || isRunning ? '#78716C' : '#11110F'), padding: '14px 30px', minWidth: 250}}
+              disabled={bulkUnavailable || isChecking || isRunning}
+              style={{...cartoonBtn(bulkUnavailable || isChecking || isRunning ? '#A8A29E' : '#383832', bulkUnavailable || isChecking || isRunning ? '#78716C' : '#11110F'), padding: '14px 30px', minWidth: 250}}
               onClick={async () => {
                 const result = await registerBuilderCode?.();
                 if (result?.error) setLocalAlert(result.error);
               }}
             >
-              {isChecking ? 'CHECKING…' : isRunning ? 'SIGNING…' : 'APPROVE BUILDER & CONTINUE'}
+              {bulkUnavailable ? 'TRADING OPENS AFTER BETA' : isChecking ? 'CHECKING…' : isRunning ? 'SIGNING…' : 'APPROVE BUILDER & CONTINUE'}
             </button>
             <button
               style={{...cartoonBtn('#EAB308', '#A16207'), padding: '11px 24px'}}

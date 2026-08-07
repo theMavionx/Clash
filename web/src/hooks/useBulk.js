@@ -10,6 +10,8 @@ const FUTURES_API = import.meta.env.VITE_FUTURES_API || '/api/futures';
 const PRIVY_ENABLED = !!import.meta.env.VITE_PRIVY_APP_ID;
 const BULK_REFERRAL_URL = 'https://early.bulk.trade/deposit?ref=clashofperps';
 const POLL_MS = 15_000;
+const UNLINKED_RETRY_MS = 60_000;
+const CLOSED_BETA_RETRY_MS = 5 * 60_000;
 
 function tokenFor(player) {
   return player?.token || (typeof window !== 'undefined' ? window._playerToken : '') || '';
@@ -75,7 +77,9 @@ export function useBulk() {
   const [error, setError] = useState('');
   const [dataReady, setDataReady] = useState(false);
   const [goldEarned, setGoldEarned] = useState(null);
+  const [serviceAvailability, setServiceAvailability] = useState({ available: true, closedBeta: false, message: '' });
   const actionRef = useRef(null);
+  const accountRetryAtRef = useRef(0);
 
   const api = useCallback(async (path, options = {}) => {
     const response = await fetch(`${FUTURES_API}${path}`, {
@@ -166,13 +170,33 @@ export function useBulk() {
       setSetupVerified(walletAddr ? null : false);
       return;
     }
+    if (Date.now() < accountRetryAtRef.current) return;
     try {
       const [snapshot, builder] = await Promise.all([
         api(`/bulk/account?account=${encodeURIComponent(walletAddr)}`),
         api(`/bulk/builder-status?account=${encodeURIComponent(walletAddr)}`),
       ]);
+      if (snapshot?.available === false || builder?.available === false) {
+        const unavailable = snapshot?.available === false ? snapshot : builder;
+        const retryAfterMs = Math.max(CLOSED_BETA_RETRY_MS, Number(unavailable?.retry_after_ms || 0));
+        accountRetryAtRef.current = Date.now() + retryAfterMs;
+        setServiceAvailability({
+          available: false,
+          closedBeta: unavailable?.closed_beta === true,
+          message: unavailable?.message || 'Bulk account data is temporarily unavailable.',
+          retryAfterMs,
+        });
+        setAccount(prev => prev || { balance: 0, account_equity: 0, available_to_spend: 0, free_margin: 0 });
+        setPositions([]);
+        setOrders([]);
+        setSetupVerified(null);
+        setError('');
+        return;
+      }
       applyAccount(snapshot);
       setSetupVerified(builder?.approved === true);
+      setServiceAvailability({ available: true, closedBeta: false, message: '' });
+      accountRetryAtRef.current = 0;
       setError('');
     } catch (cause) {
       // A closed-beta wallet with no Bulk account may return 500 until its
@@ -180,10 +204,20 @@ export function useBulk() {
       setAccount(prev => prev || { balance: 0, account_equity: 0, available_to_spend: 0, free_margin: 0 });
       setPositions([]);
       setOrders([]);
-      setSetupVerified(false);
-      setError(cause?.message || 'Bulk account is not available yet');
+      const unavailable = Number(cause?.status || 0) >= 500;
+      accountRetryAtRef.current = Date.now() + (unavailable ? CLOSED_BETA_RETRY_MS : UNLINKED_RETRY_MS);
+      setSetupVerified(unavailable ? null : false);
+      setServiceAvailability(unavailable
+        ? { available: false, closedBeta: true, message: 'Bulk account data is not available during the closed beta.' }
+        : { available: true, closedBeta: false, message: '' });
+      setError(cause?.status === 409 || unavailable ? '' : (cause?.message || 'Bulk account is not available yet'));
     }
   }, [active, walletAddr, token, api, applyAccount]);
+
+  useEffect(() => {
+    accountRetryAtRef.current = 0;
+    setServiceAvailability({ available: true, closedBeta: false, message: '' });
+  }, [active, walletAddr]);
 
   useEffect(() => {
     if (!active) return;
@@ -202,8 +236,12 @@ export function useBulk() {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-token': token },
       body: JSON.stringify({ wallet: walletAddr, walletSource: solWallet?.wallet?.adapter?.name || 'solana-wallet' }),
+    }).then((response) => {
+      if (!response.ok) return;
+      accountRetryAtRef.current = 0;
+      refreshAccount().catch(() => {});
     }).catch(() => {});
-  }, [active, token, walletAddr, solWallet?.wallet?.adapter?.name]);
+  }, [active, token, walletAddr, solWallet?.wallet?.adapter?.name, refreshAccount]);
 
   const masterSign = useCallback(async (message) => {
     if (adapterAddress && typeof solWallet.signMessage === 'function') {
@@ -390,7 +428,9 @@ export function useBulk() {
   const clearError = useCallback(() => setError(''), []);
   const clearGoldEarned = useCallback(() => setGoldEarned(null), []);
   const walletUsdc = null;
-  const setupStatus = setupVerified === true ? 'ready' : setupVerified === false ? 'needs_builder' : 'checking';
+  const setupStatus = serviceAvailability.available === false
+    ? 'unavailable'
+    : setupVerified === true ? 'ready' : setupVerified === false ? 'needs_builder' : 'checking';
 
   return useMemo(() => ({
     connected: Boolean(walletAddr),
@@ -409,6 +449,7 @@ export function useBulk() {
     accountReady: Boolean(account),
     setupVerified,
     setupStatus,
+    serviceAvailability,
     activationStep,
     isReady: setupVerified === true,
     builderConfig: config ? { address: config.builder_address, fee_bps: config.builder_fee_bps } : null,
@@ -437,7 +478,7 @@ export function useBulk() {
     disconnect,
   }), [
     walletAddr, account, positions, orders, prices, markets, leverageSettings, loading, error,
-    dataReady, setupVerified, setupStatus, activationStep, config, goldEarned, clearError,
+    dataReady, setupVerified, setupStatus, serviceAvailability, activationStep, config, goldEarned, clearError,
     clearGoldEarned, refreshPublic, refreshAccount, importFills, placeMarketOrder, placeLimitOrder,
     cancelOrder, closePosition, setLeverage, setTpsl, activate, openReferralJoin, disconnect,
   ]);

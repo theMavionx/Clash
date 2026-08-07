@@ -25,6 +25,8 @@ function shallowEqualObject(a, b) {
 }
 
 const REPLAY_TELEMETRY_ENABLED = false;
+const QUEUEABLE_BRIDGE_ACTIONS = new Set(['ui_overlay', 'set_sound_enabled']);
+const PENDING_BRIDGE_ACTIONS = new Map();
 
 function isNftBackedTroopName(name) {
   const normalized = String(name || '').trim().toLowerCase().replace(/[_\s-]/g, '');
@@ -557,11 +559,28 @@ export function GodotProvider({ children }) {
       if (window._playerToken === tutorialTokenRef.current) window._playerToken = null;
       if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
     };
+  }, [flushReplayTelemetryQueue]);
+
+  useEffect(() => {
+    const flushPendingBridgeActions = () => {
+      if (!window.godotBridge) return;
+      for (const [action, data] of PENDING_BRIDGE_ACTIONS) {
+        window.godotBridge(JSON.stringify({ action, data }));
+      }
+      PENDING_BRIDGE_ACTIONS.clear();
+    };
+    window.addEventListener('clash-godot-bridge-ready', flushPendingBridgeActions);
+    flushPendingBridgeActions();
+    return () => window.removeEventListener('clash-godot-bridge-ready', flushPendingBridgeActions);
   }, []);
 
   const sendToGodot = useCallback((action, data = {}) => {
     if (window.godotBridge) {
       window.godotBridge(JSON.stringify({ action, data }));
+      return true;
+    }
+    if (QUEUEABLE_BRIDGE_ACTIONS.has(action)) {
+      PENDING_BRIDGE_ACTIONS.set(action, data);
       return true;
     }
     console.warn('[godot] bridge not ready for action', action);

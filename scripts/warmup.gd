@@ -814,7 +814,14 @@ func _finish_warmup_node() -> void:
 		finished.emit()
 	set_process(false)
 	if _warmup_host_viewport != null and is_instance_valid(_warmup_host_viewport):
-		_warmup_host_viewport.call_deferred("queue_free")
+		# Stop submitting draw work before releasing imported meshes/materials.
+		# Compatibility/WebGL can otherwise process a queued draw after the
+		# warmup viewport has freed its material RID (`material is null`).
+		_warmup_host_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
+		await get_tree().process_frame
+		await get_tree().process_frame
+		if is_instance_valid(_warmup_host_viewport):
+			_warmup_host_viewport.queue_free()
 	else:
 		queue_free()
 
@@ -2611,11 +2618,17 @@ func _find_named_node(node: Node, target_name: String) -> Node:
 
 
 func _clear_runtime_warmup_nodes() -> void:
-	for node in _runtime_warmup_nodes:
-		if is_instance_valid(node):
-			node.queue_free()
+	var pending_free := _runtime_warmup_nodes.duplicate()
 	_runtime_warmup_nodes.clear()
 	_animation_sample_jobs.clear()
+	for node in pending_free:
+		if is_instance_valid(node):
+			if node is Node3D:
+				node.visible = false
+	await get_tree().process_frame
+	for node in pending_free:
+		if is_instance_valid(node):
+			node.queue_free()
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────

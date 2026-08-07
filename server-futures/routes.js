@@ -5254,20 +5254,34 @@ router.get('/bulk/candles', async (req, res) => {
 
 router.get('/bulk/account', auth, async (req, res) => {
   if (!requireBulkDex(req, res)) return;
+  let account = '';
   try {
-    const account = bulkLinkedWallet(req, req.query.account || req.query.address || req.query.wallet);
+    account = bulkLinkedWallet(req, req.query.account || req.query.address || req.query.wallet);
     res.json(await bulk.getAccount(account));
   } catch (e) {
+    if (bulk.isReadUnavailableError(e)) {
+      const unavailable = bulk.unavailableReadState('account', account, e);
+      res.set('Cache-Control', 'private, max-age=30');
+      res.set('Retry-After', String(Math.ceil(unavailable.retry_after_ms / 1000)));
+      return res.json(unavailable);
+    }
     res.status(e.status || 502).json({ error: 'Failed to load Bulk account', detail: e.message });
   }
 });
 
 router.get('/bulk/builder-status', auth, async (req, res) => {
   if (!requireBulkDex(req, res)) return;
+  let account = '';
   try {
-    const account = bulkLinkedWallet(req, req.query.account || req.query.address || req.query.wallet);
+    account = bulkLinkedWallet(req, req.query.account || req.query.address || req.query.wallet);
     res.json(await bulk.getBuilderStatus(account));
   } catch (e) {
+    if (bulk.isReadUnavailableError(e)) {
+      const unavailable = bulk.unavailableReadState('builder_status', account, e);
+      res.set('Cache-Control', 'private, max-age=30');
+      res.set('Retry-After', String(Math.ceil(unavailable.retry_after_ms / 1000)));
+      return res.json(unavailable);
+    }
     res.status(e.status || 502).json({ error: 'Failed to verify Bulk builder approval', detail: e.message });
   }
 });

@@ -14,6 +14,8 @@ const BULK_REFERRAL_URL = String(
   process.env.BULK_REFERRAL_URL || 'https://early.bulk.trade/deposit?ref=clashofperps',
 ).trim();
 const BULK_TIMEOUT_MS = Math.max(1_000, Math.min(20_000, Number(process.env.BULK_TIMEOUT_MS || 8_000)));
+const BULK_CLOSED_BETA = !/^(0|false|no)$/i.test(String(process.env.BULK_CLOSED_BETA || '1').trim());
+const BULK_UNAVAILABLE_RETRY_MS = Math.max(30_000, Number(process.env.BULK_UNAVAILABLE_RETRY_MS || 5 * 60_000));
 const SOLANA_ADDRESS_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const MARKET_CACHE_MS = Math.max(30_000, Number(process.env.BULK_MARKET_CACHE_MS || 5 * 60_000));
 const PRICE_CACHE_MS = Math.max(1_000, Number(process.env.BULK_PRICE_CACHE_MS || 5_000));
@@ -33,6 +35,30 @@ function isSolanaAddress(value) {
   const text = String(value || '').trim();
   if (!SOLANA_ADDRESS_RE.test(text)) return false;
   try { return Buffer.from(bs58.decode(text)).length === 32; } catch { return false; }
+}
+
+function isReadUnavailableError(cause) {
+  const status = Number(cause?.status || 0);
+  return BULK_CLOSED_BETA && (status >= 500 || status === 408 || status === 429);
+}
+
+function unavailableReadState(kind, account, cause) {
+  return {
+    available: false,
+    closed_beta: BULK_CLOSED_BETA,
+    service: 'bulk',
+    resource: kind,
+    account: account || null,
+    retry_after_ms: BULK_UNAVAILABLE_RETRY_MS,
+    message: 'Bulk account data is not available during the closed beta.',
+    upstream_status: Number(cause?.status || 0) || null,
+    ...(kind === 'builder_status' ? {
+      approved: false,
+      approval: null,
+      builder_address: BULK_BUILDER_ADDRESS,
+      builder_fee_bps: BULK_BUILDER_FEE_BPS,
+    } : {}),
+  };
 }
 
 function parseMaybeJson(value) {
@@ -494,6 +520,8 @@ function config() {
     builder_fee_bps: BULK_BUILDER_FEE_BPS,
     sdk_version: '0.1.2',
     self_custody: true,
+    closed_beta: BULK_CLOSED_BETA,
+    unavailable_retry_ms: BULK_UNAVAILABLE_RETRY_MS,
   };
 }
 
@@ -518,6 +546,7 @@ module.exports = {
   getPrices,
   getTicker,
   importFillsForPlayer,
+  isReadUnavailableError,
   isSolanaAddress,
   normalizeSymbol,
   prepareTransaction,
@@ -525,5 +554,6 @@ module.exports = {
   responseRejection,
   responseStatuses,
   submitTransaction,
+  unavailableReadState,
   verifyTransaction,
 };

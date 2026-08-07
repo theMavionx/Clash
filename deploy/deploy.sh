@@ -1466,9 +1466,26 @@ server {
     }
 
     location = /rpc/solana-alchemy {
+        proxy_intercept_errors on;
+        error_page 429 500 502 503 504 = @solana_helius_fallback;
         proxy_pass https://solana-mainnet.g.alchemy.com/v2/__SOLANA_ALCHEMY_API_KEY__;
         proxy_http_version 1.1;
         proxy_set_header Host solana-mainnet.g.alchemy.com;
+        proxy_set_header Origin "";
+        proxy_set_header Referer "";
+        proxy_ssl_server_name on;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header Accept-Encoding "";
+        gzip off;
+    }
+
+    location @solana_helius_fallback {
+        proxy_pass __SOLANA_RPC_PROXY_PASS__;
+        proxy_method POST;
+        proxy_pass_request_body on;
+        proxy_http_version 1.1;
+        proxy_set_header Host __SOLANA_RPC_HOST__;
         proxy_set_header Origin "";
         proxy_set_header Referer "";
         proxy_ssl_server_name on;
@@ -1508,9 +1525,26 @@ server {
     }
 
     location = /rpc/solana {
+        proxy_intercept_errors on;
+        error_page 429 500 502 503 504 = @solana_alchemy_fallback;
         proxy_pass __SOLANA_RPC_PROXY_PASS__;
         proxy_http_version 1.1;
         proxy_set_header Host __SOLANA_RPC_HOST__;
+        proxy_set_header Origin "";
+        proxy_set_header Referer "";
+        proxy_ssl_server_name on;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header Accept-Encoding "";
+        gzip off;
+    }
+
+    location @solana_alchemy_fallback {
+        proxy_pass https://solana-mainnet.g.alchemy.com/v2/__SOLANA_ALCHEMY_API_KEY__;
+        proxy_method POST;
+        proxy_pass_request_body on;
+        proxy_http_version 1.1;
+        proxy_set_header Host solana-mainnet.g.alchemy.com;
         proxy_set_header Origin "";
         proxy_set_header Referer "";
         proxy_ssl_server_name on;

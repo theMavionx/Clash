@@ -17,6 +17,7 @@ const ACTION_STEP_MAX = 12;
 const ACTION_RECENT_MAX = 18;
 const ACTION_CONTEXT_MAX_AGE_MS = 30 * 60_000;
 const FETCH_RECOVERY_WINDOW_MS = 10 * 60_000;
+const EVENT_DEDUPE_WINDOW_MS = 30_000;
 const REDACT_KEY_RE = /(token|secret|private|password|authorization|signature|signedmessage|signed_message|x-token|cookie)/i;
 const IMPORTANT_BREADCRUMB_RE = /(Phoenix|phoenix|solana|wallet|rpc|transaction|fetch)/i;
 const NOISY_LOG_RE = /^\[load\] stage(1 download|2 signal)/;
@@ -24,6 +25,7 @@ const NOISY_SERVER_RE = /^(WalletConnect Core is already initialized|Backpack co
 const EXTENSION_ERROR_RE = /(chrome-extension:\/\/|moz-extension:\/\/|safari-web-extension:\/\/|Cannot redefine property: ethereum|Invalid property descriptor|tpweb3_|tronlinkParams|Backpack was unable to override window\.ethereum|Attempting to use a disconnected port object)/i;
 const NOISY_CLIENT_EVENT_RE = /^(page-load: iframe=|SDK imported, calling ready\(\)|ready\(\) done)/;
 const CHUNK_ERROR_RE = /(Failed to fetch dynamically imported module|Importing a module script failed|Loading chunk \d+ failed|ChunkLoadError|dynamically imported module)/i;
+const EXPECTED_BROWSER_NOISE_RE = /(AudioContext was not allowed to start|The AudioContext was not allowed to start|user didn't interact with the document first)/i;
 
 let installed = false;
 let flushing = false;
@@ -35,6 +37,7 @@ const recentAt = [];
 const breadcrumbs = [];
 const trackedActions = new Map();
 const fetchFailures = new Map();
+const recentEventAt = new Map();
 const original = {};
 const runtimeContext = {
   session_id: null,
@@ -562,11 +565,25 @@ function shouldStoreEvent(event) {
   if (NOISY_SERVER_RE.test(event.message)) return false;
   if (NOISY_CLIENT_EVENT_RE.test(event.message)) return false;
   if (EXTENSION_ERROR_RE.test(event.message) || EXTENSION_ERROR_RE.test(event.stack || '')) return false;
+  if (EXPECTED_BROWSER_NOISE_RE.test(event.message)) return false;
   return true;
+}
+
+function isDuplicateEvent(event, now = Date.now()) {
+  const key = `${event?.level || ''}|${event?.source || ''}|${event?.message || ''}`;
+  const previous = recentEventAt.get(key) || 0;
+  recentEventAt.set(key, now);
+  if (recentEventAt.size > 400) {
+    for (const [signature, at] of recentEventAt) {
+      if (at < now - EVENT_DEDUPE_WINDOW_MS) recentEventAt.delete(signature);
+    }
+  }
+  return previous > 0 && now - previous < EVENT_DEDUPE_WINDOW_MS;
 }
 
 function enqueue(event) {
   if (!shouldStoreEvent(event)) return;
+  if (isDuplicateEvent(event)) return;
   if (!nowMinuteOk()) return;
   queue.push(event);
   if (queue.length > MAX_QUEUE) queue.splice(0, queue.length - MAX_QUEUE);
@@ -670,6 +687,9 @@ function shouldStoreFetchFailure(path, status) {
   if (status === 400 && /^\/api\/find-enemy(?:\?|$)/.test(path || '')) return false;
   if (status === 400 && /^\/api\/ai-chat\/status(?:\?|$)/.test(path || '')) return false;
   if (status === 404 && /^\/api\/players\/login-wallet(?:\?|$)/.test(path || '')) return false;
+  if (status === 401 && /^\/api\/futures\/decibel\/signer(?:\?|$)/.test(path || '')) return false;
+  if (status === 404 && /^\/api\/(?:v1\/exchanges|v1\/bot\/exchanges|futures)\/flash\/balance(?:\?|$)/.test(path || '')) return false;
+  if (status === 409 && /^\/api\/futures\/bulk\/(?:account|builder-status)(?:\?|$)/.test(path || '')) return false;
   if (status === 429 && /^\/api\/troop-died(?:\?|$)/.test(path || '')) return false;
   if (/\/funding\/overview\?perMarketLimit=2/.test(path || '')) return false;
   return true;

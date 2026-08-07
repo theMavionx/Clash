@@ -64,6 +64,15 @@ function run() {
     /side must be bid or ask/,
   );
 
+  const betaError = Object.assign(new Error('Bulk API 500: HTTP 500'), { status: 500 });
+  assert.equal(bulk.isReadUnavailableError(betaError), true);
+  const unavailable = bulk.unavailableReadState('builder_status', account, betaError);
+  assert.equal(unavailable.available, false);
+  assert.equal(unavailable.closed_beta, true);
+  assert.equal(unavailable.approved, false);
+  assert.equal(unavailable.builder_address, bulk.BULK_BUILDER_ADDRESS);
+  assert.ok(unavailable.retry_after_ms >= 30_000);
+
   console.log('Bulk adapter signing and builder-routing tests passed');
 }
 

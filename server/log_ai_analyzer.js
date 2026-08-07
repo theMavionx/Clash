@@ -9,6 +9,8 @@ const DEFAULT_LOG_LIMIT = 450;
 const MAX_FILE_LOG_BYTES = 80_000;
 const MAX_EVIDENCE_CHARS = 75_000;
 const REPORT_SCHEMA_VERSION = 'clash-admin-log-ai-v1';
+const LOCAL_ANALYZER_MODEL = 'local/incident-cluster-v1';
+const DEFAULT_MODEL_MAX_TOKENS = 3000;
 
 let schedulerTimer = null;
 let runningPromise = null;
@@ -52,10 +54,17 @@ function getOpenRouterKey() {
 }
 
 function getModel() {
-  return process.env.CLASH_LOG_AI_MODEL
-    || resolveModelChain(process.env)[0]
-    || process.env.CLASH_HERMES_PRIMARY_MODEL
-    || 'openai/gpt-oss-120b';
+  return getModels()[0];
+}
+
+function getModels() {
+  const explicit = String(process.env.CLASH_LOG_AI_MODEL || '').trim();
+  const resolved = explicit ? [explicit] : resolveModelChain(process.env);
+  return Array.from(new Set([
+    ...resolved,
+    process.env.CLASH_HERMES_PRIMARY_MODEL,
+    'openai/gpt-oss-120b',
+  ].map((value) => String(value || '').trim()).filter(Boolean)));
 }
 
 function collectRows(windowStart, windowEnd, limit = DEFAULT_LOG_LIMIT) {
@@ -244,6 +253,203 @@ function sourceCounts(sources, fileLogs) {
   };
 }
 
+function scalarCount(sql, args) {
+  return Number(db.db.prepare(sql).get(...args)?.count || 0);
+}
+
+function collectSourceCounts(windowStart, windowEnd, fileLogs = []) {
+  const args = [windowStart, windowEnd];
+  const counts = {
+    client_errors: 0,
+    client_warnings: 0,
+    hermes_failures: 0,
+    mcp_failures: 0,
+    replay_telemetry: 0,
+    feedback_problems: 0,
+    file_logs: fileLogs.reduce((sum, item) => sum + item.lines.length, 0),
+  };
+  if (tableExists('client_logs')) {
+    counts.client_errors = scalarCount(`
+      SELECT COUNT(*) AS count FROM client_logs
+      WHERE created_at >= ? AND created_at < ?
+        AND lower(level) IN ('error', 'onerror', 'unhandledrejection')
+    `, args);
+    counts.client_warnings = scalarCount(`
+      SELECT COUNT(*) AS count FROM client_logs
+      WHERE created_at >= ? AND created_at < ? AND lower(level) = 'warn'
+    `, args);
+  }
+  if (tableExists('hermes_chat_events')) {
+    counts.hermes_failures = scalarCount(`
+      SELECT COUNT(*) AS count FROM hermes_chat_events
+      WHERE created_at >= ? AND created_at < ?
+        AND (lower(status) NOT IN ('ok', 'success') OR error IS NOT NULL)
+    `, args);
+  }
+  if (tableExists('mcp_events')) {
+    counts.mcp_failures = scalarCount(`
+      SELECT COUNT(*) AS count FROM mcp_events
+      WHERE created_at >= ? AND created_at < ?
+        AND (lower(status) NOT IN ('ok', 'success') OR error IS NOT NULL)
+    `, args);
+  }
+  if (tableExists('replay_telemetry')) {
+    counts.replay_telemetry = scalarCount(`
+      SELECT COUNT(*) AS count FROM replay_telemetry
+      WHERE created_at >= ? AND created_at < ?
+    `, args);
+  }
+  if (tableExists('user_feedback')) {
+    counts.feedback_problems = scalarCount(`
+      SELECT COUNT(*) AS count FROM user_feedback
+      WHERE created_at >= ? AND created_at < ? AND lower(kind) = 'problem'
+    `, args);
+  }
+  return counts;
+}
+
+function normalizedIncidentSignature(row) {
+  return String(row?.message || row?.error || row?.status || 'unknown failure')
+    .replace(/0x[a-f0-9]{16,}/gi, '0x…')
+    .replace(/[1-9A-HJ-NP-Za-km-z]{32,44}/g, '<wallet>')
+    .replace(/\b\d{4,}\b/g, '<n>')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 220);
+}
+
+function classifyLocalIncident(signature, level = 'error') {
+  const text = String(signature || '').toLowerCase();
+  if (/audio.*not allowed|bridge not ready|auto_connecting|signal is aborted/.test(text)) {
+    return { severity: 'noise', area: 'client', action: 'Keep classified as transient startup/browser noise.' };
+  }
+  if (/work\.(wasm|pck)|lazy\.chunk|runtimeerror: unreachable/.test(text)) {
+    return { severity: 'high', area: 'client', action: 'Verify immutable export assets, CDN/cache headers, and the current release smoke test.' };
+  }
+  if (/price feed unavailable|unauthorized|builder.*mismatch|failed to (place|close|withdraw)|liquidat/.test(text)) {
+    return { severity: 'high', area: 'trading', action: 'Reproduce the affected exchange request and validate its upstream response and fallback path.' };
+  }
+  if (/\b429\b|too many requests|rate limit|\b500\b|timed out|failed to fetch|material.*null|pool exhausted/.test(text)) {
+    return { severity: 'medium', area: /rpc|trade|price|bulk|dex/.test(text) ? 'trading' : 'client', action: 'Inspect the endpoint/component named by the signature and verify retry, cooldown, and fallback behavior.' };
+  }
+  if (String(level).toLowerCase() === 'warn') {
+    return { severity: 'low', area: 'client', action: 'Monitor recurrence and promote only if it becomes player-facing.' };
+  }
+  return { severity: 'medium', area: 'unknown', action: 'Reproduce with the evidence id and add a narrower diagnostic around the failing operation.' };
+}
+
+function buildLocalIncidentReport({ windowStart, windowEnd, sources, counts, providerError = '' }) {
+  const grouped = new Map();
+  for (const sourceName of ['client_errors', 'client_warnings', 'hermes_failures', 'mcp_failures']) {
+    for (const row of sources[sourceName] || []) {
+      const signature = normalizedIncidentSignature(row);
+      if (!signature) continue;
+      const key = `${sourceName}:${signature}`;
+      const current = grouped.get(key) || {
+        signature,
+        sourceName,
+        level: row.level || (sourceName.includes('warning') ? 'warn' : 'error'),
+        count: 0,
+        evidenceIds: [],
+      };
+      current.count += 1;
+      if (current.evidenceIds.length < 8 && row.id != null) {
+        const table = sourceName.startsWith('client_') ? 'client_logs'
+          : sourceName === 'hermes_failures' ? 'hermes_chat_events'
+            : 'mcp_events';
+        current.evidenceIds.push(`${table}:${row.id}`);
+      }
+      grouped.set(key, current);
+    }
+  }
+  const top = Array.from(grouped.values())
+    .map((item) => ({ ...item, classification: classifyLocalIncident(item.signature, item.level) }))
+    .sort((a, b) => {
+      const rank = { critical: 5, high: 4, medium: 3, low: 2, noise: 1 };
+      return (rank[b.classification.severity] - rank[a.classification.severity]) || (b.count - a.count);
+    })
+    .slice(0, 10);
+  const severityCounts = { critical: 0, high: 0, medium: 0, low: 0, noise: 0 };
+  for (const item of top) severityCounts[item.classification.severity] += 1;
+  const weighted = severityCounts.critical * 25 + severityCounts.high * 14 + severityCounts.medium * 7 + severityCounts.low * 2;
+  const healthScore = Math.max(0, Math.min(100, 100 - weighted));
+  const topIncidents = top.map((item) => ({
+    title: `${item.signature}${item.count > 1 ? ` (${item.count} sampled)` : ''}`,
+    severity: item.classification.severity,
+    sources: [item.sourceName],
+    evidence_ids: item.evidenceIds,
+    affected_area: item.classification.area,
+    root_cause_confidence: 'unknown',
+    summary: `Observed ${item.count} matching row(s) in the bounded evidence sample. Full-window totals are reported separately.`,
+    recommended_action: item.classification.action,
+  }));
+  const providerNote = providerError
+    ? `OpenRouter analysis was unavailable (${trimText(providerError, 300)}). This deterministic report keeps the daily operational window usable.`
+    : 'This deterministic report was requested without an external model.';
+  const reportJson = {
+    schema: REPORT_SCHEMA_VERSION,
+    health_score: healthScore,
+    severity_counts: severityCounts,
+    top_incidents: topIncidents,
+    watchlist: [
+      'client error and warning totals by source/message signature',
+      'HTTP 401/429/5xx rates for trading and Solana RPC endpoints',
+      'Godot export asset-load and renderer errors after each release',
+      'Hermes and MCP failure counts',
+    ],
+    missing_evidence: providerError ? ['External model synthesis unavailable; local clustering was used.'] : [],
+    analyzer: { mode: 'local_fallback', provider_error: providerError || null },
+  };
+  const incidentLines = topIncidents.length
+    ? topIncidents.map((item) => `- **${item.severity.toUpperCase()}** ${item.title}`).join('\n')
+    : '- No sampled error clusters were found in this window.';
+  const markdown = [
+    '# Clash Daily Operations Report',
+    '',
+    '## 1. Executive Summary',
+    '',
+    `${providerNote} Health score: **${healthScore}/100**.`,
+    '',
+    '## 2. Severity Breakdown',
+    '',
+    `Critical ${severityCounts.critical}; high ${severityCounts.high}; medium ${severityCounts.medium}; low ${severityCounts.low}; noise ${severityCounts.noise}.`,
+    '',
+    '## 3. Incident Clusters',
+    '',
+    incidentLines,
+    '',
+    '## 4. AI/Hermes/MCP Health',
+    '',
+    `Hermes failures: ${counts.hermes_failures}; MCP failures: ${counts.mcp_failures}.`,
+    '',
+    '## 5. Client/Game Health',
+    '',
+    `Client errors: ${counts.client_errors}; client warnings: ${counts.client_warnings}; replay rows: ${counts.replay_telemetry}.`,
+    '',
+    '## 6. Trading/NFT/Bridge Risk',
+    '',
+    'Review high-severity trading signatures above; no financial result is inferred without matching server or on-chain evidence.',
+    '',
+    '## 7. Noise and Expected Failures',
+    '',
+    'Browser autoplay, startup bridge readiness, aborted navigation requests, and wallet auto-connect events are treated as noise unless paired with a user-facing failure.',
+    '',
+    '## 8. Recommended Fix Queue',
+    '',
+    topIncidents.filter((item) => item.severity !== 'noise').slice(0, 6)
+      .map((item, index) => `${index + 1}. ${item.recommended_action}`).join('\n') || '1. Continue monitoring.',
+    '',
+    '## 9. Queries and Watchlist',
+    '',
+    `Window: ${windowStart} to ${windowEnd} UTC. Use the evidence ids above to inspect exact rows.`,
+    '',
+    '```json',
+    JSON.stringify(reportJson, null, 2),
+    '```',
+  ].join('\n');
+  return { markdown, jsonReport: reportJson };
+}
+
 function buildAnalysisPrompt({ windowStart, windowEnd, sources, fileLogs, counts }) {
   return [
     '# Clash of Perps Daily AI Log Analyst',
@@ -324,14 +530,14 @@ function extractJsonReport(text) {
   return safeJsonParse(match[1], null);
 }
 
-async function callOpenRouter(prompt, model) {
+async function callOpenRouter(prompt, model, options = {}) {
   const key = getOpenRouterKey();
   if (!key) {
     const err = new Error('OPENROUTER_API_KEY is not configured');
     err.status = 503;
     throw err;
   }
-  const response = await fetch(OPENROUTER_URL, {
+  const response = await (options.fetchImpl || fetch)(OPENROUTER_URL, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${key}`,
@@ -342,7 +548,7 @@ async function callOpenRouter(prompt, model) {
     body: JSON.stringify({
       model,
       temperature: 0.15,
-      max_tokens: Number(process.env.CLASH_LOG_AI_MAX_TOKENS || 6000),
+      max_tokens: Number(options.maxTokens || process.env.CLASH_LOG_AI_MAX_TOKENS || DEFAULT_MODEL_MAX_TOKENS),
       messages: [
         {
           role: 'system',
@@ -365,6 +571,24 @@ async function callOpenRouter(prompt, model) {
     throw err;
   }
   return json?.choices?.[0]?.message?.content || json?.output_text || text;
+}
+
+function isOpenRouterCreditError(error) {
+  return /more credits|insufficient credits|can only afford|monthly budget|payment required/i.test(String(error?.message || error || ''));
+}
+
+async function callOpenRouterWithFallback(prompt, models, options = {}) {
+  let lastError = null;
+  for (const model of models) {
+    try {
+      const markdown = await (options.callProvider || callOpenRouter)(prompt, model, options);
+      return { markdown, model };
+    } catch (error) {
+      lastError = error;
+      if (isOpenRouterCreditError(error)) break;
+    }
+  }
+  throw lastError || new Error('No OpenRouter model is configured');
 }
 
 function insertReport(row) {
@@ -421,16 +645,37 @@ async function runLogAiAnalysis(options = {}) {
     const windowStartDate = options.windowStart ? new Date(options.windowStart) : new Date(windowEndDate.getTime() - lookbackHours * 3600_000);
     const windowStart = sqliteDate(windowStartDate);
     const windowEnd = sqliteDate(windowEndDate);
-    const model = options.model || getModel();
+    const models = options.model ? [options.model] : getModels();
+    let model = models[0] || getModel();
 
     let prompt = '';
+    let counts = null;
     try {
       const sources = collectRows(windowStart, windowEnd, Number(options.limit || DEFAULT_LOG_LIMIT));
       const fileLogs = readRecentFileLogs(windowStartDate, windowEndDate);
-      const counts = sourceCounts(sources, fileLogs);
+      counts = collectSourceCounts(windowStart, windowEnd, fileLogs);
       prompt = buildAnalysisPrompt({ windowStart, windowEnd, sources, fileLogs, counts });
-      const markdown = await callOpenRouter(prompt, model);
-      const jsonReport = extractJsonReport(markdown);
+      let markdown = '';
+      let jsonReport = null;
+      let providerError = '';
+      try {
+        const providerResult = await callOpenRouterWithFallback(prompt, models, options);
+        markdown = providerResult.markdown;
+        model = providerResult.model;
+        jsonReport = extractJsonReport(markdown);
+      } catch (error) {
+        providerError = error?.message || String(error);
+        const local = buildLocalIncidentReport({
+          windowStart,
+          windowEnd,
+          sources,
+          counts,
+          providerError,
+        });
+        markdown = local.markdown;
+        jsonReport = local.jsonReport;
+        model = LOCAL_ANALYZER_MODEL;
+      }
       const id = insertReport({
         window_start: windowStart,
         window_end: windowEnd,
@@ -440,6 +685,7 @@ async function runLogAiAnalysis(options = {}) {
         report_markdown: markdown,
         report_json: jsonReport ? JSON.stringify(jsonReport) : null,
         source_counts: JSON.stringify(counts),
+        error: providerError || null,
         duration_ms: Date.now() - started,
         completed_at: sqliteDate(new Date()),
       });
@@ -452,7 +698,7 @@ async function runLogAiAnalysis(options = {}) {
         model,
         prompt,
         report_json: null,
-        source_counts: null,
+        source_counts: counts ? JSON.stringify(counts) : null,
         error: err?.message || String(err),
         duration_ms: Date.now() - started,
         completed_at: sqliteDate(new Date()),
@@ -501,7 +747,10 @@ module.exports = {
   REPORT_SCHEMA_VERSION,
   buildAnalysisPrompt,
   collectRows,
+  collectSourceCounts,
+  buildLocalIncidentReport,
   getModel,
+  getModels,
   listReports,
   getReport,
   runLogAiAnalysis,
