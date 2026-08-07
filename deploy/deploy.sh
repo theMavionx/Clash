@@ -22,6 +22,7 @@ RELEASES_DIR="$DEPLOY_ROOT/releases"
 SHARED_DIR="$DEPLOY_ROOT/shared"
 CURRENT_LINK="$DEPLOY_ROOT/current"
 KEEP_RELEASES="${KEEP_RELEASES:-2}"
+RUNTIME_VERIFY_ATTEMPTS="${CLASH_RUNTIME_VERIFY_ATTEMPTS:-90}"
 BACKUP_RETENTION_DAYS="${CLASH_BACKUP_RETENTION_DAYS:-3}"
 BACKUP_KEEP="${CLASH_BACKUP_KEEP:-1}"
 BACKUP_SQLITE_TIMEOUT_SECONDS="${CLASH_BACKUP_SQLITE_TIMEOUT_SECONDS:-}"
@@ -1188,9 +1189,14 @@ validate_release() {
 }
 
 verify_runtime_services() {
-    log "Verifying PM2 processes and local health endpoints..."
+    if ! [[ "$RUNTIME_VERIFY_ATTEMPTS" =~ ^[0-9]+$ ]] || [ "$RUNTIME_VERIFY_ATTEMPTS" -lt 1 ]; then
+        log "ERROR: CLASH_RUNTIME_VERIFY_ATTEMPTS must be a positive integer, got '$RUNTIME_VERIFY_ATTEMPTS'."
+        return 1
+    fi
+
+    log "Verifying PM2 processes and local health endpoints (up to ${RUNTIME_VERIFY_ATTEMPTS}s)..."
     local attempt
-    for attempt in $(seq 1 30); do
+    for attempt in $(seq 1 "$RUNTIME_VERIFY_ATTEMPTS"); do
         if pm2_root jlist | node -e '
 let raw = "";
 process.stdin.on("data", chunk => { raw += chunk; });
