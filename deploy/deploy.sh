@@ -1481,7 +1481,11 @@ server {
     }
 
     location @solana_helius_fallback {
-        proxy_pass __SOLANA_RPC_PROXY_PASS__;
+        # Named error-page locations preserve the original JSON-RPC POST, but
+        # nginx forbids a URI part in proxy_pass here. Rewrite the upstream URI
+        # first, then proxy to the origin-only URL.
+        rewrite ^ /?api-key=__SOLANA_HELIUS_API_KEY__ break;
+        proxy_pass https://mainnet.helius-rpc.com;
         proxy_method POST;
         proxy_pass_request_body on;
         proxy_http_version 1.1;
@@ -1540,7 +1544,10 @@ server {
     }
 
     location @solana_alchemy_fallback {
-        proxy_pass https://solana-mainnet.g.alchemy.com/v2/__SOLANA_ALCHEMY_API_KEY__;
+        # Keep the request body/method while moving the API-key path out of
+        # proxy_pass; URI-bearing proxy_pass values are invalid in named blocks.
+        rewrite ^ /v2/__SOLANA_ALCHEMY_API_KEY__ break;
+        proxy_pass https://solana-mainnet.g.alchemy.com;
         proxy_method POST;
         proxy_pass_request_body on;
         proxy_http_version 1.1;
@@ -1853,6 +1860,7 @@ MCPCONF
         log "SOLANA_ALCHEMY_API_KEY is set; /rpc/solana-alchemy will proxy to Alchemy server-side."
     else
         sed -i 's|proxy_pass https://solana-mainnet.g.alchemy.com/v2/__SOLANA_ALCHEMY_API_KEY__;|return 503;|g' /etc/nginx/sites-available/$DOMAIN
+        sed -i 's|        rewrite ^ /v2/__SOLANA_ALCHEMY_API_KEY__ break;|        return 503;|g' /etc/nginx/sites-available/$DOMAIN
         log "SOLANA_ALCHEMY_API_KEY is not set; /rpc/solana-alchemy will return 503."
     fi
 
@@ -1875,12 +1883,14 @@ MCPCONF
         sed -i "s|__SOLANA_RPC_HOST__|$(sed_escape_replacement "$solana_rpc_host")|g" /etc/nginx/sites-available/$DOMAIN
         sed -i "s|__SOLANA_RPC_WS_PROXY_PASS__|$(sed_escape_replacement "$solana_rpc_ws_proxy_pass")|g" /etc/nginx/sites-available/$DOMAIN
         sed -i "s|__SOLANA_RPC_WS_HOST__|$(sed_escape_replacement "$solana_rpc_ws_host")|g" /etc/nginx/sites-available/$DOMAIN
+        sed -i "s|__SOLANA_HELIUS_API_KEY__|$(sed_escape_replacement "$SOLANA_HELIUS_API_KEY")|g" /etc/nginx/sites-available/$DOMAIN
         log "SOLANA_HELIUS_API_KEY is set; /rpc/solana will proxy to Helius server-side."
     else
         sed -i 's|proxy_pass __SOLANA_RPC_PROXY_PASS__;|return 503;|g' /etc/nginx/sites-available/$DOMAIN
         sed -i 's|        proxy_set_header Host __SOLANA_RPC_HOST__;||g' /etc/nginx/sites-available/$DOMAIN
         sed -i 's|proxy_pass __SOLANA_RPC_WS_PROXY_PASS__;|return 503;|g' /etc/nginx/sites-available/$DOMAIN
         sed -i 's|        proxy_set_header Host __SOLANA_RPC_WS_HOST__;||g' /etc/nginx/sites-available/$DOMAIN
+        sed -i 's|        rewrite ^ /?api-key=__SOLANA_HELIUS_API_KEY__ break;|        return 503;|g' /etc/nginx/sites-available/$DOMAIN
         log "SOLANA_HELIUS_API_KEY is not set; /rpc/solana and /rpc/solana-ws will return 503."
     fi
 
