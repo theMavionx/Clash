@@ -27,6 +27,7 @@ const NOISY_CLIENT_EVENT_RE = /^(page-load: iframe=|SDK imported, calling ready\
 const CHUNK_ERROR_RE = /(Failed to fetch dynamically imported module|Importing a module script failed|Loading chunk \d+ failed|ChunkLoadError|dynamically imported module)/i;
 const EXPECTED_BROWSER_NOISE_RE = /(AudioContext was not allowed to start|The AudioContext was not allowed to start|user didn't interact with the document first)/i;
 const DIAGNOSTIC_CONSOLE_RE = /^(?:\[godot\] load phase\b|\[authFlow\] state\b)/i;
+const EXPECTED_SETUP_CONSOLE_RE = /^(?:\[Phoenix setup\] invite_check_result\b|\[aptos-adapter\] WalletNotConnectedError\b)/i;
 const EXPECTED_FETCH_ABORT_RE = /(?:\baborterror\b|\bfetch is aborted\b|\bsignal is aborted\b|\bthe user aborted a request\b)/i;
 
 let installed = false;
@@ -239,9 +240,9 @@ export function reportClientEvent(type, data = {}, opts = {}) {
   try {
     const requestedLevel = opts.level || 'info';
     const message = opts.message || type || 'client.event';
-    const level = type === 'auth.state' && /\bauto_connecting\b/i.test(message)
+    const level = (type === 'auth.state' && /\bauto_connecting\b/i.test(message))
       ? 'debug'
-      : requestedLevel;
+      : (type === 'phoenix.setup.invite_check_result' ? 'info' : requestedLevel);
     const source = opts.source || 'client.event';
     const isRenderDiagnostic = type === 'godot.render_diagnostic';
     const eventData = sanitizeDeep(compactClientEventData(type, data));
@@ -656,9 +657,13 @@ function flush() {
 function patchConsole(level) {
   original[level] = console[level]?.bind(console) || console.log.bind(console);
   console[level] = (...args) => {
+    let effectiveLevel = level;
     try {
       const message = truncate(args.map(argToText).join(' '), 500);
-      const effectiveLevel = level === 'warn' && DIAGNOSTIC_CONSOLE_RE.test(message)
+      effectiveLevel = level === 'warn'
+        && (DIAGNOSTIC_CONSOLE_RE.test(message)
+          || EXPECTED_SETUP_CONSOLE_RE.test(message)
+          || NOISY_SERVER_RE.test(message))
         ? 'debug'
         : level;
       if (!NOISY_LOG_RE.test(message)) {
@@ -668,7 +673,7 @@ function patchConsole(level) {
         enqueue(makeEvent(effectiveLevel, args, `console.${effectiveLevel}`));
       }
     } catch {}
-    original[level](...args);
+    (original[effectiveLevel] || original[level])(...args);
   };
 }
 
@@ -698,6 +703,8 @@ function shouldStoreFetchFailure(path, status) {
   if (status === 401 && /^\/api\/futures\/decibel\/signer(?:\?|$)/.test(path || '')) return false;
   if (status === 404 && /^\/api\/(?:v1\/exchanges|v1\/bot\/exchanges|futures)\/flash\/balance(?:\?|$)/.test(path || '')) return false;
   if (status === 409 && /^\/api\/futures\/bulk\/(?:account|builder-status)(?:\?|$)/.test(path || '')) return false;
+  if (status === 401 && /^\/api\/futures\/lighter\/account(?:\?|$)/.test(path || '')) return false;
+  if ((status === 429 || status >= 500) && /^\/rpc\/solana(?:[-/?]|$)/.test(path || '')) return false;
   if (status === 429 && /^\/api\/troop-died(?:\?|$)/.test(path || '')) return false;
   if (/\/funding\/overview\?perMarketLimit=2/.test(path || '')) return false;
   return true;
@@ -776,7 +783,8 @@ function patchFetch() {
           status: response.status,
           duration_ms,
         };
-        rememberFetchFailure(req, base);
+        if (storeFailure) rememberFetchFailure(req, base);
+        else fetchFailures.delete(fetchFailureKey(req));
         addBreadcrumbInternal(storeFailure ? 'fetch.http_error' : 'fetch.expected_http_status', base, storeFailure ? (response.status >= 500 ? 'error' : 'warn') : 'debug');
         if (storeFailure) {
           readResponseSnippet(response).then((snippet) => {

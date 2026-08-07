@@ -9171,7 +9171,7 @@ function normalizeStoredClientLog(row) {
     && /\bfetch\b|\/api\/|\/rpc\//i.test(message)) {
     return { ...row, level: 'debug', source: 'fetch.aborted' };
   }
-  if (/AudioContext was not allowed to start|user didn't interact with the document first/i.test(message)) {
+  if (/AudioContext was not allowed to start|user didn't interact with the document first|Web music play blocked:/i.test(message)) {
     return null;
   }
   if (message.includes('[godot] bridge not ready for action ui_overlay')) {
@@ -9184,6 +9184,13 @@ function normalizeStoredClientLog(row) {
     || (String(row.source || '') === 'auth.flow' && /^auth\.state auto_connecting\b/i.test(message))) {
     return { ...row, level: 'debug', source: 'auth.flow.state' };
   }
+  if (/^\[Phoenix setup\] invite_check_result\b/i.test(message)
+    || (String(row.source || '') === 'phoenix.setup' && message === 'phoenix.setup.invite_check_result')) {
+    return { ...row, level: 'info', source: 'phoenix.setup' };
+  }
+  if (/^\[aptos-adapter\] WalletNotConnectedError\b/i.test(message)) {
+    return { ...row, level: 'debug', source: 'aptos.wallet.not_connected' };
+  }
   if (message.includes('/api/futures/decibel/signer -> 401')) {
     return { ...row, level: 'debug', source: 'fetch.expected_http_status' };
   }
@@ -9192,6 +9199,12 @@ function normalizeStoredClientLog(row) {
   }
   if (/\/api\/futures\/bulk\/(?:account|builder-status).*-> 409/.test(message)) {
     return { ...row, level: 'debug', source: 'fetch.expected_http_status' };
+  }
+  if (/\/api\/futures\/lighter\/account.*-> 401/.test(message)) {
+    return { ...row, level: 'debug', source: 'fetch.expected_http_status' };
+  }
+  if (/\/rpc\/solana(?:[-/?]|$).*-> (?:429|5\d\d)/.test(message)) {
+    return { ...row, level: 'debug', source: 'fetch.rpc_fallback' };
   }
   if (message.includes('godot.render_diagnostic')
     && !message.includes('zero_visible')
