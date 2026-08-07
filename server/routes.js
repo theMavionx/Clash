@@ -9167,10 +9167,8 @@ function normalizeStoredClientLog(row) {
     || message.includes('Local Network Access')) {
     return { ...row, level: 'debug', source: 'wallet.local_network' };
   }
-  if (message.includes('/rpc/solana') && message.includes('signal is aborted')) {
-    return { ...row, level: 'debug', source: 'fetch.aborted' };
-  }
-  if (message.includes('/api/nft/demon-king/sync failed: signal is aborted')) {
+  if (/\b(?:AbortError|Fetch is aborted|signal is aborted|the user aborted a request)\b/i.test(message)
+    && /\bfetch\b|\/api\/|\/rpc\//i.test(message)) {
     return { ...row, level: 'debug', source: 'fetch.aborted' };
   }
   if (/AudioContext was not allowed to start|user didn't interact with the document first/i.test(message)) {
@@ -9178,6 +9176,13 @@ function normalizeStoredClientLog(row) {
   }
   if (message.includes('[godot] bridge not ready for action ui_overlay')) {
     return { ...row, level: 'debug', source: 'godot.startup' };
+  }
+  if (/^\[godot\] load phase\b/i.test(message)) {
+    return { ...row, level: 'debug', source: 'godot.load.phase' };
+  }
+  if (/^\[authFlow\] state\b/i.test(message)
+    || (String(row.source || '') === 'auth.flow' && /^auth\.state auto_connecting\b/i.test(message))) {
+    return { ...row, level: 'debug', source: 'auth.flow.state' };
   }
   if (message.includes('/api/futures/decibel/signer -> 401')) {
     return { ...row, level: 'debug', source: 'fetch.expected_http_status' };

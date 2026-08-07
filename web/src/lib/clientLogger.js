@@ -26,6 +26,8 @@ const EXTENSION_ERROR_RE = /(chrome-extension:\/\/|moz-extension:\/\/|safari-web
 const NOISY_CLIENT_EVENT_RE = /^(page-load: iframe=|SDK imported, calling ready\(\)|ready\(\) done)/;
 const CHUNK_ERROR_RE = /(Failed to fetch dynamically imported module|Importing a module script failed|Loading chunk \d+ failed|ChunkLoadError|dynamically imported module)/i;
 const EXPECTED_BROWSER_NOISE_RE = /(AudioContext was not allowed to start|The AudioContext was not allowed to start|user didn't interact with the document first)/i;
+const DIAGNOSTIC_CONSOLE_RE = /^(?:\[godot\] load phase\b|\[authFlow\] state\b)/i;
+const EXPECTED_FETCH_ABORT_RE = /(?:\baborterror\b|\bfetch is aborted\b|\bsignal is aborted\b|\bthe user aborted a request\b)/i;
 
 let installed = false;
 let flushing = false;
@@ -235,9 +237,12 @@ export function setClientLogContext(next = {}) {
 
 export function reportClientEvent(type, data = {}, opts = {}) {
   try {
-    const level = opts.level || 'info';
-    const source = opts.source || 'client.event';
+    const requestedLevel = opts.level || 'info';
     const message = opts.message || type || 'client.event';
+    const level = type === 'auth.state' && /\bauto_connecting\b/i.test(message)
+      ? 'debug'
+      : requestedLevel;
+    const source = opts.source || 'client.event';
     const isRenderDiagnostic = type === 'godot.render_diagnostic';
     const eventData = sanitizeDeep(compactClientEventData(type, data));
     addBreadcrumbInternal(type, eventData, level);
@@ -653,11 +658,14 @@ function patchConsole(level) {
   console[level] = (...args) => {
     try {
       const message = truncate(args.map(argToText).join(' '), 500);
+      const effectiveLevel = level === 'warn' && DIAGNOSTIC_CONSOLE_RE.test(message)
+        ? 'debug'
+        : level;
       if (!NOISY_LOG_RE.test(message)) {
-        addBreadcrumbInternal(`console.${level}`, { message }, level);
+        addBreadcrumbInternal(`console.${effectiveLevel}`, { message }, effectiveLevel);
       }
-      if (SERVER_LEVELS.has(level)) {
-        enqueue(makeEvent(level, args, `console.${level}`));
+      if (SERVER_LEVELS.has(effectiveLevel)) {
+        enqueue(makeEvent(effectiveLevel, args, `console.${effectiveLevel}`));
       }
     } catch {}
     original[level](...args);
@@ -793,11 +801,12 @@ function patchFetch() {
           duration_ms,
           error: err?.message || String(err),
         };
-        rememberFetchFailure(req, { ...data, status: null });
-        addBreadcrumbInternal('fetch.network_error', data, 'error');
-        enqueue(makeEvent('error', [
-          `fetch ${req.method} ${req.path} failed: ${data.error}`,
-        ], 'fetch', err?.stack, {
+        const aborted = err?.name === 'AbortError' || EXPECTED_FETCH_ABORT_RE.test(data.error);
+        if (!aborted) rememberFetchFailure(req, { ...data, status: null });
+        addBreadcrumbInternal(aborted ? 'fetch.aborted' : 'fetch.network_error', data, aborted ? 'debug' : 'error');
+        enqueue(makeEvent(aborted ? 'debug' : 'error', [
+          `fetch ${req.method} ${req.path} ${aborted ? 'aborted' : `failed: ${data.error}`}`,
+        ], aborted ? 'fetch.aborted' : 'fetch', err?.stack, {
           payload: { fetch: data },
         }));
       }
