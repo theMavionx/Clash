@@ -2564,6 +2564,29 @@ router.get('/prices', async (req, res) => {
   }
 });
 
+// Public, read-only Avantis oracle payload proxy. Browsers try feed-v3
+// directly first and use this same-origin route when third-party requests are
+// blocked or Avantis network routing is degraded.
+router.get('/avantis/price-update-data', async (req, res) => {
+  const pairIndex = Number(req.query.pairIndex);
+  if (!Number.isInteger(pairIndex) || pairIndex < 0 || pairIndex > 10_000) {
+    return res.status(400).json({ error: 'valid pairIndex required' });
+  }
+  try {
+    const payload = await avantis.getPriceUpdateData(pairIndex);
+    res.set('Cache-Control', 'no-store');
+    if (!(Number(payload?.price) > 0)) {
+      return res.status(503).json({ error: 'Avantis price feed unavailable', pairIndex });
+    }
+    return res.json(payload);
+  } catch (e) {
+    return res.status(502).json({
+      error: 'Failed to fetch Avantis price payload',
+      detail: e?.message || String(e),
+    });
+  }
+});
+
 router.get('/orderbook', async (req, res) => {
   const dex = (req.query.dex || 'pacifica').toLowerCase();
   const { symbol, agg_level, limit, level } = req.query;

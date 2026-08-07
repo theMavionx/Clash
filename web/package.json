@@ -15,6 +15,7 @@
     "test:nado-referral": "node test-nado-referral.mjs",
     "test:phoenix-position": "node test-phoenix-position-metrics.mjs",
     "test:position-pnl": "node test-position-pnl-metrics.mjs",
+    "test:avantis-price": "node test-avantis-price-payload.mjs",
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview"

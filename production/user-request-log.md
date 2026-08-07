@@ -3183,3 +3183,16 @@ Follow-up:
   result as a clearly labelled secondary line, add regression coverage, verify
   the web UI, then commit, push `main`, deploy through the repository production
   workflow, and smoke-test the deployed release without submitting a trade.
+
+## UR-2026-08-07-AVANTIS-PYTH-PRO-PRICE-FEED
+
+- Timestamp: 2026-08-07 13:48 (Europe/Kyiv)
+- Request: Avantis trading has shown "Price feed unavailable" for several
+  days; re-check the current Avantis API, add resilient fallbacks, prevent the
+  stale integration from blocking valid trades, test it, and deploy to prod.
+- Scope: migrate the browser and server Avantis integration to the current
+  feed-v3 Pyth Pro response while retaining Core/Hermes compatibility, route
+  the matching on-chain price-sourcing enum for TP/SL, add a safe same-origin
+  browser fallback plus a price-only market-open reference fallback, add
+  regression tests, then commit, push, deploy, and verify production without
+  submitting a trade.

@@ -1,6 +1,11 @@
 const { createWalletClient, createPublicClient, http, fallback, parseUnits, formatUnits } = require('viem');
 const { privateKeyToAccount, generatePrivateKey } = require('viem/accounts');
 const { base } = require('viem/chains');
+const {
+  PRICE_SOURCING,
+  emptyPricePayload,
+  normalizeAvantisPriceUpdateResponse,
+} = require('./avantis-price-payload');
 
 // ---------- Config ----------
 
@@ -40,6 +45,15 @@ const CORE_API        = 'https://core.avantisfi.com';
 const FEED_V3_URL     = 'https://feed-v3.avantisfi.com';
 const SOCKET_API      = 'https://socket-api-pub.avantisfi.com/socket-api/v1/data';
 const PYTH_HERMES     = 'https://hermes.pyth.network';
+const configuredFeedTimeoutMs = Number(process.env.AVANTIS_FEED_TIMEOUT_MS);
+const FEED_REQUEST_TIMEOUT_MS = Number.isFinite(configuredFeedTimeoutMs)
+  ? Math.max(1_000, Math.min(15_000, configuredFeedTimeoutMs))
+  : 8_000;
+const FEED_V3_URLS = Array.from(new Set(
+  splitList(process.env.AVANTIS_FEED_V3_URLS || FEED_V3_URL)
+    .map(value => value.replace(/\/+$/, ''))
+));
+if (FEED_V3_URLS.length === 0) FEED_V3_URLS.push(FEED_V3_URL);
 
 // Order types
 const ORDER_TYPE = {
@@ -391,16 +405,27 @@ async function getPairsMap() {
     return pairsCache;
   } catch (e) {
     console.error('Failed to fetch pairs from Avantis socket API:', e.message);
-    // Fallback static mapping for common pairs (index only approximate).
+    // Preserve the last confirmed protocol map through a transient socket
+    // outage. Pair indexes are transaction-critical and must never regress to
+    // an old approximate map while the process already has authoritative data.
+    if (pairsCache && Object.keys(pairsCache.map || {}).length > 0) {
+      pairsCacheTime = now;
+      return pairsCache;
+    }
+    // Cold-start fallback for the stable core market indexes, verified against
+    // Avantis socket-api. Unknown markets stay blocked instead of guessing.
     const staticMap = {
-      'BTC/USD': 0, BTC: 0,
-      'ETH/USD': 1, ETH: 1,
+      'ETH/USD': 0, ETH: 0,
+      'BTC/USD': 1, BTC: 1,
       'SOL/USD': 2, SOL: 2,
-      'LINK/USD': 3, LINK: 3,
+      'BNB/USD': 3, BNB: 3,
       'ARB/USD': 4, ARB: 4,
-      'BNB/USD': 5, BNB: 5,
-      'MATIC/USD': 6, MATIC: 6,
+      'DOGE/USD': 5, DOGE: 5,
+      'AVAX/USD': 6, AVAX: 6,
       'OP/USD': 7, OP: 7,
+      'POL/USD': 8, POL: 8,
+      'TIA/USD': 9, TIA: 9,
+      'SEI/USD': 10, SEI: 10,
     };
     pairsCache = { map: staticMap, indexMap: {}, raw: [] };
     pairsCacheTime = now;
@@ -421,17 +446,49 @@ async function pairIndexFromSymbol(symbol) {
 // ---------- Price feed ----------
 
 async function getPriceUpdateData(pairIndex) {
-  try {
-    const res = await fetch(`${FEED_V3_URL}/v2/pairs/${pairIndex}/price-update-data`);
-    const data = await res.json();
-    // Returns { core: { priceUpdateData: '0x...', price: ... }, pro: {...} }
-    // (was historically snake_case — keep fallback just in case).
-    const priceUpdateData = data?.core?.priceUpdateData || data?.core?.price_update_data || '0x';
-    const price = data.core?.price || 0;
-    return { priceUpdateData, price };
-  } catch (e) {
-    return { priceUpdateData: '0x', price: 0 };
+  const index = Number(pairIndex);
+  if (!Number.isInteger(index) || index < 0 || index > 10_000) return emptyPricePayload();
+
+  // feed-v3 now returns `core: null` for Pyth Pro markets. Prefer `pro`,
+  // retain Core/Hermes compatibility, and retry configured official routes.
+  for (const baseUrl of FEED_V3_URLS) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const ctrl = new AbortController();
+      const timeoutId = setTimeout(() => ctrl.abort(), FEED_REQUEST_TIMEOUT_MS);
+      try {
+        const res = await fetch(`${baseUrl}/v2/pairs/${index}/price-update-data`, {
+          signal: ctrl.signal,
+          headers: { Accept: 'application/json' },
+        });
+        if (!res.ok) continue;
+        const normalized = normalizeAvantisPriceUpdateResponse(await res.json());
+        if (normalized.price > 0) return normalized;
+      } catch {
+        // Retry / continue to the next configured endpoint.
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    }
   }
+
+  // Market-open needs a current reference price but no update bytes; the
+  // keeper still performs final oracle execution and slippage validation.
+  // TP/SL callers reject this price-only fallback because data stays `0x`.
+  try {
+    const [{ raw }, priceMap] = await Promise.all([getPairsMap(), getPrices()]);
+    const pair = raw.find(row => Number(row?.index) === index);
+    const reference = Number(priceMap?.[pair?.symbol]?.mark || 0);
+    if (reference > 0) {
+      return {
+        ...emptyPricePayload(),
+        price: reference,
+        source: 'pyth_hermes_reference',
+      };
+    }
+  } catch {
+    // Return the explicit empty contract below.
+  }
+  return emptyPricePayload();
 }
 
 // ---------- USDC helpers ----------
@@ -1115,7 +1172,7 @@ async function updateTpSl(privateKey, {
   await assertEnoughEthForGas(trader);
 
   // Fetch Pyth price update data
-  const { priceUpdateData } = await getPriceUpdateData(pair_index);
+  const { priceUpdateData, priceSourcing } = await getPriceUpdateData(pair_index);
   if (!priceUpdateData || priceUpdateData === '0x') {
     throw new Error('Price feed unavailable — cannot update TP/SL without fresh Pyth data.');
   }
@@ -1135,7 +1192,7 @@ async function updateTpSl(privateKey, {
         slContract,
         tpContract,
         [priceUpdateData],
-        0, // priceSourcing: 0 = Hermes (matches feed-v3 data we fetched)
+        priceSourcing === PRICE_SOURCING.PRO ? PRICE_SOURCING.PRO : PRICE_SOURCING.HERMES,
       ],
       value: 1n, // 1 wei for Pyth fee
       nonce,
@@ -1222,6 +1279,7 @@ module.exports = {
   getOpenOrdersByAddress,
   getMarketInfo,
   getPrices,
+  getPriceUpdateData,
   getPairsMap,
   pairIndexFromSymbol,
   createMarketOrder,

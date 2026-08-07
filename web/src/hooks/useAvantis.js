@@ -1462,16 +1462,16 @@ export function useAvantis() {
       await ensureChain();
       if (pairIndex === undefined || tradeIndex === undefined) throw new Error('Missing pair/trade index');
 
-      const { priceUpdateData } = await fetchPriceUpdateData(pairIndex);
+      const { priceUpdateData, priceSourcing } = await fetchPriceUpdateData(pairIndex);
       if (!priceUpdateData || priceUpdateData === '0x') {
         throw new Error('Price feed unavailable — try again in a moment.');
       }
       const tpContract = Number(takeProfit) > 0 ? priceToContract(Number(takeProfit)) : 0n;
       const slContract = Number(stopLoss) > 0 ? priceToContract(Number(stopLoss)) : 0n;
 
-      // 6-arg signature (contract was upgraded). `priceSourcing=0` = Hermes,
-      // matching the feed-v3 URL we fetched `priceUpdateData` from. `value`
-      // is the 1-wei Pyth fee sentinel — NOT the 0.00035 ETH execution fee
+      // 6-arg signature (contract was upgraded). Current feed-v3 data is Pyth
+      // Pro (`priceSourcing=1`); legacy Core/Hermes stays source 0. `value` is
+      // the 1-wei oracle fee sentinel — NOT the 0.00035 ETH execution fee
       // (updateTpAndSl runs inline with the price update, no keeper queue).
       // Arg order verified against Avantis official SDK
       // (avantis_trader_sdk/rpc/trade.py): updateTpAndSl(pair, trade,
@@ -1479,7 +1479,14 @@ export function useAvantis() {
       // slContract AT POSITION 3 and tpContract AT POSITION 4.
       const hash = await sendContractTransaction({
         address: TRADING_ADDRESS, abi: TRADING_ABI, functionName: 'updateTpAndSl',
-        args: [BigInt(pairIndex), BigInt(tradeIndex), slContract, tpContract, [priceUpdateData], PRICE_SOURCING.HERMES],
+        args: [
+          BigInt(pairIndex),
+          BigInt(tradeIndex),
+          slContract,
+          tpContract,
+          [priceUpdateData],
+          priceSourcing === PRICE_SOURCING.PRO ? PRICE_SOURCING.PRO : PRICE_SOURCING.HERMES,
+        ],
         value: 1n,
         silentPrivy: !!options?.silentPrivy,
         smartWallet: !!options?.smartWallet,

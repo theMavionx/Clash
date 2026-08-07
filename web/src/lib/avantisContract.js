@@ -11,6 +11,11 @@
 
 import { parseUnits, stringToHex } from 'viem';
 import { buildRpcFallbackList, envFlag, sameOriginRpcUrl, siteOrigin, splitRpcUrls } from './rpcPolicy';
+import {
+  AVANTIS_PRICE_SOURCING,
+  emptyAvantisPricePayload,
+  normalizeAvantisPriceUpdateResponse,
+} from './avantisPricePayload';
 
 // ───── Network ─────────────────────────────────────────────────────
 export const BASE_CHAIN_ID = 8453;
@@ -83,6 +88,8 @@ export const REFERRAL_CODE_BYTES32   = stringToHex(REFERRAL_CODE_STRING, { size:
 // ───── Avantis endpoints ───────────────────────────────────────────
 export const CORE_API    = 'https://core.avantisfi.com';
 export const FEED_V3_URL = 'https://feed-v3.avantisfi.com';
+const PRICE_FEED_PROXY_URL = '/api/futures/avantis/price-update-data';
+const PRICE_FEED_TIMEOUT_MS = 8_000;
 
 // ───── Order types ─────────────────────────────────────────────────
 export const ORDER_TYPE = Object.freeze({
@@ -194,7 +201,7 @@ export const TRADING_ABI = [
 ];
 
 // Matches the `priceSourcing` enum in the 6-arg updateTpAndSl signature.
-export const PRICE_SOURCING = Object.freeze({ HERMES: 0, PRO: 1 });
+export const PRICE_SOURCING = AVANTIS_PRICE_SOURCING;
 
 // ───── Scaling helpers ─────────────────────────────────────────────
 // IMPORTANT: use `parseUnits(str, 10)` instead of `Math.floor(num * 1e10)` —
@@ -235,12 +242,8 @@ export function sideIsBuy(side) {
 // The feed-v3 response already includes the current price next to the
 // priceUpdateData payload, so this is a single request.
 export async function fetchLiveMarkPrice(pairIndex) {
-  try {
-    const res = await fetch(`${FEED_V3_URL}/v2/pairs/${pairIndex}/price-update-data`);
-    if (!res.ok) return 0;
-    const data = await res.json();
-    return Number(data?.core?.price) || 0;
-  } catch { return 0; }
+  const payload = await fetchPriceUpdateData(pairIndex);
+  return Number(payload?.price) || 0;
 }
 
 // ───── Price update fetch (Pyth via Avantis feed-v3) ───────────────
@@ -248,20 +251,40 @@ export async function fetchLiveMarkPrice(pairIndex) {
 // But market-close / TP-SL updates DO need fresh Pyth data. Returns hex
 // '0x...' on failure so callers can bail cleanly.
 export async function fetchPriceUpdateData(pairIndex) {
-  // feed-v3.avantisfi.com returns { core: { priceUpdateData, price } }.
-  // Historical typo: we used `price_update_data` (snake_case) for a while
-  // and got back undefined → empty '0x' update → TP/SL flows reverted.
-  try {
-    const res = await fetch(`${FEED_V3_URL}/v2/pairs/${pairIndex}/price-update-data`);
-    if (!res.ok) return { priceUpdateData: '0x', price: 0 };
-    const data = await res.json();
-    return {
-      priceUpdateData: data?.core?.priceUpdateData || data?.core?.price_update_data || '0x',
-      price: data?.core?.price || 0,
-    };
-  } catch {
-    return { priceUpdateData: '0x', price: 0 };
+  // Current response: `{ core: null, pro: { priceUpdateData, price } }` for
+  // continuously traded markets. Legacy Core/Hermes remains supported.
+  const index = Number(pairIndex);
+  if (!Number.isInteger(index) || index < 0 || index > 10_000) return emptyAvantisPricePayload();
+
+  // Direct Avantis is fastest. The same-origin proxy is a browser/CORS/network
+  // fallback and can additionally supply a fresh Hermes reference price for
+  // market-open when feed-v3 itself is transiently unavailable.
+  const urls = [
+    `${FEED_V3_URL}/v2/pairs/${index}/price-update-data`,
+    `${PRICE_FEED_PROXY_URL}?pairIndex=${index}`,
+  ];
+  for (const url of urls) {
+    const ctrl = new AbortController();
+    const timeoutId = setTimeout(() => ctrl.abort(), PRICE_FEED_TIMEOUT_MS);
+    try {
+      const res = await fetch(url, {
+        signal: ctrl.signal,
+        headers: { accept: 'application/json' },
+        cache: 'no-store',
+      });
+      if (!res.ok) continue;
+      const data = await res.json();
+      const normalized = data?.priceSourcing !== undefined
+        ? data
+        : normalizeAvantisPriceUpdateResponse(data);
+      if (Number(normalized?.price) > 0) return normalized;
+    } catch {
+      // Continue to the next independent route.
+    } finally {
+      clearTimeout(timeoutId);
+    }
   }
+  return emptyAvantisPricePayload();
 }
 
 // ───── Execution fee — dynamic, FLOOR-not-CEILING ──────────────────

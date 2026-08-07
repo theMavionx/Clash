@@ -59,6 +59,8 @@ $NodeFiles = @(
     "server/tournament_trade_sync.js",
     "server/test-tournament-trade-cursor.js",
     "server-futures/aptos-key-pool.js",
+    "server-futures/avantis-price-payload.js",
+    "server-futures/test-avantis-price-payload.js",
     "server-futures/test-aptos-key-pool.js",
     "server-futures/hyperliquid-rewards-worker.js",
     "server-futures/test-hyperliquid-rewards-worker.js",
@@ -85,6 +87,8 @@ Invoke-Step "ranked global exact-TH matchmaking" { node server/test-ranked-globa
 Invoke-Step "client/server combat parity" { node server/test-client-server-combat-parity.js }
 Invoke-Step "shared Aptos API client" { node server/test-aptos-api.js }
 Invoke-Step "Aptos server key pool" { node server-futures/test-aptos-key-pool.js }
+Invoke-Step "Avantis price payload" { node server-futures/test-avantis-price-payload.js }
+Invoke-Step "Avantis browser price payload" { node web/test-avantis-price-payload.mjs }
 Invoke-Step "Aptos browser key pool" { node scripts/verify-aptos-browser-key-pool.mjs }
 Invoke-Step "Aptos RPC routing" { node scripts/verify-aptos-rpc-routing.mjs }
 Invoke-Step "Hyperliquid rewards worker" { node server-futures/test-hyperliquid-rewards-worker.js }
