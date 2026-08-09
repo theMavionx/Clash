@@ -47,6 +47,7 @@ import {
   writeAccountProbeCache,
 } from './accountProbeCache';
 import { addClientBreadcrumb, reportClientEvent } from '../lib/clientLogger';
+import { createRegisterAttemptManager } from './registerAttemptManager';
 
 const DEX_PICKED_KEY = 'clash_dex_picked';
 const GAME_AUTH_STORAGE_KEY = 'clash_game_auth_v1';
@@ -288,6 +289,10 @@ export function useAuthFlow() {
   // session-reset effect can clear them before the resolver machinery
   // attempts to re-use stale state.
   const lastRegisteredRef = useRef(null);
+  const registerAttemptManagerRef = useRef(null);
+  if (!registerAttemptManagerRef.current) {
+    registerAttemptManagerRef.current = createRegisterAttemptManager();
+  }
   const fcEvmTriedRef = useRef(false);
   // Set to true by pickDex when the user explicitly switches DEX while
   // already logged in. The session-reset useEffect (which fires on
@@ -311,6 +316,11 @@ export function useAuthFlow() {
   const clearManualReconnectRequired = useCallback(() => {
     writeManualReconnectRequired(false);
     setManualReconnectRequired(false);
+  }, []);
+
+  useEffect(() => {
+    const manager = registerAttemptManagerRef.current;
+    return () => manager.cancelCurrent();
   }, []);
 
   useEffect(() => {
@@ -1001,6 +1011,7 @@ export function useAuthFlow() {
 
   useEffect(() => {
     const onAuthError = (event) => {
+      registerAttemptManagerRef.current?.cancelCurrent();
       const message = authErrorMessage(event?.detail?.message);
       setRegistering(false);
       setRegisterError(message);
@@ -1097,11 +1108,13 @@ export function useAuthFlow() {
       source: candidate.source || null,
       mode: 'auto',
     });
-    // Safety: if Godot never acks (network partition / stale bridge), stop
-    // the derived "returning user" register loop and surface a retryable error.
-    let cancelled = false;
-    const t = setTimeout(() => {
-      if (cancelled) return;
+    // Keep the registration attempt independent from this effect's cleanup.
+    // Android Farcaster providers update their account/provider state after a
+    // successful personal_sign, which changes hook dependencies and reruns this
+    // effect. Cancelling in that cleanup discarded the valid signature and also
+    // removed the only timeout, leaving the UI on "Finalising" forever.
+    const manager = registerAttemptManagerRef.current;
+    const attempt = manager.begin(candidateKey, WALLET_AUTH_PROOF_TIMEOUT_MS + 5000, () => {
       setRegistering(false);
       setRegisterError('Game login timed out. Reload the page or press BACK and reconnect.');
       lastRegisteredRef.current = null;
@@ -1110,7 +1123,8 @@ export function useAuthFlow() {
         source: candidate.source || null,
         mode: 'auto',
       }, 'warn');
-    }, WALLET_AUTH_PROOF_TIMEOUT_MS + 5000);
+    });
+    if (!attempt) return;
     (async () => {
       try {
         const authProof = await withTimeout(
@@ -1122,7 +1136,7 @@ export function useAuthFlow() {
           WALLET_AUTH_PROOF_TIMEOUT_MS,
           'Wallet signature timed out. Reconnect your wallet and try again.'
         );
-        if (cancelled) return;
+        if (!manager.isActive(attempt)) return;
         if (authProof) {
           payload.authProof = authProof;
           payload.auth_proof = authProof;
@@ -1130,9 +1144,13 @@ export function useAuthFlow() {
         if (!sendToGodot('register', payload)) {
           throw new Error('Game bridge is not ready. Reload the page and try again.');
         }
+        addClientBreadcrumb('auth.register_dispatched', {
+          dex,
+          source: candidate.source || null,
+          mode: 'auto',
+        });
       } catch (e) {
-        if (cancelled) return;
-        clearTimeout(t);
+        if (!manager.finish(attempt)) return;
         const message = authErrorMessage(e?.message || 'Wallet signature required. Connect again.');
         setRegistering(false);
         setRegisterError(message);
@@ -1144,12 +1162,8 @@ export function useAuthFlow() {
         }, 'warn');
       }
     })();
-    return () => {
-      cancelled = true;
-      clearTimeout(t);
-    };
   }, [readyForRegister, dexPicked, candidate, suggestedName, dex, sendToGodot, fcUser,
-      existingAccountName, createWalletAuthProof]);
+      existingAccountName, createWalletAuthProof, registerError]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   // Actions exposed to the UI. All auth decisions flow through here.
@@ -1316,6 +1330,7 @@ export function useAuthFlow() {
   }, [clearManualReconnectRequired]);
 
   const logout = useCallback(() => {
+    registerAttemptManagerRef.current?.cancelCurrent();
     lastRegisteredRef.current = null;
     fcEvmTriedRef.current = false;
     setRegistering(false);
