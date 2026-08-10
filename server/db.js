@@ -1850,12 +1850,16 @@ try {
       image_path    TEXT NOT NULL,
       image_sha256  TEXT NOT NULL,
       mime_type     TEXT NOT NULL,
+      recovery_count INTEGER NOT NULL DEFAULT 0,
+      recovered_at  TEXT,
       created_at    TEXT NOT NULL DEFAULT (datetime('now'))
     );
     CREATE INDEX IF NOT EXISTS idx_town_hall_flag_history_player
       ON player_town_hall_flag_history(player_id, created_at DESC);
   `);
 } catch (e) { console.warn('[db] town hall flag customization migration:', e.message); }
+try { db.exec(`ALTER TABLE player_town_hall_flag_history ADD COLUMN recovery_count INTEGER NOT NULL DEFAULT 0`); } catch {}
+try { db.exec(`ALTER TABLE player_town_hall_flag_history ADD COLUMN recovered_at TEXT`); } catch {}
 
 // Referral attribution and commission ledger. Revenue events are immutable and
 // idempotent by source_type/source_id so retrying payment redemption, delivery,
@@ -2630,6 +2634,14 @@ const stmts = {
     FROM player_town_hall_flags
     WHERE player_id = ?
   `),
+  getLatestTownHallFlagHistory: db.prepare(`
+    SELECT id, player_id, purchase_id, tx_hash, image_url, image_path, image_sha256, mime_type,
+           COALESCE(recovery_count, 0) AS recovery_count, recovered_at, created_at
+    FROM player_town_hall_flag_history
+    WHERE player_id = ?
+    ORDER BY id DESC
+    LIMIT 1
+  `),
   getUnconsumedTownHallFlagPurchase: db.prepare(`
     SELECT u.id, u.player_id, u.utility, u.chain, u.tx_hash, u.payer, u.token, u.amount, u.usd_price_e6, u.created_at
     FROM utility_purchases u
@@ -2658,6 +2670,18 @@ const stmts = {
       purchase_id = excluded.purchase_id,
       tx_hash = excluded.tx_hash,
       updated_at = datetime('now')
+  `),
+  recoverTownHallFlagHistory: db.prepare(`
+    UPDATE player_town_hall_flag_history
+    SET image_url = ?,
+        image_path = ?,
+        image_sha256 = ?,
+        mime_type = ?,
+        tx_hash = COALESCE(?, tx_hash),
+        recovery_count = COALESCE(recovery_count, 0) + 1,
+        recovered_at = datetime('now')
+    WHERE player_id = ? AND purchase_id = ?
+      AND COALESCE(recovery_count, 0) = ?
   `),
   clearTownHallFlag: db.prepare(`
     DELETE FROM player_town_hall_flags
@@ -9291,6 +9315,11 @@ function getTownHallFlag(playerId) {
   return stmts.getTownHallFlag.get(playerId) || null;
 }
 
+function getLatestTownHallFlagHistory(playerId) {
+  if (!playerId) return null;
+  return stmts.getLatestTownHallFlagHistory.get(playerId) || null;
+}
+
 function getUnconsumedTownHallFlagPurchase(playerId, txHash = null) {
   if (!playerId) return null;
   const normalizedTx = txHash ? String(txHash).trim() : null;
@@ -9322,6 +9351,49 @@ function setTownHallFlag(playerId, flag = {}) {
       imageSha256,
       mimeType,
     );
+    stmts.upsertTownHallFlag.run(
+      playerId,
+      imageUrl,
+      imagePath,
+      imageSha256,
+      mimeType,
+      purchaseId,
+      txHash,
+    );
+    return getTownHallFlag(playerId);
+  })();
+}
+
+function recoverTownHallFlag(playerId, purchaseIdValue, flag = {}) {
+  if (!playerId) return { error: 'player_id required' };
+  const purchaseId = Number(purchaseIdValue || flag.purchaseId || flag.purchase_id || 0);
+  if (!Number.isSafeInteger(purchaseId) || purchaseId <= 0) {
+    return { error: 'purchase_id required' };
+  }
+  const imageUrl = String(flag.imageUrl || flag.image_url || '').trim();
+  const imagePath = String(flag.imagePath || flag.image_path || '').trim();
+  const imageSha256 = String(flag.imageSha256 || flag.image_sha256 || '').trim().toLowerCase();
+  const mimeType = String(flag.mimeType || flag.mime_type || '').trim().toLowerCase();
+  const txHash = String(flag.txHash || flag.tx_hash || '').trim() || null;
+  const expectedRecoveryCount = Math.max(0, Math.floor(Number(
+    flag.expectedRecoveryCount ?? flag.expected_recovery_count ?? 0,
+  ) || 0));
+  if (!imageUrl || !imagePath || !/^[a-f0-9]{64}$/.test(imageSha256) || !mimeType) {
+    return { error: 'invalid flag image metadata' };
+  }
+
+  return db.transaction(() => {
+    const recovered = stmts.recoverTownHallFlagHistory.run(
+      imageUrl,
+      imagePath,
+      imageSha256,
+      mimeType,
+      txHash,
+      playerId,
+      purchaseId,
+      expectedRecoveryCount,
+    );
+    if (recovered.changes !== 1) return { error: 'paid flag upload not found' };
     stmts.upsertTownHallFlag.run(
       playerId,
       imageUrl,
@@ -13374,8 +13446,10 @@ module.exports = {
   setBuildingFacing,
   getPlayerBuildings,
   getTownHallFlag,
+  getLatestTownHallFlagHistory,
   getUnconsumedTownHallFlagPurchase,
   setTownHallFlag,
+  recoverTownHallFlag,
   clearTownHallFlag,
   upgradeTroop,
   getTroopLevels,

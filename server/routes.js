@@ -7,6 +7,7 @@ const zlib = require('zlib');
 const nacl = require('tweetnacl');
 const bs58 = require('bs58').default || require('bs58');
 const db = require('./db');
+const townHallFlagStorage = require('./town_hall_flag_storage');
 const hermesClient = require('./hermes_client');
 const hermesJobs = require('./hermes_jobs');
 const logAiAnalyzer = require('./log_ai_analyzer');
@@ -3734,7 +3735,7 @@ function gameShopProductsForClient() {
     .map(gameShopProductForClient);
 }
 
-const TOWN_HALL_FLAG_UPLOAD_ROOT = path.join(__dirname, 'public', 'town-hall-flags');
+const TOWN_HALL_FLAG_UPLOAD_ROOT = townHallFlagStorage.getUploadRoot();
 const TOWN_HALL_FLAG_MAX_BYTES = Math.max(64 * 1024, Math.min(1024 * 1024, Number(process.env.TOWN_HALL_FLAG_MAX_BYTES || 512 * 1024)));
 const TOWN_HALL_FLAG_ALLOWED_MIME = new Set(['image/png', 'image/jpeg', 'image/webp']);
 
@@ -3781,6 +3782,16 @@ function parseTownHallFlagImagePayload(imageData, explicitMime = '') {
 
 function townHallFlagPublicUrl(playerId, filename) {
   return `/api/town-hall-flags/${encodeURIComponent(playerId)}/${encodeURIComponent(filename)}`;
+}
+
+function townHallFlagStatusForPlayer(playerId) {
+  const current = db.getTownHallFlag(playerId);
+  const latest = db.getLatestTownHallFlagHistory(playerId);
+  const asset = townHallFlagStorage.getFlagAssetStatus(
+    { current, latest },
+    TOWN_HALL_FLAG_UPLOAD_ROOT,
+  );
+  return { current, latest, ...asset };
 }
 
 function isRetiredGameShopProduct(product) {
@@ -6262,17 +6273,32 @@ router.get('/shop/config', (req, res) => {
   }
 });
 
+router.get('/town-hall-flag', auth, (req, res) => {
+  const status = townHallFlagStatusForPlayer(req.player.id);
+  res.set('Cache-Control', 'private, no-store');
+  return res.json({
+    town_hall_flag: status.current ? {
+      image_url: status.current.image_url,
+      updated_at: status.current.updated_at,
+      purchase_id: status.current.purchase_id || null,
+      tx_hash: status.current.tx_hash || null,
+    } : null,
+    has_paid_flag: !!status.latest,
+    asset_available: status.assetExists,
+    recovery_upload_available: status.recoveryUploadAvailable,
+    recovery_purchase_id: status.recoveryPurchaseId,
+  });
+});
+
 router.get('/town-hall-flags/:playerId/:filename', (req, res) => {
   const playerId = String(req.params.playerId || '');
   const filename = String(req.params.filename || '');
-  if (!/^[A-Za-z0-9_-]+$/.test(playerId)
-      || !/^\d+-[a-f0-9]{64}\.(png|jpg|jpeg|webp)$/i.test(filename)) {
-    return res.status(404).end();
-  }
-  const filePath = path.join(TOWN_HALL_FLAG_UPLOAD_ROOT, playerId, filename);
-  const root = path.resolve(TOWN_HALL_FLAG_UPLOAD_ROOT);
-  const resolved = path.resolve(filePath);
-  if (!resolved.startsWith(root + path.sep)) return res.status(404).end();
+  const resolved = townHallFlagStorage.resolveFlagFilePath(
+    playerId,
+    filename,
+    TOWN_HALL_FLAG_UPLOAD_ROOT,
+  );
+  if (!resolved) return res.status(404).end();
   if (!fs.existsSync(resolved)) return res.status(404).end();
   res.set('Cache-Control', 'public, max-age=31536000, immutable');
   return res.sendFile(resolved);
@@ -6280,10 +6306,21 @@ router.get('/town-hall-flags/:playerId/:filename', (req, res) => {
 
 router.post('/town-hall-flag', auth, (req, res) => {
   let savedPath = null;
+  let savedPathCreated = false;
   try {
     const token = req.body || {};
     const txHash = String(token.txSignature || token.tx_hash || token.txHash || '').trim() || null;
-    const purchase = db.getUnconsumedTownHallFlagPurchase(req.player.id, txHash);
+    const status = townHallFlagStatusForPlayer(req.player.id);
+    let purchase = db.getUnconsumedTownHallFlagPurchase(req.player.id, txHash);
+    let recovery = null;
+    if (!purchase && status.recoveryUploadAvailable && status.latest) {
+      recovery = status.latest;
+      purchase = {
+        id: recovery.purchase_id,
+        player_id: recovery.player_id,
+        tx_hash: recovery.tx_hash,
+      };
+    }
     if (!purchase) {
       return res.status(402).json({ error: 'Buy a Town Hall flag upload with CLASH on Solana first' });
     }
@@ -6295,22 +6332,36 @@ router.post('/town-hall-flag', auth, (req, res) => {
     const playerDir = path.join(TOWN_HALL_FLAG_UPLOAD_ROOT, safePlayerId);
     fs.mkdirSync(playerDir, { recursive: true });
     savedPath = path.join(playerDir, filename);
-    fs.writeFileSync(savedPath, parsed.buffer, { flag: 'w' });
+    try {
+      fs.writeFileSync(savedPath, parsed.buffer, { flag: 'wx' });
+      savedPathCreated = true;
+    } catch (writeErr) {
+      if (writeErr?.code !== 'EEXIST') throw writeErr;
+      const existingHash = crypto.createHash('sha256').update(fs.readFileSync(savedPath)).digest('hex');
+      if (existingHash !== hash) throw new Error('Existing flag asset does not match its filename');
+    }
 
     const imageUrl = townHallFlagPublicUrl(safePlayerId, filename);
-    const flag = db.setTownHallFlag(req.player.id, {
+    const flagInput = {
       imageUrl,
       imagePath: savedPath,
       imageSha256: hash,
       mimeType: parsed.mimeType,
       purchaseId: purchase.id,
       txHash: purchase.tx_hash,
-    });
+      expectedRecoveryCount: recovery?.recovery_count || 0,
+    };
+    const flag = recovery
+      ? db.recoverTownHallFlag(req.player.id, purchase.id, flagInput)
+      : db.setTownHallFlag(req.player.id, flagInput);
     if (flag?.error) {
-      return res.status(400).json({ error: flag.error });
+      const flagError = new Error(flag.error);
+      flagError.status = 400;
+      throw flagError;
     }
     return res.json({
       success: true,
+      recovered: !!recovery,
       town_hall_flag_url: flag.image_url,
       town_hall_flag: {
         image_url: flag.image_url,
@@ -6321,12 +6372,12 @@ router.post('/town-hall-flag', auth, (req, res) => {
       purchase: {
         id: purchase.id,
         tx_hash: purchase.tx_hash,
-        token: purchase.token,
-        amount: purchase.amount,
+        token: purchase.token || null,
+        amount: purchase.amount || null,
       },
     });
   } catch (err) {
-    if (savedPath) {
+    if (savedPath && savedPathCreated) {
       try { fs.unlinkSync(savedPath); } catch {}
     }
     const message = err?.message || 'Flag upload failed';
