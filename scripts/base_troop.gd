@@ -24,6 +24,9 @@ var hp: int = 100
 var max_hp: int = 100
 var damage: int = 10
 var atk_speed: float = 1.0
+## Main Ship TH10 applies one server-authored multiplier to primary deployed
+## troops. Summoned helper units keep the default 1.0 value.
+var primary_troop_power_multiplier: float = 1.0
 var _tactical_boost_active: bool = false
 var _tactical_boost_remaining: float = 0.0
 var _tactical_boost_base_damage: int = 0
@@ -704,7 +707,10 @@ static func _get_buildings_cached() -> Array:
 			for bs in tree.get_nodes_in_group("building_systems"):
 				for b in bs.placed_buildings:
 					var bdef: Dictionary = bs.building_defs.get(b.get("id", ""), {})
-					if bool(bdef.get("non_targetable", false)):
+					if (
+						bool(bdef.get("non_targetable", false))
+						or not bool(b.get("combat_targetable", true))
+					):
 						continue
 					if b.get("hp", 0) > 0 and is_instance_valid(b.get("node")):
 						# Reuse pooled entries to avoid Dictionary allocation every frame
@@ -841,6 +847,7 @@ static func _get_camera_cached() -> Camera3D:
 func _ready() -> void:
 	_init_stats()
 	_apply_troop_level_power_curve()
+	_apply_primary_troop_power_multiplier()
 	max_hp = hp
 	_setup_attack_sfx()
 	_setup_animations()
@@ -875,6 +882,14 @@ func _apply_troop_level_power_curve() -> void:
 	damage = maxi(1, roundi(float(damage) * multiplier))
 
 
+func _apply_primary_troop_power_multiplier() -> void:
+	var multiplier := maxf(1.0, primary_troop_power_multiplier)
+	if is_equal_approx(multiplier, 1.0):
+		return
+	hp = maxi(1, roundi(float(hp) * multiplier))
+	damage = maxi(1, roundi(float(damage) * multiplier))
+
+
 ## Applies level `lvl` to this troop by re-running `_init_stats()`.
 ## Call after spawning when the player's stored troop level is known.
 func upgrade_to(lvl: int) -> void:
@@ -882,6 +897,7 @@ func upgrade_to(lvl: int) -> void:
 	level = lvl
 	_init_stats()
 	_apply_troop_level_power_curve()
+	_apply_primary_troop_power_multiplier()
 	max_hp = hp
 	_setup_attack_sfx()
 

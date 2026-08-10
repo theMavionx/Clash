@@ -1,8 +1,22 @@
 # Active Session State
 
-Last updated: 2026-07-05
+Last updated: 2026-08-08
 
 ## Current Focus
+
+The active implementation task is the `clashSOL` Sanctum LST shop integration
+(goal G-010). Sanctum's live API can quote/build/execute transactions only for
+an already deployed LST; the actual LST launch remains a manual Sanctum partner
+process. Local work must therefore ship a truthful launch-pending state and a
+fully tested transaction flow gated by server-only configuration.
+
+Implementation checkpoint: the local two-state integration is complete and
+focused tests pass. The remaining dependency is Sanctum's external pool launch,
+the issued mint/API key, and a separately approved funded smoke transaction.
+The current full web build is independently blocked by unfinished Hidden Tesla
+asset work that references a missing `web/src/assets/buildings/hidden_tesla.png`;
+do not remove or paper over those concurrent owner changes while finishing the
+Sanctum launch.
 
 The repository is being prepared for faster owner-driven Codex work. Durable context now lives in:
 
@@ -49,7 +63,10 @@ Main current goals:
 
 ## Next Useful Checkpoint
 
-Run:
+For clashSOL, approve the branding and revenue wallet in
+`docs/integrations/clashsol-sanctum-launch.md`, complete the Sanctum partner
+launch, then configure the server and run the funded smoke checklist. General
+context recovery remains:
 
 ```powershell
 tools/codex/start-context.cmd -Full

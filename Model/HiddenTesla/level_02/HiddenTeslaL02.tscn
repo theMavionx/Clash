@@ -1,0 +1,85 @@
+[gd_scene load_steps=6 format=3]
+
+[ext_resource type="PackedScene" path="res://Model/HiddenTesla/level_02/hidden_tesla_l02.glb" id="1_tower"]
+[ext_resource type="Material" path="res://Model/HiddenTesla/level_02/hidden_tesla_l02_material.tres" id="2_tower_material"]
+[ext_resource type="PackedScene" path="res://Model/HiddenTesla/hatch/hidden_tesla_hatch_left_panel.glb" id="3_hatch_left_panel"]
+[ext_resource type="PackedScene" path="res://Model/HiddenTesla/hatch/hidden_tesla_hatch_right_panel.glb" id="4_hatch_right_panel"]
+[ext_resource type="Material" path="res://Model/HiddenTesla/hatch/hidden_tesla_hatch_material.tres" id="5_hatch_material"]
+[ext_resource type="PackedScene" path="res://Model/HiddenTesla/hatch/hidden_tesla_hatch_left_anchor.glb" id="6_hatch_left_anchor"]
+[ext_resource type="PackedScene" path="res://Model/HiddenTesla/hatch/hidden_tesla_hatch_right_anchor.glb" id="7_hatch_right_anchor"]
+
+[node name="HiddenTeslaL02" type="Node3D"]
+metadata/visual_level = 2
+metadata/gameplay_footprint = Vector2i(2, 2)
+metadata/normalized_height = 0.9
+metadata/hatch_scale = 0.091
+metadata/active_tower_y = 0.008
+metadata/hidden_tower_y = -1.08
+metadata/hatch_open_degrees = 160.0
+metadata/hatch_open_pivot_x = 0.109
+metadata/hatch_clearance_pivot_x = 0.127
+metadata/gold_mount_scale = 0.06734
+metadata/gold_mount_offset_x = 0.04784
+
+[node name="Hatch" type="Node3D" parent="."]
+
+[node name="HatchL" type="Node3D" parent="Hatch" groups=["hidden_tesla_hatch_left"]]
+position = Vector3(0.182, 0.069127, 0)
+
+[node name="SourceModel" parent="Hatch/HatchL" instance=ExtResource("3_hatch_left_panel")]
+position = Vector3(-0.182, 0, 0)
+scale = Vector3(0.091, 0.091, 0.091)
+
+[node name="HatchLeftPanel" parent="Hatch/HatchL/SourceModel" index="0"]
+surface_material_override/0 = ExtResource("5_hatch_material")
+
+[node name="AnchorModel" parent="Hatch/HatchL" instance=ExtResource("6_hatch_left_anchor")]
+position = Vector3(-0.04784, 0, 0)
+rotation_degrees = Vector3(0, 180, 0)
+scale = Vector3(0.06734, 0.06734, 0.06734)
+
+[node name="HatchLeftAnchor" parent="Hatch/HatchL/AnchorModel" index="0"]
+surface_material_override/0 = ExtResource("5_hatch_material")
+
+[node name="HatchR" type="Node3D" parent="Hatch" groups=["hidden_tesla_hatch_right"]]
+position = Vector3(-0.182, 0.069127, 0)
+
+[node name="SourceModel" parent="Hatch/HatchR" instance=ExtResource("4_hatch_right_panel")]
+position = Vector3(0.182, 0, 0)
+scale = Vector3(0.091, 0.091, 0.091)
+
+[node name="HatchRightPanel" parent="Hatch/HatchR/SourceModel" index="0"]
+surface_material_override/0 = ExtResource("5_hatch_material")
+
+[node name="AnchorModel" parent="Hatch/HatchR" instance=ExtResource("7_hatch_right_anchor")]
+position = Vector3(0.04784, 0, 0)
+rotation_degrees = Vector3(0, 180, 0)
+scale = Vector3(0.06734, 0.06734, 0.06734)
+
+[node name="HatchRightAnchor" parent="Hatch/HatchR/AnchorModel" index="0"]
+surface_material_override/0 = ExtResource("5_hatch_material")
+
+[node name="TeslaTower" type="Node3D" parent="." groups=["hidden_tesla_tower"]]
+position = Vector3(0, 0.008, 0)
+
+[node name="SourceModel" parent="TeslaTower" instance=ExtResource("1_tower")]
+position = Vector3(-0.000714, 0, -0.011243)
+scale = Vector3(0.082609, 0.082609, 0.082609)
+
+[node name="Tesla2" parent="TeslaTower/SourceModel" index="0"]
+surface_material_override/0 = ExtResource("2_tower_material")
+
+[node name="TeslaMuzzle" type="Marker3D" parent="TeslaTower" groups=["hidden_tesla_muzzle"]]
+position = Vector3(0, 0.885, 0)
+
+[node name="TeslaTowerTop" type="Marker3D" parent="TeslaTower"]
+position = Vector3(0, 0.9, 0)
+
+[node name="RevealTriggerOrigin" type="Marker3D" parent="."]
+position = Vector3(0, 0.05, 0)
+
+[editable path="Hatch/HatchL/SourceModel"]
+[editable path="Hatch/HatchR/SourceModel"]
+[editable path="Hatch/HatchL/AnchorModel"]
+[editable path="Hatch/HatchR/AnchorModel"]
+[editable path="TeslaTower/SourceModel"]

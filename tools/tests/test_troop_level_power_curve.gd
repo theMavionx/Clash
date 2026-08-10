@@ -5,6 +5,7 @@ const ARCHER_SCRIPT := preload("res://scripts/archer.gd")
 const MIMIC_SCRIPT := preload("res://scripts/mimic.gd")
 const NECROMANCER_SKELETON_SCRIPT := preload("res://scripts/necromancer_skeleton.gd")
 const HORROR_SCRIPT := preload("res://scripts/horror_evolution.gd")
+const BUILDING_SYSTEM_SCRIPT := preload("res://scripts/building_system.gd")
 
 const EXPECTED_KNIGHT_HP: Array[int] = [369, 492, 936, 1850, 2097, 2763, 3612]
 const EXPECTED_KNIGHT_DAMAGE: Array[int] = [31, 44, 92, 202, 255, 374, 546]
@@ -61,9 +62,43 @@ func _init() -> void:
 	horror_child.is_evolution_child = true
 	horror_child._init_stats()
 	horror_child._apply_troop_level_power_curve()
-	assert(horror_child.hp == 11171, "Horror descendants must scale with their root troop")
-	assert(horror_child.damage == 1780, "Horror descendant damage curve mismatch")
+	assert(horror_child.hp == 5585, "Horror descendants must scale with their root troop")
+	assert(horror_child.damage == 891, "Horror descendant damage curve mismatch")
 	horror_child.free()
+
+	assert(
+		is_equal_approx(BUILDING_SYSTEM_SCRIPT.player_ship_troop_power_multiplier(9), 1.0),
+		"TH9 must not receive the TH10 primary troop bonus",
+	)
+	assert(
+		is_equal_approx(BUILDING_SYSTEM_SCRIPT.player_ship_troop_power_multiplier(10), 1.394136),
+		"TH10 primary troop bonus must remain at the calibrated 1.394136x value",
+	)
+	assert(
+		is_equal_approx(
+			BUILDING_SYSTEM_SCRIPT.player_ship_troop_power_multiplier(10, 9, "fire_dragon"),
+			0.7667748,
+		),
+		"TH10 Fire Dragon role correction mismatch",
+	)
+	assert(
+		is_equal_approx(
+			BUILDING_SYSTEM_SCRIPT.player_ship_troop_power_multiplier(10, 9, "wind_mage"),
+			2.6488584,
+		),
+		"TH10 Wind Mage role correction mismatch",
+	)
+	var th10_knight = KNIGHT_SCRIPT.new()
+	th10_knight.level = 7
+	th10_knight.primary_troop_power_multiplier = (
+		BUILDING_SYSTEM_SCRIPT.player_ship_troop_power_multiplier(10, 7, "knight")
+	)
+	th10_knight._init_stats()
+	th10_knight._apply_troop_level_power_curve()
+	th10_knight._apply_primary_troop_power_multiplier()
+	assert(th10_knight.hp == 10449, "TH10 Knight HP multiplier mismatch")
+	assert(th10_knight.damage == 1579, "TH10 Knight damage multiplier mismatch")
+	th10_knight.free()
 
 	print(
 		"TROOP_LEVEL_POWER_CURVE_OK "

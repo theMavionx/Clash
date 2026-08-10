@@ -94,9 +94,9 @@ const originalMechanicalDragon = { ...TROOP_STATS.mechanical_dragon[1] };
 const originalCannon = { ...DEFENSE_STATS.cannon[7] };
 
 try {
-  assert.equal(Object.keys(DEFENSE_STATS.cannon).length, 7, 'Cannon must define seven combat levels');
+  assert.equal(Object.keys(DEFENSE_STATS.cannon).length, 10, 'Cannon must define ten combat levels');
   let previousDps = 0;
-  for (let level = 1; level <= 7; level++) {
+  for (let level = 1; level <= 10; level++) {
     const stats = DEFENSE_STATS.cannon[level];
     const dps = stats.damage / stats.fireRate;
     assert.ok(dps > previousDps, `Cannon L${level} DPS must improve monotonically`);
@@ -170,7 +170,7 @@ try {
   const doubleCannon = simulate([
     building(1, 'town_hall', 0, 0),
     cannonBuilding,
-    building(3, 'cannon', 15, 17, 7),
+    building(3, 'cannon', 13, 17, 7),
   ], [
     deploy('Knight', attackWorld.x, attackWorld.z, 0),
     deploy('MechanicalDragon', airPoint.x, airPoint.z, 1),

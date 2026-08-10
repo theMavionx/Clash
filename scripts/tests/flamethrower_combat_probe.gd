@@ -680,8 +680,8 @@ func _probe_building_integration(failures: Array[String]) -> void:
 	var flamethrower_def: Dictionary = building_system.building_defs.get("flamethrower", {})
 	_expect(flamethrower_def.get("hp_levels", []).size() == 10, "future L10 remains available to authoring and combat config", failures)
 	_expect(
-		building_system._get_live_building_max_level("flamethrower") == 9,
-		"player-facing Flamethrower upgrades stop at live TH9",
+		building_system._get_live_building_max_level("flamethrower") == 10,
+		"player-facing Flamethrower upgrades reach live TH10",
 		failures
 	)
 	_expect(not bool(flamethrower_def.get("apply_camera_facing_yaw", true)), "directional wrapper opts out of camera-facing yaw", failures)

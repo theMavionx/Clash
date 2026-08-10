@@ -26,8 +26,28 @@ const PLAYER_SHIP_LEVELS: Dictionary = {
 	7: {"capacity": 45, "energy": 16, "cannon_damage": 2800, "cannon_base_cost": 4, "town_hall": 7, "medkit_unlocked": true, "freeze_unlocked": true, "unlocks": ["Freeze Orb"], "cost": {"gold": 12000, "wood": 24000, "ore": 21000}},
 	8: {"capacity": 45, "energy": 18, "cannon_damage": 3400, "cannon_base_cost": 4, "town_hall": 8, "medkit_unlocked": true, "freeze_unlocked": true, "rage_unlocked": true, "unlocks": ["Rage Field"], "cost": {"gold": 16000, "wood": 32000, "ore": 28000}},
 	9: {"capacity": 45, "energy": 20, "cannon_damage": 4100, "cannon_base_cost": 5, "town_hall": 9, "medkit_unlocked": true, "freeze_unlocked": true, "rage_unlocked": true, "tactical_reserve_unlocked": true, "unlocks": ["Tactical Reserve (+2 energy)"], "cost": {"gold": 21000, "wood": 42000, "ore": 36000}},
-	10: {"capacity": 45, "energy": 22, "cannon_damage": 4900, "cannon_base_cost": 5, "town_hall": 10, "medkit_unlocked": true, "freeze_unlocked": true, "rage_unlocked": true, "tactical_reserve_unlocked": true, "skeleton_barrel_unlocked": true, "unlocks": ["Skeleton Barrel"], "cost": {"gold": 27000, "wood": 54000, "ore": 46000}},
+	10: {"capacity": 45, "energy": 22, "cannon_damage": 4900, "cannon_base_cost": 5, "troop_power_multiplier": 1.394136, "troop_level_power_multipliers": [3.0, 3.0, 3.0, 2.85, 2.525, 2.325, 2.075, 1.525, 1.0], "troop_type_power_multipliers": {"demon_king": 0.82875, "fire_dragon": 0.55, "horror": 0.70, "ice_golem": 1.65, "mimic": 0.975, "wind_mage": 1.90}, "troop_type_power_min_level": 5, "town_hall": 10, "medkit_unlocked": true, "freeze_unlocked": true, "rage_unlocked": true, "tactical_reserve_unlocked": true, "skeleton_barrel_unlocked": true, "unlocks": ["Skeleton Barrel"], "cost": {"gold": 27000, "wood": 54000, "ore": 46000}},
 }
+
+static func player_ship_troop_power_multiplier(
+	level: int,
+	troop_level: int = -1,
+	troop_type: String = ""
+) -> float:
+	var normalized_level: int = clampi(level, 1, MAX_PLAYER_SHIP_LEVEL)
+	var config: Dictionary = PLAYER_SHIP_LEVELS.get(normalized_level, {})
+	var multiplier := maxf(1.0, float(config.get("troop_power_multiplier", 1.0)))
+	if troop_level < 1:
+		return multiplier
+	var level_scales: Array = config.get("troop_level_power_multipliers", [])
+	if not level_scales.is_empty():
+		var level_index := clampi(troop_level - 1, 0, level_scales.size() - 1)
+		multiplier *= maxf(0.01, float(level_scales[level_index]))
+	var min_type_level := maxi(1, int(config.get("troop_type_power_min_level", 1)))
+	if troop_level >= min_type_level:
+		var type_scales: Dictionary = config.get("troop_type_power_multipliers", {})
+		multiplier *= maxf(0.01, float(type_scales.get(troop_type, 1.0)))
+	return multiplier
 
 func _main_ship_energy_for_level(level: int) -> int:
 	var normalized_level: int = clampi(level, 1, MAX_PLAYER_SHIP_LEVEL)
@@ -79,12 +99,12 @@ var building_defs: Dictionary = {
 		"scene": "res://Model/Mine/1.glb",
 		"model_scale": 0.25,
 		"model_rotation_y": 270.0,
-		"hp_levels": [1200, 2200, 3800, 6000, 7712, 10302, 12798, 14900, 17200],
+		"hp_levels": [1200, 2200, 3800, 6000, 7712, 10302, 12798, 14900, 17200, 19800],
 		"cost": {"gold": 180, "wood": 500},
 		"upgrade_base_cost": {"gold": 220, "wood": 550},
 		"produces": "ore",
-		"produce_rate": [18, 33, 54, 81, 120, 170, 225, 295, 375],    # per minute per level
-		"produce_max": [200, 400, 800, 1600, 3000, 5000, 7500, 10500, 14000],  # max stored before collection
+		"produce_rate": [18, 33, 54, 81, 120, 170, 225, 295, 375, 465],    # per minute per level
+		"produce_max": [200, 400, 800, 1600, 3000, 5000, 7500, 10500, 14000, 18000],  # max stored before collection
 	},
 	"barn": {
 		"name": "Barn",
@@ -92,9 +112,9 @@ var building_defs: Dictionary = {
 		"color": Color(0.6, 0.25, 0.2, 0.5),
 		"height": 0.4,
 		"scene": "res://Model/Barn/1.glb",
-		"scenes": ["res://Model/Barn/1.glb", "res://Model/Barn/2.glb", "res://Model/Barn/3.glb", "res://Model/Barn/3.glb", "res://Model/Barn/3.glb", "res://Model/Barn/3.glb", "res://Model/Barn/3.glb", "res://Model/Barn/3.glb", "res://Model/Barn/3.glb"],
+		"scenes": ["res://Model/Barn/1.glb", "res://Model/Barn/2.glb", "res://Model/Barn/3.glb", "res://Model/Barn/3.glb", "res://Model/Barn/3.glb", "res://Model/Barn/3.glb", "res://Model/Barn/3.glb", "res://Model/Barn/3.glb", "res://Model/Barn/3.glb", "res://Model/Barn/3.glb"],
 		"model_scale": 0.25,
-		"hp_levels": [2000, 3500, 6000, 9500, 12132, 16094, 19908, 23200, 26800],
+		"hp_levels": [2000, 3500, 6000, 9500, 12132, 16094, 19908, 23200, 26800, 30900],
 		"cost": {"gold": 350, "wood": 900, "ore": 750},
 		"upgrade_base_cost": {"gold": 450, "wood": 1050, "ore": 900},
 		"max_count": 1,
@@ -121,12 +141,12 @@ var building_defs: Dictionary = {
 		"height": 0.35,
 		"scene": "res://Model/Sawmill/1.glb",
 		"model_scale": 0.1,
-		"hp_levels": [1200, 2200, 3800, 6000, 7712, 10302, 12798, 14900, 17200],
+		"hp_levels": [1200, 2200, 3800, 6000, 7712, 10302, 12798, 14900, 17200, 19800],
 		"cost": {"gold": 180, "ore": 500},
 		"upgrade_base_cost": {"gold": 220, "ore": 550},
 		"produces": "wood",
-		"produce_rate": [24, 45, 72, 108, 160, 230, 300, 390, 500],
-		"produce_max": [250, 500, 1000, 2000, 3750, 6000, 9000, 12000, 16000],
+		"produce_rate": [24, 45, 72, 108, 160, 230, 300, 390, 500, 620],
+		"produce_max": [250, 500, 1000, 2000, 3750, 6000, 9000, 12000, 16000, 20500],
 	},
 	"town_hall": {
 		"name": "Town Hall",
@@ -135,13 +155,13 @@ var building_defs: Dictionary = {
 		"color": Color(0.7, 0.55, 0.2, 0.5),
 		"height": 0.5,
 		"scene": "res://Model/Town_Hall/Town Hall Level 1.glb",
-		"scenes": ["res://Model/Town_Hall/Town Hall Level 1.glb", "res://Model/Town_Hall/Town Hall Level 2.glb", "res://Model/Town_Hall/Town Hall Level 3.glb", "res://Model/Town_Hall/Town Hall Level 4.glb", "res://Model/Town_Hall/Town Hall Level 5.glb", "res://Model/Town_Hall/Town Hall Level 6.glb", "res://Model/Town_Hall/Town Hall Level 7.glb", "res://Model/Town_Hall/Town Hall Level 8.glb", "res://Model/Town_Hall/Town Hall Level 9.glb"],
+		"scenes": ["res://Model/Town_Hall/Town Hall Level 1.glb", "res://Model/Town_Hall/Town Hall Level 2.glb", "res://Model/Town_Hall/Town Hall Level 3.glb", "res://Model/Town_Hall/Town Hall Level 4.glb", "res://Model/Town_Hall/Town Hall Level 5.glb", "res://Model/Town_Hall/Town Hall Level 6.glb", "res://Model/Town_Hall/Town Hall Level 7.glb", "res://Model/Town_Hall/Town Hall Level 8.glb", "res://Model/Town_Hall/Town Hall Level 9.glb", "res://Model/Town_Hall/Town Hall Level 10.glb"],
 		"model_scale": 0.05,
-		"hp_levels": [3500, 8000, 16000, 24000, 30848, 41200, 51193, 63000, 76000],
+		"hp_levels": [3500, 8000, 16000, 24000, 30848, 41200, 51193, 63000, 76000, 91000],
 		"is_main": true,
 		"max_count": 1,
 		"cost": {},
-		"upgrade_cost": {2: {"gold": 1200, "wood": 4200, "ore": 3500}, 3: {"gold": 4000, "wood": 8500, "ore": 7500}, 4: {"gold": 12000, "wood": 22000, "ore": 19000}, 5: {"gold": 30000, "wood": 54000, "ore": 48000}, 6: {"gold": 55000, "wood": 75000, "ore": 68000}, 7: {"gold": 85000, "wood": 106000, "ore": 98000}, 8: {"gold": 120000, "wood": 140000, "ore": 130000}, 9: {"gold": 175000, "wood": 220000, "ore": 200000}},
+		"upgrade_cost": {2: {"gold": 1200, "wood": 4200, "ore": 3500}, 3: {"gold": 4000, "wood": 8500, "ore": 7500}, 4: {"gold": 12000, "wood": 22000, "ore": 19000}, 5: {"gold": 30000, "wood": 54000, "ore": 48000}, 6: {"gold": 55000, "wood": 75000, "ore": 68000}, 7: {"gold": 85000, "wood": 106000, "ore": 98000}, 8: {"gold": 120000, "wood": 140000, "ore": 130000}, 9: {"gold": 175000, "wood": 220000, "ore": 200000}, 10: {"gold": 245000, "wood": 270000, "ore": 255000}},
 	},
 	"turret": {
 		"name": "Turret",
@@ -151,10 +171,11 @@ var building_defs: Dictionary = {
 		"height": 0.45,
 		"scene": "res://Model/Turret/scene.gltf",
 		"model_scale": 0.25,
-		"model_scales": [0.2, 0.225, 0.25, 0.275, 0.3, 0.3, 0.3, 0.3, 0.3],
-		"hp_levels": [900, 1600, 2800, 4500, 5558, 7137, 8532, 9900, 11400],
+		"model_scales": [0.2, 0.225, 0.25, 0.275, 0.3, 0.3, 0.3, 0.3, 0.3, 0.3],
+		"hp_levels": [900, 1600, 2800, 4500, 5558, 7137, 8532, 9900, 11400, 13100],
 		"cost": {"gold": 800, "wood": 2400, "ore": 2000},
 		"upgrade_base_cost": {"gold": 750, "wood": 2500, "ore": 2100},
+		"upgrade_cost": {10: {"gold": 96000, "wood": 320000, "ore": 270000}},
 		"altar_ward_bonus": true,
 		"outline_aabb_include": ["Stand"],  # Only count Stand mesh for outline, ignore barrel
 	},
@@ -175,12 +196,13 @@ var building_defs: Dictionary = {
 			"res://Model/cannons/level_07/cannon_level_07.tscn",
 			"res://Model/cannons/level_07/cannon_level_07.tscn",
 			"res://Model/cannons/level_07/cannon_level_07.tscn",
+			"res://Model/cannons/level_07/cannon_level_07.tscn",
 		],
 		"model_scale": 0.125,
-		"model_scales": [0.125, 0.12, 0.125, 0.105, 0.105, 0.10, 0.10, 0.10, 0.10],
+		"model_scales": [0.125, 0.12, 0.125, 0.105, 0.105, 0.10, 0.10, 0.10, 0.10, 0.10],
 		"model_rotation_y": 270.0,
-		"hp_levels": [3200, 3900, 4700, 5600, 6148, 6742, 7141, 8200, 9400],
-		"damage_levels": [40, 109, 259, 431, 510, 577, 620, 690, 760],
+		"hp_levels": [3200, 3900, 4700, 5600, 6148, 6742, 7141, 8200, 9400, 10800],
+		"damage_levels": [40, 109, 259, 431, 510, 577, 620, 690, 760, 840],
 		"cost": {"gold": 16000, "wood": 36000, "ore": 30000},
 		"upgrade_cost": {
 			2: {"gold": 24000, "wood": 52000, "ore": 44000},
@@ -191,6 +213,7 @@ var building_defs: Dictionary = {
 			7: {"gold": 105000, "wood": 142000, "ore": 125000},
 			8: {"gold": 130000, "wood": 175000, "ore": 150000},
 			9: {"gold": 155000, "wood": 210000, "ore": 185000},
+			10: {"gold": 185000, "wood": 250000, "ore": 220000},
 		},
 		"max_count": 2,
 		"altar_ward_bonus": true,
@@ -231,10 +254,10 @@ var building_defs: Dictionary = {
 		"color": Color(0.5, 0.4, 0.3, 0.5),
 		"height": 0.35,
 		"scene": "res://Model/Storage/Storage shed_1.glb",
-		"scenes": ["res://Model/Storage/Storage shed_1.glb", "res://Model/Storage/Storage House_2.glb", "res://Model/Storage/Business Building_3.glb", "res://Model/Storage/Business Building_3.glb", "res://Model/Storage/Business Building_3.glb", "res://Model/Storage/Business Building_3.glb", "res://Model/Storage/Business Building_3.glb", "res://Model/Storage/Business Building_3.glb", "res://Model/Storage/Business Building_3.glb"],
+		"scenes": ["res://Model/Storage/Storage shed_1.glb", "res://Model/Storage/Storage House_2.glb", "res://Model/Storage/Business Building_3.glb", "res://Model/Storage/Business Building_3.glb", "res://Model/Storage/Business Building_3.glb", "res://Model/Storage/Business Building_3.glb", "res://Model/Storage/Business Building_3.glb", "res://Model/Storage/Business Building_3.glb", "res://Model/Storage/Business Building_3.glb", "res://Model/Storage/Business Building_3.glb"],
 		"model_scale": 0.3,
 		"model_offset": Vector3(0, 0, -0.04),
-		"hp_levels": [1400, 2500, 4200, 6500, 8136, 10575, 12798, 14900, 17200],
+		"hp_levels": [1400, 2500, 4200, 6500, 8136, 10575, 12798, 14900, 17200, 19800],
 		"cost": {"gold": 400, "wood": 1400},
 		"upgrade_base_cost": {"gold": 500, "wood": 1500},
 	},
@@ -244,11 +267,11 @@ var building_defs: Dictionary = {
 		"color": Color(0.5, 0.45, 0.55, 0.5),
 		"height": 0.45,
 		"scene": "res://Model/Archer_towers/tower_1.glb",
-		"scenes": ["res://Model/Archer_towers/tower_1.glb", "res://Model/Archer_towers/towerplus_2.fbx", "res://Model/Archer_towers/3,4,5.glb", "res://Model/Archer_towers/3,4,5.glb", "res://Model/Archer_towers/3,4,5.glb", "res://Model/Archer_towers/3,4,5.glb", "res://Model/Archer_towers/3,4,5.glb", "res://Model/Archer_towers/3,4,5.glb", "res://Model/Archer_towers/3,4,5.glb"],
+		"scenes": ["res://Model/Archer_towers/tower_1.glb", "res://Model/Archer_towers/towerplus_2.fbx", "res://Model/Archer_towers/3,4,5.glb", "res://Model/Archer_towers/3,4,5.glb", "res://Model/Archer_towers/3,4,5.glb", "res://Model/Archer_towers/3,4,5.glb", "res://Model/Archer_towers/3,4,5.glb", "res://Model/Archer_towers/3,4,5.glb", "res://Model/Archer_towers/3,4,5.glb", "res://Model/Archer_towers/3,4,5.glb"],
 		"model_scale": 0.03,
 		"model_offset": Vector3(0.11, 0, -0.02),
-		"model_offsets": [Vector3(0.11, 0, -0.02), Vector3(0.11, 0, -0.02), Vector3(0, 0, 0), Vector3(0, 0, 0), Vector3(0, 0, 0), Vector3(0, 0, 0), Vector3(0, 0, 0), Vector3(0, 0, 0), Vector3(0, 0, 0)],
-		"hp_levels": [800, 1500, 2500, 3800, 4703, 6051, 7252, 8400, 9700],
+		"model_offsets": [Vector3(0.11, 0, -0.02), Vector3(0.11, 0, -0.02), Vector3(0, 0, 0), Vector3(0, 0, 0), Vector3(0, 0, 0), Vector3(0, 0, 0), Vector3(0, 0, 0), Vector3(0, 0, 0), Vector3(0, 0, 0), Vector3(0, 0, 0)],
+		"hp_levels": [800, 1500, 2500, 3800, 4703, 6051, 7252, 8400, 9700, 11200],
 		"cost": {"gold": 500, "wood": 1600},
 		"upgrade_base_cost": {"gold": 550, "wood": 1700},
 		"altar_ward_bonus": true,
@@ -268,12 +291,16 @@ var building_defs: Dictionary = {
 		"color": Color(0.55, 0.3, 0.7, 0.5),  # purple magic theme
 		"height": 0.5,
 		"scene": "res://Model/MageTower/1.fbx",
-		"scenes": ["res://Model/MageTower/1.fbx", "res://Model/MageTower/2.fbx", "res://Model/MageTower/3.fbx", "res://Model/MageTower/3.fbx", "res://Model/MageTower/3.fbx", "res://Model/MageTower/3.fbx", "res://Model/MageTower/3.fbx", "res://Model/MageTower/3.fbx", "res://Model/MageTower/3.fbx"],
+		"scenes": ["res://Model/MageTower/1.fbx", "res://Model/MageTower/2.fbx", "res://Model/MageTower/3.fbx", "res://Model/MageTower/3.fbx", "res://Model/MageTower/3.fbx", "res://Model/MageTower/3.fbx", "res://Model/MageTower/3.fbx", "res://Model/MageTower/3.fbx", "res://Model/MageTower/3.fbx", "res://Model/MageTower/3.fbx"],
 		"model_scale": 0.039,  # TARBO FBX scale (0.02 base +50%, then +30% size)
 		"model_rotation_y": 0.0,
-		"hp_levels": [700, 1200, 2000, 3100, 3837, 4939, 5901, 6850, 7900],
+		"hp_levels": [700, 1200, 2000, 3100, 3837, 4939, 5901, 6850, 7900, 9100],
 		"cost": {"gold": 2800, "ore": 5200},
 		"upgrade_base_cost": {"gold": 1600, "ore": 3000},
+		"upgrade_cost": {
+			9: {"gold": 160000, "ore": 270000},
+			10: {"gold": 205000, "ore": 320000},
+		},
 		"max_count": 2,
 		"altar_ward_bonus": true,
 		"hp_bar_height": 0.5,
@@ -307,12 +334,12 @@ var building_defs: Dictionary = {
 		],
 		"model_scale": 0.032,
 		"model_rotation_y": 0.0,
-		"hp_levels": [1700, 2400, 3200, 4100, 4580, 5324, 6019, 6900, 7900],
-		"damage_levels": [95, 108, 158, 227, 233, 240, 294, 330, 370],
-		"range_levels": [1.433, 1.600, 1.767, 1.933, 2.100, 2.250, 2.400, 2.500, 2.600],
-		"min_range_levels": [0.70, 0.75, 0.80, 0.82, 0.82, 0.80, 0.78, 0.78, 0.78],
-		"splash_radius_levels": [0.30, 0.34, 0.38, 0.42, 0.45, 0.49, 0.52, 0.54, 0.56],
-		"reload_levels": [2.40, 2.40, 2.40, 2.40, 2.40, 2.40, 2.40, 2.40, 2.40],
+		"hp_levels": [1700, 2400, 3200, 4100, 4580, 5324, 6019, 6900, 7900, 9000],
+		"damage_levels": [95, 108, 158, 227, 233, 240, 294, 330, 370, 415],
+		"range_levels": [1.10, 1.15, 1.20, 1.25, 1.35, 1.45, 1.55, 1.65, 1.75, 1.85],
+		"min_range_levels": [0.45, 0.47, 0.49, 0.51, 0.54, 0.57, 0.60, 0.63, 0.66, 0.69],
+		"splash_radius_levels": [0.30, 0.34, 0.38, 0.42, 0.45, 0.49, 0.52, 0.54, 0.56, 0.58],
+		"reload_levels": [2.40, 2.40, 2.40, 2.40, 2.40, 2.40, 2.40, 2.40, 2.40, 2.40],
 		"cost": {"gold": 8000, "wood": 12000, "ore": 10000},
 		"upgrade_cost": {
 			2: {"gold": 14000, "wood": 22000, "ore": 18000},
@@ -323,6 +350,7 @@ var building_defs: Dictionary = {
 			7: {"gold": 92000, "wood": 132000, "ore": 112000},
 			8: {"gold": 118000, "wood": 165000, "ore": 140000},
 			9: {"gold": 145000, "wood": 205000, "ore": 175000},
+			10: {"gold": 180000, "wood": 245000, "ore": 210000},
 		},
 		"max_count": 2,
 		"altar_ward_bonus": true,
@@ -352,8 +380,8 @@ var building_defs: Dictionary = {
 			"res://Model/Mortar/mortar_lvl4_projectile.fbx",
 		],
 		"test_damage": 294,
-		"test_damage_levels": [95, 108, 158, 227, 233, 240, 294, 330, 370],
-		"test_range": 2.60,
+		"test_damage_levels": [95, 108, 158, 227, 233, 240, 294, 330, 370, 415],
+		"test_range": 1.55,
 		"test_reload_sec": 2.40,
 	},
 	"harpoon": {
@@ -364,10 +392,10 @@ var building_defs: Dictionary = {
 		"height": 0.50,
 		"scene": "res://Model/Harpoon/HarpoonDefense.tscn",
 		"model_scale": 0.0625,
-		"hp_levels": [1800, 2400, 3200, 4300, 5600, 6756, 10201, 12000, 13800],
-		"damage_levels": [45, 55, 65, 75, 77, 82, 98, 100, 112],
-		"range_levels": [1.20, 1.27, 1.45, 1.64, 1.82, 1.95, 2.08, 2.20, 2.30],
-		"pull_speed_levels": [0.85, 0.92, 0.99, 1.06, 1.13, 1.20, 1.40, 1.48, 1.55],
+		"hp_levels": [1800, 2400, 3200, 4300, 5600, 6756, 10201, 12000, 13800, 15800],
+		"damage_levels": [45, 55, 65, 75, 77, 82, 98, 100, 112, 126],
+		"range_levels": [0.95, 1.00, 1.05, 1.10, 1.20, 1.30, 1.40, 1.50, 1.60, 1.70],
+		"pull_speed_levels": [0.85, 0.92, 0.99, 1.06, 1.13, 1.20, 1.40, 1.48, 1.55, 1.62],
 		"reload_sec": 7.00,
 		"pull_duration_sec": 0.80,
 		"stop_distance": 0.60,
@@ -382,6 +410,7 @@ var building_defs: Dictionary = {
 			7: {"gold": 86000, "wood": 122000, "ore": 104000},
 			8: {"gold": 108000, "wood": 142000, "ore": 124000},
 			9: {"gold": 135000, "wood": 185000, "ore": 160000},
+			10: {"gold": 165000, "wood": 225000, "ore": 195000},
 		},
 		"max_count": 2,
 		"altar_ward_bonus": true,
@@ -395,11 +424,11 @@ var building_defs: Dictionary = {
 		"height": 0.56,
 		"scene": "res://Model/air_bomb/air_bomb.tscn",
 		"model_scale": 1.0,
-		"hp_levels": [3200, 4000, 5000, 6200, 7600, 9200, 11000, 13000, 15200],
-		"damage_levels": [140, 220, 330, 480, 680, 920, 1200, 1520, 1880],
-		"range_levels": [2.25, 2.30, 2.35, 2.40, 2.45, 2.50, 2.55, 2.60, 2.65],
-		"splash_radius_levels": [0.31, 0.31, 0.31, 0.31, 0.31, 0.31, 0.31, 0.31, 0.31],
-		"reload_levels": [4.50, 4.50, 4.50, 4.50, 4.50, 4.50, 4.50, 4.50, 4.50],
+		"hp_levels": [3200, 4000, 5000, 6200, 7600, 9200, 11000, 13000, 15200, 17600],
+		"damage_levels": [140, 220, 330, 480, 680, 920, 1200, 1520, 1880, 2280],
+		"range_levels": [1.10, 1.15, 1.20, 1.25, 1.35, 1.45, 1.55, 1.65, 1.75, 1.85],
+		"splash_radius_levels": [0.31, 0.31, 0.31, 0.31, 0.31, 0.31, 0.31, 0.31, 0.31, 0.31],
+		"reload_levels": [4.50, 4.50, 4.50, 4.50, 4.50, 4.50, 4.50, 4.50, 4.50, 4.50],
 		"target_type": "air",
 		"cost": {"gold": 18000, "wood": 48000, "ore": 40000},
 		"upgrade_cost": {
@@ -411,10 +440,59 @@ var building_defs: Dictionary = {
 			7: {"gold": 108000, "wood": 138000, "ore": 120000},
 			8: {"gold": 126000, "wood": 142000, "ore": 132000},
 			9: {"gold": 140000, "wood": 143000, "ore": 142000},
+			10: {"gold": 160000, "wood": 170000, "ore": 166000},
 		},
 		"max_count": 2,
 		"altar_ward_bonus": true,
 		"hp_bar_height": 0.80,
+	},
+	"hidden_tesla": {
+		"name": "Hidden Tesla",
+		"cells": Vector2i(2, 2),
+		"footprint_extra": 0.35,
+		"color": Color(0.18, 0.58, 0.82, 0.5),
+		"height": 0.62,
+		"scene": "res://Model/HiddenTesla/level_01/HiddenTeslaL01.tscn",
+		"scenes": [
+			"res://Model/HiddenTesla/level_01/HiddenTeslaL01.tscn",
+			"res://Model/HiddenTesla/level_02/HiddenTeslaL02.tscn",
+			"res://Model/HiddenTesla/level_03/HiddenTeslaL03.tscn",
+			"res://Model/HiddenTesla/level_04/HiddenTeslaL04.tscn",
+			"res://Model/HiddenTesla/level_05/HiddenTeslaL05.tscn",
+			"res://Model/HiddenTesla/level_06/HiddenTeslaL06.tscn",
+			"res://Model/HiddenTesla/level_07/HiddenTeslaL07.tscn",
+			"res://Model/HiddenTesla/level_08/HiddenTeslaL08.tscn",
+			"res://Model/HiddenTesla/level_09/HiddenTeslaL09.tscn",
+			"res://Model/HiddenTesla/level_10/HiddenTeslaL10.tscn",
+		],
+		# The supplied meshes are authored much taller/wider than the production
+		# island scale. At 0.65, L10 is 0.702 m tall and its 0.270 m hatch fits the
+		# canonical 0.276 m 2x2 footprint while remaining a little taller than the
+		# 0.534 m Air Bomb.
+		"model_scale": 0.65,
+		"model_rotation_y": 0.0,
+		"apply_camera_facing_yaw": false,
+		"hp_levels": [1800, 2500, 3300, 4300, 5400, 6700, 8200, 9900, 11800, 13900],
+		"damage_levels": [40, 78, 172, 281, 343, 406, 473, 546, 624, 707],
+		"range_levels": [1.05, 1.05, 1.05, 1.05, 1.05, 1.05, 1.05, 1.05, 1.05, 1.05],
+		"reload_levels": [0.65, 0.65, 0.65, 0.65, 0.65, 0.65, 0.65, 0.65, 0.65, 0.65],
+		"trigger_radius": 1.20,
+		"target_type": "ground_air",
+		"cost": {"gold": 24000, "wood": 65000, "ore": 55000},
+		"upgrade_cost": {
+			2: {"gold": 36000, "wood": 80000, "ore": 68000},
+			3: {"gold": 52000, "wood": 100000, "ore": 85000},
+			4: {"gold": 70000, "wood": 122000, "ore": 104000},
+			5: {"gold": 90000, "wood": 145000, "ore": 123000},
+			6: {"gold": 112000, "wood": 168000, "ore": 143000},
+			7: {"gold": 138000, "wood": 192000, "ore": 164000},
+			8: {"gold": 166000, "wood": 220000, "ore": 188000},
+			9: {"gold": 196000, "wood": 250000, "ore": 215000},
+			10: {"gold": 230000, "wood": 285000, "ore": 245000},
+		},
+		"max_count": 2,
+		"altar_ward_bonus": true,
+		"hp_bar_height": 0.82,
 	},
 	"flamethrower": {
 		"name": "Flamethrower",
@@ -443,7 +521,7 @@ var building_defs: Dictionary = {
 		"apply_camera_facing_yaw": false,
 		"hp_levels": [2600, 3350, 4250, 5300, 6500, 7850, 9300, 10900, 12650, 14600],
 		"damage_levels": [58, 78, 105, 137, 172, 210, 250, 295, 345, 400],
-		"range_levels": [1.20, 1.28, 1.36, 1.44, 1.52, 1.60, 1.68, 1.78, 1.86, 1.95],
+		"range_levels": [0.80, 0.85, 0.90, 0.95, 1.05, 1.15, 1.25, 1.35, 1.45, 1.55],
 		"reload_levels": [1.50, 1.50, 1.50, 1.50, 1.50, 1.50, 1.50, 1.50, 1.50, 1.50],
 		"cone_degrees": 50.0,
 		"damage_ticks_per_stream": 3,
@@ -475,10 +553,11 @@ var building_defs: Dictionary = {
 		"model_scale": 0.055,
 		"model_offset": Vector3(0, -0.05, 0),
 		"model_rotation_y": 0.0,
-		"hp_levels": [1, 1, 1, 1, 1, 1, 1, 1, 1],
-		"damage_levels": [500, 750, 1050, 1450, 2000, 2400, 2900, 3400, 3900],
+		"hp_levels": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+		"damage_levels": [500, 750, 1050, 1450, 2000, 2400, 2900, 3400, 3900, 4400],
 		"cost": {"gold": 1800, "wood": 4800, "ore": 4000},
 		"upgrade_base_cost": {"gold": 1000, "wood": 2600, "ore": 2200},
+		"upgrade_cost": {10: {"gold": 125000, "wood": 320000, "ore": 280000}},
 		"max_count": 3,
 		"no_outline": true,
 		"no_hp_bar": true,
@@ -490,10 +569,10 @@ var building_defs: Dictionary = {
 		"color": Color(0.4, 0.4, 0.45, 0.5),
 		"height": 0.3,
 		"scene": "res://Model/Tombstone/GLB format/1.glb",
-		"scenes": ["res://Model/Tombstone/GLB format/1.glb", "res://Model/Tombstone/GLB format/2.glb", "res://Model/Tombstone/GLB format/3.glb", "res://Model/Tombstone/GLB format/4.glb", "res://Model/Tombstone/GLB format/4.glb", "res://Model/Tombstone/GLB format/4.glb", "res://Model/Tombstone/GLB format/4.glb", "res://Model/Tombstone/GLB format/4.glb"],
+		"scenes": ["res://Model/Tombstone/GLB format/1.glb", "res://Model/Tombstone/GLB format/2.glb", "res://Model/Tombstone/GLB format/3.glb", "res://Model/Tombstone/GLB format/4.glb", "res://Model/Tombstone/GLB format/4.glb", "res://Model/Tombstone/GLB format/4.glb", "res://Model/Tombstone/GLB format/4.glb", "res://Model/Tombstone/GLB format/4.glb", "res://Model/Tombstone/GLB format/4.glb", "res://Model/Tombstone/GLB format/4.glb"],
 		"model_scale": 0.3,
-		"model_scales": [0.3, 0.3, 0.3, 0.1, 0.1, 0.1, 0.1, 0.1],
-		"hp_levels": [1000, 1500, 2000, 2700, 2956, 3418, 4200, 5000],
+		"model_scales": [0.3, 0.3, 0.3, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1],
+		"hp_levels": [1000, 1500, 2000, 2700, 2956, 3418, 4200, 5000, 6000, 7000],
 		"cost": {"gold": 600, "ore": 2200},
 		"upgrade_base_cost": {"gold": 650, "ore": 2400},
 		"altar_ward_bonus": true,
@@ -530,6 +609,7 @@ const BUILDING_UPGRADE_COST_MULTIPLIERS: Dictionary = {
 	7: 45,
 	8: 70,
 	9: 100,
+	10: 130,
 }
 
 # ── Resources ─────────────────────────────────────────────────
@@ -558,6 +638,7 @@ const TH_BASE_CAPACITY: Dictionary = {
 	7: {"gold": 35000, "wood": 35000, "ore": 35000},
 	8: {"gold": 50000, "wood": 50000, "ore": 50000},
 	9: {"gold": 55000, "wood": 55000, "ore": 55000},
+	10: {"gold": 60000, "wood": 60000, "ore": 60000},
 }
 const STORAGE_CAPACITY: Dictionary = {
 	1: {"gold": 2000, "wood": 2000, "ore": 2000},
@@ -569,6 +650,7 @@ const STORAGE_CAPACITY: Dictionary = {
 	7: {"gold": 36000, "wood": 36000, "ore": 36000},
 	8: {"gold": 45000, "wood": 45000, "ore": 45000},
 	9: {"gold": 55000, "wood": 55000, "ore": 55000},
+	10: {"gold": 66000, "wood": 66000, "ore": 66000},
 }
 
 func _get_resource_caps() -> Dictionary:
@@ -578,7 +660,7 @@ func _get_resource_caps() -> Dictionary:
 		for b in bs.placed_buildings:
 			if b.get("id", "") == "town_hall":
 				th_level = maxi(th_level, b.get("level", 1))
-	var base: Dictionary = TH_BASE_CAPACITY.get(mini(th_level, 7), TH_BASE_CAPACITY[1])
+	var base: Dictionary = TH_BASE_CAPACITY.get(mini(th_level, LIVE_TOWN_HALL_CAP), TH_BASE_CAPACITY[1])
 	var max_gold: int = base.gold
 	var max_wood: int = base.wood
 	var max_ore: int = base.ore
@@ -598,8 +680,8 @@ func _send_resource_caps() -> void:
 		bridge.send_to_react("resource_caps", caps)
 
 # ── Town Hall Progression (mirrors server/db.js) ─────────────
-## TH8 and TH9 are playable. TH10 assets remain data-ready behind this cap.
-const LIVE_TOWN_HALL_CAP: int = 9
+## Town Hall 10 is the current live progression cap.
+const LIVE_TOWN_HALL_CAP: int = 10
 
 const TH_UNLOCK: Dictionary = {
 	"storage": 2,
@@ -612,47 +694,50 @@ const TH_UNLOCK: Dictionary = {
 	"cannon": 7,
 	"air_bomb": 9,
 	"flamethrower": 8,
+	"hidden_tesla": 10,
 }
 
 # Max count per building per TH level. Individual tables may include future
 # Town Hall gates beyond the current playable TH7 and clamp to their last entry.
 const TH_MAX_COUNT: Dictionary = {
-	"mine": [1, 2, 3, 3, 4, 4, 4, 4, 4],
-	"sawmill": [1, 2, 3, 3, 4, 4, 4, 4, 4],
-	"barn": [1, 1, 1, 1, 1, 1, 1, 1, 1],
-	"altar": [1, 1, 1, 1, 1, 1, 1, 1, 1],
-	"archer_tower": [1, 2, 3, 3, 3, 3, 3, 3, 3],
-	"tombstone": [0, 1, 3, 3, 3, 3, 3, 3, 3],
-	"turret": [0, 0, 3, 3, 3, 3, 3, 3, 3],
-	"shark_trap": [0, 0, 1, 1, 2, 3, 3, 4, 5],
-	"storage": [0, 1, 2, 3, 3, 3, 3, 4, 4],
-	"mage_tower": [0, 0, 0, 2, 2, 2, 2, 3, 3],
-	"mortar": [0, 0, 0, 0, 1, 2, 2, 2, 2],
-	"harpoon": [0, 0, 0, 0, 0, 1, 1, 2, 2], # one at TH6-TH7, second at TH8
-	"cannon": [0, 0, 0, 0, 0, 0, 2, 3, 3],
-	"air_bomb": [0, 0, 0, 0, 0, 0, 0, 0, 2],
+	"mine": [1, 2, 3, 3, 4, 4, 4, 4, 4, 4],
+	"sawmill": [1, 2, 3, 3, 4, 4, 4, 4, 4, 4],
+	"barn": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+	"altar": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+	"archer_tower": [1, 2, 3, 3, 3, 3, 3, 3, 3, 3],
+	"tombstone": [0, 1, 3, 3, 3, 3, 3, 3, 3, 3],
+	"turret": [0, 0, 3, 3, 3, 3, 3, 3, 3, 3],
+	"shark_trap": [0, 0, 1, 1, 2, 3, 3, 4, 5, 5],
+	"storage": [0, 1, 2, 3, 3, 3, 3, 4, 4, 4],
+	"mage_tower": [0, 0, 0, 2, 2, 2, 2, 3, 3, 3],
+	"mortar": [0, 0, 0, 0, 1, 2, 2, 2, 2, 2],
+	"harpoon": [0, 0, 0, 0, 0, 1, 1, 2, 2, 2], # one at TH6-TH7, second at TH8
+	"cannon": [0, 0, 0, 0, 0, 0, 2, 3, 3, 3],
+	"air_bomb": [0, 0, 0, 0, 0, 0, 0, 0, 2, 2],
 	"flamethrower": [0, 0, 0, 0, 0, 0, 0, 1, 1, 2],
-	"town_hall": [1, 1, 1, 1, 1, 1, 1, 1, 1],
+	"hidden_tesla": [0, 0, 0, 0, 0, 0, 0, 0, 0, 2],
+	"town_hall": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
 }
 
 const TH_MAX_LEVEL: Dictionary = {
-	"town_hall": [1, 2, 3, 4, 5, 6, 7, 8, 9],
-	"mine": [1, 2, 3, 4, 5, 6, 7, 8, 9],
-	"sawmill": [1, 2, 3, 4, 5, 6, 7, 8, 9],
-	"barn": [1, 2, 3, 4, 5, 6, 7, 8, 9],
-	"storage": [1, 2, 3, 4, 5, 6, 7, 8, 9],
-	"archer_tower": [1, 2, 3, 4, 5, 6, 7, 8, 9],
-	"turret": [1, 2, 3, 4, 5, 6, 7, 8, 9],
-	"mage_tower": [1, 2, 3, 4, 5, 6, 7, 8, 9],
-	"tombstone": [1, 2, 3, 4, 4, 5, 6, 7, 8],
-	"mortar": [1, 1, 1, 1, 5, 6, 7, 8, 9],
-	"harpoon": [1, 1, 1, 1, 1, 6, 7, 8, 9],
-	"shark_trap": [1, 2, 3, 4, 5, 6, 7, 8, 9],
-	"cannon": [1, 1, 1, 1, 1, 1, 7, 8, 9],
-	"air_bomb": [1, 1, 1, 1, 1, 1, 1, 1, 9],
+	"town_hall": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+	"mine": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+	"sawmill": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+	"barn": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+	"storage": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+	"archer_tower": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+	"turret": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+	"mage_tower": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+	"tombstone": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+	"mortar": [1, 1, 1, 1, 5, 6, 7, 8, 9, 10],
+	"harpoon": [1, 1, 1, 1, 1, 6, 7, 8, 9, 10],
+	"shark_trap": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+	"cannon": [1, 1, 1, 1, 1, 1, 7, 8, 9, 10],
+	"air_bomb": [1, 1, 1, 1, 1, 1, 1, 1, 9, 10],
 	"flamethrower": [1, 1, 1, 1, 1, 1, 1, 8, 9, 10],
-	"port": [1, 2, 3, 3, 3, 3, 3, 3, 3],
-	"altar": [1, 1, 1, 1, 1, 1, 1, 1, 1],
+	"hidden_tesla": [1, 1, 1, 1, 1, 1, 1, 1, 1, 10],
+	"port": [1, 2, 3, 3, 3, 3, 3, 3, 3, 3],
+	"altar": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
 }
 
 func _get_building_max_level_for_th(building_id: String, th_level: int) -> int:
@@ -877,6 +962,8 @@ var grid_extent_z: float = 0.0
 # ── Grid State ────────────────────────────────────────────────
 var grid: Array[bool] = []
 var placed_buildings: Array[Dictionary] = []
+var _hidden_tesla_combat_mode_initialized: bool = false
+var _hidden_tesla_combat_hidden_last: bool = false
 
 # ── Range Indicator ───────────────────────────────────────────
 var _range_indicator: MeshInstance3D = null
@@ -918,11 +1005,13 @@ var _home_player_flag_url: String = ""
 static var _scene_res_cache: Dictionary = {}
 static var _turret_script_res: Script = null
 static var _cannon_script_res: Script = null
+static var _town_hall_cannon_script_res: Script = null
 static var _mage_tower_script_res: Script = null
 static var _mortar_script_res: Script = null
 static var _harpoon_script_res: Script = null
 static var _air_bomb_script_res: Script = null
 static var _flamethrower_script_res: Script = null
+static var _hidden_tesla_script_res: Script = null
 static var _shark_trap_script_res: Script = null
 static var _altar_effect_script_res: Script = null
 static var _town_hall_flag_texture_cache: Dictionary = {}
@@ -988,6 +1077,13 @@ func _attach_building_defense_script(node: Node3D, building_type: String) -> voi
 			_turret_script_res = _load_script_resource("res://scripts/turret.gd")
 		if _turret_script_res:
 			node.set_script(_turret_script_res)
+	elif building_type == "town_hall":
+		if _town_hall_cannon_script_res == null:
+			_town_hall_cannon_script_res = _load_script_resource(
+				"res://scripts/town_hall_cannon.gd"
+			)
+		if _town_hall_cannon_script_res:
+			node.set_script(_town_hall_cannon_script_res)
 	elif building_type == "cannon":
 		if _cannon_script_res == null:
 			_cannon_script_res = _load_script_resource("res://scripts/cannon.gd")
@@ -1018,6 +1114,11 @@ func _attach_building_defense_script(node: Node3D, building_type: String) -> voi
 			_flamethrower_script_res = _load_script_resource("res://scripts/tower_flamethrower.gd")
 		if _flamethrower_script_res:
 			node.set_script(_flamethrower_script_res)
+	elif building_type == "hidden_tesla":
+		if _hidden_tesla_script_res == null:
+			_hidden_tesla_script_res = _load_script_resource("res://scripts/tower_hidden_tesla.gd")
+		if _hidden_tesla_script_res:
+			node.set_script(_hidden_tesla_script_res)
 	elif building_type == "shark_trap":
 		if _shark_trap_script_res == null:
 			_shark_trap_script_res = _load_script_resource("res://scripts/shark_trap.gd")
@@ -1126,7 +1227,9 @@ var trophy_label: Label
 var is_viewing_enemy: bool:
 	get: return _battle.is_viewing_enemy if _battle else false
 	set(v):
-		if _battle: _battle.is_viewing_enemy = v
+		if _battle:
+			_battle.is_viewing_enemy = v
+		_sync_hidden_tesla_combat_state()
 var _server_busy: bool = false
 var enemy_info: Dictionary:
 	get: return _battle.enemy_info if _battle else {}
@@ -1154,6 +1257,7 @@ var _replay_active: bool:
 	set(v):
 		if _battle:
 			_battle._replay_active = v
+		_sync_hidden_tesla_combat_state()
 		BaseTroop.invalidate_replay_telemetry_sink_cache()
 
 
@@ -1355,8 +1459,8 @@ var troop_defs: Dictionary = {
 		"model": "res://Model/Characters/Necromancer/Necromancer.fbx",
 		"script": "res://scripts/necromancer.gd",
 		"min_town_hall_level": 7,
-		"slot_cost": 18,
-		"buy_cost": 1800,
+		"slot_cost": 10,
+		"buy_cost": 1000,
 		"max_level": 9,
 		"costs": {
 			1: {"gold": 250, "ore": 250},
@@ -1374,8 +1478,8 @@ var troop_defs: Dictionary = {
 		"model": "res://Model/Characters/HorrorEvolution/horror.fbx",
 		"script": "res://scripts/horror_evolution.gd",
 		"min_town_hall_level": 10,
-		"slot_cost": 22,
-		"buy_cost": 2200,
+		"slot_cost": 10,
+		"buy_cost": 1000,
 		"max_level": 7,
 		"costs": {
 			1: {"gold": 375, "ore": 375},
@@ -1410,8 +1514,8 @@ var troop_defs: Dictionary = {
 		"model": "res://Model/Characters/IceGolem/IceGolem.fbx",
 		"script": "res://scripts/ice_golem.gd",
 		"min_town_hall_level": 9,
-		"slot_cost": 11,
-		"buy_cost": 1100,
+		"slot_cost": 10,
+		"buy_cost": 1000,
 		"max_level": 9,
 		"costs": {
 			1: {"gold": 500, "ore": 500},
@@ -1429,8 +1533,8 @@ var troop_defs: Dictionary = {
 		"model": "res://Model/Characters/WindMage/WindMage.fbx",
 		"script": "res://scripts/wind_mage.gd",
 		"min_town_hall_level": 8,
-		"slot_cost": 18,
-		"buy_cost": 1800,
+		"slot_cost": 10,
+		"buy_cost": 1000,
 		"max_level": 9,
 		"costs": {
 			1: {"gold": 250, "ore": 250},
@@ -1465,7 +1569,7 @@ var troop_defs: Dictionary = {
 		"display": "Fire Dragon (Flying Boss)",
 		"model": "res://Model/Characters/FireDragon/FireDragon.tscn",
 		"script": "res://scripts/fire_dragon.gd",
-		"slot_cost": 11,
+		"slot_cost": 10,
 		"buy_cost": 0,
 		"max_level": 9,
 		"costs": {
@@ -1520,15 +1624,16 @@ func _register_test_only_buildings() -> void:
 			"res://Model/Mortar/mortar_lvl4.fbx",
 			"res://Model/Mortar/mortar_lvl4.fbx",
 			"res://Model/Mortar/mortar_lvl4.fbx",
+			"res://Model/Mortar/mortar_lvl4.fbx",
 		],
 		"model_scale": 0.032,
 		"model_rotation_y": 0.0,
-		"hp_levels": [1700, 2400, 3200, 4100, 4580, 5324, 6019, 6900, 7900],
-		"damage_levels": [95, 108, 158, 227, 233, 240, 294, 330, 370],
-		"range_levels": [1.433, 1.600, 1.767, 1.933, 2.100, 2.250, 2.400, 2.500, 2.600],
-		"min_range_levels": [0.70, 0.75, 0.80, 0.82, 0.82, 0.80, 0.78, 0.78, 0.78],
-		"splash_radius_levels": [0.30, 0.34, 0.38, 0.42, 0.45, 0.49, 0.52, 0.54, 0.56],
-		"reload_levels": [2.40, 2.40, 2.40, 2.40, 2.40, 2.40, 2.40, 2.40, 2.40],
+		"hp_levels": [1700, 2400, 3200, 4100, 4580, 5324, 6019, 6900, 7900, 9000],
+		"damage_levels": [95, 108, 158, 227, 233, 240, 294, 330, 370, 415],
+		"range_levels": [1.10, 1.15, 1.20, 1.25, 1.35, 1.45, 1.55, 1.65, 1.75, 1.85],
+		"min_range_levels": [0.45, 0.47, 0.49, 0.51, 0.54, 0.57, 0.60, 0.63, 0.66, 0.69],
+		"splash_radius_levels": [0.30, 0.34, 0.38, 0.42, 0.45, 0.49, 0.52, 0.54, 0.56, 0.58],
+		"reload_levels": [2.40, 2.40, 2.40, 2.40, 2.40, 2.40, 2.40, 2.40, 2.40, 2.40],
 		"cost": {"gold": 600, "wood": 900, "ore": 700},
 		"altar_ward_bonus": true,
 		"test_only": true,
@@ -1558,8 +1663,8 @@ func _register_test_only_buildings() -> void:
 			"res://Model/Mortar/mortar_lvl4_projectile.fbx",
 		],
 		"test_damage": 294,
-		"test_damage_levels": [95, 108, 158, 227, 233, 240, 294, 330, 370],
-		"test_range": 2.60,
+		"test_damage_levels": [95, 108, 158, 227, 233, 240, 294, 330, 370, 415],
+		"test_range": 1.55,
 		"test_reload_sec": 2.40,
 	}
 
@@ -1696,6 +1801,10 @@ func _process(delta: float) -> void:
 func _physics_process(delta: float) -> void:
 	if _cannon == null or _battle == null:
 		return
+	# BSBattle owns the authoritative flags and a few legacy paths still update
+	# them directly. The cached transition check keeps existing Teslas in their
+	# revealed state during combat while still catching every enter/leave mode.
+	_sync_hidden_tesla_combat_state()
 	# Both live attacks and deterministic replay playback advance combat on
 	# fixed physics ticks. UI, resource production, and cosmetic animation
 	# remain in `_process`, but no result-affecting timer depends on render FPS.
@@ -4100,6 +4209,10 @@ func _preload_building_scenes() -> void:
 		_turret_script_res = _load_script_resource("res://scripts/turret.gd")
 	if _cannon_script_res == null:
 		_cannon_script_res = _load_script_resource("res://scripts/cannon.gd")
+	if _town_hall_cannon_script_res == null:
+		_town_hall_cannon_script_res = _load_script_resource(
+			"res://scripts/town_hall_cannon.gd"
+		)
 	if _mage_tower_script_res == null:
 		_mage_tower_script_res = _load_script_resource("res://scripts/tower_mage.gd")
 	if _mortar_script_res == null:
@@ -4110,6 +4223,8 @@ func _preload_building_scenes() -> void:
 		_air_bomb_script_res = _load_script_resource("res://scripts/tower_air_bomb.gd")
 	if _flamethrower_script_res == null:
 		_flamethrower_script_res = _load_script_resource("res://scripts/tower_flamethrower.gd")
+	if _hidden_tesla_script_res == null:
+		_hidden_tesla_script_res = _load_script_resource("res://scripts/tower_hidden_tesla.gd")
 
 
 ## Build cache key for a building type at a specific level.
@@ -5188,6 +5303,8 @@ func _hide_grid() -> void:
 
 func _find_building_at(gp: Vector2i) -> Dictionary:
 	for b in placed_buildings:
+		if _is_hidden_tesla_concealed(b):
+			continue
 		var def = building_defs[b.id]
 		var bp = b.grid_pos as Vector2i
 		if gp.x >= bp.x and gp.x < bp.x + def.cells.x and gp.y >= bp.y and gp.y < bp.y + def.cells.y:
@@ -5208,6 +5325,8 @@ func _find_nearest_building_to_local(local_pos: Vector3) -> Dictionary:
 	for b in placed_buildings:
 		if int(b.get("hp", 0)) <= 0:
 			continue
+		if _is_hidden_tesla_concealed(b):
+			continue
 		var node: Node3D = b.get("node", null) as Node3D
 		if not is_instance_valid(node):
 			continue
@@ -5219,6 +5338,13 @@ func _find_nearest_building_to_local(local_pos: Vector3) -> Dictionary:
 			nearest_dist_sq = dist_sq
 			nearest = b
 	return nearest
+
+
+func _is_hidden_tesla_concealed(building: Dictionary) -> bool:
+	return (
+		str(building.get("id", "")) == "hidden_tesla"
+		and not bool(building.get("combat_targetable", true))
+	)
 
 
 func _find_ship_cannon_target_from_mouse() -> Dictionary:
@@ -5349,6 +5475,9 @@ func _clear_selection_for_switch(next_building: Dictionary) -> void:
 
 
 func _select_building(b: Dictionary) -> void:
+	if is_viewing_enemy and _is_hidden_tesla_concealed(b):
+		_deselect_building()
+		return
 	_clear_selection_for_switch(b)
 	_set_mortar_range_visuals_for_selected(false)
 	_show_flamethrower_range_visual({}, false)
@@ -5408,6 +5537,7 @@ func _select_building(b: Dictionary) -> void:
 			"range": current_range,
 			"next_range": next_range,
 			"next_detect_range": next_range,
+			"trigger_radius": float(def.get("trigger_radius", 0.0)),
 			"min_range": current_min_range,
 			"next_min_range": next_min_range,
 			"splash_radius": current_splash_radius,
@@ -5442,7 +5572,7 @@ func _select_building(b: Dictionary) -> void:
 
 	# Range indicator for defense buildings
 	_hide_range_indicator()
-	var defense_ids = ["turret", "cannon", "tombstone", "archtower", "archer_tower", "archertower", "mage_tower", "harpoon", "air_bomb"]
+	var defense_ids = ["turret", "cannon", "tombstone", "archtower", "archer_tower", "archertower", "mage_tower", "harpoon", "air_bomb", "hidden_tesla"]
 	if b.id in defense_ids and is_instance_valid(b.get("node", null)):
 		var bnode = b["node"]
 		var r: float = 1.0
@@ -6295,6 +6425,8 @@ func remove_building(b: Dictionary) -> void:
 		# 0.2-second swell below is cosmetic; allowing its combat script or an
 		# owned projectile pool to advance until the idle tween finishes makes
 		# the final shot count depend on render cadence.
+		if b.node.has_method("mark_destroyed"):
+			b.node.mark_destroyed()
 		b.node.set_process(false)
 		b.node.set_physics_process(false)
 		var tower_unit: Node = b.get("tower_unit_node", null)
@@ -6430,6 +6562,12 @@ func _apply_building_runtime_level(b: Dictionary) -> void:
 		node.set_level(lvl)
 	if is_instance_valid(node) and node.has_method("set_ward_bonus_pct"):
 		node.set_ward_bonus_pct(ward_pct)
+	if (
+		str(b.get("id", "")) == "hidden_tesla"
+		and is_instance_valid(node)
+		and node.has_method("bind_building_runtime")
+	):
+		node.bind_building_runtime(b, self, is_viewing_enemy or _replay_active)
 	if str(b.get("id", "")) == "flamethrower" and is_instance_valid(node) and node.has_method("set_facing_step"):
 		node.set_facing_step(int(b.get("facing_step", 0)))
 	if is_instance_valid(node) and node.has_method("set_spawn_facing_global"):
@@ -6447,6 +6585,34 @@ func _apply_building_runtime_level(b: Dictionary) -> void:
 	for skel in b.get("skeletons", []):
 		if is_instance_valid(skel) and skel.has_method("set_ward_bonus_pct"):
 			skel.set_ward_bonus_pct(ward_pct)
+
+
+func on_hidden_tesla_targetability_changed(
+	building_runtime: Dictionary,
+	is_targetable: bool
+) -> void:
+	if building_runtime.is_empty():
+		return
+	building_runtime["combat_targetable"] = is_targetable
+	BaseTroop.invalidate_buildings_cache()
+
+
+func _sync_hidden_tesla_combat_state(force: bool = false) -> void:
+	var should_hide := is_viewing_enemy or _replay_active
+	if (
+		not force
+		and _hidden_tesla_combat_mode_initialized
+		and _hidden_tesla_combat_hidden_last == should_hide
+	):
+		return
+	_hidden_tesla_combat_mode_initialized = true
+	_hidden_tesla_combat_hidden_last = should_hide
+	for building in placed_buildings:
+		if str(building.get("id", "")) != "hidden_tesla":
+			continue
+		var node: Node = building.get("node", null)
+		if is_instance_valid(node) and node.has_method("set_combat_hidden_enabled"):
+			node.call("set_combat_hidden_enabled", should_hide)
 
 
 func _get_defense_spawn_facing_global() -> Vector3:
@@ -8085,11 +8251,24 @@ func _get_random_grid_world_pos() -> Vector3:
 
 
 
+func prepare_enemy_attack_presentation() -> void:
+	# This is the synchronous visual half of entering combat. It intentionally
+	# runs before any asynchronous fleet build or GPU warmup so an attacker never
+	# gets a frame that exposes selected defenses or an above-ground Hidden Tesla.
+	_deselect_building()
+	is_viewing_enemy = true
+
+
 func _on_attack_pressed() -> void:
-	var fleet: Array = await _build_fleet()
 	var attack_system = get_node_or_null("../AttackSystem")
-	if attack_system and attack_system.has_method("enter_attack_mode"):
-		attack_system.enter_attack_mode(fleet)
+	if not attack_system or not attack_system.has_method("enter_attack_mode"):
+		return
+	prepare_enemy_attack_presentation()
+	var fleet: Array = await _build_fleet()
+	if not is_instance_valid(attack_system):
+		is_viewing_enemy = false
+		return
+	attack_system.enter_attack_mode(fleet)
 
 
 ## Refreshes ship_troops meta on all ports from the authoritative server state.

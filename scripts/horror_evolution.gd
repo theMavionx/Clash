@@ -47,43 +47,43 @@ const STAGE_TEXTURES: Array[Texture2D] = [
 	LURKER_TEXTURE,
 ]
 
-## The family is balanced as a twenty-slot attrition unit. Later stages trade
+## The family is balanced as a ten-slot attrition unit. Later stages trade
 ## per-body power for extra targets, so total effective HP is useful without
 ## eclipsing a full mixed army.
 const LEVEL_STATS: Dictionary = {
 	1: {
-		"hp": [4533, 1367, 413],
-		"damage": [453, 160, 60],
+		"hp": [2266, 683, 207],
+		"damage": [227, 80, 30],
 		"atk_speed": [1.24, 0.96, 0.72],
 	},
 	2: {
-		"hp": [5967, 1800, 547],
-		"damage": [607, 213, 80],
+		"hp": [2983, 900, 274],
+		"damage": [304, 107, 40],
 		"atk_speed": [1.24, 0.96, 0.72],
 	},
 	3: {
-		"hp": [7800, 2333, 707],
-		"damage": [813, 287, 107],
+		"hp": [3900, 1166, 353],
+		"damage": [407, 143, 54],
 		"atk_speed": [1.24, 0.96, 0.72],
 	},
 	4: {
-		"hp": [10067, 3000, 907],
-		"damage": [1100, 387, 147],
+		"hp": [5034, 1500, 453],
+		"damage": [550, 194, 74],
 		"atk_speed": [1.24, 0.96, 0.72],
 	},
 	5: {
-		"hp": [12800, 3800, 1147],
-		"damage": [1480, 520, 193],
+		"hp": [6400, 1900, 573],
+		"damage": [740, 260, 97],
 		"atk_speed": [1.24, 0.96, 0.72],
 	},
 	6: {
-		"hp": [15933, 4700, 1420],
-		"damage": [1973, 693, 260],
+		"hp": [7966, 2350, 710],
+		"damage": [987, 347, 130],
 		"atk_speed": [1.24, 0.96, 0.72],
 	},
 	7: {
-		"hp": [21880, 6420, 1940],
-		"damage": [2912, 1023, 381],
+		"hp": [10940, 3210, 970],
+		"damage": [1456, 512, 190],
 		"atk_speed": [1.24, 0.96, 0.72],
 	},
 }
@@ -241,6 +241,7 @@ func _spawn_next_generation(source: String) -> void:
 		child.set_script(get_script())
 		child.set("evolution_stage", next_stage)
 		child.set("level", level)
+		child.set("primary_troop_power_multiplier", primary_troop_power_multiplier)
 		child.set("is_evolution_child", true)
 		var child_lineage := parent_lineage * 2 + child_index + 1
 		child.set("evolution_lineage", child_lineage)

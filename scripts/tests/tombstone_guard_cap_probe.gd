@@ -10,7 +10,7 @@ func _initialize() -> void:
 
 
 func _run_probe() -> void:
-	for tombstone_level in range(1, 9):
+	for tombstone_level in range(1, 11):
 		var expected_count: int = mini(tombstone_level, 5)
 		var actual_count: int = BuildingSystemScript.tombstone_skeleton_count_for_level(tombstone_level)
 		if actual_count != expected_count:
@@ -56,10 +56,10 @@ func _run_probe() -> void:
 	var tombstone := Node3D.new()
 	tombstone.name = "ProbeTombstone"
 	fixture.add_child(tombstone)
-	var building: Dictionary = {"id": "tombstone", "level": 8, "node": tombstone, "skeletons": []}
+	var building: Dictionary = {"id": "tombstone", "level": 10, "node": tombstone, "skeletons": []}
 
-	building_system._spawn_tombstone_skeletons(building, 8)
-	if not _expect_spawn_state(building, 5, 8):
+	building_system._spawn_tombstone_skeletons(building, 10)
+	if not _expect_spawn_state(building, 5, 10):
 		fixture.queue_free()
 		quit(1)
 		return
@@ -77,7 +77,7 @@ func _run_probe() -> void:
 	fixture.queue_free()
 	await process_frame
 
-	print("TOMBSTONE_GUARD_CAP_PROBE_PASS counts=1,2,3,4,5,5,5,5")
+	print("TOMBSTONE_GUARD_CAP_PROBE_PASS counts=1,2,3,4,5,5,5,5,5,5")
 	quit(0)
 
 

@@ -11,6 +11,7 @@ const TARGETABLE_DEFENSE_IDS: Dictionary = {
 	"harpoon": true,
 	"air_bomb": true,
 	"flamethrower": true,
+	"cannon": true,
 }
 const FREEZABLE_DEFENSE_IDS: Dictionary = {
 	"turret": true,
@@ -21,6 +22,7 @@ const FREEZABLE_DEFENSE_IDS: Dictionary = {
 	"harpoon": true,
 	"air_bomb": true,
 	"flamethrower": true,
+	"cannon": true,
 	"shark_trap": true,
 }
 
@@ -32,12 +34,18 @@ static func canonical_building_id(raw_id: Variant) -> String:
 	return compact
 
 
-static func is_priority_defense(raw_id: Variant) -> bool:
-	return TARGETABLE_DEFENSE_IDS.has(canonical_building_id(raw_id))
+static func is_priority_defense(raw_id: Variant, level: int = -1) -> bool:
+	var building_id := canonical_building_id(raw_id)
+	if building_id == "town_hall":
+		return level >= 10
+	return TARGETABLE_DEFENSE_IDS.has(building_id)
 
 
-static func is_freezable_defense(raw_id: Variant) -> bool:
-	return FREEZABLE_DEFENSE_IDS.has(canonical_building_id(raw_id))
+static func is_freezable_defense(raw_id: Variant, level: int = -1) -> bool:
+	var building_id := canonical_building_id(raw_id)
+	if building_id == "town_hall":
+		return level >= 10
+	return FREEZABLE_DEFENSE_IDS.has(building_id)
 
 
 static func apply_radial(
@@ -54,7 +62,7 @@ static func apply_radial(
 		for building_value: Variant in bs_node.placed_buildings:
 			var building: Dictionary = building_value
 			var building_id := canonical_building_id(building.get("id", ""))
-			if not FREEZABLE_DEFENSE_IDS.has(building_id):
+			if not is_freezable_defense(building_id, int(building.get("level", 1))):
 				continue
 			if int(building.get("hp", 0)) <= 0:
 				continue

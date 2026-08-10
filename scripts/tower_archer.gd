@@ -17,15 +17,16 @@ const CAN_TARGET_GROUND: bool = true
 const CAN_TARGET_AIR: bool = true
 
 const LEVEL_STATS = {
-	1: {"damage": 25, "fire_rate": 1.0, "detect_range": 1.10},
-	2: {"damage": 68, "fire_rate": 1.0, "detect_range": 1.32},
-	3: {"damage": 161, "fire_rate": 1.0, "detect_range": 1.55},
-	4: {"damage": 269, "fire_rate": 1.0, "detect_range": 1.78},
-	5: {"damage": 276, "fire_rate": 1.0, "detect_range": 2.00},
-	6: {"damage": 315, "fire_rate": 1.0, "detect_range": 2.15},
-	7: {"damage": 388, "fire_rate": 1.0, "detect_range": 2.30},
-	8: {"damage": 440, "fire_rate": 1.0, "detect_range": 2.40},
-	9: {"damage": 500, "fire_rate": 1.0, "detect_range": 2.50},
+	1: {"damage": 25, "fire_rate": 1.0, "detect_range": 1.00},
+	2: {"damage": 68, "fire_rate": 1.0, "detect_range": 1.05},
+	3: {"damage": 161, "fire_rate": 1.0, "detect_range": 1.10},
+	4: {"damage": 269, "fire_rate": 1.0, "detect_range": 1.15},
+	5: {"damage": 276, "fire_rate": 1.0, "detect_range": 1.25},
+	6: {"damage": 315, "fire_rate": 1.0, "detect_range": 1.35},
+	7: {"damage": 388, "fire_rate": 1.0, "detect_range": 1.45},
+	8: {"damage": 440, "fire_rate": 1.0, "detect_range": 1.55},
+	9: {"damage": 500, "fire_rate": 1.0, "detect_range": 1.65},
+	10: {"damage": 570, "fire_rate": 1.0, "detect_range": 1.75},
 }
 
 enum State { IDLE, ATTACKING, VICTORY }
@@ -35,7 +36,7 @@ var level: int = 1
 var damage: int = 90
 var ward_bonus_pct: int = 0
 var fire_rate: float = 1.2
-var detect_range: float = 1.10
+var detect_range: float = 1.00
 var _fire_timer: float = 0.0
 var _freeze_remaining: float = 0.0
 var _target: Node3D = null

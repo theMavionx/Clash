@@ -28,7 +28,7 @@ try {
     moveSpeed: 0,
   });
 
-  for (let level = 1; level <= 8; level++) {
+  for (let level = 1; level <= 10; level++) {
     const result = verifyReplay({
       defenderBuildings: [
         building(1, 'town_hall', 2, 2, 1),
@@ -58,7 +58,7 @@ try {
     );
   }
 
-  console.log('[TOMBSTONE_GUARD_CAP] PASS levels=1..8 counts=1,2,3,4,5,5,5,5');
+  console.log('[TOMBSTONE_GUARD_CAP] PASS levels=1..10 counts=1,2,3,4,5,5,5,5,5,5');
 } finally {
   Object.assign(TROOP_STATS.knight[1], originalKnight);
 }

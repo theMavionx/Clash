@@ -41,12 +41,14 @@ function completeRequirements(playerId, townHallLevel) {
 }
 
 try {
-  assert.equal(gameDb.LIVE_TOWN_HALL_CAP, 9);
+  assert.equal(gameDb.LIVE_TOWN_HALL_CAP, 10);
   assert.equal(combat.MAX_TROOP_LEVEL, 9);
   assert.equal(gameDb.TH_UNLOCK.flamethrower, 8);
   assert.equal(gameDb.TH_UNLOCK.air_bomb, 9);
+  assert.equal(gameDb.TH_UNLOCK.hidden_tesla, 10);
   assert.deepEqual(gameDb.TH_MAX_COUNT.flamethrower.slice(7, 9), [1, 1]);
   assert.deepEqual(gameDb.TH_MAX_COUNT.air_bomb.slice(7, 9), [0, 2]);
+  assert.deepEqual(gameDb.TH_MAX_COUNT.hidden_tesla, [0, 0, 0, 0, 0, 0, 0, 0, 0, 2]);
   assert.deepEqual(gameDb.TH_MAX_COUNT.cannon.slice(6, 9), [2, 3, 3]);
   assert.deepEqual(gameDb.TH_MAX_COUNT.mage_tower.slice(6, 9), [2, 3, 3]);
   assert.deepEqual(gameDb.TH_MAX_COUNT.shark_trap.slice(6, 9), [3, 4, 5]);
@@ -54,7 +56,22 @@ try {
   assert.equal(gameDb.getBuildingMaxLevelForTownHall('air_bomb', 9), 9);
   assert.equal(gameDb.getBuildingMaxLevelForTownHall('harpoon', 8), 8);
   assert.equal(gameDb.getBuildingMaxLevelForTownHall('harpoon', 9), 9);
-  assert.equal(gameDb.getBuildingMaxLevelForTownHall('tombstone', 9), 8);
+  assert.equal(gameDb.getBuildingMaxLevelForTownHall('tombstone', 9), 9);
+
+  const standardTenLevelBuildings = [
+    'town_hall', 'mine', 'sawmill', 'barn', 'storage', 'archer_tower',
+    'turret', 'mage_tower', 'tombstone', 'mortar', 'harpoon', 'shark_trap',
+    'cannon', 'flamethrower', 'air_bomb',
+  ];
+  for (const type of standardTenLevelBuildings) {
+    assert.equal(gameDb.BUILDING_DEFS[type].max_level, 10, `${type} must author L10`);
+    assert.equal(gameDb.BUILDING_DEFS[type].hp_levels.length, 10, `${type} must have ten HP rows`);
+    assert.equal(gameDb.getBuildingMaxLevelForTownHall(type, 9), 9, `${type} must cap at L9 on TH9`);
+    assert.equal(gameDb.getBuildingMaxLevelForTownHall(type, 10), 10, `${type} must unlock L10 on TH10`);
+  }
+  assert.equal(gameDb.getBuildingMaxLevelForTownHall('hidden_tesla', 10), 10);
+  assert.equal(gameDb.getBuildingMaxLevelForTownHall('port', 10), 3);
+  assert.equal(gameDb.getBuildingMaxLevelForTownHall('altar', 10), 1);
   assert.deepEqual(gameDb.getBuildingUpgradeCost('harpoon', 8), {
     gold: 135000, wood: 185000, ore: 160000,
   });
@@ -113,18 +130,48 @@ try {
     assert.deepEqual(upgraded.resources, { gold: 95000, wood: 45000, ore: 70000 });
   }
 
-  const blockedTh10 = gameDb.upgradeBuilding(player.id, townHallId);
-  assert.equal(blockedTh10.code, 'TOWN_HALL_LEVEL_NOT_LIVE');
-  assert.equal(blockedTh10.live_town_hall_cap, 9);
-  assert.equal(blockedTh10.target_town_hall_level, 10);
+  completeRequirements(player.id, 9);
+  assert.deepEqual(gameDb.getResourceCaps(player.id), {
+    gold: 275000, wood: 275000, ore: 275000,
+  });
+  gameDb.db.prepare(
+    'UPDATE players SET gold = 275000, wood = 275000, ore = 275000 WHERE id = ?',
+  ).run(player.id);
+  const th10 = gameDb.upgradeBuilding(player.id, townHallId);
+  assert.equal(th10.level, 10);
+  assert.equal(th10.max_hp, 91000);
+  assert.deepEqual(th10.resources, { gold: 30000, wood: 5000, ore: 20000 });
+
+  for (const type of standardTenLevelBuildings.filter((buildingType) => buildingType !== 'town_hall')) {
+    const building = gameDb.db.prepare(`
+      SELECT id, level FROM buildings
+       WHERE player_id = ? AND type = ?
+       ORDER BY id
+       LIMIT 1
+    `).get(player.id, type);
+    assert.ok(building, `${type} must exist in the completed TH9 base`);
+    assert.equal(building.level, 9, `${type} must still be L9 before its TH10 upgrade`);
+    gameDb.db.prepare(
+      'UPDATE players SET gold = 1000000, wood = 1000000, ore = 1000000 WHERE id = ?',
+    ).run(player.id);
+    const upgraded = gameDb.upgradeBuilding(player.id, building.id);
+    assert.equal(upgraded.error, undefined, `${type} L9 -> L10 upgrade must succeed after TH10`);
+    assert.equal(upgraded.level, 10, `${type} must reach L10`);
+    assert.equal(
+      upgraded.max_hp,
+      gameDb.BUILDING_DEFS[type].hp_levels[9],
+      `${type} L10 HP must use its tenth authored row`,
+    );
+  }
 
   const enemy = gameDb.findEnemy(player.id);
   assert.equal(enemy.error, undefined);
   assert.equal(enemy.is_bot, 1);
-  assert.equal(enemy.town_hall_level, 9);
+  assert.equal(enemy.town_hall_level, 10);
   const botBuildings = gameDb.getPlayerBuildings(enemy.id);
-  assert.equal(botBuildings.filter((building) => building.type === 'flamethrower').length, 1);
+  assert.equal(botBuildings.filter((building) => building.type === 'flamethrower').length, 2);
   assert.equal(botBuildings.filter((building) => building.type === 'air_bomb').length, 2);
+  assert.equal(botBuildings.filter((building) => building.type === 'hidden_tesla').length, 2);
   assert.equal(
     botBuildings.every((building) => (
       building.type !== 'flamethrower' || Number.isInteger(building.facing_step)
@@ -139,7 +186,7 @@ try {
   assert.equal(battleSession.combat_snapshot_version, 2);
   assert.equal(battleSession.combat_rules_version, 'flamethrower-v1');
 
-  console.log('[TH8_TH9_PROGRESSION] PASS th8=flamethrower+expanded_defenses th9=2_air_bombs+2xL9_harpoon bot_snapshot=v2 cap=9');
+  console.log('[TH8_TH10_PROGRESSION] PASS th8=flamethrower th9=2_air_bombs th10=2_hidden_teslas upgrades=14xL9_to_L10 bot_snapshot=v2 cap=10');
 } finally {
   gameDb.db.close();
   for (const suffix of ['', '-wal', '-shm']) fs.rmSync(`${dbPath}${suffix}`, { force: true });

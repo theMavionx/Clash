@@ -30,17 +30,18 @@ function refill(playerId) {
 
 try {
   assert.equal(gameDb.TH_UNLOCK.air_bomb, 9);
-  assert.deepEqual(gameDb.TH_MAX_COUNT.air_bomb, [0, 0, 0, 0, 0, 0, 0, 0, 2]);
-  assert.deepEqual(gameDb.TH_MAX_LEVEL.air_bomb, [1, 1, 1, 1, 1, 1, 1, 1, 9]);
+  assert.deepEqual(gameDb.TH_MAX_COUNT.air_bomb, [0, 0, 0, 0, 0, 0, 0, 0, 2, 2]);
+  assert.deepEqual(gameDb.TH_MAX_LEVEL.air_bomb, [1, 1, 1, 1, 1, 1, 1, 1, 9, 10]);
   for (let townHallLevel = 1; townHallLevel <= 8; townHallLevel++) {
     assert.equal(gameDb.getBuildingMaxLevelForTownHall('air_bomb', townHallLevel), 1);
   }
   assert.equal(gameDb.getBuildingMaxLevelForTownHall('air_bomb', 9), 9);
+  assert.equal(gameDb.getBuildingMaxLevelForTownHall('air_bomb', 10), 10);
 
   const expectedDefinition = {
     size: [3, 3],
-    max_level: 9,
-    hp_levels: [3200, 4000, 5000, 6200, 7600, 9200, 11000, 13000, 15200],
+    max_level: 10,
+    hp_levels: [3200, 4000, 5000, 6200, 7600, 9200, 11000, 13000, 15200, 17600],
     cost: { gold: 18000, wood: 48000, ore: 40000 },
     upgrade_cost: {
       2: { gold: 28000, wood: 62000, ore: 52000 },
@@ -51,11 +52,12 @@ try {
       7: { gold: 108000, wood: 138000, ore: 120000 },
       8: { gold: 126000, wood: 142000, ore: 132000 },
       9: { gold: 140000, wood: 143000, ore: 142000 },
+      10: { gold: 160000, wood: 170000, ore: 166000 },
     },
     max_count: 2,
   };
   assert.deepEqual(gameDb.BUILDING_DEFS.air_bomb, expectedDefinition);
-  assert.deepEqual(gameDb.TROPHY_TABLE.air_bomb, [30, 55, 90, 135, 190, 250, 320, 400, 490]);
+  assert.deepEqual(gameDb.TROPHY_TABLE.air_bomb, [30, 55, 90, 135, 190, 250, 320, 400, 490, 590]);
   for (let currentLevel = 1; currentLevel < 9; currentLevel++) {
     const cost = gameDb.getBuildingUpgradeCost('air_bomb', currentLevel);
     assert.deepEqual(cost, expectedDefinition.upgrade_cost[currentLevel + 1]);
@@ -111,7 +113,7 @@ try {
     assert.deepEqual(upgraded.cost, expectedDefinition.upgrade_cost[targetLevel]);
   }
   refill(playerId);
-  assert.match(gameDb.upgradeBuilding(playerId, first.id).error, /Already at max level/);
+  assert.match(gameDb.upgradeBuilding(playerId, first.id).error, /Upgrade Town Hall to level 10 first/);
 
   console.log(
     '[AIR_BOMB_PROGRESSION] PASS unlock=TH9 count=2 levels=1-9'

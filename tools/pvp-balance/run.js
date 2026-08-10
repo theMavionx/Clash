@@ -179,10 +179,24 @@ function runBalanceLab({
   const catalogOnly = !!cli['catalog-only'];
   const verbose = !!cli.verbose;
   const exhaustive = !!cli.exhaustive;
+  const labOffenseScaleAll = numberArg(
+    cli['lab-offense-scale-all'],
+    1,
+    0.5,
+    3.0,
+  );
   const labOffenseScaleByLevel = Object.fromEntries(
-    [5, 6, 7, 8, 9].map((level) => [
+    Array.from(
+      { length: Math.max(1, Number(combatDefs.MAX_TROOP_LEVEL) || 1) },
+      (_, index) => index + 1,
+    ).map((level) => [
       level,
-      numberArg(cli[`lab-offense-scale-th${level}`], 1, 0.5, 2.0),
+      numberArg(
+        cli[`lab-offense-scale-th${level}`],
+        labOffenseScaleAll,
+        0.5,
+        3.0,
+      ),
     ]),
   );
   const labOffenseScaleByTroop = Object.fromEntries(
@@ -217,7 +231,37 @@ function runBalanceLab({
     cli['lab-defense-damage-scale'],
     1,
     0.25,
-    1.5,
+    8.0,
+  );
+  const labDefenseDamageScaleByLevel = Object.fromEntries(
+    Array.from({ length: 10 }, (_, index) => index + 1).map((level) => [
+      level,
+      numberArg(
+        cli[`lab-defense-damage-scale-l${level}`],
+        labDefenseDamageScale,
+        0.25,
+        8.0,
+      ),
+    ]),
+  );
+  const labDefenseDamageScaleByType = Object.fromEntries(
+    Object.keys(combatDefs.DEFENSE_STATS || {})
+      .map((type) => [
+        type,
+        numberArg(
+          cli[`lab-defense-damage-scale-${type.replaceAll('_', '-')}`],
+          1,
+          0.10,
+          8.0,
+        ),
+      ])
+      .filter(([, scale]) => scale !== 1),
+  );
+  const labSkeletonGuardDamageScale = numberArg(
+    cli['lab-defense-damage-scale-skeleton-guard'],
+    1,
+    0.10,
+    8.0,
   );
   const labBuildingHpScale = numberArg(
     cli['lab-building-hp-scale'],
@@ -266,7 +310,12 @@ function runBalanceLab({
       dbApi.TROOP_DEFS[type].slot_cost = slotCost;
     }
   }
-  applyLabDefenseDamageScale(combatDefs, labDefenseDamageScale);
+  applyLabDefenseDamageScale(
+    combatDefs,
+    labDefenseDamageScaleByLevel,
+    labDefenseDamageScaleByType,
+    labSkeletonGuardDamageScale,
+  );
   applyLabLateDefenseDamageScale(combatDefs, labLateDefenseDamageScale);
   applyLabLateDefenseScale(combatDefs, labLateDefenseScale);
   applyLabTownHallDefenseScale(combatDefs, dbApi, 7, labTh7DefenseScale);
@@ -430,7 +479,7 @@ function runBalanceLab({
   for (let th = 1; th <= catalog.maxTownHall; th += 1) {
     armiesByTownHall.set(
       th,
-      generateArmyCatalog(th, catalog, shipCapacities[th], seed),
+      generateArmyCatalog(th, catalog, shipCapacities[th], seed, combatDefs),
     );
   }
   const allArmies = [...armiesByTownHall.values()].flat();
@@ -751,6 +800,9 @@ function runBalanceLab({
     labOffenseScaleByTroop,
     labSlotCostByTroop,
     labDefenseDamageScale,
+    labDefenseDamageScaleByLevel,
+    labDefenseDamageScaleByType,
+    labSkeletonGuardDamageScale,
     labBuildingHpScale,
     labBuildingHpMinLevel,
     labLateDefenseScale,
@@ -1067,19 +1119,40 @@ function applyLabOffenseScales(combatDefs, scaleByLevel, scaleByTroop) {
   }
 }
 
-function applyLabDefenseDamageScale(combatDefs, scale) {
-  if (scale === 1) return;
-  for (const levels of Object.values(combatDefs.DEFENSE_STATS || {})) {
-    for (const stats of Object.values(levels || {})) {
-      if (!stats) continue;
+function applyLabDefenseDamageScale(
+  combatDefs,
+  scaleByLevel,
+  scaleByType,
+  skeletonGuardScale = 1,
+) {
+  for (const [defenseType, sourceLevels] of Object.entries(combatDefs.DEFENSE_STATS || {})) {
+    const levels = Object.isFrozen(sourceLevels) ? { ...sourceLevels } : sourceLevels;
+    if (levels !== sourceLevels) combatDefs.DEFENSE_STATS[defenseType] = levels;
+    for (const [rawLevel, sourceStats] of Object.entries(levels || {})) {
+      if (!sourceStats) continue;
+      const scale = (
+        Number(scaleByLevel?.[Number(rawLevel)] || 1)
+        * Number(scaleByType?.[defenseType] || 1)
+      );
+      if (scale === 1) continue;
+      // Shared authored configs (currently Flamethrower) are deliberately
+      // frozen in production. A balance-lab modifier must operate on a local
+      // row instead of mutating that canonical object.
+      const stats = Object.isFrozen(sourceStats) ? { ...sourceStats } : sourceStats;
+      if (stats !== sourceStats) levels[rawLevel] = stats;
       for (const field of ['damage', 'baseDamage', 'maxDamage']) {
         if (!Number.isFinite(Number(stats[field]))) continue;
         stats[field] = Math.max(1, Math.round(Number(stats[field]) * scale));
       }
     }
   }
-  for (const stats of Object.values(combatDefs.SKELETON_GUARD?.levels || {})) {
+  for (const [rawLevel, stats] of Object.entries(combatDefs.SKELETON_GUARD?.levels || {})) {
     if (!stats) continue;
+    const scale = (
+      Number(scaleByLevel?.[Number(rawLevel)] || 1)
+      * Number(skeletonGuardScale || 1)
+    );
+    if (scale === 1) continue;
     stats.damage = Math.max(1, Math.round(Number(stats.damage) * scale));
   }
 }
@@ -1863,7 +1936,7 @@ function validateBaseCatalog(
   };
 }
 
-function generateArmyCatalog(townHall, catalog, capacity, seed) {
+function generateArmyCatalog(townHall, catalog, capacity, seed, combatDefs) {
   const available = catalog.troops.filter((troop) => troop.unlockTownHall <= townHall);
   if (available.length === 0) {
     throw new Error(`No troops are available at TH${townHall}.`);
@@ -1892,7 +1965,10 @@ function generateArmyCatalog(townHall, catalog, capacity, seed) {
   const ranged = available.filter((troop) => troop.ranged).map((troop) => troop.type);
   const flying = available.filter((troop) => troop.flying).map((troop) => troop.type);
   const tanks = [...available]
-    .sort((a, b) => troopDurabilityScore(b, catalog) - troopDurabilityScore(a, catalog))
+    .sort((a, b) => (
+      troopDurabilityScore(b, catalog, townHall, combatDefs)
+      - troopDurabilityScore(a, catalog, townHall, combatDefs)
+    ))
     .slice(0, Math.max(1, Math.ceil(available.length / 3)))
     .map((troop) => troop.type);
   const trapRunners = available.filter((troop) => troop.trapImmune).map((troop) => troop.type);
@@ -2125,9 +2201,18 @@ function createArmy(townHall, name, pattern, available, capacity) {
   };
 }
 
-function troopDurabilityScore(troop, catalog) {
+function troopDurabilityScore(troop, catalog, townHall = 1, combatDefs = null) {
   const full = catalog.troops.find((entry) => entry.type === troop.type) || troop;
-  return (Number(full.maxHp) / Math.max(1, Number(full.slotCost) || 1))
+  const shipLevel = combatDefs
+    ? discoverShipLevelForTownHall(combatDefs, townHall)
+    : 1;
+  const troopLevel = Math.max(1, Math.min(Number(full.maxLevel) || 1, townHall));
+  const primaryPower = combatDefs?.troopPowerMultiplierForShipLevel?.(
+    shipLevel,
+    troopLevel,
+    full.type,
+  ) || 1;
+  return (Number(full.maxHp) * primaryPower / Math.max(1, Number(full.slotCost) || 1))
     * (full.melee ? 1.2 : 1)
     * (full.flying ? 1.05 : 1);
 }
@@ -6734,6 +6819,9 @@ Core options:
   --lab-offense-scale-th5 <factor>
   --lab-offense-scale-th6 <factor>
   --lab-offense-scale-th7 <factor>
+  --lab-offense-scale-all <factor>
+                           Scale HP and damage for every primary troop level
+                           in an isolated balance run (default: 1.0).
                            Lab-only HP/damage scales for max-level offense search.
   --lab-offense-scale-<troop> <factor>
                            Lab-only L5+ HP/damage scale for one troop type
@@ -6743,6 +6831,11 @@ Core options:
                            search (for example --lab-slot-cost-mage 7).
   --lab-defense-damage-scale <factor>
                            Lab-only damage scale for all defenses in the selected tiers.
+  --lab-defense-damage-scale-lN <factor>
+                           Override the lab damage scale for one defense level (L1-L10).
+  --lab-defense-damage-scale-<type> <factor>
+                           Multiply one defense type after the level scale; use hyphenated
+                           IDs such as hidden-tesla, air-bomb, or skeleton-guard.
   --lab-building-hp-scale <factor>
                            Lab-only HP scale for targetable buildings after catalog
                            validation; shark traps are not changed.

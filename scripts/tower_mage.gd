@@ -11,67 +11,74 @@ const LEVEL_STATS := {
 		"max_damage": 18,
 		"tick_rate": 0.25,
 		"ramp_time": 4.0,
-		"detect_range": 1.05,
+		"detect_range": 0.95,
 	},
 	2: {
 		"base_damage": 11,
 		"max_damage": 51,
 		"tick_rate": 0.25,
 		"ramp_time": 3.0,
-		"detect_range": 1.15,
+		"detect_range": 0.97,
 	},
 	3: {
 		"base_damage": 21,
 		"max_damage": 113,
 		"tick_rate": 0.25,
 		"ramp_time": 2.5,
-		"detect_range": 1.25,
+		"detect_range": 0.99,
 	},
 	4: {
 		"base_damage": 35,
 		"max_damage": 191,
 		"tick_rate": 0.25,
 		"ramp_time": 2.2,
-		"detect_range": 1.35,
+		"detect_range": 1.01,
 	},
 	5: {
 		"base_damage": 38,
 		"max_damage": 202,
 		"tick_rate": 0.25,
 		"ramp_time": 2.0,
-		"detect_range": 1.45,
+		"detect_range": 1.08,
 	},
 	6: {
 		"base_damage": 44,
 		"max_damage": 237,
 		"tick_rate": 0.25,
 		"ramp_time": 1.9,
-		"detect_range": 1.55,
+		"detect_range": 1.15,
 	},
 	7: {
 		"base_damage": 57,
 		"max_damage": 303,
 		"tick_rate": 0.25,
 		"ramp_time": 1.8,
-		"detect_range": 1.65,
+		"detect_range": 1.22,
 	},
 	8: {
 		"base_damage": 64,
 		"max_damage": 340,
 		"tick_rate": 0.25,
 		"ramp_time": 1.8,
-		"detect_range": 1.73,
+		"detect_range": 1.29,
 	},
 	9: {
 		"base_damage": 72,
 		"max_damage": 382,
 		"tick_rate": 0.25,
 		"ramp_time": 1.8,
-		"detect_range": 1.80,
+		"detect_range": 1.36,
+	},
+	10: {
+		"base_damage": 82,
+		"max_damage": 430,
+		"tick_rate": 0.25,
+		"ramp_time": 1.8,
+		"detect_range": 1.43,
 	},
 }
 
-@export var detect_range: float = 1.05
+@export var detect_range: float = 0.95
 ## When true the crystal sinks/shrinks away while no enemy is in range. Off by
 ## default so the crystal stays visible in the base view, where there are never
 ## enemy troops.

@@ -1,8 +1,10 @@
 'use strict';
 
 /**
- * Immutable v2 battle-session snapshots for the approved Flamethrower design.
+ * Immutable v2 battle-session snapshots for authoritative special defenses.
  * The snapshot, rather than the defender's later live base, is replay authority.
+ * Hidden Tesla needs no additional serialized runtime state: every battle starts
+ * hidden, while older snapshots without that building remain valid unchanged.
  */
 
 const flame = require('./flamethrower_config');

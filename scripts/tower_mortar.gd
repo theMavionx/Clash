@@ -3,22 +3,23 @@ extends Node3D
 ## Fires a slow arcing cannonball at ground troops and deals splash damage.
 
 const LEVEL_STATS := {
-	1: {"damage": 95, "fire_rate": 2.40, "detect_range": 1.433, "min_range": 0.70, "splash_radius": 0.30, "travel_time": 0.82},
-	2: {"damage": 108, "fire_rate": 2.40, "detect_range": 1.600, "min_range": 0.75, "splash_radius": 0.34, "travel_time": 0.78},
-	3: {"damage": 158, "fire_rate": 2.40, "detect_range": 1.767, "min_range": 0.80, "splash_radius": 0.38, "travel_time": 0.74},
-	4: {"damage": 227, "fire_rate": 2.40, "detect_range": 1.933, "min_range": 0.82, "splash_radius": 0.42, "travel_time": 0.70},
-	5: {"damage": 233, "fire_rate": 2.40, "detect_range": 2.100, "min_range": 0.82, "splash_radius": 0.45, "travel_time": 0.66},
-	6: {"damage": 240, "fire_rate": 2.40, "detect_range": 2.250, "min_range": 0.80, "splash_radius": 0.49, "travel_time": 0.62},
-	7: {"damage": 294, "fire_rate": 2.40, "detect_range": 2.400, "min_range": 0.78, "splash_radius": 0.52, "travel_time": 0.58},
-	8: {"damage": 330, "fire_rate": 2.40, "detect_range": 2.500, "min_range": 0.78, "splash_radius": 0.54, "travel_time": 0.58},
-	9: {"damage": 370, "fire_rate": 2.40, "detect_range": 2.600, "min_range": 0.78, "splash_radius": 0.56, "travel_time": 0.58},
+	1: {"damage": 95, "fire_rate": 2.40, "detect_range": 1.10, "min_range": 0.45, "splash_radius": 0.30, "travel_time": 0.82},
+	2: {"damage": 108, "fire_rate": 2.40, "detect_range": 1.15, "min_range": 0.47, "splash_radius": 0.34, "travel_time": 0.78},
+	3: {"damage": 158, "fire_rate": 2.40, "detect_range": 1.20, "min_range": 0.49, "splash_radius": 0.38, "travel_time": 0.74},
+	4: {"damage": 227, "fire_rate": 2.40, "detect_range": 1.25, "min_range": 0.51, "splash_radius": 0.42, "travel_time": 0.70},
+	5: {"damage": 233, "fire_rate": 2.40, "detect_range": 1.35, "min_range": 0.54, "splash_radius": 0.45, "travel_time": 0.66},
+	6: {"damage": 240, "fire_rate": 2.40, "detect_range": 1.45, "min_range": 0.57, "splash_radius": 0.49, "travel_time": 0.62},
+	7: {"damage": 294, "fire_rate": 2.40, "detect_range": 1.55, "min_range": 0.60, "splash_radius": 0.52, "travel_time": 0.58},
+	8: {"damage": 330, "fire_rate": 2.40, "detect_range": 1.65, "min_range": 0.63, "splash_radius": 0.54, "travel_time": 0.58},
+	9: {"damage": 370, "fire_rate": 2.40, "detect_range": 1.75, "min_range": 0.66, "splash_radius": 0.56, "travel_time": 0.58},
+	10: {"damage": 415, "fire_rate": 2.40, "detect_range": 1.85, "min_range": 0.69, "splash_radius": 0.58, "travel_time": 0.58},
 }
 
 const PROJECTILE_SCENE: String = "res://Model/Mortar/mortar_lvl2_projectile.fbx"
 const PROJECTILE_POOL_SIZE: int = 8
-const PROJECTILE_SCALES: Array[float] = [0.030, 0.034, 0.038, 0.042, 0.046, 0.050, 0.054]
-const MUZZLE_HEIGHTS: Array[float] = [0.22, 0.25, 0.28, 0.31, 0.31, 0.31, 0.31]
-const ARC_HEIGHTS: Array[float] = [0.50, 0.57, 0.65, 0.74, 0.82, 0.90, 0.98]
+const PROJECTILE_SCALES: Array[float] = [0.030, 0.034, 0.038, 0.042, 0.046, 0.050, 0.054, 0.058, 0.062, 0.066]
+const MUZZLE_HEIGHTS: Array[float] = [0.22, 0.25, 0.28, 0.31, 0.31, 0.31, 0.31, 0.31, 0.31, 0.31]
+const ARC_HEIGHTS: Array[float] = [0.50, 0.57, 0.65, 0.74, 0.82, 0.90, 0.98, 1.04, 1.10, 1.16]
 const TARGET_SEARCH_INTERVAL: float = 0.15
 const IMPACT_FX_DURATION: float = 0.32
 const ATTACK_SFX_PATHS: Array[String] = [
@@ -54,8 +55,8 @@ var level: int = 1
 var damage: int = 95
 var ward_bonus_pct: int = 0
 var fire_rate: float = 2.4
-var detect_range: float = 1.433
-var min_range: float = 0.70
+var detect_range: float = 1.10
+var min_range: float = 0.45
 var splash_radius: float = 0.22
 var travel_time: float = 0.82
 

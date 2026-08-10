@@ -36,7 +36,7 @@ function gdResourceDictionary(resources) {
 }
 
 function maxResourceCapacity(townHallLevel) {
-  const thLevel = Math.max(1, Math.min(7, Number(townHallLevel) || 1));
+  const thLevel = Math.max(1, Math.min(gameDb.LIVE_TOWN_HALL_CAP, Number(townHallLevel) || 1));
   const base = gameDb.TH_BASE_CAPACITY[thLevel];
   const storageCount = Number(gameDb.TH_MAX_COUNT.storage[thLevel - 1] || 0);
   const storageLevel = gameDb.getBuildingMaxLevelForTownHall('storage', thLevel);
@@ -51,12 +51,12 @@ function maxResourceCapacity(townHallLevel) {
 
 function firstTownHallForBuildingLevel(type, targetLevel) {
   const unlock = Number(gameDb.TH_UNLOCK[type] || 1);
-  for (let thLevel = unlock; thLevel <= 7; thLevel += 1) {
+  for (let thLevel = unlock; thLevel <= gameDb.LIVE_TOWN_HALL_CAP; thLevel += 1) {
     if (gameDb.getBuildingMaxLevelForTownHall(type, thLevel) >= targetLevel) {
       return thLevel;
     }
   }
-  return 7;
+  return gameDb.LIVE_TOWN_HALL_CAP;
 }
 
 try {
@@ -69,6 +69,7 @@ try {
     7: 45,
     8: 70,
     9: 100,
+    10: 130,
   });
 
   const expectedTownHallCosts = {
@@ -80,10 +81,11 @@ try {
     7: { gold: 85000, wood: 106000, ore: 98000 },
     8: { gold: 120000, wood: 140000, ore: 130000 },
     9: { gold: 175000, wood: 220000, ore: 200000 },
+    10: { gold: 245000, wood: 270000, ore: 255000 },
   };
 
   let previousTownHallTotal = 0;
-  for (let targetLevel = 2; targetLevel <= 7; targetLevel += 1) {
+  for (let targetLevel = 2; targetLevel <= gameDb.LIVE_TOWN_HALL_CAP; targetLevel += 1) {
     const cost = gameDb.getBuildingUpgradeCost('town_hall', targetLevel - 1);
     const cap = maxResourceCapacity(targetLevel - 1);
     assert.deepEqual(cost, expectedTownHallCosts[targetLevel]);
@@ -124,7 +126,7 @@ try {
       (sum, resource) => sum + Number(def.cost[resource] || 0),
       0,
     );
-    for (let targetLevel = 2; targetLevel <= Math.min(def.max_level, 7); targetLevel += 1) {
+    for (let targetLevel = 2; targetLevel <= def.max_level; targetLevel += 1) {
       const cost = gameDb.getBuildingUpgradeCost(type, targetLevel - 1);
       const requiredTownHall = firstTownHallForBuildingLevel(type, targetLevel);
       const cap = maxResourceCapacity(requiredTownHall);
@@ -138,7 +140,7 @@ try {
     }
   }
 
-  for (const type of ['mortar', 'harpoon', 'cannon']) {
+  for (const type of ['mortar', 'harpoon', 'cannon', 'air_bomb', 'hidden_tesla']) {
     const def = gameDb.BUILDING_DEFS[type];
     assert.ok(def.upgrade_cost, `${type} must use an authored late-game cost table`);
     const clientSection = clientBuildingSection(type);
@@ -150,7 +152,7 @@ try {
       (sum, resource) => sum + Number(def.cost[resource] || 0),
       0,
     );
-    for (let targetLevel = 2; targetLevel <= Math.min(def.max_level, 7); targetLevel += 1) {
+    for (let targetLevel = 2; targetLevel <= def.max_level; targetLevel += 1) {
       const cost = gameDb.getBuildingUpgradeCost(type, targetLevel - 1);
       const requiredTownHall = firstTownHallForBuildingLevel(type, targetLevel);
       const cap = maxResourceCapacity(requiredTownHall);
@@ -178,10 +180,11 @@ try {
 
   assert.deepEqual(maxResourceCapacity(1), { gold: 6000, wood: 6000, ore: 6000 });
   assert.deepEqual(maxResourceCapacity(7), { gold: 143000, wood: 143000, ore: 143000 });
+  assert.deepEqual(maxResourceCapacity(10), { gold: 324000, wood: 324000, ore: 324000 });
 
   console.log(
-    '[BUILDING_COST_PROGRESSION] PASS curve=2,4,8,15,27,45,70,100'
-    + ' th_costs=4.2k_to_220k legacy_capacity_gate=143k',
+    '[BUILDING_COST_PROGRESSION] PASS curve=2,4,8,15,27,45,70,100,130'
+    + ' th_costs=4.2k_to_270k th10_capacity_gate=324k',
   );
 } finally {
   gameDb.db.close();

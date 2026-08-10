@@ -23,15 +23,15 @@ const EMISSION_TEXTURE: Texture2D = preload(
 ## Attack cadence remains authored and readable at every level. HP and damage
 ## carry progression because this troop's value is tanking and disruption.
 const LEVEL_STATS: Dictionary = {
-	1: {"hp": 5250, "damage": 195, "atk_speed": 1.42},
-	2: {"hp": 6750, "damage": 263, "atk_speed": 1.42},
-	3: {"hp": 8750, "damage": 358, "atk_speed": 1.42},
-	4: {"hp": 11125, "damage": 488, "atk_speed": 1.42},
-	5: {"hp": 14000, "damage": 658, "atk_speed": 1.42},
-	6: {"hp": 17250, "damage": 878, "atk_speed": 1.42},
-	7: {"hp": 21840, "damage": 1200, "atk_speed": 1.42},
-	8: {"hp": 21840, "damage": 1200, "atk_speed": 1.42},
-	9: {"hp": 21840, "damage": 1200, "atk_speed": 1.42},
+	1: {"hp": 4773, "damage": 177, "atk_speed": 1.42},
+	2: {"hp": 6136, "damage": 239, "atk_speed": 1.42},
+	3: {"hp": 7955, "damage": 325, "atk_speed": 1.42},
+	4: {"hp": 10114, "damage": 444, "atk_speed": 1.42},
+	5: {"hp": 12727, "damage": 598, "atk_speed": 1.42},
+	6: {"hp": 15682, "damage": 798, "atk_speed": 1.42},
+	7: {"hp": 19855, "damage": 1091, "atk_speed": 1.42},
+	8: {"hp": 19855, "damage": 1091, "atk_speed": 1.42},
+	9: {"hp": 19855, "damage": 1091, "atk_speed": 1.42},
 }
 
 const ANIM_FILES: Array[String] = [
@@ -85,7 +85,10 @@ func _init_stats() -> void:
 
 
 func _building_target_priority(building: Dictionary) -> int:
-	return 0 if CombatFreeze.is_priority_defense(building.get("id", "")) else 1
+	return 0 if CombatFreeze.is_priority_defense(
+		building.get("id", ""),
+		int(building.get("level", 1)),
+	) else 1
 
 
 func _guard_target_priority(_guard: Node3D) -> int:

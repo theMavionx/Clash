@@ -34,7 +34,7 @@ func _run_probe() -> void:
 	root.add_child(fixture)
 
 	var ground := _make_troop("ground_probe", BaseTroop.UNIT_TARGET_GROUND, Vector3(0.8, 0.0, 0.0), 1)
-	var air := _make_troop("air_probe", BaseTroop.UNIT_TARGET_AIR, Vector3(1.5, 0.42, 0.0), 2)
+	var air := _make_troop("air_probe", BaseTroop.UNIT_TARGET_AIR, Vector3(1.25, 0.42, 0.0), 2)
 	fixture.add_child(ground)
 	fixture.add_child(air)
 	ground.state = BaseTroop.State.RUNNING
@@ -83,7 +83,11 @@ func _run_probe() -> void:
 	_expect(air.hp <= 918, "L6 impact applies 82 damage", failures)
 	_expect(is_equal_approx(air.global_position.y, initial_y), "pull preserves target Y", failures)
 	_expect(absf(Vector2(air.global_position.x, air.global_position.z).length() - 0.60) <= 0.00001, "pull stops at 0.60", failures)
-	_expect(first_pull_duration == 45, "L6 pull from 1.50 completes in 45 ticks", failures)
+	_expect(
+		first_pull_duration >= 30 and first_pull_duration <= 40,
+		"L6 compact pull completes in 30-40 ticks",
+		failures
+	)
 	_expect(
 		lock_ticks.size() >= 1 and fire_ticks.size() >= 1 and fire_ticks[0] - lock_ticks[0] == tower.WINDUP_TICKS,
 		"first launch completes the full 27-tick wind-up",
@@ -141,15 +145,15 @@ func _run_probe() -> void:
 	tower.set_level(7)
 	tower.set_ward_bonus_pct(15)
 	_expect(tower.damage == 113, "L7 ward damage uses ceiling rounding", failures)
-	_expect(is_equal_approx(tower.detect_range, 2.08), "L7 range matches Mage Tower at 2.08", failures)
+	_expect(is_equal_approx(tower.detect_range, 1.40), "L7 range uses the compact anti-air boundary", failures)
 	_expect(is_equal_approx(tower.pull_speed, 1.40), "L7 pull speed is 1.40", failures)
 	tower.set_level(8)
 	_expect(tower.damage == 115, "L8 Ward damage uses ceiling rounding", failures)
-	_expect(is_equal_approx(tower.detect_range, 2.20), "L8 range extends to 2.20", failures)
+	_expect(is_equal_approx(tower.detect_range, 1.50), "L8 range extends to 1.50", failures)
 	_expect(is_equal_approx(tower.pull_speed, 1.48), "L8 pull speed is 1.48", failures)
 	tower.set_level(9)
 	_expect(tower.damage == 129, "L9 Ward damage uses ceiling rounding", failures)
-	_expect(is_equal_approx(tower.detect_range, 2.30), "L9 range extends to 2.30", failures)
+	_expect(is_equal_approx(tower.detect_range, 1.60), "L9 range extends to 1.60", failures)
 	_expect(is_equal_approx(tower.pull_speed, 1.55), "L9 pull speed is 1.55", failures)
 
 	var wrapper_scene := load("res://Model/Harpoon/HarpoonDefense.tscn") as PackedScene

@@ -23,15 +23,16 @@ The canonical building key is `harpoon` and the player-facing name is `Harpoon`.
 
 | Level | TH required | HP | Gold | Wood | Ore | Impact | Range | Pull speed |
 |---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| 1 | 6 | 1,800 | 12,000 | 22,000 | 18,000 | 45 | 1.20 | 0.85 |
-| 2 | 6 | 2,400 | 20,000 | 42,000 | 35,000 | 55 | 1.27 | 0.92 |
-| 3 | 6 | 3,200 | 30,000 | 56,000 | 47,000 | 65 | 1.45 | 0.99 |
-| 4 | 6 | 4,300 | 41,000 | 70,000 | 59,000 | 75 | 1.64 | 1.06 |
-| 5 | 6 | 5,600 | 54,000 | 84,000 | 71,000 | 77 | 1.82 | 1.13 |
-| 6 | 6 | 6,756 | 68,000 | 98,000 | 83,000 | 82 | 1.95 | 1.20 |
-| 7 | 7 | 10,201 | 86,000 | 122,000 | 104,000 | 98 | 2.08 | 1.40 |
-| 8 | 8 | 12,000 | 108,000 | 142,000 | 124,000 | 100 | 2.20 | 1.48 |
-| 9 | 9 | 13,800 | 135,000 | 185,000 | 160,000 | 112 | 2.30 | 1.55 |
+| 1 | 6 | 1,800 | 12,000 | 22,000 | 18,000 | 45 | 0.95 | 0.85 |
+| 2 | 6 | 2,400 | 20,000 | 42,000 | 35,000 | 55 | 1.00 | 0.92 |
+| 3 | 6 | 3,200 | 30,000 | 56,000 | 47,000 | 65 | 1.05 | 0.99 |
+| 4 | 6 | 4,300 | 41,000 | 70,000 | 59,000 | 75 | 1.10 | 1.06 |
+| 5 | 6 | 5,600 | 54,000 | 84,000 | 71,000 | 77 | 1.20 | 1.13 |
+| 6 | 6 | 6,756 | 68,000 | 98,000 | 83,000 | 82 | 1.30 | 1.20 |
+| 7 | 7 | 10,201 | 86,000 | 122,000 | 104,000 | 98 | 1.40 | 1.40 |
+| 8 | 8 | 12,000 | 108,000 | 142,000 | 124,000 | 100 | 1.50 | 1.48 |
+| 9 | 9 | 13,800 | 135,000 | 185,000 | 160,000 | 112 | 1.60 | 1.55 |
+| 10 | 10 | 15,800 | 165,000 | 225,000 | 195,000 | 126 | 1.70 | 1.62 |
 
 Reload is 7.00 seconds, pull duration cap is 0.80 seconds, and stop distance is 0.60 at every level.
 
@@ -134,12 +135,16 @@ Where:
 |---|---|---|
 | `H` | Harpoon XZ center | Valid building position |
 | `T` | target XZ center | Valid combat position |
-| `R` | search range | 1.20 L1 through 2.30 L9 |
+| `R` | search range | 0.95 L1 through 1.70 L10 |
 | `S` | stop distance | 0.60 |
 | `P` | pull speed | 0.85 L1 through 1.55 L9 |
 | `Dmax` | maximum pull duration | 0.80 s |
 
-Example: an L6 Harpoon hit at 1.50 distance still reaches the stop ring in 0.75 seconds. A target caught at the full 1.95 range instead moves the same maximum 0.96 units during the fixed 0.80-second pull and finishes at distance 0.99. L7, L8, and L9 full-range catches finish at approximately 0.96, 1.016, and 1.06 respectively. Increasing search range therefore expands engagement coverage without changing control uptime.
+Example: an L6 Harpoon hit at 1.20 reaches the stop ring in 0.50 seconds. A
+target caught at the full 1.30 boundary reaches the same 0.60 stop ring in
+about 0.58 seconds. L7-L10 full-range catches also finish at the stop ring;
+increasing search range expands engagement coverage without changing the fixed
+0.80-second control cap.
 
 ### Control ceiling
 
@@ -181,7 +186,9 @@ or replace the sturdier general-purpose defenses.
 - **Bait with a cheaper flyer:** nearest-target priority lets Windlings or another air body absorb the hook.
 - **Use ground pressure:** Harpoon cannot attack ground units and has lower HP than the main same-tier direct-fire defenses.
 - **Freeze or destroy it:** Freeze breaks an active rope and prevents launch; destroying the building immediately releases the target.
-- **Attack from outside the defended arc:** the playable 1.95-2.08 range exceeds the compact Mage Tower L6-L7 ranges of 1.55-1.65 but remains below the same-tier Archer Tower ranges of 2.15-2.30. Layout orientation and a seven-second reload still leave approach windows.
+- **Attack from outside the defended arc:** the playable 1.30-1.40 range stays
+  slightly above the compact Mage Tower L6-L7 range and below the same-tier
+  Archer Tower. Layout orientation and a seven-second reload leave approach windows.
 - **Read the wind-up:** the 0.45-second lock presentation, rotating head, launched harpoon, taut rope, stop ring, and reload state must communicate what happened.
 - The decorative upper sight is intentionally omitted from the runtime LOD. It has no targeting role; removing its four meshes reduces rendering work without changing aim readability.
 - **Persistent combat facing:** on spawn, the upper assembly faces the real troop deployment zone from `AttackSystem/shipPlane`, not the center of the defended building grid. Construction may begin at zero scale, so this one-time heading waits until the transform is invertible. A valid air target then owns yaw; after that target is lost, retract completes, or reload ends, the upper assembly preserves its last combat heading instead of returning to a home angle. The static base never rotates.
@@ -236,7 +243,7 @@ All values must live in mirrored external/client-server defense data, not scatte
 | Knob | Category | Baseline | Safe test range | Failure outside range |
 |---|---|---:|---:|---|
 | Base damage L6/L7/L8/L9 | Curve | 82 / 98 / 100 / 112 | 75-95 / 90-110 / 95-110 / 105-125 | Too high turns control into burst; too low makes impact unreadable. |
-| Search range L6/L7/L8/L9 | Feel | 1.95 / 2.08 / 2.20 / 2.30 | +/- 0.10 per tier | Too high denies air approach; too low rarely activates. |
+| Search range L6/L7/L8/L9 | Feel | 1.30 / 1.40 / 1.50 / 1.60 | +/- 0.10 per tier | Too high denies air approach; too low rarely activates. |
 | Reload | Gate | 7.00 s | 7.00 s fixed for Phase 1 | Owner-defined identity; do not level-scale. |
 | Stop distance | Feel | 0.60 | 0.55-0.70 | Too low overlaps the tower; too high creates little displacement. |
 | Pull speed L6/L7/L8/L9 | Feel | 1.20 / 1.40 / 1.48 / 1.55 | 1.10-1.60 | Too low cannot reach the ring; too high reads as teleportation. |

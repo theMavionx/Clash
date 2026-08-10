@@ -407,6 +407,8 @@ func _ready() -> void:
 		call_deferred("_capture_harpoon_spawn_facing")
 	if OS.get_cmdline_user_args().has("--verify-flamethrower-test-main"):
 		call_deferred("_verify_flamethrower_test_main")
+	if OS.get_cmdline_user_args().has("--verify-hidden-tesla-test-main"):
+		call_deferred("_verify_hidden_tesla_test_main")
 	if OS.get_cmdline_user_args().has("--verify-test-main-interactions"):
 		call_deferred("_verify_test_main_interactions")
 	if OS.get_cmdline_user_args().has("--verify-test-scene-parity"):
@@ -5030,6 +5032,226 @@ func _verify_flamethrower_test_main() -> void:
 	get_tree().quit(0)
 
 
+func _verify_hidden_tesla_test_main() -> void:
+	if DisplayServer.get_name() == "headless":
+		push_error("[HIDDEN_TESLA_TEST_MAIN] rendered display is required")
+		get_tree().quit(1)
+		return
+	get_window().size = Vector2i(1280, 720)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	var main_bs := _building_system_for_grid("main")
+	if main_bs == null:
+		push_error("[HIDDEN_TESLA_TEST_MAIN] main BuildingSystem is missing")
+		get_tree().quit(1)
+		return
+	reset_sandbox()
+	await get_tree().process_frame
+	seed(8102026)
+	if not await spawn_building_level("hidden_tesla", 10):
+		push_error("[HIDDEN_TESLA_TEST_MAIN] level 10 Hidden Tesla did not spawn")
+		get_tree().quit(1)
+		return
+	await get_tree().create_timer(0.45).timeout
+	await get_tree().process_frame
+	var building: Dictionary = main_bs.selected_building
+	var tower := building.get("node", null) as Node3D
+	if tower == null or str(building.get("id", "")) != "hidden_tesla":
+		push_error("[HIDDEN_TESLA_TEST_MAIN] spawned Tesla is not selected")
+		get_tree().quit(1)
+		return
+	var snapshot: Dictionary = tower.call("get_debug_snapshot")
+	if str(snapshot.get("state", "")) != "ACTIVE":
+		push_error("[HIDDEN_TESLA_TEST_MAIN] owner-side Tesla must be active outside enemy combat")
+		get_tree().quit(1)
+		return
+	var hatch_left := tower.find_child("HatchL", true, false) as Node3D
+	var hatch_right := tower.find_child("HatchR", true, false) as Node3D
+	var tesla_visual := tower.find_child("TeslaTower", true, false) as Node3D
+	if (
+		hatch_left == null
+		or hatch_right == null
+		or tesla_visual == null
+		or not hatch_left.visible
+		or not hatch_right.visible
+		or not tesla_visual.visible
+	):
+		push_error("[HIDDEN_TESLA_TEST_MAIN] hatch/tower visibility contract is incorrect")
+		get_tree().quit(1)
+		return
+	# Let the ordinary local level-up label finish so the evidence frame shows
+	# the final building silhouette and shallow 20-degree hatch without UI obstruction.
+	await get_tree().create_timer(2.15).timeout
+	if _panel:
+		_panel.visible = false
+	if is_instance_valid(_test_ship_ability_hud):
+		_test_ship_ability_hud.visible = false
+	if get_tree().current_scene:
+		_hide_capture_canvas_items(get_tree().current_scene)
+	main_bs._hide_range_indicator()
+	var output_dir := ProjectSettings.globalize_path("res://artifacts/hidden-tesla-test-main")
+	DirAccess.make_dir_recursive_absolute(output_dir)
+	var old_camera := get_viewport().get_camera_3d()
+	if old_camera:
+		old_camera.current = false
+	var camera := Camera3D.new()
+	camera.name = "HiddenTeslaTestMainCamera"
+	camera.projection = Camera3D.PROJECTION_ORTHOGONAL
+	camera.size = 2.65
+	get_tree().current_scene.add_child(camera)
+	var framing_center := tower.global_position + Vector3(0.0, 0.42, 0.0)
+	camera.global_position = framing_center + Vector3(1.55, 2.35, 2.10)
+	camera.look_at(framing_center, Vector3.UP)
+	camera.current = true
+	await RenderingServer.frame_post_draw
+	var output_path := output_dir.path_join("hidden_tesla_l10_active_hatch_20deg.png")
+	var capture_error := get_viewport().get_texture().get_image().save_png(output_path)
+	if capture_error != OK:
+		push_error("[HIDDEN_TESLA_TEST_MAIN] capture failed: " + error_string(capture_error))
+		get_tree().quit(1)
+		return
+	# Exercise the large native Attack button that the owner presses in TestMain.
+	# Its synchronous presentation phase must conceal the Tesla before the first
+	# physics/render frame, even though fleet assembly can await server state.
+	var attack: Node = get_node_or_null("../AttackSystem")
+	var native_attack_button := main_bs.get("attack_button") as Button
+	if attack == null or native_attack_button == null:
+		push_error("[HIDDEN_TESLA_TEST_MAIN] native Attack controls are missing")
+		get_tree().quit(1)
+		return
+	native_attack_button.pressed.emit()
+	await get_tree().physics_frame
+	await get_tree().process_frame
+	snapshot = tower.call("get_debug_snapshot")
+	if (
+		str(snapshot.get("state", "")) != "HIDDEN"
+		or bool(snapshot.get("combat_targetable", true))
+		or tower.visible
+		or tesla_visual.is_visible_in_tree()
+		or hatch_left.is_visible_in_tree()
+		or hatch_right.is_visible_in_tree()
+		or not main_bs.selected_building.is_empty()
+	):
+		push_error("[HIDDEN_TESLA_TEST_MAIN] native Attack must immediately conceal the full Tesla and clear selection")
+		get_tree().quit(1)
+		return
+	var native_attack_wait := 0.0
+	while not bool(attack.get("is_attack_mode")) and native_attack_wait < 4.0:
+		await get_tree().process_frame
+		native_attack_wait += get_process_delta_time()
+	if not bool(attack.get("is_attack_mode")):
+		push_error("[HIDDEN_TESLA_TEST_MAIN] native AttackSystem never entered attack mode")
+		get_tree().quit(1)
+		return
+	attack.call("cleanup_combat_nodes")
+	main_bs.set("is_viewing_enemy", false)
+	await get_tree().physics_frame
+	await get_tree().process_frame
+	snapshot = tower.call("get_debug_snapshot")
+	if str(snapshot.get("state", "")) != "ACTIVE" or not tower.visible:
+		push_error("[HIDDEN_TESLA_TEST_MAIN] native Attack cleanup did not restore owner preview")
+		get_tree().quit(1)
+		return
+
+	# Exercise the F1 sandbox Attack path too, including empty-loadout fallback,
+	# warmup and AttackSystem initialization.
+	clear_test_attack_loadout()
+	await start_test_attack()
+	if attack == null or attack.get("_army_entries").is_empty():
+		push_error("[HIDDEN_TESLA_TEST_MAIN] Attack button did not create the fallback army")
+		get_tree().quit(1)
+		return
+	await get_tree().physics_frame
+	await get_tree().process_frame
+	snapshot = tower.call("get_debug_snapshot")
+	if (
+		str(snapshot.get("state", "")) != "HIDDEN"
+		or bool(snapshot.get("combat_targetable", true))
+		or tower.visible
+		or tesla_visual.is_visible_in_tree()
+		or hatch_left.is_visible_in_tree()
+		or hatch_right.is_visible_in_tree()
+	):
+		push_error("[HIDDEN_TESLA_TEST_MAIN] attack start must fully conceal the untargetable Tesla")
+		get_tree().quit(1)
+		return
+	await RenderingServer.frame_post_draw
+	var hidden_output_path := output_dir.path_join("hidden_tesla_l10_attack_start_hidden.png")
+	capture_error = get_viewport().get_texture().get_image().save_png(hidden_output_path)
+	if capture_error != OK:
+		push_error("[HIDDEN_TESLA_TEST_MAIN] hidden capture failed: " + error_string(capture_error))
+		get_tree().quit(1)
+		return
+	# Spawn through AttackSystem inside the real trigger radius. This proves the
+	# same Tesla that hid at button press can reveal, acquire, and deal damage.
+	var troop_spawn := tower.global_position + Vector3(0.8, 0.0, 0.0)
+	troop_spawn.y = float(main_bs.get("grid_y"))
+	if not attack.call("_spawn_manual_troop", "Knight", 1, troop_spawn, 9910):
+		push_error("[HIDDEN_TESLA_TEST_MAIN] nearby Knight could not spawn")
+		get_tree().quit(1)
+		return
+	var nearby_troop: Node = await _wait_for_live_test_troop(2.0)
+	if nearby_troop == null:
+		push_error("[HIDDEN_TESLA_TEST_MAIN] nearby Knight never became active")
+		get_tree().quit(1)
+		return
+	var troop_hp_before := int(nearby_troop.get("hp"))
+	var combat_wait := 0.0
+	while combat_wait < 2.0:
+		await get_tree().physics_frame
+		combat_wait += get_physics_process_delta_time()
+		snapshot = tower.call("get_debug_snapshot")
+		if str(snapshot.get("state", "")) == "ACTIVE" and int(nearby_troop.get("hp")) < troop_hp_before:
+			break
+	if (
+		str(snapshot.get("state", "")) != "ACTIVE"
+		or int(nearby_troop.get("hp")) >= troop_hp_before
+	):
+		push_error("[HIDDEN_TESLA_TEST_MAIN] Tesla did not reveal and damage the nearby Knight")
+		get_tree().quit(1)
+		return
+	await RenderingServer.frame_post_draw
+	var proximity_output_path := output_dir.path_join("hidden_tesla_l10_proximity_active.png")
+	capture_error = get_viewport().get_texture().get_image().save_png(proximity_output_path)
+	if capture_error != OK:
+		push_error("[HIDDEN_TESLA_TEST_MAIN] proximity capture failed: " + error_string(capture_error))
+		get_tree().quit(1)
+		return
+	attack.call("cleanup_combat_nodes")
+	# Leaving combat must restore the owner preview, and direct legacy writes on
+	# BSBattle must still be detected on the next fixed tick.
+	main_bs.set("is_viewing_enemy", false)
+	await get_tree().physics_frame
+	snapshot = tower.call("get_debug_snapshot")
+	if str(snapshot.get("state", "")) != "ACTIVE" or not tower.visible or not tesla_visual.visible:
+		push_error("[HIDDEN_TESLA_TEST_MAIN] owner mode did not restore the active Tesla")
+		get_tree().quit(1)
+		return
+	var battle: BSBattle = main_bs.get("_battle")
+	battle.is_viewing_enemy = true
+	await get_tree().physics_frame
+	snapshot = tower.call("get_debug_snapshot")
+	if str(snapshot.get("state", "")) != "HIDDEN" or tower.visible or tesla_visual.is_visible_in_tree():
+		push_error("[HIDDEN_TESLA_TEST_MAIN] direct battle-mode transition was not synchronized")
+		get_tree().quit(1)
+		return
+	print(
+		"[HIDDEN_TESLA_TEST_MAIN] PASS level=10 native_attack=true sandbox_attack=true fallback_knight=true attack_start=fully_hidden damage=true reentry=hidden captures=%s,%s,%s"
+		% [output_path, hidden_output_path, proximity_output_path]
+	)
+	camera.queue_free()
+	if old_camera and is_instance_valid(old_camera):
+		old_camera.current = true
+	_finish_test_building_interactions()
+	# TestMain warms shared combat visuals in an owned SubViewport. Wait for the
+	# warmup contract itself instead of guessing a delay, otherwise quitting the
+	# rendered evidence run can leave the final render-target textures alive.
+	await _await_profile_background_warmup(35.0)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	get_tree().quit(0)
+
+
 func _flamethrower_visuals_match_step(
 	building_node: Node3D,
 	editor: FlamethrowerFacingEditor,
@@ -5759,10 +5981,26 @@ func start_test_attack() -> void:
 		return
 	var fleet: Array = _build_test_attack_fleet()
 	if fleet.is_empty():
-		_set_status("Choose at least one attacker.")
-		return
+		# The sandbox Attack button should be immediately usable. Falling back to
+		# one Knight avoids a silent no-op when no loadout was configured yet.
+		var available_troops := _test_attack_troops()
+		var fallback_troop := "Knight" if available_troops.has("Knight") else (
+			available_troops[0] if not available_troops.is_empty() else ""
+		)
+		if fallback_troop == "":
+			_set_status("No test attackers are available.")
+			return
+		_attack_counts[fallback_troop] = 1
+		_attack_levels[fallback_troop] = maxi(1, int(_attack_levels.get(fallback_troop, 1)))
+		_refresh_attack_row(fallback_troop)
+		_refresh_test_ship_row()
+		fleet = _build_test_attack_fleet()
 	if not _load_test_attack_army(false):
 		return
+	# Conceal defender-only information synchronously on the button press. Combat
+	# warmup can take multiple rendered frames on a cold GPU and must never leave
+	# Hidden Tesla models, selection arrows, or range UI visible during that wait.
+	_prepare_test_attack_presentation()
 	var warmup_started := Time.get_ticks_msec()
 	var warmup_script: Script = load("res://scripts/warmup.gd")
 	if warmup_script != null:
@@ -5782,12 +6020,12 @@ func start_test_attack() -> void:
 
 
 func _prepare_test_battle(fleet: Array) -> void:
+	_prepare_test_attack_presentation()
 	var now_sec := Time.get_ticks_msec() / 1000.0
 	for raw_bs in get_tree().get_nodes_in_group("building_systems"):
 		var bs: Node = raw_bs
 		if not is_instance_valid(bs):
 			continue
-		bs.set("is_viewing_enemy", true)
 		var battle: BSBattle = bs.get("_battle")
 		if battle == null:
 			continue
@@ -5807,6 +6045,17 @@ func _prepare_test_battle(fleet: Array) -> void:
 		}
 	reset_test_ship_abilities(false)
 	_refresh_test_ship_ability_hud()
+
+
+func _prepare_test_attack_presentation() -> void:
+	for raw_bs in get_tree().get_nodes_in_group("building_systems"):
+		var bs: Node = raw_bs
+		if not is_instance_valid(bs):
+			continue
+		if bs.has_method("prepare_enemy_attack_presentation"):
+			bs.call("prepare_enemy_attack_presentation")
+		else:
+			bs.set("is_viewing_enemy", true)
 
 
 func load_test_attack_army() -> void:

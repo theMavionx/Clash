@@ -18,12 +18,12 @@ const scratchDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clash-raid-bot-layouts
 const scratchCatalog = path.join(scratchDir, 'catalog.json');
 const scratchReport = path.join(scratchDir, 'report.md');
 const scratchData = path.join(scratchDir, 'report.json');
-const layoutsByTownHall = { 5: 450, 6: 900, 7: 900, 8: 900, 9: 900 };
+const layoutsByTownHall = { 5: 450, 6: 900, 7: 900, 8: 900, 9: 900, 10: 900 };
 
 try {
-  // Existing TH5-TH7 geometry is already production-calibrated. Regeneration
-  // only appends the new tiers so older matchmaking cohorts stay byte-for-byte
-  // stable and their measured win-rate contract does not drift accidentally.
+  // Existing TH5-TH9 geometry is already production-calibrated. Regeneration
+  // only appends TH10 so older matchmaking cohorts stay byte-for-byte stable
+  // and their measured win-rate contract does not drift accidentally.
   const previousCatalogResult = spawnSync(
     'git.exe',
     ['show', 'HEAD:server/data/raid-bot-layouts-th6-th7.json'],
@@ -44,9 +44,9 @@ try {
       balanceTool,
       '--catalog-only',
       '--profile',
-      'th5-th9',
+      'th5-th10',
       '--bases',
-      '6500',
+      '10000',
       '--seed',
       '729',
       '--dump-bases',
@@ -74,9 +74,9 @@ try {
 
   const generated = JSON.parse(fs.readFileSync(scratchCatalog, 'utf8'));
   const compact = {};
-  for (const townHall of [5, 6, 7, 8, 9]) {
+  for (const townHall of [5, 6, 7, 8, 9, 10]) {
     const layoutsPerTownHall = layoutsByTownHall[townHall];
-    compact[townHall] = townHall <= 7
+    compact[townHall] = townHall <= 9
       ? previousCatalog[String(townHall)]
       : generated
         .filter((base) => Number(base.townHall) === townHall)
@@ -101,7 +101,7 @@ try {
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
   fs.writeFileSync(outputPath, `${JSON.stringify(compact)}\n`, 'utf8');
   console.log(
-    `Wrote TH5=${layoutsByTownHall[5]}, TH6=${layoutsByTownHall[6]}, TH7=${layoutsByTownHall[7]}, TH8=${layoutsByTownHall[8]}, and TH9=${layoutsByTownHall[9]} layouts to ${outputPath}`,
+    `Wrote TH5=${layoutsByTownHall[5]}, TH6=${layoutsByTownHall[6]}, TH7=${layoutsByTownHall[7]}, TH8=${layoutsByTownHall[8]}, TH9=${layoutsByTownHall[9]}, and TH10=${layoutsByTownHall[10]} layouts to ${outputPath}`,
   );
 } finally {
   fs.rmSync(scratchDir, { recursive: true, force: true });

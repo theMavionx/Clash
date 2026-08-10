@@ -18,15 +18,15 @@ const EMISSION_TEXTURE: Texture2D = preload(
 )
 
 const LEVEL_STATS: Dictionary = {
-	1: {"hp": 90, "damage": 20, "atk_speed": 0.90, "move_speed": 0.65},
-	2: {"hp": 120, "damage": 26, "atk_speed": 0.90, "move_speed": 0.67},
-	3: {"hp": 155, "damage": 34, "atk_speed": 0.90, "move_speed": 0.69},
-	4: {"hp": 200, "damage": 44, "atk_speed": 0.90, "move_speed": 0.71},
-	5: {"hp": 250, "damage": 57, "atk_speed": 0.90, "move_speed": 0.73},
-	6: {"hp": 310, "damage": 73, "atk_speed": 0.90, "move_speed": 0.75},
-	7: {"hp": 450, "damage": 110, "atk_speed": 0.90, "move_speed": 0.77},
-	8: {"hp": 510, "damage": 124, "atk_speed": 0.90, "move_speed": 0.77},
-	9: {"hp": 575, "damage": 140, "atk_speed": 0.90, "move_speed": 0.77},
+	1: {"hp": 50, "damage": 11, "atk_speed": 0.90, "move_speed": 0.65},
+	2: {"hp": 67, "damage": 14, "atk_speed": 0.90, "move_speed": 0.67},
+	3: {"hp": 86, "damage": 19, "atk_speed": 0.90, "move_speed": 0.69},
+	4: {"hp": 111, "damage": 24, "atk_speed": 0.90, "move_speed": 0.71},
+	5: {"hp": 139, "damage": 32, "atk_speed": 0.90, "move_speed": 0.73},
+	6: {"hp": 172, "damage": 41, "atk_speed": 0.90, "move_speed": 0.75},
+	7: {"hp": 250, "damage": 61, "atk_speed": 0.90, "move_speed": 0.77},
+	8: {"hp": 283, "damage": 69, "atk_speed": 0.90, "move_speed": 0.77},
+	9: {"hp": 319, "damage": 78, "atk_speed": 0.90, "move_speed": 0.77},
 }
 
 const ANIM_FILES: Array[String] = [

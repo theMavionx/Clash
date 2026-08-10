@@ -373,9 +373,9 @@ process.env.CLASH_MAIN_DB = dbPath;
 const gameDb = require('./db');
 try {
   assert.equal(gameDb.TROOP_DEFS.wind_mage.min_town_hall_level, 8);
-  assert.equal(gameDb.TROOP_DEFS.wind_mage.slot_cost, 15);
-  assert.equal(gameDb.TROOP_DEFS.wind_mage.buy_cost, 1500);
-  assert.equal(gameDb.TROOP_DEFS.wind_mage.max_level, 7);
+  assert.equal(gameDb.TROOP_DEFS.wind_mage.slot_cost, 10);
+  assert.equal(gameDb.TROOP_DEFS.wind_mage.buy_cost, 1000);
+  assert.equal(gameDb.TROOP_DEFS.wind_mage.max_level, 9);
   assert.equal(gameDb.ACTIVE_TROOP_TYPES.includes('wind_mage'), true);
 } finally {
   gameDb.db.close();

@@ -28,18 +28,20 @@ static var _web_body_material: StandardMaterial3D = null
 static var _combined_body_mesh: ArrayMesh = null
 
 const LEVEL_STATS: Dictionary = {
-	1: {"hp": 360, "damage": 38, "atk_speed": 0.86, "move_speed": 0.46, "detection_radius": 0.95},
-	2: {"hp": 520, "damage": 53, "atk_speed": 0.86, "move_speed": 0.52, "detection_radius": 1.10},
-	3: {"hp": 620, "damage": 66, "atk_speed": 0.86, "move_speed": 0.54, "detection_radius": 1.25},
-	4: {"hp": 820, "damage": 97, "atk_speed": 0.86, "move_speed": 0.58, "detection_radius": 1.40},
-	5: {"hp": 998, "damage": 125, "atk_speed": 0.86, "move_speed": 0.60, "detection_radius": 1.52},
-	6: {"hp": 1378, "damage": 179, "atk_speed": 0.86, "move_speed": 0.60, "detection_radius": 1.52},
-	7: {"hp": 1848, "damage": 238, "atk_speed": 0.86, "move_speed": 0.60, "detection_radius": 1.52},
-	8: {"hp": 2416, "damage": 310, "atk_speed": 0.86, "move_speed": 0.60, "detection_radius": 1.52},
+	1: {"hp": 360, "damage": 38, "atk_speed": 0.86, "move_speed": 0.46, "detection_radius": 0.70},
+	2: {"hp": 520, "damage": 53, "atk_speed": 0.86, "move_speed": 0.52, "detection_radius": 0.75},
+	3: {"hp": 620, "damage": 66, "atk_speed": 0.86, "move_speed": 0.54, "detection_radius": 0.80},
+	4: {"hp": 820, "damage": 97, "atk_speed": 0.86, "move_speed": 0.58, "detection_radius": 0.85},
+	5: {"hp": 998, "damage": 125, "atk_speed": 0.86, "move_speed": 0.60, "detection_radius": 0.95},
+	6: {"hp": 1378, "damage": 179, "atk_speed": 0.86, "move_speed": 0.60, "detection_radius": 0.95},
+	7: {"hp": 1848, "damage": 238, "atk_speed": 0.86, "move_speed": 0.60, "detection_radius": 0.95},
+	8: {"hp": 2416, "damage": 310, "atk_speed": 0.86, "move_speed": 0.60, "detection_radius": 0.95},
+	9: {"hp": 3150, "damage": 400, "atk_speed": 0.86, "move_speed": 0.60, "detection_radius": 0.95},
+	10: {"hp": 3650, "damage": 450, "atk_speed": 0.86, "move_speed": 0.60, "detection_radius": 0.95},
 }
 
 var level: int = 2
-var detection_radius: float = 1.10
+var detection_radius: float = 0.75
 var patrol_radius: float = 0.35
 var patrol_inner_radius: float = 0.18  ## min distance from tombstone center (outside building body)
 var move_speed: float = 0.52

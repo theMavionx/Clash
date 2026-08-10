@@ -7,15 +7,16 @@ extends Node3D
 signal air_bomb_event(kind: String, payload: Dictionary)
 
 const LEVEL_STATS: Dictionary = {
-	1: {"damage": 140, "detect_range": 2.25},
-	2: {"damage": 220, "detect_range": 2.30},
-	3: {"damage": 330, "detect_range": 2.35},
-	4: {"damage": 480, "detect_range": 2.40},
-	5: {"damage": 680, "detect_range": 2.45},
-	6: {"damage": 920, "detect_range": 2.50},
-	7: {"damage": 1200, "detect_range": 2.55},
-	8: {"damage": 1520, "detect_range": 2.60},
-	9: {"damage": 1880, "detect_range": 2.65},
+	1: {"damage": 140, "detect_range": 1.10},
+	2: {"damage": 220, "detect_range": 1.15},
+	3: {"damage": 330, "detect_range": 1.20},
+	4: {"damage": 480, "detect_range": 1.25},
+	5: {"damage": 680, "detect_range": 1.35},
+	6: {"damage": 920, "detect_range": 1.45},
+	7: {"damage": 1200, "detect_range": 1.55},
+	8: {"damage": 1520, "detect_range": 1.65},
+	9: {"damage": 1880, "detect_range": 1.75},
+	10: {"damage": 2280, "detect_range": 1.85},
 }
 
 const FIXED_DELTA: float = 1.0 / 60.0
@@ -30,7 +31,7 @@ const PROJECTILE_SCRIPT: Script = preload("res://scripts/air_bomb_projectile.gd"
 var level: int = 1
 var damage: int = 140
 var ward_bonus_pct: int = 0
-var detect_range: float = 2.25
+var detect_range: float = 1.10
 
 var _sim_tick: int = -1
 var _next_scan_tick: int = 0

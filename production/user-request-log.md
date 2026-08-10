@@ -3221,9 +3221,100 @@ Follow-up:
 - Follow-up: "не тест а відразу запускай" — the owner explicitly authorized live execution. Confirm Digger has no active Phoenix position before launch, keep the existing proportional-collateral sizing and safety ceilings, switch the local ignored runtime to live mode, and start the watcher without replaying historical fills.
 - Follow-up: "перевір щоб бот то все правильно враховував і додавав теж" — validate consecutive Digger position additions, reductions, reversals, and closes against the full public history; require every confirmed copy order to fill the complete calculated delta so partial/zero fills cannot corrupt the optimistic follower-position state; restart the live watcher with the verified version.
 - Follow-up: "перевір щоб в еквіваленті % до його маржи відкривав угоди" — verify live sizing preserves Digger's position-notional-to-collateral percentage using current leader and follower collateral, with unavoidable market lot rounding always applied downward so follower exposure does not exceed the proportional target.
+- Follow-up: "перевір що там з угодами чи ти все правильно відкрив" — audit all live confirmations and actual Phoenix positions. The audit found follower-submitted transactions that also filled Digger maker liquidity; pause the watcher, add persistent submitted-signature tracking plus follower-history cross-checking, and skip those self-caused leader fills to prevent recursive copy feedback without manually changing the active position.
 
 ## UR-2026-08-08-DEX-TOURNAMENT-LATENCY-DEPLOY
 
 - Timestamp: 2026-08-08 00:00 (Europe/Kyiv)
 - Request: "купа багів знайшов при зміні бірди вона змінюється не моментально часто це займає якийсь час до цього це було моментально. також дані по турніру часто дуже довго грузять теж"; follow-up: "Failed to load resource: the server responded with a status of 524 ()"; deploy approval: "виправ то все діло і коміт пуш деплой на прод".
 - Scope: make in-game DEX selection immediate and race-safe, remove full-state hydration from same-player venue switches, move global tournament trade synchronization out of public HTTP request paths into bounded cooperative background work, prevent overlapping award sweeps and client polls, add short-lived player-scoped tournament caching and timeouts, verify locally under concurrent requests and in the browser, then commit and push `main`, deploy through the canonical production workflow, and verify the live release across a full scheduler interval.
+
+## UR-2026-08-08-TH10-HIDDEN-TESLA
+
+- Timestamp: 2026-08-08 18:00 (Europe/Kyiv)
+- Request: add Town Hall level 10 across the full client/server/progression stack and add a new Hidden Tesla defense using `Hatch.rar` and `Tesla.rar`; higher levels may reuse a slightly scaled hatch, lightning VFX may reuse the Electro Dragon implementation, and gameplay should follow the recognizable Clash of Clans hidden/reveal/attack behavior.
+- Scope: inspect and import all supplied Tesla/hatch levels, define data-driven TH10 unlocks and Tesla level progression, implement hidden/reveal/combat logic for ground and air targets, synchronize Godot and server combat/building definitions, integrate build/upgrade/persistence/test-scene flows, and run focused server plus live Godot visual/combat verification before handoff. Remain on `main`; do not commit, push, or deploy without separate approval.
+
+## UR-2026-08-08-CLASHSOL-SANCTUM-LST
+
+- Timestamp: 2026-08-08 18:27 (Europe/Kyiv)
+- Request: "https://learn.sanctum.so/docs/for-developers/sanctum-api я хочу десь в магазині додати можливість створювати наш lst через санктум clashSOL передивись їх апі і реалізуй то все діло".
+- Scope: audit the current Sanctum launch and trading APIs, document the external Sanctum launch requirement, add a safe server-side API-key proxy and durable order intents for SOL-to-clashSOL staking, add a self-custodial Solana wallet signing flow in the in-game shop, expose a truthful launch-pending state until the Sanctum mint/pool and API key exist, and verify server contracts, frontend behavior, and browser layout locally. Do not create a mainnet mint, submit the Sanctum partner form, commit, push, deploy, or mutate production without separate approval and the missing launch credentials/addresses.
+
+## UR-2026-08-09-TROOP-SLOT-CAP-10
+
+- Timestamp: 2026-08-09 00:04 (Europe/Kyiv)
+- Request: "давай занерфимо вінд мага і всіх інших персонажів ото що вони займають по 18 місць то дуже багато на справді пропорційно зменши його характеристики і зроби так щоб максимально було 10 місць щоб персонаж міг займати"
+- Scope: cap every persisted troop root at ten Main Ship slots; proportionally
+  scale HP and damage for Wind Mage, Necromancer, Horror, Ice Golem and Fire
+  Dragon using `10 / previous_slots`, including Windlings, Necromancer summons
+  and every Horror evolution stage; keep attack cadence, movement and utility
+  rules stable; repack existing loadouts through slot-cost migration v4; align
+  server, Godot, React reinforcement/UI tables, tests and balance docs; verify
+  client/server parity and deterministic late-game combat locally. No commit,
+  push, deployment or production mutation requested.
+- Follow-up: "і попрацюй над балансом перевір чи він не змінився якщо так то виправ до 55%".
+- Result: implemented the ten-slot cap across server, Godot and React; migration
+  v4 preserves all reduced-slot roots. The canonical two-seed TH10 policy gate
+  moved from 55.10% to 56.60% after the initial conversion. A structural
+  root-count correction brought Wind Mage, Necromancer and Horror pure armies
+  back near the roster target and produced 1,747/3,120 attacker wins (55.99%)
+  with zero invalid battles. Focused parity, capacity, migration, combat,
+  tactical and Godot checks pass. See
+  `production/reports/troop-slot-cap-10-balance-check-2026-08-09.md`.
+
+## UR-2026-08-09-DEFENSE-RADIUS-REBALANCE
+
+- Timestamp: 2026-08-09 14:18 (Europe/Kyiv)
+- Request: "на 50% зменши радіус бо зараз тупо на весь острів дістає і в інших будівлях перевір маг тавер башня лучників і так далі позменшуй все то діло і знову ж таки баланс зроби".
+- Scope: halve Hidden Tesla's real combat radius, audit every ranged defense including
+  Mage Tower and Archer Tower against the actual island scale, reduce excessive client/server
+  combat and display ranges together, then retune damage/cadence as needed and verify focused
+  Godot combat plus deterministic PvP balance. Remain on `main`; do not commit, push, deploy,
+  or touch production data without separate approval.
+- Result: Hidden Tesla attack/reveal radii are exactly halved to `1.05`/`0.875`;
+  all ranged defenses and Tombstone guard detection now use role-based compact curves mirrored
+  on client/server/shared data. Damage and cadence were preserved because the final 3,000-battle
+  deterministic run produced 54.33% attacker wins in the mixed policy cohort (884/1,627), within
+  0.67 percentage points of the 55% target, with zero invalid replays. Focused server, Godot,
+  rendered 82-frame Tesla, performance, Web-export, and browser smoke checks pass. See
+  `production/reports/defense-range-rebalance-2026-08-09.md`.
+
+## UR-2026-08-09-HIDDEN-TESLA-L05-AUTHORED-ASSET
+
+- Timestamp: 2026-08-09 16:09 (Europe/Kyiv)
+- Request: try the separately supplied `Tesla5.glb` for Hidden Tesla level 5.
+- Scope: validate the GLB, replace only the L5 tower asset and its matching PBR
+  maps, preserve the TH10 unlock rule and all combat tuning, then re-import,
+  render, and regression-test the hide/reveal/attack flow on `main`.
+- Result: the valid authored L5 replaces the L6-derived fallback. It imports as
+  one 3,393-vertex / 2,278-triangle mesh, matches the original L5 textures,
+  preserves normalized scale and hatch clearance, and passes scene, combat,
+  server, and performance probes. No commit, push, deploy, or production data
+  mutation was performed.
+
+## UR-2026-08-09-HIDDEN-TESLA-LATE-WARNING
+
+- Timestamp: 2026-08-09 18:14 (Europe/Kyiv)
+- Request: make the Hidden Tesla trap appear shortly in advance, once deployed
+  units are already committed and the attacker can no longer meaningfully
+  change the approach.
+- Scope: separate reveal and damage radii, retain compact damage coverage,
+  mirror client/server timing, add exact-boundary tests, render the moving
+  approach frame by frame, run TestMain, performance, and full balance checks.
+- Result: reveal begins at `1.20`, damage remains at `1.05`, and the fixed
+  30-tick rise provides a narrow `0.15` late-warning band. All focused tests
+  pass; the 3,000-battle lab produced 54.46% policy attacker wins with zero
+  invalid battles. No commit, push, deploy, or production mutation occurred.
+
+## UR-2026-08-09-FARCASTER-ANDROID-FINALISING
+
+- Timestamp: 2026-08-09 22:00 (Europe/Kyiv)
+- Request: investigate and urgently fix the production Farcaster Mini App on
+  Android staying on `Finalising` after wallet signing for CryptoMill
+  (`0x71ce5605ab649d97446ef179bc2983b18ddc9a48`), then commit, push, deploy,
+  and verify production.
+- Scope: correlate the wallet with production auth telemetry, repair the
+  registration-attempt lifecycle without changing the account or game data,
+  add a focused regression, deploy from `main`, and verify the live bundle and
+  services.

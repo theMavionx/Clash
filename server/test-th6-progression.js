@@ -71,7 +71,7 @@ try {
     archer_tower: 6,
     turret: 6,
     mage_tower: 6,
-    tombstone: 5,
+    tombstone: 6,
     mortar: 6,
     harpoon: 6,
     shark_trap: 6,
@@ -101,12 +101,12 @@ try {
   assert.deepEqual(gameDb.getBuildingUpgradeCost('mortar', 5), { gold: 68000, wood: 96000, ore: 82000 });
   assert.deepEqual(gameDb.TH_MAX_COUNT.mortar.slice(0, 6), [0, 0, 0, 0, 1, 2]);
   assert.equal(gameDb.TH_UNLOCK.harpoon, 6);
-  assert.deepEqual(gameDb.TH_MAX_COUNT.harpoon, [0, 0, 0, 0, 0, 1, 1, 2, 2]);
-  assert.deepEqual(gameDb.TH_MAX_LEVEL.harpoon, [1, 1, 1, 1, 1, 6, 7, 8, 9]);
+  assert.deepEqual(gameDb.TH_MAX_COUNT.harpoon, [0, 0, 0, 0, 0, 1, 1, 2, 2, 2]);
+  assert.deepEqual(gameDb.TH_MAX_LEVEL.harpoon, [1, 1, 1, 1, 1, 6, 7, 8, 9, 10]);
   assert.deepEqual(gameDb.BUILDING_DEFS.harpoon, {
     size: [2, 2],
-    max_level: 9,
-    hp_levels: [1800, 2400, 3200, 4300, 5600, 6756, 10201, 12000, 13800],
+    max_level: 10,
+    hp_levels: [1800, 2400, 3200, 4300, 5600, 6756, 10201, 12000, 13800, 15800],
     cost: { gold: 12000, wood: 22000, ore: 18000 },
     upgrade_cost: {
       2: { gold: 20000, wood: 42000, ore: 35000 },
@@ -117,6 +117,7 @@ try {
       7: { gold: 86000, wood: 122000, ore: 104000 },
       8: { gold: 108000, wood: 142000, ore: 124000 },
       9: { gold: 135000, wood: 185000, ore: 160000 },
+      10: { gold: 165000, wood: 225000, ore: 195000 },
     },
     max_count: 2,
   });
@@ -128,8 +129,8 @@ try {
   assert.deepEqual(gameDb.TH_MAX_COUNT.shark_trap.slice(0, 6), [0, 0, 1, 1, 2, 3]);
   assert.equal(gameDb.getBuildingMaxLevelForTownHall('mortar', 5), 5);
   assert.equal(gameDb.getBuildingMaxLevelForTownHall('mortar', 6), 6);
-  assert.equal(gameDb.getBuildingMaxLevelForTownHall('tombstone', 5), 4);
-  assert.equal(gameDb.getBuildingMaxLevelForTownHall('tombstone', 6), 5);
+  assert.equal(gameDb.getBuildingMaxLevelForTownHall('tombstone', 5), 5);
+  assert.equal(gameDb.getBuildingMaxLevelForTownHall('tombstone', 6), 6);
   assert.equal(gameDb.getBuildingMaxLevelForTownHall('mine', 6), 6);
 
   const player = gameDb.registerPlayer(`th6_progression_${Date.now()}`);
@@ -141,7 +142,7 @@ try {
   insertBuilding(playerId, 'sawmill', 5, 9, 0);
   insertBuilding(playerId, 'barn', 5, 13, 0);
   const storageId = insertBuilding(playerId, 'storage', 5, 18, 0);
-  const tombstoneId = insertBuilding(playerId, 'tombstone', 4, 22, 0);
+  const tombstoneId = insertBuilding(playerId, 'tombstone', 5, 22, 0);
   insertBuilding(playerId, 'archer_tower', 5, 0, 6);
   insertBuilding(playerId, 'turret', 5, 5, 6);
   insertBuilding(playerId, 'mage_tower', 5, 9, 6);
@@ -166,7 +167,7 @@ try {
   assert.equal(townHallUpgrade.hp, 41200);
 
   assert.equal(gameDb.upgradeBuilding(playerId, mortarId).level, 6);
-  assert.equal(gameDb.upgradeBuilding(playerId, tombstoneId).level, 5);
+  assert.equal(gameDb.upgradeBuilding(playerId, tombstoneId).level, 6);
   assert.equal(gameDb.upgradeBuilding(playerId, mineId).level, 6);
   assert.equal(gameDb.upgradeBuilding(playerId, storageId).level, 6);
   assert.deepEqual(gameDb.getResourceCaps(playerId), {
@@ -259,8 +260,8 @@ try {
   );
 
   assert.equal(gameDb.TROOP_DEFS.ice_golem.min_town_hall_level, 9);
-  assert.equal(gameDb.TROOP_DEFS.ice_golem.slot_cost, 11);
-  assert.equal(gameDb.TROOP_DEFS.ice_golem.buy_cost, 1100);
+  assert.equal(gameDb.TROOP_DEFS.ice_golem.slot_cost, 10);
+  assert.equal(gameDb.TROOP_DEFS.ice_golem.buy_cost, 1000);
   const lockedIceGolem = gameDb.getTroopTownHallUnlock(playerId, 'IceGolem');
   assert.equal(lockedIceGolem.unlocked, false);
   assert.equal(lockedIceGolem.current_town_hall_level, 6);
@@ -269,8 +270,8 @@ try {
   assert.equal(gameDb.upgradeTroop(playerId, 'IceGolem').code, 'TOWN_HALL_LEVEL_REQUIRED');
 
   assert.equal(gameDb.TROOP_DEFS.necromancer.min_town_hall_level, 7);
-  assert.equal(gameDb.TROOP_DEFS.necromancer.slot_cost, 18);
-  assert.equal(gameDb.TROOP_DEFS.necromancer.buy_cost, 1800);
+  assert.equal(gameDb.TROOP_DEFS.necromancer.slot_cost, 10);
+  assert.equal(gameDb.TROOP_DEFS.necromancer.buy_cost, 1000);
   const lockedNecromancer = gameDb.getTroopTownHallUnlock(playerId, 'Necromancer');
   assert.equal(lockedNecromancer.unlocked, false);
   assert.equal(lockedNecromancer.current_town_hall_level, 6);

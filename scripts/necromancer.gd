@@ -1,7 +1,7 @@
 extends "res://scripts/mage.gd"
 class_name Necromancer
-## Fifteen-slot ranged summoner. Direct damage and renewable skeleton pressure
-## consume most of one late-game army, while the owner remains vulnerable.
+## Ten-slot ranged summoner. Direct damage and renewable skeleton pressure
+## consume a meaningful part of one late-game army, while the owner remains vulnerable.
 ## up to three weak, owner-bound skeletons add pressure and distraction.
 
 const MAX_TROOP_LEVEL: int = 9
@@ -28,15 +28,15 @@ const ALBEDO_TEXTURE: Texture2D = preload(
 const STAFF_SCENE: String = "res://Model/Characters/Necromancer/NecromancerStaff.fbx"
 
 const NECROMANCER_LEVEL_STATS: Dictionary = {
-	1: {"hp": 2640, "damage": 510, "atk_speed": 1.35},
-	2: {"hp": 3480, "damage": 724, "atk_speed": 1.35},
-	3: {"hp": 4560, "damage": 1121, "atk_speed": 1.35},
-	4: {"hp": 5880, "damage": 1628, "atk_speed": 1.35},
-	5: {"hp": 7440, "damage": 2327, "atk_speed": 1.35},
-	6: {"hp": 9240, "damage": 3305, "atk_speed": 1.35},
-	7: {"hp": 20700, "damage": 8533, "atk_speed": 1.35},
-	8: {"hp": 20700, "damage": 8533, "atk_speed": 1.35},
-	9: {"hp": 20700, "damage": 8533, "atk_speed": 1.35},
+	1: {"hp": 1320, "damage": 255, "atk_speed": 1.35},
+	2: {"hp": 1740, "damage": 362, "atk_speed": 1.35},
+	3: {"hp": 2280, "damage": 561, "atk_speed": 1.35},
+	4: {"hp": 2940, "damage": 814, "atk_speed": 1.35},
+	5: {"hp": 3720, "damage": 1164, "atk_speed": 1.35},
+	6: {"hp": 4620, "damage": 1652, "atk_speed": 1.35},
+	7: {"hp": 10350, "damage": 4267, "atk_speed": 1.35},
+	8: {"hp": 10350, "damage": 4267, "atk_speed": 1.35},
+	9: {"hp": 10350, "damage": 4267, "atk_speed": 1.35},
 }
 
 const ANIM_FILES: Array[String] = [

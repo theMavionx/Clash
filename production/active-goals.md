@@ -471,6 +471,56 @@ Next checkpoint:
   native `/ws` open/close. Remaining blocker for true end-to-end trading is
   browser Tx signing/session credential UX with a real Dango account.
 
+## G-010 clashSOL Sanctum LST Integration
+
+- Status: active
+- Priority: P1
+- Owner intent: let players stake SOL into a branded `clashSOL` LST from the
+  in-game shop through Sanctum while preserving self-custody.
+- Core constraint: Sanctum's current API does not launch new LSTs. Sanctum
+  manually deploys the pool after branding, revenue-wallet and mint handoff;
+  the API can only read and transact against an already deployed LST.
+
+Scope:
+
+- Document and prepare the external `clashSOL` launch package and configuration.
+- Keep the Sanctum API key server-side.
+- Add metadata/status, exact-in SOL-to-clashSOL order and signed-transaction
+  execution endpoints restricted to the configured mint.
+- Persist short-lived order intents so the public client cannot use Clash as an
+  arbitrary Sanctum proxy or alter the upstream order before signing.
+- Add a polished shop entry and external/Privy Solana wallet signing flow.
+- Show an explicit launch-pending state until `SANCTUM_API_KEY` and
+  `CLASHSOL_MINT` are configured and the mint is discoverable through Sanctum.
+
+Current checkpoint:
+
+- Official API and launch documentation audited. Permissionless LST creation
+  is not available, so the external launch package is documented separately.
+- Local implementation is complete: server-only API-key service, fixed
+  wrapped-SOL-to-clashSOL orders, durable intent ledger, exact message and
+  Ed25519 signature verification, replay protection, shop card/modal, and
+  external/Privy wallet signing paths.
+- Focused server and browser transaction tests pass; the launch-pending API and
+  desktop/mobile shop layouts were verified locally. A full current-worktree
+  web rebuild is temporarily blocked by the unrelated in-progress TH10 Hidden
+  Tesla work referencing a not-yet-created `hidden_tesla.png`; the Sanctum
+  build itself passed before that concurrent edit appeared.
+- Remaining launch work is external: approve branding/revenue wallet, complete
+  Sanctum onboarding and mint handoff, configure `SANCTUM_API_KEY` plus
+  `CLASHSOL_MINT`, then run an owner-approved funded mainnet stake smoke.
+
+Acceptance criteria:
+
+- API credentials never enter the browser bundle or logs.
+- The server only constructs orders from wrapped SOL to the configured
+  `clashSOL` mint and verifies the wallet-signed transaction message against
+  the stored upstream order before execution.
+- Missing launch configuration produces a stable, informative shop state and
+  never a fake success.
+- External wallet-adapter and Privy embedded Solana signing paths are supported.
+- Server tests, frontend tests/build/lint and a local browser shop flow pass.
+
 ## Parking Lot
 
 - Add CI once the local checks are stable.

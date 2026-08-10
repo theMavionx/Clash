@@ -1,20 +1,21 @@
 extends Node3D
-## Ground-only Cannon defense for Town Hall 7, levels 1 through 7.
+## Ground-only Cannon defense, with progression through Town Hall 10.
 ##
 ## The authored base is never animated. Barrel yaw and firing presentation are
 ## recomposed every frame from captured rest transforms so repeated shots cannot
 ## accumulate scale, rotation, or recoil offsets.
 
 const LEVEL_STATS := {
-	1: {"damage": 40, "fire_rate": 1.60, "detect_range": 1.35},
-	2: {"damage": 109, "fire_rate": 1.60, "detect_range": 1.45},
-	3: {"damage": 259, "fire_rate": 1.60, "detect_range": 1.55},
-	4: {"damage": 431, "fire_rate": 1.60, "detect_range": 1.65},
-	5: {"damage": 510, "fire_rate": 1.60, "detect_range": 1.75},
-	6: {"damage": 577, "fire_rate": 1.60, "detect_range": 1.85},
-	7: {"damage": 620, "fire_rate": 1.60, "detect_range": 2.00},
-	8: {"damage": 690, "fire_rate": 1.60, "detect_range": 2.08},
-	9: {"damage": 760, "fire_rate": 1.60, "detect_range": 2.16},
+	1: {"damage": 40, "fire_rate": 1.60, "detect_range": 1.00},
+	2: {"damage": 109, "fire_rate": 1.60, "detect_range": 1.04},
+	3: {"damage": 259, "fire_rate": 1.60, "detect_range": 1.08},
+	4: {"damage": 431, "fire_rate": 1.60, "detect_range": 1.12},
+	5: {"damage": 510, "fire_rate": 1.60, "detect_range": 1.20},
+	6: {"damage": 577, "fire_rate": 1.60, "detect_range": 1.28},
+	7: {"damage": 620, "fire_rate": 1.60, "detect_range": 1.36},
+	8: {"damage": 690, "fire_rate": 1.60, "detect_range": 1.44},
+	9: {"damage": 760, "fire_rate": 1.60, "detect_range": 1.52},
+	10: {"damage": 840, "fire_rate": 1.60, "detect_range": 1.60},
 }
 
 const PROJECTILE_SPEED: float = 3.2
@@ -53,7 +54,7 @@ const ATTACK_SFX_PATHS: Array[String] = [
 const ATTACK_SFX_VOLUME_DB: float = -2.0
 const ATTACK_SFX_PITCH_JITTER: float = 0.035
 
-@export var detect_range: float = 1.35
+@export var detect_range: float = 1.00
 @export var bullet_speed: float = PROJECTILE_SPEED
 @export var attack_sfx_enabled: bool = true
 

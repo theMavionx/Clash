@@ -3,7 +3,7 @@ extends Node3D
 ## target and damage from replay movement; this script mirrors that result and
 ## owns presentation only.
 
-const DAMAGE_LEVELS: Array[int] = [500, 750, 1050, 1450, 2000, 2400, 2900, 3400, 3900]
+const DAMAGE_LEVELS: Array[int] = [500, 750, 1050, 1450, 2000, 2400, 2900, 3400, 3900, 4400]
 const TRIGGER_PADDING: float = 0.018
 const HEAD_TIP_HEIGHT: float = 0.105
 const HEAD_VISIBLE_DEPTH: float = 0.10

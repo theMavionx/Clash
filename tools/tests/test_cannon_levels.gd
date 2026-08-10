@@ -14,13 +14,13 @@ const EXPECTED_BUILDING_SCALES: Array[float] = [
 	0.10,
 ]
 const EXPECTED_STATS: Dictionary = {
-	1: {"damage": 40, "fire_rate": 1.60, "detect_range": 1.35},
-	2: {"damage": 109, "fire_rate": 1.60, "detect_range": 1.45},
-	3: {"damage": 259, "fire_rate": 1.60, "detect_range": 1.55},
-	4: {"damage": 431, "fire_rate": 1.60, "detect_range": 1.65},
-	5: {"damage": 510, "fire_rate": 1.60, "detect_range": 1.75},
-	6: {"damage": 577, "fire_rate": 1.60, "detect_range": 1.85},
-	7: {"damage": 620, "fire_rate": 1.60, "detect_range": 2.00},
+	1: {"damage": 40, "fire_rate": 1.60, "detect_range": 1.00},
+	2: {"damage": 109, "fire_rate": 1.60, "detect_range": 1.04},
+	3: {"damage": 259, "fire_rate": 1.60, "detect_range": 1.08},
+	4: {"damage": 431, "fire_rate": 1.60, "detect_range": 1.12},
+	5: {"damage": 510, "fire_rate": 1.60, "detect_range": 1.20},
+	6: {"damage": 577, "fire_rate": 1.60, "detect_range": 1.28},
+	7: {"damage": 620, "fire_rate": 1.60, "detect_range": 1.36},
 }
 
 var _failures: Array[String] = []
@@ -58,9 +58,18 @@ func _run() -> void:
 	var cannon_definition: Dictionary = definition_holder.building_defs["cannon"]
 	var building_scales: Array = cannon_definition.get("model_scales", [])
 	_expect(
-		building_scales == EXPECTED_BUILDING_SCALES,
-		"Cannon building scales do not match the validated 3x3 footprint profile",
+		building_scales.size() >= 10,
+		"Cannon progression must expose visual scales through L10",
 	)
+	for scale_index in range(mini(building_scales.size(), EXPECTED_BUILDING_SCALES.size())):
+		_expect(
+			is_equal_approx(
+				float(building_scales[scale_index]),
+				EXPECTED_BUILDING_SCALES[scale_index],
+			),
+			"Cannon L%d scale does not match the validated 3x3 footprint profile"
+			% (scale_index + 1),
+		)
 	_expect(
 		is_equal_approx(float(cannon_definition.get("model_rotation_y", 0.0)), 270.0),
 		"Cannon default orientation must face straight toward the gameplay camera",

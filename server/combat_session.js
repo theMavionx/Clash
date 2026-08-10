@@ -19,6 +19,7 @@ const {
   windMageStableHash, windMageHashUnit,
   MAX_SHIPS, TROOPS_PER_SHIP, MAX_TROOPS, TIME_LIMIT_SEC, SAIL_DELAY_SEC,
   cannonDamageForShipLevel, cannonInitialEnergyForShipLevel, CANNON_ENERGY_PER_DESTROY,
+  troopPowerMultiplierForShipLevel,
   CANNON_RELOAD_SEC, CANNON_SPEED, CANNON_MIN_FLIGHT_SEC,
   CANNON_START_POS, CANNON_TARGET_Y,
   MEDKIT_UNLOCK_SHIP_LEVEL, MEDKIT_ENERGY_COST, MEDKIT_ENERGY_COST_INCREMENT,
@@ -49,6 +50,12 @@ const HARPOON_YAW_TOLERANCE_RAD = 2 * Math.PI / 180;
 const AIR_BOMB_TICK_RATE = 60;
 const AIR_BOMB_SPLASH_EDGE_EPSILON = 1e-6;
 const AIR_BOMB_TARGET_TIE_EPSILON = 1e-9;
+// Replay deploy coordinates are serialized to 0.001 world units while defense
+// centers retain full grid precision. A squared-distance edge tolerance of
+// 0.001 keeps an authored boundary inclusive after that deterministic
+// quantization without affecting visible gameplay distance.
+const HIDDEN_TESLA_RANGE_EDGE_EPSILON = 1e-3;
+const HIDDEN_TESLA_TARGET_TIE_EPSILON = 1e-9;
 
 // ---------- Config ----------
 
@@ -77,6 +84,7 @@ const ICE_GOLEM_PRIORITY_DEFENSE_TYPES = new Set([
   'harpoon',
   'flamethrower',
   'air_bomb',
+  'hidden_tesla',
   'cannon',
 ]);
 const ICE_GOLEM_FREEZABLE_DEFENSE_TYPES = new Set([
@@ -123,6 +131,12 @@ const FLAMETHROWER_TRANSITIONS = Object.freeze({
     FLAMETHROWER_STATE.DISABLED,
   ]),
   [FLAMETHROWER_STATE.DISABLED]: new Set(),
+});
+const HIDDEN_TESLA_STATE = Object.freeze({
+  HIDDEN: 'hidden',
+  REVEALING: 'revealing',
+  ACTIVE: 'active',
+  DESTROYED: 'destroyed',
 });
 const TROOP_NAMES = {
   knight: 'Knight',
@@ -185,10 +199,18 @@ function canonicalDefenseBuildingType(type) {
 }
 
 function isIceGolemPriorityDefense(building) {
+  if (
+    canonicalDefenseBuildingType(building?.type) === 'town_hall'
+    && Number(building?.level) >= 10
+  ) return true;
   return ICE_GOLEM_PRIORITY_DEFENSE_TYPES.has(canonicalDefenseBuildingType(building?.type));
 }
 
 function isIceGolemFreezableDefense(building) {
+  if (
+    canonicalDefenseBuildingType(building?.type) === 'town_hall'
+    && Number(building?.level) >= 10
+  ) return true;
   return ICE_GOLEM_FREEZABLE_DEFENSE_TYPES.has(canonicalDefenseBuildingType(building?.type));
 }
 
@@ -834,7 +856,11 @@ function gridToWorld(gridX, gridZ, sizeX, sizeZ, gc) {
 }
 
 function isCombatTargetBuilding(building) {
-  return building?.type !== 'shark_trap';
+  if (building?.type === 'shark_trap') return false;
+  if (building?.type === 'hidden_tesla') {
+    return building.teslaState === HIDDEN_TESLA_STATE.ACTIVE;
+  }
+  return true;
 }
 
 function troopInsideSharkTrap(troop, trap) {
@@ -982,6 +1008,7 @@ function verifyReplay({
       cellSize: gc.cell_size,
       gridRotation: gc.grid_rotation,
       facingStep: b.facing_step ?? null,
+      teslaState: b.type === 'hidden_tesla' ? HIDDEN_TESLA_STATE.HIDDEN : null,
       avoidRadius: Math.max(size[0], size[1]) * gc.cell_size * 0.5 + 0.06,
     };
   });
@@ -992,10 +1019,11 @@ function verifyReplay({
   const harpoons = [];
   const flamethrowers = [];
   const airBombs = [];
+  const hiddenTeslas = [];
   const sharkTraps = buildings
     .filter(b => b.type === 'shark_trap')
     .map(b => {
-      const damageLevels = BUILDING_DEFS.shark_trap?.damage_levels || [500, 750, 1050, 1450, 2000, 2400, 2900, 3400, 3900];
+      const damageLevels = BUILDING_DEFS.shark_trap?.damage_levels || [500, 750, 1050, 1450, 2000, 2400, 2900, 3400, 3900, 4400];
       const level = Math.max(1, Math.min(damageLevels.length, Number(b.level) || 1));
       return {
         buildingId: b.id,
@@ -1083,6 +1111,12 @@ function verifyReplay({
   let time = 0;
   let combatTick = 0;
   let simulationEndReason = 'battle_timeout';
+  let hiddenTeslaRevealStarts = 0;
+  let hiddenTeslaRevealCompletes = 0;
+  let hiddenTeslaShots = 0;
+  let hiddenTeslaDamageApplied = 0;
+  let hiddenTeslaKills = 0;
+  let hiddenTeslaDestroyed = 0;
 
   function traceEvent(kind, data = {}) {
     if (!debugTrace) return;
@@ -1102,6 +1136,190 @@ function verifyReplay({
     if (Number.isFinite(replayOrder)) return replayOrder;
     const troopId = Number(troop?.id);
     return Number.isFinite(troopId) ? troopId : Number.MAX_SAFE_INTEGER;
+  }
+
+  function hiddenTeslaTracePayload(defense, target = null, extra = {}) {
+    return {
+      defenseType: 'hidden_tesla',
+      buildingId: defense.buildingId,
+      buildingOrder: defense.buildingOrder,
+      level: defense.level,
+      state: defense.state,
+      tick: combatTick,
+      targetId: target?.id ?? null,
+      targetReplayOrder: target ? stableTroopReplayOrder(target) : null,
+      targetTroop: target?.type ?? null,
+      ...extra,
+    };
+  }
+
+  function hiddenTeslaOwner(defense) {
+    return buildings.find(building => building.id === defense.buildingId) || null;
+  }
+
+  function hiddenTeslaTriggerTarget(defense, aliveTroops) {
+    const triggerRangeSq = defense.triggerRange * defense.triggerRange;
+    let best = null;
+    let bestDistSq = Infinity;
+    for (const troop of aliveTroops) {
+      if (!troop || troop.hp <= 0) continue;
+      const distanceSq = distSq2d(defense.x, defense.z, troop.x, troop.z);
+      if (distanceSq > triggerRangeSq + HIDDEN_TESLA_RANGE_EDGE_EPSILON) continue;
+      const order = stableTroopReplayOrder(troop);
+      const bestOrder = stableTroopReplayOrder(best);
+      if (
+        distanceSq < bestDistSq - HIDDEN_TESLA_TARGET_TIE_EPSILON
+        || (
+          Math.abs(distanceSq - bestDistSq) <= HIDDEN_TESLA_TARGET_TIE_EPSILON
+          && order < bestOrder
+        )
+      ) {
+        best = troop;
+        bestDistSq = distanceSq;
+      }
+    }
+    return best ? { target: best, distanceSq: bestDistSq } : null;
+  }
+
+  function destroyHiddenTesla(defense, owner, reason = 'building_destroyed') {
+    if (defense.state === HIDDEN_TESLA_STATE.DESTROYED) return;
+    defense.state = HIDDEN_TESLA_STATE.DESTROYED;
+    defense.targetId = null;
+    if (owner) owner.teslaState = HIDDEN_TESLA_STATE.DESTROYED;
+    hiddenTeslaDestroyed++;
+    traceEvent('hidden_tesla_destroyed', hiddenTeslaTracePayload(defense, null, {
+      reason,
+      hp: owner?.hp ?? null,
+    }));
+  }
+
+  function startHiddenTeslaReveal(defense, owner, cause, trigger = null) {
+    defense.state = HIDDEN_TESLA_STATE.REVEALING;
+    defense.revealStartTick = combatTick;
+    defense.revealCompleteTick = combatTick + defense.revealTicks;
+    defense.revealCause = cause;
+    defense.triggerTroopId = trigger?.target?.id ?? null;
+    owner.teslaState = HIDDEN_TESLA_STATE.REVEALING;
+    hiddenTeslaRevealStarts++;
+    traceEvent('hidden_tesla_reveal_started', hiddenTeslaTracePayload(
+      defense,
+      trigger?.target ?? null,
+      {
+        cause,
+        revealStartTick: defense.revealStartTick,
+        revealCompleteTick: defense.revealCompleteTick,
+        triggerRange: defense.triggerRange,
+        triggerDistance: trigger ? round3(Math.sqrt(trigger.distanceSq)) : null,
+      },
+    ));
+  }
+
+  function updateHiddenTeslaRevealStates(aliveTroops) {
+    for (const defense of hiddenTeslas) {
+      const owner = hiddenTeslaOwner(defense);
+      if (!owner || owner.hp <= 0) {
+        destroyHiddenTesla(defense, owner);
+        continue;
+      }
+      if (owner.isUpgrading || owner.isUnderConstruction) continue;
+      if (defense.state === HIDDEN_TESLA_STATE.HIDDEN) {
+        if (combatTick >= defense.nextTriggerScanTick) {
+          defense.nextTriggerScanTick = combatTick + defense.triggerScanTicks;
+          const trigger = hiddenTeslaTriggerTarget(defense, aliveTroops);
+          if (trigger) {
+            startHiddenTeslaReveal(defense, owner, 'proximity', trigger);
+          }
+        }
+      }
+      if (
+        defense.state === HIDDEN_TESLA_STATE.REVEALING
+        && combatTick >= defense.revealCompleteTick
+      ) {
+        defense.state = HIDDEN_TESLA_STATE.ACTIVE;
+        defense.nextScanTick = combatTick;
+        defense.reloadReadyTick = combatTick;
+        owner.teslaState = HIDDEN_TESLA_STATE.ACTIVE;
+        hiddenTeslaRevealCompletes++;
+        traceEvent('hidden_tesla_reveal_complete', hiddenTeslaTracePayload(defense, null, {
+          cause: defense.revealCause,
+          revealStartTick: defense.revealStartTick,
+          revealCompleteTick: defense.revealCompleteTick,
+          durationTicks: combatTick - defense.revealStartTick,
+        }));
+      }
+    }
+  }
+
+  function hiddenTeslaTargetById(targetId, aliveTroops) {
+    if (targetId == null) return null;
+    return aliveTroops.find(troop => troop.id === targetId) || null;
+  }
+
+  function hiddenTeslaTargetValid(defense, troop) {
+    if (!canDefenseTargetTroop(defense, troop)) return false;
+    return distSq2d(defense.x, defense.z, troop.x, troop.z)
+      <= defense.detectRange * defense.detectRange + HIDDEN_TESLA_RANGE_EDGE_EPSILON;
+  }
+
+  function findHiddenTeslaTarget(defense, aliveTroops) {
+    const near = findNearestAlive(defense.x, defense.z, aliveTroops, {
+      filter: troop => hiddenTeslaTargetValid(defense, troop),
+      preferReplayOrderOnTie: true,
+    });
+    return near?.target ?? null;
+  }
+
+  function updateHiddenTeslaDefenses(aliveTroops) {
+    for (const defense of hiddenTeslas) {
+      const owner = hiddenTeslaOwner(defense);
+      if (!owner || owner.hp <= 0) {
+        destroyHiddenTesla(defense, owner);
+        continue;
+      }
+      if (owner.isUpgrading || owner.isUnderConstruction) continue;
+      if (defense.state !== HIDDEN_TESLA_STATE.ACTIVE) continue;
+      if ((Number(defense.frozenUntil) || 0) > time) continue;
+
+      let target = hiddenTeslaTargetById(defense.targetId, aliveTroops);
+      if (!hiddenTeslaTargetValid(defense, target)) {
+        target = null;
+        defense.targetId = null;
+      }
+      if (combatTick >= defense.nextScanTick) {
+        defense.nextScanTick = combatTick + defense.scanTicks;
+        target = findHiddenTeslaTarget(defense, aliveTroops);
+        defense.targetId = target?.id ?? null;
+      }
+      if (!target || combatTick < defense.reloadReadyTick) continue;
+
+      const hpBefore = target.hp;
+      target.hp -= defense.damage;
+      const hpAfter = target.hp;
+      const appliedDamage = Math.min(hpBefore, defense.damage);
+      defense.lastFireTick = combatTick;
+      defense.reloadReadyTick = combatTick + defense.reloadTicks;
+      hiddenTeslaShots++;
+      hiddenTeslaDamageApplied += appliedDamage;
+      traceEvent('hidden_tesla_fire', hiddenTeslaTracePayload(defense, target, {
+        damage: defense.damage,
+        baseDamage: defense.baseDamage,
+        hpBefore,
+        hpAfter,
+        reloadReadyTick: defense.reloadReadyTick,
+        range: defense.detectRange,
+      }));
+      traceEvent('hidden_tesla_damage', hiddenTeslaTracePayload(defense, target, {
+        damage: defense.damage,
+        appliedDamage,
+        hpBefore,
+        hpAfter,
+      }));
+      if (hpAfter <= 0) {
+        hiddenTeslaKills++;
+        handleTroopDeath(target, 'hidden_tesla_damage', defense.damage);
+        defense.targetId = null;
+      }
+    }
   }
 
   function shortestAngleDelta(from, to) {
@@ -2382,6 +2600,9 @@ function verifyReplay({
     const level = Math.max(1, Math.min(7, Math.trunc(Number(parent.level) || 1)));
     const stats = HORROR_EVOLUTION.stages?.[nextStage]?.[level];
     if (!stats) return 0;
+    const offenseMultiplier = Math.max(1, Number(parent.primaryTroopPowerMultiplier) || 1);
+    const scaledHp = Math.max(1, Math.round(Number(stats.hp) * offenseMultiplier));
+    const scaledDamage = Math.max(1, Math.round(Number(stats.damage) * offenseMultiplier));
 
     const rootOrder = Number.isFinite(Number(parent.evolutionRootOrder))
       ? Math.max(0, Math.trunc(Number(parent.evolutionRootOrder)))
@@ -2423,9 +2644,10 @@ function verifyReplay({
         type: 'horror',
         level,
         ...troopMovementProfile('horror', nextStage),
-        hp: stats.hp,
-        maxHp: stats.hp,
-        damage: stats.damage,
+        hp: scaledHp,
+        maxHp: scaledHp,
+        damage: scaledDamage,
+        primaryTroopPowerMultiplier: offenseMultiplier,
         atkSpeed: stats.atkSpeed,
         moveSpeed: stats.moveSpeed,
         range: stats.range,
@@ -2487,7 +2709,7 @@ function verifyReplay({
         childIndex,
         childLineage,
         level,
-        hp: stats.hp,
+        hp: scaledHp,
         x: round3(childPos.x),
         z: round3(childPos.z),
       });
@@ -3352,6 +3574,22 @@ function verifyReplay({
   for (const b of buildings) {
     if (b.type === 'town_hall') townHallId = b.id;
 
+    // TH10 exposes one roof barrel and mirrors one ordinary L10 Cannon. Keep a
+    // single defense entry so presentation and authoritative damage stay 1:1.
+    if (b.type === 'town_hall' && Number(b.level) >= 10) {
+      const s = DEFENSE_STATS.cannon[10];
+      defenses.push({
+        buildingId: b.id, type: 'town_hall_cannon',
+        damage: wardDamage(s.damage), fireRate: s.fireRate, detectRange: s.detectRange,
+        projSpeed: s.projSpeed,
+        targetGround: true, targetAir: false,
+        x: b.x, z: b.z,
+        timer: 0, isAttacking: false, targetId: null,
+        frozenUntil: 0,
+        _searchTimer: 0,
+      });
+    }
+
     if (b.type === 'turret') {
       const s = DEFENSE_STATS.turret[b.level] || DEFENSE_STATS.turret[1];
       defenses.push({
@@ -3492,6 +3730,46 @@ function verifyReplay({
       defenses.push(airBomb);
       airBombs.push(airBomb);
     }
+    if (b.type === 'hidden_tesla') {
+      const hiddenTeslaLevel = Math.max(
+        1,
+        Math.min(Number(b.level) || 1, Object.keys(DEFENSE_STATS.hidden_tesla).length),
+      );
+      const s = DEFENSE_STATS.hidden_tesla[hiddenTeslaLevel] || DEFENSE_STATS.hidden_tesla[1];
+      const hiddenTesla = {
+        buildingId: b.id,
+        buildingOrder: b.buildingOrder,
+        type: 'hidden_tesla',
+        level: hiddenTeslaLevel,
+        damage: wardDamage(s.damage),
+        baseDamage: s.damage,
+        fireRate: s.fireRate,
+        detectRange: s.detectRange,
+        triggerRange: s.triggerRange,
+        triggerScanTicks: s.triggerScanTicks,
+        revealTicks: s.revealTicks,
+        reloadTicks: s.reloadTicks,
+        scanTicks: s.scanTicks,
+        targetGround: true,
+        targetAir: true,
+        x: b.x,
+        z: b.z,
+        frozenUntil: 0,
+        state: HIDDEN_TESLA_STATE.HIDDEN,
+        revealStartTick: null,
+        revealCompleteTick: null,
+        revealCause: null,
+        triggerTroopId: null,
+        nextTriggerScanTick: 0,
+        nextScanTick: 0,
+        reloadReadyTick: 0,
+        lastFireTick: null,
+        targetId: null,
+      };
+      b.teslaState = HIDDEN_TESLA_STATE.HIDDEN;
+      defenses.push(hiddenTesla);
+      hiddenTeslas.push(hiddenTesla);
+    }
     if (b.type === 'harpoon') {
       const harpoonLevel = Math.max(
         1,
@@ -3599,6 +3877,15 @@ function verifyReplay({
     return String(left.buildingId).localeCompare(String(right.buildingId));
   });
   flamethrowers.sort((left, right) => {
+    if (left.buildingOrder !== right.buildingOrder) {
+      return left.buildingOrder - right.buildingOrder;
+    }
+    const leftId = Number(left.buildingId);
+    const rightId = Number(right.buildingId);
+    if (Number.isFinite(leftId) && Number.isFinite(rightId)) return leftId - rightId;
+    return String(left.buildingId).localeCompare(String(right.buildingId));
+  });
+  hiddenTeslas.sort((left, right) => {
     if (left.buildingOrder !== right.buildingOrder) {
       return left.buildingOrder - right.buildingOrder;
     }
@@ -4039,6 +4326,19 @@ function verifyReplay({
           : (TROOP_STATS[sp.troopType]?.[sp.troopLevel] || TROOP_STATS[sp.troopType]?.[1]);
         const stats = baseStats;
         if (!stats) continue;
+        const primaryTroopPowerMultiplier = troopPowerMultiplierForShipLevel(
+          authoritativeShipLevel,
+          sp.troopLevel,
+          sp.troopType,
+        );
+        const scaledHp = Math.max(
+          1,
+          Math.round(Number(stats.hp) * primaryTroopPowerMultiplier),
+        );
+        const scaledDamage = Math.max(
+          1,
+          Math.round(Number(stats.damage) * primaryTroopPowerMultiplier),
+        );
         // One troop per spawn entry
         const troopId = nextTroopId++;
         const spawnGridConfig = sp.gridIndex == null
@@ -4051,7 +4351,8 @@ function verifyReplay({
           replayOrder: sp.replayOrder,
           type: sp.troopType,
           level: sp.troopLevel,
-          hp: stats.hp, maxHp: stats.hp, damage: stats.damage,
+          hp: scaledHp, maxHp: scaledHp, damage: scaledDamage,
+          primaryTroopPowerMultiplier,
           atkSpeed: stats.atkSpeed, moveSpeed: stats.moveSpeed, range: stats.range,
           melee: stats.melee, projSpeed: stats.projSpeed || 0,
           burstPhases: Array.isArray(stats.burstPhases)
@@ -4123,7 +4424,9 @@ function verifyReplay({
           troop: sp.troopType,
           targetType: stats.flying ? UNIT_TARGET_AIR : UNIT_TARGET_GROUND,
           level: sp.troopLevel,
-          hp: stats.hp,
+          hp: scaledHp,
+          damage: scaledDamage,
+          primaryTroopPowerMultiplier,
           x: Math.round(spawnPos.x * 1000) / 1000,
           z: Math.round(spawnPos.z * 1000) / 1000,
         });
@@ -4306,10 +4609,13 @@ function verifyReplay({
 
     const aliveTroops = [];
     for (const t of troops) { if (t.hp > 0) aliveTroops.push(t); }
+    updateHiddenTeslaRevealStates(aliveTroops);
     const aliveGuards = [];
     for (const g of guards) { if (g.hp > 0) aliveGuards.push(g); }
     const aliveBuildings = [];
     for (const b of buildings) { if (b.hp > 0 && isCombatTargetBuilding(b)) aliveBuildings.push(b); }
+    const aliveBuildingObstacles = [];
+    for (const b of buildings) { if (b.hp > 0 && b.type !== 'shark_trap') aliveBuildingObstacles.push(b); }
 
     // A medkit heals paid attacking troops that remain inside the field.
     // Summoned skeletons are deliberately excluded: they cost no ship space
@@ -4591,6 +4897,13 @@ function verifyReplay({
       if (aliveTroops[troopIndex].hp <= 0) aliveTroops.splice(troopIndex, 1);
     }
 
+    // Hidden Tesla resolves as a direct authoritative electric hit. It has no
+    // projectile or splash phase, so one fire event can affect only one troop.
+    updateHiddenTeslaDefenses(aliveTroops);
+    for (let troopIndex = aliveTroops.length - 1; troopIndex >= 0; troopIndex--) {
+      if (aliveTroops[troopIndex].hp <= 0) aliveTroops.splice(troopIndex, 1);
+    }
+
     // Existing tower bullets move before a defense can fire a new shot,
     // matching turret.gd / tower_archer.gd process order.
     cannonEnergy += updateProjectiles(projectiles, 'defense', (p, target, hpBefore, hpAfter) => {
@@ -4661,7 +4974,12 @@ function verifyReplay({
 
     // ── Defense AI (turrets + archer towers) ──
     for (const d of defenses) {
-      if (d.type === 'harpoon' || d.type === 'air_bomb' || d.type === 'flamethrower') continue;
+      if (
+        d.type === 'harpoon'
+        || d.type === 'air_bomb'
+        || d.type === 'flamethrower'
+        || d.type === 'hidden_tesla'
+      ) continue;
       const bld = buildings.find(b => b.id === d.buildingId);
       if (!bld || bld.hp <= 0) continue;
       if ((Number(d.frozenUntil) || 0) > time) continue;
@@ -5153,7 +5471,7 @@ function verifyReplay({
           target,
           aliveTroops,
           aliveGuards,
-          aliveBuildings,
+          aliveBuildingObstacles,
           movementGridConfigs
         );
         if (rageBoosted) rageBoostedMoveTicks++;
@@ -5564,6 +5882,13 @@ function verifyReplay({
     }
 
     // ── End conditions ──
+    // A troop or committed ability may have destroyed a Tesla after its own
+    // defense phase. Record and disable it before evaluating the battle end.
+    for (const hiddenTesla of hiddenTeslas) {
+      const owner = hiddenTeslaOwner(hiddenTesla);
+      if (!owner || owner.hp <= 0) destroyHiddenTesla(hiddenTesla, owner);
+    }
+
     const thCheck = buildings.find(b => b.id === townHallId);
     if (thCheck && thCheck.hp <= 0) {
       simulationEndReason = 'town_hall_destroyed';
@@ -5686,6 +6011,12 @@ function verifyReplay({
       triggered: trap.triggered,
       troopId: trap.troopId,
     })),
+    _hiddenTeslaRevealStarts: hiddenTeslaRevealStarts,
+    _hiddenTeslaRevealCompletes: hiddenTeslaRevealCompletes,
+    _hiddenTeslaShots: hiddenTeslaShots,
+    _hiddenTeslaDamageApplied: hiddenTeslaDamageApplied,
+    _hiddenTeslaKills: hiddenTeslaKills,
+    _hiddenTeslaDestroyed: hiddenTeslaDestroyed,
     _pendingRalliesLeft: pendingRallies.length,
     _rallyFocus: rallyFocus ? {
       type: rallyFocus.isGuard ? 'guard' : rallyFocus.target.type,
@@ -5733,6 +6064,23 @@ function verifyReplay({
       streamIndex: defense.streamIndex,
       frozenUntilTick: defense.frozenUntilTick,
       permanentlyDisabled: defense.permanentlyDisabled,
+    })),
+    _hiddenTeslaDetails: hiddenTeslas.map(defense => ({
+      buildingId: defense.buildingId,
+      buildingOrder: defense.buildingOrder,
+      level: defense.level,
+      state: defense.state,
+      revealCause: defense.revealCause,
+      revealStartTick: defense.revealStartTick,
+      revealCompleteTick: defense.revealCompleteTick,
+      triggerTroopId: defense.triggerTroopId,
+      triggerRange: defense.triggerRange,
+      triggerScanTicks: defense.triggerScanTicks,
+      nextTriggerScanTick: defense.nextTriggerScanTick,
+      nextScanTick: defense.nextScanTick,
+      lastFireTick: defense.lastFireTick,
+      reloadReadyTick: defense.reloadReadyTick,
+      targetId: defense.targetId,
     })),
     _combatSnapshotVersion: combatSnapshotVersion,
     _combatRulesVersion: combatRulesVersion,

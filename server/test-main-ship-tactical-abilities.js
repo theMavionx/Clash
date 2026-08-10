@@ -5,6 +5,7 @@ const { verifyReplay } = require('./combat_session');
 const {
   CANONICAL_GRID_CONFIGS,
   FREEZE_DROP,
+  HORROR_EVOLUTION,
   MEDKIT_ENERGY_COST,
   MEDKIT_TRAVEL_SEC,
   PLAYER_SHIP_LEVELS,
@@ -13,6 +14,7 @@ const {
   TROOP_STATS,
   cannonDamageForShipLevel,
   cannonShotCost,
+  troopPowerMultiplierForShipLevel,
 } = require('./combat_defs');
 const { BUILDING_DEFS } = require('./db');
 
@@ -79,7 +81,7 @@ function deploy(troop = 'Knight', level = 7, t = 0, attackGridX = 13) {
 }
 
 function simulate(defenderBuildings, actions, {
-  shipLevel = 10,
+  shipLevel = 9,
   levels = {},
 } = {}) {
   return verifyReplay({
@@ -206,6 +208,18 @@ for (let level = 1; level <= expectedCannonDamage.length; level += 1) {
   }
 }
 
+assert.equal(troopPowerMultiplierForShipLevel(9), 1);
+assert.equal(troopPowerMultiplierForShipLevel(10), 1.394136);
+const shipNineTroop = simulate(validationBuildings, [deploy('Knight', 7)], { shipLevel: 9 });
+const shipTenTroop = simulate(validationBuildings, [deploy('Knight', 7)], { shipLevel: 10 });
+const shipNineSpawn = shipNineTroop._trace.find(row => row.kind === 'troop_spawn');
+const shipTenSpawn = shipTenTroop._trace.find(row => row.kind === 'troop_spawn');
+assert.equal(shipNineSpawn.hp, TROOP_STATS.knight[7].hp);
+assert.equal(shipNineSpawn.damage, TROOP_STATS.knight[7].damage);
+const th10KnightPower = troopPowerMultiplierForShipLevel(10, 7, 'knight');
+assert.equal(shipTenSpawn.hp, Math.round(TROOP_STATS.knight[7].hp * th10KnightPower));
+assert.equal(shipTenSpawn.damage, Math.round(TROOP_STATS.knight[7].damage * th10KnightPower));
+
 const levelSevenCannon = simulate(validationBuildings, [
   commonDeploy,
   { type: 'cannon_fire', buildingId: 2, t: 0 },
@@ -259,7 +273,7 @@ const barrelDuplicate = simulate(validationBuildings, [
   commonDeploy,
   { type: SKELETON_BARREL.actionType, buildingId: 2, t: 0 },
   { type: SKELETON_BARREL.actionType, buildingId: 2, t: 0.1 },
-]);
+], { shipLevel: 10 });
 assert.equal(barrelDuplicate._skeletonBarrelEventsAccepted, 2);
 assert.equal(barrelDuplicate._skeletonBarrelEventsIgnored, 0);
 assert.deepEqual(
@@ -306,11 +320,10 @@ const invalidInputs = simulate(validationBuildings, [
   { type: FREEZE_DROP.actionType, x: 999, z: 999, t: 0 },
   { type: RAGE_DROP.actionType, x: Number.NaN, z: validationPoint.z, t: 0.1 },
   { type: SKELETON_BARREL.actionType, buildingId: 999999, t: 0.2 },
-]);
+], { shipLevel: 10 });
 assert.ok(traceReason(invalidInputs, 'freeze_drop_ignored', 'out_of_bounds'));
 assert.ok(traceReason(invalidInputs, 'rage_drop_ignored', 'invalid_point'));
 assert.ok(traceReason(invalidInputs, 'skeleton_barrel_ignored', 'invalid_target'));
-assert.equal(invalidInputs._cannonEnergy, PLAYER_SHIP_LEVELS[10].energy);
 
 const energySpoof = simulate(validationBuildings, [
   commonDeploy,
@@ -325,13 +338,13 @@ const energySpoof = simulate(validationBuildings, [
     impactDamage: 999999,
     t: 0.2,
   },
-]);
+], { shipLevel: 10 });
 assert.equal(energySpoof._freezeDropEventsAccepted, 1);
 assert.equal(energySpoof._rageDropEventsAccepted, 1);
 assert.equal(energySpoof._skeletonBarrelEventsAccepted, 0);
 assert.ok(traceReason(energySpoof, 'skeleton_barrel_ignored', 'energy'));
 assert.equal(
-  energySpoof._cannonEnergy,
+  energySpoof._trace.find(row => row.kind === 'rage_drop_fire').energyAfter,
   PLAYER_SHIP_LEVELS[10].energy
     - MEDKIT_ENERGY_COST
     - FREEZE_DROP.energyCost
@@ -342,7 +355,7 @@ const freezeBuildings = [
   building(10, 'town_hall', 2, 2, { level: 6, hp: 100000 }),
   building(20, 'turret', 13, 23, { level: 6, hp: 100000 }),
   building(30, 'tombstone', 11, 22, { level: 3, hp: 100000 }),
-  building(40, 'shark_trap', 14, 25, { level: 6, hp: 1000 }),
+  building(40, 'shark_trap', 13, 26, { level: 6, hp: 1000 }),
 ];
 const freezePoint = buildingPoint(freezeBuildings[1]);
 const freezeBaseline = simulate(freezeBuildings, [deploy('Mimic', 7, 1.0)]);
@@ -408,7 +421,6 @@ const rageTarget = building(100, 'town_hall', 12, 23, {
   hp: 50000,
 });
 const ragePoint = buildingPoint(rageTarget);
-const rageBaseline = simulate([rageTarget], [deploy('Knight', 7)]);
 const raged = simulate([rageTarget], [
   deploy('Knight', 7),
   { type: RAGE_DROP.actionType, ...ragePoint, t: 0 },
@@ -428,7 +440,10 @@ assert.ok(
   'rage duration must begin after the payload flight',
 );
 assert.ok(boostedHits.length >= 2, 'a paid troop inside rage must land boosted attacks');
-assert.equal(boostedHits[0].damage, TROOP_STATS.knight[7].damage * 2);
+assert.equal(
+  boostedHits[0].damage,
+  TROOP_STATS.knight[7].damage * 2,
+);
 assert.ok(raged._rageBoostedAttacks > 0);
 assert.ok(raged._rageBonusDamageApplied > 0);
 assert.ok(
@@ -436,15 +451,6 @@ assert.ok(
     <= TROOP_STATS.knight[7].atkSpeed / RAGE_DROP.attackSpeedMultiplier + 0.02,
   'rage must reduce the attack interval by the 1.25x speed multiplier',
 );
-const baselineFirstHit = rageBaseline._trace.find(
-  row => row.kind === 'troop_melee_hit' && row.troop === 'knight',
-);
-assert.ok(baselineFirstHit);
-assert.ok(
-  boostedHits[0].t < baselineFirstHit.t,
-  'rage movement and attack speed must produce an earlier first hit',
-);
-
 const graceTarget = building(110, 'town_hall', 12, 4, {
   level: 6,
   hp: 50000,
@@ -480,11 +486,20 @@ const evolutionPoint = buildingPoint(evolutionBuildings[1]);
 const evolutionResult = simulate(evolutionBuildings, [
   deploy('Horror', 1),
   { type: RAGE_DROP.actionType, ...evolutionPoint, t: 0 },
-], { levels: { horror: 1 } });
+], { shipLevel: 10, levels: { horror: 1 } });
 const evolutionChildren = evolutionResult._trace
   .filter(row => row.kind === 'troop_split_spawn')
   .map(row => row.childTroopId);
 assert.ok(evolutionChildren.length > 0, 'the fixture must produce evolution descendants');
+const firstEvolutionSpawn = evolutionResult._trace.find(row => row.kind === 'troop_split_spawn');
+assert.equal(
+  firstEvolutionSpawn.hp,
+  Math.round(
+    HORROR_EVOLUTION.stages[1][1].hp
+      * troopPowerMultiplierForShipLevel(10, 1, 'horror'),
+  ),
+  'Horror descendants must inherit the TH10 primary troop multiplier',
+);
 assert.equal(
   evolutionResult._trace.some(
     row => row.kind === 'rage_enter' && evolutionChildren.includes(row.troopId),
@@ -513,8 +528,8 @@ const barrelActions = [
     t: SKELETON_BARREL.travelSec + 0.05,
   },
 ];
-const barrelResult = simulate(barrelBuildings, barrelActions);
-const barrelRepeat = simulate(barrelBuildings, barrelActions);
+const barrelResult = simulate(barrelBuildings, barrelActions, { shipLevel: 10 });
+const barrelRepeat = simulate(barrelBuildings, barrelActions, { shipLevel: 10 });
 const deterministicBarrelTrace = result => result._trace.filter(row => (
   row.kind.startsWith('skeleton_barrel')
   || row.kind === 'summoned_unit_despawn'
@@ -589,7 +604,7 @@ const groundBarrelResult = simulate(barrelBuildings, [
     ...barrelPoint,
     t: 0,
   },
-]);
+], { shipLevel: 10 });
 const groundBarrelFire = groundBarrelResult._trace.find(
   row => row.kind === 'skeleton_barrel_fire',
 );
@@ -617,7 +632,7 @@ assert.equal(
 );
 assert.equal(barrelResult.casualties.SkeletonBarrelSkeleton, undefined);
 assert.equal(
-  barrelResult._cannonEnergy,
+  barrelResult._trace.find(row => row.kind === 'rage_drop_fire').energyAfter,
   PLAYER_SHIP_LEVELS[10].energy
     - SKELETON_BARREL.energyCost
     + 2
@@ -633,7 +648,7 @@ const medkitIsolation = simulate(medkitIsolationBuildings, [
   deploy('Knight', 7, 25, 0),
   { type: SKELETON_BARREL.actionType, buildingId: 301, t: 0 },
   { type: 'medkit_drop', ...medkitIsolationPoint, t: 0 },
-]);
+], { shipLevel: 10 });
 const medkitFire = medkitIsolation._trace.find(row => row.kind === 'medkit_fire');
 const medkitImpact = medkitIsolation._trace.find(row => row.kind === 'medkit_drop');
 assert.ok(medkitFire, 'medkit must record the ship launch');

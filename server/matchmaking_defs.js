@@ -5,7 +5,7 @@ const GENERATING_RAID_BOT_LAYOUTS =
   String(process.env.CLASH_GENERATING_RAID_BOT_LAYOUTS || '') === '1';
 const HIGH_TIER_LAYOUT_CATALOG = GENERATING_RAID_BOT_LAYOUTS
   ? {}
-  : require('./data/raid-bot-layouts-th6-th7.json'); // catalog now spans TH5-TH9
+  : require('./data/raid-bot-layouts-th6-th7.json'); // catalog now spans TH5-TH10
 
 const MAIN_GRID_WIDTH = 29;
 const MAIN_GRID_HEIGHT = 27;
@@ -25,6 +25,7 @@ const BOT_TEMPLATE_COUNTS_BY_TH = {
   7: { normal: 180, hard: 720 },
   8: { normal: 180, hard: 720 },
   9: { normal: 180, hard: 720 },
+  10: { normal: 180, hard: 720 },
 };
 
 // The deterministic balance lab and production outcomes agree that geometry
@@ -71,6 +72,7 @@ const RANKED_CHALLENGE_BOT_ARCHETYPES_BY_TH = Object.freeze({
   7: Object.freeze(['corner-keep']),
   8: HIGH_TIER_BOT_ARCHETYPES,
   9: HIGH_TIER_BOT_ARCHETYPES,
+  10: HIGH_TIER_BOT_ARCHETYPES,
 });
 
 const MATCHMAKING_CONFIG = {
@@ -140,6 +142,7 @@ const BOT_BUILDING_SIZES = {
   cannon: [3, 3],
   flamethrower: [3, 3],
   air_bomb: [3, 3],
+  hidden_tesla: [2, 2],
 };
 
 const BOT_GRID_SPECS = {
@@ -446,7 +449,7 @@ const COMPETITIVE_BOT_MAX_LEVELS = {
     barn: 5,
     storage: 5,
     archer_tower: 5,
-    tombstone: 4,
+    tombstone: 5,
     turret: 5,
     mage_tower: 5,
     mortar: 5,
@@ -459,7 +462,7 @@ const COMPETITIVE_BOT_MAX_LEVELS = {
     barn: 6,
     storage: 6,
     archer_tower: 6,
-    tombstone: 5,
+    tombstone: 6,
     turret: 6,
     mage_tower: 6,
     mortar: 6,
@@ -473,7 +476,7 @@ const COMPETITIVE_BOT_MAX_LEVELS = {
     barn: 7,
     storage: 7,
     archer_tower: 7,
-    tombstone: 6,
+    tombstone: 7,
     turret: 7,
     mage_tower: 7,
     mortar: 7,
@@ -488,7 +491,7 @@ const COMPETITIVE_BOT_MAX_LEVELS = {
     barn: 8,
     storage: 8,
     archer_tower: 8,
-    tombstone: 7,
+    tombstone: 8,
     turret: 8,
     mage_tower: 8,
     mortar: 8,
@@ -504,7 +507,7 @@ const COMPETITIVE_BOT_MAX_LEVELS = {
     barn: 9,
     storage: 9,
     archer_tower: 9,
-    tombstone: 8,
+    tombstone: 9,
     turret: 9,
     mage_tower: 9,
     mortar: 9,
@@ -513,6 +516,24 @@ const COMPETITIVE_BOT_MAX_LEVELS = {
     cannon: 9,
     flamethrower: 9,
     air_bomb: 9,
+  },
+  10: {
+    town_hall: 10,
+    mine: 10,
+    sawmill: 10,
+    barn: 10,
+    storage: 10,
+    archer_tower: 10,
+    tombstone: 10,
+    turret: 10,
+    mage_tower: 10,
+    mortar: 10,
+    shark_trap: 10,
+    harpoon: 10,
+    cannon: 10,
+    flamethrower: 10,
+    air_bomb: 10,
+    hidden_tesla: 10,
   },
 };
 
@@ -527,6 +548,7 @@ const COMPETITIVE_BOT_DEFENSE_TYPES = new Set([
   'cannon',
   'flamethrower',
   'air_bomb',
+  'hidden_tesla',
 ]);
 
 const COMPETITIVE_BOT_ECONOMY_TYPES = new Set([

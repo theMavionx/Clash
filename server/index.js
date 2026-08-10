@@ -1387,18 +1387,23 @@ let players = [], replays = [];
 let localToolsPlayer = '';
 const ADMIN_BUILDING_TOOL_DEFS = [
   { type: 'altar', label: 'Altar', max: 1 },
-  { type: 'archer_tower', label: 'Archer Tower', max: 6 },
-  { type: 'barn', label: 'Barn', max: 6 },
-  { type: 'mage_tower', label: 'Mage Tower', max: 6 },
-  { type: 'mine', label: 'Mine', max: 6 },
-  { type: 'mortar', label: 'Mortar', max: 2 },
+  { type: 'air_bomb', label: 'Air Bomb', max: 10 },
+  { type: 'archer_tower', label: 'Archer Tower', max: 10 },
+  { type: 'barn', label: 'Barn', max: 10 },
+  { type: 'cannon', label: 'Cannon', max: 10 },
+  { type: 'flamethrower', label: 'Flamethrower', max: 10 },
+  { type: 'harpoon', label: 'Harpoon', max: 10 },
+  { type: 'hidden_tesla', label: 'Hidden Tesla', max: 10 },
+  { type: 'mage_tower', label: 'Mage Tower', max: 10 },
+  { type: 'mine', label: 'Mine', max: 10 },
+  { type: 'mortar', label: 'Mortar', max: 10 },
   { type: 'port', label: 'Port', max: 3 },
-  { type: 'sawmill', label: 'Sawmill', max: 6 },
-  { type: 'shark_trap', label: 'Shark Trap', max: 6 },
-  { type: 'storage', label: 'Storage', max: 6 },
-  { type: 'tombstone', label: 'Tombstone', max: 5 },
-  { type: 'town_hall', label: 'Town Hall', max: 6 },
-  { type: 'turret', label: 'Turret', max: 6 },
+  { type: 'sawmill', label: 'Sawmill', max: 10 },
+  { type: 'shark_trap', label: 'Shark Trap', max: 10 },
+  { type: 'storage', label: 'Storage', max: 10 },
+  { type: 'tombstone', label: 'Tombstone', max: 10 },
+  { type: 'town_hall', label: 'Town Hall', max: 10 },
+  { type: 'turret', label: 'Turret', max: 10 },
 ];
 const ADMIN_BUILDING_TYPES = ADMIN_BUILDING_TOOL_DEFS.map((b) => b.type);
 const ADMIN_RESOURCE_TOOL_DEFS = [
@@ -1793,7 +1798,7 @@ function renderBuildingTools() {
   const resourceBox = document.getElementById('localResourceRows');
   const trophyBox = document.getElementById('localTrophyRows');
   if (!maxBox || !rowsBox || !resourceBox || !trophyBox) return;
-  maxBox.innerHTML = [1, 2, 3, 4, 5, 6, 7].map((level) =>
+  maxBox.innerHTML = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((level) =>
     '<button class="btn" onclick="buildMaxVillage(' + level + ')">' + level + '</button>'
   ).join('');
   resourceBox.innerHTML = ADMIN_RESOURCE_TOOL_DEFS.map((def) => {
@@ -1888,11 +1893,11 @@ async function buildMaxVillage(level) {
 
 async function maxEverything() {
   if (!localToolsPlayer) return;
-  if (!confirm('Clear buildings, build max TH7 village, and fill all resources for ' + localToolsPlayer + '?')) return;
+  if (!confirm('Clear buildings, build max TH10 village, and fill all resources for ' + localToolsPlayer + '?')) return;
   setLocalToolsStatus('Building max village...');
   try {
     const village = await apiPost('/admin/players/' + encodeURIComponent(localToolsPlayer) + '/max-village', {
-      town_hall_level: 7,
+      town_hall_level: 10,
     });
     const resources = await apiPost('/admin/players/' + encodeURIComponent(localToolsPlayer) + '/add-resources', {
       gold: 999999999,

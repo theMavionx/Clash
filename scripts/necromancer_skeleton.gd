@@ -20,18 +20,18 @@ const ANIM_FILES: Array[String] = [
 	"res://Model/Characters/Animations/Rig_Medium/Rig_Medium_Simulation.glb",
 ]
 
-## Derived from the corresponding Tombstone guard level:
-## 30% HP, 35% damage and 150% attack cooldown.
+## Derived from the corresponding Tombstone guard level and the ten-slot
+## Necromancer package: 15% HP, 17.5% damage and 150% attack cooldown.
 const LEVEL_STATS: Dictionary = {
-	1: {"hp": 108, "damage": 13, "atk_speed": 1.29, "move_speed": 0.46},
-	2: {"hp": 108, "damage": 13, "atk_speed": 1.29, "move_speed": 0.46},
-	3: {"hp": 156, "damage": 19, "atk_speed": 1.29, "move_speed": 0.52},
-	4: {"hp": 186, "damage": 23, "atk_speed": 1.29, "move_speed": 0.54},
-	5: {"hp": 246, "damage": 34, "atk_speed": 1.29, "move_speed": 0.58},
-	6: {"hp": 299, "damage": 44, "atk_speed": 1.29, "move_speed": 0.60},
-	7: {"hp": 299, "damage": 44, "atk_speed": 1.29, "move_speed": 0.60},
-	8: {"hp": 396, "damage": 60, "atk_speed": 1.29, "move_speed": 0.62},
-	9: {"hp": 453, "damage": 68, "atk_speed": 1.29, "move_speed": 0.62},
+	1: {"hp": 54, "damage": 7, "atk_speed": 1.29, "move_speed": 0.46},
+	2: {"hp": 54, "damage": 7, "atk_speed": 1.29, "move_speed": 0.46},
+	3: {"hp": 78, "damage": 10, "atk_speed": 1.29, "move_speed": 0.52},
+	4: {"hp": 93, "damage": 12, "atk_speed": 1.29, "move_speed": 0.54},
+	5: {"hp": 123, "damage": 17, "atk_speed": 1.29, "move_speed": 0.58},
+	6: {"hp": 150, "damage": 22, "atk_speed": 1.29, "move_speed": 0.60},
+	7: {"hp": 150, "damage": 22, "atk_speed": 1.29, "move_speed": 0.60},
+	8: {"hp": 198, "damage": 30, "atk_speed": 1.29, "move_speed": 0.62},
+	9: {"hp": 227, "damage": 34, "atk_speed": 1.29, "move_speed": 0.62},
 }
 
 static var _body_material: StandardMaterial3D = null

@@ -25,9 +25,9 @@ Town Hall 7 extends every established, upgradeable building line by one level an
 | Sawmill | 7 | 18,000 | 300 wood/minute; 9,000 internal capacity |
 | Storage | 7 | 18,000 | +36,000 capacity per resource |
 | Turret | 7 | 12,000 | 788 damage, fixed 0.70 s interval, 1.62 range |
-| Archer Tower | 7 | 10,200 | 675 damage, fixed 1.00 s interval, 2.30 range |
+| Archer Tower | 7 | 10,200 | 388 damage, fixed 1.00 s interval, 1.45 range |
 | Mage Tower | 7 | 8,300 | 98–527 damage/tick, fixed 0.25 s tick, 1.8 s ramp, 1.65 range |
-| Mortar | 7 | 8,100 | 487 splash damage, fixed 2.40 s interval, 0.78–2.40 range, 0.52 splash radius |
+| Mortar | 7 | 8,100 | 294 splash damage, fixed 2.40 s interval, 0.60-1.55 range, 0.52 splash radius |
 | Tombstone | 6 | 3,418 | Five L6 guards; 1,378 HP and 179 damage per guard |
 | Shark Trap | 7 | 1 | 2,900 trigger damage |
 | Cannon | 7 | 9,000 | 1,080 damage, fixed 1.60 s interval, 2.00 range |
@@ -56,19 +56,22 @@ Existing TH6 limits are preserved: Mine 4, Sawmill 4, Barn 1, Storage 3, Turret 
 
 | Level | HP | Damage | Interval | Range | DPS |
 |---:|---:|---:|---:|---:|---:|
-| 1 | 3,200 | 40 | 1.60 s | 1.35 | 25.0 |
-| 2 | 3,900 | 109 | 1.60 s | 1.45 | 68.1 |
-| 3 | 4,700 | 259 | 1.60 s | 1.55 | 161.9 |
-| 4 | 5,600 | 431 | 1.60 s | 1.65 | 269.4 |
-| 5 | 6,600 | 631 | 1.60 s | 1.75 | 394.4 |
-| 6 | 7,700 | 759 | 1.60 s | 1.85 | 474.4 |
-| 7 | 9,000 | 1,080 | 1.60 s | 2.00 | 675.0 |
+| 1 | 3,200 | 40 | 1.60 s | 1.00 | 25.0 |
+| 2 | 3,900 | 109 | 1.60 s | 1.04 | 68.1 |
+| 3 | 4,700 | 259 | 1.60 s | 1.08 | 161.9 |
+| 4 | 5,600 | 431 | 1.60 s | 1.12 | 269.4 |
+| 5 | 6,148 | 510 | 1.60 s | 1.20 | 318.8 |
+| 6 | 6,742 | 577 | 1.60 s | 1.28 | 360.6 |
+| 7 | 7,141 | 620 | 1.60 s | 1.36 | 387.5 |
+| 8 | 8,200 | 690 | 1.60 s | 1.44 | 431.3 |
+| 9 | 9,400 | 760 | 1.60 s | 1.52 | 475.0 |
+| 10 | 10,800 | 840 | 1.60 s | 1.60 | 525.0 |
 
 Cannon trades air targeting and Archer Tower's longer high-level range for
 heavier single-hit burst and greater durability. The final win-rate
 calibration is applied through the shared same-TH troop curve rather than an
-artificial TH7 defense spike; Cannon remains ground-only with 2.00 range
-versus Archer Tower's 2.30.
+artificial TH7 defense spike; Cannon remains ground-only with 1.36 range at L7
+versus Archer Tower's 1.45.
 
 ### Cannon economy
 

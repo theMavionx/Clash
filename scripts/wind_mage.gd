@@ -1,6 +1,6 @@
 class_name WindMage
 extends BaseTroop
-## Fifteen-slot late-game control troop. A synchronized wind slash damages a
+## Ten-slot late-game control troop. A synchronized wind slash damages a
 ## long widening corridor and releases a bounded pack of short-lived Windlings.
 
 const MAX_TROOP_LEVEL: int = 9
@@ -32,15 +32,15 @@ const EMISSION_TEXTURE: Texture2D = preload(
 ## Stable cadence preserves the authored slash motion. Level progression is
 ## concentrated in survivability and damage instead of animation speed.
 const LEVEL_STATS: Dictionary = {
-	1: {"hp": 2200, "damage": 430, "atk_speed": 2.20},
-	2: {"hp": 2900, "damage": 560, "atk_speed": 2.20},
-	3: {"hp": 3800, "damage": 740, "atk_speed": 2.20},
-	4: {"hp": 4900, "damage": 980, "atk_speed": 2.20},
-	5: {"hp": 6200, "damage": 1280, "atk_speed": 2.20},
-	6: {"hp": 7700, "damage": 1660, "atk_speed": 2.20},
-	7: {"hp": 12000, "damage": 3000, "atk_speed": 2.20},
-	8: {"hp": 12000, "damage": 3000, "atk_speed": 2.20},
-	9: {"hp": 12000, "damage": 3000, "atk_speed": 2.20},
+	1: {"hp": 1100, "damage": 215, "atk_speed": 2.20},
+	2: {"hp": 1450, "damage": 280, "atk_speed": 2.20},
+	3: {"hp": 1900, "damage": 370, "atk_speed": 2.20},
+	4: {"hp": 2450, "damage": 490, "atk_speed": 2.20},
+	5: {"hp": 3100, "damage": 640, "atk_speed": 2.20},
+	6: {"hp": 3850, "damage": 830, "atk_speed": 2.20},
+	7: {"hp": 6000, "damage": 1500, "atk_speed": 2.20},
+	8: {"hp": 6000, "damage": 1500, "atk_speed": 2.20},
+	9: {"hp": 6000, "damage": 1500, "atk_speed": 2.20},
 }
 
 const ANIM_FILES: Array[String] = [

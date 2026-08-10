@@ -65,8 +65,10 @@ const {
   fetchWithAptosKeys,
   runWithAptosKeys,
 } = require('./aptos_api');
+const { SanctumError, createSanctumService } = require('./sanctum');
 
 const router = express.Router();
+const sanctumService = createSanctumService({ db: db.db });
 
 // Temporary lenient battle mode: still runs server-side replay verification and
 // logs/stores all mismatch diagnostics, but does not block player rewards unless
@@ -6244,6 +6246,55 @@ function getGameShopClientConfigCached() {
 }
 
 // ---------- Game shop: utility resources granted server-side ----------
+function sendSanctumError(res, error) {
+  if (error instanceof SanctumError) {
+    return res.status(error.status || 400).json({ error: error.message, code: error.code });
+  }
+  console.warn('[sanctum] unexpected error:', error?.message || error);
+  return res.status(500).json({ error: 'clashSOL service temporarily unavailable', code: 'INTERNAL_ERROR' });
+}
+
+router.get('/sanctum/clashsol/status', async (_req, res) => {
+  try {
+    const status = await sanctumService.getStatus();
+    res.set('Cache-Control', status.available
+      ? 'public, max-age=30, stale-while-revalidate=60'
+      : 'public, max-age=60');
+    return res.json(status);
+  } catch (error) {
+    return sendSanctumError(res, error);
+  }
+});
+
+router.post('/sanctum/clashsol/orders', auth, async (req, res) => {
+  try {
+    const order = await sanctumService.createOrder({
+      playerId: req.player.id,
+      wallet: req.body?.wallet,
+      amountSol: req.body?.amountSol,
+      slippageBps: req.body?.slippageBps,
+    });
+    res.set('Cache-Control', 'no-store');
+    return res.status(201).json(order);
+  } catch (error) {
+    return sendSanctumError(res, error);
+  }
+});
+
+router.post('/sanctum/clashsol/orders/:orderId/execute', auth, async (req, res) => {
+  try {
+    const result = await sanctumService.executeOrder({
+      playerId: req.player.id,
+      orderId: req.params.orderId,
+      signedTransaction: req.body?.signedTransaction,
+    });
+    res.set('Cache-Control', 'no-store');
+    return res.json(result);
+  } catch (error) {
+    return sendSanctumError(res, error);
+  }
+});
+
 router.get('/shop/config', (req, res) => {
   try {
     const { value, cacheState } = getGameShopClientConfigCached();
@@ -19133,14 +19184,15 @@ const ADMIN_MAX_VILLAGE_BUILD_ORDER = [
   'harpoon',
   'flamethrower',
   'air_bomb',
+  'hidden_tesla',
   'port',
 ];
 
 const ADMIN_TH_MAX_COUNT = {
   ...db.TH_MAX_COUNT,
   // Legacy ports remain admin-visible for old accounts, but Port building
-  // progression remains capped at level 3 through TH9.
-  port: [1, 2, 3, 3, 3, 3, 3, 3, 3],
+  // progression remains capped at level 3 through TH10.
+  port: [1, 2, 3, 3, 3, 3, 3, 3, 3, 3],
 };
 
 function adminMaxBuildingCountForTh(type, townHallLevel) {
@@ -19272,7 +19324,7 @@ router.post('/admin/players/:name/max-village', adminAuth, (req, res) => {
   try {
     const player = db.db.prepare('SELECT id, name FROM players WHERE name = ? AND COALESCE(is_bot, 0) = 0').get(req.params.name);
     if (!player) return res.status(404).json({ error: 'Player not found' });
-    const townHallLevel = Math.max(1, Math.min(db.LIVE_TOWN_HALL_CAP || 9, Math.floor(Number(req.body?.town_hall_level || req.body?.level || 1))));
+    const townHallLevel = Math.max(1, Math.min(db.LIVE_TOWN_HALL_CAP || 10, Math.floor(Number(req.body?.town_hall_level || req.body?.level || 1))));
     const result = db.db.transaction(() => {
       db.db.prepare('DELETE FROM buildings WHERE player_id = ?').run(player.id);
       const added = [];

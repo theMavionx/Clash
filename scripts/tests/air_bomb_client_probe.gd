@@ -105,7 +105,7 @@ func _run_probe() -> void:
 func _probe_targeting_reload_and_committed_shot(failures: Array[String]) -> void:
 	var fixture := _new_fixture("AirBombTargetingProbe")
 	var ground := _make_troop("ground", BaseTroop.UNIT_TARGET_GROUND, Vector3(0.35, 0.0, 0.0), 1)
-	var air := _make_troop("air", BaseTroop.UNIT_TARGET_AIR, Vector3(1.15, 0.45, 0.0), 2)
+	var air := _make_troop("air", BaseTroop.UNIT_TARGET_AIR, Vector3(1.00, 0.45, 0.0), 2)
 	fixture.add_child(ground)
 	fixture.add_child(air)
 	var tower: Variant = _make_tower(Vector3.ZERO, 100)
@@ -160,7 +160,7 @@ func _probe_splash_falloff(failures: Array[String]) -> void:
 	var projectile: Variant = Node3D.new()
 	projectile.set_script(ProjectileScript)
 	fixture.add_child(projectile)
-	projectile.initialize(Vector3.ZERO, center, 140, 0.31, 2.25, 150, 150, 1, 0)
+	projectile.initialize(Vector3.ZERO, center, 140, 0.31, 1.10, 150, 150, 1, 0)
 	BaseTroop.invalidate_combat_lists()
 	var initial_hp := center.hp
 	var hit_count: int = projectile._apply_air_splash(Vector3.ZERO)
@@ -187,7 +187,7 @@ func _probe_homing_and_target_loss(failures: Array[String]) -> void:
 	_expect(int(static_snapshot.homing_age_ticks) == 71, "1.5-unit static target uses exactly 71 homing ticks", failures)
 	static_target.remove_from_group("troops")
 	BaseTroop.invalidate_combat_lists()
-	var far_target := _make_troop("far_static", BaseTroop.UNIT_TARGET_AIR, Vector3(2.65, 0.4, 0.0), 18)
+	var far_target := _make_troop("far_static", BaseTroop.UNIT_TARGET_AIR, Vector3(1.75, 0.4, 0.0), 18)
 	fixture.add_child(far_target)
 	var far_hp := far_target.hp
 	var far_projectile: Variant = _make_projectile(fixture, Vector3.ZERO, far_target, 140, 198)
@@ -236,9 +236,9 @@ func _probe_homing_and_target_loss(failures: Array[String]) -> void:
 	# use replay order and then instance ID, and a second loss may retarget again
 	# without restarting the rise or changing the launch heading.
 	var rise_initial := _make_troop("rise_initial", BaseTroop.UNIT_TARGET_AIR, Vector3(2.0, 0.4, 0.0), 21)
-	var rise_high_order := _make_troop("rise_high_order", BaseTroop.UNIT_TARGET_AIR, Vector3(0.0, 0.4, 1.5), 24)
-	var rise_low_old := _make_troop("rise_low_old", BaseTroop.UNIT_TARGET_AIR, Vector3(0.0, 0.4, -1.5), 22)
-	var rise_low_new := _make_troop("rise_low_new", BaseTroop.UNIT_TARGET_AIR, Vector3(-1.5, 0.4, 0.0), 22)
+	var rise_high_order := _make_troop("rise_high_order", BaseTroop.UNIT_TARGET_AIR, Vector3(0.0, 0.4, 1.0), 24)
+	var rise_low_old := _make_troop("rise_low_old", BaseTroop.UNIT_TARGET_AIR, Vector3(0.0, 0.4, -1.0), 22)
+	var rise_low_new := _make_troop("rise_low_new", BaseTroop.UNIT_TARGET_AIR, Vector3(-1.0, 0.4, 0.0), 22)
 	for troop in [rise_initial, rise_high_order, rise_low_old, rise_low_new]:
 		fixture.add_child(troop)
 	var rise_projectile: Variant = _make_projectile(fixture, Vector3.ZERO, rise_initial, 140, 201)
@@ -268,7 +268,7 @@ func _probe_homing_and_target_loss(failures: Array[String]) -> void:
 	# The replacement is acquired and steered toward on the same tick, but the
 	# turn remains capped at four degrees and the 144-tick lifetime is unchanged.
 	var homing_initial := _make_troop("homing_initial", BaseTroop.UNIT_TARGET_AIR, Vector3(2.0, 0.4, 0.0), 30)
-	var homing_replacement := _make_troop("homing_replacement", BaseTroop.UNIT_TARGET_AIR, Vector3(0.25, 0.4, 1.2), 31)
+	var homing_replacement := _make_troop("homing_replacement", BaseTroop.UNIT_TARGET_AIR, Vector3(0.25, 0.4, 0.95), 31)
 	fixture.add_child(homing_initial)
 	fixture.add_child(homing_replacement)
 	var homing_projectile: Variant = _make_projectile(fixture, Vector3.ZERO, homing_initial, 140, 202)
@@ -289,7 +289,7 @@ func _probe_homing_and_target_loss(failures: Array[String]) -> void:
 	_expect(int(after_homing_retarget.homing_age_ticks) == int(before_homing_retarget.homing_age_ticks) + 1, "homing retarget does not reset flight age", failures)
 	_expect(heading_change > 0.0 and heading_change <= homing_projectile.TURN_RADIANS_PER_TICK + 0.000001, "homing retarget turns from the existing heading by at most four degrees", failures)
 	_expect(float(after_homing_retarget.position.z) > float(before_homing_retarget.position.z), "homing retarget steers on the same tick instead of continuing stale straight flight", failures)
-	_expect(int(after_homing_retarget.retarget_count) == 1 and is_equal_approx(float(after_homing_retarget.retarget_range), 2.25), "homing debug state exposes immutable range and retarget count", failures)
+	_expect(int(after_homing_retarget.retarget_count) == 1 and is_equal_approx(float(after_homing_retarget.retarget_range), 1.10), "homing debug state exposes immutable range and retarget count", failures)
 	while not bool(homing_projectile.get_debug_snapshot().finished):
 		homing_replacement.global_position = homing_projectile.global_position + Vector3(8.0, 0.0, 8.0)
 		homing_projectile._simulation_step()
@@ -343,7 +343,7 @@ func _probe_freeze_and_level_curve(failures: Array[String]) -> void:
 	tower.set_level(9)
 	tower.set_ward_bonus_pct(15)
 	_expect(tower.damage == 2162, "L9 Ward damage uses ceiling rounding", failures)
-	_expect(is_equal_approx(tower.detect_range, 2.65), "L9 search range is 2.65", failures)
+	_expect(is_equal_approx(tower.detect_range, 1.75), "L9 search range is 1.75", failures)
 	_expect(tower.RELOAD_TICKS == 270, "reload never scales with level", failures)
 	_expect(is_equal_approx(tower.SPLASH_RADIUS, 0.31), "tower uses the owner-approved half-size splash radius", failures)
 	_expect(is_equal_approx(ProjectileScript.PROJECTILE_SPEED, 1.19), "projectile uses the owner-approved 30-percent slower flight speed", failures)
@@ -461,8 +461,8 @@ func _probe_building_integration(failures: Array[String]) -> void:
 	_expect(definition.get("scene", "") == "res://Model/air_bomb/air_bomb.tscn", "BuildingSystem uses the production Air Bomb scene", failures)
 	_expect(definition.get("max_count", 0) == 2, "Air Bomb definition caps at two", failures)
 	_expect(building_system.TH_UNLOCK.get("air_bomb", 0) == 9, "Air Bomb unlock is Town Hall 9", failures)
-	_expect(building_system.TH_MAX_COUNT.get("air_bomb", []) == [0, 0, 0, 0, 0, 0, 0, 0, 2], "client TH count gate mirrors server", failures)
-	_expect(building_system.TH_MAX_LEVEL.get("air_bomb", []) == [1, 1, 1, 1, 1, 1, 1, 1, 9], "client TH level gate mirrors server", failures)
+	_expect(building_system.TH_MAX_COUNT.get("air_bomb", []) == [0, 0, 0, 0, 0, 0, 0, 0, 2, 2], "client TH count gate mirrors server through TH10", failures)
+	_expect(building_system.TH_MAX_LEVEL.get("air_bomb", []) == [1, 1, 1, 1, 1, 1, 1, 1, 9, 10], "client TH level gate mirrors server through TH10", failures)
 	var defense_node := Node3D.new()
 	building_system._attach_building_defense_script(defense_node, "air_bomb")
 	_expect(defense_node.get_script() == TowerScript, "BuildingSystem attaches TowerAirBomb runtime", failures)
@@ -620,7 +620,7 @@ func _make_projectile(
 	target: Node3D,
 	damage: int,
 	server_id: int,
-	retarget_range: float = 2.25,
+	retarget_range: float = 1.10,
 ) -> Variant:
 	var projectile: Variant = Node3D.new()
 	projectile.set_script(ProjectileScript)

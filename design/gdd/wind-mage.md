@@ -10,29 +10,31 @@ single-target damage.
 ## Army Economy
 
 - Unlock: Town Hall 8
-- Ship capacity: 18 slots
-- Training cost: 1,800 gold (100 gold per occupied slot)
-- Upgrade levels: 1-7
+- Ship capacity: 10 slots
+- Training cost: 1,000 gold (100 gold per occupied slot)
+- Upgrade levels: 1-9
 - Windlings do not occupy ship slots and are not paid casualties.
 
 ## Wind Mage Stats
 
 | Level | HP | Primary damage | Attack interval |
 | --- | ---: | ---: | ---: |
-| 1 | 2,200 | 430 | 2.20 s |
-| 2 | 2,900 | 560 | 2.20 s |
-| 3 | 3,800 | 740 | 2.20 s |
-| 4 | 4,900 | 980 | 2.20 s |
-| 5 | 6,200 | 1,280 | 2.20 s |
-| 6 | 7,700 | 1,660 | 2.20 s |
-| 7 | 12,000 | 3,000 | 2.20 s |
+| 1 | 1,100 | 215 | 2.20 s |
+| 2 | 1,450 | 280 | 2.20 s |
+| 3 | 1,900 | 370 | 2.20 s |
+| 4 | 2,450 | 490 | 2.20 s |
+| 5 | 3,100 | 640 | 2.20 s |
+| 6 | 3,850 | 830 | 2.20 s |
+| 7 | 6,000 | 1,500 | 2.20 s |
+| 8 | 6,000 | 1,500 | 2.20 s |
+| 9 | 6,000 | 1,500 | 2.20 s |
 
 The strike lands at 52% of the attack animation. The primary target receives
 full damage. Up to four other buildings inside the wind corridor receive 50%
 damage. Skeleton guards and other units are not valid wave targets.
 
 The table stores authored pre-curve values. The level-7 primary root resolves
-to 21,600 HP and 5,400 primary damage after the shared `1.80x` same-TH curve.
+to 10,440 HP and 2,610 primary damage after the shared `1.74x` same-TH curve.
 
 ## Wind Corridor
 
@@ -52,13 +54,15 @@ positions inside the corridor.
 
 | Level | HP | Damage | Attack interval |
 | --- | ---: | ---: | ---: |
-| 1 | 90 | 20 | 0.90 s |
-| 2 | 120 | 26 | 0.90 s |
-| 3 | 155 | 34 | 0.90 s |
-| 4 | 200 | 44 | 0.90 s |
-| 5 | 250 | 57 | 0.90 s |
-| 6 | 310 | 73 | 0.90 s |
-| 7 | 450 | 110 | 0.90 s |
+| 1 | 50 | 11 | 0.90 s |
+| 2 | 67 | 14 | 0.90 s |
+| 3 | 86 | 19 | 0.90 s |
+| 4 | 111 | 24 | 0.90 s |
+| 5 | 139 | 32 | 0.90 s |
+| 6 | 172 | 41 | 0.90 s |
+| 7 | 250 | 61 | 0.90 s |
+| 8 | 283 | 69 | 0.90 s |
+| 9 | 319 | 78 | 0.90 s |
 
 - Lifetime: 8 seconds
 - Per-owner cap: 6 active Windlings
@@ -84,7 +88,7 @@ positions inside the corridor.
 - Targets outside the corridor take no wave damage.
 - A cast creates two or three Windlings and never exceeds six per caster.
 - Windlings cannot attack guards and do not become casualties.
-- The unit is available from Town Hall 8 for 18 ship slots in every ship,
+- The unit is available from Town Hall 8 for 10 ship slots in every ship,
   upgrade, casualty, replay, and mobile attack UI.
 - The mobile attack roster scrolls horizontally without covering battle HUD
   controls.

@@ -62,7 +62,7 @@ func _run() -> void:
 	_expect(cannon._pool_ready, "projectile pool did not build eagerly")
 	_expect(cannon.damage == 40, "L1 Cannon damage is not 40")
 	_expect(is_equal_approx(cannon.fire_rate, 1.60), "L1 Cannon fire interval is not 1.60")
-	_expect(is_equal_approx(cannon.detect_range, 1.35), "L1 Cannon range is not 1.35")
+	_expect(is_equal_approx(cannon.detect_range, 1.00), "L1 Cannon range is not 1.00")
 	_expect(is_equal_approx(cannon.bullet_speed, 3.2), "Cannon projectile speed is not 3.2")
 
 	var base: Node3D = cannon._base
@@ -288,7 +288,7 @@ func _run() -> void:
 	cannon.set_level(7)
 	_expect(cannon.damage == 620, "L7 Cannon damage is not 620")
 	_expect(is_equal_approx(cannon.fire_rate, 1.60), "L7 Cannon fire interval is not the fixed 1.60 seconds")
-	_expect(is_equal_approx(cannon.detect_range, 2.00), "L7 Cannon range is not 2.00")
+	_expect(is_equal_approx(cannon.detect_range, 1.36), "L7 Cannon range is not 1.36")
 
 	if cannon._attack_sfx_player != null:
 		cannon._attack_sfx_player.stop()

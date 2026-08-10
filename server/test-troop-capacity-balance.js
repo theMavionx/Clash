@@ -18,15 +18,16 @@ const EXPECTED_SLOT_COSTS = Object.freeze({
   mechanical_dragon: 5,
   demon_king: 6,
   mimic: 8,
-  fire_dragon: 11,
-  ice_golem: 11,
-  necromancer: 18,
-  horror: 22,
-  wind_mage: 18,
+  fire_dragon: 10,
+  ice_golem: 10,
+  necromancer: 10,
+  horror: 10,
+  wind_mage: 10,
 });
 
 for (const [type, expected] of Object.entries(EXPECTED_SLOT_COSTS)) {
   assert.equal(TROOP_SLOT_COSTS[type], expected, `${type} ship slot cost diverged`);
+  assert.ok(expected <= 10, `${type} exceeds the ten-slot troop cap`);
 }
 
 function maxMetric(type) {
@@ -149,9 +150,9 @@ const horrorPhaseDpsPerSlot = [
   4 * horrorSmall.damage / horrorSmall.atkSpeed,
 ].map(value => value / TROOP_SLOT_COSTS.horror);
 assert.ok(
-  horrorFamilyHpPerSlot >= knight.hpPerSlot * 0.88
-    && horrorFamilyHpPerSlot <= knight.hpPerSlot,
-  'Horror 1->2->4 lifetime HP must stay within 12% of a Knight per slot',
+  horrorFamilyHpPerSlot >= knight.hpPerSlot * 0.95
+    && horrorFamilyHpPerSlot <= knight.hpPerSlot * 1.05,
+  'Horror 1->2->4 lifetime HP must stay within 5% of a Knight per slot',
 );
 assert.ok(
   Math.max(...horrorPhaseDpsPerSlot) < knight.dpsPerSlot * 0.55,
@@ -198,11 +199,11 @@ const LEGAL_45_SLOT_ROSTERS = Object.freeze({
   barrels: { mimic: 5, archer: 5 },
   mechanicalDragons: { mechanical_dragon: 9 },
   demonKings: { demon_king: 7, archer: 3 },
-  fireDragons: { fire_dragon: 4, archer: 1 },
-  iceGolems: { ice_golem: 4, archer: 1 },
-  necromancers: { necromancer: 2, archer: 9 },
-  horrors: { horror: 2, archer: 1 },
-  windMages: { wind_mage: 2, archer: 9 },
+  fireDragons: { fire_dragon: 4, archer: 5 },
+  iceGolems: { ice_golem: 4, archer: 5 },
+  necromancers: { necromancer: 4, archer: 5 },
+  horrors: { horror: 4, archer: 5 },
+  windMages: { wind_mage: 4, archer: 5 },
 });
 
 function occupiedSlots(roster) {
@@ -215,7 +216,7 @@ function occupiedSlots(roster) {
 for (const [name, roster] of Object.entries(LEGAL_45_SLOT_ROSTERS)) {
   assert.equal(occupiedSlots(roster), 45, `${name} roster must occupy exactly 45 slots`);
 }
-assert.ok(occupiedSlots({ horror: 3 }) > 45, 'three Horrors must not fit in the max-level ship');
+assert.ok(occupiedSlots({ horror: 5 }) > 45, 'five Horrors must not fit in the max-level ship');
 
 const report = [
   knight,

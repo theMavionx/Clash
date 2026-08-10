@@ -266,6 +266,11 @@ assert.match(
   /func _ready\(\).*?[\r\n]+\s*_init_stats\(\)[\r\n]+\s*_apply_troop_level_power_curve\(\)/s,
   'BaseTroop must apply the shared power curve after raw level stats',
 );
+assert.match(
+  baseTroopSource,
+  /_apply_troop_level_power_curve\(\)[\r\n]+\s*_apply_primary_troop_power_multiplier\(\)/,
+  'BaseTroop must apply Main Ship primary troop power after the level curve',
+);
 
 assertTroopStats('scripts/knight.gd', 'knight');
 assertTroopStats('scripts/barbarian.gd', 'barbarian');
@@ -552,11 +557,49 @@ for (const [level, config] of Object.entries(PLAYER_SHIP_LEVELS)) {
   assert.match(line, new RegExp(`"energy":\\s*${config.energy}`));
   assert.match(line, new RegExp(`"cannon_damage":\\s*${config.cannon_damage}`));
   assert.match(line, new RegExp(`"cannon_base_cost":\\s*${config.cannon_base_cost}`));
+  if (config.troop_power_multiplier != null) {
+    assert.match(
+      line,
+      new RegExp(`"troop_power_multiplier":\\s*${config.troop_power_multiplier}`),
+      `Main Ship client level ${level} troop power diverged`,
+    );
+  }
+  if (config.troop_level_power_multipliers != null) {
+    const clientLevelScales = line.match(
+      /"troop_level_power_multipliers":\s*\[([^\]]+)\]/,
+    );
+    assert.ok(clientLevelScales, `Main Ship client level ${level} troop-level scales are missing`);
+    assert.deepEqual(
+      toNumbers(clientLevelScales[1]),
+      [...config.troop_level_power_multipliers],
+      `Main Ship client level ${level} troop-level scales diverged`,
+    );
+  }
+  if (config.troop_type_power_multipliers != null) {
+    const clientTypeScales = line.match(
+      /"troop_type_power_multipliers":\s*\{([^}]+)\}/,
+    );
+    assert.ok(clientTypeScales, `Main Ship client level ${level} troop-type scales are missing`);
+    const parsedTypeScales = Object.fromEntries(
+      [...clientTypeScales[1].matchAll(/"([^"]+)":\s*([0-9.]+)/g)]
+        .map(([, type, scale]) => [type, Number(scale)]),
+    );
+    assert.deepEqual(
+      parsedTypeScales,
+      { ...config.troop_type_power_multipliers },
+      `Main Ship client level ${level} troop-type scales diverged`,
+    );
+  }
   for (const [resource, amount] of Object.entries(config.cost)) {
     if (Number(level) === 1) continue;
     assert.match(line, new RegExp(`"${resource}":\\s*${amount}`));
   }
 }
+assert.match(
+  read('scripts/attack_system.gd'),
+  /primary_troop_power_multiplier\s*=\s*_active_main_ship_troop_power_multiplier\([\s\S]*?\)/,
+  'AttackSystem must attach the authoritative Main Ship multiplier before troop _ready',
+);
 const medkitClient = read('scripts/bs_medkit.gd');
 for (const [name, expected] of Object.entries({
   MEDKIT_UNLOCK_SHIP_LEVEL,
@@ -713,6 +756,11 @@ for (const eventKind of [
   'harpoon_pull_start',
   'harpoon_pull_end',
   'harpoon_release',
+  'hidden_tesla_reveal_started',
+  'hidden_tesla_reveal_complete',
+  'hidden_tesla_fire',
+  'hidden_tesla_damage',
+  'hidden_tesla_destroyed',
 ]) {
   assert.match(
     dbSource,
@@ -730,31 +778,31 @@ assertDefenseStats('scripts/turret.gd', 'turret', {
   damage: 'damage',
   fire_rate: 'fireRate',
   detect_range: 'detectRange',
-}, 9);
+}, 10);
 assertDefenseStats('scripts/tower_archer.gd', 'archer_tower', {
   damage: 'damage',
   fire_rate: 'fireRate',
   detect_range: 'detectRange',
-}, 9);
+}, 10);
 assertDefenseStats('scripts/tower_mage.gd', 'mage_tower', {
   base_damage: 'baseDamage',
   max_damage: 'maxDamage',
   tick_rate: 'tickRate',
   ramp_time: 'rampTime',
   detect_range: 'detectRange',
-}, 9);
+}, 10);
 assertDefenseStats('scripts/tower_mortar.gd', 'mortar', {
   damage: 'damage',
   fire_rate: 'fireRate',
   detect_range: 'detectRange',
   min_range: 'minRange',
   splash_radius: 'splashRadius',
-}, 9);
+}, 10);
 assertDefenseStats('scripts/cannon.gd', 'cannon', {
   damage: 'damage',
   fire_rate: 'fireRate',
   detect_range: 'detectRange',
-}, 9);
+}, 10);
 for (const [troopType, levels] of Object.entries(TROOP_STATS)) {
   const baseline = levels[1].atkSpeed;
   for (const [level, stats] of Object.entries(levels)) {
@@ -765,7 +813,7 @@ for (const [troopType, levels] of Object.entries(TROOP_STATS)) {
     );
   }
 }
-for (const defenseType of ['turret', 'archer_tower', 'mage_tower', 'mortar', 'cannon', 'harpoon', 'air_bomb']) {
+for (const defenseType of ['turret', 'archer_tower', 'mage_tower', 'mortar', 'cannon', 'harpoon', 'air_bomb', 'hidden_tesla']) {
   const levels = DEFENSE_STATS[defenseType];
   const baseline = levels[1].tickRate || levels[1].fireRate;
   for (const [level, stats] of Object.entries(levels)) {
@@ -780,7 +828,7 @@ for (const [level, stats] of Object.entries(SKELETON_GUARD.levels)) {
   assert.equal(stats.atkSpeed, SKELETON_GUARD.levels[1].atkSpeed, `Tombstone guard L${level} cadence changed`);
 }
 assert.equal(SKELETON_GUARD.maxActivePerTombstone, 5, 'Tombstone must cap active guards at five');
-for (let level = 6; level <= 8; level++) {
+for (let level = 6; level <= 10; level++) {
   assert.equal(
     SKELETON_GUARD.levels[level].moveSpeed,
     SKELETON_GUARD.levels[5].moveSpeed,
@@ -811,13 +859,13 @@ for (let level = 6; level <= 8; level++) {
 }
 assert.deepEqual(
   Object.values(DEFENSE_STATS.mage_tower).map((stats) => stats.detectRange),
-  [1.05, 1.15, 1.25, 1.35, 1.45, 1.55, 1.65, 1.73, 1.8],
+  [0.95, 0.97, 0.99, 1.01, 1.08, 1.15, 1.22, 1.29, 1.36, 1.43],
   'Mage Tower range must stay on the reduced compact coverage curve',
 );
 const harpoonSource = read('scripts/tower_harpoon.gd');
 const harpoonRows = parseDictionaryRows('scripts/tower_harpoon.gd');
-assert.equal(Object.keys(harpoonRows).length, 9, 'Harpoon client must define all nine levels');
-for (let level = 1; level <= 8; level++) {
+assert.equal(Object.keys(harpoonRows).length, 10, 'Harpoon client must define all ten levels');
+for (let level = 1; level <= 10; level++) {
   assert.deepEqual(
     harpoonRows[level],
     {
@@ -838,8 +886,8 @@ assert.equal(parseNumberConstant(harpoonSource, 'STOP_DISTANCE'), DEFENSE_STATS.
 const airBombTowerSource = read('scripts/tower_air_bomb.gd');
 const airBombProjectileSource = read('scripts/air_bomb_projectile.gd');
 const airBombRows = parseDictionaryRows('scripts/tower_air_bomb.gd');
-assert.equal(Object.keys(airBombRows).length, 9, 'Air Bomb client must define all nine levels');
-for (let level = 1; level <= 9; level++) {
+assert.equal(Object.keys(airBombRows).length, 10, 'Air Bomb client must define all ten levels');
+for (let level = 1; level <= 10; level++) {
   assert.deepEqual(
     airBombRows[level],
     {
@@ -865,6 +913,23 @@ assert.match(airBombTowerSource, /SPLASH_RADIUS,\s*\n\s*detect_range,/, 'Air Bom
 assert.match(sharkFallback, /retargetRange:\s*defense\.detectRange/, 'Air Bomb server must snapshot the same launch-time range');
 assert.match(sharkFallback, /cleanupAirBombProjectile\(projectile, 'no_retarget_candidate'\)/, 'Air Bomb server must harmlessly clean up when no replacement exists');
 assert.match(dbSource, /'air_bomb_retarget'/, 'Air Bomb retarget telemetry must survive compact replay traces');
+const hiddenTeslaSource = read('scripts/tower_hidden_tesla.gd');
+const hiddenTeslaRows = parseDictionaryRows('scripts/tower_hidden_tesla.gd');
+assert.equal(Object.keys(hiddenTeslaRows).length, 10, 'Hidden Tesla client must define all ten levels');
+for (let level = 1; level <= 10; level++) {
+  assert.deepEqual(
+    hiddenTeslaRows[level],
+    {
+      damage: DEFENSE_STATS.hidden_tesla[level].damage,
+      detect_range: DEFENSE_STATS.hidden_tesla[level].detectRange,
+    },
+    `hidden_tesla level ${level} client/server stats diverged`,
+  );
+}
+assert.equal(parseNumberConstant(hiddenTeslaSource, 'TARGET_SCAN_TICKS'), DEFENSE_STATS.hidden_tesla[1].scanTicks);
+assert.equal(parseNumberConstant(hiddenTeslaSource, 'RELOAD_TICKS'), DEFENSE_STATS.hidden_tesla[1].reloadTicks);
+assert.equal(parseNumberConstant(hiddenTeslaSource, 'REVEAL_TICKS'), DEFENSE_STATS.hidden_tesla[1].revealTicks);
+assert.equal(parseNumberConstant(hiddenTeslaSource, 'TRIGGER_RADIUS'), DEFENSE_STATS.hidden_tesla[1].triggerRange);
 assert.deepEqual(
   {
     turretL7Damage: DEFENSE_STATS.turret[7].damage,
@@ -892,16 +957,16 @@ assert.deepEqual(
 );
 assert.match(
   buildingSystem,
-  /"cannon":\s*\{[\s\S]*?"damage_levels":\s*\[40,\s*109,\s*259,\s*431,\s*510,\s*577,\s*620,\s*690,\s*760\]/,
+  /"cannon":\s*\{[\s\S]*?"damage_levels":\s*\[40,\s*109,\s*259,\s*431,\s*510,\s*577,\s*620,\s*690,\s*760,\s*840\]/,
   'Cannon upgrade UI damage rows must mirror runtime combat stats',
 );
 assert.equal(
-  (buildingSystem.match(/"test_damage_levels":\s*\[95,\s*108,\s*158,\s*227,\s*233,\s*240,\s*294,\s*330,\s*370\]/g) || []).length,
+  (buildingSystem.match(/"test_damage_levels":\s*\[95,\s*108,\s*158,\s*227,\s*233,\s*240,\s*294,\s*330,\s*370,\s*415\]/g) || []).length,
   2,
-  'both Mortar metadata mirrors must expose all nine calibrated damage levels',
+  'both Mortar metadata mirrors must expose all ten calibrated damage levels',
 );
 const cannonSource = read('scripts/cannon.gd');
-for (let level = 1; level <= 9; level++) {
+for (let level = 1; level <= 10; level++) {
   assert.equal(
     parseNumberConstant(cannonSource, 'PROJECTILE_SPEED'),
     DEFENSE_STATS.cannon[level].projSpeed,
@@ -914,8 +979,8 @@ assert.match(cannonSource, /const CAN_TARGET_GROUND:\s*bool\s*=\s*true/);
 assert.match(cannonSource, /const CAN_TARGET_AIR:\s*bool\s*=\s*false/);
 
 const guardRows = parseDictionaryRows('scripts/skeleton_guard.gd');
-assert.equal(Object.keys(guardRows).length, 8, 'client skeleton guard must define eight levels');
-for (let level = 1; level <= 8; level++) {
+assert.equal(Object.keys(guardRows).length, 10, 'client skeleton guard must define ten levels');
+for (let level = 1; level <= 10; level++) {
   assert.deepEqual(
     guardRows[level],
     {
@@ -948,7 +1013,7 @@ const buildingSystemProgression = read('scripts/building_system.gd');
 const serverTownHallUnlock = parseStringNumberDictionary(dbSource, 'const TH_UNLOCK');
 const serverTownHallCount = parseStringArrayDictionary(dbSource, 'const TH_MAX_COUNT');
 const serverTownHallLevel = parseStringArrayDictionary(dbSource, 'const TH_MAX_LEVEL');
-assert.equal(parseNumberConstant(dbSource, 'LIVE_TOWN_HALL_CAP'), 9);
+assert.equal(parseNumberConstant(dbSource, 'LIVE_TOWN_HALL_CAP'), 10);
 assert.equal(
   parseNumberConstant(buildingSystemProgression, 'LIVE_TOWN_HALL_CAP'),
   parseNumberConstant(dbSource, 'LIVE_TOWN_HALL_CAP'),
@@ -993,9 +1058,9 @@ assert.deepEqual(
 
 console.log(
   '[COMBAT_PARITY] PASS troops=knight,archer,mage,pea_shooter,wind_mage,windling,mimic,mechanical_dragon,ice_golem,necromancer,horror,demon_king,fire_dragon'
-  + ' summon=owner_bound,capped,expiring shark_trap=levels_1_to_9'
-  + ' ship_slots=knight1,archer1,mage6,pea5,mimic8,mechanical5,demon6,ice11,fire11,wind_mage18,necromancer18,horror22'
+  + ' summon=owner_bound,capped,expiring shark_trap=levels_1_to_10'
+  + ' ship_slots=knight1,archer1,mage6,pea5,mimic8,mechanical5,demon6,ice10,fire10,wind_mage10,necromancer10,horror10'
   + ' tactical_constants=freeze,rage,skeleton_barrel'
-  + ' defenses=turret9,archer9,mage9,mortar9,harpoon9,air_bomb9,cannon9,guards8'
-  + ' telemetry=chain,freeze,trap,wind_wave,summon,split progression=th9',
+  + ' defenses=turret10,archer10,mage10,mortar10,harpoon10,air_bomb10,cannon10,hidden_tesla10,guards10'
+  + ' telemetry=chain,freeze,trap,wind_wave,summon,split,hidden_tesla progression=th10',
 );

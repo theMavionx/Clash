@@ -41,13 +41,13 @@ const REINFORCE_SLOT_COSTS = {
   knight: 1,
   archer: 1,
   peashooter: 5,
-  mage: 4,
-  mimic: 6,
-  mechanicaldragon: 4,
+  mage: 6,
+  mimic: 8,
+  mechanicaldragon: 5,
   icegolem: 10,
-  necromancer: 15,
-  windmage: 15,
-  horror: 20,
+  necromancer: 10,
+  windmage: 10,
+  horror: 10,
 };
 
 function normalizedTroopName(name) {

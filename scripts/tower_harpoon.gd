@@ -7,56 +7,62 @@ signal harpoon_event(kind: String, payload: Dictionary)
 const LEVEL_STATS: Dictionary = {
 	1: {
 		"damage": 45,
-		"detect_range": 1.20,
+		"detect_range": 0.95,
 		"pull_speed": 0.85,
 		"pull_duration_ticks": 48,
 	},
 	2: {
 		"damage": 55,
-		"detect_range": 1.27,
+		"detect_range": 1.00,
 		"pull_speed": 0.92,
 		"pull_duration_ticks": 48,
 	},
 	3: {
 		"damage": 65,
-		"detect_range": 1.45,
+		"detect_range": 1.05,
 		"pull_speed": 0.99,
 		"pull_duration_ticks": 48,
 	},
 	4: {
 		"damage": 75,
-		"detect_range": 1.64,
+		"detect_range": 1.10,
 		"pull_speed": 1.06,
 		"pull_duration_ticks": 48,
 	},
 	5: {
 		"damage": 77,
-		"detect_range": 1.82,
+		"detect_range": 1.20,
 		"pull_speed": 1.13,
 		"pull_duration_ticks": 48,
 	},
 	6: {
 		"damage": 82,
-		"detect_range": 1.95,
+		"detect_range": 1.30,
 		"pull_speed": 1.20,
 		"pull_duration_ticks": 48,
 	},
 	7: {
 		"damage": 98,
-		"detect_range": 2.08,
+		"detect_range": 1.40,
 		"pull_speed": 1.40,
 		"pull_duration_ticks": 48,
 	},
 	8: {
 		"damage": 100,
-		"detect_range": 2.20,
+		"detect_range": 1.50,
 		"pull_speed": 1.48,
 		"pull_duration_ticks": 48,
 	},
 	9: {
 		"damage": 112,
-		"detect_range": 2.30,
+		"detect_range": 1.60,
 		"pull_speed": 1.55,
+		"pull_duration_ticks": 48,
+	},
+	10: {
+		"damage": 126,
+		"detect_range": 1.70,
+		"pull_speed": 1.62,
 		"pull_duration_ticks": 48,
 	},
 }
@@ -99,7 +105,7 @@ enum HarpoonState {
 	DISABLED,
 }
 
-@export var detect_range: float = 1.95
+@export var detect_range: float = 1.20
 
 var level: int = 1
 var damage: int = 100

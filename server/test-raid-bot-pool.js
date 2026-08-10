@@ -13,7 +13,7 @@ const {
 } = require('./matchmaking_defs');
 
 const EXPECTED_BY_TH = {
-  1: 72, 2: 90, 3: 90, 4: 75, 5: 450, 6: 900, 7: 900, 8: 900, 9: 900,
+  1: 72, 2: 90, 3: 90, 4: 75, 5: 450, 6: 900, 7: 900, 8: 900, 9: 900, 10: 900,
 };
 const EXPECTED_BY_BUCKET = {
   '1:normal': 15, '1:hard': 57,
@@ -25,6 +25,7 @@ const EXPECTED_BY_BUCKET = {
   '7:normal': 180, '7:hard': 720,
   '8:normal': 180, '8:hard': 720,
   '9:normal': 180, '9:hard': 720,
+  '10:normal': 180, '10:hard': 720,
 };
 const GRID_SPECS = { 0: [29, 27], 1: [27, 3], 2: [27, 5] };
 const BUILDING_SIZES = {
@@ -32,43 +33,50 @@ const BUILDING_SIZES = {
   sawmill: [3, 3], turret: [2, 2], tombstone: [3, 3], storage: [4, 5],
   archer_tower: [3, 3], mage_tower: [3, 3], mortar: [2, 2],
   shark_trap: [2, 2], harpoon: [2, 2], cannon: [3, 3],
-  flamethrower: [3, 3], air_bomb: [3, 3],
+  flamethrower: [3, 3], air_bomb: [3, 3], hidden_tesla: [2, 2],
 };
 const MAX_LEVEL = {
-  town_hall: 9, mine: 9, barn: 9, port: 3, sawmill: 9, turret: 9,
-  tombstone: 8, storage: 9, archer_tower: 9, mage_tower: 9,
-  mortar: 9, shark_trap: 9, harpoon: 9, cannon: 9, flamethrower: 9, air_bomb: 9,
+  town_hall: 10, mine: 10, barn: 10, port: 3, sawmill: 10, turret: 10,
+  tombstone: 10, storage: 10, archer_tower: 10, mage_tower: 10,
+  mortar: 10, shark_trap: 10, harpoon: 10, cannon: 10, flamethrower: 10,
+  air_bomb: 10, hidden_tesla: 10,
 };
 const COMPETITIVE_BOT_MAX_LEVELS = {
   5: {
     town_hall: 5, mine: 5, sawmill: 5, barn: 5, storage: 5,
-    archer_tower: 5, tombstone: 4, turret: 5, mage_tower: 5,
+    archer_tower: 5, tombstone: 5, turret: 5, mage_tower: 5,
     mortar: 5, shark_trap: 5,
   },
   6: {
     town_hall: 6, mine: 6, sawmill: 6, barn: 6, storage: 6,
-    archer_tower: 6, tombstone: 5, turret: 6, mage_tower: 6,
+    archer_tower: 6, tombstone: 6, turret: 6, mage_tower: 6,
     mortar: 6, shark_trap: 6, harpoon: 6,
   },
   7: {
     town_hall: 7, mine: 7, sawmill: 7, barn: 7, storage: 7,
-    archer_tower: 7, tombstone: 6, turret: 7, mage_tower: 7,
+    archer_tower: 7, tombstone: 7, turret: 7, mage_tower: 7,
     mortar: 7, shark_trap: 7, harpoon: 7, cannon: 7,
   },
   8: {
     town_hall: 8, mine: 8, sawmill: 8, barn: 8, storage: 8,
-    archer_tower: 8, tombstone: 7, turret: 8, mage_tower: 8,
+    archer_tower: 8, tombstone: 8, turret: 8, mage_tower: 8,
     mortar: 8, shark_trap: 8, harpoon: 8, cannon: 8, flamethrower: 8,
   },
   9: {
     town_hall: 9, mine: 9, sawmill: 9, barn: 9, storage: 9,
-    archer_tower: 9, tombstone: 8, turret: 9, mage_tower: 9,
+    archer_tower: 9, tombstone: 9, turret: 9, mage_tower: 9,
     mortar: 9, shark_trap: 9, harpoon: 9, cannon: 9, flamethrower: 9, air_bomb: 9,
+  },
+  10: {
+    town_hall: 10, mine: 10, sawmill: 10, barn: 10, storage: 10,
+    archer_tower: 10, tombstone: 10, turret: 10, mage_tower: 10,
+    mortar: 10, shark_trap: 10, harpoon: 10, cannon: 10,
+    flamethrower: 10, air_bomb: 10, hidden_tesla: 10,
   },
 };
 const COMPETITIVE_BOT_DEFENSE_TYPES = new Set([
   'archer_tower', 'tombstone', 'turret', 'mage_tower',
-  'mortar', 'shark_trap', 'harpoon', 'cannon', 'flamethrower', 'air_bomb',
+  'mortar', 'shark_trap', 'harpoon', 'cannon', 'flamethrower', 'air_bomb', 'hidden_tesla',
 ]);
 const REQUIRED_PLAYER_LIKE_NAMES = [
   'ghost', 'www', 'egorble', 'papajshon', 'nick', 'volumer', 'luckier',
@@ -190,7 +198,7 @@ const sampledBotRewards = [];
 for (let index = 0; index < 4000; index += 1) {
   const difficulty = ['normal', 'hard'][index % 2];
   const resources = botResources(
-    (index % 9) + 1,
+    (index % 10) + 1,
     difficulty,
     `test-distribution-${index}`,
   );
@@ -269,7 +277,7 @@ for (const template of templates.filter((entry) => entry.th >= 5)) {
   if (belowMaxCount === 0) stats.fullyMaxed += 1;
   competitiveTemplateStats.set(bucket, stats);
 }
-for (const th of [5, 6, 7, 8, 9]) {
+for (const th of [5, 6, 7, 8, 9, 10]) {
   const hardStats = competitiveTemplateStats.get(`${th}:hard`);
   const normalStats = competitiveTemplateStats.get(`${th}:normal`);
   assert.ok(hardStats, `TH${th} hard stats should exist`);
@@ -292,8 +300,11 @@ for (const template of templates.filter((entry) => entry.th >= 6)) {
   assert.equal(template.buildings.filter((building) => building.type === 'mortar').length, 2);
   assert.equal(
     template.buildings.filter((building) => building.type === 'shark_trap').length,
-    template.th === 8 ? 4 : template.th === 9 ? 5 : 3,
+    template.th === 8 ? 4 : template.th >= 9 ? 5 : 3,
   );
+	if (template.th >= 10) {
+		assert.equal(template.buildings.filter((building) => building.type === 'hidden_tesla').length, 2);
+	}
 }
 for (const template of templates.filter((entry) => entry.th >= 7)) {
   assert.equal(
@@ -765,7 +776,7 @@ try {
   assert.equal(gameDb.getTrophies(defeatAttackerId), 89, 'TH4 attack defeat should subtract 11 trophies');
   assert.equal(gameDb.getTrophies(defeatDefenderId), 122, 'TH4 successful defense should award 22 trophies');
 
-  console.log(`[raid-bot-pool] PASS total=${templates.length} th2=90 th3=90 th4=75 th5=450 th6=900 th7=900 th8=900 th9=900 resources=varied main_ship=true adaptive=true victory=12 defeat=-11 defense=22 materialized=true rerolled=true`);
+  console.log(`[raid-bot-pool] PASS total=${templates.length} th2=90 th3=90 th4=75 th5=450 th6=900 th7=900 th8=900 th9=900 th10=900 resources=varied main_ship=true adaptive=true victory=12 defeat=-11 defense=22 materialized=true rerolled=true`);
 } finally {
   gameDb.db.close();
   for (const suffix of ['', '-wal', '-shm']) fs.rmSync(`${dbPath}${suffix}`, { force: true });

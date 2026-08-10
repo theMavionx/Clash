@@ -3,15 +3,16 @@ extends Node3D
 ## Uses object pooling to avoid per-shot allocations and first-fire lag.
 
 const LEVEL_STATS = {
-	1: {"damage": 35, "fire_rate": 0.70, "detect_range": 0.90},
-	2: {"damage": 74, "fire_rate": 0.70, "detect_range": 1.05},
-	3: {"damage": 188, "fire_rate": 0.70, "detect_range": 1.18},
-	4: {"damage": 308, "fire_rate": 0.70, "detect_range": 1.30},
-	5: {"damage": 318, "fire_rate": 0.70, "detect_range": 1.42},
-	6: {"damage": 364, "fire_rate": 0.70, "detect_range": 1.52},
-	7: {"damage": 453, "fire_rate": 0.70, "detect_range": 1.62},
-	8: {"damage": 515, "fire_rate": 0.70, "detect_range": 1.70},
-	9: {"damage": 585, "fire_rate": 0.70, "detect_range": 1.78},
+	1: {"damage": 35, "fire_rate": 0.70, "detect_range": 0.95},
+	2: {"damage": 74, "fire_rate": 0.70, "detect_range": 0.97},
+	3: {"damage": 188, "fire_rate": 0.70, "detect_range": 0.99},
+	4: {"damage": 308, "fire_rate": 0.70, "detect_range": 1.01},
+	5: {"damage": 318, "fire_rate": 0.70, "detect_range": 1.10},
+	6: {"damage": 364, "fire_rate": 0.70, "detect_range": 1.18},
+	7: {"damage": 453, "fire_rate": 0.70, "detect_range": 1.26},
+	8: {"damage": 515, "fire_rate": 0.70, "detect_range": 1.34},
+	9: {"damage": 585, "fire_rate": 0.70, "detect_range": 1.42},
+	10: {"damage": 660, "fire_rate": 0.70, "detect_range": 1.50},
 }
 
 const MUZZLE_FLASH_FRAMES: Array[String] = [
@@ -36,7 +37,7 @@ const ATTACK_SFX_PITCH_JITTER: float = 0.04
 const CAN_TARGET_GROUND: bool = true
 const CAN_TARGET_AIR: bool = false
 
-@export var detect_range: float = 0.90
+@export var detect_range: float = 0.95
 @export var bullet_speed: float = 4.0
 
 var level: int = 1

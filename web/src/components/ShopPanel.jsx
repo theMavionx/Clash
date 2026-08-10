@@ -1,6 +1,7 @@
 import { useState, memo, useCallback, useMemo } from 'react';
 import { useSend, useBuildingDefs, usePlayer, useResources } from '../hooks/useGodot';
 import { useLayout } from '../hooks/useIsMobile';
+import SanctumLstPanel from './SanctumLstPanel';
 
 import goldIcon from '../assets/resources/gold_bar.png';
 import woodIcon from '../assets/resources/wood_bar.png';
@@ -22,6 +23,7 @@ import imgSharkTrap from '../assets/buildings/sharktrap.png';
 import imgHarpoon from '../assets/buildings/harpoon.png';
 import imgAirBomb from '../assets/buildings/air_bomb.png';
 import imgFlamethrower from '../assets/buildings/flamethrower.png';
+import imgHiddenTesla from '../assets/buildings/hidden_tesla_v2.png';
 import imgAltar from '../assets/units/altar.png';
 
 const ALTAR_PRICE_LABEL = '$15.00';
@@ -30,6 +32,7 @@ const TABS = [
   { id: 'Economy', label: 'Economy' },
   { id: 'Military', label: 'Military' },
   { id: 'Defense', label: 'Defense' },
+  { id: 'Web3', label: 'Web3' },
 ];
 
 const DESC_MAP = {
@@ -50,6 +53,7 @@ const DESC_MAP = {
   harpoon: 'Hooks and pulls nearby flying enemies',
   air_bomb: 'Homing anti-air bomb with splash damage',
   flamethrower: 'Fixed 50 degree ground flame cone',
+  hidden_tesla: 'Hides underground, then shocks ground and air enemies',
   altar: 'Onchain base boost',
 };
 
@@ -69,6 +73,7 @@ const CATEGORY_MAP = {
   harpoon: 'Defense',
   air_bomb: 'Defense',
   flamethrower: 'Defense',
+  hidden_tesla: 'Defense',
   altar: 'Economy',
   port: 'Military',
   town_hall: 'Economy',
@@ -92,6 +97,7 @@ const THUMBNAIL_MAP = {
   harpoon: imgHarpoon,
   air_bomb: imgAirBomb,
   flamethrower: imgFlamethrower,
+  hidden_tesla: imgHiddenTesla,
   storage: imgStorage,
   altar: imgAltar,
 };
@@ -108,6 +114,7 @@ const THUMBNAIL_SCALE_MAP = {
   harpoon: 1.12,
   air_bomb: 1.08,
   flamethrower: 1.08,
+  hidden_tesla: 1.06,
   altar: 1.28,
 };
 
@@ -181,6 +188,7 @@ function ShopPanel({ onClose }) {
   const { isMobile } = useLayout();
 
   const [activeTab, setActiveTab] = useState('Economy');
+  const [showSanctumLst, setShowSanctumLst] = useState(false);
   const buildings = buildingDefs?.buildings || {};
   const placedCounts = buildingDefs?.placed_counts || {};
   const thLevel = buildingDefs?.th_level || 1;
@@ -294,6 +302,22 @@ function ShopPanel({ onClose }) {
 
         <div style={styles.cardArea} className="grad-scrollbar">
           <div style={{ ...styles.cardScroll, padding: isMobile ? '16px' : '20px 24px' }}>
+            {activeTab === 'Web3' && (
+              <button style={styles.clashSolCard} onClick={() => setShowSanctumLst(true)}>
+                <div style={styles.clashSolArt}>
+                  <div style={styles.clashSolGlow} />
+                  <img src="/tokens/SOL.svg" alt="Solana" style={styles.clashSolSolLogo} />
+                  <img src="/icons/icon-512.png" alt="Clash" style={styles.clashSolGameLogo} />
+                  <span style={styles.clashSolBadge}>SANCTUM LST</span>
+                </div>
+                <div style={styles.clashSolInfo}>
+                  <span style={styles.clashSolEyebrow}>LIQUID STAKING</span>
+                  <strong style={styles.clashSolTitle}>clashSOL</strong>
+                  <span style={styles.clashSolDescription}>Stake SOL and keep your position liquid with the Clash community token.</span>
+                  <span style={styles.clashSolCta}>Open clashSOL</span>
+                </div>
+              </button>
+            )}
             {filteredBuildings.map(([id, def, status]) => {
               const disabled = !status.onchainLocked && (status.locked || status.maxed || !status.canAfford);
               const thumbnail = THUMBNAIL_MAP[id];
@@ -400,6 +424,7 @@ function ShopPanel({ onClose }) {
           </div>
         </div>
       </div>
+      <SanctumLstPanel open={showSanctumLst} onClose={() => setShowSanctumLst(false)} />
       </div>
     </>
   );
@@ -468,6 +493,26 @@ const styles = {
     transition: 'transform 0.15s cubic-bezier(0.18, 0.89, 0.32, 1.28), box-shadow 0.1s',
     flexShrink: 0,
   },
+  clashSolCard: {
+    width: 'min(520px, 100%)', minHeight: 225, padding: 0, overflow: 'hidden', cursor: 'pointer',
+    display: 'grid', gridTemplateColumns: 'minmax(145px, 42%) 1fr', textAlign: 'left',
+    borderRadius: 18, border: '3px solid #bca47c', background: '#fff9e9', color: '#51351f',
+    boxShadow: '0 8px 18px rgba(0,0,0,.16), inset 0 -4px 0 rgba(76,49,26,.08)',
+    fontFamily: '"Inter", "Segoe UI", sans-serif',
+  },
+  clashSolArt: {
+    position: 'relative', minHeight: 220, overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center',
+    background: 'linear-gradient(145deg, #17151d 0%, #32225d 52%, #5e3ede 100%)',
+  },
+  clashSolGlow: { position: 'absolute', width: 170, height: 170, borderRadius: '50%', background: 'radial-gradient(circle, rgba(126,243,214,.65), rgba(126,243,214,0) 68%)' },
+  clashSolSolLogo: { position: 'relative', width: 100, height: 100, objectFit: 'contain', filter: 'drop-shadow(0 8px 14px rgba(0,0,0,.45))' },
+  clashSolGameLogo: { position: 'absolute', right: 18, bottom: 28, width: 55, height: 55, borderRadius: '50%', border: '4px solid #fff8e7', background: '#fff' },
+  clashSolBadge: { position: 'absolute', top: 13, left: 13, padding: '5px 8px', borderRadius: 999, background: 'rgba(255,255,255,.92)', color: '#4f35ba', fontSize: 9, fontWeight: 950, letterSpacing: .8 },
+  clashSolInfo: { padding: '25px 22px 22px', display: 'flex', flexDirection: 'column', alignItems: 'flex-start' },
+  clashSolEyebrow: { color: '#7a58e4', fontSize: 10, fontWeight: 950, letterSpacing: 1 },
+  clashSolTitle: { marginTop: 6, color: '#4b2f1d', fontSize: 29, lineHeight: 1 },
+  clashSolDescription: { marginTop: 11, color: '#806950', fontSize: 12, lineHeight: 1.45, fontWeight: 650 },
+  clashSolCta: { marginTop: 'auto', width: '100%', padding: '10px 12px', borderRadius: 10, textAlign: 'center', background: '#7150df', color: '#fff', fontSize: 12, fontWeight: 950, boxShadow: '0 3px 0 #4d34ae', boxSizing: 'border-box' },
   cardImgTop: {
     height: 'clamp(80px, 25vw, 110px)',
     display: 'flex',

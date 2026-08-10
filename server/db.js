@@ -2119,6 +2119,43 @@ try {
   `);
 } catch (e) { console.warn('[db] shop_solana_quotes migration:', e.message); }
 
+// Sanctum clashSOL orders are intentionally persisted instead of returning a
+// client-controlled upstream order object. The browser receives the unsigned
+// transaction, signs it, and references this short-lived intent. The server
+// then reloads the exact Sanctum payload and verifies that the signed message
+// has not changed before forwarding it to /swap/token/execute.
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS sanctum_order_intents (
+      id                    TEXT PRIMARY KEY,
+      player_id             TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      wallet                TEXT NOT NULL,
+      input_mint            TEXT NOT NULL,
+      output_mint           TEXT NOT NULL,
+      input_amount          TEXT NOT NULL,
+      output_amount         TEXT NOT NULL,
+      slippage_bps          INTEGER NOT NULL,
+      order_json            TEXT NOT NULL,
+      unsigned_tx_hash      TEXT NOT NULL,
+      tx_kind               TEXT NOT NULL,
+      status                TEXT NOT NULL DEFAULT 'pending',
+      expires_at_ms         INTEGER NOT NULL,
+      execution_started_at  TEXT,
+      tx_signature          TEXT,
+      consumed_at           TEXT,
+      last_error            TEXT,
+      created_at            TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_sanctum_order_intents_player
+      ON sanctum_order_intents(player_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_sanctum_order_intents_expiry
+      ON sanctum_order_intents(status, expires_at_ms);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_sanctum_order_intents_signature
+      ON sanctum_order_intents(tx_signature)
+      WHERE tx_signature IS NOT NULL;
+  `);
+} catch (e) { console.warn('[db] sanctum_order_intents migration:', e.message); }
+
 // Internal telemetry. These are append-only event ledgers for admin analytics:
 // where claim-gold/shop/task flows fail, and how resources move through the
 // economy. Keep them server-owned so client code cannot spoof analytics.
@@ -2298,8 +2335,8 @@ try {
 // ---------- Resource Production Definitions ----------
 
 const PRODUCTION_DEFS = {
-  mine:    { resource: 'ore',  rate: [18, 33, 54, 81, 120, 170, 225, 295, 375], max: [200, 400, 800, 1600, 3000, 5000, 7500, 10500, 14000] },    // per minute
-  sawmill: { resource: 'wood', rate: [24, 45, 72, 108, 160, 230, 300, 390, 500], max: [250, 500, 1000, 2000, 3750, 6000, 9000, 12000, 16000] },
+  mine:    { resource: 'ore',  rate: [18, 33, 54, 81, 120, 170, 225, 295, 375, 465], max: [200, 400, 800, 1600, 3000, 5000, 7500, 10500, 14000, 18000] },    // per minute
+  sawmill: { resource: 'wood', rate: [24, 45, 72, 108, 160, 230, 300, 390, 500, 620], max: [250, 500, 1000, 2000, 3750, 6000, 9000, 12000, 16000, 20500] },
 };
 
 // ---------- Prepared Statements ----------
@@ -5750,8 +5787,8 @@ function seedTournamentDailyPoolBaseline(tournamentId) {
 // ---------- Building Definitions (mirroring Godot) ----------
 
 // ---------- Town Hall Progression System ----------
-// TH8 and TH9 are playable. TH10 assets remain data-ready behind this cap.
-const LIVE_TOWN_HALL_CAP = 9;
+// Town Hall 10 and its authored progression are live.
+const LIVE_TOWN_HALL_CAP = 10;
 
 // Buildings unlocked per TH level. Not listed = available from TH1.
 const TH_UNLOCK = {
@@ -5765,49 +5802,52 @@ const TH_UNLOCK = {
   cannon:    7,  // unlocked at TH7
   flamethrower: flamethrower.BUILDING.unlock_th,
   air_bomb:  9,  // two Air Bomb defenses unlock with playable TH9
+  hidden_tesla: 10, // two Hidden Teslas unlock with playable TH10
 };
 
 // Max count per building type per TH level. Individual tables may include future
-// Town Hall gates through the current playable TH9 and clamp to their last entry.
+// Town Hall gates through the current playable TH10 and clamp to their last entry.
 const TH_MAX_COUNT = {
-  mine:         [1, 2, 3, 3, 4, 4, 4, 4, 4],
-  sawmill:      [1, 2, 3, 3, 4, 4, 4, 4, 4],
-  barn:         [1, 1, 1, 1, 1, 1, 1, 1, 1],
-  altar:        [1, 1, 1, 1, 1, 1, 1, 1, 1],
-  archer_tower: [1, 2, 3, 3, 3, 3, 3, 3, 3],
-  tombstone:    [0, 1, 3, 3, 3, 3, 3, 3, 3],  // unlocked at TH2
-  turret:       [0, 0, 3, 3, 3, 3, 3, 3, 3],  // unlocked at TH3
-  shark_trap:   [0, 0, 1, 1, 2, 3, 3, 4, 5],  // extra traps at TH8 and TH9
-  storage:      [0, 1, 2, 3, 3, 3, 3, 4, 4],  // fourth Storage supports TH8+ costs
-  mage_tower:   [0, 0, 0, 2, 2, 2, 2, 3, 3],  // third Mage Tower at TH8
-  mortar:       [0, 0, 0, 0, 1, 2, 2, 2, 2],  // unlocked at TH5, second at TH6
-  harpoon:      [0, 0, 0, 0, 0, 1, 1, 2, 2], // one at TH6-TH7, second at TH8
-  cannon:       [0, 0, 0, 0, 0, 0, 2, 3, 3],  // third Cannon at TH8
+  mine:         [1, 2, 3, 3, 4, 4, 4, 4, 4, 4],
+  sawmill:      [1, 2, 3, 3, 4, 4, 4, 4, 4, 4],
+  barn:         [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+  altar:        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+  archer_tower: [1, 2, 3, 3, 3, 3, 3, 3, 3, 3],
+  tombstone:    [0, 1, 3, 3, 3, 3, 3, 3, 3, 3],  // unlocked at TH2
+  turret:       [0, 0, 3, 3, 3, 3, 3, 3, 3, 3],  // unlocked at TH3
+  shark_trap:   [0, 0, 1, 1, 2, 3, 3, 4, 5, 5],  // extra traps at TH8 and TH9
+  storage:      [0, 1, 2, 3, 3, 3, 3, 4, 4, 4],  // fourth Storage supports TH8+ costs
+  mage_tower:   [0, 0, 0, 2, 2, 2, 2, 3, 3, 3],  // third Mage Tower at TH8
+  mortar:       [0, 0, 0, 0, 1, 2, 2, 2, 2, 2],  // unlocked at TH5, second at TH6
+  harpoon:      [0, 0, 0, 0, 0, 1, 1, 2, 2, 2], // one at TH6-TH7, second at TH8
+  cannon:       [0, 0, 0, 0, 0, 0, 2, 3, 3, 3],  // third Cannon at TH8
   flamethrower: flamethrower.BUILDING.max_count_by_th,
-  air_bomb:     [0, 0, 0, 0, 0, 0, 0, 0, 2], // exactly two at TH9
-  town_hall:    [1, 1, 1, 1, 1, 1, 1, 1, 1],
+  air_bomb:     [0, 0, 0, 0, 0, 0, 0, 0, 2, 2], // exactly two from TH9
+  hidden_tesla: [0, 0, 0, 0, 0, 0, 0, 0, 0, 2], // exactly two at TH10
+  town_hall:    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
 };
 
 // Maximum reachable building level at each Town Hall level. This is separate
 // from count unlocks because Mortar L5 and Harpoon L6 are TH6 content.
 const TH_MAX_LEVEL = {
-  town_hall:    [1, 2, 3, 4, 5, 6, 7, 8, 9],
-  mine:         [1, 2, 3, 4, 5, 6, 7, 8, 9],
-  sawmill:      [1, 2, 3, 4, 5, 6, 7, 8, 9],
-  barn:         [1, 2, 3, 4, 5, 6, 7, 8, 9],
-  storage:      [1, 2, 3, 4, 5, 6, 7, 8, 9],
-  archer_tower: [1, 2, 3, 4, 5, 6, 7, 8, 9],
-  turret:       [1, 2, 3, 4, 5, 6, 7, 8, 9],
-  mage_tower:   [1, 2, 3, 4, 5, 6, 7, 8, 9],
-  tombstone:    [1, 2, 3, 4, 4, 5, 6, 7, 8],
-  mortar:       [1, 1, 1, 1, 5, 6, 7, 8, 9],
-  harpoon:      [1, 1, 1, 1, 1, 6, 7, 8, 9],
-  shark_trap:   [1, 2, 3, 4, 5, 6, 7, 8, 9],
-  cannon:       [1, 1, 1, 1, 1, 1, 7, 8, 9],
+  town_hall:    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+  mine:         [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+  sawmill:      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+  barn:         [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+  storage:      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+  archer_tower: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+  turret:       [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+  mage_tower:   [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+  tombstone:    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+  mortar:       [1, 1, 1, 1, 5, 6, 7, 8, 9, 10],
+  harpoon:      [1, 1, 1, 1, 1, 6, 7, 8, 9, 10],
+  shark_trap:   [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+  cannon:       [1, 1, 1, 1, 1, 1, 7, 8, 9, 10],
   flamethrower: flamethrower.BUILDING.max_level_by_th,
-  air_bomb:     [1, 1, 1, 1, 1, 1, 1, 1, 9],
-  port:         [1, 2, 3, 3, 3, 3, 3, 3, 3],
-  altar:        [1, 1, 1, 1, 1, 1, 1, 1, 1],
+  air_bomb:     [1, 1, 1, 1, 1, 1, 1, 1, 9, 10],
+  hidden_tesla: [1, 1, 1, 1, 1, 1, 1, 1, 1, 10],
+  port:         [1, 2, 3, 3, 3, 3, 3, 3, 3, 3],
+  altar:        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
 };
 
 function getBuildingMaxLevelForTownHall(type, townHallLevel) {
@@ -5824,7 +5864,7 @@ const BUILDING_DEFS = {
   flamethrower: flamethrower.buildingDefinition(),
   town_hall: {
     size: [4, 4], max_level: LIVE_TOWN_HALL_CAP,
-    hp_levels: [3500, 8000, 16000, 24000, 30848, 41200, 51193, 63000, 76000],
+    hp_levels: [3500, 8000, 16000, 24000, 30848, 41200, 51193, 63000, 76000, 91000],
     cost: { gold: 0, wood: 0, ore: 0 },
     upgrade_cost: {
       2: { gold: 1200, wood: 4200, ore: 3500 },
@@ -5835,19 +5875,20 @@ const BUILDING_DEFS = {
       7: { gold: 85000, wood: 106000, ore: 98000 },
       8: { gold: 120000, wood: 140000, ore: 130000 },
       9: { gold: 175000, wood: 220000, ore: 200000 },
+      10: { gold: 245000, wood: 270000, ore: 255000 },
     },
     max_count: 1,
   },
   mine: {
-    size: [3, 3], max_level: 9,
-    hp_levels: [1200, 2200, 3800, 6000, 7712, 10302, 12798, 14900, 17200],
+    size: [3, 3], max_level: 10,
+    hp_levels: [1200, 2200, 3800, 6000, 7712, 10302, 12798, 14900, 17200, 19800],
     cost: { gold: 180, wood: 500, ore: 0 },
     upgrade_base_cost: { gold: 220, wood: 550, ore: 0 },
     max_count: 4,
   },
   barn: {
-    size: [4, 3], max_level: 9,
-    hp_levels: [2000, 3500, 6000, 9500, 12132, 16094, 19908, 23200, 26800],
+    size: [4, 3], max_level: 10,
+    hp_levels: [2000, 3500, 6000, 9500, 12132, 16094, 19908, 23200, 26800, 30900],
     cost: { gold: 350, wood: 900, ore: 750 },
     upgrade_base_cost: { gold: 450, wood: 1050, ore: 900 },
     max_count: 1,
@@ -5867,50 +5908,57 @@ const BUILDING_DEFS = {
     shop_sku: 'altar',
   },
   sawmill: {
-    size: [3, 3], max_level: 9,
-    hp_levels: [1200, 2200, 3800, 6000, 7712, 10302, 12798, 14900, 17200],
+    size: [3, 3], max_level: 10,
+    hp_levels: [1200, 2200, 3800, 6000, 7712, 10302, 12798, 14900, 17200, 19800],
     cost: { gold: 180, wood: 0, ore: 500 },
     upgrade_base_cost: { gold: 220, wood: 0, ore: 550 },
     max_count: 4,
   },
   turret: {
-    size: [2, 2], max_level: 9,
-    hp_levels: [900, 1600, 2800, 4500, 5558, 7137, 8532, 9900, 11400],
+    size: [2, 2], max_level: 10,
+    hp_levels: [900, 1600, 2800, 4500, 5558, 7137, 8532, 9900, 11400, 13100],
     cost: { gold: 800, wood: 2400, ore: 2000 },
     upgrade_base_cost: { gold: 750, wood: 2500, ore: 2100 },
+    upgrade_cost: {
+      10: { gold: 96000, wood: 320000, ore: 270000 },
+    },
     max_count: 6,
   },
   tombstone: {
-    size: [3, 3], max_level: 8,
-    hp_levels: [1000, 1500, 2000, 2700, 2956, 3418, 4200, 5000],
+    size: [3, 3], max_level: 10,
+    hp_levels: [1000, 1500, 2000, 2700, 2956, 3418, 4200, 5000, 6000, 7000],
     cost: { gold: 600, wood: 0, ore: 2200 },
     upgrade_base_cost: { gold: 650, wood: 0, ore: 2400 },
     max_count: 4,
   },
   storage: {
-    size: [4, 5], max_level: 9,
-    hp_levels: [1400, 2500, 4200, 6500, 8136, 10575, 12798, 14900, 17200],
+    size: [4, 5], max_level: 10,
+    hp_levels: [1400, 2500, 4200, 6500, 8136, 10575, 12798, 14900, 17200, 19800],
     cost: { gold: 400, wood: 1400, ore: 0 },
     upgrade_base_cost: { gold: 500, wood: 1500, ore: 0 },
     max_count: 4,
   },
   archer_tower: {
-    size: [3, 3], max_level: 9,
-    hp_levels: [800, 1500, 2500, 3800, 4703, 6051, 7252, 8400, 9700],
+    size: [3, 3], max_level: 10,
+    hp_levels: [800, 1500, 2500, 3800, 4703, 6051, 7252, 8400, 9700, 11200],
     cost: { gold: 500, wood: 1600, ore: 0 },
     upgrade_base_cost: { gold: 550, wood: 1700, ore: 0 },
     max_count: 4,
   },
   mage_tower: {
-    size: [3, 3], max_level: 9,
-    hp_levels: [700, 1200, 2000, 3100, 3837, 4939, 5901, 6850, 7900],
+    size: [3, 3], max_level: 10,
+    hp_levels: [700, 1200, 2000, 3100, 3837, 4939, 5901, 6850, 7900, 9100],
     cost: { gold: 2800, wood: 0, ore: 5200 },
     upgrade_base_cost: { gold: 1600, wood: 0, ore: 3000 },
+    upgrade_cost: {
+      9: { gold: 160000, wood: 0, ore: 270000 },
+      10: { gold: 205000, wood: 0, ore: 320000 },
+    },
     max_count: 2,
   },
   mortar: {
-    size: [2, 2], max_level: 9,
-    hp_levels: [1700, 2400, 3200, 4100, 4580, 5324, 6019, 6900, 7900],
+    size: [2, 2], max_level: 10,
+    hp_levels: [1700, 2400, 3200, 4100, 4580, 5324, 6019, 6900, 7900, 9000],
     cost: { gold: 8000, wood: 12000, ore: 10000 },
     upgrade_cost: {
       2: { gold: 14000, wood: 22000, ore: 18000 },
@@ -5921,12 +5969,13 @@ const BUILDING_DEFS = {
       7: { gold: 92000, wood: 132000, ore: 112000 },
       8: { gold: 118000, wood: 165000, ore: 140000 },
       9: { gold: 145000, wood: 205000, ore: 175000 },
+      10: { gold: 180000, wood: 245000, ore: 210000 },
     },
     max_count: 2,
   },
   harpoon: {
-    size: [2, 2], max_level: 9,
-    hp_levels: [1800, 2400, 3200, 4300, 5600, 6756, 10201, 12000, 13800],
+    size: [2, 2], max_level: 10,
+    hp_levels: [1800, 2400, 3200, 4300, 5600, 6756, 10201, 12000, 13800, 15800],
     cost: { gold: 12000, wood: 22000, ore: 18000 },
     upgrade_cost: {
       2: { gold: 20000, wood: 42000, ore: 35000 },
@@ -5937,6 +5986,7 @@ const BUILDING_DEFS = {
       7: { gold: 86000, wood: 122000, ore: 104000 },
       8: { gold: 108000, wood: 142000, ore: 124000 },
       9: { gold: 135000, wood: 185000, ore: 160000 },
+      10: { gold: 165000, wood: 225000, ore: 195000 },
     },
     max_count: 2,
   },
@@ -5944,8 +5994,8 @@ const BUILDING_DEFS = {
   // owner-approved provisional TH9 curve and must be revalidated when the
   // authoritative TH9 storage economy is promoted.
   air_bomb: {
-    size: [3, 3], max_level: 9,
-    hp_levels: [3200, 4000, 5000, 6200, 7600, 9200, 11000, 13000, 15200],
+    size: [3, 3], max_level: 10,
+    hp_levels: [3200, 4000, 5000, 6200, 7600, 9200, 11000, 13000, 15200, 17600],
     cost: { gold: 18000, wood: 48000, ore: 40000 },
     upgrade_cost: {
       2: { gold: 28000, wood: 62000, ore: 52000 },
@@ -5956,21 +6006,25 @@ const BUILDING_DEFS = {
       7: { gold: 108000, wood: 138000, ore: 120000 },
       8: { gold: 126000, wood: 142000, ore: 132000 },
       9: { gold: 140000, wood: 143000, ore: 142000 },
+      10: { gold: 160000, wood: 170000, ore: 166000 },
     },
     max_count: 2,
   },
   shark_trap: {
-    size: [2, 2], max_level: 9,
-    hp_levels: [1, 1, 1, 1, 1, 1, 1, 1, 1],
-    damage_levels: [500, 750, 1050, 1450, 2000, 2400, 2900, 3400, 3900],
+    size: [2, 2], max_level: 10,
+    hp_levels: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+    damage_levels: [500, 750, 1050, 1450, 2000, 2400, 2900, 3400, 3900, 4400],
     cost: { gold: 1800, wood: 4800, ore: 4000 },
     upgrade_base_cost: { gold: 1000, wood: 2600, ore: 2200 },
+    upgrade_cost: {
+      10: { gold: 125000, wood: 320000, ore: 280000 },
+    },
     max_count: 3,
     non_targetable: true,
   },
   cannon: {
-    size: [3, 3], max_level: 9,
-    hp_levels: [3200, 3900, 4700, 5600, 6148, 6742, 7141, 8200, 9400],
+    size: [3, 3], max_level: 10,
+    hp_levels: [3200, 3900, 4700, 5600, 6148, 6742, 7141, 8200, 9400, 10800],
     cost: { gold: 16000, wood: 36000, ore: 30000 },
     upgrade_cost: {
       2: { gold: 24000, wood: 52000, ore: 44000 },
@@ -5981,6 +6035,24 @@ const BUILDING_DEFS = {
       7: { gold: 105000, wood: 142000, ore: 125000 },
       8: { gold: 130000, wood: 175000, ore: 150000 },
       9: { gold: 155000, wood: 210000, ore: 185000 },
+      10: { gold: 185000, wood: 250000, ore: 220000 },
+    },
+    max_count: 2,
+  },
+  hidden_tesla: {
+    size: [2, 2], max_level: 10,
+    hp_levels: [1800, 2500, 3300, 4300, 5400, 6700, 8200, 9900, 11800, 13900],
+    cost: { gold: 24000, wood: 65000, ore: 55000 },
+    upgrade_cost: {
+      2: { gold: 36000, wood: 80000, ore: 68000 },
+      3: { gold: 52000, wood: 100000, ore: 85000 },
+      4: { gold: 70000, wood: 122000, ore: 104000 },
+      5: { gold: 90000, wood: 145000, ore: 123000 },
+      6: { gold: 112000, wood: 168000, ore: 143000 },
+      7: { gold: 138000, wood: 192000, ore: 164000 },
+      8: { gold: 166000, wood: 220000, ore: 188000 },
+      9: { gold: 196000, wood: 250000, ore: 215000 },
+      10: { gold: 230000, wood: 285000, ore: 245000 },
     },
     max_count: 2,
   },
@@ -6063,6 +6135,7 @@ const BUILDING_UPGRADE_COST_MULTIPLIERS = {
   7: 45,
   8: 70,
   9: 100,
+  10: 130,
 };
 
 function getBuildingUpgradeCost(type, currentLevel) {
@@ -6578,7 +6651,7 @@ const TROOP_DEFS = {
     max_level: 9,
     min_town_hall_level: 8,
     slot_cost: TROOP_SLOT_COSTS.wind_mage,
-    buy_cost: 1800,
+    buy_cost: 1000,
     cost: [
       { gold: 250, wood: 0, ore: 250 },
       { gold: 500, wood: 0, ore: 500 },
@@ -6594,7 +6667,7 @@ const TROOP_DEFS = {
     max_level: 9,
     min_town_hall_level: 7,
     slot_cost: TROOP_SLOT_COSTS.necromancer,
-    buy_cost: 1800,
+    buy_cost: 1000,
     cost: [
       { gold: 250, wood: 0, ore: 250 },
       { gold: 500, wood: 0, ore: 500 },
@@ -6610,7 +6683,7 @@ const TROOP_DEFS = {
     max_level: 7,
     min_town_hall_level: 10,
     slot_cost: TROOP_SLOT_COSTS.horror,
-    buy_cost: 2200,
+    buy_cost: 1000,
     cost: [
       { gold: 375, wood: 0, ore: 375 },
       { gold: 750, wood: 0, ore: 750 },
@@ -6709,7 +6782,7 @@ const TROOP_DEFS = {
     max_level: 9,
     min_town_hall_level: 9,
     slot_cost: TROOP_SLOT_COSTS.ice_golem,
-    buy_cost: 1100,
+    buy_cost: 1000,
     cost: [
       { gold: 500, wood: 0, ore: 500 },
       { gold: 1000, wood: 0, ore: 1000 },
@@ -6840,7 +6913,7 @@ const ALTAR_SKILL_DEFS = {
   },
 };
 
-const DEFENSE_BUILDING_TYPES = new Set(['turret', 'archer_tower', 'archertower', 'archtower', 'mage_tower', 'tombstone', 'mortar', 'harpoon', 'flamethrower', 'air_bomb', 'shark_trap', 'cannon']);
+const DEFENSE_BUILDING_TYPES = new Set(['turret', 'archer_tower', 'archertower', 'archtower', 'mage_tower', 'tombstone', 'mortar', 'harpoon', 'flamethrower', 'air_bomb', 'hidden_tesla', 'shark_trap', 'cannon']);
 
 const DEMON_KING_UPGRADE_WINS = {
   2: 1000,
@@ -6863,22 +6936,23 @@ const GRID_SPECS = {
 const TROPHY_WIN = 30;
 
 const TROPHY_TABLE = {
-  town_hall: [50, 120, 250, 450, 720, 1080, 1520, 2050, 2650],
-  mine:      [10, 25, 50, 90, 145, 220, 315, 430, 565],
-  barn:      [10, 25, 50, 90, 145, 220, 315, 430, 565],
+  town_hall: [50, 120, 250, 450, 720, 1080, 1520, 2050, 2650, 3380],
+  mine:      [10, 25, 50, 90, 145, 220, 315, 430, 565, 720],
+  barn:      [10, 25, 50, 90, 145, 220, 315, 430, 565, 720],
   port:      [15, 35, 70, 125, 195],
-  sawmill:   [10, 25, 50, 90, 145, 220, 315, 430, 565],
-  turret:    [20, 45, 90, 160, 255, 380, 535, 720, 930],
-  tombstone: [5, 10, 20, 40, 70, 110, 160, 220],
-  storage:      [10, 25, 50, 90, 145, 220, 315, 430, 565],
-  archer_tower: [15, 35, 70, 125, 200, 300, 425, 570, 750],
-  mage_tower:   [20, 45, 90, 145, 225, 330, 460, 620, 810],
-  mortar:       [30, 65, 125, 210, 315, 440, 580, 750, 950],
-  harpoon:      [20, 35, 55, 80, 110, 145, 190, 240, 300],
-  air_bomb:     [30, 55, 90, 135, 190, 250, 320, 400, 490],
+  sawmill:   [10, 25, 50, 90, 145, 220, 315, 430, 565, 720],
+  turret:    [20, 45, 90, 160, 255, 380, 535, 720, 930, 1170],
+  tombstone: [5, 10, 20, 40, 70, 110, 160, 220, 295, 375],
+  storage:      [10, 25, 50, 90, 145, 220, 315, 430, 565, 720],
+  archer_tower: [15, 35, 70, 125, 200, 300, 425, 570, 750, 960],
+  mage_tower:   [20, 45, 90, 145, 225, 330, 460, 620, 810, 1040],
+  mortar:       [30, 65, 125, 210, 315, 440, 580, 750, 950, 1190],
+  harpoon:      [20, 35, 55, 80, 110, 145, 190, 240, 300, 375],
+  air_bomb:     [30, 55, 90, 135, 190, 250, 320, 400, 490, 590],
+  hidden_tesla: [30, 60, 105, 165, 235, 320, 420, 535, 665, 820],
   flamethrower: [30, 55, 90, 135, 190, 250, 320, 400, 490, 590],
-  shark_trap:   [25, 40, 60, 85, 115, 155, 205, 270, 345],
-  cannon:       [25, 45, 70, 105, 145, 190, 240, 305, 380],
+  shark_trap:   [25, 40, 60, 85, 115, 155, 205, 270, 345, 430],
+  cannon:       [25, 45, 70, 105, 145, 190, 240, 305, 380, 470],
 };
 
 // ---------- Helper Functions ----------
@@ -8548,6 +8622,7 @@ const TH_BASE_CAPACITY = {
   7: { gold: 35000, wood: 35000, ore: 35000 },
   8: { gold: 50000, wood: 50000, ore: 50000 },
   9: { gold: 55000, wood: 55000, ore: 55000 },
+  10: { gold: 60000, wood: 60000, ore: 60000 },
 };
 
 // Additional capacity per Storage building per level
@@ -8561,6 +8636,7 @@ const STORAGE_CAPACITY = {
   7: { gold: 36000, wood: 36000, ore: 36000 },
   8: { gold: 45000, wood: 45000, ore: 45000 },
   9: { gold: 55000, wood: 55000, ore: 55000 },
+  10: { gold: 66000, wood: 66000, ore: 66000 },
 };
 
 function getResourceCaps(playerId) {
@@ -10061,6 +10137,13 @@ function defensePowerForBuilding(building) {
       + (Number(stats.detectRange) || 0) * 170
       + (Number(stats.splashRadius) || 0) * 420;
   }
+  if (type === 'hidden_tesla') {
+    const stats = DEFENSE_STATS.hidden_tesla[level] || DEFENSE_STATS.hidden_tesla[1];
+    const dps = (Number(stats.damage) || 0) / Math.max(0.1, Number(stats.fireRate) || 1);
+    return dps * 34
+      + (Number(stats.detectRange) || 0) * 175
+      + (Number(stats.triggerRange) || 0) * 95;
+  }
   if (type === 'cannon') {
     const stats = DEFENSE_STATS.cannon[level] || DEFENSE_STATS.cannon[1];
     const dps = (Number(stats.damage) || 0) / Math.max(0.1, Number(stats.fireRate) || 1);
@@ -11487,7 +11570,7 @@ function repairAllBuildings(playerId) {
 }
 
 const SHIP_COST_GOLD = 250;
-const TROOP_SLOT_COST_VERSION = 3;
+const TROOP_SLOT_COST_VERSION = 4;
 const SHIP_SLOT_FILLER = '_SLOT_FILLER_';
 
 function safeShipTroopArray(raw) {
@@ -12125,6 +12208,11 @@ function compactSimTrace(trace) {
     'flamethrower_damage_tick',
     'flamethrower_stream_end',
     'flamethrower_cooldown_ready',
+    'hidden_tesla_reveal_started',
+    'hidden_tesla_reveal_complete',
+    'hidden_tesla_fire',
+    'hidden_tesla_damage',
+    'hidden_tesla_destroyed',
     'troop_projectile_lost_target',
     'cannon_fire',
     'cannon_hit',
@@ -12138,13 +12226,20 @@ function compactSimTrace(trace) {
       id: event.buildingId ?? event.guardId ?? event.troopId ?? null,
       type: event.type ?? event.targetType ?? event.targetTroop ?? null,
       defenseType: event.defenseType ?? null,
+      level: event.level ?? null,
+      state: event.state ?? null,
       troop: event.troop ?? null,
       replayOrder: event.replayOrder ?? event.targetReplayOrder ?? event.sourceReplayOrder ?? null,
       targetId: event.targetId ?? event.targetTroopId ?? event.target?.id ?? null,
       targetType: event.targetType ?? event.targetTroop ?? event.target?.type ?? null,
       hp: event.hp ?? event.hpAfter ?? event.hp_after ?? event.target?.hp ?? null,
       damage: event.damage ?? null,
+      appliedDamage: event.appliedDamage ?? null,
+      baseDamage: event.baseDamage ?? null,
+      hpBefore: event.hpBefore ?? null,
+      hpAfter: event.hpAfter ?? null,
       reason: event.reason ?? null,
+      cause: event.cause ?? null,
       ownerTroopId: event.ownerTroopId ?? null,
       summonIndex: event.summon_index ?? event.summonSequence ?? null,
       castSerial: event.cast_serial ?? null,
@@ -12160,6 +12255,10 @@ function compactSimTrace(trace) {
       tick: event.tick ?? null,
       fireTick: event.fireTick ?? null,
       durationTicks: event.durationTicks ?? null,
+      revealStartTick: event.revealStartTick ?? null,
+      revealCompleteTick: event.revealCompleteTick ?? null,
+      triggerDistance: event.triggerDistance ?? null,
+      destructionPercent: event.destructionPercent ?? null,
       finalDistance: event.finalDistance ?? null,
       immunityUntilTick: event.immunityUntilTick ?? null,
       buildingOrder: event.buildingOrder ?? null,
@@ -12249,6 +12348,13 @@ function replaySimDebug(simResult) {
     combatSnapshotVersion: simResult._combatSnapshotVersion ?? simResult.combatSnapshotVersion ?? null,
     combatRulesVersion: simResult._combatRulesVersion ?? simResult.combatRulesVersion ?? null,
     flamethrowerDetails: simResult._flamethrowerDetails || [],
+    hiddenTeslaRevealStarts: simResult._hiddenTeslaRevealStarts || 0,
+    hiddenTeslaRevealCompletes: simResult._hiddenTeslaRevealCompletes || 0,
+    hiddenTeslaShots: simResult._hiddenTeslaShots || 0,
+    hiddenTeslaDamageApplied: simResult._hiddenTeslaDamageApplied || 0,
+    hiddenTeslaKills: simResult._hiddenTeslaKills || 0,
+    hiddenTeslaDestroyed: simResult._hiddenTeslaDestroyed || 0,
+    hiddenTeslaDetails: simResult._hiddenTeslaDetails || [],
   };
   const text = JSON.stringify(debug);
   const max = Number(process.env.CLASH_SIM_DEBUG_MAX_BYTES || 2_000_000);

@@ -35,6 +35,7 @@ import imgSharkTrap from '../assets/buildings/sharktrap.png';
 import imgHarpoon from '../assets/buildings/harpoon.png';
 import imgAirBomb from '../assets/buildings/air_bomb.png';
 import imgFlamethrower from '../assets/buildings/flamethrower.png';
+import imgHiddenTesla from '../assets/buildings/hidden_tesla_v2.png';
 import imgAltar from '../assets/units/altar.png';
 import defaultTownHallFlagImg from '../../../Model/Town_Hall/Pirate_Flag_Default.png';
 
@@ -161,6 +162,7 @@ const THUMBNAIL_MAP = {
   harpoon: imgHarpoon,
   air_bomb: imgAirBomb,
   flamethrower: imgFlamethrower,
+  hidden_tesla: imgHiddenTesla,
   storage: imgStorage,
   altar: imgAltar,
   main_ship: imgShip,
@@ -202,6 +204,7 @@ const DESC_MAP = {
   harpoon: 'An air-only control defense that damages and pulls one flying enemy into a defensive kill zone.',
   air_bomb: 'Launches one homing balloon bomb at a time and damages flying enemies in the impact radius.',
   flamethrower: 'A fixed directional defense that burns every ground enemy inside its 50 degree cone. Rotate it to cover the attack approach.',
+  hidden_tesla: 'Stays hidden and untargetable until enemies approach, then rises and shocks one ground or air target at a time.',
   residence: 'Residences produce gold.',
 };
 
@@ -295,11 +298,11 @@ function troopSlotCost(name) {
     Mimic: 8,
     MechanicalDragon: 5,
     DemonKing: 6,
-    IceGolem: 11,
-    FireDragon: 11,
-    Necromancer: 18,
-    WindMage: 18,
-    Horror: 22,
+    IceGolem: 10,
+    FireDragon: 10,
+    Necromancer: 10,
+    WindMage: 10,
+    Horror: 10,
   };
   return costs[troopBaseName(name)] || 1;
 }
@@ -1426,6 +1429,16 @@ function BuildingInfoPanel({ onOpenTroops }) {
         <StatBox label="Health" current={building.max_hp} />
         <StatBox label="Level" current={building.level} />
       </>
+    ) : building.id === 'hidden_tesla' ? (
+      <>
+        <StatBox label="Shock Damage" current={building.damage} />
+        <StatBox label="Attack Range" current={Number(building.detect_range || 0).toFixed(2)} />
+        <StatBox label="Reveal Range" current={Number(building.trigger_radius || 0).toFixed(2)} />
+        <StatBox label="Reload" current={`${Number(building.reload_sec || 0.65).toFixed(2)} s`} />
+        <StatBox label="Targets" current="Ground and air" />
+        <StatBox label="Health" current={building.max_hp} />
+        <StatBox label="Level" current={building.level} />
+      </>
     ) : building.id === 'flamethrower' ? (
       <>
         <StatBox label="Damage / Tick" current={building.damage} />
@@ -1677,6 +1690,19 @@ function BuildingInfoPanel({ onOpenTroops }) {
         />
         <StatBox label="Splash Radius" current={Number(building.splash_radius || 0).toFixed(2)} />
         <StatBox label="Reload" current={`${Number(building.reload_sec || 4.5).toFixed(2)} s`} />
+        <StatBox label="Health" current={building.max_hp} upgradeTo={building.next_hp} />
+        <StatBox label="Level" current={building.level} upgradeTo={building.level + 1} />
+      </>
+    ) : building.id === 'hidden_tesla' ? (
+      <>
+        <StatBox label="Shock Damage" current={building.damage} upgradeTo={building.next_damage} />
+        <StatBox
+          label="Attack Range"
+          current={Number(building.detect_range || 0).toFixed(2)}
+          upgradeTo={Number(building.next_detect_range || building.detect_range || 0).toFixed(2)}
+        />
+        <StatBox label="Reveal Range" current={Number(building.trigger_radius || 0).toFixed(2)} />
+        <StatBox label="Reload" current={`${Number(building.reload_sec || 0.65).toFixed(2)} s`} />
         <StatBox label="Health" current={building.max_hp} upgradeTo={building.next_hp} />
         <StatBox label="Level" current={building.level} upgradeTo={building.level + 1} />
       </>

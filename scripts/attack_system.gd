@@ -1273,6 +1273,11 @@ func _spawn_troop_after_delay(
 		troop.set_player_troop_levels(player_levels)
 	if troop.has_method("set_nft_rarity"):
 		troop.set_nft_rarity(_troop_entry_rarity(troop_entry))
+	if "primary_troop_power_multiplier" in troop:
+		troop.primary_troop_power_multiplier = _active_main_ship_troop_power_multiplier(
+			lvl,
+			_normalize_troop_entry(troop_entry).to_snake_case(),
+		)
 	get_tree().current_scene.add_child(troop)
 	var troop_scale_key := _normalize_troop_entry(troop_entry)
 	if not TROOP_DEFS.has(troop_scale_key) and script_res != null:
@@ -1305,6 +1310,13 @@ func _spawn_troop_after_delay(
 
 static func _scale_for_troop(troop_name: String, base_scale: float) -> float:
 	return base_scale * float(TROOP_SCALE_MULTIPLIERS.get(troop_name, 1.0))
+
+
+func _active_main_ship_troop_power_multiplier(troop_level: int, troop_type: String) -> float:
+	if _fleet.is_empty():
+		return 1.0
+	var level: int = clampi(int(_fleet[0].get("level", 1)), 1, BuildingSystem.MAX_PLAYER_SHIP_LEVEL)
+	return BuildingSystem.player_ship_troop_power_multiplier(level, troop_level, troop_type)
 
 
 ## Returns the deterministic troop spawn position derived from a ship's

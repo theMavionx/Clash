@@ -26,6 +26,7 @@ import imgSharkTrap from '../assets/buildings/sharktrap.png';
 import imgHarpoon from '../assets/buildings/harpoon.png';
 import imgAirBomb from '../assets/buildings/air_bomb.png';
 import imgFlamethrower from '../assets/buildings/flamethrower.png';
+import imgHiddenTesla from '../assets/buildings/hidden_tesla_v2.png';
 
 import knightImg from '../assets/units/knight.png';
 import mageImg from '../assets/units/mage.png';
@@ -36,7 +37,7 @@ import berserkImg from '../assets/units/berserk.png';
 const URLS = [
   goldIcon, woodIcon, stoneIcon,
   imgMine, imgBarn, imgPort, imgSawmill, imgTownHall,
-  imgTurret, imgCannon, imgTombstone, imgArcherTower, imgStorage, imgShip, imgSharkTrap, imgHarpoon, imgAirBomb, imgFlamethrower,
+  imgTurret, imgCannon, imgTombstone, imgArcherTower, imgStorage, imgShip, imgSharkTrap, imgHarpoon, imgAirBomb, imgFlamethrower, imgHiddenTesla,
   knightImg, mageImg, arbaletImg, archerImg, berserkImg,
 ];
 

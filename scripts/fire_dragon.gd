@@ -7,15 +7,15 @@ extends BaseTroop
 enum DragonSkin { BLACK }
 
 const COMMON_LEVEL_STATS: Dictionary = {
-	1: {"hp": 1750, "damage": 470, "atk_speed": 1.25},
-	2: {"hp": 2320, "damage": 670, "atk_speed": 1.25},
-	3: {"hp": 3080, "damage": 1050, "atk_speed": 1.25},
-	4: {"hp": 4000, "damage": 1549, "atk_speed": 1.25},
-	5: {"hp": 5049, "damage": 2218, "atk_speed": 1.25},
-	6: {"hp": 6440, "damage": 3158, "atk_speed": 1.25},
-	7: {"hp": 8740, "damage": 4879, "atk_speed": 1.25},
-	8: {"hp": 8740, "damage": 4879, "atk_speed": 1.25},
-	9: {"hp": 8740, "damage": 4879, "atk_speed": 1.25},
+	1: {"hp": 1591, "damage": 427, "atk_speed": 1.25},
+	2: {"hp": 2109, "damage": 609, "atk_speed": 1.25},
+	3: {"hp": 2800, "damage": 955, "atk_speed": 1.25},
+	4: {"hp": 3636, "damage": 1408, "atk_speed": 1.25},
+	5: {"hp": 4590, "damage": 2016, "atk_speed": 1.25},
+	6: {"hp": 5855, "damage": 2871, "atk_speed": 1.25},
+	7: {"hp": 7945, "damage": 4435, "atk_speed": 1.25},
+	8: {"hp": 7945, "damage": 4435, "atk_speed": 1.25},
+	9: {"hp": 7945, "damage": 4435, "atk_speed": 1.25},
 }
 
 const NFT_RARITY_MULTIPLIERS: Dictionary = {
