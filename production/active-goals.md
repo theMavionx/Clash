@@ -506,9 +506,13 @@ Current checkpoint:
   web rebuild is temporarily blocked by the unrelated in-progress TH10 Hidden
   Tesla work referencing a not-yet-created `hidden_tesla.png`; the Sanctum
   build itself passed before that concurrent edit appeared.
-- Remaining launch work is external: approve branding/revenue wallet, complete
-  Sanctum onboarding and mint handoff, configure `SANCTUM_API_KEY` plus
-  `CLASHSOL_MINT`, then run an owner-approved funded mainnet stake smoke.
+- Sanctum API access was received and verified against the production `/lsts`
+  endpoint on 2026-08-10. The key is configured outside Git. The agreed epoch
+  fee split is 5% to Clash and 5% to Sanctum.
+- Remaining launch work is external: Sanctum must deploy/register `clashSOL`
+  and supply the exact mint (the live list contained no clashSOL entry on
+  2026-08-10). Then configure `CLASHSOL_MINT` and run an owner-approved funded
+  mainnet stake smoke.
 
 Acceptance criteria:
 
