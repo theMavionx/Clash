@@ -12,6 +12,11 @@ import { fetchOwnedNftsForPlayerWallets, nftLevelImageUrl, nftRarityBadgeStyle, 
 import { buySolanaShopItem } from '../lib/gameShop';
 import { makePrivySolanaWallet, pickPrivySolanaWallet } from '../lib/privySolanaWallet';
 import { openSolanaWallet } from '../lib/solanaWalletUi';
+import {
+  emptyTownHallFlagEntitlement,
+  parseTownHallFlagEntitlement,
+  shouldChargeForTownHallFlagUpload,
+} from '../lib/townHallFlagEntitlement';
 
 import goldIcon from '../assets/resources/gold_bar.png';
 import woodIcon from '../assets/resources/wood_bar.png';
@@ -719,6 +724,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
   const [flagPreview, setFlagPreview] = useState('');
   const [flagBusy, setFlagBusy] = useState(false);
   const [flagStatus, setFlagStatus] = useState('');
+  const [flagEntitlement, setFlagEntitlement] = useState(() => emptyTownHallFlagEntitlement());
   const demonKingPortForceSyncRef = useRef(new Map());
 
   const openSolanaConnect = useCallback(() => {
@@ -740,8 +746,46 @@ function BuildingInfoPanel({ onOpenTroops }) {
     setFlagFile(null);
     setFlagPreview('');
     setFlagStatus('');
+    setFlagEntitlement(emptyTownHallFlagEntitlement());
     setTroopInfo(null);
   }, [building?.id, building?.server_id, building?.open_load_troops]);
+
+  useEffect(() => {
+    if (view !== 'FLAG') return undefined;
+    const token = player?.token || window._playerToken;
+    if (!token) {
+      setFlagEntitlement(emptyTownHallFlagEntitlement({ loaded: true, error: 'Login required' }));
+      return undefined;
+    }
+    const controller = new AbortController();
+    setFlagEntitlement(emptyTownHallFlagEntitlement({ loading: true }));
+    fetch('/api/town-hall-flag', {
+      headers: { 'x-token': token },
+      signal: controller.signal,
+    })
+      .then(async (res) => {
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.error) throw new Error(json.error || `HTTP ${res.status}`);
+        return json;
+      })
+      .then((json) => {
+        if (controller.signal.aborted) return;
+        const entitlement = parseTownHallFlagEntitlement(json);
+        setFlagEntitlement(entitlement);
+        if (entitlement.recoveryUploadAvailable) {
+          setFlagStatus('Your paid flag file was lost during an old deploy. Choose the image again to restore it free.');
+        }
+      })
+      .catch((err) => {
+        if (controller.signal.aborted) return;
+        setFlagEntitlement(emptyTownHallFlagEntitlement({
+          loaded: true,
+          error: (err?.message || 'Could not verify flag purchase').slice(0, 120),
+        }));
+        setFlagStatus('Could not verify your flag purchase. Try again before paying.');
+      });
+    return () => controller.abort();
+  }, [player?.token, view]);
 
   useEffect(() => {
     if (building?.altar_skills) {
@@ -1026,8 +1070,13 @@ function BuildingInfoPanel({ onOpenTroops }) {
       setFlagStatus('Choose a flag image');
       return;
     }
+    if (!flagEntitlement.loaded || flagEntitlement.error) {
+      setFlagStatus('Could not verify your flag purchase. Close and reopen this panel, then try again.');
+      return;
+    }
+    const requiresPayment = shouldChargeForTownHallFlagUpload(flagEntitlement);
     const buyer = paymentSolWallet?.publicKey?.toBase58?.() || '';
-    if (!buyer) {
+    if (requiresPayment && !buyer) {
       setFlagStatus('Connect a Solana wallet to pay with CLASH');
       openSolanaConnect();
       return;
@@ -1037,21 +1086,26 @@ function BuildingInfoPanel({ onOpenTroops }) {
     try {
       const imageData = flagPreview || await prepareTownHallFlagImage(flagFile);
       setFlagPreview(imageData);
-      setFlagStatus('Confirm CLASH payment...');
-      const payment = await buySolanaShopItem({
-        solWallet: paymentSolWallet,
-        buyer,
-        token,
-        sku: TOWN_HALL_FLAG_SKU,
-        payment: 'clash',
-        quantity: 1,
-      });
-      setFlagStatus('Uploading flag...');
+      let payment = null;
+      if (requiresPayment) {
+        setFlagStatus('Confirm CLASH payment...');
+        payment = await buySolanaShopItem({
+          solWallet: paymentSolWallet,
+          buyer,
+          token,
+          sku: TOWN_HALL_FLAG_SKU,
+          payment: 'clash',
+          quantity: 1,
+        });
+        setFlagStatus('Uploading flag...');
+      } else {
+        setFlagStatus('Restoring paid flag...');
+      }
       const res = await fetch('/api/town-hall-flag', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-token': token },
         body: JSON.stringify({
-          txSignature: payment.signature,
+          txSignature: payment?.signature || undefined,
           imageData,
           mimeType: 'image/png',
         }),
@@ -1061,13 +1115,14 @@ function BuildingInfoPanel({ onOpenTroops }) {
       const url = json.town_hall_flag_url || json.town_hall_flag?.image_url;
       if (!url) throw new Error('Server did not return flag URL');
       applyTownHallFlagLocal(url, json.town_hall_flag || { image_url: url });
-      setFlagStatus('Flag updated');
+      setFlagEntitlement(parseTownHallFlagEntitlement({ recovery_upload_available: false }));
+      setFlagStatus(json.recovered ? 'Paid flag restored' : 'Flag updated');
     } catch (err) {
       setFlagStatus((err?.shortMessage || err?.message || 'Flag upload failed').slice(0, 180));
     } finally {
       setFlagBusy(false);
     }
-  }, [applyTownHallFlagLocal, flagBusy, flagFile, flagPreview, openSolanaConnect, paymentSolWallet, player?.token]);
+  }, [applyTownHallFlagLocal, flagBusy, flagEntitlement, flagFile, flagPreview, openSolanaConnect, paymentSolWallet, player?.token]);
 
   const handleTownHallFlagReset = useCallback(async () => {
     if (flagBusy) return;
@@ -1498,7 +1553,10 @@ function BuildingInfoPanel({ onOpenTroops }) {
     const currentFlag = building.town_hall_flag_url || building.flag_url || player?.town_hall_flag?.image_url || '';
     const preview = flagPreview || currentFlag;
     const hasCustomFlag = !!currentFlag;
-    const hasSolanaPaymentWallet = !!solWallet?.publicKey?.toBase58?.();
+    const hasSolanaPaymentWallet = !!paymentSolWallet?.publicKey?.toBase58?.();
+    const recoveryUploadAvailable = flagEntitlement.loaded && flagEntitlement.recoveryUploadAvailable;
+    const flagEntitlementReady = flagEntitlement.loaded && !flagEntitlement.loading && !flagEntitlement.error;
+    const flagUploadDisabled = flagBusy || !flagFile || !flagEntitlementReady;
     return (
       <div style={{ ...LT.overlay, ...(isMobile ? { alignItems: 'stretch' } : {}) }} onClick={handleDeselect}>
         <div style={{ ...LT.panel, ...(isMobile ? { width: '100vw', maxWidth: '100vw', height: '100%', maxHeight: 'none', borderRadius: 0 } : { width: 560 }) }} onClick={e => e.stopPropagation()}>
@@ -1552,7 +1610,9 @@ function BuildingInfoPanel({ onOpenTroops }) {
               </div>
             </div>
             <div style={styles.flagCopy}>
-              Standard is free to restore anytime. Uploading a custom square flag costs $5 in CLASH on Solana and is visible to every player who sees your base.
+              {recoveryUploadAvailable
+                ? 'Your previous purchase is verified. Choose the flag image again and restore it without another payment.'
+                : 'Standard is free to restore anytime. Uploading a custom square flag costs $5 in CLASH on Solana and is visible to every player who sees your base.'}
             </div>
             <label style={styles.flagFileLabel}>
               <input
@@ -1567,7 +1627,10 @@ function BuildingInfoPanel({ onOpenTroops }) {
             {flagStatus && (
               <div style={{
                 ...styles.flagStatus,
-                ...(['Flag updated', 'Standard flag restored', 'Standard flag selected'].includes(flagStatus) ? styles.flagStatusOk : styles.flagStatusError),
+                ...(['Flag updated', 'Paid flag restored', 'Standard flag restored', 'Standard flag selected'].includes(flagStatus)
+                  || recoveryUploadAvailable
+                  ? styles.flagStatusOk
+                  : styles.flagStatusError),
               }}>
                 {flagStatus}
               </div>
@@ -1577,13 +1640,21 @@ function BuildingInfoPanel({ onOpenTroops }) {
               style={{
                 ...styles.actionBtn,
                 width: '100%',
-                opacity: flagBusy || !flagFile ? 0.65 : 1,
-                cursor: flagBusy || !flagFile ? 'not-allowed' : 'pointer',
+                opacity: flagUploadDisabled ? 0.65 : 1,
+                cursor: flagUploadDisabled ? 'not-allowed' : 'pointer',
               }}
-              disabled={flagBusy || !flagFile}
+              disabled={flagUploadDisabled}
               onClick={handleTownHallFlagUpload}
             >
-              {flagBusy ? 'Processing...' : hasSolanaPaymentWallet ? 'Pay $5 CLASH & Upload' : 'Connect Solana Wallet'}
+              {flagBusy
+                ? 'Processing...'
+                : flagEntitlement.loading
+                  ? 'Checking purchase...'
+                  : recoveryUploadAvailable
+                    ? 'Restore paid flag — free'
+                    : hasSolanaPaymentWallet
+                      ? 'Pay $5 CLASH & Upload'
+                      : 'Connect Solana Wallet'}
             </button>
           </div>
         </div>

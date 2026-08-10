@@ -1,5 +1,5 @@
 #!/bin/bash
-# Daily backup of /opt/clash/shared/ databases + .env.
+# Daily backup of /opt/clash/shared/ databases, paid flag uploads, and .env.
 #
 # Runs independently of deploys and prunes /opt/clash/shared/backups by both
 # age and count.
@@ -111,6 +111,11 @@ backup_sqlite_db() {
 
 backup_sqlite_db "$SHARED_DIR/server/clash.db" "$backup_dir/server/clash.db" || true
 backup_sqlite_db "$SHARED_DIR/server-futures/futures.db" "$backup_dir/server-futures/futures.db" || true
+
+if [ -d "$SHARED_DIR/server/town-hall-flags" ]; then
+    mkdir -p "$backup_dir/server/town-hall-flags"
+    rsync -a "$SHARED_DIR/server/town-hall-flags/" "$backup_dir/server/town-hall-flags/"
+fi
 
 if [ -f "$SHARED_DIR/.env" ]; then
     cp -a "$SHARED_DIR/.env" "$backup_dir/.env"

@@ -6,6 +6,7 @@
 #   /opt/clash/releases/<release-id>/... immutable built release
 #   /opt/clash/shared/.env shared production env
 #   /opt/clash/shared/server/*.db shared main SQLite DB
+#   /opt/clash/shared/server/town-hall-flags persistent paid player uploads
 #   /opt/clash/shared/server-futures/*.db shared futures SQLite DB
 #
 # Nginx serves /opt/clash/current/web/dist and proxies API/MCP processes.
@@ -45,6 +46,7 @@ WEB_DIST="$WEB_DIR/dist"
 OWNED_ASSETS_MANIFEST="$WEB_DIST/.clash-owned-assets"
 
 SHARED_SERVER_DIR="$SHARED_DIR/server"
+SHARED_TOWN_HALL_FLAG_DIR="$SHARED_SERVER_DIR/town-hall-flags"
 SHARED_FUTURES_DIR="$SHARED_DIR/server-futures"
 ENV_FILE="$SHARED_DIR/.env"
 NPM_CACHE_DIR="${CLASH_NPM_CACHE_DIR:-$SHARED_DIR/npm-cache}"
@@ -390,7 +392,21 @@ install_system_dependencies() {
 
 prepare_shared_runtime() {
     log "[2/9] Preparing shared runtime..."
-    mkdir -p "$RELEASES_DIR" "$SHARED_SERVER_DIR" "$SHARED_FUTURES_DIR" "$SHARED_DIR/backups" "$NPM_CACHE_DIR"
+    mkdir -p "$RELEASES_DIR" "$SHARED_SERVER_DIR" "$SHARED_TOWN_HALL_FLAG_DIR" "$SHARED_FUTURES_DIR" "$SHARED_DIR/backups" "$NPM_CACHE_DIR"
+    local legacy_flag_dir
+    local migrated_flag_source=0
+    for legacy_flag_dir in \
+        "$DEPLOY_ROOT/server/public/town-hall-flags" \
+        "$CURRENT_LINK/server/public/town-hall-flags" \
+        "$RELEASES_DIR"/*/server/public/town-hall-flags; do
+        [ -d "$legacy_flag_dir" ] || continue
+        [ "$(readlink -f "$legacy_flag_dir")" = "$(readlink -f "$SHARED_TOWN_HALL_FLAG_DIR")" ] && continue
+        rsync -a --ignore-existing "$legacy_flag_dir/" "$SHARED_TOWN_HALL_FLAG_DIR/"
+        migrated_flag_source=$((migrated_flag_source + 1))
+    done
+    if [ "$migrated_flag_source" -gt 0 ]; then
+        log "Migrated legacy Town Hall flag uploads from $migrated_flag_source release path(s) into shared storage"
+    fi
     local hermes_model_chain="openai/gpt-oss-120b,qwen/qwen3-30b-a3b-instruct-2507:nitro,google/gemma-4-26b-a4b-it:nitro"
     local hermes_primary_model="openai/gpt-oss-120b"
     local hermes_fallback_model="qwen/qwen3-30b-a3b-instruct-2507:nitro"
@@ -636,6 +652,7 @@ prepare_shared_runtime() {
     set_env_value "VITE_INK_EXPLORER_URL" "https://explorer.inkonchain.com"
     set_env_value "VITE_NFT_INK_CONTRACT" "0x5Cc846B2bA0f030A5165a456eD903A5989E19F3F"
     set_env_value "CLASH_MAIN_DB" "$SHARED_SERVER_DIR/clash.db"
+    set_env_value "TOWN_HALL_FLAG_UPLOAD_ROOT" "$SHARED_TOWN_HALL_FLAG_DIR"
     set_env_value "CLASH_FUTURES_DB" "$SHARED_FUTURES_DIR/futures.db"
     set_env_value "CLASH_MCP_PUBLIC_URL" "https://$MCP_DOMAIN"
     set_env_value "CLASH_GAME_API_URL" "http://127.0.0.1:4000/api"
@@ -687,6 +704,10 @@ backup_shared_databases() {
     stop_services_for_database_backup
     backup_sqlite_db "$SHARED_SERVER_DIR/clash.db" "$backup_dir/server/clash.db" || true
     backup_sqlite_db "$SHARED_FUTURES_DIR/futures.db" "$backup_dir/server-futures/futures.db" || true
+    if [ -d "$SHARED_TOWN_HALL_FLAG_DIR" ]; then
+        mkdir -p "$backup_dir/server/town-hall-flags"
+        rsync -a "$SHARED_TOWN_HALL_FLAG_DIR/" "$backup_dir/server/town-hall-flags/"
+    fi
     resume_services_after_database_backup
     if [ -f "$ENV_FILE" ]; then
         cp -a "$ENV_FILE" "$backup_dir/.env"
