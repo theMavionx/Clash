@@ -590,6 +590,7 @@ prepare_shared_runtime() {
     ensure_env_default "CLASH_BOT_URL" "http://127.0.0.1:8080"
     ensure_env_default "CLASH_BOT_WS_URL" "ws://127.0.0.1:8080"
     ensure_env_default "VITE_MM_BOTS_BUTTON_ENABLED" "1"
+    ensure_env_default "MM_BOTS_DEFAULT_ACCESS_ENABLED" "1"
     ensure_env_default "CLASH_MCP_CORS_ORIGINS" "https://$DOMAIN,https://www.$DOMAIN,https://$MCP_DOMAIN"
     ensure_env_default "CLASH_MCP_RATE_WINDOW_MS" "60000"
     ensure_env_default "CLASH_MCP_RATE_LIMIT" "180"

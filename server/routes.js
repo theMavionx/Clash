@@ -10051,7 +10051,9 @@ router.get('/players/me', auth, (req, res) => {
 
 router.get('/mm-bots/access', auth, (req, res) => {
   res.set('Cache-Control', 'no-store');
-  const access = db.getMmBotAccess(req.player.id);
+  // Self-heal rows created by an older import path. Explicit admin revocations
+  // are preserved because ensureDefaultMmBotAccess only inserts when missing.
+  const access = db.ensureDefaultMmBotAccess(req.player.id);
   res.json({
     ok: true,
     enabled: !!access?.enabled,

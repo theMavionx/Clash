@@ -2467,6 +2467,32 @@ const stmts = {
       updated_by = excluded.updated_by,
       updated_at = datetime('now')
   `),
+  ensureDefaultMmBotAccess: db.prepare(`
+    INSERT INTO mm_bot_access (player_id, enabled, note, created_by, updated_by, updated_at)
+    VALUES (?, 1, ?, 'system', 'system', datetime('now'))
+    ON CONFLICT(player_id) DO NOTHING
+  `),
+  getMmBotAccessCoverage: db.prepare(`
+    SELECT
+      COUNT(*) AS eligible_players,
+      SUM(CASE WHEN a.enabled = 1 THEN 1 ELSE 0 END) AS enabled_players,
+      SUM(CASE WHEN a.enabled = 0 THEN 1 ELSE 0 END) AS disabled_players,
+      SUM(CASE WHEN a.player_id IS NULL THEN 1 ELSE 0 END) AS missing_players
+    FROM players p
+    LEFT JOIN mm_bot_access a ON a.player_id = p.id
+    WHERE COALESCE(p.is_bot, 0) = 0
+  `),
+  grantMmBotsToAllRealPlayers: db.prepare(`
+    INSERT INTO mm_bot_access (player_id, enabled, note, created_by, updated_by, updated_at)
+    SELECT p.id, 1, ?, 'system', 'system', datetime('now')
+    FROM players p
+    WHERE COALESCE(p.is_bot, 0) = 0
+    ON CONFLICT(player_id) DO UPDATE SET
+      enabled = 1,
+      note = CASE WHEN mm_bot_access.enabled = 0 THEN excluded.note ELSE mm_bot_access.note END,
+      updated_by = CASE WHEN mm_bot_access.enabled = 0 THEN 'system' ELSE mm_bot_access.updated_by END,
+      updated_at = CASE WHEN mm_bot_access.enabled = 0 THEN datetime('now') ELSE mm_bot_access.updated_at END
+  `),
   listWalletBlacklist: db.prepare(`
     SELECT *
     FROM wallet_blacklist
@@ -7960,6 +7986,7 @@ function registerPlayer(name, options = {}) {
     stmts.upsertTroopLevel.run(id, troop, 1);
   }
   ensurePlayerShip(id);
+  ensureDefaultMmBotAccess(id);
   const player = { id, name, token };
   if (options.referralCode) {
     try {
@@ -8106,6 +8133,43 @@ function normalizeMmBotAccessRow(row) {
     updated_at: row.updated_at || null,
     updated_by: row.updated_by || null,
   };
+}
+
+function defaultMmBotAccessEnabled() {
+  const value = String(process.env.MM_BOTS_DEFAULT_ACCESS_ENABLED ?? '1').trim().toLowerCase();
+  return !['0', 'false', 'no', 'off'].includes(value);
+}
+
+function ensureDefaultMmBotAccess(playerId) {
+  const id = String(playerId || '').trim();
+  if (!id || !defaultMmBotAccessEnabled()) return getMmBotAccess(id);
+  stmts.ensureDefaultMmBotAccess.run(id, 'Automatic MM bot access for new players');
+  return getMmBotAccess(id);
+}
+
+function mmBotAccessCoverage() {
+  const row = stmts.getMmBotAccessCoverage.get() || {};
+  return {
+    eligible_players: Number(row.eligible_players || 0),
+    enabled_players: Number(row.enabled_players || 0),
+    disabled_players: Number(row.disabled_players || 0),
+    missing_players: Number(row.missing_players || 0),
+  };
+}
+
+function grantMmBotsToAllRealPlayers(options = {}) {
+  const before = mmBotAccessCoverage();
+  const result = {
+    ...before,
+    newly_granted: before.missing_players,
+    reenabled: before.disabled_players,
+    already_enabled: before.enabled_players,
+  };
+  if (options.apply !== true) return { applied: false, ...result };
+  const note = String(options.note || 'Automatic MM bot access rollout').trim().slice(0, 500)
+    || 'Automatic MM bot access rollout';
+  stmts.grantMmBotsToAllRealPlayers.run(note);
+  return { applied: true, ...result, after: mmBotAccessCoverage() };
 }
 
 function getMmBotAccess(playerId) {
@@ -13489,6 +13553,9 @@ module.exports = {
   isMmBotAccessEnabled,
   listMmBotAccess,
   listEnabledMmBotAccessPlayerIds,
+  ensureDefaultMmBotAccess,
+  mmBotAccessCoverage,
+  grantMmBotsToAllRealPlayers,
   setMmBotAccess,
   ensureReferralCode,
   issueReferralCodeForPlayer,
