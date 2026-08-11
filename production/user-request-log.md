@@ -3348,3 +3348,40 @@ Follow-up:
 - Approval: explicit authorization to commit the reviewed current Nado referral
   changes on `main`, push `origin/main`, deploy through the canonical production
   workflow, and verify the live revision and service health.
+
+## UR-2026-08-11-NADO-POSITION-LEVERAGE-PNL-LABEL
+
+- Timestamp: 2026-08-11 17:40 (Europe/Kyiv)
+- Request: verify and correct the leverage displayed on Nado position cards,
+  which currently shows an implausible `0.1x`, and remove the word `Net` from
+  the displayed PnL label.
+- Scope: trace the normalized Nado position/account fields and the shared
+  position-card math, compare the calculation with the current Nado SDK/API
+  semantics, apply a focused display fix, and verify it locally in the browser.
+  No commit, push, deployment, or production mutation requested.
+## UR-2026-08-11-ONDO-PERPS-FULL-INTEGRATION
+
+- Timestamp: 2026-08-11 18:10 Europe/Kyiv
+- Request: fully integrate Ondo Perps as a Clash trading venue following the existing exchange integrations; source an official logo; prepare builder-code routing in every order request using `builderCode: { code, feeRateBps: 1 }` even though the builder code has not been issued yet.
+- Scope: official API/auth/schema audit; browser and server adapters; market/account/position/order/trade flows; builder configuration; UI/DEX selector; bots/tournament/rewards/earnings compatibility where supported; regression tests and local browser verification. No production deploy or production mutation requested.
+
+## UR-2026-08-11-ONDO-REGION-RESTRICTION
+
+- Timestamp: 2026-08-11 19:05 Europe/Kyiv
+- Request: prevent users in the United States, Canada, and sanctioned
+  jurisdictions from accessing Ondo trading through the Clash frontend, and
+  show a clear region-blocked screen like the existing Perpl error treatment.
+- Scope: use trusted edge-country headers, block Ondo private/auth/trading
+  routes server-side, gate the Ondo React surface before wallet signing or
+  market subscriptions, preserve every other exchange, and verify both allowed
+  and blocked local flows. No commit, push, deployment, or production mutation
+  requested.
+
+### Release authorization follow-up
+
+- Timestamp: 2026-08-11 21:32 Europe/Kyiv
+- Request: "перевір сам проетстуй в браузері і заливай на прод пуш коміт деплой".
+- Approval: explicit authorization to re-run the local/browser release checks,
+  commit all current reviewed Ondo/Nado integration changes on `main`, push
+  `origin/main`, deploy through the canonical production workflow, and verify
+  the live revision and service health.

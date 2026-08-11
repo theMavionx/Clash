@@ -5738,6 +5738,7 @@ function dexAccent(dex) {
     hyperliquid: '#86efac',
     grvt: '#5eead4',
     nado: '#67e8f9',
+    ondo: '#111111',
     hotstuff: '#f97316',
     risex: '#f43f5e',
     katana: '#eab308',

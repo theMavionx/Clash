@@ -131,7 +131,7 @@ function BasicTradeFlow({
         ?? 0
     ));
     if (accBal > 0) return accBal;
-    if (dex === 'pacifica' || dex === 'hyperliquid' || dex === 'risex' || dex === 'phoenix' || dex === 'nado' || dex === 'flash') return 0;
+    if (dex === 'pacifica' || dex === 'hyperliquid' || dex === 'risex' || dex === 'phoenix' || dex === 'nado' || dex === 'ondo' || dex === 'flash') return 0;
     return Number(walletUsdc || 0);
   }, [account, walletUsdc, dex]);
 
@@ -264,7 +264,9 @@ function BasicTradeFlow({
         const sym = pickedToken.symbol;
         const maxMargin = tradeBalance;
         if (Number.isFinite(maxMargin) && pickedAmount > maxMargin + 1e-6) {
-          setErrorMsg(`Pacifica needs a small fee buffer. Use $${maxMargin.toFixed(2)} margin or less.`);
+          setErrorMsg(dex === 'pacifica'
+            ? `Pacifica needs a small fee buffer. Use $${maxMargin.toFixed(2)} margin or less.`
+            : `Insufficient trading balance. Use $${maxMargin.toFixed(2)} margin or less.`);
           submittedRef.current = false;
           setSubmitting(false);
           return;
@@ -350,9 +352,12 @@ function BasicTradeFlow({
           return;
         }
         const finalNotional = tokenAmt * livePrice;
-        if (!Number.isFinite(finalNotional) || finalNotional < PACIFICA_MIN_NOTIONAL_USD) {
+        const venueMinimumNotional = dex === 'pacifica'
+          ? PACIFICA_MIN_NOTIONAL_USD
+          : Math.max(0, Number(pickedToken?.min_notional_usd || 0));
+        if (!Number.isFinite(finalNotional) || finalNotional + 1e-9 < venueMinimumNotional) {
           setErrorMsg(
-            `Pacifica requires a position >= $${PACIFICA_MIN_NOTIONAL_USD}. Yours: ` +
+            `${dex === 'pacifica' ? 'Pacifica' : 'This market'} requires a position >= $${venueMinimumNotional.toFixed(2)}. Yours: ` +
             `$${Number.isFinite(finalNotional) ? finalNotional.toFixed(2) : '0.00'}. Increase amount or leverage.`
           );
           submittedRef.current = false;

@@ -4,6 +4,7 @@ import { fetchPerplFills } from '../lib/perplClient';
 import { phoenixFetch, phoenixSymbol } from '../lib/phoenixClient';
 import { pacificaFetch } from '../lib/pacificaClient';
 import { normalizeOstiumTrade } from '../lib/ostiumTradeHistory';
+import { readOndoSession } from '../lib/ondoClient';
 import {
   migratePlainLocalStorageCredential,
   readEncryptedCredential,
@@ -271,6 +272,36 @@ function normalizeNadoTrade(fill, markets) {
   };
 }
 
+function normalizeOndoTrade(fill) {
+  const symbol = String(fill?.symbol || fill?.market || '').toUpperCase().replace(/-USD\.P$/u, '');
+  if (!symbol) return null;
+  const direction = String(fill?.direction || '').toLowerCase();
+  const rawSide = String(fill?.side || '').toLowerCase();
+  const isClose = direction.startsWith('close') || direction.startsWith('flip');
+  // A flip reports the resulting direction, but realized PnL belongs to the
+  // side it closed: flipLongToShort closes a long; flipShortToLong closes a
+  // short. Treating the destination as the closed side inverted both rows.
+  const isShort = direction.startsWith('flip')
+    ? direction.startsWith('flipshort')
+    : direction.includes('short') || (!direction && rawSide === 'sell');
+  const side = isClose
+    ? (isShort ? 'close_short' : 'close_long')
+    : (isShort ? 'open_short' : 'open_long');
+  return {
+    ...fill,
+    _dex: 'ondo',
+    id: fill?.fill_id || fill?.id || fill?.order_id || `${symbol}:${fill?.created_at}:${fill?.price}:${fill?.amount}`,
+    symbol,
+    side,
+    action: side,
+    amount: Math.abs(Number(fill?.amount ?? fill?.size ?? 0)),
+    price: Number(fill?.price ?? 0),
+    fee: Math.abs(Number(fill?.fee ?? 0)),
+    created_at: fill?.created_at ?? fill?.time,
+    realized_pnl_amount: fill?.pnl ?? fill?.realized_pnl ?? fill?.realizedPnl,
+  };
+}
+
 function normalizeHotstuffTrade(fill, markets) {
   const instrumentId = Number(fill?.pair_index ?? fill?.instrument_id ?? fill?.instrumentId);
   const m = (markets || []).find(x => Number(x.pair_index ?? x.market_id) === instrumentId)
@@ -506,6 +537,18 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
           if (!cancelled) setTrades(rows(d).map(t => normalizeNadoTrade(t, markets)).filter(Boolean));
           return;
         }
+        if (dex === 'ondo') {
+          if (!EVM_ADDRESS_RE.test(String(addr || ''))) throw new Error('Connect an Ethereum wallet to view Ondo history');
+          const session = readOndoSession(addr);
+          if (!session?.token) throw new Error('Sign in to Ondo Perps to view trade history');
+          const d = await fetchFuturesJson(`/api/futures/ondo/fills?dex=ondo&account=${encodeURIComponent(addr)}&limit=100`, {
+            dex: 'ondo',
+            headers: { 'x-ondo-wallet': addr, 'x-ondo-token': session.token },
+            signal: controller.signal,
+          });
+          if (!cancelled) setTrades(rows(d).map(normalizeOndoTrade).filter(Boolean));
+          return;
+        }
         if (dex === 'hotstuff') {
           if (!EVM_ADDRESS_RE.test(String(addr || ''))) throw new Error('Connect an EVM wallet to view Hotstuff history');
           const d = await fetchFuturesJson(`/api/futures/hotstuff/trade-history?dex=hotstuff&account=${encodeURIComponent(addr)}&limit=100`, {
@@ -665,12 +708,12 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
     return <div style={{ padding: 20, textAlign: 'center', color: '#B71C1C', fontWeight: 800 }}>{error}</div>;
   }
   if (!filtered.length) {
-    const name = dex === 'decibel' ? 'Decibel ' : dex === 'ostium' ? 'Ostium ' : dex === 'monad' ? 'Perpl ' : dex === 'phoenix' ? 'Phoenix ' : dex === 'hyperliquid' ? 'Hyperliquid ' : dex === 'risex' ? 'RISEx ' : dex === 'nado' ? 'Nado ' : dex === 'hotstuff' ? 'Hotstuff ' : dex === 'grvt' ? 'GRVT ' : dex === 'gmtrade' ? 'GMTrade ' : dex === 'flash' ? 'Flash Trade ' : dex === 'hibachi' ? 'Hibachi ' : dex === 'katana' ? 'Katana ' : dex === 'gmx' ? 'GMX ' : dex === 'avantis' ? 'Avantis ' : dex === 'lighter' ? 'Lighter ' : dex === 'bulk' ? 'Bulk ' : '';
+    const name = dex === 'decibel' ? 'Decibel ' : dex === 'ostium' ? 'Ostium ' : dex === 'monad' ? 'Perpl ' : dex === 'phoenix' ? 'Phoenix ' : dex === 'hyperliquid' ? 'Hyperliquid ' : dex === 'risex' ? 'RISEx ' : dex === 'nado' ? 'Nado ' : dex === 'ondo' ? 'Ondo ' : dex === 'hotstuff' ? 'Hotstuff ' : dex === 'grvt' ? 'GRVT ' : dex === 'gmtrade' ? 'GMTrade ' : dex === 'flash' ? 'Flash Trade ' : dex === 'hibachi' ? 'Hibachi ' : dex === 'katana' ? 'Katana ' : dex === 'gmx' ? 'GMX ' : dex === 'avantis' ? 'Avantis ' : dex === 'lighter' ? 'Lighter ' : dex === 'bulk' ? 'Bulk ' : '';
     return <div style={{ padding: 20, textAlign: 'center', color: '#a3906a' }}>No {name}trade history</div>;
   }
 
   const isDecibel = dex === 'decibel';
-  const showPnl = dex === 'decibel' || dex === 'ostium' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hotstuff' || dex === 'grvt' || dex === 'gmtrade' || dex === 'flash' || dex === 'hibachi' || dex === 'katana' || dex === 'gmx' || dex === 'avantis' || dex === 'lighter' || dex === 'bulk';
+  const showPnl = dex === 'decibel' || dex === 'ostium' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'hotstuff' || dex === 'grvt' || dex === 'gmtrade' || dex === 'flash' || dex === 'hibachi' || dex === 'katana' || dex === 'gmx' || dex === 'avantis' || dex === 'lighter' || dex === 'bulk';
 
   return (
     <table style={S.table}>

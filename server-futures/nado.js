@@ -378,16 +378,20 @@ function positionStats(balance, market) {
   return { amount, absAmount, symbol, mark, vQuote, entry, notional, pnl };
 }
 
-function normalizePosition(balance, market, marginOverride = null) {
+function normalizePosition(balance, market) {
   const stats = positionStats(balance, market);
   if (!stats) return null;
   const { amount, absAmount, symbol, mark, entry, notional, pnl } = stats;
   const initialHealth = rawToDecimal(balance?.healthContributions?.initial || 0);
   const unweightedHealth = rawToDecimal(balance?.healthContributions?.unweighted || 0);
+  // Nado unified margin does not reserve the order-panel leverage selection on
+  // a position. The venue's exact position-level margin metric is the initial
+  // risk penalty exposed by the engine: unweighted health minus initial
+  // health. Do not replace this with a proportional share of account equity;
+  // that turns a small position in a well-funded account into a misleading
+  // sub-1x value (for example, 0.1x instead of BTC's risk-implied 20x).
   const riskMargin = unweightedHealth.minus(initialHealth).abs();
-  const margin = BigNumber.isBigNumber(marginOverride) && marginOverride.gt(0)
-    ? marginOverride
-    : riskMargin;
+  const margin = riskMargin;
   const leverage = margin.gt(0) ? notional.div(margin) : new BigNumber(0);
   return {
     symbol,
@@ -399,11 +403,13 @@ function normalizePosition(balance, market, marginOverride = null) {
     liquidation_price: null,
     margin: margin.toFixed(),
     leverage: leverage.gt(0) ? leverage.toFixed(2) : null,
+    leverage_source: leverage.gt(0) ? 'nado_initial_health_margin' : null,
     pnl_usd: pnl.toFixed(),
     pnl_pct: margin.gt(0) ? pnl.div(margin).times(100).toNumber() : 0,
     pair_index: Number(balance.productId),
     trade_index: null,
     is_isolated: false,
+    margin_type: 'cross',
     _raw: balance,
   };
 }
@@ -415,30 +421,8 @@ async function getPositionsByAddress(address) {
     const [summary, byMarket] = await Promise.all([getSubaccountSummary(clean), marketMap()]);
     const balances = Array.isArray(summary?.balances) ? summary.balances : [];
     const positionBalances = balances.filter(b => Number(b.type) === PRODUCT_TYPE_PERP && !balanceAmount(b).isZero());
-    const quote = balances.find(b => Number(b.productId) === QUOTE_PRODUCT_ID);
-    const quoteAmount = balanceAmount(quote);
-    const spotCollateral = balances
-      .filter(b => Number(b.type) === PRODUCT_TYPE_SPOT && !balanceAmount(b).isZero())
-      .reduce((acc, b) => acc.plus(spotCollateralValue(b)), new BigNumber(0));
-    const statsByProduct = new Map();
-    const totalNotional = positionBalances.reduce((acc, b) => {
-      const stats = positionStats(b, byMarket.get(Number(b.productId)));
-      if (!stats) return acc;
-      statsByProduct.set(Number(b.productId), stats);
-      return acc.plus(stats.notional);
-    }, new BigNumber(0));
-    const perpEquity = [...statsByProduct.values()].reduce((acc, stats) => (
-      acc.plus(stats.amount.times(stats.mark || 0).plus(stats.vQuote))
-    ), new BigNumber(0));
-    const accountEquity = spotCollateral.plus(perpEquity);
     const result = positionBalances
-      .map((b) => {
-        const stats = statsByProduct.get(Number(b.productId));
-        const allocatedMargin = stats && totalNotional.gt(0) && accountEquity.gt(0)
-          ? accountEquity.times(stats.notional).div(totalNotional)
-          : null;
-        return normalizePosition(b, byMarket.get(Number(b.productId)), allocatedMargin);
-      })
+      .map(b => normalizePosition(b, byMarket.get(Number(b.productId))))
       .filter(Boolean);
     positionsCache.set(clean, { at: Date.now(), value: result });
     return result;
@@ -633,4 +617,8 @@ module.exports = {
   getOrdersByAddress,
   getAccountTradeHistory,
   importFillsForPlayer,
+  __test: {
+    normalizePosition,
+    positionStats,
+  },
 };

@@ -164,6 +164,27 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_bulk_builder_proofs_player_account
     ON bulk_order_builder_proofs(player_id, account, created_at);
 
+  -- Ondo's authenticated fill feed does not repeat the builderCode payload.
+  -- Persist every server-routed order so later fill imports can prove that a
+  -- fill originated from Clash and carried the configured one-bps builder fee.
+  CREATE TABLE IF NOT EXISTS ondo_builder_orders (
+    order_id        TEXT PRIMARY KEY,
+    player_id       TEXT NOT NULL,
+    account         TEXT NOT NULL,
+    client_order_id TEXT,
+    symbol          TEXT NOT NULL,
+    side            TEXT NOT NULL,
+    order_type      TEXT NOT NULL,
+    builder_code    TEXT NOT NULL,
+    builder_fee_bps INTEGER NOT NULL CHECK (builder_fee_bps = 1),
+    request_json    TEXT NOT NULL,
+    response_json   TEXT NOT NULL,
+    created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_ondo_builder_orders_player_account
+    ON ondo_builder_orders(player_id, account, created_at);
+
   CREATE TABLE IF NOT EXISTS gmtrade_pending_trade_reports (
     signature       TEXT PRIMARY KEY,
     player_id       TEXT NOT NULL,
@@ -450,6 +471,28 @@ const stmts = {
     WHERE signature = ?
   `),
   deletePendingGmtradeTradeReport: db.prepare('DELETE FROM gmtrade_pending_trade_reports WHERE signature = ?'),
+  recordOndoBuilderOrder: db.prepare(`
+    INSERT INTO ondo_builder_orders (
+      order_id, player_id, account, client_order_id, symbol, side, order_type,
+      builder_code, builder_fee_bps, request_json, response_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(order_id) DO UPDATE SET
+      player_id = excluded.player_id,
+      account = excluded.account,
+      client_order_id = COALESCE(excluded.client_order_id, ondo_builder_orders.client_order_id),
+      symbol = excluded.symbol,
+      side = excluded.side,
+      order_type = excluded.order_type,
+      builder_code = excluded.builder_code,
+      builder_fee_bps = excluded.builder_fee_bps,
+      request_json = excluded.request_json,
+      response_json = excluded.response_json
+  `),
+  getOndoBuilderOrder: db.prepare(`
+    SELECT * FROM ondo_builder_orders
+    WHERE order_id = ? AND player_id = ? AND account = ?
+    LIMIT 1
+  `),
   getDexWorkerState: db.prepare('SELECT value FROM dex_worker_state WHERE dex = ? AND key = ?'),
   setDexWorkerState: db.prepare(`
     INSERT INTO dex_worker_state (dex, key, value, updated_at)
@@ -720,6 +763,48 @@ function deletePendingGmtradeTradeReport(signature) {
   return { changes: info.changes || 0 };
 }
 
+function recordOndoBuilderOrder({
+  orderId,
+  playerId,
+  account,
+  clientOrderId = null,
+  symbol,
+  side,
+  orderType,
+  builderCode,
+  builderFeeBps,
+  requestJson,
+  responseJson,
+}) {
+  if (!orderId || !playerId || !account || !symbol || !side || !orderType || !builderCode) {
+    return { changes: 0 };
+  }
+  if (Number(builderFeeBps) !== 1) throw new Error('Ondo builder fee must be exactly 1 bps');
+  const info = stmts.recordOndoBuilderOrder.run(
+    String(orderId),
+    String(playerId),
+    String(account).toLowerCase(),
+    clientOrderId == null ? null : String(clientOrderId),
+    String(symbol).toUpperCase(),
+    String(side).toLowerCase(),
+    String(orderType).toLowerCase(),
+    String(builderCode),
+    1,
+    typeof requestJson === 'string' ? requestJson : JSON.stringify(requestJson || {}),
+    typeof responseJson === 'string' ? responseJson : JSON.stringify(responseJson || {}),
+  );
+  return { changes: info.changes || 0 };
+}
+
+function getOndoBuilderOrder(orderId, playerId, account) {
+  if (!orderId || !playerId || !account) return null;
+  return stmts.getOndoBuilderOrder.get(
+    String(orderId),
+    String(playerId),
+    String(account).toLowerCase(),
+  ) || null;
+}
+
 // ---------- Exports ----------
 
 module.exports = {
@@ -739,6 +824,8 @@ module.exports = {
   listPendingGmtradeTradeReports,
   markPendingGmtradeTradeReportAttempt,
   deletePendingGmtradeTradeReport,
+  recordOndoBuilderOrder,
+  getOndoBuilderOrder,
   recordDecibelOrderProof,
   getDecibelOrderProof,
   upgradeDecibelWorkerTradeByClient,

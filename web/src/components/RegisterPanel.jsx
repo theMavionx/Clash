@@ -6,6 +6,7 @@ import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { useAptosWallet } from '../contexts/AptosWalletContext';
 import { DEX_CONFIG, getAvailableDexConfigs } from '../contexts/DexContext';
 import { useAuthFlow } from '../auth/useAuthFlow';
+import { useOndoRegionAccess } from '../hooks/useOndoRegionAccess';
 import { openSolanaWallet } from '../lib/solanaWalletUi';
 
 const GAME_AUTH_STORAGE_KEY = 'clash_game_auth_v1';
@@ -60,6 +61,23 @@ function Spinner({ label }) {
 function DexPicker({ onPick, isInFrame, isSolanaMobile }) {
   const dexOptions = getAvailableDexConfigs({ isInFrame, isSolanaMobile });
   const isDesktopGrid = useMediaQuery('(min-width: 900px) and (min-height: 620px)');
+  const [showOndoGate, setShowOndoGate] = useState(false);
+  const { regionAccess, checkRegionAccess, retryRegionAccess } = useOndoRegionAccess(true);
+  if (showOndoGate) {
+    return (
+      <OndoRegionGate
+        access={regionAccess}
+        onRetry={async () => {
+          const access = await retryRegionAccess();
+          if (access.allowed) {
+            setShowOndoGate(false);
+            onPick('ondo');
+          }
+        }}
+        onBack={() => setShowOndoGate(false)}
+      />
+    );
+  }
   return (
     <div style={S.bodyStack}>
       <h3 style={S.sectionTitle}>CHOOSE YOUR DEX</h3>
@@ -71,7 +89,20 @@ function DexPicker({ onPick, isInFrame, isSolanaMobile }) {
           <button
             key={cfg.id}
             type="button"
-            onClick={() => onPick(cfg.id)}
+            onClick={async () => {
+              if (cfg.id !== 'ondo' || regionAccess.status === 'allowed') {
+                onPick(cfg.id);
+                return;
+              }
+              setShowOndoGate(true);
+              if (regionAccess.status === 'idle' || regionAccess.status === 'checking') {
+                const access = await checkRegionAccess();
+                if (access.allowed) {
+                  setShowOndoGate(false);
+                  onPick('ondo');
+                }
+              }
+            }}
             style={{
               ...S.dexCard,
               ...(isDesktopGrid ? S.dexCardDesktop : null),
@@ -105,6 +136,7 @@ function DexPicker({ onPick, isInFrame, isSolanaMobile }) {
                   cfg.id === 'hyperliquid' ? 'SELF-CUSTODY · EVM' :
                   cfg.id === 'risex' ? 'SELF-CUSTODY · RISE' :
                   cfg.id === 'nado' ? 'SELF-CUSTODY · INK' :
+                  cfg.id === 'ondo' ? 'SELF-CUSTODY · EVM' :
                   cfg.id === 'hibachi' ? 'SELF-CUSTODY · EVM' :
                   cfg.id === 'hotstuff' ? 'SELF-CUSTODY · HOT' :
                   cfg.id === 'grvt' ? 'SELF-CUSTODY · GRVT' :
@@ -123,6 +155,51 @@ function DexPicker({ onPick, isInFrame, isSolanaMobile }) {
       </div>
     </div>
   );
+}
+
+function OndoRegionGate({ access, onRetry, onBack }) {
+  const checking = !access || access.status === 'idle' || access.status === 'checking';
+  const unavailable = access?.status === 'unavailable';
+  return (
+    <div style={S.bodyStack}>
+      <img
+        src={DEX_CONFIG.ondo.logo}
+        alt="ONDO PERPS"
+        style={{width: 88, height: 88, objectFit: 'contain', alignSelf: 'center', borderRadius: 18, background: '#000'}}
+      />
+      <h3 style={{...S.sectionTitle, textAlign: 'center'}}>
+        {checking ? 'CHECKING REGION...' : unavailable ? 'REGION CHECK UNAVAILABLE' : 'ONDO PERPS IS UNAVAILABLE'}
+      </h3>
+      <p style={{...S.subtle, textAlign: 'center'}}>
+        {checking
+          ? 'Please wait while Clash checks whether Ondo trading is available in your country or IP region.'
+          : unavailable
+            ? (access?.message || 'Clash could not verify your region, so Ondo access remains locked.')
+            : 'Clash cannot provide Ondo trading access to users in the United States, Canada, U.S. territories, or sanctioned jurisdictions.'}
+      </p>
+      {!checking && (
+        <div style={{border: '2px solid #FCA5A5', borderRadius: 12, padding: '12px 14px', background: '#FEE2E2', color: '#991B1B', fontSize: 12, lineHeight: 1.45, fontWeight: 800, textAlign: 'center'}}>
+          Wallet sign-in and all Ondo account and trading actions are disabled through Clash in restricted regions.
+        </div>
+      )}
+      {unavailable && <button type="button" style={S.primaryBtn} onClick={onRetry}>RETRY CHECK</button>}
+      {!checking && <button type="button" style={S.secondaryBtn} onClick={onBack}>CHOOSE ANOTHER EXCHANGE</button>}
+    </div>
+  );
+}
+
+function ConnectOndo(props) {
+  const { regionAccess, retryRegionAccess } = useOndoRegionAccess(true);
+  if (regionAccess.status !== 'allowed') {
+    return (
+      <OndoRegionGate
+        access={regionAccess}
+        onRetry={retryRegionAccess}
+        onBack={props.onBack}
+      />
+    );
+  }
+  return <ConnectAvantis {...props} dex="ondo" />;
 }
 
 function useMediaQuery(query) {
@@ -419,6 +496,7 @@ function ConnectAvantis({ onOpenEvmModal, onPrivyLogin, privyEnabled, privyAuthe
     : dex === 'hyperliquid' ? 'HYPERLIQUID'
     : dex === 'risex' ? 'RISEX'
     : dex === 'nado' ? 'NADO'
+    : dex === 'ondo' ? 'ONDO PERPS'
     : dex === 'hibachi' ? 'HIBACHI'
     : dex === 'hotstuff' ? 'HOTSTUFF'
     : dex === 'grvt' ? 'GRVT'
@@ -432,6 +510,7 @@ function ConnectAvantis({ onOpenEvmModal, onPrivyLogin, privyEnabled, privyAuthe
     : dex === 'hyperliquid' ? 'EVM'
     : dex === 'risex' ? 'RISE'
     : dex === 'nado' ? 'Ink'
+    : dex === 'ondo' ? 'Ethereum'
     : dex === 'hibachi' ? 'EVM'
     : dex === 'hotstuff' ? 'Hotstuff L1'
     : dex === 'grvt' ? 'GRVT Exchange'
@@ -440,11 +519,12 @@ function ConnectAvantis({ onOpenEvmModal, onPrivyLogin, privyEnabled, privyAuthe
     : dex === 'gmtrade' ? 'Solana'
     : dex === 'flash' ? 'Solana'
     : 'Base';
+  const chainArticle = chainName === 'EVM' || chainName === 'Ethereum' ? 'an' : 'a';
   return (
     <div style={S.bodyStack}>
       <h3 style={S.sectionTitle}>CONNECT TO {venue}</h3>
       <p style={S.subtle}>
-        Sign in with email or connect a {chainName} wallet. Trades are signed by your own wallet - we never hold your keys.
+        Sign in with email or connect {chainArticle} {chainName} wallet. Trades are signed by your own wallet - we never hold your keys.
       </p>
       {privyEnabled && (
         <button style={S.primaryBtn} onClick={onPrivyLogin}>
@@ -583,6 +663,7 @@ function RegisterPanel() {
                   dex === 'hyperliquid' ? 'Hyperliquid' :
                   dex === 'risex' ? 'RISEx' :
                   dex === 'nado' ? 'Nado' :
+                  dex === 'ondo' ? 'Ondo Perps' :
                   dex === 'hibachi' ? 'Hibachi' :
                   dex === 'hotstuff' ? 'Hotstuff' :
                   dex === 'grvt' ? 'GRVT' :
@@ -650,6 +731,17 @@ function RegisterPanel() {
             />
           );
         }
+        if (dex === 'ondo') {
+          return (
+            <ConnectOndo
+              onBack={actions.unpickDex}
+              onOpenEvmModal={openEvmConnect}
+              onPrivyLogin={actions.loginWithPrivy}
+              privyEnabled={privyEnabled}
+              privyAuthed={privyAuthed}
+            />
+          );
+        }
         if (dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'lighter') {
           return (
             <ConnectAvantis
@@ -705,6 +797,7 @@ function RegisterPanel() {
     if (dex === 'hyperliquid') return 'HYPERLIQUID LOGIN';
     if (dex === 'risex') return 'RISEX LOGIN';
     if (dex === 'nado') return 'NADO LOGIN';
+    if (dex === 'ondo') return 'ONDO PERPS LOGIN';
     if (dex === 'hibachi') return 'HIBACHI LOGIN';
     if (dex === 'hotstuff') return 'HOTSTUFF LOGIN';
     if (dex === 'grvt') return 'GRVT LOGIN';
@@ -734,7 +827,7 @@ function RegisterPanel() {
       <EvmWalletModal
         open={evmModalOpen}
         onClose={() => setEvmModalOpen(false)}
-        targetChain={!dexPicked ? 'baseConnect' : dex === 'gmx' || dex === 'ostium' || dex === 'hyperliquid' ? 'arbitrum' : dex === 'monad' ? 'monad' : dex === 'risex' ? 'rise' : dex === 'nado' ? 'ink' : dex === 'hibachi' ? 'base' : dex === 'grvt' ? 'baseConnect' : dex === 'katana' ? 'katana' : dex === 'hotstuff' ? 'mainnet' : dex === 'lighter' ? 'baseConnect' : 'base'}
+        targetChain={!dexPicked ? 'baseConnect' : dex === 'gmx' || dex === 'ostium' || dex === 'hyperliquid' ? 'arbitrum' : dex === 'monad' ? 'monad' : dex === 'risex' ? 'rise' : dex === 'nado' ? 'ink' : dex === 'hibachi' ? 'base' : dex === 'grvt' ? 'baseConnect' : dex === 'katana' ? 'katana' : dex === 'hotstuff' || dex === 'ondo' ? 'mainnet' : dex === 'lighter' ? 'baseConnect' : 'base'}
         onConnected={handleEvmConnected}
       />
     </div>

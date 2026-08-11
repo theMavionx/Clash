@@ -29,6 +29,7 @@ const cases = [
   ['hyperliquid', { account: { taker_fee: 0.00035 } }, 20 - (200 * 0.00045 + 220 * 0.00045)],
   ['risex', { account: { taker_fee: 0.0005 } }, 20 - (200 * 0.0006 + 220 * 0.0006)],
   ['nado', { account: { taker_fee: 0.0003 } }, 20 - (200 * 0.0004 + 220 * 0.0004)],
+  ['ondo', { account: { taker_fee: 0.00035 } }, 20 - (200 * 0.00045 + 220 * 0.00045)],
   ['hibachi', { account: { taker_fee: 0.0004 } }, 20 - (200 * 0.0004 + 220 * 0.0004)],
   ['hotstuff', { account: { taker_fee: 0.0004 } }, 20 - (200 * 0.0005 + 220 * 0.0005)],
   ['grvt', {}, 20 - (200 * 0.00055 + 220 * 0.00055)],
@@ -80,7 +81,7 @@ assert.equal(phoenixPresentation.usesVenueGross, true, 'Phoenix live cards use v
 assert.equal(phoenixPresentation.primaryLabel, 'PnL');
 approx(phoenixPresentation.primaryPnlUsd, -35.2915, 'Phoenix primary gross PnL');
 approx(phoenixPresentation.primaryPnlPct, -4.9494147764, 'Phoenix primary gross ROE');
-assert.equal(phoenixPresentation.secondaryLabel, 'Est. net after fees');
+assert.equal(phoenixPresentation.secondaryLabel, 'Est. after fees');
 approx(phoenixPresentation.secondaryNetPnlUsd, -42.480472138, 'Phoenix secondary net PnL');
 approx(phoenixPresentation.secondaryNetPnlPct, -5.9576236914, 'Phoenix secondary net ROE');
 
@@ -92,7 +93,7 @@ const risexPresentation = positionPnlPresentation({
   pnlFees: phoenix,
 });
 assert.equal(risexPresentation.usesVenueGross, false, 'other venues keep net PnL primary');
-assert.equal(risexPresentation.primaryLabel, 'Net');
+assert.equal(risexPresentation.primaryLabel, 'PnL');
 approx(risexPresentation.primaryPnlUsd, 19.6, 'other venue primary net PnL');
 assert.equal(risexPresentation.secondaryNetPnlUsd, null, 'other venue has no duplicate secondary net');
 
@@ -136,7 +137,7 @@ approx(lighterRates.builderRate, 0.0001, 'Lighter integrator fee');
 
 assert.deepEqual(
   [...FEE_AWARE_POSITION_DEXES].sort(),
-  ['avantis', 'bulk', 'decibel', 'flash', 'gmtrade', 'gmx', 'grvt', 'hibachi', 'hotstuff', 'hyperliquid', 'katana', 'lighter', 'monad', 'nado', 'ostium', 'pacifica', 'phoenix', 'risex'].sort(),
+  ['avantis', 'bulk', 'decibel', 'flash', 'gmtrade', 'gmx', 'grvt', 'hibachi', 'hotstuff', 'hyperliquid', 'katana', 'lighter', 'monad', 'nado', 'ondo', 'ostium', 'pacifica', 'phoenix', 'risex'].sort(),
   'every FuturesPanel venue must be covered by fee-aware PnL',
 );
 

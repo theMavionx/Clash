@@ -3,6 +3,7 @@ import { createPhoenixPublicWsClient, phoenixSymbol } from '../lib/phoenixClient
 import { PACIFICA_WS_URL, pacificaFetch } from '../lib/pacificaClient';
 import { startDecibelOrderBook } from '../lib/decibelOrderBook';
 import { normalizeBulkOrderBook } from '../lib/bulkClient';
+import { ONDO_WS_URL, buildOndoWsPing, ondoMarketName } from '../lib/ondoClient';
 
 const PRICE_STEPS = [0.01, 0.02, 0.1, 1];
 const FUTURES_API = import.meta.env.VITE_FUTURES_API || '/api/futures';
@@ -98,6 +99,77 @@ function OrderBook({
   const wsRef = useRef(null);
 
   useEffect(() => {
+    if (dex === 'ondo') {
+      let cancelled = false;
+      let socket = null;
+      let heartbeat = null;
+      let reconnectTimer = null;
+      let reconnectAttempts = 0;
+      const controller = new AbortController();
+      const selectedMarket = ondoMarketName(marketName || symbol);
+      const loadSnapshot = async () => {
+        try {
+          const params = new URLSearchParams({ dex: 'ondo', symbol, limit: '25' });
+          const response = await fetch(`${FUTURES_API}/orderbook?${params.toString()}`, { signal: controller.signal });
+          const json = await response.json().catch(() => null);
+          if (!response.ok) throw new Error(json?.detail || json?.error || `Ondo order book ${response.status}`);
+          if (!cancelled) setBook(normalizePhoenixBook(json));
+        } catch (error) {
+          if (!cancelled && error?.name !== 'AbortError') console.warn('[Ondo] order book snapshot failed', error?.message || error);
+        }
+      };
+
+      const connect = () => {
+        if (cancelled) return;
+        socket = new WebSocket(ONDO_WS_URL);
+        wsRef.current = socket;
+        socket.addEventListener('open', () => {
+          reconnectAttempts = 0;
+          socket.send(JSON.stringify({
+            op: 'subscribe',
+            channel: 'depthBooksPerps',
+            markets: [selectedMarket],
+            depthLevels: '0.01',
+            limit: 25,
+          }));
+          const sendPing = () => {
+            if (socket?.readyState !== WebSocket.OPEN) return;
+            const id = globalThis.crypto?.randomUUID?.() || `clash-book-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+            socket.send(JSON.stringify(buildOndoWsPing(id)));
+          };
+          sendPing();
+          heartbeat = window.setInterval(sendPing, 1_000);
+        });
+        socket.addEventListener('message', (event) => {
+          let message;
+          try { message = JSON.parse(event.data); } catch { return; }
+          if (message?.type !== 'update' || message?.channel !== 'depthBooksPerps' || !Array.isArray(message.data)) return;
+          const update = message.data.find(row => ondoMarketName(row?.market) === selectedMarket);
+          if (update && !cancelled) setBook(normalizePhoenixBook(update));
+        });
+        socket.addEventListener('close', () => {
+          if (heartbeat) window.clearInterval(heartbeat);
+          heartbeat = null;
+          if (cancelled) return;
+          void loadSnapshot();
+          reconnectAttempts += 1;
+          reconnectTimer = window.setTimeout(connect, Math.min(15_000, 1_000 * (2 ** Math.min(reconnectAttempts, 4))));
+        });
+        socket.addEventListener('error', () => socket?.close());
+      };
+
+      void loadSnapshot();
+      connect();
+      return () => {
+        cancelled = true;
+        controller.abort();
+        if (heartbeat) window.clearInterval(heartbeat);
+        if (reconnectTimer) window.clearTimeout(reconnectTimer);
+        socket?.close();
+        if (wsRef.current === socket) wsRef.current = null;
+      };
+    }
+
     if (dex === 'bulk') {
       let cancelled = false;
       const controller = new AbortController();

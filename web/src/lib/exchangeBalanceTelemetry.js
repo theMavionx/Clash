@@ -1,6 +1,6 @@
 const SUPPORTED_EXCHANGES = new Set([
   'pacifica', 'avantis', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix',
-  'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana',
+  'hyperliquid', 'risex', 'nado', 'ondo', 'hibachi', 'hotstuff', 'grvt', 'katana',
   'gmtrade', 'flash', 'lighter', 'bulk',
 ]);
 

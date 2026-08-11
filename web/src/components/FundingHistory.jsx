@@ -3,6 +3,7 @@ import { getReadClient } from '../lib/decibel';
 import { fetchPerplPositionHistory } from '../lib/perplClient';
 import { phoenixFetch, phoenixSymbol } from '../lib/phoenixClient';
 import { pacificaFetch } from '../lib/pacificaClient';
+import { readOndoSession } from '../lib/ondoClient';
 
 const READ_TIMEOUT_MS = 8000;
 
@@ -159,6 +160,24 @@ function FundingHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [
           if (!cancelled) setPayments(rows.map(normalizePhoenixFunding).filter(p => p.symbol));
           return;
         }
+        if (dex === 'ondo') {
+          const session = readOndoSession(addr);
+          if (!session?.token) throw new Error('Sign in to Ondo Perps to view funding history');
+          const token = typeof window !== 'undefined' ? window._playerToken : '';
+          const response = await fetch(`/api/futures/ondo/funding?dex=ondo&account=${encodeURIComponent(addr)}&limit=100`, {
+            headers: {
+              ...(token ? { 'x-token': token } : {}),
+              'x-dex': 'ondo',
+              'x-ondo-wallet': addr,
+              'x-ondo-token': session.token,
+            },
+            signal: controller.signal,
+          });
+          const data = await response.json().catch(() => ({}));
+          if (!response.ok) throw new Error(data?.detail || data?.error || `Ondo funding history ${response.status}`);
+          if (!cancelled) setPayments(Array.isArray(data?.result) ? data.result : []);
+          return;
+        }
         if (dex === 'hyperliquid' || dex === 'nado' || dex === 'ostium') {
           if (!cancelled) setPayments([]);
           return;
@@ -218,7 +237,7 @@ function FundingHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [
     return <div style={{ padding: 20, textAlign: 'center', color: '#B71C1C', fontWeight: 800 }}>{error}</div>;
   }
   if (!filtered.length) {
-    const name = dex === 'decibel' ? 'Decibel ' : dex === 'ostium' ? 'Ostium rollover ' : dex === 'monad' ? 'Perpl ' : dex === 'phoenix' ? 'Phoenix ' : dex === 'hyperliquid' ? 'Hyperliquid ' : dex === 'nado' ? 'Nado ' : '';
+    const name = dex === 'decibel' ? 'Decibel ' : dex === 'ostium' ? 'Ostium rollover ' : dex === 'monad' ? 'Perpl ' : dex === 'phoenix' ? 'Phoenix ' : dex === 'hyperliquid' ? 'Hyperliquid ' : dex === 'nado' ? 'Nado ' : dex === 'ondo' ? 'Ondo ' : '';
     return <div style={{ padding: 20, textAlign: 'center', color: '#a3906a' }}>No {name}funding payments</div>;
   }
 

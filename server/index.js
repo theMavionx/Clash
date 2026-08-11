@@ -835,6 +835,7 @@ app.get('/api/admin/panel', (req, res) => {
               <option value="hyperliquid">Hyperliquid</option>
               <option value="risex">RISEx</option>
               <option value="nado">Nado</option>
+              <option value="ondo">Ondo Perps</option>
               <option value="grvt">GRVT</option>
               <option value="hotstuff">Hotstuff</option>
             </select>
@@ -859,6 +860,7 @@ app.get('/api/admin/panel', (req, res) => {
               <label style="font-size:11px;color:#d1d5db;display:flex;align-items:center;gap:6px"><input data-tn-dex-check value="hyperliquid" type="checkbox" onchange="updateTournamentDexScopeUi();updateTournamentTeamUi()" style="width:auto;margin:0">Hyperliquid</label>
               <label style="font-size:11px;color:#d1d5db;display:flex;align-items:center;gap:6px"><input data-tn-dex-check value="risex" type="checkbox" onchange="updateTournamentDexScopeUi();updateTournamentTeamUi()" style="width:auto;margin:0">RISEx</label>
               <label style="font-size:11px;color:#d1d5db;display:flex;align-items:center;gap:6px"><input data-tn-dex-check value="nado" type="checkbox" onchange="updateTournamentDexScopeUi();updateTournamentTeamUi()" style="width:auto;margin:0">Nado</label>
+              <label style="font-size:11px;color:#d1d5db;display:flex;align-items:center;gap:6px"><input data-tn-dex-check value="ondo" type="checkbox" onchange="updateTournamentDexScopeUi();updateTournamentTeamUi()" style="width:auto;margin:0">Ondo Perps</label>
               <label style="font-size:11px;color:#d1d5db;display:flex;align-items:center;gap:6px"><input data-tn-dex-check value="grvt" type="checkbox" onchange="updateTournamentDexScopeUi();updateTournamentTeamUi()" style="width:auto;margin:0">GRVT</label>
               <label style="font-size:11px;color:#d1d5db;display:flex;align-items:center;gap:6px"><input data-tn-dex-check value="hotstuff" type="checkbox" onchange="updateTournamentDexScopeUi();updateTournamentTeamUi()" style="width:auto;margin:0">Hotstuff</label>
             </div>
@@ -1544,6 +1546,7 @@ function renderPlayers() {
   const hplCount   = players.filter(p => p.dex === 'hyperliquid').length;
   const risCount   = players.filter(p => p.dex === 'risex').length;
   const ndoCount   = players.filter(p => p.dex === 'nado').length;
+  const ondCount   = players.filter(p => p.dex === 'ondo').length;
   const hibCount   = players.filter(p => p.dex === 'hibachi').length;
   const grvtCount  = players.filter(p => p.dex === 'grvt').length;
   const hotCount    = players.filter(p => p.dex === 'hotstuff').length;
@@ -1573,6 +1576,7 @@ function renderPlayers() {
     '<div class="stat" style="border-color:#16a34a"><div class="v" style="color:#86efac;font-size:22px">' + hplCount + '</div><div class="l">Hyperliquid</div></div>' +
     '<div class="stat" style="border-color:#e11d48"><div class="v" style="color:#fb7185;font-size:22px">' + risCount + '</div><div class="l">RISEx</div></div>' +
     '<div class="stat" style="border-color:#00b8d9"><div class="v" style="color:#67e8f9;font-size:22px">' + ndoCount + '</div><div class="l">Nado</div></div>' +
+    '<div class="stat" style="border-color:#111111"><div class="v" style="color:#e5e7eb;font-size:22px">' + ondCount + '</div><div class="l">Ondo Perps</div></div>' +
     '<div class="stat" style="border-color:#dc2626"><div class="v" style="color:#f87171;font-size:22px">' + hibCount + '</div><div class="l">Hibachi</div></div>' +
     '<div class="stat" style="border-color:#f59e0b"><div class="v" style="color:#fbbf24;font-size:22px">' + grvtCount + '</div><div class="l">GRVT</div></div>' +
     '<div class="stat" style="border-color:#ef4444"><div class="v" style="color:#fca5a5;font-size:22px">' + hotCount + '</div><div class="l">Hotstuff</div></div>' +
@@ -1598,6 +1602,7 @@ function renderPlayers() {
     if (d === 'hyperliquid') return '<span class="badge" style="background:#14532d;color:#bbf7d0">HL</span>';
     if (d === 'risex') return '<span class="badge" style="background:#7f1d1d;color:#fecdd3">RIS</span>';
     if (d === 'nado') return '<span class="badge" style="background:#164e63;color:#cffafe">NDO</span>';
+    if (d === 'ondo') return '<span class="badge" style="background:#111827;color:#f9fafb">ONDO</span>';
     if (d === 'hibachi') return '<span class="badge" style="background:#7f1d1d;color:#fecaca">HIB</span>';
     if (d === 'grvt') return '<span class="badge" style="background:#78350f;color:#fde68a">GRVT</span>';
     if (d === 'hotstuff') return '<span class="badge" style="background:#7f1d1d;color:#fecaca">HOT</span>';
@@ -2723,6 +2728,7 @@ async function loadStats() {
     const hplCount = (byDex.find(x => x.dex === 'hyperliquid') || {}).n || 0;
     const risCount = (byDex.find(x => x.dex === 'risex') || {}).n || 0;
     const ndoCount = (byDex.find(x => x.dex === 'nado') || {}).n || 0;
+    const ondCount = (byDex.find(x => x.dex === 'ondo') || {}).n || 0;
     const hibCount = (byDex.find(x => x.dex === 'hibachi') || {}).n || 0;
     const grvtCount = (byDex.find(x => x.dex === 'grvt') || {}).n || 0;
     const hotCount = (byDex.find(x => x.dex === 'hotstuff') || {}).n || 0;
@@ -2742,6 +2748,7 @@ async function loadStats() {
     const hplRew = rewardsMap.hyperliquid || {};
     const risRew = rewardsMap.risex || {};
     const ndoRew = rewardsMap.nado || {};
+    const ondRew = rewardsMap.ondo || {};
     const hibRew = rewardsMap.hibachi || {};
     const grvtRew = rewardsMap.grvt || {};
     const hotRew = rewardsMap.hotstuff || {};
@@ -2761,6 +2768,7 @@ async function loadStats() {
       dexCard('hyperliquid', 'Hyperliquid',     '#16a34a', hplCount, hplRew.total_gold || 0, hplRew.total_volume || 0, activityLines('hyperliquid')) +
       dexCard('risex',    'RISEx',             '#e11d48', risCount, risRew.total_gold || 0, risRew.total_volume || 0, activityLines('risex')) +
       dexCard('nado',     'Nado · Ink',        '#00b8d9', ndoCount, ndoRew.total_gold || 0, ndoRew.total_volume || 0, activityLines('nado')) +
+      dexCard('ondo',     'Ondo Perps · Ethereum', '#111111', ondCount, ondRew.total_gold || 0, ondRew.total_volume || 0, activityLines('ondo')) +
       dexCard('hibachi',  'Hibachi',           '#dc2626', hibCount, hibRew.total_gold || 0, hibRew.total_volume || 0, activityLines('hibachi')) +
       dexCard('grvt',     'GRVT / GRVT Exchange', '#f59e0b', grvtCount, grvtRew.total_gold || 0, grvtRew.total_volume || 0, activityLines('grvt')) +
       dexCard('hotstuff', 'Hotstuff',          '#ef4444', hotCount, hotRew.total_gold || 0, hotRew.total_volume || 0, activityLines('hotstuff')) +
@@ -2916,6 +2924,7 @@ async function loadStats() {
       topTraderTable('risex',   'RISEx',           '#e11d48') +
       topTraderTable('phoenix', 'Phoenix · Solana', '#f97316') +
       topTraderTable('nado',    'Nado · Ink',       '#00b8d9') +
+      topTraderTable('ondo',    'Ondo Perps · Ethereum', '#111827') +
       topTraderTable('hibachi', 'Hibachi',          '#dc2626');
 
     document.getElementById('topTradersByDex').innerHTML +=
@@ -2944,6 +2953,7 @@ async function loadStats() {
       if (d === 'hyperliquid') return '<span class="badge" style="background:#14532d;color:#bbf7d0">HL</span>';
       if (d === 'risex') return '<span class="badge" style="background:#7f1d1d;color:#fecdd3">RIS</span>';
       if (d === 'nado') return '<span class="badge" style="background:#164e63;color:#cffafe">NDO</span>';
+      if (d === 'ondo') return '<span class="badge" style="background:#111827;color:#f9fafb">ONDO</span>';
       if (d === 'hibachi') return '<span class="badge" style="background:#7f1d1d;color:#fecaca">HIB</span>';
       if (d === 'grvt') return '<span class="badge" style="background:#78350f;color:#fde68a">GRVT</span>';
       if (d === 'hotstuff') return '<span class="badge" style="background:#7f1d1d;color:#fecaca">HOT</span>';
@@ -3198,6 +3208,7 @@ const TOURNAMENT_DEX_LABELS_ADMIN = {
   hyperliquid: 'Hyperliquid',
   risex: 'RISEx',
   nado: 'Nado',
+  ondo: 'Ondo Perps',
   hibachi: 'Hibachi',
   grvt: 'GRVT',
   hotstuff: 'Hotstuff',
@@ -4489,6 +4500,7 @@ function renderRevenueAnalytics(data) {
     { key: 'hyperliquid', label: 'Hyperliquid' },
     { key: 'risex', label: 'RISE' },
     { key: 'nado', label: 'Nado' },
+    { key: 'ondo', label: 'Ondo Perps' },
     { key: 'hibachi', label: 'Hibachi' },
     { key: 'hotstuff', label: 'Hotstuff' },
     { key: 'katana', label: 'Katana Perps' },
@@ -4573,6 +4585,7 @@ async function loadEarnings(force) {
       ['grvt',     'GRVT',     '#5eead4', '#14b8a6'],
       ['risex',    'RISE',     '#c084fc', '#9333ea'],
       ['nado',     'Nado',     '#67e8f9', '#00b8d9'],
+      ['ondo',     'Ondo Perps', '#f8fafc', '#111827'],
       ['hibachi',  'Hibachi',  '#f87171', '#dc2626'],
       ['hotstuff', 'Hotstuff', '#fca5a5', '#ef4444'],
       ['katana',   'Katana Perps', '#67e8f9', '#06b6d4'],

@@ -9,6 +9,7 @@ const COMMON_PRIVATE_DEXES = new Set([
   'hyperliquid',
   'risex',
   'nado',
+  'ondo',
   'hibachi',
   'hotstuff',
   'grvt',

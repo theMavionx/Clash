@@ -105,6 +105,7 @@ const FUTURES_TASK_DEXES = new Set([
   'hyperliquid',
   'risex',
   'nado',
+  'ondo',
   'hibachi',
   'hotstuff',
   'grvt',
@@ -546,6 +547,7 @@ function walletMatchesDex(dex, wallet) {
     dex === 'hyperliquid' ||
     dex === 'risex' ||
     dex === 'nado' ||
+    dex === 'ondo' ||
     dex === 'hibachi' ||
     dex === 'hotstuff' ||
     dex === 'katana' ||

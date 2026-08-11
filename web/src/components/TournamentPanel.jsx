@@ -28,6 +28,7 @@ const DEX_LABELS = {
   hyperliquid: 'Hyperliquid',
   risex: 'RISEx',
   nado: 'Nado',
+  ondo: 'Ondo Perps',
   hibachi: 'Hibachi',
   hotstuff: 'Hotstuff',
   grvt: 'GRVT',

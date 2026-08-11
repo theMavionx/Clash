@@ -22,6 +22,7 @@ const DEX_WALLET = {
   hyperliquid: { kind: 'evm', chain: 'Arbitrum', label: 'Hyperliquid', cta: 'Reconnect Arbitrum wallet', targetChain: 'arbitrum' },
   risex: { kind: 'evm', chain: 'RISE', label: 'RISEx', cta: 'Reconnect RISE wallet', targetChain: 'rise' },
   nado: { kind: 'evm', chain: 'Ink', label: 'Nado', cta: 'Reconnect Ink wallet', targetChain: 'ink' },
+  ondo: { kind: 'evm', chain: 'Ethereum', label: 'Ondo Perps', cta: 'Reconnect Ethereum wallet', targetChain: 'mainnet' },
   hibachi: { kind: 'evm', chain: 'EVM', label: 'Hibachi', cta: 'Reconnect EVM wallet', targetChain: 'base' },
   hotstuff: { kind: 'evm', chain: 'Ethereum', label: 'Hotstuff', cta: 'Reconnect Ethereum wallet', targetChain: 'mainnet' },
   grvt: { kind: 'evm', chain: 'GRVT Exchange', label: 'GRVT', cta: 'Reconnect GRVT wallet', targetChain: 'grvt' },

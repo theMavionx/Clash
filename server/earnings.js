@@ -2399,6 +2399,8 @@ const BULK_BUILDER_ADDRESS = String(
   process.env.BULK_BUILDER_ADDRESS || 'Drvzmh5iRfHRuKHgmm6Q77CqxhqvsXaLvrKkfMP8qci9',
 ).trim();
 const BULK_BUILDER_FEE_BPS = Math.max(1, Math.min(15, Number(process.env.BULK_BUILDER_FEE_BPS || 1)));
+const ONDO_BUILDER_CODE = String(process.env.ONDO_PERPS_BUILDER_CODE || '').trim();
+const ONDO_BUILDER_FEE_BPS = 1;
 
 function readHotstuffLocalStats() {
   const Db = loadSqlite();
@@ -3071,6 +3073,32 @@ async function fetchBulkEarnings() {
   };
 }
 
+async function fetchOndoEarnings() {
+  const local = readVerifiedFuturesDexStats('ondo', 'ondo_builder_fill');
+  const estimated = local.volume_usd * (ONDO_BUILDER_FEE_BPS / 10000);
+  return {
+    earned_usd: 0,
+    currency: 'USDC (Ondo)',
+    builder_code: ONDO_BUILDER_CODE || null,
+    configured: !!ONDO_BUILDER_CODE,
+    volume_usd: local.volume_usd,
+    volume_24h_usd: local.volume_24h_usd,
+    trades: local.trades,
+    trades_24h: local.trades_24h,
+    traders: local.traders,
+    estimated_fee_usd: roundUsd(estimated),
+    builder_fee_bps: ONDO_BUILDER_FEE_BPS,
+    builder_fee_pct: ONDO_BUILDER_FEE_BPS / 100,
+    latest_fill_at: local.latest_fill_at,
+    recent_proofs: local.recent_proofs,
+    model: ONDO_BUILDER_CODE ? 'ondo_builder_fill_estimate' : 'ondo_builder_code_pending',
+    source_detail: 'ondo_server_routed_order_and_authenticated_fill_proof',
+    note: ONDO_BUILDER_CODE
+      ? `Ondo fills count only after Clash stored the server-enforced builder order proof at ${ONDO_BUILDER_FEE_BPS} bps. Ondo does not expose a cumulative public builder-earnings endpoint, so $${roundUsd(estimated).toFixed(4)} is shown as an estimate and is not added to exact total earned.`
+      : 'Ondo integration is ready at 1 bps, but the builder code is still pending activation by Ondo. Orders remain usable without claiming builder attribution until ONDO_PERPS_BUILDER_CODE is configured.',
+  };
+}
+
 // Revenue analytics for admin: fast local stats by time window and by
 // tournament. Exact cumulative readers above stay authoritative where a DEX
 // exposes them; this section focuses on comparable volume x rate reporting.
@@ -3086,6 +3114,7 @@ const ANALYTICS_DEXES = [
   { key: 'grvt', label: 'GRVT' },
   { key: 'risex', label: 'RISE' },
   { key: 'nado', label: 'Nado' },
+  { key: 'ondo', label: 'Ondo Perps' },
   { key: 'hibachi', label: 'Hibachi' },
   { key: 'hotstuff', label: 'Hotstuff' },
   { key: 'katana', label: 'Katana Perps' },
@@ -3155,6 +3184,7 @@ function tradeSourceWhereForAnalytics(dex) {
   if (dex === 'grvt') return "verified_source = 'grvt_builder'";
   if (dex === 'risex') return tradeRecon.verifiedSourceClauseForDex('risex');
   if (dex === 'nado') return "verified_source = 'nado_api'";
+  if (dex === 'ondo') return "verified_source = 'ondo_builder_fill'";
   if (dex === 'hibachi') return "verified_source = 'hibachi_api'";
   if (dex === 'hotstuff') return "verified_source = 'hotstuff_api'";
   if (dex === 'katana') return "verified_source = 'katana_api'";
@@ -3367,6 +3397,18 @@ function revenueModelForDex(dex, dateForRate = null) {
       address: BULK_BUILDER_ADDRESS,
       model: 'bulk_signed_builder_volume_estimate',
       source_detail: 'bulk_v0_1_2_signed_order_proof',
+    };
+  }
+  if (dex === 'ondo') {
+    return {
+      configured: !!ONDO_BUILDER_CODE,
+      rate: ONDO_BUILDER_FEE_BPS / 10000,
+      rate_label: ONDO_BUILDER_CODE ? '1 bps builder fee estimate' : '1 bps prepared; builder code pending',
+      builder_fee_bps: ONDO_BUILDER_FEE_BPS,
+      builder_fee_pct: ONDO_BUILDER_FEE_BPS / 100,
+      builder_code: ONDO_BUILDER_CODE || null,
+      model: ONDO_BUILDER_CODE ? 'ondo_builder_fill_estimate' : 'ondo_builder_code_pending',
+      source_detail: 'ondo_server_routed_order_and_authenticated_fill_proof',
     };
   }
   if (dex === 'hibachi') {
@@ -3766,6 +3808,11 @@ const FAILED_EARNINGS_META = {
     address: BULK_BUILDER_ADDRESS,
     currency: 'USDC (Bulk/Solana)',
   },
+  ondo: {
+    builder_code: ONDO_BUILDER_CODE || null,
+    builder_fee_bps: ONDO_BUILDER_FEE_BPS,
+    currency: 'USDC (Ondo)',
+  },
 };
 
 const EARNINGS_READER_CONFIG = {
@@ -3787,6 +3834,7 @@ const EARNINGS_READER_CONFIG = {
   flash: { source: 'flash_v2_verified_tx_local_estimate', read: () => fetchFlashEarnings() },
   lighter: { source: 'lighter_integrator_fills_fee_sum', read: () => fetchLighterEarnings() },
   bulk: { source: 'bulk_v0_1_2_signed_order_proof', read: () => fetchBulkEarnings() },
+  ondo: { source: 'ondo_server_routed_order_and_authenticated_fill_proof', read: () => fetchOndoEarnings() },
 };
 
 const EARNINGS_DEX_ORDER = [
@@ -3808,6 +3856,7 @@ const EARNINGS_DEX_ORDER = [
   'flash',
   'lighter',
   'bulk',
+  'ondo',
 ];
 
 const EARNINGS_DEX_ALIASES = {

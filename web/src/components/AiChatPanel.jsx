@@ -671,6 +671,7 @@ const DEX_TO_AI_SHOP_CHAIN = {
   gmx: 'arbitrum',
   hyperliquid: 'arbitrum',
   nado: 'ink',
+  ondo: 'base',
   monad: 'monad',
   decibel: 'aptos',
 };

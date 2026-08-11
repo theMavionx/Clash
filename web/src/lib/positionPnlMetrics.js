@@ -27,6 +27,7 @@ export const FEE_AWARE_POSITION_DEXES = Object.freeze([
   'lighter',
   'monad',
   'nado',
+  'ondo',
   'ostium',
   'pacifica',
   'phoenix',
@@ -53,6 +54,7 @@ const DEFAULT_TAKER_RATE = Object.freeze({
   lighter: 0,
   monad: 0.00069,
   nado: 0.00035,
+  ondo: 0.00035,
   ostium: 0.0006,
   pacifica: 0.0004,
   phoenix: 0.00035,
@@ -77,6 +79,9 @@ const DEFAULT_BUILDER_RATE = Object.freeze({
   hyperliquid: envNumber('VITE_HYPERLIQUID_BUILDER_FEE_TENTH_BPS', 10) / 100_000,
   lighter: envNumber('VITE_LIGHTER_BUILDER_FEE_BPS', 1) / 10_000,
   nado: envNumber('VITE_NADO_BUILDER_FEE_RATE', 10) / 100_000,
+  // Ondo is contractually fixed at 1 bps in the server order adapter. Do not
+  // allow a stale browser build environment to display a different net PnL.
+  ondo: 1 / 10_000,
   ostium: envNumber('VITE_OSTIUM_BUILDER_FEE_BPS', 2) / 10_000,
   pacifica: envNumber('VITE_PACIFICA_BUILDER_FEE_BPS', 2) / 10_000,
   // RISEx encodes hundredths of a basis point: 100 wire units = 1 bp.
@@ -440,11 +445,13 @@ export function positionPnlPresentation({
 
   return {
     usesVenueGross,
-    primaryLabel: usesVenueGross ? 'PnL' : (pnlFees?.feeAdjusted ? 'Net' : 'PnL'),
+    // Keep fee-aware net accounting, but use the familiar PnL label in the UI.
+    // The fee breakdown remains available in the tooltip.
+    primaryLabel: 'PnL',
     primaryPnlUsd: usesVenueGross ? grossUsd : netUsd,
     primaryPnlPct: usesVenueGross ? grossPct : resolvedNetPct,
     secondaryLabel: showsSecondaryNet
-      ? (pnlFees?.estimated ? 'Est. net after fees' : 'Net after fees')
+      ? (pnlFees?.estimated ? 'Est. after fees' : 'After fees')
       : null,
     secondaryNetPnlUsd: showsSecondaryNet ? netUsd : null,
     secondaryNetPnlPct: showsSecondaryNet ? resolvedNetPct : null,

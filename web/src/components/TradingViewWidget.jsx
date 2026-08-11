@@ -562,7 +562,24 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
       const start = now - tf.ms;
       try {
         let candles = [];
-        if (dex === 'bulk') {
+        if (dex === 'ondo') {
+          try {
+            const params = new URLSearchParams({
+              dex: 'ondo',
+              symbol,
+              resolution: tf.pyth,
+              from: String(Math.floor(start / 1000)),
+              to: String(Math.floor(now / 1000)),
+            });
+            const response = await fetch(`/api/futures/candles?${params.toString()}`);
+            const json = await response.json().catch(() => null);
+            if (!response.ok) throw new Error(json?.detail || json?.error || `Ondo candles ${response.status}`);
+            candles = (Array.isArray(json) ? json : []).map(normalizeBulkCandle).filter(Boolean).sort((a, b) => a.time - b.time);
+          } catch {
+            candles = await loadPythCandles(tf, now, start).catch(() => []);
+          }
+          if (cancelled) return;
+        } else if (dex === 'bulk') {
           try {
             const params = new URLSearchParams({ symbol, interval, limit: '500' });
             const response = await fetch(`/api/futures/bulk/candles?${params.toString()}`);

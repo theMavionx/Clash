@@ -12,6 +12,7 @@ import { usePhoenix } from '../hooks/usePhoenix';
 import { useHyperliquid } from '../hooks/useHyperliquid';
 import { useRisex } from '../hooks/useRisex';
 import { useNado } from '../hooks/useNado';
+import { useOndo } from '../hooks/useOndo';
 import { useHibachi } from '../hooks/useHibachi';
 import { useHotstuff } from '../hooks/useHotstuff';
 import { useGrvt } from '../hooks/useGrvt';
@@ -87,6 +88,7 @@ function ProfileModal({ onClose }) {
   const hyperliquidHook = useHyperliquid();
   const risexHook = useRisex();
   const nadoHook = useNado();
+  const ondoHook = useOndo();
   const hibachiHook = useHibachi();
   const hotstuffHook = useHotstuff();
   const grvtHook = useGrvt();
@@ -112,6 +114,8 @@ function ProfileModal({ onClose }) {
     ? risexHook
     : dex === 'nado'
     ? nadoHook
+    : dex === 'ondo'
+    ? ondoHook
     : dex === 'hibachi'
     ? hibachiHook
     : dex === 'hotstuff'
@@ -168,7 +172,7 @@ function ProfileModal({ onClose }) {
   // though the Avantis account is registered with an EVM wallet. Resolve
   // to the chain-correct address for the active DEX.
   const adapterAddr = (connected && publicKey) ? publicKey.toBase58() : null;
-  const liveWallet = (dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'lighter')
+  const liveWallet = (dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'lighter')
     ? (walletAddr || null)            // EVM from useAvantis/useGmx/useMonad
     : dex === 'decibel'
     ? (walletAddr || null)            // Aptos from useDecibel
@@ -177,7 +181,7 @@ function ProfileModal({ onClose }) {
     : (adapterAddr || walletAddr || null); // Solana adapter / Privy
   const linkedWallet = player?.wallet || null;
   const activeWallet = liveWallet || linkedWallet;
-  const walletSource = (dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'lighter')
+  const walletSource = (dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'lighter')
     ? (liveWallet ? 'evm' : null)
     : dex === 'decibel'
     ? (liveWallet ? 'aptos' : null)
@@ -1093,6 +1097,11 @@ function ProfileModal({ onClose }) {
               style={{...cartoonBtn('#00B8D9', '#075985'), width: '100%', textAlign: 'center', padding: '14px'}}
               onClick={() => setEvmModalOpen(true)}
             >CONNECT INK WALLET</button>
+          ) : dex === 'ondo' ? (
+            <button
+              style={{...cartoonBtn('#111111', '#000000'), width: '100%', textAlign: 'center', padding: '14px'}}
+              onClick={() => setEvmModalOpen(true)}
+            >CONNECT ETHEREUM WALLET</button>
           ) : dex === 'hibachi' ? (
             <button
               style={{...cartoonBtn('#111827', '#374151'), width: '100%', textAlign: 'center', padding: '14px'}}
@@ -1134,7 +1143,7 @@ function ProfileModal({ onClose }) {
                 <button
                   style={S.walletRepairBtn}
                   onClick={() => {
-                    if (dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'lighter') setEvmModalOpen(true);
+                    if (dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'lighter') setEvmModalOpen(true);
                     else if (dex === 'decibel') aptosConnect?.();
                     else openSolanaConnect();
                   }}
@@ -1375,7 +1384,7 @@ function ProfileModal({ onClose }) {
       <EvmWalletModal
         open={evmModalOpen}
         onClose={() => setEvmModalOpen(false)}
-        targetChain={dex === 'gmx' || dex === 'hyperliquid' || dex === 'ostium' ? 'arbitrum' : dex === 'monad' ? 'monad' : dex === 'risex' ? 'rise' : dex === 'nado' ? 'ink' : dex === 'grvt' ? 'baseConnect' : dex === 'katana' ? 'katana' : dex === 'hotstuff' || dex === 'hibachi' || dex === 'lighter' ? 'mainnet' : 'base'}
+        targetChain={dex === 'gmx' || dex === 'hyperliquid' || dex === 'ostium' ? 'arbitrum' : dex === 'monad' ? 'monad' : dex === 'risex' ? 'rise' : dex === 'nado' ? 'ink' : dex === 'grvt' ? 'baseConnect' : dex === 'katana' ? 'katana' : dex === 'hotstuff' || dex === 'ondo' || dex === 'hibachi' || dex === 'lighter' ? 'mainnet' : 'base'}
         onConnected={handleEvmConnected}
       />
     </>

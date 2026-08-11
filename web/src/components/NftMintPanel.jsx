@@ -169,6 +169,7 @@ const DEX_LABELS = {
   monad: 'Perpl / Monad',
   hyperliquid: 'Hyperliquid / Arbitrum',
   nado: 'Nado / Ink',
+  ondo: 'Ondo Perps / Ethereum',
   hotstuff: 'Hotstuff L1',
   grvt: 'GRVT / GRVT Exchange',
 };
@@ -224,6 +225,7 @@ const DEX_TO_NFT_CHAIN = {
   decibel:  'aptos',
   hyperliquid: 'arbitrum',
   nado:     'ink',
+  ondo:     'base',
   hotstuff: 'base',
   grvt:     'base',
 };
@@ -465,6 +467,7 @@ const DEX_TO_SHOP_CHAIN = {
   decibel:  'aptos',
   hyperliquid: 'arbitrum',
   nado:     'ink',
+  ondo:     'base',
   hotstuff: 'base',
 };
 

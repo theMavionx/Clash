@@ -196,6 +196,23 @@ export const DEX_CONFIG = {
     chainShort: 'INK',
     description: 'Perps on Ink',
   },
+  ondo: {
+    id: 'ondo',
+    label: 'ONDO PERPS',
+    shortLabel: 'ONDO',
+    emoji: 'ONDO',
+    // Official Ondo Perps favicon, copied locally from app.ondoperps.xyz so
+    // the picker and setup screens do not depend on third-party uptime.
+    logo: '/ondo-perps.svg',
+    logoIsWordmark: false,
+    color: '#111111',
+    colorDark: '#000000',
+    colorLight: 'rgba(17,17,17,0.12)',
+    borderColor: '#333333',
+    chain: 'Ethereum',
+    chainShort: 'ETH',
+    description: 'Stocks, commodities and crypto perps',
+  },
   hibachi: {
     id: 'hibachi',
     label: 'HIBACHI',
@@ -315,6 +332,7 @@ export const DEX_ORDER = [
   'hyperliquid',
   'risex',
   'nado',
+  'ondo',
   'hibachi',
   'decibel',
   'pacifica',
@@ -424,7 +442,7 @@ export function DexProvider({ children }) {
         // this a stale /api/state response from account A could land under
         // account B's context and reset the DEX selector to the wrong value.
         if (cancelled) return;
-        if (j.dex === 'pacifica' || j.dex === 'avantis' || j.dex === 'decibel' || j.dex === 'gmx' || j.dex === 'ostium' || j.dex === 'monad' || j.dex === 'phoenix' || j.dex === 'hyperliquid' || j.dex === 'risex' || j.dex === 'nado' || j.dex === 'hibachi' || j.dex === 'hotstuff' || j.dex === 'grvt' || j.dex === 'katana' || j.dex === 'gmtrade' || j.dex === 'flash' || j.dex === 'lighter' || j.dex === 'bulk') {
+        if (j.dex === 'pacifica' || j.dex === 'avantis' || j.dex === 'decibel' || j.dex === 'gmx' || j.dex === 'ostium' || j.dex === 'monad' || j.dex === 'phoenix' || j.dex === 'hyperliquid' || j.dex === 'risex' || j.dex === 'nado' || j.dex === 'ondo' || j.dex === 'hibachi' || j.dex === 'hotstuff' || j.dex === 'grvt' || j.dex === 'katana' || j.dex === 'gmtrade' || j.dex === 'flash' || j.dex === 'lighter' || j.dex === 'bulk') {
           // Compare against current React state, not localStorage — localStorage
           // was the previous account's setting and we want the authoritative
           // server value for THIS token to win even if it matches what's
@@ -461,7 +479,7 @@ export function DexServerSync() {
         if (cancelled || !r.ok) return;
         const j = await r.json();
         if (cancelled) return;
-        if (j.dex === 'pacifica' || j.dex === 'avantis' || j.dex === 'decibel' || j.dex === 'gmx' || j.dex === 'ostium' || j.dex === 'monad' || j.dex === 'phoenix' || j.dex === 'hyperliquid' || j.dex === 'risex' || j.dex === 'nado' || j.dex === 'hibachi' || j.dex === 'hotstuff' || j.dex === 'grvt' || j.dex === 'katana' || j.dex === 'gmtrade' || j.dex === 'flash' || j.dex === 'lighter' || j.dex === 'bulk') {
+        if (j.dex === 'pacifica' || j.dex === 'avantis' || j.dex === 'decibel' || j.dex === 'gmx' || j.dex === 'ostium' || j.dex === 'monad' || j.dex === 'phoenix' || j.dex === 'hyperliquid' || j.dex === 'risex' || j.dex === 'nado' || j.dex === 'ondo' || j.dex === 'hibachi' || j.dex === 'hotstuff' || j.dex === 'grvt' || j.dex === 'katana' || j.dex === 'gmtrade' || j.dex === 'flash' || j.dex === 'lighter' || j.dex === 'bulk') {
           writeLastPlayerDexPreference({ ...player, token }, j.dex);
           setDex(j.dex);
         }

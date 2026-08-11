@@ -12,6 +12,7 @@ import { usePhoenix } from '../hooks/usePhoenix';
 import { useHyperliquid } from '../hooks/useHyperliquid';
 import { useRisex } from '../hooks/useRisex';
 import { useNado } from '../hooks/useNado';
+import { useOndo } from '../hooks/useOndo';
 import { useHibachi } from '../hooks/useHibachi';
 import { useHotstuff } from '../hooks/useHotstuff';
 import { useGrvt } from '../hooks/useGrvt';
@@ -114,13 +115,14 @@ const DEX_ERROR_LABELS = {
   lighter: 'Lighter',
   monad: 'Perpl',
   nado: 'Nado',
+  ondo: 'Ondo Perps',
   ostium: 'Ostium',
   pacifica: 'Pacifica',
   phoenix: 'Phoenix',
   risex: 'RISEx',
   bulk: 'Bulk',
 };
-const OPEN_TPSL_NATIVE_ORDER_ATTACH_DEXES = new Set(['avantis', 'bulk', 'decibel', 'flash', 'gmx', 'hibachi', 'hotstuff', 'hyperliquid', 'katana', 'lighter', 'nado', 'ostium', 'pacifica']);
+const OPEN_TPSL_NATIVE_ORDER_ATTACH_DEXES = new Set(['avantis', 'bulk', 'decibel', 'flash', 'gmx', 'hibachi', 'hotstuff', 'hyperliquid', 'katana', 'lighter', 'nado', 'ondo', 'ostium', 'pacifica']);
 const OPEN_TPSL_NATIVE_LIMIT_ATTACH_DEXES = new Set([...OPEN_TPSL_NATIVE_ORDER_ATTACH_DEXES, 'grvt', 'phoenix']);
 const OPEN_TPSL_POST_MARKET_DEXES = new Set([
   'decibel',
@@ -130,7 +132,8 @@ const OPEN_TPSL_POST_MARKET_DEXES = new Set([
   'katana',
   'lighter',
   'monad',
-  'nado',
+    'nado',
+    'ondo',
   'ostium',
   'pacifica',
   'phoenix',
@@ -1057,7 +1060,7 @@ function positionPnlFeeTitle(pnlFees) {
     const impact = Number(pnlFees.closePriceImpactUsd);
     parts.push(`close price impact ${impact >= 0 ? '+' : '-'}${money(impact)}`);
   }
-  return `${pnlFees.estimated ? 'Estimated net PnL' : 'Net PnL'}: ${parts.join(', ')}`;
+  return `${pnlFees.estimated ? 'Estimated PnL after fees' : 'PnL after fees'}: ${parts.join(', ')}`;
 }
 
 function PositionPnlReadout({ pnlDisplay, pnlColor, pnlFees, isDust, compact = false }) {
@@ -3438,8 +3441,8 @@ const BottomPanel = memo(function BottomPanel({
             <table style={S.table}>
               <thead><tr>
                 <th style={S.th}>Symbol</th><th style={S.th}>Side</th><th style={S.th}>Size</th>
-                <th style={S.th}>Entry</th><th style={S.th}>Mark</th><th style={S.th}>{dex === 'phoenix' ? 'PnL' : 'Net PnL'}</th>
-                <th style={S.th}>{dex === 'phoenix' ? 'PnL %' : 'Net PnL %'}</th><th style={S.th}>TP / SL</th><th style={S.th}>Lev</th><th style={S.th}></th>
+                <th style={S.th}>Entry</th><th style={S.th}>Mark</th><th style={S.th}>PnL</th>
+                <th style={S.th}>PnL %</th><th style={S.th}>TP / SL</th><th style={S.th}>Lev</th><th style={S.th}></th>
               </tr></thead>
               <tbody>{filteredPositions.map((p, i) => {
                 const {
@@ -3592,7 +3595,7 @@ function FuturesPanel() {
   const { dex } = useDex();
   const evmConnectChain = dex === 'gmx' || dex === 'hyperliquid' || dex === 'ostium'
     ? 'arbitrum'
-    : dex === 'hotstuff'
+    : dex === 'hotstuff' || dex === 'ondo'
     ? 'mainnet'
     : dex === 'grvt'
     ? 'baseConnect'
@@ -3636,6 +3639,7 @@ function FuturesPanel() {
   const hyperliquidHook = useHyperliquid();
   const risexHook = useRisex();
   const nadoHook = useNado();
+  const ondoHook = useOndo();
   const hibachiHook = useHibachi();
   const hotstuffHook = useHotstuff();
   const grvtHook = useGrvt();
@@ -3667,6 +3671,8 @@ function FuturesPanel() {
     ? risexHook
     : dex === 'nado'
     ? nadoHook
+    : dex === 'ondo'
+    ? ondoHook
     : dex === 'hibachi'
     ? hibachiHook
     : dex === 'hotstuff'
@@ -3707,6 +3713,7 @@ function FuturesPanel() {
     lighterNeedsIntegratorApproval, lighterNeedsReferral, lighterReferralChecking, lighterReferralStatus,
     lighterCredentials, detectAccount: detectLighterAccount,
     registerBuilderCode,
+    regionAccess, retryRegionAccess,
     refresh: refreshTrading,
   } = trading;
   const openedSortedPositions = useOpenedSortedPositions(positions);
@@ -3937,7 +3944,7 @@ function FuturesPanel() {
     // under a wallet they only ever used to peek at the orderbook.
     // The legitimate use case (connecting an Avantis wallet from the
     // FuturesPanel) is still allowed: dex === 'avantis'.
-    if (dex !== 'avantis' && dex !== 'gmx' && dex !== 'ostium' && dex !== 'monad' && dex !== 'hyperliquid' && dex !== 'risex' && dex !== 'nado' && dex !== 'hibachi' && dex !== 'hotstuff' && dex !== 'grvt') {
+    if (dex !== 'avantis' && dex !== 'gmx' && dex !== 'ostium' && dex !== 'monad' && dex !== 'hyperliquid' && dex !== 'risex' && dex !== 'nado' && dex !== 'ondo' && dex !== 'hibachi' && dex !== 'hotstuff' && dex !== 'grvt') {
       console.warn('[futures] Ignoring EVM connect: active DEX is', dex);
       return;
     }
@@ -4018,9 +4025,11 @@ function FuturesPanel() {
     setSuccessMsg('Wallet close submitted.');
   }, [dex, executeOneTapWalletFallback]);
   const handleToggleOneTapTrading = useCallback(async () => {
-    if (dex !== 'hyperliquid' && dex !== 'nado' && dex !== 'katana' && dex !== 'flash' && dex !== 'ostium') return;
+    if (dex !== 'hyperliquid' && dex !== 'nado' && dex !== 'ondo' && dex !== 'katana' && dex !== 'flash' && dex !== 'ostium') return;
     const dexLabel = dex === 'nado'
       ? 'Nado'
+      : dex === 'ondo'
+        ? 'Ondo'
       : dex === 'katana'
         ? 'Katana'
         : dex === 'flash'
@@ -4039,7 +4048,7 @@ function FuturesPanel() {
       setSuccessMsg(`One tap trading disabled. Opening a ${dexLabel} order will ask to enable it again.`);
       return;
     }
-    if (dex === 'katana' || dex === 'flash' || dex === 'ostium') {
+    if (dex === 'ondo' || dex === 'katana' || dex === 'flash' || dex === 'ostium') {
       setReferralLinking(true);
       try {
         const result = typeof setOneTapTradingEnabled === 'function'
@@ -4774,7 +4783,7 @@ function FuturesPanel() {
       setLeverageApi(symbol, v);
       return;
     }
-    if (dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'grvt' || dex === 'flash') return;
+    if (dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'grvt' || dex === 'flash') return;
     // Pacifica leverage updates should use the agent key. If the user has
     // not enabled it yet, keep this UI-only and flush after auto-bind on
     // trade submit.
@@ -5317,7 +5326,7 @@ function FuturesPanel() {
           </>
         )}
         <div style={{...S.symbolBarActions, ...(compactSymbolBar ? S.symbolBarActionsCompact : {}), gap: compactSymbolBar ? 4 : 8}}>
-          {dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'decibel' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'katana' || dex === 'gmtrade' || dex === 'flash' || dex === 'lighter' || dex === 'bulk' ? (
+          {dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'decibel' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'hibachi' || dex === 'katana' || dex === 'gmtrade' || dex === 'flash' || dex === 'lighter' || dex === 'bulk' ? (
             // Read-only badge for venues where the production margin mode is
             // not user-toggleable in our integration.
             <div
@@ -5336,6 +5345,8 @@ function FuturesPanel() {
                 ? 'RISEx uses cross margin in your RISE account'
                 : dex === 'nado'
                 ? 'Nado uses cross margin in your Ink account'
+                : dex === 'ondo'
+                ? 'Ondo Perps uses cross margin in your Ondo margin account'
                 : dex === 'hibachi'
                 ? 'Hibachi margin is managed in your Hibachi account'
                 : dex === 'katana'
@@ -5348,10 +5359,10 @@ function FuturesPanel() {
                 ? 'Bulk cross margin and leverage are managed by your signed account settings'
                 : 'Avantis uses isolated margin per trade (no cross mode)'}
             >
-              <span style={{color: ((dex === 'decibel' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'katana' || dex === 'lighter' || dex === 'bulk') ? '#4CAF50' : '#FF9800'), fontWeight: 900}}>
+              <span style={{color: ((dex === 'decibel' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'hibachi' || dex === 'katana' || dex === 'lighter' || dex === 'bulk') ? '#4CAF50' : '#FF9800'), fontWeight: 900}}>
                 {dex === 'gmtrade'
                   ? 'Isolated'
-                  : (dex === 'decibel' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'katana')
+                  : (dex === 'decibel' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'hibachi' || dex === 'katana')
                   ? 'Cross'
                   : dex === 'lighter' || dex === 'bulk'
                   ? 'Cross'
@@ -5545,7 +5556,7 @@ function FuturesPanel() {
           </div>
         </div>
 
-        {(dex === 'nado' || dex === 'flash') && (
+        {(dex === 'nado' || dex === 'ondo' || dex === 'flash') && (
           <div style={{
             display: 'flex',
             alignItems: 'center',
@@ -5561,13 +5572,13 @@ function FuturesPanel() {
               fontWeight: 900,
               color: oneTapTrading?.enabled ? '#166534' : '#5C3A21',
             }}>
-              {dex === 'flash' ? 'Flash one tap' : 'One tap'}{oneTapTrading?.enabled && oneTapTrading?.approved === false ? ' pending' : ''}
+              {dex === 'flash' ? 'Flash one tap' : dex === 'ondo' ? 'Ondo session' : 'One tap'}{oneTapTrading?.enabled && oneTapTrading?.approved === false ? ' pending' : ''}
             </span>
             <button
               type="button"
               onClick={handleToggleOneTapTrading}
               disabled={referralLinking || loading}
-              title={dex === 'flash' ? 'Flash delegated session signer' : 'Nado linked signer'}
+              title={dex === 'flash' ? 'Flash delegated session signer' : dex === 'ondo' ? 'Ondo SIWE session' : 'Nado linked signer'}
               style={{
                 ...S.btnSmall,
                 flex: '0 0 auto',
@@ -5579,7 +5590,7 @@ function FuturesPanel() {
                 opacity: (referralLinking || loading) ? 0.7 : 1,
               }}
             >
-              {referralLinking ? '...' : oneTapTrading?.enabled ? 'ON' : (dex === 'flash' ? 'ENABLE' : 'OFF')}
+              {referralLinking ? '...' : oneTapTrading?.enabled ? 'ON' : (dex === 'flash' || dex === 'ondo' ? 'ENABLE' : 'OFF')}
             </button>
           </div>
         )}
@@ -5896,6 +5907,58 @@ function FuturesPanel() {
 
   const hasActiveFilters = btmFilters.symbol !== 'All' || btmFilters.side !== 'All';
 
+  // Ondo region eligibility is checked before wallet login, account reads or
+  // live market subscriptions. The server repeats the same check on every
+  // private Ondo endpoint, so this screen is UX rather than the only control.
+  if (dex === 'ondo' && regionAccess?.status !== 'allowed') {
+    const checkingRegion = !regionAccess || regionAccess.status === 'idle' || regionAccess.status === 'checking';
+    const blockedRegion = regionAccess?.status === 'blocked';
+    return (
+      <>
+        <style>{animCSS}</style>
+        <div ref={panelRef} className={fullscreen ? 'futures-fullscreen' : ''} style={{
+          ...(fullscreen ? S.containerFull : S.container),
+          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '4px solid #d4c8b0' } : {}),
+          transform: (fullscreen || isMobile) ? undefined : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
+        }}>
+          <div style={S.header} onPointerDown={handlePointerDown}>
+            <span style={S.headerTitle}>Ondo Perps</span>
+            <button data-nodrag onClick={handleClose} style={S.closeBtn}>×</button>
+          </div>
+          <div style={{...S.body, alignItems: 'center', justifyContent: 'center', gap: 16, padding: 28}}>
+            <div style={{width: 96, height: 96, borderRadius: 20, background: '#000', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 5px 0 #333, 0 8px 16px rgba(0,0,0,0.25)'}}>
+              <img src={DEX_CONFIG.ondo.logo} alt="Ondo Perps" style={{width: 88, height: 88, objectFit: 'contain'}} />
+            </div>
+            <div style={{color: '#5C3A21', fontSize: 21, fontWeight: 900, textAlign: 'center'}}>
+              {checkingRegion ? 'Checking regional availability...' : blockedRegion ? 'Ondo Perps is unavailable in your region' : 'Regional check unavailable'}
+            </div>
+            <div style={{color: '#8a7252', fontSize: 13, fontWeight: 650, textAlign: 'center', maxWidth: 410, lineHeight: 1.5}}>
+              {checkingRegion
+                ? 'Please wait while Clash verifies whether Ondo trading is available from your country or IP region.'
+                : blockedRegion
+                  ? 'Clash cannot provide Ondo trading access to users in the United States, Canada, U.S. territories, or sanctioned jurisdictions.'
+                  : (regionAccess?.message || 'Clash could not verify your region, so Ondo trading remains locked.')}
+            </div>
+            {!checkingRegion && (
+              <div style={{width: '100%', maxWidth: 420, border: '2px solid #FCA5A5', borderRadius: 12, padding: '12px 14px', background: '#FEE2E2', color: '#991B1B', fontSize: 12, lineHeight: 1.45, fontWeight: 750, textAlign: 'center'}}>
+                Ondo wallet login, account data, orders, deposits and withdrawals are disabled through Clash in restricted regions.
+              </div>
+            )}
+            {regionAccess?.status === 'unavailable' && (
+              <button
+                data-nodrag
+                style={{...cartoonBtn('#111111', '#000000'), padding: '12px 28px'}}
+                onClick={() => retryRegionAccess?.()}
+              >
+                RETRY CHECK
+              </button>
+            )}
+          </div>
+        </div>
+      </>
+    );
+  }
+
   // ==================== SOLANA WALLET RESTORE ====================
   if (checkingSolanaWallet) {
     const venueLabel = dex === 'phoenix' ? 'Phoenix' : 'Pacifica';
@@ -5953,7 +6016,7 @@ function FuturesPanel() {
 
   // ==================== WRONG SELF-CUSTODY WALLET ====================
   const shouldBlockWalletMismatch = dex === 'flash';
-  if (shouldBlockWalletMismatch && (dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'gmtrade' || dex === 'flash') && walletMismatch) {
+  if (shouldBlockWalletMismatch && (dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'gmtrade' || dex === 'flash') && walletMismatch) {
     return (
       <>
         <style>{animCSS}</style>
@@ -5978,7 +6041,7 @@ function FuturesPanel() {
               boxShadow: '0 5px 0 #B45309, 0 8px 16px rgba(0,0,0,0.25)',
             }}>!</div>
             <div style={{color: '#5C3A21', fontSize: 18, fontWeight: 900}}>
-              Wrong {dex === 'gmx' || dex === 'hyperliquid' || dex === 'ostium' ? 'Arbitrum' : dex === 'hotstuff' ? 'Ethereum' : dex === 'grvt' ? 'GRVT Exchange' : dex === 'katana' ? 'Katana' : dex === 'monad' ? 'Monad' : dex === 'risex' ? 'RISE' : dex === 'nado' ? 'Ink' : dex === 'hibachi' ? 'EVM' : (dex === 'phoenix' || dex === 'gmtrade' || dex === 'flash') ? 'Solana' : 'Base'} wallet
+              Wrong {dex === 'gmx' || dex === 'hyperliquid' || dex === 'ostium' ? 'Arbitrum' : dex === 'hotstuff' || dex === 'ondo' ? 'Ethereum' : dex === 'grvt' ? 'GRVT Exchange' : dex === 'katana' ? 'Katana' : dex === 'monad' ? 'Monad' : dex === 'risex' ? 'RISE' : dex === 'nado' ? 'Ink' : dex === 'hibachi' ? 'EVM' : (dex === 'phoenix' || dex === 'gmtrade' || dex === 'flash') ? 'Solana' : 'Base'} wallet
             </div>
             <div style={{color: '#8a7252', fontSize: 12, fontWeight: 700, maxWidth: 340, lineHeight: 1.45}}>
               This game account is linked to {registeredEvmWallet?.slice(0, 6)}...{registeredEvmWallet?.slice(-4)}, but the connected wallet is {walletAddr?.slice(0, 6)}...{walletAddr?.slice(-4)}.
@@ -6462,6 +6525,40 @@ function FuturesPanel() {
                   <span>RISEX - RISE MAINNET</span>
                 </div>
               </>
+            ) : dex === 'ondo' ? (
+              <>
+                <div style={{
+                  width: 80, height: 80, borderRadius: 18,
+                  background: '#000', border: '4px solid #333',
+                  boxShadow: '0 5px 0 #111, 0 8px 16px rgba(0,0,0,0.25)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
+                }}>
+                  <img src={DEX_CONFIG.ondo.logo} alt="Ondo Perps" style={{width: 72, height: 72, objectFit: 'contain'}} />
+                </div>
+                <div style={{
+                  color: '#5C3A21', fontSize: 18, fontWeight: 900,
+                  textAlign: 'center', letterSpacing: '0.5px',
+                }}>Connect your Ethereum wallet</div>
+                <div style={{
+                  color: '#8a7252', fontSize: 12, fontWeight: 600,
+                  textAlign: 'center', maxWidth: 300, lineHeight: 1.4,
+                }}>
+                  Ondo Perps uses Ethereum SIWE for account access. After one signature, market and limit orders are one tap through your short-lived Ondo session.
+                </div>
+                {renderPrivyEmailButton('#111111', '#000000')}
+                <button
+                  style={{...cartoonBtn(privyEnabled ? '#8A7252' : '#111111', privyEnabled ? '#6B573E' : '#000000'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                  onClick={() => setEvmModalOpen(true)}
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                    <rect x="2" y="6" width="20" height="14" rx="3"/><path d="M16 14h.01"/><path d="M2 10h20"/>
+                  </svg>
+                  <span>CONNECT ETHEREUM WALLET</span>
+                </button>
+                <div style={{display: 'flex', alignItems: 'center', gap: 4, color: '#111', fontSize: 11, fontWeight: 800, letterSpacing: '0.5px', marginTop: 4}}>
+                  <span>ONDO PERPS - ETHEREUM LOGIN</span>
+                </div>
+              </>
             ) : dex === 'nado' ? (
               <>
                 <div style={{
@@ -6797,6 +6894,66 @@ function FuturesPanel() {
               <div style={hlGateStyles.footnote}>
                 Required only when this wallet has no Nado referrer. Existing referrals pass automatically.
               </div>
+            </div>
+          </div>
+        </div>
+      </>
+    );
+  }
+
+  // ==================== ONDO SIWE / JWT SETUP ====================
+  if (dex === 'ondo' && hasWallet && setupVerified !== true) {
+    return (
+      <>
+        <style>{animCSS}</style>
+        <div ref={panelRef} className={fullscreen ? 'futures-fullscreen' : ''} style={{
+          ...(fullscreen ? S.containerFull : S.container),
+          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '4px solid #d4c8b0' } : {}),
+          transform: (fullscreen || isMobile) ? undefined : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
+        }}>
+          <div style={S.header} onPointerDown={handlePointerDown}>
+            <span style={S.headerTitle}>Ondo Perps setup</span>
+            <button data-nodrag onClick={handleClose} style={S.closeBtn}>×</button>
+          </div>
+          <div style={{...S.body, alignItems: 'center', justifyContent: 'center', gap: 16, padding: 28}}>
+            <div style={{width: 96, height: 96, borderRadius: 20, background: '#000', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 5px 0 #333, 0 8px 16px rgba(0,0,0,0.25)'}}>
+              <img src={DEX_CONFIG.ondo.logo} alt="Ondo Perps" style={{width: 88, height: 88, objectFit: 'contain'}} />
+            </div>
+            <div style={{color: '#5C3A21', fontSize: 21, fontWeight: 900, textAlign: 'center'}}>
+              Sign in to Ondo Perps
+            </div>
+            <div style={{color: '#8a7252', fontSize: 13, fontWeight: 650, textAlign: 'center', maxWidth: 410, lineHeight: 1.5}}>
+              Sign Ondo&apos;s official SIWE login message once. Orders then use Ondo&apos;s JWT session, so trading is one tap and Clash never receives your private key.
+            </div>
+            <div style={{width: '100%', maxWidth: 420, border: '2px solid #bfa46f', borderRadius: 12, padding: '12px 14px', background: '#fff8e8', color: '#6B4E2E', fontSize: 12, lineHeight: 1.45, fontWeight: 750}}>
+              <div>Builder routing: <strong>{builderConfig?.configured ? `${builderConfig.code} at 1 bps` : 'prepared at 1 bps; code pending from Ondo'}</strong></div>
+              <div style={{marginTop: 5}}>The server injects this into every market, limit, close, and attached TP/SL entry order. Browser overrides are ignored.</div>
+            </div>
+            {error && (
+              <div style={{color: '#991B1B', background: '#FEE2E2', border: '2px solid #FCA5A5', borderRadius: 10, padding: '10px 14px', fontSize: 12, fontWeight: 750, maxWidth: 410}}>
+                {humanizeTradeError(error, dex)}
+              </div>
+            )}
+            <button
+              data-nodrag
+              style={{...cartoonBtn('#111111', '#000000'), padding: '14px 30px', minWidth: 260, opacity: loading ? 0.65 : 1}}
+              disabled={loading}
+              onClick={async () => {
+                const result = await activate();
+                if (result?.error) setLocalAlert(result.error);
+              }}
+            >
+              {loading ? 'SIGNING IN...' : 'SIGN IN & ACCEPT TERMS'}
+            </button>
+            <button
+              data-nodrag
+              style={{...cartoonBtn('#D4C8B0', '#A3906A'), padding: '10px 22px'}}
+              onClick={() => window.open('https://app.ondoperps.xyz', '_blank', 'noopener,noreferrer')}
+            >
+              OPEN ONDO PERPS
+            </button>
+            <div style={{fontSize: 10, color: '#8a7252', fontWeight: 700, textAlign: 'center', maxWidth: 390}}>
+              Ondo authentication always uses Ethereum mainnet (chain ID 1). Continuing accepts Ondo&apos;s current terms and privacy policy.
             </div>
           </div>
         </div>
@@ -9115,7 +9272,7 @@ function FuturesPanel() {
             <div style={{flex: `0 0 ${chartPct}%`, maxWidth: `${chartPct}%`, minHeight: 0, overflow: 'hidden', position: 'relative'}}>
               <TradingViewWidget symbol={symbol} pythSymbol={currentMarket?.pyth_symbol} positions={positions} orders={displayOrders} currentPrice={currentPrice} chartOverlay={explainBadge} dex={dex} />
             </div>
-            {(dex === 'pacifica' || dex === 'phoenix' || dex === 'decibel' || dex === 'bulk') && (
+            {(dex === 'pacifica' || dex === 'phoenix' || dex === 'decibel' || dex === 'ondo' || dex === 'bulk') && (
               <>
                 {/* Drag handle: chart ↔ orderbook */}
                 <div style={S.dragHandleV} onMouseDown={dragChart} />
@@ -9772,6 +9929,8 @@ function FuturesPanel() {
     const walletBalanceLabel = dex === 'hyperliquid'
       ? 'Arbitrum Wallet USDC'
       : dex === 'hotstuff'
+      ? 'Ethereum Wallet USDC'
+      : dex === 'ondo'
       ? 'Ethereum Wallet USDC'
       : dex === 'gmtrade'
       ? 'GMTrade Wallet'
@@ -10829,6 +10988,8 @@ function FuturesPanel() {
                 ? 'Sends USDC from your Solana wallet to your Flash account. Needs a small SOL float for gas.'
                 : dex === 'nado'
                 ? 'Approves the selected Ink stablecoin, then deposits it into your Nado default subaccount. Needs a small ETH float on Ink for gas.'
+                : dex === 'ondo'
+                ? 'Provisions your Ondo Ethereum deposit address, then transfers native Ethereum USDC to it. Needs ETH for gas; margin credit can take a few moments.'
                 : dex === 'hotstuff'
                 ? 'Use Hotstuff official to deposit or withdraw. Clash only handles trading and optional Spot to Perps internal transfer.'
                 : dex === 'grvt'
@@ -10854,7 +11015,7 @@ function FuturesPanel() {
             Pacifica shows when there's something to take out. Decibel and
             RISEx always show the action from day one (the button disables at
             available=0 instead of hiding the whole card). */}
-        {dex !== 'avantis' && dex !== 'gmx' && dex !== 'ostium' && dex !== 'hibachi' && dex !== 'katana' && dex !== 'gmtrade' && dex !== 'hotstuff' && (dex === 'decibel' || dex === 'risex' || dex === 'hyperliquid' || dex === 'nado' || dex === 'flash' || available > 0) && (
+        {dex !== 'avantis' && dex !== 'gmx' && dex !== 'ostium' && dex !== 'hibachi' && dex !== 'katana' && dex !== 'gmtrade' && dex !== 'hotstuff' && (dex === 'decibel' || dex === 'risex' || dex === 'hyperliquid' || dex === 'nado' || dex === 'ondo' || dex === 'flash' || available > 0) && (
           <div style={S.fullCard}>
             <div style={S.row}>
               <span style={{...S.label, color: '#9945FF'}}>{dex === 'monad' ? 'Withdraw AUSD' : dex === 'nado' ? 'Withdraw USDt0' : 'Withdraw USDC'}</span>
@@ -10911,6 +11072,8 @@ function FuturesPanel() {
                 ? 'Withdraws USDC from your Flash account back to your Solana wallet.'
                 : dex === 'nado'
                 ? 'Withdraws USDt0 from your Nado default subaccount back to your Ink wallet. Nado charges a 1 USDt0 withdrawal fee, so Max subtracts it.'
+                : dex === 'ondo'
+                ? 'Submits an Ondo USDC withdrawal from your margin account to your connected Ethereum wallet.'
                 : dex === 'grvt'
                 ? 'Opens GRVT so you can withdraw or manage funds on your GRVT account.'
                 : dex === 'pacifica'

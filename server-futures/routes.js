@@ -20,6 +20,7 @@ const hyperliquid = require('./hyperliquid');
 const hyperliquidRewards = require('./hyperliquid-rewards-worker');
 const risex = require('./risex');
 const nado = require('./nado');
+const ondo = require('./ondo');
 const hibachi = require('./hibachi');
 const hotstuff = require('./hotstuff');
 const hotstuffRewards = require('./hotstuff-rewards-worker');
@@ -914,7 +915,7 @@ function auth(req, res, next) {
   // Trust the SERVER-stored dex, not whatever the client asks for. The client
   // header/query is still useful as a best-effort sanity check: if it explicitly
   // asks for the wrong dex, reject so the UI can prompt the user to /set-dex.
-  const SUPPORTED_DEXES = new Set(['avantis', 'pacifica', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash', 'lighter', 'bulk']);
+  const SUPPORTED_DEXES = new Set(['avantis', 'pacifica', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'ondo', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash', 'lighter', 'bulk']);
   const storedDex = SUPPORTED_DEXES.has(player.dex) ? player.dex : 'pacifica';
   const askedDex = (req.query.dex || req.headers['x-dex'] || storedDex).toLowerCase();
   const normalizedAsked = SUPPORTED_DEXES.has(askedDex) ? askedDex : 'pacifica';
@@ -1139,7 +1140,7 @@ function flashBodyWallet(req) {
 // Get or create custodial wallet for player
 router.post('/wallet', auth, (req, res) => {
   try {
-    if (req.dex === 'avantis' || req.dex === 'gmx' || req.dex === 'ostium' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'hibachi' || req.dex === 'hotstuff' || req.dex === 'grvt' || req.dex === 'katana' || req.dex === 'gmtrade' || req.dex === 'flash' || req.dex === 'bulk') {
+    if (req.dex === 'avantis' || req.dex === 'gmx' || req.dex === 'ostium' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'ondo' || req.dex === 'hibachi' || req.dex === 'hotstuff' || req.dex === 'grvt' || req.dex === 'katana' || req.dex === 'gmtrade' || req.dex === 'flash' || req.dex === 'bulk') {
       return res.status(410).json({
         error: `${req.dex} is self-custody. Connect the chain wallet in the client instead.`,
       });
@@ -1169,7 +1170,7 @@ router.post('/wallet', auth, (req, res) => {
 
 // Get wallet info (public key only — never expose secret)
 router.get('/wallet', auth, (req, res) => {
-  if (req.dex === 'avantis' || req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'hibachi' || req.dex === 'hotstuff' || req.dex === 'grvt' || req.dex === 'katana' || req.dex === 'gmtrade' || req.dex === 'flash' || req.dex === 'ostium' || req.dex === 'bulk') {
+  if (req.dex === 'avantis' || req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'ondo' || req.dex === 'hibachi' || req.dex === 'hotstuff' || req.dex === 'grvt' || req.dex === 'katana' || req.dex === 'gmtrade' || req.dex === 'flash' || req.dex === 'ostium' || req.dex === 'bulk') {
     return res.status(410).json({
       error: `${req.dex} is self-custody. Connect the chain wallet in the client instead.`,
     });
@@ -2518,6 +2519,7 @@ router.get('/markets', async (req, res) => {
       : dex === 'hyperliquid' ? await hyperliquid.getMarketInfo()
       : dex === 'risex' ? await risex.getMarketInfo()
       : dex === 'nado' ? await nado.getMarketInfo()
+      : dex === 'ondo' ? await ondo.getMarketInfo()
       : dex === 'hibachi' ? await hibachi.getMarketInfo()
       : dex === 'hotstuff' ? await hotstuff.getMarketInfo()
       : dex === 'grvt' ? await grvt.getMarketInfo()
@@ -2546,6 +2548,7 @@ router.get('/prices', async (req, res) => {
       : dex === 'hyperliquid' ? await hyperliquid.getPrices()
       : dex === 'risex' ? await risex.getPrices()
       : dex === 'nado' ? await nado.getPrices()
+      : dex === 'ondo' ? await ondo.getPrices()
       : dex === 'hibachi' ? await hibachi.getPrices()
       : dex === 'hotstuff' ? await hotstuff.getPrices()
       : dex === 'grvt' ? await grvt.getPrices()
@@ -2594,6 +2597,8 @@ router.get('/orderbook', async (req, res) => {
   try {
     const book = dex === 'gmtrade'
       ? await gmtrade.getOrderbook(symbol, limit || 25)
+      : dex === 'ondo'
+      ? await ondo.getDepth(symbol, limit || 25)
       : dex === 'katana'
       ? await katana.getOrderbook(symbol, limit || 25, level || agg_level || 2)
       : dex === 'bulk'
@@ -2606,15 +2611,25 @@ router.get('/orderbook', async (req, res) => {
 });
 
 router.get('/candles', async (req, res) => {
-  const { symbol, interval, start_time, end_time } = req.query;
+  const dex = String(req.query.dex || 'pacifica').toLowerCase();
+  const symbol = req.query.symbol;
+  const interval = req.query.interval || req.query.resolution;
+  const start_time = req.query.start_time || req.query.from;
+  const end_time = req.query.end_time || req.query.to;
   if (!symbol || !interval || !start_time) {
     return res.status(400).json({ error: 'symbol, interval, start_time required' });
   }
   try {
-    const candles = await pacifica.getCandles(symbol, interval, start_time, end_time);
+    const candles = dex === 'ondo'
+      ? await ondo.getCandles(symbol, {
+        resolution: String(interval).replace(/[mM]$/u, ''),
+        from: Math.floor(Number(start_time) / (Number(start_time) > 1e12 ? 1000 : 1)),
+        to: end_time ? Math.floor(Number(end_time) / (Number(end_time) > 1e12 ? 1000 : 1)) : undefined,
+      })
+      : await pacifica.getCandles(symbol, interval, start_time, end_time);
     res.json(candles);
   } catch (e) {
-    res.status(500).json({ error: 'Failed to get candles' });
+    res.status(500).json({ error: 'Failed to get candles', detail: e?.message || String(e) });
   }
 });
 
@@ -3023,7 +3038,7 @@ router.get('/orders', async (req, res) => {
 
 // Reject self-custody writes on legacy Pacifica server endpoints. These
 // venues sign in the browser or use their dedicated route groups.
-const CLIENT_SIGNED_DEXES = new Set(['avantis', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash', 'bulk']);
+const CLIENT_SIGNED_DEXES = new Set(['avantis', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'ondo', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash', 'bulk']);
 
 function avantisMigratedGuard(req, res, next) {
   if (CLIENT_SIGNED_DEXES.has(req.dex)) {
@@ -4526,6 +4541,356 @@ router.get('/nado/trade-history', auth, async (req, res) => {
   } catch (e) {
     console.warn('[nado] trade-history failed:', e.message);
     res.status(502).json({ error: 'Failed to load Nado trade history', detail: e.message });
+  }
+});
+
+function sendOndoError(res, error, fallback = 'Ondo request failed') {
+  const status = Number(error?.status);
+  const safeStatus = Number.isInteger(status) && status >= 400 && status < 600 ? status : 502;
+  return res.status(safeStatus).json({
+    error: error?.message || fallback,
+    code: error?.code || error?.upstream?.error_code || null,
+  });
+}
+
+function setOndoGeoResponseHeaders(res) {
+  res.set('Cache-Control', 'private, no-store, max-age=0');
+  res.vary('CF-IPCountry');
+  res.vary('CF-Region-Code');
+  res.vary('CF-Region');
+  res.vary('X-Vercel-IP-Country');
+  res.vary('X-Vercel-IP-Country-Region');
+  res.vary('CloudFront-Viewer-Country');
+  res.vary('CloudFront-Viewer-Country-Region');
+}
+
+function requireOndoRegion(req, res, next) {
+  const access = ondo.regionAccessForRequest(req);
+  setOndoGeoResponseHeaders(res);
+  if (access.allowed) return next();
+  return res.status(access.status === 'unavailable' ? 503 : 451).json({
+    error: access.message,
+    code: 'ONDO_REGION_BLOCKED',
+    allowed: false,
+    status: access.status,
+    country: access.country,
+    regionCode: access.regionCode,
+    reason: access.reason,
+  });
+}
+
+router.get('/ondo/eligibility', (req, res) => {
+  const access = ondo.regionAccessForRequest(req);
+  setOndoGeoResponseHeaders(res);
+  res.json(access);
+});
+
+// Everything below `/ondo` is private account or trading functionality. The
+// public normalized market endpoints live elsewhere and remain available to
+// the shared Clash UI, but restricted regions cannot start SIWE, read an Ondo
+// account, submit/cancel orders, deposit, withdraw, or import fills via Clash.
+router.use('/ondo', requireOndoRegion);
+
+function requireOndoOwner(req, res) {
+  if (req.dex !== 'ondo') {
+    res.status(409).json({
+      error: `Account is registered for '${req.dex}'. Switch DEX to ondo before calling Ondo endpoints.`,
+      stored_dex: req.dex,
+      requested_dex: 'ondo',
+    });
+    return null;
+  }
+  const requested = ondo.normalizeAddress(
+    req.body?.account
+    || req.body?.wallet
+    || req.query?.account
+    || req.query?.wallet
+    || req.headers['x-ondo-wallet'],
+  );
+  const linked = ondo.normalizeAddress(req.dexWallet) || ondo.normalizeAddress(req.playerWallet);
+  const account = requested || linked;
+  if (!account) {
+    res.status(400).json({ error: 'Ondo EVM wallet required (0x...)' });
+    return null;
+  }
+  if (linked && requested && linked !== requested) {
+    res.status(403).json({ error: 'Ondo wallet does not match the wallet linked to this Clash account.' });
+    return null;
+  }
+  return { account };
+}
+
+function ondoTokenFromReq(req) {
+  return req.headers['x-ondo-token'] || req.body?.ondo_token || req.body?.ondoToken || null;
+}
+
+async function requireOndoSession(req, res) {
+  const owner = requireOndoOwner(req, res);
+  if (!owner) return null;
+  try {
+    const token = ondo.normalizeToken(ondoTokenFromReq(req));
+    const session = await ondo.verifySessionOwner(token, owner.account);
+    // Preserve `account` as the normalized EVM owner. The adapter also returns
+    // accountInfo (the raw /v1/account response); spreading it over owner used
+    // to replace the address with an object and corrupted proof/address-book
+    // calls as "[object Object]".
+    return { ...session, account: owner.account, token };
+  } catch (error) {
+    sendOndoError(res, error, 'Ondo session verification failed');
+    return null;
+  }
+}
+
+router.get('/ondo/config', auth, (req, res) => {
+  if (!requireOndoOwner(req, res)) return;
+  res.set('Cache-Control', 'no-store');
+  res.json(ondo.builderConfig());
+});
+
+router.post('/ondo/auth/challenge', auth, async (req, res) => {
+  const owner = requireOndoOwner(req, res);
+  if (!owner) return;
+  try {
+    const result = await ondo.requestLoginChallenge(owner.account);
+    res.set('Cache-Control', 'no-store');
+    res.json({ ...result, builder: ondo.builderConfig() });
+  } catch (error) {
+    sendOndoError(res, error, 'Failed to create Ondo login challenge');
+  }
+});
+
+router.post('/ondo/auth/complete', auth, async (req, res) => {
+  const owner = requireOndoOwner(req, res);
+  if (!owner) return;
+  try {
+    const result = await ondo.completeLoginChallenge({ id: req.body?.id, signature: req.body?.signature });
+    const identifier = ondo.normalizeAddress(result?.result?.identifier);
+    if (!identifier || identifier !== owner.account) {
+      return res.status(403).json({ error: 'Ondo login response wallet mismatch' });
+    }
+    res.set('Cache-Control', 'no-store');
+    return res.json({ ...result, builder: ondo.builderConfig() });
+  } catch (error) {
+    return sendOndoError(res, error, 'Failed to complete Ondo login');
+  }
+});
+
+router.post('/ondo/auth/logout', auth, async (req, res) => {
+  const session = await requireOndoSession(req, res);
+  if (!session) return;
+  try {
+    await ondo.invalidateSession(session.token);
+    res.json({ success: true });
+  } catch (error) {
+    sendOndoError(res, error, 'Failed to end Ondo session');
+  }
+});
+
+router.post('/ondo/agreement', auth, async (req, res) => {
+  const session = await requireOndoSession(req, res);
+  if (!session) return;
+  try {
+    const requestedTerms = Math.max(1, Math.min(1_000, Math.floor(Number(req.body?.termsVersion) || 1)));
+    const requestedPrivacy = Math.max(1, Math.min(1_000, Math.floor(Number(req.body?.privacyVersion) || 1)));
+    const acceptedTerms = Number(session.accountInfo?.termsVersion || 0);
+    const acceptedPrivacy = Number(session.accountInfo?.privacyVersion || 0);
+    if (acceptedTerms >= requestedTerms && acceptedPrivacy >= requestedPrivacy) {
+      return res.json({
+        success: true,
+        result: {
+          alreadyAccepted: true,
+          termsVersion: acceptedTerms,
+          privacyVersion: acceptedPrivacy,
+        },
+      });
+    }
+    const result = await ondo.request('/v1/agreement', {
+      method: 'POST',
+      token: session.token,
+      body: {
+        termsVersion: requestedTerms,
+        privacyVersion: requestedPrivacy,
+      },
+    });
+    return res.json(result);
+  } catch (error) {
+    return sendOndoError(res, error, 'Failed to accept Ondo terms');
+  }
+});
+
+router.get('/ondo/account', auth, async (req, res) => {
+  const session = await requireOndoSession(req, res);
+  if (!session) return;
+  try { res.json(await ondo.getAccount(session.token, session.accountInfo)); }
+  catch (error) { sendOndoError(res, error, 'Failed to load Ondo account'); }
+});
+
+router.get('/ondo/positions', auth, async (req, res) => {
+  const session = await requireOndoSession(req, res);
+  if (!session) return;
+  try { res.json(await ondo.getPositions(session.token)); }
+  catch (error) { sendOndoError(res, error, 'Failed to load Ondo positions'); }
+});
+
+router.get('/ondo/orders', auth, async (req, res) => {
+  const session = await requireOndoSession(req, res);
+  if (!session) return;
+  try { res.json(await ondo.getOrders(session.token, req.query)); }
+  catch (error) { sendOndoError(res, error, 'Failed to load Ondo orders'); }
+});
+
+router.get('/ondo/fills', auth, async (req, res) => {
+  const session = await requireOndoSession(req, res);
+  if (!session) return;
+  try {
+    const result = await ondo.getFills(session.token, req.query);
+    res.json({ result: result.rows, pageInfo: result.pageInfo });
+  } catch (error) {
+    sendOndoError(res, error, 'Failed to load Ondo fills');
+  }
+});
+
+router.get('/ondo/funding', auth, async (req, res) => {
+  const session = await requireOndoSession(req, res);
+  if (!session) return;
+  try {
+    const result = await ondo.getFundingFees(session.token, req.query);
+    res.json({ result: result.rows, pageInfo: result.pageInfo });
+  } catch (error) {
+    sendOndoError(res, error, 'Failed to load Ondo funding history');
+  }
+});
+
+router.post('/ondo/orders', auth, async (req, res) => {
+  const session = await requireOndoSession(req, res);
+  if (!session) return;
+  try {
+    const result = await ondo.createOrder(session.token, req.body || {});
+    const responseRow = result.response?.result || result.response || {};
+    const orderId = String(responseRow?.orderId || responseRow?.order_id || '').trim();
+    if (result.builder.configured && orderId) {
+      db.recordOndoBuilderOrder({
+        orderId,
+        playerId: req.playerId,
+        account: session.account,
+        clientOrderId: result.request?.clientOrderId || responseRow?.clientOrderId || null,
+        symbol: ondo.marketName(result.request?.market).replace(/-USD\.P$/u, ''),
+        side: result.request?.side,
+        orderType: result.request?.type,
+        builderCode: result.builder.code,
+        builderFeeBps: result.builder.feeRateBps,
+        requestJson: result.request,
+        responseJson: result.response,
+      });
+    }
+    res.json({ ...result.response, clashBuilder: result.builder });
+  } catch (error) {
+    sendOndoError(res, error, 'Failed to place Ondo order');
+  }
+});
+
+router.delete('/ondo/orders/:orderId', auth, async (req, res) => {
+  const session = await requireOndoSession(req, res);
+  if (!session) return;
+  try { res.json(await ondo.cancelOrder(session.token, req.params.orderId)); }
+  catch (error) { sendOndoError(res, error, 'Failed to cancel Ondo order'); }
+});
+
+router.post('/ondo/leverage', auth, async (req, res) => {
+  const session = await requireOndoSession(req, res);
+  if (!session) return;
+  try { res.json(await ondo.setLeverage(session.token, req.body || {})); }
+  catch (error) { sendOndoError(res, error, 'Failed to set Ondo leverage'); }
+});
+
+router.post('/ondo/stop-order', auth, async (req, res) => {
+  const session = await requireOndoSession(req, res);
+  if (!session) return;
+  try { res.json(await ondo.setStopOrder(session.token, req.body || {})); }
+  catch (error) { sendOndoError(res, error, 'Failed to set Ondo TP/SL'); }
+});
+
+router.delete('/ondo/stop-order', auth, async (req, res) => {
+  const session = await requireOndoSession(req, res);
+  if (!session) return;
+  try { res.json(await ondo.removeStopOrder(session.token, { ...req.query, ...req.body })); }
+  catch (error) { sendOndoError(res, error, 'Failed to remove Ondo TP/SL'); }
+});
+
+router.post('/ondo/deposit-address', auth, async (req, res) => {
+  const session = await requireOndoSession(req, res);
+  if (!session) return;
+  try {
+    res.json(await ondo.provisionDepositAddress(session.token, {
+      accountId: session.accountId,
+      network: req.body?.network || 'ethereum',
+    }));
+  } catch (error) {
+    sendOndoError(res, error, 'Failed to provision Ondo deposit address');
+  }
+});
+
+router.get('/ondo/address-book', auth, async (req, res) => {
+  const session = await requireOndoSession(req, res);
+  if (!session) return;
+  try { res.json(await ondo.getAddressBook(session.token)); }
+  catch (error) { sendOndoError(res, error, 'Failed to load Ondo withdrawal address book'); }
+});
+
+router.post('/ondo/address-book/challenge', auth, async (req, res) => {
+  const session = await requireOndoSession(req, res);
+  if (!session) return;
+  try {
+    res.json(await ondo.requestAddressBookChallenge(session.token, {
+      walletAddress: session.account,
+      withdrawalAddress: req.body?.withdrawalAddress || req.body?.address || session.account,
+    }));
+  } catch (error) {
+    sendOndoError(res, error, 'Failed to prepare Ondo withdrawal-address approval');
+  }
+});
+
+router.post('/ondo/address-book/complete', auth, async (req, res) => {
+  const session = await requireOndoSession(req, res);
+  if (!session) return;
+  try {
+    res.json(await ondo.completeAddressBookChallenge(session.token, {
+      id: req.body?.id,
+      signature: req.body?.signature,
+      addressLabel: req.body?.addressLabel || 'Clash wallet',
+    }));
+  } catch (error) {
+    sendOndoError(res, error, 'Failed to approve Ondo withdrawal address');
+  }
+});
+
+router.post('/ondo/withdraw', auth, async (req, res) => {
+  const session = await requireOndoSession(req, res);
+  if (!session) return;
+  try {
+    res.json(await ondo.withdraw(session.token, {
+      accountId: session.accountId,
+      amount: req.body?.amount,
+      address: req.body?.address || session.account,
+      network: req.body?.network || 'ethereum',
+      customerWithdrawalId: req.body?.customerWithdrawalId || req.body?.customer_withdrawal_id,
+    }));
+  } catch (error) {
+    sendOndoError(res, error, 'Failed to withdraw from Ondo');
+  }
+});
+
+router.post('/ondo/import-fills', auth, async (req, res) => {
+  const session = await requireOndoSession(req, res);
+  if (!session) return;
+  try {
+    const result = await ondo.importFillsForPlayer(req.playerId, session.account, session.token, req.body || {});
+    if (result.imported > 0) {
+      console.log(`[ondo] imported ${result.imported} builder fill(s) for player=${req.playerName} wallet=${session.account.slice(0, 10)}...`);
+    }
+    res.json(result);
+  } catch (error) {
+    sendOndoError(res, error, 'Failed to import Ondo fills');
   }
 });
 
@@ -6063,7 +6428,7 @@ router.get('/deposits', auth, (req, res) => {
 // Get USDC & native balance on custodial wallet
 const balanceCache = new Map();
 router.get('/balance', auth, async (req, res) => {
-  if (req.dex === 'gmx' || req.dex === 'ostium' || req.dex === 'monad' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'hibachi' || req.dex === 'katana' || req.dex === 'gmtrade' || req.dex === 'flash' || req.dex === 'bulk') {
+  if (req.dex === 'gmx' || req.dex === 'ostium' || req.dex === 'monad' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'ondo' || req.dex === 'hibachi' || req.dex === 'katana' || req.dex === 'gmtrade' || req.dex === 'flash' || req.dex === 'bulk') {
     return res.status(410).json({ error: `${req.dex} balances are read directly by the client wallet.` });
   }
   const wallet = db.getWallet(req.playerId, req.dex);
