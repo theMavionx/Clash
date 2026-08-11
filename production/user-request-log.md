@@ -3318,3 +3318,11 @@ Follow-up:
   registration-attempt lifecycle without changing the account or game data,
   add a focused regression, deploy from `main`, and verify the live bundle and
   services.
+
+## UR-2026-08-11-PHOENIX-ISOLATED-LIMIT-ORDER
+
+- Timestamp: 2026-08-11 15:19 (Europe/Kyiv)
+- Request: "виправ і задеплой хот фікс ... i am facing this error while trying to place a limit order on phoenix app. i already have a position running".
+- Scope: reproduce the Phoenix isolated-limit request validation failure, compare the
+  browser request with the current Phoenix/Rise contract, apply the smallest safe fix,
+  add a focused regression, commit/push/deploy from `main`, and verify production.

@@ -47,6 +47,7 @@ import {
   phoenixPositionDisplayMetrics,
   sumPhoenixGrossPositionPnl,
 } from '../lib/phoenixPositionMetrics';
+import { phoenixIsolatedLimitNativeFields } from '../lib/phoenixOrderRequests';
 
 const GAME_API = import.meta.env.VITE_GAME_API || '/api';
 const FUTURES_API = import.meta.env.VITE_FUTURES_API || '/api/futures';
@@ -6145,9 +6146,7 @@ export function usePhoenix() {
               })
             );
             const transferAmount = toSafeInstructionNumber(toRawUsdcCeil(transferUsdc), 'isolated transfer amount');
-            const priceInTicks = packet?.priceInTicks == null
-              ? undefined
-              : toSafeInstructionNumber(packet.priceInTicks, 'limit price');
+            const nativeLimitFields = phoenixIsolatedLimitNativeFields(packet);
             let finalIsolatedOneTap = !!isolatedOneTapSession;
             const conditionalAccountIx = attachedTpsl.hasTpsl
               ? await ensureConditionalOrdersAccountIx(isolated.subaccountIndex, orderClient, isolatedOneTapSession
@@ -6158,9 +6157,7 @@ export function usePhoenix() {
               authority: orderAuthority,
               symbol: phx,
               side: sideToUi(sideToPhoenix(side)),
-              price: Number(price),
-              ...(priceInTicks === undefined ? {} : { priceInTicks }),
-              quantity: Number(baseUnits),
+              ...nativeLimitFields,
               transferAmount,
               pdaIndex: 0,
               allowCrossAndIsolatedForAsset: true,

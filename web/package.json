@@ -14,6 +14,7 @@
     "test:bulk-client": "node test-bulk-client.mjs",
     "test:nado-referral": "node test-nado-referral.mjs",
     "test:phoenix-position": "node test-phoenix-position-metrics.mjs",
+    "test:phoenix-isolated-limit": "node test-phoenix-isolated-limit-request.mjs",
     "test:position-pnl": "node test-position-pnl-metrics.mjs",
     "test:avantis-price": "node test-avantis-price-payload.mjs",
     "test:sanctum": "node test-sanctum-lst.mjs",
