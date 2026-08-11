@@ -10,6 +10,7 @@ import { loadHotstuffStoredAgent } from './hotstuffAgentStorage';
 import { ensureNadoLinkedSignerReady } from './nadoLinkedSignerSetup';
 import { readNadoLinkedSigner } from './nadoLinkedSignerStorage';
 import { INK_CHAIN_ID } from './nadoConfig';
+import { readNadoReferralVerification } from './nadoReferral';
 import { readPacificaAgent, findAnyPacificaAgent, listStoredPacificaMasters } from './pacificaAgentStorage';
 import { bindPacificaAgent } from './pacificaBind';
 import { registeredDexWallet, playerLoginWallet } from './playerDexAccounts';
@@ -172,7 +173,18 @@ async function ensureNadoReady(player, ctx = {}) {
     return { ok: false, error: 'Connect your Ink EVM wallet (Futures → Nado).' };
   }
 
+  // Attribution is accepted and remotely verified from Futures. Bot setup
+  // honors the same wallet-scoped local receipt, so a previously stored signer
+  // cannot bypass the mandatory Nado referral gate.
+  if (!readNadoReferralVerification(primary)) {
+    return {
+      ok: false,
+      error: 'Open Futures → Nado and accept the Clash referral before connecting the Nado bot.',
+    };
+  }
+
   for (const w of [primary, ...wallets.filter((x) => x !== primary)]) {
+    if (!readNadoReferralVerification(w)) continue;
     const linked = readNadoLinkedSigner(w);
     if (linked?.privateKey) return { ok: true, wallet: w };
   }

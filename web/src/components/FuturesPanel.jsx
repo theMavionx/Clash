@@ -22,6 +22,7 @@ import { useLighter } from '../hooks/useLighter';
 import { useBulk } from '../hooks/useBulk';
 import { useOstium } from '../hooks/useOstium';
 import { RISEX_BRIDGE_CHAINS } from '../lib/risexConfig';
+import { NADO_REFERRAL_ACCESS } from '../lib/nadoReferral';
 import { useDex, DEX_CONFIG } from '../contexts/DexContext';
 import { useAptosWallet } from '../contexts/AptosWalletContext';
 import { useFuturesMode } from '../contexts/FuturesModeContext';
@@ -3692,7 +3693,7 @@ function FuturesPanel() {
     closePosition, depositToPacifica, withdraw, activate, disconnect, setTpsl, setMarginMode, moveSpotToPerp, switchToRise, switchToInk,
     oneTapWalletFallback, executeOneTapWalletFallback, clearOneTapWalletFallback,
     // Avantis-only — undefined on the Pacifica branch.
-    hasReferrer, linkOurReferrer, oneTapTrading, setOneTapTradingEnabled, connectPerpl, openReferralJoin, approveIntegrator, referralCode, referralUrl, referralTermsUrl, walletMismatch, registeredEvmWallet,
+    hasReferrer, linkOurReferrer, oneTapTrading, setOneTapTradingEnabled, connectPerpl, openReferralJoin, approveIntegrator, referralCode, referralUrl, referralTermsUrl, referralAccess, referralStatus, walletMismatch, registeredEvmWallet,
     // Pacifica agent-wallet — undefined on Avantis (Pacifica-only feature)
     pacAgent, bindAgent, bindingAgent, bindAgentError, forgetAgentLocally, revokeAgentOnServer,
     // Decibel-only — drives the blocking activation modal + gate screen.
@@ -3715,6 +3716,11 @@ function FuturesPanel() {
     () => groupOrdersForList(displayOrders, positions),
     [displayOrders, positions],
   );
+  // A mandatory attribution gate must never trap a trader in market risk.
+  // Existing positions/orders keep the risk-management UI available, while
+  // every new Nado open is still rejected by useNado until referral verifies.
+  const hasNadoRiskToManage = dex === 'nado'
+    && (openedSortedPositions.length > 0 || displayOrders.length > 0);
   const removePendingAction = useCallback((id) => {
     setPendingActions(current => current.filter(action => action.id !== id));
   }, []);
@@ -3908,16 +3914,16 @@ function FuturesPanel() {
       try { localStorage.setItem(referralDismissKey, '1'); } catch { /* storage disabled */ }
     }
   }, [referralDismissKey]);
-  // Avantis: referral linkage banner. Decibel: builder-fee approval banner.
-  // Avantis: referral linkage banner. Decibel runs its full activation
-  // through the dedicated gate screen (see DECIBEL ACTIVATE GATE below)
-  // — that flow already covers builder-fee approval, so the banner is
-  // redundant for Decibel and was only showing because `builderApproved`
-  // can stay false after a partial activation. Keep the banner for
-  // Avantis only.
-  const showReferralBanner =
-    (dex === 'hyperliquid' || dex === 'nado')
-    && !!walletAddr && hasReferrer === false && !referralDismissed;
+  // Hyperliquid keeps its optional one-tap banner. Nado uses a mandatory gate;
+  // only wallets with live exposure see this non-dismissible compact version
+  // so close/cancel actions remain reachable while new opens stay blocked.
+  const showReferralBanner = (
+    dex === 'hyperliquid'
+      ? !!walletAddr && hasReferrer === false && !referralDismissed
+      : dex === 'nado'
+        ? !!walletAddr && referralAccess !== NADO_REFERRAL_ACCESS.READY && hasNadoRiskToManage
+        : false
+  );
   const handleEvmConnected = useCallback(({ address, walletName, provider, rdns }) => {
     setEvmModalOpen(false);
     if (!provider || !address) return;
@@ -5239,7 +5245,17 @@ function FuturesPanel() {
     : 'Open Interest';
   const fundingInfoLabel = dex === 'ostium' ? 'Net L/S 8h' : fundingLabel;
   const oracle = curPriceData ? parseFloat(curPriceData.oracle || 0) : 0;
-  const tradeButtonBlocked = (dex === 'flash' && !!flashMarketBlockReason) || (dex === 'ostium' && !!ostiumMarketBlockMessage);
+  const nadoReferralOpenBlocked = dex === 'nado' && referralAccess !== NADO_REFERRAL_ACCESS.READY;
+  const tradeButtonBlocked = nadoReferralOpenBlocked
+    || (dex === 'flash' && !!flashMarketBlockReason)
+    || (dex === 'ostium' && !!ostiumMarketBlockMessage);
+  const tradeButtonBlockMessage = nadoReferralOpenBlocked
+    ? (referralAccess === NADO_REFERRAL_ACCESS.UNAVAILABLE
+      ? 'Verify your Nado referral before opening another trade.'
+      : `Accept Nado referral ${referralCode || '13z8hnl'} before opening another trade.`)
+    : dex === 'ostium'
+      ? ostiumMarketBlockMessage
+      : `${symbol} is not open for Flash trading right now (${flashMarketBlockReason}).`;
   const tradeButtonBusy = loading || tradeBusy || tradePhase != null;
   useEffect(() => {
     setClientActivity({
@@ -5811,7 +5827,7 @@ function FuturesPanel() {
 
         {tradeButtonBlocked && (
           <div style={S.errorBar}>
-            <span style={S.errorText}>{symbol} is not open for Flash trading right now ({flashMarketBlockReason}).</span>
+            <span style={S.errorText}>{tradeButtonBlockMessage}</span>
           </div>
         )}
         {successMsg && (
@@ -6671,6 +6687,119 @@ function FuturesPanel() {
           onConnected={handleEvmConnected}
           targetChain={evmConnectChain}
         />
+      </>
+    );
+  }
+
+  // ==================== NADO MANDATORY REFERRAL GATE ====================
+  // Nado attribution is wallet-level and immutable once assigned. New/opening
+  // activity stays locked until Accept verifies Fuul/Ink once and stores the
+  // wallet-scoped verification receipt in localStorage.
+  // Wallets with live exposure keep the normal panel so closes/cancels remain
+  // available; useNado independently blocks every new market/limit open.
+  if (
+    dex === 'nado'
+    && hasWallet
+    && referralAccess !== NADO_REFERRAL_ACCESS.READY
+    && !hasNadoRiskToManage
+  ) {
+    const nadoReferralChecking = referralAccess === NADO_REFERRAL_ACCESS.CHECKING;
+    const nadoReferralUnavailable = referralAccess === NADO_REFERRAL_ACCESS.UNAVAILABLE;
+    const nadoReferralBusy = referralLinking || loading || nadoReferralChecking;
+    const nadoReferralError = localAlert
+      || (nadoReferralUnavailable
+        ? referralStatus?.fuul_error || referralStatus?.onchain_error || 'Nado referral verification is temporarily unavailable.'
+        : error);
+    return (
+      <>
+        <style>{animCSS}</style>
+        <style>{`@keyframes act-spin{to{transform:rotate(360deg)}}@keyframes act-pulse{0%,100%{opacity:.7}50%{opacity:1}}`}</style>
+        <div ref={panelRef} className={fullscreen ? 'futures-fullscreen' : ''} style={{
+          ...(fullscreen ? S.containerFull : S.container),
+          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '4px solid #d4c8b0' } : {}),
+          transform: (fullscreen || isMobile) ? undefined : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
+          transition: isDragging ? 'none' : 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
+        }}>
+          <div style={S.header} onPointerDown={handlePointerDown}>
+            <span style={S.headerTitle}>Nado setup</span>
+            <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
+          <div style={{...S.body, alignItems: 'stretch', overflowY: 'auto', overflowX: 'hidden', padding: 0, background: '#fdf8e7'}}>
+            <div style={hlGateStyles.frame}>
+              <div style={hlGateStyles.titleBlock}>
+                <div style={hlGateStyles.kicker}>
+                  {nadoReferralChecking ? 'LOADING SAVED STATUS' : nadoReferralUnavailable ? 'VERIFICATION REQUIRED' : 'REQUIRED BEFORE TRADING'}
+                </div>
+                <div style={hlGateStyles.title}>
+                  {nadoReferralChecking ? 'Checking this browser' : 'Accept the Clash referral'}
+                </div>
+                <div style={hlGateStyles.subtitle}>
+                  {nadoReferralChecking
+                    ? 'Clash is reading the saved verification for this wallet.'
+                    : `Press Accept once. Clash then verifies referral ${referralCode || '13z8hnl'} through Nado and stores the confirmed result for this wallet in this browser.`}
+                </div>
+              </div>
+
+              <ol style={hlGateStyles.stepList}>
+                <li style={hlGateStyles.stepItem}>
+                  <span style={{...hlGateStyles.stepBubble, ...(nadoReferralChecking ? hlGateStyles.stepBubble_active : hlGateStyles.stepBubble_done)}}>
+                    {nadoReferralChecking ? <span style={hlGateStyles.spinner} /> : '1'}
+                  </span>
+                  <span style={hlGateStyles.stepText}>
+                    <span style={hlGateStyles.stepLabel}>Accept referral setup</span>
+                    <span style={hlGateStyles.stepHint}>Starts the check; a signature is requested only if the wallet has no referrer.</span>
+                  </span>
+                </li>
+                <li style={hlGateStyles.stepItem}>
+                  <span style={{...hlGateStyles.stepBubble, ...(!nadoReferralChecking && !nadoReferralUnavailable ? hlGateStyles.stepBubble_active : {})}}>2</span>
+                  <span style={hlGateStyles.stepText}>
+                    <span style={hlGateStyles.stepLabel}>Verify through Nado</span>
+                    <span style={hlGateStyles.stepHint}>Fuul API plus the Nado endpoint contract on Ink; existing referrals are not overwritten.</span>
+                  </span>
+                </li>
+                <li style={hlGateStyles.stepItem}>
+                  <span style={hlGateStyles.stepBubble}>3</span>
+                  <span style={hlGateStyles.stepText}>
+                    <span style={hlGateStyles.stepLabel}>Remember and unlock trading</span>
+                    <span style={hlGateStyles.stepHint}>The verified wallet receipt is saved locally so normal opens do not repeat API checks.</span>
+                  </span>
+                </li>
+              </ol>
+
+              {referralTermsUrl && (
+                <div style={hlGateStyles.footnote}>
+                  By accepting, you agree to the{' '}
+                  <a href={referralTermsUrl} target="_blank" rel="noreferrer" style={{color: '#6d4f08', textDecoration: 'underline'}}>
+                    Nado referral terms
+                  </a>.
+                </div>
+              )}
+
+              {nadoReferralError && <div style={hlGateStyles.errorBox}>{humanizeTradeError(nadoReferralError, dex)}</div>}
+
+              <button
+                data-nodrag
+                style={{
+                  ...hlGateStyles.primaryBtn,
+                  ...(nadoReferralBusy ? hlGateStyles.primaryBtnBusy : {}),
+                }}
+                disabled={nadoReferralBusy}
+                onClick={handleLinkReferrer}
+              >
+                {nadoReferralBusy
+                  ? 'CHECKING...'
+                  : nadoReferralUnavailable
+                    ? 'RETRY ACCEPT & VERIFY'
+                    : `ACCEPT ${referralCode || '13z8hnl'} & CONTINUE`}
+              </button>
+              <div style={hlGateStyles.footnote}>
+                Required only when this wallet has no Nado referrer. Existing referrals pass automatically.
+              </div>
+            </div>
+          </div>
+        </div>
       </>
     );
   }
@@ -10948,10 +11077,12 @@ function FuturesPanel() {
                   because the underlying mechanic differs — Decibel is NOT a
                   trader-side discount, it's how the game gets attribution. */}
               <span style={{display: 'block'}}>
-                {dex === 'decibel'
-                  ? 'Activate trading on Decibel'
-                  : dex === 'nado'
-                  ? 'Add the Clash referral on Nado'
+                 {dex === 'decibel'
+                   ? 'Activate trading on Decibel'
+                   : dex === 'nado'
+                   ? (referralAccess === NADO_REFERRAL_ACCESS.CHECKING
+                     ? 'Loading saved Nado referral'
+                     : 'Nado referral is required for new trades')
                   : dex === 'hyperliquid'
                   ? (oneTapTrading?.approved ? 'One tap trading is ready' : 'Enable Hyperliquid one tap trading')
                   : 'Unlock 5% off every Avantis trade'}
@@ -10960,7 +11091,9 @@ function FuturesPanel() {
                 {dex === 'nado'
                   ? (
                     <>
-                      Sign the exact message for code {referralCode || '13z8hnl'}; Clash verifies it through Nado&apos;s referral API.
+                      {referralAccess === NADO_REFERRAL_ACCESS.CHECKING
+                        ? 'Reading this wallet\'s saved verification. Existing positions can still be closed.'
+                        : `Accept code ${referralCode || '13z8hnl'} once; Clash verifies it and saves the result locally. Existing positions can still be closed.`}
                       {referralTermsUrl && (
                         <>
                           {' '}By accepting, you agree to the{' '}
@@ -11000,12 +11133,13 @@ function FuturesPanel() {
             </button>
             <button
               data-nodrag
-              onClick={handleDismissReferral}
+              onClick={dex === 'nado' ? undefined : handleDismissReferral}
               title="Dismiss"
               style={{
                 background: 'transparent', border: 'none',
                 color: '#8a6914', cursor: 'pointer',
                 fontSize: 18, fontWeight: 900, padding: '0 4px', lineHeight: 1,
+                display: dex === 'nado' ? 'none' : undefined,
               }}
             >×</button>
           </div>

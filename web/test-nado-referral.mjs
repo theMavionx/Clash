@@ -1,12 +1,17 @@
 import assert from 'node:assert/strict';
 import {
   NADO_REFERRAL_CODE,
+  NADO_REFERRAL_ACCESS,
   acceptNadoReferralTerms,
   applyNadoReferralCode,
   fetchNadoReferralCodeAvailability,
   fetchNadoReferralStatus,
   fetchNadoReferralTermsStatus,
+  nadoReferralAccessState,
   nadoReferralSignatureMessage,
+  readNadoReferralVerification,
+  rememberNadoReferralVerification,
+  requireNadoReferralVerification,
 } from './src/lib/nadoReferral.js';
 
 const wallet = '0x39B36f1EDF2eF5a6f2e02991b3a85Fb356eB5005';
@@ -25,6 +30,51 @@ const fetchImpl = async (url, options) => {
 };
 
 assert.equal(nadoReferralSignatureMessage(), `I am using referral code ${NADO_REFERRAL_CODE}`);
+assert.equal(nadoReferralAccessState(null, wallet), NADO_REFERRAL_ACCESS.CHECKING);
+assert.equal(nadoReferralAccessState({ wallet, checking: true, has_referrer: true }, wallet), NADO_REFERRAL_ACCESS.CHECKING);
+assert.equal(nadoReferralAccessState({ wallet, checking: false, has_referrer: false }, wallet), NADO_REFERRAL_ACCESS.REQUIRED);
+assert.equal(nadoReferralAccessState({ wallet, checking: false, has_referrer: null }, wallet), NADO_REFERRAL_ACCESS.UNAVAILABLE);
+assert.equal(nadoReferralAccessState({ wallet, checking: false, has_referrer: true }, wallet), NADO_REFERRAL_ACCESS.READY);
+assert.equal(
+  nadoReferralAccessState({ wallet: '0x0000000000000000000000000000000000000001', checking: false, has_referrer: true }, wallet),
+  NADO_REFERRAL_ACCESS.CHECKING,
+);
+const stored = new Map();
+const storage = {
+  getItem: key => stored.get(key) || null,
+  setItem: (key, value) => stored.set(key, value),
+};
+assert.equal(readNadoReferralVerification(wallet, { storage }), null);
+const receipt = rememberNadoReferralVerification(wallet, {
+  source: 'fuul_api',
+  code: NADO_REFERRAL_CODE,
+  linked_our_referral: true,
+}, { storage });
+assert.equal(receipt.verified, true);
+assert.equal(receipt.wallet, wallet.toLowerCase());
+assert.equal(receipt.linked_our_referral, true);
+assert.equal(readNadoReferralVerification(wallet, { storage }).code, NADO_REFERRAL_CODE);
+assert.equal(
+  readNadoReferralVerification('0x0000000000000000000000000000000000000001', { storage }),
+  null,
+);
+const blockedStorage = {
+  getItem: () => null,
+  setItem: () => { throw new Error('storage blocked'); },
+};
+assert.equal(rememberNadoReferralVerification(wallet, {}, { storage: blockedStorage }), null);
+assert.equal(
+  requireNadoReferralVerification({ wallet, checking: false, has_referrer: true }, wallet).has_referrer,
+  true,
+);
+assert.throws(
+  () => requireNadoReferralVerification({ wallet, checking: false, has_referrer: false }, wallet),
+  /Accept the Clash Nado referral 13z8hnl/,
+);
+assert.throws(
+  () => requireNadoReferralVerification(null, wallet),
+  /verification is unavailable/,
+);
 assert.deepEqual(await fetchNadoReferralStatus(wallet, { fetchImpl }), { referred: false });
 assert.equal((await fetchNadoReferralTermsStatus(wallet, { fetchImpl })).terms_accepted, false);
 assert.equal((await fetchNadoReferralCodeAvailability(NADO_REFERRAL_CODE, { fetchImpl })).available, true);

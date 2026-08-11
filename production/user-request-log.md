@@ -3326,3 +3326,25 @@ Follow-up:
 - Scope: reproduce the Phoenix isolated-limit request validation failure, compare the
   browser request with the current Phoenix/Rise contract, apply the smallest safe fix,
   add a focused regression, commit/push/deploy from `main`, and verify production.
+
+## UR-2026-08-11-NADO-MANDATORY-REFERRAL
+
+- Timestamp: 2026-08-11 16:49 (Europe/Kyiv)
+- Request: make accepting the Clash Nado referral mandatory for wallets that do
+  not yet have a referrer, like the Pacifica activation flow, instead of showing
+  a dismissible optional banner.
+- Scope: keep the existing Fuul API plus Ink contract verification, replace the
+  optional Nado prompt with a non-bypassable setup gate, and run the remote
+  verification only when the player presses Accept. Store a wallet-scoped
+  verified receipt in browser localStorage, require that receipt for new orders,
+  deposits, and Nado bot setup, and preserve risk-reducing close/cancel access for
+  wallets with existing exposure. No commit, push, deployment, or production
+  mutation requested.
+
+### Release authorization follow-up
+
+- Timestamp: 2026-08-11 17:21 (Europe/Kyiv)
+- Request: "коміт пуш деплой на прод".
+- Approval: explicit authorization to commit the reviewed current Nado referral
+  changes on `main`, push `origin/main`, deploy through the canonical production
+  workflow, and verify the live revision and service health.

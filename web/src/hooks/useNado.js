@@ -28,6 +28,7 @@ import {
   normalizeNadoPrices,
 } from '../lib/nadoClient';
 import {
+  NADO_REFERRAL_ACCESS,
   NADO_REFERRAL_CODE,
   NADO_REFERRAL_URL,
   acceptNadoReferralTerms,
@@ -35,7 +36,11 @@ import {
   fetchNadoReferralCodeAvailability,
   fetchNadoReferralStatus,
   fetchNadoReferralTermsStatus,
+  nadoReferralAccessState,
   nadoReferralSignatureMessage,
+  readNadoReferralVerification,
+  rememberNadoReferralVerification,
+  requireNadoReferralVerification,
 } from '../lib/nadoReferral';
 
 const POLL_INTERVAL_MS = 45_000;
@@ -364,6 +369,7 @@ export function useNado() {
   const claimGoldRef = useRef(null);
   const importFillsRef = useRef(null);
   const referralWalletRef = useRef(null);
+  const referralStatusRef = useRef(null);
 
   const registeredWallet = registeredDexWallet(player, 'nado', 'evm');
   const registeredEvmWallet = isNadoAddress(registeredWallet) ? registeredWallet.toLowerCase() : null;
@@ -452,11 +458,14 @@ export function useNado() {
 
   const refreshReferralStatus = useCallback(async () => {
     if (!walletAddr) {
+      referralStatusRef.current = null;
       setReferralStatus(null);
       return { has_referrer: false, referred: false, onchain_code: '' };
     }
     const expectedWallet = String(walletAddr).toLowerCase();
-    setReferralStatus(previous => ({ ...(previous || {}), wallet: expectedWallet, checking: true }));
+    const checking = { ...(referralStatusRef.current || {}), wallet: expectedWallet, checking: true };
+    referralStatusRef.current = checking;
+    setReferralStatus(checking);
     const [fuulResult, termsResult, onchainResult] = await Promise.allSettled([
       fetchNadoReferralStatus(walletAddr),
       fetchNadoReferralTermsStatus(walletAddr),
@@ -489,10 +498,12 @@ export function useNado() {
       onchain_error: onchainResult.status === 'rejected' ? nadoErrorMessage(onchainResult.reason) : null,
     };
     if (referralWalletRef.current !== expectedWallet) return { ...next, stale: true };
-    setReferralStatus(previous => ({
+    const stored = {
       ...next,
-      linked_our_referral: previous?.linked_our_referral === true && hasReferrer === true,
-    }));
+      linked_our_referral: referralStatusRef.current?.linked_our_referral === true && hasReferrer === true,
+    };
+    referralStatusRef.current = stored;
+    setReferralStatus(stored);
     if (!fuulKnown && onchainResult.status === 'rejected') {
       console.warn('[useNado] referral verification unavailable:', next.fuul_error, next.onchain_error);
     }
@@ -731,14 +742,26 @@ export function useNado() {
 
   useEffect(() => {
     if (!walletAddr) {
+      referralStatusRef.current = null;
       setReferralStatus(null);
       return;
     }
     if (!isActiveDex) return;
-    refreshReferralStatus().catch((e) => {
-      console.warn('[useNado] referral status refresh:', nadoErrorMessage(e));
-    });
-  }, [isActiveDex, walletAddr, refreshReferralStatus]);
+    const receipt = readNadoReferralVerification(walletAddr);
+    const localStatus = {
+      wallet: String(walletAddr).toLowerCase(),
+      checking: false,
+      has_referrer: receipt?.verified === true,
+      referred: receipt?.verified === true,
+      code: receipt?.code || null,
+      onchain_code: '',
+      source: receipt?.source || 'local_unverified',
+      local_verified: receipt?.verified === true,
+      linked_our_referral: receipt?.linked_our_referral === true,
+    };
+    referralStatusRef.current = localStatus;
+    setReferralStatus(localStatus);
+  }, [isActiveDex, walletAddr]);
 
   useEffect(() => {
     if (!isActiveDex) return undefined;
@@ -768,6 +791,7 @@ export function useNado() {
     setWalletUsdc(null);
     replaceTriggerOrders([]);
     setSetupVerified(false);
+    referralStatusRef.current = null;
     setReferralStatus(null);
     setWalletUsdcStatus({
       status: 'idle',
@@ -906,11 +930,33 @@ export function useNado() {
       await ensureReady();
       const current = await refreshReferralStatus();
       if (current?.has_referrer === true) {
+        const linkedOurReferral = String(current.onchain_code || '').toLowerCase()
+          === NADO_REFERRAL_CODE.toLowerCase();
+        const receipt = rememberNadoReferralVerification(walletAddr, {
+          code: current.onchain_code || current.code || null,
+          source: current.source || 'nado_verification',
+          linked_our_referral: linkedOurReferral,
+        });
+        if (!receipt) {
+          throw new Error('Nado referral is verified, but Clash could not save it in this browser. Enable local storage and retry.');
+        }
+        const confirmed = {
+          ...current,
+          wallet: String(walletAddr).toLowerCase(),
+          checking: false,
+          has_referrer: true,
+          local_verified: true,
+          linked_our_referral: linkedOurReferral,
+          receipt,
+        };
+        referralStatusRef.current = confirmed;
+        setReferralStatus(confirmed);
         return {
           success: true,
           already_linked: true,
           code: current.onchain_code || null,
           source: current.source,
+          referral: confirmed,
         };
       }
 
@@ -945,17 +991,30 @@ export function useNado() {
         throw new Error('Nado accepted the referral request but did not verify it yet. Retry in a few seconds.');
       }
 
-      const refreshed = await refreshReferralStatus();
       const confirmed = {
-        ...refreshed,
+        wallet: String(walletAddr).toLowerCase(),
+        checking: false,
         has_referrer: true,
         referred: true,
         code: NADO_REFERRAL_CODE,
+        onchain_code: '',
         linked_our_referral: true,
         source: 'fuul_api',
-        terms_document_url: terms?.terms_document_url || refreshed?.terms_document_url || null,
+        terms_accepted: true,
+        terms_acceptance_required: terms?.terms_acceptance_required === true,
+        terms_document_url: terms?.terms_document_url || null,
       };
+      confirmed.receipt = rememberNadoReferralVerification(walletAddr, {
+        code: NADO_REFERRAL_CODE,
+        source: 'fuul_api',
+        linked_our_referral: true,
+      });
+      if (!confirmed.receipt) {
+        throw new Error('Nado referral is verified, but Clash could not save it in this browser. Enable local storage and retry.');
+      }
+      confirmed.local_verified = true;
       if (referralWalletRef.current === String(walletAddr).toLowerCase()) {
+        referralStatusRef.current = confirmed;
         setReferralStatus(confirmed);
       }
       return { success: true, code: NADO_REFERRAL_CODE, referral: confirmed };
@@ -967,6 +1026,11 @@ export function useNado() {
       setLoading(false);
     }
   }, [walletAddr, ensureReady, refreshReferralStatus, getWalletClient]);
+
+  const ensureReferralReadyForOpening = useCallback(async () => {
+    const current = referralStatusRef.current;
+    return requireNadoReferralVerification(current, walletAddr, NADO_REFERRAL_CODE);
+  }, [walletAddr]);
 
   const openReferralJoin = useCallback(() => {
     if (typeof window !== 'undefined') window.open(NADO_REFERRAL_URL, '_blank', 'noopener,noreferrer');
@@ -1201,6 +1265,7 @@ export function useNado() {
     setLoading(true);
     setError(null);
     try {
+      await ensureReferralReadyForOpening();
       let market = findMarket(symbol);
       if (!market) {
         await fetchMarkets();
@@ -1238,13 +1303,14 @@ export function useNado() {
     } finally {
       setLoading(false);
     }
-  }, [findMarket, fetchMarkets, placeOrder, placeAttachedTpslOrders, fetchAccount, syncRewards]);
+  }, [ensureReferralReadyForOpening, findMarket, fetchMarkets, placeOrder, placeAttachedTpslOrders, fetchAccount, syncRewards]);
 
   const placeLimitOrder = useCallback(async (symbol, side, price, amount, _tif = 'GTC', leverage = 1, options = {}) => {
     void _tif;
     setLoading(true);
     setError(null);
     try {
+      await ensureReferralReadyForOpening();
       let market = findMarket(symbol);
       if (!market) {
         await fetchMarkets();
@@ -1281,7 +1347,7 @@ export function useNado() {
     } finally {
       setLoading(false);
     }
-  }, [findMarket, fetchMarkets, placeOrder, placeAttachedTpslOrders, fetchAccount, syncRewards]);
+  }, [ensureReferralReadyForOpening, findMarket, fetchMarkets, placeOrder, placeAttachedTpslOrders, fetchAccount, syncRewards]);
 
   const closePosition = useCallback(async (symbol, side, amountBase) => {
     setLoading(true);
@@ -1361,6 +1427,7 @@ export function useNado() {
     setError(null);
     try {
       if (!walletAddr) throw new Error('Connect your EVM wallet first');
+      await ensureReferralReadyForOpening();
       await ensureReady();
       const assetId = String(options?.asset || options?.assetId || 'usdt0').toLowerCase();
       const asset = NADO_DEPOSIT_ASSETS.find(row => row.id === assetId) || NADO_DEPOSIT_ASSETS[0];
@@ -1377,9 +1444,7 @@ export function useNado() {
           : {}),
       });
       await fetchAccount();
-      await refreshReferralStatus();
       setTimeout(fetchAccount, 10_000);
-      setTimeout(refreshReferralStatus, 10_000);
       return { success: true, txHash, info: `Nado ${asset.label} deposit submitted on Ink. Balance can take a few moments to refresh.` };
     } catch (e) {
       const msg = nadoErrorMessage(e, 'Nado deposit failed');
@@ -1388,7 +1453,7 @@ export function useNado() {
     } finally {
       setLoading(false);
     }
-  }, [walletAddr, ensureReady, createClient, fetchAccount, referralStatus, refreshReferralStatus]);
+  }, [walletAddr, ensureReferralReadyForOpening, ensureReady, createClient, fetchAccount, referralStatus]);
 
   const switchToInk = useCallback(async () => {
     await ensureReady();
@@ -1583,7 +1648,12 @@ export function useNado() {
     registeredEvmWallet,
     oneTapTrading: linkedSignerState,
     setOneTapTradingEnabled: setNadoOneTapTradingEnabled,
-    hasReferrer: referralStatus?.has_referrer ?? null,
+    hasReferrer: nadoReferralAccessState(referralStatus, walletAddr) === NADO_REFERRAL_ACCESS.READY
+      ? true
+      : nadoReferralAccessState(referralStatus, walletAddr) === NADO_REFERRAL_ACCESS.REQUIRED
+        ? false
+        : null,
+    referralAccess: nadoReferralAccessState(referralStatus, walletAddr),
     linkOurReferrer,
     referralStatus,
     referralCode: NADO_REFERRAL_CODE,

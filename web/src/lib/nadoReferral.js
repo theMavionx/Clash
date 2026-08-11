@@ -19,6 +19,82 @@ export const NADO_FUUL_API_KEY = String(
 ).trim();
 
 const EVM_ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
+const NADO_REFERRAL_VERIFICATION_STORAGE_PREFIX = 'clash_nado_referral_verified_v1';
+
+export const NADO_REFERRAL_ACCESS = Object.freeze({
+  DISCONNECTED: 'disconnected',
+  CHECKING: 'checking',
+  REQUIRED: 'required',
+  UNAVAILABLE: 'unavailable',
+  READY: 'ready',
+});
+
+// Referral state is wallet-scoped. Treat a stale result from a previously
+// connected wallet as unknown so a wallet switch can never inherit another
+// wallet's approval for even a single render.
+export function nadoReferralAccessState(status, walletAddress) {
+  const wallet = String(walletAddress || '').trim().toLowerCase();
+  if (!wallet) return NADO_REFERRAL_ACCESS.DISCONNECTED;
+  const statusWallet = String(status?.wallet || '').trim().toLowerCase();
+  if (!status || statusWallet !== wallet || status?.checking === true) {
+    return NADO_REFERRAL_ACCESS.CHECKING;
+  }
+  if (status?.has_referrer === true) return NADO_REFERRAL_ACCESS.READY;
+  if (status?.has_referrer === false) return NADO_REFERRAL_ACCESS.REQUIRED;
+  return NADO_REFERRAL_ACCESS.UNAVAILABLE;
+}
+
+export function requireNadoReferralVerification(status, walletAddress, code = NADO_REFERRAL_CODE) {
+  const access = nadoReferralAccessState(status, walletAddress);
+  if (access === NADO_REFERRAL_ACCESS.READY) return status;
+  if (access === NADO_REFERRAL_ACCESS.REQUIRED) {
+    throw new Error(`Accept the Clash Nado referral ${assertReferralCode(code)} before opening a trade`);
+  }
+  throw new Error('Nado referral verification is unavailable. Accept and verify the referral before opening a trade.');
+}
+
+function referralVerificationStorage(options = {}) {
+  if (options.storage) return options.storage;
+  if (typeof window !== 'undefined') return window.localStorage;
+  return null;
+}
+
+function referralVerificationKey(address) {
+  return `${NADO_REFERRAL_VERIFICATION_STORAGE_PREFIX}:${assertEvmAddress(address).toLowerCase()}`;
+}
+
+export function readNadoReferralVerification(address, options = {}) {
+  const storage = referralVerificationStorage(options);
+  if (!storage) return null;
+  try {
+    const record = JSON.parse(storage.getItem(referralVerificationKey(address)) || 'null');
+    const wallet = assertEvmAddress(address).toLowerCase();
+    if (record?.verified !== true || String(record?.wallet || '').toLowerCase() !== wallet) return null;
+    return record;
+  } catch {
+    return null;
+  }
+}
+
+export function rememberNadoReferralVerification(address, details = {}, options = {}) {
+  const storage = referralVerificationStorage(options);
+  if (!storage) return null;
+  const wallet = assertEvmAddress(address).toLowerCase();
+  const record = {
+    wallet,
+    verified: true,
+    verified_at: Date.now(),
+    source: String(details?.source || 'nado_verification'),
+    code: details?.code ? String(details.code) : null,
+    linked_our_referral: details?.linked_our_referral === true,
+  };
+  try {
+    storage.setItem(referralVerificationKey(wallet), JSON.stringify(record));
+    return record;
+  } catch {
+    return null;
+  }
+}
 
 function assertEvmAddress(address) {
   const clean = String(address || '').trim();
