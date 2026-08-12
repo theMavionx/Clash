@@ -8,6 +8,10 @@ import { DEX_CONFIG, getAvailableDexConfigs } from '../contexts/DexContext';
 import { useAuthFlow } from '../auth/useAuthFlow';
 import { useOndoRegionAccess } from '../hooks/useOndoRegionAccess';
 import { openSolanaWallet } from '../lib/solanaWalletUi';
+import {
+  TradingRegionGate,
+  TradingSetupGate,
+} from './trading/TradingSetupGate';
 
 const GAME_AUTH_STORAGE_KEY = 'clash_game_auth_v1';
 const DEX_PICKED_KEY = 'clash_dex_picked';
@@ -158,33 +162,14 @@ function DexPicker({ onPick, isInFrame, isSolanaMobile }) {
 }
 
 function OndoRegionGate({ access, onRetry, onBack }) {
-  const checking = !access || access.status === 'idle' || access.status === 'checking';
-  const unavailable = access?.status === 'unavailable';
   return (
-    <div style={S.bodyStack}>
-      <img
-        src={DEX_CONFIG.ondo.logo}
-        alt="ONDO PERPS"
-        style={{width: 88, height: 88, objectFit: 'contain', alignSelf: 'center', borderRadius: 18, background: '#000'}}
-      />
-      <h3 style={{...S.sectionTitle, textAlign: 'center'}}>
-        {checking ? 'CHECKING REGION...' : unavailable ? 'REGION CHECK UNAVAILABLE' : 'ONDO PERPS IS UNAVAILABLE'}
-      </h3>
-      <p style={{...S.subtle, textAlign: 'center'}}>
-        {checking
-          ? 'Please wait while Clash checks whether Ondo trading is available in your country or IP region.'
-          : unavailable
-            ? (access?.message || 'Clash could not verify your region, so Ondo access remains locked.')
-            : 'Clash cannot provide Ondo trading access to users in the United States, Canada, U.S. territories, or sanctioned jurisdictions.'}
-      </p>
-      {!checking && (
-        <div style={{border: '2px solid #FCA5A5', borderRadius: 12, padding: '12px 14px', background: '#FEE2E2', color: '#991B1B', fontSize: 12, lineHeight: 1.45, fontWeight: 800, textAlign: 'center'}}>
-          Wallet sign-in and all Ondo account and trading actions are disabled through Clash in restricted regions.
-        </div>
-      )}
-      {unavailable && <button type="button" style={S.primaryBtn} onClick={onRetry}>RETRY CHECK</button>}
-      {!checking && <button type="button" style={S.secondaryBtn} onClick={onBack}>CHOOSE ANOTHER EXCHANGE</button>}
-    </div>
+    <TradingRegionGate
+      venueName="Ondo Perps"
+      logo={DEX_CONFIG.ondo.logo}
+      access={access}
+      onRetry={onRetry}
+      onBack={onBack}
+    />
   );
 }
 
@@ -351,6 +336,34 @@ function ContinueAccount({ wallet, name, error, onContinue }) {
   );
 }
 
+function ConnectVenueGate({
+  dex,
+  kicker = 'SECURE CONNECTION',
+  title,
+  subtitle,
+  steps,
+  actions,
+  error = '',
+  footnote = 'Self-custody stays enabled: Clash never receives your wallet private key.',
+}) {
+  const cfg = dex ? (DEX_CONFIG[dex] || DEX_CONFIG.pacifica) : null;
+  return (
+    <TradingSetupGate
+      kicker={kicker}
+      title={title}
+      subtitle={subtitle}
+      logo={cfg?.logo}
+      logoAlt={cfg?.label || ''}
+      logoBackground={cfg ? `linear-gradient(180deg, ${cfg.color} 0%, ${cfg.colorDark} 100%)` : '#fffaf0'}
+      steps={steps}
+      actions={actions}
+      error={error}
+      footnote={footnote}
+      style={{ paddingTop: 4, paddingBottom: 4 }}
+    />
+  );
+}
+
 function ConnectPacifica({ onOpenWalletModal, onPrivyLogin, privyEnabled, privyAuthed, dex = 'pacifica' }) {
   const venue = dex === 'bulk' ? 'BULK' : dex === 'flash' ? 'FLASH TRADE' : dex === 'gmtrade' ? 'GMTRADE' : dex === 'phoenix' ? 'PHOENIX' : 'PACIFICA';
   const connectCopy = dex === 'bulk'
@@ -360,21 +373,31 @@ function ConnectPacifica({ onOpenWalletModal, onPrivyLogin, privyEnabled, privyA
     : dex === 'flash'
       ? 'Connect your Solana wallet to start playing. Flash Trade transactions are built by the Flash v2 transaction builder and signed by your own wallet - we never hold your keys.'
     : 'Connect your Solana wallet to start playing. Trades are signed by your own wallet - we never hold your keys.';
+  const steps = [
+    { id: 'wallet', label: 'Connect a Solana wallet', hint: 'Choose email or a wallet app. The connected wallet remains self-custodial.', status: 'active' },
+    { id: 'venue', label: `Verify ${venue} access`, hint: dex === 'bulk' ? 'Clash checks beta access and the builder approval.' : 'Clash verifies the venue account and required attribution.', status: 'pending' },
+    { id: 'ready', label: 'Unlock trading', hint: 'Balances and markets load only after the venue setup succeeds.', status: 'pending' },
+  ];
+  const actions = [];
+  if (privyEnabled) actions.push({
+    label: privyAuthed ? 'CONTINUE WITH EMAIL' : 'SIGN IN WITH EMAIL',
+    onClick: onPrivyLogin,
+    icon: <EmailIcon />,
+  });
+  actions.push({
+    label: 'CONNECT SOLANA WALLET',
+    onClick: onOpenWalletModal,
+    icon: <WalletIcon />,
+    variant: privyEnabled ? 'secondary' : 'primary',
+  });
   return (
-    <div style={S.bodyStack}>
-      <h3 style={S.sectionTitle}>CONNECT TO {venue}</h3>
-      <p style={S.subtle}>
-        {connectCopy}
-      </p>
-      {privyEnabled && (
-        <button style={S.primaryBtn} onClick={onPrivyLogin}>
-          <EmailIcon /> {privyAuthed ? 'CONTINUE WITH EMAIL' : 'SIGN IN WITH EMAIL'}
-        </button>
-      )}
-      <button style={privyEnabled ? S.secondaryBtn : S.primaryBtn} onClick={onOpenWalletModal}>
-        <WalletIcon /> CONNECT SOLANA WALLET
-      </button>
-    </div>
+    <ConnectVenueGate
+      dex={dex}
+      title={`Connect to ${venue}`}
+      subtitle={connectCopy}
+      steps={steps}
+      actions={actions}
+    />
   );
 }
 
@@ -411,60 +434,72 @@ function ConnectLinkedWallet({
         }
       : onOpenWalletModal;
 
+  const actions = [];
+  if (privyEnabled) actions.push({
+    label: privyAuthed ? 'CONTINUE WITH EMAIL' : 'SIGN IN WITH EMAIL',
+    onClick: onPrivyLogin,
+    icon: <EmailIcon />,
+  });
+  actions.push({
+    label: cta,
+    onClick,
+    disabled: kind === 'aptos' && aptosConnecting,
+    icon: <WalletIcon />,
+    variant: privyEnabled ? 'secondary' : 'primary',
+  });
   return (
-    <div style={S.bodyStack}>
-      <h3 style={S.sectionTitle}>CONNECT TO {String(cfg.label || 'CLASH').toUpperCase()}</h3>
-      <p style={S.subtle}>
-        Reconnect the wallet linked to this game account to continue. You can connect a separate trading wallet after login if this venue needs another chain.
-      </p>
-      {privyEnabled && (
-        <button style={S.primaryBtn} onClick={onPrivyLogin}>
-          <EmailIcon /> {privyAuthed ? 'CONTINUE WITH EMAIL' : 'SIGN IN WITH EMAIL'}
-        </button>
-      )}
-      <button
-        style={privyEnabled ? S.secondaryBtn : S.primaryBtn}
-        onClick={onClick}
-        disabled={kind === 'aptos' && aptosConnecting}
-      >
-        <WalletIcon /> {cta}
-      </button>
-    </div>
+    <ConnectVenueGate
+      dex={dex}
+      kicker="LINKED WALLET REQUIRED"
+      title={`Reconnect to ${String(cfg.label || 'Clash')}`}
+      subtitle="Reconnect the wallet already linked to this game account. A separate trading wallet can be connected after login when the venue needs another chain."
+      steps={[
+        { id: 'match', label: 'Reconnect the linked wallet', hint: `${shortWallet(wallet)} must approve this game session.`, status: 'active' },
+        { id: 'verify', label: 'Verify account ownership', hint: 'Clash checks that the connected address matches the saved account.', status: 'pending' },
+        { id: 'venue', label: 'Continue venue setup', hint: 'Venue-specific builder, referral, or signer checks follow next.', status: 'pending' },
+      ]}
+      actions={actions}
+    />
   );
 }
 
 function ConnectAccount({ onOpenWalletModal, onOpenEvmModal, onConnectAptos, aptosConnecting, aptosHasProvider, onPrivyLogin, privyEnabled, privyAuthed }) {
+  const actions = [];
+  if (privyEnabled) actions.push({
+    label: privyAuthed ? 'CONTINUE WITH EMAIL' : 'EMAIL / PASSWORD',
+    onClick: onPrivyLogin,
+    icon: <EmailIcon />,
+  });
+  actions.push(
+    { label: 'CONNECT EVM WALLET', onClick: onOpenEvmModal, icon: <WalletIcon />, variant: privyEnabled ? 'secondary' : 'primary' },
+    { label: 'CONNECT SOLANA WALLET', onClick: onOpenWalletModal, icon: <WalletIcon />, variant: 'secondary' },
+    {
+      label: aptosConnecting ? 'CONNECTING...' : (aptosHasProvider ? 'CONNECT APTOS WALLET' : 'INSTALL PETRA'),
+      disabled: aptosConnecting,
+      icon: <WalletIcon />,
+      variant: 'secondary',
+      onClick: () => {
+        if (!aptosHasProvider) {
+          try { window.open('https://petra.app/', '_blank', 'noopener,noreferrer'); } catch {}
+          return;
+        }
+        onConnectAptos();
+      },
+    },
+  );
   return (
-    <div style={S.bodyStack}>
-      <h3 style={S.sectionTitle}>CREATE YOUR ACCOUNT</h3>
-      <p style={S.subtle}>
-        Sign in once, then choose any supported perp venue. You can switch venues later without losing your village, quests, or tournament progress.
-      </p>
-      {privyEnabled && (
-        <button style={S.primaryBtn} onClick={onPrivyLogin}>
-          <EmailIcon /> {privyAuthed ? 'CONTINUE WITH EMAIL' : 'EMAIL / PASSWORD'}
-        </button>
-      )}
-      <button style={privyEnabled ? S.secondaryBtn : S.primaryBtn} onClick={onOpenEvmModal}>
-        <WalletIcon /> CONNECT EVM WALLET
-      </button>
-      <button style={S.secondaryBtn} onClick={onOpenWalletModal}>
-        <WalletIcon /> CONNECT SOLANA WALLET
-      </button>
-      <button
-        style={S.secondaryBtn}
-        onClick={() => {
-          if (!aptosHasProvider) {
-            try { window.open('https://petra.app/', '_blank', 'noopener,noreferrer'); } catch {}
-            return;
-          }
-          onConnectAptos();
-        }}
-        disabled={aptosConnecting}
-      >
-        <WalletIcon /> {aptosConnecting ? 'CONNECTING...' : (aptosHasProvider ? 'CONNECT APTOS WALLET' : 'INSTALL PETRA')}
-      </button>
-    </div>
+    <ConnectVenueGate
+      kicker="ONE GAME ACCOUNT"
+      title="Create your Clash account"
+      subtitle="Sign in once, then use any supported perp venue without losing your village, quests, or tournament progress."
+      steps={[
+        { id: 'login', label: 'Choose a secure sign-in', hint: 'Email, EVM, Solana, and Aptos are supported.', status: 'active' },
+        { id: 'profile', label: 'Create your game profile', hint: 'Your village and tournament progress attach to this account.', status: 'pending' },
+        { id: 'exchange', label: 'Choose an exchange', hint: 'Each venue then shows the same clear setup checklist.', status: 'pending' },
+      ]}
+      actions={actions}
+      footnote="You can switch exchanges later without creating another game account."
+    />
   );
 }
 
@@ -520,21 +555,39 @@ function ConnectAvantis({ onOpenEvmModal, onPrivyLogin, privyEnabled, privyAuthe
     : dex === 'flash' ? 'Solana'
     : 'Base';
   const chainArticle = chainName === 'EVM' || chainName === 'Ethereum' ? 'an' : 'a';
+  const venueSetupStep = dex === 'ondo'
+    ? {
+        label: 'Accept Clash builder code',
+        hint: 'After wallet connection, accept builder code 4249023162302247479 at 1 bps.',
+      }
+    : dex === 'nado'
+      ? { label: 'Verify Nado referral', hint: 'Clash checks the wallet referral before allowing new positions.' }
+      : { label: `Verify ${venue} setup`, hint: 'Clash checks the required account, referral, builder, and signer permissions.' };
+  const actions = [];
+  if (privyEnabled) actions.push({
+    label: privyAuthed ? 'CONTINUE WITH EMAIL' : 'SIGN IN WITH EMAIL',
+    onClick: onPrivyLogin,
+    icon: <EmailIcon />,
+  });
+  actions.push({
+    label: `CONNECT ${chainName.toUpperCase()} WALLET`,
+    onClick: onOpenEvmModal,
+    icon: <WalletIcon />,
+    variant: privyEnabled ? 'secondary' : 'primary',
+  });
   return (
-    <div style={S.bodyStack}>
-      <h3 style={S.sectionTitle}>CONNECT TO {venue}</h3>
-      <p style={S.subtle}>
-        Sign in with email or connect {chainArticle} {chainName} wallet. Trades are signed by your own wallet - we never hold your keys.
-      </p>
-      {privyEnabled && (
-        <button style={S.primaryBtn} onClick={onPrivyLogin}>
-          <EmailIcon /> {privyAuthed ? 'CONTINUE WITH EMAIL' : 'SIGN IN WITH EMAIL'}
-        </button>
-      )}
-      <button style={privyEnabled ? S.secondaryBtn : S.primaryBtn} onClick={onOpenEvmModal}>
-        <WalletIcon /> CONNECT WALLET
-      </button>
-    </div>
+    <ConnectVenueGate
+      dex={dex}
+      title={`Connect to ${venue}`}
+      subtitle={`Sign in with email or connect ${chainArticle} ${chainName} wallet. Trades stay self-custodial.`}
+      steps={[
+        { id: 'wallet', label: `Connect ${chainName} wallet`, hint: 'Choose email or your preferred wallet app.', status: 'active' },
+        { id: 'setup', ...venueSetupStep, status: 'pending' },
+        { id: 'ready', label: 'Unlock one-tap trading', hint: 'The trading panel opens only after every required check succeeds.', status: 'pending' },
+      ]}
+      actions={actions}
+      footnote="Every venue keeps its own authorization rules; the checklist and status language stay consistent."
+    />
   );
 }
 
@@ -542,9 +595,6 @@ function ConnectAvantis({ onOpenEvmModal, onPrivyLogin, privyEnabled, privyAuthe
 // Privy doesn't currently support generating embedded Aptos wallets, so we
 // only offer the explicit Petra connect.
 function ConnectDecibel({ onConnectAptos, isConnecting, hasProvider, error }) {
-  // When no Petra provider is detected, the CTA should send the user to
-  // the install page — clicking onConnectAptos in that state was a no-op
-  // / threw, leaving the user on a dead button.
   const handleClick = () => {
     if (!hasProvider) {
       try { window.open('https://petra.app/', '_blank', 'noopener,noreferrer'); } catch {}
@@ -553,29 +603,26 @@ function ConnectDecibel({ onConnectAptos, isConnecting, hasProvider, error }) {
     onConnectAptos();
   };
   return (
-    <div style={S.bodyStack}>
-      <h3 style={S.sectionTitle}>CONNECT TO DECIBEL</h3>
-      <p style={S.subtle}>
-        Connect your Aptos wallet (Petra) to start playing. Trades are signed by an
-        api-wallet on this device — you sign once, then trade silently.
-      </p>
-      <button
-        style={S.primaryBtn}
-        onClick={handleClick}
-        disabled={isConnecting}
-      >
-        <WalletIcon />
-        {isConnecting ? 'CONNECTING…' : (hasProvider ? 'CONNECT PETRA' : 'INSTALL PETRA')}
-      </button>
-      {error && (
-        <div style={{ color: '#B71C1C', fontSize: 12, fontWeight: 700, textAlign: 'center' }}>
-          {error}
-        </div>
-      )}
-    </div>
+    <ConnectVenueGate
+      dex="decibel"
+      title="Connect to Decibel"
+      subtitle="Connect Petra once. Decibel then guides you through the delegated signer and builder approval in the same setup checklist."
+      steps={[
+        { id: 'wallet', label: 'Connect Aptos wallet', hint: 'Petra proves ownership of the trading account.', status: 'active' },
+        { id: 'signer', label: 'Authorize fast trading', hint: 'A delegated API wallet signs orders without exposing your main key.', status: 'pending' },
+        { id: 'builder', label: 'Verify builder fee routing', hint: 'Trading unlocks only after the builder approval is visible on-chain.', status: 'pending' },
+      ]}
+      actions={[{
+        label: isConnecting ? 'CONNECTING...' : (hasProvider ? 'CONNECT PETRA' : 'INSTALL PETRA'),
+        onClick: handleClick,
+        disabled: isConnecting,
+        icon: <WalletIcon />,
+      }]}
+      error={error}
+      footnote="The delegated signer can place orders but cannot withdraw funds."
+    />
   );
 }
-
 function WalletIcon() {
   return (
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">

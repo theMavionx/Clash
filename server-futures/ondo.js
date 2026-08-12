@@ -1,9 +1,12 @@
 const crypto = require('crypto');
 
+const ONDO_DEFAULT_BUILDER_CODE = '4249023162302247479';
 const ONDO_API_URL = String(
   process.env.ONDO_PERPS_API_URL || 'https://api.ondoperps.xyz',
 ).replace(/\/+$/u, '');
-const ONDO_BUILDER_CODE = String(process.env.ONDO_PERPS_BUILDER_CODE || '').trim();
+const ONDO_BUILDER_CODE = String(
+  process.env.ONDO_PERPS_BUILDER_CODE || ONDO_DEFAULT_BUILDER_CODE,
+).trim();
 // Clash intentionally charges one builder basis point. Keep this server-side:
 // a modified browser must not be able to raise, lower, or replace the fee.
 const ONDO_BUILDER_FEE_BPS = 1;
@@ -189,6 +192,36 @@ function decimalText(value, label, { allowZero = false } = {}) {
   return text;
 }
 
+function decimalScale(value, label) {
+  const text = decimalText(value, label);
+  const [whole, fraction = ''] = text.split('.');
+  return {
+    digits: BigInt(`${whole}${fraction}`),
+    scale: fraction.length,
+  };
+}
+
+function decimalFromInteger(value, scale) {
+  const padded = value.toString().padStart(scale + 1, '0');
+  if (scale === 0) return padded;
+  const whole = padded.slice(0, -scale);
+  const fraction = padded.slice(-scale).replace(/0+$/u, '');
+  return fraction ? `${whole}.${fraction}` : whole;
+}
+
+function alignOndoDecimal(value, increment, label = 'price') {
+  const input = decimalScale(value, label);
+  const step = decimalScale(increment, `${label} increment`);
+  const scale = Math.max(input.scale, step.scale);
+  const inputInteger = input.digits * (10n ** BigInt(scale - input.scale));
+  const stepInteger = step.digits * (10n ** BigInt(scale - step.scale));
+  const aligned = (inputInteger / stepInteger) * stepInteger;
+  if (aligned <= 0n) {
+    throw Object.assign(new Error(`Ondo ${label} is below increment ${increment}`), { status: 400 });
+  }
+  return decimalFromInteger(aligned, scale);
+}
+
 function queryString(query = {}) {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(query || {})) {
@@ -236,25 +269,61 @@ async function request(path, { method = 'GET', token = null, query = null, body 
 }
 
 function builderConfig() {
+  const configured = ONDO_BUILDER_CODE === ONDO_DEFAULT_BUILDER_CODE
+    && ONDO_BUILDER_FEE_BPS === 1;
   return {
-    configured: !!ONDO_BUILDER_CODE,
-    code: ONDO_BUILDER_CODE || null,
+    configured,
+    code: configured ? ONDO_BUILDER_CODE : null,
     feeRateBps: ONDO_BUILDER_FEE_BPS,
-    source: ONDO_BUILDER_CODE ? 'server_env' : 'pending_ondo_issuance',
+    source: process.env.ONDO_PERPS_BUILDER_CODE ? 'server_env' : 'clash_default',
   };
 }
 
 function addBuilderCode(order) {
+  const config = builderConfig();
+  if (!config.configured) {
+    throw Object.assign(new Error('Exact Clash Ondo builder routing is unavailable'), {
+      status: 503,
+      code: 'ONDO_BUILDER_UNAVAILABLE',
+    });
+  }
   const clean = { ...(order || {}) };
   delete clean.builderCode;
   delete clean.builder_code;
-  if (ONDO_BUILDER_CODE) {
-    clean.builderCode = {
-      code: ONDO_BUILDER_CODE,
-      feeRateBps: ONDO_BUILDER_FEE_BPS,
-    };
-  }
+  clean.builderCode = {
+    code: config.code,
+    feeRateBps: config.feeRateBps,
+  };
   return clean;
+}
+
+function orderIdentityFromResponse(payload, fallbackClientOrderId = null) {
+  const result = payload?.result;
+  const data = payload?.data;
+  const candidates = [
+    payload,
+    result,
+    data,
+    payload?.order,
+    result?.order,
+    data?.order,
+    Array.isArray(payload?.orders) ? payload.orders[0] : null,
+    Array.isArray(result?.orders) ? result.orders[0] : null,
+    Array.isArray(data?.orders) ? data.orders[0] : null,
+    Array.isArray(result) ? result[0] : null,
+    Array.isArray(data) ? data[0] : null,
+  ].filter(row => row && typeof row === 'object');
+  let orderId = '';
+  let clientOrderId = String(fallbackClientOrderId || '').trim();
+  for (const row of candidates) {
+    if (!orderId) {
+      orderId = String(row.orderId ?? row.orderID ?? row.order_id ?? '').trim();
+    }
+    if (!clientOrderId) {
+      clientOrderId = String(row.clientOrderId ?? row.clientOrderID ?? row.client_order_id ?? '').trim();
+    }
+  }
+  return { orderId: orderId || null, clientOrderId: clientOrderId || null };
 }
 
 function maxLeverage(row) {
@@ -314,6 +383,30 @@ async function getRawMarkets() {
   const payload = await request('/v1/markets');
   marketsCache = { at: now, payload };
   return payload;
+}
+
+async function getQuoteIncrement(value) {
+  const market = marketName(value);
+  const payload = await getRawMarkets();
+  const rows = payload?.result?.perps?.tradingPairs;
+  const row = (Array.isArray(rows) ? rows : []).find(item => marketName(item?.market) === market);
+  const increment = row?.quoteIncrement;
+  if (!increment || num(increment) <= 0) {
+    throw Object.assign(new Error(`Ondo quote increment unavailable for ${market}`), { status: 502 });
+  }
+  return String(increment);
+}
+
+async function alignOrderTriggerPrices(input = {}) {
+  const takeProfit = input.takeProfit ?? input.take_profit;
+  const stopLoss = input.stopLoss ?? input.stop_loss;
+  if (!(num(takeProfit) > 0) && !(num(stopLoss) > 0)) return input;
+  const increment = await getQuoteIncrement(input.market || input.symbol);
+  return {
+    ...input,
+    ...(num(takeProfit) > 0 ? { takeProfit: alignOndoDecimal(takeProfit, increment, 'take profit') } : {}),
+    ...(num(stopLoss) > 0 ? { stopLoss: alignOndoDecimal(stopLoss, increment, 'stop loss') } : {}),
+  };
 }
 
 async function getRawPrices() {
@@ -574,8 +667,8 @@ function normalizeOrder(row) {
     symbol: symbolFromMarket(row?.market),
     market: marketName(row?.market),
     pair_index: marketName(row?.market),
-    order_id: row?.orderId || null,
-    client_order_id: row?.clientOrderId || null,
+    order_id: row?.orderId ?? row?.orderID ?? row?.order_id ?? null,
+    client_order_id: row?.clientOrderId ?? row?.clientOrderID ?? row?.client_order_id ?? null,
     side: String(row?.side || '').toLowerCase(),
     amount: String(remaining || num(row?.size)),
     initial_amount: String(row?.size || ''),
@@ -599,10 +692,10 @@ function normalizeFill(row) {
   const price = num(row?.price);
   return {
     dex: 'ondo',
-    fill_id: row?.id || null,
-    order_id: row?.orderId || null,
-    parent_order_id: row?.parentOrderID || row?.parentOrderId || null,
-    client_order_id: row?.clientOrderId || null,
+    fill_id: row?.id ?? row?.fillId ?? row?.fillID ?? row?.fill_id ?? null,
+    order_id: row?.orderId ?? row?.orderID ?? row?.order_id ?? null,
+    parent_order_id: row?.parentOrderID ?? row?.parentOrderId ?? row?.parent_order_id ?? null,
+    client_order_id: row?.clientOrderId ?? row?.clientOrderID ?? row?.client_order_id ?? null,
     symbol: symbolFromMarket(row?.market),
     market: marketName(row?.market),
     side: String(row?.side || '').toLowerCase(),
@@ -694,7 +787,7 @@ async function getFundingFees(token, query = {}) {
 async function importFillsForPlayer(playerId, account, token, options = {}) {
   const owner = normalizeAddress(account);
   if (!owner) throw Object.assign(new Error('Valid Ondo account wallet required'), { status: 400 });
-  if (!ONDO_BUILDER_CODE) {
+  if (!builderConfig().configured) {
     return { imported: 0, updated: 0, scanned: 0, eligible: 0, builder_configured: false };
   }
   const db = require('./db');
@@ -710,7 +803,8 @@ async function importFillsForPlayer(playerId, account, token, options = {}) {
     scanned += batch.rows.length;
     for (const fill of batch.rows) {
       const proof = db.getOndoBuilderOrder(fill.order_id, playerId, owner)
-        || (fill.parent_order_id ? db.getOndoBuilderOrder(fill.parent_order_id, playerId, owner) : null);
+        || (fill.parent_order_id ? db.getOndoBuilderOrder(fill.parent_order_id, playerId, owner) : null)
+        || (fill.client_order_id ? db.getOndoBuilderOrderByClient(fill.client_order_id, playerId, owner) : null);
       if (!proof || proof.builder_code !== ONDO_BUILDER_CODE || Number(proof.builder_fee_bps) !== ONDO_BUILDER_FEE_BPS) continue;
       eligible += 1;
       const clientOrderId = `ondo:fill:${owner}:${fill.fill_id}`;
@@ -790,7 +884,12 @@ function buildOrder(input = {}) {
 }
 
 async function createOrder(token, input) {
-  const body = buildOrder(input);
+  const suppliedClientOrderId = input?.clientOrderId || input?.client_order_id;
+  const withIdentity = suppliedClientOrderId ? input : {
+    ...input,
+    clientOrderId: `clash-server-${Date.now()}-${crypto.randomBytes(5).toString('hex')}`,
+  };
+  const body = buildOrder(await alignOrderTriggerPrices(withIdentity));
   const response = await request('/v1/perps/orders', { method: 'POST', token, body });
   return { response, request: body, builder: builderConfig() };
 }
@@ -811,14 +910,16 @@ async function setStopOrder(token, { market, symbol, positionDirection, side, ty
   const direction = String(positionDirection || side || '').toLowerCase();
   if (!['long', 'short'].includes(direction)) throw Object.assign(new Error('Ondo position direction required'), { status: 400 });
   if (!['stopLoss', 'takeProfit'].includes(type)) throw Object.assign(new Error('Ondo stop order type required'), { status: 400 });
+  const selectedMarket = marketName(market || symbol);
+  const quoteIncrement = await getQuoteIncrement(selectedMarket);
   return request('/v1/perps/stop_order', {
     method: 'POST',
     token,
     body: {
-      market: marketName(market || symbol),
+      market: selectedMarket,
       positionDirection: direction,
       type,
-      triggerPrice: decimalText(triggerPrice, 'trigger price'),
+      triggerPrice: alignOndoDecimal(triggerPrice, quoteIncrement, 'trigger price'),
     },
   });
 }
@@ -831,7 +932,7 @@ async function removeStopOrder(token, { market, symbol, type = null }) {
 
 async function provisionDepositAddress(token, { accountId, network = 'ethereum' }) {
   const selected = String(network || '').toLowerCase();
-  if (!['ethereum', 'solana', 'avalanche'].includes(selected)) {
+  if (!['ethereum', 'arbitrum', 'solana', 'avalanche'].includes(selected)) {
     throw Object.assign(new Error('Unsupported Ondo deposit network'), { status: 400 });
   }
   return request('/v1/provision_address', {
@@ -908,12 +1009,14 @@ async function getCandles(market, { resolution = '5', from, to } = {}) {
 
 module.exports = {
   ONDO_API_URL,
+  ONDO_DEFAULT_BUILDER_CODE,
   ONDO_BUILDER_CODE,
   ONDO_BUILDER_FEE_BPS,
   ONDO_REGION_BLOCKED_MESSAGE,
   ONDO_REGION_UNAVAILABLE_MESSAGE,
   ONDO_RESTRICTED_COUNTRY_CODES,
   addBuilderCode,
+  alignOndoDecimal,
   builderConfig,
   buildOrder,
   cancelOrder,
@@ -943,6 +1046,7 @@ module.exports = {
   normalizePosition,
   normalizeSessionIdentity,
   normalizeToken,
+  orderIdentityFromResponse,
   provisionDepositAddress,
   regionAccessForRequest,
   removeStopOrder,

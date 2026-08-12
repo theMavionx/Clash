@@ -1,9 +1,38 @@
+export const ONDO_DEPOSIT_NETWORKS = Object.freeze([
+  Object.freeze({
+    id: 'ethereum',
+    label: 'Ethereum',
+    chainId: 1,
+    usdcAddress: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+    gasSymbol: 'ETH',
+  }),
+  Object.freeze({
+    id: 'arbitrum',
+    label: 'Arbitrum',
+    chainId: 42161,
+    usdcAddress: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831',
+    gasSymbol: 'ETH',
+  }),
+]);
+
+export function getOndoDepositNetwork(value = 'ethereum') {
+  const id = String(value || '').trim().toLowerCase();
+  const network = ONDO_DEPOSIT_NETWORKS.find(row => row.id === id);
+  if (!network) throw new Error(`Unsupported Ondo deposit network: ${id || 'empty'}`);
+  return network;
+}
+
+// SIWE and the current withdrawal-address approval flow remain Ethereum-based.
+// Keep these compatibility exports separate from the selectable deposit chain.
 export const ONDO_CHAIN_ID = 1;
-export const ONDO_USDC_ADDRESS = '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48';
+export const ONDO_USDC_ADDRESS = getOndoDepositNetwork('ethereum').usdcAddress;
 export const ONDO_APP_URL = 'https://app.ondoperps.xyz';
 export const ONDO_DOCS_URL = 'https://docs.ondoperps.xyz';
 export const ONDO_WS_URL = 'wss://api.ondoperps.xyz/ws';
 export const ONDO_SESSION_STORAGE_PREFIX = 'clash_ondo_session_v1';
+export const ONDO_BUILDER_ACCEPTANCE_STORAGE_PREFIX = 'clash_ondo_builder_acceptance_v1';
+export const ONDO_BUILDER_CODE = '4249023162302247479';
+export const ONDO_BUILDER_FEE_BPS = 1;
 export const ONDO_REGION_BLOCKED_MESSAGE = 'Ondo Perps is not available in your country or IP region.';
 
 export const ONDO_USDC_ABI = [{
@@ -97,6 +126,52 @@ export function buildOndoOrderRequest({ market, side, type = 'market', size, pri
 
 function sessionStorageKey(wallet) {
   return `${ONDO_SESSION_STORAGE_PREFIX}:${String(wallet || '').toLowerCase()}`;
+}
+
+function builderAcceptanceStorageKey(wallet) {
+  return `${ONDO_BUILDER_ACCEPTANCE_STORAGE_PREFIX}:${String(wallet || '').toLowerCase()}`;
+}
+
+export function readOndoBuilderAcceptance(
+  wallet,
+  builderCode = ONDO_BUILDER_CODE,
+  feeRateBps = ONDO_BUILDER_FEE_BPS,
+  storage = typeof window !== 'undefined' ? window.localStorage : null,
+) {
+  if (!isOndoAddress(wallet) || !storage) return null;
+  try {
+    const parsed = JSON.parse(storage.getItem(builderAcceptanceStorageKey(wallet)) || 'null');
+    if (!parsed || parsed.version !== 1) return null;
+    if (String(parsed.wallet || '').toLowerCase() !== String(wallet).toLowerCase()) return null;
+    if (String(parsed.builderCode || '') !== String(builderCode || '')) return null;
+    if (Number(parsed.feeRateBps) !== Number(feeRateBps)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+export function writeOndoBuilderAcceptance(
+  wallet,
+  builderCode = ONDO_BUILDER_CODE,
+  feeRateBps = ONDO_BUILDER_FEE_BPS,
+  storage = typeof window !== 'undefined' ? window.localStorage : null,
+) {
+  if (!isOndoAddress(wallet) || !storage) return null;
+  const code = String(builderCode || '').trim();
+  const fee = Number(feeRateBps);
+  if (code !== ONDO_BUILDER_CODE || fee !== ONDO_BUILDER_FEE_BPS) {
+    throw new Error('Exact Clash Ondo builder routing required');
+  }
+  const record = {
+    version: 1,
+    wallet: String(wallet).toLowerCase(),
+    builderCode: code,
+    feeRateBps: fee,
+    acceptedAt: Date.now(),
+  };
+  storage.setItem(builderAcceptanceStorageKey(wallet), JSON.stringify(record));
+  return record;
 }
 
 export function readOndoSession(wallet, storage = typeof window !== 'undefined' ? window.localStorage : null) {

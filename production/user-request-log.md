@@ -3385,3 +3385,72 @@ Follow-up:
   commit all current reviewed Ondo/Nado integration changes on `main`, push
   `origin/main`, deploy through the canonical production workflow, and verify
   the live revision and service health.
+
+## UR-2026-08-12-ONDO-IP-BLOCK-AND-BUILDER-SETUP-UX
+
+- Timestamp: 2026-08-12 08:06 Europe/Kyiv
+- Request: make the Ondo restriction screen explicitly say that the user's
+  current IP is blocked, and redesign the ugly Ondo authorization into a
+  polished Decibel-style setup with mandatory builder-code acceptance.
+- Scope: improve both pre-registration and trading-panel region gates, expose
+  the detected country without collecting/displaying the raw IP, configure the
+  issued Ondo builder code `4249023162302247479` at one basis point, require a
+  wallet-scoped builder-routing acceptance before Ondo SIWE/trading, and verify
+  the allowed and blocked browser flows. No commit, push, or deployment
+  requested.
+- Follow-up (2026-08-12 08:08 Europe/Kyiv): replace the separate exchange
+  authorization layouts with one polished reusable trading-setup module. Keep
+  wallet, referral, builder-code, delegated-signer, and regional rules specific
+  to each venue while sharing the visual shell, progress states, errors, and
+  actions across every exchange.
+
+## UR-2026-08-12-ONDO-MULTICHAIN-DEPOSIT
+
+- Timestamp: 2026-08-12 Europe/Kyiv
+- Request: add an Ondo deposit network switch so players can fund with native
+  USDC from either Ethereum or Arbitrum.
+- Scope: verify the live Ondo production network/token configuration, route the
+  selected network through balance reads, wallet chain switching, deposit
+  address provisioning and the ERC-20 transfer, add matching account-panel UI,
+  and cover both networks with client/server regression tests. Withdrawal and
+  SIWE remain on their existing Ethereum flow. No commit, push, deployment, or
+  production mutation requested.
+
+## UR-2026-08-12-PHOENIX-ONLY-FEE-ADJUSTED-PNL
+
+- Timestamp: 2026-08-12 Europe/Kyiv
+- Request: fix Ondo position PnL so it matches Ondo's own uPnL, remove the
+  visible `PnL` word from open-position value rows, and retain opening/closing
+  fee accounting only for Phoenix instead of applying estimated fees to every
+  exchange.
+- Scope: make non-Phoenix position metrics pass through venue unrealized PnL
+  and venue percentage without fee deductions, keep Phoenix's explicit
+  gross/after-fees presentation, update regression coverage, and verify the
+  reported Ondo BTC example. No commit, push, deployment, or production
+  mutation requested.
+
+## UR-2026-08-12-ONDO-TPSL-QUOTE-INCREMENT
+
+- Timestamp: 2026-08-12 Europe/Kyiv
+- Request: fix Ondo TP/SL created from `% PnL`; the converted BTC trigger
+  `63899.31` was rejected because the live market requires quote increment `1`.
+- Scope: quantize standalone and attached Ondo TP/SL triggers using current
+  market metadata in both the browser adapter and the authoritative server
+  request path, and add the reported BTC value as a regression case. No
+  commit, push, deployment, or production mutation requested.
+
+## UR-2026-08-12-ONDO-TRADING-GOLD
+
+- Timestamp: 2026-08-12 Europe/Kyiv
+- Request: Ondo trading gold is not being credited.
+- Production evidence: successful Ondo order requests existed, but the active
+  futures process had no Ondo builder code, `ondo_builder_orders` contained
+  zero proofs, `trade_history` contained zero Ondo fills, and no Ondo claim
+  result had been produced. The deployed release therefore allowed orders
+  without reward attribution.
+- Scope: hard-lock the issued builder code and one-bps fee, refuse unrouted
+  orders, persist proof using every official order-ID spelling with a
+  server-generated client ID fallback, match fills by order/parent/client ID,
+  and let `claim-gold` import fills using the verified Ondo browser session.
+  Existing trades placed without builder routing are not retroactively marked
+  eligible. No commit, push, deployment, or production mutation requested.

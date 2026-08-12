@@ -434,6 +434,7 @@ prepare_shared_runtime() {
                 printf '%s\n' VITE_NADO_SUBACCOUNT_NAME=default
                 printf '%s\n' VITE_NADO_BUILDER_ID=3600
                 printf '%s\n' VITE_NADO_BUILDER_FEE_RATE=10
+                printf '%s\n' ONDO_PERPS_BUILDER_CODE=4249023162302247479
                 printf '%s\n' GRVT_BUILDER_ACCOUNT_ID=0x5d2c800b71f71fcf6bbf990f25ec39de09a87b45
                 printf '%s\n' GRVT_BUILDER_X_ACCOUNT_ID=3973781287105049
                 printf '%s\n' GRVT_BUILDER_API_KEY=
@@ -508,6 +509,7 @@ prepare_shared_runtime() {
     ensure_env_default "VITE_NADO_SUBACCOUNT_NAME" "default"
     ensure_env_default "VITE_NADO_BUILDER_ID" "3600"
     ensure_env_default "VITE_NADO_BUILDER_FEE_RATE" "10"
+    ensure_env_default "ONDO_PERPS_BUILDER_CODE" "4249023162302247479"
     ensure_env_default "GRVT_BUILDER_ACCOUNT_ID" "0x5d2c800b71f71fcf6bbf990f25ec39de09a87b45"
     ensure_env_default "GRVT_BUILDER_X_ACCOUNT_ID" "3973781287105049"
     ensure_env_default "GRVT_BUILDER_API_KEY" ""
@@ -619,6 +621,7 @@ prepare_shared_runtime() {
     set_env_value "VITE_NADO_SUBACCOUNT_NAME" "default"
     set_env_value "VITE_NADO_BUILDER_ID" "3600"
     set_env_value "VITE_NADO_BUILDER_FEE_RATE" "10"
+    set_env_value "ONDO_PERPS_BUILDER_CODE" "4249023162302247479"
     set_env_value "GRVT_BUILDER_ACCOUNT_ID" "0x5d2c800b71f71fcf6bbf990f25ec39de09a87b45"
     set_env_value "GRVT_BUILDER_X_ACCOUNT_ID" "3973781287105049"
     set_env_value "GRVT_BUILDER_FEE_BPS" "1"

@@ -5,8 +5,14 @@ import {
   buildOndoWsPing,
   clearOndoSession,
   normalizeOndoRegionAccess,
+  ONDO_BUILDER_CODE,
+  ONDO_BUILDER_FEE_BPS,
+  ONDO_DEPOSIT_NETWORKS,
+  getOndoDepositNetwork,
   ondoMarketName,
+  readOndoBuilderAcceptance,
   readOndoSession,
+  writeOndoBuilderAcceptance,
   writeOndoSession,
 } from './src/lib/ondoClient.js';
 import { normalizeExchangeBalanceSnapshot } from './src/lib/exchangeBalanceTelemetry.js';
@@ -20,6 +26,23 @@ class MemoryStorage {
 
 const walletA = '0x1111111111111111111111111111111111111111';
 const walletB = '0x2222222222222222222222222222222222222222';
+
+assert.deepEqual(ONDO_DEPOSIT_NETWORKS.map(network => network.id), ['ethereum', 'arbitrum']);
+assert.deepEqual(getOndoDepositNetwork('ethereum'), {
+  id: 'ethereum',
+  label: 'Ethereum',
+  chainId: 1,
+  usdcAddress: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+  gasSymbol: 'ETH',
+});
+assert.deepEqual(getOndoDepositNetwork('ARBITRUM'), {
+  id: 'arbitrum',
+  label: 'Arbitrum',
+  chainId: 42161,
+  usdcAddress: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831',
+  gasSymbol: 'ETH',
+});
+assert.throws(() => getOndoDepositNetwork('base'), /Unsupported Ondo deposit network/u);
 
 assert.deepEqual(normalizeOndoRegionAccess({ allowed: false, status: 'blocked', country: 'us', regionCode: 'CA' }), {
   allowed: false,
@@ -48,6 +71,7 @@ assert.equal(ondoMarketName('xag'), 'XAG-USD.P');
 assert.equal(ondoMarketName('BTC-USD.P'), 'BTC-USD.P');
 assert.equal(alignOndoDecimal('0.010099999999', '0.0001'), '0.01');
 assert.equal(alignOndoDecimal('45.449', '0.01'), '45.44');
+assert.equal(alignOndoDecimal('63899.31', '1'), '63899', 'BTC percent-PnL trigger must align to quoteIncrement=1');
 assert.throws(() => alignOndoDecimal('0.00001', '0.001'), /below Ondo minimum increment/u);
 
 const request = buildOndoOrderRequest({
@@ -88,6 +112,27 @@ assert.deepEqual(normalizeExchangeBalanceSnapshot({
 });
 
 const storage = new MemoryStorage();
+const builderAcceptance = writeOndoBuilderAcceptance(
+  walletA,
+  ONDO_BUILDER_CODE,
+  ONDO_BUILDER_FEE_BPS,
+  storage,
+);
+assert.equal(builderAcceptance.builderCode, '4249023162302247479');
+assert.equal(builderAcceptance.feeRateBps, 1);
+assert.equal(readOndoBuilderAcceptance(walletA, ONDO_BUILDER_CODE, 1, storage)?.wallet, walletA);
+assert.equal(readOndoBuilderAcceptance(walletB, ONDO_BUILDER_CODE, 1, storage), null, 'builder acceptance must be wallet scoped');
+assert.equal(readOndoBuilderAcceptance(walletA, 'another-builder', 1, storage), null, 'builder-code changes must require a new acceptance');
+assert.equal(readOndoBuilderAcceptance(walletA, ONDO_BUILDER_CODE, 2, storage), null, 'fee changes must require a new acceptance');
+assert.throws(
+  () => writeOndoBuilderAcceptance(walletA, ONDO_BUILDER_CODE, 2, storage),
+  /Exact Clash Ondo builder routing required/u,
+);
+assert.throws(
+  () => writeOndoBuilderAcceptance(walletA, 'another-builder', 1, storage),
+  /Exact Clash Ondo builder routing required/u,
+);
+
 const token = 'ondo-test-token-that-is-long-enough';
 const saved = writeOndoSession(walletA, {
   token,
@@ -107,4 +152,4 @@ writeOndoSession(walletA, {
 }, storage);
 assert.equal(readOndoSession(walletA, storage), null, 'expired session must fail closed');
 
-console.log('Ondo browser client PASS: exact increments, order schema, official WS heartbeat, server-only builder routing, wallet-scoped JWT');
+console.log('Ondo browser client PASS: exact increments, order schema, official WS heartbeat, wallet-scoped builder acceptance, server-only builder routing, wallet-scoped JWT');

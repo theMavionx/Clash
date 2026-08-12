@@ -17,6 +17,7 @@
     "test:phoenix-position": "node test-phoenix-position-metrics.mjs",
     "test:phoenix-isolated-limit": "node test-phoenix-isolated-limit-request.mjs",
     "test:position-pnl": "node test-position-pnl-metrics.mjs",
+    "test:futures-scroll": "node test-futures-scroll-layout.mjs",
     "test:avantis-price": "node test-avantis-price-payload.mjs",
     "test:sanctum": "node test-sanctum-lst.mjs",
     "build": "vite build",

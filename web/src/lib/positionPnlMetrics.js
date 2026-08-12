@@ -1,37 +1,15 @@
-// Unified open-position PnL accounting for every futures venue in Clash.
+// Open-position PnL presentation shared by every futures venue in Clash.
 //
-// Venue APIs disagree on what `pnl` means. Some return mark-to-market PnL,
-// some include accrued borrow/funding fees, and Phoenix already returns the
-// estimated round-trip result. This module keeps that ambiguity out of the
-// shared UI by producing one contract:
+// Venue position endpoints already expose the uPnL their own interfaces show.
+// Clash must preserve that value. Phoenix is the sole exception: its adapter
+// provides an explicit fee breakdown used for the requested after-fees line.
 //
-//   net PnL = gross mark PnL - opening costs - estimated closing costs
-//
-// Account equity is intentionally not calculated here. Opening fees are
-// normally already debited from venue collateral, so applying this result to
-// account equity would double-count them. This is display accounting for the
-// individual open position only.
+// Never estimate or subtract opening/closing fees for other venues here. Their
+// balances and uPnL contracts differ, and doing so makes Clash disagree with
+// the venue's own position table.
 
 export const FEE_AWARE_POSITION_DEXES = Object.freeze([
-  'avantis',
-  'bulk',
-  'decibel',
-  'flash',
-  'gmtrade',
-  'gmx',
-  'grvt',
-  'hibachi',
-  'hotstuff',
-  'hyperliquid',
-  'katana',
-  'lighter',
-  'monad',
-  'nado',
-  'ondo',
-  'ostium',
-  'pacifica',
   'phoenix',
-  'risex',
 ]);
 
 // Taker rates are used only when the venue does not expose the user's live
@@ -309,6 +287,31 @@ export function calculateFeeAwarePositionPnl({
     grossPnlUsd,
   ) ?? 0);
   const collateral = Math.max(0, finiteNumber(margin) ?? finiteNumber(position?.margin) ?? 0);
+
+  // Only Phoenix has an approved fee-aware display contract. Every other
+  // venue must match its own uPnL exactly, regardless of optional fee-looking
+  // fields returned by an adapter.
+  if (venue !== 'phoenix') {
+    return {
+      grossPnlUsd: gross,
+      netPnlUsd: gross,
+      openingFeeUsd: 0,
+      closingFeeUsd: 0,
+      otherFeeUsd: 0,
+      totalFeeUsd: 0,
+      baseOpeningRate: 0,
+      baseClosingRate: 0,
+      builderRate: 0,
+      openingRate: 0,
+      closingRate: 0,
+      rateSource: 'not-applied',
+      feeAdjusted: false,
+      estimated: false,
+      source: position?.pnl_source || 'venue-unrealized-pnl',
+      pnlPct: collateral > 0 ? gross / collateral * 100 : null,
+    };
+  }
+
   const rates = resolvePositionFeeRates({ dex: venue, position, market, account });
   const { entryNotional, closingNotional } = positionNotionals({
     position, amount, entryPrice, markPrice, positionValueUsd,
@@ -327,51 +330,6 @@ export function calculateFeeAwarePositionPnl({
       feeAdjusted: true,
       estimated: position?.pnl_fees_exact !== true,
       source: position?.pnl_source || 'position-fee-adjusted',
-      pnlPct: collateral > 0 ? net / collateral * 100 : null,
-    };
-  }
-
-  if (venue === 'gmx') {
-    const afterPending = firstFinite(position?.pnl_after_pending_fees_usd, position?.pnlAfterPendingFeesUsd, gross) ?? gross;
-    const pendingFeeUsd = Math.max(0, firstFinite(position?.pending_position_fees_usd, gross - afterPending) ?? 0);
-    const closingFeeUsd = Math.max(0, firstFinite(position?.closing_fee_usd, position?.closingFeeUsd) ?? 0);
-    const closePriceImpactUsd = firstFinite(position?.closing_price_impact_usd, position?.closePriceImpactDeltaUsd) ?? 0;
-    const openingFeeUsd = entryNotional * rates.openingRate;
-    const net = cleanZero(afterPending - closingFeeUsd + closePriceImpactUsd - openingFeeUsd);
-    const otherFeeUsd = Math.max(0, pendingFeeUsd - Math.max(0, closePriceImpactUsd));
-    return {
-      grossPnlUsd: gross,
-      netPnlUsd: net,
-      openingFeeUsd,
-      closingFeeUsd,
-      otherFeeUsd,
-      totalFeeUsd: cleanZero(gross - net),
-      closePriceImpactUsd,
-      ...rates,
-      feeAdjusted: true,
-      estimated: true,
-      source: 'gmx-sdk-close-costs',
-      pnlPct: collateral > 0 ? net / collateral * 100 : null,
-    };
-  }
-
-  if (venue === 'flash') {
-    const explicitExitAndBorrow = firstNonNegative(position?.flash_position_fees_usd);
-    const openingFeeUsd = entryNotional * rates.openingRate;
-    const closingFeeUsd = explicitExitAndBorrow ?? closingNotional * rates.closingRate;
-    const netBeforeOpening = firstFinite(position?.pnl_with_fees_usd, position?.pnlWithFeeUsdUi);
-    const net = cleanZero((netBeforeOpening ?? (gross - closingFeeUsd)) - openingFeeUsd);
-    return {
-      grossPnlUsd: gross,
-      netPnlUsd: net,
-      openingFeeUsd,
-      closingFeeUsd,
-      otherFeeUsd: 0,
-      totalFeeUsd: cleanZero(gross - net),
-      ...rates,
-      feeAdjusted: true,
-      estimated: true,
-      source: explicitExitAndBorrow != null ? 'flash-live-close-and-borrow' : 'flash-fee-schedule',
       pnlPct: collateral > 0 ? net / collateral * 100 : null,
     };
   }
@@ -415,12 +373,8 @@ export function calculateFeeAwarePositionPnl({
   };
 }
 
-// Most Clash venues use the fee-aware net estimate as the primary open-position
-// metric. Phoenix's own position table instead presents gross mark-to-market
-// uPnL/ROE. Keep the accounting contract above unchanged, but provide one
-// presentation contract so every live Clash layout can match Phoenix while
-// retaining the estimated round-trip result as a clearly labelled secondary
-// figure.
+// Every venue presents its own uPnL. Phoenix additionally exposes the requested
+// fee-aware estimate as a clearly labelled secondary line.
 export function positionPnlPresentation({
   dex,
   isDust = false,
@@ -445,9 +399,7 @@ export function positionPnlPresentation({
 
   return {
     usesVenueGross,
-    // Keep fee-aware net accounting, but use the familiar PnL label in the UI.
-    // The fee breakdown remains available in the tooltip.
-    primaryLabel: 'PnL',
+    primaryLabel: '',
     primaryPnlUsd: usesVenueGross ? grossUsd : netUsd,
     primaryPnlPct: usesVenueGross ? grossPct : resolvedNetPct,
     secondaryLabel: showsSecondaryNet

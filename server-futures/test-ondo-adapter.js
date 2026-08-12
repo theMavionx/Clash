@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const WebSocket = require('ws');
 
-process.env.ONDO_PERPS_BUILDER_CODE = 'clash-test-builder';
+process.env.ONDO_PERPS_BUILDER_CODE = '4249023162302247479';
 
 const ondo = require('./ondo');
 
@@ -47,6 +47,10 @@ function readLiveMarketSocket() {
 }
 
 async function main() {
+  assert.equal(ondo.ONDO_DEFAULT_BUILDER_CODE, '4249023162302247479');
+  assert.equal(ondo.ONDO_BUILDER_FEE_BPS, 1);
+  assert.equal(ondo.alignOndoDecimal('63899.31', '1', 'trigger price'), '63899');
+  assert.equal(ondo.alignOndoDecimal('45.449', '0.01', 'trigger price'), '45.44');
   assert.equal(ondo.evaluateRegionAccess({ country: 'US' }).allowed, false);
   assert.equal(ondo.evaluateRegionAccess({ country: 'ca' }).allowed, false);
   assert.equal(ondo.evaluateRegionAccess({ country: 'IR' }).reason, 'restricted_country');
@@ -72,7 +76,7 @@ async function main() {
 
   assert.deepEqual(ondo.builderConfig(), {
     configured: true,
-    code: 'clash-test-builder',
+    code: '4249023162302247479',
     feeRateBps: 1,
     source: 'server_env',
   });
@@ -84,7 +88,7 @@ async function main() {
     size: '0.001',
     builderCode: { code: 'attacker', feeRateBps: 10 },
   });
-  assert.deepEqual(marketOrder.builderCode, { code: 'clash-test-builder', feeRateBps: 1 });
+  assert.deepEqual(marketOrder.builderCode, { code: '4249023162302247479', feeRateBps: 1 });
   assert.equal(marketOrder.market, 'BTC-USD.P');
   assert.equal(marketOrder.side, 'buy');
   assert.equal(marketOrder.type, 'market');
@@ -112,8 +116,16 @@ async function main() {
     postOnly: false,
     takeProfit: { triggerPrice: '43.00' },
     stopLoss: { triggerPrice: '46.50' },
-    builderCode: { code: 'clash-test-builder', feeRateBps: 1 },
+    builderCode: { code: '4249023162302247479', feeRateBps: 1 },
   });
+  assert.deepEqual(
+    ondo.orderIdentityFromResponse({ result: { orderID: 'official-order-1', clientOrderID: 'clash-client-1' } }),
+    { orderId: 'official-order-1', clientOrderId: 'clash-client-1' },
+  );
+  assert.deepEqual(
+    ondo.orderIdentityFromResponse({ result: { order: { orderId: 'nested-order-2' } } }, 'fallback-client-2'),
+    { orderId: 'nested-order-2', clientOrderId: 'fallback-client-2' },
+  );
   assert.throws(() => ondo.buildOrder({
     market: 'XAG', side: 'buy', type: 'limit', price: '45.44', size: '0.01', clientOrderId: 'bad:id',
   }), /client order ID/u);
@@ -149,12 +161,14 @@ async function main() {
   assert.equal(account.total_margin_used, 35);
 
   const fill = ondo.normalizeFill({
-    id: 'fill-1', orderId: 'order-1', market: 'BTC-USD.P', side: 'buy',
+    id: 'fill-1', orderID: 'order-1', clientOrderID: 'clash-client-1', market: 'BTC-USD.P', side: 'buy',
     parentOrderID: 'parent-order-1', size: '0.25', price: '64000', filledCost: '16000', fee: '5.6', isMaker: false,
   });
   assert.equal(fill.notional_usd, 16000);
   assert.equal(fill.fee, 5.6);
   assert.equal(fill.parent_order_id, 'parent-order-1');
+  assert.equal(fill.order_id, 'order-1');
+  assert.equal(fill.client_order_id, 'clash-client-1');
 
   const identity = ondo.normalizeSessionIdentity({
     result: {
@@ -186,6 +200,40 @@ async function main() {
   assert.equal(invalidateRequest?.url, 'https://api.ondoperps.xyz/v1/auth/invalidate_jwt');
   assert.equal(invalidateRequest?.options?.method, 'GET', 'official invalidate_jwt endpoint is GET');
 
+  let depositRequest = null;
+  try {
+    global.fetch = async (url, options = {}) => {
+      depositRequest = { url: String(url), options };
+      return new Response(JSON.stringify({
+        success: true,
+        result: {
+          chain: 'arbitrum',
+          accountId: 'account-1',
+          symbol: 'USDC',
+          address: '0x3333333333333333333333333333333333333333',
+        },
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    };
+    const provisioned = await ondo.provisionDepositAddress('ondo-test-token-that-is-long-enough', {
+      accountId: 'account-1',
+      network: 'ARBITRUM',
+    });
+    assert.equal(provisioned.result.chain, 'arbitrum');
+  } finally {
+    global.fetch = originalFetch;
+  }
+  assert.equal(depositRequest?.url, 'https://api.ondoperps.xyz/v1/provision_address');
+  assert.equal(depositRequest?.options?.method, 'POST');
+  assert.deepEqual(JSON.parse(depositRequest?.options?.body || '{}'), {
+    symbol: 'USDC',
+    network: 'arbitrum',
+    deposit_destination: { id: 'account-1', wallet: 'margin' },
+  });
+  await assert.rejects(
+    () => ondo.provisionDepositAddress('ondo-test-token-that-is-long-enough', { accountId: 'account-1', network: 'base' }),
+    /Unsupported Ondo deposit network/u,
+  );
+
   const sessionToken = 'ondo-concurrent-session-token-that-is-long-enough';
   const sessionWallet = '0x2222222222222222222222222222222222222222';
   let sessionReads = 0;
@@ -210,7 +258,7 @@ async function main() {
   }
   assert.equal(sessionReads, 1, 'parallel route authorization must share one Ondo /v1/account read');
 
-  const [markets, prices, depth, candles, wsMarket] = await Promise.all([
+  const [markets, prices, depth, candles, wsMarket, liveConfig] = await Promise.all([
     ondo.getMarketInfo(),
     ondo.getPrices(),
     ondo.getDepth('BTC', 5),
@@ -220,7 +268,11 @@ async function main() {
       to: Math.floor(Date.now() / 1000),
     }),
     readLiveMarketSocket(),
+    ondo.request('/v1/markets'),
   ]);
+  const liveUsdc = liveConfig?.result?.tokenConfig?.find(row => row?.id === 'USDC');
+  assert.equal(liveUsdc?.networks?.ethereum?.contractAddress?.toLowerCase(), '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48');
+  assert.equal(liveUsdc?.networks?.arbitrum?.contractAddress?.toLowerCase(), '0xaf88d065e77c8cc2239327c5edb3a432268e5831');
   assert.ok(markets.some(row => row.symbol === 'BTC' && row.tick_size && row.lot_size && row.volume_24h > 0 && row.open_interest > 0), 'live BTC market stats missing');
   assert.ok(prices.some(row => row.symbol === 'BTC' && Number(row.mark) > 0), 'live BTC mark missing');
   assert.ok(Array.isArray(depth.bids) && Array.isArray(depth.asks), 'live order book shape invalid');
@@ -229,6 +281,44 @@ async function main() {
   assert.ok(Number.isFinite(wsMarket.funding), 'live BTC WebSocket funding missing');
   assert.equal(wsMarket.pong, true, 'official Ondo WebSocket heartbeat failed');
   assert.ok(wsMarket.depth.bids > 0 && wsMarket.depth.asks > 0, 'live Ondo depthBooksPerps snapshot missing');
+
+  const submittedTradingRequests = [];
+  try {
+    global.fetch = async (url, options = {}) => {
+      submittedTradingRequests.push({ url: String(url), options });
+      return new Response(JSON.stringify({ success: true, result: { orderId: 'aligned-test-order' } }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    };
+    await ondo.setStopOrder('ondo-test-token-that-is-long-enough', {
+      market: 'BTC-USD.P',
+      positionDirection: 'long',
+      type: 'takeProfit',
+      triggerPrice: '63899.31',
+    });
+    await ondo.createOrder('ondo-test-token-that-is-long-enough', {
+      market: 'BTC-USD.P',
+      side: 'buy',
+      type: 'market',
+      size: '0.0014',
+      takeProfit: '63899.31',
+    });
+  } finally {
+    global.fetch = originalFetch;
+  }
+  assert.equal(submittedTradingRequests.length, 2, 'cached market metadata must avoid an extra request during TP/SL submit');
+  assert.deepEqual(JSON.parse(submittedTradingRequests[0]?.options?.body || '{}'), {
+    market: 'BTC-USD.P',
+    positionDirection: 'long',
+    type: 'takeProfit',
+    triggerPrice: '63899',
+  });
+  assert.equal(
+    JSON.parse(submittedTradingRequests[1]?.options?.body || '{}')?.takeProfit?.triggerPrice,
+    '63899',
+    'attached TP must use the same quote-increment alignment',
+  );
 
   console.log(`Ondo adapter PASS: ${markets.length} markets, ${prices.length} marks, REST ${depth.bids.length}/${depth.asks.length} depth, WS ${wsMarket.depth.bids}/${wsMarket.depth.asks} depth, ${candles.length} candles, WS BTC $${wsMarket.mark} funding ${wsMarket.funding}; builder fee locked to 1 bps`);
 }

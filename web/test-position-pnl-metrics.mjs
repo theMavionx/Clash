@@ -21,31 +21,48 @@ const base = {
   positionValueUsd: 220,
 };
 
-const cases = [
-  ['pacifica', { account: { taker_fee: 0.0003 } }, 20 - (200 * 0.0005 + 220 * 0.0005)],
-  ['avantis', { market: { symbol: 'BTC/USD', openFeeP: 0.045, closeFeeP: 0.04 } }, 20 - (200 * 0.00045 + 220 * 0.0004)],
-  ['decibel', { account: { taker_fee: 0.0003 } }, 20 - (200 * 0.0004 + 220 * 0.0004)],
-  ['monad', { market: { symbol: 'BTC', _raw: { config: { taker_fee: 690 } } } }, 20 - (200 * 0.00069 + 220 * 0.00069)],
-  ['hyperliquid', { account: { taker_fee: 0.00035 } }, 20 - (200 * 0.00045 + 220 * 0.00045)],
-  ['risex', { account: { taker_fee: 0.0005 } }, 20 - (200 * 0.0006 + 220 * 0.0006)],
-  ['nado', { account: { taker_fee: 0.0003 } }, 20 - (200 * 0.0004 + 220 * 0.0004)],
-  ['ondo', { account: { taker_fee: 0.00035 } }, 20 - (200 * 0.00045 + 220 * 0.00045)],
-  ['hibachi', { account: { taker_fee: 0.0004 } }, 20 - (200 * 0.0004 + 220 * 0.0004)],
-  ['hotstuff', { account: { taker_fee: 0.0004 } }, 20 - (200 * 0.0005 + 220 * 0.0005)],
-  ['grvt', {}, 20 - (200 * 0.00055 + 220 * 0.00055)],
-  ['katana', { market: { symbol: 'BTC', _raw: { takerFeeRate: '0.00019' } } }, 20 - (200 * 0.00019 + 220 * 0.00019)],
-  ['gmtrade', {}, 20 - (200 * 0.0006 + 220 * 0.0006)],
-  ['lighter', { market: { symbol: 'BTC', taker_fee: 0 } }, 20 - (200 * 0.0001 + 220 * 0.0001)],
-  ['bulk', {}, 20 - (200 * 0.0001 + 220 * 0.0001)],
-  ['ostium', { market: { symbol: 'BTC', open_fee_bps: 6, close_fee_bps: 0, builder_fee_bps: 2 } }, 20 - (200 * 0.0008 + 220 * 0.0002)],
+const venuePnlDexes = [
+  'pacifica', 'avantis', 'decibel', 'monad', 'hyperliquid', 'risex', 'nado',
+  'ondo', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'lighter',
+  'bulk', 'ostium', 'gmx', 'flash',
 ];
 
-for (const [dex, context, expected] of cases) {
-  const result = calculateFeeAwarePositionPnl({ dex, ...base, ...context });
-  assert.equal(result.feeAdjusted, true, `${dex} should be fee adjusted`);
-  approx(result.netPnlUsd, expected, `${dex} net PnL`);
-  approx(result.pnlPct, expected, `${dex} net PnL percent`);
+for (const dex of venuePnlDexes) {
+  const result = calculateFeeAwarePositionPnl({
+    dex,
+    ...base,
+    position: {
+      ...base.position,
+      net_pnl_usd: 10,
+      pnl_with_fees_usd: 9,
+      opening_fee_usd: 5,
+      closing_fee_usd: 6,
+      trading_fee_rate: 0.5,
+      pnl_includes_fees: true,
+    },
+  });
+  assert.equal(result.feeAdjusted, false, `${dex} must preserve venue uPnL`);
+  approx(result.grossPnlUsd, 20, `${dex} gross uPnL`);
+  approx(result.netPnlUsd, 20, `${dex} displayed uPnL`);
+  approx(result.totalFeeUsd, 0, `${dex} must not apply fees`);
 }
+
+const ondoScreenshot = calculateFeeAwarePositionPnl({
+  dex: 'ondo',
+  position: {
+    symbol: 'BTC', side: 'bid', amount: 0.0014, entry_price: 63740,
+    mark_price: 63731, margin: 4.46, unrealized_pnl: -0.0126,
+  },
+  grossPnlUsd: -0.0126,
+  amount: 0.0014,
+  entryPrice: 63740,
+  markPrice: 63731,
+  margin: 4.46,
+  positionValueUsd: 89.22,
+});
+approx(ondoScreenshot.netPnlUsd, -0.0126, 'Ondo screenshot uPnL');
+approx(ondoScreenshot.pnlPct, (-0.0126 / 4.46) * 100, 'Ondo screenshot ROE');
+assert.equal(ondoScreenshot.feeAdjusted, false);
 
 const phoenix = calculateFeeAwarePositionPnl({
   dex: 'phoenix',
@@ -78,7 +95,7 @@ const phoenixPresentation = positionPnlPresentation({
   },
 });
 assert.equal(phoenixPresentation.usesVenueGross, true, 'Phoenix live cards use venue gross PnL');
-assert.equal(phoenixPresentation.primaryLabel, 'PnL');
+assert.equal(phoenixPresentation.primaryLabel, '');
 approx(phoenixPresentation.primaryPnlUsd, -35.2915, 'Phoenix primary gross PnL');
 approx(phoenixPresentation.primaryPnlPct, -4.9494147764, 'Phoenix primary gross ROE');
 assert.equal(phoenixPresentation.secondaryLabel, 'Est. after fees');
@@ -93,37 +110,9 @@ const risexPresentation = positionPnlPresentation({
   pnlFees: phoenix,
 });
 assert.equal(risexPresentation.usesVenueGross, false, 'other venues keep net PnL primary');
-assert.equal(risexPresentation.primaryLabel, 'PnL');
+assert.equal(risexPresentation.primaryLabel, '');
 approx(risexPresentation.primaryPnlUsd, 19.6, 'other venue primary net PnL');
 assert.equal(risexPresentation.secondaryNetPnlUsd, null, 'other venue has no duplicate secondary net');
-
-const gmx = calculateFeeAwarePositionPnl({
-  dex: 'gmx',
-  ...base,
-  position: {
-    ...base.position,
-    pnl_gross_usd: 20,
-    pnl_after_pending_fees_usd: 19.8,
-    pending_position_fees_usd: 0.2,
-    closing_fee_usd: 0.11,
-    closing_price_impact_usd: -0.02,
-  },
-});
-approx(gmx.netPnlUsd, 19.57, 'GMX SDK close costs plus opening estimate');
-approx(gmx.totalFeeUsd, 0.43, 'GMX total deductions');
-
-const flash = calculateFeeAwarePositionPnl({
-  dex: 'flash',
-  ...base,
-  position: {
-    ...base.position,
-    pnl_without_fees_usd: 20,
-    pnl_with_fees_usd: 19.8,
-    flash_position_fees_usd: 0.2,
-  },
-});
-approx(flash.openingFeeUsd, 0.102, 'Flash opening fee estimate');
-approx(flash.netPnlUsd, 19.698, 'Flash live exit/borrow plus opening fee');
 
 const market = findPositionMarket([
   { symbol: 'ETH', pair_index: 1 },
@@ -137,8 +126,8 @@ approx(lighterRates.builderRate, 0.0001, 'Lighter integrator fee');
 
 assert.deepEqual(
   [...FEE_AWARE_POSITION_DEXES].sort(),
-  ['avantis', 'bulk', 'decibel', 'flash', 'gmtrade', 'gmx', 'grvt', 'hibachi', 'hotstuff', 'hyperliquid', 'katana', 'lighter', 'monad', 'nado', 'ondo', 'ostium', 'pacifica', 'phoenix', 'risex'].sort(),
-  'every FuturesPanel venue must be covered by fee-aware PnL',
+  ['phoenix'],
+  'only Phoenix may use fee-aware open-position PnL',
 );
 
-console.log(`position PnL metrics: ${FEE_AWARE_POSITION_DEXES.length} venues covered`);
+console.log('position PnL metrics: venue uPnL preserved; Phoenix-only fee accounting');

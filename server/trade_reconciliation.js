@@ -78,6 +78,7 @@ const USER_SCOPED_IMPORT_DEXES = new Set([
   'gmtrade',
   'hotstuff',
   'nado',
+  'ondo',
   'risex',
   'hibachi',
   'katana',
@@ -473,6 +474,11 @@ function adapterCredentials(dex, wallet, headers = {}, opts = {}) {
     if (!accountIndex || !authToken) return null;
     return { accountIndex, authToken };
   }
+  if (dex === 'ondo') {
+    const token = headerValue(headers, 'x-ondo-token') || opts.token || opts.ondoToken || opts.ondo_token;
+    if (!token) return null;
+    return { token };
+  }
   return null;
 }
 
@@ -526,6 +532,20 @@ async function runDexAdapter(player, dex, wallet, opts = {}) {
   if (dex === 'nado') {
     const nado = require('../server-futures/nado');
     return { dex, ...(await nado.importFillsForPlayer(playerId, wallet, { limit })) };
+  }
+
+  if (dex === 'ondo') {
+    const creds = adapterCredentials(dex, wallet, opts.headers, opts.credentials || opts);
+    if (!creds?.token) return { ok: false, skipped: 'browser_session_required', dex };
+    const ondo = require('../server-futures/ondo');
+    const identity = await ondo.verifySessionOwner(creds.token, wallet);
+    return {
+      dex,
+      ...(await ondo.importFillsForPlayer(playerId, identity.wallet, creds.token, {
+        limit,
+        pageCap: opts.pageCap || 4,
+      })),
+    };
   }
 
   if (dex === 'risex') {

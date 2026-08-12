@@ -4766,24 +4766,45 @@ router.post('/ondo/orders', auth, async (req, res) => {
   if (!session) return;
   try {
     const result = await ondo.createOrder(session.token, req.body || {});
-    const responseRow = result.response?.result || result.response || {};
-    const orderId = String(responseRow?.orderId || responseRow?.order_id || '').trim();
-    if (result.builder.configured && orderId) {
-      db.recordOndoBuilderOrder({
-        orderId,
-        playerId: req.playerId,
-        account: session.account,
-        clientOrderId: result.request?.clientOrderId || responseRow?.clientOrderId || null,
-        symbol: ondo.marketName(result.request?.market).replace(/-USD\.P$/u, ''),
-        side: result.request?.side,
-        orderType: result.request?.type,
-        builderCode: result.builder.code,
-        builderFeeBps: result.builder.feeRateBps,
-        requestJson: result.request,
-        responseJson: result.response,
+    if (!result.builder.configured) {
+      throw Object.assign(new Error('Ondo order was not builder routed'), { status: 503 });
+    }
+    const identity = ondo.orderIdentityFromResponse(result.response, result.request?.clientOrderId);
+    const proofOrderId = identity.orderId || (identity.clientOrderId ? `client:${identity.clientOrderId}` : '');
+    if (!proofOrderId) {
+      throw Object.assign(new Error('Ondo accepted the request without an attributable order identifier'), {
+        status: 502,
+        code: 'ONDO_ORDER_PROOF_MISSING',
       });
     }
-    res.json({ ...result.response, clashBuilder: result.builder });
+    const proof = db.recordOndoBuilderOrder({
+      orderId: proofOrderId,
+      playerId: req.playerId,
+      account: session.account,
+      clientOrderId: identity.clientOrderId,
+      symbol: ondo.marketName(result.request?.market).replace(/-USD\.P$/u, ''),
+      side: result.request?.side,
+      orderType: result.request?.type,
+      builderCode: result.builder.code,
+      builderFeeBps: result.builder.feeRateBps,
+      requestJson: result.request,
+      responseJson: result.response,
+    });
+    if (!proof?.changes) {
+      throw Object.assign(new Error('Ondo builder proof could not be persisted'), {
+        status: 503,
+        code: 'ONDO_ORDER_PROOF_WRITE_FAILED',
+      });
+    }
+    res.json({
+      ...result.response,
+      clashBuilder: result.builder,
+      clashBuilderProof: {
+        saved: true,
+        orderId: identity.orderId,
+        clientOrderId: identity.clientOrderId,
+      },
+    });
   } catch (error) {
     sendOndoError(res, error, 'Failed to place Ondo order');
   }

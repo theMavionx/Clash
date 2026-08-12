@@ -185,6 +185,9 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_ondo_builder_orders_player_account
     ON ondo_builder_orders(player_id, account, created_at);
 
+  CREATE INDEX IF NOT EXISTS idx_ondo_builder_orders_client
+    ON ondo_builder_orders(player_id, account, client_order_id);
+
   CREATE TABLE IF NOT EXISTS gmtrade_pending_trade_reports (
     signature       TEXT PRIMARY KEY,
     player_id       TEXT NOT NULL,
@@ -491,6 +494,12 @@ const stmts = {
   getOndoBuilderOrder: db.prepare(`
     SELECT * FROM ondo_builder_orders
     WHERE order_id = ? AND player_id = ? AND account = ?
+    LIMIT 1
+  `),
+  getOndoBuilderOrderByClient: db.prepare(`
+    SELECT * FROM ondo_builder_orders
+    WHERE client_order_id = ? AND player_id = ? AND account = ?
+    ORDER BY created_at DESC
     LIMIT 1
   `),
   getDexWorkerState: db.prepare('SELECT value FROM dex_worker_state WHERE dex = ? AND key = ?'),
@@ -805,6 +814,15 @@ function getOndoBuilderOrder(orderId, playerId, account) {
   ) || null;
 }
 
+function getOndoBuilderOrderByClient(clientOrderId, playerId, account) {
+  if (!clientOrderId || !playerId || !account) return null;
+  return stmts.getOndoBuilderOrderByClient.get(
+    String(clientOrderId),
+    String(playerId),
+    String(account).toLowerCase(),
+  ) || null;
+}
+
 // ---------- Exports ----------
 
 module.exports = {
@@ -826,6 +844,7 @@ module.exports = {
   deletePendingGmtradeTradeReport,
   recordOndoBuilderOrder,
   getOndoBuilderOrder,
+  getOndoBuilderOrderByClient,
   recordDecibelOrderProof,
   getDecibelOrderProof,
   upgradeDecibelWorkerTradeByClient,

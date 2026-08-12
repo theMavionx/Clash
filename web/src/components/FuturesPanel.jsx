@@ -46,6 +46,12 @@ import FilterPopup from './FilterPopup';
 import TokenIcon from './TokenIcon';
 import GoldRewardToast from './GoldRewardToast';
 import { GOLD_REWARD_PANEL_TOAST_STYLE } from './goldRewardToastStyles';
+import {
+  TradingRegionGate,
+  TradingSetupGate,
+  tradingSetupStyles as hlGateStyles,
+} from './trading/TradingSetupGate';
+import OndoDepositNetworkSelector from './trading/OndoDepositNetworkSelector';
 import { openSolanaWallet } from '../lib/solanaWalletUi';
 import { setClientActivity } from '../lib/updateCoordinator';
 import { reportClientEvent } from '../lib/clientLogger';
@@ -2470,155 +2476,6 @@ const HYPERLIQUID_STEP_HINTS = {
 // gold-on-brown title, step-bubble progress rail, big green primary
 // CTA. Embedded `act-spin` keyframes are declared inline by the gate's
 // `<style>` tag — see the surrounding setupGate JSX.
-const hlGateStyles = {
-  frame: {
-    margin: '0 auto',
-    width: '100%',
-    maxWidth: 460,
-    padding: 'clamp(14px, 3vh, 24px) clamp(14px, 4vw, 24px)',
-    display: 'flex', flexDirection: 'column',
-    gap: 'clamp(10px, 2vh, 16px)',
-    fontFamily: '"Inter","Segoe UI",sans-serif',
-  },
-  titleBlock: {
-    display: 'flex', flexDirection: 'column', gap: 4,
-    alignItems: 'center', textAlign: 'center',
-  },
-  kicker: {
-    fontSize: 11, fontWeight: 900, color: '#1B5E20',
-    letterSpacing: 1.4, textTransform: 'uppercase',
-  },
-  title: {
-    fontSize: 'clamp(18px, 2.6vh, 22px)', fontWeight: 900, color: '#5C3A21',
-    lineHeight: 1.2,
-  },
-  subtitle: {
-    fontSize: 12, fontWeight: 700, color: '#8a7252',
-    lineHeight: 1.45, maxWidth: 380,
-  },
-
-  stepList: {
-    listStyle: 'none', margin: 0, padding: '12px 14px',
-    background: '#fffbef',
-    border: '1px solid #d4c8b0',
-    borderRadius: 12,
-    display: 'flex', flexDirection: 'column', gap: 12,
-  },
-  stepItem: {
-    display: 'flex', alignItems: 'flex-start', gap: 11,
-  },
-  stepBubble: {
-    width: 28, height: 28, borderRadius: '50%',
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-    fontSize: 13, fontWeight: 900, flexShrink: 0,
-    marginTop: 1,
-    background: '#e8dfc8', color: '#9f8759',
-    border: '2px solid #d4c8b0',
-    transition: 'background 0.2s, border-color 0.2s, color 0.2s',
-  },
-  stepBubble_pending: {},
-  stepBubble_active: {
-    background: '#fff6dc', border: '2px solid #c2851b', color: '#5C3A21',
-    boxShadow: '0 0 0 3px rgba(255,217,122,0.4)',
-  },
-  stepBubble_done: {
-    background: 'linear-gradient(180deg, #91df7d 0%, #3b9b41 100%)',
-    border: '2px solid #1f6d34', color: '#fff',
-  },
-  stepBubble_error: {
-    background: '#E53935', border: '2px solid #7f0000', color: '#fff',
-  },
-  stepText: {
-    display: 'flex', flexDirection: 'column', minWidth: 0, lineHeight: 1.25,
-    flex: 1,
-  },
-  stepLabel: {
-    fontSize: 13, fontWeight: 800, color: '#7a5a30',
-  },
-  stepLabel_active: { color: '#5C3A21' },
-  stepLabel_done: { color: '#5C3A21' },
-  stepLabel_error: { color: '#b71c1c' },
-  stepLabel_pending: {},
-  stepHint: {
-    fontSize: 11, color: '#9f8759', fontWeight: 700,
-    marginTop: 1, overflowWrap: 'anywhere',
-  },
-
-  // Spinner reuses `act-spin` keyframes injected by the gate render so
-  // it animates the same way as the legacy big-circle spinner used to.
-  spinner: {
-    width: 12, height: 12, borderRadius: '50%',
-    borderWidth: 2,
-    borderStyle: 'solid',
-    borderColor: 'rgba(92,58,33,0.25)',
-    borderTopColor: '#5C3A21',
-    animation: 'act-spin 0.9s linear infinite',
-  },
-  bigSpinner: {
-    width: 42, height: 42, borderRadius: '50%',
-    borderWidth: 4,
-    borderStyle: 'solid',
-    borderColor: 'rgba(92,58,33,0.18)',
-    borderTopColor: '#5C3A21',
-    animation: 'act-spin 0.9s linear infinite',
-    alignSelf: 'center',
-  },
-
-  workingHint: {
-    fontSize: 13, fontWeight: 800, color: '#5C3A21',
-    background: 'linear-gradient(180deg, #fff2c2 0%, #ffd76a 100%)',
-    border: '2px solid #c2851b',
-    padding: '10px 14px', borderRadius: 12,
-    textAlign: 'center',
-    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.45)',
-    animation: 'act-pulse 2.4s ease-in-out infinite',
-  },
-
-  primaryBtn: {
-    padding: '12px 18px', borderRadius: 12,
-    fontSize: 14, fontWeight: 900,
-    background: 'linear-gradient(180deg, #91df7d 0%, #3b9b41 100%)',
-    border: '2px solid #1f6d34',
-    color: '#fff',
-    cursor: 'pointer',
-    fontFamily: 'inherit',
-    letterSpacing: 0.3,
-    textShadow: '0 1px 1px rgba(0,0,0,0.35)',
-    boxShadow: '0 4px 10px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.4)',
-  },
-  secondaryBtn: {
-    padding: '12px 18px', borderRadius: 12,
-    fontSize: 14, fontWeight: 900,
-    background: '#fffaf0',
-    border: '2px solid #bfa77b',
-    color: '#5C3A21',
-    cursor: 'pointer',
-    fontFamily: 'inherit',
-    letterSpacing: 0.3,
-    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.65)',
-  },
-  primaryBtnBusy: { opacity: 0.7, cursor: 'not-allowed' },
-
-  errorBox: {
-    color: '#7a1f1c',
-    background: '#fdecea',
-    border: '1px solid #E53935',
-    borderRadius: 10,
-    padding: '8px 10px',
-    fontSize: 12, fontWeight: 700,
-    overflowWrap: 'anywhere',
-  },
-
-  // Subtle footnote below the primary action — used by the Decibel gate
-  // for the "your funds stay in your wallet" reassurance line.
-  footnote: {
-    fontSize: 11, fontWeight: 700,
-    color: '#9f8759',
-    textAlign: 'center',
-    lineHeight: 1.4,
-  },
-};
-
 const FLASH_FUNDING_STEPS = [
   {
     id: 'ledger',
@@ -3708,8 +3565,9 @@ function FuturesPanel() {
     // subaccountAddr lets the gate distinguish "fresh user" (no
     // subaccount yet) from "returning user" (subaccount on-chain but
     // delegation missing — usually after rejecting the delegate step).
-    activationStep, isReady, setupVerified, serviceAvailability, subaccountAddr, gasSponsored, apiWalletAddr, inviteStatus, builderConfig, hotstuffSetupStatus,
+    activationStep, isReady, setupVerified, serviceAvailability, subaccountAddr, gasSponsored, apiWalletAddr, inviteStatus, builderConfig, builderAccepted, hotstuffSetupStatus,
     bridgeDepositSourceChainId, setBridgeDepositSourceChainId, bridgeDepositSources,
+    ondoDepositNetwork, ondoDepositNetworks, setOndoDepositNetwork,
     lighterNeedsIntegratorApproval, lighterNeedsReferral, lighterReferralChecking, lighterReferralStatus,
     lighterCredentials, detectAccount: detectLighterAccount,
     registerBuilderCode,
@@ -5447,13 +5305,28 @@ function FuturesPanel() {
   );
 
   const renderTradeControls = ({ compactMobile = false, parentScroll = false } = {}) => (
-    <div style={{
+    <div
+      className={fullscreen && !parentScroll ? 'grad-scrollbar futures-trade-controls-scroll' : undefined}
+      style={{
       display: 'flex',
       flexDirection: 'column',
       gap: compactMobile ? 6 : 8,
       minWidth: 0,
       ...(fullscreen && !parentScroll
-        ? {width: '100%', overflowY: 'auto', overflowX: 'hidden', padding: 10, scrollbarWidth: 'none'}
+        ? {
+            width: '100%',
+            height: '100%',
+            minHeight: 0,
+            overflowY: 'auto',
+            overflowX: 'hidden',
+            padding: '10px 10px max(18px, env(safe-area-inset-bottom))',
+            boxSizing: 'border-box',
+            scrollbarWidth: 'thin',
+            scrollbarGutter: 'stable',
+            WebkitOverflowScrolling: 'touch',
+            overscrollBehaviorY: 'contain',
+            touchAction: 'pan-y',
+          }
         : {}),
       ...(parentScroll ? {width: '100%', padding: 10, boxSizing: 'border-box'} : {}),
     }}>
@@ -5556,7 +5429,7 @@ function FuturesPanel() {
           </div>
         </div>
 
-        {(dex === 'nado' || dex === 'ondo' || dex === 'flash') && (
+        {(dex === 'nado' || dex === 'flash') && (
           <div style={{
             display: 'flex',
             alignItems: 'center',
@@ -5572,13 +5445,13 @@ function FuturesPanel() {
               fontWeight: 900,
               color: oneTapTrading?.enabled ? '#166534' : '#5C3A21',
             }}>
-              {dex === 'flash' ? 'Flash one tap' : dex === 'ondo' ? 'Ondo session' : 'One tap'}{oneTapTrading?.enabled && oneTapTrading?.approved === false ? ' pending' : ''}
+              {dex === 'flash' ? 'Flash one tap' : 'One tap'}{oneTapTrading?.enabled && oneTapTrading?.approved === false ? ' pending' : ''}
             </span>
             <button
               type="button"
               onClick={handleToggleOneTapTrading}
               disabled={referralLinking || loading}
-              title={dex === 'flash' ? 'Flash delegated session signer' : dex === 'ondo' ? 'Ondo SIWE session' : 'Nado linked signer'}
+              title={dex === 'flash' ? 'Flash delegated session signer' : 'Nado linked signer'}
               style={{
                 ...S.btnSmall,
                 flex: '0 0 auto',
@@ -5590,7 +5463,7 @@ function FuturesPanel() {
                 opacity: (referralLinking || loading) ? 0.7 : 1,
               }}
             >
-              {referralLinking ? '...' : oneTapTrading?.enabled ? 'ON' : (dex === 'flash' || dex === 'ondo' ? 'ENABLE' : 'OFF')}
+              {referralLinking ? '...' : oneTapTrading?.enabled ? 'ON' : (dex === 'flash' ? 'ENABLE' : 'OFF')}
             </button>
           </div>
         )}
@@ -5911,8 +5784,6 @@ function FuturesPanel() {
   // live market subscriptions. The server repeats the same check on every
   // private Ondo endpoint, so this screen is UX rather than the only control.
   if (dex === 'ondo' && regionAccess?.status !== 'allowed') {
-    const checkingRegion = !regionAccess || regionAccess.status === 'idle' || regionAccess.status === 'checking';
-    const blockedRegion = regionAccess?.status === 'blocked';
     return (
       <>
         <style>{animCSS}</style>
@@ -5923,42 +5794,22 @@ function FuturesPanel() {
         }}>
           <div style={S.header} onPointerDown={handlePointerDown}>
             <span style={S.headerTitle}>Ondo Perps</span>
-            <button data-nodrag onClick={handleClose} style={S.closeBtn}>×</button>
+            <button data-nodrag onClick={handleClose} style={S.closeBtn} aria-label="Close Ondo Perps">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
           </div>
-          <div style={{...S.body, alignItems: 'center', justifyContent: 'center', gap: 16, padding: 28}}>
-            <div style={{width: 96, height: 96, borderRadius: 20, background: '#000', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 5px 0 #333, 0 8px 16px rgba(0,0,0,0.25)'}}>
-              <img src={DEX_CONFIG.ondo.logo} alt="Ondo Perps" style={{width: 88, height: 88, objectFit: 'contain'}} />
-            </div>
-            <div style={{color: '#5C3A21', fontSize: 21, fontWeight: 900, textAlign: 'center'}}>
-              {checkingRegion ? 'Checking regional availability...' : blockedRegion ? 'Ondo Perps is unavailable in your region' : 'Regional check unavailable'}
-            </div>
-            <div style={{color: '#8a7252', fontSize: 13, fontWeight: 650, textAlign: 'center', maxWidth: 410, lineHeight: 1.5}}>
-              {checkingRegion
-                ? 'Please wait while Clash verifies whether Ondo trading is available from your country or IP region.'
-                : blockedRegion
-                  ? 'Clash cannot provide Ondo trading access to users in the United States, Canada, U.S. territories, or sanctioned jurisdictions.'
-                  : (regionAccess?.message || 'Clash could not verify your region, so Ondo trading remains locked.')}
-            </div>
-            {!checkingRegion && (
-              <div style={{width: '100%', maxWidth: 420, border: '2px solid #FCA5A5', borderRadius: 12, padding: '12px 14px', background: '#FEE2E2', color: '#991B1B', fontSize: 12, lineHeight: 1.45, fontWeight: 750, textAlign: 'center'}}>
-                Ondo wallet login, account data, orders, deposits and withdrawals are disabled through Clash in restricted regions.
-              </div>
-            )}
-            {regionAccess?.status === 'unavailable' && (
-              <button
-                data-nodrag
-                style={{...cartoonBtn('#111111', '#000000'), padding: '12px 28px'}}
-                onClick={() => retryRegionAccess?.()}
-              >
-                RETRY CHECK
-              </button>
-            )}
+          <div style={{...S.body, alignItems: 'stretch', overflowY: 'auto', overflowX: 'hidden', padding: 0, background: '#fdf8e7'}}>
+            <TradingRegionGate
+              venueName="Ondo Perps"
+              logo={DEX_CONFIG.ondo.logo}
+              access={regionAccess}
+              onRetry={() => retryRegionAccess?.()}
+            />
           </div>
         </div>
       </>
     );
   }
-
   // ==================== SOLANA WALLET RESTORE ====================
   if (checkingSolanaWallet) {
     const venueLabel = dex === 'phoenix' ? 'Phoenix' : 'Pacifica';
@@ -6901,8 +6752,31 @@ function FuturesPanel() {
     );
   }
 
-  // ==================== ONDO SIWE / JWT SETUP ====================
+  // ==================== ONDO BUILDER / SIWE SETUP ====================
   if (dex === 'ondo' && hasWallet && setupVerified !== true) {
+    const ondoRunning = Boolean(activationStep) || loading;
+    const ondoStepIndex = Number(activationStep?.index || 0);
+    const ondoError = localAlert || error;
+    const ondoSteps = [
+      {
+        id: 'builder',
+        label: 'Accept Clash builder routing',
+        hint: `Approve builder code ${builderConfig?.code || '4249023162302247479'} at exactly 1 bps for this wallet.`,
+        status: builderAccepted ? 'done' : (ondoStepIndex === 1 || !ondoRunning ? 'active' : 'pending'),
+      },
+      {
+        id: 'siwe',
+        label: 'Sign in with Ethereum',
+        hint: 'Sign Ondo\'s official SIWE message. Clash never receives your private key.',
+        status: ondoStepIndex > 2 ? 'done' : (ondoStepIndex === 2 ? 'active' : 'pending'),
+      },
+      {
+        id: 'account',
+        label: 'Verify account and unlock trading',
+        hint: 'Accept Ondo terms, verify the JWT session, then open the one-tap trading panel.',
+        status: setupVerified === true ? 'done' : (ondoStepIndex === 3 ? 'active' : 'pending'),
+      },
+    ];
     return (
       <>
         <style>{animCSS}</style>
@@ -6913,59 +6787,79 @@ function FuturesPanel() {
         }}>
           <div style={S.header} onPointerDown={handlePointerDown}>
             <span style={S.headerTitle}>Ondo Perps setup</span>
-            <button data-nodrag onClick={handleClose} style={S.closeBtn}>×</button>
+            <button data-nodrag onClick={handleClose} style={S.closeBtn} aria-label="Close Ondo setup">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
           </div>
-          <div style={{...S.body, alignItems: 'center', justifyContent: 'center', gap: 16, padding: 28}}>
-            <div style={{width: 96, height: 96, borderRadius: 20, background: '#000', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 5px 0 #333, 0 8px 16px rgba(0,0,0,0.25)'}}>
-              <img src={DEX_CONFIG.ondo.logo} alt="Ondo Perps" style={{width: 88, height: 88, objectFit: 'contain'}} />
-            </div>
-            <div style={{color: '#5C3A21', fontSize: 21, fontWeight: 900, textAlign: 'center'}}>
-              Sign in to Ondo Perps
-            </div>
-            <div style={{color: '#8a7252', fontSize: 13, fontWeight: 650, textAlign: 'center', maxWidth: 410, lineHeight: 1.5}}>
-              Sign Ondo&apos;s official SIWE login message once. Orders then use Ondo&apos;s JWT session, so trading is one tap and Clash never receives your private key.
-            </div>
-            <div style={{width: '100%', maxWidth: 420, border: '2px solid #bfa46f', borderRadius: 12, padding: '12px 14px', background: '#fff8e8', color: '#6B4E2E', fontSize: 12, lineHeight: 1.45, fontWeight: 750}}>
-              <div>Builder routing: <strong>{builderConfig?.configured ? `${builderConfig.code} at 1 bps` : 'prepared at 1 bps; code pending from Ondo'}</strong></div>
-              <div style={{marginTop: 5}}>The server injects this into every market, limit, close, and attached TP/SL entry order. Browser overrides are ignored.</div>
-            </div>
-            {error && (
-              <div style={{color: '#991B1B', background: '#FEE2E2', border: '2px solid #FCA5A5', borderRadius: 10, padding: '10px 14px', fontSize: 12, fontWeight: 750, maxWidth: 410}}>
-                {humanizeTradeError(error, dex)}
-              </div>
-            )}
-            <button
-              data-nodrag
-              style={{...cartoonBtn('#111111', '#000000'), padding: '14px 30px', minWidth: 260, opacity: loading ? 0.65 : 1}}
-              disabled={loading}
-              onClick={async () => {
-                const result = await activate();
-                if (result?.error) setLocalAlert(result.error);
+          <div style={{...S.body, alignItems: 'stretch', overflowY: 'auto', overflowX: 'hidden', padding: 0, background: '#fdf8e7'}}>
+            <TradingSetupGate
+              kicker={builderAccepted ? 'FINISH ONDO SETUP' : 'BUILDER CODE REQUIRED'}
+              title={builderAccepted ? 'Sign in to Ondo Perps' : 'Accept the Clash builder code'}
+              subtitle="One clear setup flow enables secure one-tap Ondo trading while keeping every order attributed to Clash."
+              logo={DEX_CONFIG.ondo.logo}
+              logoAlt="Ondo Perps"
+              logoBackground="#111"
+              steps={ondoSteps}
+              working={ondoRunning}
+              workingText={activationStep?.label || (loading ? 'Checking your Ondo setup...' : '')}
+              statusContent={(
+                <>
+                  <div><strong>Builder code:</strong> {builderConfig?.code || '4249023162302247479'}</div>
+                  <div><strong>Builder fee:</strong> 1 bps (0.01%)</div>
+                  <div style={{marginTop: 4}}>Clash injects these exact values server-side into market, limit, close, and attached TP/SL entry orders. Browser overrides are ignored.</div>
+                </>
+              )}
+              error={ondoError ? humanizeTradeError(ondoError, dex) : ''}
+              primaryAction={{
+                label: ondoRunning
+                  ? 'PLEASE APPROVE IN YOUR WALLET...'
+                  : builderAccepted
+                    ? 'SIGN IN TO ONDO PERPS'
+                    : 'ACCEPT BUILDER CODE & SIGN IN',
+                disabled: ondoRunning,
+                onClick: async () => {
+                  setLocalAlert('');
+                  const result = await activate();
+                  if (result?.error) setLocalAlert(result.error);
+                },
               }}
-            >
-              {loading ? 'SIGNING IN...' : 'SIGN IN & ACCEPT TERMS'}
-            </button>
-            <button
-              data-nodrag
-              style={{...cartoonBtn('#D4C8B0', '#A3906A'), padding: '10px 22px'}}
-              onClick={() => window.open('https://app.ondoperps.xyz', '_blank', 'noopener,noreferrer')}
-            >
-              OPEN ONDO PERPS
-            </button>
-            <div style={{fontSize: 10, color: '#8a7252', fontWeight: 700, textAlign: 'center', maxWidth: 390}}>
-              Ondo authentication always uses Ethereum mainnet (chain ID 1). Continuing accepts Ondo&apos;s current terms and privacy policy.
-            </div>
+              secondaryAction={{
+                label: 'OPEN ONDO PERPS',
+                variant: 'secondary',
+                onClick: () => window.open('https://app.ondoperps.xyz', '_blank', 'noopener,noreferrer'),
+              }}
+              footnote="Ondo authentication uses Ethereum mainnet (chain ID 1). Accepting the builder code does not give Clash custody or withdrawal permission."
+            />
           </div>
         </div>
       </>
     );
   }
-
   // ==================== BULK BUILDER APPROVAL GATE ====================
   if (dex === 'bulk' && hasWallet && setupVerified !== true) {
     const bulkUnavailable = serviceAvailability?.available === false;
     const isChecking = !bulkUnavailable && (setupVerified === null || loading);
     const isRunning = Boolean(activationStep);
+    const bulkSteps = [
+      {
+        id: 'access',
+        label: 'Verify Bulk account access',
+        hint: 'Clash checks whether this wallet can trade during the current beta.',
+        status: isChecking ? 'active' : bulkUnavailable ? 'error' : 'done',
+      },
+      {
+        id: 'builder',
+        label: 'Approve Clash builder routing',
+        hint: 'Sign the one-time builder approval at exactly 1 bps.',
+        status: isRunning ? 'active' : bulkUnavailable || isChecking ? 'pending' : 'active',
+      },
+      {
+        id: 'ready',
+        label: 'Unlock signed trading',
+        hint: 'Every later market and limit order stays independently wallet-signed.',
+        status: 'pending',
+      },
+    ];
     return (
       <>
         <style>{animCSS}</style>
@@ -6976,50 +6870,50 @@ function FuturesPanel() {
         }}>
           <div style={S.header} onPointerDown={handlePointerDown}>
             <span style={S.headerTitle}>Bulk setup</span>
-            <button data-nodrag onClick={handleClose} style={S.closeBtn}>×</button>
+            <button data-nodrag onClick={handleClose} style={S.closeBtn} aria-label="Close Bulk setup">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
           </div>
-          <div style={{...S.body, alignItems: 'center', justifyContent: 'center', gap: 18, padding: 28}}>
-            <div style={{width: 112, height: 112, borderRadius: 16, background: '#1B1B18', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center'}}>
-              <img src={DEX_CONFIG.bulk.logo} alt="Bulk" style={{width: 98, height: 98, objectFit: 'contain'}} />
-            </div>
-            <div style={{color: '#5C3A21', fontSize: 21, fontWeight: 900, textAlign: 'center'}}>
-              {bulkUnavailable ? 'Bulk closed beta' : isChecking ? 'Checking your Bulk account' : 'Approve Clash builder routing'}
-            </div>
-            <div style={{color: '#8a7252', fontSize: 13, fontWeight: 650, textAlign: 'center', maxWidth: 390, lineHeight: 1.5}}>
-              {bulkUnavailable
-                ? (serviceAvailability?.message || 'Bulk account trading is not available during the closed beta. You can still join through the Clash referral below.')
-                : 'Bulk requires a one-time signed approval for the Clash builder address. Every later market or limit order is independently signed by this wallet and includes the same builder routing.'}
-            </div>
-            {error && !isChecking && (
-              <div style={{color: '#991B1B', background: '#FEE2E2', border: '2px solid #FCA5A5', borderRadius: 10, padding: '10px 14px', fontSize: 12, fontWeight: 750, maxWidth: 410}}>
-                {error}
-              </div>
-            )}
-            <button
-              disabled={bulkUnavailable || isChecking || isRunning}
-              style={{...cartoonBtn(bulkUnavailable || isChecking || isRunning ? '#A8A29E' : '#383832', bulkUnavailable || isChecking || isRunning ? '#78716C' : '#11110F'), padding: '14px 30px', minWidth: 250}}
-              onClick={async () => {
-                const result = await registerBuilderCode?.();
-                if (result?.error) setLocalAlert(result.error);
+          <div style={{...S.body, alignItems: 'stretch', overflowY: 'auto', overflowX: 'hidden', padding: 0, background: '#fdf8e7'}}>
+            <TradingSetupGate
+              kicker={bulkUnavailable ? 'CLOSED BETA' : isChecking ? 'VERIFYING ACCOUNT' : 'BUILDER APPROVAL REQUIRED'}
+              title={bulkUnavailable ? 'Bulk trading is not open yet' : isChecking ? 'Checking your Bulk account' : 'Approve Clash builder routing'}
+              subtitle={bulkUnavailable
+                ? (serviceAvailability?.message || 'Bulk trading is not available during the closed beta. You can still join through the Clash referral.')
+                : 'Approve once, then every order remains self-custodial and independently signed by this wallet.'}
+              logo={DEX_CONFIG.bulk.logo}
+              logoAlt="Bulk"
+              logoBackground="#1B1B18"
+              steps={bulkSteps}
+              working={isChecking || isRunning}
+              workingText={isChecking ? 'Checking Bulk beta access...' : activationStep?.label || 'Waiting for your wallet signature...'}
+              statusContent={(
+                <>
+                  <div><strong>Builder:</strong> {builderConfig?.address || 'Drvzmh5iRfHRuKHgmm6Q77CqxhqvsXaLvrKkfMP8qci9'}</div>
+                  <div><strong>Builder fee:</strong> {builderConfig?.fee_bps || 1} bps</div>
+                </>
+              )}
+              error={!isChecking && error ? humanizeTradeError(error, dex) : ''}
+              primaryAction={{
+                label: bulkUnavailable ? 'TRADING OPENS AFTER BETA' : isChecking ? 'CHECKING...' : isRunning ? 'PLEASE APPROVE IN YOUR WALLET...' : 'APPROVE BUILDER & CONTINUE',
+                disabled: bulkUnavailable || isChecking || isRunning,
+                onClick: async () => {
+                  const result = await registerBuilderCode?.();
+                  if (result?.error) setLocalAlert(result.error);
+                },
               }}
-            >
-              {bulkUnavailable ? 'TRADING OPENS AFTER BETA' : isChecking ? 'CHECKING…' : isRunning ? 'SIGNING…' : 'APPROVE BUILDER & CONTINUE'}
-            </button>
-            <button
-              style={{...cartoonBtn('#EAB308', '#A16207'), padding: '11px 24px'}}
-              onClick={() => openReferralJoin?.()}
-            >
-              DEPOSIT WITH CLASH REFERRAL
-            </button>
-            <div style={{color: '#8a7252', fontSize: 11, fontWeight: 700, textAlign: 'center', maxWidth: 420, wordBreak: 'break-all'}}>
-              Builder: {builderConfig?.address || 'Drvzmh5iRfHRuKHgmm6Q77CqxhqvsXaLvrKkfMP8qci9'} · {builderConfig?.fee_bps || 1} bps
-            </div>
+              secondaryAction={{
+                label: 'DEPOSIT WITH CLASH REFERRAL',
+                variant: 'secondary',
+                onClick: () => openReferralJoin?.(),
+              }}
+              footnote="The builder approval does not give Clash custody or withdrawal permission."
+            />
           </div>
         </div>
       </>
     );
   }
-
   // ==================== LIGHTER API KEY GATE ====================
   if (dex === 'lighter' && hasWallet && setupVerified !== true) {
     const isRunning = referralLinking || loading;
@@ -8803,48 +8697,73 @@ function FuturesPanel() {
     return (
       <>
         <style>{animCSS}</style>
-        <div ref={panelRef} className={fullscreen ? "futures-fullscreen" : ""} style={{
+        <div ref={panelRef} className={fullscreen ? 'futures-fullscreen' : ''} style={{
           ...(fullscreen ? S.containerFull : S.container),
           ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '4px solid #d4c8b0' } : {}),
           transform: (fullscreen || isMobile) ? undefined : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
           transition: isDragging ? 'none' : 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
         }}>
           <div style={S.header} onPointerDown={handlePointerDown}>
-            <span style={S.headerTitle}>Setup Perpl Trading</span>
-            <button data-nodrag onClick={handleClose} style={S.closeBtn}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            <span style={S.headerTitle}>Perpl setup</span>
+            <button data-nodrag onClick={handleClose} style={S.closeBtn} aria-label="Close Perpl setup">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
             </button>
           </div>
-          <div style={{...S.body, alignItems: 'center', justifyContent: 'center', gap: 14, textAlign: 'center', padding: 24}}>
-            <img src={DEX_CONFIG.monad.logo} alt="" style={{width: 64, height: 64, objectFit: 'contain'}} />
-            <div style={{color: '#5C3A21', fontSize: 19, fontWeight: 900}}>
-              {perplChecking ? 'Checking your Perpl account' : perplAuthed ? 'Create or fund your Perpl account' : 'Sign in to Perpl'}
-            </div>
-            <div style={{color: '#8a7252', fontSize: 12, fontWeight: 700, maxWidth: 360, lineHeight: 1.45}}>
-              {perplChecking
-                ? 'Waiting for Perpl to send your wallet snapshot. This usually takes a moment.'
+          <div style={{...S.body, alignItems: 'stretch', overflowY: 'auto', overflowX: 'hidden', padding: 0, background: '#fdf8e7'}}>
+            <TradingSetupGate
+              kicker={perplChecking ? 'VERIFYING ACCOUNT' : perplAuthed ? 'FUND TRADING ACCOUNT' : 'WALLET SIGNATURE REQUIRED'}
+              title={perplChecking ? 'Checking your Perpl account' : perplAuthed ? 'Create or fund your Perpl account' : 'Sign in to Perpl'}
+              subtitle={perplChecking
+                ? 'Waiting for Perpl to return the live wallet and exchange-account snapshot.'
                 : perplAuthed
-                ? 'Perpl keeps collateral as AUSD inside its Exchange contract. Create the account with AUSD, then the trading panel will unlock.'
-                : 'One wallet signature opens a Perpl API session. If this wallet is not approved yet, enter your Perpl access code first.'}
-            </div>
-            {!perplAuthed && (
-              <div style={{width: '100%', maxWidth: 360, display: 'flex', flexDirection: 'column', gap: 6}}>
-                <label style={{...S.label, textAlign: 'left'}}>Access Code</label>
-                <input
-                  type="text"
-                  placeholder="Input access code"
-                  value={perplAccessCode}
-                  onChange={e => setPerplAccessCode(e.target.value)}
-                  autoCapitalize="none"
-                  autoCorrect="off"
-                  spellCheck={false}
-                  style={{...S.input, width: '100%', padding: '10px 12px', fontSize: 14}}
-                />
-              </div>
-            )}
-            {perplAuthed && !perplChecking && (
-              <div style={{width: '100%', maxWidth: 360, display: 'flex', flexDirection: 'column', gap: 8}}>
-                <div style={{...S.fullCard, margin: 0}}>
+                  ? 'Perpl keeps AUSD collateral in its Exchange contract. Choose an amount to create and fund the account.'
+                  : 'One wallet signature opens a Perpl API session. New wallets may also need a Perpl access code.'}
+              logo={DEX_CONFIG.monad.logo}
+              logoAlt="Perpl"
+              logoBackground="#4530E0"
+              steps={[
+                { id: 'sign', label: 'Sign in to Perpl', hint: 'Open an authenticated API session with your connected wallet.', status: perplAuthed ? 'done' : 'active' },
+                { id: 'account', label: 'Verify the exchange account', hint: 'Clash checks allowlist and live account state before funding.', status: perplChecking ? 'active' : perplAuthed ? 'done' : 'pending' },
+                { id: 'fund', label: 'Create and fund with AUSD', hint: 'Deposit collateral while keeping a small MON balance for gas.', status: perplAuthed && !perplChecking ? 'active' : 'pending' },
+              ]}
+              working={loading || perplChecking}
+              workingText={perplChecking ? 'Loading the live Perpl account...' : loading ? 'Waiting for your wallet...' : ''}
+              error={error ? humanizeTradeError(error, dex) : ''}
+              primaryAction={{
+                label: loading || perplChecking ? 'PLEASE WAIT...' : perplAuthed ? 'CREATE ACCOUNT' : 'SIGN IN TO PERPL',
+                disabled: loading || perplChecking || (perplAuthed && !canCreate),
+                onClick: async () => {
+                  if (!perplAuthed) {
+                    const fn = connectPerpl || linkOurReferrer;
+                    if (fn) {
+                      const result = await fn({ accessCode: perplAccessCode });
+                      if (result && !result.error) setPerplAccessCode('');
+                    }
+                    return;
+                  }
+                  const result = await activate(depositAmt || '10');
+                  if (!result?.error) setDepositAmt('');
+                },
+              }}
+              footnote="Perpl remains self-custodial. Clash only submits the actions you approve."
+            >
+              {!perplAuthed && (
+                <div style={{display: 'flex', flexDirection: 'column', gap: 6}}>
+                  <label style={{...S.label, textAlign: 'left'}}>Access code</label>
+                  <input
+                    type="text"
+                    placeholder="Input access code"
+                    value={perplAccessCode}
+                    onChange={event => setPerplAccessCode(event.target.value)}
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    style={{...S.input, width: '100%', padding: '10px 12px', fontSize: 14}}
+                  />
+                </div>
+              )}
+              {perplAuthed && !perplChecking && (
+                <div style={hlGateStyles.statusBox}>
                   <div style={S.row}>
                     <span style={S.label}>Wallet AUSD</span>
                     <span style={S.detail}>${walletAusd.toFixed(2)}</span>
@@ -8853,52 +8772,22 @@ function FuturesPanel() {
                     type="number"
                     placeholder="Amount (AUSD)"
                     value={depositAmt}
-                    onChange={e => setDepositAmt(e.target.value)}
-                    style={{...S.input, width: '100%', padding: '10px 12px', fontSize: 14}}
+                    onChange={event => setDepositAmt(event.target.value)}
+                    style={{...S.input, width: '100%', padding: '10px 12px', fontSize: 14, marginTop: 8}}
                   />
+                  {walletAusd <= 0 && (
+                    <div style={{fontSize: 11, color: '#8a7252', fontWeight: 700, lineHeight: 1.4, marginTop: 7}}>
+                      No AUSD detected. Swap or bridge into AUSD first and keep a small MON balance for gas.
+                    </div>
+                  )}
                 </div>
-                {walletAusd <= 0 && (
-                  <div style={{fontSize: 11, color: '#8a7252', fontWeight: 700, lineHeight: 1.4}}>
-                    Your wallet has no AUSD on Monad. Swap or bridge into AUSD first, and keep a small MON balance for gas.
-                  </div>
-                )}
-              </div>
-            )}
-            <button
-              style={{
-                ...cartoonBtn(perplAuthed ? '#6F5CFF' : '#4530E0', '#3724B8'),
-                padding: '14px 30px',
-                minWidth: 240,
-                opacity: perplAuthed && !canCreate ? 0.65 : 1,
-              }}
-              disabled={loading || perplChecking || (perplAuthed && !canCreate)}
-              onClick={async () => {
-                if (!perplAuthed) {
-                  const fn = connectPerpl || linkOurReferrer;
-                  if (fn) {
-                    const res = await fn({ accessCode: perplAccessCode });
-                    if (res && !res.error) setPerplAccessCode('');
-                  }
-                  return;
-                }
-                const res = await activate(depositAmt || '10');
-                if (!res?.error) setDepositAmt('');
-              }}
-            >
-              {loading || perplChecking ? 'PLEASE WAIT...' : perplAuthed ? 'CREATE ACCOUNT' : 'SIGN IN'}
-            </button>
-            {error && (
-              <div style={{...S.errorBar, maxWidth: 380}} onClick={clearError}>
-                <span style={S.errorText}>{humanizeTradeError(error, dex)}</span>
-                <span style={S.errorCloseIcon}>×</span>
-              </div>
-            )}
+              )}
+            </TradingSetupGate>
           </div>
         </div>
       </>
     );
   }
-
   // ==================== PHOENIX SETUP GATE ====================
   if (dex === 'phoenix' && hasWallet && setupVerified !== true) {
     const whitelisted = inviteStatus?.whitelisted === true;
@@ -8909,98 +8798,76 @@ function FuturesPanel() {
     return (
       <>
         <style>{animCSS}</style>
-        <div ref={panelRef} className={fullscreen ? "futures-fullscreen" : ""} style={{
+        <div ref={panelRef} className={fullscreen ? 'futures-fullscreen' : ''} style={{
           ...(fullscreen ? S.containerFull : S.container),
           ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '4px solid #d4c8b0' } : {}),
           transform: (fullscreen || isMobile) ? undefined : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
           transition: isDragging ? 'none' : 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
         }}>
           <div style={S.header} onPointerDown={handlePointerDown}>
-            <span style={S.headerTitle}>Setup Phoenix Trading</span>
-            <button data-nodrag onClick={handleClose} style={S.closeBtn}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            <span style={S.headerTitle}>Phoenix setup</span>
+            <button data-nodrag onClick={handleClose} style={S.closeBtn} aria-label="Close Phoenix setup">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
             </button>
           </div>
-          <div style={{...S.body, alignItems: 'center', justifyContent: 'center', gap: 14, textAlign: 'center', padding: 24}}>
-            <img src={DEX_CONFIG.phoenix.logo} alt="" style={{width: 64, height: 64, objectFit: 'contain'}} />
-            <div style={{color: '#5C3A21', fontSize: 19, fontWeight: 900}}>
-              {checkingInvite ? (waitingForPhoenixState ? 'Loading Phoenix account' : 'Checking Phoenix access') : whitelisted ? 'Create your Phoenix account' : 'Enter your Phoenix code'}
-            </div>
-            <div style={{color: '#8a7252', fontSize: 12, fontWeight: 700, maxWidth: 360, lineHeight: 1.45}}>
-              {waitingForPhoenixState
-                ? (restoringPhoenixSetup ? 'This wallet has a cached Phoenix account. Loading live state now.' : 'Checking live Phoenix trader state before asking for a code.')
+          <div style={{...S.body, alignItems: 'stretch', overflowY: 'auto', overflowX: 'hidden', padding: 0, background: '#fdf8e7'}}>
+            <TradingSetupGate
+              kicker={checkingInvite ? 'VERIFYING ACCOUNT' : whitelisted ? 'CREATE TRADER ACCOUNT' : 'ACCESS CODE REQUIRED'}
+              title={checkingInvite ? 'Loading your Phoenix account' : whitelisted ? 'Create your Phoenix trader' : 'Enter your Phoenix code'}
+              subtitle={waitingForPhoenixState
+                ? (restoringPhoenixSetup ? 'A cached Phoenix setup was found. Clash is confirming its live on-chain state.' : 'Clash checks live trader state before asking for a referral code or signature.')
                 : whitelisted
-                ? 'This wallet is allowlisted. Create the on-chain trader account, then deposit USDC to trade.'
-                : 'Clash creates the Phoenix trader account first, then applies your referral code with a wallet signature.'}
-            </div>
-            {checkingInvite ? (
-              <div style={{width: '100%', maxWidth: 360, minHeight: 108, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 10}}>
-                <div style={{
-                  width: 42,
-                  height: 42,
-                  borderRadius: '50%',
-                  borderWidth: 5,
-                  borderStyle: 'solid',
-                  borderColor: 'rgba(249,115,22,0.22)',
-                  borderTopColor: DEX_CONFIG.phoenix.color,
-                  animation: 'wallet-spin 0.85s linear infinite',
-                }} />
-                <div style={{fontSize: 12, color: '#8a7252', fontWeight: 800}}>
-                  {waitingForPhoenixState ? 'Loading trader account...' : 'Checking wallet allowlist...'}
-                </div>
-              </div>
-            ) : !whitelisted && (
-              <div style={{width: '100%', maxWidth: 360, display: 'flex', flexDirection: 'column', gap: 8}}>
-                <input
-                  type="text"
-                  placeholder="Referral code"
-                  value={phoenixInviteCode}
-                  onChange={e => setPhoenixInviteCode(e.target.value)}
-                  autoCapitalize="none"
-                  autoCorrect="off"
-                  spellCheck={false}
-                  style={{...S.input, width: '100%', padding: '10px 12px', fontSize: 14}}
-                />
-                {needsCode && !phoenixInviteCode.trim() && (
-                  <div style={{fontSize: 11, color: '#C2410C', fontWeight: 800, lineHeight: 1.35}}>
-                    This wallet is not allowlisted yet.
-                  </div>
-                )}
-              </div>
-            )}
-            <button
-              style={{
-                ...cartoonBtn('#F97316', '#C2410C'),
-                padding: '14px 30px',
-                minWidth: 240,
-                opacity: loading || checkingInvite ? 0.7 : 1,
+                  ? 'This wallet is allowlisted. Create the on-chain trader account, then deposit USDC to begin trading.'
+                  : 'Clash creates the Phoenix trader account and applies the referral code with your wallet signature.'}
+              logo={DEX_CONFIG.phoenix.logo}
+              logoAlt="Phoenix"
+              logoBackground="#F97316"
+              steps={[
+                { id: 'state', label: 'Check live Phoenix state', hint: 'Read the trader account and wallet allowlist before requesting a signature.', status: checkingInvite ? 'active' : 'done' },
+                { id: 'access', label: 'Verify access or referral code', hint: 'Already allowlisted wallets skip the code without changing attribution.', status: checkingInvite ? 'pending' : whitelisted ? 'done' : 'active' },
+                { id: 'account', label: 'Create the on-chain trader', hint: 'Your Solana wallet signs account creation and builder-routed trading setup.', status: whitelisted ? 'active' : 'pending' },
+              ]}
+              working={checkingInvite || loading}
+              workingText={checkingInvite
+                ? (waitingForPhoenixState ? 'Loading the trader account...' : 'Checking the wallet allowlist...')
+                : loading ? 'Waiting for your Solana wallet...' : ''}
+              error={error ? humanizeTradeError(error, dex) : ''}
+              primaryAction={{
+                label: loading || checkingInvite ? 'PLEASE WAIT...' : whitelisted ? 'CREATE ACCOUNT' : 'ACTIVATE PHOENIX',
+                disabled: loading || checkingInvite,
+                onClick: async () => {
+                  const inviteCode = phoenixInviteCode.trim();
+                  const ok = await activate({ inviteCode, inviteKind: phoenixInviteKind });
+                  if (ok) setPhoenixInviteCode(inviteCode || PHOENIX_DEFAULT_REFERRAL_CODE);
+                },
               }}
-              disabled={loading || checkingInvite}
-              onClick={async () => {
-                const inviteCode = phoenixInviteCode.trim();
-                const ok = await activate({
-                  inviteCode,
-                  inviteKind: phoenixInviteKind,
-                });
-                if (ok) setPhoenixInviteCode(inviteCode || PHOENIX_DEFAULT_REFERRAL_CODE);
-              }}
+              footnote="Phoenix stays self-custodial: account creation and every trade require only the permissions shown here."
             >
-              {loading || checkingInvite ? 'PLEASE WAIT...' : whitelisted ? 'CREATE ACCOUNT' : 'ACTIVATE PHOENIX'}
-            </button>
-            {error && (
-              <div style={{
-                color: '#B71C1C', fontSize: 12, fontWeight: 700,
-                textAlign: 'center', maxWidth: 380, padding: '8px 12px',
-                background: '#FFEBEE', borderRadius: 8, border: '1px solid #FFCDD2',
-                overflowWrap: 'anywhere', wordBreak: 'break-word',
-              }}>{humanizeTradeError(error, dex)}</div>
-            )}
+              {!checkingInvite && !whitelisted && (
+                <div style={{display: 'flex', flexDirection: 'column', gap: 8}}>
+                  <input
+                    type="text"
+                    placeholder="Referral code"
+                    value={phoenixInviteCode}
+                    onChange={event => setPhoenixInviteCode(event.target.value)}
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    style={{...S.input, width: '100%', padding: '10px 12px', fontSize: 14}}
+                  />
+                  {needsCode && !phoenixInviteCode.trim() && (
+                    <div style={{fontSize: 11, color: '#C2410C', fontWeight: 800, lineHeight: 1.35, textAlign: 'center'}}>
+                      This wallet is not allowlisted yet.
+                    </div>
+                  )}
+                </div>
+              )}
+            </TradingSetupGate>
           </div>
         </div>
       </>
     );
   }
-
   // ==================== DECIBEL ACTIVATE GATE ====================
   // Petra is connected but the on-chain trading setup isn't done. The gate
   // takes over the WHOLE futures panel — no trading UI is reachable behind
@@ -9874,6 +9741,24 @@ function FuturesPanel() {
       if (risexSourceBalanceState === 'error') return 'unavailable';
       return '$--';
     })();
+    const ondoDepositSources = dex === 'ondo' && Array.isArray(ondoDepositNetworks)
+      ? ondoDepositNetworks
+      : [];
+    const selectedOndoDepositNetwork = dex === 'ondo'
+      ? (ondoDepositSources.find(network => network.id === ondoDepositNetwork?.id)
+        || ondoDepositNetwork
+        || ondoDepositSources[0]
+        || { id: 'ethereum', label: 'Ethereum', chainId: 1, gasSymbol: 'ETH' })
+      : null;
+    const ondoWalletState = dex === 'ondo'
+      ? (walletUsdcStatus?.status || (walletUsdc == null ? 'checking' : 'ready'))
+      : null;
+    const ondoWalletValue = (() => {
+      if (dex !== 'ondo') return '$--';
+      if (walletUsdc !== null && ondoWalletState !== 'error') return `$${walletUsdc.toFixed(2)}`;
+      if (ondoWalletState === 'error') return 'Unavailable';
+      return 'Checking...';
+    })();
     const depositActionBusy = ['preparing', 'switching', 'approving', 'signing', 'confirming', 'bridging', 'depositing']
       .includes(String(depositStatus?.status || ''));
     const risexDepositBusy = dex === 'risex' && depositActionBusy;
@@ -9931,7 +9816,7 @@ function FuturesPanel() {
       : dex === 'hotstuff'
       ? 'Ethereum Wallet USDC'
       : dex === 'ondo'
-      ? 'Ethereum Wallet USDC'
+      ? `${selectedOndoDepositNetwork?.label || 'Ethereum'} Wallet USDC`
       : dex === 'gmtrade'
       ? 'GMTrade Wallet'
       : dex === 'katana'
@@ -9947,10 +9832,18 @@ function FuturesPanel() {
       ? risexWalletValue
       : dex === 'nado'
       ? nadoWalletValue
+      : dex === 'ondo'
+      ? ondoWalletValue
       : dex === 'grvt'
       ? `$${pacAccountValue.toFixed(2)}`
       : `$${walletUsdc !== null ? walletUsdc.toFixed(2) : '--'}`;
-    const walletBalanceColor = dex === 'risex' ? risexWalletValueColor : dex === 'nado' ? nadoWalletValueColor : '#5C3A21';
+    const walletBalanceColor = dex === 'risex'
+      ? risexWalletValueColor
+      : dex === 'nado'
+      ? nadoWalletValueColor
+      : dex === 'ondo' && ondoWalletState === 'error'
+      ? '#B91C1C'
+      : '#5C3A21';
 
     return (
       <div style={{display: 'flex', flexDirection: 'column', gap: 10}}>
@@ -10778,6 +10671,8 @@ function FuturesPanel() {
                 )
                 : dex === 'nado'
                 ? <span style={S.detail}>Wallet: {nadoWalletValue} {selectedNadoDepositAsset.label}</span>
+                : dex === 'ondo'
+                ? <span style={S.detail}>{selectedOndoDepositNetwork?.label || 'Ethereum'} wallet: {ondoWalletValue} USDC</span>
                 : walletUsdc !== null && <span style={S.detail}>Wallet: ${walletUsdc.toFixed(2)} {dex === 'monad' ? 'AUSD' : 'USDC'}</span>}
             </div>
             {dex === 'hotstuff' ? (
@@ -10892,7 +10787,15 @@ function FuturesPanel() {
                 </button>
               </div>
             ) : (
-            <div style={{display: 'flex', gap: 6, alignItems: 'stretch'}}>
+            <div style={{display: 'flex', gap: 6, alignItems: 'stretch', flexWrap: dex === 'ondo' ? 'wrap' : 'nowrap'}}>
+              {dex === 'ondo' && (
+                <OndoDepositNetworkSelector
+                  networks={ondoDepositSources}
+                  selectedNetworkId={selectedOndoDepositNetwork?.id}
+                  onSelect={setOndoDepositNetwork}
+                  disabled={loading || depositActionBusy}
+                />
+              )}
               {dex === 'risex' && (
                 <select
                   value={risexDepositSource?.id || 42161}
@@ -10967,7 +10870,18 @@ function FuturesPanel() {
                   setLocalAlert(`Ink wallet has ${selectedNadoWalletBalance.toFixed(2)} ${selectedNadoDepositAsset.label}`);
                   return;
                 }
-                const r = await depositToPacifica(depositAmt, dex === 'risex' ? { sourceChainId: risexDepositSource?.id } : dex === 'nado' ? { asset: selectedNadoDepositAsset.id } : undefined);
+                if (dex === 'ondo' && Number.isFinite(Number(walletUsdc)) && v > Number(walletUsdc) + 0.000001) {
+                  setLocalAlert(`${selectedOndoDepositNetwork?.label || 'Selected network'} wallet has ${Number(walletUsdc).toFixed(2)} USDC`);
+                  return;
+                }
+                const depositOptions = dex === 'risex'
+                  ? { sourceChainId: risexDepositSource?.id }
+                  : dex === 'nado'
+                  ? { asset: selectedNadoDepositAsset.id }
+                  : dex === 'ondo'
+                  ? { network: selectedOndoDepositNetwork?.id }
+                  : undefined;
+                const r = await depositToPacifica(depositAmt, depositOptions);
                 if (!r?.error) {
                   setDepositAmt('');
                   if (r?.info) setLocalAlert(r.info);
@@ -10989,7 +10903,7 @@ function FuturesPanel() {
                 : dex === 'nado'
                 ? 'Approves the selected Ink stablecoin, then deposits it into your Nado default subaccount. Needs a small ETH float on Ink for gas.'
                 : dex === 'ondo'
-                ? 'Provisions your Ondo Ethereum deposit address, then transfers native Ethereum USDC to it. Needs ETH for gas; margin credit can take a few moments.'
+                ? `Provisions your Ondo ${selectedOndoDepositNetwork?.label || 'Ethereum'} deposit address, then transfers native ${selectedOndoDepositNetwork?.label || 'Ethereum'} USDC to it. Needs ${selectedOndoDepositNetwork?.gasSymbol || 'ETH'} for gas; margin credit can take a few moments.`
                 : dex === 'hotstuff'
                 ? 'Use Hotstuff official to deposit or withdraw. Clash only handles trading and optional Spot to Perps internal transfer.'
                 : dex === 'grvt'

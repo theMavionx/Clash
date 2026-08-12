@@ -5,20 +5,25 @@ import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { registeredDexWallet } from '../lib/playerDexAccounts';
 import {
   ONDO_APP_URL,
+  ONDO_BUILDER_CODE,
+  ONDO_BUILDER_FEE_BPS,
   ONDO_CHAIN_ID,
+  ONDO_DEPOSIT_NETWORKS,
   ONDO_REGION_BLOCKED_MESSAGE,
   ONDO_USDC_ABI,
-  ONDO_USDC_ADDRESS,
   ONDO_WS_URL,
   alignOndoDecimal,
   buildOndoOrderRequest,
   buildOndoWsPing,
   clearOndoSession,
+  getOndoDepositNetwork,
   isOndoAddress,
   ondoErrorMessage,
   ondoMarketName,
   ondoOrderSide,
+  readOndoBuilderAcceptance,
   readOndoSession,
+  writeOndoBuilderAcceptance,
   writeOndoSession,
 } from '../lib/ondoClient';
 import { useOndoRegionAccess } from './useOndoRegionAccess';
@@ -33,13 +38,25 @@ function num(value, fallback = 0) {
 }
 
 function orderIdOf(payload) {
-  const row = payload?.result || payload || {};
-  return row?.orderId || row?.order_id || null;
+  const result = payload?.result;
+  const data = payload?.data;
+  const rows = [payload, result, data, payload?.order, result?.order, data?.order]
+    .filter(row => row && typeof row === 'object');
+  for (const row of rows) {
+    const orderId = row?.orderId ?? row?.orderID ?? row?.order_id;
+    if (orderId != null && String(orderId).trim()) return String(orderId).trim();
+  }
+  return null;
 }
 
 function depositAddressOf(payload) {
   const row = payload?.result || payload || {};
   return String(row?.address || row?.depositAddress || '').trim();
+}
+
+function alignedTriggerPrice(value, market) {
+  if (!(num(value) > 0)) return undefined;
+  return alignOndoDecimal(value, market?.tick_size || '0.01');
 }
 
 export function useOndo() {
@@ -66,13 +83,24 @@ export function useOndo() {
   const [markets, setMarkets] = useState([]);
   const [prices, setPrices] = useState([]);
   const [walletUsdc, setWalletUsdc] = useState(null);
+  const [depositNetworkId, setDepositNetworkId] = useState(ONDO_DEPOSIT_NETWORKS[0].id);
+  const depositNetworkRef = useRef(ONDO_DEPOSIT_NETWORKS[0].id);
+  const [walletUsdcReadStatus, setWalletUsdcReadStatus] = useState({
+    status: 'idle',
+    chainId: ONDO_DEPOSIT_NETWORKS[0].chainId,
+    network: ONDO_DEPOSIT_NETWORKS[0].id,
+    message: `${ONDO_DEPOSIT_NETWORKS[0].label} USDC wallet balance`,
+  });
   const [dataReady, setDataReady] = useState(false);
   const [accountReady, setAccountReady] = useState(false);
   const [setupVerified, setSetupVerified] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [goldEarned, setGoldEarned] = useState(null);
-  const [builderConfig, setBuilderConfig] = useState({ configured: false, code: null, feeRateBps: 1, source: 'pending_ondo_issuance' });
+  const [builderConfig, setBuilderConfig] = useState({ configured: true, code: ONDO_BUILDER_CODE, feeRateBps: ONDO_BUILDER_FEE_BPS, source: 'clash_default' });
+  const [builderAccepted, setBuilderAccepted] = useState(false);
+  const builderAcceptedRef = useRef(false);
+  const [activationStep, setActivationStep] = useState(null);
   const [leverageSettings, setLeverageSettings] = useState({});
 
   const registeredWallet = registeredDexWallet(player, 'ondo', 'evm');
@@ -81,14 +109,21 @@ export function useOndo() {
 
   useEffect(() => {
     const restored = walletAddr ? readOndoSession(walletAddr) : null;
+    const acceptance = walletAddr
+      ? readOndoBuilderAcceptance(walletAddr, builderConfig.code, builderConfig.feeRateBps)
+      : null;
+    const accepted = !!acceptance;
     sessionRef.current = restored;
+    builderAcceptedRef.current = accepted;
     setSession(restored);
-    setSetupVerified(walletAddr ? (restored ? true : false) : false);
+    setBuilderAccepted(accepted);
+    setSetupVerified(walletAddr ? !!(restored && accepted) : false);
     setAccount(null);
     setPositions([]);
     setOrders([]);
+    setWalletUsdc(null);
     setAccountReady(!walletAddr);
-  }, [walletAddr]);
+  }, [builderConfig.code, builderConfig.feeRateBps, walletAddr]);
 
   const clearError = useCallback(() => setError(null), []);
   const clearGoldEarned = useCallback(() => setGoldEarned(null), []);
@@ -176,31 +211,74 @@ export function useOndo() {
     }
   }, [fetchJson]);
 
+  const selectedDepositNetwork = useMemo(
+    () => getOndoDepositNetwork(depositNetworkId),
+    [depositNetworkId],
+  );
+
+  const setOndoDepositNetwork = useCallback((networkId) => {
+    const next = getOndoDepositNetwork(networkId);
+    depositNetworkRef.current = next.id;
+    setDepositNetworkId(next.id);
+    setWalletUsdc(null);
+    setWalletUsdcReadStatus({
+      status: 'checking',
+      chainId: next.chainId,
+      network: next.id,
+      message: `Checking ${next.label} USDC wallet balance...`,
+    });
+  }, []);
+
   const readWalletUsdc = useCallback(async () => {
     if (!walletAddr || typeof getPublicClient !== 'function') return null;
+    const network = selectedDepositNetwork;
+    setWalletUsdcReadStatus({
+      status: 'checking',
+      chainId: network.chainId,
+      network: network.id,
+      message: `Checking ${network.label} USDC wallet balance...`,
+    });
     try {
-      const client = getPublicClient(ONDO_CHAIN_ID);
+      const client = getPublicClient(network.chainId);
       const raw = await client.readContract({
-        address: ONDO_USDC_ADDRESS,
+        address: network.usdcAddress,
         abi: ONDO_USDC_ABI,
         functionName: 'balanceOf',
         args: [walletAddr],
       });
       const balance = Number(formatUnits(raw, 6));
+      if (depositNetworkRef.current !== network.id) return null;
       setWalletUsdc(Number.isFinite(balance) ? balance : null);
+      setWalletUsdcReadStatus({
+        status: 'ready',
+        chainId: network.chainId,
+        network: network.id,
+        message: `${network.label} USDC wallet balance`,
+      });
       return balance;
     } catch (requestError) {
-      console.warn('[useOndo] Ethereum USDC balance:', requestError?.message || requestError);
+      if (depositNetworkRef.current !== network.id) return null;
+      console.warn(`[useOndo] ${network.label} USDC balance:`, requestError?.message || requestError);
       setWalletUsdc(null);
+      setWalletUsdcReadStatus({
+        status: 'error',
+        chainId: network.chainId,
+        network: network.id,
+        message: `${network.label} USDC balance is unavailable`,
+      });
       return null;
     }
-  }, [getPublicClient, walletAddr]);
+  }, [getPublicClient, selectedDepositNetwork, walletAddr]);
 
   const fetchBuilderConfig = useCallback(async () => {
     if (!gameToken || !walletAddr) return null;
     try {
       const config = await fetchJson('/api/futures/ondo/config?dex=ondo');
       setBuilderConfig(config);
+      const accepted = !!readOndoBuilderAcceptance(walletAddr, config.code, config.feeRateBps);
+      builderAcceptedRef.current = accepted;
+      setBuilderAccepted(accepted);
+      if (sessionRef.current?.token) setSetupVerified(accepted);
       return config;
     } catch (requestError) {
       console.warn('[useOndo] builder config:', requestError?.message || requestError);
@@ -235,7 +313,7 @@ export function useOndo() {
         if (row?.symbol && num(row?.leverage) > 0) nextLeverage[row.symbol] = num(row.leverage);
       }
       setLeverageSettings(previous => ({ ...previous, ...nextLeverage }));
-      setSetupVerified(true);
+      setSetupVerified(builderAcceptedRef.current);
       setAccountReady(true);
       return nextAccount;
     } catch (requestError) {
@@ -269,6 +347,20 @@ export function useOndo() {
     setError(null);
     try {
       await requireRegionAccess();
+      const config = await fetchBuilderConfig();
+      if (
+        !config?.configured
+        || String(config?.code || '') !== ONDO_BUILDER_CODE
+        || Number(config.feeRateBps) !== ONDO_BUILDER_FEE_BPS
+      ) {
+        throw new Error('Ondo builder routing is not configured. Trading remains locked.');
+      }
+      setActivationStep({ index: 1, total: 3, label: 'Accept builder routing' });
+      const acceptance = writeOndoBuilderAcceptance(walletAddr, config.code, config.feeRateBps);
+      if (!acceptance) throw new Error('Could not save Ondo builder acceptance for this wallet');
+      builderAcceptedRef.current = true;
+      setBuilderAccepted(true);
+      setActivationStep({ index: 2, total: 3, label: 'Sign in with Ethereum' });
       if (typeof ensureChain === 'function') await ensureChain(ONDO_CHAIN_ID);
       const walletClient = typeof getWalletClient === 'function' ? getWalletClient(ONDO_CHAIN_ID) : null;
       if (!walletClient?.signMessage) throw new Error('Ethereum wallet signer is not ready');
@@ -298,23 +390,25 @@ export function useOndo() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ account: walletAddr, termsVersion: 1, privacyVersion: 1 }),
       }, { authenticated: true });
+      setActivationStep({ index: 3, total: 3, label: 'Verify Ondo account' });
       const [, nextAccount] = await Promise.all([fetchBuilderConfig(), fetchAccount()]);
       if (!nextAccount) throw new Error('Ondo account verification did not complete');
       setSetupVerified(true);
-      return { success: true, accountId: record.accountId, builder: completed?.builder || builderConfig };
+      return { success: true, accountId: record.accountId, builder: completed?.builder || config };
     } catch (requestError) {
       const message = ondoErrorMessage(requestError, 'Ondo sign-in failed');
       setError(message);
       setSetupVerified(false);
       return { error: message };
     } finally {
+      setActivationStep(null);
       setLoading(false);
     }
-  }, [builderConfig, ensureChain, fetchAccount, fetchBuilderConfig, fetchJson, getWalletClient, requireRegionAccess, walletAddr, walletMismatch]);
+  }, [ensureChain, fetchAccount, fetchBuilderConfig, fetchJson, getWalletClient, requireRegionAccess, walletAddr, walletMismatch]);
 
   const requireSession = useCallback(async () => {
     await requireRegionAccess();
-    if (sessionRef.current?.token) return sessionRef.current;
+    if (sessionRef.current?.token && builderAcceptedRef.current) return sessionRef.current;
     const result = await activate();
     if (result?.error || !sessionRef.current?.token) throw new Error(result?.error || 'Sign in to Ondo first');
     return sessionRef.current;
@@ -340,11 +434,16 @@ export function useOndo() {
   }, [fetchJson, gameToken, walletAddr]);
 
   const claimGold = useCallback(async () => {
-    if (!gameToken || !walletAddr) return null;
+    const currentSession = sessionRef.current;
+    if (!gameToken || !walletAddr || !currentSession?.token) return null;
     try {
       const response = await fetch('/api/trading/claim-gold', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-token': gameToken },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-token': gameToken,
+          'x-ondo-token': currentSession.token,
+        },
         body: JSON.stringify({ wallet: walletAddr, dex: 'ondo' }),
       });
       const payload = await response.json().catch(() => ({}));
@@ -419,8 +518,8 @@ export function useOndo() {
         side,
         type: 'market',
         size,
-        takeProfit: options.takeProfit ?? options.take_profit ?? options.tp,
-        stopLoss: options.stopLoss ?? options.stop_loss ?? options.sl,
+        takeProfit: alignedTriggerPrice(options.takeProfit ?? options.take_profit ?? options.tp, market),
+        stopLoss: alignedTriggerPrice(options.stopLoss ?? options.stop_loss ?? options.sl, market),
         clientOrderId: `clash-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
       });
       const response = await submitOrder(body);
@@ -454,8 +553,8 @@ export function useOndo() {
         size,
         price: alignedPrice,
         timeInForce: tif,
-        takeProfit: options.takeProfit ?? options.take_profit ?? options.tp,
-        stopLoss: options.stopLoss ?? options.stop_loss ?? options.sl,
+        takeProfit: alignedTriggerPrice(options.takeProfit ?? options.take_profit ?? options.tp, market),
+        stopLoss: alignedTriggerPrice(options.stopLoss ?? options.stop_loss ?? options.sl, market),
         clientOrderId: `clash-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
       });
       const response = await submitOrder(body);
@@ -525,18 +624,21 @@ export function useOndo() {
     setError(null);
     try {
       await requireSession();
+      const market = findMarket(symbol);
+      if (!market) throw new Error(`Ondo ${symbol} market is unavailable`);
+      if (market.disabled) throw new Error(`Ondo ${symbol} market is currently disabled`);
       const direction = ondoOrderSide(side) === 'sell' ? 'long' : 'short';
       const legs = [
-        { type: 'takeProfit', triggerPrice: tpPrice },
-        { type: 'stopLoss', triggerPrice: slPrice },
-      ].filter(leg => num(leg.triggerPrice) > 0);
+        { type: 'takeProfit', triggerPrice: alignedTriggerPrice(tpPrice, market) },
+        { type: 'stopLoss', triggerPrice: alignedTriggerPrice(slPrice, market) },
+      ].filter(leg => leg.triggerPrice);
       if (!legs.length) throw new Error('Enter TP or SL price');
       const results = [];
       for (const leg of legs) {
         results.push(await fetchJson('/api/futures/ondo/stop-order?dex=ondo', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ account: walletAddr, symbol, positionDirection: direction, ...leg }),
+          body: JSON.stringify({ account: walletAddr, market: market.market_name, positionDirection: direction, ...leg }),
         }, { authenticated: true }));
       }
       await fetchAccount();
@@ -548,34 +650,41 @@ export function useOndo() {
     } finally {
       setLoading(false);
     }
-  }, [fetchAccount, fetchJson, requireSession, walletAddr]);
+  }, [fetchAccount, fetchJson, findMarket, requireSession, walletAddr]);
 
-  const depositToPacifica = useCallback(async (amount) => {
+  const depositToPacifica = useCallback(async (amount, options = {}) => {
     setLoading(true);
     setError(null);
     try {
       await requireSession();
-      if (typeof ensureChain === 'function') await ensureChain(ONDO_CHAIN_ID);
-      const walletClient = typeof getWalletClient === 'function' ? getWalletClient(ONDO_CHAIN_ID) : null;
-      if (!walletClient?.writeContract) throw new Error('Ethereum wallet signer is not ready');
+      const network = getOndoDepositNetwork(options?.network || selectedDepositNetwork.id);
+      if (typeof ensureChain === 'function') await ensureChain(network.chainId);
+      const walletClient = typeof getWalletClient === 'function' ? getWalletClient(network.chainId) : null;
+      if (!walletClient?.writeContract) throw new Error(`${network.label} wallet signer is not ready`);
       const provisioned = await fetchJson('/api/futures/ondo/deposit-address?dex=ondo', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ account: walletAddr, network: 'ethereum' }),
+        body: JSON.stringify({ account: walletAddr, network: network.id }),
       }, { authenticated: true });
       const destination = depositAddressOf(provisioned);
-      if (!isOndoAddress(destination)) throw new Error('Ondo did not return a valid Ethereum deposit address');
+      if (!isOndoAddress(destination)) throw new Error(`Ondo did not return a valid ${network.label} deposit address`);
       const value = parseUnits(String(amount), 6);
       if (value <= 0n) throw new Error('Enter a positive USDC amount');
       const hash = await walletClient.writeContract({
         account: walletAddr,
-        address: ONDO_USDC_ADDRESS,
+        address: network.usdcAddress,
         abi: ONDO_USDC_ABI,
         functionName: 'transfer',
         args: [destination, value],
       });
       setTimeout(fetchAccount, 12_000);
-      return { success: true, txHash: hash, depositAddress: destination, info: 'Ondo USDC deposit submitted on Ethereum. Margin credit can take a few moments.' };
+      return {
+        success: true,
+        txHash: hash,
+        depositAddress: destination,
+        network: network.id,
+        info: `Ondo USDC deposit submitted on ${network.label}. Margin credit can take a few moments.`,
+      };
     } catch (requestError) {
       const message = ondoErrorMessage(requestError, 'Ondo deposit failed');
       setError(message);
@@ -583,7 +692,7 @@ export function useOndo() {
     } finally {
       setLoading(false);
     }
-  }, [ensureChain, fetchAccount, fetchJson, getWalletClient, requireSession, walletAddr]);
+  }, [ensureChain, fetchAccount, fetchJson, getWalletClient, requireSession, selectedDepositNetwork, walletAddr]);
 
   const withdraw = useCallback(async (amount) => {
     setLoading(true);
@@ -786,7 +895,10 @@ export function useOndo() {
     prices,
     markets,
     walletUsdc,
-    walletUsdcStatus: { status: walletUsdc == null ? 'checking' : 'ready', chainId: ONDO_CHAIN_ID, message: 'Ethereum USDC wallet balance' },
+    walletUsdcStatus: walletUsdcReadStatus,
+    ondoDepositNetwork: selectedDepositNetwork,
+    ondoDepositNetworks: ONDO_DEPOSIT_NETWORKS,
+    setOndoDepositNetwork,
     spotUsdc: null,
     leverageSettings,
     marginModes: {},
@@ -823,6 +935,8 @@ export function useOndo() {
     walletMismatch,
     registeredEvmWallet,
     builderConfig,
+    builderAccepted,
+    activationStep,
     regionAccess,
     retryRegionAccess,
     oneTapTrading: { enabled: !!session?.token, approved: !!session?.token, signer: walletAddr, mode: 'ondo_jwt' },
