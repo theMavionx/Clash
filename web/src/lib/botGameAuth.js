@@ -183,13 +183,10 @@ async function ensureNadoReady(player, ctx = {}) {
     };
   }
 
-  for (const w of [primary, ...wallets.filter((x) => x !== primary)]) {
-    if (!readNadoReferralVerification(w)) continue;
-    const linked = readNadoLinkedSigner(w);
-    if (linked?.privateKey) return { ok: true, wallet: w };
-  }
-
   try {
+    // Local storage is not proof that Nado still authorizes this key. Nado
+    // permits only one linked signer per subaccount, so another client can
+    // replace it. Always verify/repair remotely before the bot exports a key.
     await ensureNadoLinkedSignerReady({
       walletAddress: primary,
       // Never pass default Base walletClient — Nado is Ink (57073).

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createNadoClient } from '@nadohq/client';
 import { getOrderNonce, NADO_ABIS, NADO_DEPLOYMENTS } from '@nadohq/shared';
 import { createWalletClient, formatUnits, http, parseUnits, zeroAddress } from 'viem';
-import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
+import { privateKeyToAccount } from 'viem/accounts';
 import { useDex } from '../contexts/DexContext';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { usePlayer } from './useGodot';
@@ -42,6 +42,7 @@ import {
   rememberNadoReferralVerification,
   requireNadoReferralVerification,
 } from '../lib/nadoReferral';
+import { reconcileNadoLinkedSigner } from '../lib/nadoLinkedSignerReconcile';
 
 const POLL_INTERVAL_MS = 45_000;
 const NADO_REFRESH_BACKOFF_MS = 60_000;
@@ -362,6 +363,7 @@ export function useNado() {
   const triggerOrdersRef = useRef([]);
   const linkedSignerRef = useRef(null);
   const linkedSignerWalletClientRef = useRef(null);
+  const linkedSignerApprovedRef = useRef(false);
   const accountRef = useRef(null);
   const positionsRef = useRef([]);
   const refreshBackoffRef = useRef({ accountUntil: 0, positionsUntil: 0 });
@@ -424,10 +426,12 @@ export function useNado() {
   }, []);
 
   const setActiveLinkedSigner = useCallback((record, meta = {}) => {
+    const approved = !!record && meta.approved === true;
     linkedSignerRef.current = record || null;
     linkedSignerWalletClientRef.current = record ? createLinkedSignerWalletClient(record) : null;
+    linkedSignerApprovedRef.current = approved;
     setLinkedSignerState(record
-      ? { enabled: true, approved: meta.approved !== false, signer: record.address, ...meta }
+      ? { enabled: approved, approved, configured: true, signer: record.address, ...meta }
       : { enabled: false, approved: false, signer: null, ...meta });
     return record || null;
   }, []);
@@ -818,35 +822,38 @@ export function useNado() {
   const enableLinkedSigner = useCallback(async () => {
     await ensureReady();
     const client = createClient({ useLinkedSigner: false });
-    const created = readNadoLinkedSigner(walletAddr)
-      || linkedSignerFromPrivateKey(generatePrivateKey());
-    const signerAddress = created.account.address;
-    const signerBytes32 = nadoAddressToBytes32(signerAddress);
-    let remote = await getRemoteLinkedSigner().catch(() => null);
-    const remoteSigner = nadoSignerAddress(remote?.signer);
-    if (remoteSigner !== created.address) {
-      await client.subaccount.linkSigner({
+    const stored = readNadoLinkedSigner(walletAddr);
+    // Use Nado's standard deterministic signer when Clash has no recoverable
+    // local key. A signer created by app.nado.xyz or another integration may
+    // still be active remotely, but its random private key is unavailable to
+    // Clash. Re-signing this SDK message recreates the same Clash signer after
+    // storage loss and safely rotates the remote signer back to a usable key.
+    const { record: remembered, remote } = await reconcileNadoLinkedSigner({
+      stored,
+      createStandardSigner: async () => linkedSignerFromPrivateKey(
+        (await client.subaccount.createStandardLinkedSigner(NADO_SUBACCOUNT_NAME)).privateKey,
+      ),
+      getRemote: getRemoteLinkedSigner,
+      linkSigner: signer => client.subaccount.linkSigner({
         subaccountName: NADO_SUBACCOUNT_NAME,
-        signer: signerBytes32,
-      });
-      for (let i = 0; i < 6; i += 1) {
-        remote = await getRemoteLinkedSigner().catch(() => null);
-        if (nadoSignerAddress(remote?.signer) === created.address) break;
-        await new Promise(resolve => setTimeout(resolve, 1000));
-      }
-    }
+        signer,
+      }),
+      remember: record => rememberNadoLinkedSigner(walletAddr, record),
+      normalizeSigner: nadoSignerAddress,
+      encodeSigner: nadoAddressToBytes32,
+    });
     const verifiedSigner = nadoSignerAddress(remote?.signer);
-    if (verifiedSigner !== created.address) {
-      throw new Error('Nado linked signer was submitted but is not active yet. Wait a few seconds and retry.');
-    }
-    const remembered = rememberNadoLinkedSigner(walletAddr, created);
     setActiveLinkedSigner(remembered, { approved: true, remoteSigner: verifiedSigner });
     return remembered;
   }, [walletAddr, ensureReady, createClient, getRemoteLinkedSigner, setActiveLinkedSigner]);
 
   const ensureLinkedSignerReady = useCallback(async () => {
     await ensureReady();
-    if (linkedSignerRef.current && linkedSignerWalletClientRef.current) return linkedSignerRef.current;
+    if (
+      linkedSignerApprovedRef.current
+      && linkedSignerRef.current
+      && linkedSignerWalletClientRef.current
+    ) return linkedSignerRef.current;
     const refreshed = await refreshLinkedSignerStatus();
     if (refreshed.ready && refreshed.record) return refreshed.record;
     return enableLinkedSigner();

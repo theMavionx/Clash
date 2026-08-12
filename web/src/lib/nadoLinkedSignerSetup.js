@@ -3,7 +3,7 @@
  */
 import { createNadoClient } from '@nadohq/client';
 import { createWalletClient, getAddress, http } from 'viem';
-import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
+import { privateKeyToAccount } from 'viem/accounts';
 import {
   INK_CHAIN_ID,
   INK_RPC_URLS,
@@ -18,10 +18,12 @@ import {
   readNadoLinkedSigner,
   rememberNadoLinkedSigner,
 } from './nadoLinkedSignerStorage';
+import { reconcileNadoLinkedSigner } from './nadoLinkedSignerReconcile';
 
 function createLinkedSignerWalletClient(record) {
   const account = privateKeyToAccount(record.privateKey);
-  const rpcUrl = INK_RPC_URLS.split(',')[0]?.trim() || 'https://rpc-gel.inkonchain.com';
+  const rpcUrl = (Array.isArray(INK_RPC_URLS) ? INK_RPC_URLS[0] : String(INK_RPC_URLS || '').split(',')[0])
+    ?.trim() || 'https://rpc-gel.inkonchain.com';
   return createWalletClient({
     account,
     chain: inkChain,
@@ -127,31 +129,26 @@ export async function ensureNadoLinkedSignerReady(ctx = {}) {
     }
 
     const ownerClient = createNadoClient(NADO_CHAIN_ENV, { publicClient, walletClient });
-    const created = readNadoLinkedSigner(owner) || linkedSignerFromPrivateKey(generatePrivateKey());
-    const signerBytes32 = nadoAddressToBytes32(created.account.address);
-
-    let remote = await getRemoteLinkedSigner(ownerClient, owner).catch(() => null);
-    if (nadoSignerAddress(remote?.signer) !== created.address) {
-      try {
-        await ownerClient.subaccount.linkSigner({
-          subaccountName: NADO_SUBACCOUNT_NAME,
-          signer: signerBytes32,
-        });
-      } catch (err) {
-        throw rewriteChainIdError(err);
-      }
-      for (let i = 0; i < 6; i += 1) {
-        remote = await getRemoteLinkedSigner(ownerClient, owner).catch(() => null);
-        if (nadoSignerAddress(remote?.signer) === created.address) break;
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-      }
-    }
-
-    if (nadoSignerAddress(remote?.signer) !== created.address) {
-      throw new Error('Nado linked signer was submitted but is not active yet. Wait a few seconds and retry.');
-    }
-
-    rememberNadoLinkedSigner(owner, created);
+    await reconcileNadoLinkedSigner({
+      stored: readNadoLinkedSigner(owner),
+      createStandardSigner: async () => linkedSignerFromPrivateKey(
+        (await ownerClient.subaccount.createStandardLinkedSigner(NADO_SUBACCOUNT_NAME)).privateKey,
+      ),
+      getRemote: () => getRemoteLinkedSigner(ownerClient, owner),
+      linkSigner: async signer => {
+        try {
+          await ownerClient.subaccount.linkSigner({
+            subaccountName: NADO_SUBACCOUNT_NAME,
+            signer,
+          });
+        } catch (err) {
+          throw rewriteChainIdError(err);
+        }
+      },
+      remember: record => rememberNadoLinkedSigner(owner, record),
+      normalizeSigner: nadoSignerAddress,
+      encodeSigner: nadoAddressToBytes32,
+    });
     return { ok: true, wallet: owner };
   } catch (err) {
     throw rewriteChainIdError(err);

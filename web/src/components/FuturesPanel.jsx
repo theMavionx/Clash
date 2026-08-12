@@ -3906,7 +3906,7 @@ function FuturesPanel() {
       setSuccessMsg(`One tap trading disabled. Opening a ${dexLabel} order will ask to enable it again.`);
       return;
     }
-    if (dex === 'ondo' || dex === 'katana' || dex === 'flash' || dex === 'ostium') {
+    if (dex === 'nado' || dex === 'ondo' || dex === 'katana' || dex === 'flash' || dex === 'ostium') {
       setReferralLinking(true);
       try {
         const result = typeof setOneTapTradingEnabled === 'function'
@@ -5463,7 +5463,7 @@ function FuturesPanel() {
                 opacity: (referralLinking || loading) ? 0.7 : 1,
               }}
             >
-              {referralLinking ? '...' : oneTapTrading?.enabled ? 'ON' : (dex === 'flash' ? 'ENABLE' : 'OFF')}
+              {referralLinking ? '...' : oneTapTrading?.enabled ? 'ON' : 'ENABLE'}
             </button>
           </div>
         )}

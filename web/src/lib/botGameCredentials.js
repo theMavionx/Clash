@@ -1345,6 +1345,13 @@ export async function syncGameAccountToPhantom({
     const label = GAME_WALLET_EXCHANGE_LABELS[ex] || ex.toUpperCase();
     return { ok: false, error: `${label} temporarily disabled in Bots.` };
   }
+  if (ex === 'nado') {
+    // Sync/reconnect is an explicit mutating action. Verify or repair Nado's
+    // single remote linked signer immediately before exporting the local key.
+    // Keep gather/probe read-only so merely opening Bots never prompts a wallet.
+    const ready = await ensureGameExchangeReady(ex, player, walletCtx);
+    if (!ready?.ok) return ready;
+  }
   const gathered = await gatherGameCredentials(ex, player, walletCtx);
   if (!gathered.ok) return { ok: false, error: gathered.error };
 

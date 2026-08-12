@@ -13,6 +13,7 @@
     "test:order-display": "node test-order-display-metrics.mjs",
     "test:bulk-client": "node test-bulk-client.mjs",
     "test:nado-referral": "node test-nado-referral.mjs",
+    "test:nado-one-tap": "node test-nado-one-tap.mjs",
     "test:ondo": "node test-ondo-client.mjs",
     "test:phoenix-position": "node test-phoenix-position-metrics.mjs",
     "test:phoenix-isolated-limit": "node test-phoenix-isolated-limit-request.mjs",
