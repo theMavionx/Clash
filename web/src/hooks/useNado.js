@@ -440,7 +440,12 @@ export function useNado() {
     const publicClient = typeof getPublicClient === 'function' ? getPublicClient(INK_CHAIN_ID) : null;
     const walletClient = typeof getWalletClient === 'function' ? getWalletClient(INK_CHAIN_ID) : null;
     if (!publicClient || !walletClient) throw new Error('Nado wallet signer is not ready');
-    const linkedSignerWalletClient = useLinkedSigner ? linkedSignerWalletClientRef.current : null;
+    // A locally stored key is only a candidate until Nado confirms that the
+    // same address is active remotely. Never let a stale key (for example,
+    // after another Nado client rotated the signer) reach a signed API call.
+    const linkedSignerWalletClient = useLinkedSigner && linkedSignerApprovedRef.current
+      ? linkedSignerWalletClientRef.current
+      : null;
     return createNadoClient(NADO_CHAIN_ENV, {
       publicClient,
       walletClient,
@@ -889,7 +894,10 @@ export function useNado() {
     if (!walletAddr) return [];
     if (ensureSigner) await ensureLinkedSignerReady();
     else if (ensureWallet) await ensureReady();
-    if (!linkedSignerWalletClientRef.current && !allowWalletSignature) return triggerOrdersRef.current || [];
+    if (
+      !allowWalletSignature
+      && (!linkedSignerApprovedRef.current || !linkedSignerWalletClientRef.current)
+    ) return triggerOrdersRef.current || [];
     const currentMarkets = marketsRef.current?.length ? marketsRef.current : await fetchMarkets();
     const productIds = (currentMarkets || []).map(m => Number(m?.market_id)).filter(Number.isFinite);
     const client = createClient();
@@ -1066,7 +1074,7 @@ export function useNado() {
   useEffect(() => {
     if (!isActiveDex || !walletAddr) return undefined;
     const sync = async () => {
-      if (!linkedSignerWalletClientRef.current) return;
+      if (!linkedSignerApprovedRef.current || !linkedSignerWalletClientRef.current) return;
       await fetchTriggerOrdersFromNado().catch((e) => {
         console.warn('[useNado] trigger order sync failed:', e?.message || e);
       });

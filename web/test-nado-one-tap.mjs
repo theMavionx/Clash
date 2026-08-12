@@ -23,6 +23,16 @@ assert.match(
 );
 assert.match(
   hookSource,
+  /useLinkedSigner\s*&&\s*linkedSignerApprovedRef\.current\s*\?\s*linkedSignerWalletClientRef\.current/,
+  'Nado clients must never receive an unverified locally cached signer',
+);
+assert.match(
+  hookSource,
+  /!linkedSignerApprovedRef\.current\s*\|\|\s*!linkedSignerWalletClientRef\.current\) return;/,
+  'background trigger-order polling must remain idle until the remote signer is verified',
+);
+assert.match(
+  hookSource,
   /createStandardLinkedSigner\(NADO_SUBACCOUNT_NAME\)/,
   'Futures must recover Nado one-tap through the official deterministic signer API',
 );

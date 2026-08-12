@@ -39,6 +39,10 @@ so it cannot use it for one-tap orders.
 - Require MM-bot readiness and credential export to verify/repair the linked
   signer remotely on explicit Setup/Sync or reconnect; a passive Bots scan
   remains read-only and a stale local key can no longer be synced as ready.
+- Keep background trigger-order synchronization idle while the cached signer is
+  unverified. The production canary exposed one remaining read path that could
+  attach the stale local key before remote verification; client creation and
+  polling are now both gated by the verified-signer flag.
 
 ### Testing
 - `npm run test:nado-one-tap` — PASS.
