@@ -9,7 +9,8 @@
     "jobs": "node hermes_jobs_worker.js",
     "recover:bridges": "node recover_pending_bridges.js",
     "test:sanctum": "node test-sanctum.js",
-    "test:ondo-claim": "node test-ondo-claim-reconciliation.js"
+    "test:ondo-claim": "node test-ondo-claim-reconciliation.js",
+    "test:ondo-earnings": "node test-ondo-earnings.js"
   },
   "keywords": [],
   "author": "",

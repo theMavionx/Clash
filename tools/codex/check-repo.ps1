@@ -53,6 +53,7 @@ $NodeFiles = @(
     "server/custodial_marketplace.js",
     "server/nft_v3_endpoints.js",
     "server/earnings.js",
+    "server/test-ondo-earnings.js",
     "server/index.js",
     "server/routes.js",
     "server/db.js",
@@ -96,6 +97,7 @@ Invoke-Step "Decibel bulk rewards worker" { node server-futures/test-decibel-bul
 Invoke-Step "Decibel exact-fill reconciliation" { node server-futures/test-decibel-exact-fill-reconciliation.js }
 Invoke-Step "Tournament trade cursor" { node server/test-tournament-trade-cursor.js }
 Invoke-Step "Hermes jobs worker" { node server/test-hermes-jobs-worker.js }
+Invoke-Step "Ondo proof-gated builder earnings" { node server/test-ondo-earnings.js }
 
 $CombatRegressionTests = @(
     "server/test-mimic-combat.js",
