@@ -1,5 +1,6 @@
 import { memo, useCallback } from 'react';
 import { useFarcaster } from '../hooks/useFarcaster';
+import { uiButton } from '../styles/theme';
 
 import goldIcon from '../assets/resources/gold_bar.png';
 import woodIcon from '../assets/resources/wood_bar.png';
@@ -91,9 +92,9 @@ function ShareButton({ isVictory, isReplay, isAiOnlineBattle, result }) {
 
   if (isReplay || isAiOnlineBattle) return null;
   return (
-    <div style={{ ...styles.btnWrap, background: 'linear-gradient(180deg, #8B5CF6 0%, #6D28D9 100%)' }} onClick={handleShare}>
+    <button type="button" style={{ ...styles.btnWrap, ...styles.btnSecondary }} onClick={handleShare}>
       <span style={styles.btnText}>Share</span>
-    </div>
+    </button>
   );
 }
 
@@ -218,9 +219,9 @@ function BattleResultOverlay({ result, onClose }) {
         {/* Buttons */}
         <div style={{ display: 'flex', gap: 12 }}>
           {!isError && <ShareButton isVictory={isVictory} isReplay={isReplay} isAiOnlineBattle={isAiOnlineBattle} result={result} />}
-          <div style={styles.btnWrap} onClick={onClose}>
+          <button type="button" style={styles.btnWrap} onClick={onClose}>
             <span style={styles.btnText}>Return</span>
-          </div>
+          </button>
         </div>
       </div>
     </div>
@@ -303,20 +304,20 @@ const styles = {
   },
   titleText: {
     fontSize: 56,
-    fontWeight: 900,
-    color: '#fff',
+    fontWeight: 700,
+    color: 'var(--terminal-on-accent)',
     textTransform: 'uppercase',
     letterSpacing: '1px',
     fontStyle: 'italic',
-    textShadow: '-2px -2px 0 #0a0a0a, 2px -2px 0 #0a0a0a, -2px 2px 0 #0a0a0a, 2px 2px 0 #0a0a0a, 0 4px 0 #0a0a0a, 0 8px 16px rgba(0,0,0,0.8)',
+    textShadow: 'none',
     lineHeight: 1,
     zIndex: 2,
     textAlign: 'center',
   },
   subtitleText: {
     fontSize: 16,
-    fontWeight: 900,
-    color: '#fff',
+    fontWeight: 700,
+    color: 'var(--terminal-on-accent)',
     textShadow: textOutline,
     marginTop: 8,
     textAlign: 'center',
@@ -335,18 +336,18 @@ const styles = {
   },
   panelTitle: {
     fontSize: 16,
-    fontWeight: 900,
-    color: '#fff',
+    fontWeight: 700,
+    color: 'var(--terminal-on-accent)',
     textShadow: textOutline,
   },
   errorPanel: {
     background: 'linear-gradient(180deg, #5a2b24 0%, #3d1d19 100%)',
-    border: '3px solid #c66a4b',
+    border: '1px solid #c66a4b',
   },
   errorText: {
-    color: '#fff7df',
+    color: 'var(--terminal-surface)',
     fontSize: 14,
-    fontWeight: 800,
+    fontWeight: 600,
     textAlign: 'center',
     lineHeight: 1.4,
     textShadow: textOutline,
@@ -372,8 +373,8 @@ const styles = {
   },
   lootValue: {
     fontSize: 16,
-    fontWeight: 900,
-    color: '#fff',
+    fontWeight: 700,
+    color: 'var(--terminal-on-accent)',
     textShadow: textOutline,
   },
   trophyReward: {
@@ -390,7 +391,7 @@ const styles = {
   },
   trophyValue: {
     fontSize: 30,
-    fontWeight: 900,
+    fontWeight: 700,
     color: '#ffd766',
     textShadow: textOutline,
   },
@@ -398,28 +399,21 @@ const styles = {
     marginTop: -8,
     color: '#fff7d6',
     fontSize: 13,
-    fontWeight: 900,
+    fontWeight: 700,
     textAlign: 'center',
     textShadow: textOutline,
   },
   btnWrap: {
-    background: 'linear-gradient(180deg, #74c4ff 0%, #3ba4f4 100%)',
-    borderRadius: 6,
-    padding: '12px 48px',
-    cursor: 'pointer',
+    ...uiButton('primary', { minHeight: 46, minWidth: 150, padding: '12px 32px', fontSize: 15 }),
     marginTop: 12,
-    boxShadow: 'inset 0 2px 0 rgba(255,255,255,0.4), inset 0 -4px 0 #1e70b3, 0 8px 16px rgba(0,0,0,0.3)',
-    border: '2px solid #0a0a0a',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
     animation: 'btnPop 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275) 1s both',
   },
+  btnSecondary: uiButton('secondary', { minHeight: 46, minWidth: 150, padding: '12px 32px', fontSize: 15 }),
   btnText: {
-    color: '#fff',
-    fontSize: 18,
-    fontWeight: 900,
-    textShadow: textOutline,
+    color: 'inherit',
+    fontSize: 15,
+    fontWeight: 700,
+    textShadow: 'none',
     letterSpacing: '0.5px',
     transform: 'translateY(-1px)',
   },
@@ -438,18 +432,18 @@ const styles = {
   },
   casualtyCount: {
     position: 'absolute', bottom: -4, right: -6,
-    background: '#E53935', color: '#fff', fontSize: 12, fontWeight: 900,
+    background: 'var(--terminal-short)', color: 'var(--terminal-on-accent)', fontSize: 12, fontWeight: 700,
     padding: '1px 6px', borderRadius: 8, lineHeight: '16px',
     boxShadow: '0 2px 4px rgba(0,0,0,0.4)',
   },
   casualtyName: {
-    fontSize: 11, fontWeight: 800, color: '#ccc', textShadow: textOutline,
+    fontSize: 11, fontWeight: 600, color: '#ccc', textShadow: textOutline,
   },
   reinforceInfo: {
     display: 'flex', alignItems: 'center', gap: 6, marginTop: 4,
   },
   reinforceCost: {
-    fontSize: 13, fontWeight: 800, color: '#FFD700', textShadow: textOutline,
+    fontSize: 13, fontWeight: 600, color: '#FFD700', textShadow: textOutline,
   },
 };
 

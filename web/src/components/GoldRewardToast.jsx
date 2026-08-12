@@ -1,5 +1,6 @@
 import { memo } from 'react';
 import goldIcon from '../assets/resources/gold_bar.png';
+import { uiIconButton } from '../styles/theme';
 
 function GoldRewardToast({ amount, reason = 'Trading rewards', onClose, style }) {
   const value = Number(amount || 0);
@@ -29,15 +30,15 @@ const S = {
     transform: 'translateX(-50%)',
     width: 'min(440px, calc(100vw - 24px))',
     zIndex: 10000,
-    background: 'linear-gradient(135deg, #FFD700 0%, #FFA000 100%)',
-    border: '3px solid #E65100',
+    background: 'var(--terminal-surface)',
+    border: '1px solid var(--terminal-border)',
     borderRadius: 14,
     padding: '12px 16px',
     display: 'flex',
     alignItems: 'center',
     gap: 10,
     minWidth: 0,
-    boxShadow: '0 6px 20px rgba(255,160,0,0.4)',
+    boxShadow: '0 16px 36px var(--terminal-shadow)',
     animation: 'fadeIn 0.3s ease-out',
     pointerEvents: 'auto',
     boxSizing: 'border-box',
@@ -47,20 +48,19 @@ const S = {
     height: 41,
     objectFit: 'contain',
     flexShrink: 0,
-    filter: 'drop-shadow(0 0 1px #fff) drop-shadow(0 0 3px #fff) drop-shadow(0 2px 3px rgba(0,0,0,0.45))',
+    filter: 'none',
   },
   amount: {
     fontSize: 18,
-    fontWeight: 900,
-    color: '#5C3A21',
-    textShadow: '0 1px 0 rgba(255,255,255,0.5)',
+    fontWeight: 750,
+    color: 'var(--terminal-orange)',
     whiteSpace: 'nowrap',
     flexShrink: 0,
   },
   reason: {
     fontSize: 11,
     fontWeight: 700,
-    color: '#7B5B00',
+    color: 'var(--terminal-text-muted)',
     flex: 1,
     textAlign: 'right',
     minWidth: 0,
@@ -68,22 +68,10 @@ const S = {
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
   },
-  closeBtn: {
-    width: 22,
-    height: 22,
-    borderRadius: '50%',
-    background: 'rgba(0,0,0,0.15)',
-    border: 'none',
-    color: '#5C3A21',
-    fontWeight: 900,
+  closeBtn: uiIconButton('secondary', 26, {
     fontSize: 13,
-    cursor: 'pointer',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
     flexShrink: 0,
     marginLeft: 4,
-    padding: 0,
     lineHeight: 1,
-  },
+  }),
 };

@@ -32,6 +32,7 @@ import { DEFAULT_SOLANA_RPC_URL, createSolanaConnection, selectFreshSolanaRpcUrl
 import { sendSolanaTransactionWithRetry } from '../lib/solanaTx';
 import { buildSolanaWalletTxOptions } from '../lib/solanaSeekerTx';
 import { INK_CHAIN_ID, inkChain } from '../lib/nadoConfig';
+import { uiButton, uiIconButton } from '../styles/theme';
 
 // Chain logos live in web/public/tokens — same dir we already use for
 // trading-pair token icons. Using real brand marks instead of emoji
@@ -1620,7 +1621,7 @@ function BridgeStatusModal({
 
           {pendingRelay && status === 'error' && (
             <div style={modalStyles.pendingBox}>
-              <div style={{ fontWeight: 900, marginBottom: 2 }}>Burn saved</div>
+              <div style={{ fontWeight: 700, marginBottom: 2 }}>Burn saved</div>
               <div style={{ fontSize: 12, opacity: 0.85 }}>
                 Burn: {shortAddr(pendingRelay.burnTxHash, 8, 6)}<br />
                 Retry mints on the destination — burn won't happen twice.
@@ -1678,60 +1679,50 @@ const localStyles = {
     display: 'flex', flexDirection: 'column', gap: 10,
     overflowY: 'auto',
     // Parchment scrollbar to match the rest of the shop UI.
-    scrollbarWidth: 'thin',
-    scrollbarColor: '#bba882 #fdf8e7',
     margin: '0 -16px', padding: '0 16px',
   },
-  intro: { fontSize: 13, color: '#5C3A21', margin: '4px 0 8px', lineHeight: 1.4 },
+  intro: { fontSize: 13, color: 'var(--terminal-text)', margin: '4px 0 8px', lineHeight: 1.4 },
   row: { display: 'flex', flexDirection: 'column', gap: 6 },
-  label: { fontSize: 12, fontWeight: 700, color: '#5C3A21', letterSpacing: 0.2 },
+  label: { fontSize: 12, fontWeight: 700, color: 'var(--terminal-text)', letterSpacing: 0.2 },
   chainPicker: { display: 'flex', flexWrap: 'wrap', gap: 6 },
   chainChip: {
     padding: '6px 10px', borderRadius: 10, fontSize: 13, fontWeight: 600,
-    background: '#fff6dc', border: '2px solid #d4c8b0', color: '#5C3A21',
+    background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', color: 'var(--terminal-text)',
     cursor: 'pointer',
     display: 'inline-flex', alignItems: 'center', gap: 6,
   },
   chainChipActive: {
-    background: '#ffd97a', border: '2px solid #9f8759', boxShadow: '0 1px 2px rgba(0,0,0,0.15)',
+    background: 'var(--terminal-brand-soft)', border: '1px solid var(--terminal-orange)', color: 'var(--terminal-brand-text)', boxShadow: 'none',
   },
   chainChipDisabled: { opacity: 0.4, cursor: 'not-allowed' },
   walletChip: {
     alignSelf: 'flex-start', padding: '6px 12px', borderRadius: 10, fontSize: 12,
-    background: '#fff6dc', border: '2px solid #9f8759', color: '#5C3A21',
+    background: 'var(--terminal-surface)', border: '1px solid var(--terminal-text-muted)', color: 'var(--terminal-text)',
     cursor: 'pointer', fontWeight: 600,
   },
   input: {
-    padding: '8px 10px', borderRadius: 8, border: '2px solid #d4c8b0',
-    background: '#fff', color: '#3a2810', fontSize: 13, fontFamily: 'monospace',
+    padding: '8px 10px', borderRadius: 8, border: '1px solid var(--terminal-border)',
+    background: 'var(--terminal-surface)', color: 'var(--terminal-text)', fontSize: 13, fontFamily: 'monospace',
     outline: 'none',
   },
   checkboxRow: {
-    display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#5C3A21',
+    display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--terminal-text)',
     cursor: 'pointer',
   },
   notice: {
-    padding: '6px 10px', borderRadius: 8, background: '#fff0e0', color: '#7a4a1a',
-    fontSize: 12, border: '1px solid #f0c4a0',
+    padding: '6px 10px', borderRadius: 8, background: 'var(--terminal-warning-soft)', color: 'var(--terminal-warning)',
+    fontSize: 12, border: '1px solid var(--terminal-warning-border)',
   },
-  noticeOk: { background: '#e8f5e0', color: '#2e6b1a', border: '1px solid #b0d4a0' },
+  noticeOk: { background: 'var(--terminal-long-soft)', color: 'var(--terminal-long-strong)', border: '1px solid var(--terminal-long-border)' },
   successBox: {
-    padding: 10, borderRadius: 10, background: '#fff6dc', border: '2px solid #d4c8b0',
-    color: '#5C3A21', fontSize: 13,
+    padding: 10, borderRadius: 10, background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)',
+    color: 'var(--terminal-text)', fontSize: 13,
   },
   actions: { display: 'flex', justifyContent: 'space-between', gap: 10, marginTop: 4 },
-  backBtn: {
-    padding: '8px 14px', borderRadius: 10, fontSize: 13, fontWeight: 600,
-    background: '#fff6dc', border: '2px solid #9f8759', color: '#5C3A21',
-    cursor: 'pointer',
-  },
-  bridgeBtn: {
-    padding: '10px 16px', borderRadius: 10, fontSize: 14, fontWeight: 800,
-    background: '#7ce04a', border: '2px solid #4a8f2c', color: '#1a3d0a',
-    cursor: 'pointer', minWidth: 140,
-  },
+  backBtn: uiButton('secondary', { minHeight: 38, padding: '8px 14px', fontSize: 13 }),
+  bridgeBtn: uiButton('primary', { minHeight: 40, padding: '10px 16px', fontSize: 14, minWidth: 140 }),
   bridgeBtnDisabled: { opacity: 0.5, cursor: 'not-allowed' },
-  helperHint: { fontSize: 12, color: '#7a5a30', fontStyle: 'italic' },
+  helperHint: { fontSize: 12, color: 'var(--terminal-text-secondary)', fontStyle: 'italic' },
   // Horizontal NFT carousel row: [◀] [scrollable strip of cards] [▶].
   // Arrows are only rendered when >4 NFTs; the strip is overflow-x: auto
   // so wheel/trackpad still works, and arrows give a click target for
@@ -1745,59 +1736,43 @@ const localStyles = {
   batchPickerBar: {
     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
     gap: 8, padding: '6px 8px', borderRadius: 10,
-    background: '#fff8e6', border: '1px solid #d4c8b0',
+    background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)',
   },
-  batchPickerText: { fontSize: 11, fontWeight: 900, color: '#5C3A21' },
+  batchPickerText: { fontSize: 11, fontWeight: 700, color: 'var(--terminal-text)' },
   batchPickerActions: { display: 'flex', gap: 6, flexShrink: 0 },
-  miniBtn: {
-    padding: '4px 8px', borderRadius: 8,
-    background: '#ffd97a', border: '1px solid #9f8759',
-    color: '#5C3A21', fontSize: 11, fontWeight: 900,
-    cursor: 'pointer',
-  },
-  miniBtnMuted: {
-    padding: '4px 8px', borderRadius: 8,
-    background: '#fff6dc', border: '1px solid #d4c8b0',
-    color: '#7a5a30', fontSize: 11, fontWeight: 900,
-    cursor: 'pointer',
-  },
+  miniBtn: uiButton('primary', { minHeight: 30, padding: '4px 8px', fontSize: 11 }),
+  miniBtnMuted: uiButton('secondary', { minHeight: 30, padding: '4px 8px', fontSize: 11 }),
   nftScroll: {
     display: 'flex', gap: 8,
     overflowX: 'auto', overflowY: 'hidden',
     padding: 6, flex: 1, minWidth: 0,
-    background: '#fff8e6',
-    border: '2px solid #d4c8b0',
+    background: 'var(--terminal-surface)',
+    border: '1px solid var(--terminal-border)',
     borderRadius: 10,
     scrollSnapType: 'x mandatory',
-    scrollbarWidth: 'thin',
   },
-  nftArrowBtn: {
-    width: 28, height: 56, borderRadius: 8, padding: 0,
-    background: '#fff6dc', border: '2px solid #9f8759', color: '#5C3A21',
-    cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
-    flexShrink: 0,
-  },
+  nftArrowBtn: uiIconButton('secondary', 32, { height: 56 }),
   nftCard: {
     display: 'flex', flexDirection: 'column', alignItems: 'center',
     padding: 4, gap: 4,
-    borderRadius: 8, border: '2px solid transparent',
-    background: '#fff', cursor: 'pointer',
+    borderRadius: 8, border: '1px solid transparent',
+    background: 'var(--terminal-surface)', cursor: 'pointer',
     transition: 'border-color 0.1s',
     flexShrink: 0, width: 96,
     scrollSnapAlign: 'start',
   },
   nftCardActive: {
-    border: '2px solid #9f8759',
-    background: '#ffd97a',
+    border: '1px solid var(--terminal-text-muted)',
+    background: 'var(--terminal-brand-border)',
     boxShadow: '0 1px 2px rgba(0,0,0,0.18)',
   },
   nftImg: {
     width: 72, height: 72, objectFit: 'cover', borderRadius: 6,
-    background: '#e8dfc8',
+    background: 'var(--terminal-surface-subtle)',
   },
   nftMeta: {
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-    width: '100%', minWidth: 0, fontSize: 11, fontWeight: 700, color: '#5C3A21',
+    width: '100%', minWidth: 0, fontSize: 11, fontWeight: 700, color: 'var(--terminal-text)',
   },
   nftId: {
     fontFamily: 'monospace',
@@ -1808,40 +1783,36 @@ const localStyles = {
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
   },
-  nftLevel: { color: '#7a5a30', flexShrink: 0 },
+  nftLevel: { color: 'var(--terminal-text-secondary)', flexShrink: 0 },
 
   // ── Wizard chrome ─────────────────────────────────────────────────
   stepHeader: { display: 'flex', flexDirection: 'column', gap: 2, marginBottom: 4 },
-  stepTitle:  { fontSize: 17, fontWeight: 900, color: '#5C3A21' },
-  stepSubtitle: { fontSize: 11, color: '#9f8759', letterSpacing: 0.4, textTransform: 'uppercase' },
+  stepTitle:  { fontSize: 17, fontWeight: 700, color: 'var(--terminal-text)' },
+  stepSubtitle: { fontSize: 11, color: 'var(--terminal-text-muted)', letterSpacing: 0.4, textTransform: 'uppercase' },
 
   stepDots: {
     display: 'flex', justifyContent: 'center', gap: 8, marginTop: 6, marginBottom: 2,
   },
   stepDot: {
-    width: 8, height: 8, borderRadius: '50%', background: '#e8dfc8',
-    border: '1px solid #d4c8b0',
+    width: 8, height: 8, borderRadius: '50%', background: 'var(--terminal-surface-subtle)',
+    border: '1px solid var(--terminal-border)',
   },
-  stepDotActive: { background: '#ffd97a', border: '1px solid #9f8759', boxShadow: '0 0 0 2px rgba(255,217,122,0.4)' },
-  stepDotDone:   { background: '#7ce04a', border: '1px solid #4a8f2c' },
+  stepDotActive: { background: 'var(--terminal-brand-border)', border: '1px solid var(--terminal-text-muted)', boxShadow: '0 0 0 2px rgba(255,217,122,0.4)' },
+  stepDotDone:   { background: 'var(--terminal-long)', border: '1px solid var(--terminal-long)' },
 
-  connectBtn: {
-    alignSelf: 'flex-start', padding: '8px 14px', borderRadius: 10, fontSize: 13,
-    background: '#ffd97a', border: '2px solid #9f8759', color: '#5C3A21',
-    cursor: 'pointer', fontWeight: 700,
-  },
+  connectBtn: uiButton('primary', { alignSelf: 'flex-start', minHeight: 38, padding: '8px 14px', fontSize: 13 }),
 
   // ── Large NFT card (shown on steps 2 + 3) ────────────────────────
   nftCardLarge: {
     display: 'flex', alignItems: 'center', gap: 12,
     padding: 10, borderRadius: 14,
-    background: 'linear-gradient(180deg, #fff6dc 0%, #ffefc4 100%)',
-    border: '2px solid #d4c8b0',
+    background: 'linear-gradient(180deg, var(--terminal-surface) 0%, var(--terminal-brand-soft) 100%)',
+    border: '1px solid var(--terminal-border)',
     boxShadow: '0 2px 6px rgba(95,58,33,0.08)',
   },
   nftCardLargeImgWrap: {
     width: 80, height: 80, borderRadius: 12,
-    background: '#fff', border: '2px solid #d4c8b0',
+    background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     overflow: 'hidden', flexShrink: 0,
   },
@@ -1849,15 +1820,15 @@ const localStyles = {
   nftCardLargeMeta: {
     display: 'flex', flexDirection: 'column', gap: 2, flex: 1, minWidth: 0,
   },
-  nftCardLargeTitle: { fontSize: 15, fontWeight: 800, color: '#5C3A21' },
-  nftCardLargeSub: { fontSize: 12, color: '#7a5a30', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  nftCardLargeTitle: { fontSize: 15, fontWeight: 600, color: 'var(--terminal-text)' },
+  nftCardLargeSub: { fontSize: 12, color: 'var(--terminal-text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   nftCardLargeSubText: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   nftCardLargeLevel: { fontSize: 12, fontWeight: 700, color: '#b8860b' },
   batchCard: {
     display: 'flex', alignItems: 'center', gap: 12,
     padding: 10, borderRadius: 14,
-    background: 'linear-gradient(180deg, #fff6dc 0%, #ffefc4 100%)',
-    border: '2px solid #d4c8b0',
+    background: 'linear-gradient(180deg, var(--terminal-surface) 0%, var(--terminal-brand-soft) 100%)',
+    border: '1px solid var(--terminal-border)',
     boxShadow: '0 2px 6px rgba(95,58,33,0.08)',
   },
   batchThumbStack: {
@@ -1872,14 +1843,14 @@ const localStyles = {
     width: 76,
     height: 76,
     borderRadius: 12,
-    background: '#fff',
-    border: '2px solid #d4c8b0',
+    background: 'var(--terminal-surface)',
+    border: '1px solid var(--terminal-border)',
     overflow: 'hidden',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    color: '#5C3A21',
-    fontWeight: 900,
+    color: 'var(--terminal-text)',
+    fontWeight: 700,
   },
   batchMeta: {
     display: 'flex', flexDirection: 'column', gap: 3, flex: 1, minWidth: 0,
@@ -1887,7 +1858,7 @@ const localStyles = {
   batchIds: {
     fontSize: 11,
     fontFamily: 'monospace',
-    color: '#5C3A21',
+    color: 'var(--terminal-text)',
     minWidth: 0,
     overflow: 'hidden',
     textOverflow: 'ellipsis',
@@ -1899,22 +1870,22 @@ const localStyles = {
     padding: 0, border: 'none', background: 'transparent', cursor: 'pointer',
     display: 'flex', flexDirection: 'column', gap: 2, alignItems: 'stretch',
   },
-  previewBtnHint: { fontSize: 10, color: '#9f8759', textAlign: 'right', fontStyle: 'italic' },
+  previewBtnHint: { fontSize: 10, color: 'var(--terminal-text-muted)', textAlign: 'right', fontStyle: 'italic' },
 
   // Bridge arrow between source + dest cards on step 3.
   bridgeArrowRow: {
     display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, margin: '4px 0',
   },
-  bridgeArrow: { fontSize: 22, color: '#7ce04a' },
-  bridgeArrowLabel: { fontSize: 10, color: '#9f8759', letterSpacing: 0.4, textTransform: 'uppercase' },
+  bridgeArrow: { fontSize: 22, color: 'var(--terminal-long)' },
+  bridgeArrowLabel: { fontSize: 10, color: 'var(--terminal-text-muted)', letterSpacing: 0.4, textTransform: 'uppercase' },
 
   confirmMeta: {
     display: 'flex', flexDirection: 'column', gap: 4,
     padding: '8px 10px', borderRadius: 8,
-    background: '#fff8e6', border: '1px solid #d4c8b0',
-    fontSize: 12, color: '#5C3A21',
+    background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)',
+    fontSize: 12, color: 'var(--terminal-text)',
   },
-  confirmLabel: { fontWeight: 700, marginRight: 6, color: '#7a5a30' },
+  confirmLabel: { fontWeight: 700, marginRight: 6, color: 'var(--terminal-text-secondary)' },
   confirmValue: { fontFamily: 'monospace', wordBreak: 'break-all' },
 };
 
@@ -1934,8 +1905,8 @@ const modalStyles = {
   },
   panel: {
     width: 380, maxWidth: '100%', maxHeight: '88vh',
-    background: '#fdf8e7',
-    border: '5px solid #d4c8b0', borderRadius: 18,
+    background: 'var(--terminal-surface)',
+    border: '1px solid var(--terminal-border)', borderRadius: 18,
     boxShadow: '0 18px 50px rgba(0,0,0,0.45)',
     display: 'flex', flexDirection: 'column',
     fontFamily: 'inherit', overflow: 'hidden',
@@ -1943,19 +1914,13 @@ const modalStyles = {
   header: {
     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
     padding: '12px 14px',
-    background: '#d4c8b0', borderBottom: '3px solid #bba882',
+    background: 'var(--terminal-border)', borderBottom: '1px solid var(--terminal-border-strong)',
   },
-  title: { fontSize: 16, fontWeight: 900, color: '#5C3A21' },
-  closeBtn: {
-    width: 26, height: 26, borderRadius: '50%',
-    background: '#E53935', border: '2px solid #fff', color: '#fff',
-    cursor: 'pointer', padding: 0,
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-  },
+  title: { fontSize: 16, fontWeight: 700, color: 'var(--terminal-text)' },
+  closeBtn: uiIconButton('danger', 30),
   body: {
     padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 12,
     overflowY: 'auto',
-    scrollbarWidth: 'thin', scrollbarColor: '#bba882 #fdf8e7',
   },
 
   stepList: {
@@ -1968,29 +1933,29 @@ const modalStyles = {
   stepBubble: {
     width: 28, height: 28, borderRadius: '50%',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
-    fontSize: 13, fontWeight: 900, flexShrink: 0,
-    background: '#e8dfc8', color: '#9f8759', border: '2px solid #d4c8b0',
+    fontSize: 13, fontWeight: 700, flexShrink: 0,
+    background: 'var(--terminal-surface-subtle)', color: 'var(--terminal-text-muted)', border: '1px solid var(--terminal-border)',
     transition: 'background 0.2s, border-color 0.2s',
   },
   stepBubble_pending: {},
   stepBubble_active: {
-    background: '#fff6dc', border: '2px solid #c2851b', color: '#5C3A21',
+    background: 'var(--terminal-surface)', border: '1px solid var(--terminal-brand-strong)', color: 'var(--terminal-text)',
     boxShadow: '0 0 0 3px rgba(255,217,122,0.4)',
   },
   stepBubble_done: {
-    background: 'linear-gradient(180deg, #91df7d 0%, #3b9b41 100%)',
-    border: '2px solid #1f6d34', color: '#fff',
+    background: 'linear-gradient(180deg, var(--terminal-long-border) 0%, var(--terminal-long) 100%)',
+    border: '1px solid var(--terminal-long-strong)', color: 'var(--terminal-on-accent)',
   },
   stepBubble_error: {
-    background: '#E53935', border: '2px solid #7f0000', color: '#fff',
+    background: 'var(--terminal-short)', border: '1px solid var(--terminal-short-strong)', color: 'var(--terminal-on-accent)',
   },
   stepText: { display: 'flex', flexDirection: 'column', minWidth: 0, lineHeight: 1.2 },
-  stepLabel: { fontSize: 13, fontWeight: 800, color: '#7a5a30' },
-  stepLabel_active: { color: '#5C3A21' },
-  stepLabel_done:   { color: '#5C3A21' },
-  stepLabel_error:  { color: '#b71c1c' },
+  stepLabel: { fontSize: 13, fontWeight: 600, color: 'var(--terminal-text-secondary)' },
+  stepLabel_active: { color: 'var(--terminal-text)' },
+  stepLabel_done:   { color: 'var(--terminal-text)' },
+  stepLabel_error:  { color: 'var(--terminal-short-strong)' },
   stepLabel_pending: {},
-  stepHint: { fontSize: 11, color: '#9f8759', fontWeight: 700 },
+  stepHint: { fontSize: 11, color: 'var(--terminal-text-muted)', fontWeight: 700 },
 
   // Tiny CSS spinner used in the "active" bubble. Rotation is driven by
   // the global `nft-mint-ring-spin` keyframes injected by NftMintPanel —
@@ -1998,43 +1963,43 @@ const modalStyles = {
   // those keyframes are in scope.
   spinner: {
     width: 12, height: 12, borderRadius: '50%',
-    borderWidth: 2,
+    borderWidth: 1,
     borderStyle: 'solid',
     borderColor: 'rgba(92,58,33,0.25)',
-    borderTopColor: '#5C3A21',
+    borderTopColor: 'var(--terminal-text)',
     animation: 'nft-mint-ring-spin 0.9s linear infinite',
   },
 
   batchList: {
     display: 'flex', flexDirection: 'column', gap: 6,
     padding: 8, borderRadius: 10,
-    background: '#fff8e6', border: '1px solid #d4c8b0',
+    background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)',
   },
   batchItem: {
     display: 'grid', gridTemplateColumns: '22px minmax(0, 1fr) auto',
-    alignItems: 'center', gap: 7, fontSize: 11, color: '#5C3A21',
+    alignItems: 'center', gap: 7, fontSize: 11, color: 'var(--terminal-text)',
   },
   batchIndex: {
     width: 20, height: 20, borderRadius: '50%',
     display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-    background: '#d4c8b0', color: '#5C3A21', fontWeight: 900,
+    background: 'var(--terminal-border)', color: 'var(--terminal-text)', fontWeight: 700,
   },
   batchLabel: {
     minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-    fontFamily: 'monospace', fontWeight: 800,
+    fontFamily: 'monospace', fontWeight: 600,
   },
   batchPill: {
     padding: '2px 6px', borderRadius: 999,
-    background: '#e8dfc8', color: '#7a5a30',
-    fontSize: 10, fontWeight: 900, textTransform: 'uppercase',
+    background: 'var(--terminal-surface-subtle)', color: 'var(--terminal-text-secondary)',
+    fontSize: 10, fontWeight: 700, textTransform: 'uppercase',
   },
-  batchPillDone: { background: '#d9efc0', color: '#1f6d34' },
-  batchPillError: { background: '#ffd8d8', color: '#9d1e1e' },
+  batchPillDone: { background: 'var(--terminal-long-soft)', color: 'var(--terminal-long-strong)' },
+  batchPillError: { background: 'var(--terminal-short-soft)', color: 'var(--terminal-short-strong)' },
 
   resultBox: {
     padding: '10px 12px', borderRadius: 10,
-    background: 'linear-gradient(180deg, #f1fbe5 0%, #d9efc0 100%)',
-    border: '2px solid #7db85a', color: '#1f3e0a',
+    background: 'linear-gradient(180deg, var(--terminal-long-soft) 0%, var(--terminal-long-soft) 100%)',
+    border: '1px solid var(--terminal-long-border)', color: 'var(--terminal-long-strong)',
     display: 'flex', flexDirection: 'column', gap: 6,
   },
   resultHeadline: { fontSize: 14 },
@@ -2055,34 +2020,28 @@ const modalStyles = {
 
   pendingBox: {
     padding: '8px 10px', borderRadius: 10,
-    background: '#fff1cc', border: '2px solid #d9a928', color: '#5C3A21',
+    background: 'var(--terminal-brand-soft)', border: '1px solid var(--terminal-warning)', color: 'var(--terminal-text)',
   },
 
   errorBox: {
     padding: '8px 10px', borderRadius: 10,
-    background: '#fdecea', border: '2px solid #E53935', color: '#7a1f1c',
+    background: 'var(--terminal-short-soft)', border: '1px solid var(--terminal-short)', color: 'var(--terminal-short-strong)',
     fontSize: 12, fontWeight: 700,
   },
 
   workingHint: {
-    fontSize: 11, color: '#7a5a30', fontStyle: 'italic', textAlign: 'center',
+    fontSize: 11, color: 'var(--terminal-text-secondary)', fontStyle: 'italic', textAlign: 'center',
   },
 
   footer: {
     display: 'flex', gap: 8, justifyContent: 'flex-end',
     padding: '10px 14px',
-    borderTop: '3px solid #d4c8b0', background: '#f5ecd2',
+    borderTop: '1px solid var(--terminal-border)', background: 'var(--terminal-surface-subtle)',
   },
   primaryBtn: {
-    padding: '9px 16px', borderRadius: 10, fontSize: 13, fontWeight: 900,
-    background: 'linear-gradient(180deg, #91df7d 0%, #3b9b41 100%)',
-    border: '2px solid #1f6d34', color: '#fff',
-    cursor: 'pointer',
-    textShadow: '0 1px 1px rgba(0,0,0,0.35)',
+    ...uiButton('primary', { padding: '9px 16px' }),
   },
   secondaryBtn: {
-    padding: '9px 14px', borderRadius: 10, fontSize: 13, fontWeight: 800,
-    background: '#fff6dc', border: '2px solid #9f8759', color: '#5C3A21',
-    cursor: 'pointer',
+    ...uiButton('secondary', { padding: '9px 14px' }),
   },
 };

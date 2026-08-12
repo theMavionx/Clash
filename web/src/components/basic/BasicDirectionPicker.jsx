@@ -66,8 +66,6 @@ function BasicDirectionPicker({ symbol, iconSym, price, onPick }) {
           onClick={() => onPick('long')}
           whileHover={{ y: -3 }}
           whileTap={{ scale: 0.97 }}
-          animate={{ boxShadow: ['0 5px 0 #2e7d32, 0 6px 14px rgba(67,160,71,0.4)', '0 5px 0 #2e7d32, 0 10px 22px rgba(67,160,71,0.55)', '0 5px 0 #2e7d32, 0 6px 14px rgba(67,160,71,0.4)'] }}
-          transition={{ boxShadow: { duration: 2.4, repeat: Infinity, ease: 'easeInOut' } }}
           style={{ ...S.bigBtn, ...S.upBtn }}
         >
           <span style={S.arrowUp}>▲</span>
@@ -79,8 +77,6 @@ function BasicDirectionPicker({ symbol, iconSym, price, onPick }) {
           onClick={() => onPick('short')}
           whileHover={{ y: -3 }}
           whileTap={{ scale: 0.97 }}
-          animate={{ boxShadow: ['0 5px 0 #c62828, 0 6px 14px rgba(229,57,53,0.4)', '0 5px 0 #c62828, 0 10px 22px rgba(229,57,53,0.55)', '0 5px 0 #c62828, 0 6px 14px rgba(229,57,53,0.4)'] }}
-          transition={{ boxShadow: { duration: 2.4, repeat: Infinity, ease: 'easeInOut', delay: 1.2 } }}
           style={{ ...S.bigBtn, ...S.downBtn }}
         >
           <span style={S.arrowDown}>▼</span>
@@ -97,7 +93,7 @@ export default memo(BasicDirectionPicker);
 const S = {
   tightTitle: {
     fontSize: 'clamp(16px, 3vh, 20px)',
-    fontWeight: 900, color: colors.ink,
+    fontWeight: 700, color: colors.ink,
     textAlign: 'center', letterSpacing: '0.3px',
     margin: '2px 0 4px', lineHeight: 1.1,
   },
@@ -109,9 +105,9 @@ const S = {
     // when the buttons compete for room.
     padding: '12px 14px',
     borderRadius: 16,
-    background: 'linear-gradient(180deg, #ffffff 0%, #fdf8e7 100%)',
-    border: `3px solid ${colors.border}`,
-    boxShadow: '0 3px 0 rgba(92,58,33,0.10), 0 4px 10px rgba(92,58,33,0.10)',
+    background: 'var(--terminal-surface)',
+    border: `1px solid ${colors.border}`,
+    boxShadow: '0 4px 12px rgba(17,24,39,0.06)',
     margin: '2px 0 6px',
     flexShrink: 0,
   },
@@ -119,14 +115,14 @@ const S = {
     display: 'flex', alignItems: 'center', gap: 8,
   },
   symbol: {
-    fontSize: 14, fontWeight: 900,
+    fontSize: 14, fontWeight: 700,
     color: colors.inkSoft, letterSpacing: '1.2px',
     textTransform: 'uppercase',
   },
   price: {
     // Scales 22pt (cramped) → 32pt (full panel).
     fontSize: 'clamp(22px, 5.5vh, 32px)',
-    fontWeight: 900, color: colors.ink,
+    fontWeight: 700, color: colors.ink,
     fontVariantNumeric: 'tabular-nums',
     letterSpacing: '-0.5px',
     lineHeight: 1.05,
@@ -142,25 +138,24 @@ const S = {
     gap: 10, padding: '14px 16px',
     border: 'none', borderRadius: 16,
     cursor: 'pointer',
-    color: '#fff',
+    color: 'var(--terminal-on-accent)',
     fontFamily: 'inherit',
     width: '100%',
     height: 76,  // Fixed compact height — same on phone, tablet, desktop.
     boxSizing: 'border-box',
   },
   upBtn: {
-    background: 'linear-gradient(180deg, #4caf50 0%, #2e7d32 100%)',
-    border: '4px solid #1b5e20',
+    background: 'var(--terminal-long)',
+    border: '1px solid var(--terminal-long)',
   },
   downBtn: {
-    background: 'linear-gradient(180deg, #ef5350 0%, #c62828 100%)',
-    border: '4px solid #b71c1c',
+    background: 'var(--terminal-short)',
+    border: '1px solid var(--terminal-short)',
   },
-  arrowUp: { fontSize: 28, lineHeight: 1, textShadow: '0 2px 0 rgba(0,0,0,0.3)' },
-  arrowDown: { fontSize: 28, lineHeight: 1, textShadow: '0 2px 0 rgba(0,0,0,0.3)' },
+  arrowUp: { fontSize: 28, lineHeight: 1 },
+  arrowDown: { fontSize: 28, lineHeight: 1 },
   bigBtnLabel: {
-    fontSize: 26, fontWeight: 900, letterSpacing: '1.5px',
-    textShadow: '0 2px 0 rgba(0,0,0,0.3)',
+    fontSize: 26, fontWeight: 700, letterSpacing: '1.5px',
     marginRight: 'auto', // push hint to the right end
     marginLeft: 4,
   },

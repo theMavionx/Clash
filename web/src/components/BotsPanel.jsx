@@ -1,6 +1,6 @@
 import { memo, useCallback, useMemo, useState, useEffect, useRef } from 'react';
 import { useLayout } from '../hooks/useIsMobile';
-import { cartoonBtn } from '../styles/theme';
+import { uiButton, uiIconButton } from '../styles/theme';
 import { colors, shared } from './basic/styles';
 import { usePlayer } from '../hooks/useGodot';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
@@ -32,7 +32,6 @@ import { botApiUrl, botAuthHeaders, botWsUrl, fetchBotApiJson, botApiPathCandida
 import { registeredDexWallet } from '../lib/playerDexAccounts';
 import { topUpOstiumDelegateGas, refreshOstiumOneTapStatus } from '../lib/ostiumOneTapSetup';
 import { OSTIUM_CHAIN_ID } from '../lib/ostiumConfig';
-import { reportExchangeBalanceSnapshots } from '../lib/exchangeBalanceTelemetry';
 import {
   describeOstiumBotAction,
   normalizeOstiumErrorText,
@@ -46,13 +45,16 @@ import {
 } from '../lib/nadoBotUx';
 import {
   AGGRESSIVE_VOLUME_SLIDER,
+  calmOrderSizeAbsMax,
   formatVolumeUsd,
   impliedDailyVolumeFromSize,
-  observedCostPer1M,
+  feeCostPer1M,
   planAggressiveVolume,
+  venuePlanDefaults,
 } from '../lib/aggressiveVolumePlan';
 import {
   CALM_VOLUME_TARGET,
+  maxSafeTradeSizeUsd,
   planCalmFromBalance,
 } from '../lib/calmVolumePlan';
 import buttonBg from '../assets/resources/file_00000000a6f87246844c6271b76cd436.png';
@@ -83,8 +85,8 @@ const BOT_TYPES = [
     id: 'dca',
     name: 'DCA',
     code: 'dca',
-    accent: '#1E88E5',
-    accentDark: '#1565C0',
+    accent: 'var(--terminal-info)',
+    accentDark: 'var(--terminal-info)',
     tagline: 'Harvests funding while staying near flat.',
     description: 'Opens long on one exchange and short on another so market exposure stays close to zero while collecting funding.',
     bestFor: 'Funding gaps between two venues, lower directional risk.',
@@ -94,17 +96,29 @@ const BOT_TYPES = [
     id: 'symmetric_mm',
     name: 'Symmetric MM',
     code: 'symmetric_mm',
-    accent: '#43A047',
-    accentDark: '#2E7D32',
+    accent: 'var(--terminal-long)',
+    accentDark: 'var(--terminal-long-strong)',
     tagline: 'Quotes both sides evenly around mid price.',
     description: 'Keeps balanced bid and ask orders with equal sizing. It is the classic market-maker shape for simple spread capture.',
     bestFor: 'Liquid pairs, stable spreads, balanced inventory.',
     cadence: 'Requotes on drift',
   },
+  {
+    id: 'ping_pong',
+    name: 'Ping-Pong',
+    code: 'ping_pong',
+    accent: '#FB8C00',
+    accentDark: '#EF6C00',
+    tagline: 'Open → short hold → close → repeat.',
+    description: 'Opens a market order, holds a few seconds, then closes. Delay between open/close is randomized (1–20s) so it does not look like rigid spam.',
+    bestFor: 'Simple Decibel volume cycling without quoting both sides.',
+    cadence: 'Random 1–20s hold & idle',
+  },
 ];
 
-/** Live launch strategies: Symmetric MM + DCA (funding / dual-venue). */
-const LAUNCH_BOT_TYPES = ['symmetric_mm', 'dca']
+/** Live launch strategies. Ping-Pong is Decibel-only (filtered in the strategy step). */
+const LAUNCH_BOT_TYPE_IDS = ['symmetric_mm', 'dca', 'ping_pong'];
+const LAUNCH_BOT_TYPES = LAUNCH_BOT_TYPE_IDS
   .map((id) => BOT_TYPES.find((bot) => bot.id === id))
   .filter(Boolean);
 
@@ -154,6 +168,47 @@ function getBotType(type) {
 
 function isDcaKind(kind) {
   return kind === 'dca' || kind === 'delta_neutral';
+}
+
+/** Venues with live funding ticks for DCA (HL / Pacifica / Decibel). */
+const DCA_FUNDING_EXCHANGES = ['hyperliquid', 'pacifica', 'decibel'];
+const DCA_DEFAULT_SYMBOL = 'BTC-USD';
+const DCA_DEFAULT_LEVERAGE = 5;
+
+function isDcaFundingExchange(exchangeId) {
+  return DCA_FUNDING_EXCHANGES.includes(String(exchangeId || '').toLowerCase());
+}
+
+function tenantIdFromStrategyIds(ids) {
+  for (const id of ids || []) {
+    if (!id) continue;
+    const bare = stripTenantPrefix(id);
+    if (bare && bare !== id) {
+      return id.slice(0, id.length - bare.length - 1);
+    }
+  }
+  return null;
+}
+
+function buildDcaInstanceId(tenantId, exchangeA, exchangeB, symbol = DCA_DEFAULT_SYMBOL) {
+  const a = String(exchangeA || '').toLowerCase();
+  const b = String(exchangeB || '').toLowerCase();
+  if (!tenantId || !a || !b || a === b) return '';
+  return `${tenantId}:dca:${a}<->${b}:${symbol}`;
+}
+
+/** Free margin needed on each DCA leg ≈ notional/leverage × 1.25. */
+function dcaLegMarginNeedUsd(positionSizeUsd, leverage = DCA_DEFAULT_LEVERAGE) {
+  const size = Number(positionSizeUsd);
+  const lev = Math.max(1, Number(leverage) || DCA_DEFAULT_LEVERAGE);
+  if (!Number.isFinite(size) || size <= 0) return 0;
+  return Math.round((size / lev) * 1.25 * 100) / 100;
+}
+
+function freeMarginUsdFromBalance(bal) {
+  if (!bal) return null;
+  const v = Number(bal.available_margin_usd ?? bal.equity_usd);
+  return Number.isFinite(v) ? v : null;
 }
 
 function formatApiError(error, fallback = 'unknown error') {
@@ -431,6 +486,33 @@ function formatInventory(rt) {
   return entries.map(([sym, qty]) => `${sym}: ${qty}`).join(', ');
 }
 
+/** Format venue positions (exchange API) for the bot's symbols. */
+function formatVenueInventory(venueLive, symbols = []) {
+  if (!venueLive || !Array.isArray(venueLive.positions)) return null;
+  // On venue error with empty list — fall back to bot-local inventory.
+  if (venueLive.positions_error && venueLive.positions.length === 0) return null;
+  const want = new Set(
+    (Array.isArray(symbols) ? symbols : [])
+      .map((s) => String(s || '').toUpperCase().split('-')[0].split('/')[0])
+      .filter(Boolean),
+  );
+  const rows = venueLive.positions.filter((p) => {
+    const sz = Number(p.size);
+    if (!Number.isFinite(sz) || sz === 0) return false;
+    if (want.size === 0) return true;
+    const base = String(p.symbol || '').toUpperCase().split('-')[0].split('/')[0];
+    return want.has(base) || want.has(String(p.symbol || '').toUpperCase());
+  });
+  if (rows.length === 0) return '0';
+  return rows.map((p) => {
+    const side = String(p.side || '').toLowerCase().includes('short') ? 'S' : 'L';
+    const sz = Number(p.size);
+    const upnl = Number(p.unrealized_pnl_usd);
+    const upnlPart = Number.isFinite(upnl) ? ` uPnL ${upnl.toFixed(2)}` : '';
+    return `${side} ${sz}${upnlPart}`;
+  }).join(' · ');
+}
+
 function accountActiveForExchange(accounts, exchange) {
   const needle = String(exchange).toLowerCase();
   return accounts.some(
@@ -482,6 +564,7 @@ const mapHandleToBot = (
   exchangeBalances = {},
   orderHistory = [],
   periodStats24h = {},
+  venueLiveByExchange = {},
 ) => {
   const details = getBotConfigDetails(handle.id);
   const ov = overrides[handle.id] || {};
@@ -501,7 +584,7 @@ const mapHandleToBot = (
   const isRunning = runningList.some((r) => r.id === handle.id);
   const rt = runtime[handle.id] || {};
   const cycles = Number(rt.cycles) || 0;
-  const openQuotes = Number(rt.open_quotes) || 0;
+  const localOpenQuotes = Number(rt.open_quotes) || 0;
   const backoffSymbols = Array.isArray(rt.backoff_symbols) ? rt.backoff_symbols : [];
   const inBackoff = rt.in_backoff === true || backoffSymbols.length > 0;
   const market = (Array.isArray(handle.symbols) ? handle.symbols : [])
@@ -516,6 +599,12 @@ const mapHandleToBot = (
   )];
   const bal = exchangeBalances[exchangeKey];
   const balFmt = formatExchangeBalance(bal);
+  const venueLive = venueLiveByExchange[exchangeKey] || null;
+  // Prefer exchange open-order count; fall back to bot-local working orders.
+  const venueOpenOrders = venueLive && venueLive.open_orders_error == null
+    ? Number(venueLive.open_orders_count) || 0
+    : null;
+  const openQuotes = venueOpenOrders != null ? venueOpenOrders : localOpenQuotes;
   const fills = Number(rt.fills) || countFillsForExchange(orderHistory, exchange);
   const sessionVolumeUsd = Number(rt.volume_usd);
   const sessionFeesUsd = Number(rt.fees_usd);
@@ -528,9 +617,53 @@ const mapHandleToBot = (
       fills: Number(rt.fills) || 0,
     }
     : null;
-  const inventory = formatInventory(rt);
+  const localInventory = formatInventory(rt);
+  const venueInventory = formatVenueInventory(venueLive, handle.symbols);
+  // Exchange positions are the display truth; local MM inventory is secondary.
+  const inventory = venueInventory != null ? venueInventory : (localInventory ?? '—');
+  const inventorySource = venueInventory != null ? 'exchange' : 'bot';
+  // Summary 24h: prefer venue trade-history; audit rollup is fallback only.
+  const venueStatsKeys = exchangeKeys.length ? exchangeKeys : [exchangeKey].filter(Boolean);
+  const venuePeriodSummary = (() => {
+    const rows = venueStatsKeys
+      .map((k) => venueLiveByExchange[k]?.trade_stats_24h)
+      .filter(Boolean);
+    if (rows.length === 0) return null;
+    let fills = 0;
+    let closes = 0;
+    let volumeUsd = 0;
+    let feesUsd = 0;
+    let winsUsd = 0;
+    let lossesUsd = 0;
+    let realizedUsd = 0;
+    const sources = [];
+    rows.forEach((s) => {
+      fills += Number(s.fills) || 0;
+      closes += Number(s.closes) || 0;
+      volumeUsd += Number(s.volume_usd) || 0;
+      feesUsd += Number(s.fees_usd) || 0;
+      winsUsd += Number(s.wins_usd) || 0;
+      lossesUsd += Number(s.losses_usd) || 0;
+      realizedUsd += Number(s.realized_pnl_usd) || 0;
+      if (s.source) sources.push(String(s.source));
+    });
+    const feeBps = volumeUsd > 0 ? (feesUsd / volumeUsd) * 10000 : 0;
+    return {
+      fills,
+      closes,
+      volumeUsd,
+      feesUsd,
+      feeBps,
+      winsUsd,
+      lossesUsd,
+      realizedUsd,
+      netUsd: realizedUsd - feesUsd,
+      source: sources[0] || 'exchange',
+      fromExchange: true,
+    };
+  })();
   const periodRaw = periodStats24h[handle.id] || null;
-  const periodSummary = periodRaw ? {
+  const auditPeriodSummary = periodRaw ? {
     fills: Number(periodRaw.fills) || 0,
     closes: Number(periodRaw.closes) || 0,
     volumeUsd: Number(periodRaw.volume_usd) || 0,
@@ -540,15 +673,61 @@ const mapHandleToBot = (
     lossesUsd: Number(periodRaw.losses_usd) || 0,
     realizedUsd: Number(periodRaw.realized_pnl_usd) || 0,
     netUsd: Number(periodRaw.net_after_fees_usd) || 0,
+    source: 'bot_audit',
+    fromExchange: false,
   } : null;
-  const hasOpenInventory = inventory != null
-    && inventory !== '0'
-    && Number.isFinite(Number(inventory))
-    && Number(inventory) !== 0;
-  const unrealizedRaw = bal?.unrealized != null ? bal.unrealized : null;
-  // Stopped + flat: "—" (not $0.00) so users don't think the feed is stuck.
-  // Running / non-zero: show live exchange unrealized.
-  const unrealizedPnl = (unrealizedRaw != null && (isRunning || unrealizedRaw !== 0))
+  const periodSummary = venuePeriodSummary || auditPeriodSummary;
+  const hasOpenInventory = (() => {
+    if (venueLive && Array.isArray(venueLive.positions)) {
+      const want = new Set(
+        (Array.isArray(handle.symbols) ? handle.symbols : [])
+          .map((s) => String(s || '').toUpperCase().split('-')[0].split('/')[0])
+          .filter(Boolean),
+      );
+      return venueLive.positions.some((p) => {
+        const sz = Number(p.size);
+        if (!Number.isFinite(sz) || sz === 0) return false;
+        if (want.size === 0) return true;
+        const base = String(p.symbol || '').toUpperCase().split('-')[0].split('/')[0];
+        return want.has(base) || want.has(String(p.symbol || '').toUpperCase());
+      });
+    }
+    return inventory != null
+      && inventory !== '0'
+      && inventory !== '—'
+      && Number.isFinite(Number(inventory))
+      && Number(inventory) !== 0;
+  })();
+  // uPnL = open-position mark-to-market only. Flat inventory → null ("—"), never fake $0.00.
+  const venueUpnl = (() => {
+    if (!venueLive || !Array.isArray(venueLive.positions) || !hasOpenInventory) return null;
+    const want = new Set(
+      (Array.isArray(handle.symbols) ? handle.symbols : [])
+        .map((s) => String(s || '').toUpperCase().split('-')[0].split('/')[0])
+        .filter(Boolean),
+    );
+    let sum = 0;
+    let any = false;
+    for (const p of venueLive.positions) {
+      const sz = Number(p.size);
+      if (!Number.isFinite(sz) || sz === 0) continue;
+      if (want.size > 0) {
+        const base = String(p.symbol || '').toUpperCase().split('-')[0].split('/')[0];
+        if (!want.has(base) && !want.has(String(p.symbol || '').toUpperCase())) continue;
+      }
+      const u = Number(p.unrealized_pnl_usd);
+      if (!Number.isFinite(u)) continue;
+      sum += u;
+      any = true;
+    }
+    if (any) return sum;
+    const top = Number(venueLive.unrealized_pnl_usd);
+    return Number.isFinite(top) ? top : null;
+  })();
+  const unrealizedRaw = venueUpnl != null
+    ? venueUpnl
+    : (hasOpenInventory && bal?.unrealized != null ? bal.unrealized : null);
+  const unrealizedPnl = (hasOpenInventory && unrealizedRaw != null && Number.isFinite(unrealizedRaw))
     ? unrealizedRaw
     : null;
 
@@ -613,12 +792,12 @@ const mapHandleToBot = (
   } else if (bal?.error && (bal.available ?? 0) <= 0 && (bal.equity ?? 0) <= 0) {
     lastAction = `Exchange balance error: ${shortenError(bal.error)}`;
   } else if (openQuotes > 0) {
-    lastAction = `${openQuotes} quote(s) on exchange · cycle ${cycles}`;
+    lastAction = `${openQuotes} open order(s) on exchange · cycle ${cycles}`;
   } else if (cycles > 0 && hasOpenInventory) {
     if (exchangeKey === 'decibel' || exchangeKey === 'ostium') {
-      lastAction = `Position open (${inventory}) — closing via maker exit; 0 new quotes until flat (normal MM)`;
+      lastAction = `Exchange position open (${inventory}) — closing via maker exit; 0 new quotes until flat (normal MM)`;
     } else {
-      lastAction = `Position open (${inventory}) — draining inventory; new quotes resume when flat`;
+      lastAction = `Exchange position open (${inventory}) — draining; new quotes resume when flat`;
     }
   } else if (cycles > 0) {
     if (String(exchange).toUpperCase().includes('GRVT') && handle.kind === 'ping_pong') {
@@ -630,7 +809,7 @@ const mapHandleToBot = (
       const need = nadoMinDepositUsd(20);
       lastAction = avail != null && avail < need
         ? `Nado: 0 quotes — floor $${NADO_MIN_ORDER_USD}/order; free ≈$${avail.toFixed(2)} needs ≥~$${need} (venue min, not quota)`
-        : `Nado: 0 quotes — Margin ≥$${NADO_MIN_ORDER_USD} and free margin ≥~$${need} (venue floor, not quota)`;
+        : `Nado: 0 quotes — Trade Size ≥$${NADO_MIN_ORDER_USD} and free margin ≥~$${need} (venue floor, not quota)`;
     } else if (exchangeKey === 'katana') {
       lastAction = 'Katana: 0 quotes — reconnect API key/secret + one-tap signer from Launch New Bot';
     } else if (exchangeKey === 'decibel') {
@@ -645,14 +824,14 @@ const mapHandleToBot = (
       } else if (avail != null && avail < 1) {
         lastAction = `Decibel: free margin ≈$${avail.toFixed(2)} — deposit USDC (venue min ~$10/leg; bot raises lev up to 40×)`;
       } else if (avail != null) {
-        lastAction = `Decibel: 0 quotes with free ≈$${avail.toFixed(2)} — check Margin ≥$10, open halt, or wait one cycle (bot may quote one side on micro deposit)`;
+        lastAction = `Decibel: 0 quotes with free ≈$${avail.toFixed(2)} — check Trade Size ≥$10, open halt, or wait one cycle (bot may quote one side on micro deposit)`;
       } else {
-        lastAction = 'Decibel: 0 quotes — Margin ≥$10, free USDC on trader wallet, lev up to 40×';
+        lastAction = 'Decibel: 0 quotes — Trade Size ≥$10, free USDC on trader wallet, lev up to 40×';
       }
     } else if (balFmt.tone === 'warn') {
       lastAction = 'Bot runs but account balance is $0 — deposit margin before quoting';
     } else {
-      lastAction = `Bot runs but ${exchange} has 0 quotes — check free margin, configured margin, and leverage`;
+      lastAction = `Bot runs but ${exchange} has 0 quotes — check margin, size, leverage`;
     }
   } else {
     lastAction = 'Worker spawned, waiting for first cycle';
@@ -676,6 +855,10 @@ const mapHandleToBot = (
     balanceDetail: balFmt.detail,
     balanceTone: balFmt.tone,
     inventory: inventory ?? '—',
+    inventorySource,
+    localOpenQuotes,
+    venueOpenOrders,
+    venueLive,
     spread,
     fills,
     cycles,
@@ -695,15 +878,15 @@ const mapHandleToBot = (
   };
 };
 
-function RobotGlyph({ size = 28, color = '#5C3A21' }) {
+function RobotGlyph({ size = 28, color = 'var(--terminal-text)' }) {
   return (
     <svg width={size} height={size} viewBox="0 0 32 32" fill="none" aria-hidden="true">
       <path d="M16 3v4" stroke={color} strokeWidth="2.4" strokeLinecap="round" />
       <circle cx="16" cy="3.5" r="2" fill="#E8B830" stroke={color} strokeWidth="1.6" />
-      <rect x="6" y="8" width="20" height="17" rx="5" fill="#FDF8E7" stroke={color} strokeWidth="2.4" />
-      <path d="M8 14h16" stroke="#D4C8B0" strokeWidth="2" />
-      <circle cx="12" cy="16" r="2.2" fill="#1E88E5" />
-      <circle cx="20" cy="16" r="2.2" fill="#43A047" />
+      <rect x="6" y="8" width="20" height="17" rx="5" fill="var(--terminal-surface)" stroke={color} strokeWidth="2.4" />
+      <path d="M8 14h16" stroke="var(--terminal-border)" strokeWidth="2" />
+      <circle cx="12" cy="16" r="2.2" fill="var(--terminal-info)" />
+      <circle cx="20" cy="16" r="2.2" fill="var(--terminal-long)" />
       <path d="M12 22h8" stroke={color} strokeWidth="2.2" strokeLinecap="round" />
       <path d="M3.5 15.5v4M28.5 15.5v4" stroke={color} strokeWidth="2.4" strokeLinecap="round" />
     </svg>
@@ -715,7 +898,7 @@ function RobotButtonMark({ size = 48 }) {
     <div style={{ ...S.buttonMark, width: size, height: size }}>
       <div style={{ ...S.buttonMarkBg, backgroundImage: `url(${buttonBg})` }} />
       <div style={S.buttonMarkIcon}>
-        <RobotGlyph size={Math.round(size * 0.56)} color="#fff" />
+        <RobotGlyph size={Math.round(size * 0.56)} color="var(--terminal-surface)" />
       </div>
     </div>
   );
@@ -736,8 +919,8 @@ function ExchangeMark({ exchangeId, size = 40, framed = true }) {
         width: size,
         height: size,
         ...(framed ? {
-          borderColor: dex?.borderColor || '#BBA882',
-          background: dex?.colorLight || '#F4EEDC',
+          borderColor: dex?.borderColor || 'var(--terminal-border-strong)',
+          background: dex?.colorLight || 'var(--terminal-surface-subtle)',
         } : {}),
       }}
       title={label}
@@ -1015,11 +1198,19 @@ function SliderField({
   formatValue = money,
   formatBound = money,
 }) {
+  // Guard: HTML range keeps the numeric `value` text even when value > max
+  // (live Nado: calm plan set $2605 while VPS still had max={500}).
+  const lo = Number(min);
+  const hi = Number(max);
+  const raw = Number(value);
+  const clamped = Number.isFinite(raw)
+    ? Math.min(Math.max(raw, lo), hi)
+    : lo;
   return (
     <div style={S.sliderCard}>
       <div style={S.sliderTop}>
         <span style={S.label}>{label}</span>
-        <strong style={S.sliderValue}>{formatValue(value)}</strong>
+        <strong style={S.sliderValue}>{formatValue(clamped)}</strong>
       </div>
       <input
         className="bots-range"
@@ -1027,7 +1218,7 @@ function SliderField({
         min={min}
         max={max}
         step={step}
-        value={value}
+        value={clamped}
         onChange={(event) => onChange(Number(event.target.value))}
         aria-label={label}
       />
@@ -1062,7 +1253,7 @@ function AggressivePlanCard({ plan, liveCostPer1M }) {
           <strong style={S.aggressivePlanVal}>{costLabel}</strong>
         </div>
         <div style={S.aggressivePlanCell}>
-          <span style={S.aggressivePlanKey}>Margin</span>
+          <span style={S.aggressivePlanKey}>Trade size</span>
           <strong style={S.aggressivePlanVal}>{money(plan.tradeSizeUsd)}</strong>
         </div>
         <div style={S.aggressivePlanCell}>
@@ -1079,23 +1270,23 @@ function AggressivePlanCard({ plan, liveCostPer1M }) {
           <span style={S.aggressivePlanKey}>Achievable/day</span>
           <strong style={{
             ...S.aggressivePlanVal,
-            color: plan.capped ? '#B45309' : undefined,
+            color: plan.capped ? 'var(--terminal-warning)' : undefined,
           }}>
             {formatVolumeUsd(plan.achievableVolumeUsd ?? plan.dailyVolumeUsd)}
           </strong>
         </div>
       </div>
       <p style={S.aggressivePlanHint}>
-        Model: ~{plan.roundTripsPerDay} round-trips/day → margin = volume ÷ (2×RTs).
+        Model: ~{plan.roundTripsPerDay} round-trips/day → size = volume ÷ (2×RTs).
         Deposit covers dual quotes + inventory at {plan.avgLeverage}×
         {plan.maxLeverage != null ? ` (cap ${plan.maxLeverage}×)` : ''}.
         {plan.leverageFixed ? ' Venue bot leverage is fixed (not adaptive).' : ' Adaptive raise toward cap if margin is tight.'}
         Cost mixes maker/taker fees + ~{plan.adverseBps} bps bleed (1 bps ≈ $100/$1M).
         {plan.capped
-          ? ` Target exceeds venue cadence — honest ceiling ~${formatVolumeUsd(plan.achievableVolumeUsd)} (raise margin/deposit or lower target).`
+          ? ` Target exceeds venue cadence — honest ceiling ~${formatVolumeUsd(plan.achievableVolumeUsd)} (raise size/deposit or lower target).`
           : ''}
         {plan.availableUsd == null && Number(plan.dailyVolumeUsd) > 100_000
-          ? ' Connect balance so configured margin is clamped to available funds — without it the target is uncapped planning only.'
+          ? ' Connect balance so size is clamped to free margin — without it the target is uncapped planning only.'
           : ''}
       </p>
     </div>
@@ -1104,10 +1295,10 @@ function AggressivePlanCard({ plan, liveCostPer1M }) {
 
 function CalmPlanCard({ plan, onApply }) {
   if (!plan) return null;
-  const tone = plan.hitsTarget ? '#2E7D32' : '#B45309';
+  const tone = plan.hitsTarget ? 'var(--terminal-long-strong)' : 'var(--terminal-warning)';
   return (
     <div style={S.aggressivePlanCard}>
-      <span style={S.label}>Calm margin from balance</span>
+      <span style={S.label}>Calm size from balance</span>
       <div style={S.aggressivePlanGrid}>
         <div style={S.aggressivePlanCell}>
           <span style={S.aggressivePlanKey}>Your free</span>
@@ -1116,7 +1307,7 @@ function CalmPlanCard({ plan, onApply }) {
           </strong>
         </div>
         <div style={S.aggressivePlanCell}>
-          <span style={S.aggressivePlanKey}>Safe margin</span>
+          <span style={S.aggressivePlanKey}>Safe trade</span>
           <strong style={S.aggressivePlanVal}>{money(plan.tradeSizeUsd)}</strong>
         </div>
         <div style={S.aggressivePlanCell}>
@@ -1144,11 +1335,11 @@ function CalmPlanCard({ plan, onApply }) {
           type="button"
           className="bots-focusable"
           style={{
-            ...cartoonBtn('#43A047', '#2E7D32'),
+            ...uiButton('primary'),
             width: '100%',
             minHeight: 40,
             fontSize: 13,
-            fontWeight: 900,
+            fontWeight: 700,
           }}
           onClick={onApply}
         >
@@ -1201,7 +1392,7 @@ function BotCard({ bot, expanded, onToggle, onStart, onStop, onDelete }) {
             </strong>
           </div>
           <div style={S.metric}>
-            <span style={S.metricLabel}>Free Margin</span>
+            <span style={S.metricLabel}>Margin</span>
             <strong style={{
               ...S.metricValue,
               color: bot.balanceTone === 'error' ? colors.short
@@ -1211,15 +1402,15 @@ function BotCard({ bot, expanded, onToggle, onStart, onStop, onDelete }) {
             </strong>
           </div>
           <div style={S.metric}>
-            <span style={S.metricLabel}>Margin</span>
+            <span style={S.metricLabel}>Trade Size</span>
             <strong style={S.metricValue}>{money(bot.tradeSize)}</strong>
           </div>
         </div>
         {!expanded && isRunning && (
           <div style={S.collapsedRuntime}>
-            Cycles <strong>{bot.cycles ?? 0}</strong>
+            Orders <strong>{bot.openQuotes ?? 0}</strong>
             {' · '}
-            Open quotes <strong>{bot.openQuotes ?? 0}</strong>
+            Pos <strong>{bot.inventory}</strong>
             {bot.inBackoff ? (
               <> · <strong style={{ color: '#E65100' }}>backoff</strong></>
             ) : null}
@@ -1231,7 +1422,7 @@ function BotCard({ bot, expanded, onToggle, onStart, onStop, onDelete }) {
           {isRunning ? (
             <button
               type="button"
-              style={{ ...cartoonBtn('#E53935', '#C62828'), padding: '6px 14px', fontSize: 12, borderRadius: 8 }}
+              style={{ ...uiButton('danger'), minHeight: 32, padding: '6px 14px', fontSize: 12 }}
               onClick={(e) => { e.stopPropagation(); onStop(bot.id); }}
             >
               Stop Bot
@@ -1240,7 +1431,7 @@ function BotCard({ bot, expanded, onToggle, onStart, onStop, onDelete }) {
             <>
               <button
                 type="button"
-                style={{ ...cartoonBtn('#43A047', '#2E7D32'), padding: '6px 14px', fontSize: 12, borderRadius: 8 }}
+                style={{ ...uiButton('primary'), minHeight: 32, padding: '6px 14px', fontSize: 12 }}
                 onClick={(e) => { e.stopPropagation(); onStart(bot.id); }}
               >
                 ▶ Start Bot
@@ -1248,7 +1439,7 @@ function BotCard({ bot, expanded, onToggle, onStart, onStop, onDelete }) {
               {canDelete && onDelete ? (
                 <button
                   type="button"
-                  style={{ ...cartoonBtn('#78909C', '#546E7A'), padding: '6px 14px', fontSize: 12, borderRadius: 8 }}
+                  style={{ ...uiButton('danger'), minHeight: 32, padding: '6px 14px', fontSize: 12 }}
                   onClick={(e) => { e.stopPropagation(); onDelete(bot.id); }}
                 >
                   Delete
@@ -1269,7 +1460,7 @@ function BotCard({ bot, expanded, onToggle, onStart, onStop, onDelete }) {
             <div style={S.detailCard}>
               <span style={S.metricLabel}>Account</span>
               <div style={S.detailRows}>
-                <span>Free Margin <strong>{bot.balanceLabel || '—'}</strong></span>
+                <span>Margin <strong>{bot.balanceLabel || '—'}</strong></span>
                 {bot.balanceDetail ? (
                   <span style={{ fontSize: 11, color: '#6b5340' }}>{bot.balanceDetail}</span>
                 ) : null}
@@ -1277,12 +1468,42 @@ function BotCard({ bot, expanded, onToggle, onStart, onStop, onDelete }) {
               </div>
             </div>
             <div style={S.detailCard}>
-              <span style={S.metricLabel}>Runtime (this process)</span>
+              <span style={S.metricLabel}>Exchange (live profile)</span>
+              <div style={S.detailRows}>
+                <span>
+                  Position{' '}
+                  <strong>{bot.inventory}</strong>
+                </span>
+                <span>
+                  Open orders{' '}
+                  <strong>{bot.openQuotes ?? 0}</strong>
+                </span>
+                <span>
+                  uPnL{' '}
+                  <strong>
+                    {bot.pnl != null && Number.isFinite(Number(bot.pnl))
+                      ? `${Number(bot.pnl).toFixed(4)} USD`
+                      : '—'}
+                  </strong>
+                </span>
+                {bot.venueLive?.positions_error ? (
+                  <span style={{ fontSize: 11, color: colors.short }}>
+                    Positions: {String(bot.venueLive.positions_error).slice(0, 120)}
+                  </span>
+                ) : null}
+                {bot.venueLive?.open_orders_error ? (
+                  <span style={{ fontSize: 11, color: colors.short }}>
+                    Orders: {String(bot.venueLive.open_orders_error).slice(0, 120)}
+                  </span>
+                ) : null}
+              </div>
+            </div>
+            <div style={S.detailCard}>
+              <span style={S.metricLabel}>Bot worker (process-local)</span>
               <div style={S.detailRows}>
                 <span>Cycles <strong>{bot.cycles ?? 0}</strong></span>
-                <span>Open quotes <strong>{bot.openQuotes ?? 0}</strong></span>
-                <span>Fills <strong>{bot.fills}</strong></span>
-                <span>Inventory <strong>{bot.inventory}</strong></span>
+                <span>Local quote track <strong>{bot.localOpenQuotes ?? 0}</strong></span>
+                <span>Session fills <strong>{bot.fills}</strong></span>
                 {bot.sessionSummary ? (
                   <>
                     <span>Session vol <strong>{bot.sessionSummary.volumeUsd.toFixed(2)} USD</strong></span>
@@ -1290,7 +1511,9 @@ function BotCard({ bot, expanded, onToggle, onStart, onStop, onDelete }) {
                     <span>Session realized <strong>{bot.sessionSummary.realizedUsd.toFixed(4)} USD</strong></span>
                   </>
                 ) : (
-                  <span style={{ fontSize: 11, opacity: 0.75 }}>Session stats reset on bot restart</span>
+                  <span style={{ fontSize: 11, opacity: 0.75 }}>
+                    Process-local — resets on restart; use Exchange / Summary 24h for truth
+                  </span>
                 )}
               </div>
             </div>
@@ -1300,7 +1523,9 @@ function BotCard({ bot, expanded, onToggle, onStart, onStop, onDelete }) {
               <p style={S.detailCopy}>{PRESETS[bot.preset]?.copy || PRESETS.calm.copy}</p>
             </div>
             <div style={S.detailCard}>
-              <span style={S.metricLabel}>Summary (24h)</span>
+              <span style={S.metricLabel}>
+                Summary (24h)
+              </span>
               {bot.periodSummary ? (
                 <div style={S.detailRows}>
                   <span>Fills / closes: <strong>{bot.periodSummary.fills} / {bot.periodSummary.closes}</strong></span>
@@ -1325,18 +1550,23 @@ function BotCard({ bot, expanded, onToggle, onStart, onStop, onDelete }) {
                     <strong>{bot.periodSummary.realizedUsd.toFixed(4)} USD</strong>
                   </span>
                   <span>
-                    Net after fees (trust this):{' '}
+                    Net after fees:{' '}
                     <strong style={{
                       color: bot.periodSummary.netUsd >= 0 ? colors.long : colors.short,
                     }}>
                       {bot.periodSummary.netUsd.toFixed(4)} USD
                     </strong>
                   </span>
+                  {bot.venueLive?.trade_stats_error ? (
+                    <span style={{ fontSize: 11, color: colors.short }}>
+                      History: {String(bot.venueLive.trade_stats_error).slice(0, 120)}
+                    </span>
+                  ) : null}
                 </div>
               ) : (
                 <p style={S.detailCopy}>
-                  No journaled trades in the last 24h for this bot id.
-                  If the exchange shows fills, check Telegram/audit after restart — session stats above are process-local.
+                  No exchange fills in the last 24h for this account.
+                  Telegram still uses the bot audit journal (separate from this card).
                 </p>
               )}
             </div>
@@ -1349,7 +1579,7 @@ function BotCard({ bot, expanded, onToggle, onStart, onStop, onDelete }) {
             {isRunning ? (
               <button
                 type="button"
-                style={{ ...cartoonBtn('#E53935', '#C62828'), padding: '8px 16px', fontSize: 13, borderRadius: 10 }}
+                style={{ ...uiButton('danger'), minHeight: 36, padding: '8px 16px', fontSize: 13 }}
                 onClick={(e) => { e.stopPropagation(); onStop(bot.id); }}
               >
                 Stop Bot
@@ -1358,7 +1588,7 @@ function BotCard({ bot, expanded, onToggle, onStart, onStop, onDelete }) {
               <>
                 <button
                   type="button"
-                  style={{ ...cartoonBtn('#43A047', '#2E7D32'), padding: '8px 16px', fontSize: 13, borderRadius: 10 }}
+                  style={{ ...uiButton('primary'), minHeight: 36, padding: '8px 16px', fontSize: 13 }}
                   onClick={(e) => { e.stopPropagation(); onStart(bot.id); }}
                 >
                   Start Bot
@@ -1366,7 +1596,7 @@ function BotCard({ bot, expanded, onToggle, onStart, onStop, onDelete }) {
                 {canDelete && onDelete ? (
                   <button
                     type="button"
-                    style={{ ...cartoonBtn('#78909C', '#546E7A'), padding: '8px 16px', fontSize: 13, borderRadius: 10 }}
+                    style={{ ...uiButton('danger'), minHeight: 36, padding: '8px 16px', fontSize: 13 }}
                     onClick={(e) => { e.stopPropagation(); onDelete(bot.id); }}
                   >
                     Delete config
@@ -1474,9 +1704,13 @@ function BotsPanel({ onClose }) {
   const [runningInstances, setRunningInstances] = useState([]);
   const [runtimeById, setRuntimeById] = useState({});
   const [periodStats24h, setPeriodStats24h] = useState({});
+  /** Per-exchange positions + open orders from venue APIs (UI truth). */
+  const [venueLiveByExchange, setVenueLiveByExchange] = useState({});
   const [globalActiveOrders, setGlobalActiveOrders] = useState(0);
   const [selectedInstanceId, setSelectedInstanceId] = useState('');
   const [selectedExchangeId, setSelectedExchangeId] = useState('');
+  /** Checked funding venues for DCA (exactly two required to launch). */
+  const [dcaExchangeIds, setDcaExchangeIds] = useState([]);
   const [instancesLoading, setInstancesLoading] = useState(true);
   const [launching, setLaunching] = useState(false);
   const stepHeadingRef = useRef(null);
@@ -1536,7 +1770,7 @@ function BotsPanel({ onClose }) {
 
   const exchangeOptions = useMemo(() => getAvailableDexConfigs().map((dex) => {
     const instances = configuredInstances.filter((inst) => {
-      if (inst.kind !== 'symmetric_mm') return false;
+      if (inst.kind !== 'symmetric_mm' && inst.kind !== 'ping_pong') return false;
       return parseStrategyInstanceId(inst.id).exchanges.some(
         (exchange) => exchange.toLowerCase() === dex.id.toLowerCase(),
       );
@@ -1546,15 +1780,16 @@ function BotsPanel({ onClose }) {
     ) || null;
     const accountActive = accountActiveForExchange(syncedAccounts, dex.id);
     const setupSupported = supportsGameWalletSync(dex.id);
+    const launchable = instances.some((inst) => inst.kind === 'symmetric_mm' || inst.kind === 'ping_pong');
     return {
       dex,
       instances,
       syncedAccount,
       accountActive,
-      strategyAvailable: instances.length > 0 && (setupSupported || accountActive),
-      readyForLaunch: instances.length > 0 && accountActive,
+      strategyAvailable: launchable && (setupSupported || accountActive),
+      readyForLaunch: launchable && accountActive,
       setupSupported,
-      status: instances.length === 0
+      status: !launchable
         ? (syncedAccount ? 'CONNECTED' : 'UNAVAILABLE')
         : (!setupSupported && !accountActive) ? 'UNAVAILABLE' : accountActive ? 'READY' : 'NOT CONNECTED',
     };
@@ -1584,10 +1819,112 @@ function BotsPanel({ onClose }) {
     [exchangeOptions, selectedExchangeId],
   );
 
-  const selectedExchangeInstances = selectedExchangeOption?.instances || [];
+  const launchBotTypesForExchange = useMemo(() => {
+    const ids = selectedExchangeId === 'decibel'
+      ? ['symmetric_mm', 'ping_pong', 'dca']
+      : ['symmetric_mm', 'dca'];
+    return ids.map((id) => BOT_TYPES.find((bot) => bot.id === id)).filter(Boolean);
+  }, [selectedExchangeId]);
+
+  const dcaVenueOptions = useMemo(() => (
+    exchangeOptions.filter((option) => (
+      isDcaFundingExchange(option.dex.id) && option.accountActive
+    ))
+  ), [exchangeOptions]);
+
+  const dcaTenantId = useMemo(() => (
+    tenantIdFromStrategyIds([
+      ...configuredInstances.map((i) => i.id),
+      ...runningInstances.map((i) => i.id),
+    ]) || String(player?.id || player?.wallet || '').trim() || null
+  ), [configuredInstances, runningInstances, player?.id, player?.wallet]);
+
+  const dcaPairReady = selectedType === 'dca'
+    && dcaExchangeIds.length === 2
+    && dcaExchangeIds.every((ex) => accountActiveForExchange(syncedAccounts, ex));
+
+  const dcaMarginNeed = dcaLegMarginNeedUsd(tradeSize, DCA_DEFAULT_LEVERAGE);
+
+  const dcaDepositIssues = useMemo(() => {
+    if (selectedType !== 'dca' || dcaExchangeIds.length !== 2) return [];
+    const issues = [];
+    for (const ex of dcaExchangeIds) {
+      const bal = exchangeBalances[String(ex).toLowerCase()];
+      const free = freeMarginUsdFromBalance(bal);
+      if (free == null) {
+        issues.push(`${DEX_CONFIG[ex]?.label || ex}: balance unknown — refresh portfolio`);
+        continue;
+      }
+      if (free < dcaMarginNeed) {
+        issues.push(
+          `${DEX_CONFIG[ex]?.label || ex}: free ≈$${free.toFixed(2)} < ~$${dcaMarginNeed} needed per DCA leg`,
+        );
+      }
+    }
+    return issues;
+  }, [selectedType, dcaExchangeIds, exchangeBalances, dcaMarginNeed]);
+
+  const selectedExchangeInstances = useMemo(() => {
+    const all = selectedExchangeOption?.instances || [];
+    const kind = selectedType === 'ping_pong' ? 'ping_pong' : 'symmetric_mm';
+    // DCA uses dual-venue handles separately; market picker here is MM / ping-pong.
+    if (selectedType === 'dca') return all.filter((inst) => inst.kind === 'dca');
+    return all.filter((inst) => inst.kind === kind);
+  }, [selectedExchangeOption, selectedType]);
   const selectedSyncedAccount = syncedAccounts.find(
     (account) => account.exchange?.toLowerCase() === selectedExchangeId,
   ) || null;
+
+  // Build / clear DCA instance id from venue checkboxes.
+  useEffect(() => {
+    if (selectedType !== 'dca') return;
+    if (dcaExchangeIds.length !== 2 || !dcaTenantId) {
+      if (selectedInstanceId && parseStrategyInstanceId(selectedInstanceId).kind === 'dca') {
+        setSelectedInstanceId('');
+      }
+      return;
+    }
+    const nextId = buildDcaInstanceId(
+      dcaTenantId,
+      dcaExchangeIds[0],
+      dcaExchangeIds[1],
+      DCA_DEFAULT_SYMBOL,
+    );
+    if (nextId && nextId !== selectedInstanceId) {
+      setSelectedInstanceId(nextId);
+    }
+  }, [selectedType, dcaExchangeIds, dcaTenantId, selectedInstanceId]);
+
+  const toggleDcaExchange = useCallback((exchangeId) => {
+    const id = String(exchangeId || '').toLowerCase();
+    if (!isDcaFundingExchange(id)) return;
+    setDcaExchangeIds((prev) => {
+      if (prev.includes(id)) return prev.filter((x) => x !== id);
+      if (prev.length >= 2) return [prev[1], id];
+      return [...prev, id];
+    });
+  }, []);
+
+  // Keep market selection when switching Symmetric MM ↔ Ping-Pong on Decibel.
+  useEffect(() => {
+    if (!selectedExchangeId || selectedType === 'dca') return;
+    const wantKind = selectedType === 'ping_pong' ? 'ping_pong' : 'symmetric_mm';
+    if (selectedType === 'ping_pong' && selectedExchangeId !== 'decibel') {
+      setSelectedType('symmetric_mm');
+      return;
+    }
+    const current = selectedExchangeInstances.find((inst) => inst.id === selectedInstanceId);
+    if (current?.kind === wantKind) return;
+    const parsed = selectedInstanceId ? parseStrategyInstanceId(selectedInstanceId) : null;
+    const sym = String((parsed?.symbols || current?.symbols || [])[0] || '').toUpperCase();
+    const match = selectedExchangeInstances.find((inst) => (
+      inst.kind === wantKind
+      && (!sym || (inst.symbols || []).some((s) => String(s).toUpperCase() === sym))
+    )) || selectedExchangeInstances[0];
+    if (match?.id && match.id !== selectedInstanceId) {
+      setSelectedInstanceId(match.id);
+    }
+  }, [selectedType, selectedExchangeId, selectedExchangeInstances, selectedInstanceId]);
 
   const decibelMetaBySymbol = useMemo(() => {
     const map = {};
@@ -1664,16 +2001,19 @@ function BotsPanel({ onClose }) {
     setSelectedExchangeId(exchangeId);
     setNewAccExchange(exchangeId);
     let instanceId = '';
-    if (option.instances.length === 1) {
-      instanceId = option.instances[0].id;
+    const mmInstances = option.instances.filter((inst) => inst.kind === 'symmetric_mm');
+    const prefer = mmInstances.length > 0 ? mmInstances : option.instances;
+    if (prefer.length === 1) {
+      instanceId = prefer[0].id;
     } else if (exchangeId === 'decibel') {
-      // Prefer BTC as recommended default among whitelist markets.
-      const btc = option.instances.find((inst) => (
+      // Prefer BTC Symmetric MM as recommended default among whitelist markets.
+      const btc = prefer.find((inst) => (
         (inst.symbols || []).some((s) => String(s).toUpperCase() === 'BTC-USD')
       ));
-      instanceId = btc?.id || option.instances[0]?.id || '';
+      instanceId = btc?.id || prefer[0]?.id || '';
     }
     setSelectedInstanceId(instanceId);
+    setSelectedType('symmetric_mm');
     const details = getBotConfigDetails(instanceId || exchangeId);
     const presetId = details.preset || 'calm';
     setPreset(presetId);
@@ -1740,6 +2080,7 @@ function BotsPanel({ onClose }) {
       exchangeBalances,
       orderHistory,
       periodStats24h,
+      venueLiveByExchange,
     ));
   }, [
     configuredInstances,
@@ -1750,6 +2091,7 @@ function BotsPanel({ onClose }) {
     exchangeBalances,
     orderHistory,
     periodStats24h,
+    venueLiveByExchange,
   ]);
 
   const activeCount = bots.filter((bot) => bot.status === 'Running' || bot.status === 'Paused').length;
@@ -1781,12 +2123,67 @@ function BotsPanel({ onClose }) {
     });
   }, [preset, selectedFreeMarginUsd, selectedExchangeId, calmTargetVolumeUsd]);
 
-  const liveCostPer1M = useMemo(() => {
-    if (costPer1MUsd != null && Number.isFinite(costPer1MUsd) && volume24hUsd > 0) {
-      return costPer1MUsd;
+  // Trade Size slider max = real dual-leg ceiling at equity leverage curve
+  // (more deposit → lower lev → honest max the bot can run without lev/quota errors).
+  const tradeSizeSliderMax = useMemo(() => {
+    const v = venuePlanDefaults(selectedExchangeId);
+    const minOrder = Math.max(5, Number(v.minOrderUsd) || 5);
+    const absMax = calmOrderSizeAbsMax(selectedExchangeId);
+    const avail = selectedFreeMarginUsd;
+    if (avail == null || !Number.isFinite(Number(avail))) {
+      // Balance unknown — soft abs only (not the old hard $500 UI wall).
+      return absMax;
     }
-    return observedCostPer1M(volume24hUsd, mockPnl);
-  }, [costPer1MUsd, volume24hUsd, mockPnl]);
+    const fromBal = maxSafeTradeSizeUsd(avail, selectedExchangeId);
+    if (fromBal >= minOrder) return fromBal;
+    // Known but too small for dual-leg — don't advertise a fake $5k ceiling.
+    return minOrder;
+  }, [selectedExchangeId, selectedFreeMarginUsd]);
+
+  const maxPositionSliderMax = useMemo(() => {
+    return Math.max(5000, tradeSizeSliderMax * 3);
+  }, [tradeSizeSliderMax]);
+
+  const tradeSizeSliderMin = useMemo(() => {
+    const v = venuePlanDefaults(selectedExchangeId);
+    return Math.max(5, Number(v.minOrderUsd) || 5);
+  }, [selectedExchangeId]);
+
+  useEffect(() => {
+    if (preset !== 'calm') return;
+    setTradeSize((prev) => {
+      const n = Number(prev) || 0;
+      if (n > tradeSizeSliderMax) return tradeSizeSliderMax;
+      if (n > 0 && n < tradeSizeSliderMin) return tradeSizeSliderMin;
+      return prev;
+    });
+    setMaxPosition((prev) => {
+      const n = Number(prev) || 0;
+      if (n > maxPositionSliderMax) return maxPositionSliderMax;
+      return prev;
+    });
+  }, [preset, tradeSizeSliderMax, tradeSizeSliderMin, maxPositionSliderMax]);
+
+  // Cost/$1M = trading fees per $1M notional (same basis as SUMMARY fee bps).
+  // Prefer venue/bot 24h period rollups; never |net PnL| / volume.
+  const liveCostPer1M = useMemo(() => {
+    let fees = 0;
+    let vol = 0;
+    for (const bot of bots) {
+      const s = bot.periodSummary;
+      if (!s) continue;
+      const v = Number(s.volumeUsd);
+      const f = Number(s.feesUsd);
+      if (Number.isFinite(v) && v > 0) vol += v;
+      if (Number.isFinite(f) && f >= 0) fees += f;
+    }
+    const fromPeriod = feeCostPer1M(vol, fees);
+    if (fromPeriod != null) return fromPeriod;
+    if (costPer1MUsd != null && Number.isFinite(costPer1MUsd) && volume24hUsd > 0) {
+      return Math.abs(costPer1MUsd);
+    }
+    return null;
+  }, [bots, costPer1MUsd, volume24hUsd]);
 
   const applyAggressiveVolume = useCallback((volumeUsd, exchangeId = selectedExchangeId) => {
     const plan = planAggressiveVolume({
@@ -1824,6 +2221,7 @@ function BotsPanel({ onClose }) {
     setPreset('calm');
     setSelectedInstanceId('');
     setSelectedExchangeId('');
+    setDcaExchangeIds([]);
   }, []);
 
   const openLaunch = useCallback(() => {
@@ -1845,20 +2243,6 @@ function BotsPanel({ onClose }) {
 
   const applyPortfolioPayload = useCallback((data) => {
     if (!data) return;
-    const balanceSnapshots = (data.exchanges || []).flatMap((row) => {
-      const equity = parseDecimalField(row.balance?.equity_usd);
-      const available = parseDecimalField(row.balance?.available_margin_usd);
-      if (equity == null && available == null) return [];
-      return [{
-        dex: row.exchange,
-        balance_usd: equity ?? available,
-        available_usd: available,
-        source: 'mm_bot_portfolio',
-      }];
-    });
-    if (balanceSnapshots.length) {
-      reportExchangeBalanceSnapshots(balanceSnapshots, { token });
-    }
     setExchangeBalances((prev) => {
       const map = { ...prev };
       for (const row of data.exchanges || []) {
@@ -1919,7 +2303,7 @@ function BotsPanel({ onClose }) {
     if (cost != null && Number.isFinite(cost)) {
       setCostPer1MUsd(cost);
     }
-  }, [token]);
+  }, []);
 
   const fetchExchangeBalanceFallback = useCallback(async (exchanges) => {
     if (!token || !Array.isArray(exchanges) || exchanges.length === 0) return;
@@ -1981,18 +2365,6 @@ function BotsPanel({ onClose }) {
       if (row.equity != null) totalEquity += row.equity;
     }
     if (Object.keys(map).length === 0) return;
-    const balanceSnapshots = Object.entries(map).flatMap(([ex, row]) => {
-      if (row.equity == null && row.available == null) return [];
-      return [{
-        dex: ex,
-        balance_usd: row.equity ?? row.available,
-        available_usd: row.available,
-        source: 'mm_bot_balance_fallback',
-      }];
-    });
-    if (balanceSnapshots.length) {
-      reportExchangeBalanceSnapshots(balanceSnapshots, { token });
-    }
     setExchangeBalances((prev) => {
       const next = { ...prev };
       for (const [ex, incoming] of Object.entries(map)) {
@@ -2737,23 +3109,72 @@ function BotsPanel({ onClose }) {
         runtime = {},
         overrides = {},
         period_stats_24h: periodStats = {},
+        kpi_24h: kpi24h = null,
         active_orders: activeOrders = 0,
+        venue_live: venueLive = null,
       } = res.data;
       setConfiguredInstances(configured);
       setRunningInstances(running);
       setRuntimeById(runtime || {});
       setPeriodStats24h(periodStats || {});
       setOverridesById(overrides || {});
-      setGlobalActiveOrders(Number(activeOrders) || 0);
+      // Prefer venue open-order sum for header when available.
+      const venueOrderSum = venueLive
+        ? Object.values(venueLive).reduce((acc, row) => acc + (Number(row?.open_orders_count) || 0), 0)
+        : null;
+      setGlobalActiveOrders(
+        venueOrderSum != null ? venueOrderSum : (Number(activeOrders) || 0),
+      );
+      if (venueLive && typeof venueLive === 'object') {
+        const mapped = {};
+        Object.entries(venueLive).forEach(([ex, row]) => {
+          mapped[String(ex).toLowerCase()] = row;
+        });
+        setVenueLiveByExchange(mapped);
+      }
+      // Header Vol / Net: prefer summed venue trade_stats_24h; audit kpi is fallback.
+      const venueStatRows = venueLive
+        ? Object.values(venueLive).map((row) => row?.trade_stats_24h).filter(Boolean)
+        : [];
+      if (venueStatRows.length > 0) {
+        let vol = 0;
+        let realized = 0;
+        let fees = 0;
+        venueStatRows.forEach((s) => {
+          vol += Number(s.volume_usd) || 0;
+          realized += Number(s.realized_pnl_usd) || 0;
+          fees += Number(s.fees_usd) || 0;
+        });
+        const net = realized - fees;
+        if (Number.isFinite(vol) && vol >= 0) setVolume24hUsd(vol);
+        if (Number.isFinite(net)) {
+          setPortfolioPnl(net);
+          setTotalPnl(net);
+        }
+      } else if (kpi24h) {
+        const vol = Number(kpi24h.volume_usd);
+        const net = Number(kpi24h.net_after_fees_usd);
+        if (Number.isFinite(vol) && vol >= 0) setVolume24hUsd(vol);
+        if (Number.isFinite(net)) {
+          setPortfolioPnl(net);
+          setTotalPnl(net);
+        }
+      }
       if (res.data.exchange_balances) {
-        // Balance snapshots have equity/available only — do NOT hardcode
-        // unrealized=0 (that wiped live portfolio uPnL every 5s).
-        applyPortfolioPayload({
-          exchanges: (res.data.exchange_balances.exchanges || []).map((row) => ({
+        // Merge balances; unrealized preferably from venue_live positions.
+        const balExchanges = (res.data.exchange_balances.exchanges || []).map((row) => {
+          const ex = String(row.exchange || '').toLowerCase();
+          const live = venueLive?.[ex] || venueLive?.[row.exchange];
+          const upnl = live != null ? live.unrealized_pnl_usd : undefined;
+          return {
             exchange: row.exchange,
             balance: row.balance,
             balance_error: row.balance_error,
-          })),
+            unrealized_pnl_usd: upnl,
+          };
+        });
+        applyPortfolioPayload({
+          exchanges: balExchanges,
           total_equity_usd: res.data.exchange_balances.total_equity_usd,
           total_available_usd: res.data.exchange_balances.total_available_usd,
         });
@@ -2896,6 +3317,18 @@ function BotsPanel({ onClose }) {
       setLaunching(false);
       return;
     }
+    if (selectedType === 'dca' || parsed.kind === 'dca') {
+      if (parsed.exchanges.length !== 2) {
+        setNotice('DCA needs exactly two funding venues checked (Hyperliquid, Pacifica, or Decibel).');
+        setLaunching(false);
+        return;
+      }
+      if (dcaDepositIssues.length > 0) {
+        setNotice(`Deposit too low for DCA — ${dcaDepositIssues.join('; ')}`);
+        setLaunching(false);
+        return;
+      }
+    }
     if (parsed.exchanges.some((ex) => ex.toLowerCase() === 'nado')) {
       const size = Number(tradeSize) || 0;
       const avail = selectedFreeMarginUsd;
@@ -2903,7 +3336,7 @@ function BotsPanel({ onClose }) {
       if (size > 0 && size < NADO_MIN_ORDER_USD) {
         setNotice(
           `Nado minimum order is $${NADO_MIN_ORDER_USD} notional (venue floor, not a quota). `
-          + `Raise Margin to ≥$${NADO_MIN_ORDER_USD} before Launch.`
+          + `Raise Trade Size to ≥$${NADO_MIN_ORDER_USD} before Launch.`
           + (avail != null && avail < need
             ? ` Your free ≈$${Number(avail).toFixed(2)} also needs ≥~$${need} for dual-sided quotes.`
             : ''),
@@ -2985,7 +3418,7 @@ function BotsPanel({ onClose }) {
       if (res?.data?.status !== 'started') {
         const errText = formatApiError(res?.error);
         const marginHint = /margin|insufficient|balance|clearinghouse/i.test(errText)
-          ? ' Lower Margin and Launch again — same market replaces params (does not clone a second bot).'
+          ? ' Lower Trade size and Launch again — same market replaces params (does not clone a second bot).'
           : '';
         setNotice(`Launch failed: ${errText}.${marginHint}`);
         return;
@@ -2999,8 +3432,8 @@ function BotsPanel({ onClose }) {
 
       const cfgNote = cfgRes?.data?.updated
         ? (preset === 'aggressive'
-          ? ` Config: ${formatVolumeUsd(dailyVolumeUsd)}/day target → $${tradeSize} margin @ ~${aggressivePlan?.avgLeverage || '?'}×, ~$${Math.round(aggressivePlan?.costPer1MUsd || 0)}/$1M.`
-          : ` Config: $${tradeSize} margin, spread ${spreadBps} bps.`)
+          ? ` Config: ${formatVolumeUsd(dailyVolumeUsd)}/day target → $${tradeSize} trade @ ~${aggressivePlan?.avgLeverage || '?'}×, ~$${Math.round(aggressivePlan?.costPer1MUsd || 0)}/$1M.`
+          : ` Config: $${tradeSize} trade, spread ${spreadBps} bps.`)
         : '';
       setNotice(`Launched ${getBotType(selectedType).name} on ${getExchangeName(selectedInstanceId)} successfully!${cfgNote}${evictNote}`);
       appendHistory('Strategy started', getExchangeName(selectedInstanceId), getBotType(selectedType).name);
@@ -3016,7 +3449,7 @@ function BotsPanel({ onClose }) {
     } finally {
       setLaunching(false);
     }
-  }, [launching, selectedInstanceId, token, tradeSize, maxPosition, dailyVolumeUsd, aggressivePlan, preset, selectedType, fetchInstances, fetchOrderHistory, resetLaunch, syncedAccounts, appendHistory, authorizeGrvtBuilder, evmWallet, resolveEvmWallet, selectedFreeMarginUsd]);
+  }, [launching, selectedInstanceId, token, tradeSize, maxPosition, dailyVolumeUsd, aggressivePlan, preset, selectedType, fetchInstances, fetchOrderHistory, resetLaunch, syncedAccounts, appendHistory, authorizeGrvtBuilder, evmWallet, resolveEvmWallet, selectedFreeMarginUsd, dcaDepositIssues]);
 
   // Real-time WebSocket updates via Clash game backend mediator
   const [wsConnected, setWsConnected] = useState(false);
@@ -3232,8 +3665,8 @@ function BotsPanel({ onClose }) {
             History
           </button>
         </div>
-        <button type="button" style={{ ...cartoonBtn('#43A047', '#2E7D32'), ...S.launchButton }} onClick={openLaunch}>
-          <RobotGlyph size={22} color="#fff" />
+        <button type="button" style={{ ...uiButton('primary'), ...S.launchButton }} onClick={openLaunch}>
+          <RobotGlyph size={22} color="var(--terminal-surface)" />
           Launch New Bot
         </button>
       </div>
@@ -3296,10 +3729,10 @@ function BotsPanel({ onClose }) {
         </section>
       ) : (
         <div style={S.emptyLaunchState}>
-          <div style={S.emptyLaunchIcon}><RobotGlyph size={40} color="#5C3A21" /></div>
+          <div style={S.emptyLaunchIcon}><RobotGlyph size={40} color="var(--terminal-text)" /></div>
           <h3 style={S.emptyLaunchTitle}>Launch your first market maker</h3>
           <p className="bots-empty-copy" style={S.emptyLaunchCopy}>Choose an exchange, set your limits, and your bot will appear here.</p>
-          <button type="button" style={{ ...cartoonBtn('#43A047', '#2E7D32'), ...S.emptyLaunchButton }} onClick={openLaunch}>
+          <button type="button" style={{ ...uiButton('primary'), ...S.emptyLaunchButton }} onClick={openLaunch}>
             Launch New Bot
           </button>
         </div>
@@ -3344,8 +3777,8 @@ function BotsPanel({ onClose }) {
             History
           </button>
         </div>
-        <button type="button" style={{ ...cartoonBtn('#43A047', '#2E7D32'), ...S.launchButton }} onClick={openLaunch}>
-          <RobotGlyph size={22} color="#fff" />
+        <button type="button" style={{ ...uiButton('primary'), ...S.launchButton }} onClick={openLaunch}>
+          <RobotGlyph size={22} color="var(--terminal-surface)" />
           Launch New Bot
         </button>
       </div>
@@ -3409,8 +3842,8 @@ function BotsPanel({ onClose }) {
               History
             </button>
           </div>
-          <button type="button" style={{ ...cartoonBtn('#43A047', '#2E7D32'), ...S.launchButton }} onClick={openLaunch}>
-            <RobotGlyph size={22} color="#fff" />
+          <button type="button" style={{ ...uiButton('primary'), ...S.launchButton }} onClick={openLaunch}>
+            <RobotGlyph size={22} color="var(--terminal-surface)" />
             Launch New Bot
           </button>
         </div>
@@ -3452,13 +3885,13 @@ function BotsPanel({ onClose }) {
                 key={dex.id}
                 style={{
                   ...S.accountExchangeCard,
-                  borderLeftColor: dex.borderColor || '#BBA882',
+                  borderLeftColor: dex.borderColor || 'var(--terminal-border-strong)',
                   ...(selected ? {
                     ...S.accountExchangeCardActive,
-                    borderTopColor: dex.borderColor || '#1E88E5',
-                    borderRightColor: dex.borderColor || '#1E88E5',
-                    borderBottomColor: dex.borderColor || '#1E88E5',
-                    borderLeftColor: dex.borderColor || '#1E88E5',
+                    borderTopColor: dex.borderColor || 'var(--terminal-info)',
+                    borderRightColor: dex.borderColor || 'var(--terminal-info)',
+                    borderBottomColor: dex.borderColor || 'var(--terminal-info)',
+                    borderLeftColor: dex.borderColor || 'var(--terminal-info)',
                   } : {}),
                 }}
               >
@@ -3489,7 +3922,7 @@ function BotsPanel({ onClose }) {
                         setNewAccExchange(dex.id);
                         connectGameWalletAccount(dex.id);
                       }}
-                      style={{ ...cartoonBtn('#43A047', '#2E7D32'), ...S.accountActionButton }}
+                      style={{ ...uiButton('primary'), ...S.accountActionButton }}
                     >
                       Connect
                     </button>
@@ -3499,7 +3932,7 @@ function BotsPanel({ onClose }) {
                       type="button"
                       disabled={gameAuthBusy}
                       onClick={() => reconnectGameWalletAccount(dex.id)}
-                      style={{ ...cartoonBtn('#1E88E5', '#1565C0'), ...S.accountActionButton }}
+                      style={{ ...uiButton('secondary'), ...S.accountActionButton }}
                     >
                       Reconnect
                     </button>
@@ -3510,7 +3943,7 @@ function BotsPanel({ onClose }) {
                       disabled={gameAuthBusy}
                       onClick={() => toggleExchangeActive(dex.id, !active)}
                       style={{
-                        ...cartoonBtn(active ? '#8D6E63' : '#43A047', active ? '#6D4C41' : '#2E7D32'),
+                        ...uiButton(active ? 'secondary' : 'primary'),
                         ...S.accountActionButton,
                       }}
                     >
@@ -3521,7 +3954,7 @@ function BotsPanel({ onClose }) {
                     type="button"
                     disabled={!syncedAccount || gameAuthProbing === dex.id}
                     onClick={() => testGameExchangeBalance(dex.id)}
-                    style={{ ...cartoonBtn('#F9A825', '#F57F17'), ...S.accountActionButton }}
+                    style={{ ...uiButton('secondary'), ...S.accountActionButton }}
                   >
                     {gameAuthProbing === dex.id ? '...' : 'Balance'}
                   </button>
@@ -3532,7 +3965,7 @@ function BotsPanel({ onClose }) {
         </div>
 
         {selectedAccountOption && (
-          <div style={{ ...S.inlineConnectionCard, borderLeftColor: selectedAccountOption.dex.borderColor || '#BBA882' }}>
+          <div style={{ ...S.inlineConnectionCard, borderLeftColor: selectedAccountOption.dex.borderColor || 'var(--terminal-border-strong)' }}>
             <div style={S.inlineConnectionHeader}>
               <ExchangeMark exchangeId={selectedAccountOption.dex.id} size={40} />
               <div style={S.exchangeTriggerText}>
@@ -3598,7 +4031,7 @@ function BotsPanel({ onClose }) {
                           type="button"
                           disabled={gameAuthBusy || !hotstuffAgentInput.trim()}
                           onClick={completeHotstuffAndSync}
-                          style={{ ...cartoonBtn('#5D4037', '#3E2723'), fontSize: 11, padding: '5px 8px', flexShrink: 0 }}
+                          style={{ ...uiButton('primary'), minHeight: 32, fontSize: 11, padding: '5px 8px', flexShrink: 0 }}
                         >
                           Save + Sync
                         </button>
@@ -3610,7 +4043,7 @@ function BotsPanel({ onClose }) {
                           type="button"
                           disabled={gameAuthBusy || !evmWallet?.isReady}
                           onClick={() => connectGameWalletAccount('avantis')}
-                          style={{ ...cartoonBtn('#7B1FA2', '#6A1B9A'), fontSize: 11, padding: '6px 8px', width: '100%' }}
+                          style={{ ...uiButton('primary'), minHeight: 34, fontSize: 11, padding: '6px 8px', width: '100%' }}
                         >
                           Smart Wallet + Sync
                         </button>
@@ -3635,7 +4068,7 @@ function BotsPanel({ onClose }) {
                               type="button"
                               disabled={gameAuthBusy || !avantisDelegateInput.trim()}
                               onClick={completeAvantisAndSync}
-                              style={{ ...cartoonBtn('#00897B', '#00695C'), fontSize: 11, padding: '5px 8px', flexShrink: 0 }}
+                              style={{ ...uiButton('primary'), minHeight: 32, fontSize: 11, padding: '5px 8px', flexShrink: 0 }}
                             >
                               Save + Sync
                             </button>
@@ -3651,7 +4084,7 @@ function BotsPanel({ onClose }) {
                               type="button"
                               disabled={gameAuthBusy || !evmWallet?.isReady}
                               onClick={() => connectGameWalletAccount('ostium')}
-                              style={{ ...cartoonBtn('#1565C0', '#0D47A1'), fontSize: 11, padding: '6px 8px', width: '100%' }}
+                              style={{ ...uiButton('primary'), minHeight: 34, fontSize: 11, padding: '6px 8px', width: '100%' }}
                             >
                               One tap + Sync
                             </button>
@@ -3676,7 +4109,7 @@ function BotsPanel({ onClose }) {
                                   type="button"
                                   disabled={gameAuthBusy || !ostiumDelegateInput.trim()}
                                   onClick={completeOstiumAndSync}
-                                  style={{ ...cartoonBtn('#00897B', '#00695C'), fontSize: 11, padding: '5px 8px', flexShrink: 0 }}
+                                  style={{ ...uiButton('primary'), minHeight: 32, fontSize: 11, padding: '5px 8px', flexShrink: 0 }}
                                 >
                                   Save + Sync
                                 </button>
@@ -3686,7 +4119,7 @@ function BotsPanel({ onClose }) {
                         )}
                         {row.synced && (
                           <>
-                            <div style={{ fontSize: 10, opacity: 0.85, lineHeight: 1.35, color: '#166534' }}>
+                            <div style={{ fontSize: 10, opacity: 0.85, lineHeight: 1.35, color: 'var(--terminal-long-strong)' }}>
                               Ostium synced — bot signs with browser delegate (trader USDC stays in your wallet).
                               If place_order fails with «insufficient funds for gas», the one-tap
                               delegate needs ETH — click Top up (MetaMask pays). USDC stays on your trader.
@@ -3695,7 +4128,7 @@ function BotsPanel({ onClose }) {
                               type="button"
                               disabled={gameAuthBusy || !evmWallet?.isReady}
                               onClick={topUpOstiumGasClick}
-                              style={{ ...cartoonBtn('#EF6C00', '#E65100'), fontSize: 11, padding: '6px 8px', width: '100%' }}
+                              style={{ ...uiButton('warning'), minHeight: 34, fontSize: 11, padding: '6px 8px', width: '100%' }}
                               title="MetaMask sends ~0.0003 ETH to the Ostium one-tap delegate"
                             >
                               Top up one-tap gas
@@ -3704,7 +4137,7 @@ function BotsPanel({ onClose }) {
                               type="button"
                               disabled={gameAuthBusy || !evmWallet?.isReady}
                               onClick={() => connectGameWalletAccount('ostium')}
-                              style={{ ...cartoonBtn('#1565C0', '#0D47A1'), fontSize: 11, padding: '6px 8px', width: '100%' }}
+                              style={{ ...uiButton('primary'), minHeight: 34, fontSize: 11, padding: '6px 8px', width: '100%' }}
                             >
                               Re-run One tap + Sync
                             </button>
@@ -3751,7 +4184,7 @@ function BotsPanel({ onClose }) {
                             type="button"
                             disabled={gameAuthBusy || !hibachiApiKeyInput.trim() || !hibachiAccountIdInput.trim() || !hibachiPrivateKeyInput.trim()}
                             onClick={completeHibachiAndSync}
-                            style={{ ...cartoonBtn('#C62828', '#B71C1C'), fontSize: 11, padding: '5px 8px', flexShrink: 0 }}
+                            style={{ ...uiButton('primary'), minHeight: 32, fontSize: 11, padding: '5px 8px', flexShrink: 0 }}
                           >
                             Save + Sync
                           </button>
@@ -3773,7 +4206,7 @@ function BotsPanel({ onClose }) {
                           type="button"
                           disabled={gameAuthBusy || !risexSessionInput.trim()}
                           onClick={completeRisexAndSync}
-                          style={{ ...cartoonBtn('#6A1B9A', '#4A148C'), fontSize: 11, padding: '5px 8px', flexShrink: 0 }}
+                          style={{ ...uiButton('primary'), minHeight: 32, fontSize: 11, padding: '5px 8px', flexShrink: 0 }}
                         >
                           Save + Sync
                         </button>
@@ -3828,7 +4261,7 @@ function BotsPanel({ onClose }) {
                                 type="button"
                                 disabled={gameAuthBusy || !katanaApiKeyInput.trim() || !katanaApiSecretInput.trim() || !katanaOneTapInput.trim()}
                                 onClick={completeKatanaFullAndSync}
-                                style={{ ...cartoonBtn('#E65100', '#BF360C'), fontSize: 11, padding: '5px 8px', flexShrink: 0 }}
+                                style={{ ...uiButton('primary'), minHeight: 32, fontSize: 11, padding: '5px 8px', flexShrink: 0 }}
                               >
                                 Save + Sync
                               </button>
@@ -3852,7 +4285,7 @@ function BotsPanel({ onClose }) {
                           type="button"
                           disabled={gameAuthBusy || !nadoLinkedInput.trim()}
                           onClick={completeNadoAndSync}
-                          style={{ ...cartoonBtn('#0277BD', '#01579B'), fontSize: 11, padding: '5px 8px', flexShrink: 0 }}
+                          style={{ ...uiButton('primary'), minHeight: 32, fontSize: 11, padding: '5px 8px', flexShrink: 0 }}
                         >
                           Save + Sync
                         </button>
@@ -3873,7 +4306,7 @@ function BotsPanel({ onClose }) {
                           type="button"
                           disabled={gameAuthBusy || !phoenixSecretInput.trim()}
                           onClick={completePhoenixAndSync}
-                          style={{ ...cartoonBtn('#AD1457', '#880E4F'), fontSize: 11, padding: '5px 8px', flexShrink: 0 }}
+                          style={{ ...uiButton('primary'), minHeight: 32, fontSize: 11, padding: '5px 8px', flexShrink: 0 }}
                         >
                           Save + Sync
                         </button>
@@ -3900,7 +4333,7 @@ function BotsPanel({ onClose }) {
                         type="button"
                         disabled={gameAuthBusy}
                         onClick={authorizeGrvtBuilderClick}
-                        style={{ ...cartoonBtn('#7B1FA2', '#6A1B9A'), fontSize: 11, padding: '5px 8px', marginTop: 6, width: '100%' }}
+                        style={{ ...uiButton('primary'), minHeight: 32, fontSize: 11, padding: '5px 8px', marginTop: 6, width: '100%' }}
                       >
                         Retry builder authorization
                       </button>
@@ -3911,7 +4344,7 @@ function BotsPanel({ onClose }) {
                         type="button"
                         disabled={gameAuthBusy}
                         onClick={() => connectGameWalletAccount(row.exchange)}
-                        style={{ ...cartoonBtn('#43A047', '#2E7D32'), fontSize: 11, padding: '5px 8px' }}
+                        style={{ ...uiButton('primary'), minHeight: 32, fontSize: 11, padding: '5px 8px' }}
                       >
                         {(row.ready && !row.synced) || (row.partial && (row.exchange === 'grvt' || row.exchange === 'katana'))
                           ? 'Connect bot'
@@ -3923,7 +4356,7 @@ function BotsPanel({ onClose }) {
                           type="button"
                           disabled={gameAuthBusy}
                           onClick={() => toggleExchangeActive(row.exchange, true)}
-                          style={{ ...cartoonBtn('#43A047', '#2E7D32'), fontSize: 11, padding: '5px 8px' }}
+                          style={{ ...uiButton('primary'), minHeight: 32, fontSize: 11, padding: '5px 8px' }}
                         >
                           Enable
                         </button>
@@ -3933,7 +4366,7 @@ function BotsPanel({ onClose }) {
                           type="button"
                           disabled={gameAuthBusy}
                           onClick={() => reconnectGameWalletAccount(row.exchange)}
-                          style={{ ...cartoonBtn('#1E88E5', '#1565C0'), fontSize: 11, padding: '5px 8px' }}
+                          style={{ ...uiButton('secondary'), minHeight: 32, fontSize: 11, padding: '5px 8px' }}
                           title="Clear Phantom cache and re-sync credentials from the game"
                         >
                           Reconnect
@@ -3943,7 +4376,7 @@ function BotsPanel({ onClose }) {
                         type="button"
                         disabled={!(row.synced || syncedAccount) || gameAuthProbing === row.exchange}
                         onClick={() => testGameExchangeBalance(row.exchange)}
-                        style={{ ...cartoonBtn('#F9A825', '#F57F17'), fontSize: 11, padding: '5px 8px' }}
+                        style={{ ...uiButton('secondary'), minHeight: 32, fontSize: 11, padding: '5px 8px' }}
                       >
                         {gameAuthProbing === row.exchange ? '…' : 'Balance'}
                       </button>
@@ -4012,7 +4445,7 @@ function BotsPanel({ onClose }) {
             type="button"
             disabled={gameAuthBusy || !newAccPrivateKey.trim()}
             onClick={addAccount}
-            style={{ ...cartoonBtn('#43A047', '#2E7D32'), marginTop: 12, width: '100%', py: 2, borderRadius: 12 }}
+            style={{ ...uiButton('primary'), marginTop: 12, width: '100%' }}
           >
             Connect & Sync Account
           </button>
@@ -4056,7 +4489,7 @@ function BotsPanel({ onClose }) {
             <div id="bot-exchange-status" style={S.exchangeStatus} aria-live="polite">
               {selectedExchangeOption ? (
                 <>
-                  <span style={{ ...S.exchangeStatusDot, background: selectedExchangeOption.readyForLaunch ? '#43A047' : '#A3906A' }} />
+                  <span style={{ ...S.exchangeStatusDot, background: selectedExchangeOption.readyForLaunch ? 'var(--terminal-long)' : 'var(--terminal-text-muted)' }} />
                   <span>
                     <strong>{selectedExchangeOption.dex.label}</strong>
                     {' · '}{selectedExchangeOption.dex.description}
@@ -4068,7 +4501,7 @@ function BotsPanel({ onClose }) {
             </div>
           </div>
           {selectedExchangeOption?.strategyAvailable && selectedExchangeOption.setupSupported && (
-            <div style={{ ...S.inlineConnectionCard, borderLeftColor: selectedExchangeOption.dex.borderColor || '#BBA882' }}>
+            <div style={{ ...S.inlineConnectionCard, borderLeftColor: selectedExchangeOption.dex.borderColor || 'var(--terminal-border-strong)' }}>
               <div style={S.inlineConnectionHeader}>
                 <ExchangeMark exchangeId={selectedExchangeOption.dex.id} size={40} />
                 <div style={S.exchangeTriggerText}>
@@ -4087,7 +4520,7 @@ function BotsPanel({ onClose }) {
             className="bots-focusable"
             disabled={!selectedExchangeOption?.readyForLaunch}
             style={{
-              ...cartoonBtn(selectedExchangeOption?.readyForLaunch ? '#1E88E5' : '#A3906A', selectedExchangeOption?.readyForLaunch ? '#1565C0' : '#8C7D5C'),
+              ...uiButton('primary'),
               ...S.nextButton,
               ...(!selectedExchangeOption?.readyForLaunch ? S.disabledButton : {}),
             }}
@@ -4102,10 +4535,18 @@ function BotsPanel({ onClose }) {
         <div className="bots-step-page" style={S.stepPage}>
           <div>
             <h2 ref={stepHeadingRef} tabIndex={-1} style={S.stepTitle}>Choose Strategy</h2>
-            <p style={S.stepCopy}>Pick how the bot manages quotes and market exposure.</p>
+            <p style={S.stepCopy}>
+              Pick how the bot manages quotes and market exposure.
+              {selectedExchangeId === 'decibel'
+                ? ' Ping-Pong is available on Decibel: open → random hold → close.'
+                : ''}
+
+              {dcaVenueOptions.length >= 2
+                ? ' DCA: on the next step check two funding venues to hedge between.'
+                : ' DCA needs two connected funding venues (Hyperliquid, Pacifica, Decibel).'}</p>
           </div>
           <div style={S.strategyGrid}>
-            {LAUNCH_BOT_TYPES.map((bot) => {
+            {launchBotTypesForExchange.map((bot) => {
               const active = selectedType === bot.id;
               return (
                 <button
@@ -4120,7 +4561,7 @@ function BotsPanel({ onClose }) {
                   onClick={() => setSelectedType(bot.id)}
                 >
                   <div style={{ ...S.botAvatar, background: `linear-gradient(180deg, ${bot.accent} 0%, ${bot.accentDark} 100%)` }}>
-                    <RobotGlyph size={28} color="#fff" />
+                    <RobotGlyph size={28} color="var(--terminal-surface)" />
                   </div>
                   <div style={S.strategyText}>
                     <div style={S.strategyTitleRow}>
@@ -4135,7 +4576,7 @@ function BotsPanel({ onClose }) {
           <button
             type="button"
             className="bots-focusable"
-            style={{ ...cartoonBtn('#1E88E5', '#1565C0'), ...S.nextButton }}
+            style={{ ...uiButton('primary'), ...S.nextButton }}
             onClick={() => setStep('settings')}
           >
             Continue to Settings
@@ -4148,15 +4589,79 @@ function BotsPanel({ onClose }) {
           <div>
             <h2 ref={stepHeadingRef} tabIndex={-1} style={S.stepTitle}>Bot Settings</h2>
             <p style={S.stepCopy}>
-              {preset === 'aggressive'
+              {selectedType === 'ping_pong'
+                ? 'Ping-Pong opens a market order, holds 1–20s (random), closes, then waits 1–20s before the next open. Set Trade Size for notional per leg.'
+                : preset === 'aggressive'
                 ? 'Pick Aggressive, set daily volume — we estimate deposit, leverage, and cost per $1M.'
-                : 'Calm: we set Margin / Max Position from your free balance. Default target $100k/day — if balance is too small we show the safe volume and deposit needed.'}
+                : 'Calm: we size Trade Size / Max Position from your free margin. Default target $100k/day — if balance is too small we show the safe volume and deposit needed.'}
               {selectedExchangeId === 'nado'
                 ? ` Nado floor: $${NADO_MIN_ORDER_USD} notional per order (venue minimum — not an API quota). Dual-sided MM needs ~$${nadoMinDepositUsd(20)}+ free USDC at up to 20×.`
                 : ''}
             </p>
           </div>
-          {(sortedExchangeInstances.length > 1 || selectedExchangeId === 'decibel') && (
+          {selectedType === 'dca' && (
+            <div style={S.marketPickerCard}>
+              <span style={S.label}>DCA venues (pick 2)</span>
+              <p style={{ ...S.marketPickerHint, marginBottom: 10 }}>
+                Check the exchanges to hedge between. Bot verifies free margin on both, then runs funding-flat DCA on {DCA_DEFAULT_SYMBOL}.
+              </p>
+              {dcaVenueOptions.length < 2 ? (
+                <p style={{ ...S.stepCopy, color: '#B45309', marginTop: 0 }}>
+                  Connect at least two funding venues (Hyperliquid, Pacifica, Decibel) under Accounts / Launch.
+                </p>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {dcaVenueOptions.map((option) => {
+                    const ex = option.dex.id;
+                    const checked = dcaExchangeIds.includes(ex);
+                    const free = freeMarginUsdFromBalance(exchangeBalances[ex]);
+                    const ok = free != null && free >= dcaMarginNeed;
+                    return (
+                      <label
+                        key={ex}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 10,
+                          padding: '10px 12px',
+                          borderRadius: 12,
+                          border: checked ? '2px solid #1E88E5' : '1px solid #D6C7A8',
+                          background: checked ? 'rgba(30,136,229,0.08)' : '#FFFCF5',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          className="bots-focusable"
+                          checked={checked}
+                          onChange={() => toggleDcaExchange(ex)}
+                          disabled={launching}
+                        />
+                        <ExchangeMark exchangeId={ex} size={28} />
+                        <span style={{ flex: 1 }}>
+                          <strong>{option.dex.label}</strong>
+                          <small style={{ display: 'block', opacity: 0.75 }}>
+                            {free == null
+                              ? 'Balance pending…'
+                              : `Free ≈$${free.toFixed(2)}${ok ? '' : ` · need ~$${dcaMarginNeed}`}`}
+                          </small>
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+              {dcaExchangeIds.length > 0 && dcaExchangeIds.length !== 2 && (
+                <span style={S.marketPickerHint}>Select exactly two venues.</span>
+              )}
+              {dcaDepositIssues.length > 0 && (
+                <p style={{ ...S.stepCopy, color: '#B45309', marginTop: 8 }}>
+                  {dcaDepositIssues.join(' · ')}
+                </p>
+              )}
+            </div>
+          )}
+          {selectedType !== 'dca' && (sortedExchangeInstances.length > 1 || selectedExchangeId === 'decibel') && (
             <div style={S.marketPickerCard}>
               <label htmlFor="bot-market" style={S.label}>Market</label>
               <select
@@ -4242,21 +4747,21 @@ function BotsPanel({ onClose }) {
               />
               <CalmPlanCard plan={calmPlan} onApply={() => applyCalmPlan()} />
               <SliderField
-                label="Margin"
-                min={5}
-                max={500}
+                label="Trade Size"
+                min={tradeSizeSliderMin}
+                max={tradeSizeSliderMax}
                 step={5}
-                value={tradeSize}
-                defaultValue={calmPlan?.tradeSizeUsd || 20}
+                value={Math.min(Math.max(Number(tradeSize) || tradeSizeSliderMin, tradeSizeSliderMin), tradeSizeSliderMax)}
+                defaultValue={calmPlan?.tradeSizeUsd || tradeSizeSliderMin}
                 onChange={setTradeSize}
               />
               <SliderField
                 label="Maximum Position"
-                min={50}
-                max={5000}
+                min={Math.max(50, tradeSizeSliderMin)}
+                max={maxPositionSliderMax}
                 step={50}
-                value={maxPosition}
-                defaultValue={calmPlan?.maxPositionUsd || 200}
+                value={Math.min(Math.max(Number(maxPosition) || 50, 50), maxPositionSliderMax)}
+                defaultValue={calmPlan?.maxPositionUsd || Math.min(200, maxPositionSliderMax)}
                 onChange={setMaxPosition}
               />
             </>
@@ -4264,8 +4769,20 @@ function BotsPanel({ onClose }) {
           <button
             type="button"
             className="bots-focusable"
-            disabled={!selectedInstanceId}
-            style={{ ...cartoonBtn(selectedInstanceId ? '#1E88E5' : '#A3906A', selectedInstanceId ? '#1565C0' : '#8C7D5C'), ...S.nextButton, ...(!selectedInstanceId ? S.disabledButton : {}) }}
+            disabled={
+              selectedType === 'dca'
+                ? (!dcaPairReady || dcaDepositIssues.length > 0 || !selectedInstanceId)
+                : !selectedInstanceId
+            }
+            style={{
+              ...uiButton('primary'),
+              ...S.nextButton,
+              ...((selectedType === 'dca'
+                ? (!dcaPairReady || dcaDepositIssues.length > 0 || !selectedInstanceId)
+                : !selectedInstanceId)
+                ? S.disabledButton
+                : {}),
+            }}
             onClick={() => setStep('review')}
           >
             Review Bot
@@ -4278,8 +4795,23 @@ function BotsPanel({ onClose }) {
           <div>
             <h2 ref={stepHeadingRef} tabIndex={-1} style={S.stepTitle}>Review and Launch</h2>
             <p style={S.stepCopy}>Check your setup before starting the bot.</p>
+            {selectedType === 'dca' && (
+              <p
+                style={{
+                  ...S.stepCopy,
+                  color: dcaDepositIssues.length ? 'var(--terminal-warning)' : 'var(--terminal-long-strong)',
+                  marginTop: 6,
+                }}
+              >
+                {dcaPairReady
+                  ? (dcaDepositIssues.length
+                    ? `Deposit check: ${dcaDepositIssues.join(' · ')}`
+                    : `Both venues have ≥~${dcaMarginNeed} free margin for DCA legs on ${DCA_DEFAULT_SYMBOL}.`)
+                  : 'Pick exactly two funding venues in Settings before launch.'}
+              </p>
+            )}
             {selectedExchangeId === 'nado' && (
-              <p style={{ ...S.stepCopy, color: '#B45309', marginTop: 6 }}>
+              <p style={{ ...S.stepCopy, color: 'var(--terminal-warning)', marginTop: 6 }}>
                 {(() => {
                   const need = nadoMinDepositUsd(20);
                   const sizeOk = Number(tradeSize) >= NADO_MIN_ORDER_USD;
@@ -4287,15 +4819,15 @@ function BotsPanel({ onClose }) {
                     || !Number.isFinite(selectedFreeMarginUsd)
                     || selectedFreeMarginUsd >= need;
                   if (!sizeOk && !balOk) {
-                    return `Nado: Margin must be ≥$${NADO_MIN_ORDER_USD}, and free ≈$${Number(selectedFreeMarginUsd).toFixed(2)} needs ≥~$${need} for dual quotes (venue floor, not quota).`;
+                    return `Nado: Trade Size must be ≥$${NADO_MIN_ORDER_USD}, and free ≈$${Number(selectedFreeMarginUsd).toFixed(2)} needs ≥~$${need} for dual quotes (venue floor, not quota).`;
                   }
                   if (!sizeOk) {
-                    return `Nado: Margin $${tradeSize} is below the $${NADO_MIN_ORDER_USD} venue minimum — raise it before Launch.`;
+                    return `Nado: Trade Size $${tradeSize} is below the $${NADO_MIN_ORDER_USD} venue minimum — raise it before Launch.`;
                   }
                   if (!balOk) {
                     return `Nado: free ≈$${Number(selectedFreeMarginUsd).toFixed(2)} is below ~$${need} needed for dual $${NADO_MIN_ORDER_USD} quotes — deposit USDC first.`;
                   }
-                  return `Nado venue floor $${NADO_MIN_ORDER_USD}/order — margin and balance look OK for Launch.`;
+                  return `Nado venue floor $${NADO_MIN_ORDER_USD}/order — size and balance look OK for Launch.`;
                 })()}
               </p>
             )}
@@ -4303,7 +4835,7 @@ function BotsPanel({ onClose }) {
           <div style={S.reviewCard}>
             <div style={S.cardTop}>
               <div style={{ ...S.botAvatar, background: `linear-gradient(180deg, ${selectedBot.accent} 0%, ${selectedBot.accentDark} 100%)` }}>
-                <RobotGlyph size={30} color="#fff" />
+                <RobotGlyph size={30} color="var(--terminal-surface)" />
               </div>
               <div style={S.cardTitleBlock}>
                 <strong style={S.cardTitle}>{selectedBot.name}</strong>
@@ -4312,15 +4844,23 @@ function BotsPanel({ onClose }) {
             </div>
             <p style={S.detailCopy}>{selectedBot.description}</p>
             <div style={S.reviewRows}>
-              <span>Exchange <strong>{DEX_CONFIG[selectedExchangeId]?.label || getExchangeName(selectedInstanceId)}</strong></span>
-              <span>Market <strong>{configuredInstances.find(i => i.id === selectedInstanceId)?.symbols?.join(', ') || ''}</strong></span>
+              <span>Exchange <strong>{
+                selectedType === 'dca'
+                  ? dcaExchangeIds.map((ex) => DEX_CONFIG[ex]?.label || ex).join(' ↔ ')
+                  : (DEX_CONFIG[selectedExchangeId]?.label || getExchangeName(selectedInstanceId))
+              }</strong></span>
+              <span>Market <strong>{
+                selectedType === 'dca'
+                  ? DCA_DEFAULT_SYMBOL
+                  : (configuredInstances.find(i => i.id === selectedInstanceId)?.symbols?.join(', ') || '')
+              }</strong></span>
               {preset === 'aggressive' ? (
                 <>
                   <span>Daily volume <strong>{formatVolumeUsd(dailyVolumeUsd)}</strong></span>
                   <span>Deposit (est.) <strong>{money(aggressivePlan?.depositUsd || 0)}</strong></span>
                   <span>Avg leverage <strong>{aggressivePlan?.avgLeverage || '—'}×</strong></span>
                   <span>Cost / $1M <strong>~${Math.round(aggressivePlan?.costPer1MUsd || 0)}</strong></span>
-                  <span>Margin <strong>{money(tradeSize)}</strong></span>
+                  <span>Trade Size <strong>{money(tradeSize)}</strong></span>
                   <span>Max position <strong>{money(maxPosition)}</strong></span>
                 </>
               ) : (
@@ -4328,7 +4868,7 @@ function BotsPanel({ onClose }) {
                   <span>Volume wish <strong>{formatVolumeUsd(calmTargetVolumeUsd)}</strong></span>
                   <span>Safe volume/day <strong>{formatVolumeUsd(calmPlan?.achievableDailyVolumeUsd || 0)}</strong></span>
                   <span>Need for target <strong>{money(calmPlan?.depositForTargetUsd || 0)}</strong></span>
-                  <span>Margin <strong>{money(tradeSize)}</strong></span>
+                  <span>Trade Size <strong>{money(tradeSize)}</strong></span>
                   <span>Maximum Position <strong>{money(maxPosition)}</strong></span>
                 </>
               )}
@@ -4341,7 +4881,7 @@ function BotsPanel({ onClose }) {
             className="bots-focusable"
             disabled={launching || !selectedInstanceId}
             aria-busy={launching}
-            style={{ ...cartoonBtn('#43A047', '#2E7D32'), ...S.nextButton, ...(launching ? S.disabledButton : {}) }}
+            style={{ ...uiButton('primary'), ...S.nextButton, ...(launching ? S.disabledButton : {}) }}
             onClick={launchBot}
           >
             {launching ? 'Launching…' : 'Launch Bot'}
@@ -4394,7 +4934,7 @@ const STYLE = `
   }
   .bots-range {
     width: 100%;
-    accent-color: #1E88E5;
+    accent-color: var(--terminal-info);
     cursor: pointer;
   }
   .bots-range::-webkit-slider-thumb {
@@ -4403,10 +4943,10 @@ const STYLE = `
   .bots-market-select {
     width: 100%;
     min-height: 44px;
-    border: 2px solid #BBA882;
+    border: 2px solid var(--terminal-border-strong);
     border-radius: 10px;
-    background: #FDF8E7;
-    color: #5C3A21;
+    background: var(--terminal-surface);
+    color: var(--terminal-text);
     cursor: pointer;
     font: 900 14px/1.2 "Inter", "Segoe UI", sans-serif;
     padding: 0 10px;
@@ -4416,7 +4956,7 @@ const STYLE = `
     box-shadow: 0 0 0 3px rgba(30, 136, 229, 0.32) !important;
   }
   .bots-step-page h2:focus-visible {
-    outline: 3px solid #1E88E5;
+    outline: 3px solid var(--terminal-info);
     outline-offset: 3px;
   }
   .bots-segment-button {
@@ -4434,10 +4974,10 @@ const STYLE = `
   .bots-segment-button:focus-visible {
     border-color: transparent !important;
     outline: none !important;
-    box-shadow: inset 0 -2px 0 #1E88E5 !important;
+    box-shadow: inset 0 -2px 0 var(--terminal-info) !important;
   }
   .bots-segment-button[aria-current="page"]:focus-visible {
-    box-shadow: inset 0 -2px 0 #1E88E5, 0 1px 2px rgba(92,58,33,0.08) !important;
+    box-shadow: inset 0 -2px 0 var(--terminal-info), 0 1px 2px var(--terminal-surface-muted) !important;
   }
   .bots-inline-setup button,
   .bots-inline-setup input,
@@ -4509,8 +5049,8 @@ const S = {
     right: 'clamp(12px, 1.25vw, 24px)',
     bottom: 118,
     width: 'min(760px, calc(100vw - 32px))',
-    background: '#e8dfc8',
-    border: '6px solid #d4c8b0',
+    background: 'var(--terminal-surface-subtle)',
+    border: '1px solid var(--terminal-border)',
     borderRadius: 24,
     display: 'flex',
     flexDirection: 'column',
@@ -4533,8 +5073,8 @@ const S = {
     alignItems: 'center',
     justifyContent: 'space-between',
     padding: '8px 12px',
-    background: '#d4c8b0',
-    borderBottom: '4px solid #bba882',
+    background: 'var(--terminal-border)',
+    borderBottom: '1px solid var(--terminal-border-strong)',
     flexShrink: 0,
   },
   headerBrand: {
@@ -4565,35 +5105,19 @@ const S = {
   },
   headerTitle: {
     fontSize: 18,
-    fontWeight: 900,
-    color: '#5C3A21',
+    fontWeight: 700,
+    color: 'var(--terminal-text)',
     lineHeight: 1,
   },
   headerSub: {
     fontSize: 11,
-    fontWeight: 800,
-    color: '#77573d',
+    fontWeight: 600,
+    color: 'var(--terminal-text-secondary)',
     textTransform: 'uppercase',
     letterSpacing: 0.4,
     marginTop: 3,
   },
-  closeButton: {
-    width: 32,
-    height: 32,
-    borderRadius: '50%',
-    background: '#E53935',
-    border: '3px solid #fff',
-    color: '#fff',
-    cursor: 'pointer',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 0,
-    fontSize: 16,
-    fontWeight: 900,
-    boxShadow: '0 3px 5px rgba(0,0,0,0.3)',
-    lineHeight: 1,
-  },
+  closeButton: uiIconButton('danger', 32, { fontSize: 16, lineHeight: 1 }),
   body: {
     flex: 1,
     minHeight: 0,
@@ -4603,17 +5127,17 @@ const S = {
     padding: 12,
     overflowY: 'auto',
     overflowX: 'hidden',
-    background: '#fdf8e7',
+    background: 'var(--terminal-surface)',
   },
   notice: {
-    borderWidth: 2,
+    borderWidth: 1,
     borderStyle: 'solid',
-    borderColor: '#43A047',
+    borderColor: 'var(--terminal-long)',
     borderRadius: 10,
     background: 'rgba(67,160,71,0.14)',
-    color: '#2E7D32',
+    color: 'var(--terminal-long-strong)',
     fontSize: 12,
-    fontWeight: 800,
+    fontWeight: 600,
     padding: '8px 10px',
     textAlign: 'left',
     display: 'flex',
@@ -4623,13 +5147,13 @@ const S = {
     cursor: 'pointer',
   },
   noticeClose: {
-    fontWeight: 900,
+    fontWeight: 700,
     opacity: 0.7,
   },
   noticeError: {
-    borderColor: '#D98B8B',
-    background: '#FBE2E2',
-    color: '#9F2D2D',
+    borderColor: 'var(--terminal-short)',
+    background: 'var(--terminal-short-soft)',
+    color: 'var(--terminal-short-strong)',
   },
   summaryGrid: {
     display: 'grid',
@@ -4637,9 +5161,9 @@ const S = {
     gap: 8,
   },
   summaryCard: {
-    background: '#e8dfc8',
-    border: '3px solid #d4c8b0',
-    borderRadius: 12,
+    background: 'var(--terminal-surface-subtle)',
+    border: '1px solid var(--terminal-border)',
+    borderRadius: 10,
     padding: '9px 10px',
     display: 'flex',
     flexDirection: 'column',
@@ -4647,9 +5171,9 @@ const S = {
     minWidth: 0,
   },
   summaryValue: {
-    color: '#5C3A21',
+    color: 'var(--terminal-text)',
     fontSize: 22,
-    fontWeight: 900,
+    fontWeight: 700,
     lineHeight: 1,
   },
   dashboardLoading: {
@@ -4660,15 +5184,15 @@ const S = {
     alignItems: 'center',
     justifyContent: 'center',
     gap: 7,
-    color: '#77573D',
+    color: 'var(--terminal-text-secondary)',
     textAlign: 'center',
   },
   loadingSpinner: {
     width: 34,
     height: 34,
     borderRadius: '50%',
-    border: '4px solid #D4C8B0',
-    borderTopColor: '#43A047',
+    border: '1px solid var(--terminal-border)',
+    borderTopColor: 'var(--terminal-long)',
     marginBottom: 5,
   },
   toolbar: {
@@ -4682,8 +5206,8 @@ const S = {
     display: 'flex',
     gap: 3,
     padding: 3,
-    background: '#e8dfc8',
-    border: '1px solid #C9B896',
+    background: 'var(--terminal-surface-subtle)',
+    border: '1px solid var(--terminal-border)',
     borderRadius: 8,
   },
   segmentButton: {
@@ -4691,19 +5215,19 @@ const S = {
     borderStyle: 'solid',
     borderColor: 'transparent',
     background: 'transparent',
-    color: '#77573d',
+    color: 'var(--terminal-text-secondary)',
     fontSize: 12,
-    fontWeight: 900,
+    fontWeight: 700,
     borderRadius: 6,
     padding: '8px 11px',
     cursor: 'pointer',
     fontFamily: 'inherit',
   },
   segmentActive: {
-    background: '#fdf8e7',
-    borderColor: 'transparent',
-    color: '#5C3A21',
-    boxShadow: 'inset 0 -2px 0 #BBA882, 0 1px 2px rgba(92,58,33,0.08)',
+    background: 'var(--terminal-brand-soft)',
+    borderColor: 'var(--terminal-orange)',
+    color: 'var(--terminal-brand-text)',
+    boxShadow: 'none',
   },
   launchButton: {
     minHeight: 38,
@@ -4723,17 +5247,17 @@ const S = {
   },
   myBotsTitle: {
     margin: '12px 0 8px',
-    color: '#5C3A21',
+    color: 'var(--terminal-text)',
     fontSize: 17,
-    fontWeight: 900,
+    fontWeight: 700,
   },
   emptyLaunchState: {
     flex: 1,
     minHeight: 250,
     padding: '32px 18px',
-    border: '2px dashed #C9B896',
+    border: '1px dashed var(--terminal-border-strong)',
     borderRadius: 16,
-    background: 'linear-gradient(180deg, rgba(232,223,200,0.42), rgba(253,248,231,0.75))',
+    background: 'var(--terminal-surface-subtle)',
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
@@ -4745,8 +5269,8 @@ const S = {
     width: 68,
     height: 68,
     borderRadius: 18,
-    background: '#E8DFC8',
-    border: '3px solid #D4C8B0',
+    background: 'var(--terminal-surface-subtle)',
+    border: '1px solid var(--terminal-border)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -4754,16 +5278,16 @@ const S = {
   },
   emptyLaunchTitle: {
     margin: 0,
-    color: '#5C3A21',
+    color: 'var(--terminal-text)',
     fontSize: 20,
-    fontWeight: 900,
+    fontWeight: 700,
   },
   emptyLaunchCopy: {
     maxWidth: 380,
     width: '100%',
     boxSizing: 'border-box',
     margin: '7px 0 18px',
-    color: '#77573D',
+    color: 'var(--terminal-text-secondary)',
     fontSize: 13,
     fontWeight: 700,
     lineHeight: 1.45,
@@ -4773,12 +5297,12 @@ const S = {
   emptyLaunchButton: {
     minHeight: 44,
     padding: '10px 18px',
-    borderRadius: 13,
+    borderRadius: 10,
     fontSize: 14,
   },
   botCard: {
-    background: '#e8dfc8',
-    border: '2px solid #d4c8b0',
+    background: 'var(--terminal-surface-subtle)',
+    border: '1px solid var(--terminal-border)',
     borderRadius: 8,
     padding: '10px 12px',
     display: 'flex',
@@ -4788,12 +5312,12 @@ const S = {
   },
   botCardExpanded: {
     gridColumn: '1 / -1',
-    background: 'linear-gradient(180deg, #e8dfc8 0%, #f3ebd1 100%)',
+    background: 'var(--terminal-surface-subtle)',
   },
   collapsedRuntime: {
     marginTop: 6,
     fontSize: 12,
-    color: '#5C3A21',
+    color: 'var(--terminal-text)',
     opacity: 0.85,
   },
   collapsedActions: {
@@ -4807,9 +5331,9 @@ const S = {
     padding: '8px 10px',
     fontSize: 12,
     lineHeight: 1.45,
-    color: '#5C3A21',
-    background: 'rgba(255,255,255,0.35)',
-    border: '1px solid #d4c8b0',
+    color: 'var(--terminal-text)',
+    background: 'var(--terminal-surface)',
+    border: '1px solid var(--terminal-border)',
     borderRadius: 8,
   },
   blockedHint: {
@@ -4840,7 +5364,7 @@ const S = {
     width: 44,
     height: 44,
     borderRadius: 12,
-    border: '3px solid rgba(92,58,33,0.55)',
+    border: '1px solid rgba(92,58,33,0.55)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -4862,15 +5386,15 @@ const S = {
   },
   cardTitle: {
     fontSize: 16,
-    fontWeight: 900,
-    color: '#5C3A21',
+    fontWeight: 700,
+    color: 'var(--terminal-text)',
     whiteSpace: 'nowrap',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
   },
   cardSub: {
     fontSize: 11,
-    fontWeight: 800,
+    fontWeight: 600,
     color: '#8b7655',
     textTransform: 'uppercase',
     letterSpacing: 0.3,
@@ -4882,13 +5406,13 @@ const S = {
     borderRadius: 999,
     padding: '3px 7px',
     fontSize: 10,
-    fontWeight: 900,
+    fontWeight: 700,
     textTransform: 'uppercase',
     flexShrink: 0,
   },
   statusRunning: {
     background: 'rgba(67,160,71,0.16)',
-    color: '#2E7D32',
+    color: 'var(--terminal-long-strong)',
     border: '1px solid rgba(67,160,71,0.45)',
   },
   statusPaused: {
@@ -4909,22 +5433,22 @@ const S = {
   sectionTitle: {
     margin: '14px 0 8px',
     fontSize: 13,
-    fontWeight: 800,
-    color: '#5C3A21',
+    fontWeight: 600,
+    color: 'var(--terminal-text)',
     letterSpacing: '0.02em',
   },
   expandIcon: {
     width: 28,
     height: 28,
     borderRadius: 8,
-    background: '#fdf8e7',
-    border: '2px solid #d4c8b0',
-    color: '#5C3A21',
+    background: 'var(--terminal-surface)',
+    border: '1px solid var(--terminal-border)',
+    color: 'var(--terminal-text)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     fontSize: 20,
-    fontWeight: 900,
+    fontWeight: 700,
     flexShrink: 0,
   },
   metricGrid: {
@@ -4934,8 +5458,8 @@ const S = {
     marginTop: 9,
   },
   metric: {
-    background: '#fdf8e7',
-    border: '2px solid #d4c8b0',
+    background: 'var(--terminal-surface)',
+    border: '1px solid var(--terminal-border)',
     borderRadius: 10,
     padding: '7px 8px',
     display: 'flex',
@@ -4945,15 +5469,15 @@ const S = {
   },
   metricLabel: {
     fontSize: 10,
-    fontWeight: 900,
-    color: '#a3906a',
+    fontWeight: 700,
+    color: 'var(--terminal-text-muted)',
     textTransform: 'uppercase',
     letterSpacing: 0.4,
   },
   metricValue: {
     fontSize: 15,
-    fontWeight: 900,
-    color: '#5C3A21',
+    fontWeight: 700,
+    color: 'var(--terminal-text)',
     lineHeight: 1.1,
   },
   expandPanel: {
@@ -4969,21 +5493,21 @@ const S = {
     gap: 8,
   },
   detailCard: {
-    background: '#fdf8e7',
-    border: '2px solid #d4c8b0',
+    background: 'var(--terminal-surface)',
+    border: '1px solid var(--terminal-border)',
     borderRadius: 10,
     padding: 10,
     minWidth: 0,
   },
   detailTitle: {
     display: 'block',
-    color: '#5C3A21',
+    color: 'var(--terminal-text)',
     fontSize: 14,
-    fontWeight: 900,
+    fontWeight: 700,
     marginTop: 3,
   },
   detailCopy: {
-    color: '#77573d',
+    color: 'var(--terminal-text-secondary)',
     fontSize: 12,
     fontWeight: 700,
     lineHeight: 1.35,
@@ -4993,22 +5517,22 @@ const S = {
     display: 'grid',
     gap: 5,
     marginTop: 5,
-    color: '#77573d',
+    color: 'var(--terminal-text-secondary)',
     fontSize: 12,
-    fontWeight: 800,
+    fontWeight: 600,
   },
   lastAction: {
     background: 'rgba(30,136,229,0.1)',
-    border: '2px solid rgba(30,136,229,0.25)',
+    border: '1px solid rgba(30,136,229,0.25)',
     borderRadius: 10,
     padding: '8px 10px',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 8,
-    color: '#1565C0',
+    color: 'var(--terminal-info)',
     fontSize: 12,
-    fontWeight: 800,
+    fontWeight: 600,
   },
   historyList: {
     display: 'flex',
@@ -5016,8 +5540,8 @@ const S = {
     gap: 8,
   },
   historyRow: {
-    background: '#e8dfc8',
-    border: '3px solid #d4c8b0',
+    background: 'var(--terminal-surface-subtle)',
+    border: '1px solid var(--terminal-border)',
     borderRadius: 12,
     padding: '10px 12px',
     display: 'grid',
@@ -5026,24 +5550,24 @@ const S = {
     alignItems: 'center',
   },
   historyTime: {
-    color: '#a3906a',
+    color: 'var(--terminal-text-muted)',
     fontSize: 12,
-    fontWeight: 900,
+    fontWeight: 700,
     fontFamily: 'monospace',
   },
   historyMain: {
     display: 'flex',
     flexDirection: 'column',
     gap: 2,
-    color: '#77573d',
+    color: 'var(--terminal-text-secondary)',
     fontSize: 12,
     fontWeight: 700,
     minWidth: 0,
   },
   historyValue: {
-    color: '#5C3A21',
+    color: 'var(--terminal-text)',
     fontSize: 13,
-    fontWeight: 900,
+    fontWeight: 700,
     whiteSpace: 'nowrap',
   },
   launchShell: {
@@ -5086,55 +5610,42 @@ const S = {
     flexDirection: 'column',
     alignItems: 'center',
     gap: 3,
-    color: '#A3906A',
+    color: 'var(--terminal-text-muted)',
   },
   stepTrackItemActive: {
-    color: '#5C3A21',
+    color: 'var(--terminal-text)',
   },
   stepNumber: {
     width: 22,
     height: 22,
     borderRadius: '50%',
-    borderWidth: 2,
+    borderWidth: 1,
     borderStyle: 'solid',
     borderColor: '#C9B896',
-    background: '#E8DFC8',
+    background: 'var(--terminal-surface-subtle)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     fontSize: 10,
-    fontWeight: 900,
+    fontWeight: 700,
     boxSizing: 'border-box',
   },
   stepNumberActive: {
-    borderColor: '#43A047',
-    background: '#43A047',
-    color: '#FFF',
+    borderColor: 'var(--terminal-long)',
+    background: 'var(--terminal-long)',
+    color: 'var(--terminal-on-accent)',
   },
   stepLabel: {
     maxWidth: '100%',
     fontSize: 9,
-    fontWeight: 900,
+    fontWeight: 700,
     textTransform: 'uppercase',
     letterSpacing: 0.25,
     whiteSpace: 'nowrap',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
   },
-  backButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
-    background: 'transparent',
-    border: `2px solid ${colors.border}`,
-    color: colors.ink,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    cursor: 'pointer',
-    flexShrink: 0,
-    padding: 0,
-  },
+  backButton: uiIconButton('secondary', 36),
   stepPage: {
     flex: 1,
     minHeight: 0,
@@ -5147,8 +5658,8 @@ const S = {
   },
   stepTitle: {
     fontSize: 24,
-    fontWeight: 900,
-    color: '#5C3A21',
+    fontWeight: 700,
+    color: 'var(--terminal-text)',
     textAlign: 'center',
     margin: '2px 0 3px',
     lineHeight: 1.15,
@@ -5167,10 +5678,10 @@ const S = {
     gap: 9,
   },
   strategyCard: {
-    background: '#e8dfc8',
-    borderWidth: 3,
+    background: 'var(--terminal-surface-subtle)',
+    borderWidth: 1,
     borderStyle: 'solid',
-    borderColor: '#d4c8b0',
+    borderColor: 'var(--terminal-border)',
     borderRadius: 12,
     padding: 10,
     display: 'flex',
@@ -5180,12 +5691,12 @@ const S = {
     textAlign: 'left',
     fontFamily: 'inherit',
     minWidth: 0,
-    color: '#5C3A21',
+    color: 'var(--terminal-text)',
   },
   strategyCardActive: {
-    borderColor: '#43A047',
-    background: '#F4EEDC',
-    boxShadow: '0 0 0 3px rgba(67,160,71,0.12), 0 4px 0 #D4C8B0',
+    borderColor: 'var(--terminal-orange)',
+    background: 'var(--terminal-brand-soft)',
+    boxShadow: '0 0 0 3px var(--terminal-brand-ring)',
   },
   strategyCardDisabled: {
     cursor: 'not-allowed',
@@ -5200,11 +5711,11 @@ const S = {
   },
   soonBadge: {
     borderRadius: 999,
-    background: '#7A746B',
-    color: '#FFF',
+    background: 'var(--terminal-surface-muted)',
+    color: 'var(--terminal-text-secondary)',
     padding: '3px 7px',
     fontSize: 9,
-    fontWeight: 900,
+    fontWeight: 700,
     textTransform: 'uppercase',
     letterSpacing: 0.4,
   },
@@ -5215,8 +5726,8 @@ const S = {
     minWidth: 0,
   },
   exchangePickerCard: {
-    background: '#E8DFC8',
-    border: '3px solid #D4C8B0',
+    background: 'var(--terminal-surface-subtle)',
+    border: '1px solid var(--terminal-border)',
     borderRadius: 14,
     padding: 12,
     display: 'flex',
@@ -5229,10 +5740,10 @@ const S = {
   exchangeDropdownTrigger: {
     width: '100%',
     minHeight: 56,
-    border: '2px solid #BBA882',
+    border: '1px solid var(--terminal-border-strong)',
     borderRadius: 12,
-    background: '#FDF8E7',
-    color: '#5C3A21',
+    background: 'var(--terminal-surface)',
+    color: 'var(--terminal-text)',
     padding: '8px 12px',
     display: 'flex',
     alignItems: 'center',
@@ -5259,7 +5770,7 @@ const S = {
     width: 20,
     height: 20,
     flexShrink: 0,
-    color: '#77573D',
+    color: 'var(--terminal-text-secondary)',
   },
   exchangeListboxPanel: {
     position: 'absolute',
@@ -5268,24 +5779,24 @@ const S = {
     left: 0,
     right: 0,
     padding: 6,
-    border: '2px solid #BBA882',
+    border: '1px solid var(--terminal-border-strong)',
     borderRadius: 12,
-    background: '#FDF8E7',
-    boxShadow: '0 12px 26px rgba(92,58,33,0.24)',
+    background: 'var(--terminal-surface)',
+    boxShadow: 'var(--terminal-shadow-card)',
     display: 'flex',
     flexDirection: 'column',
     gap: 6,
   },
   exchangeSearchBox: {
     minHeight: 38,
-    border: '2px solid #D4C8B0',
+    border: '1px solid var(--terminal-border)',
     borderRadius: 9,
-    background: '#FFFDF5',
+    background: 'var(--terminal-surface-subtle)',
     display: 'flex',
     alignItems: 'center',
     gap: 7,
     padding: '0 10px',
-    color: '#8A7459',
+    color: 'var(--terminal-text-muted)',
   },
   exchangeSearchIcon: {
     width: 17,
@@ -5299,7 +5810,7 @@ const S = {
     border: 0,
     outline: 0,
     background: 'transparent',
-    color: '#5C3A21',
+    color: 'var(--terminal-text)',
     fontFamily: 'inherit',
     fontSize: 13,
     fontWeight: 700,
@@ -5316,13 +5827,13 @@ const S = {
     display: 'flex',
     alignItems: 'center',
     gap: 9,
-    color: '#5C3A21',
+    color: 'var(--terminal-text)',
     cursor: 'pointer',
     boxSizing: 'border-box',
   },
   exchangeOptionActive: {
-    background: 'rgba(30,136,229,0.12)',
-    boxShadow: 'inset 0 0 0 2px rgba(30,136,229,0.32)',
+    background: 'var(--terminal-brand-soft)',
+    boxShadow: 'inset 0 0 0 1px var(--terminal-orange)',
   },
   exchangeOptionDisabled: {
     opacity: 0.58,
@@ -5341,9 +5852,9 @@ const S = {
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',
-    borderWidth: 2,
+    borderWidth: 1,
     borderStyle: 'solid',
-    borderColor: '#BBA882',
+    borderColor: 'var(--terminal-border-strong)',
     borderRadius: 8,
     boxSizing: 'border-box',
   },
@@ -5354,9 +5865,9 @@ const S = {
     background: 'transparent',
   },
   exchangeMarkFallback: {
-    color: '#5C3A21',
+    color: 'var(--terminal-text)',
     fontSize: 11,
-    fontWeight: 900,
+    fontWeight: 700,
   },
   exchangeMarkImage: {
     position: 'absolute',
@@ -5378,7 +5889,7 @@ const S = {
   exchangeMarkStackItem: {
     position: 'absolute',
     top: 0,
-    filter: 'drop-shadow(2px 0 0 #E8DFC8)',
+    filter: 'drop-shadow(2px 0 0 var(--terminal-surface-subtle))',
   },
   exchangeMarkStackItemBare: {
     filter: 'none',
@@ -5395,31 +5906,31 @@ const S = {
     flexShrink: 0,
     borderRadius: 999,
     padding: '3px 6px',
-    background: '#DDD5C4',
-    color: '#6E655A',
+    background: 'var(--terminal-surface-muted)',
+    color: 'var(--terminal-text-secondary)',
     fontSize: 9,
-    fontWeight: 900,
+    fontWeight: 700,
     textTransform: 'uppercase',
   },
   exchangeOptionStatusReady: {
     background: 'rgba(67,160,71,0.16)',
-    color: '#2E7D32',
+    color: 'var(--terminal-long-strong)',
   },
   exchangeEmptyState: {
     minHeight: 72,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    color: '#8A7459',
+    color: 'var(--terminal-text-muted)',
     fontSize: 12,
-    fontWeight: 800,
+    fontWeight: 600,
   },
   exchangeStatus: {
     minHeight: 18,
     display: 'flex',
     alignItems: 'center',
     gap: 7,
-    color: '#77573D',
+    color: 'var(--terminal-text-secondary)',
     fontSize: 11,
     fontWeight: 700,
     lineHeight: 1.35,
@@ -5431,16 +5942,16 @@ const S = {
     flexShrink: 0,
   },
   inlineConnectionCard: {
-    background: '#F4EEDC',
+    background: 'var(--terminal-surface-subtle)',
     borderTopWidth: 1,
     borderRightWidth: 1,
     borderBottomWidth: 1,
     borderLeftWidth: 4,
     borderStyle: 'solid',
-    borderTopColor: '#C9B896',
-    borderRightColor: '#C9B896',
-    borderBottomColor: '#C9B896',
-    borderLeftColor: '#BBA882',
+    borderTopColor: 'var(--terminal-border)',
+    borderRightColor: 'var(--terminal-border)',
+    borderBottomColor: 'var(--terminal-border)',
+    borderLeftColor: 'var(--terminal-orange)',
     borderRadius: 8,
     padding: 12,
     display: 'flex',
@@ -5452,39 +5963,39 @@ const S = {
     alignItems: 'center',
     gap: 9,
     padding: '0 0 9px',
-    borderBottom: '1px solid #D4C8B0',
+    borderBottom: '1px solid var(--terminal-border)',
   },
   connectionPill: {
     flexShrink: 0,
     borderRadius: 999,
     padding: '4px 7px',
     fontSize: 9,
-    fontWeight: 900,
+    fontWeight: 700,
     letterSpacing: 0.35,
   },
   connectionChecking: {
-    background: '#E4DED2',
-    color: '#655E54',
+    background: 'var(--terminal-surface-muted)',
+    color: 'var(--terminal-text-secondary)',
   },
   connectionActive: {
     background: 'rgba(67,160,71,0.16)',
-    color: '#2E7D32',
+    color: 'var(--terminal-long-strong)',
   },
   connectionInactive: {
-    background: 'rgba(232,184,48,0.22)',
-    color: '#795A00',
+    background: 'var(--terminal-warning-soft)',
+    color: 'var(--terminal-warning)',
   },
   connectionReady: {
     background: 'rgba(30,136,229,0.14)',
-    color: '#1565C0',
+    color: 'var(--terminal-info)',
   },
   connectionPartial: {
-    background: 'rgba(249,168,37,0.18)',
-    color: '#9A4D00',
+    background: 'var(--terminal-warning-soft)',
+    color: 'var(--terminal-warning)',
   },
   connectionMissing: {
-    background: '#FBE2E2',
-    color: '#9F2D2D',
+    background: 'var(--terminal-short-soft)',
+    color: 'var(--terminal-short-strong)',
   },
   inlineSetupBody: {
     display: 'flex',
@@ -5499,7 +6010,7 @@ const S = {
   },
   inlineManualSection: {
     paddingTop: 10,
-    borderTop: '1px solid #D4C8B0',
+    borderTop: '1px solid var(--terminal-border)',
   },
   inlineSetupToolbar: {
     display: 'flex',
@@ -5507,23 +6018,11 @@ const S = {
     justifyContent: 'space-between',
     gap: 10,
   },
-  scanButton: {
-    minHeight: 34,
-    padding: '6px 10px',
-    border: '1px solid #A3906A',
-    borderRadius: 7,
-    background: '#FFFDF5',
-    color: '#5C3A21',
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
+  scanButton: uiButton('secondary', {
+    minHeight: 34, padding: '6px 10px', fontSize: 11,
     flexShrink: 0,
-    cursor: 'pointer',
     fontFamily: 'inherit',
-    fontSize: 11,
-    fontWeight: 900,
-  },
+  }),
   inlineBusyRow: {
     display: 'flex',
     alignItems: 'center',
@@ -5531,16 +6030,16 @@ const S = {
     padding: '8px 10px',
     borderRadius: 10,
     background: 'rgba(30,136,229,0.1)',
-    color: '#1565C0',
+    color: 'var(--terminal-info)',
     fontSize: 11,
-    fontWeight: 800,
+    fontWeight: 600,
   },
   inlineBusySpinner: {
     width: 16,
     height: 16,
     borderRadius: '50%',
-    border: '2px solid rgba(30,136,229,0.25)',
-    borderTopColor: '#1E88E5',
+    border: '1px solid rgba(30,136,229,0.25)',
+    borderTopColor: 'var(--terminal-info)',
     flexShrink: 0,
   },
   disabledButton: {
@@ -5548,8 +6047,8 @@ const S = {
     cursor: 'not-allowed',
   },
   marketPickerCard: {
-    background: '#E8DFC8',
-    border: '3px solid #D4C8B0',
+    background: 'var(--terminal-surface-subtle)',
+    border: '1px solid var(--terminal-border)',
     borderRadius: 12,
     padding: 12,
     display: 'flex',
@@ -5557,13 +6056,13 @@ const S = {
     gap: 7,
   },
   marketPickerHint: {
-    color: '#77573D',
+    color: 'var(--terminal-text-secondary)',
     fontSize: 11,
     fontWeight: 700,
   },
   sliderCard: {
-    background: '#e8dfc8',
-    border: '3px solid #d4c8b0',
+    background: 'var(--terminal-surface-subtle)',
+    border: '1px solid var(--terminal-border)',
     borderRadius: 12,
     padding: 12,
     display: 'flex',
@@ -5577,28 +6076,28 @@ const S = {
     gap: 8,
   },
   label: {
-    color: '#5C3A21',
+    color: 'var(--terminal-text)',
     fontSize: 11,
-    fontWeight: 900,
+    fontWeight: 700,
     textTransform: 'uppercase',
     letterSpacing: 0.4,
   },
   sliderValue: {
-    color: '#5C3A21',
+    color: 'var(--terminal-text)',
     fontSize: 18,
-    fontWeight: 900,
+    fontWeight: 700,
   },
   sliderLabels: {
     display: 'flex',
     justifyContent: 'space-between',
-    color: '#a3906a',
+    color: 'var(--terminal-text-muted)',
     fontSize: 11,
-    fontWeight: 800,
+    fontWeight: 600,
     gap: 8,
   },
   presetCard: {
-    background: '#e8dfc8',
-    border: '3px solid #d4c8b0',
+    background: 'var(--terminal-surface-subtle)',
+    border: '1px solid var(--terminal-border)',
     borderRadius: 12,
     padding: 12,
     display: 'flex',
@@ -5606,8 +6105,8 @@ const S = {
     gap: 8,
   },
   aggressivePlanCard: {
-    background: '#fdf8e7',
-    border: '3px solid #d4c8b0',
+    background: 'var(--terminal-surface)',
+    border: '1px solid var(--terminal-border)',
     borderRadius: 12,
     padding: 12,
     display: 'flex',
@@ -5620,7 +6119,7 @@ const S = {
     gap: 8,
   },
   aggressivePlanCell: {
-    background: '#e8dfc8',
+    background: 'var(--terminal-surface-subtle)',
     borderRadius: 10,
     padding: '8px 9px',
     display: 'flex',
@@ -5629,22 +6128,22 @@ const S = {
     minWidth: 0,
   },
   aggressivePlanKey: {
-    color: '#a3906a',
+    color: 'var(--terminal-text-muted)',
     fontSize: 10,
-    fontWeight: 800,
+    fontWeight: 600,
     textTransform: 'uppercase',
     letterSpacing: 0.3,
   },
   aggressivePlanVal: {
-    color: '#5C3A21',
+    color: 'var(--terminal-text)',
     fontSize: 13,
-    fontWeight: 900,
+    fontWeight: 700,
     lineHeight: 1.2,
     wordBreak: 'break-word',
   },
   aggressivePlanHint: {
     margin: 0,
-    color: '#77573d',
+    color: 'var(--terminal-text-secondary)',
     fontSize: 11,
     fontWeight: 700,
     lineHeight: 1.35,
@@ -5655,27 +6154,27 @@ const S = {
     gap: 7,
   },
   presetButton: {
-    borderWidth: 2,
+    borderWidth: 1,
     borderStyle: 'solid',
-    borderColor: '#bba882',
-    background: '#d4c8b0',
+    borderColor: 'var(--terminal-border-strong)',
+    background: 'var(--terminal-surface)',
     borderRadius: 10,
-    color: '#5C3A21',
+    color: 'var(--terminal-text)',
     fontSize: 13,
-    fontWeight: 900,
+    fontWeight: 700,
     padding: '9px 10px',
     cursor: 'pointer',
     fontFamily: 'inherit',
   },
   presetActive: {
-    background: '#fdf8e7',
-    borderColor: '#1E88E5',
-    color: '#1565C0',
-    boxShadow: '0 2px 0 #bba882',
+    background: 'var(--terminal-brand-soft)',
+    borderColor: 'var(--terminal-orange)',
+    color: 'var(--terminal-brand-text)',
+    boxShadow: 'none',
   },
   reviewCard: {
-    background: 'linear-gradient(180deg, #e8dfc8 0%, #f3ebd1 100%)',
-    border: '3px solid #d4c8b0',
+    background: 'var(--terminal-surface-subtle)',
+    border: '1px solid var(--terminal-border)',
     borderRadius: 12,
     padding: 12,
     display: 'flex',
@@ -5686,14 +6185,14 @@ const S = {
     display: 'grid',
     gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
     gap: 8,
-    color: '#77573d',
+    color: 'var(--terminal-text-secondary)',
     fontSize: 12,
-    fontWeight: 800,
+    fontWeight: 600,
   },
   nextButton: {
     width: '100%',
     minHeight: 44,
-    borderRadius: 14,
+    borderRadius: 10,
     fontSize: 16,
     marginTop: 'auto',
   },
@@ -5710,8 +6209,8 @@ const S = {
     marginTop: 10,
   },
   accountsHero: {
-    background: '#E8DFC8',
-    border: '1px solid #C9B896',
+    background: 'var(--terminal-surface-subtle)',
+    border: '1px solid var(--terminal-border)',
     borderRadius: 8,
     padding: '11px 12px',
     display: 'flex',
@@ -5721,27 +6220,27 @@ const S = {
   },
   accountsHeroTitle: {
     margin: 0,
-    color: '#5C3A21',
+    color: 'var(--terminal-text)',
     fontSize: 18,
-    fontWeight: 900,
+    fontWeight: 700,
     lineHeight: 1.1,
   },
   accountsHeroCopy: {
     margin: '4px 0 0',
-    color: '#77573D',
+    color: 'var(--terminal-text-secondary)',
     fontSize: 12,
     fontWeight: 700,
     lineHeight: 1.35,
   },
   accountsHeroStat: {
     flexShrink: 0,
-    color: '#1565C0',
+    color: 'var(--terminal-info)',
     background: 'rgba(30,136,229,0.12)',
     border: '1px solid rgba(30,136,229,0.25)',
     borderRadius: 999,
     padding: '6px 9px',
     fontSize: 12,
-    fontWeight: 900,
+    fontWeight: 700,
     whiteSpace: 'nowrap',
   },
   accountsGrid: {
@@ -5750,16 +6249,16 @@ const S = {
     gap: 8,
   },
   accountExchangeCard: {
-    background: '#F4EEDC',
+    background: 'var(--terminal-surface-subtle)',
     borderTopWidth: 1,
     borderRightWidth: 1,
     borderBottomWidth: 1,
     borderLeftWidth: 4,
     borderStyle: 'solid',
-    borderTopColor: '#C9B896',
-    borderRightColor: '#C9B896',
-    borderBottomColor: '#C9B896',
-    borderLeftColor: '#BBA882',
+    borderTopColor: 'var(--terminal-border)',
+    borderRightColor: 'var(--terminal-border)',
+    borderBottomColor: 'var(--terminal-border)',
+    borderLeftColor: 'var(--terminal-border-strong)',
     borderRadius: 8,
     padding: 9,
     display: 'flex',
@@ -5768,8 +6267,8 @@ const S = {
     minWidth: 0,
   },
   accountExchangeCardActive: {
-    background: '#FFFDF5',
-    boxShadow: '0 0 0 2px rgba(30,136,229,0.09)',
+    background: 'var(--terminal-surface)',
+    boxShadow: '0 0 0 2px var(--terminal-brand-ring)',
   },
   accountExchangeMain: {
     border: 'none',
@@ -5785,7 +6284,7 @@ const S = {
     minWidth: 0,
   },
   accountBalanceDetail: {
-    color: '#8B7655',
+    color: 'var(--terminal-text-muted)',
     fontSize: 10,
     whiteSpace: 'nowrap',
     overflow: 'hidden',
@@ -5797,7 +6296,7 @@ const S = {
     gridTemplateColumns: 'repeat(auto-fit, minmax(78px, 1fr))',
     gap: 6,
     paddingTop: 7,
-    borderTop: '1px solid #D4C8B0',
+    borderTop: '1px solid var(--terminal-border)',
   },
   accountActionButton: {
     minHeight: 34,
@@ -5806,8 +6305,8 @@ const S = {
     fontSize: 11,
   },
   gameAuthCard: {
-    background: '#efe6cf',
-    border: '3px solid #c9b896',
+    background: 'var(--terminal-surface-subtle)',
+    border: '1px solid var(--terminal-border)',
     borderRadius: 12,
     padding: 12,
     display: 'flex',
@@ -5833,8 +6332,8 @@ const S = {
     gap: 8,
   },
   gameAuthRow: {
-    background: '#f8f1df',
-    border: '2px solid #d9cdb4',
+    background: 'var(--terminal-surface)',
+    border: '1px solid var(--terminal-border)',
     borderRadius: 10,
     padding: 10,
     display: 'flex',
@@ -5850,7 +6349,7 @@ const S = {
   gameAuthRowHint: {
     fontSize: 11,
     fontWeight: 700,
-    color: '#8b7655',
+    color: 'var(--terminal-text-muted)',
     lineHeight: 1.35,
   },
   gameAuthRowActions: {
@@ -5860,27 +6359,27 @@ const S = {
   },
   gameAuthStatusPill: {
     fontSize: 10,
-    fontWeight: 900,
+    fontWeight: 700,
     padding: '3px 8px',
     borderRadius: 999,
-    border: '2px solid #fff',
+    border: '1px solid var(--terminal-surface)',
     letterSpacing: 0.4,
   },
   gameAuthStatusReady: {
-    background: '#1E88E5',
-    color: '#fff',
+    background: 'var(--terminal-info)',
+    color: 'var(--terminal-on-accent)',
   },
   gameAuthStatusSynced: {
-    background: '#43A047',
-    color: '#fff',
+    background: 'var(--terminal-long)',
+    color: 'var(--terminal-on-accent)',
   },
   gameAuthStatusMissing: {
-    background: '#B0BEC5',
-    color: '#37474F',
+    background: 'var(--terminal-surface-muted)',
+    color: 'var(--terminal-text-secondary)',
   },
   gameAuthStatusPartial: {
-    background: '#FB8C00',
-    color: '#fff',
+    background: 'var(--terminal-warning-soft)',
+    color: 'var(--terminal-warning)',
   },
   grvtOneTapRow: {
     display: 'flex',
@@ -5894,11 +6393,11 @@ const S = {
     boxSizing: 'border-box',
     padding: '6px 10px',
     borderRadius: 8,
-    border: '2px solid #d4c8b0',
+    border: '1px solid var(--terminal-border)',
     fontSize: 12,
     fontFamily: 'monospace',
-    background: '#fffaf0',
-    color: '#5C3A21',
+    background: 'var(--terminal-surface)',
+    color: 'var(--terminal-text)',
     lineHeight: 1.35,
     minHeight: 0,
   },
@@ -5908,8 +6407,8 @@ const S = {
     width: 'auto',
   },
   accountFormCard: {
-    background: '#e8dfc8',
-    border: '3px solid #d4c8b0',
+    background: 'var(--terminal-surface-subtle)',
+    border: '1px solid var(--terminal-border)',
     borderRadius: 12,
     padding: 12,
     display: 'flex',
@@ -5917,8 +6416,8 @@ const S = {
     boxSizing: 'border-box',
   },
   accountsListCard: {
-    background: '#e8dfc8',
-    border: '3px solid #d4c8b0',
+    background: 'var(--terminal-surface-subtle)',
+    border: '1px solid var(--terminal-border)',
     borderRadius: 12,
     padding: 12,
     display: 'flex',
@@ -5928,7 +6427,7 @@ const S = {
   sectionDesc: {
     fontSize: 12,
     fontWeight: 700,
-    color: '#8b7655',
+    color: 'var(--terminal-text-muted)',
     margin: '3px 0 10px 0',
   },
   formGrid: {
@@ -5942,24 +6441,24 @@ const S = {
     gap: 4,
   },
   formSelect: {
-    border: '2px solid #bba882',
-    background: '#fdf8e7',
+    border: '1px solid var(--terminal-border-strong)',
+    background: 'var(--terminal-surface)',
     borderRadius: 10,
-    color: '#5C3A21',
+    color: 'var(--terminal-text)',
     fontSize: 13,
-    fontWeight: 800,
+    fontWeight: 600,
     padding: '8px 10px',
     cursor: 'pointer',
     fontFamily: 'inherit',
     outline: 'none',
   },
   formInput: {
-    border: '2px solid #bba882',
-    background: '#fdf8e7',
+    border: '1px solid var(--terminal-border-strong)',
+    background: 'var(--terminal-surface)',
     borderRadius: 10,
-    color: '#5C3A21',
+    color: 'var(--terminal-text)',
     fontSize: 13,
-    fontWeight: 800,
+    fontWeight: 600,
     padding: '8px 10px',
     fontFamily: 'inherit',
     outline: 'none',
@@ -5971,8 +6470,8 @@ const S = {
     gap: 8,
   },
   accountRow: {
-    background: '#fdf8e7',
-    border: '2px solid #d4c8b0',
+    background: 'var(--terminal-surface)',
+    border: '1px solid var(--terminal-border)',
     borderRadius: 10,
     padding: '8px 10px',
     display: 'flex',
@@ -5981,8 +6480,8 @@ const S = {
     gap: 10,
   },
   accountRowActive: {
-    background: '#fdf8e7',
-    border: '2px solid #43A047',
+    background: 'var(--terminal-surface)',
+    border: '1px solid var(--terminal-long)',
     borderRadius: 10,
     padding: '8px 10px',
     display: 'flex',
@@ -5994,11 +6493,11 @@ const S = {
     width: 36,
     height: 36,
     borderRadius: 8,
-    border: '2px solid rgba(92,58,33,0.3)',
+    border: '1px solid var(--terminal-border)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    background: '#e8dfc8',
+    background: 'var(--terminal-surface-subtle)',
   },
   accountDetails: {
     display: 'flex',
@@ -6012,8 +6511,8 @@ const S = {
   },
   emptyState: {
     fontSize: 12,
-    fontWeight: 800,
-    color: '#8b7655',
+    fontWeight: 600,
+    color: 'var(--terminal-text-muted)',
     textAlign: 'center',
     padding: '20px 0',
   },

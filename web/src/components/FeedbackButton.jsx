@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { uiButton, uiIconButton } from '../styles/theme';
 
 const DISCORD_URL = 'https://discord.gg/wSNuupRSw';
 const TELEGRAM_URL = 'https://t.me/clashofperps';
@@ -17,14 +18,14 @@ export default function FeedbackButton() {
           pointer-events: auto;
           height: 34px;
           padding: 0 12px;
-          border: 2px solid #5C3A21;
-          border-radius: 8px;
-          background: #fff6dc;
-          color: #3a2818;
-          box-shadow: 0 5px 12px rgba(0,0,0,0.32), inset 0 1px 0 rgba(255,255,255,0.55);
+          border: 1px solid var(--terminal-border-strong);
+          border-radius: 10px;
+          background: var(--terminal-surface);
+          color: var(--terminal-text);
+          box-shadow: none;
           font-family: inherit;
           font-size: 12px;
-          font-weight: 900;
+          font-weight: 700;
           letter-spacing: 0;
           cursor: pointer;
         }
@@ -86,18 +87,18 @@ const S = {
   },
   modal: {
     width: 'min(360px, calc(100vw - 28px))',
-    borderRadius: 8,
-    border: '3px solid #5C3A21',
-    background: '#fff4d4',
-    color: '#2f2117',
+    borderRadius: 20,
+    border: '1px solid var(--terminal-border)',
+    background: 'var(--terminal-surface)',
+    color: 'var(--terminal-text)',
     overflow: 'hidden',
     boxShadow: '0 18px 38px rgba(0,0,0,0.45)',
     fontFamily: '"Inter", "Segoe UI", sans-serif',
   },
   header: {
     height: 44,
-    background: 'linear-gradient(180deg, #f7c85a, #d89c2d)',
-    borderBottom: '2px solid #5C3A21',
+    background: 'var(--terminal-surface-subtle)',
+    borderBottom: '1px solid var(--terminal-border)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -105,22 +106,11 @@ const S = {
   },
   title: {
     fontSize: 15,
-    fontWeight: 900,
+    fontWeight: 700,
     letterSpacing: 0,
-    color: '#321f12',
+    color: 'var(--terminal-text)',
   },
-  close: {
-    width: 28,
-    height: 28,
-    borderRadius: 6,
-    border: '2px solid #5C3A21',
-    background: '#fff4d4',
-    color: '#321f12',
-    fontSize: 15,
-    fontWeight: 900,
-    lineHeight: '20px',
-    cursor: 'pointer',
-  },
+  close: uiIconButton('secondary', 30, { fontSize: 15 }),
   body: {
     padding: 14,
     display: 'flex',
@@ -130,30 +120,18 @@ const S = {
   text: {
     fontSize: 13,
     lineHeight: 1.35,
-    fontWeight: 800,
-    color: '#6d5338',
+    fontWeight: 600,
+    color: 'var(--terminal-text-muted)',
   },
   linkButton: {
-    width: '100%',
-    height: 42,
-    borderRadius: 8,
-    border: '3px solid #5C3A21',
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: 900,
-    letterSpacing: 0,
-    cursor: 'pointer',
-    boxShadow: '0 4px 0 #5C3A21, 0 7px 12px rgba(0,0,0,0.22)',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
+    ...uiButton('secondary', { width: '100%', minHeight: 42, fontSize: 14 }),
     textDecoration: 'none',
     boxSizing: 'border-box',
   },
   discord: {
-    background: 'linear-gradient(180deg, #7289da, #4752c4)',
+    borderColor: 'var(--terminal-border-strong)',
   },
   telegram: {
-    background: 'linear-gradient(180deg, #35aee2, #168ac2)',
+    borderColor: 'var(--terminal-border-strong)',
   },
 };

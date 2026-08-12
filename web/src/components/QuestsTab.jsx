@@ -10,6 +10,7 @@ import { readEncryptedCredential, writeEncryptedCredential } from '../lib/encryp
 import { pacificaFetch } from '../lib/pacificaClient';
 import { listStoredPacificaMasters, readPacificaAgent } from '../lib/pacificaAgentStorage';
 import { nftRarityCardStyle, normalizeNftRarity } from '../lib/nftV3Client';
+import { uiButton } from '../styles/theme';
 
 
 const GAME_API = import.meta.env.VITE_GAME_API || '/api';
@@ -776,10 +777,10 @@ function QuestsTab({ markets = [] }) {
       <div style={{...S.empty, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12}}>
         <div style={{
           width: 36, height: 36, borderRadius: '50%',
-          borderWidth: 3,
+          borderWidth: 1,
           borderStyle: 'solid',
-          borderColor: 'rgba(92,58,33,0.15)',
-          borderTopColor: '#e8b830',
+          borderColor: 'var(--terminal-border)',
+          borderTopColor: 'var(--terminal-orange)',
           animation: 'qt-spin 0.9s linear infinite',
         }} />
         <div style={S.emptyTitle}>Loading quests…</div>
@@ -808,7 +809,22 @@ function QuestsTab({ markets = [] }) {
           style={GOLD_REWARD_PANEL_TOAST_STYLE}
         />
       )}
-      {error && <div style={S.error} onClick={() => setError(null)}>{error}</div>}
+      {error && (
+        <div
+          style={S.error}
+          role="button"
+          tabIndex={0}
+          onClick={() => setError(null)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault();
+              setError(null);
+            }
+          }}
+        >
+          {error}
+        </div>
+      )}
       {visibleTasks.map(t => (
         <QuestCard
           key={t.id}
@@ -826,65 +842,49 @@ function QuestsTab({ markets = [] }) {
 const S = {
   wrap: { display: 'flex', flexDirection: 'column', gap: 10 },
   card: {
-    background: 'linear-gradient(180deg, #fdf8e7 0%, #f3ebd1 100%)',
-    border: '2px solid #d4c8b0',
-    borderRadius: 12,
+    background: 'var(--terminal-surface)',
+    border: '1px solid var(--terminal-border)',
+    borderRadius: 14,
     padding: 12,
     display: 'flex', flexDirection: 'column', gap: 8,
-    boxShadow: '0 2px 4px rgba(92, 58, 33, 0.08)',
+    boxShadow: '0 4px 14px rgba(17,24,39,0.06)',
   },
   cardHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 },
-  cardTitle: { fontSize: 15, fontWeight: 900, color: '#5C3A21' },
-  cardDesc: { fontSize: 12, color: '#8a7252', fontWeight: 600 },
-  cardAuto: { fontSize: 11, color: '#a3906a', fontStyle: 'italic', fontWeight: 600 },
+  cardTitle: { fontSize: 15, fontWeight: 750, color: 'var(--terminal-text)' },
+  cardDesc: { fontSize: 12, color: 'var(--terminal-text-muted)', fontWeight: 600 },
+  cardAuto: { fontSize: 11, color: 'var(--terminal-text-faint)', fontStyle: 'italic', fontWeight: 600 },
   progressWrap: { display: 'flex', flexDirection: 'column', gap: 4 },
-  progressBar: { height: 8, background: '#e4d9b8', borderRadius: 4, overflow: 'hidden', border: '1px solid #c4b894' },
-  progressFill: { height: '100%', background: 'linear-gradient(90deg, #e8b830 0%, #d49820 100%)', transition: 'width 0.3s' },
-  progressText: { fontSize: 11, fontWeight: 700, color: '#5C3A21', textAlign: 'right' },
+  progressBar: { height: 8, background: 'var(--terminal-surface-muted)', borderRadius: 999, overflow: 'hidden', border: '1px solid var(--terminal-border)' },
+  progressFill: { height: '100%', background: 'var(--terminal-orange)', transition: 'width 0.3s' },
+  progressText: { fontSize: 11, fontWeight: 700, color: 'var(--terminal-text-control)', textAlign: 'right', fontVariantNumeric: 'tabular-nums' },
   rewardRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginTop: 2 },
   rewards: { display: 'flex', gap: 6, flexWrap: 'wrap' },
-  rewardGold: { fontSize: 12, fontWeight: 900, color: '#b8860b', background: '#fff5cc', padding: '3px 8px', borderRadius: 6, border: '1px solid #e8b830', display: 'flex', alignItems: 'center', gap: 4 },
-  rewardWood: { fontSize: 12, fontWeight: 900, color: '#4d7a2e', background: '#e8f5d8', padding: '3px 8px', borderRadius: 6, border: '1px solid #6ab344', display: 'flex', alignItems: 'center', gap: 4 },
-  rewardOre: { fontSize: 12, fontWeight: 900, color: '#566878', background: '#dde5ea', padding: '3px 8px', borderRadius: 6, border: '1px solid #8a9aaa', display: 'flex', alignItems: 'center', gap: 4 },
-  rewardBoost: { fontSize: 11, fontWeight: 900, color: '#704214', background: '#fff0b8', padding: '3px 7px', borderRadius: 6, border: '1px solid #d8a62a', display: 'flex', alignItems: 'center' },
+  rewardGold: { fontSize: 12, fontWeight: 750, color: 'var(--terminal-brand-strong)', background: 'var(--terminal-brand-soft)', padding: '3px 8px', borderRadius: 8, border: '1px solid var(--terminal-brand-border)', display: 'flex', alignItems: 'center', gap: 4 },
+  rewardWood: { fontSize: 12, fontWeight: 750, color: 'var(--terminal-long)', background: 'var(--terminal-long-soft)', padding: '3px 8px', borderRadius: 8, border: '1px solid var(--terminal-long-border)', display: 'flex', alignItems: 'center', gap: 4 },
+  rewardOre: { fontSize: 12, fontWeight: 750, color: 'var(--terminal-text-secondary)', background: 'var(--terminal-surface-muted)', padding: '3px 8px', borderRadius: 8, border: '1px solid var(--terminal-border)', display: 'flex', alignItems: 'center', gap: 4 },
+  rewardBoost: { fontSize: 11, fontWeight: 750, color: 'var(--terminal-brand-strong)', background: 'var(--terminal-brand-soft)', padding: '3px 7px', borderRadius: 8, border: '1px solid var(--terminal-brand-border)', display: 'flex', alignItems: 'center' },
   rewardIcon: { width: 16, height: 16, objectFit: 'contain' },
   nftUnlockRow: {
     display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
-    background: '#fff7d6', border: '1px solid #e6c46b', borderRadius: 7,
+    background: 'var(--terminal-brand-soft)', border: '1px solid var(--terminal-brand-border)', borderRadius: 10,
     padding: '5px 7px', marginTop: 2,
   },
-  nftUnlockText: { fontSize: 11, lineHeight: 1.2, fontWeight: 800, color: '#704214' },
-  nftUnlockBtn: {
-    flex: '0 0 auto', padding: '4px 8px', borderRadius: 7, border: '1px solid #a86d16',
-    background: 'linear-gradient(180deg, #f0be35 0%, #c68419 100%)',
-    color: '#fff', fontSize: 11, fontWeight: 900, cursor: 'pointer',
-    textShadow: '1px 1px 0 rgba(0,0,0,0.22)',
-  },
+  nftUnlockText: { fontSize: 11, lineHeight: 1.2, fontWeight: 700, color: 'var(--terminal-warning)' },
+  nftUnlockBtn: uiButton('primary', { flex: '0 0 auto', minHeight: 32, padding: '5px 9px', fontSize: 11 }),
 
-  btnStart: {
-    minWidth: 86, padding: '6px 14px', background: 'linear-gradient(180deg, #6ab344 0%, #4d7a2e 100%)',
-    color: '#fff', fontWeight: 900, fontSize: 12, border: '2px solid #3a5e22', borderRadius: 8,
-    cursor: 'pointer', textShadow: '1px 1px 0 rgba(0,0,0,0.3)',
-  },
-  btnClaim: {
-    minWidth: 86, padding: '6px 14px', background: 'linear-gradient(180deg, #e8b830 0%, #b8860b 100%)',
-    color: '#fff', fontWeight: 900, fontSize: 12, border: '2px solid #8a5f00', borderRadius: 8,
-    cursor: 'pointer', textShadow: '1px 1px 0 rgba(0,0,0,0.3)', animation: 'pulse-glow 1.5s infinite',
-  },
-  btnRefresh: {
-    minWidth: 86, padding: '6px 14px', background: '#d4c8b0', color: '#5C3A21',
-    fontWeight: 800, fontSize: 12, border: '2px solid #a3906a', borderRadius: 8, cursor: 'pointer',
-  },
-  doneLabel: { fontSize: 18, fontWeight: 900, color: '#6ab344' },
+  btnStart: uiButton('primary', { minWidth: 86, minHeight: 36, padding: '7px 14px', fontSize: 12 }),
+  btnClaim: uiButton('primary', { minWidth: 86, minHeight: 36, padding: '7px 14px', fontSize: 12 }),
+  btnRefresh: uiButton('secondary', { minWidth: 86, minHeight: 36, padding: '7px 14px', fontSize: 12 }),
+  doneLabel: { fontSize: 18, fontWeight: 750, color: 'var(--terminal-long)' },
   badgeRow: { display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4, flexWrap: 'wrap' },
-  badgeExclusive: { fontSize: 10, fontWeight: 900, color: '#fff', background: 'linear-gradient(180deg, #8b5cf6 0%, #5b21b6 100%)', padding: '2px 6px', borderRadius: 4, border: '1px solid #4c1d95', textShadow: '1px 1px 0 rgba(0,0,0,0.25)' },
-  badgeDone: { fontSize: 10, fontWeight: 800, color: '#4d7a2e', background: '#e8f5d8', padding: '2px 6px', borderRadius: 4, border: '1px solid #6ab344' },
-  badgeRepeat: { fontSize: 10, fontWeight: 800, color: '#5C3A21', background: '#fff5cc', padding: '2px 6px', borderRadius: 4, border: '1px solid #e8b830' },
-  empty: { textAlign: 'center', padding: 40, color: '#8a7252' },
+  badgeExclusive: { fontSize: 10, fontWeight: 600, color: 'var(--terminal-brand-strong)', background: 'var(--terminal-brand-soft)', padding: '2px 6px', borderRadius: 8, border: '1px solid var(--terminal-brand-border)' },
+  badgeDone: { fontSize: 10, fontWeight: 600, color: 'var(--terminal-long)', background: 'var(--terminal-long-soft)', padding: '2px 6px', borderRadius: 8, border: '1px solid var(--terminal-long-border)' },
+  badgeRepeat: { fontSize: 10, fontWeight: 600, color: 'var(--terminal-text-control)', background: 'var(--terminal-surface-subtle)', padding: '2px 6px', borderRadius: 8, border: '1px solid var(--terminal-border)' },
+  empty: { textAlign: 'center', padding: 40, color: 'var(--terminal-text-muted)' },
   emptyIcon: { fontSize: 48, marginBottom: 10 },
-  emptyTitle: { fontSize: 16, fontWeight: 900, color: '#5C3A21', marginBottom: 6 },
+  emptyTitle: { fontSize: 16, fontWeight: 750, color: 'var(--terminal-text)', marginBottom: 6 },
   emptyDesc: { fontSize: 12, fontWeight: 600 },
-  error: { background: '#fee', border: '2px solid #c33', color: '#c33', padding: 8, borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: 'pointer', textAlign: 'center' },
+  error: { background: 'var(--terminal-short-soft)', border: '1px solid var(--terminal-short-border)', color: 'var(--terminal-short)', padding: 8, borderRadius: 10, fontSize: 12, fontWeight: 700, cursor: 'pointer', textAlign: 'center' },
 };
 
 export default memo(QuestsTab);

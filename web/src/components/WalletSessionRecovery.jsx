@@ -10,6 +10,7 @@ import { useFarcaster } from '../hooks/useFarcaster';
 import { openSolanaWallet } from '../lib/solanaWalletUi';
 import { addClientBreadcrumb } from '../lib/clientLogger';
 import EvmWalletModal from './EvmWalletModal';
+import { uiButton, uiIconButton } from '../styles/theme';
 
 const DEX_PICKED_KEY = 'clash_dex_picked';
 const SHOW_AFTER_MS = 1200;
@@ -23,6 +24,8 @@ const DEX_WALLET = {
   risex: { kind: 'evm', chain: 'RISE', label: 'RISEx', cta: 'Reconnect RISE wallet', targetChain: 'rise' },
   nado: { kind: 'evm', chain: 'Ink', label: 'Nado', cta: 'Reconnect Ink wallet', targetChain: 'ink' },
   ondo: { kind: 'evm', chain: 'Ethereum', label: 'Ondo Perps', cta: 'Reconnect Ethereum wallet', targetChain: 'mainnet' },
+  leverup: { kind: 'evm', chain: 'Monad', label: 'LeverUp V2', cta: 'Reconnect Monad wallet', targetChain: 'monad' },
+  aster: { kind: 'evm', chain: 'Aster', label: 'Aster', cta: 'Reconnect EVM wallet', targetChain: 'baseConnect' },
   hibachi: { kind: 'evm', chain: 'EVM', label: 'Hibachi', cta: 'Reconnect EVM wallet', targetChain: 'base' },
   hotstuff: { kind: 'evm', chain: 'Ethereum', label: 'Hotstuff', cta: 'Reconnect Ethereum wallet', targetChain: 'mainnet' },
   grvt: { kind: 'evm', chain: 'GRVT Exchange', label: 'GRVT', cta: 'Reconnect GRVT wallet', targetChain: 'grvt' },
@@ -210,16 +213,29 @@ export default function WalletSessionRecovery() {
 
   return (
     <>
-      <div style={S.card}>
-        <div style={S.title}>Wallet session needs repair</div>
-        <div style={S.text}>
+      <style>{`
+        .wallet-session-recovery button:focus-visible {
+          outline: 3px solid rgba(242, 101, 34, 0.28);
+          outline-offset: 2px;
+        }
+      `}</style>
+      <div
+        className="wallet-session-recovery"
+        role="region"
+        aria-live="polite"
+        aria-labelledby="wallet-recovery-title"
+        aria-describedby="wallet-recovery-description"
+        style={S.card}
+      >
+        <div id="wallet-recovery-title" style={S.title}>Wallet session needs repair</div>
+        <div id="wallet-recovery-description" style={S.text}>
           You are still signed in to the game, but {meta.label} needs a live {meta.chain} wallet to trade.
           {shortLinked ? ` Linked wallet: ${shortLinked}.` : ''}
           {shortOther ? ` A different wallet is active (${shortOther}).` : ''}
         </div>
         <div style={S.actions}>
-          <button style={S.primary} onClick={handleReconnect}>{meta.cta}</button>
-          <button style={S.secondary} onClick={handleLogout}>Log out</button>
+          <button type="button" style={S.primary} onClick={handleReconnect}>{meta.cta}</button>
+          <button type="button" style={S.secondary} onClick={handleLogout}>Log out</button>
         </div>
       </div>
       <EvmWalletModal
@@ -239,76 +255,54 @@ const S = {
   card: {
     position: 'fixed',
     left: '50%',
-    bottom: 18,
+    bottom: 'calc(env(safe-area-inset-bottom, 0px) + 16px)',
     transform: 'translateX(-50%)',
-    width: 'min(430px, calc(100vw - 24px))',
+    width: 'min(460px, calc(100vw - 24px))',
     zIndex: 260,
     pointerEvents: 'auto',
-    background: '#fdf8e7',
-    border: '4px solid #d4c8b0',
-    borderRadius: 18,
-    boxShadow: '0 14px 36px rgba(0,0,0,0.42)',
-    padding: '14px 14px 12px',
+    background: 'var(--terminal-surface)',
+    border: '1px solid var(--terminal-border)',
+    borderRadius: 16,
+    boxShadow: '0 16px 40px var(--terminal-shadow)',
+    padding: 16,
+    boxSizing: 'border-box',
     fontFamily: '"Inter","Segoe UI",sans-serif',
   },
   close: {
+    ...uiIconButton('secondary', 36),
     position: 'absolute',
     right: 10,
     top: 8,
-    width: 26,
-    height: 26,
-    borderRadius: '50%',
-    border: '2px solid #fff',
-    background: '#E53935',
-    color: '#fff',
     fontSize: 18,
-    fontWeight: 900,
-    lineHeight: '18px',
-    cursor: 'pointer',
+    lineHeight: 1,
   },
   title: {
-    paddingRight: 34,
-    color: '#5C3A21',
-    fontSize: 15,
-    fontWeight: 900,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
+    color: 'var(--terminal-text)',
+    fontSize: 16,
+    fontWeight: 750,
+    letterSpacing: '-0.01em',
   },
   text: {
     marginTop: 6,
-    color: '#77573d',
-    fontSize: 12,
-    fontWeight: 700,
-    lineHeight: 1.35,
+    color: 'var(--terminal-text-muted)',
+    fontSize: 13,
+    fontWeight: 500,
+    lineHeight: 1.5,
   },
   actions: {
     display: 'flex',
+    flexWrap: 'wrap',
     gap: 8,
-    marginTop: 12,
+    marginTop: 14,
   },
   primary: {
-    flex: 1,
-    border: '3px solid #3720a6',
-    borderRadius: 10,
-    background: 'linear-gradient(180deg, #6F5CFF 0%, #4530E0 100%)',
-    color: '#fff',
-    fontSize: 12,
-    fontWeight: 900,
-    padding: '10px 12px',
-    cursor: 'pointer',
-    boxShadow: '0 3px 0 #3720a6',
-    textShadow: '0 1px 0 rgba(0,0,0,0.35)',
+    ...uiButton('primary', { minHeight: 44, padding: '10px 14px' }),
+    flex: '1 1 220px',
+    fontFamily: 'inherit',
   },
   secondary: {
-    border: '3px solid #8b2a2a',
-    borderRadius: 10,
-    background: 'linear-gradient(180deg, #ef5350 0%, #d32f2f 100%)',
-    color: '#fff',
-    fontSize: 12,
-    fontWeight: 900,
-    padding: '10px 12px',
-    cursor: 'pointer',
-    boxShadow: '0 3px 0 #8b2a2a',
-    textShadow: '0 1px 0 rgba(0,0,0,0.35)',
+    ...uiButton('danger', { minHeight: 44, padding: '10px 14px' }),
+    flex: '1 1 96px',
+    fontFamily: 'inherit',
   },
 };

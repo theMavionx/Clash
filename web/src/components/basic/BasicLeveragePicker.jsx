@@ -7,6 +7,7 @@ import { memo, useMemo, useState } from 'react';
 // eslint-disable-next-line no-unused-vars -- used as JSX namespace (`motion.button`), false positive
 import { motion } from 'framer-motion';
 import { colors, shared } from './styles';
+import { uiButton } from '../../styles/theme';
 
 // Risk tiers used purely for the live label + accent color. Ranges
 // stay the same as the previous 3-card picker so the existing copy
@@ -72,7 +73,7 @@ function BasicLeveragePicker({ amount, direction, maxLeverage = 20, onPick, onBa
         style={{
           ...S.banner,
           borderColor: band.color,
-          boxShadow: `0 4px 0 ${band.color}, 0 8px 16px rgba(0,0,0,0.15)`,
+          boxShadow: '0 4px 12px rgba(17,24,39,0.06)',
         }}
       >
         <div style={S.bannerLeft}>
@@ -139,7 +140,7 @@ export { tierForLev };
 const S = {
   tightTitle: {
     fontSize: 'clamp(16px, 3vh, 20px)',
-    fontWeight: 900, color: colors.ink,
+    fontWeight: 700, color: colors.ink,
     textAlign: 'center', letterSpacing: '0.3px',
     margin: '2px 0 6px', lineHeight: 1.1,
   },
@@ -150,20 +151,18 @@ const S = {
   banner: {
     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
     gap: 10, padding: '10px 14px',
-    background: 'linear-gradient(180deg, #fdf8e7 0%, #f3ebd1 100%)',
-    borderWidth: 3, borderStyle: 'solid', borderRadius: 14,
+    background: 'var(--terminal-surface)',
+    borderWidth: 1, borderStyle: 'solid', borderRadius: 12,
     transition: 'border-color 0.18s ease, box-shadow 0.18s ease',
   },
   bannerLeft: { display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 },
   bannerIcon: { fontSize: 22, lineHeight: 1 },
   bannerLabel: {
-    fontSize: 14, fontWeight: 900, letterSpacing: '0.6px',
-    textShadow: '0 1px 0 rgba(255,255,255,0.45)',
+    fontSize: 14, fontWeight: 700, letterSpacing: '0.6px',
   },
   bannerValue: {
-    fontSize: 'clamp(20px, 4vh, 26px)', fontWeight: 900,
+    fontSize: 'clamp(20px, 4vh, 26px)', fontWeight: 700,
     fontVariantNumeric: 'tabular-nums',
-    textShadow: '0 1px 0 rgba(255,255,255,0.45)',
   },
   bannerBlurb: {
     margin: '2px 4px 4px',
@@ -175,8 +174,8 @@ const S = {
   // control reads as a single object rather than three loose rows.
   sliderCard: {
     padding: '12px 12px 10px', borderRadius: 12,
-    background: 'rgba(255,255,255,0.5)',
-    borderWidth: 2, borderStyle: 'solid', borderColor: colors.border,
+    background: 'var(--terminal-surface-subtle)',
+    borderWidth: 1, borderStyle: 'solid', borderColor: colors.border,
     display: 'flex', flexDirection: 'column', gap: 8,
     boxSizing: 'border-box',
   },
@@ -194,7 +193,7 @@ const S = {
   },
   scaleRow: {
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-    fontSize: 10, fontWeight: 800, color: colors.inkFaint,
+    fontSize: 10, fontWeight: 600, color: colors.inkFaint,
     letterSpacing: '0.3px',
     margin: '-2px 2px 0',
   },
@@ -205,28 +204,17 @@ const S = {
   },
   stat: {
     padding: '6px 8px', borderRadius: 8,
-    background: 'rgba(92,58,33,0.05)',
+    background: 'var(--terminal-surface)',
   },
   statLabel: {
-    fontSize: 9, fontWeight: 800, color: colors.inkFaint,
+    fontSize: 9, fontWeight: 600, color: colors.inkFaint,
     letterSpacing: '0.3px', marginBottom: 2,
   },
   statValue: {
-    fontSize: 14, fontWeight: 900, color: colors.ink,
+    fontSize: 14, fontWeight: 700, color: colors.ink,
     fontVariantNumeric: 'tabular-nums',
   },
-  continueBtn: {
-    width: '100%', padding: 12,
-    fontSize: 15, fontWeight: 900, color: '#fff',
-    borderWidth: 4, borderStyle: 'solid', borderColor: 'rgba(0,0,0,0.25)',
-    borderRadius: 14,
-    cursor: 'pointer',
-    fontFamily: 'inherit',
-    letterSpacing: '0.5px',
-    boxSizing: 'border-box',
-    boxShadow: '0 4px 0 rgba(0,0,0,0.25), 0 6px 16px rgba(0,0,0,0.2)',
-    textShadow: '0 2px 0 rgba(0,0,0,0.3)',
-  },
+  continueBtn: uiButton('primary', { width: '100%', minHeight: 44, padding: 12, fontSize: 15, boxSizing: 'border-box' }),
   backLink: {
     background: 'transparent', border: 'none',
     color: colors.inkFaint, fontSize: 12, fontWeight: 700,

@@ -145,16 +145,18 @@ function ResourceBar() {
                 ...styles.indicator,
                 background: barColor,
                 width: `${pct}%`,
-                boxShadow: 'inset 0 1px 1px rgba(255,255,255,0.4), inset 0 -1px 3px rgba(0,0,0,0.3)'
+                boxShadow: 'inset 0 1px 1px var(--terminal-chip-overlay), inset 0 -1px 3px rgba(0,0,0,0.3)'
               }} />
               <div style={styles.textWrap}>
                 <span style={{ ...styles.value, ...(mobile ? { fontSize: 13 } : {}) }}>{fmtShort(current)}</span>
                 <span style={{ ...styles.maxValue, ...(mobile ? { fontSize: 9 } : {}) }}>/ {fmtShort(max)}</span>
               </div>
               <button
+                type="button"
                 style={styles.hiddenButton}
                 onClick={() => handleClick(key)}
                 title={`Add ${key}`}
+                aria-label={`Add ${key}`}
               />
             </div>
           </div>
@@ -227,16 +229,16 @@ const styles = {
   },
   value: {
     fontSize: 18,
-    fontWeight: 900,
-    color: '#fff',
-    textShadow: '-1px -1px 0 #111, 1px -1px 0 #111, -1px 1px 0 #111, 1px 1px 0 #111, 0 2px 1px rgba(0,0,0,1)',
+    fontWeight: 700,
+    color: 'var(--terminal-on-accent)',
+    textShadow: 'none',
     letterSpacing: '0.5px',
   },
   maxValue: {
     fontSize: 11,
     fontWeight: 700,
-    color: 'rgba(255,255,255,0.5)',
-    textShadow: '0 1px 1px rgba(0,0,0,0.8)',
+    color: 'var(--terminal-chip-overlay)',
+    textShadow: 'none',
   },
   hiddenButton: {
     position: 'absolute',

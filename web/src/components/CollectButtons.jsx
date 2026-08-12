@@ -17,8 +17,10 @@ const CollectButton = memo(function CollectButton({ serverId, x, y, resource, am
   return (
     <div style={{ position: 'fixed', left: x - 24, top: y - 56, zIndex: 15, pointerEvents: 'all' }}>
       <button
+        type="button"
         style={{ ...styles.btn, borderColor: color, boxShadow: `0 4px 12px ${color}66` }}
         onClick={() => onCollect(serverId)}
+        aria-label={`Collect ${amount} ${resource}`}
       >
         <img src={RES_ICONS[resource] || goldIcon} alt={resource} style={styles.icon} />
         <span style={styles.amount}>+{amount}</span>
@@ -64,7 +66,7 @@ const styles = {
     // Longhand border so the per-resource `borderColor` override on the
     // button doesn't mix shorthand + longhand (React warns about that
     // when the color changes between renders).
-    borderWidth: 2,
+    borderWidth: 1,
     borderStyle: 'solid',
     borderColor: '#FFD700',
     borderRadius: 14,
@@ -81,9 +83,9 @@ const styles = {
   },
   amount: {
     fontSize: 12,
-    fontWeight: 900,
-    color: '#fff',
-    textShadow: '0 1px 2px rgba(0,0,0,0.8)',
+    fontWeight: 700,
+    color: 'var(--terminal-on-accent)',
+    textShadow: 'none',
   },
 };
 

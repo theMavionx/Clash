@@ -15,6 +15,7 @@ export const DEX_LABELS = {
   risex: 'RISEx',
   nado: 'Nado',
   ondo: 'Ondo Perps',
+  leverup: 'LeverUp V2',
   hibachi: 'Hibachi',
   grvt: 'GRVT',
   hotstuff: 'Hotstuff',

@@ -48,6 +48,15 @@ import {
 } from './accountProbeCache';
 import { addClientBreadcrumb, reportClientEvent } from '../lib/clientLogger';
 import { createRegisterAttemptManager } from './registerAttemptManager';
+import {
+  dispatchGodotRegister,
+  GODOT_REGISTER_BRIDGE_TIMEOUT_MS,
+} from './godotRegisterBridge';
+import {
+  authWalletKindForDex,
+  EVM_AUTH_DEX_IDS,
+  SOLANA_AUTH_DEX_IDS,
+} from './walletSelection';
 
 const DEX_PICKED_KEY = 'clash_dex_picked';
 const GAME_AUTH_STORAGE_KEY = 'clash_game_auth_v1';
@@ -60,8 +69,8 @@ const MANUAL_RECONNECT_WALLET_WAIT_MS = 8000;
 const WALLET_AUTH_PROOF_TIMEOUT_MS = 20000;
 const WALLET_AUTH_ACTION = 'wallet-auth';
 const PRIVY_ENABLED = !!import.meta.env.VITE_PRIVY_APP_ID;
-const EVM_AUTH_DEXES = new Set(['avantis', 'gmx', 'ostium', 'monad', 'hyperliquid', 'risex', 'nado', 'ondo', 'hibachi', 'hotstuff', 'grvt', 'katana', 'lighter']);
-const SOLANA_AUTH_DEXES = new Set(['pacifica', 'phoenix', 'gmtrade', 'flash', 'bulk']);
+const EVM_AUTH_DEXES = new Set(EVM_AUTH_DEX_IDS);
+const SOLANA_AUTH_DEXES = new Set(SOLANA_AUTH_DEX_IDS);
 // How long to wait for an auto-resolver to produce a candidate before
 // revealing the manual-connect CTAs. Keeps the spinner short when the
 // user isn't authenticated anywhere; keeps the "Joining…" UX intact when
@@ -114,18 +123,10 @@ function walletAddressChainType(wallet) {
   return 'solana';
 }
 
-function walletChainTypeForKnownDex(dex) {
-  const venue = String(dex || '').toLowerCase();
-  if (venue === 'decibel') return 'aptos';
-  if (EVM_AUTH_DEXES.has(venue)) return 'evm';
-  if (SOLANA_AUTH_DEXES.has(venue)) return 'solana';
-  return 'unknown';
-}
-
 function walletChainTypeForDex(wallet, dex) {
   const walletType = walletAddressChainType(wallet);
   if (walletType !== 'unknown') return walletType;
-  return walletChainTypeForKnownDex(dex);
+  return authWalletKindForDex(dex);
 }
 
 function walletAuthMessage({ wallet, dex, issuedAt }) {
@@ -270,6 +271,8 @@ export function useAuthFlow() {
     privySolanaSignMessage = signMessage;
   }
   const { showRegister } = useUI();
+  const showRegisterRef = useRef(showRegister);
+  showRegisterRef.current = showRegister;
   const {
     enabled: privyEnabled,
     ready: privyReady,
@@ -322,6 +325,10 @@ export function useAuthFlow() {
     const manager = registerAttemptManagerRef.current;
     return () => manager.cancelCurrent();
   }, []);
+
+  useEffect(() => {
+    if (!showRegister) registerAttemptManagerRef.current?.cancelCurrent();
+  }, [showRegister]);
 
   useEffect(() => {
     const onManualReconnectRequired = () => {
@@ -929,7 +936,10 @@ export function useAuthFlow() {
     if (registerError && candidate) return 'need_name';
     if (registering) return 'registering';
     if (booting) return 'booting';
-    if (!dexPicked && !storedAuthWallet && !manualReconnectRequired) return 'pick_dex';
+    // An explicit unpick must always reach the DEX picker. Previously a
+    // remembered auth wallet kept this condition false, so CHANGE appeared
+    // to do nothing and the same reconnect screen rendered again.
+    if (!dexPicked && !manualReconnectRequired) return 'pick_dex';
     if (
       manualReconnectRequired &&
       !manualReconnectSatisfied &&
@@ -1033,6 +1043,7 @@ export function useAuthFlow() {
   // derived state — ESLint's heuristic flag is acceptable here.
   /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
+    if (!showRegister) return;
     // Gate on readyForRegister — prevents firing on the same render where
     // the session-reset effect detected a transition but hasn't yet flushed
     // the cleared dexPicked / evmContext state. See `readyForRegister`
@@ -1115,16 +1126,20 @@ export function useAuthFlow() {
     // effect. Cancelling in that cleanup discarded the valid signature and also
     // removed the only timeout, leaving the UI on "Finalising" forever.
     const manager = registerAttemptManagerRef.current;
-    const attempt = manager.begin(candidateKey, WALLET_AUTH_PROOF_TIMEOUT_MS + 5000, () => {
-      setRegistering(false);
-      setRegisterError('Game login timed out. Reload the page or press BACK and reconnect.');
-      lastRegisteredRef.current = null;
-      addClientBreadcrumb('auth.register_timeout', {
-        dex,
-        source: candidate.source || null,
-        mode: 'auto',
-      }, 'warn');
-    });
+    const attempt = manager.begin(
+      candidateKey,
+      WALLET_AUTH_PROOF_TIMEOUT_MS + GODOT_REGISTER_BRIDGE_TIMEOUT_MS + 5000,
+      () => {
+        setRegistering(false);
+        setRegisterError('Game login timed out. Wait a moment or press BACK and reconnect.');
+        lastRegisteredRef.current = null;
+        addClientBreadcrumb('auth.register_timeout', {
+          dex,
+          source: candidate.source || null,
+          mode: 'auto',
+        }, 'warn');
+      },
+    );
     if (!attempt) return;
     (async () => {
       try {
@@ -1142,9 +1157,12 @@ export function useAuthFlow() {
           payload.authProof = authProof;
           payload.auth_proof = authProof;
         }
-        if (!sendToGodot('register', payload)) {
-          throw new Error('Game bridge is not ready. Reload the page and try again.');
-        }
+        const dispatched = await dispatchGodotRegister({
+          sendToGodot,
+          payload,
+          isActive: () => manager.isActive(attempt) && showRegisterRef.current,
+        });
+        if (!dispatched || !manager.isActive(attempt)) return;
         addClientBreadcrumb('auth.register_dispatched', {
           dex,
           source: candidate.source || null,
@@ -1163,7 +1181,7 @@ export function useAuthFlow() {
         }, 'warn');
       }
     })();
-  }, [readyForRegister, dexPicked, candidate, suggestedName, dex, sendToGodot, fcUser,
+  }, [showRegister, readyForRegister, dexPicked, candidate, suggestedName, dex, sendToGodot, fcUser,
       existingAccountName, createWalletAuthProof, registerError]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
@@ -1244,8 +1262,39 @@ export function useAuthFlow() {
     fcEvmTriedRef.current = false;
   }, []);
 
+  const changeWallet = useCallback(async () => {
+    // This is an explicit account-boundary action. Keep the selected DEX so
+    // the user returns to the correct venue setup, but remove every wallet
+    // resolver that could immediately re-select the previous account.
+    registerAttemptManagerRef.current?.cancelCurrent();
+    lastRegisteredRef.current = null;
+    fcEvmTriedRef.current = true;
+    seekerAutoConnectTriedRef.current = true;
+    setRegistering(false);
+    setRegisterError('');
+    writeManualReconnectRequired(false);
+    setManualReconnectRequired(false);
+    try {
+      localStorage.removeItem(GAME_AUTH_STORAGE_KEY);
+      localStorage.removeItem(MANUAL_RECONNECT_KEY);
+      if (typeof window !== 'undefined') window._playerToken = null;
+    } catch { /* storage disabled */ }
+
+    try { evmDisconnect?.(); } catch { /* idempotent */ }
+    const disconnects = [
+      () => solWallet?.disconnect?.(),
+      () => aptosWallet?.disconnect?.(),
+      () => (privyEnabled && privyAuthed ? privyLogout?.() : null),
+    ];
+    await Promise.allSettled(disconnects.map((disconnect) => Promise.resolve().then(disconnect)));
+    addClientBreadcrumb('wallet.change_ready', {
+      dex,
+      wallet_kind: authWalletKindForDex(dex),
+    });
+  }, [aptosWallet, dex, evmDisconnect, privyAuthed, privyEnabled, privyLogout, solWallet]);
+
   const submitName = useCallback(async (name) => {
-    if (!candidate || !name || name.trim().length < 2) return;
+    if (!showRegister || !candidate || !name || name.trim().length < 2) return;
     // Key the dedup ref on (wallet, dex). Same wallet on different DEXes
     // is now a different account — without `dex` in the key, switching
     // from Avantis to GMX would silently no-op the GMX register because
@@ -1295,9 +1344,12 @@ export function useAuthFlow() {
         payload.authProof = authProof;
         payload.auth_proof = authProof;
       }
-      if (!sendToGodot('register', payload)) {
-        throw new Error('Game bridge is not ready. Reload the page and try again.');
-      }
+      const dispatched = await dispatchGodotRegister({
+        sendToGodot,
+        payload,
+        isActive: () => showRegisterRef.current && lastRegisteredRef.current === candidateKey,
+      });
+      if (!dispatched) return;
       setTimeout(() => setRegistering(false), 10000);
     } catch (e) {
       const message = authErrorMessage(e?.message || 'Wallet signature required. Connect again.');
@@ -1310,7 +1362,7 @@ export function useAuthFlow() {
         message,
       }, 'warn');
     }
-  }, [candidate, dex, dexPicked, sendToGodot, fcUser, createWalletAuthProof]);
+  }, [showRegister, candidate, dex, dexPicked, sendToGodot, fcUser, createWalletAuthProof]);
 
   // Trigger manual Privy login (email) — Privy renders its own modal.
   const confirmLogin = useCallback(() => {
@@ -1366,6 +1418,7 @@ export function useAuthFlow() {
     actions: {
       pickDex,
       unpickDex,
+      changeWallet,
       submitName,
       confirmLogin,
       clearRegisterError: () => setRegisterError(''),

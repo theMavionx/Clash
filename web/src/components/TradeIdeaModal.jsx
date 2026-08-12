@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, memo } from 'react';
 import elfaLogo from '../assets/elfa.svg';
 import { usePlayer } from '../hooks/useGodot';
 import { pacificaFetch } from '../lib/pacificaClient';
+import { uiButton, uiIconButton } from '../styles/theme';
 
 const GAME_API = import.meta.env.VITE_GAME_API || '/api';
 
@@ -71,10 +72,10 @@ function MiniChart({ symbol, entry, tp, sl, mark }) {
   const { W, H, y, barW } = view;
   const fmt = (n) => n >= 100 ? Math.round(n).toLocaleString() : n.toFixed(4);
   const levelsRaw = [
-    { key: 'tp',    val: tp,    color: '#4CAF50', label: 'TP' },
-    { key: 'mark',  val: mark,  color: '#5C3A21', label: 'Mark' },
+    { key: 'tp',    val: tp,    color: 'var(--terminal-long)', label: 'TP' },
+    { key: 'mark',  val: mark,  color: 'var(--terminal-text)', label: 'Mark' },
     { key: 'entry', val: entry, color: '#9c27b0', label: 'Entry' },
-    { key: 'sl',    val: sl,    color: '#E53935', label: 'SL' },
+    { key: 'sl',    val: sl,    color: 'var(--terminal-short)', label: 'SL' },
   ].filter(l => typeof l.val === 'number' && isFinite(l.val));
 
   const tagW = 78;
@@ -138,7 +139,7 @@ function MiniChart({ symbol, entry, tp, sl, mark }) {
           const yOpen = y(c.o), yClose = y(c.c);
           const yHigh = y(c.h), yLow = y(c.l);
           const up = c.c >= c.o;
-          const color = up ? '#4CAF50' : '#E53935';
+          const color = up ? 'var(--terminal-long)' : 'var(--terminal-short)';
           const bodyTop = Math.min(yOpen, yClose);
           const bodyH = Math.max(1.5, Math.abs(yClose - yOpen));
           return (
@@ -166,7 +167,7 @@ function MiniChart({ symbol, entry, tp, sl, mark }) {
               <text
                 x={W + tagW / 2} y={l.yTag + 5}
                 textAnchor="middle"
-                fontSize={13} fontWeight={900} fill="#fff"
+                fontSize={13} fontWeight={900} fill="var(--terminal-surface)"
                 style={{ fontFamily: 'system-ui, -apple-system, sans-serif' }}
               >{fmt(l.val)}</text>
             </g>
@@ -179,8 +180,8 @@ function MiniChart({ symbol, entry, tp, sl, mark }) {
 
 const miniS = {
   wrap: {
-    background: 'rgba(0,0,0,0.04)',
-    border: '1.5px solid rgba(92,58,33,0.2)',
+    background: 'var(--terminal-surface-subtle)',
+    border: '1px solid var(--terminal-border)',
     borderRadius: 8,
     padding: 6,
     marginBottom: 12,
@@ -189,8 +190,8 @@ const miniS = {
   svg: { width: '100%', height: '100%', display: 'block' },
   loading: {
     display: 'flex', alignItems: 'center', justifyContent: 'center',
-    height: 140, fontSize: 12, color: '#8a7252', fontWeight: 700,
-    background: 'rgba(0,0,0,0.04)', border: '1.5px solid rgba(92,58,33,0.2)',
+    height: 140, fontSize: 12, color: 'var(--terminal-text-muted)', fontWeight: 650,
+    background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)',
     borderRadius: 8, marginBottom: 12,
   },
 };
@@ -262,12 +263,12 @@ function TradeIdeaModal({ symbol, currentPrice, onClose, onApply }) {
 
   const idea = data?.idea;
   const isLong = idea?.side === 'long';
-  const sideColor = isLong ? '#4CAF50' : '#E53935';
+  const sideColor = isLong ? 'var(--terminal-long)' : 'var(--terminal-short)';
   const confColor =
-    !idea ? '#8a7252'
-    : idea.confidence >= 70 ? '#4CAF50'
-    : idea.confidence >= 50 ? '#e8b830'
-    : '#E53935';
+    !idea ? 'var(--terminal-text-muted)'
+    : idea.confidence >= 70 ? 'var(--terminal-long)'
+    : idea.confidence >= 50 ? 'var(--terminal-orange)'
+    : 'var(--terminal-short)';
 
   const fmt = (n) => typeof n === 'number' ? (n >= 100 ? n.toLocaleString(undefined, { maximumFractionDigits: 2 }) : n.toFixed(4)) : '—';
 
@@ -306,10 +307,10 @@ function TradeIdeaModal({ symbol, currentPrice, onClose, onApply }) {
             <div style={S.levelsGrid}>
               <LevelRow label="Entry"  value={fmt(idea.entry)} color="#9c27b0" />
               {mark != null && (
-                <LevelRow label="Mark" value={fmt(mark)} color="#5C3A21" muted />
+                <LevelRow label="Mark" value={fmt(mark)} color="var(--terminal-text)" muted />
               )}
-              <LevelRow label="TP"     value={fmt(idea.tp)}    color="#4CAF50" />
-              <LevelRow label="SL"     value={fmt(idea.sl)}    color="#E53935" />
+              <LevelRow label="TP"     value={fmt(idea.tp)}    color="var(--terminal-long)" />
+              <LevelRow label="SL"     value={fmt(idea.sl)}    color="var(--terminal-short)" />
             </div>
 
             <div style={S.metaGrid}>
@@ -326,7 +327,7 @@ function TradeIdeaModal({ symbol, currentPrice, onClose, onApply }) {
 
             {onApply && (
               <button
-                style={{...S.applyBtn, background: sideColor}}
+                style={{...S.applyBtn, background: sideColor, borderColor: sideColor}}
                 onClick={() => { onApply(idea); onClose(); }}
               >
                 Got it
@@ -361,72 +362,64 @@ function MetaCard({ label, value, color }) {
   return (
     <div style={S.metaCard}>
       <div style={S.metaLabel}>{label}</div>
-      <div style={{...S.metaValue, color: color || '#5C3A21'}}>{value}</div>
+      <div style={{...S.metaValue, color: color || 'var(--terminal-text)'}}>{value}</div>
     </div>
   );
 }
 
 const S = {
   backdrop: {
-    position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)',
+    position: 'fixed', inset: 0, background: 'rgba(17,24,39,0.48)',
     zIndex: 10000, display: 'flex', alignItems: 'flex-start', justifyContent: 'center',
     padding: '16px 16px', overflowY: 'auto',
   },
   modal: {
-    background: 'linear-gradient(180deg, #fdf8e7 0%, #f3ebd1 100%)',
-    border: '3px solid #5C3A21', borderRadius: 14, padding: 14,
-    maxWidth: 460, width: '100%', boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
-    maxHeight: 'calc(100vh - 32px)', overflowY: 'auto',
+    background: 'var(--terminal-surface)',
+    border: '1px solid var(--terminal-border)', borderRadius: 16, padding: 16,
+    maxWidth: 460, width: '100%', boxShadow: '0 24px 64px rgba(17,24,39,0.22)',
+    maxHeight: 'calc(100dvh - 32px)', overflowY: 'auto',
   },
   header: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 },
-  title: { fontSize: 16, fontWeight: 900, color: '#5C3A21', flex: 1, margin: 0 },
-  closeBtn: {
-    background: 'transparent', border: 'none', color: '#5C3A21',
-    fontSize: 18, fontWeight: 900, cursor: 'pointer', padding: 4,
-  },
-  loading: { fontSize: 13, color: '#8a7252', fontWeight: 700, padding: '20px 0', textAlign: 'center' },
-  error: { fontSize: 13, color: '#c33', fontWeight: 700, padding: '12px 0' },
+  title: { fontSize: 16, fontWeight: 750, color: 'var(--terminal-text)', flex: 1, margin: 0 },
+  closeBtn: uiIconButton('secondary', 34, { fontSize: 18 }),
+  loading: { fontSize: 13, color: 'var(--terminal-text-muted)', fontWeight: 650, padding: '20px 0', textAlign: 'center' },
+  error: { fontSize: 13, color: 'var(--terminal-short)', fontWeight: 700, padding: '12px 0' },
   sideBadge: {
-    display: 'inline-block', color: '#fff', fontSize: 13, fontWeight: 900,
+    display: 'inline-block', color: 'var(--terminal-on-accent)', fontSize: 13, fontWeight: 700,
     padding: '4px 14px', borderRadius: 6, letterSpacing: '1px', marginBottom: 12,
   },
   levelsGrid: { display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 12 },
   levelRow: {
     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-    padding: '7px 10px', background: 'rgba(255,255,255,0.5)',
-    border: '1.5px solid rgba(92,58,33,0.25)', borderRadius: 8, gap: 8,
+    padding: '7px 10px', background: 'var(--terminal-surface-subtle)',
+    border: '1px solid var(--terminal-border)', borderRadius: 10, gap: 8,
   },
   levelLabel: {
-    color: '#fff', fontSize: 11, fontWeight: 900, padding: '2px 10px',
+    color: 'var(--terminal-on-accent)', fontSize: 11, fontWeight: 700, padding: '2px 10px',
     borderRadius: 4, letterSpacing: '0.5px', minWidth: 52, textAlign: 'center', flexShrink: 0,
   },
-  levelValue: { fontSize: 15, fontWeight: 800, color: '#5C3A21', fontFamily: 'monospace', whiteSpace: 'nowrap' },
+  levelValue: { fontSize: 15, fontWeight: 750, color: 'var(--terminal-text)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' },
   metaGrid: { display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6, marginBottom: 12 },
   metaCard: {
-    background: 'rgba(255,255,255,0.5)', border: '1.5px solid rgba(92,58,33,0.25)',
-    borderRadius: 8, padding: '8px 4px', textAlign: 'center', minWidth: 0,
+    background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)',
+    borderRadius: 10, padding: '8px 4px', textAlign: 'center', minWidth: 0,
   },
-  metaLabel: { fontSize: 9, fontWeight: 800, color: '#a3906a', textTransform: 'uppercase', letterSpacing: '0.3px', whiteSpace: 'nowrap' },
-  metaValue: { fontSize: 13, fontWeight: 900, marginTop: 2, whiteSpace: 'nowrap' },
+  metaLabel: { fontSize: 10, fontWeight: 700, color: 'var(--terminal-text-muted)', textTransform: 'uppercase', letterSpacing: '0.3px', whiteSpace: 'nowrap' },
+  metaValue: { fontSize: 13, fontWeight: 700, marginTop: 2, whiteSpace: 'nowrap' },
   reason: {
-    fontSize: 13, color: '#5C3A21', lineHeight: 1.4, fontWeight: 600,
-    background: 'rgba(255,255,255,0.4)', padding: '8px 10px', borderRadius: 8,
-    border: '1.5px solid rgba(92,58,33,0.2)', marginBottom: 12,
+    fontSize: 13, color: 'var(--terminal-text-control)', lineHeight: 1.4, fontWeight: 600,
+    background: 'var(--terminal-surface-subtle)', padding: '8px 10px', borderRadius: 10,
+    border: '1px solid var(--terminal-border)', marginBottom: 12,
   },
-  reasonLabel: { fontWeight: 900, color: '#9c27b0', marginRight: 4 },
-  applyBtn: {
-    width: '100%', color: '#fff', border: 'none', borderRadius: 10,
-    padding: '10px', fontSize: 14, fontWeight: 900, cursor: 'pointer',
-    boxShadow: '0 3px 0 rgba(0,0,0,0.25)', marginBottom: 10,
-    letterSpacing: '0.5px',
-  },
+  reasonLabel: { fontWeight: 750, color: 'var(--terminal-orange)', marginRight: 4 },
+  applyBtn: uiButton('primary', { width: '100%', minHeight: 44, padding: '10px', fontSize: 14, marginBottom: 10 }),
   disclaimer: {
-    fontSize: 10, color: '#8a7252', textAlign: 'center', fontWeight: 600,
+    fontSize: 10, color: 'var(--terminal-text-muted)', textAlign: 'center', fontWeight: 600,
     fontStyle: 'italic', marginBottom: 8,
   },
   poweredBy: {
     display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-    fontSize: 10, color: '#a3906a', fontWeight: 700, letterSpacing: '0.03em', textTransform: 'uppercase',
+    fontSize: 10, color: 'var(--terminal-text-muted)', fontWeight: 700, letterSpacing: '0.03em', textTransform: 'uppercase',
   },
   poweredLogo: { height: 16, width: 'auto', objectFit: 'contain', display: 'block' },
 };

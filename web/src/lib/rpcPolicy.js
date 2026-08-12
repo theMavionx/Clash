@@ -10,12 +10,21 @@ export function sameOriginRpcUrl(path) {
   return `${siteOrigin()}${raw.startsWith('/') ? raw : `/${raw}`}`;
 }
 
+/** Same-origin WebSocket URL helper (http→ws / https→wss). */
 export function sameOriginWsUrl(path) {
   const raw = String(path || '').trim();
   if (!raw) return '';
   if (/^wss?:\/\//i.test(raw)) return raw;
-  const origin = siteOrigin().replace(/^http:/i, 'ws:').replace(/^https:/i, 'wss:');
-  return `${origin}${raw.startsWith('/') ? raw : `/${raw}`}`;
+  if (/^https:\/\//i.test(raw)) return raw.replace(/^https:\/\//i, 'wss://');
+  if (/^http:\/\//i.test(raw)) return raw.replace(/^http:\/\//i, 'ws://');
+  if (typeof window !== 'undefined' && window.location?.host) {
+    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${proto}//${window.location.host}${raw.startsWith('/') ? raw : `/${raw}`}`;
+  }
+  const http = sameOriginRpcUrl(raw);
+  if (/^https:\/\//i.test(http)) return http.replace(/^https:\/\//i, 'wss://');
+  if (/^http:\/\//i.test(http)) return http.replace(/^http:\/\//i, 'ws://');
+  return http;
 }
 
 export function splitRpcUrls(value) {

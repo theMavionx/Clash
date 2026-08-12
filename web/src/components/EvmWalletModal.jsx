@@ -5,6 +5,7 @@ import { ARC_CHAIN_ID_HEX, ARC_CHAIN_NAME, ARC_EXPLORER_URL, ARC_NETWORK_CTA, AR
 import { GRVT_CHAIN_ID_HEX, GRVT_CHAIN_NAME, GRVT_EXPLORER_URL, GRVT_RPC_URLS } from '../lib/grvtConfig';
 import { KATANA_CHAIN_ID_HEX, KATANA_CHAIN_NAME, KATANA_EXPLORER_URL, KATANA_RPC_URLS } from '../lib/katanaConfig';
 import { ETHEREUM_RPC_URLS } from '../lib/ethereumConfig';
+import { uiButton, uiIconButton } from '../styles/theme';
 
 // Styled to match RegisterPanel + BuildingInfoPanel — parchment body, blue
 // header, yellow CTA. The previous dark cartoonPanel look stood out against
@@ -276,11 +277,11 @@ export default function EvmWalletModal({ open, onClose, onConnected, targetChain
   };
 
   return (
-    <div onClick={onClose} style={M.overlay}>
-      <div onClick={e => e.stopPropagation()} style={M.panel}>
+    <div className="perps-wallet-modal" onClick={onClose} style={M.overlay}>
+      <div role="dialog" aria-modal="true" aria-labelledby="evm-wallet-title" onClick={e => e.stopPropagation()} style={M.panel}>
         <div style={M.header}>
-          <span style={M.headerTitle}>CONNECT WALLET</span>
-          <button onClick={onClose} style={M.closeBtn} aria-label="Close">✖</button>
+          <span id="evm-wallet-title" style={M.headerTitle}>CONNECT WALLET</span>
+          <button type="button" onClick={onClose} style={M.closeBtn} aria-label="Close">✖</button>
         </div>
         <div style={M.body}>
           <div style={M.subtitle}>
@@ -334,7 +335,7 @@ export default function EvmWalletModal({ open, onClose, onConnected, targetChain
 
           {error && <div style={M.error}>{error}</div>}
 
-          <button onClick={onClose} style={M.cancelBtn}>CANCEL</button>
+          <button type="button" onClick={onClose} style={M.cancelBtn}>CANCEL</button>
         </div>
       </div>
     </div>
@@ -344,107 +345,85 @@ export default function EvmWalletModal({ open, onClose, onConnected, targetChain
 const M = {
   overlay: {
     position: 'fixed', inset: 0, zIndex: 1000,
-    background: 'rgba(0,0,0,0.7)',
+    background: 'rgba(17,24,39,0.48)',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     pointerEvents: 'all',
   },
   panel: {
-    width: 380, maxWidth: '94vw',
-    background: '#ebdaba',
-    border: '4px solid #377d9f',
-    boxShadow: '0 20px 60px rgba(0,0,0,0.8), inset 0 0 0 4px #ebdaba',
+    width: 380, maxWidth: 'calc(100vw - 24px)', maxHeight: 'calc(100dvh - 24px)',
+    background: 'var(--terminal-surface)',
+    border: '1px solid var(--terminal-border)', borderRadius: 16,
+    boxShadow: '0 24px 64px rgba(17,24,39,0.22)',
     display: 'flex', flexDirection: 'column',
-    overflow: 'hidden',
+    overflow: 'auto',
     fontFamily: '"Inter","Segoe UI",sans-serif',
   },
   header: {
     display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative',
-    height: 54, background: '#4ca5d2',
-    borderBottom: '4px solid #377d9f',
+    minHeight: 54, background: 'var(--terminal-surface)',
+    borderBottom: '1px solid var(--terminal-border)',
   },
   headerTitle: {
-    fontSize: 22, fontStyle: 'italic', fontWeight: 900, color: '#fff',
-    textTransform: 'uppercase', textShadow: '0 2px 4px rgba(0,0,0,0.6)',
-    letterSpacing: 1,
+    fontSize: 17, fontWeight: 750, color: 'var(--terminal-text)',
+    textTransform: 'uppercase', letterSpacing: .5,
   },
-  closeBtn: {
+  closeBtn: uiIconButton('secondary', 34, {
     position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)',
-    width: 32, height: 32, background: 'rgba(0,0,0,0.15)', border: 'none', borderRadius: 4,
-    color: '#fff', cursor: 'pointer',
-    display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0,
     fontSize: 14, fontWeight: 700,
-  },
+  }),
   body: {
     padding: '16px 20px 20px',
     display: 'flex', flexDirection: 'column', gap: 12,
   },
   subtitle: {
-    fontSize: 12, fontWeight: 700, color: '#5d6d75',
+    fontSize: 12, fontWeight: 650, color: 'var(--terminal-text-muted)',
     textAlign: 'center', letterSpacing: 0.3,
   },
   note: {
     marginTop: -6,
     fontSize: 11,
     fontWeight: 700,
-    color: '#7b6a4f',
+    color: 'var(--terminal-text-muted)',
     textAlign: 'center',
     lineHeight: 1.35,
   },
   empty: {
     padding: '18px 14px', borderRadius: 12,
-    background: 'rgba(26, 60, 79, 0.05)',
-    border: '2px dashed #377d9f',
-    color: '#5d6d75', fontSize: 13, textAlign: 'center', lineHeight: 1.5,
+    background: 'var(--terminal-surface-subtle)',
+    border: '1px dashed var(--terminal-border-strong)',
+    color: 'var(--terminal-text-muted)', fontSize: 13, textAlign: 'center', lineHeight: 1.5,
   },
   list: { display: 'flex', flexDirection: 'column', gap: 8 },
-  providerBtn: {
-    display: 'flex', alignItems: 'center', gap: 12,
-    padding: '12px 14px', borderRadius: 12,
-    borderWidth: 2,
-    borderStyle: 'solid',
-    borderColor: '#377d9f',
-    background: '#fff',
-    color: '#1a3c4f', fontSize: 15, fontWeight: 800,
+  providerBtn: uiButton('secondary', {
+    width: '100%', justifyContent: 'flex-start', gap: 12,
+    minHeight: 52, padding: '12px 14px',
+    fontSize: 15, fontWeight: 700,
     textAlign: 'left', outline: 'none',
-    transition: 'background 0.15s, transform 0.1s',
-    boxShadow: 'inset 0 1px 2px rgba(255,255,255,0.6), 0 2px 4px rgba(0,0,0,0.1)',
     fontFamily: 'inherit',
-  },
+  }),
   providerBtnActive: {
-    background: 'rgba(251,192,45,0.25)',
-    borderColor: '#F57F17',
+    background: 'var(--terminal-brand-soft)',
+    borderColor: 'var(--terminal-orange)',
   },
   providerIcon: {
     width: 28, height: 28, borderRadius: 6,
   },
   providerFallbackIcon: {
     width: 28, height: 28, borderRadius: 6,
-    background: 'linear-gradient(135deg, #FBC02D 0%, #F57F17 100%)',
+    background: 'var(--terminal-orange)',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
-    fontSize: 14, fontWeight: 900, color: '#fff',
-    textShadow: '0 1px 0 rgba(0,0,0,0.3)',
+    fontSize: 14, fontWeight: 700, color: 'var(--terminal-on-accent)',
   },
   providerName: { flex: 1 },
   connectingLabel: {
-    fontSize: 11, fontWeight: 700, color: '#F57F17',
+    fontSize: 11, fontWeight: 700, color: 'var(--terminal-brand-strong)',
     textTransform: 'uppercase', letterSpacing: 0.5,
   },
   error: {
     padding: '10px 12px', borderRadius: 10,
-    background: 'rgba(229,57,53,0.12)',
-    border: '1.5px solid #E53935',
-    color: '#c62828', fontSize: 12, fontWeight: 700,
+    background: 'var(--terminal-short-soft)',
+    border: '1px solid var(--terminal-short-border)',
+    color: 'var(--terminal-short)', fontSize: 12, fontWeight: 700,
   },
-  cancelBtn: {
-    width: '100%',
-    padding: '11px 18px', borderRadius: 14,
-    border: 'none',
-    background: 'linear-gradient(180deg, #90a4ae 0%, #546e7a 100%)',
-    boxShadow: '0 4px 10px rgba(0,0,0,0.2), inset 0 2px 0 rgba(255,255,255,0.3)',
-    color: '#fff',
-    fontSize: 13, fontWeight: 900, letterSpacing: 1, textTransform: 'uppercase',
-    textShadow: '0 1px 2px rgba(0,0,0,0.3)',
-    cursor: 'pointer',
-    fontFamily: 'inherit',
-  },
+  cancelBtn: uiButton('secondary', { width: '100%', minHeight: 44, padding: '11px 18px', textTransform: 'uppercase' }),
 };

@@ -6,12 +6,14 @@ import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { useAptosWallet } from '../contexts/AptosWalletContext';
 import { DEX_CONFIG, getAvailableDexConfigs } from '../contexts/DexContext';
 import { useAuthFlow } from '../auth/useAuthFlow';
+import { authWalletKindForDex } from '../auth/walletSelection';
 import { useOndoRegionAccess } from '../hooks/useOndoRegionAccess';
 import { openSolanaWallet } from '../lib/solanaWalletUi';
 import {
   TradingRegionGate,
   TradingSetupGate,
 } from './trading/TradingSetupGate';
+import { uiButton } from '../styles/theme';
 
 const GAME_AUTH_STORAGE_KEY = 'clash_game_auth_v1';
 const DEX_PICKED_KEY = 'clash_dex_picked';
@@ -110,9 +112,6 @@ function DexPicker({ onPick, isInFrame, isSolanaMobile }) {
             style={{
               ...S.dexCard,
               ...(isDesktopGrid ? S.dexCardDesktop : null),
-              border: `3px solid ${cfg.borderColor}`,
-              background: `linear-gradient(180deg, ${cfg.color} 0%, ${cfg.colorDark} 100%)`,
-              boxShadow: `0 5px 0 ${cfg.borderColor}, 0 7px 14px rgba(0,0,0,0.25)`,
             }}
           >
             <div style={S.dexCardBody}>
@@ -125,7 +124,6 @@ function DexPicker({ onPick, isInFrame, isSolanaMobile }) {
                     width: 'auto',
                     objectFit: 'contain',
                     objectPosition: 'left center',
-                    filter: 'drop-shadow(0 2px 0 rgba(0,0,0,0.35))',
                   }}
                 />
                 {!cfg.logoIsWordmark && (
@@ -141,6 +139,8 @@ function DexPicker({ onPick, isInFrame, isSolanaMobile }) {
                   cfg.id === 'risex' ? 'SELF-CUSTODY · RISE' :
                   cfg.id === 'nado' ? 'SELF-CUSTODY · INK' :
                   cfg.id === 'ondo' ? 'SELF-CUSTODY · EVM' :
+                  cfg.id === 'leverup' ? 'SELF-CUSTODY · MONAD' :
+                  cfg.id === 'aster' ? 'SELF-CUSTODY · EVM' :
                   cfg.id === 'hibachi' ? 'SELF-CUSTODY · EVM' :
                   cfg.id === 'hotstuff' ? 'SELF-CUSTODY · HOT' :
                   cfg.id === 'grvt' ? 'SELF-CUSTODY · GRVT' :
@@ -207,16 +207,13 @@ function useMediaQuery(query) {
   return matches;
 }
 
-function DexBadge({ dex, onChange }) {
+function DexBadge({ dex, onChangeWallet, onChangeDex }) {
   const cfg = DEX_CONFIG[dex] || DEX_CONFIG.pacifica;
   return (
     <div style={S.dexBadgeRow}>
       <div
         style={{
           ...S.dexBadge,
-          background: `linear-gradient(180deg, ${cfg.color} 0%, ${cfg.colorDark} 100%)`,
-          border: `2px solid ${cfg.borderColor}`,
-          boxShadow: `0 2px 0 ${cfg.borderColor}`,
         }}
       >
         <img
@@ -226,14 +223,16 @@ function DexBadge({ dex, onChange }) {
             height: cfg.logoIsWordmark ? 12 : 14,
             width: 'auto',
             objectFit: 'contain',
-            filter: 'drop-shadow(0 1px 0 rgba(0,0,0,0.35))',
           }}
         />
         {!cfg.logoIsWordmark && (
           <span style={S.dexBadgeLabel}>{cfg.label}</span>
         )}
       </div>
-      <button type="button" onClick={onChange} style={S.changeBtn}>← CHANGE</button>
+      <div style={S.dexBadgeActions}>
+        <button type="button" onClick={onChangeWallet} style={S.changeBtn}>CHANGE WALLET</button>
+        <button type="button" onClick={onChangeDex} style={S.changeDexBtn}>CHANGE DEX</button>
+      </div>
     </div>
   );
 }
@@ -279,7 +278,7 @@ function NameForm({ wallet, suggested, seekerHandle, error, onBack, onClearError
   return (
     <form onSubmit={submit} style={S.bodyStack}>
       <button type="button" style={S.backBtn} onClick={onBack}>
-        &larr; BACK
+        &larr; BACK TO WALLETS
       </button>
       <h3 style={S.sectionTitle}>PICK A NAME</h3>
       <div style={S.walletPill}>
@@ -354,7 +353,7 @@ function ConnectVenueGate({
       subtitle={subtitle}
       logo={cfg?.logo}
       logoAlt={cfg?.label || ''}
-      logoBackground={cfg ? `linear-gradient(180deg, ${cfg.color} 0%, ${cfg.colorDark} 100%)` : '#fffaf0'}
+      logoBackground="var(--terminal-surface)"
       steps={steps}
       actions={actions}
       error={error}
@@ -532,6 +531,8 @@ function ConnectAvantis({ onOpenEvmModal, onPrivyLogin, privyEnabled, privyAuthe
     : dex === 'risex' ? 'RISEX'
     : dex === 'nado' ? 'NADO'
     : dex === 'ondo' ? 'ONDO PERPS'
+    : dex === 'leverup' ? 'LEVERUP V2'
+    : dex === 'aster' ? 'ASTER'
     : dex === 'hibachi' ? 'HIBACHI'
     : dex === 'hotstuff' ? 'HOTSTUFF'
     : dex === 'grvt' ? 'GRVT'
@@ -546,6 +547,8 @@ function ConnectAvantis({ onOpenEvmModal, onPrivyLogin, privyEnabled, privyAuthe
     : dex === 'risex' ? 'RISE'
     : dex === 'nado' ? 'Ink'
     : dex === 'ondo' ? 'Ethereum'
+    : dex === 'leverup' ? 'Monad'
+    : dex === 'aster' ? 'EVM'
     : dex === 'hibachi' ? 'EVM'
     : dex === 'hotstuff' ? 'Hotstuff L1'
     : dex === 'grvt' ? 'GRVT Exchange'
@@ -560,6 +563,8 @@ function ConnectAvantis({ onOpenEvmModal, onPrivyLogin, privyEnabled, privyAuthe
         label: 'Accept Clash builder code',
         hint: 'After wallet connection, accept builder code clashofperps at 1 bps.',
       }
+    : dex === 'aster'
+      ? { label: 'Approve Clash builder', hint: 'Aster trading unlocks after the Clash builder address and configured builder fee are approved.' }
     : dex === 'nado'
       ? { label: 'Verify Nado referral', hint: 'Clash checks the wallet referral before allowing new positions.' }
       : { label: `Verify ${venue} setup`, hint: 'Clash checks the required account, referral, builder, and signer permissions.' };
@@ -686,10 +691,26 @@ function RegisterPanel() {
     actions.unpickDex?.();
   }, [actions]);
 
-  const backFromName = useCallback(() => {
+  const chooseDifferentWallet = useCallback(async () => {
     actions.clearRegisterError?.();
-    actions.unpickDex?.();
-  }, [actions]);
+    setStoredAuthRecord(null);
+    await actions.changeWallet?.();
+
+    const kind = authWalletKindForDex(dex);
+    if (kind === 'evm') {
+      setEvmModalOpen(true);
+      return;
+    }
+    if (kind === 'aptos') {
+      await aptos.connect?.();
+      return;
+    }
+    openSolanaWallet({ wallets, select, connect, openWalletModal, inFrame: isInFrame });
+  }, [actions, aptos, connect, dex, isInFrame, openWalletModal, select, wallets]);
+
+  const backFromName = useCallback(() => {
+    void chooseDifferentWallet();
+  }, [chooseDifferentWallet]);
 
   const body = (() => {
     switch (state) {
@@ -711,6 +732,8 @@ function RegisterPanel() {
                   dex === 'risex' ? 'RISEx' :
                   dex === 'nado' ? 'Nado' :
                   dex === 'ondo' ? 'Ondo Perps' :
+                  dex === 'leverup' ? 'LeverUp V2' :
+                  dex === 'aster' ? 'Aster' :
                   dex === 'hibachi' ? 'Hibachi' :
                   dex === 'hotstuff' ? 'Hotstuff' :
                   dex === 'grvt' ? 'GRVT' :
@@ -789,7 +812,7 @@ function RegisterPanel() {
             />
           );
         }
-        if (dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'lighter') {
+        if (dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'leverup' || dex === 'aster' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'lighter') {
           return (
             <ConnectAvantis
               dex={dex}
@@ -845,6 +868,8 @@ function RegisterPanel() {
     if (dex === 'risex') return 'RISEX LOGIN';
     if (dex === 'nado') return 'NADO LOGIN';
     if (dex === 'ondo') return 'ONDO PERPS LOGIN';
+    if (dex === 'leverup') return 'LEVERUP V2 LOGIN';
+    if (dex === 'aster') return 'ASTER LOGIN';
     if (dex === 'hibachi') return 'HIBACHI LOGIN';
     if (dex === 'hotstuff') return 'HOTSTUFF LOGIN';
     if (dex === 'grvt') return 'GRVT LOGIN';
@@ -858,13 +883,39 @@ function RegisterPanel() {
   })();
 
   return (
-    <div style={S.overlay}>
-      <div style={state === 'pick_dex' ? { ...S.panel, ...S.dexPickerPanel } : S.panel}>
+    <div className="register-panel" style={S.overlay}>
+      <style>{`
+        .register-panel button:focus-visible,
+        .register-panel input:focus-visible {
+          outline: 3px solid rgba(242, 101, 34, 0.28);
+          outline-offset: 2px;
+        }
+        @media (max-width: 767px) {
+          .register-panel { align-items: stretch !important; padding: 0 !important; }
+          .register-panel__dialog { width: 100% !important; max-width: none !important; max-height: 100dvh !important; border-radius: 0 !important; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .register-panel * { scroll-behavior: auto !important; }
+        }
+      `}</style>
+      <div
+        className="register-panel__dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="register-panel-title"
+        style={state === 'pick_dex' ? { ...S.panel, ...S.dexPickerPanel } : S.panel}
+      >
         <div style={S.header}>
-          <span style={S.headerTitle}>{headerTitle}</span>
+          <span id="register-panel-title" style={S.headerTitle}>{headerTitle}</span>
         </div>
         <div className="shop-scroll" style={S.content}>
-          {showDexBadge && <DexBadge dex={dex} onChange={actions.unpickDex} />}
+          {showDexBadge && (
+            <DexBadge
+              dex={dex}
+              onChangeWallet={() => { void chooseDifferentWallet(); }}
+              onChangeDex={actions.unpickDex}
+            />
+          )}
           {state === 'manual_connect' && (
             <StoredWalletNotice record={storedAuthRecord} onDisconnect={disconnectStoredWallet} />
           )}
@@ -874,7 +925,7 @@ function RegisterPanel() {
       <EvmWalletModal
         open={evmModalOpen}
         onClose={() => setEvmModalOpen(false)}
-        targetChain={!dexPicked ? 'baseConnect' : dex === 'gmx' || dex === 'ostium' || dex === 'hyperliquid' ? 'arbitrum' : dex === 'monad' ? 'monad' : dex === 'risex' ? 'rise' : dex === 'nado' ? 'ink' : dex === 'hibachi' ? 'base' : dex === 'grvt' ? 'baseConnect' : dex === 'katana' ? 'katana' : dex === 'hotstuff' || dex === 'ondo' ? 'mainnet' : dex === 'lighter' ? 'baseConnect' : 'base'}
+        targetChain={!dexPicked ? 'baseConnect' : dex === 'gmx' || dex === 'ostium' || dex === 'hyperliquid' ? 'arbitrum' : dex === 'monad' || dex === 'leverup' ? 'monad' : dex === 'risex' ? 'rise' : dex === 'nado' ? 'ink' : dex === 'hibachi' ? 'base' : dex === 'grvt' || dex === 'aster' ? 'baseConnect' : dex === 'katana' ? 'katana' : dex === 'hotstuff' || dex === 'ondo' ? 'mainnet' : dex === 'lighter' ? 'baseConnect' : 'base'}
         onConnected={handleEvmConnected}
       />
     </div>
@@ -884,43 +935,42 @@ function RegisterPanel() {
 export default memo(RegisterPanel);
 
 // ──────────────────────────────────────────────────────────────────────
-// Styles — mirror the BuildingInfoPanel LT modal style (#ebdaba parchment
-// + #377d9f blue header + yellow primary button). Kept in one object so
-// the whole file's style sits in one scrolling place.
+// ClashBot Light Terminal styles shared by every auth and wallet state.
 // ──────────────────────────────────────────────────────────────────────
 const S = {
   overlay: {
     position: 'fixed', inset: 0,
-    background: 'rgba(0,0,0,0.6)',
+    background: 'rgba(17,24,39,0.48)',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
-    padding: '10px',
+    padding: 16,
     zIndex: 30, pointerEvents: 'all',
   },
   panel: {
     width: 420, maxWidth: '94vw',
-    maxHeight: 'calc(100vh - 20px)',
-    background: '#ebdaba',
-    border: '4px solid #377d9f',
-    boxShadow: '0 20px 60px rgba(0,0,0,0.8), inset 0 0 0 4px #ebdaba',
+    maxHeight: 'calc(100dvh - 32px)',
+    background: 'var(--terminal-surface)',
+    border: '1px solid var(--terminal-border)',
+    borderRadius: 16,
+    boxShadow: '0 24px 64px rgba(17,24,39,0.18)',
     display: 'flex', flexDirection: 'column',
     overflow: 'hidden',
     fontFamily: '"Inter","Segoe UI",sans-serif',
+    color: 'var(--terminal-text)',
   },
   dexPickerPanel: {
     width: 'min(760px, 94vw)',
   },
   header: {
     display: 'flex', alignItems: 'center', justifyContent: 'center',
-    height: 54, background: '#4ca5d2',
-    borderBottom: '4px solid #377d9f',
+    minHeight: 56, background: 'var(--terminal-surface-subtle)',
+    borderBottom: '1px solid var(--terminal-border)', padding: '0 20px',
   },
   headerTitle: {
-    fontSize: 24, fontStyle: 'italic', fontWeight: 900, color: '#fff',
-    textTransform: 'uppercase', textShadow: '0 2px 4px rgba(0,0,0,0.6)',
-    letterSpacing: 1,
+    fontSize: 18, fontWeight: 750, color: 'var(--terminal-text)',
+    letterSpacing: '-0.01em',
   },
   content: {
-    padding: '18px 22px 22px',
+    padding: '20px clamp(16px, 5vw, 24px) 24px',
     display: 'flex', flexDirection: 'column', gap: 14,
     flex: 1, minHeight: 0,
     overflowY: 'auto',
@@ -933,16 +983,15 @@ const S = {
   },
   sectionTitle: {
     margin: 0,
-    fontSize: 18, fontWeight: 900, color: '#377d9f',
-    textTransform: 'uppercase', letterSpacing: 1, textAlign: 'center',
+    fontSize: 18, fontWeight: 750, color: 'var(--terminal-text)',
+    letterSpacing: '-0.01em', textAlign: 'center',
   },
   subtle: {
-    margin: 0, fontSize: 13, fontWeight: 600, color: '#5d6d75',
-    textAlign: 'center', lineHeight: 1.45,
+    margin: 0, fontSize: 13, fontWeight: 500, color: 'var(--terminal-text-muted)',
+    textAlign: 'center', lineHeight: 1.5,
   },
 
-  // DEX picker cards (keep the original colored buttons — they're the DEX's
-  // brand identity, not the parchment theme).
+  // DEX logos preserve venue identity inside neutral terminal controls.
   dexList: {
     display: 'flex', flexDirection: 'column', gap: 10, marginTop: 4, paddingBottom: 6,
   },
@@ -954,8 +1003,10 @@ const S = {
   },
   dexCard: {
     width: '100%', display: 'flex', alignItems: 'center', gap: 14,
-    padding: '14px 16px', borderRadius: 16,
-    cursor: 'pointer', outline: 'none', textAlign: 'left', color: '#fff',
+    minHeight: 64, padding: '12px 14px', borderRadius: 12,
+    border: '1px solid var(--terminal-border)', background: 'var(--terminal-surface)',
+    boxShadow: '0 1px 2px rgba(17,24,39,0.04)',
+    cursor: 'pointer', outline: 'none', textAlign: 'left', color: 'var(--terminal-text)',
     fontFamily: 'inherit',
   },
   dexCardDesktop: {
@@ -968,8 +1019,8 @@ const S = {
   },
   dexCardTitleRow: { display: 'flex', alignItems: 'center', gap: 8 },
   dexCardLabel: {
-    fontSize: 20, fontWeight: 900, color: '#fff',
-    letterSpacing: '0.8px', textShadow: '0 2px 0 rgba(0,0,0,0.35)',
+    fontSize: 18, fontWeight: 750, color: 'var(--terminal-text)',
+    letterSpacing: '-0.01em',
     textTransform: 'lowercase',
   },
   dexCardLabelDesktop: {
@@ -977,17 +1028,15 @@ const S = {
     letterSpacing: '0.4px',
   },
   dexCardSubtitle: {
-    fontSize: 11, fontWeight: 800,
-    color: 'rgba(255,255,255,0.88)',
-    textShadow: '0 1px 0 rgba(0,0,0,0.3)', letterSpacing: '0.3px',
+    fontSize: 11, fontWeight: 600,
+    color: 'var(--terminal-text-muted)', letterSpacing: '0.02em',
   },
   dexCardSubtitleDesktop: {
     fontSize: 10,
     lineHeight: 1.25,
   },
   dexCardChevron: {
-    fontSize: 26, color: '#fff', fontWeight: 900,
-    textShadow: '0 2px 0 rgba(0,0,0,0.3)',
+    fontSize: 24, color: 'var(--terminal-orange)', fontWeight: 700,
   },
 
   // DEX badge (shown after picker — a compact pill + CHANGE button).
@@ -998,31 +1047,22 @@ const S = {
   dexBadge: {
     display: 'flex', alignItems: 'center', gap: 6,
     padding: '5px 10px', borderRadius: 10,
+    background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)',
   },
   dexBadgeLabel: {
-    fontSize: 11, fontWeight: 900, color: '#fff',
-    letterSpacing: '0.8px', textShadow: '0 1px 0 rgba(0,0,0,0.35)',
+    fontSize: 11, fontWeight: 750, color: 'var(--terminal-text)',
+    letterSpacing: '0.04em',
   },
-  changeBtn: {
-    background: 'rgba(26, 60, 79, 0.08)',
-    border: '1.5px solid #377d9f',
-    color: '#377d9f',
-    fontSize: 10, fontWeight: 900, letterSpacing: '0.5px',
-    cursor: 'pointer', padding: '5px 10px', borderRadius: 8,
+  dexBadgeActions: {
+    display: 'flex', alignItems: 'center', justifyContent: 'flex-end',
+    flexWrap: 'wrap', gap: 6,
   },
-  backBtn: {
+  changeBtn: uiButton('secondary', { minHeight: 40, fontSize: 11, padding: '8px 12px' }),
+  changeDexBtn: uiButton('ghost', { minHeight: 40, fontSize: 11, padding: '8px 10px' }),
+  backBtn: uiButton('secondary', {
     alignSelf: 'flex-start',
-    background: 'rgba(26, 60, 79, 0.08)',
-    border: '1.5px solid #377d9f',
-    color: '#377d9f',
-    fontSize: 11,
-    fontWeight: 900,
-    letterSpacing: '0.5px',
-    cursor: 'pointer',
-    padding: '6px 11px',
-    borderRadius: 9,
-    fontFamily: 'inherit',
-  },
+    minHeight: 40, fontSize: 11, padding: '8px 12px',
+  }),
 
   storedWalletBox: {
     display: 'grid',
@@ -1030,8 +1070,8 @@ const S = {
     alignItems: 'center',
     gap: 10,
     padding: '10px 12px',
-    background: 'rgba(26, 60, 79, 0.08)',
-    border: '2px solid #377d9f',
+    background: 'var(--terminal-surface-subtle)',
+    border: '1px solid var(--terminal-border)',
     borderRadius: 12,
   },
   storedWalletText: {
@@ -1041,64 +1081,55 @@ const S = {
     gap: 2,
   },
   storedWalletLabel: {
-    color: '#377d9f',
-    fontSize: 10,
-    fontWeight: 900,
-    letterSpacing: '0.7px',
+    color: 'var(--terminal-text-muted)',
+    fontSize: 11,
+    fontWeight: 700,
+    letterSpacing: '0.04em',
   },
   storedWalletAddress: {
-    color: '#1a3c4f',
+    color: 'var(--terminal-text)',
     fontSize: 14,
-    fontWeight: 900,
-    fontFamily: 'monospace',
+    fontWeight: 700,
+    fontFamily: '"SFMono-Regular",Consolas,monospace',
+    fontVariantNumeric: 'tabular-nums',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
   },
   storedWalletName: {
-    color: '#5d6d75',
-    fontSize: 11,
-    fontWeight: 800,
+    color: 'var(--terminal-text-muted)',
+    fontSize: 12,
+    fontWeight: 600,
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
   },
-  storedWalletDisconnect: {
-    border: '2px solid #8b2a2a',
-    borderRadius: 9,
-    background: 'linear-gradient(180deg, #ef5350 0%, #d32f2f 100%)',
-    color: '#fff',
-    fontSize: 10,
-    fontWeight: 900,
-    padding: '8px 9px',
-    cursor: 'pointer',
-    fontFamily: 'inherit',
-  },
+  storedWalletDisconnect: uiButton('danger', { minHeight: 40, fontSize: 11, padding: '8px 12px' }),
 
   // Wallet pill shown before name form.
   walletPill: {
     alignSelf: 'center',
     display: 'flex', alignItems: 'center', gap: 8,
     padding: '8px 16px',
-    background: 'rgba(26, 60, 79, 0.08)',
-    border: '1.5px solid #377d9f',
+    background: 'var(--terminal-surface-subtle)',
+    border: '1px solid var(--terminal-border)',
     borderRadius: 12,
   },
   walletDot: {
     width: 10, height: 10, borderRadius: '50%',
-    background: '#479a1f', boxShadow: '0 0 6px rgba(71,154,31,0.7)',
+    background: 'var(--terminal-long)',
   },
   walletAddr: {
-    fontSize: 14, fontWeight: 800, fontFamily: 'monospace', color: '#1a3c4f',
+    fontSize: 14, fontWeight: 700, fontFamily: '"SFMono-Regular",Consolas,monospace',
+    fontVariantNumeric: 'tabular-nums', color: 'var(--terminal-text)',
   },
 
   input: {
-    width: '100%', padding: '12px 16px', borderRadius: 14,
-    border: '2px solid #377d9f',
-    background: '#fff',
-    color: '#1a3c4f', fontSize: 17, fontWeight: 700,
+    width: '100%', minHeight: 46, padding: '11px 14px', borderRadius: 10,
+    border: '1px solid var(--terminal-border-strong)',
+    background: 'var(--terminal-surface)',
+    color: 'var(--terminal-text)', fontSize: 16, fontWeight: 600,
     textAlign: 'center', outline: 'none', boxSizing: 'border-box',
-    boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.1)',
     fontFamily: 'inherit',
   },
   nameError: {
@@ -1106,11 +1137,11 @@ const S = {
     boxSizing: 'border-box',
     padding: '9px 12px',
     borderRadius: 12,
-    border: '2px solid #E53935',
-    background: 'rgba(229, 57, 53, 0.1)',
-    color: '#B71C1C',
+    border: '1px solid var(--terminal-short-border)',
+    background: 'var(--terminal-short-soft)',
+    color: 'var(--terminal-short)',
     fontSize: 13,
-    fontWeight: 900,
+    fontWeight: 650,
     lineHeight: 1.3,
     textAlign: 'center',
   },
@@ -1118,55 +1149,25 @@ const S = {
     display: 'flex', alignItems: 'center', gap: 10,
     width: '100%', boxSizing: 'border-box',
     padding: '10px 14px', borderRadius: 12,
-    background: 'linear-gradient(180deg, rgba(168,116,255,0.18) 0%, rgba(120,80,220,0.22) 100%)',
-    border: '2px solid #8B5CF6',
-    boxShadow: '0 2px 0 #6D28D9, inset 0 1px 0 rgba(255,255,255,0.25)',
-    color: '#3F1B8C',
-    fontSize: 12, fontWeight: 800, letterSpacing: '0.4px',
+    background: 'var(--terminal-brand-soft)',
+    border: '1px solid var(--terminal-brand-border)',
+    color: 'var(--terminal-warning)',
+    fontSize: 12, fontWeight: 650, letterSpacing: '0.01em',
     cursor: 'pointer', textAlign: 'left',
     fontFamily: 'inherit',
   },
   skrChipIcon: {
     flexShrink: 0,
     width: 22, height: 22, borderRadius: 6,
-    background: 'linear-gradient(180deg, #A78BFA 0%, #6D28D9 100%)',
-    color: '#fff',
+    background: 'var(--terminal-orange)',
+    color: 'var(--terminal-on-accent)',
     display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-    fontSize: 12, fontWeight: 900,
-    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.4), 0 1px 0 rgba(0,0,0,0.25)',
-    textShadow: '0 1px 0 rgba(0,0,0,0.3)',
+    fontSize: 12, fontWeight: 600,
   },
   skrChipText: { lineHeight: 1.3 },
 
-  // Matches BuildingInfoPanel.styles.actionBtn (yellow gradient).
-  primaryBtn: {
-    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
-    background: 'linear-gradient(180deg, #FBC02D 0%, #F57F17 100%)',
-    border: 'none',
-    boxShadow: '0 6px 16px rgba(245, 127, 23, 0.35), inset 0 2px 0 rgba(255,255,255,0.4)',
-    borderRadius: 16,
-    padding: '13px 20px',
-    color: '#fff',
-    fontSize: 15, fontWeight: 900,
-    cursor: 'pointer', width: '100%',
-    textAlign: 'center', textTransform: 'uppercase', letterSpacing: 1,
-    textShadow: '0 2px 2px rgba(0,0,0,0.3)',
-    fontFamily: 'inherit',
-  },
-  secondaryBtn: {
-    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
-    background: 'linear-gradient(180deg, #4ca5d2 0%, #377d9f 100%)',
-    border: 'none',
-    boxShadow: '0 5px 14px rgba(55, 125, 159, 0.35), inset 0 2px 0 rgba(255,255,255,0.3)',
-    borderRadius: 16,
-    padding: '12px 20px',
-    color: '#fff',
-    fontSize: 14, fontWeight: 900,
-    cursor: 'pointer', width: '100%',
-    textAlign: 'center', textTransform: 'uppercase', letterSpacing: 1,
-    textShadow: '0 2px 2px rgba(0,0,0,0.3)',
-    fontFamily: 'inherit',
-  },
+  primaryBtn: uiButton('primary', { minHeight: 46, padding: '12px 20px', fontSize: 14, width: '100%' }),
+  secondaryBtn: uiButton('secondary', { minHeight: 46, padding: '12px 20px', fontSize: 14, width: '100%' }),
 
   // Spinner (Clash-style yellow ring on parchment).
   spinnerWrap: {
@@ -1174,15 +1175,15 @@ const S = {
     padding: '12px 0',
   },
   spinner: {
-    width: 44, height: 44, borderRadius: '50%',
-    borderWidth: 4,
+    width: 34, height: 34, borderRadius: '50%',
+    borderWidth: 1,
     borderStyle: 'solid',
-    borderColor: 'rgba(55,125,159,0.2)',
-    borderTopColor: '#F57F17',
+    borderColor: 'var(--terminal-border)',
+    borderTopColor: 'var(--terminal-orange)',
     animation: 'rp-spin 0.9s linear infinite',
   },
   spinnerLabel: {
-    fontSize: 14, fontWeight: 800, color: '#377d9f',
-    textTransform: 'uppercase', letterSpacing: 0.5,
+    fontSize: 13, fontWeight: 650, color: 'var(--terminal-text-muted)',
+    letterSpacing: '0.01em',
   },
 };

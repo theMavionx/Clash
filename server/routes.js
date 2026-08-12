@@ -215,7 +215,7 @@ function verifySolanaWalletSignature(wallet, message, signature, encoding = '') 
 
 const WALLET_AUTH_ACTION = 'wallet-auth';
 const WALLET_AUTH_MAX_AGE_MS = 10 * 60 * 1000;
-const EVM_DEXES = new Set(['avantis', 'gmx', 'ostium', 'monad', 'hyperliquid', 'risex', 'nado', 'ondo', 'hibachi', 'hotstuff', 'grvt', 'katana', 'lighter']);
+const EVM_DEXES = new Set(['avantis', 'gmx', 'ostium', 'monad', 'hyperliquid', 'risex', 'nado', 'ondo', 'leverup', 'aster', 'hibachi', 'hotstuff', 'grvt', 'katana', 'lighter']);
 const SOLANA_DEXES = new Set(['pacifica', 'phoenix', 'gmtrade', 'flash', 'bulk']);
 let aptosTsSdkPromise = null;
 
@@ -9536,7 +9536,7 @@ router.post('/replay-telemetry', (req, res) => {
 // 'pacifica' — which is exactly the bug that produced phantom Pacifica
 // accounts whenever a user picked GMX in the picker (the chosen DEX never
 // reached the database).
-const VALID_DEXES = new Set(['pacifica', 'avantis', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'ondo', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash', 'lighter', 'bulk']);
+const VALID_DEXES = new Set(['pacifica', 'avantis', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'ondo', 'leverup', 'aster', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash', 'lighter', 'bulk']);
 const DEX_REQUIRED_CHAIN = {
   pacifica: 'solana',
   phoenix: 'solana',
@@ -9552,6 +9552,8 @@ const DEX_REQUIRED_CHAIN = {
   risex: 'evm',
   nado: 'evm',
   ondo: 'evm',
+  leverup: 'evm',
+  aster: 'evm',
   hibachi: 'evm',
   hotstuff: 'evm',
   grvt: 'evm',
@@ -15508,6 +15510,21 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
     });
   }
 
+  // Aster is selectable and fully self-custodial, but Clash attribution
+  // cannot be proven until the registered builder address is configured.
+  // Fail closed instead of falling through to Pacifica or crediting an
+  // unverified Aster fill from a generic worker source.
+  if (dex === 'aster') {
+    recordClaimTelemetry({
+      result: 'builder_pending',
+      reason: 'Aster rewards are pending Clash builder verification',
+    });
+    return res.json({
+      gold: 0,
+      reason: 'Aster rewards activate after the Clash builder address and attributed fills are verified.',
+    });
+  }
+
   // Auto-replace Farcaster `fc_<fid>` placeholder wallets with the real
   // address from the request body. The placeholder is stored by older
   // FC auto-register paths when an EVM provider wasn't yet available;
@@ -15531,7 +15548,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
   // simply gets "No new trades" — that's the desired no-op, NOT a fall-
   // through to the Pacifica branch which would 400 with "wallet required"
   // or worse, hit Pacifica's REST with a non-Solana address.
-  if (dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'gmtrade' || dex === 'flash' || dex === 'lighter' || dex === 'bulk') {
+  if (dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'aster' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'gmtrade' || dex === 'flash' || dex === 'lighter' || dex === 'bulk') {
     const forceHibachiCatchup = dex === 'hibachi' && req.body?.force_reconcile === true;
     const reconcile = await tradeRecon.reconcileTradesForPlayer(req.player, {
       dex,

@@ -9,6 +9,7 @@
 import { memo, useEffect, useRef, useState, useCallback } from 'react';
 import { motion, useMotionValue, animate as fmAnimate } from 'framer-motion';
 import { colors, shared } from './styles';
+import { uiButton } from '../../styles/theme';
 
 function fmtUsd(n) {
   const v = Math.max(0, Number(n) || 0);
@@ -246,7 +247,7 @@ function BasicAmountSlider({ direction, balance, onPick, onBack }) {
             whileTap={{ scale: 0.92 }}
             style={{
               ...S.chip,
-              ...(Math.abs(pct - p) < 0.005 ? { background: directionColor, color: '#fff', borderColor: directionColor } : {}),
+              ...(Math.abs(pct - p) < 0.005 ? { background: directionColor, color: 'var(--terminal-on-accent)', borderColor: directionColor } : {}),
             }}
           >
             {p === 1 ? 'MAX' : `${p * 100}%`}
@@ -275,13 +276,13 @@ export default memo(BasicAmountSlider);
 const S = {
   tightTitle: {
     fontSize: 'clamp(16px, 3vh, 20px)',
-    fontWeight: 900, color: colors.ink,
+    fontWeight: 700, color: colors.ink,
     textAlign: 'center', letterSpacing: '0.3px',
     margin: '2px 0 4px', lineHeight: 1.1,
   },
   bigUsd: {
     fontSize: 'clamp(32px, 6.5vh, 48px)',
-    fontWeight: 900,
+    fontWeight: 700,
     textAlign: 'center', letterSpacing: '-1px',
     fontVariantNumeric: 'tabular-nums',
     margin: '2px 0 0',
@@ -298,7 +299,7 @@ const S = {
     border: 'none',
     background: 'transparent',
     font: 'inherit',
-    fontWeight: 900,
+    fontWeight: 700,
     lineHeight: 1,
     cursor: 'text',
     fontVariantNumeric: 'tabular-nums',
@@ -312,7 +313,7 @@ const S = {
   },
   amountPrefix: {
     font: 'inherit',
-    fontWeight: 900,
+    fontWeight: 700,
     color: 'inherit',
     lineHeight: 1,
   },
@@ -323,7 +324,7 @@ const S = {
     outline: 'none',
     background: 'transparent',
     font: 'inherit',
-    fontWeight: 900,
+    fontWeight: 700,
     lineHeight: 1,
     textAlign: 'left',
     fontVariantNumeric: 'tabular-nums',
@@ -353,8 +354,8 @@ const S = {
     height: 8,
     transform: 'translateY(-50%)',
     borderRadius: 4,
-    background: 'rgba(92,58,33,0.18)',
-    boxShadow: 'inset 0 1px 2px rgba(92,58,33,0.15)',
+    background: 'var(--terminal-border)',
+    boxShadow: 'none',
     pointerEvents: 'none',
   },
   trackFill: {
@@ -367,7 +368,7 @@ const S = {
     transition: 'width 0.05s linear',
     // Subtle inset shadow gives the fill a slightly recessed look — sits
     // visually "inside" the track instead of floating above it.
-    boxShadow: 'inset 0 -1px 0 rgba(0,0,0,0.18)',
+    boxShadow: 'none',
   },
   // Solid circle, no border — the dark-green ring on a green-on-parchment
   // setup created a cream "halo" optical illusion that looked broken.
@@ -378,7 +379,7 @@ const S = {
     width: THUMB, height: THUMB,
     borderRadius: '50%',
     boxSizing: 'border-box',
-    boxShadow: '0 2px 4px rgba(0,0,0,0.25), inset 0 -2px 0 rgba(0,0,0,0.18)',
+    boxShadow: '0 2px 6px var(--terminal-shadow)',
     cursor: 'grab',
     touchAction: 'none',
     flexShrink: 0,
@@ -388,29 +389,18 @@ const S = {
   },
   chip: {
     flex: 1, padding: '8px 4px',
-    fontSize: 12, fontWeight: 800,
+    fontSize: 12, fontWeight: 600,
     color: colors.ink,
-    background: 'rgba(255,255,255,0.6)',
-    borderWidth: 2, borderStyle: 'solid', borderColor: colors.border,
+    background: 'var(--terminal-surface)',
+    borderWidth: 1, borderStyle: 'solid', borderColor: colors.border,
     borderRadius: 10, cursor: 'pointer',
     fontFamily: 'inherit',
     boxSizing: 'border-box',
     transition: 'all 0.15s ease',
   },
-  continueBtn: {
-    width: '100%', padding: '12px',
-    fontSize: 15, fontWeight: 900, color: '#fff',
-    borderWidth: 4, borderStyle: 'solid', borderColor: 'rgba(0,0,0,0.25)',
-    borderRadius: 14,
-    cursor: 'pointer',
-    fontFamily: 'inherit',
-    letterSpacing: '0.5px',
-    boxSizing: 'border-box',
-    boxShadow: '0 4px 0 rgba(0,0,0,0.25), 0 6px 16px rgba(0,0,0,0.2)',
-    textShadow: '0 2px 0 rgba(0,0,0,0.3)',
-  },
+  continueBtn: uiButton('primary', { width: '100%', minHeight: 44, padding: '12px', fontSize: 15, boxSizing: 'border-box' }),
   continueBtnDisabled: {
-    background: '#bba882',
+    background: 'var(--terminal-border-strong)',
     cursor: 'not-allowed',
     boxShadow: 'none',
   },

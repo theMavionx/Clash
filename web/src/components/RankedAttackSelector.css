@@ -13,12 +13,12 @@
   width: min(980px, 100%);
   max-height: min(820px, calc(100vh - 36px));
   overflow: auto;
-  border: 4px solid #286783;
-  border-radius: 8px;
-  background: #f4e8cc;
-  box-shadow: 0 18px 48px rgba(16, 26, 31, 0.46), inset 0 0 0 2px #a5d2e5;
-  color: #573822;
-  scrollbar-color: #9e875d transparent;
+  border: 1px solid var(--terminal-border);
+  border-radius: 20px;
+  background: var(--terminal-surface);
+  box-shadow: 0 20px 60px var(--terminal-shadow);
+  color: var(--terminal-text);
+  scrollbar-gutter: stable;
 }
 
 .ranked-attack-panel > header {
@@ -31,8 +31,8 @@
   gap: 16px;
   min-height: 76px;
   padding: 12px 16px;
-  border-bottom: 4px solid #bda678;
-  background: #55acd2;
+  border-bottom: 1px solid var(--terminal-border);
+  background: var(--terminal-surface-subtle);
 }
 
 .ranked-attack-title-lockup {
@@ -51,9 +51,9 @@
 
 .ranked-attack-title-lockup span {
   display: block;
-  color: #22495b;
-  font-size: 10px;
-  font-weight: 900;
+  color: var(--terminal-text-muted);
+  font-size: 11px;
+  font-weight: 700;
   text-transform: uppercase;
 }
 
@@ -65,11 +65,11 @@
 
 .ranked-attack-panel h2 {
   overflow: hidden;
-  color: #fff;
-  font-size: clamp(24px, 4vw, 34px);
+  color: var(--terminal-text);
+  font-size: clamp(22px, 4vw, 30px);
   line-height: 1.04;
   text-overflow: ellipsis;
-  text-shadow: 0 3px 0 #315c70;
+  text-shadow: none;
   white-space: nowrap;
 }
 
@@ -77,15 +77,15 @@
   width: 42px;
   height: 42px;
   flex: 0 0 42px;
-  border: 3px solid #8c1d18;
-  border-radius: 8px;
-  background: #e7463d;
-  box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.35), 0 3px 0 #8c1d18;
-  color: #fff;
+  border: 1px solid var(--terminal-short-strong);
+  border-radius: 10px;
+  background: var(--terminal-short);
+  box-shadow: none;
+  color: var(--terminal-on-accent);
   cursor: pointer;
   font: inherit;
-  font-size: 24px;
-  font-weight: 900;
+  font-size: 20px;
+  font-weight: 700;
   line-height: 32px;
 }
 
@@ -94,22 +94,22 @@
   align-items: center;
   gap: 10px;
   margin: 12px 14px 0;
-  color: #795e3e;
-  font-size: 10px;
-  font-weight: 900;
+  color: var(--terminal-text-muted);
+  font-size: 11px;
+  font-weight: 700;
   text-transform: uppercase;
 }
 
 .ranked-attack-tournament-picker select {
   min-width: 0;
   flex: 1;
-  border: 2px solid #b99f70;
-  border-radius: 6px;
-  background: #fff9e8;
-  color: #573822;
+  border: 1px solid var(--terminal-border-strong);
+  border-radius: 10px;
+  background: var(--terminal-surface-subtle);
+  color: var(--terminal-text);
   font: inherit;
   font-size: 12px;
-  font-weight: 800;
+  font-weight: 600;
   padding: 8px 10px;
 }
 
@@ -127,10 +127,10 @@
   min-width: 0;
   grid-template-rows: 180px minmax(0, 1fr);
   overflow: hidden;
-  border: 3px solid #a98a58;
-  border-radius: 8px;
-  background: #fff8e7;
-  box-shadow: inset 0 0 0 2px #ead8af, 0 4px 0 rgba(87, 56, 34, 0.22);
+  border: 1px solid var(--terminal-border);
+  border-radius: 16px;
+  background: var(--terminal-surface);
+  box-shadow: 0 1px 2px var(--terminal-shadow-soft);
 }
 
 .ranked-attack-mode.casual {
@@ -138,7 +138,7 @@
 }
 
 .ranked-attack-mode.ranked {
-  border-color: #7f6544;
+  border-color: var(--terminal-border);
 }
 
 .ranked-attack-mode.unavailable {
@@ -151,7 +151,7 @@
   display: grid;
   place-items: center;
   overflow: hidden;
-  border-bottom: 3px solid #a98a58;
+  border-bottom: 1px solid var(--terminal-border);
 }
 
 .ranked-attack-visual.casual {
@@ -191,10 +191,10 @@
   width: 42px;
   height: 42px;
   place-items: center;
-  border: 2px solid rgba(76, 48, 26, 0.45);
-  border-radius: 7px;
-  background: #fff8e7;
-  box-shadow: 0 2px 0 rgba(76, 48, 26, 0.22);
+  border: 1px solid var(--terminal-border);
+  border-radius: 10px;
+  background: var(--terminal-surface);
+  box-shadow: none;
 }
 
 .ranked-attack-dex-mark img {
@@ -207,25 +207,25 @@
   position: absolute;
   top: 10px;
   right: 10px;
-  border: 2px solid currentColor;
+  border: 1px solid currentColor;
   border-radius: 999px;
   padding: 4px 8px;
-  background: #fff8e7;
-  font-size: 9px;
-  font-weight: 900;
+  background: var(--terminal-surface);
+  font-size: 10px;
+  font-weight: 700;
   text-transform: uppercase;
 }
 
 .ranked-attack-status.casual {
-  color: #8d5d17;
+  color: var(--terminal-warning);
 }
 
 .ranked-attack-status.live {
-  color: #267531;
+  color: var(--terminal-long);
 }
 
 .ranked-attack-status.prereg {
-  color: #2f63a0;
+  color: var(--terminal-info);
 }
 
 .ranked-attack-content {
@@ -237,21 +237,21 @@
 }
 
 .ranked-attack-content.casual {
-  background: #fff8e7;
+  background: var(--terminal-surface);
 }
 
 .ranked-attack-heading > span {
   display: block;
   margin-bottom: 2px;
-  color: #ae680e;
-  font-size: 10px;
-  font-weight: 900;
+  color: var(--terminal-brand-text);
+  font-size: 11px;
+  font-weight: 700;
   text-transform: uppercase;
 }
 
 .ranked-attack-heading h3 {
   overflow: hidden;
-  color: #4d301f;
+  color: var(--terminal-text);
   font-size: 21px;
   line-height: 1.1;
   text-overflow: ellipsis;
@@ -260,9 +260,9 @@
 
 .ranked-attack-heading p {
   margin-top: 5px;
-  color: #816847;
+  color: var(--terminal-text-muted);
   font-size: 12px;
-  font-weight: 750;
+  font-weight: 600;
   line-height: 1.4;
 }
 
@@ -272,13 +272,13 @@
   bottom: 16px;
   left: 16px;
   z-index: 1;
-  color: #432b1d;
+  color: var(--terminal-text);
   text-shadow:
     -1px -1px 0 rgba(255, 248, 231, 0.96),
     1px -1px 0 rgba(255, 248, 231, 0.96),
     -1px 1px 0 rgba(255, 248, 231, 0.96),
     1px 1px 0 rgba(255, 248, 231, 0.96),
-    0 2px 2px rgba(255, 248, 231, 0.72);
+    0 2px 2px var(--terminal-warning-soft);
 }
 
 .ranked-attack-casual-heading h3,
@@ -287,7 +287,7 @@
 }
 
 .ranked-attack-casual-heading > span {
-  color: #8f5108;
+  color: var(--terminal-brand-text);
 }
 
 .ranked-attack-casual-heading h3 {
@@ -301,8 +301,8 @@
 .ranked-attack-metrics {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  border-top: 2px solid #dcc9a0;
-  border-bottom: 2px solid #dcc9a0;
+  border-top: 1px solid var(--terminal-border);
+  border-bottom: 1px solid var(--terminal-border);
 }
 
 .ranked-attack-metrics > div {
@@ -312,15 +312,15 @@
 }
 
 .ranked-attack-metrics > div + div {
-  border-left: 1px solid #dcc9a0;
+  border-left: 1px solid var(--terminal-border);
 }
 
 .ranked-attack-metrics span {
   display: block;
   overflow: hidden;
-  color: #987d58;
-  font-size: 8px;
-  font-weight: 900;
+  color: var(--terminal-text-muted);
+  font-size: 10px;
+  font-weight: 700;
   text-overflow: ellipsis;
   text-transform: uppercase;
   white-space: nowrap;
@@ -329,7 +329,7 @@
 .ranked-attack-metrics strong {
   display: block;
   margin-top: 2px;
-  color: #4c3424;
+  color: var(--terminal-text);
   font-size: 16px;
 }
 
@@ -338,13 +338,13 @@
   flex-wrap: wrap;
   justify-content: center;
   gap: 6px 12px;
-  color: #806747;
+  color: var(--terminal-text-muted);
   font-size: 10px;
-  font-weight: 800;
+  font-weight: 600;
 }
 
 .ranked-attack-trading-strip b {
-  color: #356b42;
+  color: var(--terminal-long);
 }
 
 .ranked-attack-rules {
@@ -355,28 +355,28 @@
 
 .ranked-attack-rules span {
   border-radius: 5px;
-  background: #e6d7b7;
-  color: #795d39;
+  background: var(--terminal-surface-muted);
+  color: var(--terminal-text-control);
   padding: 4px 7px;
   font-size: 9px;
-  font-weight: 800;
+  font-weight: 600;
 }
 
 .ranked-attack-rules b {
-  color: #4c3424;
+  color: var(--terminal-text);
 }
 
 .ranked-attack-notice,
 .ranked-attack-deadline {
-  color: #2e6d91;
+  color: var(--terminal-info);
   font-size: 10px;
-  font-weight: 900;
+  font-weight: 700;
 }
 
 .ranked-attack-registration {
   display: grid;
   gap: 7px;
-  border-top: 2px solid #dcc9a0;
+  border-top: 1px solid var(--terminal-border);
   padding-top: 9px;
 }
 
@@ -386,9 +386,9 @@
 }
 
 .ranked-attack-registration label > span {
-  color: #8c704e;
-  font-size: 9px;
-  font-weight: 900;
+  color: var(--terminal-text-muted);
+  font-size: 10px;
+  font-weight: 700;
   text-transform: uppercase;
 }
 
@@ -396,56 +396,56 @@
   width: 100%;
   min-width: 0;
   box-sizing: border-box;
-  border: 2px solid #bfa675;
-  border-radius: 6px;
+  border: 1px solid var(--terminal-border-strong);
+  border-radius: 10px;
   outline: none;
-  background: #fffaf0;
-  color: #4c3424;
+  background: var(--terminal-surface);
+  color: var(--terminal-text);
   font: inherit;
   font-size: 12px;
-  font-weight: 750;
+  font-weight: 600;
   padding: 8px 9px;
 }
 
 .ranked-attack-registration input:focus {
-  border-color: #3f9de1;
-  box-shadow: 0 0 0 2px rgba(63, 157, 225, 0.18);
+  border-color: var(--terminal-orange);
+  box-shadow: 0 0 0 3px var(--terminal-brand-ring);
 }
 
 .ranked-attack-casual-button,
 .ranked-attack-primary {
   min-height: 50px;
   margin-top: auto;
-  border-radius: 7px;
+  border-radius: 10px;
   cursor: pointer;
-  color: #fff;
+  color: var(--terminal-on-accent);
   font: inherit;
-  font-weight: 900;
-  text-shadow: 0 2px 0 rgba(65, 37, 12, 0.45);
+  font-weight: 700;
+  text-shadow: none;
 }
 
 .ranked-attack-casual-button {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  border: 3px solid #a86709;
-  background: #ffb32c;
-  box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.45), 0 3px 0 #a86709;
+  border: 1px solid var(--terminal-brand-strong);
+  background: var(--terminal-orange);
+  box-shadow: none;
   padding: 0 16px;
 }
 
 .ranked-attack-primary {
-  border: 3px solid #1f6395;
-  background: #3f9de1;
-  box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.4), 0 3px 0 #1f6395;
+  border: 1px solid var(--terminal-brand-strong);
+  background: var(--terminal-orange);
+  box-shadow: none;
   padding: 0 12px;
 }
 
 .ranked-attack-primary:disabled,
 .ranked-attack-casual-button:disabled {
   cursor: not-allowed;
-  filter: grayscale(0.7);
-  opacity: 0.62;
+  filter: none;
+  opacity: 0.48;
 }
 
 .ranked-attack-loading {
@@ -454,19 +454,19 @@
   place-items: center;
   align-content: center;
   gap: 8px;
-  border: 3px dashed #a7b9bf;
-  border-radius: 8px;
-  color: #32719b;
+  border: 1px dashed var(--terminal-border-strong);
+  border-radius: 16px;
+  color: var(--terminal-info);
   font-size: 12px;
-  font-weight: 850;
+  font-weight: 700;
   text-align: center;
 }
 
 .ranked-attack-loading span {
   width: 22px;
   height: 22px;
-  border: 3px solid #b5d9ec;
-  border-top-color: #32719b;
+  border: 3px solid var(--terminal-info-soft);
+  border-top-color: var(--terminal-info);
   border-radius: 50%;
   animation: ranked-attack-spin 0.7s linear infinite;
 }

@@ -10,6 +10,7 @@ import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { useFarcaster } from '../hooks/useFarcaster';
 import { usePlayer } from '../hooks/useGodot';
 import { useLayout } from '../hooks/useIsMobile';
+import { uiButton, uiIconButton } from '../styles/theme';
 import { useAptosWallet } from '../contexts/AptosWalletContext';
 import { BASE_CHAIN_ID, BASE_PRIMARY_RPC_URL, ensureBaseChain } from '../lib/avantisContract';
 import { ARBITRUM_CHAIN_ID, ensureArbitrumChain } from '../lib/gmxConfig';
@@ -1523,7 +1524,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
                     </>
                   ) : (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '8px 4px' }}>
-                      <div style={{ fontSize: 13, color: '#5C3A21', lineHeight: 1.4 }}>
+                      <div style={{ fontSize: 13, color: 'var(--terminal-text)', lineHeight: 1.4 }}>
                         {SALE_NFT_NAME} mint isn't live on <b>{selectedChain.charAt(0).toUpperCase() + selectedChain.slice(1)}</b> yet.
                         Use Base, Solana, Arbitrum, or Monad for this drop.
                       </div>
@@ -1534,11 +1535,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
                           setSelectedPayment(defaultPaymentForChain('base'));
                           setNotice(null);
                         }}
-                        style={{
-                          padding: '10px 14px', borderRadius: 12, fontSize: 14, fontWeight: 800,
-                          background: '#7ce04a', border: '2px solid #4a8f2c', color: '#1a3d0a',
-                          cursor: 'pointer',
-                        }}
+                        style={uiButton('primary', { minHeight: 42, padding: '10px 14px', fontSize: 14 })}
                       >
                         Switch to Base
                       </button>
@@ -2257,7 +2254,7 @@ function DemonKingUpgradePanel({
               ? `Level ${displayNextLevel}: ${wins} / ${requiredWins} wins`
               : `Level ${displayNextLevel}: NFT level verified`}
           </span>
-          <span style={{ fontSize: 12, color: winsReady ? '#257a28' : '#9a5b0f', fontWeight: 900 }}>
+          <span style={{ fontSize: 12, color: winsReady ? 'var(--terminal-long)' : 'var(--terminal-warning)', fontWeight: 700 }}>
             {winsReady ? 'Wins requirement complete' : 'Win more battles to unlock the NFT upgrade'}
           </span>
         </div>
@@ -2305,7 +2302,7 @@ function DemonKingUpgradePanel({
       )}
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        <div style={{ fontSize: 12, fontWeight: 900, color: '#5C3A21' }}>Your upgradeable NFTs</div>
+        <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--terminal-text)' }}>Your upgradeable NFTs</div>
         {tokens.length > 0 ? (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8 }}>
             {tokens.map((tokenItem) => {
@@ -2338,7 +2335,7 @@ function DemonKingUpgradePanel({
             })}
           </div>
         ) : (
-          <div style={{ fontSize: 12, color: '#7c633e', lineHeight: 1.4 }}>
+          <div style={{ fontSize: 12, color: 'var(--terminal-text-muted)', lineHeight: 1.4 }}>
             {chainWalletConnected ? 'No upgradeable NFT auto-detected. Paste a token id if the indexer is behind.' : `Connect ${SHOP_CHAIN_LABEL[chain] || chain} wallet to load NFTs.`}
           </div>
         )}
@@ -2634,10 +2631,10 @@ function ResourceCardSkeleton({ isMobile }) {
   const btnStyle = {
     ...styles.resourceBuyBtn,
     ...(isMobile ? styles.resourceBuyBtnMobile : null),
-    background: 'linear-gradient(90deg, #e6d9b7 0%, #f0e4c4 50%, #e6d9b7 100%)',
+    background: 'linear-gradient(90deg, var(--terminal-border) 0%, var(--terminal-surface-subtle) 50%, var(--terminal-border) 100%)',
     backgroundSize: '200% 100%',
     color: 'transparent',
-    border: '3px solid #d4c8b0',
+    border: '1px solid var(--terminal-border)',
   };
   return (
     <div style={cardStyle}>
@@ -2657,8 +2654,8 @@ function ResourceCardSkeleton({ isMobile }) {
 function ShieldGlyph({ size = 48 }) {
   return (
     <svg width={size} height={size} viewBox="0 0 64 64" fill="none">
-      <path d="M32 6 L52 15 L52 31 C52 45 43 54 32 59 C21 54 12 45 12 31 L12 15 Z" fill="#3b7dd8" stroke="#173d73" strokeWidth="3" />
-      <path d="M25 31 L30 36 L40 24" stroke="#fff" strokeWidth="5" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M32 6 L52 15 L52 31 C52 45 43 54 32 59 C21 54 12 45 12 31 L12 15 Z" fill="var(--terminal-info)" stroke="var(--terminal-info)" strokeWidth="3" />
+      <path d="M25 31 L30 36 L40 24" stroke="var(--terminal-surface)" strokeWidth="5" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M32 11 L47 18 L47 31 C47 42 40 49 32 53" stroke="rgba(255,255,255,0.35)" strokeWidth="2" strokeLinecap="round" />
     </svg>
   );
@@ -2667,9 +2664,9 @@ function ShieldGlyph({ size = 48 }) {
 function ResourceGlyph({ size = 48 }) {
   return (
     <svg width={size} height={size} viewBox="0 0 64 64" fill="none">
-      <path d="M15 24 L32 14 L49 24 V44 L32 54 L15 44 Z" fill="#d59a2f" stroke="#6b3d12" strokeWidth="3" strokeLinejoin="round" />
-      <path d="M15 24 L32 34 L49 24" stroke="#6b3d12" strokeWidth="3" strokeLinejoin="round" />
-      <path d="M32 34 V54" stroke="#6b3d12" strokeWidth="3" />
+      <path d="M15 24 L32 14 L49 24 V44 L32 54 L15 44 Z" fill="var(--terminal-brand-strong)" stroke="var(--terminal-text-secondary)" strokeWidth="3" strokeLinejoin="round" />
+      <path d="M15 24 L32 34 L49 24" stroke="var(--terminal-text-secondary)" strokeWidth="3" strokeLinejoin="round" />
+      <path d="M32 34 V54" stroke="var(--terminal-text-secondary)" strokeWidth="3" />
       <path d="M25 20 L41 29" stroke="rgba(255,255,255,0.45)" strokeWidth="3" strokeLinecap="round" />
     </svg>
   );
@@ -2684,7 +2681,7 @@ function AltarGlyph({ size = 48 }) {
       <path d="M26 17 L38 17 L42 28 L22 28 Z" fill="#c4a0d7" stroke="#3d244d" strokeWidth="3" strokeLinejoin="round" />
       <path d="M32 7 C38 14 38 19 32 24 C26 19 26 14 32 7 Z" fill="#56d8ff" stroke="#126579" strokeWidth="3" />
       <path d="M32 13 C35 17 35 19 32 22" stroke="rgba(255,255,255,0.75)" strokeWidth="2" strokeLinecap="round" />
-      <path d="M21 36 H43" stroke="rgba(255,255,255,0.4)" strokeWidth="3" strokeLinecap="round" />
+      <path d="M21 36 H43" stroke="var(--terminal-chip-overlay)" strokeWidth="3" strokeLinecap="round" />
     </svg>
   );
 }
@@ -3362,8 +3359,8 @@ const overlayStyles = {
     position: 'relative',
     width: 140, height: 140,
     borderRadius: 18,
-    border: '5px solid #d4c8b0',
-    background: 'radial-gradient(circle at 50% 35%, #f3e6c4 0%, #d8c190 60%, #b89a64 100%)',
+    border: '1px solid var(--terminal-border)',
+    background: 'radial-gradient(circle at 50% 35%, var(--terminal-surface-subtle) 0%, var(--terminal-border-strong) 60%, var(--terminal-border-strong) 100%)',
     boxShadow:
       'inset 0 4px 10px rgba(0,0,0,0.2), 0 12px 26px rgba(0,0,0,0.35), 0 0 32px rgba(255,210,90,0.5)',
     overflow: 'hidden',
@@ -3381,11 +3378,11 @@ const overlayStyles = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    color: '#5C3A21',
+    color: 'var(--terminal-text)',
     fontSize: 82,
-    fontWeight: 900,
+    fontWeight: 700,
     lineHeight: 1,
-    textShadow: '0 5px 0 rgba(255,255,255,0.45), 0 12px 18px rgba(0,0,0,0.32)',
+    textShadow: 'none',
   },
   cardBare: {
     background: 'transparent',
@@ -3417,18 +3414,18 @@ const overlayStyles = {
     position: 'absolute',
     width: 178, height: 178,
     borderRadius: '50%',
-    borderWidth: 4,
+    borderWidth: 1,
     borderStyle: 'solid',
     borderColor: 'transparent',
-    borderTopColor: '#5C3A21',
-    borderRightColor: '#5C3A21',
+    borderTopColor: 'var(--terminal-text)',
+    borderRightColor: 'var(--terminal-text)',
     boxShadow: '0 0 18px rgba(92,58,33,0.35)',
   },
   ringInner: {
     position: 'absolute',
     width: 200, height: 200,
     borderRadius: '50%',
-    border: '3px dashed rgba(92,58,33,0.35)',
+    border: '1px dashed rgba(92,58,33,0.35)',
     opacity: 0.7,
   },
   copy: {
@@ -3437,24 +3434,24 @@ const overlayStyles = {
     maxWidth: 360,
   },
   titleSpinner: {
-    fontSize: 18, fontWeight: 900, color: '#5C3A21',
-    textShadow: '0 1px 0 rgba(255,255,255,0.55)',
+    fontSize: 18, fontWeight: 700, color: 'var(--terminal-text)',
+    textShadow: 'none',
     letterSpacing: 0,
   },
   titleSuccess: {
-    fontSize: 26, fontWeight: 900, color: '#5C3A21',
-    textShadow: '0 2px 0 rgba(255,255,255,0.55), 0 0 14px rgba(255,210,90,0.7)',
+    fontSize: 26, fontWeight: 700, color: 'var(--terminal-text)',
+    textShadow: 'none',
     letterSpacing: 1,
     textTransform: 'uppercase',
   },
   subtitle: {
-    fontSize: 13, fontWeight: 800, color: '#70522b',
+    fontSize: 13, fontWeight: 600, color: 'var(--terminal-text-secondary)',
   },
   subtitleSuccess: {
-    fontSize: 13, fontWeight: 800, color: '#70522b',
+    fontSize: 13, fontWeight: 600, color: 'var(--terminal-text-secondary)',
   },
   hint: {
-    fontSize: 11, fontWeight: 700, color: '#9b7c4a',
+    fontSize: 11, fontWeight: 700, color: 'var(--terminal-text-muted)',
     marginTop: 2,
     maxWidth: 280,
   },
@@ -3462,46 +3459,20 @@ const overlayStyles = {
     marginTop: 4,
     padding: '4px 10px',
     borderRadius: 9,
-    background: '#fff6dc',
-    border: '2px solid #d4c8b0',
-    color: '#5C3A21',
-    fontSize: 11, fontWeight: 900,
+    background: 'var(--terminal-surface)',
+    border: '1px solid var(--terminal-border)',
+    color: 'var(--terminal-text)',
+    fontSize: 11, fontWeight: 700,
     letterSpacing: 0.5,
   },
   actionRow: {
     display: 'flex', gap: 8, marginTop: 10,
   },
-  linkBtn: {
-    padding: '8px 14px',
-    borderRadius: 12,
-    border: '3px solid #9f8759',
-    background: '#fff6dc',
-    color: '#5C3A21', fontSize: 12, fontWeight: 900,
-    textDecoration: 'none',
-    cursor: 'pointer',
-  },
+  linkBtn: uiButton('secondary', { minHeight: 36, padding: '8px 14px', fontSize: 12, textDecoration: 'none' }),
   doneBtn: {
-    padding: '8px 18px',
-    borderRadius: 12,
-    border: '3px solid #5C3A21',
-    background: 'linear-gradient(180deg, #ffd76a 0%, #c2851b 100%)',
-    color: '#3a1f00', fontSize: 13, fontWeight: 900,
-    cursor: 'pointer',
-    textShadow: '0 1px 0 rgba(255,255,255,0.5)',
-    boxShadow: '0 4px 10px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.5)',
+    ...uiButton('primary', { padding: '8px 18px' }),
   },
-  cancelBtn: {
-    marginTop: 10,
-    padding: '7px 14px',
-    borderRadius: 12,
-    border: '3px solid #9f8759',
-    background: '#fff6dc',
-    color: '#5C3A21',
-    fontSize: 12,
-    fontWeight: 900,
-    cursor: 'pointer',
-    boxShadow: '0 2px 6px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.55)',
-  },
+  cancelBtn: uiButton('secondary', { marginTop: 10, minHeight: 36, padding: '7px 14px', fontSize: 12 }),
 };
 
 const MINT_ANIM_CSS = `
@@ -3687,39 +3658,7 @@ const MINT_ANIM_CSS = `
   }
 
   /* ── Parchment scrollbar — shared with the rest of the shop UI ──
-     Used on the tab slides + any scrollable container in the marketplace.
-     Slim, brown-on-cream, matches the borders/buttons rather than the
-     OS default. WebKit (Chrome/Safari/Edge) styles via these rules;
-     Firefox uses scrollbar-width/-color set inline on the elements. */
-  .shop-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
-  .shop-scroll::-webkit-scrollbar-track {
-    background: #fdf8e7;
-    border-radius: 4px;
-  }
-  .shop-scroll::-webkit-scrollbar-thumb {
-    background: linear-gradient(180deg, #d4c8b0 0%, #bba882 100%);
-    border-radius: 4px;
-    border: 1px solid #fdf8e7;
-  }
-  .shop-scroll::-webkit-scrollbar-thumb:hover {
-    background: linear-gradient(180deg, #bba882 0%, #a3906a 100%);
-  }
-  .shop-scroll::-webkit-scrollbar-corner { background: transparent; }
-  /* Windows Chrome/Edge render up/down increment buttons on the track
-     by default — they break the soft parchment look. Hide them so the
-     scrollbar is just track + thumb. display:none collapses both
-     single and double-button variants. */
-  .shop-scroll::-webkit-scrollbar-button,
-  .shop-scroll::-webkit-scrollbar-button:start,
-  .shop-scroll::-webkit-scrollbar-button:end,
-  .shop-scroll::-webkit-scrollbar-button:vertical:start,
-  .shop-scroll::-webkit-scrollbar-button:vertical:end,
-  .shop-scroll::-webkit-scrollbar-button:horizontal:start,
-  .shop-scroll::-webkit-scrollbar-button:horizontal:end {
-    display: none;
-    height: 0;
-    width: 0;
-  }
+     Scrollbar appearance is centralized in FuturesTerminal.css. */
 `;
 
 const styles = {
@@ -3737,8 +3676,8 @@ const styles = {
     // listings) scroll inside their own slide instead of growing the
     // panel. Capped at 92vh for short viewports.
     height: 'min(600px, 92vh)',
-    background: '#fdf8e7',
-    border: '6px solid #d4c8b0', borderRadius: 22,
+    background: 'var(--terminal-surface)',
+    border: '1px solid var(--terminal-border)', borderRadius: 22,
     boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
     overflow: 'hidden', fontFamily: '"Inter","Segoe UI",sans-serif',
     display: 'flex', flexDirection: 'column',
@@ -3750,44 +3689,26 @@ const styles = {
   },
   header: {
     display: 'grid', gridTemplateColumns: '34px 1fr 34px', alignItems: 'center',
-    padding: '12px 14px', background: '#d4c8b0', borderBottom: '4px solid #bba882',
+    padding: '12px 14px', background: 'var(--terminal-border)', borderBottom: '1px solid var(--terminal-border-strong)',
     flex: '0 0 auto',
   },
   headerSpacer: { width: 34, height: 34 },
   title: {
-    fontSize: 20, fontWeight: 900, color: '#5C3A21',
+    fontSize: 20, fontWeight: 700, color: 'var(--terminal-text)',
     letterSpacing: 0, textAlign: 'center',
-    textShadow: '0 1px 0 rgba(255,255,255,0.4)',
+    textShadow: 'none',
   },
-  backBtn: {
-    width: 32, height: 32, borderRadius: 12, background: '#fff6dc',
-    border: '3px solid #9f8759', color: '#5C3A21', cursor: 'pointer',
-    display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0,
-  },
-  closeBtn: {
-    width: 32, height: 32, borderRadius: '50%', background: '#E53935',
-    border: '3px solid #fff', color: '#fff', cursor: 'pointer',
-    display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0,
-    boxShadow: '0 2px 4px rgba(0,0,0,0.3)',
-  },
-  bridgeBtn: {
-    width: 32, height: 32, borderRadius: 12, background: '#fff6dc',
-    border: '3px solid #9f8759', color: '#5C3A21', cursor: 'pointer',
-    display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0,
-    boxShadow: '0 2px 4px rgba(0,0,0,0.15)',
-  },
+  backBtn: uiIconButton('secondary', 32),
+  closeBtn: uiIconButton('danger', 32),
+  bridgeBtn: uiIconButton('secondary', 32),
   // Bridge entry button rendered inside the hero summary row — small pill
   // with icon + "Bridge" label. Sits right under the dynamic supply chip
   // so it's visually grouped with the NFT preview, not the modal chrome.
-  heroBridgeBtn: {
+  heroBridgeBtn: uiButton('secondary', {
     alignSelf: 'flex-start',
-    display: 'inline-flex', alignItems: 'center', gap: 6,
     marginTop: 4, padding: '5px 10px',
-    borderRadius: 999, background: '#fff6dc',
-    border: '2px solid #9f8759', color: '#5C3A21',
-    cursor: 'pointer', fontSize: 12, fontWeight: 700,
-    boxShadow: '0 1px 2px rgba(0,0,0,0.12)',
-  },
+    minHeight: 32, borderRadius: 999, fontSize: 12,
+  }),
   shopActionRow: {
     display: 'flex',
     alignItems: 'center',
@@ -3795,52 +3716,30 @@ const styles = {
     marginBottom: 8,
   },
   switchChainBtn: {
+    ...uiButton('secondary', { minHeight: 36, padding: '8px 12px', fontSize: 12 }),
     flex: '1 1 auto',
-    minHeight: 34,
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    border: '2px solid #8c6a3c',
-    borderRadius: 11,
-    background: 'linear-gradient(180deg, #fff8df 0%, #dfc996 100%)',
-    color: '#5C3A21',
-    fontSize: 12,
-    fontWeight: 900,
     fontFamily: 'inherit',
-    cursor: 'pointer',
-    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.55), 0 2px 5px rgba(0,0,0,0.16)',
   },
   switchChainArrow: {
     fontSize: 10,
-    color: '#876033',
+    color: 'var(--terminal-text-secondary)',
     lineHeight: 1,
   },
-  bridgeMiniBtn: {
+  bridgeMiniBtn: uiButton('secondary', {
     flex: '0 0 auto',
     minHeight: 34,
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
     padding: '0 12px',
-    border: '2px solid #9f8759',
-    borderRadius: 11,
-    background: '#fffaf0',
-    color: '#5C3A21',
     fontSize: 12,
-    fontWeight: 900,
     fontFamily: 'inherit',
-    cursor: 'pointer',
-  },
+  }),
   textInput: {
     minHeight: 38,
-    border: '2px solid #d4c8b0',
+    border: '1px solid var(--terminal-border)',
     borderRadius: 10,
-    background: '#fffdf4',
-    color: '#5C3A21',
+    background: 'var(--terminal-surface)',
+    color: 'var(--terminal-text)',
     fontSize: 13,
-    fontWeight: 800,
+    fontWeight: 600,
     fontFamily: 'inherit',
     padding: '0 10px',
     outline: 'none',
@@ -3851,28 +3750,29 @@ const styles = {
     gap: 8,
     marginBottom: 8,
     padding: 8,
-    border: '2px solid #d4c8b0',
+    border: '1px solid var(--terminal-border)',
     borderRadius: 12,
-    background: '#fff8df',
+    background: 'var(--terminal-surface)',
   },
   chainSwitchBtn: {
     minHeight: 48,
     display: 'flex',
     alignItems: 'center',
     gap: 8,
-    border: '2px solid #d4c8b0',
+    border: '1px solid var(--terminal-border)',
     borderRadius: 10,
-    background: '#fffdf4',
-    color: '#5C3A21',
+    background: 'var(--terminal-surface)',
+    color: 'var(--terminal-text)',
     cursor: 'pointer',
     fontFamily: 'inherit',
     padding: '6px 8px',
     minWidth: 0,
   },
   chainSwitchBtnActive: {
-    border: '2px solid #1d6fe0',
-    background: 'linear-gradient(180deg, #e8f1ff 0%, #c5dbff 100%)',
-    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.6), 0 1px 4px rgba(0,0,0,0.12)',
+    border: '1px solid var(--terminal-orange)',
+    background: 'var(--terminal-brand-soft)',
+    color: 'var(--terminal-brand-text)',
+    boxShadow: 'none',
   },
   chainSwitchBtnDisabled: {
     opacity: 0.55,
@@ -3885,10 +3785,10 @@ const styles = {
     alignItems: 'center',
     justifyContent: 'center',
     borderRadius: 7,
-    background: '#5C3A21',
-    color: '#fff6dc',
+    background: 'var(--terminal-text)',
+    color: 'var(--terminal-surface)',
     fontSize: 9,
-    fontWeight: 900,
+    fontWeight: 700,
     letterSpacing: 0.4,
   },
   chainLogoBadge: {
@@ -3896,11 +3796,11 @@ const styles = {
     width: 36,
     height: 36,
     borderRadius: '50%',
-    background: '#fffaf0',
-    border: '2px solid #d4c8b0',
-    color: '#5C3A21',
+    background: 'var(--terminal-surface)',
+    border: '1px solid var(--terminal-border)',
+    color: 'var(--terminal-text)',
     fontSize: 9,
-    fontWeight: 900,
+    fontWeight: 700,
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -3912,11 +3812,11 @@ const styles = {
     width: 22,
     height: 22,
     borderRadius: '50%',
-    background: '#fffaf0',
+    background: 'var(--terminal-surface)',
     border: '1px solid rgba(92,58,33,0.22)',
-    color: '#5C3A21',
+    color: 'var(--terminal-text)',
     fontSize: 8,
-    fontWeight: 900,
+    fontWeight: 700,
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -3939,7 +3839,7 @@ const styles = {
   },
   chainSwitchName: {
     fontSize: 12,
-    fontWeight: 900,
+    fontWeight: 700,
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
@@ -3947,8 +3847,8 @@ const styles = {
   },
   chainSwitchSub: {
     fontSize: 10,
-    fontWeight: 800,
-    color: '#8b6b3f',
+    fontWeight: 600,
+    color: 'var(--terminal-text-secondary)',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
@@ -3965,8 +3865,6 @@ const styles = {
   bodyMarketplaceScroll: {
     overflowY: 'auto',
     overflowX: 'hidden',
-    scrollbarWidth: 'thin',
-    scrollbarColor: '#bba882 #fdf8e7',
   },
   // ── Tab slider ────────────────────────────────────────────────────
   // Viewport clips the wider track; the track holds all three slides
@@ -4009,11 +3907,7 @@ const styles = {
     boxSizing: 'border-box',
     padding: '0 16px',
     display: 'flex', flexDirection: 'column', gap: 10,
-    // Firefox-specific scrollbar tint — thumb/track colors. WebKit-based
-    // browsers pick up the `.shop-scroll::-webkit-scrollbar*` rules in
-    // MINT_ANIM_CSS so they match the parchment palette across engines.
-    scrollbarWidth: 'thin',
-    scrollbarColor: '#bba882 #fdf8e7',
+    // Firefox uses the same thin global ClashBot scrollbar treatment.
   },
   slideHiddenForMarketplaceScroll: {
     display: 'none',
@@ -4023,7 +3917,6 @@ const styles = {
     height: 'auto',
     minHeight: 0,
     overflowY: 'visible',
-    scrollbarWidth: 'auto',
   },
   slideMobile: {
     padding: '0 10px',
@@ -4048,20 +3941,20 @@ const styles = {
   },
   comingSoonBadge: {
     padding: '5px 12px', borderRadius: 999,
-    background: 'linear-gradient(180deg, #ffd76a 0%, #c2851b 100%)',
-    border: '2px solid #5C3A21', color: '#3a1f00',
-    fontSize: 11, fontWeight: 900, letterSpacing: 1.2,
-    boxShadow: '0 4px 10px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.5)',
+    background: 'linear-gradient(180deg, var(--terminal-brand-border) 0%, var(--terminal-brand-strong) 100%)',
+    border: '1px solid var(--terminal-text)', color: 'var(--terminal-text)',
+    fontSize: 11, fontWeight: 700, letterSpacing: 1.2,
+    boxShadow: '0 4px 10px rgba(0,0,0,0.35), inset 0 1px 0 var(--terminal-chip-overlay)',
   },
   comingSoonTitle: {
-    color: '#fff7df', fontSize: 22, fontWeight: 900,
-    textShadow: '0 2px 6px rgba(0,0,0,0.6)',
+    color: 'var(--terminal-surface)', fontSize: 22, fontWeight: 700,
+    textShadow: 'none',
     lineHeight: 1.1,
   },
   comingSoonSub: {
     color: 'rgba(255,247,223,0.85)', fontSize: 13, fontWeight: 700,
     maxWidth: 320, lineHeight: 1.45,
-    textShadow: '0 1px 3px rgba(0,0,0,0.5)',
+    textShadow: 'none',
   },
   shopTabs: {
     display: 'grid',
@@ -4069,19 +3962,19 @@ const styles = {
     gap: 6,
     padding: 4,
     borderRadius: 12,
-    background: '#e8dfc8',
-    border: '2px solid #d4c8b0',
+    background: 'var(--terminal-surface-subtle)',
+    border: '1px solid var(--terminal-border)',
   },
   shopTabBtn: {
     minHeight: 34,
     minWidth: 0,
     padding: '0 6px',
-    border: '2px solid transparent',
+    border: '1px solid transparent',
     borderRadius: 9,
     background: 'transparent',
-    color: '#77573d',
+    color: 'var(--terminal-text-secondary)',
     fontSize: 12,
-    fontWeight: 900,
+    fontWeight: 700,
     cursor: 'pointer',
     fontFamily: 'inherit',
     whiteSpace: 'nowrap',
@@ -4090,10 +3983,10 @@ const styles = {
     textAlign: 'center',
   },
   shopTabBtnActive: {
-    background: '#fff8df',
-    border: '2px solid #bba882',
-    color: '#5C3A21',
-    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.6), 0 2px 4px rgba(0,0,0,0.12)',
+    background: 'var(--terminal-brand-soft)',
+    border: '1px solid var(--terminal-orange)',
+    color: 'var(--terminal-brand-text)',
+    boxShadow: 'none',
   },
   topRow: {
     display: 'grid',
@@ -4122,8 +4015,8 @@ const styles = {
     width: 120, height: 120,
     boxSizing: 'border-box',
     borderRadius: 18,
-    background: 'radial-gradient(circle at 50% 35%, #f3e6c4 0%, #d8c190 60%, #b89a64 100%)',
-    border: '5px solid #d4c8b0',
+    background: 'radial-gradient(circle at 50% 35%, var(--terminal-surface-subtle) 0%, var(--terminal-border-strong) 60%, var(--terminal-border-strong) 100%)',
+    border: '1px solid var(--terminal-border)',
     boxShadow: 'inset 0 4px 10px rgba(0,0,0,0.18), 0 8px 18px rgba(0,0,0,0.28)',
     overflow: 'hidden',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -4133,7 +4026,7 @@ const styles = {
     height: 72,
     boxSizing: 'border-box',
     borderRadius: 14,
-    border: '3px solid #d4c8b0',
+    border: '1px solid var(--terminal-border)',
     boxShadow: 'inset 0 3px 7px rgba(0,0,0,0.18), 0 5px 12px rgba(0,0,0,0.24)',
   },
   heroGlow: {
@@ -4158,16 +4051,16 @@ const styles = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    background: 'radial-gradient(circle at 50% 38%, #fff7df 0%, #d8c190 62%, #8b6b3f 100%)',
+    background: 'radial-gradient(circle at 50% 38%, var(--terminal-surface) 0%, var(--terminal-border-strong) 62%, var(--terminal-text-secondary) 100%)',
   },
   mysteryHeroMark: {
     position: 'relative',
     zIndex: 1,
-    color: '#5C3A21',
+    color: 'var(--terminal-text)',
     fontSize: 70,
-    fontWeight: 900,
+    fontWeight: 700,
     lineHeight: 1,
-    textShadow: '0 4px 0 rgba(255,255,255,0.45), 0 8px 12px rgba(0,0,0,0.28)',
+    textShadow: 'none',
   },
   mysteryHeroMarkSmall: {
     position: 'absolute',
@@ -4191,7 +4084,7 @@ const styles = {
     gap: 4,
   },
   heroName: {
-    fontSize: 22, fontWeight: 900, color: '#5C3A21',
+    fontSize: 22, fontWeight: 700, color: 'var(--terminal-text)',
     letterSpacing: 0,
     lineHeight: 1,
   },
@@ -4203,7 +4096,7 @@ const styles = {
     textOverflow: 'ellipsis',
   },
   editionTag: {
-    fontSize: 11, fontWeight: 900, color: '#8b6b3f',
+    fontSize: 11, fontWeight: 700, color: 'var(--terminal-text-secondary)',
     textTransform: 'uppercase', letterSpacing: 0,
   },
   marketEditionTagMobile: {
@@ -4234,9 +4127,9 @@ const styles = {
     gap: 1,
     padding: '6px 8px',
     borderRadius: 9,
-    border: '2px solid #d4c8b0',
-    background: '#fff8df',
-    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.55), 0 2px 5px rgba(92,58,33,0.12)',
+    border: '1px solid var(--terminal-border)',
+    background: 'var(--terminal-surface)',
+    boxShadow: 'inset 0 1px 0 var(--terminal-chip-overlay), 0 2px 5px rgba(92,58,33,0.12)',
   },
   marketStatMobile: {
     minHeight: 38,
@@ -4245,17 +4138,17 @@ const styles = {
   },
   marketStatLabel: {
     fontSize: 9,
-    fontWeight: 900,
-    color: '#9b7c4a',
+    fontWeight: 700,
+    color: 'var(--terminal-text-muted)',
     textTransform: 'uppercase',
     letterSpacing: 0.3,
     lineHeight: 1,
   },
   marketStatValue: {
     minWidth: 0,
-    color: '#5C3A21',
+    color: 'var(--terminal-text)',
     fontSize: 15,
-    fontWeight: 900,
+    fontWeight: 700,
     lineHeight: 1.05,
     whiteSpace: 'nowrap',
     overflow: 'hidden',
@@ -4272,21 +4165,21 @@ const styles = {
     marginTop: 2,
     padding: '5px 10px',
     borderRadius: 8,
-    background: '#5C3A21',
-    color: '#fff7df',
-    border: '2px solid #2d1706',
+    background: 'var(--terminal-text)',
+    color: 'var(--terminal-surface)',
+    border: '1px solid var(--terminal-text)',
     fontSize: 11,
-    fontWeight: 900,
+    fontWeight: 700,
     letterSpacing: 0,
     boxShadow: '0 2px 5px rgba(0,0,0,0.25)',
   },
   soldOutBox: {
     borderRadius: 8,
-    border: '2px solid #5C3A21',
-    background: '#f2e0ba',
-    color: '#5C3A21',
+    border: '1px solid var(--terminal-text)',
+    background: 'var(--terminal-surface-subtle)',
+    color: 'var(--terminal-text)',
     fontSize: 13,
-    fontWeight: 900,
+    fontWeight: 700,
     lineHeight: 1.35,
     textAlign: 'center',
     padding: '10px 12px',
@@ -4294,9 +4187,9 @@ const styles = {
   mysteryLockedBox: {
     minHeight: 106,
     borderRadius: 8,
-    border: '2px dashed #8b6b3f',
-    background: 'linear-gradient(180deg, #fff8df 0%, #eadbb6 100%)',
-    color: '#5C3A21',
+    border: '1px dashed var(--terminal-text-secondary)',
+    background: 'linear-gradient(180deg, var(--terminal-surface) 0%, var(--terminal-border) 100%)',
+    color: 'var(--terminal-text)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -4304,18 +4197,18 @@ const styles = {
   },
   mysteryLockedMark: {
     fontSize: 30,
-    fontWeight: 900,
+    fontWeight: 700,
     letterSpacing: 0,
   },
   contextChip: {
     alignSelf: 'flex-start',
     padding: '4px 8px',
     borderRadius: 8,
-    background: '#e8dfc8',
-    border: '2px solid #d4c8b0',
-    color: '#70522b',
+    background: 'var(--terminal-surface-subtle)',
+    border: '1px solid var(--terminal-border)',
+    color: 'var(--terminal-text-secondary)',
     fontSize: 10,
-    fontWeight: 900,
+    fontWeight: 700,
   },
   // Wrapper that pairs the chain-switcher pill with a separate
   // disconnect button so each interactive zone has a single, obvious
@@ -4331,30 +4224,30 @@ const styles = {
     display: 'inline-flex', alignItems: 'center', gap: 6,
     padding: '4px 8px 4px 4px',
     borderRadius: 9,
-    background: 'linear-gradient(180deg, #fff6dc 0%, #ead9b2 100%)',
-    border: '2px solid #d4c8b0',
-    color: '#5C3A21',
+    background: 'linear-gradient(180deg, var(--terminal-surface) 0%, var(--terminal-border) 100%)',
+    border: '1px solid var(--terminal-border)',
+    color: 'var(--terminal-text)',
     fontSize: 12,
-    fontWeight: 900,
+    fontWeight: 700,
     cursor: 'pointer',
-    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.6), 0 2px 4px rgba(0,0,0,0.12)',
+    boxShadow: 'inset 0 1px 0 var(--terminal-chip-overlay), 0 2px 4px rgba(0,0,0,0.12)',
     transition: 'filter 0.12s',
   },
   chainChipBadge: {
-    background: '#5C3A21',
-    color: '#fff7df',
-    fontSize: 9, fontWeight: 900,
+    background: 'var(--terminal-text)',
+    color: 'var(--terminal-surface)',
+    fontSize: 9, fontWeight: 700,
     padding: '2px 6px',
     borderRadius: 6,
     letterSpacing: 0.5,
   },
   chainChipName: {
-    fontSize: 12, fontWeight: 900,
+    fontSize: 12, fontWeight: 700,
     letterSpacing: 0.3,
   },
   chainChipArrow: {
     fontSize: 10,
-    color: '#9b7c4a',
+    color: 'var(--terminal-text-muted)',
     lineHeight: 1,
     marginLeft: 2,
   },
@@ -4362,11 +4255,11 @@ const styles = {
     display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
     width: 26, padding: 0,
     borderRadius: 9,
-    background: '#fff6dc',
-    border: '2px solid #d4c8b0',
-    color: '#5C3A21',
+    background: 'var(--terminal-surface)',
+    border: '1px solid var(--terminal-border)',
+    color: 'var(--terminal-text)',
     cursor: 'pointer',
-    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.6), 0 2px 4px rgba(0,0,0,0.12)',
+    boxShadow: 'none',
     transition: 'filter 0.12s, background 0.12s',
   },
   // Chain + payment toggles for the Game Resources tab.
@@ -4383,28 +4276,28 @@ const styles = {
     alignItems: 'center',
     justifyContent: 'center',
     gap: 1,
-    border: '2px solid #d4c8b0',
+    border: '1px solid var(--terminal-border)',
     borderRadius: 11,
-    background: '#fff8df',
-    color: '#77573d',
+    background: 'var(--terminal-surface)',
+    color: 'var(--terminal-text-secondary)',
     cursor: 'pointer',
     fontFamily: 'inherit',
     padding: '4px 8px',
   },
   shopChainBtnActive: {
-    border: '2px solid #8c6a3c',
-    background: 'linear-gradient(180deg, #fff6dc 0%, #d7c69f 100%)',
-    color: '#5C3A21',
-    boxShadow: 'inset 0 2px 0 rgba(255,255,255,0.55), 0 2px 4px rgba(0,0,0,0.18)',
+    border: '1px solid var(--terminal-orange)',
+    background: 'var(--terminal-brand-soft)',
+    color: 'var(--terminal-brand-text)',
+    boxShadow: 'none',
   },
   shopChainLabel: {
     fontSize: 13,
-    fontWeight: 900,
+    fontWeight: 700,
     letterSpacing: 0.3,
   },
   shopChainSub: {
     fontSize: 10,
-    fontWeight: 800,
+    fontWeight: 600,
     opacity: 0.75,
   },
   shopPaymentRow: {
@@ -4420,30 +4313,30 @@ const styles = {
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    border: '2px solid #c2ae83',
+    border: '1px solid var(--terminal-border-strong)',
     borderRadius: 9,
-    background: '#fff',
-    color: '#77573d',
+    background: 'var(--terminal-surface)',
+    color: 'var(--terminal-text-secondary)',
     cursor: 'pointer',
     fontFamily: 'inherit',
     padding: '4px 8px',
   },
   shopPaymentBtnActive: {
-    border: '2px solid #1d6fe0',
-    background: 'linear-gradient(180deg, #e8f1ff 0%, #c5dbff 100%)',
-    color: '#0e3a72',
-    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.6), 0 1px 3px rgba(0,0,0,0.12)',
+    border: '1px solid var(--terminal-orange)',
+    background: 'var(--terminal-brand-soft)',
+    color: 'var(--terminal-brand-text)',
+    boxShadow: 'none',
   },
   shopPaymentLabel: {
     display: 'block',
     fontSize: 12,
-    fontWeight: 900,
+    fontWeight: 700,
     lineHeight: 1.05,
   },
   shopPaymentSub: {
     display: 'block',
     fontSize: 9,
-    fontWeight: 800,
+    fontWeight: 600,
     opacity: 0.7,
     lineHeight: 1.1,
   },
@@ -4467,13 +4360,13 @@ const styles = {
     width: 24,
     height: 20,
     borderRadius: 6,
-    background: '#5C3A21',
-    color: '#fff7df',
+    background: 'var(--terminal-text)',
+    color: 'var(--terminal-surface)',
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
     fontSize: 8,
-    fontWeight: 900,
+    fontWeight: 700,
     letterSpacing: 0.2,
     flex: '0 0 auto',
   },
@@ -4487,11 +4380,11 @@ const styles = {
     gridTemplateColumns: '92px minmax(0, 1fr) auto',
     alignItems: 'center',
     gap: 10,
-    border: '3px solid #d4c8b0',
+    border: '1px solid var(--terminal-border)',
     borderRadius: 13,
-    background: 'linear-gradient(180deg, #fff8df 0%, #ead9b2 100%)',
+    background: 'linear-gradient(180deg, var(--terminal-surface) 0%, var(--terminal-border) 100%)',
     padding: 10,
-    boxShadow: 'inset 0 2px 0 rgba(255,255,255,0.55), 0 4px 10px rgba(0,0,0,0.12)',
+    boxShadow: 'inset 0 2px 0 var(--terminal-chip-overlay), 0 4px 10px rgba(0,0,0,0.12)',
   },
   // Mobile: icon + text on one row, full-width button on a row below. The
   // 3-column desktop layout collapses to 2 columns + a wrapping button so
@@ -4545,15 +4438,15 @@ const styles = {
     gridArea: 'info',
   },
   resourceTitle: {
-    color: '#5C3A21',
+    color: 'var(--terminal-text)',
     fontSize: 14,
-    fontWeight: 900,
+    fontWeight: 700,
     lineHeight: 1.1,
   },
   resourceSubtitle: {
-    color: '#77573d',
+    color: 'var(--terminal-text-secondary)',
     fontSize: 11,
-    fontWeight: 800,
+    fontWeight: 600,
     lineHeight: 1.2,
   },
   resourceMetaRow: {
@@ -4564,28 +4457,28 @@ const styles = {
     marginTop: 3,
   },
   resourcePrice: {
-    color: '#1f6d34',
+    color: 'var(--terminal-long-strong)',
     fontSize: 12,
-    fontWeight: 900,
+    fontWeight: 700,
   },
   resourceMeta: {
     padding: '2px 6px',
     borderRadius: 7,
-    background: '#e8dfc8',
-    color: '#6b502d',
+    background: 'var(--terminal-surface-subtle)',
+    color: 'var(--terminal-text-secondary)',
     fontSize: 10,
-    fontWeight: 900,
+    fontWeight: 700,
   },
   quantityStepper: {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 10,
-    border: '3px solid #d4c8b0',
+    border: '1px solid var(--terminal-border)',
     borderRadius: 12,
-    background: '#fff8df',
+    background: 'var(--terminal-surface)',
     padding: '8px 10px',
-    boxShadow: 'inset 0 2px 0 rgba(255,255,255,0.55)',
+    boxShadow: 'inset 0 2px 0 var(--terminal-chip-overlay)',
   },
   quantityStepperCompact: {
     display: 'flex',
@@ -4595,9 +4488,9 @@ const styles = {
     marginTop: 4,
   },
   quantityLabel: {
-    color: '#5C3A21',
+    color: 'var(--terminal-text)',
     fontSize: 12,
-    fontWeight: 900,
+    fontWeight: 700,
     textTransform: 'uppercase',
   },
   quantityControls: {
@@ -4606,40 +4499,19 @@ const styles = {
     gap: 4,
   },
   quantityBtn: {
-    width: 30,
-    height: 30,
-    borderRadius: 9,
-    border: '2px solid #9f8759',
-    background: 'linear-gradient(180deg, #fff6dc 0%, #d7c69f 100%)',
-    color: '#5C3A21',
-    fontSize: 17,
-    fontWeight: 900,
-    lineHeight: 1,
+    ...uiIconButton('secondary', 30, { fontSize: 17, lineHeight: 1 }),
     fontFamily: 'inherit',
-    cursor: 'pointer',
   },
-  quantityBtnCompact: {
-    width: 24,
-    height: 24,
-    borderRadius: 7,
-    border: '2px solid #9f8759',
-    background: '#fff6dc',
-    color: '#5C3A21',
-    fontSize: 13,
-    fontWeight: 900,
-    lineHeight: 1,
-    fontFamily: 'inherit',
-    cursor: 'pointer',
-  },
+  quantityBtnCompact: uiIconButton('secondary', 28, { fontSize: 13, lineHeight: 1, fontFamily: 'inherit' }),
   quantityInput: {
     width: 52,
     height: 30,
     borderRadius: 9,
-    border: '2px solid #d4c8b0',
-    background: '#fffaf0',
-    color: '#5C3A21',
+    border: '1px solid var(--terminal-border)',
+    background: 'var(--terminal-surface)',
+    color: 'var(--terminal-text)',
     fontSize: 14,
-    fontWeight: 900,
+    fontWeight: 700,
     textAlign: 'center',
     fontFamily: 'inherit',
   },
@@ -4647,26 +4519,18 @@ const styles = {
     width: 42,
     height: 24,
     borderRadius: 7,
-    border: '2px solid #d4c8b0',
-    background: '#fffaf0',
-    color: '#5C3A21',
+    border: '1px solid var(--terminal-border)',
+    background: 'var(--terminal-surface)',
+    color: 'var(--terminal-text)',
     fontSize: 12,
-    fontWeight: 900,
+    fontWeight: 700,
     textAlign: 'center',
     fontFamily: 'inherit',
   },
   resourceBuyBtn: {
+    ...uiButton('secondary', { minHeight: 38, padding: '8px 12px', fontSize: 11 }),
     minWidth: 104,
-    minHeight: 38,
-    borderRadius: 11,
-    border: '3px solid #9f8759',
-    background: 'linear-gradient(180deg, #fff6dc 0%, #d7c69f 100%)',
-    color: '#5C3A21',
-    fontSize: 11,
-    fontWeight: 900,
-    cursor: 'pointer',
     fontFamily: 'inherit',
-    boxShadow: '0 4px 8px rgba(0,0,0,0.18), inset 0 2px 0 rgba(255,255,255,0.5)',
   },
   resourceBuyBtnMobile: {
     width: '100%',
@@ -4677,10 +4541,10 @@ const styles = {
     padding: '0 12px',
   },
   resourceBuyBtnReady: {
-    border: '3px solid #1f6d34',
-    background: 'linear-gradient(180deg, #87d95f 0%, #3d9b42 100%)',
-    color: '#fff',
-    textShadow: '0 1px 1px rgba(0,0,0,0.35)',
+    border: '1px solid var(--terminal-brand-strong)',
+    background: 'var(--terminal-orange)',
+    color: 'var(--terminal-on-accent)',
+    textShadow: 'none',
   },
   resourceBuyBtnDisabled: {
     opacity: 0.55,
@@ -4688,11 +4552,11 @@ const styles = {
     filter: 'grayscale(0.35)',
   },
   supplyBox: {
-    border: '3px solid #d4c8b0',
+    border: '1px solid var(--terminal-border)',
     borderRadius: 13,
-    background: 'linear-gradient(180deg, #fff8df 0%, #ead9b2 100%)',
+    background: 'linear-gradient(180deg, var(--terminal-surface) 0%, var(--terminal-border) 100%)',
     padding: '10px 11px',
-    boxShadow: 'inset 0 2px 0 rgba(255,255,255,0.55), 0 4px 10px rgba(0,0,0,0.12)',
+    boxShadow: 'inset 0 2px 0 var(--terminal-chip-overlay), 0 4px 10px rgba(0,0,0,0.12)',
   },
   supplyTop: {
     display: 'flex',
@@ -4703,34 +4567,34 @@ const styles = {
   },
   supplyTitle: {
     minWidth: 0,
-    color: '#5C3A21',
+    color: 'var(--terminal-text)',
     fontSize: 13,
-    fontWeight: 900,
+    fontWeight: 700,
     textTransform: 'uppercase',
   },
   supplyRemaining: {
     flex: '0 0 auto',
     borderRadius: 10,
-    background: '#5C3A21',
-    color: '#fff7df',
+    background: 'var(--terminal-text)',
+    color: 'var(--terminal-surface)',
     padding: '4px 8px',
     fontSize: 11,
-    fontWeight: 900,
+    fontWeight: 700,
   },
   progressTrack: {
     position: 'relative',
     height: 16,
     borderRadius: 9,
-    border: '2px solid #9f8759',
-    background: '#d7c69f',
+    border: '1px solid var(--terminal-text-muted)',
+    background: 'var(--terminal-border-strong)',
     overflow: 'hidden',
     boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.25)',
   },
   progressFill: {
     height: '100%',
     borderRadius: 7,
-    background: 'linear-gradient(90deg, #4aa64f 0%, #f5cf57 58%, #f2a72b 100%)',
-    boxShadow: 'inset 0 2px 0 rgba(255,255,255,0.4), 0 0 8px rgba(245,207,87,0.55)',
+    background: 'linear-gradient(90deg, var(--terminal-long) 0%, var(--terminal-orange) 58%, var(--terminal-orange) 100%)',
+    boxShadow: 'inset 0 2px 0 var(--terminal-chip-overlay), 0 0 8px rgba(245,207,87,0.55)',
     transition: 'width 280ms ease',
   },
   supplyMeta: {
@@ -4738,43 +4602,43 @@ const styles = {
     justifyContent: 'space-between',
     gap: 10,
     marginTop: 7,
-    color: '#7a5b31',
+    color: 'var(--terminal-text-secondary)',
     fontSize: 11,
-    fontWeight: 900,
+    fontWeight: 700,
   },
   supplyOverview: {
     display: 'grid',
     gridTemplateColumns: 'minmax(0, 1fr) 128px minmax(0, 1fr)',
     alignItems: 'center',
     gap: 8,
-    border: '3px solid #d4c8b0',
+    border: '1px solid var(--terminal-border)',
     borderRadius: 13,
-    background: 'linear-gradient(180deg, #fff8df 0%, #ead9b2 100%)',
+    background: 'linear-gradient(180deg, var(--terminal-surface) 0%, var(--terminal-border) 100%)',
     padding: '10px 11px',
-    boxShadow: 'inset 0 2px 0 rgba(255,255,255,0.55), 0 4px 10px rgba(0,0,0,0.12)',
+    boxShadow: 'inset 0 2px 0 var(--terminal-chip-overlay), 0 4px 10px rgba(0,0,0,0.12)',
   },
   chainSupplySide: {
     minWidth: 0,
     display: 'flex',
     flexDirection: 'column',
     gap: 3,
-    color: '#5C3A21',
+    color: 'var(--terminal-text)',
   },
   chainSupplyLabel: {
     fontSize: 11,
-    fontWeight: 900,
+    fontWeight: 700,
     textTransform: 'uppercase',
-    color: '#8b6b3f',
+    color: 'var(--terminal-text-secondary)',
   },
   chainSupplyValue: {
     fontSize: 15,
-    fontWeight: 900,
+    fontWeight: 700,
     lineHeight: 1,
   },
   chainSupplyMeta: {
     fontSize: 10,
-    fontWeight: 900,
-    color: '#8b6b3f',
+    fontWeight: 700,
+    color: 'var(--terminal-text-secondary)',
   },
   totalSupply: {
     minWidth: 0,
@@ -4784,27 +4648,27 @@ const styles = {
     justifyContent: 'center',
     padding: '6px 8px',
     borderRadius: 12,
-    background: '#5C3A21',
+    background: 'var(--terminal-text)',
     boxShadow: 'inset 0 2px 0 rgba(255,255,255,0.18), 0 3px 8px rgba(0,0,0,0.18)',
-    color: '#fff7df',
+    color: 'var(--terminal-surface)',
   },
   totalSupplyLabel: {
     fontSize: 9,
-    fontWeight: 900,
+    fontWeight: 700,
     textTransform: 'uppercase',
-    color: '#f5cf57',
+    color: 'var(--terminal-orange)',
   },
   totalSupplyValue: {
     fontSize: 32,
     lineHeight: 0.95,
-    fontWeight: 900,
+    fontWeight: 700,
     letterSpacing: 0,
-    textShadow: '0 2px 0 rgba(0,0,0,0.25)',
+    textShadow: 'none',
   },
   totalSupplyMeta: {
     fontSize: 10,
-    fontWeight: 900,
-    color: '#f8e1a0',
+    fontWeight: 700,
+    color: 'var(--terminal-brand-soft)',
   },
   // Promotional banner highlighting the CLASH-token discount. Sits
   // between the supply box and the chain picker so the saving is the
@@ -4816,9 +4680,9 @@ const styles = {
     width: '100%',
     padding: '10px 12px',
     borderRadius: 12,
-    background: 'linear-gradient(135deg, #fff2c2 0%, #ffd76a 50%, #f0a335 100%)',
-    border: '3px solid #c2851b',
-    boxShadow: '0 6px 14px rgba(194,133,27,0.28), inset 0 1px 0 rgba(255,255,255,0.5)',
+    background: 'linear-gradient(135deg, var(--terminal-brand-soft) 0%, var(--terminal-brand-border) 50%, var(--terminal-orange) 100%)',
+    border: '1px solid var(--terminal-brand-strong)',
+    boxShadow: '0 6px 14px rgba(194,133,27,0.28), inset 0 1px 0 var(--terminal-chip-overlay)',
     fontFamily: 'inherit',
     textAlign: 'left',
     cursor: 'pointer',
@@ -4829,8 +4693,8 @@ const styles = {
     height: 42,
     borderRadius: '50%',
     overflow: 'hidden',
-    background: '#1f1b16',
-    border: '3px solid #fff2c2',
+    background: 'var(--terminal-text)',
+    border: '1px solid var(--terminal-brand-soft)',
     boxShadow: '0 3px 8px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,255,255,0.25)',
   },
   clashBannerLogoImg: {
@@ -4847,19 +4711,19 @@ const styles = {
   },
   clashBannerTitle: {
     fontSize: 13,
-    fontWeight: 900,
-    color: '#3a1f00',
+    fontWeight: 700,
+    color: 'var(--terminal-text)',
     letterSpacing: 0.2,
-    textShadow: '0 1px 0 rgba(255,255,255,0.4)',
+    textShadow: 'none',
   },
   clashBannerSub: {
     fontSize: 11,
-    fontWeight: 800,
-    color: '#5C3A21',
+    fontWeight: 600,
+    color: 'var(--terminal-text)',
   },
   clashBannerSubAccent: {
     color: '#1B5E20',
-    fontWeight: 900,
+    fontWeight: 700,
   },
   // Small section heading used above the chain grid (and reusable for
   // any future "pick something" rows). Matches the brown medieval tone
@@ -4874,15 +4738,15 @@ const styles = {
   },
   sectionHeaderText: {
     fontSize: 13,
-    fontWeight: 900,
-    color: '#5C3A21',
+    fontWeight: 700,
+    color: 'var(--terminal-text)',
     textTransform: 'uppercase',
     letterSpacing: 0.6,
   },
   sectionHeaderHint: {
     fontSize: 10,
-    fontWeight: 800,
-    color: '#9b7c4a',
+    fontWeight: 600,
+    color: 'var(--terminal-text-muted)',
     letterSpacing: 0.3,
   },
   chainGrid: {
@@ -4898,9 +4762,9 @@ const styles = {
     // melts into the background — only the rotating gradient ring
     // remains visible. Padding is dialled down so the ring hugs the
     // text instead of framing a tall empty block.
-    background: '#fdf8e7',
+    background: 'var(--terminal-surface)',
     padding: '8px 12px',
-    color: '#5C3A21',
+    color: 'var(--terminal-text)',
     cursor: 'pointer',
     fontFamily: 'inherit',
     display: 'flex',
@@ -4910,61 +4774,61 @@ const styles = {
     textAlign: 'left',
   },
   chainBtnActive: {
-    border: '3px solid #c2851b',
-    background: '#fff1c4',
+    border: '1px solid var(--terminal-brand-strong)',
+    background: 'var(--terminal-brand-soft)',
   },
   chainBadge: {
     justifySelf: 'start',
     padding: '5px 8px',
     borderRadius: 9,
-    background: '#5C3A21',
-    color: '#fff7df',
+    background: 'var(--terminal-text)',
+    color: 'var(--terminal-surface)',
     fontSize: 10,
-    fontWeight: 900,
+    fontWeight: 700,
   },
   chainTitle: {
     fontSize: 20,
-    fontWeight: 900,
+    fontWeight: 700,
     letterSpacing: 0,
     lineHeight: 1,
   },
   chainSubtitle: {
     fontSize: 11,
-    fontWeight: 900,
-    color: '#8b6b3f',
+    fontWeight: 700,
+    color: 'var(--terminal-text-secondary)',
     letterSpacing: 0.3,
   },
   chainReady: {
     fontSize: 11,
-    fontWeight: 900,
-    color: '#2e7d32',
+    fontWeight: 700,
+    color: 'var(--terminal-long-strong)',
   },
   chainConnect: {
     fontSize: 11,
-    fontWeight: 900,
-    color: '#9a6a18',
+    fontWeight: 700,
+    color: 'var(--terminal-warning)',
   },
   selectedChainBar: {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
-    border: '3px solid #d4c8b0',
+    border: '1px solid var(--terminal-border)',
     borderRadius: 12,
-    background: '#efe6d0',
+    background: 'var(--terminal-surface-subtle)',
     padding: '8px 10px',
   },
   selectedChainText: {
-    color: '#5C3A21',
+    color: 'var(--terminal-text)',
     fontSize: 15,
-    fontWeight: 900,
+    fontWeight: 700,
   },
   changeBtn: {
-    border: '2px solid #9f8759',
+    border: '1px solid var(--terminal-text-muted)',
     borderRadius: 9,
-    background: '#fffaf0',
-    color: '#5C3A21',
+    background: 'var(--terminal-surface)',
+    color: 'var(--terminal-text)',
     fontSize: 11,
-    fontWeight: 900,
+    fontWeight: 700,
     padding: '5px 8px',
     cursor: 'pointer',
     fontFamily: 'inherit',
@@ -4975,7 +4839,7 @@ const styles = {
     gap: 8,
   },
   walletStatus: {
-    border: '3px solid #d4c8b0',
+    border: '1px solid var(--terminal-border)',
     borderRadius: 12,
     padding: '7px 10px',
     minWidth: 0,
@@ -4991,39 +4855,28 @@ const styles = {
     flexDirection: 'column',
     gap: 2,
   },
-  walletReady: { background: '#e5f4d8', border: '3px solid #7db85a' },
-  walletWarn: { background: '#fff1cc', border: '3px solid #d9a928' },
-  walletIdle: { background: '#efe6d0' },
+  walletReady: { background: 'var(--terminal-long-soft)', border: '1px solid var(--terminal-long-border)' },
+  walletWarn: { background: 'var(--terminal-brand-soft)', border: '1px solid var(--terminal-warning)' },
+  walletIdle: { background: 'var(--terminal-surface-subtle)' },
   walletLabel: {
     fontSize: 10,
-    color: '#8b6b3f',
-    fontWeight: 900,
+    color: 'var(--terminal-text-secondary)',
+    fontWeight: 700,
     textTransform: 'uppercase',
     letterSpacing: 0.3,
   },
   walletValue: {
     fontSize: 14,
-    color: '#5C3A21',
-    fontWeight: 900,
+    color: 'var(--terminal-text)',
+    fontWeight: 700,
     lineHeight: 1,
   },
   walletHint: {
     fontSize: 10,
-    color: '#8b6b3f',
-    fontWeight: 800,
+    color: 'var(--terminal-text-secondary)',
+    fontWeight: 600,
   },
-  walletDisconnectBtn: {
-    flex: '0 0 auto',
-    width: 30, height: 30,
-    borderRadius: 9,
-    background: '#fff6dc',
-    border: '2px solid #9f8759',
-    color: '#5C3A21',
-    cursor: 'pointer',
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-    padding: 0,
-    transition: 'filter 0.12s, background 0.12s',
-  },
+  walletDisconnectBtn: uiIconButton('danger', 30),
   options: {
     display: 'grid',
     gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
@@ -5031,9 +4884,9 @@ const styles = {
   },
   optionBtn: {
     position: 'relative',
-    border: '3px solid #d4c8b0',
+    border: '1px solid var(--terminal-border)',
     borderRadius: 12,
-    background: '#fffaf0',
+    background: 'var(--terminal-surface)',
     padding: '10px',
     display: 'grid',
     gridTemplateColumns: 'auto 1fr',
@@ -5041,16 +4894,17 @@ const styles = {
     columnGap: 8,
     rowGap: 3,
     alignItems: 'center',
-    color: '#5C3A21',
+    color: 'var(--terminal-text)',
     cursor: 'pointer',
     fontFamily: 'inherit',
     textAlign: 'left',
     minHeight: 74,
   },
   optionBtnActive: {
-    border: '3px solid #c2851b',
-    background: '#fff1c4',
-    boxShadow: 'inset 0 0 0 2px rgba(255,255,255,0.65)',
+    border: '1px solid var(--terminal-orange)',
+    background: 'var(--terminal-brand-soft)',
+    color: 'var(--terminal-brand-text)',
+    boxShadow: 'none',
   },
   optionBtnDisabled: {
     opacity: 0.68,
@@ -5063,9 +4917,9 @@ const styles = {
     padding: 0,
     borderRadius: '50%',
     background: 'transparent',
-    color: '#5C3A21',
+    color: 'var(--terminal-text)',
     fontSize: 10,
-    fontWeight: 900,
+    fontWeight: 700,
     textAlign: 'center',
     textTransform: 'uppercase',
     display: 'flex',
@@ -5087,10 +4941,10 @@ const styles = {
     marginLeft: 6,
     padding: '1px 6px',
     borderRadius: 6,
-    background: '#1B5E20',
-    color: '#fff7df',
+    background: 'var(--terminal-long)',
+    color: 'var(--terminal-surface)',
     fontSize: 9,
-    fontWeight: 900,
+    fontWeight: 700,
     letterSpacing: 0.4,
     verticalAlign: '1px',
     boxShadow: '0 1px 2px rgba(0,0,0,0.25)',
@@ -5098,47 +4952,47 @@ const styles = {
   optionMain: {
     minWidth: 0,
     fontSize: 15,
-    fontWeight: 900,
+    fontWeight: 700,
     lineHeight: 1,
   },
   optionPrice: {
     fontSize: 12,
-    fontWeight: 900,
-    color: '#2e7d32',
+    fontWeight: 700,
+    color: 'var(--terminal-long-strong)',
   },
   optionDealText: {
     minWidth: 0,
     fontSize: 10,
-    fontWeight: 900,
-    color: '#8a4a08',
+    fontWeight: 700,
+    color: 'var(--terminal-warning)',
     textTransform: 'uppercase',
     lineHeight: 1,
   },
   quoteStrip: {
     minHeight: 34,
     borderRadius: 11,
-    border: '2px solid #d4c8b0',
-    background: '#fff8df',
-    color: '#5C3A21',
+    border: '1px solid var(--terminal-border)',
+    background: 'var(--terminal-surface)',
+    color: 'var(--terminal-text)',
     fontSize: 12,
-    fontWeight: 900,
+    fontWeight: 700,
     padding: '8px 10px',
     display: 'flex',
     alignItems: 'center',
     lineHeight: 1.2,
   },
   quoteStripWarn: {
-    border: '2px solid #d69b2d',
-    background: '#fff1cc',
-    color: '#7d4c0f',
+    border: '1px solid var(--terminal-brand-strong)',
+    background: 'var(--terminal-brand-soft)',
+    color: 'var(--terminal-warning)',
   },
   nftTokenBadge: {
     flex: '0 0 auto',
     width: 42,
     height: 42,
     borderRadius: 10,
-    border: '2px solid #d4c8b0',
-    background: '#fffaf0',
+    border: '1px solid var(--terminal-border)',
+    background: 'var(--terminal-surface)',
     overflow: 'hidden',
     display: 'inline-flex',
     alignItems: 'center',
@@ -5156,33 +5010,18 @@ const styles = {
     top: 6,
     right: 7,
     borderRadius: 8,
-    background: '#5C3A21',
-    color: '#fff7df',
+    background: 'var(--terminal-text)',
+    color: 'var(--terminal-surface)',
     padding: '3px 6px',
     fontSize: 9,
-    fontWeight: 900,
+    fontWeight: 700,
   },
   mintBtn: {
-    width: '100%',
-    padding: '13px',
-    background: 'linear-gradient(180deg, #ffd76a 0%, #c2851b 100%)',
-    border: '3px solid #5C3A21',
-    borderRadius: 14,
-    color: '#3a1f00',
-    fontSize: 16,
-    fontWeight: 900,
-    letterSpacing: 0,
-    textShadow: '0 1px 0 rgba(255,255,255,0.5)',
-    boxShadow: '0 6px 16px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.5)',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 10,
+    ...uiButton('neutral', { width: '100%', minHeight: 44, padding: 12, fontSize: 14 }),
     fontFamily: 'inherit',
   },
   mintBtnReady: {
-    background: 'linear-gradient(180deg, #91df7d 0%, #3b9b41 100%)',
-    color: '#12330f',
+    ...uiButton('primary', { width: '100%', minHeight: 44, padding: 12, fontSize: 14 }),
   },
   mintBtnDisabled: {
     opacity: 0.7,
@@ -5196,7 +5035,7 @@ const styles = {
     alignItems: 'center',
     justifyContent: 'center',
     fontSize: 13,
-    fontWeight: 900,
+    fontWeight: 700,
     overflow: 'hidden',
     padding: 0,
   },
@@ -5208,21 +5047,21 @@ const styles = {
   },
   notice: {
     borderRadius: 10,
-    border: '2px solid #d4c8b0',
-    background: '#fff5d6',
-    color: '#6b4f25',
+    border: '1px solid var(--terminal-border)',
+    background: 'var(--terminal-warning-soft)',
+    color: 'var(--terminal-text-secondary)',
     fontSize: 12,
-    fontWeight: 800,
+    fontWeight: 600,
     padding: '8px 10px',
     textAlign: 'center',
   },
   noticeReady: {
     borderRadius: 10,
-    border: '2px solid #7db85a',
-    background: '#e5f4d8',
-    color: '#2c6b25',
+    border: '1px solid var(--terminal-long-border)',
+    background: 'var(--terminal-long-soft)',
+    color: 'var(--terminal-long-strong)',
     fontSize: 12,
-    fontWeight: 900,
+    fontWeight: 700,
     padding: '8px 10px',
     textAlign: 'center',
   },

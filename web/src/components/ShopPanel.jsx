@@ -2,6 +2,7 @@ import { useState, memo, useCallback, useMemo } from 'react';
 import { useSend, useBuildingDefs, usePlayer, useResources } from '../hooks/useGodot';
 import { useLayout } from '../hooks/useIsMobile';
 import SanctumLstPanel from './SanctumLstPanel';
+import { uiButton, uiIconButton } from '../styles/theme';
 
 import goldIcon from '../assets/resources/gold_bar.png';
 import woodIcon from '../assets/resources/wood_bar.png';
@@ -127,55 +128,47 @@ const RES_ICONS = {
 };
 
 const tabBase = {
-  padding: '0 28px',
-  fontSize: 16,
-  fontWeight: 900,
-  fontFamily: '"Inter", "Segoe UI", sans-serif',
-  cursor: 'pointer',
+  ...uiButton('secondary', { minHeight: 44, padding: '0 18px', fontSize: 14 }),
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
-  transition: 'all 0.15s cubic-bezier(0.18, 0.89, 0.32, 1.28)',
   outline: 'none',
-  borderStyle: 'solid',
-  borderWidth: '4px 4px 0',
-  borderColor: 'transparent',
-  borderRadius: '16px 16px 0 0',
+  borderRadius: '10px 10px 0 0',
 };
 
 const TAB_STYLE_ACTIVE = {
   ...tabBase,
-  background: '#fdf8e7',
-  color: '#5C3A21',
-  borderColor: '#d4c8b0',
-  marginBottom: -6,
-  height: 56,
+  background: 'var(--terminal-brand-soft)',
+  color: 'var(--terminal-brand-text)',
+  borderColor: 'var(--terminal-orange)',
+  marginBottom: 0,
+  height: 50,
   zIndex: 20,
 };
 
 const TAB_STYLE_INACTIVE = {
   ...tabBase,
-  background: '#d4c8b0',
-  color: '#77573d',
-  borderColor: '#bba882',
+  background: 'var(--terminal-border)',
+  color: 'var(--terminal-text-secondary)',
+  borderColor: 'var(--terminal-border-strong)',
   marginBottom: 0,
   height: 50,
   zIndex: 10,
-  boxShadow: 'inset 0 -4px 10px rgba(0,0,0,0.08)',
+  boxShadow: 'none',
 };
 
 const TAB_CONTENT_ACTIVE = {
   display: 'flex',
   alignItems: 'center',
   gap: 6,
-  textShadow: '0 1px 0 rgba(255,255,255,0.5)',
+  textShadow: 'none',
 };
 
 const TAB_CONTENT_INACTIVE = {
   display: 'flex',
   alignItems: 'center',
   gap: 6,
-  textShadow: '0 1px 2px rgba(0,0,0,0.3)',
+  textShadow: 'none',
 };
 
 const stopPropagation = (e) => e.stopPropagation();
@@ -258,9 +251,10 @@ function ShopPanel({ onClose }) {
       <div style={styles.overlay} onClick={onClose}>
         <div style={styles.container} onClick={stopPropagation}>
         <button
+          type="button"
           style={{
             ...styles.closeBtn,
-            top: isMobile ? 48 : 58,
+            top: isMobile ? 70 : 58,
             right: isMobile ? 10 : 18,
           }}
           onClick={onClose}
@@ -269,7 +263,11 @@ function ShopPanel({ onClose }) {
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
         </button>
         <div style={styles.tabArea}>
-          <div style={{ ...styles.tabContainer, gap: isMobile ? 2 : 4 }}>
+          <div style={{
+            ...styles.tabContainer,
+            gap: isMobile ? 2 : 4,
+            width: 'min(calc(100% - 24px), 500px)',
+          }}>
             {TABS.map(tab => {
               const isActive = activeTab === tab.id;
               
@@ -278,15 +276,20 @@ function ShopPanel({ onClose }) {
                 ...TAB_STYLE_ACTIVE,
                 padding: isMobile ? '0 12px' : '0 28px',
                 fontSize: isMobile ? 14 : 16,
+                flex: '1 1 0',
+                minWidth: 0,
               };
               const inactiveStyle = {
                 ...TAB_STYLE_INACTIVE,
                 padding: isMobile ? '0 12px' : '0 28px',
                 fontSize: isMobile ? 14 : 16,
+                flex: '1 1 0',
+                minWidth: 0,
               };
 
               return (
                 <button
+                  type="button"
                   key={tab.id}
                   style={isActive ? activeStyle : inactiveStyle}
                   onClick={() => setActiveTab(tab.id)}
@@ -303,7 +306,7 @@ function ShopPanel({ onClose }) {
         <div style={styles.cardArea} className="grad-scrollbar">
           <div style={{ ...styles.cardScroll, padding: isMobile ? '16px' : '20px 24px' }}>
             {activeTab === 'Web3' && (
-              <button style={styles.clashSolCard} onClick={() => setShowSanctumLst(true)}>
+              <button type="button" style={styles.clashSolCard} onClick={() => setShowSanctumLst(true)}>
                 <div style={styles.clashSolArt}>
                   <div style={styles.clashSolGlow} />
                   <img src="/tokens/SOL.svg" alt="Solana" style={styles.clashSolSolLogo} />
@@ -331,9 +334,18 @@ function ShopPanel({ onClose }) {
                   ...(status.maxed ? styles.cardMaxed : {}),
                   ...(!status.canAfford && !status.locked && !status.maxed ? styles.cardUnaffordable : {}),
                 }}
+                role="button"
+                tabIndex={disabled ? -1 : 0}
+                aria-disabled={disabled}
                 onClick={() => {
                   if (status.onchainLocked) handleOpenOnchainShop();
                   else if (!disabled) handlePlacement(id);
+                }}
+                onKeyDown={(event) => {
+                  if (disabled || (event.key !== 'Enter' && event.key !== ' ')) return;
+                  event.preventDefault();
+                  if (status.onchainLocked) handleOpenOnchainShop();
+                  else handlePlacement(id);
                 }}
               >
                 {/* Count badge */}
@@ -403,7 +415,7 @@ function ShopPanel({ onClose }) {
                         amount > 0 && (
                           <div key={res} style={{
                             ...styles.costPill,
-                            ...((resources[res] || 0) < amount ? { color: '#E53935' } : {}),
+                            ...((resources[res] || 0) < amount ? { color: 'var(--terminal-short)' } : {}),
                           }}>
                             <span style={styles.costValue}>{amount.toLocaleString()}</span>
                             <img src={RES_ICONS[res] || goldIcon} style={styles.resIconSmall} alt={res} />
@@ -454,8 +466,8 @@ const styles = {
     borderRadius: '24px 24px 0 0',
   },
   cardArea: {
-    background: '#e8dfc8',
-    borderTop: '6px solid #d4c8b0',
+    background: 'var(--terminal-surface-subtle)',
+    borderTop: '1px solid var(--terminal-border)',
     padding: '16px 8px 10px 8px',
     minHeight: 'auto',
     overflowY: 'auto',
@@ -482,9 +494,9 @@ const styles = {
     position: 'relative',
     width: 'clamp(110px, 40vw, 160px)',
     height: 'clamp(180px, 52vw, 240px)',
-    background: '#fdf8e7',
+    background: 'var(--terminal-surface)',
     borderRadius: 14,
-    border: '3px solid #d4c8b0',
+    border: '1px solid var(--terminal-border)',
     display: 'flex',
     flexDirection: 'column',
     cursor: 'pointer',
@@ -496,7 +508,7 @@ const styles = {
   clashSolCard: {
     width: 'min(520px, 100%)', minHeight: 225, padding: 0, overflow: 'hidden', cursor: 'pointer',
     display: 'grid', gridTemplateColumns: 'minmax(145px, 42%) 1fr', textAlign: 'left',
-    borderRadius: 18, border: '3px solid #bca47c', background: '#fff9e9', color: '#51351f',
+    borderRadius: 18, border: '1px solid #bca47c', background: 'var(--terminal-surface)', color: 'var(--terminal-text)',
     boxShadow: '0 8px 18px rgba(0,0,0,.16), inset 0 -4px 0 rgba(76,49,26,.08)',
     fontFamily: '"Inter", "Segoe UI", sans-serif',
   },
@@ -506,13 +518,13 @@ const styles = {
   },
   clashSolGlow: { position: 'absolute', width: 170, height: 170, borderRadius: '50%', background: 'radial-gradient(circle, rgba(126,243,214,.65), rgba(126,243,214,0) 68%)' },
   clashSolSolLogo: { position: 'relative', width: 100, height: 100, objectFit: 'contain', filter: 'drop-shadow(0 8px 14px rgba(0,0,0,.45))' },
-  clashSolGameLogo: { position: 'absolute', right: 18, bottom: 28, width: 55, height: 55, borderRadius: '50%', border: '4px solid #fff8e7', background: '#fff' },
-  clashSolBadge: { position: 'absolute', top: 13, left: 13, padding: '5px 8px', borderRadius: 999, background: 'rgba(255,255,255,.92)', color: '#4f35ba', fontSize: 9, fontWeight: 950, letterSpacing: .8 },
+  clashSolGameLogo: { position: 'absolute', right: 18, bottom: 28, width: 55, height: 55, borderRadius: '50%', border: '1px solid var(--terminal-surface)', background: 'var(--terminal-surface)' },
+  clashSolBadge: { position: 'absolute', top: 13, left: 13, padding: '5px 8px', borderRadius: 999, background: 'rgba(255,255,255,.92)', color: '#4f35ba', fontSize: 9, fontWeight: 700, letterSpacing: .8 },
   clashSolInfo: { padding: '25px 22px 22px', display: 'flex', flexDirection: 'column', alignItems: 'flex-start' },
-  clashSolEyebrow: { color: '#7a58e4', fontSize: 10, fontWeight: 950, letterSpacing: 1 },
-  clashSolTitle: { marginTop: 6, color: '#4b2f1d', fontSize: 29, lineHeight: 1 },
-  clashSolDescription: { marginTop: 11, color: '#806950', fontSize: 12, lineHeight: 1.45, fontWeight: 650 },
-  clashSolCta: { marginTop: 'auto', width: '100%', padding: '10px 12px', borderRadius: 10, textAlign: 'center', background: '#7150df', color: '#fff', fontSize: 12, fontWeight: 950, boxShadow: '0 3px 0 #4d34ae', boxSizing: 'border-box' },
+  clashSolEyebrow: { color: '#7a58e4', fontSize: 10, fontWeight: 700, letterSpacing: 1 },
+  clashSolTitle: { marginTop: 6, color: 'var(--terminal-text)', fontSize: 29, lineHeight: 1 },
+  clashSolDescription: { marginTop: 11, color: 'var(--terminal-text-muted)', fontSize: 12, lineHeight: 1.45, fontWeight: 650 },
+  clashSolCta: { ...uiButton('primary', { marginTop: 'auto', width: '100%', minHeight: 38, padding: '10px 12px', fontSize: 12 }), boxSizing: 'border-box' },
   cardImgTop: {
     height: 'clamp(80px, 25vw, 110px)',
     display: 'flex',
@@ -525,7 +537,7 @@ const styles = {
     position: 'absolute',
     width: '100%',
     height: '100%',
-    background: 'radial-gradient(circle at center, rgba(255,255,255,0.6) 0%, transparent 60%)',
+    background: 'radial-gradient(circle at center, var(--terminal-chip-overlay) 0%, transparent 60%)',
     zIndex: 0,
   },
   thumbnail: {
@@ -556,7 +568,7 @@ const styles = {
   },
   cardOnchainLocked: {
     opacity: 0.82,
-    border: '3px solid #58b9d8',
+    border: '1px solid #58b9d8',
     boxShadow: '0 0 0 2px rgba(86,216,255,0.22), 0 6px 12px rgba(0,0,0,0.15)',
     cursor: 'pointer',
   },
@@ -573,7 +585,7 @@ const styles = {
   },
   countBadge: {
     position: 'absolute', top: 6, right: 8, zIndex: 10,
-    fontSize: 13, fontWeight: 900, color: '#5C3A21',
+    fontSize: 13, fontWeight: 700, color: 'var(--terminal-text)',
   },
   lockOverlay: {
     position: 'absolute', inset: 0, zIndex: 10,
@@ -583,16 +595,16 @@ const styles = {
   },
   lockIcon: { fontSize: 32 },
   lockName: {
-    fontSize: 14, fontWeight: 900, color: '#5C3A21', marginTop: 4,
+    fontSize: 14, fontWeight: 700, color: 'var(--terminal-text)', marginTop: 4,
   },
   lockText: {
-    fontSize: 11, fontWeight: 700, color: '#a3906a',
+    fontSize: 11, fontWeight: 700, color: 'var(--terminal-text-muted)',
   },
   onchainPrice: {
     marginTop: 'auto',
     fontSize: 'clamp(15px, 4vw, 18px)',
-    fontWeight: 900,
-    color: '#5C3A21',
+    fontWeight: 700,
+    color: 'var(--terminal-text)',
     fontFamily: '"Inter", "Segoe UI", sans-serif',
     lineHeight: 1.1,
   },
@@ -600,13 +612,13 @@ const styles = {
     margin: '5px auto 0',
     padding: '4px 10px',
     borderRadius: 8,
-    background: '#58b9d8',
-    color: '#fdf8e7',
+    background: 'var(--terminal-orange)',
+    color: 'var(--terminal-on-accent)',
     fontSize: 10,
-    fontWeight: 900,
+    fontWeight: 700,
     textTransform: 'uppercase',
     letterSpacing: 0,
-    boxShadow: '0 2px 0 #2f7f98',
+    boxShadow: 'none',
   },
   cardInfo: {
     padding: '4px 8px 8px 8px',
@@ -617,15 +629,15 @@ const styles = {
   },
   cardName: {
     fontSize: 'clamp(13px, 3.5vw, 15px)',
-    fontWeight: 800,
-    color: '#333',
+    fontWeight: 600,
+    color: 'var(--terminal-text-control)',
     fontFamily: '"Inter", "Segoe UI", sans-serif',
     marginBottom: 1,
     lineHeight: 1.1,
   },
   cardDesc: {
     fontSize: 11,
-    color: '#777',
+    color: 'var(--terminal-text-muted)',
     fontWeight: 600,
     lineHeight: 1.2,
   },
@@ -656,15 +668,15 @@ const styles = {
   },
   costValue: {
     fontSize: 'clamp(12px, 3.5vw, 16px)',
-    fontWeight: 800,
-    color: '#333',
+    fontWeight: 600,
+    color: 'var(--terminal-text-control)',
     fontFamily: '"Inter", "Segoe UI", sans-serif',
   },
   freeText: {
     fontSize: 20,
-    fontWeight: 900,
-    color: '#4CAF50',
-    textShadow: '0 1px 1px #fff',
+    fontWeight: 700,
+    color: 'var(--terminal-long)',
+    textShadow: 'none',
   },
   tabArea: {
     background: 'transparent',
@@ -680,31 +692,13 @@ const styles = {
     display: 'flex',
     gap: 4,
   },
-  closeBtn: {
+  closeBtn: uiIconButton('danger', 40, {
     position: 'absolute',
-    width: 40,
-    height: 40,
-    borderRadius: '50%',
-    background: '#E53935',
-    border: '3px solid #fff',
-    color: '#fff',
-    cursor: 'pointer',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    boxShadow: '0 3px 0 #a92826, 0 8px 14px rgba(0,0,0,0.28)',
     zIndex: 40,
-    padding: 0,
-  },
+  }),
 };
 
 const animCSS = `
-  /* Gradient Scrollbar Horizontal */
-  .grad-scrollbar::-webkit-scrollbar { height: 10px; width: 10px; }
-  .grad-scrollbar::-webkit-scrollbar-track { background: #fdf8e7; border-radius: 5px; margin: 10px; }
-  .grad-scrollbar::-webkit-scrollbar-thumb { background: linear-gradient(90deg, #d4c8b0 0%, #bba882 100%); border-radius: 5px; border: 2px solid #fdf8e7; }
-  .grad-scrollbar::-webkit-scrollbar-thumb:hover { background: linear-gradient(90deg, #bba882 0%, #a3906a 100%); }
-  
   /* Hover active state for building card */
   .grad-scrollbar > div > div:hover {
     transform: translateY(-4px) scale(1.02);

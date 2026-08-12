@@ -10,6 +10,7 @@ const COMMON_PRIVATE_DEXES = new Set([
   'risex',
   'nado',
   'ondo',
+  'leverup',
   'hibachi',
   'hotstuff',
   'grvt',
@@ -363,6 +364,11 @@ function buildDexSpecificRequests({ dex, token, walletAddress, signal }) {
       addPrefetchRequest(requests, futuresUrl(`/bulk/account?address=${encoded(address)}`), { headers, signal });
       addPrefetchRequest(requests, futuresUrl(`/bulk/builder-status?address=${encoded(address)}`), { headers, signal });
     }
+    return requests;
+  }
+
+  if (dex === 'aster') {
+    addPrefetchRequest(requests, futuresUrl('/aster/config'), { headers, signal });
     return requests;
   }
 

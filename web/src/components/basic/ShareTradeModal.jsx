@@ -8,6 +8,7 @@ import { memo, useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { generateShareImage, canShareFiles, nativeShare, downloadImage, copyImage } from './generateShareImage';
 import { colors } from './styles';
+import { uiButton, uiIconButton } from '../../styles/theme';
 
 function ShareTradeModal({ open, trade, onClose }) {
   const [previewUrl, setPreviewUrl] = useState(null);
@@ -190,7 +191,7 @@ export default memo(ShareTradeModal);
 const S = {
   backdrop: {
     position: 'fixed', inset: 0,
-    background: 'rgba(0,0,0,0.55)',
+    background: 'var(--terminal-overlay)',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     padding: 16, zIndex: 10000,
     // GameUI's outer overlay div sets `pointer-events: none` so clicks
@@ -202,11 +203,11 @@ const S = {
   },
   modal: {
     width: '100%', maxWidth: 460,
-    background: 'linear-gradient(180deg, #fdf8e7 0%, #f3ebd1 100%)',
-    borderWidth: 4, borderStyle: 'solid', borderColor: '#5C3A21',
-    borderRadius: 18,
+    background: 'var(--terminal-surface)',
+    borderWidth: 1, borderStyle: 'solid', borderColor: 'var(--terminal-border)',
+    borderRadius: 16,
     padding: 14,
-    boxShadow: '0 12px 40px rgba(0,0,0,0.4)',
+    boxShadow: '0 24px 64px rgba(17,24,39,0.22)',
     display: 'flex', flexDirection: 'column', gap: 12,
     fontFamily: '"Inter","Segoe UI",sans-serif',
     boxSizing: 'border-box',
@@ -215,19 +216,14 @@ const S = {
     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
   },
   title: {
-    fontSize: 16, fontWeight: 900, color: colors.ink,
+    fontSize: 16, fontWeight: 700, color: colors.ink,
     letterSpacing: '0.4px',
   },
-  closeBtn: {
-    width: 32, height: 32, borderRadius: 8,
-    background: 'rgba(92,58,33,0.08)', border: 'none',
-    color: colors.ink, cursor: 'pointer',
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-  },
+  closeBtn: uiIconButton('secondary', 32),
   previewWrap: {
     width: '100%',
     aspectRatio: '1200 / 742',  // matches generateShareImage canvas
-    background: 'rgba(0,0,0,0.06)',
+    background: 'var(--terminal-surface-subtle)',
     borderRadius: 12,
     overflow: 'hidden',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -243,7 +239,7 @@ const S = {
   },
   spinner: {
     width: 28, height: 28,
-    borderWidth: 3, borderStyle: 'solid', borderColor: colors.border,
+    borderWidth: 1, borderStyle: 'solid', borderColor: colors.border,
     borderTopColor: colors.ink,
     borderRadius: '50%',
     boxSizing: 'border-box',
@@ -255,42 +251,24 @@ const S = {
   actions: {
     display: 'flex', gap: 8,
   },
-  shareBtn: {
-    flex: 2, padding: '12px',
-    fontSize: 15, fontWeight: 900, color: '#fff',
-    background: 'linear-gradient(180deg, #4caf50 0%, #2e7d32 100%)',
-    borderWidth: 3, borderStyle: 'solid', borderColor: '#1b5e20',
-    borderRadius: 12, cursor: 'pointer', fontFamily: 'inherit',
-    letterSpacing: '0.4px',
-    textShadow: '0 1px 0 rgba(0,0,0,0.3)',
-    boxSizing: 'border-box',
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-  },
-  altBtn: {
-    flex: 1, padding: '12px',
-    fontSize: 14, fontWeight: 800, color: '#5C3A21',
-    background: '#fdf8e7',
-    borderWidth: 2, borderStyle: 'solid', borderColor: '#d4c8b0',
-    borderRadius: 12, cursor: 'pointer', fontFamily: 'inherit',
-    boxSizing: 'border-box',
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-  },
+  shareBtn: uiButton('primary', { flex: 2, minHeight: 44, padding: '12px', fontSize: 15, boxSizing: 'border-box' }),
+  altBtn: uiButton('secondary', { flex: 1, minHeight: 44, padding: '12px', fontSize: 14, boxSizing: 'border-box' }),
   btnDisabled: {
     opacity: 0.6, cursor: 'wait',
   },
   feedbackOk: {
     fontSize: 12, fontWeight: 700,
-    color: '#2e7d32',
-    background: 'rgba(76, 175, 80, 0.12)',
-    border: '1px solid #4caf50',
+    color: 'var(--terminal-long)',
+    background: 'var(--terminal-long-soft)',
+    border: '1px solid var(--terminal-long-border)',
     padding: '6px 10px', borderRadius: 8,
     textAlign: 'center',
   },
   feedbackErr: {
     fontSize: 12, fontWeight: 700,
-    color: '#c62828',
-    background: 'rgba(239, 83, 80, 0.12)',
-    border: '1px solid #ef5350',
+    color: 'var(--terminal-short)',
+    background: 'var(--terminal-short-soft)',
+    border: '1px solid var(--terminal-short-border)',
     padding: '6px 10px', borderRadius: 8,
     textAlign: 'center',
   },

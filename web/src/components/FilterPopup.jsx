@@ -1,5 +1,6 @@
 import { memo, useRef, useEffect, useState } from 'react';
 import TokenIcon from './TokenIcon';
+import { uiButton, uiIconButton } from '../styles/theme';
 
 function FilterPopup({ visible, onClose, filters, onChange, symbols, showSide, sortOptions }) {
   const ref = useRef(null);
@@ -56,7 +57,7 @@ function FilterPopup({ visible, onClose, filters, onChange, symbols, showSide, s
               {filters.symbol !== 'All' ? <TokenIcon sym={filters.symbol} size={18} /> : <div style={{width: 18, height: 18}}></div>}
               <span>{filters.symbol}</span>
             </div>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#5C3A21" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" style={{transform: openDropdown ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s'}}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--terminal-text-muted)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{transform: openDropdown ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s'}}>
               <polyline points="6 9 12 15 18 9"></polyline>
             </svg>
             
@@ -65,9 +66,9 @@ function FilterPopup({ visible, onClose, filters, onChange, symbols, showSide, s
                 {['All', ...symbols].map(s => (
                   <div 
                     key={s} 
-                    style={{...S.dropdownItem, background: filters.symbol === s ? '#e8dfc8' : 'transparent'}}
-                    onMouseOver={(e) => e.currentTarget.style.background = filters.symbol === s ? '#e8dfc8' : 'rgba(187, 168, 130, 0.2)'}
-                    onMouseOut={(e) => e.currentTarget.style.background = filters.symbol === s ? '#e8dfc8' : 'transparent'}
+                    style={{...S.dropdownItem, background: filters.symbol === s ? 'var(--terminal-brand-soft)' : 'transparent'}}
+                    onMouseOver={(e) => e.currentTarget.style.background = filters.symbol === s ? 'var(--terminal-brand-soft)' : 'var(--terminal-surface-subtle)'}
+                    onMouseOut={(e) => e.currentTarget.style.background = filters.symbol === s ? 'var(--terminal-brand-soft)' : 'transparent'}
                     onClick={(e) => { 
                       e.stopPropagation(); 
                       set('symbol', s); 
@@ -123,50 +124,43 @@ export default memo(FilterPopup);
 const S = {
   backdrop: {
     position: 'fixed', inset: 0, zIndex: 500,
-    background: 'rgba(0,0,0,0.4)',
+    background: 'rgba(17,24,39,0.42)',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
   },
   modal: {
-    width: 340, maxWidth: '90vw', background: '#fdf8e7', border: '6px solid #d4c8b0', borderRadius: 20,
-    boxShadow: '0 15px 40px rgba(0,0,0,0.4)', padding: 20,
+    width: 340, maxWidth: 'calc(100vw - 24px)', maxHeight: 'calc(100dvh - 24px)', overflowY: 'auto', background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 16,
+    boxShadow: '0 24px 64px rgba(17,24,39,0.22)', padding: 20,
     display: 'flex', flexDirection: 'column', gap: 14,
     fontFamily: '"Inter","Segoe UI",sans-serif',
   },
   header: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
-  title: { fontSize: 18, fontWeight: 900, color: '#5C3A21' },
-  resetBtn: {
-    padding: '5px 14px', background: '#d4c8b0', border: '2px solid #bba882', borderRadius: 8,
-    fontSize: 12, fontWeight: 800, color: '#5C3A21', cursor: 'pointer',
-  },
-  closeBtn: {
-    width: 28, height: 28, borderRadius: '50%', background: '#E53935', border: '2px solid #fff',
-    color: '#fff', fontWeight: 900, fontSize: 14, cursor: 'pointer',
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-  },
+  title: { fontSize: 18, fontWeight: 750, color: 'var(--terminal-text)' },
+  resetBtn: uiButton('secondary', { minHeight: 34, padding: '6px 14px', fontSize: 12 }),
+  closeBtn: uiIconButton('secondary', 32, { fontSize: 14 }),
   section: { display: 'flex', flexDirection: 'column', gap: 6 },
-  label: { fontSize: 11, fontWeight: 800, color: '#a3906a', textTransform: 'uppercase' },
+  label: { fontSize: 11, fontWeight: 700, color: 'var(--terminal-text-muted)', textTransform: 'uppercase' },
   chips: { display: 'flex', flexWrap: 'wrap', gap: 6 },
   chip: {
-    padding: '6px 14px', background: '#e8dfc8', border: '2px solid #d4c8b0',
-    borderRadius: 8, cursor: 'pointer', fontWeight: 700, fontSize: 13, color: '#5C3A21',
+    minHeight: 36, padding: '6px 14px', background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)',
+    borderRadius: 10, cursor: 'pointer', fontWeight: 650, fontSize: 13, color: 'var(--terminal-text-control)',
   },
   chipActive: {
-    padding: '6px 14px', background: '#4CAF50', border: '2px solid #2E7D32',
-    borderRadius: 8, cursor: 'pointer', fontWeight: 700, fontSize: 13, color: '#fff',
+    minHeight: 36, padding: '6px 14px', background: 'var(--terminal-orange)', border: '1px solid var(--terminal-orange)',
+    borderRadius: 10, cursor: 'pointer', fontWeight: 700, fontSize: 13, color: 'var(--terminal-on-accent)',
   },
   selectWrap: {
     position: 'relative',
     width: '100%',
     padding: '8px 12px',
-    background: '#e8dfc8',
-    border: '2px solid #bba882',
-    borderRadius: 8,
+    background: 'var(--terminal-surface)',
+    border: '1px solid var(--terminal-border-strong)',
+    borderRadius: 10,
     outline: 'none',
     fontSize: 14,
-    fontWeight: 800,
-    color: '#5C3A21',
+    fontWeight: 700,
+    color: 'var(--terminal-text)',
     cursor: 'pointer',
-    boxShadow: 'inset 0 2px 2px #fff, 0 2px 4px rgba(0,0,0,0.05)',
+    boxShadow: 'none',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -177,12 +171,12 @@ const S = {
     left: -2,
     right: -2,
     marginTop: 4,
-    background: '#fdf8e7',
-    border: '3px solid #bba882',
-    borderRadius: 12,
+    background: 'var(--terminal-surface)',
+    border: '1px solid var(--terminal-border)',
+    borderRadius: 10,
     maxHeight: 220,
     overflowY: 'auto',
-    boxShadow: '0 8px 16px rgba(0,0,0,0.2), inset 0 0 0 1px #fff',
+    boxShadow: '0 12px 28px rgba(17,24,39,0.14)',
     display: 'flex',
     flexDirection: 'column',
     padding: 6,
@@ -195,9 +189,9 @@ const S = {
     padding: '8px 10px',
     borderRadius: 8,
     cursor: 'pointer',
-    fontWeight: 800,
+    fontWeight: 650,
     fontSize: 13,
-    color: '#5C3A21',
+    color: 'var(--terminal-text)',
     transition: 'background 0.1s',
   },
 };

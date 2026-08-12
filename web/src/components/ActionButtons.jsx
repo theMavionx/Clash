@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, useMem
 import { useSend, useUI, useResources, useBuildingDefs, usePlayer } from '../hooks/useGodot';
 import { useLayout } from '../hooks/useIsMobile';
 import { useDex } from '../contexts/DexContext';
+import { uiButton, uiIconButton } from '../styles/theme';
 import buildIcon from '../assets/resources/Gemini_Generated_Image_dl9plxdl9plxdl9p-removebg-preview.png';
 import attackIcon from '../assets/resources/file_000000006858720a8f860ee8da33335a.png';
 import chartIcon from '../assets/resources/chart.png';
@@ -503,7 +504,7 @@ function TroopPortrait({ info, style, fallbackStyle = null }) {
         background: 'rgba(119, 218, 205, 0.22)',
         border: '1px solid rgba(45, 111, 125, 0.4)',
         borderRadius: 4,
-        fontWeight: 900,
+        fontWeight: 700,
         lineHeight: 1,
         ...fallbackStyle,
       }}
@@ -568,7 +569,7 @@ function ManualAttackHUD({
           alignItems: mobile ? 'flex-end' : 'center',
           gap: mobile ? 5 : 10,
         }}>
-          {battleTimer != null && <div style={{ ...hud.timerPill, ...(mobile ? hud.timerPillMobile : {}), color: battleTimer <= 30 ? '#E53935' : '#5C3A21', border: `2px solid ${battleTimer <= 30 ? '#7f0000' : '#9f8759'}` }}>{Math.floor(battleTimer / 60)}:{String(battleTimer % 60).padStart(2, '0')}</div>}
+          {battleTimer != null && <div style={{ ...hud.timerPill, ...(mobile ? hud.timerPillMobile : {}), color: battleTimer <= 30 ? 'var(--terminal-short)' : 'var(--terminal-text)', border: `1px solid ${battleTimer <= 30 ? 'var(--terminal-short-strong)' : 'var(--terminal-text-muted)'}` }}>{Math.floor(battleTimer / 60)}:{String(battleTimer % 60).padStart(2, '0')}</div>}
           <button style={{ ...hud.homeBtn, ...(mobile ? hud.homeBtnMobile : {}) }} onClick={onSurrender} title="Surrender" aria-label="Surrender">
             <SurrenderFlagIcon size={mobile ? 24 : 30} />
           </button>
@@ -590,7 +591,7 @@ function ManualAttackHUD({
           gap: 4,
         } : {}),
       }}>
-        {!ready && !mobile && <div style={{ ...hud.card, width: 116, height: 58, padding: '4px 8px', borderColor: '#2c83ba', color: '#5C3A21', fontSize: 11, fontWeight: 900, textAlign: 'center', flexShrink: 0 }}>MAIN SHIP<br/>APPROACHING...</div>}
+        {!ready && !mobile && <div style={{ ...hud.card, width: 116, height: 58, padding: '4px 8px', borderColor: '#2c83ba', color: 'var(--terminal-text)', fontSize: 11, fontWeight: 700, textAlign: 'center', flexShrink: 0 }}>MAIN SHIP<br/>APPROACHING...</div>}
         <div
           ref={troopScrollRef}
           className="attack-troop-scroll"
@@ -613,7 +614,7 @@ function ManualAttackHUD({
               <button
                 key={group.key || groupIdx}
                 data-troop-index={groupIdx}
-                style={{ ...hud.card, width: size, minWidth: size, height: size, padding: 2, position: 'relative', flexDirection: 'column', gap: 1, scrollSnapAlign: 'start', opacity: ready ? 1 : 0.55, borderColor: selected ? '#FFD700' : '#9f8759', boxShadow: selected ? '0 0 12px rgba(255,215,0,0.6), inset 0 0 8px rgba(255,215,0,0.15)' : 'none', cursor: ready ? 'pointer' : 'wait' }}
+                style={{ ...hud.card, width: size, minWidth: size, height: size, padding: 2, position: 'relative', flexDirection: 'column', gap: 1, scrollSnapAlign: 'start', opacity: ready ? 1 : 0.55, borderColor: selected ? '#FFD700' : 'var(--terminal-text-muted)', boxShadow: selected ? '0 0 12px rgba(255,215,0,0.6), inset 0 0 8px rgba(255,215,0,0.15)' : 'none', cursor: ready ? 'pointer' : 'wait' }}
                 onClick={(event) => { event.stopPropagation(); if (ready) onSelectTroop(groupIdx); }}
                 disabled={!ready}
                 title={`Deploy ${info.label || group.label || group.key}`}
@@ -625,8 +626,8 @@ function ManualAttackHUD({
                   style={{ width: '76%', height: '67%', objectFit: 'contain' }}
                   fallbackStyle={{ fontSize: mobile ? 13 : 16 }}
                 />
-                <span style={{ maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: mobile ? 8 : 9, fontWeight: 900, color: '#5C3A21', textTransform: 'uppercase', lineHeight: 1 }}>{displayLabel}</span>
-                <span style={{ position: 'absolute', top: -4, right: -4, background: '#5C3A21', color: '#fff7df', fontSize: 9, fontWeight: 900, borderRadius: 6, padding: '1px 5px', border: '1px solid #3d1f00' }}>x{group.count || 0}</span>
+                <span style={{ maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: mobile ? 8 : 9, fontWeight: 700, color: 'var(--terminal-text)', textTransform: 'uppercase', lineHeight: 1 }}>{displayLabel}</span>
+                <span style={{ position: 'absolute', top: -4, right: -4, background: 'var(--terminal-text)', color: 'var(--terminal-surface)', fontSize: 9, fontWeight: 700, borderRadius: 6, padding: '1px 5px', border: '1px solid #3d1f00' }}>x{group.count || 0}</span>
               </button>
             );
           })}
@@ -733,8 +734,8 @@ function AttackHUD({
           {battleTimer != null && (
             <div style={{
               ...hud.timerPill,
-              color: battleTimer <= 30 ? '#E53935' : '#5C3A21',
-              border: `2px solid ${battleTimer <= 30 ? '#7f0000' : '#9f8759'}`,
+              color: battleTimer <= 30 ? 'var(--terminal-short)' : 'var(--terminal-text)',
+              border: `1px solid ${battleTimer <= 30 ? 'var(--terminal-short-strong)' : 'var(--terminal-text-muted)'}`,
             }}>
               {Math.floor(battleTimer / 60)}:{String(battleTimer % 60).padStart(2, '0')}
             </div>
@@ -776,7 +777,7 @@ function AttackHUD({
           style={{ ...hud.card, width: mobile ? 28 : 34, height: mobile ? 28 : 34, padding: 0, borderColor: 'rgba(255,215,0,0.6)', cursor: 'pointer', flexDirection: 'column', gap: 0 }}
           onClick={(e) => { e.stopPropagation(); setExpandedShip(expandedShip !== null ? null : 0); }}
         >
-          <span style={{ fontSize: mobile ? 10 : 12, fontWeight: 900, color: '#FFD700' }}>?</span>
+          <span style={{ fontSize: mobile ? 10 : 12, fontWeight: 700, color: '#FFD700' }}>?</span>
         </button>
         {ships.map((ship, shipIdx) => {
           const isPlaced = !!ship.placed;
@@ -795,7 +796,7 @@ function AttackHUD({
                 ...hud.card,
                 width: sz, height: sz,
                 opacity: isPlaced ? 0.5 : 1,
-                borderColor: isSelected ? '#FFD700' : isPlaced ? 'rgba(159,135,89,0.4)' : '#9f8759',
+                borderColor: isSelected ? '#FFD700' : isPlaced ? 'rgba(159,135,89,0.4)' : 'var(--terminal-text-muted)',
                 boxShadow: isSelected ? '0 0 12px rgba(255,215,0,0.6), inset 0 0 8px rgba(255,215,0,0.15)' : 'none',
                 cursor: isPlaced ? 'default' : 'pointer',
                 flexDirection: 'column', gap: 0, padding: 2, position: 'relative',
@@ -806,25 +807,25 @@ function AttackHUD({
               }}
             >
               <img src={shipImg} alt="" style={{ width: '80%', height: '55%', objectFit: 'contain', filter: isPlaced ? 'grayscale(0.7) brightness(0.7)' : 'none' }} />
-              <div style={{ fontSize: 7, fontWeight: 800, color: '#8b6b3f', textTransform: 'uppercase', lineHeight: 1 }}>
+              <div style={{ fontSize: 7, fontWeight: 600, color: 'var(--terminal-text-secondary)', textTransform: 'uppercase', lineHeight: 1 }}>
                 {isPlaced ? 'DEPLOYED' : `Lv.${ship.level}`}
               </div>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 2, height: mobile ? 13 : 15, marginTop: 1 }}>
                 {previewTroops.map((troop, index) => {
                   const info = TROOP_IMG_MAP[normalizeTroopKey(troop)] || {};
                   return (
-                    <span key={`${troop}-${index}`} style={{ width: mobile ? 11 : 13, height: mobile ? 11 : 13, borderRadius: 3, overflow: 'hidden', border: '1px solid rgba(92,58,33,0.45)', background: '#fff6dc' }}>
+                    <span key={`${troop}-${index}`} style={{ width: mobile ? 11 : 13, height: mobile ? 11 : 13, borderRadius: 3, overflow: 'hidden', border: '1px solid rgba(92,58,33,0.45)', background: 'var(--terminal-surface)' }}>
                       <TroopPortrait info={info} style={{ width: '100%', height: '100%', objectFit: 'cover' }} fallbackStyle={{ fontSize: 6, border: 'none', borderRadius: 0 }} />
                     </span>
                   );
                 })}
-                {remainingTroops > 0 && <span style={{ fontSize: mobile ? 7 : 8, fontWeight: 900, color: '#5C3A21' }}>+{remainingTroops}</span>}
+                {remainingTroops > 0 && <span style={{ fontSize: mobile ? 7 : 8, fontWeight: 700, color: 'var(--terminal-text)' }}>+{remainingTroops}</span>}
               </div>
-              <div style={{ position: 'absolute', top: -4, left: -4, background: '#2c83ba', color: '#fff7df', fontSize: mobile ? 9 : 10, fontWeight: 900, borderRadius: 6, padding: '1px 5px', border: '1px solid #15567f', boxShadow: '0 2px 3px rgba(0,0,0,0.25)' }}>
+              <div style={{ position: 'absolute', top: -4, left: -4, background: '#2c83ba', color: 'var(--terminal-surface)', fontSize: mobile ? 9 : 10, fontWeight: 700, borderRadius: 6, padding: '1px 5px', border: '1px solid #15567f', boxShadow: '0 2px 3px rgba(0,0,0,0.25)' }}>
                 P{portNumber}
               </div>
               {/* Troop count badge */}
-              <div style={{ position: 'absolute', top: -4, right: -4, background: '#5C3A21', color: '#fff7df', fontSize: 9, fontWeight: 900, borderRadius: 6, padding: '1px 5px', border: '1px solid #3d1f00' }}>
+              <div style={{ position: 'absolute', top: -4, right: -4, background: 'var(--terminal-text)', color: 'var(--terminal-surface)', fontSize: 9, fontWeight: 700, borderRadius: 6, padding: '1px 5px', border: '1px solid #3d1f00' }}>
                 x{realTroops.length}
               </div>
             </button>
@@ -836,7 +837,7 @@ function AttackHUD({
       {expandedShip !== null && (
         <div style={hud.shipModal} onClick={() => setExpandedShip(null)}>
           <div style={hud.shipModalPanel} onClick={e => e.stopPropagation()}>
-            <div style={{ fontSize: 16, fontWeight: 900, color: '#5C3A21', textAlign: 'center', marginBottom: 10, letterSpacing: 0.3 }}>
+            <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--terminal-text)', textAlign: 'center', marginBottom: 10, letterSpacing: 0.3 }}>
               Fleet — {ships.length} Ships
             </div>
             {ships.map((ship, si) => {
@@ -849,22 +850,22 @@ function AttackHUD({
                 groups[key] = (groups[key] || 0) + 1;
               }
               return (
-                <div key={si} style={{ width: '100%', marginBottom: 8, padding: '8px 10px', background: '#fff6dc', borderRadius: 10, border: '2px solid #d4c8b0' }}>
-                  <div style={{ display: 'inline-flex', alignItems: 'center', marginBottom: 4, padding: '2px 7px', borderRadius: 7, background: '#2c83ba', color: '#fff7df', border: '1px solid #15567f', fontSize: 11, fontWeight: 900 }}>
+                <div key={si} style={{ width: '100%', marginBottom: 8, padding: '8px 10px', background: 'var(--terminal-surface)', borderRadius: 10, border: '1px solid var(--terminal-border)' }}>
+                  <div style={{ display: 'inline-flex', alignItems: 'center', marginBottom: 4, padding: '2px 7px', borderRadius: 7, background: '#2c83ba', color: 'var(--terminal-surface)', border: '1px solid #15567f', fontSize: 11, fontWeight: 700 }}>
                     Port P{portNumber}
                   </div>
-                  <div style={{ fontSize: 11, fontWeight: 800, color: ship.placed ? '#9f8759' : '#5C3A21', marginBottom: 4, textTransform: 'uppercase', letterSpacing: 0.4 }}>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: ship.placed ? 'var(--terminal-text-muted)' : 'var(--terminal-text)', marginBottom: 4, textTransform: 'uppercase', letterSpacing: 0.4 }}>
                     Ship {si + 1} (Lv.{ship.level}) — {ship.placed ? 'DEPLOYED' : `${troops.length} troops`}
                   </div>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
                     {Object.entries(groups).map(([key, count]) => {
                       const info = TROOP_IMG_MAP[key] || {};
                       return (
-                        <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 3, background: '#fffaf0', border: '1px solid #d4c8b0', borderRadius: 6, padding: '2px 6px' }}>
+                        <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 3, background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 6, padding: '2px 6px' }}>
                           <div style={{ width: 22, height: 22, borderRadius: 3, overflow: 'hidden' }}>
                             <TroopPortrait info={info} style={{ width: '100%', height: '100%', objectFit: 'cover' }} fallbackStyle={{ fontSize: 7, border: 'none' }} />
                           </div>
-                          <span style={{ fontSize: 10, fontWeight: 800, color: '#5C3A21' }}>{info.label || key} x{count}</span>
+                          <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--terminal-text)' }}>{info.label || key} x{count}</span>
                         </div>
                       );
                     })}
@@ -872,7 +873,7 @@ function AttackHUD({
                 </div>
               );
             })}
-            <button style={{ marginTop: 6, padding: '8px 20px', background: '#fff6dc', border: '2px solid #9f8759', borderRadius: 10, color: '#5C3A21', fontSize: 13, fontWeight: 800, cursor: 'pointer', fontFamily: 'inherit' }} onClick={() => setExpandedShip(null)}>Close</button>
+            <button style={{ marginTop: 6, padding: '8px 20px', background: 'var(--terminal-surface)', border: '1px solid var(--terminal-text-muted)', borderRadius: 10, color: 'var(--terminal-text)', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }} onClick={() => setExpandedShip(null)}>Close</button>
           </div>
         </div>
       )}
@@ -1032,7 +1033,7 @@ function ReplayHUD({ onReturnHome, battleTimer, replayDuration = 0, replayLabel 
 // ── NFT shop icon — cartoon storefront with striped awning + windows
 // showing the valuables on offer (coin + gem). Sits in the action bar
 // next to the tournament/battle-log buttons; line weights and palette
-// match the rest of the HUD (~2-2.5px strokes, brown #5C3A21 outlines,
+// match the rest of the HUD (~2-2.5px strokes, brown var(--terminal-text) outlines,
 // cream/red/gold accents).
 const NftMintIcon = ({ size = 50 }) => (
   <svg width={size} height={size} viewBox="0 0 64 64" fill="none" style={{ filter: 'drop-shadow(0 2px 3px rgba(0,0,0,0.4))' }}>
@@ -1040,20 +1041,20 @@ const NftMintIcon = ({ size = 50 }) => (
     <ellipse cx="32" cy="60" rx="26" ry="2.5" fill="rgba(0,0,0,0.25)" />
 
     {/* Roof banner — small gold pennant on a pole */}
-    <line x1="32" y1="12" x2="32" y2="4" stroke="#5C3A21" strokeWidth="1.6" strokeLinecap="round" />
+    <line x1="32" y1="12" x2="32" y2="4" stroke="var(--terminal-text)" strokeWidth="1.6" strokeLinecap="round" />
     <path d="M32 4 L41 6.5 L32 9 Z" fill="#FFD700" stroke="#3d1f00" strokeWidth="1.2" strokeLinejoin="round" />
 
     {/* Building body */}
-    <rect x="6" y="20" width="52" height="38" fill="#e6c894" stroke="#5C3A21" strokeWidth="2.5" />
+    <rect x="6" y="20" width="52" height="38" fill="#e6c894" stroke="var(--terminal-text)" strokeWidth="2.5" />
     {/* Wooden floorboards hint */}
-    <line x1="6" y1="52" x2="58" y2="52" stroke="#5C3A21" strokeWidth="1.2" opacity="0.5" />
+    <line x1="6" y1="52" x2="58" y2="52" stroke="var(--terminal-text)" strokeWidth="1.2" opacity="0.5" />
 
     {/* Striped awning — red + cream alternating */}
     <path d="M3 20 L61 20 L55 11 L9 11 Z" fill="#d72b1c" stroke="#5a0d05" strokeWidth="2" strokeLinejoin="round" />
-    <path d="M16 20 L19 11" stroke="#fff2c2" strokeWidth="3" />
-    <path d="M27 20 L29 11" stroke="#fff2c2" strokeWidth="3" />
-    <path d="M37 20 L36 11" stroke="#fff2c2" strokeWidth="3" />
-    <path d="M48 20 L46 11" stroke="#fff2c2" strokeWidth="3" />
+    <path d="M16 20 L19 11" stroke="var(--terminal-brand-soft)" strokeWidth="3" />
+    <path d="M27 20 L29 11" stroke="var(--terminal-brand-soft)" strokeWidth="3" />
+    <path d="M37 20 L36 11" stroke="var(--terminal-brand-soft)" strokeWidth="3" />
+    <path d="M48 20 L46 11" stroke="var(--terminal-brand-soft)" strokeWidth="3" />
     {/* Awning scalloped bottom edge */}
     <path d="M3 20 Q 9 24 15 20 T 27 20 T 39 20 T 51 20 T 61 20"
           fill="none" stroke="#5a0d05" strokeWidth="1.5" strokeLinejoin="round" />
@@ -1078,10 +1079,10 @@ const NftMintIcon = ({ size = 50 }) => (
 // ── Shield icon for defense log ───────────────────────────────────────────
 const ShieldIcon = ({ size = 60 }) => (
   <svg width={size} height={size} viewBox="0 0 64 64" fill="none">
-    <path d="M32 6 L54 16 L54 32 Q54 50 32 58 Q10 50 10 32 L10 16 Z" fill="#3b7dd8" stroke="#1a3a6a" strokeWidth="2.5"/>
+    <path d="M32 6 L54 16 L54 32 Q54 50 32 58 Q10 50 10 32 L10 16 Z" fill="var(--terminal-info)" stroke="#1a3a6a" strokeWidth="2.5"/>
     <path d="M32 10 L50 18 L50 32 Q50 47 32 54 Q14 47 14 32 L14 18 Z" fill="none" stroke="rgba(255,255,255,0.25)" strokeWidth="1.5"/>
-    <path d="M26 28 L30 32 L38 24" stroke="#fff" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round"/>
-    <path d="M24 36 L40 36" stroke="rgba(255,255,255,0.5)" strokeWidth="2" strokeLinecap="round"/>
+    <path d="M26 28 L30 32 L38 24" stroke="var(--terminal-surface)" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round"/>
+    <path d="M24 36 L40 36" stroke="var(--terminal-chip-overlay)" strokeWidth="2" strokeLinecap="round"/>
     <path d="M27 41 L37 41" stroke="rgba(255,255,255,0.35)" strokeWidth="2" strokeLinecap="round"/>
   </svg>
 );
@@ -1308,17 +1309,17 @@ function ActionButtons({ onOpenBattleLog, onOpenBots }) {
               </button>
             </div>
             <div style={rf.body}>
-              <div style={{ display: 'flex', justifyContent: 'center', color: '#B71C1C' }}>
+              <div style={{ display: 'flex', justifyContent: 'center', color: 'var(--terminal-short-strong)' }}>
                 <SurrenderFlagIcon size={42} />
               </div>
-              <div style={{fontSize: 15, fontWeight: 800, color: '#5C3A21', textAlign: 'center', lineHeight: 1.5}}>
-                You will lose <span style={{color: '#E53935'}}>trophies</span> and retreat from battle. Dead troops will need reinforcing.
+              <div style={{fontSize: 15, fontWeight: 600, color: 'var(--terminal-text)', textAlign: 'center', lineHeight: 1.5}}>
+                You will lose <span style={{color: 'var(--terminal-short)'}}>trophies</span> and retreat from battle. Dead troops will need reinforcing.
               </div>
               <div style={{display: 'flex', gap: 10, width: '100%'}}>
-                <button style={{...rf.confirmBtn, background: 'linear-gradient(180deg, #9E9E9E 0%, #616161 100%)', border: '3px solid #424242', flex: 1}} onClick={() => setShowSurrender(false)}>
+                <button style={uiButton('secondary', { flex: 1, minHeight: 48, fontSize: 15 })} onClick={() => setShowSurrender(false)}>
                   CANCEL
                 </button>
-                <button style={{...rf.confirmBtn, background: 'linear-gradient(180deg, #E53935 0%, #B71C1C 100%)', border: '3px solid #7f0000', flex: 1}} onClick={() => { setShowSurrender(false); handleReturnHome(); }}>
+                <button style={uiButton('danger', { flex: 1, minHeight: 48, fontSize: 15 })} onClick={() => { setShowSurrender(false); handleReturnHome(); }}>
                   SURRENDER
                 </button>
               </div>
@@ -1435,11 +1436,11 @@ function ActionButtons({ onOpenBattleLog, onOpenBots }) {
             }} width={btnSmall} height={btnSmall}>
               <div style={styles.notificationBadgeSmall}>!</div>
               <svg width={mobile ? 44 : 56} height={mobile ? 44 : 56} viewBox="0 0 64 64" fill="none">
-                <path d="M32 8L40 20H24L32 8Z" fill="#e8b830" stroke="#5C3A21" strokeWidth="2"/>
-                <rect x="28" y="20" width="8" height="28" rx="2" fill="#e8b830" stroke="#5C3A21" strokeWidth="2"/>
-                <rect x="20" y="28" width="24" height="8" rx="2" fill="#e8b830" stroke="#5C3A21" strokeWidth="2"/>
-                <circle cx="32" cy="52" r="6" fill="#4CAF50" stroke="#2E7D32" strokeWidth="2"/>
-                <path d="M29 52L31 54L35 50" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                <path d="M32 8L40 20H24L32 8Z" fill="#e8b830" stroke="var(--terminal-text)" strokeWidth="2"/>
+                <rect x="28" y="20" width="8" height="28" rx="2" fill="#e8b830" stroke="var(--terminal-text)" strokeWidth="2"/>
+                <rect x="20" y="28" width="24" height="8" rx="2" fill="#e8b830" stroke="var(--terminal-text)" strokeWidth="2"/>
+                <circle cx="32" cy="52" r="6" fill="var(--terminal-long)" stroke="var(--terminal-long-strong)" strokeWidth="2"/>
+                <path d="M29 52L31 54L35 50" stroke="var(--terminal-surface)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
               </svg>
               <span style={{...styles.btnLabel, bottom: mobile ? 16 : 22, fontSize: mobile ? 9 : 11}}>REINFORCE</span>
             </CustomBtn>
@@ -1569,7 +1570,7 @@ function ReinforceModal({ casualties, cost: serverCost, onConfirm, onClose }) {
                   {UNIT_IMG_MAP[name]
                     ? <img src={UNIT_IMG_MAP[name]} alt={name} style={rf.img} />
                     : normalizeTroopKey(name) === 'windmage'
-                    ? <span aria-hidden="true" style={{ ...rf.img, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: '#2d6f7d', background: 'rgba(119, 218, 205, 0.22)', border: '1px solid rgba(45, 111, 125, 0.4)', borderRadius: 4, fontSize: 12, fontWeight: 900 }}>WM</span>
+                    ? <span aria-hidden="true" style={{ ...rf.img, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: '#2d6f7d', background: 'rgba(119, 218, 205, 0.22)', border: '1px solid rgba(45, 111, 125, 0.4)', borderRadius: 4, fontSize: 12, fontWeight: 700 }}>WM</span>
                     : null}
                   <div style={rf.countBadge}>x{count}</div>
                 </div>
@@ -1597,50 +1598,39 @@ const rf = {
     zIndex: 200, pointerEvents: 'all',
   },
   panel: {
-    width: 400, maxWidth: '95vw', background: '#fdf8e7',
-    border: '6px solid #d4c8b0', borderRadius: 24,
+    width: 400, maxWidth: '95vw', background: 'var(--terminal-surface)',
+    border: '1px solid var(--terminal-border)', borderRadius: 24,
     boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
     overflow: 'hidden', fontFamily: '"Inter","Segoe UI",sans-serif',
   },
   header: {
     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-    padding: '14px 16px', background: '#d4c8b0', borderBottom: '4px solid #bba882',
+    padding: '14px 16px', background: 'var(--terminal-border)', borderBottom: '1px solid var(--terminal-border-strong)',
   },
-  title: { fontSize: 20, fontWeight: 900, color: '#5C3A21' },
-  closeBtn: {
-    width: 30, height: 30, borderRadius: '50%', background: '#E53935',
-    border: '3px solid #fff', color: '#fff', cursor: 'pointer',
-    display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0,
-  },
+  title: { fontSize: 20, fontWeight: 700, color: 'var(--terminal-text)' },
+  closeBtn: uiIconButton('danger', 30),
   body: { padding: 20, display: 'flex', flexDirection: 'column', gap: 16, alignItems: 'center' },
   grid: { display: 'flex', flexWrap: 'wrap', gap: 14, justifyContent: 'center' },
   card: { width: 90, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 },
   imgWrap: {
-    width: 80, height: 80, borderRadius: 14, background: '#e8dfc8',
-    border: '3px solid #d4c8b0', position: 'relative', overflow: 'hidden',
+    width: 80, height: 80, borderRadius: 14, background: 'var(--terminal-surface-subtle)',
+    border: '1px solid var(--terminal-border)', position: 'relative', overflow: 'hidden',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
   },
   img: { width: '100%', height: '100%', objectFit: 'cover', filter: 'drop-shadow(0 3px 5px rgba(0,0,0,0.4)) sepia(0.2)' },
   countBadge: {
     position: 'absolute', bottom: 2, right: 2,
-    background: '#E53935', color: '#fff', fontSize: 12, fontWeight: 900,
+    background: 'var(--terminal-short)', color: 'var(--terminal-on-accent)', fontSize: 12, fontWeight: 700,
     padding: '1px 7px', borderRadius: 8, boxShadow: '0 2px 4px rgba(0,0,0,0.4)',
   },
-  name: { fontSize: 12, fontWeight: 900, color: '#5C3A21' },
+  name: { fontSize: 12, fontWeight: 700, color: 'var(--terminal-text)' },
   costRow: {
     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-    width: '100%', padding: '10px 0', borderTop: '2px solid #e8dfc8',
+    width: '100%', padding: '10px 0', borderTop: '1px solid var(--terminal-surface-subtle)',
   },
-  costLabel: { fontSize: 14, fontWeight: 800, color: '#77573d' },
-  costVal: { fontSize: 18, fontWeight: 900, color: '#e8b830' },
-  confirmBtn: {
-    width: '100%', padding: '14px',
-    background: 'linear-gradient(180deg, #4CAF50 0%, #2E7D32 100%)',
-    border: '3px solid #1B5E20', borderRadius: 14,
-    color: '#fff', fontSize: 16, fontWeight: 900, cursor: 'pointer',
-    textShadow: '0 2px 2px rgba(0,0,0,0.3)',
-    boxShadow: '0 6px 16px rgba(0,0,0,0.3)',
-  },
+  costLabel: { fontSize: 14, fontWeight: 600, color: 'var(--terminal-text-secondary)' },
+  costVal: { fontSize: 18, fontWeight: 700, color: '#e8b830' },
+  confirmBtn: uiButton('primary', { width: '100%', minHeight: 48, padding: '14px', fontSize: 16 }),
 };
 
 export default memo(ActionButtons);
@@ -1677,14 +1667,14 @@ const hud = {
   },
   timerPill: {
     padding: '8px 16px',
-    background: 'linear-gradient(180deg, #fff6dc 0%, #ead9b2 100%)',
-    border: '2px solid #9f8759',
+    background: 'linear-gradient(180deg, var(--terminal-surface) 0%, var(--terminal-border) 100%)',
+    border: '1px solid var(--terminal-text-muted)',
     borderRadius: 10,
-    fontSize: 20, fontWeight: 900,
+    fontSize: 20, fontWeight: 700,
     letterSpacing: 0,
-    color: '#5C3A21',
-    textShadow: '0 1px 0 rgba(255,255,255,0.45)',
-    boxShadow: '0 4px 10px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.5)',
+    color: 'var(--terminal-text)',
+    textShadow: 'none',
+    boxShadow: '0 4px 10px rgba(0,0,0,0.18), inset 0 1px 0 var(--terminal-chip-overlay)',
     fontVariantNumeric: 'tabular-nums',
   },
   timerPillMobile: {
@@ -1695,14 +1685,14 @@ const hud = {
   homeBtn: {
     width: 56, height: 56,
     padding: 0,
-    background: 'linear-gradient(180deg, #E53935 0%, #b71c1c 100%)',
-    border: '3px solid #7f0000',
+    background: 'linear-gradient(180deg, var(--terminal-short) 0%, var(--terminal-short-strong) 100%)',
+    border: '1px solid var(--terminal-short-strong)',
     borderRadius: 14,
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     cursor: 'pointer', flexShrink: 0, overflow: 'hidden',
     transition: 'filter 0.15s',
     outline: 'none',
-    color: '#fff',
+    color: 'var(--terminal-on-accent)',
     boxShadow: '0 4px 10px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.25)',
   },
   homeBtnMobile: {
@@ -1712,13 +1702,13 @@ const hud = {
   },
   replayBadge: {
     padding: '8px 16px',
-    background: 'linear-gradient(180deg, #ffd76a 0%, #c2851b 100%)',
-    border: '2px solid #5C3A21',
+    background: 'linear-gradient(180deg, var(--terminal-brand-border) 0%, var(--terminal-brand-strong) 100%)',
+    border: '1px solid var(--terminal-text)',
     borderRadius: 10,
-    color: '#3a1f00', fontSize: 14, fontWeight: 900,
+    color: 'var(--terminal-text)', fontSize: 14, fontWeight: 700,
     letterSpacing: '1px',
-    textShadow: '0 1px 0 rgba(255,255,255,0.45)',
-    boxShadow: '0 4px 10px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.5)',
+    textShadow: 'none',
+    boxShadow: '0 4px 10px rgba(0,0,0,0.25), inset 0 1px 0 var(--terminal-chip-overlay)',
   },
   replayBadgeMobile: {
     padding: '7px 9px',
@@ -1739,11 +1729,11 @@ const hud = {
     pointerEvents: 'none',
     minWidth: 128,
     padding: '8px 16px 10px',
-    background: 'linear-gradient(180deg, #fff6dc 0%, #ead9b2 100%)',
-    border: '3px solid #9f8759',
+    background: 'linear-gradient(180deg, var(--terminal-surface) 0%, var(--terminal-border) 100%)',
+    border: '1px solid var(--terminal-text-muted)',
     borderRadius: 12,
-    boxShadow: '0 8px 24px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,255,255,0.55)',
-    color: '#5C3A21',
+    boxShadow: '0 8px 24px rgba(0,0,0,0.28), inset 0 1px 0 var(--terminal-chip-overlay)',
+    color: 'var(--terminal-text)',
     textAlign: 'center',
     fontFamily: '"Inter","Segoe UI",sans-serif',
   },
@@ -1758,32 +1748,32 @@ const hud = {
     zIndex: 101,
   },
   replayCountdownLabel: {
-    color: '#8b6b3f',
+    color: 'var(--terminal-text-secondary)',
     fontSize: 10,
-    fontWeight: 900,
+    fontWeight: 700,
     letterSpacing: 0.5,
     lineHeight: 1.1,
     marginBottom: 4,
     textTransform: 'uppercase',
   },
   replayCountdownTime: {
-    color: '#5C3A21',
+    color: 'var(--terminal-text)',
     fontSize: 30,
-    fontWeight: 900,
+    fontWeight: 700,
     lineHeight: 1,
-    textShadow: '0 1px 0 rgba(255,255,255,0.55)',
+    textShadow: 'none',
     fontVariantNumeric: 'tabular-nums',
   },
   speedBtn: {
     width: 56, height: 56,
-    background: 'linear-gradient(180deg, #fff6dc 0%, #ead9b2 100%)',
-    border: '2px solid #9f8759',
+    background: 'linear-gradient(180deg, var(--terminal-surface) 0%, var(--terminal-border) 100%)',
+    border: '1px solid var(--terminal-text-muted)',
     borderRadius: 14,
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     cursor: 'pointer', flexShrink: 0,
     transition: 'filter 0.15s',
     outline: 'none',
-    boxShadow: '0 4px 10px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.5)',
+    boxShadow: '0 4px 10px rgba(0,0,0,0.18), inset 0 1px 0 var(--terminal-chip-overlay)',
   },
   replayControlMobile: {
     width: 48,
@@ -1791,12 +1781,12 @@ const hud = {
     borderRadius: 12,
   },
   speedText: {
-    color: '#5C3A21', fontSize: 18, fontWeight: 900,
-    textShadow: '0 1px 0 rgba(255,255,255,0.45)',
+    color: 'var(--terminal-text)', fontSize: 18, fontWeight: 700,
+    textShadow: 'none',
   },
   sep: {
     width: 2, height: 68,
-    background: 'linear-gradient(180deg, transparent, #9f8759, transparent)',
+    background: 'linear-gradient(180deg, transparent, var(--terminal-text-muted), transparent)',
     borderRadius: 1, flexShrink: 0,
   },
   troopRow: {
@@ -1820,10 +1810,10 @@ const hud = {
   card: {
     position: 'relative',
     width: 74, height: 88,
-    background: 'linear-gradient(180deg, #fff6dc 0%, #ead9b2 100%)',
-    borderWidth: 2,
+    background: 'linear-gradient(180deg, var(--terminal-surface) 0%, var(--terminal-border) 100%)',
+    borderWidth: 1,
     borderStyle: 'solid',
-    borderColor: '#9f8759',
+    borderColor: 'var(--terminal-text-muted)',
     borderRadius: 14,
     display: 'flex', flexDirection: 'column',
     alignItems: 'center', justifyContent: 'flex-start',
@@ -1841,18 +1831,18 @@ const hud = {
   },
   countBadge: {
     position: 'absolute', bottom: 19, right: 3,
-    background: '#5C3A21',
+    background: 'var(--terminal-text)',
     border: '1px solid #3d1f00',
     borderRadius: 6, padding: '1px 5px',
   },
   countText: {
-    color: '#fff7df', fontSize: 12, fontWeight: 900,
+    color: 'var(--terminal-surface)', fontSize: 12, fontWeight: 700,
     lineHeight: 1.2,
   },
   selArrow: {
     position: 'absolute', bottom: 19, left: 4,
-    color: '#c2851b', fontSize: 9, lineHeight: 1,
-    textShadow: '0 0 6px rgba(194,133,27,0.7)',
+    color: 'var(--terminal-brand-strong)', fontSize: 9, lineHeight: 1,
+    textShadow: 'none',
   },
   shipModal: {
     position: 'fixed', inset: 0, background: 'rgba(20,12,4,0.6)',
@@ -1860,12 +1850,12 @@ const hud = {
     zIndex: 200, pointerEvents: 'all',
   },
   shipModalPanel: {
-    background: '#fdf8e7',
-    border: '6px solid #d4c8b0', borderRadius: 18,
+    background: 'var(--terminal-surface)',
+    border: '1px solid var(--terminal-border)', borderRadius: 18,
     padding: '16px 20px', maxWidth: 320, width: 'calc(100% - 32px)',
     display: 'flex', flexDirection: 'column', alignItems: 'center',
     boxShadow: '0 12px 40px rgba(0,0,0,0.5)',
-    color: '#5C3A21',
+    color: 'var(--terminal-text)',
   },
   cardLabel: {
     fontSize: 9, fontWeight: 700,
@@ -1876,55 +1866,55 @@ const hud = {
   cannonBtn: {
     width: 82, height: 82,
     position: 'relative',
-    background: 'linear-gradient(180deg, #fff6dc 0%, #ead9b2 100%)',
-    borderWidth: 3,
+    background: 'linear-gradient(180deg, var(--terminal-surface) 0%, var(--terminal-border) 100%)',
+    borderWidth: 1,
     borderStyle: 'solid',
-    borderColor: '#9f8759',
+    borderColor: 'var(--terminal-text-muted)',
     borderRadius: 18,
     display: 'flex', flexDirection: 'column',
     alignItems: 'center', justifyContent: 'center', gap: 4,
     cursor: 'pointer', flexShrink: 0,
     transition: 'border-color 0.2s, box-shadow 0.2s, filter 0.2s',
     outline: 'none',
-    boxShadow: '0 4px 12px rgba(0,0,0,0.22), inset 0 1px 0 rgba(255,255,255,0.5)',
+    boxShadow: '0 4px 12px rgba(0,0,0,0.22), inset 0 1px 0 var(--terminal-chip-overlay)',
   },
   cannonActive: {
-    borderWidth: 3,
+    borderWidth: 1,
     borderStyle: 'solid',
     borderColor: 'rgba(255,155,0,0.88)',
     boxShadow: '0 0 22px rgba(255,155,0,0.5), inset 0 0 10px rgba(255,155,0,0.12)',
     filter: 'brightness(1.18)',
   },
   rallyActive: {
-    borderWidth: 3,
+    borderWidth: 1,
     borderStyle: 'solid',
     borderColor: 'rgba(255,55,40,0.95)',
     boxShadow: '0 0 22px rgba(255,55,40,0.55), inset 0 0 10px rgba(255,55,40,0.18)',
     filter: 'brightness(1.18)',
   },
   medkitActive: {
-    borderWidth: 3,
+    borderWidth: 1,
     borderStyle: 'solid',
     borderColor: 'rgba(32,184,101,0.95)',
     boxShadow: '0 0 22px rgba(32,184,101,0.55), inset 0 0 10px rgba(32,184,101,0.18)',
     filter: 'brightness(1.12)',
   },
   freezeActive: {
-    borderWidth: 3,
+    borderWidth: 1,
     borderStyle: 'solid',
     borderColor: 'rgba(70,203,255,0.95)',
     boxShadow: '0 0 22px rgba(70,203,255,0.55), inset 0 0 10px rgba(70,203,255,0.18)',
     filter: 'brightness(1.14)',
   },
   rageActive: {
-    borderWidth: 3,
+    borderWidth: 1,
     borderStyle: 'solid',
     borderColor: 'rgba(197,65,222,0.95)',
     boxShadow: '0 0 22px rgba(197,65,222,0.55), inset 0 0 10px rgba(197,65,222,0.18)',
     filter: 'brightness(1.14)',
   },
   skeletonBarrelActive: {
-    borderWidth: 3,
+    borderWidth: 1,
     borderStyle: 'solid',
     borderColor: 'rgba(223,139,45,0.95)',
     boxShadow: '0 0 22px rgba(223,139,45,0.55), inset 0 0 10px rgba(223,139,45,0.18)',
@@ -1973,14 +1963,14 @@ const hud = {
   },
   mobileEnergyToggleActive: {
     borderColor: '#d64817',
-    boxShadow: '0 0 14px rgba(214,72,23,0.42), inset 0 1px 0 rgba(255,255,255,0.55)',
+    boxShadow: '0 0 14px rgba(214,72,23,0.42), inset 0 1px 0 var(--terminal-chip-overlay)',
   },
   mobileAbilityChevron: {
     width: 7,
     height: 7,
     flex: '0 0 7px',
-    borderTop: '2px solid #5C3A21',
-    borderLeft: '2px solid #5C3A21',
+    borderTop: '1px solid var(--terminal-text)',
+    borderLeft: '1px solid var(--terminal-text)',
     transform: 'rotate(45deg) translate(1px, 1px)',
     transformOrigin: 'center',
     transition: 'transform 140ms ease',
@@ -1994,9 +1984,9 @@ const hud = {
     bottom: 'calc(100% + 8px)',
     padding: 6,
     background: 'linear-gradient(180deg, rgba(255,246,220,0.98) 0%, rgba(234,217,178,0.98) 100%)',
-    border: '2px solid #9f8759',
+    border: '1px solid var(--terminal-text-muted)',
     borderRadius: 14,
-    boxShadow: '0 10px 28px rgba(0,0,0,0.34), inset 0 1px 0 rgba(255,255,255,0.6)',
+    boxShadow: '0 10px 28px rgba(0,0,0,0.34), inset 0 1px 0 var(--terminal-chip-overlay)',
     boxSizing: 'border-box',
   },
   mobileAbilityGrid: {
@@ -2013,9 +2003,9 @@ const hud = {
     cursor: 'default',
   },
   cannonLabel: {
-    color: '#5C3A21', fontSize: 10, fontWeight: 900,
+    color: 'var(--terminal-text)', fontSize: 10, fontWeight: 700,
     textTransform: 'uppercase', letterSpacing: '0.5px', lineHeight: 1,
-    textShadow: '0 1px 0 rgba(255,255,255,0.45)',
+    textShadow: 'none',
   },
   cannonCostBadge: {
     position: 'absolute',
@@ -2024,10 +2014,10 @@ const hud = {
     display: 'flex',
     alignItems: 'center',
     gap: 2,
-    color: '#3a1f00',
+    color: 'var(--terminal-text)',
     fontSize: 14,
-    fontWeight: 900,
-    textShadow: '0 1px 0 rgba(255,255,255,0.55)',
+    fontWeight: 700,
+    textShadow: 'none',
   },
   cannonCostBadgeMobile: {
     bottom: 1,
@@ -2041,18 +2031,18 @@ const hud = {
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     fontSize: 8,
     boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.3)',
-    color: '#fff',
+    color: 'var(--terminal-on-accent)',
   },
   cannonGroup: {
     display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8,
   },
   energyPill: {
-    background: 'linear-gradient(180deg, #fff6dc 0%, #ead9b2 100%)',
-    border: '2px solid #9f8759',
+    background: 'linear-gradient(180deg, var(--terminal-surface) 0%, var(--terminal-border) 100%)',
+    border: '1px solid var(--terminal-text-muted)',
     borderRadius: 10,
     padding: '6px 12px',
     display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 8,
-    boxShadow: '0 4px 10px rgba(0,0,0,0.2), inset 0 1px 0 rgba(255,255,255,0.5)',
+    boxShadow: '0 4px 10px rgba(0,0,0,0.2), inset 0 1px 0 var(--terminal-chip-overlay)',
   },
   energyPillMobile: {
     borderRadius: 8,
@@ -2066,15 +2056,15 @@ const hud = {
     width: 24, height: 24,
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     boxShadow: 'inset 0 2px 0 rgba(255,255,255,0.3)',
-    color: '#fff',
+    color: 'var(--terminal-on-accent)',
   },
   energyIconMobile: {
     width: 18,
     height: 18,
   },
   energyValue: {
-    fontSize: 22, fontWeight: 900, color: '#5C3A21',
-    textShadow: '0 1px 0 rgba(255,255,255,0.45)',
+    fontSize: 22, fontWeight: 700, color: 'var(--terminal-text)',
+    textShadow: 'none',
   },
   energyValueMobile: {
     fontSize: 16,
@@ -2126,16 +2116,16 @@ const styles = {
     padding: '0 8px 0 5px',
     borderRadius: 13,
     background: 'linear-gradient(180deg, #fff2a8 0%, #d79d15 100%)',
-    border: '2px solid #5C3A21',
+    border: '1px solid var(--terminal-text)',
     boxShadow: '0 3px 6px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.65)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 3,
-    color: '#5C3A21',
+    color: 'var(--terminal-text)',
     fontSize: 14,
-    fontWeight: 950,
-    textShadow: '0 1px 0 rgba(255,255,255,0.45)',
+    fontWeight: 700,
+    textShadow: 'none',
     zIndex: 12,
   },
   attackCostBadgeMobile: {
@@ -2147,8 +2137,8 @@ const styles = {
   },
   attackCostBadgeLocked: {
     background: 'linear-gradient(180deg, #ffd1d1 0%, #d94a3b 100%)',
-    color: '#fff',
-    textShadow: '0 1px 2px rgba(0,0,0,0.55)',
+    color: 'var(--terminal-on-accent)',
+    textShadow: 'none',
   },
   attackCostIcon: {
     width: 15,
@@ -2190,22 +2180,22 @@ const styles = {
   },
   btnLabel: {
     position: 'absolute', bottom: 28, left: 0, right: 0,
-    color: '#fff', fontSize: 14, fontWeight: 900,
-    textShadow: '-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 0 2px 4px rgba(0,0,0,0.8)',
+    color: 'var(--terminal-on-accent)', fontSize: 14, fontWeight: 700,
+    textShadow: 'none',
     textTransform: 'uppercase', letterSpacing: '0.5px', textAlign: 'center', zIndex: 10,
   },
   notificationBadge: {
     position: 'absolute', top: 6, right: 6,
-    background: '#E63946', color: '#fff', borderRadius: '50%',
+    background: '#E63946', color: 'var(--terminal-on-accent)', borderRadius: '50%',
     width: 32, height: 32, display: 'flex', alignItems: 'center', justifyContent: 'center',
-    fontSize: 16, fontWeight: 900, border: '3px solid #fff',
+    fontSize: 16, fontWeight: 700, border: '1px solid var(--terminal-surface)',
     boxShadow: '0 4px 8px rgba(0,0,0,0.5)', zIndex: 5,
   },
   notificationBadgeSmall: {
     position: 'absolute', top: 4, right: 4,
-    background: '#E63946', color: '#fff', borderRadius: '50%',
+    background: '#E63946', color: 'var(--terminal-on-accent)', borderRadius: '50%',
     width: 24, height: 24, display: 'flex', alignItems: 'center', justifyContent: 'center',
-    fontSize: 12, fontWeight: 900, border: '2px solid #fff',
+    fontSize: 12, fontWeight: 700, border: '1px solid var(--terminal-surface)',
     boxShadow: '0 4px 8px rgba(0,0,0,0.5)', zIndex: 5,
   },
 };

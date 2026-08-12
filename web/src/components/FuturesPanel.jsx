@@ -1,4 +1,4 @@
-import { useState, memo, useCallback, useMemo, useRef, useEffect } from 'react';
+import { Fragment, useState, memo, useCallback, useMemo, useRef, useEffect } from 'react';
 import { useSend } from '../hooks/useGodot';
 import { useLayout } from '../hooks/useIsMobile';
 import { useWallet } from '@solana/wallet-adapter-react';
@@ -13,6 +13,8 @@ import { useHyperliquid } from '../hooks/useHyperliquid';
 import { useRisex } from '../hooks/useRisex';
 import { useNado } from '../hooks/useNado';
 import { useOndo } from '../hooks/useOndo';
+import { useLeverup } from '../hooks/useLeverup';
+import { useAster } from '../hooks/useAster';
 import { useHibachi } from '../hooks/useHibachi';
 import { useHotstuff } from '../hooks/useHotstuff';
 import { useGrvt } from '../hooks/useGrvt';
@@ -27,11 +29,12 @@ import { NADO_REFERRAL_ACCESS } from '../lib/nadoReferral';
 import { useDex, DEX_CONFIG } from '../contexts/DexContext';
 import { useAptosWallet } from '../contexts/AptosWalletContext';
 import { useFuturesMode } from '../contexts/FuturesModeContext';
+import { useFuturesTheme } from '../hooks/useFuturesTheme';
+import { uiButton, uiIconButton } from '../styles/theme';
 import FuturesModeSelect from './FuturesModeSelect';
 import BasicTradeFlow from './basic/BasicTradeFlow';
 import ShareTradeModal from './basic/ShareTradeModal';
 import { useFarcaster } from '../hooks/useFarcaster';
-import { cartoonBtn } from '../styles/theme';
 import TradingViewWidget from './TradingViewWidget';
 import EvmWalletModal from './EvmWalletModal';
 import { useOptionalPrivy } from './PrivyAuthProvider';
@@ -77,12 +80,37 @@ import { OSTIUM_ORACLE_FEE_BUFFER_USD, ostiumOracleFeeBufferMessage } from '../l
 import pacificaLogo from '../assets/pacifica.png';
 import elfaBadge from '../assets/photo_5976518637193465030_x.jpg';
 
+function useTerminalMobile() {
+  const query = '(max-width: 767px)';
+  const [matches, setMatches] = useState(() => window.matchMedia(query).matches);
+
+  useEffect(() => {
+    const media = window.matchMedia(query);
+    const handleChange = (event) => setMatches(event.matches);
+    setMatches(media.matches);
+    media.addEventListener?.('change', handleChange);
+    return () => media.removeEventListener?.('change', handleChange);
+  }, []);
+
+  return matches;
+}
+
+function terminalButton() {
+  return uiButton('primary', {
+    width: 'min(100%, 240px)',
+    minHeight: 44,
+    boxSizing: 'border-box',
+  });
+}
+
 const TABS = [
   { id: 'Trade', icon: <svg className="tab-icon-trade" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3 3v18h18"/><path className="trend-line" d="m19 9-5 5-4-4-3 3"/></svg>, label: 'Trade' },
   { id: 'Positions', icon: <svg className="tab-icon-positions" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><rect className="briefcase-body" width="20" height="14" x="2" y="7" rx="2" ry="2"/><path className="handle" d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>, label: 'Positions' },
   { id: 'Orders', icon: <svg className="tab-icon-orders" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line className="order-line" x1="8" y1="6" x2="21" y2="6"/><line className="order-line" x1="8" y1="12" x2="21" y2="12"/><line className="order-line" x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>, label: 'Orders' },
   { id: 'Quests', icon: <svg className="tab-icon-quests" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><g className="sword-group"><path d="M14.5 17.5L3 6V3h3l11.5 11.5"/><path d="M13 19l6-6"/><path d="M16 16l4 4"/><path d="M19 21l2-2"/></g></svg>, label: 'Quests' },
   { id: 'Account', icon: <svg className="tab-icon-account" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path className="avatar-body" d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle className="avatar-head" cx="12" cy="7" r="4"/></svg>, label: 'Account' },
+  { id: 'History', icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 3v6h6"/><path d="M12 7v5l3 2"/></svg>, label: 'History' },
+  { id: 'Funding', icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M16 12h.01"/><path d="M3 9h18"/></svg>, label: 'Funding' },
 ];
 
 const POPULAR_SYMBOLS = ['BTC', 'ETH', 'SOL', 'DOGE', 'XRP', 'SUI', 'TRUMP'];
@@ -122,6 +150,8 @@ const DEX_ERROR_LABELS = {
   monad: 'Perpl',
   nado: 'Nado',
   ondo: 'Ondo Perps',
+  leverup: 'LeverUp V2',
+  aster: 'Aster',
   ostium: 'Ostium',
   pacifica: 'Pacifica',
   phoenix: 'Phoenix',
@@ -129,7 +159,7 @@ const DEX_ERROR_LABELS = {
   bulk: 'Bulk',
 };
 const OPEN_TPSL_NATIVE_ORDER_ATTACH_DEXES = new Set(['avantis', 'bulk', 'decibel', 'flash', 'gmx', 'hibachi', 'hotstuff', 'hyperliquid', 'katana', 'lighter', 'nado', 'ondo', 'ostium', 'pacifica']);
-const OPEN_TPSL_NATIVE_LIMIT_ATTACH_DEXES = new Set([...OPEN_TPSL_NATIVE_ORDER_ATTACH_DEXES, 'grvt', 'phoenix']);
+const OPEN_TPSL_NATIVE_LIMIT_ATTACH_DEXES = new Set([...OPEN_TPSL_NATIVE_ORDER_ATTACH_DEXES, 'grvt', 'leverup', 'phoenix']);
 const OPEN_TPSL_POST_MARKET_DEXES = new Set([
   'decibel',
   'gmx',
@@ -137,6 +167,8 @@ const OPEN_TPSL_POST_MARKET_DEXES = new Set([
   'hyperliquid',
   'katana',
   'lighter',
+  'leverup',
+  'aster',
   'monad',
     'nado',
     'ondo',
@@ -1032,7 +1064,7 @@ function getPositionMetrics(pos, prices, leverageSettings = {}, feeContext = {})
     pnlDisplay.primaryPnlUsd,
     pnlDisplay.primaryPnlPct,
   );
-  const pnlColor = pnlDirection >= 0 ? '#4CAF50' : '#E53935';
+  const pnlColor = pnlDirection >= 0 ? 'var(--terminal-long)' : 'var(--terminal-short)';
   return {
     entryP,
     markP,
@@ -1086,7 +1118,7 @@ function PositionPnlReadout({ pnlDisplay, pnlColor, pnlFees, isDust, compact = f
     >
       <span style={{
         fontSize: compact ? 18 : 14,
-        fontWeight: 900,
+        fontWeight: 700,
         color: pnlColor,
         fontVariantNumeric: 'tabular-nums',
         whiteSpace: 'nowrap',
@@ -1098,8 +1130,8 @@ function PositionPnlReadout({ pnlDisplay, pnlColor, pnlFees, isDust, compact = f
       {secondaryUsd != null && (
         <span style={{
           fontSize: compact ? 9 : 10,
-          fontWeight: 800,
-          color: '#8a6d2f',
+          fontWeight: 600,
+          color: 'var(--terminal-warning)',
           fontVariantNumeric: 'tabular-nums',
           whiteSpace: 'nowrap',
         }}>
@@ -1714,7 +1746,7 @@ function TpslValueInput({ leg, mode, value, onChange, pos, metrics, maxPrice }) 
       />
       <div style={{
         ...S.tpslPreview,
-        color: hasValue && resolved.error ? '#B71C1C' : (leg === 'tp' ? '#2e7d32' : '#8a4b20'),
+        color: hasValue && resolved.error ? 'var(--terminal-short-strong)' : (leg === 'tp' ? 'var(--terminal-long)' : 'var(--terminal-warning)'),
       }}>
         {preview}
       </div>
@@ -1854,10 +1886,10 @@ function PositionTpslRow({ pos, orders }) {
   if (!tp && !sl) return null;
   return (
     <div style={S.row}>
-      <span style={{ ...S.detail, color: tp ? '#4CAF50' : '#a3906a' }}>
+      <span style={{ ...S.detail, color: tp ? 'var(--terminal-long)' : 'var(--terminal-text-muted)' }}>
         TP: {tp ? `$${fmtPrice(tp)}` : '-'}
       </span>
-      <span style={{ ...S.detail, color: sl ? '#E53935' : '#a3906a' }}>
+      <span style={{ ...S.detail, color: sl ? 'var(--terminal-short)' : 'var(--terminal-text-muted)' }}>
         SL: {sl ? `$${fmtPrice(sl)}` : '-'}
       </span>
     </div>
@@ -2419,19 +2451,19 @@ const SignalIcon = ({ type, size = 14 }) => {
     </svg>
   );
   if (type === '📈') return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="#4CAF50" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="var(--terminal-long)" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
       <polyline points="22 7 13.5 15.5 8.5 10.5 2 17" />
       <polyline points="16 7 22 7 22 13" />
     </svg>
   );
   if (type === '📉') return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="#E53935" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="var(--terminal-short)" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
       <polyline points="22 17 13.5 8.5 8.5 13.5 2 7" />
       <polyline points="16 17 22 17 22 11" />
     </svg>
   );
   if (type === '💀') return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="#a3906a" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="var(--terminal-text-muted)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
       <path d="M9 10a.5.5 0 0 1 .5.5v1a.5.5 0 0 1-1 0v-1a.5.5 0 0 1 .5-.5zm6 0a.5.5 0 0 1 .5.5v1a.5.5 0 0 1-1 0v-1a.5.5 0 0 1 .5-.5z" />
       <path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 18a8 8 0 1 1 8-8 8 8 0 0 1-8 8z" />
       <path d="M12 13c-2 0-3 1-3 3s1 3 3 3 3-1 3-3-1-3-3-3z" />
@@ -2599,8 +2631,8 @@ const flashFundingModalStyles = {
     width: 'min(440px, 100%)',
     maxHeight: 'min(680px, calc(100vh - 28px))',
     overflowY: 'auto',
-    background: '#fdf8e7',
-    border: '5px solid #d4c8b0',
+    background: 'var(--terminal-surface)',
+    border: '1px solid var(--terminal-border)',
     borderRadius: 16,
     boxShadow: '0 18px 44px rgba(0,0,0,0.36)',
     padding: 16,
@@ -2654,15 +2686,15 @@ const DecibelDepositGate = ({
   return (
     <>
       <style>{animCSS}</style>
-      <div ref={panelRef} className={fullscreen ? "futures-fullscreen" : ""} style={{
+      <div ref={panelRef} className={`futures-terminal-shell ${fullscreen ? 'futures-fullscreen futures-terminal-shell--fullscreen' : 'futures-terminal-shell--compact'}`} style={{
         ...(fullscreen ? S.containerFull : S.container),
-        ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '4px solid #d4c8b0' } : {}),
+        ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '1px solid var(--terminal-border)' } : {}),
         transform: (fullscreen || isMobile) ? undefined : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
         transition: isDragging ? 'none' : 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
       }}>
         <div style={S.header} onPointerDown={onPointerDown}>
           <span style={S.headerTitle}>Deposit USDC to start</span>
-          <button data-nodrag onClick={onClose} style={S.closeBtn}>
+          <button type="button" data-nodrag onClick={onClose} style={S.closeBtn} aria-label="Close deposit dialog">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           </button>
         </div>
@@ -2688,19 +2720,19 @@ const DecibelDepositGate = ({
             width: 'clamp(64px, 12vh, 96px)',
             height: 'clamp(64px, 12vh, 96px)',
             borderRadius: '50%',
-            background: 'linear-gradient(180deg, #FFD54F 0%, #F57C00 100%)',
-            border: '4px solid #FB8C00',
+            background: 'var(--terminal-warning-soft)',
+            border: '1px solid #FB8C00',
             boxShadow: '0 6px 0 #E65100, 0 10px 22px rgba(0,0,0,0.28)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             fontSize: 'clamp(32px, 6vh, 48px)',
             flexShrink: 0,
           }}>💵</div>
           <div style={{
-            color: '#5C3A21', fontSize: 'clamp(17px, 2.6vh, 22px)', fontWeight: 900,
+            color: 'var(--terminal-text)', fontSize: 'clamp(17px, 2.6vh, 22px)', fontWeight: 700,
             textAlign: 'center', letterSpacing: '0.4px',
           }}>Fund your trading account</div>
           <div style={{
-            color: '#8a7252', fontSize: 13, fontWeight: 600,
+            color: 'var(--terminal-text-muted)', fontSize: 13, fontWeight: 600,
             textAlign: 'center', maxWidth: 380, lineHeight: 1.5,
           }}>
             You can't trade without USDC for collateral. Deposit at least
@@ -2712,11 +2744,11 @@ const DecibelDepositGate = ({
           <div style={{
             width: '100%', maxWidth: 380,
             display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-            background: '#fffbef', border: '2px solid #d4c8b0',
+            background: 'var(--terminal-warning-soft)', border: '1px solid var(--terminal-border)',
             borderRadius: 12, padding: '10px 14px',
           }}>
-            <div style={{fontSize: 12, fontWeight: 700, color: '#8a7252'}}>In your wallet</div>
-            <div style={{fontSize: 16, fontWeight: 900, color: '#5C3A21'}}>
+            <div style={{fontSize: 12, fontWeight: 700, color: 'var(--terminal-text-muted)'}}>In your wallet</div>
+            <div style={{fontSize: 16, fontWeight: 700, color: 'var(--terminal-text)'}}>
               ${wallet.toFixed(2)} USDC
             </div>
           </div>
@@ -2726,10 +2758,10 @@ const DecibelDepositGate = ({
           <div style={{width: '100%', maxWidth: 380, display: 'flex', flexDirection: 'column', gap: 8}}>
             <div style={{
               display: 'flex', alignItems: 'center', gap: 8,
-              background: '#fffbef', border: '2px solid #d4c8b0',
+              background: 'var(--terminal-warning-soft)', border: '1px solid var(--terminal-border)',
               borderRadius: 12, padding: '10px 14px',
             }}>
-              <div style={{fontSize: 18, fontWeight: 900, color: '#5C3A21'}}>$</div>
+              <div style={{fontSize: 18, fontWeight: 700, color: 'var(--terminal-text)'}}>$</div>
               <input
                 type="number" min="1" step="0.5"
                 value={amt}
@@ -2737,11 +2769,11 @@ const DecibelDepositGate = ({
                 disabled={busy || loading}
                 style={{
                   flex: 1, border: 'none', outline: 'none',
-                  background: 'transparent', fontSize: 18, fontWeight: 900,
-                  color: '#5C3A21', minWidth: 0,
+                  background: 'transparent', fontSize: 18, fontWeight: 700,
+                  color: 'var(--terminal-text)', minWidth: 0,
                 }}
               />
-              <div style={{fontSize: 11, fontWeight: 700, color: '#8a7252'}}>USDC</div>
+              <div style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text-muted)'}}>USDC</div>
             </div>
             <div style={{display: 'flex', gap: 6}}>
               {[5, 10, 25, 50].filter(v => v <= wallet || v === 5).map(v => (
@@ -2751,10 +2783,10 @@ const DecibelDepositGate = ({
                   disabled={busy || loading || v > wallet}
                   style={{
                     flex: 1, padding: '6px 0',
-                    background: amtN === v ? '#5C3A21' : '#fffbef',
-                    color: amtN === v ? '#fff' : '#5C3A21',
-                    border: '2px solid #d4c8b0', borderRadius: 8,
-                    fontSize: 12, fontWeight: 800, cursor: 'pointer',
+                    background: amtN === v ? 'var(--terminal-text)' : 'var(--terminal-warning-soft)',
+                    color: amtN === v ? 'var(--terminal-surface)' : 'var(--terminal-text)',
+                    border: '1px solid var(--terminal-border)', borderRadius: 8,
+                    fontSize: 12, fontWeight: 600, cursor: 'pointer',
                     opacity: v > wallet ? 0.4 : 1,
                   }}
                 >${v}</button>
@@ -2765,9 +2797,9 @@ const DecibelDepositGate = ({
                   disabled={busy || loading}
                   style={{
                     flex: 1, padding: '6px 0',
-                    background: '#fffbef', color: '#5C3A21',
-                    border: '2px solid #d4c8b0', borderRadius: 8,
-                    fontSize: 12, fontWeight: 800, cursor: 'pointer',
+                    background: 'var(--terminal-warning-soft)', color: 'var(--terminal-text)',
+                    border: '1px solid var(--terminal-border)', borderRadius: 8,
+                    fontSize: 12, fontWeight: 600, cursor: 'pointer',
                   }}
                 >MAX</button>
               )}
@@ -2776,9 +2808,9 @@ const DecibelDepositGate = ({
 
           <button
             style={{
-              ...cartoonBtn(canSubmit ? '#DAA520' : '#9CA3AF', canSubmit ? '#B8860B' : '#6B7280'),
+              ...terminalButton(canSubmit ? 'var(--terminal-warning)' : 'var(--terminal-text-faint)', canSubmit ? 'var(--terminal-warning)' : 'var(--terminal-text-muted)'),
               padding: '16px 36px',
-              fontSize: 16, fontWeight: 900, letterSpacing: '0.5px',
+              fontSize: 16, fontWeight: 700, letterSpacing: '0.5px',
               width: '100%', maxWidth: 380,
               opacity: canSubmit ? 1 : 0.7,
               cursor: canSubmit ? 'pointer' : 'not-allowed',
@@ -2797,9 +2829,9 @@ const DecibelDepositGate = ({
 
           {wallet === 0 && (
             <div style={{
-              fontSize: 12, color: '#7a6a4a', fontWeight: 700,
+              fontSize: 12, color: 'var(--terminal-text-muted)', fontWeight: 700,
               textAlign: 'center', maxWidth: 380, padding: '10px 14px',
-              background: '#fff8d8', border: '1px solid #d4c8b0',
+              background: 'var(--terminal-warning-soft)', border: '1px solid var(--terminal-border)',
               borderRadius: 8, lineHeight: 1.5,
             }}>
               Your Petra wallet has no USDC yet. Get USDC on Aptos via
@@ -2809,16 +2841,16 @@ const DecibelDepositGate = ({
           )}
 
           <div style={{
-            fontSize: 11, color: '#a3906a', fontWeight: 700,
+            fontSize: 11, color: 'var(--terminal-text-muted)', fontWeight: 700,
             textAlign: 'center', maxWidth: 320, lineHeight: 1.4,
           }}>
             You can withdraw any time — funds stay on Aptos under your control.
           </div>
           {(localErr || error) && (
             <div style={{
-              color: '#B71C1C', fontSize: 12, fontWeight: 700,
+              color: 'var(--terminal-short-strong)', fontSize: 12, fontWeight: 700,
               textAlign: 'center', maxWidth: 380, padding: '8px 12px',
-              background: '#FFEBEE', borderRadius: 8, border: '1px solid #FFCDD2',
+              background: 'var(--terminal-short-soft)', borderRadius: 8, border: '1px solid var(--terminal-short-border)',
             }}>{localErr || error}</div>
           )}
         </div>
@@ -2878,7 +2910,7 @@ const SymbolPicker = memo(function SymbolPicker({ markets, prices, symbol, onSel
         value={search}
         onChange={e => setSearch(e.target.value)}
         autoFocus
-        style={{padding: '6px 10px', border: '2px solid #d4c8b0', borderRadius: 8, background: '#fdf8e7', fontSize: 13, fontWeight: 700, color: '#5C3A21', outline: 'none'}}
+        style={{padding: '6px 10px', border: '1px solid var(--terminal-border)', borderRadius: 8, background: 'var(--terminal-surface)', fontSize: 13, fontWeight: 700, color: 'var(--terminal-text)', outline: 'none'}}
       />
       <div className="grad-scrollbar" style={{overflowY: 'auto', overflowX: 'hidden', flex: 1}}>
         <table style={{width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse', fontSize: 12, fontFamily: '"Inter","Segoe UI",sans-serif'}}>
@@ -2896,14 +2928,14 @@ const SymbolPicker = memo(function SymbolPicker({ markets, prices, symbol, onSel
           </tr></thead>
           <tbody>{rows.map(r => (
             <tr key={r.key} onClick={() => onSelect(r.symbol)}
-              style={{...SP.row, background: r.symbol === symbol ? '#e8dfc8' : 'transparent', cursor: 'pointer'}}>
+              style={{...SP.row, background: r.symbol === symbol ? 'var(--terminal-surface-subtle)' : 'transparent', cursor: 'pointer'}}>
               <td style={SP.td}>
                 <div style={{display: 'flex', alignItems: 'center', gap: 5}}>
                   <TokenIcon sym={r.iconSym} size={18} />
-                  <span style={{fontWeight: 900, color: '#5C3A21'}}>{r.label}</span>
-                  <span style={{fontSize: 10, fontWeight: 800, color: '#a3906a'}}>{r.maxLev}x</span>
+                  <span style={{fontWeight: 700, color: 'var(--terminal-text)'}}>{r.label}</span>
+                  <span style={{fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-muted)'}}>{r.maxLev}x</span>
                   {r.marketClosed && (
-                    <span style={{fontSize: 9, fontWeight: 900, color: '#B45309', background: '#FFF7D6', border: '1px solid #F59E0B', borderRadius: 5, padding: '1px 4px'}}>
+                    <span style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-warning)', background: 'var(--terminal-warning-soft)', border: '1px solid var(--terminal-warning)', borderRadius: 5, padding: '1px 4px'}}>
                       Closed
                     </span>
                   )}
@@ -2932,14 +2964,14 @@ const SymbolPicker = memo(function SymbolPicker({ markets, prices, symbol, onSel
                     : r.activity?.popularity > 0
                       ? 'Popular market fallback'
                       : 'No venue activity metric'}
-                style={{...SP.td, textAlign: 'right', fontWeight: 800, fontFamily: 'monospace', color: r.activity?.volume > 0 ? '#7b5a22' : '#9b8a6a', fontSize: 10, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'clip'}}
+                style={{...SP.td, textAlign: 'right', fontWeight: 600, fontFamily: 'monospace', color: r.activity?.volume > 0 ? 'var(--terminal-warning)' : 'var(--terminal-text-muted)', fontSize: 11, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'clip'}}
               >
                 {r.activity?.label || '—'}
               </td>
-              <td style={{...SP.td, textAlign: 'right', fontWeight: 700, fontFamily: 'monospace', color: '#5C3A21', fontSize: 11, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'clip'}}>
+              <td style={{...SP.td, textAlign: 'right', fontWeight: 700, fontFamily: 'monospace', color: 'var(--terminal-text)', fontSize: 11, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'clip'}}>
                 {r.mark > 0 ? fmtPrice(r.mark) : '—'}
               </td>
-              <td style={{...SP.td, textAlign: 'right', fontWeight: 800, fontFamily: 'monospace', color: r.change >= 0 ? '#4CAF50' : '#E53935', fontSize: 11, whiteSpace: 'nowrap', overflow: 'hidden'}}>
+              <td style={{...SP.td, textAlign: 'right', fontWeight: 600, fontFamily: 'monospace', color: r.change >= 0 ? 'var(--terminal-long)' : 'var(--terminal-short)', fontSize: 11, whiteSpace: 'nowrap', overflow: 'hidden'}}>
                 {r.change >= 0 ? '+' : ''}{r.change.toFixed(2)}%
               </td>
             </tr>
@@ -2951,8 +2983,8 @@ const SymbolPicker = memo(function SymbolPicker({ markets, prices, symbol, onSel
 });
 
 const SP = {
-  th: { padding: '4px 8px', textAlign: 'left', fontSize: 10, fontWeight: 800, color: '#a3906a', textTransform: 'uppercase', borderBottom: '2px solid #d4c8b0' },
-  td: { padding: '6px 8px', borderBottom: '1px solid #e8dfc8' },
+  th: { padding: '4px 8px', textAlign: 'left', fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-muted)', textTransform: 'uppercase', borderBottom: '1px solid var(--terminal-border)' },
+  td: { padding: '6px 8px', borderBottom: '1px solid var(--terminal-surface-subtle)' },
   row: { transition: 'background 0.1s' },
 };
 
@@ -3004,10 +3036,10 @@ const OrdersList = memo(function OrdersList({ orders, cancelOrder, positions = [
   if (!groupedOrders.length) {
     return (
       <div style={S.empty}>
-        <div style={{opacity: 0.3, color: '#5C3A21'}}>
+        <div style={{opacity: 0.3, color: 'var(--terminal-text)'}}>
           <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
         </div>
-        <div style={{color: '#5C3A21', fontSize: 18, fontWeight: 900}}>No Orders</div>
+        <div style={{color: 'var(--terminal-text)', fontSize: 18, fontWeight: 700}}>No Orders</div>
       </div>
     );
   }
@@ -3027,20 +3059,20 @@ const OrdersList = memo(function OrdersList({ orders, cancelOrder, positions = [
         const isTP = type.includes('TAKE') || type.includes('TP');
         const isSL = type.includes('STOP') || type.includes('SL');
         const pending = isOrderPendingConfirmation(o);
-        const typeColor = isTP ? '#4CAF50' : isSL ? '#E53935' : '#a3906a';
+        const typeColor = isTP ? 'var(--terminal-long)' : isSL ? 'var(--terminal-short)' : 'var(--terminal-text-muted)';
         return (
           <div key={orderStableKey(o, i)} style={S.posCard}>
             <div style={S.row}>
-              <span style={{fontSize: 16, fontWeight: 900}}>{sym}</span>
-              <span style={{fontSize: 10, fontWeight: 800, color: typeColor, background: '#fdf8e7', padding: '2px 6px', borderRadius: 5, border: '1px solid #d4c8b0'}}>{type}</span>
+              <span style={{fontSize: 16, fontWeight: 700}}>{sym}</span>
+              <span style={{fontSize: 11, fontWeight: 600, color: typeColor, background: 'var(--terminal-surface)', padding: '2px 6px', borderRadius: 5, border: '1px solid var(--terminal-border)'}}>{type}</span>
               {pending ? <OrderPendingBadge /> : null}
-              <span style={{fontSize: 13, fontWeight: 900, color: isBid ? '#4CAF50' : '#E53935'}}>
+              <span style={{fontSize: 13, fontWeight: 700, color: isBid ? 'var(--terminal-long)' : 'var(--terminal-short)'}}>
                 {sideLabel}
               </span>
               {pending ? (
-                <span style={{fontSize: 10, fontWeight: 800, color: '#8b7655'}}>Pending</span>
+                <span style={{fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-muted)'}}>Pending</span>
               ) : isReadOnlyOrder(o) ? (
-                <span style={{fontSize: 10, fontWeight: 800, color: '#8b7655'}}>On position</span>
+                <span style={{fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-muted)'}}>On position</span>
               ) : (
                 <button style={S.cancelBtn} onClick={() => cancelOrder(sym, o.order_id ?? o.i, o.pair_index, o.trade_index)}>✕</button>
               )}
@@ -3064,7 +3096,7 @@ const OrdersList = memo(function OrdersList({ orders, cancelOrder, positions = [
 const PositionsList = memo(function PositionsList({
   positions, orders, prices, dataReady, leverageSettings, marginModes, loading, error,
   closePosition, setTpsl, clearError, isBasic, dex, setLocalAlert = () => {}, setSuccessMsg = () => {},
-  markets = [], account = null,
+  setShareTrade = () => {}, markets = [], account = null,
 }) {
   const [expandedPos, setExpandedPos] = useState(null);
   const [closePct, setClosePct] = useState(100);
@@ -3077,17 +3109,17 @@ const PositionsList = memo(function PositionsList({
   if (!positions.length) {
     return (
       <div style={S.empty}>
-        <div style={{opacity: 0.3, color: '#5C3A21'}}>
+        <div style={{opacity: 0.3, color: 'var(--terminal-text)'}}>
           <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect width="20" height="14" x="2" y="7" rx="2" ry="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>
         </div>
-        <div style={{color: '#5C3A21', fontSize: 18, fontWeight: 900}}>{dataReady ? 'No Positions' : 'Loading...'}</div>
+        <div style={{color: 'var(--terminal-text)', fontSize: 18, fontWeight: 700}}>{dataReady ? 'No Positions' : 'Loading...'}</div>
       </div>
     );
   }
   return (
     <div style={{display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'flex-start'}}>
       {positions.map((pos, i) => {
-        const { entryP, markP, amt, margin, setLev, posValueUsd, pnlColor, isDust, dustUsd, pnlFees, pnlDisplay } = getPositionMetrics(
+        const { entryP, markP, amt, margin, setLev, posValueUsd, pnlVal, pnlPct, pnlColor, isDust, dustUsd, pnlFees, pnlDisplay } = getPositionMetrics(
           pos,
           prices,
           leverageSettings,
@@ -3104,28 +3136,40 @@ const PositionsList = memo(function PositionsList({
         const changedTpPrice = tpSubmit.value;
         const changedSlPrice = slSubmit.value;
         const hasTpslChanges = tpSubmit.changed || slSubmit.changed;
+        const shareSnapshot = openPositionShareSnapshot({
+          dex,
+          pos,
+          leverage: setLev,
+          entryPrice: entryP,
+          markPrice: markP,
+          margin,
+          netPnlUsd: pnlVal,
+          netPnlPct: pnlPct,
+          pnlFees,
+          isDust,
+        });
 
         return (
           <div key={positionStableKey(pos) || i} style={S.posCard}>
             <div style={S.row}>
-              <span style={{fontSize: 16, fontWeight: 900}}>{pos.symbol}</span>
+              <span style={{fontSize: 16, fontWeight: 700}}>{pos.symbol}</span>
               <div style={{display: 'flex', alignItems: 'center', gap: 6}}>
                 {(() => {
                   const isIso = pos.is_isolated ?? marginModes?.[pos.symbol];
                   return (
-                    <span style={{fontSize: 10, fontWeight: 800, padding: '2px 6px', borderRadius: 5, borderWidth: 1, borderStyle: 'solid', borderColor: isIso ? '#FF9800' : '#4CAF50', color: isIso ? '#FF9800' : '#4CAF50', background: 'rgba(255,255,255,0.4)'}}>
+                    <span style={{fontSize: 11, fontWeight: 600, padding: '2px 6px', borderRadius: 5, borderWidth: 1, borderStyle: 'solid', borderColor: isIso ? 'var(--terminal-warning)' : 'var(--terminal-long)', color: isIso ? 'var(--terminal-warning)' : 'var(--terminal-long)', background: 'var(--terminal-chip-overlay)'}}>
                       {isIso ? 'ISO' : 'CROSS'}
                     </span>
                   );
                 })()}
-                <span style={{fontSize: 11, fontWeight: 800, color: isDust ? '#8a6d2f' : '#a3906a', background: '#fdf8e7', padding: '2px 6px', borderRadius: 5, border: '1px solid #d4c8b0'}}>{isDust ? 'DUST' : formatPositionLeverageBadge(setLev)}</span>
-                <span style={{fontSize: 13, fontWeight: 900, color: pos.side === 'bid' ? '#4CAF50' : '#E53935'}}>
+                <span style={{fontSize: 11, fontWeight: 600, color: isDust ? 'var(--terminal-warning)' : 'var(--terminal-text-muted)', background: 'var(--terminal-surface)', padding: '2px 6px', borderRadius: 5, border: '1px solid var(--terminal-border)'}}>{isDust ? 'DUST' : formatPositionLeverageBadge(setLev)}</span>
+                <span style={{fontSize: 13, fontWeight: 700, color: pos.side === 'bid' ? 'var(--terminal-long)' : 'var(--terminal-short)'}}>
                   {pos.side === 'bid' ? 'LONG' : 'SHORT'}
                 </span>
               </div>
             </div>
             <div style={S.row}>
-              <span style={S.detail}>{isDust ? 'Dust' : 'Size'}: {isDust ? `$${dustUsd.toFixed(2)}` : (pos.amount_display || formatPositionAmount(pos.amount))} {!isDust && <span style={{color: '#a3906a'}}>(${posValueUsd.toFixed(2)})</span>}</span>
+              <span style={S.detail}>{isDust ? 'Dust' : 'Size'}: {isDust ? `$${dustUsd.toFixed(2)}` : (pos.amount_display || formatPositionAmount(pos.amount))} {!isDust && <span style={{color: 'var(--terminal-text-muted)'}}>(${posValueUsd.toFixed(2)})</span>}</span>
               <span style={S.detail}>Entry: ${fmtPrice(parseFloat(pos.entry_price))}</span>
             </div>
             <div style={S.row}>
@@ -3161,14 +3205,28 @@ const PositionsList = memo(function PositionsList({
                   setExpandedPos(`${posKey}:tpsl`);
                 }}>TP/SL</button>
               )}
+              {!isBasic && (
+                <button
+                  type="button"
+                  style={{...S.tblShareBtn, width: 34, height: 'auto', minHeight: 32}}
+                  onClick={() => setShareTrade(shareSnapshot)}
+                  title="Share this trade"
+                  aria-label={`Share ${pos.symbol} position`}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <circle cx="18" cy="5" r="3" /><circle cx="6" cy="12" r="3" /><circle cx="18" cy="19" r="3" />
+                    <line x1="8.59" y1="13.51" x2="15.42" y2="17.49" /><line x1="15.41" y1="6.51" x2="8.59" y2="10.49" />
+                  </svg>
+                </button>
+              )}
             </div>
 
             {/* Close slider */}
             {expanded === 'close' && (
               <div style={S.expandPanel}>
                 <div style={S.row}>
-                  <span style={{fontSize: 13, fontWeight: 900, color: '#5C3A21'}}>{isDust ? 'Clean up Flash dust' : `Close ${closePct}%`}</span>
-                  <span style={{fontSize: 11, color: '#a3906a', fontWeight: 700}}>
+                  <span style={{fontSize: 13, fontWeight: 700, color: 'var(--terminal-text)'}}>{isDust ? 'Clean up Flash dust' : `Close ${closePct}%`}</span>
+                  <span style={{fontSize: 11, color: 'var(--terminal-text-muted)', fontWeight: 700}}>
                     {formatCloseAmountLabel(pos, closePct, posValueUsd, isDust, dustUsd)}
                   </span>
                 </div>
@@ -3236,7 +3294,18 @@ const PositionsList = memo(function PositionsList({
       })}
 
       {error && (
-        <div style={S.errorBar} onClick={clearError}>
+        <div
+          style={S.errorBar}
+          role="button"
+          tabIndex={0}
+          onClick={clearError}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault();
+              clearError();
+            }
+          }}
+        >
           <span style={S.errorText}>{humanizeTradeError(error, dex)}</span>
         </div>
       )}
@@ -3251,11 +3320,21 @@ const BottomPanel = memo(function BottomPanel({
   btmSymbols, sortOptionsForTab, hasActiveFilters,
   filteredPositions, filteredOrders, orders, positions,
   prices, walletAddr, dataReady, leverageSettings,
-  closePosition, cancelOrder, dex, loading, historyAccountAddr, markets,
+  closePosition, cancelOrder, setTpsl, dex, loading, historyAccountAddr, markets,
   account,
+  fetchTradeHistory, fetchFundingHistory,
+  activeSymbol,
+  setLocalAlert = () => {}, setSuccessMsg = () => {}, setShareTrade = () => {},
   pendingActions = [], beginPendingClose = () => null, removePendingAction = () => {},
 }) {
   const tpslOrders = Array.isArray(orders) ? orders : filteredOrders;
+  const [expandedPositionAction, setExpandedPositionAction] = useState(null);
+  const [closePct, setClosePct] = useState(100);
+  const [tpPrice, setTpPrice] = useState('');
+  const [slPrice, setSlPrice] = useState('');
+  const [tpslInputMode, setTpslInputMode] = useState('price');
+  const [tpslInitial, setTpslInitial] = useState({ key: null, tp: '', sl: '' });
+  const [tpslSubmittingPos, setTpslSubmittingPos] = useState(null);
   // Avantis/Flash do not expose funding payments in the trading UI flow.
   const tabs = [
     { id: 'positions', label: `Positions (${filteredPositions.length})` },
@@ -3267,14 +3346,23 @@ const BottomPanel = memo(function BottomPanel({
   ];
 
   return (
-    <div style={{...S.bottomPanel, height: bottomH}}>
-      <div style={{...S.bottomTabs, position: 'relative'}}>
+    <section className="futures-terminal-activity" style={{...S.bottomPanel, height: bottomH}} aria-label="Trading activity">
+      <div className="futures-terminal-activity__tabs" style={{...S.bottomTabs, position: 'relative'}} role="tablist" aria-label="Trading activity views">
         {tabs.map(t => (
-          <button key={t.id} style={bottomTab === t.id ? S.bottomTabActive : S.bottomTabBtn} onClick={() => { setBottomTab(t.id); setShowFilter(false); }}>
+          <button
+            key={t.id}
+            type="button"
+            role="tab"
+            aria-selected={bottomTab === t.id}
+            style={bottomTab === t.id ? S.bottomTabActive : S.bottomTabBtn}
+            onClick={() => { setBottomTab(t.id); setShowFilter(false); }}
+          >
             {t.label}
           </button>
         ))}
         <button
+          type="button"
+          aria-label="Filter trading activity"
           style={{...S.filterBtn, ...(hasActiveFilters ? S.filterBtnActive : {})}}
           onClick={() => setShowFilter(v => !v)}
           title="Filters"
@@ -3292,7 +3380,7 @@ const BottomPanel = memo(function BottomPanel({
           sortOptions={sortOptionsForTab}
         />
       </div>
-      <div style={S.bottomContent}>
+      <div className="futures-terminal-activity__content" style={S.bottomContent}>
         {bottomTab === 'positions' && (
           filteredPositions.length ? (
             <table style={S.table}>
@@ -3305,8 +3393,12 @@ const BottomPanel = memo(function BottomPanel({
                 const {
                   entryP: entryPrice,
                   markP: markPrice,
+                  amt,
+                  margin,
                   setLev: lev,
                   posValueUsd: tblPosValue,
+                  pnlVal,
+                  pnlPct,
                   pnlColor,
                   isDust,
                   dustUsd,
@@ -3315,56 +3407,256 @@ const BottomPanel = memo(function BottomPanel({
                 } = getPositionMetrics(p, prices, leverageSettings, { dex, markets, account });
                 const { tp, sl } = getPositionTpsl(p, tpslOrders);
                 const pendingClose = pendingActionForPosition(pendingActions, p, 'close');
+                const rowKey = positionStableKey(p) || `${p.symbol}-${p.side}-${i}`;
+                const expanded = expandedPositionAction?.startsWith(`${rowKey}:`)
+                  ? expandedPositionAction.slice(rowKey.length + 1)
+                  : null;
+                const tpslBusy = tpslSubmittingPos === rowKey;
+                const tpslMetrics = {
+                  entryP: entryPrice,
+                  markP: markPrice,
+                  amt,
+                  margin,
+                  setLev: lev,
+                  posValueUsd: tblPosValue,
+                };
+                const initialTpsl = tpslInitial.key === rowKey ? tpslInitial : { tp: '', sl: '' };
+                const tpSubmit = tpslSubmitValue({
+                  pos: p,
+                  metrics: tpslMetrics,
+                  leg: 'tp',
+                  mode: tpslInputMode,
+                  value: tpPrice,
+                  initialValue: initialTpsl.tp,
+                });
+                const slSubmit = tpslSubmitValue({
+                  pos: p,
+                  metrics: tpslMetrics,
+                  leg: 'sl',
+                  mode: tpslInputMode,
+                  value: slPrice,
+                  initialValue: initialTpsl.sl,
+                });
+                const hasTpslChanges = tpSubmit.changed || slSubmit.changed;
+                const shareSnapshot = openPositionShareSnapshot({
+                  dex,
+                  pos: p,
+                  leverage: lev,
+                  entryPrice,
+                  markPrice,
+                  margin,
+                  netPnlUsd: pnlVal,
+                  netPnlPct: pnlPct,
+                  pnlFees,
+                  isDust,
+                });
+                const handleClose = async () => {
+                  const fraction = isDust ? 1 : closePct / 100;
+                  const baseAmount = dex === 'avantis' ? parseFloat(p.margin) : parseFloat(p.amount);
+                  const amount = baseAmount * fraction;
+                  const pending = beginPendingClose(p, amount, fraction >= 1);
+                  const result = await closePosition(
+                    p.symbol,
+                    p.side,
+                    String(amount),
+                    p.pair_index,
+                    p.trade_index,
+                    fraction >= 1,
+                    dex === 'flash'
+                      ? { position: p, inputUsdUi: String((dustUsd || tblPosValue) * fraction) }
+                      : undefined,
+                  );
+                  if (result?.error && pending?.id) removePendingAction(pending.id);
+                };
                 return (
-                  <tr key={positionStableKey(p) || i} style={S.tr}>
+                  <Fragment key={rowKey}>
+                  <tr style={S.tr}>
                     <td style={S.td}>{p.symbol}</td>
-                    <td style={{...S.td, color: p.side === 'bid' ? '#4CAF50' : '#E53935', fontWeight: 900}}>{p.side === 'bid' ? 'LONG' : 'SHORT'}</td>
-                    <td style={S.td}>{isDust ? 'Dust' : p.amount} <span style={{color: '#a3906a', fontSize: 11}}>(${(isDust ? dustUsd : tblPosValue).toFixed(2)})</span></td>
+                    <td style={{...S.td, color: p.side === 'bid' ? 'var(--terminal-long)' : 'var(--terminal-short)', fontWeight: 750}}>{p.side === 'bid' ? 'LONG' : 'SHORT'}</td>
+                    <td style={S.td}>{isDust ? 'Dust' : p.amount} <span style={{color: 'var(--terminal-text-muted)', fontSize: 11}}>(${(isDust ? dustUsd : tblPosValue).toFixed(2)})</span></td>
                     <td style={S.td}>${fmtPrice(entryPrice)}</td>
                     <td style={S.td}>{markPrice ? `$${fmtPrice(markPrice)}` : '—'}</td>
-                    <td style={{...S.td, color: pnlColor, fontWeight: 900}} title={positionPnlFeeTitle(pnlFees)}>
+                    <td style={{...S.td, color: pnlColor, fontWeight: 700}} title={positionPnlFeeTitle(pnlFees)}>
                       <div>{pnlDisplay.primaryLabel} {formatSignedPnlUsd(pnlDisplay.primaryPnlUsd)}</div>
                       {pnlDisplay.secondaryNetPnlUsd != null && (
-                        <div style={{fontSize: 10, color: '#8a6d2f'}}>{pnlDisplay.secondaryLabel} {formatSignedPnlUsd(pnlDisplay.secondaryNetPnlUsd)}</div>
+                        <div style={{fontSize: 11, color: 'var(--terminal-warning)'}}>{pnlDisplay.secondaryLabel} {formatSignedPnlUsd(pnlDisplay.secondaryNetPnlUsd)}</div>
                       )}
                     </td>
-                    <td style={{...S.td, color: pnlColor, fontWeight: 900}} title={positionPnlFeeTitle(pnlFees)}>
+                    <td style={{...S.td, color: pnlColor, fontWeight: 700}} title={positionPnlFeeTitle(pnlFees)}>
                       <div>{isDust ? '-' : `${pnlDisplay.primaryPnlPct >= 0 ? '+' : ''}${pnlDisplay.primaryPnlPct.toFixed(2)}%`}</div>
                       {!isDust && pnlDisplay.secondaryNetPnlPct != null && (
-                        <div style={{fontSize: 10, color: '#8a6d2f'}}>{pnlDisplay.secondaryNetPnlPct >= 0 ? '+' : ''}{pnlDisplay.secondaryNetPnlPct.toFixed(2)}%</div>
+                        <div style={{fontSize: 11, color: 'var(--terminal-warning)'}}>{pnlDisplay.secondaryNetPnlPct >= 0 ? '+' : ''}{pnlDisplay.secondaryNetPnlPct.toFixed(2)}%</div>
                       )}
                     </td>
                     <td style={S.td}>
-                      <span style={{color: tp ? '#4CAF50' : '#a3906a', fontWeight: 800}}>TP {tp ? `$${fmtPrice(tp)}` : '-'}</span>
-                      <span style={{color: '#a3906a'}}> / </span>
-                      <span style={{color: sl ? '#E53935' : '#a3906a', fontWeight: 800}}>SL {sl ? `$${fmtPrice(sl)}` : '-'}</span>
+                      <span style={{color: tp ? 'var(--terminal-long)' : 'var(--terminal-text-faint)', fontWeight: 750}}>TP {tp ? `$${fmtPrice(tp)}` : '-'}</span>
+                      <span style={{color: 'var(--terminal-text-muted)'}}> / </span>
+                      <span style={{color: sl ? 'var(--terminal-short)' : 'var(--terminal-text-faint)', fontWeight: 750}}>SL {sl ? `$${fmtPrice(sl)}` : '-'}</span>
                     </td>
                     <td style={S.td}>{isDust ? 'Dust' : formatPositionLeverageBadge(lev)}</td>
-                    <td style={S.td}>
-                      <button
-                        style={{...S.tblCloseBtn, opacity: loading || pendingClose ? 0.5 : 1, cursor: loading || pendingClose ? 'not-allowed' : 'pointer'}}
-                        disabled={loading || !!pendingClose}
-                        onClick={async () => {
-                          const amount = dex === 'avantis' ? p.margin : p.amount;
-                          const pending = beginPendingClose(p, amount, true);
-                          const result = await closePosition(
-                            p.symbol,
-                            p.side,
-                            amount,
-                            p.pair_index,
-                            p.trade_index,
-                            true,
-                            dex === 'flash' ? { position: p, inputUsdUi: String(isDust ? dustUsd : tblPosValue) } : undefined,
-                          );
-                          if (result?.error && pending?.id) removePendingAction(pending.id);
-                        }}
-                      >{pendingClose ? <ClosingButtonLabel text="" /> : loading ? <ClosingButtonLabel text="" /> : 'Close'}</button>
+                    <td style={{...S.td, whiteSpace: 'nowrap'}}>
+                      <div style={S.tblActionGroup}>
+                        <button
+                          type="button"
+                          style={{...S.tblCloseBtn, opacity: loading || pendingClose ? 0.5 : 1, cursor: loading || pendingClose ? 'not-allowed' : 'pointer'}}
+                          disabled={loading || !!pendingClose}
+                          aria-expanded={expanded === 'close'}
+                          onClick={() => {
+                            setClosePct(100);
+                            setExpandedPositionAction(expanded === 'close' ? null : `${rowKey}:close`);
+                          }}
+                        >{pendingClose ? <ClosingButtonLabel text="" /> : 'Close'}</button>
+                        {!isDust && (
+                          <button
+                            type="button"
+                            style={S.tblRiskBtn}
+                            aria-expanded={expanded === 'tpsl'}
+                            onClick={() => {
+                              if (expanded === 'tpsl') {
+                                setExpandedPositionAction(null);
+                                setTpslInitial({ key: null, tp: '', sl: '' });
+                                setTpslInputMode('price');
+                                return;
+                              }
+                              const nextTp = formatTpslInputValue(tp);
+                              const nextSl = formatTpslInputValue(sl);
+                              setTpPrice(nextTp);
+                              setSlPrice(nextSl);
+                              setTpslInputMode('price');
+                              setTpslInitial({ key: rowKey, tp: nextTp, sl: nextSl });
+                              setExpandedPositionAction(`${rowKey}:tpsl`);
+                            }}
+                          >TP/SL</button>
+                        )}
+                        <button
+                          type="button"
+                          style={S.tblShareBtn}
+                          onClick={() => setShareTrade(shareSnapshot)}
+                          title="Share this trade"
+                          aria-label={`Share ${p.symbol} position`}
+                        >
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                            <circle cx="18" cy="5" r="3" /><circle cx="6" cy="12" r="3" /><circle cx="18" cy="19" r="3" />
+                            <line x1="8.59" y1="13.51" x2="15.42" y2="17.49" /><line x1="15.41" y1="6.51" x2="8.59" y2="10.49" />
+                          </svg>
+                        </button>
+                      </div>
                     </td>
                   </tr>
+                  {expanded === 'close' && (
+                    <tr style={S.tblExpandedRow}>
+                      <td colSpan={10} style={S.tblExpandedCell}>
+                        <div style={S.tblExpandedPanel}>
+                          <div style={S.row}>
+                            <span style={S.tblExpandedTitle}>{isDust ? 'Clean up Flash dust' : `Close ${closePct}%`}</span>
+                            <span style={S.tblExpandedAmount}>{formatCloseAmountLabel(p, closePct, tblPosValue, isDust, dustUsd)}</span>
+                          </div>
+                          {!isDust && (
+                            <>
+                              <input
+                                type="range"
+                                min="5"
+                                max="100"
+                                step="5"
+                                value={closePct}
+                                className="grad-slider"
+                                aria-label={`Close ${p.symbol} percentage`}
+                                onChange={(event) => setClosePct(Number(event.target.value))}
+                                style={{...S.slider, '--val': `${((closePct - 5) / 95) * 100}%`}}
+                              />
+                              <div style={S.sliderLabels}><span>5%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span></div>
+                            </>
+                          )}
+                          <button
+                            type="button"
+                            style={{...S.btnRed, width: '100%'}}
+                            onClick={handleClose}
+                            disabled={loading || !!pendingClose}
+                          >
+                            {pendingClose
+                              ? <ClosingButtonLabel text={pendingPhaseLabel(pendingClose.phase, 'Closing...')} />
+                              : loading ? <ClosingButtonLabel /> : (isDust ? 'Clean up dust' : `Close ${closePct}%`)}
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                  {!isDust && expanded === 'tpsl' && (
+                    <tr style={S.tblExpandedRow}>
+                      <td colSpan={10} style={S.tblExpandedCell}>
+                        <div style={S.tblExpandedPanel}>
+                          <TpslEditor
+                            mode={tpslInputMode}
+                            onModeChange={(nextMode) => {
+                              setTpslInputMode(nextMode);
+                              setTpPrice('');
+                              setSlPrice('');
+                            }}
+                            tpValue={tpPrice}
+                            slValue={slPrice}
+                            onTpChange={setTpPrice}
+                            onSlChange={setSlPrice}
+                            pos={p}
+                            metrics={tpslMetrics}
+                            ostiumTpMax={ostiumTpInputMax(dex, p)}
+                            busy={tpslBusy}
+                            busyLabel="Setting..."
+                            loading={loading}
+                            hasChanges={hasTpslChanges}
+                            onSubmit={async () => {
+                              if (!hasTpslChanges) {
+                                setLocalAlert('Change TP or SL before setting.');
+                                return;
+                              }
+                              if (tpSubmit.error || slSubmit.error) {
+                                setLocalAlert(tpSubmit.error || slSubmit.error);
+                                return;
+                              }
+                              if (!validateTpslBeforeSubmit({
+                                dex,
+                                pos: p,
+                                tpPrice: tpSubmit.value,
+                                slPrice: slSubmit.value,
+                                setLocalAlert,
+                              })) return;
+                              setTpslSubmittingPos(rowKey);
+                              try {
+                                const result = await setTpsl(
+                                  p.symbol,
+                                  positionCloseSide(p),
+                                  tpSubmit.value,
+                                  slSubmit.value,
+                                  p.pair_index,
+                                  p.trade_index,
+                                  p.amount,
+                                  p.market_addr,
+                                );
+                                if (result?.error) {
+                                  setLocalAlert(result.error);
+                                  return;
+                                }
+                                setTpPrice('');
+                                setSlPrice('');
+                                setTpslInputMode('price');
+                                setTpslInitial({ key: null, tp: '', sl: '' });
+                                setExpandedPositionAction(null);
+                                if (result?.info) setSuccessMsg(result.info);
+                              } catch (submitError) {
+                                setLocalAlert(submitError?.message || String(submitError));
+                              } finally {
+                                setTpslSubmittingPos((current) => current === rowKey ? null : current);
+                              }
+                            }}
+                          />
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                 );
               })}</tbody>
             </table>
-          ) : <div style={{padding: 20, textAlign: 'center', color: '#a3906a'}}>{!dataReady ? 'Loading...' : hasActiveFilters ? 'No positions match filters' : 'No open positions'}</div>
+          ) : <div style={{padding: 20, textAlign: 'center', color: 'var(--terminal-text-muted)'}}>{!dataReady ? 'Loading...' : hasActiveFilters ? 'No positions match filters' : 'No open positions'}</div>
         )}
         {bottomTab === 'orders' && (
           filteredOrders.length ? (
@@ -3383,13 +3675,13 @@ const BottomPanel = memo(function BottomPanel({
                 const sideLabel = orderSideLabel(o);
                 const isTP = type.includes('TAKE') || type.includes('TP');
                 const isSL = type.includes('STOP') || type.includes('SL');
-                const typeColor = isTP ? '#4CAF50' : isSL ? '#E53935' : '#a3906a';
+                const typeColor = isTP ? 'var(--terminal-long)' : isSL ? 'var(--terminal-short)' : 'var(--terminal-text-faint)';
                 const pending = isOrderPendingConfirmation(o);
                 const attachedRows = orderAttachedTpslRows(o);
                 return (
                   <tr key={orderStableKey(o, i)} style={S.tr}>
                     <td style={S.td}>{sym}</td>
-                    <td style={{...S.td, color: positionSide === 'bid' ? '#4CAF50' : '#E53935', fontWeight: 900}}>{sideLabel}</td>
+                    <td style={{...S.td, color: positionSide === 'bid' ? 'var(--terminal-long)' : 'var(--terminal-short)', fontWeight: 750}}>{sideLabel}</td>
                     <td style={{...S.td, color: typeColor, fontWeight: 700}}>
                       <span style={{display: 'inline-flex', alignItems: 'center', gap: 6}}>
                         {type}
@@ -3401,9 +3693,9 @@ const BottomPanel = memo(function BottomPanel({
                     <td style={S.td}>{amt}</td>
                     <td style={S.td}>
                       {pending ? (
-                        <span style={{color: '#8b7655', fontSize: 11, fontWeight: 800}}>Pending</span>
+                        <span style={{color: 'var(--terminal-text-muted)', fontSize: 11, fontWeight: 600}}>Pending</span>
                       ) : isReadOnlyOrder(o) ? (
-                        <span style={{color: '#8b7655', fontSize: 11, fontWeight: 800}}>On position</span>
+                        <span style={{color: 'var(--terminal-text-muted)', fontSize: 11, fontWeight: 600}}>On position</span>
                       ) : (
                         <button
                           style={S.tblCloseBtn}
@@ -3419,7 +3711,7 @@ const BottomPanel = memo(function BottomPanel({
                 );
               })}</tbody>
             </table>
-          ) : <div style={{padding: 20, textAlign: 'center', color: '#a3906a'}}>{!dataReady ? 'Loading...' : hasActiveFilters ? 'No orders match filters' : 'No open orders'}</div>
+          ) : <div style={{padding: 20, textAlign: 'center', color: 'var(--terminal-text-muted)'}}>{!dataReady ? 'Loading...' : hasActiveFilters ? 'No orders match filters' : 'No open orders'}</div>
         )}
         {bottomTab === 'history' && (
           <TradeHistory
@@ -3428,6 +3720,8 @@ const BottomPanel = memo(function BottomPanel({
             dex={dex}
             markets={markets}
             filters={btmFilters}
+            fetchTradeHistory={fetchTradeHistory}
+            activeSymbol={activeSymbol}
           />
         )}
         {bottomTab === 'funding' && dex !== 'avantis' && dex !== 'flash' && (
@@ -3437,14 +3731,16 @@ const BottomPanel = memo(function BottomPanel({
             dex={dex}
             markets={markets}
             filters={btmFilters}
+            fetchFundingHistory={fetchFundingHistory}
           />
         )}
       </div>
-    </div>
+    </section>
   );
 });
 
 function FuturesPanel() {
+  useFuturesTheme();
   const { setFuturesOpen } = useSend();
   const { select, wallets, connect } = useWallet();
   const { setVisible: openWalletModal } = useWalletModal();
@@ -3454,13 +3750,13 @@ function FuturesPanel() {
     ? 'arbitrum'
     : dex === 'hotstuff' || dex === 'ondo'
     ? 'mainnet'
-    : dex === 'grvt'
+    : dex === 'grvt' || dex === 'aster'
     ? 'baseConnect'
     : dex === 'gmtrade' || dex === 'flash'
     ? 'solana'
     : dex === 'katana'
     ? 'katana'
-    : dex === 'monad'
+    : dex === 'monad' || dex === 'leverup'
     ? 'monad'
     : dex === 'risex'
     ? 'rise'
@@ -3477,10 +3773,27 @@ function FuturesPanel() {
   // In Basic mode the user only opens market trades from the wizard, so
   // limit/conditional Orders are not relevant. Hide that tab + redirect if
   // it's somehow active (e.g. Pro→Basic switch while Orders was selected).
-  const visibleTabs = useMemo(
-    () => isBasic ? TABS.filter(t => t.id !== 'Orders') : TABS,
-    [isBasic]
-  );
+  const visibleTabs = useMemo(() => TABS.filter((tab) => {
+    if (isBasic && (tab.id === 'Orders' || tab.id === 'History' || tab.id === 'Funding')) return false;
+    if (tab.id === 'Funding' && (dex === 'avantis' || dex === 'flash')) return false;
+    return true;
+  }), [dex, isBasic]);
+  const handleTabsWheel = useCallback((event) => {
+    const tabs = event.currentTarget;
+    const maxScrollLeft = Math.max(0, tabs.scrollWidth - tabs.clientWidth);
+    if (maxScrollLeft <= 0) return;
+
+    // Trackpads already provide a horizontal delta. Only translate a
+    // predominantly vertical wheel gesture so native horizontal scrolling
+    // stays intact.
+    if (Math.abs(event.deltaX) > Math.abs(event.deltaY)) return;
+    const nextScrollLeft = Math.max(0, Math.min(maxScrollLeft, tabs.scrollLeft + event.deltaY));
+    if (nextScrollLeft === tabs.scrollLeft) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    tabs.scrollLeft = nextScrollLeft;
+  }, []);
   // Branch on DEX. All four hooks expose the same interface shape so the
   // rest of the panel doesn't have to know which chain it's on:
   //   pacifica → Solana-signed (Privy embedded or external)
@@ -3497,6 +3810,8 @@ function FuturesPanel() {
   const risexHook = useRisex();
   const nadoHook = useNado();
   const ondoHook = useOndo();
+  const leverupHook = useLeverup();
+  const asterHook = useAster();
   const hibachiHook = useHibachi();
   const hotstuffHook = useHotstuff();
   const grvtHook = useGrvt();
@@ -3530,6 +3845,10 @@ function FuturesPanel() {
     ? nadoHook
     : dex === 'ondo'
     ? ondoHook
+    : dex === 'leverup'
+    ? leverupHook
+    : dex === 'aster'
+    ? asterHook
     : dex === 'hibachi'
     ? hibachiHook
     : dex === 'hotstuff'
@@ -3571,6 +3890,7 @@ function FuturesPanel() {
     lighterNeedsIntegratorApproval, lighterNeedsReferral, lighterReferralChecking, lighterReferralStatus,
     lighterCredentials, detectAccount: detectLighterAccount,
     registerBuilderCode,
+    fetchTradeHistory, fetchFundingHistory,
     regionAccess, retryRegionAccess,
     refresh: refreshTrading,
   } = trading;
@@ -3585,6 +3905,9 @@ function FuturesPanel() {
   // Existing positions/orders keep the risk-management UI available, while
   // every new Nado open is still rejected by useNado until referral verifies.
   const hasNadoRiskToManage = dex === 'nado'
+    && (openedSortedPositions.length > 0 || displayOrders.length > 0);
+  const hasAsterRiskToManage = dex === 'aster'
+    && oneTapTrading?.approved === true
     && (openedSortedPositions.length > 0 || displayOrders.length > 0);
   const removePendingAction = useCallback((id) => {
     setPendingActions(current => current.filter(action => action.id !== id));
@@ -3657,7 +3980,7 @@ function FuturesPanel() {
     if (!privyEnabled) return null;
     return (
       <button
-        style={{...cartoonBtn(color, dark), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+        style={{...terminalButton(color, dark), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
         onClick={loginWithPrivyEmail}
       >
         <span>{privyAuthed ? 'CONTINUE WITH EMAIL' : 'SIGN IN WITH EMAIL'}</span>
@@ -3688,13 +4011,19 @@ function FuturesPanel() {
     }
   }, [manualTradingRefreshBusy, trading]);
 
-  const { isMobile } = useLayout();
+  const { isMobile: gameLayoutMobile } = useLayout();
+  const terminalMobile = useTerminalMobile();
+  const isMobile = gameLayoutMobile || terminalMobile;
   // Drag state — ref-based: zero React re-renders during drag, no listener leaks
   const posRef = useRef({ x: 0, y: 0 });
   const panelRef = useRef(null);
   const [isDragging, setIsDragging] = useState(false);
   const handlePointerDown = useCallback((e) => {
     if (e.target.closest('[data-nodrag]')) return;
+    // A maximized terminal is anchored to the viewport. Do not start a drag
+    // from any of its headers, including setup/auth states that reuse this
+    // handler before the main trading workspace is rendered.
+    if (e.currentTarget.closest('.futures-terminal-shell--fullscreen')) return;
     // On mobile, panel is fixed/centered — dragging would just throw layout off.
     if (isMobile) return;
     const clientX = e.touches ? e.touches[0].clientX : e.clientX;
@@ -3802,7 +4131,7 @@ function FuturesPanel() {
     // under a wallet they only ever used to peek at the orderbook.
     // The legitimate use case (connecting an Avantis wallet from the
     // FuturesPanel) is still allowed: dex === 'avantis'.
-    if (dex !== 'avantis' && dex !== 'gmx' && dex !== 'ostium' && dex !== 'monad' && dex !== 'hyperliquid' && dex !== 'risex' && dex !== 'nado' && dex !== 'ondo' && dex !== 'hibachi' && dex !== 'hotstuff' && dex !== 'grvt') {
+    if (dex !== 'avantis' && dex !== 'gmx' && dex !== 'ostium' && dex !== 'monad' && dex !== 'hyperliquid' && dex !== 'risex' && dex !== 'nado' && dex !== 'ondo' && dex !== 'leverup' && dex !== 'aster' && dex !== 'hibachi' && dex !== 'hotstuff' && dex !== 'grvt') {
       console.warn('[futures] Ignoring EVM connect: active DEX is', dex);
       return;
     }
@@ -4039,8 +4368,9 @@ function FuturesPanel() {
 
   // Resizable panel sizes (percentages / pixels)
   const [bottomH, setBottomH] = useState(160);
-  const [obWidth, setObWidth] = useState(160);
+  const [obWidth, setObWidth] = useState(240);
   const [chartPct, setChartPct] = useState(55);
+  const [mobileMarketView, setMobileMarketView] = useState('chart');
 
   const bottomHRef = useRef(bottomH);
   bottomHRef.current = bottomH;
@@ -4079,7 +4409,7 @@ function FuturesPanel() {
     const startW = obWidthRef.current;
     const onMove = (ev) => {
       const moveX = ev.touches ? ev.touches[0].clientX : ev.clientX;
-      setObWidth(Math.max(80, Math.min(350, startW + (moveX - startX))));
+      setObWidth(Math.max(160, Math.min(350, startW + (moveX - startX))));
     };
     const onUp = () => { 
       window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); 
@@ -4304,8 +4634,8 @@ function FuturesPanel() {
     ? `${formatRatePct(ostiumLongRolloverPct)}/${formatRatePct(ostiumShortRolloverPct)}`
     : fundingText;
   const fundingColor = hasOstiumRollover
-    ? '#5C3A21'
-    : (fr >= 0 ? '#4CAF50' : '#E53935');
+    ? 'var(--terminal-text)'
+    : (fr >= 0 ? 'var(--terminal-long)' : 'var(--terminal-short)');
 
   // Convert USDC amount to token amount, rounded to lot size
   const lotSize = useMemo(() => {
@@ -4641,7 +4971,7 @@ function FuturesPanel() {
       setLeverageApi(symbol, v);
       return;
     }
-    if (dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'grvt' || dex === 'flash') return;
+    if (dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'leverup' || dex === 'aster' || dex === 'grvt' || dex === 'flash') return;
     // Pacifica leverage updates should use the agent key. If the user has
     // not enabled it yet, keep this UI-only and flush after auto-bind on
     // trade submit.
@@ -4710,7 +5040,7 @@ function FuturesPanel() {
       const phoenixMarginPrice = dex === 'phoenix'
         ? (Number(currentPrice) > 0 ? Number(currentPrice) : tradePrice)
         : tradePrice;
-      const isCollateralDex = dex === 'avantis' || dex === 'bulk' || dex === 'decibel' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'gmtrade' || dex === 'flash';
+      const isCollateralDex = dex === 'avantis' || dex === 'bulk' || dex === 'decibel' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'leverup' || dex === 'aster' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'gmtrade' || dex === 'flash';
       const attachedTpsl = resolveOpenTpslForSide(side);
       if (!attachedTpsl?.ok) return;
       if (attachedTpsl?.hasTpsl && orderType === 'limit' && !OPEN_TPSL_NATIVE_LIMIT_ATTACH_DEXES.has(dex)) {
@@ -5151,12 +5481,12 @@ function FuturesPanel() {
   const compactSymbolBar = isMobile || !fullscreen;
   const renderSymbolBar = () => (
     <>
-      <div style={{...S.symbolBar, ...(compactSymbolBar ? S.symbolBarCompact : {}), ...(fullscreen ? {background: '#e8dfc8', borderBottom: '3px solid #d4c8b0'} : {})}}>
-        <button style={{...S.symbolBtn, ...(compactSymbolBar ? S.symbolBtnCompact : {}), padding: compactSymbolBar ? '6px 8px' : '6px 10px', gap: compactSymbolBar ? 5 : 6, whiteSpace: 'nowrap'}} onClick={() => setShowSymbolPicker(!showSymbolPicker)} data-nodrag>
+      <div className="futures-market-strip clash-scroll-hidden" style={{...S.symbolBar, ...(compactSymbolBar ? S.symbolBarCompact : {}), ...(fullscreen ? {background: 'var(--terminal-surface)', borderBottom: '1px solid var(--terminal-border)'} : {})}}>
+        <button type="button" aria-haspopup="listbox" aria-expanded={showSymbolPicker} aria-label={`Select market, currently ${symbol}`} style={{...S.symbolBtn, ...(compactSymbolBar ? S.symbolBtnCompact : {}), padding: compactSymbolBar ? '6px 8px' : '6px 10px', gap: compactSymbolBar ? 5 : 6, whiteSpace: 'nowrap'}} onClick={() => setShowSymbolPicker(!showSymbolPicker)} data-nodrag>
           <span style={{display: 'inline-flex', flexShrink: 0}}>
             <TokenIcon sym={baseSymbolForIcon(currentMarket, symbol)} size={20} />
           </span>
-          <span style={{fontSize: 15, fontWeight: 900, flexShrink: 0}}>{symbol}</span>
+          <span style={{fontSize: 15, fontWeight: 700, flexShrink: 0}}>{symbol}</span>
           {(() => {
             const loaded = elfaSignals && Object.keys(elfaSignals).length > 0;
             if (!loaded) return null;
@@ -5170,21 +5500,21 @@ function FuturesPanel() {
               </span>
             );
           })()}
-          {!isMobile && !fullscreen && currentPrice && <span style={{...S.symbolPriceCompact, fontSize: 13, color: '#5C3A21', fontWeight: 700}}>${fmtPrice(parseFloat(currentPrice))}</span>}
+          {!isMobile && !fullscreen && currentPrice && <span style={{...S.symbolPriceCompact, fontSize: 13, color: 'var(--terminal-text)', fontWeight: 700}}>${fmtPrice(parseFloat(currentPrice))}</span>}
           <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" style={{flexShrink: 0}}><polyline points="6 9 12 15 18 9"/></svg>
         </button>
         {fullscreen && !isMobile && (
           <>
             <div style={S.infoCell}><span style={S.infoCellLabel}>Mark</span><span style={S.infoCellValue}>{currentPrice ? fmtPrice(parseFloat(currentPrice)) : '—'}</span></div>
             <div style={S.infoCell}><span style={S.infoCellLabel}>Oracle</span><span style={S.infoCellValue}>{oracle > 0 ? fmtPrice(oracle) : '—'}</span></div>
-            <div style={S.infoCell}><span style={S.infoCellLabel}>24h</span><span style={{...S.infoCellValue, color: change24h >= 0 ? '#4CAF50' : '#E53935'}}>{change24h >= 0 ? '+' : ''}{change24h.toFixed(2)}%</span></div>
+            <div style={S.infoCell}><span style={S.infoCellLabel}>24h</span><span style={{...S.infoCellValue, color: change24h >= 0 ? 'var(--terminal-long)' : 'var(--terminal-short)'}}>{change24h >= 0 ? '+' : ''}{change24h.toFixed(2)}%</span></div>
             <div style={S.infoCell}><span style={S.infoCellLabel}>Volume</span><span style={S.infoCellValue}>{volume24hText}</span></div>
             <div style={{...S.infoCell, ...(hasOstiumSideOi ? S.infoCellWide : null)}} title={oiTitle}><span style={S.infoCellLabel}>{oiLabel}</span><span style={{...S.infoCellValue, ...(hasOstiumSideOi ? S.infoCellValueCompact : null)}}>{oiText}</span></div>
             <div style={{...S.infoCell, ...(dex === 'ostium' ? S.infoCellWide : null)}}><span style={S.infoCellLabel}>{fundingInfoLabel}</span><span style={{...S.infoCellValue, ...(dex === 'ostium' ? S.infoCellValueCompact : null), color: fundingColor}}>{fundingText}</span></div>
           </>
         )}
         <div style={{...S.symbolBarActions, ...(compactSymbolBar ? S.symbolBarActionsCompact : {}), gap: compactSymbolBar ? 4 : 8}}>
-          {dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'decibel' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'hibachi' || dex === 'katana' || dex === 'gmtrade' || dex === 'flash' || dex === 'lighter' || dex === 'bulk' ? (
+          {dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'decibel' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'leverup' || dex === 'aster' || dex === 'hibachi' || dex === 'katana' || dex === 'gmtrade' || dex === 'flash' || dex === 'lighter' || dex === 'bulk' ? (
             // Read-only badge for venues where the production margin mode is
             // not user-toggleable in our integration.
             <div
@@ -5217,7 +5547,7 @@ function FuturesPanel() {
                 ? 'Bulk cross margin and leverage are managed by your signed account settings'
                 : 'Avantis uses isolated margin per trade (no cross mode)'}
             >
-              <span style={{color: ((dex === 'decibel' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'hibachi' || dex === 'katana' || dex === 'lighter' || dex === 'bulk') ? '#4CAF50' : '#FF9800'), fontWeight: 900}}>
+              <span style={{color: ((dex === 'decibel' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'hibachi' || dex === 'katana' || dex === 'lighter' || dex === 'bulk') ? 'var(--terminal-text-control)' : 'var(--terminal-warning)'), fontWeight: 750}}>
                 {dex === 'gmtrade'
                   ? 'Isolated'
                   : (dex === 'decibel' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'hibachi' || dex === 'katana')
@@ -5246,7 +5576,7 @@ function FuturesPanel() {
                 ? 'Close this symbol position and cancel its open orders before changing margin mode'
                 : (marginModes[symbol] ? 'Isolated margin' : 'Cross margin')}
             >
-              <span style={{color: marginModes[symbol] ? '#FF9800' : '#4CAF50', fontWeight: 900}}>
+              <span style={{color: marginModes[symbol] ? 'var(--terminal-warning)' : 'var(--terminal-text-control)', fontWeight: 750}}>
                 {marginModes[symbol] ? 'Isolated' : 'Cross'}
               </span>
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" style={{flexShrink: 0}}>
@@ -5286,7 +5616,7 @@ function FuturesPanel() {
               <span style={S.balanceMetricLabel}>Free</span>
               <span style={{
                 ...S.balanceMetricValue,
-                color: balanceCheckPending ? '#8C7D5C' : '#2E7D32',
+                color: balanceCheckPending ? 'var(--terminal-text-muted)' : 'var(--terminal-long)',
               }}>
                 {balanceCheckPending ? '—' : formatAccountHeaderUsd(pacBalance, isMobile)}
               </span>
@@ -5296,7 +5626,7 @@ function FuturesPanel() {
       </div>
       {showSymbolPicker && (
         <div style={{position: 'fixed', inset: 0, zIndex: 400, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', paddingTop: 60}} onClick={() => setShowSymbolPicker(false)}>
-          <div style={{width: fullscreen ? 480 : '90%', maxWidth: 600, maxHeight: '80vh', background: '#fdf8e7', border: '5px solid #d4c8b0', borderRadius: 16, padding: 12, boxShadow: '0 15px 40px rgba(0,0,0,0.4)', display: 'flex', flexDirection: 'column'}} onClick={e => e.stopPropagation()}>
+          <div style={{width: fullscreen ? 480 : '90%', maxWidth: 600, maxHeight: '80vh', background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 16, padding: 12, boxShadow: '0 15px 40px rgba(0,0,0,0.4)', display: 'flex', flexDirection: 'column'}} onClick={e => e.stopPropagation()}>
             <SymbolPicker markets={markets} prices={prices} symbol={symbol} onSelect={(s) => { setSymbol(s); setShowSymbolPicker(false); }} fullscreen={fullscreen} signals={elfaSignals} />
           </div>
         </div>
@@ -5306,7 +5636,7 @@ function FuturesPanel() {
 
   const renderTradeControls = ({ compactMobile = false, parentScroll = false } = {}) => (
     <div
-      className={fullscreen && !parentScroll ? 'grad-scrollbar futures-trade-controls-scroll' : undefined}
+      className={`futures-order-ticket${fullscreen && !parentScroll ? ' grad-scrollbar futures-trade-controls-scroll' : ''}${compactMobile ? ' futures-order-ticket--compact' : ''}`}
       style={{
       display: 'flex',
       flexDirection: 'column',
@@ -5321,7 +5651,6 @@ function FuturesPanel() {
             overflowX: 'hidden',
             padding: '10px 10px max(18px, env(safe-area-inset-bottom))',
             boxSizing: 'border-box',
-            scrollbarWidth: 'thin',
             scrollbarGutter: 'stable',
             WebkitOverflowScrolling: 'touch',
             overscrollBehaviorY: 'contain',
@@ -5336,7 +5665,18 @@ function FuturesPanel() {
           account_equity > 0; gating on free margin would pop the deposit
           prompt for any user with a position. */}
       {!balanceCheckPending && pacAccountValue < 0.01 && (
-        <div style={S.noBalanceHint} onClick={() => setActiveTab('Account')}>
+        <div
+          style={S.noBalanceHint}
+          role="button"
+          tabIndex={0}
+          onClick={() => setActiveTab('Account')}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault();
+              setActiveTab('Account');
+            }
+          }}
+        >
           No balance — go to Account tab to deposit USDC
         </div>
       )}
@@ -5435,15 +5775,15 @@ function FuturesPanel() {
             alignItems: 'center',
             justifyContent: 'space-between',
             gap: 8,
-            background: oneTapTrading?.enabled ? 'rgba(22,163,74,0.10)' : 'rgba(92,58,33,0.06)',
-            border: `1px solid ${oneTapTrading?.enabled ? 'rgba(22,163,74,0.35)' : 'rgba(92,58,33,0.18)'}`,
+            background: oneTapTrading?.enabled ? 'rgba(22,163,74,0.10)' : 'rgba(17,24,39,0.06)',
+            border: `1px solid ${oneTapTrading?.enabled ? 'rgba(22,163,74,0.35)' : 'rgba(17,24,39,0.18)'}`,
             borderRadius: 8,
             padding: '6px 8px',
           }}>
             <span style={{
               fontSize: 11,
-              fontWeight: 900,
-              color: oneTapTrading?.enabled ? '#166534' : '#5C3A21',
+              fontWeight: 700,
+              color: oneTapTrading?.enabled ? 'var(--terminal-long-strong)' : 'var(--terminal-text)',
             }}>
               {dex === 'flash' ? 'Flash one tap' : 'One tap'}{oneTapTrading?.enabled && oneTapTrading?.approved === false ? ' pending' : ''}
             </span>
@@ -5457,9 +5797,9 @@ function FuturesPanel() {
                 flex: '0 0 auto',
                 minWidth: 56,
                 padding: '4px 10px',
-                background: oneTapTrading?.enabled ? '#16A34A' : '#fff6dc',
-                color: oneTapTrading?.enabled ? '#fff' : '#5C3A21',
-                border: `2px solid ${oneTapTrading?.enabled ? '#15803D' : '#b58b2a'}`,
+                background: oneTapTrading?.enabled ? 'var(--terminal-long)' : 'var(--terminal-warning-soft)',
+                color: oneTapTrading?.enabled ? 'var(--terminal-surface)' : 'var(--terminal-text)',
+                border: `1px solid ${oneTapTrading?.enabled ? 'var(--terminal-long)' : 'var(--terminal-warning-border)'}`,
                 opacity: (referralLinking || loading) ? 0.7 : 1,
               }}
             >
@@ -5507,10 +5847,10 @@ function FuturesPanel() {
 
         <div style={{display: 'flex', flexDirection: 'column', gap: 4}}>
           <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
-            <span style={{fontSize: 11, fontWeight: 700, color: '#a3906a'}}>
+            <span style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text-muted)'}}>
               {sizePct}% of ${sizePctMarginBase.toFixed(2)} {(dex === 'phoenix' || dex === 'pacifica' || dex === 'hotstuff' || dex === 'ostium') ? 'usable' : dex === 'flash' ? 'free' : 'balance'}
             </span>
-            <span style={{fontSize: 11, fontWeight: 700, color: '#5C3A21'}}>
+            <span style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text)'}}>
               buying power ${maxUsdc.toFixed(0)}
             </span>
           </div>
@@ -5541,13 +5881,13 @@ function FuturesPanel() {
               padding: '7px 9px',
             }}>
               <div style={{display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0}}>
-                <span style={{fontSize: 11, fontWeight: 900, color: enabled ? '#166534' : '#7C2D12'}}>
+                <span style={{fontSize: 11, fontWeight: 700, color: enabled ? 'var(--terminal-long-strong)' : 'var(--terminal-warning)'}}>
                   Pacifica one tap trading
                 </span>
                 <span style={{
-                  fontSize: 10,
+                  fontSize: 11,
                   fontWeight: 700,
-                  color: bindAgentError && !enabled ? '#B91C1C' : '#8a7252',
+                  color: bindAgentError && !enabled ? 'var(--terminal-short-strong)' : 'var(--terminal-text-muted)',
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap',
@@ -5564,11 +5904,11 @@ function FuturesPanel() {
                   flex: '0 0 auto',
                   minWidth: 72,
                   padding: '5px 10px',
-                  background: enabled ? '#16A34A' : '#fff6dc',
-                  color: enabled ? '#fff' : '#5C3A21',
-                  borderWidth: 2,
+                  background: enabled ? 'var(--terminal-long)' : 'var(--terminal-warning-soft)',
+                  color: enabled ? 'var(--terminal-surface)' : 'var(--terminal-text)',
+                  borderWidth: 1,
                   borderStyle: 'solid',
-                  borderColor: enabled ? '#15803D' : '#b58b2a',
+                  borderColor: enabled ? 'var(--terminal-long)' : 'var(--terminal-warning-border)',
                   opacity: (busy || loading) ? 0.7 : 1,
                 }}
               >
@@ -5608,13 +5948,13 @@ function FuturesPanel() {
               padding: '7px 9px',
             }}>
               <div style={{display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0}}>
-                <span style={{fontSize: 11, fontWeight: 900, color: enabled ? '#166534' : '#7C2D12'}}>
+                <span style={{fontSize: 11, fontWeight: 700, color: enabled ? 'var(--terminal-long-strong)' : 'var(--terminal-warning)'}}>
                   Ostium one tap trading
                 </span>
                 <span style={{
-                  fontSize: 10,
+                  fontSize: 11,
                   fontWeight: 700,
-                  color: '#8a7252',
+                  color: 'var(--terminal-text-muted)',
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap',
@@ -5631,11 +5971,11 @@ function FuturesPanel() {
                   flex: '0 0 auto',
                   minWidth: 72,
                   padding: '5px 10px',
-                  background: enabled ? '#16A34A' : '#fff6dc',
-                  color: enabled ? '#fff' : '#5C3A21',
-                  borderWidth: 2,
+                  background: enabled ? 'var(--terminal-long)' : 'var(--terminal-warning-soft)',
+                  color: enabled ? 'var(--terminal-surface)' : 'var(--terminal-text)',
+                  borderWidth: 1,
                   borderStyle: 'solid',
-                  borderColor: enabled ? '#15803D' : '#F97316',
+                  borderColor: enabled ? 'var(--terminal-long)' : 'var(--terminal-orange)',
                   opacity: busy ? 0.7 : 1,
                 }}
               >
@@ -5662,23 +6002,23 @@ function FuturesPanel() {
                 maxHeight: 'min(62vh, 360px)',
                 margin: '0 auto',
                 padding: 14,
-                borderWidth: 4,
+                borderWidth: 1,
                 borderRadius: 18,
                 gap: 8,
                 boxSizing: 'border-box',
                 overflowY: 'auto',
                 WebkitOverflowScrolling: 'touch',
                 overscrollBehavior: 'contain',
-                scrollbarWidth: 'none',
+                scrollbarGutter: 'stable',
               } : {}),
             }}>
               <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
-                <span style={{fontSize: isMobile ? 14 : 16, fontWeight: 900, color: '#5C3A21'}}>Adjust Leverage</span>
+                <span style={{fontSize: isMobile ? 14 : 16, fontWeight: 700, color: 'var(--terminal-text)'}}>Adjust Leverage</span>
                 <button style={S.levCloseBtn} onClick={() => setShowLeverage(false)}>
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                 </button>
               </div>
-              <div style={{fontSize: isMobile ? 34 : 48, fontWeight: 900, color: '#5C3A21', textAlign: 'center', padding: isMobile ? '2px 0' : '10px 0'}}>{leverage}x</div>
+              <div style={{fontSize: isMobile ? 34 : 48, fontWeight: 700, color: 'var(--terminal-text)', textAlign: 'center', padding: isMobile ? '2px 0' : '10px 0'}}>{leverage}x</div>
               <input type="range" min="1" max={maxLev} value={leverage} className="grad-slider" onChange={e => handleLeverageChange(e.target.value)} style={{...S.slider, '--val': `${maxLev > 1 ? ((leverage - 1) / (maxLev - 1)) * 100 : 0}%`}} />
               <div style={S.sliderLabels}><span>1x</span><span>{Math.floor(maxLev/4)}x</span><span>{Math.floor(maxLev/2)}x</span><span>{Math.floor(maxLev*3/4)}x</span><span>{maxLev}x</span></div>
               <div style={{display: 'grid', gridTemplateColumns: isMobile ? 'repeat(3, minmax(0, 1fr))' : 'repeat(4, minmax(0, 1fr))', gap: 6, marginTop: 6}}>
@@ -5701,7 +6041,7 @@ function FuturesPanel() {
                 })()}
               </div>
               {leverage > maxLev * 0.5 && (
-                <div style={{fontSize: 11, color: '#E53935', fontWeight: 700, textAlign: 'center', marginTop: 4}}>
+                <div style={{fontSize: 11, color: 'var(--terminal-short)', fontWeight: 700, textAlign: 'center', marginTop: 4}}>
                   High leverage increases liquidation risk
                 </div>
               )}
@@ -5715,16 +6055,16 @@ function FuturesPanel() {
           </div>
         )}
         {successMsg && (
-          <div style={S.successBar} onClick={() => setSuccessMsg(null)}>
+          <div style={S.successBar} role="button" tabIndex={0} onClick={() => setSuccessMsg(null)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSuccessMsg(null); } }}>
             <span>✓ {successMsg}</span>
           </div>
         )}
 
         <div style={S.row}>
-          <button style={{...cartoonBtn('#4CAF50','#2E7D32'), ...S.tradeBtn, opacity: tradeButtonBlocked ? 0.55 : 1}} onClick={() => handleTrade('bid')} disabled={tradeButtonBusy || tradeButtonBlocked}>
+          <button type="button" className="futures-order-ticket__submit futures-order-ticket__submit--long" style={{...S.tradeBtn, ...S.tradeBtnLong, opacity: tradeButtonBlocked ? 0.55 : 1}} onClick={() => handleTrade('bid')} disabled={tradeButtonBusy || tradeButtonBlocked}>
             <span style={S.tradeBtnText}>{tradeButtonBusy ? tradeButtonPendingLabel : 'LONG'}</span>
           </button>
-          <button style={{...cartoonBtn('#E53935','#B71C1C'), ...S.tradeBtn, opacity: tradeButtonBlocked ? 0.55 : 1}} onClick={() => handleTrade('ask')} disabled={tradeButtonBusy || tradeButtonBlocked}>
+          <button type="button" className="futures-order-ticket__submit futures-order-ticket__submit--short" style={{...S.tradeBtn, ...S.tradeBtnShort, opacity: tradeButtonBlocked ? 0.55 : 1}} onClick={() => handleTrade('ask')} disabled={tradeButtonBusy || tradeButtonBlocked}>
             <span style={S.tradeBtnText}>{tradeButtonBusy ? tradeButtonPendingLabel : 'SHORT'}</span>
           </button>
         </div>
@@ -5787,9 +6127,9 @@ function FuturesPanel() {
     return (
       <>
         <style>{animCSS}</style>
-        <div ref={panelRef} className={fullscreen ? 'futures-fullscreen' : ''} style={{
+        <div ref={panelRef} className={`futures-terminal-shell ${fullscreen ? 'futures-fullscreen futures-terminal-shell--fullscreen' : 'futures-terminal-shell--compact'}`} style={{
           ...(fullscreen ? S.containerFull : S.container),
-          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '4px solid #d4c8b0' } : {}),
+          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '1px solid var(--terminal-border)' } : {}),
           transform: (fullscreen || isMobile) ? undefined : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
         }}>
           <div style={S.header} onPointerDown={handlePointerDown}>
@@ -5798,7 +6138,7 @@ function FuturesPanel() {
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
             </button>
           </div>
-          <div style={{...S.body, alignItems: 'stretch', overflowY: 'auto', overflowX: 'hidden', padding: 0, background: '#fdf8e7'}}>
+          <div style={{...S.body, alignItems: 'stretch', overflowY: 'auto', overflowX: 'hidden', padding: 0, background: 'var(--terminal-surface)'}}>
             <TradingRegionGate
               venueName="Ondo Perps"
               logo={DEX_CONFIG.ondo.logo}
@@ -5813,45 +6153,44 @@ function FuturesPanel() {
   // ==================== SOLANA WALLET RESTORE ====================
   if (checkingSolanaWallet) {
     const venueLabel = dex === 'phoenix' ? 'Phoenix' : 'Pacifica';
-    const venueColor = dex === 'phoenix' ? '#F97316' : '#9945FF';
-    const venueShadow = dex === 'phoenix' ? '#C2410C' : '#7B36CC';
+    const venueColor = dex === 'phoenix' ? 'var(--terminal-orange)' : '#9945FF';
     return (
       <>
         <style>{animCSS}</style>
-        <div ref={panelRef} className={fullscreen ? "futures-fullscreen" : ""} style={{
+        <div ref={panelRef} className={`futures-terminal-shell ${fullscreen ? 'futures-fullscreen futures-terminal-shell--fullscreen' : 'futures-terminal-shell--compact'}`} style={{
           ...(fullscreen ? S.containerFull : S.container),
-          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '4px solid #d4c8b0' } : {}),
+          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '1px solid var(--terminal-border)' } : {}),
           transform: (fullscreen || isMobile) ? undefined : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
           transition: isDragging ? 'none' : 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)'
         }}>
-          <div style={S.header} onPointerDown={handlePointerDown}>
+          <header className="futures-terminal-header" style={S.header} onPointerDown={handlePointerDown}>
             <span style={S.headerTitle}>Futures Trading</span>
-            <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+            <button type="button" data-nodrag onClick={handleClose} style={S.closeBtn} aria-label="Close futures trading">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
             </button>
-          </div>
+          </header>
           <div style={{...S.body, alignItems: 'center', justifyContent: 'center', gap: 18, textAlign: 'center'}}>
             <div style={{
               width: 76,
               height: 76,
               borderRadius: '50%',
-              borderWidth: 6,
+              borderWidth: 1,
               borderStyle: 'solid',
-              borderColor: '#E7D9BF',
+              borderColor: 'var(--terminal-warning-border)',
               borderTopColor: venueColor,
-              boxShadow: `0 5px 0 ${venueShadow}, 0 8px 16px rgba(0,0,0,0.22)`,
+              boxShadow: '0 0 0 4px rgba(242,101,34,0.12)',
               animation: 'wallet-spin 0.85s linear infinite',
             }} />
             <div style={{
-              color: '#5C3A21',
+              color: 'var(--terminal-text)',
               fontSize: 18,
-              fontWeight: 900,
+              fontWeight: 700,
               letterSpacing: '0.5px',
             }}>
               Loading {venueLabel}
             </div>
             <div style={{
-              color: '#8a7252',
+              color: 'var(--terminal-text-muted)',
               fontSize: 12,
               fontWeight: 700,
               maxWidth: 280,
@@ -5867,38 +6206,38 @@ function FuturesPanel() {
 
   // ==================== WRONG SELF-CUSTODY WALLET ====================
   const shouldBlockWalletMismatch = dex === 'flash';
-  if (shouldBlockWalletMismatch && (dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'gmtrade' || dex === 'flash') && walletMismatch) {
+  if (shouldBlockWalletMismatch && (dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'leverup' || dex === 'aster' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'gmtrade' || dex === 'flash') && walletMismatch) {
     return (
       <>
         <style>{animCSS}</style>
-        <div ref={panelRef} className={fullscreen ? "futures-fullscreen" : ""} style={{
+        <div ref={panelRef} className={`futures-terminal-shell ${fullscreen ? 'futures-fullscreen futures-terminal-shell--fullscreen' : 'futures-terminal-shell--compact'}`} style={{
           ...(fullscreen ? S.containerFull : S.container),
-          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '4px solid #d4c8b0' } : {}),
+          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '1px solid var(--terminal-border)' } : {}),
           transform: (fullscreen || isMobile) ? undefined : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
           transition: isDragging ? 'none' : 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)'
         }}>
           <div style={S.header} onPointerDown={handlePointerDown}>
             <span style={S.headerTitle}>Futures Trading</span>
-            <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+            <button type="button" data-nodrag onClick={handleClose} style={S.closeBtn} aria-label="Close futures trading">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
             </button>
           </div>
           <div style={{...S.body, alignItems: 'center', justifyContent: 'center', gap: 16, textAlign: 'center'}}>
             <div style={{
               width: 58, height: 58, borderRadius: '50%',
-              background: '#F59E0B', color: '#fff',
+              background: 'var(--terminal-warning)', color: 'var(--terminal-on-accent)',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontSize: 36, fontWeight: 900,
-              boxShadow: '0 5px 0 #B45309, 0 8px 16px rgba(0,0,0,0.25)',
+              fontSize: 36, fontWeight: 700,
+              boxShadow: '0 8px 24px rgba(17,24,39,0.10)',
             }}>!</div>
-            <div style={{color: '#5C3A21', fontSize: 18, fontWeight: 900}}>
-              Wrong {dex === 'gmx' || dex === 'hyperliquid' || dex === 'ostium' ? 'Arbitrum' : dex === 'hotstuff' || dex === 'ondo' ? 'Ethereum' : dex === 'grvt' ? 'GRVT Exchange' : dex === 'katana' ? 'Katana' : dex === 'monad' ? 'Monad' : dex === 'risex' ? 'RISE' : dex === 'nado' ? 'Ink' : dex === 'hibachi' ? 'EVM' : (dex === 'phoenix' || dex === 'gmtrade' || dex === 'flash') ? 'Solana' : 'Base'} wallet
+            <div style={{color: 'var(--terminal-text)', fontSize: 18, fontWeight: 700}}>
+              Wrong {dex === 'gmx' || dex === 'hyperliquid' || dex === 'ostium' ? 'Arbitrum' : dex === 'hotstuff' || dex === 'ondo' ? 'Ethereum' : dex === 'aster' ? 'Aster/EVM' : dex === 'grvt' ? 'GRVT Exchange' : dex === 'katana' ? 'Katana' : dex === 'monad' || dex === 'leverup' ? 'Monad' : dex === 'risex' ? 'RISE' : dex === 'nado' ? 'Ink' : dex === 'hibachi' ? 'EVM' : (dex === 'phoenix' || dex === 'gmtrade' || dex === 'flash') ? 'Solana' : 'Base'} wallet
             </div>
-            <div style={{color: '#8a7252', fontSize: 12, fontWeight: 700, maxWidth: 340, lineHeight: 1.45}}>
+            <div style={{color: 'var(--terminal-text-muted)', fontSize: 12, fontWeight: 700, maxWidth: 340, lineHeight: 1.45}}>
               This game account is linked to {registeredEvmWallet?.slice(0, 6)}...{registeredEvmWallet?.slice(-4)}, but the connected wallet is {walletAddr?.slice(0, 6)}...{walletAddr?.slice(-4)}.
             </div>
             <button
-              style={{...cartoonBtn('#0EA5E9', '#0284C7'), padding: '14px 28px'}}
+              style={{...terminalButton('#0EA5E9', 'var(--terminal-info)'), padding: '14px 28px'}}
               onClick={() => (dex === 'phoenix' || dex === 'gmtrade' || dex === 'flash') ? openWalletModal(true) : setEvmModalOpen(true)}
             >
               SWITCH WALLET
@@ -5920,44 +6259,36 @@ function FuturesPanel() {
     return (
       <>
         <style>{animCSS}</style>
-        <div ref={panelRef} className={fullscreen ? "futures-fullscreen" : ""} style={{
+        <div ref={panelRef} className={`futures-terminal-shell ${fullscreen ? 'futures-fullscreen futures-terminal-shell--fullscreen' : 'futures-terminal-shell--compact'}`} style={{
           ...(fullscreen ? S.containerFull : S.container),
-          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '4px solid #d4c8b0' } : {}),
+          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '1px solid var(--terminal-border)' } : {}),
           transform: (fullscreen || isMobile) ? undefined : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
           transition: isDragging ? 'none' : 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)'
         }}>
           <div style={S.header} onPointerDown={handlePointerDown}>
             <span style={S.headerTitle}>Futures Trading</span>
-            <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+            <button type="button" data-nodrag onClick={handleClose} style={S.closeBtn} aria-label="Close futures trading">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
             </button>
           </div>
           <div style={{...S.body, alignItems: 'center', justifyContent: 'center', gap: 20}}>
             {dex === 'bulk' ? (
               <>
-                <div style={{
-                  width: 96, height: 96, borderRadius: 16,
-                  background: '#1B1B18', border: '4px solid #383832',
-                  boxShadow: '0 5px 0 #11110F, 0 8px 16px rgba(0,0,0,0.25)',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
-                }}>
-                  <img src={DEX_CONFIG.bulk.logo} alt="Bulk" style={{width: 82, height: 82, objectFit: 'contain'}} />
-                </div>
-                <div style={{color: '#5C3A21', fontSize: 18, fontWeight: 900, textAlign: 'center'}}>
+                <div style={{color: 'var(--terminal-text)', fontSize: 18, fontWeight: 700, textAlign: 'center'}}>
                   Connect your Solana wallet
                 </div>
-                <div style={{color: '#8a7252', fontSize: 12, fontWeight: 600, textAlign: 'center', maxWidth: 310, lineHeight: 1.45}}>
+                <div style={{color: 'var(--terminal-text-muted)', fontSize: 12, fontWeight: 600, textAlign: 'center', maxWidth: 310, lineHeight: 1.45}}>
                   Bulk is in closed beta. Connect the wallet you will fund on Bulk; Clash signs every action locally and never receives your private key.
                 </div>
                 {renderPrivyEmailButton('#383832', '#11110F')}
                 <button
-                  style={{...cartoonBtn('#383832', '#11110F'), padding: '14px 32px'}}
+                  style={{...terminalButton('#383832', '#11110F'), padding: '14px 32px'}}
                   onClick={openSolanaConnect}
                 >
                   CONNECT SOLANA WALLET
                 </button>
                 <button
-                  style={{...cartoonBtn('#EAB308', '#A16207'), padding: '11px 24px'}}
+                  style={{...terminalButton('var(--terminal-warning)', 'var(--terminal-warning-border)'), padding: '11px 24px'}}
                   onClick={() => window.open('https://early.bulk.trade/deposit?ref=clashofperps', '_blank', 'noopener,noreferrer')}
                 >
                   JOIN BULK WITH CLASH REFERRAL
@@ -5966,35 +6297,27 @@ function FuturesPanel() {
             ) : dex === 'gmtrade' ? (
               <>
                 <div style={{
-                  width: 80, height: 80, borderRadius: '50%',
-                  background: 'linear-gradient(180deg, #14B8A6 0%, #0F766E 100%)',
-                  border: '4px solid #0D9488',
-                  boxShadow: '0 5px 0 #0F766E, 0 8px 16px rgba(0,0,0,0.25)',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  fontSize: 24, fontWeight: 900, color: '#fff',
-                }}>GMT</div>
-                <div style={{
-                  color: '#5C3A21', fontSize: 18, fontWeight: 900,
+                  color: 'var(--terminal-text)', fontSize: 18, fontWeight: 700,
                   textAlign: 'center', letterSpacing: '0.5px',
                 }}>Connect your Solana wallet</div>
                 <div style={{
-                  color: '#8a7252', fontSize: 12, fontWeight: 600,
+                  color: 'var(--terminal-text-muted)', fontSize: 12, fontWeight: 600,
                   textAlign: 'center', maxWidth: 300, lineHeight: 1.4,
                 }}>
                   GMTrade runs on Solana. Connect the same wallet you use for this game account.
                   Please accept our referral code in Clash to receive a GMTrade fee discount.
                   Clash confirms the code on-chain before trading rewards unlock.
                 </div>
-                {renderPrivyEmailButton('#14B8A6', '#0F766E')}
+                {renderPrivyEmailButton('#14B8A6', 'var(--terminal-long)')}
                 <button
-                  style={{...cartoonBtn('#14B8A6', '#0F766E'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                  style={{...terminalButton('#14B8A6', 'var(--terminal-long)'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
                   onClick={() => openWalletModal(true)}
                 >
                   <span>CONNECT SOLANA WALLET</span>
                 </button>
                 <div style={{
                   display: 'flex', alignItems: 'center', gap: 4,
-                  color: '#0F766E', fontSize: 11, fontWeight: 800,
+                  color: 'var(--terminal-long)', fontSize: 11, fontWeight: 600,
                   letterSpacing: '0.5px', marginTop: 4,
                 }}>
                   <span>GMTRADE - SOLANA</span>
@@ -6003,34 +6326,25 @@ function FuturesPanel() {
             ) : dex === 'katana' ? (
               <>
                 <div style={{
-                  width: 80, height: 80, borderRadius: '50%',
-                  background: 'linear-gradient(180deg, #F04438 0%, #991B1B 100%)',
-                  border: '4px solid #B42318',
-                  boxShadow: '0 5px 0 #991B1B, 0 8px 16px rgba(0,0,0,0.25)',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  fontSize: 28, fontWeight: 900, color: '#fff',
-                  filter: 'drop-shadow(0 2px 0 rgba(0,0,0,0.35))',
-                }}>KTN</div>
-                <div style={{
-                  color: '#5C3A21', fontSize: 18, fontWeight: 900,
+                  color: 'var(--terminal-text)', fontSize: 18, fontWeight: 700,
                   textAlign: 'center', letterSpacing: '0.5px',
                 }}>Connect your Katana wallet</div>
                 <div style={{
-                  color: '#8a7252', fontSize: 12, fontWeight: 600,
+                  color: 'var(--terminal-text-muted)', fontSize: 12, fontWeight: 600,
                   textAlign: 'center', maxWidth: 300, lineHeight: 1.4,
                 }}>
                   Katana Perps runs on Katana. Connect the same EVM wallet you use for this game account.
                 </div>
-                {renderPrivyEmailButton('#F04438', '#991B1B')}
+                {renderPrivyEmailButton('#F04438', 'var(--terminal-short-strong)')}
                 <button
-                  style={{...cartoonBtn('#F04438', '#991B1B'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                  style={{...terminalButton('#F04438', 'var(--terminal-short-strong)'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
                   onClick={() => setEvmModalOpen(true)}
                 >
                   <span>CONNECT KATANA WALLET</span>
                 </button>
                 <div style={{
                   display: 'flex', alignItems: 'center', gap: 4,
-                  color: '#991B1B', fontSize: 11, fontWeight: 800,
+                  color: 'var(--terminal-short-strong)', fontSize: 11, fontWeight: 600,
                   letterSpacing: '0.5px', marginTop: 4,
                 }}>
                   <span>KATANA PERPS - KATANA</span>
@@ -6039,34 +6353,25 @@ function FuturesPanel() {
             ) : dex === 'hibachi' ? (
               <>
                 <div style={{
-                  width: 80, height: 80, borderRadius: '50%',
-                  background: 'linear-gradient(180deg, #EF4444 0%, #991B1B 100%)',
-                  border: '4px solid #DC2626',
-                  boxShadow: '0 5px 0 #991B1B, 0 8px 16px rgba(0,0,0,0.25)',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  fontSize: 32, fontWeight: 900, color: '#fff',
-                  filter: 'drop-shadow(0 2px 0 rgba(0,0,0,0.35))',
-                }}>HB</div>
-                <div style={{
-                  color: '#5C3A21', fontSize: 18, fontWeight: 900,
+                  color: 'var(--terminal-text)', fontSize: 18, fontWeight: 700,
                   textAlign: 'center', letterSpacing: '0.5px',
                 }}>Connect your EVM wallet</div>
                 <div style={{
-                  color: '#8a7252', fontSize: 12, fontWeight: 600,
+                  color: 'var(--terminal-text-muted)', fontSize: 12, fontWeight: 600,
                   textAlign: 'center', maxWidth: 300, lineHeight: 1.4,
                 }}>
                   Hibachi uses an EVM wallet identity. Connect the same EVM wallet you use for this game account; API keys are requested later only for placing Hibachi orders.
                 </div>
-                {renderPrivyEmailButton('#EF4444', '#991B1B')}
+                {renderPrivyEmailButton('var(--terminal-short)', 'var(--terminal-short-strong)')}
                 <button
-                  style={{...cartoonBtn('#EF4444', '#991B1B'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                  style={{...terminalButton('var(--terminal-short)', 'var(--terminal-short-strong)'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
                   onClick={() => setEvmModalOpen(true)}
                 >
                   <span>CONNECT EVM WALLET</span>
                 </button>
                 <div style={{
                   display: 'flex', alignItems: 'center', gap: 4,
-                  color: '#991B1B', fontSize: 11, fontWeight: 800,
+                  color: 'var(--terminal-short-strong)', fontSize: 11, fontWeight: 600,
                   letterSpacing: '0.5px', marginTop: 4,
                 }}>
                   <span>HIBACHI - EVM</span>
@@ -6078,27 +6383,18 @@ function FuturesPanel() {
               // AptosWalletContext directly instead of EvmWalletModal.
               <>
                 <div style={{
-                  width: 80, height: 80, borderRadius: '50%',
-                  background: 'linear-gradient(180deg, #FFE600 0%, #B8860B 100%)',
-                  border: '4px solid #DAA520',
-                  boxShadow: '0 5px 0 #B8860B, 0 8px 16px rgba(0,0,0,0.25)',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  fontSize: 44,
-                  filter: 'drop-shadow(0 2px 0 rgba(0,0,0,0.35))',
-                }}>🔊</div>
-                <div style={{
-                  color: '#5C3A21', fontSize: 18, fontWeight: 900,
+                  color: 'var(--terminal-text)', fontSize: 18, fontWeight: 700,
                   textAlign: 'center', letterSpacing: '0.5px',
                 }}>Connect your Aptos wallet</div>
                 <div style={{
-                  color: '#8a7252', fontSize: 12, fontWeight: 600,
+                  color: 'var(--terminal-text-muted)', fontSize: 12, fontWeight: 600,
                   textAlign: 'center', maxWidth: 280, lineHeight: 1.4,
                 }}>
                   Decibel is non-custodial — Petra signs each trade.<br />
                   USDC for collateral, APT for gas.
                 </div>
                 <button
-                  style={{...cartoonBtn('#DAA520', '#B8860B'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                  style={{...terminalButton('var(--terminal-warning)', 'var(--terminal-warning)'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
                   onClick={() => aptosWallet.connect()}
                   disabled={aptosWallet.isConnecting}
                 >
@@ -6106,14 +6402,14 @@ function FuturesPanel() {
                 </button>
                 <div style={{
                   display: 'flex', alignItems: 'center', gap: 4,
-                  color: '#B8860B', fontSize: 11, fontWeight: 800,
+                  color: 'var(--terminal-warning)', fontSize: 11, fontWeight: 600,
                   letterSpacing: '0.5px', marginTop: 4,
                 }}>
                   <span>DECIBEL · APTOS MAINNET</span>
                 </div>
                 {aptosWallet.error && (
                   <div style={{
-                    color: '#B71C1C', fontSize: 11, fontWeight: 700,
+                    color: 'var(--terminal-short-strong)', fontSize: 11, fontWeight: 700,
                     textAlign: 'center', maxWidth: 280,
                   }}>{aptosWallet.error}</div>
                 )}
@@ -6126,28 +6422,19 @@ function FuturesPanel() {
               // old fake "provisioning custodial wallet" spinner.
               <>
                 <div style={{
-                  width: 80, height: 80, borderRadius: '50%',
-                  background: 'linear-gradient(180deg, #0EA5E9 0%, #0369A1 100%)',
-                  border: '4px solid #0284C7',
-                  boxShadow: '0 5px 0 #0284C7, 0 8px 16px rgba(0,0,0,0.25)',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  fontSize: 44,
-                  filter: 'drop-shadow(0 2px 0 rgba(0,0,0,0.35))',
-                }}>⚡</div>
-                <div style={{
-                  color: '#5C3A21', fontSize: 18, fontWeight: 900,
+                  color: 'var(--terminal-text)', fontSize: 18, fontWeight: 700,
                   textAlign: 'center', letterSpacing: '0.5px',
                 }}>Connect your Base wallet</div>
                 <div style={{
-                  color: '#8a7252', fontSize: 12, fontWeight: 600,
+                  color: 'var(--terminal-text-muted)', fontSize: 12, fontWeight: 600,
                   textAlign: 'center', maxWidth: 280, lineHeight: 1.4,
                 }}>
                   Avantis is non-custodial — your own wallet signs each trade.<br />
                   Nothing held on our side.
                 </div>
-                {renderPrivyEmailButton('#0EA5E9', '#0284C7')}
+                {renderPrivyEmailButton('#0EA5E9', 'var(--terminal-info)')}
                 <button
-                  style={{...cartoonBtn(privyEnabled ? '#8A7252' : '#0EA5E9', privyEnabled ? '#6B573E' : '#0284C7'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                  style={{...terminalButton(privyEnabled ? 'var(--terminal-text-muted)' : '#0EA5E9', privyEnabled ? 'var(--terminal-text-secondary)' : 'var(--terminal-info)'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
                   onClick={() => setEvmModalOpen(true)}
                 >
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -6159,7 +6446,7 @@ function FuturesPanel() {
                 </button>
                 <div style={{
                   display: 'flex', alignItems: 'center', gap: 4,
-                  color: '#0369A1', fontSize: 11, fontWeight: 800,
+                  color: '#0369A1', fontSize: 11, fontWeight: 600,
                   letterSpacing: '0.5px', marginTop: 4,
                 }}>
                   <span>AVANTIS · BASE MAINNET</span>
@@ -6168,27 +6455,18 @@ function FuturesPanel() {
             ) : dex === 'ostium' ? (
               <>
                 <div style={{
-                  width: 80, height: 80, borderRadius: '50%',
-                  background: 'linear-gradient(180deg, #111827 0%, #374151 100%)',
-                  border: '4px solid #F97316',
-                  boxShadow: '0 5px 0 #9A3412, 0 8px 16px rgba(0,0,0,0.25)',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  fontSize: 30, fontWeight: 900, color: '#fff',
-                  filter: 'drop-shadow(0 2px 0 rgba(0,0,0,0.35))',
-                }}>OST</div>
-                <div style={{
-                  color: '#5C3A21', fontSize: 18, fontWeight: 900,
+                  color: 'var(--terminal-text)', fontSize: 18, fontWeight: 700,
                   textAlign: 'center', letterSpacing: '0.5px',
                 }}>Connect your Arbitrum wallet</div>
                 <div style={{
-                  color: '#8a7252', fontSize: 12, fontWeight: 600,
+                  color: 'var(--terminal-text-muted)', fontSize: 12, fontWeight: 600,
                   textAlign: 'center', maxWidth: 280, lineHeight: 1.4,
                 }}>
                   Ostium is non-custodial on Arbitrum. Clash can use a browser-only delegate for one tap trading; USDC stays in your wallet.
                 </div>
-                {renderPrivyEmailButton('#111827', '#374151')}
+                {renderPrivyEmailButton('var(--terminal-text)', 'var(--terminal-text-control)')}
                 <button
-                  style={{...cartoonBtn(privyEnabled ? '#8A7252' : '#111827', privyEnabled ? '#6B573E' : '#374151'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                  style={{...terminalButton(privyEnabled ? 'var(--terminal-text-muted)' : 'var(--terminal-text)', privyEnabled ? 'var(--terminal-text-secondary)' : 'var(--terminal-text-control)'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
                   onClick={() => setEvmModalOpen(true)}
                 >
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -6200,7 +6478,7 @@ function FuturesPanel() {
                 </button>
                 <div style={{
                   display: 'flex', alignItems: 'center', gap: 4,
-                  color: '#9A3412', fontSize: 11, fontWeight: 800,
+                  color: 'var(--terminal-warning)', fontSize: 11, fontWeight: 600,
                   letterSpacing: '0.5px', marginTop: 4,
                 }}>
                   <span>OSTIUM · ARBITRUM MAINNET</span>
@@ -6212,20 +6490,11 @@ function FuturesPanel() {
               // explicit "Phase 1: read-only" hint until writes ship.
               <>
                 <div style={{
-                  width: 80, height: 80, borderRadius: '50%',
-                  background: 'linear-gradient(180deg, #4F46E5 0%, #3730A3 100%)',
-                  border: '4px solid #4338CA',
-                  boxShadow: '0 5px 0 #3730A3, 0 8px 16px rgba(0,0,0,0.25)',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  fontSize: 44,
-                  filter: 'drop-shadow(0 2px 0 rgba(0,0,0,0.35))',
-                }}>🟣</div>
-                <div style={{
-                  color: '#5C3A21', fontSize: 18, fontWeight: 900,
+                  color: 'var(--terminal-text)', fontSize: 18, fontWeight: 700,
                   textAlign: 'center', letterSpacing: '0.5px',
                 }}>Connect your Arbitrum wallet</div>
                 <div style={{
-                  color: '#8a7252', fontSize: 12, fontWeight: 600,
+                  color: 'var(--terminal-text-muted)', fontSize: 12, fontWeight: 600,
                   textAlign: 'center', maxWidth: 280, lineHeight: 1.4,
                 }}>
                   GMX is non-custodial — your own wallet signs each trade.<br />
@@ -6233,7 +6502,7 @@ function FuturesPanel() {
                 </div>
                 {renderPrivyEmailButton('#4F46E5', '#3730A3')}
                 <button
-                  style={{...cartoonBtn(privyEnabled ? '#8A7252' : '#4F46E5', privyEnabled ? '#6B573E' : '#3730A3'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                  style={{...terminalButton(privyEnabled ? 'var(--terminal-text-muted)' : '#4F46E5', privyEnabled ? 'var(--terminal-text-secondary)' : '#3730A3'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
                   onClick={() => setEvmModalOpen(true)}
                 >
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -6245,7 +6514,7 @@ function FuturesPanel() {
                 </button>
                 <div style={{
                   display: 'flex', alignItems: 'center', gap: 4,
-                  color: '#3730A3', fontSize: 11, fontWeight: 800,
+                  color: '#3730A3', fontSize: 11, fontWeight: 600,
                   letterSpacing: '0.5px', marginTop: 4,
                 }}>
                   <span>GMX · ARBITRUM MAINNET</span>
@@ -6254,27 +6523,18 @@ function FuturesPanel() {
             ) : dex === 'monad' ? (
               <>
                 <div style={{
-                  width: 80, height: 80, borderRadius: '50%',
-                  background: 'linear-gradient(180deg, #6F5CFF 0%, #4530E0 100%)',
-                  border: '4px solid #5547E5',
-                  boxShadow: '0 5px 0 #4530E0, 0 8px 16px rgba(0,0,0,0.25)',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  fontSize: 44,
-                  filter: 'drop-shadow(0 2px 0 rgba(0,0,0,0.35))',
-                }}>↯</div>
-                <div style={{
-                  color: '#5C3A21', fontSize: 18, fontWeight: 900,
+                  color: 'var(--terminal-text)', fontSize: 18, fontWeight: 700,
                   textAlign: 'center', letterSpacing: '0.5px',
                 }}>Connect your Monad wallet</div>
                 <div style={{
-                  color: '#8a7252', fontSize: 12, fontWeight: 600,
+                  color: 'var(--terminal-text-muted)', fontSize: 12, fontWeight: 600,
                   textAlign: 'center', maxWidth: 280, lineHeight: 1.4,
                 }}>
                   Perpl trades on Monad. You need MON for gas and AUSD for collateral.
                 </div>
                 {renderPrivyEmailButton('#6F5CFF', '#4530E0')}
                 <button
-                  style={{...cartoonBtn(privyEnabled ? '#8A7252' : '#6F5CFF', privyEnabled ? '#6B573E' : '#4530E0'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                  style={{...terminalButton(privyEnabled ? 'var(--terminal-text-muted)' : '#6F5CFF', privyEnabled ? 'var(--terminal-text-secondary)' : '#4530E0'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
                   onClick={() => setEvmModalOpen(true)}
                 >
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -6286,7 +6546,7 @@ function FuturesPanel() {
                 </button>
                 <div style={{
                   display: 'flex', alignItems: 'center', gap: 4,
-                  color: '#4530E0', fontSize: 11, fontWeight: 800,
+                  color: '#4530E0', fontSize: 11, fontWeight: 600,
                   letterSpacing: '0.5px', marginTop: 4,
                 }}>
                   <span>PERPL · MONAD MAINNET</span>
@@ -6295,28 +6555,18 @@ function FuturesPanel() {
             ) : dex === 'hyperliquid' ? (
               <>
                 <div style={{
-                  width: 80, height: 80, borderRadius: '50%',
-                  background: 'linear-gradient(180deg, #22C55E 0%, #047857 100%)',
-                  border: '4px solid #059669',
-                  boxShadow: '0 5px 0 #047857, 0 8px 16px rgba(0,0,0,0.25)',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  filter: 'drop-shadow(0 2px 0 rgba(0,0,0,0.35))',
-                }}>
-                  <img src={DEX_CONFIG.hyperliquid.logo} alt="" style={{width: 48, height: 48, objectFit: 'contain'}} />
-                </div>
-                <div style={{
-                  color: '#5C3A21', fontSize: 18, fontWeight: 900,
+                  color: 'var(--terminal-text)', fontSize: 18, fontWeight: 700,
                   textAlign: 'center', letterSpacing: '0.5px',
                 }}>Connect your EVM wallet</div>
                 <div style={{
-                  color: '#8a7252', fontSize: 12, fontWeight: 600,
+                  color: 'var(--terminal-text-muted)', fontSize: 12, fontWeight: 600,
                   textAlign: 'center', maxWidth: 280, lineHeight: 1.4,
                 }}>
                   Hyperliquid trades are signed by your wallet. Deposit USDC to Hyperliquid first, then trade here.
                 </div>
-                {renderPrivyEmailButton('#22C55E', '#047857')}
+                {renderPrivyEmailButton('var(--terminal-long)', 'var(--terminal-long)')}
                 <button
-                  style={{...cartoonBtn(privyEnabled ? '#8A7252' : '#22C55E', privyEnabled ? '#6B573E' : '#047857'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                  style={{...terminalButton(privyEnabled ? 'var(--terminal-text-muted)' : 'var(--terminal-long)', privyEnabled ? 'var(--terminal-text-secondary)' : 'var(--terminal-long)'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
                   onClick={() => setEvmModalOpen(true)}
                 >
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -6328,7 +6578,7 @@ function FuturesPanel() {
                 </button>
                 <div style={{
                   display: 'flex', alignItems: 'center', gap: 4,
-                  color: '#047857', fontSize: 11, fontWeight: 800,
+                  color: 'var(--terminal-long)', fontSize: 11, fontWeight: 600,
                   letterSpacing: '0.5px', marginTop: 4,
                 }}>
                   <span>HYPERLIQUID</span>
@@ -6337,28 +6587,18 @@ function FuturesPanel() {
             ) : dex === 'risex' ? (
               <>
                 <div style={{
-                  width: 80, height: 80, borderRadius: '50%',
-                  background: 'linear-gradient(180deg, #04DF83 0%, #009C5D 100%)',
-                  border: '4px solid #00B86B',
-                  boxShadow: '0 5px 0 #007A49, 0 8px 16px rgba(0,0,0,0.25)',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  filter: 'drop-shadow(0 2px 0 rgba(0,0,0,0.35))',
-                }}>
-                  <img src={DEX_CONFIG.risex.logo} alt="" style={{width: 48, height: 48, objectFit: 'contain'}} />
-                </div>
-                <div style={{
-                  color: '#5C3A21', fontSize: 18, fontWeight: 900,
+                  color: 'var(--terminal-text)', fontSize: 18, fontWeight: 700,
                   textAlign: 'center', letterSpacing: '0.5px',
                 }}>Connect your RISE wallet</div>
                 <div style={{
-                  color: '#8a7252', fontSize: 12, fontWeight: 600,
+                  color: 'var(--terminal-text-muted)', fontSize: 12, fontWeight: 600,
                   textAlign: 'center', maxWidth: 280, lineHeight: 1.4,
                 }}>
                   RISEx trades are signed by your EVM wallet on RISE. Add the RISE network if your wallet asks.
                 </div>
                 {renderPrivyEmailButton('#04DF83', '#009C5D')}
                 <button
-                  style={{...cartoonBtn(privyEnabled ? '#8A7252' : '#04DF83', privyEnabled ? '#6B573E' : '#009C5D'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                  style={{...terminalButton(privyEnabled ? 'var(--terminal-text-muted)' : '#04DF83', privyEnabled ? 'var(--terminal-text-secondary)' : '#009C5D'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
                   onClick={() => setEvmModalOpen(true)}
                 >
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -6370,35 +6610,98 @@ function FuturesPanel() {
                 </button>
                 <div style={{
                   display: 'flex', alignItems: 'center', gap: 4,
-                  color: '#007A49', fontSize: 11, fontWeight: 800,
+                  color: '#007A49', fontSize: 11, fontWeight: 600,
                   letterSpacing: '0.5px', marginTop: 4,
                 }}>
                   <span>RISEX - RISE MAINNET</span>
                 </div>
               </>
+            ) : dex === 'lighter' ? (
+              <>
+                <div style={{color: 'var(--terminal-text)', fontSize: 18, fontWeight: 700, textAlign: 'center'}}>
+                  Connect your EVM wallet
+                </div>
+                <div style={{color: 'var(--terminal-text-muted)', fontSize: 12, fontWeight: 600, textAlign: 'center', maxWidth: 310, lineHeight: 1.45}}>
+                  Connect the EVM wallet that owns your Lighter account. Clash will verify your account index, API key and integrator approval before trading.
+                </div>
+                {renderPrivyEmailButton('var(--terminal-orange)', 'var(--terminal-brand-strong)')}
+                <button
+                  style={{...terminalButton(privyEnabled ? 'var(--terminal-text-faint)' : 'var(--terminal-orange)', privyEnabled ? 'var(--terminal-text-muted)' : 'var(--terminal-brand-strong)'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                  onClick={() => setEvmModalOpen(true)}
+                >
+                  <span>CONNECT EVM WALLET</span>
+                </button>
+                <div style={{color: 'var(--terminal-text-muted)', fontSize: 11, fontWeight: 600, letterSpacing: '0.5px'}}>
+                  LIGHTER · EVM ACCOUNT
+                </div>
+              </>
+            ) : dex === 'leverup' ? (
+              <>
+                <div style={{
+                  color: 'var(--terminal-text)', fontSize: 18, fontWeight: 700,
+                  textAlign: 'center', letterSpacing: '0.5px',
+                }}>Connect your Monad wallet</div>
+                <div style={{
+                  color: 'var(--terminal-text-muted)', fontSize: 12, fontWeight: 600,
+                  textAlign: 'center', maxWidth: 300, lineHeight: 1.4,
+                }}>
+                  LeverUp V2 uses a one-time onchain agent authorization, then signs gasless trade intents locally in this browser.
+                </div>
+                {renderPrivyEmailButton('#9BC400', '#506600')}
+                <button
+                  style={{...terminalButton(privyEnabled ? 'var(--terminal-text-muted)' : '#506600', privyEnabled ? 'var(--terminal-text-secondary)' : '#405200'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                  onClick={() => setEvmModalOpen(true)}
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                    <rect x="2" y="6" width="20" height="14" rx="3"/><path d="M16 14h.01"/><path d="M2 10h20"/>
+                  </svg>
+                  <span>CONNECT MONAD WALLET</span>
+                </button>
+                <div style={{display: 'flex', alignItems: 'center', gap: 4, color: '#506600', fontSize: 11, fontWeight: 600, letterSpacing: '0.5px', marginTop: 4}}>
+                  <span>LEVERUP V2 - MONAD MAINNET</span>
+                </div>
+              </>
+            ) : dex === 'aster' ? (
+              <>
+                <div style={{
+                  color: 'var(--terminal-text)', fontSize: 18, fontWeight: 700,
+                  textAlign: 'center', letterSpacing: '0.5px',
+                }}>Connect your Aster wallet</div>
+                <div style={{
+                  color: 'var(--terminal-text-muted)', fontSize: 12, fontWeight: 600,
+                  textAlign: 'center', maxWidth: 310, lineHeight: 1.4,
+                }}>
+                  Connect the EVM wallet that owns your Aster account. Setup creates a browser-only V3 Agent with trading permission and no withdrawal permission.
+                </div>
+                {renderPrivyEmailButton('#D98A43', '#9A4F1D')}
+                <button
+                  style={{...terminalButton(privyEnabled ? 'var(--terminal-text-muted)' : '#D98A43', privyEnabled ? 'var(--terminal-text-secondary)' : '#9A4F1D'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                  onClick={() => setEvmModalOpen(true)}
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                    <rect x="2" y="6" width="20" height="14" rx="3"/><path d="M16 14h.01"/><path d="M2 10h20"/>
+                  </svg>
+                  <span>CONNECT EVM WALLET</span>
+                </button>
+                <div style={{display: 'flex', alignItems: 'center', gap: 4, color: '#9A4F1D', fontSize: 11, fontWeight: 600, letterSpacing: '0.5px', marginTop: 4}}>
+                  <span>ASTER FUTURES API V3</span>
+                </div>
+              </>
             ) : dex === 'ondo' ? (
               <>
                 <div style={{
-                  width: 80, height: 80, borderRadius: 18,
-                  background: '#000', border: '4px solid #333',
-                  boxShadow: '0 5px 0 #111, 0 8px 16px rgba(0,0,0,0.25)',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
-                }}>
-                  <img src={DEX_CONFIG.ondo.logo} alt="Ondo Perps" style={{width: 72, height: 72, objectFit: 'contain'}} />
-                </div>
-                <div style={{
-                  color: '#5C3A21', fontSize: 18, fontWeight: 900,
+                  color: 'var(--terminal-text)', fontSize: 18, fontWeight: 700,
                   textAlign: 'center', letterSpacing: '0.5px',
                 }}>Connect your Ethereum wallet</div>
                 <div style={{
-                  color: '#8a7252', fontSize: 12, fontWeight: 600,
+                  color: 'var(--terminal-text-muted)', fontSize: 12, fontWeight: 600,
                   textAlign: 'center', maxWidth: 300, lineHeight: 1.4,
                 }}>
                   Ondo Perps uses Ethereum SIWE for account access. After one signature, market and limit orders are one tap through your short-lived Ondo session.
                 </div>
-                {renderPrivyEmailButton('#111111', '#000000')}
+                {renderPrivyEmailButton('var(--terminal-text)', '#000000')}
                 <button
-                  style={{...cartoonBtn(privyEnabled ? '#8A7252' : '#111111', privyEnabled ? '#6B573E' : '#000000'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                  style={{...terminalButton(privyEnabled ? 'var(--terminal-text-muted)' : 'var(--terminal-text)', privyEnabled ? 'var(--terminal-text-secondary)' : '#000000'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
                   onClick={() => setEvmModalOpen(true)}
                 >
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
@@ -6406,35 +6709,25 @@ function FuturesPanel() {
                   </svg>
                   <span>CONNECT ETHEREUM WALLET</span>
                 </button>
-                <div style={{display: 'flex', alignItems: 'center', gap: 4, color: '#111', fontSize: 11, fontWeight: 800, letterSpacing: '0.5px', marginTop: 4}}>
+                <div style={{display: 'flex', alignItems: 'center', gap: 4, color: 'var(--terminal-text)', fontSize: 11, fontWeight: 600, letterSpacing: '0.5px', marginTop: 4}}>
                   <span>ONDO PERPS - ETHEREUM LOGIN</span>
                 </div>
               </>
             ) : dex === 'nado' ? (
               <>
                 <div style={{
-                  width: 80, height: 80, borderRadius: '50%',
-                  background: 'linear-gradient(180deg, #00B8D9 0%, #075985 100%)',
-                  border: '4px solid #0891B2',
-                  boxShadow: '0 5px 0 #075985, 0 8px 16px rgba(0,0,0,0.25)',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  filter: 'drop-shadow(0 2px 0 rgba(0,0,0,0.35))',
-                }}>
-                  <img src={DEX_CONFIG.nado.logo} alt="" style={{width: 48, height: 48, objectFit: 'contain'}} />
-                </div>
-                <div style={{
-                  color: '#5C3A21', fontSize: 18, fontWeight: 900,
+                  color: 'var(--terminal-text)', fontSize: 18, fontWeight: 700,
                   textAlign: 'center', letterSpacing: '0.5px',
                 }}>Connect your Ink wallet</div>
                 <div style={{
-                  color: '#8a7252', fontSize: 12, fontWeight: 600,
+                  color: 'var(--terminal-text-muted)', fontSize: 12, fontWeight: 600,
                   textAlign: 'center', maxWidth: 280, lineHeight: 1.4,
                 }}>
                   Nado trades are signed by your EVM wallet on Ink. You need USDt0 collateral and a little ETH on Ink for gas.
                 </div>
-                {renderPrivyEmailButton('#00B8D9', '#075985')}
+                {renderPrivyEmailButton('#00B8D9', 'var(--terminal-info)')}
                 <button
-                  style={{...cartoonBtn(privyEnabled ? '#8A7252' : '#00B8D9', privyEnabled ? '#6B573E' : '#075985'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                  style={{...terminalButton(privyEnabled ? 'var(--terminal-text-muted)' : '#00B8D9', privyEnabled ? 'var(--terminal-text-secondary)' : 'var(--terminal-info)'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
                   onClick={() => setEvmModalOpen(true)}
                 >
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -6446,7 +6739,7 @@ function FuturesPanel() {
                 </button>
                 <div style={{
                   display: 'flex', alignItems: 'center', gap: 4,
-                  color: '#075985', fontSize: 11, fontWeight: 800,
+                  color: 'var(--terminal-info)', fontSize: 11, fontWeight: 600,
                   letterSpacing: '0.5px', marginTop: 4,
                 }}>
                   <span>NADO - INK MAINNET</span>
@@ -6455,28 +6748,18 @@ function FuturesPanel() {
             ) : dex === 'hotstuff' ? (
               <>
                 <div style={{
-                  width: 80, height: 80, borderRadius: '50%',
-                  background: 'linear-gradient(180deg, #FF5A5F 0%, #B91C1C 100%)',
-                  border: '4px solid #DC2626',
-                  boxShadow: '0 5px 0 #7F1D1D, 0 8px 16px rgba(0,0,0,0.25)',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  filter: 'drop-shadow(0 2px 0 rgba(0,0,0,0.35))',
-                }}>
-                  <img src={DEX_CONFIG.hotstuff.logo} alt="" style={{width: 48, height: 48, objectFit: 'contain'}} />
-                </div>
-                <div style={{
-                  color: '#5C3A21', fontSize: 18, fontWeight: 900,
+                  color: 'var(--terminal-text)', fontSize: 18, fontWeight: 700,
                   textAlign: 'center', letterSpacing: '0.5px',
                 }}>Connect your Hotstuff wallet</div>
                 <div style={{
-                  color: '#8a7252', fontSize: 12, fontWeight: 600,
+                  color: 'var(--terminal-text-muted)', fontSize: 12, fontWeight: 600,
                   textAlign: 'center', maxWidth: 280, lineHeight: 1.4,
                 }}>
                   New Hotstuff users should join with the Clash referral first, then connect the same Ethereum wallet here. Clash also applies the referral best-effort during setup.
                 </div>
                 {referralUrl && (
                   <button
-                    style={{...cartoonBtn('#111827', '#030712'), padding: '12px 24px', display: 'flex', alignItems: 'center', gap: 10}}
+                    style={{...terminalButton('var(--terminal-text)', 'var(--terminal-text)'), padding: '12px 24px', display: 'flex', alignItems: 'center', gap: 10}}
                     onClick={() => {
                       if (typeof openReferralJoin === 'function') openReferralJoin();
                       else window.open(referralUrl, '_blank', 'noopener,noreferrer');
@@ -6489,9 +6772,9 @@ function FuturesPanel() {
                     <span>JOIN WITH CLASH REFERRAL</span>
                   </button>
                 )}
-                {renderPrivyEmailButton('#FF5A5F', '#B91C1C')}
+                {renderPrivyEmailButton('#FF5A5F', 'var(--terminal-short-strong)')}
                 <button
-                  style={{...cartoonBtn(privyEnabled ? '#8A7252' : '#FF5A5F', privyEnabled ? '#6B573E' : '#B91C1C'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                  style={{...terminalButton(privyEnabled ? 'var(--terminal-text-muted)' : '#FF5A5F', privyEnabled ? 'var(--terminal-text-secondary)' : 'var(--terminal-short-strong)'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
                   onClick={() => setEvmModalOpen(true)}
                 >
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -6503,7 +6786,7 @@ function FuturesPanel() {
                 </button>
                 <div style={{
                   display: 'flex', alignItems: 'center', gap: 4,
-                  color: '#B91C1C', fontSize: 11, fontWeight: 800,
+                  color: 'var(--terminal-short-strong)', fontSize: 11, fontWeight: 600,
                   letterSpacing: '0.5px', marginTop: 4,
                 }}>
                   <span>HOTSTUFF - ETHEREUM MAINNET{referralCode ? ` - REF ${referralCode}` : ''}</span>
@@ -6512,28 +6795,18 @@ function FuturesPanel() {
             ) : dex === 'grvt' ? (
               <>
                 <div style={{
-                  width: 80, height: 80, borderRadius: '50%',
-                  background: 'linear-gradient(180deg, #374151 0%, #111827 100%)',
-                  border: '4px solid #111827',
-                  boxShadow: '0 5px 0 #030712, 0 8px 16px rgba(0,0,0,0.25)',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  filter: 'drop-shadow(0 2px 0 rgba(0,0,0,0.35))',
-                }}>
-                  <img src={DEX_CONFIG.grvt.logo} alt="" style={{width: 48, height: 48, objectFit: 'contain'}} />
-                </div>
-                <div style={{
-                  color: '#5C3A21', fontSize: 18, fontWeight: 900,
+                  color: 'var(--terminal-text)', fontSize: 18, fontWeight: 700,
                   textAlign: 'center', letterSpacing: '0.5px',
                 }}>Connect your GRVT wallet</div>
                 <div style={{
-                  color: '#8a7252', fontSize: 12, fontWeight: 600,
+                  color: 'var(--terminal-text-muted)', fontSize: 12, fontWeight: 600,
                   textAlign: 'center', maxWidth: 280, lineHeight: 1.4,
                 }}>
                   GRVT trades are signed on GRVT Exchange chain. Save your GRVT session credentials so Clash can read builder-code fills and credit gold.
                 </div>
-                {renderPrivyEmailButton('#374151', '#111827')}
+                {renderPrivyEmailButton('var(--terminal-text-control)', 'var(--terminal-text)')}
                 <button
-                  style={{...cartoonBtn(privyEnabled ? '#8A7252' : '#374151', privyEnabled ? '#6B573E' : '#111827'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                  style={{...terminalButton(privyEnabled ? 'var(--terminal-text-muted)' : 'var(--terminal-text-control)', privyEnabled ? 'var(--terminal-text-secondary)' : 'var(--terminal-text)'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
                   onClick={() => setEvmModalOpen(true)}
                 >
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -6545,7 +6818,7 @@ function FuturesPanel() {
                 </button>
                 <div style={{
                   display: 'flex', alignItems: 'center', gap: 4,
-                  color: '#111827', fontSize: 11, fontWeight: 800,
+                  color: 'var(--terminal-text)', fontSize: 11, fontWeight: 600,
                   letterSpacing: '0.5px', marginTop: 4,
                 }}>
                   <span>GRVT - EXCHANGE CHAIN</span>
@@ -6554,21 +6827,11 @@ function FuturesPanel() {
             ) : dex === 'phoenix' ? (
               <>
                 <div style={{
-                  width: 80, height: 80, borderRadius: '50%',
-                  background: 'linear-gradient(180deg, #F97316 0%, #C2410C 100%)',
-                  border: '4px solid #EA580C',
-                  boxShadow: '0 5px 0 #C2410C, 0 8px 16px rgba(0,0,0,0.25)',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  filter: 'drop-shadow(0 2px 0 rgba(0,0,0,0.35))',
-                }}>
-                  <img src={DEX_CONFIG.phoenix.logo} alt="" style={{width: 48, height: 48, objectFit: 'contain'}} />
-                </div>
-                <div style={{
-                  color: '#5C3A21', fontSize: 18, fontWeight: 900,
+                  color: 'var(--terminal-text)', fontSize: 18, fontWeight: 700,
                   textAlign: 'center', letterSpacing: '0.5px',
                 }}>{restoringPrivySolana ? 'Restoring email wallet' : 'Connect your Solana wallet'}</div>
                 <div style={{
-                  color: '#8a7252', fontSize: 12, fontWeight: 600,
+                  color: 'var(--terminal-text-muted)', fontSize: 12, fontWeight: 600,
                   textAlign: 'center', maxWidth: 280, lineHeight: 1.4,
                 }}>
                   {restoringPrivySolana
@@ -6577,21 +6840,21 @@ function FuturesPanel() {
                 </div>
                 {privyEnabled && (
                   <button
-                    style={{...cartoonBtn('#F97316', '#C2410C'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                    style={{...terminalButton('var(--terminal-orange)', 'var(--terminal-brand-text)'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
                     onClick={loginWithPrivyEmail}
                   >
                     <span>{privyAuthed ? 'CONTINUE WITH EMAIL' : 'SIGN IN WITH EMAIL'}</span>
                   </button>
                 )}
                 <button
-                  style={{...cartoonBtn(privyEnabled ? '#8A7252' : '#F97316', privyEnabled ? '#6B573E' : '#C2410C'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                  style={{...terminalButton(privyEnabled ? 'var(--terminal-text-muted)' : 'var(--terminal-orange)', privyEnabled ? 'var(--terminal-text-secondary)' : 'var(--terminal-brand-text)'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
                   onClick={openSolanaConnect}
                 >
                   <span>CONNECT SOLANA WALLET</span>
                 </button>
                 <div style={{
                   display: 'flex', alignItems: 'center', gap: 4,
-                  color: '#C2410C', fontSize: 11, fontWeight: 800,
+                  color: 'var(--terminal-brand-text)', fontSize: 11, fontWeight: 600,
                   letterSpacing: '0.5px', marginTop: 4,
                 }}>
                   <span>PHOENIX · SOLANA MAINNET</span>
@@ -6599,13 +6862,12 @@ function FuturesPanel() {
               </>
             ) : (
               <>
-                <div style={{fontSize: 48, filter: 'grayscale(60%)'}}>🔗</div>
-                <div style={{color: '#5C3A21', fontSize: 18, fontWeight: 900, textAlign: 'center'}}>
+                <div style={{color: 'var(--terminal-text)', fontSize: 18, fontWeight: 700, textAlign: 'center'}}>
                   {restoringPrivySolana ? 'Restoring email wallet' : 'Connect Wallet to Trade'}
                 </div>
                 {restoringPrivySolana && (
                   <div style={{
-                    color: '#8a7252', fontSize: 12, fontWeight: 600,
+                    color: 'var(--terminal-text-muted)', fontSize: 12, fontWeight: 600,
                     textAlign: 'center', maxWidth: 280, lineHeight: 1.4,
                   }}>
                     Your Privy Solana wallet is being prepared. If it does not continue, tap the email button once.
@@ -6613,14 +6875,14 @@ function FuturesPanel() {
                 )}
                 {privyEnabled && (
                   <button
-                    style={{...cartoonBtn('#9945FF', '#7B36CC'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                    style={{...terminalButton('#9945FF', '#7B36CC'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
                     onClick={loginWithPrivyEmail}
                   >
                     <span>{privyAuthed ? 'CONTINUE WITH EMAIL' : 'SIGN IN WITH EMAIL'}</span>
                   </button>
                 )}
                 <button
-                  style={{...cartoonBtn(privyEnabled ? '#8A7252' : '#9945FF', privyEnabled ? '#6B573E' : '#7B36CC'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                  style={{...terminalButton(privyEnabled ? 'var(--terminal-text-muted)' : '#9945FF', privyEnabled ? 'var(--terminal-text-secondary)' : '#7B36CC'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
                   onClick={openSolanaConnect}
                 >
                   <span>CONNECT SOLANA WALLET</span>
@@ -6662,19 +6924,19 @@ function FuturesPanel() {
       <>
         <style>{animCSS}</style>
         <style>{`@keyframes act-spin{to{transform:rotate(360deg)}}@keyframes act-pulse{0%,100%{opacity:.7}50%{opacity:1}}`}</style>
-        <div ref={panelRef} className={fullscreen ? 'futures-fullscreen' : ''} style={{
+        <div ref={panelRef} className={`futures-terminal-shell ${fullscreen ? 'futures-fullscreen futures-terminal-shell--fullscreen' : 'futures-terminal-shell--compact'}`} style={{
           ...(fullscreen ? S.containerFull : S.container),
-          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '4px solid #d4c8b0' } : {}),
+          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '1px solid var(--terminal-border)' } : {}),
           transform: (fullscreen || isMobile) ? undefined : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
           transition: isDragging ? 'none' : 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
         }}>
           <div style={S.header} onPointerDown={handlePointerDown}>
             <span style={S.headerTitle}>Nado setup</span>
-            <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+            <button type="button" data-nodrag onClick={handleClose} style={S.closeBtn} aria-label="Close futures trading">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
             </button>
           </div>
-          <div style={{...S.body, alignItems: 'stretch', overflowY: 'auto', overflowX: 'hidden', padding: 0, background: '#fdf8e7'}}>
+          <div style={{...S.body, alignItems: 'stretch', overflowY: 'auto', overflowX: 'hidden', padding: 0, background: 'var(--terminal-surface)'}}>
             <div style={hlGateStyles.frame}>
               <div style={hlGateStyles.titleBlock}>
                 <div style={hlGateStyles.kicker}>
@@ -6719,7 +6981,7 @@ function FuturesPanel() {
               {referralTermsUrl && (
                 <div style={hlGateStyles.footnote}>
                   By accepting, you agree to the{' '}
-                  <a href={referralTermsUrl} target="_blank" rel="noreferrer" style={{color: '#6d4f08', textDecoration: 'underline'}}>
+                  <a href={referralTermsUrl} target="_blank" rel="noreferrer" style={{color: 'var(--terminal-warning)', textDecoration: 'underline'}}>
                     Nado referral terms
                   </a>.
                 </div>
@@ -6746,6 +7008,184 @@ function FuturesPanel() {
                 Required only when this wallet has no Nado referrer. Existing referrals pass automatically.
               </div>
             </div>
+          </div>
+        </div>
+      </>
+    );
+  }
+
+  // ==================== LEVERUP V2 AGENT SETUP ====================
+  if (dex === 'leverup' && hasWallet && setupVerified !== true) {
+    const leverupRunning = Boolean(activationStep) || loading;
+    const leverupError = localAlert || error;
+    const leverupAgentApproved = oneTapTrading?.approved === true;
+    const leverupAllowanceReady = oneTapTrading?.allowanceReady === true;
+    const leverupSteps = [
+      {
+        id: 'agent',
+        label: 'Authorize the Clash browser signer',
+        hint: 'One Monad transaction grants only LeverUp V2 actions 0-13. The private key stays in this browser.',
+        status: leverupAgentApproved ? 'done' : 'active',
+      },
+      {
+        id: 'allowance',
+        label: 'Approve USDC trading allowance',
+        hint: 'LeverUp pulls collateral from your wallet only when you submit an order.',
+        status: leverupAllowanceReady ? 'done' : (leverupAgentApproved ? 'active' : 'pending'),
+      },
+      {
+        id: 'verify',
+        label: 'Verify V2 one-click trading onchain',
+        hint: 'Clash enables trading only after the stored signer and permissions match the Diamond contract.',
+        status: setupVerified === true ? 'done' : (leverupAgentApproved && leverupAllowanceReady ? 'active' : 'pending'),
+      },
+    ];
+    return (
+      <>
+        <style>{animCSS}</style>
+        <div ref={panelRef} className={`futures-terminal-shell ${fullscreen ? 'futures-fullscreen futures-terminal-shell--fullscreen' : 'futures-terminal-shell--compact'}`} style={{
+          ...(fullscreen ? S.containerFull : S.container),
+          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '1px solid var(--terminal-border)' } : {}),
+          transform: (fullscreen || isMobile) ? undefined : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
+        }}>
+          <div style={S.header} onPointerDown={handlePointerDown}>
+            <span style={S.headerTitle}>LeverUp V2 setup</span>
+            <button data-nodrag onClick={handleClose} style={S.closeBtn} aria-label="Close LeverUp setup">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
+          <div style={{...S.body, alignItems: 'stretch', overflowY: 'auto', overflowX: 'hidden', padding: 0, background: 'var(--terminal-surface)'}}>
+            <TradingSetupGate
+              kicker="LEVERUP V2 ONE-CLICK"
+              title="Enable gasless LeverUp trading"
+              subtitle="Authorize a browser-only trading signer once. Future orders use LeverUp V2 EIP-712 intents without repeated wallet popups."
+              logo={DEX_CONFIG.leverup.logo}
+              logoAlt="LeverUp V2"
+              logoBackground="#151713"
+              steps={leverupSteps}
+              working={leverupRunning}
+              workingText={typeof activationStep === 'string' ? activationStep : (activationStep?.label || 'Checking LeverUp V2 setup...')}
+              statusContent={(
+                <>
+                  <div><strong>Network:</strong> Monad mainnet (143)</div>
+                  <div><strong>Version:</strong> LeverUp OneClick V2</div>
+                  <div><strong>Clash broker:</strong> {builderConfig?.active ? `#${builderConfig.brokerId} verified onchain` : 'pending ID from LeverUp'}</div>
+                  <div style={{marginTop: 4}}>Until the Clash broker ID is configured, trading stays available through LeverUp's default broker but Clash rewards remain disabled.</div>
+                </>
+              )}
+              error={leverupError ? humanizeTradeError(leverupError, dex) : ''}
+              primaryAction={{
+                label: leverupRunning ? 'PLEASE APPROVE IN YOUR WALLET...' : 'ENABLE LEVERUP V2 ONE-CLICK',
+                disabled: leverupRunning,
+                onClick: async () => {
+                  setLocalAlert('');
+                  const result = await activate();
+                  if (result?.error) setLocalAlert(result.error);
+                },
+              }}
+              secondaryAction={{
+                label: 'OPEN LEVERUP',
+                variant: 'secondary',
+                onClick: () => window.open('https://app.leverup.xyz', '_blank', 'noopener,noreferrer'),
+              }}
+              footnote="The local signer can submit LeverUp trading actions only. Reset revokes it onchain before removing the browser key."
+            />
+          </div>
+        </div>
+      </>
+    );
+  }
+
+  // ==================== ASTER V3 AGENT / BUILDER SETUP ====================
+  if (dex === 'aster' && hasWallet && setupVerified !== true && !hasAsterRiskToManage) {
+    const asterRunning = Boolean(activationStep) || loading;
+    const asterError = localAlert || error;
+    const agentApproved = oneTapTrading?.approved === true;
+    const builderConfigured = builderConfig?.configured === true;
+    const asterBuilderApproved = oneTapTrading?.builderApproved === true;
+    const asterFeeBps = Number(builderConfig?.feeBps);
+    const asterFeeLabel = Number.isFinite(asterFeeBps)
+      ? `${asterFeeBps.toLocaleString(undefined, { maximumFractionDigits: 8 })} bps`
+      : `rate ${builderConfig?.feeRate || '0.00001'}`;
+    const asterSteps = [
+      {
+        id: 'agent',
+        label: 'Authorize the Clash Aster Agent',
+        hint: 'The Agent key stays in this browser and can trade perps only. Withdraw permission is disabled.',
+        status: agentApproved ? 'done' : 'active',
+      },
+      {
+        id: 'builder',
+        label: `Approve the Clash builder at ${asterFeeLabel}`,
+        hint: builderConfigured
+          ? `Aster must confirm ${shortAddr(builderConfig.address)} with max fee ${builderConfig.feeRate || '0.00001'}.`
+          : 'The integration is ready; Clash still needs the registered Aster builder wallet before opening trades.',
+        status: asterBuilderApproved ? 'done' : (agentApproved ? 'active' : 'pending'),
+      },
+      {
+        id: 'verify',
+        label: 'Verify V3 Agent and builder through Aster',
+        hint: 'Trading unlocks only when both approvals match the local Agent and server-owned builder configuration.',
+        status: setupVerified === true ? 'done' : (agentApproved && builderConfigured ? 'active' : 'pending'),
+      },
+    ];
+    const primaryDisabled = asterRunning || (agentApproved && !builderConfigured);
+    return (
+      <>
+        <style>{animCSS}</style>
+        <div ref={panelRef} className={`futures-terminal-shell ${fullscreen ? 'futures-fullscreen futures-terminal-shell--fullscreen' : 'futures-terminal-shell--compact'}`} style={{
+          ...(fullscreen ? S.containerFull : S.container),
+          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '1px solid var(--terminal-border)' } : {}),
+          transform: (fullscreen || isMobile) ? undefined : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
+        }}>
+          <div style={S.header} onPointerDown={handlePointerDown}>
+            <span style={S.headerTitle}>Aster setup</span>
+            <button data-nodrag onClick={handleClose} style={S.closeBtn} aria-label="Close Aster setup">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
+          <div style={{...S.body, alignItems: 'stretch', overflowY: 'auto', overflowX: 'hidden', padding: 0, background: 'var(--terminal-surface)'}}>
+            <TradingSetupGate
+              kicker="ASTER CODE · FUTURES API V3"
+              title={builderConfigured ? 'Enable Aster one-tap trading' : 'Aster integration is awaiting the builder wallet'}
+              subtitle={`One owner signature creates a browser-only API Agent. Every opening order is then forced through the approved Clash builder at ${asterFeeLabel}.`}
+              logo={DEX_CONFIG.aster.logo}
+              logoAlt="Aster"
+              logoBackground="#17140F"
+              steps={asterSteps}
+              working={asterRunning}
+              workingText={activationStep?.label || (loading ? 'Checking Aster V3 setup...' : '')}
+              statusContent={(
+                <>
+                  <div><strong>API:</strong> Aster Futures V3</div>
+                  <div><strong>Agent:</strong> {agentApproved ? `${shortAddr(oneTapTrading?.signer)} approved` : 'not approved'}</div>
+                  <div><strong>Builder:</strong> {builderConfigured ? `${shortAddr(builderConfig.address)} · ${asterFeeLabel}` : 'pending address from owner'}</div>
+                  <div style={{marginTop: 4}}>Close/cancel safety paths never require builder configuration. New opens remain fail-closed until attribution verifies.</div>
+                </>
+              )}
+              error={asterError ? humanizeTradeError(asterError, dex) : ''}
+              primaryAction={{
+                label: asterRunning
+                  ? 'PLEASE APPROVE IN YOUR WALLET...'
+                  : agentApproved && !builderConfigured
+                    ? 'BUILDER ADDRESS PENDING'
+                    : agentApproved
+                      ? 'APPROVE BUILDER & CONTINUE'
+                      : 'ENABLE ASTER V3 AGENT',
+                disabled: primaryDisabled,
+                onClick: async () => {
+                  setLocalAlert('');
+                  const result = await activate();
+                  if (result?.error) setLocalAlert(result.error);
+                },
+              }}
+              secondaryAction={{
+                label: 'OPEN ASTER',
+                variant: 'secondary',
+                onClick: () => window.open('https://www.asterdex.com/en/futures', '_blank', 'noopener,noreferrer'),
+              }}
+              footnote="Aster uses EIP-712 signatures. Clash does not receive your wallet key or the locally generated Agent key."
+            />
           </div>
         </div>
       </>
@@ -6780,9 +7220,9 @@ function FuturesPanel() {
     return (
       <>
         <style>{animCSS}</style>
-        <div ref={panelRef} className={fullscreen ? 'futures-fullscreen' : ''} style={{
+        <div ref={panelRef} className={`futures-terminal-shell ${fullscreen ? 'futures-fullscreen futures-terminal-shell--fullscreen' : 'futures-terminal-shell--compact'}`} style={{
           ...(fullscreen ? S.containerFull : S.container),
-          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '4px solid #d4c8b0' } : {}),
+          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '1px solid var(--terminal-border)' } : {}),
           transform: (fullscreen || isMobile) ? undefined : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
         }}>
           <div style={S.header} onPointerDown={handlePointerDown}>
@@ -6791,14 +7231,14 @@ function FuturesPanel() {
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
             </button>
           </div>
-          <div style={{...S.body, alignItems: 'stretch', overflowY: 'auto', overflowX: 'hidden', padding: 0, background: '#fdf8e7'}}>
+          <div style={{...S.body, alignItems: 'stretch', overflowY: 'auto', overflowX: 'hidden', padding: 0, background: 'var(--terminal-surface)'}}>
             <TradingSetupGate
               kicker={builderAccepted ? 'FINISH ONDO SETUP' : 'BUILDER CODE REQUIRED'}
               title={builderAccepted ? 'Sign in to Ondo Perps' : 'Accept the Clash builder code'}
               subtitle="One clear setup flow enables secure one-tap Ondo trading while keeping every order attributed to Clash."
               logo={DEX_CONFIG.ondo.logo}
               logoAlt="Ondo Perps"
-              logoBackground="#111"
+              logoBackground="var(--terminal-text)"
               steps={ondoSteps}
               working={ondoRunning}
               workingText={activationStep?.label || (loading ? 'Checking your Ondo setup...' : '')}
@@ -6863,9 +7303,9 @@ function FuturesPanel() {
     return (
       <>
         <style>{animCSS}</style>
-        <div ref={panelRef} className={fullscreen ? 'futures-fullscreen' : ''} style={{
+        <div ref={panelRef} className={`futures-terminal-shell ${fullscreen ? 'futures-fullscreen futures-terminal-shell--fullscreen' : 'futures-terminal-shell--compact'}`} style={{
           ...(fullscreen ? S.containerFull : S.container),
-          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '4px solid #d4c8b0' } : {}),
+          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '1px solid var(--terminal-border)' } : {}),
           transform: (fullscreen || isMobile) ? undefined : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
         }}>
           <div style={S.header} onPointerDown={handlePointerDown}>
@@ -6874,7 +7314,7 @@ function FuturesPanel() {
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
             </button>
           </div>
-          <div style={{...S.body, alignItems: 'stretch', overflowY: 'auto', overflowX: 'hidden', padding: 0, background: '#fdf8e7'}}>
+          <div style={{...S.body, alignItems: 'stretch', overflowY: 'auto', overflowX: 'hidden', padding: 0, background: 'var(--terminal-surface)'}}>
             <TradingSetupGate
               kicker={bulkUnavailable ? 'CLOSED BETA' : isChecking ? 'VERIFYING ACCOUNT' : 'BUILDER APPROVAL REQUIRED'}
               title={bulkUnavailable ? 'Bulk trading is not open yet' : isChecking ? 'Checking your Bulk account' : 'Approve Clash builder routing'}
@@ -6950,19 +7390,19 @@ function FuturesPanel() {
       <>
         <style>{animCSS}</style>
         <style>{`@keyframes act-spin{to{transform:rotate(360deg)}}@keyframes act-pulse{0%,100%{opacity:.7}50%{opacity:1}}`}</style>
-        <div ref={panelRef} className={fullscreen ? "futures-fullscreen" : ""} style={{
+        <div ref={panelRef} className={`futures-terminal-shell ${fullscreen ? 'futures-fullscreen futures-terminal-shell--fullscreen' : 'futures-terminal-shell--compact'}`} style={{
           ...(fullscreen ? S.containerFull : S.container),
-          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '4px solid #d4c8b0' } : {}),
+          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '1px solid var(--terminal-border)' } : {}),
           transform: (fullscreen || isMobile) ? undefined : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
           transition: isDragging ? 'none' : 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
         }}>
           <div style={S.header} onPointerDown={handlePointerDown}>
             <span style={S.headerTitle}>{isRunning ? 'Connecting Lighter...' : 'Lighter setup'}</span>
-            <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+            <button type="button" data-nodrag onClick={handleClose} style={S.closeBtn} aria-label="Close futures trading">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
             </button>
           </div>
-          <div style={{...S.body, alignItems: 'stretch', overflowY: 'auto', overflowX: 'hidden', padding: 0, background: '#fdf8e7'}}>
+          <div style={{...S.body, alignItems: 'stretch', overflowY: 'auto', overflowX: 'hidden', padding: 0, background: 'var(--terminal-surface)'}}>
             <div style={hlGateStyles.frame}>
               <div style={hlGateStyles.titleBlock}>
                 <span style={hlGateStyles.kicker}>{isRunning ? 'CONNECTING' : 'ACTION REQUIRED'}</span>
@@ -7014,15 +7454,15 @@ function FuturesPanel() {
                 </li>
               </ol>
               {showLighterCredentialForm && (
-              <div style={{display: 'flex', flexDirection: 'column', gap: 10, background: '#fffaf0', border: '2px solid #d4c8b0', borderRadius: 12, padding: 12}}>
+              <div style={{display: 'flex', flexDirection: 'column', gap: 10, background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 12, padding: 12}}>
                 <label style={{display: 'flex', flexDirection: 'column', gap: 5}}>
-                  <span style={{fontSize: 11, fontWeight: 900, color: '#5C3A21', textTransform: 'uppercase'}}>Your Lighter account index</span>
+                  <span style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text)', textTransform: 'uppercase'}}>Your Lighter account index</span>
                   <input type="number" value={lighterAccountIndexInput} onChange={(e) => {
                     setLighterAccountDetectStatus('');
                     setLighterAccountIndexInput(e.target.value);
                   }} placeholder={lighterAccountDetectStatus === 'checking' ? 'Detecting from wallet...' : 'Auto-detected or enter manually'} disabled={isRunning} style={{...S.input, padding: '10px 12px', fontSize: 14}} />
                   {lighterAccountDetectStatus && (
-                    <span style={{fontSize: 11, fontWeight: 800, color: lighterAccountDetectStatus === 'found' ? '#2f9e44' : '#9f8759'}}>
+                    <span style={{fontSize: 11, fontWeight: 600, color: lighterAccountDetectStatus === 'found' ? '#2f9e44' : 'var(--terminal-text-faint)'}}>
                       {lighterAccountDetectStatus === 'checking'
                         ? 'Checking your Lighter account from the connected EVM wallet...'
                         : lighterAccountDetectStatus === 'found'
@@ -7034,11 +7474,11 @@ function FuturesPanel() {
                   )}
                 </label>
                 <label style={{display: 'flex', flexDirection: 'column', gap: 5}}>
-                  <span style={{fontSize: 11, fontWeight: 900, color: '#5C3A21', textTransform: 'uppercase'}}>API key index</span>
+                  <span style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text)', textTransform: 'uppercase'}}>API key index</span>
                   <input type="number" value={lighterApiKeyIndexInput} onChange={(e) => setLighterApiKeyIndexInput(e.target.value)} placeholder="Use index > 3" disabled={isRunning} style={{...S.input, padding: '10px 12px', fontSize: 14}} />
                 </label>
                 <label style={{display: 'flex', flexDirection: 'column', gap: 5}}>
-                  <span style={{fontSize: 11, fontWeight: 900, color: '#5C3A21', textTransform: 'uppercase'}}>API private key</span>
+                  <span style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text)', textTransform: 'uppercase'}}>API private key</span>
                   <input
                     type="password"
                     value={lighterApiPrivateKeyInput}
@@ -7052,22 +7492,22 @@ function FuturesPanel() {
                     style={{...S.input, padding: '10px 12px', fontSize: 14}}
                   />
                 </label>
-                <div style={{fontSize: 11, fontWeight: 700, color: '#9f8759', lineHeight: 1.35}}>
+                <div style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text-faint)', lineHeight: 1.35}}>
                   The API key is stored only in this browser, encrypted by browser storage. Clash does not write it to the database.
                 </div>
               </div>
               )}
               {hasLighterCredentials && lighterReferralChecking && (
-                <div style={{fontSize: 12, fontWeight: 800, color: '#5C3A21', lineHeight: 1.35, border: '2px solid #d4c8b0', background: '#fffaf0', borderRadius: 12, padding: 12}}>
+                <div style={{fontSize: 12, fontWeight: 600, color: 'var(--terminal-text)', lineHeight: 1.35, border: '1px solid var(--terminal-border)', background: 'var(--terminal-surface-subtle)', borderRadius: 12, padding: 12}}>
                   Reading this wallet&apos;s current referral from Lighter. Trading remains locked until Lighter returns a confirmed <code>used_code</code>.
                 </div>
               )}
               {hasLighterCredentials && lighterNeedsReferral && (
-                <div style={{fontSize: 12, fontWeight: 800, color: '#5C3A21', lineHeight: 1.35, border: '2px solid #e0b44c', background: '#fff6d9', borderRadius: 12, padding: 12, display: 'flex', flexDirection: 'column', gap: 10}}>
+                <div style={{fontSize: 12, fontWeight: 600, color: 'var(--terminal-text)', lineHeight: 1.35, border: '1px solid var(--terminal-warning-border)', background: 'var(--terminal-warning-soft)', borderRadius: 12, padding: 12, display: 'flex', flexDirection: 'column', gap: 10}}>
                   <span>No Lighter referral is attached to this wallet. Confirm <strong>{referralCode}</strong> before trading. Clash never replaces an existing referral.</span>
                   <button
                     type="button"
-                    style={{ ...hlGateStyles.secondaryBtn, padding: '9px 12px', fontSize: 12, alignSelf: 'stretch', background: '#fffaf0' }}
+                    style={{ ...hlGateStyles.secondaryBtn, padding: '9px 12px', fontSize: 12, alignSelf: 'stretch', background: 'var(--terminal-surface-subtle)' }}
                     disabled={isRunning}
                     onClick={() => {
                       if (typeof openReferralJoin === 'function') openReferralJoin();
@@ -7104,7 +7544,7 @@ function FuturesPanel() {
                 </button>
               )}
               {lighterNeedsIntegratorApproval && hasReferrer === true && (
-                <div style={{fontSize: 12, fontWeight: 800, color: '#5C3A21', lineHeight: 1.35, border: '2px solid #e0b44c', background: '#fff6d9', borderRadius: 12, padding: 12, display: 'flex', flexDirection: 'column', gap: 10}}>
+                <div style={{fontSize: 12, fontWeight: 600, color: 'var(--terminal-text)', lineHeight: 1.35, border: '1px solid var(--terminal-warning-border)', background: 'var(--terminal-warning-soft)', borderRadius: 12, padding: 12, display: 'flex', flexDirection: 'column', gap: 10}}>
                   <span>Lighter API key is saved. Approve the Clash integrator fee before trading unlocks.</span>
                   <button
                     type="button"
@@ -7125,7 +7565,7 @@ function FuturesPanel() {
                   {lighterCredentialFormOpen && (
                     <button
                       type="button"
-                      style={{ ...hlGateStyles.secondaryBtn, padding: '9px 12px', fontSize: 12, alignSelf: 'stretch', background: '#fffaf0' }}
+                      style={{ ...hlGateStyles.secondaryBtn, padding: '9px 12px', fontSize: 12, alignSelf: 'stretch', background: 'var(--terminal-surface-subtle)' }}
                       disabled={isRunning}
                       onClick={() => {
                         setLighterCredentialFormOpen(false);
@@ -7224,15 +7664,15 @@ function FuturesPanel() {
       <>
         <style>{animCSS}</style>
         <style>{`@keyframes act-spin{to{transform:rotate(360deg)}}@keyframes act-pulse{0%,100%{opacity:.7}50%{opacity:1}}`}</style>
-        <div ref={panelRef} className={fullscreen ? "futures-fullscreen" : ""} style={{
+        <div ref={panelRef} className={`futures-terminal-shell ${fullscreen ? 'futures-fullscreen futures-terminal-shell--fullscreen' : 'futures-terminal-shell--compact'}`} style={{
           ...(fullscreen ? S.containerFull : S.container),
-          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '4px solid #d4c8b0' } : {}),
+          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '1px solid var(--terminal-border)' } : {}),
           transform: (fullscreen || isMobile) ? undefined : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
           transition: isDragging ? 'none' : 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
         }}>
           <div style={S.header} onPointerDown={handlePointerDown}>
             <span style={S.headerTitle}>{isRunning ? 'Connecting Hibachi...' : 'Hibachi setup'}</span>
-            <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+            <button type="button" data-nodrag onClick={handleClose} style={S.closeBtn} aria-label="Close futures trading">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
             </button>
           </div>
@@ -7242,7 +7682,7 @@ function FuturesPanel() {
             overflowY: 'auto',
             overflowX: 'hidden',
             padding: 0,
-            background: '#fdf8e7',
+            background: 'var(--terminal-surface)',
           }}>
             <div style={hlGateStyles.frame}>
               <div style={hlGateStyles.titleBlock}>
@@ -7283,13 +7723,13 @@ function FuturesPanel() {
                 display: 'flex',
                 flexDirection: 'column',
                 gap: 10,
-                background: '#fffaf0',
-                border: '2px solid #d4c8b0',
+                background: 'var(--terminal-surface-subtle)',
+                border: '1px solid var(--terminal-border)',
                 borderRadius: 12,
                 padding: 12,
               }}>
                 <label style={{display: 'flex', flexDirection: 'column', gap: 5}}>
-                  <span style={{fontSize: 11, fontWeight: 900, color: '#5C3A21', textTransform: 'uppercase'}}>Hibachi API key</span>
+                  <span style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text)', textTransform: 'uppercase'}}>Hibachi API key</span>
                   <input
                     type="password"
                     value={hibachiApiKeyInput}
@@ -7304,7 +7744,7 @@ function FuturesPanel() {
                   />
                 </label>
                 <label style={{display: 'flex', flexDirection: 'column', gap: 5}}>
-                  <span style={{fontSize: 11, fontWeight: 900, color: '#5C3A21', textTransform: 'uppercase'}}>Account id</span>
+                  <span style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text)', textTransform: 'uppercase'}}>Account id</span>
                   <input
                     type="text"
                     value={hibachiAccountIdInput}
@@ -7319,7 +7759,7 @@ function FuturesPanel() {
                   />
                 </label>
                 <label style={{display: 'flex', flexDirection: 'column', gap: 5}}>
-                  <span style={{fontSize: 11, fontWeight: 900, color: '#5C3A21', textTransform: 'uppercase'}}>API private key</span>
+                  <span style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text)', textTransform: 'uppercase'}}>API private key</span>
                   <input
                     type="password"
                     value={hibachiPrivateKeyInput}
@@ -7333,7 +7773,7 @@ function FuturesPanel() {
                     style={{...S.input, padding: '10px 12px', fontSize: 14}}
                   />
                 </label>
-                <div style={{fontSize: 11, fontWeight: 700, color: '#9f8759', lineHeight: 1.35}}>
+                <div style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text-faint)', lineHeight: 1.35}}>
                   Stored in this browser only. Use the private key shown when you create the Hibachi API key.
                 </div>
               </div>
@@ -7343,9 +7783,9 @@ function FuturesPanel() {
                   style={{
                     ...hlGateStyles.primaryBtn,
                     width: '100%',
-                    background: 'linear-gradient(180deg, #fff8e6 0%, #f5e6bd 100%)',
-                    border: '2px solid #9f8759',
-                    color: '#5C3A21',
+                    background: 'var(--terminal-warning-soft)',
+                    border: '1px solid var(--terminal-text-faint)',
+                    color: 'var(--terminal-text)',
                     textShadow: 'none',
                   }}
                   onClick={() => {
@@ -7409,19 +7849,19 @@ function FuturesPanel() {
       <>
         <style>{animCSS}</style>
         <style>{`@keyframes act-spin{to{transform:rotate(360deg)}}@keyframes act-pulse{0%,100%{opacity:.7}50%{opacity:1}}`}</style>
-        <div ref={panelRef} className={fullscreen ? "futures-fullscreen" : ""} style={{
+        <div ref={panelRef} className={`futures-terminal-shell ${fullscreen ? 'futures-fullscreen futures-terminal-shell--fullscreen' : 'futures-terminal-shell--compact'}`} style={{
           ...(fullscreen ? S.containerFull : S.container),
-          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '4px solid #d4c8b0' } : {}),
+          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '1px solid var(--terminal-border)' } : {}),
           transform: (fullscreen || isMobile) ? undefined : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
           transition: isDragging ? 'none' : 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
         }}>
           <div style={S.header} onPointerDown={handlePointerDown}>
             <span style={S.headerTitle}>{isRunning ? 'Connecting GRVT...' : 'GRVT setup'}</span>
-            <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+            <button type="button" data-nodrag onClick={handleClose} style={S.closeBtn} aria-label="Close futures trading">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
             </button>
           </div>
-          <div style={{...S.body, alignItems: 'stretch', overflowY: 'auto', overflowX: 'hidden', padding: 0, background: '#fdf8e7'}}>
+          <div style={{...S.body, alignItems: 'stretch', overflowY: 'auto', overflowX: 'hidden', padding: 0, background: 'var(--terminal-surface)'}}>
             <div style={hlGateStyles.frame}>
               <div style={hlGateStyles.titleBlock}>
                 <span style={hlGateStyles.kicker}>{isRunning ? 'CONNECTING' : 'ACTION REQUIRED'}</span>
@@ -7482,13 +7922,13 @@ function FuturesPanel() {
                 display: 'flex',
                 flexDirection: 'column',
                 gap: 10,
-                background: '#fffaf0',
-                border: '2px solid #d4c8b0',
+                background: 'var(--terminal-surface-subtle)',
+                border: '1px solid var(--terminal-border)',
                 borderRadius: 12,
                 padding: 12,
               }}>
                 <label style={{display: 'flex', flexDirection: 'column', gap: 5}}>
-                  <span style={{fontSize: 11, fontWeight: 900, color: '#5C3A21', textTransform: 'uppercase'}}>Existing GRVT API key</span>
+                  <span style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text)', textTransform: 'uppercase'}}>Existing GRVT API key</span>
                   <input
                     type="password"
                     value={grvtApiKeyInput}
@@ -7508,9 +7948,9 @@ function FuturesPanel() {
                     ...(!grvtCanSaveManual ? hlGateStyles.primaryBtnBusy : null),
                     width: '100%',
                     padding: '10px 12px',
-                    background: '#fff6dc',
-                    color: '#5C3A21',
-                    border: '2px solid #9f8759',
+                    background: 'var(--terminal-warning-soft)',
+                    color: 'var(--terminal-text)',
+                    border: '1px solid var(--terminal-text-faint)',
                     textShadow: 'none',
                   }}
                   disabled={!grvtCanSaveManual}
@@ -7563,19 +8003,19 @@ function FuturesPanel() {
       <>
         <style>{animCSS}</style>
         <style>{`@keyframes act-spin{to{transform:rotate(360deg)}}@keyframes act-pulse{0%,100%{opacity:.7}50%{opacity:1}}`}</style>
-        <div ref={panelRef} className={fullscreen ? "futures-fullscreen" : ""} style={{
+        <div ref={panelRef} className={`futures-terminal-shell ${fullscreen ? 'futures-fullscreen futures-terminal-shell--fullscreen' : 'futures-terminal-shell--compact'}`} style={{
           ...(fullscreen ? S.containerFull : S.container),
-          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '4px solid #d4c8b0' } : {}),
+          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '1px solid var(--terminal-border)' } : {}),
           transform: (fullscreen || isMobile) ? undefined : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
           transition: isDragging ? 'none' : 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
         }}>
           <div style={S.header} onPointerDown={handlePointerDown}>
             <span style={S.headerTitle}>{isRunning ? 'Checking Katana...' : 'Katana setup'}</span>
-            <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+            <button type="button" data-nodrag onClick={handleClose} style={S.closeBtn} aria-label="Close futures trading">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
             </button>
           </div>
-          <div style={{...S.body, alignItems: 'stretch', overflowY: 'auto', overflowX: 'hidden', padding: 0, background: '#fdf8e7'}}>
+          <div style={{...S.body, alignItems: 'stretch', overflowY: 'auto', overflowX: 'hidden', padding: 0, background: 'var(--terminal-surface)'}}>
             <div style={hlGateStyles.frame}>
               <div style={hlGateStyles.titleBlock}>
                 <span style={hlGateStyles.kicker}>{isRunning ? 'CHECKING' : 'ACTION REQUIRED'}</span>
@@ -7640,13 +8080,13 @@ function FuturesPanel() {
                 display: 'flex',
                 flexDirection: 'column',
                 gap: 10,
-                background: '#fffaf0',
-                border: '2px solid #d4c8b0',
+                background: 'var(--terminal-surface-subtle)',
+                border: '1px solid var(--terminal-border)',
                 borderRadius: 12,
                 padding: 12,
               }}>
                 <label style={{display: 'flex', flexDirection: 'column', gap: 5}}>
-                  <span style={{fontSize: 11, fontWeight: 900, color: '#5C3A21', textTransform: 'uppercase'}}>Katana API key</span>
+                  <span style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text)', textTransform: 'uppercase'}}>Katana API key</span>
                   <input
                     type="password"
                     value={katanaApiKeyInput}
@@ -7661,7 +8101,7 @@ function FuturesPanel() {
                   />
                 </label>
                 <label style={{display: 'flex', flexDirection: 'column', gap: 5}}>
-                  <span style={{fontSize: 11, fontWeight: 900, color: '#5C3A21', textTransform: 'uppercase'}}>Katana API secret</span>
+                  <span style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text)', textTransform: 'uppercase'}}>Katana API secret</span>
                   <input
                     type="password"
                     value={katanaApiSecretInput}
@@ -7675,7 +8115,7 @@ function FuturesPanel() {
                     style={{...S.input, padding: '10px 12px', fontSize: 14}}
                   />
                 </label>
-                <div style={{fontSize: 11, fontWeight: 700, color: '#9f8759', lineHeight: 1.35}}>
+                <div style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text-faint)', lineHeight: 1.35}}>
                   Do not enter a wallet private key. Katana one tap creates a local delegated key and stores it encrypted in this browser only.
                 </div>
               </div>
@@ -7729,13 +8169,13 @@ function FuturesPanel() {
               </button>
 
               {referralUrl && (
-                <div style={{fontSize: 11, fontWeight: 700, color: '#9f8759', lineHeight: 1.35, wordBreak: 'break-all'}}>
+                <div style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text-faint)', lineHeight: 1.35, wordBreak: 'break-all'}}>
                   {referralUrl}
                 </div>
               )}
 
               {successMsg && (
-                <div style={hlGateStyles.successBox || {fontSize: 12, fontWeight: 800, color: '#0F766E'}}>
+                <div style={hlGateStyles.successBox || {fontSize: 12, fontWeight: 600, color: 'var(--terminal-long)'}}>
                   {successMsg}
                 </div>
               )}
@@ -7762,15 +8202,15 @@ function FuturesPanel() {
       <>
         <style>{animCSS}</style>
         <style>{`@keyframes act-spin{to{transform:rotate(360deg)}}@keyframes act-pulse{0%,100%{opacity:.7}50%{opacity:1}}`}</style>
-        <div ref={panelRef} className={fullscreen ? "futures-fullscreen" : ""} style={{
+        <div ref={panelRef} className={`futures-terminal-shell ${fullscreen ? 'futures-fullscreen futures-terminal-shell--fullscreen' : 'futures-terminal-shell--compact'}`} style={{
           ...(fullscreen ? S.containerFull : S.container),
-          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '4px solid #d4c8b0' } : {}),
+          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '1px solid var(--terminal-border)' } : {}),
           transform: (fullscreen || isMobile) ? undefined : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
           transition: isDragging ? 'none' : 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
         }}>
           <div style={S.header} onPointerDown={handlePointerDown}>
             <span style={S.headerTitle}>GMTrade setup</span>
-            <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+            <button type="button" data-nodrag onClick={handleClose} style={S.closeBtn} aria-label="Close futures trading">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
             </button>
           </div>
@@ -7780,7 +8220,7 @@ function FuturesPanel() {
             overflowY: 'auto',
             overflowX: 'hidden',
             padding: 0,
-            background: '#fdf8e7',
+            background: 'var(--terminal-surface)',
           }}>
             <div style={hlGateStyles.frame}>
               <div style={hlGateStyles.titleBlock}>
@@ -7856,15 +8296,15 @@ function FuturesPanel() {
       <>
         <style>{animCSS}</style>
         <style>{`@keyframes act-spin{to{transform:rotate(360deg)}}@keyframes act-pulse{0%,100%{opacity:.7}50%{opacity:1}}`}</style>
-        <div ref={panelRef} className={fullscreen ? "futures-fullscreen" : ""} style={{
+        <div ref={panelRef} className={`futures-terminal-shell ${fullscreen ? 'futures-fullscreen futures-terminal-shell--fullscreen' : 'futures-terminal-shell--compact'}`} style={{
           ...(fullscreen ? S.containerFull : S.container),
-          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '4px solid #d4c8b0' } : {}),
+          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '1px solid var(--terminal-border)' } : {}),
           transform: (fullscreen || isMobile) ? undefined : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
           transition: isDragging ? 'none' : 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
         }}>
           <div style={S.header} onPointerDown={handlePointerDown}>
             <span style={S.headerTitle}>Flash setup</span>
-            <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+            <button type="button" data-nodrag onClick={handleClose} style={S.closeBtn} aria-label="Close futures trading">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
             </button>
           </div>
@@ -7874,7 +8314,7 @@ function FuturesPanel() {
             overflowY: 'auto',
             overflowX: 'hidden',
             padding: 0,
-            background: '#fdf8e7',
+            background: 'var(--terminal-surface)',
           }}>
             <div style={hlGateStyles.frame}>
               <div style={hlGateStyles.titleBlock}>
@@ -7953,7 +8393,7 @@ function FuturesPanel() {
               )}
 
               {successMsg && (
-                <div style={hlGateStyles.successBox || {fontSize: 12, fontWeight: 800, color: '#0F766E'}}>
+                <div style={hlGateStyles.successBox || {fontSize: 12, fontWeight: 600, color: 'var(--terminal-long)'}}>
                   {successMsg}
                 </div>
               )}
@@ -7980,15 +8420,15 @@ function FuturesPanel() {
       <>
         <style>{animCSS}</style>
         <style>{`@keyframes act-spin{to{transform:rotate(360deg)}}@keyframes act-pulse{0%,100%{opacity:.7}50%{opacity:1}}`}</style>
-        <div ref={panelRef} className={fullscreen ? "futures-fullscreen" : ""} style={{
+        <div ref={panelRef} className={`futures-terminal-shell ${fullscreen ? 'futures-fullscreen futures-terminal-shell--fullscreen' : 'futures-terminal-shell--compact'}`} style={{
           ...(fullscreen ? S.containerFull : S.container),
-          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '4px solid #d4c8b0' } : {}),
+          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '1px solid var(--terminal-border)' } : {}),
           transform: (fullscreen || isMobile) ? undefined : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
           transition: isDragging ? 'none' : 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
         }}>
           <div style={S.header} onPointerDown={handlePointerDown}>
             <span style={S.headerTitle}>{isRunning ? 'Linking Avantis...' : 'Avantis setup'}</span>
-            <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+            <button type="button" data-nodrag onClick={handleClose} style={S.closeBtn} aria-label="Close futures trading">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
             </button>
           </div>
@@ -7998,7 +8438,7 @@ function FuturesPanel() {
             overflowY: 'auto',
             overflowX: 'hidden',
             padding: 0,
-            background: '#fdf8e7',
+            background: 'var(--terminal-surface)',
           }}>
             <div style={hlGateStyles.frame}>
               <div style={hlGateStyles.titleBlock}>
@@ -8094,15 +8534,15 @@ function FuturesPanel() {
         <>
           <style>{animCSS}</style>
           <style>{`@keyframes act-spin{to{transform:rotate(360deg)}}@keyframes act-pulse{0%,100%{opacity:.7}50%{opacity:1}}`}</style>
-          <div ref={panelRef} className={fullscreen ? "futures-fullscreen" : ""} style={{
+          <div ref={panelRef} className={`futures-terminal-shell ${fullscreen ? 'futures-fullscreen futures-terminal-shell--fullscreen' : 'futures-terminal-shell--compact'}`} style={{
             ...(fullscreen ? S.containerFull : S.container),
-            ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '4px solid #d4c8b0' } : {}),
+            ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '1px solid var(--terminal-border)' } : {}),
             transform: (fullscreen || isMobile) ? undefined : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
             transition: isDragging ? 'none' : 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
           }}>
             <div style={S.header} onPointerDown={handlePointerDown}>
               <span style={S.headerTitle}>Hotstuff setup</span>
-              <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+            <button type="button" data-nodrag onClick={handleClose} style={S.closeBtn} aria-label="Close futures trading">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
               </button>
             </div>
@@ -8112,7 +8552,7 @@ function FuturesPanel() {
               overflowY: 'auto',
               overflowX: 'hidden',
               padding: 0,
-              background: '#fdf8e7',
+              background: 'var(--terminal-surface)',
             }}>
               <div style={{ ...hlGateStyles.frame, justifyContent: 'center', minHeight: 260 }}>
                 <span style={hlGateStyles.bigSpinner} />
@@ -8137,15 +8577,15 @@ function FuturesPanel() {
       <>
         <style>{animCSS}</style>
         <style>{`@keyframes act-spin{to{transform:rotate(360deg)}}@keyframes act-pulse{0%,100%{opacity:.7}50%{opacity:1}}`}</style>
-        <div ref={panelRef} className={fullscreen ? "futures-fullscreen" : ""} style={{
+        <div ref={panelRef} className={`futures-terminal-shell ${fullscreen ? 'futures-fullscreen futures-terminal-shell--fullscreen' : 'futures-terminal-shell--compact'}`} style={{
           ...(fullscreen ? S.containerFull : S.container),
-          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '4px solid #d4c8b0' } : {}),
+          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '1px solid var(--terminal-border)' } : {}),
           transform: (fullscreen || isMobile) ? undefined : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
           transition: isDragging ? 'none' : 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
         }}>
           <div style={S.header} onPointerDown={handlePointerDown}>
             <span style={S.headerTitle}>{isRunning ? 'Setting up Hotstuff...' : 'Hotstuff setup'}</span>
-            <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+            <button type="button" data-nodrag onClick={handleClose} style={S.closeBtn} aria-label="Close futures trading">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
             </button>
           </div>
@@ -8155,7 +8595,7 @@ function FuturesPanel() {
             overflowY: 'auto',
             overflowX: 'hidden',
             padding: 0,
-            background: '#fdf8e7',
+            background: 'var(--terminal-surface)',
           }}>
             <div style={hlGateStyles.frame}>
               <div style={hlGateStyles.titleBlock}>
@@ -8237,7 +8677,7 @@ function FuturesPanel() {
 
               {spotBal > 0.000001 && (
                 <button
-                  style={{...S.btnSmall, width: '100%', marginTop: 8, background: '#16A34A', color: '#fff', border: '2px solid #15803D'}}
+                  style={{...S.btnSmall, width: '100%', marginTop: 8, background: 'var(--terminal-long)', color: 'var(--terminal-on-accent)', border: '1px solid var(--terminal-long)'}}
                   onClick={async () => {
                     const amountText = spotBal.toFixed(6).replace(/(\.\d*?)0+$/u, '$1').replace(/\.$/u, '');
                     const r = await moveSpotToPerp?.(amountText);
@@ -8272,15 +8712,15 @@ function FuturesPanel() {
       <>
         <style>{animCSS}</style>
         <style>{`@keyframes act-spin{to{transform:rotate(360deg)}}@keyframes act-pulse{0%,100%{opacity:.7}50%{opacity:1}}`}</style>
-        <div ref={panelRef} className={fullscreen ? "futures-fullscreen" : ""} style={{
+        <div ref={panelRef} className={`futures-terminal-shell ${fullscreen ? 'futures-fullscreen futures-terminal-shell--fullscreen' : 'futures-terminal-shell--compact'}`} style={{
           ...(fullscreen ? S.containerFull : S.container),
-          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '4px solid #d4c8b0' } : {}),
+          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '1px solid var(--terminal-border)' } : {}),
           transform: (fullscreen || isMobile) ? undefined : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
           transition: isDragging ? 'none' : 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
         }}>
           <div style={S.header} onPointerDown={handlePointerDown}>
             <span style={S.headerTitle}>{isRunning ? 'Setting up Pacifica...' : 'Pacifica setup'}</span>
-            <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+            <button type="button" data-nodrag onClick={handleClose} style={S.closeBtn} aria-label="Close futures trading">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
             </button>
           </div>
@@ -8290,7 +8730,7 @@ function FuturesPanel() {
             overflowY: 'auto',
             overflowX: 'hidden',
             padding: 0,
-            background: '#fdf8e7',
+            background: 'var(--terminal-surface)',
           }}>
             <div style={hlGateStyles.frame}>
               <div style={hlGateStyles.titleBlock}>
@@ -8438,15 +8878,15 @@ function FuturesPanel() {
       <>
         <style>{animCSS}</style>
         <style>{`@keyframes act-spin{to{transform:rotate(360deg)}}@keyframes act-pulse{0%,100%{opacity:.7}50%{opacity:1}}`}</style>
-        <div ref={panelRef} className={fullscreen ? "futures-fullscreen" : ""} style={{
+        <div ref={panelRef} className={`futures-terminal-shell ${fullscreen ? 'futures-fullscreen futures-terminal-shell--fullscreen' : 'futures-terminal-shell--compact'}`} style={{
           ...(fullscreen ? S.containerFull : S.container),
-          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '4px solid #d4c8b0' } : {}),
+          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '1px solid var(--terminal-border)' } : {}),
           transform: (fullscreen || isMobile) ? undefined : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
           transition: isDragging ? 'none' : 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
         }}>
           <div style={S.header} onPointerDown={handlePointerDown}>
             <span style={S.headerTitle}>{isRunning ? 'Setting up Hyperliquid…' : 'Hyperliquid setup'}</span>
-            <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+            <button type="button" data-nodrag onClick={handleClose} style={S.closeBtn} aria-label="Close futures trading">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
             </button>
           </div>
@@ -8456,7 +8896,7 @@ function FuturesPanel() {
             overflowY: 'auto',
             overflowX: 'hidden',
             padding: 0,
-            background: '#fdf8e7',
+            background: 'var(--terminal-surface)',
           }}>
             <div style={hlGateStyles.frame}>
               {/* Title block — mirrors BridgeStatusModal's status / title /
@@ -8558,19 +8998,19 @@ function FuturesPanel() {
       <>
         <style>{animCSS}</style>
         <style>{`@keyframes act-spin{to{transform:rotate(360deg)}}`}</style>
-        <div ref={panelRef} className={fullscreen ? "futures-fullscreen" : ""} style={{
+        <div ref={panelRef} className={`futures-terminal-shell ${fullscreen ? 'futures-fullscreen futures-terminal-shell--fullscreen' : 'futures-terminal-shell--compact'}`} style={{
           ...(fullscreen ? S.containerFull : S.container),
-          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '4px solid #d4c8b0' } : {}),
+          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '1px solid var(--terminal-border)' } : {}),
           transform: (fullscreen || isMobile) ? undefined : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
           transition: isDragging ? 'none' : 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
         }}>
           <div style={S.header} onPointerDown={handlePointerDown}>
             <span style={S.headerTitle}>{isRunning ? 'Setting up RISEx...' : 'RISEx setup'}</span>
-            <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+            <button type="button" data-nodrag onClick={handleClose} style={S.closeBtn} aria-label="Close futures trading">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
             </button>
           </div>
-          <div style={{ ...S.body, alignItems: 'stretch', overflowY: 'auto', overflowX: 'hidden', padding: 0, background: '#fdf8e7' }}>
+          <div style={{ ...S.body, alignItems: 'stretch', overflowY: 'auto', overflowX: 'hidden', padding: 0, background: 'var(--terminal-surface)' }}>
             <div style={hlGateStyles.frame}>
               <div style={hlGateStyles.titleBlock}>
                 <img src={DEX_CONFIG.risex.logo} alt="" style={{width: 56, height: 56, objectFit: 'contain', alignSelf: 'center'}} />
@@ -8585,10 +9025,10 @@ function FuturesPanel() {
                   width: '100%',
                   maxWidth: 420,
                   padding: 12,
-                  border: '2px solid #d7b45b',
-                  background: '#fff5cf',
-                  boxShadow: '0 3px 0 #c69b3f',
-                  color: '#5c3a21',
+                  border: '1px solid var(--terminal-warning-border)',
+                  background: 'var(--terminal-warning-soft)',
+                  boxShadow: '0 3px 0 var(--terminal-warning)',
+                  color: 'var(--terminal-text)',
                   display: 'flex',
                   flexDirection: 'column',
                   gap: 7,
@@ -8610,7 +9050,7 @@ function FuturesPanel() {
                       {loading ? 'Registering on RISE...' : 'Register Clash builder code'}
                     </button>
                   ) : (
-                    <span style={{fontSize: 11, lineHeight: 1.4, fontWeight: 800, color: '#9a6218'}}>
+                    <span style={{fontSize: 11, lineHeight: 1.4, fontWeight: 600, color: 'var(--terminal-warning)'}}>
                       Connect the Clash fee-recipient wallet to complete this one-time registration.
                     </span>
                   )}
@@ -8658,7 +9098,7 @@ function FuturesPanel() {
                     spellCheck={false}
                     style={{...S.input, width: '100%', padding: '10px 12px', fontSize: 14}}
                   />
-                  <div style={{fontSize: 11, color: '#B45309', fontWeight: 800, lineHeight: 1.35}}>
+                  <div style={{fontSize: 11, color: 'var(--terminal-warning)', fontWeight: 600, lineHeight: 1.35}}>
                     RISEx mainnet is invite-gated. Redeemed but pending accounts need RISEx to activate access before trading.
                   </div>
                 </div>
@@ -8697,9 +9137,9 @@ function FuturesPanel() {
     return (
       <>
         <style>{animCSS}</style>
-        <div ref={panelRef} className={fullscreen ? 'futures-fullscreen' : ''} style={{
+        <div ref={panelRef} className={`futures-terminal-shell ${fullscreen ? 'futures-fullscreen futures-terminal-shell--fullscreen' : 'futures-terminal-shell--compact'}`} style={{
           ...(fullscreen ? S.containerFull : S.container),
-          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '4px solid #d4c8b0' } : {}),
+          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '1px solid var(--terminal-border)' } : {}),
           transform: (fullscreen || isMobile) ? undefined : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
           transition: isDragging ? 'none' : 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
         }}>
@@ -8709,7 +9149,7 @@ function FuturesPanel() {
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
             </button>
           </div>
-          <div style={{...S.body, alignItems: 'stretch', overflowY: 'auto', overflowX: 'hidden', padding: 0, background: '#fdf8e7'}}>
+          <div style={{...S.body, alignItems: 'stretch', overflowY: 'auto', overflowX: 'hidden', padding: 0, background: 'var(--terminal-surface)'}}>
             <TradingSetupGate
               kicker={perplChecking ? 'VERIFYING ACCOUNT' : perplAuthed ? 'FUND TRADING ACCOUNT' : 'WALLET SIGNATURE REQUIRED'}
               title={perplChecking ? 'Checking your Perpl account' : perplAuthed ? 'Create or fund your Perpl account' : 'Sign in to Perpl'}
@@ -8776,7 +9216,7 @@ function FuturesPanel() {
                     style={{...S.input, width: '100%', padding: '10px 12px', fontSize: 14, marginTop: 8}}
                   />
                   {walletAusd <= 0 && (
-                    <div style={{fontSize: 11, color: '#8a7252', fontWeight: 700, lineHeight: 1.4, marginTop: 7}}>
+                    <div style={{fontSize: 11, color: 'var(--terminal-text-muted)', fontWeight: 700, lineHeight: 1.4, marginTop: 7}}>
                       No AUSD detected. Swap or bridge into AUSD first and keep a small MON balance for gas.
                     </div>
                   )}
@@ -8798,9 +9238,9 @@ function FuturesPanel() {
     return (
       <>
         <style>{animCSS}</style>
-        <div ref={panelRef} className={fullscreen ? 'futures-fullscreen' : ''} style={{
+        <div ref={panelRef} className={`futures-terminal-shell ${fullscreen ? 'futures-fullscreen futures-terminal-shell--fullscreen' : 'futures-terminal-shell--compact'}`} style={{
           ...(fullscreen ? S.containerFull : S.container),
-          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '4px solid #d4c8b0' } : {}),
+          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '1px solid var(--terminal-border)' } : {}),
           transform: (fullscreen || isMobile) ? undefined : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
           transition: isDragging ? 'none' : 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
         }}>
@@ -8810,7 +9250,7 @@ function FuturesPanel() {
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
             </button>
           </div>
-          <div style={{...S.body, alignItems: 'stretch', overflowY: 'auto', overflowX: 'hidden', padding: 0, background: '#fdf8e7'}}>
+          <div style={{...S.body, alignItems: 'stretch', overflowY: 'auto', overflowX: 'hidden', padding: 0, background: 'var(--terminal-surface)'}}>
             <TradingSetupGate
               kicker={checkingInvite ? 'VERIFYING ACCOUNT' : whitelisted ? 'CREATE TRADER ACCOUNT' : 'ACCESS CODE REQUIRED'}
               title={checkingInvite ? 'Loading your Phoenix account' : whitelisted ? 'Create your Phoenix trader' : 'Enter your Phoenix code'}
@@ -8821,7 +9261,7 @@ function FuturesPanel() {
                   : 'Clash creates the Phoenix trader account and applies the referral code with your wallet signature.'}
               logo={DEX_CONFIG.phoenix.logo}
               logoAlt="Phoenix"
-              logoBackground="#F97316"
+              logoBackground="var(--terminal-orange)"
               steps={[
                 { id: 'state', label: 'Check live Phoenix state', hint: 'Read the trader account and wallet allowlist before requesting a signature.', status: checkingInvite ? 'active' : 'done' },
                 { id: 'access', label: 'Verify access or referral code', hint: 'Already allowlisted wallets skip the code without changing attribution.', status: checkingInvite ? 'pending' : whitelisted ? 'done' : 'active' },
@@ -8856,7 +9296,7 @@ function FuturesPanel() {
                     style={{...S.input, width: '100%', padding: '10px 12px', fontSize: 14}}
                   />
                   {needsCode && !phoenixInviteCode.trim() && (
-                    <div style={{fontSize: 11, color: '#C2410C', fontWeight: 800, lineHeight: 1.35, textAlign: 'center'}}>
+                    <div style={{fontSize: 11, color: 'var(--terminal-brand-text)', fontWeight: 600, lineHeight: 1.35, textAlign: 'center'}}>
                       This wallet is not allowlisted yet.
                     </div>
                   )}
@@ -8963,15 +9403,15 @@ function FuturesPanel() {
       <>
         <style>{animCSS}</style>
         <style>{`@keyframes act-spin{to{transform:rotate(360deg)}}@keyframes act-pulse{0%,100%{opacity:.7}50%{opacity:1}}`}</style>
-        <div ref={panelRef} className={fullscreen ? "futures-fullscreen" : ""} style={{
+        <div ref={panelRef} className={`futures-terminal-shell ${fullscreen ? 'futures-fullscreen futures-terminal-shell--fullscreen' : 'futures-terminal-shell--compact'}`} style={{
           ...(fullscreen ? S.containerFull : S.container),
-          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '4px solid #d4c8b0' } : {}),
+          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '1px solid var(--terminal-border)' } : {}),
           transform: (fullscreen || isMobile) ? undefined : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
           transition: isDragging ? 'none' : 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
         }}>
           <div style={S.header} onPointerDown={handlePointerDown}>
             <span style={S.headerTitle}>{isRunning ? 'Activating Decibel…' : 'Decibel setup'}</span>
-            <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+            <button type="button" data-nodrag onClick={handleClose} style={S.closeBtn} aria-label="Close futures trading">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
             </button>
           </div>
@@ -8981,7 +9421,7 @@ function FuturesPanel() {
             overflowY: 'auto',
             overflowX: 'hidden',
             padding: 0,
-            background: '#fdf8e7',
+            background: 'var(--terminal-surface)',
           }}>
             <div style={hlGateStyles.frame}>
               <div style={hlGateStyles.titleBlock}>
@@ -9079,6 +9519,7 @@ function FuturesPanel() {
 
   // ==================== TRADE TAB ====================
   const renderTrade = () => {
+    const supportsOrderBook = dex === 'pacifica' || dex === 'phoenix' || dex === 'decibel' || dex === 'ondo' || dex === 'bulk' || dex === 'leverup' || dex === 'aster';
     // Funding / borrow rate badge (top-right of chart).
     const fundingBadge = currentMarket ? (
       <div style={{ ...S.fundingOverlay, ...(hasOstiumRollover ? S.fundingOverlayCompact : null) }}>
@@ -9107,43 +9548,100 @@ function FuturesPanel() {
     if (fullscreen) {
       if (isMobile) {
         return (
-          <div style={{display: 'flex', flexDirection: 'column', flex: '0 0 auto', minHeight: '100%', overflow: 'visible'}}>
+          <div className="futures-terminal-workspace futures-terminal-workspace--mobile" style={{display: 'flex', flexDirection: 'column', flex: '0 0 auto', minHeight: '100%', overflow: 'visible'}}>
             {renderSymbolBar()}
-            {/* Top: chart */}
-            <div style={{flex: '0 0 clamp(220px, 38vh, 360px)', position: 'relative', minHeight: 180}}>
-              <TradingViewWidget symbol={symbol} pythSymbol={currentMarket?.pyth_symbol} positions={positions} orders={displayOrders} currentPrice={currentPrice} chartOverlay={explainBadge} dex={dex} />
-              {fundingBadge}
-            </div>
+            {supportsOrderBook && (
+              <div className="futures-mobile-market-tabs" role="tablist" aria-label="Market view">
+                {['chart', 'book'].map((view) => (
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={mobileMarketView === view}
+                    key={view}
+                    onClick={() => setMobileMarketView(view)}
+                    className={mobileMarketView === view ? 'is-active' : ''}
+                  >
+                    {view === 'chart' ? 'Chart' : 'Order book'}
+                  </button>
+                ))}
+              </div>
+            )}
+            {mobileMarketView === 'book' && supportsOrderBook ? (
+              <div className="futures-terminal-book futures-terminal-book--mobile" role="tabpanel">
+                <OrderBook
+                  symbol={symbol}
+                  dex={dex}
+                  marketName={currentMarket?.market_name}
+                  marketAddr={currentMarket?.market_addr}
+                  priceStep={orderBookStep}
+                  onPriceStepChange={setOrderBookStep}
+                  onTopOfBookChange={setTopOfBook}
+                />
+              </div>
+            ) : (
+              <div className="futures-terminal-chart" role="tabpanel" style={{flex: '0 0 clamp(220px, 38vh, 360px)', position: 'relative', minHeight: 180}}>
+                <TradingViewWidget symbol={symbol} pythSymbol={currentMarket?.pyth_symbol} positions={positions} orders={displayOrders} currentPrice={currentPrice} chartOverlay={explainBadge} dex={dex} />
+                {fundingBadge}
+              </div>
+            )}
 
             {/* Bottom: Trade controls */}
-            <div style={{
+            <div className="futures-terminal-ticket" style={{
               flex: '0 0 auto',
               minHeight: 'auto',
               overflow: 'visible',
               WebkitOverflowScrolling: 'touch',
               paddingBottom: 'max(10px, env(safe-area-inset-bottom))',
-              background: '#e8dfc8',
-              borderTop: '2px solid #d4c8b0',
+              background: 'var(--terminal-canvas)',
+              borderTop: '1px solid var(--terminal-border)',
             }}>
               {renderTradeControls({ compactMobile: true, parentScroll: true })}
             </div>
+            {openedSortedPositions.length > 0 && (
+              <section className="futures-mobile-positions" aria-label="Open positions" style={S.mobileTradePositions}>
+                <div style={S.mobileTradePositionsHeader}>
+                  <span>Open positions</span>
+                  <span style={S.mobileTradePositionsCount}>{openedSortedPositions.length}</span>
+                </div>
+                <PositionsList
+                  positions={openedSortedPositions}
+                  orders={displayOrders}
+                  prices={prices}
+                  dataReady={dataReady}
+                  leverageSettings={leverageSettings}
+                  marginModes={marginModes}
+                  loading={loading}
+                  error={error}
+                  closePosition={closePosition}
+                  setTpsl={setTpsl}
+                  clearError={clearError}
+                  isBasic={false}
+                  dex={dex}
+                  setLocalAlert={setLocalAlert}
+                  setSuccessMsg={setSuccessMsg}
+                  setShareTrade={setShareTrade}
+                  markets={markets}
+                  account={account}
+                />
+              </section>
+            )}
           </div>
         );
       }
 
       return (
-        <div style={{display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden'}}>
+        <div className="futures-terminal-workspace" style={{display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden'}}>
           {renderSymbolBar()}
           {/* Top: chart + orderbook + controls */}
-          <div style={{display: 'flex', flex: '1 1 auto', minHeight: 0, overflow: 'hidden'}}>
-            <div style={{flex: `0 0 ${chartPct}%`, maxWidth: `${chartPct}%`, minHeight: 0, overflow: 'hidden', position: 'relative'}}>
+          <div className="futures-terminal-workspace__primary" style={{display: 'flex', flex: '1 1 auto', minHeight: 0, overflow: 'hidden'}}>
+            <div className="futures-terminal-chart" style={{flex: `0 0 ${chartPct}%`, maxWidth: `${chartPct}%`, minHeight: 0, overflow: 'hidden', position: 'relative'}}>
               <TradingViewWidget symbol={symbol} pythSymbol={currentMarket?.pyth_symbol} positions={positions} orders={displayOrders} currentPrice={currentPrice} chartOverlay={explainBadge} dex={dex} />
             </div>
-            {(dex === 'pacifica' || dex === 'phoenix' || dex === 'decibel' || dex === 'ondo' || dex === 'bulk') && (
+            {supportsOrderBook && (
               <>
                 {/* Drag handle: chart ↔ orderbook */}
                 <div style={S.dragHandleV} onMouseDown={dragChart} />
-                <div style={{flex: `0 0 ${obWidth}px`, minHeight: 0, overflow: 'hidden'}}>
+                <div className="futures-terminal-book" style={{flex: `0 0 ${obWidth}px`, minHeight: 0, overflow: 'hidden'}}>
                   {/* Decibel paints an authenticated snapshot first, then
                       follows its live depth WebSocket with key failover. */}
                   <OrderBook
@@ -9160,7 +9658,7 @@ function FuturesPanel() {
                 <div style={S.dragHandleV} onMouseDown={dragOb} />
               </>
             )}
-            <div style={{flex: '1 1 0', minWidth: 0, minHeight: 0, overflow: 'hidden'}}>{renderTradeControls()}</div>
+            <div className="futures-terminal-ticket" style={{flex: '1 1 0', minWidth: 0, minHeight: 0, overflow: 'hidden'}}>{renderTradeControls()}</div>
           </div>
           {/* Drag handle: top ↔ bottom */}
           <div style={S.dragHandleH} onMouseDown={dragBottom} />
@@ -9189,11 +9687,18 @@ function FuturesPanel() {
             leverageSettings={leverageSettings}
             closePosition={closePosition}
             cancelOrder={cancelOrder}
+            setTpsl={setTpsl}
             dex={dex}
             loading={loading}
+            setLocalAlert={setLocalAlert}
+            setSuccessMsg={setSuccessMsg}
+            setShareTrade={setShareTrade}
             pendingActions={pendingActions}
             beginPendingClose={beginPendingClose}
             removePendingAction={removePendingAction}
+            fetchTradeHistory={fetchTradeHistory}
+            fetchFundingHistory={fetchFundingHistory}
+            activeSymbol={symbol}
           />
         </div>
       );
@@ -9202,7 +9707,7 @@ function FuturesPanel() {
     return (
       <>
         {renderSymbolBar()}
-        <div style={{...S.chartArea, position: 'relative'}}>
+        <div className="futures-terminal-chart futures-terminal-chart--compact" style={{...S.chartArea, position: 'relative'}}>
           <TradingViewWidget symbol={symbol} pythSymbol={currentMarket?.pyth_symbol} positions={positions} orders={displayOrders} currentPrice={currentPrice} chartOverlay={explainBadge} dex={dex} />
           {fundingBadge}
         </div>
@@ -9216,10 +9721,10 @@ function FuturesPanel() {
     if (!openedSortedPositions.length) {
       return (
         <div style={S.empty}>
-          <div style={{opacity: 0.3, color: '#5C3A21'}}>
+          <div style={{opacity: 0.3, color: 'var(--terminal-text)'}}>
             <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect width="20" height="14" x="2" y="7" rx="2" ry="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>
           </div>
-          <div style={{color: '#5C3A21', fontSize: 18, fontWeight: 900}}>{dataReady ? 'No Positions' : 'Loading...'}</div>
+          <div style={{color: 'var(--terminal-text)', fontSize: 18, fontWeight: 700}}>{dataReady ? 'No Positions' : 'Loading...'}</div>
         </div>
       );
     }
@@ -9288,23 +9793,21 @@ function FuturesPanel() {
               <div key={positionStableKey(pos) || i} style={S.posCard}>
                 <div style={S.row}>
                   <div style={{display: 'flex', alignItems: 'center', gap: 8, minWidth: 0}}>
-                    <span style={{fontSize: 16, fontWeight: 900}}>{pos.symbol}</span>
+                    <span style={{fontSize: 16, fontWeight: 700}}>{pos.symbol}</span>
                     <span style={{
-                      fontSize: 12, fontWeight: 900,
+                      fontSize: 12, fontWeight: 700,
                       padding: '2px 8px', borderRadius: 6,
-                      color: '#fff',
-                      background: pos.side === 'bid'
-                        ? 'linear-gradient(180deg, #4caf50 0%, #2e7d32 100%)'
-                        : 'linear-gradient(180deg, #ef5350 0%, #c62828 100%)',
+                      color: 'var(--terminal-on-accent)',
+                      background: pos.side === 'bid' ? 'var(--terminal-long)' : 'var(--terminal-short)',
                       letterSpacing: '0.5px',
-                      textShadow: '0 1px 0 rgba(0,0,0,0.3)',
+                      textShadow: 'none',
                     }}>
                       {pos.side === 'bid' ? '▲ UP' : '▼ DOWN'}
                     </span>
                     <span style={{
-                      fontSize: 11, fontWeight: 800, color: '#a3906a',
-                      background: '#fdf8e7', padding: '2px 6px',
-                      borderRadius: 5, border: '1px solid #d4c8b0',
+                      fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-muted)',
+                      background: 'var(--terminal-surface)', padding: '2px 6px',
+                      borderRadius: 5, border: '1px solid var(--terminal-border)',
                     }}>{isDust ? 'DUST' : formatPositionLeverageBadge(setLev)}</span>
                   </div>
                   <PositionPnlReadout
@@ -9331,10 +9834,10 @@ function FuturesPanel() {
                   <button
                     style={{
                       width: 44, padding: 0,
-                      background: 'rgba(255,255,255,0.6)',
-                      border: '2px solid #d4c8b0',
+                      background: 'var(--terminal-chip-overlay)',
+                      border: '1px solid var(--terminal-border)',
                       borderRadius: 8,
-                      color: '#5C3A21',
+                      color: 'var(--terminal-text)',
                       cursor: 'pointer',
                       display: 'flex', alignItems: 'center', justifyContent: 'center',
                       flexShrink: 0,
@@ -9387,24 +9890,24 @@ function FuturesPanel() {
           return (
             <div key={positionStableKey(pos) || i} style={S.posCard}>
               <div style={S.row}>
-                <span style={{fontSize: 16, fontWeight: 900}}>{pos.symbol}</span>
+                <span style={{fontSize: 16, fontWeight: 700}}>{pos.symbol}</span>
                 <div style={{display: 'flex', alignItems: 'center', gap: 6}}>
                   {(() => {
                     const isIso = dex === 'gmtrade' ? true : (pos.is_isolated ?? marginModes?.[pos.symbol]);
                     return (
-                      <span style={{fontSize: 10, fontWeight: 800, padding: '2px 6px', borderRadius: 5, borderWidth: 1, borderStyle: 'solid', borderColor: isIso ? '#FF9800' : '#4CAF50', color: isIso ? '#FF9800' : '#4CAF50', background: 'rgba(255,255,255,0.4)'}}>
+                      <span style={{fontSize: 11, fontWeight: 600, padding: '2px 6px', borderRadius: 5, borderWidth: 1, borderStyle: 'solid', borderColor: isIso ? 'var(--terminal-warning)' : 'var(--terminal-long)', color: isIso ? 'var(--terminal-warning)' : 'var(--terminal-long)', background: 'var(--terminal-chip-overlay)'}}>
                         {isIso ? 'ISO' : 'CROSS'}
                       </span>
                     );
                   })()}
-                  <span style={{fontSize: 11, fontWeight: 800, color: isDust ? '#8a6d2f' : '#a3906a', background: '#fdf8e7', padding: '2px 6px', borderRadius: 5, border: '1px solid #d4c8b0'}}>{isDust ? 'DUST' : formatPositionLeverageBadge(setLev)}</span>
-                  <span style={{fontSize: 13, fontWeight: 900, color: pos.side === 'bid' ? '#4CAF50' : '#E53935'}}>
+                  <span style={{fontSize: 11, fontWeight: 600, color: isDust ? 'var(--terminal-warning)' : 'var(--terminal-text-muted)', background: 'var(--terminal-surface)', padding: '2px 6px', borderRadius: 5, border: '1px solid var(--terminal-border)'}}>{isDust ? 'DUST' : formatPositionLeverageBadge(setLev)}</span>
+                  <span style={{fontSize: 13, fontWeight: 700, color: pos.side === 'bid' ? 'var(--terminal-long)' : 'var(--terminal-short)'}}>
                     {pos.side === 'bid' ? 'LONG' : 'SHORT'}
                   </span>
                 </div>
               </div>
               <div style={S.row}>
-                <span style={S.detail}>{isDust ? 'Dust' : 'Size'}: {isDust ? `$${dustUsd.toFixed(2)}` : (pos.amount_display || formatPositionAmount(pos.amount))} {!isDust && <span style={{color: '#a3906a'}}>(${posValueUsd.toFixed(2)})</span>}</span>
+                <span style={S.detail}>{isDust ? 'Dust' : 'Size'}: {isDust ? `$${dustUsd.toFixed(2)}` : (pos.amount_display || formatPositionAmount(pos.amount))} {!isDust && <span style={{color: 'var(--terminal-text-muted)'}}>(${posValueUsd.toFixed(2)})</span>}</span>
                 <span style={S.detail}>Entry: ${fmtPrice(parseFloat(pos.entry_price))}</span>
               </div>
               <div style={S.row}>
@@ -9429,7 +9932,7 @@ function FuturesPanel() {
                 const danger = distPct < 10;
                 return (
                   <div style={S.row}>
-                    <span style={{ ...S.detail, color: danger ? '#E53935' : '#a3906a' }}>
+                    <span style={{ ...S.detail, color: danger ? 'var(--terminal-short)' : 'var(--terminal-text-muted)' }}>
                       Liq: ${fmtPrice(liq)}
                       {markP > 0 && <span style={{ marginLeft: 6, fontWeight: 700 }}>({distPct.toFixed(1)}% away)</span>}
                     </span>
@@ -9465,10 +9968,10 @@ function FuturesPanel() {
                 <button
                   style={{
                     width: 32, padding: 0,
-                    background: 'rgba(255,255,255,0.6)',
-                    border: '1px solid #d4c8b0',
+                    background: 'var(--terminal-chip-overlay)',
+                    border: '1px solid var(--terminal-border)',
                     borderRadius: 6,
-                    color: '#5C3A21',
+                    color: 'var(--terminal-text)',
                     cursor: 'pointer',
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
                     flexShrink: 0,
@@ -9493,8 +9996,8 @@ function FuturesPanel() {
               {expanded === 'close' && (
                 <div style={S.expandPanel}>
                   <div style={S.row}>
-                    <span style={{fontSize: 13, fontWeight: 900, color: '#5C3A21'}}>{isDust ? 'Clean up Flash dust' : `Close ${closePct}%`}</span>
-                    <span style={{fontSize: 11, color: '#a3906a', fontWeight: 700}}>
+                    <span style={{fontSize: 13, fontWeight: 700, color: 'var(--terminal-text)'}}>{isDust ? 'Clean up Flash dust' : `Close ${closePct}%`}</span>
+                    <span style={{fontSize: 11, color: 'var(--terminal-text-muted)', fontWeight: 700}}>
                       {formatCloseAmountLabel(pos, closePct, posValueUsd, isDust, dustUsd)}
                     </span>
                   </div>
@@ -9564,7 +10067,7 @@ function FuturesPanel() {
         })}
 
         {successMsg && (
-          <div style={S.successBar} onClick={() => setSuccessMsg(null)}>
+          <div style={S.successBar} role="button" tabIndex={0} onClick={() => setSuccessMsg(null)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSuccessMsg(null); } }}>
             <span>✓ {successMsg}</span>
           </div>
         )}
@@ -9577,10 +10080,10 @@ function FuturesPanel() {
     if (!groupedDisplayOrders.length) {
       return (
         <div style={S.empty}>
-          <div style={{opacity: 0.3, color: '#5C3A21'}}>
+          <div style={{opacity: 0.3, color: 'var(--terminal-text)'}}>
             <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
           </div>
-          <div style={{color: '#5C3A21', fontSize: 18, fontWeight: 900}}>No Orders</div>
+          <div style={{color: 'var(--terminal-text)', fontSize: 18, fontWeight: 700}}>No Orders</div>
         </div>
       );
     }
@@ -9600,20 +10103,20 @@ function FuturesPanel() {
           const isTP = type.includes('TAKE') || type.includes('TP');
           const isSL = type.includes('STOP') || type.includes('SL');
           const pending = isOrderPendingConfirmation(o);
-          const typeColor = isTP ? '#4CAF50' : isSL ? '#E53935' : '#a3906a';
+          const typeColor = isTP ? 'var(--terminal-long)' : isSL ? 'var(--terminal-short)' : 'var(--terminal-text-muted)';
           return (
             <div key={orderStableKey(o, i)} style={S.posCard}>
               <div style={S.row}>
-                <span style={{fontSize: 16, fontWeight: 900}}>{sym}</span>
-                <span style={{fontSize: 10, fontWeight: 800, color: typeColor, background: '#fdf8e7', padding: '2px 6px', borderRadius: 5, border: '1px solid #d4c8b0'}}>{type}</span>
+                <span style={{fontSize: 16, fontWeight: 700}}>{sym}</span>
+                <span style={{fontSize: 11, fontWeight: 600, color: typeColor, background: 'var(--terminal-surface)', padding: '2px 6px', borderRadius: 5, border: '1px solid var(--terminal-border)'}}>{type}</span>
                 {pending ? <OrderPendingBadge /> : null}
-                <span style={{fontSize: 13, fontWeight: 900, color: isBid ? '#4CAF50' : '#E53935'}}>
+                <span style={{fontSize: 13, fontWeight: 700, color: isBid ? 'var(--terminal-long)' : 'var(--terminal-short)'}}>
                   {sideLabel}
                 </span>
                 {pending ? (
-                  <span style={{fontSize: 10, fontWeight: 800, color: '#8b7655'}}>Pending</span>
+                  <span style={{fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-muted)'}}>Pending</span>
                 ) : isReadOnlyOrder(o) ? (
-                  <span style={{fontSize: 10, fontWeight: 800, color: '#8b7655'}}>On position</span>
+                  <span style={{fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-muted)'}}>On position</span>
                 ) : (
                   <button
                     style={S.cancelBtn}
@@ -9719,10 +10222,10 @@ function FuturesPanel() {
       return risexWalletState === 'switching' ? 'Switching...' : 'Checking...';
     })();
     const risexWalletValueColor = risexWalletNeedsSwitch
-      ? '#B45309'
+      ? 'var(--terminal-warning)'
       : risexWalletError
-      ? '#B91C1C'
-      : '#5C3A21';
+      ? 'var(--terminal-short-strong)'
+      : 'var(--terminal-text)';
     const risexDepositSources = Array.isArray(bridgeDepositSources) && bridgeDepositSources.length
       ? bridgeDepositSources
       : RISEX_BRIDGE_CHAINS;
@@ -9802,7 +10305,7 @@ function FuturesPanel() {
       if (nadoWalletState === 'error') return 'Unavailable';
       return nadoWalletState === 'switching' ? 'Switching...' : 'Checking...';
     })();
-    const nadoWalletValueColor = nadoWalletError ? '#B91C1C' : '#5C3A21';
+    const nadoWalletValueColor = nadoWalletError ? 'var(--terminal-short-strong)' : 'var(--terminal-text)';
     const handleSwitchToInk = async () => {
       const fn = switchToInk || activate;
       if (!fn) return;
@@ -9813,6 +10316,8 @@ function FuturesPanel() {
     const showWalletBalanceCard = dex !== 'hibachi';
     const walletBalanceLabel = dex === 'hyperliquid'
       ? 'Arbitrum Wallet USDC'
+      : dex === 'leverup'
+      ? 'Monad Wallet USDC'
       : dex === 'hotstuff'
       ? 'Ethereum Wallet USDC'
       : dex === 'ondo'
@@ -9842,8 +10347,8 @@ function FuturesPanel() {
       : dex === 'nado'
       ? nadoWalletValueColor
       : dex === 'ondo' && ondoWalletState === 'error'
-      ? '#B91C1C'
-      : '#5C3A21';
+      ? 'var(--terminal-short-strong)'
+      : 'var(--terminal-text)';
 
     return (
       <div style={{display: 'flex', flexDirection: 'column', gap: 10}}>
@@ -9852,7 +10357,7 @@ function FuturesPanel() {
           <div style={S.row}>
             <span style={S.label}>Connected Wallet</span>
             <div style={{display: 'flex', alignItems: 'center', gap: 6}}>
-              <span style={{fontSize: 12, fontWeight: 700, fontFamily: 'monospace', color: '#5C3A21'}}>
+              <span style={{fontSize: 12, fontWeight: 700, fontFamily: 'monospace', color: 'var(--terminal-text)'}}>
                 {walletCopied ? 'Copied' : `${walletAddr?.slice(0, 6)}...${walletAddr?.slice(-4)}`}
               </span>
               <button
@@ -9867,8 +10372,8 @@ function FuturesPanel() {
                   display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                   width: 22, height: 22, padding: 0, borderRadius: 6,
                   background: walletCopied ? 'rgba(67,160,71,0.18)' : 'rgba(0,0,0,0.08)',
-                  border: `1px solid ${walletCopied ? 'rgba(46,125,50,0.5)' : 'rgba(92,58,33,0.3)'}`,
-                  cursor: 'pointer', color: walletCopied ? '#2E7D32' : '#5C3A21',
+                  border: `1px solid ${walletCopied ? 'rgba(46,125,50,0.5)' : 'rgba(17,24,39,0.3)'}`,
+                  cursor: 'pointer', color: walletCopied ? 'var(--terminal-long)' : 'var(--terminal-text)',
                   transition: 'all 0.15s ease',
                 }}
               >
@@ -9895,10 +10400,10 @@ function FuturesPanel() {
                 style={{
                   ...S.btnSmall,
                   padding: '6px 10px',
-                  fontSize: 10,
-                  background: '#fff8e6',
-                  color: '#991B1B',
-                  border: '2px solid #DC2626',
+                  fontSize: 11,
+                  background: 'var(--terminal-warning-soft)',
+                  color: 'var(--terminal-short-strong)',
+                  border: '1px solid var(--terminal-short)',
                   whiteSpace: 'nowrap',
                 }}
                 onClick={() => {
@@ -9912,7 +10417,7 @@ function FuturesPanel() {
                 EDIT API
               </button>
             </div>
-            <div style={{fontSize: 10, fontWeight: 800, color: '#9f8759', lineHeight: 1.35}}>
+            <div style={{fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-faint)', lineHeight: 1.35}}>
               Stored encrypted in this browser. Balance, margin, positions, and orders are read from Hibachi.
             </div>
           </div>
@@ -9921,15 +10426,15 @@ function FuturesPanel() {
         {dex === 'hotstuff' && setupVerified === true && (
           <div style={S.fullCard}>
             <div style={S.row}>
-              <span style={{...S.label, color: '#9A3412'}}>Hotstuff agent</span>
+              <span style={{...S.label, color: 'var(--terminal-warning)'}}>Hotstuff agent</span>
               <button
                 style={{
                   ...S.btnSmall,
                   padding: '6px 10px',
-                  fontSize: 10,
-                  background: '#fff8e6',
-                  color: '#9A3412',
-                  border: '2px solid #F97316',
+                  fontSize: 11,
+                  background: 'var(--terminal-warning-soft)',
+                  color: 'var(--terminal-warning)',
+                  border: '1px solid var(--terminal-orange)',
                   whiteSpace: 'nowrap',
                 }}
                 onClick={async () => {
@@ -9944,7 +10449,7 @@ function FuturesPanel() {
                 CLEAR AGENT
               </button>
             </div>
-            <div style={{fontSize: 10, fontWeight: 800, color: '#9f8759', lineHeight: 1.35}}>
+            <div style={{fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-faint)', lineHeight: 1.35}}>
               Stored encrypted in this browser. Clearing it only removes the local Hotstuff order signer; your Hotstuff account and funds stay unchanged.
             </div>
           </div>
@@ -9953,15 +10458,15 @@ function FuturesPanel() {
         {dex === 'lighter' && lighterCredentials?.accountIndex != null && (
           <div style={S.fullCard}>
             <div style={S.row}>
-              <span style={{...S.label, color: '#0284C7'}}>Lighter API</span>
+              <span style={{...S.label, color: 'var(--terminal-info)'}}>Lighter API</span>
               <button
                 style={{
                   ...S.btnSmall,
                   padding: '6px 10px',
-                  fontSize: 10,
-                  background: '#EFF6FF',
-                  color: '#075985',
-                  border: '2px solid #38BDF8',
+                  fontSize: 11,
+                  background: 'var(--terminal-info-soft)',
+                  color: 'var(--terminal-info)',
+                  border: '1px solid var(--terminal-info-border)',
                   whiteSpace: 'nowrap',
                 }}
                 onClick={async () => {
@@ -9980,16 +10485,16 @@ function FuturesPanel() {
               </button>
             </div>
             <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8}}>
-              <div style={{background: '#fffaf0', border: '2px solid #d4c8b0', borderRadius: 10, padding: '8px 10px'}}>
-                <div style={{fontSize: 10, fontWeight: 900, color: '#9f8759', textTransform: 'uppercase'}}>Account index</div>
-                <div style={{fontSize: 13, fontWeight: 900, color: '#5C3A21'}}>{lighterCredentials.accountIndex}</div>
+              <div style={{background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 10, padding: '8px 10px'}}>
+                <div style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text-faint)', textTransform: 'uppercase'}}>Account index</div>
+                <div style={{fontSize: 13, fontWeight: 700, color: 'var(--terminal-text)'}}>{lighterCredentials.accountIndex}</div>
               </div>
-              <div style={{background: '#fffaf0', border: '2px solid #d4c8b0', borderRadius: 10, padding: '8px 10px'}}>
-                <div style={{fontSize: 10, fontWeight: 900, color: '#9f8759', textTransform: 'uppercase'}}>API key index</div>
-                <div style={{fontSize: 13, fontWeight: 900, color: '#5C3A21'}}>{lighterCredentials.apiKeyIndex ?? '-'}</div>
+              <div style={{background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 10, padding: '8px 10px'}}>
+                <div style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text-faint)', textTransform: 'uppercase'}}>API key index</div>
+                <div style={{fontSize: 13, fontWeight: 700, color: 'var(--terminal-text)'}}>{lighterCredentials.apiKeyIndex ?? '-'}</div>
               </div>
             </div>
-            <div style={{fontSize: 10, fontWeight: 800, color: '#9f8759', lineHeight: 1.35}}>
+            <div style={{fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-faint)', lineHeight: 1.35}}>
               Stored encrypted in this browser only. Changing the key removes the saved approval and asks you to approve the Clash integrator again.
             </div>
           </div>
@@ -10001,7 +10506,7 @@ function FuturesPanel() {
           <div style={S.row}>
             <span style={S.label}>{walletBalanceLabel}</span>
             <div style={{display: 'flex', alignItems: 'center', gap: 8}}>
-              <span style={{fontSize: 18, fontWeight: 900, color: walletBalanceColor}}>
+              <span style={{fontSize: 18, fontWeight: 700, color: walletBalanceColor}}>
                 {walletBalanceValue}
               </span>
               {dex === 'risex' && (risexWalletNeedsSwitch || risexWalletError) && (
@@ -10012,10 +10517,10 @@ function FuturesPanel() {
                   style={{
                     ...S.btnSmall,
                     padding: '5px 9px',
-                    fontSize: 10,
-                    background: '#16A34A',
-                    color: '#fff',
-                    border: '2px solid #15803D',
+                    fontSize: 11,
+                    background: 'var(--terminal-long)',
+                    color: 'var(--terminal-on-accent)',
+                    border: '1px solid var(--terminal-long)',
                     opacity: (risexWalletBusy || loading) ? 0.65 : 1,
                     whiteSpace: 'nowrap',
                   }}
@@ -10031,10 +10536,10 @@ function FuturesPanel() {
                   style={{
                     ...S.btnSmall,
                     padding: '5px 9px',
-                    fontSize: 10,
+                    fontSize: 11,
                     background: '#0891B2',
-                    color: '#fff',
-                    border: '2px solid #075985',
+                    color: 'var(--terminal-on-accent)',
+                    border: '1px solid var(--terminal-info)',
                     opacity: (nadoWalletBusy || loading) ? 0.65 : 1,
                     whiteSpace: 'nowrap',
                   }}
@@ -10045,12 +10550,12 @@ function FuturesPanel() {
             </div>
           </div>
           {dex === 'risex' && risexWalletMessage && (
-            <div style={{marginTop: 6, fontSize: 10, lineHeight: 1.35, color: risexWalletNeedsSwitch ? '#B45309' : '#B91C1C', fontWeight: 800}}>
+            <div style={{marginTop: 6, fontSize: 11, lineHeight: 1.35, color: risexWalletNeedsSwitch ? 'var(--terminal-warning)' : 'var(--terminal-short-strong)', fontWeight: 600}}>
               {risexWalletMessage}
             </div>
           )}
           {dex === 'nado' && nadoWalletMessage && (
-            <div style={{marginTop: 6, fontSize: 10, lineHeight: 1.35, color: nadoWalletError ? '#B91C1C' : '#075985', fontWeight: 800}}>
+            <div style={{marginTop: 6, fontSize: 11, lineHeight: 1.35, color: nadoWalletError ? 'var(--terminal-short-strong)' : 'var(--terminal-info)', fontWeight: 600}}>
               {nadoWalletMessage}
             </div>
           )}
@@ -10061,7 +10566,7 @@ function FuturesPanel() {
           <div style={S.fullCard}>
             <div style={S.row}>
               <span style={S.label}>{hyperliquidUnified ? 'Hyperliquid USDC' : 'Legacy Spot USDC'}</span>
-              <span style={{fontSize: 18, fontWeight: 900, color: '#5C3A21'}}>
+              <span style={{fontSize: 18, fontWeight: 700, color: 'var(--terminal-text)'}}>
                 ${hyperliquidSpot.toFixed(2)}
               </span>
             </div>
@@ -10097,11 +10602,11 @@ function FuturesPanel() {
           <div style={S.fullCard}>
             <div style={S.row}>
               <span style={S.label}>GRVT Funding Account</span>
-              <span style={{fontSize: 18, fontWeight: 900, color: '#5C3A21'}}>
+              <span style={{fontSize: 18, fontWeight: 700, color: 'var(--terminal-text)'}}>
                 {grvtFundingBalance.toFixed(2)} {grvtFundingCurrency}
               </span>
             </div>
-            <div style={{marginTop: 6, fontSize: 10, lineHeight: 1.35, color: '#8a7252', fontWeight: 800}}>
+            <div style={{marginTop: 6, fontSize: 11, lineHeight: 1.35, color: 'var(--terminal-text-muted)', fontWeight: 600}}>
               Deposits can land in GRVT funding first. Move funds to your GRVT trading account in the GRVT app if Free Margin is still $0.
             </div>
           </div>
@@ -10110,17 +10615,17 @@ function FuturesPanel() {
         {dex === 'grvt' && (
           <div style={S.fullCard}>
             <div style={S.row}>
-              <span style={{...S.label, color: '#1D4ED8'}}>GRVT account</span>
+              <span style={{...S.label, color: 'var(--terminal-info)'}}>GRVT account</span>
               <span style={S.detail}>Browser only</span>
             </div>
             <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8}}>
-              <div style={{background: '#fffaf0', border: '2px solid #d4c8b0', borderRadius: 10, padding: '8px 10px'}}>
-                <div style={{fontSize: 10, fontWeight: 900, color: '#9f8759', textTransform: 'uppercase'}}>API key</div>
-                <div style={{fontSize: 13, fontWeight: 900, color: '#5C3A21'}}>Saved</div>
+              <div style={{background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 10, padding: '8px 10px'}}>
+                <div style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text-faint)', textTransform: 'uppercase'}}>API key</div>
+                <div style={{fontSize: 13, fontWeight: 700, color: 'var(--terminal-text)'}}>Saved</div>
               </div>
-              <div style={{background: oneTapTrading?.enabled ? '#DCFCE7' : '#fffaf0', border: `2px solid ${oneTapTrading?.enabled ? '#16A34A' : '#d4c8b0'}`, borderRadius: 10, padding: '8px 10px'}}>
-                <div style={{fontSize: 10, fontWeight: 900, color: oneTapTrading?.enabled ? '#166534' : '#9f8759', textTransform: 'uppercase'}}>One tap</div>
-                <div style={{fontSize: 13, fontWeight: 900, color: oneTapTrading?.enabled ? '#166534' : '#5C3A21'}}>
+              <div style={{background: oneTapTrading?.enabled ? 'var(--terminal-long-soft)' : 'var(--terminal-surface-subtle)', border: `1px solid ${oneTapTrading?.enabled ? 'var(--terminal-long)' : 'var(--terminal-border)'}`, borderRadius: 10, padding: '8px 10px'}}>
+                <div style={{fontSize: 11, fontWeight: 700, color: oneTapTrading?.enabled ? 'var(--terminal-long-strong)' : 'var(--terminal-text-faint)', textTransform: 'uppercase'}}>One tap</div>
+                <div style={{fontSize: 13, fontWeight: 700, color: oneTapTrading?.enabled ? 'var(--terminal-long-strong)' : 'var(--terminal-text)'}}>
                   {oneTapTrading?.enabled ? 'Enabled' : 'Off'}
                 </div>
               </div>
@@ -10129,19 +10634,19 @@ function FuturesPanel() {
               <div style={{
                 marginBottom: 8,
                 background: 'rgba(22,163,74,0.08)',
-                border: '2px dashed rgba(22,163,74,0.35)',
+                border: '1px dashed rgba(22,163,74,0.35)',
                 borderRadius: 10,
                 padding: '8px 10px',
-                fontSize: 10,
-                fontWeight: 800,
-                color: '#166534',
+                fontSize: 11,
+                fontWeight: 600,
+                color: 'var(--terminal-long-strong)',
                 wordBreak: 'break-all',
               }}>
                 Signer: {oneTapTrading.signer}
               </div>
             )}
             <button
-              style={{...S.btnSmall, width: '100%', padding: '9px 10px', background: '#2563EB', color: '#fff', border: '2px solid #1D4ED8'}}
+              style={{...S.btnSmall, width: '100%', padding: '9px 10px', background: 'var(--terminal-info)', color: 'var(--terminal-on-accent)', border: '1px solid var(--terminal-info)'}}
               onClick={() => {
                 setGrvtApiKeyInput('');
                 setGrvtPrivateKeyInput('');
@@ -10151,7 +10656,7 @@ function FuturesPanel() {
             >
               Change account
             </button>
-            <span style={{display: 'block', marginTop: 8, fontSize: 10, color: '#a3906a', fontWeight: 700, lineHeight: 1.35}}>
+            <span style={{display: 'block', marginTop: 8, fontSize: 11, color: 'var(--terminal-text-muted)', fontWeight: 700, lineHeight: 1.35}}>
               GRVT credentials are stored encrypted in this browser only. Private keys are never sent to Clash servers.
             </span>
           </div>
@@ -10166,14 +10671,14 @@ function FuturesPanel() {
             <div style={S.levBackdrop} onClick={() => { if (!loading) setGrvtAccountModalOpen(false); }} />
             <div style={{...S.levModal, width: isMobile ? 'calc(100% - 32px)' : 380, maxWidth: 420, gap: 12}}>
               <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
-                <span style={{fontSize: 16, fontWeight: 900, color: '#5C3A21'}}>Change GRVT account</span>
+                <span style={{fontSize: 16, fontWeight: 700, color: 'var(--terminal-text)'}}>Change GRVT account</span>
                 <button style={S.levCloseBtn} disabled={loading} onClick={() => setGrvtAccountModalOpen(false)}>
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                 </button>
               </div>
               <button
                 type="button"
-                style={{...S.btnSmall, width: '100%', padding: '10px 12px', background: '#16A34A', color: '#fff', border: '2px solid #15803D'}}
+                style={{...S.btnSmall, width: '100%', padding: '10px 12px', background: 'var(--terminal-long)', color: 'var(--terminal-on-accent)', border: '1px solid var(--terminal-long)'}}
                 disabled={loading}
                 onClick={async () => {
                   const res = await activate?.({ autoBuilderKey: true });
@@ -10190,7 +10695,7 @@ function FuturesPanel() {
                 {loading ? 'Authorizing...' : 'Authorize with wallet'}
               </button>
               <label style={{display: 'flex', flexDirection: 'column', gap: 6}}>
-                <span style={{fontSize: 11, fontWeight: 900, color: '#5C3A21', textTransform: 'uppercase'}}>New GRVT API key</span>
+                <span style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text)', textTransform: 'uppercase'}}>New GRVT API key</span>
                 <input
                   type="password"
                   placeholder="Paste GRVT API key"
@@ -10213,9 +10718,9 @@ function FuturesPanel() {
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'space-between',
-                  background: grvtAccountOneTap ? '#DCFCE7' : '#fffaf0',
-                  color: grvtAccountOneTap ? '#166534' : '#5C3A21',
-                  border: `2px solid ${grvtAccountOneTap ? '#16A34A' : '#d4c8b0'}`,
+                  background: grvtAccountOneTap ? 'var(--terminal-long-soft)' : 'var(--terminal-surface-subtle)',
+                  color: grvtAccountOneTap ? 'var(--terminal-long-strong)' : 'var(--terminal-text)',
+                  border: `1px solid ${grvtAccountOneTap ? 'var(--terminal-long)' : 'var(--terminal-border)'}`,
                 }}
                 disabled={loading}
                 onClick={() => setGrvtAccountOneTap(v => !v)}
@@ -10226,17 +10731,17 @@ function FuturesPanel() {
                   textAlign: 'center',
                   borderRadius: 999,
                   padding: '3px 8px',
-                  background: grvtAccountOneTap ? '#16A34A' : '#e8dfc8',
-                  color: grvtAccountOneTap ? '#fff' : '#5C3A21',
+                  background: grvtAccountOneTap ? 'var(--terminal-long)' : 'var(--terminal-surface-subtle)',
+                  color: grvtAccountOneTap ? 'var(--terminal-surface)' : 'var(--terminal-text)',
                   fontSize: 11,
-                  fontWeight: 900,
+                  fontWeight: 700,
                 }}>
                   {grvtAccountOneTap ? 'ON' : 'OFF'}
                 </span>
               </button>
               {grvtAccountOneTap && (
                 <label style={{display: 'flex', flexDirection: 'column', gap: 6}}>
-                  <span style={{fontSize: 11, fontWeight: 900, color: '#5C3A21', textTransform: 'uppercase'}}>
+                  <span style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text)', textTransform: 'uppercase'}}>
                     GRVT Secret Private Key {oneTapTrading?.enabled ? '(optional replacement)' : ''}
                   </span>
                   <input
@@ -10253,12 +10758,12 @@ function FuturesPanel() {
                   />
                 </label>
               )}
-              <div style={{fontSize: 10, color: '#8a7252', fontWeight: 800, lineHeight: 1.35}}>
+              <div style={{fontSize: 11, color: 'var(--terminal-text-muted)', fontWeight: 600, lineHeight: 1.35}}>
                 API key is used to read your GRVT account. One tap private key stays encrypted in this browser and is used only to sign orders locally.
               </div>
               <div style={{display: 'flex', gap: 8}}>
                 <button
-                  style={{...S.btnSmall, flex: 1, padding: '9px 10px', background: '#fffaf0', color: '#5C3A21', border: '2px solid #d4c8b0'}}
+                  style={{...S.btnSmall, flex: 1, padding: '9px 10px', background: 'var(--terminal-surface-subtle)', color: 'var(--terminal-text)', border: '1px solid var(--terminal-border)'}}
                   disabled={loading}
                   onClick={() => {
                     setGrvtAccountModalOpen(false);
@@ -10273,9 +10778,9 @@ function FuturesPanel() {
                     ...S.btnSmall,
                     flex: 1,
                     padding: '9px 10px',
-                    background: '#16A34A',
-                    color: '#fff',
-                    border: '2px solid #15803D',
+                    background: 'var(--terminal-long)',
+                    color: 'var(--terminal-on-accent)',
+                    border: '1px solid var(--terminal-long)',
                     opacity: loading || !grvtApiKeyInput.trim() || (grvtAccountOneTap && !oneTapTrading?.enabled && !grvtPrivateKeyInput.trim()) ? 0.65 : 1,
                   }}
                   disabled={loading || !grvtApiKeyInput.trim() || (grvtAccountOneTap && !oneTapTrading?.enabled && !grvtPrivateKeyInput.trim())}
@@ -10322,19 +10827,20 @@ function FuturesPanel() {
           </>
         )}
 
-        {(dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'hyperliquid' || dex === 'gmtrade') ? (() => {
+        {(dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'hyperliquid' || dex === 'gmtrade' || dex === 'leverup') ? (() => {
           const isGmx = dex === 'gmx';
           const isOstium = dex === 'ostium';
           const isHyperliquid = dex === 'hyperliquid';
           const isGmtrade = dex === 'gmtrade';
+          const isLeverup = dex === 'leverup';
           const isFlash = dex === 'flash';
           const isHibachi = dex === 'hibachi';
-          const accentLight = isFlash ? '#4CAF50' : isGmtrade ? '#14B8A6' : isHibachi ? '#EF4444' : isOstium ? '#111827' : isHyperliquid ? '#16A34A' : isGmx ? '#4F46E5' : '#0EA5E9';
-          const accentDark = isFlash ? '#166534' : isGmtrade ? '#0F766E' : isHibachi ? '#991B1B' : isOstium ? '#9A3412' : isHyperliquid ? '#166534' : isGmx ? '#3730A3' : '#0369A1';
-          const accentBg = isFlash ? 'rgba(34,197,94,0.08)' : isGmtrade ? 'rgba(20,184,166,0.08)' : isHibachi ? 'rgba(239,68,68,0.08)' : isOstium ? 'rgba(249,115,22,0.08)' : isHyperliquid ? 'rgba(22,163,74,0.08)' : isGmx ? 'rgba(79,70,229,0.08)' : 'rgba(14,165,233,0.08)';
-          const accentBorder = isFlash ? 'rgba(34,197,94,0.30)' : isGmtrade ? 'rgba(20,184,166,0.35)' : isHibachi ? 'rgba(239,68,68,0.35)' : isOstium ? 'rgba(249,115,22,0.35)' : isHyperliquid ? 'rgba(22,163,74,0.35)' : isGmx ? 'rgba(79,70,229,0.35)' : 'rgba(14,165,233,0.35)';
-          const accentBtnBorder = isFlash ? '#15803D' : isGmtrade ? '#0F766E' : isHibachi ? '#DC2626' : isOstium ? '#F97316' : isHyperliquid ? '#15803D' : isGmx ? '#4338CA' : '#0284C7';
-          const chainName = (isGmtrade || isFlash) ? 'Solana' : isHibachi ? 'Base / Arbitrum' : isHyperliquid || isGmx || isOstium ? 'Arbitrum' : 'Base';
+          const accentLight = isLeverup ? 'var(--terminal-brand)' : isFlash ? 'var(--terminal-long)' : isGmtrade ? '#14B8A6' : isHibachi ? 'var(--terminal-short)' : isOstium ? 'var(--terminal-text)' : isHyperliquid ? 'var(--terminal-long)' : isGmx ? '#4F46E5' : '#0EA5E9';
+          const accentDark = isLeverup ? 'var(--terminal-brand-text)' : isFlash ? 'var(--terminal-long-strong)' : isGmtrade ? 'var(--terminal-long)' : isHibachi ? 'var(--terminal-short-strong)' : isOstium ? 'var(--terminal-warning)' : isHyperliquid ? 'var(--terminal-long-strong)' : isGmx ? '#3730A3' : '#0369A1';
+          const accentBg = isLeverup ? 'var(--terminal-brand-soft)' : isFlash ? 'rgba(34,197,94,0.08)' : isGmtrade ? 'rgba(20,184,166,0.08)' : isHibachi ? 'rgba(239,68,68,0.08)' : isOstium ? 'rgba(249,115,22,0.08)' : isHyperliquid ? 'rgba(22,163,74,0.08)' : isGmx ? 'rgba(79,70,229,0.08)' : 'rgba(14,165,233,0.08)';
+          const accentBorder = isLeverup ? 'var(--terminal-brand)' : isFlash ? 'rgba(34,197,94,0.30)' : isGmtrade ? 'rgba(20,184,166,0.35)' : isHibachi ? 'rgba(239,68,68,0.35)' : isOstium ? 'rgba(249,115,22,0.35)' : isHyperliquid ? 'rgba(22,163,74,0.35)' : isGmx ? 'rgba(79,70,229,0.35)' : 'rgba(14,165,233,0.35)';
+          const accentBtnBorder = isLeverup ? 'var(--terminal-brand)' : isFlash ? 'var(--terminal-long)' : isGmtrade ? 'var(--terminal-long)' : isHibachi ? 'var(--terminal-short)' : isOstium ? 'var(--terminal-orange)' : isHyperliquid ? 'var(--terminal-long)' : isGmx ? '#4338CA' : 'var(--terminal-info)';
+          const chainName = isLeverup ? 'Monad' : (isGmtrade || isFlash) ? 'Solana' : isHibachi ? 'Base / Arbitrum' : isHyperliquid || isGmx || isOstium ? 'Arbitrum' : 'Base';
           const isDepositing = isHyperliquid && depositStatus?.status === 'depositing';
           const isMovingToPerp = isHyperliquid && depositStatus?.status === 'moving_to_perp';
           const isFundingBusy = isDepositing || isMovingToPerp;
@@ -10349,16 +10855,16 @@ function FuturesPanel() {
             Number.isFinite(hibachiArbitrumUsdc) ? `Arbitrum $${hibachiArbitrumUsdc.toFixed(2)}` : null,
           ].filter(Boolean).join(' / ');
           const walletUsdcText = walletUsdc !== null
-            ? (isHibachi ? `USDC: ${hibachiWalletText || `$${walletUsdc.toFixed(2)}`}` : `${isGmtrade ? 'Solana wallet ' : isHyperliquid ? 'Arbitrum ' : ''}USDC: $${walletUsdc.toFixed(2)}`)
+            ? (isHibachi ? `USDC: ${hibachiWalletText || `$${walletUsdc.toFixed(2)}`}` : `${isGmtrade ? 'Solana wallet ' : isHyperliquid ? 'Arbitrum ' : isLeverup ? 'Monad wallet ' : ''}USDC: $${walletUsdc.toFixed(2)}`)
             : isHibachi && walletUsdcStatus?.status === 'checking'
             ? 'Base / Arbitrum USDC: checking...'
             : null;
           return (
           <div style={S.fullCard}>
             <div style={S.row}>
-              <span style={{...S.label, color: accentLight}}>{isFlash ? 'Deposit USDC' : isGmtrade ? 'GMTrade native wallet' : isHibachi ? 'Hibachi funding' : isHyperliquid ? 'Hyperliquid funding' : 'Self-custody wallet'}</span>
+              <span style={{...S.label, color: accentLight}}>{isFlash ? 'Deposit USDC' : isGmtrade ? 'GMTrade native wallet' : isHibachi ? 'Hibachi funding' : isHyperliquid ? 'Hyperliquid funding' : isLeverup ? 'LeverUp V2 self-custody' : 'Self-custody wallet'}</span>
               {isFundingBusy
-                ? <span style={{...S.detail, color: '#15803D'}}>{isMovingToPerp ? 'Moving to trading' : 'Depositing'}{pendingDepositLabel ? ` ${pendingDepositLabel} USDC` : ''}...</span>
+                ? <span style={{...S.detail, color: 'var(--terminal-long)'}}>{isMovingToPerp ? 'Moving to trading' : 'Depositing'}{pendingDepositLabel ? ` ${pendingDepositLabel} USDC` : ''}...</span>
                 : walletUsdcText && (
                   <span style={{...S.detail, display: 'inline-flex', alignItems: 'center', gap: 6}}>
                     {walletUsdcText}
@@ -10374,10 +10880,10 @@ function FuturesPanel() {
                         width: 24,
                         height: 24,
                         borderRadius: '50%',
-                        border: `2px solid ${accentBtnBorder}`,
-                        background: manualTradingRefreshBusy ? '#e7dcc2' : '#fff8e6',
+                        border: `1px solid ${accentBtnBorder}`,
+                        background: manualTradingRefreshBusy ? 'var(--terminal-surface-muted)' : 'var(--terminal-warning-soft)',
                         color: accentDark,
-                        fontWeight: 900,
+                        fontWeight: 700,
                         cursor: manualTradingRefreshBusy ? 'default' : 'pointer',
                         lineHeight: 1,
                         display: 'inline-flex',
@@ -10404,7 +10910,7 @@ function FuturesPanel() {
               <div style={{
                 display: 'flex', alignItems: 'center', gap: 6,
                 background: accentBg,
-                border: `2px dashed ${accentBorder}`,
+                border: `1px dashed ${accentBorder}`,
                 borderRadius: 10, padding: '8px 10px',
               }}>
                 <code style={{
@@ -10414,9 +10920,9 @@ function FuturesPanel() {
                 {walletAddr && (
                   <button
                     style={{
-                      ...S.btnSmall, padding: '6px 10px', fontSize: 10,
-                      background: accentLight, color: '#fff',
-                      border: `2px solid ${accentBtnBorder}`, whiteSpace: 'nowrap',
+                      ...S.btnSmall, padding: '6px 10px', fontSize: 11,
+                      background: accentLight, color: 'var(--terminal-on-accent)',
+                      border: `1px solid ${accentBtnBorder}`, whiteSpace: 'nowrap',
                     }}
                     onClick={async () => { try { await navigator.clipboard.writeText(walletAddr); } catch {} }}
                   >COPY</button>
@@ -10427,13 +10933,13 @@ function FuturesPanel() {
                 <div style={{
                   display: 'flex', alignItems: 'center', gap: 6,
                   background: accentBg,
-                  border: `2px dashed ${accentBorder}`,
+                  border: `1px dashed ${accentBorder}`,
                   borderRadius: 10, padding: '8px 10px',
                 }}>
                   <span style={{
                     flex: 1,
                     fontSize: 11,
-                    fontWeight: 800,
+                    fontWeight: 600,
                     color: accentDark,
                     lineHeight: 1.35,
                   }}>
@@ -10441,9 +10947,9 @@ function FuturesPanel() {
                   </span>
                   <button
                     style={{
-                      ...S.btnSmall, padding: '6px 10px', fontSize: 10,
-                      background: accentLight, color: '#fff',
-                      border: `2px solid ${accentBtnBorder}`, whiteSpace: 'nowrap',
+                      ...S.btnSmall, padding: '6px 10px', fontSize: 11,
+                      background: accentLight, color: 'var(--terminal-on-accent)',
+                      border: `1px solid ${accentBtnBorder}`, whiteSpace: 'nowrap',
                     }}
                     onClick={() => {
                       if (typeof openReferralJoin === 'function') openReferralJoin();
@@ -10452,9 +10958,9 @@ function FuturesPanel() {
                   >OPEN</button>
                   <button
                     style={{
-                      ...S.btnSmall, padding: '6px 10px', fontSize: 10,
-                      background: '#fff8e6', color: accentDark,
-                      border: `2px solid ${accentBtnBorder}`, whiteSpace: 'nowrap',
+                      ...S.btnSmall, padding: '6px 10px', fontSize: 11,
+                      background: 'var(--terminal-warning-soft)', color: accentDark,
+                      border: `1px solid ${accentBtnBorder}`, whiteSpace: 'nowrap',
                     }}
                     onClick={() => {
                       disconnect?.();
@@ -10594,12 +11100,12 @@ function FuturesPanel() {
                   alignItems: 'center',
                   justifyContent: 'space-between',
                   gap: 8,
-                  background: oneTapTrading?.enabled ? 'rgba(22,163,74,0.10)' : 'rgba(92,58,33,0.06)',
-                  border: `1px solid ${oneTapTrading?.enabled ? 'rgba(22,163,74,0.35)' : 'rgba(92,58,33,0.18)'}`,
+                  background: oneTapTrading?.enabled ? 'rgba(22,163,74,0.10)' : 'rgba(17,24,39,0.06)',
+                  border: `1px solid ${oneTapTrading?.enabled ? 'rgba(22,163,74,0.35)' : 'rgba(17,24,39,0.18)'}`,
                   borderRadius: 8,
                   padding: '7px 9px',
                 }}>
-                  <span style={{fontSize: 11, fontWeight: 900, color: oneTapTrading?.enabled ? '#166534' : '#5C3A21'}}>
+                  <span style={{fontSize: 11, fontWeight: 700, color: oneTapTrading?.enabled ? 'var(--terminal-long-strong)' : 'var(--terminal-text)'}}>
                     One tap trading
                     {oneTapTrading?.enabled && oneTapTrading?.approved === false ? ' pending' : ''}
                   </span>
@@ -10611,9 +11117,9 @@ function FuturesPanel() {
                       ...S.btnSmall,
                       minWidth: 72,
                       padding: '5px 10px',
-                      background: oneTapTrading?.enabled ? '#16A34A' : '#fff6dc',
-                      color: oneTapTrading?.enabled ? '#fff' : '#5C3A21',
-                      border: `2px solid ${oneTapTrading?.enabled ? '#15803D' : '#b58b2a'}`,
+                      background: oneTapTrading?.enabled ? 'var(--terminal-long)' : 'var(--terminal-warning-soft)',
+                      color: oneTapTrading?.enabled ? 'var(--terminal-surface)' : 'var(--terminal-text)',
+                      border: `1px solid ${oneTapTrading?.enabled ? 'var(--terminal-long)' : 'var(--terminal-warning-border)'}`,
                       opacity: referralLinking ? 0.7 : 1,
                     }}
                   >
@@ -10626,9 +11132,9 @@ function FuturesPanel() {
                   style={{
                     ...S.btnSmall,
                     width: '100%',
-                    background: '#16A34A',
-                    color: '#fff',
-                    border: '2px solid #15803D',
+                    background: 'var(--terminal-long)',
+                    color: 'var(--terminal-on-accent)',
+                    border: '1px solid var(--terminal-long)',
                     opacity: isFundingBusy ? 0.65 : 1,
                   }}
                   onClick={async () => {
@@ -10641,7 +11147,7 @@ function FuturesPanel() {
                   Move legacy ${hyperliquidSpotFree.toFixed(2)} to Trading
                 </button>
               )}
-              <span style={{fontSize: 10, color: '#a3906a', fontWeight: 700, lineHeight: 1.35}}>
+              <span style={{fontSize: 11, color: 'var(--terminal-text-muted)', fontWeight: 700, lineHeight: 1.35}}>
                 {isHyperliquid
                   ? hyperliquidUnified
                     ? <>{isFundingBusy ? 'Waiting for Hyperliquid to finish funding. ' : ''}Sends native <b>USDC on {chainName}</b> to Hyperliquid Bridge2. Unified account is active, so credited USDC is already available for trading. Minimum is <b>5 USDC</b>.</>
@@ -10654,6 +11160,8 @@ function FuturesPanel() {
                   ? <>Hibachi deposit and withdrawal are not exposed through this Clash API flow. Use the official Hibachi app to manage funds on <b>{chainName}</b>.</>
                   : isOstium
                   ? <>USDC stays in your <b>Arbitrum wallet</b>. One-time setup approves Ostium USDC spending and registers a browser-only delegate. The delegate pays trade gas from a small ETH float; Clash does not sponsor gas.</>
+                  : isLeverup
+                  ? <>USDC stays in your <b>Monad wallet</b>. One-time setup authorizes a browser-only LeverUp V2 agent and approves USDC. V2 order intents are gasless after setup; keep a small <b>MON</b> balance for authorization or allowance changes.</>
                   : <>Funds stay in YOUR wallet. Each trade prompts a signature. Make sure you have <b>USDC</b> + a small <b>ETH</b> gas float on <b>{chainName}</b>.</>}
               </span>
             </div>
@@ -10662,10 +11170,10 @@ function FuturesPanel() {
         })() : (
           <div style={S.fullCard}>
             <div style={S.row}>
-              <span style={{...S.label, color: '#4CAF50'}}>{dex === 'monad' ? 'Deposit AUSD' : dex === 'nado' ? `Deposit ${selectedNadoDepositAsset.label}` : dex === 'hotstuff' ? 'Hotstuff funding' : dex === 'grvt' ? 'Open GRVT Deposit' : dex === 'katana' ? 'Open Katana Deposit' : 'Deposit USDC'}</span>
+              <span style={{...S.label, color: 'var(--terminal-long)'}}>{dex === 'monad' ? 'Deposit AUSD' : dex === 'nado' ? `Deposit ${selectedNadoDepositAsset.label}` : dex === 'hotstuff' ? 'Hotstuff funding' : dex === 'grvt' ? 'Open GRVT Deposit' : dex === 'katana' ? 'Open Katana Deposit' : 'Deposit USDC'}</span>
               {dex === 'risex'
                 ? (
-                  <span style={{...S.detail, color: '#15803D'}}>
+                  <span style={{...S.detail, color: 'var(--terminal-long)'}}>
                     {risexDepositSource?.name || 'Arbitrum'} USDC: {risexSourceBalanceText}
                   </span>
                 )
@@ -10684,7 +11192,7 @@ function FuturesPanel() {
                   padding: '8px 10px',
                   fontSize: 11,
                   lineHeight: 1.4,
-                  color: '#5C3A21',
+                  color: 'var(--terminal-text)',
                   fontWeight: 750,
                 }}>
                   Hotstuff deposit and withdrawal are handled in the official Hotstuff app. Clash reads your account balance and trades through the registered browser agent.
@@ -10701,7 +11209,7 @@ function FuturesPanel() {
                 </button>
                 {Number(spotUsdc || 0) > 0.000001 && (
                   <button
-                    style={{...S.btnSmall, width: '100%', background: '#16A34A', color: '#fff', border: '2px solid #15803D'}}
+                    style={{...S.btnSmall, width: '100%', background: 'var(--terminal-long)', color: 'var(--terminal-on-accent)', border: '1px solid var(--terminal-long)'}}
                     onClick={async () => {
                       const amountText = Number(spotUsdc || 0).toFixed(6).replace(/(\.\d*?)0+$/u, '$1').replace(/\.$/u, '');
                       const r = await moveSpotToPerp?.(amountText);
@@ -10723,7 +11231,7 @@ function FuturesPanel() {
                   padding: '8px 10px',
                   fontSize: 11,
                   lineHeight: 1.4,
-                  color: '#5C3A21',
+                  color: 'var(--terminal-text)',
                   fontWeight: 750,
                 }}>
                   GRVT deposits must be completed in the GRVT app. Clash reads your credited GRVT trading balance and builder-code fills after the deposit is processed.
@@ -10748,7 +11256,7 @@ function FuturesPanel() {
                   padding: '8px 10px',
                   fontSize: 11,
                   lineHeight: 1.4,
-                  color: '#5C3A21',
+                  color: 'var(--terminal-text)',
                   fontWeight: 750,
                 }}>
                   Katana supports USDC deposits through its official bridge flow, including Arbitrum via Stargate. Native in-game deposit needs the full Katana bridge contract flow; for now Clash opens Katana so the deposit is handled by their app.
@@ -10773,7 +11281,7 @@ function FuturesPanel() {
                   padding: '8px 10px',
                   fontSize: 11,
                   lineHeight: 1.4,
-                  color: '#5C3A21',
+                  color: 'var(--terminal-text)',
                   fontWeight: 750,
                 }}>
                   Bulk funding is currently handled by the closed-beta deposit page. The Clash referral is included automatically.
@@ -10807,7 +11315,7 @@ function FuturesPanel() {
                     minWidth: 0,
                     padding: '8px 8px',
                     fontSize: 12,
-                    fontWeight: 800,
+                    fontWeight: 600,
                   }}
                 >
                   {risexDepositSources.map(chain => (
@@ -10826,7 +11334,7 @@ function FuturesPanel() {
                     minWidth: 0,
                     padding: '8px 8px',
                     fontSize: 12,
-                    fontWeight: 800,
+                    fontWeight: 600,
                   }}
                 >
                   {nadoDepositAssets.map(asset => (
@@ -10891,7 +11399,7 @@ function FuturesPanel() {
               </button>
             </div>
             )}
-            <span style={{fontSize: 10, color: '#a3906a', fontWeight: 700}}>
+            <span style={{fontSize: 11, color: 'var(--terminal-text-muted)', fontWeight: 700}}>
               {dex === 'decibel'
                 ? 'Sends USDC from your Aptos wallet to your Decibel trading subaccount. Needs a small APT float for gas.'
                 : dex === 'monad'
@@ -10971,7 +11479,7 @@ function FuturesPanel() {
                 {loading ? '...' : dex === 'grvt' ? 'Open' : (withdrawMax <= 0 ? 'No funds' : 'Withdraw')}
               </button>
             </div>
-            <span style={{fontSize: 10, color: '#a3906a', fontWeight: 700}}>
+            <span style={{fontSize: 11, color: 'var(--terminal-text-muted)', fontWeight: 700}}>
               {dex === 'hyperliquid'
                 ? 'Requests a Hyperliquid withdrawal to your connected Arbitrum address. Arrival usually takes a few minutes.'
                 : dex === 'risex'
@@ -11007,15 +11515,15 @@ function FuturesPanel() {
             ['Maker Fee', formatFeeRate(account?.maker_fee)],
             ['Taker Fee', formatFeeRate(account?.taker_fee)],
           ].map(([k, v]) => (
-            <div key={k} style={{...S.row, padding: '4px 0', borderBottom: '1px solid #d4c8b0'}}>
+            <div key={k} style={{...S.row, padding: '4px 0', borderBottom: '1px solid var(--terminal-border)'}}>
               <span style={S.detail}>{k}</span>
-              <span style={{fontSize: 13, fontWeight: 800, color: '#5C3A21'}}>{v}</span>
+              <span style={{fontSize: 13, fontWeight: 600, color: 'var(--terminal-text)'}}>{v}</span>
             </div>
           ))}
         </div>
 
         {successMsg && (
-          <div style={S.successBar} onClick={() => setSuccessMsg(null)}>
+          <div style={S.successBar} role="button" tabIndex={0} onClick={() => setSuccessMsg(null)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSuccessMsg(null); } }}>
             <span>✓ {successMsg}</span>
           </div>
         )}
@@ -11065,6 +11573,12 @@ function FuturesPanel() {
     if (activeTab === 'Trade') return renderTrade();
     if (activeTab === 'Positions') return renderPositions();
     if (activeTab === 'Orders') return renderOrders();
+    if (activeTab === 'History') return (
+      <TradeHistory walletAddr={walletAddr} accountAddr={(dex === 'decibel' || dex === 'grvt') ? subaccountAddr : walletAddr} dex={dex} markets={markets} fetchTradeHistory={fetchTradeHistory} activeSymbol={symbol} />
+    );
+    if (activeTab === 'Funding') return (
+      <FundingHistory walletAddr={walletAddr} accountAddr={(dex === 'decibel' || dex === 'grvt') ? subaccountAddr : walletAddr} dex={dex} markets={markets} fetchFundingHistory={fetchFundingHistory} />
+    );
     if (activeTab === 'Account') return renderAccount();
     if (activeTab === 'Quests') return <QuestsTab markets={markets} />;
   };
@@ -11078,15 +11592,15 @@ function FuturesPanel() {
     return (
       <>
         <style>{animCSS}</style>
-        <div ref={panelRef} className={fullscreen ? "futures-fullscreen" : ""} style={{
+        <div ref={panelRef} className={`futures-terminal-shell ${fullscreen ? 'futures-fullscreen futures-terminal-shell--fullscreen' : 'futures-terminal-shell--compact'}`} style={{
           ...(fullscreen ? S.containerFull : S.container),
-          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '4px solid #d4c8b0' } : {}),
+          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '1px solid var(--terminal-border)' } : {}),
           transform: (fullscreen || isMobile) ? undefined : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
           transition: isDragging ? 'none' : 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)'
         }}>
           <div style={S.header} onPointerDown={handlePointerDown}>
             <span style={S.headerTitle}>Futures Trading</span>
-            <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+            <button type="button" data-nodrag onClick={handleClose} style={S.closeBtn} aria-label="Close futures trading">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
             </button>
           </div>
@@ -11107,44 +11621,48 @@ function FuturesPanel() {
   return (
     <>
       <style>{animCSS}</style>
-      <div ref={panelRef} className={fullscreen ? "futures-fullscreen" : ""} style={{
+      <div ref={panelRef} className={`futures-terminal-shell ${fullscreen ? 'futures-fullscreen futures-terminal-shell--fullscreen' : 'futures-terminal-shell--compact'}`} style={{
         ...(fullscreen ? S.containerFull : S.container),
-        ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '4px solid #d4c8b0' } : {}),
+        ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '1px solid var(--terminal-border)' } : {}),
         transform: (fullscreen || isMobile) ? undefined : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
         transition: isDragging ? 'none' : 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)'
       }}>
-        <div style={S.header} onPointerDown={handlePointerDown}>
-          <div className="futures-tabs-scroll" style={{display: 'flex', gap: 6, alignItems: 'center', flex: 1, minWidth: 0, overflowX: 'auto', scrollbarWidth: 'none'}}>
+        <header className="futures-terminal-header" style={S.header} onPointerDown={handlePointerDown}>
+          <div
+            className="futures-tabs-scroll clash-scroll-hidden"
+            onWheel={handleTabsWheel}
+            style={{display: 'flex', gap: 6, alignItems: 'center', flex: 1, minWidth: 0, overflowX: 'auto', overscrollBehaviorX: 'contain'}}
+          >
             {visibleTabs.map(t => {
               const active = activeTab === t.id;
               return (
-                <button key={t.id} onClick={() => setActiveTab(t.id)} className={`tab-btn ${active ? 'active' : ''}`} style={{...(active ? S.tabActive : S.tabInactive), flexShrink: 0}}>
+                <button type="button" key={t.id} onClick={() => setActiveTab(t.id)} className={`tab-btn ${active ? 'active' : ''}`} aria-pressed={active} style={{...(active ? S.tabActive : S.tabInactive), flexShrink: 0}}>
                   {t.icon}
-                  {active && <span style={{fontSize: 14, fontWeight: 800}}>{t.label}</span>}
+                  <span style={{fontSize: 12, fontWeight: active ? 750 : 650}}>{t.label}</span>
                 </button>
               );
             })}
           </div>
           <div style={{display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0, marginLeft: 8}}>
-            <button data-nodrag onClick={() => setFullscreen(!fullscreen)} style={S.headerBtn} title={fullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}>
+            <button type="button" data-nodrag onClick={() => setFullscreen(!fullscreen)} style={S.headerBtn} title={fullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'} aria-label={fullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}>
               {fullscreen ? (
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="14" y1="10" x2="21" y2="3"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
               ) : (
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
               )}
             </button>
-            <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+            <button type="button" data-nodrag onClick={handleClose} style={S.closeBtn} aria-label="Close futures trading">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
             </button>
           </div>
-        </div>
+        </header>
         {showReferralBanner && (
           <div style={{
             display: 'flex', alignItems: 'center', gap: 10,
             padding: '8px 12px',
-            background: 'linear-gradient(180deg, #FFF3CD 0%, #FFE69C 100%)',
-            borderBottom: '2px solid #D4A017',
-            color: '#5C3A21', fontSize: 12, fontWeight: 800,
+            background: 'var(--terminal-warning-soft)',
+            borderBottom: '1px solid var(--terminal-warning)',
+            color: 'var(--terminal-text)', fontSize: 12, fontWeight: 600,
           }}>
             <span style={{fontSize: 16}}>🎁</span>
             <span style={{flex: 1, minWidth: 0}}>
@@ -11164,7 +11682,7 @@ function FuturesPanel() {
                   ? (oneTapTrading?.approved ? 'One tap trading is ready' : 'Enable Hyperliquid one tap trading')
                   : 'Unlock 5% off every Avantis trade'}
               </span>
-              <span style={{fontSize: 10, fontWeight: 700, color: '#8a6914'}}>
+              <span style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-warning)'}}>
                 {dex === 'nado'
                   ? (
                     <>
@@ -11179,7 +11697,7 @@ function FuturesPanel() {
                             target="_blank"
                             rel="noreferrer"
                             onClick={event => event.stopPropagation()}
-                            style={{color: '#6d4f08', textDecoration: 'underline'}}
+                            style={{color: 'var(--terminal-warning)', textDecoration: 'underline'}}
                           >Nado referral terms</a>.
                         </>
                       )}
@@ -11197,12 +11715,12 @@ function FuturesPanel() {
               onClick={handleLinkReferrer}
               disabled={referralLinking}
               style={{
-                background: referralLinking ? '#b8860b' : 'linear-gradient(180deg, #e8b830 0%, #b8860b 100%)',
-                border: '2px solid #8a6914', borderRadius: 8,
-                color: '#fff', padding: '6px 12px',
-                fontSize: 11, fontWeight: 900, letterSpacing: '0.5px',
+                background: referralLinking ? 'var(--terminal-text-faint)' : 'var(--terminal-orange)',
+                border: '1px solid var(--terminal-warning)', borderRadius: 8,
+                color: 'var(--terminal-on-accent)', padding: '6px 12px',
+                fontSize: 11, fontWeight: 700, letterSpacing: '0.5px',
                 cursor: referralLinking ? 'wait' : 'pointer',
-                textShadow: '0 1px 0 rgba(0,0,0,0.3)',
+                textShadow: 'none',
                 whiteSpace: 'nowrap',
               }}
             >
@@ -11214,8 +11732,8 @@ function FuturesPanel() {
               title="Dismiss"
               style={{
                 background: 'transparent', border: 'none',
-                color: '#8a6914', cursor: 'pointer',
-                fontSize: 18, fontWeight: 900, padding: '0 4px', lineHeight: 1,
+                color: 'var(--terminal-warning)', cursor: 'pointer',
+                fontSize: 18, fontWeight: 700, padding: '0 4px', lineHeight: 1,
                 display: dex === 'nado' ? 'none' : undefined,
               }}
             >×</button>
@@ -11227,7 +11745,15 @@ function FuturesPanel() {
               ...S.panelErrorToast,
               top: showReferralBanner ? 94 : 48,
             }}
+            role="button"
+            tabIndex={0}
             onClick={closePanelAlert}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                closePanelAlert();
+              }
+            }}
             role="status"
           >
             <span style={S.panelErrorIcon}>!</span>
@@ -11246,7 +11772,7 @@ function FuturesPanel() {
             </button>
           </div>
         )}
-        <div className="futures-panel-body" style={S.body}>
+        <main className="futures-panel-body futures-terminal-body" style={S.body}>
           <div key={activeTab} style={{
             animation: 'fadeIn 0.25s ease-out',
             display: 'flex',
@@ -11257,7 +11783,7 @@ function FuturesPanel() {
           }}>
             {renderContent()}
           </div>
-        </div>
+        </main>
 
         {dex === 'ostium' && oneTapWalletFallback && (
           <div style={S.oneTapFallbackWrap}>
@@ -11271,7 +11797,7 @@ function FuturesPanel() {
         )}
 
         {/* Powered by DEX footer — switches logo + label per active DEX */}
-        <div style={S.pacificaFooter}>
+        <footer className="futures-terminal-footer" style={S.pacificaFooter}>
           {(() => {
             const cfg = DEX_CONFIG[dex] || DEX_CONFIG.pacifica;
             const brand = cfg.id === 'monad' ? 'Perpl' : cfg.label;
@@ -11297,7 +11823,7 @@ function FuturesPanel() {
               </>
             );
           })()}
-        </div>
+        </footer>
 
         {tradeIdeaOpen && (
           <TradeIdeaModal
@@ -11342,16 +11868,14 @@ function FuturesPanel() {
 export default memo(FuturesPanel);
 
 const animCSS = `
-  .futures-tabs-scroll::-webkit-scrollbar { display: none; }
-
   /* Floating Explain pill — starts as a circle (just "?"), expands on hover to show "Explain" */
   .explain-chart-pill {
     position: absolute; bottom: 8px; right: 8px; z-index: 20;
     display: inline-flex; align-items: center;
     height: 28px; width: 28px; padding: 0;
-    background: rgba(255, 255, 255, 0.92);
-    color: #5C3A21;
-    border: 2px solid #5C3A21;
+    background: var(--terminal-chip-overlay);
+    color: var(--terminal-brand-strong);
+    border: 1px solid var(--terminal-border);
     border-radius: 999px;
     cursor: pointer; overflow: hidden;
     box-shadow: 0 2px 6px rgba(0,0,0,0.25);
@@ -11362,7 +11886,7 @@ const animCSS = `
   .explain-chart-pill:focus-visible {
     width: 112px;
     padding: 0 10px 0 4px;
-    background: #fff;
+    background: var(--terminal-surface);
     outline: none;
   }
   .explain-chart-pill .explain-q {
@@ -11399,18 +11923,12 @@ const animCSS = `
   @keyframes futures-close-spin {
     to { transform: rotate(360deg); }
   }
-  /* Gradient Scrollbar */
-  .grad-scrollbar::-webkit-scrollbar { width: 8px; }
-  .grad-scrollbar::-webkit-scrollbar-track { background: #fdf8e7; border-radius: 4px; }
-  .grad-scrollbar::-webkit-scrollbar-thumb { background: linear-gradient(180deg, #d4c8b0 0%, #bba882 100%); border-radius: 4px; border: 1px solid #fdf8e7; }
-  .grad-scrollbar::-webkit-scrollbar-thumb:hover { background: linear-gradient(180deg, #bba882 0%, #a3906a 100%); }
-
   /* Gradient Range Slider */
   .grad-slider {
     -webkit-appearance: none;
     width: 100%;
     height: 8px;
-    background: linear-gradient(90deg, #5C3A21 0%, #5C3A21 var(--val, 0%), #d4c8b0 var(--val, 0%), #d4c8b0 100%);
+    background: linear-gradient(90deg, var(--terminal-orange) 0%, var(--terminal-orange) var(--val, 0%), var(--terminal-border) var(--val, 0%), var(--terminal-border) 100%);
     border-radius: 4px;
     outline: none;
     cursor: pointer;
@@ -11421,23 +11939,22 @@ const animCSS = `
     width: 18px;
     height: 18px;
     border-radius: 50%;
-    background: #fdf8e7;
-    border: 4px solid #5C3A21;
-    box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+    background: var(--terminal-surface);
+    border: 4px solid var(--terminal-orange);
+    box-shadow: 0 1px 4px rgba(17,24,39,0.2);
     cursor: pointer;
   }
   .grad-slider::-moz-range-thumb {
     width: 18px;
     height: 18px;
     border-radius: 50%;
-    background: #fdf8e7;
-    border: 4px solid #5C3A21;
-    box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+    background: var(--terminal-surface);
+    border: 4px solid var(--terminal-orange);
+    box-shadow: 0 1px 4px rgba(17,24,39,0.2);
     cursor: pointer;
   }
 
-  .futures-panel-body::-webkit-scrollbar { display: none; }
-  .futures-panel-body { overflow-x: hidden !important; }
+  .futures-panel-body { overflow-x: hidden !important; scrollbar-gutter: stable; }
   .futures-panel-body input[type=number]::-webkit-inner-spin-button,
   .futures-panel-body input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
   .futures-panel-body input[type=number] { -moz-appearance: textfield; }
@@ -11517,9 +12034,9 @@ const DESKTOP_PANEL_GUTTER = 'clamp(12px, 1.25vw, 24px)';
 const S = {
   containerFull: {
     position: 'fixed', top: 0, right: 0, bottom: 0, left: 0, width: '100%', height: '100%',
-    background: '#e8dfc8', border: '0px solid #d4c8b0', borderRadius: 0,
+    background: 'var(--terminal-canvas)', border: 'none', borderRadius: 0,
     display: 'flex', flexDirection: 'column', pointerEvents: 'auto', overflow: 'hidden', zIndex: 100,
-    boxShadow: '0 0 0 rgba(0,0,0,0)', fontFamily: '"Inter","Segoe UI",sans-serif',
+    boxShadow: 'none', fontFamily: 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
     boxSizing: 'border-box',
   },
   container: {
@@ -11529,60 +12046,56 @@ const S = {
     bottom: 150,
     width: DESKTOP_PANEL_WIDTH,
     maxWidth: 'calc(100vw - 32px)',
-    background: '#e8dfc8', border: '6px solid #d4c8b0', borderRadius: 24,
+    background: 'var(--terminal-canvas)', border: '1px solid var(--terminal-border)', borderRadius: 20,
     display: 'flex', flexDirection: 'column', pointerEvents: 'auto', overflow: 'hidden', zIndex: 100,
-    boxShadow: '0 10px 30px rgba(0,0,0,0.4)', fontFamily: '"Inter","Segoe UI",sans-serif',
+    boxShadow: '0 20px 50px var(--terminal-shadow)', fontFamily: 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
     boxSizing: 'border-box',
   },
   header: {
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-    padding: '8px 12px', background: '#d4c8b0', borderBottom: '4px solid #bba882',
+    padding: 'var(--terminal-header-padding, 8px 12px)', background: 'var(--terminal-surface)', borderBottom: '1px solid var(--terminal-border)',
     cursor: 'grab', userSelect: 'none',
   },
-  headerTitle: { fontSize: 16, fontWeight: 900, color: '#5C3A21' },
+  headerTitle: { fontSize: 16, fontWeight: 700, color: 'var(--terminal-text)' },
   tabActive: {
     display: 'flex', alignItems: 'center', gap: 4, padding: '6px 10px',
-    background: '#fdf8e7', border: '3px solid #bba882', borderRadius: 12,
-    color: '#333', boxShadow: '0 3px 0 #bba882', transform: 'translateY(-1px)', cursor: 'default',
+    background: 'var(--terminal-brand-soft)', border: '1px solid var(--terminal-orange)', borderRadius: 10,
+    color: 'var(--terminal-brand-strong)', boxShadow: 'none', cursor: 'default',
     minHeight: 36,
   },
   tabInactive: {
-    display: 'flex', alignItems: 'center', justifyContent: 'center', width: 36, height: 36,
-    background: '#bba882', border: '3px solid #a3906a', borderRadius: 12,
-    color: '#333', boxShadow: '0 3px 0 #a3906a', cursor: 'pointer', padding: 0,
+    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, minHeight: 36,
+    background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 10,
+    color: 'var(--terminal-text-muted)', boxShadow: 'none', cursor: 'pointer', padding: '6px 9px',
   },
-  closeBtn: {
-    width: 32, height: 32, borderRadius: '50%', background: '#E53935', border: '3px solid #fff',
-    color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0,
-    boxShadow: '0 3px 5px rgba(0,0,0,0.3)',
-  },
+  closeBtn: uiIconButton('secondary', 36),
   body: {
-    flex: 1, padding: 12, display: 'flex', flexDirection: 'column', gap: 10,
-    overflowY: 'auto', overflowX: 'hidden', background: '#fdf8e7', scrollbarWidth: 'none',
+    flex: 1, padding: 'var(--terminal-body-padding, 12px)', display: 'flex', flexDirection: 'column', gap: 10,
+    overflowY: 'auto', overflowX: 'hidden', background: 'var(--terminal-canvas)', scrollbarGutter: 'stable',
     minHeight: 0,
   },
   pacificaFooter: {
     display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
-    padding: '6px 12px', borderTop: '3px solid #d4c8b0',
-    background: 'linear-gradient(90deg, #e8dfc8 0%, #fdf8e7 50%, #e8dfc8 100%)',
+    padding: '6px 12px', borderTop: '1px solid var(--terminal-border)',
+    background: 'var(--terminal-surface)',
     flexShrink: 0,
   },
-  pacificaLogo: { width: 20, height: 20, objectFit: 'contain', filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.2))' },
-  pacificaText: { fontSize: 10, fontWeight: 700, color: '#a3906a', letterSpacing: '0.05em', textTransform: 'uppercase' },
-  pacificaBrand: { fontSize: 11, fontWeight: 900, color: '#5C3A21', letterSpacing: '0.08em', textTransform: 'uppercase' },
+  pacificaLogo: { width: 20, height: 20, objectFit: 'contain' },
+  pacificaText: { fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-faint)', letterSpacing: '0.05em', textTransform: 'uppercase' },
+  pacificaBrand: { fontSize: 11, fontWeight: 600, color: 'var(--terminal-text)', letterSpacing: '0.08em', textTransform: 'uppercase' },
   symbolBar: {
     display: 'flex', alignItems: 'center', gap: 12, padding: '4px 15px',
     background: 'transparent', flexShrink: 0,
-    overflowX: 'auto', scrollbarWidth: 'none', minHeight: 0,
+    overflowX: 'auto', minHeight: 0,
   },
   symbolBarCompact: {
     gap: 6, padding: '4px 8px', justifyContent: 'space-between',
     overflowX: 'hidden',
   },
-  infoCell: { display: 'flex', flexDirection: 'column', gap: 0, width: 90, flexShrink: 0 },
+  infoCell: { display: 'flex', flexDirection: 'column', gap: 1, width: 'clamp(72px, 7vw, 90px)', flexShrink: 0 },
   infoCellWide: { width: 118 },
-  infoCellLabel: { fontSize: 9, fontWeight: 700, color: '#a3906a', textTransform: 'uppercase', lineHeight: 1 },
-  infoCellValue: { fontSize: 13, fontWeight: 900, color: '#5C3A21', fontFamily: 'monospace', whiteSpace: 'nowrap', lineHeight: 1.2 },
+  infoCellLabel: { fontSize: 11, fontWeight: 700, color: 'var(--terminal-text-faint)', textTransform: 'uppercase', lineHeight: 1 },
+  infoCellValue: { fontSize: 13, fontWeight: 750, color: 'var(--terminal-text)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', lineHeight: 1.2 },
   infoCellValueCompact: { fontSize: 11 },
   fundingOverlay: {
     position: 'absolute', top: 5, right: 10, zIndex: 10,
@@ -11590,24 +12103,24 @@ const S = {
     pointerEvents: 'none',
   },
   fundingOverlayCompact: { right: 6, gap: 3 },
-  fundingOLabel: { fontSize: 10, fontWeight: 800, color: '#a3906a', letterSpacing: '0.04em' },
-  fundingOValue: { fontSize: 11, fontWeight: 900, fontFamily: 'monospace' },
-  fundingOValueCompact: { fontSize: 10 },
+  fundingOLabel: { fontSize: 11, fontWeight: 700, color: 'var(--terminal-text-faint)', letterSpacing: '0.04em' },
+  fundingOValue: { fontSize: 11, fontWeight: 750, fontVariantNumeric: 'tabular-nums' },
+  fundingOValueCompact: { fontSize: 11 },
   // Common
   row: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 },
-  label: { color: '#5C3A21', fontSize: 11, fontWeight: 800, textTransform: 'uppercase' },
-  detail: { fontSize: 12, fontWeight: 700, color: '#77573d' },
+  label: { color: 'var(--terminal-text-control)', fontSize: 11, fontWeight: 700, textTransform: 'uppercase' },
+  detail: { fontSize: 12, fontWeight: 600, color: 'var(--terminal-text-muted)' },
   orderPendingBadge: {
     display: 'inline-flex',
     alignItems: 'center',
     gap: 4,
     padding: '2px 6px',
     borderRadius: 6,
-    border: '1px solid #d4c8b0',
-    background: '#fff7d6',
-    color: '#8a6d2f',
-    fontSize: 10,
-    fontWeight: 900,
+    border: '1px solid var(--terminal-border)',
+    background: 'var(--terminal-warning-soft)',
+    color: 'var(--terminal-warning)',
+    fontSize: 11,
+    fontWeight: 700,
     lineHeight: 1,
     whiteSpace: 'nowrap',
   },
@@ -11615,10 +12128,10 @@ const S = {
     width: 9,
     height: 9,
     borderRadius: '50%',
-    borderWidth: 2,
+    borderWidth: 1,
     borderStyle: 'solid',
-    borderColor: '#d4c8b0',
-    borderTopColor: '#8a6d2f',
+    borderColor: 'var(--terminal-border)',
+    borderTopColor: 'var(--terminal-warning)',
     animation: 'wallet-spin 0.75s linear infinite',
     flexShrink: 0,
   },
@@ -11628,12 +12141,12 @@ const S = {
     gap: 8,
     padding: '5px 7px',
     borderRadius: 8,
-    background: 'rgba(255, 248, 231, 0.72)',
-    border: '1px solid #d4c8b0',
+    background: 'var(--terminal-warning-soft)',
+    border: '1px solid var(--terminal-border)',
   },
   attachedTpslLeg: {
     fontSize: 11,
-    fontWeight: 900,
+    fontWeight: 700,
     lineHeight: 1.15,
     whiteSpace: 'nowrap',
   },
@@ -11642,22 +12155,22 @@ const S = {
     flexWrap: 'wrap',
     gap: 6,
     marginTop: 3,
-    color: '#77573d',
+    color: 'var(--terminal-text-secondary)',
   },
   attachedTpslLegCompact: {
-    fontSize: 10,
-    fontWeight: 900,
+    fontSize: 11,
+    fontWeight: 700,
     lineHeight: 1.1,
     whiteSpace: 'nowrap',
   },
   input: {
-    background: '#fff', border: '3px solid #d4c8b0', borderRadius: 10,
-    padding: '9px 10px', color: '#333', fontSize: 15, fontWeight: 700, outline: 'none',
+    background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border-strong)', borderRadius: 9,
+    padding: '10px', color: 'var(--terminal-text)', fontSize: 15, fontWeight: 650, outline: 'none',
     width: '100%', boxSizing: 'border-box', minWidth: 0,
   },
   errorBar: {
-    background: '#E5393520', border: '2px solid #E53935', borderRadius: 8,
-    padding: '7px 10px', color: '#B71C1C', fontSize: 12, fontWeight: 700, cursor: 'pointer',
+    background: 'var(--terminal-depth-short)', border: '1px solid var(--terminal-short)', borderRadius: 8,
+    padding: '7px 10px', color: 'var(--terminal-short-strong)', fontSize: 12, fontWeight: 700, cursor: 'pointer',
     display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8,
     minWidth: 0, maxWidth: '100%', overflow: 'hidden', overflowWrap: 'anywhere', wordBreak: 'break-word',
   },
@@ -11665,7 +12178,7 @@ const S = {
     flex: '1 1 auto', minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word',
   },
   errorCloseIcon: {
-    color: '#B71C1C', fontSize: 14, fontWeight: 900, opacity: 0.7, flexShrink: 0,
+    color: 'var(--terminal-short-strong)', fontSize: 14, fontWeight: 700, opacity: 0.7, flexShrink: 0,
   },
   panelErrorToast: {
     position: 'absolute',
@@ -11677,13 +12190,13 @@ const S = {
     gap: 8,
     minWidth: 0,
     padding: '8px 10px',
-    background: 'linear-gradient(180deg, #fff4e6 0%, #ffe3e0 100%)',
-    border: '2px solid #E53935',
+    background: 'var(--terminal-short-soft)',
+    border: '1px solid var(--terminal-short)',
     borderRadius: 10,
-    boxShadow: '0 5px 14px rgba(92,58,33,0.24)',
-    color: '#8A1C13',
+    boxShadow: '0 5px 14px rgba(17,24,39,0.24)',
+    color: 'var(--terminal-short-strong)',
     fontSize: 11,
-    fontWeight: 850,
+    fontWeight: 600,
     lineHeight: 1.25,
     cursor: 'pointer',
     boxSizing: 'border-box',
@@ -11693,13 +12206,13 @@ const S = {
     width: 18,
     height: 18,
     borderRadius: '50%',
-    background: '#E53935',
-    color: '#fff',
+    background: 'var(--terminal-short)',
+    color: 'var(--terminal-on-accent)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     fontSize: 12,
-    fontWeight: 950,
+    fontWeight: 700,
     flexShrink: 0,
     lineHeight: 1,
   },
@@ -11715,9 +12228,9 @@ const S = {
     borderRadius: '50%',
     background: 'rgba(138,28,19,0.12)',
     border: 'none',
-    color: '#8A1C13',
+    color: 'var(--terminal-short-strong)',
     fontSize: 12,
-    fontWeight: 950,
+    fontWeight: 700,
     cursor: 'pointer',
     display: 'flex',
     alignItems: 'center',
@@ -11731,11 +12244,11 @@ const S = {
     flex: '0 0 auto',
   },
   oneTapFallbackBar: {
-    background: '#E5393520',
-    border: '2px solid #E53935',
+    background: 'var(--terminal-depth-short)',
+    border: '1px solid var(--terminal-short)',
     borderRadius: 8,
     padding: 9,
-    color: '#B71C1C',
+    color: 'var(--terminal-short-strong)',
     fontSize: 12,
     fontWeight: 700,
     display: 'flex',
@@ -11757,9 +12270,9 @@ const S = {
   oneTapFallbackDismiss: {
     background: 'transparent',
     border: 'none',
-    color: '#B71C1C',
+    color: 'var(--terminal-short-strong)',
     fontSize: 16,
-    fontWeight: 900,
+    fontWeight: 700,
     lineHeight: 1,
     padding: 0,
     cursor: 'pointer',
@@ -11767,8 +12280,8 @@ const S = {
     flexShrink: 0,
   },
   successBar: {
-    background: '#4CAF5020', border: '2px solid #4CAF50', borderRadius: 8,
-    padding: '7px 10px', color: '#2E7D32', fontSize: 12, fontWeight: 800, cursor: 'pointer',
+    background: 'var(--terminal-depth-long)', border: '1px solid var(--terminal-long)', borderRadius: 8,
+    padding: '7px 10px', color: 'var(--terminal-long)', fontSize: 12, fontWeight: 600, cursor: 'pointer',
     textAlign: 'center',
   },
   empty: {
@@ -11777,23 +12290,19 @@ const S = {
   },
   // Trade
   chartArea: {
-    width: '100%', flex: 1, minHeight: 200, background: '#fff', borderRadius: 12,
-    border: '4px solid #d4c8b0', overflow: 'hidden', boxShadow: 'inset 0 3px 6px rgba(0,0,0,0.1)',
+    width: '100%', flex: 1, minHeight: 200, background: 'var(--terminal-surface)', borderRadius: 12,
+    border: '1px solid var(--terminal-border)', overflow: 'hidden', boxShadow: 'none',
     position: 'relative',
   },
   chartFullscreen: {
-    width: '100%', flex: 3, minHeight: 400, background: '#fff', borderRadius: 12,
-    border: '4px solid #d4c8b0', overflow: 'hidden', boxShadow: 'inset 0 3px 6px rgba(0,0,0,0.1)',
+    width: '100%', flex: 3, minHeight: 400, background: 'var(--terminal-surface)', borderRadius: 12,
+    border: '1px solid var(--terminal-border)', overflow: 'hidden', boxShadow: 'inset 0 3px 6px rgba(0,0,0,0.1)',
     position: 'relative',
   },
-  headerBtn: {
-    width: 32, height: 32, borderRadius: '50%', background: '#1E88E5', border: '3px solid #fff',
-    color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0,
-    boxShadow: '0 3px 5px rgba(0,0,0,0.3)',
-  },
+  headerBtn: uiIconButton('secondary', 36),
   symbolBtn: {
     display: 'flex', alignItems: 'center', gap: 6, padding: '5px 10px',
-    background: '#e8dfc8', border: '3px solid #d4c8b0', borderRadius: 10, cursor: 'pointer', color: '#333',
+    background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 9, cursor: 'pointer', color: 'var(--terminal-text)',
   },
   symbolBtnCompact: {
     flex: '0 1 auto', minWidth: 0, overflow: 'hidden', boxSizing: 'border-box',
@@ -11810,7 +12319,7 @@ const S = {
   balanceSummary: {
     display: 'flex', alignItems: 'stretch', flexShrink: 0,
     minWidth: 142, padding: '4px 7px',
-    background: '#e8dfc8', border: '2px solid #d4c8b0', borderRadius: 8,
+    background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 8,
     boxSizing: 'border-box',
   },
   balanceSummaryCompact: {
@@ -11832,144 +12341,146 @@ const S = {
     padding: '0 2px',
   },
   balanceMetricLabel: {
-    fontSize: 8, fontWeight: 800, color: '#8C7D5C', lineHeight: 1,
+    fontSize: 11, fontWeight: 700, color: 'var(--terminal-text-faint)', lineHeight: 1,
     letterSpacing: 0, textTransform: 'uppercase', whiteSpace: 'nowrap',
   },
   balanceMetricValue: {
-    fontSize: 12, fontWeight: 900, color: '#5C3A21', lineHeight: 1.2,
+    fontSize: 12, fontWeight: 750, color: 'var(--terminal-text)', lineHeight: 1.2,
     fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap',
   },
   balanceLoadingValue: {
     display: 'inline-flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4,
-    minHeight: 14, color: '#8C7D5C', fontSize: 9, textTransform: 'uppercase',
+    minHeight: 14, color: 'var(--terminal-text-muted)', fontSize: 11, textTransform: 'uppercase',
   },
   balanceLoadingSpinner: {
     width: 9, height: 9, borderRadius: '50%', flexShrink: 0,
-    borderWidth: 2, borderStyle: 'solid', borderColor: '#c7b996',
-    borderTopColor: '#5C3A21', animation: 'wallet-spin 0.75s linear infinite',
+    borderWidth: 1, borderStyle: 'solid', borderColor: 'var(--terminal-border)',
+    borderTopColor: 'var(--terminal-orange)', animation: 'wallet-spin 0.75s linear infinite',
   },
   balanceDivider: {
     width: 1, alignSelf: 'stretch', margin: '0 2px',
-    background: '#c7b996', opacity: 0.9,
+    background: 'var(--terminal-border)', opacity: 1,
   },
   chips: {
     display: 'flex', flexWrap: 'wrap', gap: 5, padding: 8,
-    background: '#e8dfc8', borderRadius: 10, border: '2px solid #d4c8b0', animation: 'slideDown 0.2s',
+    background: 'var(--terminal-surface-subtle)', borderRadius: 10, border: '1px solid var(--terminal-border)', animation: 'slideDown 0.2s',
   },
   chip: {
-    padding: '5px 10px', background: '#fdf8e7', border: '2px solid #d4c8b0',
-    borderRadius: 7, cursor: 'pointer', fontWeight: 700, fontSize: 12, color: '#5C3A21',
+    padding: '5px 10px', background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)',
+    borderRadius: 7, cursor: 'pointer', fontWeight: 700, fontSize: 12, color: 'var(--terminal-text)',
   },
   chipActive: {
-    padding: '5px 10px', background: '#4CAF50', border: '2px solid #2E7D32',
-    borderRadius: 7, cursor: 'pointer', fontWeight: 700, fontSize: 12, color: '#fff',
+    padding: '5px 10px', background: 'var(--terminal-brand-soft)', border: '1px solid var(--terminal-orange)',
+    borderRadius: 7, cursor: 'pointer', fontWeight: 700, fontSize: 12, color: 'var(--terminal-brand-text)',
   },
   depositRow: {
-    display: 'flex', gap: 6, background: '#e8dfc8', border: '2px solid #d4c8b0', borderRadius: 10, padding: 8,
+    display: 'flex', gap: 6, background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 10, padding: 8,
   },
   depositBtn: {
-    padding: '8px 14px', background: '#4CAF50', border: '2px solid #2E7D32', borderRadius: 8,
-    color: '#fff', fontWeight: 800, fontSize: 12, cursor: 'pointer',
+    padding: '8px 14px', background: 'var(--terminal-orange)', border: '1px solid var(--terminal-brand-strong)', borderRadius: 8,
+    color: 'var(--terminal-on-accent)', fontWeight: 600, fontSize: 12, cursor: 'pointer',
   },
   tradeBox: {
-    display: 'flex', flexDirection: 'column', gap: 10, background: '#e8dfc8',
-    padding: 12, borderRadius: 14, border: '3px solid #d4c8b0',
+    display: 'flex', flexDirection: 'column', gap: 10, background: 'var(--terminal-surface)',
+    padding: 12, borderRadius: 12, border: '1px solid var(--terminal-border)',
     minWidth: 0, boxSizing: 'border-box',
   },
   typeBtn: {
-    flex: 1, padding: '7px', background: '#d4c8b0', border: '2px solid #bba882',
-    borderRadius: 8, cursor: 'pointer', fontWeight: 800, fontSize: 12, color: '#5C3A21', textTransform: 'uppercase',
+    flex: 1, padding: '8px', background: 'var(--terminal-surface-muted)', border: '1px solid var(--terminal-border)',
+    borderRadius: 8, cursor: 'pointer', fontWeight: 700, fontSize: 12, color: 'var(--terminal-text-muted)', textTransform: 'uppercase',
   },
   typeActive: {
-    flex: 1, padding: '7px', background: '#fdf8e7', border: '2px solid #bba882',
-    borderRadius: 8, fontWeight: 800, fontSize: 12, color: '#333', textTransform: 'uppercase',
-    boxShadow: '0 2px 0 #bba882',
+    flex: 1, padding: '8px', background: 'var(--terminal-brand-soft)', border: '1px solid var(--terminal-orange)',
+    borderRadius: 8, fontWeight: 750, fontSize: 12, color: 'var(--terminal-brand-strong)', textTransform: 'uppercase',
+    boxShadow: 'none',
   },
   levBackdrop: {
     position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 10000,
   },
   levModal: {
     position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
-    width: 320, background: '#fdf8e7', border: '6px solid #d4c8b0', borderRadius: 20,
+    width: 320, background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 20,
     padding: 20, display: 'flex', flexDirection: 'column', gap: 10,
     boxShadow: '0 15px 40px rgba(0,0,0,0.4)', zIndex: 10001,
     fontFamily: '"Inter","Segoe UI",sans-serif',
   },
   levCloseBtn: {
-    width: 28, height: 28, borderRadius: '50%', background: '#E53935', border: '2px solid #fff',
-    color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0,
+    width: 28, height: 28, borderRadius: '50%', background: 'var(--terminal-short)', border: '1px solid var(--terminal-surface)',
+    color: 'var(--terminal-on-accent)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0,
   },
   marginSwapBtn: {
-    padding: '8px 12px', background: '#e8dfc8', border: '2px solid #d4c8b0', borderRadius: 8,
-    fontSize: 13, cursor: 'pointer', display: 'inline-flex', alignItems: 'center',
+    padding: '8px 12px', background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border-strong)', borderRadius: 8,
+    color: 'var(--terminal-text-control)', fontSize: 13, cursor: 'pointer', display: 'inline-flex', alignItems: 'center',
     height: '100%', boxSizing: 'border-box', whiteSpace: 'nowrap', flexShrink: 0,
     lineHeight: 1,
   },
   levPreset: {
-    flex: 1, padding: '8px 0', background: '#e8dfc8', border: '2px solid #d4c8b0', borderRadius: 8,
-    fontWeight: 800, fontSize: 13, color: '#5C3A21', cursor: 'pointer', textAlign: 'center',
+    flex: 1, padding: '8px 0', background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 8,
+    fontWeight: 600, fontSize: 13, color: 'var(--terminal-text)', cursor: 'pointer', textAlign: 'center',
   },
   levPresetActive: {
-    flex: 1, padding: '8px 0', background: '#4CAF50', border: '2px solid #2E7D32', borderRadius: 8,
-    fontWeight: 800, fontSize: 13, color: '#fff', cursor: 'pointer', textAlign: 'center',
-    boxShadow: '0 2px 0 #2E7D32',
+    flex: 1, padding: '8px 0', background: 'var(--terminal-brand-soft)', border: '1px solid var(--terminal-orange)', borderRadius: 8,
+    fontWeight: 600, fontSize: 13, color: 'var(--terminal-brand-text)', cursor: 'pointer', textAlign: 'center',
+    boxShadow: 'none',
   },
   unitToggle: {
-    padding: '2px 8px', background: '#d4c8b0', border: '2px solid #bba882', borderRadius: 6,
-    fontSize: 10, fontWeight: 800, color: '#5C3A21', cursor: 'pointer', textTransform: 'uppercase',
+    padding: '3px 8px', background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border-strong)', borderRadius: 6,
+    fontSize: 11, fontWeight: 750, color: 'var(--terminal-text-control)', cursor: 'pointer', textTransform: 'uppercase',
     display: 'flex', alignItems: 'center',
   },
   midPriceBtn: {
     padding: '2px 9px',
-    background: '#fdf8e7',
-    border: '2px solid #bba882',
+    background: 'var(--terminal-surface-subtle)',
+    border: '1px solid var(--terminal-border-strong)',
     borderRadius: 6,
-    fontSize: 10,
-    fontWeight: 900,
-    color: '#5C3A21',
+    fontSize: 11,
+    fontWeight: 750,
+    color: 'var(--terminal-text-control)',
     cursor: 'pointer',
     textTransform: 'uppercase',
     lineHeight: 1.2,
   },
   levBtn: {
-    width: '100%', background: '#fff', border: '3px solid #d4c8b0', borderRadius: 10,
-    padding: '9px 10px', color: '#333', fontSize: 15, fontWeight: 800, cursor: 'pointer',
+    width: '100%', background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border-strong)', borderRadius: 9,
+    padding: '10px', color: 'var(--terminal-text)', fontSize: 15, fontWeight: 700, cursor: 'pointer',
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
     boxSizing: 'border-box', minWidth: 0,
   },
   sliderBox: {
-    background: '#fdf8e7', border: '2px solid #d4c8b0', borderRadius: 10, padding: 10,
+    background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 10, padding: 10,
     display: 'flex', flexDirection: 'column', gap: 6, animation: 'slideDown 0.2s',
   },
-  slider: { width: '100%', cursor: 'pointer', accentColor: '#E53935' },
-  sliderLabels: { display: 'flex', justifyContent: 'space-between', color: '#a3906a', fontSize: 11, fontWeight: 700 },
+  slider: { width: '100%', cursor: 'pointer', accentColor: 'var(--terminal-orange)' },
+  sliderLabels: { display: 'flex', justifyContent: 'space-between', color: 'var(--terminal-text-faint)', fontSize: 11, fontWeight: 650 },
   // Position-size readout — sits right below the Amount+Leverage row so the
   // trader sees leveraged exposure before they commit.
   positionBox: {
-    background: 'linear-gradient(180deg, #fdf8e7 0%, #f3e8c8 100%)',
-    border: '2px solid #d4c8b0', borderRadius: 10,
+    background: 'var(--terminal-surface-subtle)',
+    border: '1px solid var(--terminal-border)', borderRadius: 10,
     padding: '8px 12px',
     display: 'flex', flexDirection: 'column', gap: 2,
-    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.5)',
+    boxShadow: 'none',
   },
   positionRow: {
     display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
   },
   positionLabel: {
-    fontSize: 11, fontWeight: 900, color: '#a3906a',
+    fontSize: 11, fontWeight: 700, color: 'var(--terminal-text-muted)',
     textTransform: 'uppercase', letterSpacing: 0.8,
   },
   positionValue: {
-    fontSize: 18, fontWeight: 900, color: '#5C3A21',
+    fontSize: 18, fontWeight: 750, color: 'var(--terminal-text)',
   },
   positionSub: {
-    fontSize: 11, fontWeight: 700, color: '#5C3A21',
+    fontSize: 11, fontWeight: 650, color: 'var(--terminal-text-muted)',
   },
-  tradeBtn: { flex: 1, minWidth: 0, padding: '11px 6px', borderRadius: 14, display: 'flex', alignItems: 'center', justifyContent: 'center' },
-  tradeBtnText: { color: '#fff', fontSize: 20, fontWeight: 900, textShadow: '0 2px 0 rgba(0,0,0,0.4)' },
+  tradeBtn: { flex: 1, minWidth: 0, padding: '11px 6px', borderRadius: 10, border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', boxShadow: 'none' },
+  tradeBtnLong: { background: 'var(--terminal-long)' },
+  tradeBtnShort: { background: 'var(--terminal-short)' },
+  tradeBtnText: { color: 'var(--terminal-on-accent)', fontSize: 15, fontWeight: 750, letterSpacing: '0.04em' },
   // Positions
   posCard: {
-    background: '#e8dfc8', border: '3px solid #d4c8b0', borderRadius: 12,
+    background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 12,
     padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 5,
     // `flex: 0 0 auto` keeps the card sized to its content. Older value
     // `0 1 380px` set flex-basis=380px which, inside a column flex parent,
@@ -11979,7 +12490,7 @@ const S = {
     flex: '0 0 auto',
   },
   fullCard: {
-    background: '#e8dfc8', border: '3px solid #d4c8b0', borderRadius: 12,
+    background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 12,
     padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 5,
     width: '100%',
   },
@@ -11993,29 +12504,29 @@ const S = {
   },
   tpslMetaRow: {
     display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8,
-    flexWrap: 'wrap', fontSize: 11, fontWeight: 800, color: '#77573d',
-    background: 'rgba(255,255,255,0.35)', border: '1px solid #d4c8b0',
+    flexWrap: 'wrap', fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-secondary)',
+    background: 'rgba(255,255,255,0.35)', border: '1px solid var(--terminal-border)',
     borderRadius: 8, padding: '5px 8px',
   },
   tpslModeRow: {
     display: 'flex', alignItems: 'center', gap: 6, minWidth: 0,
   },
   tpslModeLabel: {
-    fontSize: 10, fontWeight: 900, color: '#77573d', textTransform: 'uppercase', flexShrink: 0,
+    fontSize: 11, fontWeight: 700, color: 'var(--terminal-text-secondary)', textTransform: 'uppercase', flexShrink: 0,
   },
   tpslModeGroup: {
     display: 'flex', gap: 4, flex: '1 1 auto', minWidth: 0,
   },
   tpslModeButton: {
-    flex: 1, minWidth: 0, padding: '5px 4px', background: '#d4c8b0',
-    border: '2px solid #bba882', borderRadius: 7, color: '#5C3A21',
-    fontWeight: 900, fontSize: 10, cursor: 'pointer', textAlign: 'center',
+    flex: 1, minWidth: 0, padding: '5px 4px', background: 'var(--terminal-border)',
+    border: '1px solid var(--terminal-border-strong)', borderRadius: 7, color: 'var(--terminal-text)',
+    fontWeight: 700, fontSize: 11, cursor: 'pointer', textAlign: 'center',
   },
   tpslModeActive: {
-    flex: 1, minWidth: 0, padding: '5px 4px', background: '#fdf8e7',
-    border: '2px solid #8a5f35', borderRadius: 7, color: '#5C3A21',
-    fontWeight: 950, fontSize: 10, cursor: 'pointer', textAlign: 'center',
-    boxShadow: '0 1px 0 rgba(92,58,33,0.25)',
+    flex: 1, minWidth: 0, padding: '5px 4px', background: 'var(--terminal-surface)',
+    border: '1px solid var(--terminal-border-strong)', borderRadius: 7, color: 'var(--terminal-text)',
+    fontWeight: 700, fontSize: 11, cursor: 'pointer', textAlign: 'center',
+    boxShadow: '0 1px 0 rgba(17,24,39,0.25)',
   },
   tpslInputGrid: {
     display: 'flex', gap: 6, alignItems: 'stretch', flexWrap: 'wrap',
@@ -12024,39 +12535,39 @@ const S = {
     flex: '1 1 118px', minWidth: 118, display: 'flex', flexDirection: 'column', gap: 3,
   },
   tpslInput: {
-    background: '#fff', border: '3px solid #d4c8b0', borderRadius: 10,
-    padding: '7px 8px', color: '#333', fontSize: 12, fontWeight: 800,
+    background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 10,
+    padding: '7px 8px', color: 'var(--terminal-text-control)', fontSize: 12, fontWeight: 600,
     outline: 'none', width: '100%', boxSizing: 'border-box', minWidth: 0,
   },
   tpslPreview: {
-    minHeight: 13, fontSize: 10, fontWeight: 850, lineHeight: 1.25,
+    minHeight: 13, fontSize: 11, fontWeight: 600, lineHeight: 1.25,
     overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
   },
   tpslHint: {
-    fontSize: 10, fontWeight: 750, color: '#8a7252', lineHeight: 1.2,
+    fontSize: 11, fontWeight: 750, color: 'var(--terminal-text-muted)', lineHeight: 1.2,
   },
   openTpslBox: {
-    border: '2px solid #d4c8b0', borderRadius: 10, background: 'rgba(255,255,255,0.28)',
+    border: '1px solid var(--terminal-border)', borderRadius: 10, background: 'var(--terminal-surface-subtle)',
     display: 'flex', flexDirection: 'column', overflow: 'hidden',
   },
   openTpslBoxActive: {
-    border: '2px solid #f2a000', borderRadius: 10, background: '#fff7d6',
+    border: '1px solid var(--terminal-orange)', borderRadius: 10, background: 'var(--terminal-brand-soft)',
     display: 'flex', flexDirection: 'column', overflow: 'hidden',
-    boxShadow: '0 1px 0 rgba(92,58,33,0.16)',
+    boxShadow: 'none',
   },
   openTpslHeader: {
     width: '100%', border: 'none', background: 'transparent', padding: '7px 9px',
     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-    cursor: 'pointer', color: '#5C3A21',
+    cursor: 'pointer', color: 'var(--terminal-text-control)',
   },
-  openTpslTitle: { fontSize: 12, fontWeight: 950, textTransform: 'uppercase' },
+  openTpslTitle: { fontSize: 12, fontWeight: 750, textTransform: 'uppercase' },
   openTpslToggleOff: {
-    fontSize: 10, fontWeight: 950, padding: '2px 7px', borderRadius: 999,
-    background: '#d4c8b0', color: '#6f5a3d',
+    fontSize: 11, fontWeight: 750, padding: '2px 7px', borderRadius: 999,
+    background: 'var(--terminal-border)', color: 'var(--terminal-text-muted)',
   },
   openTpslToggleOn: {
-    fontSize: 10, fontWeight: 950, padding: '2px 7px', borderRadius: 999,
-    background: '#16A34A', color: '#fff',
+    fontSize: 11, fontWeight: 750, padding: '2px 7px', borderRadius: 999,
+    background: 'var(--terminal-orange)', color: 'var(--terminal-on-accent)',
   },
   openTpslBody: {
     display: 'flex', flexDirection: 'column', gap: 6, padding: '0 8px 8px',
@@ -12065,14 +12576,14 @@ const S = {
     display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 6,
   },
   openTpslNotice: {
-    fontSize: 10, fontWeight: 750, color: '#8a7252', lineHeight: 1.2,
+    fontSize: 11, fontWeight: 750, color: 'var(--terminal-text-muted)', lineHeight: 1.2,
   },
   openTpslNoticeWarn: {
-    fontSize: 10, fontWeight: 850, color: '#9A3412', lineHeight: 1.2,
+    fontSize: 11, fontWeight: 600, color: 'var(--terminal-warning)', lineHeight: 1.2,
   },
   btnRed: {
-    flex: 1, padding: '8px', background: '#E53935', border: '2px solid #B71C1C', borderRadius: 8,
-    color: '#fff', fontWeight: 800, fontSize: 12, cursor: 'pointer', boxShadow: '0 2px 0 #B71C1C', textAlign: 'center',
+    ...uiButton('danger', { flex: 1, minHeight: 36, padding: '8px', fontSize: 12 }),
+    textAlign: 'center',
   },
   closeLoadingLabel: {
     display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6,
@@ -12080,34 +12591,34 @@ const S = {
   },
   closeLoadingSpinner: {
     width: 12, height: 12, borderRadius: '50%',
-    borderWidth: 2,
+    borderWidth: 1,
     borderStyle: 'solid',
     borderColor: 'rgba(255,255,255,0.42)',
-    borderTopColor: '#fff',
+    borderTopColor: 'var(--terminal-on-accent)',
     animation: 'futures-close-spin 0.75s linear infinite',
     flexShrink: 0,
   },
   btnBlue: {
-    padding: '8px 12px', background: '#1E88E5', border: '2px solid #1565C0', borderRadius: 8,
-    color: '#fff', fontWeight: 800, fontSize: 12, cursor: 'pointer', boxShadow: '0 2px 0 #1565C0',
+    padding: '8px 12px', background: 'var(--terminal-orange)', border: '1px solid var(--terminal-brand-strong)', borderRadius: 8,
+    color: 'var(--terminal-on-accent)', fontWeight: 600, fontSize: 12, cursor: 'pointer', boxShadow: 'none',
   },
   btnPurple: {
-    padding: '8px 12px', background: '#9945FF', border: '2px solid #7B36CC', borderRadius: 8,
-    color: '#fff', fontWeight: 800, fontSize: 12, cursor: 'pointer', boxShadow: '0 2px 0 #7B36CC',
+    padding: '8px 12px', background: 'var(--terminal-neutral-button)', border: '1px solid var(--terminal-text)', borderRadius: 8,
+    color: 'var(--terminal-on-accent)', fontWeight: 600, fontSize: 12, cursor: 'pointer', boxShadow: 'none',
   },
   btnSmall: {
-    padding: '8px 10px', background: '#d4c8b0', border: '2px solid #bba882', borderRadius: 8,
-    fontWeight: 800, fontSize: 12, color: '#5C3A21', cursor: 'pointer',
+    padding: '8px 10px', background: 'var(--terminal-border)', border: '1px solid var(--terminal-border-strong)', borderRadius: 8,
+    fontWeight: 600, fontSize: 12, color: 'var(--terminal-text)', cursor: 'pointer',
   },
   marketClosedHint: {
     display: 'flex',
     flexDirection: 'column',
     gap: 6,
     padding: '8px 10px',
-    background: '#FFF7D6',
-    border: '2px solid #F59E0B',
+    background: 'var(--terminal-warning-soft)',
+    border: '1px solid var(--terminal-warning)',
     borderRadius: 10,
-    color: '#7C2D12',
+    color: 'var(--terminal-warning)',
     fontSize: 11,
     fontWeight: 750,
     lineHeight: 1.25,
@@ -12121,22 +12632,22 @@ const S = {
   },
   marketClosedTitle: {
     fontSize: 12,
-    fontWeight: 950,
+    fontWeight: 700,
     textTransform: 'uppercase',
-    color: '#B45309',
+    color: 'var(--terminal-warning)',
   },
   marketClosedSymbol: {
     fontSize: 11,
-    fontWeight: 950,
-    color: '#5C3A21',
-    background: 'rgba(255,255,255,0.55)',
+    fontWeight: 700,
+    color: 'var(--terminal-text)',
+    background: 'var(--terminal-chip-overlay)',
     border: '1px solid rgba(180,83,9,0.22)',
     borderRadius: 6,
     padding: '2px 6px',
     whiteSpace: 'nowrap',
   },
   marketClosedCopy: {
-    color: '#7C2D12',
+    color: 'var(--terminal-warning)',
     overflowWrap: 'anywhere',
     wordBreak: 'break-word',
   },
@@ -12147,81 +12658,105 @@ const S = {
     flexWrap: 'wrap',
   },
   marketClosedActionLabel: {
-    fontSize: 10,
-    fontWeight: 900,
-    color: '#9A6B24',
+    fontSize: 11,
+    fontWeight: 700,
+    color: 'var(--terminal-warning)',
     textTransform: 'uppercase',
   },
   marketClosedChoice: {
     padding: '4px 7px',
-    background: '#fdf8e7',
-    border: '2px solid #d4c8b0',
+    background: 'var(--terminal-surface)',
+    border: '1px solid var(--terminal-border)',
     borderRadius: 7,
     cursor: 'pointer',
-    color: '#5C3A21',
+    color: 'var(--terminal-text)',
     fontSize: 11,
-    fontWeight: 900,
+    fontWeight: 700,
   },
   noBalanceHint: {
-    padding: '8px 12px', background: '#FFF3E0', border: '2px solid #FF9800', borderRadius: 8,
+    padding: '8px 12px', background: 'var(--terminal-brand-soft)', border: '1px solid var(--terminal-warning)', borderRadius: 8,
     color: '#E65100', fontSize: 12, fontWeight: 700, textAlign: 'center', cursor: 'pointer',
   },
   balCard: {
-    flex: 1, background: '#e8dfc8', border: '3px solid #d4c8b0', borderRadius: 12,
+    flex: 1, background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 12,
     padding: 10, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2,
   },
-  balCardLabel: { fontSize: 10, fontWeight: 800, color: '#a3906a', textTransform: 'uppercase' },
-  balCardValue: { fontSize: 18, fontWeight: 900, color: '#5C3A21' },
+  balCardLabel: { fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-muted)', textTransform: 'uppercase' },
+  balCardValue: { fontSize: 18, fontWeight: 700, color: 'var(--terminal-text)' },
   cancelBtn: {
-    width: 26, height: 26, borderRadius: '50%', background: '#E53935', border: '2px solid #fff',
-    color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
-    fontSize: 13, fontWeight: 900, padding: 0,
+    width: 26, height: 26, borderRadius: '50%', background: 'var(--terminal-short)', border: '1px solid var(--terminal-surface)',
+    color: 'var(--terminal-on-accent)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+    fontSize: 13, fontWeight: 700, padding: 0,
   },
   // Bottom panel (fullscreen)
   bottomPanel: {
-    background: '#e8dfc8',
+    background: 'var(--terminal-surface)', borderTop: '1px solid var(--terminal-border)',
     display: 'flex', flexDirection: 'column', minHeight: 60,
     overflow: 'hidden', flexShrink: 0,
   },
   bottomTabs: {
-    display: 'flex', gap: 0, background: '#d4c8b0', flexShrink: 0,
+    display: 'flex', gap: 0, background: 'var(--terminal-surface)', borderBottom: '1px solid var(--terminal-border)', flexShrink: 0,
   },
   bottomTabBtn: {
     padding: '6px 20px', background: 'transparent', border: 'none',
-    fontSize: 12, fontWeight: 700, color: '#77573d', cursor: 'pointer',
-    borderBottom: '2px solid transparent',
+    fontSize: 12, fontWeight: 650, color: 'var(--terminal-text-muted)', cursor: 'pointer',
+    borderBottom: '1px solid transparent',
   },
   bottomTabActive: {
-    padding: '6px 20px', background: '#e8dfc8', border: 'none',
-    fontSize: 12, fontWeight: 800, color: '#5C3A21', cursor: 'default',
-    borderBottom: '2px solid #4CAF50',
+    padding: '6px 20px', background: 'var(--terminal-surface)', border: 'none',
+    fontSize: 12, fontWeight: 750, color: 'var(--terminal-text)', cursor: 'default',
+    borderBottom: '1px solid var(--terminal-orange)',
   },
   dragHandleV: {
-    width: 6, cursor: 'col-resize', background: '#d4c8b0', flexShrink: 0,
+    width: 5, cursor: 'col-resize', background: 'var(--terminal-surface-muted)', flexShrink: 0,
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     transition: 'background 0.15s',
   },
   dragHandleH: {
-    height: 6, cursor: 'row-resize', background: '#bba882', flexShrink: 0,
+    height: 5, cursor: 'row-resize', background: 'var(--terminal-surface-muted)', flexShrink: 0,
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     transition: 'background 0.15s',
   },
-  bottomContent: { flex: 1, overflowY: 'auto', overflowX: 'hidden', scrollbarWidth: 'none', position: 'relative' },
+  bottomContent: { flex: 1, overflowY: 'auto', overflowX: 'auto', scrollbarGutter: 'stable', position: 'relative' },
   filterBtn: {
     marginLeft: 'auto', padding: '4px 8px', background: 'transparent', border: 'none',
-    cursor: 'pointer', color: '#77573d', display: 'flex', alignItems: 'center', gap: 4, position: 'relative',
+    cursor: 'pointer', color: 'var(--terminal-text-secondary)', display: 'flex', alignItems: 'center', gap: 4, position: 'relative',
   },
-  filterBtnActive: { color: '#4CAF50' },
+  filterBtnActive: { color: 'var(--terminal-brand-text)', background: 'var(--terminal-brand-soft)', borderColor: 'var(--terminal-orange)' },
   filterDot: {
     position: 'absolute', top: 2, right: 2, width: 6, height: 6,
-    borderRadius: '50%', background: '#4CAF50',
+    borderRadius: '50%', background: 'var(--terminal-orange)',
   },
-  table: { width: '100%', borderCollapse: 'collapse', fontSize: 12, fontFamily: 'monospace' },
-  th: { padding: '4px 12px', textAlign: 'left', color: '#a3906a', fontWeight: 700, fontSize: 10, textTransform: 'uppercase', background: '#e8dfc8' },
-  td: { padding: '4px 12px', color: '#5C3A21', fontSize: 12, borderBottom: '1px solid #d4c8b0' },
-  tr: { background: '#fdf8e7' },
-  tblCloseBtn: {
-    padding: '2px 8px', background: '#E53935', border: 'none', borderRadius: 4,
-    color: '#fff', fontWeight: 800, fontSize: 10, cursor: 'pointer',
+  table: { width: '100%', borderCollapse: 'collapse', fontSize: 12, fontVariantNumeric: 'tabular-nums' },
+  th: { padding: '6px 12px', textAlign: 'left', color: 'var(--terminal-text-faint)', fontWeight: 700, fontSize: 11, textTransform: 'uppercase', background: 'var(--terminal-surface-subtle)' },
+  td: { padding: '6px 12px', color: 'var(--terminal-text)', fontSize: 12, borderBottom: '1px solid var(--terminal-border)' },
+  tr: { background: 'var(--terminal-surface)' },
+  tblCloseBtn: uiButton('danger', { minHeight: 28, padding: '2px 8px', borderRadius: 8, fontSize: 11 }),
+  tblActionGroup: {
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4,
+  },
+  tblRiskBtn: uiButton('secondary', { minHeight: 28, padding: '2px 8px', borderRadius: 8, fontSize: 11 }),
+  tblShareBtn: uiIconButton('secondary', 28, { borderRadius: 8 }),
+  tblExpandedRow: { background: 'var(--terminal-surface-subtle)' },
+  tblExpandedCell: {
+    padding: '8px 12px 12px', borderBottom: '1px solid var(--terminal-border)',
+  },
+  tblExpandedPanel: {
+    width: 'min(720px, 100%)', display: 'flex', flexDirection: 'column', gap: 8,
+    padding: 10, background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 10,
+  },
+  tblExpandedTitle: { fontSize: 13, fontWeight: 700, color: 'var(--terminal-text)' },
+  tblExpandedAmount: { fontSize: 11, fontWeight: 650, color: 'var(--terminal-text-muted)' },
+  mobileTradePositions: {
+    display: 'flex', flexDirection: 'column', gap: 8, padding: '10px 8px max(12px, env(safe-area-inset-bottom))',
+    background: 'var(--terminal-canvas)', borderTop: '1px solid var(--terminal-border)',
+  },
+  mobileTradePositionsHeader: {
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    color: 'var(--terminal-text)', fontSize: 13, fontWeight: 700,
+  },
+  mobileTradePositionsCount: {
+    minWidth: 24, height: 24, padding: '0 7px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+    borderRadius: 999, background: 'var(--terminal-brand-soft)', color: 'var(--terminal-brand-text)', fontSize: 11,
   },
 };

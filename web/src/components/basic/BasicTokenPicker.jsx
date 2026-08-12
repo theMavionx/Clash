@@ -10,8 +10,8 @@ import TokenIcon from '../TokenIcon';
 import { fmtPrice } from '../../lib/fmtPrice';
 import { ostiumOpenTradeBlockReason } from '../../lib/ostiumMarketStatus';
 
-const PCT_GREEN = '#4caf50';
-const PCT_RED = '#e53935';
+const PCT_GREEN = 'var(--terminal-long)';
+const PCT_RED = 'var(--terminal-short)';
 const FIAT_SYMBOLS = new Set([
   'AUD', 'BRL', 'CAD', 'CHF', 'CNH', 'EUR', 'GBP', 'IDR', 'INR', 'JPY', 'KRW',
   'MXN', 'NZD', 'SEK', 'SGD', 'TRY', 'TWD', 'USD', 'ZAR',
@@ -74,7 +74,7 @@ function ChangeBar({ pct }) {
   return (
     <div style={{
       position: 'relative', width: '100%', height: 4,
-      borderRadius: 2, background: 'rgba(92,58,33,0.08)',
+      borderRadius: 2, background: 'var(--terminal-surface-muted)',
       overflow: 'hidden',
     }}>
       <div style={{
@@ -209,8 +209,8 @@ const S = {
     width: '100%', boxSizing: 'border-box',
     padding: '10px 12px 10px 36px',
     fontSize: 14, fontWeight: 600, color: colors.ink,
-    background: 'rgba(255,255,255,0.6)',
-    border: `2px solid ${colors.border}`, borderRadius: 12,
+    background: 'var(--terminal-surface)',
+    border: `1px solid ${colors.border}`, borderRadius: 10,
     outline: 'none',
     fontFamily: 'inherit',
   },
@@ -230,10 +230,10 @@ const S = {
   card: {
     display: 'flex', flexDirection: 'column', gap: 6,
     padding: 12,
-    background: 'linear-gradient(180deg, #fdf8e7 0%, #f3ebd1 100%)',
-    border: `2px solid ${colors.border}`, borderRadius: 14,
+    background: 'var(--terminal-surface)',
+    border: `1px solid ${colors.border}`, borderRadius: 12,
     cursor: 'pointer', textAlign: 'left',
-    boxShadow: '0 2px 6px rgba(92,58,33,0.12)',
+    boxShadow: '0 4px 12px rgba(17,24,39,0.06)',
     fontFamily: 'inherit',
   },
   symbolRow: {
@@ -241,25 +241,25 @@ const S = {
     gap: 6,
   },
   symbol: {
-    fontSize: 14, fontWeight: 900, color: colors.ink, letterSpacing: '0.4px',
+    fontSize: 14, fontWeight: 700, color: colors.ink, letterSpacing: '0.4px',
     overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
   },
   closedBadge: {
     fontSize: 9,
-    fontWeight: 900,
-    color: '#B45309',
-    background: '#FFF7D6',
-    border: '1px solid #F59E0B',
+    fontWeight: 700,
+    color: 'var(--terminal-warning)',
+    background: 'var(--terminal-warning-soft)',
+    border: '1px solid var(--terminal-warning)',
     borderRadius: 5,
     padding: '1px 4px',
     flexShrink: 0,
   },
   pct: {
-    fontSize: 11, fontWeight: 800,
+    fontSize: 11, fontWeight: 600,
     flexShrink: 0,
   },
   price: {
-    fontSize: 18, fontWeight: 900, color: colors.ink,
+    fontSize: 18, fontWeight: 700, color: colors.ink,
     fontVariantNumeric: 'tabular-nums',
   },
 };

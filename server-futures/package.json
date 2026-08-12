@@ -17,7 +17,8 @@
     "test:lighter-referral": "node test-lighter-referral.js",
     "test:nado-position": "node test-nado-position-metrics.js",
     "test:ondo": "node test-ondo-adapter.js",
-    "test:ondo-rewards": "node test-ondo-reward-proof.js"
+    "test:ondo-rewards": "node test-ondo-reward-proof.js",
+    "test:aster-adapter": "node test-aster-adapter.js"
   },
   "type": "commonjs",
   "dependencies": {

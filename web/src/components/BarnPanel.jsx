@@ -1,12 +1,12 @@
 import { memo, useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useWallet as useSolWallet } from '@solana/wallet-adapter-react';
-import { useSend, useBuildingDefs, usePlayer } from '../hooks/useGodot';
-import { useLayout } from '../hooks/useIsMobile';
+import { useSend, useBuildingDefs, usePlayer, useResources } from '../hooks/useGodot';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { useAptosWallet } from '../contexts/AptosWalletContext';
 import { useOptionalPrivy } from './PrivyAuthProvider';
 import useHydratedNftPlayer from '../hooks/useHydratedNftPlayer';
 import { fetchOwnedNftsForPlayerWallets, nftRarityBadgeStyle, nftRarityCardStyle, nftRarityLabel, normalizeNftRarity, resolveDemonKingPlayerInventorySyncTarget, syncDemonKingNfts } from '../lib/nftV3Client';
+import './BarnPanel.css';
 
 import goldIcon from '../assets/resources/gold_bar.png';
 import woodIcon from '../assets/resources/wood_bar.png';
@@ -27,15 +27,8 @@ import fireDragonImg from '../assets/units/fire_dragon.png';
 import windMageImg from '../assets/units/wind_mage.png';
 import peaShooterImg from '../assets/units/pea_shooter.png';
 
-const dragonImg = '/cdn/nft/dragon/1/default.jpg';
-
 // Module-level CSS — injected once, not re-parsed on every render
 const UPGRADE_ANIM_CSS = `
-  @keyframes levelUpGlow {
-    0% { transform: scale(0.5); opacity: 1; filter: hue-rotate(0deg); }
-    50% { transform: scale(1.5); opacity: 0.8; filter: hue-rotate(90deg); }
-    100% { transform: scale(2.5); opacity: 0; filter: hue-rotate(180deg); }
-  }
   @keyframes levelUpPop {
     0% { transform: scale(1); }
     30% { transform: scale(1.15) translateY(-20px); filter: brightness(1.5); }
@@ -46,9 +39,6 @@ const UPGRADE_ANIM_CSS = `
     20% { transform: translateY(-40px) scale(1.2); opacity: 1; }
     80% { transform: translateY(-100px) scale(1); opacity: 1; }
     100% { transform: translateY(-120px) scale(0.8); opacity: 0; }
-  }
-  .upgrade-anim-glow {
-    animation: levelUpGlow 1s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
   }
   .upgrade-anim-char {
     animation: levelUpPop 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
@@ -100,21 +90,10 @@ const RES_ICONS = {
 
 const stopPropagation = (e) => e.stopPropagation();
 
-function demonKingShipEntry(token) {
-  if (!token) return 'DemonKing';
-  return `DemonKing:${token.chain}:${token.tokenId}:R${normalizeNftRarity(token.rarity || 'common')}`;
-}
-
 function nftBackedShipEntry(troopName, token) {
   const normalized = troopName === 'FireDragon' ? 'FireDragon' : 'DemonKing';
   if (!token) return normalized;
   return `${normalized}:${token.chain}:${token.tokenId}:R${normalizeNftRarity(token.rarity || 'common')}`;
-}
-
-function shortTokenId(tokenId) {
-  const value = String(tokenId || '');
-  if (value.length <= 8) return value;
-  return `${value.slice(0, 4)}...${value.slice(-4)}`;
 }
 
 function isEvmDemonKingChain(chain) {
@@ -545,16 +524,23 @@ function getTroopMaxStats(name, troopLevels = {}, rarity = 'common') {
   return TROOP_STATS[name]?.maxStats || TROOP_STATS[name]?.stats?.[maxLevel];
 }
 
-const ProgressBar = ({ label, value, max, gradient, showAsTime = false, valueText = null }) => {
-  const percentage = Math.min((value / max) * 100, 100);
+const ProgressBar = ({ label, value, max, showAsTime = false, valueText = null }) => {
+  const percentage = Math.min((Number(value) / Math.max(1, Number(max))) * 100, 100);
   return (
-    <div style={styles.progressRow}>
-      <div style={styles.progressHeader}>
-        <span style={styles.progressLabel}>{label}</span>
-        <span style={styles.progressValue}>{valueText || `${value}${showAsTime ? 's' : ''}`}</span>
+    <div className="barn-unit-stat">
+      <div className="barn-unit-stat__header">
+        <span>{label}</span>
+        <strong>{valueText || `${value}${showAsTime ? 's' : ''}`}</strong>
       </div>
-      <div style={styles.progressBarBg}>
-        <div style={{...styles.progressBarFill, background: gradient, width: `${percentage}%`}} />
+      <div
+        className="barn-unit-stat__track"
+        role="progressbar"
+        aria-label={label}
+        aria-valuenow={Number(value)}
+        aria-valuemin="0"
+        aria-valuemax={Number(max)}
+      >
+        <div className="barn-unit-stat__fill" style={{ width: `${percentage}%` }} />
       </div>
     </div>
   );
@@ -563,8 +549,8 @@ const ProgressBar = ({ label, value, max, gradient, showAsTime = false, valueTex
 function BarnPanel({ building, onClose }) {
   const { sendToGodot } = useSend();
   const playerState = usePlayer();
+  const resources = useResources();
   const { buildingDefs, troopLevels } = useBuildingDefs();
-  const { isMobile: mobile } = useLayout();
   const nftPlayerState = useHydratedNftPlayer(playerState);
   const evmWallet = useEvmWallet();
   const evmAddress = evmWallet?.address || null;
@@ -591,6 +577,8 @@ function BarnPanel({ building, onClose }) {
   const [demonKingLoading, setDemonKingLoading] = useState(false);
   const [demonKingError, setDemonKingError] = useState(null);
   const [pendingUpgrade, setPendingUpgrade] = useState(null);
+  const dialogRef = useRef(null);
+  const restoreFocusRef = useRef(null);
   const troops = buildingDefs?.troops || {};
   const currentTownHallLevel = Number(buildingDefs?.th_level || buildingDefs?.town_hall_level || 1) || 1;
   const troopNames = ACTIVE_TROOP_NAMES.filter((name) => troopDefinitionFromMap(troops, name));
@@ -612,6 +600,46 @@ function BarnPanel({ building, onClose }) {
   useEffect(() => {
     sendToGodot('refresh_troops');
   }, [sendToGodot]);
+
+  useEffect(() => {
+    restoreFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const dialog = dialogRef.current;
+    const focusableSelector = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+    const focusFirst = () => {
+      const focusable = dialog?.querySelectorAll(focusableSelector);
+      (focusable?.[0] || dialog)?.focus?.();
+    };
+    const animationFrame = window.requestAnimationFrame(focusFirst);
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+      if (event.key !== 'Tab' || !dialog) return;
+      const focusable = [...dialog.querySelectorAll(focusableSelector)];
+      if (focusable.length === 0) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.cancelAnimationFrame(animationFrame);
+      document.removeEventListener('keydown', handleKeyDown);
+      restoreFocusRef.current?.focus?.();
+    };
+  }, [onClose]);
 
   useEffect(() => {
     if (!currentNftTroop) return undefined;
@@ -733,13 +761,15 @@ function BarnPanel({ building, onClose }) {
     return () => clearTimeout(timeoutId);
   }, [currentTroopName, lvl, pendingUpgrade]);
   
-  const handlePrev = useCallback(() => {
-    setCurrentIndex(prev => (prev === 0 ? troopNames.length - 1 : prev - 1));
-  }, [troopNames.length]);
+  const handlePrev = () => {
+    if (troopNames.length < 2) return;
+    setCurrentIndex(currentIndex === 0 ? troopNames.length - 1 : currentIndex - 1);
+  };
 
-  const handleNext = useCallback(() => {
-    setCurrentIndex(prev => (prev === troopNames.length - 1 ? 0 : prev + 1));
-  }, [troopNames.length]);
+  const handleNext = () => {
+    if (troopNames.length < 2) return;
+    setCurrentIndex(currentIndex === troopNames.length - 1 ? 0 : currentIndex + 1);
+  };
 
   useEffect(() => {
     if (troopNames.length > 0 && currentIndex >= troopNames.length) setCurrentIndex(0);
@@ -821,16 +851,40 @@ function BarnPanel({ building, onClose }) {
   const maxStats = getTroopMaxStats(currentTroopName, troopLevels, selectedNftRarity);
   const displayName = TROOP_STATS[currentTroopName]?.display || tdef?.display || currentTroopName;
 
-  const sphereSize = mobile ? 100 : 200;
-  const sliderW = mobile ? 32 : 48;
-  const sliderH = mobile ? 52 : 72;
-  const reqBoxSize = mobile ? 60 : 90;
   const upgradePending = !!pendingUpgrade && pendingUpgrade.troop === currentTroopName && Number(pendingUpgrade.expectedLevel || 0) === Number(displayLvl || 0);
+  const resourceEntries = nextCost
+    ? Object.entries(nextCost).filter(([, amount]) => Number(amount) > 0)
+    : [];
+  const resourceShortfalls = resourceEntries
+    .map(([resource, amount]) => ({
+      resource,
+      required: Number(amount),
+      available: Number(resources?.[resource] || 0),
+    }))
+    .map((entry) => ({ ...entry, shortfall: Math.max(0, entry.required - entry.available) }))
+    .filter((entry) => entry.shortfall > 0);
+  const ctaBlocker = building.is_enemy
+    ? 'Enemy units cannot be upgraded'
+    : upgradePending
+      ? 'Upgrade pending…'
+      : isMax
+        ? 'Maximum level reached'
+        : !troopUnlocked
+          ? `Town Hall Level ${requiredTownHallLevel} required`
+          : !townHallReadyForNextLevel
+            ? `Upgrade Town Hall to Level ${nextTroopLevel}`
+            : !barnReadyForNextLevel
+              ? `Upgrade Barn to Level ${requiredBarnLevel}`
+              : isNftBackedTroop && demonKingLoading
+                ? `Checking ${currentNftTroop.label} ownership…`
+                : isNftBackedTroop && !selectedDemonNft
+                  ? `${currentNftTroop.label} NFT required`
+                  : resourceShortfalls.length > 0
+                    ? `Need ${resourceShortfalls.map(({ resource, shortfall }) => `${shortfall.toLocaleString()} ${resource}`).join(', ')}`
+                    : '';
+  const upgradeDisabled = !!ctaBlocker;
   const handleMainUpgrade = () => {
-    if (upgradePending) return;
-    if (!troopUnlocked) return;
-    if (!townHallReadyForNextLevel) return;
-    if (!barnReadyForNextLevel) return;
+    if (upgradeDisabled) return;
     if (!isNftBackedTroop) {
       handleUpgradeTroop(currentTroopName, displayLvl);
       return;
@@ -851,551 +905,202 @@ function BarnPanel({ building, onClose }) {
   };
 
   return (
-    <div style={{...styles.overlay, ...(mobile ? { alignItems: 'stretch' } : {})}} onClick={onClose}>
+    <div className="barn-unit-modal__overlay" onClick={onClose}>
       <style>{UPGRADE_ANIM_CSS}</style>
+      <section
+        ref={dialogRef}
+        className="barn-unit-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="barn-unit-modal-title"
+        tabIndex={-1}
+        onClick={stopPropagation}
+      >
+        <header className="barn-unit-modal__header">
+          <h2 id="barn-unit-modal-title" className="barn-unit-modal__title">{displayName}</h2>
+          <button type="button" className="barn-unit-modal__close" onClick={onClose} aria-label={`Close ${displayName}`}>
+            <span aria-hidden="true">&times;</span>
+          </button>
+        </header>
 
-      <div style={{...styles.panel, ...(mobile ? { width: '100vw', maxWidth: '100vw', height: '100%', maxHeight: 'none', borderRadius: 0 } : {})}} onClick={stopPropagation}>
-
-        <div style={styles.header}>
-          <span style={{...styles.headerTitle, fontSize: mobile ? 18 : 24}}>{displayName}</span>
-          <button style={styles.closeBtn} onClick={onClose}>✖</button>
-        </div>
-
-        <div style={{...styles.contentLayout, flexDirection: mobile ? 'column' : 'row', flexWrap: mobile ? 'nowrap' : 'wrap', padding: mobile ? '16px 16px' : '24px 20px', gap: mobile ? 16 : 24, overflowY: 'auto', minHeight: 0}}>
-
-          {/* Character + Sliders — on mobile show FIRST (above stats) */}
-          <div style={{...styles.rightColumn, ...(mobile ? { maxWidth: '100%', width: '100%', flex: 'none', order: -1 } : {})}}>
-            <div style={styles.characterDisplayArea}>
-              <button style={{...styles.sliderBtn, width: sliderW, height: sliderH, fontSize: mobile ? 24 : 32}} onClick={handlePrev}>❮</button>
-
-              <div style={styles.characterWrapper}>
-                <div style={{...styles.characterSphere, width: sphereSize, height: sphereSize}}>
-                  <div style={{...styles.upgradeBadge, ...(mobile ? { padding: '2px 10px', top: -6, right: -14 } : {})}}>
-                    <div style={styles.badgeBigPart}>
-                      <span style={{...styles.badgeLvlText, fontSize: mobile ? 10 : 14}}>Lvl</span>
-                      <span style={{...styles.badgeLvlNumber, fontSize: mobile ? 18 : 32}}>{displayLvl}</span>
-                    </div>
-                  </div>
-                  {isAnimatingUpgrade && (
-                    <div className="upgrade-anim-glow" style={{ position: 'absolute', width: sphereSize * 2, height: sphereSize * 2, borderRadius: '50%', background: 'radial-gradient(circle, rgba(251, 192, 45, 0.6) 0%, transparent 70%)', zIndex: 4, pointerEvents: 'none' }} />
-                  )}
-                  {isAnimatingUpgrade && (
-                    <div className="upgrade-anim-text" style={{ position: 'absolute', top: '20%', color: '#FBC02D', fontSize: mobile ? 36 : 56, fontWeight: 900, textShadow: '0 4px 20px rgba(251, 192, 45, 0.8), 0 4px 4px #000', zIndex: 20, pointerEvents: 'none', whiteSpace: 'nowrap' }}>
-                      LEVEL UP!
-                    </div>
-                  )}
+        <div
+          className="barn-unit-modal__body clash-scroll"
+          role="region"
+          aria-label={`${displayName} upgrade details`}
+          tabIndex={0}
+        >
+          <div className="barn-unit-modal__layout">
+            <aside className="barn-unit-preview" aria-label={`${displayName} preview`}>
+              <div className="barn-unit-preview__selector">
+                <button
+                  type="button"
+                  className="barn-unit-preview__nav"
+                  onClick={handlePrev}
+                  disabled={troopNames.length < 2}
+                  aria-label="Previous unit"
+                >
+                  <span aria-hidden="true">&lsaquo;</span>
+                </button>
+                <div className="barn-unit-preview__sphere">
+                  {isAnimatingUpgrade && <div className="barn-unit-preview__level-up upgrade-anim-text">Level up</div>}
                   {isNftBackedTroop ? (
                     <img
                       src={currentNftTroop.image}
                       alt={currentNftTroop.label}
-                      className={isAnimatingUpgrade ? 'upgrade-anim-char' : ''}
-                      style={{
-                        ...styles.characterImg,
-                        transform: `translateY(${CARD_TROOP_STYLE_MAP[currentTroopName]?.offsetY || '10%'}) scale(${CARD_TROOP_STYLE_MAP[currentTroopName]?.scale || 1.35})`,
-                      }}
+                      className={`barn-unit-preview__image${isAnimatingUpgrade ? ' upgrade-anim-char' : ''}`}
+                      style={{ transform: `translateY(${CARD_TROOP_STYLE_MAP[currentTroopName]?.offsetY || '10%'}) scale(${CARD_TROOP_STYLE_MAP[currentTroopName]?.scale || 1.35})` }}
                     />
                   ) : troopNames.map(name => {
                     const isActive = name === currentTroopName;
                     if (!UNIT_IMAGES[name]) {
                       if (!isActive) return null;
                       return (
-                        <div
-                          key={name}
-                          className={isAnimatingUpgrade ? 'upgrade-anim-char' : ''}
-                          style={{...styles.characterFallback, opacity: 1}}
-                          aria-label="Wind Mage portrait pending"
-                        >
-                          <span style={{fontSize: mobile ? 24 : 44}}>WM</span>
-                          <small style={{fontSize: mobile ? 7 : 10}}>WIND MAGE</small>
+                        <div key={name} className={`barn-unit-preview__fallback${isAnimatingUpgrade ? ' upgrade-anim-char' : ''}`} aria-label={`${displayName} portrait pending`}>
+                          <strong>WM</strong>
+                          <small>Wind Mage</small>
                         </div>
                       );
                     }
                     const charStyle = CARD_TROOP_STYLE_MAP[name] || { scale: 1.8, offsetY: '5%' };
                     return (
                       <img
-                        key={name} src={UNIT_IMAGES[name]} alt={name} className={isActive && isAnimatingUpgrade ? "upgrade-anim-char" : ""}
-                        style={{ ...styles.characterImg, transform: `translateY(${charStyle.offsetY}) scale(${charStyle.scale})`, opacity: isActive ? 1 : 0, pointerEvents: isActive ? 'auto' : 'none' }}
+                        key={name}
+                        src={UNIT_IMAGES[name]}
+                        alt={isActive ? name : ''}
+                        aria-hidden={!isActive}
+                        className={`barn-unit-preview__image${isActive && isAnimatingUpgrade ? ' upgrade-anim-char' : ''}`}
+                        style={{ transform: `translateY(${charStyle.offsetY}) scale(${charStyle.scale})`, opacity: isActive ? 1 : 0 }}
                       />
                     );
                   })}
                 </div>
+                <button
+                  type="button"
+                  className="barn-unit-preview__nav"
+                  onClick={handleNext}
+                  disabled={troopNames.length < 2}
+                  aria-label="Next unit"
+                >
+                  <span aria-hidden="true">&rsaquo;</span>
+                </button>
               </div>
-
-              <button style={{...styles.sliderBtn, width: sliderW, height: sliderH, fontSize: mobile ? 24 : 32}} onClick={handleNext}>❯</button>
-            </div>
-          </div>
-
-          {/* Stats & Resources */}
-          <div style={{...styles.leftColumn, ...(mobile ? { maxWidth: '100%', width: '100%', flex: '1 1 100%' } : {})}}>
-            <h3 style={{...styles.sectionTitle, fontSize: mobile ? 16 : 20}}>Stats</h3>
-            {stats && maxStats && (
-              <div style={styles.progressContainer}>
-                <ProgressBar label="Health Points" value={stats.hp} max={maxStats.hp} gradient="linear-gradient(90deg, #f59e0b, #fbbf24)" />
-                <ProgressBar label="Damage Output" value={stats.damage} max={maxStats.damage} gradient="linear-gradient(90deg, #10b981, #34d399)" />
-                <ProgressBar label="Attack Speed" value={stats.atk_speed} max={maxStats.atk_speed} showAsTime={true} gradient="linear-gradient(90deg, #6366f1, #818cf8)" />
-                <ProgressBar label="Level Progress" value={displayLvl} max={troopMaxLevel} gradient="linear-gradient(90deg, #8b5cf6, #a78bfa)" />
-              </div>
-            )}
-            {TROOP_STATS[currentTroopName]?.trait && (
-              <div style={{
-                marginTop: mobile ? 8 : 10,
-                padding: mobile ? '8px 10px' : '10px 12px',
-                border: '1px solid #c9a95f',
-                borderRadius: 6,
-                background: '#fff5cf',
-                color: '#68431f',
-                fontSize: mobile ? 11 : 12,
-                fontWeight: 800,
-                lineHeight: 1.35,
-              }}>
-                {TROOP_STATS[currentTroopName].trait}
-              </div>
-            )}
-            {troopLogistics && (
-              <div style={{
-                marginTop: 6,
-                display: 'flex',
-                flexWrap: 'wrap',
-                gap: mobile ? 5 : 7,
-                color: '#1f5968',
-                fontSize: mobile ? 10 : 11,
-                fontWeight: 900,
-              }}>
-                <span style={styles.logisticsChip}>TH{troopLogistics.townHallLevel}</span>
-                <span style={styles.logisticsChip}>{troopLogistics.slotCost} ship slots</span>
-                <span style={styles.logisticsChip}>{troopLogistics.loadCostGold.toLocaleString()} gold to load</span>
-              </div>
-            )}
-
-            {isNftBackedTroop && (
-              <div style={styles.demonInventory}>
-                <div style={styles.demonInventoryHeader}>
-                  <span>{hasDemonKingWallet ? `${demonKingNfts.length} NFT${demonKingNfts.length === 1 ? '' : 's'} owned` : 'Connect wallet'}</span>
-                  {demonKingLoading && <span>Loading...</span>}
-                </div>
-                {demonKingError && <div style={styles.demonInventoryHint}>{demonKingError}</div>}
-                {hasDemonKingWallet && demonKingNfts.length > 0 ? (
-                  <div style={styles.demonTokenGrid}>
-                    {demonKingNfts.map((token) => {
-                      const key = nftBackedShipEntry(currentTroopName, token);
-                      const active = key === (selectedDemonKey || nftBackedShipEntry(currentTroopName, selectedDemonNft));
-                      const tokenLabel = demonKingDisplayLabel(token, demonKingNfts);
-                      const rarityCardStyle = isRarityNftTroop
-                        ? nftRarityCardStyle(token.rarity, 1, { active })
-                        : {};
-                      return (
-                        <button
-                          key={key}
-                          type="button"
-                          onClick={() => setSelectedDemonKey(key)}
-                          style={{...styles.demonTokenBtn, ...(active ? styles.demonTokenBtnActive : null), ...rarityCardStyle}}
-                        >
-                          <span style={isRarityNftTroop ? nftRarityBadgeStyle(token.rarity, 1, { compact: true }) : null}>
-                            {isRarityNftTroop ? nftRarityLabel(token.rarity, 1) : 'NFT'}
-                          </span>
-                          <span>{tokenLabel}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <div style={styles.demonInventoryHint}>
-                    {hasDemonKingWallet ? `${currentNftTroop.label} unlocks when a connected wallet owns at least one NFT.` : `Open the NFT shop to connect and load your ${currentNftTroop.label} NFTs.`}
-                  </div>
+              <div className="barn-unit-preview__level" aria-label={nextTroopLevel ? `Level ${displayLvl} to ${nextTroopLevel}` : `Level ${displayLvl}, maximum`}>
+                <span>Level</span>
+                <strong>{displayLvl}</strong>
+                {nextTroopLevel && (
+                  <>
+                    <span aria-hidden="true">&rarr;</span>
+                    <strong className="barn-unit-preview__next-level">{nextTroopLevel}</strong>
+                  </>
                 )}
               </div>
-            )}
+              <span className="barn-unit-preview__count">{safeIndex + 1} / {troopNames.length}</span>
+            </aside>
 
-            <h3 style={{...styles.sectionTitle, marginTop: mobile ? 10 : 16, fontSize: mobile ? 16 : 20}}>Upgrade Resources</h3>
-            {!troopUnlocked && (
-              <div style={styles.demonInventoryHint}>
-                Town Hall Lv {requiredTownHallLevel} unlocks {displayName}.
-              </div>
-            )}
-            {troopUnlocked && !townHallReadyForNextLevel && nextTroopLevel && (
-              <div style={styles.demonInventoryHint}>
-                Town Hall Lv {nextTroopLevel} unlocks troop Lv {nextTroopLevel}.
-              </div>
-            )}
-            {!barnReadyForNextLevel && (
-              <div style={styles.demonInventoryHint}>
-                Barn Lv {requiredBarnLevel} unlocks troop Lv {nextTroopLevel}. Upgrade the Barn first.
-              </div>
-            )}
-            <div style={{...styles.reqGrid, ...(mobile ? { flexWrap: 'nowrap', justifyContent: 'center', gap: 8 } : {})}}>
-              {nextCost ? Object.entries(nextCost).map(([res, amt]) => {
-                if (amt === 0) return null;
-                return (
-                  <div key={res} style={{...styles.reqBox, width: reqBoxSize, height: reqBoxSize}}>
-                    <img src={RES_ICONS[res] || goldIcon} style={{...styles.reqIconImg, width: mobile ? 34 : 44, height: mobile ? 34 : 44}} alt={res} />
-                    <span style={{...styles.reqAmt, fontSize: mobile ? 13 : 16}}>{amt}</span>
+            <div className="barn-unit-details">
+              <section className="barn-unit-section" aria-labelledby="barn-unit-stats-title">
+                <h3 id="barn-unit-stats-title" className="barn-unit-section__title">Stats</h3>
+                {stats && maxStats && (
+                  <div className="barn-unit-stats">
+                    <ProgressBar label="Health Points" value={stats.hp} max={maxStats.hp} />
+                    <ProgressBar label="Damage Output" value={stats.damage} max={maxStats.damage} />
+                    <ProgressBar label="Attack Speed" value={stats.atk_speed} max={maxStats.atk_speed} showAsTime />
+                    <ProgressBar label="Level Progress" value={displayLvl} max={troopMaxLevel} />
                   </div>
-                );
-              }) : (
-                <div style={styles.reqBoxMax}>
-                  <span style={{color: '#94a3b8', fontSize: 13, fontStyle: 'italic'}}>No Requirements</span>
-                </div>
+                )}
+                {TROOP_STATS[currentTroopName]?.trait && (
+                  <div className="barn-unit-trait">{TROOP_STATS[currentTroopName].trait}</div>
+                )}
+                {troopLogistics && (
+                  <div className="barn-unit-logistics" aria-label="Unit logistics">
+                    <span>TH {troopLogistics.townHallLevel}</span>
+                    <span>{troopLogistics.slotCost} ship slots</span>
+                    <span>{troopLogistics.loadCostGold.toLocaleString()} gold to load</span>
+                  </div>
+                )}
+              </section>
+
+              {isNftBackedTroop && (
+                <section className="barn-unit-nft" aria-labelledby="barn-unit-nft-title">
+                  <div className="barn-unit-nft__header">
+                    <h3 id="barn-unit-nft-title" className="barn-unit-section__title">NFT unit</h3>
+                    <span>{hasDemonKingWallet ? `${demonKingNfts.length} owned` : 'Wallet required'}</span>
+                  </div>
+                  {demonKingLoading && <div className="barn-unit-hint" role="status">Loading NFT inventory…</div>}
+                  {demonKingError && <div className="barn-unit-hint barn-unit-hint--error">{demonKingError}</div>}
+                  {hasDemonKingWallet && demonKingNfts.length > 0 ? (
+                    <div className="barn-unit-nft__grid">
+                      {demonKingNfts.map((token) => {
+                        const key = nftBackedShipEntry(currentTroopName, token);
+                        const active = key === (selectedDemonKey || nftBackedShipEntry(currentTroopName, selectedDemonNft));
+                        const tokenLabel = demonKingDisplayLabel(token, demonKingNfts);
+                        const rarityCardStyle = isRarityNftTroop ? nftRarityCardStyle(token.rarity, 1, { active }) : {};
+                        return (
+                          <button
+                            key={key}
+                            type="button"
+                            className={`barn-unit-nft__token${active ? ' barn-unit-nft__token--active' : ''}`}
+                            aria-pressed={active}
+                            onClick={() => setSelectedDemonKey(key)}
+                            style={rarityCardStyle}
+                          >
+                            <span style={isRarityNftTroop ? nftRarityBadgeStyle(token.rarity, 1, { compact: true }) : null}>
+                              {isRarityNftTroop ? nftRarityLabel(token.rarity, 1) : 'NFT'}
+                            </span>
+                            <span>{tokenLabel}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : !demonKingLoading && (
+                    <div className="barn-unit-hint">
+                      {hasDemonKingWallet ? `${currentNftTroop.label} requires an owned NFT.` : `Connect a supported wallet to load ${currentNftTroop.label} NFTs.`}
+                    </div>
+                  )}
+                </section>
               )}
+
+              <section className="barn-unit-section" aria-labelledby="barn-unit-cost-title">
+                <h3 id="barn-unit-cost-title" className="barn-unit-section__title">Upgrade resources</h3>
+                {ctaBlocker && <div className="barn-unit-blocker" role="status">{ctaBlocker}</div>}
+                <div className="barn-unit-costs">
+                  {resourceEntries.length > 0 ? resourceEntries.map(([resource, amount]) => {
+                    const required = Number(amount);
+                    const available = Number(resources?.[resource] || 0);
+                    const shortfall = Math.max(0, required - available);
+                    return (
+                      <div
+                        key={resource}
+                        className={`barn-unit-cost${shortfall > 0 ? ' barn-unit-cost--short' : ''}`}
+                        aria-label={`${resource}: ${required.toLocaleString()} required, ${available.toLocaleString()} available${shortfall > 0 ? `, ${shortfall.toLocaleString()} short` : ''}`}
+                      >
+                        <img src={RES_ICONS[resource] || goldIcon} alt="" />
+                        <div aria-hidden="true">
+                          <span>Required</span>
+                          <strong>{required.toLocaleString()}</strong>
+                          <small>
+                            {available.toLocaleString()} available{shortfall > 0 ? ` / ${shortfall.toLocaleString()} short` : ''}
+                          </small>
+                        </div>
+                      </div>
+                    );
+                  }) : (
+                    <div className="barn-unit-costs__empty">No requirements</div>
+                  )}
+                </div>
+              </section>
             </div>
           </div>
-
         </div>
 
-        {/* Upgrade button — fixed at bottom, outside scroll area */}
-        {!isMax && !building.is_enemy && (
-          <div style={{ padding: mobile ? '8px 12px 12px' : '12px 20px 16px', display: 'flex', justifyContent: 'center' }}>
-            <button
-              style={{
-                ...styles.actionBtn,
-                ...(!troopUnlocked || !townHallReadyForNextLevel || !barnReadyForNextLevel || upgradePending ? styles.actionBtnDisabled : null),
-                width: '100%',
-                maxWidth: mobile ? '100%' : 240,
-                padding: mobile ? '12px 16px' : '14px 20px',
-                fontSize: mobile ? 14 : 14,
-              }}
-              disabled={!troopUnlocked || !townHallReadyForNextLevel || !barnReadyForNextLevel || upgradePending}
-              onClick={handleMainUpgrade}
-            >
-              {upgradePending
-                ? 'Upgrading...'
-                : !troopUnlocked
-                ? `Town Hall Lv ${requiredTownHallLevel} required`
-                : !townHallReadyForNextLevel
-                ? `Upgrade Town Hall to Lv ${nextTroopLevel}`
-                : !barnReadyForNextLevel
-                ? `Upgrade Barn to Lv ${requiredBarnLevel}`
-                : isNftBackedTroop
-                ? (selectedDemonNft ? `Upgrade ${currentNftTroop.label} to Lv` : `Get ${currentNftTroop.label} NFT`)
-                : 'Upgrade to Lv'} {upgradePending || !townHallReadyForNextLevel || !barnReadyForNextLevel || (isNftBackedTroop && !selectedDemonNft) ? '' : nextTroopLevel}
-            </button>
-          </div>
-        )}
-
-      </div>
+        <footer className="barn-unit-modal__footer">
+          <button type="button" className="barn-unit-modal__action" disabled={upgradeDisabled} aria-busy={upgradePending || undefined} onClick={handleMainUpgrade}>
+            {ctaBlocker || `Upgrade to Level ${nextTroopLevel}`}
+          </button>
+        </footer>
+      </section>
     </div>
   );
 }
 
 export default memo(BarnPanel);
-
-const styles = {
-  overlay: {
-    position: 'fixed', inset: 0,
-    background: 'rgba(0,0,0,0.6)',
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-    zIndex: 20, pointerEvents: 'all',
-  },
-  panel: {
-    width: 680, maxWidth: '96vw', maxHeight: '90vh',
-    background: '#ebdaba',
-    border: '4px solid #377d9f',
-    boxShadow: '0 20px 60px rgba(0,0,0,0.8), inset 0 0 0 4px #ebdaba',
-    display: 'flex', flexDirection: 'column',
-    overflow: 'hidden', fontFamily: '"Inter","Segoe UI",sans-serif',
-    position: 'relative', cursor: 'default',
-  },
-  header: {
-    display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative',
-    height: 54, background: '#4ca5d2',
-    borderBottom: '4px solid #377d9f',
-    width: '100%',
-  },
-  headerTitle: { 
-    fontSize: 24, fontStyle: 'italic', fontWeight: 900, color: '#fff', 
-    textTransform: 'uppercase', textShadow: '0 2px 4px rgba(0,0,0,0.6)', margin: 0,
-  },
-  closeBtn: {
-    position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)',
-    width: 32, height: 32, background: 'rgba(0,0,0,0.1)', border: 'none', borderRadius: 4,
-    color: '#1a3c4f', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0,
-    fontSize: 20, fontWeight: 'bold'
-  },
-  contentLayout: {
-    display: 'flex', width: '100%',
-    padding: '24px 20px', justifyContent: 'center', alignItems: 'flex-start',
-    flex: 1, overflowY: 'auto', overflowX: 'hidden', gap: 24, flexWrap: 'wrap',
-  },
-  leftColumn: {
-    flex: '1 1 200px', maxWidth: 300,
-    display: 'flex', flexDirection: 'column', gap: 16,
-    position: 'relative', zIndex: 10,
-  },
-  sectionTitle: {
-    margin: 0,
-    fontSize: 20,
-    fontWeight: 900,
-    color: '#377d9f',
-    marginBottom: 0,
-  },
-  progressContainer: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 16,
-  },
-  progressRow: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 8,
-  },
-  progressHeader: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  progressLabel: {
-    fontSize: 12,
-    fontWeight: 800,
-    color: '#7692a1',
-    textTransform: 'uppercase',
-  },
-  progressValue: {
-    fontSize: 14,
-    fontWeight: 900,
-    color: '#1a3c4f',
-  },
-  progressBarBg: {
-    height: 8,
-    background: 'rgba(0,0,0,0.06)',
-    borderRadius: 4,
-    overflow: 'hidden',
-    boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.15)',
-  },
-  progressBarFill: {
-    height: '100%',
-    borderRadius: 4,
-    transition: 'width 0.4s ease-out',
-  },
-  characterDisplayArea: {
-    width: '100%',
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    position: 'relative',
-    gap: 8,
-  },
-  sliderBtn: {
-    background: 'rgba(0,0,0,0.1)',
-    border: 'none',
-    borderRadius: 12,
-    color: '#1a3c4f',
-    fontSize: 32,
-    fontWeight: 900,
-    width: 48,
-    height: 72,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    cursor: 'pointer',
-    transition: 'all 0.2s',
-    zIndex: 30,
-    flexShrink: 0,
-  },
-  characterWrapper: {
-    position: 'relative',
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: '100%',
-    height: '100%',
-  },
-  characterSphere: {
-    width: 200,
-    height: 200,
-    position: 'relative',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    background: 'radial-gradient(circle at 30% 30%, #d4caa8 0%, #b8af8c 100%)',
-    borderRadius: '50%',
-    boxShadow: 'inset 0 4px 10px rgba(0,0,0,0.3)',
-    border: '2px solid rgba(0,0,0,0.1)'
-  },
-  characterImg: {
-    position: 'absolute',
-    width: '100%',
-    height: '100%',
-    objectFit: 'contain',
-    zIndex: 5,
-    pointerEvents: 'none',
-    filter: 'drop-shadow(0 10px 20px rgba(0,0,0,0.4))',
-    transformOrigin: 'bottom center',
-    transition: 'opacity 0.35s ease-in-out',
-  },
-  characterFallback: {
-    position: 'absolute',
-    inset: '13%',
-    zIndex: 5,
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 3,
-    color: '#2d6f7d',
-    background: 'rgba(119, 218, 205, 0.22)',
-    border: '1px solid rgba(45, 111, 125, 0.4)',
-    borderRadius: '50%',
-    fontWeight: 900,
-    lineHeight: 1,
-    pointerEvents: 'none',
-  },
-  logisticsChip: {
-    padding: '4px 7px',
-    border: '1px solid rgba(45, 111, 125, 0.32)',
-    borderRadius: 5,
-    background: 'rgba(222, 248, 241, 0.72)',
-    whiteSpace: 'nowrap',
-  },
-  demonInventory: {
-    background: 'rgba(255,255,255,0.18)',
-    border: '1px solid rgba(92,58,33,0.18)',
-    borderRadius: 8,
-    padding: 10,
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 8,
-  },
-  demonInventoryHeader: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    gap: 8,
-    color: '#5C3A21',
-    fontSize: 12,
-    fontWeight: 900,
-    textTransform: 'uppercase',
-  },
-  demonInventoryHint: {
-    color: '#7c633e',
-    fontSize: 12,
-    fontWeight: 700,
-    lineHeight: 1.35,
-  },
-  demonTokenGrid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
-    gap: 6,
-  },
-  demonTokenBtn: {
-    border: '2px solid rgba(92,58,33,0.25)',
-    borderRadius: 8,
-    background: 'rgba(255,255,255,0.28)',
-    color: '#5C3A21',
-    cursor: 'pointer',
-    fontWeight: 900,
-    padding: '7px 8px',
-    display: 'flex',
-    justifyContent: 'space-between',
-    gap: 6,
-    fontSize: 12,
-  },
-  demonTokenBtnActive: {
-    background: 'linear-gradient(180deg, #ffe27a 0%, #f59e0b 100%)',
-    // Full `border` shorthand — base demonTokenBtn uses `border: '2px
-    // solid ...'`, so overriding only borderColor here mixes shorthand
-    // + longhand and makes React warn when the selection toggles.
-    border: '2px solid #8a4b00',
-    color: '#3d250f',
-  },
-  upgradeBadge: {
-    position: 'absolute',
-    top: -10,
-    right: -20,
-    background: 'linear-gradient(135deg, #FBC02D 0%, #F57F17 100%)',
-    borderRadius: 24,
-    padding: '4px 16px',
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    boxShadow: '0 8px 16px rgba(245, 127, 23, 0.4), inset 0 2px 0 rgba(255,255,255,0.3)',
-    zIndex: 10,
-  },
-  badgeTopText: {
-    fontSize: 10,
-    fontWeight: 700,
-    color: 'rgba(255,255,255,0.9)',
-    textTransform: 'uppercase',
-    marginTop: 4,
-  },
-  badgeBigPart: {
-    display: 'flex',
-    alignItems: 'baseline',
-    gap: 4,
-    marginBottom: 2,
-  },
-  badgeLvlText: {
-    fontSize: 14,
-    fontWeight: 800,
-    color: '#fff',
-  },
-  badgeLvlNumber: {
-    fontSize: 32,
-    fontWeight: 900,
-    color: '#cbd5e1',
-  },
-  rightColumn: {
-    flex: '1 1 280px', maxWidth: 340,
-    display: 'flex', flexDirection: 'column', alignItems: 'center',
-    position: 'relative', zIndex: 10,
-  },
-  reqGrid: {
-    display: 'flex',
-    justifyContent: 'flex-start',
-    flexWrap: 'wrap',
-    gap: 12,
-  },
-  reqBox: {
-    background: 'rgba(0, 0, 0, 0.05)',
-    border: '1px solid rgba(0, 0, 0, 0.1)',
-    borderRadius: 20,
-    width: 90,
-    height: 90,
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 4,
-    boxShadow: 'inset 0 1px 2px rgba(255,255,255,0.5)',
-    transition: 'transform 0.2s, background 0.2s',
-  },
-  reqBoxMax: {
-    gridColumn: '1 / -1',
-    display: 'flex',
-    justifyContent: 'flex-start',
-    padding: '10px 0',
-  },
-  reqIconImg: {
-    width: 44,
-    height: 44,
-    objectFit: 'contain',
-    filter: 'drop-shadow(0 2px 2px rgba(0,0,0,0.3))',
-    marginBottom: 4,
-  },
-  reqAmt: {
-    fontSize: 16,
-    fontWeight: 900,
-    color: '#1a3c4f',
-  },
-  actionBtn: {
-    background: 'linear-gradient(180deg, #FBC02D 0%, #F57F17 100%)',
-    border: 'none',
-    boxShadow: '0 8px 20px rgba(245, 127, 23, 0.3), inset 0 2px 0 rgba(255,255,255,0.4)',
-    borderRadius: 20,
-    padding: '14px 20px',
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: 900,
-    cursor: 'pointer',
-    width: '100%',
-    textAlign: 'center',
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-    textShadow: '0 2px 2px rgba(0,0,0,0.3)',
-    transition: 'transform 0.1s',
-  },
-  actionBtnDisabled: {
-    background: 'linear-gradient(180deg, #a8a29e 0%, #78716c 100%)',
-    boxShadow: 'inset 0 2px 0 rgba(255,255,255,0.25)',
-    cursor: 'not-allowed',
-    opacity: 0.86,
-  }
-};

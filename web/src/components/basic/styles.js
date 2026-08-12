@@ -1,22 +1,22 @@
-// Shared styles for the Basic-mode trade wizard. Parchment / cartoon
-// aesthetic that matches RegisterPanel and FuturesModeSelect.
+// Shared ClashBot Light styles for the Basic-mode trade wizard.
+import { uiIconButton } from '../../styles/theme';
 
 export const colors = {
-  parchment: '#fdf8e7',
-  parchmentDark: '#f3ebd1',
-  ink: '#5C3A21',
-  inkSoft: '#77573d',
-  inkFaint: '#a3906a',
-  border: '#d4c8b0',
-  borderStrong: '#a3906a',
-  long: '#43a047',
-  longDark: '#2e7d32',
-  short: '#e53935',
-  shortDark: '#c62828',
-  safe: '#6ab344',
-  balanced: '#e8b830',
-  aggressive: '#ef5350',
-  blue: '#0EA5E9',
+  parchment: 'var(--terminal-surface)',
+  parchmentDark: 'var(--terminal-surface-subtle)',
+  ink: 'var(--terminal-text)',
+  inkSoft: 'var(--terminal-text-secondary)',
+  inkFaint: 'var(--terminal-text-muted)',
+  border: 'var(--terminal-border)',
+  borderStrong: 'var(--terminal-border-strong)',
+  long: 'var(--terminal-long)',
+  longDark: 'var(--terminal-long-strong)',
+  short: 'var(--terminal-short)',
+  shortDark: 'var(--terminal-short-strong)',
+  safe: 'var(--terminal-long)',
+  balanced: 'var(--terminal-orange)',
+  aggressive: 'var(--terminal-short)',
+  blue: 'var(--terminal-orange)',
 };
 
 export const shared = {
@@ -41,33 +41,25 @@ export const shared = {
     display: 'flex', alignItems: 'center', gap: 10,
     marginBottom: 4,
   },
-  backBtn: {
-    width: 36, height: 36, borderRadius: 10,
-    background: 'transparent',
-    border: `2px solid ${colors.border}`,
-    color: colors.ink,
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-    cursor: 'pointer', fontSize: 20,
-    flexShrink: 0,
-  },
+  backBtn: uiIconButton('secondary', 36, { fontSize: 20 }),
   stepDots: {
     flex: 1, display: 'flex', gap: 6, justifyContent: 'center',
   },
   dot: {
     width: 8, height: 8, borderRadius: '50%',
-    background: 'rgba(92,58,33,0.18)',
+    background: 'var(--terminal-border-strong)',
     transition: 'all 0.25s ease',
   },
   dotActive: {
     width: 24,
-    background: colors.ink,
+    background: 'var(--terminal-orange)',
   },
   dotDone: {
     background: colors.safe,
   },
   spacer36: { width: 36, flexShrink: 0 },  // mirrors back button width to keep dots centered
   title: {
-    fontSize: 24, fontWeight: 900, color: colors.ink,
+    fontSize: 24, fontWeight: 750, color: colors.ink,
     letterSpacing: '0.3px', textAlign: 'center',
     margin: '6px 0 2px',
     lineHeight: 1.2,

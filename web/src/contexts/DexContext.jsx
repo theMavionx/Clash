@@ -213,6 +213,38 @@ export const DEX_CONFIG = {
     chainShort: 'ETH',
     description: 'Stocks, commodities and crypto perps',
   },
+  leverup: {
+    id: 'leverup',
+    label: 'LEVERUP V2',
+    shortLabel: 'LUP',
+    emoji: 'LUP',
+    logo: '/leverup.svg',
+    logoIsWordmark: false,
+    color: '#9BC400',
+    colorDark: '#506600',
+    colorLight: 'rgba(204,255,0,0.16)',
+    borderColor: '#9BC400',
+    chain: 'Monad',
+    chainShort: 'MON',
+    description: 'Gasless V2 perps on Monad',
+  },
+  aster: {
+    id: 'aster',
+    label: 'ASTER',
+    shortLabel: 'AST',
+    emoji: 'AST',
+    // Official Aster API Docs mark, stored locally to avoid a runtime
+    // dependency on GitHub Pages availability.
+    logo: '/aster.svg',
+    logoIsWordmark: false,
+    color: '#F2B36F',
+    colorDark: '#B45F23',
+    colorLight: 'rgba(242,179,111,0.16)',
+    borderColor: '#D98A43',
+    chain: 'Aster',
+    chainShort: 'ASTER',
+    description: 'Aster V3 perpetual futures',
+  },
   hibachi: {
     id: 'hibachi',
     label: 'HIBACHI',
@@ -333,6 +365,8 @@ export const DEX_ORDER = [
   'risex',
   'nado',
   'ondo',
+  'aster',
+  'leverup',
   'hibachi',
   'decibel',
   'pacifica',
@@ -442,7 +476,7 @@ export function DexProvider({ children }) {
         // this a stale /api/state response from account A could land under
         // account B's context and reset the DEX selector to the wrong value.
         if (cancelled) return;
-        if (j.dex === 'pacifica' || j.dex === 'avantis' || j.dex === 'decibel' || j.dex === 'gmx' || j.dex === 'ostium' || j.dex === 'monad' || j.dex === 'phoenix' || j.dex === 'hyperliquid' || j.dex === 'risex' || j.dex === 'nado' || j.dex === 'ondo' || j.dex === 'hibachi' || j.dex === 'hotstuff' || j.dex === 'grvt' || j.dex === 'katana' || j.dex === 'gmtrade' || j.dex === 'flash' || j.dex === 'lighter' || j.dex === 'bulk') {
+        if (j.dex === 'pacifica' || j.dex === 'avantis' || j.dex === 'decibel' || j.dex === 'gmx' || j.dex === 'ostium' || j.dex === 'monad' || j.dex === 'phoenix' || j.dex === 'hyperliquid' || j.dex === 'risex' || j.dex === 'nado' || j.dex === 'ondo' || j.dex === 'aster' || j.dex === 'leverup' || j.dex === 'hibachi' || j.dex === 'hotstuff' || j.dex === 'grvt' || j.dex === 'katana' || j.dex === 'gmtrade' || j.dex === 'flash' || j.dex === 'lighter' || j.dex === 'bulk') {
           // Compare against current React state, not localStorage — localStorage
           // was the previous account's setting and we want the authoritative
           // server value for THIS token to win even if it matches what's
@@ -479,7 +513,7 @@ export function DexServerSync() {
         if (cancelled || !r.ok) return;
         const j = await r.json();
         if (cancelled) return;
-        if (j.dex === 'pacifica' || j.dex === 'avantis' || j.dex === 'decibel' || j.dex === 'gmx' || j.dex === 'ostium' || j.dex === 'monad' || j.dex === 'phoenix' || j.dex === 'hyperliquid' || j.dex === 'risex' || j.dex === 'nado' || j.dex === 'ondo' || j.dex === 'hibachi' || j.dex === 'hotstuff' || j.dex === 'grvt' || j.dex === 'katana' || j.dex === 'gmtrade' || j.dex === 'flash' || j.dex === 'lighter' || j.dex === 'bulk') {
+        if (j.dex === 'pacifica' || j.dex === 'avantis' || j.dex === 'decibel' || j.dex === 'gmx' || j.dex === 'ostium' || j.dex === 'monad' || j.dex === 'phoenix' || j.dex === 'hyperliquid' || j.dex === 'risex' || j.dex === 'nado' || j.dex === 'ondo' || j.dex === 'aster' || j.dex === 'leverup' || j.dex === 'hibachi' || j.dex === 'hotstuff' || j.dex === 'grvt' || j.dex === 'katana' || j.dex === 'gmtrade' || j.dex === 'flash' || j.dex === 'lighter' || j.dex === 'bulk') {
           writeLastPlayerDexPreference({ ...player, token }, j.dex);
           setDex(j.dex);
         }

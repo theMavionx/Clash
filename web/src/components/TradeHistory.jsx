@@ -302,6 +302,73 @@ function normalizeOndoTrade(fill) {
   };
 }
 
+function normalizeAsterTrade(fill) {
+  const rawSymbol = String(fill?.symbol || '').toUpperCase();
+  const symbol = rawSymbol.replace(/USDT$/u, '').replace(/-PERP$/u, '');
+  if (!symbol) return null;
+  const orderSide = String(fill?.side || '').toUpperCase();
+  const position = String(fill?.positionSide || '').toUpperCase();
+  const isLongPosition = position !== 'SHORT';
+  const isClose = isLongPosition ? orderSide === 'SELL' : orderSide === 'BUY';
+  const side = isClose
+    ? (isLongPosition ? 'close_long' : 'close_short')
+    : (isLongPosition ? 'open_long' : 'open_short');
+  return {
+    ...fill,
+    _dex: 'aster',
+    id: fill?.id || fill?.tradeId || fill?.orderId || `${rawSymbol}:${fill?.time}:${fill?.price}:${fill?.qty}`,
+    symbol,
+    side,
+    action: side,
+    amount: Math.abs(Number(fill?.qty ?? fill?.quantity ?? 0)),
+    price: Number(fill?.price ?? 0),
+    fee: Math.abs(Number(fill?.commission ?? fill?.fee ?? 0)),
+    created_at: fill?.time ?? fill?.timestamp,
+    realized_pnl_amount: fill?.realizedPnl ?? fill?.realized_pnl,
+  };
+}
+
+const LEVERUP_OPEN_OPERATIONS = new Set(['OPEN_POSITION', 'POSITION_INCREASED', 'EXECUTE_LIMIT_ORDER_SUCCESSFUL', 'OPEN_MARKET_TRADE']);
+const LEVERUP_CLOSE_OPERATIONS = new Set(['CLOSE_POSITION', 'POSITION_DECREASED', 'EXECUTE_CLOSE_SUCCESSFUL', 'EXECUTE_DECREASE_ORDER_SUCCESSFUL', 'CLOSE_TRADE_SUCCESSFUL']);
+
+function normalizeLeverupTrade(fill, markets = []) {
+  const position = fill?.position || {};
+  const market = markets.find(row => (
+    String(row?.pairBase || row?.market || '').toLowerCase() === String(fill?.pairBase || position?.pairBase || '').toLowerCase()
+  ));
+  const symbol = String(position?.pair || fill?.pair || fill?.symbol || market?.symbol || '')
+    .toUpperCase()
+    .replace(/\/USD$/u, '')
+    .replace(/-USD(?:\.P)?$/u, '');
+  if (!symbol) return null;
+  const operation = String(fill?.operationType || fill?.operation_type || '').toUpperCase();
+  if (!LEVERUP_OPEN_OPERATIONS.has(operation) && !LEVERUP_CLOSE_OPERATIONS.has(operation)) return null;
+  const isClose = LEVERUP_CLOSE_OPERATIONS.has(operation);
+  const isLong = fill?.isLong ?? position?.isLong ?? true;
+  const qtyRaw = fill?.qty ?? position?.qty ?? 0;
+  const priceRaw = fill?.closePrice ?? fill?.entryPrice ?? position?.entryPrice ?? 0;
+  const amount = Math.abs(Number(qtyRaw)) / 1e10;
+  const price = Number(priceRaw) / 1e18;
+  const closeInfo = fill?.closeInfo || fill?.detail?.closeInfo || fill?.detail || {};
+  const feeRaw = isClose
+    ? (closeInfo?.closeFee ?? fill?.closeFee ?? 0)
+    : (fill?.openFee ?? fill?.detail?.openFee ?? position?.openFee ?? 0);
+  const pnlRaw = fill?.pnl ?? closeInfo?.pnl;
+  return {
+    ...fill,
+    _dex: 'leverup',
+    id: fill?.id || fill?.transactionHash || `${symbol}:${fill?.blockTime}:${price}:${amount}`,
+    symbol,
+    side: isClose ? (isLong ? 'close_long' : 'close_short') : (isLong ? 'open_long' : 'open_short'),
+    action: isClose ? (isLong ? 'close_long' : 'close_short') : (isLong ? 'open_long' : 'open_short'),
+    amount,
+    price,
+    fee: Math.abs(Number(feeRaw)) / 1e18,
+    created_at: fill?.blockTime ?? fill?.timestamp,
+    realized_pnl_amount: pnlRaw != null ? Number(pnlRaw) / 1e18 : null,
+  };
+}
+
 function normalizeHotstuffTrade(fill, markets) {
   const instrumentId = Number(fill?.pair_index ?? fill?.instrument_id ?? fill?.instrumentId);
   const m = (markets || []).find(x => Number(x.pair_index ?? x.market_id) === instrumentId)
@@ -457,7 +524,7 @@ function signedUsd(value, digits = 4) {
   return `${n > 0 ? '+' : '-'}$${Math.abs(n).toFixed(digits)}`;
 }
 
-function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [], filters }) {
+function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [], filters, fetchTradeHistory, activeSymbol }) {
   const [trades, setTrades] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -549,6 +616,17 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
           if (!cancelled) setTrades(rows(d).map(normalizeOndoTrade).filter(Boolean));
           return;
         }
+        if (dex === 'leverup') {
+          if (!EVM_ADDRESS_RE.test(String(addr || ''))) throw new Error('Connect a Monad wallet to view LeverUp history');
+          const d = await fetchFuturesJson(`/api/futures/leverup/history?dex=leverup&account=${encodeURIComponent(addr)}&size=100`, {
+            dex: 'leverup',
+            headers: { 'x-leverup-wallet': addr },
+            signal: controller.signal,
+          });
+          const items = Array.isArray(d?.content) ? d.content : [];
+          if (!cancelled) setTrades(items.map(item => normalizeLeverupTrade(item, markets)).filter(Boolean));
+          return;
+        }
         if (dex === 'hotstuff') {
           if (!EVM_ADDRESS_RE.test(String(addr || ''))) throw new Error('Connect an EVM wallet to view Hotstuff history');
           const d = await fetchFuturesJson(`/api/futures/hotstuff/trade-history?dex=hotstuff&account=${encodeURIComponent(addr)}&limit=100`, {
@@ -634,6 +712,16 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
           if (!cancelled) setTrades(rows.map(normalizeGrvtTrade).filter(Boolean));
           return;
         }
+        if (dex === 'aster') {
+          if (typeof fetchTradeHistory !== 'function') throw new Error('Aster one-tap signer is not ready');
+          const requestedSymbol = filters?.symbol && filters.symbol !== 'All'
+            ? filters.symbol
+            : activeSymbol;
+          if (!requestedSymbol) throw new Error('Select an Aster market to view its trade history');
+          const marketRows = await fetchTradeHistory(requestedSymbol, { limit: 500 });
+          if (!cancelled) setTrades((Array.isArray(marketRows) ? marketRows : []).map(normalizeAsterTrade).filter(Boolean));
+          return;
+        }
         if (LOCAL_INDEX_HISTORY_DEXES.has(dex)) {
           const d = await fetchFuturesJson(`/api/futures/history?dex=${encodeURIComponent(dex)}`, {
             dex,
@@ -673,7 +761,7 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
       clearTimeout(timeout);
       controller.abort();
     };
-  }, [walletAddr, accountAddr, dex, markets]);
+  }, [walletAddr, accountAddr, dex, markets, fetchTradeHistory, activeSymbol, filters?.symbol]);
 
   let filtered = trades;
 
@@ -702,20 +790,21 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
   });
 
   if (loading) {
-    return <div style={{ padding: 20, textAlign: 'center', color: '#a3906a' }}>Loading...</div>;
+    return <div style={S.state}>Loading...</div>;
   }
   if (error) {
-    return <div style={{ padding: 20, textAlign: 'center', color: '#B71C1C', fontWeight: 800 }}>{error}</div>;
+    return <div style={{ ...S.state, color: 'var(--terminal-short)', fontWeight: 700 }}>{error}</div>;
   }
   if (!filtered.length) {
-    const name = dex === 'decibel' ? 'Decibel ' : dex === 'ostium' ? 'Ostium ' : dex === 'monad' ? 'Perpl ' : dex === 'phoenix' ? 'Phoenix ' : dex === 'hyperliquid' ? 'Hyperliquid ' : dex === 'risex' ? 'RISEx ' : dex === 'nado' ? 'Nado ' : dex === 'ondo' ? 'Ondo ' : dex === 'hotstuff' ? 'Hotstuff ' : dex === 'grvt' ? 'GRVT ' : dex === 'gmtrade' ? 'GMTrade ' : dex === 'flash' ? 'Flash Trade ' : dex === 'hibachi' ? 'Hibachi ' : dex === 'katana' ? 'Katana ' : dex === 'gmx' ? 'GMX ' : dex === 'avantis' ? 'Avantis ' : dex === 'lighter' ? 'Lighter ' : dex === 'bulk' ? 'Bulk ' : '';
-    return <div style={{ padding: 20, textAlign: 'center', color: '#a3906a' }}>No {name}trade history</div>;
+    const name = dex === 'decibel' ? 'Decibel ' : dex === 'ostium' ? 'Ostium ' : dex === 'monad' ? 'Perpl ' : dex === 'phoenix' ? 'Phoenix ' : dex === 'hyperliquid' ? 'Hyperliquid ' : dex === 'risex' ? 'RISEx ' : dex === 'nado' ? 'Nado ' : dex === 'ondo' ? 'Ondo ' : dex === 'leverup' ? 'LeverUp ' : dex === 'aster' ? 'Aster ' : dex === 'hotstuff' ? 'Hotstuff ' : dex === 'grvt' ? 'GRVT ' : dex === 'gmtrade' ? 'GMTrade ' : dex === 'flash' ? 'Flash Trade ' : dex === 'hibachi' ? 'Hibachi ' : dex === 'katana' ? 'Katana ' : dex === 'gmx' ? 'GMX ' : dex === 'avantis' ? 'Avantis ' : dex === 'lighter' ? 'Lighter ' : dex === 'bulk' ? 'Bulk ' : '';
+    return <div style={S.state}>No {name}trade history</div>;
   }
 
   const isDecibel = dex === 'decibel';
-  const showPnl = dex === 'decibel' || dex === 'ostium' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'hotstuff' || dex === 'grvt' || dex === 'gmtrade' || dex === 'flash' || dex === 'hibachi' || dex === 'katana' || dex === 'gmx' || dex === 'avantis' || dex === 'lighter' || dex === 'bulk';
+  const showPnl = dex === 'decibel' || dex === 'ostium' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'leverup' || dex === 'aster' || dex === 'hotstuff' || dex === 'grvt' || dex === 'gmtrade' || dex === 'flash' || dex === 'hibachi' || dex === 'katana' || dex === 'gmx' || dex === 'avantis' || dex === 'lighter' || dex === 'bulk';
 
   return (
+    <div style={S.scroller}>
     <table style={S.table}>
       <thead><tr>
         <th style={S.th}>Time</th>
@@ -733,7 +822,7 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
           const isOpen = side.includes('open');
           const isLong = side.includes('long') || side === 'bid';
           const label = isOpen ? (isLong ? 'Open Long' : 'Open Short') : (isLong ? 'Close Long' : 'Close Short');
-          const color = isLong ? '#4CAF50' : '#E53935';
+          const color = isLong ? 'var(--terminal-long)' : 'var(--terminal-short)';
           const ts = timeMs(t.created_at);
           const time = ts ? new Date(ts).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '-';
           const pnl = Number(t.realized_pnl_amount || 0);
@@ -742,17 +831,17 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
             <tr key={t.id || i} style={S.tr}>
               <td style={S.td}>{time}</td>
               <td style={S.td}>{t.symbol || '-'}</td>
-              <td style={{ ...S.td, color, fontWeight: 800 }}>{label}</td>
+              <td style={{ ...S.td, color, fontWeight: 600 }}>{label}</td>
               <td style={S.td}>${displayNumber(t.price, 6)}</td>
               <td style={S.td}>{displayNumber(t.amount, 6)}</td>
               <td style={S.td}>${Number(t.fee || 0).toFixed(4)}</td>
               {showPnl && (
-                <td style={{ ...S.td, color: pnl >= 0 ? '#4CAF50' : '#E53935', fontWeight: 800 }}>
+                <td style={{ ...S.td, color: pnl >= 0 ? 'var(--terminal-long)' : 'var(--terminal-short)', fontWeight: 700 }}>
                   {signedUsd(pnl)}
                 </td>
               )}
               {isDecibel && (
-                <td style={{ ...S.td, color: funding >= 0 ? '#4CAF50' : '#E53935', fontWeight: 800 }}>
+                <td style={{ ...S.td, color: funding >= 0 ? 'var(--terminal-long)' : 'var(--terminal-short)', fontWeight: 700 }}>
                   {signedUsd(funding)}
                 </td>
               )}
@@ -761,14 +850,17 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
         })}
       </tbody>
     </table>
+    </div>
   );
 }
 
 export default memo(TradeHistory);
 
 const S = {
-  table: { width: '100%', borderCollapse: 'collapse', fontSize: 12, fontFamily: 'monospace' },
-  th: { padding: '4px 12px', textAlign: 'left', color: '#a3906a', fontWeight: 700, fontSize: 10, textTransform: 'uppercase', background: '#e8dfc8' },
-  td: { padding: '4px 12px', color: '#5C3A21', fontSize: 12, borderBottom: '1px solid #d4c8b0' },
-  tr: { background: '#fdf8e7' },
+  state: { padding: 20, textAlign: 'center', color: 'var(--terminal-text-muted)' },
+  scroller: { width: '100%', overflowX: 'auto', WebkitOverflowScrolling: 'touch' },
+  table: { width: '100%', minWidth: 680, borderCollapse: 'collapse', fontSize: 12, fontVariantNumeric: 'tabular-nums' },
+  th: { padding: '6px 12px', textAlign: 'left', color: 'var(--terminal-text-muted)', fontWeight: 700, fontSize: 10, textTransform: 'uppercase', background: 'var(--terminal-surface-subtle)', whiteSpace: 'nowrap' },
+  td: { padding: '6px 12px', color: 'var(--terminal-text)', fontSize: 12, borderBottom: '1px solid var(--terminal-border)', whiteSpace: 'nowrap' },
+  tr: { background: 'var(--terminal-surface)' },
 };

@@ -9,6 +9,7 @@
 import { memo, useState } from 'react';
 import { motion } from 'framer-motion';
 import { colors } from './styles';
+import { uiButton } from '../../styles/theme';
 
 function AgentApprovalBanner({ bindAgent, busy, error }) {
   const [dismissed, setDismissed] = useState(false);
@@ -74,8 +75,8 @@ const S = {
     alignItems: 'center', gap: 10,
     padding: '10px 12px',
     borderRadius: 12,
-    background: 'linear-gradient(180deg, #fef9e0 0%, #fdf3c4 100%)',
-    borderWidth: 2, borderStyle: 'solid', borderColor: '#e8b830',
+    background: 'var(--terminal-brand-soft)',
+    borderWidth: 1, borderStyle: 'solid', borderColor: 'var(--terminal-brand-border)',
     boxSizing: 'border-box',
     fontFamily: '"Inter","Segoe UI",sans-serif',
     width: '100%',
@@ -87,12 +88,12 @@ const S = {
     fontSize: 22, lineHeight: 1,
     width: 36, height: 36,
     display: 'flex', alignItems: 'center', justifyContent: 'center',
-    background: '#fff5cc', borderRadius: '50%',
-    border: '2px solid #e8b830',
+    background: 'var(--terminal-surface)', borderRadius: 10,
+    border: '1px solid var(--terminal-brand-border)',
   },
   body: { minWidth: 0, overflow: 'hidden' },
   title: {
-    fontSize: 13, fontWeight: 900, color: colors.ink,
+    fontSize: 13, fontWeight: 700, color: colors.ink,
     letterSpacing: '0.3px',
   },
   text: {
@@ -108,19 +109,6 @@ const S = {
     display: 'flex', flexDirection: 'column', gap: 4,
     flexShrink: 0,
   },
-  enableBtn: {
-    padding: '6px 12px', borderRadius: 8,
-    fontSize: 11, fontWeight: 900, color: '#fff',
-    background: 'linear-gradient(180deg, #e8b830 0%, #b8860b 100%)',
-    borderWidth: 2, borderStyle: 'solid', borderColor: '#8a5f00',
-    cursor: 'pointer', fontFamily: 'inherit',
-    letterSpacing: '0.4px',
-    textShadow: '0 1px 0 rgba(0,0,0,0.3)',
-  },
-  dismissBtn: {
-    padding: '4px 10px', borderRadius: 6,
-    fontSize: 10, fontWeight: 700, color: colors.inkFaint,
-    background: 'transparent', border: 'none',
-    cursor: 'pointer', fontFamily: 'inherit',
-  },
+  enableBtn: uiButton('primary', { minHeight: 34, padding: '6px 12px', fontSize: 11 }),
+  dismissBtn: uiButton('ghost', { minHeight: 30, padding: '4px 10px', fontSize: 10, color: colors.inkFaint }),
 };

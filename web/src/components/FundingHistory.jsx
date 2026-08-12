@@ -98,13 +98,29 @@ function normalizePhoenixFunding(row) {
   };
 }
 
+function normalizeAsterFunding(row) {
+  const rawSymbol = String(row?.symbol || '').toUpperCase();
+  return {
+    ...row,
+    _dex: 'aster',
+    id: row?.tranId || row?.id || `${rawSymbol}:${row?.time}:${row?.income}`,
+    symbol: rawSymbol.replace(/USDT$/u, ''),
+    side: '',
+    payout: Number(row?.income ?? 0),
+    rate: null,
+    amount: null,
+    fee: 0,
+    created_at: row?.time ?? row?.timestamp,
+  };
+}
+
 function displayNumber(value, digits = 6) {
   const n = Number(value);
   if (!Number.isFinite(n)) return '-';
   return n.toLocaleString(undefined, { maximumFractionDigits: digits });
 }
 
-function FundingHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [], filters }) {
+function FundingHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [], filters, fetchFundingHistory }) {
   const [payments, setPayments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -178,7 +194,13 @@ function FundingHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [
           if (!cancelled) setPayments(Array.isArray(data?.result) ? data.result : []);
           return;
         }
-        if (dex === 'hyperliquid' || dex === 'nado' || dex === 'ostium') {
+        if (dex === 'aster') {
+          if (typeof fetchFundingHistory !== 'function') throw new Error('Aster one-tap signer is not ready');
+          const rows = await fetchFundingHistory({ limit: 500 });
+          if (!cancelled) setPayments((Array.isArray(rows) ? rows : []).map(normalizeAsterFunding).filter(row => row.symbol));
+          return;
+        }
+        if (dex === 'hyperliquid' || dex === 'nado' || dex === 'leverup' || dex === 'ostium') {
           if (!cancelled) setPayments([]);
           return;
         }
@@ -203,7 +225,7 @@ function FundingHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [
       clearTimeout(timeout);
       controller.abort();
     };
-  }, [walletAddr, accountAddr, dex, markets]);
+  }, [walletAddr, accountAddr, dex, markets, fetchFundingHistory]);
 
   let filtered = payments;
 
@@ -231,17 +253,18 @@ function FundingHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [
   });
 
   if (loading) {
-    return <div style={{ padding: 20, textAlign: 'center', color: '#a3906a' }}>Loading...</div>;
+    return <div style={S.state}>Loading...</div>;
   }
   if (error) {
-    return <div style={{ padding: 20, textAlign: 'center', color: '#B71C1C', fontWeight: 800 }}>{error}</div>;
+    return <div style={{ ...S.state, color: 'var(--terminal-short)', fontWeight: 700 }}>{error}</div>;
   }
   if (!filtered.length) {
-    const name = dex === 'decibel' ? 'Decibel ' : dex === 'ostium' ? 'Ostium rollover ' : dex === 'monad' ? 'Perpl ' : dex === 'phoenix' ? 'Phoenix ' : dex === 'hyperliquid' ? 'Hyperliquid ' : dex === 'nado' ? 'Nado ' : dex === 'ondo' ? 'Ondo ' : '';
-    return <div style={{ padding: 20, textAlign: 'center', color: '#a3906a' }}>No {name}funding payments</div>;
+    const name = dex === 'decibel' ? 'Decibel ' : dex === 'ostium' ? 'Ostium rollover ' : dex === 'monad' ? 'Perpl ' : dex === 'phoenix' ? 'Phoenix ' : dex === 'hyperliquid' ? 'Hyperliquid ' : dex === 'nado' ? 'Nado ' : dex === 'ondo' ? 'Ondo ' : dex === 'leverup' ? 'LeverUp ' : dex === 'aster' ? 'Aster ' : '';
+    return <div style={S.state}>No {name}funding payments</div>;
   }
 
   return (
+    <div style={S.scroller}>
     <table style={S.table}>
       <thead><tr>
         <th style={S.th}>Time</th>
@@ -256,7 +279,7 @@ function FundingHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [
         {filtered.slice(0, 100).map((p, i) => {
           const payout = Number(p.payout || 0);
           const rate = Number(p.rate);
-          const color = payout >= 0 ? '#4CAF50' : '#E53935';
+          const color = payout >= 0 ? 'var(--terminal-long)' : 'var(--terminal-short)';
           const side = String(p.side || p.action || '').toLowerCase();
           const isLong = side === 'bid' || side.includes('long');
           const ts = timeMs(p.created_at);
@@ -265,11 +288,11 @@ function FundingHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [
             <tr key={p.id || i} style={S.tr}>
               <td style={S.td}>{time}</td>
               <td style={S.td}>{p.symbol || '-'}</td>
-              <td style={{ ...S.td, color: isLong ? '#4CAF50' : '#E53935', fontWeight: 800 }}>{isLong ? 'LONG' : 'SHORT'}</td>
-              <td style={{ ...S.td, color: Number.isFinite(rate) ? (rate >= 0 ? '#4CAF50' : '#E53935') : '#a3906a' }}>
+              <td style={{ ...S.td, color: isLong ? 'var(--terminal-long)' : 'var(--terminal-short)', fontWeight: 700 }}>{isLong ? 'LONG' : 'SHORT'}</td>
+              <td style={{ ...S.td, color: Number.isFinite(rate) ? (rate >= 0 ? 'var(--terminal-long)' : 'var(--terminal-short)') : 'var(--terminal-text-muted)' }}>
                 {Number.isFinite(rate) ? `${rate >= 0 ? '+' : ''}${(rate * 100).toFixed(4)}%` : '-'}
               </td>
-              <td style={{ ...S.td, color, fontWeight: 800 }}>{payout >= 0 ? '+' : '-'}${Math.abs(payout).toFixed(6)}</td>
+              <td style={{ ...S.td, color, fontWeight: 600 }}>{payout >= 0 ? '+' : '-'}${Math.abs(payout).toFixed(6)}</td>
               <td style={S.td}>{displayNumber(p.amount, 6)}</td>
               {dex === 'decibel' && <td style={S.td}>${Number(p.fee || 0).toFixed(4)}</td>}
             </tr>
@@ -277,14 +300,17 @@ function FundingHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [
         })}
       </tbody>
     </table>
+    </div>
   );
 }
 
 export default memo(FundingHistory);
 
 const S = {
-  table: { width: '100%', borderCollapse: 'collapse', fontSize: 12, fontFamily: 'monospace' },
-  th: { padding: '4px 12px', textAlign: 'left', color: '#a3906a', fontWeight: 700, fontSize: 10, textTransform: 'uppercase', background: '#e8dfc8' },
-  td: { padding: '4px 12px', color: '#5C3A21', fontSize: 12, borderBottom: '1px solid #d4c8b0' },
-  tr: { background: '#fdf8e7' },
+  state: { padding: 20, textAlign: 'center', color: 'var(--terminal-text-muted)' },
+  scroller: { width: '100%', overflowX: 'auto', WebkitOverflowScrolling: 'touch' },
+  table: { width: '100%', minWidth: 620, borderCollapse: 'collapse', fontSize: 12, fontVariantNumeric: 'tabular-nums' },
+  th: { padding: '6px 12px', textAlign: 'left', color: 'var(--terminal-text-muted)', fontWeight: 700, fontSize: 10, textTransform: 'uppercase', background: 'var(--terminal-surface-subtle)', whiteSpace: 'nowrap' },
+  td: { padding: '6px 12px', color: 'var(--terminal-text)', fontSize: 12, borderBottom: '1px solid var(--terminal-border)', whiteSpace: 'nowrap' },
+  tr: { background: 'var(--terminal-surface)' },
 };

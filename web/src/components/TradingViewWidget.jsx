@@ -13,6 +13,7 @@ import {
 } from '../lib/phoenixClient';
 import { pacificaFetch } from '../lib/pacificaClient';
 import { OSTIUM_PRICE_STREAM_WS } from '../lib/ostiumConfig';
+import { FUTURES_THEME_DARK, useFuturesTheme } from '../hooks/useFuturesTheme';
 
 // Pyth Benchmarks serves historical candles in TradingView UDF format for
 // every Pyth feed. Query it directly from the user's browser first so public
@@ -440,6 +441,8 @@ async function fetchDecibelCandles(symbol, interval, startMs, endMs) {
 }
 
 function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], orders = [], currentPrice, chartOverlay, dex = 'pacifica' }) {
+  const { theme } = useFuturesTheme();
+  const darkTheme = theme === FUTURES_THEME_DARK;
   const containerRef = useRef(null);
   const chartRef = useRef(null);
   const seriesRef = useRef(null);
@@ -454,19 +457,21 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
     if (!containerRef.current) return;
 
     const chart = createChart(containerRef.current, {
-      layout: { background: { color: '#fdf8e7' }, textColor: '#5C3A21', fontSize: 11 },
-      grid: { vertLines: { color: '#e8dfc822' }, horzLines: { color: '#e8dfc844' } },
+      // lightweight-charts paints to canvas, so it needs resolved color values;
+      // CSS custom properties are only used by the surrounding DOM shell.
+      layout: { background: { color: darkTheme ? '#111827' : '#FFFFFF' }, textColor: darkTheme ? '#AAB4C3' : '#6B7280', fontSize: 11, fontFamily: 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' },
+      grid: { vertLines: { color: darkTheme ? '#202A39' : '#F3F4F6' }, horzLines: { color: darkTheme ? '#202A39' : '#F3F4F6' } },
       crosshair: { mode: 0 },
-      rightPriceScale: { borderColor: '#d4c8b0', scaleMargins: { top: 0.1, bottom: 0.1 } },
-      timeScale: { borderColor: '#d4c8b0', timeVisible: true, secondsVisible: false },
+      rightPriceScale: { borderColor: darkTheme ? '#2C3748' : '#E5E7EB', scaleMargins: { top: 0.1, bottom: 0.1 } },
+      timeScale: { borderColor: darkTheme ? '#2C3748' : '#E5E7EB', timeVisible: true, secondsVisible: false },
       handleScroll: true,
       handleScale: true,
     });
 
     const series = chart.addSeries(CandlestickSeries, {
-      upColor: '#4CAF50', downColor: '#E53935',
-      borderUpColor: '#2E7D32', borderDownColor: '#B71C1C',
-      wickUpColor: '#4CAF50', wickDownColor: '#E53935',
+      upColor: darkTheme ? '#34D399' : '#087A55', downColor: darkTheme ? '#F87171' : '#D14343',
+      borderUpColor: darkTheme ? '#34D399' : '#087A55', borderDownColor: darkTheme ? '#F87171' : '#D14343',
+      wickUpColor: darkTheme ? '#34D399' : '#087A55', wickDownColor: darkTheme ? '#F87171' : '#D14343',
     });
 
     chartRef.current = chart;
@@ -488,7 +493,7 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
       chartRef.current = null;
       seriesRef.current = null;
     };
-  }, []);
+  }, [darkTheme]);
 
   // Load candles when symbol or interval changes
   useEffect(() => {
@@ -579,6 +584,35 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
             candles = await loadPythCandles(tf, now, start).catch(() => []);
           }
           if (cancelled) return;
+        } else if (dex === 'aster') {
+          try {
+            const params = new URLSearchParams({
+              dex: 'aster',
+              symbol,
+              interval,
+              limit: '500',
+              start_time: String(start),
+              end_time: String(now),
+            });
+            const response = await fetch(`/api/futures/candles?${params.toString()}`);
+            const json = await response.json().catch(() => null);
+            if (!response.ok) throw new Error(json?.detail || json?.error || `Aster candles ${response.status}`);
+            const rows = Array.isArray(json) ? json : Array.isArray(json?.data) ? json.data : [];
+            candles = rows.map((row) => {
+              if (!Array.isArray(row) || row.length < 5) return null;
+              const candle = {
+                time: Math.floor(Number(row[0]) / 1000),
+                open: Number(row[1]),
+                high: Number(row[2]),
+                low: Number(row[3]),
+                close: Number(row[4]),
+              };
+              return Object.values(candle).every(Number.isFinite) ? candle : null;
+            }).filter(Boolean).sort((a, b) => a.time - b.time);
+          } catch {
+            candles = await loadPythCandles(tf, now, start).catch(() => []);
+          }
+          if (cancelled) return;
         } else if (dex === 'bulk') {
           try {
             const params = new URLSearchParams({ symbol, interval, limit: '500' });
@@ -607,7 +641,7 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
             candles = await loadPythCandles(tf, now, start);
           }
           if (cancelled) return;
-        } else if (dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hotstuff' || dex === 'grvt' || dex === 'gmtrade' || dex === 'flash') {
+        } else if (dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'leverup' || dex === 'hotstuff' || dex === 'grvt' || dex === 'gmtrade' || dex === 'flash') {
           // These DEXes use Pyth benchmarks for chart candles. The helper
           // keeps retries bounded so rate limits do not cascade.
           candles = await loadPythCandles(tf, now, start);
@@ -652,7 +686,7 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
       : 30_000;
     const iv = window.setInterval(load, reloadMs);
     return () => { cancelled = true; window.clearInterval(iv); };
-  }, [symbol, pythSymbol, interval, dex]);
+  }, [symbol, pythSymbol, interval, dex, darkTheme]);
 
   useEffect(() => {
     if (dex !== 'ostium' || !seriesRef.current || typeof WebSocket === 'undefined') return undefined;
@@ -802,7 +836,9 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
           const pnlStr = fmtLineUsd(pnl);
           const line = seriesRef.current.createPriceLine({
             price: entry,
-            color: isLong ? '#4CAF50' : '#E53935',
+            color: isLong
+              ? (darkTheme ? '#34D399' : '#087A55')
+              : (darkTheme ? '#F87171' : '#D14343'),
             lineWidth: 2,
             lineStyle: 2, // dashed
             axisLabelVisible: true,
@@ -812,8 +848,8 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
         }
 
         for (const [kind, color, label] of [
-          ['tp', '#4CAF50', 'TP'],
-          ['sl', '#E53935', 'SL'],
+          ['tp', darkTheme ? '#34D399' : '#087A55', 'TP'],
+          ['sl', darkTheme ? '#F87171' : '#D14343', 'SL'],
         ]) {
           const price = positionTpslLinePrice(pos, kind);
           if (!(price > 0)) continue;
@@ -847,8 +883,14 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
         if ((isTP || isSL) && positionTpslLineKeys.has(priceLineKey(triggerKind, price))) continue;
         const pending = !!(ord?._optimistic || ord?._raw?.optimistic);
         const color = pending
-          ? '#B59A4A'
-          : isTP ? '#4CAF50' : isSL ? '#E53935' : stopPrice > 0 ? '#FF9800' : (isBid ? '#2196F3' : '#9C27B0');
+          ? (darkTheme ? '#FBBF24' : '#B7791F')
+          : isTP
+            ? (darkTheme ? '#34D399' : '#087A55')
+            : isSL
+              ? (darkTheme ? '#F87171' : '#D14343')
+              : stopPrice > 0
+                ? (darkTheme ? '#F47A3C' : '#F26522')
+                : (isBid ? (darkTheme ? '#60A5FA' : '#2563EB') : (darkTheme ? '#C4B5FD' : '#7C3AED'));
         const label = isTP ? 'TP' : isSL ? 'SL' : stopPrice > 0 ? 'STOP' : 'LIMIT';
         const line = seriesRef.current.createPriceLine({
           price,
@@ -883,14 +925,16 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
       window.clearInterval(pnlInterval);
       setPendingLineBadges([]);
     };
-  }, [positions, orders, symbol]);
+  }, [positions, orders, symbol, darkTheme]);
 
   return (
-    <div style={{ width: '100%', height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+    <section className="futures-trading-chart" style={{ width: '100%', height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column', background: 'var(--terminal-surface)' }} aria-label={`${symbol} price chart`}>
       {/* Timeframe selector */}
       <div style={S.tfBar}>
         {INTERVALS.map(tf => (
           <button
+            type="button"
+            aria-pressed={interval === tf.value}
             key={tf.value}
             style={interval === tf.value ? S.tfActive : S.tfBtn}
             onClick={() => setInterval_(tf.value)}
@@ -902,8 +946,8 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
       <div style={{ flex: '1 1 auto', minHeight: 0, position: 'relative' }}>
         <div ref={containerRef} style={{ width: '100%', height: '100%' }} />
         {loading && (
-          <div style={{position: 'absolute', inset: 0, zIndex: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(253, 248, 231, 0.7)'}}>
-            <div style={{width: 40, height: 40, borderWidth: 5, borderStyle: 'solid', borderColor: '#d4c8b0', borderTopColor: '#5C3A21', borderRadius: '50%', animation: 'tv-spin 1s linear infinite'}}></div>
+          <div style={{position: 'absolute', inset: 0, zIndex: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--terminal-loading-overlay)'}}>
+            <div style={{width: 36, height: 36, borderWidth: 1, borderStyle: 'solid', borderColor: 'var(--terminal-border)', borderTopColor: 'var(--terminal-orange)', borderRadius: '50%', animation: 'tv-spin 1s linear infinite'}}></div>
             <style dangerouslySetInnerHTML={{__html: `@keyframes tv-spin { to { transform: rotate(360deg); } }`}} />
           </div>
         )}
@@ -911,8 +955,8 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
             anchors to the actual price-chart area, not to the outer wrapper
             that also includes the timeframe tab bar. */}
         {pendingLineBadges.map((badge) => (
-          <div key={badge.key} style={{position: 'absolute', top: badge.top, right: 8, zIndex: 9, display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 7px', borderRadius: 8, border: '1px solid #c7b16b', background: 'rgba(255, 247, 214, 0.94)', color: '#7a6224', fontSize: 10, fontWeight: 900, pointerEvents: 'none', boxShadow: '0 1px 4px rgba(92,58,33,0.18)'}}>
-            <span style={{width: 9, height: 9, borderRadius: '50%', borderWidth: 2, borderStyle: 'solid', borderColor: '#d7c58b', borderTopColor: '#7a6224', animation: 'tv-pending-spin 0.75s linear infinite', flexShrink: 0}} />
+          <div key={badge.key} style={{position: 'absolute', top: badge.top, right: 8, zIndex: 9, display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 7px', borderRadius: 7, border: '1px solid var(--terminal-brand-border)', background: 'var(--terminal-brand-soft)', color: 'var(--terminal-brand-text)', fontSize: 10, fontWeight: 750, pointerEvents: 'none', boxShadow: '0 2px 6px var(--terminal-shadow-soft)'}}>
+            <span style={{width: 9, height: 9, borderRadius: '50%', borderWidth: 1, borderStyle: 'solid', borderColor: 'var(--terminal-brand-border)', borderTopColor: 'var(--terminal-orange)', animation: 'tv-pending-spin 0.75s linear infinite', flexShrink: 0}} />
             {badge.label}
           </div>
         ))}
@@ -921,7 +965,7 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
         )}
         {chartOverlay}
       </div>
-    </div>
+    </section>
   );
 }
 
@@ -929,17 +973,17 @@ export default memo(TradingViewWidget);
 
 const S = {
   tfBar: {
-    display: 'flex', gap: 2, padding: '4px 6px', background: '#fdf8e7',
-    borderBottom: '1px solid #e8dfc8',
+    display: 'flex', gap: 2, padding: '5px 8px', background: 'var(--terminal-surface)',
+    borderBottom: '1px solid var(--terminal-border)',
   },
   tfBtn: {
     padding: '3px 8px', background: 'transparent', border: 'none',
-    fontSize: 11, fontWeight: 700, color: '#a3906a', cursor: 'pointer',
-    borderRadius: 4,
+    fontSize: 11, fontWeight: 650, color: 'var(--terminal-text-muted)', cursor: 'pointer',
+    borderRadius: 6,
   },
   tfActive: {
-    padding: '3px 8px', background: '#5C3A21', border: 'none',
-    fontSize: 11, fontWeight: 700, color: '#fff', cursor: 'default',
-    borderRadius: 4,
+    padding: '3px 8px', background: 'var(--terminal-brand-soft)', border: 'none',
+    fontSize: 11, fontWeight: 750, color: 'var(--terminal-brand-strong)', cursor: 'default',
+    borderRadius: 6,
   },
 };

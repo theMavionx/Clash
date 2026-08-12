@@ -37,6 +37,7 @@ import {
 } from '../lib/marketplace';
 import { fetchOwnedNfts, nftRarityBadgeStyle, nftRarityCardStyle, normalizeNftRarity, syncDemonKingNfts } from '../lib/nftV3Client';
 import { addClientBreadcrumb } from '../lib/clientLogger';
+import { uiButton, uiIconButton } from '../styles/theme';
 
 const LISTINGS_PAGE_SIZE = 50;
 const RARITY_FILTER_OPTIONS = [
@@ -759,8 +760,8 @@ function BuyConfirmModal({ listing, rarity, legacyLevel = 1, baseReady, busy, on
             <div style={{ ...s.cardLevelBadge, ...nftRarityBadgeStyle(rarity, legacyLevel) }}>{nftRarityLabel(rarity, legacyLevel)}</div>
           </div>
           <div style={s.modalBreakdown}>
-            <span>Price</span><span style={{ fontWeight: 800 }}>{formatPriceWei(listing.priceWei, tokenAddr)}</span>
-            <span>Payment</span><span style={{ fontWeight: 800 }}>{meta.symbol} {isEthPayment(tokenAddr) ? '(native)' : '(ERC-20)'}</span>
+            <span>Price</span><span style={{ fontWeight: 600 }}>{formatPriceWei(listing.priceWei, tokenAddr)}</span>
+            <span>Payment</span><span style={{ fontWeight: 600 }}>{meta.symbol} {isEthPayment(tokenAddr) ? '(native)' : '(ERC-20)'}</span>
             <span>Seller</span><span>{shortAddr(listing.seller, 6, 4)}</span>
           </div>
           {!baseReady ? (
@@ -791,56 +792,38 @@ const s = {
   connectBanner: {
     display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'space-between',
     padding: '10px 12px', borderRadius: 12,
-    background: 'linear-gradient(135deg, #fff2c2 0%, #ffd76a 60%, #f0a335 100%)',
-    border: '3px solid #c2851b',
-    boxShadow: '0 6px 14px rgba(194,133,27,0.28), inset 0 1px 0 rgba(255,255,255,0.5)',
+    background: 'linear-gradient(135deg, var(--terminal-brand-soft) 0%, var(--terminal-brand-border) 60%, var(--terminal-orange) 100%)',
+    border: '1px solid var(--terminal-brand-strong)',
+    boxShadow: '0 6px 14px rgba(194,133,27,0.28), inset 0 1px 0 var(--terminal-chip-overlay)',
   },
   connectBannerText: { display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 },
-  connectBannerTitle: { fontSize: 13, fontWeight: 900, color: '#3a1f00', letterSpacing: 0.2 },
-  connectBannerSub: { fontSize: 11, fontWeight: 800, color: '#5C3A21' },
-  connectBannerBtn: {
-    flexShrink: 0,
-    padding: '8px 14px', borderRadius: 10, fontSize: 13, fontWeight: 900,
-    background: '#5C3A21', color: '#fff7df', border: '2px solid #3a1f00',
-    cursor: 'pointer', whiteSpace: 'nowrap',
-  },
+  connectBannerTitle: { fontSize: 13, fontWeight: 700, color: 'var(--terminal-text)', letterSpacing: 0.2 },
+  connectBannerSub: { fontSize: 11, fontWeight: 600, color: 'var(--terminal-text)' },
+  connectBannerBtn: uiButton('primary', { flexShrink: 0, minHeight: 38, padding: '8px 14px', whiteSpace: 'nowrap' }),
 
   subTabs: { display: 'flex', gap: 6, alignItems: 'center' },
-  subTab: {
-    flex: 1,
-    padding: '8px 10px', borderRadius: 10, fontSize: 12, fontWeight: 800,
-    background: '#fff6dc', border: '2px solid #d4c8b0', color: '#5C3A21',
-    cursor: 'pointer', letterSpacing: 0.3, textTransform: 'uppercase',
-  },
-  subTabActive: { background: '#ffd97a', border: '2px solid #9f8759', boxShadow: '0 1px 2px rgba(0,0,0,0.15)' },
-  listNewBtn: {
-    padding: '8px 12px', borderRadius: 10, fontSize: 12, fontWeight: 900,
-    background: '#7ce04a', border: '2px solid #4a8f2c', color: '#1a3d0a',
-    cursor: 'pointer', whiteSpace: 'nowrap',
-  },
+  subTab: uiButton('secondary', { flex: 1, minHeight: 36, padding: '8px 10px', fontSize: 12, textTransform: 'uppercase' }),
+  subTabActive: { background: 'var(--terminal-brand-soft)', border: '1px solid var(--terminal-orange)', color: 'var(--terminal-brand-text)', boxShadow: 'none' },
+  listNewBtn: uiButton('primary', { minHeight: 36, padding: '8px 12px', fontSize: 12, whiteSpace: 'nowrap' }),
 
   rarityFilterRow: {
     display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap',
-    padding: 6, borderRadius: 12, background: '#fff8e6', border: '2px solid #d4c8b0',
+    padding: 6, borderRadius: 12, background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)',
   },
-  rarityFilterChip: {
-    minHeight: 28, padding: '5px 10px', borderRadius: 9, fontSize: 11, fontWeight: 900,
-    background: '#fff6dc', border: '2px solid #d4c8b0', color: '#5C3A21',
-    cursor: 'pointer', fontFamily: 'inherit',
-  },
-  rarityFilterChipActive: { background: '#ffd97a', border: '2px solid #9f8759' },
-  rarityFilterChipUnrevealed: { background: '#f3ead6', color: '#7a5a30', border: '2px solid #c8b99a' },
+  rarityFilterChip: uiButton('secondary', { minHeight: 30, padding: '5px 10px', fontSize: 11 }),
+  rarityFilterChipActive: { background: 'var(--terminal-brand-border)', border: '1px solid var(--terminal-text-muted)' },
+  rarityFilterChipUnrevealed: { background: 'var(--terminal-surface-subtle)', color: 'var(--terminal-text-secondary)', border: '1px solid var(--terminal-border-strong)' },
   rarityFilterChipDisabled: { opacity: 0.55, cursor: 'not-allowed' },
 
-  gridMeta: { fontSize: 12, fontWeight: 700, color: '#7a5a30', letterSpacing: 0.2 },
+  gridMeta: { fontSize: 12, fontWeight: 700, color: 'var(--terminal-text-secondary)', letterSpacing: 0.2 },
   emptyState: {
     display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
     padding: '24px 12px', borderRadius: 12,
-    background: '#fffaf0', border: '2px dashed #d4c8b0', color: '#5C3A21',
+    background: 'var(--terminal-surface)', border: '1px dashed var(--terminal-border)', color: 'var(--terminal-text)',
     fontSize: 13, fontWeight: 700, textAlign: 'center',
   },
-  emptyStateSub: { fontSize: 11, color: '#9f8759', fontWeight: 600, fontStyle: 'italic' },
-  emptyStateInline: { fontSize: 12, color: '#7a5a30', fontStyle: 'italic' },
+  emptyStateSub: { fontSize: 11, color: 'var(--terminal-text-muted)', fontWeight: 600, fontStyle: 'italic' },
+  emptyStateInline: { fontSize: 12, color: 'var(--terminal-text-secondary)', fontStyle: 'italic' },
 
   grid: {
     display: 'grid',
@@ -850,86 +833,72 @@ const s = {
   card: {
     display: 'flex', flexDirection: 'column', gap: 4,
     padding: 8, borderRadius: 12,
-    background: '#fff6dc', border: '2px solid #d4c8b0',
+    background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)',
     boxShadow: '0 2px 6px rgba(95,58,33,0.08)',
   },
   cardImgWrap: {
     position: 'relative',
     width: '100%', aspectRatio: '1 / 1',
     borderRadius: 10, overflow: 'hidden',
-    background: '#fff', border: '2px solid #d4c8b0',
+    background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
   },
   cardImg: { width: '100%', height: '100%', objectFit: 'cover' },
   cardLevelBadge: {
     position: 'absolute', top: 4, right: 4,
     padding: '2px 6px', borderRadius: 6,
-    background: 'rgba(92,58,33,0.92)', color: '#fff7df',
-    fontSize: 10, fontWeight: 900, letterSpacing: 0.2,
+    background: 'rgba(92,58,33,0.92)', color: 'var(--terminal-surface)',
+    fontSize: 10, fontWeight: 700, letterSpacing: 0.2,
   },
   cardMeta: {
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-    fontSize: 13, fontWeight: 900, color: '#5C3A21',
+    fontSize: 13, fontWeight: 700, color: 'var(--terminal-text)',
   },
   cardTitle: { fontFamily: 'monospace' },
-  cardPrice: { color: '#2e7d32', fontSize: 12 },
+  cardPrice: { color: 'var(--terminal-long-strong)', fontSize: 12 },
   cardSubMeta: {
     display: 'flex', justifyContent: 'space-between',
-    fontSize: 10, color: '#7a5a30', fontWeight: 700,
+    fontSize: 10, color: 'var(--terminal-text-secondary)', fontWeight: 700,
   },
-  cardExpiry: { color: '#9f8759', fontStyle: 'italic' },
-  cardBuyBtn: {
-    padding: '7px 10px', borderRadius: 8, fontSize: 12, fontWeight: 900,
-    background: '#7ce04a', border: '2px solid #4a8f2c', color: '#1a3d0a',
-    cursor: 'pointer', marginTop: 2,
-  },
-  cardBuyBtnDisabled: { opacity: 0.5, cursor: 'not-allowed', background: '#e8dfc8', border: '2px solid #9f8759', color: '#5C3A21' },
-  cardCancelBtn: { background: '#ffb347', border: '2px solid #a86b1a', color: '#3a1f00' },
+  cardExpiry: { color: 'var(--terminal-text-muted)', fontStyle: 'italic' },
+  cardBuyBtn: uiButton('primary', { width: '100%', minHeight: 34, padding: '7px 10px', fontSize: 12, marginTop: 2 }),
+  cardBuyBtnDisabled: { opacity: 0.5, cursor: 'not-allowed', background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-text-muted)', color: 'var(--terminal-text)' },
+  cardCancelBtn: uiButton('danger', { width: '100%', minHeight: 34, padding: '7px 10px', fontSize: 12, marginTop: 2 }),
 
   pager: {
     display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 12,
     marginTop: 4, paddingTop: 4,
   },
-  pagerBtn: {
-    padding: '6px 12px', borderRadius: 8, fontSize: 12, fontWeight: 800,
-    background: '#fff6dc', border: '2px solid #9f8759', color: '#5C3A21',
-    cursor: 'pointer',
-  },
-  pagerLabel: { fontSize: 12, fontWeight: 800, color: '#5C3A21' },
+  pagerBtn: uiButton('secondary', { minHeight: 34, padding: '6px 12px', fontSize: 12 }),
+  pagerLabel: { fontSize: 12, fontWeight: 600, color: 'var(--terminal-text)' },
 
   // ── List-new form ─────────────────────────────────────────────────
   form: { display: 'flex', flexDirection: 'column', gap: 12 },
   formRow: { display: 'flex', flexDirection: 'column', gap: 6 },
-  formLabel: { fontSize: 12, fontWeight: 800, color: '#5C3A21', letterSpacing: 0.2, textTransform: 'uppercase' },
+  formLabel: { fontSize: 12, fontWeight: 600, color: 'var(--terminal-text)', letterSpacing: 0.2, textTransform: 'uppercase' },
   input: {
-    padding: '8px 10px', borderRadius: 8, border: '2px solid #d4c8b0',
-    background: '#fff', color: '#3a2810', fontSize: 13, fontFamily: 'monospace', outline: 'none',
+    padding: '8px 10px', borderRadius: 8, border: '1px solid var(--terminal-border)',
+    background: 'var(--terminal-surface)', color: 'var(--terminal-text)', fontSize: 13, fontFamily: 'monospace', outline: 'none',
   },
   payPicker: { display: 'flex', gap: 6, flexWrap: 'wrap' },
   payChip: {
     flex: 1, minWidth: 80,
     display: 'flex', flexDirection: 'column', alignItems: 'flex-start',
     padding: '6px 10px', borderRadius: 10, cursor: 'pointer',
-    background: '#fff6dc', border: '2px solid #d4c8b0', color: '#5C3A21',
+    background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', color: 'var(--terminal-text)',
   },
-  payChipActive: { background: '#ffd97a', border: '2px solid #9f8759', boxShadow: '0 1px 2px rgba(0,0,0,0.15)' },
-  payChipLabel: { fontSize: 13, fontWeight: 900 },
-  payChipSub: { fontSize: 10, fontWeight: 700, color: '#7a5a30' },
+  payChipActive: { background: 'var(--terminal-brand-soft)', border: '1px solid var(--terminal-orange)', color: 'var(--terminal-brand-text)', boxShadow: 'none' },
+  payChipLabel: { fontSize: 13, fontWeight: 700 },
+  payChipSub: { fontSize: 10, fontWeight: 700, color: 'var(--terminal-text-secondary)' },
   previewBox: {
     display: 'grid', gridTemplateColumns: 'auto 1fr', gap: 4,
     padding: '8px 10px', borderRadius: 8,
-    background: '#fff8e6', border: '1px solid #d4c8b0',
-    fontSize: 12, color: '#5C3A21',
+    background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)',
+    fontSize: 12, color: 'var(--terminal-text)',
   },
   formActions: { display: 'flex', gap: 8, justifyContent: 'flex-end' },
-  formCancelBtn: {
-    padding: '8px 14px', borderRadius: 10, fontSize: 13, fontWeight: 800,
-    background: '#fff6dc', border: '2px solid #9f8759', color: '#5C3A21', cursor: 'pointer',
-  },
-  formSubmitBtn: {
-    padding: '10px 16px', borderRadius: 10, fontSize: 14, fontWeight: 900,
-    background: '#7ce04a', border: '2px solid #4a8f2c', color: '#1a3d0a', cursor: 'pointer',
-  },
+  formCancelBtn: uiButton('secondary', { minHeight: 38, padding: '8px 14px', fontSize: 13 }),
+  formSubmitBtn: uiButton('primary', { minHeight: 40, padding: '10px 16px', fontSize: 14 }),
   formSubmitBtnBusy: { opacity: 0.6, cursor: 'not-allowed' },
 
   // Mini owned-NFT carousel — mirrors the one in NftBridgePanel.
@@ -937,30 +906,24 @@ const s = {
   nftScroll: {
     display: 'flex', gap: 8, overflowX: 'auto', overflowY: 'hidden',
     padding: 6, flex: 1, minWidth: 0,
-    background: '#fff8e6', border: '2px solid #d4c8b0', borderRadius: 10,
+    background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 10,
     scrollSnapType: 'x mandatory',
-    scrollbarWidth: 'thin',
-    scrollbarColor: '#bba882 #fff8e6',
   },
-  scrollBtn: {
-    width: 26, height: 56, borderRadius: 8, padding: 0,
-    background: '#fff6dc', border: '2px solid #9f8759', color: '#5C3A21',
-    cursor: 'pointer', flexShrink: 0, fontWeight: 900, fontSize: 14,
-  },
+  scrollBtn: uiIconButton('secondary', 32, { height: 56, fontSize: 14 }),
   miniCard: {
     display: 'flex', flexDirection: 'column', alignItems: 'center',
-    padding: 4, gap: 4, borderRadius: 8, border: '2px solid transparent',
-    background: '#fff', cursor: 'pointer', flexShrink: 0, width: 96,
+    padding: 4, gap: 4, borderRadius: 8, border: '1px solid transparent',
+    background: 'var(--terminal-surface)', cursor: 'pointer', flexShrink: 0, width: 96,
     scrollSnapAlign: 'start',
   },
-  miniCardActive: { border: '2px solid #9f8759', background: '#ffd97a', boxShadow: '0 1px 2px rgba(0,0,0,0.18)' },
-  miniImg: { width: 72, height: 72, objectFit: 'cover', borderRadius: 6, background: '#e8dfc8' },
+  miniCardActive: { border: '1px solid var(--terminal-text-muted)', background: 'var(--terminal-brand-border)', boxShadow: '0 1px 2px rgba(0,0,0,0.18)' },
+  miniImg: { width: 72, height: 72, objectFit: 'cover', borderRadius: 6, background: 'var(--terminal-surface-subtle)' },
   miniMeta: {
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-    width: '100%', fontSize: 11, fontWeight: 700, color: '#5C3A21',
+    width: '100%', fontSize: 11, fontWeight: 700, color: 'var(--terminal-text)',
   },
   miniId: { fontFamily: 'monospace', flex: 1, textAlign: 'left' },
-  miniLevel: { color: '#7a5a30' },
+  miniLevel: { color: 'var(--terminal-text-secondary)' },
 
   // ── Buy confirm modal ─────────────────────────────────────────────
   modalOverlay: {
@@ -970,46 +933,39 @@ const s = {
   },
   modalPanel: {
     width: 360, maxWidth: 'calc(100vw - 20px)', maxHeight: 'calc(100dvh - 20px)', borderRadius: 14, overflowY: 'auto',
-    background: '#fdf8e7', border: '4px solid #d4c8b0',
+    background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)',
     boxShadow: '0 18px 50px rgba(0,0,0,0.45)', boxSizing: 'border-box', WebkitOverflowScrolling: 'touch',
   },
   modalHeader: {
     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-    padding: '10px 14px', background: '#d4c8b0', borderBottom: '3px solid #bba882',
+    padding: '10px 14px', background: 'var(--terminal-border)', borderBottom: '1px solid var(--terminal-border-strong)',
   },
-  modalTitle: { fontSize: 15, fontWeight: 900, color: '#5C3A21' },
-  modalCloseBtn: {
-    width: 24, height: 24, borderRadius: '50%',
-    background: '#E53935', border: '2px solid #fff', color: '#fff',
-    cursor: 'pointer', fontWeight: 900, padding: 0, lineHeight: '20px',
-  },
+  modalTitle: { fontSize: 15, fontWeight: 700, color: 'var(--terminal-text)' },
+  modalCloseBtn: uiIconButton('danger', 28, { lineHeight: 1 }),
   modalBody: { padding: 14, display: 'flex', flexDirection: 'column', gap: 10 },
   modalImgWrap: {
     position: 'relative',
     width: 'min(100%, 310px)', aspectRatio: '1 / 1', maxHeight: '42dvh', alignSelf: 'center',
     borderRadius: 12, overflow: 'hidden',
-    background: '#fff', border: '2px solid #d4c8b0',
+    background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)',
   },
   modalImg: { width: '100%', height: '100%', objectFit: 'cover' },
   modalBreakdown: {
     display: 'grid', gridTemplateColumns: 'auto 1fr', gap: 4,
     padding: '8px 10px', borderRadius: 8,
-    background: '#fff8e6', border: '1px solid #d4c8b0',
-    fontSize: 12, color: '#5C3A21',
+    background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)',
+    fontSize: 12, color: 'var(--terminal-text)',
   },
   modalConfirmBtn: {
-    width: '100%', padding: 12, borderRadius: 12, fontSize: 14, fontWeight: 900,
-    background: 'linear-gradient(180deg, #91df7d 0%, #3b9b41 100%)',
-    border: '3px solid #1f6d34', color: '#fff', cursor: 'pointer',
-    textShadow: '0 1px 1px rgba(0,0,0,0.35)',
+    ...uiButton('primary', { width: '100%', minHeight: 44, padding: 12, fontSize: 14 }),
   },
 
   notice: {
     padding: '8px 10px', borderRadius: 8,
-    background: '#fff0e0', color: '#7a4a1a', fontSize: 12,
-    border: '1px solid #f0c4a0',
+    background: 'var(--terminal-warning-soft)', color: 'var(--terminal-warning)', fontSize: 12,
+    border: '1px solid var(--terminal-warning-border)',
     display: 'flex', alignItems: 'center', gap: 6,
   },
-  noticeOk: { background: '#e8f5e0', color: '#2e6b1a', border: '1px solid #b0d4a0' },
-  noticeLink: { color: 'inherit', fontWeight: 800, textDecoration: 'underline' },
+  noticeOk: { background: 'var(--terminal-long-soft)', color: 'var(--terminal-long-strong)', border: '1px solid var(--terminal-long-border)' },
+  noticeLink: { color: 'inherit', fontWeight: 600, textDecoration: 'underline' },
 };

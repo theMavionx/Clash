@@ -1,0 +1,1368 @@
+.building-info-modal__overlay {
+  --bim-canvas: #f5f5f5;
+  --bim-surface: #ffffff;
+  --bim-surface-subtle: #f9fafb;
+  --bim-surface-muted: #f3f4f6;
+  --bim-line: #e5e7eb;
+  --bim-line-strong: #d1d5db;
+  --bim-text: #111827;
+  --bim-text-secondary: #4b5563;
+  --bim-text-muted: #6b7280;
+  --bim-brand: #f26522;
+  --bim-brand-strong: #d95618;
+  --bim-brand-soft: #fff3ec;
+  --bim-brand-line: #fed7aa;
+  --bim-long: #087a55;
+  --bim-short: #d14343;
+  --bim-short-soft: #fef2f2;
+  --bim-short-line: #fecaca;
+  --bim-overlay: rgba(17, 24, 39, 0.48);
+  --bim-shadow: rgba(17, 24, 39, 0.16);
+  --bim-sphere-start: #ffffff;
+  --bim-sphere-end: #eef1f4;
+
+  position: fixed;
+  inset: 0;
+  z-index: 1300;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: var(--bim-overlay);
+  pointer-events: auto;
+  font-family: Inter, "Segoe UI", system-ui, sans-serif;
+}
+
+:root[data-ui-theme='dark'] .building-info-modal__overlay,
+:root[data-futures-theme='dark'] .building-info-modal__overlay {
+  --bim-canvas: #0b0f17;
+  --bim-surface: #111827;
+  --bim-surface-subtle: #171f2d;
+  --bim-surface-muted: #1f2937;
+  --bim-line: #2c3748;
+  --bim-line-strong: #3a475c;
+  --bim-text: #f9fafb;
+  --bim-text-secondary: #cbd5e1;
+  --bim-text-muted: #aab4c3;
+  --bim-brand: #f47a3c;
+  --bim-brand-strong: #f26522;
+  --bim-brand-soft: #3a2117;
+  --bim-brand-line: #7c3a1e;
+  --bim-long: #34d399;
+  --bim-short: #f87171;
+  --bim-short-soft: #3a1c22;
+  --bim-short-line: #7f2634;
+  --bim-overlay: rgba(2, 6, 23, 0.72);
+  --bim-shadow: rgba(0, 0, 0, 0.34);
+  --bim-sphere-start: #253044;
+  --bim-sphere-end: #151d2a;
+}
+
+.building-info-modal {
+  display: flex;
+  width: min(920px, calc(100vw - 40px));
+  max-height: min(780px, calc(100dvh - 40px));
+  flex-direction: column;
+  overflow: hidden;
+  color: var(--bim-text);
+  background: var(--bim-surface);
+  border: 1px solid var(--bim-line);
+  border-radius: 16px;
+  box-shadow: 0 24px 64px var(--bim-shadow);
+}
+
+.building-info-modal--wide {
+  width: min(1010px, calc(100vw - 40px));
+}
+
+.building-info-modal__header {
+  position: relative;
+  display: flex;
+  min-height: 56px;
+  flex: 0 0 56px;
+  align-items: center;
+  padding: 0 68px 0 20px;
+  background: var(--bim-surface-subtle);
+  border-bottom: 1px solid var(--bim-line);
+}
+
+.building-info-modal__title {
+  overflow: hidden;
+  margin: 0;
+  color: var(--bim-text);
+  font-size: 18px;
+  font-weight: 750;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.building-info-modal__close {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  display: inline-flex;
+  width: 44px;
+  height: 44px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transform: translateY(-50%);
+  color: var(--bim-text-secondary);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  font: inherit;
+  font-size: 25px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.building-info-modal__close:hover {
+  color: var(--bim-text);
+  background: var(--bim-surface-muted);
+  border-color: var(--bim-line);
+}
+
+.building-info-modal__close:focus-visible,
+.building-info-modal__action:focus-visible {
+  outline: 3px solid rgba(242, 101, 34, 0.24);
+  outline-offset: 2px;
+}
+
+.building-info-modal__body:focus-visible {
+  outline: 3px solid rgba(242, 101, 34, 0.28);
+  outline-offset: -3px;
+}
+
+.building-info-modal__body {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.building-info-modal__layout {
+  display: grid;
+  grid-template-columns: 290px minmax(0, 1fr);
+  gap: 28px;
+  align-items: start;
+  padding: 24px;
+}
+
+.building-info-modal__preview {
+  display: flex;
+  align-self: start;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 18px;
+  background: var(--bim-surface-subtle);
+  border: 1px solid var(--bim-line);
+  border-radius: 14px;
+}
+
+.building-info-modal__sphere {
+  position: relative;
+  display: flex;
+  width: 252px;
+  max-width: 100%;
+  aspect-ratio: 1;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: radial-gradient(circle at 32% 28%, var(--bim-sphere-start), var(--bim-sphere-end) 72%);
+  border: 1px solid var(--bim-line);
+  border-radius: 50%;
+}
+
+.building-info-modal__building-image {
+  position: absolute;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+  filter: drop-shadow(0 10px 18px rgba(17, 24, 39, 0.2));
+}
+
+.building-info-modal__building-image--altar {
+  width: 88%;
+  height: 88%;
+}
+
+.building-info-modal__building-image--fallback {
+  position: static;
+  width: 54%;
+  height: 54%;
+  color: var(--bim-text-muted);
+  filter: none;
+}
+
+.building-info-modal__level {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 11px;
+  color: var(--bim-text-secondary);
+  background: var(--bim-surface);
+  border: 1px solid var(--bim-line);
+  border-radius: 999px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+}
+
+.building-info-modal__level strong {
+  color: var(--bim-text);
+  font-size: 14px;
+}
+
+.building-info-modal__level-arrow {
+  color: var(--bim-text-muted);
+}
+
+.building-info-modal__level-next {
+  color: var(--bim-long) !important;
+}
+
+.building-info-modal__details {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.building-info-modal__section-title {
+  margin: 0 0 10px;
+  color: var(--bim-text);
+  font-size: 14px;
+  font-weight: 750;
+  letter-spacing: 0.02em;
+}
+
+.building-info-modal__stats-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.building-info-stat {
+  min-width: 0;
+  padding: 11px 12px;
+  background: var(--bim-surface-subtle);
+  border: 1px solid var(--bim-line);
+  border-radius: 10px;
+}
+
+.building-info-stat__label {
+  overflow: hidden;
+  margin-bottom: 5px;
+  color: var(--bim-text-muted);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.035em;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+}
+
+.building-info-stat__values {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+.building-info-stat__current,
+.building-info-stat__upgraded {
+  overflow-wrap: anywhere;
+  color: var(--bim-text);
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.building-info-stat__arrow {
+  flex: 0 0 auto;
+  color: var(--bim-text-muted);
+  font-size: 14px;
+}
+
+.building-info-stat__upgraded {
+  color: var(--bim-long);
+}
+
+.building-info-modal__supplemental,
+.building-info-modal__cost {
+  min-width: 0;
+}
+
+.building-info-modal__description,
+.building-info-modal__status {
+  padding: 12px 14px;
+  color: var(--bim-text-secondary);
+  background: var(--bim-surface-subtle);
+  border: 1px solid var(--bim-line);
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 550;
+  line-height: 1.5;
+}
+
+.building-info-modal__status {
+  color: var(--bim-long);
+  font-weight: 700;
+}
+
+.building-info-modal__supplemental > .building-info-modal__section-title:not(:first-child) {
+  margin-top: 14px;
+}
+
+.building-info-cost__grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.building-info-cost__chip {
+  display: flex;
+  min-width: 142px;
+  flex: 1 1 142px;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 10px;
+  background: var(--bim-surface-subtle);
+  border: 1px solid var(--bim-line);
+  border-radius: 10px;
+}
+
+.building-info-cost__chip--short {
+  background: var(--bim-short-soft);
+  border-color: var(--bim-short-line);
+}
+
+.building-info-cost__icon {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  object-fit: contain;
+}
+
+.building-info-cost__values {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  font-variant-numeric: tabular-nums;
+}
+
+.building-info-cost__required-label {
+  color: var(--bim-text-muted) !important;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.035em;
+  text-transform: uppercase;
+}
+
+.building-info-cost__values strong {
+  color: var(--bim-text);
+  font-size: 14px;
+  line-height: 1.15;
+}
+
+.building-info-cost__values > span:last-child {
+  color: var(--bim-text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: normal;
+}
+
+.building-info-cost__chip--short .building-info-cost__values > span:last-child {
+  color: var(--bim-short);
+}
+
+.building-info-cost__empty {
+  width: 100%;
+  padding: 12px;
+  color: var(--bim-text-muted);
+  background: var(--bim-surface-subtle);
+  border: 1px dashed var(--bim-line-strong);
+  border-radius: 10px;
+  font-size: 12px;
+  text-align: center;
+}
+
+.building-info-modal__footer {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 14px;
+  justify-content: flex-end;
+  padding: 12px 20px;
+  background: var(--bim-surface);
+  border-top: 1px solid var(--bim-line);
+}
+
+.building-info-modal__action-status {
+  min-width: 0;
+  flex: 1 1 auto;
+  color: var(--bim-short);
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.building-info-modal__action {
+  min-width: 220px;
+  min-height: 48px;
+  padding: 12px 20px;
+  color: #ffffff;
+  background: var(--bim-brand);
+  border: 1px solid var(--bim-brand-strong);
+  border-radius: 10px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.building-info-modal__action:hover {
+  background: var(--bim-brand-strong);
+}
+
+.building-info-modal__action:disabled {
+  color: var(--bim-text-muted);
+  background: var(--bim-surface-muted);
+  border-color: var(--bim-line-strong);
+  cursor: not-allowed;
+}
+
+@media (min-width: 600px) and (max-width: 899px) {
+  .building-info-modal {
+    width: min(760px, calc(100vw - 32px));
+    max-height: calc(100dvh - 32px);
+  }
+
+  .building-info-modal__header {
+    min-height: 52px;
+    flex-basis: 52px;
+  }
+
+  .building-info-modal__layout {
+    grid-template-columns: 190px minmax(0, 1fr);
+    gap: 18px;
+    padding: 18px;
+  }
+
+  .building-info-modal__preview {
+    grid-column: 1;
+    grid-row: 1;
+    padding: 12px;
+  }
+
+  .building-info-modal__sphere {
+    width: 154px;
+  }
+
+  .building-info-modal__details {
+    display: contents;
+  }
+
+  .building-info-modal__cost,
+  .building-info-modal__supplemental {
+    grid-column: 2;
+    grid-row: 1;
+    align-self: start;
+  }
+
+  .building-info-modal__stats {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+}
+
+@media (max-width: 599px) {
+  .building-info-modal__overlay {
+    align-items: stretch;
+    padding: 0;
+  }
+
+  .building-info-modal,
+  .building-info-modal--wide {
+    width: 100%;
+    max-height: 100dvh;
+    border-width: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .building-info-modal__header {
+    min-height: 48px;
+    flex-basis: 48px;
+    padding-left: 14px;
+  }
+
+  .building-info-modal__title {
+    font-size: 16px;
+  }
+
+  .building-info-modal__close {
+    right: 4px;
+  }
+
+  .building-info-modal__layout {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 14px 12px 18px;
+  }
+
+  .building-info-modal__preview {
+    width: 100%;
+    box-sizing: border-box;
+    flex-direction: row;
+    justify-content: center;
+    padding: 10px 12px;
+  }
+
+  .building-info-modal__sphere {
+    width: 112px;
+    flex: 0 0 112px;
+  }
+
+  .building-info-modal__details {
+    width: 100%;
+    gap: 16px;
+  }
+
+  .building-info-modal__stats-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .building-info-stat {
+    padding: 10px;
+  }
+
+  .building-info-stat__current,
+  .building-info-stat__upgraded {
+    font-size: 16px;
+  }
+
+  .building-info-modal__footer {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 7px;
+    padding: 10px 12px calc(10px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .building-info-modal__action-status {
+    text-align: center;
+  }
+
+  .building-info-modal__action {
+    width: 100%;
+    min-width: 0;
+  }
+}
+
+@media (max-width: 359px) {
+  .building-info-modal__stats-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .building-info-modal__preview {
+    justify-content: space-between;
+  }
+
+  .building-info-modal__sphere {
+    width: 96px;
+    flex-basis: 96px;
+  }
+}
+
+.building-config-modal {
+  width: min(620px, calc(100vw - 40px));
+  max-height: min(760px, calc(100dvh - 40px));
+}
+
+.building-config-modal__body {
+  display: flex !important;
+  flex-direction: column;
+  gap: 16px !important;
+  padding: 20px 24px 24px !important;
+  color: var(--bim-text);
+  background: var(--bim-surface);
+}
+
+.building-config-modal__body > div:first-child {
+  color: var(--bim-text-muted) !important;
+  font-size: 11px !important;
+  font-weight: 700 !important;
+  letter-spacing: .06em !important;
+  text-transform: uppercase;
+}
+
+.building-config-modal__body button,
+.building-config-modal__body label {
+  box-shadow: none !important;
+  text-shadow: none !important;
+}
+
+.building-config-modal__body > div:nth-child(2) > * {
+  color: var(--bim-text) !important;
+  background: var(--bim-surface-subtle) !important;
+  border: 1px solid var(--bim-line) !important;
+  border-radius: 12px !important;
+}
+
+.building-config-modal__body > div:nth-child(2) > .building-config-modal__flag-card--active,
+.building-config-modal__body > div:nth-child(2) > *:focus-within {
+  border-color: var(--bim-brand) !important;
+}
+
+.building-config-modal__body > div:nth-child(2) > .building-config-modal__flag-card--active {
+  background: var(--bim-brand-soft) !important;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--bim-brand) 18%, transparent) !important;
+}
+
+.building-config-modal__body > div:nth-child(3) {
+  color: var(--bim-text-secondary) !important;
+  font-size: 13px !important;
+  font-weight: 550 !important;
+  line-height: 1.5 !important;
+}
+
+.building-config-modal__body label {
+  min-height: 48px !important;
+  color: var(--bim-text-secondary) !important;
+  background: var(--bim-surface-subtle) !important;
+  border: 1px dashed var(--bim-line-strong) !important;
+  border-radius: 10px !important;
+}
+
+.altar-config-modal__scroll {
+  background: var(--bim-canvas);
+}
+
+.altar-config-modal__scroll > div:first-child {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 12px 18px !important;
+  background: var(--bim-surface) !important;
+  border-bottom: 1px solid var(--bim-line) !important;
+}
+
+.altar-config-modal__scroll > div:first-child button {
+  min-height: 44px;
+  color: var(--bim-text-secondary) !important;
+  background: var(--bim-surface-subtle) !important;
+  border: 1px solid var(--bim-line) !important;
+  border-radius: 10px !important;
+  box-shadow: none !important;
+  text-shadow: none !important;
+}
+
+.altar-config-modal__scroll > div:first-child button[style*="rgb(255, 255, 255)"],
+.altar-config-modal__scroll > div:first-child button:focus-visible {
+  color: var(--bim-brand-strong) !important;
+  background: var(--bim-brand-soft) !important;
+  border-color: var(--bim-brand) !important;
+}
+
+.altar-config-modal__tab--active {
+  color: var(--bim-brand-strong) !important;
+  background: var(--bim-brand-soft) !important;
+  border-color: var(--bim-brand) !important;
+}
+
+.altar-config-modal__body {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 20px !important;
+  color: var(--bim-text);
+  background: transparent !important;
+}
+
+.altar-config-modal__body button {
+  box-shadow: none !important;
+  text-shadow: none !important;
+}
+
+.altar-config-modal__canvas {
+  color: var(--bim-text) !important;
+  background: transparent !important;
+}
+
+.altar-config-modal__branch-title {
+  color: var(--bim-text) !important;
+  font-size: 18px !important;
+  font-weight: 750 !important;
+  text-shadow: none !important;
+}
+
+.altar-config-modal__branch-sub {
+  color: var(--bim-text-muted) !important;
+  font-size: 12px !important;
+  text-shadow: none !important;
+}
+
+.altar-config-modal__path {
+  gap: 10px !important;
+}
+
+.altar-config-modal__row {
+  gap: 12px !important;
+}
+
+.altar-config-modal__node {
+  color: var(--bim-text-secondary) !important;
+  background: var(--bim-surface-muted) !important;
+  border: 1px solid var(--bim-line-strong) !important;
+  border-radius: 12px !important;
+  box-shadow: none !important;
+  text-shadow: none !important;
+  animation: none !important;
+}
+
+.altar-config-modal__node--next {
+  color: var(--bim-brand-strong) !important;
+  background: var(--bim-brand-soft) !important;
+  border-color: var(--bim-brand) !important;
+}
+
+.altar-config-modal__node--unlocked {
+  color: var(--bim-long) !important;
+  background: color-mix(in srgb, var(--bim-long) 10%, var(--bim-surface)) !important;
+  border-color: color-mix(in srgb, var(--bim-long) 45%, var(--bim-line)) !important;
+}
+
+.altar-config-modal__node-info,
+.altar-config-modal__side {
+  color: var(--bim-text) !important;
+  background: var(--bim-surface-subtle) !important;
+  border: 1px solid var(--bim-line) !important;
+  border-radius: 12px !important;
+  box-shadow: none !important;
+}
+
+.altar-config-modal__node-info--next {
+  background: var(--bim-brand-soft) !important;
+  border-color: var(--bim-brand-line) !important;
+}
+
+.altar-config-modal__node-info--unlocked {
+  background: color-mix(in srgb, var(--bim-long) 8%, var(--bim-surface)) !important;
+}
+
+.altar-config-modal__node-info > div,
+.altar-config-modal__side > div {
+  color: inherit !important;
+  text-shadow: none !important;
+}
+
+.altar-config-modal__status {
+  margin-top: 12px;
+  padding: 10px 12px;
+  color: var(--bim-short);
+  background: var(--bim-short-soft);
+  border: 1px solid var(--bim-short-line);
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.4;
+}
+
+.altar-config-modal__node-info img,
+.altar-config-modal__side img {
+  filter: none !important;
+}
+
+.altar-config-modal__node-info [style*="border-radius"],
+.altar-config-modal__side [style*="border-radius"] {
+  color: var(--bim-text-secondary) !important;
+  background: var(--bim-surface) !important;
+  border-color: var(--bim-line) !important;
+  box-shadow: none !important;
+  text-shadow: none !important;
+}
+
+@media (max-width: 599px) {
+  .building-config-modal {
+    width: 100%;
+    max-height: 100dvh;
+  }
+
+  .building-config-modal__body {
+    padding: 14px 12px 20px !important;
+  }
+
+  .altar-config-modal__body {
+    padding: 14px 12px 20px !important;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .building-info-modal *,
+  .building-info-modal *::before,
+  .building-info-modal *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Ship roster and troop catalogue share the progression modal language. */
+.unit-load-modal {
+  width: min(920px, calc(100vw - 40px));
+  max-height: min(820px, calc(100dvh - 40px));
+}
+
+.unit-load-modal__body {
+  display: flex;
+  flex-direction: column;
+  background: var(--bim-canvas);
+}
+
+.unit-load-modal__ship-summary {
+  display: flex !important;
+  flex-wrap: wrap;
+  flex: 0 0 auto;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 16px !important;
+  padding: 12px 20px !important;
+  color: var(--bim-text-secondary);
+  background: var(--bim-surface);
+  border-bottom: 1px solid var(--bim-line) !important;
+  font-size: 12px;
+}
+
+.unit-load-modal__ship-summary > div:first-child {
+  min-width: 0;
+  color: var(--bim-text) !important;
+  font-size: 12px !important;
+  font-weight: 650 !important;
+}
+
+.unit-load-modal__ship-copy {
+  flex: 1 1 auto;
+}
+
+.unit-load-modal__ship-meta,
+.unit-load-modal__ship-unlocks,
+.unit-load-modal__ship-next {
+  margin-top: 3px;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.unit-load-modal__ship-meta {
+  color: var(--bim-text-secondary);
+}
+
+.unit-load-modal__ship-unlocks {
+  color: var(--bim-long);
+}
+
+.unit-load-modal__ship-next {
+  color: #b45309;
+}
+
+:root[data-ui-theme='dark'] .unit-load-modal__ship-next,
+:root[data-futures-theme='dark'] .unit-load-modal__ship-next {
+  color: #fbbf24;
+}
+
+.unit-load-modal__ship-status {
+  flex: 1 0 100%;
+  color: var(--bim-text-secondary) !important;
+  font-size: 11px !important;
+  font-weight: 650;
+  text-align: right;
+}
+
+.unit-load-modal__ship-summary button {
+  min-width: 132px;
+  min-height: 44px !important;
+  padding: 9px 14px !important;
+  color: #fff !important;
+  background: var(--bim-brand) !important;
+  border: 1px solid var(--bim-brand-strong) !important;
+  border-radius: 10px !important;
+  box-shadow: none !important;
+  text-shadow: none !important;
+}
+
+.unit-load-modal__ship-summary button:disabled {
+  color: var(--bim-text-muted) !important;
+  background: var(--bim-surface-muted) !important;
+  border-color: var(--bim-line-strong) !important;
+}
+
+.unit-load-modal__roster {
+  flex: 0 0 auto;
+  padding: 14px 18px;
+  background: var(--bim-surface);
+  border-bottom: 1px solid var(--bim-line);
+}
+
+.unit-load-modal__roster::before {
+  display: block;
+  margin-bottom: 9px;
+  color: var(--bim-text);
+  content: "Loaded troops";
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.unit-load-modal__roster-scroll {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 1px 1px 4px;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x proximity;
+}
+
+.unit-load-card {
+  position: relative;
+  flex: 0 0 auto;
+  overflow: hidden;
+  color: var(--bim-text);
+  background: var(--bim-surface-subtle) !important;
+  border: 1px solid var(--bim-line-strong) !important;
+  border-radius: 10px !important;
+  box-shadow: none !important;
+  scroll-snap-align: start;
+}
+
+.unit-load-card__action,
+.unit-catalog-card__action {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: inherit;
+  cursor: pointer;
+}
+
+.unit-load-card__action:disabled,
+.unit-catalog-card__action:disabled {
+  cursor: not-allowed;
+}
+
+.unit-load-card > :not(.unit-load-card__action):not(.unit-catalog-card__info),
+.unit-catalog-card > :not(.unit-catalog-card__action):not(.unit-catalog-card__info) {
+  pointer-events: none;
+}
+
+.unit-load-card--loaded {
+  cursor: pointer;
+}
+
+.unit-load-card--selected {
+  background: var(--bim-brand-soft) !important;
+  border-color: var(--bim-brand) !important;
+  box-shadow: 0 0 0 2px rgba(242, 101, 34, 0.18) !important;
+  transform: none !important;
+}
+
+.unit-load-card--free {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 8px;
+  border-style: dashed !important;
+  cursor: pointer;
+}
+
+.unit-load-card--free:disabled {
+  color: var(--bim-text-muted);
+  cursor: not-allowed;
+}
+
+.unit-load-card__free-number {
+  font-size: 22px;
+  font-weight: 750;
+}
+
+.unit-load-card__free-label {
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: .035em;
+  text-align: center;
+}
+
+.unit-load-modal__selection-bar {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 9px 14px;
+  color: var(--bim-brand-strong);
+  background: var(--bim-brand-soft);
+  border-bottom: 1px solid var(--bim-brand-line);
+}
+
+.unit-load-modal__selection-bar > div:first-child {
+  min-width: 160px;
+  flex: 1 1 auto;
+  color: inherit !important;
+  font-size: 12px !important;
+  text-align: left !important;
+}
+
+.unit-load-modal__selection-bar button {
+  min-height: 40px !important;
+  box-shadow: none !important;
+  text-shadow: none !important;
+}
+
+.unit-load-modal__catalog {
+  display: flex !important;
+  min-height: auto !important;
+  flex: 0 0 auto !important;
+  flex-direction: column !important;
+  align-items: stretch !important;
+  gap: 12px !important;
+  overflow: visible !important;
+  padding: 16px 18px 22px !important;
+}
+
+.unit-load-modal__catalog::before {
+  color: var(--bim-text);
+  content: "Available troops";
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.unit-load-modal__catalog > div:first-of-type {
+  color: var(--bim-text-muted) !important;
+  font-size: 11px !important;
+  font-weight: 550 !important;
+  text-align: left !important;
+}
+
+.unit-load-modal__grid {
+  display: grid !important;
+  width: 100% !important;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px !important;
+  align-items: stretch !important;
+  justify-content: stretch !important;
+  min-height: 0 !important;
+}
+
+.unit-load-modal__grid--nft {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.unit-catalog-card {
+  position: relative;
+  overflow: hidden;
+  width: 100% !important;
+  min-width: 0;
+  aspect-ratio: 4 / 5 !important;
+  color: var(--bim-text);
+  background: var(--bim-surface) !important;
+  border: 1px solid var(--bim-line) !important;
+  border-radius: 12px !important;
+  box-shadow: 0 1px 2px rgba(17, 24, 39, .06) !important;
+}
+
+.unit-catalog-card:hover:not(.unit-catalog-card--locked):not([aria-disabled="true"]) {
+  border-color: var(--bim-brand) !important;
+  box-shadow: 0 0 0 2px rgba(242, 101, 34, .14) !important;
+}
+
+.unit-catalog-card--locked,
+.unit-catalog-card[aria-disabled="true"] {
+  background: var(--bim-surface-muted) !important;
+  cursor: not-allowed !important;
+}
+
+.unit-catalog-card[aria-disabled="true"] img:not(.unit-catalog-card__info img) {
+  opacity: .55;
+  filter: grayscale(.6) saturate(.55);
+}
+
+.unit-catalog-card--muted {
+  background: var(--bim-surface-muted) !important;
+}
+
+.unit-catalog-card__info {
+  top: 5px !important;
+  left: 5px !important;
+  display: inline-flex !important;
+  z-index: 30 !important;
+  pointer-events: auto !important;
+  width: 44px !important;
+  height: 44px !important;
+  padding: 0 !important;
+  align-items: center;
+  justify-content: center;
+  color: transparent !important;
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 10px !important;
+  box-shadow: none !important;
+}
+
+.unit-catalog-card__info > span {
+  display: inline-flex;
+  width: 26px;
+  height: 26px;
+  align-items: center;
+  justify-content: center;
+  color: var(--bim-text-secondary);
+  background: color-mix(in srgb, var(--bim-surface) 94%, transparent);
+  border: 1px solid var(--bim-line-strong);
+  border-radius: 8px;
+  font-family: Georgia, serif;
+  font-size: 15px;
+  font-style: italic;
+  font-weight: 700;
+  line-height: 1;
+  box-shadow: 0 1px 2px rgba(17, 24, 39, .12);
+}
+
+.unit-catalog-card__action:focus-visible,
+.unit-load-card__action:focus-visible,
+.unit-catalog-card__info:focus-visible,
+.unit-info-modal__close:focus-visible {
+  outline: 3px solid rgba(242, 101, 34, .28);
+  outline-offset: 2px;
+}
+
+.unit-info-modal__overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 230;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: var(--bim-overlay);
+}
+
+.unit-info-modal {
+  position: relative;
+  width: min(460px, 100%);
+  max-height: 100%;
+  overflow-y: auto;
+  padding: 20px;
+  color: var(--bim-text);
+  background: var(--bim-surface);
+  border: 1px solid var(--bim-line);
+  border-radius: 16px;
+  box-shadow: 0 20px 56px var(--bim-shadow);
+}
+
+.unit-info-modal__close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 3;
+  display: inline-flex;
+  width: 44px !important;
+  height: 44px !important;
+  align-items: center;
+  justify-content: center;
+  color: var(--bim-text-secondary) !important;
+  background: transparent !important;
+  border: 1px solid transparent !important;
+  border-radius: 10px !important;
+  box-shadow: none !important;
+  font-size: 24px !important;
+}
+
+.unit-info-modal__header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding-right: 38px;
+}
+
+.unit-info-modal__portrait {
+  position: relative;
+  width: 96px;
+  height: 104px;
+  flex: 0 0 96px;
+  overflow: hidden;
+  background: var(--bim-surface-subtle);
+  border: 1px solid var(--bim-line);
+  border-radius: 12px;
+}
+
+.unit-info-modal__heading {
+  min-width: 0;
+}
+
+.unit-info-modal__heading h3 {
+  margin: 0;
+  color: var(--bim-text);
+  font-size: 20px;
+  font-weight: 750;
+}
+
+.unit-info-modal__role {
+  margin-top: 5px;
+  color: var(--bim-brand-strong);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.unit-info-modal__token {
+  margin-top: 5px;
+  color: var(--bim-text-muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.unit-info-modal__description {
+  margin: 14px 0 12px;
+  color: var(--bim-text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.unit-info-modal__stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.unit-info-modal__stat {
+  min-width: 0;
+  padding: 10px;
+  background: var(--bim-surface-subtle);
+  border: 1px solid var(--bim-line);
+  border-radius: 10px;
+}
+
+.unit-info-modal__stat span {
+  display: block;
+  color: var(--bim-text-muted);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: .035em;
+}
+
+.unit-info-modal__stat strong {
+  display: block;
+  margin-top: 4px;
+  color: var(--bim-text);
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.unit-info-modal__status {
+  margin-top: 10px;
+  padding: 10px 12px;
+  color: var(--bim-text-secondary);
+  background: var(--bim-surface-muted);
+  border: 1px solid var(--bim-line);
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.35;
+  text-align: center;
+}
+
+@media (max-width: 899px) {
+  .unit-load-modal__grid,
+  .unit-load-modal__grid--nft {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 599px) {
+  .unit-load-modal {
+    width: 100%;
+    max-height: 100dvh;
+  }
+
+  .unit-load-modal__ship-summary {
+    padding: 10px 12px !important;
+  }
+
+  .unit-load-modal__roster {
+    padding: 12px;
+  }
+
+  .unit-load-modal__roster-scroll {
+    margin-right: -12px;
+    padding-right: 12px;
+  }
+
+  .unit-load-modal__catalog {
+    padding: 14px 12px 20px !important;
+  }
+
+  .unit-load-modal__grid,
+  .unit-load-modal__grid--nft {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px !important;
+  }
+
+  .unit-catalog-card {
+    min-height: 124px;
+  }
+
+  .unit-info-modal__overlay {
+    align-items: flex-end;
+    padding: 8px;
+  }
+
+  .unit-info-modal {
+    width: 100%;
+    padding: 16px;
+    border-radius: 16px;
+  }
+}
+
+@media (max-width: 479px) {
+  .unit-load-modal__ship-summary {
+    align-items: stretch !important;
+    flex-direction: column;
+    gap: 10px !important;
+  }
+
+  .unit-load-modal__ship-summary .unit-load-modal__ship-upgrade {
+    width: 100%;
+  }
+
+  .unit-load-modal__ship-status {
+    text-align: left;
+  }
+}
+
+@media (max-width: 359px) {
+  .unit-load-modal__grid,
+  .unit-load-modal__grid--nft {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .unit-info-modal__stats {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

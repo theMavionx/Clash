@@ -1,40 +1,114 @@
 export const colors = {
   gold: '#FFD700',
   goldDark: '#C59600',
-  wood: '#4CAF50',
-  woodDark: '#2E7D32',
+  wood: 'var(--terminal-long)',
+  woodDark: 'var(--terminal-long-strong)',
   ore: '#9C27B0',
   oreDark: '#6A1B9A',
-  red: '#E53935',
-  green: '#43A047',
-  blue: '#1E88E5',
-  brown: '#5D4037',
-  cream: '#FFF8E1',
-  text: '#FFFFFF',
-  shadow: 'rgba(0,0,0,0.35)',
+  red: 'var(--terminal-short)',
+  green: 'var(--terminal-long)',
+  blue: 'var(--terminal-info)',
+  brown: 'var(--terminal-text)',
+  cream: 'var(--terminal-surface)',
+  text: 'var(--terminal-on-accent)',
+  shadow: 'var(--terminal-shadow)',
 };
 
-// Cartoon-style button with 3D effect
-export const cartoonBtn = (bg, border) => ({
-  padding: '12px 24px',
-  borderRadius: 16,
-  border: `3px solid ${border}`,
-  background: `linear-gradient(180deg, ${bg} 0%, ${border} 100%)`,
-  color: '#fff',
-  fontSize: 18,
-  fontWeight: 900,
-  cursor: 'pointer',
-  textShadow: '0 2px 0 rgba(0,0,0,0.3)',
-  boxShadow: `0 4px 0 ${border}, 0 6px 12px rgba(0,0,0,0.3)`,
-  letterSpacing: 0.5,
-  transition: 'transform 0.1s, box-shadow 0.1s',
-  userSelect: 'none',
+const UI_BUTTON_VARIANTS = {
+  primary: {
+    background: 'var(--terminal-orange)',
+    borderColor: 'var(--terminal-brand-strong)',
+    color: 'var(--terminal-on-accent)',
+  },
+  secondary: {
+    background: 'var(--terminal-surface)',
+    borderColor: 'var(--terminal-border-strong)',
+    color: 'var(--terminal-text)',
+  },
+  neutral: {
+    background: 'var(--terminal-surface-muted)',
+    borderColor: 'var(--terminal-border-strong)',
+    color: 'var(--terminal-text-control)',
+  },
+  success: {
+    background: 'var(--terminal-long)',
+    borderColor: 'var(--terminal-long-strong)',
+    color: 'var(--terminal-on-accent)',
+  },
+  danger: {
+    background: 'var(--terminal-short)',
+    borderColor: 'var(--terminal-short-strong)',
+    color: 'var(--terminal-on-accent)',
+  },
+  warning: {
+    background: 'var(--terminal-warning)',
+    borderColor: 'var(--terminal-warning-border)',
+    color: 'var(--terminal-on-warning)',
+  },
+  info: {
+    background: 'var(--terminal-info)',
+    borderColor: 'var(--terminal-info-border)',
+    color: 'var(--terminal-on-accent)',
+  },
+  ghost: {
+    background: 'transparent',
+    borderColor: 'transparent',
+    color: 'var(--terminal-text-secondary)',
+  },
+};
+
+export const uiButton = (variant = 'primary', overrides = {}) => {
+  const tone = UI_BUTTON_VARIANTS[variant] || UI_BUTTON_VARIANTS.primary;
+  const depth = variant === 'ghost' ? 'none' : 'var(--terminal-shadow-control)';
+  return {
+    minHeight: 40,
+    padding: '9px 14px',
+    borderRadius: 10,
+    border: `1px solid ${tone.borderColor}`,
+    background: tone.background,
+    color: tone.color,
+    fontSize: 13,
+    fontWeight: 700,
+    lineHeight: 1.15,
+    cursor: 'pointer',
+    textShadow: 'none',
+    boxShadow: depth,
+    letterSpacing: 0.1,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    boxSizing: 'border-box',
+    gap: 8,
+    userSelect: 'none',
+    transition: 'background-color 150ms ease, border-color 150ms ease, color 150ms ease, box-shadow 150ms ease, filter 150ms ease, transform 150ms ease',
+    ...overrides,
+  };
+};
+
+export const uiIconButton = (variant = 'secondary', size = 36, overrides = {}) => uiButton(variant, {
+  width: size,
+  height: size,
+  minHeight: size,
+  padding: 0,
+  flexShrink: 0,
+  ...overrides,
+});
+
+// Shared dimensional action button. The historical name is retained so older
+// panels can migrate without changing their event wiring.
+export const cartoonBtn = (bg, border) => uiButton('primary', {
+  padding: '10px 18px',
+  background: bg,
+  border: `1px solid ${border}`,
+  fontSize: 14,
+  letterSpacing: 0.2,
 });
 
 export const cartoonPanel = {
-  background: 'linear-gradient(180deg, #3E2723 0%, #2C1B0E 100%)',
-  border: '3px solid #6D4C2A',
-  borderRadius: 20,
+  background: 'var(--terminal-surface)',
+  border: '1px solid var(--terminal-border)',
+  borderRadius: 16,
   padding: 16,
-  boxShadow: '0 6px 20px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.1)',
+  color: 'var(--terminal-text)',
+  boxShadow: 'var(--terminal-shadow-card)',
 };

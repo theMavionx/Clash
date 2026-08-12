@@ -13,7 +13,6 @@ import EnemyHeader from './EnemyHeader';
 import BattleResultOverlay from './BattleResultOverlay';
 import TutorialOverlay, { FLAG_ARMY, FLAG_ATTACK, FLAG_TRADE, FLAG_VIDEO } from './TutorialOverlay';
 import NftGoldBoostButton from './NftGoldBoostButton';
-import FeedbackButton from './FeedbackButton';
 import { useSend, useUI, useSelectedBuilding, useTutorial, usePlayer } from '../hooks/useGodot';
 import { useAgentActions } from '../hooks/useAgentActions';
 import { useSolanaMobile } from '../hooks/useSolanaMobile';
@@ -22,6 +21,7 @@ import { getAvailableDexConfigs, isDexAvailableInContext, useDex } from '../cont
 import ChunkErrorBoundary from './ChunkErrorBoundary';
 import { addClientBreadcrumb, lazyWithClientReload } from '../lib/clientLogger';
 import { readSoundEnabled } from '../lib/soundSettings';
+import { uiButton } from '../styles/theme';
 import {
   readLastPlayerDexPreference,
   readLastPlayerDexPreferenceAsync,
@@ -142,11 +142,7 @@ function VenuePickerOverlay({ isSolanaMobile, onPick }) {
               <button
                 key={cfg.id}
                 type="button"
-                style={{
-                  ...venueStyles.card,
-                  borderColor: cfg.borderColor,
-                  background: `linear-gradient(180deg, ${cfg.color} 0%, ${cfg.colorDark} 100%)`,
-                }}
+                style={venueStyles.card}
                 onClick={() => onPick(cfg.id)}
               >
                 <span style={{
@@ -494,21 +490,20 @@ export default function GameUI() {
   if (!ready) return null;
 
   if (showRegister) {
-    return <RegisterPanel />;
+    return <div className="clash-ui-root"><RegisterPanel /></div>;
   }
 
   // Hide normal HUD during cloud transition, but keep a small status above
   // the Godot cloud canvas so long waits do not feel frozen.
-  if (cloudVisible) return <CloudTransitionStatus message={cloudMessage} />;
+  if (cloudVisible) return <div className="clash-ui-root"><CloudTransitionStatus message={cloudMessage} /></div>;
 
   return (
-    <div style={styles.overlay}>
+    <div className="clash-ui-root" style={styles.overlay}>
       {!enemyMode?.active && <ResourceBar />}
       {!enemyMode?.active && <PlayerInfo onOpenProfile={() => setShowProfile(true)} onOpenLeaderboard={() => setShowLeaderboard(true)} />}
       {showFloatingUtilities && (
         <NftGoldBoostButton placement="side" />
       )}
-      {showFloatingUtilities && <FeedbackButton />}
       {showVenuePicker && (
         <VenuePickerOverlay
           isSolanaMobile={isSolanaMobile}
@@ -596,9 +591,10 @@ const venueStyles = {
   panel: {
     width: 'min(760px, 94vw)',
     maxHeight: 'calc(100vh - 24px)',
-    background: '#ebdaba',
-    border: '4px solid #377d9f',
-    boxShadow: '0 20px 60px rgba(0,0,0,0.8), inset 0 0 0 4px #ebdaba',
+    background: 'var(--terminal-surface)',
+    border: '1px solid var(--terminal-border)',
+    borderRadius: 20,
+    boxShadow: '0 20px 60px var(--terminal-shadow)',
     display: 'flex',
     flexDirection: 'column',
     overflow: 'hidden',
@@ -609,22 +605,21 @@ const venueStyles = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    background: '#4ca5d2',
-    borderBottom: '4px solid #377d9f',
-    color: '#fff',
-    fontSize: 22,
-    fontStyle: 'italic',
-    fontWeight: 900,
-    textShadow: '0 2px 4px rgba(0,0,0,0.6)',
+    background: 'var(--terminal-surface-subtle)',
+    borderBottom: '1px solid var(--terminal-border)',
+    color: 'var(--terminal-text)',
+    fontSize: 18,
+    fontWeight: 700,
+    textShadow: 'none',
   },
   body: {
     padding: 18,
     overflowY: 'auto',
   },
   copy: {
-    color: '#5b432c',
+    color: 'var(--terminal-text-muted)',
     fontSize: 14,
-    fontWeight: 800,
+    fontWeight: 600,
     lineHeight: 1.35,
     marginBottom: 14,
     textAlign: 'center',
@@ -635,16 +630,11 @@ const venueStyles = {
     gap: 12,
   },
   card: {
-    minHeight: 76,
-    border: '3px solid #5C3A21',
-    borderRadius: 8,
-    padding: '10px 12px',
-    color: '#fff',
+    ...uiButton('secondary', { width: '100%', minHeight: 76, padding: '10px 12px', justifyContent: 'flex-start' }),
+    color: 'var(--terminal-text)',
     display: 'flex',
     alignItems: 'center',
     gap: 10,
-    cursor: 'pointer',
-    boxShadow: '0 5px 0 rgba(0,0,0,0.25), 0 7px 14px rgba(0,0,0,0.25)',
     textAlign: 'left',
   },
   logoWrap: {
@@ -654,26 +644,30 @@ const venueStyles = {
     alignItems: 'center',
     justifyContent: 'center',
     flex: '0 0 auto',
+    borderRadius: 10,
+    background: 'var(--terminal-surface-muted)',
+    border: '1px solid var(--terminal-border)',
   },
   logo: {
     maxWidth: 44,
     maxHeight: 32,
     objectFit: 'contain',
-    filter: 'drop-shadow(0 2px 0 rgba(0,0,0,0.35))',
+    filter: 'none',
   },
   cardText: {
     display: 'flex',
     flexDirection: 'column',
     gap: 3,
-    fontWeight: 900,
-    textShadow: '0 2px 0 rgba(0,0,0,0.35)',
+    fontWeight: 700,
+    textShadow: 'none',
     flex: 1,
   },
   chevron: {
-    fontSize: 36,
-    fontWeight: 900,
+    fontSize: 24,
+    fontWeight: 700,
     lineHeight: 1,
-    textShadow: '0 2px 0 rgba(0,0,0,0.35)',
+    textShadow: 'none',
+    color: 'var(--terminal-text-muted)',
   },
 };
 
@@ -702,21 +696,21 @@ const styles = {
     maxWidth: 'min(360px, 88vw)',
     padding: '10px 16px',
     borderRadius: 8,
-    border: '3px solid rgba(92,58,33,0.82)',
+    border: '1px solid rgba(92,58,33,0.82)',
     background: 'rgba(246,232,196,0.92)',
-    color: '#5C3A21',
+    color: 'var(--terminal-text)',
     fontSize: 17,
-    fontWeight: 900,
+    fontWeight: 700,
     textAlign: 'center',
-    textShadow: '0 1px 0 rgba(255,255,255,0.65)',
+    textShadow: 'none',
     boxShadow: '0 6px 18px rgba(0,0,0,0.26)',
   },
   cloudStatusSpinner: {
     width: 14,
     height: 14,
     borderRadius: '50%',
-    border: '3px solid rgba(92,58,33,0.25)',
-    borderTopColor: '#5C3A21',
+    border: '1px solid rgba(92,58,33,0.25)',
+    borderTopColor: 'var(--terminal-text)',
     animation: 'spin 0.8s linear infinite',
     flex: '0 0 auto',
   },

@@ -13,6 +13,8 @@ import { useHyperliquid } from '../hooks/useHyperliquid';
 import { useRisex } from '../hooks/useRisex';
 import { useNado } from '../hooks/useNado';
 import { useOndo } from '../hooks/useOndo';
+import { useLeverup } from '../hooks/useLeverup';
+import { useAster } from '../hooks/useAster';
 import { useHibachi } from '../hooks/useHibachi';
 import { useHotstuff } from '../hooks/useHotstuff';
 import { useGrvt } from '../hooks/useGrvt';
@@ -22,11 +24,16 @@ import { useOstium } from '../hooks/useOstium';
 import { useBulk } from '../hooks/useBulk';
 import { useDex, DEX_CONFIG } from '../contexts/DexContext';
 import { useFuturesMode } from '../contexts/FuturesModeContext';
+import {
+  FUTURES_THEME_DARK,
+  FUTURES_THEME_LIGHT,
+  useFuturesTheme,
+} from '../hooks/useFuturesTheme';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { useAptosWallet } from '../contexts/AptosWalletContext';
 import { useFarcaster } from '../hooks/useFarcaster';
 import { useSkrHandle } from '../hooks/useSkrHandle';
-import { cartoonBtn } from '../styles/theme';
+import { uiButton, uiIconButton } from '../styles/theme';
 import EvmWalletModal from './EvmWalletModal';
 import { openSolanaWallet } from '../lib/solanaWalletUi';
 import { readSoundEnabled, writeSoundEnabled } from '../lib/soundSettings';
@@ -77,6 +84,7 @@ function ProfileModal({ onClose }) {
   const { isInFrame: inFrame } = useFarcaster();
   const { dex, setDex } = useDex();
   const { mode: futuresMode, setMode: setFuturesMode } = useFuturesMode();
+  const { theme: futuresTheme, setTheme: setFuturesTheme } = useFuturesTheme();
   const { address: evmAddress, disconnect: evmDisconnect, setExternalProvider: setEvmProvider } = useEvmWallet();
   const { address: aptosAddress, disconnect: aptosDisconnect, connect: aptosConnect } = useAptosWallet();
   const pacificaHook = usePacifica();
@@ -89,6 +97,8 @@ function ProfileModal({ onClose }) {
   const risexHook = useRisex();
   const nadoHook = useNado();
   const ondoHook = useOndo();
+  const leverupHook = useLeverup();
+  const asterHook = useAster();
   const hibachiHook = useHibachi();
   const hotstuffHook = useHotstuff();
   const grvtHook = useGrvt();
@@ -116,6 +126,10 @@ function ProfileModal({ onClose }) {
     ? nadoHook
     : dex === 'ondo'
     ? ondoHook
+    : dex === 'leverup'
+    ? leverupHook
+    : dex === 'aster'
+    ? asterHook
     : dex === 'hibachi'
     ? hibachiHook
     : dex === 'hotstuff'
@@ -172,7 +186,7 @@ function ProfileModal({ onClose }) {
   // though the Avantis account is registered with an EVM wallet. Resolve
   // to the chain-correct address for the active DEX.
   const adapterAddr = (connected && publicKey) ? publicKey.toBase58() : null;
-  const liveWallet = (dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'lighter')
+  const liveWallet = (dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'leverup' || dex === 'aster' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'lighter')
     ? (walletAddr || null)            // EVM from useAvantis/useGmx/useMonad
     : dex === 'decibel'
     ? (walletAddr || null)            // Aptos from useDecibel
@@ -181,7 +195,7 @@ function ProfileModal({ onClose }) {
     : (adapterAddr || walletAddr || null); // Solana adapter / Privy
   const linkedWallet = player?.wallet || null;
   const activeWallet = liveWallet || linkedWallet;
-  const walletSource = (dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'lighter')
+  const walletSource = (dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'leverup' || dex === 'aster' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'lighter')
     ? (liveWallet ? 'evm' : null)
     : dex === 'decibel'
     ? (liveWallet ? 'aptos' : null)
@@ -742,7 +756,7 @@ function ProfileModal({ onClose }) {
                 </div>
               ) : (
                 <div style={S.nameDisplayWrap}>
-                  <span style={{color: '#5C3A21', fontSize: 20, fontWeight: 900, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis'}}>{currentName}</span>
+                  <span style={{color: 'var(--terminal-text)', fontSize: 20, fontWeight: 700, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis'}}>{currentName}</span>
                   <button
                     type="button"
                     style={S.nameEditBtn}
@@ -764,26 +778,25 @@ function ProfileModal({ onClose }) {
               {nameError && <div style={S.nameError}>{nameError}</div>}
               <div style={{display: 'flex', alignItems: 'center', gap: 4}}>
                 <img src={trophyIcon} alt="" style={{width: 16, height: 16, filter: 'invert(60%) sepia(90%) saturate(500%) hue-rotate(10deg)'}} />
-                <span style={{fontSize: 13, fontWeight: 800, color: '#a3906a'}}>{(player?.trophies || 0).toLocaleString()}</span>
+                <span style={{fontSize: 13, fontWeight: 600, color: 'var(--terminal-text-muted)'}}>{(player?.trophies || 0).toLocaleString()}</span>
               </div>
             </div>
           </div>
-          <button style={S.closeBtn} onClick={onClose}>
+          <button type="button" style={S.closeBtn} onClick={onClose} aria-label="Close profile">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           </button>
         </div>
 
-        <div style={S.body}>
+        <div className="clash-scroll" style={S.body}>
           {/* DEX selector strip — cartoon-styled, gradient tile with 3D shadow */}
           {(() => {
             const cfg = DEX_CONFIG[dex] || DEX_CONFIG.pacifica;
             return (
               <div style={{
                 display: 'flex', alignItems: 'center', gap: 10,
-                padding: '10px 12px', borderRadius: 14,
-                background: `linear-gradient(180deg, ${cfg.color} 0%, ${cfg.colorDark} 100%)`,
-                border: `3px solid ${cfg.borderColor}`,
-                boxShadow: `0 3px 0 ${cfg.borderColor}, 0 4px 8px rgba(0,0,0,0.2)`,
+                padding: '10px 12px', borderRadius: 12,
+                background: 'var(--terminal-surface-subtle)',
+                border: '1px solid var(--terminal-border)',
               }}>
                 {/* Official DEX logo — Pacifica pairs icon + text label,
                     Avantis ships the full wordmark. */}
@@ -795,46 +808,38 @@ function ProfileModal({ onClose }) {
                       height: cfg.logoIsWordmark ? 22 : 26,
                       width: 'auto',
                       objectFit: 'contain',
-                      filter: 'drop-shadow(0 2px 0 rgba(0,0,0,0.35))',
+                      maxWidth: 112,
                     }}
                   />
                   {!cfg.logoIsWordmark && (
                     <span style={{
-                      fontSize: 16, fontWeight: 900, color: '#fff',
+                      fontSize: 16, fontWeight: 700, color: 'var(--terminal-text)',
                       letterSpacing: '0.6px',
-                      textShadow: '0 2px 0 rgba(0,0,0,0.35)',
+                      textShadow: 'none',
                       textTransform: 'lowercase',
                     }}>{cfg.label.toLowerCase()}</span>
                   )}
                 </div>
                 <div style={{flex: 1, minWidth: 0}}>
                   <div style={{
-                    fontSize: 10, fontWeight: 800,
-                    color: 'rgba(255,255,255,0.88)',
+                    fontSize: 10, fontWeight: 600,
+                    color: 'var(--terminal-text-muted)',
                     letterSpacing: '0.5px',
-                    textShadow: '0 1px 0 rgba(0,0,0,0.3)',
+                    textShadow: 'none',
                   }}>TRADING ON</div>
                   <div style={{
-                    fontSize: 12, fontWeight: 900, color: '#fff',
+                    fontSize: 12, fontWeight: 700, color: 'var(--terminal-text)',
                     letterSpacing: '0.8px',
-                    textShadow: '0 1px 0 rgba(0,0,0,0.35)',
+                    textShadow: 'none',
                     marginTop: 1,
                   }}>
                     {cfg.chain} · SELF-CUSTODY
                   </div>
                 </div>
                 <button
+                  type="button"
                   onClick={switchDex}
-                  style={{
-                    background: 'rgba(0,0,0,0.25)',
-                    border: '2px solid rgba(0,0,0,0.35)',
-                    color: '#fff',
-                    fontSize: 10, fontWeight: 900,
-                    padding: '6px 10px', borderRadius: 8,
-                    cursor: 'pointer', letterSpacing: '0.8px',
-                    textShadow: '0 1px 0 rgba(0,0,0,0.4)',
-                    boxShadow: '0 2px 0 rgba(0,0,0,0.2)',
-                  }}
+                  style={uiButton('secondary', { minHeight: 32, height: 32, padding: '0 11px', fontSize: 10 })}
                 >SWITCH</button>
               </div>
             );
@@ -847,16 +852,16 @@ function ProfileModal({ onClose }) {
             <div style={{
               display: 'flex', alignItems: 'center', gap: 10,
               padding: '8px 12px', borderRadius: 12,
-              background: 'rgba(92, 58, 33, 0.06)',
-              border: '2px solid rgba(92, 58, 33, 0.18)',
+              background: 'var(--terminal-surface-muted)',
+              border: '1px solid var(--terminal-surface-muted)',
             }}>
               <div style={{flex: 1, minWidth: 0}}>
                 <div style={{
-                  fontSize: 9, fontWeight: 800, color: '#a3906a',
+                  fontSize: 9, fontWeight: 600, color: 'var(--terminal-text-muted)',
                   letterSpacing: '0.6px',
                 }}>FUTURES MODE</div>
                 <div style={{
-                  fontSize: 12, fontWeight: 900, color: '#5C3A21',
+                  fontSize: 12, fontWeight: 700, color: 'var(--terminal-text)',
                   marginTop: 1,
                 }}>
                   {futuresMode === 'pro' ? 'Pro — full feature set' : 'Basic — simplified UI'}
@@ -864,42 +869,63 @@ function ProfileModal({ onClose }) {
               </div>
               <div style={{display: 'flex', gap: 4, flexShrink: 0}}>
                 <button
+                  type="button"
                   onClick={() => futuresMode !== 'basic' && setFuturesMode('basic')}
                   disabled={futuresMode === 'basic'}
-                  style={{
-                    padding: '6px 12px', borderRadius: 8,
-                    fontSize: 11, fontWeight: 900, letterSpacing: '0.5px',
-                    cursor: futuresMode === 'basic' ? 'default' : 'pointer',
-                    background: futuresMode === 'basic'
-                      ? 'linear-gradient(180deg, #6ab344 0%, #4d7a2e 100%)'
-                      : '#e8dfc8',
-                    color: futuresMode === 'basic' ? '#fff' : '#77573d',
-                    border: futuresMode === 'basic'
-                      ? '2px solid #3a5e22'
-                      : '2px solid #d4c8b0',
-                    textShadow: futuresMode === 'basic' ? '1px 1px 0 rgba(0,0,0,0.3)' : 'none',
-                  }}
+                  style={uiButton(futuresMode === 'basic' ? 'primary' : 'secondary', {
+                    minHeight: 32, height: 32, padding: '0 12px', fontSize: 11,
+                  })}
                 >BASIC</button>
                 <button
+                  type="button"
                   onClick={() => futuresMode !== 'pro' && setFuturesMode('pro')}
                   disabled={futuresMode === 'pro'}
-                  style={{
-                    padding: '6px 12px', borderRadius: 8,
-                    fontSize: 11, fontWeight: 900, letterSpacing: '0.5px',
-                    cursor: futuresMode === 'pro' ? 'default' : 'pointer',
-                    background: futuresMode === 'pro'
-                      ? 'linear-gradient(180deg, #0EA5E9 0%, #0369A1 100%)'
-                      : '#e8dfc8',
-                    color: futuresMode === 'pro' ? '#fff' : '#77573d',
-                    border: futuresMode === 'pro'
-                      ? '2px solid #0284C7'
-                      : '2px solid #d4c8b0',
-                    textShadow: futuresMode === 'pro' ? '1px 1px 0 rgba(0,0,0,0.3)' : 'none',
-                  }}
+                  style={uiButton(futuresMode === 'pro' ? 'primary' : 'secondary', {
+                    minHeight: 32, height: 32, padding: '0 12px', fontSize: 11,
+                  })}
                 >PRO</button>
               </div>
             </div>
           )}
+
+          <div style={S.futuresThemeBox}>
+            <div style={S.soundInfo}>
+              <div style={S.futuresThemeLabel}>Interface theme</div>
+              <div style={S.futuresThemeState}>
+                {futuresTheme === FUTURES_THEME_DARK ? 'Dark interface' : 'Light interface'}
+              </div>
+            </div>
+            <div role="group" aria-label="Interface color theme" style={S.futuresThemeChoices}>
+              <button
+                type="button"
+                aria-pressed={futuresTheme === FUTURES_THEME_LIGHT}
+                onClick={() => setFuturesTheme(FUTURES_THEME_LIGHT)}
+                style={{
+                  ...S.futuresThemeChoice,
+                  ...(futuresTheme === FUTURES_THEME_LIGHT
+                    ? S.futuresThemeChoiceActive
+                    : S.futuresThemeChoiceIdle),
+                }}
+              >
+                <span aria-hidden="true" style={{ ...S.themeSwatch, background: 'var(--terminal-surface)' }} />
+                Light
+              </button>
+              <button
+                type="button"
+                aria-pressed={futuresTheme === FUTURES_THEME_DARK}
+                onClick={() => setFuturesTheme(FUTURES_THEME_DARK)}
+                style={{
+                  ...S.futuresThemeChoice,
+                  ...(futuresTheme === FUTURES_THEME_DARK
+                    ? S.futuresThemeChoiceActive
+                    : S.futuresThemeChoiceIdle),
+                }}
+              >
+                <span aria-hidden="true" style={{ ...S.themeSwatch, background: 'var(--terminal-neutral-button)' }} />
+                Dark
+              </button>
+            </div>
+          </div>
 
           <div style={S.soundBox}>
             <div style={S.soundInfo}>
@@ -1020,9 +1046,9 @@ function ProfileModal({ onClose }) {
                         }}
                         style={{
                           ...S.copyBtn,
-                          background: copied === wallet.address ? 'rgba(67,160,71,0.18)' : 'rgba(0,0,0,0.08)',
-                          border: `1px solid ${copied === wallet.address ? 'rgba(46,125,50,0.5)' : 'rgba(92,58,33,0.3)'}`,
-                          color: copied === wallet.address ? '#2E7D32' : '#5C3A21',
+                          background: copied === wallet.address ? 'var(--terminal-long-soft)' : 'var(--terminal-surface-muted)',
+                          border: `1px solid ${copied === wallet.address ? 'var(--terminal-long-border)' : 'var(--terminal-border-strong)'}`,
+                          color: copied === wallet.address ? 'var(--terminal-long)' : 'var(--terminal-text-secondary)',
                         }}
                       >
                         {copied === wallet.address ? (
@@ -1054,82 +1080,92 @@ function ProfileModal({ onClose }) {
             <div style={S.connectedBox}>
               <div style={{display: 'flex', alignItems: 'center', gap: 8}}>
                 <div style={S.dot} />
-                <span style={{fontSize: 13, fontWeight: 800, fontFamily: 'monospace', color: '#5C3A21'}}>Farcaster Wallet</span>
+                <span style={{fontSize: 13, fontWeight: 600, fontFamily: 'monospace', color: 'var(--terminal-text)'}}>Farcaster Wallet</span>
               </div>
             </div>
           ) : dex === 'avantis' ? (
             <button
-              style={{...cartoonBtn('#0284C7', '#0369A1'), width: '100%', textAlign: 'center', padding: '14px'}}
+              style={uiButton('primary', { width: '100%', minHeight: 44, padding: '12px 16px' })}
               onClick={() => setEvmModalOpen(true)}
             >CONNECT BASE WALLET</button>
           ) : dex === 'gmx' ? (
             <button
-              style={{...cartoonBtn('#4F46E5', '#3730A3'), width: '100%', textAlign: 'center', padding: '14px'}}
+              style={uiButton('primary', { width: '100%', minHeight: 44, padding: '12px 16px' })}
               onClick={() => setEvmModalOpen(true)}
             >CONNECT ARBITRUM WALLET</button>
           ) : dex === 'ostium' ? (
             <button
-              style={{...cartoonBtn('#111827', '#374151'), width: '100%', textAlign: 'center', padding: '14px'}}
+              style={uiButton('primary', { width: '100%', minHeight: 44, padding: '12px 16px' })}
               onClick={() => setEvmModalOpen(true)}
             >CONNECT OSTIUM WALLET</button>
           ) : dex === 'monad' ? (
             <button
-              style={{...cartoonBtn('#6F5CFF', '#4530E0'), width: '100%', textAlign: 'center', padding: '14px'}}
+              style={uiButton('primary', { width: '100%', minHeight: 44, padding: '12px 16px' })}
               onClick={() => setEvmModalOpen(true)}
             >CONNECT MONAD WALLET</button>
           ) : dex === 'hyperliquid' ? (
             <button
-              style={{...cartoonBtn('#22C55E', '#047857'), width: '100%', textAlign: 'center', padding: '14px'}}
+              style={uiButton('primary', { width: '100%', minHeight: 44, padding: '12px 16px' })}
               onClick={() => setEvmModalOpen(true)}
             >CONNECT HYPERLIQUID WALLET</button>
           ) : dex === 'decibel' ? (
             <button
-              style={{...cartoonBtn('#DAA520', '#B8860B'), width: '100%', textAlign: 'center', padding: '14px'}}
+              style={uiButton('primary', { width: '100%', minHeight: 44, padding: '12px 16px' })}
               onClick={() => aptosConnect?.()}
             >CONNECT PETRA WALLET</button>
           ) : dex === 'risex' ? (
             <button
-              style={{...cartoonBtn('#04DF83', '#047857'), width: '100%', textAlign: 'center', padding: '14px'}}
+              style={uiButton('primary', { width: '100%', minHeight: 44, padding: '12px 16px' })}
               onClick={() => setEvmModalOpen(true)}
             >CONNECT RISE WALLET</button>
           ) : dex === 'nado' ? (
             <button
-              style={{...cartoonBtn('#00B8D9', '#075985'), width: '100%', textAlign: 'center', padding: '14px'}}
+              style={uiButton('primary', { width: '100%', minHeight: 44, padding: '12px 16px' })}
               onClick={() => setEvmModalOpen(true)}
             >CONNECT INK WALLET</button>
           ) : dex === 'ondo' ? (
             <button
-              style={{...cartoonBtn('#111111', '#000000'), width: '100%', textAlign: 'center', padding: '14px'}}
+              style={uiButton('primary', { width: '100%', minHeight: 44, padding: '12px 16px' })}
               onClick={() => setEvmModalOpen(true)}
             >CONNECT ETHEREUM WALLET</button>
+          ) : dex === 'leverup' ? (
+            <button
+              style={uiButton('primary', { width: '100%', minHeight: 44, padding: '12px 16px' })}
+              onClick={() => setEvmModalOpen(true)}
+            >CONNECT MONAD WALLET</button>
+          ) : dex === 'aster' ? (
+            <button
+              style={uiButton('primary', { width: '100%', minHeight: 44, padding: '12px 16px' })}
+              onClick={() => setEvmModalOpen(true)}
+            >CONNECT ASTER WALLET</button>
           ) : dex === 'hibachi' ? (
             <button
-              style={{...cartoonBtn('#111827', '#374151'), width: '100%', textAlign: 'center', padding: '14px'}}
+              style={uiButton('primary', { width: '100%', minHeight: 44, padding: '12px 16px' })}
               onClick={() => setEvmModalOpen(true)}
             >CONNECT HIBACHI WALLET</button>
           ) : dex === 'hotstuff' ? (
             <button
-              style={{...cartoonBtn('#EF4444', '#991B1B'), width: '100%', textAlign: 'center', padding: '14px'}}
+              style={uiButton('primary', { width: '100%', minHeight: 44, padding: '12px 16px' })}
               onClick={() => setEvmModalOpen(true)}
             >CONNECT ETHEREUM WALLET</button>
           ) : dex === 'grvt' ? (
             <button
-              style={{...cartoonBtn('#111827', '#374151'), width: '100%', textAlign: 'center', padding: '14px'}}
+              style={uiButton('primary', { width: '100%', minHeight: 44, padding: '12px 16px' })}
               onClick={() => setEvmModalOpen(true)}
             >CONNECT GRVT WALLET</button>
           ) : dex === 'katana' ? (
             <button
-              style={{...cartoonBtn('#F04438', '#991B1B'), width: '100%', textAlign: 'center', padding: '14px'}}
+              style={uiButton('primary', { width: '100%', minHeight: 44, padding: '12px 16px' })}
               onClick={() => setEvmModalOpen(true)}
             >CONNECT KATANA WALLET</button>
           ) : dex === 'lighter' ? (
             <button
-              style={{...cartoonBtn('#22A7F0', '#0369A1'), width: '100%', textAlign: 'center', padding: '14px'}}
+              style={uiButton('primary', { width: '100%', minHeight: 44, padding: '12px 16px' })}
               onClick={() => setEvmModalOpen(true)}
             >CONNECT LIGHTER WALLET</button>
           ) : (
             <button
-              style={{...cartoonBtn('#9945FF', '#7B36CC'), width: '100%', textAlign: 'center', padding: '14px'}}
+              style={uiButton('primary', { width: '100%', minHeight: 44, padding: '12px 16px' })}
               onClick={openSolanaConnect}
             >CONNECT WALLET</button>
           )}
@@ -1143,7 +1179,7 @@ function ProfileModal({ onClose }) {
                 <button
                   style={S.walletRepairBtn}
                   onClick={() => {
-                    if (dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'lighter') setEvmModalOpen(true);
+                    if (dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'leverup' || dex === 'aster' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'lighter') setEvmModalOpen(true);
                     else if (dex === 'decibel') aptosConnect?.();
                     else openSolanaConnect();
                   }}
@@ -1277,16 +1313,15 @@ function ProfileModal({ onClose }) {
           {dex === 'avantis' && activeWallet && (
             <div style={{
               padding: '12px 14px', borderRadius: 14,
-              background: 'linear-gradient(180deg, #FFF3E0 0%, #FFE0B2 100%)',
-              border: '3px solid #E65100',
-              boxShadow: '0 3px 0 #E65100, 0 4px 8px rgba(0,0,0,0.15)',
+              background: 'var(--terminal-brand-soft)',
+              border: '1px solid var(--terminal-brand-border)',
             }}>
               <div style={{
-                fontSize: 12, fontWeight: 900, color: '#BF360C',
+                fontSize: 12, fontWeight: 700, color: 'var(--terminal-brand-text)',
                 letterSpacing: '1px', marginBottom: 4,
               }}>💰 DEPOSIT TO TRADE</div>
               <div style={{
-                fontSize: 12, color: '#5D2A0C', fontWeight: 700,
+                fontSize: 12, color: 'var(--terminal-text-secondary)', fontWeight: 600,
                 lineHeight: 1.4,
               }}>
                 Send <b>USDC</b> + a little <b>ETH</b> (for gas, ~0.003 ETH) to the address above on the <b>Base</b> network.
@@ -1344,8 +1379,8 @@ function ProfileModal({ onClose }) {
                 <div style={{display: 'flex', alignItems: 'center', gap: 8}}>
                   <span style={{fontSize: 28}}>🪙</span>
                   <div>
-                    <div style={{fontSize: 22, fontWeight: 900, color: '#5C3A21'}}>{tradingStats.total_gold.toLocaleString()} Gold</div>
-                    <div style={{fontSize: 11, color: '#a3906a', fontWeight: 700}}>Volume: ${parseFloat(tradingStats.total_volume || 0).toFixed(0)}</div>
+                    <div style={{fontSize: 22, fontWeight: 700, color: 'var(--terminal-text)'}}>{tradingStats.total_gold.toLocaleString()} Gold</div>
+                    <div style={{fontSize: 11, color: 'var(--terminal-text-muted)', fontWeight: 700}}>Volume: ${parseFloat(tradingStats.total_volume || 0).toFixed(0)}</div>
                   </div>
                 </div>
               </div>
@@ -1356,9 +1391,9 @@ function ProfileModal({ onClose }) {
                   <div style={S.sectionTitle}>Gold History</div>
                   {tradingStats.gold_history.map((h, i) => (
                     <div key={i} style={S.historyRow}>
-                      <span style={{fontSize: 14, fontWeight: 900, color: '#4CAF50'}}>+{h.amount}</span>
-                      <span style={{fontSize: 12, fontWeight: 700, color: '#77573d', flex: 1}}>{h.reason}</span>
-                      <span style={{fontSize: 10, color: '#a3906a'}}>{h.created_at?.split(' ')[0]}</span>
+                      <span style={{fontSize: 14, fontWeight: 700, color: 'var(--terminal-long)'}}>+{h.amount}</span>
+                      <span style={{fontSize: 12, fontWeight: 700, color: 'var(--terminal-text-secondary)', flex: 1}}>{h.reason}</span>
+                      <span style={{fontSize: 10, color: 'var(--terminal-text-muted)'}}>{h.created_at?.split(' ')[0]}</span>
                     </div>
                   ))}
                 </>
@@ -1372,9 +1407,9 @@ function ProfileModal({ onClose }) {
               <div style={S.sectionTitle}>Trade History</div>
               {tradingStats.trades.slice(0, 20).map((t, i) => (
                 <div key={i} style={S.historyRow}>
-                  <span style={{fontSize: 13, fontWeight: 900, color: '#5C3A21', minWidth: 40}}>{t.symbol}</span>
-                  <span style={{fontSize: 12, fontWeight: 700, color: '#77573d', flex: 1}}>{t.amount} @ ${parseFloat(t.price).toLocaleString()}</span>
-                  <span style={{fontSize: 10, color: '#a3906a'}}>{t.created_at?.split(' ')[0] || '—'}</span>
+                  <span style={{fontSize: 13, fontWeight: 700, color: 'var(--terminal-text)', minWidth: 40}}>{t.symbol}</span>
+                  <span style={{fontSize: 12, fontWeight: 700, color: 'var(--terminal-text-secondary)', flex: 1}}>{t.amount} @ ${parseFloat(t.price).toLocaleString()}</span>
+                  <span style={{fontSize: 10, color: 'var(--terminal-text-muted)'}}>{t.created_at?.split(' ')[0] || '—'}</span>
                 </div>
               ))}
             </>
@@ -1384,7 +1419,7 @@ function ProfileModal({ onClose }) {
       <EvmWalletModal
         open={evmModalOpen}
         onClose={() => setEvmModalOpen(false)}
-        targetChain={dex === 'gmx' || dex === 'hyperliquid' || dex === 'ostium' ? 'arbitrum' : dex === 'monad' ? 'monad' : dex === 'risex' ? 'rise' : dex === 'nado' ? 'ink' : dex === 'grvt' ? 'baseConnect' : dex === 'katana' ? 'katana' : dex === 'hotstuff' || dex === 'ondo' || dex === 'hibachi' || dex === 'lighter' ? 'mainnet' : 'base'}
+        targetChain={dex === 'gmx' || dex === 'hyperliquid' || dex === 'ostium' ? 'arbitrum' : dex === 'monad' || dex === 'leverup' ? 'monad' : dex === 'risex' ? 'rise' : dex === 'nado' ? 'ink' : dex === 'grvt' || dex === 'aster' ? 'baseConnect' : dex === 'katana' ? 'katana' : dex === 'hotstuff' || dex === 'ondo' || dex === 'hibachi' || dex === 'lighter' ? 'mainnet' : 'base'}
         onConnected={handleEvmConnected}
       />
     </>
@@ -1397,23 +1432,23 @@ const S = {
   backdrop: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 200, pointerEvents: 'auto' },
   modal: {
     position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
-    width: '90%', maxWidth: 370, maxHeight: '85vh', background: '#fdf8e7', border: '6px solid #d4c8b0', borderRadius: 24,
+    width: '90%', maxWidth: 370, maxHeight: '85vh', background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 24,
     boxShadow: '0 20px 60px rgba(0,0,0,0.5)', display: 'flex', flexDirection: 'column',
     zIndex: 201, pointerEvents: 'auto', overflow: 'hidden', fontFamily: '"Inter","Segoe UI",sans-serif',
   },
   header: {
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-    padding: '14px 16px', background: '#d4c8b0', borderBottom: '4px solid #bba882',
+    padding: '14px 16px', background: 'var(--terminal-border)', borderBottom: '1px solid var(--terminal-border-strong)',
   },
   levelBadge: {
     width: 44, height: 44, borderRadius: 10,
     background: 'radial-gradient(circle at 30% 30%, #7bd9ff 0%, #46b8e8 70%, #2a9ccb 100%)',
-    border: '3px solid #1a1a1a', display: 'flex', alignItems: 'center', justifyContent: 'center',
+    border: '1px solid #1a1a1a', display: 'flex', alignItems: 'center', justifyContent: 'center',
     boxShadow: '0 3px 6px rgba(0,0,0,0.4)',
     position: 'relative',
     overflow: 'hidden',
   },
-  levelNum: { color: '#fff', fontSize: 22, fontWeight: 900, textShadow: '-1.5px -1.5px 0 #0a0a0a, 1.5px -1.5px 0 #0a0a0a, -1.5px 1.5px 0 #0a0a0a, 1.5px 1.5px 0 #0a0a0a, 0 2px 2px rgba(0,0,0,0.8)' },
+  levelNum: { color: 'var(--terminal-on-accent)', fontSize: 22, fontWeight: 700, textShadow: 'none' },
   nameDisplayWrap: {
     display: 'flex', alignItems: 'center', gap: 7, minWidth: 0, maxWidth: 190,
   },
@@ -1422,107 +1457,118 @@ const S = {
   },
   nameInput: {
     width: 110, minWidth: 0, height: 30, padding: '0 8px',
-    borderRadius: 8, border: '2px solid #bba882', background: '#fffaf0',
-    color: '#5C3A21', fontSize: 15, fontWeight: 900, outline: 'none',
+    borderRadius: 8, border: '1px solid var(--terminal-border-strong)', background: 'var(--terminal-surface)',
+    color: 'var(--terminal-text)', fontSize: 15, fontWeight: 700, outline: 'none',
     boxShadow: 'inset 0 2px 0 rgba(0,0,0,0.08)',
   },
-  nameEditBtn: {
-    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-    width: 25, height: 25, padding: 0, borderRadius: 7,
-    background: '#fdf8e7', border: '2px solid #bba882', color: '#5C3A21',
-    cursor: 'pointer', boxShadow: '0 2px 0 #a3906a',
-  },
-  nameSaveBtn: {
-    height: 30, padding: '0 9px', borderRadius: 8,
-    background: 'linear-gradient(180deg, #4CAF50 0%, #2E7D32 100%)',
-    border: '2px solid #1b5e20', color: '#fff', fontSize: 11, fontWeight: 900,
-    cursor: 'pointer', textShadow: '0 1px 0 rgba(0,0,0,0.35)',
-  },
-  nameCancelBtn: {
-    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-    width: 30, height: 30, padding: 0, borderRadius: 8,
-    background: '#fdf8e7', border: '2px solid #bba882', color: '#8b5a2b',
-    fontSize: 12, fontWeight: 900, cursor: 'pointer',
-  },
+  nameEditBtn: uiIconButton('secondary', 30),
+  nameSaveBtn: uiButton('success', { minHeight: 30, height: 30, padding: '0 9px', fontSize: 11 }),
+  nameCancelBtn: uiIconButton('secondary', 30, { fontSize: 12 }),
   nameError: {
     maxWidth: 240,
     padding: '5px 8px',
     borderRadius: 8,
-    border: '2px solid rgba(198,40,40,0.35)',
+    border: '1px solid rgba(198,40,40,0.35)',
     background: 'rgba(198,40,40,0.09)',
-    color: '#C62828',
+    color: 'var(--terminal-short-strong)',
     fontSize: 11,
-    fontWeight: 900,
+    fontWeight: 700,
     lineHeight: 1.2,
     marginTop: 2,
   },
-  closeBtn: {
-    width: 30, height: 30, borderRadius: '50%', background: '#E53935', border: '3px solid #fff',
-    color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0,
-  },
-  body: { flex: 1, padding: 16, display: 'flex', flexDirection: 'column', gap: 8, overflowY: 'auto', scrollbarWidth: 'none' },
+  closeBtn: uiIconButton('danger', 30),
+  body: { flex: 1, padding: 16, display: 'flex', flexDirection: 'column', gap: 8, overflowY: 'auto' },
   soundBox: {
     display: 'flex', alignItems: 'center', gap: 10,
     padding: '10px 12px', borderRadius: 14,
-    background: 'linear-gradient(180deg, #FFF5D6 0%, #E8DFC8 100%)',
-    border: '3px solid #c9b590',
-    boxShadow: '0 3px 0 #a98f63, inset 0 1px 0 rgba(255,255,255,0.55)',
+    background: 'var(--terminal-surface-subtle)',
+    border: '1px solid var(--terminal-border)',
   },
   soundInfo: { flex: 1, minWidth: 0 },
+  futuresThemeBox: {
+    display: 'flex', alignItems: 'center', gap: 10,
+    padding: '10px 12px', borderRadius: 14,
+    background: 'var(--terminal-surface-subtle)',
+    border: '1px solid var(--terminal-border-strong)',
+  },
+  futuresThemeLabel: {
+    fontSize: 10, fontWeight: 700, color: 'var(--terminal-text-muted)',
+    letterSpacing: '0.7px', textTransform: 'uppercase',
+  },
+  futuresThemeState: {
+    marginTop: 2, fontSize: 12, fontWeight: 700, color: 'var(--terminal-text)',
+    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+  },
+  futuresThemeChoices: {
+    display: 'inline-flex', gap: 3, padding: 3, borderRadius: 10,
+    background: 'var(--terminal-border)', flexShrink: 0,
+  },
+  futuresThemeChoice: {
+    minWidth: 66, height: 34, padding: '0 9px', borderRadius: 8,
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+    fontSize: 11, fontWeight: 600, cursor: 'pointer',
+  },
+  futuresThemeChoiceActive: {
+    background: 'var(--terminal-surface)', color: 'var(--terminal-brand-text)', border: '1px solid var(--terminal-orange)',
+    boxShadow: '0 1px 3px rgba(17,24,39,0.14)',
+  },
+  futuresThemeChoiceIdle: {
+    background: 'transparent', color: 'var(--terminal-text-secondary)', border: '1px solid transparent',
+  },
+  themeSwatch: {
+    width: 11, height: 11, borderRadius: '50%', border: '1px solid var(--terminal-text-faint)',
+    boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.2)',
+  },
   soundLabel: {
-    fontSize: 10, fontWeight: 900, color: '#a3906a',
+    fontSize: 10, fontWeight: 700, color: 'var(--terminal-text-muted)',
     letterSpacing: '0.7px', textTransform: 'uppercase',
   },
   soundState: {
-    marginTop: 2, fontSize: 12, fontWeight: 900, color: '#5C3A21',
+    marginTop: 2, fontSize: 12, fontWeight: 700, color: 'var(--terminal-text)',
     whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
   },
   soundToggle: {
-    minWidth: 84, height: 42, borderRadius: 12,
+    minWidth: 84, height: 42, borderRadius: 10,
     display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 7,
-    cursor: 'pointer', color: '#fff',
-    fontSize: 12, fontWeight: 900, letterSpacing: '0.8px',
-    textShadow: '0 2px 0 rgba(0,0,0,0.25)',
-    boxShadow: '0 3px 0 rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.35)',
+    cursor: 'pointer',
+    fontSize: 12, fontWeight: 700, letterSpacing: '0.8px',
+    textShadow: 'none',
+    boxShadow: 'none',
+    transition: 'background-color 160ms ease-out, border-color 160ms ease-out, color 160ms ease-out',
   },
   soundToggleOn: {
-    background: 'linear-gradient(180deg, #6AB344 0%, #4D7A2E 100%)',
-    border: '3px solid #3A5E22',
+    background: 'var(--terminal-long)',
+    border: '1px solid var(--terminal-long-strong)',
+    color: 'var(--terminal-on-accent)',
   },
   soundToggleOff: {
-    background: 'linear-gradient(180deg, #A3906A 0%, #6E5A3C 100%)',
-    border: '3px solid #4F3E28',
+    background: 'var(--terminal-surface-subtle)',
+    border: '1px solid var(--terminal-border-strong)',
+    color: 'var(--terminal-text-control)',
   },
   referralBox: {
     display: 'flex', flexDirection: 'column', gap: 8,
     padding: '10px 12px', borderRadius: 14,
-    background: 'linear-gradient(180deg, #E8F5E9 0%, #D8EBCB 100%)',
-    border: '3px solid #91A971',
-    boxShadow: '0 3px 0 #6F8656, inset 0 1px 0 rgba(255,255,255,0.55)',
+    background: 'var(--terminal-long-soft)',
+    border: '1px solid var(--terminal-long-border)',
   },
   referralHead: {
     display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
   },
   referralSub: {
-    marginTop: 2, color: '#5E7447', fontSize: 11, fontWeight: 900,
+    marginTop: 2, color: 'var(--terminal-long-strong)', fontSize: 11, fontWeight: 700,
   },
-  referralCopyBtn: {
-    height: 34, padding: '0 12px', borderRadius: 9,
-    background: 'linear-gradient(180deg, #6AB344 0%, #4D7A2E 100%)',
-    border: '2px solid #3A5E22', color: '#fff',
-    fontSize: 11, fontWeight: 900, cursor: 'pointer',
-    textShadow: '0 1px 0 rgba(0,0,0,0.35)',
-  },
+  referralCopyBtn: uiButton('secondary', { minHeight: 34, height: 34, padding: '0 12px', fontSize: 11 }),
   referralLink: {
     padding: '8px 9px', borderRadius: 9,
-    background: 'rgba(255,255,255,0.55)',
-    border: '1px solid rgba(92,58,33,0.16)',
-    color: '#395726', fontSize: 12, fontWeight: 900,
+    background: 'var(--terminal-chip-overlay)',
+    border: '1px solid var(--terminal-long-border)',
+    color: 'var(--terminal-long-strong)', fontSize: 12, fontWeight: 700,
     fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
   },
   referralBy: {
-    color: '#5E7447', fontSize: 11, fontWeight: 900,
+    color: 'var(--terminal-long-strong)', fontSize: 11, fontWeight: 700,
   },
   referralStats: {
     display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 6,
@@ -1530,237 +1576,200 @@ const S = {
   referralStat: {
     display: 'flex', flexDirection: 'column', gap: 2,
     minWidth: 0, padding: '7px 5px', borderRadius: 9,
-    background: 'rgba(255,255,255,0.5)',
-    border: '1px solid rgba(92,58,33,0.14)',
-    color: '#395726', fontSize: 11, fontWeight: 900,
+    background: 'var(--terminal-chip-overlay)',
+    border: '1px solid var(--terminal-long-border)',
+    color: 'var(--terminal-long-strong)', fontSize: 11, fontWeight: 700,
     textAlign: 'center',
   },
   referralStatLabel: {
-    color: '#6F8656', fontSize: 8, fontWeight: 900,
+    color: 'var(--terminal-long)', fontSize: 9, fontWeight: 700,
     textTransform: 'uppercase',
   },
   connectedBox: {
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-    background: '#e8dfc8', border: '3px solid #d4c8b0', borderRadius: 12, padding: '10px 14px',
+    background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 12, padding: '10px 14px',
   },
   walletListBox: {
     display: 'flex', flexDirection: 'column', gap: 8,
-    background: '#e8dfc8', border: '3px solid #d4c8b0', borderRadius: 12, padding: 10,
+    background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border-strong)', borderRadius: 12, padding: 10,
   },
   walletListTitle: {
-    color: '#77573d', fontSize: 10, fontWeight: 900,
+    color: 'var(--terminal-text-secondary)', fontSize: 11, fontWeight: 700,
     textTransform: 'uppercase', letterSpacing: 0.7,
   },
   walletRow: {
     display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: 8,
-    alignItems: 'center', padding: '8px 9px', borderRadius: 10,
-    background: 'rgba(255,255,255,0.42)', border: '1px solid rgba(92,58,33,0.18)',
+    alignItems: 'center', padding: '11px 10px', borderRadius: 10,
+    background: 'var(--terminal-surface-raised)', border: '1px solid var(--terminal-border-strong)',
+    boxShadow: '0 1px 2px var(--terminal-shadow-soft)',
   },
   walletRowMain: { display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 },
-  walletRowText: { minWidth: 0, display: 'flex', flexDirection: 'column', gap: 3 },
+  walletRowText: { minWidth: 0, display: 'flex', flexDirection: 'column', gap: 5 },
   walletRowTop: { display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, flexWrap: 'wrap' },
-  walletChain: { color: '#5C3A21', fontSize: 11, fontWeight: 900 },
-  walletAddress: { color: '#5C3A21', fontSize: 12, fontWeight: 900, fontFamily: 'monospace' },
-  walletRowSub: { color: '#a3906a', fontSize: 10, fontWeight: 800, lineHeight: 1.2 },
+  walletChain: { color: 'var(--terminal-text)', fontSize: 12, fontWeight: 700 },
+  walletAddress: { color: 'var(--terminal-text-secondary)', fontSize: 12, fontWeight: 700, fontFamily: 'monospace' },
+  walletRowSub: { color: 'var(--terminal-text-secondary)', fontSize: 11, fontWeight: 600, lineHeight: 1.3 },
   walletRowActions: { display: 'flex', alignItems: 'center', gap: 6 },
-  copyBtn: {
-    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-    width: 24, height: 24, padding: 0, borderRadius: 7,
-    cursor: 'pointer', transition: 'all 0.15s ease',
-  },
+  copyBtn: uiIconButton('secondary', 28),
   loginChip: {
     padding: '2px 7px', borderRadius: 999,
     background: 'rgba(14,165,233,0.14)', border: '1px solid rgba(2,132,199,0.45)',
-    color: '#0369A1', fontSize: 9, fontWeight: 900, textTransform: 'uppercase', letterSpacing: 0.4,
+    color: '#0369A1', fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4,
   },
   connectedChip: {
     padding: '2px 7px', borderRadius: 999,
-    background: 'rgba(76,175,80,0.15)', border: '1px solid rgba(46,125,50,0.45)',
-    color: '#2E7D32', fontSize: 9, fontWeight: 900, textTransform: 'uppercase', letterSpacing: 0.4,
+    background: 'var(--terminal-long-soft)', border: '1px solid var(--terminal-long-border)',
+    color: 'var(--terminal-long)', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4,
   },
-  dot: { width: 10, height: 10, borderRadius: '50%', background: '#4CAF50', boxShadow: '0 0 6px #4CAF50' },
-  offlineDot: { width: 10, height: 10, borderRadius: '50%', background: '#a3906a', boxShadow: '0 0 6px rgba(163,144,106,0.5)' },
+  dot: { width: 10, height: 10, borderRadius: '50%', background: 'var(--terminal-long)', boxShadow: '0 0 6px var(--terminal-long)' },
+  offlineDot: { width: 10, height: 10, borderRadius: '50%', background: 'var(--terminal-text-muted)', boxShadow: '0 0 6px rgba(163,144,106,0.5)' },
   offlineChip: {
     padding: '2px 7px', borderRadius: 999,
-    background: 'rgba(163,144,106,0.16)', border: '1px solid rgba(163,144,106,0.45)',
-    color: '#77573d', fontSize: 9, fontWeight: 900, textTransform: 'uppercase', letterSpacing: 0.4,
+    background: 'var(--terminal-surface-muted)', border: '1px solid var(--terminal-border-strong)',
+    color: 'var(--terminal-text-secondary)', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4,
   },
   seekerChip: {
     display: 'inline-flex', alignItems: 'center', gap: 5,
     padding: '2px 8px', borderRadius: 999,
-    background: 'linear-gradient(180deg, #A78BFA 0%, #6D28D9 100%)',
-    color: '#fff', fontSize: 10, fontWeight: 900, letterSpacing: '0.4px',
+    background: 'var(--terminal-info-soft)', border: '1px solid var(--terminal-info-border)',
+    color: 'var(--terminal-info)', fontSize: 10, fontWeight: 700, letterSpacing: '0.4px',
     textTransform: 'lowercase',
-    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.35), 0 1px 0 rgba(0,0,0,0.25)',
-    textShadow: '0 1px 0 rgba(0,0,0,0.3)',
+    textShadow: 'none',
   },
   walletError: {
     padding: '6px 8px', borderRadius: 8,
-    border: '2px solid rgba(198,40,40,0.35)',
-    background: 'rgba(198,40,40,0.09)', color: '#C62828',
-    fontSize: 11, fontWeight: 900, lineHeight: 1.25,
+    border: '1px solid rgba(198,40,40,0.35)',
+    background: 'rgba(198,40,40,0.09)', color: 'var(--terminal-short-strong)',
+    fontSize: 11, fontWeight: 700, lineHeight: 1.25,
   },
   walletRepair: {
     padding: '10px 12px', borderRadius: 12,
-    background: 'linear-gradient(180deg, #FFF8E1 0%, #FFE9A6 100%)',
-    border: '3px solid #D79A1E',
-    boxShadow: '0 3px 0 #b57812, 0 4px 8px rgba(0,0,0,0.12)',
+    background: 'var(--terminal-warning-soft)',
+    border: '1px solid var(--terminal-warning-border)',
   },
-  walletRepairText: { color: '#6b421d', fontSize: 11, fontWeight: 800, lineHeight: 1.35 },
+  walletRepairText: { color: 'var(--terminal-warning)', fontSize: 11, fontWeight: 600, lineHeight: 1.35 },
   walletRepairActions: { display: 'flex', gap: 8, marginTop: 8 },
-  walletRepairBtn: {
-    flex: 1, padding: '8px 10px', borderRadius: 9, cursor: 'pointer',
-    background: 'linear-gradient(180deg, #6F5CFF 0%, #4530E0 100%)',
-    border: '2px solid #3720a6', color: '#fff', fontSize: 11, fontWeight: 900,
-  },
-  walletRepairLogout: {
-    padding: '8px 10px', borderRadius: 9, cursor: 'pointer',
-    background: 'linear-gradient(180deg, #ef5350 0%, #d32f2f 100%)',
-    border: '2px solid #8b2a2a', color: '#fff', fontSize: 11, fontWeight: 900,
-  },
+  walletRepairBtn: uiButton('primary', { flex: 1, minHeight: 36, padding: '8px 10px', fontSize: 11 }),
+  walletRepairLogout: uiButton('danger', { minHeight: 36, padding: '8px 10px', fontSize: 11 }),
   credentialsBox: {
     display: 'flex', flexDirection: 'column', gap: 8,
     padding: '10px 12px', borderRadius: 12,
-    background: '#e8dfc8', border: '2px solid #d4c8b0',
+    background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)',
   },
   credentialsHead: {
     display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
   },
   credentialsHint: {
-    marginTop: 2, color: '#77573d', fontSize: 10, fontWeight: 800, lineHeight: 1.25,
+    marginTop: 2, color: 'var(--terminal-text-secondary)', fontSize: 10, fontWeight: 600, lineHeight: 1.25,
   },
   credentialsMessage: {
     padding: '6px 8px', borderRadius: 8,
-    background: 'rgba(14,165,233,0.1)', border: '1px solid rgba(2,132,199,0.28)',
-    color: '#0369A1', fontSize: 11, fontWeight: 900, lineHeight: 1.25,
+    background: 'var(--terminal-info-soft)', border: '1px solid var(--terminal-info-border)',
+    color: 'var(--terminal-info)', fontSize: 11, fontWeight: 700, lineHeight: 1.25,
   },
   credentialRow: {
     display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: 8,
     alignItems: 'center', padding: '8px 9px', borderRadius: 10,
-    background: 'rgba(255,255,255,0.42)', border: '1px solid rgba(92,58,33,0.18)',
+    background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)',
   },
   credentialMain: {
     display: 'flex', alignItems: 'center', gap: 8, minWidth: 0,
   },
   credentialLogo: {
     width: 24, height: 24, objectFit: 'contain', borderRadius: 6, flexShrink: 0,
-    background: 'rgba(255,255,255,0.5)',
+    background: 'var(--terminal-chip-overlay)',
   },
   credentialTitleLine: {
     display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', minWidth: 0,
   },
   credentialName: {
-    color: '#5C3A21', fontSize: 12, fontWeight: 900,
+    color: 'var(--terminal-text)', fontSize: 12, fontWeight: 700,
   },
   credentialSub: {
-    color: '#77573d', fontSize: 10, fontWeight: 800, lineHeight: 1.2, marginTop: 2,
+    color: 'var(--terminal-text-secondary)', fontSize: 10, fontWeight: 600, lineHeight: 1.2, marginTop: 2,
   },
   credentialActiveChip: {
     padding: '2px 7px', borderRadius: 999,
-    background: 'rgba(76,175,80,0.15)', border: '1px solid rgba(46,125,50,0.45)',
-    color: '#2E7D32', fontSize: 8, fontWeight: 900, textTransform: 'uppercase', letterSpacing: 0.35,
+    background: 'var(--terminal-long-soft)', border: '1px solid var(--terminal-long-border)',
+    color: 'var(--terminal-long-strong)', fontSize: 8, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.35,
   },
   credentialIdleChip: {
     padding: '2px 7px', borderRadius: 999,
-    background: 'rgba(163,144,106,0.16)', border: '1px solid rgba(163,144,106,0.45)',
-    color: '#77573d', fontSize: 8, fontWeight: 900, textTransform: 'uppercase', letterSpacing: 0.35,
+    background: 'var(--terminal-surface-muted)', border: '1px solid var(--terminal-border)',
+    color: 'var(--terminal-text-secondary)', fontSize: 8, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.35,
   },
   credentialActions: {
     display: 'flex', alignItems: 'center', gap: 5,
   },
-  credentialPrimaryBtn: {
-    height: 30, padding: '0 10px', borderRadius: 8, cursor: 'pointer',
-    background: 'linear-gradient(180deg, #0EA5E9 0%, #0369A1 100%)',
-    border: '2px solid #025b8d', color: '#fff', fontSize: 10, fontWeight: 900,
-    textShadow: '0 1px 0 rgba(0,0,0,0.35)',
-  },
-  credentialClearBtn: {
-    height: 30, padding: '0 8px', borderRadius: 8, cursor: 'pointer',
-    background: '#f4e8d1', border: '2px solid #c9b590',
-    color: '#77573d', fontSize: 10, fontWeight: 900,
-  },
+  credentialPrimaryBtn: uiButton('primary', { minHeight: 30, height: 30, padding: '0 10px', fontSize: 10 }),
+  credentialClearBtn: uiButton('secondary', { minHeight: 30, height: 30, padding: '0 8px', fontSize: 10 }),
   aiBox: {
     display: 'flex', flexDirection: 'column', gap: 8,
     padding: '10px 12px', borderRadius: 12,
-    background: '#e8dfc8', border: '2px solid #d4c8b0',
+    background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)',
   },
   aiCreateRow: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: 8, alignItems: 'center' },
   aiInput: {
-    minWidth: 0, height: 34, borderRadius: 8, border: '2px solid #d4c8b0',
-    background: '#fffaf0', color: '#5C3A21', padding: '0 10px',
-    fontSize: 12, fontWeight: 800, outline: 'none',
+    minWidth: 0, height: 34, borderRadius: 8, border: '1px solid var(--terminal-border)',
+    background: 'var(--terminal-surface)', color: 'var(--terminal-text)', padding: '0 10px',
+    fontSize: 12, fontWeight: 600, outline: 'none',
   },
-  aiPrimaryBtn: {
-    height: 34, padding: '0 12px', borderRadius: 8, cursor: 'pointer',
-    background: 'linear-gradient(180deg, #0EA5E9 0%, #0369A1 100%)',
-    border: '2px solid #025b8d', color: '#fff', fontSize: 11, fontWeight: 900,
-  },
+  aiPrimaryBtn: uiButton('primary', { minHeight: 34, height: 34, padding: '0 12px', fontSize: 11 }),
   aiSecretBox: {
     display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: 8,
     alignItems: 'center', padding: 8, borderRadius: 8,
-    background: 'rgba(255,255,255,0.55)', border: '1px solid rgba(92,58,33,0.2)',
+    background: 'var(--terminal-surface-muted)', border: '1px solid var(--terminal-border)',
   },
   aiSecretText: {
     minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-    fontFamily: 'monospace', fontSize: 11, fontWeight: 800, color: '#5C3A21',
+    fontFamily: 'monospace', fontSize: 11, fontWeight: 600, color: 'var(--terminal-text)',
   },
-  aiCopyBtn: {
-    padding: '6px 9px', borderRadius: 7, cursor: 'pointer',
-    background: '#6ab344', border: '2px solid #4d7a2e',
-    color: '#fff', fontSize: 10, fontWeight: 900,
-  },
-  aiHint: { fontSize: 10, fontWeight: 800, color: '#77573d', lineHeight: 1.35 },
-  aiMono: { fontFamily: 'monospace', color: '#5C3A21' },
-  aiError: { fontSize: 11, fontWeight: 800, color: '#B71C1C' },
+  aiCopyBtn: uiButton('secondary', { minHeight: 30, padding: '6px 9px', fontSize: 10 }),
+  aiHint: { fontSize: 10, fontWeight: 600, color: 'var(--terminal-text-secondary)', lineHeight: 1.35 },
+  aiMono: { fontFamily: 'monospace', color: 'var(--terminal-text)' },
+  aiError: { fontSize: 11, fontWeight: 600, color: 'var(--terminal-short-strong)' },
   aiKeyList: { display: 'flex', flexDirection: 'column', gap: 6 },
   aiKeyRow: {
     display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: 8, alignItems: 'center',
-    padding: '7px 8px', borderRadius: 8, background: 'rgba(255,255,255,0.42)',
-    border: '1px solid rgba(92,58,33,0.16)',
+    padding: '7px 8px', borderRadius: 8, background: 'var(--terminal-surface)',
+    border: '1px solid var(--terminal-border)',
   },
   aiKeyName: {
     overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-    fontSize: 12, fontWeight: 900, color: '#5C3A21',
+    fontSize: 12, fontWeight: 700, color: 'var(--terminal-text)',
   },
   aiKeyMeta: {
     overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-    fontFamily: 'monospace', fontSize: 10, color: '#77573d', marginTop: 1,
+    fontFamily: 'monospace', fontSize: 10, color: 'var(--terminal-text-secondary)', marginTop: 1,
   },
-  aiRevokeBtn: {
-    padding: '5px 8px', borderRadius: 7, cursor: 'pointer',
-    background: '#f4e8d1', border: '1px solid #c9b590',
-    color: '#77573d', fontSize: 10, fontWeight: 900,
-  },
-  disconnectBtn: {
-    padding: '5px 12px', background: '#E53935', border: '2px solid #B71C1C',
-    borderRadius: 8, color: '#fff', fontWeight: 800, fontSize: 11, cursor: 'pointer',
-  },
+  aiRevokeBtn: uiButton('danger', { minHeight: 30, padding: '5px 8px', fontSize: 10 }),
+  disconnectBtn: uiButton('danger', { minHeight: 32, padding: '5px 12px', fontSize: 11 }),
   sectionTitle: {
-    fontSize: 12, fontWeight: 800, color: '#a3906a', textTransform: 'uppercase',
-    marginTop: 6, paddingBottom: 2, borderBottom: '2px solid #e8dfc8',
+    fontSize: 12, fontWeight: 600, color: 'var(--terminal-text-muted)', textTransform: 'uppercase',
+    marginTop: 6, paddingBottom: 2, borderBottom: '1px solid var(--terminal-surface-subtle)',
   },
   statRow: {
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-    padding: '8px 12px', background: '#e8dfc8', border: '2px solid #d4c8b0', borderRadius: 10,
+    padding: '8px 12px', background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 10,
   },
-  statLabel: { fontSize: 13, fontWeight: 700, color: '#77573d' },
-  statVal: { fontSize: 15, fontWeight: 900, color: '#5C3A21' },
+  statLabel: { fontSize: 13, fontWeight: 700, color: 'var(--terminal-text-secondary)' },
+  statVal: { fontSize: 15, fontWeight: 700, color: 'var(--terminal-text)' },
   resCard: {
     flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2,
-    background: '#e8dfc8', border: '2px solid #d4c8b0', borderRadius: 10, padding: 8,
+    background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 10, padding: 8,
   },
-  resVal: { fontSize: 16, fontWeight: 900 },
-  resLabel: { fontSize: 10, fontWeight: 700, color: '#a3906a', textTransform: 'uppercase' },
+  resVal: { fontSize: 16, fontWeight: 700 },
+  resLabel: { fontSize: 10, fontWeight: 700, color: 'var(--terminal-text-muted)', textTransform: 'uppercase' },
   goldCard: {
-    background: 'linear-gradient(135deg, #FFF8E1 0%, #FFE082 100%)',
-    border: '3px solid #FFB300', borderRadius: 14, padding: 14,
+    background: 'var(--terminal-warning-soft)',
+    border: '1px solid var(--terminal-warning-border)', borderRadius: 14, padding: 14,
   },
   goldStat: {
     flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1,
-    background: 'rgba(255,255,255,0.5)', borderRadius: 8, padding: 6,
+    background: 'var(--terminal-chip-overlay)', borderRadius: 8, padding: 6,
   },
   historyRow: {
     display: 'flex', alignItems: 'center', gap: 8,
-    padding: '7px 12px', background: '#e8dfc8', border: '2px solid #d4c8b0', borderRadius: 8,
+    padding: '7px 12px', background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 8,
   },
 };

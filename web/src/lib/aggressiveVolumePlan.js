@@ -29,17 +29,17 @@ const ADVERSE_BPS = 0.5;
 
 /** Per-venue fee + planning leverage. Runtime may raise toward maxLeverage. */
 const VENUE = {
-  // Bot MM cap 20× (venue 40×); raise-lev when deposit is tight.
-  decibel: { makerBps: 1, takerBps: 4, leverage: 10, maxLeverage: 20, sizeMax: AGGRESSIVE_ORDER_SIZE_ABS_MAX, rts: DECIBEL_ROUND_TRIPS_PER_DAY },
-  ostium: { makerBps: 5, takerBps: 8, leverage: 10, maxLeverage: 50, sizeMax: AGGRESSIVE_ORDER_SIZE_ABS_MAX, rts: ROUND_TRIPS_PER_DAY },
-  pacifica: { makerBps: 2, takerBps: 4, leverage: 10, maxLeverage: 50, sizeMax: AGGRESSIVE_ORDER_SIZE_ABS_MAX, rts: PACIFICA_ROUND_TRIPS_PER_DAY },
-  hyperliquid: { makerBps: -2, takerBps: 5, leverage: 10, maxLeverage: 25, sizeMax: AGGRESSIVE_ORDER_SIZE_ABS_MAX, rts: ROUND_TRIPS_PER_DAY },
-  grvt: { makerBps: -2, takerBps: 5, leverage: 10, maxLeverage: 25, sizeMax: AGGRESSIVE_ORDER_SIZE_ABS_MAX, rts: ROUND_TRIPS_PER_DAY },
+  // Match backend venue_mm_max_leverage + order_size_abs_max (profile soft stops).
+  decibel: { makerBps: 1, takerBps: 4, leverage: 10, maxLeverage: 40, sizeMax: 1000, calmSizeMax: 1000, rts: DECIBEL_ROUND_TRIPS_PER_DAY, minOrderUsd: 10 },
+  ostium: { makerBps: 5, takerBps: 8, leverage: 10, maxLeverage: 50, sizeMax: AGGRESSIVE_ORDER_SIZE_ABS_MAX, calmSizeMax: 5000, rts: ROUND_TRIPS_PER_DAY },
+  pacifica: { makerBps: 2, takerBps: 4, leverage: 10, maxLeverage: 50, sizeMax: AGGRESSIVE_ORDER_SIZE_ABS_MAX, calmSizeMax: 5000, rts: PACIFICA_ROUND_TRIPS_PER_DAY },
+  hyperliquid: { makerBps: -2, takerBps: 5, leverage: 10, maxLeverage: 25, sizeMax: AGGRESSIVE_ORDER_SIZE_ABS_MAX, calmSizeMax: 5000, rts: ROUND_TRIPS_PER_DAY },
+  grvt: { makerBps: -2, takerBps: 5, leverage: 10, maxLeverage: 25, sizeMax: AGGRESSIVE_ORDER_SIZE_ABS_MAX, calmSizeMax: 5000, rts: ROUND_TRIPS_PER_DAY },
   // Live 2026-07: Nado gateway min_size ≈ $100 notional.
-  nado: { makerBps: 1, takerBps: 3, leverage: 10, maxLeverage: 20, sizeMax: AGGRESSIVE_ORDER_SIZE_ABS_MAX, rts: ROUND_TRIPS_PER_DAY, minOrderUsd: 100 },
-  risex: { makerBps: 2, takerBps: 5, leverage: 10, maxLeverage: 25, sizeMax: AGGRESSIVE_ORDER_SIZE_ABS_MAX, rts: ROUND_TRIPS_PER_DAY },
-  avantis: { makerBps: 3, takerBps: 6, leverage: 10, maxLeverage: 50, sizeMax: AGGRESSIVE_ORDER_SIZE_ABS_MAX, rts: ROUND_TRIPS_PER_DAY },
-  default: { makerBps: 2, takerBps: 5, leverage: 10, maxLeverage: 20, sizeMax: AGGRESSIVE_ORDER_SIZE_ABS_MAX, rts: ROUND_TRIPS_PER_DAY },
+  nado: { makerBps: 1, takerBps: 3, leverage: 10, maxLeverage: 20, sizeMax: AGGRESSIVE_ORDER_SIZE_ABS_MAX, calmSizeMax: 5000, rts: ROUND_TRIPS_PER_DAY, minOrderUsd: 100 },
+  risex: { makerBps: 2, takerBps: 5, leverage: 10, maxLeverage: 25, sizeMax: AGGRESSIVE_ORDER_SIZE_ABS_MAX, calmSizeMax: 5000, rts: ROUND_TRIPS_PER_DAY, minOrderUsd: 12 },
+  avantis: { makerBps: 3, takerBps: 6, leverage: 10, maxLeverage: 50, sizeMax: AGGRESSIVE_ORDER_SIZE_ABS_MAX, calmSizeMax: 5000, rts: ROUND_TRIPS_PER_DAY },
+  default: { makerBps: 2, takerBps: 5, leverage: 10, maxLeverage: 20, sizeMax: AGGRESSIVE_ORDER_SIZE_ABS_MAX, calmSizeMax: 5000, rts: ROUND_TRIPS_PER_DAY },
 };
 
 /** Dual-leg max notional per side: available × lev × 0.85 / 2 */
@@ -47,6 +47,32 @@ export function dualLegMaxNotionalUsd(availableUsd, leverage) {
   const avail = Math.max(0, Number(availableUsd) || 0);
   const lev = Math.max(1, Number(leverage) || 1);
   return (avail * lev * 0.85) / 2;
+}
+
+/**
+ * Equity-aware quote leverage (mirrors Rust `quote_leverage_for_equity`):
+ * small deposit → venue max; large deposit → ~10×.
+ */
+export function quoteLeverageForEquity(exchangeId, availableUsd) {
+  const v = venuePlanDefaults(exchangeId);
+  const max = Math.max(1, Math.floor(Number(v.maxLeverage) || 20));
+  const key = venueKey(exchangeId);
+  const curved = key === 'risex' || key === 'nado' || key === 'decibel';
+  if (!curved) return Math.max(1, Math.floor(Number(v.leverage) || 10));
+  const e = Math.max(0, Number(availableUsd) || 0);
+  let fromCurve;
+  if (e < 50) fromCurve = max;
+  else if (e < 150) fromCurve = Math.floor((max * 4) / 5);
+  else if (e < 400) fromCurve = Math.floor((max * 3) / 5);
+  else if (e < 1500) fromCurve = Math.min(12, max);
+  else fromCurve = Math.min(10, max);
+  return Math.max(1, Math.min(max, fromCurve));
+}
+
+/** Soft abs max for Calm Trade Size slider (mirrors backend order_size_abs_max Calm). */
+export function calmOrderSizeAbsMax(exchangeId) {
+  const v = venuePlanDefaults(exchangeId);
+  return Math.max(50, Number(v.calmSizeMax) || 5000);
 }
 
 /**
@@ -122,14 +148,22 @@ export function estimateCostPer1M(exchangeId) {
 }
 
 /**
- * Live realized cost/$1M from bot/portfolio stats when volume is large enough.
+ * Fee cost in USD per $1M notional: fees / volume * 1_000_000.
+ * Do NOT pass net PnL here — that under/over-states trading fee cost.
  */
-export function observedCostPer1M(volumeUsd, netCostUsd) {
+export function feeCostPer1M(volumeUsd, feesUsd) {
   const vol = Number(volumeUsd);
-  const cost = Number(netCostUsd);
-  if (!Number.isFinite(vol) || vol < 1_000) return null;
-  if (!Number.isFinite(cost)) return null;
-  return (Math.abs(cost) / vol) * 1_000_000;
+  const fees = Number(feesUsd);
+  if (!Number.isFinite(vol) || vol < 100) return null;
+  if (!Number.isFinite(fees) || fees < 0) return null;
+  return (fees / vol) * 1_000_000;
+}
+
+/**
+ * @deprecated Use feeCostPer1M(volume, fees). Kept for callers that already pass fee totals.
+ */
+export function observedCostPer1M(volumeUsd, feesOrCostUsd) {
+  return feeCostPer1M(volumeUsd, Math.abs(Number(feesOrCostUsd)));
 }
 
 /**
@@ -155,18 +189,20 @@ export function planAggressiveVolume({
   const minOrder = Math.max(5, Number(v.minOrderUsd) || 5);
   tradeSize = snap(tradeSize, minOrder, sizeMax, 5);
 
-  // Raise leverage toward max before shrinking size (small deposits).
+  // Equity curve first (more dep → less lev), then raise only if size still tight.
   const avail = Math.max(0, Number(availableUsd) || 0);
-  let leverage = Math.max(1, v.leverage || 10);
-  const maxLev = Math.max(leverage, v.maxLeverage || leverage);
+  const maxLev = Math.max(1, v.maxLeverage || v.leverage || 10);
+  let leverage = avail > 0
+    ? quoteLeverageForEquity(exchangeId, avail)
+    : Math.max(1, v.leverage || 10);
   if (avail > 0) {
-    leverage = leverageForDualLeg(avail, tradeSize, minOrder, leverage, maxLev);
-    const maxLeg = dualLegMaxNotionalUsd(avail, leverage);
-    if (maxLeg < minOrder) {
+    const curveCap = dualLegMaxNotionalUsd(avail, quoteLeverageForEquity(exchangeId, avail));
+    if (curveCap < minOrder) {
       tradeSize = 0;
-    } else if (tradeSize > maxLeg) {
-      tradeSize = snap(maxLeg, minOrder, sizeMax, 5);
+    } else if (tradeSize > curveCap) {
+      tradeSize = snap(Math.min(curveCap, sizeMax), minOrder, sizeMax, 5);
     }
+    leverage = leverageForDualLeg(avail, tradeSize || minOrder, minOrder, leverage, maxLev);
   }
 
   if (tradeSize <= 0) {

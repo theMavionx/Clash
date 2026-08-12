@@ -1,5 +1,6 @@
 import { Component } from 'react';
 import { reportLazyChunkError } from '../lib/clientLogger';
+import { uiButton } from '../styles/theme';
 
 function forceReload() {
   const current = new URL(window.location.href);
@@ -83,21 +84,15 @@ const styles = {
     justifyContent: 'center',
     gap: 12,
     background: '#0a0b1a',
-    color: '#fff',
+    color: 'var(--terminal-on-accent)',
     fontFamily: '"Inter", "Segoe UI", sans-serif',
   },
   title: {
     fontSize: 18,
-    fontWeight: 900,
+    fontWeight: 700,
   },
   button: {
-    padding: '10px 22px',
-    borderRadius: 8,
-    border: '2px solid #5a3a22',
-    background: 'linear-gradient(180deg, #ffe066, #e6b800)',
-    color: '#2e1c10',
-    fontWeight: 900,
-    cursor: 'pointer',
+    ...uiButton('primary', { minHeight: 42, padding: '10px 22px' }),
     pointerEvents: 'auto',
     touchAction: 'manipulation',
     position: 'relative',

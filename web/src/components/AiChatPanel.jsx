@@ -10,6 +10,7 @@ import { useDex } from '../contexts/DexContext';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { useAptosWallet } from '../contexts/AptosWalletContext';
 import { useOptionalPrivy } from './PrivyAuthProvider';
+import { uiButton, uiIconButton } from '../styles/theme';
 import EvmWalletModal from './EvmWalletModal';
 import { BASE_CHAIN_ID, TRADING_ADDRESS, ensureBaseChain } from '../lib/avantisContract';
 import { ARBITRUM_CHAIN_ID, ensureArbitrumChain } from '../lib/gmxConfig';
@@ -778,15 +779,14 @@ const HERMES_CHAT_CSS = `
 .hermes-status-dot { animation: hermesStatusPulse 1.6s ease-in-out infinite; }
 .hermes-typing-dot { animation: hermesTypingDot 1s ease-in-out infinite; }
 .hermes-starter-chip:hover {
-  border-color: #c2851b !important;
-  background: #fff6dc !important;
+  border-color: var(--terminal-brand-strong) !important;
+  background: var(--terminal-surface) !important;
   transform: translateY(-1px);
 }
 .hermes-send-glow:not(:disabled) {
   box-shadow:
-    0 4px 12px rgba(31,109,52,0.4),
-    0 0 0 3px rgba(145,223,125,0.25),
-    inset 0 1px 0 rgba(255,255,255,0.45) !important;
+    0 4px 12px var(--terminal-shadow),
+    0 0 0 3px var(--terminal-brand-ring) !important;
 }
 .hermes-send-glow:not(:disabled):hover { transform: translateY(-1px); }
 .hermes-send-glow:disabled { filter: grayscale(0.4) brightness(0.95); }
@@ -797,11 +797,7 @@ const HERMES_CHAT_CSS = `
 }
 /* BEST-VALUE ribbon on the premium product card — slow shimmer so it
    reads as "the one to pick" without aggressive blink. */
-@keyframes hermesRibbonShimmer {
-  0%, 100% { box-shadow: 0 2px 5px rgba(0,0,0,0.25), 0 0 0 0 rgba(255,215,0,0); }
-  50%      { box-shadow: 0 2px 8px rgba(0,0,0,0.28), 0 0 0 4px rgba(255,215,0,0.35); }
-}
-.hermes-ribbon { animation: hermesRibbonShimmer 2.6s ease-in-out infinite; }
+.hermes-ribbon { box-shadow: 0 2px 6px var(--terminal-shadow-soft); }
 /* Step-rail spinner (same animation as Bridge modal's nft-mint-ring-spin
    but scoped locally so this file doesn't depend on NftMintPanel being
    mounted simultaneously). */
@@ -2941,7 +2937,7 @@ function AiChatPanel({ onClose }) {
 }
 
 // ── Parchment palette ────────────────────────────────────────────────
-// Matches the Battle Shop / NFT panels: cream parchment `#fdf8e7` body,
+// Matches the Battle Shop / NFT panels: cream parchment `var(--terminal-surface)` body,
 // brown borders, gold accents, red close pill. Same visual language as
 // the rest of the in-game UI so the AI panel doesn't feel like a
 // foreign element.
@@ -3692,18 +3688,18 @@ function AiShopModal({
                       // Scroll / message icon — three stacked lines on a
                       // parchment scroll glyph.
                       <svg width="26" height="26" viewBox="0 0 32 32" fill="none">
-                        <path d="M5 7c0-1.5 1-2 2-2h18c2 0 3 1.5 3 3v15c0 2-1.5 3-3 3H10c-2 0-3-1.5-3-3V8H5z" fill="#fff7df" stroke="#5C3A21" strokeWidth="2" strokeLinejoin="round"/>
-                        <path d="M11 11h12M11 16h12M11 21h8" stroke="#5C3A21" strokeWidth="2" strokeLinecap="round"/>
-                        <path d="M5 7c0 1.5 1 2 2 2h2V5H7c-1 0-2 .5-2 2z" fill="#c2851b" stroke="#5C3A21" strokeWidth="2" strokeLinejoin="round"/>
+                        <path d="M5 7c0-1.5 1-2 2-2h18c2 0 3 1.5 3 3v15c0 2-1.5 3-3 3H10c-2 0-3-1.5-3-3V8H5z" fill="var(--terminal-surface)" stroke="var(--terminal-text)" strokeWidth="2" strokeLinejoin="round"/>
+                        <path d="M11 11h12M11 16h12M11 21h8" stroke="var(--terminal-text)" strokeWidth="2" strokeLinecap="round"/>
+                        <path d="M5 7c0 1.5 1 2 2 2h2V5H7c-1 0-2 .5-2 2z" fill="var(--terminal-brand-strong)" stroke="var(--terminal-text)" strokeWidth="2" strokeLinejoin="round"/>
                       </svg>
                     ) : (
                       // Crown with infinity — premium / lifetime.
                       <svg width="28" height="28" viewBox="0 0 32 32" fill="none">
-                        <path d="M4 22l3-12 5 6 4-8 4 8 5-6 3 12z" fill="#FFD700" stroke="#5C3A21" strokeWidth="2" strokeLinejoin="round"/>
-                        <rect x="4" y="22" width="24" height="4" rx="1" fill="#c2851b" stroke="#5C3A21" strokeWidth="2"/>
-                        <circle cx="7" cy="9" r="1.4" fill="#fff" stroke="#5C3A21" strokeWidth="1.2"/>
-                        <circle cx="16" cy="6"  r="1.6" fill="#fff" stroke="#5C3A21" strokeWidth="1.2"/>
-                        <circle cx="25" cy="9" r="1.4" fill="#fff" stroke="#5C3A21" strokeWidth="1.2"/>
+                        <path d="M4 22l3-12 5 6 4-8 4 8 5-6 3 12z" fill="#FFD700" stroke="var(--terminal-text)" strokeWidth="2" strokeLinejoin="round"/>
+                        <rect x="4" y="22" width="24" height="4" rx="1" fill="var(--terminal-brand-strong)" stroke="var(--terminal-text)" strokeWidth="2"/>
+                        <circle cx="7" cy="9" r="1.4" fill="var(--terminal-surface)" stroke="var(--terminal-text)" strokeWidth="1.2"/>
+                        <circle cx="16" cy="6"  r="1.6" fill="var(--terminal-surface)" stroke="var(--terminal-text)" strokeWidth="1.2"/>
+                        <circle cx="25" cy="9" r="1.4" fill="var(--terminal-surface)" stroke="var(--terminal-text)" strokeWidth="1.2"/>
                       </svg>
                     )}
                   </div>
@@ -3782,16 +3778,14 @@ const styles = {
   panel: {
     width: 'min(420px, calc(100vw - 24px))',
     height: 'min(640px, calc(100vh - 32px))',
-    background:
-      'radial-gradient(120% 80% at 0% 0%, rgba(255,247,205,0.85) 0%, rgba(253,248,231,0) 55%),' +
-      ' linear-gradient(180deg, #fdf8e7 0%, #f7ecc9 100%)',
-    border: '2px solid #d4c8b0',
+    background: 'var(--terminal-surface)',
+    border: '1px solid var(--terminal-border)',
     borderRadius: 18,
     boxShadow:
       '0 24px 60px rgba(0,0,0,0.45),' +
-      ' 0 2px 0 rgba(255,255,255,0.55) inset,' +
-      ' 0 0 0 1px rgba(255,255,255,0.4) inset',
-    color: '#5C3A21',
+      ' 0 2px 0 var(--terminal-chip-overlay) inset,' +
+      ' 0 0 0 1px var(--terminal-chip-overlay) inset',
+    color: 'var(--terminal-text)',
     display: 'flex',
     flexDirection: 'column',
     overflow: 'hidden',
@@ -3840,8 +3834,8 @@ const styles = {
   dragHandle: {
     width: 40, height: 4,
     borderRadius: 3,
-    background: 'linear-gradient(90deg, #bba882 0%, #d4c8b0 50%, #bba882 100%)',
-    boxShadow: '0 1px 0 rgba(255,255,255,0.4)',
+    background: 'linear-gradient(90deg, var(--terminal-border-strong) 0%, var(--terminal-border) 50%, var(--terminal-border-strong) 100%)',
+    boxShadow: '0 1px 0 var(--terminal-chip-overlay)',
   },
   header: {
     display: 'flex',
@@ -3878,9 +3872,9 @@ const styles = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    background: '#fff6dc',
+    background: 'var(--terminal-surface)',
     boxShadow:
-      '0 0 0 1.5px #d4c8b0,' +
+      '0 0 0 1.5px var(--terminal-border),' +
       ' 0 0 0 4px rgba(255,215,0,0.18),' +
       ' 0 2px 4px rgba(95,58,33,0.18)',
     flexShrink: 0,
@@ -3901,7 +3895,7 @@ const styles = {
     border: '1px solid rgba(76,175,80,0.35)',
     color: '#1B5E20',
     fontSize: 9,
-    fontWeight: 900,
+    fontWeight: 700,
     letterSpacing: 0.4,
     textTransform: 'uppercase',
     lineHeight: 1,
@@ -3910,7 +3904,7 @@ const styles = {
     display: 'inline-block',
     width: 6, height: 6,
     borderRadius: '50%',
-    background: '#4caf50',
+    background: 'var(--terminal-long)',
   },
   // Resize grip — sits in the bottom-right corner of the desktop panel.
   // Two diagonal stripes drawn with linear-gradient so it doesn't need
@@ -3925,35 +3919,35 @@ const styles = {
     background:
       'linear-gradient(135deg,' +
       ' transparent 0%, transparent 40%,' +
-      ' #bba882 40%, #bba882 50%,' +
+      ' var(--terminal-border-strong) 40%, var(--terminal-border-strong) 50%,' +
       ' transparent 50%, transparent 65%,' +
-      ' #bba882 65%, #bba882 75%,' +
+      ' var(--terminal-border-strong) 65%, var(--terminal-border-strong) 75%,' +
       ' transparent 75%, transparent 100%)',
     borderBottomRightRadius: 14,
     opacity: 0.7,
   },
   title: {
-    fontSize: 15, fontWeight: 900, color: '#5C3A21',
+    fontSize: 15, fontWeight: 700, color: 'var(--terminal-text)',
     letterSpacing: 0.2,
     lineHeight: 1.1,
-    textShadow: '0 1px 0 rgba(255,255,255,0.45)',
+    textShadow: 'none',
   },
   sub: {
-    fontSize: 11, fontWeight: 800, color: '#1B5E20',
+    fontSize: 11, fontWeight: 600, color: '#1B5E20',
     textTransform: 'uppercase', letterSpacing: 0.4, marginTop: 2,
     display: 'inline-flex', alignItems: 'center', gap: 5,
   },
   onlineDot: {
     display: 'inline-block',
     width: 8, height: 8, borderRadius: '50%',
-    background: '#4caf50',
+    background: 'var(--terminal-long)',
     boxShadow: '0 0 6px rgba(76,175,80,0.7)',
   },
   close: {
     width: 22, height: 22, borderRadius: '50%',
-    background: '#E53935', border: '1.5px solid #fff', color: '#fff',
+    background: 'var(--terminal-short)', border: '1.5px solid var(--terminal-surface)', color: 'var(--terminal-on-accent)',
     cursor: 'pointer', padding: 0,
-    fontSize: 12, fontWeight: 900, lineHeight: '20px',
+    fontSize: 12, fontWeight: 700, lineHeight: '20px',
     boxShadow: '0 1px 2px rgba(0,0,0,0.25)',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
   },
@@ -3967,9 +3961,9 @@ const styles = {
     margin: '10px 14px 0',
     padding: '8px 10px',
     borderRadius: 12,
-    border: '1px solid #d7c49a',
-    background: 'linear-gradient(180deg, #fff7df 0%, #f6e8bf 100%)',
-    boxShadow: '0 1px 3px rgba(95,58,33,0.10), inset 0 1px 0 rgba(255,255,255,0.55)',
+    border: '1px solid var(--terminal-border)',
+    background: 'var(--terminal-surface-subtle)',
+    boxShadow: 'none',
     flex: '0 0 auto',
   },
   quotaSummaryCompact: {
@@ -3984,14 +3978,14 @@ const styles = {
   },
   quotaSummaryTitle: {
     fontSize: 11,
-    fontWeight: 900,
-    color: '#5C3A21',
+    fontWeight: 700,
+    color: 'var(--terminal-text)',
     textTransform: 'uppercase',
     letterSpacing: 0.35,
   },
   quotaSummaryTotal: {
     fontSize: 11,
-    fontWeight: 900,
+    fontWeight: 700,
     color: '#1B5E20',
     whiteSpace: 'nowrap',
   },
@@ -4014,8 +4008,8 @@ const styles = {
   quotaStatLabel: {
     display: 'block',
     fontSize: 9,
-    fontWeight: 850,
-    color: '#8b6b3f',
+    fontWeight: 600,
+    color: 'var(--terminal-text-secondary)',
     whiteSpace: 'nowrap',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
@@ -4024,8 +4018,8 @@ const styles = {
     display: 'block',
     marginTop: 2,
     fontSize: 13,
-    fontWeight: 950,
-    color: '#3a1f00',
+    fontWeight: 700,
+    color: 'var(--terminal-text)',
     whiteSpace: 'nowrap',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
@@ -4037,40 +4031,18 @@ const styles = {
     flexShrink: 0,
   },
   shopToggle: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    border: '1.5px solid #b88a26',
-    borderRadius: 10,
-    background: 'linear-gradient(180deg, #fff2c2 0%, #d99d27 100%)',
-    color: '#3a1f00',
-    padding: '6px 11px 6px 9px',
-    fontSize: 11,
-    fontWeight: 900,
+    ...uiButton('secondary', { minHeight: 34, padding: '6px 11px 6px 9px', fontSize: 11 }),
     letterSpacing: 0.3,
     textTransform: 'uppercase',
-    cursor: 'pointer',
-    boxShadow: '0 2px 5px rgba(194,133,27,0.35), inset 0 1px 0 rgba(255,255,255,0.5)',
-    transition: 'transform 120ms ease, box-shadow 120ms ease',
   },
 
   // ── Shop modal (separate overlay above the chat panel) ───────────
   // Centered modal with parchment palette + cream body. The chat
   // backdrop sits at zIndex 80 so this layer sits above it.
   newChatToggle: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    border: '1.5px solid #9f8b66',
-    borderRadius: 10,
-    background: 'linear-gradient(180deg, #fffaf0 0%, #e2d4a8 100%)',
-    color: '#4b351c',
-    padding: '6px 10px 6px 8px',
-    fontSize: 11,
-    fontWeight: 900,
+    ...uiButton('secondary', { minHeight: 34, padding: '6px 10px 6px 8px', fontSize: 11 }),
     letterSpacing: 0.25,
     textTransform: 'uppercase',
-    cursor: 'pointer',
-    boxShadow: '0 2px 4px rgba(95,58,33,0.16), inset 0 1px 0 rgba(255,255,255,0.55)',
-    transition: 'transform 120ms ease, box-shadow 120ms ease, opacity 120ms ease',
     whiteSpace: 'nowrap',
   },
   newChatToggleMobile: {
@@ -4096,15 +4068,13 @@ const styles = {
   shopPanel: {
     width: 'min(460px, calc(100vw - 24px))',
     maxHeight: 'min(640px, calc(100vh - 32px))',
-    background:
-      'radial-gradient(120% 80% at 0% 0%, rgba(255,247,205,0.85) 0%, rgba(253,248,231,0) 55%),' +
-      ' linear-gradient(180deg, #fdf8e7 0%, #f7ecc9 100%)',
-    border: '2px solid #d4c8b0',
+    background: 'var(--terminal-surface)',
+    border: '1px solid var(--terminal-border)',
     borderRadius: 18,
     boxShadow:
       '0 28px 60px rgba(0,0,0,0.55),' +
-      ' 0 2px 0 rgba(255,255,255,0.55) inset',
-    color: '#5C3A21',
+      ' 0 2px 0 var(--terminal-chip-overlay) inset',
+    color: 'var(--terminal-text)',
     display: 'flex',
     flexDirection: 'column',
     overflow: 'hidden',
@@ -4116,9 +4086,8 @@ const styles = {
     justifyContent: 'space-between',
     gap: 10,
     padding: '12px 14px 12px',
-    borderBottom: '1px solid #e6dcc1',
-    background:
-      'linear-gradient(180deg, rgba(255,246,220,0.95) 0%, rgba(255,246,220,0.55) 100%)',
+    borderBottom: '1px solid var(--terminal-border)',
+    background: 'var(--terminal-surface-subtle)',
     flex: '0 0 auto',
   },
   shopHeaderLeft: {
@@ -4128,11 +4097,11 @@ const styles = {
     display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0,
   },
   shopHeaderTitle: {
-    fontSize: 15, fontWeight: 900, color: '#5C3A21',
+    fontSize: 15, fontWeight: 700, color: 'var(--terminal-text)',
     lineHeight: 1.1, letterSpacing: 0.2,
   },
   shopHeaderSub: {
-    fontSize: 11, fontWeight: 700, color: '#8b6b3f',
+    fontSize: 11, fontWeight: 700, color: 'var(--terminal-text-secondary)',
     lineHeight: 1.2,
   },
   shopBody: {
@@ -4143,13 +4112,11 @@ const styles = {
     display: 'flex',
     flexDirection: 'column',
     gap: 10,
-    scrollbarWidth: 'thin',
-    scrollbarColor: '#bba882 #fdf8e7',
   },
   shopToggleActive: {
-    background: 'linear-gradient(180deg, #c4f4ff 0%, #4ca5d2 100%)',
-    border: '1px solid #377d9f',
-    color: '#07324a',
+    background: 'var(--terminal-brand-soft)',
+    border: '1px solid var(--terminal-orange)',
+    color: 'var(--terminal-brand-text)',
   },
   mobileTopBar: {
     display: 'flex',
@@ -4174,8 +4141,6 @@ const styles = {
     display: 'flex',
     flexDirection: 'column',
     gap: 10,
-    scrollbarWidth: 'thin',
-    scrollbarColor: '#bba882 #fdf8e7',
   },
   shopSummary: {
     display: 'flex',
@@ -4184,34 +4149,34 @@ const styles = {
     gap: 10,
     padding: '8px 10px',
     borderRadius: 10,
-    background: '#fff6dc',
-    border: '1px solid #d4c8b0',
+    background: 'var(--terminal-surface)',
+    border: '1px solid var(--terminal-border)',
   },
   shopSummaryTitle: {
     fontSize: 13,
-    fontWeight: 900,
-    color: '#5C3A21',
+    fontWeight: 700,
+    color: 'var(--terminal-text)',
   },
   shopSummarySub: {
     fontSize: 11,
-    fontWeight: 800,
-    color: '#1B5E20',
+    fontWeight: 600,
+    color: 'var(--terminal-long)',
     marginTop: 2,
   },
   shopReadyBadge: {
     padding: '5px 8px',
     borderRadius: 999,
     fontSize: 10,
-    fontWeight: 900,
-    color: '#7a1f1c',
-    background: '#fdecea',
+    fontWeight: 700,
+    color: 'var(--terminal-short-strong)',
+    background: 'var(--terminal-short-soft)',
     border: '1px solid #e8a39f',
     whiteSpace: 'nowrap',
   },
   shopReadyBadgeOn: {
-    color: '#145a1f',
-    background: '#e4f8dc',
-    border: '1px solid #8ecf84',
+    color: 'var(--terminal-long)',
+    background: 'var(--terminal-long-soft)',
+    border: '1px solid var(--terminal-long)',
   },
   shopSection: {
     display: 'flex',
@@ -4225,8 +4190,8 @@ const styles = {
     gap: 8,
     padding: '0 2px',
     fontSize: 10,
-    fontWeight: 900,
-    color: '#8b6b3f',
+    fontWeight: 700,
+    color: 'var(--terminal-text-secondary)',
     textTransform: 'uppercase',
     letterSpacing: 0,
   },
@@ -4241,18 +4206,19 @@ const styles = {
     gap: 6,
   },
   shopChainBtn: {
-    border: '1px solid #d4c8b0',
+    border: '1px solid var(--terminal-border)',
     borderRadius: 9,
-    background: '#fff9e9',
-    color: '#5C3A21',
+    background: 'var(--terminal-surface)',
+    color: 'var(--terminal-text)',
     padding: '7px 6px',
     cursor: 'pointer',
     textAlign: 'left',
     minWidth: 0,
   },
   shopChainBtnActive: {
-    background: 'linear-gradient(180deg, #dff5ff 0%, #9fd7ee 100%)',
-    border: '1px solid #377d9f',
+    background: 'var(--terminal-brand-soft)',
+    border: '1px solid var(--terminal-orange)',
+    color: 'var(--terminal-brand-text)',
   },
   shopChainLocked: {
     cursor: 'default',
@@ -4260,7 +4226,7 @@ const styles = {
   shopChainLabel: {
     display: 'block',
     fontSize: 11,
-    fontWeight: 900,
+    fontWeight: 700,
     whiteSpace: 'nowrap',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
@@ -4269,8 +4235,8 @@ const styles = {
     display: 'block',
     marginTop: 2,
     fontSize: 9,
-    fontWeight: 800,
-    color: '#8b6b3f',
+    fontWeight: 600,
+    color: 'var(--terminal-text-secondary)',
     whiteSpace: 'nowrap',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
@@ -4288,10 +4254,10 @@ const styles = {
   },
   shopPaymentBtn: {
     minWidth: 62,
-    border: '1.5px solid #d4c8b0',
+    border: '1.5px solid var(--terminal-border)',
     borderRadius: 11,
-    background: '#fffaf0',
-    color: '#5C3A21',
+    background: 'var(--terminal-surface)',
+    color: 'var(--terminal-text)',
     padding: '7px 10px',
     cursor: 'pointer',
     display: 'flex',
@@ -4301,12 +4267,10 @@ const styles = {
     boxShadow: '0 1px 2px rgba(95,58,33,0.05)',
   },
   shopPaymentBtnActive: {
-    background: 'linear-gradient(180deg, #fff2c2 0%, #ffd76a 100%)',
-    border: '1.5px solid #c2851b',
-    boxShadow:
-      '0 2px 6px rgba(194,133,27,0.30),' +
-      ' 0 0 0 3px rgba(255,215,0,0.18),' +
-      ' inset 0 1px 0 rgba(255,255,255,0.5)',
+    background: 'var(--terminal-brand-soft)',
+    border: '1px solid var(--terminal-orange)',
+    color: 'var(--terminal-brand-text)',
+    boxShadow: 'none',
   },
   // Per-token icon circle on the left side of each payment chip — same
   // approach as NftMintPanel.optionBadge so token icons all read
@@ -4329,7 +4293,7 @@ const styles = {
     display: 'block',
   },
   shopPaymentLogoFallback: {
-    fontSize: 11, fontWeight: 900, color: '#5C3A21',
+    fontSize: 11, fontWeight: 700, color: 'var(--terminal-text)',
   },
   shopPaymentText: {
     display: 'flex', flexDirection: 'column', minWidth: 0,
@@ -4338,22 +4302,22 @@ const styles = {
   shopPaymentLabel: {
     display: 'block',
     fontSize: 11,
-    fontWeight: 900,
+    fontWeight: 700,
   },
   shopPaymentSub: {
     display: 'block',
     fontSize: 9,
-    fontWeight: 800,
-    color: '#8b6b3f',
+    fontWeight: 600,
+    color: 'var(--terminal-text-secondary)',
   },
   shopNotice: {
-    color: '#5C3A21',
-    background: '#fff2c2',
+    color: 'var(--terminal-text)',
+    background: 'var(--terminal-brand-soft)',
     border: '1px solid #d7a536',
     borderRadius: 9,
     padding: '7px 9px',
     fontSize: 12,
-    fontWeight: 800,
+    fontWeight: 600,
   },
   jobsGrid: {
     display: 'grid',
@@ -4368,26 +4332,26 @@ const styles = {
   },
   jobsSectionTitle: {
     fontSize: 11,
-    fontWeight: 950,
-    color: '#8b6b3f',
+    fontWeight: 700,
+    color: 'var(--terminal-text-secondary)',
     textTransform: 'uppercase',
     letterSpacing: 0.35,
   },
   jobsEmpty: {
-    border: '1px dashed #d4c8b0',
+    border: '1px dashed var(--terminal-border)',
     borderRadius: 10,
     padding: 12,
-    color: '#8b6b3f',
+    color: 'var(--terminal-text-secondary)',
     fontSize: 12,
-    fontWeight: 800,
-    background: 'rgba(255,250,240,0.58)',
+    fontWeight: 600,
+    background: 'var(--terminal-surface-subtle)',
   },
   jobCard: {
-    border: '1px solid #d4c8b0',
+    border: '1px solid var(--terminal-border)',
     borderRadius: 12,
     padding: 10,
-    background: 'linear-gradient(180deg, #fffaf0 0%, #fff2d4 100%)',
-    boxShadow: '0 1px 3px rgba(95,58,33,0.10)',
+    background: 'var(--terminal-surface-subtle)',
+    boxShadow: 'none',
     display: 'flex',
     flexDirection: 'column',
     gap: 7,
@@ -4400,67 +4364,67 @@ const styles = {
   },
   jobName: {
     fontSize: 13,
-    fontWeight: 950,
-    color: '#3a1f00',
+    fontWeight: 700,
+    color: 'var(--terminal-text)',
   },
   jobMeta: {
     marginTop: 2,
     fontSize: 10,
-    fontWeight: 800,
-    color: '#8b6b3f',
+    fontWeight: 600,
+    color: 'var(--terminal-text-secondary)',
   },
   jobStatus: {
     flexShrink: 0,
     borderRadius: 999,
-    border: '1px solid #d4c8b0',
-    background: '#f7ecc9',
-    color: '#6b4a20',
+    border: '1px solid var(--terminal-border)',
+    background: 'var(--terminal-warning-soft)',
+    color: 'var(--terminal-warning)',
     padding: '3px 7px',
     fontSize: 9,
-    fontWeight: 950,
+    fontWeight: 700,
     textTransform: 'uppercase',
   },
   jobStatusActive: {
-    border: '1px solid #8ecf84',
-    background: '#e4f8dc',
-    color: '#145a1f',
+    border: '1px solid var(--terminal-long)',
+    background: 'var(--terminal-long-soft)',
+    color: 'var(--terminal-long)',
   },
   jobStatusBlocked: {
     border: '1px solid #e8a39f',
-    background: '#fdecea',
-    color: '#7a1f1c',
+    background: 'var(--terminal-short-soft)',
+    color: 'var(--terminal-short-strong)',
   },
   jobInstruction: {
     fontSize: 12,
     lineHeight: 1.35,
     fontWeight: 750,
-    color: '#5C3A21',
+    color: 'var(--terminal-text)',
   },
   jobFacts: {
     display: 'flex',
     flexWrap: 'wrap',
     gap: 6,
     fontSize: 10,
-    fontWeight: 850,
-    color: '#8b6b3f',
+    fontWeight: 600,
+    color: 'var(--terminal-text-secondary)',
   },
   jobSummary: {
     borderRadius: 8,
-    background: '#fff6dc',
+    background: 'var(--terminal-surface)',
     border: '1px solid rgba(139,107,63,0.2)',
     padding: '6px 7px',
     fontSize: 11,
     fontWeight: 750,
-    color: '#5C3A21',
+    color: 'var(--terminal-text)',
   },
   jobError: {
     borderRadius: 8,
-    background: '#fdecea',
+    background: 'var(--terminal-short-soft)',
     border: '1px solid #e8a39f',
     padding: '6px 7px',
     fontSize: 11,
-    fontWeight: 850,
-    color: '#7a1f1c',
+    fontWeight: 600,
+    color: 'var(--terminal-short-strong)',
   },
   jobActions: {
     display: 'flex',
@@ -4469,42 +4433,28 @@ const styles = {
     gap: 6,
   },
   jobSmallButton: {
-    border: '1px solid #bba882',
-    borderRadius: 9,
-    background: 'linear-gradient(180deg, #fffaf0 0%, #e2d4a8 100%)',
-    color: '#4b351c',
-    padding: '6px 9px',
-    fontSize: 10,
-    fontWeight: 900,
-    cursor: 'pointer',
+    ...uiButton('secondary', { minHeight: 32, padding: '6px 9px', fontSize: 10 }),
   },
   jobDangerButton: {
-    border: '1px solid #b23b32',
-    borderRadius: 9,
-    background: 'linear-gradient(180deg, #ff8d83 0%, #d9342c 100%)',
-    color: '#fff',
-    padding: '6px 9px',
-    fontSize: 10,
-    fontWeight: 900,
-    cursor: 'pointer',
+    ...uiButton('danger', { minHeight: 32, padding: '6px 9px', fontSize: 10 }),
   },
   jobLabel: {
     display: 'flex',
     flexDirection: 'column',
     gap: 4,
     fontSize: 10,
-    fontWeight: 900,
-    color: '#8b6b3f',
+    fontWeight: 700,
+    color: 'var(--terminal-text-secondary)',
     textTransform: 'uppercase',
     letterSpacing: 0.25,
   },
   jobInput: {
     width: '100%',
     boxSizing: 'border-box',
-    border: '1px solid #d4c8b0',
+    border: '1px solid var(--terminal-border)',
     borderRadius: 9,
-    background: '#fffaf0',
-    color: '#3a1f00',
+    background: 'var(--terminal-surface)',
+    color: 'var(--terminal-text)',
     padding: '8px 9px',
     fontSize: 12,
     fontWeight: 750,
@@ -4522,19 +4472,19 @@ const styles = {
     gap: 6,
   },
   jobSegmentButton: {
-    border: '1px solid #d4c8b0',
+    border: '1px solid var(--terminal-border)',
     borderRadius: 9,
-    background: '#fffaf0',
-    color: '#5C3A21',
+    background: 'var(--terminal-surface)',
+    color: 'var(--terminal-text)',
     padding: '7px 6px',
     fontSize: 10,
-    fontWeight: 900,
+    fontWeight: 700,
     cursor: 'pointer',
   },
   jobSegmentActive: {
-    border: '1px solid #377d9f',
-    background: 'linear-gradient(180deg, #dff5ff 0%, #9fd7ee 100%)',
-    color: '#07324a',
+    border: '1px solid var(--terminal-orange)',
+    background: 'var(--terminal-brand-soft)',
+    color: 'var(--terminal-brand-text)',
   },
   aiProductList: {
     display: 'flex',
@@ -4553,37 +4503,30 @@ const styles = {
     gap: 12,
     padding: '12px 13px',
     borderRadius: 14,
-    border: '1.5px solid #d4c8b0',
-    background: 'linear-gradient(180deg, #fffaf0 0%, #fff2d4 100%)',
-    boxShadow:
-      '0 2px 6px rgba(95,58,33,0.08),' +
-      ' inset 0 1px 0 rgba(255,255,255,0.55)',
+    border: '1px solid var(--terminal-border)',
+    background: 'var(--terminal-surface)',
+    boxShadow: 'var(--terminal-shadow-card)',
   },
   // Premium card — stronger gold halo + warmer border so it visibly
   // out-weighs the starter pack at a glance. The halo size grows with
   // the card (0/0/0 + 4px) so the eye lands here first.
   aiProductCardPremium: {
-    border: '2px solid #c2851b',
-    background:
-      'linear-gradient(180deg, #fff2c2 0%, #ffd76a 100%)',
-    boxShadow:
-      '0 6px 18px rgba(194,133,27,0.32),' +
-      ' 0 0 0 4px rgba(255,215,0,0.22),' +
-      ' inset 0 1px 0 rgba(255,255,255,0.6)',
+    border: '1px solid var(--terminal-orange)',
+    background: 'var(--terminal-brand-soft)',
+    boxShadow: 'var(--terminal-shadow-card)',
   },
   aiProductRibbon: {
     position: 'absolute',
     top: -8, right: 12,
     padding: '3px 8px',
     fontSize: 9,
-    fontWeight: 900,
-    color: '#3a1f00',
-    background: 'linear-gradient(180deg, #fff2c2 0%, #ffd76a 100%)',
-    border: '1.5px solid #5C3A21',
-    borderRadius: 6,
+    fontWeight: 700,
+    color: 'var(--terminal-brand-text)',
+    background: 'var(--terminal-brand-soft)',
+    border: '1px solid var(--terminal-brand-border)',
+    borderRadius: 999,
     letterSpacing: 0.6,
-    boxShadow: '0 2px 5px rgba(0,0,0,0.25)',
-    textShadow: '0 1px 0 rgba(255,255,255,0.45)',
+    textShadow: 'none',
   },
 
   // Two icon container variants share the same shape but different
@@ -4594,9 +4537,8 @@ const styles = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    background: 'linear-gradient(180deg, #fff6dc 0%, #ead9b2 100%)',
-    border: '2px solid #9f8759',
-    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.55), 0 2px 3px rgba(0,0,0,0.1)',
+    background: 'var(--terminal-surface-muted)',
+    border: '1px solid var(--terminal-border)',
     flexShrink: 0,
   },
   aiProductIconPro: {
@@ -4605,18 +4547,17 @@ const styles = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    background: 'linear-gradient(180deg, #fff7c2 0%, #ffd049 100%)',
-    border: '2px solid #c2851b',
-    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.55), 0 2px 5px rgba(194,133,27,0.4)',
+    background: 'var(--terminal-brand-soft)',
+    border: '1px solid var(--terminal-brand-border)',
     flexShrink: 0,
   },
 
   aiProductInfo: { minWidth: 0 },
   aiProductTitle: {
-    fontSize: 14, fontWeight: 900, color: '#5C3A21', lineHeight: 1.2,
+    fontSize: 14, fontWeight: 700, color: 'var(--terminal-text)', lineHeight: 1.2,
   },
   aiProductSub: {
-    fontSize: 11, fontWeight: 700, color: '#7a5a30',
+    fontSize: 11, fontWeight: 700, color: 'var(--terminal-text-secondary)',
     marginTop: 2, lineHeight: 1.35,
   },
   aiProductMeta: {
@@ -4626,31 +4567,31 @@ const styles = {
     flexWrap: 'wrap',
     marginTop: 6,
     fontSize: 11,
-    fontWeight: 800,
-    color: '#5C3A21',
+    fontWeight: 600,
+    color: 'var(--terminal-text)',
   },
   aiProductPrice: {
     fontSize: 15,
-    fontWeight: 900,
-    color: '#1B5E20',
-    textShadow: '0 1px 0 rgba(255,255,255,0.4)',
+    fontWeight: 700,
+    color: 'var(--terminal-long)',
+    textShadow: 'none',
   },
-  aiProductDot: { color: '#bba882', fontWeight: 900 },
-  aiProductMetaMain: { color: '#5C3A21' },
+  aiProductDot: { color: 'var(--terminal-border-strong)', fontWeight: 700 },
+  aiProductMetaMain: { color: 'var(--terminal-text)' },
   aiProductPerMsg: {
     fontSize: 10, fontWeight: 700,
-    color: '#8b6b3f',
+    color: 'var(--terminal-text-secondary)',
     fontStyle: 'italic',
   },
   aiProductBonus: {
     padding: '2px 6px',
     borderRadius: 6,
-    background: '#1B5E20',
-    color: '#fff7df',
+    background: 'var(--terminal-long-soft)',
+    color: 'var(--terminal-long)',
+    border: '1px solid var(--terminal-long-border)',
     fontSize: 9.5,
-    fontWeight: 900,
+    fontWeight: 700,
     letterSpacing: 0.3,
-    boxShadow: '0 1px 2px rgba(0,0,0,0.2)',
   },
 
   // Column that stacks the optional CLASH-bonus chip on top of the Buy
@@ -4663,33 +4604,17 @@ const styles = {
     gap: 5,
   },
   aiBuyBtn: {
-    border: '1.5px solid #9d7a31',
-    borderRadius: 10,
-    background: '#e8dcc1',
-    color: '#6b5630',
-    padding: '9px 12px',
-    fontSize: 12,
-    fontWeight: 900,
-    cursor: 'not-allowed',
+    ...uiButton('neutral', { padding: '9px 12px', fontSize: 12, cursor: 'not-allowed' }),
     whiteSpace: 'nowrap',
-    letterSpacing: 0.3,
     minWidth: 102,
   },
   aiBuyBtnReady: {
-    cursor: 'pointer',
-    color: '#fff',
-    border: '2px solid #1f6d34',
-    background: 'linear-gradient(180deg, #91df7d 0%, #3b9b41 100%)',
-    textShadow: '0 1px 1px rgba(0,0,0,0.4)',
-    boxShadow: '0 3px 6px rgba(0,0,0,0.2), inset 0 1px 0 rgba(255,255,255,0.4)',
+    ...uiButton('primary', { padding: '9px 12px', fontSize: 12, minWidth: 102 }),
   },
   // Premium CTA — same green base but with a warmer halo so the
   // "best value" card's button has more visual weight than the pack's.
   aiBuyBtnPremium: {
-    boxShadow:
-      '0 3px 8px rgba(0,0,0,0.25),' +
-      ' 0 0 0 3px rgba(255,215,0,0.28),' +
-      ' inset 0 1px 0 rgba(255,255,255,0.5)',
+    boxShadow: '0 2px 6px var(--terminal-shadow)',
   },
   messages: {
     flex: 1, minHeight: 0,
@@ -4698,16 +4623,12 @@ const styles = {
     display: 'flex',
     flexDirection: 'column',
     gap: 10,
-    scrollbarWidth: 'thin',
-    scrollbarColor: '#bba882 #fdf8e7',
   },
   bubble: {
     padding: '8px 12px',
-    border: '1px solid #d4c8b0',
+    border: '1px solid var(--terminal-border)',
     lineHeight: 1.45,
-    boxShadow:
-      '0 1px 2px rgba(95,58,33,0.08),' +
-      ' inset 0 1px 0 rgba(255,255,255,0.45)',
+    boxShadow: '0 1px 2px var(--terminal-shadow-soft)',
     minWidth: 0,
   },
   userBubble: {
@@ -4715,30 +4636,30 @@ const styles = {
     // mint/list buttons elsewhere — feels like the player's own voice.
     // Asymmetric bottom-right corner gives the bubble a "speech tail"
     // anchored to the right edge.
-    background: 'linear-gradient(180deg, #fff2c2 0%, #ffd76a 100%)',
-    border: '1px solid #c2851b',
-    color: '#3a1f00',
+    background: 'var(--terminal-brand-soft)',
+    border: '1px solid var(--terminal-brand-border)',
+    color: 'var(--terminal-text)',
     borderRadius: '14px 14px 4px 14px',
   },
   aiBubble: {
     // Cream parchment with a hairline darker bottom edge — the
     // asymmetric bottom-left corner mirrors the user bubble's tail so
     // the two voices read as opposite halves of the same conversation.
-    background: 'linear-gradient(180deg, #fffaee 0%, #fff2cf 100%)',
-    color: '#5C3A21',
+    background: 'var(--terminal-surface-subtle)',
+    color: 'var(--terminal-text)',
     borderRadius: '14px 14px 14px 4px',
   },
   role: {
-    fontSize: 10, color: '#8b6b3f', fontWeight: 900,
+    fontSize: 10, color: 'var(--terminal-text-secondary)', fontWeight: 700,
     textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 3,
   },
   text: { fontSize: 13, fontWeight: 600, whiteSpace: 'pre-wrap' },
-  meta: { fontSize: 10, color: '#9f8759', marginTop: 6, fontStyle: 'italic' },
+  meta: { fontSize: 10, color: 'var(--terminal-text-muted)', marginTop: 6, fontStyle: 'italic' },
   error: {
     margin: '0 12px 8px',
-    color: '#7a1f1c',
-    background: '#fdecea',
-    border: '1px solid #E53935',
+    color: 'var(--terminal-short-strong)',
+    background: 'var(--terminal-short-soft)',
+    border: '1px solid var(--terminal-short)',
     borderRadius: 8,
     padding: '6px 9px',
     fontSize: 12, fontWeight: 700,
@@ -4751,9 +4672,8 @@ const styles = {
     // Soft gradient fade into the message stream so the composer reads
     // as floating above the content, not as a hard band stuck to the
     // bottom edge.
-    background:
-      'linear-gradient(180deg, rgba(245,236,210,0) 0%, #f5ecd2 30%, #ead9b2 100%)',
-    borderTop: '1px solid #e6dcc1',
+    background: 'var(--terminal-surface)',
+    borderTop: '1px solid var(--terminal-border)',
     flex: '0 0 auto',
   },
   // Pill wrapper around the textarea — owns the border, background and
@@ -4764,22 +4684,18 @@ const styles = {
     minWidth: 0,
     display: 'flex',
     alignItems: 'stretch',
-    background: '#fffaf0',
-    border: '1.5px solid #d4c8b0',
+    background: 'var(--terminal-surface)',
+    border: '1px solid var(--terminal-border)',
     borderRadius: 14,
     padding: '0 4px 0 12px',
-    boxShadow:
-      'inset 0 1px 2px rgba(95,58,33,0.08),' +
-      ' 0 1px 0 rgba(255,255,255,0.6)',
+    boxShadow: 'none',
     transition: 'border-color 0.18s ease, box-shadow 0.18s ease',
   },
   inputWrapActive: {
     // Use the full `border` shorthand here so React doesn't warn about
     // mixing shorthand (base) + longhand (active) during re-render.
-    border: '1.5px solid #c2851b',
-    boxShadow:
-      'inset 0 1px 2px rgba(95,58,33,0.06),' +
-      ' 0 0 0 3px rgba(194,133,27,0.18)',
+    border: '1px solid var(--terminal-orange)',
+    boxShadow: '0 0 0 3px var(--terminal-brand-ring)',
   },
   input: {
     flex: 1,
@@ -4787,7 +4703,7 @@ const styles = {
     border: 'none',
     borderRadius: 0,
     background: 'transparent',
-    color: '#3a2810',
+    color: 'var(--terminal-text)',
     padding: '9px 4px 9px 0',
     outline: 'none',
     fontSize: 13.5,
@@ -4797,35 +4713,32 @@ const styles = {
     minHeight: 40,
     maxHeight: 120,
     overflowY: 'auto',
-    scrollbarWidth: 'thin',
-    scrollbarColor: '#bba882 #fffaf0',
     height: 40,
   },
   send: {
     width: 44, height: 44,
     minWidth: 44,
     padding: 0,
-    border: '1.5px solid #1f6d34',
+    border: '1px solid var(--terminal-border-strong)',
     borderRadius: 12,
     // Disabled / resting tone keeps the green identity but flattens
     // it; the `.hermes-send-glow:not(:disabled)` rule and sendReady
     // override paint the live glow.
-    background: 'linear-gradient(180deg, #b8e6a5 0%, #5fb466 100%)',
-    color: '#fff',
+    background: 'var(--terminal-surface-muted)',
+    color: 'var(--terminal-text-disabled)',
     cursor: 'pointer',
-    boxShadow:
-      '0 2px 4px rgba(0,0,0,0.18),' +
-      ' inset 0 1px 0 rgba(255,255,255,0.4)',
+    boxShadow: 'none',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     flexShrink: 0,
   },
   sendReady: {
-    background: 'linear-gradient(180deg, #91df7d 0%, #2f8b3a 100%)',
-    // Full shorthand again — base has `border: '1.5px solid #1f6d34'`,
+    background: 'var(--terminal-orange)',
+    // Full shorthand again — base has `border: '1.5px solid var(--terminal-long-strong)'`,
     // mixing shorthand + longhand makes React warn on transitions.
-    border: '1.5px solid #1f6d34',
+    border: '1px solid var(--terminal-brand-strong)',
+    color: 'var(--terminal-on-accent)',
   },
 
   // ── Welcome / empty state ─────────────────────────────────────────
@@ -4837,12 +4750,9 @@ const styles = {
     margin: '6px 4px 2px',
     padding: '14px 14px 12px',
     borderRadius: 16,
-    border: '1.5px solid #e2d4a8',
-    background:
-      'radial-gradient(120% 80% at 50% 0%, #fff7d9 0%, #fdf3c8 50%, #f5e9b8 100%)',
-    boxShadow:
-      '0 3px 10px rgba(95,58,33,0.10),' +
-      ' inset 0 1px 0 rgba(255,255,255,0.6)',
+    border: '1px solid var(--terminal-border)',
+    background: 'var(--terminal-surface-subtle)',
+    boxShadow: 'var(--terminal-shadow-card)',
     textAlign: 'center',
     width: '100%',
     maxWidth: 420,
@@ -4855,23 +4765,23 @@ const styles = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    background: '#fff6dc',
+    background: 'var(--terminal-surface)',
     boxShadow:
-      '0 0 0 2px #d4c8b0,' +
+      '0 0 0 2px var(--terminal-border),' +
       ' 0 0 0 6px rgba(255,215,0,0.18),' +
       ' 0 3px 6px rgba(95,58,33,0.2)',
   },
   welcomeTitle: {
     fontSize: 15,
-    fontWeight: 900,
-    color: '#5C3A21',
+    fontWeight: 700,
+    color: 'var(--terminal-text)',
     letterSpacing: 0.3,
     margin: '4px 0 4px',
   },
   welcomeSub: {
     fontSize: 11.5,
     fontWeight: 600,
-    color: '#7a5a30',
+    color: 'var(--terminal-text-secondary)',
     lineHeight: 1.45,
     margin: '0 4px 10px',
   },
@@ -4885,11 +4795,11 @@ const styles = {
     appearance: 'none',
     cursor: 'pointer',
     textAlign: 'left',
-    border: '1.5px solid #d4c8b0',
-    background: '#fffaf0',
+    border: '1.5px solid var(--terminal-border)',
+    background: 'var(--terminal-surface)',
     borderRadius: 11,
     padding: '8px 10px',
-    color: '#5C3A21',
+    color: 'var(--terminal-text)',
     fontFamily: 'inherit',
     boxShadow: '0 1px 2px rgba(95,58,33,0.06)',
     display: 'flex',
@@ -4898,15 +4808,15 @@ const styles = {
   },
   starterChipLabel: {
     fontSize: 10,
-    fontWeight: 900,
-    color: '#c2851b',
+    fontWeight: 700,
+    color: 'var(--terminal-brand-strong)',
     letterSpacing: 0.6,
     textTransform: 'uppercase',
   },
   starterChipText: {
     fontSize: 12,
     fontWeight: 700,
-    color: '#5C3A21',
+    color: 'var(--terminal-text)',
     lineHeight: 1.35,
   },
 
@@ -4933,9 +4843,9 @@ const styles = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    background: '#fff6dc',
+    background: 'var(--terminal-surface)',
     boxShadow:
-      '0 0 0 1px #d4c8b0,' +
+      '0 0 0 1px var(--terminal-border),' +
       ' 0 1px 2px rgba(95,58,33,0.18)',
     marginBottom: 2,
     flexShrink: 0,
@@ -4957,7 +4867,7 @@ const styles = {
     display: 'inline-block',
     width: 5, height: 5,
     borderRadius: '50%',
-    background: '#8b6b3f',
+    background: 'var(--terminal-text-secondary)',
     willChange: 'transform, opacity',
   },
 };
@@ -4977,16 +4887,16 @@ const topUpStyles = {
   },
   panel: {
     width: 380, maxWidth: '100%', maxHeight: '88vh',
-    background: '#fdf8e7',
-    border: '5px solid #d4c8b0', borderRadius: 18,
+    background: 'var(--terminal-surface)',
+    border: '1px solid var(--terminal-border)', borderRadius: 18,
     boxShadow: '0 18px 50px rgba(0,0,0,0.45)',
     display: 'flex', flexDirection: 'column',
     fontFamily: 'inherit', overflow: 'hidden',
   },
   panelWide: {
     width: 460, maxWidth: '100%', maxHeight: '88vh',
-    background: '#fdf8e7',
-    border: '5px solid #d4c8b0', borderRadius: 18,
+    background: 'var(--terminal-surface)',
+    border: '1px solid var(--terminal-border)', borderRadius: 18,
     boxShadow: '0 18px 50px rgba(0,0,0,0.45)',
     display: 'flex', flexDirection: 'column',
     fontFamily: 'inherit', overflow: 'hidden',
@@ -4994,19 +4904,13 @@ const topUpStyles = {
   header: {
     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
     padding: '12px 14px',
-    background: '#d4c8b0', borderBottom: '3px solid #bba882',
+    background: 'var(--terminal-border)', borderBottom: '1px solid var(--terminal-border-strong)',
   },
-  title: { fontSize: 16, fontWeight: 900, color: '#5C3A21' },
-  closeBtn: {
-    width: 26, height: 26, borderRadius: '50%',
-    background: '#E53935', border: '2px solid #fff', color: '#fff',
-    cursor: 'pointer', padding: 0,
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-  },
+  title: { fontSize: 16, fontWeight: 700, color: 'var(--terminal-text)' },
+  closeBtn: uiIconButton('danger', 30),
   body: {
     padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 12,
     overflowY: 'auto',
-    scrollbarWidth: 'thin', scrollbarColor: '#bba882 #fdf8e7',
   },
 
   stepList: {
@@ -5017,80 +4921,80 @@ const topUpStyles = {
   stepBubble: {
     width: 28, height: 28, borderRadius: '50%',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
-    fontSize: 13, fontWeight: 900, flexShrink: 0,
-    background: '#e8dfc8', color: '#9f8759', border: '2px solid #d4c8b0',
+    fontSize: 13, fontWeight: 700, flexShrink: 0,
+    background: 'var(--terminal-surface-subtle)', color: 'var(--terminal-text-muted)', border: '1px solid var(--terminal-border)',
     transition: 'background 0.2s, border-color 0.2s',
   },
   stepBubble_pending: {},
   stepBubble_active: {
-    background: '#fff6dc', border: '2px solid #c2851b', color: '#5C3A21',
+    background: 'var(--terminal-surface)', border: '1px solid var(--terminal-brand-strong)', color: 'var(--terminal-text)',
     boxShadow: '0 0 0 3px rgba(255,217,122,0.4)',
   },
   stepBubble_done: {
-    background: 'linear-gradient(180deg, #91df7d 0%, #3b9b41 100%)',
-    border: '2px solid #1f6d34', color: '#fff',
+    background: 'linear-gradient(180deg, var(--terminal-long-border) 0%, var(--terminal-long) 100%)',
+    border: '1px solid var(--terminal-long-strong)', color: 'var(--terminal-on-accent)',
   },
   stepBubble_error: {
-    background: '#E53935', border: '2px solid #7f0000', color: '#fff',
+    background: 'var(--terminal-short)', border: '1px solid var(--terminal-short-strong)', color: 'var(--terminal-on-accent)',
   },
   stepText: { display: 'flex', flexDirection: 'column', minWidth: 0, lineHeight: 1.2 },
-  stepLabel: { fontSize: 13, fontWeight: 800, color: '#7a5a30' },
-  stepLabel_active: { color: '#5C3A21' },
-  stepLabel_done:   { color: '#5C3A21' },
-  stepLabel_error:  { color: '#b71c1c' },
+  stepLabel: { fontSize: 13, fontWeight: 600, color: 'var(--terminal-text-secondary)' },
+  stepLabel_active: { color: 'var(--terminal-text)' },
+  stepLabel_done:   { color: 'var(--terminal-text)' },
+  stepLabel_error:  { color: 'var(--terminal-short-strong)' },
   stepLabel_pending: {},
-  stepHint: { fontSize: 11, color: '#9f8759', fontWeight: 700 },
+  stepHint: { fontSize: 11, color: 'var(--terminal-text-muted)', fontWeight: 700 },
 
   // Spinner inside the "active" step bubble — same look as the bridge
   // modal's, driven by the local `.hermes-step-spinner` class.
   spinner: {
     width: 12, height: 12, borderRadius: '50%',
-    borderWidth: 2,
+    borderWidth: 1,
     borderStyle: 'solid',
     borderColor: 'rgba(92,58,33,0.25)',
-    borderTopColor: '#5C3A21',
+    borderTopColor: 'var(--terminal-text)',
     display: 'inline-block',
   },
 
   successBox: {
     position: 'relative',
     padding: '14px 12px', borderRadius: 12,
-    background: 'linear-gradient(180deg, #f1fbe5 0%, #d9efc0 100%)',
-    border: '2px solid #7db85a', color: '#1f3e0a',
+    background: 'linear-gradient(180deg, var(--terminal-long-soft) 0%, var(--terminal-long-soft) 100%)',
+    border: '1px solid var(--terminal-long-border)', color: 'var(--terminal-long-strong)',
     display: 'flex', flexDirection: 'column', alignItems: 'center',
     gap: 4, overflow: 'visible',
     textAlign: 'center',
   },
   successHeadline: {
-    fontSize: 16, fontWeight: 900, color: '#1B5E20',
-    textShadow: '0 1px 0 rgba(255,255,255,0.5)',
+    fontSize: 16, fontWeight: 700, color: '#1B5E20',
+    textShadow: 'none',
   },
   successSub: { fontSize: 12, fontWeight: 700, color: '#3a6320' },
 
   resultBox: {
     padding: '10px 12px', borderRadius: 12,
-    background: '#fff6dc', border: '2px solid #d4c8b0',
-    color: '#5C3A21',
+    background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)',
+    color: 'var(--terminal-text)',
   },
   resultHeadline: {
-    fontSize: 13, fontWeight: 900, color: '#5C3A21', lineHeight: 1.35,
+    fontSize: 13, fontWeight: 700, color: 'var(--terminal-text)', lineHeight: 1.35,
   },
   resultMono: {
     fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
-    fontSize: 12, fontWeight: 800, color: '#3a2810',
+    fontSize: 12, fontWeight: 600, color: 'var(--terminal-text)',
   },
 
   pendingBox: {
     padding: '9px 10px', borderRadius: 10,
-    background: '#fffaf0', border: '2px solid #d4c8b0',
-    color: '#6d4b23', fontSize: 12, fontWeight: 700, lineHeight: 1.35,
+    background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)',
+    color: 'var(--terminal-text-secondary)', fontSize: 12, fontWeight: 700, lineHeight: 1.35,
   },
 
   policyBox: {
     padding: '11px 12px',
     borderRadius: 12,
-    background: 'linear-gradient(180deg, #fffaf0 0%, #fff2cf 100%)',
-    border: '2px solid #d4c8b0',
+    background: 'var(--terminal-surface-subtle)',
+    border: '1px solid var(--terminal-border)',
     display: 'flex',
     flexDirection: 'column',
     gap: 10,
@@ -5103,23 +5007,23 @@ const topUpStyles = {
   },
   policyTitle: {
     fontSize: 13,
-    fontWeight: 900,
-    color: '#5C3A21',
+    fontWeight: 700,
+    color: 'var(--terminal-text)',
   },
   policySub: {
     marginTop: 2,
     fontSize: 11,
     fontWeight: 700,
-    color: '#8b6b3f',
+    color: 'var(--terminal-text-secondary)',
     lineHeight: 1.35,
   },
   policyPill: {
     padding: '4px 8px',
     borderRadius: 999,
-    background: '#1B5E20',
-    color: '#fff7df',
+    background: 'var(--terminal-long)',
+    color: 'var(--terminal-on-accent)',
     fontSize: 10,
-    fontWeight: 900,
+    fontWeight: 700,
     whiteSpace: 'nowrap',
   },
   fieldBlock: {
@@ -5129,8 +5033,8 @@ const topUpStyles = {
   },
   fieldLabel: {
     fontSize: 10,
-    fontWeight: 900,
-    color: '#c2851b',
+    fontWeight: 700,
+    color: 'var(--terminal-brand-strong)',
     letterSpacing: 0.5,
     textTransform: 'uppercase',
   },
@@ -5142,24 +5046,24 @@ const topUpStyles = {
   },
   range: {
     width: '100%',
-    accentColor: '#c2851b',
+    accentColor: 'var(--terminal-brand-strong)',
   },
   numberInput: {
     width: '100%',
     boxSizing: 'border-box',
-    border: '2px solid #d4c8b0',
+    border: '1px solid var(--terminal-border)',
     borderRadius: 8,
-    background: '#fffaf0',
-    color: '#3a2810',
+    background: 'var(--terminal-surface)',
+    color: 'var(--terminal-text)',
     padding: '6px 7px',
     fontSize: 12,
-    fontWeight: 900,
+    fontWeight: 700,
     outline: 'none',
   },
   unitText: {
     fontSize: 11,
-    fontWeight: 900,
-    color: '#5C3A21',
+    fontWeight: 700,
+    color: 'var(--terminal-text)',
   },
   segmented: {
     display: 'grid',
@@ -5167,19 +5071,19 @@ const topUpStyles = {
     gap: 6,
   },
   segmentButton: {
-    border: '2px solid #d4c8b0',
+    border: '1px solid var(--terminal-border)',
     borderRadius: 9,
-    background: '#fffaf0',
-    color: '#7a5a30',
+    background: 'var(--terminal-surface)',
+    color: 'var(--terminal-text-secondary)',
     padding: '7px 8px',
     fontSize: 11,
-    fontWeight: 900,
+    fontWeight: 700,
     cursor: 'pointer',
   },
   segmentButtonActive: {
-    border: '2px solid #c2851b',
-    background: 'linear-gradient(180deg, #fff2c2 0%, #ffd76a 100%)',
-    color: '#3a1f00',
+    border: '1px solid var(--terminal-orange)',
+    background: 'var(--terminal-brand-soft)',
+    color: 'var(--terminal-brand-text)',
   },
   policySummary: {
     padding: '7px 9px',
@@ -5188,13 +5092,13 @@ const topUpStyles = {
     border: '1px solid rgba(139,107,63,0.22)',
     color: '#6d4b23',
     fontSize: 11,
-    fontWeight: 800,
+    fontWeight: 600,
     lineHeight: 1.35,
   },
 
   errorBox: {
     padding: '8px 10px', borderRadius: 10,
-    background: '#fdecea', border: '2px solid #E53935', color: '#7a1f1c',
+    background: 'var(--terminal-short-soft)', border: '1px solid var(--terminal-short)', color: 'var(--terminal-short-strong)',
     fontSize: 12, fontWeight: 700,
   },
 
@@ -5203,41 +5107,37 @@ const topUpStyles = {
   },
   infoCard: {
     padding: '9px 10px', borderRadius: 10,
-    background: '#fffaf0', border: '2px solid #d4c8b0',
+    background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)',
     display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0,
   },
   infoLabel: {
-    fontSize: 10, fontWeight: 900, color: '#c2851b',
+    fontSize: 10, fontWeight: 700, color: 'var(--terminal-brand-strong)',
     letterSpacing: 0.5, textTransform: 'uppercase',
   },
   infoValue: {
-    fontSize: 12, fontWeight: 800, color: '#5C3A21',
+    fontSize: 12, fontWeight: 600, color: 'var(--terminal-text)',
     lineHeight: 1.3, overflowWrap: 'anywhere',
   },
   monoRow: {
     display: 'flex', alignItems: 'center', gap: 6, minWidth: 0,
   },
   miniBtn: {
-    padding: '4px 7px', borderRadius: 7, fontSize: 10, fontWeight: 900,
-    background: '#fff6dc', border: '2px solid #9f8759', color: '#5C3A21',
+    padding: '4px 7px', borderRadius: 7, fontSize: 10, fontWeight: 700,
+    background: 'var(--terminal-surface)', border: '1px solid var(--terminal-text-muted)', color: 'var(--terminal-text)',
     cursor: 'pointer', flexShrink: 0,
   },
 
   workingHint: {
-    fontSize: 11, color: '#7a5a30', fontStyle: 'italic', textAlign: 'center',
+    fontSize: 11, color: 'var(--terminal-text-secondary)', fontStyle: 'italic', textAlign: 'center',
   },
 
   footer: {
     display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap',
     padding: '10px 14px',
-    borderTop: '3px solid #d4c8b0', background: '#f5ecd2',
+    borderTop: '1px solid var(--terminal-border)', background: 'var(--terminal-surface-subtle)',
   },
   primaryBtn: {
-    padding: '9px 16px', borderRadius: 10, fontSize: 13, fontWeight: 900,
-    background: 'linear-gradient(180deg, #91df7d 0%, #3b9b41 100%)',
-    border: '2px solid #1f6d34', color: '#fff',
-    cursor: 'pointer',
-    textShadow: '0 1px 1px rgba(0,0,0,0.35)',
+    ...uiButton('primary', { padding: '9px 16px' }),
   },
   disabledBtn: {
     opacity: 0.55,
@@ -5245,9 +5145,7 @@ const topUpStyles = {
     filter: 'grayscale(0.25)',
   },
   secondaryBtn: {
-    padding: '9px 14px', borderRadius: 10, fontSize: 13, fontWeight: 800,
-    background: '#fff6dc', border: '2px solid #9f8759', color: '#5C3A21',
-    cursor: 'pointer',
+    ...uiButton('secondary', { padding: '9px 14px' }),
   },
 };
 

@@ -99,6 +99,36 @@ function OrderBook({
   const wsRef = useRef(null);
 
   useEffect(() => {
+    if (dex === 'aster') {
+      let cancelled = false;
+      let controller = new AbortController();
+      const load = async () => {
+        controller.abort();
+        controller = new AbortController();
+        try {
+          const params = new URLSearchParams({ dex: 'aster', symbol, limit: '100' });
+          const response = await fetch(`${FUTURES_API}/orderbook?${params.toString()}`, { signal: controller.signal });
+          const json = await response.json().catch(() => null);
+          if (!response.ok) throw new Error(json?.detail || json?.error || `Aster order book ${response.status}`);
+          if (!cancelled) setBook(normalizePhoenixBook(json));
+        } catch (error) {
+          if (!cancelled && error?.name !== 'AbortError') console.warn('[Aster] order book snapshot failed', error?.message || error);
+        }
+      };
+      void load();
+      const timer = window.setInterval(load, 2_000);
+      return () => {
+        cancelled = true;
+        controller.abort();
+        window.clearInterval(timer);
+      };
+    }
+
+    if (dex === 'leverup') {
+      setBook({ bids: [], asks: [] });
+      return undefined;
+    }
+
     if (dex === 'ondo') {
       let cancelled = false;
       let socket = null;
@@ -329,13 +359,29 @@ function OrderBook({
     : '-';
   const spread = book.asks[0] && book.bids[0] ? (book.asks[0].price - book.bids[0].price).toFixed(2) : '—';
 
+  if (dex === 'leverup') {
+    return (
+      <section className="futures-order-book" style={S.container} aria-label={`${symbol} pricing model`}>
+        <div style={S.header}>
+          <span style={S.title}>Pricing</span>
+        </div>
+        <div style={S.oracleOnly}>
+          <span style={S.oracleBadge}>ORACLE</span>
+          <strong style={S.oracleTitle}>Oracle-priced market</strong>
+          <span style={S.oracleCopy}>LeverUp V2 does not publish a public L2 order book. Orders use the live LeverUp oracle and on-chain slippage configuration.</span>
+        </div>
+      </section>
+    );
+  }
+
   return (
-    <div style={S.container}>
+    <section className="futures-order-book" style={S.container} aria-label={`${symbol} order book`}>
       <div style={S.header}>
         <span style={S.title}>Order Book</span>
         <div style={S.headerRight}>
           <span style={S.spread}>Spread: ${spreadDisplay || spread}</span>
           <select
+            aria-label="Order book price step"
             value={String(priceStep)}
             onChange={(event) => onPriceStepChange?.(Number(event.target.value))}
             style={S.stepSelect}
@@ -347,13 +393,17 @@ function OrderBook({
           </select>
         </div>
       </div>
+      <div style={S.columns} aria-hidden="true">
+        <span>Price</span>
+        <span>Size {String(symbol || '').replace(/-PERP$/u, '')}</span>
+      </div>
 
       {/* Asks (reversed — lowest at bottom, pushed down) */}
       <div style={S.sideAsks}>
         {[...displayBook.asks].reverse().map((a) => (
           <div key={`${a.price}:${a.amount}`} style={S.row}>
             <div style={{...S.bar, ...S.barAsk, width: `${(a.amount / maxAskAmt) * 100}%`}} />
-            <span style={S.price}>{formatBookPrice(a.price, priceStep)}</span>
+            <span style={{...S.price, color: 'var(--terminal-short)'}}>{formatBookPrice(a.price, priceStep)}</span>
             <span style={S.amount}>{a.amount.toFixed(4)}</span>
           </div>
         ))}
@@ -361,7 +411,7 @@ function OrderBook({
 
       {/* Spread line */}
       <div style={S.spreadLine}>
-        <span style={{fontSize: 14, fontWeight: 900, color: '#5C3A21'}}>
+        <span style={{fontSize: 14, fontWeight: 750, color: 'var(--terminal-text)', fontVariantNumeric: 'tabular-nums'}}>
           {book.bids[0]?.price?.toLocaleString() || '—'}
         </span>
       </div>
@@ -371,12 +421,12 @@ function OrderBook({
         {displayBook.bids.map((b) => (
           <div key={`${b.price}:${b.amount}`} style={S.row}>
             <div style={{...S.bar, ...S.barBid, width: `${(b.amount / maxBidAmt) * 100}%`}} />
-            <span style={{...S.price, color: '#4CAF50'}}>{formatBookPrice(b.price, priceStep)}</span>
+            <span style={{...S.price, color: 'var(--terminal-long)'}}>{formatBookPrice(b.price, priceStep)}</span>
             <span style={S.amount}>{b.amount.toFixed(4)}</span>
           </div>
         ))}
       </div>
-    </div>
+    </section>
   );
 }
 
@@ -385,25 +435,31 @@ export default memo(OrderBook);
 const S = {
   container: {
     display: 'flex', flexDirection: 'column', height: '100%',
-    background: '#fdf8e7',
-    fontSize: 11, overflow: 'hidden',
+    background: 'var(--terminal-surface)',
+    fontSize: 11, overflow: 'hidden', fontVariantNumeric: 'tabular-nums',
   },
   header: {
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-    padding: '4px 6px', borderBottom: '1px solid #e8dfc8',
+    minHeight: 34, padding: '5px 8px', borderBottom: '1px solid var(--terminal-border)',
   },
-  title: { fontSize: 12, fontWeight: 800, color: '#5C3A21', textTransform: 'uppercase' },
-  spread: { fontSize: 10, fontWeight: 700, color: '#a3906a' },
+  title: { fontSize: 11, fontWeight: 750, color: 'var(--terminal-text)', textTransform: 'uppercase', letterSpacing: '0.04em' },
+  spread: { fontSize: 10, fontWeight: 650, color: 'var(--terminal-text-faint)', whiteSpace: 'nowrap' },
   headerRight: { display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 },
+  columns: {
+    display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8,
+    padding: '4px 8px', borderBottom: '1px solid var(--terminal-surface-muted)',
+    color: 'var(--terminal-text-faint)', fontSize: 9, fontWeight: 700,
+    letterSpacing: '0.04em', textTransform: 'uppercase',
+  },
   stepSelect: {
     height: 24,
     minWidth: 54,
-    background: '#fdf8e7',
-    border: '2px solid #d4c8b0',
+    background: 'var(--terminal-surface)',
+    border: '1px solid var(--terminal-border-strong)',
     borderRadius: 6,
-    color: '#5C3A21',
+    color: 'var(--terminal-text-control)',
     fontSize: 10,
-    fontWeight: 900,
+    fontWeight: 700,
     outline: 'none',
     cursor: 'pointer',
   },
@@ -417,19 +473,42 @@ const S = {
     position: 'absolute', top: 0, bottom: 0, right: 0,
     opacity: 0.15, transition: 'width 0.3s',
   },
-  barBid: { background: '#4CAF50' },
-  barAsk: { background: '#E53935' },
+  barBid: { background: 'var(--terminal-long)' },
+  barAsk: { background: 'var(--terminal-short)' },
   price: {
-    flex: 1, fontWeight: 700, color: '#E53935', zIndex: 1,
-    fontFamily: 'monospace', fontSize: 11,
+    flex: 1, fontWeight: 700, color: 'var(--terminal-short)', zIndex: 1,
+    fontSize: 11, fontVariantNumeric: 'tabular-nums',
   },
   amount: {
-    fontWeight: 600, color: '#77573d', zIndex: 1, textAlign: 'right',
-    fontFamily: 'monospace', fontSize: 11,
+    fontWeight: 600, color: 'var(--terminal-text-muted)', zIndex: 1, textAlign: 'right',
+    fontSize: 11, fontVariantNumeric: 'tabular-nums',
   },
   spreadLine: {
     display: 'flex', justifyContent: 'center', alignItems: 'center',
-    padding: '2px 0', borderTop: '1px solid #e8dfc8', borderBottom: '1px solid #e8dfc8',
-    background: '#e8dfc8', flexShrink: 0,
+    padding: '4px 0', borderTop: '1px solid var(--terminal-border)', borderBottom: '1px solid var(--terminal-border)',
+    background: 'var(--terminal-surface-subtle)', flexShrink: 0,
   },
+  oracleOnly: {
+    flex: 1,
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    padding: 20,
+    textAlign: 'center',
+    background: 'var(--terminal-surface-subtle)',
+  },
+  oracleBadge: {
+    border: '1px solid var(--terminal-brand)',
+    borderRadius: 999,
+    padding: '3px 8px',
+    color: 'var(--terminal-brand-text)',
+    background: 'var(--terminal-brand-soft)',
+    fontSize: 10,
+    fontWeight: 700,
+    letterSpacing: '0.06em',
+  },
+  oracleTitle: { color: 'var(--terminal-text)', fontSize: 13, fontWeight: 700 },
+  oracleCopy: { color: 'var(--terminal-text-muted)', fontSize: 11, lineHeight: 1.45, maxWidth: 240 },
 };

@@ -1,6 +1,7 @@
 import { memo, useState, useEffect, useCallback } from 'react';
 import { useSend, usePlayer } from '../hooks/useGodot';
 import trophyIcon from '../assets/resources/free-icon-cup-with-star-109765.png';
+import { uiButton, uiIconButton } from '../styles/theme';
 
 const fmt = (n) => (n || 0).toLocaleString().replace(/,/g, ' ');
 
@@ -72,6 +73,29 @@ function BattleLogPanel({ onClose }) {
   const [revengeMessage, setRevengeMessage] = useState('');
   const [expanded, setExpanded] = useState(null);
   const [filter, setFilter] = useState('all'); // 'all' | 'attack' | 'defense'
+
+  const handleFilterWheel = useCallback((event) => {
+    const row = event.currentTarget;
+    if (row.scrollWidth <= row.clientWidth) return;
+    const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+    row.scrollLeft += delta;
+    if (event.cancelable) event.preventDefault();
+  }, []);
+
+  const handleFilterKeyDown = useCallback((event) => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const keys = ['all', 'attack', 'defense'];
+    const currentIndex = Math.max(0, keys.indexOf(filter));
+    const nextIndex = event.key === 'Home'
+      ? 0
+      : event.key === 'End'
+        ? keys.length - 1
+        : (currentIndex + (event.key === 'ArrowRight' ? 1 : -1) + keys.length) % keys.length;
+    const next = keys[nextIndex];
+    setFilter(next);
+    event.currentTarget.parentElement?.querySelector(`[data-filter="${next}"]`)?.focus();
+  }, [filter]);
 
   const handleWatchReplay = useCallback((battle) => {
     if (!battle.replay_data || !battle.buildings_snapshot) return;
@@ -164,11 +188,41 @@ function BattleLogPanel({ onClose }) {
 
   return (
     <>
+      <style>{`
+        .battle-log-summary:focus-visible,
+        .battle-log-tab:focus-visible,
+        .battle-log-close:focus-visible {
+          outline: 3px solid var(--terminal-info);
+          outline-offset: -3px;
+        }
+        .battle-log-opponent-name {
+          display: -webkit-box;
+          -webkit-box-orient: vertical;
+          -webkit-line-clamp: 2;
+          overflow: hidden;
+        }
+        @media (max-width: 360px) {
+          .battle-log-modal { border-radius: 16px !important; }
+          .battle-log-body { padding: 8px !important; }
+          .battle-log-card { padding: 9px 8px !important; }
+          .battle-log-summary-grid { column-gap: 7px !important; }
+          .battle-log-side-badge {
+            padding-inline: 6px !important;
+            font-size: 9px !important;
+          }
+          .battle-log-trophy-value { font-size: 13px !important; }
+          .battle-log-detail-row {
+            grid-template-columns: minmax(0, 1fr) !important;
+            gap: 2px !important;
+          }
+          .battle-log-detail-value { text-align: left !important; }
+        }
+      `}</style>
       <div style={S.backdrop} onClick={onClose} />
-      <div style={S.modal}>
+      <div className="battle-log-modal" style={S.modal} role="dialog" aria-modal="true" aria-labelledby="battle-log-title">
         <div style={S.header}>
-          <span style={S.headerTitle}>Battle Log</span>
-          <button style={S.closeBtn} onClick={onClose}>
+          <span id="battle-log-title" style={S.headerTitle}>Battle Log</span>
+          <button className="battle-log-close" type="button" style={S.closeBtn} onClick={onClose} aria-label="Close battle log">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4">
               <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
             </svg>
@@ -176,15 +230,33 @@ function BattleLogPanel({ onClose }) {
         </div>
 
         {/* Filter tabs */}
-        <div style={S.filterRow}>
+        <div
+          className="battle-log-filter-row clash-scroll-hidden"
+          style={S.filterRow}
+          role="tablist"
+          aria-label="Battle log filters"
+          onWheel={handleFilterWheel}
+        >
           {[['all', 'All'], ['attack', 'My Attacks'], ['defense', 'Defenses']].map(([key, label]) => (
-            <button key={key} style={S.filterTab(filter === key)} onClick={() => setFilter(key)}>
+            <button
+              className="battle-log-tab"
+              key={key}
+              type="button"
+              role="tab"
+              data-filter={key}
+              aria-selected={filter === key}
+              aria-controls="battle-log-results"
+              tabIndex={filter === key ? 0 : -1}
+              style={S.filterTab(filter === key)}
+              onClick={() => setFilter(key)}
+              onKeyDown={handleFilterKeyDown}
+            >
               {label}
             </button>
           ))}
         </div>
 
-        <div style={S.body}>
+        <div id="battle-log-results" className="battle-log-body clash-scroll" style={S.body} role="tabpanel" tabIndex="0" aria-label="Battle log entries">
           {loading && <div style={S.empty}>Loading...</div>}
           {!loading && filtered.length === 0 && (
             <div style={S.empty}>No battles yet</div>
@@ -209,44 +281,67 @@ function BattleLogPanel({ onClose }) {
                     : '';
 
             // Badge logic
-            let badgeText, badgeDesc;
+            let badgeText, relationText;
             if (isAttack) {
               badgeText = isVictory ? 'VICTORY' : 'DEFEAT';
-              badgeDesc = `vs ${b.opponent_name}`;
+              relationText = 'vs';
             } else {
               badgeText = isVictory ? 'RAIDED' : 'DEFENDED';
-              badgeDesc = `by ${b.opponent_name}`;
+              relationText = 'by';
             }
+            const opponentName = String(b.opponent_name || 'Unknown player');
+            const detailsId = `battle-log-details-${String(b.id).replace(/[^a-zA-Z0-9_-]/g, '-')}`;
+            const isPositiveResult = (isAttack && isVictory) || (!isAttack && !isVictory);
+            const trophyDelta = isPositiveResult ? 30 : -15;
 
             return (
-              <div key={b.id} style={{
+              <article key={b.id} className="battle-log-card" style={{
                 ...S.card,
-                borderColor: isAttack ? '#5b9bd5' : '#d4c8b0',
+                borderColor: 'var(--terminal-border)',
                 borderLeftWidth: 4,
-                borderLeftColor: isAttack ? '#3b7dd8' : '#E53935',
-              }} onClick={() => setExpanded(isExpanded ? null : b.id)}>
-                <div style={S.cardRow}>
-                  <div style={S.sideBadge(isAttack, isVictory)}>
+                borderLeftColor: isPositiveResult ? 'var(--terminal-long)' : 'var(--terminal-short)',
+              }}>
+                <button
+                  className="battle-log-summary"
+                  type="button"
+                  style={S.summaryButton}
+                  aria-expanded={isExpanded}
+                  aria-controls={detailsId}
+                  aria-label={`${badgeText}, ${relationText} ${opponentName}, ${timeAgo(b.created_at)}, trophy change ${trophyDelta > 0 ? 'plus ' : 'minus '}${Math.abs(trophyDelta)}`}
+                  onClick={() => setExpanded(isExpanded ? null : b.id)}
+                >
+                  <div className="battle-log-summary-grid" style={S.summaryGrid}>
+                  <span className="battle-log-side-badge" style={S.sideBadge(isPositiveResult)}>
                     {badgeText}
-                  </div>
+                  </span>
                   <div style={S.cardInfo}>
-                    <span style={S.opponentName}>{badgeDesc}</span>
+                    <span style={S.opponentLine}>
+                      <span style={S.relationText} aria-hidden="true">{relationText}</span>
+                      <span
+                        className="battle-log-opponent-name"
+                        style={S.opponentName}
+                        title={opponentName}
+                      >
+                        {opponentName}
+                      </span>
+                    </span>
                     <span style={S.time}>{timeAgo(b.created_at)}</span>
                   </div>
                   <div style={S.trophyTotal}>
                     <img src={trophyIcon} alt="" style={S.trophyMini} />
-                    <span style={{ color: (isAttack && isVictory) || (!isAttack && !isVictory) ? '#b45309' : '#E53935', fontWeight: 900, fontSize: 14 }}>
-                      {(isAttack && isVictory) || (!isAttack && !isVictory) ? '+30' : '-15'}
+                    <span className="battle-log-trophy-value" aria-hidden="true" style={{ color: isPositiveResult ? 'var(--terminal-warning)' : 'var(--terminal-short)', fontWeight: 700, fontSize: 14, fontVariantNumeric: 'tabular-nums' }}>
+                      {trophyDelta > 0 ? `+${trophyDelta}` : trophyDelta}
                     </span>
                   </div>
-                </div>
+                  </div>
+                </button>
 
                 {isExpanded && (
-                  <div style={S.details}>
+                  <div id={detailsId} style={S.details}>
                     {totalLoot > 0 && b.loot && (
-                      <div style={S.detailRow}>
+                      <div className="battle-log-detail-row" style={S.detailRow}>
                         <span style={S.detailLabel}>{isAttack ? 'Looted' : 'Stolen'}</span>
-                        <span style={S.detailVal}>
+                        <span className="battle-log-detail-value" style={S.detailVal}>
                           {b.loot.gold > 0 && <span style={{ color: '#e8b830' }}>{fmt(b.loot.gold)} gold </span>}
                           {b.loot.wood > 0 && <span style={{ color: '#6ab344' }}>{fmt(b.loot.wood)} wood </span>}
                           {b.loot.ore > 0 && <span style={{ color: '#8a9aaa' }}>{fmt(b.loot.ore)} ore</span>}
@@ -254,21 +349,21 @@ function BattleLogPanel({ onClose }) {
                       </div>
                     )}
                     {thDmg != null && (
-                      <div style={S.detailRow}>
+                      <div className="battle-log-detail-row" style={S.detailRow}>
                         <span style={S.detailLabel}>Town Hall damage</span>
-                        <span style={{ ...S.detailVal, color: thDmg > 50 ? '#E53935' : '#a3906a' }}>{thDmg}%</span>
+                        <span className="battle-log-detail-value" style={{ ...S.detailVal, color: thDmg > 50 ? 'var(--terminal-short)' : 'var(--terminal-text-muted)' }}>{thDmg}%</span>
                       </div>
                     )}
                     {b.buildings_destroyed > 0 && (
-                      <div style={S.detailRow}>
+                      <div className="battle-log-detail-row" style={S.detailRow}>
                         <span style={S.detailLabel}>Buildings destroyed</span>
-                        <span style={S.detailVal}>{b.buildings_destroyed}</span>
+                        <span className="battle-log-detail-value" style={S.detailVal}>{b.buildings_destroyed}</span>
                       </div>
                     )}
                     {b.duration > 0 && (
-                      <div style={S.detailRow}>
+                      <div className="battle-log-detail-row" style={S.detailRow}>
                         <span style={S.detailLabel}>Duration</span>
-                        <span style={S.detailVal}>{Math.round(b.duration)}s</span>
+                        <span className="battle-log-detail-value" style={S.detailVal}>{Math.round(b.duration)}s</span>
                       </div>
                     )}
                     {b.replay_data && (() => {
@@ -277,13 +372,13 @@ function BattleLogPanel({ onClose }) {
                       const troopText = Object.entries(troops).map(([t, c]) => `${t} x${c}`).join(', ');
                       return (
                         <>
-                          <div style={S.detailRow}>
+                          <div className="battle-log-detail-row" style={S.detailRow}>
                             <span style={S.detailLabel}>Ships</span>
-                            <span style={S.detailVal}>{ships.length}</span>
+                            <span className="battle-log-detail-value" style={S.detailVal}>{ships.length}</span>
                           </div>
-                          <div style={S.detailRow}>
+                          <div className="battle-log-detail-row" style={S.detailRow}>
                             <span style={S.detailLabel}>Troops</span>
-                            <span style={S.detailVal}>{troopText || '-'}</span>
+                            <span className="battle-log-detail-value" style={S.detailVal}>{troopText || '-'}</span>
                           </div>
                         </>
                       );
@@ -291,6 +386,7 @@ function BattleLogPanel({ onClose }) {
                     {b.replay_data && b.buildings_snapshot && (
                       <div style={S.actionRow}>
                         <button
+                          type="button"
                           style={S.watchBtn}
                           onClick={(e) => { e.stopPropagation(); handleWatchReplay(b); }}
                         >
@@ -316,7 +412,7 @@ function BattleLogPanel({ onClose }) {
                     )}
                   </div>
                 )}
-              </div>
+              </article>
             );
           })}
         </div>
@@ -331,87 +427,85 @@ const S = {
   backdrop: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 200, pointerEvents: 'auto' },
   modal: {
     position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
-    width: 380, maxHeight: '85vh', background: '#fdf8e7', border: '6px solid #d4c8b0', borderRadius: 24,
-    boxShadow: '0 20px 60px rgba(0,0,0,0.5)', display: 'flex', flexDirection: 'column',
+    width: 'min(440px, calc(100dvw - 16px))', maxHeight: 'calc(100dvh - 16px)', boxSizing: 'border-box',
+    background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 20,
+    boxShadow: '0 8px 18px rgba(0,0,0,0.34)', display: 'flex', flexDirection: 'column',
     zIndex: 201, pointerEvents: 'auto', overflow: 'hidden', fontFamily: '"Inter","Segoe UI",sans-serif',
   },
   header: {
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-    padding: '14px 16px', background: '#d4c8b0', borderBottom: '4px solid #bba882',
+    padding: '14px 16px', background: 'var(--terminal-border)', borderBottom: '1px solid var(--terminal-border-strong)',
   },
-  headerTitle: { fontSize: 18, fontWeight: 900, color: '#5C3A21' },
-  closeBtn: {
-    width: 30, height: 30, borderRadius: '50%', background: '#E53935', border: '3px solid #fff',
-    color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0,
-  },
+  headerTitle: { fontSize: 18, fontWeight: 700, color: 'var(--terminal-text)' },
+  closeBtn: uiIconButton('danger', 44),
   filterRow: {
-    display: 'flex', gap: 0, borderBottom: '3px solid #d4c8b0',
+    display: 'flex', gap: 0, overflowX: 'auto', overscrollBehaviorX: 'contain', touchAction: 'pan-x',
+    background: 'var(--terminal-surface-subtle)', flexShrink: 0,
   },
   filterTab: (active) => ({
-    flex: 1, padding: '8px 0', border: 'none', cursor: 'pointer',
-    fontSize: 12, fontWeight: 800,
-    background: active ? '#fdf8e7' : '#e8dfc8',
-    color: active ? '#5C3A21' : '#a3906a',
-    borderBottom: active ? '3px solid #5C3A21' : '3px solid transparent',
-    marginBottom: -3,
+    flex: '1 0 100px', minHeight: 44, padding: '8px 10px', border: 'none', cursor: 'pointer',
+    fontSize: 12, fontWeight: 700,
+    background: active ? 'var(--terminal-surface)' : 'var(--terminal-surface-subtle)',
+    color: active ? 'var(--terminal-text)' : 'var(--terminal-text-muted)',
+    boxShadow: active ? 'inset 0 -3px 0 var(--terminal-orange)' : 'none',
   }),
   body: {
     flex: 1, padding: 12, display: 'flex', flexDirection: 'column', gap: 8,
-    overflowY: 'auto', scrollbarWidth: 'none',
+    minHeight: 0, overflowY: 'auto', overflowX: 'hidden',
   },
   revengeMessage: {
-    background: '#f8d6ca',
-    border: '2px solid #d8715b',
+    background: 'var(--terminal-short-soft)',
+    border: '1px solid #d8715b',
     color: '#9b2c21',
     borderRadius: 8,
     padding: '6px 8px',
     fontSize: 11,
-    fontWeight: 900,
+    fontWeight: 700,
   },
   revengeBtn: (disabled) => ({
+    ...uiButton(disabled ? 'neutral' : 'primary', { minHeight: 44, padding: '8px 12px' }),
     flex: '0 0 112px',
-    height: 42,
-    borderRadius: 9,
-    border: `2px solid ${disabled ? '#9d9278' : '#8d421e'}`,
-    background: disabled
-      ? 'linear-gradient(180deg, #d2c6ad 0%, #b6a78a 100%)'
-      : 'linear-gradient(180deg, #ffb13d 0%, #e65f1c 100%)',
-    color: disabled ? '#6f6047' : '#fff',
-    fontSize: 11,
-    fontWeight: 950,
     cursor: disabled ? 'not-allowed' : 'pointer',
-    textShadow: disabled ? 'none' : '0 1px 1px rgba(0,0,0,0.35)',
   }),
-  empty: { textAlign: 'center', padding: 40, color: '#a3906a', fontWeight: 700, fontSize: 14 },
+  empty: { textAlign: 'center', padding: 40, color: 'var(--terminal-text-muted)', fontWeight: 700, fontSize: 14 },
   card: {
-    background: '#e8dfc8',
-    borderWidth: 3,
+    background: 'var(--terminal-surface-subtle)',
+    borderWidth: 1,
     borderStyle: 'solid',
-    borderColor: '#d4c8b0',
+    borderColor: 'var(--terminal-border)',
     borderRadius: 12,
     padding: '10px 12px',
-    cursor: 'pointer', transition: 'background 0.15s',
+    boxSizing: 'border-box', minWidth: 0, overflow: 'hidden',
+    boxShadow: '0 2px 4px rgba(0,0,0,0.16)',
   },
-  cardRow: { display: 'flex', alignItems: 'center', gap: 10 },
-  sideBadge: (isAttack, isVictory) => ({
-    padding: '3px 8px', borderRadius: 6, fontSize: 10, fontWeight: 900, letterSpacing: '0.5px',
-    background: isAttack
-      ? (isVictory ? '#3b7dd8' : '#6a8cba')
-      : (isVictory ? '#E53935' : '#43A047'),
-    color: '#fff', textShadow: '0 1px 1px rgba(0,0,0,0.3)', flexShrink: 0,
+  summaryButton: {
+    display: 'block', width: '100%', minWidth: 0, padding: 0, margin: 0,
+    border: 'none', borderRadius: 8, background: 'transparent', color: 'inherit',
+    font: 'inherit', textAlign: 'left', cursor: 'pointer',
+  },
+  summaryGrid: {
+    display: 'grid', gridTemplateColumns: 'max-content minmax(0, 1fr) max-content',
+    alignItems: 'center', columnGap: 10, width: '100%', minWidth: 0,
+  },
+  sideBadge: (isPositiveResult) => ({
+    padding: '3px 8px', borderRadius: 6, fontSize: 10, fontWeight: 700, letterSpacing: '0.5px',
+    background: isPositiveResult ? 'var(--terminal-long)' : 'var(--terminal-short)',
+    color: 'var(--terminal-on-accent)', textShadow: 'none', flexShrink: 0,
   }),
-  cardInfo: { flex: 1, display: 'flex', flexDirection: 'column', gap: 1 },
-  opponentName: { fontSize: 14, fontWeight: 900, color: '#5C3A21' },
-  time: { fontSize: 11, fontWeight: 700, color: '#a3906a' },
-  trophyTotal: { display: 'flex', alignItems: 'center', gap: 3, flexShrink: 0 },
+  cardInfo: { minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1 },
+  opponentLine: { display: 'grid', gridTemplateColumns: 'max-content minmax(0, 1fr)', alignItems: 'start', gap: 4, minWidth: 0 },
+  relationText: { fontSize: 14, lineHeight: 1.25, fontWeight: 700, color: 'var(--terminal-text-secondary)' },
+  opponentName: { minWidth: 0, fontSize: 14, lineHeight: 1.25, fontWeight: 700, color: 'var(--terminal-text)', overflowWrap: 'anywhere' },
+  time: { fontSize: 11, fontWeight: 700, color: 'var(--terminal-text-muted)' },
+  trophyTotal: { display: 'flex', alignItems: 'center', gap: 3, minWidth: 'max-content', whiteSpace: 'nowrap', justifySelf: 'end' },
   trophyMini: { width: 16, height: 16, objectFit: 'contain', filter: 'invert(60%) sepia(90%) saturate(500%) hue-rotate(10deg)' },
   details: {
-    marginTop: 8, paddingTop: 8, borderTop: '2px solid #d4c8b0',
+    marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--terminal-border)',
     display: 'flex', flexDirection: 'column', gap: 5,
   },
-  detailRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
-  detailLabel: { fontSize: 12, fontWeight: 700, color: '#77573d' },
-  detailVal: { fontSize: 12, fontWeight: 900, color: '#5C3A21' },
+  detailRow: { display: 'grid', gridTemplateColumns: 'minmax(0, 0.9fr) minmax(0, 1.1fr)', alignItems: 'start', gap: 8, minWidth: 0 },
+  detailLabel: { minWidth: 0, fontSize: 12, fontWeight: 700, color: 'var(--terminal-text-secondary)', overflowWrap: 'anywhere' },
+  detailVal: { minWidth: 0, fontSize: 12, fontWeight: 700, color: 'var(--terminal-text)', textAlign: 'right', overflowWrap: 'anywhere', wordBreak: 'break-word' },
   actionRow: {
     marginTop: 6,
     display: 'flex',
@@ -419,13 +513,8 @@ const S = {
     alignItems: 'stretch',
   },
   watchBtn: {
+    ...uiButton('info', { minHeight: 44, padding: '8px 12px' }),
     flex: 1,
     minWidth: 0,
-    padding: '8px 0',
-    background: 'linear-gradient(180deg, #74c4ff 0%, #3ba4f4 100%)',
-    border: '2px solid #1a6fb5', borderRadius: 8,
-    color: '#fff', fontSize: 13, fontWeight: 900, cursor: 'pointer',
-    textShadow: '0 1px 2px rgba(0,0,0,0.5)',
-    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.3), 0 3px 6px rgba(0,0,0,0.3)',
   },
 };

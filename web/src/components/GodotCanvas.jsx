@@ -1116,7 +1116,7 @@ const barContainerStyle = {
   maxWidth: '450px',
   height: '28px',
   backgroundColor: '#2e1c10', // Dark wood background
-  border: '3px solid #5a3a22', // Thick wood edge
+  border: '1px solid #5a3a22', // Thick wood edge
   borderRadius: '8px',
   boxShadow: 'inset 0 4px 8px rgba(0,0,0,0.6), 0 4px 12px rgba(0,0,0,0.5)',
   overflow: 'hidden',
@@ -1943,12 +1943,12 @@ function GodotCanvas({ onEngineReady }) {
           <div style={progressWrapperStyle}>
             {/* Stage label */}
             <div style={{
-              color: '#fff',
+              color: 'var(--terminal-on-accent)',
               marginBottom: '14px',
               fontFamily: '"Inter", "Segoe UI", sans-serif',
               fontSize: '22px',
-              fontWeight: 900,
-              textShadow: '0 2px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000',
+              fontWeight: 700,
+              textShadow: 'none',
               letterSpacing: '1px',
               textAlign: 'center',
             }}>
@@ -1962,8 +1962,8 @@ function GodotCanvas({ onEngineReady }) {
                   width: `${displayedProgress}%`,
                   height: '100%',
                   background: 'linear-gradient(to bottom, #ffe066, #e6b800)',
-                  borderRight: '2px solid #fff8dc',
-                  boxShadow: 'inset 0 2px 4px rgba(255,255,255,0.4)',
+                  borderRight: '1px solid #fff8dc',
+                  boxShadow: 'inset 0 2px 4px var(--terminal-chip-overlay)',
                   transition: 'width 0.1s linear',
                 }}
               />
@@ -1971,12 +1971,12 @@ function GodotCanvas({ onEngineReady }) {
 
             {/* Percentage */}
             <div style={{
-              color: '#fff',
+              color: 'var(--terminal-on-accent)',
               marginTop: '10px',
               fontFamily: '"Inter", "Segoe UI", sans-serif',
               fontSize: '18px',
-              fontWeight: 900,
-              textShadow: '0 2px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000',
+              fontWeight: 700,
+              textShadow: 'none',
               letterSpacing: '1px',
               textAlign: 'center',
             }}>

@@ -1,4 +1,5 @@
 import { memo, useState, useEffect, useCallback, useRef } from 'react';
+import { uiButton } from '../styles/theme';
 
 // ── Tutorial flags (bitmask) ──────────────────────────────────────
 const FLAG_BASE = 1;    // welcome, TH, buildings, resources
@@ -199,17 +200,17 @@ const S = {
   },
   dot: {
     width: 12, height: 12, borderRadius: '50%',
-    background: 'rgba(255,255,255,0.4)',
+    background: 'var(--terminal-chip-overlay)',
     transition: 'all 0.2s',
   },
   dotActive: {
-    background: '#4CAF50',
+    background: 'var(--terminal-long)',
     boxShadow: '0 0 10px rgba(76, 175, 80, 0.8)',
     transform: 'scale(1.3)',
   },
   card: {
-    background: '#fdf8e7',
-    border: '6px solid #d4c8b0',
+    background: 'var(--terminal-surface)',
+    border: '1px solid var(--terminal-border)',
     borderRadius: 24,
     padding: '24px 24px 20px',
     maxWidth: 380, width: 'calc(100% - 32px)',
@@ -228,16 +229,16 @@ const S = {
   },
   iconCircle: {
     width: 64, height: 64, borderRadius: '50%',
-    background: '#e8dfc8',
-    border: '4px solid #d4c8b0',
+    background: 'var(--terminal-surface-subtle)',
+    border: '1px solid var(--terminal-border)',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
     marginTop: -52,
   },
   icon: { fontSize: 32, lineHeight: 1 },
   title: {
-    margin: '16px 0 8px', fontSize: 22, fontWeight: 900,
-    color: '#5C3A21', textAlign: 'center',
+    margin: '16px 0 8px', fontSize: 22, fontWeight: 700,
+    color: 'var(--terminal-text)', textAlign: 'center',
     fontFamily: '"Inter","Segoe UI",sans-serif',
   },
   videoTitle: {
@@ -245,7 +246,7 @@ const S = {
   },
   text: {
     margin: '0 0 20px', fontSize: 15, fontWeight: 600,
-    color: '#77573d', textAlign: 'center',
+    color: 'var(--terminal-text-secondary)', textAlign: 'center',
     lineHeight: 1.5, maxWidth: 300,
     fontFamily: '"Inter","Segoe UI",sans-serif',
   },
@@ -259,7 +260,7 @@ const S = {
     maxHeight: 'min(62vh, 520px)',
     overflow: 'hidden',
     borderRadius: 12,
-    border: '3px solid #d4c8b0',
+    border: '1px solid var(--terminal-border)',
     background: '#1f1a14',
     boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.18), 0 8px 20px rgba(0,0,0,0.28)',
     marginBottom: 16,
@@ -274,22 +275,13 @@ const S = {
     display: 'flex', gap: 12, width: '100%',
   },
   skipBtn: {
-    flex: 1, padding: '12px 14px', borderRadius: 14,
-    border: '3px solid #d4c8b0', background: '#e8dfc8',
-    color: '#77573d', fontSize: 15, fontWeight: 800,
-    cursor: 'pointer', transition: 'all 0.1s',
+    ...uiButton('secondary', { flex: 1, minHeight: 44, padding: '12px 14px', fontSize: 14 }),
   },
   nextBtn: {
-    flex: 2, padding: '12px 14px', borderRadius: 14,
-    background: 'linear-gradient(180deg, #4CAF50 0%, #2E7D32 100%)',
-    border: '3px solid #1B5E20',
-    color: '#fff', fontSize: 15, fontWeight: 900, textAlign: 'center',
-    cursor: 'pointer', transition: 'all 0.1s',
-    textShadow: '0 2px 2px rgba(0,0,0,0.3)',
-    boxShadow: '0 6px 16px rgba(0,0,0,0.3)',
+    ...uiButton('primary', { flex: 2, minHeight: 44, padding: '12px 14px', fontSize: 14 }),
   },
   counter: {
-    marginTop: 12, fontSize: 12, fontWeight: 800,
-    color: '#bba882',
+    marginTop: 12, fontSize: 12, fontWeight: 600,
+    color: 'var(--terminal-border-strong)',
   },
 };

@@ -6,6 +6,13 @@ import trophyIcon from '../assets/resources/free-icon-cup-with-star-109765.png';
 
 const formatNumber = (n) => (n || 0).toLocaleString().replace(/,/g, ' ');
 
+function activateOnKeyboard(event, action) {
+  if (event.key !== 'Enter' && event.key !== ' ') return;
+  event.preventDefault();
+  event.stopPropagation();
+  action?.();
+}
+
 function formatShieldRemaining(ms) {
   const totalMin = Math.max(0, Math.floor(ms / 60000));
   if (totalMin >= 60) {
@@ -47,12 +54,21 @@ function PlayerInfo({ onOpenProfile, onOpenLeaderboard }) {
   const progressPct = thTotal > 0 ? Math.min(100, (thProgress / thTotal) * 100) : 0;
 
   return (
-    <div style={{ ...styles.wrap, ...(mobile ? { top: 8, left: 8, gap: 8 } : {}) }} onClick={onOpenProfile}>
-      <div style={styles.levelCircleContainer}>
+    <div
+      style={{ ...styles.wrap, ...(mobile ? { top: 8, left: 8, gap: 8 } : {}) }}
+    >
+      <div
+        style={styles.levelCircleContainer}
+        onClick={onOpenProfile}
+        onKeyDown={(event) => activateOnKeyboard(event, onOpenProfile)}
+        role="button"
+        tabIndex={0}
+        aria-label="Open profile"
+      >
         <div style={{
           ...styles.levelCircle,
           ...(mobile ? { width: 48, height: 48, borderRadius: 10, padding: 5 } : {}),
-          background: `conic-gradient(from -90deg, #fff ${progressPct * 3.6}deg, #1a1a1a ${progressPct * 3.6}deg)`,
+          background: `conic-gradient(from -90deg, var(--terminal-surface) ${progressPct * 3.6}deg, #1a1a1a ${progressPct * 3.6}deg)`,
         }}>
           <div style={{ ...styles.innerSquare, ...(mobile ? { borderRadius: 7 } : {}) }}>
             <span style={{ ...styles.levelText, ...(mobile ? { fontSize: 24 } : {}) }}>{townHallLevel}</span>
@@ -61,10 +77,28 @@ function PlayerInfo({ onOpenProfile, onOpenLeaderboard }) {
       </div>
 
       <div style={styles.infoStack}>
-        <span style={{ ...styles.name, ...(mobile ? { fontSize: 18 } : {}) }}>{playerState.player_name}</span>
+        {playerState.player_name && (
+          <span
+            style={{ ...styles.name, ...(mobile ? { fontSize: 18 } : {}) }}
+            onClick={onOpenProfile}
+            onKeyDown={(event) => activateOnKeyboard(event, onOpenProfile)}
+            role="button"
+            tabIndex={0}
+            aria-label="Open profile"
+          >
+            {playerState.player_name}
+          </span>
+        )}
 
         <div style={styles.trophyRow}>
-          <div style={styles.trophyContainer} onClick={(e) => { e.stopPropagation(); onOpenLeaderboard?.(); }}>
+          <div
+            style={styles.trophyContainer}
+            onClick={(event) => { event.stopPropagation(); onOpenLeaderboard?.(); }}
+            onKeyDown={(event) => activateOnKeyboard(event, onOpenLeaderboard)}
+            role="button"
+            tabIndex={0}
+            aria-label="Open leaderboard"
+          >
             <div style={styles.trophyBox}>
               <img src={trophyIcon} alt="trophy" style={styles.trophyImg} />
             </div>
@@ -81,8 +115,8 @@ function PlayerInfo({ onOpenProfile, onOpenLeaderboard }) {
               title={`Shield protects your base for ${formatShieldRemaining(shieldRemainingMs)}`}
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" style={styles.shieldChipIcon}>
-                <path d="M12 2 L20 5 L20 12 C20 17 16 21 12 22 C8 21 4 17 4 12 L4 5 Z" fill="#fff" stroke="#0e3a72" strokeWidth="2" />
-                <path d="M9 12 L11 14 L15 9" stroke="#1d6fe0" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+                <path d="M12 2 L20 5 L20 12 C20 17 16 21 12 22 C8 21 4 17 4 12 L4 5 Z" fill="var(--terminal-surface)" stroke="var(--terminal-info)" strokeWidth="2" />
+                <path d="M9 12 L11 14 L15 9" stroke="var(--terminal-info)" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" fill="none" />
               </svg>
               <span style={styles.shieldChipText}>{formatShieldRemaining(shieldRemainingMs)}</span>
             </div>
@@ -104,13 +138,13 @@ const styles = {
     alignItems: 'center',
     gap: 12,
     pointerEvents: 'auto',
-    cursor: 'pointer',
     zIndex: 10,
     fontFamily: 'system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
   },
   levelCircleContainer: {
     position: 'relative',
     zIndex: 2,
+    cursor: 'pointer',
   },
   levelCircle: {
     width: 68,
@@ -118,7 +152,7 @@ const styles = {
     borderRadius: 14,
     background: '#1a1a1a',
     border: '3.5px solid #0a0a0a',
-    boxShadow: '0 4px 10px rgba(0,0,0,0.7)',
+    boxShadow: 'inset 0 1.5px 0 rgba(255,255,255,0.34), 0 0 0 2px rgba(255,255,255,0.86), 0 5px 12px rgba(0,0,0,0.62)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -136,13 +170,13 @@ const styles = {
     justifyContent: 'center',
     position: 'relative',
     overflow: 'hidden',
-    boxShadow: 'inset 0 2px 3px rgba(255,255,255,0.4), 0 2px 4px rgba(0,0,0,0.3)',
+    boxShadow: 'inset 0 2px 3px var(--terminal-chip-overlay), 0 2px 4px rgba(0,0,0,0.3)',
   },
   levelText: {
-    color: '#fff',
+    color: 'var(--terminal-on-accent)',
     fontSize: 34,
-    fontWeight: 900,
-    textShadow: '-2px -2px 0 #0a0a0a, 2px -2px 0 #0a0a0a, -2px 2px 0 #0a0a0a, 2px 2px 0 #0a0a0a, 0 0 4px #0a0a0a, 0 3px 3px rgba(0,0,0,1)',
+    fontWeight: 700,
+    textShadow: 'none',
     zIndex: 2,
     transform: 'translateY(-1px)',
     letterSpacing: '-1px',
@@ -154,12 +188,13 @@ const styles = {
     gap: 2,
   },
   name: {
-    color: '#fff',
+    color: 'var(--terminal-on-accent)',
     fontSize: 24,
-    fontWeight: 900,
-    textShadow: '-1px -1px 0 #1a1a1a, 1px -1px 0 #1a1a1a, -1px 1px 0 #1a1a1a, 1px 1px 0 #1a1a1a, 0 2px 2px rgba(0,0,0,0.8)',
+    fontWeight: 700,
+    textShadow: 'none',
     marginLeft: 4,
     letterSpacing: '0.5px',
+    cursor: 'pointer',
   },
   trophyRow: {
     display: 'flex',
@@ -181,12 +216,12 @@ const styles = {
     padding: '0 9px 0 7px',
     borderRadius: 13,
     background: 'linear-gradient(180deg, #5cabff 0%, #2c6ed8 100%)',
-    border: '2px solid #0a0a0a',
+    border: '1px solid #0a0a0a',
     boxShadow: 'inset 0 1.5px 1px rgba(255,255,255,0.45), 0 2px 4px rgba(0,0,0,0.45)',
-    color: '#fff',
-    fontWeight: 900,
+    color: 'var(--terminal-on-accent)',
+    fontWeight: 700,
     fontSize: 12,
-    textShadow: '-1px -1px 0 #0a2a55, 1px -1px 0 #0a2a55, -1px 1px 0 #0a2a55, 1px 1px 0 #0a2a55',
+    textShadow: 'none',
     letterSpacing: 0.3,
     pointerEvents: 'auto',
     cursor: 'help',
@@ -233,9 +268,9 @@ const styles = {
   },
   trophiesText: {
     fontSize: 16,
-    fontWeight: 900,
-    color: '#fff',
-    textShadow: '-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 0 2px 1px rgba(0,0,0,1)',
+    fontWeight: 700,
+    color: 'var(--terminal-on-accent)',
+    textShadow: 'none',
     letterSpacing: '0.5px',
     width: '100%',
     textAlign: 'center',

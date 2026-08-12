@@ -15,11 +15,11 @@ export default function OndoDepositNetworkSelector({
         flex: '1 0 100%',
         display: 'grid',
         gridTemplateColumns: `repeat(${rows.length}, minmax(0, 1fr))`,
-        gap: 6,
+        gap: 4,
         padding: 4,
         borderRadius: 10,
-        border: '1px solid rgba(29, 166, 106, 0.30)',
-        background: 'rgba(29, 166, 106, 0.08)',
+        border: '1px solid var(--terminal-border)',
+        background: 'var(--terminal-surface-subtle)',
       }}
     >
       {rows.map(network => {
@@ -34,15 +34,16 @@ export default function OndoDepositNetworkSelector({
             disabled={disabled}
             style={{
               minWidth: 0,
-              border: selected ? '2px solid #15803D' : '2px solid transparent',
+              border: selected ? '1px solid var(--terminal-orange)' : '1px solid transparent',
               borderRadius: 8,
+              minHeight: 36,
               padding: '7px 8px',
-              background: selected ? '#fff8e6' : 'transparent',
-              color: selected ? '#166534' : '#6B5A42',
+              background: selected ? 'var(--terminal-brand-soft)' : 'transparent',
+              color: selected ? 'var(--terminal-brand-strong)' : 'var(--terminal-text-muted)',
               fontSize: 11,
-              fontWeight: 900,
+              fontWeight: 700,
               cursor: disabled ? 'default' : 'pointer',
-              boxShadow: selected ? '0 1px 3px rgba(21,128,61,0.16)' : 'none',
+              boxShadow: 'none',
             }}
           >
             {network.label}

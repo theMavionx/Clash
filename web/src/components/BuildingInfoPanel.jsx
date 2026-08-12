@@ -10,8 +10,10 @@ import { useFarcaster } from '../hooks/useFarcaster';
 import useHydratedNftPlayer from '../hooks/useHydratedNftPlayer';
 import { fetchOwnedNftsForPlayerWallets, nftLevelImageUrl, nftRarityBadgeStyle, nftRarityCardStyle, nftRarityLabel, normalizeNftRarity, resolveDemonKingPlayerInventorySyncTarget, syncDemonKingNfts } from '../lib/nftV3Client';
 import { buySolanaShopItem } from '../lib/gameShop';
+import { uiButton, uiIconButton } from '../styles/theme';
 import { makePrivySolanaWallet, pickPrivySolanaWallet } from '../lib/privySolanaWallet';
 import { openSolanaWallet } from '../lib/solanaWalletUi';
+import './BuildingInfoPanel.css';
 import {
   emptyTownHallFlagEntitlement,
   parseTownHallFlagEntitlement,
@@ -177,7 +179,7 @@ const THUMBNAIL_STYLE_MAP = {
   mortar: {
     left: '53%',
     top: '50%',
-    transform: 'translate(-50%, -50%) scale(1.2)',
+    transform: 'translate(-50%, -50%) scale(1.35)',
     transformOrigin: 'center center',
     objectPosition: 'center center',
   },
@@ -660,6 +662,8 @@ async function prepareTownHallFlagImage(file) {
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('Image resize is unavailable');
   ctx.clearRect(0, 0, canvas.width, canvas.height);
+  // Canvas does not resolve CSS custom properties. Keep the normalized flag
+  // background deterministic for uploads in both UI themes.
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   const scale = Math.max(canvas.width / img.naturalWidth, canvas.height / img.naturalHeight);
@@ -709,7 +713,12 @@ function BuildingInfoPanel({ onOpenTroops }) {
   const [troopActionPending, setTroopActionPending] = useState(null);
   const [troopInfo, setTroopInfo] = useState(null);
   const [localTroops, setLocalTroops] = useState(null);
+  const [shipUpgradePending, setShipUpgradePending] = useState(false);
   const shipActionPendingRef = useRef(false);
+  const modalRef = useRef(null);
+  const modalRestoreFocusRef = useRef(null);
+  const troopInfoRef = useRef(null);
+  const troopInfoRestoreFocusRef = useRef(null);
   const [demonKingNfts, setDemonKingNfts] = useState([]);
   const [demonKingNftLoading, setDemonKingNftLoading] = useState(false);
   const [demonKingNftError, setDemonKingNftError] = useState(null);
@@ -827,6 +836,16 @@ function BuildingInfoPanel({ onOpenTroops }) {
     setLocalTroops(null);
     setTroopActionPending(null);
   }, [serverTroopsKey]);
+
+  useEffect(() => {
+    setShipUpgradePending(false);
+  }, [building?.id, building?.server_id, building?.ship_level, building?.ship_update_nonce]);
+
+  useEffect(() => {
+    if (!shipUpgradePending) return undefined;
+    const timeout = window.setTimeout(() => setShipUpgradePending(false), 10000);
+    return () => window.clearTimeout(timeout);
+  }, [shipUpgradePending]);
 
   useEffect(() => {
     if (!troopActionPending) return undefined;
@@ -958,6 +977,90 @@ function BuildingInfoPanel({ onOpenTroops }) {
   }, [demonKingSyncTarget, hasDemonKingWallet, view]);
 
   const handleDeselect = useCallback(() => sendToGodot('deselect_building'), [sendToGodot]);
+  useEffect(() => {
+    if (!['INFO', 'UPGRADE', 'BUY_SHIP', 'FLAG', 'ALTAR_SKILLS', 'LOAD_TROOPS'].includes(view)) return undefined;
+
+    modalRestoreFocusRef.current = document.activeElement;
+    const focusModal = window.requestAnimationFrame(() => {
+      modalRef.current?.querySelector('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')?.focus();
+    });
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        if (view === 'LOAD_TROOPS') {
+          setView('ACTIONS');
+        } else {
+          handleDeselect();
+        }
+        return;
+      }
+      if (event.key !== 'Tab' || !modalRef.current) return;
+
+      const focusable = [...modalRef.current.querySelectorAll(
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      )].filter(element => element.getClientRects().length > 0);
+      if (focusable.length === 0) return;
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.cancelAnimationFrame(focusModal);
+      window.removeEventListener('keydown', handleKeyDown);
+      if (modalRestoreFocusRef.current instanceof HTMLElement && modalRestoreFocusRef.current.isConnected) {
+        modalRestoreFocusRef.current.focus();
+      }
+    };
+  }, [handleDeselect, view]);
+
+  useEffect(() => {
+    if (!troopInfo) return undefined;
+    troopInfoRestoreFocusRef.current = document.activeElement;
+    const focusDialog = window.requestAnimationFrame(() => {
+      troopInfoRef.current?.querySelector('button, [href], [tabindex]:not([tabindex="-1"])')?.focus();
+    });
+    const handleTroopInfoKeyDown = (event) => {
+      if (!troopInfoRef.current) return;
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        setTroopInfo(null);
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      event.stopImmediatePropagation();
+      const focusable = [...troopInfoRef.current.querySelectorAll(
+        'button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+      )].filter(element => element.getClientRects().length > 0);
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    window.addEventListener('keydown', handleTroopInfoKeyDown, true);
+    return () => {
+      window.cancelAnimationFrame(focusDialog);
+      window.removeEventListener('keydown', handleTroopInfoKeyDown, true);
+      if (troopInfoRestoreFocusRef.current instanceof HTMLElement && troopInfoRestoreFocusRef.current.isConnected) {
+        troopInfoRestoreFocusRef.current.focus();
+      }
+    };
+  }, [troopInfo]);
+
   const handleUpgrade = useCallback(() => {
     sendToGodot('upgrade_building');
     setView('ACTIONS'); // Close after upgrading
@@ -991,6 +1094,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
     if (current >= 3) return;
     if (!canAffordAltarCost(cost)) {
       setAltarError('Not enough resources');
+      return;
     }
     setAltarBusy(true);
     setAltarError(canAffordAltarCost(cost) ? '' : 'Trying server upgrade...');
@@ -1186,7 +1290,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
           onMouseDown={e => e.currentTarget.style.transform = 'scale(0.95)'}
           onMouseUp={e => e.currentTarget.style.transform = 'scale(1.05)'}
         >
-          <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+          <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="var(--terminal-surface)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
             <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
             <circle cx="9" cy="7" r="4"></circle>
             <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
@@ -1204,7 +1308,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
           onMouseDown={e => e.currentTarget.style.transform = 'scale(0.95)'}
           onMouseUp={e => e.currentTarget.style.transform = 'scale(1.05)'}
         >
-          <svg width={isMobile ? 32 : 40} height={isMobile ? 32 : 40} viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round">
+          <svg width={isMobile ? 32 : 40} height={isMobile ? 32 : 40} viewBox="0 0 24 24" fill="none" stroke="var(--terminal-surface)" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round">
             <line x1="12" y1="19" x2="12" y2="5"></line>
             <polyline points="5 12 12 5 19 12"></polyline>
           </svg>
@@ -1220,7 +1324,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
           onMouseDown={e => e.currentTarget.style.transform = 'scale(0.95)'}
           onMouseUp={e => e.currentTarget.style.transform = 'scale(1.05)'}
         >
-          <svg width={isMobile ? 32 : 38} height={isMobile ? 32 : 38} viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+          <svg width={isMobile ? 32 : 38} height={isMobile ? 32 : 38} viewBox="0 0 24 24" fill="none" stroke="var(--terminal-surface)" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
             <path d="M5 22V4"></path>
             <path d="M5 4h12l-2 4 2 4H5"></path>
           </svg>
@@ -1239,7 +1343,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
           onMouseDown={e => e.currentTarget.style.transform = 'scale(0.95)'}
           onMouseUp={e => e.currentTarget.style.transform = 'scale(1.05)'}
         >
-          <svg width={isMobile ? 34 : 42} height={isMobile ? 34 : 42} viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <svg width={isMobile ? 34 : 42} height={isMobile ? 34 : 42} viewBox="0 0 24 24" fill="none" stroke="var(--terminal-surface)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <path d="M4 12a8 8 0 0 1 13.7-5.6L20 8.7" />
             <path d="M20 4v4.7h-4.7" />
             <path d="M20 12a8 8 0 0 1-13.7 5.6L4 15.3" />
@@ -1257,7 +1361,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
           onMouseDown={e => e.currentTarget.style.transform = 'scale(0.95)'}
           onMouseUp={e => e.currentTarget.style.transform = 'scale(1.05)'}
         >
-          <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+          <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="var(--terminal-surface)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="12" cy="5" r="3"></circle>
             <line x1="12" y1="22" x2="12" y2="8"></line>
             <path d="M5 12H2a10 10 0 0 0 20 0h-3"></path>
@@ -1276,7 +1380,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
           onMouseDown={e => e.currentTarget.style.transform = 'scale(0.95)'}
           onMouseUp={e => e.currentTarget.style.transform = 'scale(1.05)'}
         >
-          <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+          <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="var(--terminal-surface)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
             <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
             <circle cx="9" cy="7" r="4"></circle>
             <line x1="19" y1="8" x2="19" y2="14"></line>
@@ -1296,7 +1400,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
           onMouseDown={e => e.currentTarget.style.transform = 'scale(0.95)'}
           onMouseUp={e => e.currentTarget.style.transform = 'scale(1.05)'}
         >
-          <svg width={isMobile ? 32 : 40} height={isMobile ? 32 : 40} viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round">
+          <svg width={isMobile ? 32 : 40} height={isMobile ? 32 : 40} viewBox="0 0 24 24" fill="none" stroke="var(--terminal-surface)" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round">
             <line x1="12" y1="19" x2="12" y2="5"></line>
             <polyline points="5 12 12 5 19 12"></polyline>
           </svg>
@@ -1305,113 +1409,191 @@ function BuildingInfoPanel({ onOpenTroops }) {
     </div>
   );
 
-  const renderModal = (title, level, leftContent, centerImg, rightContent, mainActionText, onMainAction) => {
+  const getResourceShortfalls = (costObj) => Object.entries(costObj || {})
+    .map(([resource, rawRequired]) => {
+      const required = Math.max(0, Number(rawRequired) || 0);
+      const available = Math.max(0, Number(resources?.[resource]) || 0);
+      return { resource, amount: Math.max(0, required - available) };
+    })
+    .filter(({ amount }) => amount > 0);
+
+  const formatResourceShortfalls = (shortfalls) => shortfalls.length > 0
+    ? `Need ${shortfalls.map(({ resource, amount }) => `${amount.toLocaleString()} ${resource}`).join(' · ')}`
+    : '';
+
+  const renderModal = (
+    title,
+    level,
+    leftContent,
+    centerImg,
+    rightContent,
+    mainActionText,
+    onMainAction,
+    actionOptions = {},
+  ) => {
     const isAltarModal = title === 'ALTAR';
+    const costFirst = view === 'UPGRADE' || view === 'BUY_SHIP';
+    const numericLevel = Number(level);
+    const nextLevel = Number.isFinite(numericLevel) ? numericLevel + 1 : null;
+    const titleId = `building-info-title-${String(building.id || 'building').replace(/[^a-z0-9_-]/gi, '-')}`;
+    const actionDisabled = Boolean(actionOptions.disabled || actionOptions.busy);
     return (
-    <div style={{...LT.overlay, ...(isMobile ? { alignItems: 'stretch' } : {})}} onClick={handleDeselect}>
-      <div style={{...LT.panel, ...(isAltarModal && !isMobile ? { width: 1010, maxWidth: '94vw' } : {}), ...(isMobile ? { width: '100vw', maxWidth: '100vw', height: '100%', maxHeight: 'none', borderRadius: 0 } : {})}} onClick={e => e.stopPropagation()}>
-        {/* Header */}
-        <div style={{...LT.header, height: isMobile ? 44 : 54}}>
-          <span style={{...LT.headerTitle, fontSize: isMobile ? 18 : 24}}>{title}</span>
-          <button style={LT.closeBtn} onClick={handleDeselect}>X</button>
-        </div>
-
-        {/* Scrollable content area */}
-        <div style={{ ...styles.contentLayout, marginTop: isMobile ? 8 : 12, flexDirection: isMobile ? 'column' : 'row', flexWrap: 'nowrap', gap: isMobile ? 12 : (isAltarModal ? 34 : 20), minHeight: 0, padding: isMobile ? '8px 12px 22px' : (isAltarModal ? '0 20px 26px' : undefined) }}>
-
-          {/* Image column (on mobile: first, smaller) */}
-          <div style={{ flex: isMobile ? 'none' : (isAltarModal ? '0 0 460px' : 1), display: 'flex', flexDirection: 'column', alignItems: 'center', ...isMobile && { order: 1 } }}>
-             <div style={styles.characterWrapper}>
-               {level && (
-                 <div style={styles.upgradeBadge}>
-                   <div style={styles.badgeBigPart}>
-                     <span style={styles.badgeLvlText}>Lvl</span>
-                     <span style={{...styles.badgeLvlNumber, fontSize: isMobile ? 22 : undefined}}>{level}</span>
-                   </div>
-                 </div>
-               )}
-               <div style={{ ...styles.characterSphere, ...(isAltarModal && !isMobile ? { width: 280, height: 280 } : {}), ...(isMobile ? { width: 110, height: 110 } : {})}}>
-                  {centerImg}
-               </div>
-             </div>
-          </div>
-
-          {/* Stats & Cost column */}
-          <div style={{...styles.leftColumn, ...(isAltarModal && !isMobile ? { width: 410 } : {}), ...isMobile && { width: '100%', order: 2, marginTop: 4 }}}>
-             <h3 style={{...styles.sectionTitle, marginTop: 0, fontSize: isMobile ? 16 : undefined}}>Stats</h3>
-             <div style={styles.statsContainer}>
-                {leftContent}
-             </div>
-             {rightContent && (
-               <div style={{ marginTop: isMobile ? 12 : 20 }}>
-                 {rightContent}
-               </div>
-             )}
-          </div>
-        </div>
-
-        {/* Action button — always at bottom, outside scroll area */}
-        {mainActionText && (
-          <div style={{ padding: isMobile ? '8px 12px 12px' : '12px 20px 16px', display: 'flex', justifyContent: 'center' }}>
+      <div className="building-info-modal__overlay" onClick={handleDeselect}>
+        <section
+          ref={modalRef}
+          className={`building-info-modal${isAltarModal ? ' building-info-modal--wide' : ''}`}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby={titleId}
+          onClick={event => event.stopPropagation()}
+        >
+          <header className="building-info-modal__header">
+            <h2 id={titleId} className="building-info-modal__title">{title}</h2>
             <button
-              style={{...styles.actionBtn, width: '100%', maxWidth: isMobile ? '100%' : 240}}
-              onClick={onMainAction}
+              type="button"
+              className="building-info-modal__close"
+              onClick={handleDeselect}
+              aria-label={`Close ${title}`}
             >
-               {mainActionText}
+              <span aria-hidden="true">&times;</span>
             </button>
+          </header>
+
+          <div
+            className="building-info-modal__body clash-scroll"
+            role="region"
+            aria-label={`${building.name} details`}
+            tabIndex={0}
+          >
+            <div className="building-info-modal__layout">
+              <aside className="building-info-modal__preview" aria-label={`${building.name} preview`}>
+                <div className="building-info-modal__sphere">{centerImg}</div>
+                {level != null && (
+                  <div className="building-info-modal__level" aria-label={costFirst && nextLevel != null ? `Level ${level} to ${nextLevel}` : `Level ${level}`}>
+                    <span>Level</span>
+                    <strong>{level}</strong>
+                    {costFirst && nextLevel != null && (
+                      <>
+                        <span className="building-info-modal__level-arrow" aria-hidden="true">&rarr;</span>
+                        <strong className="building-info-modal__level-next">{nextLevel}</strong>
+                      </>
+                    )}
+                  </div>
+                )}
+              </aside>
+
+              <div className="building-info-modal__details">
+                {costFirst && rightContent && (
+                  <section className="building-info-modal__cost">{rightContent}</section>
+                )}
+                <section className="building-info-modal__stats" aria-labelledby={`${titleId}-stats`}>
+                  <h3 id={`${titleId}-stats`} className="building-info-modal__section-title">Stats</h3>
+                  <div className="building-info-modal__stats-grid">{leftContent}</div>
+                </section>
+                {!costFirst && rightContent && (
+                  <section className="building-info-modal__supplemental">{rightContent}</section>
+                )}
+              </div>
+            </div>
           </div>
-        )}
+
+          {mainActionText && (
+            <footer className="building-info-modal__footer">
+              {actionOptions.status && (
+                <div className="building-info-modal__action-status" role="status">
+                  {actionOptions.status}
+                </div>
+              )}
+              <button
+                type="button"
+                className="building-info-modal__action"
+                onClick={onMainAction}
+                disabled={actionDisabled}
+                aria-disabled={actionDisabled}
+                aria-busy={actionOptions.busy || undefined}
+              >
+                {actionOptions.busy ? (actionOptions.busyText || 'Upgrading…') : mainActionText}
+              </button>
+            </footer>
+          )}
+        </section>
       </div>
-    </div>
     );
   };
 
-  const StatBox = ({ label, current, upgradeTo }) => (
-    <div style={styles.statBox}>
-      <div style={styles.statBoxLabel}>{label}</div>
-      <div style={styles.statBoxValues}>
-        <span style={styles.statCurrent}>{current}</span>
-        {upgradeTo && (
-           <>
-             <span style={styles.statArrow}>→</span>
-             <span style={styles.statUpgraded}>{upgradeTo}</span>
-           </>
-        )}
+  const StatBox = ({ label, current, upgradeTo }) => {
+    const hasUpgrade = upgradeTo != null;
+    const hasChange = hasUpgrade && String(upgradeTo) !== String(current);
+    const accessibleValue = hasChange
+      ? `${label}: ${current}, upgrades to ${upgradeTo}`
+      : `${label}: ${current}`;
+    return (
+      <div className="building-info-stat" aria-label={accessibleValue}>
+        <div className="building-info-stat__label">{label}</div>
+        <div className="building-info-stat__values" aria-hidden="true">
+          <span className="building-info-stat__current">{current}</span>
+          {hasChange && (
+            <>
+              <span className="building-info-stat__arrow">&rarr;</span>
+              <span className="building-info-stat__upgraded">{upgradeTo}</span>
+            </>
+          )}
+        </div>
       </div>
-    </div>
-  );
+    );
+  };
 
-  const ResourceReqs = ({ costObj, title }) => (
-    <>
-      <h3 style={styles.sectionTitle}>{title || "Resource Cost"}</h3>
-      <div style={styles.reqGrid}>
-        {costObj && Object.keys(costObj).length > 0 ? Object.entries(costObj).map(([res, amt]) => {
-          if (amt === 0) return null;
-          return (
-            <div key={res} style={styles.reqBox}>
-              <img src={ICONS[res] || goldIcon} style={styles.reqIconImg} alt={res} />
-              <span style={styles.reqAmt}>{amt.toLocaleString()}</span>
-            </div>
-          );
-        }) : (
-          <div style={styles.reqBoxMax}>
-            <span style={{color: '#94a3b8', fontSize: 13}}>No Requirements</span>
-          </div>
-        )}
+  const ResourceReqs = ({ costObj, title }) => {
+    const entries = costObj
+      ? Object.entries(costObj).filter(([, amount]) => Number(amount) > 0)
+      : [];
+    return (
+      <div className="building-info-cost">
+        <h3 className="building-info-modal__section-title">{title || 'Resource Cost'}</h3>
+        <div className="building-info-cost__grid">
+          {entries.length > 0 ? entries.map(([res, amount]) => {
+            const required = Number(amount);
+            const available = Number(resources?.[res] || 0);
+            const shortfall = Math.max(0, required - available);
+            return (
+              <div
+                key={res}
+                className={`building-info-cost__chip${shortfall > 0 ? ' building-info-cost__chip--short' : ''}`}
+                aria-label={`${res}: ${required.toLocaleString()} required, ${available.toLocaleString()} available${shortfall > 0 ? `, ${shortfall.toLocaleString()} short` : ''}`}
+              >
+                <img src={ICONS[res] || goldIcon} className="building-info-cost__icon" alt="" />
+                <div className="building-info-cost__values" aria-hidden="true">
+                  <span className="building-info-cost__required-label">Required</span>
+                  <strong>{required.toLocaleString()}</strong>
+                  <span>{shortfall > 0 ? `${shortfall.toLocaleString()} short` : `${available.toLocaleString()} available`}</span>
+                </div>
+              </div>
+            );
+          }) : (
+            <div className="building-info-cost__empty">No requirements</div>
+          )}
+        </div>
       </div>
-    </>
-  );
+    );
+  };
 
   const buildingImg = THUMBNAIL_MAP[building.id] ? (
     <img
       src={THUMBNAIL_MAP[building.id]}
       alt={building.name}
-      style={building.id === 'altar'
-        ? { ...styles.characterImg, ...styles.altarStaticImg }
-        : { ...styles.characterImg, ...(THUMBNAIL_STYLE_MAP[building.id] || {}) }}
+      className={`building-info-modal__building-image${building.id === 'altar' ? ' building-info-modal__building-image--altar' : ''}`}
+      style={building.id === 'altar' ? undefined : (THUMBNAIL_STYLE_MAP[building.id] || undefined)}
     />
   ) : (
-    <div style={{...styles.characterImg, display:'flex', alignItems:'center', justifyContent:'center', fontSize: 150}}>🏠</div>
+    <svg
+      className="building-info-modal__building-image building-info-modal__building-image--fallback"
+      viewBox="0 0 64 64"
+      aria-label={building.name || 'Building'}
+      role="img"
+    >
+      <path d="M8 29 32 9l24 20v26H38V39H26v16H8Z" fill="currentColor" opacity=".18" />
+      <path d="M8 29 32 9l24 20M13 25v30h38V25M26 55V39h12v16" fill="none" stroke="currentColor" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
   );
 
   const renderInfo = () => {
@@ -1436,13 +1618,13 @@ function BuildingInfoPanel({ onOpenTroops }) {
       );
       const rightContent = (
         <>
-          <h3 style={styles.sectionTitle}>Description</h3>
-          <div style={styles.descriptionBox}>
-            <span style={styles.descriptionText}>{description}</span>
+          <h3 className="building-info-modal__section-title">Description</h3>
+          <div className="building-info-modal__description">
+            <span>{description}</span>
           </div>
-          <h3 style={styles.sectionTitle}>Status</h3>
-          <div style={{...styles.reqBoxMax, padding: 16, background: 'rgba(0, 0, 0, 0.05)', borderRadius: 8, border: '1px solid rgba(0, 0, 0, 0.1)', boxShadow: 'inset 0 1px 2px rgba(255,255,255,0.5)'}}>
-            <span style={{color: '#377d9f', fontSize: 16, fontWeight: 800}}>
+          <h3 className="building-info-modal__section-title">Status</h3>
+          <div className="building-info-modal__status">
+            <span>
               {unlockedAbilities.length > 0 ? unlockedAbilities.join(' · ') : 'Basic cannon and rally'}
             </span>
           </div>
@@ -1525,15 +1707,15 @@ function BuildingInfoPanel({ onOpenTroops }) {
       <>
          {description && (
            <>
-             <h3 style={styles.sectionTitle}>Description</h3>
-             <div style={styles.descriptionBox}>
-               <span style={styles.descriptionText}>{description}</span>
+              <h3 className="building-info-modal__section-title">Description</h3>
+              <div className="building-info-modal__description">
+                <span>{description}</span>
              </div>
            </>
          )}
-         <h3 style={styles.sectionTitle}>Status</h3>
-          <div style={{...styles.reqBoxMax, padding: 16, background: 'rgba(0, 0, 0, 0.05)', borderRadius: 16, border: '1px solid rgba(0, 0, 0, 0.1)', boxShadow: 'inset 0 1px 2px rgba(255,255,255,0.5)'}}>
-            <span style={{color: '#377d9f', fontSize: 16, fontWeight: 800}}>Functional</span>
+         <h3 className="building-info-modal__section-title">Status</h3>
+          <div className="building-info-modal__status">
+            <span>Functional</span>
           </div>
           {building.id === 'flamethrower' && !building.is_enemy && (
             <button
@@ -1558,17 +1740,18 @@ function BuildingInfoPanel({ onOpenTroops }) {
     const flagEntitlementReady = flagEntitlement.loaded && !flagEntitlement.loading && !flagEntitlement.error;
     const flagUploadDisabled = flagBusy || !flagFile || !flagEntitlementReady;
     return (
-      <div style={{ ...LT.overlay, ...(isMobile ? { alignItems: 'stretch' } : {}) }} onClick={handleDeselect}>
-        <div style={{ ...LT.panel, ...(isMobile ? { width: '100vw', maxWidth: '100vw', height: '100%', maxHeight: 'none', borderRadius: 0 } : { width: 560 }) }} onClick={e => e.stopPropagation()}>
-          <div style={{ ...LT.header, height: isMobile ? 44 : 54 }}>
-            <span style={{ ...LT.headerTitle, fontSize: isMobile ? 18 : 24 }}>TOWN HALL FLAG</span>
-            <button style={LT.closeBtn} onClick={handleDeselect}>X</button>
-          </div>
-          <div style={{ padding: isMobile ? '14px 16px 18px' : '18px 24px 24px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div className="building-info-modal__overlay" onClick={handleDeselect}>
+        <section ref={modalRef} className="building-info-modal building-config-modal" role="dialog" aria-modal="true" aria-labelledby="town-hall-flag-title" onClick={e => e.stopPropagation()}>
+          <header className="building-info-modal__header">
+            <h2 id="town-hall-flag-title" className="building-info-modal__title">Town Hall Flag</h2>
+            <button type="button" className="building-info-modal__close" onClick={handleDeselect} aria-label="Close Town Hall Flag"><span aria-hidden="true">&times;</span></button>
+          </header>
+          <div className="building-info-modal__body clash-scroll building-config-modal__body" role="region" aria-label="Town Hall flag settings" tabIndex={0}>
             <div style={styles.flagLibraryHeader}>Library</div>
             <div style={{ ...styles.flagLibraryGrid, ...(isMobile ? styles.flagLibraryGridMobile : null) }}>
               <button
                 type="button"
+                className={`building-config-modal__flag-card${!hasCustomFlag && !flagPreview ? ' building-config-modal__flag-card--active' : ''}`}
                 style={{
                   ...styles.flagLibraryCard,
                   ...(!hasCustomFlag && !flagPreview ? styles.flagLibraryCardActive : null),
@@ -1594,7 +1777,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
                 <div style={styles.flagLibraryTitle}>Standard</div>
                 <div style={styles.flagLibrarySub}>{hasCustomFlag ? 'Restore original' : 'Current flag'}</div>
               </button>
-              <div style={{
+              <div className={`building-config-modal__flag-card${hasCustomFlag || flagPreview ? ' building-config-modal__flag-card--active' : ''}`} style={{
                 ...styles.flagLibraryCard,
                 ...(hasCustomFlag || flagPreview ? styles.flagLibraryCardActive : null),
               }}>
@@ -1657,7 +1840,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
                       : 'Connect Solana Wallet'}
             </button>
           </div>
-        </div>
+        </section>
       </div>
     );
   };
@@ -1678,6 +1861,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
         ? building.ship_next_unlocks.filter(Boolean)
         : [];
       const shipUpgradeCost = building.ship_upgrade_cost || {};
+      const shipUpgradeShortfalls = getResourceShortfalls(shipUpgradeCost);
       const leftContent = (
         <>
           <StatBox label="Troop Capacity" current={currentCapacity} upgradeTo={nextCapacity} />
@@ -1695,8 +1879,12 @@ function BuildingInfoPanel({ onOpenTroops }) {
         leftContent,
         buildingImg,
         rightContent,
-        'Upgrade Now',
+        `Upgrade to Level ${currentLevel + 1}`,
         handleMainShipUpgrade,
+        {
+          disabled: shipUpgradeShortfalls.length > 0,
+          status: formatResourceShortfalls(shipUpgradeShortfalls),
+        },
       );
     }
     const isTownHallUpgrade = building.id === 'town_hall';
@@ -1823,6 +2011,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
         )}
       </>
     );
+    const upgradeShortfalls = getResourceShortfalls(building.upgrade_cost);
 
     return renderModal(
       `UPGRADE ${building.name.toUpperCase()}`, 
@@ -1830,8 +2019,12 @@ function BuildingInfoPanel({ onOpenTroops }) {
       leftContent, 
       buildingImg, 
       rightContent, 
-      "Upgrade Now", 
-      handleUpgrade
+      `Upgrade to Level ${Number(building.level || 0) + 1}`,
+      handleUpgrade,
+      {
+        disabled: upgradeShortfalls.length > 0,
+        status: formatResourceShortfalls(upgradeShortfalls),
+      },
     );
   };
 
@@ -1863,7 +2056,8 @@ function BuildingInfoPanel({ onOpenTroops }) {
     const current = Number(altarLevels[altarTab] || 0);
     const nextCost = active.costs[current] || null;
     const canAffordUpgrade = !!nextCost && canAffordAltarCost(nextCost);
-    const canClickUpgrade = current < 3 && nextCost && !altarBusy;
+    const altarShortfalls = nextCost ? getResourceShortfalls(nextCost) : [];
+    const canClickUpgrade = current < 3 && nextCost && canAffordUpgrade && !altarBusy;
 
     const CompactCost = ({ cost = {} }) => (
       <div style={{ ...styles.altarTreeCostList, ...(isMobile ? styles.altarTreeCostListMobile : null) }}>
@@ -1881,12 +2075,14 @@ function BuildingInfoPanel({ onOpenTroops }) {
     );
 
     return (
-      <div style={{ ...LT.overlay, ...(isMobile ? { alignItems: 'stretch' } : {}) }} onClick={handleDeselect}>
-        <div style={{ ...LT.panel, ...styles.altarTreePanel, ...(isMobile ? styles.altarTreePanelMobile : null) }} onClick={e => e.stopPropagation()}>
-          <div style={{ ...LT.header, height: isMobile ? 44 : 54 }}>
-            <span style={{ ...LT.headerTitle, fontSize: isMobile ? 18 : 24 }}>ALTAR UPGRADES</span>
-            <button style={LT.closeBtn} onClick={handleDeselect}>X</button>
-          </div>
+      <div className="building-info-modal__overlay" onClick={handleDeselect}>
+        <section ref={modalRef} className="building-info-modal building-info-modal--wide altar-config-modal" role="dialog" aria-modal="true" aria-labelledby="altar-upgrades-title" onClick={e => e.stopPropagation()}>
+          <header className="building-info-modal__header">
+            <h2 id="altar-upgrades-title" className="building-info-modal__title">Altar Upgrades</h2>
+            <button type="button" className="building-info-modal__close" onClick={handleDeselect} aria-label="Close Altar upgrades"><span aria-hidden="true">&times;</span></button>
+          </header>
+
+          <div className="building-info-modal__body clash-scroll altar-config-modal__scroll" role="region" aria-label="Altar skill branches" tabIndex={0}>
 
           <div style={{ ...styles.altarTabs, ...styles.altarTreeTabs, ...(isMobile ? styles.altarTreeTabsMobile : null) }}>
             {ALTAR_SKILL_ORDER.map((skillId) => {
@@ -1894,6 +2090,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
               return (
                 <button
                   key={skillId}
+                  className={`altar-config-modal__tab${selected ? ' altar-config-modal__tab--active' : ''}`}
                   style={{ ...styles.altarTab, ...(isMobile ? styles.altarTabMobile : null), ...(selected ? styles.altarTabActive : null) }}
                   onClick={() => { setAltarTab(skillId); setAltarError(''); }}
                 >
@@ -1904,19 +2101,19 @@ function BuildingInfoPanel({ onOpenTroops }) {
             })}
           </div>
 
-          <div style={{ ...styles.altarTreeBody, ...(isMobile ? styles.altarTreeBodyMobile : null) }}>
-            <div style={{ ...styles.altarTreeCanvas, ...(isMobile ? styles.altarTreeCanvasMobile : null) }}>
-              <div style={{ ...styles.altarTreeBranchTitle, ...(isMobile ? styles.altarTreeBranchTitleMobile : null) }}>{active.title}</div>
-              <div style={{ ...styles.altarTreeBranchSub, ...(isMobile ? styles.altarTreeBranchSubMobile : null) }}>Current: {formatAltarSkillBonus(active, current)}</div>
-              <div style={{ ...styles.altarTreePath, ...(isMobile ? styles.altarTreePathMobile : null) }}>
+          <div className="altar-config-modal__body" style={{ ...styles.altarTreeBody, ...(isMobile ? styles.altarTreeBodyMobile : null) }}>
+            <div className="altar-config-modal__canvas" style={{ ...styles.altarTreeCanvas, ...(isMobile ? styles.altarTreeCanvasMobile : null) }}>
+              <div className="altar-config-modal__branch-title" style={{ ...styles.altarTreeBranchTitle, ...(isMobile ? styles.altarTreeBranchTitleMobile : null) }}>{active.title}</div>
+              <div className="altar-config-modal__branch-sub" style={{ ...styles.altarTreeBranchSub, ...(isMobile ? styles.altarTreeBranchSubMobile : null) }}>Current: {formatAltarSkillBonus(active, current)}</div>
+              <div className="altar-config-modal__path" style={{ ...styles.altarTreePath, ...(isMobile ? styles.altarTreePathMobile : null) }}>
                 {[1, 2, 3].map((level) => {
                   const unlocked = level <= current;
                   const isNext = level === current + 1;
                   return (
-                    <div key={level} style={{ ...styles.altarTreeRow, ...(isMobile ? styles.altarTreeRowMobile : null) }}>
-                      <div style={{ ...styles.altarTreeNodeWrap, ...(isMobile ? styles.altarTreeNodeWrapMobile : null) }}>
+                    <div key={level} className="altar-config-modal__row" style={{ ...styles.altarTreeRow, ...(isMobile ? styles.altarTreeRowMobile : null) }}>
+                      <div className="altar-config-modal__node-wrap" style={{ ...styles.altarTreeNodeWrap, ...(isMobile ? styles.altarTreeNodeWrapMobile : null) }}>
                         {level < 3 && <div style={{ ...styles.altarTreeLine, ...(isMobile ? styles.altarTreeLineMobile : null) }} />}
-                        <div style={{ ...styles.altarTreeNode, ...(isMobile ? styles.altarTreeNodeMobile : null), ...(unlocked ? styles.altarTreeNodeUnlocked : null), ...(isNext ? styles.altarTreeNodeNext : null) }}>
+                        <div className={`altar-config-modal__node${unlocked ? ' altar-config-modal__node--unlocked' : ''}${isNext ? ' altar-config-modal__node--next' : ''}`} style={{ ...styles.altarTreeNode, ...(isMobile ? styles.altarTreeNodeMobile : null), ...(unlocked ? styles.altarTreeNodeUnlocked : null), ...(isNext ? styles.altarTreeNodeNext : null) }}>
                           <span style={{ ...styles.altarTreeNodeLevel, ...(isMobile ? styles.altarTreeNodeLevelMobile : null) }}>Lv{level}</span>
                           <span style={{ ...styles.altarTreeNodeValue, ...(isMobile ? styles.altarTreeNodeValueMobile : null) }}>
                             {active.bonusType === 'range'
@@ -1927,7 +2124,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
                           </span>
                         </div>
                       </div>
-                      <div style={{ ...styles.altarTreeNodeInfo, ...(isMobile ? styles.altarTreeNodeInfoMobile : null), ...(unlocked ? styles.altarTreeNodeInfoUnlocked : null) }}>
+                      <div className={`altar-config-modal__node-info${unlocked ? ' altar-config-modal__node-info--unlocked' : ''}${isNext ? ' altar-config-modal__node-info--next' : ''}`} style={{ ...styles.altarTreeNodeInfo, ...(isMobile ? styles.altarTreeNodeInfoMobile : null), ...(unlocked ? styles.altarTreeNodeInfoUnlocked : null) }}>
                         <div style={{ ...styles.altarTreeNodeName, ...(isMobile ? styles.altarTreeNodeNameMobile : null) }}>
                           {active.label} {level}{unlocked ? ' ACTIVE' : isNext ? ' NEXT' : ''}
                         </div>
@@ -1940,23 +2137,29 @@ function BuildingInfoPanel({ onOpenTroops }) {
               </div>
             </div>
 
-            <div style={{ ...styles.altarTreeSide, ...(isMobile ? styles.altarTreeSideMobile : null) }}>
+            <aside className="altar-config-modal__side" style={{ ...styles.altarTreeSide, ...(isMobile ? styles.altarTreeSideMobile : null) }}>
               <div style={{ ...styles.altarTreeSideTitle, ...(isMobile ? styles.altarTreeSideTitleMobile : null) }}>{current >= 3 ? 'Branch Complete' : `Upgrade to Lv.${current + 1}`}</div>
               <div style={{ ...styles.altarTreeSideText, ...(isMobile ? styles.altarTreeSideTextMobile : null) }}>
                 {current >= 3 ? formatAltarSkillBonus(active, 3) : `Next bonus: ${formatAltarSkillBonus(active, current + 1)}`}
               </div>
               {nextCost ? <AltarResourceCards cost={nextCost} /> : <div style={styles.altarTreeDone}>MAX LEVEL</div>}
               {altarError && <div style={styles.altarError}>{altarError}</div>}
+              {!altarError && altarShortfalls.length > 0 && (
+                <div className="altar-config-modal__status" role="status">
+                  {formatResourceShortfalls(altarShortfalls)}
+                </div>
+              )}
               <button
                 style={{ ...styles.actionBtn, width: '100%', marginTop: isMobile ? 10 : 16, minHeight: isMobile ? 46 : undefined, opacity: canClickUpgrade ? (canAffordUpgrade ? 1 : 0.82) : 0.55 }}
                 disabled={!canClickUpgrade}
                 onClick={() => handleAltarUpgrade(altarTab)}
               >
-                {current >= 3 ? 'MAX LEVEL' : altarBusy ? 'UPGRADING...' : 'UPGRADE NOW'}
+                {current >= 3 ? 'MAX LEVEL' : altarBusy ? 'UPGRADING...' : altarShortfalls.length > 0 ? 'NOT ENOUGH RESOURCES' : 'UPGRADE NOW'}
               </button>
-            </div>
+            </aside>
           </div>
-        </div>
+          </div>
+        </section>
       </div>
     );
   };
@@ -1980,7 +2183,11 @@ function BuildingInfoPanel({ onOpenTroops }) {
       shipImg, 
       rightContent, 
       "Unlock Ship", 
-      handleBuyShip
+      handleBuyShip,
+      {
+        disabled: getResourceShortfalls(shipCost).length > 0,
+        status: formatResourceShortfalls(getResourceShortfalls(shipCost)),
+      },
     );
   };
 
@@ -2002,7 +2209,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
       : [];
     const shipNextTownHall = Number(building.ship_next_town_hall || 1);
     const shipUpgradeCost = building.ship_upgrade_cost || {};
-    const canAffordShipUpgrade = ['gold', 'wood', 'ore'].every((key) => Number(resources?.[key] || 0) >= Number(shipUpgradeCost?.[key] || 0));
+    const shipUpgradeShortfalls = getResourceShortfalls(shipUpgradeCost);
     const portNumber = Number(building.port_number || 0);
     const troopLvls = building.troop_levels || {};
     const getTroopLvl = (name) => {
@@ -2011,6 +2218,18 @@ function BuildingInfoPanel({ onOpenTroops }) {
     };
     const allTroops = ['Knight', 'Mage', 'Archer', 'PeaShooter', 'Mimic', 'Necromancer', 'WindMage', 'Horror', 'MechanicalDragon', 'IceGolem'];
     const currentTownHallLevel = Number(buildingDefs?.th_level || buildingDefs?.town_hall_level || 1) || 1;
+    const shipUpgradeBlockedReason = shipUpgradePending
+      ? 'Upgrade pending…'
+      : currentTownHallLevel < shipNextTownHall
+        ? `Town Hall Level ${shipNextTownHall} required`
+        : shipUpgradeShortfalls.length > 0
+          ? formatResourceShortfalls(shipUpgradeShortfalls)
+          : '';
+    const handleInlineShipUpgrade = () => {
+      if (shipUpgradeBlockedReason || shipLevel >= shipMaxLevel) return;
+      setShipUpgradePending(true);
+      if (!sendToGodot('upgrade_main_ship')) setShipUpgradePending(false);
+    };
     const troopDefinitions = buildingDefs?.troops || {};
     const troopUnlock = (name) => {
       const base = troopBaseName(name);
@@ -2097,21 +2316,26 @@ function BuildingInfoPanel({ onOpenTroops }) {
     };
 
     const renderTroopInfoButton = (details) => (
-      <span
-        role="button"
-        tabIndex={0}
+      <button
+        type="button"
+        className="unit-catalog-card__info"
         aria-label={`View ${troopDisplayName(details.name)} details`}
         title="Unit details"
         style={{...LT.troopInfoButton, ...(isMobile ? LT.troopInfoButtonMobile : null)}}
-        onPointerDown={(event) => event.stopPropagation()}
         onClick={(event) => openTroopInfo(event, details)}
-        onKeyDown={(event) => {
-          if (event.key !== 'Enter' && event.key !== ' ') return;
-          openTroopInfo(event, details);
-        }}
       >
-        i
-      </span>
+        <span aria-hidden="true">i</span>
+      </button>
+    );
+
+    const renderTroopCardAction = ({ label, disabled = false, onClick }) => (
+      <button
+        type="button"
+        className="unit-catalog-card__action"
+        aria-label={label}
+        disabled={disabled}
+        onClick={onClick}
+      />
     );
 
     const handleLoadTroop = (name) => {
@@ -2171,7 +2395,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
       return (
         <>
           {loading && (
-            <button type="button" style={{...LT.troopCard, ...LT.troopCardMuted, width: cardW, flexShrink: isMobile ? 1 : 0}}>
+            <div className="unit-catalog-card unit-catalog-card--muted" style={{...LT.troopCard, ...LT.troopCardMuted, width: cardW, flexShrink: isMobile ? 1 : 0}}>
               {renderTroopInfoButton({ name: base, level: 1, status: 'Syncing NFT ownership' })}
               <div style={{...LT.demonIdBadge, ...(isMobile ? LT.demonIdBadgeMobile : null), ...LT.demonIdBadgeWithInfo, fontSize: isMobile ? 9 : 11}}>
                 SYNC
@@ -2183,7 +2407,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
               <div style={{...LT.bottomOverlay, height: isMobile ? 26 : 30}}>
                 <span style={{...LT.costText, fontSize: isMobile ? 9 : 11}}>SYNCING</span>
               </div>
-            </button>
+            </div>
           )}
           {!loading && availableTokens.map((token) => {
             const entry = nftBackedShipEntry(base, token);
@@ -2199,15 +2423,17 @@ function BuildingInfoPanel({ onOpenTroops }) {
               ? shipTroops.length + troopSlotCost(entry) > capacity
               : !troopSwapPlacement(shipTroops, swapSlot, entry, capacity);
             return (
-              <button
+              <div
                 key={entry}
-                type="button"
+                className="unit-catalog-card"
                 aria-disabled={disabled}
-                style={{...LT.troopCard, ...rarityStyle, width: cardW, flexShrink: isMobile ? 1 : 0, ...(disabled ? { opacity: 0.45, cursor: 'not-allowed' } : null)}}
-                onClick={() => {
-                  if (!disabled) handleLoadTroop(entry);
-                }}
+                style={{...LT.troopCard, ...rarityStyle, width: cardW, flexShrink: isMobile ? 1 : 0}}
               >
+                {renderTroopCardAction({
+                  label: disabled ? `${troopDisplayName(base)} unavailable: ship capacity exceeded` : `Load ${troopDisplayName(base)}`,
+                  disabled,
+                  onClick: () => handleLoadTroop(entry),
+                })}
                 {renderTroopInfoButton({
                   name: entry,
                   level: Number(token.level || 1),
@@ -2228,18 +2454,21 @@ function BuildingInfoPanel({ onOpenTroops }) {
                 </div>
                 <div style={{...LT.bottomOverlay, height: isMobile ? 26 : 30}}>
                   <span style={{...LT.costText, fontSize: isMobile ? 10 : 12}}>
-                    {troopSlotCost(base)} SLOTS
+                    {disabled ? 'SHIP FULL' : `${troopSlotCost(base)} SLOTS`}
                   </span>
                 </div>
-              </button>
+              </div>
             );
           })}
           {!loading && availableTokens.length === 0 && (
-            <button
-              type="button"
+            <div
+              className="unit-catalog-card unit-catalog-card--muted"
               style={{...LT.troopCard, ...LT.troopCardMuted, width: cardW, flexShrink: isMobile ? 1 : 0}}
-              onClick={() => openNftShop(cfg.collection)}
             >
+              {renderTroopCardAction({
+                label: `Open ${cfg.label} NFT collection`,
+                onClick: () => openNftShop(cfg.collection),
+              })}
               {renderTroopInfoButton({
                 name: base,
                 level: 1,
@@ -2257,7 +2486,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
                   {hasDemonKingWallet ? (error || (tokens.length ? 'ALL USED' : 'NEED NFT')) : 'CONNECT'}
                 </span>
               </div>
-            </button>
+            </div>
           )}
         </>
       );
@@ -2303,11 +2532,11 @@ function BuildingInfoPanel({ onOpenTroops }) {
       setView('ACTIONS');
     };
 
-    const slotW = isMobile ? 52 : (capacity > 6 ? 58 : 78);
-    const slotH = isMobile ? 66 : (capacity > 6 ? 74 : 100);
-    const cardW = isMobile ? 'clamp(84px, 27%, 102px)' : 100;
+    const slotW = isMobile ? 58 : (capacity > 6 ? 66 : 82);
+    const slotH = isMobile ? 74 : (capacity > 6 ? 82 : 104);
+    const cardW = isMobile ? undefined : 112;
     const mobileLoadedBarStyle = isMobile ? {
-      justifyContent: 'center',
+      justifyContent: 'flex-start',
       alignContent: 'center',
     } : null;
     const troopInfoBase = troopInfo ? troopBaseName(troopInfo.name) : '';
@@ -2321,51 +2550,85 @@ function BuildingInfoPanel({ onOpenTroops }) {
     const troopInfoSlots = troopInfoBase ? troopSlotCost(troopInfoBase) : 0;
     const troopInfoImage = troopInfoBase ? (troopInfoNft?.image || UNIT_IMAGES[troopInfoBase]) : null;
     return (
-      <div style={{...LT.overlay, ...(isMobile ? { alignItems: 'stretch' } : {})}}>
-        <div style={{...LT.panel, ...(isMobile ? { width: '100vw', maxWidth: '100vw', height: '100%', maxHeight: 'none', borderRadius: 0 } : {})}} onClick={e => e.stopPropagation()}>
+      <div className="building-info-modal__overlay" onClick={handleClose}>
+        <section
+          ref={modalRef}
+          className="building-info-modal unit-load-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="unit-load-modal-title"
+          onClick={event => event.stopPropagation()}
+        >
           {/* Header */}
-          <div style={{...LT.header, height: isMobile ? 44 : 54}}>
-            <span style={{...LT.headerTitle, fontSize: isMobile ? 18 : 24}}>
+          <header className="building-info-modal__header">
+            <h2 id="unit-load-modal-title" className="building-info-modal__title">
               {isMainShip ? `Main Ship Lv.${shipLevel}` : portNumber ? `Choose Troops - P${portNumber}` : 'Choose Troops'}
-            </span>
-            <button style={LT.closeBtn} onClick={handleClose}>X</button>
-          </div>
+            </h2>
+            <button type="button" className="building-info-modal__close" onClick={handleClose} aria-label="Close troop selection">
+              <span aria-hidden="true">&times;</span>
+            </button>
+          </header>
+          <div
+            className="building-info-modal__body clash-scroll unit-load-modal__body"
+            role="region"
+            aria-label="Ship troop selection"
+            tabIndex={0}
+          >
 
           {isMainShip && (
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: isMobile ? '8px 10px' : '10px 16px', background: '#efe3c8', borderBottom: '2px solid #cbb98f' }}>
-              <div style={{ color: '#5C3A21', fontWeight: 900, fontSize: isMobile ? 11 : 13 }}>
+            <div className="unit-load-modal__ship-summary">
+              <div className="unit-load-modal__ship-copy">
                 Capacity {capacity}{shipLevel >= 5 ? ' · MAX CAPACITY' : ` · Next ${Number(building.ship_next_capacity || capacity)}`}
-                <div style={{ color: '#6b552f', fontSize: isMobile ? 9 : 10, marginTop: 2 }}>
+                <div className="unit-load-modal__ship-meta">
                   Battle energy {shipEnergy}{shipLevel < shipMaxLevel ? ` · Next ${nextShipEnergy}` : ' · MAX LEVEL'}
                 </div>
-                <div style={{ color: '#6b552f', fontSize: isMobile ? 9 : 10, marginTop: 2 }}>
+                <div className="unit-load-modal__ship-meta">
                   Cannon {shipCannonDamage.toLocaleString()} dmg · {shipCannonCost} energy
                   {shipLevel < shipMaxLevel && (
                     <> · Next {nextShipCannonDamage.toLocaleString()} dmg / {nextShipCannonCost} energy</>
                   )}
                 </div>
                 {shipUnlockedAbilities.length > 0 && (
-                  <div style={{ color: '#1c8b4d', fontSize: isMobile ? 9 : 10, marginTop: 2 }}>
+                  <div className="unit-load-modal__ship-unlocks">
                     {shipUnlockedAbilities.join(' · ')}
                   </div>
                 )}
                 {shipLevel < shipMaxLevel && (
                   <>
-                    <div style={{ color: '#9b5d14', fontSize: isMobile ? 9 : 10, marginTop: 2 }}>
+                    <div className="unit-load-modal__ship-next">
                       Next: {shipNextUnlocks.length > 0 ? shipNextUnlocks.join(', ') : '+2 battle energy'} · TH{shipNextTownHall}
                     </div>
-                    <div style={{ color: '#8b6b3f', fontSize: isMobile ? 9 : 10, marginTop: 2 }}>
+                    <div className="unit-load-modal__ship-meta">
                       {Object.entries(shipUpgradeCost).map(([key, value]) => `${value} ${key}`).join(' · ')}
                     </div>
                   </>
                 )}
               </div>
-              {shipLevel < shipMaxLevel && <button type="button" disabled={!canAffordShipUpgrade} onClick={() => sendToGodot('upgrade_main_ship')} style={{ padding: isMobile ? '8px 12px' : '10px 16px', border: '2px solid #7d5d24', borderRadius: 7, background: canAffordShipUpgrade ? '#f3ba35' : '#c8baa0', color: '#4b2b16', fontWeight: 900, cursor: canAffordShipUpgrade ? 'pointer' : 'not-allowed', fontFamily: 'inherit' }}>UPGRADE</button>}
+              {shipLevel < shipMaxLevel && (
+                <button
+                  type="button"
+                  className="unit-load-modal__ship-upgrade"
+                  disabled={!!shipUpgradeBlockedReason}
+                  aria-busy={shipUpgradePending || undefined}
+                  title={shipUpgradeBlockedReason || 'Upgrade main ship'}
+                  onClick={handleInlineShipUpgrade}
+                  style={uiButton('primary', {
+                    minHeight: isMobile ? 34 : 40,
+                    padding: isMobile ? '8px 12px' : '10px 16px',
+                  })}
+                >
+                  {shipUpgradePending ? 'UPGRADING…' : 'UPGRADE'}
+                </button>
+              )}
+              {shipLevel < shipMaxLevel && shipUpgradeBlockedReason && (
+                <div className="unit-load-modal__ship-status" role="status">{shipUpgradeBlockedReason}</div>
+              )}
             </div>
           )}
 
           {/* Loaded troops slots */}
-          <div style={{...LT.loadedBar, padding: isMobile ? '11px 10px' : '12px 16px', flexWrap: 'wrap', gap: isMobile ? 7 : 8, ...(mobileLoadedBarStyle || {})}}>
+          <section className="unit-load-modal__roster" aria-label={`${shipTroops.length} of ${capacity} ship spaces used`}>
+          <div className="unit-load-modal__roster-scroll clash-scroll-hidden" style={{...mobileLoadedBarStyle}}>
             {loadedGroups.map((group) => {
               const t = group.entry;
               const base = group.base;
@@ -2379,12 +2642,19 @@ function BuildingInfoPanel({ onOpenTroops }) {
               return (
                 <div
                   key={group.key}
+                  className={`unit-load-card unit-load-card--loaded${isSwapping ? ' unit-load-card--selected' : ''}`}
                   style={{ ...LT.loadedSlot, width: slotW, height: slotH, ...(isSwapping ? LT.loadedSlotActive : {}) }}
-                  onClick={() => {
-                    setSwapSlot(group.start);
-                    setTroopAction({ key: group.key, base: group.base });
-                  }}
                 >
+                  <button
+                    type="button"
+                    className="unit-load-card__action"
+                    aria-label={`Select loaded ${troopDisplayName(base)}${group.count > 1 ? ` group of ${group.count}` : ''}`}
+                    aria-pressed={isSwapping}
+                    onClick={() => {
+                      setSwapSlot(group.start);
+                      setTroopAction({ key: group.key, base: group.base });
+                    }}
+                  />
                   {renderTroopInfoButton({
                     name: t,
                     level: getTroopLvl(base),
@@ -2419,8 +2689,11 @@ function BuildingInfoPanel({ onOpenTroops }) {
                 </div>
               );
             })}
-            <div
+            <button
+              type="button"
               key="free-slots"
+              className="unit-load-card unit-load-card--free"
+              disabled={freeSlots <= 0}
               style={{
                 ...LT.freeSlotSummary,
                 width: Math.max(slotW, isMobile ? 74 : 86),
@@ -2438,11 +2711,12 @@ function BuildingInfoPanel({ onOpenTroops }) {
               <span style={{...LT.freeSlotText, fontSize: isMobile ? 9 : 10}}>
                 {freeSlots > 0 ? 'FREE SLOTS' : 'FULL'}
               </span>
-            </div>
+            </button>
           </div>
+          </section>
 
           {(troopAction || swapSlot !== null) && (
-            <div style={{...LT.swapActionBar, ...(isMobile ? { gap: 6, padding: '7px 8px', flexWrap: 'wrap' } : {})}}>
+            <div className="unit-load-modal__selection-bar" role="status">
               <div style={{...LT.swapHint, fontSize: isMobile ? 12 : 14}}>
                 {selectedGroup
                   ? `${troopDisplayName(selectedGroup.base)}${selectedGroup.count > 1 ? ` x${selectedGroup.count}` : ''} selected`
@@ -2467,29 +2741,36 @@ function BuildingInfoPanel({ onOpenTroops }) {
           )}
 
           {/* Troop selection grid */}
-          <div style={{...LT.grid, padding: isMobile ? '8px 8px' : '14px 18px', gap: isMobile ? 8 : 10, flexDirection: 'column', flexWrap: 'nowrap', justifyContent: 'flex-start', alignItems: 'center'}}>
+          <div className="unit-load-modal__catalog">
             <div style={{...LT.troopPriceNote, fontSize: isMobile ? 9 : 11}}>
               Non-NFT troops cost 100 gold per occupied ship slot.
             </div>
-            <div style={{...LT.normalTroopGrid, gap: isMobile ? 6 : 10}}>
+            <div className="unit-load-modal__grid">
             {allTroops.map(name => {
               const lvl = getTroopLvl(name);
               const unlock = troopUnlock(name);
               const occupiedSlots = troopSlotCost(name);
+              const canPlace = canPlaceTroop(name);
+              const disabledReason = !unlock.unlocked
+                ? `Town Hall Level ${unlock.required} required`
+                : !canPlace
+                  ? (troopActionPending || shipActionPendingRef.current
+                      ? 'Ship update pending'
+                      : `Need ${occupiedSlots} free ${occupiedSlots === 1 ? 'slot' : 'slots'}`)
+                  : '';
               return (
-                <button
+                <div
                   key={name}
-                  aria-disabled={!unlock.unlocked}
-                  title={!unlock.unlocked ? `Town Hall Lv ${unlock.required} required` : undefined}
-                  style={{...LT.troopCard, width: cardW, flexShrink: isMobile ? 1 : 0, ...(!unlock.unlocked ? { opacity: 0.5, cursor: 'not-allowed' } : null)}}
-                  onClick={() => {
-                    if (!unlock.unlocked || !canPlaceTroop(name)) {
-                      return;
-                    } else {
-                      handleLoadTroop(name);
-                    }
-                  }}
+                  className={`unit-catalog-card${disabledReason ? ' unit-catalog-card--locked' : ''}`}
+                  aria-disabled={!!disabledReason}
+                  title={disabledReason || undefined}
+                  style={{...LT.troopCard, width: cardW, flexShrink: isMobile ? 1 : 0}}
                 >
+                  {renderTroopCardAction({
+                    label: disabledReason ? `${troopDisplayName(name)} unavailable: ${disabledReason}` : `Load ${troopDisplayName(name)}`,
+                    disabled: !!disabledReason,
+                    onClick: () => handleLoadTroop(name),
+                  })}
                   {renderTroopInfoButton({
                     name,
                     level: lvl,
@@ -2505,17 +2786,17 @@ function BuildingInfoPanel({ onOpenTroops }) {
                   <div style={{...LT.bottomOverlay, height: isMobile ? 24 : 28}}>
                     <span style={{...LT.costText, fontSize: isMobile ? 11 : 13}}>
                       {unlock.unlocked
-                        ? `${occupiedSlots} ${occupiedSlots === 1 ? 'SLOT' : 'SLOTS'}`
+                        ? (disabledReason || `${occupiedSlots} ${occupiedSlots === 1 ? 'SLOT' : 'SLOTS'}`)
                         : `TH${unlock.required}`}
                     </span>
                   </div>
-                </button>
+                </div>
               );
             })}
             </div>
-            <div style={{...LT.demonKingRow, gap: isMobile ? 6 : 10}}>
+            <div className="unit-load-modal__grid unit-load-modal__grid--nft">
             {demonKingNftLoading && (
-              <button type="button" style={{...LT.troopCard, ...LT.troopCardMuted, width: cardW, flexShrink: isMobile ? 1 : 0}}>
+              <div className="unit-catalog-card unit-catalog-card--muted" style={{...LT.troopCard, ...LT.troopCardMuted, width: cardW, flexShrink: isMobile ? 1 : 0}}>
                 {renderTroopInfoButton({ name: 'DemonKing', level: 1, status: 'Syncing NFT ownership' })}
                 <div style={{...LT.demonIdBadge, ...(isMobile ? LT.demonIdBadgeMobile : null), ...LT.demonIdBadgeWithInfo, fontSize: isMobile ? 9 : 11}}>
                   SYNC
@@ -2527,7 +2808,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
                 <div style={{...LT.bottomOverlay, height: isMobile ? 26 : 30}}>
                   <span style={{...LT.costText, fontSize: isMobile ? 9 : 11}}>SYNCING</span>
                 </div>
-              </button>
+              </div>
             )}
             {!demonKingNftLoading && availableDemonNfts.map((token) => {
               const entry = demonKingShipEntry(token);
@@ -2540,15 +2821,17 @@ function BuildingInfoPanel({ onOpenTroops }) {
                     return !troopSwapPlacement(shipTroops, swapSlot, entry, capacity);
                   })();
               return (
-                <button
+                <div
                   key={entry}
-                  type="button"
+                  className="unit-catalog-card"
                   aria-disabled={disabled}
-                  style={{...LT.troopCard, ...rarityStyle, width: cardW, flexShrink: isMobile ? 1 : 0, ...(disabled ? { opacity: 0.45, cursor: 'not-allowed' } : null)}}
-                  onClick={() => {
-                    if (!disabled) handleLoadTroop(entry);
-                  }}
+                  style={{...LT.troopCard, ...rarityStyle, width: cardW, flexShrink: isMobile ? 1 : 0}}
                 >
+                  {renderTroopCardAction({
+                    label: disabled ? 'Demon King unavailable: ship capacity exceeded' : `Load Demon King ${demonTokenLabel}`,
+                    disabled,
+                    onClick: () => handleLoadTroop(entry),
+                  })}
                   {renderTroopInfoButton({
                     name: entry,
                     level: Number(token.level || 1),
@@ -2567,18 +2850,21 @@ function BuildingInfoPanel({ onOpenTroops }) {
                   </div>
                   <div style={{...LT.bottomOverlay, height: isMobile ? 26 : 30}}>
                     <span style={{...LT.costText, fontSize: isMobile ? 10 : 12}}>
-                      {troopSlotCost(entry)} SLOTS
+                      {disabled ? 'SHIP FULL' : `${troopSlotCost(entry)} SLOTS`}
                     </span>
                   </div>
-                </button>
+                </div>
               );
             })}
             {!demonKingNftLoading && availableDemonNfts.length === 0 && (
-              <button
-                type="button"
+              <div
+                className="unit-catalog-card unit-catalog-card--muted"
                 style={{...LT.troopCard, ...LT.troopCardMuted, width: cardW, flexShrink: isMobile ? 1 : 0}}
-                onClick={openNftShop}
               >
+                {renderTroopCardAction({
+                  label: 'Open Demon King NFT collection',
+                  onClick: () => openNftShop('demonking'),
+                })}
                 {renderTroopInfoButton({
                   name: 'DemonKing',
                   level: 1,
@@ -2598,7 +2884,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
                     {hasDemonKingWallet ? (demonKingNftError || (demonKingNfts.length ? 'ALL USED' : 'NEED NFT')) : 'CONNECT'}
                   </span>
                 </div>
-              </button>
+              </div>
             )}
             {renderNftTroopCards({
               base: 'FireDragon',
@@ -2610,26 +2896,29 @@ function BuildingInfoPanel({ onOpenTroops }) {
             })}
             </div>
           </div>
+          </div>
           {troopInfo && troopInfoCopy && (
-            <div style={LT.troopInfoBackdrop} onClick={() => setTroopInfo(null)}>
+            <div className="unit-info-modal__overlay" onClick={() => setTroopInfo(null)}>
               <section
+                ref={troopInfoRef}
                 role="dialog"
                 aria-modal="true"
                 aria-labelledby="troop-info-title"
-                style={{...LT.troopInfoDialog, ...(isMobile ? LT.troopInfoDialogMobile : null)}}
+                className="unit-info-modal clash-scroll"
                 onClick={(event) => event.stopPropagation()}
               >
                 <button
                   type="button"
+                  className="unit-info-modal__close"
                   aria-label="Close unit details"
                   title="Close"
                   style={LT.troopInfoCloseButton}
                   onClick={() => setTroopInfo(null)}
                 >
-                  X
+                  <span aria-hidden="true">&times;</span>
                 </button>
-                <div style={LT.troopInfoHeader}>
-                  <div style={LT.troopInfoPortrait}>
+                <div className="unit-info-modal__header">
+                  <div className="unit-info-modal__portrait">
                     {troopInfoImage && (
                       <img
                         src={troopInfoImage}
@@ -2641,46 +2930,46 @@ function BuildingInfoPanel({ onOpenTroops }) {
                       />
                     )}
                   </div>
-                  <div style={LT.troopInfoHeading}>
-                    <h3 id="troop-info-title" style={LT.troopInfoTitle}>{troopDisplayName(troopInfoBase)}</h3>
-                    <div style={LT.troopInfoRole}>{troopInfoCopy.role}</div>
+                  <div className="unit-info-modal__heading">
+                    <h3 id="troop-info-title">{troopDisplayName(troopInfoBase)}</h3>
+                    <div className="unit-info-modal__role">{troopInfoCopy.role}</div>
                     {(troopInfo.tokenLabel || troopInfo.rarity) && (
-                      <div style={LT.troopInfoToken}>
+                      <div className="unit-info-modal__token">
                         {[troopInfo.tokenLabel, troopInfo.rarity].filter(Boolean).join(' - ')}
                       </div>
                     )}
                   </div>
                 </div>
-                <p style={LT.troopInfoDescription}>{troopInfoCopy.description}</p>
-                <div style={LT.troopInfoStats}>
-                  <div style={LT.troopInfoStat}>
-                    <span style={LT.troopInfoStatLabel}>LEVEL</span>
-                    <strong style={LT.troopInfoStatValue}>{Math.max(1, Number(troopInfo.level || 1))}</strong>
+                <p className="unit-info-modal__description">{troopInfoCopy.description}</p>
+                <div className="unit-info-modal__stats">
+                  <div className="unit-info-modal__stat">
+                    <span>LEVEL</span>
+                    <strong>{Math.max(1, Number(troopInfo.level || 1))}</strong>
                   </div>
-                  <div style={LT.troopInfoStat}>
-                    <span style={LT.troopInfoStatLabel}>SHIP SPACE</span>
-                    <strong style={LT.troopInfoStatValue}>{troopInfoSlots}</strong>
+                  <div className="unit-info-modal__stat">
+                    <span>SHIP SPACE</span>
+                    <strong>{troopInfoSlots}</strong>
                   </div>
-                  <div style={LT.troopInfoStat}>
-                    <span style={LT.troopInfoStatLabel}>RECRUITMENT</span>
-                    <strong style={LT.troopInfoStatValue}>
+                  <div className="unit-info-modal__stat">
+                    <span>RECRUITMENT</span>
+                    <strong>
                       {troopInfoNft ? 'Owned NFT' : `${troopInfoSlots * 100} gold`}
                     </strong>
                   </div>
-                  <div style={LT.troopInfoStat}>
-                    <span style={LT.troopInfoStatLabel}>UNLOCK</span>
-                    <strong style={LT.troopInfoStatValue}>
+                  <div className="unit-info-modal__stat">
+                    <span>UNLOCK</span>
+                    <strong>
                       {troopInfoNft
                         ? 'NFT'
                         : `Town Hall ${Math.max(1, Number(troopInfo.requiredTownHall || troopUnlock(troopInfoBase).required))}`}
                     </strong>
                   </div>
                 </div>
-                {troopInfo.status && <div style={LT.troopInfoStatus}>{troopInfo.status}</div>}
+                {troopInfo.status && <div className="unit-info-modal__status">{troopInfo.status}</div>}
               </section>
             </div>
           )}
-        </div>
+        </section>
       </div>
     );
   };
@@ -2802,16 +3091,16 @@ const styles = {
   },
   actionName: {
     fontSize: 18,
-    fontWeight: 900,
-    color: '#fff',
-    textShadow: '-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 0 2px 4px rgba(0,0,0,0.8)',
+    fontWeight: 700,
+    color: 'var(--terminal-on-accent)',
+    textShadow: 'none',
     whiteSpace: 'nowrap',
   },
   actionLevel: {
     fontSize: 14,
-    fontWeight: 800,
+    fontWeight: 600,
     color: '#FFD700',
-    textShadow: '-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000',
+    textShadow: 'none',
     whiteSpace: 'nowrap',
   },
   actionsWrap: {
@@ -2828,43 +3117,49 @@ const styles = {
     width: 68,
     height: 68,
     borderRadius: '50%',
-    border: '4px solid #fff',
+    border: '1px solid var(--terminal-border-strong)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     cursor: 'pointer',
     pointerEvents: 'all',
-    boxShadow: '0 6px 0 rgba(0,0,0,0.3), 0 8px 16px rgba(0,0,0,0.5)',
-    color: '#fff',
+    boxShadow: '0 2px 6px var(--terminal-shadow)',
+    color: 'var(--terminal-on-accent)',
     outline: 'none',
     transition: 'transform 0.1s cubic-bezier(0.4, 0, 0.2, 1)',
   },
   btnInfo: {
-    background: 'linear-gradient(180deg, #4aa6ef, #1e70b9)',
-    textShadow: '0 2px 2px rgba(0,0,0,0.4)',
+    background: 'var(--terminal-info)',
+    borderColor: 'var(--terminal-info-border)',
+    textShadow: 'none',
   },
   btnUpgrade: {
-    background: 'linear-gradient(180deg, #7ad23f, #479a1f)',
-    textShadow: '0 2px 2px rgba(0,0,0,0.4)',
+    background: 'var(--terminal-long)',
+    borderColor: 'var(--terminal-long-strong)',
+    textShadow: 'none',
   },
   btnTroops: {
-    background: 'linear-gradient(180deg, #ffca28, #f57f17)',
-    textShadow: '0 2px 2px rgba(0,0,0,0.4)',
+    background: 'var(--terminal-warning)',
+    borderColor: 'var(--terminal-warning-border)',
+    textShadow: 'none',
   },
   btnAltar: {
-    background: 'linear-gradient(180deg, #68d132, #3fa51f)',
-    textShadow: '0 2px 2px rgba(0,0,0,0.4)',
-    boxShadow: '0 6px 0 rgba(12, 71, 33, 0.55), 0 10px 18px rgba(0,0,0,0.45), inset 0 2px 0 rgba(255,255,255,0.38)',
+    background: 'var(--terminal-long)',
+    borderColor: 'var(--terminal-long-strong)',
+    textShadow: 'none',
+    boxShadow: '0 2px 6px var(--terminal-shadow)',
   },
   btnFlag: {
-    background: 'linear-gradient(180deg, #ff9148, #d44a18)',
-    textShadow: '0 2px 2px rgba(0,0,0,0.4)',
-    boxShadow: '0 6px 0 rgba(99, 39, 15, 0.55), 0 10px 18px rgba(0,0,0,0.45), inset 0 2px 0 rgba(255,255,255,0.38)',
+    background: 'var(--terminal-orange)',
+    borderColor: 'var(--terminal-brand-strong)',
+    textShadow: 'none',
+    boxShadow: '0 2px 6px var(--terminal-shadow)',
   },
   btnFacing: {
-    background: 'linear-gradient(180deg, #ff9148, #c94a1a)',
-    textShadow: '0 2px 2px rgba(0,0,0,0.4)',
-    boxShadow: '0 6px 0 rgba(99, 39, 15, 0.55), 0 10px 18px rgba(0,0,0,0.45), inset 0 2px 0 rgba(255,255,255,0.38)',
+    background: 'var(--terminal-orange)',
+    borderColor: 'var(--terminal-brand-strong)',
+    textShadow: 'none',
+    boxShadow: '0 2px 6px var(--terminal-shadow)',
   },
   iconLarge: {
     fontSize: 48,
@@ -2895,7 +3190,7 @@ const styles = {
   sectionTitle: {
     margin: 0,
     fontSize: 20,
-    fontWeight: 900,
+    fontWeight: 700,
     color: '#377d9f',
     marginBottom: 8,
   },
@@ -2909,24 +3204,24 @@ const styles = {
     borderRadius: 16,
     padding: '12px 16px',
     border: '1px solid rgba(0, 0, 0, 0.1)',
-    boxShadow: 'inset 0 1px 2px rgba(255,255,255,0.5)',
+    boxShadow: 'inset 0 1px 2px var(--terminal-chip-overlay)',
   },
   descriptionBox: {
     background: 'rgba(0, 0, 0, 0.05)',
     borderRadius: 16,
     padding: '12px 16px',
     border: '1px solid rgba(0, 0, 0, 0.1)',
-    boxShadow: 'inset 0 1px 2px rgba(255,255,255,0.5)',
+    boxShadow: 'inset 0 1px 2px var(--terminal-chip-overlay)',
   },
   descriptionText: {
     color: '#1a3c4f',
     fontSize: 14,
-    fontWeight: 800,
+    fontWeight: 600,
     lineHeight: 1.35,
   },
   statBoxLabel: {
     fontSize: 12,
-    fontWeight: 800,
+    fontWeight: 600,
     color: '#7692a1',
     textTransform: 'uppercase',
     letterSpacing: 1,
@@ -2939,7 +3234,7 @@ const styles = {
   },
   statCurrent: {
     fontSize: 24,
-    fontWeight: 800,
+    fontWeight: 600,
     color: '#1a3c4f',
   },
   statArrow: {
@@ -2949,7 +3244,7 @@ const styles = {
   },
   statUpgraded: {
     fontSize: 24,
-    fontWeight: 900,
+    fontWeight: 700,
     color: '#479a1f',
   },
   altarTabs: {
@@ -2964,16 +3259,17 @@ const styles = {
     background: 'rgba(0,0,0,0.05)',
     color: '#1a3c4f',
     padding: '9px 10px',
-    fontWeight: 900,
+    fontWeight: 700,
     cursor: 'pointer',
     display: 'flex',
     flexDirection: 'column',
     gap: 3,
   },
   altarTabActive: {
-    background: 'linear-gradient(180deg, #4aa6d3, #277ba5)',
-    color: '#fff',
-    boxShadow: '0 8px 18px rgba(39,123,165,0.24)',
+    background: 'var(--terminal-brand-soft)',
+    borderColor: 'var(--terminal-orange)',
+    color: 'var(--terminal-brand-text)',
+    boxShadow: 'none',
   },
   altarSkillPanel: {
     minWidth: 330,
@@ -3023,7 +3319,7 @@ const styles = {
     flex: 1,
     gap: 10,
     minHeight: 0,
-    overflowY: 'auto',
+    overflow: 'visible',
     padding: '8px 10px 14px',
   },
   altarTreeCanvas: {
@@ -3042,8 +3338,8 @@ const styles = {
   altarTreeBranchTitle: {
     color: '#1a3c4f',
     fontSize: 26,
-    fontWeight: 900,
-    textShadow: '0 2px 0 rgba(255,255,255,0.65)',
+    fontWeight: 700,
+    textShadow: 'none',
     textAlign: 'center',
   },
   altarTreeBranchTitleMobile: {
@@ -3053,7 +3349,7 @@ const styles = {
   altarTreeBranchSub: {
     color: '#377d9f',
     fontSize: 14,
-    fontWeight: 900,
+    fontWeight: 700,
     textAlign: 'center',
     marginTop: 4,
   },
@@ -3113,12 +3409,12 @@ const styles = {
     width: 88,
     height: 88,
     borderRadius: 18,
-    borderWidth: 4,
+    borderWidth: 1,
     borderStyle: 'solid',
     borderColor: '#84dfff',
     background: 'linear-gradient(180deg, #1cc9ff, #1182d5)',
     boxShadow: '0 8px 0 rgba(2, 30, 54, 0.55), 0 10px 20px rgba(0,0,0,0.35), inset 0 2px 0 rgba(255,255,255,0.45)',
-    color: '#fff',
+    color: 'var(--terminal-on-accent)',
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
@@ -3130,7 +3426,7 @@ const styles = {
     width: 58,
     height: 58,
     borderRadius: 12,
-    borderWidth: 3,
+    borderWidth: 1,
     boxShadow: '0 5px 0 rgba(2, 30, 54, 0.48), 0 7px 12px rgba(0,0,0,0.26), inset 0 2px 0 rgba(255,255,255,0.42)',
   },
   altarTreeNodeUnlocked: {
@@ -3143,15 +3439,15 @@ const styles = {
   },
   altarTreeNodeLevel: {
     fontSize: 22,
-    fontWeight: 900,
-    textShadow: '0 2px 0 rgba(0,0,0,0.35)',
+    fontWeight: 700,
+    textShadow: 'none',
   },
   altarTreeNodeLevelMobile: {
     fontSize: 15,
   },
   altarTreeNodeValue: {
     fontSize: 16,
-    fontWeight: 900,
+    fontWeight: 700,
     opacity: 0.95,
   },
   altarTreeNodeValueMobile: {
@@ -3162,7 +3458,7 @@ const styles = {
     border: '1px solid rgba(0,0,0,0.12)',
     background: 'rgba(0,0,0,0.05)',
     padding: '12px 14px',
-    boxShadow: 'inset 0 1px 2px rgba(255,255,255,0.55)',
+    boxShadow: 'inset 0 1px 2px var(--terminal-chip-overlay)',
   },
   altarTreeNodeInfoMobile: {
     padding: '7px 8px',
@@ -3173,8 +3469,8 @@ const styles = {
   altarTreeNodeName: {
     color: '#1a3c4f',
     fontSize: 17,
-    fontWeight: 900,
-    textShadow: '0 1px 0 rgba(255,255,255,0.65)',
+    fontWeight: 700,
+    textShadow: 'none',
   },
   altarTreeNodeNameMobile: {
     fontSize: 13,
@@ -3182,7 +3478,7 @@ const styles = {
   altarTreeNodeBonus: {
     color: '#377d9f',
     fontSize: 13,
-    fontWeight: 900,
+    fontWeight: 700,
     marginTop: 2,
   },
   altarTreeNodeBonusMobile: {
@@ -3206,7 +3502,7 @@ const styles = {
     background: 'rgba(0,0,0,0.06)',
     border: '1px solid rgba(0,0,0,0.12)',
     color: '#1a3c4f',
-    fontWeight: 900,
+    fontWeight: 700,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -3235,7 +3531,7 @@ const styles = {
     borderRadius: 8,
     border: '1px solid rgba(0,0,0,0.13)',
     background: 'rgba(0,0,0,0.05)',
-    boxShadow: 'inset 0 1px 2px rgba(255,255,255,0.55)',
+    boxShadow: 'inset 0 1px 2px var(--terminal-chip-overlay)',
     padding: 14,
     alignSelf: 'stretch',
   },
@@ -3246,7 +3542,7 @@ const styles = {
   altarTreeSideTitle: {
     color: '#1a3c4f',
     fontSize: 21,
-    fontWeight: 900,
+    fontWeight: 700,
     marginBottom: 5,
   },
   altarTreeSideTitleMobile: {
@@ -3256,7 +3552,7 @@ const styles = {
   altarTreeSideText: {
     color: '#377d9f',
     fontSize: 14,
-    fontWeight: 900,
+    fontWeight: 700,
     lineHeight: 1.35,
     marginBottom: 12,
   },
@@ -3270,9 +3566,9 @@ const styles = {
     textAlign: 'center',
     color: '#1a3c4f',
     fontSize: 22,
-    fontWeight: 900,
+    fontWeight: 700,
     background: 'rgba(203, 245, 224, 0.48)',
-    border: '2px solid #2f9e6f',
+    border: '1px solid #2f9e6f',
   },
   altarBranchInfo: {
     background: 'rgba(0,0,0,0.05)',
@@ -3280,12 +3576,12 @@ const styles = {
     borderRadius: 16,
     padding: '12px 14px',
     marginBottom: 12,
-    boxShadow: 'inset 0 1px 2px rgba(255,255,255,0.5)',
+    boxShadow: 'inset 0 1px 2px var(--terminal-chip-overlay)',
   },
   altarBranchTitle: {
     color: '#1a3c4f',
     fontSize: 17,
-    fontWeight: 900,
+    fontWeight: 700,
     marginBottom: 4,
   },
   altarHeaderRow: {
@@ -3298,12 +3594,12 @@ const styles = {
   altarSubtext: {
     color: '#1a3c4f',
     fontSize: 14,
-    fontWeight: 800,
+    fontWeight: 600,
   },
   altarResourceHint: {
     color: '#5f7280',
     fontSize: 12,
-    fontWeight: 900,
+    fontWeight: 700,
     textAlign: 'right',
     lineHeight: 1.4,
   },
@@ -3318,22 +3614,22 @@ const styles = {
     padding: 10,
     background: 'rgba(0,0,0,0.04)',
     border: '1px solid rgba(0,0,0,0.12)',
-    boxShadow: 'inset 0 1px 2px rgba(255,255,255,0.55)',
+    boxShadow: 'inset 0 1px 2px var(--terminal-chip-overlay)',
   },
   altarLevelCardActive: {
-    border: '2px solid #2f9e6f',
+    border: '1px solid #2f9e6f',
     background: 'rgba(203, 245, 224, 0.48)',
   },
   altarLevelTitle: {
     color: '#1a3c4f',
     fontSize: 16,
-    fontWeight: 900,
+    fontWeight: 700,
     marginBottom: 10,
   },
   altarBonus: {
     color: '#377d9f',
     fontSize: 13,
-    fontWeight: 900,
+    fontWeight: 700,
     lineHeight: 1.3,
     minHeight: 34,
   },
@@ -3354,7 +3650,7 @@ const styles = {
     borderRadius: 16,
     background: 'rgba(0,0,0,0.04)',
     border: '1px solid rgba(0,0,0,0.11)',
-    boxShadow: 'inset 0 1px 2px rgba(255,255,255,0.55)',
+    boxShadow: 'inset 0 1px 2px var(--terminal-chip-overlay)',
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
@@ -3379,15 +3675,15 @@ const styles = {
   altarReqAmt: {
     color: '#1a3c4f',
     fontSize: 18,
-    fontWeight: 900,
+    fontWeight: 700,
   },
   altarReqAmtMobile: {
     fontSize: 13,
   },
   altarError: {
     marginTop: 12,
-    color: '#b42318',
-    fontWeight: 900,
+    color: 'var(--terminal-short-strong)',
+    fontWeight: 700,
     textAlign: 'center',
   },
 
@@ -3417,7 +3713,7 @@ const styles = {
     background: 'radial-gradient(circle at 30% 30%, #d4caa8 0%, #b8af8c 100%)',
     borderRadius: '50%',
     boxShadow: 'inset 0 4px 10px rgba(0,0,0,0.3)',
-    border: '2px solid rgba(0,0,0,0.1)',
+    border: '1px solid rgba(0,0,0,0.1)',
     overflow: 'hidden',
   },
   characterImg: {
@@ -3455,13 +3751,13 @@ const styles = {
   },
   badgeLvlText: {
     fontSize: 14,
-    fontWeight: 800,
-    color: '#fff',
+    fontWeight: 600,
+    color: 'var(--terminal-on-accent)',
   },
   badgeLvlNumber: {
     fontSize: 32,
-    fontWeight: 900,
-    color: '#cbd5e1',
+    fontWeight: 700,
+    color: 'var(--terminal-border-strong)',
   },
 
   rightColumn: {
@@ -3482,7 +3778,7 @@ const styles = {
   reqBox: {
     background: 'rgba(0, 0, 0, 0.05)',
     border: '1px solid rgba(0, 0, 0, 0.1)',
-    boxShadow: 'inset 0 1px 2px rgba(255,255,255,0.5)',
+    boxShadow: 'inset 0 1px 2px var(--terminal-chip-overlay)',
     borderRadius: 20,
     width: 90,
     height: 90,
@@ -3507,7 +3803,7 @@ const styles = {
   },
   reqAmt: {
     fontSize: 16,
-    fontWeight: 900,
+    fontWeight: 700,
     color: '#1a3c4f',
   },
   trophyUpgradeNotice: {
@@ -3517,17 +3813,15 @@ const styles = {
     width: '100%',
     padding: '10px 12px',
     boxSizing: 'border-box',
-    borderRadius: 8,
-    border: '2px solid #c89b2b',
-    background: 'linear-gradient(180deg, #fff6c9 0%, #f5dfa0 100%)',
-    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.8), 0 2px 4px rgba(89,57,18,0.16)',
+    borderRadius: 10,
+    border: '1px solid var(--bim-brand-line, #fed7aa)',
+    background: 'var(--bim-brand-soft, #fff3ec)',
   },
   trophyUpgradeIcon: {
     width: 34,
     height: 34,
     flex: '0 0 34px',
     objectFit: 'contain',
-    filter: 'drop-shadow(0 2px 1px rgba(84,55,15,0.28))',
   },
   trophyUpgradeCopy: {
     display: 'flex',
@@ -3536,18 +3830,18 @@ const styles = {
     gap: 2,
   },
   trophyUpgradeTitle: {
-    color: '#6d431b',
+    color: 'var(--bim-text, #111827)',
     fontSize: 13,
     lineHeight: 1.15,
   },
   trophyUpgradeText: {
-    color: '#785b31',
+    color: 'var(--bim-text-muted, #6b7280)',
     fontSize: 11,
-    fontWeight: 800,
+    fontWeight: 600,
     lineHeight: 1.3,
   },
   flagLibraryHeader: {
-    color: '#6d4a2e',
+    color: 'var(--bim-text-muted)',
     fontSize: 13,
     fontWeight: 1000,
     textTransform: 'uppercase',
@@ -3563,12 +3857,12 @@ const styles = {
     gap: 9,
   },
   flagLibraryCard: {
-    borderWidth: 3,
+    borderWidth: 1,
     borderStyle: 'solid',
-    borderColor: '#b89455',
+    borderColor: 'var(--bim-line)',
     borderRadius: 12,
-    background: 'rgba(255,255,255,0.3)',
-    boxShadow: '0 4px 0 rgba(90,54,22,0.18), inset 0 2px 0 rgba(255,255,255,0.52)',
+    background: 'var(--bim-surface-subtle)',
+    boxShadow: 'none',
     padding: 10,
     minHeight: 150,
     display: 'flex',
@@ -3577,21 +3871,21 @@ const styles = {
     justifyContent: 'center',
     gap: 6,
     cursor: 'pointer',
-    color: '#6d4a2e',
+    color: 'var(--bim-text)',
     fontFamily: 'inherit',
   },
   flagLibraryCardActive: {
-    borderColor: '#2f9dcc',
-    background: 'rgba(76, 169, 210, 0.13)',
-    boxShadow: '0 4px 0 rgba(30, 90, 125, 0.2), 0 0 0 2px rgba(47,157,204,0.16)',
+    borderColor: 'var(--bim-brand)',
+    background: 'var(--bim-brand-soft)',
+    boxShadow: '0 0 0 2px color-mix(in srgb, var(--bim-brand) 18%, transparent)',
   },
   flagLibraryImageWrap: {
     width: 84,
     height: 84,
     borderRadius: 9,
     overflow: 'hidden',
-    background: '#fff4d8',
-    border: '2px solid rgba(109,74,46,0.24)',
+    background: 'var(--bim-surface-muted)',
+    border: '1px solid var(--bim-line)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -3605,7 +3899,7 @@ const styles = {
   flagLibraryEmpty: {
     fontSize: 36,
     fontWeight: 1000,
-    color: '#b89455',
+    color: 'var(--bim-brand)',
     lineHeight: 1,
   },
   flagDefaultThumb: {
@@ -3613,7 +3907,7 @@ const styles = {
     height: 84,
     borderRadius: 9,
     background: '#050305',
-    border: '2px solid rgba(109,74,46,0.24)',
+    border: '1px solid var(--bim-line)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -3634,8 +3928,8 @@ const styles = {
   },
   flagLibrarySub: {
     fontSize: 11,
-    fontWeight: 800,
-    color: '#8a6a45',
+    fontWeight: 600,
+    color: 'var(--bim-text-muted)',
     textAlign: 'center',
     lineHeight: 1.15,
   },
@@ -3644,9 +3938,9 @@ const styles = {
     height: 148,
     alignSelf: 'center',
     borderRadius: 12,
-    border: '4px solid #b89455',
-    background: '#fff4d8',
-    boxShadow: '0 6px 0 rgba(90,54,22,0.22), inset 0 2px 0 rgba(255,255,255,0.65)',
+    border: '1px solid var(--bim-line)',
+    background: 'var(--bim-surface-muted)',
+    boxShadow: 'none',
     overflow: 'hidden',
     display: 'flex',
     alignItems: 'center',
@@ -3659,24 +3953,24 @@ const styles = {
     display: 'block',
   },
   flagPreviewEmpty: {
-    color: '#7b5b34',
-    fontWeight: 900,
+    color: 'var(--bim-text-muted)',
+    fontWeight: 700,
     fontSize: 22,
   },
   flagCopy: {
-    color: '#6d4a2e',
+    color: 'var(--bim-text-secondary)',
     fontSize: 14,
-    fontWeight: 800,
+    fontWeight: 600,
     lineHeight: 1.35,
     textAlign: 'center',
   },
   flagFileLabel: {
     minHeight: 46,
     borderRadius: 10,
-    border: '2px dashed #b89455',
-    background: 'rgba(255,255,255,0.34)',
-    color: '#6d4a2e',
-    fontWeight: 900,
+    border: '1px dashed var(--bim-line-strong)',
+    background: 'var(--bim-surface-subtle)',
+    color: 'var(--bim-text-secondary)',
+    fontWeight: 700,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -3692,34 +3986,26 @@ const styles = {
     borderRadius: 8,
     padding: '10px 12px',
     fontSize: 13,
-    fontWeight: 900,
+    fontWeight: 700,
     textAlign: 'center',
   },
   flagStatusOk: {
-    color: '#116234',
-    background: 'rgba(67, 190, 108, 0.18)',
-    border: '1px solid rgba(22, 121, 61, 0.28)',
+    color: 'var(--bim-long)',
+    background: 'color-mix(in srgb, var(--bim-long) 12%, var(--bim-surface))',
+    border: '1px solid color-mix(in srgb, var(--bim-long) 30%, var(--bim-line))',
   },
   flagStatusError: {
-    color: '#8c241a',
-    background: 'rgba(255, 91, 65, 0.12)',
-    border: '1px solid rgba(150, 45, 32, 0.24)',
+    color: 'var(--bim-short)',
+    background: 'var(--bim-short-soft)',
+    border: '1px solid var(--bim-short-line)',
   },
   actionBtn: {
-    background: 'linear-gradient(180deg, #FBC02D 0%, #F57F17 100%)',
-    border: 'none',
-    boxShadow: '0 8px 20px rgba(245, 127, 23, 0.3), inset 0 2px 0 rgba(255,255,255,0.4)',
-    borderRadius: 20,
-    padding: '14px 20px',
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: 900,
-    cursor: 'pointer',
+    ...uiButton('primary', { minHeight: 44, padding: '12px 20px', fontSize: 14 }),
     width: '100%',
     textAlign: 'center',
     textTransform: 'uppercase',
     letterSpacing: 1,
-    textShadow: '0 2px 2px rgba(0,0,0,0.3)',
+    textShadow: 'none',
     transition: 'transform 0.1s',
   },
 };
@@ -3734,37 +4020,36 @@ const LT = {
   },
   panel: {
     width: 680, maxWidth: '98vw', maxHeight: '90vh',
-    background: '#ebdaba',
-    border: '4px solid #377d9f',
-    boxShadow: '0 20px 60px rgba(0,0,0,0.8), inset 0 0 0 4px #ebdaba',
+    background: 'var(--terminal-surface)',
+    border: '1px solid var(--terminal-border)',
+    borderRadius: 16,
+    boxShadow: '0 20px 60px var(--terminal-shadow)',
     display: 'flex', flexDirection: 'column',
     overflow: 'hidden', position: 'relative', fontFamily: '"Inter","Segoe UI",sans-serif',
   },
   header: {
     display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative',
-    height: 54, background: '#4ca5d2',
-    borderBottom: '4px solid #377d9f',
+    height: 54, background: 'var(--terminal-surface-subtle)',
+    borderBottom: '1px solid var(--terminal-border)',
   },
   headerTitle: { 
-    fontSize: 24, fontStyle: 'italic', fontWeight: 900, color: '#fff', 
-    textTransform: 'uppercase', textShadow: '0 2px 4px rgba(0,0,0,0.6)' 
+    fontSize: 20, fontWeight: 700, color: 'var(--terminal-text)',
+    textTransform: 'uppercase', textShadow: 'none',
   },
-  closeBtn: {
+  closeBtn: uiIconButton('secondary', 36, {
     position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)',
-    width: 32, height: 32, background: 'rgba(0,0,0,0.1)', border: 'none', borderRadius: 4,
-    color: '#1a3c4f', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0,
     fontSize: 20, fontWeight: 'bold'
-  },
+  }),
   loadedBar: {
     display: 'flex', gap: 6, padding: '12px 14px',
-    justifyContent: 'center', background: 'rgba(0,0,0,0.06)', borderBottom: '2px solid rgba(0,0,0,0.06)',
+    justifyContent: 'center', background: 'var(--terminal-surface-subtle)', borderBottom: '1px solid var(--terminal-border)',
   },
   loadedSlot: {
     width: 70, height: 90, borderRadius: 8,
     background: 'linear-gradient(180deg, #d4d2c8 0%, #a5a398 100%)', border: '1px solid #727068',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     position: 'relative', overflow: 'hidden', cursor: 'pointer',
-    boxShadow: 'inset 0 1px 2px rgba(255,255,255,0.4), 0 2px 4px rgba(0,0,0,0.2)',
+    boxShadow: 'inset 0 1px 2px var(--terminal-chip-overlay), 0 2px 4px rgba(0,0,0,0.2)',
     transition: 'filter 0.1s',
   },
   loadedSlotImg: { 
@@ -3772,7 +4057,7 @@ const LT = {
     filter: 'drop-shadow(0 4px 6px rgba(0,0,0,0.5))',
     transformOrigin: 'top center',
   },
-  loadedSlotActive: { border: '2px solid #E53935', filter: 'brightness(1.15)', transform: 'scale(1.05)', zIndex: 10 },
+  loadedSlotActive: { border: '1px solid var(--terminal-short)', filter: 'brightness(1.15)', transform: 'scale(1.05)', zIndex: 10 },
   loadedCountBadge: {
     position: 'absolute',
     right: 5,
@@ -3783,7 +4068,7 @@ const LT = {
     background: 'linear-gradient(180deg, #ffd95a 0%, #f39b15 100%)',
     border: '1px solid rgba(101, 58, 13, 0.45)',
     color: '#4a2f1c',
-    fontWeight: 900,
+    fontWeight: 700,
     lineHeight: 1,
     textAlign: 'center',
     boxShadow: '0 2px 4px rgba(0,0,0,0.35)',
@@ -3798,29 +4083,29 @@ const LT = {
     background: 'rgba(32, 20, 12, 0.72)',
     color: '#fff4c7',
     border: '1px solid rgba(255, 229, 145, 0.45)',
-    fontWeight: 900,
+    fontWeight: 700,
     lineHeight: 1,
     textTransform: 'uppercase',
-    textShadow: '0 1px 2px rgba(0,0,0,0.9)',
+    textShadow: 'none',
     zIndex: 18,
   },
   emptySlot: {
-    width: 70, height: 90, background: 'rgba(0,0,0,0.05)', border: '2px dashed #928d81', borderRadius: 8,
-    display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#928d81', fontSize: 24, fontWeight: 900, cursor: 'pointer',
+    width: 70, height: 90, background: 'var(--terminal-surface-subtle)', border: '1px dashed var(--terminal-border-strong)', borderRadius: 8,
+    display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--terminal-text-muted)', fontSize: 24, fontWeight: 700, cursor: 'pointer',
     transition: 'filter 0.1s',
   },
   freeSlotSummary: {
     width: 86,
     height: 90,
     borderRadius: 8,
-    background: 'rgba(0,0,0,0.05)',
-    border: '2px dashed #928d81',
+    background: 'var(--terminal-surface-subtle)',
+    border: '1px dashed var(--terminal-border-strong)',
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
     justifyContent: 'center',
-    color: '#786f60',
-    fontWeight: 900,
+    color: 'var(--terminal-text-secondary)',
+    fontWeight: 700,
     cursor: 'pointer',
     textAlign: 'center',
     gap: 4,
@@ -3831,15 +4116,15 @@ const LT = {
     cursor: 'default',
   },
   freeSlotNumber: {
-    color: '#5f4b35',
-    fontWeight: 900,
+    color: 'var(--terminal-text)',
+    fontWeight: 700,
     lineHeight: 1,
   },
   freeSlotText: {
     maxWidth: '100%',
     padding: '0 4px',
-    color: '#928d81',
-    fontWeight: 900,
+    color: 'var(--terminal-text-muted)',
+    fontWeight: 700,
     lineHeight: 1.05,
     textTransform: 'uppercase',
   },
@@ -3868,10 +4153,10 @@ const LT = {
     margin: '4px 4px 0',
     padding: '7px 10px',
     borderRadius: 8,
-    background: 'rgba(55, 125, 159, 0.14)',
-    border: '1px solid rgba(55, 125, 159, 0.28)',
-    color: '#5b3a24',
-    fontWeight: 900,
+    background: 'var(--terminal-info-soft)',
+    border: '1px solid var(--terminal-info-border)',
+    color: 'var(--terminal-text)',
+    fontWeight: 700,
     textTransform: 'uppercase',
     display: 'flex',
     alignItems: 'center',
@@ -3883,7 +4168,7 @@ const LT = {
     background: 'linear-gradient(180deg, #d4d2c8 0%, #a5a398 100%)', border: '1px solid #727068',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     cursor: 'pointer', position: 'relative', overflow: 'hidden',
-    boxShadow: 'inset 0 1px 2px rgba(255,255,255,0.4), 0 2px 4px rgba(0,0,0,0.15)',
+    boxShadow: 'inset 0 1px 2px var(--terminal-chip-overlay), 0 2px 4px rgba(0,0,0,0.15)',
     transition: 'filter 0.1s', padding: 0,
   },
   troopCardMuted: {
@@ -3893,8 +4178,8 @@ const LT = {
   },
   troopLvlBadge: {
     position: 'absolute', top: 6, right: 8, zIndex: 10,
-    fontSize: 16, fontStyle: 'italic', fontWeight: 900, color: '#fff', 
-    textShadow: '0 2px 3px rgba(0,0,0,0.9), 0 -1px 2px rgba(0,0,0,1), 1px 0 2px rgba(0,0,0,1), -1px 0 2px rgba(0,0,0,1)',
+    fontSize: 16, fontStyle: 'italic', fontWeight: 700, color: 'var(--terminal-on-accent)',
+    textShadow: 'none',
   },
   troopInfoButton: {
     position: 'absolute',
@@ -3904,7 +4189,7 @@ const LT = {
     width: 23,
     height: 23,
     borderRadius: '50%',
-    border: '2px solid rgba(72, 49, 28, 0.75)',
+    border: '1px solid rgba(72, 49, 28, 0.75)',
     background: 'rgba(255, 248, 225, 0.94)',
     color: '#5d4027',
     display: 'flex',
@@ -3913,7 +4198,7 @@ const LT = {
     fontFamily: 'Georgia, serif',
     fontSize: 15,
     fontStyle: 'italic',
-    fontWeight: 900,
+    fontWeight: 700,
     lineHeight: 1,
     cursor: 'pointer',
     boxShadow: '0 2px 4px rgba(0,0,0,0.32)',
@@ -3930,9 +4215,9 @@ const LT = {
     maxWidth: '58%', padding: '3px 5px', borderRadius: 5,
     background: 'rgba(32, 20, 12, 0.78)', color: '#fff4c7',
     border: '1px solid rgba(255, 229, 145, 0.65)',
-    fontWeight: 900, lineHeight: 1, whiteSpace: 'nowrap',
+    fontWeight: 700, lineHeight: 1, whiteSpace: 'nowrap',
     overflow: 'hidden', textOverflow: 'ellipsis',
-    textShadow: '0 1px 2px rgba(0,0,0,0.9)',
+    textShadow: 'none',
   },
   demonIdBadgeWithInfo: {
     left: 34,
@@ -3955,7 +4240,7 @@ const LT = {
     background: 'rgba(255, 214, 77, 0.92)',
     color: '#4a2f1c',
     border: '1px solid rgba(92, 56, 22, 0.35)',
-    fontWeight: 900,
+    fontWeight: 700,
     lineHeight: 1,
     textShadow: 'none',
   },
@@ -3977,7 +4262,7 @@ const LT = {
     display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10,
     padding: '0 4px',
   },
-  costText: { fontSize: 13, fontWeight: 900, color: '#FFD700', textShadow: '0 1px 2px rgba(0,0,0,0.8)' },
+  costText: { fontSize: 13, fontWeight: 700, color: '#FFD700', textShadow: 'none' },
   troopInfoBackdrop: {
     position: 'absolute',
     inset: 0,
@@ -3995,32 +4280,23 @@ const LT = {
     maxHeight: '100%',
     overflowY: 'auto',
     padding: 18,
-    border: '3px solid #377d9f',
-    borderRadius: 8,
-    background: '#fff7e4',
-    color: '#5c3a21',
+    border: '1px solid var(--terminal-border)',
+    borderRadius: 16,
+    background: 'var(--terminal-surface)',
+    color: 'var(--terminal-text)',
     boxShadow: '0 14px 34px rgba(0,0,0,0.48)',
   },
   troopInfoDialogMobile: {
     width: '100%',
     padding: 14,
   },
-  troopInfoCloseButton: {
+  troopInfoCloseButton: uiIconButton('secondary', 36, {
     position: 'absolute',
     top: 9,
     right: 9,
     zIndex: 3,
-    width: 30,
-    height: 30,
-    border: '2px solid #8f6b43',
-    borderRadius: '50%',
-    background: '#f7ead0',
-    color: '#5c3a21',
     fontSize: 14,
-    fontWeight: 900,
-    lineHeight: 1,
-    cursor: 'pointer',
-  },
+  }),
   troopInfoHeader: {
     display: 'flex',
     alignItems: 'center',
@@ -4033,7 +4309,7 @@ const LT = {
     width: 86,
     height: 94,
     overflow: 'hidden',
-    border: '2px solid #9b815d',
+    border: '1px solid #9b815d',
     borderRadius: 7,
     background: 'linear-gradient(180deg, #d9d6cb 0%, #aaa79c 100%)',
   },
@@ -4052,21 +4328,21 @@ const LT = {
     margin: 0,
     color: '#4e2f1b',
     fontSize: 22,
-    fontWeight: 900,
+    fontWeight: 700,
     lineHeight: 1.1,
   },
   troopInfoRole: {
     marginTop: 5,
     color: '#287da5',
     fontSize: 13,
-    fontWeight: 900,
+    fontWeight: 700,
     textTransform: 'uppercase',
   },
   troopInfoToken: {
     marginTop: 6,
     color: '#7b5b34',
     fontSize: 12,
-    fontWeight: 800,
+    fontWeight: 600,
     overflowWrap: 'anywhere',
   },
   troopInfoDescription: {
@@ -4092,7 +4368,7 @@ const LT = {
     display: 'block',
     color: '#8a704d',
     fontSize: 9,
-    fontWeight: 900,
+    fontWeight: 700,
     lineHeight: 1.1,
   },
   troopInfoStatValue: {
@@ -4100,7 +4376,7 @@ const LT = {
     marginTop: 3,
     color: '#4e2f1b',
     fontSize: 13,
-    fontWeight: 900,
+    fontWeight: 700,
     lineHeight: 1.2,
     overflowWrap: 'anywhere',
   },
@@ -4112,7 +4388,7 @@ const LT = {
     background: '#fff0b8',
     color: '#674514',
     fontSize: 12,
-    fontWeight: 900,
+    fontWeight: 700,
     lineHeight: 1.3,
     textAlign: 'center',
     overflowWrap: 'anywhere',
@@ -4120,42 +4396,32 @@ const LT = {
   troopPriceNote: {
     width: '100%',
     color: '#6f512f',
-    fontWeight: 900,
+    fontWeight: 700,
     textAlign: 'center',
     lineHeight: 1.25,
   },
   swapBadge: {
     position: 'absolute', top: -2, right: -2,
-    background: '#E53935', color: '#fff', fontSize: 10, fontWeight: 900,
+    background: 'var(--terminal-short)', color: 'var(--terminal-on-accent)', fontSize: 10, fontWeight: 700,
     padding: '2px 5px', borderRadius: 4, lineHeight: 1, boxShadow: '0 2px 4px rgba(0,0,0,0.4)', zIndex: 20
   },
   swapHint: {
-    textAlign: 'center', fontSize: 14, fontWeight: 900, color: '#E53935',
+    textAlign: 'center', fontSize: 14, fontWeight: 700, color: 'var(--terminal-short)',
     background: 'transparent',
   },
   swapActionBar: {
     display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12,
-    padding: '8px 16px', background: 'rgba(229,57,53,0.08)', borderBottom: '2px solid rgba(0,0,0,0.06)',
+    padding: '8px 16px', background: 'rgba(229,57,53,0.08)', borderBottom: '1px solid rgba(0,0,0,0.06)',
   },
   removeTroopBtn: {
-    border: '2px solid #8b211b', borderRadius: 7,
-    background: 'linear-gradient(180deg, #ff675f 0%, #cf2f27 100%)',
-    color: '#fff', fontSize: 12, fontWeight: 900, padding: '7px 14px',
-    cursor: 'pointer', boxShadow: '0 2px 0 #7d211c, 0 3px 6px rgba(0,0,0,0.25)',
-    letterSpacing: 0,
+    ...uiButton('danger', { minHeight: 34, fontSize: 12, padding: '7px 14px' }),
   },
   removeAllTroopsBtn: {
-    border: '2px solid #6b1712', borderRadius: 7,
-    background: 'linear-gradient(180deg, #e84940 0%, #a9221b 100%)',
-    color: '#fff', fontSize: 12, fontWeight: 900, padding: '7px 14px',
-    cursor: 'pointer', boxShadow: '0 2px 0 #5d1713, 0 3px 6px rgba(0,0,0,0.25)',
-    letterSpacing: 0,
+    ...uiButton('danger', { minHeight: 34, fontSize: 12, padding: '7px 14px' }),
   },
   troopActionCloseBtn: {
-    width: 30, height: 30, flex: '0 0 30px',
-    border: '2px solid #927650', borderRadius: '50%',
-    background: '#fff8e7', color: '#6f512f', fontSize: 15, fontWeight: 900,
-    cursor: 'pointer', lineHeight: 1, padding: 0,
+    ...uiIconButton('secondary', 30, { borderRadius: '50%', fontSize: 15, lineHeight: 1 }),
+    flex: '0 0 30px',
   },
   actionBtnDisabled: {
     opacity: 0.45,

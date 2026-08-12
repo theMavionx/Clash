@@ -9,6 +9,7 @@
 // double-fire the trade.
 
 import { memo, useCallback, useMemo, useRef, useState } from 'react';
+import { uiIconButton } from '../../styles/theme';
 // eslint-disable-next-line no-unused-vars -- used as JSX namespace (`motion.div`), false positive
 import { motion, AnimatePresence } from 'framer-motion';
 import BasicTokenPicker from './BasicTokenPicker';
@@ -534,23 +535,12 @@ const S = {
     display: 'flex', alignItems: 'center', gap: 10,
     padding: '16px 14px 10px',
   },
-  backBtn: {
-    width: 36, height: 36, borderRadius: 10,
-    background: 'transparent',
-    border: `2px solid ${colors.border}`,
-    color: colors.ink,
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-    cursor: 'pointer',
-    flexShrink: 0,
-    padding: 0,
-    fontFamily: 'inherit',
-    transition: 'opacity 0.2s ease',
-  },
+  backBtn: uiIconButton('secondary', 36, { transition: 'opacity 0.2s ease' }),
   errorBanner: {
     margin: '0 14px 8px', padding: '10px 14px',
     borderRadius: 10,
     background: 'rgba(239,83,80,0.18)',
-    border: `2px solid ${colors.aggressive}`,
+    border: `1px solid ${colors.aggressive}`,
     color: colors.shortDark,
     fontSize: 13, fontWeight: 700,
     cursor: 'pointer',
@@ -563,7 +553,7 @@ const S = {
     overflowWrap: 'anywhere',
     wordBreak: 'break-word',
   },
-  errorClose: { fontWeight: 900, opacity: 0.6, flexShrink: 0 },
+  errorClose: { fontWeight: 700, opacity: 0.6, flexShrink: 0 },
   stepWrap: {
     flex: 1, position: 'relative', minHeight: 0,
     overflow: 'hidden',

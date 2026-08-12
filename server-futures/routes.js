@@ -21,6 +21,8 @@ const hyperliquidRewards = require('./hyperliquid-rewards-worker');
 const risex = require('./risex');
 const nado = require('./nado');
 const ondo = require('./ondo');
+const leverup = require('./leverup');
+const aster = require('./aster');
 const hibachi = require('./hibachi');
 const hotstuff = require('./hotstuff');
 const hotstuffRewards = require('./hotstuff-rewards-worker');
@@ -915,7 +917,7 @@ function auth(req, res, next) {
   // Trust the SERVER-stored dex, not whatever the client asks for. The client
   // header/query is still useful as a best-effort sanity check: if it explicitly
   // asks for the wrong dex, reject so the UI can prompt the user to /set-dex.
-  const SUPPORTED_DEXES = new Set(['avantis', 'pacifica', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'ondo', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash', 'lighter', 'bulk']);
+  const SUPPORTED_DEXES = new Set(['avantis', 'pacifica', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'ondo', 'leverup', 'aster', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash', 'lighter', 'bulk']);
   const storedDex = SUPPORTED_DEXES.has(player.dex) ? player.dex : 'pacifica';
   const askedDex = (req.query.dex || req.headers['x-dex'] || storedDex).toLowerCase();
   const normalizedAsked = SUPPORTED_DEXES.has(askedDex) ? askedDex : 'pacifica';
@@ -1140,7 +1142,7 @@ function flashBodyWallet(req) {
 // Get or create custodial wallet for player
 router.post('/wallet', auth, (req, res) => {
   try {
-    if (req.dex === 'avantis' || req.dex === 'gmx' || req.dex === 'ostium' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'ondo' || req.dex === 'hibachi' || req.dex === 'hotstuff' || req.dex === 'grvt' || req.dex === 'katana' || req.dex === 'gmtrade' || req.dex === 'flash' || req.dex === 'bulk') {
+    if (req.dex === 'avantis' || req.dex === 'gmx' || req.dex === 'ostium' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'ondo' || req.dex === 'leverup' || req.dex === 'aster' || req.dex === 'hibachi' || req.dex === 'hotstuff' || req.dex === 'grvt' || req.dex === 'katana' || req.dex === 'gmtrade' || req.dex === 'flash' || req.dex === 'bulk') {
       return res.status(410).json({
         error: `${req.dex} is self-custody. Connect the chain wallet in the client instead.`,
       });
@@ -1170,7 +1172,7 @@ router.post('/wallet', auth, (req, res) => {
 
 // Get wallet info (public key only — never expose secret)
 router.get('/wallet', auth, (req, res) => {
-  if (req.dex === 'avantis' || req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'ondo' || req.dex === 'hibachi' || req.dex === 'hotstuff' || req.dex === 'grvt' || req.dex === 'katana' || req.dex === 'gmtrade' || req.dex === 'flash' || req.dex === 'ostium' || req.dex === 'bulk') {
+  if (req.dex === 'avantis' || req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'ondo' || req.dex === 'leverup' || req.dex === 'aster' || req.dex === 'hibachi' || req.dex === 'hotstuff' || req.dex === 'grvt' || req.dex === 'katana' || req.dex === 'gmtrade' || req.dex === 'flash' || req.dex === 'ostium' || req.dex === 'bulk') {
     return res.status(410).json({
       error: `${req.dex} is self-custody. Connect the chain wallet in the client instead.`,
     });
@@ -1236,6 +1238,13 @@ router.get('/account', async (req, res) => {
       }
       const info = await nado.getAccountByAddress(address);
       return res.json(info);
+    }
+    if (dex === 'leverup') {
+      const address = String(req.query.address || '').trim();
+      if (!leverup.isEvmAddress(address)) {
+        return res.status(400).json({ error: 'address query param required (0x...)' });
+      }
+      return res.json(await leverup.getAccountByAddress(address));
     }
     if (dex === 'hotstuff') {
       const address = String(req.query.address || '').trim();
@@ -2520,6 +2529,8 @@ router.get('/markets', async (req, res) => {
       : dex === 'risex' ? await risex.getMarketInfo()
       : dex === 'nado' ? await nado.getMarketInfo()
       : dex === 'ondo' ? await ondo.getMarketInfo()
+      : dex === 'leverup' ? await leverup.getMarketInfo()
+      : dex === 'aster' ? await aster.getMarketInfo()
       : dex === 'hibachi' ? await hibachi.getMarketInfo()
       : dex === 'hotstuff' ? await hotstuff.getMarketInfo()
       : dex === 'grvt' ? await grvt.getMarketInfo()
@@ -2549,6 +2560,8 @@ router.get('/prices', async (req, res) => {
       : dex === 'risex' ? await risex.getPrices()
       : dex === 'nado' ? await nado.getPrices()
       : dex === 'ondo' ? await ondo.getPrices()
+      : dex === 'leverup' ? await leverup.getPrices()
+      : dex === 'aster' ? await aster.getPrices()
       : dex === 'hibachi' ? await hibachi.getPrices()
       : dex === 'hotstuff' ? await hotstuff.getPrices()
       : dex === 'grvt' ? await grvt.getPrices()
@@ -2597,8 +2610,17 @@ router.get('/orderbook', async (req, res) => {
   try {
     const book = dex === 'gmtrade'
       ? await gmtrade.getOrderbook(symbol, limit || 25)
+      : dex === 'leverup'
+      ? {
+        bids: [],
+        asks: [],
+        source: 'leverup_oracle',
+        message: 'LeverUp V2 is oracle-priced and does not publish a public L2 order book.',
+      }
       : dex === 'ondo'
       ? await ondo.getDepth(symbol, limit || 25)
+      : dex === 'aster'
+      ? await aster.getDepth(symbol, limit || 100)
       : dex === 'katana'
       ? await katana.getOrderbook(symbol, limit || 25, level || agg_level || 2)
       : dex === 'bulk'
@@ -2626,6 +2648,8 @@ router.get('/candles', async (req, res) => {
         from: Math.floor(Number(start_time) / (Number(start_time) > 1e12 ? 1000 : 1)),
         to: end_time ? Math.floor(Number(end_time) / (Number(end_time) > 1e12 ? 1000 : 1)) : undefined,
       })
+      : dex === 'aster'
+      ? await aster.getKlines(symbol, interval, req.query.limit || 500)
       : await pacifica.getCandles(symbol, interval, start_time, end_time);
     res.json(candles);
   } catch (e) {
@@ -2868,6 +2892,13 @@ router.get('/positions', async (req, res) => {
       const positions = await nado.getPositionsByAddress(address);
       return res.json(positions);
     }
+    if (dex === 'leverup') {
+      const address = String(req.query.address || '').trim();
+      if (!leverup.isEvmAddress(address)) {
+        return res.status(400).json({ error: 'address query param required' });
+      }
+      return res.json(await leverup.getPositionsByAddress(address));
+    }
     if (dex === 'hotstuff') {
       const address = String(req.query.address || '').trim();
       if (!hotstuff.isEvmAddress(address)) {
@@ -2978,6 +3009,13 @@ router.get('/orders', async (req, res) => {
       const orders = await nado.getOrdersByAddress(address);
       return res.json(orders);
     }
+    if (dex === 'leverup') {
+      const address = String(req.query.address || '').trim();
+      if (!leverup.isEvmAddress(address)) {
+        return res.status(400).json({ error: 'address query param required' });
+      }
+      return res.json(await leverup.getOrdersByAddress(address));
+    }
     if (dex === 'hotstuff') {
       const address = String(req.query.address || '').trim();
       if (!hotstuff.isEvmAddress(address)) {
@@ -3038,7 +3076,7 @@ router.get('/orders', async (req, res) => {
 
 // Reject self-custody writes on legacy Pacifica server endpoints. These
 // venues sign in the browser or use their dedicated route groups.
-const CLIENT_SIGNED_DEXES = new Set(['avantis', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'ondo', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash', 'bulk']);
+const CLIENT_SIGNED_DEXES = new Set(['avantis', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'ondo', 'leverup', 'aster', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash', 'bulk']);
 
 function avantisMigratedGuard(req, res, next) {
   if (CLIENT_SIGNED_DEXES.has(req.dex)) {
@@ -4541,6 +4579,195 @@ router.get('/nado/trade-history', auth, async (req, res) => {
   } catch (e) {
     console.warn('[nado] trade-history failed:', e.message);
     res.status(502).json({ error: 'Failed to load Nado trade history', detail: e.message });
+  }
+});
+
+function sendLeverupError(res, error, fallback = 'LeverUp request failed') {
+  const status = Number(error?.status);
+  const safeStatus = Number.isInteger(status) && status >= 400 && status < 600 ? status : 502;
+  return res.status(safeStatus).json({
+    error: error?.message || fallback,
+    detail: error?.payload || null,
+  });
+}
+
+function requireLeverupOwner(req, res) {
+  if (req.dex !== 'leverup') {
+    res.status(409).json({
+      error: `Account is registered for '${req.dex}'. Switch DEX to leverup before calling LeverUp endpoints.`,
+      stored_dex: req.dex,
+      requested_dex: 'leverup',
+    });
+    return null;
+  }
+  const requested = leverup.normalizeAddress(
+    req.body?.trader
+      || req.body?.account
+      || req.query?.account
+      || req.query?.address
+      || req.headers['x-leverup-wallet'],
+  );
+  const linked = leverup.normalizeAddress(req.dexWallet) || leverup.normalizeAddress(req.playerWallet);
+  const account = requested || linked;
+  if (!account) {
+    res.status(400).json({ error: 'LeverUp trader address required (0x...)' });
+    return null;
+  }
+  if (requested && linked && requested !== linked) {
+    res.status(403).json({ error: 'LeverUp trader does not match the wallet linked to this player' });
+    return null;
+  }
+  return { account };
+}
+
+router.get('/leverup/config', async (_req, res) => {
+  try {
+    const broker = await leverup.getBrokerConfig();
+    return res.json({
+      version: 'v2',
+      chainId: leverup.LEVERUP_CHAIN_ID,
+      diamond: leverup.LEVERUP_DIAMOND,
+      collateral: leverup.LEVERUP_USDC,
+      marginToken: leverup.LEVERUP_LVUSD,
+      broker,
+    });
+  } catch (error) {
+    return sendLeverupError(res, error, 'Failed to load LeverUp configuration');
+  }
+});
+
+router.get('/leverup/fee-config', async (_req, res) => {
+  try {
+    res.set('Cache-Control', 'public, max-age=30');
+    return res.json(await leverup.getFeeConfig());
+  } catch (error) {
+    return sendLeverupError(res, error, 'Failed to load LeverUp anti-DDoS fee configuration');
+  }
+});
+
+router.get('/leverup/account', auth, async (req, res) => {
+  try {
+    const owner = requireLeverupOwner(req, res);
+    if (!owner) return;
+    return res.json(await leverup.getAccountByAddress(owner.account));
+  } catch (error) {
+    return sendLeverupError(res, error, 'Failed to load LeverUp account');
+  }
+});
+
+router.get('/leverup/positions', auth, async (req, res) => {
+  try {
+    const owner = requireLeverupOwner(req, res);
+    if (!owner) return;
+    return res.json(await leverup.getPositionsByAddress(owner.account));
+  } catch (error) {
+    return sendLeverupError(res, error, 'Failed to load LeverUp positions');
+  }
+});
+
+router.get('/leverup/orders', auth, async (req, res) => {
+  try {
+    const owner = requireLeverupOwner(req, res);
+    if (!owner) return;
+    return res.json(await leverup.getOrdersByAddress(owner.account));
+  } catch (error) {
+    return sendLeverupError(res, error, 'Failed to load LeverUp orders');
+  }
+});
+
+router.get('/leverup/history', auth, async (req, res) => {
+  try {
+    const owner = requireLeverupOwner(req, res);
+    if (!owner) return;
+    return res.json(await leverup.getTradeHistory(owner.account, req.query));
+  } catch (error) {
+    return sendLeverupError(res, error, 'Failed to load LeverUp trade history');
+  }
+});
+
+router.post('/leverup/intents', auth, async (req, res) => {
+  try {
+    const owner = requireLeverupOwner(req, res);
+    if (!owner) return;
+    const intentHash = await leverup.submitIntent(req.body || {}, owner.account);
+    return res.json({ intentHash });
+  } catch (error) {
+    return sendLeverupError(res, error, 'Failed to submit LeverUp V2 intent');
+  }
+});
+
+router.get('/leverup/intents/:intentHash', auth, async (req, res) => {
+  try {
+    const owner = requireLeverupOwner(req, res);
+    if (!owner) return;
+    return res.json(await leverup.getIntentStatus(req.params.intentHash));
+  } catch (error) {
+    return sendLeverupError(res, error, 'Failed to load LeverUp intent status');
+  }
+});
+
+function sendAsterError(res, error, fallback = 'Aster request failed') {
+  const status = Number(error?.status);
+  const safeStatus = Number.isInteger(status) && status >= 400 && status < 600 ? status : 502;
+  return res.status(safeStatus).json({
+    error: error?.message || fallback,
+    code: error?.code || null,
+    detail: error?.payload || null,
+  });
+}
+
+function requireAsterOwner(req, res) {
+  if (req.dex !== 'aster') {
+    res.status(409).json({
+      error: `Account is registered for '${req.dex}'. Switch DEX to aster before calling Aster endpoints.`,
+      stored_dex: req.dex,
+      requested_dex: 'aster',
+    });
+    return null;
+  }
+  const requested = aster.normalizeAddress(
+    req.body?.account
+      || req.body?.user
+      || req.query?.account
+      || req.query?.address
+      || req.headers['x-aster-wallet'],
+  );
+  const linked = aster.normalizeAddress(req.dexWallet) || aster.normalizeAddress(req.playerWallet);
+  const account = requested || linked;
+  if (!account) {
+    res.status(400).json({ error: 'Aster owner address required (0x...)' });
+    return null;
+  }
+  if (requested && linked && requested !== linked) {
+    res.status(403).json({ error: 'Aster owner does not match the wallet linked to this player' });
+    return null;
+  }
+  return { account };
+}
+
+router.get('/aster/config', async (_req, res) => {
+  res.set('Cache-Control', 'no-store');
+  return res.json({
+    version: 'v3',
+    api: aster.ASTER_API_BASE,
+    builder: aster.getBuilderConfig(),
+  });
+});
+
+router.post('/aster/request', auth, async (req, res) => {
+  try {
+    const owner = requireAsterOwner(req, res);
+    if (!owner) return;
+    const payload = await aster.forwardSignedRequest({
+      method: req.body?.method,
+      path: req.body?.path,
+      payload: req.body?.payload,
+      signature: req.body?.signature,
+    }, owner.account);
+    res.set('Cache-Control', 'no-store');
+    return res.json(payload);
+  } catch (error) {
+    return sendAsterError(res, error);
   }
 });
 
@@ -6449,7 +6676,7 @@ router.get('/deposits', auth, (req, res) => {
 // Get USDC & native balance on custodial wallet
 const balanceCache = new Map();
 router.get('/balance', auth, async (req, res) => {
-  if (req.dex === 'gmx' || req.dex === 'ostium' || req.dex === 'monad' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'ondo' || req.dex === 'hibachi' || req.dex === 'katana' || req.dex === 'gmtrade' || req.dex === 'flash' || req.dex === 'bulk') {
+  if (req.dex === 'gmx' || req.dex === 'ostium' || req.dex === 'monad' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'ondo' || req.dex === 'leverup' || req.dex === 'aster' || req.dex === 'hibachi' || req.dex === 'katana' || req.dex === 'gmtrade' || req.dex === 'flash' || req.dex === 'bulk') {
     return res.status(410).json({ error: `${req.dex} balances are read directly by the client wallet.` });
   }
   const wallet = db.getWallet(req.playerId, req.dex);

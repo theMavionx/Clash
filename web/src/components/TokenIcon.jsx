@@ -138,8 +138,8 @@ export default function TokenIcon({ sym, size = 20, fallbackColor, style }) {
             width: '100%',
             height: '100%',
             fontSize: fallbackFontSize,
-            fontWeight: 900,
-            color: '#fff',
+            fontWeight: 700,
+            color: 'var(--terminal-on-accent)',
             lineHeight: 1,
           }}
         >

@@ -16,4 +16,34 @@ assert.match(tradeControls, /WebkitOverflowScrolling:\s*'touch'/u, 'touch scroll
 assert.match(tradeControls, /touchAction:\s*'pan-y'/u, 'vertical swipe gestures must be reserved for the controls column');
 assert.match(tradeControls, /safe-area-inset-bottom/u, 'last TP\/SL controls need space above the bottom safe area');
 
-console.log('Futures scroll layout PASS: fullscreen trade controls keep TP/SL reachable');
+const dragStart = source.indexOf('const handlePointerDown = useCallback((e) => {');
+const dragEnd = source.indexOf('const [activeTab, setActiveTab]', dragStart);
+assert.ok(dragStart >= 0 && dragEnd > dragStart, 'terminal drag handler must exist');
+const dragHandler = source.slice(dragStart, dragEnd);
+assert.match(
+  dragHandler,
+  /e\.currentTarget\.closest\('\.futures-terminal-shell--fullscreen'\)/u,
+  'maximized terminal must reject pointer drag before registering move listeners',
+);
+assert.match(dragHandler, /window\.addEventListener\('mousemove'/u, 'compact terminal must remain draggable');
+
+const tabsWheelStart = source.indexOf('const handleTabsWheel = useCallback((event) => {');
+const tabsWheelEnd = source.indexOf('// Branch on DEX.', tabsWheelStart);
+assert.ok(tabsWheelStart >= 0 && tabsWheelEnd > tabsWheelStart, 'tabs wheel handler must exist');
+const tabsWheelHandler = source.slice(tabsWheelStart, tabsWheelEnd);
+assert.match(tabsWheelHandler, /tabs\.scrollWidth - tabs\.clientWidth/u, 'wheel handler must only engage when tabs overflow');
+assert.match(tabsWheelHandler, /tabs\.scrollLeft \+ event\.deltaY/u, 'vertical wheel input must move the tabs horizontally');
+assert.match(tabsWheelHandler, /event\.preventDefault\(\)/u, 'handled tab-wheel input must not move the page');
+assert.match(source, /className="futures-tabs-scroll clash-scroll-hidden"\s+onWheel=\{handleTabsWheel\}/u, 'top tabs must use the wheel handler and hide only the horizontal navigation rail');
+
+const tabsStart = source.indexOf('const TABS = [');
+const tabsEnd = source.indexOf('];', tabsStart);
+assert.ok(tabsStart >= 0 && tabsEnd > tabsStart, 'terminal tab configuration must exist');
+const tabsConfig = source.slice(tabsStart, tabsEnd);
+assert.ok(
+  tabsConfig.indexOf("id: 'Account'") < tabsConfig.indexOf("id: 'History'")
+    && tabsConfig.indexOf("id: 'History'") < tabsConfig.indexOf("id: 'Funding'"),
+  'History and Funding must remain the final two terminal tabs',
+);
+
+console.log('Futures layout PASS: fullscreen controls scroll, maximized window stays fixed, compact window drags, tabs wheel-scroll horizontally');
