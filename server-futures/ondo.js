@@ -1,6 +1,6 @@
 const crypto = require('crypto');
 
-const ONDO_DEFAULT_BUILDER_CODE = '4249023162302247479';
+const ONDO_DEFAULT_BUILDER_CODE = 'clashofperps';
 const ONDO_API_URL = String(
   process.env.ONDO_PERPS_API_URL || 'https://api.ondoperps.xyz',
 ).replace(/\/+$/u, '');

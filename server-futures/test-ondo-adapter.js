@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const WebSocket = require('ws');
 
-process.env.ONDO_PERPS_BUILDER_CODE = '4249023162302247479';
+process.env.ONDO_PERPS_BUILDER_CODE = 'clashofperps';
 
 const ondo = require('./ondo');
 
@@ -47,7 +47,7 @@ function readLiveMarketSocket() {
 }
 
 async function main() {
-  assert.equal(ondo.ONDO_DEFAULT_BUILDER_CODE, '4249023162302247479');
+  assert.equal(ondo.ONDO_DEFAULT_BUILDER_CODE, 'clashofperps');
   assert.equal(ondo.ONDO_BUILDER_FEE_BPS, 1);
   assert.equal(ondo.alignOndoDecimal('63899.31', '1', 'trigger price'), '63899');
   assert.equal(ondo.alignOndoDecimal('45.449', '0.01', 'trigger price'), '45.44');
@@ -76,7 +76,7 @@ async function main() {
 
   assert.deepEqual(ondo.builderConfig(), {
     configured: true,
-    code: '4249023162302247479',
+    code: 'clashofperps',
     feeRateBps: 1,
     source: 'server_env',
   });
@@ -88,7 +88,7 @@ async function main() {
     size: '0.001',
     builderCode: { code: 'attacker', feeRateBps: 10 },
   });
-  assert.deepEqual(marketOrder.builderCode, { code: '4249023162302247479', feeRateBps: 1 });
+  assert.deepEqual(marketOrder.builderCode, { code: 'clashofperps', feeRateBps: 1 });
   assert.equal(marketOrder.market, 'BTC-USD.P');
   assert.equal(marketOrder.side, 'buy');
   assert.equal(marketOrder.type, 'market');
@@ -116,7 +116,7 @@ async function main() {
     postOnly: false,
     takeProfit: { triggerPrice: '43.00' },
     stopLoss: { triggerPrice: '46.50' },
-    builderCode: { code: '4249023162302247479', feeRateBps: 1 },
+    builderCode: { code: 'clashofperps', feeRateBps: 1 },
   });
   assert.deepEqual(
     ondo.orderIdentityFromResponse({ result: { orderID: 'official-order-1', clientOrderID: 'clash-client-1' } }),

@@ -8,7 +8,7 @@ const path = require('node:path');
 const dbPath = path.join(os.tmpdir(), `clash-ondo-reward-${process.pid}-${Date.now()}.db`);
 process.env.CLASH_FUTURES_DB = dbPath;
 process.env.NODE_ENV = 'development';
-process.env.ONDO_PERPS_BUILDER_CODE = '4249023162302247479';
+process.env.ONDO_PERPS_BUILDER_CODE = 'clashofperps';
 
 const ondo = require('./ondo');
 const db = require('./db');

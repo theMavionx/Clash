@@ -558,7 +558,7 @@ function ConnectAvantis({ onOpenEvmModal, onPrivyLogin, privyEnabled, privyAuthe
   const venueSetupStep = dex === 'ondo'
     ? {
         label: 'Accept Clash builder code',
-        hint: 'After wallet connection, accept builder code 4249023162302247479 at 1 bps.',
+        hint: 'After wallet connection, accept builder code clashofperps at 1 bps.',
       }
     : dex === 'nado'
       ? { label: 'Verify Nado referral', hint: 'Clash checks the wallet referral before allowing new positions.' }

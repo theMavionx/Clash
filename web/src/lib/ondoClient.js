@@ -31,7 +31,7 @@ export const ONDO_DOCS_URL = 'https://docs.ondoperps.xyz';
 export const ONDO_WS_URL = 'wss://api.ondoperps.xyz/ws';
 export const ONDO_SESSION_STORAGE_PREFIX = 'clash_ondo_session_v1';
 export const ONDO_BUILDER_ACCEPTANCE_STORAGE_PREFIX = 'clash_ondo_builder_acceptance_v1';
-export const ONDO_BUILDER_CODE = '4249023162302247479';
+export const ONDO_BUILDER_CODE = 'clashofperps';
 export const ONDO_BUILDER_FEE_BPS = 1;
 export const ONDO_REGION_BLOCKED_MESSAGE = 'Ondo Perps is not available in your country or IP region.';
 

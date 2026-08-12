@@ -6761,7 +6761,7 @@ function FuturesPanel() {
       {
         id: 'builder',
         label: 'Accept Clash builder routing',
-        hint: `Approve builder code ${builderConfig?.code || '4249023162302247479'} at exactly 1 bps for this wallet.`,
+        hint: `Approve builder code ${builderConfig?.code || 'clashofperps'} at exactly 1 bps for this wallet.`,
         status: builderAccepted ? 'done' : (ondoStepIndex === 1 || !ondoRunning ? 'active' : 'pending'),
       },
       {
@@ -6804,7 +6804,7 @@ function FuturesPanel() {
               workingText={activationStep?.label || (loading ? 'Checking your Ondo setup...' : '')}
               statusContent={(
                 <>
-                  <div><strong>Builder code:</strong> {builderConfig?.code || '4249023162302247479'}</div>
+                  <div><strong>Builder code:</strong> {builderConfig?.code || 'clashofperps'}</div>
                   <div><strong>Builder fee:</strong> 1 bps (0.01%)</div>
                   <div style={{marginTop: 4}}>Clash injects these exact values server-side into market, limit, close, and attached TP/SL entry orders. Browser overrides are ignored.</div>
                 </>

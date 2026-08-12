@@ -6,7 +6,7 @@ const path = require('path');
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clash-ondo-claim-'));
 process.env.CLASH_MAIN_DB = path.join(tmpDir, 'clash.db');
 process.env.CLASH_FUTURES_DB = path.join(tmpDir, 'futures.db');
-process.env.ONDO_PERPS_BUILDER_CODE = '4249023162302247479';
+process.env.ONDO_PERPS_BUILDER_CODE = 'clashofperps';
 process.env.ONDO_PERPS_BUILDER_FEE_BPS = '1';
 
 const wallet = '0x1111111111111111111111111111111111111111';

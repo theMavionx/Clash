@@ -118,7 +118,7 @@ const builderAcceptance = writeOndoBuilderAcceptance(
   ONDO_BUILDER_FEE_BPS,
   storage,
 );
-assert.equal(builderAcceptance.builderCode, '4249023162302247479');
+assert.equal(builderAcceptance.builderCode, 'clashofperps');
 assert.equal(builderAcceptance.feeRateBps, 1);
 assert.equal(readOndoBuilderAcceptance(walletA, ONDO_BUILDER_CODE, 1, storage)?.wallet, walletA);
 assert.equal(readOndoBuilderAcceptance(walletB, ONDO_BUILDER_CODE, 1, storage), null, 'builder acceptance must be wallet scoped');
