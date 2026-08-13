@@ -4585,6 +4585,7 @@ async function loadEarnings(force) {
       ['grvt',     'GRVT',     '#5eead4', '#14b8a6'],
       ['risex',    'RISE',     '#c084fc', '#9333ea'],
       ['nado',     'Nado',     '#67e8f9', '#00b8d9'],
+      ['aster',    'Aster',    '#facc15', '#ca8a04'],
       ['ondo',     'Ondo Perps', '#f8fafc', '#111827'],
       ['hibachi',  'Hibachi',  '#f87171', '#dc2626'],
       ['hotstuff', 'Hotstuff', '#fca5a5', '#ef4444'],
@@ -4634,12 +4635,13 @@ async function loadEarnings(force) {
       const d = data[k] || {};
       const snapshot = snapshotDexes[k] || {};
       const ok = d.ok;
-      const risexEstimate = d.model === 'risex_onchain_attributed_volume_estimate'
+      const estimateOnly = (d.model === 'risex_onchain_attributed_volume_estimate'
+        || d.snapshot_value_kind === 'estimate')
         && Number.isFinite(Number(d.estimated_fee_usd));
-      const displayedEarnings = risexEstimate ? Number(d.estimated_fee_usd) : Number(d.earned_usd);
+      const displayedEarnings = estimateOnly ? Number(d.estimated_fee_usd) : Number(d.earned_usd);
       const v = ok && Number.isFinite(displayedEarnings) ? '$' + displayedEarnings.toFixed(4) : '—';
-      const valueKindLine = risexEstimate
-        ? '<div style="font-size:10px;color:#fbbf24;font-weight:700;text-transform:uppercase;letter-spacing:.4px">on-chain attributed estimate</div>'
+      const valueKindLine = estimateOnly
+        ? '<div style="font-size:10px;color:#fbbf24;font-weight:700;text-transform:uppercase;letter-spacing:.4px">' + (d.model === 'aster_order_proof_volume_estimate' ? 'order-proof attributed estimate' : 'on-chain attributed estimate') + '</div>'
         : '';
       const addrLine = ok && d.address
         ? '<code class="mono" style="color:#94a3b8;font-size:10px">' + esc(d.address.slice(0, 10) + '…' + d.address.slice(-4)) + '</code>'
@@ -4706,6 +4708,14 @@ async function loadEarnings(force) {
             ? ' / local ' + Number(d.local_trades) + ' fill(s)'
             : '';
           return '<span style="color:#9ca3af;font-size:11px">' + (d.trades || 0) + ' builder fill(s) / $' + Number(d.volume_usd || 0).toFixed(0) + ' vol' + local + estimate + '</span>';
+        }
+        if (d.model === 'aster_builder_user_trades_exact' || d.model === 'aster_order_proof_volume_estimate') {
+          const mode = d.model === 'aster_builder_user_trades_exact' ? 'exact builder feed' : 'signed order proofs';
+          const local = Number.isFinite(Number(d.local_proof_trades))
+            ? ' / ' + Number(d.local_proof_trades) + ' local proof fill(s)'
+            : '';
+          const status = d.tracking?.status ? ' / ' + esc(String(d.tracking.status)) : '';
+          return '<span style="color:#9ca3af;font-size:11px">' + mode + ' / ' + Number(d.trades || 0) + ' fill(s) / $' + Number(d.volume_usd || 0).toFixed(2) + ' volume' + local + status + '</span>';
         }
         if (d.model === 'hotstuff_local_broker_fee_exact') {
           const estimate = Number.isFinite(Number(d.estimated_fee_usd))

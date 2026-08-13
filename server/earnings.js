@@ -2401,6 +2401,11 @@ const BULK_BUILDER_ADDRESS = String(
 const BULK_BUILDER_FEE_BPS = Math.max(1, Math.min(15, Number(process.env.BULK_BUILDER_FEE_BPS || 1)));
 const ONDO_BUILDER_CODE = String(process.env.ONDO_PERPS_BUILDER_CODE || '').trim();
 const ONDO_BUILDER_FEE_BPS = 1;
+const ASTER_BUILDER_ADDRESS = String(
+  process.env.ASTER_BUILDER_ADDRESS || process.env.ASTER_BUILDER_CODE || '',
+).trim().toLowerCase();
+const ASTER_BUILDER_FEE_RATE = String(process.env.ASTER_BUILDER_FEE_RATE || '0.00001').trim();
+const ASTER_BUILDER_FEE_BPS = Math.max(0, Number(ASTER_BUILDER_FEE_RATE) * 10_000);
 
 function ondoVerifiedBuilderProofWhere() {
   if (!ONDO_BUILDER_CODE) return '0';
@@ -2410,6 +2415,21 @@ function ondoVerifiedBuilderProofWhere() {
     AND json_extract(proof_json, '$.venue') = 'ondo'
     AND json_extract(proof_json, '$.builder_code') = '${code}'
     AND CAST(json_extract(proof_json, '$.builder_fee_bps') AS INTEGER) = ${ONDO_BUILDER_FEE_BPS}
+    AND COALESCE(json_extract(proof_json, '$.fill_id'), '') != ''
+    AND COALESCE(json_extract(proof_json, '$.builder_order_id'), '') != ''
+  `;
+}
+
+function asterVerifiedBuilderProofWhere() {
+  if (!/^0x[0-9a-f]{40}$/u.test(ASTER_BUILDER_ADDRESS)) return '0';
+  const address = ASTER_BUILDER_ADDRESS.replace(/'/gu, "''");
+  const feeRate = ASTER_BUILDER_FEE_RATE.replace(/'/gu, "''");
+  return `
+    json_valid(COALESCE(proof_json, ''))
+    AND json_extract(proof_json, '$.venue') = 'aster'
+    AND json_extract(proof_json, '$.source') = 'aster_user_trade_order_proof'
+    AND lower(json_extract(proof_json, '$.builder_address')) = '${address}'
+    AND json_extract(proof_json, '$.builder_fee_rate') = '${feeRate}'
     AND COALESCE(json_extract(proof_json, '$.fill_id'), '') != ''
     AND COALESCE(json_extract(proof_json, '$.builder_order_id'), '') != ''
   `;
@@ -3119,6 +3139,217 @@ async function fetchOndoEarnings() {
   };
 }
 
+function ensureAsterEarningsIndex(mainDb) {
+  if (!mainDb) return;
+  mainDb.exec(`
+    CREATE TABLE IF NOT EXISTS aster_builder_fills (
+      builder_address TEXT NOT NULL,
+      user_address    TEXT NOT NULL,
+      trade_id        TEXT NOT NULL,
+      order_id        TEXT,
+      trade_time      TEXT NOT NULL,
+      symbol          TEXT,
+      side            TEXT,
+      price           TEXT,
+      quantity        TEXT,
+      notional_usd    REAL NOT NULL DEFAULT 0,
+      builder_fee_usd REAL NOT NULL DEFAULT 0,
+      raw_json        TEXT NOT NULL,
+      indexed_at      TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (builder_address, user_address, trade_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_aster_builder_fills_time
+      ON aster_builder_fills(builder_address, trade_time);
+    CREATE INDEX IF NOT EXISTS idx_aster_builder_fills_order
+      ON aster_builder_fills(builder_address, order_id);
+  `);
+}
+
+function upsertAsterBuilderFills(mainDb, rows, builderAddress) {
+  if (!mainDb || !Array.isArray(rows) || !builderAddress) return { indexed: 0, skipped: 0 };
+  ensureAsterEarningsIndex(mainDb);
+  const insert = mainDb.prepare(`
+    INSERT INTO aster_builder_fills (
+      builder_address, user_address, trade_id, order_id, trade_time,
+      symbol, side, price, quantity, notional_usd, builder_fee_usd, raw_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(builder_address, user_address, trade_id) DO UPDATE SET
+      order_id = excluded.order_id,
+      trade_time = excluded.trade_time,
+      symbol = excluded.symbol,
+      side = excluded.side,
+      price = excluded.price,
+      quantity = excluded.quantity,
+      notional_usd = excluded.notional_usd,
+      builder_fee_usd = excluded.builder_fee_usd,
+      raw_json = excluded.raw_json,
+      indexed_at = datetime('now')
+  `);
+  let indexed = 0;
+  let skipped = 0;
+  const tx = mainDb.transaction((items) => {
+    for (const row of items) {
+      const tradeId = String(row?.tradeId ?? row?.id ?? '').trim();
+      const userAddress = String(row?.userAddress || '').trim().toLowerCase();
+      const tradeMs = Number(row?.insertTime ?? row?.time ?? row?.timestamp);
+      const tradeDate = new Date(tradeMs);
+      if (!tradeId || !/^0x[0-9a-f]{40}$/u.test(userAddress) || !Number.isFinite(tradeDate.getTime())) {
+        skipped += 1;
+        continue;
+      }
+      insert.run(
+        builderAddress,
+        userAddress,
+        tradeId,
+        row?.orderId == null ? null : String(row.orderId),
+        tradeDate.toISOString(),
+        row?.symbol == null ? null : String(row.symbol),
+        row?.side == null ? null : String(row.side),
+        row?.price == null ? null : String(row.price),
+        row?.qty == null ? null : String(row.qty),
+        Math.abs(safeNumber(row?.totalQuota) || (safeNumber(row?.price) * safeNumber(row?.qty))),
+        Math.abs(safeNumber(row?.builderFee)),
+        JSON.stringify(row),
+      );
+      indexed += 1;
+    }
+  });
+  tx(rows);
+  return { indexed, skipped };
+}
+
+function readAsterExactIndexedEarnings(mainDb, builderAddress) {
+  const empty = {
+    earned_usd: 0,
+    earned_24h_usd: 0,
+    volume_usd: 0,
+    volume_24h_usd: 0,
+    trades: 0,
+    trades_24h: 0,
+    traders: 0,
+    latest_fill_at: null,
+    recent_proofs: [],
+  };
+  if (!mainDb || !builderAddress) return empty;
+  ensureAsterEarningsIndex(mainDb);
+  const summary = mainDb.prepare(`
+    SELECT COUNT(*) AS trades,
+           COUNT(DISTINCT user_address) AS traders,
+           COALESCE(SUM(notional_usd), 0) AS volume_usd,
+           COALESCE(SUM(builder_fee_usd), 0) AS earned_usd,
+           MAX(trade_time) AS latest_fill_at
+    FROM aster_builder_fills
+    WHERE builder_address = ?
+  `).get(builderAddress) || {};
+  const recent = mainDb.prepare(`
+    SELECT COUNT(*) AS trades,
+           COALESCE(SUM(notional_usd), 0) AS volume_usd,
+           COALESCE(SUM(builder_fee_usd), 0) AS earned_usd
+    FROM aster_builder_fills
+    WHERE builder_address = ? AND trade_time > datetime('now', '-24 hours')
+  `).get(builderAddress) || {};
+  const proofs = mainDb.prepare(`
+    SELECT user_address, trade_id, order_id, trade_time, symbol, side,
+           price, quantity, notional_usd, builder_fee_usd
+    FROM aster_builder_fills
+    WHERE builder_address = ?
+    ORDER BY trade_time DESC
+    LIMIT 20
+  `).all(builderAddress);
+  return {
+    earned_usd: roundUsd(summary.earned_usd),
+    earned_24h_usd: roundUsd(recent.earned_usd),
+    volume_usd: roundUsd(summary.volume_usd),
+    volume_24h_usd: roundUsd(recent.volume_usd),
+    trades: safeNumber(summary.trades),
+    trades_24h: safeNumber(recent.trades),
+    traders: safeNumber(summary.traders),
+    latest_fill_at: summary.latest_fill_at || null,
+    recent_proofs: proofs,
+  };
+}
+
+async function fetchAsterEarnings({ mainDb = null } = {}) {
+  let aster;
+  try { aster = require('../server-futures/aster'); } catch { aster = null; }
+  const config = aster?.getBuilderConfig?.() || {
+    configured: /^0x[0-9a-f]{40}$/u.test(ASTER_BUILDER_ADDRESS),
+    address: ASTER_BUILDER_ADDRESS || null,
+    feeRate: ASTER_BUILDER_FEE_RATE,
+    feeBps: ASTER_BUILDER_FEE_BPS,
+    tracking: { exactBuilderFeed: false, status: 'order_proof_tracking_ready' },
+  };
+  const address = String(config.address || ASTER_BUILDER_ADDRESS || '').toLowerCase();
+  const local = readVerifiedFuturesDexStats('aster', 'aster_builder_fill', {
+    rowWhere: asterVerifiedBuilderProofWhere(),
+    earnedRatePpm: ASTER_BUILDER_FEE_BPS * 100,
+  });
+  let exact = readAsterExactIndexedEarnings(mainDb, address);
+  let refresh = null;
+  let refreshError = null;
+  if (config?.tracking?.exactBuilderFeed && aster?.fetchBuilderTrades) {
+    try {
+      const provider = await aster.fetchBuilderTrades();
+      refresh = upsertAsterBuilderFills(mainDb, provider.rows, address);
+      refresh.provider_rows = provider.rows.length;
+      refresh.provider_total = provider.total;
+      exact = readAsterExactIndexedEarnings(mainDb, address);
+    } catch (error) {
+      refreshError = String(error?.message || error).slice(0, 200);
+    }
+  }
+  const exactFeedSucceeded = Boolean(config?.tracking?.exactBuilderFeed && refresh && !refreshError);
+  if (exact.trades > 0 || exactFeedSucceeded) {
+    return {
+      ...exact,
+      currency: 'USDT (Aster)',
+      address: address || null,
+      configured: !!config.configured,
+      builder_fee_rate: config.feeRate || ASTER_BUILDER_FEE_RATE,
+      builder_fee_bps: Number(config.feeBps ?? ASTER_BUILDER_FEE_BPS),
+      builder_fee_pct: Number(config.feeBps ?? ASTER_BUILDER_FEE_BPS) / 100,
+      estimated_fee_usd: roundUsd(local.earned_usd),
+      local_proof_trades: local.trades,
+      local_proof_volume_usd: local.volume_usd,
+      tracking: config.tracking,
+      refresh,
+      refresh_error: refreshError,
+      model: 'aster_builder_user_trades_exact',
+      source_detail: 'aster_v3_builder_user_trades_builder_fee',
+      note: `Exact builderFee sum from Aster's authenticated builder/userTrades feed, persisted by tradeId and userAddress so the 30-day provider window does not erase older indexed earnings.${refreshError ? ` Latest refresh failed; serving the stored exact index (${refreshError}).` : ''}`,
+    };
+  }
+  const estimated = local.earned_usd;
+  return {
+    earned_usd: 0,
+    earned_24h_usd: 0,
+    currency: 'USDT (Aster)',
+    address: address || null,
+    configured: !!config.configured,
+    volume_usd: local.volume_usd,
+    volume_24h_usd: local.volume_24h_usd,
+    trades: local.trades,
+    trades_24h: local.trades_24h,
+    traders: local.traders,
+    estimated_fee_usd: roundUsd(estimated),
+    snapshot_value_kind: 'estimate',
+    snapshot_cumulative_usd: roundUsd(estimated),
+    builder_fee_rate: config.feeRate || ASTER_BUILDER_FEE_RATE,
+    builder_fee_bps: Number(config.feeBps ?? ASTER_BUILDER_FEE_BPS),
+    builder_fee_pct: Number(config.feeBps ?? ASTER_BUILDER_FEE_BPS) / 100,
+    latest_fill_at: local.latest_fill_at,
+    recent_proofs: local.recent_proofs,
+    tracking: config.tracking,
+    refresh_error: refreshError,
+    exact_unavailable: true,
+    model: config.configured ? 'aster_order_proof_volume_estimate' : 'aster_builder_not_configured',
+    source_detail: 'aster_signed_order_proof_x_user_trade_volume',
+    note: config.configured
+      ? `Aster order proofs are active for ${address}. The estimate counts only userTrades fills whose orderId matches a persisted Clash order carrying builder ${address} at ${Number(config.feeBps ?? ASTER_BUILDER_FEE_BPS)} bps. Exact builderFee totals will switch on automatically when ASTER_BUILDER_SIGNER_PRIVATE_KEY is configured for the authorized builder API Wallet.${refreshError ? ` Exact feed check: ${refreshError}.` : ''}`
+      : 'Aster builder address is not configured, so builder attribution and earnings counting are disabled.',
+  };
+}
+
 // Revenue analytics for admin: fast local stats by time window and by
 // tournament. Exact cumulative readers above stay authoritative where a DEX
 // exposes them; this section focuses on comparable volume x rate reporting.
@@ -3134,6 +3365,7 @@ const ANALYTICS_DEXES = [
   { key: 'grvt', label: 'GRVT' },
   { key: 'risex', label: 'RISE' },
   { key: 'nado', label: 'Nado' },
+  { key: 'aster', label: 'Aster' },
   { key: 'ondo', label: 'Ondo Perps' },
   { key: 'hibachi', label: 'Hibachi' },
   { key: 'hotstuff', label: 'Hotstuff' },
@@ -3204,6 +3436,7 @@ function tradeSourceWhereForAnalytics(dex) {
   if (dex === 'grvt') return "verified_source = 'grvt_builder'";
   if (dex === 'risex') return tradeRecon.verifiedSourceClauseForDex('risex');
   if (dex === 'nado') return "verified_source = 'nado_api'";
+  if (dex === 'aster') return `verified_source = 'aster_builder_fill' AND (${asterVerifiedBuilderProofWhere()})`;
   if (dex === 'ondo') return `verified_source = 'ondo_builder_fill' AND (${ondoVerifiedBuilderProofWhere()})`;
   if (dex === 'hibachi') return "verified_source = 'hibachi_api'";
   if (dex === 'hotstuff') return "verified_source = 'hotstuff_api'";
@@ -3343,6 +3576,18 @@ function revenueModelForDex(dex, dateForRate = null) {
       builder_fee_bps: bps,
       model: bps > 0 ? 'single_builder_fee' : 'builder_fee_not_configured',
       source_detail: bps > 0 ? 'local_volume_x_nado_bps' : 'nado_builder_not_configured',
+    };
+  }
+  if (dex === 'aster') {
+    return {
+      configured: /^0x[0-9a-f]{40}$/u.test(ASTER_BUILDER_ADDRESS) && ASTER_BUILDER_FEE_BPS > 0,
+      rate: ASTER_BUILDER_FEE_BPS / 10000,
+      rate_label: `${ASTER_BUILDER_FEE_BPS} bps builder fee`,
+      builder_fee_bps: ASTER_BUILDER_FEE_BPS,
+      builder_fee_pct: ASTER_BUILDER_FEE_BPS / 100,
+      address: ASTER_BUILDER_ADDRESS || null,
+      model: 'aster_order_proof_volume_estimate',
+      source_detail: 'aster_signed_order_proof_x_user_trade_volume',
     };
   }
   if (dex === 'hotstuff') {
@@ -3824,6 +4069,10 @@ const FAILED_EARNINGS_META = {
     builder_id: NADO_BUILDER_ID,
     currency: 'USDt0 (Ink)',
   },
+  aster: {
+    address: ASTER_BUILDER_ADDRESS || null,
+    currency: 'USDT (Aster)',
+  },
   bulk: {
     address: BULK_BUILDER_ADDRESS,
     currency: 'USDC (Bulk/Solana)',
@@ -3847,6 +4096,7 @@ const EARNINGS_READER_CONFIG = {
   grvt: { source: 'grvt_builder_fill_history', read: () => fetchGrvtEarnings() },
   risex: { source: 'risex_builder_10_place_order_proof', read: ({ mainDb }) => fetchRisexEarnings({ mainDb }) },
   nado: { source: 'nado_archive_orders_builder_fee', read: ({ mainDb }) => fetchNadoEarnings({ mainDb }) },
+  aster: { source: 'aster_v3_builder_user_trades_or_order_proof', read: ({ mainDb }) => fetchAsterEarnings({ mainDb }) },
   hotstuff: { source: 'hotstuff_api_fills_broker_fee', read: () => fetchHotstuffEarnings() },
   hibachi: { source: 'hibachi_api_activity_builder_fee_unverified', read: () => fetchHibachiEarnings() },
   katana: { source: 'katana_builder_fee_exact_or_estimate', read: () => fetchKatanaEarnings() },
@@ -3869,6 +4119,7 @@ const EARNINGS_DEX_ORDER = [
   'grvt',
   'risex',
   'nado',
+  'aster',
   'hotstuff',
   'hibachi',
   'katana',
@@ -4436,5 +4687,8 @@ module.exports = {
     readNadoIndexedEarnings,
     nadoUnpackBuilderAppendix,
     nadoSubaccountHex,
+    ensureAsterEarningsIndex,
+    upsertAsterBuilderFills,
+    readAsterExactIndexedEarnings,
   },
 };

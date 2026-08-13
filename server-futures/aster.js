@@ -1,4 +1,5 @@
 const got = require('got');
+const { privateKeyToAccount } = require('viem/accounts');
 
 const ASTER_API_BASE = String(process.env.ASTER_API_URL || 'https://fapi.asterdex.com').replace(/\/+$/u, '');
 const ASTER_API_TIMEOUT_MS = Math.max(2_000, Math.min(20_000, Number(process.env.ASTER_API_TIMEOUT_MS || 8_000)));
@@ -11,6 +12,17 @@ const ASTER_BUILDER_FEE_RATE = /^(?:0(?:\.\d+)?|1(?:\.0+)?)$/u.test(configuredFe
   ? configuredFeeRate
   : ASTER_DEFAULT_BUILDER_FEE_RATE;
 const ASTER_BUILDER_NAME = String(process.env.ASTER_BUILDER_NAME || 'clashofperps').trim().slice(0, 64) || 'clashofperps';
+const ASTER_BUILDER_SIGNER_PRIVATE_KEY = normalizePrivateKey(process.env.ASTER_BUILDER_SIGNER_PRIVATE_KEY || '');
+const ASTER_BUILDER_SIGNER_ADDRESS = normalizeAddress(process.env.ASTER_BUILDER_SIGNER_ADDRESS || '');
+const ASTER_MESSAGE_DOMAIN = Object.freeze({
+  name: 'AsterSignTransaction',
+  version: '1',
+  chainId: 1666,
+  verifyingContract: '0x0000000000000000000000000000000000000000',
+});
+const ASTER_MESSAGE_TYPES = Object.freeze({
+  Message: Object.freeze([{ name: 'msg', type: 'string' }]),
+});
 
 const MARKET_CACHE_MS = 30_000;
 const PRICE_CACHE_MS = 2_000;
@@ -45,6 +57,13 @@ const SIGNED_ENDPOINTS = new Map([
 function normalizeAddress(value) {
   const text = String(value || '').trim();
   return /^0x[0-9a-fA-F]{40}$/u.test(text) ? text.toLowerCase() : '';
+}
+
+function normalizePrivateKey(value) {
+  const text = String(value || '').trim();
+  if (/^0x[0-9a-fA-F]{64}$/u.test(text)) return text;
+  if (/^[0-9a-fA-F]{64}$/u.test(text)) return `0x${text}`;
+  return '';
 }
 
 function num(value, fallback = 0) {
@@ -231,6 +250,37 @@ function getBuilderConfig() {
     feeBps,
     name: ASTER_BUILDER_NAME,
     status: ASTER_BUILDER_ADDRESS ? 'configured' : 'pending_builder_address',
+    tracking: getBuilderTrackingConfig(),
+  };
+}
+
+function getBuilderSignerAccount() {
+  if (!ASTER_BUILDER_SIGNER_PRIVATE_KEY) return null;
+  try {
+    const account = privateKeyToAccount(ASTER_BUILDER_SIGNER_PRIVATE_KEY);
+    if (ASTER_BUILDER_SIGNER_ADDRESS
+      && normalizeAddress(account.address) !== ASTER_BUILDER_SIGNER_ADDRESS) {
+      return null;
+    }
+    return account;
+  } catch {
+    return null;
+  }
+}
+
+function getBuilderTrackingConfig() {
+  const signer = getBuilderSignerAccount();
+  return {
+    orderProofs: Boolean(ASTER_BUILDER_ADDRESS),
+    userTradeReconciliation: Boolean(ASTER_BUILDER_ADDRESS),
+    exactBuilderFeed: Boolean(ASTER_BUILDER_ADDRESS && signer),
+    exactBuilderFeedWindowDays: 30,
+    signerAddress: signer ? normalizeAddress(signer.address) : (ASTER_BUILDER_SIGNER_ADDRESS || null),
+    status: !ASTER_BUILDER_ADDRESS
+      ? 'pending_builder_address'
+      : signer
+        ? 'exact_feed_ready'
+        : 'order_proof_tracking_ready',
   };
 }
 
@@ -240,6 +290,184 @@ function parseSignedPayload(payload) {
     throw Object.assign(new Error('Invalid Aster signed payload'), { status: 400 });
   }
   return { raw, params: new URLSearchParams(raw) };
+}
+
+function orderResponseIdentity(response, requestParams) {
+  const candidates = [
+    response,
+    response?.data,
+    response?.result,
+    response?.response,
+    response?.data?.data,
+    response?.data?.result,
+  ].filter(value => value && typeof value === 'object' && !Array.isArray(value));
+  let orderId = '';
+  let clientOrderId = String(requestParams?.get('newClientOrderId') || '').trim();
+  for (const candidate of candidates) {
+    orderId ||= String(candidate.orderId ?? candidate.orderID ?? candidate.id ?? '').trim();
+    clientOrderId ||= String(candidate.clientOrderId ?? candidate.clientOrderID ?? '').trim();
+  }
+  return { orderId, clientOrderId };
+}
+
+function builderOrderProofFromRequest({ method, path, payload, response, owner }) {
+  if (String(method || '').toUpperCase() !== 'POST' || String(path || '') !== '/fapi/v3/order') return null;
+  const parsed = parseSignedPayload(payload);
+  const requestOwner = normalizeAddress(parsed.params.get('user'));
+  const signer = normalizeAddress(parsed.params.get('signer'));
+  const builderAddress = normalizeAddress(parsed.params.get('builder'));
+  const builderFeeRate = String(parsed.params.get('feeRate') || '').trim();
+  if (!requestOwner || requestOwner !== normalizeAddress(owner) || !signer) return null;
+  if (!ASTER_BUILDER_ADDRESS || builderAddress !== ASTER_BUILDER_ADDRESS
+    || builderFeeRate !== ASTER_BUILDER_FEE_RATE) return null;
+  const identity = orderResponseIdentity(response, parsed.params);
+  const proofOrderId = identity.orderId || (identity.clientOrderId ? `client:${identity.clientOrderId}` : '');
+  if (!proofOrderId) return null;
+  return {
+    orderId: proofOrderId,
+    upstreamOrderId: identity.orderId || null,
+    clientOrderId: identity.clientOrderId || null,
+    account: requestOwner,
+    signer,
+    symbol: String(parsed.params.get('symbol') || '').trim().toUpperCase(),
+    side: String(parsed.params.get('side') || '').trim().toUpperCase(),
+    orderType: String(parsed.params.get('type') || '').trim().toUpperCase(),
+    reduceOnly: String(parsed.params.get('reduceOnly') || '').toLowerCase() === 'true'
+      || String(parsed.params.get('closePosition') || '').toLowerCase() === 'true',
+    builderAddress,
+    builderFeeRate,
+    builderFeeBps: Number((Number(builderFeeRate) * 10_000).toFixed(8)),
+    request: Object.fromEntries(parsed.params.entries()),
+    response,
+  };
+}
+
+function rowsFromUserTradesPayload(payload) {
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload?.rows)) return payload.rows;
+  if (Array.isArray(payload?.data)) return payload.data;
+  if (Array.isArray(payload?.result)) return payload.result;
+  return [];
+}
+
+function tradeTimestampIso(row) {
+  const value = Number(row?.time ?? row?.insertTime ?? row?.updateTime ?? row?.timestamp);
+  if (!(value > 0)) return null;
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : null;
+}
+
+function importUserTradesForPlayer({ db, playerId, account, payload }) {
+  if (!db || !playerId || !normalizeAddress(account)) {
+    return { scanned: 0, eligible: 0, imported: 0, updated: 0 };
+  }
+  const owner = normalizeAddress(account);
+  const rows = rowsFromUserTradesPayload(payload);
+  let eligible = 0;
+  let imported = 0;
+  let updated = 0;
+  for (const row of rows) {
+    const tradeId = String(row?.id ?? row?.tradeId ?? '').trim();
+    const orderId = String(row?.orderId ?? row?.orderID ?? '').trim();
+    const clientOrderId = String(row?.clientOrderId ?? row?.clientOrderID ?? '').trim();
+    if (!tradeId || (!orderId && !clientOrderId)) continue;
+    const orderProof = (orderId
+      ? db.getAsterBuilderOrder(orderId, playerId, owner)
+      : null) || (clientOrderId
+      ? db.getAsterBuilderOrderByClient(clientOrderId, playerId, owner)
+      : null);
+    if (!orderProof
+      || normalizeAddress(orderProof.builder_address) !== ASTER_BUILDER_ADDRESS
+      || String(orderProof.builder_fee_rate || '') !== ASTER_BUILDER_FEE_RATE) continue;
+    eligible += 1;
+    const price = String(row?.price ?? row?.avgPrice ?? '0');
+    const amount = String(row?.qty ?? row?.quantity ?? row?.executedQty ?? '0');
+    const notional = num(row?.quoteQty ?? row?.totalQuota ?? row?.cumQuote, Math.abs(num(price) * num(amount)));
+    const exactBuilderFee = row?.builderFee == null || row?.builderFee === '' ? null : String(row.builderFee);
+    const result = db.upsertVerifiedTrade(playerId, {
+      symbol: symbolBase(row?.symbol || orderProof.symbol),
+      side: String(row?.side || orderProof.side).toUpperCase() === 'BUY' ? 'bid' : 'ask',
+      orderType: String(orderProof.order_type || 'fill').toLowerCase(),
+      amount,
+      price,
+      orderId: orderId || orderProof.order_id,
+      clientOrderId: `aster:fill:${owner}:${tradeId}`,
+      status: 'filled',
+      dex: 'aster',
+      notional_usd: Math.abs(notional),
+      verifiedSource: 'aster_builder_fill',
+      fee: exactBuilderFee,
+      proofJson: JSON.stringify({
+        source: 'aster_user_trade_order_proof',
+        venue: 'aster',
+        fill_id: tradeId,
+        builder_order_id: orderProof.order_id,
+        builder_address: orderProof.builder_address,
+        builder_fee_rate: orderProof.builder_fee_rate,
+        builder_fee_bps: orderProof.builder_fee_bps,
+        exact_builder_fee: exactBuilderFee,
+        fill: row,
+      }),
+      createdAt: tradeTimestampIso(row),
+    });
+    imported += Number(result?.inserted || 0);
+    updated += Number(result?.updated || 0);
+  }
+  return { scanned: rows.length, eligible, imported, updated };
+}
+
+let lastBuilderNonce = 0n;
+function nextBuilderNonce() {
+  const candidate = BigInt(Date.now()) * 1000n;
+  lastBuilderNonce = candidate > lastBuilderNonce ? candidate : lastBuilderNonce + 1n;
+  return lastBuilderNonce.toString();
+}
+
+async function buildBuilderTradesSignedQuery(entries = []) {
+  if (!ASTER_BUILDER_ADDRESS) throw new Error('Aster builder address is not configured');
+  const account = getBuilderSignerAccount();
+  if (!account) throw new Error('Aster builder signer credential is not configured');
+  const params = new URLSearchParams();
+  for (const [key, value] of entries) {
+    if (value !== undefined && value !== null && value !== '') params.append(String(key), String(value));
+  }
+  params.append('nonce', nextBuilderNonce());
+  params.append('signer', normalizeAddress(account.address));
+  const payload = params.toString();
+  const signature = await account.signTypedData({
+    domain: ASTER_MESSAGE_DOMAIN,
+    types: ASTER_MESSAGE_TYPES,
+    primaryType: 'Message',
+    message: { msg: payload },
+  });
+  return { payload, signature, signer: normalizeAddress(account.address) };
+}
+
+async function fetchBuilderTrades({ startTime = null, endTime = null, limit = 1000, pageCap = 50 } = {}) {
+  const now = Date.now();
+  const safeStart = Math.max(now - (30 * 24 * 60 * 60 * 1000), Number(startTime) || 0);
+  const safeEnd = Math.max(safeStart, Math.min(now, Number(endTime) || now));
+  const safeLimit = Math.max(1, Math.min(1000, Number(limit) || 1000));
+  const safePageCap = Math.max(1, Math.min(100, Number(pageCap) || 50));
+  const rows = [];
+  let total = 0;
+  for (let page = 1; page <= safePageCap; page += 1) {
+    const signed = await buildBuilderTradesSignedQuery([
+      ['startTime', safeStart],
+      ['endTime', safeEnd],
+      ['page', page],
+      ['limit', safeLimit],
+    ]);
+    const payload = await request('/fapi/v3/builder/userTrades', {
+      method: 'GET',
+      rawQuery: `${signed.payload}&signature=${encodeURIComponent(signed.signature)}`,
+    });
+    const pageRows = rowsFromUserTradesPayload(payload);
+    rows.push(...pageRows);
+    total = Math.max(total, Number(payload?.total) || rows.length);
+    if (!payload?.hasMore || pageRows.length < safeLimit) break;
+  }
+  return { rows, total, startTime: safeStart, endTime: safeEnd };
 }
 
 function validateSignedRequest({ method, path, payload, signature, owner }) {
@@ -312,6 +540,11 @@ module.exports = {
   ASTER_BUILDER_FEE_RATE,
   normalizeAddress,
   getBuilderConfig,
+  getBuilderTrackingConfig,
+  builderOrderProofFromRequest,
+  importUserTradesForPlayer,
+  buildBuilderTradesSignedQuery,
+  fetchBuilderTrades,
   getMarketInfo,
   getPrices,
   getDepth,

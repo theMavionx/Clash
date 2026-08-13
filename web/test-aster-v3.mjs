@@ -115,10 +115,13 @@ const serverSource = fs.readFileSync(path.join(root, '../server-futures/aster.js
 assert.match(hookSource, /\/fapi\/v3\/approveAgent/u);
 assert.match(hookSource, /\['signatureChainId', ASTER_MANAGEMENT_SIGNATURE_CHAIN_ID\]/u);
 assert.match(hookSource, /\['builder', builder\.address\][\s\S]*\['feeRate', builder\.feeRate \|\| ASTER_FEE_RATE\]/u);
+assert.match(hookSource, /nextAsterClientOrderId/u, 'every submitted Aster order needs a stable client order identity');
+assert.match(hookSource, /path === '\/fapi\/v3\/order'[\s\S]*newClientOrderId/u, 'Aster order identity must be injected before signing');
 assert.match(hookSource, /\['canWithdraw', false\]/u, 'Aster Agent must never receive withdrawal permission');
 assert.match(hookSource, /function asterCloseSide/u, 'close and TP\/SL must invert position direction explicitly');
 assert.match(panelSource, /dex === 'aster'[\s\S]*hasAsterRiskToManage/u, 'builder setup gate must not trap existing Aster risk');
 assert.match(serverSource, /opening trades are disabled/u, 'server must fail closed before builder configuration');
 assert.match(serverSource, /ASTER_DEFAULT_BUILDER_FEE_RATE = '0\.00001'/u);
+assert.match(serverSource, /\/fapi\/v3\/builder\/userTrades/u, 'official exact Aster builder trade feed must be supported');
 
 console.log('Aster V3 signing, builder routing, risk controls, and source invariants: PASS');

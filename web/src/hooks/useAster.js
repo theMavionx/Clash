@@ -59,6 +59,13 @@ function asterCloseSide(value) {
   return isLongSide(value) ? 'SELL' : 'BUY';
 }
 
+let asterClientOrderSequence = 0;
+function nextAsterClientOrderId(signer) {
+  asterClientOrderSequence = (asterClientOrderSequence + 1) % 1_679_616;
+  const signerTag = String(signer || '').replace(/^0x/u, '').slice(0, 6).toLowerCase() || 'agent';
+  return `clash-${Date.now().toString(36)}-${signerTag}-${asterClientOrderSequence.toString(36)}`.slice(0, 36);
+}
+
 function orderType(row) {
   const type = String(row?.type || row?.origType || '').toUpperCase();
   if (type.includes('TAKE_PROFIT')) return 'take_profit';
@@ -148,8 +155,13 @@ export function useAster() {
     const record = recordOverride || agentRef.current || readAsterAgent(walletAddr);
     if (!record) throw new Error('Enable Aster one-tap trading first');
     agentRef.current = record;
+    const requestEntries = [...businessEntries];
+    if (path === '/fapi/v3/order' && String(method).toUpperCase() === 'POST'
+      && !requestEntries.some(([key]) => key === 'newClientOrderId')) {
+      requestEntries.push(['newClientOrderId', nextAsterClientOrderId(record.address)]);
+    }
     const entries = [
-      ...businessEntries,
+      ...requestEntries,
       ['nonce', nextAsterNonce()],
       ['user', walletAddr],
       ['signer', record.address],

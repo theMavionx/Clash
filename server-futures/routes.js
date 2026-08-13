@@ -4758,13 +4758,80 @@ router.post('/aster/request', auth, async (req, res) => {
   try {
     const owner = requireAsterOwner(req, res);
     if (!owner) return;
-    const payload = await aster.forwardSignedRequest({
+    const forwardedRequest = {
       method: req.body?.method,
       path: req.body?.path,
       payload: req.body?.payload,
       signature: req.body?.signature,
-    }, owner.account);
+    };
+    const payload = await aster.forwardSignedRequest(forwardedRequest, owner.account);
+    const builderProof = aster.builderOrderProofFromRequest({
+      ...forwardedRequest,
+      response: payload,
+      owner: owner.account,
+    });
+    let savedBuilderProof = null;
+    if (builderProof) {
+      try {
+        const write = db.recordAsterBuilderOrder({
+          ...builderProof,
+          playerId: req.playerId,
+          requestJson: builderProof.request,
+          responseJson: builderProof.response,
+        });
+        savedBuilderProof = {
+          saved: Number(write?.changes || 0) > 0,
+          orderId: builderProof.upstreamOrderId,
+          clientOrderId: builderProof.clientOrderId,
+          builderAddress: builderProof.builderAddress,
+          feeRate: builderProof.builderFeeRate,
+        };
+        if (!savedBuilderProof.saved) {
+          console.error('[aster] accepted builder order could not be persisted', {
+            player_id: req.playerId,
+            account: owner.account,
+            order_id: builderProof.upstreamOrderId,
+            client_order_id: builderProof.clientOrderId,
+          });
+        }
+      } catch (proofError) {
+        console.error('[aster] accepted builder order proof write failed', {
+          player_id: req.playerId,
+          account: owner.account,
+          order_id: builderProof.upstreamOrderId,
+          client_order_id: builderProof.clientOrderId,
+          error: proofError?.message || String(proofError),
+        });
+        savedBuilderProof = {
+          saved: false,
+          orderId: builderProof.upstreamOrderId,
+          clientOrderId: builderProof.clientOrderId,
+          builderAddress: builderProof.builderAddress,
+          feeRate: builderProof.builderFeeRate,
+        };
+      }
+    }
+    if (String(forwardedRequest.method || '').toUpperCase() === 'GET'
+      && String(forwardedRequest.path || '') === '/fapi/v3/userTrades') {
+      try {
+        aster.importUserTradesForPlayer({
+          db,
+          playerId: req.playerId,
+          account: owner.account,
+          payload,
+        });
+      } catch (importError) {
+        console.warn('[aster] user trade proof reconciliation failed', {
+          player_id: req.playerId,
+          account: owner.account,
+          error: importError?.message || String(importError),
+        });
+      }
+    }
     res.set('Cache-Control', 'no-store');
+    if (savedBuilderProof && payload && typeof payload === 'object' && !Array.isArray(payload)) {
+      return res.json({ ...payload, clashBuilderProof: savedBuilderProof });
+    }
     return res.json(payload);
   } catch (error) {
     return sendAsterError(res, error);

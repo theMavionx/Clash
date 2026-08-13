@@ -188,6 +188,36 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_ondo_builder_orders_client
     ON ondo_builder_orders(player_id, account, client_order_id);
 
+  -- Aster's user trade feed identifies fills by orderId but does not repeat
+  -- the builder fields from the signed order. Persist the accepted request so
+  -- later fill imports can prove the order was routed through Clash's builder
+  -- address at the configured fee rate.
+  CREATE TABLE IF NOT EXISTS aster_builder_orders (
+    order_id        TEXT NOT NULL,
+    player_id       TEXT NOT NULL,
+    account         TEXT NOT NULL,
+    client_order_id TEXT,
+    signer          TEXT NOT NULL,
+    symbol          TEXT NOT NULL,
+    side            TEXT NOT NULL,
+    order_type      TEXT NOT NULL,
+    reduce_only     INTEGER NOT NULL DEFAULT 0 CHECK (reduce_only IN (0, 1)),
+    builder_address TEXT NOT NULL,
+    builder_fee_rate TEXT NOT NULL,
+    builder_fee_bps REAL NOT NULL,
+    request_json    TEXT NOT NULL,
+    response_json   TEXT NOT NULL,
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (order_id, player_id, account)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_aster_builder_orders_player_account
+    ON aster_builder_orders(player_id, account, created_at);
+
+  CREATE INDEX IF NOT EXISTS idx_aster_builder_orders_client
+    ON aster_builder_orders(player_id, account, client_order_id);
+
   CREATE TABLE IF NOT EXISTS gmtrade_pending_trade_reports (
     signature       TEXT PRIMARY KEY,
     player_id       TEXT NOT NULL,
@@ -498,6 +528,37 @@ const stmts = {
   `),
   getOndoBuilderOrderByClient: db.prepare(`
     SELECT * FROM ondo_builder_orders
+    WHERE client_order_id = ? AND player_id = ? AND account = ?
+    ORDER BY created_at DESC
+    LIMIT 1
+  `),
+  recordAsterBuilderOrder: db.prepare(`
+    INSERT INTO aster_builder_orders (
+      order_id, player_id, account, client_order_id, signer, symbol, side,
+      order_type, reduce_only, builder_address, builder_fee_rate,
+      builder_fee_bps, request_json, response_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(order_id, player_id, account) DO UPDATE SET
+      client_order_id = COALESCE(excluded.client_order_id, aster_builder_orders.client_order_id),
+      signer = excluded.signer,
+      symbol = excluded.symbol,
+      side = excluded.side,
+      order_type = excluded.order_type,
+      reduce_only = excluded.reduce_only,
+      builder_address = excluded.builder_address,
+      builder_fee_rate = excluded.builder_fee_rate,
+      builder_fee_bps = excluded.builder_fee_bps,
+      request_json = excluded.request_json,
+      response_json = excluded.response_json,
+      updated_at = datetime('now')
+  `),
+  getAsterBuilderOrder: db.prepare(`
+    SELECT * FROM aster_builder_orders
+    WHERE order_id = ? AND player_id = ? AND account = ?
+    LIMIT 1
+  `),
+  getAsterBuilderOrderByClient: db.prepare(`
+    SELECT * FROM aster_builder_orders
     WHERE client_order_id = ? AND player_id = ? AND account = ?
     ORDER BY created_at DESC
     LIMIT 1
@@ -823,6 +884,65 @@ function getOndoBuilderOrderByClient(clientOrderId, playerId, account) {
   ) || null;
 }
 
+function recordAsterBuilderOrder({
+  orderId,
+  playerId,
+  account,
+  clientOrderId = null,
+  signer,
+  symbol,
+  side,
+  orderType,
+  reduceOnly = false,
+  builderAddress,
+  builderFeeRate,
+  builderFeeBps,
+  requestJson,
+  responseJson,
+}) {
+  if (!orderId || !playerId || !account || !signer || !symbol || !side || !orderType || !builderAddress) {
+    return { changes: 0 };
+  }
+  const feeRate = String(builderFeeRate || '').trim();
+  const feeBps = Number(builderFeeBps);
+  if (!feeRate || !Number.isFinite(feeBps) || feeBps < 0) return { changes: 0 };
+  const info = stmts.recordAsterBuilderOrder.run(
+    String(orderId),
+    String(playerId),
+    String(account).toLowerCase(),
+    clientOrderId == null || clientOrderId === '' ? null : String(clientOrderId),
+    String(signer).toLowerCase(),
+    String(symbol).toUpperCase(),
+    String(side).toUpperCase(),
+    String(orderType).toUpperCase(),
+    reduceOnly ? 1 : 0,
+    String(builderAddress).toLowerCase(),
+    feeRate,
+    feeBps,
+    typeof requestJson === 'string' ? requestJson : JSON.stringify(requestJson || {}),
+    typeof responseJson === 'string' ? responseJson : JSON.stringify(responseJson || {}),
+  );
+  return { changes: info.changes || 0 };
+}
+
+function getAsterBuilderOrder(orderId, playerId, account) {
+  if (!orderId || !playerId || !account) return null;
+  return stmts.getAsterBuilderOrder.get(
+    String(orderId),
+    String(playerId),
+    String(account).toLowerCase(),
+  ) || null;
+}
+
+function getAsterBuilderOrderByClient(clientOrderId, playerId, account) {
+  if (!clientOrderId || !playerId || !account) return null;
+  return stmts.getAsterBuilderOrderByClient.get(
+    String(clientOrderId),
+    String(playerId),
+    String(account).toLowerCase(),
+  ) || null;
+}
+
 // ---------- Exports ----------
 
 module.exports = {
@@ -845,6 +965,9 @@ module.exports = {
   recordOndoBuilderOrder,
   getOndoBuilderOrder,
   getOndoBuilderOrderByClient,
+  recordAsterBuilderOrder,
+  getAsterBuilderOrder,
+  getAsterBuilderOrderByClient,
   recordDecibelOrderProof,
   getDecibelOrderProof,
   upgradeDecibelWorkerTradeByClient,

@@ -18,7 +18,8 @@
     "test:nado-position": "node test-nado-position-metrics.js",
     "test:ondo": "node test-ondo-adapter.js",
     "test:ondo-rewards": "node test-ondo-reward-proof.js",
-    "test:aster-adapter": "node test-aster-adapter.js"
+    "test:aster-adapter": "node test-aster-adapter.js",
+    "test:aster-tracking": "node test-aster-builder-tracking.js"
   },
   "type": "commonjs",
   "dependencies": {
