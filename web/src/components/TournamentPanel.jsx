@@ -553,7 +553,7 @@ function LuckyRaiderPanel({ t, schedule, currentTownHallLevel = 0 }) {
         <div style={S.luckyPrize}>{rewards.join(' + ') || 'Prize configured by admin'}</div>
       </div>
 
-      <div style={S.luckyGrid}>
+      <div className="tournament-modal__lucky-grid" style={S.luckyGrid}>
         <Stat label="Your tickets" value={`${fmt(lucky.my_tickets || 0)} / ${fmt(lucky.max_tickets || 0)}`} />
         <Stat label="Attack tickets" value={fmt(myTickets.attack)} />
         <Stat label="Volume tickets" value={`${fmt(myTickets.volume)}${myTickets.maxVolume > 0 ? ` / ${fmt(myTickets.maxVolume)}` : ''}`} />
@@ -653,7 +653,7 @@ function RankedRaidSummary({ state, tournament, joined }) {
 
       {joined ? (
         <>
-          <div style={S.rankedSummaryGrid}>
+          <div className="tournament-modal__ranked-summary-grid" style={S.rankedSummaryGrid}>
             <div style={S.rankedSummaryStat}>
               <span style={S.rankedSummaryValue}>{fmt(state?.score || 0)}</span>
               <span style={S.rankedSummaryLabel}>Raid trophies</span>
@@ -1000,25 +1000,68 @@ function TournamentPanel({ onClose }) {
 
   return (
     <>
-      {/* Inline keyframes for the body cross-fade. Lives here instead of a
-          global stylesheet because it's the only consumer; renders once
-          when the modal mounts and gets cleaned up with it. */}
-      <style>{`@keyframes tournamentFade { from { opacity: 0 } to { opacity: 1 } }`}</style>
+      {/* Component-local motion and responsive rules render only while this
+          modal is mounted, keeping its phone layout independent from the
+          global legacy selectors for inline panel widths. */}
+      <style>{`
+        @keyframes tournamentFade { from { opacity: 0 } to { opacity: 1 } }
+
+        @media (max-width: 899px), (max-height: 600px) {
+          .tournament-modal button {
+            min-height: 44px;
+          }
+
+          .tournament-modal input,
+          .tournament-modal select,
+          .tournament-modal textarea {
+            min-height: 44px;
+            box-sizing: border-box;
+          }
+
+          .tournament-modal__close {
+            min-width: 44px !important;
+            min-height: 44px !important;
+          }
+        }
+
+        @media (max-width: 600px) {
+          .tournament-modal {
+            width: 100dvw !important;
+            max-width: 100dvw !important;
+            height: min(620px, 85dvh) !important;
+            max-height: min(620px, 85dvh) !important;
+            left: 0 !important;
+            transform: translateY(-50%) !important;
+            border-radius: 0 !important;
+          }
+        }
+
+        @media (max-width: 359px) {
+          .tournament-modal__ranked-summary-grid,
+          .tournament-modal__daily-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+          }
+
+          .tournament-modal__lucky-grid {
+            grid-template-columns: minmax(0, 1fr) !important;
+          }
+        }
+      `}</style>
       <div style={S.backdrop} onClick={onClose} />
-      <div style={S.modal}>
+      <div className="tournament-modal" style={S.modal}>
         <div style={S.header}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <img src={trophyIcon} alt="" style={S.headerIcon} />
             <span style={S.headerTitle}>Tournament</span>
           </div>
-          <button style={S.closeBtn} onClick={onClose} aria-label="Close">
+          <button className="tournament-modal__close" style={S.closeBtn} onClick={onClose} aria-label="Close">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4">
               <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
             </svg>
           </button>
         </div>
 
-        <div style={S.tabRow}>
+        <div className="tournament-modal__tabs" style={S.tabRow}>
           <button
             style={tab === 'active' ? S.tabActive : S.tab}
             onClick={() => { setTab('active'); setPickedHistoryId(null); }}
@@ -1563,7 +1606,7 @@ function DailyPointsCard({ t, days, selectedDay, selectedDayId, onPickDay, myPla
                 <span style={S.dailyMineRank}>{mineRank ? `#${mineRank}` : '-'}</span>
               </div>
 
-              <div style={S.dailyGrid}>
+              <div className="tournament-modal__daily-grid" style={S.dailyGrid}>
                 <div style={S.dailyMiniStat}>
                   <strong style={S.dailyMiniValue}>{fmtUsd(day.totals?.volume_usd)}</strong>
                   <span style={S.dailyMiniLabel}>Volume</span>
@@ -1636,8 +1679,8 @@ const S = {
     // Fixed height (clamped to viewport on small screens) keeps the modal
     // from "popping" up/down when tab content changes size — empty states
     // and a 50-row leaderboard now share the same outer footprint.
-    width: 380, maxWidth: '94vw',
-    height: 'min(88vh, 620px)',
+    width: 480, maxWidth: 'calc(100dvw - 32px)',
+    height: 'min(88dvh, 620px)',
     background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 24,
     boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
     display: 'flex', flexDirection: 'column',
@@ -1690,7 +1733,10 @@ const S = {
   },
   headerTitle: { fontSize: 18, fontWeight: 700, color: 'var(--terminal-text)' },
   closeBtn: uiIconButton('danger', 30),
-  body: { flex: 1, padding: 12, display: 'flex', flexDirection: 'column', gap: 10, overflowY: 'auto' },
+  body: {
+    flex: 1, minHeight: 0, padding: 12, display: 'flex', flexDirection: 'column', gap: 10,
+    overflowY: 'auto', overflowX: 'hidden', overscrollBehavior: 'contain', WebkitOverflowScrolling: 'touch',
+  },
   empty: { textAlign: 'center', padding: 28, color: 'var(--terminal-text-muted)', fontWeight: 700, fontSize: 13 },
   emptySmall: { textAlign: 'center', padding: 14, color: 'var(--terminal-text-muted)', fontWeight: 600, fontSize: 12 },
   emptyIcon: { fontSize: 44, marginBottom: 6 },
@@ -1774,7 +1820,7 @@ const S = {
   },
   luckyEntryName: { fontSize: 13, fontWeight: 700, color: 'var(--terminal-text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   luckyEntryMeta: { fontSize: 10, fontWeight: 600, color: 'var(--terminal-text-muted)', marginTop: 2 },
-  luckyEntrySubMeta: { fontSize: 9, fontWeight: 600, color: 'var(--terminal-text-secondary)', marginTop: 2, opacity: 0.85 },
+  luckyEntrySubMeta: { fontSize: 10, fontWeight: 600, color: 'var(--terminal-text-secondary)', marginTop: 2, opacity: 0.85 },
   luckyTickets: { fontSize: 12, fontWeight: 700, color: 'var(--terminal-warning)', whiteSpace: 'nowrap' },
   luckyHistoryRow: {
     background: 'var(--terminal-surface-subtle)',
@@ -1863,12 +1909,12 @@ const S = {
   rankedSummaryLive: {
     flexShrink: 0, padding: '3px 6px', borderRadius: 5,
     background: 'var(--terminal-long-soft)', border: '1px solid var(--terminal-long)',
-    color: 'var(--terminal-long)', fontSize: 8, fontWeight: 700,
+    color: 'var(--terminal-long)', fontSize: 10, fontWeight: 700,
   },
   rankedSummaryLocked: {
     flexShrink: 0, padding: '3px 6px', borderRadius: 5,
     background: 'var(--terminal-warning-soft)', border: '1px solid var(--terminal-warning)',
-    color: '#92400e', fontSize: 8, fontWeight: 700,
+    color: '#92400e', fontSize: 10, fontWeight: 700,
   },
   rankedSummaryGrid: {
     display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
@@ -1882,7 +1928,7 @@ const S = {
     overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
   },
   rankedSummaryLabel: {
-    display: 'block', color: 'var(--terminal-text-muted)', fontSize: 9, fontWeight: 700,
+    display: 'block', color: 'var(--terminal-text-muted)', fontSize: 10, fontWeight: 700,
     textTransform: 'uppercase', marginTop: 2,
   },
   rankedSummaryMeta: {
@@ -2033,7 +2079,7 @@ const S = {
     letterSpacing: 0.45,
   },
   townHallReqBadgeOk: {
-    fontSize: 9,
+    fontSize: 10,
     fontWeight: 700,
     padding: '2px 6px',
     borderRadius: 999,
@@ -2042,7 +2088,7 @@ const S = {
     whiteSpace: 'nowrap',
   },
   townHallReqBadgeBlocked: {
-    fontSize: 9,
+    fontSize: 10,
     fontWeight: 700,
     padding: '2px 6px',
     borderRadius: 999,
@@ -2094,7 +2140,7 @@ const S = {
     border: '1px solid var(--terminal-border)', borderRadius: 8, padding: '6px 4px',
   },
   statValue: { fontSize: 14, fontWeight: 700, lineHeight: 1.2 },
-  statLabel: { fontSize: 9, color: 'var(--terminal-text-muted)', textTransform: 'uppercase', marginTop: 2, fontWeight: 700, letterSpacing: 0.4 },
+  statLabel: { fontSize: 10, color: 'var(--terminal-text-muted)', textTransform: 'uppercase', marginTop: 2, fontWeight: 700, letterSpacing: 0.4 },
   freezeNote: {
     fontSize: 11, color: 'var(--terminal-text-secondary)', lineHeight: 1.4, padding: '6px 4px',
     background: 'var(--terminal-surface)', borderRadius: 8, marginBottom: 8,
@@ -2123,7 +2169,7 @@ const S = {
     whiteSpace: 'nowrap',
   },
   dailyCompactLabel: {
-    fontSize: 9, fontWeight: 700, color: 'var(--terminal-text-secondary)', textTransform: 'uppercase',
+    fontSize: 10, fontWeight: 700, color: 'var(--terminal-text-secondary)', textTransform: 'uppercase',
   },
   dailyCompactValue: {
     fontSize: 12, fontWeight: 700, color: 'var(--terminal-long)',
@@ -2192,7 +2238,7 @@ const S = {
     whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
   },
   dailyMiniLabel: {
-    fontSize: 8, fontWeight: 600, color: 'var(--terminal-text-muted)',
+    fontSize: 10, fontWeight: 600, color: 'var(--terminal-text-muted)',
     textTransform: 'uppercase', letterSpacing: 0.35,
   },
   dailyList: { display: 'flex', flexDirection: 'column', gap: 5 },
@@ -2217,7 +2263,7 @@ const S = {
     whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
   },
   dailyPlayerMeta: {
-    fontSize: 9, fontWeight: 600, color: 'var(--terminal-text-muted)',
+    fontSize: 10, fontWeight: 600, color: 'var(--terminal-text-muted)',
     whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
   },
   dailyPlayerPoints: {
@@ -2245,7 +2291,7 @@ const S = {
   name: { fontSize: 13, fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
   topDexBadge: {
     display: 'inline-block', marginLeft: 6, verticalAlign: 'middle',
-    fontSize: 9, fontStyle: 'normal', fontWeight: 700, color: 'var(--terminal-info)',
+    fontSize: 10, fontStyle: 'normal', fontWeight: 700, color: 'var(--terminal-info)',
     background: 'var(--terminal-info-soft)', border: '1px solid var(--terminal-info-border)', borderRadius: 6,
     padding: '1px 5px', textTransform: 'uppercase',
   },

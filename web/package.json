@@ -24,6 +24,7 @@
     "test:futures-position-actions": "node test-futures-fullscreen-position-actions.mjs",
     "test:futures-theme": "node --test test-futures-theme.mjs",
     "test:scrollbars": "node --test test-scrollbars.mjs",
+    "test:tournament-layout": "node --test test-tournament-panel-layout.mjs",
     "test:building-info-layout": "node --test test-building-info-layout.mjs",
     "test:unit-management-layout": "node --test test-unit-management-layout.mjs",
     "test:app-ui-theme": "node --test test-app-ui-theme.mjs",
