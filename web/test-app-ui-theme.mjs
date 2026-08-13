@@ -29,10 +29,26 @@ test('the app root owns the shared visual and accessibility behavior', () => {
 
 test('critical shared tokens exist in both light and dark themes', () => {
   const css = read('src/components/FuturesTerminal.css');
-  for (const token of ['brand', 'brand-ring', 'text-disabled', 'shadow-card']) {
+  for (const token of ['brand', 'brand-ring', 'text-disabled', 'shadow-card', 'icon', 'icon-active']) {
     const matches = css.match(new RegExp(`--terminal-${token}:`, 'gu')) || [];
     assert.equal(matches.length, 2, `--terminal-${token} must exist in light and dark themes`);
   }
+});
+
+test('button icons keep a stable palette across themes and pressed controls do not filter their contents', () => {
+  const css = read('src/components/FuturesTerminal.css');
+  const theme = read('src/styles/theme.js');
+  const actions = read('src/components/ActionButtons.jsx');
+  assert.equal((css.match(/--terminal-icon: #768399;/gu) || []).length, 2);
+  assert.equal((css.match(/--terminal-icon-active: #F26522;/gu) || []).length, 2);
+  assert.match(css, /\.clash-ui-root button > svg,[\s\S]*?color: var\(--terminal-button-icon, currentColor\);/u);
+  assert.doesNotMatch(css, /\.clash-ui-root button > svg,[\s\S]{0,220}?(?:filter|opacity):/u);
+  assert.match(css, /\.futures-terminal-shell \.tab-btn > svg\s*\{[^}]*var\(--terminal-icon\)/su);
+  assert.match(css, /\.futures-terminal-shell \.tab-btn\[aria-pressed='true'\] > svg\s*\{[^}]*var\(--terminal-icon-active\)/su);
+  assert.match(actions, /const SurrenderFlagIcon[\s\S]{0,500}stroke="currentColor"/u);
+  assert.doesNotMatch(css, /\.clash-ui-root button:active:not\(:disabled\)\s*\{[^}]*filter:/su);
+  assert.match(theme, /'--terminal-button-icon': tone\.iconColor/u);
+  assert.doesNotMatch(theme, /transition: '[^']*filter/u);
 });
 
 test('legacy parchment palette no longer leaks into React game panels', () => {

@@ -6,6 +6,22 @@
     <meta name="viewport" content="width=device-width, user-scalable=no, initial-scale=1.0, viewport-fit=cover" />
     <meta name="ory-verify" content="orynth-b2d8dd45ce2f47d18572cf1d23c9b6e7" />
     <title>Clash of Perps</title>
+    <script>
+      // Apply the saved interface theme before React and its styles load so
+      // the first painted frame already matches the player's preference.
+      (function () {
+        var theme = 'dark';
+        try {
+          var storedTheme = window.localStorage.getItem('clash:futures-theme:v1');
+          if (storedTheme === 'light' || storedTheme === 'dark') theme = storedTheme;
+        } catch (error) {
+          // Storage can be blocked in privacy modes. Dark remains the safe
+          // in-memory default and React will keep the same root attributes.
+        }
+        document.documentElement.setAttribute('data-ui-theme', theme);
+        document.documentElement.setAttribute('data-futures-theme', theme);
+      })();
+    </script>
 
     <!-- PWA + TWA installability. The manifest below is what Bubblewrap
          reads when generating the Android APK for the Solana Seeker dApp

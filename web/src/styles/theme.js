@@ -19,41 +19,49 @@ const UI_BUTTON_VARIANTS = {
     background: 'var(--terminal-orange)',
     borderColor: 'var(--terminal-brand-strong)',
     color: 'var(--terminal-on-accent)',
+    iconColor: 'var(--terminal-on-accent)',
   },
   secondary: {
     background: 'var(--terminal-surface)',
     borderColor: 'var(--terminal-border-strong)',
     color: 'var(--terminal-text)',
+    iconColor: 'var(--terminal-icon)',
   },
   neutral: {
     background: 'var(--terminal-surface-muted)',
     borderColor: 'var(--terminal-border-strong)',
     color: 'var(--terminal-text-control)',
+    iconColor: 'var(--terminal-icon)',
   },
   success: {
     background: 'var(--terminal-long)',
     borderColor: 'var(--terminal-long-strong)',
     color: 'var(--terminal-on-accent)',
+    iconColor: 'var(--terminal-on-accent)',
   },
   danger: {
     background: 'var(--terminal-short)',
     borderColor: 'var(--terminal-short-strong)',
     color: 'var(--terminal-on-accent)',
+    iconColor: 'var(--terminal-on-accent)',
   },
   warning: {
     background: 'var(--terminal-warning)',
     borderColor: 'var(--terminal-warning-border)',
     color: 'var(--terminal-on-warning)',
+    iconColor: 'var(--terminal-on-warning)',
   },
   info: {
     background: 'var(--terminal-info)',
     borderColor: 'var(--terminal-info-border)',
     color: 'var(--terminal-on-accent)',
+    iconColor: 'var(--terminal-on-accent)',
   },
   ghost: {
     background: 'transparent',
     borderColor: 'transparent',
     color: 'var(--terminal-text-secondary)',
+    iconColor: 'var(--terminal-icon)',
   },
 };
 
@@ -67,6 +75,7 @@ export const uiButton = (variant = 'primary', overrides = {}) => {
     border: `1px solid ${tone.borderColor}`,
     background: tone.background,
     color: tone.color,
+    '--terminal-button-icon': tone.iconColor,
     fontSize: 13,
     fontWeight: 700,
     lineHeight: 1.15,
@@ -80,7 +89,7 @@ export const uiButton = (variant = 'primary', overrides = {}) => {
     boxSizing: 'border-box',
     gap: 8,
     userSelect: 'none',
-    transition: 'background-color 150ms ease, border-color 150ms ease, color 150ms ease, box-shadow 150ms ease, filter 150ms ease, transform 150ms ease',
+    transition: 'background-color 150ms ease, border-color 150ms ease, color 150ms ease, box-shadow 150ms ease, transform 150ms ease',
     ...overrides,
   };
 };

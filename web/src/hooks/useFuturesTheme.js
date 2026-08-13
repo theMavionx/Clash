@@ -3,16 +3,19 @@ import { useEffect, useSyncExternalStore } from 'react';
 export const FUTURES_THEME_LIGHT = 'light';
 export const FUTURES_THEME_DARK = 'dark';
 export const FUTURES_THEME_STORAGE_KEY = 'clash:futures-theme:v1';
+export const FUTURES_THEME_DEFAULT = FUTURES_THEME_DARK;
 
 const THEME_EVENT = 'clash:futures-theme-change';
-let memoryTheme = FUTURES_THEME_LIGHT;
+let memoryTheme = FUTURES_THEME_DEFAULT;
 
-function normalizeFuturesTheme(value) {
-  return value === FUTURES_THEME_DARK ? FUTURES_THEME_DARK : FUTURES_THEME_LIGHT;
+export function normalizeFuturesTheme(value) {
+  if (value === FUTURES_THEME_LIGHT) return FUTURES_THEME_LIGHT;
+  if (value === FUTURES_THEME_DARK) return FUTURES_THEME_DARK;
+  return FUTURES_THEME_DEFAULT;
 }
 
 function readStoredTheme() {
-  if (typeof window === 'undefined') return FUTURES_THEME_LIGHT;
+  if (typeof window === 'undefined') return FUTURES_THEME_DEFAULT;
   try {
     const storedTheme = window.localStorage.getItem(FUTURES_THEME_STORAGE_KEY);
     memoryTheme = normalizeFuturesTheme(storedTheme ?? memoryTheme);
@@ -36,7 +39,8 @@ function subscribe(callback) {
 
   const handleStorage = (event) => {
     if (event.key !== FUTURES_THEME_STORAGE_KEY) return;
-    applyTheme(readStoredTheme());
+    memoryTheme = normalizeFuturesTheme(event.newValue);
+    applyTheme(memoryTheme);
     callback();
   };
   const handleThemeChange = () => callback();
@@ -66,7 +70,7 @@ export function setFuturesTheme(value) {
 }
 
 export function useFuturesTheme() {
-  const theme = useSyncExternalStore(subscribe, readStoredTheme, () => FUTURES_THEME_LIGHT);
+  const theme = useSyncExternalStore(subscribe, readStoredTheme, () => FUTURES_THEME_DEFAULT);
   useEffect(() => applyTheme(theme), [theme]);
   return { theme, setTheme: setFuturesTheme };
 }

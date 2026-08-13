@@ -16,6 +16,7 @@ import { inkChain } from '../lib/nadoConfig';
 import { grvtChain } from '../lib/grvtConfig';
 import { katanaChain } from '../lib/katanaConfig';
 import { DEFAULT_PRIVY_SOLANA_RPC_URL, solanaWsUrl } from '../lib/solanaRpc';
+import { FUTURES_THEME_DARK, useFuturesTheme } from '../hooks/useFuturesTheme';
 // Perpl (Monad mainnet) is too new to ship in viem/chains, so we define it
 // locally in monadConfig and import the same object both here (Privy's
 // supportedChains list) and in EvmWalletContext (chain switch helper).
@@ -111,6 +112,7 @@ function PrivyStateBridge({ children }) {
 // app keeps working and the "Login with Privy" button can simply be disabled.
 export default function PrivyAuthProvider({ children }) {
   const appId = import.meta.env.VITE_PRIVY_APP_ID;
+  const { theme: interfaceTheme } = useFuturesTheme();
   if (!appId) {
     return (
       <OptionalPrivyContext.Provider value={OPTIONAL_PRIVY_DEFAULT}>
@@ -130,7 +132,7 @@ export default function PrivyAuthProvider({ children }) {
         // that was hanging with ethereum-and-solana.
         loginMethods: ['email'],
         appearance: {
-          theme: 'light',
+          theme: interfaceTheme === FUTURES_THEME_DARK ? 'dark' : 'light',
           accentColor: '#e8b830',
           logo: '/icons/icon.jpg',
         },

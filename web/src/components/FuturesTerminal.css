@@ -12,6 +12,8 @@
   --terminal-text-muted: #6b7280;
   --terminal-text-faint: #9ca3af;
   --terminal-text-disabled: #9ca3af;
+  --terminal-icon: #768399;
+  --terminal-icon-active: #F26522;
   --terminal-on-accent: #ffffff;
   --terminal-on-warning: #111827;
   --terminal-orange: #f26522;
@@ -71,6 +73,8 @@
   --terminal-text-muted: #aab4c3;
   --terminal-text-faint: #7f8a9a;
   --terminal-text-disabled: #7f8a9a;
+  --terminal-icon: #768399;
+  --terminal-icon-active: #F26522;
   --terminal-on-accent: #ffffff;
   --terminal-on-warning: #111827;
   --terminal-orange: #f47a3c;
@@ -230,7 +234,23 @@ html {
 
 .clash-ui-root button:active:not(:disabled) {
   transform: translateY(0);
-  filter: brightness(0.98);
+}
+
+/* Shared uiButton controls expose --terminal-button-icon. Controls outside
+   that contract (battle HUD, semantic filters, custom actions) keep their
+   button's intended currentColor. Do not reset filter/opacity here: several
+   deliberately illustrated gameplay icons own those properties. */
+.clash-ui-root button > svg,
+.futures-terminal-shell button > svg {
+  color: var(--terminal-button-icon, currentColor);
+}
+
+.futures-terminal-shell .tab-btn > svg {
+  color: var(--terminal-icon);
+}
+
+.futures-terminal-shell .tab-btn[aria-pressed='true'] > svg {
+  color: var(--terminal-icon-active);
 }
 
 .clash-ui-root button:focus-visible,
