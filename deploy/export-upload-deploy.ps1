@@ -118,9 +118,10 @@ try {
   $remoteTarget = "${remote}:$remoteGodotDir/"
 
   $remoteHead = ""
-  $remoteRuntimeBuildCmd = "node -e `"const fs=require('fs');const p=JSON.parse(fs.readFileSync('$RemoteSourceDir/current/web/dist/godot/godot-runtime-manifest.json','utf8'));console.log(p.build||'')`""
+  $remoteRuntimeManifestCmd = "cat '$RemoteSourceDir/current/web/dist/godot/godot-runtime-manifest.json'"
   try {
-    $remoteRuntimeBuild = (& $plink -batch -ssh -P 22 -pw $password -hostkey $HostKey $remote $remoteRuntimeBuildCmd 2>$null | Select-Object -Last 1).Trim()
+    $remoteRuntimeManifest = ((& $plink -batch -ssh -P 22 -pw $password -hostkey $HostKey $remote $remoteRuntimeManifestCmd 2>$null) -join "`n") | ConvertFrom-Json
+    $remoteRuntimeBuild = "$($remoteRuntimeManifest.build)".Trim()
     if ($remoteRuntimeBuild -match '([0-9a-fA-F]{8,40})$') {
       $remoteHead = $Matches[1]
       Write-Host "==> Active Godot runtime base: $remoteRuntimeBuild"

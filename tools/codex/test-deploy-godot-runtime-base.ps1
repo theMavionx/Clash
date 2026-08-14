@@ -7,6 +7,9 @@ $source = Get-Content -LiteralPath $deployScriptPath -Raw
 if ($source -notmatch 'current/web/dist/godot/godot-runtime-manifest\.json') {
     throw "Godot deploy detection must read the active runtime manifest"
 }
+if ($source -notmatch 'ConvertFrom-Json') {
+    throw "Godot deploy detection must parse the complete runtime manifest"
+}
 if ($source -notmatch "remoteRuntimeBuild -match '\(\[0-9a-fA-F\]\{8,40\}\)\$'") {
     throw "Godot deploy detection must extract the active runtime commit"
 }
