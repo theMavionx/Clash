@@ -71,8 +71,6 @@ function Resolve-GodotExe {
   param([string]$Preferred)
   if ($Preferred -and (Test-Path $Preferred)) { return $Preferred }
   $candidates = @(
-    "C:\Users\Admin\Downloads\Godot_v4.6-stable_win64.exe\Godot_v4.6-stable_win64_console.exe",
-    "C:\Users\Admin\Downloads\Godot_v4.6-stable_win64.exe\Godot_v4.6-stable_win64.exe",
     "C:\Users\Admin\Downloads\Godot_v4.6.1-stable_win64.exe\Godot_v4.6.1-stable_win64_console.exe",
     "C:\Users\Admin\Downloads\Godot_v4.6.1-stable_win64.exe\Godot_v4.6.1-stable_win64.exe",
     (Join-Path $repoRoot ".tmp-godot\engine\Godot_v4.6.1-stable_win64_console.exe"),

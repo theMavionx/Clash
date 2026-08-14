@@ -57,6 +57,8 @@ SWITCHED=0
 PREVIOUS_CURRENT_REAL=""
 LOCK_DIR=""
 PM2_ROOT_HOME="/root/.pm2"
+TOURNAMENT_MIGRATION_EXPECTED=0
+TOURNAMENT_ROW_COUNT_BEFORE=""
 
 log() {
     echo "[$(date -u +%H:%M:%S)] $*"
@@ -429,6 +431,15 @@ prepare_shared_runtime() {
                 printf '%s\n' DECIBEL_API_WALLET_PRIVATE_KEY=
                 printf '%s\n' DECIBEL_ALLOWED_BUILDER_ADDRS=
                 printf '%s\n' DECIBEL_BUILDER_FEE_BPS=1
+                printf '%s\n' RH_LIGHTER_INTEGRATOR_ACCOUNT_INDEX=3156
+                printf '%s\n' RH_LIGHTER_INTEGRATOR_L1_ADDRESS=0xB36402e87a86206D3a114a98B53f31362291fe1B
+                printf '%s\n' RH_LIGHTER_BUILDER_FEE_BPS=1
+                printf '%s\n' RH_LIGHTER_REFERRAL_CODE=CLASSHOFPERPS
+                printf '%s\n' VITE_RH_LIGHTER_BUILDER_FEE_BPS=1
+                printf '%s\n' VITE_RH_LIGHTER_REFERRAL_CODE=CLASSHOFPERPS
+                printf '%s\n' ASTER_BUILDER_ADDRESS=0xB36402e87a86206D3a114a98B53f31362291fe1B
+                printf '%s\n' ASTER_BUILDER_FEE_RATE=0.0001
+                printf '%s\n' ASTER_BUILDER_SIGNER_ADDRESS=0xa388E6fA16dE55DaA3D4A6c0dC326B5088c7CCBD
                 printf '%s\n' NADO_SUBACCOUNT_NAME=default
                 printf '%s\n' NADO_FILL_LOOKBACK_LIMIT=100
                 printf '%s\n' VITE_NADO_SUBACCOUNT_NAME=default
@@ -500,6 +511,15 @@ prepare_shared_runtime() {
     ensure_env_default "DECIBEL_API_WALLET_PRIVATE_KEY" ""
     ensure_env_default "DECIBEL_ALLOWED_BUILDER_ADDRS" ""
     ensure_env_default "DECIBEL_BUILDER_FEE_BPS" "1"
+    ensure_env_default "RH_LIGHTER_INTEGRATOR_ACCOUNT_INDEX" "3156"
+    ensure_env_default "RH_LIGHTER_INTEGRATOR_L1_ADDRESS" "0xB36402e87a86206D3a114a98B53f31362291fe1B"
+    ensure_env_default "RH_LIGHTER_BUILDER_FEE_BPS" "1"
+    ensure_env_default "RH_LIGHTER_REFERRAL_CODE" "CLASSHOFPERPS"
+    ensure_env_default "VITE_RH_LIGHTER_BUILDER_FEE_BPS" "1"
+    ensure_env_default "VITE_RH_LIGHTER_REFERRAL_CODE" "CLASSHOFPERPS"
+    ensure_env_default "ASTER_BUILDER_ADDRESS" "0xB36402e87a86206D3a114a98B53f31362291fe1B"
+    ensure_env_default "ASTER_BUILDER_FEE_RATE" "0.0001"
+    ensure_env_default "ASTER_BUILDER_SIGNER_ADDRESS" "0xa388E6fA16dE55DaA3D4A6c0dC326B5088c7CCBD"
     ensure_env_default "HYPERLIQUID_BUILDER_FEE_TENTH_BPS" "10"
     ensure_env_default "VITE_HYPERLIQUID_BUILDER_FEE_TENTH_BPS" "10"
     ensure_env_default "PHOENIX_FLIGHT_BUILDER_FEE_BPS" "1"
@@ -612,6 +632,15 @@ prepare_shared_runtime() {
 
     set_env_value "NODE_ENV" "production"
     set_env_value "DECIBEL_BUILDER_FEE_BPS" "1"
+    set_env_value "RH_LIGHTER_INTEGRATOR_ACCOUNT_INDEX" "3156"
+    set_env_value "RH_LIGHTER_INTEGRATOR_L1_ADDRESS" "0xB36402e87a86206D3a114a98B53f31362291fe1B"
+    set_env_value "RH_LIGHTER_BUILDER_FEE_BPS" "1"
+    set_env_value "RH_LIGHTER_REFERRAL_CODE" "CLASSHOFPERPS"
+    set_env_value "VITE_RH_LIGHTER_BUILDER_FEE_BPS" "1"
+    set_env_value "VITE_RH_LIGHTER_REFERRAL_CODE" "CLASSHOFPERPS"
+    set_env_value "ASTER_BUILDER_ADDRESS" "0xB36402e87a86206D3a114a98B53f31362291fe1B"
+    set_env_value "ASTER_BUILDER_FEE_RATE" "0.0001"
+    set_env_value "ASTER_BUILDER_SIGNER_ADDRESS" "0xa388E6fA16dE55DaA3D4A6c0dC326B5088c7CCBD"
     set_env_value "HYPERLIQUID_BUILDER_FEE_TENTH_BPS" "10"
     set_env_value "VITE_HYPERLIQUID_BUILDER_FEE_TENTH_BPS" "10"
     set_env_value "PHOENIX_FLIGHT_BUILDER_FEE_BPS" "1"
@@ -725,6 +754,65 @@ backup_shared_databases() {
     fi
     log "Shared backup written to $backup_dir"
     prune_shared_backups
+}
+
+backup_tournaments_before_schema_migration() {
+    local db_path="$SHARED_SERVER_DIR/clash.db"
+    [ -f "$db_path" ] || return 0
+    grep -q "'rhlighter'" "$SERVER_DIR/db.js" || return 0
+
+    local schema
+    schema="$(sqlite3 "$db_path" "SELECT sql FROM sqlite_master WHERE type='table' AND name='tournaments';")"
+    [ -n "$schema" ] || return 0
+    case "$schema" in
+        *"'rhlighter'"*) return 0 ;;
+    esac
+
+    TOURNAMENT_MIGRATION_EXPECTED=1
+    TOURNAMENT_ROW_COUNT_BEFORE="$(sqlite3 "$db_path" "SELECT COUNT(*) FROM tournaments;")"
+    [[ "$TOURNAMENT_ROW_COUNT_BEFORE" =~ ^[0-9]+$ ]] \
+        || die "Could not read the pre-migration tournaments row count"
+
+    local backup_dir="$SHARED_DIR/backups/$RELEASE_ID"
+    local dump_path="$backup_dir/tournaments-before-rhlighter.sql"
+    local restore_probe="$backup_dir/.tournaments-restore-probe.db"
+    mkdir -p "$backup_dir"
+    rm -f "$dump_path" "$dump_path.zst" "$dump_path.gz" "$restore_probe"
+
+    if ! sqlite3 "$db_path" ".dump tournaments" > "$dump_path"; then
+        rm -f "$dump_path" "$restore_probe"
+        die "Failed to create the pre-migration tournaments backup"
+    fi
+    [ -s "$dump_path" ] || die "Pre-migration tournaments backup is empty"
+    grep -q 'CREATE TABLE tournaments' "$dump_path" \
+        || die "Pre-migration tournaments backup is missing its schema"
+    if ! sqlite3 "$restore_probe" < "$dump_path"; then
+        rm -f "$restore_probe"
+        die "Pre-migration tournaments backup failed its restore probe"
+    fi
+
+    local restored_count
+    restored_count="$(sqlite3 "$restore_probe" "SELECT COUNT(*) FROM tournaments;")"
+    rm -f "$restore_probe"
+    [ "$restored_count" = "$TOURNAMENT_ROW_COUNT_BEFORE" ] \
+        || die "Pre-migration tournaments backup row-count verification failed"
+    compress_backup_file "$dump_path"
+    log "Verified pre-migration tournaments backup in $backup_dir (rows=$TOURNAMENT_ROW_COUNT_BEFORE)"
+}
+
+verify_tournament_schema_migration() {
+    [ "$TOURNAMENT_MIGRATION_EXPECTED" -eq 1 ] || return 0
+
+    local db_path="$SHARED_SERVER_DIR/clash.db"
+    local schema current_count
+    schema="$(sqlite3 "$db_path" "SELECT sql FROM sqlite_master WHERE type='table' AND name='tournaments';")"
+    case "$schema" in
+        *"'rhlighter'"*) ;;
+        *) return 1 ;;
+    esac
+    current_count="$(sqlite3 "$db_path" "SELECT COUNT(*) FROM tournaments;")"
+    [ "$current_count" = "$TOURNAMENT_ROW_COUNT_BEFORE" ] || return 1
+    return 0
 }
 
 compress_backup_file() {
@@ -1243,7 +1331,11 @@ process.stdin.on("end", () => {
 });' \
             && curl -fsS --max-time 5 http://127.0.0.1:4000/api/online >/dev/null \
             && curl -fsS --max-time 5 http://127.0.0.1:3999/ >/dev/null \
-            && curl -fsS --max-time 5 http://127.0.0.1:4100/health >/dev/null; then
+            && curl -fsS --max-time 5 http://127.0.0.1:4100/health >/dev/null \
+            && verify_tournament_schema_migration; then
+            if [ "$TOURNAMENT_MIGRATION_EXPECTED" -eq 1 ]; then
+                log "Tournament schema migration verified (rows=$TOURNAMENT_ROW_COUNT_BEFORE, rhlighter=enabled)."
+            fi
             log "Runtime verification passed."
             return 0
         fi
@@ -2061,6 +2153,7 @@ main() {
     install_release_dependencies
     build_frontend
     validate_release
+    backup_tournaments_before_schema_migration
     sync_legacy_databases_before_switch
     switch_current_release
     write_nginx_config

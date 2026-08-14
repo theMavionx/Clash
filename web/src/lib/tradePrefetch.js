@@ -385,6 +385,14 @@ function buildDexSpecificRequests({ dex, token, walletAddress, signal }) {
     return requests;
   }
 
+  if (dex === 'rhlighter') {
+    addPrefetchRequest(requests, futuresUrl('/rh-lighter/config'), { headers, signal });
+    if (address) {
+      addPrefetchRequest(requests, futuresUrl(`/rh-lighter/account?address=${encoded(address)}`), { headers, signal });
+    }
+    return requests;
+  }
+
   if (dex === 'grvt') {
     addPrefetchRequest(requests, futuresUrl('/grvt/config?dex=grvt'), { headers, signal });
     return requests;

@@ -307,7 +307,7 @@ function ClientLogContextBridge() {
 
   const solAddress = solWallet?.publicKey?.toBase58?.() || null;
   const privySolAddress = (privy.solanaWallets || []).find(w => w?.address)?.address || null;
-  const isEvmDex = dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'leverup' || dex === 'aster' || dex === 'hotstuff' || dex === 'grvt';
+  const isEvmDex = dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'leverup' || dex === 'aster' || dex === 'hotstuff' || dex === 'grvt' || dex === 'rhlighter';
   const walletAddress = dex === 'decibel'
     ? aptosWallet?.address
     : isEvmDex
@@ -367,7 +367,8 @@ function isEvmTradeDex(dex) {
     || dex === 'hotstuff'
     || dex === 'grvt'
     || dex === 'katana'
-    || dex === 'lighter';
+    || dex === 'lighter'
+    || dex === 'rhlighter';
 }
 
 function TradeDataPrefetchBridge() {

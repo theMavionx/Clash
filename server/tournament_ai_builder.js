@@ -13,7 +13,7 @@ const DEFAULT_TIMEOUT_MS = 45000;
 const TOURNAMENT_DEXES = new Set([
   'pacifica', 'avantis', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix',
   'hyperliquid', 'risex', 'nado', 'ondo', 'hibachi', 'grvt', 'hotstuff', 'katana',
-  'gmtrade', 'flash', 'lighter',
+  'gmtrade', 'flash', 'lighter', 'rhlighter',
   'bulk',
 ]);
 const TOURNAMENT_FIELDS = new Set([

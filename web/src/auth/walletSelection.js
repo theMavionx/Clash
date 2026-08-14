@@ -1,6 +1,6 @@
 export const EVM_AUTH_DEX_IDS = Object.freeze([
   'avantis', 'gmx', 'ostium', 'monad', 'hyperliquid', 'risex', 'nado',
-  'ondo', 'leverup', 'aster', 'hibachi', 'hotstuff', 'grvt', 'katana', 'lighter',
+  'ondo', 'leverup', 'aster', 'hibachi', 'hotstuff', 'grvt', 'katana', 'lighter', 'rhlighter',
 ]);
 
 export const SOLANA_AUTH_DEX_IDS = Object.freeze([

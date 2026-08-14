@@ -41,6 +41,16 @@ const {
 
 const DECIBEL_HTTP = process.env.DECIBEL_HTTP_URL
   || 'https://api.mainnet.aptoslabs.com/decibel';
+const DECIBEL_REFERRAL_CODE = String(
+  process.env.DECIBEL_REFERRAL_CODE
+  || process.env.VITE_DECIBEL_REFERRAL_CODE
+  || 'NQSW0V',
+).trim().toUpperCase();
+const DECIBEL_REFERRAL_URL = `https://app.decibel.trade/r/${encodeURIComponent(DECIBEL_REFERRAL_CODE)}`;
+const configuredReferralCacheMs = Number(process.env.DECIBEL_REFERRAL_CACHE_MS || 5 * 60_000);
+const DECIBEL_REFERRAL_CACHE_MS = Number.isFinite(configuredReferralCacheMs)
+  ? Math.max(5_000, configuredReferralCacheMs)
+  : 5 * 60_000;
 const DECIBEL_WS = process.env.DECIBEL_WS_URL
   || 'wss://api.mainnet.aptoslabs.com/decibel/ws';
 const APTOS_FULLNODE = process.env.APTOS_FULLNODE_URL
@@ -95,6 +105,157 @@ function normalizeAptosAddress(addr) {
   const hex = raw.startsWith('0x') ? raw.slice(2) : raw;
   if (!/^[0-9a-f]+$/.test(hex)) return raw;
   return `0x${hex.padStart(64, '0')}`;
+}
+
+const decibelReferralCache = new Map();
+let decibelReferralCodeValidation = null;
+
+async function responseJson(response) {
+  const text = await response.text().catch(() => '');
+  if (!text) return {};
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { raw: text };
+  }
+}
+
+function normalizeDecibelReferralStatus(account, payload = null) {
+  const referralCode = String(payload?.referral_code || '').trim().toUpperCase();
+  return {
+    checked: true,
+    account: normalizeAptosAddress(account),
+    has_referrer: referralCode.length > 0 && payload?.is_active !== false,
+    is_our_referral: referralCode === DECIBEL_REFERRAL_CODE,
+    referral_code: referralCode || null,
+    referrer_account: normalizeAptosAddress(payload?.referrer_account || '') || null,
+    is_affiliate_referral: payload?.is_affiliate_referral === true,
+    referred_at_ms: Number(payload?.referred_at_ms || 0) || null,
+    is_active: payload?.is_active !== false && referralCode.length > 0,
+    clash_referral_code: DECIBEL_REFERRAL_CODE,
+    referral_url: DECIBEL_REFERRAL_URL,
+  };
+}
+
+async function validateDecibelReferralCode(options = {}) {
+  const force = options.force === true;
+  if (!force && decibelReferralCodeValidation?.is_valid === true && decibelReferralCodeValidation?.is_active === true) {
+    return decibelReferralCodeValidation;
+  }
+  const response = await fetchWithAptosKey(
+    `${DECIBEL_HTTP}/api/v1/referrals/code/${encodeURIComponent(DECIBEL_REFERRAL_CODE)}`,
+    { headers: { accept: 'application/json' }, cache: 'no-store' },
+    'Decibel referral code validation',
+  );
+  const data = await responseJson(response);
+  if (!response.ok) {
+    const error = new Error(`Decibel referral code validation failed: ${response.status} ${data?.message || data?.error || data?.raw || response.statusText}`);
+    error.status = response.status;
+    error.data = data;
+    throw error;
+  }
+  const result = {
+    referral_code: String(data?.referral_code || '').trim().toUpperCase(),
+    is_valid: data?.is_valid === true,
+    is_active: data?.is_active === true,
+  };
+  if (result.referral_code !== DECIBEL_REFERRAL_CODE || !result.is_valid || !result.is_active) {
+    const error = new Error(`Decibel referral ${DECIBEL_REFERRAL_CODE} is not valid and active`);
+    error.status = 503;
+    error.code = 'DECIBEL_REFERRAL_CODE_UNAVAILABLE';
+    error.data = result;
+    throw error;
+  }
+  decibelReferralCodeValidation = result;
+  return result;
+}
+
+async function getDecibelReferralStatus(account, options = {}) {
+  const owner = normalizeAptosAddress(account);
+  if (!owner) {
+    const error = new Error('Decibel owner account is required for referral verification');
+    error.status = 400;
+    throw error;
+  }
+  const cached = decibelReferralCache.get(owner);
+  if (options.force !== true && cached && Date.now() - cached.checked_at < DECIBEL_REFERRAL_CACHE_MS) {
+    return { ...cached.status, cached: true };
+  }
+  const response = await fetchWithAptosKey(
+    `${DECIBEL_HTTP}/api/v1/referrals/account/${encodeURIComponent(owner)}`,
+    { headers: { accept: 'application/json' }, cache: 'no-store' },
+    'Decibel referral status',
+  );
+  if (response.status === 404) {
+    const status = normalizeDecibelReferralStatus(owner, null);
+    decibelReferralCache.set(owner, { checked_at: Date.now(), status });
+    return status;
+  }
+  const data = await responseJson(response);
+  if (!response.ok) {
+    const error = new Error(`Decibel referral status failed: ${response.status} ${data?.message || data?.error || data?.raw || response.statusText}`);
+    error.status = response.status;
+    error.data = data;
+    throw error;
+  }
+  const status = normalizeDecibelReferralStatus(owner, data);
+  decibelReferralCache.set(owner, { checked_at: Date.now(), status });
+  return status;
+}
+
+async function redeemDecibelReferral(account) {
+  const owner = normalizeAptosAddress(account);
+  const existing = await getDecibelReferralStatus(owner, { force: true });
+  if (existing.has_referrer) {
+    return {
+      ok: true,
+      applied: false,
+      already_linked: true,
+      referral_status: existing,
+    };
+  }
+  await validateDecibelReferralCode();
+  const response = await fetchWithAptosKey(
+    `${DECIBEL_HTTP}/api/v1/referrals/redeem`,
+    {
+      method: 'POST',
+      headers: { accept: 'application/json', 'content-type': 'application/json' },
+      body: JSON.stringify({ account: owner, referral_code: DECIBEL_REFERRAL_CODE }),
+    },
+    'Decibel referral redemption',
+  );
+  const data = await responseJson(response);
+  if (!response.ok && response.status !== 409) {
+    const error = new Error(`Decibel referral redemption failed: ${response.status} ${data?.message || data?.error || data?.raw || response.statusText}`);
+    error.status = response.status;
+    error.data = data;
+    throw error;
+  }
+  decibelReferralCache.delete(owner);
+  const referralStatus = await getDecibelReferralStatus(owner, { force: true });
+  if (!referralStatus.has_referrer) {
+    const error = new Error('Decibel accepted the referral request but did not return a confirmed referrer');
+    error.status = 502;
+    error.code = 'DECIBEL_REFERRAL_NOT_CONFIRMED';
+    throw error;
+  }
+  return {
+    ok: true,
+    applied: referralStatus.is_our_referral,
+    already_linked: !referralStatus.is_our_referral,
+    referral_status: referralStatus,
+    result: response.ok ? data : null,
+  };
+}
+
+async function requireDecibelReferral(account) {
+  const status = await getDecibelReferralStatus(account);
+  if (status.has_referrer) return status;
+  const error = new Error(`Accept Decibel referral ${DECIBEL_REFERRAL_CODE} before opening a position`);
+  error.status = 403;
+  error.code = 'DECIBEL_REFERRAL_REQUIRED';
+  error.referral_status = status;
+  throw error;
 }
 
 async function aptosView(functionId, args = [], typeArguments = []) {
@@ -1692,9 +1853,15 @@ async function waitForPlacedOrderEffect(options = {}) {
 }
 
 module.exports = {
+  DECIBEL_REFERRAL_CODE,
+  DECIBEL_REFERRAL_URL,
   normalizeAptosAddress,
   normalizeClientOrderId,
   newClientOrderId,
+  validateDecibelReferralCode,
+  getDecibelReferralStatus,
+  redeemDecibelReferral,
+  requireDecibelReferral,
   aptosView,
   fetchAptosJsonPath,
   getAptosKeyPoolStatus: () => aptosApiKeyPool.snapshot(),

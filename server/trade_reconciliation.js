@@ -25,6 +25,7 @@ const FUTURES_REWARD_DEXES = new Set([
   'gmtrade',
   'flash',
   'lighter',
+  'rhlighter',
   'bulk',
 ]);
 
@@ -48,6 +49,7 @@ const DEX_REQUIRED_CHAIN = {
   grvt: 'evm',
   katana: 'evm',
   lighter: 'evm',
+  rhlighter: 'evm',
 };
 
 const VERIFIED_SOURCES_BY_DEX = {
@@ -68,6 +70,7 @@ const VERIFIED_SOURCES_BY_DEX = {
   gmtrade: ['gmtrade_tx', 'gmtrade_position_after_tx', 'gmtrade_close_tx_client_notional'],
   flash: ['flash_tx'],
   lighter: ['lighter_integrator'],
+  rhlighter: ['rhlighter_integrator'],
   bulk: ['bulk_builder_signed'],
 };
 
@@ -84,6 +87,7 @@ const USER_SCOPED_IMPORT_DEXES = new Set([
   'katana',
   'grvt',
   'lighter',
+  'rhlighter',
   'bulk',
 ]);
 
@@ -92,6 +96,7 @@ const CREDENTIAL_SCOPED_IMPORT_DEXES = new Set([
   'katana',
   'grvt',
   'lighter',
+  'rhlighter',
 ]);
 
 const DEFAULT_RECONCILE_COOLDOWN_MS = Math.max(5_000, Number(process.env.TRADE_RECONCILE_COOLDOWN_MS || 30_000));
@@ -468,9 +473,10 @@ function adapterCredentials(dex, wallet, headers = {}, opts = {}) {
     if (!apiKey && !subAccountId && !accountId && !cookie) return null;
     return { apiKey, subAccountId, accountId, cookie };
   }
-  if (dex === 'lighter') {
-    const accountIndex = headerValue(headers, 'x-lighter-account-index') || opts.accountIndex || opts.account_index;
-    const authToken = headerValue(headers, 'x-lighter-auth-token') || opts.authToken || opts.auth_token;
+  if (dex === 'lighter' || dex === 'rhlighter') {
+    const headerPrefix = dex === 'rhlighter' ? 'x-rh-lighter' : 'x-lighter';
+    const accountIndex = headerValue(headers, `${headerPrefix}-account-index`) || opts.accountIndex || opts.account_index;
+    const authToken = headerValue(headers, `${headerPrefix}-auth-token`) || opts.authToken || opts.auth_token;
     if (!accountIndex || !authToken) return null;
     return { accountIndex, authToken };
   }
@@ -579,11 +585,13 @@ async function runDexAdapter(player, dex, wallet, opts = {}) {
     return { dex, ...(await grvt.importFillsForPlayer(playerId, creds, { limit })) };
   }
 
-  if (dex === 'lighter') {
+  if (dex === 'lighter' || dex === 'rhlighter') {
     const creds = adapterCredentials(dex, wallet, opts.headers, opts.credentials || opts);
     if (!creds) return { ok: false, skipped: 'browser_credentials_required', dex };
-    const lighter = require('../server-futures/lighter');
-    return { dex, ...(await lighter.importFillsForPlayer(playerId, creds, { limit })) };
+    const lighterAdapter = dex === 'rhlighter'
+      ? require('../server-futures/rh-lighter')
+      : require('../server-futures/lighter');
+    return { dex, ...(await lighterAdapter.importFillsForPlayer(playerId, { ...creds, limit })) };
   }
 
   if (dex === 'gmtrade') {

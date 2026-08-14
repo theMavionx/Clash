@@ -21,7 +21,7 @@ import {
 const root = path.dirname(fileURLToPath(import.meta.url));
 const privateKey = `0x${'11'.repeat(32)}`;
 
-assert.equal(ASTER_FEE_RATE, '0.00001', 'Aster client fallback must match the official Aster Code demo rate');
+assert.equal(ASTER_FEE_RATE, '0.0001', 'Aster client fallback must charge the configured 1 bps builder fee');
 assert.deepEqual(ASTER_MESSAGE_DOMAIN, {
   name: 'AsterSignTransaction',
   version: '1',
@@ -46,7 +46,7 @@ const payload = encodeAsterParams([
 ]);
 assert.equal(
   payload,
-  'symbol=BTCUSDT&type=LIMIT&side=BUY&quantity=0.001&price=65000.0&ipWhitelist=&builder=0x2222222222222222222222222222222222222222&feeRate=0.00001&nonce=1786500000000000&user=0x3333333333333333333333333333333333333333&signer=0x4444444444444444444444444444444444444444',
+  'symbol=BTCUSDT&type=LIMIT&side=BUY&quantity=0.001&price=65000.0&ipWhitelist=&builder=0x2222222222222222222222222222222222222222&feeRate=0.0001&nonce=1786500000000000&user=0x3333333333333333333333333333333333333333&signer=0x4444444444444444444444444444444444444444',
   'Aster signed query ordering and empty fields must be preserved byte-for-byte',
 );
 
@@ -121,7 +121,7 @@ assert.match(hookSource, /\['canWithdraw', false\]/u, 'Aster Agent must never re
 assert.match(hookSource, /function asterCloseSide/u, 'close and TP\/SL must invert position direction explicitly');
 assert.match(panelSource, /dex === 'aster'[\s\S]*hasAsterRiskToManage/u, 'builder setup gate must not trap existing Aster risk');
 assert.match(serverSource, /opening trades are disabled/u, 'server must fail closed before builder configuration');
-assert.match(serverSource, /ASTER_DEFAULT_BUILDER_FEE_RATE = '0\.00001'/u);
+assert.match(serverSource, /ASTER_DEFAULT_BUILDER_FEE_RATE = '0\.0001'/u);
 assert.match(serverSource, /\/fapi\/v3\/builder\/userTrades/u, 'official exact Aster builder trade feed must be supported');
 
 console.log('Aster V3 signing, builder routing, risk controls, and source invariants: PASS');

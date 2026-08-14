@@ -1,35 +1,76 @@
 const { spawn } = require('child_process');
+const { AsyncLocalStorage } = require('async_hooks');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { getAddress, isAddressEqual, recoverMessageAddress } = require('viem');
 
-const LIGHTER_API = String(process.env.LIGHTER_API_URL || 'https://mainnet.zklighter.elliot.ai').replace(/\/+$/u, '');
-const LIGHTER_CHAIN_ID = Number(process.env.LIGHTER_CHAIN_ID || 304);
-const LIGHTER_INTEGRATOR_ACCOUNT_INDEX = Number(
-  process.env.LIGHTER_INTEGRATOR_ACCOUNT_INDEX
-  || process.env.VITE_LIGHTER_INTEGRATOR_ACCOUNT_INDEX
-  || 730898,
-);
-const LIGHTER_BUILDER_FEE_BPS = Math.max(0, Number(
-  process.env.LIGHTER_BUILDER_FEE_BPS
-  || process.env.VITE_LIGHTER_BUILDER_FEE_BPS
-  || 1,
-));
-const LIGHTER_BUILDER_FEE_VALUE = Math.round(LIGHTER_BUILDER_FEE_BPS * 100);
-const LIGHTER_REFERRAL_CODE = String(
-  process.env.LIGHTER_REFERRAL_CODE
-  || process.env.VITE_LIGHTER_REFERRAL_CODE
-  || 'CLASHOFPERPS',
-).trim().toUpperCase();
-const LIGHTER_REFERRAL_URL = `https://app.lighter.xyz/?referral=${encodeURIComponent(LIGHTER_REFERRAL_CODE)}`;
+function optionalInteger(value, fallback = null) {
+  const text = String(value ?? '').trim();
+  if (!text) return fallback;
+  const parsed = Number(text);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
+function makeProfile(options = {}) {
+  const dexId = String(options.dexId || 'lighter').trim().toLowerCase();
+  const label = String(options.label || 'Lighter').trim();
+  const api = String(options.api || 'https://mainnet.zklighter.elliot.ai').replace(/\/+$/u, '');
+  const builderFeeBps = Math.max(0, Number(options.builderFeeBps ?? 1));
+  const referralCode = String(options.referralCode || '').trim().toUpperCase();
+  return Object.freeze({
+    dexId,
+    label,
+    api,
+    chainId: optionalInteger(options.chainId),
+    integratorAccountIndex: optionalInteger(options.integratorAccountIndex, 0),
+    integratorExpectedOwner: String(options.integratorExpectedOwner || '').trim().toLowerCase(),
+    integratorConfigEnv: String(options.integratorConfigEnv || 'LIGHTER_INTEGRATOR_ACCOUNT_INDEX').trim(),
+    builderFeeBps,
+    builderFeeValue: Math.round(builderFeeBps * 100),
+    approvalTtlDays: Math.max(1, Math.min(3650, Number(options.approvalTtlDays || 365))),
+    referralRequired: options.referralRequired === true,
+    referralCode,
+    referralUrl: String(options.referralUrl || '').trim(),
+  });
+}
+
+const DEFAULT_LIGHTER_PROFILE = makeProfile({
+  dexId: 'lighter',
+  label: 'Lighter',
+  api: process.env.LIGHTER_API_URL || 'https://mainnet.zklighter.elliot.ai',
+  chainId: process.env.LIGHTER_CHAIN_ID || 304,
+  integratorAccountIndex: process.env.LIGHTER_INTEGRATOR_ACCOUNT_INDEX
+    || process.env.VITE_LIGHTER_INTEGRATOR_ACCOUNT_INDEX
+    || 730898,
+  integratorExpectedOwner: process.env.LIGHTER_INTEGRATOR_L1_ADDRESS
+    || '0xB36402e87a86206D3a114a98B53f31362291fe1B',
+  integratorConfigEnv: 'LIGHTER_INTEGRATOR_ACCOUNT_INDEX',
+  builderFeeBps: process.env.LIGHTER_BUILDER_FEE_BPS
+    || process.env.VITE_LIGHTER_BUILDER_FEE_BPS
+    || 1,
+  approvalTtlDays: process.env.LIGHTER_APPROVAL_TTL_DAYS || 365,
+  referralRequired: true,
+  referralCode: process.env.LIGHTER_REFERRAL_CODE
+    || process.env.VITE_LIGHTER_REFERRAL_CODE
+    || 'CLASHOFPERPS',
+  referralUrl: `https://app.lighter.xyz/?referral=${encodeURIComponent(String(
+    process.env.LIGHTER_REFERRAL_CODE
+    || process.env.VITE_LIGHTER_REFERRAL_CODE
+    || 'CLASHOFPERPS',
+  ).trim().toUpperCase())}`,
+});
+
+const lighterProfileContext = new AsyncLocalStorage();
+function currentProfile() {
+  return lighterProfileContext.getStore() || DEFAULT_LIGHTER_PROFILE;
+}
 // Lighter's production web app generates this compatibility token for
 // referral/use. It is not a wallet signature or a secret; account ownership is
 // authorized separately by the Lighter auth token.
 const LIGHTER_REFERRAL_SIGNATURE_SUFFIX = 'wP81zDNpES';
 const LIGHTER_REQUEST_TIMEOUT_MS = Math.max(1000, Math.min(20_000, Number(process.env.LIGHTER_TIMEOUT_MS || 8000)));
 const LIGHTER_PUBLIC_CACHE_TTL_MS = Math.max(1000, Math.min(60_000, Number(process.env.LIGHTER_PUBLIC_CACHE_TTL_MS || 12_000)));
-const LIGHTER_APPROVAL_TTL_DAYS = Math.max(1, Math.min(3650, Number(process.env.LIGHTER_APPROVAL_TTL_DAYS || 365)));
 function defaultPythonBin() {
   const bundled = path.join(
     os.homedir(),
@@ -108,6 +149,8 @@ function formatApprovalHex(value, width = 16) {
 }
 
 function buildApproveIntegratorMessageFromTxInfo(txInfo) {
+  const profile = currentProfile();
+  if (profile.chainId == null) return '';
   const tx = parseJsonObject(txInfo);
   if (!tx) return '';
   const required = [
@@ -134,7 +177,7 @@ function buildApproveIntegratorMessageFromTxInfo(txInfo) {
     `max spot taker fee: ${formatApprovalHex(tx.MaxSpotTakerFee)}`,
     `max spot maker fee: ${formatApprovalHex(tx.MaxSpotMakerFee)}`,
     `approval expiry: ${formatApprovalHex(tx.ApprovalExpiry)}`,
-    `chainId: ${formatApprovalHex(LIGHTER_CHAIN_ID)}`,
+    `chainId: ${formatApprovalHex(profile.chainId)}`,
     'Only sign this message for a trusted client!',
   ].join('\n');
 }
@@ -166,6 +209,7 @@ async function verifyL1ApprovalSignature({ accountIndex, txInfo, messageToSign, 
 }
 
 function runSigner(action, payload = {}) {
+  const profile = currentProfile();
   return new Promise((resolve, reject) => {
     const child = spawn(LIGHTER_PYTHON_BIN, [LIGHTER_SIGNER_SCRIPT], {
       cwd: __dirname,
@@ -202,16 +246,17 @@ function runSigner(action, payload = {}) {
       }
       resolve(data);
     });
-    child.stdin.end(JSON.stringify({ action, api_url: LIGHTER_API, ...payload }));
+    child.stdin.end(JSON.stringify({ action, api_url: profile.api, ...payload }));
   });
 }
 
 async function request(path, options = {}) {
+  const profile = currentProfile();
   const method = String(options.method || 'GET').toUpperCase();
   const bodyValue = options.form
     ? new URLSearchParams(Object.entries(options.form).map(([key, value]) => [key, String(value ?? '')])).toString()
     : JSON.stringify(options.body || {});
-  const queryKey = method === 'GET' ? path : `${path}:${bodyValue}`;
+  const queryKey = method === 'GET' ? `${profile.api}:${path}` : `${profile.api}:${path}:${bodyValue}`;
   const now = Date.now();
   if (method === 'GET') {
     const cached = cache.get(queryKey);
@@ -220,13 +265,13 @@ async function request(path, options = {}) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), LIGHTER_REQUEST_TIMEOUT_MS);
   try {
-    const res = await fetch(`${LIGHTER_API}${path}`, {
+    const res = await fetch(`${profile.api}${path}`, {
       method,
       signal: ctrl.signal,
       headers: {
         accept: 'application/json',
         'content-type': options.form ? 'application/x-www-form-urlencoded' : 'application/json',
-        'user-agent': 'ClashOfPerps/1.0 lighter',
+        'user-agent': `ClashOfPerps/1.0 ${profile.dexId}`,
         ...(options.headers || {}),
       },
       body: method === 'GET' ? undefined : bodyValue,
@@ -240,6 +285,7 @@ async function request(path, options = {}) {
         : (data?.message || data?.error || text || `HTTP ${res.status}`);
       const err = new Error(`Lighter ${method} ${path} failed: ${msg}`);
       err.status = res.ok ? 502 : res.status;
+      err.code = Number(data?.code) || null;
       err.data = data;
       throw err;
     }
@@ -254,7 +300,7 @@ async function request(path, options = {}) {
 }
 
 function clearRequestCache(path) {
-  cache.delete(path);
+  cache.delete(`${currentProfile().api}:${path}`);
 }
 
 function signerCredentials(input = {}) {
@@ -499,6 +545,38 @@ function isOpenLighterPosition(position) {
   return amount > 1e-12 && notional > 0.01;
 }
 
+function integratorApprovalStatus(account) {
+  const profile = currentProfile();
+  const integratorIndex = Number(profile.integratorAccountIndex || 0);
+  if (!Number.isInteger(integratorIndex) || integratorIndex <= 0) {
+    return { configured: false, approved: false, reason: `${profile.label} partner account is not configured` };
+  }
+  const approval = rows(account?.approved_integrators).find((row) => (
+    Number(row?.account_index ?? row?.integrator_account_index) === integratorIndex
+  ));
+  if (!approval) return { configured: true, approved: false, reason: 'Integrator approval not found' };
+  const expiry = Number(approval.approval_expiry || 0);
+  const fee = Number(profile.builderFeeValue || 0);
+  const hasFeeCapacity = Number(approval.max_perps_taker_fee || 0) >= fee
+    && Number(approval.max_perps_maker_fee || 0) >= fee;
+  const unexpired = expiry <= 0 || expiry > Date.now();
+  return {
+    configured: true,
+    approved: hasFeeCapacity && unexpired,
+    reason: !hasFeeCapacity ? 'Integrator fee allowance is below the Clash fee' : (!unexpired ? 'Integrator approval expired' : ''),
+    approval,
+  };
+}
+
+function requireConfiguredIntegrator() {
+  const profile = currentProfile();
+  if (Number.isInteger(profile.integratorAccountIndex) && profile.integratorAccountIndex > 0) return profile;
+  throw Object.assign(
+    new Error(`${profile.label} trading is waiting for ${profile.integratorConfigEnv}. Orders without Clash partner attribution are disabled.`),
+    { status: 503, code: 'LIGHTER_INTEGRATOR_NOT_CONFIGURED' },
+  );
+}
+
 async function getAccountRecord({ accountIndex, l1Address } = {}) {
   const index = Number(accountIndex);
   const hasIndex = Number.isInteger(index) && index >= 0;
@@ -507,8 +585,69 @@ async function getAccountRecord({ accountIndex, l1Address } = {}) {
   const qs = hasIndex
     ? `by=index&value=${encodeURIComponent(String(index))}`
     : `by=l1_address&value=${encodeURIComponent(address)}`;
-  const data = await request(`/api/v1/account?${qs}`);
+  let data;
+  try {
+    data = await request(`/api/v1/account?${qs}`);
+  } catch (err) {
+    if ([21100, 29404, 404].includes(Number(err?.code)) || Number(err?.status) === 404) return null;
+    throw err;
+  }
   return rows(data, 'accounts')[0] || null;
+}
+
+async function getIntegratorStatus() {
+  const profile = currentProfile();
+  const index = Number(profile.integratorAccountIndex || 0);
+  if (!Number.isInteger(index) || index <= 0) {
+    return {
+      configured: false,
+      ready: false,
+      account_index: null,
+      expected_owner: profile.integratorExpectedOwner || null,
+      reason: `${profile.integratorConfigEnv} is not configured`,
+    };
+  }
+  try {
+    const account = await getAccountRecord({ accountIndex: index });
+    if (!account) {
+      return {
+        configured: true,
+        ready: false,
+        account_index: index,
+        expected_owner: profile.integratorExpectedOwner || null,
+        reason: `${profile.label} partner account ${index} does not exist on this deployment`,
+      };
+    }
+    const owner = String(account.l1_address || account.owner || '').trim().toLowerCase();
+    const expected = profile.integratorExpectedOwner;
+    const ownerMatches = !expected || owner === expected;
+    return {
+      configured: true,
+      ready: ownerMatches,
+      account_index: index,
+      owner: owner || null,
+      expected_owner: expected || null,
+      reason: ownerMatches ? '' : `${profile.label} partner account ${index} belongs to an unexpected owner`,
+    };
+  } catch (err) {
+    return {
+      configured: true,
+      ready: false,
+      account_index: index,
+      expected_owner: profile.integratorExpectedOwner || null,
+      reason: `${profile.label} partner account validation failed: ${err?.message || err}`,
+    };
+  }
+}
+
+async function requireReadyIntegrator() {
+  const profile = requireConfiguredIntegrator();
+  const status = await getIntegratorStatus();
+  if (status.ready) return profile;
+  throw Object.assign(
+    new Error(`${status.reason}. Orders without verified Clash partner attribution are disabled.`),
+    { status: 503, code: 'LIGHTER_INTEGRATOR_NOT_READY', integrator_status: status },
+  );
 }
 
 async function getAccount({ accountIndex, l1Address } = {}) {
@@ -522,6 +661,7 @@ async function getAccount({ accountIndex, l1Address } = {}) {
   const positions = rows(acct.positions)
     .map(pos => normalizePosition(pos, marketById))
     .filter(isOpenLighterPosition);
+  const integrator = integratorApprovalStatus(acct);
   return {
     exists: true,
     account_index: acct.account_index ?? acct.index,
@@ -532,6 +672,10 @@ async function getAccount({ accountIndex, l1Address } = {}) {
     collateral: num(acct.collateral ?? balance, balance),
     positions,
     assets,
+    integrator_configured: integrator.configured,
+    integrator_approved: integrator.approved,
+    integrator_approval_reason: integrator.reason,
+    integrator_account_index: currentProfile().integratorAccountIndex,
     _raw: acct,
   };
 }
@@ -546,7 +690,7 @@ function authHeader(input = {}) {
   return token ? { authorization: token } : {};
 }
 
-function referralUseSignature(l1Address, referralCode = LIGHTER_REFERRAL_CODE) {
+function referralUseSignature(l1Address, referralCode = currentProfile().referralCode) {
   return Buffer.from(
     `${String(l1Address || '').trim()}${String(referralCode || '').trim()}${LIGHTER_REFERRAL_SIGNATURE_SUFFIX}`,
     'utf8',
@@ -554,14 +698,15 @@ function referralUseSignature(l1Address, referralCode = LIGHTER_REFERRAL_CODE) {
 }
 
 function normalizeReferralStatus(payload, account) {
+  const profile = currentProfile();
   const usedCode = String(payload?.used_code || '').trim();
   return {
     checked: true,
     has_referral: usedCode.length > 0,
-    is_our_referral: usedCode.toUpperCase() === LIGHTER_REFERRAL_CODE,
+    is_our_referral: !!profile.referralCode && usedCode.toUpperCase() === profile.referralCode,
     used_code: usedCode,
-    referral_code: LIGHTER_REFERRAL_CODE,
-    referral_url: LIGHTER_REFERRAL_URL,
+    referral_code: profile.referralCode,
+    referral_url: profile.referralUrl,
     account_index: Number(account?.account_index ?? account?.index),
     l1_address: String(account?.l1_address || ''),
   };
@@ -589,6 +734,19 @@ function requireMatchingLighterOwner(account, expectedL1Address) {
 }
 
 async function getReferralStatus(input = {}) {
+  const profile = currentProfile();
+  if (!profile.referralRequired) {
+    return {
+      checked: true,
+      required: false,
+      has_referral: true,
+      is_our_referral: false,
+      used_code: '',
+      referral_code: '',
+      referral_url: '',
+      account_index: accountIndexFromInput(input),
+    };
+  }
   const accountIndex = accountIndexFromInput(input);
   if (accountIndex == null) {
     throw Object.assign(new Error('Lighter account_index required'), { status: 400 });
@@ -611,6 +769,10 @@ async function getReferralStatus(input = {}) {
 }
 
 async function useReferralCode(input = {}) {
+  const profile = currentProfile();
+  if (!profile.referralRequired || !profile.referralCode) {
+    throw Object.assign(new Error(`${profile.label} referral is not configured or required`), { status: 409 });
+  }
   const initial = await getReferralStatus(input);
   if (initial.has_referral) {
     return {
@@ -630,7 +792,7 @@ async function useReferralCode(input = {}) {
       headers,
       form: {
         l1_address: owner,
-        referral_code: LIGHTER_REFERRAL_CODE,
+        referral_code: profile.referralCode,
         discord: '',
         telegram: '',
         x: '',
@@ -657,10 +819,12 @@ async function useReferralCode(input = {}) {
 }
 
 async function requireReferralForTrading(input = {}) {
+  const profile = currentProfile();
+  if (!profile.referralRequired) return { checked: true, required: false, has_referral: true };
   const status = await getReferralStatus(input);
   if (!status.has_referral) {
     throw Object.assign(
-      new Error(`Accept a Lighter referral code before trading. Clash code: ${LIGHTER_REFERRAL_CODE}`),
+      new Error(`Accept a ${profile.label} referral code before trading. Clash code: ${profile.referralCode}`),
       { status: 403, code: 'LIGHTER_REFERRAL_REQUIRED', referral_status: status },
     );
   }
@@ -724,13 +888,13 @@ async function getActiveOrders({ accountIndex, authToken } = {}) {
 }
 
 function isOurIntegratorTrade(trade) {
-  const collector = LIGHTER_INTEGRATOR_ACCOUNT_INDEX;
+  const collector = currentProfile().integratorAccountIndex;
   return Number(trade?.integrator_maker_fee_collector_index || 0) === collector
     || Number(trade?.integrator_taker_fee_collector_index || 0) === collector;
 }
 
 function lighterIntegratorFeeUsd(trade) {
-  const collector = LIGHTER_INTEGRATOR_ACCOUNT_INDEX;
+  const collector = currentProfile().integratorAccountIndex;
   const notional = num(trade?.usd_amount, Math.abs(num(trade?.size, 0) * num(trade?.price, 0)));
   if (!Number.isFinite(notional) || notional <= 0) return 0;
   let feeValue = 0;
@@ -745,6 +909,7 @@ function lighterIntegratorFeeUsd(trade) {
 }
 
 function normalizeTradeForHistory(trade, accountIndex, marketById = new Map()) {
+  const profile = currentProfile();
   const isAsk = Number(trade?.ask_account_id) === Number(accountIndex);
   const marketId = Number(trade?.market_id ?? trade?.market_index);
   const market = Number.isInteger(marketId) ? marketById.get(marketId) : null;
@@ -760,11 +925,11 @@ function normalizeTradeForHistory(trade, accountIndex, marketById = new Map()) {
     amount: String(trade?.size ?? ''),
     price: String(trade?.price ?? ''),
     orderId: trade?.trade_id_str || trade?.trade_id || trade?.tx_hash,
-    clientOrderId: `lighter:${trade?.trade_id_str || trade?.trade_id || trade?.tx_hash || ''}:${accountIndex}`,
+    clientOrderId: `${profile.dexId}:${trade?.trade_id_str || trade?.trade_id || trade?.tx_hash || ''}:${accountIndex}`,
     status: 'filled',
-    dex: 'lighter',
+    dex: profile.dexId,
     notional_usd: notional,
-    verifiedSource: 'lighter_integrator',
+    verifiedSource: `${profile.dexId}_integrator`,
     pnl: pnl == null ? null : String(pnl),
     fee: String(integratorFeeUsd),
     proofJson: JSON.stringify(trade),
@@ -788,15 +953,16 @@ async function createAuthToken(input = {}) {
 }
 
 async function prepareIntegratorApproval(input = {}) {
+  const profile = await requireReadyIntegrator();
   const creds = signerCredentials(input);
-  const maxFee = Math.max(LIGHTER_BUILDER_FEE_VALUE, Number(input.maxFeeValue || 0), 100);
+  const maxFee = Math.max(profile.builderFeeValue, Number(input.maxFeeValue || 0), 100);
   const requestedExpiry = Number(input.approvalExpiry ?? input.approval_expiry);
   const approvalExpiry = Number.isInteger(requestedExpiry) && requestedExpiry > 0
     ? (requestedExpiry < 10_000_000_000 ? requestedExpiry * 1000 : requestedExpiry)
-    : Date.now() + Math.round(LIGHTER_APPROVAL_TTL_DAYS * 24 * 60 * 60 * 1000);
+    : Date.now() + Math.round(profile.approvalTtlDays * 24 * 60 * 60 * 1000);
   const result = await runSigner('approve_integrator_prepare', {
     ...creds,
-    integrator_account_index: LIGHTER_INTEGRATOR_ACCOUNT_INDEX,
+    integrator_account_index: profile.integratorAccountIndex,
     max_perps_taker_fee: maxFee,
     max_perps_maker_fee: maxFee,
     max_spot_taker_fee: 0,
@@ -805,8 +971,8 @@ async function prepareIntegratorApproval(input = {}) {
   });
   return {
     ok: true,
-    integrator_account_index: LIGHTER_INTEGRATOR_ACCOUNT_INDEX,
-    builder_fee_value: LIGHTER_BUILDER_FEE_VALUE,
+    integrator_account_index: profile.integratorAccountIndex,
+    builder_fee_value: profile.builderFeeValue,
     max_fee_value: maxFee,
     approval_expiry: approvalExpiry,
     ...result,
@@ -814,6 +980,7 @@ async function prepareIntegratorApproval(input = {}) {
 }
 
 async function submitIntegratorApproval(input = {}) {
+  await requireReadyIntegrator();
   const creds = signerCredentials(input);
   if (!input.tx_info || input.tx_type == null) throw Object.assign(new Error('Lighter approval tx_info required'), { status: 400 });
   await verifyL1ApprovalSignature({
@@ -958,6 +1125,7 @@ async function createGroupedOrder({
   slippage,
   input = {},
 }) {
+  const profile = requireConfiguredIntegrator();
   const takeProfitUi = positiveNumberFrom(input, 'takeProfit', 'take_profit', 'tp');
   const stopLossUi = positiveNumberFrom(input, 'stopLoss', 'stop_loss', 'sl');
   const childCount = (takeProfitUi > 0 ? 1 : 0) + (stopLossUi > 0 ? 1 : 0);
@@ -1016,9 +1184,9 @@ async function createGroupedOrder({
     ...creds,
     grouping_type: groupingType,
     orders: orders.map(stripSignedOrderMeta),
-    integrator_account_index: LIGHTER_INTEGRATOR_ACCOUNT_INDEX,
-    integrator_taker_fee: LIGHTER_BUILDER_FEE_VALUE,
-    integrator_maker_fee: LIGHTER_BUILDER_FEE_VALUE,
+    integrator_account_index: profile.integratorAccountIndex,
+    integrator_taker_fee: profile.builderFeeValue,
+    integrator_maker_fee: profile.builderFeeValue,
   });
   logSignerResult('grouped order submitted', {
     account_index: creds.account_index,
@@ -1044,8 +1212,8 @@ async function createGroupedOrder({
     order_type: orderType.name,
     reduce_only: false,
     signer_price: entryOrder._signer_price,
-    builder_fee_value: LIGHTER_BUILDER_FEE_VALUE,
-    integrator_account_index: LIGHTER_INTEGRATOR_ACCOUNT_INDEX,
+    builder_fee_value: profile.builderFeeValue,
+    integrator_account_index: profile.integratorAccountIndex,
     attached_tpsl: true,
     grouping_type: groupingType,
     child_order_count: childOrders.length,
@@ -1056,6 +1224,7 @@ async function createGroupedOrder({
 }
 
 async function createOrder(input = {}) {
+  const profile = await requireReadyIntegrator();
   const creds = signerCredentials(input);
   await requireReferralForTrading({
     ...input,
@@ -1109,9 +1278,9 @@ async function createOrder(input = {}) {
   const result = await runSigner('create_order', {
     ...creds,
     ...stripSignedOrderMeta(signedOrder),
-    integrator_account_index: LIGHTER_INTEGRATOR_ACCOUNT_INDEX,
-    integrator_taker_fee: LIGHTER_BUILDER_FEE_VALUE,
-    integrator_maker_fee: LIGHTER_BUILDER_FEE_VALUE,
+    integrator_account_index: profile.integratorAccountIndex,
+    integrator_taker_fee: profile.builderFeeValue,
+    integrator_maker_fee: profile.builderFeeValue,
   });
   logSignerResult('order submitted', {
     account_index: creds.account_index,
@@ -1136,8 +1305,8 @@ async function createOrder(input = {}) {
     order_type: orderType.name,
     reduce_only: !!input.reduceOnly || !!input.reduce_only,
     signer_price: signerPrice,
-    builder_fee_value: LIGHTER_BUILDER_FEE_VALUE,
-    integrator_account_index: LIGHTER_INTEGRATOR_ACCOUNT_INDEX,
+    builder_fee_value: profile.builderFeeValue,
+    integrator_account_index: profile.integratorAccountIndex,
     ...result,
   };
 }
@@ -1178,6 +1347,7 @@ async function setLeverage(input = {}) {
 }
 
 async function importFillsForPlayer(playerId, input = {}) {
+  const profile = await requireReadyIntegrator();
   const db = require('./db');
   const accountIndex = accountIndexFromInput(input);
   if (accountIndex == null) throw Object.assign(new Error('Lighter account_index required'), { status: 400 });
@@ -1218,26 +1388,33 @@ async function importFillsForPlayer(playerId, input = {}) {
     trades_checked: checked,
     inserted,
     skipped_not_ours: skipped,
-    integrator_account_index: LIGHTER_INTEGRATOR_ACCOUNT_INDEX,
+    integrator_account_index: profile.integratorAccountIndex,
     next_cursor: nextCursor,
   };
 }
 
 function config() {
+  const profile = currentProfile();
   return {
-    api: LIGHTER_API,
-    chainId: LIGHTER_CHAIN_ID,
-    integratorAccountIndex: LIGHTER_INTEGRATOR_ACCOUNT_INDEX,
-    builderFeeBps: LIGHTER_BUILDER_FEE_BPS,
-    builderFeeValue: LIGHTER_BUILDER_FEE_VALUE,
-    approvalTtlDays: LIGHTER_APPROVAL_TTL_DAYS,
-    referralCode: LIGHTER_REFERRAL_CODE,
-    referralUrl: LIGHTER_REFERRAL_URL,
+    dexId: profile.dexId,
+    label: profile.label,
+    api: profile.api,
+    chainId: profile.chainId,
+    integratorConfigured: profile.integratorAccountIndex > 0,
+    integratorAccountIndex: profile.integratorAccountIndex || null,
+    integratorExpectedOwner: profile.integratorExpectedOwner || null,
+    builderFeeBps: profile.builderFeeBps,
+    builderFeeValue: profile.builderFeeValue,
+    approvalTtlDays: profile.approvalTtlDays,
+    referralRequired: profile.referralRequired,
+    referralCode: profile.referralCode,
+    referralUrl: profile.referralUrl,
   };
 }
 
-module.exports = {
+const adapterFunctions = {
   config,
+  getIntegratorStatus,
   getMarketInfo,
   getPrices,
   getAccount,
@@ -1256,4 +1433,18 @@ module.exports = {
   createOrder,
   cancelOrder,
   setLeverage,
+};
+
+function createLighterAdapter(options = {}) {
+  const profile = makeProfile(options);
+  const adapter = {};
+  for (const [name, fn] of Object.entries(adapterFunctions)) {
+    adapter[name] = (...args) => lighterProfileContext.run(profile, () => fn(...args));
+  }
+  return Object.freeze(adapter);
+}
+
+module.exports = {
+  ...createLighterAdapter(DEFAULT_LIGHTER_PROFILE),
+  createLighterAdapter,
 };

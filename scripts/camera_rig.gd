@@ -407,7 +407,9 @@ func _process(delta_raw: float) -> void:
 			edge_dir.z = ((finger_pos.y - (screen_size.y - edge_y)) / edge_y)
 		if edge_dir != Vector3.ZERO:
 			_mark_user_camera_input()
-			var zoom_factor: float = _current_zoom * 0.2
+			# Preserve the legacy far-zoom feel without allowing scene-specific
+			# max zoom values to multiply edge-pan speed without bound.
+			var zoom_factor: float = minf(_current_zoom * 0.2, 1.0)
 			_target_position += edge_dir * edge_pan_speed * zoom_factor * delta
 			_target_position.y = 0.0
 

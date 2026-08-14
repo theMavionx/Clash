@@ -11,7 +11,9 @@
     "test:sanctum": "node test-sanctum.js",
     "test:ondo-claim": "node test-ondo-claim-reconciliation.js",
     "test:ondo-earnings": "node test-ondo-earnings.js",
-    "test:aster-earnings": "node test-aster-earnings.js"
+    "test:aster-earnings": "node test-aster-earnings.js",
+    "test:rh-lighter-earnings": "node test-rh-lighter-earnings.js",
+    "test:rh-lighter-tournament-migration": "node test-rhlighter-tournament-migration.js"
   },
   "keywords": [],
   "author": "",

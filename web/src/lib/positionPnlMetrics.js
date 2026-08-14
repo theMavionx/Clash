@@ -30,6 +30,7 @@ const DEFAULT_TAKER_RATE = Object.freeze({
   hyperliquid: 0.00045,
   katana: 0.00019,
   lighter: 0,
+  rhlighter: 0,
   monad: 0.00069,
   nado: 0.00035,
   ondo: 0.00035,
@@ -56,6 +57,7 @@ const DEFAULT_BUILDER_RATE = Object.freeze({
   hotstuff: envNumber('VITE_HOTSTUFF_BROKER_FEE_RATE', 0.0001),
   hyperliquid: envNumber('VITE_HYPERLIQUID_BUILDER_FEE_TENTH_BPS', 10) / 100_000,
   lighter: envNumber('VITE_LIGHTER_BUILDER_FEE_BPS', 1) / 10_000,
+  rhlighter: envNumber('VITE_RH_LIGHTER_BUILDER_FEE_BPS', 1) / 10_000,
   nado: envNumber('VITE_NADO_BUILDER_FEE_RATE', 10) / 100_000,
   // Ondo is contractually fixed at 1 bps in the server order adapter. Do not
   // allow a stale browser build environment to display a different net PnL.

@@ -22,7 +22,7 @@ import { getPreferredAptosApiKey } from './aptosBrowserKeyPool';
 // ───── Builder fee config ─────────────────────────────────────────────────
 
 // Builder address registered on app.decibel.trade. Aptos format: "0x" + 64
-// hex chars. The 6-char codes like `Z7ZFYZ` / `DC13WJ` are referral codes
+// hex chars. The 6-char codes like `NQSW0V` / `DC13WJ` are referral codes
 // (consumer-side), NOT builder addresses — `placeOrder` validates this
 // on-chain and reverts with "invalid address" if you pass a short code.
 export const BUILDER_ADDR = '0xc82aea3965cd4f0731baf1e9a28cea65b0697911aea346577e6488d542653332';
@@ -48,7 +48,11 @@ export const BUILDER_FEE_BPS = 1;
 // Decibel's referral registry, builder is the on-chain fee recipient.
 // Setting both is normal: referral unblocks trading, builder routes
 // per-trade fees to us.
-export const REFERRAL_CODE = 'Z7ZFYZ';
+export const REFERRAL_CODE = String(
+  (typeof import.meta !== 'undefined' && import.meta.env?.VITE_DECIBEL_REFERRAL_CODE)
+  || 'NQSW0V',
+).trim().toUpperCase();
+export const REFERRAL_URL = `https://app.decibel.trade/r/${encodeURIComponent(REFERRAL_CODE)}`;
 
 // Returns true when the integration is wired to actually charge builder
 // fees. Used by the hook to skip the `approveMaxBuilderFee` flow and the

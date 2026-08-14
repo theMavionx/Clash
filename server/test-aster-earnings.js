@@ -11,11 +11,11 @@ const mainDbPath = path.join(os.tmpdir(), `clash-aster-earnings-main-${process.p
 const builder = '0xB36402e87a86206D3a114a98B53f31362291fe1B'.toLowerCase();
 process.env.CLASH_FUTURES_DB = futuresDbPath;
 process.env.ASTER_BUILDER_ADDRESS = builder;
-process.env.ASTER_BUILDER_FEE_RATE = '0.00001';
+process.env.ASTER_BUILDER_FEE_RATE = '0.0001';
 delete process.env.ASTER_BUILDER_SIGNER_PRIVATE_KEY;
 delete process.env.ASTER_BUILDER_SIGNER_ADDRESS;
 
-function proof(address, feeRate = '0.00001', overrides = {}) {
+function proof(address, feeRate = '0.0001', overrides = {}) {
   return JSON.stringify({
     source: 'aster_user_trade_order_proof',
     venue: 'aster',
@@ -47,11 +47,11 @@ async function run() {
     ) VALUES (?, 'BTC', 'bid', 'market', '1', '1', ?, ?, 'filled', 'aster', ?, ?, ?, ?, datetime('now'))
   `);
   insert.run('good-a', 'order-a', 'fill-a', 1000, 'aster_builder_fill', null, proof(builder));
-  insert.run('good-b', 'order-b', 'fill-b', 500, 'aster_builder_fill', null, proof(builder, '0.00001', {
+  insert.run('good-b', 'order-b', 'fill-b', 500, 'aster_builder_fill', null, proof(builder, '0.0001', {
     fill_id: 'fill-proof-b', builder_order_id: 'order-proof-b',
   }));
   insert.run('wrong-builder', 'order-c', 'fill-c', 2000, 'aster_builder_fill', null, proof('0x9999999999999999999999999999999999999999'));
-  insert.run('wrong-rate', 'order-d', 'fill-d', 4000, 'aster_builder_fill', null, proof(builder, '0.0001'));
+  insert.run('wrong-rate', 'order-d', 'fill-d', 4000, 'aster_builder_fill', null, proof(builder, '0.00001'));
   insert.run('wrong-source', 'order-e', 'fill-e', 8000, 'server', null, proof(builder));
   fdb.close();
 
@@ -60,11 +60,11 @@ async function run() {
   const estimate = await earnings.fetchEarningsDex('aster', { force: true, mainDb });
   assert.equal(estimate.row.model, 'aster_order_proof_volume_estimate');
   assert.equal(estimate.row.address, builder);
-  assert.equal(estimate.row.builder_fee_bps, 0.1);
+  assert.equal(estimate.row.builder_fee_bps, 1);
   assert.equal(estimate.row.trades, 2, 'only exact builder/rate/order proofs count');
   assert.equal(estimate.row.volume_usd, 1500);
   assert.equal(estimate.row.earned_usd, 0, 'estimate is never added to exact total earnings');
-  assert.equal(estimate.row.estimated_fee_usd, 0.015);
+  assert.equal(estimate.row.estimated_fee_usd, 0.15);
   assert.equal(estimate.row.snapshot_value_kind, 'estimate');
   assert.equal(estimate.row.tracking.exactBuilderFeed, false);
 
@@ -72,7 +72,7 @@ async function run() {
   const all = analytics.windows.find(row => row.key === 'all');
   assert.equal(all.dexes.aster.trades, 2);
   assert.equal(all.dexes.aster.volume_usd, 1500);
-  assert.equal(all.dexes.aster.estimated_fee_usd, 0.015);
+  assert.equal(all.dexes.aster.estimated_fee_usd, 0.15);
   assert(earnings._test.earningsDexOrder().includes('aster'));
 
   const indexed = earnings._test.upsertAsterBuilderFills(mainDb, [

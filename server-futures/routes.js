@@ -31,6 +31,7 @@ const katana = require('./katana');
 const gmtrade = require('./gmtrade');
 const flash = require('./flash');
 const lighter = require('./lighter');
+const rhLighter = require('./rh-lighter');
 const bulk = require('./bulk');
 const ostium = require('./ostium');
 const { createPublicClient, decodeFunctionData, formatUnits, http } = require('viem');
@@ -917,7 +918,7 @@ function auth(req, res, next) {
   // Trust the SERVER-stored dex, not whatever the client asks for. The client
   // header/query is still useful as a best-effort sanity check: if it explicitly
   // asks for the wrong dex, reject so the UI can prompt the user to /set-dex.
-  const SUPPORTED_DEXES = new Set(['avantis', 'pacifica', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'ondo', 'leverup', 'aster', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash', 'lighter', 'bulk']);
+  const SUPPORTED_DEXES = new Set(['avantis', 'pacifica', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'ondo', 'leverup', 'aster', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash', 'lighter', 'rhlighter', 'bulk']);
   const storedDex = SUPPORTED_DEXES.has(player.dex) ? player.dex : 'pacifica';
   const askedDex = (req.query.dex || req.headers['x-dex'] || storedDex).toLowerCase();
   const normalizedAsked = SUPPORTED_DEXES.has(askedDex) ? askedDex : 'pacifica';
@@ -1318,13 +1319,29 @@ function ensureDecibel(req, res) {
   return true;
 }
 
-async function requireDecibelOwnerAndSubaccount(req, res) {
+function requireDecibelOwner(req, res) {
   if (!ensureDecibel(req, res)) return null;
-  const owner = normalizeAptosAddress(req.body?.owner || req.query?.owner || req.playerWallet);
-  if (!owner) {
+  const linkedOwner = normalizeAptosAddress(req.dexWallet || req.playerWallet);
+  const requestedOwner = normalizeAptosAddress(
+    req.body?.owner || req.query?.owner || linkedOwner,
+  );
+  if (!requestedOwner) {
     res.status(400).json({ error: 'owner required' });
     return null;
   }
+  if (linkedOwner && requestedOwner !== linkedOwner) {
+    res.status(403).json({
+      error: 'Decibel owner does not match the Aptos wallet linked to this game account.',
+      code: 'DECIBEL_OWNER_MISMATCH',
+    });
+    return null;
+  }
+  return requestedOwner;
+}
+
+async function requireDecibelOwnerAndSubaccount(req, res) {
+  const owner = requireDecibelOwner(req, res);
+  if (!owner) return null;
   const subaccount = normalizeAptosAddress(
     req.body?.subaccountAddr || req.body?.subaccount || req.query?.subaccountAddr || req.query?.subaccount
   );
@@ -1662,6 +1679,38 @@ router.get('/decibel/signer', auth, async (req, res) => {
   } catch (e) {
     console.error('[decibel] signer error:', e);
     res.status(500).json({ error: e.message || 'Decibel server signer unavailable' });
+  }
+});
+
+router.get('/decibel/referral', auth, async (req, res) => {
+  try {
+    const owner = requireDecibelOwner(req, res);
+    if (!owner) return;
+    res.json(await decibel.getDecibelReferralStatus(owner, {
+      force: String(req.query?.force || '') === '1',
+    }));
+  } catch (e) {
+    console.warn('[decibel] referral status error:', e.message);
+    res.status(e.status || 502).json({
+      error: e.message || 'Failed to verify Decibel referral',
+      code: e.code,
+      referral_status: e.referral_status,
+    });
+  }
+});
+
+router.post('/decibel/referral/redeem', auth, async (req, res) => {
+  try {
+    const owner = requireDecibelOwner(req, res);
+    if (!owner) return;
+    res.json(await decibel.redeemDecibelReferral(owner));
+  } catch (e) {
+    console.warn('[decibel] referral redeem error:', e.message);
+    res.status(e.status || 502).json({
+      error: e.message || 'Failed to accept Decibel referral',
+      code: e.code,
+      referral_status: e.referral_status,
+    });
   }
 });
 
@@ -2255,6 +2304,9 @@ router.post('/decibel/orders/place', auth, async (req, res) => {
     if (!verified) return;
     const builder = requireDecibelBuilderFee(req, res);
     if (!builder) return;
+    if (req.body?.isReduceOnly !== true) {
+      await decibel.requireDecibelReferral(verified.owner);
+    }
     const clientOrderId = decibel.normalizeClientOrderId(req.body?.clientOrderId)
       || decibel.newClientOrderId();
     const orderPayload = {
@@ -2378,7 +2430,11 @@ router.post('/decibel/orders/place', auth, async (req, res) => {
     res.json({ ...result, clientOrderId: orderPayload.clientOrderId, verified: verification.verified === true, verification, fillRecord, ordersAfter });
   } catch (e) {
     console.error('[decibel] place order error:', e);
-    res.status(500).json({ error: e.message || 'Failed to place Decibel order' });
+    res.status(e.status || 500).json({
+      error: e.message || 'Failed to place Decibel order',
+      code: e.code,
+      referral_status: e.referral_status,
+    });
   }
 });
 
@@ -2538,6 +2594,7 @@ router.get('/markets', async (req, res) => {
       : dex === 'gmtrade' ? await gmtrade.getMarketInfo()
       : dex === 'flash' ? await flash.getMarketInfo()
       : dex === 'lighter' ? await lighter.getMarketInfo()
+      : dex === 'rhlighter' ? await rhLighter.getMarketInfo()
       : dex === 'bulk' ? await bulk.getMarkets()
       : await pacifica.getMarketInfo();
     res.json(info);
@@ -2569,6 +2626,7 @@ router.get('/prices', async (req, res) => {
       : dex === 'gmtrade' ? await gmtrade.getPrices()
       : dex === 'flash' ? await flash.getPrices()
       : dex === 'lighter' ? await lighter.getPrices()
+      : dex === 'rhlighter' ? await rhLighter.getPrices()
       : dex === 'bulk' ? await bulk.getPrices()
       : await pacifica.getPrices();
     res.json(prices);
@@ -5999,127 +6057,72 @@ router.post('/bulk/import-fills', auth, async (req, res) => {
   }
 });
 
-router.get('/lighter/config', async (_req, res) => {
-  res.json(lighter.config());
-});
-
-router.get('/lighter/account', auth, async (req, res) => {
-  try {
-    const accountIndex = req.query.account_index || req.query.accountIndex;
-    const l1Address = req.query.l1_address || req.query.l1Address || req.query.address;
-    res.json(await lighter.getAccount({ accountIndex, l1Address }));
-  } catch (e) {
-    console.warn('[lighter] account failed:', e.message);
-    res.status(e.status || 502).json({ error: 'Failed to load Lighter account', detail: e.message });
-  }
-});
-
-router.post('/lighter/credentials/check', auth, async (req, res) => {
-  try {
-    res.json(await lighter.checkCredentials(req.body || {}));
-  } catch (e) {
-    console.warn('[lighter] credential check failed:', e.message);
-    res.status(e.status || 400).json({ error: 'Failed to verify Lighter API key', detail: e.message });
-  }
-});
-
-router.post('/lighter/auth-token', auth, async (req, res) => {
-  try {
-    res.json(await lighter.createAuthToken(req.body || {}));
-  } catch (e) {
-    console.warn('[lighter] auth-token failed:', e.message);
-    res.status(e.status || 400).json({ error: 'Failed to create Lighter auth token', detail: e.message });
-  }
-});
-
-router.post('/lighter/referral/status', auth, async (req, res) => {
-  try {
-    res.json(await lighter.getReferralStatus(req.body || {}));
-  } catch (e) {
-    console.warn('[lighter] referral status failed:', e.message);
-    res.status(e.status || 400).json({ error: 'Failed to load Lighter referral status', detail: e.message });
-  }
-});
-
-router.post('/lighter/referral/use', auth, async (req, res) => {
-  try {
-    res.json(await lighter.useReferralCode(req.body || {}));
-  } catch (e) {
-    console.warn('[lighter] referral use failed:', e.message);
-    res.status(e.status || 400).json({
-      error: 'Failed to accept Clash Lighter referral',
-      detail: e.message,
-      code: e.data?.code || undefined,
+function registerLighterDeploymentRoutes(prefix, adapter, label) {
+  const tag = String(prefix).replace(/^\//u, '');
+  const deploymentDex = String(adapter.config()?.dexId || '').trim().toLowerCase();
+  const requireDeploymentDex = (req, res) => {
+    if (req.dex === deploymentDex) return true;
+    res.status(409).json({
+      error: `Account is registered for '${req.dex}'. Switch DEX to ${deploymentDex} before calling ${label} endpoints.`,
+      stored_dex: req.dex,
+      requested_dex: deploymentDex,
     });
-  }
-});
+    return false;
+  };
+  router.get(`${prefix}/config`, async (_req, res) => {
+    const integratorStatus = await adapter.getIntegratorStatus();
+    res.json({
+      ...adapter.config(),
+      integratorReady: integratorStatus.ready === true,
+      integratorStatus,
+    });
+  });
 
-router.post('/lighter/approve-integrator/prepare', auth, async (req, res) => {
-  try {
-    res.json(await lighter.prepareIntegratorApproval(req.body || {}));
-  } catch (e) {
-    console.warn('[lighter] approve-integrator prepare failed:', e.message);
-    res.status(e.status || 400).json({ error: 'Failed to prepare Lighter integrator approval', detail: e.message });
-  }
-});
-
-router.post('/lighter/approve-integrator/submit', auth, async (req, res) => {
-  try {
-    res.json(await lighter.submitIntegratorApproval(req.body || {}));
-  } catch (e) {
-    console.warn('[lighter] approve-integrator submit failed:', e.message);
-    res.status(e.status || 400).json({ error: 'Failed to submit Lighter integrator approval', detail: e.message });
-  }
-});
-
-router.post('/lighter/orders', auth, async (req, res) => {
-  try {
-    res.json(await lighter.getActiveOrders(req.body || {}));
-  } catch (e) {
-    console.warn('[lighter] active orders failed:', e.message);
-    res.status(e.status || 502).json({ error: 'Failed to load Lighter active orders', detail: e.message });
-  }
-});
-
-router.post('/lighter/order', auth, async (req, res) => {
-  try {
-    res.json(await lighter.createOrder(req.body || {}));
-  } catch (e) {
-    console.warn('[lighter] order failed:', e.message);
-    res.status(e.status || 400).json({ error: 'Failed to submit Lighter order', detail: e.message });
-  }
-});
-
-router.post('/lighter/order/cancel', auth, async (req, res) => {
-  try {
-    res.json(await lighter.cancelOrder(req.body || {}));
-  } catch (e) {
-    console.warn('[lighter] cancel failed:', e.message);
-    res.status(e.status || 400).json({ error: 'Failed to cancel Lighter order', detail: e.message });
-  }
-});
-
-router.post('/lighter/set-leverage', auth, async (req, res) => {
-  try {
-    res.json(await lighter.setLeverage(req.body || {}));
-  } catch (e) {
-    console.warn('[lighter] set-leverage failed:', e.message);
-    res.status(e.status || 400).json({ error: 'Failed to update Lighter leverage', detail: e.message });
-  }
-});
-
-router.post('/lighter/import-fills', auth, async (req, res) => {
-  try {
-    const result = await lighter.importFillsForPlayer(req.playerId, req.body || {});
-    if (result.inserted > 0) {
-      console.log(`[lighter] imported ${result.inserted} integrator fill(s) for player=${req.playerName} account=${result.account_index}`);
+  router.get(`${prefix}/account`, auth, async (req, res) => {
+    if (!requireDeploymentDex(req, res)) return;
+    try {
+      const accountIndex = req.query.account_index || req.query.accountIndex;
+      const l1Address = req.query.l1_address || req.query.l1Address || req.query.address;
+      res.json(await adapter.getAccount({ accountIndex, l1Address }));
+    } catch (e) {
+      console.warn(`[${tag}] account failed:`, e.message);
+      res.status(e.status || 502).json({ error: `Failed to load ${label} account`, detail: e.message });
     }
-    res.json(result);
-  } catch (e) {
-    console.warn('[lighter] import-fills failed:', e.message);
-    res.status(e.status || 502).json({ error: 'Failed to import Lighter fills', detail: e.message });
-  }
-});
+  });
+
+  const post = (suffix, action, failure, fallbackStatus = 400) => {
+    router.post(`${prefix}${suffix}`, auth, async (req, res) => {
+      if (!requireDeploymentDex(req, res)) return;
+      try {
+        res.json(await action(req));
+      } catch (e) {
+        console.warn(`[${tag}] ${suffix} failed:`, e.message);
+        res.status(e.status || fallbackStatus).json({ error: failure, detail: e.message, code: e.code || e.data?.code || undefined });
+      }
+    });
+  };
+
+  post('/credentials/check', req => adapter.checkCredentials(req.body || {}), `Failed to verify ${label} API key`);
+  post('/auth-token', req => adapter.createAuthToken(req.body || {}), `Failed to create ${label} auth token`);
+  post('/referral/status', req => adapter.getReferralStatus(req.body || {}), `Failed to load ${label} referral status`);
+  post('/referral/use', req => adapter.useReferralCode(req.body || {}), `Failed to accept Clash ${label} referral`);
+  post('/approve-integrator/prepare', req => adapter.prepareIntegratorApproval(req.body || {}), `Failed to prepare ${label} integrator approval`);
+  post('/approve-integrator/submit', req => adapter.submitIntegratorApproval(req.body || {}), `Failed to submit ${label} integrator approval`);
+  post('/orders', req => adapter.getActiveOrders(req.body || {}), `Failed to load ${label} active orders`, 502);
+  post('/order', req => adapter.createOrder(req.body || {}), `Failed to submit ${label} order`);
+  post('/order/cancel', req => adapter.cancelOrder(req.body || {}), `Failed to cancel ${label} order`);
+  post('/set-leverage', req => adapter.setLeverage(req.body || {}), `Failed to update ${label} leverage`);
+  post('/import-fills', async (req) => {
+    const result = await adapter.importFillsForPlayer(req.playerId, req.body || {});
+    if (result.inserted > 0) {
+      console.log(`[${tag}] imported ${result.inserted} integrator fill(s) for player=${req.playerName} account=${result.account_index}`);
+    }
+    return result;
+  }, `Failed to import ${label} fills`, 502);
+}
+
+registerLighterDeploymentRoutes('/lighter', lighter, 'Lighter');
+registerLighterDeploymentRoutes('/rh-lighter', rhLighter, 'Robinhood Lighter');
 
 function requireFlashDex(req, res) {
   if (req.dex === 'flash') return true;

@@ -11,17 +11,34 @@ import {
 import {
   fetchLighterMarketsDirect,
   fetchLighterPricesDirect,
+  LIGHTER_BROWSER_API,
+  RH_LIGHTER_BROWSER_API,
 } from '../lib/lighterClient';
 
 const FUTURES_API = '/api/futures';
-const STORAGE_KEY = 'clash_lighter_credentials_v1';
 const POLL_INTERVAL_MS = 45_000;
 const AUTH_TOKEN_DEADLINE_SECONDS = 600;
 const AUTH_TOKEN_REFRESH_SKEW_MS = 90_000;
-const LIGHTER_REFERRAL_CODE = String(
-  import.meta.env.VITE_LIGHTER_REFERRAL_CODE || 'CLASHOFPERPS',
-).trim().toUpperCase();
-const LIGHTER_REFERRAL_URL = `https://app.lighter.xyz/?referral=${encodeURIComponent(LIGHTER_REFERRAL_CODE)}`;
+const LIGHTER_PROFILE = Object.freeze({
+  dexId: 'lighter',
+  label: 'Lighter',
+  routePrefix: 'lighter',
+  storageKey: 'clash_lighter_credentials_v1',
+  browserApi: LIGHTER_BROWSER_API,
+  referralRequired: true,
+  referralCode: String(import.meta.env.VITE_LIGHTER_REFERRAL_CODE || 'CLASHOFPERPS').trim().toUpperCase(),
+  referralUrl: `https://app.lighter.xyz/?referral=${encodeURIComponent(String(import.meta.env.VITE_LIGHTER_REFERRAL_CODE || 'CLASHOFPERPS').trim().toUpperCase())}`,
+});
+const RH_LIGHTER_PROFILE = Object.freeze({
+  dexId: 'rhlighter',
+  label: 'Robinhood Lighter',
+  routePrefix: 'rh-lighter',
+  storageKey: 'clash_rh_lighter_credentials_v1',
+  browserApi: RH_LIGHTER_BROWSER_API,
+  referralRequired: true,
+  referralCode: String(import.meta.env.VITE_RH_LIGHTER_REFERRAL_CODE || 'CLASSHOFPERPS').trim().toUpperCase(),
+  referralUrl: String(import.meta.env.VITE_RH_LIGHTER_REFERRAL_URL || '').trim(),
+});
 
 function rows(payload) {
   if (Array.isArray(payload)) return payload;
@@ -45,23 +62,23 @@ function normalizeCredentials(value) {
   };
 }
 
-async function loadCredentials() {
-  const migrated = await migratePlainLocalStorageCredential(STORAGE_KEY, STORAGE_KEY, normalizeCredentials);
-  const stored = migrated || await readEncryptedCredential(STORAGE_KEY);
+async function loadCredentials(storageKey) {
+  const migrated = await migratePlainLocalStorageCredential(storageKey, storageKey, normalizeCredentials);
+  const stored = migrated || await readEncryptedCredential(storageKey);
   return normalizeCredentials(stored);
 }
 
-async function saveCredentials(creds) {
+async function saveCredentials(storageKey, creds) {
   const normalized = normalizeCredentials(creds);
   if (!normalized) throw new Error('Enter a valid Lighter account index');
-  await writeEncryptedCredential(STORAGE_KEY, normalized);
-  try { window.localStorage.removeItem(STORAGE_KEY); } catch {}
+  await writeEncryptedCredential(storageKey, normalized);
+  try { window.localStorage.removeItem(storageKey); } catch {}
   return normalized;
 }
 
-async function clearCredentials() {
-  await removeEncryptedCredential(STORAGE_KEY);
-  try { window.localStorage.removeItem(STORAGE_KEY); } catch {}
+async function clearCredentials(storageKey) {
+  await removeEncryptedCredential(storageKey);
+  try { window.localStorage.removeItem(storageKey); } catch {}
 }
 
 async function fetchJson(url, options = {}) {
@@ -123,7 +140,7 @@ function activePositions(list) {
   });
 }
 
-function normalizeReferralStatus(value) {
+function normalizeReferralStatus(value, profile) {
   if (!value || value?.checked !== true) return null;
   const usedCode = String(value?.used_code || '').trim();
   return {
@@ -131,16 +148,18 @@ function normalizeReferralStatus(value) {
     checked: true,
     has_referral: value?.has_referral === true || usedCode.length > 0,
     is_our_referral: value?.is_our_referral === true
-      || usedCode.toUpperCase() === LIGHTER_REFERRAL_CODE,
+      || (!!profile.referralCode && usedCode.toUpperCase() === profile.referralCode),
     used_code: usedCode,
-    referral_code: LIGHTER_REFERRAL_CODE,
-    referral_url: LIGHTER_REFERRAL_URL,
+    referral_code: profile.referralCode,
+    referral_url: profile.referralUrl,
   };
 }
 
-export function useLighter() {
+function useLighterProfile(profile) {
+  const { dexId, label, routePrefix, storageKey, browserApi, referralRequired } = profile;
+  const credentialHeaderPrefix = dexId === 'rhlighter' ? 'x-rh-lighter' : 'x-lighter';
   const { dex } = useDex();
-  const isActiveDex = dex === 'lighter';
+  const isActiveDex = dex === dexId;
   const player = usePlayer();
   const evmWallet = useEvmWallet();
   const token = player?.token || (typeof window !== 'undefined' ? window._playerToken : '') || '';
@@ -154,21 +173,22 @@ export function useLighter() {
   const [error, setError] = useState('');
   const [goldEarned, setGoldEarned] = useState(null);
   const [referralStatus, setReferralStatus] = useState(null);
+  const [venueConfig, setVenueConfig] = useState(null);
   const claimGoldRef = useRef(null);
 
   useEffect(() => {
     if (!isActiveDex) return;
     let cancelled = false;
-    loadCredentials()
+    loadCredentials(storageKey)
       .then((loaded) => { if (!cancelled) setCredentials(loaded); })
       .catch((e) => { if (!cancelled) setError(e?.message || String(e)); });
     return () => { cancelled = true; };
-  }, [isActiveDex]);
+  }, [isActiveDex, storageKey]);
 
   const headers = useMemo(() => ({
     ...(token ? { 'x-token': token } : {}),
-    'x-dex': 'lighter',
-  }), [token]);
+    'x-dex': dexId,
+  }), [dexId, token]);
 
   const refreshReadOnlyToken = useCallback(async (sourceCredentials) => {
     const creds = normalizeCredentials(sourceCredentials);
@@ -176,28 +196,28 @@ export function useLighter() {
     if (creds?.accountIndex == null || creds.apiKeyIndex == null || !creds.apiPrivateKey) {
       throw new Error('Lighter API credentials are required to refresh account reads.');
     }
-    const tokenResult = await fetchJson(`${FUTURES_API}/lighter/auth-token`, {
+    const tokenResult = await fetchJson(`${FUTURES_API}/${routePrefix}/auth-token`, {
       method: 'POST',
       headers: { ...headers, 'content-type': 'application/json' },
       body: JSON.stringify(credentialPayload(creds, { deadline: AUTH_TOKEN_DEADLINE_SECONDS })),
     });
     const authToken = tokenResult.auth_token;
-    if (!authToken) throw new Error('Lighter auth token was not returned');
-    const saved = await saveCredentials({
+    if (!authToken) throw new Error(`${label} auth token was not returned`);
+    const saved = await saveCredentials(storageKey, {
       ...creds,
       readOnlyToken: authToken,
       readOnlyTokenExpiresAt: Date.now() + (AUTH_TOKEN_DEADLINE_SECONDS * 1000),
     });
     setCredentials(saved);
     return saved;
-  }, [headers]);
+  }, [headers, label, routePrefix, storageKey]);
 
   const refreshReferralStatus = useCallback(async (sourceCredentials) => {
     const creds = normalizeCredentials(sourceCredentials);
     if (creds?.accountIndex == null || !creds.readOnlyToken) {
       throw new Error('Lighter auth token is required to check referral status.');
     }
-    const result = await fetchJson(`${FUTURES_API}/lighter/referral/status`, {
+    const result = await fetchJson(`${FUTURES_API}/${routePrefix}/referral/status`, {
       method: 'POST',
       headers: { ...headers, 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -206,39 +226,48 @@ export function useLighter() {
         wallet: evmWallet?.address || '',
       }),
     });
-    const normalized = normalizeReferralStatus(result);
-    if (!normalized) throw new Error('Lighter did not return a confirmed referral status.');
+    const normalized = normalizeReferralStatus(result, profile);
+    if (!normalized) throw new Error(`${label} did not return a confirmed referral status.`);
     setReferralStatus(normalized);
     return normalized;
-  }, [evmWallet?.address, headers]);
+  }, [evmWallet?.address, headers, label, profile, routePrefix]);
 
   const refresh = useCallback(async () => {
     if (!isActiveDex) return;
     setLoading(true);
     setError('');
     try {
-      const [marketData, priceData, accountData] = await Promise.all([
+      const [marketData, priceData, accountData, configData] = await Promise.all([
         fetchWithBrowserFallback(
           'markets',
-          fetchLighterMarketsDirect,
-          () => fetchJson(`${FUTURES_API}/markets?dex=lighter`),
+          () => fetchLighterMarketsDirect(browserApi),
+          () => fetchJson(`${FUTURES_API}/markets?dex=${encodeURIComponent(dexId)}`),
         ),
         fetchWithBrowserFallback(
           'prices',
-          fetchLighterPricesDirect,
-          () => fetchJson(`${FUTURES_API}/prices?dex=lighter`),
+          () => fetchLighterPricesDirect(browserApi),
+          () => fetchJson(`${FUTURES_API}/prices?dex=${encodeURIComponent(dexId)}`),
         ),
         credentials?.accountIndex != null && token
-          ? fetchJson(`${FUTURES_API}/lighter/account?account_index=${encodeURIComponent(credentials.accountIndex)}`, { headers })
+          ? fetchJson(`${FUTURES_API}/${routePrefix}/account?account_index=${encodeURIComponent(credentials.accountIndex)}`, { headers })
           : Promise.resolve(null),
+        fetchJson(`${FUTURES_API}/${routePrefix}/config`),
       ]);
       setMarkets(rows(marketData));
       setPrices(Array.isArray(priceData) ? priceData : Object.values(priceData || {}));
       setAccount(accountData || null);
+      setVenueConfig(configData || null);
+      if (credentials && accountData?.integrator_approved !== credentials.integratorApproved) {
+        const reconciled = await saveCredentials(storageKey, {
+          ...credentials,
+          integratorApproved: accountData?.integrator_approved === true,
+        });
+        setCredentials(reconciled);
+      }
       if (credentials?.accountIndex != null && token) {
         const readCredentials = await refreshReadOnlyToken(credentials);
         try {
-          const activeOrders = await fetchJson(`${FUTURES_API}/lighter/orders`, {
+          const activeOrders = await fetchJson(`${FUTURES_API}/${routePrefix}/orders`, {
             method: 'POST',
             headers: { ...headers, 'content-type': 'application/json' },
             body: JSON.stringify({
@@ -248,14 +277,14 @@ export function useLighter() {
           });
           setOrders(rows(activeOrders));
         } catch (ordersError) {
-          console.warn('[Lighter] active orders read failed:', ordersError?.message || ordersError);
+          console.warn(`[${label}] active orders read failed:`, ordersError?.message || ordersError);
         }
         try {
           await refreshReferralStatus(readCredentials);
         } catch (referralError) {
           setReferralStatus(null);
-          setError(referralError?.message || 'Failed to verify Lighter referral status.');
-          console.warn('[Lighter] referral status read failed:', referralError?.message || referralError);
+          setError(referralError?.message || `Failed to verify ${label} referral status.`);
+          console.warn(`[${label}] referral status read failed:`, referralError?.message || referralError);
         }
       } else {
         setOrders([]);
@@ -266,7 +295,7 @@ export function useLighter() {
     } finally {
       setLoading(false);
     }
-  }, [credentials, headers, isActiveDex, refreshReadOnlyToken, refreshReferralStatus, token]);
+  }, [browserApi, credentials, dexId, headers, isActiveDex, label, refreshReadOnlyToken, refreshReferralStatus, routePrefix, storageKey, token]);
 
   useEffect(() => {
     if (!isActiveDex) return undefined;
@@ -279,31 +308,31 @@ export function useLighter() {
     [350, 1600, 4200, 9000].forEach((delay) => {
       window.setTimeout(() => {
         refresh().catch((e) => {
-          console.warn('[Lighter] post-order refresh failed:', e?.message || e);
+          console.warn(`[${label}] post-order refresh failed:`, e?.message || e);
         });
       }, delay);
     });
-  }, [refresh]);
+  }, [label, refresh]);
 
   const updateCredentials = useCallback(async (next) => {
     if (!token) throw new Error('Login required');
     const candidate = normalizeCredentials(next);
     if (candidate?.accountIndex == null || candidate.apiKeyIndex == null || !candidate.apiPrivateKey) {
-      throw new Error('Enter Lighter account index, API key index, and API private key');
+      throw new Error(`Enter ${label} account index, API key index, and API private key`);
     }
-    const verified = await fetchJson(`${FUTURES_API}/lighter/credentials/check`, {
+    const verified = await fetchJson(`${FUTURES_API}/${routePrefix}/credentials/check`, {
       method: 'POST',
       headers: { ...headers, 'content-type': 'application/json' },
       body: JSON.stringify(credentialPayload(candidate)),
     });
-    const tokenResult = await fetchJson(`${FUTURES_API}/lighter/auth-token`, {
+    const tokenResult = await fetchJson(`${FUTURES_API}/${routePrefix}/auth-token`, {
       method: 'POST',
       headers: { ...headers, 'content-type': 'application/json' },
       body: JSON.stringify(credentialPayload(candidate, { deadline: AUTH_TOKEN_DEADLINE_SECONDS })),
     });
     const authToken = tokenResult.auth_token;
-    if (!authToken) throw new Error('Lighter auth token was not returned');
-    const saved = await saveCredentials({
+    if (!authToken) throw new Error(`${label} auth token was not returned`);
+    const saved = await saveCredentials(storageKey, {
       ...candidate,
       readOnlyToken: authToken,
       readOnlyTokenExpiresAt: Date.now() + (AUTH_TOKEN_DEADLINE_SECONDS * 1000),
@@ -324,15 +353,15 @@ export function useLighter() {
       referralStatus: checkedReferral,
       referralStatusError: referralError,
     };
-  }, [headers, refreshReferralStatus, token]);
+  }, [headers, label, refreshReferralStatus, routePrefix, storageKey, token]);
 
   const detectAccount = useCallback(async (address = '') => {
     const l1Address = String(address || evmWallet?.address || '').trim();
     if (!token) throw new Error('Login required');
     if (!/^0x[a-fA-F0-9]{40}$/.test(l1Address)) {
-      throw new Error('Connect your Lighter EVM wallet first');
+      throw new Error(`Connect your ${label} EVM wallet first`);
     }
-    const data = await fetchJson(`${FUTURES_API}/lighter/account?address=${encodeURIComponent(l1Address)}`, { headers });
+    const data = await fetchJson(`${FUTURES_API}/${routePrefix}/account?address=${encodeURIComponent(l1Address)}`, { headers });
     if (data?.exists === false || data?.account_index == null) {
       return { found: false, accountIndex: null, account: data };
     }
@@ -341,14 +370,14 @@ export function useLighter() {
       accountIndex: Number(data.account_index),
       account: data,
     };
-  }, [evmWallet?.address, headers, token]);
+  }, [evmWallet?.address, headers, label, routePrefix, token]);
 
   const disconnect = useCallback(async () => {
-    await clearCredentials();
+    await clearCredentials(storageKey);
     setCredentials(null);
     setAccount(null);
     setReferralStatus(null);
-  }, []);
+  }, [storageKey]);
 
   const ensureCredentials = useCallback(() => {
     if (credentials?.accountIndex == null || credentials.apiKeyIndex == null || !credentials.apiPrivateKey) {
@@ -361,14 +390,14 @@ export function useLighter() {
     if (!token) throw new Error('Login required');
     const creds = overrideCredentials ? normalizeCredentials(overrideCredentials) : ensureCredentials();
     if (creds?.accountIndex == null || creds.apiKeyIndex == null || !creds.apiPrivateKey) {
-      throw new Error('Lighter API credentials are required before approving integrator fees.');
+      throw new Error(`${label} API credentials are required before approving integrator fees.`);
     }
     const walletClient = typeof evmWallet?.getWalletClient === 'function'
       ? evmWallet.getWalletClient(1)
       : evmWallet?.walletClient;
     const walletAddr = evmWallet?.address;
-    if (!walletClient || !walletAddr) throw new Error('Connect your EVM wallet to approve Lighter integrator fees');
-    const prepared = await fetchJson(`${FUTURES_API}/lighter/approve-integrator/prepare`, {
+    if (!walletClient || !walletAddr) throw new Error(`Connect your EVM wallet to approve ${label} integrator fees`);
+    const prepared = await fetchJson(`${FUTURES_API}/${routePrefix}/approve-integrator/prepare`, {
       method: 'POST',
       headers: { ...headers, 'content-type': 'application/json' },
       body: JSON.stringify(credentialPayload(creds)),
@@ -378,7 +407,7 @@ export function useLighter() {
     if (message) {
       l1Signature = await walletClient.signMessage({ account: walletAddr, message });
     }
-    const submitted = await fetchJson(`${FUTURES_API}/lighter/approve-integrator/submit`, {
+    const submitted = await fetchJson(`${FUTURES_API}/${routePrefix}/approve-integrator/submit`, {
       method: 'POST',
       headers: { ...headers, 'content-type': 'application/json' },
       body: JSON.stringify(credentialPayload(creds, {
@@ -389,10 +418,11 @@ export function useLighter() {
         l1Signature,
       })),
     });
-    const saved = await saveCredentials({ ...creds, integratorApproved: true });
+    const saved = await saveCredentials(storageKey, { ...creds, integratorApproved: true });
     setCredentials(saved);
+    window.setTimeout(() => refresh().catch(() => {}), 900);
     return submitted;
-  }, [ensureCredentials, evmWallet, headers, token]);
+  }, [ensureCredentials, evmWallet, headers, label, refresh, routePrefix, storageKey, token]);
 
   const acceptClashReferral = useCallback(async () => {
     if (!token) throw new Error('Login required');
@@ -401,7 +431,7 @@ export function useLighter() {
     setError('');
     try {
       const readCredentials = await refreshReadOnlyToken(creds);
-      const result = await fetchJson(`${FUTURES_API}/lighter/referral/use`, {
+      const result = await fetchJson(`${FUTURES_API}/${routePrefix}/referral/use`, {
         method: 'POST',
         headers: { ...headers, 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -410,10 +440,10 @@ export function useLighter() {
           wallet: evmWallet?.address || '',
         }),
       });
-      const checked = normalizeReferralStatus(result?.referral_status);
+      const checked = normalizeReferralStatus(result?.referral_status, profile);
       if (!checked?.has_referral) {
         setReferralStatus(checked);
-        throw new Error('Lighter accepted the request but has not confirmed the referral yet. Retry the check in a moment.');
+        throw new Error(`${label} accepted the request but has not confirmed the referral yet. Retry the check in a moment.`);
       }
       setReferralStatus(checked);
       return result;
@@ -423,11 +453,11 @@ export function useLighter() {
     } finally {
       setLoading(false);
     }
-  }, [ensureCredentials, evmWallet?.address, headers, refreshReadOnlyToken, token]);
+  }, [ensureCredentials, evmWallet?.address, headers, label, profile, refreshReadOnlyToken, routePrefix, token]);
 
   const openReferralJoin = useCallback(() => {
-    window.open(LIGHTER_REFERRAL_URL, '_blank', 'noopener,noreferrer');
-  }, []);
+    if (profile.referralUrl) window.open(profile.referralUrl, '_blank', 'noopener,noreferrer');
+  }, [profile.referralUrl]);
 
   const submitOrder = useCallback(async (payload) => {
     if (!token) throw new Error('Login required');
@@ -447,12 +477,12 @@ export function useLighter() {
       accountIndex: creds?.accountIndex,
       apiKeyIndex: creds?.apiKeyIndex,
     };
-    console.info('[Lighter UI] submit order start', safePayload);
+    console.info(`[${label} UI] submit order start`, safePayload);
     let result;
     setLoading(true);
     setError('');
     try {
-      result = await fetchJson(`${FUTURES_API}/lighter/order`, {
+      result = await fetchJson(`${FUTURES_API}/${routePrefix}/order`, {
         method: 'POST',
         headers: { ...headers, 'content-type': 'application/json' },
         body: JSON.stringify(credentialPayload(readCredentials, {
@@ -462,7 +492,7 @@ export function useLighter() {
         })),
       });
     } catch (e) {
-      console.error('[Lighter UI] submit order failed', {
+      console.error(`[${label} UI] submit order failed`, {
         ...safePayload,
         status: e?.status || null,
         message: e?.message || String(e),
@@ -473,7 +503,7 @@ export function useLighter() {
     } finally {
       setLoading(false);
     }
-    console.info('[Lighter UI] submit order result', {
+    console.info(`[${label} UI] submit order result`, {
       ...safePayload,
       status: result?.status || null,
       tx_type: result?.tx_type || null,
@@ -483,13 +513,13 @@ export function useLighter() {
     scheduleRefreshBurst();
     const syncRewards = () => {
       claimGoldRef.current?.({ reason: 'trade' }).catch((e) => {
-        console.warn('[Lighter] post-trade claim failed:', e?.message || e);
+        console.warn(`[${label}] post-trade claim failed:`, e?.message || e);
       });
     };
     window.setTimeout(syncRewards, 2500);
     window.setTimeout(syncRewards, 8000);
     return result;
-  }, [ensureCredentials, evmWallet?.address, headers, refreshReadOnlyToken, scheduleRefreshBurst, token]);
+  }, [ensureCredentials, evmWallet?.address, headers, label, refreshReadOnlyToken, routePrefix, scheduleRefreshBurst, token]);
 
   const placeMarketOrder = useCallback((symbol, side, qty, slippage = '0.5', leverage = 20, options = {}) => (
     submitOrder({
@@ -526,7 +556,7 @@ export function useLighter() {
     const side = normalizeSide(closeSide);
     const qty = Number(amount);
     if (!Number.isFinite(qty) || qty <= 0) {
-      throw new Error('Lighter position amount is required for TP/SL.');
+      throw new Error(`${label} position amount is required for TP/SL.`);
     }
     const submitTrigger = async (kind, triggerPrice) => {
       const price = Number(triggerPrice);
@@ -547,7 +577,7 @@ export function useLighter() {
     if (tp) results.push({ kind: 'take_profit', result: tp });
     const sl = await submitTrigger('stop_loss', stopLoss);
     if (sl) results.push({ kind: 'stop_loss', result: sl });
-    if (!results.length) throw new Error('Enter a valid Lighter TP or SL price.');
+    if (!results.length) throw new Error(`Enter a valid ${label} TP or SL price.`);
     setAccount((prev) => {
       if (!prev || !Array.isArray(prev.positions)) return prev;
       const tpValue = Number(takeProfit);
@@ -585,9 +615,9 @@ export function useLighter() {
     return {
       ok: true,
       results,
-      info: results.length === 2 ? 'Lighter TP/SL orders submitted.' : `Lighter ${results[0].kind === 'take_profit' ? 'take profit' : 'stop loss'} order submitted.`,
+      info: results.length === 2 ? `${label} TP/SL orders submitted.` : `${label} ${results[0].kind === 'take_profit' ? 'take profit' : 'stop loss'} order submitted.`,
     };
-  }, [scheduleRefreshBurst, submitOrder]);
+  }, [label, scheduleRefreshBurst, submitOrder]);
 
   const cancelOrder = useCallback(async (symbolOrOrder, orderId, pairIndex) => {
     if (!token) throw new Error('Login required');
@@ -596,7 +626,7 @@ export function useLighter() {
     setLoading(true);
     setError('');
     try {
-      const result = await fetchJson(`${FUTURES_API}/lighter/order/cancel`, {
+      const result = await fetchJson(`${FUTURES_API}/${routePrefix}/order/cancel`, {
         method: 'POST',
         headers: { ...headers, 'content-type': 'application/json' },
         body: JSON.stringify(credentialPayload(creds, {
@@ -613,12 +643,12 @@ export function useLighter() {
     } finally {
       setLoading(false);
     }
-  }, [ensureCredentials, headers, scheduleRefreshBurst, token]);
+  }, [ensureCredentials, headers, routePrefix, scheduleRefreshBurst, token]);
 
   const setLeverage = useCallback(async (symbol, lev, options = {}) => {
     if (!token) throw new Error('Login required');
     const creds = ensureCredentials();
-    return fetchJson(`${FUTURES_API}/lighter/set-leverage`, {
+    return fetchJson(`${FUTURES_API}/${routePrefix}/set-leverage`, {
       method: 'POST',
       headers: { ...headers, 'content-type': 'application/json' },
       body: JSON.stringify(credentialPayload(creds, {
@@ -631,7 +661,7 @@ export function useLighter() {
       setLeverageSettings(prev => ({ ...prev, [String(symbol || '').toUpperCase()]: Number(lev) }));
       return result;
     });
-  }, [ensureCredentials, headers, token]);
+  }, [ensureCredentials, headers, routePrefix, token]);
 
   const closePosition = useCallback(async (symbol, side, amount, pairIndex, _tradeIndex, fullClose) => {
     const closeSide = normalizeSide(side) === 'bid' ? 'ask' : 'bid';
@@ -648,10 +678,10 @@ export function useLighter() {
 
   const claimGold = useCallback(async ({ reason = 'manual' } = {}) => {
     if (!token) throw new Error('Login required');
-    if (credentials?.accountIndex == null) throw new Error('Lighter account index required');
+    if (credentials?.accountIndex == null) throw new Error(`${label} account index required`);
     const readCredentials = await refreshReadOnlyToken(credentials);
     try {
-      const importResult = await fetchJson(`${FUTURES_API}/lighter/import-fills`, {
+      const importResult = await fetchJson(`${FUTURES_API}/${routePrefix}/import-fills`, {
         method: 'POST',
         headers: { ...headers, 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -661,7 +691,7 @@ export function useLighter() {
         }),
       });
       if (importResult?.inserted || importResult?.skipped_not_ours || importResult?.trades_checked) {
-        console.info('[Lighter] import-fills before claim', {
+        console.info(`[${label}] import-fills before claim`, {
           reason,
           account_index: importResult.account_index,
           inserted: importResult.inserted || 0,
@@ -671,21 +701,21 @@ export function useLighter() {
         });
       }
     } catch (e) {
-      console.warn('[Lighter] import-fills before claim failed:', e?.message || e);
+      console.warn(`[${label}] import-fills before claim failed:`, e?.message || e);
     }
     const res = await fetch('/api/trading/claim-gold', {
       method: 'POST',
       headers: {
         ...headers,
         'content-type': 'application/json',
-        'x-lighter-account-index': String(readCredentials.accountIndex),
-        'x-lighter-auth-token': readCredentials.readOnlyToken || '',
+        [`${credentialHeaderPrefix}-account-index`]: String(readCredentials.accountIndex),
+        [`${credentialHeaderPrefix}-auth-token`]: readCredentials.readOnlyToken || '',
       },
-      body: JSON.stringify({ dex: 'lighter', wallet: evmWallet?.address || '' }),
+      body: JSON.stringify({ dex: dexId, wallet: evmWallet?.address || '' }),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      const err = new Error(data?.error || data?.reason || `Lighter claim failed (${res.status})`);
+      const err = new Error(data?.error || data?.reason || `${label} claim failed (${res.status})`);
       err.status = res.status;
       err.data = data;
       throw err;
@@ -696,11 +726,11 @@ export function useLighter() {
     }
     try {
       window.dispatchEvent(new CustomEvent('clash:trading-reward-claimed', {
-        detail: { dex: 'lighter', gold: Number(data?.gold || 0), reason },
+        detail: { dex: dexId, gold: Number(data?.gold || 0), reason },
       }));
     } catch {}
     return data;
-  }, [credentials, evmWallet?.address, headers, refreshReadOnlyToken, token]);
+  }, [credentialHeaderPrefix, credentials, dexId, evmWallet?.address, headers, label, refreshReadOnlyToken, routePrefix, token]);
 
   claimGoldRef.current = claimGold;
 
@@ -709,7 +739,7 @@ export function useLighter() {
     const fire = () => {
       if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
       claimGoldRef.current?.({ reason: 'poll' }).catch((e) => {
-        console.warn('[Lighter] poll claim failed:', e?.message || e);
+        console.warn(`[${label}] poll claim failed:`, e?.message || e);
       });
     };
     const kickoff = window.setTimeout(fire, 5000);
@@ -718,10 +748,10 @@ export function useLighter() {
       window.clearTimeout(kickoff);
       window.clearInterval(timer);
     };
-  }, [credentials?.accountIndex, isActiveDex, token]);
+  }, [credentials?.accountIndex, isActiveDex, label, token]);
 
   return {
-    walletAddr: evmWallet?.address || (credentials?.accountIndex != null ? `lighter:${credentials.accountIndex}` : ''),
+    walletAddr: evmWallet?.address || (credentials?.accountIndex != null ? `${dexId}:${credentials.accountIndex}` : ''),
     account,
     positions: activePositions(account?.positions || []),
     orders,
@@ -735,12 +765,18 @@ export function useLighter() {
     accountReady: credentials?.accountIndex != null,
     connected: credentials?.accountIndex != null,
     setupVerified: credentials?.accountIndex != null
-      ? credentials.integratorApproved === true && referralStatus?.has_referral === true
+      ? venueConfig?.integratorReady === true
+        && account?.integrator_approved === true
+        && (!referralRequired || referralStatus?.has_referral === true)
       : false,
-    lighterNeedsIntegratorApproval: credentials?.accountIndex != null && credentials.integratorApproved !== true,
-    lighterNeedsReferral: credentials?.accountIndex != null && referralStatus?.has_referral === false,
-    lighterReferralChecking: credentials?.accountIndex != null && referralStatus == null,
+    lighterNeedsIntegratorApproval: credentials?.accountIndex != null && account?.integrator_approved !== true,
+    lighterNeedsReferral: referralRequired && credentials?.accountIndex != null && referralStatus?.has_referral === false,
+    lighterReferralChecking: referralRequired && credentials?.accountIndex != null && referralStatus == null,
     lighterReferralStatus: referralStatus,
+    lighterVenueLabel: label,
+    lighterReferralRequired: referralRequired,
+    lighterIntegratorConfigured: venueConfig?.integratorReady === true,
+    lighterConfig: venueConfig,
     lighterCredentials: credentials ? {
       accountIndex: credentials.accountIndex,
       apiKeyIndex: credentials.apiKeyIndex,
@@ -771,16 +807,24 @@ export function useLighter() {
     switchToRise: null,
     switchToInk: null,
     hasReferrer: credentials?.accountIndex == null ? null : referralStatus?.has_referral ?? null,
-    linkOurReferrer: acceptClashReferral,
+    linkOurReferrer: referralRequired ? acceptClashReferral : null,
     oneTapTrading: null,
     setOneTapTradingEnabled: null,
     connectPerpl: null,
-    openReferralJoin,
-    referralCode: LIGHTER_REFERRAL_CODE,
-    referralUrl: LIGHTER_REFERRAL_URL,
+    openReferralJoin: referralRequired ? openReferralJoin : null,
+    referralCode: profile.referralCode,
+    referralUrl: profile.referralUrl,
     walletMismatch: false,
     registeredEvmWallet: '',
     claimGold,
     approveIntegrator,
   };
+}
+
+export function useLighter() {
+  return useLighterProfile(LIGHTER_PROFILE);
+}
+
+export function useRhLighter() {
+  return useLighterProfile(RH_LIGHTER_PROFILE);
 }

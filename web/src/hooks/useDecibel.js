@@ -21,7 +21,7 @@ import {
   getReadClient,
   amountToChainUnits, getPrimarySubaccountAddr,
   DECIBEL_PACKAGE_MAINNET, DECIBEL_USDC_MAINNET,
-  REFERRAL_CODE,
+  REFERRAL_CODE, REFERRAL_URL,
 } from '../lib/decibel';
 import { writeDecibelSubaccountCache, readDecibelSubaccountCache } from '../lib/decibelSubaccountCache';
 import {
@@ -895,6 +895,10 @@ export function useDecibel() {
   // null = unknown / loading. true = builder fee already approved (or no
   // builder configured globally). false = approval needed.
   const [builderApproved, setBuilderApproved] = useState(null);
+  // Decibel referral attribution is an authenticated API record on the
+  // master Aptos wallet (not an on-chain builder approval). Existing
+  // third-party referrers are valid and must never be overwritten.
+  const [referralStatus, setReferralStatus] = useState(null);
   // null = server signer not available yet. string = server-side API wallet
   // address that has delegated trading rights on the user's subaccount.
   const [apiWalletAddr, setApiWalletAddr] = useState(null);
@@ -984,7 +988,9 @@ export function useDecibel() {
       });
       const err = new Error(data?.error || `Decibel server request failed (${res.status})`);
       err.status = res.status;
+      err.code = data?.code;
       err.body = data;
+      err.referralStatus = data?.referral_status || null;
       throw err;
     }
     D.log('server request ok', {
@@ -1162,6 +1168,7 @@ export function useDecibel() {
     setDataReady(false);
     setAccountReady(false);
     setBuilderApproved(null);
+    setReferralStatus(null);
     setApiWalletAddr(null);
     setApiWalletDelegated(null);
     setSetupVerified(null);
@@ -1186,6 +1193,98 @@ export function useDecibel() {
       else D.log('Petra wallet disconnected');
     }
   }, [address, isActiveDex]);
+
+  const fetchReferralStatus = useCallback(async (options = {}) => {
+    if (!address) {
+      setReferralStatus(null);
+      return null;
+    }
+    const gen = walletGenRef.current;
+    try {
+      const force = options.force === true;
+      const status = await decibelServerRequest(
+        `/referral?owner=${encodeURIComponent(address)}${force ? '&force=1' : ''}`,
+        null,
+        'GET',
+      );
+      if (walletGenRef.current !== gen) return null;
+      const normalized = {
+        ...status,
+        checked: true,
+        unavailable: false,
+        has_referrer: status?.has_referrer === true,
+      };
+      setReferralStatus(normalized);
+      return normalized;
+    } catch (e) {
+      if (walletGenRef.current !== gen) return null;
+      D.warn('referral status unavailable:', e?.message || e);
+      setReferralStatus(previous => previous?.has_referrer === true
+        ? previous
+        : {
+            checked: false,
+            unavailable: true,
+            has_referrer: false,
+            clash_referral_code: REFERRAL_CODE,
+            referral_url: REFERRAL_URL,
+            error: e?.message || 'Decibel referral verification is temporarily unavailable.',
+          });
+      if (options.throwOnError === true) throw e;
+      return null;
+    }
+  }, [address, decibelServerRequest]);
+
+  const ensureDecibelReferral = useCallback(async () => {
+    if (!address) {
+      const error = new Error('Connect Petra before accepting the Decibel referral');
+      error.code = 'NO_LOGIN_WALLET';
+      throw error;
+    }
+    let current = referralStatus;
+    if (current?.has_referrer !== true) {
+      current = await fetchReferralStatus({ force: true, throwOnError: true });
+    }
+    if (current?.has_referrer === true) {
+      return {
+        ok: true,
+        applied: false,
+        already_linked: true,
+        referral_status: current,
+      };
+    }
+    const result = await decibelServerRequest('/referral/redeem', { owner: address });
+    const confirmed = result?.referral_status;
+    if (confirmed?.has_referrer !== true) {
+      const error = new Error('Decibel referral was not confirmed. Please try again.');
+      error.code = 'DECIBEL_REFERRAL_NOT_CONFIRMED';
+      throw error;
+    }
+    setReferralStatus({ ...confirmed, checked: true, unavailable: false });
+    return result;
+  }, [address, decibelServerRequest, fetchReferralStatus, referralStatus]);
+
+  const linkDecibelReferral = useCallback(async () => {
+    try {
+      const result = await ensureDecibelReferral();
+      setError(null);
+      return result;
+    } catch (e) {
+      const message = e?.message || 'Failed to accept Decibel referral';
+      setError(message.slice(0, 300));
+      return { error: message, code: e?.code };
+    }
+  }, [ensureDecibelReferral]);
+
+  const requireReferralForOpening = useCallback(async () => {
+    let current = referralStatus;
+    if (current?.has_referrer !== true) {
+      current = await fetchReferralStatus({ force: true, throwOnError: true });
+    }
+    if (current?.has_referrer === true) return current;
+    const error = new Error(`Accept Decibel referral ${REFERRAL_CODE} before opening a trade`);
+    error.code = 'DECIBEL_REFERRAL_REQUIRED';
+    throw error;
+  }, [fetchReferralStatus, referralStatus]);
 
   // ───── Read paths ─────
 
@@ -1867,23 +1966,12 @@ export function useDecibel() {
       activationInFlightRef.current = false;
       return { error: 'NO_LOGIN_WALLET' };
     }
-    setActivationStep({ index: 0, total: 0, label: 'Preparing activation…' });
+    setActivationStep({ index: 0, total: 0, label: 'Accept Decibel referral' });
     try {
       // ───── Pre-flight ─────
-      D.step('preflight: redeeming referral code', REFERRAL_CODE, 'for', address);
-      try {
-        await withAbortableRead(
-          (read, fetchOptions) => read.referrals.redeemCode(
-            { referralCode: REFERRAL_CODE, account: address },
-            { fetchOptions },
-          ),
-          READ_TIMEOUT_MS,
-          'referral-redeem',
-        );
-        D.log('referral redeem: OK');
-      } catch (e) {
-        D.warn('referral redeem (non-fatal):', e?.message || e);
-      }
+      D.step('preflight: verifying Decibel referral for', address);
+      const referral = await ensureDecibelReferral();
+      D.log('referral verified:', referral?.referral_status?.referral_code || '(existing referral)');
 
       let sub = await ensureSubaccount();
 
@@ -2063,7 +2151,7 @@ export function useDecibel() {
       activationInFlightRef.current = false;
       return { error: msg };
     }
-  }, [address, loginSignAndSubmit, ensureSubaccount, fetchBuilderApproval, fetchAccount, resolveBuilderSubaccount, fetchServerSigner]);
+  }, [address, loginSignAndSubmit, ensureSubaccount, fetchBuilderApproval, fetchAccount, resolveBuilderSubaccount, fetchServerSigner, ensureDecibelReferral]);
 
   // Ensures the browser has completed the Petra-side setup required for the
   // server signer to place Decibel orders.
@@ -2187,6 +2275,7 @@ export function useDecibel() {
       }
     };
     try {
+      await requireReferralForOpening(); checkGen();
       requireServerSigner();
       const collateral = Number(amount);
       if (!Number.isFinite(collateral) || collateral <= 0) throw new Error('Invalid amount');
@@ -2270,7 +2359,7 @@ export function useDecibel() {
     } finally {
       setLoading(false);
     }
-  }, [requireServerSigner, address, ensureSubaccount, builderFields, reportTrade, pollDecibelStateAfterWrite, scheduleClaim, placeOrderOnServer]);
+  }, [requireReferralForOpening, requireServerSigner, address, ensureSubaccount, builderFields, reportTrade, pollDecibelStateAfterWrite, scheduleClaim, placeOrderOnServer]);
 
   const placeLimitOrder = useCallback(async (symbol, side, price, amount, _tif, leverage, options = {}) => {
     setLoading(true);
@@ -2285,6 +2374,7 @@ export function useDecibel() {
       }
     };
     try {
+      await requireReferralForOpening(); checkGen();
       requireServerSigner();
       const collateral = Number(amount);
       const priceN = Number(price);
@@ -2390,7 +2480,7 @@ export function useDecibel() {
     } finally {
       setLoading(false);
     }
-  }, [requireServerSigner, address, ensureSubaccount, builderFields, reportTrade, pollDecibelStateAfterWrite, scheduleClaim, placeOrderOnServer, applyDecibelOrders]);
+  }, [requireReferralForOpening, requireServerSigner, address, ensureSubaccount, builderFields, reportTrade, pollDecibelStateAfterWrite, scheduleClaim, placeOrderOnServer, applyDecibelOrders]);
 
   // Close = reduceOnly IOC at slipped live mark. `amount` is base units
   // (the position's quantity to close, NOT collateral) — same semantics as
@@ -3007,6 +3097,11 @@ export function useDecibel() {
     fetchBuilderApproval();
   }, [isActiveDex, address, fetchBuilderApproval]);
 
+  useEffect(() => {
+    if (!isActiveDex || !address) return;
+    void fetchReferralStatus();
+  }, [isActiveDex, address, fetchReferralStatus, player?.token]);
+
   // Hydrate the server-side API wallet address on mount/address change.
   useEffect(() => {
     let cancelled = false;
@@ -3141,10 +3236,13 @@ export function useDecibel() {
     decibelDepositAddress: address,
     decibelChain: 'aptos',
     isSelfCustody: true,
-    // Builder fee — same shape as Avantis's hasReferrer / linkOurReferrer
-    // so the FuturesPanel banner UI works without branching.
-    hasReferrer: builderApproved,
-    linkOurReferrer: activateApiWallet,
+    // Referral is a separate Decibel API record on the master wallet.
+    // Builder fee approval remains represented by `builderApproved`.
+    hasReferrer: referralStatus?.has_referrer ?? null,
+    linkOurReferrer: linkDecibelReferral,
+    referralCode: REFERRAL_CODE,
+    referralUrl: REFERRAL_URL,
+    referralStatus,
     // Server API wallet introspection — FuturesPanel can show "Activate"
     // until this signer is delegated and verified.
     apiWalletAddr,
@@ -3172,7 +3270,7 @@ export function useDecibel() {
     leverageSettings, marginModes,
     depositToPacifica, withdraw, activate, claimGold, placeMarketOrder,
     placeLimitOrder, closePosition, cancelOrder, setTpsl, setLeverage, setMarginMode,
-    builderApproved, activateApiWallet, apiWalletAddr, apiWalletDelegated,
+    referralStatus, linkDecibelReferral, apiWalletAddr, apiWalletDelegated,
     activationStep, setupVerified, subaccountAddr, connect,
   ]);
 }

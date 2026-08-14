@@ -3454,3 +3454,37 @@ Follow-up:
   and let `claim-gold` import fills using the verified Ondo browser session.
   Existing trades placed without builder routing are not retroactively marked
   eligible. No commit, push, deployment, or production mutation requested.
+
+## UR-2026-08-14-RH-LIGHTER-INTEGRATION
+
+- Timestamp: 2026-08-14 Europe/Kyiv
+- Request: fully integrate Robinhood Lighter from the official RH Lighter API,
+  verify whether the existing standard Lighter builder code/account can be
+  reused, and attach builder attribution correctly.
+- Scope: keep standard Lighter unchanged; add a separate Robinhood Lighter
+  deployment profile, one-bps partner attribution, explicit integrator approval,
+  isolated browser credentials/storage, server routes, trading and read flows,
+  truthful configuration gating, earnings/trade attribution support, UI venue
+  registration, tests, and an ADR. Do not assume the standard deployment's
+  integrator account index exists on RH Lighter. No commit, push, deployment, or
+  funded/on-chain transaction requested.
+
+## UR-2026-08-14-FULL-RELEASE-AUTHORIZATION
+
+- Timestamp: 2026-08-14 Europe/Kyiv
+- Request: commit every current reviewed change on `main`, push it to GitHub,
+  deploy it to production, and verify the live release.
+- Approved release scope: Robinhood Lighter integration and partner account
+  `3156` with one-bps attribution and referral `CLASSHOFPERPS`; Aster one-bps
+  builder attribution and admin/earnings tracking; mandatory Decibel referral
+  `NQSW0V`; responsive battle-result and tournament UI; and the Godot building
+  movement smoothing/grid improvements already present in the worktree.
+- Production configuration: keep Robinhood Lighter separate from standard
+  Lighter and set `RH_LIGHTER_INTEGRATOR_ACCOUNT_INDEX=3156`, expected owner
+  `0xB36402e87a86206D3a114a98B53f31362291fe1B`, fee `1` bps, and referral
+  `CLASSHOFPERPS` through the canonical shared environment workflow.
+- Operational acceptance: the owner explicitly approved the transactional
+  tournament-schema migration required to add `rhlighter`. Deployment must use
+  the canonical atomic release script, retain the previous immutable release
+  for rollback, and verify database/schema row preservation plus public service
+  health. No funded trade or wallet signature is authorized by this release.

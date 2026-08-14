@@ -975,6 +975,18 @@ var _move_source_gp: Vector2i = Vector2i.ZERO
 var _move_source_pos: Vector3 = Vector3.ZERO
 var _move_last_grid_step_gp: Vector2i = Vector2i(-9999, -9999)
 var _move_indicator: MeshInstance3D = null
+var _move_indicator_detail: MeshInstance3D = null
+var _move_indicator_visual_key: String = ""
+var _move_target_local: Vector3 = Vector3.ZERO
+var _move_last_pointer_screen: Vector2 = Vector2.INF
+var _move_touch_owner_index: int = -1
+var _move_active_touch_indices: Dictionary = {}
+var _move_multitouch_active: bool = false
+var _move_touch_confirm_pending: bool = false
+var _move_commit_pending: bool = false
+const MOVE_FOLLOW_SPEED_CELLS_PER_SECOND: float = 10.0
+const MOVE_FOLLOW_RESPONSE_PER_SECOND: float = 14.0
+const MOVE_SETTLE_DISTANCE_CELLS: float = 0.001
 
 # ── Placement State ───────────────────────────────────────────
 var is_placing: bool = false
@@ -983,6 +995,8 @@ var ghost: Node3D = null
 var ghost_material: StandardMaterial3D = null
 var current_grid_pos: Vector2i = Vector2i.ZERO
 var grid_visual: MeshInstance3D = null
+var _grid_visual_mesh: QuadMesh = null
+var _grid_visual_material: ShaderMaterial = null
 var shop_unlocks: Dictionary = {}
 var _flamethrower_facing_step := 0
 var _flamethrower_placement_user_rotated := false
@@ -1769,6 +1783,7 @@ const PRODUCE_TICK: float = 1.0  # update production every second
 
 func _process(delta: float) -> void:
 	_bs_frame += 1
+	_process_move_visual(delta)
 	# FPS label — update every 15th frame to avoid string alloc every frame
 	if _fps_lbl and _bs_frame % 15 == 0:
 		_fps_lbl.text = "FPS: %d" % Engine.get_frames_per_second()
@@ -1796,6 +1811,39 @@ func _process(delta: float) -> void:
 			_produce_timer -= PRODUCE_TICK
 			_production._tick_production()
 		_production._update_collect_icons()
+
+
+static func move_visual_step(
+	current: Vector3,
+	target: Vector3,
+	delta: float,
+	visual_cell_size: float
+) -> Vector3:
+	var offset := target - current
+	var distance := offset.length()
+	var safe_cell_size := maxf(visual_cell_size, 0.001)
+	if distance <= safe_cell_size * MOVE_SETTLE_DISTANCE_CELLS:
+		return target
+	if delta <= 0.0:
+		return current
+	var safe_delta := minf(delta, 0.1)
+	var response_step := distance * (1.0 - exp(-MOVE_FOLLOW_RESPONSE_PER_SECOND * safe_delta))
+	var capped_step := safe_cell_size * MOVE_FOLLOW_SPEED_CELLS_PER_SECOND * safe_delta
+	var step_distance := minf(distance, minf(response_step, capped_step))
+	return current + offset * (step_distance / distance)
+
+
+func _process_move_visual(delta: float) -> void:
+	if not _is_moving or _move_commit_pending:
+		return
+	# Camera edge-pan changes the ray even while the owning pointer is stationary.
+	# Reprojecting the last pointer keeps the logical tile authoritative.
+	if _move_last_pointer_screen != Vector2.INF:
+		_update_move_building(_move_last_pointer_screen)
+	var node := selected_building.get("node", null) as Node3D
+	if not is_instance_valid(node):
+		return
+	node.position = move_visual_step(node.position, _move_target_local, delta, cell_size)
 
 
 func _physics_process(delta: float) -> void:
@@ -3980,7 +4028,52 @@ func _begin_placement(building_id: String) -> void:
 ## placement preview. Previously re-allocated per ghost (which meant first
 ## placement compiled its pipeline variant cold on WASM).
 static var _shared_ghost_material: StandardMaterial3D = null
-static var _shared_grid_material: StandardMaterial3D = null
+static var _shared_grid_shader: Shader = null
+static var _shared_grid_material: ShaderMaterial = null
+
+const GRID_VISUAL_SHADER_SOURCE := """
+shader_type spatial;
+render_mode unshaded, blend_mix, depth_draw_never, cull_disabled;
+
+uniform vec2 grid_dimensions = vec2(27.0, 27.0);
+uniform vec4 minor_color : source_color = vec4(0.4549, 0.7882, 1.0, 0.46);
+uniform vec4 boundary_color : source_color = vec4(0.9176, 0.9725, 1.0, 0.68);
+uniform float minor_width_px = 1.25;
+uniform float minor_feather_px = 0.75;
+uniform float boundary_width_px = 2.25;
+uniform float boundary_feather_px = 0.75;
+
+void fragment() {
+	vec2 grid_coord = UV * grid_dimensions;
+	vec2 grid_fwidth = max(fwidth(grid_coord), vec2(0.00001));
+	vec2 minor_grid_distance = min(fract(grid_coord), 1.0 - fract(grid_coord));
+	vec2 minor_pixel_distance = minor_grid_distance / grid_fwidth;
+	float minor_half_width = minor_width_px * 0.5;
+	vec2 minor_axis_coverage = 1.0 - smoothstep(
+		vec2(minor_half_width),
+		vec2(minor_half_width + minor_feather_px),
+		minor_pixel_distance
+	);
+	float minor_coverage = max(minor_axis_coverage.x, minor_axis_coverage.y);
+
+	vec2 boundary_grid_distance = min(grid_coord, grid_dimensions - grid_coord);
+	vec2 boundary_pixel_distance = boundary_grid_distance / grid_fwidth;
+	float boundary_half_width = boundary_width_px * 0.5;
+	vec2 boundary_axis_coverage = 1.0 - smoothstep(
+		vec2(boundary_half_width),
+		vec2(boundary_half_width + boundary_feather_px),
+		boundary_pixel_distance
+	);
+	float boundary_coverage = max(boundary_axis_coverage.x, boundary_axis_coverage.y);
+
+	float minor_alpha = minor_coverage * minor_color.a;
+	float boundary_alpha = boundary_coverage * boundary_color.a;
+	float final_alpha = max(minor_alpha, boundary_alpha);
+	float boundary_mix = clamp(boundary_alpha / max(final_alpha, 0.00001), 0.0, 1.0);
+	ALBEDO = mix(minor_color.rgb, boundary_color.rgb, boundary_mix);
+	ALPHA = final_alpha;
+}
+"""
 
 static func _get_ghost_material() -> StandardMaterial3D:
 	if _shared_ghost_material == null:
@@ -3992,14 +4085,38 @@ static func _get_ghost_material() -> StandardMaterial3D:
 	return _shared_ghost_material
 
 
-static func _get_grid_material() -> StandardMaterial3D:
+static func _get_grid_shader() -> Shader:
+	if _shared_grid_shader == null:
+		_shared_grid_shader = Shader.new()
+		_shared_grid_shader.code = GRID_VISUAL_SHADER_SOURCE
+	return _shared_grid_shader
+
+
+static func _get_grid_material() -> ShaderMaterial:
 	if _shared_grid_material == null:
-		_shared_grid_material = StandardMaterial3D.new()
-		_shared_grid_material.albedo_color = Color(0, 0, 0, 0.25)
-		_shared_grid_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-		_shared_grid_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-		_shared_grid_material.no_depth_test = false
+		_shared_grid_material = ShaderMaterial.new()
+		_shared_grid_material.shader = _get_grid_shader()
+		var minor_color := Color("74c9ff")
+		minor_color.a = 0.46
+		var boundary_color := Color("eaf8ff")
+		boundary_color.a = 0.68
+		_shared_grid_material.set_shader_parameter("minor_color", minor_color)
+		_shared_grid_material.set_shader_parameter("boundary_color", boundary_color)
+		_shared_grid_material.set_shader_parameter("minor_width_px", 1.25)
+		_shared_grid_material.set_shader_parameter("minor_feather_px", 0.75)
+		_shared_grid_material.set_shader_parameter("boundary_width_px", 2.25)
+		_shared_grid_material.set_shader_parameter("boundary_feather_px", 0.75)
 	return _shared_grid_material
+
+
+func _get_configured_grid_material() -> ShaderMaterial:
+	if _grid_visual_material == null:
+		_grid_visual_material = _get_grid_material().duplicate() as ShaderMaterial
+	_grid_visual_material.set_shader_parameter(
+		"grid_dimensions",
+		Vector2(float(grid_width), float(grid_height))
+	)
+	return _grid_visual_material
 
 
 ## Shared upgrade outline shader + material. `material_overlay` on a mesh
@@ -4375,10 +4492,17 @@ func _unhandled_input(event: InputEvent) -> void:
 
 	# Move mode
 	if _is_moving:
+		if _move_commit_pending:
+			return
 		if event is InputEventMouseMotion:
-			_update_move_building((event as InputEventMouseMotion).position)
+			_move_last_pointer_screen = (event as InputEventMouseMotion).position
+			_update_move_building(_move_last_pointer_screen)
 		elif event is InputEventScreenDrag:
-			_update_move_building((event as InputEventScreenDrag).position)
+			var drag := event as InputEventScreenDrag
+			_move_touch_dragged(drag.index)
+			if drag.index == _move_touch_owner_index:
+				_move_last_pointer_screen = drag.position
+				_update_move_building(_move_last_pointer_screen)
 		if event is InputEventMouseButton and event.pressed:
 			if event.button_index == MOUSE_BUTTON_LEFT:
 				_update_move_building((event as InputEventMouseButton).position)
@@ -4387,10 +4511,19 @@ func _unhandled_input(event: InputEvent) -> void:
 			elif event.button_index == MOUSE_BUTTON_RIGHT:
 				_cancel_move()
 				get_viewport().set_input_as_handled()
-		elif event is InputEventScreenTouch and event.pressed:
-			_update_move_building((event as InputEventScreenTouch).position)
-			_confirm_move()
-			get_viewport().set_input_as_handled()
+		elif event is InputEventScreenTouch:
+			var move_touch := event as InputEventScreenTouch
+			if move_touch.pressed:
+				if _move_touch_pressed(move_touch.index):
+					_move_last_pointer_screen = move_touch.position
+					_update_move_building(_move_last_pointer_screen)
+				get_viewport().set_input_as_handled()
+			else:
+				var should_confirm := _move_touch_released(move_touch.index)
+				if should_confirm:
+					_move_last_pointer_screen = move_touch.position
+					_update_move_building(_move_last_pointer_screen)
+					_confirm_move()
 		return
 
 	if is_placing:
@@ -4646,7 +4779,11 @@ func _unhandled_input(event: InputEvent) -> void:
 					if bs != self:
 						bs._deselect_building()
 				if selected_building.size() > 0 and found.get("node") == selected_building.get("node") and not is_viewing_enemy:
-					_start_move(selected_building)
+					if event is InputEventScreenTouch:
+						var move_start_touch := event as InputEventScreenTouch
+						_start_move(selected_building, pointer_position, move_start_touch.index)
+					else:
+						_start_move(selected_building, pointer_position)
 				else:
 					_select_building(found)
 				get_viewport().set_input_as_handled()
@@ -5261,38 +5398,32 @@ func _show_grid() -> void:
 	if grid_visual != null:
 		return
 
-	var im = ImmediateMesh.new()
 	grid_visual = MeshInstance3D.new()
-	grid_visual.mesh = im
-
-	grid_visual.material_override = _get_grid_material()
-
-	var half_x = grid_extent_x / 2.0
-	var half_z = grid_extent_z / 2.0
-	var line_w = cell_size * 0.03  # Line thickness
-
-	im.surface_begin(Mesh.PRIMITIVE_TRIANGLES)
-	# Lines along X (for each Z row)
-	for i in range(grid_height + 1):
-		var z = -half_z + i * cell_size
-		var a = Vector3(-half_x, 0.01, z - line_w)
-		var b = Vector3( half_x, 0.01, z - line_w)
-		var c = Vector3( half_x, 0.01, z + line_w)
-		var d = Vector3(-half_x, 0.01, z + line_w)
-		im.surface_add_vertex(a); im.surface_add_vertex(b); im.surface_add_vertex(c)
-		im.surface_add_vertex(a); im.surface_add_vertex(c); im.surface_add_vertex(d)
-	# Lines along Z (for each X column)
-	for i in range(grid_width + 1):
-		var x = -half_x + i * cell_size
-		var a = Vector3(x - line_w, 0.01, -half_z)
-		var b = Vector3(x + line_w, 0.01, -half_z)
-		var c = Vector3(x + line_w, 0.01,  half_z)
-		var d = Vector3(x - line_w, 0.01,  half_z)
-		im.surface_add_vertex(a); im.surface_add_vertex(b); im.surface_add_vertex(c)
-		im.surface_add_vertex(a); im.surface_add_vertex(c); im.surface_add_vertex(d)
-	im.surface_end()
-
+	if _grid_visual_mesh == null:
+		_grid_visual_mesh = _build_grid_visual_mesh()
+	grid_visual.mesh = _grid_visual_mesh
+	grid_visual.material_override = _get_configured_grid_material()
+	grid_visual.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var extents := grid_logical_extents()
+	var min_x := -grid_extent_x * 0.5
+	var min_z := -grid_extent_z * 0.5
+	grid_visual.position = Vector3(
+		min_x + extents.x * 0.5,
+		0.01,
+		min_z + extents.y * 0.5
+	)
+	grid_visual.rotation.x = -PI * 0.5
 	add_child(grid_visual)
+
+
+func grid_logical_extents() -> Vector2:
+	return Vector2(float(grid_width) * cell_size, float(grid_height) * cell_size)
+
+
+func _build_grid_visual_mesh() -> QuadMesh:
+	var quad := QuadMesh.new()
+	quad.size = grid_logical_extents()
+	return quad
 
 
 func _hide_grid() -> void:
@@ -5448,6 +5579,8 @@ func _find_ship_barrel_target_from_screen(screen_pos: Vector2) -> Dictionary:
 	return {}
 
 func _clear_selection_for_switch(next_building: Dictionary) -> void:
+	if _move_commit_pending:
+		return
 	var current_node: Node = selected_building.get("node", null)
 	var next_node: Node = next_building.get("node", null)
 	if is_instance_valid(current_node) and current_node == next_node:
@@ -5475,6 +5608,8 @@ func _clear_selection_for_switch(next_building: Dictionary) -> void:
 
 
 func _select_building(b: Dictionary) -> void:
+	if _move_commit_pending:
+		return
 	if is_viewing_enemy and _is_hidden_tesla_concealed(b):
 		_deselect_building()
 		return
@@ -5658,6 +5793,8 @@ func _select_building(b: Dictionary) -> void:
 
 
 func _deselect_building() -> void:
+	if _move_commit_pending:
+		return
 	if _is_moving:
 		_cancel_move(false)
 	_set_mortar_range_visuals_for_selected(false)
@@ -7303,6 +7440,8 @@ func _find_ship_at_click(mouse_pos: Vector2) -> Dictionary:
 
 ## Shows the React load-troops modal for a port ship.
 func _show_ship_panel(ship_data: Dictionary) -> void:
+	if _move_commit_pending:
+		return
 	if bool(ship_data.get("main_ship", false)):
 		await _show_main_ship_panel()
 		return
@@ -7371,6 +7510,8 @@ func _show_ship_panel(ship_data: Dictionary) -> void:
 
 
 func _show_main_ship_panel() -> void:
+	if _move_commit_pending:
+		return
 	var ship: Dictionary
 	if test_mode:
 		ship = _test_player_ship_snapshot()
@@ -7392,6 +7533,8 @@ func _show_main_ship_panel() -> void:
 			_show_error("Main ship service returned invalid data")
 			return
 		ship = ship_value
+	if _move_commit_pending:
+		return
 	selected_building = {"id": "main_ship", "server_id": "main_ship", "node": get_node_or_null("../MainShipController")}
 	_send_main_ship_panel(ship)
 
@@ -8596,7 +8739,50 @@ func _make_arrow_mesh() -> ImmediateMesh:
 	return im
 
 
-func _start_move(b: Dictionary) -> void:
+func _move_touch_pressed(touch_index: int) -> bool:
+	if _move_commit_pending:
+		return false
+	var had_active_touch := not _move_active_touch_indices.is_empty()
+	_move_active_touch_indices[touch_index] = true
+	if had_active_touch or _move_multitouch_active:
+		_move_multitouch_active = true
+		_move_touch_confirm_pending = false
+		return false
+	_move_touch_owner_index = touch_index
+	_move_touch_confirm_pending = true
+	return true
+
+
+func _move_touch_dragged(_touch_index: int) -> void:
+	if _move_commit_pending:
+		return
+	# Any drag event may be the first half of a pinch, so a tap is no longer
+	# clean even if the owning pointer has barely moved.
+	_move_touch_confirm_pending = false
+
+
+func _move_touch_released(touch_index: int) -> bool:
+	if _move_commit_pending:
+		return false
+	var should_confirm := (
+		_move_touch_confirm_pending
+		and touch_index == _move_touch_owner_index
+		and not _move_multitouch_active
+		and _move_active_touch_indices.size() == 1
+	)
+	_move_active_touch_indices.erase(touch_index)
+	_move_touch_confirm_pending = false
+	if _move_active_touch_indices.is_empty():
+		_move_touch_owner_index = -1
+		_move_multitouch_active = false
+	return should_confirm
+
+
+func _start_move(
+	b: Dictionary,
+	pointer_screen: Variant = null,
+	touch_owner_index: int = -1
+) -> void:
 	if is_viewing_enemy or _server_busy or _is_moving:
 		return
 	if not test_mode and _block_without_server("move building"):
@@ -8604,12 +8790,23 @@ func _start_move(b: Dictionary) -> void:
 	# Cancel any ongoing move on other building systems
 	for bs in _building_systems:
 		if bs != self and bs._is_moving:
+			if bool(bs.get("_move_commit_pending")):
+				return
 			bs._cancel_move(false)
 	_is_moving = true
 	_set_collection_icons_suppressed_for_all(true)
 	_move_source_gp = b.grid_pos
 	_move_last_grid_step_gp = _move_source_gp
 	_move_source_pos = b["node"].position
+	_move_target_local = _move_source_pos
+	_move_last_pointer_screen = pointer_screen as Vector2 if pointer_screen is Vector2 else Vector2.INF
+	_move_touch_owner_index = touch_owner_index
+	_move_active_touch_indices.clear()
+	_move_multitouch_active = false
+	_move_touch_confirm_pending = false
+	_move_commit_pending = false
+	if touch_owner_index >= 0:
+		_move_active_touch_indices[touch_owner_index] = true
 	var def = building_defs[b.id]
 	_despawn_port_ship_for_move(b)
 	# Free grid cells temporarily so validity check works while dragging
@@ -8618,7 +8815,7 @@ func _start_move(b: Dictionary) -> void:
 	_hide_range_indicator()
 	current_building_id = b.id
 	_show_grid()
-	_update_move_building()
+	_update_move_building(pointer_screen)
 
 
 func _update_move_building(screen_position: Variant = null) -> void:
@@ -8642,16 +8839,21 @@ func _update_move_building(screen_position: Variant = null) -> void:
 	current_grid_pos = gp
 	var sx = def.cells.x * cell_size
 	var sz = def.cells.y * cell_size
-	var local_pos = _grid_to_local(gp)
-	local_pos.x += sx / 2.0
-	local_pos.z += sz / 2.0
-	local_pos.y = 0
-	b["node"].position = local_pos
+	var local_pos := move_local_for_grid(gp, def.cells)
+	_move_target_local = local_pos
 	# Tombstone: skeletons stay at old position during drag.
 	# They will run to the new position only after _confirm_move().
 	# Validity indicator under the building
 	var valid = _can_place(gp, def.cells)
 	_update_move_indicator(local_pos, sx, sz, valid)
+
+
+func move_local_for_grid(grid_pos: Vector2i, footprint: Vector2i) -> Vector3:
+	var local_pos := _grid_to_local(grid_pos)
+	local_pos.x += float(footprint.x) * cell_size * 0.5
+	local_pos.z += float(footprint.y) * cell_size * 0.5
+	local_pos.y = 0.0
+	return local_pos
 
 
 func _update_move_indicator(center: Vector3, sx: float, sz: float, valid: bool) -> void:
@@ -8665,21 +8867,137 @@ func _update_move_indicator(center: Vector3, sx: float, sz: float, valid: bool) 
 		created_material.cull_mode = BaseMaterial3D.CULL_DISABLED
 		created_material.render_priority = 3
 		_move_indicator.material_override = created_material
+		_move_indicator.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		add_child(_move_indicator)
+		_move_indicator_detail = MeshInstance3D.new()
+		var detail_material := StandardMaterial3D.new()
+		detail_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		detail_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		detail_material.vertex_color_use_as_albedo = true
+		detail_material.cull_mode = BaseMaterial3D.CULL_DISABLED
+		detail_material.render_priority = 4
+		_move_indicator_detail.material_override = detail_material
+		_move_indicator_detail.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_move_indicator.add_child(_move_indicator_detail)
 	(_move_indicator.mesh as QuadMesh).size = Vector2(sx, sz)
 	_move_indicator.rotation.x = -PI * 0.5
 	_move_indicator.position = center + Vector3(0, 0.03, 0)
 	var mat = _move_indicator.material_override as StandardMaterial3D
-	mat.albedo_color = Color(0.1, 0.9, 0.1, 0.35) if valid else Color(0.9, 0.1, 0.1, 0.35)
+	var fill_color := Color("36d978") if valid else Color("ff5a52")
+	fill_color.a = 0.24 if valid else 0.28
+	mat.albedo_color = fill_color
+	var outline_color := Color("d9ffea") if valid else Color("fff0ed")
+	outline_color.a = 0.92 if valid else 0.96
+	(_move_indicator_detail.material_override as StandardMaterial3D).albedo_color = outline_color
+	var visual_key := "%0.4f:%0.4f:%s" % [sx, sz, valid]
+	if visual_key != _move_indicator_visual_key:
+		_move_indicator_visual_key = visual_key
+		_move_indicator_detail.mesh = _build_move_indicator_detail_mesh(sx, sz, valid)
+
+
+func _build_move_indicator_detail_mesh(sx: float, sz: float, valid: bool) -> ImmediateMesh:
+	var im := ImmediateMesh.new()
+	var half_x := sx * 0.5
+	var half_y := sz * 0.5
+	var outline_width := cell_size * (0.075 if valid else 0.085)
+	var line_color := Color.WHITE
+	im.surface_begin(Mesh.PRIMITIVE_TRIANGLES)
+	_add_colored_quad_xy(im, Rect2(Vector2(-half_x, -half_y), Vector2(sx, outline_width)), line_color)
+	_add_colored_quad_xy(im, Rect2(Vector2(-half_x, half_y - outline_width), Vector2(sx, outline_width)), line_color)
+	_add_colored_quad_xy(im, Rect2(Vector2(-half_x, -half_y), Vector2(outline_width, sz)), line_color)
+	_add_colored_quad_xy(im, Rect2(Vector2(half_x - outline_width, -half_y), Vector2(outline_width, sz)), line_color)
+	if not valid:
+		_add_indicator_hatch(im, half_x, half_y, line_color)
+	im.surface_end()
+	return im
+
+
+static func _add_colored_quad_xy(im: ImmediateMesh, rect: Rect2, color: Color) -> void:
+	var a := Vector3(rect.position.x, rect.position.y, 0.002)
+	var b := Vector3(rect.end.x, rect.position.y, 0.002)
+	var c := Vector3(rect.end.x, rect.end.y, 0.002)
+	var d := Vector3(rect.position.x, rect.end.y, 0.002)
+	im.surface_set_color(color)
+	im.surface_add_vertex(a); im.surface_add_vertex(b); im.surface_add_vertex(c)
+	im.surface_add_vertex(a); im.surface_add_vertex(c); im.surface_add_vertex(d)
+
+
+func _add_indicator_hatch(
+	im: ImmediateMesh,
+	half_x: float,
+	half_y: float,
+	color: Color
+) -> void:
+	var period: float = cell_size * 0.32
+	var stripe_width: float = cell_size * 0.055
+	# For y = x + offset, offset spacing is sqrt(2) times the measured
+	# perpendicular period between 45-degree stripes.
+	var offset_step: float = period * sqrt(2.0)
+	var min_offset: float = -half_y - half_x
+	var max_offset: float = half_y + half_x
+	var offset: float = floorf(min_offset / offset_step) * offset_step
+	while offset <= max_offset + 0.00001:
+		var intersections: Array[Vector2] = []
+		_append_hatch_intersection(intersections, Vector2(-half_x, -half_x + offset), half_x, half_y)
+		_append_hatch_intersection(intersections, Vector2(half_x, half_x + offset), half_x, half_y)
+		_append_hatch_intersection(intersections, Vector2(-half_y - offset, -half_y), half_x, half_y)
+		_append_hatch_intersection(intersections, Vector2(half_y - offset, half_y), half_x, half_y)
+		if intersections.size() >= 2:
+			_add_indicator_diagonal(im, intersections[0], intersections[1], stripe_width, color)
+		offset += offset_step
+
+
+static func _append_hatch_intersection(
+	points: Array[Vector2],
+	point: Vector2,
+	half_x: float,
+	half_y: float
+) -> void:
+	if point.x < -half_x - 0.00001 or point.x > half_x + 0.00001:
+		return
+	if point.y < -half_y - 0.00001 or point.y > half_y + 0.00001:
+		return
+	for existing in points:
+		if existing.is_equal_approx(point):
+			return
+	points.append(point)
+
+
+static func _add_indicator_diagonal(
+	im: ImmediateMesh,
+	start: Vector2,
+	finish: Vector2,
+	thickness: float,
+	color: Color
+) -> void:
+	var direction := (finish - start).normalized()
+	var normal := Vector2(-direction.y, direction.x) * thickness * 0.5
+	var a := Vector3(start.x + normal.x, start.y + normal.y, 0.003)
+	var b := Vector3(finish.x + normal.x, finish.y + normal.y, 0.003)
+	var c := Vector3(finish.x - normal.x, finish.y - normal.y, 0.003)
+	var d := Vector3(start.x - normal.x, start.y - normal.y, 0.003)
+	im.surface_set_color(color)
+	im.surface_add_vertex(a); im.surface_add_vertex(b); im.surface_add_vertex(c)
+	im.surface_add_vertex(a); im.surface_add_vertex(c); im.surface_add_vertex(d)
 
 
 func _confirm_move() -> void:
+	if _server_busy or _move_commit_pending:
+		return
 	var b = selected_building
 	if b.size() == 0:
 		return
 	var def = building_defs[b.id]
-	if not _can_place(current_grid_pos, def.cells):
+	var confirmed_grid_pos := current_grid_pos
+	if not _can_place(confirmed_grid_pos, def.cells):
 		return
+	var rollback_building: Dictionary = b
+	var rollback_source_gp: Vector2i = _move_source_gp
+	var rollback_source_pos: Vector3 = _move_source_pos
+	var confirmed_local_pos := move_local_for_grid(confirmed_grid_pos, def.cells)
+	_move_target_local = confirmed_local_pos
+	if is_instance_valid(b.get("node", null)):
+		b["node"].position = confirmed_local_pos
 	var net = _net
 	if not test_mode:
 		if _block_without_server("move building"):
@@ -8690,18 +9008,27 @@ func _confirm_move() -> void:
 			_cancel_move()
 			return
 		_server_busy = true
-		var result = await net.move_building(b.server_id, current_grid_pos.x, current_grid_pos.y)
+		_move_commit_pending = true
+		var result = await net.move_building(b.server_id, confirmed_grid_pos.x, confirmed_grid_pos.y)
 		_server_busy = false
 		if not is_instance_valid(self):
 			return
+		_move_commit_pending = false
 		if result.has("error"):
-			_show_error(str(result.error))
-			_cancel_move()
+			var move_error := str(result.error)
+			_cancel_move(
+				true,
+				rollback_building,
+				rollback_source_gp,
+				rollback_source_pos
+			)
+			_show_error(move_error)
 			return
 	# Occupy new grid cells
-	_set_grid_occupied(current_grid_pos, def.cells, true)
-	b["grid_pos"] = current_grid_pos
-	# b.node is already at the new position (moved by _update_move_building)
+	_set_grid_occupied(confirmed_grid_pos, def.cells, true)
+	b["grid_pos"] = confirmed_grid_pos
+	if is_instance_valid(b.get("node", null)):
+		b["node"].position = confirmed_local_pos
 	# Tombstone: respawn dead skeletons and relocate alive ones
 	if b.id == "tombstone":
 		var existing_skeletons: Array = []
@@ -8728,15 +9055,32 @@ func _confirm_move() -> void:
 	_select_building(b)
 
 
-func _cancel_move(reselect: bool = true) -> void:
-	var b = selected_building
+func _cancel_move(
+	reselect: bool = true,
+	rollback_building: Dictionary = {},
+	rollback_source_gp: Variant = null,
+	rollback_source_pos: Variant = null
+) -> void:
+	if _move_commit_pending:
+		return
+	var b: Dictionary = rollback_building if not rollback_building.is_empty() else selected_building
+	var source_gp: Vector2i = (
+		rollback_source_gp as Vector2i
+		if rollback_source_gp is Vector2i
+		else _move_source_gp
+	)
+	var source_pos: Vector3 = (
+		rollback_source_pos as Vector3
+		if rollback_source_pos is Vector3
+		else _move_source_pos
+	)
 	if b.size() > 0:
 		# Restore original grid cells
 		var def = building_defs[b.id]
-		_set_grid_occupied(_move_source_gp, def.cells, true)
+		_set_grid_occupied(source_gp, def.cells, true)
 		# Move building back to original position
 		if is_instance_valid(b.get("node", null)):
-			b["node"].position = _move_source_pos
+			b["node"].position = source_pos
 			# Tombstone: restore skeletons' tombstone_pos (they stay where they are)
 			if b.id == "tombstone" and b.has("skeletons"):
 				var tomb_world = b["node"].global_position
@@ -8755,11 +9099,20 @@ func _end_move() -> void:
 	_set_collection_icons_suppressed_for_all(false)
 	current_building_id = ""
 	_move_last_grid_step_gp = Vector2i(-9999, -9999)
+	_move_target_local = Vector3.ZERO
+	_move_last_pointer_screen = Vector2.INF
+	_move_touch_owner_index = -1
+	_move_active_touch_indices.clear()
+	_move_multitouch_active = false
+	_move_touch_confirm_pending = false
+	_move_commit_pending = false
 	if not always_show_grid:
 		_hide_grid()
 	if _move_indicator and is_instance_valid(_move_indicator):
 		_move_indicator.queue_free()
 	_move_indicator = null
+	_move_indicator_detail = null
+	_move_indicator_visual_key = ""
 
 
 func _set_collection_icons_suppressed_for_all(suppressed: bool) -> void:

@@ -1,11 +1,13 @@
 const assert = require('assert');
+const fs = require('fs');
+const path = require('path');
 const aster = require('./aster');
 
 const OWNER = '0x3333333333333333333333333333333333333333';
 const SIGNER = '0x4444444444444444444444444444444444444444';
 const SIGNATURE = `0x${'11'.repeat(65)}`;
 
-assert.equal(aster.getBuilderConfig().feeBps, 0.1, 'official demo rate 0.00001 must be displayed as 0.1 bps');
+assert.equal(aster.getBuilderConfig().feeBps, 1, 'configured rate 0.0001 must be displayed as 1 bps');
 
 assert.throws(() => aster.validateSignedRequest({
   method: 'POST',
@@ -38,6 +40,11 @@ assert.doesNotThrow(() => aster.validateSignedRequest({
   signature: SIGNATURE,
   owner: OWNER,
 }));
+
+const deploySource = fs.readFileSync(path.join(__dirname, '..', 'deploy', 'deploy.sh'), 'utf8');
+assert.match(deploySource, /set_env_value "ASTER_BUILDER_ADDRESS" "0xB36402e87a86206D3a114a98B53f31362291fe1B"/);
+assert.match(deploySource, /set_env_value "ASTER_BUILDER_FEE_RATE" "0\.0001"/);
+assert.match(deploySource, /set_env_value "ASTER_BUILDER_SIGNER_ADDRESS" "0xa388E6fA16dE55DaA3D4A6c0dC326B5088c7CCBD"/);
 
 assert.throws(() => aster.validateSignedRequest({
   method: 'POST',

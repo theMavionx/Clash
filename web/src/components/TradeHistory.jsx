@@ -17,7 +17,7 @@ const HIBACHI_STORAGE_KEY = 'clash_hibachi_credentials_v1';
 const KATANA_STORAGE_KEY = 'clash_katana_credentials_v1';
 
 const EVM_ADDRESS_RE = /^0x[a-fA-F0-9]{40}$/u;
-const LOCAL_INDEX_HISTORY_DEXES = new Set(['avantis', 'gmx', 'gmtrade', 'flash', 'lighter', 'bulk']);
+const LOCAL_INDEX_HISTORY_DEXES = new Set(['avantis', 'gmx', 'gmtrade', 'flash', 'lighter', 'rhlighter', 'bulk']);
 
 function rows(payload) {
   if (Array.isArray(payload)) return payload;
@@ -796,12 +796,12 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
     return <div style={{ ...S.state, color: 'var(--terminal-short)', fontWeight: 700 }}>{error}</div>;
   }
   if (!filtered.length) {
-    const name = dex === 'decibel' ? 'Decibel ' : dex === 'ostium' ? 'Ostium ' : dex === 'monad' ? 'Perpl ' : dex === 'phoenix' ? 'Phoenix ' : dex === 'hyperliquid' ? 'Hyperliquid ' : dex === 'risex' ? 'RISEx ' : dex === 'nado' ? 'Nado ' : dex === 'ondo' ? 'Ondo ' : dex === 'leverup' ? 'LeverUp ' : dex === 'aster' ? 'Aster ' : dex === 'hotstuff' ? 'Hotstuff ' : dex === 'grvt' ? 'GRVT ' : dex === 'gmtrade' ? 'GMTrade ' : dex === 'flash' ? 'Flash Trade ' : dex === 'hibachi' ? 'Hibachi ' : dex === 'katana' ? 'Katana ' : dex === 'gmx' ? 'GMX ' : dex === 'avantis' ? 'Avantis ' : dex === 'lighter' ? 'Lighter ' : dex === 'bulk' ? 'Bulk ' : '';
+    const name = dex === 'decibel' ? 'Decibel ' : dex === 'ostium' ? 'Ostium ' : dex === 'monad' ? 'Perpl ' : dex === 'phoenix' ? 'Phoenix ' : dex === 'hyperliquid' ? 'Hyperliquid ' : dex === 'risex' ? 'RISEx ' : dex === 'nado' ? 'Nado ' : dex === 'ondo' ? 'Ondo ' : dex === 'leverup' ? 'LeverUp ' : dex === 'aster' ? 'Aster ' : dex === 'hotstuff' ? 'Hotstuff ' : dex === 'grvt' ? 'GRVT ' : dex === 'gmtrade' ? 'GMTrade ' : dex === 'flash' ? 'Flash Trade ' : dex === 'hibachi' ? 'Hibachi ' : dex === 'katana' ? 'Katana ' : dex === 'gmx' ? 'GMX ' : dex === 'avantis' ? 'Avantis ' : dex === 'lighter' ? 'Lighter ' : dex === 'rhlighter' ? 'Robinhood Lighter ' : dex === 'bulk' ? 'Bulk ' : '';
     return <div style={S.state}>No {name}trade history</div>;
   }
 
   const isDecibel = dex === 'decibel';
-  const showPnl = dex === 'decibel' || dex === 'ostium' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'leverup' || dex === 'aster' || dex === 'hotstuff' || dex === 'grvt' || dex === 'gmtrade' || dex === 'flash' || dex === 'hibachi' || dex === 'katana' || dex === 'gmx' || dex === 'avantis' || dex === 'lighter' || dex === 'bulk';
+  const showPnl = dex === 'decibel' || dex === 'ostium' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'leverup' || dex === 'aster' || dex === 'hotstuff' || dex === 'grvt' || dex === 'gmtrade' || dex === 'flash' || dex === 'hibachi' || dex === 'katana' || dex === 'gmx' || dex === 'avantis' || dex === 'lighter' || dex === 'rhlighter' || dex === 'bulk';
 
   return (
     <div style={S.scroller}>

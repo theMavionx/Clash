@@ -31,6 +31,7 @@ const DEX_WALLET = {
   grvt: { kind: 'evm', chain: 'GRVT Exchange', label: 'GRVT', cta: 'Reconnect GRVT wallet', targetChain: 'grvt' },
   katana: { kind: 'evm', chain: 'Katana', label: 'Katana', cta: 'Reconnect Katana wallet', targetChain: 'katana' },
   lighter: { kind: 'evm', chain: 'Ethereum', label: 'Lighter', cta: 'Reconnect EVM wallet', targetChain: 'mainnet' },
+  rhlighter: { kind: 'evm', chain: 'Robinhood Lighter', label: 'Robinhood Lighter', cta: 'Reconnect EVM wallet', targetChain: 'baseConnect' },
   decibel: { kind: 'aptos', chain: 'Aptos', label: 'Decibel', cta: 'Reconnect Petra wallet' },
   pacifica: { kind: 'solana', chain: 'Solana', label: 'Pacifica', cta: 'Reconnect Solana wallet' },
   phoenix: { kind: 'solana', chain: 'Solana', label: 'Phoenix', cta: 'Reconnect Solana wallet' },

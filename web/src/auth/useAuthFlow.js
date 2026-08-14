@@ -1089,7 +1089,7 @@ export function useAuthFlow() {
     const payload = { name: nameToUse, wallet: candidate.wallet };
     if (authDex) payload.dex = authDex;
     if (referralCodeRef.current) payload.referralCode = referralCodeRef.current;
-    if (authDex === 'avantis' || authDex === 'gmx' || authDex === 'ostium' || authDex === 'monad' || authDex === 'hyperliquid' || authDex === 'risex' || authDex === 'nado' || authDex === 'ondo' || authDex === 'hibachi' || authDex === 'hotstuff' || authDex === 'grvt' || authDex === 'katana' || authDex === 'lighter') {
+    if (EVM_AUTH_DEXES.has(authDex)) {
       // Chain is dex-driven, NOT taken from candidate.chain — the Privy
       // resolver hard-codes 'base' regardless of which DEX is active, so
       // trusting candidate.chain would mis-tag GMX/Perpl registrations as
@@ -1107,6 +1107,7 @@ export function useAuthFlow() {
         : authDex === 'grvt' ? 'grvt'
         : authDex === 'katana' ? 'katana'
         : authDex === 'lighter' ? 'lighter'
+        : authDex === 'rhlighter' ? 'rhlighter'
         : 'base';
       payload.walletSource = candidate.source;
     }
@@ -1309,7 +1310,7 @@ export function useAuthFlow() {
     const payload = { name: name.trim(), wallet: candidate.wallet };
     if (authDex) payload.dex = authDex;
     if (referralCodeRef.current) payload.referralCode = referralCodeRef.current;
-    if (authDex === 'avantis' || authDex === 'gmx' || authDex === 'ostium' || authDex === 'monad' || authDex === 'hyperliquid' || authDex === 'risex' || authDex === 'nado' || authDex === 'ondo' || authDex === 'hibachi' || authDex === 'hotstuff' || authDex === 'grvt' || authDex === 'katana' || authDex === 'lighter') {
+    if (EVM_AUTH_DEXES.has(authDex)) {
       payload.chain = authDex === 'gmx' || authDex === 'ostium' ? 'arbitrum'
         : authDex === 'monad' ? 'monad'
         : authDex === 'hyperliquid' ? 'arbitrum'
@@ -1321,6 +1322,7 @@ export function useAuthFlow() {
         : authDex === 'grvt' ? 'grvt'
         : authDex === 'katana' ? 'katana'
         : authDex === 'lighter' ? 'lighter'
+        : authDex === 'rhlighter' ? 'rhlighter'
         : 'base';
       payload.walletSource = candidate.source;
     }

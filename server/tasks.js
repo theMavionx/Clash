@@ -113,6 +113,7 @@ const FUTURES_TASK_DEXES = new Set([
   'gmtrade',
   'flash',
   'lighter',
+  'rhlighter',
   'bulk',
 ]);
 
@@ -551,7 +552,8 @@ function walletMatchesDex(dex, wallet) {
     dex === 'hibachi' ||
     dex === 'hotstuff' ||
     dex === 'katana' ||
-    dex === 'lighter'
+    dex === 'lighter' ||
+    dex === 'rhlighter'
   ) return isEvmWallet(wallet);
   return true;
 }
@@ -634,7 +636,7 @@ function isGmtradeCloseFallbackTrade(trade) {
 
 async function fetchFuturesDexTrades(player, dexFilter, opts = {}) {
   const wallet = resolveWalletForDex(player, dexFilter);
-  const walletCompatible = !wallet || dexFilter === 'lighter' || walletMatchesDex(dexFilter, wallet);
+  const walletCompatible = !wallet || dexFilter === 'lighter' || dexFilter === 'rhlighter' || walletMatchesDex(dexFilter, wallet);
   const reconcileWallet = walletCompatible ? wallet : null;
   if (wallet && !walletCompatible) {
     console.warn(
@@ -721,7 +723,7 @@ async function fetchWalletTrades(player, opts = {}) {
     // spend seconds in unrelated RPC backfills and make /tasks time out before
     // the freshly imported Lighter fills are counted.
     const forcedDex = requestedTaskDex(opts);
-    const dexes = opts.singleDex || dexFilter === 'lighter' || dexFilter === 'bulk' || forcedDex
+    const dexes = opts.singleDex || dexFilter === 'lighter' || dexFilter === 'rhlighter' || dexFilter === 'bulk' || forcedDex
       ? [dexFilter]
       : getTaskFuturesDexes(player, opts.dex);
     const batches = [];

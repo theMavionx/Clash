@@ -3,6 +3,11 @@ export const LIGHTER_BROWSER_API = String(
   || import.meta.env.VITE_LIGHTER_API_URL
   || 'https://mainnet.zklighter.elliot.ai',
 ).replace(/\/+$/u, '');
+export const RH_LIGHTER_BROWSER_API = String(
+  import.meta.env.VITE_RH_LIGHTER_BROWSER_API_URL
+  || import.meta.env.VITE_RH_LIGHTER_API_URL
+  || 'https://api.rh.lighter.xyz',
+).replace(/\/+$/u, '');
 
 const REQUEST_TIMEOUT_MS = Math.max(1_000, Math.min(20_000, Number(
   import.meta.env.VITE_LIGHTER_BROWSER_TIMEOUT_MS || 8_000,
@@ -33,15 +38,17 @@ function normalizeSymbol(value) {
     .replace(/[-/](PERP|USD|USDC)$/iu, '');
 }
 
-async function lighterRequest(path) {
+async function lighterRequest(path, api = LIGHTER_BROWSER_API) {
+  const base = String(api || LIGHTER_BROWSER_API).replace(/\/+$/u, '');
+  const cacheKey = `${base}:${path}`;
   const now = Date.now();
-  const cached = cache.get(path);
+  const cached = cache.get(cacheKey);
   if (cached && now - cached.at < PUBLIC_CACHE_TTL_MS) return cached.data;
 
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
   try {
-    const res = await fetch(`${LIGHTER_BROWSER_API}${path}`, {
+    const res = await fetch(`${base}${path}`, {
       signal: ctrl.signal,
       headers: {
         accept: 'application/json',
@@ -62,7 +69,7 @@ async function lighterRequest(path) {
         : (data?.message || data?.error || text || `HTTP ${res.status}`);
       throw new Error(`Lighter ${path} failed: ${msg}`);
     }
-    cache.set(path, { at: now, data });
+    cache.set(cacheKey, { at: now, data });
     if (cache.size > 120) cache = new Map(Array.from(cache.entries()).slice(-80));
     return data;
   } finally {
@@ -93,8 +100,8 @@ function buildFundingRateMaps(fundingRows = []) {
   return { byId, bySymbol };
 }
 
-async function getFundingRateMaps() {
-  const data = await lighterRequest('/api/v1/funding-rates');
+async function getFundingRateMaps(api) {
+  const data = await lighterRequest('/api/v1/funding-rates', api);
   return buildFundingRateMaps(rows(data, 'funding_rates'));
 }
 
@@ -144,18 +151,18 @@ function marketFromOrderBook(row, fundingMaps = null) {
   };
 }
 
-async function getOrderBooks(filter = 'perp') {
+async function getOrderBooks(filter = 'perp', api = LIGHTER_BROWSER_API) {
   if (String(filter || '').toLowerCase() === 'perp') {
-    const details = rows(await lighterRequest('/api/v1/orderBookDetails'), 'order_book_details');
+    const details = rows(await lighterRequest('/api/v1/orderBookDetails', api), 'order_book_details');
     if (details.length) return details;
   }
-  return rows(await lighterRequest(`/api/v1/orderBooks?filter=${encodeURIComponent(filter)}`), 'order_books');
+  return rows(await lighterRequest(`/api/v1/orderBooks?filter=${encodeURIComponent(filter)}`, api), 'order_books');
 }
 
-export async function fetchLighterMarketsDirect() {
+export async function fetchLighterMarketsDirect(api = LIGHTER_BROWSER_API) {
   const [orderBooks, fundingMaps] = await Promise.all([
-    getOrderBooks('perp'),
-    getFundingRateMaps().catch((err) => {
+    getOrderBooks('perp', api),
+    getFundingRateMaps(api).catch((err) => {
       console.warn('[Lighter browser] funding-rates read failed:', err?.message || err);
       return buildFundingRateMaps([]);
     }),
@@ -166,10 +173,10 @@ export async function fetchLighterMarketsDirect() {
     .filter(row => row.symbol);
 }
 
-export async function fetchLighterPricesDirect() {
+export async function fetchLighterPricesDirect(api = LIGHTER_BROWSER_API) {
   const [orderBooks, fundingMaps] = await Promise.all([
-    getOrderBooks('perp'),
-    getFundingRateMaps().catch((err) => {
+    getOrderBooks('perp', api),
+    getFundingRateMaps(api).catch((err) => {
       console.warn('[Lighter browser] funding-rates read failed:', err?.message || err);
       return buildFundingRateMaps([]);
     }),

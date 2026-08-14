@@ -17,7 +17,7 @@ const builderSigner = privateKeyToAccount(builderSignerKey);
 process.env.NODE_ENV = 'development';
 process.env.CLASH_FUTURES_DB = dbPath;
 process.env.ASTER_BUILDER_ADDRESS = builder;
-process.env.ASTER_BUILDER_FEE_RATE = '0.00001';
+process.env.ASTER_BUILDER_FEE_RATE = '0.0001';
 process.env.ASTER_BUILDER_SIGNER_PRIVATE_KEY = builderSignerKey;
 process.env.ASTER_BUILDER_SIGNER_ADDRESS = builderSigner.address;
 
@@ -35,7 +35,7 @@ const requestPayload = new URLSearchParams([
   ['side', 'BUY'],
   ['quantity', '0.002'],
   ['builder', builder],
-  ['feeRate', '0.00001'],
+  ['feeRate', '0.0001'],
   ['newClientOrderId', 'clash-order-proof-1'],
   ['nonce', '1786500000000000'],
   ['user', owner],
@@ -79,7 +79,7 @@ async function run() {
   assert.equal(proof.orderId, String(orderResponse.orderId));
   assert.equal(proof.clientOrderId, orderResponse.clientOrderId);
   assert.equal(proof.builderAddress, builder.toLowerCase());
-  assert.equal(proof.builderFeeBps, 0.1);
+  assert.equal(proof.builderFeeBps, 1);
 
   const write = db.recordAsterBuilderOrder({
     ...proof,
@@ -130,7 +130,7 @@ async function run() {
   const tradeProof = JSON.parse(trade.proof_json);
   assert.equal(tradeProof.builder_order_id, String(orderResponse.orderId));
   assert.equal(tradeProof.builder_address, builder.toLowerCase());
-  assert.equal(tradeProof.builder_fee_rate, '0.00001');
+  assert.equal(tradeProof.builder_fee_rate, '0.0001');
 
   const repeated = aster.importUserTradesForPlayer({
     db,

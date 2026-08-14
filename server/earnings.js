@@ -2395,6 +2395,23 @@ const LIGHTER_BUILDER_FEE_BPS = Math.max(0, Number(
   || process.env.VITE_LIGHTER_BUILDER_FEE_BPS
   || 1,
 )) || 1;
+const RH_LIGHTER_API = String(
+  process.env.RH_LIGHTER_API_URL || 'https://api.rh.lighter.xyz',
+).replace(/\/+$/u, '');
+const RH_LIGHTER_INTEGRATOR_ACCOUNT_INDEX = Number(
+  process.env.RH_LIGHTER_INTEGRATOR_ACCOUNT_INDEX
+  || process.env.VITE_RH_LIGHTER_INTEGRATOR_ACCOUNT_INDEX
+  || 0,
+);
+const RH_LIGHTER_INTEGRATOR_L1_ADDRESS = String(
+  process.env.RH_LIGHTER_INTEGRATOR_L1_ADDRESS
+  || '0xB36402e87a86206D3a114a98B53f31362291fe1B',
+).trim().toLowerCase();
+const RH_LIGHTER_BUILDER_FEE_BPS = Math.max(0, Number(
+  process.env.RH_LIGHTER_BUILDER_FEE_BPS
+  || process.env.VITE_RH_LIGHTER_BUILDER_FEE_BPS
+  || 1,
+)) || 1;
 const BULK_BUILDER_ADDRESS = String(
   process.env.BULK_BUILDER_ADDRESS || 'Drvzmh5iRfHRuKHgmm6Q77CqxhqvsXaLvrKkfMP8qci9',
 ).trim();
@@ -2404,7 +2421,7 @@ const ONDO_BUILDER_FEE_BPS = 1;
 const ASTER_BUILDER_ADDRESS = String(
   process.env.ASTER_BUILDER_ADDRESS || process.env.ASTER_BUILDER_CODE || '',
 ).trim().toLowerCase();
-const ASTER_BUILDER_FEE_RATE = String(process.env.ASTER_BUILDER_FEE_RATE || '0.00001').trim();
+const ASTER_BUILDER_FEE_RATE = String(process.env.ASTER_BUILDER_FEE_RATE || '0.0001').trim();
 const ASTER_BUILDER_FEE_BPS = Math.max(0, Number(ASTER_BUILDER_FEE_RATE) * 10_000);
 
 function ondoVerifiedBuilderProofWhere() {
@@ -2574,7 +2591,9 @@ function readVerifiedFuturesDexStats(
       END
     `;
     const feeExpr = "ABS(CAST(COALESCE(NULLIF(fee, ''), '0') AS REAL))";
-    const canonicalEarnedRatePpm = Number(earnedRatePpm);
+    const canonicalEarnedRatePpm = earnedRatePpm == null || earnedRatePpm === ''
+      ? Number.NaN
+      : Number(earnedRatePpm);
     const earnedExpr = Number.isFinite(canonicalEarnedRatePpm) && canonicalEarnedRatePpm >= 0
       ? `((${volumeExpr}) * ${canonicalEarnedRatePpm} / 1000000.0)`
       : earnedFeeWhere
@@ -3075,6 +3094,101 @@ async function fetchLighterEarnings() {
   };
 }
 
+async function fetchRhLighterEarnings() {
+  const collector = Number.isFinite(RH_LIGHTER_INTEGRATOR_ACCOUNT_INDEX)
+    ? Math.trunc(RH_LIGHTER_INTEGRATOR_ACCOUNT_INDEX)
+    : 0;
+  // `rhlighter_integrator` is emitted only after the importer verifies that the
+  // fill collector matches this deployment's configured partner index. The fee
+  // column already contains the exact integrator fee for that verified fill.
+  const local = readVerifiedFuturesDexStats('rhlighter', 'rhlighter_integrator', {
+    earnedFeeWhere: collector > 0 ? '1' : '0',
+  });
+  const estimated = local.volume_usd * (RH_LIGHTER_BUILDER_FEE_BPS / 10000);
+  if (collector <= 0) {
+    return {
+      earned_usd: 0,
+      currency: 'USDC (Robinhood Lighter)',
+      address: null,
+      volume_usd: local.volume_usd,
+      volume_24h_usd: local.volume_24h_usd,
+      trades: local.trades,
+      trades_24h: local.trades_24h,
+      traders: local.traders,
+      estimated_fee_usd: roundUsd(estimated),
+      builder_fee_bps: RH_LIGHTER_BUILDER_FEE_BPS,
+      builder_fee_pct: RH_LIGHTER_BUILDER_FEE_BPS / 100,
+      integrator_account_index: null,
+      configured: false,
+      model: 'rh_lighter_integrator_not_configured',
+      source_detail: 'rh_lighter_partner_stats_pending_integrator_account',
+      note: 'Robinhood Lighter requires its own account index for partner attribution. The standard Lighter integrator index is not valid on this deployment.',
+    };
+  }
+
+  let partnerStats = null;
+  let remoteError = '';
+  try {
+    const identity = await fetchJson(
+      `${RH_LIGHTER_API}/api/v1/account?by=index&value=${encodeURIComponent(String(collector))}`,
+      { headers: { accept: 'application/json' } },
+    );
+    const account = Array.isArray(identity?.accounts) ? identity.accounts[0] : null;
+    const owner = String(account?.l1_address || account?.owner || '').trim().toLowerCase();
+    if (!account) throw new Error(`partner account ${collector} does not exist on Robinhood Lighter`);
+    if (RH_LIGHTER_INTEGRATOR_L1_ADDRESS && owner !== RH_LIGHTER_INTEGRATOR_L1_ADDRESS) {
+      throw new Error(`partner account ${collector} belongs to ${owner || 'an unknown owner'}`);
+    }
+    partnerStats = await fetchJson(
+      `${RH_LIGHTER_API}/api/v1/partnerStats?account_index=${encodeURIComponent(String(collector))}`,
+      { headers: { accept: 'application/json' } },
+    );
+  } catch (err) {
+    remoteError = err?.message || String(err);
+  }
+  const hasExactRemote = Number(partnerStats?.code) === 200
+    && Number.isFinite(Number(partnerStats?.total_fees_earned));
+  const exactEarned = hasExactRemote ? Number(partnerStats.total_fees_earned) : local.earned_usd;
+  const exactVolume = hasExactRemote ? Number(partnerStats.total_volume || 0) : local.volume_usd;
+  const exactTrades = hasExactRemote ? Number(partnerStats.total_trades || 0) : local.trades;
+  return {
+    earned_usd: roundUsd(exactEarned),
+    currency: 'USDC (Robinhood Lighter)',
+    address: collector,
+    volume_usd: roundUsd(exactVolume),
+    volume_24h_usd: local.volume_24h_usd,
+    trades: exactTrades,
+    trades_24h: local.trades_24h,
+    traders: hasExactRemote ? Number(partnerStats.unique_clients || 0) : local.traders,
+    earned_24h_usd: local.earned_24h_usd,
+    fee_usd: local.fee_usd,
+    fee_24h_usd: local.fee_24h_usd,
+    estimated_fee_usd: roundUsd(estimated),
+    builder_fee_bps: RH_LIGHTER_BUILDER_FEE_BPS,
+    builder_fee_pct: RH_LIGHTER_BUILDER_FEE_BPS / 100,
+    integrator_account_index: collector,
+    integrator_expected_owner: RH_LIGHTER_INTEGRATOR_L1_ADDRESS || null,
+    integrator_ready: hasExactRemote,
+    partner_stats: hasExactRemote ? {
+      total_taker_fees_earned: Number(partnerStats.total_taker_fees_earned || 0),
+      total_maker_fees_earned: Number(partnerStats.total_maker_fees_earned || 0),
+      total_taker_volume: Number(partnerStats.total_taker_volume || 0),
+      total_maker_volume: Number(partnerStats.total_maker_volume || 0),
+      total_taker_trades: Number(partnerStats.total_taker_trades || 0),
+      total_maker_trades: Number(partnerStats.total_maker_trades || 0),
+      unique_clients: Number(partnerStats.unique_clients || 0),
+    } : null,
+    latest_fill_at: local.latest_fill_at,
+    recent_proofs: local.recent_proofs,
+    configured: true,
+    model: hasExactRemote ? 'rh_lighter_partner_stats_exact' : 'rh_lighter_local_integrator_fee_exact',
+    source_detail: hasExactRemote ? 'rh_lighter_public_partner_stats' : 'rh_lighter_integrator_fills_fee_sum',
+    note: hasExactRemote
+      ? `Exact cumulative Robinhood Lighter partnerStats for integrator account ${collector}; recent 24h activity remains locally indexed from attributed fills.`
+      : `Robinhood Lighter partnerStats was unavailable (${remoteError || 'unknown error'}); showing only locally imported attributed fills.`,
+  };
+}
+
 async function fetchBulkEarnings() {
   const expectedAddress = BULK_BUILDER_ADDRESS.replace(/'/g, "''");
   const proofWhere = `
@@ -3373,6 +3487,7 @@ const ANALYTICS_DEXES = [
   { key: 'gmtrade', label: 'GMTrade' },
   { key: 'flash', label: 'Flash Trade' },
   { key: 'lighter', label: 'Lighter' },
+  { key: 'rhlighter', label: 'Robinhood Lighter' },
   { key: 'bulk', label: 'Bulk' },
 ];
 
@@ -3444,6 +3559,7 @@ function tradeSourceWhereForAnalytics(dex) {
   if (dex === 'gmtrade') return "verified_source IN ('gmtrade_tx', 'gmtrade_position_after_tx', 'gmtrade_close_tx_client_notional')";
   if (dex === 'flash') return "verified_source = 'flash_tx'";
   if (dex === 'lighter') return "verified_source = 'lighter_integrator'";
+  if (dex === 'rhlighter') return "verified_source = 'rhlighter_integrator'";
   if (dex === 'bulk') return tradeRecon.verifiedSourceClauseForDex('bulk');
   if (dex === 'phoenix') return "verified_source IN ('worker', 'tx')";
   if (dex === 'gmx') return "verified_source IN ('worker', 'client', 'server')";
@@ -3649,6 +3765,19 @@ function revenueModelForDex(dex, dateForRate = null) {
       integrator_account_index: LIGHTER_INTEGRATOR_ACCOUNT_INDEX,
       model: bps > 0 ? 'single_builder_fee' : 'builder_fee_not_configured',
       source_detail: bps > 0 ? 'local_volume_x_lighter_bps' : 'lighter_integrator_not_configured',
+    };
+  }
+  if (dex === 'rhlighter') {
+    const bps = Math.max(0, RH_LIGHTER_BUILDER_FEE_BPS);
+    return {
+      configured: bps > 0 && RH_LIGHTER_INTEGRATOR_ACCOUNT_INDEX > 0,
+      rate: bps / 10000,
+      rate_label: bps > 0 ? `${bps} bps RH integrator fee` : 'integrator fee not configured',
+      builder_fee_bps: bps,
+      builder_fee_pct: bps / 100,
+      integrator_account_index: RH_LIGHTER_INTEGRATOR_ACCOUNT_INDEX || null,
+      model: bps > 0 ? 'single_builder_fee' : 'builder_fee_not_configured',
+      source_detail: bps > 0 ? 'local_volume_x_rh_lighter_bps' : 'rh_lighter_integrator_not_configured',
     };
   }
   if (dex === 'bulk') {
@@ -4073,6 +4202,10 @@ const FAILED_EARNINGS_META = {
     address: ASTER_BUILDER_ADDRESS || null,
     currency: 'USDT (Aster)',
   },
+  rhlighter: {
+    address: RH_LIGHTER_INTEGRATOR_ACCOUNT_INDEX || null,
+    currency: 'USDC (Robinhood Lighter)',
+  },
   bulk: {
     address: BULK_BUILDER_ADDRESS,
     currency: 'USDC (Bulk/Solana)',
@@ -4103,6 +4236,7 @@ const EARNINGS_READER_CONFIG = {
   gmtrade: { source: 'gmtrade_verified_tx_local_estimate', read: () => fetchGmtradeEarnings() },
   flash: { source: 'flash_v2_verified_tx_local_estimate', read: () => fetchFlashEarnings() },
   lighter: { source: 'lighter_integrator_fills_fee_sum', read: () => fetchLighterEarnings() },
+  rhlighter: { source: 'rh_lighter_public_partner_stats', read: () => fetchRhLighterEarnings() },
   bulk: { source: 'bulk_v0_1_2_signed_order_proof', read: () => fetchBulkEarnings() },
   ondo: { source: 'ondo_clashofperps_order_proof_x_authenticated_fill_volume_x_1bps', read: () => fetchOndoEarnings() },
 };
@@ -4126,6 +4260,7 @@ const EARNINGS_DEX_ORDER = [
   'gmtrade',
   'flash',
   'lighter',
+  'rhlighter',
   'bulk',
   'ondo',
 ];

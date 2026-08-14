@@ -22,7 +22,6 @@ function Resolve-GodotExe {
     $Candidates = @(
         $env:GODOT_EXE,
         "C:\Users\Admin\Downloads\Godot_v4.6.1-stable_win64.exe\Godot_v4.6.1-stable_win64_console.exe",
-        "C:\Users\Admin\Downloads\Godot_v4.6-stable_win64.exe\Godot_v4.6-stable_win64_console.exe",
         (Join-Path $RepoRoot ".tmp-godot\engine\Godot_v4.6.1-stable_win64_console.exe")
     )
     return ($Candidates | Where-Object {
@@ -54,6 +53,9 @@ $NodeFiles = @(
     "server/nft_v3_endpoints.js",
     "server/earnings.js",
     "server/test-ondo-earnings.js",
+    "server/test-aster-earnings.js",
+    "server/test-rh-lighter-earnings.js",
+    "server/test-rhlighter-tournament-migration.js",
     "server/index.js",
     "server/routes.js",
     "server/db.js",
@@ -69,6 +71,10 @@ $NodeFiles = @(
     "server-futures/decibel-rewards-worker.js",
     "server-futures/test-decibel-exact-fill-reconciliation.js",
     "server-futures/test-decibel-bulk-rewards.js",
+    "server-futures/test-decibel-referral.js",
+    "server-futures/test-aster-adapter.js",
+    "server-futures/test-aster-builder-tracking.js",
+    "server-futures/test-rh-lighter-adapter.js",
     "server-futures/index.js",
     "server-futures/routes.js",
     "server-futures/gmtrade.js",
@@ -95,6 +101,17 @@ Invoke-Step "Aptos RPC routing" { node scripts/verify-aptos-rpc-routing.mjs }
 Invoke-Step "Hyperliquid rewards worker" { node server-futures/test-hyperliquid-rewards-worker.js }
 Invoke-Step "Decibel bulk rewards worker" { node server-futures/test-decibel-bulk-rewards.js }
 Invoke-Step "Decibel exact-fill reconciliation" { node server-futures/test-decibel-exact-fill-reconciliation.js }
+Invoke-Step "Decibel referral enforcement" { node server-futures/test-decibel-referral.js }
+Invoke-Step "Aster adapter" { node server-futures/test-aster-adapter.js }
+Invoke-Step "Aster builder tracking" { node server-futures/test-aster-builder-tracking.js }
+Invoke-Step "Aster earnings" { node server/test-aster-earnings.js }
+Invoke-Step "RH Lighter adapter" { node server-futures/test-rh-lighter-adapter.js }
+Invoke-Step "RH Lighter earnings" { node server/test-rh-lighter-earnings.js }
+Invoke-Step "RH Lighter tournament schema migration" { node server/test-rhlighter-tournament-migration.js }
+Invoke-Step "Aster browser integration" { node web/test-aster-v3.mjs }
+Invoke-Step "Decibel browser referral" { node web/test-decibel-referral.mjs }
+Invoke-Step "RH Lighter browser integration" { node web/test-rh-lighter.mjs }
+Invoke-Step "battle result responsive layout" { node --test web/test-battle-result-layout.mjs }
 Invoke-Step "Tournament trade cursor" { node server/test-tournament-trade-cursor.js }
 Invoke-Step "Hermes jobs worker" { node server/test-hermes-jobs-worker.js }
 Invoke-Step "Ondo proof-gated builder earnings" { node server/test-ondo-earnings.js }
@@ -136,6 +153,9 @@ if ($Mode -eq "Deploy") {
     }
     Invoke-Step "camera swipe smoothing Godot regression" {
         & $GodotExe --headless --path $RepoRoot res://scenes/TestMain.tscn -- --verify-camera-swipe-smoothing
+    }
+    Invoke-Step "building move smoothing and grid Godot regression" {
+        & $GodotExe --headless --path $RepoRoot --script res://scripts/tests/building_move_smoothing_probe.gd
     }
     if (Test-Path "web/package.json") {
         Invoke-Step "web build" { npm.cmd --prefix web run build }

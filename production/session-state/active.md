@@ -1,8 +1,18 @@
 # Active Session State
 
-Last updated: 2026-08-08
+Last updated: 2026-08-14
 
 ## Current Focus
+
+Release checkpoint (2026-08-14): the owner authorized committing, pushing, and
+deploying the complete reviewed `main` worktree. The candidate combines
+Robinhood Lighter account `3156`/referral attribution, Aster and Decibel
+builder/referral tracking, tournament and battle-result UI, and Godot building
+move/grid improvements. Before release, the canonical deploy configuration must
+pin the RH Lighter integrator index/owner/one-bps fee/referral, all focused
+exchange/UI/Godot checks must pass, and production must verify the `rhlighter`
+tournament-schema migration without losing rows. No funded order is part of the
+release smoke.
 
 The active implementation task is the `clashSOL` Sanctum LST shop integration
 (goal G-010). Sanctum's live API can quote/build/execute transactions only for

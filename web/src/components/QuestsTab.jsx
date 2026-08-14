@@ -16,6 +16,20 @@ import { uiButton } from '../styles/theme';
 const GAME_API = import.meta.env.VITE_GAME_API || '/api';
 const FUTURES_API = import.meta.env.VITE_FUTURES_API || '/api/futures';
 const LIGHTER_STORAGE_KEY = 'clash_lighter_credentials_v1';
+const LIGHTER_TASK_PROFILES = Object.freeze({
+  lighter: Object.freeze({
+    storageKey: LIGHTER_STORAGE_KEY,
+    routePrefix: 'lighter',
+    accountHeader: 'x-lighter-account-index',
+    authHeader: 'x-lighter-auth-token',
+  }),
+  rhlighter: Object.freeze({
+    storageKey: 'clash_rh_lighter_credentials_v1',
+    routePrefix: 'rh-lighter',
+    accountHeader: 'x-rh-lighter-account-index',
+    authHeader: 'x-rh-lighter-auth-token',
+  }),
+});
 const HIBACHI_STORAGE_KEY = 'clash_hibachi_credentials_v1';
 const LIGHTER_AUTH_TOKEN_DEADLINE_SECONDS = 600;
 const LIGHTER_AUTH_TOKEN_REFRESH_SKEW_MS = 90_000;
@@ -412,7 +426,7 @@ function lighterTokenIsFresh(creds) {
   );
 }
 
-async function ensureLighterTaskCredentials(creds, baseHeaders) {
+async function ensureLighterTaskCredentials(creds, baseHeaders, profile) {
   const accountIndex = Number(creds?.accountIndex ?? creds?.account_index);
   const apiKeyIndex = Number(creds?.apiKeyIndex ?? creds?.api_key_index);
   const apiPrivateKey = String(creds?.apiPrivateKey ?? creds?.api_private_key ?? '').trim();
@@ -427,9 +441,9 @@ async function ensureLighterTaskCredentials(creds, baseHeaders) {
     const existingToken = String(creds?.readOnlyToken || creds?.read_only_token || creds?.authToken || '').trim();
     return existingToken ? { accountIndex, authToken: existingToken } : null;
   }
-  const res = await fetch(`${FUTURES_API}/lighter/auth-token`, {
+  const res = await fetch(`${FUTURES_API}/${profile.routePrefix}/auth-token`, {
     method: 'POST',
-    headers: { ...baseHeaders, 'content-type': 'application/json', 'x-dex': 'lighter' },
+    headers: { ...baseHeaders, 'content-type': 'application/json', 'x-dex': profile.dex },
     body: JSON.stringify({
       accountIndex,
       apiKeyIndex,
@@ -450,7 +464,7 @@ async function ensureLighterTaskCredentials(creds, baseHeaders) {
     readOnlyToken: data.auth_token,
     readOnlyTokenExpiresAt: Date.now() + (LIGHTER_AUTH_TOKEN_DEADLINE_SECONDS * 1000),
   };
-  await writeEncryptedCredential(LIGHTER_STORAGE_KEY, saved);
+  await writeEncryptedCredential(profile.storageKey, saved);
   return { accountIndex, authToken: data.auth_token };
 }
 
@@ -598,13 +612,15 @@ function QuestsTab({ markets = [] }) {
       }
       return base;
     }
-    if (activeDex !== 'lighter') return base;
+    const lighterProfile = LIGHTER_TASK_PROFILES[activeDex];
+    if (!lighterProfile) return base;
     try {
-      const creds = await readEncryptedCredential(LIGHTER_STORAGE_KEY);
-      const lighterCreds = await ensureLighterTaskCredentials(creds, base);
+      const profile = { ...lighterProfile, dex: activeDex };
+      const creds = await readEncryptedCredential(profile.storageKey);
+      const lighterCreds = await ensureLighterTaskCredentials(creds, base, profile);
       if (lighterCreds?.authToken) {
-        base['x-lighter-account-index'] = String(lighterCreds.accountIndex);
-        base['x-lighter-auth-token'] = lighterCreds.authToken;
+        base[profile.accountHeader] = String(lighterCreds.accountIndex);
+        base[profile.authHeader] = lighterCreds.authToken;
       }
     } catch {
       // Quests should remain usable even if encrypted browser storage is unavailable.

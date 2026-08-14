@@ -19,7 +19,7 @@ import { useHibachi } from '../hooks/useHibachi';
 import { useHotstuff } from '../hooks/useHotstuff';
 import { useGrvt } from '../hooks/useGrvt';
 import { useKatana } from '../hooks/useKatana';
-import { useLighter } from '../hooks/useLighter';
+import { useLighter, useRhLighter } from '../hooks/useLighter';
 import { useOstium } from '../hooks/useOstium';
 import { useBulk } from '../hooks/useBulk';
 import { useDex, DEX_CONFIG } from '../contexts/DexContext';
@@ -104,6 +104,7 @@ function ProfileModal({ onClose }) {
   const grvtHook = useGrvt();
   const katanaHook = useKatana();
   const lighterHook = useLighter();
+  const rhLighterHook = useRhLighter();
   const ostiumHook = useOstium();
   const bulkHook = useBulk();
   const tradingHook = dex === 'avantis'
@@ -140,6 +141,8 @@ function ProfileModal({ onClose }) {
     ? katanaHook
     : dex === 'lighter'
     ? lighterHook
+    : dex === 'rhlighter'
+    ? rhLighterHook
     : dex === 'bulk'
     ? bulkHook
     : pacificaHook;
@@ -186,7 +189,7 @@ function ProfileModal({ onClose }) {
   // though the Avantis account is registered with an EVM wallet. Resolve
   // to the chain-correct address for the active DEX.
   const adapterAddr = (connected && publicKey) ? publicKey.toBase58() : null;
-  const liveWallet = (dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'leverup' || dex === 'aster' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'lighter')
+  const liveWallet = (dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'leverup' || dex === 'aster' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'lighter' || dex === 'rhlighter')
     ? (walletAddr || null)            // EVM from useAvantis/useGmx/useMonad
     : dex === 'decibel'
     ? (walletAddr || null)            // Aptos from useDecibel
@@ -195,7 +198,7 @@ function ProfileModal({ onClose }) {
     : (adapterAddr || walletAddr || null); // Solana adapter / Privy
   const linkedWallet = player?.wallet || null;
   const activeWallet = liveWallet || linkedWallet;
-  const walletSource = (dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'leverup' || dex === 'aster' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'lighter')
+  const walletSource = (dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'leverup' || dex === 'aster' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'lighter' || dex === 'rhlighter')
     ? (liveWallet ? 'evm' : null)
     : dex === 'decibel'
     ? (liveWallet ? 'aptos' : null)
@@ -618,7 +621,14 @@ function ProfileModal({ onClose }) {
       hook: lighterHook,
       walletLabel: 'EVM wallet',
     },
-  ]), [grvtHook, hibachiHook, hotstuffHook, katanaHook, lighterHook]);
+    {
+      id: 'rhlighter',
+      label: 'Robinhood Lighter',
+      details: 'separate RH account index, API key index, private key',
+      hook: rhLighterHook,
+      walletLabel: 'EVM wallet',
+    },
+  ]), [grvtHook, hibachiHook, hotstuffHook, katanaHook, lighterHook, rhLighterHook]);
 
   const switchToCredentialDex = useCallback((dexId) => {
     setDex(dexId);
@@ -656,12 +666,13 @@ function ProfileModal({ onClose }) {
       if (apiSecret == null) return null;
       return { apiKey, apiSecret };
     }
-    if (dexId === 'lighter') {
-      const accountIndex = window.prompt('Lighter account index', '');
+    if (dexId === 'lighter' || dexId === 'rhlighter') {
+      const venue = dexId === 'rhlighter' ? 'Robinhood Lighter' : 'Lighter';
+      const accountIndex = window.prompt(`${venue} account index`, '');
       if (accountIndex == null) return null;
-      const apiKeyIndex = window.prompt('Lighter API key index', '');
+      const apiKeyIndex = window.prompt(`${venue} API key index`, '');
       if (apiKeyIndex == null) return null;
-      const apiPrivateKey = window.prompt('Lighter API private key', '');
+      const apiPrivateKey = window.prompt(`${venue} API private key`, '');
       if (apiPrivateKey == null) return null;
       return { accountIndex, apiKeyIndex, apiPrivateKey };
     }
@@ -1163,6 +1174,11 @@ function ProfileModal({ onClose }) {
               style={uiButton('primary', { width: '100%', minHeight: 44, padding: '12px 16px' })}
               onClick={() => setEvmModalOpen(true)}
             >CONNECT LIGHTER WALLET</button>
+          ) : dex === 'rhlighter' ? (
+            <button
+              style={uiButton('primary', { width: '100%', minHeight: 44, padding: '12px 16px' })}
+              onClick={() => setEvmModalOpen(true)}
+            >CONNECT ROBINHOOD LIGHTER WALLET</button>
           ) : (
             <button
               style={uiButton('primary', { width: '100%', minHeight: 44, padding: '12px 16px' })}
@@ -1179,7 +1195,7 @@ function ProfileModal({ onClose }) {
                 <button
                   style={S.walletRepairBtn}
                   onClick={() => {
-                    if (dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'leverup' || dex === 'aster' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'lighter') setEvmModalOpen(true);
+                    if (dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'leverup' || dex === 'aster' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'lighter' || dex === 'rhlighter') setEvmModalOpen(true);
                     else if (dex === 'decibel') aptosConnect?.();
                     else openSolanaConnect();
                   }}
@@ -1419,7 +1435,7 @@ function ProfileModal({ onClose }) {
       <EvmWalletModal
         open={evmModalOpen}
         onClose={() => setEvmModalOpen(false)}
-        targetChain={dex === 'gmx' || dex === 'hyperliquid' || dex === 'ostium' ? 'arbitrum' : dex === 'monad' || dex === 'leverup' ? 'monad' : dex === 'risex' ? 'rise' : dex === 'nado' ? 'ink' : dex === 'grvt' || dex === 'aster' ? 'baseConnect' : dex === 'katana' ? 'katana' : dex === 'hotstuff' || dex === 'ondo' || dex === 'hibachi' || dex === 'lighter' ? 'mainnet' : 'base'}
+        targetChain={dex === 'gmx' || dex === 'hyperliquid' || dex === 'ostium' ? 'arbitrum' : dex === 'monad' || dex === 'leverup' ? 'monad' : dex === 'risex' ? 'rise' : dex === 'nado' ? 'ink' : dex === 'grvt' || dex === 'aster' || dex === 'rhlighter' ? 'baseConnect' : dex === 'katana' ? 'katana' : dex === 'hotstuff' || dex === 'ondo' || dex === 'hibachi' || dex === 'lighter' ? 'mainnet' : 'base'}
         onConnected={handleEvmConnected}
       />
     </>

@@ -703,7 +703,7 @@ function shouldStoreFetchFailure(path, status) {
   if (status === 401 && /^\/api\/futures\/decibel\/signer(?:\?|$)/.test(path || '')) return false;
   if (status === 404 && /^\/api\/(?:v1\/exchanges|v1\/bot\/exchanges|futures)\/flash\/balance(?:\?|$)/.test(path || '')) return false;
   if (status === 409 && /^\/api\/futures\/bulk\/(?:account|builder-status)(?:\?|$)/.test(path || '')) return false;
-  if (status === 401 && /^\/api\/futures\/lighter\/account(?:\?|$)/.test(path || '')) return false;
+  if (status === 401 && /^\/api\/futures\/(?:lighter|rh-lighter)\/account(?:\?|$)/.test(path || '')) return false;
   if ((status === 429 || status >= 500) && /^\/rpc\/solana(?:[-/?]|$)/.test(path || '')) return false;
   if (status === 429 && /^\/api\/troop-died(?:\?|$)/.test(path || '')) return false;
   if (/\/funding\/overview\?perMarketLimit=2/.test(path || '')) return false;

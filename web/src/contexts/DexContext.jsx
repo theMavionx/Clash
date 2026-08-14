@@ -350,11 +350,27 @@ export const DEX_CONFIG = {
     chainShort: 'LTR',
     description: 'Perps on Lighter',
   },
+  rhlighter: {
+    id: 'rhlighter',
+    label: 'ROBINHOOD LIGHTER',
+    shortLabel: 'RH LTR',
+    emoji: 'RH',
+    logo: '/lighter.svg',
+    logoIsWordmark: false,
+    color: '#16A34A',
+    colorDark: '#15803D',
+    colorLight: 'rgba(22,163,74,0.14)',
+    borderColor: '#22C55E',
+    chain: 'Robinhood Lighter',
+    chainShort: 'RH',
+    description: 'Perps on Robinhood Lighter',
+  },
 };
 
 export const DEX_ORDER = [
   'bulk',
   'lighter',
+  'rhlighter',
   'flash',
   'gmtrade',
   'katana',
@@ -476,7 +492,7 @@ export function DexProvider({ children }) {
         // this a stale /api/state response from account A could land under
         // account B's context and reset the DEX selector to the wrong value.
         if (cancelled) return;
-        if (j.dex === 'pacifica' || j.dex === 'avantis' || j.dex === 'decibel' || j.dex === 'gmx' || j.dex === 'ostium' || j.dex === 'monad' || j.dex === 'phoenix' || j.dex === 'hyperliquid' || j.dex === 'risex' || j.dex === 'nado' || j.dex === 'ondo' || j.dex === 'aster' || j.dex === 'leverup' || j.dex === 'hibachi' || j.dex === 'hotstuff' || j.dex === 'grvt' || j.dex === 'katana' || j.dex === 'gmtrade' || j.dex === 'flash' || j.dex === 'lighter' || j.dex === 'bulk') {
+        if (DEX_CONFIG[j.dex]) {
           // Compare against current React state, not localStorage — localStorage
           // was the previous account's setting and we want the authoritative
           // server value for THIS token to win even if it matches what's
@@ -513,7 +529,7 @@ export function DexServerSync() {
         if (cancelled || !r.ok) return;
         const j = await r.json();
         if (cancelled) return;
-        if (j.dex === 'pacifica' || j.dex === 'avantis' || j.dex === 'decibel' || j.dex === 'gmx' || j.dex === 'ostium' || j.dex === 'monad' || j.dex === 'phoenix' || j.dex === 'hyperliquid' || j.dex === 'risex' || j.dex === 'nado' || j.dex === 'ondo' || j.dex === 'aster' || j.dex === 'leverup' || j.dex === 'hibachi' || j.dex === 'hotstuff' || j.dex === 'grvt' || j.dex === 'katana' || j.dex === 'gmtrade' || j.dex === 'flash' || j.dex === 'lighter' || j.dex === 'bulk') {
+        if (DEX_CONFIG[j.dex]) {
           writeLastPlayerDexPreference({ ...player, token }, j.dex);
           setDex(j.dex);
         }

@@ -21,7 +21,7 @@ import { useGrvt } from '../hooks/useGrvt';
 import { useKatana } from '../hooks/useKatana';
 import { useGmtrade } from '../hooks/useGmtrade';
 import { useFlash } from '../hooks/useFlash';
-import { useLighter } from '../hooks/useLighter';
+import { useLighter, useRhLighter } from '../hooks/useLighter';
 import { useBulk } from '../hooks/useBulk';
 import { useOstium } from '../hooks/useOstium';
 import { RISEX_BRIDGE_CHAINS } from '../lib/risexConfig';
@@ -147,6 +147,7 @@ const DEX_ERROR_LABELS = {
   hyperliquid: 'Hyperliquid',
   katana: 'Katana',
   lighter: 'Lighter',
+  rhlighter: 'Robinhood Lighter',
   monad: 'Perpl',
   nado: 'Nado',
   ondo: 'Ondo Perps',
@@ -158,7 +159,7 @@ const DEX_ERROR_LABELS = {
   risex: 'RISEx',
   bulk: 'Bulk',
 };
-const OPEN_TPSL_NATIVE_ORDER_ATTACH_DEXES = new Set(['avantis', 'bulk', 'decibel', 'flash', 'gmx', 'hibachi', 'hotstuff', 'hyperliquid', 'katana', 'lighter', 'nado', 'ondo', 'ostium', 'pacifica']);
+const OPEN_TPSL_NATIVE_ORDER_ATTACH_DEXES = new Set(['avantis', 'bulk', 'decibel', 'flash', 'gmx', 'hibachi', 'hotstuff', 'hyperliquid', 'katana', 'lighter', 'rhlighter', 'nado', 'ondo', 'ostium', 'pacifica']);
 const OPEN_TPSL_NATIVE_LIMIT_ATTACH_DEXES = new Set([...OPEN_TPSL_NATIVE_ORDER_ATTACH_DEXES, 'grvt', 'leverup', 'phoenix']);
 const OPEN_TPSL_POST_MARKET_DEXES = new Set([
   'decibel',
@@ -167,6 +168,7 @@ const OPEN_TPSL_POST_MARKET_DEXES = new Set([
   'hyperliquid',
   'katana',
   'lighter',
+  'rhlighter',
   'leverup',
   'aster',
   'monad',
@@ -2477,6 +2479,8 @@ const SignalIcon = ({ type, size = 14 }) => {
 // activate gate (full-screen, NOT a popup) to explain each Petra prompt
 // inline before the user clicks sign.
 const ACTIVATION_STEP_HINTS = {
+  'Accept Decibel referral':
+    'Clash checks the referral record for your master Aptos wallet. If it has no referrer, Decibel attaches NQSW0V through its authenticated API; no Petra signature is needed.',
   'Create trading account':
     "Petra will sign a transaction that creates your private subaccount on Decibel. This is the on-chain object that holds your USDC and your positions.",
   'Authorize fast trading':
@@ -3819,6 +3823,7 @@ function FuturesPanel() {
   const gmtradeHook = useGmtrade();
   const flashHook = useFlash();
   const lighterHook = useLighter();
+  const rhLighterHook = useRhLighter();
   const bulkHook = useBulk();
   const ostiumHook = useOstium();
   // Aptos wallet handle — used for the "Connect Petra" CTA on the Decibel
@@ -3863,6 +3868,8 @@ function FuturesPanel() {
     ? flashHook
     : dex === 'lighter'
     ? lighterHook
+    : dex === 'rhlighter'
+    ? rhLighterHook
     : dex === 'bulk'
     ? bulkHook
     : pacificaHook;
@@ -3888,12 +3895,14 @@ function FuturesPanel() {
     bridgeDepositSourceChainId, setBridgeDepositSourceChainId, bridgeDepositSources,
     ondoDepositNetwork, ondoDepositNetworks, setOndoDepositNetwork,
     lighterNeedsIntegratorApproval, lighterNeedsReferral, lighterReferralChecking, lighterReferralStatus,
+    lighterVenueLabel, lighterReferralRequired, lighterIntegratorConfigured, lighterConfig,
     lighterCredentials, detectAccount: detectLighterAccount,
     registerBuilderCode,
     fetchTradeHistory, fetchFundingHistory,
     regionAccess, retryRegionAccess,
     refresh: refreshTrading,
   } = trading;
+  const isLighterDex = dex === 'lighter' || dex === 'rhlighter';
   const openedSortedPositions = useOpenedSortedPositions(positions);
   const [pendingActions, setPendingActions] = useState([]);
   const displayOrders = Array.isArray(orders) ? orders : [];
@@ -3905,6 +3914,8 @@ function FuturesPanel() {
   // Existing positions/orders keep the risk-management UI available, while
   // every new Nado open is still rejected by useNado until referral verifies.
   const hasNadoRiskToManage = dex === 'nado'
+    && (openedSortedPositions.length > 0 || displayOrders.length > 0);
+  const hasDecibelRiskToManage = dex === 'decibel'
     && (openedSortedPositions.length > 0 || displayOrders.length > 0);
   const hasAsterRiskToManage = dex === 'aster'
     && oneTapTrading?.approved === true
@@ -4092,6 +4103,11 @@ function FuturesPanel() {
     try {
       const result = await linkOurReferrer();
       if (result?.error) setLocalAlert(result.error);
+      else if (dex === 'decibel') {
+        setSuccessMsg(result?.already_linked
+          ? 'This Decibel wallet already has a referral.'
+          : `Decibel referral ${referralCode || 'NQSW0V'} confirmed.`);
+      }
       else if (dex === 'nado') {
         setSuccessMsg(result?.already_linked
           ? 'This Nado wallet already has a referral.'
@@ -4108,14 +4124,16 @@ function FuturesPanel() {
       try { localStorage.setItem(referralDismissKey, '1'); } catch { /* storage disabled */ }
     }
   }, [referralDismissKey]);
-  // Hyperliquid keeps its optional one-tap banner. Nado uses a mandatory gate;
-  // only wallets with live exposure see this non-dismissible compact version
-  // so close/cancel actions remain reachable while new opens stay blocked.
+  // Hyperliquid keeps its optional one-tap banner. Nado and Decibel use a
+  // mandatory gate; wallets with live exposure get this non-dismissible
+  // compact version so close/cancel remains reachable while opens stay blocked.
   const showReferralBanner = (
     dex === 'hyperliquid'
       ? !!walletAddr && hasReferrer === false && !referralDismissed
       : dex === 'nado'
         ? !!walletAddr && referralAccess !== NADO_REFERRAL_ACCESS.READY && hasNadoRiskToManage
+        : dex === 'decibel'
+          ? !!walletAddr && hasReferrer !== true && hasDecibelRiskToManage
         : false
   );
   const handleEvmConnected = useCallback(({ address, walletName, provider, rdns }) => {
@@ -4319,7 +4337,7 @@ function FuturesPanel() {
   const [fullscreen, setFullscreen] = useState(window.innerWidth < 600);
 
   useEffect(() => {
-    if (dex !== 'lighter') return undefined;
+    if (!isLighterDex) return undefined;
     if (setupVerified === true || lighterCredentials?.accountIndex != null) return undefined;
     if (!hasWallet || !/^0x[a-fA-F0-9]{40}$/.test(String(walletAddr || ''))) return undefined;
     if (lighterAccountIndexInput.trim()) return undefined;
@@ -4340,7 +4358,7 @@ function FuturesPanel() {
         if (!cancelled) setLighterAccountDetectStatus('error');
       });
     return () => { cancelled = true; };
-  }, [detectLighterAccount, dex, hasWallet, lighterAccountIndexInput, lighterCredentials?.accountIndex, setupVerified, walletAddr]);
+  }, [detectLighterAccount, hasWallet, isLighterDex, lighterAccountIndexInput, lighterCredentials?.accountIndex, setupVerified, walletAddr]);
 
   // Share-trade modal — opened only on demand via the share button next to
   // open positions. Closing a trade should not interrupt the flow with an
@@ -5005,7 +5023,7 @@ function FuturesPanel() {
     setTradePhase('preparing');
     setLocalAlert(null);
     const logLighterTrade = (step, data = {}, level = 'info') => {
-      if (dex !== 'lighter') return;
+      if (!isLighterDex) return;
       const payload = {
         step,
         symbol,
@@ -5023,10 +5041,10 @@ function FuturesPanel() {
         lighterNeedsIntegratorApproval,
         ...data,
       };
-      console[level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'info']('[Lighter UI] trade flow', payload);
-      reportClientEvent('lighter.trade_flow', payload, {
+      console[level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'info'](`[${lighterVenueLabel || 'Lighter'} UI] trade flow`, payload);
+      reportClientEvent(`${dex}.trade_flow`, payload, {
         level,
-        message: `[Lighter UI] trade ${step}`,
+        message: `[${lighterVenueLabel || 'Lighter'} UI] trade ${step}`,
       });
     };
     try {
@@ -5298,7 +5316,7 @@ function FuturesPanel() {
       // executes against whatever leverage was last persisted (e.g. 40× from
       // a previous session even though the slider shows 20×). Avantis/GMX
       // take leverage per-trade in the place-order call, so no pre-flush.
-      if (dex === 'pacifica' || dex === 'bulk' || dex === 'decibel' || dex === 'hotstuff' || dex === 'lighter') {
+      if (dex === 'pacifica' || dex === 'bulk' || dex === 'decibel' || dex === 'hotstuff' || isLighterDex) {
         if (levTimerRef.current) {
           clearTimeout(levTimerRef.current);
           levTimerRef.current = null;
@@ -5417,7 +5435,7 @@ function FuturesPanel() {
       setTradeBusy(false);
       setTradePhase(null);
     }
-  }, [amount, tokenAmount, positionUsdc, limitPrice, symbol, orderType, amountInUsdc, currentPrice, orderSizingPrice, currentMarket, placeMarketOrder, placeLimitOrder, leverage, leverageSettings, setLeverageApi, dex, pacAgent, bindAgent, bindingAgent, pacBalance, pacificaMaxMargin, ostiumMaxMargin, pacificaTakerFeeRate, phoenixTakerFeeRate, hotstuffTakerFeeRate, flashMaxMargin, positions, lotSize, hasWallet, setupVerified, lighterNeedsIntegratorApproval, flashMarketBlockReason, ostiumMarketBlockMessage, maxLev, marginModes, resolveOpenTpslForSide, setTpsl]);
+  }, [amount, tokenAmount, positionUsdc, limitPrice, symbol, orderType, amountInUsdc, currentPrice, orderSizingPrice, currentMarket, placeMarketOrder, placeLimitOrder, leverage, leverageSettings, setLeverageApi, dex, pacAgent, bindAgent, bindingAgent, pacBalance, pacificaMaxMargin, ostiumMaxMargin, pacificaTakerFeeRate, phoenixTakerFeeRate, hotstuffTakerFeeRate, flashMaxMargin, positions, lotSize, hasWallet, setupVerified, isLighterDex, lighterNeedsIntegratorApproval, lighterVenueLabel, flashMarketBlockReason, ostiumMarketBlockMessage, maxLev, marginModes, resolveOpenTpslForSide, setTpsl]);
 
   // ==================== TRADE CONTROLS (reusable) ====================
   // Symbol info bar — token + market data (above chart)
@@ -5443,13 +5461,19 @@ function FuturesPanel() {
   const fundingInfoLabel = dex === 'ostium' ? 'Net L/S 8h' : fundingLabel;
   const oracle = curPriceData ? parseFloat(curPriceData.oracle || 0) : 0;
   const nadoReferralOpenBlocked = dex === 'nado' && referralAccess !== NADO_REFERRAL_ACCESS.READY;
+  const decibelReferralOpenBlocked = dex === 'decibel' && hasReferrer !== true;
   const tradeButtonBlocked = nadoReferralOpenBlocked
+    || decibelReferralOpenBlocked
     || (dex === 'flash' && !!flashMarketBlockReason)
     || (dex === 'ostium' && !!ostiumMarketBlockMessage);
   const tradeButtonBlockMessage = nadoReferralOpenBlocked
     ? (referralAccess === NADO_REFERRAL_ACCESS.UNAVAILABLE
       ? 'Verify your Nado referral before opening another trade.'
       : `Accept Nado referral ${referralCode || '13z8hnl'} before opening another trade.`)
+    : decibelReferralOpenBlocked
+      ? (referralStatus?.unavailable
+        ? 'Decibel referral verification is temporarily unavailable. Retry before opening a trade.'
+        : `Accept Decibel referral ${referralCode || 'NQSW0V'} before opening a trade.`)
     : dex === 'ostium'
       ? ostiumMarketBlockMessage
       : `${symbol} is not open for Flash trading right now (${flashMarketBlockReason}).`;
@@ -5514,7 +5538,7 @@ function FuturesPanel() {
           </>
         )}
         <div style={{...S.symbolBarActions, ...(compactSymbolBar ? S.symbolBarActionsCompact : {}), gap: compactSymbolBar ? 4 : 8}}>
-          {dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'decibel' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'leverup' || dex === 'aster' || dex === 'hibachi' || dex === 'katana' || dex === 'gmtrade' || dex === 'flash' || dex === 'lighter' || dex === 'bulk' ? (
+          {dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'decibel' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'leverup' || dex === 'aster' || dex === 'hibachi' || dex === 'katana' || dex === 'gmtrade' || dex === 'flash' || isLighterDex || dex === 'bulk' ? (
             // Read-only badge for venues where the production margin mode is
             // not user-toggleable in our integration.
             <div
@@ -5541,18 +5565,18 @@ function FuturesPanel() {
                 ? 'Katana uses cross margin in this integration'
                 : dex === 'gmtrade'
                 ? 'GMTrade uses isolated collateral per Solana position account'
-                : dex === 'lighter'
-                ? 'Lighter margin mode is managed through the Lighter account settings in this integration'
+                : isLighterDex
+                ? `${lighterVenueLabel || 'Lighter'} margin mode is managed through the exchange account settings in this integration`
                 : dex === 'bulk'
                 ? 'Bulk cross margin and leverage are managed by your signed account settings'
                 : 'Avantis uses isolated margin per trade (no cross mode)'}
             >
-              <span style={{color: ((dex === 'decibel' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'hibachi' || dex === 'katana' || dex === 'lighter' || dex === 'bulk') ? 'var(--terminal-text-control)' : 'var(--terminal-warning)'), fontWeight: 750}}>
+              <span style={{color: ((dex === 'decibel' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'hibachi' || dex === 'katana' || isLighterDex || dex === 'bulk') ? 'var(--terminal-text-control)' : 'var(--terminal-warning)'), fontWeight: 750}}>
                 {dex === 'gmtrade'
                   ? 'Isolated'
                   : (dex === 'decibel' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'hibachi' || dex === 'katana')
                   ? 'Cross'
-                  : dex === 'lighter' || dex === 'bulk'
+                  : isLighterDex || dex === 'bulk'
                   ? 'Cross'
                   : 'Isolated'}
               </span>
@@ -6616,13 +6640,13 @@ function FuturesPanel() {
                   <span>RISEX - RISE MAINNET</span>
                 </div>
               </>
-            ) : dex === 'lighter' ? (
+            ) : isLighterDex ? (
               <>
                 <div style={{color: 'var(--terminal-text)', fontSize: 18, fontWeight: 700, textAlign: 'center'}}>
                   Connect your EVM wallet
                 </div>
                 <div style={{color: 'var(--terminal-text-muted)', fontSize: 12, fontWeight: 600, textAlign: 'center', maxWidth: 310, lineHeight: 1.45}}>
-                  Connect the EVM wallet that owns your Lighter account. Clash will verify your account index, API key and integrator approval before trading.
+                  Connect the EVM wallet that owns your {lighterVenueLabel || 'Lighter'} account. Clash will verify your account index, API key and integrator approval before trading.
                 </div>
                 {renderPrivyEmailButton('var(--terminal-orange)', 'var(--terminal-brand-strong)')}
                 <button
@@ -7106,7 +7130,7 @@ function FuturesPanel() {
     const asterFeeBps = Number(builderConfig?.feeBps);
     const asterFeeLabel = Number.isFinite(asterFeeBps)
       ? `${asterFeeBps.toLocaleString(undefined, { maximumFractionDigits: 8 })} bps`
-      : `rate ${builderConfig?.feeRate || '0.00001'}`;
+      : `rate ${builderConfig?.feeRate || '0.0001'}`;
     const asterSteps = [
       {
         id: 'agent',
@@ -7118,7 +7142,7 @@ function FuturesPanel() {
         id: 'builder',
         label: `Approve the Clash builder at ${asterFeeLabel}`,
         hint: builderConfigured
-          ? `Aster must confirm ${shortAddr(builderConfig.address)} with max fee ${builderConfig.feeRate || '0.00001'}.`
+          ? `Aster must confirm ${shortAddr(builderConfig.address)} with max fee ${builderConfig.feeRate || '0.0001'}.`
           : 'The integration is ready; Clash still needs the registered Aster builder wallet before opening trades.',
         status: asterBuilderApproved ? 'done' : (agentApproved ? 'active' : 'pending'),
       },
@@ -7355,7 +7379,7 @@ function FuturesPanel() {
     );
   }
   // ==================== LIGHTER API KEY GATE ====================
-  if (dex === 'lighter' && hasWallet && setupVerified !== true) {
+  if (isLighterDex && hasWallet && setupVerified !== true) {
     const isRunning = referralLinking || loading;
     const hasLighterCredentials = lighterCredentials?.accountIndex != null;
     const showLighterCredentialForm = !hasLighterCredentials || lighterCredentialFormOpen;
@@ -7365,7 +7389,9 @@ function FuturesPanel() {
       && lighterApiPrivateKeyInput.trim().length > 0
       && !isRunning;
     const lighterCredentialState = hasLighterCredentials ? 'done' : (isRunning ? 'active' : 'pending');
-    const lighterReferralState = hasReferrer === true
+    const lighterReferralState = lighterReferralRequired === false
+      ? 'done'
+      : hasReferrer === true
       ? 'done'
       : (hasLighterCredentials && (lighterReferralChecking || (isRunning && lighterNeedsReferral)))
         ? 'active'
@@ -7375,16 +7401,20 @@ function FuturesPanel() {
       : (hasReferrer === true && isRunning)
         ? 'active'
         : 'pending';
-    const lighterGateTitle = lighterNeedsReferral
+    const lighterGateTitle = !lighterIntegratorConfigured
+      ? `${lighterVenueLabel || 'Lighter'} partner setup pending`
+      : lighterNeedsReferral
       ? `Accept ${referralCode} referral`
       : lighterReferralChecking && hasLighterCredentials
         ? 'Checking Lighter referral'
         : lighterNeedsIntegratorApproval && hasReferrer === true
           ? 'Approve Clash integrator'
           : 'Add Lighter API credentials';
-    const lighterGateSubtitle = lighterNeedsReferral
+    const lighterGateSubtitle = !lighterIntegratorConfigured
+      ? 'Market data is live, but Clash has not configured its Robinhood Lighter integrator account yet. Opening orders stay disabled so no trade can bypass partner attribution.'
+      : lighterNeedsReferral
       ? 'This Lighter account has no referral code. Accept the Clash code before trading unlocks; an existing code is always preserved.'
-      : 'Clash verifies your Lighter account, existing referral, and integrator approval before enabling orders.';
+      : `Clash verifies your ${lighterVenueLabel || 'Lighter'} account${lighterReferralRequired === false ? '' : ', existing referral'}, and integrator approval before enabling orders.`;
 
     return (
       <>
@@ -7397,7 +7427,7 @@ function FuturesPanel() {
           transition: isDragging ? 'none' : 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
         }}>
           <div style={S.header} onPointerDown={handlePointerDown}>
-            <span style={S.headerTitle}>{isRunning ? 'Connecting Lighter...' : 'Lighter setup'}</span>
+            <span style={S.headerTitle}>{isRunning ? `Connecting ${lighterVenueLabel || 'Lighter'}...` : `${lighterVenueLabel || 'Lighter'} setup`}</span>
             <button type="button" data-nodrag onClick={handleClose} style={S.closeBtn} aria-label="Close futures trading">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
             </button>
@@ -7416,7 +7446,7 @@ function FuturesPanel() {
                   <span style={{ ...hlGateStyles.stepBubble, ...hlGateStyles.stepBubble_done }}>1</span>
                   <span style={hlGateStyles.stepText}>
                     <span style={{ ...hlGateStyles.stepLabel, ...hlGateStyles.stepLabel_done }}>EVM wallet connected</span>
-                    <span style={hlGateStyles.stepHint}>{walletAddr?.slice(0, 6)}...{walletAddr?.slice(-4)} is used for Lighter setup approval.</span>
+                    <span style={hlGateStyles.stepHint}>{walletAddr?.slice(0, 6)}...{walletAddr?.slice(-4)} is used for {lighterVenueLabel || 'Lighter'} setup approval.</span>
                   </span>
                 </li>
                 <li style={hlGateStyles.stepItem}>
@@ -7425,7 +7455,7 @@ function FuturesPanel() {
                   </span>
                   <span style={hlGateStyles.stepText}>
                     <span style={{ ...hlGateStyles.stepLabel, ...hlGateStyles[`stepLabel_${lighterCredentialState}`] }}>Verify API key</span>
-                    <span style={hlGateStyles.stepHint}>The key is sent transiently to Clash only for signed Lighter requests.</span>
+                    <span style={hlGateStyles.stepHint}>The key is sent transiently to Clash only for signed {lighterVenueLabel || 'Lighter'} requests.</span>
                   </span>
                 </li>
                 <li style={hlGateStyles.stepItem}>
@@ -7433,13 +7463,15 @@ function FuturesPanel() {
                     {lighterReferralState === 'done' ? 'OK' : lighterReferralState === 'active' ? <span style={hlGateStyles.spinner} /> : 3}
                   </span>
                   <span style={hlGateStyles.stepText}>
-                    <span style={{ ...hlGateStyles.stepLabel, ...hlGateStyles[`stepLabel_${lighterReferralState}`] }}>Verify referral code</span>
+                    <span style={{ ...hlGateStyles.stepLabel, ...hlGateStyles[`stepLabel_${lighterReferralState}`] }}>{lighterReferralRequired === false ? 'Referral not required' : 'Verify referral code'}</span>
                     <span style={hlGateStyles.stepHint}>
-                      {hasReferrer === true
+                      {lighterReferralRequired === false
+                        ? 'Robinhood Lighter partner attribution is independent from referral codes.'
+                        : hasReferrer === true
                         ? `Existing referral ${lighterReferralStatus?.used_code || ''} is accepted.`
                         : lighterNeedsReferral
                           ? `No referral found. Confirm ${referralCode} to continue.`
-                          : 'Clash reads used_code from Lighter without replacing an existing referral.'}
+                          : `Clash reads used_code from ${lighterVenueLabel || 'Lighter'} without replacing an existing referral.`}
                     </span>
                   </span>
                 </li>
@@ -7449,14 +7481,14 @@ function FuturesPanel() {
                   </span>
                   <span style={hlGateStyles.stepText}>
                     <span style={{ ...hlGateStyles.stepLabel, ...hlGateStyles[`stepLabel_${lighterIntegratorState}`] }}>Approve Clash integrator</span>
-                    <span style={hlGateStyles.stepHint}>Required for Clash-routed Lighter orders and builder-fee attribution.</span>
+                    <span style={hlGateStyles.stepHint}>Required for Clash-routed {lighterVenueLabel || 'Lighter'} orders and builder-fee attribution.</span>
                   </span>
                 </li>
               </ol>
               {showLighterCredentialForm && (
               <div style={{display: 'flex', flexDirection: 'column', gap: 10, background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 12, padding: 12}}>
                 <label style={{display: 'flex', flexDirection: 'column', gap: 5}}>
-                  <span style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text)', textTransform: 'uppercase'}}>Your Lighter account index</span>
+                  <span style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text)', textTransform: 'uppercase'}}>Your {lighterVenueLabel || 'Lighter'} account index</span>
                   <input type="number" value={lighterAccountIndexInput} onChange={(e) => {
                     setLighterAccountDetectStatus('');
                     setLighterAccountIndexInput(e.target.value);
@@ -7464,11 +7496,11 @@ function FuturesPanel() {
                   {lighterAccountDetectStatus && (
                     <span style={{fontSize: 11, fontWeight: 600, color: lighterAccountDetectStatus === 'found' ? '#2f9e44' : 'var(--terminal-text-faint)'}}>
                       {lighterAccountDetectStatus === 'checking'
-                        ? 'Checking your Lighter account from the connected EVM wallet...'
+                        ? `Checking your ${lighterVenueLabel || 'Lighter'} account from the connected EVM wallet...`
                         : lighterAccountDetectStatus === 'found'
-                          ? 'Lighter account index detected automatically.'
+                          ? `${lighterVenueLabel || 'Lighter'} account index detected automatically.`
                           : lighterAccountDetectStatus === 'not_found'
-                            ? 'No Lighter account was found for this wallet. Enter the account index manually if this wallet has a sub-account.'
+                            ? `No ${lighterVenueLabel || 'Lighter'} account was found for this wallet. Enter the account index manually if this wallet has a sub-account.`
                             : 'Could not auto-detect the account index. You can still enter it manually.'}
                     </span>
                   )}
@@ -7483,7 +7515,7 @@ function FuturesPanel() {
                     type="password"
                     value={lighterApiPrivateKeyInput}
                     onChange={(e) => setLighterApiPrivateKeyInput(e.target.value)}
-                    placeholder="Paste Lighter API private key"
+                    placeholder={`Paste ${lighterVenueLabel || 'Lighter'} API private key`}
                     autoComplete="new-password"
                     autoCapitalize="none"
                     autoCorrect="off"
@@ -7497,12 +7529,12 @@ function FuturesPanel() {
                 </div>
               </div>
               )}
-              {hasLighterCredentials && lighterReferralChecking && (
+              {lighterReferralRequired !== false && hasLighterCredentials && lighterReferralChecking && (
                 <div style={{fontSize: 12, fontWeight: 600, color: 'var(--terminal-text)', lineHeight: 1.35, border: '1px solid var(--terminal-border)', background: 'var(--terminal-surface-subtle)', borderRadius: 12, padding: 12}}>
                   Reading this wallet&apos;s current referral from Lighter. Trading remains locked until Lighter returns a confirmed <code>used_code</code>.
                 </div>
               )}
-              {hasLighterCredentials && lighterNeedsReferral && (
+              {lighterReferralRequired !== false && hasLighterCredentials && lighterNeedsReferral && (
                 <div style={{fontSize: 12, fontWeight: 600, color: 'var(--terminal-text)', lineHeight: 1.35, border: '1px solid var(--terminal-warning-border)', background: 'var(--terminal-warning-soft)', borderRadius: 12, padding: 12, display: 'flex', flexDirection: 'column', gap: 10}}>
                   <span>No Lighter referral is attached to this wallet. Confirm <strong>{referralCode}</strong> before trading. Clash never replaces an existing referral.</span>
                   <button
@@ -7518,7 +7550,7 @@ function FuturesPanel() {
                   </button>
                 </div>
               )}
-              {hasLighterCredentials && lighterNeedsReferral && (
+              {lighterReferralRequired !== false && hasLighterCredentials && lighterNeedsReferral && (
                 <button
                   style={{ ...hlGateStyles.primaryBtn, ...(isRunning ? hlGateStyles.primaryBtnBusy : null) }}
                   disabled={isRunning}
@@ -7543,9 +7575,16 @@ function FuturesPanel() {
                   {isRunning ? 'Confirming referral...' : `Accept ${referralCode} referral ->`}
                 </button>
               )}
-              {lighterNeedsIntegratorApproval && hasReferrer === true && (
+              {!lighterIntegratorConfigured && (
+                <div role="status" style={{fontSize: 12, fontWeight: 650, color: 'var(--terminal-warning)', lineHeight: 1.45, border: '1px solid var(--terminal-warning-border)', background: 'var(--terminal-warning-soft)', borderRadius: 12, padding: 12}}>
+                  {dex === 'rhlighter'
+                    ? <>Robinhood Lighter uses a deployment-specific integrator account index. The standard Lighter index cannot be reused. Configure <code>RH_LIGHTER_INTEGRATOR_ACCOUNT_INDEX</code> after the Clash wallet has an RH Lighter account; 1 bps equals fee value <code>{lighterConfig?.builderFeeValue ?? 100}</code>. {lighterConfig?.integratorStatus?.reason || ''}</>
+                    : <>Clash could not validate the configured Lighter integrator account. Opening orders remain disabled. {lighterConfig?.integratorStatus?.reason || ''}</>}
+                </div>
+              )}
+              {lighterNeedsIntegratorApproval && hasReferrer === true && lighterIntegratorConfigured && (
                 <div style={{fontSize: 12, fontWeight: 600, color: 'var(--terminal-text)', lineHeight: 1.35, border: '1px solid var(--terminal-warning-border)', background: 'var(--terminal-warning-soft)', borderRadius: 12, padding: 12, display: 'flex', flexDirection: 'column', gap: 10}}>
-                  <span>Lighter API key is saved. Approve the Clash integrator fee before trading unlocks.</span>
+                  <span>{lighterVenueLabel || 'Lighter'} API key is saved. Approve the Clash integrator fee before trading unlocks.</span>
                   <button
                     type="button"
                     style={{ ...hlGateStyles.secondaryBtn, padding: '9px 12px', fontSize: 12, alignSelf: 'stretch' }}
@@ -7557,7 +7596,7 @@ function FuturesPanel() {
                       setLighterApiPrivateKeyInput('');
                       setLighterAccountDetectStatus('');
                       setLocalAlert('');
-                      setSuccessMsg('Paste the replacement Lighter API private key and save it.');
+                      setSuccessMsg(`Paste the replacement ${lighterVenueLabel || 'Lighter'} API private key and save it.`);
                     }}
                   >
                     Change API key
@@ -7578,7 +7617,7 @@ function FuturesPanel() {
                   )}
                 </div>
               )}
-              {lighterNeedsIntegratorApproval && hasReferrer === true && (
+              {lighterNeedsIntegratorApproval && hasReferrer === true && lighterIntegratorConfigured && (
                 <button
                   style={{ ...hlGateStyles.primaryBtn, ...(isRunning ? hlGateStyles.primaryBtnBusy : null) }}
                   disabled={isRunning}
@@ -7587,7 +7626,7 @@ function FuturesPanel() {
                     setReferralLinking(true);
                     try {
                       await approveIntegrator();
-                      setSuccessMsg('Lighter setup complete. Clash integrator fee approved.');
+                      setSuccessMsg(`${lighterVenueLabel || 'Lighter'} setup complete. Clash integrator fee approved.`);
                     } catch (e) {
                       setLocalAlert(e?.message || String(e));
                     } finally {
@@ -7616,18 +7655,20 @@ function FuturesPanel() {
                       setLighterApiPrivateKeyInput('');
                       setLighterCredentialFormOpen(false);
                       if (res?.referralStatusError) {
-                        setLocalAlert(`Lighter API key was saved, but referral verification failed: ${res.referralStatusError}`);
-                      } else if (res?.referralStatus?.has_referral !== true) {
-                        setSuccessMsg(`Lighter API key saved. Confirm the ${referralCode} referral to continue.`);
+                        setLocalAlert(`${lighterVenueLabel || 'Lighter'} API key was saved, but referral verification failed: ${res.referralStatusError}`);
+                      } else if (lighterReferralRequired !== false && res?.referralStatus?.has_referral !== true) {
+                        setSuccessMsg(`${lighterVenueLabel || 'Lighter'} API key saved. Confirm the ${referralCode} referral to continue.`);
+                      } else if (!lighterIntegratorConfigured) {
+                        setSuccessMsg(`${lighterVenueLabel || 'Lighter'} API key saved. Trading will unlock after the Clash RH integrator account is configured and approved.`);
                       } else if (typeof approveIntegrator === 'function') {
                         try {
                           await approveIntegrator(res);
-                          setSuccessMsg('Lighter setup complete. Clash integrator fee approved.');
+                          setSuccessMsg(`${lighterVenueLabel || 'Lighter'} setup complete. Clash integrator fee approved.`);
                         } catch (approveError) {
-                          setLocalAlert(approveError?.message || 'Lighter API key saved. Approve Clash integrator before trading.');
+                          setLocalAlert(approveError?.message || `${lighterVenueLabel || 'Lighter'} API key saved. Approve Clash integrator before trading.`);
                         }
                       } else {
-                        setSuccessMsg('Lighter API key and referral verified.');
+                        setSuccessMsg(`${lighterVenueLabel || 'Lighter'} API key verified.`);
                       }
                     }
                   } catch (e) {
@@ -7637,7 +7678,7 @@ function FuturesPanel() {
                   }
                 }}
               >
-                {isRunning ? 'Connecting...' : 'Add Lighter credentials ->'}
+                {isRunning ? 'Connecting...' : `Add ${lighterVenueLabel || 'Lighter'} credentials ->`}
               </button>
               )}
               {(error || localAlert) && (
@@ -9324,19 +9365,28 @@ function FuturesPanel() {
   // and the regular trade tabs render.
   // Show the gate while verification is loading too — that prevents a
   // flash of trading UI before we can confirm the on-chain delegation.
-  if (dex === 'decibel' && hasWallet && setupVerified !== true) {
-    const isRunning = !!activationStep;
-    const isChecking = setupVerified === null && !isRunning;
+  if (
+    dex === 'decibel'
+    && hasWallet
+    && (setupVerified !== true || (hasReferrer !== true && !hasDecibelRiskToManage))
+  ) {
+    const isReferralOnly = setupVerified === true && hasReferrer !== true;
+    const isRunning = !!activationStep || referralLinking;
+    const isChecking = !isRunning && (
+      setupVerified === null
+      || (setupVerified === true && hasReferrer === null && !referralStatus?.unavailable)
+    );
     const stepHint = activationStep ? (ACTIVATION_STEP_HINTS[activationStep.label] || '') : '';
     const isReturning = !!subaccountAddr;
-    const activeLabel = activationStep?.label || '';
+    const activeLabel = activationStep?.label || (referralLinking ? 'Accept Decibel referral' : '');
+    const isReferralWorking = activeLabel === 'Accept Decibel referral';
     const runIndex = Number(activationStep?.index || 0);
 
     // Steps shown in the new bridge-style step rail. `runLabels` is what
     // the activation state machine emits when this step is in flight
     // (different from the displayed title for some steps — e.g. "Verify
     // fee routing" maps to the runtime "Enable builder fee routing").
-    const decibelSteps = isReturning
+    const decibelSetupSteps = isReturning
       ? (gasSponsored
           ? [
               { idx: 1, title: 'Authorize fast trading',
@@ -9369,30 +9419,51 @@ function FuturesPanel() {
             runLabels: ['Enable builder fee routing'] },
         ];
 
+    const decibelSteps = [
+      {
+        idx: 1,
+        kind: 'referral',
+        title: 'Accept Decibel referral',
+        hint: `Existing referrers are preserved. Otherwise Decibel attaches ${referralCode || 'NQSW0V'} through its API without a Petra signature.`,
+        runLabels: ['Accept Decibel referral'],
+      },
+      ...decibelSetupSteps.map(step => ({ ...step, idx: step.idx + 1 })),
+    ];
+
     const steps = decibelSteps.map((s) => {
       let state = 'pending';
-      if (isRunning) {
+      if (s.kind === 'referral' && hasReferrer === true) {
+        state = 'done';
+      } else if (s.kind !== 'referral' && setupVerified === true) {
+        state = 'done';
+      } else if (isRunning) {
         const isActive = s.runLabels.includes(activeLabel);
         if (isActive) state = 'active';
-        else if (runIndex > 0 && s.idx < runIndex) state = 'done';
+        else if (runIndex > 0 && s.idx <= runIndex) state = 'done';
       }
       return { ...s, state };
     });
 
-    const headerStatus = isChecking ? 'VERIFYING ON-CHAIN'
+    const headerStatus = isChecking ? 'VERIFYING ACCOUNT'
+      : isReferralWorking ? 'VERIFYING REFERRAL'
       : isRunning && activationStep?.total > 0
-        ? `STEP ${Math.max(1, activationStep.index)} OF ${activationStep.total}`
+        ? `STEP ${Math.max(2, activationStep.index + 1)} OF ${activationStep.total + 1}`
         : isRunning ? 'PREPARING'
         : 'ACTION REQUIRED';
     const headerTitle = isRunning
-      ? (activationStep.label || 'Setting up Decibel')
+      ? (activationStep?.label || 'Accepting Decibel referral')
       : isChecking
         ? 'Checking your Decibel account'
+        : isReferralOnly ? 'Accept the Clash referral'
         : isReturning ? 'Authorize this device' : 'Activate to start trading';
     const headerSubtitle = isRunning
-      ? (stepHint || 'Open Petra and approve the request to continue.')
+      ? (stepHint || (isReferralWorking
+        ? 'Checking the referral attached to your master Aptos wallet. No Petra signature is required.'
+        : 'Open Petra and approve the request to continue.'))
       : isChecking
         ? 'Reading your subaccount and trading delegations from Aptos. This takes a moment on first load.'
+        : isReferralOnly
+          ? `Decibel requires a referrer before new trades. Accept ${referralCode || 'NQSW0V'} once; any existing referral remains unchanged.`
         : isReturning
           ? (apiWalletAddr
               ? 'We found your Decibel account and server signer. Just authorize the missing on-chain approvals.'
@@ -9451,15 +9522,21 @@ function FuturesPanel() {
 
               {isRunning ? (
                 <div style={hlGateStyles.workingHint}>
-                  Open Petra and approve the request — don't close this window.
+                  {isReferralWorking
+                    ? 'Checking Decibel referral status — no wallet signature is required.'
+                    : "Open Petra and approve the request — don't close this window."}
                 </div>
               ) : (
                 <button
                   style={{ ...hlGateStyles.primaryBtn, ...(isChecking ? hlGateStyles.primaryBtnBusy : null) }}
                   disabled={isChecking}
-                  onClick={() => { if (linkOurReferrer) linkOurReferrer(); }}
+                  onClick={isReferralOnly ? handleLinkReferrer : activate}
                 >
-                  {isChecking ? 'Please wait…' : isReturning ? 'Authorize this device →' : 'Activate trading →'}
+                  {isChecking
+                    ? 'Please wait…'
+                    : isReferralOnly
+                      ? `Accept ${referralCode || 'NQSW0V'} & continue →`
+                      : isReturning ? 'Authorize this device →' : 'Activate trading →'}
                 </button>
               )}
 
@@ -10455,10 +10532,10 @@ function FuturesPanel() {
           </div>
         )}
 
-        {dex === 'lighter' && lighterCredentials?.accountIndex != null && (
+        {isLighterDex && lighterCredentials?.accountIndex != null && (
           <div style={S.fullCard}>
             <div style={S.row}>
-              <span style={{...S.label, color: 'var(--terminal-info)'}}>Lighter API</span>
+              <span style={{...S.label, color: 'var(--terminal-info)'}}>{lighterVenueLabel || 'Lighter'} API</span>
               <button
                 style={{
                   ...S.btnSmall,
@@ -10478,7 +10555,7 @@ function FuturesPanel() {
                   setLighterApiKeyIndexInput(String(lighterCredentials.apiKeyIndex ?? ''));
                   setLighterApiPrivateKeyInput('');
                   setLighterAccountDetectStatus('');
-                  setLocalAlert('Paste the replacement Lighter API key.');
+                  setLocalAlert(`Paste the replacement ${lighterVenueLabel || 'Lighter'} API key.`);
                 }}
               >
                 CHANGE API
@@ -11666,14 +11743,12 @@ function FuturesPanel() {
           }}>
             <span style={{fontSize: 16}}>🎁</span>
             <span style={{flex: 1, minWidth: 0}}>
-              {/* Banner copy: same component handles both Avantis (5% referral
-                  discount, on-chain link) and Decibel (one-time delegation +
-                  builder fee approval). The visible label and CTA differ
-                  because the underlying mechanic differs — Decibel is NOT a
-                  trader-side discount, it's how the game gets attribution. */}
+              {/* Mandatory referral banners never hide risk-management UI.
+                  Decibel attribution is an authenticated API record, separate
+                  from its on-chain builder approval and trading delegation. */}
               <span style={{display: 'block'}}>
                  {dex === 'decibel'
-                   ? 'Activate trading on Decibel'
+                   ? 'Decibel referral is required for new trades'
                    : dex === 'nado'
                    ? (referralAccess === NADO_REFERRAL_ACCESS.CHECKING
                      ? 'Loading saved Nado referral'
@@ -11706,7 +11781,9 @@ function FuturesPanel() {
                   : dex === 'hyperliquid'
                   ? 'Optional: one Arbitrum signature approves a local agent so future orders do not hit wallet chainId errors.'
                   : dex === 'decibel'
-                  ? 'One Petra signature — sets up an api wallet so trades sign silently.'
+                  ? (referralStatus?.unavailable
+                    ? 'Verification is temporarily unavailable. Existing positions can still be closed; retry before opening another trade.'
+                    : `Accept ${referralCode || 'NQSW0V'} once through Decibel's API. Existing referrals are preserved, and current positions can still be closed.`)
                   : 'One signature — links your wallet to our referral code.'}
               </span>
             </span>
@@ -11724,17 +11801,17 @@ function FuturesPanel() {
                 whiteSpace: 'nowrap',
               }}
             >
-              {referralLinking ? 'SIGNING...' : (dex === 'decibel' ? 'ACTIVATE' : dex === 'nado' ? 'ACCEPT' : dex === 'hyperliquid' ? 'ENABLE' : 'UNLOCK')}
+              {referralLinking ? 'CHECKING...' : (dex === 'decibel' ? 'ACCEPT' : dex === 'nado' ? 'ACCEPT' : dex === 'hyperliquid' ? 'ENABLE' : 'UNLOCK')}
             </button>
             <button
               data-nodrag
-              onClick={dex === 'nado' ? undefined : handleDismissReferral}
+              onClick={(dex === 'nado' || dex === 'decibel') ? undefined : handleDismissReferral}
               title="Dismiss"
               style={{
                 background: 'transparent', border: 'none',
                 color: 'var(--terminal-warning)', cursor: 'pointer',
                 fontSize: 18, fontWeight: 700, padding: '0 4px', lineHeight: 1,
-                display: dex === 'nado' ? 'none' : undefined,
+                display: (dex === 'nado' || dex === 'decibel') ? 'none' : undefined,
               }}
             >×</button>
           </div>
