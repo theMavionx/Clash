@@ -24,6 +24,7 @@ import { registeredDexWallet } from '../lib/playerDexAccounts';
 import { getGmxApiSdk } from '../lib/gmxClient';
 import {
   ARBITRUM_CHAIN_ID,
+  GMX_EXCHANGE_ROUTER,
   GMX_SYNTHETICS_ROUTER,
   ERC20_ABI,
   MAX_UINT256,
@@ -33,6 +34,18 @@ import {
   GMX_REFERRAL_CODE,
   REFERRAL_STORAGE_ABI,
 } from '../lib/gmxConfig';
+import {
+  GMX_DATA_STORE,
+  GMX_DATA_STORE_ABI,
+  GMX_UI_FEE_BPS,
+  GMX_UI_FEE_FACTOR,
+  GMX_UI_FEE_RECEIVER,
+  GMX_UI_FEE_ROUTER_ABI,
+  gmxUiFeeFactorKey,
+  gmxUiFeeFactorToBps,
+  isGmxUiFeeOwner,
+  withGmxUiFee,
+} from '../lib/gmxUiFee';
 
 // Encode the affiliate code as a right-padded bytes32 once at module load.
 // "clashofperps" is 12 bytes ASCII → padded with 20 null bytes to fit the
@@ -371,6 +384,14 @@ export function useGmx() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [goldEarned, setGoldEarned] = useState(null);
+  const [gmxUiFeeStatus, setGmxUiFeeStatus] = useState({
+    checking: false,
+    activating: false,
+    configured: false,
+    factor: null,
+    factorBps: 0,
+    error: null,
+  });
 
   const marketsRef = useRef([]);
   // Raw ticker list (NOT deduped) — `findGmxMarketSymbol` searches through
@@ -404,6 +425,73 @@ export function useGmx() {
     }
     await ensureChain(ARBITRUM_CHAIN_ID);
   }, [ensureChain]);
+
+  const refreshGmxUiFeeStatus = useCallback(async () => {
+    const pc = getPublicClient?.(ARBITRUM_CHAIN_ID);
+    if (!pc) return null;
+    setGmxUiFeeStatus(current => ({ ...current, checking: true, error: null }));
+    try {
+      const factor = await pc.readContract({
+        address: GMX_DATA_STORE,
+        abi: GMX_DATA_STORE_ABI,
+        functionName: 'getUint',
+        args: [gmxUiFeeFactorKey()],
+      });
+      const next = {
+        checking: false,
+        activating: false,
+        configured: BigInt(factor) === GMX_UI_FEE_FACTOR,
+        factor: BigInt(factor),
+        factorBps: gmxUiFeeFactorToBps(factor),
+        error: null,
+      };
+      setGmxUiFeeStatus(next);
+      return next;
+    } catch (statusError) {
+      const message = decodeWriteError(statusError, 'GMX UI fee status unavailable');
+      setGmxUiFeeStatus(current => ({
+        ...current,
+        checking: false,
+        activating: false,
+        error: message,
+      }));
+      return { error: message };
+    }
+  }, [getPublicClient]);
+
+  const activateGmxUiFee = useCallback(async () => {
+    if (!walletAddr) return { error: 'Connect the GMX fee receiver wallet first' };
+    if (!isGmxUiFeeOwner(walletAddr)) {
+      return { error: `Only GMX fee receiver ${GMX_UI_FEE_RECEIVER} can activate this fee` };
+    }
+    setGmxUiFeeStatus(current => ({ ...current, activating: true, error: null }));
+    try {
+      await ensureGmxChain();
+      const wc = getWalletClient(ARBITRUM_CHAIN_ID);
+      const pc = getPublicClient(ARBITRUM_CHAIN_ID);
+      if (!wc || !pc) throw new Error('Failed to build Arbitrum clients');
+      const hash = await wc.writeContract({
+        address: GMX_EXCHANGE_ROUTER,
+        abi: GMX_UI_FEE_ROUTER_ABI,
+        functionName: 'setUiFeeFactor',
+        args: [GMX_UI_FEE_FACTOR],
+        account: walletAddr,
+      });
+      const receipt = await pc.waitForTransactionReceipt({ hash, timeout: TX_TIMEOUT_MS });
+      if (receipt.status !== 'success') throw new Error('GMX UI fee activation reverted');
+      const verified = await refreshGmxUiFeeStatus();
+      if (!verified?.configured) throw new Error('GMX UI fee transaction confirmed but on-chain verification failed');
+      return { success: true, txHash: hash, factorBps: GMX_UI_FEE_BPS };
+    } catch (activationError) {
+      const message = decodeWriteError(activationError, 'GMX UI fee activation failed');
+      setGmxUiFeeStatus(current => ({
+        ...current,
+        activating: false,
+        error: message,
+      }));
+      return { error: message };
+    }
+  }, [walletAddr, ensureGmxChain, getWalletClient, getPublicClient, refreshGmxUiFeeStatus]);
 
   // Wallet-mismatch guard: same gate Avantis uses. The player's registered
   // EVM wallet (from server) must match the currently connected wallet,
@@ -640,6 +728,11 @@ export function useGmx() {
   // fetchMarkets runs once on mount (and once when GMX becomes the active
   // DEX) so the panel can render market tiles before the user connects.
   useEffect(() => { if (isActiveDex) fetchMarkets(); }, [isActiveDex, fetchMarkets]);
+
+  useEffect(() => {
+    if (!isActiveDex) return;
+    refreshGmxUiFeeStatus();
+  }, [isActiveDex, refreshGmxUiFeeStatus]);
 
   useEffect(() => {
     if (!isActiveDex) return;
@@ -961,7 +1054,7 @@ export function useGmx() {
       await ensureReferralCodeBound();
 
       const tpsl = buildGmxOpenTpsl(options, sizeUsd);
-      const prepared = await apiSdk.prepareOrder({
+      const prepared = await apiSdk.prepareOrder(withGmxUiFee({
         kind: 'increase',
         symbol: marketSymbol,
         direction: isLong ? 'long' : 'short',
@@ -973,7 +1066,7 @@ export function useGmx() {
         slippage: slippageBps,
         mode: 'classic',
         from: walletAddr,
-      });
+      }));
 
       const hash = await sendPreparedClassicTx(prepared);
       console.log(`[useGmx] placeMarketOrder tx submitted: ${hash}`);
@@ -1046,7 +1139,7 @@ export function useGmx() {
       await ensureReferralCodeBound();
 
       const tpsl = buildGmxOpenTpsl(options, sizeUsd);
-      const prepared = await apiSdk.prepareOrder({
+      const prepared = await apiSdk.prepareOrder(withGmxUiFee({
         kind: 'increase',
         symbol: marketSymbol,
         direction: isLong ? 'long' : 'short',
@@ -1059,7 +1152,7 @@ export function useGmx() {
         slippage: 100,                 // 1% — limit fills tend to be tighter, room for safety
         mode: 'classic',
         from: walletAddr,
-      });
+      }));
 
       const hash = await sendPreparedClassicTx(prepared);
       console.log(`[useGmx] placeLimitOrder tx submitted: ${hash}`);
@@ -1179,7 +1272,7 @@ export function useGmx() {
         marketSymbol, sizeInUsd: String(pos.sizeInUsd), collateralToken: collateralSym,
       });
 
-      const prepared = await apiSdk.prepareOrder({
+      const prepared = await apiSdk.prepareOrder(withGmxUiFee({
         kind: 'decrease',
         symbol: marketSymbol,
         direction: isLong ? 'long' : 'short',
@@ -1191,7 +1284,7 @@ export function useGmx() {
         keepLeverage: false,            // Full close releases all collateral.
         mode: 'classic',
         from: walletAddr,
-      });
+      }));
 
       const hash = await sendPreparedClassicTx(prepared);
       console.log(`[useGmx] closePosition tx submitted: ${hash}`);
@@ -1280,7 +1373,7 @@ export function useGmx() {
       // direction internally based on `direction` + `orderType`.
       const submitTrigger = async (priceStr, orderType) => {
         const triggerPriceBig = parseUnits(String(priceStr), 30);
-        const prepared = await apiSdk.prepareOrder({
+        const prepared = await apiSdk.prepareOrder(withGmxUiFee({
           kind: 'decrease',
           symbol: marketSymbol,
           direction: isLong ? 'long' : 'short',
@@ -1292,7 +1385,7 @@ export function useGmx() {
           slippage: 100,                  // 1% — same as close path
           mode: 'classic',
           from: walletAddr,
-        });
+        }));
         const hash = await sendPreparedClassicTx(prepared);
         console.log(`[useGmx] setTpsl ${orderType} tx submitted: ${hash}`);
       };
@@ -1396,6 +1489,12 @@ export function useGmx() {
     isReady,
     walletMismatch,
     registeredEvmWallet,
+    gmxUiFeeStatus,
+    gmxUiFeeReceiver: GMX_UI_FEE_RECEIVER,
+    gmxUiFeeBps: GMX_UI_FEE_BPS,
+    gmxUiFeeOwnerConnected: isGmxUiFeeOwner(walletAddr),
+    refreshGmxUiFeeStatus,
+    activateGmxUiFee,
     // Avantis-side flags read by the panel — undefined keeps the GMX branch
     // out of the referral / builder UIs we haven't designed for it yet.
     hasReferrer: null,

@@ -54,6 +54,8 @@ $NodeFiles = @(
     "server/earnings.js",
     "server/test-ondo-earnings.js",
     "server/test-aster-earnings.js",
+    "server/gmx_ui_fees.js",
+    "server/test-gmx-ui-fee-earnings.js",
     "server/test-rh-lighter-earnings.js",
     "server/test-rhlighter-tournament-migration.js",
     "server/index.js",
@@ -75,6 +77,9 @@ $NodeFiles = @(
     "server-futures/test-aster-adapter.js",
     "server-futures/test-aster-builder-tracking.js",
     "server-futures/test-rh-lighter-adapter.js",
+    "server-futures/gmx-ui-fee.js",
+    "server-futures/gmx-rewards-worker.js",
+    "server-futures/test-gmx-ui-fee-attribution.js",
     "server-futures/index.js",
     "server-futures/routes.js",
     "server-futures/gmtrade.js",
@@ -105,6 +110,9 @@ Invoke-Step "Decibel referral enforcement" { node server-futures/test-decibel-re
 Invoke-Step "Aster adapter" { node server-futures/test-aster-adapter.js }
 Invoke-Step "Aster builder tracking" { node server-futures/test-aster-builder-tracking.js }
 Invoke-Step "Aster earnings" { node server/test-aster-earnings.js }
+Invoke-Step "GMX exact UI-fee attribution" { node server-futures/test-gmx-ui-fee-attribution.js }
+Invoke-Step "GMX exact UI-fee earnings" { node server/test-gmx-ui-fee-earnings.js }
+Invoke-Step "GMX browser routing" { node web/test-gmx-ui-fee.mjs }
 Invoke-Step "RH Lighter adapter" { node server-futures/test-rh-lighter-adapter.js }
 Invoke-Step "RH Lighter earnings" { node server/test-rh-lighter-earnings.js }
 Invoke-Step "RH Lighter tournament schema migration" { node server/test-rhlighter-tournament-migration.js }

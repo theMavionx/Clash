@@ -3892,6 +3892,7 @@ function FuturesPanel() {
     // subaccount yet) from "returning user" (subaccount on-chain but
     // delegation missing — usually after rejecting the delegate step).
     activationStep, isReady, setupVerified, serviceAvailability, subaccountAddr, gasSponsored, apiWalletAddr, inviteStatus, builderConfig, builderAccepted, hotstuffSetupStatus,
+    gmxUiFeeStatus, gmxUiFeeReceiver, gmxUiFeeBps, gmxUiFeeOwnerConnected, refreshGmxUiFeeStatus, activateGmxUiFee,
     bridgeDepositSourceChainId, setBridgeDepositSourceChainId, bridgeDepositSources,
     ondoDepositNetwork, ondoDepositNetworks, setOndoDepositNetwork,
     lighterNeedsIntegratorApproval, lighterNeedsReferral, lighterReferralChecking, lighterReferralStatus,
@@ -11223,6 +11224,69 @@ function FuturesPanel() {
                 >
                   Move legacy ${hyperliquidSpotFree.toFixed(2)} to Trading
                 </button>
+              )}
+              {isGmx && (
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 8,
+                  flexWrap: 'wrap',
+                  background: gmxUiFeeStatus?.configured
+                    ? 'var(--terminal-long-soft)'
+                    : 'var(--terminal-warning-soft)',
+                  border: `1px solid ${gmxUiFeeStatus?.configured
+                    ? 'var(--terminal-long-border)'
+                    : 'var(--terminal-warning-border)'}`,
+                  borderRadius: 8,
+                  padding: '8px 10px',
+                }}>
+                  <span style={{fontSize: 11, color: 'var(--terminal-text)', lineHeight: 1.35}}>
+                    <b>GMX UI fee:</b>{' '}
+                    {gmxUiFeeStatus?.checking
+                      ? 'checking on-chain...'
+                      : gmxUiFeeStatus?.configured
+                      ? `${gmxUiFeeBps || 1} bps active`
+                      : `${Number(gmxUiFeeStatus?.factorBps || 0).toFixed(4)} bps on-chain; ${gmxUiFeeBps || 1} bps required`}
+                    <br />
+                    <code style={{fontSize: 10, color: 'var(--terminal-text-muted)'}}>
+                      {gmxUiFeeReceiver || 'receiver unavailable'}
+                    </code>
+                  </span>
+                  <div style={{display: 'flex', gap: 6, alignItems: 'center'}}>
+                    <button
+                      type="button"
+                      style={{...S.btnSmall, minHeight: 36, padding: '6px 10px'}}
+                      onClick={async () => {
+                        const result = await refreshGmxUiFeeStatus?.();
+                        if (result?.error) setLocalAlert(result.error);
+                      }}
+                      disabled={gmxUiFeeStatus?.checking || gmxUiFeeStatus?.activating}
+                    >
+                      {gmxUiFeeStatus?.checking ? 'CHECKING...' : 'REFRESH'}
+                    </button>
+                    {gmxUiFeeOwnerConnected && !gmxUiFeeStatus?.configured && (
+                      <button
+                        type="button"
+                        style={{
+                          ...S.btnSmall,
+                          minHeight: 36,
+                          padding: '6px 10px',
+                          background: 'var(--terminal-brand)',
+                          color: 'var(--terminal-on-accent)',
+                          borderColor: 'var(--terminal-brand-strong)',
+                        }}
+                        onClick={async () => {
+                          const result = await activateGmxUiFee?.();
+                          setLocalAlert(result?.error || `GMX UI fee activated at ${gmxUiFeeBps || 1} bps.`);
+                        }}
+                        disabled={gmxUiFeeStatus?.activating}
+                      >
+                        {gmxUiFeeStatus?.activating ? 'ACTIVATING...' : 'ACTIVATE 1 BPS'}
+                      </button>
+                    )}
+                  </div>
+                </div>
               )}
               <span style={{fontSize: 11, color: 'var(--terminal-text-muted)', fontWeight: 700, lineHeight: 1.35}}>
                 {isHyperliquid

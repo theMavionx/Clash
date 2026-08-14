@@ -18,6 +18,8 @@
     "test:ondo": "node test-ondo-client.mjs",
     "test:leverup-v2": "node test-leverup-v2.mjs",
     "test:aster-v3": "node test-aster-v3.mjs",
+    "test:gmx-ui-fee": "node test-gmx-ui-fee.mjs",
+    "test:gmx-ui-fee-live": "node test-gmx-ui-fee-live.cjs",
     "test:rh-lighter": "node test-rh-lighter.mjs",
     "test:battle-result-layout": "node --test test-battle-result-layout.mjs",
     "test:phoenix-position": "node test-phoenix-position-metrics.mjs",

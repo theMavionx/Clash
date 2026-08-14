@@ -7,11 +7,10 @@
 //   Pacifica  — sum `fees_all_time` from the builder-code leaderboard.
 //               Pacifica pre-aggregates the same builder fees per referred
 //               wallet, avoiding a full paginated history scan on every read.
-//   GMX       — Goldsky subgraph `affiliateStats(period: total)` for our
-//               affiliate address: totalRebateUsd − discountUsd. This is
-//               the authoritative number GMX's own /referrals page reads.
-//               Wallet-balance was misleading: the affiliate wallet may
-//               hold unrelated USDC. Subgraph gives the actual earned $.
+//   GMX       — exact unclaimed UI fees from DataStore keys for our receiver,
+//               plus a separately-labelled referral estimate. Wallet balance
+//               is never treated as earnings because it may contain unrelated
+//               funds.
 //   Decibel   — On-chain builder fees are accrued in PerpEngineGlobal's
 //               internal ledger keyed by builder subaccount; there is no
 //               public view function that returns the accumulator and
@@ -34,6 +33,11 @@ const {
   fetchWithAptosKeys,
 } = require('./aptos_api');
 const tradeRecon = require('./trade_reconciliation');
+const {
+  GMX_UI_FEE_BPS,
+  GMX_UI_FEE_RECEIVER,
+  fetchGmxUiFeeSnapshot,
+} = require('./gmx_ui_fees');
 
 async function fetchJson(url, opts = {}, timeoutMs = 10_000) {
   const ctrl = new AbortController();
@@ -695,22 +699,46 @@ async function fetchGmxEarnings() {
     } finally { fdb.close(); }
   }
 
-  // 4. Estimate only. Exact GMX affiliate earnings are not the same as wallet
-  // balance and the local volume model must not be counted as earned.
-  const earned = volume * (GMX_AVG_FEE_BPS / 10000) * (affiliateShareBps / 10000);
+  // 4. Exact unclaimed UI-fee accrual comes from GMX DataStore, keyed by
+  // (market, collateral token, receiver). Referral income is separate and
+  // remains an estimate because GMX exposes it through another claim path.
+  let uiFeeSnapshot = null;
+  let uiFeeError = null;
+  try {
+    uiFeeSnapshot = await fetchGmxUiFeeSnapshot();
+  } catch (error) {
+    uiFeeError = String(error?.message || error || 'unknown GMX UI fee read error').slice(0, 220);
+  }
+  const referralEstimate = volume * (GMX_AVG_FEE_BPS / 10000) * (affiliateShareBps / 10000);
+  const uiFeeEstimate = volume * (GMX_UI_FEE_BPS / 10000);
+  const exactClaimable = Number(uiFeeSnapshot?.claimable_usd) || 0;
   return {
-    earned_usd: 0,
-    address: GMX_AFFILIATE,
+    earned_usd: roundUsd(exactClaimable),
+    address: GMX_UI_FEE_RECEIVER,
     currency: 'USDC (Arbitrum)',
     volume_usd: volume,
     trades,
     tier: tierIdx,
-    estimated_fee_usd: roundUsd(earned),
+    estimated_fee_usd: roundUsd(uiFeeEstimate + referralEstimate),
+    claimable_ui_fee_usd: roundUsd(exactClaimable),
+    ui_fee_receiver: GMX_UI_FEE_RECEIVER,
+    ui_fee_bps: GMX_UI_FEE_BPS,
+    ui_fee_factor_bps_onchain: Number(uiFeeSnapshot?.onchain_bps) || 0,
+    ui_fee_configured: uiFeeSnapshot?.configured === true,
+    ui_fee_tokens: uiFeeSnapshot?.tokens || [],
+    ui_fee_market_token_pairs: Number(uiFeeSnapshot?.market_token_pairs) || 0,
+    affiliate_address: GMX_AFFILIATE,
+    estimated_referral_fee_usd: roundUsd(referralEstimate),
+    estimated_ui_fee_usd: roundUsd(uiFeeEstimate),
     rebate_pct: affiliateShareBps / 100,
     fee_per_side_pct: GMX_AVG_FEE_BPS / 100,
-    model: 'gmx_onchain_tier_estimate_only',
-    note: `On-chain referral tier is verified, but exact GMX commission payout is not counted from the local model. Estimated volume × ${GMX_AVG_FEE_BPS}bps fee × ${affiliateShareBps}bps rebate is shown only in estimated_fee_usd.`,
-    source_detail: 'gmx_referral_tier_onchain_estimate_only',
+    model: 'gmx_ui_fee_datastore_plus_referral_estimate',
+    note: uiFeeSnapshot
+      ? `Exact unclaimed GMX UI fees are read from DataStore for ${GMX_UI_FEE_RECEIVER}. On-chain factor is ${Number(uiFeeSnapshot.onchain_bps || 0).toFixed(4)} bps; configured target is ${GMX_UI_FEE_BPS} bps. Referral income remains separately estimated from attributed local volume.`
+      : `GMX UI-fee DataStore read failed (${uiFeeError}). earned_usd stays 0; the ${GMX_UI_FEE_BPS} bps UI-fee and referral values are shown only in estimated_fee_usd.`,
+    source_detail: uiFeeSnapshot
+      ? 'gmx_claimable_ui_fee_datastore_exact'
+      : 'gmx_ui_fee_datastore_unavailable',
   };
 }
 
@@ -3638,13 +3666,16 @@ function revenueModelForDex(dex, dateForRate = null) {
     };
   }
   if (dex === 'gmx') {
+    const referralRate = (GMX_AVG_FEE_BPS / 10000) * (GMX_AFFILIATE_SHARE_BPS / 10000);
+    const uiFeeRate = GMX_UI_FEE_BPS / 10000;
     return {
       configured: true,
-      rate: (GMX_AVG_FEE_BPS / 10000) * (GMX_AFFILIATE_SHARE_BPS / 10000),
-      rate_label: `${GMX_AVG_FEE_BPS} bps fee x ${GMX_AFFILIATE_SHARE_BPS} bps rebate`,
+      rate: uiFeeRate + referralRate,
+      rate_label: `${GMX_UI_FEE_BPS} bps UI fee + ${GMX_AVG_FEE_BPS} bps fee x ${GMX_AFFILIATE_SHARE_BPS} bps rebate`,
+      builder_fee_bps: GMX_UI_FEE_BPS,
       fee_per_side_bps: GMX_AVG_FEE_BPS,
       rebate_bps: GMX_AFFILIATE_SHARE_BPS,
-      model: 'volume_x_fee_x_rebate',
+      model: 'volume_x_ui_fee_plus_referral_rebate',
       source_detail: 'local_volume_x_gmx_rate',
     };
   }
@@ -4221,7 +4252,7 @@ const EARNINGS_READER_CONFIG = {
   pacifica: { source: 'pacifica_builder_leaderboard_fee_sum', read: () => fetchPacificaEarnings() },
   decibel: { source: 'decibel_account_overview_fee_income', read: () => fetchDecibelEarnings() },
   avantis: { source: 'avantis_code_owner_onchain_estimate_only', read: () => fetchAvantisEarnings() },
-  gmx: { source: 'gmx_referral_tier_onchain_estimate_only', read: () => fetchGmxEarnings() },
+  gmx: { source: 'gmx_claimable_ui_fee_datastore_exact', read: () => fetchGmxEarnings() },
   ostium: { source: 'arbitrum_usdc_balance_of_builder', read: ({ mainDb }) => fetchOstiumEarnings({ mainDb }) },
   phoenix: { source: 'phoenix_flight_collateral_transfers', read: ({ mainDb }) => fetchPhoenixEarnings({ mainDb }) },
   monad: { source: 'perpl_builder_fee_not_configured', read: () => fetchPerplEarnings() },

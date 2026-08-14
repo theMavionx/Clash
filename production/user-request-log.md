@@ -3488,3 +3488,19 @@ Follow-up:
   the canonical atomic release script, retain the previous immutable release
   for rollback, and verify database/schema row preservation plus public service
   health. No funded trade or wallet signature is authorized by this release.
+
+## UR-2026-08-14-GMX-UI-FEE-INTEGRATION
+
+- Timestamp: 2026-08-14 Europe/Kyiv
+- Request: configure the existing GMX referral-owner wallet as the GMX builder
+  / UI-fee receiver, fully integrate and test it, then commit, push, and deploy
+  the result to production.
+- Approved configuration: receiver and referral owner
+  `0x412A02Ba415e5969596E6f0A35f9439760a3468F`, referral `clashofperps`, and
+  1-bps UI fee on all supported GMX position actions.
+- Scope: centralized order routing, owner-only on-chain factor activation and
+  status, execution-proof tournament/gold attribution, exact claimable-fee
+  earnings reads, production env defaults, tests, ADR, release and production
+  smoke verification. Deployment itself does not possess or use the receiver
+  private key; the one-time factor transaction still requires that owner
+  wallet's explicit signature.

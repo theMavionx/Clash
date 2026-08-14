@@ -524,6 +524,16 @@ prepare_shared_runtime() {
     ensure_env_default "VITE_HYPERLIQUID_BUILDER_FEE_TENTH_BPS" "10"
     ensure_env_default "PHOENIX_FLIGHT_BUILDER_FEE_BPS" "1"
     ensure_env_default "VITE_PHOENIX_FLIGHT_BUILDER_FEE_BPS" "1"
+    # GMX server proof, browser routing and the legacy referral estimate must
+    # resolve to one immutable release configuration. Fail-open defaults would
+    # allow a stale .env to build a frontend that routes somewhere else.
+    set_env_value "GMX_UI_FEE_RECEIVER" "0x412A02Ba415e5969596E6f0A35f9439760a3468F"
+    set_env_value "GMX_UI_FEE_BPS" "1"
+    set_env_value "GMX_UI_FEE_ATTRIBUTION_CUTOVER_AT" "2026-08-14T00:00:00.000Z"
+    set_env_value "GMX_REFERRAL_CODE" "clashofperps"
+    set_env_value "GMX_AFFILIATE_ADDR" "0x412A02Ba415e5969596E6f0A35f9439760a3468F"
+    set_env_value "VITE_GMX_UI_FEE_RECEIVER" "0x412A02Ba415e5969596E6f0A35f9439760a3468F"
+    set_env_value "VITE_GMX_UI_FEE_BPS" "1"
     ensure_env_default "NADO_SUBACCOUNT_NAME" "default"
     ensure_env_default "NADO_FILL_LOOKBACK_LIMIT" "100"
     ensure_env_default "VITE_NADO_SUBACCOUNT_NAME" "default"
