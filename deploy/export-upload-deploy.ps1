@@ -118,11 +118,24 @@ try {
   $remoteTarget = "${remote}:$remoteGodotDir/"
 
   $remoteHead = ""
-  $remoteHeadCmd = "cd '$RemoteSourceDir' && git rev-parse HEAD"
+  $remoteRuntimeBuildCmd = "node -e `"const fs=require('fs');const p=JSON.parse(fs.readFileSync('$RemoteSourceDir/current/web/dist/godot/godot-runtime-manifest.json','utf8'));console.log(p.build||'')`""
   try {
-    $remoteHead = (& $plink -batch -ssh -P 22 -pw $password -hostkey $HostKey $remote $remoteHeadCmd 2>$null | Select-Object -Last 1).Trim()
+    $remoteRuntimeBuild = (& $plink -batch -ssh -P 22 -pw $password -hostkey $HostKey $remote $remoteRuntimeBuildCmd 2>$null | Select-Object -Last 1).Trim()
+    if ($remoteRuntimeBuild -match '([0-9a-fA-F]{8,40})$') {
+      $remoteHead = $Matches[1]
+      Write-Host "==> Active Godot runtime base: $remoteRuntimeBuild"
+    }
   } catch {
     $remoteHead = ""
+  }
+  if (-not $remoteHead) {
+    $remoteHeadCmd = "cd '$RemoteSourceDir' && git rev-parse HEAD"
+    try {
+      $remoteHead = (& $plink -batch -ssh -P 22 -pw $password -hostkey $HostKey $remote $remoteHeadCmd 2>$null | Select-Object -Last 1).Trim()
+      Write-Host "==> Active Godot runtime build unavailable; falling back to source HEAD $remoteHead"
+    } catch {
+      $remoteHead = ""
+    }
   }
 
   $godotChangedFiles = if ($ForceGodotExport -or $env:CLASH_FORCE_GODOT_EXPORT -eq "1") {

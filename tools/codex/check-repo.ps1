@@ -112,6 +112,7 @@ Invoke-Step "Aster browser integration" { node web/test-aster-v3.mjs }
 Invoke-Step "Decibel browser referral" { node web/test-decibel-referral.mjs }
 Invoke-Step "RH Lighter browser integration" { node web/test-rh-lighter.mjs }
 Invoke-Step "battle result responsive layout" { node --test web/test-battle-result-layout.mjs }
+Invoke-Step "Godot deploy active-runtime base" { powershell -NoProfile -ExecutionPolicy Bypass -File tools/codex/test-deploy-godot-runtime-base.ps1 }
 Invoke-Step "Tournament trade cursor" { node server/test-tournament-trade-cursor.js }
 Invoke-Step "Hermes jobs worker" { node server/test-hermes-jobs-worker.js }
 Invoke-Step "Ondo proof-gated builder earnings" { node server/test-ondo-earnings.js }
