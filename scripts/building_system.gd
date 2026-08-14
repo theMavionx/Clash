@@ -976,7 +976,7 @@ var _move_source_pos: Vector3 = Vector3.ZERO
 var _move_last_grid_step_gp: Vector2i = Vector2i(-9999, -9999)
 var _move_indicator: MeshInstance3D = null
 var _move_indicator_detail: MeshInstance3D = null
-var _move_indicator_visual_key: String = ""
+var _move_indicator_visual_key := Vector3(-1.0, -1.0, -1.0)
 var _move_target_local: Vector3 = Vector3.ZERO
 var _move_last_pointer_screen: Vector2 = Vector2.INF
 var _move_touch_owner_index: int = -1
@@ -4036,42 +4036,72 @@ shader_type spatial;
 render_mode unshaded, blend_mix, depth_draw_never, cull_disabled;
 
 uniform vec2 grid_dimensions = vec2(27.0, 27.0);
-uniform vec4 minor_color : source_color = vec4(0.4549, 0.7882, 1.0, 0.46);
-uniform vec4 boundary_color : source_color = vec4(0.9176, 0.9725, 1.0, 0.68);
-uniform float minor_width_px = 1.25;
-uniform float minor_feather_px = 0.75;
-uniform float boundary_width_px = 2.25;
-uniform float boundary_feather_px = 0.75;
+uniform vec4 minor_body_color : source_color = vec4(0.078431, 0.317647, 0.356863, 0.42);
+uniform vec4 minor_core_color : source_color = vec4(0.780392, 0.960784, 1.0, 0.30);
+uniform vec4 boundary_body_color : source_color = vec4(0.031373, 0.184314, 0.231373, 0.88);
+uniform vec4 boundary_core_color : source_color = vec4(0.909804, 0.984314, 1.0, 0.78);
+uniform float minor_body_width_px = 1.65;
+uniform float minor_body_feather_px = 0.65;
+uniform float minor_core_width_px = 0.65;
+uniform float minor_core_feather_px = 0.35;
+uniform float boundary_body_width_px = 4.25;
+uniform float boundary_body_feather_px = 0.75;
+uniform float boundary_core_width_px = 1.25;
+uniform float boundary_core_feather_px = 0.40;
+
+float line_coverage(vec2 pixel_distance, float width_px, float feather_px) {
+	float half_width = width_px * 0.5;
+	vec2 axis_coverage = 1.0 - smoothstep(
+		vec2(half_width),
+		vec2(half_width + feather_px),
+		pixel_distance
+	);
+	return max(axis_coverage.x, axis_coverage.y);
+}
 
 void fragment() {
 	vec2 grid_coord = UV * grid_dimensions;
 	vec2 grid_fwidth = max(fwidth(grid_coord), vec2(0.00001));
 	vec2 minor_grid_distance = min(fract(grid_coord), 1.0 - fract(grid_coord));
 	vec2 minor_pixel_distance = minor_grid_distance / grid_fwidth;
-	float minor_half_width = minor_width_px * 0.5;
-	vec2 minor_axis_coverage = 1.0 - smoothstep(
-		vec2(minor_half_width),
-		vec2(minor_half_width + minor_feather_px),
-		minor_pixel_distance
-	);
-	float minor_coverage = max(minor_axis_coverage.x, minor_axis_coverage.y);
-
 	vec2 boundary_grid_distance = min(grid_coord, grid_dimensions - grid_coord);
 	vec2 boundary_pixel_distance = boundary_grid_distance / grid_fwidth;
-	float boundary_half_width = boundary_width_px * 0.5;
-	vec2 boundary_axis_coverage = 1.0 - smoothstep(
-		vec2(boundary_half_width),
-		vec2(boundary_half_width + boundary_feather_px),
-		boundary_pixel_distance
-	);
-	float boundary_coverage = max(boundary_axis_coverage.x, boundary_axis_coverage.y);
 
-	float minor_alpha = minor_coverage * minor_color.a;
-	float boundary_alpha = boundary_coverage * boundary_color.a;
-	float final_alpha = max(minor_alpha, boundary_alpha);
-	float boundary_mix = clamp(boundary_alpha / max(final_alpha, 0.00001), 0.0, 1.0);
-	ALBEDO = mix(minor_color.rgb, boundary_color.rgb, boundary_mix);
-	ALPHA = final_alpha;
+	float minor_body_alpha = line_coverage(
+		minor_pixel_distance,
+		minor_body_width_px,
+		minor_body_feather_px
+	) * minor_body_color.a;
+	float minor_core_alpha = line_coverage(
+		minor_pixel_distance,
+		minor_core_width_px,
+		minor_core_feather_px
+	) * minor_core_color.a;
+	float boundary_body_alpha = line_coverage(
+		boundary_pixel_distance,
+		boundary_body_width_px,
+		boundary_body_feather_px
+	) * boundary_body_color.a;
+	float boundary_core_alpha = line_coverage(
+		boundary_pixel_distance,
+		boundary_core_width_px,
+		boundary_core_feather_px
+	) * boundary_core_color.a;
+
+	vec3 premultiplied_color = minor_body_color.rgb * minor_body_alpha;
+	float composite_alpha = minor_body_alpha;
+	premultiplied_color = minor_core_color.rgb * minor_core_alpha
+		+ premultiplied_color * (1.0 - minor_core_alpha);
+	composite_alpha = minor_core_alpha + composite_alpha * (1.0 - minor_core_alpha);
+	premultiplied_color = boundary_body_color.rgb * boundary_body_alpha
+		+ premultiplied_color * (1.0 - boundary_body_alpha);
+	composite_alpha = boundary_body_alpha + composite_alpha * (1.0 - boundary_body_alpha);
+	premultiplied_color = boundary_core_color.rgb * boundary_core_alpha
+		+ premultiplied_color * (1.0 - boundary_core_alpha);
+	composite_alpha = boundary_core_alpha + composite_alpha * (1.0 - boundary_core_alpha);
+
+	ALBEDO = premultiplied_color / max(composite_alpha, 0.00001);
+	ALPHA = composite_alpha;
 }
 """
 
@@ -4096,16 +4126,26 @@ static func _get_grid_material() -> ShaderMaterial:
 	if _shared_grid_material == null:
 		_shared_grid_material = ShaderMaterial.new()
 		_shared_grid_material.shader = _get_grid_shader()
-		var minor_color := Color("74c9ff")
-		minor_color.a = 0.46
-		var boundary_color := Color("eaf8ff")
-		boundary_color.a = 0.68
-		_shared_grid_material.set_shader_parameter("minor_color", minor_color)
-		_shared_grid_material.set_shader_parameter("boundary_color", boundary_color)
-		_shared_grid_material.set_shader_parameter("minor_width_px", 1.25)
-		_shared_grid_material.set_shader_parameter("minor_feather_px", 0.75)
-		_shared_grid_material.set_shader_parameter("boundary_width_px", 2.25)
-		_shared_grid_material.set_shader_parameter("boundary_feather_px", 0.75)
+		var minor_body_color := Color("14515b")
+		minor_body_color.a = 0.42
+		var minor_core_color := Color("c7f5ff")
+		minor_core_color.a = 0.30
+		var boundary_body_color := Color("082f3b")
+		boundary_body_color.a = 0.88
+		var boundary_core_color := Color("e8fbff")
+		boundary_core_color.a = 0.78
+		_shared_grid_material.set_shader_parameter("minor_body_color", minor_body_color)
+		_shared_grid_material.set_shader_parameter("minor_core_color", minor_core_color)
+		_shared_grid_material.set_shader_parameter("boundary_body_color", boundary_body_color)
+		_shared_grid_material.set_shader_parameter("boundary_core_color", boundary_core_color)
+		_shared_grid_material.set_shader_parameter("minor_body_width_px", 1.65)
+		_shared_grid_material.set_shader_parameter("minor_body_feather_px", 0.65)
+		_shared_grid_material.set_shader_parameter("minor_core_width_px", 0.65)
+		_shared_grid_material.set_shader_parameter("minor_core_feather_px", 0.35)
+		_shared_grid_material.set_shader_parameter("boundary_body_width_px", 4.25)
+		_shared_grid_material.set_shader_parameter("boundary_body_feather_px", 0.75)
+		_shared_grid_material.set_shader_parameter("boundary_core_width_px", 1.25)
+		_shared_grid_material.set_shader_parameter("boundary_core_feather_px", 0.40)
 	return _shared_grid_material
 
 
@@ -4854,10 +4894,12 @@ func _update_ghost(screen_position: Variant = null) -> void:
 	)
 	if local_hit == Vector3.INF:
 		ghost.visible = false
+		_hide_footprint_indicator()
 		return
 
 	if not _is_in_grid(local_hit):
 		ghost.visible = false
+		_hide_footprint_indicator()
 		return
 
 	ghost.visible = true
@@ -4877,10 +4919,25 @@ func _update_ghost(screen_position: Variant = null) -> void:
 		if _apply_flamethrower_attack_facing():
 			_emit_flamethrower_facing_editor("placement")
 
-	if _can_place(gp, def.cells):
+	var valid := _can_place(gp, def.cells)
+	_update_placement_footprint_indicator(local_pos, def.cells, valid)
+	if valid:
 		ghost_material.albedo_color = Color(0, 0.8, 0, 0.4)
 	else:
 		ghost_material.albedo_color = Color(0.8, 0, 0, 0.4)
+
+
+func _update_placement_footprint_indicator(
+	center: Vector3,
+	footprint: Vector2i,
+	valid: bool
+) -> void:
+	_update_move_indicator(
+		center,
+		float(footprint.x) * cell_size,
+		float(footprint.y) * cell_size,
+		valid
+	)
 
 
 func _can_place(pos: Vector2i, size: Vector2i) -> bool:
@@ -5113,6 +5170,7 @@ func _cancel_placement() -> void:
 	if ghost:
 		ghost.queue_free()
 		ghost = null
+	_clear_footprint_indicator()
 	_end_flamethrower_editor(false)
 
 
@@ -8879,6 +8937,7 @@ func _update_move_indicator(center: Vector3, sx: float, sz: float, valid: bool) 
 		_move_indicator_detail.material_override = detail_material
 		_move_indicator_detail.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		_move_indicator.add_child(_move_indicator_detail)
+	_move_indicator.visible = true
 	(_move_indicator.mesh as QuadMesh).size = Vector2(sx, sz)
 	_move_indicator.rotation.x = -PI * 0.5
 	_move_indicator.position = center + Vector3(0, 0.03, 0)
@@ -8889,10 +8948,23 @@ func _update_move_indicator(center: Vector3, sx: float, sz: float, valid: bool) 
 	var outline_color := Color("d9ffea") if valid else Color("fff0ed")
 	outline_color.a = 0.92 if valid else 0.96
 	(_move_indicator_detail.material_override as StandardMaterial3D).albedo_color = outline_color
-	var visual_key := "%0.4f:%0.4f:%s" % [sx, sz, valid]
+	var visual_key := Vector3(sx, sz, 1.0 if valid else 0.0)
 	if visual_key != _move_indicator_visual_key:
 		_move_indicator_visual_key = visual_key
 		_move_indicator_detail.mesh = _build_move_indicator_detail_mesh(sx, sz, valid)
+
+
+func _hide_footprint_indicator() -> void:
+	if _move_indicator and is_instance_valid(_move_indicator):
+		_move_indicator.visible = false
+
+
+func _clear_footprint_indicator() -> void:
+	if _move_indicator and is_instance_valid(_move_indicator):
+		_move_indicator.queue_free()
+	_move_indicator = null
+	_move_indicator_detail = null
+	_move_indicator_visual_key = Vector3(-1.0, -1.0, -1.0)
 
 
 func _build_move_indicator_detail_mesh(sx: float, sz: float, valid: bool) -> ImmediateMesh:
@@ -9108,11 +9180,7 @@ func _end_move() -> void:
 	_move_commit_pending = false
 	if not always_show_grid:
 		_hide_grid()
-	if _move_indicator and is_instance_valid(_move_indicator):
-		_move_indicator.queue_free()
-	_move_indicator = null
-	_move_indicator_detail = null
-	_move_indicator_visual_key = ""
+	_clear_footprint_indicator()
 
 
 func _set_collection_icons_suppressed_for_all(suppressed: bool) -> void:

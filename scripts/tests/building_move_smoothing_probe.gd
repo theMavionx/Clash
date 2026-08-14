@@ -212,32 +212,53 @@ func _run_art_contract_checks() -> void:
 	)
 	var grid_material := building_system.grid_visual.material_override as ShaderMaterial
 	_expect(grid_material != null, "grid did not use one procedural ShaderMaterial")
-	var minor_color := Color("74c9ff")
-	minor_color.a = 0.46
-	var boundary_color := Color("eaf8ff")
-	boundary_color.a = 0.68
+	var minor_body_color := Color("14515b")
+	minor_body_color.a = 0.42
+	var minor_core_color := Color("c7f5ff")
+	minor_core_color.a = 0.30
+	var boundary_body_color := Color("082f3b")
+	boundary_body_color.a = 0.88
+	var boundary_core_color := Color("e8fbff")
+	boundary_core_color.a = 0.78
 	_expect(
 		(grid_material.get_shader_parameter("grid_dimensions") as Vector2).is_equal_approx(Vector2(7.0, 5.0)),
 		"grid dimension uniforms did not match logical columns/rows"
 	)
 	_expect(
-		(grid_material.get_shader_parameter("minor_color") as Color).is_equal_approx(minor_color)
-		and is_equal_approx(float(grid_material.get_shader_parameter("minor_width_px")), 1.25)
-		and is_equal_approx(float(grid_material.get_shader_parameter("minor_feather_px")), 0.75),
-		"minor grid shader color/width/feather contract is incorrect"
+		(grid_material.get_shader_parameter("minor_body_color") as Color).is_equal_approx(minor_body_color)
+		and is_equal_approx(float(grid_material.get_shader_parameter("minor_body_width_px")), 1.65)
+		and is_equal_approx(float(grid_material.get_shader_parameter("minor_body_feather_px")), 0.65)
+		and (grid_material.get_shader_parameter("minor_core_color") as Color).is_equal_approx(minor_core_color)
+		and is_equal_approx(float(grid_material.get_shader_parameter("minor_core_width_px")), 0.65)
+		and is_equal_approx(float(grid_material.get_shader_parameter("minor_core_feather_px")), 0.35),
+		"minor etched body/core shader contract is incorrect"
 	)
 	_expect(
-		(grid_material.get_shader_parameter("boundary_color") as Color).is_equal_approx(boundary_color)
-		and is_equal_approx(float(grid_material.get_shader_parameter("boundary_width_px")), 2.25)
-		and is_equal_approx(float(grid_material.get_shader_parameter("boundary_feather_px")), 0.75),
-		"boundary shader color/width/feather contract is incorrect"
+		(grid_material.get_shader_parameter("boundary_body_color") as Color).is_equal_approx(boundary_body_color)
+		and is_equal_approx(float(grid_material.get_shader_parameter("boundary_body_width_px")), 4.25)
+		and is_equal_approx(float(grid_material.get_shader_parameter("boundary_body_feather_px")), 0.75)
+		and (grid_material.get_shader_parameter("boundary_core_color") as Color).is_equal_approx(boundary_core_color)
+		and is_equal_approx(float(grid_material.get_shader_parameter("boundary_core_width_px")), 1.25)
+		and is_equal_approx(float(grid_material.get_shader_parameter("boundary_core_feather_px")), 0.40),
+		"boundary etched body/core shader contract is incorrect"
 	)
 	var shader_source: String = grid_material.shader.code
 	_expect(
 		"fwidth(grid_coord)" in shader_source
-		and "max(minor_axis_coverage.x, minor_axis_coverage.y)" in shader_source
-		and "max(minor_alpha, boundary_alpha)" in shader_source,
+		and "return max(axis_coverage.x, axis_coverage.y)" in shader_source,
 		"grid shader did not use screen-space derivatives and max crossing coverage"
+	)
+	var minor_body_composite := shader_source.find("premultiplied_color = minor_body_color.rgb")
+	var minor_core_composite := shader_source.find("premultiplied_color = minor_core_color.rgb")
+	var boundary_body_composite := shader_source.find("premultiplied_color = boundary_body_color.rgb")
+	var boundary_core_composite := shader_source.find("premultiplied_color = boundary_core_color.rgb")
+	_expect(
+		minor_body_composite >= 0
+		and minor_body_composite < minor_core_composite
+		and minor_core_composite < boundary_body_composite
+		and boundary_body_composite < boundary_core_composite
+		and "ALPHA = composite_alpha" in shader_source,
+		"grid shader did not alpha-over body/core layers in the required order"
 	)
 	_expect(
 		"depth_draw_never" in shader_source
@@ -249,6 +270,38 @@ func _run_art_contract_checks() -> void:
 	_expect(
 		building_system._get_configured_grid_material() == grid_material,
 		"grid material was recreated instead of cached"
+	)
+	var building_source := FileAccess.get_file_as_string("res://scripts/building_system.gd")
+	var ghost_source_start := building_source.find("func _update_ghost(")
+	var ghost_source_end := building_source.find("func _can_place(", ghost_source_start)
+	var ghost_source := building_source.substr(ghost_source_start, ghost_source_end - ghost_source_start)
+	var placement_indicator_start := building_source.find("func _update_placement_footprint_indicator(")
+	var placement_indicator_end := building_source.find("func _can_place(", placement_indicator_start)
+	var placement_indicator_source := building_source.substr(
+		placement_indicator_start,
+		placement_indicator_end - placement_indicator_start
+	)
+	var cancel_placement_start := building_source.find("func _cancel_placement(")
+	var cancel_placement_end := building_source.find("func _begin_flamethrower_editor(", cancel_placement_start)
+	var cancel_placement_source := building_source.substr(
+		cancel_placement_start,
+		cancel_placement_end - cancel_placement_start
+	)
+	_expect(
+		ghost_source_start >= 0
+		and ghost_source_end > ghost_source_start
+		and "_update_placement_footprint_indicator(local_pos, def.cells, valid)" in ghost_source
+		and "_hide_footprint_indicator()" in ghost_source
+		and placement_indicator_start >= 0
+		and placement_indicator_end > placement_indicator_start
+		and "_update_move_indicator(" in placement_indicator_source,
+		"placement ghost updates were not routed through the shared move footprint renderer"
+	)
+	_expect(
+		cancel_placement_start >= 0
+		and cancel_placement_end > cancel_placement_start
+		and "_clear_footprint_indicator()" in cancel_placement_source,
+		"placement teardown did not retain shared footprint cleanup"
 	)
 
 	building_system._update_move_indicator(Vector3.ZERO, 0.75, 0.75, true)
@@ -308,6 +361,48 @@ func _run_art_contract_checks() -> void:
 			is_equal_approx(measured_period, CELL_SIZE * 0.32),
 			"invalid hatch period was not exactly 0.32 cell"
 		)
+
+	var shared_indicator: MeshInstance3D = building_system._move_indicator
+	var placement_center := Vector3(0.25, 0.0, -0.25)
+	building_system._update_placement_footprint_indicator(
+		placement_center,
+		Vector2i(3, 3),
+		false
+	)
+	var cached_placement_mesh: Mesh = building_system._move_indicator_detail.mesh
+	_expect(
+		building_system._move_indicator == shared_indicator
+		and building_system._move_indicator.position.is_equal_approx(
+			placement_center + Vector3(0.0, 0.03, 0.0)
+		)
+		and (building_system._move_indicator.mesh as QuadMesh).size.is_equal_approx(Vector2(0.75, 0.75)),
+		"placement did not reuse the move footprint indicator at its snapped center/size"
+	)
+	building_system._update_placement_footprint_indicator(
+		placement_center,
+		Vector2i(3, 3),
+		false
+	)
+	_expect(
+		building_system._move_indicator_detail.mesh == cached_placement_mesh,
+		"unchanged placement validity rebuilt cached footprint detail geometry"
+	)
+	building_system._hide_footprint_indicator()
+	_expect(not building_system._move_indicator.visible, "hidden placement ghost left its footprint visible")
+	building_system._update_placement_footprint_indicator(
+		placement_center,
+		Vector2i(3, 3),
+		true
+	)
+	_expect(building_system._move_indicator.visible, "placement footprint did not reappear on a valid target update")
+	building_system.is_placing = true
+	building_system._cancel_placement()
+	_expect(
+		building_system._move_indicator == null
+		and building_system._move_indicator_detail == null
+		and building_system._move_indicator_visual_key == Vector3(-1.0, -1.0, -1.0),
+		"placement teardown did not clear the shared footprint indicator/cache"
+	)
 	building_system.free()
 
 
