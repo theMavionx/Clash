@@ -784,14 +784,15 @@ backup_tournaments_before_schema_migration() {
         die "Failed to create the pre-migration tournaments backup"
     fi
     [ -s "$dump_path" ] || die "Pre-migration tournaments backup is empty"
-    grep -q 'CREATE TABLE tournaments' "$dump_path" \
-        || die "Pre-migration tournaments backup is missing its schema"
     if ! sqlite3 "$restore_probe" < "$dump_path"; then
         rm -f "$restore_probe"
         die "Pre-migration tournaments backup failed its restore probe"
     fi
 
-    local restored_count
+    local restored_schema restored_count
+    restored_schema="$(sqlite3 "$restore_probe" "SELECT sql FROM sqlite_master WHERE type='table' AND name='tournaments';")"
+    [ -n "$restored_schema" ] \
+        || die "Pre-migration tournaments backup is missing its schema"
     restored_count="$(sqlite3 "$restore_probe" "SELECT COUNT(*) FROM tournaments;")"
     rm -f "$restore_probe"
     [ "$restored_count" = "$TOURNAMENT_ROW_COUNT_BEFORE" ] \

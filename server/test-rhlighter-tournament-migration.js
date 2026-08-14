@@ -11,6 +11,18 @@ const dbPath = path.join(tempDir, 'clash.db');
 const originalDbPath = process.env.CLASH_MAIN_DB;
 
 try {
+  const deployScript = fs.readFileSync(path.join(repoRoot, 'deploy', 'deploy.sh'), 'utf8');
+  assert.match(
+    deployScript,
+    /restored_schema=.*sqlite3 .*restore_probe.*sqlite_master/s,
+    'deploy must verify the restored tournaments schema through SQLite',
+  );
+  assert.doesNotMatch(
+    deployScript,
+    /grep -q ['"]CREATE TABLE tournaments/,
+    'deploy must not assume SQLite emits an unquoted tournaments table name',
+  );
+
   process.env.CLASH_MAIN_DB = dbPath;
   const dbModulePath = require.resolve('./db');
   delete require.cache[dbModulePath];
