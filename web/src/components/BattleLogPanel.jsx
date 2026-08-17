@@ -475,11 +475,11 @@ const S = {
     borderColor: 'var(--terminal-border)',
     borderRadius: 12,
     padding: '10px 12px',
-    boxSizing: 'border-box', minWidth: 0, overflow: 'hidden',
+    boxSizing: 'border-box', minWidth: 0, overflow: 'hidden', flex: '0 0 auto',
     boxShadow: '0 2px 4px rgba(0,0,0,0.16)',
   },
   summaryButton: {
-    display: 'block', width: '100%', minWidth: 0, padding: 0, margin: 0,
+    display: 'block', width: '100%', minWidth: 0, minHeight: 44, padding: 0, margin: 0,
     border: 'none', borderRadius: 8, background: 'transparent', color: 'inherit',
     font: 'inherit', textAlign: 'left', cursor: 'pointer',
   },

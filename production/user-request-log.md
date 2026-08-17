@@ -3504,3 +3504,19 @@ Follow-up:
   smoke verification. Deployment itself does not possess or use the receiver
   private key; the one-time factor transaction still requires that owner
   wallet's explicit signature.
+
+## UR-2026-08-17-001
+
+- Timestamp: 2026-08-17 11:12:38 Europe/Kyiv
+- Request: "давай кул оушен і закинь на прод відразу"
+- Scope: apply the selected Cool Ocean lighting preset consistently to the
+  authored Godot scene and production Web render profile, verify the real
+  desktop/mobile Web export, then commit, push, and deploy it to production.
+
+## UR-2026-08-17-002
+
+- Timestamp: 2026-08-17 11:12:38 Europe/Kyiv
+- Request: "баг в батл логах виправ також разом зі світлом і тоді вже на прод"
+- Scope: fix Battle Log rows collapsing when the history contains many entries,
+  verify dense scrolling and expanded details on desktop/mobile, and ship the
+  fix in the same production release as Cool Ocean lighting.

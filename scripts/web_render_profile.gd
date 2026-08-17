@@ -368,10 +368,10 @@ func _apply_profile() -> void:
 			continue
 		var environment := world_environment.environment.duplicate(true) as Environment
 		environment.glow_enabled = false
-		# Balance material readability against highlight clipping in the web build.
+		# Keep the production Web image on the authored Cool Ocean baseline.
 		environment.ambient_light_color = Color(0.72, 0.78, 0.92, 1.0)
 		environment.ambient_light_energy = 1.44
-		environment.tonemap_exposure = 0.9
+		environment.tonemap_exposure = 0.7
 		environment.tonemap_white = 7.0
 		environment.ssao_enabled = false
 		environment.ssil_enabled = false
@@ -381,9 +381,11 @@ func _apply_profile() -> void:
 		if directional_light != null:
 			directional_light.shadow_enabled = false
 			if directional_light.name == "DirectionalLight3D":
-				directional_light.light_energy = 1.41
+				directional_light.light_color = Color(0.92, 0.95, 1.0, 1.0)
+				directional_light.light_energy = 1.10
 			elif directional_light.name == "FillLight":
-				directional_light.light_energy = 0.61
+				directional_light.light_color = Color(0.58, 0.70, 1.0, 1.0)
+				directional_light.light_energy = 0.46
 
 	var water := get_node_or_null(water_path) as MeshInstance3D
 	if water != null:
