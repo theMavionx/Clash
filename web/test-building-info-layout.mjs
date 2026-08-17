@@ -43,6 +43,20 @@ test('dialog has keyboard dismissal, focus containment, and accessible controls'
   assert.match(styles, /\.building-info-modal__body:focus-visible/);
 });
 
+test('close button stays vertically centered across global button interactions', () => {
+  const closeRule = styles.match(/\.building-info-modal__close\s*\{([\s\S]*?)\}/)?.[1] ?? '';
+  const closeFocusRule = styles.match(/\.building-info-modal__close:focus-visible\s*\{([\s\S]*?)\}/)?.[1] ?? '';
+  const actionFocusRule = styles.match(/\.building-info-modal__action:focus-visible\s*\{([\s\S]*?)\}/)?.[1] ?? '';
+
+  assert.match(closeRule, /top:\s*0;/);
+  assert.match(closeRule, /bottom:\s*0;/);
+  assert.match(closeRule, /margin-block:\s*auto;/);
+  assert.match(closeRule, /transform:\s*none\s*!important;/);
+  assert.doesNotMatch(closeRule, /translate(?:Y)?\s*\(/);
+  assert.match(closeFocusRule, /outline-offset:\s*-[1-9]\d*px\s*!important;/);
+  assert.match(actionFocusRule, /outline-offset:\s*2px;/);
+});
+
 test('modal stays above the game HUD and blocks unaffordable upgrades', () => {
   assert.match(styles, /\.building-info-modal__overlay\s*\{[\s\S]*?z-index:\s*1300;/);
   assert.match(styles, /\.building-info-modal__overlay\s*\{[\s\S]*?pointer-events:\s*auto;/);

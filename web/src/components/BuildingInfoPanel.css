@@ -100,15 +100,17 @@
 
 .building-info-modal__close {
   position: absolute;
-  top: 50%;
+  top: 0;
   right: 8px;
+  bottom: 0;
   display: inline-flex;
   width: 44px;
   height: 44px;
   align-items: center;
   justify-content: center;
+  margin-block: auto;
   padding: 0;
-  transform: translateY(-50%);
+  transform: none !important;
   color: var(--bim-text-secondary);
   background: transparent;
   border: 1px solid transparent;
@@ -125,7 +127,11 @@
   border-color: var(--bim-line);
 }
 
-.building-info-modal__close:focus-visible,
+.building-info-modal__close:focus-visible {
+  outline: 3px solid rgba(242, 101, 34, 0.24);
+  outline-offset: -4px !important;
+}
+
 .building-info-modal__action:focus-visible {
   outline: 3px solid rgba(242, 101, 34, 0.24);
   outline-offset: 2px;
