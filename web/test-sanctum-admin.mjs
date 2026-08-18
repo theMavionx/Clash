@@ -16,6 +16,8 @@ assert.match(admin, /Recent Claims/);
 assert.match(admin, /Recent Swaps/);
 assert.match(admin, /Configuration History/);
 assert.match(admin, /Full audit exports/);
+assert.match(admin, /Estimated validator-peer APY/);
+assert.match(admin, /same-validator peers; not guaranteed/);
 assert.match(admin, /adminDownload\(`\/admin\/sanctum\/export\.csv\?dataset=\$\{dataset\}`/);
 assert.match(admin, /adminPut\('\/admin\/sanctum\/settings'/);
 assert.match(api, /export function adminPut/);

@@ -113,7 +113,9 @@ function makePriorityFeeUnsignedTransaction(wallet) {
       }),
     ],
   }).compileToV0Message([lookup]);
-  return new VersionedTransaction(message);
+  const transaction = new VersionedTransaction(message);
+  transaction.__lookupAccount = lookup;
+  return transaction;
 }
 
 function makeMultiSignerUnsignedTransaction(wallet, sponsor) {
@@ -164,6 +166,7 @@ async function run() {
   let failExecute = false;
   let nextSponsor = null;
   let nextReviewedPriorityFee = false;
+  const lookupAccounts = new Map();
   const fetchImpl = async (input, init = {}) => {
     const url = new URL(String(input));
     seenUrls.push(url);
@@ -202,6 +205,7 @@ async function run() {
         : nextReviewedPriorityFee
           ? makePriorityFeeUnsignedTransaction(wallet)
           : makeUnsignedTransaction(wallet);
+      if (unsigned.__lookupAccount) lookupAccounts.set(unsigned.__lookupAccount.key.toBase58(), unsigned.__lookupAccount);
       nextReviewedPriorityFee = false;
       const tx = Buffer.from(unsigned.serialize()).toString('base64');
       unsignedByAmount.set(amount, tx);
@@ -243,17 +247,62 @@ async function run() {
       if (chainStatusError) throw new Error('simulated RPC outage');
       return chainStatus;
     },
+    addressLookupTableReader: async tableKeys => tableKeys.map(key => {
+      const table = lookupAccounts.get(String(key));
+      if (!table) throw new Error(`missing test lookup table ${key}`);
+      return table;
+    }),
   });
   const status = await service.getStatus();
   assert.equal(status.available, true);
   assert.equal(status.mint, clashSolMint);
   assert.equal(status.apy, 0.073);
   assert.equal(status.apyPeriod, 'last_epoch');
+  assert.equal(status.apyEstimate, null);
   const degradedStatus = service.getLocalStatus({ degraded: true, error: 'temporary outage' });
   assert.equal(degradedStatus.available, true);
   assert.equal(degradedStatus.degraded, true);
   assert.equal(degradedStatus.mint, clashSolMint);
   assert.match(degradedStatus.warning, /temporary outage/);
+
+  const peerVoteAccount = Keypair.generate().publicKey.toBase58();
+  const estimateService = createSanctumService({
+    db: makeDb(),
+    apiKey,
+    clashSolMint,
+    apiBaseUrl: 'https://sanctum.test',
+    fetchImpl: async input => {
+      const url = new URL(String(input));
+      if (url.pathname === `/lsts/${clashSolMint}`) {
+        return jsonResponse(200, { data: [{
+          mint: clashSolMint,
+          symbol: 'clashSOL',
+          name: 'Clash Staked SOL',
+          decimals: 9,
+          pool: { program: 'SanctumSpl', voteAccount: peerVoteAccount },
+          latestApy: 0,
+        }] });
+      }
+      if (url.pathname === `/lsts/${clashSolMint}/apys`) {
+        return jsonResponse(200, { data: [{ epoch: 101, epochEndTs: 2000, apy: 0 }] });
+      }
+      if (url.pathname === '/lsts') {
+        return jsonResponse(200, { data: [0.048, 0.052, 0.056, 0.90].map((latestApy, index) => ({
+          mint: Keypair.generate().publicKey.toBase58(),
+          pool: { program: 'SanctumSpl', voteAccount: peerVoteAccount },
+          tvl: 2_000_000_000 + index,
+          latestApy,
+        })) });
+      }
+      return jsonResponse(404, { error: 'unexpected route' });
+    },
+  });
+  const estimatedStatus = await estimateService.getStatus();
+  assert.equal(estimatedStatus.apy, null);
+  assert.equal(estimatedStatus.apyPeriod, 'pending_first_valid_epoch');
+  assert.equal(estimatedStatus.apyEstimate, 0.052);
+  assert.equal(estimatedStatus.apyEstimateSource, 'same_validator_peer_median');
+  assert.equal(estimatedStatus.apyEstimatePeerCount, 3);
 
   const undiscoverableService = createSanctumService({
     db: makeDb(),
@@ -348,6 +397,63 @@ async function run() {
   chainStatus = { slot: 123452, confirmationStatus: 'confirmed', confirmations: 1, err: null };
   assert.equal((await service.getOrderStatus({ playerId: 'player-1', orderId: priorityFeeOrder.orderId })).status, 'confirmed');
   chainStatus = null;
+
+  nextReviewedPriorityFee = true;
+  const recompiledWalletOrder = await service.createOrder({
+    playerId: 'player-1', wallet: wallet.publicKey.toBase58(), amountSol: '0.765', slippageBps: 30,
+  });
+  const recompiledReviewed = VersionedTransaction.deserialize(Buffer.from(recompiledWalletOrder.transaction, 'base64'));
+  const recompiledLookup = lookupAccounts.get(recompiledReviewed.message.addressTableLookups[0].accountKey.toBase58());
+  const decompiledMessage = TransactionMessage.decompile(recompiledReviewed.message, {
+    addressLookupTableAccounts: [recompiledLookup],
+  });
+  const recompiledWalletTx = new VersionedTransaction(new TransactionMessage({
+    payerKey: decompiledMessage.payerKey,
+    recentBlockhash: Keypair.generate().publicKey.toBase58(),
+    instructions: decompiledMessage.instructions.map(instruction => (
+      instruction.programId.equals(ComputeBudgetProgram.programId) && instruction.data[0] === 3
+        ? ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 2_500 })
+        : instruction
+    )),
+  }).compileToV0Message());
+  recompiledWalletTx.sign([wallet]);
+  const recompiledWalletResult = await service.executeOrder({
+    playerId: 'player-1',
+    orderId: recompiledWalletOrder.orderId,
+    signedTransaction: Buffer.from(recompiledWalletTx.serialize()).toString('base64'),
+  });
+  assert.equal(recompiledWalletResult.status, 'submitted');
+  chainStatus = { slot: 123453, confirmationStatus: 'confirmed', confirmations: 1, err: null };
+  assert.equal((await service.getOrderStatus({ playerId: 'player-1', orderId: recompiledWalletOrder.orderId })).status, 'confirmed');
+  chainStatus = null;
+
+  nextReviewedPriorityFee = true;
+  const addedTransferOrder = await service.createOrder({
+    playerId: 'player-1', wallet: wallet.publicKey.toBase58(), amountSol: '0.766', slippageBps: 30,
+  });
+  const addedTransferReviewed = VersionedTransaction.deserialize(Buffer.from(addedTransferOrder.transaction, 'base64'));
+  const addedTransferLookup = lookupAccounts.get(addedTransferReviewed.message.addressTableLookups[0].accountKey.toBase58());
+  const addedTransferMessage = TransactionMessage.decompile(addedTransferReviewed.message, {
+    addressLookupTableAccounts: [addedTransferLookup],
+  });
+  const addedTransferTx = new VersionedTransaction(new TransactionMessage({
+    payerKey: addedTransferMessage.payerKey,
+    recentBlockhash: Keypair.generate().publicKey.toBase58(),
+    instructions: [
+      ...addedTransferMessage.instructions,
+      SystemProgram.transfer({
+        fromPubkey: wallet.publicKey,
+        toPubkey: Keypair.generate().publicKey,
+        lamports: 1,
+      }),
+    ],
+  }).compileToV0Message());
+  addedTransferTx.sign([wallet]);
+  await expectCode(service.executeOrder({
+    playerId: 'player-1',
+    orderId: addedTransferOrder.orderId,
+    signedTransaction: Buffer.from(addedTransferTx.serialize()).toString('base64'),
+  }), 'TRANSACTION_CHANGED');
 
   nextReviewedPriorityFee = true;
   const unsafePriorityFeeOrder = await service.createOrder({
@@ -642,9 +748,15 @@ async function run() {
     assert.equal(liveStatus.available, true);
     assert.equal(liveStatus.mint, LIVE_CLASHSOL_MINT);
     assert.equal(liveStatus.symbol, 'clashSOL');
-    assert.equal(liveStatus.apyPeriod, 'last_epoch');
-    assert.equal(Number.isFinite(Number(liveStatus.apy)), true);
-    console.log('Sanctum live metadata and latest-epoch APY verified.');
+    if (Number(liveStatus.apy) > 0) {
+      assert.equal(liveStatus.apyPeriod, 'last_epoch');
+    } else {
+      assert.equal(liveStatus.apyPeriod, 'pending_first_valid_epoch');
+      assert.equal(Number(liveStatus.apyEstimate) > 0, true);
+      assert.equal(liveStatus.apyEstimateSource, 'same_validator_peer_median');
+      assert.equal(Number(liveStatus.apyEstimatePeerCount) >= 3, true);
+    }
+    console.log('Sanctum live metadata and measured-or-peer-estimated APY verified.');
   }
   console.log('Sanctum clashSOL tests passed: semantic signature validation, bounded RPC reconciliation, multi-signer IDs and idempotency.');
 }

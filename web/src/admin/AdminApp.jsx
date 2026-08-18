@@ -5129,8 +5129,13 @@ function SanctumAdminPanel({ data, reload }) {
   const claimed = Number(summary.claims_30d || 0);
   const eligible = (data.daily || []).reduce((sum, row) => sum + Number(row.eligible_holders || 0), 0);
   const claimRate = eligible > 0 ? `${((claimed / eligible) * 100).toFixed(1)}%` : '0%';
-  const apyValue = Number(data?.status?.apy);
-  const apyPercent = Number.isFinite(apyValue) ? (apyValue <= 1 ? apyValue * 100 : apyValue) : null;
+  const measuredApy = Number(data?.status?.apy);
+  const estimatedApy = Number(data?.status?.apyEstimate);
+  const hasMeasuredApy = Number.isFinite(measuredApy) && measuredApy > 0;
+  const hasEstimatedApy = !hasMeasuredApy && Number.isFinite(estimatedApy) && estimatedApy > 0;
+  const apyValue = hasMeasuredApy ? measuredApy : (hasEstimatedApy ? estimatedApy : null);
+  const apyPercent = apyValue == null ? null : (apyValue <= 1 ? apyValue * 100 : apyValue);
+  const apyLabel = hasMeasuredApy ? 'Last epoch APY' : (hasEstimatedApy ? 'Estimated validator-peer APY' : 'APY pending');
   const tokenAmount = (value) => (Number(value || 0) / 1e9).toLocaleString(undefined, { maximumFractionDigits: 6 });
 
   async function saveSettings() {
@@ -5184,7 +5189,7 @@ function SanctumAdminPanel({ data, reload }) {
           <div className="admin-card-body admin-grid">
             <div><strong>{data.status?.name || 'Clash Staked SOL'}</strong> · {data.status?.symbol || 'clashSOL'}</div>
             <div className="admin-mono" style={{ wordBreak: 'break-all' }}>{data.mint || data.status?.mint || '-'}</div>
-            <div className="admin-card-sub">Last epoch APY: {apyPercent == null ? '—' : `${apyPercent.toFixed(2)}%`} · Last sample {fmtTime(summary.last_snapshot_at)} · {num(summary.samples_today || 0)} samples today</div>
+            <div className="admin-card-sub">{apyLabel}: {apyPercent == null ? '—' : `${apyPercent.toFixed(2)}%`}{hasEstimatedApy ? ` (${num(data.status?.apyEstimatePeerCount || 0)} same-validator peers; not guaranteed)` : ''} · Last sample {fmtTime(summary.last_snapshot_at)} · {num(summary.samples_today || 0)} samples today</div>
             <a className="admin-btn" href="https://app.sanctum.so/explore/clashSOL" target="_blank" rel="noreferrer">Open on Sanctum</a>
           </div>
         </div>

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useOptionalPrivy } from './PrivyAuthProvider';
 import { pickPrivySolanaWallet } from '../lib/privySolanaWallet';
@@ -22,6 +23,10 @@ import './SanctumShopTab.css';
 
 const SOLSCAN_TOKEN_URL = 'https://solscan.io/token/';
 const SANCTUM_EXPLORE_URL = 'https://app.sanctum.so/explore/clashSOL';
+const SANCTUM_STAKE_URL = 'https://app.sanctum.so/stake/clashSOL';
+// Keep the reviewed in-app implementation available for a later re-enable,
+// but route players through Sanctum's official staking surface for now.
+const EMBEDDED_SWAP_ENABLED = false;
 const ACTIVE_SWAP_KEY = 'clash:sanctum:active-swap:';
 const SWAP_TERMINAL_STATES = new Set(['success', 'failed_before_broadcast', 'failed_on_chain', 'expired']);
 const SWAP_POLL_STATES = new Set(['broadcasting', 'submission_unknown', 'submitted', 'confirming']);
@@ -81,6 +86,9 @@ function plainSwapError(error, fallback = 'The swap could not be completed.') {
   }
   if (code === 'WALLET_PRIORITY_FEE_UNSAFE') {
     return 'Your wallet added unsupported fee settings. No swap was sent; request a fresh quote.';
+  }
+  if (code === 'TRANSACTION_VALIDATION_UNAVAILABLE') {
+    return 'Solana lookup tables could not be verified in time. No swap was sent; retry the quote when RPC connectivity recovers.';
   }
   if (code === 'ONCHAIN_FAILED') return 'Solana confirmed that this transaction failed on-chain.';
   if (['UPSTREAM_TIMEOUT', 'UPSTREAM_UNAVAILABLE', 'CONFIRMATION_UNAVAILABLE'].includes(code)) {
@@ -183,8 +191,9 @@ function shortAddress(value) {
 }
 
 function displayApy(value) {
+  if (value == null || value === '') return '—';
   const number = Number(value);
-  if (!Number.isFinite(number) || number < 0) return '—';
+  if (!Number.isFinite(number) || number <= 0) return '—';
   return `${(number <= 1 ? number * 100 : number).toFixed(2)}%`;
 }
 
@@ -244,7 +253,7 @@ export default function SanctumShopTab({
 }) {
   const adapterWallet = useWallet();
   const privy = useOptionalPrivy();
-  const [section, setSection] = useState('swap');
+  const [section, setSection] = useState('rewards');
   const [direction, setDirection] = useState('stake');
   const [amount, setAmount] = useState('0.1');
   const [status, setStatus] = useState(null);
@@ -296,7 +305,7 @@ export default function SanctumShopTab({
         sessionToken
           ? getClashSolHistory({ token: sessionToken, signal })
           : Promise.resolve({ items: [] }),
-        sessionToken && walletAddress
+        EMBEDDED_SWAP_ENABLED && sessionToken && walletAddress
           ? getClashSolBalances({ wallet: walletAddress, token: sessionToken, signal })
           : Promise.resolve(null),
       ]);
@@ -364,6 +373,7 @@ export default function SanctumShopTab({
   }, [activeSwapStorageKey]);
 
   useEffect(() => {
+    if (!EMBEDDED_SWAP_ENABLED) return;
     if (!activeSwapStorageKey || !swapProgress || swapProgress.wallet !== walletAddress) return;
     localStorage.setItem(activeSwapStorageKey, JSON.stringify({
       wallet: walletAddress,
@@ -373,6 +383,7 @@ export default function SanctumShopTab({
   }, [activeSwapStorageKey, order, swapProgress, walletAddress]);
 
   useEffect(() => {
+    if (!EMBEDDED_SWAP_ENABLED) return undefined;
     if (!activeSwapStorageKey || !sessionToken) return undefined;
     let stored;
     try { stored = JSON.parse(localStorage.getItem(activeSwapStorageKey) || 'null'); } catch { stored = null; }
@@ -435,6 +446,7 @@ export default function SanctumShopTab({
   }, [activeSwapStorageKey, sessionToken, walletAddress]);
 
   useEffect(() => {
+    if (!EMBEDDED_SWAP_ENABLED) return undefined;
     if (!progressOpen || !activeProgressOrderId) return undefined;
     const previous = document.activeElement;
     window.requestAnimationFrame(() => progressDialogRef.current?.focus?.());
@@ -442,6 +454,7 @@ export default function SanctumShopTab({
   }, [activeProgressOrderId, progressOpen]);
 
   useEffect(() => {
+    if (!EMBEDDED_SWAP_ENABLED) return undefined;
     if (!sessionToken || !activeProgressOrderId || !SWAP_POLL_STATES.has(activeProgressStatus)) return undefined;
     let cancelled = false;
     let timer = 0;
@@ -469,6 +482,7 @@ export default function SanctumShopTab({
   }, [activeProgressOrderId, activeProgressStatus, sessionToken]);
 
   useEffect(() => {
+    if (!EMBEDDED_SWAP_ENABLED) return undefined;
     if (activeProgressStatus !== 'refreshing' || !activeProgressWallet || !sessionToken) return undefined;
     let cancelled = false;
     let timer = 0;
@@ -702,7 +716,10 @@ export default function SanctumShopTab({
     }
   }, [loadData, onResourcesChanged, sessionToken, walletAddress]);
 
-  const apy = displayApy(status?.apy);
+  const hasMeasuredApy = Number(status?.apy) > 0;
+  const hasEstimatedApy = !hasMeasuredApy && Number(status?.apyEstimate) > 0;
+  const apy = displayApy(hasMeasuredApy ? status.apy : status?.apyEstimate);
+  const apyLabel = hasMeasuredApy ? 'Last epoch APY' : (hasEstimatedApy ? 'Est. validator APY' : 'APY status');
   const inputSymbol = direction === 'stake' ? 'SOL' : 'clashSOL';
   const outputSymbol = direction === 'stake' ? 'clashSOL' : 'SOL';
   const availableInputAtomics = spendableAtomics(balances, direction);
@@ -737,26 +754,35 @@ export default function SanctumShopTab({
         </div>
         <div className="sanctum-shop__hero-copy">
           <span className="sanctum-shop__eyebrow">POWERED BY SANCTUM</span>
-          <h2>Stake SOL. Earn yield. Claim Gold.</h2>
-          <p>Swap to the live Clash community LST and earn a daily in-game holder reward.</p>
+          <h2>Stake on Sanctum. Earn yield. Claim Gold.</h2>
+          <p>Stake on Sanctum, then link the same wallet here for Daily Gold.</p>
         </div>
         {status?.mint && (
           <a className="sanctum-shop__external" href={`${SOLSCAN_TOKEN_URL}${status.mint}`} target="_blank" rel="noreferrer">
             {shortAddress(status.mint)} ↗
           </a>
         )}
+        <a className="sanctum-shop__stake-cta" href={SANCTUM_STAKE_URL} target="_blank" rel="noopener noreferrer">
+          <span><strong>Stake SOL for clashSOL</strong><small>Official Sanctum app · clashSOL preselected</small></span>
+          <span aria-hidden="true">↗</span>
+        </a>
       </header>
 
       <div className="sanctum-shop__metrics" aria-label="clashSOL metrics">
-        <div><span>Last epoch APY</span><strong>{apy}</strong></div>
+        <div><span>{apyLabel}</span><strong>{apy}</strong></div>
         <div><span>Snapshot clashSOL</span><strong>{rewardBalance(reward)}</strong></div>
         <div><span>Gold ready</span><strong>{displayNumber(pendingGold, 0)}</strong></div>
         <div><span>Daily Gold rate</span><strong>{rewardsEnabled ? `${displayNumber(rewardRate, 0)} / 1` : 'Paused'}</strong></div>
       </div>
 
+      {hasEstimatedApy && (
+        <div className="sanctum-shop__apy-note">
+          clashSOL is awaiting its first valid completed-epoch APY. {apy} is the median of {Number(status?.apyEstimatePeerCount || 0)} active Sanctum LSTs using the same validator vote account, so it is an estimate—not a guaranteed clashSOL yield.
+        </div>
+      )}
+
       <nav className="sanctum-shop__nav" aria-label="clashSOL sections" role="tablist">
         {[
-          ['swap', 'Swap'],
           ['rewards', 'Daily Gold'],
           ['history', 'History'],
         ].map(([id, label]) => (
@@ -774,7 +800,7 @@ export default function SanctumShopTab({
         ))}
       </nav>
 
-      {swapProgress && !progressOpen && (
+      {EMBEDDED_SWAP_ENABLED && swapProgress && !progressOpen && (
         <button
           type="button"
           className={`sanctum-swap-progress-chip${swapProgress.status === 'submission_unknown' ? ' is-warning' : ''}${progressTerminal ? ` is-terminal ${swapProgress.status === 'success' ? 'is-success' : 'is-error'}` : ''}`}
@@ -790,13 +816,12 @@ export default function SanctumShopTab({
       )}
 
       {status?.degraded && (
-        <div className="sanctum-shop__state">Live APY metadata is delayed. Swaps will retry Sanctum when you request a quote; rewards and history remain available.</div>
+        <div className="sanctum-shop__state">Live APY metadata is delayed. Official Sanctum staking, Daily Gold, and reward history remain available.</div>
       )}
 
       {!status && phase === 'loading' && <div className="sanctum-shop__state">Loading live clashSOL data…</div>}
-      {status && !available && <div className="sanctum-shop__state">clashSOL swaps are temporarily unavailable. Your reward history remains safe.</div>}
 
-      {section === 'swap' && available && (
+      {EMBEDDED_SWAP_ENABLED && section === 'swap' && available && (
         <div className="sanctum-shop__content">
           <div className="sanctum-shop__direction" aria-label="Swap direction">
             <button type="button" disabled={swapControlsDisabled} aria-pressed={direction === 'stake'} className={direction === 'stake' ? 'is-active' : ''} onClick={() => { discardQuote(); setDirection('stake'); }}>SOL → clashSOL</button>
@@ -861,12 +886,28 @@ export default function SanctumShopTab({
               {phase === 'quoting' ? 'Getting live quote…' : 'Review swap'}
             </button>
           )}
-          <p className="sanctum-shop__disclosure">The exchange rate and output are quoted by Sanctum. Your wallet signs the reviewed transaction; Clash never receives your private key.</p>
+          <p className="sanctum-shop__disclosure">The exchange rate and output are quoted by Sanctum. Your wallet may safely recalculate the standard Solana priority fee; Clash caps it at 0.005 SOL and rejects any changed swap or added transfer. Clash never receives your private key.</p>
         </div>
       )}
 
       {section === 'rewards' && (
         <div className="sanctum-shop__content">
+          <div className="sanctum-shop__benefits" aria-label="Daily Gold benefits">
+            <div><span aria-hidden="true">◆</span><strong>{rewardsEnabled ? `${displayNumber(rewardRate, 0)} Gold` : 'Daily Gold paused'}</strong><small>{rewardsEnabled ? 'per 1 clashSOL for each eligible UTC day' : 'Matured rewards stay safe'}</small></div>
+            <div><span aria-hidden="true">✓</span><strong>You keep custody</strong><small>clashSOL stays in your linked Solana wallet</small></div>
+            <div><span aria-hidden="true">↻</span><strong>Unclaimed Gold is banked</strong><small>Claim what fits; the remainder stays ready</small></div>
+          </div>
+          <details className="sanctum-shop__stake-details">
+            <summary>How to get clashSOL and earn Daily Gold</summary>
+            <p>Sanctum opens with clashSOL already selected. Connect your Solana wallet there, choose how much SOL to stake, and confirm directly on Sanctum.</p>
+            <ol className="sanctum-shop__stake-steps" aria-label="How to get clashSOL and earn daily Gold">
+              <li><span>1</span><div><strong>Open Sanctum</strong><small>clashSOL is preselected for you.</small></div></li>
+              <li><span>2</span><div><strong>Stake SOL</strong><small>Review the quote and sign on Sanctum.</small></div></li>
+              <li><span>3</span><div><strong>Return to Clash</strong><small>Link the same holder wallet below.</small></div></li>
+              <li><span>4</span><div><strong>Hold and claim</strong><small>Hold through the UTC day; Gold matures the next day.</small></div></li>
+            </ol>
+            <p className="sanctum-shop__stake-safety">The swap happens entirely on Sanctum. Clash never receives your private key, signed transaction, or swap funds.</p>
+          </details>
           {!rewardsEnabled && <div className="sanctum-shop__state">Daily Gold accrual is paused. Existing matured rewards remain safe and claimable.</div>}
           <div className={`sanctum-shop__reward-card${pendingGold > 0 ? '' : ' is-empty'}`}>
             <span>Ready to claim</span>
@@ -894,7 +935,14 @@ export default function SanctumShopTab({
             <div><span>Next snapshot</span><strong>{displayDate(reward?.next_snapshot_at)}</strong></div>
             <div><span>Linked wallet</span><strong>{reward?.wallet ? shortAddress(reward.wallet) : 'Not linked'}</strong></div>
           </div>
-          <p className="sanctum-shop__disclosure">Gold is an in-game loyalty reward with no cash value and is separate from variable staking yield. Hold clashSOL today; Gold is calculated tomorrow from the lowest balance observed across the UTC day. If storage is short, you claim what fits and the rest stays ready.</p>
+          <div className="sanctum-shop__reward-timeline" aria-label="Daily Gold timing">
+            <div><span>Today</span><strong>Hold clashSOL</strong></div>
+            <i aria-hidden="true">→</i>
+            <div><span>UTC close</span><strong>Lowest balance recorded</strong></div>
+            <i aria-hidden="true">→</i>
+            <div><span>Tomorrow</span><strong>Gold becomes claimable</strong></div>
+          </div>
+          <p className="sanctum-shop__disclosure">Use the same Solana wallet on Sanctum and in Clash. Gold is an in-game loyalty reward with no cash value and is separate from variable staking yield. Your reward uses the lowest clashSOL balance observed across the completed UTC day, which prevents temporary balance snapshots from earning a full-day reward.</p>
         </div>
       )}
 
@@ -929,7 +977,7 @@ export default function SanctumShopTab({
         </div>
       )}
 
-      {progressOpen && swapProgress && (
+      {EMBEDDED_SWAP_ENABLED && progressOpen && swapProgress && createPortal((
         <div className="sanctum-swap-progress__backdrop" role="presentation">
           <div
             ref={progressDialogRef}
@@ -941,7 +989,11 @@ export default function SanctumShopTab({
             tabIndex={-1}
             onKeyDown={(event) => {
               keepFocusInsideDialog(event);
-              if (event.key === 'Escape' && progressTerminal) clearSwapProgress();
+              if (event.key === 'Escape') {
+                event.preventDefault();
+                if (progressTerminal) clearSwapProgress();
+                else setProgressOpen(false);
+              }
             }}
           >
             <header className="sanctum-swap-progress__header">
@@ -1063,7 +1115,7 @@ export default function SanctumShopTab({
             </footer>
           </div>
         </div>
-      )}
+      ), document.body)}
 
       {notice && <div className="sanctum-shop__notice" role="status">{notice}</div>}
       {error && <div className="sanctum-shop__error" role="alert">{error}</div>}

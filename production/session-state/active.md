@@ -1,6 +1,6 @@
 # Active Session State
 
-Last updated: 2026-08-18
+Last updated: 2026-08-19
 
 ## Current Focus
 
@@ -15,31 +15,22 @@ tournament-schema migration without losing rows. No funded order is part of the
 release smoke.
 
 The active implementation task is the live `clashSOL` Sanctum Battle Shop and
-completed-day holder reward integration (goal G-010). Sanctum now resolves the launched
-9-decimal SanctumSpl clashSOL mint. Current work moves the existing secure swap
-flow out of the construction picker, adds SOL↔clashSOL exact-input swaps, daily
-server-verified Gold entitlements at an initial 2,000 Gold per clashSOL, player
-history, and admin configuration/metrics. Reward observations run every 30
-minutes, mature on the next UTC day from the minimum observed balance, and can
-be claimed partially when Gold storage is constrained. The API key remains
-server-only.
+completed-day holder reward integration (goal G-010). For v1.1.4 the embedded
+swap is deliberately hidden: new staking opens the official preselected
+Sanctum clashSOL page, while Battle Shop remains the native rewards hub. Daily
+server-verified Gold starts at 2,000 Gold per clashSOL, observations run every
+30 minutes, rewards mature after the UTC day from the minimum observed balance,
+and capacity-safe claims preserve any remainder. The API key remains server-only.
 
-Implementation checkpoint: Sanctum's external pool is live and the complete
-bidirectional swap, completed-day reward, admin and audit-export implementation
-is on production. The v1.1.3 follow-up release fixes the first owner-signed
-swap incident: a wallet-refreshed recent blockhash and standard Compute Budget
-limit/price are accepted only after exact comparison of signer keys, account
-roles, lookup tables, and every non-Compute instruction; the calculated wallet
-priority fee is capped at 0.005 SOL. Primary signatures
-are stored before execute; ambiguous upstream/RPC outcomes reconcile as
-submission-unknown instead of inviting a duplicate; and old/cleared browser
-sessions recover the server's active order. The Battle Shop now presents a
-bridge-style four-stage status, minimizes safely, polls while nonterminal, and
-shows explorer/error/balance receipts. Its Marketplace navigation also keeps
-full-height tabs and actions under long-list overflow. Focused lifecycle,
-migration, reward, UI, lint and build gates are being finalized before the
-authorized v1.1.3 commit/push/deploy. A funded retry remains owner-signed in
-the browser.
+Implementation checkpoint: Sanctum's external pool and the completed-day
+reward/admin/audit implementation are live. v1.1.4 keeps the resolved-semantics
+and bounded-fee server hardening but disables all embedded player-side swap
+entry points and background order recovery. Battle Shop defaults to Daily Gold,
+shows the official Sanctum stake CTA, custody/rate/storage benefits, completed
+UTC-day timing, wallet link, claim and history. Direct zero APY is suppressed;
+until clashSOL has a valid completed epoch, the UI may show a clearly labelled
+same-validator peer median estimate. Focused tests, responsive browser checks,
+canonical Deploy gate and production verification are the current checkpoint.
 
 The repository is being prepared for faster owner-driven Codex work. Durable context now lives in:
 
@@ -88,11 +79,10 @@ Main current goals:
 
 For Robinhood Lighter v1.1.2, verify the owner account `3156` is shown as
 self-referral-exempt, then let the owner explicitly approve the same-master
-integrator before attempting any trade. For clashSOL, ship v1.1.3, verify the
-bounded wallet-fee and Battle Shop layout fixes in production, continue
-monitoring the first completed UTC-day reward finalization/claim, and run the
-funded swap checklist only with an owner wallet signature. General context
-recovery remains:
+integrator before attempting any trade. For clashSOL, ship v1.1.4, verify the
+official Sanctum URL, hidden embedded swap, Daily Gold claim/status/history and
+estimated-APY disclosure in production, then monitor the first completed
+UTC-day reward finalization/claim. General context recovery remains:
 
 ```powershell
 tools/codex/start-context.cmd -Full

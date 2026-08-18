@@ -22,6 +22,7 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 5_000;
 const DEFAULT_SIGNATURE_RPC_TIMEOUT_MS = 2_500;
 const DEFAULT_SIGNATURE_STATUS_TIMEOUT_MS = 8_000;
 const STATUS_CACHE_MS = 60_000;
+const PEER_APY_CACHE_MS = 15 * 60_000;
 const MIN_SOL_LAMPORTS = 1_000_000n; // 0.001 SOL
 const MAX_SOL_LAMPORTS = 10_000_000_000_000n; // 10,000 SOL
 const MAX_SIGNED_TX_BASE64_LENGTH = 12_000;
@@ -271,6 +272,35 @@ function versionedSemanticShape(message) {
   };
 }
 
+function median(values) {
+  const sorted = values.slice().sort((a, b) => a - b);
+  if (!sorted.length) return null;
+  const midpoint = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0
+    ? (sorted[midpoint - 1] + sorted[midpoint]) / 2
+    : sorted[midpoint];
+}
+
+function estimateValidatorPeerApy(payload, metadata) {
+  const voteAccount = String(metadata?.voteAccount || '').trim();
+  const poolProgram = String(metadata?.poolProgram || '').trim();
+  if (!voteAccount || !poolProgram) return null;
+  const rows = Array.isArray(payload?.data) ? payload.data : (Array.isArray(payload) ? payload : []);
+  const candidates = rows
+    .filter(row => String(row?.mint || '') !== metadata.mint)
+    .filter(row => String(row?.pool?.voteAccount || '') === voteAccount)
+    .filter(row => String(row?.pool?.program || '') === poolProgram)
+    .filter(row => Number(row?.tvl || 0) >= 1_000_000_000)
+    .map(row => Number(row?.latestApy ?? row?.avgApy))
+    .filter(value => Number.isFinite(value) && value > 0 && value <= 0.20);
+  if (candidates.length < 3) return null;
+  return {
+    apy: median(candidates),
+    peerCount: candidates.length,
+    source: 'same_validator_peer_median',
+  };
+}
+
 function validateWalletPriorityFeeInstructions(instructions) {
   if (instructions.length > 2) {
     throw new SanctumError('WALLET_PRIORITY_FEE_UNSAFE', 'The wallet added an unsupported priority-fee configuration', 400);
@@ -317,17 +347,132 @@ function verifySafeVersionedWalletAdjustments(signed, reviewed) {
   return true;
 }
 
-function verifyReviewedSignedTransaction(base64, expectedWallet, expectedKind, expectedHash, reviewedBase64) {
+function resolvedVersionedSemanticShape(message, addressLookupTableAccounts) {
+  const keys = message.getAccountKeys({ addressLookupTableAccounts });
+  const accountAt = (index) => {
+    const key = keys.get(index);
+    if (!key) {
+      throw new SanctumError('INVALID_TRANSACTION', 'The signed Sanctum transaction has unresolved account indexes', 400);
+    }
+    return {
+      address: key.toBase58(),
+      signer: message.isAccountSigner(index),
+      writable: message.isAccountWritable(index),
+    };
+  };
+  const instructions = message.compiledInstructions.map(instruction => {
+    const program = accountAt(instruction.programIdIndex).address;
+    return {
+      program,
+      accounts: Array.from(instruction.accountKeyIndexes).map(accountAt),
+      data: Buffer.from(instruction.data).toString('base64'),
+    };
+  });
+  return {
+    feePayer: accountAt(0).address,
+    signerKeys: message.staticAccountKeys
+      .slice(0, Number(message.header.numRequiredSignatures || 0))
+      .map(key => key.toBase58()),
+    swapInstructions: instructions.filter(instruction => instruction.program !== COMPUTE_BUDGET_PROGRAM_ID),
+    computeInstructions: instructions.filter(instruction => instruction.program === COMPUTE_BUDGET_PROGRAM_ID),
+  };
+}
+
+async function defaultAddressLookupTableReader(tableKeys, { perRpcTimeoutMs = DEFAULT_SIGNATURE_RPC_TIMEOUT_MS } = {}) {
+  const keys = Array.from(new Set((tableKeys || []).map(key => String(key))));
+  if (!keys.length) return [];
+  const urls = solanaRpcUrls();
+  if (!urls.length) throw new Error('Sanctum transaction validation failed: no Solana RPC endpoint is configured');
+  let lastError = null;
+  for (const rpcUrl of urls) {
+    try {
+      const connection = createSolanaConnection(Connection, rpcUrl, 'confirmed');
+      // eslint-disable-next-line no-await-in-loop
+      const tables = await withTimeout(
+        Promise.all(keys.map(async key => {
+          const result = await connection.getAddressLookupTable(new PublicKey(key));
+          if (!result?.value) throw new Error(`Address lookup table ${key} was not found`);
+          return result.value;
+        })),
+        perRpcTimeoutMs,
+        () => new Error('Address lookup table RPC timed out'),
+      );
+      return tables;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError || new Error('Address lookup tables could not be resolved');
+}
+
+async function verifyResolvedVersionedWalletAdjustments(signed, reviewed, {
+  addressLookupTableReader = defaultAddressLookupTableReader,
+  perRpcTimeoutMs = DEFAULT_SIGNATURE_RPC_TIMEOUT_MS,
+} = {}) {
+  const tableKeys = [signed.tx.message, reviewed.tx.message]
+    .flatMap(message => message.addressTableLookups.map(lookup => lookup.accountKey.toBase58()));
+  let tables;
+  try {
+    tables = await addressLookupTableReader(tableKeys, { perRpcTimeoutMs });
+  } catch (error) {
+    throw new SanctumError(
+      'TRANSACTION_VALIDATION_UNAVAILABLE',
+      'The signed transaction could not be safely validated against Solana lookup tables. Try again.',
+      503,
+      { reason: String(error?.message || 'lookup table resolution failed').slice(0, 160) },
+    );
+  }
+  const signedShape = resolvedVersionedSemanticShape(signed.tx.message, tables);
+  const reviewedShape = resolvedVersionedSemanticShape(reviewed.tx.message, tables);
+  if (signedShape.feePayer !== reviewedShape.feePayer) {
+    return { valid: false, details: { reason: 'fee_payer_changed' } };
+  }
+  if (JSON.stringify(signedShape.signerKeys) !== JSON.stringify(reviewedShape.signerKeys)) {
+    return { valid: false, details: { reason: 'signer_set_changed' } };
+  }
+  if (signedShape.swapInstructions.length !== reviewedShape.swapInstructions.length) {
+    return {
+      valid: false,
+      details: {
+        reason: 'non_compute_instruction_count_changed',
+        reviewedCount: reviewedShape.swapInstructions.length,
+        signedCount: signedShape.swapInstructions.length,
+      },
+    };
+  }
+  for (let index = 0; index < reviewedShape.swapInstructions.length; index += 1) {
+    const expected = reviewedShape.swapInstructions[index];
+    const actual = signedShape.swapInstructions[index];
+    if (expected.program !== actual.program) {
+      return { valid: false, details: { reason: 'program_changed', instructionIndex: index } };
+    }
+    if (JSON.stringify(expected.accounts) !== JSON.stringify(actual.accounts)) {
+      return { valid: false, details: { reason: 'instruction_accounts_changed', instructionIndex: index } };
+    }
+    if (expected.data !== actual.data) {
+      return { valid: false, details: { reason: 'instruction_data_changed', instructionIndex: index } };
+    }
+  }
+  validateWalletPriorityFeeInstructions(signedShape.computeInstructions);
+  return { valid: true, details: null };
+}
+
+async function verifyReviewedSignedTransaction(base64, expectedWallet, expectedKind, expectedHash, reviewedBase64, options = {}) {
   try {
     return { inspected: verifySignedTransaction(base64, expectedWallet, expectedKind, expectedHash), blockhashRefreshed: false };
   } catch (error) {
     if (error?.code !== 'TRANSACTION_CHANGED' || !reviewedBase64) throw error;
     const signed = inspectTransaction(base64, expectedWallet);
     const reviewed = inspectTransaction(reviewedBase64, expectedWallet);
-    const safeWalletAdjustment = signed.kind === 'versioned'
+    let safeWalletAdjustment = signed.kind === 'versioned'
       && reviewed.kind === 'versioned'
       && signed.kind === expectedKind
       && verifySafeVersionedWalletAdjustments(signed, reviewed);
+    if (!safeWalletAdjustment && signed.kind === 'versioned' && reviewed.kind === 'versioned' && signed.kind === expectedKind) {
+      const resolvedAdjustment = await verifyResolvedVersionedWalletAdjustments(signed, reviewed, options);
+      safeWalletAdjustment = resolvedAdjustment.valid;
+      if (!safeWalletAdjustment && resolvedAdjustment.details) error.details = resolvedAdjustment.details;
+    }
     const blockhashOnlyAdjustment = signed.kind === reviewed.kind
       && signed.kind === expectedKind
       && JSON.stringify(transactionShape(signed)) === JSON.stringify(transactionShape(reviewed));
@@ -410,7 +555,8 @@ function safeLstMetadata(payload, configuredMint) {
     logoUri: typeof source.logoUri === 'string' ? source.logoUri.slice(0, 1_000) : null,
     decimals,
     poolProgram: poolProgram.slice(0, 40),
-    apy,
+    voteAccount: String(source.pool?.voteAccount || '').slice(0, 60) || null,
+    apy: Number.isFinite(apy) && apy > 0 ? apy : null,
   };
 }
 
@@ -418,7 +564,7 @@ function extractApy(payload) {
   const source = payload?.apy || payload?.apys || payload?.data || payload || {};
   if (Array.isArray(source)) {
     const latest = source
-      .filter(row => Number.isFinite(Number(row?.apy)))
+      .filter(row => Number.isFinite(Number(row?.apy)) && Number(row.apy) > 0)
       .sort((a, b) => Number(b?.epochEndTs || b?.epoch || 0) - Number(a?.epochEndTs || a?.epoch || 0))[0];
     return latest ? Number(latest.apy) : null;
   }
@@ -432,7 +578,7 @@ function extractApy(payload) {
     source.last_7_epoch_apy,
     source.annualPercentageYield,
   ];
-  const value = candidates.map(Number).find(candidate => Number.isFinite(candidate) && candidate >= 0);
+  const value = candidates.map(Number).find(candidate => Number.isFinite(candidate) && candidate > 0);
   return value ?? null;
 }
 
@@ -458,6 +604,7 @@ function createSanctumService({
   expiredIntentRetentionMs = process.env.SANCTUM_EXPIRED_INTENT_RETENTION_MS,
   orderPayloadRetentionMs = process.env.SANCTUM_ORDER_PAYLOAD_RETENTION_MS,
   signatureStatusReader = defaultSignatureStatusReader,
+  addressLookupTableReader = defaultAddressLookupTableReader,
   signatureRpcTimeoutMs = DEFAULT_SIGNATURE_RPC_TIMEOUT_MS,
   signatureStatusTimeoutMs = DEFAULT_SIGNATURE_STATUS_TIMEOUT_MS,
   now = () => Date.now(),
@@ -489,6 +636,7 @@ function createSanctumService({
     positiveInteger(orderPayloadRetentionMs, 30 * 24 * 60 * 60 * 1000),
   );
   let statusCache = null;
+  let peerApyCache = null;
 
   async function request(pathname, { method = 'GET', query = {}, body } = {}) {
     if (!configured) {
@@ -578,12 +726,26 @@ function createSanctumService({
       throw error;
     }
     const apy = extractApy(apyPayload) ?? metadata.apy;
+    let apyEstimate = null;
+    if (apy == null) {
+      if (!peerApyCache || peerApyCache.expiresAt <= now()) {
+        const peersPayload = await request('/lsts').catch(() => null);
+        peerApyCache = {
+          value: estimateValidatorPeerApy(peersPayload, metadata),
+          expiresAt: now() + PEER_APY_CACHE_MS,
+        };
+      }
+      apyEstimate = peerApyCache.value;
+    }
     const value = {
       available: true,
       launchStatus: 'live',
       ...metadata,
       apy,
-      apyPeriod: 'last_epoch',
+      apyPeriod: apy == null ? 'pending_first_valid_epoch' : 'last_epoch',
+      apyEstimate: apyEstimate?.apy ?? null,
+      apyEstimateSource: apyEstimate?.source ?? null,
+      apyEstimatePeerCount: apyEstimate?.peerCount ?? 0,
       updatedAt: new Date(now()).toISOString(),
     };
     statusCache = { value, expiresAt: now() + STATUS_CACHE_MS };
@@ -599,7 +761,10 @@ function createSanctumService({
       symbol: 'clashSOL',
       mint: normalizedMint || null,
       apy: null,
-      apyPeriod: 'last_epoch',
+      apyPeriod: 'pending_first_valid_epoch',
+      apyEstimate: peerApyCache?.value?.apy ?? null,
+      apyEstimateSource: peerApyCache?.value?.source ?? null,
+      apyEstimatePeerCount: peerApyCache?.value?.peerCount ?? 0,
       ...(error ? { warning: String(error).slice(0, 180) } : {}),
       updatedAt: new Date(now()).toISOString(),
     };
@@ -881,24 +1046,34 @@ function createSanctumService({
     let reviewedOrder;
     try {
       reviewedOrder = JSON.parse(row.order_json);
-      verified = verifyReviewedSignedTransaction(
+      verified = await verifyReviewedSignedTransaction(
         signedTransaction,
         row.wallet,
         row.tx_kind,
         row.unsigned_tx_hash,
         reviewedOrder?.tx,
+        { addressLookupTableReader, perRpcTimeoutMs: safeSignatureRpcTimeoutMs },
       );
     } catch (error) {
-      db.prepare(`
-        UPDATE sanctum_order_intents
-        SET status = 'failed', last_error = ?, last_error_code = ?, last_error_stage = 'signature_validation'
-        WHERE id = ? AND player_id = ? AND status = 'pending'
-      `).run(
-        String(error?.message || 'Signed transaction validation failed').slice(0, 300),
-        String(error?.code || 'INVALID_TRANSACTION').slice(0, 80),
-        id,
-        player,
-      );
+      if (error?.code === 'TRANSACTION_CHANGED') {
+        console.warn('[sanctum] rejected wallet transaction mutation', {
+          orderId: id,
+          wallet: `${row.wallet.slice(0, 5)}...${row.wallet.slice(-5)}`,
+          ...(error.details || { reason: 'message_semantics_changed' }),
+        });
+      }
+      if (error?.code !== 'TRANSACTION_VALIDATION_UNAVAILABLE') {
+        db.prepare(`
+          UPDATE sanctum_order_intents
+          SET status = 'failed', last_error = ?, last_error_code = ?, last_error_stage = 'signature_validation'
+          WHERE id = ? AND player_id = ? AND status = 'pending'
+        `).run(
+          String(error?.message || 'Signed transaction validation failed').slice(0, 300),
+          String(error?.code || 'INVALID_TRANSACTION').slice(0, 80),
+          id,
+          player,
+        );
+      }
       throw error;
     }
     // Solana identifies a transaction by its first signature, which is not

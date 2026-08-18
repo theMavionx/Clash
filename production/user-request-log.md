@@ -3588,3 +3588,18 @@ Follow-up:
   focused safe/unsafe v0 transaction tests; keep Battle Shop tabs/actions at
   their natural height under Marketplace overflow; release as v1.1.3. No
   unattended wallet signature or funded swap is part of deployment.
+
+## UR-2026-08-19-CLASHSOL-OFFICIAL-SANCTUM-HANDOFF
+
+- Timestamp: 2026-08-19 Europe/Kyiv
+- Request: temporarily hide the in-game Sanctum swap, replace it with a polished
+  link to `https://app.sanctum.so/stake/clashSOL` where clashSOL is preselected,
+  keep the Daily Gold claim experience in Battle Shop, explain the holder
+  benefit and timing clearly, then commit, push and deploy everything to
+  production.
+- Approved scope: disable embedded balance/order/restore/poll/sign/execute UI,
+  preserve historical activity and server audit data, retain wallet linking,
+  completed-day observations, capacity-safe claims, admin controls and history,
+  show measured APY or a clearly labelled non-guaranteed same-validator peer
+  estimate, release as v1.1.4, and deploy through the canonical atomic pipeline.
+  Deployment performs no wallet signature, stake, swap, or funded transaction.

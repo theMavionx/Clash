@@ -14,14 +14,17 @@ Accepted
 
 The first owner-signed clashSOL swap was rejected before broadcast because the
 wallet recalculated standard Solana Compute Budget instructions while signing.
-The reviewed Sanctum route, signers, account roles, address lookup tables, and
-swap instructions were unchanged, but byte-for-byte message validation treated
-the safe priority-fee update as arbitrary transaction tampering.
+The reviewed Sanctum route, signers, account roles, resolved account addresses,
+and swap instructions were unchanged, but byte-for-byte message validation
+treated the safe priority-fee update as arbitrary transaction tampering. A
+second production incident showed that a wallet may also recompile the same v0
+message with a different static/address-lookup-table layout while preserving
+the actual programs, accounts, roles, and instruction bytes.
 
 ### Constraints
 
 - A wallet must never be allowed to change the Sanctum route, recipients,
-  amounts, signers, account roles, lookup tables, or non-Compute instructions.
+  amounts, signers, resolved account roles, or non-Compute instructions.
 - Phantom and other Solana wallets may legitimately refresh the recent
   blockhash and Compute Budget limit/price while signing.
 - The server must bound the maximum possible priority fee independently of the
@@ -35,7 +38,9 @@ the safe priority-fee update as arbitrary transaction tampering.
 - Accept at most one `SetComputeUnitLimit` and one `SetComputeUnitPrice`.
 - Cap the compute-unit limit at 1,400,000 and the calculated priority fee at
   0.005 SOL.
-- Keep every non-Compute message semantic exactly equal to the reviewed order.
+- Keep every resolved non-Compute message semantic exactly equal to the
+  reviewed order, even when equivalent accounts move between static keys and
+  address lookup tables.
 - Prove safe and unsafe wallet rewrites with real versioned-transaction tests,
   including address lookup tables.
 
@@ -44,11 +49,12 @@ the safe priority-fee update as arbitrary transaction tampering.
 When exact message-hash validation fails for a versioned Sanctum transaction,
 the server performs a second, narrowly scoped semantic comparison:
 
-1. signer keys must be identical and ordered identically;
-2. every non-Compute static account and its signer/writable role must match;
-3. every address lookup table and writable/readonly index list must match;
-4. every non-Compute instruction program, ordered account references, and data
-   bytes must match;
+1. signer keys and the fee payer must be identical and ordered identically;
+2. the fast path compares static roles and lookup-table references directly;
+3. if that layout differs, the server resolves both messages' lookup tables
+   from Solana and compares actual program/account addresses plus signer and
+   writable roles for every ordered non-Compute instruction;
+4. every non-Compute instruction data byte must match;
 5. Compute Budget instructions may contain only one unit-limit opcode and one
    unit-price opcode;
 6. the limit must be between 1 and 1,400,000 compute units;
@@ -65,7 +71,7 @@ Reviewed Sanctum v0 message          Wallet-signed v0 message
               |                                  |
               +------ semantic comparator -------+
                                |
-            signers/accounts/LUTs/swap ix exact?
+       signers/resolved accounts/roles/swap ix exact?
                       | yes              | no -> reject
                       v
             Compute Budget opcodes bounded?
@@ -83,7 +89,9 @@ Reviewed Sanctum v0 message          Wallet-signed v0 message
 - `verifyReviewedSignedTransaction(...)` retains the exact-hash fast path and
   invokes semantic validation only after a `TRANSACTION_CHANGED` result.
 - `verifySafeVersionedWalletAdjustments(...)` compares the immutable message
-  semantics.
+  semantics on the no-network fast path.
+- `verifyResolvedVersionedWalletAdjustments(...)` resolves address lookup
+  tables and accepts layout-only recompilation when actual semantics match.
 - `validateWalletPriorityFeeInstructions(...)` enforces opcode, count, unit,
   and total-fee limits.
 
@@ -116,18 +124,24 @@ Reviewed Sanctum v0 message          Wallet-signed v0 message
 ### Positive
 
 - Standard wallet fee estimation no longer breaks an otherwise unchanged swap.
+- Wallets may recompile equivalent static/LUT account layouts without being
+  mistaken for a changed recipient or route.
 - Route and account integrity remain server-enforced.
 - A hard 0.005 SOL fee ceiling prevents extreme wallet priority fees.
 
 ### Negative
 
 - Semantic validation is more complex than comparing one hash.
+- A layout-changing wallet signature requires bounded Solana RPC reads for the
+  reviewed lookup tables.
 - Future legitimate Compute Budget opcodes require an explicit reviewed change.
 
 ### Risks
 
-- **Semantic comparison omission**: mitigated by comparing ordered instruction
-  account references and data plus all static roles and lookup indexes.
+- **Semantic comparison omission**: mitigated by resolving ordered instruction
+  accounts to real addresses and comparing signer/writable roles and data.
+- **Lookup RPC outage**: fail closed with a retryable 503 and keep the quote
+  pending instead of misclassifying it as tampering.
 - **Fee arithmetic error**: mitigated with integer `BigInt` arithmetic and
   ceiling division.
 - **Wallet incompatibility**: unknown or duplicate Compute Budget instructions
@@ -139,7 +153,8 @@ Reviewed Sanctum v0 message          Wallet-signed v0 message
   differs; negligible relative to the upstream request.
 - **Memory**: temporary normalized message objects for one transaction.
 - **Load Time**: no client-load impact.
-- **Network**: no additional request.
+- **Network**: no request on exact/structural fast paths; bounded lookup-table
+  RPC reads only when the wallet recompiles the account layout.
 
 ## Migration Plan
 
@@ -151,6 +166,9 @@ then request a fresh quote for any attempt previously rejected with
 
 - A realistic v0 transaction with two existing Compute Budget instructions and
   one address lookup table accepts a safe wallet repricing.
+- The same transaction recompiled from a lookup-table account into static
+  account keys is accepted after resolved semantic comparison.
+- Adding even a one-lamport transfer while recompiling is rejected.
 - The same route with a calculated fee above 0.005 SOL is rejected before
   upstream execution.
 - Any signer, account role, lookup, program, instruction-account order, or

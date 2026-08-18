@@ -1,7 +1,7 @@
 # ADR-0019: clashSOL Sanctum Shop Integration
 
 ## Status
-Accepted
+Accepted; active player-side swap execution superseded by ADR-0027
 
 ## Date
 2026-08-08
@@ -29,9 +29,10 @@ ordinary SPL token as a functioning LST.
 - The player's Solana private key must remain in an external wallet adapter or
   Privy embedded wallet.
 - An unsigned transaction returned by Sanctum must preserve its signers,
-  account roles, lookup tables, and swap instructions between the order and
-  execute requests. Wallet-added Compute Budget pricing is permitted only
-  within the bounds recorded by ADR-0026.
+  resolved account addresses/roles, and swap instructions between the order
+  and execute requests. Equivalent static/address-lookup-table recompilation
+  and wallet-added Compute Budget pricing are permitted only within the bounds
+  recorded by ADR-0026.
 - The Clash API must not become a generic authenticated proxy for arbitrary
   Sanctum swaps.
 - Mainnet mint creation, authority transfer, partner-form submission and
@@ -65,9 +66,8 @@ Implement a two-state integration.
    signs that transaction. The server verifies the signature and message hash,
    retrieves the original upstream order from SQLite, and sends both to
    Sanctum's execute endpoint. Before execution, the server compares signer
-   keys, static account roles, address-lookup tables, and every non-Compute
-   instruction, then validates any wallet-adjusted Compute Budget instructions
-   against ADR-0026.
+   keys and every resolved non-Compute program/account/role/data tuple, then
+   validates any wallet-adjusted Compute Budget instructions against ADR-0026.
 
 The client never supplies input/output mints or an arbitrary upstream order
 object. The server owns those fields from configuration and stored intent.
@@ -172,8 +172,9 @@ Clash verifies signer + semantic message shape -> Sanctum /swap/token/execute
 - **Sanctum API schema drift**: validate required fields, reject unknown route
   semantics, and keep focused contract tests.
 - **Transaction mutation by a wallet**: verify the expected wallet signature,
-  require exact signer/account/LUT/non-Compute instruction equality, and allow
-  only the bounded Compute Budget exception defined by ADR-0026.
+  require exact resolved signer/account-role/non-Compute instruction equality,
+  and allow only layout-equivalent LUT recompilation plus the bounded Compute
+  Budget exception defined by ADR-0026.
 - **Stale order/blockhash**: expire intents quickly and require a fresh quote.
 - **API/rate-limit outage**: cache metadata, bound timeouts, and return a clear
   unavailable state without retry storms.
@@ -215,3 +216,4 @@ Clash verifies signer + semantic message shape -> Sanctum /swap/token/execute
 - [ADR-0008: Solana Core NFT Marketplace](./adr-0008-solana-core-nft-marketplace.md)
 - [ADR-0018: Bulk Browser Signing and Builder Attribution](./adr-0018-bulk-browser-signing-and-builder-attribution.md)
 - [ADR-0026: Bounded Wallet Compute Budget Adjustments for Sanctum](./adr-0026-sanctum-bounded-wallet-compute-budget.md)
+- [ADR-0027: Sanctum-Hosted clashSOL Swap and Native Holder Rewards](./adr-0027-sanctum-hosted-swap-and-native-holder-rewards.md)

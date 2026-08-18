@@ -473,7 +473,7 @@ Next checkpoint:
 
 ## G-010 clashSOL Sanctum LST Integration
 
-- Status: v1.1.3 wallet-compatibility release candidate validation in progress
+- Status: v1.1.4 official-Sanctum handoff and Daily Gold release candidate in progress
 - Priority: P1
 - Owner intent: let players stake SOL into a branded `clashSOL` LST from the
   in-game shop through Sanctum while preserving self-custody.
@@ -528,6 +528,13 @@ Current checkpoint:
   durable submitted/unknown/confirmed reconciliation and bridge-style
   four-stage receipt, and prevents Marketplace overflow from collapsing the
   Battle Shop navigation.
+- On 2026-08-19 the owner chose to pause the embedded player-side swap despite
+  the validated wallet-compatibility work. v1.1.4 routes new staking through
+  the official preselected `https://app.sanctum.so/stake/clashSOL` page,
+  disables embedded balance/order/restore/polling work, and keeps Clash-owned
+  Daily Gold, wallet linking, capacity-safe claims, APY/status and history in
+  Battle Shop. Direct clashSOL APY remains pending its first valid epoch; the
+  UI may show a clearly labelled, non-guaranteed same-validator peer median.
 
 Acceptance criteria:
 
@@ -537,7 +544,8 @@ Acceptance criteria:
   the stored upstream order before execution.
 - Missing launch configuration produces a stable, informative shop state and
   never a fake success.
-- External wallet-adapter and Privy embedded Solana signing paths are supported.
+- The official Sanctum staking handoff and Clash holder-wallet linking paths
+  are supported; the dormant embedded wallet-signing path is not player-visible.
 - Server tests, frontend tests/build/lint and a local browser shop flow pass.
 
 ## Parking Lot
