@@ -3746,6 +3746,7 @@ const styles = {
     minHeight: 32, borderRadius: 999, fontSize: 12,
   }),
   shopActionRow: {
+    flex: '0 0 auto',
     display: 'flex',
     alignItems: 'center',
     gap: 8,
@@ -3781,6 +3782,7 @@ const styles = {
     outline: 'none',
   },
   chainSwitchPanel: {
+    flex: '0 0 auto',
     display: 'grid',
     gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
     gap: 8,
@@ -3993,6 +3995,9 @@ const styles = {
     textShadow: 'none',
   },
   shopTabs: {
+    flex: '0 0 auto',
+    minHeight: 54,
+    boxSizing: 'border-box',
     display: 'flex',
     gap: 6,
     padding: 4,

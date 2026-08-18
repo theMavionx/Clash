@@ -25,6 +25,9 @@ const STATUS_CACHE_MS = 60_000;
 const MIN_SOL_LAMPORTS = 1_000_000n; // 0.001 SOL
 const MAX_SOL_LAMPORTS = 10_000_000_000_000n; // 10,000 SOL
 const MAX_SIGNED_TX_BASE64_LENGTH = 12_000;
+const COMPUTE_BUDGET_PROGRAM_ID = 'ComputeBudget111111111111111111111111111111';
+const MAX_WALLET_COMPUTE_UNIT_LIMIT = 1_400_000n;
+const MAX_WALLET_PRIORITY_FEE_LAMPORTS = 5_000_000n; // 0.005 SOL
 const VALID_SIGNATURE_RE = /^[1-9A-HJ-NP-Za-km-z]{80,90}$/;
 const EXECUTION_STALE_SECONDS = 120;
 const UNKNOWN_RECONCILE_GRACE_MS = 10 * 60 * 1000;
@@ -212,6 +215,108 @@ function transactionShape(inspected) {
     : legacyMessageShape(inspected.tx);
 }
 
+function versionedAccountModel(message) {
+  const refs = [];
+  const staticAccounts = message.staticAccountKeys.map((key, index) => {
+    const signerCount = Number(message.header.numRequiredSignatures || 0);
+    const readonlySignerStart = signerCount - Number(message.header.numReadonlySignedAccounts || 0);
+    const readonlyUnsignedStart = message.staticAccountKeys.length - Number(message.header.numReadonlyUnsignedAccounts || 0);
+    const signer = index < signerCount;
+    const writable = signer ? index < readonlySignerStart : index < readonlyUnsignedStart;
+    const address = key.toBase58();
+    refs.push(`static:${address}`);
+    return { address, signer, writable };
+  });
+  const writableLookupRefs = [];
+  const readonlyLookupRefs = [];
+  const lookups = message.addressTableLookups.map(lookup => {
+    const table = lookup.accountKey.toBase58();
+    const writableIndexes = Array.from(lookup.writableIndexes);
+    const readonlyIndexes = Array.from(lookup.readonlyIndexes);
+    writableIndexes.forEach(index => writableLookupRefs.push(`lookup:${table}:w:${index}`));
+    readonlyIndexes.forEach(index => readonlyLookupRefs.push(`lookup:${table}:r:${index}`));
+    return { table, writableIndexes, readonlyIndexes };
+  });
+  refs.push(...writableLookupRefs, ...readonlyLookupRefs);
+  return {
+    refs,
+    signerKeys: staticAccounts.filter(account => account.signer).map(account => account.address),
+    staticAccounts: staticAccounts
+      .filter(account => account.address !== COMPUTE_BUDGET_PROGRAM_ID)
+      .sort((a, b) => a.address.localeCompare(b.address)),
+    lookups: lookups.sort((a, b) => a.table.localeCompare(b.table)),
+  };
+}
+
+function versionedSemanticShape(message) {
+  const accounts = versionedAccountModel(message);
+  const instructions = message.compiledInstructions.map(instruction => {
+    const program = accounts.refs[instruction.programIdIndex];
+    const accountRefs = Array.from(instruction.accountKeyIndexes).map(index => accounts.refs[index]);
+    if (!program || accountRefs.some(ref => !ref)) {
+      throw new SanctumError('INVALID_TRANSACTION', 'The signed Sanctum transaction has invalid account indexes', 400);
+    }
+    return {
+      program,
+      accounts: accountRefs,
+      data: Buffer.from(instruction.data).toString('base64'),
+    };
+  });
+  return {
+    signerKeys: accounts.signerKeys,
+    staticAccounts: accounts.staticAccounts,
+    lookups: accounts.lookups,
+    swapInstructions: instructions.filter(instruction => instruction.program !== `static:${COMPUTE_BUDGET_PROGRAM_ID}`),
+    computeInstructions: instructions.filter(instruction => instruction.program === `static:${COMPUTE_BUDGET_PROGRAM_ID}`),
+  };
+}
+
+function validateWalletPriorityFeeInstructions(instructions) {
+  if (instructions.length > 2) {
+    throw new SanctumError('WALLET_PRIORITY_FEE_UNSAFE', 'The wallet added an unsupported priority-fee configuration', 400);
+  }
+  let computeUnitLimit = null;
+  let computeUnitPrice = null;
+  for (const instruction of instructions) {
+    const data = Buffer.from(instruction.data, 'base64');
+    if (data.length === 5 && data[0] === 2 && computeUnitLimit == null) {
+      computeUnitLimit = BigInt(data.readUInt32LE(1));
+      continue;
+    }
+    if (data.length === 9 && data[0] === 3 && computeUnitPrice == null) {
+      computeUnitPrice = data.readBigUInt64LE(1);
+      continue;
+    }
+    throw new SanctumError('WALLET_PRIORITY_FEE_UNSAFE', 'The wallet added an unsupported priority-fee instruction', 400);
+  }
+  if (computeUnitLimit != null && (computeUnitLimit < 1n || computeUnitLimit > MAX_WALLET_COMPUTE_UNIT_LIMIT)) {
+    throw new SanctumError('WALLET_PRIORITY_FEE_UNSAFE', 'The wallet requested an unsafe compute-unit limit', 400);
+  }
+  const feeLimit = computeUnitLimit ?? MAX_WALLET_COMPUTE_UNIT_LIMIT;
+  const maximumPriorityFee = ((computeUnitPrice ?? 0n) * feeLimit + 999_999n) / 1_000_000n;
+  if (maximumPriorityFee > MAX_WALLET_PRIORITY_FEE_LAMPORTS) {
+    throw new SanctumError('WALLET_PRIORITY_FEE_TOO_HIGH', 'The wallet priority fee is above the 0.005 SOL safety limit', 400);
+  }
+}
+
+function verifySafeVersionedWalletAdjustments(signed, reviewed) {
+  const signedShape = versionedSemanticShape(signed.tx.message);
+  const reviewedShape = versionedSemanticShape(reviewed.tx.message);
+  if (
+    JSON.stringify(signedShape.signerKeys) !== JSON.stringify(reviewedShape.signerKeys)
+    || JSON.stringify(signedShape.staticAccounts) !== JSON.stringify(reviewedShape.staticAccounts)
+    || JSON.stringify(signedShape.lookups) !== JSON.stringify(reviewedShape.lookups)
+    || JSON.stringify(signedShape.swapInstructions) !== JSON.stringify(reviewedShape.swapInstructions)
+  ) {
+    return false;
+  }
+  // Wallets may add or recalculate Compute Budget instructions while signing
+  // (for example, their priority-fee estimator). They may not change any
+  // signer, account role, lookup table, or non-compute swap instruction.
+  validateWalletPriorityFeeInstructions(signedShape.computeInstructions);
+  return true;
+}
+
 function verifyReviewedSignedTransaction(base64, expectedWallet, expectedKind, expectedHash, reviewedBase64) {
   try {
     return { inspected: verifySignedTransaction(base64, expectedWallet, expectedKind, expectedHash), blockhashRefreshed: false };
@@ -219,11 +324,14 @@ function verifyReviewedSignedTransaction(base64, expectedWallet, expectedKind, e
     if (error?.code !== 'TRANSACTION_CHANGED' || !reviewedBase64) throw error;
     const signed = inspectTransaction(base64, expectedWallet);
     const reviewed = inspectTransaction(reviewedBase64, expectedWallet);
-    if (
-      signed.kind !== reviewed.kind
-      || signed.kind !== expectedKind
-      || JSON.stringify(transactionShape(signed)) !== JSON.stringify(transactionShape(reviewed))
-    ) {
+    const safeWalletAdjustment = signed.kind === 'versioned'
+      && reviewed.kind === 'versioned'
+      && signed.kind === expectedKind
+      && verifySafeVersionedWalletAdjustments(signed, reviewed);
+    const blockhashOnlyAdjustment = signed.kind === reviewed.kind
+      && signed.kind === expectedKind
+      && JSON.stringify(transactionShape(signed)) === JSON.stringify(transactionShape(reviewed));
+    if (!safeWalletAdjustment && !blockhashOnlyAdjustment) {
       throw error;
     }
     const signature = signed.kind === 'versioned'

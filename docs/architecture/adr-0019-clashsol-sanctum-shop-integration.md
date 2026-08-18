@@ -28,8 +28,10 @@ ordinary SPL token as a functioning LST.
 - The Sanctum API requires an API key that must not enter the browser bundle.
 - The player's Solana private key must remain in an external wallet adapter or
   Privy embedded wallet.
-- An unsigned transaction returned by Sanctum must not be editable between the
-  order and execute requests.
+- An unsigned transaction returned by Sanctum must preserve its signers,
+  account roles, lookup tables, and swap instructions between the order and
+  execute requests. Wallet-added Compute Budget pricing is permitted only
+  within the bounds recorded by ADR-0026.
 - The Clash API must not become a generic authenticated proxy for arbitrary
   Sanctum swaps.
 - Mainnet mint creation, authority transfer, partner-form submission and
@@ -42,8 +44,10 @@ ordinary SPL token as a functioning LST.
   server-side API-key proxy.
 - Restrict order construction to wrapped SOL as input and the configured
   `clashSOL` mint as output.
-- Persist short-lived order intents and compare the signed transaction message
-  with the exact message returned by Sanctum.
+- Persist short-lived order intents and semantically compare the signed
+  transaction with the message returned by Sanctum: every non-Compute field is
+  immutable, while the recent blockhash and ADR-0026-bounded Compute Budget
+  limit/price may be refreshed by the signing wallet.
 - Support external Solana wallet adapters and Privy embedded Solana wallets.
 - Keep the shop responsive and usable on mobile.
 
@@ -60,7 +64,10 @@ Implement a two-state integration.
    short-lived order id plus the transaction and safe quote fields. The browser
    signs that transaction. The server verifies the signature and message hash,
    retrieves the original upstream order from SQLite, and sends both to
-   Sanctum's execute endpoint.
+   Sanctum's execute endpoint. Before execution, the server compares signer
+   keys, static account roles, address-lookup tables, and every non-Compute
+   instruction, then validates any wallet-adjusted Compute Budget instructions
+   against ADR-0026.
 
 The client never supplies input/output mints or an arbitrary upstream order
 object. The server owns those fields from configuration and stored intent.
@@ -83,10 +90,10 @@ Shop -> Clash order endpoint -> Sanctum /swap/token/order
                  durable order intent
                          |
                          v
-External/Privy wallet signs exact unsigned transaction
+External/Privy wallet signs the reviewed transaction
                          |
                          v
-Clash verifies signer + message hash -> Sanctum /swap/token/execute
+Clash verifies signer + semantic message shape -> Sanctum /swap/token/execute
                          |
                          v
                  clashSOL reaches player ATA
@@ -164,8 +171,9 @@ Clash verifies signer + message hash -> Sanctum /swap/token/execute
 
 - **Sanctum API schema drift**: validate required fields, reject unknown route
   semantics, and keep focused contract tests.
-- **Transaction mutation by a wallet**: compare message bytes and verify the
-  expected wallet signature before execute.
+- **Transaction mutation by a wallet**: verify the expected wallet signature,
+  require exact signer/account/LUT/non-Compute instruction equality, and allow
+  only the bounded Compute Budget exception defined by ADR-0026.
 - **Stale order/blockhash**: expire intents quickly and require a fresh quote.
 - **API/rate-limit outage**: cache metadata, bound timeouts, and return a clear
   unavailable state without retry storms.
@@ -193,8 +201,9 @@ Clash verifies signer + message hash -> Sanctum /swap/token/execute
 ## Validation Criteria
 
 - Missing configuration returns launch-pending and never creates an order.
-- Wrong wallet, amount, output mint, expired order, modified transaction, bad
-  signature and replayed execution are rejected.
+- Wrong wallet, amount, output mint, expired order, modified non-Compute
+  transaction, unsupported/excessive wallet fee, bad signature and replayed
+  execution are rejected.
 - A canonical mocked Sanctum response passes order and execute end to end.
 - No API key appears in client source, built assets, API responses, or logs.
 - The shop panel renders without overlap at desktop and phone widths.
@@ -205,3 +214,4 @@ Clash verifies signer + message hash -> Sanctum /swap/token/execute
 - [ADR-0007: Batch NFT and Shop Transactions](./adr-0007-batch-nft-and-shop-transactions.md)
 - [ADR-0008: Solana Core NFT Marketplace](./adr-0008-solana-core-nft-marketplace.md)
 - [ADR-0018: Bulk Browser Signing and Builder Attribution](./adr-0018-bulk-browser-signing-and-builder-attribution.md)
+- [ADR-0026: Bounded Wallet Compute Budget Adjustments for Sanctum](./adr-0026-sanctum-bounded-wallet-compute-budget.md)

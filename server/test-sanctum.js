@@ -2,7 +2,9 @@ const assert = require('assert/strict');
 const Database = require('better-sqlite3');
 const bs58Module = require('bs58');
 const {
+  AddressLookupTableAccount,
   Keypair,
+  ComputeBudgetProgram,
   SystemProgram,
   TransactionMessage,
   VersionedTransaction,
@@ -85,6 +87,35 @@ function makeUnsignedTransaction(wallet) {
   return new VersionedTransaction(message);
 }
 
+function makePriorityFeeUnsignedTransaction(wallet) {
+  const lookupKey = Keypair.generate().publicKey;
+  const recipient = Keypair.generate().publicKey;
+  const lookup = new AddressLookupTableAccount({
+    key: lookupKey,
+    state: {
+      deactivationSlot: 18_446_744_073_709_551_615n,
+      lastExtendedSlot: 0,
+      lastExtendedSlotStartIndex: 0,
+      authority: undefined,
+      addresses: [recipient],
+    },
+  });
+  const message = new TransactionMessage({
+    payerKey: wallet.publicKey,
+    recentBlockhash: Keypair.generate().publicKey.toBase58(),
+    instructions: [
+      ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 3_935 }),
+      ComputeBudgetProgram.setComputeUnitLimit({ units: 74_629 }),
+      SystemProgram.transfer({
+        fromPubkey: wallet.publicKey,
+        toPubkey: recipient,
+        lamports: 1,
+      }),
+    ],
+  }).compileToV0Message([lookup]);
+  return new VersionedTransaction(message);
+}
+
 function makeMultiSignerUnsignedTransaction(wallet, sponsor) {
   const message = new TransactionMessage({
     payerKey: sponsor.publicKey,
@@ -132,6 +163,7 @@ async function run() {
   let finalSignature = '';
   let failExecute = false;
   let nextSponsor = null;
+  let nextReviewedPriorityFee = false;
   const fetchImpl = async (input, init = {}) => {
     const url = new URL(String(input));
     seenUrls.push(url);
@@ -165,7 +197,12 @@ async function run() {
       const amount = url.searchParams.get('amt');
       const sponsor = nextSponsor;
       nextSponsor = null;
-      const unsigned = sponsor ? makeMultiSignerUnsignedTransaction(wallet, sponsor) : makeUnsignedTransaction(wallet);
+      const unsigned = sponsor
+        ? makeMultiSignerUnsignedTransaction(wallet, sponsor)
+        : nextReviewedPriorityFee
+          ? makePriorityFeeUnsignedTransaction(wallet)
+          : makeUnsignedTransaction(wallet);
+      nextReviewedPriorityFee = false;
       const tx = Buffer.from(unsigned.serialize()).toString('base64');
       unsignedByAmount.set(amount, tx);
       return jsonResponse(200, {
@@ -282,6 +319,54 @@ async function run() {
     db.prepare('SELECT status, last_error_code, last_error_stage FROM sanctum_order_intents WHERE id = ?').get(changedInstructionOrder.orderId),
     { status: 'failed', last_error_code: 'TRANSACTION_CHANGED', last_error_stage: 'signature_validation' },
   );
+
+  nextReviewedPriorityFee = true;
+  const priorityFeeOrder = await service.createOrder({
+    playerId: 'player-1', wallet: wallet.publicKey.toBase58(), amountSol: '0.76', slippageBps: 30,
+  });
+  const priorityFeeReviewed = VersionedTransaction.deserialize(Buffer.from(priorityFeeOrder.transaction, 'base64'));
+  assert.equal(priorityFeeReviewed.message.addressTableLookups.length, 1);
+  const priorityFeeTx = VersionedTransaction.deserialize(Buffer.from(priorityFeeOrder.transaction, 'base64'));
+  const priorityFeeKeys = priorityFeeTx.message.staticAccountKeys.map(key => key.toBase58());
+  assert.equal(priorityFeeTx.message.compiledInstructions.filter(
+    instruction => priorityFeeKeys[instruction.programIdIndex] === ComputeBudgetProgram.programId.toBase58(),
+  ).length, 2);
+  const safeLimitData = ComputeBudgetProgram.setComputeUnitLimit({ units: 500_000 }).data;
+  const safePriceData = ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 2_000 }).data;
+  priorityFeeTx.message.compiledInstructions.forEach(instruction => {
+    if (priorityFeeKeys[instruction.programIdIndex] !== ComputeBudgetProgram.programId.toBase58()) return;
+    instruction.data = instruction.data[0] === 2 ? safeLimitData : safePriceData;
+  });
+  priorityFeeTx.message.recentBlockhash = Keypair.generate().publicKey.toBase58();
+  priorityFeeTx.sign([wallet]);
+  const priorityFeeResult = await service.executeOrder({
+    playerId: 'player-1',
+    orderId: priorityFeeOrder.orderId,
+    signedTransaction: Buffer.from(priorityFeeTx.serialize()).toString('base64'),
+  });
+  assert.equal(priorityFeeResult.status, 'submitted');
+  chainStatus = { slot: 123452, confirmationStatus: 'confirmed', confirmations: 1, err: null };
+  assert.equal((await service.getOrderStatus({ playerId: 'player-1', orderId: priorityFeeOrder.orderId })).status, 'confirmed');
+  chainStatus = null;
+
+  nextReviewedPriorityFee = true;
+  const unsafePriorityFeeOrder = await service.createOrder({
+    playerId: 'player-1', wallet: wallet.publicKey.toBase58(), amountSol: '0.77', slippageBps: 30,
+  });
+  const unsafePriorityTx = VersionedTransaction.deserialize(Buffer.from(unsafePriorityFeeOrder.transaction, 'base64'));
+  const unsafePriorityKeys = unsafePriorityTx.message.staticAccountKeys.map(key => key.toBase58());
+  const unsafeLimitData = ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }).data;
+  const unsafePriceData = ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 10_000_000 }).data;
+  unsafePriorityTx.message.compiledInstructions.forEach(instruction => {
+    if (unsafePriorityKeys[instruction.programIdIndex] !== ComputeBudgetProgram.programId.toBase58()) return;
+    instruction.data = instruction.data[0] === 2 ? unsafeLimitData : unsafePriceData;
+  });
+  unsafePriorityTx.sign([wallet]);
+  await expectCode(service.executeOrder({
+    playerId: 'player-1',
+    orderId: unsafePriorityFeeOrder.orderId,
+    signedTransaction: Buffer.from(unsafePriorityTx.serialize()).toString('base64'),
+  }), 'WALLET_PRIORITY_FEE_TOO_HIGH');
 
   const sponsor = Keypair.generate();
   nextSponsor = sponsor;

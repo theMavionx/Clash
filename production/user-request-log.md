@@ -3570,3 +3570,21 @@ Follow-up:
   the official same-master integrator approval path, add regression coverage,
   release as v1.1.2, and deploy through the canonical atomic pipeline. No
   funded order or unattended wallet signature is authorized.
+
+## UR-2026-08-18-CLASHSOL-WALLET-FEE-AND-SHOP-LAYOUT
+
+- Timestamp: 2026-08-18 Europe/Kyiv
+- Request: diagnose the repeated Sanctum execute HTTP 400, implement swaps the
+  way production Solana wallets expect, fix the shifted/collapsed Battle Shop
+  buttons, then commit, push and deploy everything to production.
+- Production evidence: wallet
+  `4Ze3bbJbmBjAUutV3LT1XUmqZG67fAR5PUr7vkXUgU2g` signed a transaction whose
+  standard Compute Budget priority-fee settings differed from the reviewed
+  Sanctum payload. The server rejected it before broadcast; no transaction
+  signature was stored and no SOL was spent by that attempt.
+- Approved scope: semantically preserve every signer, account role, lookup
+  table and non-Compute instruction; accept at most one wallet-adjusted Compute
+  Unit Limit and Price with a calculated fee no greater than 0.005 SOL; add
+  focused safe/unsafe v0 transaction tests; keep Battle Shop tabs/actions at
+  their natural height under Marketplace overflow; release as v1.1.3. No
+  unattended wallet signature or funded swap is part of deployment.

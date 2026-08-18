@@ -43,6 +43,21 @@ const [battleShop, constructionShop, sanctumTab, sanctumCss, sanctumClient] = aw
 
 assert.match(battleShop, /id: 'clashsol'/);
 assert.match(battleShop, /<SanctumShopTab/);
+assert.match(
+  battleShop,
+  /shopTabs:\s*\{[\s\S]*?flex: '0 0 auto',[\s\S]*?minHeight: 54,[\s\S]*?boxSizing: 'border-box'/,
+  'Battle Shop tabs must keep their natural height when Marketplace owns vertical scrolling',
+);
+assert.match(
+  battleShop,
+  /shopActionRow:\s*\{[\s\S]*?flex: '0 0 auto'/,
+  'Battle Shop action row must not collapse under Marketplace overflow',
+);
+assert.match(
+  battleShop,
+  /chainSwitchPanel:\s*\{[\s\S]*?flex: '0 0 auto'/,
+  'Battle Shop chain picker must not collapse under Marketplace overflow',
+);
 assert.doesNotMatch(constructionShop, /SanctumLstPanel|activeTab === 'Web3'|SANCTUM LST/);
 assert.match(sanctumTab, /SOL → clashSOL/);
 assert.match(sanctumTab, /clashSOL → SOL/);
@@ -79,6 +94,7 @@ assert.match(sanctumTab, /View on Solscan/);
 assert.match(sanctumTab, /Minimize/);
 assert.match(sanctumTab, /Swap in progress/);
 assert.match(sanctumTab, /Submission status is still being checked/);
+assert.match(sanctumTab, /priority fee above the 0\.005 SOL safety limit/);
 assert.match(sanctumTab, /sanctum-swap-progress__body/);
 assert.match(sanctumTab, /sanctum-swap-progress__footer-status/);
 assert.match(sanctumTab, /aria-live="polite" aria-atomic="true"/);

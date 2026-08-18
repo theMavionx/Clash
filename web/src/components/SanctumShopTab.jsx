@@ -76,6 +76,12 @@ function plainSwapError(error, fallback = 'The swap could not be completed.') {
   if (['INVALID_SIGNATURE', 'INVALID_TRANSACTION', 'TRANSACTION_CHANGED'].includes(code)) {
     return 'The signed transaction did not match the quote. No swap was sent.';
   }
+  if (code === 'WALLET_PRIORITY_FEE_TOO_HIGH') {
+    return 'Your wallet proposed a priority fee above the 0.005 SOL safety limit. Lower it and request a fresh quote.';
+  }
+  if (code === 'WALLET_PRIORITY_FEE_UNSAFE') {
+    return 'Your wallet added unsupported fee settings. No swap was sent; request a fresh quote.';
+  }
   if (code === 'ONCHAIN_FAILED') return 'Solana confirmed that this transaction failed on-chain.';
   if (['UPSTREAM_TIMEOUT', 'UPSTREAM_UNAVAILABLE', 'CONFIRMATION_UNAVAILABLE'].includes(code)) {
     return 'Submission status is uncertain. Do not send another swap while Clash checks Solana.';
