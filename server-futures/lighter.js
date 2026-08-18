@@ -32,6 +32,7 @@ function makeProfile(options = {}) {
     referralRequired: options.referralRequired === true,
     referralCode,
     referralUrl: String(options.referralUrl || '').trim(),
+    signerRunner: typeof options.signerRunner === 'function' ? options.signerRunner : null,
   });
 }
 
@@ -210,6 +211,9 @@ async function verifyL1ApprovalSignature({ accountIndex, txInfo, messageToSign, 
 
 function runSigner(action, payload = {}) {
   const profile = currentProfile();
+  if (profile.signerRunner) {
+    return Promise.resolve(profile.signerRunner(action, payload));
+  }
   return new Promise((resolve, reject) => {
     const child = spawn(LIGHTER_PYTHON_BIN, [LIGHTER_SIGNER_SCRIPT], {
       cwd: __dirname,
@@ -650,6 +654,25 @@ async function requireReadyIntegrator() {
   );
 }
 
+function sameMasterAccountOwner(account, integratorAccount) {
+  const accountOwner = String(account?.l1_address || account?.owner || '').trim();
+  const integratorOwner = String(integratorAccount?.l1_address || integratorAccount?.owner || '').trim();
+  if (!accountOwner || !integratorOwner) return false;
+  try {
+    return isAddressEqual(getAddress(accountOwner), getAddress(integratorOwner));
+  } catch {
+    return false;
+  }
+}
+
+async function isSameMasterIntegratorAccount(accountIndex, profile) {
+  const [account, integratorAccount] = await Promise.all([
+    getAccountRecord({ accountIndex }),
+    getAccountRecord({ accountIndex: profile.integratorAccountIndex }),
+  ]);
+  return sameMasterAccountOwner(account, integratorAccount);
+}
+
 async function getAccount({ accountIndex, l1Address } = {}) {
   const acct = await getAccountRecord({ accountIndex, l1Address });
   if (!acct) return { exists: false };
@@ -712,6 +735,22 @@ function normalizeReferralStatus(payload, account) {
   };
 }
 
+async function getOwnedReferralCode({ accountIndex, headers }) {
+  try {
+    const data = await request(
+      `/api/v1/referral/get?account_index=${encodeURIComponent(accountIndex)}`,
+      { headers },
+    );
+    return String(data?.referral_code || '').trim();
+  } catch (err) {
+    // Lighter returns 400 when an otherwise authenticated account has not
+    // created a referral code. The preceding userReferrals request already
+    // validated the token, so this is a normal "not a referrer" state.
+    if (err?.status === 400 || err?.status === 404) return '';
+    throw err;
+  }
+}
+
 function requireMatchingLighterOwner(account, expectedL1Address) {
   const owner = String(account?.l1_address || '').trim();
   const expected = String(expectedL1Address || '').trim();
@@ -765,7 +804,21 @@ async function getReferralStatus(input = {}) {
   );
   const path = `/api/v1/referral/userReferrals?l1_address=${encodeURIComponent(owner)}&limit=1`;
   const data = await request(path, { headers });
-  return normalizeReferralStatus(data, account);
+  const status = normalizeReferralStatus(data, account);
+  if (status.has_referral || !profile.referralCode) return status;
+
+  // Lighter forbids a referral-code owner from using their own code. Treat
+  // ownership of Clash's configured code as a narrow gate exemption while
+  // keeping the referral mandatory for every other account.
+  const ownedReferralCode = await getOwnedReferralCode({ accountIndex, headers });
+  const referralExempt = ownedReferralCode.toUpperCase() === profile.referralCode;
+  return {
+    ...status,
+    is_our_referral: referralExempt,
+    referral_exempt: referralExempt,
+    referral_exempt_reason: referralExempt ? 'self_referral_owner' : '',
+    owned_referral_code: ownedReferralCode,
+  };
 }
 
 async function useReferralCode(input = {}) {
@@ -774,11 +827,12 @@ async function useReferralCode(input = {}) {
     throw Object.assign(new Error(`${profile.label} referral is not configured or required`), { status: 409 });
   }
   const initial = await getReferralStatus(input);
-  if (initial.has_referral) {
+  if (initial.has_referral || initial.referral_exempt) {
     return {
       ok: true,
       applied: false,
       already_linked: true,
+      referral_exempt: initial.referral_exempt === true,
       referral_status: initial,
     };
   }
@@ -822,7 +876,7 @@ async function requireReferralForTrading(input = {}) {
   const profile = currentProfile();
   if (!profile.referralRequired) return { checked: true, required: false, has_referral: true };
   const status = await getReferralStatus(input);
-  if (!status.has_referral) {
+  if (!status.has_referral && !status.referral_exempt) {
     throw Object.assign(
       new Error(`Accept a ${profile.label} referral code before trading. Clash code: ${profile.referralCode}`),
       { status: 403, code: 'LIGHTER_REFERRAL_REQUIRED', referral_status: status },
@@ -969,26 +1023,32 @@ async function prepareIntegratorApproval(input = {}) {
     max_spot_maker_fee: 0,
     approval_expiry: approvalExpiry,
   });
+  const sameMasterAccount = await isSameMasterIntegratorAccount(creds.account_index, profile);
   return {
     ok: true,
     integrator_account_index: profile.integratorAccountIndex,
     builder_fee_value: profile.builderFeeValue,
     max_fee_value: maxFee,
     approval_expiry: approvalExpiry,
+    same_master_account: sameMasterAccount,
+    requires_l1_signature: !sameMasterAccount,
     ...result,
   };
 }
 
 async function submitIntegratorApproval(input = {}) {
-  await requireReadyIntegrator();
+  const profile = await requireReadyIntegrator();
   const creds = signerCredentials(input);
   if (!input.tx_info || input.tx_type == null) throw Object.assign(new Error('Lighter approval tx_info required'), { status: 400 });
-  await verifyL1ApprovalSignature({
-    accountIndex: creds.account_index,
-    txInfo: input.tx_info,
-    messageToSign: input.messageToSign || input.message_to_sign,
-    l1Signature: input.l1Signature || input.l1_signature || '',
-  });
+  const sameMasterAccount = await isSameMasterIntegratorAccount(creds.account_index, profile);
+  if (!sameMasterAccount) {
+    await verifyL1ApprovalSignature({
+      accountIndex: creds.account_index,
+      txInfo: input.tx_info,
+      messageToSign: input.messageToSign || input.message_to_sign,
+      l1Signature: input.l1Signature || input.l1_signature || '',
+    });
+  }
   const result = await runSigner('send_tx', {
     ...creds,
     tx_type: Number(input.tx_type),
@@ -996,7 +1056,7 @@ async function submitIntegratorApproval(input = {}) {
     tx_hash: input.tx_hash,
     l1_signature: input.l1Signature || input.l1_signature || '',
   });
-  return { ok: true, ...result };
+  return { ok: true, same_master_account: sameMasterAccount, ...result };
 }
 
 function orderSideIsAsk(side) {
@@ -1447,4 +1507,5 @@ function createLighterAdapter(options = {}) {
 module.exports = {
   ...createLighterAdapter(DEFAULT_LIGHTER_PROFILE),
   createLighterAdapter,
+  sameMasterAccountOwner,
 };

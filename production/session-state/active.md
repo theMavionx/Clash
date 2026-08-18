@@ -82,10 +82,11 @@ Main current goals:
 
 ## Next Useful Checkpoint
 
-For clashSOL, ship v1.1.1 reconciliation, verify the affected production intent
-rows and active-order endpoint, monitor the first completed UTC-day reward
-finalization/claim, and run the funded swap checklist only with an owner wallet
-signature. General context recovery remains:
+For Robinhood Lighter, ship v1.1.2, verify the owner account `3156` is shown as
+self-referral-exempt, then let the owner explicitly approve the same-master
+integrator before attempting any trade. For clashSOL, continue monitoring the
+first completed UTC-day reward finalization/claim and run the funded swap
+checklist only with an owner wallet signature. General context recovery remains:
 
 ```powershell
 tools/codex/start-context.cmd -Full

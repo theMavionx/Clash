@@ -143,10 +143,13 @@ function activePositions(list) {
 function normalizeReferralStatus(value, profile) {
   if (!value || value?.checked !== true) return null;
   const usedCode = String(value?.used_code || '').trim();
+  const referralExempt = value?.referral_exempt === true;
   return {
     ...value,
     checked: true,
     has_referral: value?.has_referral === true || usedCode.length > 0,
+    referral_exempt: referralExempt,
+    referral_satisfied: value?.has_referral === true || usedCode.length > 0 || referralExempt,
     is_our_referral: value?.is_our_referral === true
       || (!!profile.referralCode && usedCode.toUpperCase() === profile.referralCode),
     used_code: usedCode,
@@ -404,7 +407,7 @@ function useLighterProfile(profile) {
     });
     const message = prepared.message_to_sign || prepared.messageToSign;
     let l1Signature = '';
-    if (message) {
+    if (prepared.requires_l1_signature !== false && message) {
       l1Signature = await walletClient.signMessage({ account: walletAddr, message });
     }
     const submitted = await fetchJson(`${FUTURES_API}/${routePrefix}/approve-integrator/submit`, {
@@ -441,7 +444,7 @@ function useLighterProfile(profile) {
         }),
       });
       const checked = normalizeReferralStatus(result?.referral_status, profile);
-      if (!checked?.has_referral) {
+      if (!checked?.referral_satisfied) {
         setReferralStatus(checked);
         throw new Error(`${label} accepted the request but has not confirmed the referral yet. Retry the check in a moment.`);
       }
@@ -767,10 +770,10 @@ function useLighterProfile(profile) {
     setupVerified: credentials?.accountIndex != null
       ? venueConfig?.integratorReady === true
         && account?.integrator_approved === true
-        && (!referralRequired || referralStatus?.has_referral === true)
+        && (!referralRequired || referralStatus?.referral_satisfied === true)
       : false,
     lighterNeedsIntegratorApproval: credentials?.accountIndex != null && account?.integrator_approved !== true,
-    lighterNeedsReferral: referralRequired && credentials?.accountIndex != null && referralStatus?.has_referral === false,
+    lighterNeedsReferral: referralRequired && credentials?.accountIndex != null && referralStatus?.referral_satisfied === false,
     lighterReferralChecking: referralRequired && credentials?.accountIndex != null && referralStatus == null,
     lighterReferralStatus: referralStatus,
     lighterVenueLabel: label,
@@ -806,7 +809,7 @@ function useLighterProfile(profile) {
     moveSpotToPerp: unsupportedTrading,
     switchToRise: null,
     switchToInk: null,
-    hasReferrer: credentials?.accountIndex == null ? null : referralStatus?.has_referral ?? null,
+    hasReferrer: credentials?.accountIndex == null ? null : referralStatus?.referral_satisfied ?? null,
     linkOurReferrer: referralRequired ? acceptClashReferral : null,
     oneTapTrading: null,
     setOneTapTradingEnabled: null,

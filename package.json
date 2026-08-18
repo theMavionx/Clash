@@ -1,6 +1,6 @@
 {
   "name": "clash-main",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "",
   "main": ".tmp-bubblewrap-build.js",
   "directories": {

@@ -7,11 +7,19 @@ const accountOwners = new Map([
   [101, '0x1111111111111111111111111111111111111111'],
   [102, '0x2222222222222222222222222222222222222222'],
   [103, '0x3333333333333333333333333333333333333333'],
+  [104, '0x4444444444444444444444444444444444444444'],
 ]);
 const usedCodes = new Map([
   [accountOwners.get(101), ''],
   [accountOwners.get(102), ''],
   [accountOwners.get(103), 'SOMEONEELSE'],
+  [accountOwners.get(104), ''],
+]);
+const ownedCodes = new Map([
+  [101, ''],
+  [102, ''],
+  [103, 'OTHEROWNER'],
+  [104, 'CLASHOFPERPS'],
 ]);
 const postBodies = [];
 
@@ -44,6 +52,14 @@ global.fetch = async (url, options = {}) => {
       cursor: '',
       referrals: [],
       used_code: usedCodes.get(owner) || '',
+    });
+  }
+  if (parsed.pathname === '/api/v1/referral/get') {
+    assert.match(String(options.headers?.authorization || ''), /^token-/);
+    const accountIndex = Number(parsed.searchParams.get('account_index'));
+    return jsonResponse({
+      code: 200,
+      referral_code: ownedCodes.get(accountIndex) || '',
     });
   }
   if (parsed.pathname === '/api/v1/referral/use') {
@@ -101,6 +117,26 @@ global.fetch = async (url, options = {}) => {
     assert.strictEqual(existing.referral_status.used_code, 'SOMEONEELSE');
     assert.strictEqual(postBodies.length, 1, 'existing referrals must never be replaced');
 
+    const selfReferralOwner = await lighter.getReferralStatus({
+      accountIndex: 104,
+      authToken: 'token-104',
+      wallet: accountOwners.get(104),
+    });
+    assert.strictEqual(selfReferralOwner.has_referral, false);
+    assert.strictEqual(selfReferralOwner.referral_exempt, true);
+    assert.strictEqual(selfReferralOwner.referral_exempt_reason, 'self_referral_owner');
+    assert.strictEqual(selfReferralOwner.owned_referral_code, 'CLASHOFPERPS');
+    assert.strictEqual(selfReferralOwner.is_our_referral, true);
+
+    const selfReferralAccept = await lighter.useReferralCode({
+      accountIndex: 104,
+      authToken: 'token-104',
+      wallet: accountOwners.get(104),
+    });
+    assert.strictEqual(selfReferralAccept.ok, true);
+    assert.strictEqual(selfReferralAccept.referral_exempt, true);
+    assert.strictEqual(postBodies.length, 1, 'self-referral owners must never call referral/use');
+
     await lighter.requireReferralForTrading({
       accountIndex: 101,
       authToken: 'token-101',
@@ -110,6 +146,11 @@ global.fetch = async (url, options = {}) => {
       accountIndex: 103,
       authToken: 'token-103',
       wallet: accountOwners.get(103),
+    });
+    await lighter.requireReferralForTrading({
+      accountIndex: 104,
+      authToken: 'token-104',
+      wallet: accountOwners.get(104),
     });
     await assert.rejects(
       lighter.requireReferralForTrading({

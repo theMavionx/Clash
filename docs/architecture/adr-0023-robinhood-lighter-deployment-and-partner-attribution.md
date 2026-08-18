@@ -18,9 +18,10 @@ Clash already integrates public Lighter with integrator account index `730898`. 
 4. Set the Clash Partner Attribution fee to **1 basis point** for maker and taker orders. Lighter wire values are parts per million, so the order carries `integrator_taker_fee=100` and `integrator_maker_fee=100`.
 5. Require the official `ApproveIntegrator` flow and verify `approved_integrators` from the remote account response. Browser storage is only a credential cache; it is never authoritative for approval.
 6. Use the SDK-provided `messageToSign` for cross-owner approval. Do not borrow public Lighter chain id `304` for Robinhood Lighter unless RH publishes/configures `RH_LIGHTER_CHAIN_ID`.
-7. Robinhood referral attribution remains independent from Partner Attribution, but Clash also requires a confirmed referral before opening new positions. Preserve any existing RH referral; when none exists, submit the dedicated RH code `CLASSHOFPERPS` through the authenticated RH referral API. Never reuse or silently submit the public-Lighter code.
-8. Use the public Robinhood `partnerStats` endpoint as the exact cumulative earnings source. Persist attributed fills with verified source `rhlighter_integrator` for per-player rewards, recent activity, 24-hour analytics, and order-level proof.
-9. Market data remains available when partner configuration is incomplete, but opening orders, approval preparation, and reward imports fail closed. Cancel and risk-reducing account access remain independent where supported.
+7. Use the official same-master approval path when the trading account and configured integrator account share the same L1 owner. The API-key-signed approval transaction remains mandatory, but an additional L1 `messageToSign` signature is not required in that SDK flow. Cross-owner approvals continue to require and server-verify the L1 signature.
+8. Robinhood referral attribution remains independent from Partner Attribution, but Clash also requires a confirmed referral before opening new positions. Preserve any existing RH referral; when none exists, submit the dedicated RH code `CLASSHOFPERPS` through the authenticated RH referral API. Never reuse or silently submit the public-Lighter code. Because Lighter rejects self-referral, an account that the authenticated `/api/v1/referral/get` endpoint proves already owns `CLASSHOFPERPS` satisfies only this referral gate without calling `/api/v1/referral/use`; every other account remains subject to the normal referral requirement.
+9. Use the public Robinhood `partnerStats` endpoint as the exact cumulative earnings source. Persist attributed fills with verified source `rhlighter_integrator` for per-player rewards, recent activity, 24-hour analytics, and order-level proof.
+10. Market data remains available when partner configuration is incomplete, but opening orders, approval preparation, and reward imports fail closed. Cancel and risk-reducing account access remain independent where supported.
 
 ## Alternatives considered
 
@@ -45,6 +46,7 @@ Rejected. Users can change approvals on another client, and deployment-specific 
 - A Robinhood Lighter account must first be created for the Clash partner wallet; its account index must then be configured before trading can be enabled.
 - Existing public Lighter users and credentials continue to use the unchanged `lighter` profile.
 - Users who trade on both deployments configure separate account/API-key credentials, referral state, and Clash integrator approval. Existing RH referrals are accepted and never overwritten; accounts without one attach `CLASSHOFPERPS` before opening trades.
+- The owner account for `CLASSHOFPERPS` is never asked to self-refer. Its authenticated ownership proof is exposed as a narrow `self_referral_owner` exemption, while integrator approval remains independently required.
 - Exact cumulative RH partner earnings are readable without estimating from volume, while local fill import provides player attribution and recent-window metrics.
 - No funded or signed production smoke is possible until a valid RH integrator account exists and an owner explicitly authorizes the approval/order test.
 

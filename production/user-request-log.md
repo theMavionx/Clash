@@ -3552,3 +3552,21 @@ Follow-up:
   and receipts, additive intent lifecycle columns, focused migration/behavior
   tests, v1.1.1 release metadata and production deployment. Deployment itself
   must not sign or fund a wallet transaction.
+
+## UR-2026-08-18-RH-LIGHTER-SELF-REFERRAL
+
+- Timestamp: 2026-08-18 Europe/Kyiv
+- Request: diagnose why the owner could not enter Robinhood Lighter after
+  creating the Clash referral, then commit, push, and deploy the complete fix.
+- Production evidence: account `3156` and its API credentials authenticated,
+  but RH rejected `/api/v1/referral/use` with `cannot use your own referral
+  code`. Account `3156` belongs to
+  `0xB36402e87a86206D3a114a98B53f31362291fe1B`, the owner of
+  `CLASSHOFPERPS`; other connected wallets were correctly rejected as owner
+  mismatches. The account also had no integrator approval yet.
+- Approved scope: authenticate referral ownership through official
+  `/api/v1/referral/get`, exempt only the code owner from impossible
+  self-referral, preserve mandatory referral checks for other users, support
+  the official same-master integrator approval path, add regression coverage,
+  release as v1.1.2, and deploy through the canonical atomic pipeline. No
+  funded order or unattended wallet signature is authorized.

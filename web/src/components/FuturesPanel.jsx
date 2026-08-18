@@ -7468,6 +7468,8 @@ function FuturesPanel() {
                     <span style={hlGateStyles.stepHint}>
                       {lighterReferralRequired === false
                         ? 'Robinhood Lighter partner attribution is independent from referral codes.'
+                        : lighterReferralStatus?.referral_exempt === true
+                        ? `${lighterReferralStatus?.owned_referral_code || referralCode} belongs to this account, so self-referral is not required.`
                         : hasReferrer === true
                         ? `Existing referral ${lighterReferralStatus?.used_code || ''} is accepted.`
                         : lighterNeedsReferral
@@ -7561,8 +7563,10 @@ function FuturesPanel() {
                     setLocalAlert('');
                     try {
                       const res = await linkOurReferrer();
-                      if (res?.referral_status?.has_referral) {
-                        setSuccessMsg(`Lighter referral ${res.referral_status.used_code || referralCode} confirmed.`);
+                      if (res?.referral_status?.has_referral || res?.referral_status?.referral_exempt) {
+                        setSuccessMsg(res?.referral_status?.referral_exempt
+                          ? `${referralCode} belongs to this account; self-referral is not required.`
+                          : `Lighter referral ${res.referral_status.used_code || referralCode} confirmed.`);
                       } else {
                         setLocalAlert('Lighter has not confirmed the referral yet. Retry in a moment.');
                       }
