@@ -2,10 +2,15 @@ const crypto = require('crypto');
 const nacl = require('tweetnacl');
 const bs58Module = require('bs58');
 const {
+  Connection,
   PublicKey,
   Transaction,
   VersionedTransaction,
 } = require('@solana/web3.js');
+const {
+  createSolanaConnection,
+  solanaRpcUrls,
+} = require('./solana_rpc');
 
 const bs58 = bs58Module.default || bs58Module;
 
@@ -14,11 +19,15 @@ const WRAPPED_SOL_MINT = 'So11111111111111111111111111111111111111112';
 const LIVE_CLASHSOL_MINT = 'CLAShCrEjid112Mr1tWk7VqaGUAAKbiKdikDQYyDwfes';
 const DEFAULT_ORDER_TTL_MS = 90_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 5_000;
+const DEFAULT_SIGNATURE_RPC_TIMEOUT_MS = 2_500;
+const DEFAULT_SIGNATURE_STATUS_TIMEOUT_MS = 8_000;
 const STATUS_CACHE_MS = 60_000;
 const MIN_SOL_LAMPORTS = 1_000_000n; // 0.001 SOL
 const MAX_SOL_LAMPORTS = 10_000_000_000_000n; // 10,000 SOL
 const MAX_SIGNED_TX_BASE64_LENGTH = 12_000;
 const VALID_SIGNATURE_RE = /^[1-9A-HJ-NP-Za-km-z]{80,90}$/;
+const EXECUTION_STALE_SECONDS = 120;
+const UNKNOWN_RECONCILE_GRACE_MS = 10 * 60 * 1000;
 
 class SanctumError extends Error {
   constructor(code, message, status = 400, details = null) {
@@ -28,6 +37,14 @@ class SanctumError extends Error {
     this.status = status;
     this.details = details;
   }
+}
+
+function withTimeout(promise, timeoutMs, errorFactory) {
+  let timer = null;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(errorFactory()), timeoutMs);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
 function normalizeApiBaseUrl(value) {
@@ -155,6 +172,104 @@ function verifySignedTransaction(base64, expectedWallet, expectedKind, expectedH
   return inspected;
 }
 
+function versionedMessageShape(message) {
+  return {
+    header: {
+      numRequiredSignatures: message.header.numRequiredSignatures,
+      numReadonlySignedAccounts: message.header.numReadonlySignedAccounts,
+      numReadonlyUnsignedAccounts: message.header.numReadonlyUnsignedAccounts,
+    },
+    staticAccountKeys: message.staticAccountKeys.map(key => key.toBase58()),
+    compiledInstructions: message.compiledInstructions.map(instruction => ({
+      programIdIndex: instruction.programIdIndex,
+      accountKeyIndexes: Array.from(instruction.accountKeyIndexes),
+      data: Buffer.from(instruction.data).toString('base64'),
+    })),
+    addressTableLookups: message.addressTableLookups.map(lookup => ({
+      accountKey: lookup.accountKey.toBase58(),
+      writableIndexes: Array.from(lookup.writableIndexes),
+      readonlyIndexes: Array.from(lookup.readonlyIndexes),
+    })),
+  };
+}
+
+function legacyMessageShape(transaction) {
+  const message = transaction.compileMessage();
+  return {
+    header: message.header,
+    accountKeys: message.accountKeys.map(key => key.toBase58()),
+    instructions: message.instructions.map(instruction => ({
+      programIdIndex: instruction.programIdIndex,
+      accounts: Array.from(instruction.accounts),
+      data: instruction.data,
+    })),
+  };
+}
+
+function transactionShape(inspected) {
+  return inspected.kind === 'versioned'
+    ? versionedMessageShape(inspected.tx.message)
+    : legacyMessageShape(inspected.tx);
+}
+
+function verifyReviewedSignedTransaction(base64, expectedWallet, expectedKind, expectedHash, reviewedBase64) {
+  try {
+    return { inspected: verifySignedTransaction(base64, expectedWallet, expectedKind, expectedHash), blockhashRefreshed: false };
+  } catch (error) {
+    if (error?.code !== 'TRANSACTION_CHANGED' || !reviewedBase64) throw error;
+    const signed = inspectTransaction(base64, expectedWallet);
+    const reviewed = inspectTransaction(reviewedBase64, expectedWallet);
+    if (
+      signed.kind !== reviewed.kind
+      || signed.kind !== expectedKind
+      || JSON.stringify(transactionShape(signed)) !== JSON.stringify(transactionShape(reviewed))
+    ) {
+      throw error;
+    }
+    const signature = signed.kind === 'versioned'
+      ? signed.tx.signatures[signed.signerIndex]
+      : signed.tx.signatures[signed.signerIndex]?.signature;
+    const publicKey = new PublicKey(expectedWallet).toBytes();
+    if (!signature || signature.length !== nacl.sign.signatureLength || !nacl.sign.detached.verify(signed.message, signature, publicKey)) {
+      throw new SanctumError('INVALID_SIGNATURE', 'The connected wallet did not sign this Sanctum order', 400);
+    }
+    return { inspected: signed, blockhashRefreshed: true };
+  }
+}
+
+async function defaultSignatureStatusReader(signature, { perRpcTimeoutMs = DEFAULT_SIGNATURE_RPC_TIMEOUT_MS } = {}) {
+  const urls = solanaRpcUrls();
+  if (urls.length === 0) throw new Error('Sanctum transaction confirmation failed: no Solana RPC endpoint is configured');
+  let lastError = null;
+  for (const rpcUrl of urls) {
+    try {
+      const connection = createSolanaConnection(Connection, rpcUrl, 'confirmed');
+      // eslint-disable-next-line no-await-in-loop
+      const result = await withTimeout(
+        connection.getSignatureStatuses([signature], { searchTransactionHistory: true }),
+        perRpcTimeoutMs,
+        () => new Error('Solana signature-status RPC timed out'),
+      );
+      const value = result?.value?.[0] || null;
+      if (value) {
+        return {
+          slot: Number(value.slot || 0) || null,
+          confirmations: value.confirmations,
+          confirmationStatus: value.confirmationStatus || null,
+          err: value.err || null,
+        };
+      }
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  // A null result is final only when every configured RPC answered. If even
+  // one endpoint failed, retain submission_unknown rather than risk a false
+  // terminal result during provider degradation.
+  if (lastError) throw lastError;
+  return null;
+}
+
 function safeLstMetadata(payload, configuredMint) {
   const candidates = Array.isArray(payload?.data)
     ? payload.data
@@ -234,6 +349,9 @@ function createSanctumService({
   pendingIntentLimit = process.env.SANCTUM_PENDING_INTENT_LIMIT,
   expiredIntentRetentionMs = process.env.SANCTUM_EXPIRED_INTENT_RETENTION_MS,
   orderPayloadRetentionMs = process.env.SANCTUM_ORDER_PAYLOAD_RETENTION_MS,
+  signatureStatusReader = defaultSignatureStatusReader,
+  signatureRpcTimeoutMs = DEFAULT_SIGNATURE_RPC_TIMEOUT_MS,
+  signatureStatusTimeoutMs = DEFAULT_SIGNATURE_STATUS_TIMEOUT_MS,
   now = () => Date.now(),
   randomUUID = () => crypto.randomUUID(),
 } = {}) {
@@ -252,6 +370,8 @@ function createSanctumService({
   }
   const configured = !!normalizedApiKey && !!normalizedMint && !configError;
   const safePendingIntentLimit = positiveInteger(pendingIntentLimit, 3);
+  const safeSignatureRpcTimeoutMs = positiveInteger(signatureRpcTimeoutMs, DEFAULT_SIGNATURE_RPC_TIMEOUT_MS);
+  const safeSignatureStatusTimeoutMs = positiveInteger(signatureStatusTimeoutMs, DEFAULT_SIGNATURE_STATUS_TIMEOUT_MS);
   const safeExpiredIntentRetentionMs = Math.max(
     24 * 60 * 60 * 1000,
     positiveInteger(expiredIntentRetentionMs, 7 * 24 * 60 * 60 * 1000),
@@ -289,7 +409,11 @@ function createSanctumService({
           .split(normalizedApiKey).join('[redacted]')
           .replace(/apiKey=[^&\s]+/gi, 'apiKey=[redacted]');
         throw new SanctumError(
-          response.status === 429 ? 'UPSTREAM_RATE_LIMIT' : 'UPSTREAM_ERROR',
+          response.status === 429
+            ? 'UPSTREAM_RATE_LIMIT'
+            : response.status >= 500
+              ? 'UPSTREAM_SERVER_ERROR'
+              : 'UPSTREAM_ERROR',
           upstreamMessage,
           status,
         );
@@ -377,7 +501,19 @@ function createSanctumService({
     const stamp = now();
     db.prepare(`
       UPDATE sanctum_order_intents
-      SET status = 'expired', last_error = COALESCE(last_error, 'Order expired')
+      SET status = 'submission_unknown',
+          last_error = COALESCE(last_error, 'Submission interrupted before Sanctum responded'),
+          last_error_code = COALESCE(last_error_code, 'SUBMISSION_INTERRUPTED'),
+          last_error_stage = COALESCE(last_error_stage, 'broadcast')
+      WHERE status = 'executing'
+        AND execution_started_at <= datetime('now', ?)
+    `).run(`-${EXECUTION_STALE_SECONDS} seconds`);
+    db.prepare(`
+      UPDATE sanctum_order_intents
+      SET status = 'expired',
+          last_error = COALESCE(last_error, 'Order expired'),
+          last_error_code = COALESCE(last_error_code, 'ORDER_EXPIRED'),
+          last_error_stage = COALESCE(last_error_stage, 'quote')
       WHERE status = 'pending' AND expires_at_ms <= ?
     `).run(stamp);
     db.prepare(`
@@ -387,10 +523,31 @@ function createSanctumService({
     db.prepare(`
       UPDATE sanctum_order_intents
       SET order_json = '{}'
-      WHERE status = 'consumed'
+      WHERE status IN ('consumed', 'confirmed', 'failed')
         AND order_json <> '{}'
         AND expires_at_ms < ?
     `).run(stamp - safeOrderPayloadRetentionMs);
+  }
+
+  async function getLatestActiveOrder({ playerId }) {
+    cleanupExpiredIntents();
+    const player = String(playerId || '').trim();
+    if (!player) throw new SanctumError('AUTH_REQUIRED', 'Authentication is required', 401);
+    const rows = db.prepare(`
+      SELECT *
+      FROM sanctum_order_intents
+      WHERE player_id = ? AND status IN ('executing', 'submission_unknown', 'submitted')
+      ORDER BY created_at DESC, rowid DESC
+    `).all(player);
+    for (const row of rows) {
+      let view = orderStatusView(row);
+      if (row.tx_signature) {
+        // eslint-disable-next-line no-await-in-loop
+        view = await getOrderStatus({ playerId: player, orderId: row.id });
+      }
+      if (['executing', 'submission_unknown', 'submitted'].includes(view.status)) return view;
+    }
+    return null;
   }
 
   async function createOrder({ playerId, wallet, amountSol, amount, direction: directionInput, slippageBps }) {
@@ -403,10 +560,18 @@ function createSanctumService({
     const outputMint = direction === 'stake' ? normalizedMint : WRAPPED_SOL_MINT;
     const inputAmount = parseSolToLamports(amount ?? amountSol, direction === 'stake' ? 'SOL' : 'clashSOL');
     const slippage = parseSlippageBps(slippageBps);
+    const activeSubmission = await getLatestActiveOrder({ playerId: player });
+    if (activeSubmission) {
+      throw new SanctumError(
+        'SWAP_IN_PROGRESS',
+        'An existing clashSOL swap is still being tracked. Wait for its final status before starting another.',
+        409,
+      );
+    }
     const pending = db.prepare(`
       SELECT COUNT(*) AS count
       FROM sanctum_order_intents
-      WHERE player_id = ? AND status IN ('pending', 'executing')
+      WHERE player_id = ? AND status = 'pending'
     `).get(player);
     if (Number(pending?.count || 0) >= safePendingIntentLimit) {
       throw new SanctumError(
@@ -480,6 +645,113 @@ function createSanctumService({
     };
   }
 
+  function orderStatusView(row, { rpcUnavailable = false } = {}) {
+    const status = row.status === 'consumed' ? 'submitted' : row.status;
+    const stage = status === 'pending'
+      ? 'wallet_signature'
+      : status === 'executing'
+        ? 'broadcast'
+        : status === 'submission_unknown'
+          ? 'reconciliation'
+          : status === 'submitted'
+            ? 'on_chain_confirmation'
+            : status === 'confirmed'
+              ? 'balance_refresh'
+              : status === 'expired'
+                ? 'quote'
+                : 'failed';
+    return {
+      orderId: row.id,
+      status,
+      stage,
+      direction: row.direction || 'stake',
+      wallet: row.wallet,
+      inputAmount: row.input_amount,
+      quotedOutputAmount: row.output_amount,
+      expiresAtMs: Number(row.expires_at_ms),
+      txSignature: row.tx_signature || null,
+      signature: row.tx_signature || null,
+      explorerUrl: row.tx_signature ? `https://solscan.io/tx/${row.tx_signature}` : null,
+      confirmationStatus: row.confirmation_status || null,
+      slot: row.confirmation_slot == null ? null : Number(row.confirmation_slot),
+      submittedAt: row.submitted_at || row.consumed_at || null,
+      confirmedAt: row.confirmed_at || null,
+      rpcUnavailable,
+      error: row.last_error ? {
+        code: row.last_error_code || 'SWAP_FAILED',
+        message: row.last_error,
+        stage: row.last_error_stage || 'unknown',
+        retryable: ['UPSTREAM_TIMEOUT', 'UPSTREAM_UNAVAILABLE', 'UPSTREAM_SERVER_ERROR', 'CONFIRMATION_UNAVAILABLE'].includes(row.last_error_code),
+      } : null,
+    };
+  }
+
+  async function getOrderStatus({ playerId, orderId, refresh = true }) {
+    cleanupExpiredIntents();
+    const player = String(playerId || '').trim();
+    const id = String(orderId || '').trim();
+    let row = db.prepare('SELECT * FROM sanctum_order_intents WHERE id = ? AND player_id = ? LIMIT 1').get(id, player);
+    if (!row) throw new SanctumError('ORDER_NOT_FOUND', 'Sanctum order was not found', 404);
+    if (!refresh || !row.tx_signature || !['executing', 'submission_unknown', 'submitted', 'consumed'].includes(row.status)) {
+      return orderStatusView(row);
+    }
+    let chainStatus;
+    try {
+      chainStatus = await withTimeout(
+        Promise.resolve().then(() => signatureStatusReader(row.tx_signature, {
+          perRpcTimeoutMs: safeSignatureRpcTimeoutMs,
+        })),
+        safeSignatureStatusTimeoutMs,
+        () => new Error('Solana transaction reconciliation timed out'),
+      );
+    } catch {
+      return orderStatusView(row, { rpcUnavailable: true });
+    }
+    if (!chainStatus) {
+      // Only a successful on-chain lookup may terminalize an uncertain
+      // submission. Cleanup never guesses while RPC is unavailable. Waiting
+      // beyond the quote lifetime plus the reconciliation grace also ensures
+      // the transaction's recent blockhash can no longer land later.
+      if (['submission_unknown', 'submitted'].includes(row.status) && Number(row.expires_at_ms) < now() - UNKNOWN_RECONCILE_GRACE_MS) {
+        db.prepare(`
+          UPDATE sanctum_order_intents
+          SET status = 'failed',
+              last_error = 'No Solana transaction was found after the reconciliation window ended',
+              last_error_code = 'SUBMISSION_NOT_FOUND',
+              last_error_stage = 'reconciliation'
+          WHERE id = ? AND player_id = ? AND status IN ('submission_unknown', 'submitted')
+        `).run(id, player);
+        row = db.prepare('SELECT * FROM sanctum_order_intents WHERE id = ? AND player_id = ? LIMIT 1').get(id, player);
+      }
+      return orderStatusView(row);
+    }
+    if (chainStatus.err) {
+      db.prepare(`
+        UPDATE sanctum_order_intents
+        SET status = 'failed', confirmation_status = 'failed', confirmation_slot = ?,
+            last_error = 'The Solana transaction failed on-chain',
+            last_error_code = 'ONCHAIN_FAILED', last_error_stage = 'on_chain'
+        WHERE id = ? AND player_id = ?
+      `).run(chainStatus.slot, id, player);
+    } else if (['confirmed', 'finalized'].includes(chainStatus.confirmationStatus)) {
+      db.prepare(`
+        UPDATE sanctum_order_intents
+        SET status = 'confirmed', confirmation_status = ?, confirmation_slot = ?,
+            confirmed_at = COALESCE(confirmed_at, datetime('now')),
+            last_error = NULL, last_error_code = NULL, last_error_stage = NULL
+        WHERE id = ? AND player_id = ?
+      `).run(chainStatus.confirmationStatus, chainStatus.slot, id, player);
+    } else {
+      db.prepare(`
+        UPDATE sanctum_order_intents
+        SET status = 'submitted', confirmation_status = ?, confirmation_slot = ?
+        WHERE id = ? AND player_id = ?
+      `).run(chainStatus.confirmationStatus || 'processed', chainStatus.slot, id, player);
+    }
+    row = db.prepare('SELECT * FROM sanctum_order_intents WHERE id = ? AND player_id = ? LIMIT 1').get(id, player);
+    return orderStatusView(row);
+  }
+
   async function executeOrder({ playerId, orderId, signedTransaction }) {
     cleanupExpiredIntents();
     const player = String(playerId || '').trim();
@@ -488,8 +760,8 @@ function createSanctumService({
     if (!row || row.player_id !== player) {
       throw new SanctumError('ORDER_NOT_FOUND', 'Sanctum order was not found', 404);
     }
-    if (row.status === 'consumed') {
-      throw new SanctumError('ORDER_ALREADY_EXECUTED', 'This Sanctum order was already executed', 409);
+    if (['consumed', 'submitted', 'confirmed', 'submission_unknown'].includes(row.status)) {
+      return getOrderStatus({ playerId: player, orderId: id });
     }
     if (row.status === 'executing') {
       throw new SanctumError('ORDER_EXECUTING', 'This Sanctum order is already being submitted', 409);
@@ -497,28 +769,69 @@ function createSanctumService({
     if (row.status === 'expired' || Number(row.expires_at_ms) <= now()) {
       throw new SanctumError('ORDER_EXPIRED', 'This Sanctum quote expired. Request a new one.', 410);
     }
-    verifySignedTransaction(signedTransaction, row.wallet, row.tx_kind, row.unsigned_tx_hash);
+    let verified;
+    let reviewedOrder;
+    try {
+      reviewedOrder = JSON.parse(row.order_json);
+      verified = verifyReviewedSignedTransaction(
+        signedTransaction,
+        row.wallet,
+        row.tx_kind,
+        row.unsigned_tx_hash,
+        reviewedOrder?.tx,
+      );
+    } catch (error) {
+      db.prepare(`
+        UPDATE sanctum_order_intents
+        SET status = 'failed', last_error = ?, last_error_code = ?, last_error_stage = 'signature_validation'
+        WHERE id = ? AND player_id = ? AND status = 'pending'
+      `).run(
+        String(error?.message || 'Signed transaction validation failed').slice(0, 300),
+        String(error?.code || 'INVALID_TRANSACTION').slice(0, 80),
+        id,
+        player,
+      );
+      throw error;
+    }
+    // Solana identifies a transaction by its first signature, which is not
+    // necessarily the connected wallet's signature on a multi-signer route.
+    const transactionSignature = verified.inspected.kind === 'versioned'
+      ? verified.inspected.tx.signatures[0]
+      : verified.inspected.tx.signatures[0]?.signature;
+    if (
+      !transactionSignature
+      || transactionSignature.length !== nacl.sign.signatureLength
+      || Buffer.from(transactionSignature).every(byte => byte === 0)
+    ) {
+      throw new SanctumError('INVALID_SIGNATURE', 'The Sanctum transaction is missing its primary signature', 400);
+    }
+    const derivedSignature = bs58.encode(Buffer.from(transactionSignature));
     const claimed = db.prepare(`
       UPDATE sanctum_order_intents
-      SET status = 'executing', execution_started_at = datetime('now'), last_error = NULL
+      SET status = 'executing', execution_started_at = datetime('now'),
+          tx_signature = ?, last_error = NULL, last_error_code = NULL, last_error_stage = NULL
       WHERE id = ? AND player_id = ? AND status = 'pending' AND expires_at_ms > ?
-    `).run(id, player, now());
+    `).run(derivedSignature, id, player, now());
     if (claimed.changes !== 1) {
       throw new SanctumError('ORDER_CONFLICT', 'This Sanctum order changed state. Request a new quote.', 409);
     }
     try {
-      const orderResponse = JSON.parse(row.order_json);
       const result = await request('/swap/token/execute', {
         method: 'POST',
-        body: { signedTx: signedTransaction, orderResponse },
+        body: { signedTx: signedTransaction, orderResponse: reviewedOrder },
       });
       const signature = String(result?.signature || '').trim();
       if (!VALID_SIGNATURE_RE.test(signature) || bs58.decode(signature).length !== 64) {
         throw new SanctumError('INVALID_UPSTREAM_RESPONSE', 'Sanctum returned an invalid transaction signature', 502);
       }
+      if (signature !== derivedSignature) {
+        throw new SanctumError('SIGNATURE_MISMATCH', 'Sanctum returned a different transaction signature', 502);
+      }
       db.prepare(`
         UPDATE sanctum_order_intents
-        SET status = 'consumed', tx_signature = ?, consumed_at = datetime('now'), last_error = NULL
+        SET status = 'submitted', tx_signature = ?, submitted_at = datetime('now'),
+            consumed_at = datetime('now'), confirmation_status = 'processed',
+            last_error = NULL, last_error_code = NULL, last_error_stage = NULL
         WHERE id = ? AND status = 'executing'
       `).run(signature, id);
       const linked = db.prepare(`
@@ -539,13 +852,20 @@ function createSanctumService({
           WHERE player_id = ? AND chain_type = 'solana' AND address = ?
         `).run(player, row.wallet);
       }
-      return { signature, orderId: id };
+      return getOrderStatus({ playerId: player, orderId: id });
     } catch (error) {
+      const uncertain = ['UPSTREAM_TIMEOUT', 'UPSTREAM_UNAVAILABLE', 'UPSTREAM_SERVER_ERROR'].includes(error?.code);
       db.prepare(`
         UPDATE sanctum_order_intents
-        SET status = 'pending', execution_started_at = NULL, last_error = ?
-        WHERE id = ? AND status = 'executing' AND expires_at_ms > ?
-      `).run(String(error?.message || 'Sanctum execution failed').slice(0, 300), id, now());
+        SET status = ?, execution_started_at = NULL, last_error = ?,
+            last_error_code = ?, last_error_stage = 'broadcast'
+        WHERE id = ? AND status = 'executing'
+      `).run(
+        uncertain ? 'submission_unknown' : 'failed',
+        String(error?.message || 'Sanctum execution failed').slice(0, 300),
+        String(error?.code || 'SWAP_EXECUTION_FAILED').slice(0, 80),
+        id,
+      );
       throw error;
     }
   }
@@ -555,6 +875,8 @@ function createSanctumService({
     getLocalStatus,
     createOrder,
     executeOrder,
+    getOrderStatus,
+    getLatestActiveOrder,
     configured,
   };
 }
@@ -568,4 +890,5 @@ module.exports = {
   parseSolToLamports,
   normalizeSwapDirection,
   verifySignedTransaction,
+  verifyReviewedSignedTransaction,
 };

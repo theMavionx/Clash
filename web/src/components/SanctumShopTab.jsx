@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useOptionalPrivy } from './PrivyAuthProvider';
 import { pickPrivySolanaWallet } from '../lib/privySolanaWallet';
@@ -9,8 +9,10 @@ import {
   decodeSanctumTransaction,
   executeClashSolOrder,
   formatTokenAtomics,
+  getClashSolActiveOrder,
   getClashSolBalances,
   getClashSolHistory,
+  getClashSolOrderStatus,
   getClashSolRewardStatus,
   getClashSolStatus,
   linkClashSolRewardWallet,
@@ -20,6 +22,154 @@ import './SanctumShopTab.css';
 
 const SOLSCAN_TOKEN_URL = 'https://solscan.io/token/';
 const SANCTUM_EXPLORE_URL = 'https://app.sanctum.so/explore/clashSOL';
+const ACTIVE_SWAP_KEY = 'clash:sanctum:active-swap:';
+const SWAP_TERMINAL_STATES = new Set(['success', 'failed_before_broadcast', 'failed_on_chain', 'expired']);
+const SWAP_POLL_STATES = new Set(['broadcasting', 'submission_unknown', 'submitted', 'confirming']);
+const BALANCE_REFRESH_TIMEOUT_MS = 20_000;
+
+const SWAP_STEPS = [
+  { id: 'wallet', label: 'Confirm in wallet', hint: 'Review and sign the exact swap.' },
+  { id: 'submit', label: 'Submit to Solana', hint: 'Sanctum broadcasts the signed transaction.' },
+  { id: 'confirm', label: 'Confirm on-chain', hint: 'Wait for Solana confirmation.' },
+  { id: 'balance', label: 'Update balances', hint: 'Refresh SOL and clashSOL in Clash.' },
+];
+
+function progressRank(state) {
+  if (['wallet_prompt'].includes(state)) return 0;
+  if (['signed', 'broadcasting', 'submission_unknown'].includes(state)) return 1;
+  if (['submitted', 'confirming'].includes(state)) return 2;
+  if (['refreshing'].includes(state)) return 3;
+  if (state === 'success') return 4;
+  return -1;
+}
+
+function failedProgressRank(progress) {
+  const stage = String(progress?.error?.stage || progress?.stage || '');
+  if (stage === 'wallet_signature' || stage === 'quote') return 0;
+  if (stage === 'on_chain') return 2;
+  if (stage === 'balance_refresh') return 3;
+  return 1;
+}
+
+function swapProgressMessage(progress) {
+  if (!progress) return '';
+  if (progress.status === 'wallet_prompt') return 'Approve the reviewed transaction in your Solana wallet.';
+  if (progress.status === 'signed') return 'Signature received. Preparing the transaction for submission.';
+  if (progress.status === 'broadcasting') return 'Sending your signed transaction through Sanctum.';
+  if (progress.status === 'submission_unknown') return 'Clash is checking Solana for this transaction. Do not submit another swap.';
+  if (['submitted', 'confirming'].includes(progress.status)) return 'Transaction submitted. Waiting for Solana confirmation.';
+  if (progress.status === 'refreshing') return 'Confirmed on-chain. Updating the balances shown in Clash.';
+  if (progress.status === 'success') {
+    return progress.balanceRefreshDelayed
+      ? 'The swap is confirmed. Balance indexing is taking longer than usual and will update automatically.'
+      : 'The on-chain swap and balance refresh are complete.';
+  }
+  if (progress.status === 'expired') return 'No transaction was sent. Request a fresh quote to try again.';
+  if (progress.status?.startsWith('failed')) return progress.error?.message || 'No new swap was sent.';
+  return 'Swap status updated.';
+}
+
+function plainSwapError(error, fallback = 'The swap could not be completed.') {
+  const code = String(error?.code || '').toUpperCase();
+  if (/REJECT|DECLIN|CANCEL/.test(String(error?.message || ''))) return 'The signature request was cancelled in your wallet.';
+  if (code === 'ORDER_EXPIRED') return 'This quote expired before it could be submitted.';
+  if (['INVALID_SIGNATURE', 'INVALID_TRANSACTION', 'TRANSACTION_CHANGED'].includes(code)) {
+    return 'The signed transaction did not match the quote. No swap was sent.';
+  }
+  if (code === 'ONCHAIN_FAILED') return 'Solana confirmed that this transaction failed on-chain.';
+  if (['UPSTREAM_TIMEOUT', 'UPSTREAM_UNAVAILABLE', 'CONFIRMATION_UNAVAILABLE'].includes(code)) {
+    return 'Submission status is uncertain. Do not send another swap while Clash checks Solana.';
+  }
+  return error?.message || fallback;
+}
+
+function errorDetails(error, fallbackStage = 'unknown') {
+  if (!error) return null;
+  return {
+    message: plainSwapError(error),
+    technicalMessage: error?.message || null,
+    code: error?.code || 'SWAP_FAILED',
+    stage: error?.stage || fallbackStage,
+    httpStatus: error?.status || null,
+    retryable: error?.retryable === true,
+    details: error?.details || null,
+  };
+}
+
+function progressFromServer(serverOrder, current = {}) {
+  const serverStatus = String(serverOrder?.status || '').toLowerCase();
+  let status = current.status || 'wallet_prompt';
+  if (serverStatus === 'pending') {
+    status = ['signed', 'failed_before_broadcast'].includes(current.status) ? current.status : 'wallet_prompt';
+  }
+  else if (serverStatus === 'executing') status = 'broadcasting';
+  else if (serverStatus === 'submission_unknown') status = 'submission_unknown';
+  else if (serverStatus === 'submitted') status = 'confirming';
+  else if (serverStatus === 'confirmed') status = 'refreshing';
+  else if (serverStatus === 'expired') status = 'expired';
+  else if (serverStatus === 'failed') status = serverOrder?.error?.stage === 'on_chain' ? 'failed_on_chain' : 'failed_before_broadcast';
+  return {
+    ...current,
+    ...serverOrder,
+    status,
+    signature: serverOrder?.signature || serverOrder?.txSignature || current.signature || null,
+    explorerUrl: serverOrder?.explorerUrl || current.explorerUrl || null,
+    error: serverOrder?.error
+      ? errorDetails(serverOrder.error, serverOrder.stage)
+      : (serverStatus === 'pending' && current.status === 'failed_before_broadcast' ? current.error || null : null),
+  };
+}
+
+function balanceField(balances, direction, side) {
+  const output = side === 'output';
+  const clashSol = direction === 'stake' ? output : !output;
+  return String(clashSol ? balances?.clashsol_atomics || '0' : balances?.sol_atomics || '0');
+}
+
+function positiveBalanceDelta(beforeBalances, afterBalances, direction) {
+  if (!beforeBalances || !afterBalances) return null;
+  try {
+    const before = BigInt(balanceField(beforeBalances, direction, 'output'));
+    const after = BigInt(balanceField(afterBalances, direction, 'output'));
+    return after > before ? after - before : null;
+  } catch {
+    return null;
+  }
+}
+
+function resumableOrderSummary(order) {
+  if (!order?.orderId) return null;
+  return {
+    orderId: order.orderId,
+    expiresAtMs: order.expiresAtMs,
+    inputMint: order.inputMint,
+    outputMint: order.outputMint,
+    inputAmount: order.inputAmount,
+    outputAmount: order.outputAmount,
+    slippageBps: order.slippageBps,
+    route: order.route,
+  };
+}
+
+function keepFocusInsideDialog(event) {
+  if (event.key !== 'Tab') return;
+  const focusable = [...event.currentTarget.querySelectorAll('button:not(:disabled), a[href], summary, [tabindex]:not([tabindex="-1"])')]
+    .filter((element) => !element.hasAttribute('hidden'));
+  if (!focusable.length) {
+    event.preventDefault();
+    event.currentTarget.focus();
+    return;
+  }
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}
 
 function shortAddress(value) {
   const text = String(value || '');
@@ -100,6 +250,11 @@ export default function SanctumShopTab({
   const [phase, setPhase] = useState('idle');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [swapProgress, setSwapProgress] = useState(null);
+  const [progressOpen, setProgressOpen] = useState(false);
+  const progressDialogRef = useRef(null);
+  const progressTriggerRef = useRef(null);
+  const balanceRefreshStartedRef = useRef(0);
 
   const privyWallet = useMemo(() => pickPrivySolanaWallet(privy), [privy]);
   const walletAddress = solAddress || solWallet?.publicKey?.toBase58?.() || '';
@@ -110,6 +265,14 @@ export default function SanctumShopTab({
   const rewardsEnabled = reward?.settings?.current?.enabled !== false;
   const claimableNow = Number(reward?.claimable_now || 0);
   const isLinkedWallet = reward?.linked && reward?.wallet === walletAddress;
+  const activeSwapStorageKey = walletAddress ? `${ACTIVE_SWAP_KEY}${walletAddress}` : '';
+  const activeProgressOrderId = swapProgress?.orderId || '';
+  const activeProgressStatus = swapProgress?.status || '';
+  const activeProgressDirection = swapProgress?.direction || 'stake';
+  const activeProgressBalanceBefore = swapProgress?.balanceBefore || null;
+  const activeProgressWallet = swapProgress?.wallet || walletAddress;
+  const activeSwapNonTerminal = !!swapProgress && !SWAP_TERMINAL_STATES.has(activeProgressStatus);
+  const swapControlsDisabled = busy || activeSwapNonTerminal;
 
   useEffect(() => {
     onClaimReadyChange?.(pendingGold > 0);
@@ -143,6 +306,10 @@ export default function SanctumShopTab({
         setError(failed.reason?.message || 'Some clashSOL data could not be refreshed');
       }
       if (!quiet) setPhase('idle');
+      return {
+        balances: balanceResult.status === 'fulfilled' ? balanceResult.value : null,
+        reward: rewardResult.status === 'fulfilled' ? rewardResult.value : null,
+      };
     } catch (loadError) {
       if (loadError?.name === 'AbortError') return;
       setError(loadError?.message || 'Could not load clashSOL');
@@ -171,20 +338,182 @@ export default function SanctumShopTab({
     }
   }, [busy, historyCursor, sessionToken]);
 
-  useEffect(() => {
+  const discardQuote = useCallback(() => {
     setOrder(null);
     setNotice('');
     setError('');
     if (!busy) setPhase('idle');
-  // A quote is bound to its exact input, direction, and signer.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [amount, direction, walletAddress]);
+  }, [busy]);
 
   const connect = useCallback(() => {
     onConnect?.();
   }, [onConnect]);
 
+  const clearSwapProgress = useCallback(() => {
+    if (activeSwapStorageKey) localStorage.removeItem(activeSwapStorageKey);
+    setSwapProgress(null);
+    setProgressOpen(false);
+    balanceRefreshStartedRef.current = 0;
+    window.requestAnimationFrame(() => progressTriggerRef.current?.focus?.());
+  }, [activeSwapStorageKey]);
+
+  useEffect(() => {
+    if (!activeSwapStorageKey || !swapProgress || swapProgress.wallet !== walletAddress) return;
+    localStorage.setItem(activeSwapStorageKey, JSON.stringify({
+      wallet: walletAddress,
+      order: resumableOrderSummary(order),
+      progress: swapProgress,
+    }));
+  }, [activeSwapStorageKey, order, swapProgress, walletAddress]);
+
+  useEffect(() => {
+    if (!activeSwapStorageKey || !sessionToken) return undefined;
+    let stored;
+    try { stored = JSON.parse(localStorage.getItem(activeSwapStorageKey) || 'null'); } catch { stored = null; }
+    if (!stored?.progress?.orderId || stored.wallet !== walletAddress) {
+      setSwapProgress(null);
+      setProgressOpen(false);
+      const controller = new AbortController();
+      getClashSolActiveOrder({ token: sessionToken, signal: controller.signal })
+        .then(({ order: activeOrder } = {}) => {
+          if (!activeOrder?.orderId) return;
+          const recovered = progressFromServer(activeOrder, {
+            orderId: activeOrder.orderId,
+            direction: activeOrder.direction || 'stake',
+            inputAmount: activeOrder.inputAmount,
+            quotedOutputAmount: activeOrder.quotedOutputAmount,
+            wallet: activeOrder.wallet,
+          });
+          setOrder(null);
+          setSwapProgress(recovered);
+          setProgressOpen(true);
+          setDirection(recovered.direction || 'stake');
+          if (recovered.inputAmount) setAmount(formatTokenAtomics(recovered.inputAmount, 9, 9));
+        })
+        .catch((restoreError) => {
+          if (restoreError?.name !== 'AbortError') setError(restoreError?.message || 'Could not restore the active swap');
+        });
+      return () => controller.abort();
+    }
+    setOrder(null);
+    setSwapProgress(stored.progress);
+    setProgressOpen(true);
+    if (stored.progress?.direction) setDirection(stored.progress.direction);
+    if (stored.order?.inputAmount) setAmount(formatTokenAtomics(stored.order.inputAmount, 9, 9));
+    const controller = new AbortController();
+    getClashSolOrderStatus({ orderId: stored.progress.orderId, token: sessionToken, signal: controller.signal })
+      .then((serverOrder) => setSwapProgress((current) => {
+        const next = progressFromServer(serverOrder, current || stored.progress);
+        if (String(serverOrder?.status || '').toLowerCase() === 'pending') {
+          return {
+            ...next,
+            status: 'failed_before_broadcast',
+            error: errorDetails({
+              code: 'FRESH_QUOTE_REQUIRED',
+              message: 'This unsigned quote was not stored after reload. No transaction was sent; request a fresh quote.',
+              stage: 'quote',
+            }, 'quote'),
+          };
+        }
+        return next;
+      }))
+      .catch((restoreError) => {
+        if (restoreError?.name === 'AbortError') return;
+        setSwapProgress((current) => ({
+          ...(current || stored.progress),
+          status: 'failed_before_broadcast',
+          error: errorDetails(restoreError, 'restore'),
+        }));
+      });
+    return () => controller.abort();
+  }, [activeSwapStorageKey, sessionToken, walletAddress]);
+
+  useEffect(() => {
+    if (!progressOpen || !activeProgressOrderId) return undefined;
+    const previous = document.activeElement;
+    window.requestAnimationFrame(() => progressDialogRef.current?.focus?.());
+    return () => previous?.focus?.();
+  }, [activeProgressOrderId, progressOpen]);
+
+  useEffect(() => {
+    if (!sessionToken || !activeProgressOrderId || !SWAP_POLL_STATES.has(activeProgressStatus)) return undefined;
+    let cancelled = false;
+    let timer = 0;
+    const poll = async () => {
+      try {
+        const serverOrder = await getClashSolOrderStatus({ orderId: activeProgressOrderId, token: sessionToken });
+        if (cancelled) return;
+        setSwapProgress((current) => progressFromServer(serverOrder, current || { orderId: activeProgressOrderId, status: activeProgressStatus }));
+      } catch (pollError) {
+        if (cancelled || pollError?.name === 'AbortError') return;
+        setSwapProgress((current) => ({
+          ...(current || { orderId: activeProgressOrderId, status: activeProgressStatus }),
+          status: 'submission_unknown',
+          error: errorDetails({ ...pollError, retryable: true }, 'reconciliation'),
+        }));
+      } finally {
+        if (!cancelled) timer = window.setTimeout(poll, 2200);
+      }
+    };
+    timer = window.setTimeout(poll, 700);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [activeProgressOrderId, activeProgressStatus, sessionToken]);
+
+  useEffect(() => {
+    if (activeProgressStatus !== 'refreshing' || !activeProgressWallet || !sessionToken) return undefined;
+    let cancelled = false;
+    let timer = 0;
+    if (!balanceRefreshStartedRef.current) balanceRefreshStartedRef.current = Date.now();
+    const refresh = async () => {
+      try {
+        const nextBalances = await getClashSolBalances({ wallet: activeProgressWallet, token: sessionToken });
+        if (cancelled) return;
+        setBalances(nextBalances);
+        const before = BigInt(balanceField(activeProgressBalanceBefore, activeProgressDirection, 'output'));
+        const after = BigInt(balanceField(nextBalances, activeProgressDirection, 'output'));
+        const changed = !!activeProgressBalanceBefore && after > before;
+        const timedOut = Date.now() - balanceRefreshStartedRef.current >= BALANCE_REFRESH_TIMEOUT_MS;
+        if (changed || timedOut) {
+          setSwapProgress((current) => ({
+            ...current,
+            status: 'success',
+            balanceAfter: nextBalances,
+            balanceRefreshDelayed: !changed,
+          }));
+          await loadData({ quiet: true });
+          return;
+        }
+        timer = window.setTimeout(refresh, 1800);
+      } catch (refreshError) {
+        if (cancelled) return;
+        const timedOut = Date.now() - balanceRefreshStartedRef.current >= BALANCE_REFRESH_TIMEOUT_MS;
+        if (timedOut) {
+          setSwapProgress((current) => ({
+            ...current,
+            status: 'success',
+            balanceRefreshDelayed: true,
+            balanceRefreshError: refreshError?.message || 'Balance refresh is delayed',
+          }));
+        } else {
+          timer = window.setTimeout(refresh, 2200);
+        }
+      }
+    };
+    refresh();
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [activeProgressBalanceBefore, activeProgressDirection, activeProgressStatus, activeProgressWallet, loadData, sessionToken]);
+
   const reviewSwap = useCallback(async () => {
+    if (activeSwapNonTerminal) {
+      setProgressOpen(true);
+      return;
+    }
     if (!walletAddress || !solWallet?.signTransaction) {
       connect();
       return;
@@ -210,7 +539,7 @@ export default function SanctumShopTab({
       setPhase('idle');
       setError(swapError?.message || 'Could not create the Sanctum quote');
     }
-  }, [amount, connect, direction, sessionToken, solWallet, walletAddress]);
+  }, [activeSwapNonTerminal, amount, connect, direction, sessionToken, solWallet, walletAddress]);
 
   const executeSwap = useCallback(async () => {
     if (!order || !solWallet?.signTransaction) return;
@@ -221,26 +550,89 @@ export default function SanctumShopTab({
       return;
     }
     setError('');
+    setNotice('');
+    progressTriggerRef.current = document.activeElement;
+    const initialProgress = {
+      orderId: order.orderId,
+      wallet: walletAddress,
+      status: 'wallet_prompt',
+      stage: 'wallet_signature',
+      direction,
+      inputAmount: order.inputAmount,
+      quotedOutputAmount: order.outputAmount,
+      expiresAtMs: order.expiresAtMs,
+      route: order.route,
+      balanceBefore: balances,
+      signature: null,
+      explorerUrl: null,
+      error: null,
+    };
+    setSwapProgress(initialProgress);
+    setProgressOpen(true);
     setPhase('signing');
     try {
       const unsigned = decodeSanctumTransaction(order.transaction);
       const signed = await solWallet.signTransaction(unsigned);
+      setSwapProgress((current) => ({ ...current, status: 'signed', stage: 'broadcast' }));
       setPhase('submitting');
+      setSwapProgress((current) => ({ ...current, status: 'broadcasting', stage: 'broadcast' }));
       const result = await executeClashSolOrder({
         orderId: order.orderId,
         signedTransaction: serializeSignedSanctumTransaction(signed),
         token: sessionToken,
       });
-      setOrder(null);
       setPhase('idle');
-      setNotice(`Swap submitted · ${shortAddress(result.signature)}`);
-      await loadData({ quiet: true });
+      setSwapProgress((current) => progressFromServer(result, current || initialProgress));
     } catch (swapError) {
-      setPhase('review');
       const rejected = /reject|declin|cancel/i.test(String(swapError?.message || ''));
-      setError(rejected ? 'Transaction was cancelled in the wallet.' : (swapError?.message || 'Could not submit the swap'));
+      setPhase('idle');
+      if (rejected) {
+        setSwapProgress((current) => ({
+          ...(current || initialProgress),
+          status: 'failed_before_broadcast',
+          error: errorDetails({ ...swapError, message: 'The signature request was cancelled in your wallet.' }, 'wallet_signature'),
+        }));
+        return;
+      }
+      try {
+        const serverOrder = await getClashSolOrderStatus({ orderId: order.orderId, token: sessionToken });
+        setSwapProgress((current) => {
+          const reconciled = progressFromServer(serverOrder, current || initialProgress);
+          if (reconciled.status === 'wallet_prompt') {
+            return {
+              ...reconciled,
+              status: 'failed_before_broadcast',
+              error: errorDetails(swapError, 'broadcast'),
+            };
+          }
+          return reconciled;
+        });
+      } catch {
+        const uncertain = ['UPSTREAM_TIMEOUT', 'UPSTREAM_UNAVAILABLE', 'CONFIRMATION_UNAVAILABLE'].includes(swapError?.code)
+          || Number(swapError?.status) >= 500;
+        setSwapProgress((current) => ({
+          ...(current || initialProgress),
+          status: uncertain ? 'submission_unknown' : 'failed_before_broadcast',
+          error: errorDetails({ ...swapError, retryable: uncertain }, uncertain ? 'reconciliation' : 'broadcast'),
+        }));
+      }
     }
-  }, [loadData, order, sessionToken, solWallet]);
+  }, [balances, direction, order, sessionToken, solWallet, walletAddress]);
+
+  const requestFreshQuote = useCallback(async () => {
+    clearSwapProgress();
+    setOrder(null);
+    setPhase('idle');
+    await reviewSwap();
+  }, [clearSwapProgress, reviewSwap]);
+
+  const finishSwap = useCallback(() => {
+    const signature = swapProgress?.signature;
+    clearSwapProgress();
+    setOrder(null);
+    setPhase('idle');
+    setNotice(signature ? `Swap confirmed · ${shortAddress(signature)}` : 'Swap complete.');
+  }, [clearSwapProgress, swapProgress?.signature]);
 
   const signRewardMessage = useCallback(async (messageBytes) => {
     const adapterAddress = adapterWallet?.publicKey?.toBase58?.() || '';
@@ -309,9 +701,24 @@ export default function SanctumShopTab({
   const outputSymbol = direction === 'stake' ? 'clashSOL' : 'SOL';
   const availableInputAtomics = spendableAtomics(balances, direction);
   const availableInput = atomicsInput(availableInputAtomics);
+  const swapProgressRank = progressRank(swapProgress?.status);
+  const visibleProgressRank = swapProgressRank >= 0 ? swapProgressRank : failedProgressRank(swapProgress);
+  const receivedAtomics = positiveBalanceDelta(swapProgress?.balanceBefore, swapProgress?.balanceAfter, swapProgress?.direction);
+  const progressOutputSymbol = swapProgress?.direction === 'unstake' ? 'SOL' : 'clashSOL';
+  const progressInputSymbol = swapProgress?.direction === 'unstake' ? 'clashSOL' : 'SOL';
+  const progressTerminal = SWAP_TERMINAL_STATES.has(swapProgress?.status);
+  const progressAnnouncement = swapProgressMessage(swapProgress);
+  const minimizedProgressLabel = swapProgress?.status === 'success'
+    ? 'Swap confirmed'
+    : progressTerminal
+      ? 'Swap needs attention'
+      : swapProgress?.status === 'submission_unknown'
+        ? 'Checking swap status'
+        : 'Swap in progress';
 
   return (
     <section className="sanctum-shop" aria-label="clashSOL liquid staking and rewards">
+      <div className="sanctum-shop__live-region" aria-live="polite" aria-atomic="true">{progressAnnouncement}</div>
       <header className="sanctum-shop__hero">
         <div className="sanctum-shop__logo-wrap" aria-hidden="true">
           <div className="sanctum-shop__halo" />
@@ -361,6 +768,21 @@ export default function SanctumShopTab({
         ))}
       </nav>
 
+      {swapProgress && !progressOpen && (
+        <button
+          type="button"
+          className={`sanctum-swap-progress-chip${swapProgress.status === 'submission_unknown' ? ' is-warning' : ''}${progressTerminal ? ` is-terminal ${swapProgress.status === 'success' ? 'is-success' : 'is-error'}` : ''}`}
+          onClick={() => setProgressOpen(true)}
+          aria-label={`${minimizedProgressLabel}. Open swap details.`}
+        >
+          {!progressTerminal && swapProgress.status !== 'submission_unknown' && <span className="sanctum-swap-progress__spinner" aria-hidden="true" />}
+          {swapProgress.status === 'submission_unknown' && <span className="sanctum-swap-progress-chip__mark" aria-hidden="true">?</span>}
+          {progressTerminal && <span className="sanctum-swap-progress-chip__mark" aria-hidden="true">{swapProgress.status === 'success' ? '✓' : '!'}</span>}
+          <span><strong>{minimizedProgressLabel}</strong><small>{shortAddress(swapProgress.signature || swapProgress.orderId)}</small></span>
+          <span aria-hidden="true">Open</span>
+        </button>
+      )}
+
       {status?.degraded && (
         <div className="sanctum-shop__state">Live APY metadata is delayed. Swaps will retry Sanctum when you request a quote; rewards and history remain available.</div>
       )}
@@ -371,8 +793,8 @@ export default function SanctumShopTab({
       {section === 'swap' && available && (
         <div className="sanctum-shop__content">
           <div className="sanctum-shop__direction" aria-label="Swap direction">
-            <button type="button" aria-pressed={direction === 'stake'} className={direction === 'stake' ? 'is-active' : ''} onClick={() => setDirection('stake')}>SOL → clashSOL</button>
-            <button type="button" aria-pressed={direction === 'unstake'} className={direction === 'unstake' ? 'is-active' : ''} onClick={() => setDirection('unstake')}>clashSOL → SOL</button>
+            <button type="button" disabled={swapControlsDisabled} aria-pressed={direction === 'stake'} className={direction === 'stake' ? 'is-active' : ''} onClick={() => { discardQuote(); setDirection('stake'); }}>SOL → clashSOL</button>
+            <button type="button" disabled={swapControlsDisabled} aria-pressed={direction === 'unstake'} className={direction === 'unstake' ? 'is-active' : ''} onClick={() => { discardQuote(); setDirection('unstake'); }}>clashSOL → SOL</button>
           </div>
           <label className="sanctum-shop__field">
             <span>You pay · available {availableInput} {inputSymbol}{direction === 'stake' ? ' after 0.01 SOL fee reserve' : ''}</span>
@@ -381,11 +803,14 @@ export default function SanctumShopTab({
                 value={amount}
                 onChange={(event) => {
                   const next = event.target.value.trim();
-                  if (/^\d*(?:\.\d{0,9})?$/.test(next)) setAmount(next);
+                  if (/^\d*(?:\.\d{0,9})?$/.test(next)) {
+                    discardQuote();
+                    setAmount(next);
+                  }
                 }}
                 inputMode="decimal"
                 autoComplete="off"
-                disabled={busy}
+                disabled={swapControlsDisabled}
                 aria-label={`${inputSymbol} amount`}
               />
               <b><img src={inputSymbol === 'SOL' ? '/tokens/SOL.svg' : (status?.logoUri || '/icons/icon-192.png')} alt="" />{inputSymbol}</b>
@@ -396,8 +821,11 @@ export default function SanctumShopTab({
               <button
                 key={percent}
                 type="button"
-                disabled={busy || availableInputAtomics <= 0n}
-                onClick={() => setAmount(atomicsInput((availableInputAtomics * BigInt(percent)) / 100n))}
+                disabled={swapControlsDisabled || availableInputAtomics <= 0n}
+                onClick={() => {
+                  discardQuote();
+                  setAmount(atomicsInput((availableInputAtomics * BigInt(percent)) / 100n));
+                }}
               >
                 {percent === 100 ? 'MAX' : `${percent}%`}
               </button>
@@ -419,11 +847,11 @@ export default function SanctumShopTab({
               )}
             </div>
           ) : order ? (
-            <button type="button" className="sanctum-shop__primary" disabled={busy} onClick={executeSwap}>
+            <button type="button" className="sanctum-shop__primary" disabled={swapControlsDisabled} onClick={executeSwap}>
               {phase === 'signing' ? 'Confirm in wallet…' : phase === 'submitting' ? 'Submitting…' : `Swap for ${outputSymbol}`}
             </button>
           ) : (
-            <button type="button" className="sanctum-shop__primary" disabled={busy || !amount || Number(amount) <= 0} onClick={reviewSwap}>
+            <button type="button" className="sanctum-shop__primary" disabled={swapControlsDisabled || !amount || Number(amount) <= 0} onClick={reviewSwap}>
               {phase === 'quoting' ? 'Getting live quote…' : 'Review swap'}
             </button>
           )}
@@ -470,7 +898,18 @@ export default function SanctumShopTab({
             {history.length ? history.map((item) => (
               <div className="sanctum-shop__history-row" key={`${item.type}-${item.id}`}>
                 <span className={`sanctum-shop__history-icon is-${item.type}`} aria-hidden="true">{item.type === 'gold' ? 'G' : '↔'}</span>
-                <div><strong>{historyTitle(item)}</strong><small>{historyMeta(item)}</small></div>
+                <div>
+                  <strong>{historyTitle(item)}</strong>
+                  <small>{historyMeta(item)}</small>
+                  {item.last_error && (
+                    <small className="sanctum-shop__history-error">{item.last_error} · {item.last_error_stage || 'unknown stage'}</small>
+                  )}
+                  {item.tx_signature && (
+                    <a className="sanctum-shop__history-link" href={`https://solscan.io/tx/${item.tx_signature}`} target="_blank" rel="noreferrer">
+                      View receipt ↗
+                    </a>
+                  )}
+                </div>
                 <time>{displayDate(item.claimed_at || item.consumed_at || item.created_at)}</time>
               </div>
             )) : <div className="sanctum-shop__state">No clashSOL activity yet.</div>}
@@ -481,6 +920,142 @@ export default function SanctumShopTab({
             </button>
           )}
           <a className="sanctum-shop__secondary" href={SANCTUM_EXPLORE_URL} target="_blank" rel="noreferrer">Open clashSOL on Sanctum ↗</a>
+        </div>
+      )}
+
+      {progressOpen && swapProgress && (
+        <div className="sanctum-swap-progress__backdrop" role="presentation">
+          <div
+            ref={progressDialogRef}
+            className="sanctum-swap-progress"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="sanctum-swap-progress-title"
+            aria-describedby="sanctum-swap-progress-summary"
+            tabIndex={-1}
+            onKeyDown={(event) => {
+              keepFocusInsideDialog(event);
+              if (event.key === 'Escape' && progressTerminal) clearSwapProgress();
+            }}
+          >
+            <header className="sanctum-swap-progress__header">
+              <div>
+                <span className="sanctum-shop__eyebrow">SANCTUM SWAP</span>
+                <h3 id="sanctum-swap-progress-title">
+                  {swapProgress.status === 'success'
+                    ? 'Swap confirmed'
+                    : swapProgress.status === 'expired'
+                      ? 'Quote expired'
+                      : swapProgress.status?.startsWith('failed')
+                        ? 'Swap not completed'
+                        : swapProgress.status === 'submission_unknown'
+                          ? 'Checking submission'
+                          : 'Swap in progress'}
+                </h3>
+              </div>
+              <div className="sanctum-swap-progress__header-actions">
+                {!progressTerminal && (
+                  <button type="button" className="sanctum-swap-progress__minimize" onClick={() => setProgressOpen(false)} aria-label="Minimize swap progress">Minimize</button>
+                )}
+                {progressTerminal && (
+                  <button type="button" className="sanctum-swap-progress__close" onClick={clearSwapProgress} aria-label="Close swap progress">×</button>
+                )}
+              </div>
+            </header>
+
+            <div className="sanctum-swap-progress__body">
+              <p id="sanctum-swap-progress-summary" className="sanctum-swap-progress__summary">{progressAnnouncement}</p>
+
+            <ol className="sanctum-swap-progress__steps" aria-label="Swap progress">
+              {SWAP_STEPS.map((step, index) => {
+                const isFailedStep = swapProgress.status?.startsWith('failed') && index === visibleProgressRank;
+                const isComplete = swapProgress.status === 'success' || index < visibleProgressRank;
+                const isActive = !progressTerminal && index === visibleProgressRank;
+                const stateClass = isFailedStep ? 'is-failed' : isComplete ? 'is-complete' : isActive ? 'is-active' : '';
+                return (
+                  <li key={step.id} className={stateClass} aria-current={isActive ? 'step' : undefined}>
+                    <span className="sanctum-swap-progress__step-icon" aria-hidden="true">
+                      {isActive ? <span className="sanctum-swap-progress__spinner" /> : isFailedStep ? '!' : isComplete ? '✓' : index + 1}
+                    </span>
+                    <div><strong>{step.label}</strong><small>{step.hint}</small></div>
+                  </li>
+                );
+              })}
+            </ol>
+
+            <div className={`sanctum-swap-progress__receipt${swapProgress.status === 'success' ? ' is-success' : ''}`}>
+              <div><span>You pay</span><strong>{formatTokenAtomics(swapProgress.inputAmount, 9, 6)} {progressInputSymbol}</strong></div>
+              <div className={receivedAtomics != null ? 'is-received' : ''}>
+                <span>{receivedAtomics != null ? 'Received' : 'Quoted output'}</span>
+                <strong>{receivedAtomics != null ? formatTokenAtomics(receivedAtomics, 9, 6) : `≈ ${formatTokenAtomics(swapProgress.quotedOutputAmount, 9, 6)}`} {progressOutputSymbol}</strong>
+              </div>
+              {swapProgress.slot != null && <div><span>Solana slot</span><strong>{displayNumber(swapProgress.slot, 0)}</strong></div>}
+              {swapProgress.signature && <div><span>Signature</span><strong>{shortAddress(swapProgress.signature)}</strong></div>}
+              {swapProgress.balanceBefore && (
+                <div><span>{progressOutputSymbol} before</span><strong>{formatTokenAtomics(balanceField(swapProgress.balanceBefore, swapProgress.direction, 'output'), 9, 6)}</strong></div>
+              )}
+              {swapProgress.balanceAfter && (
+                <div><span>{progressOutputSymbol} after</span><strong>{formatTokenAtomics(balanceField(swapProgress.balanceAfter, swapProgress.direction, 'output'), 9, 6)}</strong></div>
+              )}
+            </div>
+
+            {swapProgress.status === 'submission_unknown' && (
+              <div className="sanctum-swap-progress__warning" role="status">
+                <span className="sanctum-swap-progress__warning-mark" aria-hidden="true">?</span>
+                <div>
+                  <strong>Submission status is still being checked</strong>
+                  <p>Do not submit another swap. Clash will keep checking this order against Solana.</p>
+                  {swapProgress.error && (
+                    <details>
+                      <summary>Technical details</summary>
+                      <dl>
+                        <div><dt>Code</dt><dd>{swapProgress.error.code}</dd></div>
+                        <div><dt>Stage</dt><dd>{swapProgress.error.stage}</dd></div>
+                        {swapProgress.error.httpStatus && <div><dt>HTTP</dt><dd>{swapProgress.error.httpStatus}</dd></div>}
+                        <div><dt>Order</dt><dd>{swapProgress.orderId}</dd></div>
+                      </dl>
+                    </details>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {swapProgress.error && swapProgress.status !== 'submission_unknown' && (
+              <div className="sanctum-swap-progress__error" role="alert">
+                <strong>{swapProgress.error.message}</strong>
+                <details>
+                  <summary>Technical details</summary>
+                  <dl>
+                    <div><dt>Code</dt><dd>{swapProgress.error.code}</dd></div>
+                    <div><dt>Stage</dt><dd>{swapProgress.error.stage}</dd></div>
+                    {swapProgress.error.httpStatus && <div><dt>HTTP</dt><dd>{swapProgress.error.httpStatus}</dd></div>}
+                    <div><dt>Order</dt><dd>{swapProgress.orderId}</dd></div>
+                    {swapProgress.error.technicalMessage && swapProgress.error.technicalMessage !== swapProgress.error.message && (
+                      <div><dt>Message</dt><dd>{swapProgress.error.technicalMessage}</dd></div>
+                    )}
+                  </dl>
+                </details>
+              </div>
+            )}
+            </div>
+
+            <footer className="sanctum-swap-progress__actions">
+              {!progressTerminal && (
+                <span className={`sanctum-swap-progress__footer-status${swapProgress.status === 'submission_unknown' ? ' is-warning' : ''}`}>
+                  {swapProgress.status === 'submission_unknown' ? 'Still checking — do not submit another swap' : 'Safe to minimize — status updates will continue'}
+                </span>
+              )}
+              {swapProgress.explorerUrl && (
+                <a className="sanctum-shop__secondary" href={swapProgress.explorerUrl} target="_blank" rel="noreferrer">View on Solscan ↗</a>
+              )}
+              {swapProgress.status === 'success' && (
+                <button type="button" className="sanctum-shop__primary" onClick={finishSwap}>Done</button>
+              )}
+              {['failed_before_broadcast', 'failed_on_chain', 'expired'].includes(swapProgress.status) && (
+                <button type="button" className="sanctum-shop__primary" onClick={requestFreshQuote}>Get a fresh quote</button>
+              )}
+            </footer>
+          </div>
         </div>
       )}
 

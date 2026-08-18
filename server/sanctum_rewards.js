@@ -495,7 +495,10 @@ function createSanctumRewardsService({
                claimed_gold, status, rpc_slot, claimed_at, NULL AS direction,
                NULL AS input_mint, NULL AS output_mint, NULL AS input_amount,
                NULL AS output_amount, NULL AS slippage_bps, NULL AS tx_signature,
-               NULL AS consumed_at, created_at,
+               NULL AS consumed_at, created_at, NULL AS last_error,
+               NULL AS last_error_code, NULL AS last_error_stage,
+               NULL AS submitted_at, NULL AS confirmed_at,
+               NULL AS confirmation_status, NULL AS confirmation_slot,
                COALESCE(claimed_at, created_at) AS event_at
         FROM sanctum_daily_rewards WHERE player_id = ?
         UNION ALL
@@ -504,7 +507,9 @@ function createSanctumRewardsService({
                NULL AS reward_gold, NULL AS claimed_gold, status, NULL AS rpc_slot,
                NULL AS claimed_at, direction, input_mint, output_mint, input_amount,
                output_amount, slippage_bps, tx_signature, consumed_at, created_at,
-               COALESCE(consumed_at, created_at) AS event_at
+               last_error, last_error_code, last_error_stage,
+               submitted_at, confirmed_at, confirmation_status, confirmation_slot,
+               COALESCE(confirmed_at, submitted_at, consumed_at, created_at) AS event_at
         FROM sanctum_order_intents WHERE player_id = ?
       )
       ORDER BY event_at DESC, type ASC, id DESC
@@ -570,8 +575,8 @@ function createSanctumRewardsService({
     const swaps = db.prepare(`
       SELECT
         COUNT(DISTINCT player_id) AS swap_users,
-        COUNT(CASE WHEN status = 'consumed' THEN 1 END) AS swaps_complete,
-        COUNT(CASE WHEN status IN ('pending', 'executing') THEN 1 END) AS swaps_pending,
+        COUNT(CASE WHEN status IN ('consumed', 'confirmed') THEN 1 END) AS swaps_complete,
+        COUNT(CASE WHEN status IN ('pending', 'executing', 'submission_unknown', 'submitted') THEN 1 END) AS swaps_pending,
         COUNT(CASE WHEN status = 'expired' THEN 1 END) AS swaps_expired
       FROM sanctum_order_intents
     `).get();
@@ -596,7 +601,9 @@ function createSanctumRewardsService({
     const swapHistory = db.prepare(`
       SELECT s.id, s.player_id, p.name AS player_name, s.wallet, s.direction,
              s.input_amount, s.output_amount, s.status, s.tx_signature,
-             s.consumed_at, s.created_at
+             s.last_error, s.last_error_code, s.last_error_stage,
+             s.confirmation_status, s.confirmation_slot,
+             s.submitted_at, s.confirmed_at, s.consumed_at, s.created_at
       FROM sanctum_order_intents s
       LEFT JOIN players p ON p.id = s.player_id
       ORDER BY s.created_at DESC
@@ -635,7 +642,9 @@ function createSanctumRewardsService({
         SELECT s.id, s.player_id, p.name AS player_name, s.wallet, s.direction,
                s.input_mint, s.output_mint, s.input_amount, s.output_amount,
                s.slippage_bps, s.status, s.tx_signature, s.last_error,
-               s.expires_at_ms, s.consumed_at, s.created_at
+               s.last_error_code, s.last_error_stage, s.confirmation_status,
+               s.confirmation_slot, s.expires_at_ms, s.submitted_at,
+               s.confirmed_at, s.consumed_at, s.created_at
         FROM sanctum_order_intents s
         LEFT JOIN players p ON p.id = s.player_id
         ORDER BY s.created_at DESC LIMIT ?

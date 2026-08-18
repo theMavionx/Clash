@@ -2,32 +2,56 @@ import { Buffer } from 'buffer';
 import { Transaction, VersionedTransaction } from '@solana/web3.js';
 
 export const CLASHSOL_SYMBOL = 'clashSOL';
+const API_REQUEST_TIMEOUT_MS = 8_000;
 
 function sessionToken(explicitToken) {
   return explicitToken || (typeof window !== 'undefined' ? window._playerToken : null) || '';
 }
 
-async function apiJson(url, { method = 'GET', token, body, signal } = {}) {
-  const response = await fetch(url, {
-    method,
-    signal,
-    cache: 'no-store',
-    headers: {
-      ...(body ? { 'content-type': 'application/json' } : {}),
-      ...(sessionToken(token) ? { 'x-token': sessionToken(token) } : {}),
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  let payload = null;
-  try { payload = await response.json(); } catch { /* handled below */ }
-  if (!response.ok) {
-    const error = new Error(payload?.error || `Request failed (HTTP ${response.status})`);
-    error.code = payload?.code || 'REQUEST_FAILED';
-    error.status = response.status;
-    error.details = payload?.details || null;
+async function apiJson(url, { method = 'GET', token, body, signal, timeoutMs = API_REQUEST_TIMEOUT_MS } = {}) {
+  const controller = new AbortController();
+  let timedOut = false;
+  const abortFromCaller = () => controller.abort();
+  if (signal?.aborted) controller.abort();
+  else signal?.addEventListener?.('abort', abortFromCaller, { once: true });
+  const timer = window.setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+  try {
+    const response = await fetch(url, {
+      method,
+      signal: controller.signal,
+      cache: 'no-store',
+      headers: {
+        ...(body ? { 'content-type': 'application/json' } : {}),
+        ...(sessionToken(token) ? { 'x-token': sessionToken(token) } : {}),
+      },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    let payload = null;
+    try { payload = await response.json(); } catch { /* handled below */ }
+    if (!response.ok) {
+      const error = new Error(payload?.error || `Request failed (HTTP ${response.status})`);
+      error.code = payload?.code || 'REQUEST_FAILED';
+      error.status = response.status;
+      error.details = payload?.details || null;
+      throw error;
+    }
+    return payload;
+  } catch (error) {
+    if (timedOut && error?.name === 'AbortError') {
+      const timeoutError = new Error('The swap status request timed out; tracking will continue automatically.');
+      timeoutError.name = 'TimeoutError';
+      timeoutError.code = 'CLIENT_TIMEOUT';
+      timeoutError.retryable = true;
+      throw timeoutError;
+    }
     throw error;
+  } finally {
+    window.clearTimeout(timer);
+    signal?.removeEventListener?.('abort', abortFromCaller);
   }
-  return payload;
 }
 
 export function decodeSanctumTransaction(base64) {
@@ -81,6 +105,19 @@ export function executeClashSolOrder({ orderId, signedTransaction, token, signal
     signal,
     body: { signedTransaction },
   });
+}
+
+export function getClashSolOrderStatus({ orderId, token, refresh = true, signal }) {
+  if (!orderId) throw new Error('A Sanctum order ID is required');
+  const params = new URLSearchParams({ refresh: refresh ? '1' : '0' });
+  return apiJson(`/api/sanctum/clashsol/orders/${encodeURIComponent(orderId)}?${params}`, {
+    token,
+    signal,
+  });
+}
+
+export function getClashSolActiveOrder({ token, signal } = {}) {
+  return apiJson('/api/sanctum/clashsol/orders/active', { token, signal });
 }
 
 export async function stakeSolForClashSol({ wallet, amountSol, slippageBps = 30, token, onOrder }) {

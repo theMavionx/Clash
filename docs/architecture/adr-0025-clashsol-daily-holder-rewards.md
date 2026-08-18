@@ -33,9 +33,22 @@ the two safe directions only:
 - the configured clashSOL mint to wrapped SOL.
 
 The server owns both mints, direction, stored upstream order, expiry, and
-unsigned message hash. The browser signs only the reviewed transaction. The
-server verifies the required signer, Ed25519 signature, and exact message hash
-before calling Sanctum execute. The API key is never exposed to Vite.
+unsigned message structure. The browser signs only the reviewed transaction.
+The server verifies the required signer and Ed25519 signature before calling
+Sanctum execute. An exact message hash is accepted directly. A wallet may
+refresh only the transaction's recent blockhash; in that case the server
+decodes both messages and requires identical headers, account keys,
+instructions, instruction data, and address-table lookups. Any other mutation
+is rejected. The API key is never exposed to Vite.
+
+Execution is tracked as a durable lifecycle: pending, executing,
+submission-unknown, submitted, confirmed, failed or expired. The primary
+Solana transaction signature is persisted before the execute call. HTTP 5xx,
+timeouts and temporary RPC disagreement remain submission-unknown instead of
+being presented as safe-to-retry failures. Authenticated status and latest
+active-order endpoints reconcile the ledger against multiple Solana RPCs, so
+an old browser session or cleared local storage can recover without submitting
+a duplicate swap.
 
 ### Completed-day reward observations
 
@@ -131,8 +144,11 @@ routes and remove the mint-level safety boundary accepted in ADR-0019.
   unique wallet/time-bucket key to skip duplicates.
 - Player reward/status reads use indexed player/day queries.
 - Admin metrics aggregate indexed snapshot and intent ledgers.
-- No polling loop runs in the browser; the Battle Shop refreshes on open,
-  explicit refresh, claim, and swap success.
+- While a swap is nonterminal, the Battle Shop uses bounded status polling and
+  a 20-second balance refresh, persists only a sanitized order summary, and
+  can minimize into a visible background-progress chip. Transaction bytes and
+  signed transactions are never stored in local storage. Terminal state stops
+  polling; reopening the shop can recover the latest active server order.
 
 ## Migration Plan
 

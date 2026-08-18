@@ -6436,6 +6436,42 @@ router.get('/sanctum/clashsol/history', auth, (req, res) => {
   }
 });
 
+router.get('/sanctum/clashsol/orders/active', auth, async (req, res) => {
+  try {
+    if (!enforceSanctumRateLimit(
+      req,
+      res,
+      sanctumBalanceRateLimiter,
+      'Too many clashSOL status refreshes. Try again shortly.',
+    )) return undefined;
+    const order = await sanctumService.getLatestActiveOrder({ playerId: req.player.id });
+    res.set('Cache-Control', 'no-store');
+    return res.json({ order });
+  } catch (error) {
+    return sendSanctumError(res, error);
+  }
+});
+
+router.get('/sanctum/clashsol/orders/:orderId', auth, async (req, res) => {
+  try {
+    if (!enforceSanctumRateLimit(
+      req,
+      res,
+      sanctumBalanceRateLimiter,
+      'Too many clashSOL status refreshes. Try again shortly.',
+    )) return undefined;
+    const result = await sanctumService.getOrderStatus({
+      playerId: req.player.id,
+      orderId: req.params.orderId,
+      refresh: req.query?.refresh !== '0',
+    });
+    res.set('Cache-Control', 'no-store');
+    return res.json(result);
+  } catch (error) {
+    return sendSanctumError(res, error);
+  }
+});
+
 router.get('/admin/sanctum', adminAuth, async (req, res) => {
   try {
     const metrics = sanctumRewardsService.adminMetrics({ limit: req.query?.limit });

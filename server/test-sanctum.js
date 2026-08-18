@@ -40,6 +40,12 @@ function makeDb() {
       tx_signature TEXT,
       consumed_at TEXT,
       last_error TEXT,
+      last_error_code TEXT,
+      last_error_stage TEXT,
+      submitted_at TEXT,
+      confirmed_at TEXT,
+      confirmation_status TEXT,
+      confirmation_slot INTEGER,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
     ALTER TABLE sanctum_order_intents ADD COLUMN direction TEXT NOT NULL DEFAULT 'stake';
@@ -69,6 +75,19 @@ function jsonResponse(status, payload) {
 function makeUnsignedTransaction(wallet) {
   const message = new TransactionMessage({
     payerKey: wallet.publicKey,
+    recentBlockhash: Keypair.generate().publicKey.toBase58(),
+    instructions: [SystemProgram.transfer({
+      fromPubkey: wallet.publicKey,
+      toPubkey: Keypair.generate().publicKey,
+      lamports: 1,
+    })],
+  }).compileToV0Message();
+  return new VersionedTransaction(message);
+}
+
+function makeMultiSignerUnsignedTransaction(wallet, sponsor) {
+  const message = new TransactionMessage({
+    payerKey: sponsor.publicKey,
     recentBlockhash: Keypair.generate().publicKey.toBase58(),
     instructions: [SystemProgram.transfer({
       fromPubkey: wallet.publicKey,
@@ -110,7 +129,9 @@ async function run() {
   const apiKey = 'server-only-test-key';
   const seenUrls = [];
   const unsignedByAmount = new Map();
-  const finalSignature = bs58.encode(Buffer.alloc(64, 7));
+  let finalSignature = '';
+  let failExecute = false;
+  let nextSponsor = null;
   const fetchImpl = async (input, init = {}) => {
     const url = new URL(String(input));
     seenUrls.push(url);
@@ -142,7 +163,9 @@ async function run() {
       assert.equal(url.searchParams.get('signer'), wallet.publicKey.toBase58());
       assert.deepEqual(url.searchParams.getAll('swapSrc'), ['Inf', 'SanctumRouter', 'Jup']);
       const amount = url.searchParams.get('amt');
-      const unsigned = makeUnsignedTransaction(wallet);
+      const sponsor = nextSponsor;
+      nextSponsor = null;
+      const unsigned = sponsor ? makeMultiSignerUnsignedTransaction(wallet, sponsor) : makeUnsignedTransaction(wallet);
       const tx = Buffer.from(unsigned.serialize()).toString('base64');
       unsignedByAmount.set(amount, tx);
       return jsonResponse(200, {
@@ -160,12 +183,18 @@ async function run() {
       const body = JSON.parse(init.body);
       assert.equal([clashSolMint, WRAPPED_SOL_MINT].includes(body.orderResponse.out), true);
       assert.ok(typeof body.signedTx === 'string');
+      const submitted = VersionedTransaction.deserialize(Buffer.from(body.signedTx, 'base64'));
+      finalSignature = bs58.encode(Buffer.from(submitted.signatures[0]));
+      if (failExecute === 'http500') return jsonResponse(500, { error: 'simulated upstream response loss' });
+      if (failExecute) throw new Error('simulated response loss after signed submission');
       return jsonResponse(200, { signature: finalSignature });
     }
     return jsonResponse(404, { error: 'unexpected route' });
   };
 
   let counter = 0;
+  let chainStatus = null;
+  let chainStatusError = false;
   const service = createSanctumService({
     db,
     fetchImpl,
@@ -173,6 +202,10 @@ async function run() {
     clashSolMint,
     apiBaseUrl: 'https://sanctum.test',
     randomUUID: () => `order-${++counter}`,
+    signatureStatusReader: async () => {
+      if (chainStatusError) throw new Error('simulated RPC outage');
+      return chainStatus;
+    },
   });
   const status = await service.getStatus();
   assert.equal(status.available, true);
@@ -224,11 +257,49 @@ async function run() {
   const changedTx = VersionedTransaction.deserialize(Buffer.from(changedOrder.transaction, 'base64'));
   changedTx.message.recentBlockhash = Keypair.generate().publicKey.toBase58();
   changedTx.sign([wallet]);
-  await expectCode(service.executeOrder({
+  const refreshedBlockhashResult = await service.executeOrder({
     playerId: 'player-1',
     orderId: changedOrder.orderId,
     signedTransaction: Buffer.from(changedTx.serialize()).toString('base64'),
+  });
+  assert.equal(refreshedBlockhashResult.status, 'submitted');
+  chainStatus = { slot: 123450, confirmationStatus: 'confirmed', confirmations: 1, err: null };
+  assert.equal((await service.getOrderStatus({ playerId: 'player-1', orderId: changedOrder.orderId })).status, 'confirmed');
+  chainStatus = null;
+
+  const changedInstructionOrder = await service.createOrder({
+    playerId: 'player-1', wallet: wallet.publicKey.toBase58(), amountSol: '0.75', slippageBps: 30,
+  });
+  const changedInstructionTx = VersionedTransaction.deserialize(Buffer.from(changedInstructionOrder.transaction, 'base64'));
+  changedInstructionTx.message.compiledInstructions[0].data[0] ^= 1;
+  changedInstructionTx.sign([wallet]);
+  await expectCode(service.executeOrder({
+    playerId: 'player-1',
+    orderId: changedInstructionOrder.orderId,
+    signedTransaction: Buffer.from(changedInstructionTx.serialize()).toString('base64'),
   }), 'TRANSACTION_CHANGED');
+  assert.deepEqual(
+    db.prepare('SELECT status, last_error_code, last_error_stage FROM sanctum_order_intents WHERE id = ?').get(changedInstructionOrder.orderId),
+    { status: 'failed', last_error_code: 'TRANSACTION_CHANGED', last_error_stage: 'signature_validation' },
+  );
+
+  const sponsor = Keypair.generate();
+  nextSponsor = sponsor;
+  const multiSignerOrder = await service.createOrder({
+    playerId: 'player-1', wallet: wallet.publicKey.toBase58(), amountSol: '0.8', slippageBps: 30,
+  });
+  const multiSignerTx = VersionedTransaction.deserialize(Buffer.from(multiSignerOrder.transaction, 'base64'));
+  multiSignerTx.sign([sponsor, wallet]);
+  const expectedTransactionId = bs58.encode(Buffer.from(multiSignerTx.signatures[0]));
+  assert.notEqual(expectedTransactionId, bs58.encode(Buffer.from(multiSignerTx.signatures[1])));
+  const multiSignerResult = await service.executeOrder({
+    playerId: 'player-1', orderId: multiSignerOrder.orderId,
+    signedTransaction: Buffer.from(multiSignerTx.serialize()).toString('base64'),
+  });
+  assert.equal(multiSignerResult.signature, expectedTransactionId);
+  chainStatus = { slot: 123451, confirmationStatus: 'confirmed', confirmations: 1, err: null };
+  assert.equal((await service.getOrderStatus({ playerId: 'player-1', orderId: multiSignerOrder.orderId })).status, 'confirmed');
+  chainStatus = null;
 
   const order = await service.createOrder({
     playerId: 'player-1', wallet: wallet.publicKey.toBase58(), amountSol: '1.25', slippageBps: 45,
@@ -249,10 +320,138 @@ async function run() {
     db.prepare('SELECT address FROM player_wallets WHERE player_id = ?').get('player-1').address,
     wallet.publicKey.toBase58(),
   );
-  assert.equal(db.prepare('SELECT status FROM sanctum_order_intents WHERE id = ?').get(order.orderId).status, 'consumed');
-  await expectCode(service.executeOrder({
+  assert.equal(db.prepare('SELECT status FROM sanctum_order_intents WHERE id = ?').get(order.orderId).status, 'submitted');
+  chainStatus = { slot: 123456, confirmationStatus: 'confirmed', confirmations: 1, err: null };
+  const confirmedResult = await service.getOrderStatus({ playerId: 'player-1', orderId: order.orderId });
+  assert.equal(confirmedResult.status, 'confirmed');
+  assert.equal(confirmedResult.explorerUrl, `https://solscan.io/tx/${finalSignature}`);
+  const idempotentResult = await service.executeOrder({
     playerId: 'player-1', orderId: order.orderId, signedTransaction: Buffer.from(signed.serialize()).toString('base64'),
-  }), 'ORDER_ALREADY_EXECUTED');
+  });
+  assert.equal(idempotentResult.status, 'confirmed');
+  chainStatus = null;
+
+  const legacyConsumedOrder = await service.createOrder({
+    playerId: 'player-1', wallet: wallet.publicKey.toBase58(), amountSol: '0.19', slippageBps: 30,
+  });
+  const legacyConsumedTx = VersionedTransaction.deserialize(Buffer.from(legacyConsumedOrder.transaction, 'base64'));
+  legacyConsumedTx.sign([wallet]);
+  await service.executeOrder({
+    playerId: 'player-1', orderId: legacyConsumedOrder.orderId,
+    signedTransaction: Buffer.from(legacyConsumedTx.serialize()).toString('base64'),
+  });
+  db.prepare("UPDATE sanctum_order_intents SET status = 'consumed' WHERE id = ?").run(legacyConsumedOrder.orderId);
+  assert.equal(await service.getLatestActiveOrder({ playerId: 'player-1' }), null);
+  assert.equal(db.prepare('SELECT status FROM sanctum_order_intents WHERE id = ?').get(legacyConsumedOrder.orderId).status, 'consumed');
+  const quoteAfterLegacyRecovery = await service.createOrder({
+    playerId: 'player-1', wallet: wallet.publicKey.toBase58(), amountSol: '0.195', slippageBps: 30,
+  });
+  db.prepare("UPDATE sanctum_order_intents SET status = 'expired' WHERE id = ?").run(quoteAfterLegacyRecovery.orderId);
+
+  const failedOnChainOrder = await service.createOrder({
+    playerId: 'player-1', wallet: wallet.publicKey.toBase58(), amountSol: '0.2', slippageBps: 30,
+  });
+  const failedOnChainTx = VersionedTransaction.deserialize(Buffer.from(failedOnChainOrder.transaction, 'base64'));
+  failedOnChainTx.sign([wallet]);
+  chainStatus = { slot: 123457, confirmationStatus: 'confirmed', confirmations: 1, err: { InstructionError: [0, 'Custom'] } };
+  const failedOnChainResult = await service.executeOrder({
+    playerId: 'player-1', orderId: failedOnChainOrder.orderId,
+    signedTransaction: Buffer.from(failedOnChainTx.serialize()).toString('base64'),
+  });
+  assert.equal(failedOnChainResult.status, 'failed');
+  assert.equal(failedOnChainResult.error.code, 'ONCHAIN_FAILED');
+  chainStatus = null;
+
+  const uncertainOrder = await service.createOrder({
+    playerId: 'player-1', wallet: wallet.publicKey.toBase58(), amountSol: '0.15', slippageBps: 30,
+  });
+  const uncertainTx = VersionedTransaction.deserialize(Buffer.from(uncertainOrder.transaction, 'base64'));
+  uncertainTx.sign([wallet]);
+  failExecute = true;
+  await expectCode(service.executeOrder({
+    playerId: 'player-1', orderId: uncertainOrder.orderId,
+    signedTransaction: Buffer.from(uncertainTx.serialize()).toString('base64'),
+  }), 'UPSTREAM_UNAVAILABLE');
+  assert.equal(db.prepare('SELECT status FROM sanctum_order_intents WHERE id = ?').get(uncertainOrder.orderId).status, 'submission_unknown');
+  failExecute = false;
+  chainStatus = { slot: 123458, confirmationStatus: 'finalized', confirmations: null, err: null };
+  assert.equal((await service.getOrderStatus({ playerId: 'player-1', orderId: uncertainOrder.orderId })).status, 'confirmed');
+  chainStatus = null;
+
+  const upstream500Order = await service.createOrder({
+    playerId: 'player-1', wallet: wallet.publicKey.toBase58(), amountSol: '0.16', slippageBps: 30,
+  });
+  const upstream500Tx = VersionedTransaction.deserialize(Buffer.from(upstream500Order.transaction, 'base64'));
+  upstream500Tx.sign([wallet]);
+  failExecute = 'http500';
+  await expectCode(service.executeOrder({
+    playerId: 'player-1', orderId: upstream500Order.orderId,
+    signedTransaction: Buffer.from(upstream500Tx.serialize()).toString('base64'),
+  }), 'UPSTREAM_SERVER_ERROR');
+  assert.equal(db.prepare('SELECT status FROM sanctum_order_intents WHERE id = ?').get(upstream500Order.orderId).status, 'submission_unknown');
+  failExecute = false;
+  chainStatus = { slot: 123459, confirmationStatus: 'confirmed', confirmations: 1, err: null };
+  assert.equal((await service.getOrderStatus({ playerId: 'player-1', orderId: upstream500Order.orderId })).status, 'confirmed');
+  chainStatus = null;
+
+  const staleUnknownOrder = await service.createOrder({
+    playerId: 'player-1', wallet: wallet.publicKey.toBase58(), amountSol: '0.17', slippageBps: 30,
+  });
+  const staleUnknownTx = VersionedTransaction.deserialize(Buffer.from(staleUnknownOrder.transaction, 'base64'));
+  staleUnknownTx.sign([wallet]);
+  failExecute = true;
+  await expectCode(service.executeOrder({
+    playerId: 'player-1', orderId: staleUnknownOrder.orderId,
+    signedTransaction: Buffer.from(staleUnknownTx.serialize()).toString('base64'),
+  }), 'UPSTREAM_UNAVAILABLE');
+  failExecute = false;
+  db.prepare('UPDATE sanctum_order_intents SET expires_at_ms = ? WHERE id = ?')
+    .run(Date.now() - (11 * 60 * 1000), staleUnknownOrder.orderId);
+  chainStatusError = true;
+  const unavailableLookup = await service.getOrderStatus({ playerId: 'player-1', orderId: staleUnknownOrder.orderId });
+  assert.equal(unavailableLookup.status, 'submission_unknown');
+  assert.equal(unavailableLookup.rpcUnavailable, true);
+  await expectCode(service.createOrder({
+    playerId: 'player-1', wallet: wallet.publicKey.toBase58(), amountSol: '0.18', slippageBps: 30,
+  }), 'SWAP_IN_PROGRESS');
+  chainStatusError = false;
+  const finalNullLookup = await service.getOrderStatus({ playerId: 'player-1', orderId: staleUnknownOrder.orderId });
+  assert.equal(finalNullLookup.status, 'failed');
+  assert.equal(finalNullLookup.error.code, 'SUBMISSION_NOT_FOUND');
+
+  const staleSubmittedOrder = await service.createOrder({
+    playerId: 'player-1', wallet: wallet.publicKey.toBase58(), amountSol: '0.185', slippageBps: 30,
+  });
+  db.prepare(`
+    UPDATE sanctum_order_intents SET status = 'submitted', tx_signature = ?, expires_at_ms = ? WHERE id = ?
+  `).run(finalSignature, Date.now() - (11 * 60 * 1000), staleSubmittedOrder.orderId);
+  const staleSubmittedResult = await service.getOrderStatus({ playerId: 'player-1', orderId: staleSubmittedOrder.orderId });
+  assert.equal(staleSubmittedResult.status, 'failed');
+  assert.equal(staleSubmittedResult.error.code, 'SUBMISSION_NOT_FOUND');
+
+  const timeoutDb = makeDb();
+  const timeoutService = createSanctumService({
+    db: timeoutDb,
+    fetchImpl,
+    apiKey,
+    clashSolMint,
+    apiBaseUrl: 'https://sanctum.test',
+    randomUUID: () => 'timeout-order',
+    signatureStatusReader: async () => new Promise(() => {}),
+    signatureStatusTimeoutMs: 25,
+  });
+  const timeoutOrder = await timeoutService.createOrder({
+    playerId: 'player-1', wallet: wallet.publicKey.toBase58(), amountSol: '0.186', slippageBps: 30,
+  });
+  timeoutDb.prepare(`
+    UPDATE sanctum_order_intents SET status = 'submitted', tx_signature = ? WHERE id = ?
+  `).run(finalSignature, timeoutOrder.orderId);
+  const timeoutStartedAt = Date.now();
+  const timeoutResult = await timeoutService.getOrderStatus({ playerId: 'player-1', orderId: timeoutOrder.orderId });
+  assert.equal(timeoutResult.status, 'submitted');
+  assert.equal(timeoutResult.rpcUnavailable, true);
+  assert.ok(Date.now() - timeoutStartedAt < 500, 'a stalled signature RPC must not freeze reconciliation');
+  timeoutDb.close();
 
   const unstakeOrder = await service.createOrder({
     playerId: 'player-1',
@@ -362,7 +561,7 @@ async function run() {
     assert.equal(Number.isFinite(Number(liveStatus.apy)), true);
     console.log('Sanctum live metadata and latest-epoch APY verified.');
   }
-  console.log('Sanctum clashSOL tests passed: live mint config, bidirectional fixed routes, exact signature verification, replay protection.');
+  console.log('Sanctum clashSOL tests passed: semantic signature validation, bounded RPC reconciliation, multi-signer IDs and idempotency.');
 }
 
 run().catch(error => {

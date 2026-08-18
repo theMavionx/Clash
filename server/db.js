@@ -2165,6 +2165,12 @@ try {
 // so admin changes never rewrite history and claims remain idempotent.
 try {
   try { db.exec(`ALTER TABLE sanctum_order_intents ADD COLUMN direction TEXT NOT NULL DEFAULT 'stake'`); } catch {}
+  try { db.exec(`ALTER TABLE sanctum_order_intents ADD COLUMN last_error_code TEXT`); } catch {}
+  try { db.exec(`ALTER TABLE sanctum_order_intents ADD COLUMN last_error_stage TEXT`); } catch {}
+  try { db.exec(`ALTER TABLE sanctum_order_intents ADD COLUMN submitted_at TEXT`); } catch {}
+  try { db.exec(`ALTER TABLE sanctum_order_intents ADD COLUMN confirmed_at TEXT`); } catch {}
+  try { db.exec(`ALTER TABLE sanctum_order_intents ADD COLUMN confirmation_status TEXT`); } catch {}
+  try { db.exec(`ALTER TABLE sanctum_order_intents ADD COLUMN confirmation_slot INTEGER`); } catch {}
   db.exec(`
     CREATE TABLE IF NOT EXISTS sanctum_reward_settings (
       id                       INTEGER PRIMARY KEY AUTOINCREMENT,

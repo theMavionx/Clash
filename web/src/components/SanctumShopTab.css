@@ -98,6 +98,8 @@
 .sanctum-shop__history-row small,
 .sanctum-shop__history-row time { color: var(--terminal-text-muted); font-size: 12px; line-height: 1.35; }
 .sanctum-shop__history-row time { text-align: right; white-space: nowrap; }
+.sanctum-shop__history-row .sanctum-shop__history-error { margin-top: 3px; color: var(--terminal-short); }
+.sanctum-shop__history-link { display: inline-flex; min-height: 44px; margin-top: 3px; align-items: center; color: var(--terminal-brand-text); font-size: 12px; font-weight: 750; text-decoration: none; }
 
 .sanctum-shop__disclosure { margin: 0; color: var(--terminal-text-muted); font-size: 12px; line-height: 1.45; }
 .sanctum-shop__state,
@@ -106,6 +108,103 @@
 .sanctum-shop__state { color: var(--terminal-text-secondary); background: var(--terminal-surface-subtle); text-align: center; }
 .sanctum-shop__notice { border-color: color-mix(in srgb, var(--terminal-long) 45%, var(--terminal-border)); background: var(--terminal-long-soft); color: var(--terminal-long); }
 .sanctum-shop__error { border-color: color-mix(in srgb, var(--terminal-short) 50%, var(--terminal-border)); background: var(--terminal-short-soft); color: var(--terminal-short); }
+.sanctum-shop__live-region { position: fixed; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+.sanctum-swap-progress-chip { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; gap: 10px; align-items: center; width: 100%; min-height: 54px; padding: 7px 12px; border: 1px solid var(--terminal-brand-strong); border-radius: 12px; background: var(--terminal-brand-soft); color: var(--terminal-text); box-shadow: var(--terminal-shadow-control); text-align: left; cursor: pointer; }
+.sanctum-swap-progress-chip > span:nth-last-child(1) { color: var(--terminal-brand-text); font-size: 12px; font-weight: 800; }
+.sanctum-swap-progress-chip strong,
+.sanctum-swap-progress-chip small { display: block; }
+.sanctum-swap-progress-chip strong { font-size: 13px; }
+.sanctum-swap-progress-chip small { margin-top: 2px; color: var(--terminal-text-muted); font-size: 11px; }
+.sanctum-swap-progress-chip__mark { display: grid; width: 30px; height: 30px; place-items: center; border: 1px solid var(--terminal-border-strong); border-radius: 50%; font-weight: 900; }
+.sanctum-swap-progress-chip.is-warning { border-color: var(--terminal-warning-border); background: var(--terminal-warning-soft); }
+.sanctum-swap-progress-chip.is-warning .sanctum-swap-progress-chip__mark { border-color: var(--terminal-warning-border); color: var(--terminal-warning); }
+.sanctum-swap-progress-chip.is-success { border-color: var(--terminal-long-strong); background: var(--terminal-long-soft); }
+.sanctum-swap-progress-chip.is-success .sanctum-swap-progress-chip__mark { border-color: var(--terminal-long-strong); color: var(--terminal-long); }
+.sanctum-swap-progress-chip.is-error { border-color: color-mix(in srgb, var(--terminal-short) 55%, var(--terminal-border)); background: var(--terminal-short-soft); }
+.sanctum-swap-progress-chip.is-error .sanctum-swap-progress-chip__mark { border-color: var(--terminal-short); color: var(--terminal-short); }
+
+.sanctum-swap-progress__backdrop {
+  position: fixed;
+  z-index: 10050;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: color-mix(in srgb, var(--terminal-text) 66%, transparent);
+  backdrop-filter: blur(5px);
+}
+
+.sanctum-swap-progress {
+  display: flex;
+  flex-direction: column;
+  width: min(420px, calc(100vw - 36px));
+  max-height: min(760px, calc(100dvh - 36px));
+  overflow: hidden;
+  border: 1px solid var(--terminal-border-strong);
+  border-radius: 18px;
+  outline: none;
+  background: var(--terminal-surface);
+  color: var(--terminal-text);
+  box-shadow: 0 24px 70px var(--terminal-shadow), var(--terminal-shadow-control);
+  box-sizing: border-box;
+}
+
+.sanctum-swap-progress__header { position: sticky; z-index: 2; top: 0; display: flex; flex: 0 0 auto; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 16px 18px 12px; border-bottom: 1px solid var(--terminal-border); background: var(--terminal-surface); }
+.sanctum-swap-progress__header h3 { margin: 3px 0 0; font-size: 21px; line-height: 1.15; }
+.sanctum-swap-progress__header-actions { display: flex; gap: 7px; align-items: center; }
+.sanctum-swap-progress__minimize { min-width: 88px; min-height: 44px; padding: 0 12px; border: 1px solid var(--terminal-border-strong); border-radius: 11px; background: var(--terminal-surface-muted); color: var(--terminal-text); font-size: 12px; font-weight: 800; cursor: pointer; }
+.sanctum-swap-progress__close { display: grid; flex: 0 0 44px; width: 44px; height: 44px; padding: 0; place-items: center; border: 1px solid var(--terminal-border); border-radius: 11px; background: var(--terminal-surface-muted); color: var(--terminal-text); font-size: 25px; line-height: 1; cursor: pointer; }
+.sanctum-swap-progress__body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0 18px 14px; overscroll-behavior: contain; }
+.sanctum-swap-progress__summary { min-height: 40px; margin: 12px 0; color: var(--terminal-text-secondary); font-size: 13px; font-weight: 650; line-height: 1.45; }
+
+.sanctum-swap-progress__steps { display: flex; flex-direction: column; gap: 7px; margin: 0; padding: 0; list-style: none; }
+.sanctum-swap-progress__steps li { display: grid; grid-template-columns: 36px minmax(0, 1fr); gap: 10px; align-items: center; min-height: 54px; padding: 7px 10px; border: 1px solid var(--terminal-border); border-radius: 12px; background: var(--terminal-surface-subtle); box-sizing: border-box; }
+.sanctum-swap-progress__step-icon { display: grid; width: 32px; height: 32px; place-items: center; border: 1px solid var(--terminal-border-strong); border-radius: 50%; background: var(--terminal-surface-muted); color: var(--terminal-text-muted); font-size: 13px; font-weight: 900; }
+.sanctum-swap-progress__steps strong,
+.sanctum-swap-progress__steps small { display: block; }
+.sanctum-swap-progress__steps strong { font-size: 13px; }
+.sanctum-swap-progress__steps small { margin-top: 2px; color: var(--terminal-text-muted); font-size: 11px; line-height: 1.25; }
+.sanctum-swap-progress__steps li.is-active { border-color: var(--terminal-brand-strong); background: var(--terminal-brand-soft); }
+.sanctum-swap-progress__steps li.is-active .sanctum-swap-progress__step-icon { border-color: var(--terminal-brand-strong); background: var(--terminal-brand-soft); color: var(--terminal-brand-text); box-shadow: 0 0 0 4px var(--terminal-brand-ring); }
+.sanctum-swap-progress__steps li.is-complete .sanctum-swap-progress__step-icon { border-color: var(--terminal-long); background: var(--terminal-long-soft); color: var(--terminal-long); }
+.sanctum-swap-progress__steps li.is-failed { border-color: color-mix(in srgb, var(--terminal-short) 55%, var(--terminal-border)); background: var(--terminal-short-soft); }
+.sanctum-swap-progress__steps li.is-failed .sanctum-swap-progress__step-icon { border-color: var(--terminal-short); background: var(--terminal-short-soft); color: var(--terminal-short); }
+.sanctum-swap-progress__spinner { display: block; width: 18px; height: 18px; border: 3px solid color-mix(in srgb, var(--terminal-brand-text) 28%, transparent); border-top-color: var(--terminal-brand-text); border-radius: 50%; animation: sanctum-swap-spin .8s linear infinite; box-sizing: border-box; }
+.sanctum-swap-progress-chip > .sanctum-swap-progress__spinner { justify-self: center; }
+@keyframes sanctum-swap-spin { to { transform: rotate(360deg); } }
+
+.sanctum-swap-progress__receipt { display: grid; gap: 6px; margin-top: 12px; padding: 11px; border: 1px solid var(--terminal-border); border-radius: 12px; background: var(--terminal-surface-subtle); }
+.sanctum-swap-progress__receipt > div { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; }
+.sanctum-swap-progress__receipt span { color: var(--terminal-text-muted); }
+.sanctum-swap-progress__receipt strong { overflow-wrap: anywhere; color: var(--terminal-text); text-align: right; }
+.sanctum-swap-progress__receipt.is-success { border-color: var(--terminal-long-strong); box-shadow: inset 4px 0 0 var(--terminal-long); }
+.sanctum-swap-progress__receipt .is-received { margin: 2px -3px; padding: 7px 6px; border-radius: 8px; background: var(--terminal-long-soft); }
+.sanctum-swap-progress__receipt .is-received span,
+.sanctum-swap-progress__receipt .is-received strong { color: var(--terminal-long); font-weight: 850; }
+
+.sanctum-swap-progress__warning { display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 9px; margin-top: 12px; padding: 11px; border: 1px solid var(--terminal-warning-border); border-radius: 12px; background: var(--terminal-warning-soft); color: var(--terminal-text); font-size: 12px; line-height: 1.4; }
+.sanctum-swap-progress__warning-mark { display: grid; width: 30px; height: 30px; place-items: center; border: 1px solid var(--terminal-warning-border); border-radius: 50%; color: var(--terminal-warning); font-weight: 900; }
+.sanctum-swap-progress__warning strong { color: var(--terminal-warning); font-size: 13px; }
+.sanctum-swap-progress__warning p { margin: 3px 0 0; color: var(--terminal-text-secondary); }
+.sanctum-swap-progress__warning details { margin-top: 5px; }
+.sanctum-swap-progress__warning summary { min-height: 44px; color: var(--terminal-warning); font-weight: 750; line-height: 44px; cursor: pointer; }
+.sanctum-swap-progress__warning dl { margin: 0; }
+.sanctum-swap-progress__warning dl > div { display: grid; grid-template-columns: 58px minmax(0, 1fr); gap: 6px; padding: 2px 0; }
+.sanctum-swap-progress__warning dt { color: var(--terminal-text-muted); }
+.sanctum-swap-progress__warning dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
+
+.sanctum-swap-progress__error { margin-top: 12px; padding: 11px; border: 1px solid color-mix(in srgb, var(--terminal-short) 55%, var(--terminal-border)); border-radius: 12px; background: var(--terminal-short-soft); color: var(--terminal-short); font-size: 12px; line-height: 1.4; }
+.sanctum-swap-progress__error > strong { display: block; font-size: 13px; }
+.sanctum-swap-progress__error details { margin-top: 7px; color: var(--terminal-text-secondary); }
+.sanctum-swap-progress__error summary { min-height: 44px; line-height: 44px; cursor: pointer; font-weight: 750; }
+.sanctum-swap-progress__error dl { margin: 4px 0 0; }
+.sanctum-swap-progress__error dl > div { display: grid; grid-template-columns: 62px minmax(0, 1fr); gap: 7px; padding: 3px 0; }
+.sanctum-swap-progress__error dt { color: var(--terminal-text-muted); }
+.sanctum-swap-progress__error dd { min-width: 0; margin: 0; overflow-wrap: anywhere; color: var(--terminal-text); }
+.sanctum-swap-progress__actions { position: sticky; z-index: 2; bottom: 0; display: grid; flex: 0 0 auto; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; min-height: 12px; padding: 12px 18px 16px; border-top: 1px solid var(--terminal-border); background: var(--terminal-surface); }
+.sanctum-swap-progress__footer-status { grid-column: 1 / -1; color: var(--terminal-text-muted); font-size: 11px; font-weight: 700; text-align: center; }
+.sanctum-swap-progress__footer-status.is-warning { color: var(--terminal-warning); }
 
 @media (max-width: 420px) {
   .sanctum-shop__hero { grid-template-columns: 58px minmax(0, 1fr); padding: 11px; gap: 10px; }
@@ -120,8 +219,17 @@
   .sanctum-shop__history-row time { grid-column: 2; text-align: left; }
 }
 
+@media (max-width: 480px) {
+  .sanctum-swap-progress__backdrop { align-items: end; padding: 0; }
+  .sanctum-swap-progress { width: 100%; max-height: 100dvh; border-right: 0; border-bottom: 0; border-left: 0; border-radius: 20px 20px 0 0; }
+  .sanctum-swap-progress__header { padding-top: max(16px, env(safe-area-inset-top)); padding-right: max(16px, env(safe-area-inset-right)); padding-left: max(16px, env(safe-area-inset-left)); }
+  .sanctum-swap-progress__body { padding-right: max(16px, env(safe-area-inset-right)); padding-left: max(16px, env(safe-area-inset-left)); }
+  .sanctum-swap-progress__actions { padding-right: max(16px, env(safe-area-inset-right)); padding-bottom: max(16px, env(safe-area-inset-bottom)); padding-left: max(16px, env(safe-area-inset-left)); }
+}
+
 .shop-tabs-scroll::-webkit-scrollbar { display: none; }
 
 @media (prefers-reduced-motion: reduce) {
   .sanctum-shop * { scroll-behavior: auto !important; transition: none !important; }
+  .sanctum-swap-progress__spinner { border-color: var(--terminal-brand-text); animation: none; opacity: .72; }
 }

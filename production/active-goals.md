@@ -473,7 +473,7 @@ Next checkpoint:
 
 ## G-010 clashSOL Sanctum LST Integration
 
-- Status: release candidate approved; production deployment in progress
+- Status: v1.1.1 swap-reconciliation release candidate approved; production deployment in progress
 - Priority: P1
 - Owner intent: let players stake SOL into a branded `clashSOL` LST from the
   in-game shop through Sanctum while preserving self-custody.
@@ -519,6 +519,12 @@ Current checkpoint:
   active-intent caps and retention cleanup. Remaining work is the authorized
   production rollout and an optional separately approved owner-signed funded
   mainnet swap smoke; the API key remains outside Git.
+- The first owner-signed production attempt on wallet
+  `4Ze3bbJbmBjAUutV3LT1XUmqZG67fAR5PUr7vkXUgU2g` was rejected before broadcast
+  because the wallet refreshed the recent blockhash. v1.1.1 preserves all
+  reviewed instructions while safely allowing that blockhash-only refresh,
+  adds durable submitted/unknown/confirmed reconciliation, and exposes a
+  bridge-style four-stage player receipt with recovery after reload.
 
 Acceptance criteria:
 

@@ -3535,3 +3535,20 @@ Follow-up:
 - Operational scope: database additions for immutable swap/reward/config
   ledgers are approved. No unattended wallet signature or funded swap is part
   of deployment smoke; funded execution remains owner-signed in the browser.
+
+## UR-2026-08-18-CLASHSOL-SWAP-RECONCILIATION
+
+- Timestamp: 2026-08-18 Europe/Kyiv
+- Request: investigate why the in-game Sanctum swap for wallet
+  `4Ze3bbJbmBjAUutV3LT1XUmqZG67fAR5PUr7vkXUgU2g` did not produce clashSOL,
+  make every step understandable like the existing bridge flow, fix the HTTP
+  400 execute failure, verify old attempts, then commit, push and deploy.
+- Production evidence: intents `f37bf0b4-2542-4f77-9b13-ba116281dd6d` and
+  `c517bf6b-1601-495c-9cb1-8008274824e1` never reached broadcast. Sanctum
+  rejected the wallet-signed payload as `TRANSACTION_CHANGED`; no transaction
+  signature was stored and no SOL was spent by these attempts.
+- Approved scope: recent-blockhash-only semantic verification, durable Solana
+  reconciliation, legacy active-order recovery, bridge-style player progress
+  and receipts, additive intent lifecycle columns, focused migration/behavior
+  tests, v1.1.1 release metadata and production deployment. Deployment itself
+  must not sign or fund a wallet transaction.

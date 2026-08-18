@@ -26,13 +26,16 @@ server-only.
 
 Implementation checkpoint: Sanctum's external pool is live and the complete
 bidirectional swap, completed-day reward, admin and audit-export implementation
-has passed responsive light/dark UI review, focused server/web/migration/abuse
-tests, full lint/build and the canonical Deploy gate. The API key and live mint
-were verified server-side without exposing the key. QA, UX and art are GO;
-DevOps is GO with a targeted pre-migration schema/intent backup because the
-existing intent table is empty and the migration is additive. Remaining work is
-the authorized commit/push/production rollout and post-deploy smoke. A funded
-swap remains an optional owner-signed follow-up, not part of unattended deploy.
+is on production. The v1.1.1 follow-up release fixes the first owner-signed
+swap incident: a wallet-refreshed recent blockhash is accepted only after exact
+semantic comparison of every non-blockhash message field; primary signatures
+are stored before execute; ambiguous upstream/RPC outcomes reconcile as
+submission-unknown instead of inviting a duplicate; and old/cleared browser
+sessions recover the server's active order. The Battle Shop now presents a
+bridge-style four-stage status, minimizes safely, polls while nonterminal, and
+shows explorer/error/balance receipts. Focused lifecycle, migration, reward,
+UI, lint and build gates are being finalized before the authorized v1.1.1
+commit/push/deploy. A funded retry remains owner-signed in the browser.
 
 The repository is being prepared for faster owner-driven Codex work. Durable context now lives in:
 
@@ -79,9 +82,10 @@ Main current goals:
 
 ## Next Useful Checkpoint
 
-For clashSOL, finish the production rollout, monitor the first completed UTC-day
-reward finalization/claim, and run the funded swap checklist only with an owner
-wallet signature. General context recovery remains:
+For clashSOL, ship v1.1.1 reconciliation, verify the affected production intent
+rows and active-order endpoint, monitor the first completed UTC-day reward
+finalization/claim, and run the funded swap checklist only with an owner wallet
+signature. General context recovery remains:
 
 ```powershell
 tools/codex/start-context.cmd -Full

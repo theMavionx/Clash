@@ -97,6 +97,13 @@ function makeDb() {
       status TEXT NOT NULL,
       tx_signature TEXT,
       consumed_at TEXT,
+      last_error TEXT,
+      last_error_code TEXT,
+      last_error_stage TEXT,
+      submitted_at TEXT,
+      confirmed_at TEXT,
+      confirmation_status TEXT,
+      confirmation_slot INTEGER,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
     CREATE TABLE resource_delta_events (
