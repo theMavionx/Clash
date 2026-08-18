@@ -67,9 +67,25 @@ const {
   runWithAptosKeys,
 } = require('./aptos_api');
 const { SanctumError, createSanctumService } = require('./sanctum');
+const { SanctumRewardError, createSanctumRewardsService } = require('./sanctum_rewards');
+const { createDualFixedWindowRateLimiter } = require('./sanctum_rate_limit');
 
 const router = express.Router();
 const sanctumService = createSanctumService({ db: db.db });
+const sanctumRewardsService = createSanctumRewardsService({
+  db: db.db,
+  getResourceCaps: db.getResourceCaps,
+});
+const sanctumOrderRateLimiter = createDualFixedWindowRateLimiter({
+  windowMs: Number(process.env.SANCTUM_ORDER_RATE_WINDOW_MS || 60_000),
+  playerMax: Number(process.env.SANCTUM_ORDER_RATE_PER_PLAYER || 10),
+  ipMax: Number(process.env.SANCTUM_ORDER_RATE_PER_IP || 30),
+});
+const sanctumBalanceRateLimiter = createDualFixedWindowRateLimiter({
+  windowMs: Number(process.env.SANCTUM_BALANCE_RATE_WINDOW_MS || 60_000),
+  playerMax: Number(process.env.SANCTUM_BALANCE_RATE_PER_PLAYER || 30),
+  ipMax: Number(process.env.SANCTUM_BALANCE_RATE_PER_IP || 90),
+});
 
 // Temporary lenient battle mode: still runs server-side replay verification and
 // logs/stores all mismatch diagnostics, but does not block player rewards unless
@@ -6258,11 +6274,23 @@ function getGameShopClientConfigCached() {
 
 // ---------- Game shop: utility resources granted server-side ----------
 function sendSanctumError(res, error) {
-  if (error instanceof SanctumError) {
-    return res.status(error.status || 400).json({ error: error.message, code: error.code });
+  if (error instanceof SanctumError || error instanceof SanctumRewardError) {
+    return res.status(error.status || 400).json({
+      error: error.message,
+      code: error.code,
+      ...(error.details ? { details: error.details } : {}),
+    });
   }
   console.warn('[sanctum] unexpected error:', error?.message || error);
   return res.status(500).json({ error: 'clashSOL service temporarily unavailable', code: 'INTERNAL_ERROR' });
+}
+
+function enforceSanctumRateLimit(req, res, limiter, message) {
+  const result = limiter.check({ playerId: req.player?.id, ip: requestIp(req) });
+  if (result.ok) return true;
+  res.set('Retry-After', String(result.retryAfterSec));
+  res.status(429).json({ error: message, code: 'RATE_LIMITED' });
+  return false;
 }
 
 router.get('/sanctum/clashsol/status', async (_req, res) => {
@@ -6273,20 +6301,193 @@ router.get('/sanctum/clashsol/status', async (_req, res) => {
       : 'public, max-age=60');
     return res.json(status);
   } catch (error) {
+    if (error instanceof SanctumError && error.status >= 500) {
+      const status = sanctumService.getLocalStatus({
+        degraded: true,
+        error: 'Live Sanctum metadata is temporarily unavailable. Quotes will retry upstream.',
+      });
+      res.set('Cache-Control', 'public, max-age=5, stale-while-revalidate=30');
+      return res.json(status);
+    }
+    return sendSanctumError(res, error);
+  }
+});
+
+router.get('/sanctum/clashsol/balances', auth, async (req, res) => {
+  try {
+    if (!enforceSanctumRateLimit(
+      req,
+      res,
+      sanctumBalanceRateLimiter,
+      'Too many clashSOL balance refreshes. Try again shortly.',
+    )) return undefined;
+    const balances = await sanctumRewardsService.getWalletBalances(req.query?.wallet);
+    res.set('Cache-Control', 'no-store');
+    return res.json(balances);
+  } catch (error) {
     return sendSanctumError(res, error);
   }
 });
 
 router.post('/sanctum/clashsol/orders', auth, async (req, res) => {
   try {
+    if (!enforceSanctumRateLimit(
+      req,
+      res,
+      sanctumOrderRateLimiter,
+      'Too many clashSOL quote requests. Try again shortly.',
+    )) return undefined;
     const order = await sanctumService.createOrder({
       playerId: req.player.id,
       wallet: req.body?.wallet,
-      amountSol: req.body?.amountSol,
+      amount: req.body?.amount ?? req.body?.amountSol,
+      direction: req.body?.direction,
       slippageBps: req.body?.slippageBps,
     });
     res.set('Cache-Control', 'no-store');
     return res.status(201).json(order);
+  } catch (error) {
+    return sendSanctumError(res, error);
+  }
+});
+
+router.post('/sanctum/clashsol/rewards/link-wallet', auth, async (req, res) => {
+  try {
+    const wallet = String(req.body?.wallet || '').trim();
+    const proof = await verifyWalletAuthProof(req, { wallet, dex: 'sanctum' });
+    if (!proof.ok || proof.chain !== 'solana') {
+      return res.status(proof.status || 401).json({
+        error: proof.error || 'A Solana wallet signature is required',
+        code: 'WALLET_PROOF_FAILED',
+      });
+    }
+    const existing = db.db.prepare(`
+      SELECT player_id FROM player_wallets
+      WHERE chain_type = 'solana' AND address = ?
+      LIMIT 1
+    `).get(proof.wallet);
+    if (existing && existing.player_id !== req.player.id) {
+      return res.status(409).json({
+        error: 'This Solana wallet is already linked to another Clash account',
+        code: 'WALLET_ALREADY_LINKED',
+      });
+    }
+    sanctumRewardsService.linkRewardWallet({ playerId: req.player.id, wallet: proof.wallet });
+    upsertUnifiedIdentity(req.player.id, proof.wallet, { label: 'clashSOL rewards' });
+    const reward = await sanctumRewardsService.getPlayerStatus({
+      playerId: req.player.id,
+      wallet: proof.wallet,
+    });
+    res.set('Cache-Control', 'no-store');
+    return res.json({ ok: true, reward });
+  } catch (error) {
+    return sendSanctumError(res, error);
+  }
+});
+
+router.get('/sanctum/clashsol/rewards/status', auth, async (req, res) => {
+  try {
+    const reward = await sanctumRewardsService.getPlayerStatus({
+      playerId: req.player.id,
+      wallet: req.query?.wallet,
+    });
+    res.set('Cache-Control', 'no-store');
+    return res.json(reward);
+  } catch (error) {
+    return sendSanctumError(res, error);
+  }
+});
+
+router.post('/sanctum/clashsol/rewards/claim', auth, async (req, res) => {
+  try {
+    const linkedWallet = sanctumRewardsService.resolveLinkedWallet(req.player.id, req.body?.wallet);
+    if (!linkedWallet) {
+      throw new SanctumRewardError('WALLET_NOT_LINKED', 'Link the clashSOL reward wallet first', 409);
+    }
+    const claim = sanctumRewardsService.claim({ playerId: req.player.id });
+    const reward = await sanctumRewardsService.getPlayerStatus({
+      playerId: req.player.id,
+      wallet: req.body?.wallet,
+    });
+    res.set('Cache-Control', 'no-store');
+    return res.json({
+      ok: true,
+      claimed_gold: claim.total,
+      pending_remaining: claim.pending_remaining,
+      resources: claim.resources,
+      reward,
+    });
+  } catch (error) {
+    return sendSanctumError(res, error);
+  }
+});
+
+router.get('/sanctum/clashsol/history', auth, (req, res) => {
+  try {
+    const history = sanctumRewardsService.history({
+      playerId: req.player.id,
+      limit: req.query?.limit,
+      cursor: req.query?.cursor || 0,
+    });
+    res.set('Cache-Control', 'no-store');
+    return res.json(history);
+  } catch (error) {
+    return sendSanctumError(res, error);
+  }
+});
+
+router.get('/admin/sanctum', adminAuth, async (req, res) => {
+  try {
+    const metrics = sanctumRewardsService.adminMetrics({ limit: req.query?.limit });
+    const statusResult = await Promise.allSettled([sanctumService.getStatus()]);
+    const status = statusResult[0].status === 'fulfilled'
+      ? statusResult[0].value
+      : {
+        available: false,
+        degraded: true,
+        error: statusResult[0].reason?.message || 'Sanctum upstream unavailable',
+        mint: sanctumRewardsService.mint,
+      };
+    res.set('Cache-Control', 'no-store');
+    return res.json({ status, ...metrics });
+  } catch (error) {
+    return sendSanctumError(res, error);
+  }
+});
+
+router.get('/admin/sanctum/export.csv', adminAuth, (req, res) => {
+  try {
+    const dataset = String(req.query?.dataset || '').trim().toLowerCase();
+    const rows = sanctumRewardsService.adminExport({ dataset, limit: req.query?.limit });
+    const columns = rows.length ? Object.keys(rows[0]) : [];
+    const csvCell = (value) => {
+      let text = value == null ? '' : String(value);
+      if (/^[=+\-@]/.test(text)) text = `'${text}`;
+      return `"${text.replace(/"/g, '""')}"`;
+    };
+    const csv = [
+      columns.map(csvCell).join(','),
+      ...rows.map(row => columns.map(column => csvCell(row[column])).join(',')),
+    ].join('\r\n');
+    res.set('Cache-Control', 'no-store');
+    res.set('Content-Type', 'text/csv; charset=utf-8');
+    res.set('Content-Disposition', `attachment; filename="clashsol-${dataset || 'export'}.csv"`);
+    return res.send(`\uFEFF${csv}`);
+  } catch (error) {
+    return sendSanctumError(res, error);
+  }
+});
+
+router.put('/admin/sanctum/settings', adminAuth, (req, res) => {
+  try {
+    const forwarded = String(req.headers['cf-connecting-ip'] || req.ip || 'admin').slice(0, 80);
+    const settings = sanctumRewardsService.updateSettings({
+      enabled: req.body?.enabled !== false,
+      goldPerClashSol: req.body?.gold_per_clashsol ?? req.body?.goldPerClashSol,
+      changedBy: `admin:${forwarded}`,
+    });
+    res.set('Cache-Control', 'no-store');
+    return res.json({ ok: true, settings });
   } catch (error) {
     return sendSanctumError(res, error);
   }
@@ -27010,4 +27211,13 @@ router.use('/v1/orders', auth, proxyToBot);
 router.use('/v1/analytics', auth, proxyToBot);
 router.use('/v1/config', auth, proxyToBot);
 
-module.exports = { router, auth, addLog, logBattle, logEconomy, logAuth, logError };
+module.exports = {
+  router,
+  auth,
+  addLog,
+  logBattle,
+  logEconomy,
+  logAuth,
+  logError,
+  sanctumRewardsService,
+};

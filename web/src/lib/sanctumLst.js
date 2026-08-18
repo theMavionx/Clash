@@ -24,6 +24,7 @@ async function apiJson(url, { method = 'GET', token, body, signal } = {}) {
     const error = new Error(payload?.error || `Request failed (HTTP ${response.status})`);
     error.code = payload?.code || 'REQUEST_FAILED';
     error.status = response.status;
+    error.details = payload?.details || null;
     throw error;
   }
   return payload;
@@ -59,12 +60,17 @@ export function getClashSolStatus({ signal } = {}) {
   return apiJson('/api/sanctum/clashsol/status', { signal });
 }
 
-export function createClashSolOrder({ wallet, amountSol, slippageBps = 30, token, signal }) {
+export function getClashSolBalances({ wallet, token, signal } = {}) {
+  const params = new URLSearchParams({ wallet: String(wallet || '') });
+  return apiJson(`/api/sanctum/clashsol/balances?${params}`, { token, signal });
+}
+
+export function createClashSolOrder({ wallet, amount, amountSol, direction = 'stake', slippageBps = 30, token, signal }) {
   return apiJson('/api/sanctum/clashsol/orders', {
     method: 'POST',
     token,
     signal,
-    body: { wallet, amountSol, slippageBps },
+    body: { wallet, amount: amount ?? amountSol, direction, slippageBps },
   });
 }
 
@@ -89,4 +95,73 @@ export async function stakeSolForClashSol({ wallet, amountSol, slippageBps = 30,
   const signedTransaction = serializeSignedSanctumTransaction(signed);
   const result = await executeClashSolOrder({ orderId: order.orderId, signedTransaction, token });
   return { ...result, order };
+}
+
+export function getClashSolRewardStatus({ wallet, token, signal } = {}) {
+  const query = wallet ? `?wallet=${encodeURIComponent(wallet)}` : '';
+  return apiJson(`/api/sanctum/clashsol/rewards/status${query}`, { token, signal });
+}
+
+export function getClashSolHistory({ limit = 50, cursor, token, signal } = {}) {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (cursor != null) params.set('cursor', String(cursor));
+  return apiJson(`/api/sanctum/clashsol/history?${params}`, { token, signal });
+}
+
+export function linkClashSolRewardWallet({ wallet, authProof, token, signal }) {
+  return apiJson('/api/sanctum/clashsol/rewards/link-wallet', {
+    method: 'POST',
+    token,
+    signal,
+    body: { wallet, auth_proof: authProof },
+  });
+}
+
+export function claimClashSolGold({ wallet, token, signal }) {
+  return apiJson('/api/sanctum/clashsol/rewards/claim', {
+    method: 'POST',
+    token,
+    signal,
+    body: { wallet },
+  });
+}
+
+function signatureToBase64(signature) {
+  if (typeof signature === 'string') return { signature, signatureEncoding: '' };
+  const bytes = signature?.signature || signature;
+  return {
+    signature: Buffer.from(bytes || []).toString('base64'),
+    signatureEncoding: 'base64',
+  };
+}
+
+export function clashSolWalletAuthMessage({ wallet, issuedAt }) {
+  return [
+    'Clash wallet auth',
+    'Action: wallet-auth',
+    `Wallet: ${String(wallet || '').trim()}`,
+    'DEX: sanctum',
+    `Issued At: ${issuedAt}`,
+  ].join('\n');
+}
+
+export async function createClashSolWalletAuthProof({ wallet, signMessage }) {
+  if (!wallet || typeof signMessage !== 'function') {
+    throw new Error('Connect a Solana wallet that supports message signing');
+  }
+  const issuedAt = new Date().toISOString();
+  const message = clashSolWalletAuthMessage({ wallet, issuedAt });
+  const signed = await signMessage(new TextEncoder().encode(message));
+  const normalized = signatureToBase64(signed);
+  if (!normalized.signature) throw new Error('Wallet did not return a signature');
+  return {
+    action: 'wallet-auth',
+    chain_type: 'solana',
+    wallet,
+    dex: 'sanctum',
+    issued_at: issuedAt,
+    message,
+    signature: normalized.signature,
+    signature_encoding: normalized.signatureEncoding,
+  };
 }

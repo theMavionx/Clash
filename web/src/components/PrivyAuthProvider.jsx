@@ -3,6 +3,7 @@ import { PrivyProvider, usePrivy, useSendTransaction, useWallets as usePrivyEvmW
 import {
   toSolanaWalletConnectors,
   useCreateWallet as useCreateSolanaWallet,
+  useSignMessage as usePrivySolanaSignMessage,
   useSignAndSendTransaction as usePrivySolanaSignAndSendTransaction,
   useSignTransaction as usePrivySolanaSignTransaction,
   useWallets as usePrivySolanaWallets,
@@ -44,6 +45,7 @@ const OPTIONAL_PRIVY_DEFAULT = {
   solanaWallets: [],
   evmSendTransaction: null,
   solanaSignTransaction: null,
+  solanaSignMessage: null,
   solanaSignAndSendTransaction: null,
 };
 const OptionalPrivyContext = createContext(OPTIONAL_PRIVY_DEFAULT);
@@ -59,6 +61,7 @@ function PrivyStateBridge({ children }) {
   const { ready: solanaReady, wallets: solanaWallets } = usePrivySolanaWallets();
   const { createWallet: createSolanaWallet } = useCreateSolanaWallet();
   const { signTransaction: solanaSignTransaction } = usePrivySolanaSignTransaction();
+  const { signMessage: solanaSignMessage } = usePrivySolanaSignMessage();
   const { signAndSendTransaction: solanaSignAndSendTransaction } = usePrivySolanaSignAndSendTransaction();
   const solanaCreateTriedRef = useRef(false);
 
@@ -87,6 +90,7 @@ function PrivyStateBridge({ children }) {
     solanaWallets: solanaWallets || [],
     evmSendTransaction,
     solanaSignTransaction,
+    solanaSignMessage,
     solanaSignAndSendTransaction,
   }), [
     ready,
@@ -98,6 +102,7 @@ function PrivyStateBridge({ children }) {
     solanaWallets,
     evmSendTransaction,
     solanaSignTransaction,
+    solanaSignMessage,
     solanaSignAndSendTransaction,
   ]);
   return (

@@ -2160,6 +2160,93 @@ try {
   `);
 } catch (e) { console.warn('[db] sanctum_order_intents migration:', e.message); }
 
+// Live clashSOL reward economics are versioned by effective UTC day. Daily
+// snapshots preserve the exact on-chain balance and rate used for each reward,
+// so admin changes never rewrite history and claims remain idempotent.
+try {
+  try { db.exec(`ALTER TABLE sanctum_order_intents ADD COLUMN direction TEXT NOT NULL DEFAULT 'stake'`); } catch {}
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS sanctum_reward_settings (
+      id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+      enabled                  INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0, 1)),
+      gold_per_clashsol        INTEGER NOT NULL CHECK(gold_per_clashsol >= 0),
+      effective_day_utc        TEXT NOT NULL,
+      changed_by               TEXT,
+      created_at               TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    INSERT INTO sanctum_reward_settings
+      (enabled, gold_per_clashsol, effective_day_utc, changed_by)
+    SELECT 1, 2000, date('now'), 'system:initial-launch'
+    WHERE NOT EXISTS (SELECT 1 FROM sanctum_reward_settings);
+
+    CREATE TABLE IF NOT EXISTS sanctum_daily_rewards (
+      id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+      player_id                TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      wallet                   TEXT NOT NULL,
+      reward_day_utc           TEXT NOT NULL,
+      balance_atomics          TEXT NOT NULL,
+      token_decimals           INTEGER NOT NULL DEFAULT 9,
+      gold_per_clashsol        INTEGER NOT NULL,
+      reward_gold              INTEGER NOT NULL,
+      claimed_gold             INTEGER NOT NULL DEFAULT 0,
+      rpc_slot                 INTEGER,
+      status                   TEXT NOT NULL DEFAULT 'ready'
+        CHECK(status IN ('ready', 'claimed', 'zero', 'disabled')),
+      claimed_at               TEXT,
+      created_at               TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at               TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(player_id, reward_day_utc),
+      UNIQUE(wallet, reward_day_utc)
+    );
+
+    CREATE TABLE IF NOT EXISTS sanctum_reward_wallets (
+      player_id                TEXT PRIMARY KEY REFERENCES players(id) ON DELETE CASCADE,
+      wallet                   TEXT NOT NULL UNIQUE,
+      verified_at              TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at               TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS sanctum_balance_observations (
+      id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+      player_id                TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      wallet                   TEXT NOT NULL,
+      observed_day_utc         TEXT NOT NULL,
+      sample_bucket            INTEGER NOT NULL,
+      balance_atomics          TEXT NOT NULL,
+      rpc_slot                 INTEGER,
+      observed_at              TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(wallet, observed_day_utc, sample_bucket)
+    );
+
+    CREATE TABLE IF NOT EXISTS sanctum_snapshot_events (
+      id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+      player_id                TEXT REFERENCES players(id) ON DELETE SET NULL,
+      wallet                   TEXT,
+      observed_day_utc         TEXT NOT NULL,
+      sample_bucket            INTEGER NOT NULL,
+      result                   TEXT NOT NULL CHECK(result IN ('success', 'failed')),
+      error                    TEXT,
+      rpc_slot                 INTEGER,
+      created_at               TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_sanctum_daily_rewards_player
+      ON sanctum_daily_rewards(player_id, reward_day_utc DESC);
+    CREATE INDEX IF NOT EXISTS idx_sanctum_daily_rewards_status
+      ON sanctum_daily_rewards(status, reward_day_utc DESC);
+    CREATE INDEX IF NOT EXISTS idx_sanctum_daily_rewards_wallet
+      ON sanctum_daily_rewards(wallet, reward_day_utc DESC);
+    CREATE INDEX IF NOT EXISTS idx_sanctum_balance_observations_day
+      ON sanctum_balance_observations(observed_day_utc, player_id, observed_at);
+    CREATE INDEX IF NOT EXISTS idx_sanctum_snapshot_events_result
+      ON sanctum_snapshot_events(result, created_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_sanctum_reward_settings_effective
+      ON sanctum_reward_settings(effective_day_utc DESC, id DESC);
+  `);
+  try { db.exec(`ALTER TABLE sanctum_daily_rewards ADD COLUMN claimed_gold INTEGER NOT NULL DEFAULT 0`); } catch {}
+} catch (e) { console.warn('[db] sanctum rewards migration:', e.message); }
+
 // Internal telemetry. These are append-only event ledgers for admin analytics:
 // where claim-gold/shop/task flows fail, and how resources move through the
 // economy. Keep them server-owned so client code cannot spoof analytics.

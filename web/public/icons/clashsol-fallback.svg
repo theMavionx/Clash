@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="clashSOL">
+  <defs>
+    <linearGradient id="bg" x1="18" y1="12" x2="110" y2="116" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#8B5CF6"/>
+      <stop offset=".52" stop-color="#25D4A6"/>
+      <stop offset="1" stop-color="#F26522"/>
+    </linearGradient>
+    <linearGradient id="sol" x1="36" y1="39" x2="91" y2="88" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#C4B5FD"/>
+      <stop offset=".5" stop-color="#5EEAD4"/>
+      <stop offset="1" stop-color="#FDBA74"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="120" height="120" rx="30" fill="#111827"/>
+  <rect x="7" y="7" width="114" height="114" rx="27" fill="none" stroke="url(#bg)" stroke-width="6"/>
+  <path d="M34 38h63l-10 12H24l10-12Zm-10 25h63L97 51H34L24 63Zm10 13h63L87 88H24l10-12Z" fill="url(#sol)"/>
+  <path d="M64 91 83 80v22l-19 11-19-11V80l19 11Z" fill="#F26522" stroke="#FED7AA" stroke-width="3"/>
+  <path d="M57 95h14v5H57z" fill="#111827"/>
+</svg>

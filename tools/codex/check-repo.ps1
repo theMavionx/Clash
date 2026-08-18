@@ -58,6 +58,13 @@ $NodeFiles = @(
     "server/test-gmx-ui-fee-earnings.js",
     "server/test-rh-lighter-earnings.js",
     "server/test-rhlighter-tournament-migration.js",
+    "server/sanctum.js",
+    "server/sanctum_rewards.js",
+    "server/sanctum_rate_limit.js",
+    "server/test-sanctum.js",
+    "server/test-sanctum-rewards.js",
+    "server/test-sanctum-migration.js",
+    "server/test-sanctum-rate-limit.js",
     "server/index.js",
     "server/routes.js",
     "server/db.js",
@@ -119,6 +126,12 @@ Invoke-Step "RH Lighter tournament schema migration" { node server/test-rhlighte
 Invoke-Step "Aster browser integration" { node web/test-aster-v3.mjs }
 Invoke-Step "Decibel browser referral" { node web/test-decibel-referral.mjs }
 Invoke-Step "RH Lighter browser integration" { node web/test-rh-lighter.mjs }
+Invoke-Step "Sanctum swap integration" { node server/test-sanctum.js }
+Invoke-Step "Sanctum daily holder rewards" { node server/test-sanctum-rewards.js }
+Invoke-Step "Sanctum schema migration" { node server/test-sanctum-migration.js }
+Invoke-Step "Sanctum upstream quotas" { node server/test-sanctum-rate-limit.js }
+Invoke-Step "Sanctum Battle Shop" { node web/test-sanctum-shop.mjs }
+Invoke-Step "Sanctum admin controls" { node web/test-sanctum-admin.mjs }
 Invoke-Step "battle result responsive layout" { node --test web/test-battle-result-layout.mjs }
 Invoke-Step "Godot deploy active-runtime base" { powershell -NoProfile -ExecutionPolicy Bypass -File tools/codex/test-deploy-godot-runtime-base.ps1 }
 Invoke-Step "Tournament trade cursor" { node server/test-tournament-trade-cursor.js }

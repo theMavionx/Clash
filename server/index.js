@@ -26,7 +26,7 @@ loadEnvFile(path.join(REPO_ROOT, 'web', '.env'));
 const express = require('express');
 const cors = require('cors');
 const http = require('http');
-const { router } = require('./routes');
+const { router, sanctumRewardsService } = require('./routes');
 const clashDb = require('./db');
 const earnings = require('./earnings');
 const { startDailyLogAiScheduler } = require('./log_ai_analyzer');
@@ -5569,6 +5569,13 @@ server.listen(PORT, '127.0.0.1', () => {
   console.log(`Clash server running on http://127.0.0.1:${PORT}`);
   console.log(`WebSocket available at ws://127.0.0.1:${PORT}/ws`);
   earnings.startEarningsSnapshotScheduler({ mainDb: clashDb.db });
+  const runSanctumSnapshots = () => sanctumRewardsService.snapshotAllEligiblePlayers()
+    .then((result) => {
+      if (result.attempted || result.failed) console.log('[sanctum-rewards] daily snapshot:', result);
+    })
+    .catch((error) => console.warn('[sanctum-rewards] snapshot scheduler failed:', error?.message || error));
+  setTimeout(runSanctumSnapshots, 20_000).unref?.();
+  setInterval(runSanctumSnapshots, 30 * 60 * 1000).unref?.();
 
   // Marketplace event indexer. Polls each chain for Listed/Cancelled/Sold
   // events and writes them into marketplace_listings.

@@ -500,11 +500,12 @@ prepare_shared_runtime() {
     ensure_env_default "REWARD_SECRET" "$(openssl rand -hex 32)"
     ensure_env_default "NODE_ENV" "production"
     ensure_env_default "ELFA_API_KEY" ""
-    # clashSOL stays launch-pending until Sanctum has registered the pool and
-    # the exact mint is pinned. The API key is server-only and is never lifted
-    # into the Vite/browser build environment.
+    # The API key stays server-only and is never lifted into the Vite/browser
+    # build environment. clashSOL is live, so force the audited public mint in
+    # every release instead of allowing an older blank/stale shared value to
+    # silently put the shop back into launch-pending mode.
     ensure_env_default "SANCTUM_API_KEY" ""
-    ensure_env_default "CLASHSOL_MINT" ""
+    set_env_value "CLASHSOL_MINT" "CLAShCrEjid112Mr1tWk7VqaGUAAKbiKdikDQYyDwfes"
     ensure_env_default "SANCTUM_API_BASE_URL" "https://sanctum-api.ironforge.network"
     ensure_env_default "DECIBEL_API_KEY" ""
     ensure_env_default "DECIBEL_API_KEYS" ""

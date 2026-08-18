@@ -9,7 +9,9 @@ const {
 } = require('@solana/web3.js');
 const {
   WRAPPED_SOL_MINT,
+  LIVE_CLASHSOL_MINT,
   createSanctumService,
+  normalizeSwapDirection,
   parseSolToLamports,
 } = require('./sanctum');
 
@@ -39,6 +41,18 @@ function makeDb() {
       consumed_at TEXT,
       last_error TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    ALTER TABLE sanctum_order_intents ADD COLUMN direction TEXT NOT NULL DEFAULT 'stake';
+    CREATE TABLE player_wallets (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      player_id TEXT NOT NULL,
+      chain_type TEXT NOT NULL,
+      address TEXT NOT NULL,
+      label TEXT,
+      is_primary INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(chain_type, address)
     );
   `);
   return db;
@@ -76,15 +90,18 @@ async function run() {
   assert.equal(parseSolToLamports('1'), '1000000000');
   assert.equal(parseSolToLamports('0.001000001'), '1000001');
   assert.throws(() => parseSolToLamports('1.0000000001'), error => error?.code === 'INVALID_AMOUNT');
+  assert.equal(normalizeSwapDirection('stake'), 'stake');
+  assert.equal(normalizeSwapDirection('UNSTAKE'), 'unstake');
+  assert.throws(() => normalizeSwapDirection('borrow'), error => error?.code === 'INVALID_DIRECTION');
 
-  const pendingService = createSanctumService({ db: makeDb(), fetchImpl: async () => { throw new Error('must not fetch'); } });
+  const pendingService = createSanctumService({ db: makeDb(), apiKey: '', fetchImpl: async () => { throw new Error('must not fetch'); } });
   assert.deepEqual(await pendingService.getStatus(), {
     available: false,
-    launchStatus: 'awaiting_sanctum_deployment',
+    launchStatus: 'configuration_required',
     name: 'Clash Staked SOL',
     symbol: 'clashSOL',
-    mint: null,
-    reason: 'mint_not_deployed',
+    mint: LIVE_CLASHSOL_MINT,
+    reason: 'api_key_missing',
   });
 
   const db = makeDb();
@@ -111,11 +128,16 @@ async function run() {
       });
     }
     if (url.pathname === `/lsts/${clashSolMint}/apys`) {
-      return jsonResponse(200, { last7EpochApy: 0.073 });
+      return jsonResponse(200, { data: [{ epoch: 100, epochEndTs: 1000, apy: 0.071 }, { epoch: 101, epochEndTs: 2000, apy: 0.073 }] });
     }
     if (url.pathname === '/swap/token/order') {
-      assert.equal(url.searchParams.get('inp'), WRAPPED_SOL_MINT);
-      assert.equal(url.searchParams.get('out'), clashSolMint);
+      const inputMint = url.searchParams.get('inp');
+      const outputMint = url.searchParams.get('out');
+      assert.equal(
+        (inputMint === WRAPPED_SOL_MINT && outputMint === clashSolMint)
+          || (inputMint === clashSolMint && outputMint === WRAPPED_SOL_MINT),
+        true,
+      );
       assert.equal(url.searchParams.get('mode'), 'ExactIn');
       assert.equal(url.searchParams.get('signer'), wallet.publicKey.toBase58());
       assert.deepEqual(url.searchParams.getAll('swapSrc'), ['Inf', 'SanctumRouter', 'Jup']);
@@ -124,8 +146,8 @@ async function run() {
       const tx = Buffer.from(unsigned.serialize()).toString('base64');
       unsignedByAmount.set(amount, tx);
       return jsonResponse(200, {
-        inp: WRAPPED_SOL_MINT,
-        out: clashSolMint,
+        inp: inputMint,
+        out: outputMint,
         mode: 'ExactIn',
         tx,
         inpAmt: amount,
@@ -136,7 +158,7 @@ async function run() {
     if (url.pathname === '/swap/token/execute') {
       assert.equal(init.method, 'POST');
       const body = JSON.parse(init.body);
-      assert.equal(body.orderResponse.out, clashSolMint);
+      assert.equal([clashSolMint, WRAPPED_SOL_MINT].includes(body.orderResponse.out), true);
       assert.ok(typeof body.signedTx === 'string');
       return jsonResponse(200, { signature: finalSignature });
     }
@@ -156,6 +178,12 @@ async function run() {
   assert.equal(status.available, true);
   assert.equal(status.mint, clashSolMint);
   assert.equal(status.apy, 0.073);
+  assert.equal(status.apyPeriod, 'last_epoch');
+  const degradedStatus = service.getLocalStatus({ degraded: true, error: 'temporary outage' });
+  assert.equal(degradedStatus.available, true);
+  assert.equal(degradedStatus.degraded, true);
+  assert.equal(degradedStatus.mint, clashSolMint);
+  assert.match(degradedStatus.warning, /temporary outage/);
 
   const undiscoverableService = createSanctumService({
     db: makeDb(),
@@ -184,7 +212,8 @@ async function run() {
   await expectCode(service.executeOrder({
     playerId: 'different-player', orderId: badSignatureOrder.orderId, signedTransaction: badSignatureOrder.transaction,
   }), 'ORDER_NOT_FOUND');
-  db.prepare('UPDATE sanctum_order_intents SET expires_at_ms = 0 WHERE id = ?').run(badSignatureOrder.orderId);
+  db.prepare('UPDATE sanctum_order_intents SET expires_at_ms = ? WHERE id = ?')
+    .run(Date.now() - 1, badSignatureOrder.orderId);
   await expectCode(service.executeOrder({
     playerId: 'player-1', orderId: badSignatureOrder.orderId, signedTransaction: badSignatureOrder.transaction,
   }), 'ORDER_EXPIRED');
@@ -216,13 +245,124 @@ async function run() {
     signedTransaction: Buffer.from(signed.serialize()).toString('base64'),
   });
   assert.equal(result.signature, finalSignature);
+  assert.equal(
+    db.prepare('SELECT address FROM player_wallets WHERE player_id = ?').get('player-1').address,
+    wallet.publicKey.toBase58(),
+  );
   assert.equal(db.prepare('SELECT status FROM sanctum_order_intents WHERE id = ?').get(order.orderId).status, 'consumed');
   await expectCode(service.executeOrder({
     playerId: 'player-1', orderId: order.orderId, signedTransaction: Buffer.from(signed.serialize()).toString('base64'),
   }), 'ORDER_ALREADY_EXECUTED');
 
+  const unstakeOrder = await service.createOrder({
+    playerId: 'player-1',
+    wallet: wallet.publicKey.toBase58(),
+    amount: '0.125',
+    direction: 'unstake',
+    slippageBps: 35,
+  });
+  assert.equal(unstakeOrder.direction, 'unstake');
+  assert.equal(unstakeOrder.inputMint, clashSolMint);
+  assert.equal(unstakeOrder.outputMint, WRAPPED_SOL_MINT);
+  assert.equal(db.prepare('SELECT direction FROM sanctum_order_intents WHERE id = ?').get(unstakeOrder.orderId).direction, 'unstake');
+  await expectCode(service.createOrder({
+    playerId: 'player-1',
+    wallet: wallet.publicKey.toBase58(),
+    amount: '1',
+    direction: 'borrow',
+  }), 'INVALID_DIRECTION');
+
+  const limitedDb = makeDb();
+  const limitedNow = Date.parse('2026-08-18T12:00:00.000Z');
+  let upstreamOrders = 0;
+  let limitedCounter = 0;
+  const limitedFetch = async input => {
+    const url = new URL(String(input));
+    if (url.pathname === `/lsts/${clashSolMint}`) {
+      return jsonResponse(200, {
+        data: [{
+          mint: clashSolMint,
+          symbol: 'clashSOL',
+          name: 'Clash Staked SOL',
+          decimals: 9,
+          pool: { program: 'SanctumSpl', pool: Keypair.generate().publicKey.toBase58() },
+        }],
+      });
+    }
+    if (url.pathname.endsWith('/apys')) return jsonResponse(200, { data: [] });
+    if (url.pathname === '/swap/token/order') {
+      upstreamOrders += 1;
+      const tx = Buffer.from(makeUnsignedTransaction(wallet).serialize()).toString('base64');
+      return jsonResponse(200, {
+        inp: url.searchParams.get('inp'),
+        out: url.searchParams.get('out'),
+        mode: 'ExactIn',
+        tx,
+        inpAmt: url.searchParams.get('amt'),
+        outAmt: url.searchParams.get('amt'),
+        swapSrcData: { swapSrc: 'SanctumRouter', data: { fees: [] } },
+      });
+    }
+    return jsonResponse(404, { error: 'unexpected route' });
+  };
+  const limitedService = createSanctumService({
+    db: limitedDb,
+    fetchImpl: limitedFetch,
+    apiKey,
+    clashSolMint,
+    apiBaseUrl: 'https://sanctum.test',
+    now: () => limitedNow,
+    randomUUID: () => `limited-${++limitedCounter}`,
+    pendingIntentLimit: 3,
+    expiredIntentRetentionMs: 24 * 60 * 60 * 1000,
+  });
+  const pendingOrders = [];
+  for (let index = 0; index < 3; index += 1) {
+    pendingOrders.push(await limitedService.createOrder({
+      playerId: 'player-1',
+      wallet: wallet.publicKey.toBase58(),
+      amount: '0.1',
+      direction: 'stake',
+    }));
+  }
+  assert.equal(upstreamOrders, 3);
+  await expectCode(limitedService.createOrder({
+    playerId: 'player-1',
+    wallet: wallet.publicKey.toBase58(),
+    amount: '0.1',
+    direction: 'stake',
+  }), 'TOO_MANY_PENDING_ORDERS');
+  assert.equal(upstreamOrders, 3, 'pending-intent rejection must happen before an upstream quote call');
+  limitedDb.prepare(`
+    UPDATE sanctum_order_intents
+    SET status = 'expired', expires_at_ms = ?
+    WHERE id = ?
+  `).run(limitedNow - (2 * 24 * 60 * 60 * 1000), pendingOrders[0].orderId);
+  await limitedService.createOrder({
+    playerId: 'player-1',
+    wallet: wallet.publicKey.toBase58(),
+    amount: '0.1',
+    direction: 'stake',
+  });
+  assert.equal(
+    limitedDb.prepare('SELECT COUNT(*) AS count FROM sanctum_order_intents WHERE id = ?').get(pendingOrders[0].orderId).count,
+    0,
+    'expired quote payloads must be pruned after retention',
+  );
+  assert.equal(upstreamOrders, 4);
+
   assert.ok(seenUrls.length >= 5);
-  console.log('Sanctum clashSOL tests passed: pending status, fixed route, exact message/signature verification, replay protection.');
+  if (process.env.SANCTUM_LIVE_TEST === '1') {
+    const live = createSanctumService({ db: makeDb() });
+    const liveStatus = await live.getStatus({ force: true });
+    assert.equal(liveStatus.available, true);
+    assert.equal(liveStatus.mint, LIVE_CLASHSOL_MINT);
+    assert.equal(liveStatus.symbol, 'clashSOL');
+    assert.equal(liveStatus.apyPeriod, 'last_epoch');
+    assert.equal(Number.isFinite(Number(liveStatus.apy)), true);
+    console.log('Sanctum live metadata and latest-epoch APY verified.');
+  }
+  console.log('Sanctum clashSOL tests passed: live mint config, bidirectional fixed routes, exact signature verification, replay protection.');
 }
 
 run().catch(error => {

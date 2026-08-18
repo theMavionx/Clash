@@ -1,6 +1,6 @@
 # Active Session State
 
-Last updated: 2026-08-14
+Last updated: 2026-08-18
 
 ## Current Focus
 
@@ -14,19 +14,25 @@ exchange/UI/Godot checks must pass, and production must verify the `rhlighter`
 tournament-schema migration without losing rows. No funded order is part of the
 release smoke.
 
-The active implementation task is the `clashSOL` Sanctum LST shop integration
-(goal G-010). Sanctum's live API can quote/build/execute transactions only for
-an already deployed LST; the actual LST launch remains a manual Sanctum partner
-process. Local work must therefore ship a truthful launch-pending state and a
-fully tested transaction flow gated by server-only configuration.
+The active implementation task is the live `clashSOL` Sanctum Battle Shop and
+completed-day holder reward integration (goal G-010). Sanctum now resolves the launched
+9-decimal SanctumSpl clashSOL mint. Current work moves the existing secure swap
+flow out of the construction picker, adds SOL↔clashSOL exact-input swaps, daily
+server-verified Gold entitlements at an initial 2,000 Gold per clashSOL, player
+history, and admin configuration/metrics. Reward observations run every 30
+minutes, mature on the next UTC day from the minimum observed balance, and can
+be claimed partially when Gold storage is constrained. The API key remains
+server-only.
 
-Implementation checkpoint: the local two-state integration is complete and
-focused tests pass. The remaining dependency is Sanctum's external pool launch,
-the issued mint/API key, and a separately approved funded smoke transaction.
-The current full web build is independently blocked by unfinished Hidden Tesla
-asset work that references a missing `web/src/assets/buildings/hidden_tesla.png`;
-do not remove or paper over those concurrent owner changes while finishing the
-Sanctum launch.
+Implementation checkpoint: Sanctum's external pool is live and the complete
+bidirectional swap, completed-day reward, admin and audit-export implementation
+has passed responsive light/dark UI review, focused server/web/migration/abuse
+tests, full lint/build and the canonical Deploy gate. The API key and live mint
+were verified server-side without exposing the key. QA, UX and art are GO;
+DevOps is GO with a targeted pre-migration schema/intent backup because the
+existing intent table is empty and the migration is additive. Remaining work is
+the authorized commit/push/production rollout and post-deploy smoke. A funded
+swap remains an optional owner-signed follow-up, not part of unattended deploy.
 
 The repository is being prepared for faster owner-driven Codex work. Durable context now lives in:
 
@@ -73,10 +79,9 @@ Main current goals:
 
 ## Next Useful Checkpoint
 
-For clashSOL, approve the branding and revenue wallet in
-`docs/integrations/clashsol-sanctum-launch.md`, complete the Sanctum partner
-launch, then configure the server and run the funded smoke checklist. General
-context recovery remains:
+For clashSOL, finish the production rollout, monitor the first completed UTC-day
+reward finalization/claim, and run the funded swap checklist only with an owner
+wallet signature. General context recovery remains:
 
 ```powershell
 tools/codex/start-context.cmd -Full

@@ -77,6 +77,31 @@ export function adminPatch(path, body, options) {
   return adminFetch(path, { ...options, method: 'PATCH', body });
 }
 
+export function adminPut(path, body, options) {
+  return adminFetch(path, { ...options, method: 'PUT', body });
+}
+
 export function adminDelete(path, options) {
   return adminFetch(path, { ...options, method: 'DELETE' });
+}
+
+export async function adminDownload(path, filename) {
+  const response = await fetch('/api' + path, {
+    headers: { 'x-admin-key': getStoredAdminKey() },
+    cache: 'no-store',
+  });
+  if (!response.ok) {
+    if (response.status === 403) clearAdminKey();
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(payload?.error || `Download failed (HTTP ${response.status})`);
+  }
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename || 'export.csv';
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
 }

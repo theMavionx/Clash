@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { adminDelete, adminGet, adminPatch, adminPost, clearAdminKey, getStoredAdminKey, storeAdminKey } from './api';
+import { adminDelete, adminDownload, adminGet, adminPatch, adminPost, adminPut, clearAdminKey, getStoredAdminKey, storeAdminKey } from './api';
 import {
   DEX_LABELS,
   PRIZE_PRESETS,
@@ -136,6 +136,7 @@ const NAV = [
   { id: 'earnings', label: 'Earnings', hint: 'Revenue analytics', icon: 'ER' },
   { id: 'referrals', label: 'Referrals', hint: 'Invites, commissions, payouts', icon: 'RF' },
   { id: 'shop', label: 'Shop', hint: 'Billing and AI chat', icon: 'SH' },
+  { id: 'sanctum', label: 'clashSOL', hint: 'LST growth and daily Gold', icon: 'LS' },
   { id: 'marketplace', label: 'Marketplace', hint: 'Custodial orders', icon: 'MP' },
   { id: 'nft', label: 'NFT / Bridge', hint: 'Supply and bridge state', icon: 'NF' },
   { id: 'logs', label: 'Logs', hint: 'Server logs', icon: 'LG' },
@@ -168,6 +169,7 @@ const SIMPLE_LOADERS = {
     adminGet('/admin/shop'),
     adminGet('/admin/ai-chat/billing').catch((error) => ({ error: error.message })),
   ]).then(([shop, aiBilling]) => ({ shop, aiBilling })),
+  sanctum: () => adminGet('/admin/sanctum?limit=200'),
   marketplace: () => adminGet('/admin/marketplace/custodial/stats?limit=500'),
   nft: () => adminGet('/admin/nft-analytics'),
   logs: () => adminGet('/admin/logs?limit=200'),
@@ -420,6 +422,7 @@ export default function AdminApp() {
             {active === 'earnings' && <EarningsPanel data={simpleData.earnings} reload={refreshActive} />}
             {active === 'referrals' && <ReferralsPanel data={simpleData.referrals} reload={refreshActive} />}
             {active === 'shop' && <ShopPanel data={simpleData.shop} />}
+            {active === 'sanctum' && <SanctumAdminPanel data={simpleData.sanctum} reload={refreshActive} />}
             {active === 'marketplace' && <MarketplacePanel data={simpleData.marketplace} reload={refreshActive} />}
             {active === 'nft' && <NftPanel data={simpleData.nft} />}
             {active === 'feedback' && <FeedbackPanel data={simpleData.feedback} />}
@@ -442,7 +445,7 @@ export default function AdminApp() {
               />
             )}
             {active === 'elfa' && <ElfaPanel data={simpleData.elfa} />}
-            {!['overview', 'players', 'mm-bots', 'tournaments', 'replays', 'stats', 'clash', 'tasks', 'client', 'logs', 'earnings', 'referrals', 'shop', 'marketplace', 'nft', 'feedback', 'ai-reports', 'phantom-bots', 'elfa'].includes(active) && (
+            {!['overview', 'players', 'mm-bots', 'tournaments', 'replays', 'stats', 'clash', 'tasks', 'client', 'logs', 'earnings', 'referrals', 'shop', 'sanctum', 'marketplace', 'nft', 'feedback', 'ai-reports', 'phantom-bots', 'elfa'].includes(active) && (
               <GenericDataPanel id={active} data={simpleData[active]} reload={refreshActive} />
             )}
           </section>
@@ -5092,6 +5095,153 @@ function ShopPanel({ data }) {
         <CompactTable title="Hermes Recent Errors" subtitle="Newest AI orchestration failures." columns={['Time', 'Player', 'Intent', 'Error']} rows={(billing.hermes_errors_recent || []).slice(0, 80).map((row) => [fmtTime(row.created_at), row.player_name || row.player_id || '-', row.intent || row.event_type || '-', row.error || row.response_preview || '-'])} />
       </div>
       <CompactTable title="Recent Purchases" subtitle="Newest utility purchases with chain and tx context." columns={['Time', 'Player', 'Product', 'Chain', 'Price', 'Tx']} rows={(shop.recent || []).map((row) => [fmtTime(row.created_at), row.name, row.title || row.sku, row.chain, fmtMaybeUsd(row.price_usd), short(row.tx_hash, 10, 8)])} />
+    </div>
+  );
+}
+
+function SanctumAdminPanel({ data, reload }) {
+  const current = data?.settings?.current || {};
+  const upcoming = data?.settings?.next || null;
+  const summary = data?.summary || {};
+  const [enabled, setEnabled] = useState(current.enabled !== false);
+  const [rate, setRate] = useState(String(current.gold_per_clashsol ?? 2000));
+  const [saving, setSaving] = useState(false);
+  const [notice, setNotice] = useState('');
+
+  async function downloadExport(dataset) {
+    setNotice('');
+    try {
+      await adminDownload(`/admin/sanctum/export.csv?dataset=${dataset}`, `clashsol-${dataset}.csv`);
+    } catch (error) {
+      setNotice(error.message || 'Could not download clashSOL audit export');
+    }
+  }
+
+  useEffect(() => {
+    setEnabled(current.enabled !== false);
+    setRate(String(current.gold_per_clashsol ?? 2000));
+  }, [current.enabled, current.gold_per_clashsol]);
+
+  if (!data) return <LoadingCard title="clashSOL Growth & Rewards" />;
+
+  const numericRate = Number(rate);
+  const validRate = Number.isInteger(numericRate) && numericRate >= 0 && numericRate <= 1_000_000;
+  const claimed = Number(summary.claims_30d || 0);
+  const eligible = (data.daily || []).reduce((sum, row) => sum + Number(row.eligible_holders || 0), 0);
+  const claimRate = eligible > 0 ? `${((claimed / eligible) * 100).toFixed(1)}%` : '0%';
+  const apyValue = Number(data?.status?.apy);
+  const apyPercent = Number.isFinite(apyValue) ? (apyValue <= 1 ? apyValue * 100 : apyValue) : null;
+  const tokenAmount = (value) => (Number(value || 0) / 1e9).toLocaleString(undefined, { maximumFractionDigits: 6 });
+
+  async function saveSettings() {
+    if (!validRate || saving) return;
+    const effective = upcoming?.effective_day_utc || 'the next UTC day';
+    if (!window.confirm(`Apply ${numericRate.toLocaleString()} Gold per clashSOL from ${effective} 00:00 UTC? Existing entitlements will not change.`)) return;
+    setSaving(true);
+    setNotice('');
+    try {
+      const result = await adminPut('/admin/sanctum/settings', {
+        enabled,
+        gold_per_clashsol: numericRate,
+      });
+      setNotice(`Saved. New settings take effect ${result.settings?.next?.effective_day_utc || 'next UTC day'}.`);
+      await reload();
+    } catch (error) {
+      setNotice(error.message || 'Could not save clashSOL settings');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="admin-grid">
+      <StatsGrid stats={[
+        { label: 'Verified holders', value: num(summary.verified_holders || 0), tone: 'blue' },
+        { label: 'Observed holders today', value: num(summary.current_holders || 0), tone: 'blue' },
+        { label: 'Eligible today', value: num(summary.eligible_today || 0), tone: 'green' },
+        { label: 'Verified clashSOL', value: Number(summary.clashsol_today || 0).toLocaleString(undefined, { maximumFractionDigits: 4 }), tone: 'blue' },
+        { label: 'Average positive balance', value: Number(summary.avg_positive_balance || 0).toLocaleString(undefined, { maximumFractionDigits: 4 }) },
+        { label: 'Pending Gold', value: num(summary.pending_gold || 0), tone: Number(summary.pending_gold) > 0 ? 'gold' : 'off' },
+        { label: 'Issued 24h', value: num(summary.issued_24h || 0), tone: 'gold' },
+        { label: 'Issued 7d', value: num(summary.issued_7d || 0), tone: 'gold' },
+        { label: 'Issued 30d', value: num(summary.issued_30d || 0), tone: 'gold' },
+        { label: 'Claims 30d', value: num(summary.claims_30d || 0), tone: 'green' },
+        { label: 'Claim participation', value: claimRate },
+        { label: 'Swap users', value: num(summary.swap_users || 0), tone: 'blue' },
+        { label: 'Completed swaps', value: num(summary.swaps_complete || 0), tone: 'green' },
+        { label: 'Snapshot failures 24h', value: num(summary.snapshot_failures_24h || 0), tone: Number(summary.snapshot_failures_24h) > 0 ? 'red' : 'green' },
+      ]} />
+
+      <div className="admin-grid two">
+        <div className="admin-card">
+          <div className="admin-card-head">
+            <div>
+              <div className="admin-card-title">Live clashSOL</div>
+              <div className="admin-card-sub">Sanctum pool health and audited mint.</div>
+            </div>
+            <span className={`admin-badge ${data.status?.available ? 'green' : 'red'}`}>{data.status?.available ? 'live' : 'unavailable'}</span>
+          </div>
+          <div className="admin-card-body admin-grid">
+            <div><strong>{data.status?.name || 'Clash Staked SOL'}</strong> · {data.status?.symbol || 'clashSOL'}</div>
+            <div className="admin-mono" style={{ wordBreak: 'break-all' }}>{data.mint || data.status?.mint || '-'}</div>
+            <div className="admin-card-sub">Last epoch APY: {apyPercent == null ? '—' : `${apyPercent.toFixed(2)}%`} · Last sample {fmtTime(summary.last_snapshot_at)} · {num(summary.samples_today || 0)} samples today</div>
+            <a className="admin-btn" href="https://app.sanctum.so/explore/clashSOL" target="_blank" rel="noreferrer">Open on Sanctum</a>
+          </div>
+        </div>
+
+        <div className="admin-card">
+          <div className="admin-card-head"><div><div className="admin-card-title">Daily Gold settings</div><div className="admin-card-sub">Changes are append-only and start next UTC day.</div></div></div>
+          <div className="admin-card-body admin-grid">
+            <label className="admin-field">
+              <span className="admin-label">Daily rewards</span>
+              <select className="admin-input" value={enabled ? 'enabled' : 'disabled'} onChange={(event) => setEnabled(event.target.value === 'enabled')}>
+                <option value="enabled">Enabled</option>
+                <option value="disabled">Paused</option>
+              </select>
+            </label>
+            <label className="admin-field">
+              <span className="admin-label">Gold per 1 clashSOL</span>
+              <input className="admin-input" type="number" min="0" max="1000000" step="1" value={rate} onChange={(event) => setRate(event.target.value)} />
+            </label>
+            {!validRate && <div className="admin-error">Enter a whole number from 0 to 1,000,000.</div>}
+            <div className="admin-filter-row">
+              {[0.1, 1, 10].map(amount => <span className="admin-badge gold" key={amount}>{amount} clashSOL → {validRate ? Math.floor(amount * numericRate).toLocaleString() : '—'} Gold</span>)}
+            </div>
+            {upcoming && <div className="admin-card-sub">Scheduled: {upcoming.enabled ? 'enabled' : 'paused'}, {num(upcoming.gold_per_clashsol)} Gold from {upcoming.effective_day_utc} UTC.</div>}
+            {notice && <div className={notice.startsWith('Saved') ? 'admin-badge green' : 'admin-error'}>{notice}</div>}
+            <button className="admin-btn primary" type="button" disabled={!validRate || saving} onClick={saveSettings}>{saving ? 'Saving…' : 'Save settings'}</button>
+          </div>
+        </div>
+      </div>
+
+      <CompactTable
+        title="Daily Reward Metrics"
+        subtitle="Rewards mature next day from each wallet’s minimum observed balance across the UTC day."
+        columns={['UTC day', 'Eligible holders', 'Eligible clashSOL', 'Claims', 'Claim rate', 'Gold issued']}
+        rows={(data.daily || []).map(row => {
+          const holders = Number(row.eligible_holders || 0);
+          const claims = Number(row.claims || 0);
+          return [row.reward_day_utc, num(holders), Number(row.eligible_clashsol || 0).toLocaleString(undefined, { maximumFractionDigits: 4 }), num(claims), holders ? `${((claims / holders) * 100).toFixed(1)}%` : '0%', num(row.gold_issued || 0)];
+        })}
+      />
+      <CompactTable title="Recent Claims" subtitle="Player and wallet snapshots backing every Gold entitlement." columns={['Created', 'Player', 'Wallet', 'Reward day', 'Balance', 'Rate', 'Gold', 'Status', 'Claimed']} rows={(data.claims || []).map(row => [fmtTime(row.created_at), row.player_name || short(row.player_id, 8, 6), <span className="admin-mono">{short(row.wallet, 8, 6)}</span>, row.reward_day_utc, (Number(row.balance_atomics || 0) / 1e9).toLocaleString(undefined, { maximumFractionDigits: 6 }), num(row.gold_per_clashsol), num(row.reward_gold), statusBadge(row.status), fmtTime(row.claimed_at)])} />
+      <CompactTable title="Recent Swaps" subtitle="Sanctum intent and execution audit trail." columns={['Created', 'Player', 'Wallet', 'Direction', 'Input', 'Output', 'Status', 'Signature']} rows={(data.swaps || []).map(row => [fmtTime(row.created_at), row.player_name || short(row.player_id, 8, 6), <span className="admin-mono">{short(row.wallet, 8, 6)}</span>, row.direction === 'unstake' ? 'clashSOL → SOL' : 'SOL → clashSOL', tokenAmount(row.input_amount), tokenAmount(row.output_amount), statusBadge(row.status), <span className="admin-mono">{short(row.tx_signature, 10, 8)}</span>])} />
+      <CompactTable title="Configuration History" subtitle="Append-only rate and pause audit; historical entitlements never change." columns={['Changed', 'Admin', 'State', 'Rate', 'Effective UTC day']} rows={(data.config_history || []).map(row => [fmtTime(row.created_at), row.changed_by || '-', row.enabled ? <span className="admin-badge green">enabled</span> : <span className="admin-badge off">paused</span>, num(row.gold_per_clashsol), row.effective_day_utc])} />
+      <div className="admin-card">
+        <div className="admin-card-head"><div><div className="admin-card-title">Full audit exports</div><div className="admin-card-sub">Download complete CSV ledgers for finance, growth, and support audits.</div></div></div>
+        <div className="admin-card-body admin-filter-row">
+          {['rewards', 'swaps', 'observations', 'snapshot-events', 'settings'].map((dataset) => (
+            <button
+              className="admin-btn"
+              key={dataset}
+              type="button"
+              onClick={() => downloadExport(dataset)}
+            >
+              Export {dataset} CSV
+            </button>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }

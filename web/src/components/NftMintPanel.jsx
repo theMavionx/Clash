@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useWallet as useSolWallet } from '@solana/wallet-adapter-react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { createPublicClient, createWalletClient, custom, http } from 'viem';
@@ -25,6 +25,7 @@ import { openSolanaWallet } from '../lib/solanaWalletUi';
 import { addClientBreadcrumb } from '../lib/clientLogger';
 import NftBridgePanel from './NftBridgePanel';
 import NftMarketplacePanel from './CustodialMarketplacePanel';
+import SanctumShopTab from './SanctumShopTab';
 import altarImg from '../assets/units/altar.png';
 
 const demonKingImg = '/cdn/nft/1/default.jpg';
@@ -106,6 +107,7 @@ function ChainLogoBadge({ chain, fallback, small = false }) {
 
 const SHOP_TABS = [
   { id: 'resources',   label: 'Game Resources', mobileLabel: 'Resources' },
+  { id: 'clashsol',    label: 'clashSOL',       mobileLabel: 'clashSOL' },
   ...(SHOW_NFT_MINT_TAB ? [{ id: 'nft', label: 'NFT', mobileLabel: 'NFT' }] : []),
   { id: 'marketplace', label: 'Marketplace',    mobileLabel: 'Market' },
 ];
@@ -526,7 +528,8 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
   const { isInFrame } = useFarcaster();
   const { isMobile: panelMobile } = useLayout();
 
-  const [activeShopTab, setActiveShopTab] = useState(SHOW_NFT_MINT_TAB ? 'nft' : 'resources');
+  const [activeShopTab, setActiveShopTab] = useState('resources');
+  const shopTabsRef = useRef(null);
   // Skip the legacy chain-picker step on open — the player's chain comes
   // from their chosen DEX (see [[shop-auto-chain]]). They can still re-pick
   // a chain via the top-right chip which calls handleBackToChains.
@@ -555,6 +558,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
   const [shopPurchaseStatus, setShopPurchaseStatus] = useState('idle');
   const [shopPurchaseResult, setShopPurchaseResult] = useState(null);
   const [marketplaceStats, setMarketplaceStats] = useState(DEFAULT_MARKETPLACE_STATS);
+  const [clashSolClaimReady, setClashSolClaimReady] = useState(false);
 
   const localEvmWallet = useMemo(
     () => makeNftEvmWallet(nftEvmWallet?.provider, nftEvmWallet?.address),
@@ -1193,6 +1197,11 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
   const saleMintSoldOut = SALE_NFT_MINT_SOLD_OUT;
   const saleMintLocked = SALE_NFT_MINT_LOCKED;
   const marketplaceFullScroll = view === 'shop' && activeShopTab === 'marketplace';
+
+  useEffect(() => {
+    const activeButton = shopTabsRef.current?.querySelector?.(`[data-shop-tab="${activeShopTab}"]`);
+    activeButton?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+  }, [activeShopTab]);
   const canSwitchPaymentChain = activeShopTab === 'resources' || (SHOW_NFT_MINT_TAB && activeShopTab === 'nft' && !saleMintLocked);
   const activePaymentChain = activeShopTab === 'resources'
     ? shopChain
@@ -1257,6 +1266,12 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
     }
   }, [adapterSolWallet, dex, usingPrivySolWallet]);
 
+  const handleClashSolResourcesChanged = useCallback((_resources, claimedGold) => {
+    if (Number(claimedGold) > 0) {
+      flyResourcesToBars({ gold: Number(claimedGold) }, { count: 8 });
+    }
+  }, []);
+
   return (
     <>
       <style>{MINT_ANIM_CSS}</style>
@@ -1302,25 +1317,24 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
               />
             ) : (
             <>
-            <div
-              style={{
-                ...styles.shopTabs,
-                gridTemplateColumns: `repeat(${SHOP_TABS.length}, minmax(0, 1fr))`,
-              }}
-            >
+            <div ref={shopTabsRef} style={styles.shopTabs} className="shop-tabs-scroll" aria-label="Battle Shop sections">
               {SHOP_TABS.map((tab) => {
                 const active = activeShopTab === tab.id;
                 return (
                   <button
                     key={tab.id}
                     type="button"
+                    data-shop-tab={tab.id}
                     onClick={() => { setActiveShopTab(tab.id); setChainPickerOpen(false); setNotice(null); }}
                     style={{
                       ...styles.shopTabBtn,
                       ...(active ? styles.shopTabBtnActive : null),
                     }}
                   >
-                    {panelMobile ? (tab.mobileLabel || tab.label) : tab.label}
+                    <span>{panelMobile ? (tab.mobileLabel || tab.label) : tab.label}</span>
+                    {tab.id === 'clashsol' && clashSolClaimReady && (
+                      <span style={styles.shopTabClaimBadge}>CLAIM</span>
+                    )}
                   </button>
                 );
               })}
@@ -1330,6 +1344,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
                 viewport clips overflow so only the active tab is visible;
                 each slide owns its own vertical scroll so the panel size
                 stays stable across tabs. */}
+            {activeShopTab !== 'clashsol' && (
             <div style={styles.shopActionRow}>
               {canSwitchPaymentChain && (
                 <button
@@ -1356,6 +1371,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
                 <span>Bridge</span>
               </button>
             </div>
+            )}
             {chainPickerOpen && (
               <ShopChainSwitcher
                 activeChain={activePaymentChain}
@@ -1417,7 +1433,27 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
                   />
                 </div>
 
-                {/* ─── NFT slide (index 1) ─────────────────────────── */}
+                {/* ─── clashSOL slide ─────────────────────────────── */}
+                <div
+                  className="shop-scroll"
+                  style={{
+                    ...styles.slide,
+                    ...(marketplaceFullScroll ? styles.slideHiddenForMarketplaceScroll : null),
+                  }}
+                  aria-hidden={activeShopTab !== 'clashsol'}
+                  inert={activeShopTab !== 'clashsol' ? true : undefined}
+                >
+                  <SanctumShopTab
+                    solWallet={solWallet}
+                    solAddress={solAddress}
+                    onConnect={handleSolanaReady}
+                    sessionToken={sessionToken}
+                    onClaimReadyChange={setClashSolClaimReady}
+                    onResourcesChanged={handleClashSolResourcesChanged}
+                  />
+                </div>
+
+                {/* ─── NFT slide ──────────────────────────────────── */}
                 {SHOW_NFT_MINT_TAB ? (
                 <div
                   className="shop-scroll"
@@ -3957,18 +3993,20 @@ const styles = {
     textShadow: 'none',
   },
   shopTabs: {
-    display: 'grid',
-    gridTemplateColumns: '1fr 1fr',
+    display: 'flex',
     gap: 6,
     padding: 4,
     borderRadius: 12,
     background: 'var(--terminal-surface-subtle)',
     border: '1px solid var(--terminal-border)',
+    overflowX: 'auto',
+    scrollbarWidth: 'none',
   },
   shopTabBtn: {
-    minHeight: 34,
-    minWidth: 0,
-    padding: '0 6px',
+    minHeight: 44,
+    minWidth: 104,
+    flex: '1 0 auto',
+    padding: '0 9px',
     border: '1px solid transparent',
     borderRadius: 9,
     background: 'transparent',
@@ -3978,9 +4016,21 @@ const styles = {
     cursor: 'pointer',
     fontFamily: 'inherit',
     whiteSpace: 'nowrap',
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
     textAlign: 'center',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+  },
+  shopTabClaimBadge: {
+    padding: '2px 5px',
+    borderRadius: 999,
+    border: '1px solid var(--terminal-warning-border)',
+    background: 'var(--terminal-warning-soft)',
+    color: 'var(--terminal-warning)',
+    fontSize: 10,
+    lineHeight: 1,
+    fontWeight: 800,
   },
   shopTabBtnActive: {
     background: 'var(--terminal-brand-soft)',

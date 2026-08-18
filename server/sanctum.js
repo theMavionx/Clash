@@ -11,6 +11,7 @@ const bs58 = bs58Module.default || bs58Module;
 
 const DEFAULT_API_BASE_URL = 'https://sanctum-api.ironforge.network';
 const WRAPPED_SOL_MINT = 'So11111111111111111111111111111111111111112';
+const LIVE_CLASHSOL_MINT = 'CLAShCrEjid112Mr1tWk7VqaGUAAKbiKdikDQYyDwfes';
 const DEFAULT_ORDER_TTL_MS = 90_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 5_000;
 const STATUS_CACHE_MS = 60_000;
@@ -52,10 +53,10 @@ function normalizePublicKey(value, fieldName = 'wallet') {
   }
 }
 
-function parseSolToLamports(value) {
+function parseSolToLamports(value, symbol = 'token') {
   const text = String(value ?? '').trim();
   if (!/^(?:0|[1-9]\d*)(?:\.\d{1,9})?$/.test(text)) {
-    throw new SanctumError('INVALID_AMOUNT', 'Enter a valid SOL amount with at most 9 decimals', 400);
+    throw new SanctumError('INVALID_AMOUNT', `Enter a valid ${symbol} amount with at most 9 decimals`, 400);
   }
   const [whole, fraction = ''] = text.split('.');
   const lamports = (BigInt(whole) * 1_000_000_000n) + BigInt((fraction + '000000000').slice(0, 9));
@@ -66,6 +67,14 @@ function parseSolToLamports(value) {
     throw new SanctumError('AMOUNT_TOO_LARGE', 'Maximum stake per order is 10,000 SOL', 400);
   }
   return lamports.toString();
+}
+
+function normalizeSwapDirection(value) {
+  const direction = String(value || 'stake').trim().toLowerCase();
+  if (!['stake', 'unstake'].includes(direction)) {
+    throw new SanctumError('INVALID_DIRECTION', 'Use stake or unstake for clashSOL swaps', 400);
+  }
+  return direction;
 }
 
 function parseSlippageBps(value) {
@@ -184,6 +193,12 @@ function safeLstMetadata(payload, configuredMint) {
 
 function extractApy(payload) {
   const source = payload?.apy || payload?.apys || payload?.data || payload || {};
+  if (Array.isArray(source)) {
+    const latest = source
+      .filter(row => Number.isFinite(Number(row?.apy)))
+      .sort((a, b) => Number(b?.epochEndTs || b?.epoch || 0) - Number(a?.epochEndTs || a?.epoch || 0))[0];
+    return latest ? Number(latest.apy) : null;
+  }
   const candidates = [
     typeof source === 'number' ? source : null,
     source.total,
@@ -194,7 +209,7 @@ function extractApy(payload) {
     source.last_7_epoch_apy,
     source.annualPercentageYield,
   ];
-  const value = candidates.map(Number).find(candidate => Number.isFinite(candidate) && candidate > 0);
+  const value = candidates.map(Number).find(candidate => Number.isFinite(candidate) && candidate >= 0);
   return value ?? null;
 }
 
@@ -203,14 +218,22 @@ function safeJsonError(payload, fallback) {
   return typeof candidate === 'string' && candidate.trim() ? candidate.trim().slice(0, 300) : fallback;
 }
 
+function positiveInteger(value, fallback) {
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 function createSanctumService({
   db,
   fetchImpl = globalThis.fetch,
   apiKey = process.env.SANCTUM_API_KEY,
-  clashSolMint = process.env.CLASHSOL_MINT,
+  clashSolMint = process.env.CLASHSOL_MINT || LIVE_CLASHSOL_MINT,
   apiBaseUrl = process.env.SANCTUM_API_BASE_URL || DEFAULT_API_BASE_URL,
   requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
   orderTtlMs = DEFAULT_ORDER_TTL_MS,
+  pendingIntentLimit = process.env.SANCTUM_PENDING_INTENT_LIMIT,
+  expiredIntentRetentionMs = process.env.SANCTUM_EXPIRED_INTENT_RETENTION_MS,
+  orderPayloadRetentionMs = process.env.SANCTUM_ORDER_PAYLOAD_RETENTION_MS,
   now = () => Date.now(),
   randomUUID = () => crypto.randomUUID(),
 } = {}) {
@@ -228,6 +251,15 @@ function createSanctumService({
     configError = error;
   }
   const configured = !!normalizedApiKey && !!normalizedMint && !configError;
+  const safePendingIntentLimit = positiveInteger(pendingIntentLimit, 3);
+  const safeExpiredIntentRetentionMs = Math.max(
+    24 * 60 * 60 * 1000,
+    positiveInteger(expiredIntentRetentionMs, 7 * 24 * 60 * 60 * 1000),
+  );
+  const safeOrderPayloadRetentionMs = Math.max(
+    safeExpiredIntentRetentionMs,
+    positiveInteger(orderPayloadRetentionMs, 30 * 24 * 60 * 60 * 1000),
+  );
   let statusCache = null;
 
   async function request(pathname, { method = 'GET', query = {}, body } = {}) {
@@ -276,13 +308,18 @@ function createSanctumService({
 
   async function getStatus({ force = false } = {}) {
     if (!configured) {
+      const reason = configError
+        ? 'configuration_invalid'
+        : !normalizedApiKey
+          ? 'api_key_missing'
+          : 'mint_not_deployed';
       return {
         available: false,
-        launchStatus: 'awaiting_sanctum_deployment',
+        launchStatus: reason === 'api_key_missing' ? 'configuration_required' : 'awaiting_sanctum_deployment',
         name: 'Clash Staked SOL',
         symbol: 'clashSOL',
         mint: normalizedMint || null,
-        reason: configError ? 'configuration_invalid' : 'mint_not_deployed',
+        reason,
       };
     }
     if (!force && statusCache && statusCache.expiresAt > now()) return statusCache.value;
@@ -309,34 +346,83 @@ function createSanctumService({
       throw error;
     }
     const apy = extractApy(apyPayload) ?? metadata.apy;
-    const value = { available: true, launchStatus: 'live', ...metadata, apy };
+    const value = {
+      available: true,
+      launchStatus: 'live',
+      ...metadata,
+      apy,
+      apyPeriod: 'last_epoch',
+      updatedAt: new Date(now()).toISOString(),
+    };
     statusCache = { value, expiresAt: now() + STATUS_CACHE_MS };
     return value;
   }
 
+  function getLocalStatus({ degraded = false, error = '' } = {}) {
+    return {
+      available: configured,
+      launchStatus: configured ? 'live' : 'configuration_required',
+      degraded: !!degraded,
+      name: 'Clash Staked SOL',
+      symbol: 'clashSOL',
+      mint: normalizedMint || null,
+      apy: null,
+      apyPeriod: 'last_epoch',
+      ...(error ? { warning: String(error).slice(0, 180) } : {}),
+      updatedAt: new Date(now()).toISOString(),
+    };
+  }
+
   function cleanupExpiredIntents() {
+    const stamp = now();
     db.prepare(`
       UPDATE sanctum_order_intents
       SET status = 'expired', last_error = COALESCE(last_error, 'Order expired')
       WHERE status = 'pending' AND expires_at_ms <= ?
-    `).run(now());
+    `).run(stamp);
+    db.prepare(`
+      DELETE FROM sanctum_order_intents
+      WHERE status = 'expired' AND expires_at_ms < ?
+    `).run(stamp - safeExpiredIntentRetentionMs);
+    db.prepare(`
+      UPDATE sanctum_order_intents
+      SET order_json = '{}'
+      WHERE status = 'consumed'
+        AND order_json <> '{}'
+        AND expires_at_ms < ?
+    `).run(stamp - safeOrderPayloadRetentionMs);
   }
 
-  async function createOrder({ playerId, wallet, amountSol, slippageBps }) {
-    const status = await getStatus();
-    if (!status.available) {
-      throw new SanctumError('NOT_LIVE', 'clashSOL is awaiting Sanctum deployment', 503);
-    }
+  async function createOrder({ playerId, wallet, amountSol, amount, direction: directionInput, slippageBps }) {
     cleanupExpiredIntents();
     const player = String(playerId || '').trim();
     if (!player) throw new SanctumError('AUTH_REQUIRED', 'Authentication is required', 401);
     const normalizedWallet = normalizePublicKey(wallet);
-    const inputAmount = parseSolToLamports(amountSol);
+    const direction = normalizeSwapDirection(directionInput);
+    const inputMint = direction === 'stake' ? WRAPPED_SOL_MINT : normalizedMint;
+    const outputMint = direction === 'stake' ? normalizedMint : WRAPPED_SOL_MINT;
+    const inputAmount = parseSolToLamports(amount ?? amountSol, direction === 'stake' ? 'SOL' : 'clashSOL');
     const slippage = parseSlippageBps(slippageBps);
+    const pending = db.prepare(`
+      SELECT COUNT(*) AS count
+      FROM sanctum_order_intents
+      WHERE player_id = ? AND status IN ('pending', 'executing')
+    `).get(player);
+    if (Number(pending?.count || 0) >= safePendingIntentLimit) {
+      throw new SanctumError(
+        'TOO_MANY_PENDING_ORDERS',
+        'Finish or let an existing clashSOL quote expire before requesting another.',
+        429,
+      );
+    }
+    const status = await getStatus();
+    if (!status.available) {
+      throw new SanctumError('NOT_LIVE', 'clashSOL is awaiting Sanctum deployment', 503);
+    }
     const upstream = await request('/swap/token/order', {
       query: {
-        inp: WRAPPED_SOL_MINT,
-        out: normalizedMint,
+        inp: inputMint,
+        out: outputMint,
         mode: 'ExactIn',
         signer: normalizedWallet,
         amt: inputAmount,
@@ -345,8 +431,8 @@ function createSanctumService({
       },
     });
     if (
-      String(upstream?.inp || '') !== WRAPPED_SOL_MINT
-      || String(upstream?.out || '') !== normalizedMint
+      String(upstream?.inp || '') !== inputMint
+      || String(upstream?.out || '') !== outputMint
       || String(upstream?.mode || '') !== 'ExactIn'
       || String(upstream?.inpAmt || '') !== inputAmount
       || !/^\d+$/.test(String(upstream?.outAmt || ''))
@@ -369,8 +455,8 @@ function createSanctumService({
       id,
       player,
       normalizedWallet,
-      WRAPPED_SOL_MINT,
-      normalizedMint,
+      inputMint,
+      outputMint,
       inputAmount,
       String(upstream.outAmt),
       slippage,
@@ -379,12 +465,14 @@ function createSanctumService({
       inspected.kind,
       expiresAtMs,
     );
+    db.prepare(`UPDATE sanctum_order_intents SET direction = ? WHERE id = ?`).run(direction, id);
     return {
       orderId: id,
+      direction,
       expiresAtMs,
       transaction: upstream.tx,
-      inputMint: WRAPPED_SOL_MINT,
-      outputMint: normalizedMint,
+      inputMint,
+      outputMint,
       inputAmount,
       outputAmount: String(upstream.outAmt),
       slippageBps: slippage,
@@ -433,6 +521,24 @@ function createSanctumService({
         SET status = 'consumed', tx_signature = ?, consumed_at = datetime('now'), last_error = NULL
         WHERE id = ? AND status = 'executing'
       `).run(signature, id);
+      const linked = db.prepare(`
+        SELECT player_id FROM player_wallets
+        WHERE chain_type = 'solana' AND address = ?
+        LIMIT 1
+      `).get(row.wallet);
+      if (!linked) {
+        db.prepare(`
+          INSERT OR IGNORE INTO player_wallets
+            (player_id, chain_type, address, label, is_primary, updated_at)
+          VALUES (?, 'solana', ?, 'Sanctum swap signer', 1, datetime('now'))
+        `).run(player, row.wallet);
+      } else if (linked.player_id === player) {
+        db.prepare(`
+          UPDATE player_wallets
+          SET updated_at = datetime('now')
+          WHERE player_id = ? AND chain_type = 'solana' AND address = ?
+        `).run(player, row.wallet);
+      }
       return { signature, orderId: id };
     } catch (error) {
       db.prepare(`
@@ -446,6 +552,7 @@ function createSanctumService({
 
   return {
     getStatus,
+    getLocalStatus,
     createOrder,
     executeOrder,
     configured,
@@ -454,9 +561,11 @@ function createSanctumService({
 
 module.exports = {
   SanctumError,
+  LIVE_CLASHSOL_MINT,
   WRAPPED_SOL_MINT,
   createSanctumService,
   inspectTransaction,
   parseSolToLamports,
+  normalizeSwapDirection,
   verifySignedTransaction,
 };

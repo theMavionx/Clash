@@ -1,0 +1,127 @@
+.sanctum-shop {
+  --sanctum-purple: #8b5cf6;
+  --sanctum-green: #25d4a6;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: min-content;
+  color: var(--terminal-text);
+  font-family: "Inter", "Segoe UI", sans-serif;
+}
+
+/* The Battle Shop slide is the only vertical scroll owner. Keep each section
+   at its natural height so a short viewport scrolls instead of crushing the
+   hero, metrics, and navigation into unreadable strips. */
+.sanctum-shop > * { flex: 0 0 auto; }
+
+.sanctum-shop button,
+.sanctum-shop input { font: inherit; }
+
+.sanctum-shop__hero {
+  position: relative;
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  gap: 14px;
+  align-items: center;
+  padding: 14px;
+  border: 1px solid var(--terminal-border);
+  border-radius: 16px;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--sanctum-purple) 9%, var(--terminal-surface)), color-mix(in srgb, var(--sanctum-green) 8%, var(--terminal-surface)));
+  overflow: hidden;
+}
+
+.sanctum-shop__logo-wrap { position: relative; width: 72px; height: 72px; display: grid; place-items: center; }
+.sanctum-shop__halo { position: absolute; inset: -20px; border-radius: 50%; background: radial-gradient(circle, rgba(37,212,166,.24), rgba(139,92,246,.10) 45%, transparent 70%); }
+.sanctum-shop__logo { position: relative; width: 64px; height: 64px; object-fit: contain; border-radius: 17px; filter: drop-shadow(0 7px 12px rgba(0,0,0,.25)); }
+.sanctum-shop__hero-copy { min-width: 0; }
+.sanctum-shop__eyebrow { color: var(--terminal-brand-text); font-size: 10px; font-weight: 800; letter-spacing: 1px; }
+.sanctum-shop__hero h2 { margin: 3px 0 3px; font-size: clamp(18px, 4vw, 24px); line-height: 1.05; }
+.sanctum-shop__hero p { margin: 0; color: var(--terminal-text-secondary); font-size: 14px; line-height: 1.4; font-weight: 600; }
+.sanctum-shop__external { grid-column: 1 / -1; width: fit-content; color: var(--terminal-brand-text); font-size: 12px; font-weight: 700; text-decoration: none; }
+
+.sanctum-shop__metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.sanctum-shop__metrics > div,
+.sanctum-shop__reward-facts > div { padding: 10px 11px; border: 1px solid var(--terminal-border); border-radius: 12px; background: var(--terminal-surface-subtle); min-width: 0; }
+.sanctum-shop__metrics span,
+.sanctum-shop__reward-facts span { display: block; color: var(--terminal-text-muted); font-size: 10px; font-weight: 750; text-transform: uppercase; letter-spacing: .5px; }
+.sanctum-shop__metrics strong,
+.sanctum-shop__reward-facts strong { display: block; margin-top: 3px; overflow: hidden; color: var(--terminal-text); font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
+
+.sanctum-shop__nav,
+.sanctum-shop__direction { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; padding: 4px; border: 1px solid var(--terminal-border); border-radius: 12px; background: var(--terminal-surface-subtle); }
+.sanctum-shop__direction { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.sanctum-shop__nav button,
+.sanctum-shop__direction button { position: relative; min-height: 44px; padding: 0 9px; border: 1px solid transparent; border-radius: 9px; background: transparent; color: var(--terminal-text-secondary); font-size: 12px; font-weight: 750; cursor: pointer; }
+.sanctum-shop__nav button.is-active,
+.sanctum-shop__direction button.is-active { border-color: var(--terminal-orange); background: var(--terminal-brand-soft); color: var(--terminal-brand-text); }
+.sanctum-shop__claim-dot { display: inline-block; margin-left: 5px; padding: 3px 5px; border: 1px solid var(--terminal-warning-border); border-radius: 999px; background: var(--terminal-warning-soft); color: var(--terminal-warning); font-size: 10px; line-height: 1; }
+
+.sanctum-shop__content { display: flex; flex-direction: column; gap: 10px; }
+.sanctum-shop__field > span { display: block; margin-bottom: 5px; color: var(--terminal-text-secondary); font-size: 12px; font-weight: 750; }
+.sanctum-shop__field > div { display: flex; align-items: center; min-height: 54px; padding: 0 12px; border: 1px solid var(--terminal-border-strong); border-radius: 12px; background: var(--terminal-surface); }
+.sanctum-shop__field input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--terminal-text); font-size: 24px; font-weight: 800; }
+.sanctum-shop__field b { display: flex; align-items: center; gap: 6px; font-size: 13px; white-space: nowrap; }
+.sanctum-shop__field b img { width: 25px; height: 25px; object-fit: contain; border-radius: 7px; }
+.sanctum-shop__presets { display: grid; grid-template-columns: repeat(4, 1fr); gap: 7px; }
+.sanctum-shop__presets button { min-height: 44px; border: 1px solid var(--terminal-border); border-radius: 9px; background: var(--terminal-surface-muted); color: var(--terminal-text-secondary); font-size: 12px; font-weight: 750; cursor: pointer; }
+.sanctum-shop button:disabled { cursor: not-allowed; opacity: .55; }
+.sanctum-shop button:focus-visible,
+.sanctum-shop a:focus-visible,
+.sanctum-shop input:focus-visible { outline: 3px solid var(--terminal-brand-ring); outline-offset: 2px; }
+
+.sanctum-shop__quote,
+.sanctum-shop__reward-facts { display: grid; gap: 7px; }
+.sanctum-shop__quote { padding: 11px; border: 1px solid var(--terminal-border); border-radius: 12px; background: var(--terminal-surface-subtle); }
+.sanctum-shop__quote > div { display: flex; justify-content: space-between; gap: 12px; color: var(--terminal-text-secondary); font-size: 12px; }
+.sanctum-shop__quote strong { color: var(--terminal-text); text-align: right; }
+.sanctum-shop__reward-facts { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+.sanctum-shop__primary,
+.sanctum-shop__secondary { display: flex; align-items: center; justify-content: center; min-height: 46px; padding: 0 15px; border-radius: 11px; font-size: 14px; font-weight: 800; text-align: center; text-decoration: none; box-sizing: border-box; }
+.sanctum-shop__wallet-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.sanctum-shop__primary { border: 1px solid var(--terminal-brand-strong); background: linear-gradient(180deg, var(--terminal-brand), var(--terminal-brand-strong)); color: #1f120b; box-shadow: var(--terminal-shadow-control); cursor: pointer; }
+.sanctum-shop__secondary { border: 1px solid var(--terminal-border-strong); background: var(--terminal-surface-muted); color: var(--terminal-text); }
+.sanctum-shop__reward-card { padding: 17px; border: 1px solid var(--terminal-warning-border); border-radius: 14px; background: var(--terminal-warning-soft); text-align: center; }
+.sanctum-shop__reward-card.is-empty { border-color: var(--terminal-border); background: var(--terminal-surface-subtle); }
+.sanctum-shop__reward-card span,
+.sanctum-shop__reward-card small { display: block; color: var(--terminal-text-secondary); font-size: 12px; font-weight: 650; }
+.sanctum-shop__reward-card strong { display: block; margin: 4px 0; color: var(--terminal-warning); font-size: 29px; }
+.sanctum-shop__reward-card.is-empty strong { color: var(--terminal-text-secondary); }
+
+.sanctum-shop__history { display: flex; flex-direction: column; gap: 7px; }
+.sanctum-shop__history-row { display: grid; grid-template-columns: 35px minmax(0, 1fr) auto; gap: 9px; align-items: center; min-height: 52px; padding: 6px 9px; border: 1px solid var(--terminal-border); border-radius: 11px; background: var(--terminal-surface-subtle); }
+.sanctum-shop__history-icon { display: grid; width: 31px; height: 31px; place-items: center; border-radius: 9px; background: var(--terminal-brand-soft); color: var(--terminal-brand-text); font-weight: 900; }
+.sanctum-shop__history-icon.is-gold { border: 1px solid var(--terminal-warning-border); background: var(--terminal-warning-soft); color: var(--terminal-warning); }
+.sanctum-shop__history-row strong,
+.sanctum-shop__history-row small { display: block; }
+.sanctum-shop__history-row strong { font-size: 13px; }
+.sanctum-shop__history-row small,
+.sanctum-shop__history-row time { color: var(--terminal-text-muted); font-size: 12px; line-height: 1.35; }
+.sanctum-shop__history-row time { text-align: right; white-space: nowrap; }
+
+.sanctum-shop__disclosure { margin: 0; color: var(--terminal-text-muted); font-size: 12px; line-height: 1.45; }
+.sanctum-shop__state,
+.sanctum-shop__notice,
+.sanctum-shop__error { padding: 12px; border: 1px solid var(--terminal-border); border-radius: 11px; font-size: 14px; font-weight: 650; line-height: 1.4; }
+.sanctum-shop__state { color: var(--terminal-text-secondary); background: var(--terminal-surface-subtle); text-align: center; }
+.sanctum-shop__notice { border-color: color-mix(in srgb, var(--terminal-long) 45%, var(--terminal-border)); background: var(--terminal-long-soft); color: var(--terminal-long); }
+.sanctum-shop__error { border-color: color-mix(in srgb, var(--terminal-short) 50%, var(--terminal-border)); background: var(--terminal-short-soft); color: var(--terminal-short); }
+
+@media (max-width: 420px) {
+  .sanctum-shop__hero { grid-template-columns: 58px minmax(0, 1fr); padding: 11px; gap: 10px; }
+  .sanctum-shop__logo-wrap { width: 56px; height: 56px; }
+  .sanctum-shop__logo { width: 52px; height: 52px; border-radius: 13px; }
+  .sanctum-shop__hero p { font-size: 14px; }
+  .sanctum-shop__metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .sanctum-shop__nav { grid-template-columns: repeat(3, minmax(92px, 1fr)); overflow-x: auto; }
+  .sanctum-shop__reward-facts { grid-template-columns: 1fr; }
+  .sanctum-shop__wallet-actions { grid-template-columns: 1fr; }
+  .sanctum-shop__history-row { grid-template-columns: 34px minmax(0, 1fr); }
+  .sanctum-shop__history-row time { grid-column: 2; text-align: left; }
+}
+
+.shop-tabs-scroll::-webkit-scrollbar { display: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .sanctum-shop * { scroll-behavior: auto !important; transition: none !important; }
+}

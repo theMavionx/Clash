@@ -473,7 +473,7 @@ Next checkpoint:
 
 ## G-010 clashSOL Sanctum LST Integration
 
-- Status: active
+- Status: release candidate approved; production deployment in progress
 - Priority: P1
 - Owner intent: let players stake SOL into a branded `clashSOL` LST from the
   in-game shop through Sanctum while preserving self-custody.
@@ -490,6 +490,10 @@ Scope:
 - Persist short-lived order intents so the public client cannot use Clash as an
   arbitrary Sanctum proxy or alter the upstream order before signing.
 - Add a polished shop entry and external/Privy Solana wallet signing flow.
+- Move clashSOL into the real Battle Shop, support SOL↔clashSOL swaps, and add
+  server-verified completed-day holder Gold with admin-configurable rates,
+  minimum-balance observations, capacity-safe partial claims, history, and
+  operational metrics.
 - Show an explicit launch-pending state until `SANCTUM_API_KEY` and
   `CLASHSOL_MINT` are configured and the mint is discoverable through Sanctum.
 
@@ -501,23 +505,25 @@ Current checkpoint:
   wrapped-SOL-to-clashSOL orders, durable intent ledger, exact message and
   Ed25519 signature verification, replay protection, shop card/modal, and
   external/Privy wallet signing paths.
-- Focused server and browser transaction tests pass; the launch-pending API and
-  desktop/mobile shop layouts were verified locally. A full current-worktree
-  web rebuild is temporarily blocked by the unrelated in-progress TH10 Hidden
-  Tesla work referencing a not-yet-created `hidden_tesla.png`; the Sanctum
-  build itself passed before that concurrent edit appeared.
+- Focused server, migration, quota, reward, Battle Shop and admin tests pass.
+  Desktop/mobile light/dark layouts, the live public mint/status, full web
+  build, lint and canonical Deploy gate were verified on the release candidate.
 - Sanctum API access was received and verified against the production `/lsts`
   endpoint on 2026-08-10. The key is configured outside Git. The agreed epoch
   fee split is 5% to Clash and 5% to Sanctum.
-- Remaining launch work is external: Sanctum must deploy/register `clashSOL`
-  and supply the exact mint (the live list contained no clashSOL entry on
-  2026-08-10). Then configure `CLASHSOL_MINT` and run an owner-approved funded
-  mainnet stake smoke.
+- Sanctum launched clashSOL on 2026-08-18. The official API now resolves the
+  9-decimal SanctumSpl mint `CLAShCrEjid112Mr1tWk7VqaGUAAKbiKdikDQYyDwfes`.
+  The Battle Shop/reward/admin integration is release-approved. Rewards use
+  30-minute observations, mature after the UTC day, and preserve any amount
+  that does not fit Gold storage. Abuse controls cover quote/balance quotas,
+  active-intent caps and retention cleanup. Remaining work is the authorized
+  production rollout and an optional separately approved owner-signed funded
+  mainnet swap smoke; the API key remains outside Git.
 
 Acceptance criteria:
 
 - API credentials never enter the browser bundle or logs.
-- The server only constructs orders from wrapped SOL to the configured
+- The server only constructs orders between wrapped SOL and the configured
   `clashSOL` mint and verifies the wallet-signed transaction message against
   the stored upstream order before execution.
 - Missing launch configuration produces a stable, informative shop state and

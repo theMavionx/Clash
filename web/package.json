@@ -1,7 +1,7 @@
 {
   "name": "web",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.1.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -39,6 +39,8 @@
     "test:auth-godot-bridge": "node --test test-auth-godot-bridge.mjs",
     "test:avantis-price": "node test-avantis-price-payload.mjs",
     "test:sanctum": "node test-sanctum-lst.mjs",
+    "test:sanctum-shop": "node test-sanctum-shop.mjs",
+    "test:sanctum-admin": "node test-sanctum-admin.mjs",
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview"

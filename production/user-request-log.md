@@ -3520,3 +3520,18 @@ Follow-up:
 - Scope: fix Battle Log rows collapsing when the history contains many entries,
   verify dense scrolling and expanded details on desktop/mobile, and ship the
   fix in the same production release as Cool Ocean lighting.
+
+## UR-2026-08-18-CLASHSOL-LIVE
+
+- Timestamp: 2026-08-18 Europe/Kyiv
+- Request: fully integrate the now-live clashSOL Sanctum pool into the real
+  Battle Shop, support in-app swaps, add daily Gold claims for holders with an
+  initial rate of 2,000 Gold per clashSOL, make the rate configurable in admin,
+  expose complete player/admin history and metrics, then commit, push, deploy,
+  and verify production.
+- Approved production configuration: Sanctum API key remains secret in the
+  shared server environment; public mint is
+  `CLAShCrEjid112Mr1tWk7VqaGUAAKbiKdikDQYyDwfes`.
+- Operational scope: database additions for immutable swap/reward/config
+  ledgers are approved. No unattended wallet signature or funded swap is part
+  of deployment smoke; funded execution remains owner-signed in the browser.
