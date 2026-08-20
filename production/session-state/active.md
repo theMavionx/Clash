@@ -1,6 +1,6 @@
 # Active Session State
 
-Last updated: 2026-08-19
+Last updated: 2026-08-20
 
 ## Current Focus
 
@@ -21,6 +21,14 @@ Sanctum clashSOL page, while Battle Shop remains the native rewards hub. Daily
 server-verified Gold starts at 2,000 Gold per clashSOL, observations run every
 30 minutes, rewards mature after the UTC day from the minimum observed balance,
 and capacity-safe claims preserve any remainder. The API key remains server-only.
+
+The current release task is LeverUp V2 broker activation (goal G-011). LeverUp
+already registered Clash as permissioned broker `2` on Monad with receiver
+`0xB36402e87a86206D3a114a98B53f31362291fe1B` and a 50% share of the existing
+protocol trade fee. The candidate verifies ID plus receiver on-chain, routes
+all fee-bearing open/close/partial/TP-SL actions through broker `2`, keeps
+`extraFee=0`, and adds exact aggregate lifetime/pending commission visibility
+to admin. Per-user tournament rewards remain disabled without fill-level proof.
 
 Implementation checkpoint: Sanctum's external pool and the completed-day
 reward/admin/audit implementation are live. v1.1.4 keeps the resolved-semantics
@@ -77,12 +85,11 @@ Main current goals:
 
 ## Next Useful Checkpoint
 
-For Robinhood Lighter v1.1.2, verify the owner account `3156` is shown as
-self-referral-exempt, then let the owner explicitly approve the same-master
-integrator before attempting any trade. For clashSOL, ship v1.1.4, verify the
-official Sanctum URL, hidden embedded swap, Daily Gold claim/status/history and
-estimated-APY disclosure in production, then monitor the first completed
-UTC-day reward finalization/claim. General context recovery remains:
+For LeverUp, complete the v1.1.5 release gate, deploy broker `2`, verify the
+production config/receiver/share and admin earnings source, then leave the
+funded owner-signed trade/close smoke as a separate explicit action. For
+clashSOL, continue monitoring completed UTC-day reward finalization/claim.
+General context recovery remains:
 
 ```powershell
 tools/codex/start-context.cmd -Full

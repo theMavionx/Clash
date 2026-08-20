@@ -14,7 +14,7 @@ Clash needs a native LeverUp integration using the current V2 gasless intent
 protocol on Monad mainnet. LeverUp V2 is not a bearer-token API: the trader
 authorizes a separate agent key once onchain, then that key signs EIP-712 trade
 intents which the LeverUp relayer submits. LeverUp also attributes fees through
-a numeric broker ID, but Clash has not received its broker ID yet.
+a numeric broker ID. Broker activation and earnings are finalized by ADR-0028.
 
 ### Constraints
 
@@ -38,8 +38,8 @@ a numeric broker ID, but Clash has not received its broker ID yet.
   enabled or allowing it to sign an intent.
 - Keep the signer key recoverable per connected wallet and Monad deployment,
   and revoke onchain before deleting it.
-- Make the future Clash broker ID server-configurable and validate it onchain
-  before returning it as active.
+- Make the Clash broker ID and approved receiver server-configurable and
+  validate both onchain before returning it as active.
 - Do not credit LeverUp tournament volume, gold, or earnings until the broker
   is configured and the relevant order/fill can be proven to carry it.
 
@@ -60,12 +60,10 @@ envelope, action, trader, deadline, nonce and action-data shape. When a Clash
 broker is active it also decodes every fee-bearing action and rejects a broker
 value that differs from the trusted configuration.
 
-`LEVERUP_BROKER_ID` is optional. With no configured ID, ordinary trading uses
-broker `0` and the UI reports broker rewards as pending configuration. When an
-ID is supplied, the server reads `getBrokerById` from the documented Diamond
-and activates it only when the returned receiver is nonzero and the record
-matches the requested ID. `extraFee` remains exactly zero unless the owner
-later approves a separate decision.
+`LEVERUP_BROKER_ID` and `LEVERUP_BROKER_RECEIVER` are verified together. With
+no valid configuration, ordinary trading uses broker `0`. Production uses the
+permissioned Clash broker `2` only while `getBrokerById(2)` returns the exact
+owner-approved receiver. `extraFee` remains exactly zero. See ADR-0028.
 
 ### Architecture Diagram
 
@@ -131,7 +129,7 @@ Trader wallet -- authorizeAgent --> LeverUp Diamond (Monad 143)
   prompt the owner wallet.
 - The browser signer cannot transfer wallet assets outside its granted V2
   action permissions.
-- Clash can add the issued broker ID later without rebuilding signing logic.
+- The issued broker ID is active without rebuilding signing logic.
 - Broker attribution is enforced on all fee-bearing action paths, including
   closes and standalone TP/SL orders.
 
@@ -172,11 +170,12 @@ Trader wallet -- authorizeAgent --> LeverUp Diamond (Monad 143)
    metadata, and normalized account/history UI.
 2. Validate live public reads and dry-run intent construction while broker
    status is `pending_configuration`.
-3. Receive the assigned LeverUp broker ID and expected receiver.
-4. Configure `LEVERUP_BROKER_ID`, verify `getBrokerById`, and execute one small
-   owner-authorized trade.
-5. Add proof-backed rewards/earnings import only after the broker event/index
-   source is confirmed.
+3. Receive the assigned LeverUp broker ID and expected receiver. **Complete:**
+   broker `2`, receiver `0xB36402e87a86206D3a114a98B53f31362291fe1B`.
+4. Configure ID plus receiver and verify `getBrokerById`. **Complete in
+   ADR-0028;** a funded owner smoke remains separate.
+5. Surface aggregate on-chain broker earnings in admin. Keep player/tournament
+   rewards disabled until per-user order/fill proof exists.
 
 ## Validation Criteria
 
@@ -188,10 +187,11 @@ Trader wallet -- authorizeAgent --> LeverUp Diamond (Monad 143)
 - Every submitted nonce is a string and strictly monotonic.
 - Market/limit, cancel, close, partial close and TP/SL dry-run envelopes pass
   focused schema tests without owner signatures.
-- No LeverUp reward is credited while the Clash broker is unconfigured.
+- No LeverUp player/tournament reward is credited from aggregate broker data.
 
 ## Related Decisions
 
 - [ADR-0004: Builder-Aware Decibel Trading MCP](./adr-0004-builder-aware-decibel-trading-mcp.md)
 - [ADR-0018: Bulk Browser Signing and Builder Attribution](./adr-0018-bulk-browser-signing-and-builder-attribution.md)
 - [ADR-0020: Ondo SIWE Trading and Server Builder Routing](./adr-0020-ondo-siwe-trading-and-server-builder-routing.md)
+- [ADR-0028: LeverUp Broker Activation and Earnings](./adr-0028-leverup-broker-activation-and-earnings.md)

@@ -38,6 +38,14 @@ const {
   GMX_UI_FEE_RECEIVER,
   fetchGmxUiFeeSnapshot,
 } = require('./gmx_ui_fees');
+const { formatUnits } = require('viem');
+
+const LEVERUP_BROKER_ID = Number(process.env.LEVERUP_BROKER_ID || 0);
+const LEVERUP_BROKER_RECEIVER = String(process.env.LEVERUP_BROKER_RECEIVER || '').toLowerCase();
+const LEVERUP_STABLE_TOKENS = new Map([
+  ['0x754704bc059f8c67012fed69bc8a327a5aafb603', { symbol: 'USDC', decimals: 6 }],
+  ['0xfd44b35139ae53fff7d8f2a9869c503d987f00d1', { symbol: 'lvUSD', decimals: 18 }],
+]);
 
 async function fetchJson(url, opts = {}, timeoutMs = 10_000) {
   const ctrl = new AbortController();
@@ -60,6 +68,61 @@ async function fetchJson(url, opts = {}, timeoutMs = 10_000) {
 
 function isRateLimitError(err) {
   return Number(err?.status) === 429 || /\b429\b|rate limit|too many requests/i.test(String(err?.message || err || ''));
+}
+
+function formatLeverupBrokerEarnings(broker) {
+  const receiver = String(broker?.receiver || '').toLowerCase();
+  const configured = broker?.active === true
+    && Number(broker?.brokerId) === LEVERUP_BROKER_ID
+    && /^0x[0-9a-f]{40}$/u.test(LEVERUP_BROKER_RECEIVER)
+    && receiver === LEVERUP_BROKER_RECEIVER;
+  const tokenRows = (Array.isArray(broker?.commissions) ? broker.commissions : []).map((row) => {
+    const address = String(row?.token || '').toLowerCase();
+    const token = LEVERUP_STABLE_TOKENS.get(address) || null;
+    const totalRaw = String(row?.total ?? '0');
+    const pendingRaw = String(row?.pending ?? '0');
+    return {
+      token: address || null,
+      symbol: token?.symbol || 'UNKNOWN',
+      decimals: token?.decimals ?? null,
+      total_raw: totalRaw,
+      pending_raw: pendingRaw,
+      total: token ? Number(formatUnits(BigInt(totalRaw), token.decimals)) : null,
+      pending: token ? Number(formatUnits(BigInt(pendingRaw), token.decimals)) : null,
+      usd_priced: !!token,
+    };
+  });
+  const earnedUsd = tokenRows.reduce((sum, row) => sum + (row.usd_priced ? Number(row.total || 0) : 0), 0);
+  const pendingUsd = tokenRows.reduce((sum, row) => sum + (row.usd_priced ? Number(row.pending || 0) : 0), 0);
+  const unknownNonzero = tokenRows.filter(row => !row.usd_priced && (BigInt(row.total_raw) > 0n || BigInt(row.pending_raw) > 0n));
+  return {
+    configured,
+    active: configured,
+    earned_usd: configured ? earnedUsd : 0,
+    pending_usd: configured ? pendingUsd : 0,
+    address: receiver || LEVERUP_BROKER_RECEIVER || null,
+    builder_id: Number(broker?.requestedBrokerId ?? broker?.brokerId ?? LEVERUP_BROKER_ID) || null,
+    broker_id: Number(broker?.brokerId || 0),
+    broker_name: broker?.name || null,
+    broker_url: broker?.url || null,
+    commission_share_pct: Number(broker?.commissionP || 0) / 100,
+    commission_p: Number(broker?.commissionP || 0),
+    currency: tokenRows.filter(row => row.usd_priced).map(row => row.symbol).join(', ') || 'LeverUp commission tokens',
+    tokens: tokenRows,
+    model: configured ? 'leverup_onchain_broker_commissions' : 'leverup_broker_not_verified',
+    source_detail: configured ? 'leverup_get_broker_by_id_lifetime_and_pending' : (broker?.reason || broker?.status || 'leverup_broker_not_verified'),
+    exact: configured && unknownNonzero.length === 0,
+    note: configured
+      ? `On-chain broker #${Number(broker.brokerId)} lifetime and withdrawable commissions. ${Number(broker.commissionP || 0) / 100}% is the share of LeverUp's existing protocol trade fee and adds no trader surcharge. ${unknownNonzero.length ? `${unknownNonzero.length} unknown nonzero token balance(s) are listed but excluded from USD totals.` : 'Recognized stablecoin balances are counted at $1.'}`
+      : 'LeverUp earnings remain disabled until broker id and receiver both match the on-chain Clash broker record.',
+  };
+}
+
+async function fetchLeverupEarnings() {
+  // Reuse the trading adapter's exact on-chain verification so routing and
+  // admin accounting can never disagree about the active broker receiver.
+  const leverup = require('../server-futures/leverup');
+  return formatLeverupBrokerEarnings(await leverup.getBrokerConfig({ force: true }));
 }
 
 // ── Pacifica ──────────────────────────────────────────────────────────────
@@ -4233,6 +4296,11 @@ const FAILED_EARNINGS_META = {
     address: ASTER_BUILDER_ADDRESS || null,
     currency: 'USDT (Aster)',
   },
+  leverup: {
+    address: LEVERUP_BROKER_RECEIVER || null,
+    builder_id: LEVERUP_BROKER_ID || null,
+    currency: 'USDC/lvUSD (LeverUp Monad)',
+  },
   rhlighter: {
     address: RH_LIGHTER_INTEGRATOR_ACCOUNT_INDEX || null,
     currency: 'USDC (Robinhood Lighter)',
@@ -4261,6 +4329,7 @@ const EARNINGS_READER_CONFIG = {
   risex: { source: 'risex_builder_10_place_order_proof', read: ({ mainDb }) => fetchRisexEarnings({ mainDb }) },
   nado: { source: 'nado_archive_orders_builder_fee', read: ({ mainDb }) => fetchNadoEarnings({ mainDb }) },
   aster: { source: 'aster_v3_builder_user_trades_or_order_proof', read: ({ mainDb }) => fetchAsterEarnings({ mainDb }) },
+  leverup: { source: 'leverup_get_broker_by_id_lifetime_and_pending', read: () => fetchLeverupEarnings() },
   hotstuff: { source: 'hotstuff_api_fills_broker_fee', read: () => fetchHotstuffEarnings() },
   hibachi: { source: 'hibachi_api_activity_builder_fee_unverified', read: () => fetchHibachiEarnings() },
   katana: { source: 'katana_builder_fee_exact_or_estimate', read: () => fetchKatanaEarnings() },
@@ -4285,6 +4354,7 @@ const EARNINGS_DEX_ORDER = [
   'risex',
   'nado',
   'aster',
+  'leverup',
   'hotstuff',
   'hibachi',
   'katana',
@@ -4856,5 +4926,6 @@ module.exports = {
     ensureAsterEarningsIndex,
     upsertAsterBuilderFills,
     readAsterExactIndexedEarnings,
+    formatLeverupBrokerEarnings,
   },
 };

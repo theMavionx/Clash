@@ -548,6 +548,37 @@ Acceptance criteria:
   are supported; the dormant embedded wallet-signing path is not player-visible.
 - Server tests, frontend tests/build/lint and a local browser shop flow pass.
 
+## G-011 LeverUp V2 Broker Activation
+
+- Status: v1.1.5 release candidate approved; production deployment in progress
+- Priority: P0
+- Owner intent: route every LeverUp V2 fee-bearing action through the issued
+  Clash broker and monitor the resulting commissions without adding a trader
+  surcharge.
+
+Current checkpoint:
+
+- The complete LeverUp V2 Monad venue, browser agent, account reads and 14
+  intent actions already exist.
+- Official on-chain broker registry verification on 2026-08-20 confirms broker
+  `2`, receiver `0xB36402e87a86206D3a114a98B53f31362291fe1B`, name
+  `Clash Of Perps`, and `commissionP=5000`.
+- The release candidate force-aligns ID plus receiver, fails closed on mismatch,
+  fixes dynamic batch TP/SL decoding, tests all seven fee-bearing action paths,
+  keeps `extraFee=0`, and adds aggregate lifetime/pending admin earnings.
+- Production deployment is explicitly authorized. A funded trade, commission
+  withdrawal or wallet signature is not part of automated release verification.
+
+Acceptance criteria:
+
+- Production `/api/futures/leverup/config` returns active broker `2`, exact
+  receiver match and 5000 commission points.
+- Market/limit open, market/batch/partial close and TP/SL create/update all
+  validate broker `2`; other broker IDs and non-zero extraFee fail closed.
+- Admin shows exact on-chain lifetime/pending token balances; aggregate data is
+  never treated as per-user tournament or Gold proof.
+- Canonical deploy gate, public health checks and rollback readiness pass.
+
 ## Parking Lot
 
 - Add CI once the local checks are stable.

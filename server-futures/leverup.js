@@ -4,6 +4,7 @@ const {
   fallback,
   formatUnits,
   http,
+  parseAbiParameter,
 } = require('viem');
 
 const LEVERUP_CHAIN_ID = 143;
@@ -33,6 +34,7 @@ const configuredBrokerText = String(process.env.LEVERUP_BROKER_ID || '').trim();
 const configuredBrokerId = /^\d+$/u.test(configuredBrokerText)
   ? Number(configuredBrokerText)
   : null;
+const configuredBrokerReceiverText = String(process.env.LEVERUP_BROKER_RECEIVER || '').trim();
 
 const monadChain = {
   id: LEVERUP_CHAIN_ID,
@@ -651,7 +653,39 @@ async function getFeeConfig() {
   return request(LEVERUP_RELAYER_URL, '/v2/trading/anti-ddos-config');
 }
 
-async function getBrokerConfig({ force = false } = {}) {
+function brokerConfigFromRecord(broker) {
+  const receiver = normalizeAddress(broker?.receiver);
+  const expectedReceiver = normalizeAddress(configuredBrokerReceiverText);
+  const recordMatches = Number(broker?.id) === configuredBrokerId;
+  const receiverMatches = !!expectedReceiver && receiver === expectedReceiver;
+  const active = recordMatches && receiverMatches && receiver !== ZERO_ADDRESS;
+  return {
+    configured: true,
+    active,
+    brokerId: active ? configuredBrokerId : 0,
+    requestedBrokerId: configuredBrokerId,
+    expectedReceiver: expectedReceiver || null,
+    receiverMatches,
+    extraFee: '0',
+    status: active ? 'verified_onchain' : 'invalid_onchain_record',
+    reason: active
+      ? null
+      : !recordMatches
+        ? 'broker_id_mismatch'
+        : !expectedReceiver
+          ? 'broker_receiver_not_configured'
+          : !receiverMatches
+            ? 'broker_receiver_mismatch'
+            : 'invalid_broker_record',
+    receiver: receiver || null,
+    name: String(broker?.name || '') || null,
+    url: String(broker?.url || '') || null,
+    commissionP: Number(broker?.commissionP || 0),
+    commissions: JSON.parse(JSON.stringify(broker?.commissions || [], bigintJson)),
+  };
+}
+
+async function getBrokerConfig({ force = false, recordReader = null } = {}) {
   const now = Date.now();
   if (!force && brokerCache && now - brokerCache.at < BROKER_TTL_MS) return brokerCache.value;
   if (!Number.isInteger(configuredBrokerId) || configuredBrokerId < 0 || configuredBrokerId > 0xffffff) {
@@ -662,32 +696,21 @@ async function getBrokerConfig({ force = false } = {}) {
       extraFee: '0',
       status: 'pending_configuration',
       reason: configuredBrokerText ? 'invalid_broker_id' : 'broker_id_not_configured',
+      expectedReceiver: normalizeAddress(configuredBrokerReceiverText) || null,
     };
     brokerCache = { at: now, value };
     return value;
   }
   try {
-    const broker = await publicClient.readContract({
-      address: LEVERUP_DIAMOND,
-      abi: READER_ABI,
-      functionName: 'getBrokerById',
-      args: [configuredBrokerId],
-    });
-    const receiver = normalizeAddress(broker?.receiver);
-    const active = Number(broker?.id) === configuredBrokerId && receiver && receiver !== ZERO_ADDRESS;
-    const value = {
-      configured: true,
-      active: !!active,
-      brokerId: active ? configuredBrokerId : 0,
-      requestedBrokerId: configuredBrokerId,
-      extraFee: '0',
-      status: active ? 'verified_onchain' : 'invalid_onchain_record',
-      receiver: active ? receiver : null,
-      name: active ? String(broker?.name || '') : null,
-      url: active ? String(broker?.url || '') : null,
-      commissionP: active ? Number(broker?.commissionP || 0) : 0,
-      commissions: active ? JSON.parse(JSON.stringify(broker?.commissions || [], bigintJson)) : [],
-    };
+    const broker = recordReader
+      ? await recordReader(configuredBrokerId)
+      : await publicClient.readContract({
+        address: LEVERUP_DIAMOND,
+        abi: READER_ABI,
+        functionName: 'getBrokerById',
+        args: [configuredBrokerId],
+      });
+    const value = brokerConfigFromRecord(broker);
     brokerCache = { at: now, value };
     return value;
   } catch (error) {
@@ -699,6 +722,7 @@ async function getBrokerConfig({ force = false } = {}) {
       extraFee: '0',
       status: 'verification_unavailable',
       reason: error.message,
+      expectedReceiver: normalizeAddress(configuredBrokerReceiverText) || null,
     };
     brokerCache = { at: now, value };
     return value;
@@ -712,7 +736,15 @@ function decodeIntentActionData(action, actionData) {
     throw Object.assign(new Error('Valid LeverUp V2 actionData required'), { status: 400 });
   }
   try {
-    return decodeAbiParameters(types.map(type => ({ type })), actionData);
+    // LeverUp actionData is produced by ABI-encoding `(trader, ...values)` and
+    // removing only trader's first word. Dynamic offsets still reference that
+    // original tuple head, so restore one address word before decoding. Direct
+    // decoding of the stripped bytes corrupts batch TP/SL tuple offsets.
+    const restored = `0x${'0'.repeat(64)}${String(actionData).slice(2)}`;
+    return decodeAbiParameters(
+      [{ type: 'address' }, ...types.map(type => (type.startsWith('(') ? parseAbiParameter(type) : { type }))],
+      restored,
+    ).slice(1);
   } catch (error) {
     throw Object.assign(new Error(`Invalid LeverUp actionData: ${error.shortMessage || error.message}`), { status: 400 });
   }
@@ -728,7 +760,7 @@ function actionBrokerValues(action, values) {
   return [];
 }
 
-async function validateIntentEnvelope(payload, expectedTrader = null) {
+async function validateIntentEnvelope(payload, expectedTrader = null, { brokerConfig = null } = {}) {
   const trader = normalizeAddress(payload?.trader);
   if (!trader) throw Object.assign(new Error('Valid LeverUp trader required'), { status: 400 });
   if (expectedTrader && trader !== normalizeAddress(expectedTrader)) {
@@ -758,7 +790,7 @@ async function validateIntentEnvelope(payload, expectedTrader = null) {
     throw Object.assign(new Error('Valid LeverUp EIP-712 signature required'), { status: 400 });
   }
   const values = decodeIntentActionData(action, payload?.actionData);
-  const broker = await getBrokerConfig();
+  const broker = brokerConfig || await getBrokerConfig();
   const requiredBrokerId = broker.active ? broker.brokerId : 0;
   const valuesToCheck = actionBrokerValues(action, values);
   if (valuesToCheck.some(value => value !== requiredBrokerId)) {
@@ -825,6 +857,9 @@ module.exports = {
   submitIntent,
   validateIntentEnvelope,
   __test: {
+    actionBrokerValues,
+    brokerConfigFromRecord,
+    decodeIntentActionData,
     normalizeLimitOrder,
     readMarketValues,
     readPerMarketLists,

@@ -7094,8 +7094,16 @@ function FuturesPanel() {
                 <>
                   <div><strong>Network:</strong> Monad mainnet (143)</div>
                   <div><strong>Version:</strong> LeverUp OneClick V2</div>
-                  <div><strong>Clash broker:</strong> {builderConfig?.active ? `#${builderConfig.brokerId} verified onchain` : 'pending ID from LeverUp'}</div>
-                  <div style={{marginTop: 4}}>Until the Clash broker ID is configured, trading stays available through LeverUp's default broker but Clash rewards remain disabled.</div>
+                  <div><strong>Clash broker:</strong> {builderConfig?.active ? `#${builderConfig.brokerId} verified on-chain` : 'verification pending'}</div>
+                  {builderConfig?.active ? (
+                    <>
+                      <div><strong>Receiver:</strong> {shortAddr(builderConfig.receiver)}</div>
+                      <div><strong>Fee share:</strong> {Number(builderConfig.commissionP || 0) / 100}% of LeverUp's protocol fee</div>
+                      <div style={{marginTop: 4}}>This attribution adds no extra fee for the trader. Opens, closes and TP/SL actions use the verified broker.</div>
+                    </>
+                  ) : (
+                    <div style={{marginTop: 4}}>Trading uses LeverUp's default broker until ID and receiver both verify on-chain. Clash rewards remain disabled.</div>
+                  )}
                 </>
               )}
               error={leverupError ? humanizeTradeError(leverupError, dex) : ''}

@@ -3603,3 +3603,20 @@ Follow-up:
   show measured APY or a clearly labelled non-guaranteed same-validator peer
   estimate, release as v1.1.4, and deploy through the canonical atomic pipeline.
   Deployment performs no wallet signature, stake, swap, or funded transaction.
+
+## UR-2026-08-20-LEVERUP-BROKER-ACTIVATION
+
+- Timestamp: 2026-08-20 Europe/Kyiv
+- Request: use wallet `0xB36402e87a86206D3a114a98B53f31362291fe1B`
+  for LeverUp builder fees, complete the Monad LeverUp V2 integration if
+  needed, test it, then commit, push and deploy to production immediately.
+- Production evidence: the official LeverUp Diamond returns permissioned broker
+  `2`, name `Clash Of Perps`, URL `https://clashofperps.fun/`, the exact owner
+  receiver above, and `commissionP=5000` (50% of the existing protocol trade
+  fee, with no added trader cost).
+- Approved scope: force-align broker ID plus receiver in the shared environment,
+  verify both on-chain before routing, cover every fee-bearing V2 action,
+  preserve `extraFee=0`, expose aggregate lifetime/pending commissions in
+  admin, update ADR/release metadata, commit, push and deploy through the
+  canonical atomic pipeline. No funded order, withdrawal or unattended wallet
+  signature is authorized by this deployment.

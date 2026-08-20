@@ -58,6 +58,7 @@ $NodeFiles = @(
     "server/test-gmx-ui-fee-earnings.js",
     "server/test-rh-lighter-earnings.js",
     "server/test-rhlighter-tournament-migration.js",
+    "server/test-leverup-earnings.js",
     "server/sanctum.js",
     "server/sanctum_rewards.js",
     "server/sanctum_rate_limit.js",
@@ -84,6 +85,7 @@ $NodeFiles = @(
     "server-futures/test-aster-adapter.js",
     "server-futures/test-aster-builder-tracking.js",
     "server-futures/test-rh-lighter-adapter.js",
+    "server-futures/leverup.js",
     "server-futures/gmx-ui-fee.js",
     "server-futures/gmx-rewards-worker.js",
     "server-futures/test-gmx-ui-fee-attribution.js",
@@ -123,6 +125,8 @@ Invoke-Step "GMX browser routing" { node web/test-gmx-ui-fee.mjs }
 Invoke-Step "RH Lighter adapter" { node server-futures/test-rh-lighter-adapter.js }
 Invoke-Step "RH Lighter earnings" { node server/test-rh-lighter-earnings.js }
 Invoke-Step "RH Lighter tournament schema migration" { node server/test-rhlighter-tournament-migration.js }
+Invoke-Step "LeverUp V2 broker routing" { node web/test-leverup-v2.mjs }
+Invoke-Step "LeverUp broker earnings" { node server/test-leverup-earnings.js }
 Invoke-Step "Aster browser integration" { node web/test-aster-v3.mjs }
 Invoke-Step "Decibel browser referral" { node web/test-decibel-referral.mjs }
 Invoke-Step "RH Lighter browser integration" { node web/test-rh-lighter.mjs }

@@ -127,11 +127,64 @@ const recovered = await recoverTypedDataAddress({
 assert.equal(recovered.toLowerCase(), privateKeyToAccount(privateKey).address.toLowerCase(), 'V2 intent must recover to the browser agent');
 assert(BigInt(nextLeverupNonce()) > BigInt(signed.nonce), 'intent nonces must be monotonic');
 
-delete process.env.LEVERUP_BROKER_ID;
+process.env.LEVERUP_BROKER_ID = '2';
+process.env.LEVERUP_BROKER_RECEIVER = '0xB36402e87a86206D3a114a98B53f31362291fe1B';
 const require = createRequire(import.meta.url);
 const leverupServer = require('../server-futures/leverup.js');
-const acceptedEnvelope = await leverupServer.validateIntentEnvelope(signed, trader);
+const defaultBroker = { active: false, brokerId: 0 };
+const clashBroker = { active: true, brokerId: 2 };
+const acceptedEnvelope = await leverupServer.validateIntentEnvelope(signed, trader, { brokerConfig: defaultBroker });
 assert.equal(acceptedEnvelope.action, OneClickAction.MARKET_OPEN, 'server must accept a correctly shaped V2 envelope for the linked trader');
+
+const onchainBrokerRecord = {
+  id: 2,
+  name: 'Clash Of Perps',
+  url: 'https://clashofperps.fun/',
+  receiver: '0xB36402e87a86206D3a114a98B53f31362291fe1B',
+  commissionP: 5000,
+  commissions: [],
+};
+const verifiedBroker = leverupServer.__test.brokerConfigFromRecord(onchainBrokerRecord);
+assert.equal(verifiedBroker.active, true, 'broker #2 must activate only for the issued Clash receiver');
+assert.equal(verifiedBroker.brokerId, 2);
+assert.equal(verifiedBroker.commissionP, 5000, 'the issued broker share must remain visible for monitoring');
+const mismatchedReceiver = leverupServer.__test.brokerConfigFromRecord({
+  ...onchainBrokerRecord,
+  receiver: '0x1111111111111111111111111111111111111111',
+});
+assert.equal(mismatchedReceiver.active, false, 'a changed receiver must fail closed');
+assert.equal(mismatchedReceiver.brokerId, 0, 'a receiver mismatch must route no Clash broker id');
+assert.equal(mismatchedReceiver.reason, 'broker_receiver_mismatch');
+
+const brokerActionFixtures = new Map([
+  [OneClickAction.MARKET_OPEN, [...openValues.slice(0, 9), 2, 0n]],
+  [OneClickAction.MARKET_CLOSE, [positionHash, 2]],
+  [OneClickAction.LIMIT_OPEN, [...openValues.slice(0, 9), 2, 0n]],
+  [OneClickAction.BATCH_MARKET_CLOSE, [[positionHash], 2]],
+  [OneClickAction.PARTIAL_CLOSE, [positionHash, 100_000_000n, 2]],
+  [OneClickAction.BATCH_CREATE_DECREASE_ORDERS, [positionHash, [[0, 65_000n * 10n ** 18n, 100_000_000n, 2]]]],
+  [OneClickAction.BATCH_UPDATE_DECREASE_ORDERS, [[[positionHash, 66_000n * 10n ** 18n, 90_000_000n, 2]]]],
+]);
+for (const [action, actionValues] of brokerActionFixtures) {
+  const envelope = await signLeverupIntent({
+    trader,
+    privateKey,
+    action,
+    actionValues,
+    feeToken: LEVERUP_ZERO_ADDRESS,
+    antiDdosFee: 0n,
+  });
+  const accepted = await leverupServer.validateIntentEnvelope(envelope, trader, { brokerConfig: clashBroker });
+  assert.equal(accepted.action, action, `fee-bearing V2 action ${action} must accept broker #2`);
+  assert.deepEqual(
+    leverupServer.__test.actionBrokerValues(
+      action,
+      leverupServer.__test.decodeIntentActionData(action, envelope.actionData),
+    ),
+    [2],
+    `fee-bearing V2 action ${action} must carry broker #2 in every protocol field`,
+  );
+}
 
 const retryAccount = '0x3333333333333333333333333333333333333333';
 const retryMarkets = [
@@ -201,7 +254,7 @@ const wrongBrokerEnvelope = await signLeverupIntent({
   antiDdosFee: 0n,
 });
 await assert.rejects(
-  leverupServer.validateIntentEnvelope(wrongBrokerEnvelope, trader),
+  leverupServer.validateIntentEnvelope(wrongBrokerEnvelope, trader, { brokerConfig: defaultBroker }),
   /broker ID does not match/u,
   'server must reject untrusted broker attribution',
 );
@@ -217,7 +270,7 @@ const extraFeeEnvelope = await signLeverupIntent({
   antiDdosFee: 0n,
 });
 await assert.rejects(
-  leverupServer.validateIntentEnvelope(extraFeeEnvelope, trader),
+  leverupServer.validateIntentEnvelope(extraFeeEnvelope, trader, { brokerConfig: defaultBroker }),
   /extraFee must remain zero/u,
   'server must reject an unapproved LeverUp surcharge',
 );
@@ -240,6 +293,8 @@ assert.equal(
 assert.deepEqual(selectLeverupFeeToken(13, configs, states), { feeToken: LEVERUP_ZERO_ADDRESS, antiDdosFee: 0n });
 
 const serverSource = await readFile(new URL('../server-futures/leverup.js', import.meta.url), 'utf8');
+const earningsSource = await readFile(new URL('../server/earnings.js', import.meta.url), 'utf8');
+const deploySource = await readFile(new URL('../deploy/deploy.sh', import.meta.url), 'utf8');
 const hookSource = await readFile(new URL('./src/hooks/useLeverup.js', import.meta.url), 'utf8');
 const panelSource = await readFile(new URL('./src/components/FuturesPanel.jsx', import.meta.url), 'utf8');
 const tournamentSource = await readFile(new URL('./src/admin/tournamentUtils.js', import.meta.url), 'utf8');
@@ -248,7 +303,11 @@ const tournamentDexBlock = tournamentSource.slice(0, tournamentSource.indexOf(']
 assert.match(serverSource, /symbol:\s*symbolOf\(row\.pairName \|\| row\.symbol\)/u, 'synthetic pair names must remain distinct');
 assert.match(serverSource, /replace\(\/\\\/USD/u, 'slash-delimited LeverUp pair names must normalize without a trailing slash');
 assert.match(serverSource, /requiredBrokerId = broker\.active \? broker\.brokerId : 0/u, 'server must enforce configured broker or official default broker 0');
+assert.match(serverSource, /receiver === expectedReceiver/u, 'broker activation must verify the owner-approved receiver');
 assert.match(serverSource, /extraFee must remain zero/u, 'Clash must not add LeverUp extraFee');
+assert.match(deploySource, /set_env_value "LEVERUP_BROKER_ID" "2"/u, 'production must force-align issued broker #2');
+assert.match(deploySource, /set_env_value "LEVERUP_BROKER_RECEIVER" "0xB36402e87a86206D3a114a98B53f31362291fe1B"/u, 'production must force-align the approved broker receiver');
+assert.match(earningsSource, /leverup_get_broker_by_id_lifetime_and_pending/u, 'admin must expose exact aggregate on-chain broker commissions');
 assert.match(
   hookSource,
   /rawPrice\(limitPrice\),\s*stopLoss > 0 \? rawPrice\(stopLoss\) : 0n,\s*takeProfit > 0 \? rawPrice\(takeProfit\) : 0n/u,
@@ -259,6 +318,7 @@ assert.match(panelSource, /OPEN_TPSL_NATIVE_LIMIT_ATTACH_DEXES[\s\S]*?'leverup'/
 assert.doesNotMatch(tournamentDexBlock, /leverup/u, 'LeverUp cannot enter tournaments before broker-attributed rewards exist');
 assert.match(panelSource, /dex === 'monad' \|\| dex === 'leverup'/u, 'LeverUp wallet connect must target Monad');
 assert.match(panelSource, /supportsOrderBook = .*dex === 'leverup'/u, 'LeverUp must render its oracle-pricing state instead of foreign depth');
+assert.match(panelSource, /adds no extra fee for the trader/u, 'LeverUp setup must explain that broker attribution adds no surcharge');
 assert.match(serverSource, /readPerMarketLists\('getPositionsV4'/u, 'failed position multicalls must retry instead of becoming a false empty account');
 assert.match(serverSource, /readPerMarketLists\('getLimitOrders'/u, 'failed limit-order multicalls must retry instead of hiding orders');
 assert.match(leverupIconSource, /https:\/\/app\.leverup\.xyz\/favicon\.svg/u, 'LeverUp icon must retain its official source attribution');

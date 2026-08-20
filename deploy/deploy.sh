@@ -440,6 +440,8 @@ prepare_shared_runtime() {
                 printf '%s\n' ASTER_BUILDER_ADDRESS=0xB36402e87a86206D3a114a98B53f31362291fe1B
                 printf '%s\n' ASTER_BUILDER_FEE_RATE=0.0001
                 printf '%s\n' ASTER_BUILDER_SIGNER_ADDRESS=0xa388E6fA16dE55DaA3D4A6c0dC326B5088c7CCBD
+                printf '%s\n' LEVERUP_BROKER_ID=2
+                printf '%s\n' LEVERUP_BROKER_RECEIVER=0xB36402e87a86206D3a114a98B53f31362291fe1B
                 printf '%s\n' NADO_SUBACCOUNT_NAME=default
                 printf '%s\n' NADO_FILL_LOOKBACK_LIMIT=100
                 printf '%s\n' VITE_NADO_SUBACCOUNT_NAME=default
@@ -521,6 +523,8 @@ prepare_shared_runtime() {
     ensure_env_default "ASTER_BUILDER_ADDRESS" "0xB36402e87a86206D3a114a98B53f31362291fe1B"
     ensure_env_default "ASTER_BUILDER_FEE_RATE" "0.0001"
     ensure_env_default "ASTER_BUILDER_SIGNER_ADDRESS" "0xa388E6fA16dE55DaA3D4A6c0dC326B5088c7CCBD"
+    ensure_env_default "LEVERUP_BROKER_ID" "2"
+    ensure_env_default "LEVERUP_BROKER_RECEIVER" "0xB36402e87a86206D3a114a98B53f31362291fe1B"
     ensure_env_default "HYPERLIQUID_BUILDER_FEE_TENTH_BPS" "10"
     ensure_env_default "VITE_HYPERLIQUID_BUILDER_FEE_TENTH_BPS" "10"
     ensure_env_default "PHOENIX_FLIGHT_BUILDER_FEE_BPS" "1"
@@ -652,6 +656,10 @@ prepare_shared_runtime() {
     set_env_value "ASTER_BUILDER_ADDRESS" "0xB36402e87a86206D3a114a98B53f31362291fe1B"
     set_env_value "ASTER_BUILDER_FEE_RATE" "0.0001"
     set_env_value "ASTER_BUILDER_SIGNER_ADDRESS" "0xa388E6fA16dE55DaA3D4A6c0dC326B5088c7CCBD"
+    # LeverUp assigns a permissioned numeric broker id. Force-align both the id
+    # and its on-chain receiver so a stale shared env can never redirect fees.
+    set_env_value "LEVERUP_BROKER_ID" "2"
+    set_env_value "LEVERUP_BROKER_RECEIVER" "0xB36402e87a86206D3a114a98B53f31362291fe1B"
     set_env_value "HYPERLIQUID_BUILDER_FEE_TENTH_BPS" "10"
     set_env_value "VITE_HYPERLIQUID_BUILDER_FEE_TENTH_BPS" "10"
     set_env_value "PHOENIX_FLIGHT_BUILDER_FEE_BPS" "1"

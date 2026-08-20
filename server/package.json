@@ -1,6 +1,6 @@
 {
   "name": "server",
-  "version": "1.1.4",
+  "version": "1.1.5",
   "description": "",
   "main": "index.js",
   "scripts": {
@@ -12,6 +12,7 @@
     "test:sanctum-rewards": "node test-sanctum-rewards.js",
     "test:sanctum-migration": "node test-sanctum-migration.js",
     "test:sanctum-rate-limit": "node test-sanctum-rate-limit.js",
+    "test:leverup-earnings": "node test-leverup-earnings.js",
     "test:ondo-claim": "node test-ondo-claim-reconciliation.js",
     "test:ondo-earnings": "node test-ondo-earnings.js",
     "test:aster-earnings": "node test-aster-earnings.js",
