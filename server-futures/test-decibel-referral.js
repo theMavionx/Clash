@@ -34,9 +34,14 @@ global.fetch = async (url, options = {}) => {
   const accountMatch = parsed.pathname.match(/\/referrals\/account\/(0x[0-9a-f]+)$/i);
   if (accountMatch) {
     const owner = accountMatch[1].toLowerCase();
-    const code = referred.get(owner);
-    return code
-      ? jsonResponse({ referral_code: code, is_active: true, referrer_account: `0x${'9'.repeat(64)}` })
+    const referral = referred.get(owner);
+    const code = typeof referral === 'string' ? referral : referral?.code;
+    return referral
+      ? jsonResponse({
+          referral_code: code,
+          is_active: typeof referral === 'string' ? true : referral.is_active,
+          referrer_account: referral.referrer_account || `0x${'9'.repeat(64)}`,
+        })
       : jsonResponse({ error: 'not found' }, 404);
   }
   if (parsed.pathname.endsWith('/referrals/redeem') && options.method === 'POST') {
@@ -71,14 +76,21 @@ async function main() {
   assert.equal(rotatedCall.authorization, 'Bearer decibel-test-key-2');
 
   const existingOwner = decibel.normalizeAptosAddress('0x2');
-  referred.set(existingOwner, 'OTHER1');
+  referred.set(existingOwner, {
+    code: 'OTHER1',
+    is_active: false,
+    referrer_account: `0x${'8'.repeat(64)}`,
+  });
   const beforeRedeems = calls.filter(call => call.href.endsWith('/referrals/redeem')).length;
   const existing = await decibel.redeemDecibelReferral(existingOwner);
   const afterRedeems = calls.filter(call => call.href.endsWith('/referrals/redeem')).length;
   assert.equal(existing.already_linked, true);
+  assert.equal(existing.referral_status.has_referrer, true);
+  assert.equal(existing.referral_status.is_active, false);
   assert.equal(existing.referral_status.referral_code, 'OTHER1');
   assert.equal(existing.referral_status.is_our_referral, false);
   assert.equal(afterRedeems, beforeRedeems, 'an existing referral must never be overwritten');
+  assert.equal((await decibel.requireDecibelReferral(existingOwner)).has_referrer, true);
 
   const missingOwner = decibel.normalizeAptosAddress('0x3');
   await assert.rejects(

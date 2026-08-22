@@ -122,16 +122,21 @@ async function responseJson(response) {
 
 function normalizeDecibelReferralStatus(account, payload = null) {
   const referralCode = String(payload?.referral_code || '').trim().toUpperCase();
+  const referrerAccount = normalizeAptosAddress(payload?.referrer_account || '') || null;
+  // Decibel keeps the immutable referrer relationship even when the referral
+  // code itself is no longer active. Treating `is_active: false` as "missing"
+  // makes Clash attempt an impossible overwrite and blocks activation.
+  const hasReferrer = referralCode.length > 0 || referrerAccount !== null;
   return {
     checked: true,
     account: normalizeAptosAddress(account),
-    has_referrer: referralCode.length > 0 && payload?.is_active !== false,
+    has_referrer: hasReferrer,
     is_our_referral: referralCode === DECIBEL_REFERRAL_CODE,
     referral_code: referralCode || null,
-    referrer_account: normalizeAptosAddress(payload?.referrer_account || '') || null,
+    referrer_account: referrerAccount,
     is_affiliate_referral: payload?.is_affiliate_referral === true,
     referred_at_ms: Number(payload?.referred_at_ms || 0) || null,
-    is_active: payload?.is_active !== false && referralCode.length > 0,
+    is_active: hasReferrer && payload?.is_active !== false,
     clash_referral_code: DECIBEL_REFERRAL_CODE,
     referral_url: DECIBEL_REFERRAL_URL,
   };
