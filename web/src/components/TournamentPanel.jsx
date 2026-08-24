@@ -1070,10 +1070,6 @@ function TournamentPanel({ onClose }) {
             style={tab === 'history' ? S.tabActive : S.tab}
             onClick={() => setTab('history')}
           >History</button>
-          <button
-            style={tab === 'lucky' ? S.tabActive : S.tab}
-            onClick={() => { setTab('lucky'); setPickedHistoryId(null); }}
-          >Lucky</button>
         </div>
 
         <div

@@ -4,6 +4,13 @@ import test from 'node:test';
 
 const component = await readFile(new URL('./src/components/TournamentPanel.jsx', import.meta.url), 'utf8');
 
+test('player-facing tournament tabs exclude Lucky Raider', () => {
+  const tabs = component.match(/<div className="tournament-modal__tabs"[\s\S]*?<\/div>/)?.[0] || '';
+  assert.match(tabs, />Active<\/button>/);
+  assert.match(tabs, />History<\/button>/);
+  assert.doesNotMatch(tabs, />Lucky<\/button>|setTab\('lucky'\)/);
+});
+
 test('tournament modal is wider on desktop and bounded on tablet viewports', () => {
   assert.match(component, /className="tournament-modal" style=\{S\.modal\}/);
   assert.match(component, /modal:\s*\{[\s\S]*?width:\s*480,\s*maxWidth:\s*'calc\(100dvw - 32px\)'/);
