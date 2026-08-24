@@ -984,9 +984,6 @@ var _move_active_touch_indices: Dictionary = {}
 var _move_multitouch_active: bool = false
 var _move_touch_confirm_pending: bool = false
 var _move_commit_pending: bool = false
-const MOVE_FOLLOW_SPEED_CELLS_PER_SECOND: float = 10.0
-const MOVE_FOLLOW_RESPONSE_PER_SECOND: float = 14.0
-const MOVE_SETTLE_DISTANCE_CELLS: float = 0.001
 
 # ── Placement State ───────────────────────────────────────────
 var is_placing: bool = false
@@ -1813,37 +1810,24 @@ func _process(delta: float) -> void:
 		_production._update_collect_icons()
 
 
-static func move_visual_step(
-	current: Vector3,
-	target: Vector3,
-	delta: float,
-	visual_cell_size: float
-) -> Vector3:
-	var offset := target - current
-	var distance := offset.length()
-	var safe_cell_size := maxf(visual_cell_size, 0.001)
-	if distance <= safe_cell_size * MOVE_SETTLE_DISTANCE_CELLS:
-		return target
-	if delta <= 0.0:
-		return current
-	var safe_delta := minf(delta, 0.1)
-	var response_step := distance * (1.0 - exp(-MOVE_FOLLOW_RESPONSE_PER_SECOND * safe_delta))
-	var capped_step := safe_cell_size * MOVE_FOLLOW_SPEED_CELLS_PER_SECOND * safe_delta
-	var step_distance := minf(distance, minf(response_step, capped_step))
-	return current + offset * (step_distance / distance)
-
-
-func _process_move_visual(delta: float) -> void:
+func _process_move_visual(_delta: float) -> void:
 	if not _is_moving or _move_commit_pending:
 		return
 	# Camera edge-pan changes the ray even while the owning pointer is stationary.
 	# Reprojecting the last pointer keeps the logical tile authoritative.
 	if _move_last_pointer_screen != Vector2.INF:
 		_update_move_building(_move_last_pointer_screen)
+	_sync_move_root_to_target()
+
+
+func _sync_move_root_to_target() -> void:
 	var node := selected_building.get("node", null) as Node3D
 	if not is_instance_valid(node):
 		return
-	node.position = move_visual_step(node.position, _move_target_local, delta, cell_size)
+	# The footprint and the complete building hierarchy share one authoritative
+	# snapped transform. Moving only this root preserves every child mesh's local
+	# transform (important for articulated defenses such as the Turret).
+	node.position = _move_target_local
 
 
 func _physics_process(delta: float) -> void:
@@ -8899,6 +8883,7 @@ func _update_move_building(screen_position: Variant = null) -> void:
 	var sz = def.cells.y * cell_size
 	var local_pos := move_local_for_grid(gp, def.cells)
 	_move_target_local = local_pos
+	_sync_move_root_to_target()
 	# Tombstone: skeletons stay at old position during drag.
 	# They will run to the new position only after _confirm_move().
 	# Validity indicator under the building

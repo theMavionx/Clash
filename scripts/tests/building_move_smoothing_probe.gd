@@ -1,15 +1,14 @@
 extends SceneTree
 
 const BuildingSystemScript := preload("res://scripts/building_system.gd")
-const TEST_FPS: Array[int] = [10, 20, 30, 60, 120]
+const TurretScene := preload("res://Model/Turret/scene.gltf")
 const CELL_SIZE := 0.25
-const EPSILON := 0.00001
 
 var _failures: Array[String] = []
 
 
 func _initialize() -> void:
-	_run_smoothing_checks()
+	_run_visual_sync_checks()
 	_run_touch_state_checks()
 	_run_grid_source_checks()
 	_run_art_contract_checks()
@@ -22,51 +21,42 @@ func _initialize() -> void:
 	quit(1)
 
 
-func _run_smoothing_checks() -> void:
-	var start := Vector3.ZERO
-	var target := Vector3(1.5, 0.0, 2.0) # Exactly ten test cells away.
-	var settled_targets: Array[Vector3] = []
-	for fps in TEST_FPS:
-		var delta := 1.0 / float(fps)
-		var current := start
-		var previous_distance := current.distance_to(target)
-		for _frame in range(fps * 3):
-			var next: Vector3 = BuildingSystemScript.move_visual_step(
-				current,
-				target,
-				delta,
-				CELL_SIZE
-			)
-			var next_distance := next.distance_to(target)
-			_expect(
-				next_distance <= previous_distance + EPSILON,
-				"%d FPS follow was not monotonic" % fps
-			)
-			_expect(
-				current.distance_to(next) <= CELL_SIZE * 10.0 * delta + EPSILON,
-				"%d FPS follow exceeded the ten-cell-per-second cap" % fps
-			)
-			_expect(
-				(next - start).dot(target - start) <= (target - start).length_squared() + EPSILON,
-				"%d FPS follow overshot its target" % fps
-			)
-			current = next
-			previous_distance = next_distance
-		settled_targets.append(current)
-		_expect(current == target, "%d FPS follow did not settle exactly" % fps)
-	for settled in settled_targets:
-		_expect(settled == target, "frame-rate variants did not resolve to the identical target")
+func _run_visual_sync_checks() -> void:
+	var building_system = BuildingSystemScript.new()
+	var root := Node3D.new()
+	var turret_model := TurretScene.instantiate() as Node3D
+	root.add_child(turret_model)
+	var stand := turret_model.find_child("Stand", true, false) as Node3D
+	var barrel := turret_model.find_child("Turret", true, false) as Node3D
+	_expect(stand != null and barrel != null, "real Turret scene lost its articulated mesh nodes")
+	building_system.selected_building = {"id": "turret", "node": root}
+	building_system._is_moving = true
+	building_system._move_last_pointer_screen = Vector2.INF
+	building_system._move_target_local = Vector3(1.5, 0.0, 2.0)
 
-	var long_frame: Vector3 = BuildingSystemScript.move_visual_step(
-		Vector3.ZERO,
-		Vector3(100.0, 0.0, 0.0),
-		1.0,
-		CELL_SIZE
+	var stand_local := stand.transform
+	var barrel_local := barrel.transform
+	building_system._process_move_visual(0.0)
+	_expect(
+		root.position == building_system._move_target_local,
+		"drag root lagged behind its authoritative snapped target"
 	)
 	_expect(
-		long_frame.length() <= CELL_SIZE + EPSILON,
-		"long-frame safety clamp allowed more than 0.1 seconds of movement"
+		stand.transform == stand_local and barrel.transform == barrel_local,
+		"dragging the root changed the real Turret child mesh transforms"
 	)
+
+	var frozen_position := root.position
+	building_system._move_target_local = Vector3(-2.0, 0.0, 3.0)
+	building_system._move_commit_pending = true
+	building_system._process_move_visual(1.0)
+	_expect(
+		root.position == frozen_position,
+		"commit pending did not freeze the snapped building root"
+	)
+
+	root.free()
+	building_system.free()
 
 
 func _run_grid_source_checks() -> void:
