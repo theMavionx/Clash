@@ -250,7 +250,9 @@ export const DEX_CONFIG = {
     label: 'HIBACHI',
     shortLabel: 'HBC',
     emoji: 'HB',
-    logo: '/hibachi.png',
+    // Cache-busted circular form of Hibachi's current official mark. The
+    // legacy /hibachi.png path carries the same asset for older clients.
+    logo: '/hibachi-v2.png',
     logoIsWordmark: false,
     color: '#EF4444',
     colorDark: '#991B1B',
