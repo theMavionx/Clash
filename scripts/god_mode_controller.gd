@@ -342,6 +342,16 @@ func _start_building_placement(building_id: String, requested_level: int) -> voi
 		return
 	var definition: Dictionary = defs[building_id]
 	var target_level := clampi(requested_level, 1, _max_level_for_definition(definition))
+	if (
+		_is_building_placement_active()
+		and str(_pending_placement.get("building_id", "")) == building_id
+		and int(_pending_placement.get("level", 0)) == target_level
+	):
+		_set_status("%s Lv.%d is already attached to the pointer." % [
+			definition.get("name", building_id),
+			target_level,
+		])
+		return
 	_pending_placement = {
 		"building_id": building_id,
 		"level": target_level,
@@ -350,6 +360,13 @@ func _start_building_placement(building_id: String, requested_level: int) -> voi
 	_main_bs.call("_start_placement", building_id)
 	_phase = "build"
 	_set_status("Place %s Lv.%d on the island." % [definition.get("name", building_id), target_level])
+
+
+func _is_building_placement_active() -> bool:
+	for bs in _building_systems():
+		if bool(bs.get("is_placing")):
+			return true
+	return false
 
 
 func _building_node_ids(building_id: String) -> Dictionary:
@@ -991,6 +1008,34 @@ func _verify_god_mode_flow() -> void:
 			failures.append("%s is not in test_mode" % bs.name)
 		if bs.get("_net") != null:
 			failures.append("%s still has a network client" % bs.name)
+	if is_instance_valid(_main_bs):
+		# Reproduce the reported rapid double-click at the engine boundary. The
+		# first ghost must be retired before the replacement becomes authoritative.
+		_main_bs.call("_begin_placement", "air_bomb")
+		var first_air_bomb_ghost: Node = _main_bs.get("ghost")
+		_main_bs.call("_begin_placement", "air_bomb")
+		var replacement_air_bomb_ghost: Node = _main_bs.get("ghost")
+		await get_tree().process_frame
+		if is_instance_valid(first_air_bomb_ghost):
+			failures.append("double placement left the first Air Bomb ghost alive")
+		if not is_instance_valid(replacement_air_bomb_ghost):
+			failures.append("double placement did not preserve the replacement Air Bomb ghost")
+		_main_bs.call("_cancel_placement")
+		await get_tree().process_frame
+		if is_instance_valid(replacement_air_bomb_ghost) or bool(_main_bs.get("is_placing")):
+			failures.append("Air Bomb placement cancel left a ghost or placement state alive")
+
+		# Reproduce the same double click through the production God Mode bridge
+		# command handler. Identical commands are idempotent and keep one preview.
+		_start_building_placement("air_bomb", 1)
+		var command_air_bomb_ghost: Node = _main_bs.get("ghost")
+		_start_building_placement("air_bomb", 1)
+		if _main_bs.get("ghost") != command_air_bomb_ghost:
+			failures.append("duplicate God Mode placement command replaced its active ghost")
+		_cancel_placement()
+		await get_tree().process_frame
+		if is_instance_valid(command_air_bomb_ghost) or _is_building_placement_active():
+			failures.append("duplicate God Mode placement cleanup left an active Air Bomb ghost")
 	_build_showcase()
 	if _placed_building_count() < 3:
 		failures.append("showcase did not create a usable defender base")

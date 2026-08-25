@@ -3996,6 +3996,12 @@ func _can_build_here(building_id: String) -> bool:
 func _begin_placement(building_id: String) -> void:
 	if not _can_build_here(building_id):
 		return
+	# Starting a second placement used to overwrite `ghost` without freeing the
+	# first preview. A rapid double click could therefore leave an unreferenced
+	# green box/model in the scene forever. Placement is a single-owner state:
+	# retire the current preview before creating its replacement.
+	if is_placing or is_instance_valid(ghost):
+		_cancel_placement()
 	is_placing = true
 	current_building_id = building_id
 	_flamethrower_placement_user_rotated = false
@@ -5151,9 +5157,12 @@ func _cancel_placement() -> void:
 		build_button.visible = true
 	if not always_show_grid:
 		_hide_grid()
-	if ghost:
+	if is_instance_valid(ghost):
+		# queue_free() is deferred. Hide immediately so replacing/cancelling a
+		# preview cannot flash the retired ghost for one more rendered frame.
+		ghost.visible = false
 		ghost.queue_free()
-		ghost = null
+	ghost = null
 	_clear_footprint_indicator()
 	_end_flamethrower_editor(false)
 
