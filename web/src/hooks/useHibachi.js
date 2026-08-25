@@ -12,6 +12,7 @@ import {
 } from '../lib/encryptedCredentialStorage';
 import { usePlayer } from './useGodot';
 import { registeredDexWallet } from '../lib/playerDexAccounts';
+import { isHibachiIpBlockedError } from '../lib/hibachiErrors';
 
 const STORAGE_KEY = 'clash_hibachi_credentials_v1';
 const LEVERAGE_STORAGE_KEY = 'clash_hibachi_leverage_v1';
@@ -265,13 +266,6 @@ function hibachiCredentialErrorMessage(error) {
     return 'Hibachi credentials are incorrect. Check your API key, account id, and private key.';
   }
   return msg || 'Could not verify Hibachi credentials.';
-}
-
-function isHibachiIpBlocked(error) {
-  return error?.code === 'HIBACHI_IP_BLOCKED'
-    || /HIBACHI_IP_BLOCKED|Hibachi is not available from your IP address|cloudflare|access denied/i.test(
-      String(error?.detail || error?.error || error?.message || '')
-    );
 }
 
 function normalizeHibachiCategory(value) {
@@ -604,7 +598,7 @@ export function useHibachi() {
     try {
       return await fetchJson(path);
     } catch (e) {
-      if (!isHibachiIpBlocked(e) || !canUsePublicProxyFallback()) throw e;
+      if (!isHibachiIpBlockedError(e) || !canUsePublicProxyFallback()) throw e;
       return fetchJson(hibachiProxyPath(path));
     }
   }, [fetchJson, runDirectBrowserProbe]);

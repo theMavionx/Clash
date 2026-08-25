@@ -16,6 +16,7 @@ import { useOndo } from '../hooks/useOndo';
 import { useLeverup } from '../hooks/useLeverup';
 import { useAster } from '../hooks/useAster';
 import { useHibachi } from '../hooks/useHibachi';
+import { isHibachiIpBlockedError, isHibachiRateLimitedError } from '../lib/hibachiErrors';
 import { useHotstuff } from '../hooks/useHotstuff';
 import { useGrvt } from '../hooks/useGrvt';
 import { useKatana } from '../hooks/useKatana';
@@ -775,7 +776,11 @@ function humanizeTradeError(message, dex = null) {
   if (/Insufficient Ostium USDC/i.test(text)) {
     return text;
   }
-  if (/HIBACHI_IP_BLOCKED|Hibachi is not available from your IP address|cloudflare|access denied/i.test(text)) {
+  const isHibachi = String(dex || '').toLowerCase() === 'hibachi' || /hibachi/i.test(text);
+  if (isHibachi && isHibachiRateLimitedError(message)) {
+    return 'Hibachi is temporarily rate-limiting requests. Wait a few seconds, then try again.';
+  }
+  if (isHibachi && isHibachiIpBlockedError(message)) {
     return 'Hibachi is not available from your IP address. Use a supported network or IP region, then try again.';
   }
   if (/PERPL_REGION_BLOCKED|Unavailable For Legal Reasons|not available in your country|country or IP region|451/i.test(text)) {

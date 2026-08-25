@@ -12,7 +12,12 @@ const HIBACHI_FILL_LOOKBACK_MS = Math.max(
 const HIBACHI_MAX_FEES_PERCENT = String(process.env.HIBACHI_MAX_FEES_PERCENT || '0.001');
 const HIBACHI_REWARD_MIN_NOTIONAL_USD = Math.max(0, Number(process.env.HIBACHI_REWARD_MIN_NOTIONAL_USD || 10));
 const HIBACHI_IP_BLOCKED_MESSAGE = 'Hibachi is not available from your IP address. Try a supported network or IP region.';
+const HIBACHI_RATE_LIMITED_MESSAGE = 'Hibachi is temporarily rate-limiting requests. Wait a few seconds, then try again.';
 const HIBACHI_VISIBLE_MARKET_CATEGORIES = new Set(['crypto']);
+const HIBACHI_PUBLIC_MARKET_CACHE_MS = Math.max(5_000, Math.min(5 * 60_000, Number(process.env.HIBACHI_PUBLIC_MARKET_CACHE_MS || 30_000)));
+const HIBACHI_PUBLIC_MARKET_STALE_MS = Math.max(HIBACHI_PUBLIC_MARKET_CACHE_MS, Math.min(60 * 60_000, Number(process.env.HIBACHI_PUBLIC_MARKET_STALE_MS || 5 * 60_000)));
+const HIBACHI_EXCHANGE_INFO_CACHE_MS = Math.max(60_000, Math.min(24 * 60 * 60_000, Number(process.env.HIBACHI_EXCHANGE_INFO_CACHE_MS || 10 * 60_000)));
+const HIBACHI_EXCHANGE_INFO_STALE_MS = Math.max(HIBACHI_EXCHANGE_INFO_CACHE_MS, Math.min(7 * 24 * 60 * 60_000, Number(process.env.HIBACHI_EXCHANGE_INFO_STALE_MS || 24 * 60 * 60_000)));
 const HIBACHI_PRIVATE_READ_CACHE_MS = Math.max(250, Math.min(5_000, Number(process.env.HIBACHI_PRIVATE_READ_CACHE_MS || 2_500)));
 const HIBACHI_PRIVATE_READ_STALE_MS = Math.max(1_000, Math.min(60_000, Number(process.env.HIBACHI_PRIVATE_READ_STALE_MS || 30_000)));
 const HIBACHI_PRIVATE_READ_MAX_ENTRIES = 500;
@@ -108,6 +113,18 @@ function hibachiCanTradeCategory(accountCategory, contractCategory) {
 
 function hibachiIsVisibleMarketCategory(category) {
   return HIBACHI_VISIBLE_MARKET_CATEGORIES.has(normalizeHibachiCategory(category));
+}
+
+function hibachiIsLiveContract(contract = {}) {
+  const status = String(firstPresent(
+    contract.status,
+    contract.marketStatus,
+    contract.market_status,
+    contract.symbolStatus,
+    contract.symbol_status,
+  ) || '').trim().toUpperCase();
+  if (!status) return true;
+  return ['LIVE', 'OPEN', 'ACTIVE', 'TRADING'].includes(status);
 }
 
 function rows(payload) {
@@ -874,17 +891,35 @@ async function request(base, method, path, { apiKey, body } = {}) {
     let data = null;
     try { data = text ? JSON.parse(text) : null; } catch { data = text; }
     if (!r.ok) {
-      const contentType = String(r.headers.get('content-type') || '');
-      const looksLikeEdgeBlock = r.status === 403
-        && (contentType.includes('text/html') || /cloudflare|access denied|forbidden/i.test(text || ''));
-      if (looksLikeEdgeBlock) {
+      const errorText = typeof data === 'string'
+        ? data
+        : [data?.title, data?.detail, data?.message, data?.error, text].filter(Boolean).join(' ');
+      if (r.status === 429) {
+        const headerRetryAfter = Number(r.headers.get('retry-after'));
+        const bodyRetryAfter = Number(data?.retry_after ?? data?.retryAfter);
+        const retryAfter = Number.isFinite(headerRetryAfter) && headerRetryAfter > 0
+          ? headerRetryAfter
+          : (Number.isFinite(bodyRetryAfter) && bodyRetryAfter > 0 ? bodyRetryAfter : null);
+        const err = new Error(retryAfter
+          ? `Hibachi is temporarily rate-limiting requests. Retry in ${Math.ceil(retryAfter)} seconds.`
+          : HIBACHI_RATE_LIMITED_MESSAGE);
+        err.code = 'HIBACHI_RATE_LIMITED';
+        err.status = 429;
+        err.path = path;
+        err.retryAfter = retryAfter;
+        throw err;
+      }
+      const explicitGeoBlock = r.status === 451
+        || Number(data?.error_code) === 1009
+        || /(?:country|region|jurisdiction|geographic|geo-location|ip address).{0,80}(?:unsupported|restricted|blocked|prohibited|not available)|(?:unsupported|restricted|blocked|prohibited|not available).{0,80}(?:country|region|jurisdiction|geographic|geo-location|ip address)/iu.test(errorText);
+      if ((r.status === 403 || r.status === 451) && explicitGeoBlock) {
         const err = new Error(HIBACHI_IP_BLOCKED_MESSAGE);
         err.code = 'HIBACHI_IP_BLOCKED';
-        err.status = 403;
+        err.status = r.status;
         err.path = path;
         throw err;
       }
-      const detail = typeof data === 'string' ? data : (data?.message || data?.error || text);
+      const detail = typeof data === 'string' ? data : (data?.message || data?.error || data?.detail || text);
       const err = new Error(`Hibachi ${path} ${r.status}: ${detail || 'request failed'}`);
       err.status = r.status;
       err.path = path;
@@ -898,6 +933,10 @@ async function request(base, method, path, { apiKey, body } = {}) {
 
 function isIpBlockedError(error) {
   return error?.code === 'HIBACHI_IP_BLOCKED';
+}
+
+function isRateLimitedError(error) {
+  return error?.code === 'HIBACHI_RATE_LIMITED' || Number(error?.status) === 429;
 }
 
 function credentials(input = {}) {
@@ -1213,49 +1252,132 @@ function decorateBatchOrderResult(result, parentNonce) {
   };
 }
 
-let inventoryCache = { at: 0, payload: null };
-let exchangeInfoCache = { at: 0, payload: null };
+const inventoryCache = { at: 0, payload: null, promise: null, retryAt: 0 };
+const exchangeInfoCache = { at: 0, payload: null, promise: null, retryAt: 0 };
+const contractMapCache = { at: 0, payload: null };
 const marketDataCache = new Map();
 
+async function cachedPublicRead(cache, label, loader, { ttlMs, staleMs }) {
+  const now = Date.now();
+  if (cache.payload != null && now - cache.at < ttlMs) return cache.payload;
+  if (cache.payload != null && cache.retryAt > now) return cache.payload;
+  if (cache.promise) return cache.promise;
+  const promise = Promise.resolve()
+    .then(loader)
+    .then((payload) => {
+      cache.payload = payload;
+      cache.at = Date.now();
+      cache.promise = null;
+      cache.retryAt = 0;
+      return payload;
+    }, (error) => {
+      cache.promise = null;
+      if (
+        cache.payload != null
+        && cache.at
+        && Date.now() - cache.at < staleMs
+        && isRetryableReadError(error)
+      ) {
+        const retryAfterMs = Number(error?.retryAfter) > 0
+          ? Number(error.retryAfter) * 1000
+          : 30_000;
+        cache.retryAt = Date.now() + Math.max(1_000, Math.min(5 * 60_000, retryAfterMs));
+        console.warn(`[hibachi] using stale public ${label}: ${error.message}`);
+        return cache.payload;
+      }
+      throw error;
+    });
+  cache.promise = promise;
+  return promise;
+}
+
+function contractsFromInventory(payload) {
+  return rows(payload?.markets).map(market => market?.contract || market).filter(Boolean);
+}
+
+function contractsFromExchangeInfo(payload) {
+  return rows(payload?.futureContracts).filter(Boolean);
+}
+
+function rememberContracts(contracts) {
+  const next = new Map(
+    (Array.isArray(contracts) ? contracts : [])
+      .filter(contract => contract?.symbol)
+      .map(contract => [String(contract.symbol).toUpperCase(), contract]),
+  );
+  if (next.size > 0) {
+    contractMapCache.payload = next;
+    contractMapCache.at = Date.now();
+  }
+  return next;
+}
+
 async function getInventory() {
-  if (inventoryCache.payload && Date.now() - inventoryCache.at < 20_000) return inventoryCache.payload;
-  const payload = await request(HIBACHI_DATA_API, 'GET', '/market/inventory');
-  inventoryCache = { at: Date.now(), payload };
+  const payload = await cachedPublicRead(
+    inventoryCache,
+    'inventory',
+    () => request(HIBACHI_DATA_API, 'GET', '/market/inventory'),
+    { ttlMs: HIBACHI_PUBLIC_MARKET_CACHE_MS, staleMs: HIBACHI_PUBLIC_MARKET_STALE_MS },
+  );
+  rememberContracts(contractsFromInventory(payload));
   return payload;
 }
 
 async function getExchangeInfo() {
-  if (exchangeInfoCache.payload && Date.now() - exchangeInfoCache.at < 20_000) return exchangeInfoCache.payload;
-  const payload = await request(HIBACHI_DATA_API, 'GET', '/market/exchange-info');
-  exchangeInfoCache = { at: Date.now(), payload };
+  const payload = await cachedPublicRead(
+    exchangeInfoCache,
+    'exchange info',
+    () => request(HIBACHI_DATA_API, 'GET', '/market/exchange-info'),
+    { ttlMs: HIBACHI_EXCHANGE_INFO_CACHE_MS, staleMs: HIBACHI_EXCHANGE_INFO_STALE_MS },
+  );
+  rememberContracts(contractsFromExchangeInfo(payload));
   return payload;
 }
 
 async function getMarketData(symbol) {
   const key = String(symbol || '').trim();
   if (!key) return { price: {}, stats: {} };
-  const cached = marketDataCache.get(key);
-  if (cached && Date.now() - cached.at < 20_000) return cached.payload;
-  const [price, stats] = await Promise.all([
-    request(HIBACHI_DATA_API, 'GET', `/market/data/prices?symbol=${encodeURIComponent(key)}`).catch(() => ({})),
-    request(HIBACHI_DATA_API, 'GET', `/market/data/stats?symbol=${encodeURIComponent(key)}`).catch(() => ({})),
-  ]);
-  const payload = { price: price || {}, stats: stats || {} };
-  marketDataCache.set(key, { at: Date.now(), payload });
-  return payload;
+  let cache = marketDataCache.get(key);
+  if (!cache) {
+    cache = { at: 0, payload: null, promise: null, retryAt: 0 };
+    marketDataCache.set(key, cache);
+  }
+  return cachedPublicRead(cache, `market data for ${key}`, async () => {
+    const [priceResult, statsResult] = await Promise.allSettled([
+      request(HIBACHI_DATA_API, 'GET', `/market/data/prices?symbol=${encodeURIComponent(key)}`),
+      request(HIBACHI_DATA_API, 'GET', `/market/data/stats?symbol=${encodeURIComponent(key)}`),
+    ]);
+    if (priceResult.status === 'rejected' && statsResult.status === 'rejected') {
+      throw priceResult.reason || statsResult.reason;
+    }
+    return {
+      price: priceResult.status === 'fulfilled' ? (priceResult.value || {}) : {},
+      stats: statsResult.status === 'fulfilled' ? (statsResult.value || {}) : {},
+    };
+  }, { ttlMs: HIBACHI_PUBLIC_MARKET_CACHE_MS, staleMs: HIBACHI_PUBLIC_MARKET_STALE_MS });
 }
 
 async function contractMap() {
-  let list = [];
+  if (contractMapCache.payload?.size) {
+    if (Date.now() - contractMapCache.at >= HIBACHI_EXCHANGE_INFO_CACHE_MS) {
+      getExchangeInfo().catch(error => {
+        console.warn(`[hibachi] background contract metadata refresh failed: ${error.message}`);
+      });
+    }
+    return contractMapCache.payload;
+  }
+  let list = contractsFromExchangeInfo(exchangeInfoCache.payload);
+  if (!list.length) list = contractsFromInventory(inventoryCache.payload);
+  if (list.length) return rememberContracts(list);
   try {
-    const inv = await getInventory();
-    list = rows(inv?.markets).map(m => m.contract || m).filter(Boolean);
+    const exchange = await getExchangeInfo();
+    list = contractsFromExchangeInfo(exchange);
   } catch {}
   if (!list.length) {
-    const exchange = await getExchangeInfo();
-    list = rows(exchange?.futureContracts).filter(Boolean);
+    const inv = await getInventory();
+    list = contractsFromInventory(inv);
   }
-  return new Map(list.map(c => [String(c.symbol || '').toUpperCase(), c]));
+  return rememberContracts(list);
 }
 
 async function getMarketInfo() {
@@ -1268,10 +1390,24 @@ async function getMarketInfo() {
     const exchange = await getExchangeInfo();
     markets = rows(exchange?.futureContracts).map(contract => ({ contract, info: {} }));
   }
-  const enriched = await Promise.all(markets.map(async (m) => {
+  const visibleMarkets = markets.filter((m) => {
+    const contract = m?.contract || m;
+    return hibachiIsLiveContract(contract)
+      && hibachiIsVisibleMarketCategory(hibachiContractCategory(contract, m?.info || {}));
+  });
+  const enriched = await Promise.all(visibleMarkets.map(async (m) => {
     const c = m.contract || m;
     const info = m.info || {};
-    const marketData = await getMarketData(c.symbol || info.symbol);
+    const hasInventoryPrice = num(
+      info.markPrice
+      ?? info.priceLatest
+      ?? info.spotPrice
+      ?? info.bestBidPrice
+      ?? info.bestAskPrice,
+    ) > 0;
+    const marketData = hasInventoryPrice
+      ? { price: {}, stats: {} }
+      : await getMarketData(c.symbol || info.symbol);
     const priceInfo = marketData.price || {};
     const statsInfo = marketData.stats || {};
     const symbol = symbolOf(c.symbol || info.symbol || priceInfo.symbol);
@@ -1297,9 +1433,13 @@ async function getMarketInfo() {
       mid: mark,
       oracle: mark,
       yesterday_price: num(info.price24hAgo || priceInfo.price24hAgo),
-      open_interest: 0,
-      volume_24h: num(statsInfo.volume24h),
-      funding_rate: num(priceInfo.fundingRateEstimation?.estimatedFundingRate),
+      open_interest: num(info.openInterestQuantity || statsInfo.openInterestQuantity),
+      volume_24h: num(info.volume24h || statsInfo.volume24h),
+      funding_rate: num(
+        info.estimatedFundingRate
+        ?? priceInfo.estimatedFundingRate
+        ?? priceInfo.fundingRateEstimation?.estimatedFundingRate,
+      ),
       _hibachi: { contract: c, info, price: priceInfo, stats: statsInfo },
       _raw: m,
     };
@@ -2018,12 +2158,29 @@ async function importFillsForPlayer(playerId, credsInput, opts = {}) {
   return { ok: true, imported, adopted, skipped, total: fills.length, attribution: 'hibachi_api_no_builder_code' };
 }
 
+function resetCachesForTests() {
+  for (const cache of [inventoryCache, exchangeInfoCache, contractMapCache]) {
+    cache.at = 0;
+    cache.payload = null;
+    if ('promise' in cache) cache.promise = null;
+    if ('retryAt' in cache) cache.retryAt = 0;
+  }
+  marketDataCache.clear();
+  privateReadCache.clear();
+  restRateGate.timestamps.length = 0;
+  restRateGate.queue.length = 0;
+  if (restRateGate.timer) clearTimeout(restRateGate.timer);
+  restRateGate.timer = null;
+}
+
 module.exports = {
   HIBACHI_API,
   HIBACHI_DATA_API,
   HIBACHI_IP_BLOCKED_MESSAGE,
+  HIBACHI_RATE_LIMITED_MESSAGE,
   credentials,
   isIpBlockedError,
+  isRateLimitedError,
   getMarketInfo,
   getPrices,
   getSnapshot,
@@ -2035,4 +2192,7 @@ module.exports = {
   cancelOrder,
   getAccountTradeHistory,
   importFillsForPlayer,
+  __testing: {
+    resetCaches: resetCachesForTests,
+  },
 };

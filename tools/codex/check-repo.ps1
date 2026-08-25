@@ -89,6 +89,7 @@ $NodeFiles = @(
     "server-futures/gmx-ui-fee.js",
     "server-futures/gmx-rewards-worker.js",
     "server-futures/test-gmx-ui-fee-attribution.js",
+    "server-futures/test-hibachi-rate-limit.js",
     "server-futures/index.js",
     "server-futures/routes.js",
     "server-futures/gmtrade.js",
@@ -120,6 +121,8 @@ Invoke-Step "Aster adapter" { node server-futures/test-aster-adapter.js }
 Invoke-Step "Aster builder tracking" { node server-futures/test-aster-builder-tracking.js }
 Invoke-Step "Aster earnings" { node server/test-aster-earnings.js }
 Invoke-Step "GMX exact UI-fee attribution" { node server-futures/test-gmx-ui-fee-attribution.js }
+Invoke-Step "Hibachi rate-limit and metadata cache" { node --test server-futures/test-hibachi-rate-limit.js }
+Invoke-Step "Hibachi browser error classification" { node --test web/test-hibachi-error-classification.mjs }
 Invoke-Step "GMX exact UI-fee earnings" { node server/test-gmx-ui-fee-earnings.js }
 Invoke-Step "GMX browser routing" { node web/test-gmx-ui-fee.mjs }
 Invoke-Step "RH Lighter adapter" { node server-futures/test-rh-lighter-adapter.js }
