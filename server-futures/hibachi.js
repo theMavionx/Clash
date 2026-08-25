@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const { secp256k1 } = require('@noble/curves/secp256k1');
 const { createReconnectingJsonWebSocket } = require('./reconnecting-json-websocket');
+const { createHibachiProxyPool } = require('./hibachi-proxy-pool');
 
 const HIBACHI_API = String(process.env.HIBACHI_API_URL || 'https://api.hibachi.xyz').replace(/\/+$/u, '');
 const HIBACHI_DATA_API = String(process.env.HIBACHI_DATA_API_URL || 'https://data-api.hibachi.xyz').replace(/\/+$/u, '');
@@ -31,6 +32,12 @@ const HIBACHI_WS_CONNECT_TIMEOUT_MS = Math.max(1_000, Math.min(10_000, Number(pr
 const HIBACHI_WS_SNAPSHOT_WAIT_MS = Math.max(250, Math.min(5_000, Number(process.env.HIBACHI_WS_SNAPSHOT_WAIT_MS || 2_000)));
 const HIBACHI_WS_SNAPSHOT_MAX_AGE_MS = Math.max(1_000, Math.min(120_000, Number(process.env.HIBACHI_WS_SNAPSHOT_MAX_AGE_MS || 45_000)));
 const HIBACHI_WS_IDLE_CLOSE_MS = Math.max(15_000, Math.min(10 * 60_000, Number(process.env.HIBACHI_WS_IDLE_CLOSE_MS || 120_000)));
+const hibachiProxyPool = createHibachiProxyPool();
+
+if (hibachiProxyPool.configured) {
+  const stats = hibachiProxyPool.stats();
+  console.log(`[hibachi] REST proxy pool configured: ${stats.configured} proxies, ${stats.readAttempts} read attempts, direct fallback ${stats.directFallback ? 'enabled' : 'disabled'}`);
+}
 
 function num(value, fallback = 0) {
   const n = Number(value);
@@ -871,8 +878,28 @@ async function acquireRestRateSlot(path = '') {
   });
 }
 
-async function request(base, method, path, { apiKey, body } = {}) {
-  await acquireRestRateSlot(path);
+function proxyAffinityKey(apiKey, accountId) {
+  if (!apiKey && !accountId) return '';
+  return crypto
+    .createHash('sha256')
+    .update(`${accountId || ''}:${apiKey || ''}`)
+    .digest('hex');
+}
+
+function isProxyTransportError(error) {
+  if (Number(error?.status) === 407) return true;
+  const code = String(error?.cause?.code || error?.code || '');
+  if (/^(?:ECONN|EHOST|ENET|ETIMEDOUT|UND_ERR_)/u.test(code)) return true;
+  return /fetch failed|network|socket|connect|proxy|tunnel|timed out|aborted/iu.test(String(error?.message || ''));
+}
+
+function shouldRetryHibachiRead(error, method, lease) {
+  if (!lease || !['GET', 'HEAD'].includes(method)) return false;
+  return isRateLimitedError(error) || isIpBlockedError(error) || isProxyTransportError(error);
+}
+
+async function request(base, method, path, { apiKey, accountId, body } = {}) {
+  const normalizedMethod = String(method || 'GET').toUpperCase();
   const headers = {
     accept: 'application/json',
     'Hibachi-Client': 'ClashOfPerps/1.0',
@@ -883,52 +910,86 @@ async function request(base, method, path, { apiKey, body } = {}) {
     payload = JSON.stringify(body);
   }
   if (apiKey) headers.Authorization = apiKey;
-  const ctrl = new AbortController();
-  const timeout = setTimeout(() => ctrl.abort(), 12_000);
-  try {
-    const r = await fetch(`${base}${path}`, { method, headers, body: payload, signal: ctrl.signal });
-    const text = await r.text();
-    let data = null;
-    try { data = text ? JSON.parse(text) : null; } catch { data = text; }
-    if (!r.ok) {
-      const errorText = typeof data === 'string'
-        ? data
-        : [data?.title, data?.detail, data?.message, data?.error, text].filter(Boolean).join(' ');
-      if (r.status === 429) {
-        const headerRetryAfter = Number(r.headers.get('retry-after'));
-        const bodyRetryAfter = Number(data?.retry_after ?? data?.retryAfter);
-        const retryAfter = Number.isFinite(headerRetryAfter) && headerRetryAfter > 0
-          ? headerRetryAfter
-          : (Number.isFinite(bodyRetryAfter) && bodyRetryAfter > 0 ? bodyRetryAfter : null);
-        const err = new Error(retryAfter
-          ? `Hibachi is temporarily rate-limiting requests. Retry in ${Math.ceil(retryAfter)} seconds.`
-          : HIBACHI_RATE_LIMITED_MESSAGE);
-        err.code = 'HIBACHI_RATE_LIMITED';
-        err.status = 429;
-        err.path = path;
-        err.retryAfter = retryAfter;
-        throw err;
-      }
-      const explicitGeoBlock = r.status === 451
-        || Number(data?.error_code) === 1009
-        || /(?:country|region|jurisdiction|geographic|geo-location|ip address).{0,80}(?:unsupported|restricted|blocked|prohibited|not available)|(?:unsupported|restricted|blocked|prohibited|not available).{0,80}(?:country|region|jurisdiction|geographic|geo-location|ip address)/iu.test(errorText);
-      if ((r.status === 403 || r.status === 451) && explicitGeoBlock) {
-        const err = new Error(HIBACHI_IP_BLOCKED_MESSAGE);
-        err.code = 'HIBACHI_IP_BLOCKED';
+  const maxAttempts = normalizedMethod === 'GET' && hibachiProxyPool.configured
+    ? Math.min(hibachiProxyPool.readAttempts, hibachiProxyPool.stats().configured)
+    : 1;
+  const excluded = new Set();
+  let lastError = null;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    await acquireRestRateSlot(path);
+    let lease = null;
+    const ctrl = new AbortController();
+    const timeout = setTimeout(() => ctrl.abort(), 12_000);
+    try {
+      lease = hibachiProxyPool.acquire({
+        affinityKey: proxyAffinityKey(apiKey, accountId),
+        excluded,
+      });
+      const requestOptions = {
+        method: normalizedMethod,
+        headers,
+        body: payload,
+        signal: ctrl.signal,
+      };
+      if (lease?.dispatcher) requestOptions.dispatcher = lease.dispatcher;
+      const r = await fetch(`${base}${path}`, requestOptions);
+      const text = await r.text();
+      let data = null;
+      try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+      if (!r.ok) {
+        const errorText = typeof data === 'string'
+          ? data
+          : [data?.title, data?.detail, data?.message, data?.error, text].filter(Boolean).join(' ');
+        if (r.status === 429) {
+          const headerRetryAfter = Number(r.headers.get('retry-after'));
+          const bodyRetryAfter = Number(data?.retry_after ?? data?.retryAfter);
+          const retryAfter = Number.isFinite(headerRetryAfter) && headerRetryAfter > 0
+            ? headerRetryAfter
+            : (Number.isFinite(bodyRetryAfter) && bodyRetryAfter > 0 ? bodyRetryAfter : null);
+          const err = new Error(retryAfter
+            ? `Hibachi is temporarily rate-limiting requests. Retry in ${Math.ceil(retryAfter)} seconds.`
+            : HIBACHI_RATE_LIMITED_MESSAGE);
+          err.code = 'HIBACHI_RATE_LIMITED';
+          err.status = 429;
+          err.path = path;
+          err.retryAfter = retryAfter;
+          throw err;
+        }
+        const explicitGeoBlock = r.status === 451
+          || Number(data?.error_code) === 1009
+          || /(?:country|region|jurisdiction|geographic|geo-location|ip address).{0,80}(?:unsupported|restricted|blocked|prohibited|not available)|(?:unsupported|restricted|blocked|prohibited|not available).{0,80}(?:country|region|jurisdiction|geographic|geo-location|ip address)/iu.test(errorText);
+        if ((r.status === 403 || r.status === 451) && explicitGeoBlock) {
+          const err = new Error(HIBACHI_IP_BLOCKED_MESSAGE);
+          err.code = 'HIBACHI_IP_BLOCKED';
+          err.status = r.status;
+          err.path = path;
+          throw err;
+        }
+        const detail = typeof data === 'string' ? data : (data?.message || data?.error || data?.detail || text);
+        const err = new Error(`Hibachi ${path} ${r.status}: ${detail || 'request failed'}`);
         err.status = r.status;
         err.path = path;
         throw err;
       }
-      const detail = typeof data === 'string' ? data : (data?.message || data?.error || data?.detail || text);
-      const err = new Error(`Hibachi ${path} ${r.status}: ${detail || 'request failed'}`);
-      err.status = r.status;
-      err.path = path;
-      throw err;
+      hibachiProxyPool.reportSuccess(lease);
+      return data;
+    } catch (error) {
+      lastError = error;
+      if (lease) {
+        if (isRateLimitedError(error)) hibachiProxyPool.reportRateLimit(lease, error.retryAfter);
+        else if (isIpBlockedError(error)) hibachiProxyPool.reportGeoBlock(lease);
+        else if (isProxyTransportError(error)) hibachiProxyPool.reportTransportFailure(lease);
+        else hibachiProxyPool.reportSuccess(lease);
+        excluded.add(lease.index);
+      }
+      if (!shouldRetryHibachiRead(error, normalizedMethod, lease) || attempt + 1 >= maxAttempts) throw error;
+    } finally {
+      clearTimeout(timeout);
+      hibachiProxyPool.release(lease);
     }
-    return data;
-  } finally {
-    clearTimeout(timeout);
   }
+  throw lastError || new Error(`Hibachi ${path} request failed`);
 }
 
 function isIpBlockedError(error) {
@@ -1473,7 +1534,7 @@ async function getPrices() {
 }
 
 async function authedGet(path, creds) {
-  return request(HIBACHI_API, 'GET', path, { apiKey: creds.apiKey });
+  return request(HIBACHI_API, 'GET', path, { apiKey: creds.apiKey, accountId: creds.accountId });
 }
 
 async function cachedAuthedGet(path, creds, opts = {}) {
@@ -1513,7 +1574,7 @@ async function cachedAuthedGet(path, creds, opts = {}) {
 }
 
 async function authedSend(method, path, body, creds) {
-  return request(HIBACHI_API, method, path, { apiKey: creds.apiKey, body });
+  return request(HIBACHI_API, method, path, { apiKey: creds.apiKey, accountId: creds.accountId, body });
 }
 
 function accountInfoPath(creds) {
@@ -2171,6 +2232,7 @@ function resetCachesForTests() {
   restRateGate.queue.length = 0;
   if (restRateGate.timer) clearTimeout(restRateGate.timer);
   restRateGate.timer = null;
+  hibachiProxyPool.resetForTests();
 }
 
 module.exports = {
@@ -2194,5 +2256,6 @@ module.exports = {
   importFillsForPlayer,
   __testing: {
     resetCaches: resetCachesForTests,
+    proxyPoolStats: () => hibachiProxyPool.stats(),
   },
 };
