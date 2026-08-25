@@ -563,6 +563,7 @@ function PlayersPanel({ players, reload }) {
     { label: 'Recovery 7d', value: num(players.reduce((sum, p) => sum + Number(p.matchmaking?.recovery_matches_7d || 0), 0)), tone: 'blue' },
     { label: 'Captcha flags', value: players.filter((p) => p.captcha_required || p.battle_risk?.captcha_required).length, tone: players.some((p) => p.captcha_required || p.battle_risk?.captcha_required) ? 'red' : 'green' },
     { label: 'MM Bots WL', value: players.filter((p) => p.mm_bots_enabled || p.mm_bots_access?.enabled).length, tone: 'gold' },
+    { label: 'God Mode', value: players.filter((p) => p.god_mode_enabled || p.god_mode_access?.enabled).length, tone: 'gold' },
     { label: 'Banned', value: players.filter((p) => p.banned_at).length, tone: 'red' },
   ];
 
@@ -645,7 +646,7 @@ function PlayersPanel({ players, reload }) {
             <table className="admin-table">
               <thead>
                 <tr>
-                  <th>Name</th><th>DEX</th><th>Wallet</th><th>Created</th><th>Trophies</th><th>Level</th><th>MM 7d</th><th>Risk</th><th>MM Bots</th><th>Gold</th><th>Wood</th><th>Ore</th><th>Trade Vol</th><th>Status</th><th>Actions</th>
+                  <th>Name</th><th>DEX</th><th>Wallet</th><th>Created</th><th>Trophies</th><th>Level</th><th>MM 7d</th><th>Risk</th><th>MM Bots</th><th>God Mode</th><th>Gold</th><th>Wood</th><th>Ore</th><th>Trade Vol</th><th>Status</th><th>Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -668,6 +669,11 @@ function PlayersPanel({ players, reload }) {
                         busy={mmBusy}
                         onToggle={setMmBotsAccess}
                       />
+                    </td>
+                    <td data-label="God Mode">
+                      <span className={'admin-badge ' + (p.god_mode_enabled || p.god_mode_access?.enabled ? 'gold' : 'off')}>
+                        {p.god_mode_enabled || p.god_mode_access?.enabled ? 'GOD MODE' : 'Off'}
+                      </span>
                     </td>
                     <td data-label="Gold" style={{ color: 'var(--admin-gold)' }}>{num(p.gold)}</td>
                     <td data-label="Wood" style={{ color: 'var(--admin-wood)' }}>{num(p.wood)}</td>
@@ -1479,8 +1485,13 @@ function PlayerToolsDrawer({ player, onClose, reload }) {
   const [resource, setResource] = useState({ gold: 5000, wood: 5000, ore: 5000 });
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState('');
+  const [godModeEnabled, setGodModeEnabled] = useState(!!(player.god_mode_enabled || player.god_mode_access?.enabled));
   const playerKey = encodeURIComponent(player.id || player.name);
   const playerIsBanned = !!player.banned_at;
+
+  useEffect(() => {
+    setGodModeEnabled(!!(player.god_mode_enabled || player.god_mode_access?.enabled));
+  }, [player.god_mode_access?.enabled, player.god_mode_enabled, player.id]);
 
   async function run(label, fn) {
     if (busy) return;
@@ -1512,9 +1523,48 @@ function PlayerToolsDrawer({ player, onClose, reload }) {
     run('Unban account', () => adminPost(`/admin/players/${playerKey}/unban`, {}));
   }
 
+  function setGodModeAccess(enabled) {
+    if (!enabled && !window.confirm(`Revoke God Mode Studio access for ${player.name}? Their open Studio session will be blocked on revalidation.`)) return;
+    run(enabled ? 'Grant God Mode' : 'Revoke God Mode', async () => {
+      const data = await adminPost(`/admin/players/${playerKey}/god-mode-access`, {
+        enabled,
+        note: enabled ? 'admin ui grant' : 'admin ui revoke',
+      });
+      setGodModeEnabled(!!data?.access?.enabled);
+      return data;
+    });
+  }
+
   return (
     <Drawer title={`Player Tools · ${player.name}`} subtitle={`Created ${fmtTime(player.created_at)}. Dangerous actions are grouped here so the main table stays readable.`} onClose={onClose}>
       <div className="admin-grid">
+        <div className="admin-card">
+          <div className="admin-card-head">
+            <div>
+              <div className="admin-card-title">God Mode Studio</div>
+              <div className="admin-card-sub">Server-gated access to the isolated /godmodegg creator sandbox. This grant does not change the live village or economy.</div>
+            </div>
+            <span className={'admin-badge ' + (godModeEnabled ? 'gold' : 'off')}>{godModeEnabled ? 'GOD MODE' : 'OFF'}</span>
+          </div>
+          <div className="admin-card-body admin-grid">
+            <div className="admin-help">
+              {godModeEnabled
+                ? `Enabled${player.god_mode_access?.updated_at ? ` · updated ${fmtTime(player.god_mode_access.updated_at)}` : ''}. Access is revalidated while the Studio is open.`
+                : 'No Studio access. Nothing is granted until an admin enables it here.'}
+            </div>
+            <div className="admin-filter-row">
+              <button
+                className={'admin-btn ' + (godModeEnabled ? 'danger' : 'green')}
+                type="button"
+                disabled={!!busy}
+                onClick={() => setGodModeAccess(!godModeEnabled)}
+              >
+                {busy === 'Grant God Mode' || busy === 'Revoke God Mode' ? 'Saving...' : godModeEnabled ? 'Revoke access' : 'Grant access'}
+              </button>
+              <a className="admin-btn" href="/godmodegg" target="_blank" rel="noreferrer">Open /godmodegg</a>
+            </div>
+          </div>
+        </div>
         <div className="admin-card">
           <div className="admin-card-head"><div><div className="admin-card-title">Resources</div><div className="admin-card-sub">Apply exact amounts to this account.</div></div></div>
           <div className="admin-card-body admin-grid">

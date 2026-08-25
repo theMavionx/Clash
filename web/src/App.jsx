@@ -37,6 +37,7 @@ import './index.css';
 // Lazy load heavy components — only after Farcaster SDK is ready
 const GodotCanvas = lazy(lazyWithClientReload(() => import('./components/GodotCanvas'), 'GodotCanvas'));
 const GameUI = lazy(lazyWithClientReload(() => import('./components/GameUI'), 'GameUI'));
+const GodModeApp = lazy(() => import('./godmode/GodModeApp'));
 const CLASH_SOLANA_MINT = '9mM1Mc4Ta9UJJ32v5qsHef91PiXi7EWyiSsqF5WXpump';
 const CLASH_TOKEN_NOTICE_KEY = 'clash_solana_token_notice_v2';
 const GAME_AUTH_STORAGE_KEY = 'clash_game_auth_v1';
@@ -451,6 +452,18 @@ function TradeDataPrefetchBridge() {
 }
 
 export default function App() {
+  // God Mode is a deliberately isolated route. Branch before guest-session
+  // preparation and before any of the wallet, DEX, Farcaster, or normal game
+  // providers mount, so an ungranted visitor cannot start the Godot runtime or
+  // any production gameplay side effects.
+  if (typeof window !== 'undefined' && window.location.pathname.replace(/\/+$/u, '') === '/godmodegg') {
+    return (
+      <Suspense fallback={<SplashScreen label="Checking Studio access..." />}>
+        <GodModeApp />
+      </Suspense>
+    );
+  }
+
   prepareLocalGuestSession();
 
   return (

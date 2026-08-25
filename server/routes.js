@@ -10290,6 +10290,31 @@ router.get('/players/me', auth, (req, res) => {
   res.json(state);
 });
 
+// This grant authorizes only the isolated client-local Studio. Normal village,
+// economy, matchmaking, reward, and replay mutation routes keep their existing
+// authorization and validation rules.
+router.get('/god-mode/access', auth, (req, res) => {
+  const access = db.getGodModeAccess(req.player.id);
+  res.set('Cache-Control', 'no-store, max-age=0');
+  res.set('Pragma', 'no-cache');
+  res.json({
+    allowed: !!access?.enabled,
+    access: access || {
+      player_id: req.player.id,
+      player_name: req.player.name || null,
+      enabled: false,
+      updated_at: null,
+    },
+    isolation: {
+      local_only: true,
+      normal_state_writes: false,
+      rewards: false,
+      rankings: false,
+      battle_history: false,
+    },
+  });
+});
+
 router.get('/mm-bots/access', auth, (req, res) => {
   res.set('Cache-Control', 'no-store');
   // Self-heal rows created by an older import path. Explicit admin revocations
@@ -17483,6 +17508,39 @@ router.post('/admin/players/:name/mm-bots-access', adminAuth, (req, res) => {
   res.json({ ok: true, access });
 });
 
+router.get('/admin/god-mode/access', adminAuth, (req, res) => {
+  res.set('Cache-Control', 'no-store, max-age=0');
+  res.json({
+    ok: true,
+    access: db.listGodModeAccess(req.query?.limit || 500),
+  });
+});
+
+router.post('/admin/god-mode/access', adminAuth, (req, res) => {
+  const identifier = String(req.body?.player || req.body?.player_id || req.body?.playerId || req.body?.name || '').trim();
+  if (!identifier) return res.status(400).json({ error: 'Player id, exact name, or wallet required' });
+  const enabled = req.body?.enabled === undefined ? true : parseBool(req.body.enabled);
+  const access = db.setGodModeAccess(identifier, {
+    enabled,
+    note: req.body?.note || null,
+    updatedBy: 'admin',
+  });
+  if (!access) return res.status(404).json({ error: 'Player not found' });
+  res.json({ ok: true, access, route: '/godmodegg' });
+});
+
+router.post('/admin/players/:name/god-mode-access', adminAuth, (req, res) => {
+  const identifier = String(req.params.name || '').trim();
+  if (!identifier) return res.status(400).json({ error: 'Player id, exact name, or wallet required' });
+  const access = db.setGodModeAccess(identifier, {
+    enabled: parseBool(req.body?.enabled),
+    note: req.body?.note || null,
+    updatedBy: 'admin',
+  });
+  if (!access) return res.status(404).json({ error: 'Player not found' });
+  res.json({ ok: true, access, route: '/godmodegg' });
+});
+
 router.post('/admin/shop/solana/reconcile', adminAuth, async (req, res) => {
   try {
     const limit = Number(req.body?.limit || req.query?.limit || 100);
@@ -17584,6 +17642,12 @@ router.get('/admin/players', adminAuth, (req, res) => {
       if (row?.player_id) mmBotAccessMap[row.player_id] = row;
     }
   } catch { /* mm bot access table unavailable on older DB */ }
+  const godModeAccessMap = {};
+  try {
+    for (const row of db.listGodModeAccess(5000)) {
+      if (row?.player_id) godModeAccessMap[row.player_id] = row;
+    }
+  } catch { /* god mode access table unavailable on older DB */ }
   res.json(players.map(p => {
     const tr = rewardsMap[p.id];
     const mm = matchmakingMap[p.id] || {
@@ -17635,6 +17699,12 @@ router.get('/admin/players', adminAuth, (req, res) => {
         updated_at: null,
       },
       mm_bots_enabled: !!mmBotAccessMap[p.id]?.enabled,
+      god_mode_access: godModeAccessMap[p.id] || {
+        player_id: p.id,
+        enabled: false,
+        updated_at: null,
+      },
+      god_mode_enabled: !!godModeAccessMap[p.id]?.enabled,
       captcha_required: !!battleRisk.captcha_required,
       risk_flags: battleRisk.risk_flags || [],
       // Heartbeat-derived presence flags. Computed server-side so the

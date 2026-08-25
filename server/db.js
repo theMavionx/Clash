@@ -255,6 +255,27 @@ try {
   console.warn('[db] mm_bot_access migration warning:', e.message);
 }
 
+// Production God Mode is an admin-granted, client-local Studio. This table is
+// deliberately limited to access metadata: sandbox buildings, armies, damage,
+// and results never share persistence with the live player account.
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS god_mode_access (
+      player_id  TEXT PRIMARY KEY REFERENCES players(id) ON DELETE CASCADE,
+      enabled    INTEGER NOT NULL DEFAULT 0,
+      note       TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      created_by TEXT,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_by TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_god_mode_access_enabled
+      ON god_mode_access(enabled, updated_at);
+  `);
+} catch (e) {
+  console.warn('[db] god_mode_access migration warning:', e.message);
+}
+
 // Unified account identity layer. The legacy `players.wallet` and
 // `players.dex` columns remain for compatibility, but new auth paths should
 // treat one player row as the canonical game account and attach wallets /
@@ -2585,6 +2606,29 @@ const stmts = {
       note = CASE WHEN mm_bot_access.enabled = 0 THEN excluded.note ELSE mm_bot_access.note END,
       updated_by = CASE WHEN mm_bot_access.enabled = 0 THEN 'system' ELSE mm_bot_access.updated_by END,
       updated_at = CASE WHEN mm_bot_access.enabled = 0 THEN datetime('now') ELSE mm_bot_access.updated_at END
+  `),
+  getGodModeAccessByPlayerId: db.prepare(`
+    SELECT a.*, p.name AS player_name, p.wallet AS player_wallet, p.dex AS player_dex
+    FROM god_mode_access a
+    LEFT JOIN players p ON p.id = a.player_id
+    WHERE a.player_id = ?
+    LIMIT 1
+  `),
+  listGodModeAccess: db.prepare(`
+    SELECT a.*, p.name AS player_name, p.wallet AS player_wallet, p.dex AS player_dex
+    FROM god_mode_access a
+    LEFT JOIN players p ON p.id = a.player_id
+    ORDER BY a.enabled DESC, a.updated_at DESC, a.created_at DESC
+    LIMIT ?
+  `),
+  upsertGodModeAccess: db.prepare(`
+    INSERT INTO god_mode_access (player_id, enabled, note, created_by, updated_by, updated_at)
+    VALUES (?, ?, ?, ?, ?, datetime('now'))
+    ON CONFLICT(player_id) DO UPDATE SET
+      enabled = excluded.enabled,
+      note = COALESCE(excluded.note, god_mode_access.note),
+      updated_by = excluded.updated_by,
+      updated_at = datetime('now')
   `),
   listWalletBlacklist: db.prepare(`
     SELECT *
@@ -8300,6 +8344,51 @@ function setMmBotAccess(identifier, options = {}) {
   return getMmBotAccess(player.id);
 }
 
+function normalizeGodModeAccessRow(row) {
+  if (!row) return null;
+  return {
+    player_id: row.player_id,
+    player_name: row.player_name || null,
+    player_wallet: row.player_wallet || null,
+    player_dex: row.player_dex || null,
+    enabled: Number(row.enabled || 0) === 1,
+    note: row.note || null,
+    created_at: row.created_at || null,
+    created_by: row.created_by || null,
+    updated_at: row.updated_at || null,
+    updated_by: row.updated_by || null,
+  };
+}
+
+function getGodModeAccess(playerId) {
+  const id = String(playerId || '').trim();
+  if (!id) return null;
+  return normalizeGodModeAccessRow(stmts.getGodModeAccessByPlayerId.get(id));
+}
+
+function isGodModeAccessEnabled(playerId) {
+  return !!getGodModeAccess(playerId)?.enabled;
+}
+
+function listGodModeAccess(limit = 500) {
+  const n = Math.max(1, Math.min(5000, Math.floor(Number(limit) || 500)));
+  return stmts.listGodModeAccess.all(n).map(normalizeGodModeAccessRow);
+}
+
+function setGodModeAccess(identifier, options = {}) {
+  const player = getAdminPlayer(identifier);
+  if (!player) return null;
+  const enabledRaw = String(options.enabled ?? 'true').trim().toLowerCase();
+  const enabled = options.enabled === false || options.enabled === 0 || ['0', 'false', 'no', 'off'].includes(enabledRaw) ? 0 : 1;
+  const noteRaw = options.note ?? options.reason ?? '';
+  const note = noteRaw == null ? null : String(noteRaw).trim().slice(0, 500) || null;
+  const actor = String(options.updatedBy || options.updated_by || options.createdBy || options.created_by || 'admin')
+    .trim()
+    .slice(0, 120) || 'admin';
+  stmts.upsertGodModeAccess.run(player.id, enabled, note, actor, actor);
+  return getGodModeAccess(player.id);
+}
+
 function normalizeDemonKingNftLevel(level) {
   const n = Number(level);
   return [1, 2, 3].includes(n) ? n : 1;
@@ -13652,6 +13741,10 @@ module.exports = {
   mmBotAccessCoverage,
   grantMmBotsToAllRealPlayers,
   setMmBotAccess,
+  getGodModeAccess,
+  isGodModeAccessEnabled,
+  listGodModeAccess,
+  setGodModeAccess,
   ensureReferralCode,
   issueReferralCodeForPlayer,
   getLuckyRaiderPayoutSettings,

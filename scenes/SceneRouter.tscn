@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/scene_router.gd" id="1_router"]
+
+[node name="SceneRouter" type="Node"]
+script = ExtResource("1_router")
