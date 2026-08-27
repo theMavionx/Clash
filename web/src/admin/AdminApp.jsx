@@ -2566,9 +2566,10 @@ function TournamentScoringStep({ form, update }) {
                   <option value="1">Enabled</option>
                 </select>
               </label>
+              <NumberField label="Altar trophy bonus cap (0 = full bonus)" value={form.ranked_altar_bonus_cap} onChange={(v) => update({ ranked_altar_bonus_cap: v })} />
               <div className="admin-field">
                 <span className="admin-label">Fair defender capacity</span>
-                <span className="admin-card-sub">Use 0 for unlimited defenses. Otherwise the defense cap must be at least the attack cap. Use 0 hours to disable tournament shields.</span>
+                <span className="admin-card-sub">Defense 0 means unlimited. A positive Altar cap limits Glory without changing the player's global Altar level.</span>
               </div>
             </div>
           </>

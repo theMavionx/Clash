@@ -74,6 +74,7 @@ async function run() {
         ranked_shield_hours: 1.5,
         ranked_max_defenses_per_day: 20,
         ranked_altar_bonus_enabled: false,
+        ranked_altar_bonus_cap: 0,
         prize_tiers: [],
         reward_config: {},
         mega_config: {},
@@ -97,6 +98,7 @@ async function run() {
         ranked_shield_hours: 0,
         ranked_max_defenses_per_day: 17,
         ranked_altar_bonus_enabled: true,
+        ranked_altar_bonus_cap: 5,
       }),
     });
     const patched = await patchResponse.json();
@@ -106,6 +108,7 @@ async function run() {
       || patched.tournament?.ranked_shield_hours !== 0
       || patched.tournament?.ranked_max_defenses_per_day !== 17
       || patched.tournament?.ranked_altar_bonus_enabled !== true
+      || patched.tournament?.ranked_altar_bonus_cap !== 5
     ) {
       throw new Error(`invalid patch response: ${JSON.stringify(patched)}`);
     }
@@ -136,6 +139,15 @@ async function run() {
     const changeCap = await changeCapResponse.json();
     if (changeCapResponse.status !== 409 || !/locked at 17/i.test(changeCap.error || '')) {
       throw new Error(`live ranked cap was not locked: ${JSON.stringify(changeCap)}`);
+    }
+    const changeAltarCapResponse = await fetch(`${baseUrl}/admin/tournaments/${created.tournament.id}`, {
+      method: 'PATCH',
+      headers: adminHeaders,
+      body: JSON.stringify({ ranked_altar_bonus_cap: 7 }),
+    });
+    const changeAltarCap = await changeAltarCapResponse.json();
+    if (changeAltarCapResponse.status !== 409 || !/rules are locked/i.test(changeAltarCap.error || '')) {
+      throw new Error(`live ranked Altar cap was not locked: ${JSON.stringify(changeAltarCap)}`);
     }
     const leaveLiveResponse = await fetch(`${baseUrl}/tournaments/${created.tournament.id}/leave`, {
       method: 'POST',
@@ -178,6 +190,7 @@ async function run() {
         ranked_shield_hours: 0,
         ranked_max_defenses_per_day: 20,
         ranked_altar_bonus_enabled: false,
+        ranked_altar_bonus_cap: 0,
         prize_tiers: [],
         reward_config: {},
         mega_config: {},

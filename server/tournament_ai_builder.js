@@ -21,6 +21,7 @@ const TOURNAMENT_FIELDS = new Set([
   'team_score_by', 'team_prize_mode', 'team_prize_splits', 'team_member_reward_by',
   'attack_match_policy', 'battle_mode', 'ranked_daily_attack_limit',
   'ranked_shield_hours', 'ranked_max_defenses_per_day', 'ranked_altar_bonus_enabled',
+  'ranked_altar_bonus_cap',
   'start_at', 'end_at', 'preregistration_enabled', 'registration_opens_at',
   'registration_closes_at', 'registration_require_twitter', 'gold_boost',
   'seeker_gold_boost', 'trophy_boost', 'shield_hours', 'freeze_trophies',
@@ -240,6 +241,7 @@ function normalizeDraft(rawInput = {}) {
   if ('ranked_daily_attack_limit' in draft) draft.ranked_daily_attack_limit = Math.floor(clampNumber(draft.ranked_daily_attack_limit, 1, 100, 20));
   if ('ranked_shield_hours' in draft) draft.ranked_shield_hours = clampNumber(draft.ranked_shield_hours, 0, 168, 0);
   if ('ranked_max_defenses_per_day' in draft) draft.ranked_max_defenses_per_day = Math.floor(clampNumber(draft.ranked_max_defenses_per_day, 0, 100, 20));
+  if ('ranked_altar_bonus_cap' in draft) draft.ranked_altar_bonus_cap = Math.floor(clampNumber(draft.ranked_altar_bonus_cap, 0, 100, 0));
   if ('daily_pool_points' in draft) draft.daily_pool_points = clampNumber(draft.daily_pool_points, 1, 1_000_000_000, 1000);
   if ('daily_pool_growth_pct' in draft) draft.daily_pool_growth_pct = clampNumber(draft.daily_pool_growth_pct, -99, 1000, 0);
   if ('daily_pool_award_time_utc' in draft) {
@@ -290,7 +292,7 @@ function systemPrompt(now = new Date()) {
     '- Identity: event_kind standard|lucky_raider, name, description.',
     `- DEX: dex_scope single|custom|all, dex, eligible_dexes. Supported DEX IDs: ${[...TOURNAMENT_DEXES].join(', ')}.`,
     '- Competition: mode individual|dex_vs_dex, team_score_by, team_prize_mode, team_prize_splits, team_member_reward_by, attack_match_policy.',
-    '- Battle: battle_mode casual|ranked_raids. Ranked fields: ranked_daily_attack_limit 1..100, ranked_shield_hours 0..168, ranked_max_defenses_per_day 0..100, ranked_altar_bonus_enabled.',
+    '- Battle: battle_mode casual|ranked_raids. Ranked fields: ranked_daily_attack_limit 1..100, ranked_shield_hours 0..168, ranked_max_defenses_per_day 0..100, ranked_altar_bonus_enabled, ranked_altar_bonus_cap 0..100 (0 means full verified bonus).',
     '- Schedule: start_at, end_at, preregistration_enabled, registration_opens_at, registration_closes_at, registration_require_twitter.',
     '- Eligibility/boosts: min_town_hall_level, seeker_only, gold_boost, seeker_gold_boost, trophy_boost, shield_hours, freeze_trophies.',
     '- Scoring: sort_by points|volume_usd|trophies|pnl_usd|gold, scoring_mode live|daily_pool, daily_pool_points, daily_pool_enabled_at, daily_pool_award_time_utc HH:MM, daily_pool_growth_pct, daily_pool_overrides, and three point weights summing to 100.',

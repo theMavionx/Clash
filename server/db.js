@@ -11397,6 +11397,7 @@ function findRankedEnemy(playerId, tournamentId) {
         shield_hours: config.shield_hours,
         max_defenses_per_day: config.max_defenses_per_day,
         altar_bonus_enabled: config.altar_bonus_enabled,
+        altar_bonus_cap: config.altar_bonus_cap,
         defender_is_participant: Number(best.is_tournament_participant || 0) === 1,
       },
       grid_config: CANONICAL_GRID_CONFIG,

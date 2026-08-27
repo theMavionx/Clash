@@ -23591,6 +23591,7 @@ function tournamentRowToPublic(t, options = {}) {
     ranked_shield_hours: rankedRaidConfig.shield_hours,
     ranked_max_defenses_per_day: rankedRaidConfig.max_defenses_per_day,
     ranked_altar_bonus_enabled: rankedRaidConfig.altar_bonus_enabled,
+    ranked_altar_bonus_cap: rankedRaidConfig.altar_bonus_cap,
     ranked_win_trophies: rankedRaidConfig.win_trophies,
     ranked_defense_loss_trophies: rankedRaidConfig.defense_loss_trophies,
     scoring_mode: scoringMode,
@@ -25439,7 +25440,7 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
     prize_currency, prize_tiers, mega_config, reward_config, rewards_in_cop, seeker_only,
     mode, team_score_by, team_prize_mode, team_prize_splits, team_member_reward_by, attack_match_policy,
     battle_mode, ranked_daily_attack_limit, ranked_shield_hours,
-    ranked_max_defenses_per_day, ranked_altar_bonus_enabled,
+    ranked_max_defenses_per_day, ranked_altar_bonus_enabled, ranked_altar_bonus_cap,
   } = req.body || {};
   if (!name || typeof name !== 'string') return res.status(400).json({ error: 'name required' });
   const eventKind = normalizeTournamentEventKind(event_kind);
@@ -25455,6 +25456,7 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
     ranked_shield_hours,
     ranked_max_defenses_per_day,
     ranked_altar_bonus_enabled,
+    ranked_altar_bonus_cap,
   });
   const rankedRaidConfigError = db.rankedRaids.validateRankedRaidConfig(rankedRaidConfig);
   if (rankedRaidConfigError) return res.status(400).json({ error: rankedRaidConfigError });
@@ -25556,9 +25558,9 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
       scoring_mode, daily_pool_points, daily_pool_growth_pct, daily_pool_overrides, daily_pool_enabled_at, daily_pool_award_time_utc,
       prize_currency, prize_tiers, mega_config, reward_config, rewards_in_cop, seeker_only,
       shield_hours, freeze_trophies, min_town_hall_level, registration_require_twitter, preregistration_enabled, registration_opens_at, registration_closes_at,
-      battle_mode, ranked_daily_attack_limit, ranked_shield_hours, ranked_max_defenses_per_day, ranked_altar_bonus_enabled
+      battle_mode, ranked_daily_attack_limit, ranked_shield_hours, ranked_max_defenses_per_day, ranked_altar_bonus_enabled, ranked_altar_bonus_cap
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     eventKind,
     name.trim(),
@@ -25605,7 +25607,8 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
     rankedRaidConfig.daily_attack_limit,
     rankedRaidConfig.shield_hours,
     rankedRaidConfig.max_defenses_per_day,
-    rankedRaidConfig.altar_bonus_enabled ? 1 : 0
+    rankedRaidConfig.altar_bonus_enabled ? 1 : 0,
+    rankedRaidConfig.altar_bonus_cap
   );
   const t = db.db.prepare('SELECT * FROM tournaments WHERE id = ?').get(r.lastInsertRowid);
   res.json({ ok: true, tournament: tournamentRowToPublic(t) });
@@ -25627,7 +25630,7 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
     prize_currency, prize_tiers, mega_config, reward_config, rewards_in_cop, seeker_only,
     mode, team_score_by, team_prize_mode, team_prize_splits, team_member_reward_by, attack_match_policy,
     battle_mode, ranked_daily_attack_limit, ranked_shield_hours,
-    ranked_max_defenses_per_day, ranked_altar_bonus_enabled,
+    ranked_max_defenses_per_day, ranked_altar_bonus_enabled, ranked_altar_bonus_cap,
   } = req.body || {};
   const nextEventKind = event_kind !== undefined ? normalizeTournamentEventKind(event_kind) : normalizeTournamentEventKind(t.event_kind);
   const dexConfig = normalizeTournamentDexConfig(req.body || {}, t);
@@ -25650,6 +25653,9 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
     ranked_altar_bonus_enabled: ranked_altar_bonus_enabled !== undefined
       ? ranked_altar_bonus_enabled
       : t.ranked_altar_bonus_enabled,
+    ranked_altar_bonus_cap: ranked_altar_bonus_cap !== undefined
+      ? ranked_altar_bonus_cap
+      : t.ranked_altar_bonus_cap,
   });
   const rankedRaidConfigError = db.rankedRaids.validateRankedRaidConfig(nextRankedRaidConfig);
   if (rankedRaidConfigError) return res.status(400).json({ error: rankedRaidConfigError });
@@ -25665,6 +25671,7 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
     ranked_shield_hours: nextRankedRaidConfig.shield_hours,
     ranked_max_defenses_per_day: nextRankedRaidConfig.max_defenses_per_day,
     ranked_altar_bonus_enabled: nextRankedRaidConfig.altar_bonus_enabled ? 1 : 0,
+    ranked_altar_bonus_cap: nextRankedRaidConfig.altar_bonus_cap,
   }, { participantCount: rankedParticipantCount });
   if (rankedRaidTransitionError) {
     return res.status(409).json({ error: rankedRaidTransitionError });
@@ -25820,6 +25827,7 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
     ranked_shield_hours: nextRankedRaidConfig.shield_hours,
     ranked_max_defenses_per_day: nextRankedRaidConfig.max_defenses_per_day,
     ranked_altar_bonus_enabled: nextRankedRaidConfig.altar_bonus_enabled ? 1 : 0,
+    ranked_altar_bonus_cap: nextRankedRaidConfig.altar_bonus_cap,
   };
   db.db.prepare(`
     UPDATE tournaments SET event_kind = ?, name = ?, description = ?, dex = ?, dex_scope = ?, eligible_dexes = ?,
@@ -25830,7 +25838,7 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
                             scoring_mode = ?, daily_pool_points = ?, daily_pool_growth_pct = ?, daily_pool_overrides = ?, daily_pool_enabled_at = ?, daily_pool_award_time_utc = ?,
                             prize_currency = ?, prize_tiers = ?, mega_config = ?, reward_config = ?, rewards_in_cop = ?, seeker_only = ?,
                             freeze_trophies = ?, min_town_hall_level = ?, registration_require_twitter = ?, preregistration_enabled = ?, registration_opens_at = ?, registration_closes_at = ?,
-                            battle_mode = ?, ranked_daily_attack_limit = ?, ranked_shield_hours = ?, ranked_max_defenses_per_day = ?, ranked_altar_bonus_enabled = ?
+                            battle_mode = ?, ranked_daily_attack_limit = ?, ranked_shield_hours = ?, ranked_max_defenses_per_day = ?, ranked_altar_bonus_enabled = ?, ranked_altar_bonus_cap = ?
     WHERE id = ?
   `).run(
     next.event_kind,
@@ -25879,6 +25887,7 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
     next.ranked_shield_hours,
     next.ranked_max_defenses_per_day,
     next.ranked_altar_bonus_enabled,
+    next.ranked_altar_bonus_cap,
     tid
   );
   if (next.status !== 'active' && t.paused_at) {
@@ -25906,11 +25915,14 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
     || previousRankedRaidConfig.shield_hours !== nextRankedRaidConfig.shield_hours
     || previousRankedRaidConfig.max_defenses_per_day !== nextRankedRaidConfig.max_defenses_per_day
     || previousRankedRaidConfig.altar_bonus_enabled !== nextRankedRaidConfig.altar_bonus_enabled
+    || previousRankedRaidConfig.altar_bonus_cap !== nextRankedRaidConfig.altar_bonus_cap
   ) {
     console.info(
       `[admin tournament ranked-config] id=${tid} dex=${updated?.dex || t.dex || '-'} mode=${previousRankedRaidConfig.battle_mode}->${nextRankedRaidConfig.battle_mode}`
       + ` daily_limit=${previousRankedRaidConfig.daily_attack_limit}->${nextRankedRaidConfig.daily_attack_limit}`
       + ` defense_limit=${previousRankedRaidConfig.max_defenses_per_day}->${nextRankedRaidConfig.max_defenses_per_day}`
+      + ` altar=${previousRankedRaidConfig.altar_bonus_enabled ? 'on' : 'off'}:${previousRankedRaidConfig.altar_bonus_cap}`
+      + `->${nextRankedRaidConfig.altar_bonus_enabled ? 'on' : 'off'}:${nextRankedRaidConfig.altar_bonus_cap}`
       + ` participants=${rankedParticipantCount}`,
     );
   }

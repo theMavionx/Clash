@@ -108,7 +108,11 @@ function TournamentCard({
           <span>Attack <b>+{Number(me?.win_trophies || 30)}</b></span>
           <span>Defense <b>-{Number(me?.defense_loss_trophies || tournament.ranked_defense_loss_trophies || 3)}</b></span>
           <span>Shield <b>{Number(tournament.ranked_shield_hours || 0) > 0 ? `${tournament.ranked_shield_hours}h` : 'off'}</b></span>
-          <span>Altar <b>{tournament.ranked_altar_bonus_enabled ? 'on' : 'off'}</b></span>
+          <span>
+            Altar <b>{tournament.ranked_altar_bonus_enabled
+              ? (Number(tournament.ranked_altar_bonus_cap || 0) > 0 ? `max +${tournament.ranked_altar_bonus_cap}` : 'on')
+              : 'off'}</b>
+          </span>
         </div>
 
         {shield && <div className="ranked-attack-notice">Tournament shield: {shield}</div>}

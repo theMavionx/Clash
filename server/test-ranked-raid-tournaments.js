@@ -91,13 +91,14 @@ function createFixture() {
     INSERT INTO tournaments (
       id, name, dex, status, start_at, end_at, battle_mode,
       ranked_daily_attack_limit, ranked_shield_hours,
-      ranked_max_defenses_per_day, ranked_altar_bonus_enabled
+      ranked_max_defenses_per_day, ranked_altar_bonus_enabled,
+      ranked_altar_bonus_cap
     ) VALUES (?, ?, 'ostium', 'active', '2026-07-01 00:00:00', '2026-08-01 00:00:00',
-              'ranked_raids', 2, ?, 3, ?)
+              'ranked_raids', 2, ?, 3, ?, ?)
   `);
-  insertTournament.run(1, 'Ranked Alpha', 2, 0);
-  insertTournament.run(2, 'Ranked Beta', 0, 1);
-  insertTournament.run(3, 'Ranked Global', 0, 0);
+  insertTournament.run(1, 'Ranked Alpha', 2, 0, 0);
+  insertTournament.run(2, 'Ranked Beta', 0, 1, 5);
+  insertTournament.run(3, 'Ranked Global', 0, 0, 0);
   const insertParticipant = db.prepare(`
     INSERT INTO tournament_participants (tournament_id, player_id)
     VALUES (?, ?)
@@ -209,6 +210,14 @@ function run() {
       /rules are locked/i,
       'all fairness-sensitive ranked raid rules must stay immutable while the event is live',
     );
+    assert.match(
+      rankedRaids.validateRankedRaidTransition(liveRanked, {
+        ...liveRanked,
+        ranked_altar_bonus_cap: 5,
+      }, { participantCount: 3, nowSql: '2026-07-29 12:00:00' }),
+      /rules are locked/i,
+      'the tournament-specific Altar cap must stay immutable while the event is live',
+    );
     assert.equal(
       rankedRaids.validateRankedRaidTransition(liveRanked, {
         ...liveRanked,
@@ -272,7 +281,8 @@ function run() {
       result: 'victory',
       altarBonus: 10,
     });
-    assert.equal(beta.attacker_trophy_delta, 40, 'enabled altar must add its verified bonus');
+    assert.equal(beta.attacker_trophy_delta, 35, 'enabled altar must respect the tournament cap');
+    assert.equal(beta.altar_bonus, 5);
     assert.equal(beta.defender_trophy_delta, -15);
     const betaDay = rankedRaids.playerDayStats(db, 2, 'attacker', '2026-07-29');
     assert.equal(betaDay.attacks_used, 1);
@@ -290,7 +300,7 @@ function run() {
       altarBonus: 10,
     });
     assert.equal(betaLowTownHall.base_win_trophies, 12);
-    assert.equal(betaLowTownHall.attacker_trophy_delta, 22, 'TH2 target pays 12 base plus enabled altar');
+    assert.equal(betaLowTownHall.attacker_trophy_delta, 17, 'TH2 target pays 12 base plus the capped Altar bonus');
     assert.equal(betaLowTownHall.defender_trophy_delta, -6);
     assert.equal(betaLowTownHall.target_town_hall_level, 2);
 

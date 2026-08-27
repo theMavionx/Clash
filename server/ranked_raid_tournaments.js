@@ -7,6 +7,7 @@ const DEFAULT_DAILY_ATTACK_LIMIT = 20;
 const DEFAULT_MAX_DEFENSES_PER_DAY = 20;
 const DEFAULT_WIN_TROPHIES = 30;
 const DEFAULT_DEFENSE_LOSS_TROPHIES = 15;
+const DEFAULT_ALTAR_BONUS_CAP = 0;
 
 function clampInteger(value, fallback, min, max) {
   const parsed = Number(value);
@@ -37,6 +38,14 @@ function normalizeRankedRaidConfig(tournament = {}) {
       100
     ),
     altar_bonus_enabled: Number(tournament.ranked_altar_bonus_enabled || 0) !== 0,
+    // Zero preserves the historical behavior: use the player's full verified
+    // Glory bonus. Positive values impose a tournament-specific trophy cap.
+    altar_bonus_cap: clampInteger(
+      tournament.ranked_altar_bonus_cap,
+      DEFAULT_ALTAR_BONUS_CAP,
+      0,
+      100
+    ),
     win_trophies: DEFAULT_WIN_TROPHIES,
     defense_loss_trophies: DEFAULT_DEFENSE_LOSS_TROPHIES,
   };
@@ -82,6 +91,7 @@ function validateRankedRaidTransition(currentTournament = {}, nextTournament = {
       next.shield_hours !== current.shield_hours
       || next.max_defenses_per_day !== current.max_defenses_per_day
       || next.altar_bonus_enabled !== current.altar_bonus_enabled
+      || next.altar_bonus_cap !== current.altar_bonus_cap
     )
   ) {
     return 'Ranked raid rules are locked after a live tournament has participants. End this event and create a new tournament to change them.';
@@ -104,6 +114,7 @@ function ensureRankedRaidSchema(db) {
     `ALTER TABLE tournaments ADD COLUMN ranked_shield_hours REAL NOT NULL DEFAULT 0`,
     `ALTER TABLE tournaments ADD COLUMN ranked_max_defenses_per_day INTEGER NOT NULL DEFAULT ${DEFAULT_MAX_DEFENSES_PER_DAY}`,
     `ALTER TABLE tournaments ADD COLUMN ranked_altar_bonus_enabled INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE tournaments ADD COLUMN ranked_altar_bonus_cap INTEGER NOT NULL DEFAULT ${DEFAULT_ALTAR_BONUS_CAP}`,
   ];
   const sessionColumns = [
     `ALTER TABLE battle_sessions ADD COLUMN tournament_id INTEGER`,
@@ -408,7 +419,8 @@ function getRaidContext(db, battleSessionId) {
   const row = db.prepare(`
     SELECT rr.*, t.battle_mode, t.ranked_daily_attack_limit,
            t.ranked_shield_hours, t.ranked_max_defenses_per_day,
-           t.ranked_altar_bonus_enabled, t.name AS tournament_name
+           t.ranked_altar_bonus_enabled, t.ranked_altar_bonus_cap,
+           t.name AS tournament_name
       FROM tournament_ranked_raids rr
       JOIN tournaments t ON t.id = rr.tournament_id
      WHERE rr.battle_session_id = ?
@@ -440,9 +452,12 @@ function finalizeRankedRaid(db, {
     raid.attacker_id,
     raid.defender_id
   );
-  const safeAltarBonus = isVictory && config.altar_bonus_enabled
+  const verifiedAltarBonus = isVictory && config.altar_bonus_enabled
     ? Math.max(0, Math.floor(Number(altarBonus) || 0))
     : 0;
+  const safeAltarBonus = config.altar_bonus_cap > 0
+    ? Math.min(verifiedAltarBonus, config.altar_bonus_cap)
+    : verifiedAltarBonus;
   const defenderIsParticipant = !!getParticipant(db, raid.tournament_id, raid.defender_id);
   const attackerDelta = isVictory
     ? trophyProfile.attack_win_trophies + safeAltarBonus
@@ -566,6 +581,7 @@ module.exports = {
   RANKED_BATTLE_MODE,
   DEFAULT_DAILY_ATTACK_LIMIT,
   DEFAULT_MAX_DEFENSES_PER_DAY,
+  DEFAULT_ALTAR_BONUS_CAP,
   ensureRankedRaidSchema,
   normalizeRankedRaidConfig,
   validateRankedRaidConfig,
