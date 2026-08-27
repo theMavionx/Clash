@@ -80,7 +80,7 @@ const COMPETITIVE_BOT_DEFENSE_TYPES = new Set([
 ]);
 const REQUIRED_PLAYER_LIKE_NAMES = [
   'ghost', 'www', 'egorble', 'papajshon', 'nick', 'volumer', 'luckier',
-  '0xbro', 'onlywin', 'semlysak', 'idol', 'ggbet', '555gg',
+  'bro', 'onlywin', 'semlysak', 'idol', 'ggbet', 'triple',
   'maverick', 'noctis', 'rainmaker', 'katsuro', 'solace',
   'blackreef', 'northstar', 'wildcard', 'redline', 'seawolf',
 ];
@@ -167,6 +167,12 @@ for (const [bucket, expected] of Object.entries(EXPECTED_BY_BUCKET)) assert.equa
 assert.equal(new Set(templates.map((template) => template.id)).size, templates.length, 'template ids must be unique');
 assert.equal(new Set(templates.map((template) => template.name)).size, templates.length, 'bot names must be unique');
 assert.equal(templates.some((template) => /bot/i.test(template.name)), false, 'player-facing names must not say bot');
+assert.equal(templates.some((template) => /[0-9]/.test(template.name)), false, 'player-facing bot names must not contain digits');
+assert.equal(
+  new Set(templates.map((template) => template.name.toLowerCase())).size,
+  templates.length,
+  'bot names must remain unique without relying on case',
+);
 const templateNames = new Set(templates.map((template) => template.name));
 for (const name of REQUIRED_PLAYER_LIKE_NAMES) {
   assert.equal(templateNames.has(name), true, `requested player-like name ${name} should be in the pool`);
@@ -332,6 +338,7 @@ try {
   assert.equal(match.is_bot, 1, match.error);
   assert.equal(match.matchmaking.target_is_bot, 1);
   assert.equal(/bot/i.test(match.name), false, 'materialized target should retain a player-like name');
+  assert.equal(/[0-9]/.test(match.name), false, 'materialized target should not expose numeric bot suffixes');
   assert.equal(/_[0-9a-f]{4}$/i.test(match.name), false, 'materialized names should not expose session hashes');
   assert.ok(match.buildings.length > 0, 'materialized target must include a playable base');
   assert.equal(

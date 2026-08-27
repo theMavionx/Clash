@@ -31,6 +31,7 @@ const {
   MATCHMAKING_CONFIG,
   buildBotBaseTemplates,
   botResources,
+  playerLikeDisplayNameAt,
 } = require('./matchmaking_defs');
 const rankedRaids = require('./ranked_raid_tournaments');
 const raidTrophies = require('./raid_trophy_progression');
@@ -6439,22 +6440,75 @@ function botMaterializedToken(templateId, sessionId) {
     .digest('hex')}`;
 }
 
-function botMaterializedName(templateName, sessionId) {
-  const base = String(templateName || 'player').trim().slice(0, 24) || 'player';
-  const nameExists = db.prepare(`SELECT 1 FROM players WHERE lower(name) = lower(?) LIMIT 1`);
-  if (!nameExists.get(base)) return base;
+const raidBotNameExists = db.prepare(`
+  SELECT 1
+    FROM players
+   WHERE lower(name) = lower(?)
+     AND id != COALESCE(?, '')
+   LIMIT 1
+`);
 
+function cleanDigitFreeBotName(value) {
+  return String(value || '')
+    .replace(/[0-9]+/g, '')
+    .replace(/\s+/g, ' ')
+    .replace(/^[\s._-]+|[\s._-]+$/g, '')
+    .trim()
+    .slice(0, 30);
+}
+
+function allocateRaidBotDisplayName(preferredName, stableKey, excludePlayerId = null) {
+  const preferred = cleanDigitFreeBotName(preferredName);
+  if (preferred.length >= 2 && !raidBotNameExists.get(preferred, excludePlayerId)) {
+    return preferred;
+  }
   const seed = crypto.createHash('sha256')
-    .update(`raid-bot-name:${base}:${sessionId}`)
+    .update(`raid-bot-name:${preferred || 'player'}:${stableKey}`)
     .digest()
     .readUInt32BE(0);
   for (let attempt = 0; attempt < 10000; attempt += 1) {
-    const suffix = 1 + ((seed + attempt * 7919) % 9999);
-    const candidate = `${base}${suffix}`;
-    if (!nameExists.get(candidate)) return candidate;
+    const candidate = cleanDigitFreeBotName(
+      playerLikeDisplayNameAt(seed + attempt * 7919),
+    );
+    if (candidate.length >= 2 && !raidBotNameExists.get(candidate, excludePlayerId)) {
+      return candidate;
+    }
   }
   throw new Error('Unable to allocate raid bot display name');
 }
+
+function botMaterializedName(templateName, sessionId) {
+  return allocateRaidBotDisplayName(templateName, sessionId);
+}
+
+function normalizeRaidBotDisplayNames() {
+  const rows = db.prepare(`
+    SELECT id, name
+      FROM players
+     WHERE COALESCE(is_bot, 0) = 1
+       AND name GLOB '*[0-9]*'
+     ORDER BY id
+  `).all();
+  if (!rows.length) return { scanned: 0, updated: 0 };
+
+  const updateName = db.prepare('UPDATE players SET name = ? WHERE id = ? AND COALESCE(is_bot, 0) = 1');
+  let updated = 0;
+  db.transaction(() => {
+    for (const row of rows) {
+      const nextName = allocateRaidBotDisplayName(row.name, `migration:${row.id}`, row.id);
+      if (nextName === row.name) continue;
+      updateName.run(nextName, row.id);
+      updated += 1;
+    }
+  })();
+
+  if (updated > 0) {
+    console.log(`[db] normalized ${updated} raid bot display name(s) to digit-free aliases`);
+  }
+  return { scanned: rows.length, updated };
+}
+
+normalizeRaidBotDisplayNames();
 
 const getRaidBotTemplateState = db.prepare(`
   SELECT encounter_count, last_gold, last_wood, last_ore
@@ -13716,6 +13770,7 @@ module.exports = {
   getTownHallUpgradeRequirements,
   getTownHallUpgradeBlockers,
   normalizeBuildingHpRows,
+  normalizeRaidBotDisplayNames,
   GRID_SPECS,
   TROOP_DEFS,
   DISABLED_TROOP_TYPES,

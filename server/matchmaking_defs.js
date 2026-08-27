@@ -560,7 +560,7 @@ const COMPETITIVE_BOT_ECONOMY_TYPES = new Set([
 
 const PLAYER_LIKE_NAMES = [
   'ghost', 'www', 'egorble', 'papajshon', 'nick', 'volumer', 'luckier',
-  '0xbro', 'onlywin', 'semlysak', 'idol', 'ggbet', '555gg',
+  'bro', 'onlywin', 'semlysak', 'idol', 'ggbet', 'triple',
   'mike', 'alex', 'roman', 'den', 'ivan', 'max', 'neo', 'zero', 'void',
   'nova', 'storm', 'flare', 'orbit', 'raven', 'ace', 'drift', 'clutch',
   'prime', 'dexter', 'pepe', 'shiro', 'yuki', 'kage', 'mono', 'toly',
@@ -578,15 +578,15 @@ const PLAYER_LIKE_NAMES = [
   'cloud', 'rain', 'thunder', 'static', 'neon', 'cyber', 'vector',
   'matrix', 'byte', 'cache', 'proxy', 'socket', 'ping', 'latency',
   'sigma', 'omega', 'beta', 'delta', 'gamma', 'kappa', 'ggwp', 'ezwin',
-  'nofear', 'allday', 'oneup', 'fivefive', 'nine', 'seven', '0xace',
-  '0xmax', '0xneo', '0xvoid', '1tap', 'twotap', 'hype', 'chill',
+  'nofear', 'allday', 'oneup', 'fivefive', 'nine', 'seven', 'aceonchain',
+  'maxonchain', 'neoonchain', 'voidonchain', 'onetap', 'twotap', 'hype', 'chill',
   'sleep', 'awake',
 ];
 const REQUESTED_PLAYER_NAMES_BY_TH = {
   2: ['ghost', 'www', 'egorble', 'papajshon'],
   3: ['nick', 'volumer', 'luckier'],
-  4: ['0xbro', 'onlywin', 'semlysak'],
-  5: ['idol', 'ggbet', '555gg'],
+  4: ['bro', 'onlywin', 'semlysak'],
+  5: ['idol', 'ggbet', 'triple'],
   6: ['maverick', 'noctis', 'rainmaker', 'katsuro', 'solace'],
   7: ['blackreef', 'northstar', 'wildcard', 'redline', 'seawolf'],
 };
@@ -612,11 +612,45 @@ const GENERATED_NAME_ROOTS = [
   'stan', 'steve', 'tate', 'theo', 'toby', 'troy', 'val', 'wes', 'zack',
 ];
 const GENERATED_NAME_SUFFIXES = [
-  '', 'x', '7', '77', 'gg', 'win', 'sol', 'eth',
-  'one', 'pro', 'tv', '13', '21', '47', '69', '88',
+  '', 'x', 'gg', 'win', 'sol', 'eth', 'one', 'pro',
+  'tv', 'fi', 'dex', 'chain', 'wave', 'base', 'arc', 'perp',
 ];
-const GENERATED_PLAYER_NAMES = GENERATED_NAME_ROOTS
-  .flatMap((root) => GENERATED_NAME_SUFFIXES.map((suffix) => `${root}${suffix}`))
+const GENERATED_NAME_SURNAMES = [
+  'Ash', 'Banks', 'Bell', 'Blake', 'Boone', 'Brooks', 'Burns', 'Caine',
+  'Clark', 'Cole', 'Cross', 'Dale', 'Dean', 'Drake', 'Frost', 'Gale',
+  'Gray', 'Green', 'Hall', 'Hayes', 'Hill', 'Holt', 'Hope', 'James',
+  'Kane', 'King', 'Knight', 'Lane', 'Lee', 'Lewis', 'Marsh', 'Miles',
+  'Moon', 'Nash', 'North', 'Page', 'Parks', 'Perry', 'Price', 'Quinn',
+  'Reed', 'Rhodes', 'River', 'Ross', 'Rowe', 'Sage', 'Scott', 'Shaw',
+  'Snow', 'Stone', 'Storm', 'Taylor', 'Vale', 'Voss', 'Wade', 'Ward',
+  'Wells', 'West', 'White', 'Wilde', 'Wolf', 'Wood', 'Young', 'Zane',
+];
+const GENERATED_NAME_TRAITS = [
+  'Amber', 'Blue', 'Bold', 'Calm', 'Cedar', 'Cloud', 'Cold', 'Coral',
+  'Dark', 'Dawn', 'Deep', 'East', 'Echo', 'Ember', 'Fast', 'Golden',
+  'Grand', 'Green', 'Iron', 'Ivory', 'Lunar', 'Mint', 'Neon', 'Night',
+  'Noble', 'North', 'Nova', 'Ocean', 'Quiet', 'Rapid', 'Red', 'River',
+  'Royal', 'Silver', 'Solar', 'South', 'Star', 'Steel', 'Stone', 'Swift',
+  'True', 'Velvet', 'Warm', 'West', 'White', 'Wild', 'Winter', 'Young',
+];
+
+function titleNameWord(value) {
+  const word = String(value || '').trim();
+  return word ? `${word[0].toUpperCase()}${word.slice(1).toLowerCase()}` : '';
+}
+
+// The bot catalog needs thousands of unique names, and several players may
+// materialize the same base template at once. Keep a large deterministic pool
+// of ordinary handles and first-name/surname pairs instead of exposing a
+// numeric uniqueness suffix (for example `natex4463`).
+const GENERATED_PLAYER_NAMES = Array.from(new Set([
+  ...GENERATED_NAME_ROOTS.flatMap(
+    (root) => GENERATED_NAME_SUFFIXES.map((suffix) => `${root}${suffix}`),
+  ),
+  ...GENERATED_NAME_ROOTS.flatMap((root) => GENERATED_NAME_SURNAMES.map(
+    (surname) => `${titleNameWord(root)} ${surname}`,
+  )),
+]))
   .sort((left, right) => {
     const leftHash = crypto.createHash('sha256').update(`raid-name:${left}`).digest('hex');
     const rightHash = crypto.createHash('sha256').update(`raid-name:${right}`).digest('hex');
@@ -884,9 +918,18 @@ function fallbackPlayerName(index) {
   const generatedIndex = index - FALLBACK_PLAYER_NAMES.length;
   if (generatedIndex < GENERATED_PLAYER_NAMES.length) return GENERATED_PLAYER_NAMES[generatedIndex];
   const overflowIndex = generatedIndex - GENERATED_PLAYER_NAMES.length;
-  const root = GENERATED_NAME_ROOTS[overflowIndex % GENERATED_NAME_ROOTS.length];
-  const numericSuffix = 100 + Math.floor(overflowIndex / GENERATED_NAME_ROOTS.length);
-  return `${root}${numericSuffix}`;
+  const rootIndex = overflowIndex % GENERATED_NAME_ROOTS.length;
+  const surnameIndex = Math.floor(overflowIndex / GENERATED_NAME_ROOTS.length)
+    % GENERATED_NAME_SURNAMES.length;
+  const traitIndex = Math.floor(
+    overflowIndex / (GENERATED_NAME_ROOTS.length * GENERATED_NAME_SURNAMES.length),
+  ) % GENERATED_NAME_TRAITS.length;
+  return `${GENERATED_NAME_TRAITS[traitIndex]} ${titleNameWord(GENERATED_NAME_ROOTS[rootIndex])} ${GENERATED_NAME_SURNAMES[surnameIndex]}`;
+}
+
+function playerLikeDisplayNameAt(index) {
+  const value = Number.isFinite(Number(index)) ? Math.max(0, Math.floor(Number(index))) : 0;
+  return fallbackPlayerName(value);
 }
 
 function nextFallbackPlayerName(index, usedNames) {
@@ -971,4 +1014,5 @@ module.exports = {
   MATCHMAKING_CONFIG,
   buildBotBaseTemplates,
   botResources,
+  playerLikeDisplayNameAt,
 };

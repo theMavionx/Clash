@@ -58,6 +58,37 @@ function validateRankedRaidConfig(tournament = {}) {
   return null;
 }
 
+function validateRankedRaidTransition(currentTournament = {}, nextTournament = {}, options = {}) {
+  const participantCount = Math.max(0, Math.floor(Number(options.participantCount) || 0));
+  const nowSql = String(options.nowSql || sqliteUtcFromMs(Date.now()));
+  if (participantCount === 0 || !tournamentIsLive(currentTournament, nowSql)) return null;
+
+  const current = normalizeRankedRaidConfig(currentTournament);
+  const next = normalizeRankedRaidConfig(nextTournament);
+  if (current.battle_mode === RANKED_BATTLE_MODE && next.battle_mode !== RANKED_BATTLE_MODE) {
+    return 'Ranked raids cannot be disabled after a live tournament has participants. End this event and create a new casual tournament instead.';
+  }
+  if (
+    current.battle_mode === RANKED_BATTLE_MODE
+    && next.battle_mode === RANKED_BATTLE_MODE
+    && next.daily_attack_limit !== current.daily_attack_limit
+  ) {
+    return `The live ranked raid cap is locked at ${current.daily_attack_limit} attacks per UTC day after players join.`;
+  }
+  if (
+    current.battle_mode === RANKED_BATTLE_MODE
+    && next.battle_mode === RANKED_BATTLE_MODE
+    && (
+      next.shield_hours !== current.shield_hours
+      || next.max_defenses_per_day !== current.max_defenses_per_day
+      || next.altar_bonus_enabled !== current.altar_bonus_enabled
+    )
+  ) {
+    return 'Ranked raid rules are locked after a live tournament has participants. End this event and create a new tournament to change them.';
+  }
+  return null;
+}
+
 function utcDayKey(date = new Date()) {
   return date.toISOString().slice(0, 10);
 }
@@ -538,6 +569,7 @@ module.exports = {
   ensureRankedRaidSchema,
   normalizeRankedRaidConfig,
   validateRankedRaidConfig,
+  validateRankedRaidTransition,
   isRankedRaidTournament,
   utcDayKey,
   tournamentIsLive,

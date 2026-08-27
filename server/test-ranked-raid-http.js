@@ -119,6 +119,24 @@ async function run() {
     if (!joinLiveResponse.ok || !joinedLive.joined) {
       throw new Error(`live join failed: ${JSON.stringify(joinedLive)}`);
     }
+    const disableRankedResponse = await fetch(`${baseUrl}/admin/tournaments/${created.tournament.id}`, {
+      method: 'PATCH',
+      headers: adminHeaders,
+      body: JSON.stringify({ battle_mode: 'casual' }),
+    });
+    const disableRanked = await disableRankedResponse.json();
+    if (disableRankedResponse.status !== 409 || !/cannot be disabled/i.test(disableRanked.error || '')) {
+      throw new Error(`live ranked mode was not locked: ${JSON.stringify(disableRanked)}`);
+    }
+    const changeCapResponse = await fetch(`${baseUrl}/admin/tournaments/${created.tournament.id}`, {
+      method: 'PATCH',
+      headers: adminHeaders,
+      body: JSON.stringify({ ranked_daily_attack_limit: 20 }),
+    });
+    const changeCap = await changeCapResponse.json();
+    if (changeCapResponse.status !== 409 || !/locked at 17/i.test(changeCap.error || '')) {
+      throw new Error(`live ranked cap was not locked: ${JSON.stringify(changeCap)}`);
+    }
     const leaveLiveResponse = await fetch(`${baseUrl}/tournaments/${created.tournament.id}/leave`, {
       method: 'POST',
       headers: playerHeaders,

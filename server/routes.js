@@ -25617,6 +25617,7 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
   if (!Number.isFinite(tid)) return res.status(400).json({ error: 'invalid id' });
   const t = db.db.prepare('SELECT * FROM tournaments WHERE id = ?').get(tid);
   if (!t) return res.status(404).json({ error: 'not found' });
+  const previousRankedRaidConfig = db.rankedRaids.normalizeRankedRaidConfig(t);
   const {
     name, description, event_kind, start_at, end_at, gold_boost, seeker_gold_boost, trophy_boost, sort_by, status,
     shield_hours, freeze_trophies, preregistration_enabled, registration_opens_at, registration_closes_at,
@@ -25652,6 +25653,22 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
   });
   const rankedRaidConfigError = db.rankedRaids.validateRankedRaidConfig(nextRankedRaidConfig);
   if (rankedRaidConfigError) return res.status(400).json({ error: rankedRaidConfigError });
+  const rankedParticipantCount = Number(db.db.prepare(`
+    SELECT COUNT(*) AS count
+      FROM tournament_participants
+     WHERE tournament_id = ? AND left_at IS NULL
+  `).get(tid)?.count || 0);
+  const rankedRaidTransitionError = db.rankedRaids.validateRankedRaidTransition(t, {
+    ...t,
+    battle_mode: nextRankedRaidConfig.battle_mode,
+    ranked_daily_attack_limit: nextRankedRaidConfig.daily_attack_limit,
+    ranked_shield_hours: nextRankedRaidConfig.shield_hours,
+    ranked_max_defenses_per_day: nextRankedRaidConfig.max_defenses_per_day,
+    ranked_altar_bonus_enabled: nextRankedRaidConfig.altar_bonus_enabled ? 1 : 0,
+  }, { participantCount: rankedParticipantCount });
+  if (rankedRaidTransitionError) {
+    return res.status(409).json({ error: rankedRaidTransitionError });
+  }
   const nextScoringMode = normalizeTournamentScoringMode(
     scoring_mode !== undefined ? scoring_mode : t.scoring_mode,
     'live'
@@ -25883,6 +25900,20 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
     try { db.seedTournamentDailyPoolBaseline(tid); } catch (e) { console.warn('[tournament daily pool seed]', e.message); }
   }
   const updated = db.db.prepare('SELECT * FROM tournaments WHERE id = ?').get(tid);
+  if (
+    previousRankedRaidConfig.battle_mode !== nextRankedRaidConfig.battle_mode
+    || previousRankedRaidConfig.daily_attack_limit !== nextRankedRaidConfig.daily_attack_limit
+    || previousRankedRaidConfig.shield_hours !== nextRankedRaidConfig.shield_hours
+    || previousRankedRaidConfig.max_defenses_per_day !== nextRankedRaidConfig.max_defenses_per_day
+    || previousRankedRaidConfig.altar_bonus_enabled !== nextRankedRaidConfig.altar_bonus_enabled
+  ) {
+    console.info(
+      `[admin tournament ranked-config] id=${tid} dex=${updated?.dex || t.dex || '-'} mode=${previousRankedRaidConfig.battle_mode}->${nextRankedRaidConfig.battle_mode}`
+      + ` daily_limit=${previousRankedRaidConfig.daily_attack_limit}->${nextRankedRaidConfig.daily_attack_limit}`
+      + ` defense_limit=${previousRankedRaidConfig.max_defenses_per_day}->${nextRankedRaidConfig.max_defenses_per_day}`
+      + ` participants=${rankedParticipantCount}`,
+    );
+  }
   res.json({ ok: true, tournament: tournamentRowToPublic(updated) });
 });
 

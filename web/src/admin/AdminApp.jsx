@@ -2535,6 +2535,12 @@ function TournamentScoringStep({ form, update }) {
           />
         </div>
 
+        <div className={isRankedRaid ? 'admin-help' : 'admin-error'}>
+          {isRankedRaid
+            ? `Server-enforced quota: ${Number(form.ranked_daily_attack_limit || 20)} dedicated tournament raids per player / UTC day.`
+            : 'Raid quota is inactive while Ranked raids are off. Casual matchmaking is unlimited and does not use the tournament raid counter.'}
+        </div>
+
         {isRankedRaid && (
           <>
             <div className="admin-ranked-summary">

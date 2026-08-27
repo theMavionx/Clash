@@ -176,6 +176,47 @@ function run() {
       null,
       'zero keeps unlimited defenses available'
     );
+    const liveRanked = rankedRaids.getTournament(db, 1);
+    assert.match(
+      rankedRaids.validateRankedRaidTransition(liveRanked, {
+        ...liveRanked,
+        battle_mode: 'casual',
+      }, { participantCount: 3, nowSql: '2026-07-29 12:00:00' }),
+      /cannot be disabled/i,
+      'a populated live event must not lose its server-side raid quota',
+    );
+    assert.match(
+      rankedRaids.validateRankedRaidTransition(liveRanked, {
+        ...liveRanked,
+        ranked_daily_attack_limit: 21,
+      }, { participantCount: 3, nowSql: '2026-07-29 12:00:00' }),
+      /locked at 2/i,
+      'a populated live event must not loosen its raid quota mid-competition',
+    );
+    assert.match(
+      rankedRaids.validateRankedRaidTransition(liveRanked, {
+        ...liveRanked,
+        ranked_daily_attack_limit: 1,
+      }, { participantCount: 3, nowSql: '2026-07-29 12:00:00' }),
+      /locked at 2/i,
+      'a populated live event must not tighten its raid quota mid-competition either',
+    );
+    assert.match(
+      rankedRaids.validateRankedRaidTransition(liveRanked, {
+        ...liveRanked,
+        ranked_max_defenses_per_day: 7,
+      }, { participantCount: 3, nowSql: '2026-07-29 12:00:00' }),
+      /rules are locked/i,
+      'all fairness-sensitive ranked raid rules must stay immutable while the event is live',
+    );
+    assert.equal(
+      rankedRaids.validateRankedRaidTransition(liveRanked, {
+        ...liveRanked,
+        battle_mode: 'casual',
+      }, { participantCount: 0, nowSql: '2026-07-29 12:00:00' }),
+      null,
+      'an empty event can still be reconfigured before players join',
+    );
 
     assert.equal(reserve(db, 'alpha-1', 1, 1).ok, true);
     const alpha = rankedRaids.finalizeRankedRaid(db, {
