@@ -14249,7 +14249,7 @@ router.post('/ship/load-troop', auth, async (req, res) => {
     const next = [...ship.troops];
     _appendTroopSlots(next, troopEntry);
     const updated = db.updatePlayerShipTroops(req.player.id, next, next);
-    if (updated?.error) throw { status: 400, ...updated };
+    if (updated?.error) throw { status: 400, error: updated.error };
     return { ship: _mainShipResponse(req.player.id), resources: db.getResources(req.player.id) };
   });
   try {
@@ -14300,7 +14300,7 @@ router.post('/ship/swap-troop', auth, async (req, res) => {
     const next = [...ship.troops];
     next.splice(span.start, span.end - span.start, ...replacement);
     const updated = db.updatePlayerShipTroops(req.player.id, next, next);
-    if (updated?.error) throw { status: 400, ...updated };
+    if (updated?.error) throw { status: 400, error: updated.error };
     return { ship: _mainShipResponse(req.player.id), resources: db.getResources(req.player.id) };
   });
   try {

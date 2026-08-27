@@ -5,10 +5,6 @@ const {
   CANONICAL_GRID_CONFIG,
   TROOP_STATS,
   TROOP_SLOT_COSTS,
-  MAX_SAME_TROOP_SLOT_SHARE_BPS,
-  TROOP_COPY_LIMITS,
-  sameTroopSlotLimitForCapacity,
-  maxTroopCopiesForShip,
   MAX_TROOPS,
   HORROR_EVOLUTION,
   MAX_PLAYER_SHIP_LEVEL,
@@ -9176,21 +9172,11 @@ function recordResourceDeltaEvent(event = {}) {
 function addResources(playerId, gold = 0, wood = 0, ore = 0, options = {}) {
   const current = stmts.getResources.get(playerId);
   if (!current) return null;
+  // Cap to storage capacity
   const capsBefore = getResourceCaps(playerId);
-  // Forced system compensation is value the player already owned. It may sit
-  // above storage capacity until spent; ordinary production/rewards remain
-  // capped. Keep this opt-in and server-only so public reward paths cannot use
-  // it accidentally.
-  const bypassStorageCap = options.bypassStorageCap === true;
-  const newGold = bypassStorageCap
-    ? Math.max(0, current.gold + (Number(gold) || 0))
-    : applyResourceDeltaWithCap(current.gold, gold, capsBefore.gold);
-  const newWood = bypassStorageCap
-    ? Math.max(0, current.wood + (Number(wood) || 0))
-    : applyResourceDeltaWithCap(current.wood, wood, capsBefore.wood);
-  const newOre = bypassStorageCap
-    ? Math.max(0, current.ore + (Number(ore) || 0))
-    : applyResourceDeltaWithCap(current.ore, ore, capsBefore.ore);
+  const newGold = applyResourceDeltaWithCap(current.gold, gold, capsBefore.gold);
+  const newWood = applyResourceDeltaWithCap(current.wood, wood, capsBefore.wood);
+  const newOre = applyResourceDeltaWithCap(current.ore, ore, capsBefore.ore);
   stmts.updateResource.run(newGold, newWood, newOre, playerId);
   const capsAfter = getResourceCaps(playerId);
   const lostGoldToCap = Number(gold) > 0 ? Math.max(0, current.gold + Number(gold) - newGold) : 0;
@@ -11984,7 +11970,7 @@ function repairAllBuildings(playerId) {
 }
 
 const SHIP_COST_GOLD = 250;
-const TROOP_SLOT_COST_VERSION = 5;
+const TROOP_SLOT_COST_VERSION = 4;
 const SHIP_SLOT_FILLER = '_SLOT_FILLER_';
 
 function safeShipTroopArray(raw) {
@@ -12023,68 +12009,32 @@ function packShipTroopRoots(roots, capacity) {
   const packed = [];
   const keptRoots = [];
   const overflowRoots = [];
-  const compositionOverflowRoots = [];
-  const counts = new Map();
   for (const entry of roots) {
     const slotCost = shipTroopSlotCost(entry);
-    const type = shipTroopTypeKey(entry);
-    const nextCount = (counts.get(type) || 0) + 1;
-    if (nextCount > maxTroopCopiesForShip(capacity, type)) {
-      overflowRoots.push(entry);
-      compositionOverflowRoots.push(entry);
-      continue;
-    }
     if (packed.length + slotCost > capacity) {
       overflowRoots.push(entry);
       continue;
     }
-    counts.set(type, nextCount);
     keptRoots.push(entry);
     packed.push(entry);
     for (let index = 1; index < slotCost; index += 1) packed.push(SHIP_SLOT_FILLER);
   }
-  return { packed, keptRoots, overflowRoots, compositionOverflowRoots };
-}
-
-function packedShipTroopIssue(troops, capacity) {
-  if (!Array.isArray(troops) || troops.length > capacity) {
-    return { type: 'capacity', error: 'Ship capacity exceeded' };
-  }
-  const counts = new Map();
-  for (let index = 0; index < troops.length;) {
-    const entry = troops[index];
-    if (entry === SHIP_SLOT_FILLER) {
-      return { type: 'layout', error: 'Invalid troop slot layout' };
-    }
-    const slotCost = shipTroopSlotCost(entry);
-    if (index + slotCost > troops.length) {
-      return { type: 'layout', error: 'Invalid troop slot layout' };
-    }
-    for (let offset = 1; offset < slotCost; offset += 1) {
-      if (troops[index + offset] !== SHIP_SLOT_FILLER) {
-        return { type: 'layout', error: 'Invalid troop slot layout' };
-      }
-    }
-    const type = shipTroopTypeKey(entry);
-    const count = (counts.get(type) || 0) + 1;
-    const maxCopies = maxTroopCopiesForShip(capacity, type);
-    if (count > maxCopies) {
-      return {
-        type: 'composition',
-        troop_type: type,
-        max_copies: maxCopies,
-        slot_limit: sameTroopSlotLimitForCapacity(capacity),
-        error: `Use a mixed army: this ship allows at most ${maxCopies} ${type.replaceAll('_', ' ')}`,
-      };
-    }
-    counts.set(type, count);
-    index += slotCost;
-  }
-  return null;
+  return { packed, keptRoots, overflowRoots };
 }
 
 function validatePackedShipTroops(troops, capacity) {
-  return packedShipTroopIssue(troops, capacity) == null;
+  if (!Array.isArray(troops) || troops.length > capacity) return false;
+  for (let index = 0; index < troops.length;) {
+    const entry = troops[index];
+    if (entry === SHIP_SLOT_FILLER) return false;
+    const slotCost = shipTroopSlotCost(entry);
+    if (index + slotCost > troops.length) return false;
+    for (let offset = 1; offset < slotCost; offset += 1) {
+      if (troops[index + offset] !== SHIP_SLOT_FILLER) return false;
+    }
+    index += slotCost;
+  }
+  return true;
 }
 
 function filterCurrentRootsToTemplate(currentRoots, templateRoots) {
@@ -12102,8 +12052,86 @@ function filterCurrentRootsToTemplate(currentRoots, templateRoots) {
   });
 }
 
+function defaultShipTroopEntry(troopType) {
+  return String(troopType || '')
+    .split('_')
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join('');
+}
+
+// Composition migration v5 was rejected after its first production review.
+// Roll back only rows carrying that exact migration signature. A player's
+// untouched post-migration template can be reconstructed because ordinary
+// removed roots were recorded by type. NFT identities were intentionally not
+// recorded, so those are never guessed. The short-lived compensation remains
+// with the player instead of silently withdrawing resources after the fact.
+function restoreRejectedCompositionMigration(row) {
+  if (!row || Number(row.slot_cost_version || 1) !== 5) return row;
+  let migration = {};
+  try { migration = JSON.parse(row.migration_json || '{}') || {}; } catch { return row; }
+  const rejected = migration.slot_cost_migration;
+  if (
+    !rejected
+    || Number(rejected.to_version) !== 5
+    || !Array.isArray(rejected.composition_removed_units)
+  ) {
+    return row;
+  }
+
+  const capacity = playerShipCapacity(row.level, row.capacity_override);
+  const currentRoots = shipTroopRoots(row.troops);
+  const templateRoots = shipTroopRoots(row.troop_template);
+  const templateWasUntouched = templateRoots.length === Number(rejected.template_units_after || 0);
+  const currentMatchedTemplate = JSON.stringify(currentRoots) === JSON.stringify(templateRoots);
+  const removedTypes = rejected.composition_removed_units.map((type) => normalizeTroopTypeKey(type));
+  const ordinaryTypes = removedTypes.filter((type) => type !== 'demon_king' && type !== 'fire_dragon');
+  const skippedNftTypes = removedTypes.filter((type) => type === 'demon_king' || type === 'fire_dragon');
+  const ordinaryEntries = ordinaryTypes.map((type) => defaultShipTroopEntry(type));
+
+  let nextTemplate = safeShipTroopArray(row.troop_template);
+  let nextCurrent = safeShipTroopArray(row.troops);
+  let restoredUnits = [];
+  if (templateWasUntouched && ordinaryEntries.length > 0) {
+    const restoredTemplate = packShipTroopRoots([...templateRoots, ...ordinaryEntries], capacity);
+    if (restoredTemplate.overflowRoots.length === 0) {
+      nextTemplate = restoredTemplate.packed;
+      restoredUnits = ordinaryTypes;
+      if (currentMatchedTemplate) nextCurrent = restoredTemplate.packed;
+    }
+  }
+
+  migration.composition_limit_rollback = {
+    from_version: 5,
+    to_version: TROOP_SLOT_COST_VERSION,
+    template_was_untouched: templateWasUntouched,
+    current_matched_template: currentMatchedTemplate,
+    restored_units: restoredUnits,
+    skipped_nft_units: skippedNftTypes,
+    refund_gold_retained: Math.max(0, Number(rejected.refund_gold) || 0),
+    rolled_back_at: new Date().toISOString(),
+  };
+  db.prepare(`
+    UPDATE player_ships
+    SET troops = ?,
+        troop_template = ?,
+        slot_cost_version = ?,
+        migration_json = ?,
+        updated_at = datetime('now')
+    WHERE player_id = ? AND slot_cost_version = 5
+  `).run(
+    JSON.stringify(nextCurrent),
+    JSON.stringify(nextTemplate),
+    TROOP_SLOT_COST_VERSION,
+    JSON.stringify(migration),
+    row.player_id,
+  );
+  return db.prepare('SELECT * FROM player_ships WHERE player_id = ?').get(row.player_id);
+}
+
 function migratePlayerShipSlotCosts(row) {
   if (!row) return row;
+  row = restoreRejectedCompositionMigration(row);
   const capacity = playerShipCapacity(row.level, row.capacity_override);
   const currentPacked = safeShipTroopArray(row.troops);
   const templatePacked = safeShipTroopArray(row.troop_template);
@@ -12136,10 +12164,6 @@ function migratePlayerShipSlotCosts(row) {
     template_units_before: templateRoots.length,
     template_units_after: packedTemplate.keptRoots.length,
     removed_units: packedTemplate.overflowRoots.map((entry) => shipTroopTypeKey(entry)),
-    composition_removed_units: packedTemplate.compositionOverflowRoots
-      .map((entry) => shipTroopTypeKey(entry)),
-    max_same_troop_slot_share_bps: MAX_SAME_TROOP_SLOT_SHARE_BPS,
-    troop_copy_limits: TROOP_COPY_LIMITS,
     refund_gold: refundGold,
     migrated_at: new Date().toISOString(),
   };
@@ -12163,11 +12187,9 @@ function migratePlayerShipSlotCosts(row) {
     if (refundGold > 0) {
       addResources(row.player_id, refundGold, 0, 0, {
         sourceType: 'ship_slot_rebalance_refund',
-        bypassStorageCap: true,
         metadata: {
           slot_cost_version: TROOP_SLOT_COST_VERSION,
           refunded_units: refundable.map((entry) => shipTroopTypeKey(entry)),
-          bypass_storage_cap: true,
         },
       });
     }
@@ -12217,11 +12239,6 @@ function serializePlayerShip(row) {
     troops: safeShipTroopArray(row.troops),
     troop_template: safeShipTroopArray(row.troop_template),
     slot_cost_version: Number(row.slot_cost_version || 1),
-    composition_policy: {
-      max_same_troop_slot_share_bps: MAX_SAME_TROOP_SLOT_SHARE_BPS,
-      same_troop_slot_limit: sameTroopSlotLimitForCapacity(playerShipCapacity(level, row.capacity_override)),
-      troop_copy_limits: TROOP_COPY_LIMITS,
-    },
     migrated_from_ports_at: row.migrated_from_ports_at || null,
     updated_at: row.updated_at || null,
   };
@@ -12299,14 +12316,12 @@ function updatePlayerShipTroops(playerId, troops, troopTemplate = undefined) {
   if (normalizedTroops.length > capacity || normalizedTemplate.length > capacity) {
     return { error: 'Ship capacity exceeded', capacity };
   }
-  const currentIssue = packedShipTroopIssue(normalizedTroops, capacity);
-  const templateIssue = packedShipTroopIssue(normalizedTemplate, capacity);
-  const issue = currentIssue || templateIssue;
-  if (issue) return {
-    ...issue,
-    code: issue.type === 'composition' ? 'SHIP_TROOP_COMPOSITION_LIMIT' : 'INVALID_TROOP_SLOT_LAYOUT',
-    capacity,
-  };
+  if (
+    !validatePackedShipTroops(normalizedTroops, capacity)
+    || !validatePackedShipTroops(normalizedTemplate, capacity)
+  ) {
+    return { error: 'Invalid troop slot layout', capacity };
+  }
   db.prepare(`
     UPDATE player_ships
     SET troops = ?, troop_template = ?, updated_at = datetime('now')

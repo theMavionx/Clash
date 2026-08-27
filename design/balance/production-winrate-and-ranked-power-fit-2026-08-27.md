@@ -24,19 +24,19 @@ opponent selection, and the reported AmaniPremiere trophy display issue.
   The root causes were homogeneous stacking and ranked matching that admitted
   only the attacker's Town Hall even when attack power exceeded that tier.
 
-## Decision
+## Final decision
 
-1. A troop type may occupy at most 50% of a ship's slots, rounded up. This is a
-   composition constraint, not a troop-stat nerf, and preserves counterplay.
-2. Fire Dragon is a hero-class NFT troop and is limited to one owned Dragon per
-   battle loadout. Ownership is unchanged and no NFT is deleted.
-3. Existing ordinary overflow troops are unloaded and refunded at their
-   canonical gold cost by versioned ship migration v5. This forced compensation
-   bypasses the storage cap so none of the player's prior value is lost. NFT
-   overflow is only unloaded and remains owned.
-4. The server remains authoritative. The loadout UI mirrors the returned policy
-   and disables invalid additions before the request is sent.
-5. Ranked players with at least five competitive recent raids and more than 70%
+The initial 50% same-type rule and one-Fire-Dragon limit were rejected by the
+owner after review. Player composition remains unrestricted: any number of the
+same troop may be loaded when the roots fit the ship's total slot capacity and
+the player owns each required NFT. There is no composition policy in the API,
+no client-side type blocker, and no v5 migration that unloads existing armies.
+Rows touched by the short-lived v5 release are rolled back to v4 on access.
+Untouched ordinary roots recorded by that migration are restored; prior gold
+compensation is retained, and NFT identities are never guessed or synthesized.
+
+Balance is handled through opponent quality instead of loadout prohibition.
+Ranked players with at least five competitive recent raids and more than 70%
    wins are removed from the easier live exact-TH draw. They receive a tuned
    hard bot closest to the hard power band, moving up one Town Hall only when
    the strongest same-tier hard base is still below the band. Normal and
@@ -45,21 +45,22 @@ opponent selection, and the reported AmaniPremiere trophy display issue.
 ## Deterministic balance lab
 
 Seed `82726`, production combat simulator, TH4–TH6, 180 bases, 360 attack
-policies, 3,600 valid battles:
+policies, 3,600 valid battles after restoring unrestricted compositions:
 
-| Cohort | Before | After |
-|---|---:|---:|
-| Overall attacker win rate | 68.3% | 49.4% |
-| Policy exploration | 55.0% | 50.2% |
-| Controlled homogeneous/pure matrix | 92.8% | 47.9% |
-| Fire Dragon controlled cohort | — | 59.4% |
-| Invalid simulations | 0 | 0 |
+| Cohort | Result |
+|---|---:|
+| Overall attacker win rate | 68.3% |
+| Policy exploration | 55.0% |
+| Controlled homogeneous/pure matrix | 92.8% |
+| Pure Fire Dragon matrix | 100.0% |
+| Invalid simulations | 0 |
 
-After the constraint, TH5 was 51.7% and TH6 was 54.0%. TH4 remained low at
-41.8%; that is a pre-existing progression/base-shape issue and was not hidden by
-buffing this unrelated change. No degenerate-pure-army finding remained. The
-remaining Mage DPS advisory and base-archetype variance should be monitored in
-the next broader TH4 progression pass.
+This deliberately exposes the homogeneous-army outlier instead of hiding it
+behind an availability rule. The general policy cohort is healthy at 55%, but
+fixed same-TH bases remain too easy for several maxed pure armies. Adaptive
+matchmaking protects competitive standings after the player establishes a
+strong recent record; a later defense/progression pass should address the pure
+matrix without limiting roster choice or silently weakening owned NFT counts.
 
 ## Trophy report diagnosis
 
@@ -73,9 +74,10 @@ forces one immediate server refresh for that settled result.
 
 ## Verification requirements
 
-- Composition limits must match in server definitions, migration, HTTP load and
-  swap routes, Godot bridge state, React loadout controls, and balance tooling.
-- Existing migration must be idempotent and must never convert an NFT to gold.
+- Four owned Fire Dragons plus five one-slot troops must be a valid 45-slot
+  loadout; nine Mechanical Dragons and 45 one-slot troops must also validate.
+- The server response and Godot/React bridge must expose no same-type policy.
+- Existing v4 ship rows must not be migrated or unloaded for composition.
 - Ordinary and recovery ranked matchmaking must remain exact-TH.
 - A proven high-win attacker must receive the hard power-fit bot cohort and must
   not randomly fall back to an easier live base.

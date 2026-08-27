@@ -2248,55 +2248,6 @@ function BuildingInfoPanel({ onOpenTroops }) {
       ? loadedGroups.find((group) => group.key === troopAction.key) || null
       : loadedTroopGroupForSlot(loadedGroups, swapSlot);
     const freeSlots = Math.max(0, capacity - shipTroops.length);
-    const sameTroopSlotLimit = Math.max(
-      1,
-      Number(building.ship_same_troop_slot_limit)
-        || Math.ceil(capacity * (Number(building.ship_max_same_troop_slot_share_bps || 5000) / 10000)),
-    );
-    const troopCopyLimits = building.ship_troop_copy_limits || { fire_dragon: 1 };
-    const troopCompositionIssue = (troops) => {
-      const counts = new Map();
-      for (const entry of Array.isArray(troops) ? troops : []) {
-        if (entry === '_SLOT_FILLER_') continue;
-        const base = troopBaseName(entry);
-        const slotCost = troopSlotCost(entry);
-        const shareMaxCopies = Math.max(1, Math.floor(sameTroopSlotLimit / slotCost));
-        const authoredMaxCopies = Number(troopCopyLimits[
-          base.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase()
-        ]);
-        const maxCopies = Number.isInteger(authoredMaxCopies) && authoredMaxCopies > 0
-          ? Math.min(shareMaxCopies, authoredMaxCopies)
-          : shareMaxCopies;
-        const count = (counts.get(base) || 0) + 1;
-        if (count > maxCopies) {
-          return `Max ${maxCopies} ${troopDisplayName(base)} per ship — mix troop types`;
-        }
-        counts.set(base, count);
-      }
-      return '';
-    };
-    const proposedTroopsFor = (name) => {
-      const replacement = troopReplacementEntries(name);
-      if (swapSlot === null) {
-        if (shipTroops.length + replacement.length > capacity) return null;
-        return [...shipTroops, ...replacement];
-      }
-      const placement = troopSwapPlacement(shipTroops, swapSlot, name, capacity);
-      if (!placement) return null;
-      if (placement.mode === 'append') return [...shipTroops, ...replacement];
-      const updated = [...shipTroops];
-      updated.splice(placement.start, placement.end - placement.start, ...replacement);
-      return updated;
-    };
-    const troopPlacementIssue = (name) => {
-      if (troopActionPending || shipActionPendingRef.current) return 'Ship update pending';
-      const proposed = proposedTroopsFor(name);
-      if (!proposed) {
-        const slots = troopSlotCost(name);
-        return `Need ${slots} free ${slots === 1 ? 'slot' : 'slots'}`;
-      }
-      return troopCompositionIssue(proposed);
-    };
     const nftKeysFromTroops = (troops, base, skipSpan = null) => {
       const keys = [];
       (Array.isArray(troops) ? troops : []).forEach((entry, index) => {
@@ -2392,7 +2343,6 @@ function BuildingInfoPanel({ onOpenTroops }) {
       const base = troopBaseName(name);
       const slotCost = troopSlotCost(name);
       if (swapSlot === null && shipTroops.length + slotCost > capacity) return;
-      if (troopPlacementIssue(name)) return;
       const replacement = troopReplacementEntries(name);
       if (swapSlot !== null) {
         const placement = troopSwapPlacement(shipTroops, swapSlot, name, capacity);
@@ -2469,8 +2419,9 @@ function BuildingInfoPanel({ onOpenTroops }) {
             const rarityBadgeStyle = usesRarity
               ? nftRarityBadgeStyle(token.rarity, 1, { compact: true })
               : {};
-            const placementIssue = troopPlacementIssue(entry);
-            const disabled = !!placementIssue;
+            const disabled = swapSlot === null
+              ? shipTroops.length + troopSlotCost(entry) > capacity
+              : !troopSwapPlacement(shipTroops, swapSlot, entry, capacity);
             return (
               <div
                 key={entry}
@@ -2479,7 +2430,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
                 style={{...LT.troopCard, ...rarityStyle, width: cardW, flexShrink: isMobile ? 1 : 0}}
               >
                 {renderTroopCardAction({
-                  label: disabled ? `${troopDisplayName(base)} unavailable: ${placementIssue}` : `Load ${troopDisplayName(base)}`,
+                  label: disabled ? `${troopDisplayName(base)} unavailable: ship capacity exceeded` : `Load ${troopDisplayName(base)}`,
                   disabled,
                   onClick: () => handleLoadTroop(entry),
                 })}
@@ -2503,7 +2454,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
                 </div>
                 <div style={{...LT.bottomOverlay, height: isMobile ? 26 : 30}}>
                   <span style={{...LT.costText, fontSize: isMobile ? 10 : 12}}>
-                    {disabled ? (placementIssue.startsWith('Max ') ? 'TYPE LIMIT' : 'SHIP FULL') : `${troopSlotCost(base)} SLOTS`}
+                    {disabled ? 'SHIP FULL' : `${troopSlotCost(base)} SLOTS`}
                   </span>
                 </div>
               </div>
@@ -2563,6 +2514,12 @@ function BuildingInfoPanel({ onOpenTroops }) {
         .forEach((span) => updated.splice(span.start, span.end - span.start));
       if (!dispatchShipAction('remove_troop_group', { slot: selectedGroup.start }, updated, 'all')) return;
       setSwapSlot(null);
+    };
+
+    const canPlaceTroop = (name) => {
+      if (troopActionPending || shipActionPendingRef.current) return false;
+      if (swapSlot === null) return shipTroops.length + troopSlotCost(name) <= capacity;
+      return !!troopSwapPlacement(shipTroops, swapSlot, name, capacity);
     };
 
     const closeTroopAction = () => {
@@ -2630,9 +2587,6 @@ function BuildingInfoPanel({ onOpenTroops }) {
                   {shipLevel < shipMaxLevel && (
                     <> · Next {nextShipCannonDamage.toLocaleString()} dmg / {nextShipCannonCost} energy</>
                   )}
-                </div>
-                <div className="unit-load-modal__ship-meta">
-                  Mixed army rule · max {sameTroopSlotLimit} slots from one troop type
                 </div>
                 {shipUnlockedAbilities.length > 0 && (
                   <div className="unit-load-modal__ship-unlocks">
@@ -2796,12 +2750,13 @@ function BuildingInfoPanel({ onOpenTroops }) {
               const lvl = getTroopLvl(name);
               const unlock = troopUnlock(name);
               const occupiedSlots = troopSlotCost(name);
-              const placementIssue = troopPlacementIssue(name);
-              const canPlace = !placementIssue;
+              const canPlace = canPlaceTroop(name);
               const disabledReason = !unlock.unlocked
                 ? `Town Hall Level ${unlock.required} required`
                 : !canPlace
-                  ? placementIssue
+                  ? (troopActionPending || shipActionPendingRef.current
+                      ? 'Ship update pending'
+                      : `Need ${occupiedSlots} free ${occupiedSlots === 1 ? 'slot' : 'slots'}`)
                   : '';
               return (
                 <div
@@ -2860,8 +2815,11 @@ function BuildingInfoPanel({ onOpenTroops }) {
               const demonTokenLabel = demonKingDisplayLabel(token, demonKingNfts);
               const rarityStyle = nftRarityCardStyle(token.rarity, 1);
               const rarityBadgeStyle = nftRarityBadgeStyle(token.rarity, 1, { compact: true });
-              const placementIssue = troopPlacementIssue(entry);
-              const disabled = !!placementIssue;
+              const disabled = swapSlot === null
+                ? shipTroops.length + troopSlotCost(entry) > capacity
+                : (() => {
+                    return !troopSwapPlacement(shipTroops, swapSlot, entry, capacity);
+                  })();
               return (
                 <div
                   key={entry}
@@ -2870,7 +2828,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
                   style={{...LT.troopCard, ...rarityStyle, width: cardW, flexShrink: isMobile ? 1 : 0}}
                 >
                   {renderTroopCardAction({
-                    label: disabled ? `Demon King unavailable: ${placementIssue}` : `Load Demon King ${demonTokenLabel}`,
+                    label: disabled ? 'Demon King unavailable: ship capacity exceeded' : `Load Demon King ${demonTokenLabel}`,
                     disabled,
                     onClick: () => handleLoadTroop(entry),
                   })}
@@ -2892,7 +2850,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
                   </div>
                   <div style={{...LT.bottomOverlay, height: isMobile ? 26 : 30}}>
                     <span style={{...LT.costText, fontSize: isMobile ? 10 : 12}}>
-                      {disabled ? (placementIssue.startsWith('Max ') ? 'TYPE LIMIT' : 'SHIP FULL') : `${troopSlotCost(entry)} SLOTS`}
+                      {disabled ? 'SHIP FULL' : `${troopSlotCost(entry)} SLOTS`}
                     </span>
                   </div>
                 </div>

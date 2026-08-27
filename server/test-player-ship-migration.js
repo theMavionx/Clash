@@ -143,10 +143,7 @@ try {
     expectedRoots.push(...troops);
     insertLegacyPort(legacyPlayerId, portIndex, troops);
   }
-  const expectedTroops = packTroops(expectedRoots.filter((entry) => {
-    const mageNumber = Number(String(entry).split(':')[1] || 0);
-    return !String(entry).startsWith('Mage:') || mageNumber <= 3;
-  }));
+  const expectedTroops = packTroops(expectedRoots);
 
   const migrated = gameDb.ensurePlayerShip(legacyPlayerId);
   assert.equal(migrated.id, 'main_ship');
@@ -156,7 +153,6 @@ try {
   assert.equal(migrated.slot_cost_version, gameDb.TROOP_SLOT_COST_VERSION);
   assert.deepEqual(migrated.troops, expectedTroops);
   assert.deepEqual(migrated.troop_template, expectedTroops);
-  assert.equal(gameDb.getResources(legacyPlayerId).gold, 5200, 'two excess Mages must be refunded');
   assert.ok(migrated.migrated_from_ports_at);
 
   const migrationRow = gameDb.db.prepare(`
@@ -190,7 +186,7 @@ try {
   const overCapShip = gameDb.ensurePlayerShip(overCapPlayerId);
   assert.equal(overCapShip.level, 5);
   assert.equal(overCapShip.capacity, 45, 'legacy fleets must respect the authoritative Main Ship cap');
-  assert.equal(overCapShip.troops.length, 30);
+  assert.equal(overCapShip.troops.length, 42);
   assert.equal(
     gameDb.db.prepare('SELECT capacity_override FROM player_ships WHERE player_id = ?').get(overCapPlayerId).capacity_override,
     0,
@@ -210,8 +206,8 @@ try {
   );
   const healedV2Ship = gameDb.ensurePlayerShip(staleV2PlayerId);
   assert.equal(healedV2Ship.capacity, 45);
-  assert.equal(healedV2Ship.troops.length, 23);
-  assert.equal(gameDb.getResources(staleV2PlayerId).gold, 6300, 'forced unload refund must bypass the storage cap');
+  assert.equal(healedV2Ship.troops.length, 45);
+  assert.equal(gameDb.getResources(staleV2PlayerId).gold, 4100, 'trimmed stale v2 Knight must refund 100 gold');
 
   const newPlayerId = 'new-single-ship-player';
   insertPlayer(newPlayerId, 'new_ship_test');
@@ -277,8 +273,8 @@ try {
   assert.deepEqual(refundMigration.removed_units, ['mage']);
   assert.equal(refundMigration.refund_gold, 600);
 
-  const v2RebalancePlayerId = 'slot-v2-to-v5-rebalance-player';
-  insertPlayer(v2RebalancePlayerId, 'slot_v2_to_v5_rebalance');
+  const v2RebalancePlayerId = 'slot-v2-to-v4-rebalance-player';
+  insertPlayer(v2RebalancePlayerId, 'slot_v2_to_v4_rebalance');
   const v2PackedTroops = [
     ...Array.from({ length: 7 }, () => ['Mage:7', ...Array(3).fill(SLOT_FILLER)]).flat(),
     ...Array.from({ length: 2 }, () => ['Mimic:7', ...Array(5).fill(SLOT_FILLER)]).flat(),
@@ -293,38 +289,22 @@ try {
     JSON.stringify(v2PackedTroops),
     JSON.stringify(v2PackedTroops),
   );
-  const v5Ship = gameDb.ensurePlayerShip(v2RebalancePlayerId);
-  assert.equal(v5Ship.slot_cost_version, gameDb.TROOP_SLOT_COST_VERSION);
-  const expectedV5Roots = [
-    ...Array(3).fill('Mage:7'),
-    ...Array(2).fill('Mimic:7'),
-    'MechanicalDragon:7',
-  ];
-  assert.deepEqual(v5Ship.troops, packTroops(expectedV5Roots));
-  assert.deepEqual(v5Ship.troop_template, packTroops(expectedV5Roots));
+  const v4Ship = gameDb.ensurePlayerShip(v2RebalancePlayerId);
+  assert.equal(v4Ship.slot_cost_version, 4);
+  assert.deepEqual(v4Ship.troops, packTroops(Array(7).fill('Mage:7')));
+  assert.deepEqual(v4Ship.troop_template, packTroops(Array(7).fill('Mage:7')));
   assert.equal(
     gameDb.getResources(v2RebalancePlayerId).gold,
-    6400,
-    'v5 migration must preserve the complete forced-unload value above the storage cap',
+    6000,
+    'v4 migration refund must respect the player resource cap',
   );
-  const v5Migration = JSON.parse(gameDb.db.prepare(
+  const v4Migration = JSON.parse(gameDb.db.prepare(
     'SELECT migration_json FROM player_ships WHERE player_id = ?',
   ).get(v2RebalancePlayerId).migration_json).slot_cost_migration;
-  assert.equal(v5Migration.from_version, 2);
-  assert.equal(v5Migration.to_version, gameDb.TROOP_SLOT_COST_VERSION);
-  assert.deepEqual(v5Migration.removed_units, Array(4).fill('mage'));
-  assert.deepEqual(v5Migration.composition_removed_units, Array(4).fill('mage'));
-  assert.equal(v5Migration.refund_gold, 2400);
-  const v5RefundEvent = gameDb.db.prepare(`
-    SELECT gold_delta, gold_before, gold_after, lost_gold_to_cap, metadata_json
-      FROM resource_delta_events
-     WHERE player_id = ? AND source_type = 'ship_slot_rebalance_refund'
-     ORDER BY id DESC LIMIT 1
-  `).get(v2RebalancePlayerId);
-  assert.equal(v5RefundEvent.gold_delta, 2400);
-  assert.equal(v5RefundEvent.gold_after - v5RefundEvent.gold_before, 2400);
-  assert.equal(v5RefundEvent.lost_gold_to_cap, 0);
-  assert.equal(JSON.parse(v5RefundEvent.metadata_json).bypass_storage_cap, true);
+  assert.equal(v4Migration.from_version, 2);
+  assert.equal(v4Migration.to_version, 4);
+  assert.deepEqual(v4Migration.removed_units, ['mimic', 'mimic', 'mechanical_dragon']);
+  assert.equal(v4Migration.refund_gold, 2100);
 
   const v3ReducedSlotPlayerId = 'slot-v3-to-v4-reduced-roots-player';
   insertPlayer(v3ReducedSlotPlayerId, 'slot_v3_to_v4_reduced_roots');
@@ -344,18 +324,18 @@ try {
     JSON.stringify(v3ReducedPacked),
     JSON.stringify(v3ReducedPacked),
   );
-  const reducedV5Ship = gameDb.ensurePlayerShip(v3ReducedSlotPlayerId);
-  assert.equal(reducedV5Ship.slot_cost_version, gameDb.TROOP_SLOT_COST_VERSION);
-  assert.deepEqual(reducedV5Ship.troops, packTroops(v3ReducedRoots));
-  assert.deepEqual(reducedV5Ship.troop_template, packTroops(v3ReducedRoots));
+  const reducedV4Ship = gameDb.ensurePlayerShip(v3ReducedSlotPlayerId);
+  assert.equal(reducedV4Ship.slot_cost_version, 4);
+  assert.deepEqual(reducedV4Ship.troops, packTroops(v3ReducedRoots));
+  assert.deepEqual(reducedV4Ship.troop_template, packTroops(v3ReducedRoots));
   assert.equal(gameDb.getResources(v3ReducedSlotPlayerId).gold, 4000, 'reduced slot costs must not remove or refund preserved roots');
-  const reducedV5Migration = JSON.parse(gameDb.db.prepare(
+  const reducedV4Migration = JSON.parse(gameDb.db.prepare(
     'SELECT migration_json FROM player_ships WHERE player_id = ?',
   ).get(v3ReducedSlotPlayerId).migration_json).slot_cost_migration;
-  assert.equal(reducedV5Migration.from_version, 3);
-  assert.equal(reducedV5Migration.to_version, gameDb.TROOP_SLOT_COST_VERSION);
-  assert.deepEqual(reducedV5Migration.removed_units, []);
-  assert.equal(reducedV5Migration.refund_gold, 0);
+  assert.equal(reducedV4Migration.from_version, 3);
+  assert.equal(reducedV4Migration.to_version, 4);
+  assert.deepEqual(reducedV4Migration.removed_units, []);
+  assert.equal(reducedV4Migration.refund_gold, 0);
 
   const nftPlayerId = 'slot-rebalance-nft-player';
   insertPlayer(nftPlayerId, 'slot_rebalance_nft');
@@ -374,7 +354,49 @@ try {
   assert.deepEqual(nftShip.troops, packTroops([dragonEntry]));
   assert.equal(gameDb.getResources(nftPlayerId).gold, 4000, 'overflow NFT must never be sold for gold');
 
-  console.log('[player-ship-migration] PASS composition_v5=true legacy_ports=5 capacity=45 stale_v2_healed=true ordinary_overflow_refunded=true nft_overflow_unloaded=true reduced_roots_preserved=true idempotent=true');
+  const rejectedV5PlayerId = 'rejected-composition-v5-player';
+  insertPlayer(rejectedV5PlayerId, 'rejected_composition_v5');
+  const keptV5Roots = [...Array(3).fill('Mage'), ...Array(9).fill('Knight')];
+  const rejectedV5Migration = {
+    version: 1,
+    source: 'legacy_ports',
+    slot_cost_migration: {
+      from_version: 4,
+      to_version: 5,
+      capacity: 45,
+      template_units_before: 15,
+      template_units_after: 12,
+      removed_units: ['mage', 'mage', 'mage'],
+      composition_removed_units: ['mage', 'mage', 'mage'],
+      max_same_troop_slot_share_bps: 5000,
+      troop_copy_limits: { fire_dragon: 1 },
+      refund_gold: 1800,
+      migrated_at: '2026-08-27T15:58:41.232Z',
+    },
+  };
+  gameDb.db.prepare(`
+    INSERT INTO player_ships
+      (player_id, level, troops, troop_template, capacity_override, migration_json, slot_cost_version)
+    VALUES (?, 5, ?, ?, 0, ?, 5)
+  `).run(
+    rejectedV5PlayerId,
+    JSON.stringify(packTroops(keptV5Roots)),
+    JSON.stringify(packTroops(keptV5Roots)),
+    JSON.stringify(rejectedV5Migration),
+  );
+  const restoredV5Ship = gameDb.ensurePlayerShip(rejectedV5PlayerId);
+  const restoredV5Roots = [...keptV5Roots, ...Array(3).fill('Mage')];
+  assert.equal(restoredV5Ship.slot_cost_version, 4);
+  assert.deepEqual(restoredV5Ship.troops, packTroops(restoredV5Roots));
+  assert.deepEqual(restoredV5Ship.troop_template, packTroops(restoredV5Roots));
+  assert.equal(gameDb.getResources(rejectedV5PlayerId).gold, 4000, 'rollback must not withdraw prior compensation');
+  const rejectedV5Audit = JSON.parse(gameDb.db.prepare(
+    'SELECT migration_json FROM player_ships WHERE player_id = ?',
+  ).get(rejectedV5PlayerId).migration_json).composition_limit_rollback;
+  assert.deepEqual(rejectedV5Audit.restored_units, ['mage', 'mage', 'mage']);
+  assert.equal(rejectedV5Audit.refund_gold_retained, 1800);
+
+  console.log('[player-ship-migration] PASS legacy_ports=5 capacity=45 legacy_over_cap=48 capped=45 packed_slots=42 stale_v2_healed=true refund=600 v2_to_v4_refund=2100 v3_to_v4_reduced_roots=preserved nft_unloaded=true rejected_v5_restored=true idempotent=true');
 } finally {
   gameDb.db.close();
   for (const suffix of ['', '-wal', '-shm']) {
