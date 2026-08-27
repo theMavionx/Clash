@@ -35,6 +35,36 @@ const TROOP_SLOT_COSTS = Object.freeze({
   fire_dragon: 10,
 });
 
+// A single troop type may occupy at most the rounded-up half of a ship's
+// capacity. The one-copy floor keeps every troop usable on smaller ships even
+// when that troop itself costs more than half of the available slots.
+const MAX_SAME_TROOP_SLOT_SHARE_BPS = 5000;
+const TROOP_COPY_LIMITS = Object.freeze({
+  // Fire Dragon is an NFT hero-class air unit. Multiple owned Dragons remain
+  // usable across loadouts, but stacking them in one battle bypasses the
+  // intended ground/air counterplay and dominated production outcomes.
+  fire_dragon: 1,
+});
+
+function sameTroopSlotLimitForCapacity(capacity) {
+  const normalizedCapacity = Math.max(0, Math.trunc(Number(capacity) || 0));
+  return Math.ceil(normalizedCapacity * MAX_SAME_TROOP_SLOT_SHARE_BPS / 10_000);
+}
+
+function maxTroopCopiesForShip(capacity, troopType) {
+  const normalizedCapacity = Math.max(0, Math.trunc(Number(capacity) || 0));
+  const slotCost = Math.max(1, Math.trunc(Number(TROOP_SLOT_COSTS[troopType]) || 1));
+  if (normalizedCapacity < slotCost) return 0;
+  const shareLimit = Math.max(
+    1,
+    Math.floor(sameTroopSlotLimitForCapacity(normalizedCapacity) / slotCost),
+  );
+  const authoredLimit = Number(TROOP_COPY_LIMITS[troopType]);
+  return Number.isInteger(authoredLimit) && authoredLimit > 0
+    ? Math.min(shareLimit, authoredLimit)
+    : shareLimit;
+}
+
 // One deployed Horror evolves through two deterministic child generations.
 // The child forms are battle-only entities: they consume no extra ship slots
 // and are not persisted as separate casualties.
@@ -1164,6 +1194,10 @@ const VALID_TROOP_TYPES = [
 module.exports = {
   MAX_TROOP_LEVEL,
   TROOP_SLOT_COSTS,
+  MAX_SAME_TROOP_SLOT_SHARE_BPS,
+  TROOP_COPY_LIMITS,
+  sameTroopSlotLimitForCapacity,
+  maxTroopCopiesForShip,
   TROOP_STATS,
   TROOP_LEVEL_POWER_MULTIPLIERS,
   troopLevelPowerMultiplier,

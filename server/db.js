@@ -5,6 +5,10 @@ const {
   CANONICAL_GRID_CONFIG,
   TROOP_STATS,
   TROOP_SLOT_COSTS,
+  MAX_SAME_TROOP_SLOT_SHARE_BPS,
+  TROOP_COPY_LIMITS,
+  sameTroopSlotLimitForCapacity,
+  maxTroopCopiesForShip,
   MAX_TROOPS,
   HORROR_EVOLUTION,
   MAX_PLAYER_SHIP_LEVEL,
@@ -9172,11 +9176,21 @@ function recordResourceDeltaEvent(event = {}) {
 function addResources(playerId, gold = 0, wood = 0, ore = 0, options = {}) {
   const current = stmts.getResources.get(playerId);
   if (!current) return null;
-  // Cap to storage capacity
   const capsBefore = getResourceCaps(playerId);
-  const newGold = applyResourceDeltaWithCap(current.gold, gold, capsBefore.gold);
-  const newWood = applyResourceDeltaWithCap(current.wood, wood, capsBefore.wood);
-  const newOre = applyResourceDeltaWithCap(current.ore, ore, capsBefore.ore);
+  // Forced system compensation is value the player already owned. It may sit
+  // above storage capacity until spent; ordinary production/rewards remain
+  // capped. Keep this opt-in and server-only so public reward paths cannot use
+  // it accidentally.
+  const bypassStorageCap = options.bypassStorageCap === true;
+  const newGold = bypassStorageCap
+    ? Math.max(0, current.gold + (Number(gold) || 0))
+    : applyResourceDeltaWithCap(current.gold, gold, capsBefore.gold);
+  const newWood = bypassStorageCap
+    ? Math.max(0, current.wood + (Number(wood) || 0))
+    : applyResourceDeltaWithCap(current.wood, wood, capsBefore.wood);
+  const newOre = bypassStorageCap
+    ? Math.max(0, current.ore + (Number(ore) || 0))
+    : applyResourceDeltaWithCap(current.ore, ore, capsBefore.ore);
   stmts.updateResource.run(newGold, newWood, newOre, playerId);
   const capsAfter = getResourceCaps(playerId);
   const lostGoldToCap = Number(gold) > 0 ? Math.max(0, current.gold + Number(gold) - newGold) : 0;
@@ -11205,6 +11219,14 @@ function findRankedEnemy(playerId, tournamentId) {
     }
 
     const attackPower = computeAttackPower(playerId);
+    const profile = matchmakingProfileForPlayer(playerId, attackPower);
+    const maxRankedBotTownHall = buildBotBaseTemplates()
+      .reduce((highest, template) => Math.max(highest, Number(template.th) || 1), 1);
+    const rankedBotTownHall = preferredChallengeTownHall(
+      attackPower,
+      profile,
+      maxRankedBotTownHall,
+    );
     const liveCandidates = rankedRaids.listEligibleDefenders(db, tournament, playerId, {
       dayUtc,
       townHallLevel: attackPower.town_hall_level,
@@ -11220,14 +11242,23 @@ function findRankedEnemy(playerId, tournamentId) {
        WHERE status = 'active' AND reserved_until > datetime('now')
     `).all().map((row) => row.defender_id));
     const botCandidates = raidBotTargetsEnabled()
-      ? virtualRankedBotCandidates(attackPower.town_hall_level).filter((candidate) => (
+      ? virtualRankedBotCandidates(rankedBotTownHall).filter((candidate) => (
         !matchedDefenderIds.has(candidate.id) && !activeDefenderIds.has(candidate.id)
       ))
       : [];
-    const candidates = [...liveCandidates, ...botCandidates];
+    // Ranked attempts are scarce and directly determine tournament standings.
+    // Once recent accepted results identify a proven strong attacker, do not
+    // let an easier live same-TH base randomly re-enter the pool. Keep ordinary
+    // and recovery players on the existing global exact-TH path, while strong
+    // players receive the same deterministic hard/power-fit correction already
+    // used by casual raids.
+    const selectableLiveCandidates = profile.selection_reason === 'strong_player'
+      ? []
+      : liveCandidates;
+    const candidates = [...selectableLiveCandidates, ...botCandidates];
     if (!candidates.length) {
       return {
-        error: `No new Town Hall ${attackPower.town_hall_level} ranked base is available right now.`,
+        error: `No new Town Hall ${rankedBotTownHall} ranked base is available right now.`,
         ranked_tournament: {
           id: tid,
           tournament_id: tid,
@@ -11256,7 +11287,7 @@ function findRankedEnemy(playerId, tournamentId) {
           global_shield_active: !!candidate.shield_until
             && String(candidate.shield_until) > nowSql,
           ranked_match_score:
-            Math.abs(basePowerRatio - MATCHMAKING_CONFIG.normalRatio.target) * 100
+            Math.abs(basePowerRatio - profile.target_ratio) * 100
             + Math.abs(Number(candidate.trophies || 0) - Number(player.trophies || 0)) * 0.01
             + Number(candidate.ranked_defenses_today || 0) * 5
             + Math.random() * 8,
@@ -11344,7 +11375,14 @@ function findRankedEnemy(playerId, tournamentId) {
         target_is_bot: !!best.is_bot,
         target_bot_difficulty: best.bot_difficulty || null,
         target_bot_archetype: best.bot_archetype || null,
-        selection_reason: 'ranked_global_exact_town_hall',
+        selection_reason: profile.selection_reason === 'strong_player'
+          ? 'ranked_power_fit_strong_player'
+          : 'ranked_global_exact_town_hall',
+        recent_success_rate: profile.success_rate,
+        recent_raid_count: profile.raids,
+        consecutive_losses: profile.consecutive_losses,
+        recovery_level: profile.recovery_level,
+        target_town_hall_level: rankedBotTownHall,
         attack_power: attackPower.power,
         base_power: repairedBase.power,
         base_power_ratio: Number((repairedBase.power / Math.max(1, attackPower.power)).toFixed(4)),
@@ -11946,7 +11984,7 @@ function repairAllBuildings(playerId) {
 }
 
 const SHIP_COST_GOLD = 250;
-const TROOP_SLOT_COST_VERSION = 4;
+const TROOP_SLOT_COST_VERSION = 5;
 const SHIP_SLOT_FILLER = '_SLOT_FILLER_';
 
 function safeShipTroopArray(raw) {
@@ -11985,32 +12023,68 @@ function packShipTroopRoots(roots, capacity) {
   const packed = [];
   const keptRoots = [];
   const overflowRoots = [];
+  const compositionOverflowRoots = [];
+  const counts = new Map();
   for (const entry of roots) {
     const slotCost = shipTroopSlotCost(entry);
+    const type = shipTroopTypeKey(entry);
+    const nextCount = (counts.get(type) || 0) + 1;
+    if (nextCount > maxTroopCopiesForShip(capacity, type)) {
+      overflowRoots.push(entry);
+      compositionOverflowRoots.push(entry);
+      continue;
+    }
     if (packed.length + slotCost > capacity) {
       overflowRoots.push(entry);
       continue;
     }
+    counts.set(type, nextCount);
     keptRoots.push(entry);
     packed.push(entry);
     for (let index = 1; index < slotCost; index += 1) packed.push(SHIP_SLOT_FILLER);
   }
-  return { packed, keptRoots, overflowRoots };
+  return { packed, keptRoots, overflowRoots, compositionOverflowRoots };
+}
+
+function packedShipTroopIssue(troops, capacity) {
+  if (!Array.isArray(troops) || troops.length > capacity) {
+    return { type: 'capacity', error: 'Ship capacity exceeded' };
+  }
+  const counts = new Map();
+  for (let index = 0; index < troops.length;) {
+    const entry = troops[index];
+    if (entry === SHIP_SLOT_FILLER) {
+      return { type: 'layout', error: 'Invalid troop slot layout' };
+    }
+    const slotCost = shipTroopSlotCost(entry);
+    if (index + slotCost > troops.length) {
+      return { type: 'layout', error: 'Invalid troop slot layout' };
+    }
+    for (let offset = 1; offset < slotCost; offset += 1) {
+      if (troops[index + offset] !== SHIP_SLOT_FILLER) {
+        return { type: 'layout', error: 'Invalid troop slot layout' };
+      }
+    }
+    const type = shipTroopTypeKey(entry);
+    const count = (counts.get(type) || 0) + 1;
+    const maxCopies = maxTroopCopiesForShip(capacity, type);
+    if (count > maxCopies) {
+      return {
+        type: 'composition',
+        troop_type: type,
+        max_copies: maxCopies,
+        slot_limit: sameTroopSlotLimitForCapacity(capacity),
+        error: `Use a mixed army: this ship allows at most ${maxCopies} ${type.replaceAll('_', ' ')}`,
+      };
+    }
+    counts.set(type, count);
+    index += slotCost;
+  }
+  return null;
 }
 
 function validatePackedShipTroops(troops, capacity) {
-  if (!Array.isArray(troops) || troops.length > capacity) return false;
-  for (let index = 0; index < troops.length;) {
-    const entry = troops[index];
-    if (entry === SHIP_SLOT_FILLER) return false;
-    const slotCost = shipTroopSlotCost(entry);
-    if (index + slotCost > troops.length) return false;
-    for (let offset = 1; offset < slotCost; offset += 1) {
-      if (troops[index + offset] !== SHIP_SLOT_FILLER) return false;
-    }
-    index += slotCost;
-  }
-  return true;
+  return packedShipTroopIssue(troops, capacity) == null;
 }
 
 function filterCurrentRootsToTemplate(currentRoots, templateRoots) {
@@ -12062,6 +12136,10 @@ function migratePlayerShipSlotCosts(row) {
     template_units_before: templateRoots.length,
     template_units_after: packedTemplate.keptRoots.length,
     removed_units: packedTemplate.overflowRoots.map((entry) => shipTroopTypeKey(entry)),
+    composition_removed_units: packedTemplate.compositionOverflowRoots
+      .map((entry) => shipTroopTypeKey(entry)),
+    max_same_troop_slot_share_bps: MAX_SAME_TROOP_SLOT_SHARE_BPS,
+    troop_copy_limits: TROOP_COPY_LIMITS,
     refund_gold: refundGold,
     migrated_at: new Date().toISOString(),
   };
@@ -12085,9 +12163,11 @@ function migratePlayerShipSlotCosts(row) {
     if (refundGold > 0) {
       addResources(row.player_id, refundGold, 0, 0, {
         sourceType: 'ship_slot_rebalance_refund',
+        bypassStorageCap: true,
         metadata: {
           slot_cost_version: TROOP_SLOT_COST_VERSION,
           refunded_units: refundable.map((entry) => shipTroopTypeKey(entry)),
+          bypass_storage_cap: true,
         },
       });
     }
@@ -12137,6 +12217,11 @@ function serializePlayerShip(row) {
     troops: safeShipTroopArray(row.troops),
     troop_template: safeShipTroopArray(row.troop_template),
     slot_cost_version: Number(row.slot_cost_version || 1),
+    composition_policy: {
+      max_same_troop_slot_share_bps: MAX_SAME_TROOP_SLOT_SHARE_BPS,
+      same_troop_slot_limit: sameTroopSlotLimitForCapacity(playerShipCapacity(level, row.capacity_override)),
+      troop_copy_limits: TROOP_COPY_LIMITS,
+    },
     migrated_from_ports_at: row.migrated_from_ports_at || null,
     updated_at: row.updated_at || null,
   };
@@ -12214,12 +12299,14 @@ function updatePlayerShipTroops(playerId, troops, troopTemplate = undefined) {
   if (normalizedTroops.length > capacity || normalizedTemplate.length > capacity) {
     return { error: 'Ship capacity exceeded', capacity };
   }
-  if (
-    !validatePackedShipTroops(normalizedTroops, capacity)
-    || !validatePackedShipTroops(normalizedTemplate, capacity)
-  ) {
-    return { error: 'Invalid troop slot layout', capacity };
-  }
+  const currentIssue = packedShipTroopIssue(normalizedTroops, capacity);
+  const templateIssue = packedShipTroopIssue(normalizedTemplate, capacity);
+  const issue = currentIssue || templateIssue;
+  if (issue) return {
+    ...issue,
+    code: issue.type === 'composition' ? 'SHIP_TROOP_COMPOSITION_LIMIT' : 'INVALID_TROOP_SLOT_LAYOUT',
+    capacity,
+  };
   db.prepare(`
     UPDATE player_ships
     SET troops = ?, troop_template = ?, updated_at = datetime('now')

@@ -4,10 +4,14 @@
 const assert = require('node:assert/strict');
 const {
   HORROR_EVOLUTION,
+  MAX_SAME_TROOP_SLOT_SHARE_BPS,
+  TROOP_COPY_LIMITS,
   TROOP_SLOT_COSTS,
   TROOP_STATS,
   computeNecromancerSkeletonStats,
   computeNftTroopStats,
+  maxTroopCopiesForShip,
+  sameTroopSlotLimitForCapacity,
 } = require('./combat_defs');
 
 const EXPECTED_SLOT_COSTS = Object.freeze({
@@ -192,18 +196,27 @@ for (const type of ['demon_king', 'fire_dragon']) {
   );
 }
 
+assert.equal(MAX_SAME_TROOP_SLOT_SHARE_BPS, 5000);
+assert.equal(sameTroopSlotLimitForCapacity(45), 23);
+assert.equal(TROOP_COPY_LIMITS.fire_dragon, 1);
+assert.equal(maxTroopCopiesForShip(45, 'fire_dragon'), 1);
+assert.equal(maxTroopCopiesForShip(45, 'demon_king'), 3);
+assert.equal(maxTroopCopiesForShip(45, 'mage'), 3);
+assert.equal(maxTroopCopiesForShip(45, 'knight'), 23);
+assert.equal(maxTroopCopiesForShip(12, 'fire_dragon'), 1, 'one expensive troop must remain usable');
+
 const LEGAL_45_SLOT_ROSTERS = Object.freeze({
-  archers: { archer: 45 },
-  mages: { mage: 7, knight: 3 },
-  peaShooters: { pea_shooter: 9 },
-  barrels: { mimic: 5, archer: 5 },
-  mechanicalDragons: { mechanical_dragon: 9 },
-  demonKings: { demon_king: 7, archer: 3 },
-  fireDragons: { fire_dragon: 4, archer: 5 },
-  iceGolems: { ice_golem: 4, archer: 5 },
-  necromancers: { necromancer: 4, archer: 5 },
-  horrors: { horror: 4, archer: 5 },
-  windMages: { wind_mage: 4, archer: 5 },
+  archers: { archer: 23, knight: 22 },
+  mages: { mage: 3, knight: 23, archer: 4 },
+  peaShooters: { pea_shooter: 4, knight: 23, archer: 2 },
+  barrels: { mimic: 2, knight: 23, archer: 6 },
+  mechanicalDragons: { mechanical_dragon: 4, knight: 23, archer: 2 },
+  demonKings: { demon_king: 3, knight: 23, archer: 4 },
+  fireDragons: { fire_dragon: 1, knight: 23, archer: 12 },
+  iceGolems: { ice_golem: 2, knight: 23, archer: 2 },
+  necromancers: { necromancer: 2, knight: 23, archer: 2 },
+  horrors: { horror: 2, knight: 23, archer: 2 },
+  windMages: { wind_mage: 2, knight: 23, archer: 2 },
 });
 
 function occupiedSlots(roster) {
@@ -215,8 +228,18 @@ function occupiedSlots(roster) {
 
 for (const [name, roster] of Object.entries(LEGAL_45_SLOT_ROSTERS)) {
   assert.equal(occupiedSlots(roster), 45, `${name} roster must occupy exactly 45 slots`);
+  for (const [type, count] of Object.entries(roster)) {
+    assert.ok(
+      count <= maxTroopCopiesForShip(45, type),
+      `${name} must respect the same-type composition limit`,
+    );
+  }
 }
 assert.ok(occupiedSlots({ horror: 5 }) > 45, 'five Horrors must not fit in the max-level ship');
+assert.ok(
+  4 > maxTroopCopiesForShip(45, 'fire_dragon'),
+  'the production four-Fire-Dragon stack must be illegal',
+);
 
 const report = [
   knight,

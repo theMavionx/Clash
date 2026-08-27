@@ -1104,6 +1104,7 @@ function ActionButtons({ onOpenBattleLog, onOpenBots }) {
     pendingCasualties,
     setPendingCasualties,
     battleTimer,
+    battleResult,
   } = useUI();
   const player = usePlayer();
   const token = player?.token || null;
@@ -1117,6 +1118,7 @@ function ActionButtons({ onOpenBattleLog, onOpenBots }) {
   const [rankedTournamentsLoading, setRankedTournamentsLoading] = useState(false);
   const [rankedTournamentsError, setRankedTournamentsError] = useState('');
   const rankedTournamentsFetchedAt = useRef(0);
+  const rankedRefreshBattleResultRef = useRef(null);
   const [showNftMint, setShowNftMint] = useState(false);
   const [nftMintInitial, setNftMintInitial] = useState(null);
   const resources = useResources();
@@ -1197,6 +1199,17 @@ function ActionButtons({ onOpenBattleLog, onOpenBots }) {
       setRankedTournamentsLoading(false);
     }
   }, [token, dex, rankedTournaments, rankedTournamentsLoaded]);
+
+  // Match settlement updates tournament trophies and the daily attack count
+  // atomically on the server. Refresh immediately instead of leaving the
+  // pre-battle selector snapshot cached for up to 30 seconds.
+  useEffect(() => {
+    const rankedTournamentId = battleResult?.ranked_tournament?.tournament_id
+      || battleResult?.ranked_tournament?.id;
+    if (!rankedTournamentId || rankedRefreshBattleResultRef.current === battleResult) return;
+    rankedRefreshBattleResultRef.current = battleResult;
+    loadRankedTournaments({ force: true });
+  }, [battleResult, loadRankedTournaments]);
 
   useEffect(() => {
     setRankedTournaments([]);

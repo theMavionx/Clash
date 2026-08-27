@@ -1631,6 +1631,7 @@ func _on_town_hall_destroyed() -> void:
 				"trophy_bonus_range": result.get("trophy_bonus_range", {}),
 				"trophy_delta": result.get("trophy_delta", 0),
 				"trophies": result.get("trophies", 0),
+				"ranked_tournament": result.get("ranked_tournament", {}),
 			})
 		return
 	if bridge:
@@ -2361,10 +2362,11 @@ func _finish_live_defeat(reason: String) -> void:
 		audio.play_result()
 
 	var net_def: Node = bs._net
+	var defeat_result: Dictionary = {}
 	var def_id: String = enemy_info.get("id", "")
 	if net_def and net_def.has_token() and def_id != "":
 		var defeat_session_id: String = str(enemy_info.get("battle_session_id", ""))
-		var defeat_result: Dictionary = await net_def.submit_battle_result(
+		defeat_result = await net_def.submit_battle_result(
 			def_id,
 			_battle_replay,
 			"defeat",
@@ -2393,7 +2395,12 @@ func _finish_live_defeat(reason: String) -> void:
 			defeat_casualties = defeat_result.get("casualties", defeat_casualties)
 	var bridge_def: Node = bs._bridge
 	if bridge_def:
-		bridge_def.send_to_react("battle_result", {"type": "defeat", "reason": reason, "casualties": defeat_casualties})
+		bridge_def.send_to_react("battle_result", {
+			"type": "defeat",
+			"reason": reason,
+			"casualties": defeat_casualties,
+			"ranked_tournament": defeat_result.get("ranked_tournament", {}),
+		})
 
 
 func _begin_live_defeat() -> void:

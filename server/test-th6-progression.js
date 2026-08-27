@@ -227,7 +227,17 @@ try {
   assert.equal(levelSixShip.ship.medkit_unlocked, true);
   assert.deepEqual(levelSixShip.cost, { gold: 9000, wood: 18000, ore: 15500 });
   assert.match(gameDb.upgradePlayerShip(playerId).error, /Town Hall to level 7/);
-  assert.equal(gameDb.updatePlayerShipTroops(playerId, Array(45).fill('Knight:1')).capacity, 45);
+  assert.equal(
+    gameDb.updatePlayerShipTroops(playerId, Array(45).fill('Knight:1')).code,
+    'SHIP_TROOP_COMPOSITION_LIMIT',
+  );
+  assert.equal(
+    gameDb.updatePlayerShipTroops(
+      playerId,
+      [...Array(23).fill('Knight:1'), ...Array(22).fill('Archer:1')],
+    ).capacity,
+    45,
+  );
   assert.equal(gameDb.updatePlayerShipTroops(playerId, Array(46).fill('Knight:1')).error, 'Ship capacity exceeded');
   assert.equal(
     gameDb.updatePlayerShipTroops(playerId, ['Necromancer:6']).error,
@@ -250,7 +260,16 @@ try {
       '_SLOT_FILLER_',
     );
   }
-  assert.equal(gameDb.updatePlayerShipTroops(playerId, mechanicalDragonSlots).capacity, 45);
+  assert.equal(
+    gameDb.updatePlayerShipTroops(playerId, mechanicalDragonSlots).code,
+    'SHIP_TROOP_COMPOSITION_LIMIT',
+  );
+  const legalMechanicalDragonSlots = [
+    ...mechanicalDragonSlots.slice(0, 20),
+    ...Array(23).fill('Knight:6'),
+    ...Array(2).fill('Archer:6'),
+  ];
+  assert.equal(gameDb.updatePlayerShipTroops(playerId, legalMechanicalDragonSlots).capacity, 45);
   assert.equal(
     gameDb.updatePlayerShipTroops(
       playerId,

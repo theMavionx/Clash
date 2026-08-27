@@ -218,7 +218,66 @@ try {
     assert.equal(highTierBotIds.size, 3);
   }
 
-  console.log('ranked global exact-TH matchmaking tests: PASS');
+  insertPlayer(
+    'strong-th4-attacker',
+    'Strong TH4 Attacker',
+    'strong-th4-attacker-token',
+    2_000,
+  );
+  insertTownHall('strong-th4-attacker', 4, 20);
+  game.db.prepare(`
+    INSERT INTO tournament_participants (tournament_id, player_id)
+    VALUES (?, 'strong-th4-attacker')
+  `).run(tournamentId);
+  game.db.prepare(`
+    INSERT INTO player_ships (
+      player_id, level, troops, troop_template, slot_cost_version
+    ) VALUES ('strong-th4-attacker', 4, ?, ?, ?)
+  `).run(
+    JSON.stringify([
+      'FireDragon:base:strong-th4-dragon:Rlegendary',
+      ...Array(9).fill('_SLOT_FILLER_'),
+      'HorrorEvolution:7',
+      ...Array(9).fill('_SLOT_FILLER_'),
+      'MechanicalDragon:7',
+      ...Array(4).fill('_SLOT_FILLER_'),
+      'MechanicalDragon:7',
+      ...Array(4).fill('_SLOT_FILLER_'),
+      'MechanicalDragon:7',
+      ...Array(4).fill('_SLOT_FILLER_'),
+      'Knight:7',
+    ]),
+    JSON.stringify([]),
+    game.TROOP_SLOT_COST_VERSION,
+  );
+  for (const troopType of ['fire_dragon', 'horror', 'mechanical_dragon', 'knight']) {
+    game.db.prepare(`
+      INSERT INTO troop_levels (player_id, troop_type, level)
+      VALUES ('strong-th4-attacker', ?, 7)
+    `).run(troopType);
+  }
+  for (let index = 0; index < 5; index += 1) {
+    game.db.prepare(`
+      INSERT INTO raid_matchmaking (
+        battle_session_id, attacker_id, defender_id,
+        attacker_th, defender_th, attack_power, base_power, base_power_ratio,
+        difficulty_bucket, result
+      ) VALUES (?, 'strong-th4-attacker', ?, 4, 4, 100, 100, 1, 'normal', 'victory')
+    `).run(`strong-th4-history-${index}`, `strong-th4-defender-${index}`);
+  }
+
+  const strongPowerFit = game.findRankedEnemy('strong-th4-attacker', tournamentId);
+  assert.equal(strongPowerFit.error, undefined);
+  assert.equal(strongPowerFit.is_bot, 1);
+  assert.equal(strongPowerFit.town_hall_level, 5);
+  assert.equal(strongPowerFit.matchmaking.selection_reason, 'ranked_power_fit_strong_player');
+  assert.equal(strongPowerFit.matchmaking.target_town_hall_level, 5);
+  assert.equal(strongPowerFit.matchmaking.live_candidate_count, 0);
+  assert.equal(strongPowerFit.matchmaking.recent_raid_count, 5);
+  assert.equal(strongPowerFit.matchmaking.recent_success_rate, 1);
+  assert.match(strongPowerFit.id, /^bot-ranked-bot-th5-hard-\d+$/);
+
+  console.log('ranked global exact-TH and strong-player power-fit matchmaking tests: PASS');
 } finally {
   game.db.close();
   fs.rmSync(tempDir, { recursive: true, force: true });

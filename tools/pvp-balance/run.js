@@ -1949,6 +1949,7 @@ function generateArmyCatalog(townHall, catalog, capacity, seed, combatDefs) {
       [troop.type],
       available,
       capacity,
+      combatDefs,
     );
     recipes.push(pureArmy);
     if (pureArmy.units.length > 0 && pureArmy.slotsUsed < capacity) {
@@ -1958,6 +1959,7 @@ function generateArmyCatalog(townHall, catalog, capacity, seed, combatDefs) {
         pureArmy,
         available,
         capacity,
+        combatDefs,
       }));
     }
   }
@@ -1990,7 +1992,7 @@ function generateArmyCatalog(townHall, catalog, capacity, seed, combatDefs) {
   ];
   for (const [name, pattern] of patterns) {
     if (pattern.length === 0) continue;
-    recipes.push(createArmy(townHall, name, pattern, available, capacity));
+    recipes.push(createArmy(townHall, name, pattern, available, capacity, combatDefs));
   }
   for (let variant = 0; variant < 6; variant += 1) {
     const rng = mulberry32(hash32(seed, townHall, variant));
@@ -2003,6 +2005,7 @@ function generateArmyCatalog(townHall, catalog, capacity, seed, combatDefs) {
       shuffled,
       available,
       capacity,
+      combatDefs,
     ));
   }
   const unique = new Map();
@@ -2020,6 +2023,7 @@ function createCapacityFilledArmy({
   pureArmy,
   available,
   capacity,
+  combatDefs,
 }) {
   const fillerPriority = new Map([
     ['knight', 0],
@@ -2034,13 +2038,20 @@ function createCapacityFilledArmy({
     ));
   const units = [...pureArmy.units];
   let slotsUsed = Number(pureArmy.slotsUsed || 0);
+  const counts = new Map();
+  for (const type of units) counts.set(type, (counts.get(type) || 0) + 1);
   let cursor = 0;
   while (slotsUsed < capacity && fillers.length > 0) {
     const remaining = capacity - slotsUsed;
     let selectedIndex = -1;
     for (let offset = 0; offset < fillers.length; offset += 1) {
       const index = (cursor + offset) % fillers.length;
-      if (Number(fillers[index].slotCost) <= remaining) {
+      const candidate = fillers[index];
+      const maxCopies = maxCatalogTroopCopies(capacity, candidate, combatDefs);
+      if (
+        Number(candidate.slotCost) <= remaining
+        && (counts.get(candidate.type) || 0) < maxCopies
+      ) {
         selectedIndex = index;
         break;
       }
@@ -2049,6 +2060,7 @@ function createCapacityFilledArmy({
     const filler = fillers[selectedIndex];
     units.push(filler.type);
     slotsUsed += Number(filler.slotCost);
+    counts.set(filler.type, (counts.get(filler.type) || 0) + 1);
     cursor = (selectedIndex + 1) % fillers.length;
   }
   return {
@@ -2169,20 +2181,34 @@ function availableTacticProfiles(combatDefs, townHall) {
 }
 
 
-function createArmy(townHall, name, pattern, available, capacity) {
+function maxCatalogTroopCopies(capacity, troop, combatDefs = null) {
+  if (typeof combatDefs?.maxTroopCopiesForShip === 'function') {
+    return combatDefs.maxTroopCopiesForShip(capacity, troop.type);
+  }
+  const normalizedCapacity = Math.max(0, Math.trunc(Number(capacity) || 0));
+  const slotCost = Math.max(1, Math.trunc(Number(troop.slotCost) || 1));
+  if (normalizedCapacity < slotCost) return 0;
+  return Math.max(1, Math.floor(Math.ceil(normalizedCapacity / 2) / slotCost));
+}
+
+function createArmy(townHall, name, pattern, available, capacity, combatDefs = null) {
   const byType = new Map(available.map((troop) => [troop.type, troop]));
   const normalizedPattern = pattern.filter((type) => byType.has(type));
   const units = [];
   let slotsUsed = 0;
+  const counts = new Map();
   let cursor = 0;
   let misses = 0;
   const maxIterations = capacity * Math.max(4, normalizedPattern.length * 3);
   while (slotsUsed < capacity && cursor < maxIterations && normalizedPattern.length > 0) {
     const type = normalizedPattern[cursor % normalizedPattern.length];
-    const cost = byType.get(type).slotCost;
-    if (slotsUsed + cost <= capacity) {
+    const troop = byType.get(type);
+    const cost = troop.slotCost;
+    const maxCopies = maxCatalogTroopCopies(capacity, troop, combatDefs);
+    if (slotsUsed + cost <= capacity && (counts.get(type) || 0) < maxCopies) {
       units.push(type);
       slotsUsed += cost;
+      counts.set(type, (counts.get(type) || 0) + 1);
       misses = 0;
     } else {
       misses += 1;
