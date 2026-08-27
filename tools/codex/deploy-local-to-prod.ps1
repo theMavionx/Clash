@@ -31,6 +31,13 @@ if (Test-Path -LiteralPath $DeployEnvFile) {
     }
 }
 
+# Parameter defaults are evaluated before the local env file is loaded. Refresh
+# the proxy path here so ordinary operator deploys use the configured pool
+# without requiring a duplicate -ProxyFile argument.
+if ([string]::IsNullOrWhiteSpace($ProxyFile)) {
+    $ProxyFile = $env:CLASH_DEPLOY_PROXY_FILE
+}
+
 Write-Host "== Deploy preflight =="
 git fetch origin --prune
 git status --short --branch
