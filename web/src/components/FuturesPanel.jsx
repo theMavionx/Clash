@@ -5,6 +5,7 @@ import { useWallet } from '@solana/wallet-adapter-react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { usePacifica } from '../hooks/usePacifica';
 import { useAvantis } from '../hooks/useAvantis';
+import { useDomfi } from '../hooks/useDomfi';
 import { useDecibel } from '../hooks/useDecibel';
 import { useGmx } from '../hooks/useGmx';
 import { useMonad } from '../hooks/useMonad';
@@ -138,6 +139,7 @@ const OSTIUM_MIN_MARGIN_USD = 5;
 const HOTSTUFF_FEE_BUFFER_RATE = 0.0001;
 const DEX_ERROR_LABELS = {
   avantis: 'Avantis',
+  domfi: 'DomFi',
   decibel: 'Decibel',
   flash: 'Flash',
   gmtrade: 'GMTrade',
@@ -160,7 +162,7 @@ const DEX_ERROR_LABELS = {
   risex: 'RISEx',
   bulk: 'Bulk',
 };
-const OPEN_TPSL_NATIVE_ORDER_ATTACH_DEXES = new Set(['avantis', 'bulk', 'decibel', 'flash', 'gmx', 'hibachi', 'hotstuff', 'hyperliquid', 'katana', 'lighter', 'rhlighter', 'nado', 'ondo', 'ostium', 'pacifica']);
+const OPEN_TPSL_NATIVE_ORDER_ATTACH_DEXES = new Set(['avantis', 'domfi', 'bulk', 'decibel', 'flash', 'gmx', 'hibachi', 'hotstuff', 'hyperliquid', 'katana', 'lighter', 'rhlighter', 'nado', 'ondo', 'ostium', 'pacifica']);
 const OPEN_TPSL_NATIVE_LIMIT_ATTACH_DEXES = new Set([...OPEN_TPSL_NATIVE_ORDER_ATTACH_DEXES, 'grvt', 'leverup', 'phoenix']);
 const OPEN_TPSL_POST_MARKET_DEXES = new Set([
   'decibel',
@@ -3344,14 +3346,12 @@ const BottomPanel = memo(function BottomPanel({
   const [tpslInputMode, setTpslInputMode] = useState('price');
   const [tpslInitial, setTpslInitial] = useState({ key: null, tp: '', sl: '' });
   const [tpslSubmittingPos, setTpslSubmittingPos] = useState(null);
-  // Avantis/Flash do not expose funding payments in the trading UI flow.
+  // DomFi exposes accrued funding on trades but no standalone payment-history feed.
   const tabs = [
     { id: 'positions', label: `Positions (${filteredPositions.length})` },
     { id: 'orders', label: `Orders (${filteredOrders.length})` },
-    ...(dex === 'avantis' || dex === 'flash' ? [] : [
-      { id: 'history', label: 'History' },
-      { id: 'funding', label: 'Funding' },
-    ]),
+    ...(dex === 'avantis' || dex === 'flash' ? [] : [{ id: 'history', label: 'History' }]),
+    ...(dex === 'avantis' || dex === 'domfi' || dex === 'flash' ? [] : [{ id: 'funding', label: 'Funding' }]),
   ];
 
   return (
@@ -3733,7 +3733,7 @@ const BottomPanel = memo(function BottomPanel({
             activeSymbol={activeSymbol}
           />
         )}
-        {bottomTab === 'funding' && dex !== 'avantis' && dex !== 'flash' && (
+        {bottomTab === 'funding' && dex !== 'avantis' && dex !== 'domfi' && dex !== 'flash' && (
           <FundingHistory
             walletAddr={walletAddr}
             accountAddr={historyAccountAddr}
@@ -3784,7 +3784,7 @@ function FuturesPanel() {
   // it's somehow active (e.g. Pro→Basic switch while Orders was selected).
   const visibleTabs = useMemo(() => TABS.filter((tab) => {
     if (isBasic && (tab.id === 'Orders' || tab.id === 'History' || tab.id === 'Funding')) return false;
-    if (tab.id === 'Funding' && (dex === 'avantis' || dex === 'flash')) return false;
+    if (tab.id === 'Funding' && (dex === 'avantis' || dex === 'domfi' || dex === 'flash')) return false;
     return true;
   }), [dex, isBasic]);
   const handleTabsWheel = useCallback((event) => {
@@ -3811,6 +3811,7 @@ function FuturesPanel() {
   //   gmx      → Arbitrum/EVM, self-custody via viem (Phase 1: read-only)
   const pacificaHook = usePacifica();
   const avantisHook = useAvantis();
+  const domfiHook = useDomfi();
   const decibelHook = useDecibel();
   const gmxHook = useGmx();
   const monadHook = useMonad();
@@ -3837,6 +3838,8 @@ function FuturesPanel() {
   const aptosWallet = useAptosWallet();
   const trading = dex === 'avantis'
     ? avantisHook
+    : dex === 'domfi'
+    ? domfiHook
     : dex === 'decibel'
     ? decibelHook
     : dex === 'gmx'
@@ -4155,7 +4158,7 @@ function FuturesPanel() {
     // under a wallet they only ever used to peek at the orderbook.
     // The legitimate use case (connecting an Avantis wallet from the
     // FuturesPanel) is still allowed: dex === 'avantis'.
-    if (dex !== 'avantis' && dex !== 'gmx' && dex !== 'ostium' && dex !== 'monad' && dex !== 'hyperliquid' && dex !== 'risex' && dex !== 'nado' && dex !== 'ondo' && dex !== 'leverup' && dex !== 'aster' && dex !== 'hibachi' && dex !== 'hotstuff' && dex !== 'grvt') {
+    if (dex !== 'avantis' && dex !== 'domfi' && dex !== 'gmx' && dex !== 'ostium' && dex !== 'monad' && dex !== 'hyperliquid' && dex !== 'risex' && dex !== 'nado' && dex !== 'ondo' && dex !== 'leverup' && dex !== 'aster' && dex !== 'hibachi' && dex !== 'hotstuff' && dex !== 'grvt') {
       console.warn('[futures] Ignoring EVM connect: active DEX is', dex);
       return;
     }
@@ -4563,7 +4566,9 @@ function FuturesPanel() {
         ?? account?.balance                         // last-resort
         ?? 0)
   ));
-  const pacBalance = dex === 'gmtrade'
+  const pacBalance = dex === 'domfi'
+    ? Math.max(0, Number(account?.available_to_spend ?? walletUsdc ?? 0))
+    : dex === 'gmtrade'
     ? Math.max(0, Number(walletUsdc || 0))
     : dex === 'ostium'
     ? Math.max(0, Number(account?.usdc_balance ?? walletUsdc ?? 0))
@@ -4584,7 +4589,9 @@ function FuturesPanel() {
       ?? account?.balance                  // last-resort
       ?? 0
   ));
-  const pacAccountValue = dex === 'gmtrade'
+  const pacAccountValue = dex === 'domfi'
+    ? Math.max(0, Number(account?.account_equity ?? walletUsdc ?? 0))
+    : dex === 'gmtrade'
     ? Math.max(0, Number(account?.account_equity ?? account?.balance ?? walletUsdc ?? 0))
     : dex === 'ostium'
     ? Math.max(0, Number(account?.equity ?? account?.usdc_balance ?? walletUsdc ?? 0))
@@ -4996,7 +5003,7 @@ function FuturesPanel() {
       setLeverageApi(symbol, v);
       return;
     }
-    if (dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'leverup' || dex === 'aster' || dex === 'grvt' || dex === 'flash') return;
+    if (dex === 'avantis' || dex === 'domfi' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'leverup' || dex === 'aster' || dex === 'grvt' || dex === 'flash') return;
     // Pacifica leverage updates should use the agent key. If the user has
     // not enabled it yet, keep this UI-only and flush after auto-bind on
     // trade submit.
@@ -5065,7 +5072,7 @@ function FuturesPanel() {
       const phoenixMarginPrice = dex === 'phoenix'
         ? (Number(currentPrice) > 0 ? Number(currentPrice) : tradePrice)
         : tradePrice;
-      const isCollateralDex = dex === 'avantis' || dex === 'bulk' || dex === 'decibel' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'leverup' || dex === 'aster' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'gmtrade' || dex === 'flash';
+      const isCollateralDex = dex === 'avantis' || dex === 'domfi' || dex === 'bulk' || dex === 'decibel' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'leverup' || dex === 'aster' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'gmtrade' || dex === 'flash';
       const attachedTpsl = resolveOpenTpslForSide(side);
       if (!attachedTpsl?.ok) return;
       if (attachedTpsl?.hasTpsl && orderType === 'limit' && !OPEN_TPSL_NATIVE_LIMIT_ATTACH_DEXES.has(dex)) {
@@ -5545,7 +5552,7 @@ function FuturesPanel() {
           </>
         )}
         <div style={{...S.symbolBarActions, ...(compactSymbolBar ? S.symbolBarActionsCompact : {}), gap: compactSymbolBar ? 4 : 8}}>
-          {dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'decibel' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'leverup' || dex === 'aster' || dex === 'hibachi' || dex === 'katana' || dex === 'gmtrade' || dex === 'flash' || isLighterDex || dex === 'bulk' ? (
+          {dex === 'avantis' || dex === 'domfi' || dex === 'gmx' || dex === 'ostium' || dex === 'decibel' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'leverup' || dex === 'aster' || dex === 'hibachi' || dex === 'katana' || dex === 'gmtrade' || dex === 'flash' || isLighterDex || dex === 'bulk' ? (
             // Read-only badge for venues where the production margin mode is
             // not user-toggleable in our integration.
             <div
@@ -6445,8 +6452,8 @@ function FuturesPanel() {
                   }}>{aptosWallet.error}</div>
                 )}
               </>
-            ) : dex === 'avantis' ? (
-              // Avantis is non-custodial — the user's own EVM wallet signs
+            ) : (dex === 'avantis' || dex === 'domfi') ? (
+              // Avantis and DomFi are non-custodial — the user's own EVM wallet signs
               // every trade. On page reload, external-wallet sessions are
               // lost (provider lives in React state only), so this screen
               // gives the user a direct "Connect" button instead of the
@@ -6460,12 +6467,13 @@ function FuturesPanel() {
                   color: 'var(--terminal-text-muted)', fontSize: 12, fontWeight: 600,
                   textAlign: 'center', maxWidth: 280, lineHeight: 1.4,
                 }}>
-                  Avantis is non-custodial — your own wallet signs each trade.<br />
-                  Nothing held on our side.
+                  {dex === 'domfi'
+                    ? <>DomFi is non-custodial — your own wallet signs each trade. Unbound wallets receive the <b>CLASHOFPERPS</b> referral on the first open; existing referrals stay unchanged.</>
+                    : <>Avantis is non-custodial — your own wallet signs each trade.<br />Nothing held on our side.</>}
                 </div>
-                {renderPrivyEmailButton('#0EA5E9', 'var(--terminal-info)')}
+                {renderPrivyEmailButton(dex === 'domfi' ? '#149676' : '#0EA5E9', dex === 'domfi' ? '#0B6B55' : 'var(--terminal-info)')}
                 <button
-                  style={{...terminalButton(privyEnabled ? 'var(--terminal-text-muted)' : '#0EA5E9', privyEnabled ? 'var(--terminal-text-secondary)' : 'var(--terminal-info)'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                  style={{...terminalButton(privyEnabled ? 'var(--terminal-text-muted)' : (dex === 'domfi' ? '#149676' : '#0EA5E9'), privyEnabled ? 'var(--terminal-text-secondary)' : (dex === 'domfi' ? '#0B6B55' : 'var(--terminal-info)')), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
                   onClick={() => setEvmModalOpen(true)}
                 >
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -6477,10 +6485,10 @@ function FuturesPanel() {
                 </button>
                 <div style={{
                   display: 'flex', alignItems: 'center', gap: 4,
-                  color: '#0369A1', fontSize: 11, fontWeight: 600,
+                  color: dex === 'domfi' ? '#0B6B55' : '#0369A1', fontSize: 11, fontWeight: 600,
                   letterSpacing: '0.5px', marginTop: 4,
                 }}>
-                  <span>AVANTIS · BASE MAINNET</span>
+                  <span>{dex === 'domfi' ? 'DOMFI · BASE MAINNET · REF CLASHOFPERPS' : 'AVANTIS · BASE MAINNET'}</span>
                 </div>
               </>
             ) : dex === 'ostium' ? (
@@ -10950,7 +10958,8 @@ function FuturesPanel() {
           </>
         )}
 
-        {(dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'hyperliquid' || dex === 'gmtrade' || dex === 'leverup') ? (() => {
+        {(dex === 'avantis' || dex === 'domfi' || dex === 'gmx' || dex === 'ostium' || dex === 'hyperliquid' || dex === 'gmtrade' || dex === 'leverup') ? (() => {
+          const isDomfi = dex === 'domfi';
           const isGmx = dex === 'gmx';
           const isOstium = dex === 'ostium';
           const isHyperliquid = dex === 'hyperliquid';
@@ -10985,7 +10994,7 @@ function FuturesPanel() {
           return (
           <div style={S.fullCard}>
             <div style={S.row}>
-              <span style={{...S.label, color: accentLight}}>{isFlash ? 'Deposit USDC' : isGmtrade ? 'GMTrade native wallet' : isHibachi ? 'Hibachi funding' : isHyperliquid ? 'Hyperliquid funding' : isLeverup ? 'LeverUp V2 self-custody' : 'Self-custody wallet'}</span>
+              <span style={{...S.label, color: accentLight}}>{isDomfi ? 'DomFi Base wallet' : isFlash ? 'Deposit USDC' : isGmtrade ? 'GMTrade native wallet' : isHibachi ? 'Hibachi funding' : isHyperliquid ? 'Hyperliquid funding' : isLeverup ? 'LeverUp V2 self-custody' : 'Self-custody wallet'}</span>
               {isFundingBusy
                 ? <span style={{...S.detail, color: 'var(--terminal-long)'}}>{isMovingToPerp ? 'Moving to trading' : 'Depositing'}{pendingDepositLabel ? ` ${pendingDepositLabel} USDC` : ''}...</span>
                 : walletUsdcText && (
@@ -11624,7 +11633,7 @@ function FuturesPanel() {
             Pacifica shows when there's something to take out. Decibel and
             RISEx always show the action from day one (the button disables at
             available=0 instead of hiding the whole card). */}
-        {dex !== 'avantis' && dex !== 'gmx' && dex !== 'ostium' && dex !== 'hibachi' && dex !== 'katana' && dex !== 'gmtrade' && dex !== 'hotstuff' && (dex === 'decibel' || dex === 'risex' || dex === 'hyperliquid' || dex === 'nado' || dex === 'ondo' || dex === 'flash' || available > 0) && (
+        {dex !== 'avantis' && dex !== 'domfi' && dex !== 'gmx' && dex !== 'ostium' && dex !== 'hibachi' && dex !== 'katana' && dex !== 'gmtrade' && dex !== 'hotstuff' && (dex === 'decibel' || dex === 'risex' || dex === 'hyperliquid' || dex === 'nado' || dex === 'ondo' || dex === 'flash' || available > 0) && (
           <div style={S.fullCard}>
             <div style={S.row}>
               <span style={{...S.label, color: '#9945FF'}}>{dex === 'monad' ? 'Withdraw AUSD' : dex === 'nado' ? 'Withdraw USDt0' : 'Withdraw USDC'}</span>

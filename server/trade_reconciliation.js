@@ -9,6 +9,7 @@ const APTOS_WALLET_RE = /^0x[0-9a-fA-F]{1,64}$/;
 
 const FUTURES_REWARD_DEXES = new Set([
   'avantis',
+  'domfi',
   'decibel',
   'gmx',
   'ostium',
@@ -37,6 +38,7 @@ const DEX_REQUIRED_CHAIN = {
   bulk: 'solana',
   decibel: 'aptos',
   avantis: 'evm',
+  domfi: 'evm',
   gmx: 'evm',
   ostium: 'evm',
   monad: 'evm',
@@ -54,6 +56,7 @@ const DEX_REQUIRED_CHAIN = {
 
 const VERIFIED_SOURCES_BY_DEX = {
   avantis: ['worker'],
+  domfi: ['domfi_api'],
   decibel: ['decibel_fill', 'server'],
   gmx: ['worker', 'server'],
   ostium: ['ostium_api'],
@@ -76,6 +79,7 @@ const VERIFIED_SOURCES_BY_DEX = {
 
 const USER_SCOPED_IMPORT_DEXES = new Set([
   'decibel',
+  'domfi',
   'hyperliquid',
   'ostium',
   'gmtrade',
@@ -504,6 +508,18 @@ async function runDexAdapter(player, dex, wallet, opts = {}) {
       return { ok: false, skipped: 'adapter_missing', dex };
     }
     return { dex, ...(await decibelRewards.importRecentLimitFillsForPlayer(playerId, wallet)) };
+  }
+
+  if (dex === 'domfi') {
+    const domfi = require('../server-futures/domfi');
+    if (!domfi.isEvmAddress(wallet)) return { ok: false, skipped: 'invalid_evm_wallet', dex };
+    return {
+      dex,
+      ...(await domfi.importFillsForPlayer(playerId, wallet, {
+        limit,
+        since: opts.since || resolveImportSince(player, dex),
+      })),
+    };
   }
 
   if (dex === 'hyperliquid') {

@@ -5,6 +5,7 @@ import { usePrivy } from '@privy-io/react-auth';
 import { usePlayer, useResources, useBuildingDefs, useSend } from '../hooks/useGodot';
 import { usePacifica } from '../hooks/usePacifica';
 import { useAvantis } from '../hooks/useAvantis';
+import { useDomfi } from '../hooks/useDomfi';
 import { useDecibel } from '../hooks/useDecibel';
 import { useGmx } from '../hooks/useGmx';
 import { useMonad } from '../hooks/useMonad';
@@ -89,6 +90,7 @@ function ProfileModal({ onClose }) {
   const { address: aptosAddress, disconnect: aptosDisconnect, connect: aptosConnect } = useAptosWallet();
   const pacificaHook = usePacifica();
   const avantisHook = useAvantis();
+  const domfiHook = useDomfi();
   const decibelHook = useDecibel();
   const gmxHook = useGmx();
   const monadHook = useMonad();
@@ -109,6 +111,8 @@ function ProfileModal({ onClose }) {
   const bulkHook = useBulk();
   const tradingHook = dex === 'avantis'
     ? avantisHook
+    : dex === 'domfi'
+    ? domfiHook
     : dex === 'decibel'
     ? decibelHook
     : dex === 'gmx'
@@ -189,7 +193,7 @@ function ProfileModal({ onClose }) {
   // though the Avantis account is registered with an EVM wallet. Resolve
   // to the chain-correct address for the active DEX.
   const adapterAddr = (connected && publicKey) ? publicKey.toBase58() : null;
-  const liveWallet = (dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'leverup' || dex === 'aster' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'lighter' || dex === 'rhlighter')
+  const liveWallet = (dex === 'avantis' || dex === 'domfi' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'leverup' || dex === 'aster' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'lighter' || dex === 'rhlighter')
     ? (walletAddr || null)            // EVM from useAvantis/useGmx/useMonad
     : dex === 'decibel'
     ? (walletAddr || null)            // Aptos from useDecibel
@@ -198,7 +202,7 @@ function ProfileModal({ onClose }) {
     : (adapterAddr || walletAddr || null); // Solana adapter / Privy
   const linkedWallet = player?.wallet || null;
   const activeWallet = liveWallet || linkedWallet;
-  const walletSource = (dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'leverup' || dex === 'aster' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'lighter' || dex === 'rhlighter')
+  const walletSource = (dex === 'avantis' || dex === 'domfi' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'leverup' || dex === 'aster' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'lighter' || dex === 'rhlighter')
     ? (liveWallet ? 'evm' : null)
     : dex === 'decibel'
     ? (liveWallet ? 'aptos' : null)
@@ -1099,6 +1103,11 @@ function ProfileModal({ onClose }) {
               style={uiButton('primary', { width: '100%', minHeight: 44, padding: '12px 16px' })}
               onClick={() => setEvmModalOpen(true)}
             >CONNECT BASE WALLET</button>
+          ) : dex === 'domfi' ? (
+            <button
+              style={uiButton('primary', { width: '100%', minHeight: 44, padding: '12px 16px' })}
+              onClick={() => setEvmModalOpen(true)}
+            >CONNECT BASE WALLET</button>
           ) : dex === 'gmx' ? (
             <button
               style={uiButton('primary', { width: '100%', minHeight: 44, padding: '12px 16px' })}
@@ -1195,7 +1204,7 @@ function ProfileModal({ onClose }) {
                 <button
                   style={S.walletRepairBtn}
                   onClick={() => {
-                    if (dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'leverup' || dex === 'aster' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'lighter' || dex === 'rhlighter') setEvmModalOpen(true);
+                    if (dex === 'avantis' || dex === 'domfi' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'leverup' || dex === 'aster' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'lighter' || dex === 'rhlighter') setEvmModalOpen(true);
                     else if (dex === 'decibel') aptosConnect?.();
                     else openSolanaConnect();
                   }}
@@ -1325,8 +1334,8 @@ function ProfileModal({ onClose }) {
             </>
           )}
 
-          {/* Avantis self-custody funding callout */}
-          {dex === 'avantis' && activeWallet && (
+          {/* Base self-custody funding callout */}
+          {(dex === 'avantis' || dex === 'domfi') && activeWallet && (
             <div style={{
               padding: '12px 14px', borderRadius: 14,
               background: 'var(--terminal-brand-soft)',
@@ -1335,7 +1344,7 @@ function ProfileModal({ onClose }) {
               <div style={{
                 fontSize: 12, fontWeight: 700, color: 'var(--terminal-brand-text)',
                 letterSpacing: '1px', marginBottom: 4,
-              }}>💰 DEPOSIT TO TRADE</div>
+              }}>💰 FUND BASE WALLET</div>
               <div style={{
                 fontSize: 12, color: 'var(--terminal-text-secondary)', fontWeight: 600,
                 lineHeight: 1.4,

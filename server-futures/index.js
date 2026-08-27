@@ -99,7 +99,7 @@ app.get('/', (req, res) => {
 </style>
 </head><body>
   <h1>Clash Futures Server</h1>
-  <div class="subtitle">Pacifica / Avantis / Decibel / GMX / Perpl / Katana | Builder: clashofperps</div>
+  <div class="subtitle">Pacifica / Avantis / DomFi / Decibel / GMX / Perpl / Katana | Builder: clashofperps</div>
   <div class="stats">
     <div class="stat"><div class="value">${walletCount}</div><div class="label">Wallets</div></div>
     <div class="stat"><div class="value">${tradeCount}</div><div class="label">Trades</div></div>
@@ -138,7 +138,7 @@ setupGmtradeRealtime(server);
 
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`Futures server running on http://127.0.0.1:${PORT}`);
-  console.log('Network: Pacifica Mainnet + Avantis (Base) + Decibel (Aptos) + GMX (Arbitrum) + Perpl (Monad) + Phoenix (Solana) + Hyperliquid + Nado (Ink) + Katana + GMTrade realtime');
+  console.log('Network: Pacifica Mainnet + Avantis (Base) + DomFi (Base) + Decibel (Aptos) + GMX (Arbitrum) + Perpl (Monad) + Phoenix (Solana) + Hyperliquid + Nado (Ink) + Katana + GMTrade realtime');
   console.log('Builder code: clashofperps');
   // Start gold-rewards indexers. Avantis still needs polling. Decibel orders
   // are submitted by this server signer, so the Decibel order route records

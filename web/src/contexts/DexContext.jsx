@@ -65,6 +65,23 @@ export const DEX_CONFIG = {
     chainShort: 'BASE',
     description: 'Perps on Base',
   },
+  domfi: {
+    id: 'domfi',
+    label: 'DOMFI',
+    shortLabel: 'DOMFI',
+    emoji: 'DOM',
+    // Official Domination Finance favicon, stored locally so the exchange
+    // picker does not depend on a third-party asset host at runtime.
+    logo: '/domfi.svg',
+    logoIsWordmark: false,
+    color: '#149676',
+    colorDark: '#0B6B55',
+    colorLight: 'rgba(20,150,118,0.15)',
+    borderColor: '#63ACA5',
+    chain: 'Base',
+    chainShort: 'BASE',
+    description: 'Dominance perpetuals on Base',
+  },
   decibel: {
     id: 'decibel',
     label: 'DECIBEL',
@@ -389,6 +406,7 @@ export const DEX_ORDER = [
   'decibel',
   'pacifica',
   'avantis',
+  'domfi',
   'ostium',
   'gmx',
   'monad',

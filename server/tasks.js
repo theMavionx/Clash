@@ -97,6 +97,7 @@ const TASK_TRADE_SETTLE_DELAY_SECONDS = 0;
 const TASK_START_TRADE_GRACE_MS = Math.max(0, Number(process.env.TASK_START_TRADE_GRACE_MS || 120_000));
 const FUTURES_TASK_DEXES = new Set([
   'avantis',
+  'domfi',
   'decibel',
   'gmx',
   'ostium',
@@ -542,6 +543,7 @@ function walletMatchesDex(dex, wallet) {
   if (dex === 'pacifica' || dex === 'phoenix' || dex === 'gmtrade' || dex === 'flash' || dex === 'bulk') return isSolanaWallet(wallet);
   if (
     dex === 'avantis' ||
+    dex === 'domfi' ||
     dex === 'gmx' ||
     dex === 'ostium' ||
     dex === 'monad' ||

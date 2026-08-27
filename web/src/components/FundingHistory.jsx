@@ -200,7 +200,7 @@ function FundingHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [
           if (!cancelled) setPayments((Array.isArray(rows) ? rows : []).map(normalizeAsterFunding).filter(row => row.symbol));
           return;
         }
-        if (dex === 'hyperliquid' || dex === 'nado' || dex === 'leverup' || dex === 'ostium') {
+        if (dex === 'domfi' || dex === 'hyperliquid' || dex === 'nado' || dex === 'leverup' || dex === 'ostium') {
           if (!cancelled) setPayments([]);
           return;
         }

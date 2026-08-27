@@ -3096,6 +3096,47 @@ async function fetchKatanaEarnings() {
   });
 }
 
+async function fetchDomfiEarnings() {
+  const local = readVerifiedFuturesDexStats('domfi', 'domfi_api');
+  const estimated = local.volume_usd * (DOMFI_REFERRAL_SHARE_ESTIMATE_BPS / 10000);
+  let referral = null;
+  let referralError = null;
+  try {
+    const domfi = require('../server-futures/domfi');
+    referral = await domfi.getReferralCode();
+  } catch (error) {
+    referralError = String(error?.message || error).slice(0, 160);
+  }
+  const configured = referral?.code === 'CLASHOFPERPS' && /^\d+$/u.test(String(referral?.code_id || ''));
+  return {
+    earned_usd: 0,
+    currency: 'USDC (DomFi)',
+    configured,
+    referral_code: 'CLASHOFPERPS',
+    referral_code_id: configured ? referral.code_id : null,
+    volume_usd: local.volume_usd,
+    volume_24h_usd: local.volume_24h_usd,
+    trades: local.trades,
+    trades_24h: local.trades_24h,
+    traders: local.traders,
+    estimated_fee_usd: roundUsd(estimated),
+    estimated_fee_min_usd: roundUsd(local.volume_usd * (DOMFI_REFERRAL_SHARE_MIN_BPS / 10000)),
+    estimated_fee_max_usd: roundUsd(local.volume_usd * (DOMFI_REFERRAL_SHARE_MAX_BPS / 10000)),
+    referral_share_min_bps: DOMFI_REFERRAL_SHARE_MIN_BPS,
+    referral_share_max_bps: DOMFI_REFERRAL_SHARE_MAX_BPS,
+    referral_share_estimate_bps: DOMFI_REFERRAL_SHARE_ESTIMATE_BPS,
+    latest_fill_at: local.latest_fill_at,
+    recent_proofs: local.recent_proofs,
+    model: configured ? 'domfi_verified_volume_referral_midpoint_estimate' : 'domfi_referral_code_unverified',
+    source_detail: configured
+      ? 'domfi_api_volume_x_documented_referral_share_range'
+      : 'domfi_referral_code_unverified',
+    note: configured
+      ? `CLASHOFPERPS resolves to DomFi referral #${referral.code_id}. DomFi pays 10% of the protocol half of each maker/taker fee, so the local ${DOMFI_REFERRAL_SHARE_MIN_BPS}-${DOMFI_REFERRAL_SHARE_MAX_BPS}bps range is an estimate only; exact earned and claimable USDC remains authoritative in DomFi.`
+      : `DomFi referral lookup failed, so no referral earnings are treated as configured.${referralError ? ` ${referralError}` : ''}`,
+  };
+}
+
 async function fetchGmtradeEarnings() {
   return localVerifiedBuilderEarnings({
     dex: 'gmtrade',
@@ -3562,6 +3603,7 @@ const ANALYTICS_DEXES = [
   { key: 'pacifica', label: 'Pacifica' },
   { key: 'decibel', label: 'Decibel' },
   { key: 'avantis', label: 'Avantis' },
+  { key: 'domfi', label: 'DomFi' },
   { key: 'gmx', label: 'GMX' },
   { key: 'ostium', label: 'Ostium' },
   { key: 'phoenix', label: 'Phoenix' },
@@ -3593,6 +3635,15 @@ const ANALYTICS_WINDOWS = [
 // fixed to the same canonical 1 bps enforced by order routing and rewards.
 const RISEX_BUILDER_FEE_CONVENTIONAL_BPS = 1;
 const FLASH_BUILDER_FEE_BPS = Number(process.env.FLASH_BUILDER_FEE_BPS || process.env.GMTRADE_BUILDER_FEE_BPS) || 0;
+// DomFi pays referrers 10% of the protocol half of each 5-10 bps
+// maker/taker fee. That is a variable 0.25-0.5 bps share of notional.
+// Local analytics use the midpoint only as a labelled estimate; exact
+// cumulative/claimable USDC remains authoritative in the DomFi referral UI.
+const DOMFI_REFERRAL_SHARE_MIN_BPS = 0.25;
+const DOMFI_REFERRAL_SHARE_MAX_BPS = 0.5;
+const DOMFI_REFERRAL_SHARE_ESTIMATE_BPS = (
+  DOMFI_REFERRAL_SHARE_MIN_BPS + DOMFI_REFERRAL_SHARE_MAX_BPS
+) / 2;
 
 function safeNumber(value) {
   const n = Number(value);
@@ -3636,6 +3687,7 @@ function decibelFeeBpsForDate(value) {
 }
 
 function tradeSourceWhereForAnalytics(dex) {
+  if (dex === 'domfi') return "verified_source = 'domfi_api'";
   if (dex === 'decibel') return "verified_source IN ('decibel_fill', 'server')";
   if (dex === 'monad') return "verified_source IN ('perpl_api', 'perpl_ws')";
   if (dex === 'hyperliquid') return "verified_source = 'hyperliquid_api'";
@@ -3679,6 +3731,18 @@ function revenueModelForDex(dex, dateForRate = null) {
       builder_fee_pct: bps / 100,
       model: 'single_builder_fee',
       source_detail: 'app_volume_x_decibel_bps',
+    };
+  }
+  if (dex === 'domfi') {
+    return {
+      configured: true,
+      rate: DOMFI_REFERRAL_SHARE_ESTIMATE_BPS / 10000,
+      rate_label: `${DOMFI_REFERRAL_SHARE_MIN_BPS}-${DOMFI_REFERRAL_SHARE_MAX_BPS} bps referral share`,
+      referral_share_min_bps: DOMFI_REFERRAL_SHARE_MIN_BPS,
+      referral_share_max_bps: DOMFI_REFERRAL_SHARE_MAX_BPS,
+      referral_share_estimate_bps: DOMFI_REFERRAL_SHARE_ESTIMATE_BPS,
+      model: 'domfi_verified_volume_referral_midpoint_estimate',
+      source_detail: 'domfi_api_volume_x_documented_referral_share_range',
     };
   }
   if (dex === 'phoenix') {
@@ -4283,6 +4347,10 @@ const FAILED_EARNINGS_META = {
     subaccount: DECIBEL_BUILDER_SUBACCOUNT,
     currency: 'USDC (Aptos)',
   },
+  domfi: {
+    referral_code: 'CLASHOFPERPS',
+    currency: 'USDC (DomFi)',
+  },
   risex: {
     address: '0x39b36f1edf2ef5a6f2e02991b3a85fb356eb5005',
     builder_id: 10,
@@ -4320,6 +4388,7 @@ const EARNINGS_READER_CONFIG = {
   pacifica: { source: 'pacifica_builder_leaderboard_fee_sum', read: () => fetchPacificaEarnings() },
   decibel: { source: 'decibel_account_overview_fee_income', read: () => fetchDecibelEarnings() },
   avantis: { source: 'avantis_code_owner_onchain_estimate_only', read: () => fetchAvantisEarnings() },
+  domfi: { source: 'domfi_api_volume_x_documented_referral_share_range', read: () => fetchDomfiEarnings() },
   gmx: { source: 'gmx_claimable_ui_fee_datastore_exact', read: () => fetchGmxEarnings() },
   ostium: { source: 'arbitrum_usdc_balance_of_builder', read: ({ mainDb }) => fetchOstiumEarnings({ mainDb }) },
   phoenix: { source: 'phoenix_flight_collateral_transfers', read: ({ mainDb }) => fetchPhoenixEarnings({ mainDb }) },
@@ -4345,6 +4414,7 @@ const EARNINGS_DEX_ORDER = [
   'pacifica',
   'decibel',
   'avantis',
+  'domfi',
   'gmx',
   'ostium',
   'phoenix',

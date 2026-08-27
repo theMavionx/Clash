@@ -132,7 +132,7 @@ function DexPicker({ onPick, isInFrame, isSolanaMobile }) {
               </div>
               <div style={isDesktopGrid ? { ...S.dexCardSubtitle, ...S.dexCardSubtitleDesktop } : S.dexCardSubtitle}>
                 {cfg.chain} · {
-                  cfg.id === 'avantis' ? 'SELF-CUSTODY · EVM' :
+                  cfg.id === 'avantis' || cfg.id === 'domfi' ? 'SELF-CUSTODY · EVM' :
                   cfg.id === 'gmx' ? 'SELF-CUSTODY · EVM' :
                   cfg.id === 'ostium' ? 'SELF-CUSTODY · EVM' :
                   cfg.id === 'hyperliquid' ? 'SELF-CUSTODY · EVM' :
@@ -520,12 +520,13 @@ function StoredWalletNotice({ record, onDisconnect }) {
 }
 
 function ConnectAvantis({ onOpenEvmModal, onPrivyLogin, privyEnabled, privyAuthed, dex = 'avantis' }) {
-  // Avantis (Base), GMX (Arbitrum), Perpl (Monad), and Hyperliquid all flow through the
+  // Base venues, GMX (Arbitrum), Perpl (Monad), and Hyperliquid all flow through the
   // same EVM modal + Privy email path. Privy's embedded wallet is chain-
   // agnostic at the address level — the same 0xABC… works on every EVM
   // chain; we just ensureChain(targetId) before each tx. So one panel,
   // venue labels.
-  const venue = dex === 'gmx' ? 'GMX'
+  const venue = dex === 'domfi' ? 'DOMFI'
+    : dex === 'gmx' ? 'GMX'
     : dex === 'ostium' ? 'OSTIUM'
     : dex === 'monad' ? 'PERPL'
     : dex === 'hyperliquid' ? 'HYPERLIQUID'
@@ -560,7 +561,12 @@ function ConnectAvantis({ onOpenEvmModal, onPrivyLogin, privyEnabled, privyAuthe
     : dex === 'flash' ? 'Solana'
     : 'Base';
   const chainArticle = chainName === 'EVM' || chainName === 'Ethereum' ? 'an' : 'a';
-  const venueSetupStep = dex === 'ondo'
+  const venueSetupStep = dex === 'domfi'
+    ? {
+        label: 'Check DomFi referral',
+        hint: 'Clash preserves an existing referral; otherwise the first open attaches CLASHOFPERPS automatically.',
+      }
+    : dex === 'ondo'
     ? {
         label: 'Accept Clash builder code',
         hint: 'After wallet connection, accept builder code clashofperps at 1 bps.',
@@ -592,7 +598,7 @@ function ConnectAvantis({ onOpenEvmModal, onPrivyLogin, privyEnabled, privyAuthe
       steps={[
         { id: 'wallet', label: `Connect ${chainName} wallet`, hint: 'Choose email or your preferred wallet app.', status: 'active' },
         { id: 'setup', ...venueSetupStep, status: 'pending' },
-        { id: 'ready', label: 'Unlock one-tap trading', hint: 'The trading panel opens only after every required check succeeds.', status: 'pending' },
+        { id: 'ready', label: dex === 'domfi' ? 'Unlock wallet-signed trading' : 'Unlock one-tap trading', hint: 'The trading panel opens only after every required check succeeds.', status: 'pending' },
       ]}
       actions={actions}
       footnote="Every venue keeps its own authorization rules; the checklist and status language stay consistent."
@@ -728,6 +734,7 @@ function RegisterPanel() {
             label={isInFrame && fcUser
               ? `Joining ${
                   dex === 'avantis' ? 'Avantis' :
+                  dex === 'domfi' ? 'DomFi' :
                   dex === 'decibel' ? 'Decibel' :
                   dex === 'gmx' ? 'GMX' :
                   dex === 'ostium' ? 'Ostium' :
@@ -816,7 +823,7 @@ function RegisterPanel() {
             />
           );
         }
-        if (dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'leverup' || dex === 'aster' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'lighter' || dex === 'rhlighter') {
+        if (dex === 'avantis' || dex === 'domfi' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'leverup' || dex === 'aster' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'lighter' || dex === 'rhlighter') {
           return (
             <ConnectAvantis
               dex={dex}
@@ -864,6 +871,7 @@ function RegisterPanel() {
     if (state === 'need_name') return 'YOUR NAME';
     if (state === 'registering' || state === 'auto_connecting' || state === 'booting') return 'LOADING';
     if (dex === 'avantis') return 'AVANTIS LOGIN';
+    if (dex === 'domfi') return 'DOMFI LOGIN';
     if (dex === 'decibel') return 'DECIBEL LOGIN';
     if (dex === 'gmx') return 'GMX LOGIN';
     if (dex === 'ostium') return 'OSTIUM LOGIN';

@@ -22,6 +22,7 @@ const TWITTER_HANDLE_RE = /^@?[A-Za-z0-9_]{1,15}$/;
 const DEX_LABELS = {
   pacifica: 'Pacifica',
   avantis: 'Avantis',
+  domfi: 'DomFi',
   decibel: 'Decibel',
   gmx: 'GMX',
   monad: 'Perpl',

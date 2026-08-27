@@ -567,7 +567,20 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
       const start = now - tf.ms;
       try {
         let candles = [];
-        if (dex === 'ondo') {
+        if (dex === 'domfi') {
+          const params = new URLSearchParams({
+            dex: 'domfi',
+            symbol,
+            interval,
+            start_time: String(start),
+            end_time: String(now),
+          });
+          const response = await fetch(`/api/futures/candles?${params.toString()}`);
+          const json = await response.json().catch(() => null);
+          if (!response.ok) throw new Error(json?.detail || json?.error || `DomFi candles ${response.status}`);
+          candles = (Array.isArray(json) ? json : []).map(normalizeBulkCandle).filter(Boolean).sort((a, b) => a.time - b.time);
+          if (cancelled) return;
+        } else if (dex === 'ondo') {
           try {
             const params = new URLSearchParams({
               dex: 'ondo',

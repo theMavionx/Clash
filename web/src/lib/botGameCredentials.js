@@ -545,7 +545,7 @@ function readNadoLinkedSigner(owner) {
 }
 
 /** Temporarily disabled in Bots — broken auth or needs access codes. Flash is fully retired (hidden). */
-export const BOTS_DISABLED_EXCHANGES = ['gmx', 'gmtrade', 'perpl', 'phoenix', 'flash'];
+export const BOTS_DISABLED_EXCHANGES = ['domfi', 'gmx', 'gmtrade', 'perpl', 'phoenix', 'flash'];
 
 /** Exchanges Bots can sync from game-local credential storage. */
 export const GAME_WALLET_EXCHANGES = [

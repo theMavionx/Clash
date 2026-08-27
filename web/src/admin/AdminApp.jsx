@@ -5936,6 +5936,7 @@ function dexAccent(dex) {
     pacifica: '#8b5cf6',
     decibel: '#ffd700',
     avantis: '#38bdf8',
+    domfi: '#63aca5',
     gmx: '#9aa8ff',
     phoenix: '#fb923c',
     monad: '#a78bfa',
