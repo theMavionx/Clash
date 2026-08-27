@@ -4335,6 +4335,7 @@ function FuturesPanel() {
   const [hibachiApiKeyInput, setHibachiApiKeyInput] = useState('');
   const [hibachiAccountIdInput, setHibachiAccountIdInput] = useState('');
   const [hibachiPrivateKeyInput, setHibachiPrivateKeyInput] = useState('');
+  const [hibachiTradingPermissionConfirmed, setHibachiTradingPermissionConfirmed] = useState(false);
   const [grvtAccountModalOpen, setGrvtAccountModalOpen] = useState(false);
   const [grvtAccountOneTap, setGrvtAccountOneTap] = useState(false);
   const [grvtPrivateKeyInput, setGrvtPrivateKeyInput] = useState('');
@@ -7717,6 +7718,7 @@ function FuturesPanel() {
     const hibachiCanSave = hibachiApiKeyInput.trim().length > 0
       && hibachiAccountIdInput.trim().length > 0
       && hibachiPrivateKeyInput.trim().length > 0
+      && hibachiTradingPermissionConfirmed
       && !isRunning;
 
     return (
@@ -7787,6 +7789,18 @@ function FuturesPanel() {
                 borderRadius: 12,
                 padding: 12,
               }}>
+                <div style={{
+                  padding: '10px 12px',
+                  borderRadius: 10,
+                  background: 'var(--terminal-warning-soft)',
+                  border: '1px solid var(--terminal-orange)',
+                  color: 'var(--terminal-text)',
+                  fontSize: 11,
+                  fontWeight: 650,
+                  lineHeight: 1.45,
+                }}>
+                  <strong>Required in Hibachi:</strong> API Keys → Read-write → enable Trading. Hibachi selects Read-only by default. Withdraws and Transfers are not required.
+                </div>
                 <label style={{display: 'flex', flexDirection: 'column', gap: 5}}>
                   <span style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text)', textTransform: 'uppercase'}}>Hibachi API key</span>
                   <input
@@ -7835,6 +7849,18 @@ function FuturesPanel() {
                 <div style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text-faint)', lineHeight: 1.35}}>
                   Stored in this browser only. Use the private key shown when you create the Hibachi API key.
                 </div>
+                <label style={{display: 'flex', alignItems: 'flex-start', gap: 8, cursor: isRunning ? 'default' : 'pointer'}}>
+                  <input
+                    type="checkbox"
+                    checked={hibachiTradingPermissionConfirmed}
+                    onChange={(event) => setHibachiTradingPermissionConfirmed(event.target.checked)}
+                    disabled={isRunning}
+                    style={{marginTop: 2, accentColor: 'var(--terminal-orange)'}}
+                  />
+                  <span style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text)', lineHeight: 1.4}}>
+                    I enabled Read-write → Trading for this Hibachi API key.
+                  </span>
+                </label>
               </div>
 
               {referralUrl && (
@@ -7876,6 +7902,7 @@ function FuturesPanel() {
                       setHibachiApiKeyInput('');
                       setHibachiAccountIdInput('');
                       setHibachiPrivateKeyInput('');
+                      setHibachiTradingPermissionConfirmed(false);
                       setSuccessMsg('Hibachi credentials saved in this browser.');
                     }
                   } finally {
@@ -10506,6 +10533,7 @@ function FuturesPanel() {
                   setHibachiApiKeyInput('');
                   setHibachiAccountIdInput('');
                   setHibachiPrivateKeyInput('');
+                  setHibachiTradingPermissionConfirmed(false);
                   setLocalAlert('Enter the correct Hibachi API credentials.');
                 }}
               >
@@ -11062,6 +11090,7 @@ function FuturesPanel() {
                       setHibachiApiKeyInput('');
                       setHibachiAccountIdInput('');
                       setHibachiPrivateKeyInput('');
+                      setHibachiTradingPermissionConfirmed(false);
                       setLocalAlert('Enter the correct Hibachi API credentials.');
                     }}
                   >EDIT API</button>

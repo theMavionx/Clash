@@ -137,6 +137,62 @@ test('Cloudflare 429 is rate limiting, not a Hibachi geo block', async () => {
   }
 });
 
+test('read-only Hibachi key produces a structured Trading-permission error', async () => {
+  hibachi.__testing.resetCaches();
+  const originalFetch = global.fetch;
+  global.fetch = async (url) => {
+    const value = String(url);
+    if (value.endsWith('/market/inventory')) {
+      return jsonResponse({
+        markets: [{
+          contract: {
+            id: 1,
+            symbol: 'BTC/USDT-P',
+            category: 'CRYPTO',
+            status: 'LIVE',
+            stepSize: '0.001',
+            tickSize: '0.1',
+            initialMarginRate: '0.1',
+          },
+          info: { markPrice: '100000' },
+        }],
+      });
+    }
+    if (value.includes('/trade/account/info?accountId=7')) {
+      return jsonResponse({
+        accountCategory: 'CRYPTO',
+        balance: '100',
+        assets: [{ symbol: 'USDT', quantity: '100' }],
+        positions: [],
+      });
+    }
+    if (value.endsWith('/trade/order')) {
+      return jsonResponse({ message: 'Missing required permission: Trading' }, 401);
+    }
+    throw new Error(`Unexpected Hibachi permission test request: ${value}`);
+  };
+
+  try {
+    await assert.rejects(
+      () => hibachi.placeOrder(
+        { apiKey: 'read-only-api-key', accountId: 7, privateKey: 'test-hmac-secret' },
+        { symbol: 'BTC', side: 'bid', quantity: '0.001', orderType: 'market' },
+      ),
+      (error) => {
+        assert.equal(error.code, 'HIBACHI_TRADING_PERMISSION_REQUIRED');
+        assert.equal(error.status, 401);
+        assert.equal(error.detail, 'Missing required permission: Trading');
+        assert.equal(hibachi.isTradingPermissionError(error), true);
+        assert.match(error.message, /Read-write > Trading/iu);
+        return true;
+      },
+    );
+  } finally {
+    global.fetch = originalFetch;
+    hibachi.__testing.resetCaches();
+  }
+});
+
 test('stale Hibachi market data observes retry-after cooldown after a 429', async () => {
   hibachi.__testing.resetCaches();
   const originalFetch = global.fetch;

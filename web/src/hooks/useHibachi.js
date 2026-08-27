@@ -12,7 +12,11 @@ import {
 } from '../lib/encryptedCredentialStorage';
 import { usePlayer } from './useGodot';
 import { registeredDexWallet } from '../lib/playerDexAccounts';
-import { isHibachiIpBlockedError } from '../lib/hibachiErrors';
+import {
+  HIBACHI_TRADING_PERMISSION_MESSAGE,
+  isHibachiIpBlockedError,
+  isHibachiTradingPermissionError,
+} from '../lib/hibachiErrors';
 
 const STORAGE_KEY = 'clash_hibachi_credentials_v1';
 const LEVERAGE_STORAGE_KEY = 'clash_hibachi_leverage_v1';
@@ -251,6 +255,7 @@ function promptCredentials(existing = {}) {
 }
 
 function hibachiErrorMessage(error, fallback = 'Hibachi request failed') {
+  if (isHibachiTradingPermissionError(error)) return HIBACHI_TRADING_PERMISSION_MESSAGE;
   const msg = error?.response?.data?.detail
     || error?.response?.data?.error
     || error?.detail
@@ -261,6 +266,7 @@ function hibachiErrorMessage(error, fallback = 'Hibachi request failed') {
 }
 
 function hibachiCredentialErrorMessage(error) {
+  if (isHibachiTradingPermissionError(error)) return HIBACHI_TRADING_PERMISSION_MESSAGE;
   const msg = hibachiErrorMessage(error, '');
   if (error?.status === 401 || /401|unauthorized|forbidden|invalid api|invalid key|signature/i.test(msg)) {
     return 'Hibachi credentials are incorrect. Check your API key, account id, and private key.';

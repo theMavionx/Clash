@@ -2579,7 +2579,21 @@ function hibachiErrorBody(error, fallbackError) {
       retry_after: Number(error?.retryAfter) > 0 ? Number(error.retryAfter) : null,
     };
   }
+  if (hibachi.isTradingPermissionError?.(error)) {
+    return {
+      error: hibachi.HIBACHI_TRADING_PERMISSION_REQUIRED_MESSAGE || 'Hibachi API key requires Trading permission.',
+      code: 'HIBACHI_TRADING_PERMISSION_REQUIRED',
+      detail: error?.detail || error?.message,
+      status: 401,
+    };
+  }
   return { error: fallbackError, detail: error?.message, status: error?.status || null };
+}
+
+function hibachiStructuredError(error) {
+  return hibachi.isIpBlockedError?.(error)
+    || hibachi.isRateLimitedError?.(error)
+    || hibachi.isTradingPermissionError?.(error);
 }
 
 router.get('/markets', async (req, res) => {
@@ -5365,7 +5379,7 @@ router.post('/hibachi/order', auth, async (req, res) => {
     res.json(await hibachi.placeOrder(creds, req.body || {}));
   } catch (e) {
     console.warn('[hibachi] order failed:', e.message);
-    const structured = hibachi.isIpBlockedError?.(e) || hibachi.isRateLimitedError?.(e);
+    const structured = hibachiStructuredError(e);
     res.status(hibachiErrorStatus(e, 400)).json(structured ? hibachiErrorBody(e, 'Failed to place Hibachi order') : { error: e.message || 'Failed to place Hibachi order' });
   }
 });
@@ -5377,7 +5391,7 @@ router.post('/hibachi/order/status', auth, async (req, res) => {
     res.json(await hibachi.getOrderStatus(creds, req.body || {}));
   } catch (e) {
     console.warn('[hibachi] order status failed:', e.message);
-    const structured = hibachi.isIpBlockedError?.(e) || hibachi.isRateLimitedError?.(e);
+    const structured = hibachiStructuredError(e);
     res.status(hibachiErrorStatus(e, 400)).json(structured ? hibachiErrorBody(e, 'Failed to load Hibachi order status') : { error: e.message || 'Failed to load Hibachi order status' });
   }
 });
@@ -5389,7 +5403,7 @@ router.post('/hibachi/order/cancel', auth, async (req, res) => {
     res.json(await hibachi.cancelOrder(creds, req.body || {}));
   } catch (e) {
     console.warn('[hibachi] cancel failed:', e.message);
-    const structured = hibachi.isIpBlockedError?.(e) || hibachi.isRateLimitedError?.(e);
+    const structured = hibachiStructuredError(e);
     res.status(hibachiErrorStatus(e, 400)).json(structured ? hibachiErrorBody(e, 'Failed to cancel Hibachi order') : { error: e.message || 'Failed to cancel Hibachi order' });
   }
 });

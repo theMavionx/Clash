@@ -14,6 +14,7 @@ const HIBACHI_MAX_FEES_PERCENT = String(process.env.HIBACHI_MAX_FEES_PERCENT || 
 const HIBACHI_REWARD_MIN_NOTIONAL_USD = Math.max(0, Number(process.env.HIBACHI_REWARD_MIN_NOTIONAL_USD || 10));
 const HIBACHI_IP_BLOCKED_MESSAGE = 'Hibachi is not available from your IP address. Try a supported network or IP region.';
 const HIBACHI_RATE_LIMITED_MESSAGE = 'Hibachi is temporarily rate-limiting requests. Wait a few seconds, then try again.';
+const HIBACHI_TRADING_PERMISSION_REQUIRED_MESSAGE = 'This Hibachi API key is read-only. In Hibachi, create or edit the key and enable Read-write > Trading (Withdraws and Transfers are not required), then use EDIT API in Clash.';
 const HIBACHI_VISIBLE_MARKET_CATEGORIES = new Set(['crypto']);
 const HIBACHI_PUBLIC_MARKET_CACHE_MS = Math.max(5_000, Math.min(5 * 60_000, Number(process.env.HIBACHI_PUBLIC_MARKET_CACHE_MS || 30_000)));
 const HIBACHI_PUBLIC_MARKET_STALE_MS = Math.max(HIBACHI_PUBLIC_MARKET_CACHE_MS, Math.min(60 * 60_000, Number(process.env.HIBACHI_PUBLIC_MARKET_STALE_MS || 5 * 60_000)));
@@ -967,6 +968,14 @@ async function request(base, method, path, { apiKey, accountId, body } = {}) {
           throw err;
         }
         const detail = typeof data === 'string' ? data : (data?.message || data?.error || data?.detail || text);
+        if (r.status === 401 && /missing required permission\s*:\s*trading/iu.test(String(detail || errorText))) {
+          const err = new Error(HIBACHI_TRADING_PERMISSION_REQUIRED_MESSAGE);
+          err.code = 'HIBACHI_TRADING_PERMISSION_REQUIRED';
+          err.status = 401;
+          err.path = path;
+          err.detail = detail || 'Missing required permission: Trading';
+          throw err;
+        }
         const err = new Error(`Hibachi ${path} ${r.status}: ${detail || 'request failed'}`);
         err.status = r.status;
         err.path = path;
@@ -998,6 +1007,12 @@ function isIpBlockedError(error) {
 
 function isRateLimitedError(error) {
   return error?.code === 'HIBACHI_RATE_LIMITED' || Number(error?.status) === 429;
+}
+
+function isTradingPermissionError(error) {
+  if (error?.code === 'HIBACHI_TRADING_PERMISSION_REQUIRED') return true;
+  const text = [error?.detail, error?.message, error?.error].filter(Boolean).join(' ');
+  return Number(error?.status) === 401 && /missing required permission\s*:\s*trading/iu.test(text);
 }
 
 function credentials(input = {}) {
@@ -2240,9 +2255,11 @@ module.exports = {
   HIBACHI_DATA_API,
   HIBACHI_IP_BLOCKED_MESSAGE,
   HIBACHI_RATE_LIMITED_MESSAGE,
+  HIBACHI_TRADING_PERMISSION_REQUIRED_MESSAGE,
   credentials,
   isIpBlockedError,
   isRateLimitedError,
+  isTradingPermissionError,
   getMarketInfo,
   getPrices,
   getSnapshot,

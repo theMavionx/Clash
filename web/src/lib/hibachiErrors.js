@@ -13,6 +13,15 @@ function hibachiErrorText(value) {
   ].filter(part => part !== undefined && part !== null && part !== '').join(' ');
 }
 
+export const HIBACHI_TRADING_PERMISSION_MESSAGE = 'This Hibachi API key is read-only. In Hibachi, create or edit the key and enable Read-write > Trading (Withdraws and Transfers are not required), then use EDIT API in Clash.';
+
+export function isHibachiTradingPermissionError(value) {
+  const code = String(value?.code ?? value?.response?.data?.code ?? '');
+  if (code === 'HIBACHI_TRADING_PERMISSION_REQUIRED') return true;
+  const status = Number(value?.status ?? value?.response?.status);
+  return status === 401 && /missing required permission\s*:\s*trading/iu.test(hibachiErrorText(value));
+}
+
 export function isHibachiRateLimitedError(value) {
   const status = Number(value?.status ?? value?.response?.status);
   if (status === 429) return true;
