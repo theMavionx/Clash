@@ -113,7 +113,7 @@ assert.match(hookSource, /fetch\('\/api\/trading\/claim-gold'/u);
 assert.doesNotMatch(hookSource, /fetch\('\/api\/claim-gold'/u);
 const futuresPanelSource = readFileSync(new URL('./src/components/FuturesPanel.jsx', import.meta.url), 'utf8');
 assert.match(futuresPanelSource, /dex === 'avantis' \|\| dex === 'domfi'/u);
-assert.match(futuresPanelSource, /dex !== 'avantis' && dex !== 'domfi' && dex !== 'gmx'/u);
+assert.match(futuresPanelSource, /dex !== 'avantis' && dex !== 'domfi' && dex !== 'etoro' && dex !== 'gmx'/u);
 const registerPanelSource = readFileSync(new URL('./src/components/RegisterPanel.jsx', import.meta.url), 'utf8');
 assert.match(registerPanelSource, /const venue = dex === 'domfi' \? 'DOMFI'/u);
 
