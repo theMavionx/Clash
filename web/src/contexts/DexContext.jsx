@@ -82,6 +82,23 @@ export const DEX_CONFIG = {
     chainShort: 'BASE',
     description: 'Dominance perpetuals on Base',
   },
+  etoro: {
+    id: 'etoro',
+    label: 'eToro',
+    shortLabel: 'eToro',
+    emoji: 'eT',
+    // Official eToro Builders Portal application icon, stored locally so
+    // every picker and setup screen remains independent of external uptime.
+    logo: '/etoro.svg',
+    logoIsWordmark: false,
+    color: '#6FCF17',
+    colorDark: '#4A9E12',
+    colorLight: 'rgba(111,207,23,0.15)',
+    borderColor: '#6FCF17',
+    chain: 'eToro',
+    chainShort: 'CEX',
+    description: 'Leveraged crypto CFDs via eToro API',
+  },
   decibel: {
     id: 'decibel',
     label: 'DECIBEL',
@@ -407,6 +424,7 @@ export const DEX_ORDER = [
   'pacifica',
   'avantis',
   'domfi',
+  'etoro',
   'ostium',
   'gmx',
   'monad',

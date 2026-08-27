@@ -828,6 +828,7 @@ app.get('/api/admin/panel', (req, res) => {
               <option value="pacifica">Pacifica</option>
               <option value="avantis">Avantis</option>
               <option value="domfi">DomFi</option>
+              <option value="etoro">eToro</option>
               <option value="decibel">Decibel</option>
               <option value="gmx">GMX</option>
               <option value="ostium">Ostium</option>
@@ -854,6 +855,7 @@ app.get('/api/admin/panel', (req, res) => {
               <label style="font-size:11px;color:#d1d5db;display:flex;align-items:center;gap:6px"><input data-tn-dex-check value="pacifica" type="checkbox" onchange="updateTournamentDexScopeUi();updateTournamentTeamUi()" style="width:auto;margin:0">Pacifica</label>
               <label style="font-size:11px;color:#d1d5db;display:flex;align-items:center;gap:6px"><input data-tn-dex-check value="avantis" type="checkbox" onchange="updateTournamentDexScopeUi();updateTournamentTeamUi()" style="width:auto;margin:0">Avantis</label>
               <label style="font-size:11px;color:#d1d5db;display:flex;align-items:center;gap:6px"><input data-tn-dex-check value="domfi" type="checkbox" onchange="updateTournamentDexScopeUi();updateTournamentTeamUi()" style="width:auto;margin:0">DomFi</label>
+              <label style="font-size:11px;color:#d1d5db;display:flex;align-items:center;gap:6px"><input data-tn-dex-check value="etoro" type="checkbox" onchange="updateTournamentDexScopeUi();updateTournamentTeamUi()" style="width:auto;margin:0">eToro</label>
               <label style="font-size:11px;color:#d1d5db;display:flex;align-items:center;gap:6px"><input data-tn-dex-check value="decibel" type="checkbox" onchange="updateTournamentDexScopeUi();updateTournamentTeamUi()" style="width:auto;margin:0">Decibel</label>
               <label style="font-size:11px;color:#d1d5db;display:flex;align-items:center;gap:6px"><input data-tn-dex-check value="gmx" type="checkbox" onchange="updateTournamentDexScopeUi();updateTournamentTeamUi()" style="width:auto;margin:0">GMX</label>
               <label style="font-size:11px;color:#d1d5db;display:flex;align-items:center;gap:6px"><input data-tn-dex-check value="ostium" type="checkbox" onchange="updateTournamentDexScopeUi();updateTournamentTeamUi()" style="width:auto;margin:0">Ostium</label>
@@ -3210,6 +3212,7 @@ const TOURNAMENT_DEX_LABELS_ADMIN = {
   pacifica: 'Pacifica',
   avantis: 'Avantis',
   domfi: 'DomFi',
+  etoro: 'eToro',
   decibel: 'Decibel',
   gmx: 'GMX',
   ostium: 'Ostium',
@@ -4506,6 +4509,7 @@ function renderRevenueAnalytics(data) {
     { key: 'decibel', label: 'Decibel' },
     { key: 'avantis', label: 'Avantis' },
     { key: 'domfi', label: 'DomFi' },
+    { key: 'etoro', label: 'eToro' },
     { key: 'gmx', label: 'GMX' },
     { key: 'ostium', label: 'Ostium' },
     { key: 'phoenix', label: 'Phoenix' },
@@ -4592,6 +4596,7 @@ async function loadEarnings(force) {
       ['decibel',  'Decibel',  '#facc15', '#facc15'],
       ['avantis',  'Avantis',  '#38bdf8', '#0EA5E9'],
       ['domfi',    'DomFi',    '#63aca5', '#149676'],
+      ['etoro',    'eToro',    '#79df4b', '#5cbf2a'],
       ['gmx',      'GMX',      '#a5b4fc', '#4f46e5'],
       ['ostium',   'Ostium',   '#fb923c', '#f97316'],
       ['phoenix',  'Phoenix',  '#fb923c', '#f97316'],

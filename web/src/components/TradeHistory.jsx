@@ -560,6 +560,12 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
           if (!cancelled) setTrades(rows(data).map(t => normalizeGenericTrade(t, 'domfi', markets)).filter(Boolean));
           return;
         }
+        if (dex === 'etoro') {
+          if (typeof fetchTradeHistory !== 'function') throw new Error('eToro history reader is not ready');
+          const data = await fetchTradeHistory({ limit: 100, signal: controller.signal });
+          if (!cancelled) setTrades(rows(data).map(t => normalizeGenericTrade(t, 'etoro', markets)).filter(Boolean));
+          return;
+        }
         if (dex === 'monad') {
           const data = await fetchPerplFills({ limit: 100 });
           const rows = Array.isArray(data) ? data
@@ -803,12 +809,12 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
     return <div style={{ ...S.state, color: 'var(--terminal-short)', fontWeight: 700 }}>{error}</div>;
   }
   if (!filtered.length) {
-    const name = dex === 'decibel' ? 'Decibel ' : dex === 'domfi' ? 'DomFi ' : dex === 'ostium' ? 'Ostium ' : dex === 'monad' ? 'Perpl ' : dex === 'phoenix' ? 'Phoenix ' : dex === 'hyperliquid' ? 'Hyperliquid ' : dex === 'risex' ? 'RISEx ' : dex === 'nado' ? 'Nado ' : dex === 'ondo' ? 'Ondo ' : dex === 'leverup' ? 'LeverUp ' : dex === 'aster' ? 'Aster ' : dex === 'hotstuff' ? 'Hotstuff ' : dex === 'grvt' ? 'GRVT ' : dex === 'gmtrade' ? 'GMTrade ' : dex === 'flash' ? 'Flash Trade ' : dex === 'hibachi' ? 'Hibachi ' : dex === 'katana' ? 'Katana ' : dex === 'gmx' ? 'GMX ' : dex === 'avantis' ? 'Avantis ' : dex === 'lighter' ? 'Lighter ' : dex === 'rhlighter' ? 'Robinhood Lighter ' : dex === 'bulk' ? 'Bulk ' : '';
+    const name = dex === 'decibel' ? 'Decibel ' : dex === 'domfi' ? 'DomFi ' : dex === 'etoro' ? 'eToro ' : dex === 'ostium' ? 'Ostium ' : dex === 'monad' ? 'Perpl ' : dex === 'phoenix' ? 'Phoenix ' : dex === 'hyperliquid' ? 'Hyperliquid ' : dex === 'risex' ? 'RISEx ' : dex === 'nado' ? 'Nado ' : dex === 'ondo' ? 'Ondo ' : dex === 'leverup' ? 'LeverUp ' : dex === 'aster' ? 'Aster ' : dex === 'hotstuff' ? 'Hotstuff ' : dex === 'grvt' ? 'GRVT ' : dex === 'gmtrade' ? 'GMTrade ' : dex === 'flash' ? 'Flash Trade ' : dex === 'hibachi' ? 'Hibachi ' : dex === 'katana' ? 'Katana ' : dex === 'gmx' ? 'GMX ' : dex === 'avantis' ? 'Avantis ' : dex === 'lighter' ? 'Lighter ' : dex === 'rhlighter' ? 'Robinhood Lighter ' : dex === 'bulk' ? 'Bulk ' : '';
     return <div style={S.state}>No {name}trade history</div>;
   }
 
   const isDecibel = dex === 'decibel';
-  const showPnl = dex === 'decibel' || dex === 'domfi' || dex === 'ostium' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'leverup' || dex === 'aster' || dex === 'hotstuff' || dex === 'grvt' || dex === 'gmtrade' || dex === 'flash' || dex === 'hibachi' || dex === 'katana' || dex === 'gmx' || dex === 'avantis' || dex === 'lighter' || dex === 'rhlighter' || dex === 'bulk';
+  const showPnl = dex === 'decibel' || dex === 'domfi' || dex === 'etoro' || dex === 'ostium' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'leverup' || dex === 'aster' || dex === 'hotstuff' || dex === 'grvt' || dex === 'gmtrade' || dex === 'flash' || dex === 'hibachi' || dex === 'katana' || dex === 'gmx' || dex === 'avantis' || dex === 'lighter' || dex === 'rhlighter' || dex === 'bulk';
 
   return (
     <div style={S.scroller}>

@@ -39,6 +39,7 @@ const DEMON_KING_EVM_CHAINS = ['base', 'arbitrum', 'monad', 'ink'];
 const DEMON_KING_SUPPORTED_CHAINS = [...DEMON_KING_EVM_CHAINS, 'solana', 'aptos'];
 const DEMON_KING_CHAIN_BY_DEX = {
   avantis: 'base',
+  etoro: 'base',
   gmx: 'arbitrum',
   hyperliquid: 'arbitrum',
   risex: 'arbitrum',

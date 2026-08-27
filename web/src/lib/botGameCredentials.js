@@ -545,7 +545,7 @@ function readNadoLinkedSigner(owner) {
 }
 
 /** Temporarily disabled in Bots — broken auth or needs access codes. Flash is fully retired (hidden). */
-export const BOTS_DISABLED_EXCHANGES = ['domfi', 'gmx', 'gmtrade', 'perpl', 'phoenix', 'flash'];
+export const BOTS_DISABLED_EXCHANGES = ['domfi', 'etoro', 'gmx', 'gmtrade', 'perpl', 'phoenix', 'flash'];
 
 /** Exchanges Bots can sync from game-local credential storage. */
 export const GAME_WALLET_EXCHANGES = [
@@ -582,6 +582,7 @@ export const GAME_WALLET_EXCHANGE_LABELS = {
 
 /** Not available for Bots sync (disabled or dev-only). Flash omitted — not shown. */
 export const UNSUPPORTED_GAME_WALLET_EXCHANGES = [
+  { id: 'etoro', label: 'eToro', reason: 'browser API credentials are not exported to Bots' },
   { id: 'gmx', label: 'GMX', reason: 'temporarily disabled — delegate auth required' },
   { id: 'gmtrade', label: 'GMTrade', reason: 'temporarily disabled — not working' },
   { id: 'perpl', label: 'Perpl', reason: 'temporarily disabled — delegate auth required' },

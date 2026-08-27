@@ -10,6 +10,7 @@ const APTOS_WALLET_RE = /^0x[0-9a-fA-F]{1,64}$/;
 const FUTURES_REWARD_DEXES = new Set([
   'avantis',
   'domfi',
+  'etoro',
   'decibel',
   'gmx',
   'ostium',
@@ -39,6 +40,7 @@ const DEX_REQUIRED_CHAIN = {
   decibel: 'aptos',
   avantis: 'evm',
   domfi: 'evm',
+  etoro: 'evm',
   gmx: 'evm',
   ostium: 'evm',
   monad: 'evm',
@@ -57,6 +59,7 @@ const DEX_REQUIRED_CHAIN = {
 const VERIFIED_SOURCES_BY_DEX = {
   avantis: ['worker'],
   domfi: ['domfi_api'],
+  etoro: ['etoro_api'],
   decibel: ['decibel_fill', 'server'],
   gmx: ['worker', 'server'],
   ostium: ['ostium_api'],
@@ -80,6 +83,7 @@ const VERIFIED_SOURCES_BY_DEX = {
 const USER_SCOPED_IMPORT_DEXES = new Set([
   'decibel',
   'domfi',
+  'etoro',
   'hyperliquid',
   'ostium',
   'gmtrade',
@@ -96,6 +100,7 @@ const USER_SCOPED_IMPORT_DEXES = new Set([
 ]);
 
 const CREDENTIAL_SCOPED_IMPORT_DEXES = new Set([
+  'etoro',
   'hibachi',
   'katana',
   'grvt',
@@ -455,6 +460,13 @@ function shouldSkipForCooldown(playerId, dex, wallet, reason, ms, force) {
 }
 
 function adapterCredentials(dex, wallet, headers = {}, opts = {}) {
+  if (dex === 'etoro') {
+    const apiKey = headerValue(headers, 'x-etoro-api-key') || opts.apiKey || opts.api_key;
+    const userKey = headerValue(headers, 'x-etoro-user-key') || opts.userKey || opts.user_key;
+    const environment = headerValue(headers, 'x-etoro-environment') || opts.environment || 'demo';
+    if (!apiKey || !userKey) return null;
+    return { apiKey, userKey, environment };
+  }
   if (dex === 'katana') {
     const apiKey = headerValue(headers, 'x-katana-api-key') || opts.apiKey || opts.api_key;
     const apiSecret = headerValue(headers, 'x-katana-api-secret') || opts.apiSecret || opts.api_secret;
@@ -508,6 +520,13 @@ async function runDexAdapter(player, dex, wallet, opts = {}) {
       return { ok: false, skipped: 'adapter_missing', dex };
     }
     return { dex, ...(await decibelRewards.importRecentLimitFillsForPlayer(playerId, wallet)) };
+  }
+
+  if (dex === 'etoro') {
+    const creds = adapterCredentials(dex, wallet, opts.headers, opts.credentials || opts);
+    if (!creds) return { ok: false, skipped: 'browser_credentials_required', dex };
+    const etoro = require('../server-futures/etoro');
+    return { dex, ...(await etoro.importTradesForPlayer(playerId, creds, { limit })) };
   }
 
   if (dex === 'domfi') {

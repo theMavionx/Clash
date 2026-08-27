@@ -1067,7 +1067,7 @@ try {
       event_kind   TEXT NOT NULL DEFAULT 'standard' CHECK(event_kind IN ('standard','lucky_raider')),
       name         TEXT NOT NULL,
       description  TEXT,
-      dex          TEXT NOT NULL CHECK(dex IN ('pacifica','avantis','domfi','decibel','dango','gmx','ostium','monad','phoenix','hyperliquid','risex','nado','ondo','hibachi','hotstuff','grvt','katana','gmtrade','flash','lighter','rhlighter','bulk')),
+      dex          TEXT NOT NULL CHECK(dex IN ('pacifica','avantis','domfi','etoro','decibel','dango','gmx','ostium','monad','phoenix','hyperliquid','risex','nado','ondo','hibachi','hotstuff','grvt','katana','gmtrade','flash','lighter','rhlighter','bulk')),
       dex_scope    TEXT NOT NULL DEFAULT 'single' CHECK(dex_scope IN ('single','custom','all')),
       eligible_dexes TEXT NOT NULL DEFAULT '[]',
       mode         TEXT NOT NULL DEFAULT 'individual' CHECK(mode IN ('individual','dex_vs_dex')),
@@ -1219,7 +1219,7 @@ try {
   try {
     const schema = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'tournaments'").get()?.sql || '';
     const needsRebuild = schema
-      && (!schema.includes("event_kind") || !schema.includes("'points'") || !schema.includes("'volume_trophies_50_50'") || !schema.includes("'dango'") || !schema.includes("'domfi'") || !schema.includes("'ostium'") || !schema.includes("'monad'") || !schema.includes("'phoenix'") || !schema.includes("'hyperliquid'") || !schema.includes("'risex'") || !schema.includes("'nado'") || !schema.includes("'ondo'") || !schema.includes("'hibachi'") || !schema.includes("'grvt'") || !schema.includes("'katana'") || !schema.includes("'gmtrade'") || !schema.includes("'flash'") || !schema.includes("'lighter'") || !schema.includes("'rhlighter'") || !schema.includes("'bulk'") || !schema.includes("points_trophy_weight") || !schema.includes("scoring_mode") || !schema.includes("daily_pool_points") || !schema.includes("daily_pool_growth_pct") || !schema.includes("daily_pool_overrides") || !schema.includes("daily_pool_award_time_utc") || !schema.includes("prize_tiers") || !schema.includes("mega_config") || !schema.includes("reward_config") || !schema.includes("rewards_in_cop") || !schema.includes("seeker_only") || !schema.includes("seeker_gold_boost") || !schema.includes("shield_hours") || !schema.includes("dex_scope") || !schema.includes("eligible_dexes") || !schema.includes("dex_vs_dex") || !schema.includes("team_prize_splits") || !schema.includes("attack_match_policy"));
+      && (!schema.includes("event_kind") || !schema.includes("'points'") || !schema.includes("'volume_trophies_50_50'") || !schema.includes("'dango'") || !schema.includes("'domfi'") || !schema.includes("'etoro'") || !schema.includes("'ostium'") || !schema.includes("'monad'") || !schema.includes("'phoenix'") || !schema.includes("'hyperliquid'") || !schema.includes("'risex'") || !schema.includes("'nado'") || !schema.includes("'ondo'") || !schema.includes("'hibachi'") || !schema.includes("'grvt'") || !schema.includes("'katana'") || !schema.includes("'gmtrade'") || !schema.includes("'flash'") || !schema.includes("'lighter'") || !schema.includes("'rhlighter'") || !schema.includes("'bulk'") || !schema.includes("points_trophy_weight") || !schema.includes("scoring_mode") || !schema.includes("daily_pool_points") || !schema.includes("daily_pool_growth_pct") || !schema.includes("daily_pool_overrides") || !schema.includes("daily_pool_award_time_utc") || !schema.includes("prize_tiers") || !schema.includes("mega_config") || !schema.includes("reward_config") || !schema.includes("rewards_in_cop") || !schema.includes("seeker_only") || !schema.includes("seeker_gold_boost") || !schema.includes("shield_hours") || !schema.includes("dex_scope") || !schema.includes("eligible_dexes") || !schema.includes("dex_vs_dex") || !schema.includes("team_prize_splits") || !schema.includes("attack_match_policy"));
     if (needsRebuild) {
       db.pragma('foreign_keys = OFF');
       db.transaction(() => {
@@ -1229,7 +1229,7 @@ try {
             event_kind   TEXT NOT NULL DEFAULT 'standard' CHECK(event_kind IN ('standard','lucky_raider')),
             name         TEXT NOT NULL,
             description  TEXT,
-            dex          TEXT NOT NULL CHECK(dex IN ('pacifica','avantis','domfi','decibel','dango','gmx','ostium','monad','phoenix','hyperliquid','risex','nado','ondo','hibachi','hotstuff','grvt','katana','gmtrade','flash','lighter','rhlighter','bulk')),
+            dex          TEXT NOT NULL CHECK(dex IN ('pacifica','avantis','domfi','etoro','decibel','dango','gmx','ostium','monad','phoenix','hyperliquid','risex','nado','ondo','hibachi','hotstuff','grvt','katana','gmtrade','flash','lighter','rhlighter','bulk')),
             dex_scope    TEXT NOT NULL DEFAULT 'single' CHECK(dex_scope IN ('single','custom','all')),
             eligible_dexes TEXT NOT NULL DEFAULT '[]',
             mode         TEXT NOT NULL DEFAULT 'individual' CHECK(mode IN ('individual','dex_vs_dex')),
@@ -1282,11 +1282,11 @@ try {
             id,
             CASE WHEN event_kind IN ('standard','lucky_raider') THEN event_kind ELSE 'standard' END,
             name, description,
-            CASE WHEN dex IN ('pacifica','avantis','domfi','decibel','dango','gmx','ostium','monad','phoenix','hyperliquid','risex','nado','ondo','hibachi','hotstuff','grvt','katana','gmtrade','flash','lighter','rhlighter','bulk') THEN dex ELSE 'pacifica' END,
+            CASE WHEN dex IN ('pacifica','avantis','domfi','etoro','decibel','dango','gmx','ostium','monad','phoenix','hyperliquid','risex','nado','ondo','hibachi','hotstuff','grvt','katana','gmtrade','flash','lighter','rhlighter','bulk') THEN dex ELSE 'pacifica' END,
             CASE WHEN dex_scope IN ('single','custom','all') THEN dex_scope ELSE 'single' END,
             CASE
               WHEN eligible_dexes IS NOT NULL AND eligible_dexes != '' AND eligible_dexes != '[]' THEN eligible_dexes
-              ELSE '["' || CASE WHEN dex IN ('pacifica','avantis','domfi','decibel','dango','gmx','ostium','monad','phoenix','hyperliquid','risex','nado','ondo','hibachi','hotstuff','grvt','katana','gmtrade','flash','lighter','rhlighter','bulk') THEN dex ELSE 'pacifica' END || '"]'
+              ELSE '["' || CASE WHEN dex IN ('pacifica','avantis','domfi','etoro','decibel','dango','gmx','ostium','monad','phoenix','hyperliquid','risex','nado','ondo','hibachi','hotstuff','grvt','katana','gmtrade','flash','lighter','rhlighter','bulk') THEN dex ELSE 'pacifica' END || '"]'
             END,
             CASE WHEN mode IN ('individual','dex_vs_dex') THEN mode ELSE 'individual' END,
             COALESCE(team_score_by, 'volume_usd'),
@@ -4246,6 +4246,7 @@ const TOURNAMENT_CREDIT_DEXES = new Set([
   'pacifica',
   'avantis',
   'domfi',
+  'etoro',
   'decibel',
   'gmx',
   'ostium',

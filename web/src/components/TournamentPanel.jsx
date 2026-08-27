@@ -23,6 +23,7 @@ const DEX_LABELS = {
   pacifica: 'Pacifica',
   avantis: 'Avantis',
   domfi: 'DomFi',
+  etoro: 'eToro',
   decibel: 'Decibel',
   gmx: 'GMX',
   monad: 'Perpl',

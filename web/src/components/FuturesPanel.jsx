@@ -6,6 +6,7 @@ import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { usePacifica } from '../hooks/usePacifica';
 import { useAvantis } from '../hooks/useAvantis';
 import { useDomfi } from '../hooks/useDomfi';
+import { useEtoro } from '../hooks/useEtoro';
 import { useDecibel } from '../hooks/useDecibel';
 import { useGmx } from '../hooks/useGmx';
 import { useMonad } from '../hooks/useMonad';
@@ -140,6 +141,7 @@ const HOTSTUFF_FEE_BUFFER_RATE = 0.0001;
 const DEX_ERROR_LABELS = {
   avantis: 'Avantis',
   domfi: 'DomFi',
+  etoro: 'eToro',
   decibel: 'Decibel',
   flash: 'Flash',
   gmtrade: 'GMTrade',
@@ -162,7 +164,7 @@ const DEX_ERROR_LABELS = {
   risex: 'RISEx',
   bulk: 'Bulk',
 };
-const OPEN_TPSL_NATIVE_ORDER_ATTACH_DEXES = new Set(['avantis', 'domfi', 'bulk', 'decibel', 'flash', 'gmx', 'hibachi', 'hotstuff', 'hyperliquid', 'katana', 'lighter', 'rhlighter', 'nado', 'ondo', 'ostium', 'pacifica']);
+const OPEN_TPSL_NATIVE_ORDER_ATTACH_DEXES = new Set(['avantis', 'domfi', 'etoro', 'bulk', 'decibel', 'flash', 'gmx', 'hibachi', 'hotstuff', 'hyperliquid', 'katana', 'lighter', 'rhlighter', 'nado', 'ondo', 'ostium', 'pacifica']);
 const OPEN_TPSL_NATIVE_LIMIT_ATTACH_DEXES = new Set([...OPEN_TPSL_NATIVE_ORDER_ATTACH_DEXES, 'grvt', 'leverup', 'phoenix']);
 const OPEN_TPSL_POST_MARKET_DEXES = new Set([
   'decibel',
@@ -3351,7 +3353,7 @@ const BottomPanel = memo(function BottomPanel({
     { id: 'positions', label: `Positions (${filteredPositions.length})` },
     { id: 'orders', label: `Orders (${filteredOrders.length})` },
     ...(dex === 'avantis' || dex === 'flash' ? [] : [{ id: 'history', label: 'History' }]),
-    ...(dex === 'avantis' || dex === 'domfi' || dex === 'flash' ? [] : [{ id: 'funding', label: 'Funding' }]),
+    ...(dex === 'avantis' || dex === 'domfi' || dex === 'etoro' || dex === 'flash' ? [] : [{ id: 'funding', label: 'Funding' }]),
   ];
 
   return (
@@ -3733,7 +3735,7 @@ const BottomPanel = memo(function BottomPanel({
             activeSymbol={activeSymbol}
           />
         )}
-        {bottomTab === 'funding' && dex !== 'avantis' && dex !== 'domfi' && dex !== 'flash' && (
+        {bottomTab === 'funding' && dex !== 'avantis' && dex !== 'domfi' && dex !== 'etoro' && dex !== 'flash' && (
           <FundingHistory
             walletAddr={walletAddr}
             accountAddr={historyAccountAddr}
@@ -3778,13 +3780,16 @@ function FuturesPanel() {
   // Per-account UI mode (basic/pro). NULL until the user picks on first
   // entry — we use that to gate the trading UI behind the selection screen.
   const { mode: futuresMode, needsSelection: needsModeSelection } = useFuturesMode();
-  const isBasic = futuresMode === 'basic';
+  // eToro leveraged/short orders require an explicit Stop Loss. The Basic
+  // wizard has no TP/SL step, so eToro always uses the Pro form where the
+  // required risk control is visible instead of inventing one for the user.
+  const isBasic = futuresMode === 'basic' && dex !== 'etoro';
   // In Basic mode the user only opens market trades from the wizard, so
   // limit/conditional Orders are not relevant. Hide that tab + redirect if
   // it's somehow active (e.g. Pro→Basic switch while Orders was selected).
   const visibleTabs = useMemo(() => TABS.filter((tab) => {
     if (isBasic && (tab.id === 'Orders' || tab.id === 'History' || tab.id === 'Funding')) return false;
-    if (tab.id === 'Funding' && (dex === 'avantis' || dex === 'domfi' || dex === 'flash')) return false;
+    if (tab.id === 'Funding' && (dex === 'avantis' || dex === 'domfi' || dex === 'etoro' || dex === 'flash')) return false;
     return true;
   }), [dex, isBasic]);
   const handleTabsWheel = useCallback((event) => {
@@ -3812,6 +3817,7 @@ function FuturesPanel() {
   const pacificaHook = usePacifica();
   const avantisHook = useAvantis();
   const domfiHook = useDomfi();
+  const etoroHook = useEtoro();
   const decibelHook = useDecibel();
   const gmxHook = useGmx();
   const monadHook = useMonad();
@@ -3840,6 +3846,8 @@ function FuturesPanel() {
     ? avantisHook
     : dex === 'domfi'
     ? domfiHook
+    : dex === 'etoro'
+    ? etoroHook
     : dex === 'decibel'
     ? decibelHook
     : dex === 'gmx'
@@ -3907,9 +3915,10 @@ function FuturesPanel() {
     lighterVenueLabel, lighterReferralRequired, lighterIntegratorConfigured, lighterConfig,
     lighterCredentials, detectAccount: detectLighterAccount,
     registerBuilderCode,
-    fetchTradeHistory, fetchFundingHistory,
+    fetchTradeHistory, fetchFundingHistory, fetchCandles,
     regionAccess, retryRegionAccess,
     refresh: refreshTrading,
+    etoroCredentials,
   } = trading;
   const isLighterDex = dex === 'lighter' || dex === 'rhlighter';
   const openedSortedPositions = useOpenedSortedPositions(positions);
@@ -4158,7 +4167,7 @@ function FuturesPanel() {
     // under a wallet they only ever used to peek at the orderbook.
     // The legitimate use case (connecting an Avantis wallet from the
     // FuturesPanel) is still allowed: dex === 'avantis'.
-    if (dex !== 'avantis' && dex !== 'domfi' && dex !== 'gmx' && dex !== 'ostium' && dex !== 'monad' && dex !== 'hyperliquid' && dex !== 'risex' && dex !== 'nado' && dex !== 'ondo' && dex !== 'leverup' && dex !== 'aster' && dex !== 'hibachi' && dex !== 'hotstuff' && dex !== 'grvt') {
+    if (dex !== 'avantis' && dex !== 'domfi' && dex !== 'etoro' && dex !== 'gmx' && dex !== 'ostium' && dex !== 'monad' && dex !== 'hyperliquid' && dex !== 'risex' && dex !== 'nado' && dex !== 'ondo' && dex !== 'leverup' && dex !== 'aster' && dex !== 'hibachi' && dex !== 'hotstuff' && dex !== 'grvt') {
       console.warn('[futures] Ignoring EVM connect: active DEX is', dex);
       return;
     }
@@ -4330,6 +4339,9 @@ function FuturesPanel() {
   const [grvtApiKeyInput, setGrvtApiKeyInput] = useState('');
   const [katanaApiKeyInput, setKatanaApiKeyInput] = useState('');
   const [katanaApiSecretInput, setKatanaApiSecretInput] = useState('');
+  const [etoroApiKeyInput, setEtoroApiKeyInput] = useState('');
+  const [etoroUserKeyInput, setEtoroUserKeyInput] = useState('');
+  const [etoroEnvironmentInput, setEtoroEnvironmentInput] = useState('demo');
   const [lighterAccountIndexInput, setLighterAccountIndexInput] = useState('');
   const [lighterApiKeyIndexInput, setLighterApiKeyIndexInput] = useState('');
   const [lighterApiPrivateKeyInput, setLighterApiPrivateKeyInput] = useState('');
@@ -4995,7 +5007,12 @@ function FuturesPanel() {
   const levTimerRef = useRef(null);
   const handleLeverageChange = useCallback((val) => {
     clearTradeFeedback();
-    const v = Math.min(Number(val), maxLev);
+    let v = Math.min(Number(val), maxLev);
+    if (dex === 'etoro' && Array.isArray(currentMarket?.leverage_values) && currentMarket.leverage_values.length) {
+      v = currentMarket.leverage_values.reduce((closest, option) => (
+        Math.abs(Number(option) - v) < Math.abs(Number(closest) - v) ? Number(option) : Number(closest)
+      ), Number(currentMarket.leverage_values[0]));
+    }
     setLeverage(v);
     // Avantis + GMX take leverage per-trade (passed in placeOrder call),
     // so no leverage tx ever runs from the slider. Skip cleanly.
@@ -5003,7 +5020,7 @@ function FuturesPanel() {
       setLeverageApi(symbol, v);
       return;
     }
-    if (dex === 'avantis' || dex === 'domfi' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'leverup' || dex === 'aster' || dex === 'grvt' || dex === 'flash') return;
+    if (dex === 'avantis' || dex === 'domfi' || dex === 'etoro' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'leverup' || dex === 'aster' || dex === 'grvt' || dex === 'flash') return;
     // Pacifica leverage updates should use the agent key. If the user has
     // not enabled it yet, keep this UI-only and flush after auto-bind on
     // trade submit.
@@ -5024,7 +5041,7 @@ function FuturesPanel() {
         setLeverageApi(symbol, v);
       }
     }, 800);
-  }, [clearTradeFeedback, maxLev, symbol, setLeverageApi, dex, positions, pacAgent]);
+  }, [clearTradeFeedback, currentMarket, maxLev, symbol, setLeverageApi, dex, positions, pacAgent]);
 
   // Synchronous double-click guard. React's `loading` state is async, so a
   // second click can land between dispatch-1 and React committing the button's
@@ -5072,9 +5089,13 @@ function FuturesPanel() {
       const phoenixMarginPrice = dex === 'phoenix'
         ? (Number(currentPrice) > 0 ? Number(currentPrice) : tradePrice)
         : tradePrice;
-      const isCollateralDex = dex === 'avantis' || dex === 'domfi' || dex === 'bulk' || dex === 'decibel' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'leverup' || dex === 'aster' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'gmtrade' || dex === 'flash';
+      const isCollateralDex = dex === 'avantis' || dex === 'domfi' || dex === 'etoro' || dex === 'bulk' || dex === 'decibel' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'leverup' || dex === 'aster' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'gmtrade' || dex === 'flash';
       const attachedTpsl = resolveOpenTpslForSide(side);
       if (!attachedTpsl?.ok) return;
+      if (dex === 'etoro' && (Number(leverage) > 1 || side === 'ask') && !(Number(attachedTpsl?.options?.stopLoss) > 0)) {
+        setLocalAlert('eToro requires a Stop Loss for leveraged or short positions. Enable TP/SL and enter a Stop Loss price.');
+        return;
+      }
       if (attachedTpsl?.hasTpsl && orderType === 'limit' && !OPEN_TPSL_NATIVE_LIMIT_ATTACH_DEXES.has(dex)) {
         setLocalAlert(`${dexErrorLabel(dex)} can attach TP/SL after a limit order fills. For now attach TP/SL directly only works for supported exchanges.`);
         return;
@@ -5552,7 +5573,7 @@ function FuturesPanel() {
           </>
         )}
         <div style={{...S.symbolBarActions, ...(compactSymbolBar ? S.symbolBarActionsCompact : {}), gap: compactSymbolBar ? 4 : 8}}>
-          {dex === 'avantis' || dex === 'domfi' || dex === 'gmx' || dex === 'ostium' || dex === 'decibel' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'leverup' || dex === 'aster' || dex === 'hibachi' || dex === 'katana' || dex === 'gmtrade' || dex === 'flash' || isLighterDex || dex === 'bulk' ? (
+          {dex === 'avantis' || dex === 'domfi' || dex === 'etoro' || dex === 'gmx' || dex === 'ostium' || dex === 'decibel' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'leverup' || dex === 'aster' || dex === 'hibachi' || dex === 'katana' || dex === 'gmtrade' || dex === 'flash' || isLighterDex || dex === 'bulk' ? (
             // Read-only badge for venues where the production margin mode is
             // not user-toggleable in our integration.
             <div
@@ -5561,6 +5582,8 @@ function FuturesPanel() {
                 ? 'GMX V2 uses isolated margin per position (no cross mode)'
                 : dex === 'ostium'
                 ? 'Ostium uses isolated collateral per trade in this integration'
+                : dex === 'etoro'
+                ? 'eToro CFD margin and leverage are defined per position by account eligibility'
                 : dex === 'decibel'
                 ? 'Decibel currently uses cross margin; isolated margin is not available yet'
                 : dex === 'monad'
@@ -5588,6 +5611,8 @@ function FuturesPanel() {
               <span style={{color: ((dex === 'decibel' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'hibachi' || dex === 'katana' || isLighterDex || dex === 'bulk') ? 'var(--terminal-text-control)' : 'var(--terminal-warning)'), fontWeight: 750}}>
                 {dex === 'gmtrade'
                   ? 'Isolated'
+                  : dex === 'etoro'
+                  ? 'Per position'
                   : (dex === 'decibel' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'hibachi' || dex === 'katana')
                   ? 'Cross'
                   : isLighterDex || dex === 'bulk'
@@ -6386,6 +6411,29 @@ function FuturesPanel() {
                   letterSpacing: '0.5px', marginTop: 4,
                 }}>
                   <span>KATANA PERPS - KATANA</span>
+                </div>
+              </>
+            ) : dex === 'etoro' ? (
+              <>
+                <div style={{
+                  color: 'var(--terminal-text)', fontSize: 18, fontWeight: 700,
+                  textAlign: 'center', letterSpacing: '0.5px',
+                }}>Connect your Clash login</div>
+                <div style={{
+                  color: 'var(--terminal-text-muted)', fontSize: 12, fontWeight: 600,
+                  textAlign: 'center', maxWidth: 300, lineHeight: 1.4,
+                }}>
+                  Your EVM login identifies the Clash player. On the next screen you connect a separate eToro Real or Demo API account.
+                </div>
+                {renderPrivyEmailButton('#6FCF17', '#4A9E12')}
+                <button
+                  style={{...terminalButton(privyEnabled ? 'var(--terminal-text-muted)' : '#6FCF17', privyEnabled ? 'var(--terminal-text-secondary)' : '#4A9E12'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                  onClick={() => setEvmModalOpen(true)}
+                >
+                  <span>CONNECT EVM LOGIN WALLET</span>
+                </button>
+                <div style={{display: 'flex', alignItems: 'center', gap: 4, color: '#4A9E12', fontSize: 11, fontWeight: 600, letterSpacing: '0.5px', marginTop: 4}}>
+                  <span>ETORO API ACCOUNT · REAL / DEMO</span>
                 </div>
               </>
             ) : dex === 'hibachi' ? (
@@ -7401,6 +7449,156 @@ function FuturesPanel() {
       </>
     );
   }
+  // ==================== ETORO API KEY GATE ====================
+  if (dex === 'etoro' && hasWallet && setupVerified !== true) {
+    const isRunning = referralLinking || loading;
+    const canSave = etoroApiKeyInput.trim().length > 0
+      && etoroUserKeyInput.trim().length > 0
+      && (etoroEnvironmentInput === 'demo' || etoroEnvironmentInput === 'real')
+      && !isRunning;
+    const credentialState = isRunning ? 'active' : 'pending';
+    return (
+      <>
+        <style>{animCSS}</style>
+        <style>{`@keyframes act-spin{to{transform:rotate(360deg)}}`}</style>
+        <div ref={panelRef} className={`futures-terminal-shell ${fullscreen ? 'futures-fullscreen futures-terminal-shell--fullscreen' : 'futures-terminal-shell--compact'}`} style={{
+          ...(fullscreen ? S.containerFull : S.container),
+          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '1px solid var(--terminal-border)' } : {}),
+          transform: (fullscreen || isMobile) ? undefined : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
+          transition: isDragging ? 'none' : 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
+        }}>
+          <div style={S.header} onPointerDown={handlePointerDown}>
+            <span style={S.headerTitle}>eToro setup</span>
+            <button type="button" data-nodrag onClick={handleClose} style={S.closeBtn} aria-label="Close eToro setup">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
+          <div style={{...S.body, alignItems: 'stretch', overflowY: 'auto', overflowX: 'hidden', padding: 0, background: 'var(--terminal-surface)'}}>
+            <div style={hlGateStyles.frame}>
+              <div style={hlGateStyles.titleBlock}>
+                <span style={hlGateStyles.kicker}>{isRunning ? 'VERIFYING ETORO' : 'API ACCESS REQUIRED'}</span>
+                <span style={hlGateStyles.title}>Connect your eToro account</span>
+                <span style={hlGateStyles.subtitle}>
+                  Create a Read/Write API key in eToro, then paste the API key and user key. Start with Demo unless you intentionally want real-money orders.
+                </span>
+              </div>
+
+              <ol style={hlGateStyles.stepList}>
+                <li style={hlGateStyles.stepItem}>
+                  <span style={{ ...hlGateStyles.stepBubble, ...hlGateStyles.stepBubble_done }}>OK</span>
+                  <span style={hlGateStyles.stepText}>
+                    <span style={{ ...hlGateStyles.stepLabel, ...hlGateStyles.stepLabel_done }}>Clash account connected</span>
+                    <span style={hlGateStyles.stepHint}>Your EVM login identifies the Clash player; it never authorizes eToro withdrawals.</span>
+                  </span>
+                </li>
+                <li style={hlGateStyles.stepItem}>
+                  <span style={{ ...hlGateStyles.stepBubble, ...hlGateStyles[`stepBubble_${credentialState}`] }}>
+                    {credentialState === 'active' ? <span style={hlGateStyles.spinner} /> : 2}
+                  </span>
+                  <span style={hlGateStyles.stepText}>
+                    <span style={{ ...hlGateStyles.stepLabel, ...hlGateStyles[`stepLabel_${credentialState}`] }}>Verify Real or Demo API keys</span>
+                    <span style={hlGateStyles.stepHint}>Clash checks portfolio, eligible CFD/margin instruments, positions, and orders.</span>
+                  </span>
+                </li>
+                <li style={hlGateStyles.stepItem}>
+                  <span style={{ ...hlGateStyles.stepBubble, ...hlGateStyles.stepBubble_pending }}>3</span>
+                  <span style={hlGateStyles.stepText}>
+                    <span style={{ ...hlGateStyles.stepLabel, ...hlGateStyles.stepLabel_pending }}>Unlock eToro trading</span>
+                    <span style={hlGateStyles.stepHint}>Only eligibility-approved direction, leverage, and settlement combinations are submitted.</span>
+                  </span>
+                </li>
+              </ol>
+
+              <div style={{display: 'flex', flexDirection: 'column', gap: 10, background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 12, padding: 12}}>
+                <label style={{display: 'flex', flexDirection: 'column', gap: 5}}>
+                  <span style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text)', textTransform: 'uppercase'}}>Environment</span>
+                  <select
+                    value={etoroEnvironmentInput}
+                    onChange={(event) => setEtoroEnvironmentInput(event.target.value)}
+                    disabled={isRunning}
+                    style={{...S.input, padding: '10px 12px', fontSize: 14}}
+                  >
+                    <option value="demo">Demo — test funds</option>
+                    <option value="real">Real — real funds</option>
+                  </select>
+                </label>
+                <label style={{display: 'flex', flexDirection: 'column', gap: 5}}>
+                  <span style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text)', textTransform: 'uppercase'}}>eToro API key</span>
+                  <input
+                    type="password"
+                    value={etoroApiKeyInput}
+                    onChange={(event) => setEtoroApiKeyInput(event.target.value)}
+                    placeholder="Paste x-api-key"
+                    autoComplete="new-password"
+                    disabled={isRunning}
+                    style={{...S.input, padding: '10px 12px', fontSize: 14}}
+                  />
+                </label>
+                <label style={{display: 'flex', flexDirection: 'column', gap: 5}}>
+                  <span style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text)', textTransform: 'uppercase'}}>eToro user key</span>
+                  <input
+                    type="password"
+                    value={etoroUserKeyInput}
+                    onChange={(event) => setEtoroUserKeyInput(event.target.value)}
+                    placeholder="Paste x-user-key"
+                    autoComplete="new-password"
+                    disabled={isRunning}
+                    style={{...S.input, padding: '10px 12px', fontSize: 14}}
+                  />
+                </label>
+                <div style={{fontSize: 11, fontWeight: 600, lineHeight: 1.4, color: etoroEnvironmentInput === 'real' ? 'var(--terminal-short-strong)' : 'var(--terminal-text-faint)'}}>
+                  {etoroEnvironmentInput === 'real'
+                    ? 'REAL mode sends real-money orders. Confirm the environment before saving.'
+                    : 'Demo mode uses the eToro virtual portfolio and cannot place real-money orders.'}
+                </div>
+              </div>
+
+              <button
+                type="button"
+                style={{ ...hlGateStyles.primaryBtn, ...(!canSave ? hlGateStyles.primaryBtnBusy : null) }}
+                disabled={!canSave}
+                onClick={async () => {
+                  if (!activate) return;
+                  setReferralLinking(true);
+                  setLocalAlert('');
+                  try {
+                    const result = await activate({
+                      apiKey: etoroApiKeyInput.trim(),
+                      userKey: etoroUserKeyInput.trim(),
+                      environment: etoroEnvironmentInput,
+                    });
+                    if (result?.error) setLocalAlert(result.error);
+                    else {
+                      setEtoroApiKeyInput('');
+                      setEtoroUserKeyInput('');
+                      setSuccessMsg(`eToro ${etoroEnvironmentInput === 'real' ? 'Real' : 'Demo'} account connected.`);
+                    }
+                  } finally {
+                    setReferralLinking(false);
+                  }
+                }}
+              >
+                {isRunning ? 'VERIFYING ETORO...' : `CONNECT ${etoroEnvironmentInput.toUpperCase()} ACCOUNT`}
+              </button>
+              <button
+                type="button"
+                style={hlGateStyles.secondaryBtn}
+                onClick={() => window.open('https://builders.etoro.com/', '_blank', 'noopener,noreferrer')}
+              >
+                OPEN ETORO BUILDERS
+              </button>
+
+              {(error || localAlert) && <div style={hlGateStyles.errorBox}>{humanizeTradeError(error || localAlert, dex)}</div>}
+              <div style={{fontSize: 11, lineHeight: 1.4, color: 'var(--terminal-text-faint)'}}>
+                Keys are encrypted in this browser. Clash servers use them only while proxying your explicit eToro requests and do not store them.
+              </div>
+            </div>
+          </div>
+        </div>
+      </>
+    );
+  }
+
   // ==================== LIGHTER API KEY GATE ====================
   if (isLighterDex && hasWallet && setupVerified !== true) {
     const isRunning = referralLinking || loading;
@@ -9710,7 +9908,7 @@ function FuturesPanel() {
               </div>
             ) : (
               <div className="futures-terminal-chart" role="tabpanel" style={{flex: '0 0 clamp(220px, 38vh, 360px)', position: 'relative', minHeight: 180}}>
-                <TradingViewWidget symbol={symbol} pythSymbol={currentMarket?.pyth_symbol} positions={positions} orders={displayOrders} currentPrice={currentPrice} chartOverlay={explainBadge} dex={dex} />
+                <TradingViewWidget symbol={symbol} pythSymbol={currentMarket?.pyth_symbol} positions={positions} orders={displayOrders} currentPrice={currentPrice} chartOverlay={explainBadge} dex={dex} fetchCandles={fetchCandles} />
                 {fundingBadge}
               </div>
             )}
@@ -9765,7 +9963,7 @@ function FuturesPanel() {
           {/* Top: chart + orderbook + controls */}
           <div className="futures-terminal-workspace__primary" style={{display: 'flex', flex: '1 1 auto', minHeight: 0, overflow: 'hidden'}}>
             <div className="futures-terminal-chart" style={{flex: `0 0 ${chartPct}%`, maxWidth: `${chartPct}%`, minHeight: 0, overflow: 'hidden', position: 'relative'}}>
-              <TradingViewWidget symbol={symbol} pythSymbol={currentMarket?.pyth_symbol} positions={positions} orders={displayOrders} currentPrice={currentPrice} chartOverlay={explainBadge} dex={dex} />
+              <TradingViewWidget symbol={symbol} pythSymbol={currentMarket?.pyth_symbol} positions={positions} orders={displayOrders} currentPrice={currentPrice} chartOverlay={explainBadge} dex={dex} fetchCandles={fetchCandles} />
             </div>
             {supportsOrderBook && (
               <>
@@ -9838,7 +10036,7 @@ function FuturesPanel() {
       <>
         {renderSymbolBar()}
         <div className="futures-terminal-chart futures-terminal-chart--compact" style={{...S.chartArea, position: 'relative'}}>
-          <TradingViewWidget symbol={symbol} pythSymbol={currentMarket?.pyth_symbol} positions={positions} orders={displayOrders} currentPrice={currentPrice} chartOverlay={explainBadge} dex={dex} />
+          <TradingViewWidget symbol={symbol} pythSymbol={currentMarket?.pyth_symbol} positions={positions} orders={displayOrders} currentPrice={currentPrice} chartOverlay={explainBadge} dex={dex} fetchCandles={fetchCandles} />
           {fundingBadge}
         </div>
         {renderTradeControls()}
@@ -10446,6 +10644,8 @@ function FuturesPanel() {
     const showWalletBalanceCard = dex !== 'hibachi';
     const walletBalanceLabel = dex === 'hyperliquid'
       ? 'Arbitrum Wallet USDC'
+      : dex === 'etoro'
+      ? `eToro ${String(account?.environment || etoroCredentials?.environment || 'Demo').toUpperCase()} available USD`
       : dex === 'leverup'
       ? 'Monad Wallet USDC'
       : dex === 'hotstuff'
@@ -10550,6 +10750,48 @@ function FuturesPanel() {
             </div>
             <div style={{fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-faint)', lineHeight: 1.35}}>
               Stored encrypted in this browser. Balance, margin, positions, and orders are read from Hibachi.
+            </div>
+          </div>
+        )}
+
+        {dex === 'etoro' && setupVerified === true && (
+          <div style={S.fullCard}>
+            <div style={S.row}>
+              <span style={{...S.label, color: '#5CBF2A'}}>eToro API</span>
+              <button
+                style={{
+                  ...S.btnSmall,
+                  padding: '6px 10px',
+                  fontSize: 11,
+                  background: 'rgba(111,207,23,0.12)',
+                  color: '#4A9E12',
+                  border: '1px solid #6FCF17',
+                  whiteSpace: 'nowrap',
+                }}
+                onClick={async () => {
+                  const environment = account?.environment || etoroCredentials?.environment || 'demo';
+                  await disconnect?.();
+                  setEtoroEnvironmentInput(environment);
+                  setEtoroApiKeyInput('');
+                  setEtoroUserKeyInput('');
+                  setLocalAlert('Paste the replacement eToro API key and user key.');
+                }}
+              >
+                CHANGE API
+              </button>
+            </div>
+            <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8}}>
+              <div style={{background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 10, padding: '8px 10px'}}>
+                <div style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text-faint)', textTransform: 'uppercase'}}>Environment</div>
+                <div style={{fontSize: 13, fontWeight: 800, color: account?.environment === 'real' ? 'var(--terminal-short-strong)' : 'var(--terminal-long)'}}>{String(account?.environment || etoroCredentials?.environment || 'demo').toUpperCase()}</div>
+              </div>
+              <div style={{background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 10, padding: '8px 10px'}}>
+                <div style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text-faint)', textTransform: 'uppercase'}}>Account</div>
+                <div style={{fontSize: 13, fontWeight: 700, color: 'var(--terminal-text)', fontFamily: 'monospace'}}>{String(account?.account_id || '').slice(0, 18) || 'Connected'}</div>
+              </div>
+            </div>
+            <div style={{fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-faint)', lineHeight: 1.35}}>
+              Credentials are encrypted in this browser. eToro CFD/margin eligibility controls available direction and leverage.
             </div>
           </div>
         )}
@@ -11366,7 +11608,7 @@ function FuturesPanel() {
         })() : (
           <div style={S.fullCard}>
             <div style={S.row}>
-              <span style={{...S.label, color: 'var(--terminal-long)'}}>{dex === 'monad' ? 'Deposit AUSD' : dex === 'nado' ? `Deposit ${selectedNadoDepositAsset.label}` : dex === 'hotstuff' ? 'Hotstuff funding' : dex === 'grvt' ? 'Open GRVT Deposit' : dex === 'katana' ? 'Open Katana Deposit' : 'Deposit USDC'}</span>
+              <span style={{...S.label, color: 'var(--terminal-long)'}}>{dex === 'etoro' ? 'eToro funding' : dex === 'monad' ? 'Deposit AUSD' : dex === 'nado' ? `Deposit ${selectedNadoDepositAsset.label}` : dex === 'hotstuff' ? 'Hotstuff funding' : dex === 'grvt' ? 'Open GRVT Deposit' : dex === 'katana' ? 'Open Katana Deposit' : 'Deposit USDC'}</span>
               {dex === 'risex'
                 ? (
                   <span style={{...S.detail, color: 'var(--terminal-long)'}}>
@@ -11379,7 +11621,29 @@ function FuturesPanel() {
                 ? <span style={S.detail}>{selectedOndoDepositNetwork?.label || 'Ethereum'} wallet: {ondoWalletValue} USDC</span>
                 : walletUsdc !== null && <span style={S.detail}>Wallet: ${walletUsdc.toFixed(2)} {dex === 'monad' ? 'AUSD' : 'USDC'}</span>}
             </div>
-            {dex === 'hotstuff' ? (
+            {dex === 'etoro' ? (
+              <div style={{display: 'flex', flexDirection: 'column', gap: 8}}>
+                <div style={{
+                  background: 'rgba(111,207,23,0.08)',
+                  border: '1px solid rgba(111,207,23,0.28)',
+                  borderRadius: 8,
+                  padding: '8px 10px',
+                  fontSize: 11,
+                  lineHeight: 1.4,
+                  color: 'var(--terminal-text)',
+                  fontWeight: 750,
+                }}>
+                  Deposits and withdrawals stay in your eToro account. Clash opens the official portfolio so you can manage funds there.
+                </div>
+                <button
+                  style={{...S.depositBtn, width: '100%', whiteSpace: 'nowrap', padding: '9px 10px'}}
+                  onClick={() => depositToPacifica?.('')}
+                  disabled={loading}
+                >
+                  {loading ? '...' : 'Open eToro Portfolio'}
+                </button>
+              </div>
+            ) : dex === 'hotstuff' ? (
               <div style={{display: 'flex', flexDirection: 'column', gap: 8}}>
                 <div style={{
                   background: 'rgba(239,68,68,0.08)',
@@ -11596,7 +11860,9 @@ function FuturesPanel() {
             </div>
             )}
             <span style={{fontSize: 11, color: 'var(--terminal-text-muted)', fontWeight: 700}}>
-              {dex === 'decibel'
+              {dex === 'etoro'
+                ? 'Clash never moves eToro funds. Use the official eToro portfolio for deposits and withdrawals.'
+                : dex === 'decibel'
                 ? 'Sends USDC from your Aptos wallet to your Decibel trading subaccount. Needs a small APT float for gas.'
                 : dex === 'monad'
                 ? 'Sends AUSD from your Monad wallet to your Perpl account. Needs a small MON float for gas.'
@@ -11633,7 +11899,7 @@ function FuturesPanel() {
             Pacifica shows when there's something to take out. Decibel and
             RISEx always show the action from day one (the button disables at
             available=0 instead of hiding the whole card). */}
-        {dex !== 'avantis' && dex !== 'domfi' && dex !== 'gmx' && dex !== 'ostium' && dex !== 'hibachi' && dex !== 'katana' && dex !== 'gmtrade' && dex !== 'hotstuff' && (dex === 'decibel' || dex === 'risex' || dex === 'hyperliquid' || dex === 'nado' || dex === 'ondo' || dex === 'flash' || available > 0) && (
+        {dex !== 'avantis' && dex !== 'domfi' && dex !== 'etoro' && dex !== 'gmx' && dex !== 'ostium' && dex !== 'hibachi' && dex !== 'katana' && dex !== 'gmtrade' && dex !== 'hotstuff' && (dex === 'decibel' || dex === 'risex' || dex === 'hyperliquid' || dex === 'nado' || dex === 'ondo' || dex === 'flash' || available > 0) && (
           <div style={S.fullCard}>
             <div style={S.row}>
               <span style={{...S.label, color: '#9945FF'}}>{dex === 'monad' ? 'Withdraw AUSD' : dex === 'nado' ? 'Withdraw USDt0' : 'Withdraw USDC'}</span>

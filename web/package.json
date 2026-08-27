@@ -15,6 +15,7 @@
     "test:nado-referral": "node test-nado-referral.mjs",
     "test:decibel-referral": "node test-decibel-referral.mjs",
     "test:domfi": "node test-domfi-client.mjs",
+    "test:etoro": "node test-etoro-client.mjs",
     "test:nado-one-tap": "node test-nado-one-tap.mjs",
     "test:ondo": "node test-ondo-client.mjs",
     "test:leverup-v2": "node test-leverup-v2.mjs",

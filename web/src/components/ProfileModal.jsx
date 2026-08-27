@@ -6,6 +6,7 @@ import { usePlayer, useResources, useBuildingDefs, useSend } from '../hooks/useG
 import { usePacifica } from '../hooks/usePacifica';
 import { useAvantis } from '../hooks/useAvantis';
 import { useDomfi } from '../hooks/useDomfi';
+import { useEtoro } from '../hooks/useEtoro';
 import { useDecibel } from '../hooks/useDecibel';
 import { useGmx } from '../hooks/useGmx';
 import { useMonad } from '../hooks/useMonad';
@@ -91,6 +92,7 @@ function ProfileModal({ onClose }) {
   const pacificaHook = usePacifica();
   const avantisHook = useAvantis();
   const domfiHook = useDomfi();
+  const etoroHook = useEtoro();
   const decibelHook = useDecibel();
   const gmxHook = useGmx();
   const monadHook = useMonad();
@@ -113,6 +115,8 @@ function ProfileModal({ onClose }) {
     ? avantisHook
     : dex === 'domfi'
     ? domfiHook
+    : dex === 'etoro'
+    ? etoroHook
     : dex === 'decibel'
     ? decibelHook
     : dex === 'gmx'
@@ -193,7 +197,7 @@ function ProfileModal({ onClose }) {
   // though the Avantis account is registered with an EVM wallet. Resolve
   // to the chain-correct address for the active DEX.
   const adapterAddr = (connected && publicKey) ? publicKey.toBase58() : null;
-  const liveWallet = (dex === 'avantis' || dex === 'domfi' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'leverup' || dex === 'aster' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'lighter' || dex === 'rhlighter')
+  const liveWallet = (dex === 'avantis' || dex === 'domfi' || dex === 'etoro' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'leverup' || dex === 'aster' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'lighter' || dex === 'rhlighter')
     ? (walletAddr || null)            // EVM from useAvantis/useGmx/useMonad
     : dex === 'decibel'
     ? (walletAddr || null)            // Aptos from useDecibel
@@ -202,7 +206,7 @@ function ProfileModal({ onClose }) {
     : (adapterAddr || walletAddr || null); // Solana adapter / Privy
   const linkedWallet = player?.wallet || null;
   const activeWallet = liveWallet || linkedWallet;
-  const walletSource = (dex === 'avantis' || dex === 'domfi' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'leverup' || dex === 'aster' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'lighter' || dex === 'rhlighter')
+  const walletSource = (dex === 'avantis' || dex === 'domfi' || dex === 'etoro' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'leverup' || dex === 'aster' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'lighter' || dex === 'rhlighter')
     ? (liveWallet ? 'evm' : null)
     : dex === 'decibel'
     ? (liveWallet ? 'aptos' : null)
@@ -591,6 +595,13 @@ function ProfileModal({ onClose }) {
 
   const credentialDexes = useMemo(() => ([
     {
+      id: 'etoro',
+      label: 'eToro',
+      details: 'API key, user key, Real/Demo',
+      hook: etoroHook,
+      walletLabel: 'eToro API account',
+    },
+    {
       id: 'hibachi',
       label: 'Hibachi',
       details: 'API key, account id, private key',
@@ -632,7 +643,7 @@ function ProfileModal({ onClose }) {
       hook: rhLighterHook,
       walletLabel: 'EVM wallet',
     },
-  ]), [grvtHook, hibachiHook, hotstuffHook, katanaHook, lighterHook, rhLighterHook]);
+  ]), [etoroHook, grvtHook, hibachiHook, hotstuffHook, katanaHook, lighterHook, rhLighterHook]);
 
   const switchToCredentialDex = useCallback((dexId) => {
     setDex(dexId);
@@ -653,6 +664,15 @@ function ProfileModal({ onClose }) {
       const privateKey = window.prompt('Hibachi API private key', '');
       if (privateKey == null) return null;
       return { apiKey, accountId, privateKey };
+    }
+    if (dexId === 'etoro') {
+      const environment = window.prompt('eToro environment: demo or real', 'demo');
+      if (environment == null) return null;
+      const apiKey = window.prompt('eToro API key', '');
+      if (apiKey == null) return null;
+      const userKey = window.prompt('eToro user key', '');
+      if (userKey == null) return null;
+      return { apiKey, userKey, environment };
     }
     if (dexId === 'grvt') {
       const apiKey = window.prompt('GRVT API key', '');
@@ -1108,6 +1128,11 @@ function ProfileModal({ onClose }) {
               style={uiButton('primary', { width: '100%', minHeight: 44, padding: '12px 16px' })}
               onClick={() => setEvmModalOpen(true)}
             >CONNECT BASE WALLET</button>
+          ) : dex === 'etoro' ? (
+            <button
+              style={uiButton('primary', { width: '100%', minHeight: 44, padding: '12px 16px' })}
+              onClick={() => setEvmModalOpen(true)}
+            >CONNECT CLASH LOGIN WALLET</button>
           ) : dex === 'gmx' ? (
             <button
               style={uiButton('primary', { width: '100%', minHeight: 44, padding: '12px 16px' })}
@@ -1204,7 +1229,7 @@ function ProfileModal({ onClose }) {
                 <button
                   style={S.walletRepairBtn}
                   onClick={() => {
-                    if (dex === 'avantis' || dex === 'domfi' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'leverup' || dex === 'aster' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'lighter' || dex === 'rhlighter') setEvmModalOpen(true);
+                    if (dex === 'avantis' || dex === 'domfi' || dex === 'etoro' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'leverup' || dex === 'aster' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'lighter' || dex === 'rhlighter') setEvmModalOpen(true);
                     else if (dex === 'decibel') aptosConnect?.();
                     else openSolanaConnect();
                   }}

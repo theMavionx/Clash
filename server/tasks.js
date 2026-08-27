@@ -98,6 +98,7 @@ const TASK_START_TRADE_GRACE_MS = Math.max(0, Number(process.env.TASK_START_TRAD
 const FUTURES_TASK_DEXES = new Set([
   'avantis',
   'domfi',
+  'etoro',
   'decibel',
   'gmx',
   'ostium',
@@ -544,6 +545,7 @@ function walletMatchesDex(dex, wallet) {
   if (
     dex === 'avantis' ||
     dex === 'domfi' ||
+    dex === 'etoro' ||
     dex === 'gmx' ||
     dex === 'ostium' ||
     dex === 'monad' ||

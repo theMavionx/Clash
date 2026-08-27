@@ -1,5 +1,5 @@
 export const EVM_AUTH_DEX_IDS = Object.freeze([
-  'avantis', 'domfi', 'gmx', 'ostium', 'monad', 'hyperliquid', 'risex', 'nado',
+  'avantis', 'domfi', 'etoro', 'gmx', 'ostium', 'monad', 'hyperliquid', 'risex', 'nado',
   'ondo', 'leverup', 'aster', 'hibachi', 'hotstuff', 'grvt', 'katana', 'lighter', 'rhlighter',
 ]);
 

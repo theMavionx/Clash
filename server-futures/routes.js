@@ -35,6 +35,7 @@ const rhLighter = require('./rh-lighter');
 const bulk = require('./bulk');
 const ostium = require('./ostium');
 const domfi = require('./domfi');
+const etoro = require('./etoro');
 const { createPublicClient, decodeFunctionData, formatUnits, http } = require('viem');
 const { base } = require('viem/chains');
 const { Keypair, PublicKey, VersionedTransaction } = require('@solana/web3.js');
@@ -919,7 +920,7 @@ function auth(req, res, next) {
   // Trust the SERVER-stored dex, not whatever the client asks for. The client
   // header/query is still useful as a best-effort sanity check: if it explicitly
   // asks for the wrong dex, reject so the UI can prompt the user to /set-dex.
-  const SUPPORTED_DEXES = new Set(['avantis', 'domfi', 'pacifica', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'ondo', 'leverup', 'aster', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash', 'lighter', 'rhlighter', 'bulk']);
+  const SUPPORTED_DEXES = new Set(['avantis', 'domfi', 'etoro', 'pacifica', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'ondo', 'leverup', 'aster', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash', 'lighter', 'rhlighter', 'bulk']);
   const storedDex = SUPPORTED_DEXES.has(player.dex) ? player.dex : 'pacifica';
   const askedDex = (req.query.dex || req.headers['x-dex'] || storedDex).toLowerCase();
   const normalizedAsked = SUPPORTED_DEXES.has(askedDex) ? askedDex : 'pacifica';
@@ -1144,9 +1145,11 @@ function flashBodyWallet(req) {
 // Get or create custodial wallet for player
 router.post('/wallet', auth, (req, res) => {
   try {
-    if (req.dex === 'avantis' || req.dex === 'domfi' || req.dex === 'gmx' || req.dex === 'ostium' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'ondo' || req.dex === 'leverup' || req.dex === 'aster' || req.dex === 'hibachi' || req.dex === 'hotstuff' || req.dex === 'grvt' || req.dex === 'katana' || req.dex === 'gmtrade' || req.dex === 'flash' || req.dex === 'bulk') {
+    if (req.dex === 'avantis' || req.dex === 'domfi' || req.dex === 'etoro' || req.dex === 'gmx' || req.dex === 'ostium' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'ondo' || req.dex === 'leverup' || req.dex === 'aster' || req.dex === 'hibachi' || req.dex === 'hotstuff' || req.dex === 'grvt' || req.dex === 'katana' || req.dex === 'gmtrade' || req.dex === 'flash' || req.dex === 'bulk') {
       return res.status(410).json({
-        error: `${req.dex} is self-custody. Connect the chain wallet in the client instead.`,
+        error: req.dex === 'etoro'
+          ? 'eToro uses the dedicated browser API-account setup.'
+          : `${req.dex} is self-custody. Connect the chain wallet in the client instead.`,
       });
     }
     const isAvantis = req.dex === 'avantis';
@@ -1174,9 +1177,11 @@ router.post('/wallet', auth, (req, res) => {
 
 // Get wallet info (public key only — never expose secret)
 router.get('/wallet', auth, (req, res) => {
-  if (req.dex === 'avantis' || req.dex === 'domfi' || req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'ondo' || req.dex === 'leverup' || req.dex === 'aster' || req.dex === 'hibachi' || req.dex === 'hotstuff' || req.dex === 'grvt' || req.dex === 'katana' || req.dex === 'gmtrade' || req.dex === 'flash' || req.dex === 'ostium' || req.dex === 'bulk') {
+  if (req.dex === 'avantis' || req.dex === 'domfi' || req.dex === 'etoro' || req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'ondo' || req.dex === 'leverup' || req.dex === 'aster' || req.dex === 'hibachi' || req.dex === 'hotstuff' || req.dex === 'grvt' || req.dex === 'katana' || req.dex === 'gmtrade' || req.dex === 'flash' || req.dex === 'ostium' || req.dex === 'bulk') {
     return res.status(410).json({
-      error: `${req.dex} is self-custody. Connect the chain wallet in the client instead.`,
+      error: req.dex === 'etoro'
+        ? 'eToro uses the dedicated browser API-account setup.'
+        : `${req.dex} is self-custody. Connect the chain wallet in the client instead.`,
     });
   }
   const wallet = db.getWallet(req.playerId, req.dex);
@@ -1193,6 +1198,7 @@ router.get('/wallet', auth, (req, res) => {
 router.get('/account', async (req, res) => {
   const dex = (req.query.dex || 'pacifica').toLowerCase();
   try {
+    if (dex === 'etoro') return res.status(410).json({ error: 'Use the authenticated /etoro/account-snapshot endpoint.' });
     if (dex === 'avantis') {
       const address = String(req.query.address || '').trim();
       if (!/^0x[0-9a-fA-F]{40}$/.test(address)) {
@@ -2180,6 +2186,168 @@ router.post('/katana/orders/cancel', auth, async (req, res) => {
   });
 });
 
+function ensureEtoro(req, res) {
+  if (req.dex !== 'etoro') {
+    res.status(409).json({
+      error: `Account is registered for '${req.dex}'. Switch DEX to etoro before calling eToro endpoints.`,
+      stored_dex: req.dex,
+      requested_dex: 'etoro',
+    });
+    return false;
+  }
+  return true;
+}
+
+function etoroCredentialsFromReq(req) {
+  return etoro.credentials({
+    apiKey: req.headers['x-etoro-api-key'],
+    userKey: req.headers['x-etoro-user-key'],
+    environment: req.headers['x-etoro-environment'],
+  });
+}
+
+function requireEtoroCredentials(req, res) {
+  if (!ensureEtoro(req, res)) return null;
+  try {
+    return etoroCredentialsFromReq(req);
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message || 'eToro API credentials required' });
+    return null;
+  }
+}
+
+function etoroRouteError(res, error, fallback) {
+  const status = Number(error?.status) || 502;
+  const message = error?.message || fallback;
+  console.warn('[etoro route error]', {
+    status,
+    message,
+    retry_after: error?.retryAfter || null,
+  });
+  res.status(status).json({
+    error: message,
+    retry_after: error?.retryAfter || undefined,
+  });
+}
+
+router.get('/etoro/config', auth, (req, res) => {
+  if (!ensureEtoro(req, res)) return;
+  res.json({ ...etoro.configStatus(), credentials: etoro.credentialStatus(null) });
+});
+
+router.get('/etoro/credentials', auth, (req, res) => {
+  if (!ensureEtoro(req, res)) return;
+  res.status(410).json({
+    error: 'eToro credentials are stored only in encrypted browser storage.',
+    browser_storage_only: true,
+  });
+});
+
+router.post('/etoro/credentials/check', auth, async (req, res) => {
+  try {
+    const creds = requireEtoroCredentials(req, res);
+    if (!creds) return;
+    const snapshot = await etoro.getAccountSnapshot(creds, { force: true });
+    res.json({
+      ok: true,
+      credential_status: etoro.credentialStatus(creds),
+      ...snapshot,
+    });
+  } catch (error) {
+    etoroRouteError(res, error, 'Failed to verify eToro credentials');
+  }
+});
+
+router.get('/etoro/account-snapshot', auth, async (req, res) => {
+  try {
+    const creds = requireEtoroCredentials(req, res);
+    if (!creds) return;
+    res.json(await etoro.getAccountSnapshot(creds));
+  } catch (error) {
+    etoroRouteError(res, error, 'Failed to load eToro account');
+  }
+});
+
+router.get('/etoro/candles', auth, async (req, res) => {
+  try {
+    const creds = requireEtoroCredentials(req, res);
+    if (!creds) return;
+    res.json(await etoro.getCandles(creds, req.query.symbol, {
+      interval: req.query.interval || req.query.resolution,
+      limit: req.query.limit,
+    }));
+  } catch (error) {
+    etoroRouteError(res, error, 'Failed to load eToro candles');
+  }
+});
+
+router.get('/etoro/history', auth, async (req, res) => {
+  try {
+    const creds = requireEtoroCredentials(req, res);
+    if (!creds) return;
+    res.json(await etoro.getTradeHistory(creds, {
+      minDate: req.query.minDate || req.query.min_date,
+      page: req.query.page,
+      limit: req.query.limit,
+    }));
+  } catch (error) {
+    etoroRouteError(res, error, 'Failed to load eToro trade history');
+  }
+});
+
+router.post('/etoro/orders', auth, async (req, res) => {
+  try {
+    const creds = requireEtoroCredentials(req, res);
+    if (!creds) return;
+    res.json(await etoro.placeOrder(creds, req.body || {}));
+  } catch (error) {
+    etoroRouteError(res, error, 'Failed to place eToro order');
+  }
+});
+
+router.delete('/etoro/orders/:orderId', auth, async (req, res) => {
+  try {
+    const creds = requireEtoroCredentials(req, res);
+    if (!creds) return;
+    res.json(await etoro.cancelOrder(creds, req.params.orderId));
+  } catch (error) {
+    etoroRouteError(res, error, 'Failed to cancel eToro order');
+  }
+});
+
+router.post('/etoro/positions/:positionId/close', auth, async (req, res) => {
+  try {
+    const creds = requireEtoroCredentials(req, res);
+    if (!creds) return;
+    res.json(await etoro.closePosition(creds, req.params.positionId, req.body || {}));
+  } catch (error) {
+    etoroRouteError(res, error, 'Failed to close eToro position');
+  }
+});
+
+router.patch('/etoro/positions/:positionId', auth, async (req, res) => {
+  try {
+    const creds = requireEtoroCredentials(req, res);
+    if (!creds) return;
+    res.json(await etoro.updatePosition(creds, req.params.positionId, req.body || {}));
+  } catch (error) {
+    etoroRouteError(res, error, 'Failed to update eToro position');
+  }
+});
+
+router.post('/etoro/import-trades', auth, async (req, res) => {
+  try {
+    const creds = requireEtoroCredentials(req, res);
+    if (!creds) return;
+    res.json(await etoro.importTradesForPlayer(req.playerId, creds, {
+      limit: req.body?.limit || req.query?.limit,
+      minDate: req.body?.minDate || req.body?.min_date || req.query?.minDate,
+    }));
+  } catch (error) {
+    etoroRouteError(res, error, 'Failed to import eToro trades');
+  }
+});
+
 router.get('/decibel/positions', auth, async (req, res) => {
   try {
     const verified = await requireDecibelOwnerAndSubaccount(req, res);
@@ -2940,6 +3108,7 @@ router.get('/trades', async (req, res) => {
 router.get('/positions', async (req, res) => {
   const dex = (req.query.dex || 'pacifica').toLowerCase();
   try {
+    if (dex === 'etoro') return res.status(410).json({ error: 'Use the authenticated /etoro/account-snapshot endpoint.' });
     if (dex === 'avantis') {
       const address = String(req.query.address || '').trim();
       if (!/^0x[0-9a-fA-F]{40}$/.test(address)) {
@@ -3064,6 +3233,7 @@ router.get('/positions', async (req, res) => {
 router.get('/orders', async (req, res) => {
   const dex = (req.query.dex || 'pacifica').toLowerCase();
   try {
+    if (dex === 'etoro') return res.status(410).json({ error: 'Use the authenticated /etoro/account-snapshot endpoint.' });
     if (dex === 'avantis') {
       const address = String(req.query.address || '').trim();
       if (!/^0x[0-9a-fA-F]{40}$/.test(address)) {
@@ -3186,12 +3356,14 @@ router.get('/orders', async (req, res) => {
 
 // Reject self-custody writes on legacy Pacifica server endpoints. These
 // venues sign in the browser or use their dedicated route groups.
-const CLIENT_SIGNED_DEXES = new Set(['avantis', 'domfi', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'ondo', 'leverup', 'aster', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash', 'bulk']);
+const CLIENT_SIGNED_DEXES = new Set(['avantis', 'domfi', 'etoro', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'ondo', 'leverup', 'aster', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash', 'bulk']);
 
 function avantisMigratedGuard(req, res, next) {
   if (CLIENT_SIGNED_DEXES.has(req.dex)) {
     return res.status(410).json({
-      error: `${req.dex} is self-custody. Update your client - trades are signed in the user wallet.`,
+      error: req.dex === 'etoro'
+        ? 'eToro orders use the dedicated authenticated /etoro/orders endpoint.'
+        : `${req.dex} is self-custody. Update your client - trades are signed in the user wallet.`,
       migrated: true,
     });
   }
@@ -6851,7 +7023,7 @@ router.get('/deposits', auth, (req, res) => {
 // Get USDC & native balance on custodial wallet
 const balanceCache = new Map();
 router.get('/balance', auth, async (req, res) => {
-  if (req.dex === 'domfi' || req.dex === 'gmx' || req.dex === 'ostium' || req.dex === 'monad' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'ondo' || req.dex === 'leverup' || req.dex === 'aster' || req.dex === 'hibachi' || req.dex === 'katana' || req.dex === 'gmtrade' || req.dex === 'flash' || req.dex === 'bulk') {
+  if (req.dex === 'domfi' || req.dex === 'etoro' || req.dex === 'gmx' || req.dex === 'ostium' || req.dex === 'monad' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'ondo' || req.dex === 'leverup' || req.dex === 'aster' || req.dex === 'hibachi' || req.dex === 'katana' || req.dex === 'gmtrade' || req.dex === 'flash' || req.dex === 'bulk') {
     return res.status(410).json({ error: `${req.dex} balances are read directly by the client wallet.` });
   }
   const wallet = db.getWallet(req.playerId, req.dex);

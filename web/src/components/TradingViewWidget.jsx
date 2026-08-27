@@ -440,7 +440,7 @@ async function fetchDecibelCandles(symbol, interval, startMs, endMs) {
   }, { label: 'Decibel candlesticks' });
 }
 
-function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], orders = [], currentPrice, chartOverlay, dex = 'pacifica' }) {
+function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], orders = [], currentPrice, chartOverlay, dex = 'pacifica', fetchCandles }) {
   const { theme } = useFuturesTheme();
   const darkTheme = theme === FUTURES_THEME_DARK;
   const containerRef = useRef(null);
@@ -567,7 +567,11 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
       const start = now - tf.ms;
       try {
         let candles = [];
-        if (dex === 'domfi') {
+        if (dex === 'etoro' && typeof fetchCandles === 'function') {
+          const json = await fetchCandles(symbol, { interval, limit: 500 });
+          candles = (Array.isArray(json) ? json : []).map(normalizeBulkCandle).filter(Boolean).sort((a, b) => a.time - b.time);
+          if (cancelled) return;
+        } else if (dex === 'domfi') {
           const params = new URLSearchParams({
             dex: 'domfi',
             symbol,
@@ -699,7 +703,7 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
       : 30_000;
     const iv = window.setInterval(load, reloadMs);
     return () => { cancelled = true; window.clearInterval(iv); };
-  }, [symbol, pythSymbol, interval, dex, darkTheme]);
+  }, [symbol, pythSymbol, interval, dex, darkTheme, fetchCandles]);
 
   useEffect(() => {
     if (dex !== 'ostium' || !seriesRef.current || typeof WebSocket === 'undefined') return undefined;

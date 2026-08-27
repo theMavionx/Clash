@@ -5937,6 +5937,7 @@ function dexAccent(dex) {
     decibel: '#ffd700',
     avantis: '#38bdf8',
     domfi: '#63aca5',
+    etoro: '#6FCF17',
     gmx: '#9aa8ff',
     phoenix: '#fb923c',
     monad: '#a78bfa',

@@ -3185,6 +3185,29 @@ async function fetchHibachiEarnings() {
   };
 }
 
+async function fetchEtoroEarnings() {
+  const local = readVerifiedFuturesDexStats('etoro', 'etoro_api');
+  return {
+    earned_usd: 0,
+    currency: 'USD (eToro)',
+    volume_usd: local.volume_usd,
+    volume_24h_usd: local.volume_24h_usd,
+    trades: local.trades,
+    trades_24h: local.trades_24h,
+    traders: local.traders,
+    user_fee_usd: local.fee_usd,
+    user_fee_24h_usd: local.fee_24h_usd,
+    estimated_fee_usd: 0,
+    builder_fee_bps: 0,
+    builder_fee_pct: 0,
+    latest_fill_at: local.latest_fill_at,
+    recent_proofs: local.recent_proofs,
+    model: 'etoro_app_attribution_pending',
+    source_detail: 'etoro_api_verified_volume_no_revenue_attribution',
+    note: 'eToro API history proves player trading activity. Clash App Store/OAuth attribution is not approved yet, so no commission is estimated or counted as earned.',
+  };
+}
+
 async function fetchLighterEarnings() {
   const collector = Number.isFinite(LIGHTER_INTEGRATOR_ACCOUNT_INDEX)
     ? Math.trunc(LIGHTER_INTEGRATOR_ACCOUNT_INDEX)
@@ -3604,6 +3627,7 @@ const ANALYTICS_DEXES = [
   { key: 'decibel', label: 'Decibel' },
   { key: 'avantis', label: 'Avantis' },
   { key: 'domfi', label: 'DomFi' },
+  { key: 'etoro', label: 'eToro' },
   { key: 'gmx', label: 'GMX' },
   { key: 'ostium', label: 'Ostium' },
   { key: 'phoenix', label: 'Phoenix' },
@@ -3688,6 +3712,7 @@ function decibelFeeBpsForDate(value) {
 
 function tradeSourceWhereForAnalytics(dex) {
   if (dex === 'domfi') return "verified_source = 'domfi_api'";
+  if (dex === 'etoro') return "verified_source = 'etoro_api'";
   if (dex === 'decibel') return "verified_source IN ('decibel_fill', 'server')";
   if (dex === 'monad') return "verified_source IN ('perpl_api', 'perpl_ws')";
   if (dex === 'hyperliquid') return "verified_source = 'hyperliquid_api'";
@@ -3743,6 +3768,17 @@ function revenueModelForDex(dex, dateForRate = null) {
       referral_share_estimate_bps: DOMFI_REFERRAL_SHARE_ESTIMATE_BPS,
       model: 'domfi_verified_volume_referral_midpoint_estimate',
       source_detail: 'domfi_api_volume_x_documented_referral_share_range',
+    };
+  }
+  if (dex === 'etoro') {
+    return {
+      configured: false,
+      rate: 0,
+      rate_label: 'App Store attribution pending',
+      builder_fee_bps: 0,
+      builder_fee_pct: 0,
+      model: 'etoro_app_attribution_pending',
+      source_detail: 'etoro_api_verified_volume_no_revenue_attribution',
     };
   }
   if (dex === 'phoenix') {
@@ -4389,6 +4425,7 @@ const EARNINGS_READER_CONFIG = {
   decibel: { source: 'decibel_account_overview_fee_income', read: () => fetchDecibelEarnings() },
   avantis: { source: 'avantis_code_owner_onchain_estimate_only', read: () => fetchAvantisEarnings() },
   domfi: { source: 'domfi_api_volume_x_documented_referral_share_range', read: () => fetchDomfiEarnings() },
+  etoro: { source: 'etoro_api_verified_volume_no_revenue_attribution', read: () => fetchEtoroEarnings() },
   gmx: { source: 'gmx_claimable_ui_fee_datastore_exact', read: () => fetchGmxEarnings() },
   ostium: { source: 'arbitrum_usdc_balance_of_builder', read: ({ mainDb }) => fetchOstiumEarnings({ mainDb }) },
   phoenix: { source: 'phoenix_flight_collateral_transfers', read: ({ mainDb }) => fetchPhoenixEarnings({ mainDb }) },
@@ -4415,6 +4452,7 @@ const EARNINGS_DEX_ORDER = [
   'decibel',
   'avantis',
   'domfi',
+  'etoro',
   'gmx',
   'ostium',
   'phoenix',

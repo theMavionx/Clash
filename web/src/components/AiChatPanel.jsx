@@ -667,6 +667,7 @@ const AI_SHOP_PAYMENTS_BY_CHAIN = {
 };
 const DEX_TO_AI_SHOP_CHAIN = {
   avantis: 'base',
+  etoro: 'base',
   pacifica: 'solana',
   phoenix: 'solana',
   gmx: 'arbitrum',

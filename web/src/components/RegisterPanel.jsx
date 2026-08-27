@@ -133,6 +133,7 @@ function DexPicker({ onPick, isInFrame, isSolanaMobile }) {
               <div style={isDesktopGrid ? { ...S.dexCardSubtitle, ...S.dexCardSubtitleDesktop } : S.dexCardSubtitle}>
                 {cfg.chain} · {
                   cfg.id === 'avantis' || cfg.id === 'domfi' ? 'SELF-CUSTODY · EVM' :
+                  cfg.id === 'etoro' ? 'API ACCOUNT · CEX' :
                   cfg.id === 'gmx' ? 'SELF-CUSTODY · EVM' :
                   cfg.id === 'ostium' ? 'SELF-CUSTODY · EVM' :
                   cfg.id === 'hyperliquid' ? 'SELF-CUSTODY · EVM' :
@@ -526,6 +527,7 @@ function ConnectAvantis({ onOpenEvmModal, onPrivyLogin, privyEnabled, privyAuthe
   // chain; we just ensureChain(targetId) before each tx. So one panel,
   // venue labels.
   const venue = dex === 'domfi' ? 'DOMFI'
+    : dex === 'etoro' ? 'ETORO'
     : dex === 'gmx' ? 'GMX'
     : dex === 'ostium' ? 'OSTIUM'
     : dex === 'monad' ? 'PERPL'
@@ -545,6 +547,7 @@ function ConnectAvantis({ onOpenEvmModal, onPrivyLogin, privyEnabled, privyAuthe
     : dex === 'flash' ? 'FLASH TRADE'
     : 'AVANTIS';
   const chainName = dex === 'gmx' || dex === 'ostium' ? 'Arbitrum'
+    : dex === 'etoro' ? 'EVM'
     : dex === 'monad' ? 'Monad'
     : dex === 'hyperliquid' ? 'EVM'
     : dex === 'risex' ? 'RISE'
@@ -565,6 +568,11 @@ function ConnectAvantis({ onOpenEvmModal, onPrivyLogin, privyEnabled, privyAuthe
     ? {
         label: 'Check DomFi referral',
         hint: 'Clash preserves an existing referral; otherwise the first open attaches CLASHOFPERPS automatically.',
+      }
+    : dex === 'etoro'
+    ? {
+        label: 'Add eToro API credentials',
+        hint: 'After Clash login, choose Demo or Real and verify your eToro API key plus user key in the trading panel.',
       }
     : dex === 'ondo'
     ? {
@@ -594,11 +602,13 @@ function ConnectAvantis({ onOpenEvmModal, onPrivyLogin, privyEnabled, privyAuthe
     <ConnectVenueGate
       dex={dex}
       title={`Connect to ${venue}`}
-      subtitle={`Sign in with email or connect ${chainArticle} ${chainName} wallet. Trades stay self-custodial.`}
+      subtitle={dex === 'etoro'
+        ? 'Sign in to Clash with email or an EVM wallet, then connect your separate eToro API account.'
+        : `Sign in with email or connect ${chainArticle} ${chainName} wallet. Trades stay self-custodial.`}
       steps={[
         { id: 'wallet', label: `Connect ${chainName} wallet`, hint: 'Choose email or your preferred wallet app.', status: 'active' },
         { id: 'setup', ...venueSetupStep, status: 'pending' },
-        { id: 'ready', label: dex === 'domfi' ? 'Unlock wallet-signed trading' : 'Unlock one-tap trading', hint: 'The trading panel opens only after every required check succeeds.', status: 'pending' },
+        { id: 'ready', label: dex === 'domfi' ? 'Unlock wallet-signed trading' : dex === 'etoro' ? 'Unlock API trading' : 'Unlock one-tap trading', hint: 'The trading panel opens only after every required check succeeds.', status: 'pending' },
       ]}
       actions={actions}
       footnote="Every venue keeps its own authorization rules; the checklist and status language stay consistent."
@@ -735,6 +745,7 @@ function RegisterPanel() {
               ? `Joining ${
                   dex === 'avantis' ? 'Avantis' :
                   dex === 'domfi' ? 'DomFi' :
+                  dex === 'etoro' ? 'eToro' :
                   dex === 'decibel' ? 'Decibel' :
                   dex === 'gmx' ? 'GMX' :
                   dex === 'ostium' ? 'Ostium' :
@@ -823,7 +834,7 @@ function RegisterPanel() {
             />
           );
         }
-        if (dex === 'avantis' || dex === 'domfi' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'leverup' || dex === 'aster' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'lighter' || dex === 'rhlighter') {
+        if (dex === 'avantis' || dex === 'domfi' || dex === 'etoro' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'leverup' || dex === 'aster' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'lighter' || dex === 'rhlighter') {
           return (
             <ConnectAvantis
               dex={dex}
@@ -872,6 +883,7 @@ function RegisterPanel() {
     if (state === 'registering' || state === 'auto_connecting' || state === 'booting') return 'LOADING';
     if (dex === 'avantis') return 'AVANTIS LOGIN';
     if (dex === 'domfi') return 'DOMFI LOGIN';
+    if (dex === 'etoro') return 'ETORO LOGIN';
     if (dex === 'decibel') return 'DECIBEL LOGIN';
     if (dex === 'gmx') return 'GMX LOGIN';
     if (dex === 'ostium') return 'OSTIUM LOGIN';

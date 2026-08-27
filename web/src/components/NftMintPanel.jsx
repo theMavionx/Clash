@@ -167,6 +167,7 @@ const DEX_LABELS = {
   decibel: 'Decibel / Aptos',
   gmx: 'GMX / Arbitrum',
   avantis: 'Avantis / Base',
+  etoro: 'eToro / API',
   pacifica: 'Pacifica / Solana',
   phoenix: 'Phoenix / Solana',
   monad: 'Perpl / Monad',
@@ -221,6 +222,7 @@ function makeNftEvmWallet(provider, address) {
 // a "bridge from Base to mint here" path inside the payment view.
 const DEX_TO_NFT_CHAIN = {
   avantis:  'base',
+  etoro:    'base',
   pacifica: 'solana',
   phoenix:  'solana',
   gmx:      'arbitrum',
@@ -463,6 +465,7 @@ function getMysterySupplyInfo() {
 // connected for that DEX.
 const DEX_TO_SHOP_CHAIN = {
   avantis:  'base',
+  etoro:    'base',
   pacifica: 'solana',
   phoenix:  'solana',
   gmx:      'arbitrum',
