@@ -1,5 +1,7 @@
 param(
     [string]$Branch = "main",
+    [string]$ProxyFile = $env:CLASH_DEPLOY_PROXY_FILE,
+    [int]$ProxyMaxAttempts = 20,
     [switch]$SkipDeploy,
     [switch]$AllowDirty,
     [switch]$ForceGodotExport
@@ -48,7 +50,7 @@ if (-not (Test-Path $DeployScript)) {
 }
 
 if ($SkipDeploy) {
-    & $DeployScript -Branch $Branch -SkipDeploy:$SkipDeploy -ForceGodotExport:$ForceGodotExport
+    & $DeployScript -Branch $Branch -ProxyFile $ProxyFile -ProxyMaxAttempts $ProxyMaxAttempts -SkipDeploy:$SkipDeploy -ForceGodotExport:$ForceGodotExport
 } else {
-    & $DeployScript -Branch $Branch -ForceGodotExport:$ForceGodotExport
+    & $DeployScript -Branch $Branch -ProxyFile $ProxyFile -ProxyMaxAttempts $ProxyMaxAttempts -ForceGodotExport:$ForceGodotExport
 }

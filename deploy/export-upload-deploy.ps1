@@ -6,6 +6,8 @@ param(
   [string]$GodotExe = $env:GODOT_EXE,
   [string]$PuttyDir = "C:\Program Files\PuTTY",
   [string]$HostKey = "ssh-ed25519 255 SHA256:7ewi+hdoJkhNQSeN/YaarW8D+GMi2JYLGq2243jsc6I",
+  [string]$ProxyFile = $env:CLASH_DEPLOY_PROXY_FILE,
+  [int]$ProxyMaxAttempts = 20,
   [switch]$SkipDeploy,
   [switch]$ForceGodotExport
 )
@@ -18,6 +20,7 @@ $localGodotDir = Join-Path $webDir "public\godot"
 $exportHtml = Join-Path $localGodotDir "Work.html"
 $plink = Join-Path $PuttyDir "plink.exe"
 $pscp = Join-Path $PuttyDir "pscp.exe"
+$proxyRelay = Join-Path $PSScriptRoot "putty-http-connect-proxy.ps1"
 
 function Invoke-NativeChecked {
   param(
@@ -101,6 +104,56 @@ function Get-GodotChangedFiles {
   return @($diff | Where-Object { $_ })
 }
 
+function Get-ProxyEntryCount {
+  param([Parameter(Mandatory = $true)][string]$Path)
+  return @(
+    Get-Content -LiteralPath $Path | ForEach-Object { $_.Trim() } | Where-Object {
+      $_ -and -not $_.StartsWith('#')
+    }
+  ).Count
+}
+
+function Get-PuttyProxyArgs {
+  param([Parameter(Mandatory = $true)][int]$Index)
+  $relayForCommand = $proxyRelay.Replace('%', '%%')
+  $command = "powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$relayForCommand`" -ProxyIndex $Index -DestinationHost %host -DestinationPort %port"
+  return @("-proxycmd", $command)
+}
+
+function Resolve-PuttyProxyArgs {
+  param(
+    [Parameter(Mandatory = $true)][string]$Remote,
+    [Parameter(Mandatory = $true)][string]$Password
+  )
+
+  if (-not $ProxyFile) { return @() }
+  if (-not (Test-Path -LiteralPath $ProxyFile -PathType Leaf)) {
+    throw "Deploy proxy file not found: $ProxyFile"
+  }
+  if (-not (Test-Path -LiteralPath $proxyRelay -PathType Leaf)) {
+    throw "Deploy proxy relay not found: $proxyRelay"
+  }
+
+  $script:ProxyFile = (Resolve-Path -LiteralPath $ProxyFile).Path
+  [Environment]::SetEnvironmentVariable('CLASH_DEPLOY_PROXY_FILE', $script:ProxyFile, 'Process')
+  $entryCount = Get-ProxyEntryCount -Path $script:ProxyFile
+  if ($entryCount -lt 1) { throw "Deploy proxy pool is empty" }
+  $attemptCount = [Math]::Min($entryCount, [Math]::Max(1, $ProxyMaxAttempts))
+  Write-Host "==> Selecting a working deploy proxy ($attemptCount of $entryCount candidates; credentials redacted)"
+
+  for ($index = 0; $index -lt $attemptCount; $index++) {
+    $proxyArgs = @(Get-PuttyProxyArgs -Index $index)
+    $probeOutput = @(& $plink -batch -ssh -P 22 -pw $Password -hostkey $HostKey @proxyArgs $Remote "printf '__CLASH_DEPLOY_PROXY_OK__'" 2>$null)
+    if ($LASTEXITCODE -eq 0 -and (($probeOutput -join "`n") -match '__CLASH_DEPLOY_PROXY_OK__')) {
+      Write-Host "==> Deploy proxy selected: index $index"
+      return $proxyArgs
+    }
+    Write-Host "    proxy index $index unavailable"
+  }
+
+  throw "No working deploy proxy found in the first $attemptCount candidates"
+}
+
 if (-not (Test-Path $plink)) { throw "plink.exe not found at $plink" }
 
 $password = $env:CLASH_SSH_PASSWORD
@@ -116,11 +169,12 @@ try {
   $remoteGodotDir = "$RemoteSourceDir/web/public/godot"
   $remote = "$RemoteUser@$RemoteHost"
   $remoteTarget = "${remote}:$remoteGodotDir/"
+  $puttyProxyArgs = @(Resolve-PuttyProxyArgs -Remote $remote -Password $password)
 
   $remoteHead = ""
   $remoteRuntimeManifestCmd = "cat '$RemoteSourceDir/current/web/dist/godot/godot-runtime-manifest.json'"
   try {
-    $remoteRuntimeManifest = ((& $plink -batch -ssh -P 22 -pw $password -hostkey $HostKey $remote $remoteRuntimeManifestCmd 2>$null) -join "`n") | ConvertFrom-Json
+    $remoteRuntimeManifest = ((& $plink -batch -ssh -P 22 -pw $password -hostkey $HostKey @puttyProxyArgs $remote $remoteRuntimeManifestCmd 2>$null) -join "`n") | ConvertFrom-Json
     $remoteRuntimeBuild = "$($remoteRuntimeManifest.build)".Trim()
     if ($remoteRuntimeBuild -match '([0-9a-fA-F]{8,40})$') {
       $remoteHead = $Matches[1]
@@ -132,7 +186,7 @@ try {
   if (-not $remoteHead) {
     $remoteHeadCmd = "cd '$RemoteSourceDir' && git rev-parse HEAD"
     try {
-      $remoteHead = (& $plink -batch -ssh -P 22 -pw $password -hostkey $HostKey $remote $remoteHeadCmd 2>$null | Select-Object -Last 1).Trim()
+      $remoteHead = (& $plink -batch -ssh -P 22 -pw $password -hostkey $HostKey @puttyProxyArgs $remote $remoteHeadCmd 2>$null | Select-Object -Last 1).Trim()
       Write-Host "==> Active Godot runtime build unavailable; falling back to source HEAD $remoteHead"
     } catch {
       $remoteHead = ""
@@ -183,18 +237,18 @@ try {
 
   Write-Host "==> Updating canonical source checkout on server: $RemoteSourceDir"
   $pullCmd = "cd '$RemoteSourceDir' && git fetch origin '$Branch' && git pull --ff-only origin '$Branch' && mkdir -p '$remoteGodotDir'"
-  Invoke-NativeChecked -FilePath $plink -Arguments @("-batch", "-ssh", "-P", "22", "-pw", $password, "-hostkey", $HostKey, $remote, $pullCmd) -FailureMessage "Remote git pull failed"
+  Invoke-NativeChecked -FilePath $plink -Arguments (@("-batch", "-ssh", "-P", "22", "-pw", $password, "-hostkey", $HostKey) + $puttyProxyArgs + @($remote, $pullCmd)) -FailureMessage "Remote git pull failed"
 
   if ($shouldExportGodot) {
     Write-Host "==> Uploading Godot export to $remoteGodotDir"
-    Invoke-NativeChecked -FilePath $pscp -Arguments @("-batch", "-scp", "-P", "22", "-pw", $password, "-hostkey", $HostKey, "-r", (Join-Path $localGodotDir "*"), $remoteTarget) -FailureMessage "Godot upload failed"
+    Invoke-NativeChecked -FilePath $pscp -Arguments (@("-batch", "-scp", "-P", "22", "-pw", $password, "-hostkey", $HostKey) + $puttyProxyArgs + @("-r", (Join-Path $localGodotDir "*"), $remoteTarget)) -FailureMessage "Godot upload failed"
   }
 
   if (-not $SkipDeploy) {
     Write-Host "==> Running atomic deploy from /opt/clash"
     $godotChangedValue = if ($shouldExportGodot) { "1" } else { "0" }
     $deployCmd = "cd '$RemoteSourceDir' && sudo -n env CLASH_GODOT_CHANGED=$godotChangedValue bash deploy/deploy.sh"
-    Invoke-NativeChecked -FilePath $plink -Arguments @("-batch", "-ssh", "-P", "22", "-pw", $password, "-hostkey", $HostKey, $remote, $deployCmd) -FailureMessage "Remote deploy failed"
+    Invoke-NativeChecked -FilePath $plink -Arguments (@("-batch", "-ssh", "-P", "22", "-pw", $password, "-hostkey", $HostKey) + $puttyProxyArgs + @($remote, $deployCmd)) -FailureMessage "Remote deploy failed"
   }
 } finally {
   Pop-Location

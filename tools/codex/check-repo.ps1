@@ -102,6 +102,12 @@ $NodeFiles = @(
     "mcp/src/server.mjs"
 )
 
+$PowerShellFiles = @(
+    "deploy/export-upload-deploy.ps1",
+    "deploy/putty-http-connect-proxy.ps1",
+    "tools/codex/deploy-local-to-prod.ps1"
+)
+
 Invoke-Step "combat grid snapshot" { node tools/combat-grid/generate-combat-grid-config.cjs --check }
 Invoke-Step "combat grid regression" { node server/test-combat-grid-sync.js }
 Invoke-Step "casualty report regression" { node server/test-casualty-report.js }
@@ -172,6 +178,26 @@ foreach ($TestFile in $CombatRegressionTests) {
 foreach ($File in $NodeFiles) {
     if (Test-Path $File) {
         Invoke-Step "node --check $File" { node --check $File }
+    }
+}
+
+foreach ($File in $PowerShellFiles) {
+    if (Test-Path $File) {
+        Invoke-Step "PowerShell parse $File" {
+            $Tokens = $null
+            $Errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+                (Resolve-Path -LiteralPath $File),
+                [ref]$Tokens,
+                [ref]$Errors
+            )
+            if ($Errors.Count -gt 0) {
+                $Messages = $Errors | ForEach-Object {
+                    "line $($_.Extent.StartLineNumber): $($_.Message)"
+                }
+                throw "$File has PowerShell parse errors: $($Messages -join '; ')"
+            }
+        }
     }
 }
 
