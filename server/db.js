@@ -6660,7 +6660,9 @@ function virtualBotCandidatesForProfile(attackPower, profile) {
 
 function rankedBotPlayerId(templateId) {
   const cleanTemplateId = String(templateId || '').trim();
-  if (!/^bot-th[1-9]-(?:normal|hard)-\d+$/.test(cleanTemplateId)) {
+  // Template tiers are data-driven and already include TH10. Keep the shape
+  // validation strict without baking the current maximum Town Hall into it.
+  if (!/^bot-th[1-9]\d*-(?:normal|hard)-[1-9]\d*$/.test(cleanTemplateId)) {
     throw new Error('Invalid ranked bot template id');
   }
   return `bot-ranked-${cleanTemplateId}`;

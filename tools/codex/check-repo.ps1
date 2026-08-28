@@ -63,6 +63,7 @@ $NodeFiles = @(
     "server/test-rhlighter-tournament-migration.js",
     "server/test-leverup-earnings.js",
     "server/test-domfi-rewards.js",
+    "server/test-etoro-rewards.js",
     "server/sanctum.js",
     "server/sanctum_rewards.js",
     "server/sanctum_rate_limit.js",
@@ -79,6 +80,8 @@ $NodeFiles = @(
     "server-futures/avantis-price-payload.js",
     "server-futures/domfi.js",
     "server-futures/test-domfi-adapter.js",
+    "server-futures/etoro.js",
+    "server-futures/test-etoro-adapter.js",
     "server-futures/test-avantis-price-payload.js",
     "server-futures/test-aptos-key-pool.js",
     "server-futures/hyperliquid-rewards-worker.js",
@@ -131,6 +134,9 @@ Invoke-Step "Avantis browser price payload" { node web/test-avantis-price-payloa
 Invoke-Step "DomFi adapter and reward normalization" { node server-futures/test-domfi-adapter.js }
 Invoke-Step "DomFi browser calldata and referral" { node web/test-domfi-client.mjs }
 Invoke-Step "DomFi Gold, quests, and tournament attribution" { node server/test-domfi-rewards.js }
+Invoke-Step "eToro adapter contract" { node server-futures/test-etoro-adapter.js }
+Invoke-Step "eToro browser integration" { node web/test-etoro-client.mjs }
+Invoke-Step "eToro Gold, quests, and tournament attribution" { node server/test-etoro-rewards.js }
 Invoke-Step "Aptos browser key pool" { node scripts/verify-aptos-browser-key-pool.mjs }
 Invoke-Step "Aptos RPC routing" { node scripts/verify-aptos-rpc-routing.mjs }
 Invoke-Step "Hyperliquid rewards worker" { node server-futures/test-hyperliquid-rewards-worker.js }

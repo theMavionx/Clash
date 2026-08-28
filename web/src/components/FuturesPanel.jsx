@@ -774,6 +774,8 @@ function dexErrorLabel(dex, text = '') {
 
 function humanizeTradeError(message, dex = null) {
   const text = String(message || '');
+  const dexKey = String(dex || '').trim().toLowerCase();
+  const isPerpl = dexKey === 'monad' || dexKey === 'perpl' || /\bperpl\b|PERPL_/i.test(text);
   if (/minimum\s+(deposit\s+is\s+)?10\s+USDC|Min deposit 10 USDC/i.test(text)) {
     return 'Minimum Pacifica deposit is 10 USDC.';
   }
@@ -787,13 +789,13 @@ function humanizeTradeError(message, dex = null) {
   if (isHibachi && isHibachiIpBlockedError(message)) {
     return 'Hibachi is not available from your IP address. Use a supported network or IP region, then try again.';
   }
-  if (/PERPL_REGION_BLOCKED|Unavailable For Legal Reasons|not available in your country|country or IP region|451/i.test(text)) {
+  if (isPerpl && /PERPL_REGION_BLOCKED|Unavailable For Legal Reasons|not available in your country|country or IP region|\b451\b/i.test(text)) {
     return 'Perpl is not available in your country or IP region.';
   }
-  if (/PERPL_NOT_WHITELISTED|not whitelisted|access not granted|I'm a teapot|418/i.test(text)) {
+  if (isPerpl && /PERPL_NOT_WHITELISTED|not whitelisted|access not granted|I'm a teapot|\b418\b/i.test(text)) {
     return 'This wallet needs a Perpl access code. Enter one and sign in again, or connect a whitelisted wallet.';
   }
-  if (/PERPL_ACCESS_CODE_INVALID|access code.*invalid|access code.*exhausted|invalid\/exhausted|423/i.test(text)) {
+  if (isPerpl && /PERPL_ACCESS_CODE_INVALID|access code.*invalid|access code.*exhausted|invalid\/exhausted|\b423\b/i.test(text)) {
     return 'That Perpl access code is invalid or already exhausted. Check the code and try again.';
   }
   if (/RISEX_INVITE_REQUIRED|RISEx invite code required|invite code required before|access RISEx|redeeming code/i.test(text)) {

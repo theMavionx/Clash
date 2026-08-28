@@ -52,3 +52,10 @@ test('Hibachi setup requires an explicit Trading-permission confirmation', async
   assert.match(source, /hibachiTradingPermissionConfirmed/iu);
   assert.match(source, /I enabled Read-write → Trading/iu);
 });
+
+test('Hibachi prices containing 423 are never mislabeled as Perpl access-code errors', async () => {
+  const source = await readFile(new URL('./src/components/FuturesPanel.jsx', import.meta.url), 'utf8');
+  assert.match(source, /const isPerpl =/u);
+  assert.match(source, /isPerpl && \/PERPL_ACCESS_CODE_INVALID/u);
+  assert.doesNotMatch(source, /invalid\\\/exhausted\|423\//u);
+});

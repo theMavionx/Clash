@@ -193,6 +193,127 @@ test('read-only Hibachi key produces a structured Trading-permission error', asy
   }
 });
 
+test('Hibachi TP/SL batch orders use the current action schema and tick-aligned prices', async () => {
+  hibachi.__testing.resetCaches();
+  const originalFetch = global.fetch;
+  const submitted = [];
+  global.fetch = async (url, options = {}) => {
+    const value = String(url);
+    if (value.endsWith('/market/inventory')) {
+      return jsonResponse({
+        markets: [{
+          contract: {
+            id: 1,
+            symbol: 'BTC/USDT-P',
+            category: 'CRYPTO',
+            status: 'LIVE',
+            stepSize: '0.001',
+            tickSize: '0.1',
+            settlementDecimals: 6,
+            underlyingDecimals: 8,
+            initialMarginRate: '0.1',
+          },
+          info: { markPrice: '100000' },
+        }],
+      });
+    }
+    if (value.includes('/trade/account/info?accountId=7')) {
+      return jsonResponse({
+        accountCategory: 'CRYPTO',
+        balance: '100',
+        assets: [{ symbol: 'USDT', quantity: '100' }],
+        positions: [],
+      });
+    }
+    if (value.endsWith('/trade/orders')) {
+      submitted.push(JSON.parse(options.body));
+      return jsonResponse({ orders: [
+        { orderId: 'parent', status: 'OPEN' },
+        { orderId: 'tp', status: 'OPEN' },
+        { orderId: 'sl', status: 'OPEN' },
+      ] });
+    }
+    throw new Error(`Unexpected Hibachi TP/SL batch test request: ${value}`);
+  };
+
+  try {
+    await hibachi.placeOrder(
+      { apiKey: 'test-api-key', accountId: 7, privateKey: 'test-hmac-secret' },
+      {
+        symbol: 'BTC',
+        side: 'bid',
+        quantity: '0.001',
+        orderType: 'market',
+        takeProfit: '100100.06',
+        stopLoss: '99899.94',
+      },
+    );
+    assert.equal(submitted.length, 1);
+    assert.equal(submitted[0].accountId, 7);
+    assert.deepEqual(submitted[0].orders.map(order => order.action), ['place', 'place', 'place']);
+    assert.deepEqual(submitted[0].orders.slice(1).map(order => order.triggerPrice), ['100100.1', '99899.9']);
+    assert.deepEqual(submitted[0].orders.slice(1).map(order => order.orderFlags), ['REDUCE_ONLY', 'REDUCE_ONLY']);
+  } finally {
+    global.fetch = originalFetch;
+    hibachi.__testing.resetCaches();
+  }
+});
+
+test('standalone Hibachi trigger orders snap generated TP/SL prices to the market tick', async () => {
+  hibachi.__testing.resetCaches();
+  const originalFetch = global.fetch;
+  let submitted = null;
+  global.fetch = async (url, options = {}) => {
+    const value = String(url);
+    if (value.endsWith('/market/inventory')) {
+      return jsonResponse({
+        markets: [{
+          contract: {
+            id: 1,
+            symbol: 'BTC/USDT-P',
+            category: 'CRYPTO',
+            status: 'LIVE',
+            stepSize: '0.001',
+            tickSize: '0.1',
+            settlementDecimals: 6,
+            underlyingDecimals: 8,
+            initialMarginRate: '0.1',
+          },
+          info: { markPrice: '79000' },
+        }],
+      });
+    }
+    if (value.includes('/trade/account/info?accountId=7')) {
+      return jsonResponse({ accountCategory: 'CRYPTO', balance: '100', positions: [] });
+    }
+    if (value.endsWith('/trade/order')) {
+      submitted = JSON.parse(options.body);
+      return jsonResponse({ orderId: 'trigger', status: 'OPEN' });
+    }
+    throw new Error(`Unexpected Hibachi trigger test request: ${value}`);
+  };
+
+  try {
+    await hibachi.placeOrder(
+      { apiKey: 'test-api-key', accountId: 7, privateKey: 'test-hmac-secret' },
+      {
+        symbol: 'BTC',
+        side: 'ask',
+        quantity: '0.001',
+        orderType: 'market',
+        triggerPrice: '79423.87',
+        triggerDirection: 'HIGH',
+        reduceOnly: true,
+      },
+    );
+    assert.equal(submitted.triggerPrice, '79423.9');
+    assert.equal(submitted.orderFlags, 'REDUCE_ONLY');
+  } finally {
+    global.fetch = originalFetch;
+    hibachi.__testing.resetCaches();
+  }
+});
+
 test('stale Hibachi market data observes retry-after cooldown after a 429', async () => {
   hibachi.__testing.resetCaches();
   const originalFetch = global.fetch;

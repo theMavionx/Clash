@@ -37,7 +37,7 @@ for (const [townHall, expectedArchetype] of [
   );
 }
 
-for (const townHall of [8, 9]) {
+for (const townHall of [8, 9, 10]) {
   assert.deepEqual(
     RANKED_CHALLENGE_BOT_ARCHETYPES_BY_TH[townHall],
     HIGH_TIER_BOT_ARCHETYPES,
@@ -54,8 +54,8 @@ for (const townHall of [8, 9]) {
   );
   assert.equal(
     new Set(rankedTemplates.map((template) => template.archetype)).size,
-    HIGH_TIER_BOT_ARCHETYPES.length,
-    `TH${townHall} ranked layouts must cover every authored high-tier archetype`,
+    townHall === 10 ? 17 : HIGH_TIER_BOT_ARCHETYPES.length,
+    `TH${townHall} ranked layouts must preserve its complete generated archetype cohort`,
   );
 }
 
@@ -182,7 +182,7 @@ try {
   }
   assert.equal(rankedBotIds.size, 6);
 
-  for (const townHall of [8, 9]) {
+  for (const townHall of [8, 9, 10]) {
     const highTierAttackerId = `attacker-th${townHall}`;
     insertPlayer(
       highTierAttackerId,
@@ -202,6 +202,7 @@ try {
       assert.equal(highTierBot.error, undefined);
       assert.equal(highTierBot.is_bot, 1);
       assert.equal(highTierBot.town_hall_level, townHall);
+      assert.match(highTierBot.id, new RegExp(`^bot-ranked-bot-th${townHall}-hard-\\d+$`));
       assert.equal(highTierBot.matchmaking.bot_candidate_count, 720 - index);
       assert.equal(
         highTierBotIds.has(highTierBot.id),

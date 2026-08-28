@@ -1070,12 +1070,47 @@ function decimalPlaces(value) {
   return text.split('.')[1].replace(/0+$/u, '').length;
 }
 
+function scaledDecimalInteger(value, scale) {
+  const text = decimalText(value);
+  const negative = text.startsWith('-');
+  const unsigned = negative ? text.slice(1) : text;
+  const [whole = '0', fraction = ''] = unsigned.split('.');
+  const padded = `${fraction}${'0'.repeat(scale)}`.slice(0, scale);
+  const integer = BigInt(whole || '0') * (10n ** BigInt(scale)) + BigInt(padded || '0');
+  return negative ? -integer : integer;
+}
+
+function scaledIntegerText(value, scale) {
+  const negative = value < 0n;
+  const unsigned = negative ? -value : value;
+  if (scale === 0) return `${negative ? '-' : ''}${unsigned}`;
+  const padded = unsigned.toString().padStart(scale + 1, '0');
+  const whole = padded.slice(0, -scale) || '0';
+  const fraction = padded.slice(-scale).replace(/0+$/u, '');
+  return `${negative ? '-' : ''}${whole}${fraction ? `.${fraction}` : ''}`;
+}
+
+function roundPriceToTick(price, tickSize) {
+  if (tickSize == null || tickSize === '') return decimalText(price);
+  const priceText = decimalText(price);
+  const tickText = decimalText(tickSize);
+  const scale = Math.max(decimalPlaces(priceText), decimalPlaces(tickText));
+  const priceInteger = scaledDecimalInteger(priceText, scale);
+  const tickInteger = scaledDecimalInteger(tickText, scale);
+  if (priceInteger <= 0n) throw new Error('Hibachi price must be positive');
+  if (tickInteger <= 0n) throw new Error(`Invalid Hibachi tick size ${tickSize}`);
+  const steps = (priceInteger + (tickInteger / 2n)) / tickInteger;
+  return scaledIntegerText(steps * tickInteger, scale);
+}
+
 function checkTickSize(price, tickSize) {
   if (tickSize == null || tickSize === '') return;
-  const allowed = decimalPlaces(tickSize);
-  const actual = decimalPlaces(price);
-  if (actual > allowed) {
-    throw new Error(`Invalid Hibachi price precision: ${price} exceeds tick size ${tickSize}`);
+  const priceText = decimalText(price);
+  const tickText = decimalText(tickSize);
+  const scale = Math.max(decimalPlaces(priceText), decimalPlaces(tickText));
+  const tickInteger = scaledDecimalInteger(tickText, scale);
+  if (tickInteger <= 0n || scaledDecimalInteger(priceText, scale) % tickInteger !== 0n) {
+    throw new Error(`Invalid Hibachi price increment: ${price} is not aligned to tick size ${tickSize}`);
   }
 }
 
@@ -1876,7 +1911,7 @@ async function placeOrder(credsInput, args = {}) {
   const price = orderType === 'LIMIT' ? decimalText(args.price) : null;
   if (price != null) checkTickSize(price, contract.tickSize);
   const triggerPrice = args.triggerPrice != null || args.trigger_price != null
-    ? decimalText(args.triggerPrice ?? args.trigger_price)
+    ? roundPriceToTick(args.triggerPrice ?? args.trigger_price, contract.tickSize)
     : null;
   if (triggerPrice != null) checkTickSize(triggerPrice, contract.tickSize);
   const triggerDirection = normalizeTriggerDirection(args.triggerDirection || args.trigger_direction);
@@ -1904,12 +1939,15 @@ async function placeOrder(credsInput, args = {}) {
   const tpslLegs = triggerPrice == null && (args.attachedTpsl || args.attached_tpsl || args.takeProfit || args.take_profit || args.tp || args.stopLoss || args.stop_loss || args.sl)
     ? attachedTpslLegs(args, hibachiSide)
     : [];
+  tpslLegs.forEach((leg) => {
+    leg.triggerPrice = roundPriceToTick(leg.triggerPrice, contract.tickSize);
+  });
   tpslLegs.forEach(leg => checkTickSize(leg.triggerPrice, contract.tickSize));
   let result;
   if (tpslLegs.length) {
-    const orders = [parentBody];
+    const orders = [{ ...parentBody, action: 'place' }];
     tpslLegs.forEach((leg, index) => {
-      orders.push(signedOrderRequest(creds, {
+      orders.push({ ...signedOrderRequest(creds, {
         nonce: nonce + index + 1,
         contract,
         symbol,
@@ -1920,7 +1958,7 @@ async function placeOrder(credsInput, args = {}) {
         parentOrder: { nonce: String(nonce) },
         orderFlags: 'REDUCE_ONLY',
         maxFeesPercent,
-      }));
+      }), action: 'place' });
     });
     result = decorateBatchOrderResult(await authedSend('POST', '/trade/orders', {
       accountId: creds.accountId,
