@@ -3,7 +3,8 @@ param(
   [Parameter(Mandatory = $true)][int]$ProxyIndex,
   [Parameter(Mandatory = $true)][string]$DestinationHost,
   [Parameter(Mandatory = $true)][int]$DestinationPort,
-  [int]$ConnectTimeoutSeconds = 12
+  [int]$ConnectTimeoutSeconds = 12,
+  [switch]$ValidateEntryOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -33,11 +34,11 @@ function Read-ProxyEntry {
 
   $match = [regex]::Match(
     $entries[$Index],
-    '^(?:http://)?(?<host>[^:\s/]+):(?<port>\d{1,5}):(?<user>[^:\s]+):(?<password>.+)$',
+    '^(?:http://)?(?<host>[^:\s/]+):(?<port>\d{1,5})(?::(?<user>[^:\s]+):(?<password>.+))?/?$',
     [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
   )
   if (-not $match.Success) {
-    throw "Proxy entry must use host:port:user:password"
+    throw "Proxy entry must use host:port or host:port:user:password"
   }
 
   $port = [int]$match.Groups['port'].Value
@@ -45,11 +46,18 @@ function Read-ProxyEntry {
     throw "Proxy port is outside the valid TCP range"
   }
 
+  $hasUser = $match.Groups['user'].Success
+  $hasPassword = $match.Groups['password'].Success
+  if ($hasUser -ne $hasPassword) {
+    throw "Proxy credentials must include both user and password"
+  }
+
   return [pscustomobject]@{
     Host = $match.Groups['host'].Value
     Port = $port
-    User = $match.Groups['user'].Value
-    Password = $match.Groups['password'].Value
+    User = if ($hasUser) { $match.Groups['user'].Value } else { $null }
+    Password = if ($hasPassword) { $match.Groups['password'].Value } else { $null }
+    RequiresAuthentication = $hasUser
   }
 }
 
@@ -78,6 +86,12 @@ function Read-HttpConnectResponse {
 $client = $null
 try {
   $proxy = Read-ProxyEntry -Path $ProxyFile -Index $ProxyIndex
+  if ($ValidateEntryOnly) {
+    $authMode = if ($proxy.RequiresAuthentication) { 'basic' } else { 'none' }
+    Write-Output "proxy_entry_valid auth=$authMode"
+    return
+  }
+
   $client = [System.Net.Sockets.TcpClient]::new()
   $connectTask = $client.ConnectAsync($proxy.Host, $proxy.Port)
   if (-not $connectTask.Wait([TimeSpan]::FromSeconds($ConnectTimeoutSeconds))) {
@@ -89,16 +103,22 @@ try {
   $stream.ReadTimeout = $ConnectTimeoutSeconds * 1000
   $stream.WriteTimeout = $ConnectTimeoutSeconds * 1000
 
-  $credentialBytes = [System.Text.Encoding]::UTF8.GetBytes("$($proxy.User):$($proxy.Password)")
-  $authorization = [Convert]::ToBase64String($credentialBytes)
-  [Array]::Clear($credentialBytes, 0, $credentialBytes.Length)
   $authority = "${DestinationHost}:$DestinationPort"
-  $request = "CONNECT $authority HTTP/1.1`r`nHost: $authority`r`nProxy-Authorization: Basic $authorization`r`nProxy-Connection: Keep-Alive`r`nUser-Agent: Clash-Deploy-Relay/1.0`r`n`r`n"
+  $authorizationHeader = ''
+  $authorization = $null
+  if ($proxy.RequiresAuthentication) {
+    $credentialBytes = [System.Text.Encoding]::UTF8.GetBytes("$($proxy.User):$($proxy.Password)")
+    $authorization = [Convert]::ToBase64String($credentialBytes)
+    [Array]::Clear($credentialBytes, 0, $credentialBytes.Length)
+    $authorizationHeader = "Proxy-Authorization: Basic $authorization`r`n"
+  }
+  $request = "CONNECT $authority HTTP/1.1`r`nHost: $authority`r`n${authorizationHeader}Proxy-Connection: Keep-Alive`r`nUser-Agent: Clash-Deploy-Relay/1.0`r`n`r`n"
   $requestBytes = [System.Text.Encoding]::ASCII.GetBytes($request)
   $stream.Write($requestBytes, 0, $requestBytes.Length)
   $stream.Flush()
   [Array]::Clear($requestBytes, 0, $requestBytes.Length)
   $authorization = $null
+  $authorizationHeader = $null
   $request = $null
   $proxy.Password = $null
 

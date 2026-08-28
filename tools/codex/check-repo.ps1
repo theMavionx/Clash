@@ -108,6 +108,7 @@ $NodeFiles = @(
 $PowerShellFiles = @(
     "deploy/export-upload-deploy.ps1",
     "deploy/putty-http-connect-proxy.ps1",
+    "tools/codex/test-deploy-proxy-relay.ps1",
     "tools/codex/deploy-local-to-prod.ps1"
 )
 
@@ -161,6 +162,7 @@ Invoke-Step "Sanctum Battle Shop" { node web/test-sanctum-shop.mjs }
 Invoke-Step "Sanctum admin controls" { node web/test-sanctum-admin.mjs }
 Invoke-Step "battle result responsive layout" { node --test web/test-battle-result-layout.mjs }
 Invoke-Step "Godot deploy active-runtime base" { powershell -NoProfile -ExecutionPolicy Bypass -File tools/codex/test-deploy-godot-runtime-base.ps1 }
+Invoke-Step "deploy proxy relay formats" { powershell -NoProfile -ExecutionPolicy Bypass -File tools/codex/test-deploy-proxy-relay.ps1 }
 Invoke-Step "Tournament trade cursor" { node server/test-tournament-trade-cursor.js }
 Invoke-Step "Hermes jobs worker" { node server/test-hermes-jobs-worker.js }
 Invoke-Step "Ondo proof-gated builder earnings" { node server/test-ondo-earnings.js }
