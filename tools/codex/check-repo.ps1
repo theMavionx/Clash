@@ -43,6 +43,7 @@ $NodeFiles = @(
     "server/reconcile_ranked_raid_days.js",
     "server/test-ranked-raid-tournaments.js",
     "server/test-ranked-global-matchmaking.js",
+    "server/test-ranked-bot-pool-capacity.js",
     "server/test-ranked-raid-http.js",
     "server/test-bot-display-names.js",
     "server/test-client-server-combat-parity.js",
@@ -124,6 +125,7 @@ Invoke-Step "player ship migration regression" { node server/test-player-ship-mi
 Invoke-Step "Town Hall complete-village gate" { node server/test-town-hall-complete-village-gate.js }
 Invoke-Step "ranked raid tournament rules" { node server/test-ranked-raid-tournaments.js }
 Invoke-Step "ranked global exact-TH matchmaking" { node server/test-ranked-global-matchmaking.js }
+Invoke-Step "ranked bot pool covers configured daily capacity" { node server/test-ranked-bot-pool-capacity.js }
 Invoke-Step "ranked raid HTTP rules" { node server/test-ranked-raid-http.js }
 Invoke-Step "raid bot display names" { node server/test-bot-display-names.js }
 Invoke-Step "client/server combat parity" { node server/test-client-server-combat-parity.js }
@@ -167,6 +169,7 @@ Invoke-Step "Sanctum upstream quotas" { node server/test-sanctum-rate-limit.js }
 Invoke-Step "Sanctum Battle Shop" { node web/test-sanctum-shop.mjs }
 Invoke-Step "Sanctum admin controls" { node web/test-sanctum-admin.mjs }
 Invoke-Step "battle result responsive layout" { node --test web/test-battle-result-layout.mjs }
+Invoke-Step "tournament panel layout and volume-window labels" { node --test web/test-tournament-panel-layout.mjs }
 Invoke-Step "Godot deploy active-runtime base" { powershell -NoProfile -ExecutionPolicy Bypass -File tools/codex/test-deploy-godot-runtime-base.ps1 }
 Invoke-Step "deploy proxy relay formats" { powershell -NoProfile -ExecutionPolicy Bypass -File tools/codex/test-deploy-proxy-relay.ps1 }
 Invoke-Step "Tournament trade cursor" { node server/test-tournament-trade-cursor.js }

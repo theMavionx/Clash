@@ -59,3 +59,9 @@ test('compact ranked, daily, reward, and leaderboard labels remain at least 10px
   }
   assert.doesNotMatch(component, /fontSize:\s*[89](?:,|\b)/);
 });
+
+test('leaderboard distinguishes tournament volume from exchange rolling volume', () => {
+  assert.match(component, /function tournamentVolumeWindowTitle\(tournament\)/);
+  assert.match(component, /Exchange rolling 7d volume uses a different time window\./);
+  assert.match(component, /\{fmtUsd\(r\.volume_usd\)\} tournament vol/);
+});

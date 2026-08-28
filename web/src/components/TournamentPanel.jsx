@@ -114,6 +114,13 @@ function fmtDate(s) {
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
+function tournamentVolumeWindowTitle(tournament) {
+  const start = fmtDate(tournament?.start_at);
+  const end = fmtDate(tournament?.end_at);
+  if (!start) return 'Tournament volume counts only eligible fills recorded during this event.';
+  return `Tournament volume counts eligible fills from ${start}${end ? ` to ${end}` : ''}. Exchange rolling 7d volume uses a different time window.`;
+}
+
 function fmtDay(s) {
   if (!s) return '';
   const d = new Date(`${s}T00:00:00Z`);
@@ -1504,7 +1511,7 @@ function TournamentPanel({ onClose }) {
                         <span style={S.subRow}>
                           {r.team_label && <>{r.team_label} | </>}
                           {isMegaTournament(t) && r.mega_sector_name && <>{r.mega_sector_name} · </>}
-                          {fmt(r.trophies)} 🏆 · {fmtUsd(r.volume_usd)} vol
+                          {fmt(r.trophies)} 🏆 · <span title={tournamentVolumeWindowTitle(t)}>{fmtUsd(r.volume_usd)} tournament vol</span>
                           {showPnl && (
                             <> · {fmtUsd(r.pnl_usd)} PnL</>
                           )}

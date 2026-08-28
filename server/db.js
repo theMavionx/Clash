@@ -6658,50 +6658,66 @@ function virtualBotCandidatesForProfile(attackPower, profile) {
     });
 }
 
-function rankedBotPlayerId(templateId) {
+function rankedBotPlayerId(templateId, cycleIndex = 0) {
   const cleanTemplateId = String(templateId || '').trim();
   // Template tiers are data-driven and already include TH10. Keep the shape
   // validation strict without baking the current maximum Town Hall into it.
   if (!/^bot-th[1-9]\d*-(?:normal|hard)-[1-9]\d*$/.test(cleanTemplateId)) {
     throw new Error('Invalid ranked bot template id');
   }
-  return `bot-ranked-${cleanTemplateId}`;
+  const cleanCycleIndex = Math.max(0, Math.trunc(Number(cycleIndex) || 0));
+  return cleanCycleIndex > 0
+    ? `bot-ranked-${cleanTemplateId}-cycle${cleanCycleIndex + 1}`
+    : `bot-ranked-${cleanTemplateId}`;
 }
 
-function virtualRankedBotCandidates(townHallLevel) {
+function virtualRankedBotCandidates(townHallLevel, minimumPoolSize = 0) {
   const defenderTh = Math.max(1, Math.min(LIVE_TOWN_HALL_CAP, Math.trunc(Number(townHallLevel) || 1)));
   const exactTier = buildBotBaseTemplates()
     .filter((template) => template.th === defenderTh);
+  const hardTier = exactTier.filter((template) => template.difficulty === 'hard');
   const rankedChallengeArchetypes = new Set(
     RANKED_CHALLENGE_BOT_ARCHETYPES_BY_TH[defenderTh] || CHALLENGE_BOT_ARCHETYPES,
   );
-  const challengePool = exactTier.filter((template) => (
-    template.difficulty === 'hard'
-    && (defenderTh < 5 || rankedChallengeArchetypes.has(template.archetype))
+  const challengePool = hardTier.filter((template) => (
+    defenderTh < 5 || rankedChallengeArchetypes.has(template.archetype)
   ));
-  const rankedPool = challengePool.length > 0 ? challengePool : exactTier;
-  return rankedPool
-    .map((template) => {
-      const base = computeBasePowerFromBuildings(template.buildings);
-      return {
-        id: rankedBotPlayerId(template.id),
-        name: template.name,
-        trophies: template.trophies,
-        level: template.th,
-        is_bot: 1,
-        is_virtual_bot: true,
-        is_tournament_participant: 0,
-        bot_template_id: template.id,
-        bot_difficulty: template.difficulty,
-        bot_archetype: template.archetype,
-        bot_variant: template.variant,
-        bot_generation: template.generation,
-        bot_template: template,
-        base_power: base.power,
-        defender_th: base.town_hall_level,
-        ranked_defenses_today: 0,
-      };
-    });
+  const preferredPool = challengePool.length > 0
+    ? challengePool
+    : (hardTier.length > 0 ? hardTier : exactTier);
+  if (preferredPool.length === 0) return [];
+
+  // A tournament can allow more daily attacks than the tuned geometry cohort
+  // contains (TH7 has 37 validated corner-keep layouts while Hibachi allows
+  // 50). Create additional encounter identities from the same balance cohort
+  // instead of opening weaker, unvalidated layouts. Only a selected identity
+  // is materialized, so the expanded virtual pool does not bloat the database.
+  const requestedPoolSize = Math.max(0, Math.trunc(Number(minimumPoolSize) || 0));
+  const poolSize = Math.max(preferredPool.length, requestedPoolSize);
+  return Array.from({ length: poolSize }, (_, slot) => {
+    const template = preferredPool[slot % preferredPool.length];
+    const rankedBotCycle = Math.floor(slot / preferredPool.length);
+    const base = computeBasePowerFromBuildings(template.buildings);
+    return {
+      id: rankedBotPlayerId(template.id, rankedBotCycle),
+      name: template.name,
+      trophies: template.trophies,
+      level: template.th,
+      is_bot: 1,
+      is_virtual_bot: true,
+      is_tournament_participant: 0,
+      bot_template_id: template.id,
+      bot_difficulty: template.difficulty,
+      bot_archetype: template.archetype,
+      bot_variant: template.variant,
+      bot_generation: template.generation,
+      bot_template: template,
+      base_power: base.power,
+      defender_th: base.town_hall_level,
+      ranked_defenses_today: 0,
+      ranked_bot_cycle: rankedBotCycle,
+    };
+  });
 }
 
 function materializeBotTarget(candidate, sessionId) {
@@ -6774,10 +6790,12 @@ function materializeBotTarget(candidate, sessionId) {
 function materializeRankedBotTarget(candidate) {
   const template = candidate.bot_template || botTemplateById(candidate.bot_template_id);
   if (!template) throw new Error('Ranked bot template not found');
-  const botId = rankedBotPlayerId(template.id);
+  const rankedBotCycle = Math.max(0, Math.trunc(Number(candidate.ranked_bot_cycle) || 0));
+  const botId = rankedBotPlayerId(template.id, rankedBotCycle);
+  const rankedBotSeed = `ranked:${template.id}:cycle:${rankedBotCycle}`;
   const existing = stmts.getPlayerById.get(botId);
-  const botName = existing?.name || botMaterializedName(template.name, `ranked:${template.id}`);
-  const resources = nextBotMaterializationResources(template, `ranked:${template.id}`);
+  const botName = existing?.name || botMaterializedName(template.name, rankedBotSeed);
+  const resources = nextBotMaterializationResources(template, rankedBotSeed);
 
   if (!existing) {
     db.prepare(`
@@ -6789,7 +6807,7 @@ function materializeRankedBotTarget(candidate) {
     `).run(
       botId,
       botName,
-      botMaterializedToken(template.id, 'ranked-pool'),
+      botMaterializedToken(template.id, `ranked-pool-${rankedBotCycle}`),
       resources.gold,
       resources.wood,
       resources.ore,
@@ -11229,11 +11247,25 @@ function findRankedEnemy(playerId, tournamentId) {
         FROM battle_sessions
        WHERE status = 'active' AND reserved_until > datetime('now')
     `).all().map((row) => row.defender_id));
-    const botCandidates = raidBotTargetsEnabled()
-      ? virtualRankedBotCandidates(rankedBotTownHall).filter((candidate) => (
+    const rankedBotPoolSize = Math.max(
+      Number(config.daily_attack_limit || 0)
+        + activeDefenderIds.size
+        + MATCHMAKING_CONFIG.candidatePoolSize,
+      MATCHMAKING_CONFIG.candidatePoolSize,
+    );
+    const availableBotCandidates = raidBotTargetsEnabled()
+      ? virtualRankedBotCandidates(rankedBotTownHall, rankedBotPoolSize).filter((candidate) => (
         !matchedDefenderIds.has(candidate.id) && !activeDefenderIds.has(candidate.id)
       ))
       : [];
+    const activeBotPoolCycle = availableBotCandidates.length > 0
+      ? Math.min(...availableBotCandidates.map((candidate) => Number(candidate.ranked_bot_cycle || 0)))
+      : null;
+    const botCandidates = activeBotPoolCycle == null
+      ? []
+      : availableBotCandidates.filter((candidate) => (
+          Number(candidate.ranked_bot_cycle || 0) === activeBotPoolCycle
+        ));
     // Ranked attempts are scarce and directly determine tournament standings.
     // Once recent accepted results identify a proven strong attacker, do not
     // let an easier live same-TH base randomly re-enter the pool. Keep ordinary
@@ -11376,6 +11408,7 @@ function findRankedEnemy(playerId, tournamentId) {
         base_power_ratio: Number((repairedBase.power / Math.max(1, attackPower.power)).toFixed(4)),
         live_candidate_count: liveCandidates.length,
         bot_candidate_count: botCandidates.length,
+        bot_pool_cycle: activeBotPoolCycle == null ? null : activeBotPoolCycle + 1,
         unshielded_candidate_count: unshieldedCandidates.length,
         shield_fallback_used: !!best.ranked_shield_active || !!best.global_shield_active,
         shield_ignored_for_ranked: true,
