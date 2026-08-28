@@ -40,6 +40,7 @@ $NodeFiles = @(
     "server/test-player-ship-migration.js",
     "server/test-town-hall-complete-village-gate.js",
     "server/ranked_raid_tournaments.js",
+    "server/reconcile_ranked_raid_days.js",
     "server/test-ranked-raid-tournaments.js",
     "server/test-ranked-global-matchmaking.js",
     "server/test-ranked-raid-http.js",

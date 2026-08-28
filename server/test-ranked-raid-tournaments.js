@@ -30,7 +30,9 @@ function createFixture() {
       status TEXT NOT NULL,
       start_at TEXT NOT NULL,
       end_at TEXT,
-      paused_at TEXT
+      paused_at TEXT,
+      scoring_mode TEXT NOT NULL DEFAULT 'live',
+      daily_pool_award_time_utc TEXT NOT NULL DEFAULT '00:00'
     );
     CREATE TABLE tournament_participants (
       tournament_id INTEGER NOT NULL REFERENCES tournaments(id) ON DELETE CASCADE,
@@ -99,11 +101,17 @@ function createFixture() {
   insertTournament.run(1, 'Ranked Alpha', 2, 0, 0);
   insertTournament.run(2, 'Ranked Beta', 0, 1, 5);
   insertTournament.run(3, 'Ranked Global', 0, 0, 0);
+  insertTournament.run(4, 'Ranked Round Cutoff', 0, 1, 5);
+  db.prepare(`
+    UPDATE tournaments
+       SET scoring_mode = 'daily_pool', daily_pool_award_time_utc = '22:00'
+     WHERE id = 4
+  `).run();
   const insertParticipant = db.prepare(`
     INSERT INTO tournament_participants (tournament_id, player_id)
     VALUES (?, ?)
   `);
-  for (const tournamentId of [1, 2, 3]) {
+  for (const tournamentId of [1, 2, 3, 4]) {
     insertParticipant.run(tournamentId, 'attacker');
   }
   for (const tournamentId of [1, 2]) {
@@ -134,6 +142,31 @@ function reserve(db, sessionId, tournamentId, attackNumber, defenderId = 'defend
 function run() {
   const db = createFixture();
   try {
+    const cutoffTournament = rankedRaids.getTournament(db, 4);
+    assert.equal(
+      rankedRaids.tournamentDayKey(cutoffTournament, new Date('2026-08-27T21:59:59Z')),
+      '2026-08-26',
+      'the pre-cutoff hour belongs to the round that began the previous UTC date',
+    );
+    assert.equal(
+      rankedRaids.tournamentDayKey(cutoffTournament, new Date('2026-08-27T22:00:00Z')),
+      '2026-08-27',
+      'the configured daily-pool cutoff opens the next ranked round',
+    );
+    assert.equal(
+      rankedRaids.tournamentDayKey(cutoffTournament, new Date('2026-08-28T01:00:00Z')),
+      '2026-08-27',
+      'calendar midnight must not split a 22:00-to-22:00 tournament round',
+    );
+    assert.equal(
+      rankedRaids.tournamentDayKey(
+        { scoring_mode: 'live', daily_pool_award_time_utc: '22:00' },
+        new Date('2026-08-28T01:00:00Z'),
+      ),
+      '2026-08-28',
+      'non-daily-pool ranked tournaments retain the UTC calendar-day quota',
+    );
+
     rankedRaids.setRankedShield(db, 3, 'global-same-th', 24);
     const globalCandidates = rankedRaids.listEligibleDefenders(
       db,
@@ -339,6 +372,101 @@ function run() {
       [{ player_id: 'attacker', source: 'ranked_raid_attack' }],
       'only the participant attacker contributes to tournament activity',
     );
+
+    const insertCutoffSession = db.prepare(`
+      INSERT INTO battle_sessions (
+        id, attacker_id, defender_id, status, reserved_until,
+        tournament_id, tournament_day_utc, tournament_attack_index
+      ) VALUES (?, 'attacker', ?, 'completed', '2026-08-01 00:00:00', 4, ?, ?)
+    `);
+    const insertCutoffRaid = db.prepare(`
+      INSERT INTO tournament_ranked_raids (
+        battle_session_id, tournament_id, day_utc, attacker_id, defender_id,
+        attack_number, status, result, attacker_trophy_delta, reserved_at, completed_at
+      ) VALUES (?, 4, ?, 'attacker', ?, ?, 'completed', 'victory', 35, ?, ?)
+    `);
+    const insertCutoffActivity = db.prepare(`
+      INSERT INTO tournament_daily_activity (
+        tournament_id, day_utc, player_id, source, event_id, trophies
+      ) VALUES (4, ?, 'attacker', 'ranked_raid_attack', ?, 35)
+    `);
+    const cutoffRaids = [
+      { id: 'cutoff-0', defender: 'global-wrong-th', storedDay: '2026-07-28', storedAttack: 1, reservedAt: '2026-07-28 23:00:00' },
+      { id: 'cutoff-1', defender: 'defender', storedDay: '2026-07-29', storedAttack: 1, reservedAt: '2026-07-29 14:00:00' },
+      { id: 'cutoff-2', defender: 'defender-2', storedDay: '2026-07-29', storedAttack: 2, reservedAt: '2026-07-29 16:00:00' },
+      { id: 'cutoff-3', defender: 'global-same-th', storedDay: '2026-07-30', storedAttack: 1, reservedAt: '2026-07-30 01:00:00' },
+    ];
+    for (const raid of cutoffRaids) {
+      insertCutoffSession.run(raid.id, raid.defender, raid.storedDay, raid.storedAttack);
+      insertCutoffRaid.run(
+        raid.id,
+        raid.storedDay,
+        raid.defender,
+        raid.storedAttack,
+        raid.reservedAt,
+        raid.reservedAt,
+      );
+      insertCutoffActivity.run(raid.storedDay, `${raid.id}:attacker`);
+    }
+    const cutoffDryRun = rankedRaids.reconcileRankedRaidDayKeys(db, 4);
+    assert.equal(cutoffDryRun.dry_run, true);
+    assert.equal(cutoffDryRun.changed_day_rows, 3);
+    assert.equal(cutoffDryRun.changed_attack_numbers, 2);
+    assert.deepEqual(cutoffDryRun.affected_days, [
+      '2026-07-28',
+      '2026-07-29',
+      '2026-07-30',
+    ]);
+    const cutoffApplied = rankedRaids.reconcileRankedRaidDayKeys(db, 4, { dryRun: false });
+    assert.equal(cutoffApplied.changed_day_rows, 3);
+    assert.deepEqual(
+      db.prepare(`
+        SELECT battle_session_id, day_utc, attack_number
+          FROM tournament_ranked_raids
+         WHERE tournament_id = 4
+         ORDER BY reserved_at
+      `).all(),
+      [
+        { battle_session_id: 'cutoff-0', day_utc: '2026-07-28', attack_number: 1 },
+        { battle_session_id: 'cutoff-1', day_utc: '2026-07-28', attack_number: 2 },
+        { battle_session_id: 'cutoff-2', day_utc: '2026-07-28', attack_number: 3 },
+        { battle_session_id: 'cutoff-3', day_utc: '2026-07-29', attack_number: 1 },
+      ],
+      'historical raids must move to cutoff-aligned rounds and be renumbered per round',
+    );
+    assert.deepEqual(
+      db.prepare(`
+        SELECT id, tournament_day_utc, tournament_attack_index
+          FROM battle_sessions
+         WHERE tournament_id = 4
+         ORDER BY id
+      `).all(),
+      [
+        { id: 'cutoff-0', tournament_day_utc: '2026-07-28', tournament_attack_index: 1 },
+        { id: 'cutoff-1', tournament_day_utc: '2026-07-28', tournament_attack_index: 2 },
+        { id: 'cutoff-2', tournament_day_utc: '2026-07-28', tournament_attack_index: 3 },
+        { id: 'cutoff-3', tournament_day_utc: '2026-07-29', tournament_attack_index: 1 },
+      ],
+      'battle session metadata must stay aligned with the ranked ledger',
+    );
+    assert.deepEqual(
+      db.prepare(`
+        SELECT event_id, day_utc
+          FROM tournament_daily_activity
+         WHERE tournament_id = 4
+         ORDER BY event_id
+      `).all(),
+      [
+        { event_id: 'cutoff-0:attacker', day_utc: '2026-07-28' },
+        { event_id: 'cutoff-1:attacker', day_utc: '2026-07-28' },
+        { event_id: 'cutoff-2:attacker', day_utc: '2026-07-28' },
+        { event_id: 'cutoff-3:attacker', day_utc: '2026-07-29' },
+      ],
+      'daily-pool activity must move with its ranked raid',
+    );
+    const cutoffSecondRun = rankedRaids.reconcileRankedRaidDayKeys(db, 4, { dryRun: false });
+    assert.equal(cutoffSecondRun.changed_day_rows, 0, 'reconciliation must be idempotent');
+    assert.equal(cutoffSecondRun.changed_attack_numbers, 0, 'idempotent runs must not renumber stable rows');
 
     const alphaBoard = rankedRaids.leaderboardPreview(db, 1, 2);
     assert.deepEqual(alphaBoard.map((row) => row.player_id), ['attacker', 'defender-2']);

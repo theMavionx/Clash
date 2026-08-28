@@ -11180,7 +11180,7 @@ function findRankedEnemy(playerId, tournamentId) {
     rankedRaids.cleanupStaleReservations(db, tid);
 
     const config = rankedRaids.normalizeRankedRaidConfig(tournament);
-    const dayUtc = rankedRaids.utcDayKey();
+    const dayUtc = rankedRaids.tournamentDayKey(tournament);
     const dayStats = rankedRaids.playerDayStats(db, tid, playerId, dayUtc);
     if (dayStats.attacks_remaining <= 0) {
       return {

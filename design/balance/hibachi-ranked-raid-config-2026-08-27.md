@@ -24,8 +24,8 @@ levels from widening the event score gap beyond the owner's requested value.
 
 | Item/Value | Previous | Requested | Impact |
 |---|---:|---:|---|
-| Attacks per player / UTC day | 20 | 50 | 2.5x more attempts |
-| Defenses per player / UTC day | 20 | 50 | Keeps server fairness invariant valid |
+| Attacks per player / tournament round | 20 | 50 | 2.5x more attempts |
+| Defenses per player / tournament round | 20 | 50 | Keeps server fairness invariant valid |
 | Ranked Altar bonus | Disabled | Enabled, max +5 | Up to 250 extra trophies across 50 wins |
 | TH5 perfect daily offense | 600 | 1,750 | 1,500 base + 250 capped Altar |
 
@@ -57,3 +57,18 @@ players without Glory still receive +0.
 - Tournament `27`: attack limit `50`, defense cap `50`, Altar enabled, Altar cap `5`.
 - Existing completed raid rows remain immutable; the new rules apply only when
   reserving/finalizing subsequent raids.
+
+## 2026-08-28 Round-Boundary Correction
+
+The tournament's daily-pool cutoff is `22:00 UTC`, so its competitive day is
+`22:00 -> 22:00`, not the UTC calendar day. Ranked raids previously reset their
+quota and wrote daily activity at `00:00 UTC`. That split one competitive round
+across two storage keys and made current-round trophies appear frozen after
+midnight even though the lifetime tournament ledger was still credited.
+
+Ranked quotas, repeat-opponent checks, defense capacity, battle-session metadata,
+and daily activity now share the daily-pool round key. This does not change the
+50-attempt ceiling, trophy values, Altar cap, or total credited trophies. The
+historical reconciliation only moves existing event rows between round buckets
+and forces recalculation of an already-closed pool, preventing both missing and
+double-awarded points.

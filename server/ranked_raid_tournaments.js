@@ -82,7 +82,7 @@ function validateRankedRaidTransition(currentTournament = {}, nextTournament = {
     && next.battle_mode === RANKED_BATTLE_MODE
     && next.daily_attack_limit !== current.daily_attack_limit
   ) {
-    return `The live ranked raid cap is locked at ${current.daily_attack_limit} attacks per UTC day after players join.`;
+    return `The live ranked raid cap is locked at ${current.daily_attack_limit} attacks per tournament day after players join.`;
   }
   if (
     current.battle_mode === RANKED_BATTLE_MODE
@@ -101,6 +101,35 @@ function validateRankedRaidTransition(currentTournament = {}, nextTournament = {
 
 function utcDayKey(date = new Date()) {
   return date.toISOString().slice(0, 10);
+}
+
+function dailyPoolCutoffMinutes(tournament = {}) {
+  if (String(tournament.scoring_mode || '').toLowerCase() !== 'daily_pool') return 0;
+  const raw = String(tournament.daily_pool_award_time_utc || '00:00').trim();
+  const match = raw.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+  if (!match) return 0;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (
+    !Number.isInteger(hours)
+    || !Number.isInteger(minutes)
+    || hours < 0
+    || hours > 23
+    || minutes < 0
+    || minutes > 59
+  ) return 0;
+  return hours * 60 + minutes;
+}
+
+// Ranked quotas and the daily-pool leaderboard must use the same round key.
+// Shifting by the award cutoff maps 2026-08-28 01:00 UTC into the round that
+// began on 2026-08-27 at 22:00 UTC, rather than silently starting a new quota
+// and scoreboard bucket at calendar midnight.
+function tournamentDayKey(tournament = {}, date = new Date()) {
+  const timestamp = date instanceof Date ? date.getTime() : new Date(date).getTime();
+  const safeTimestamp = Number.isFinite(timestamp) ? timestamp : Date.now();
+  const shifted = safeTimestamp - dailyPoolCutoffMinutes(tournament) * 60_000;
+  return utcDayKey(new Date(shifted));
 }
 
 function sqliteUtcFromMs(ms) {
@@ -225,8 +254,10 @@ function cleanupStaleReservations(db, tournamentId = null) {
   `).run(...args);
 }
 
-function playerDayStats(db, tournamentId, playerId, dayUtc = utcDayKey()) {
-  const config = normalizeRankedRaidConfig(getTournament(db, tournamentId));
+function playerDayStats(db, tournamentId, playerId, dayUtc = null) {
+  const tournament = getTournament(db, tournamentId);
+  const config = normalizeRankedRaidConfig(tournament);
+  const effectiveDayUtc = dayUtc || tournamentDayKey(tournament);
   const trophyProfile = raidTrophies.trophyProfileForPlayer(db, playerId);
   const row = db.prepare(`
     SELECT
@@ -252,13 +283,13 @@ function playerDayStats(db, tournamentId, playerId, dayUtc = utcDayKey()) {
     FROM tournament_ranked_raids
     WHERE tournament_id = ? AND day_utc = ? AND attacker_id = ?
   `).get(
-    tournamentId, dayUtc, playerId,
-    tournamentId, dayUtc, playerId,
-    tournamentId, dayUtc, playerId
+    tournamentId, effectiveDayUtc, playerId,
+    tournamentId, effectiveDayUtc, playerId,
+    tournamentId, effectiveDayUtc, playerId
   ) || {};
   const attacksUsed = Number(row.attacks_used || 0);
   return {
-    day_utc: dayUtc,
+    day_utc: effectiveDayUtc,
     attacks_used: attacksUsed,
     attacks_remaining: Math.max(0, config.daily_attack_limit - attacksUsed),
     daily_attack_limit: config.daily_attack_limit,
@@ -302,7 +333,7 @@ function setRankedShield(db, tournamentId, playerId, hours) {
 
 function listEligibleDefenders(db, tournament, attackerId, options = {}) {
   const config = normalizeRankedRaidConfig(tournament);
-  const dayUtc = options.dayUtc || utcDayKey();
+  const dayUtc = options.dayUtc || tournamentDayKey(tournament);
   const townHallLevel = Math.max(1, Math.trunc(Number(options.townHallLevel) || 1));
   return db.prepare(`
     SELECT
@@ -379,16 +410,17 @@ function listEligibleDefenders(db, tournament, attackerId, options = {}) {
 function reserveRankedRaid(db, {
   battleSessionId,
   tournamentId,
-  dayUtc = utcDayKey(),
+  dayUtc = null,
   attackerId,
   defenderId,
   dailyAttackLimit,
 }) {
+  const effectiveDayUtc = dayUtc || tournamentDayKey(getTournament(db, tournamentId));
   const used = db.prepare(`
     SELECT COUNT(*) AS count
       FROM tournament_ranked_raids
      WHERE tournament_id = ? AND day_utc = ? AND attacker_id = ?
-  `).get(tournamentId, dayUtc, attackerId)?.count || 0;
+  `).get(tournamentId, effectiveDayUtc, attackerId)?.count || 0;
   if (used >= dailyAttackLimit) {
     return { ok: false, error: `Daily ranked attack limit reached (${dailyAttackLimit}/${dailyAttackLimit}).` };
   }
@@ -400,7 +432,7 @@ function reserveRankedRaid(db, {
        AND attacker_id = ?
        AND defender_id = ?
      LIMIT 1
-  `).get(tournamentId, dayUtc, attackerId, defenderId);
+  `).get(tournamentId, effectiveDayUtc, attackerId, defenderId);
   if (previousMatch) {
     return { ok: false, error: 'This ranked defender was already matched today.' };
   }
@@ -410,8 +442,158 @@ function reserveRankedRaid(db, {
       battle_session_id, tournament_id, day_utc,
       attacker_id, defender_id, attack_number, status
     ) VALUES (?, ?, ?, ?, ?, ?, 'reserved')
-  `).run(battleSessionId, tournamentId, dayUtc, attackerId, defenderId, attackNumber);
-  return { ok: true, attack_number: attackNumber, day_utc: dayUtc };
+  `).run(battleSessionId, tournamentId, effectiveDayUtc, attackerId, defenderId, attackNumber);
+  return { ok: true, attack_number: attackNumber, day_utc: effectiveDayUtc };
+}
+
+function parseSqliteUtc(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  const parsed = new Date(`${raw.replace(' ', 'T').replace(/Z$/i, '')}Z`);
+  return Number.isFinite(parsed.getTime()) ? parsed : null;
+}
+
+function rankedRaidDayReconciliationPlan(db, tournamentId) {
+  const tid = Number(tournamentId);
+  if (!Number.isInteger(tid) || tid <= 0) throw new Error('Invalid ranked tournament id.');
+  const tournament = getTournament(db, tid);
+  if (!tournament || !isRankedRaidTournament(tournament)) {
+    throw new Error('Ranked raid tournament not found.');
+  }
+  const raids = db.prepare(`
+    SELECT rowid AS row_id, *
+      FROM tournament_ranked_raids
+     WHERE tournament_id = ?
+     ORDER BY reserved_at ASC, battle_session_id ASC
+  `).all(tid);
+  const attackCounts = new Map();
+  const planned = raids.map((raid) => {
+    const reservedAt = parseSqliteUtc(raid.reserved_at);
+    if (!reservedAt) throw new Error(`Invalid ranked raid reserved_at for ${raid.battle_session_id}.`);
+    const correctDayUtc = tournamentDayKey(tournament, reservedAt);
+    const sequenceKey = `${correctDayUtc}\u0000${raid.attacker_id}`;
+    const attackNumber = (attackCounts.get(sequenceKey) || 0) + 1;
+    attackCounts.set(sequenceKey, attackNumber);
+    return {
+      ...raid,
+      correct_day_utc: correctDayUtc,
+      correct_attack_number: attackNumber,
+      day_changed: raid.day_utc !== correctDayUtc,
+      attack_number_changed: Number(raid.attack_number) !== attackNumber,
+    };
+  });
+  const affectedDays = new Set();
+  for (const raid of planned) {
+    if (!raid.day_changed && !raid.attack_number_changed) continue;
+    affectedDays.add(raid.day_utc);
+    affectedDays.add(raid.correct_day_utc);
+  }
+  return {
+    tournament,
+    raids: planned,
+    total_raids: planned.length,
+    changed_day_rows: planned.filter((raid) => raid.day_changed).length,
+    changed_attack_numbers: planned.filter((raid) => raid.attack_number_changed).length,
+    reserved_rows: planned.filter((raid) => raid.status === 'reserved').length,
+    affected_days: Array.from(affectedDays).sort(),
+  };
+}
+
+function reconcileRankedRaidDayKeys(db, tournamentId, options = {}) {
+  const dryRun = options.dryRun !== false;
+  if (dryRun) {
+    const plan = rankedRaidDayReconciliationPlan(db, tournamentId);
+    return {
+      tournament_id: Number(tournamentId),
+      dry_run: true,
+      total_raids: plan.total_raids,
+      changed_day_rows: plan.changed_day_rows,
+      changed_attack_numbers: plan.changed_attack_numbers,
+      reserved_rows: plan.reserved_rows,
+      affected_days: plan.affected_days,
+    };
+  }
+
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const plan = rankedRaidDayReconciliationPlan(db, tournamentId);
+    if (plan.reserved_rows > 0) {
+      throw new Error(`Cannot reconcile while ${plan.reserved_rows} ranked raid reservation(s) are active.`);
+    }
+    if (typeof options.beforeApply === 'function') options.beforeApply(plan);
+    if (plan.changed_day_rows > 0 || plan.changed_attack_numbers > 0) {
+      db.prepare(`
+        UPDATE tournament_ranked_raids
+           SET attack_number = -rowid
+         WHERE tournament_id = ?
+      `).run(Number(tournamentId));
+      const updateRaid = db.prepare(`
+        UPDATE tournament_ranked_raids
+           SET day_utc = ?, attack_number = ?
+         WHERE battle_session_id = ? AND tournament_id = ?
+      `);
+      const updateSession = db.prepare(`
+        UPDATE battle_sessions
+           SET tournament_day_utc = ?, tournament_attack_index = ?
+         WHERE id = ? AND tournament_id = ?
+      `);
+      const updateAttackActivity = db.prepare(`
+        UPDATE tournament_daily_activity
+           SET day_utc = ?
+         WHERE tournament_id = ?
+           AND source = 'ranked_raid_attack'
+           AND event_id = ?
+      `);
+      const updateDefenseActivity = db.prepare(`
+        UPDATE tournament_daily_activity
+           SET day_utc = ?
+         WHERE tournament_id = ?
+           AND source = 'ranked_raid_defense'
+           AND event_id = ?
+      `);
+      for (const raid of plan.raids) {
+        updateRaid.run(
+          raid.correct_day_utc,
+          raid.correct_attack_number,
+          raid.battle_session_id,
+          Number(tournamentId),
+        );
+        updateSession.run(
+          raid.correct_day_utc,
+          raid.correct_attack_number,
+          raid.battle_session_id,
+          Number(tournamentId),
+        );
+        updateAttackActivity.run(
+          raid.correct_day_utc,
+          Number(tournamentId),
+          `${raid.battle_session_id}:attacker`,
+        );
+        updateDefenseActivity.run(
+          raid.correct_day_utc,
+          Number(tournamentId),
+          `${raid.battle_session_id}:defender`,
+        );
+      }
+    }
+    const verification = rankedRaidDayReconciliationPlan(db, tournamentId);
+    if (verification.changed_day_rows > 0 || verification.changed_attack_numbers > 0) {
+      throw new Error('Ranked raid day reconciliation verification failed.');
+    }
+    db.exec('COMMIT');
+    return {
+      tournament_id: Number(tournamentId),
+      dry_run: false,
+      total_raids: plan.total_raids,
+      changed_day_rows: plan.changed_day_rows,
+      changed_attack_numbers: plan.changed_attack_numbers,
+      reserved_rows: plan.reserved_rows,
+      affected_days: plan.affected_days,
+    };
+  } catch (error) {
+    try { db.exec('ROLLBACK'); } catch {}
+    throw error;
+  }
 }
 
 function getRaidContext(db, battleSessionId) {
@@ -588,6 +770,7 @@ module.exports = {
   validateRankedRaidTransition,
   isRankedRaidTournament,
   utcDayKey,
+  tournamentDayKey,
   tournamentIsLive,
   cleanupStaleReservations,
   getTournament,
@@ -597,6 +780,8 @@ module.exports = {
   setRankedShield,
   listEligibleDefenders,
   reserveRankedRaid,
+  rankedRaidDayReconciliationPlan,
+  reconcileRankedRaidDayKeys,
   getRaidContext,
   finalizeRankedRaid,
   cancelRankedRaid,

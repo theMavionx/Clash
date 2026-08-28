@@ -72,6 +72,16 @@ response for up to 30 seconds, so it appeared unchanged. Battle settlement now
 includes ranked tournament context on victory and defeat, and the selector
 forces one immediate server refresh for that settled result.
 
+### 2026-08-28 follow-up
+
+A later report with the Day 4 view stuck at 120 had a separate root cause. The
+three wins after calendar midnight were correctly finalized at +35 each, but
+their ranked activity used the `2026-08-28` UTC calendar key while the active
+daily-pool round was still `2026-08-27` until the configured 22:00 UTC cutoff.
+The ranked day key is now derived from the tournament cutoff, and historical
+ranked rows are reconciled idempotently before affected closed pools are
+re-awarded.
+
 ## Verification requirements
 
 - Four owned Fire Dragons plus five one-slot troops must be a valid 45-slot
