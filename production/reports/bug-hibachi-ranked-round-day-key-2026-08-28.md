@@ -6,7 +6,7 @@
 **ID**: BUG-2026-0828-RANKED-DAY-KEY  
 **Severity**: S2-Major  
 **Priority**: P1-Immediate  
-**Status**: Fixed locally; production reconciliation pending deployment  
+**Status**: Resolved and verified in production  
 **Reported**: 2026-08-28  
 **Reporter**: Clash owner / AmaniPremiere
 
@@ -19,7 +19,8 @@
 
 ## Environment
 
-- **Build**: `416198f438aeb471eda5aa50ae01cb30622f411b`
+- **Reported build**: `416198f438aeb471eda5aa50ae01cb30622f411b`
+- **Fixed build**: `48b83ea9` / release `20260828072103-48b83ea9`
 - **Platform**: Production web client and Node.js backend
 - **Scene/Level**: Tournament panel, Hibachi tournament `27`, Day 4
 - **Game State**: Daily pool at `22:00 UTC`; ranked raids enabled; 50 attempts; Altar capped at +5
@@ -45,7 +46,7 @@
 
 - AmaniPremiere had four earlier ranked wins stored under `2026-08-27` for 120 trophies.
 - Three later wins finalized exactly once at +35 each (+30 base, +5 Altar) under `2026-08-28`.
-- Production audit found 154 ranked raid rows using a calendar key that differed from their 22:00-cutoff tournament key: 96 rows / 2,476 trophies should move to `2026-08-26`, and 58 rows / 1,312 trophies should move to `2026-08-27`.
+- The final production dry-run found 159 ranked raid rows using a calendar key that differed from their 22:00-cutoff tournament key.
 - No active or reserved ranked sessions existed at the audit checkpoint.
 - Client logs contained unrelated Hibachi futures 404 polling warnings but no failed ranked trophy settlement.
 - Visual evidence shows Day 4 selected with AmaniPremiere remaining at 120 trophies.
@@ -56,6 +57,11 @@
 - Routed ranked quota, opponent-repeat, defense, battle-session, and activity writes through that key.
 - Added an idempotent reconciliation command that snapshots affected rows, blocks on active reservations, moves historical rows, renumbers attempts, and re-awards only closed affected pools.
 - Added boundary, midnight, historical migration, metadata synchronization, and idempotency regression tests.
+- Deployed release `20260828072103-48b83ea9` and reconciled all 159 rows in one locked transaction.
+- Stored the pre-mutation snapshot at `/opt/clash/shared/backups/ranked-raid-days-t27-before-2026-08-28T07-30-35-365Z.json`.
+- Re-awarded only the affected closed round (`2026-08-26`); its 1,440-point pool was distributed once across 10 players.
+- Production verification found zero remaining day-key or attack-number mismatches. A raid completed after reconciliation increased the ledger from 159 to 160 rows while the mismatch count remained zero.
+- AmaniPremiere's active Day 4 now reports 210 trophies from six wins and approximately 73.706161 projected points through the public daily-points endpoint.
 
 ## Balance Impact
 
