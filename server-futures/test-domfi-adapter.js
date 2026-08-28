@@ -116,4 +116,49 @@ assert.equal(rewardRows[0].notional_usd, 100);
 assert.equal(rewardRows[1].pnl, 2);
 assert.notEqual(rewardRows[0].clientOrderId, rewardRows[1].clientOrderId);
 
-console.log('DomFi adapter normalization/reward tests passed.');
+async function testWalletBalanceFallback() {
+  const wallet = '0x2222222222222222222222222222222222222222';
+  let readCalls = 0;
+  const client = {
+    async readContract() {
+      readCalls += 1;
+      return 18_074n;
+    },
+    async getBalance() {
+      readCalls += 1;
+      return 1_250_000_000_000_000n;
+    },
+  };
+  const live = await domfi.getWalletBalance(wallet, { client, force: true });
+  assert.equal(live.available, true);
+  assert.equal(live.usdc_raw, '18074');
+  assert.equal(live.eth_wei, '1250000000000000');
+  assert.equal(live.usdc, 0.018074);
+  assert.equal(live.eth, 0.00125);
+  assert.equal(readCalls, 2);
+
+  const cached = await domfi.getWalletBalance(wallet);
+  assert.equal(cached.cache, 'hit');
+  assert.equal(cached.usdc_raw, live.usdc_raw);
+  assert.equal(readCalls, 2, 'a fresh server-side balance must be reused without another RPC call');
+
+  const unavailable = await domfi.getWalletBalanceSafe(
+    '0x3333333333333333333333333333333333333333',
+    {
+      force: true,
+      client: {
+        async readContract() { throw new Error('RPC unavailable'); },
+        async getBalance() { throw new Error('RPC unavailable'); },
+      },
+    },
+  );
+  assert.equal(unavailable.available, false);
+  assert.equal(unavailable.source, 'server_base_rpc');
+}
+
+testWalletBalanceFallback()
+  .then(() => console.log('DomFi adapter normalization/reward/balance fallback tests passed.'))
+  .catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });

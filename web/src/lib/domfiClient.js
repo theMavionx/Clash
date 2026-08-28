@@ -109,6 +109,23 @@ export function domfiUsdcDisplay(value) {
   return Number(formatUnits(BigInt(value || 0), 6));
 }
 
+export function normalizeDomfiWalletBalanceSnapshot(snapshot) {
+  if (!snapshot || snapshot.available !== true) return null;
+  try {
+    const usdcRaw = BigInt(snapshot.usdc_raw);
+    const ethRaw = snapshot.eth_wei == null ? null : BigInt(snapshot.eth_wei);
+    if (usdcRaw < 0n || (ethRaw != null && ethRaw < 0n)) return null;
+    return {
+      usdcRaw,
+      ethRaw,
+      source: String(snapshot.source || 'server_base_rpc'),
+      stale: snapshot.stale === true,
+    };
+  } catch {
+    return null;
+  }
+}
+
 function crc32cTable() {
   const polynomial = 0x82f63b78;
   const table = new Uint32Array(256);
@@ -211,16 +228,37 @@ export function prepareDomfiCloseCalldata({ pairIndex, tradeIndex, closePercent 
   });
 }
 
+const DOMFI_READ_RETRY_DELAYS_MS = [0, 300, 900];
+const DOMFI_TRANSIENT_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
+
+function domfiRetryDelay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 export async function fetchDomfiJson(pathname, options = {}) {
-  const response = await fetch(`/api/futures${pathname}`, options);
-  const payload = await response.json().catch(() => null);
-  if (!response.ok) {
-    const error = new Error(payload?.detail || payload?.error || `DomFi request failed (${response.status})`);
-    error.status = response.status;
-    error.payload = payload;
-    throw error;
+  const method = String(options.method || 'GET').toUpperCase();
+  const attempts = method === 'GET' ? DOMFI_READ_RETRY_DELAYS_MS.length : 1;
+  let lastError = null;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (attempt > 0) await domfiRetryDelay(DOMFI_READ_RETRY_DELAYS_MS[attempt]);
+    try {
+      const response = await fetch(`/api/futures${pathname}`, options);
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        const error = new Error(payload?.detail || payload?.error || `DomFi request failed (${response.status})`);
+        error.status = response.status;
+        error.payload = payload;
+        throw error;
+      }
+      return payload;
+    } catch (error) {
+      lastError = error;
+      const aborted = options.signal?.aborted || error?.name === 'AbortError';
+      const transient = error?.status == null || DOMFI_TRANSIENT_STATUS.has(Number(error.status));
+      if (aborted || !transient || attempt >= attempts - 1) throw error;
+    }
   }
-  return payload;
+  throw lastError || new Error('DomFi request failed');
 }
 
 export function assertDomfiConfig(config) {

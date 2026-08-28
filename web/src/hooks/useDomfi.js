@@ -20,12 +20,14 @@ import {
   domfiReferralCodeIdForOpen,
   domfiUsdcDisplay,
   fetchDomfiJson,
+  normalizeDomfiWalletBalanceSnapshot,
   prepareDomfiCloseCalldata,
   prepareDomfiOpenCalldata,
 } from '../lib/domfiClient';
 
 const POLL_INTERVAL_MS = 30_000;
 const RECEIPT_TIMEOUT_MS = 90_000;
+const BALANCE_READ_TIMEOUT_MS = 7_000;
 
 function walletError(error, fallback = 'DomFi transaction failed') {
   const chain = [error, error?.cause, error?.cause?.cause].filter(Boolean);
@@ -114,27 +116,57 @@ export function useDomfi() {
 
   const fetchBalance = useCallback(async () => {
     if (!walletAddr || !publicClient) return null;
-    const [usdcRaw, ethRaw] = await Promise.all([
+    let timeoutId = null;
+    const reads = Promise.allSettled([
       publicClient.readContract({ address: DOMFI_USDC, abi: DOMFI_ERC20_ABI, functionName: 'balanceOf', args: [walletAddr] }),
       publicClient.getBalance({ address: walletAddr }),
     ]);
+    const timeout = new Promise((_, reject) => {
+      timeoutId = setTimeout(() => reject(new Error('DomFi wallet balance read timed out')), BALANCE_READ_TIMEOUT_MS);
+    });
+    let results;
+    try {
+      results = await Promise.race([reads, timeout]);
+    } finally {
+      if (timeoutId) clearTimeout(timeoutId);
+    }
+    const [usdcResult, ethResult] = results;
+    if (usdcResult.status === 'rejected') throw usdcResult.reason;
+    const usdcRaw = usdcResult.value;
+    const ethRaw = ethResult.status === 'fulfilled' ? ethResult.value : null;
     setWalletUsdc(domfiUsdcDisplay(usdcRaw));
-    setWalletEth(Number(formatEther(ethRaw)));
+    if (ethRaw != null) setWalletEth(Number(formatEther(ethRaw)));
     return { usdcRaw, ethRaw };
   }, [publicClient, walletAddr]);
 
   const fetchPrivate = useCallback(async () => {
     if (!isActiveDex || !walletAddr) return null;
     const addressQuery = encodeURIComponent(walletAddr);
-    const [snapshot, nextReferral, balanceSnapshot] = await Promise.all([
+    const [snapshotResult, referralResult] = await Promise.allSettled([
       fetchDomfiJson(`/domfi/account-snapshot?address=${addressQuery}`),
       fetchDomfiJson(`/domfi/referral?address=${addressQuery}`),
-      fetchBalance(),
     ]);
+    if (snapshotResult.status === 'rejected') throw snapshotResult.reason;
+    const snapshot = snapshotResult.value;
+    const nextReferral = referralResult.status === 'fulfilled' ? referralResult.value : null;
+    let balanceSnapshot = normalizeDomfiWalletBalanceSnapshot(snapshot?.wallet_balance);
+    if (balanceSnapshot) {
+      setWalletUsdc(domfiUsdcDisplay(balanceSnapshot.usdcRaw));
+      if (balanceSnapshot.ethRaw != null) setWalletEth(Number(formatEther(balanceSnapshot.ethRaw)));
+    } else {
+      try {
+        balanceSnapshot = await fetchBalance();
+      } catch {
+        balanceSnapshot = null;
+      }
+    }
     const nextAccount = snapshot?.account || null;
     const nextPositions = Array.isArray(snapshot?.positions) ? snapshot.positions : [];
     const nextOrders = Array.isArray(snapshot?.orders) ? snapshot.orders : [];
-    const freeUsdc = domfiUsdcDisplay(balanceSnapshot?.usdcRaw || 0n);
+    const previousUsdc = Number(walletUsdc);
+    const freeUsdc = balanceSnapshot?.usdcRaw != null
+      ? domfiUsdcDisplay(balanceSnapshot.usdcRaw)
+      : (Number.isFinite(previousUsdc) && previousUsdc >= 0 ? previousUsdc : 0);
     const positionEquity = Number(nextAccount?.account_value || 0) + Number(nextAccount?.unrealized_pnl || 0);
     const oracleFeeReserve = Math.max(0, ...markets.map(row => Number(row?.oracle_fee_usdc || 0))) || 0.1;
     setAccount({
@@ -148,10 +180,10 @@ export function useDomfi() {
     });
     setPositions(Array.isArray(nextPositions) ? nextPositions : []);
     setOrders(Array.isArray(nextOrders) ? nextOrders : []);
-    setReferralStatus(nextReferral || null);
+    if (nextReferral) setReferralStatus(nextReferral);
     setAccountReady(true);
     return { account: nextAccount, positions: nextPositions, orders: nextOrders, referral: nextReferral };
-  }, [fetchBalance, isActiveDex, markets, walletAddr]);
+  }, [fetchBalance, isActiveDex, markets, walletAddr, walletUsdc]);
 
   const refresh = useCallback(async () => {
     setError(null);

@@ -135,6 +135,7 @@ Invoke-Step "Avantis price payload" { node server-futures/test-avantis-price-pay
 Invoke-Step "Avantis browser price payload" { node web/test-avantis-price-payload.mjs }
 Invoke-Step "DomFi adapter and reward normalization" { node server-futures/test-domfi-adapter.js }
 Invoke-Step "DomFi browser calldata and referral" { node web/test-domfi-client.mjs }
+Invoke-Step "client log retry queue and backoff" { node web/test-client-logger-retry.mjs }
 Invoke-Step "DomFi Gold, quests, and tournament attribution" { node server/test-domfi-rewards.js }
 Invoke-Step "eToro adapter contract" { node server-futures/test-etoro-adapter.js }
 Invoke-Step "eToro browser integration" { node web/test-etoro-client.mjs }

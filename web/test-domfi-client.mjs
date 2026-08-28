@@ -13,6 +13,8 @@ import {
   appendDomfiReferralSuffix,
   assertDomfiConfig,
   domfiReferralCodeIdForOpen,
+  fetchDomfiJson,
+  normalizeDomfiWalletBalanceSnapshot,
   encodeDomfiReferralSuffix,
   prepareDomfiCloseCalldata,
   prepareDomfiOpenCalldata,
@@ -108,6 +110,43 @@ assert.equal(decodedClose.functionName, 'closeTradeMarket');
 assert.deepEqual(decodedClose.args, [4, 3, 3333, 50n, 3_125_000_000_000_000_000n]);
 assert.throws(() => prepareDomfiCloseCalldata({ pairIndex: 0, tradeIndex: 0, closePercent: 0, price: '1' }), /between 0 and 100/);
 
+assert.deepEqual(normalizeDomfiWalletBalanceSnapshot({
+  available: true,
+  usdc_raw: '18074',
+  eth_wei: '1250000000000000',
+  source: 'server_base_rpc',
+  stale: true,
+}), {
+  usdcRaw: 18_074n,
+  ethRaw: 1_250_000_000_000_000n,
+  source: 'server_base_rpc',
+  stale: true,
+});
+assert.equal(normalizeDomfiWalletBalanceSnapshot({ available: false }), null);
+assert.equal(normalizeDomfiWalletBalanceSnapshot({ available: true, usdc_raw: 'invalid' }), null);
+
+const originalFetch = globalThis.fetch;
+let retryCalls = 0;
+try {
+  globalThis.fetch = async () => {
+    retryCalls += 1;
+    if (retryCalls === 1) throw new TypeError('network connection lost');
+    return { ok: true, status: 200, json: async () => ({ ok: true }) };
+  };
+  assert.deepEqual(await fetchDomfiJson('/domfi/config'), { ok: true });
+  assert.equal(retryCalls, 2, 'idempotent DomFi reads must retry a transient network failure');
+
+  retryCalls = 0;
+  globalThis.fetch = async () => {
+    retryCalls += 1;
+    return { ok: false, status: 400, json: async () => ({ error: 'bad request' }) };
+  };
+  await assert.rejects(fetchDomfiJson('/domfi/config'), /bad request/);
+  assert.equal(retryCalls, 1, 'non-transient DomFi responses must not be retried');
+} finally {
+  globalThis.fetch = originalFetch;
+}
+
 const hookSource = readFileSync(new URL('./src/hooks/useDomfi.js', import.meta.url), 'utf8');
 assert.match(hookSource, /fetch\('\/api\/trading\/claim-gold'/u);
 assert.doesNotMatch(hookSource, /fetch\('\/api\/claim-gold'/u);
@@ -116,5 +155,7 @@ assert.match(futuresPanelSource, /dex === 'avantis' \|\| dex === 'domfi'/u);
 assert.match(futuresPanelSource, /dex !== 'avantis' && dex !== 'domfi' && dex !== 'etoro' && dex !== 'gmx'/u);
 const registerPanelSource = readFileSync(new URL('./src/components/RegisterPanel.jsx', import.meta.url), 'utf8');
 assert.match(registerPanelSource, /const venue = dex === 'domfi' \? 'DOMFI'/u);
+assert.match(hookSource, /Promise\.allSettled/u);
+assert.match(hookSource, /normalizeDomfiWalletBalanceSnapshot\(snapshot\?\.wallet_balance\)/u);
 
 console.log('DomFi client calldata/referral tests passed.');

@@ -2,12 +2,19 @@ import {
   hasCriticalClientActivity,
   requestClientUpdate,
 } from './updateCoordinator';
+import {
+  clientLogRetryDelayMs,
+  isRetriableClientLogStatus,
+  requeueFailedClientLogBatch,
+} from './clientLogRetry';
 
 const ENDPOINT = '/api/client-log';
 const LEVELS = ['log', 'info', 'warn', 'error', 'debug'];
 const SERVER_LEVELS = new Set(['warn', 'error']);
 const BATCH_SIZE = 5;
 const FLUSH_DELAY_MS = 1200;
+const RETRY_BASE_MS = 2_000;
+const RETRY_MAX_MS = 30_000;
 const MAX_QUEUE = 100;
 const MAX_BREADCRUMBS = 90;
 const CLIENT_MAX_PER_MINUTE = 120;
@@ -35,6 +42,7 @@ let flushing = false;
 let timer = null;
 let fetchSeq = 0;
 let actionSeq = 0;
+let consecutiveFlushFailures = 0;
 const queue = [];
 const recentAt = [];
 const breadcrumbs = [];
@@ -558,12 +566,12 @@ function payloadString(payload) {
   }
 }
 
-function scheduleFlush() {
+function scheduleFlush(delayMs = FLUSH_DELAY_MS) {
   if (timer || flushing) return;
   timer = setTimeout(() => {
     timer = null;
     flush();
-  }, FLUSH_DELAY_MS);
+  }, delayMs);
 }
 
 function shouldStoreEvent(event) {
@@ -639,19 +647,38 @@ function tokenHeader() {
 
 function flush() {
   if (flushing || queue.length === 0) return;
+  if (timer) {
+    clearTimeout(timer);
+    timer = null;
+  }
   flushing = true;
   const events = queue.splice(0, BATCH_SIZE);
   const body = JSON.stringify({ events });
   const fetchImpl = original.fetch || window.fetch.bind(window);
-  fetchImpl(ENDPOINT, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...tokenHeader() },
-    body,
-    keepalive: body.length < 60_000,
-  }).catch(() => {}).finally(() => {
-    flushing = false;
-    if (queue.length) scheduleFlush();
-  });
+  let nextDelayMs = FLUSH_DELAY_MS;
+  Promise.resolve()
+    .then(() => fetchImpl(ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...tokenHeader() },
+      body,
+      keepalive: body.length < 60_000,
+    }))
+    .then((response) => {
+      if (!response?.ok && isRetriableClientLogStatus(response?.status)) {
+        throw new Error(`Client log delivery failed (${response?.status || 'network'})`);
+      }
+      consecutiveFlushFailures = 0;
+    })
+    .catch(() => {
+      consecutiveFlushFailures += 1;
+      const nextQueue = requeueFailedClientLogBatch(queue, events, MAX_QUEUE);
+      queue.splice(0, queue.length, ...nextQueue);
+      nextDelayMs = clientLogRetryDelayMs(consecutiveFlushFailures, RETRY_BASE_MS, RETRY_MAX_MS);
+    })
+    .finally(() => {
+      flushing = false;
+      if (queue.length) scheduleFlush(nextDelayMs);
+    });
 }
 
 function patchConsole(level) {

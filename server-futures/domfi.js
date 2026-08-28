@@ -1,3 +1,5 @@
+const { createPublicClient, fallback, formatEther, formatUnits, http } = require('viem');
+const { base } = require('viem/chains');
 const db = require('./db');
 
 const DOMFI_CHAIN_ID = 8453;
@@ -23,11 +25,65 @@ const FETCH_TIMEOUT_MS = Math.max(1_000, Math.min(20_000, Number(process.env.DOM
 const CACHE_TTL_MS = Math.max(1_000, Math.min(60_000, Number(process.env.DOMFI_CACHE_TTL_MS || 10_000)));
 const STALE_TTL_MS = Math.max(CACHE_TTL_MS, Math.min(30 * 60_000, Number(process.env.DOMFI_STALE_TTL_MS || 5 * 60_000)));
 const IMPORT_LIMIT = Math.max(10, Math.min(250, Number(process.env.DOMFI_IMPORT_LIMIT || 100)));
+const WALLET_BALANCE_CACHE_TTL_MS = Math.max(5_000, Math.min(60_000, Number(process.env.DOMFI_WALLET_BALANCE_CACHE_TTL_MS || 15_000)));
+const WALLET_BALANCE_STALE_TTL_MS = Math.max(
+  WALLET_BALANCE_CACHE_TTL_MS,
+  Math.min(10 * 60_000, Number(process.env.DOMFI_WALLET_BALANCE_STALE_TTL_MS || 2 * 60_000)),
+);
+const WALLET_BALANCE_CACHE_MAX = Math.max(50, Math.min(2_000, Number(process.env.DOMFI_WALLET_BALANCE_CACHE_MAX || 500)));
+const RPC_TIMEOUT_MS = Math.max(2_000, Math.min(15_000, Number(process.env.DOMFI_RPC_TIMEOUT_MS || 7_000)));
+const WALLET_BALANCE_BUDGET_MS = Math.max(2_000, Math.min(12_000, Number(process.env.DOMFI_WALLET_BALANCE_BUDGET_MS || 6_000)));
+
+const DOMFI_ERC20_BALANCE_ABI = [{
+  name: 'balanceOf',
+  type: 'function',
+  stateMutability: 'view',
+  inputs: [{ name: 'account', type: 'address' }],
+  outputs: [{ type: 'uint256' }],
+}];
+
+function splitList(value) {
+  return String(value || '')
+    .split(/[,\s]+/u)
+    .map(entry => entry.trim())
+    .filter(Boolean);
+}
+
+const baseAlchemyKey = String(process.env.BASE_ALCHEMY_KEY || process.env.ALCHEMY_BASE_API_KEY || '').trim();
+const baseAlchemyRpc = baseAlchemyKey
+  ? `https://base-mainnet.g.alchemy.com/v2/${encodeURIComponent(baseAlchemyKey)}`
+  : '';
+const DOMFI_BASE_RPC_URLS = Array.from(new Set([
+  ...splitList(
+    process.env.DOMFI_BASE_RPC_URLS
+      || process.env.DOMFI_BASE_RPC_URL
+      || process.env.BASE_RPC_URLS
+      || process.env.BASE_RPC_URL
+      || process.env.VITE_BASE_RPC_URLS
+      || process.env.VITE_BASE_RPC_URL,
+  ),
+  baseAlchemyRpc,
+  'https://mainnet.base.org',
+  'https://base-rpc.publicnode.com',
+].filter(value => /^https?:\/\//iu.test(value))));
+
+function baseRpcTransport() {
+  const transports = DOMFI_BASE_RPC_URLS.map(url => http(url, { retryCount: 1, timeout: RPC_TIMEOUT_MS }));
+  if (transports.length === 1) return transports[0];
+  return fallback(transports, { rank: false, retryCount: 0 });
+}
+
+const basePublicClient = createPublicClient({
+  chain: base,
+  transport: baseRpcTransport(),
+});
 
 let marketCache = { at: 0, rows: [] };
 let priceCache = { at: 0, rows: [] };
 let marketStateCache = { at: 0, byPair: new Map() };
 let referralCache = { at: 0, value: null };
+const walletBalanceCache = new Map();
+const walletBalanceInFlight = new Map();
 
 function isEvmAddress(value) {
   return /^0x[0-9a-fA-F]{40}$/.test(String(value || '').trim());
@@ -407,9 +463,101 @@ async function getAccountByAddress(address) {
   return accountFromPositions(wallet, positions);
 }
 
+function pruneWalletBalanceCache() {
+  while (walletBalanceCache.size > WALLET_BALANCE_CACHE_MAX) {
+    const oldestKey = walletBalanceCache.keys().next().value;
+    if (!oldestKey) break;
+    walletBalanceCache.delete(oldestKey);
+  }
+}
+
+function serializeWalletBalance(wallet, usdcRaw, ethWei, options = {}) {
+  const normalizedUsdc = BigInt(usdcRaw);
+  const normalizedEth = BigInt(ethWei);
+  return {
+    available: true,
+    address: wallet,
+    usdc_raw: normalizedUsdc.toString(),
+    eth_wei: normalizedEth.toString(),
+    usdc: Number(formatUnits(normalizedUsdc, 6)),
+    eth: Number(formatEther(normalizedEth)),
+    source: 'server_base_rpc',
+    cache: options.cache || 'miss',
+    stale: options.stale === true,
+    fetched_at: options.fetchedAt || new Date().toISOString(),
+  };
+}
+
+async function getWalletBalance(address, options = {}) {
+  const wallet = normalizeAddress(address);
+  if (!wallet) throw requestError('valid EVM address required', 400, null);
+  const now = Date.now();
+  const cached = walletBalanceCache.get(wallet);
+  if (!options.force && cached && now - cached.at < WALLET_BALANCE_CACHE_TTL_MS) {
+    return { ...cached.value, cache: 'hit', stale: false };
+  }
+
+  const customClient = options.client || null;
+  if (!customClient && walletBalanceInFlight.has(wallet)) return walletBalanceInFlight.get(wallet);
+  const client = customClient || basePublicClient;
+  const readPromise = (async () => {
+    try {
+      const [usdcRaw, ethWei] = await Promise.all([
+        client.readContract({
+          address: DOMFI_USDC,
+          abi: DOMFI_ERC20_BALANCE_ABI,
+          functionName: 'balanceOf',
+          args: [wallet],
+        }),
+        client.getBalance({ address: wallet }),
+      ]);
+      const value = serializeWalletBalance(wallet, usdcRaw, ethWei);
+      walletBalanceCache.delete(wallet);
+      walletBalanceCache.set(wallet, { at: Date.now(), value });
+      pruneWalletBalanceCache();
+      return value;
+    } catch (error) {
+      if (cached && now - cached.at < WALLET_BALANCE_STALE_TTL_MS) {
+        return { ...cached.value, cache: 'stale', stale: true };
+      }
+      throw error;
+    }
+  })();
+
+  if (!customClient) walletBalanceInFlight.set(wallet, readPromise);
+  try {
+    return await readPromise;
+  } finally {
+    if (!customClient && walletBalanceInFlight.get(wallet) === readPromise) {
+      walletBalanceInFlight.delete(wallet);
+    }
+  }
+}
+
+async function getWalletBalanceSafe(address, options = {}) {
+  let timeoutId = null;
+  try {
+    const timeout = new Promise((_, reject) => {
+      timeoutId = setTimeout(() => reject(new Error('DomFi server balance read timed out')), WALLET_BALANCE_BUDGET_MS);
+    });
+    return await Promise.race([getWalletBalance(address, options), timeout]);
+  } catch {
+    return {
+      available: false,
+      address: normalizeAddress(address),
+      source: 'server_base_rpc',
+      cache: 'unavailable',
+      stale: false,
+    };
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+}
+
 async function getAccountSnapshot(address) {
   const wallet = normalizeAddress(address);
   if (!wallet) throw requestError('valid EVM address required', 400, null);
+  const walletBalancePromise = getWalletBalanceSafe(wallet);
   const [positionRows, lifecycleRows, markets] = await Promise.all([
     rawPositions(wallet),
     rawOrders(wallet),
@@ -422,6 +570,7 @@ async function getAccountSnapshot(address) {
     account: accountFromPositions(wallet, positions),
     positions,
     orders,
+    wallet_balance: await walletBalancePromise,
   };
 }
 
@@ -612,6 +761,8 @@ module.exports = {
   getReferralBinding,
   getReferralCode,
   getReferralStatus,
+  getWalletBalance,
+  getWalletBalanceSafe,
   importFillsForPlayer,
   isEvmAddress,
   normalizeAddress,
@@ -619,5 +770,6 @@ module.exports = {
   normalizePosition,
   normalizePendingOrder,
   normalizeTradeHistory,
+  serializeWalletBalance,
   tradeRowsForImport,
 };

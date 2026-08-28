@@ -3620,3 +3620,22 @@ Follow-up:
   admin, update ADR/release metadata, commit, push and deploy through the
   canonical atomic pipeline. No funded order, withdrawal or unattended wallet
   signature is authorized by this deployment.
+
+## UR-2026-08-28-DOMFI-RPC-RESILIENCE
+
+- Timestamp: 2026-08-28 Europe/Kyiv
+- Request: "домфі щось не працюж перевір логи клієнські і все інще"; after
+  diagnosis, "внось зміни і на прод".
+- Production evidence: the affected browser reported repeated
+  `net::ERR_HTTP2_PROTOCOL_ERROR` responses for the Base RPC proxy, DomFi
+  account/market endpoints, and `/api/client-log`; the DomFi account panel then
+  surfaced a generic ERC-20 `balanceOf` error. Current direct production and
+  upstream checks returned valid data, including 0.018074 Base USDC for the
+  reported wallet, which indicates a transient client connection failure rather
+  than a DomFi contract or API migration.
+- Approved scope: make wallet-balance reads non-fatal by adding a server-side
+  Base RPC fallback to the DomFi account snapshot, retain the last trustworthy
+  balance during browser RPC degradation, retry failed client-log batches with
+  bounded backoff instead of dropping them, add regression coverage, commit,
+  push, deploy through the canonical proxy pipeline, and verify production. No
+  trade, approval, wallet signature, or funded transaction is authorized.
