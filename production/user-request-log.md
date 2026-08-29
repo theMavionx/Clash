@@ -3639,3 +3639,38 @@ Follow-up:
   bounded backoff instead of dropping them, add regression coverage, commit,
   push, deploy through the canonical proxy pipeline, and verify production. No
   trade, approval, wallet signature, or funded transaction is authorized.
+
+## UR-2026-08-28-TOURNAMENT-VOLUME-STUCK
+
+- Timestamp: 2026-08-28 Europe/Kyiv
+- Request: "I took many trades today and volume is stuck."
+- Player evidence: the active tournament leaderboard shows Ameer Pirate at
+  1,750 trophies, `$3,369 vol`, 0 Gold and 137 points despite the player
+  reporting many trades today.
+- Investigation scope: compare the active tournament window and exchange with
+  verified trade rows, tournament cursors, leaderboard aggregation, reward
+  workers, and client/server logs. Diagnose before changing scoring or
+  production data; no funded trade or wallet signature is authorized.
+
+## UR-2026-08-29-HIBACHI-HISTORY-AND-VOLUME-SYNC
+
+- Timestamp: 2026-08-29 Europe/Kyiv
+- Request: "history tab doesn't load up for hibachi on clash of perps"; also
+  fix the previously diagnosed stuck Hibachi tournament volume, audit History
+  loading across every connected exchange, and deploy the verified change to
+  production.
+- Production evidence: affected clients logged `fetch POST
+  /api/futures/hibachi/trade-history aborted` with no matching Hibachi server
+  error. The client cancelled History after 8 seconds even though a Hibachi
+  read can use a 12-second upstream attempt and proxy retries; live market-array
+  updates could also tear down and restart the History effect. The current
+  Hibachi order-history response uses `avgFillPrice`, which the adapter did not
+  normalize.
+- Approved scope: make History loading stable for all 24 configured exchanges,
+  align Hibachi timing and response normalization with its current documented
+  API, show actionable credential/timeout failures with Retry, stop invalid
+  generic Hibachi GET prefetches, reconcile Hibachi fills from the active
+  tournament panel using existing browser-encrypted credentials, add focused
+  regression coverage, commit, push and deploy through the canonical atomic
+  production pipeline. No funded trade, withdrawal, wallet signature, or
+  production database edit is authorized.

@@ -4,12 +4,18 @@
 // fdf8e7 paper, d4c8b0 stitched border, brown title, red round close button,
 // e8dfc8 rows. Three states (no tournament / not joined / joined) share the
 // same paper modal so the visual language is consistent across the game.
-import { memo, useEffect, useState, useMemo } from 'react';
+import { memo, useCallback, useEffect, useState, useMemo } from 'react';
 import { useLuckyRaider, useTournament, useTournamentDailyPoints, useTournamentLeaderboard, useTournamentHistory } from '../hooks/useTournament';
 import { useBuildingDefs, usePlayer } from '../hooks/useGodot';
 import { useDex } from '../contexts/DexContext';
 import trophyIcon from '../assets/resources/free-icon-cup-with-star-109765.png';
 import { uiButton, uiIconButton } from '../styles/theme';
+import { readHibachiCredentials } from '../lib/hibachiCredentials';
+import { registeredDexWallet } from '../lib/playerDexAccounts';
+import {
+  HIBACHI_TOURNAMENT_SYNC_INTERVAL_MS,
+  syncHibachiTournamentVolume,
+} from '../lib/hibachiTournamentSync';
 
 function formatNumber(n, options = {}) {
   const v = Number(n) || 0;
@@ -712,6 +718,7 @@ function TournamentPanel({ onClose }) {
     join,
     leave,
     updateRewardWallet,
+    refresh: refreshTournament,
   } = useTournament({ active: tab === 'active' });
   const {
     me: luckyMe,
@@ -727,6 +734,7 @@ function TournamentPanel({ onClose }) {
   const [rewardWalletEvm, setRewardWalletEvm] = useState('');
   const [rewardTwitterHandle, setRewardTwitterHandle] = useState('');
   const [rewardWalletEditing, setRewardWalletEditing] = useState(false);
+  const [hibachiSync, setHibachiSync] = useState({ state: 'idle', message: '' });
 
   // When the History tab is active and the user clicks a row, swap the
   // leaderboard pointer to that ended tournament. Otherwise the active
@@ -760,9 +768,9 @@ function TournamentPanel({ onClose }) {
   const joinBlockedByTownHall = !isHistory && me?.can_join_reason === 'town_hall_requirement_not_met';
   const joinTownHallRequirement = me?.town_hall_requirement || null;
   const currentTownHallLevel = Number(joinTownHallRequirement?.current || playerTownHallLevel(player, buildingDefs) || 0) || 0;
-  const { board } = useTournamentLeaderboard(t?.id, { active: !!t && tab !== 'lucky', pollMs: isHistory ? 60000 : 10000 });
+  const { board, refresh: refreshLeaderboard } = useTournamentLeaderboard(t?.id, { active: !!t && tab !== 'lucky', pollMs: isHistory ? 60000 : 10000 });
   const dailyActive = !!t && isDailyPoolTournament(t);
-  const { daily } = useTournamentDailyPoints(t?.id, {
+  const { daily, refresh: refreshDailyPoints } = useTournamentDailyPoints(t?.id, {
     active: dailyActive,
     pollMs: isHistory ? 60000 : 20000,
     limit: 7,
@@ -821,6 +829,77 @@ function TournamentPanel({ onClose }) {
     }
     return { schedule: board?.reward_schedule || t.reward_schedule || t.reward_config || null, sectorName: null };
   }, [board?.reward_schedule, megaSectors, myBoardRow?.mega_sector_id, t]);
+
+  const playerToken = player?.token || '';
+  const hibachiWallet = registeredDexWallet(player, 'hibachi', 'evm');
+  const syncActiveHibachiTournament = useCallback(async ({
+    forceReconcile = false,
+    reason = 'tournament_poll',
+    signal,
+  } = {}) => {
+    if (dex !== 'hibachi' || tab !== 'active' || !liveTournament?.id || !joined || !playerToken) return null;
+    setHibachiSync({ state: 'syncing', message: 'Checking recent Hibachi trades…' });
+    try {
+      const credentials = await readHibachiCredentials();
+      if (signal?.aborted) return null;
+      const result = await syncHibachiTournamentVolume({
+        token: playerToken,
+        wallet: hibachiWallet,
+        credentials,
+        forceReconcile,
+        reason,
+        signal,
+      });
+      if (signal?.aborted) return null;
+      await Promise.all([
+        refreshTournament(),
+        refreshLeaderboard(),
+        dailyActive ? refreshDailyPoints() : Promise.resolve(),
+      ]);
+      if (!signal?.aborted) {
+        setHibachiSync({
+          state: 'ready',
+          message: Number(result?.gold || 0) > 0
+            ? `Hibachi trades synced (+${Number(result.gold)} Gold).`
+            : 'Hibachi trades checked and standings refreshed.',
+        });
+      }
+      return result;
+    } catch (error) {
+      if (error?.name === 'AbortError' || signal?.aborted) return null;
+      const message = error?.message || 'Could not sync Hibachi tournament volume';
+      setHibachiSync({
+        state: /reconnect hibachi api credentials/iu.test(message) ? 'missing' : 'error',
+        message,
+      });
+      return null;
+    }
+  }, [dex, tab, liveTournament?.id, joined, playerToken, hibachiWallet, refreshTournament, refreshLeaderboard, dailyActive, refreshDailyPoints]);
+
+  useEffect(() => {
+    if (dex !== 'hibachi' || tab !== 'active' || !liveTournament?.id || !joined || !playerToken) {
+      setHibachiSync({ state: 'idle', message: '' });
+      return undefined;
+    }
+    const controller = new AbortController();
+    syncActiveHibachiTournament({
+      forceReconcile: true,
+      reason: 'tournament_open',
+      signal: controller.signal,
+    });
+    const interval = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      syncActiveHibachiTournament({
+        forceReconcile: false,
+        reason: 'tournament_poll',
+        signal: controller.signal,
+      });
+    }, HIBACHI_TOURNAMENT_SYNC_INTERVAL_MS);
+    return () => {
+      clearInterval(interval);
+      controller.abort();
+    };
+  }, [dex, tab, liveTournament?.id, joined, playerToken, syncActiveHibachiTournament]);
   useEffect(() => {
     const stored = String(myStats?.reward_wallet_evm || '').trim();
     if (!stored) {
@@ -1236,6 +1315,21 @@ function TournamentPanel({ onClose }) {
                   {t.end_at && <span style={S.tag}>{isHistory ? 'Ended' : 'Ends'} {fmtDate(t.end_at)}</span>}
                 </div>
               </div>
+
+              {dex === 'hibachi' && joined && hibachiSync.state !== 'idle' && (
+                <div style={hibachiSync.state === 'error' || hibachiSync.state === 'missing' ? S.hibachiSyncWarning : S.hibachiSyncBanner} role="status">
+                  <span>{hibachiSync.message}</span>
+                  {(hibachiSync.state === 'error' || hibachiSync.state === 'missing') && (
+                    <button
+                      type="button"
+                      style={S.hibachiSyncButton}
+                      onClick={() => syncActiveHibachiTournament({ forceReconcile: true, reason: 'tournament_manual' })}
+                    >
+                      Retry sync
+                    </button>
+                  )}
+                </div>
+              )}
 
               {paused && (
                 <div style={S.pausedBanner} role="status">
@@ -2124,6 +2218,22 @@ const S = {
   rewardSaveBtn: {
     ...uiButton('primary', { flex: 1, minHeight: 36, padding: '8px 12px', fontSize: 12 }),
     letterSpacing: 0.5, textTransform: 'uppercase',
+  },
+  hibachiSyncBanner: {
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+    padding: '8px 10px', borderRadius: 10,
+    background: 'var(--terminal-info-soft)', border: '1px solid var(--terminal-info-border)',
+    color: 'var(--terminal-text-secondary)', fontSize: 11, fontWeight: 700,
+  },
+  hibachiSyncWarning: {
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+    padding: '8px 10px', borderRadius: 10,
+    background: 'var(--terminal-short-soft)', border: '1px solid var(--terminal-short)',
+    color: 'var(--terminal-short-strong)', fontSize: 11, fontWeight: 700,
+  },
+  hibachiSyncButton: {
+    ...uiButton('secondary', { minHeight: 32, padding: '6px 9px', fontSize: 10 }),
+    flex: '0 0 auto', textTransform: 'uppercase',
   },
 
   joinBtn: {

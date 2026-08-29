@@ -15823,6 +15823,20 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       limit: dex === 'hibachi' ? 250 : 100,
       force: forceHibachiCatchup,
     });
+    const hibachiReconciliation = dex === 'hibachi' ? {
+      ok: reconcile?.ok !== false,
+      imported: Number(reconcile?.imported || 0),
+      adopted: Number(reconcile?.adopted || 0),
+      updated: Number(reconcile?.updated || 0),
+      checked: Number(reconcile?.checked || 0),
+      errors: Number(reconcile?.errors || 0),
+      skipped: reconcile?.skipped || null,
+      retryable: reconcile?.retryable === true,
+      error: reconcile?.error ? String(reconcile.error).slice(0, 300) : null,
+    } : null;
+    const withHibachiReconciliation = payload => hibachiReconciliation
+      ? { ...payload, reconciliation: hibachiReconciliation }
+      : payload;
     if (reconcile.imported || reconcile.adopted || reconcile.updated || reconcile.errors || (reconcile.skipped && reconcile.skipped !== 'cooldown' && reconcile.skipped !== 'worker_indexed')) {
       console.log(`[claim-gold ${dex}] reconcile player=${req.player.name} ${JSON.stringify({
         imported: reconcile.imported || 0,
@@ -15836,7 +15850,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
     const fdb = futuresDbReadonly();
     if (!fdb) {
       recordClaimTelemetry({ result: 'service_unavailable', reason: 'Futures service unavailable' });
-      return res.json({ gold: 0, reason: 'Futures service unavailable — try again later' });
+      return res.json(withHibachiReconciliation({ gold: 0, reason: 'Futures service unavailable — try again later' }));
     }
     let reward = db.db.prepare('SELECT * FROM trading_rewards WHERE player_id = ? AND dex = ?').get(req.player.id, dex);
     if (!reward) {
@@ -15984,12 +15998,12 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
           settlingTradeCount: Number(settlingTrades.n || 0),
           metadata: { credited_rows: pnlSync.credited_rows },
         });
-        return res.json({
+        return res.json(withHibachiReconciliation({
           gold: 0,
           reason: `Tournament PnL synced: $${pnlSync.pnl_usd.toFixed(2)}`,
           dex,
           tournament_pnl_usd: pnlSync.pnl_usd,
-        });
+        }));
       }
       console.log(`[claim-gold ${dex}] player=${req.player.name} -> SETTLING pending=${settlingTrades.n}`);
       recordClaimTelemetry({
@@ -16001,7 +16015,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
         rawVolumeUsd,
         settlingTradeCount: Number(settlingTrades.n || 0),
       });
-      return res.json(settlingPayload());
+      return res.json(withHibachiReconciliation(settlingPayload()));
     }
 
     if (newTrades.length === 0 && reward.first_deposit && reward.first_trade) {
@@ -16018,12 +16032,12 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
           pnlUsd: pnlSync.pnl_usd,
           metadata: { credited_rows: pnlSync.credited_rows },
         });
-        return res.json({
+        return res.json(withHibachiReconciliation({
           gold: 0,
           reason: `Tournament PnL synced: $${pnlSync.pnl_usd.toFixed(2)}`,
           dex,
           tournament_pnl_usd: pnlSync.pnl_usd,
-        });
+        }));
       }
       console.log(`[claim-gold ${dex}] player=${req.player.name} -> NO NEW TRADES (returning 0)`);
       recordClaimTelemetry({
@@ -16034,12 +16048,12 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
         rawTradeCount,
         rawVolumeUsd,
       });
-      return res.json({
+      return res.json(withHibachiReconciliation({
         gold: 0,
         reason: 'No new trades',
         dex,
         detail: hyperliquidClaimDebug(),
-      });
+      }));
     }
 
     // Sanity: clamp each trade's notional to a sane range so a bugged/forged
@@ -16260,7 +16274,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
         reason: 'Already claimed by parallel request',
         totalGoldPaid: 0,
       });
-      return res.json({ gold: 0, reason: 'Already claimed by parallel request', dex });
+      return res.json(withHibachiReconciliation({ gold: 0, reason: 'Already claimed by parallel request', dex }));
     }
     if (creditedTrades > 0) {
       await refreshStartedTaskProgressForTradeClaim(req.player, dex, req.headers);
@@ -16272,7 +16286,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
         result: 'paid',
         reason: reasons.join(' + ') || 'Trading reward',
       });
-      return res.json({
+      return res.json(withHibachiReconciliation({
         gold: txnResult.paid,
         reason: reasons.join(' + ') || 'Trading reward',
         dex,
@@ -16280,7 +16294,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
         tournament_gold: txnResult.tournament_gold || 0,
         altar_prosperity_bonus_pct: txnResult.prosperity_bonus_pct || 0,
         altar_prosperity_bonus: txnResult.prosperity_bonus || 0,
-      });
+      }));
     }
     console.log(`[claim-gold ${dex}] player=${req.player.name} -> ZERO PAID (had ${newTrades.length} raw trades, all clamped/below threshold)`);
     recordClaimTelemetry({
@@ -16289,12 +16303,12 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       reason: newTrades.length ? 'Below reward threshold' : 'No new trades',
       totalGoldPaid: 0,
     });
-    return res.json({
+    return res.json(withHibachiReconciliation({
       gold: 0,
       reason: newTrades.length ? 'Below reward threshold' : 'No new trades',
       dex,
       detail: hyperliquidClaimDebug(),
-    });
+    }));
   }
 
   // ── Pacifica branch ──

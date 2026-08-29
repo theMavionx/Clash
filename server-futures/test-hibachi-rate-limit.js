@@ -370,3 +370,55 @@ test('stale Hibachi market data observes retry-after cooldown after a 429', asyn
     hibachi.__testing.resetCaches();
   }
 });
+
+test('Hibachi order history accepts the current avgFillPrice response field', async () => {
+  hibachi.__testing.resetCaches();
+  const originalFetch = global.fetch;
+  const calls = [];
+  global.fetch = async (url) => {
+    const value = String(url);
+    calls.push(value);
+    if (value.includes('/trade/account/trades?accountId=7')) {
+      return jsonResponse({ trades: [] });
+    }
+    if (value.includes('/trade/orders/history?accountId=7')) {
+      const parsed = new URL(value);
+      if (parsed.searchParams.has('cursorOrderId')) return jsonResponse({ hasMore: false, orders: [] });
+      return jsonResponse({
+        hasMore: false,
+        orders: [{
+          accountId: 7,
+          avgFillPrice: '2900.000000',
+          closedAt: 1777811627000,
+          filledQuantity: '1.200000000',
+          orderId: '596002791293190100',
+          orderType: 'MARKET',
+          price: null,
+          side: 'BID',
+          status: 'Filled',
+          symbol: 'ETH/USDT-P',
+          totalQuantity: '1.200000000',
+        }],
+      });
+    }
+    throw new Error(`Unexpected Hibachi history test request: ${value}`);
+  };
+
+  try {
+    const history = await hibachi.getAccountTradeHistory(
+      { apiKey: 'test-api-key', accountId: 7, privateKey: 'test-hmac-secret' },
+      { limit: 100 },
+    );
+    assert.equal(history.length, 1);
+    assert.equal(history[0].symbol, 'ETH');
+    assert.equal(history[0].price, '2900');
+    assert.equal(history[0].amount, '1.2');
+    assert.equal(history[0].notional_usd, 3480);
+    assert.equal(history[0].source, 'orders_history');
+    assert.ok(calls.some(value => value.includes('startTime=')));
+    assert.ok(calls.some(value => value.includes('endTime=')));
+  } finally {
+    global.fetch = originalFetch;
+    hibachi.__testing.resetCaches();
+  }
+});

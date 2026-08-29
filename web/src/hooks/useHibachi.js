@@ -4,21 +4,21 @@ import { useDex } from '../contexts/DexContext';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { BASE_CHAIN_ID, USDC_ADDRESS as BASE_USDC_ADDRESS } from '../lib/avantisContract';
 import { ARBITRUM_CHAIN_ID, ARBITRUM_USDC_DECIMALS, ARBITRUM_USDC_NATIVE } from '../lib/gmxConfig';
-import {
-  migratePlainLocalStorageCredential,
-  readEncryptedCredential,
-  removeEncryptedCredential,
-  writeEncryptedCredential,
-} from '../lib/encryptedCredentialStorage';
 import { usePlayer } from './useGodot';
 import { registeredDexWallet } from '../lib/playerDexAccounts';
+import {
+  clearHibachiCredentials,
+  hibachiCredentialHeaders,
+  hibachiCredentialPayload,
+  readHibachiCredentials,
+  writeHibachiCredentials,
+} from '../lib/hibachiCredentials';
 import {
   HIBACHI_TRADING_PERMISSION_MESSAGE,
   isHibachiIpBlockedError,
   isHibachiTradingPermissionError,
 } from '../lib/hibachiErrors';
 
-const STORAGE_KEY = 'clash_hibachi_credentials_v1';
 const LEVERAGE_STORAGE_KEY = 'clash_hibachi_leverage_v1';
 const POLL_INTERVAL_MS = 45_000;
 const HIBACHI_REFERRAL_URL = String(
@@ -104,49 +104,6 @@ function normalizeEnvelope(payload) {
   if (Array.isArray(payload?.data)) return payload.data;
   if (payload?.success && Array.isArray(payload?.data)) return payload.data;
   return [];
-}
-
-function normalizeHibachiCredentials(value) {
-  if (!value?.apiKey || !value?.accountId || !value?.privateKey) return null;
-  return {
-    apiKey: String(value.apiKey),
-    accountId: String(value.accountId),
-    privateKey: String(value.privateKey),
-  };
-}
-
-function hibachiCredentialPayload(creds, extra = {}) {
-  return {
-    api_key: creds?.apiKey,
-    account_id: creds?.accountId,
-    private_key: creds?.privateKey,
-    ...extra,
-  };
-}
-
-function hibachiCredentialHeaders(creds) {
-  if (!creds?.apiKey || !creds?.accountId || !creds?.privateKey) return {};
-  return {
-    'x-hibachi-api-key': String(creds.apiKey),
-    'x-hibachi-account-id': String(creds.accountId),
-    'x-hibachi-private-key': String(creds.privateKey),
-  };
-}
-
-async function loadCredentials() {
-  const migrated = await migratePlainLocalStorageCredential(STORAGE_KEY, STORAGE_KEY, normalizeHibachiCredentials);
-  const stored = migrated || await readEncryptedCredential(STORAGE_KEY);
-  return normalizeHibachiCredentials(stored);
-}
-
-async function writeCredentials(creds) {
-  await writeEncryptedCredential(STORAGE_KEY, normalizeHibachiCredentials(creds));
-  try { window.localStorage.removeItem(STORAGE_KEY); } catch {}
-}
-
-async function clearCredentials() {
-  await removeEncryptedCredential(STORAGE_KEY);
-  try { window.localStorage.removeItem(STORAGE_KEY); } catch {}
 }
 
 function readLeverageSettings() {
@@ -507,7 +464,7 @@ export function useHibachi() {
     let cancelled = false;
     (async () => {
       try {
-        const stored = await loadCredentials();
+        const stored = await readHibachiCredentials();
         if (!cancelled) setCredentials(stored);
       } catch (e) {
         console.warn('[useHibachi] encrypted credential load failed:', e?.message || e);
@@ -1112,7 +1069,7 @@ export function useHibachi() {
         headers: authHeaders(),
         body: JSON.stringify(hibachiCredentialPayload(next)),
       });
-      await writeCredentials(next);
+      await writeHibachiCredentials(next);
       setCredentials(next);
       setAccount(verifiedAccount || null);
       setDataReady(true);
@@ -1127,7 +1084,7 @@ export function useHibachi() {
   }, [authHeaders, credentials, fetchJson, token, walletAddr]);
 
   const disconnect = useCallback(async () => {
-    await clearCredentials();
+    await clearHibachiCredentials();
     setCredentials(null);
     setAccount(null);
     setPositions([]);

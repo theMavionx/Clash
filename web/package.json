@@ -16,6 +16,7 @@
     "test:decibel-referral": "node test-decibel-referral.mjs",
     "test:domfi": "node test-domfi-client.mjs",
     "test:client-logger-retry": "node test-client-logger-retry.mjs",
+    "test:trade-history": "node --test test-trade-history-routing.mjs",
     "test:etoro": "node test-etoro-client.mjs",
     "test:nado-one-tap": "node test-nado-one-tap.mjs",
     "test:ondo": "node test-ondo-client.mjs",

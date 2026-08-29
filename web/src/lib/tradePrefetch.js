@@ -11,7 +11,6 @@ const COMMON_PRIVATE_DEXES = new Set([
   'nado',
   'ondo',
   'leverup',
-  'hibachi',
   'hotstuff',
   'grvt',
 ]);

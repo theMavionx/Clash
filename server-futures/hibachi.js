@@ -2087,7 +2087,9 @@ function normalizeOrderHistoryTrade(accountId, order) {
 
   const symbol = order?.symbol ?? order?.marketSymbol ?? order?.market_symbol ?? order?.contract?.symbol;
   const price = num(
-    order?.averagePrice
+    order?.avgFillPrice
+      ?? order?.avg_fill_price
+      ?? order?.averagePrice
       ?? order?.average_price
       ?? order?.avgPrice
       ?? order?.avg_price

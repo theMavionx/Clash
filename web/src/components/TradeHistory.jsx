@@ -1,4 +1,4 @@
-import { memo, useEffect, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import { getReadClient } from '../lib/decibel';
 import { fetchPerplFills } from '../lib/perplClient';
 import { phoenixFetch, phoenixSymbol } from '../lib/phoenixClient';
@@ -9,11 +9,12 @@ import {
   migratePlainLocalStorageCredential,
   readEncryptedCredential,
 } from '../lib/encryptedCredentialStorage';
+import { readHibachiCredentials } from '../lib/hibachiCredentials';
 
 const HYPERLIQUID_API = import.meta.env.VITE_HYPERLIQUID_API_URL || 'https://api.hyperliquid.xyz';
-const READ_TIMEOUT_MS = 8000;
+const DEFAULT_READ_TIMEOUT_MS = 15_000;
+const HIBACHI_READ_TIMEOUT_MS = 60_000;
 const GRVT_STORAGE_KEY = 'clash_grvt_credentials_v1';
-const HIBACHI_STORAGE_KEY = 'clash_hibachi_credentials_v1';
 const KATANA_STORAGE_KEY = 'clash_katana_credentials_v1';
 
 const EVM_ADDRESS_RE = /^0x[a-fA-F0-9]{40}$/u;
@@ -410,20 +411,6 @@ async function readGrvtCredentials() {
   return migrated || await readEncryptedCredential(GRVT_STORAGE_KEY);
 }
 
-function normalizeHibachiCredentials(value) {
-  if (!value?.apiKey || !value?.accountId || !value?.privateKey) return null;
-  return {
-    apiKey: String(value.apiKey),
-    accountId: String(value.accountId),
-    privateKey: String(value.privateKey),
-  };
-}
-
-async function readHibachiCredentials() {
-  const migrated = await migratePlainLocalStorageCredential(HIBACHI_STORAGE_KEY, HIBACHI_STORAGE_KEY, normalizeHibachiCredentials);
-  return normalizeHibachiCredentials(migrated || await readEncryptedCredential(HIBACHI_STORAGE_KEY));
-}
-
 function normalizeKatanaCredentials(value) {
   if (!value?.apiKey || !value?.apiSecret || !value?.wallet) return null;
   return {
@@ -528,12 +515,20 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
   const [trades, setTrades] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [reloadKey, setReloadKey] = useState(0);
+  const marketsRef = useRef(markets);
+  marketsRef.current = markets;
 
   useEffect(() => {
     const addr = dex === 'decibel' ? accountAddr : (accountAddr || walletAddr);
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), READ_TIMEOUT_MS);
+    const timeoutMs = dex === 'hibachi' ? HIBACHI_READ_TIMEOUT_MS : DEFAULT_READ_TIMEOUT_MS;
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, timeoutMs);
     let cancelled = false;
 
     setLoading(true);
@@ -550,20 +545,20 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
             offset: 0,
             fetchOptions: { signal: controller.signal },
           });
-          if (!cancelled) setTrades((res?.items || []).map(t => normalizeDecibelTrade(t, markets)));
+          if (!cancelled) setTrades((res?.items || []).map(t => normalizeDecibelTrade(t, marketsRef.current)));
           return;
         }
         if (dex === 'domfi') {
           if (!EVM_ADDRESS_RE.test(String(addr || ''))) throw new Error('Connect a Base wallet to view DomFi history');
           if (typeof fetchTradeHistory !== 'function') throw new Error('DomFi history reader is not ready');
           const data = await fetchTradeHistory({ limit: 100, signal: controller.signal });
-          if (!cancelled) setTrades(rows(data).map(t => normalizeGenericTrade(t, 'domfi', markets)).filter(Boolean));
+          if (!cancelled) setTrades(rows(data).map(t => normalizeGenericTrade(t, 'domfi', marketsRef.current)).filter(Boolean));
           return;
         }
         if (dex === 'etoro') {
           if (typeof fetchTradeHistory !== 'function') throw new Error('eToro history reader is not ready');
           const data = await fetchTradeHistory({ limit: 100, signal: controller.signal });
-          if (!cancelled) setTrades(rows(data).map(t => normalizeGenericTrade(t, 'etoro', markets)).filter(Boolean));
+          if (!cancelled) setTrades(rows(data).map(t => normalizeGenericTrade(t, 'etoro', marketsRef.current)).filter(Boolean));
           return;
         }
         if (dex === 'monad') {
@@ -573,7 +568,7 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
             : Array.isArray(data?.fills) ? data.fills
             : Array.isArray(data?.items) ? data.items
             : [];
-          if (!cancelled) setTrades(rows.map(t => normalizePerplTrade(t, markets)).filter(Boolean));
+          if (!cancelled) setTrades(rows.map(t => normalizePerplTrade(t, marketsRef.current)).filter(Boolean));
           return;
         }
         if (dex === 'phoenix') {
@@ -582,7 +577,7 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
             signal: controller.signal,
           });
           const rows = Array.isArray(d?.data) ? d.data : Array.isArray(d) ? d : [];
-          if (!cancelled) setTrades(rows.map(t => normalizePhoenixTrade(t, markets)).filter(Boolean));
+          if (!cancelled) setTrades(rows.map(t => normalizePhoenixTrade(t, marketsRef.current)).filter(Boolean));
           return;
         }
         if (dex === 'hyperliquid') {
@@ -605,7 +600,7 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
             dex: 'risex',
             signal: controller.signal,
           });
-          if (!cancelled) setTrades(rows(d).map(t => normalizeRisexTrade(t, markets)).filter(Boolean));
+          if (!cancelled) setTrades(rows(d).map(t => normalizeRisexTrade(t, marketsRef.current)).filter(Boolean));
           return;
         }
         if (dex === 'nado') {
@@ -614,7 +609,7 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
             dex: 'nado',
             signal: controller.signal,
           });
-          if (!cancelled) setTrades(rows(d).map(t => normalizeNadoTrade(t, markets)).filter(Boolean));
+          if (!cancelled) setTrades(rows(d).map(t => normalizeNadoTrade(t, marketsRef.current)).filter(Boolean));
           return;
         }
         if (dex === 'ondo') {
@@ -637,7 +632,7 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
             signal: controller.signal,
           });
           const items = Array.isArray(d?.content) ? d.content : [];
-          if (!cancelled) setTrades(items.map(item => normalizeLeverupTrade(item, markets)).filter(Boolean));
+          if (!cancelled) setTrades(items.map(item => normalizeLeverupTrade(item, marketsRef.current)).filter(Boolean));
           return;
         }
         if (dex === 'hotstuff') {
@@ -646,7 +641,7 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
             dex: 'hotstuff',
             signal: controller.signal,
           });
-          if (!cancelled) setTrades(rows(d).map(t => normalizeHotstuffTrade(t, markets)).filter(Boolean));
+          if (!cancelled) setTrades(rows(d).map(t => normalizeHotstuffTrade(t, marketsRef.current)).filter(Boolean));
           return;
         }
         if (dex === 'ostium') {
@@ -655,14 +650,13 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
             dex: 'ostium',
             signal: controller.signal,
           });
-          if (!cancelled) setTrades(rows(d).map(t => normalizeOstiumTrade(t, markets)).filter(Boolean));
+          if (!cancelled) setTrades(rows(d).map(t => normalizeOstiumTrade(t, marketsRef.current)).filter(Boolean));
           return;
         }
         if (dex === 'hibachi') {
           const creds = await readHibachiCredentials();
           if (!creds) {
-            if (!cancelled) setTrades([]);
-            return;
+            throw new Error('Reconnect Hibachi API credentials in Account to view trade history');
           }
           const d = await fetchFuturesJson('/api/futures/hibachi/trade-history', {
             dex: 'hibachi',
@@ -675,7 +669,7 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
             },
             signal: controller.signal,
           });
-          if (!cancelled) setTrades(rows(d).map(t => normalizeGenericTrade(t, 'hibachi', markets)).filter(Boolean));
+          if (!cancelled) setTrades(rows(d).map(t => normalizeGenericTrade(t, 'hibachi', marketsRef.current)).filter(Boolean));
           return;
         }
         if (dex === 'katana') {
@@ -690,18 +684,17 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
               },
               signal: controller.signal,
             });
-            if (!cancelled) setTrades(rows(d).map(t => normalizeGenericTrade(t, 'katana', markets)).filter(Boolean));
+            if (!cancelled) setTrades(rows(d).map(t => normalizeGenericTrade(t, 'katana', marketsRef.current)).filter(Boolean));
             return;
           }
           const d = await fetchFuturesJson('/api/futures/history?dex=katana', { dex: 'katana', signal: controller.signal });
-          if (!cancelled) setTrades(rows(d).filter(t => String(t?.dex || '').toLowerCase() === 'katana').map(t => normalizeLocalIndexedTrade(t, markets)).filter(Boolean));
+          if (!cancelled) setTrades(rows(d).filter(t => String(t?.dex || '').toLowerCase() === 'katana').map(t => normalizeLocalIndexedTrade(t, marketsRef.current)).filter(Boolean));
           return;
         }
         if (dex === 'grvt') {
           const creds = await readGrvtCredentials();
           if (!creds) {
-            if (!cancelled) setTrades([]);
-            return;
+            throw new Error('Reconnect GRVT credentials in Account to view trade history');
           }
           const r = await fetch('/api/futures/grvt/trade-history', {
             method: 'POST',
@@ -743,7 +736,7 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
           if (!cancelled) {
             setTrades(rows(d)
               .filter(t => String(t?.dex || '').toLowerCase() === dex)
-              .map(t => normalizeLocalIndexedTrade(t, markets))
+              .map(t => normalizeLocalIndexedTrade(t, marketsRef.current))
               .filter(Boolean));
           }
           return;
@@ -759,9 +752,11 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
         });
         if (!cancelled) setTrades(Array.isArray(d.data) ? d.data : []);
       } catch (e) {
-        if (!cancelled && e?.name !== 'AbortError') {
+        if (!cancelled && (e?.name !== 'AbortError' || timedOut)) {
           setTrades([]);
-          setError(e?.message || 'Could not load trade history');
+          setError(timedOut
+            ? `${dex === 'hibachi' ? 'Hibachi' : 'Exchange'} trade history timed out. Retry the request.`
+            : (e?.message || 'Could not load trade history'));
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -774,7 +769,7 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
       clearTimeout(timeout);
       controller.abort();
     };
-  }, [walletAddr, accountAddr, dex, markets, fetchTradeHistory, activeSymbol, filters?.symbol]);
+  }, [walletAddr, accountAddr, dex, fetchTradeHistory, activeSymbol, filters?.symbol, reloadKey]);
 
   let filtered = trades;
 
@@ -806,7 +801,12 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
     return <div style={S.state}>Loading...</div>;
   }
   if (error) {
-    return <div style={{ ...S.state, color: 'var(--terminal-short)', fontWeight: 700 }}>{error}</div>;
+    return (
+      <div style={{ ...S.state, color: 'var(--terminal-short)', fontWeight: 700 }}>
+        <div>{error}</div>
+        <button type="button" style={S.retryButton} onClick={() => setReloadKey(key => key + 1)}>Retry</button>
+      </div>
+    );
   }
   if (!filtered.length) {
     const name = dex === 'decibel' ? 'Decibel ' : dex === 'domfi' ? 'DomFi ' : dex === 'etoro' ? 'eToro ' : dex === 'ostium' ? 'Ostium ' : dex === 'monad' ? 'Perpl ' : dex === 'phoenix' ? 'Phoenix ' : dex === 'hyperliquid' ? 'Hyperliquid ' : dex === 'risex' ? 'RISEx ' : dex === 'nado' ? 'Nado ' : dex === 'ondo' ? 'Ondo ' : dex === 'leverup' ? 'LeverUp ' : dex === 'aster' ? 'Aster ' : dex === 'hotstuff' ? 'Hotstuff ' : dex === 'grvt' ? 'GRVT ' : dex === 'gmtrade' ? 'GMTrade ' : dex === 'flash' ? 'Flash Trade ' : dex === 'hibachi' ? 'Hibachi ' : dex === 'katana' ? 'Katana ' : dex === 'gmx' ? 'GMX ' : dex === 'avantis' ? 'Avantis ' : dex === 'lighter' ? 'Lighter ' : dex === 'rhlighter' ? 'Robinhood Lighter ' : dex === 'bulk' ? 'Bulk ' : '';
@@ -876,4 +876,5 @@ const S = {
   th: { padding: '6px 12px', textAlign: 'left', color: 'var(--terminal-text-muted)', fontWeight: 700, fontSize: 10, textTransform: 'uppercase', background: 'var(--terminal-surface-subtle)', whiteSpace: 'nowrap' },
   td: { padding: '6px 12px', color: 'var(--terminal-text)', fontSize: 12, borderBottom: '1px solid var(--terminal-border)', whiteSpace: 'nowrap' },
   tr: { background: 'var(--terminal-surface)' },
+  retryButton: { marginTop: 10, padding: '7px 14px', borderRadius: 8, border: '1px solid var(--terminal-border)', background: 'var(--terminal-surface-subtle)', color: 'var(--terminal-text)', fontWeight: 700, cursor: 'pointer' },
 };

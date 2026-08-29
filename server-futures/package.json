@@ -11,6 +11,7 @@
     "test:decibel-referral": "node test-decibel-referral.js",
     "test:domfi": "node test-domfi-adapter.js",
     "test:etoro": "node test-etoro-adapter.js",
+    "test:hibachi": "node --test test-hibachi-rate-limit.js",
     "test:domfi-http": "node test-domfi-http.js",
     "test:domfi-live": "node test-domfi-live.js",
     "test:gmtrade": "node test-gmtrade.js",
