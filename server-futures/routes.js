@@ -5620,6 +5620,9 @@ router.post('/hibachi/import-fills', auth, async (req, res) => {
     if (result.imported > 0) {
       console.log(`[hibachi] imported ${result.imported} fill(s) for player=${req.playerName} account=${creds.accountId}`);
     }
+    if (result?.ok === false) {
+      return res.status(Number(result.status) || 409).json(result);
+    }
     res.json(result);
   } catch (e) {
     console.warn('[hibachi] import-fills failed:', e.message);

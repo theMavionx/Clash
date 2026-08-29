@@ -57,8 +57,23 @@ function symbolOf(value) {
 
 function timestampMs(value) {
   const n = num(value, NaN);
-  if (!Number.isFinite(n) || n <= 0) return null;
-  return n > 1e12 ? Math.floor(n) : Math.floor(n * 1000);
+  if (Number.isFinite(n) && n > 0) {
+    // Hibachi endpoints have returned seconds and milliseconds. Accept
+    // micro/nanoseconds defensively so an upstream precision change cannot
+    // produce an invalid SQLite tournament timestamp.
+    if (n > 1e17) return Math.floor(n / 1e6);
+    if (n > 1e14) return Math.floor(n / 1e3);
+    return n > 1e12 ? Math.floor(n) : Math.floor(n * 1000);
+  }
+  const parsed = Date.parse(String(value || ''));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function timestampIso(value) {
+  const ms = timestampMs(value);
+  if (ms == null) return null;
+  const date = new Date(ms);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : null;
 }
 
 function normalizeHibachiCategory(value) {
@@ -2050,13 +2065,14 @@ function normalizeTrade(accountId, trade) {
   const sideText = String(trade.side || '').toUpperCase();
   const side = sideText === 'ASK' || sideText === 'SELL' ? 'short' : 'long';
   const id = trade.id || trade.tradeId || `${trade.bidOrderId || ''}:${trade.askOrderId || ''}:${trade.timestamp || ''}`;
+  const createdAt = timestampIso(trade.timestamp);
   return {
     symbol: symbolOf(trade.symbol),
     side,
     orderType: String(trade.orderType || '').toLowerCase() || 'market',
     amount: String(Math.abs(num(trade.quantity))),
     price: String(trade.price || ''),
-    orderId: trade.bidAccountId === accountId ? trade.bidOrderId : trade.askOrderId,
+    orderId: String(trade.bidAccountId) === String(accountId) ? trade.bidOrderId : trade.askOrderId,
     clientOrderId: `hibachi:${accountId}:${id}`,
     status: 'filled',
     dex: 'hibachi',
@@ -2064,7 +2080,8 @@ function normalizeTrade(accountId, trade) {
     verifiedSource: 'hibachi_api',
     pnl: trade.realizedPnl != null ? String(trade.realizedPnl) : null,
     fee: trade.fee != null ? String(trade.fee) : null,
-    created_at: timestampMs(trade.timestamp),
+    createdAt,
+    created_at: createdAt,
     source: 'trades',
     _raw: trade,
   };
@@ -2124,6 +2141,7 @@ function normalizeOrderHistoryTrade(accountId, order) {
     ?? order?.client_order_id
     ?? order?.nonce
     ?? `${symbol}:${side}:${timestampMs(order?.closedAt ?? order?.closeTime ?? order?.timestamp) || Date.now()}:${quantity}:${price}`;
+  const createdAt = timestampIso(order?.closedAt ?? order?.closed_at ?? order?.closeTime ?? order?.close_time ?? order?.updatedAt ?? order?.updated_at ?? order?.timestamp ?? order?.createdAt ?? order?.created_at);
   return {
     symbol: symbolOf(symbol),
     side,
@@ -2138,7 +2156,8 @@ function normalizeOrderHistoryTrade(accountId, order) {
     verifiedSource: 'hibachi_api',
     pnl: order?.realizedPnl != null ? String(order.realizedPnl) : (order?.realized_pnl != null ? String(order.realized_pnl) : null),
     fee: order?.fee != null ? String(order.fee) : (order?.totalFee != null ? String(order.totalFee) : null),
-    created_at: timestampMs(order?.closedAt ?? order?.closed_at ?? order?.closeTime ?? order?.close_time ?? order?.updatedAt ?? order?.updated_at ?? order?.timestamp ?? order?.createdAt ?? order?.created_at),
+    createdAt,
+    created_at: createdAt,
     source: 'orders_history',
     _raw: order,
   };
@@ -2215,9 +2234,126 @@ async function getAccountTradeHistory(credsInput, { limit = HIBACHI_FILL_LOOKBAC
   return dedupeTradeRows(combined).slice(0, max);
 }
 
+function normalizedHibachiAccountId(accountId) {
+  const value = String(accountId ?? '').trim();
+  if (!/^\d+$/u.test(value)) throw new Error('Valid Hibachi accountId required for trade attribution');
+  return value;
+}
+
+function resolveHibachiAccountOwner(dbModule, requestedPlayerId, accountId) {
+  const normalizedAccountId = normalizedHibachiAccountId(accountId);
+  const normalizedPlayerId = String(requestedPlayerId || '').trim();
+  if (!normalizedPlayerId) throw new Error('Player id required for Hibachi trade attribution');
+
+  const linked = dbModule.db.prepare(`
+    SELECT account_id, player_id, linked_at, last_verified_at
+    FROM hibachi_account_links
+    WHERE account_id = ?
+  `).get(normalizedAccountId);
+
+  let ownerId = linked?.player_id || null;
+  if (!ownerId) {
+    const owners = dbModule.db.prepare(`
+      SELECT DISTINCT player_id
+      FROM trade_history
+      WHERE dex = 'hibachi'
+        AND client_order_id LIKE ?
+      ORDER BY player_id
+    `).all(`hibachi:${normalizedAccountId}:%`).map(row => String(row.player_id));
+    if (owners.length > 1) {
+      const error = new Error('This Hibachi account has trade history assigned to multiple Clash profiles. Contact support before syncing it again.');
+      error.status = 409;
+      error.code = 'HIBACHI_ACCOUNT_OWNER_CONFLICT';
+      throw error;
+    }
+    ownerId = owners[0] || normalizedPlayerId;
+    dbModule.db.prepare(`
+      INSERT INTO hibachi_account_links (account_id, player_id, source)
+      VALUES (?, ?, 'hibachi_api')
+      ON CONFLICT(account_id) DO NOTHING
+    `).run(normalizedAccountId, ownerId);
+    ownerId = String(dbModule.db.prepare(`
+      SELECT player_id FROM hibachi_account_links WHERE account_id = ?
+    `).get(normalizedAccountId)?.player_id || ownerId);
+  }
+
+  if (ownerId !== normalizedPlayerId) {
+    const error = new Error('This Hibachi trading account is already linked to another Clash profile. Open the original profile or ask support to merge the accounts.');
+    error.status = 409;
+    error.code = 'HIBACHI_ACCOUNT_LINKED';
+    error.accountId = normalizedAccountId;
+    error.ownerPlayerId = ownerId;
+    throw error;
+  }
+
+  dbModule.db.prepare(`
+    UPDATE hibachi_account_links
+    SET last_verified_at = datetime('now')
+    WHERE account_id = ? AND player_id = ?
+  `).run(normalizedAccountId, normalizedPlayerId);
+  return { accountId: normalizedAccountId, playerId: normalizedPlayerId };
+}
+
+function importNormalizedFillsForPlayer(playerId, accountId, fills, dbModule = require('./db')) {
+  let owner;
+  try {
+    owner = resolveHibachiAccountOwner(dbModule, playerId, accountId);
+  } catch (e) {
+    return {
+      ok: false,
+      imported: 0,
+      updated: 0,
+      adopted: 0,
+      skipped: Array.isArray(fills) ? fills.length : 0,
+      total: Array.isArray(fills) ? fills.length : 0,
+      status: e.status || 409,
+      code: e.code || 'HIBACHI_ACCOUNT_LINK_FAILED',
+      retryable: false,
+      error: e.message,
+      attribution: 'hibachi_api_no_builder_code',
+    };
+  }
+  let imported = 0;
+  let updated = 0;
+  let skipped = 0;
+  for (const trade of Array.isArray(fills) ? fills : []) {
+    try {
+      const before = dbModule.db.prepare(`
+        SELECT id, player_id FROM trade_history
+        WHERE dex = 'hibachi'
+          AND client_order_id = ?
+        LIMIT 1
+      `).get(trade.clientOrderId);
+      if (before && String(before.player_id) !== owner.playerId) {
+        console.warn(`[hibachi] refused to reassign verified trade ${trade.clientOrderId} from ${before.player_id} to ${owner.playerId}`);
+        skipped++;
+        continue;
+      }
+      const r = dbModule.upsertVerifiedTrade(owner.playerId, trade);
+      if (r?.inserted) imported += r.inserted;
+      else if (r?.updated) updated += r.updated;
+      else skipped++;
+    } catch (e) {
+      skipped++;
+      if (!/UNIQUE|constraint/i.test(e.message || '')) {
+        console.warn('[hibachi] addTrade failed:', e.message);
+      }
+    }
+  }
+  return {
+    ok: true,
+    imported,
+    updated,
+    adopted: 0,
+    skipped,
+    total: Array.isArray(fills) ? fills.length : 0,
+    accountId: owner.accountId,
+    attribution: 'hibachi_api_no_builder_code',
+  };
+}
+
 async function importFillsForPlayer(playerId, credsInput, opts = {}) {
   const creds = credentials(credsInput);
-  const db = require('./db');
   let fills = [];
   try {
     fills = await getAccountTradeHistory(creds, opts);
@@ -2226,6 +2362,7 @@ async function importFillsForPlayer(playerId, credsInput, opts = {}) {
     return {
       ok: false,
       imported: 0,
+      updated: 0,
       adopted: 0,
       skipped: 0,
       total: 0,
@@ -2235,43 +2372,7 @@ async function importFillsForPlayer(playerId, credsInput, opts = {}) {
       attribution: 'hibachi_api_no_builder_code',
     };
   }
-  let imported = 0;
-  let adopted = 0;
-  let skipped = 0;
-  for (const trade of fills) {
-    try {
-      const before = db.db.prepare(`
-        SELECT id, player_id FROM trade_history
-        WHERE dex = 'hibachi'
-          AND (
-            client_order_id = ?
-            OR (? IS NOT NULL AND CAST(order_id AS TEXT) = CAST(? AS TEXT))
-          )
-        LIMIT 1
-      `).get(trade.clientOrderId, trade.orderId ?? null, trade.orderId ?? null);
-      if (before) {
-        if (before.player_id !== playerId) {
-          const moved = db.db.prepare(`
-            UPDATE trade_history
-            SET player_id = ?
-            WHERE id = ? AND dex = 'hibachi' AND verified_source = 'hibachi_api'
-          `).run(playerId, before.id);
-          if (moved.changes > 0) adopted++;
-        }
-        skipped++;
-        continue;
-      }
-      const r = db.addTrade(playerId, trade);
-      if (r?.id) imported++;
-      else skipped++;
-    } catch (e) {
-      skipped++;
-      if (!/UNIQUE|constraint/i.test(e.message || '')) {
-        console.warn('[hibachi] addTrade failed:', e.message);
-      }
-    }
-  }
-  return { ok: true, imported, adopted, skipped, total: fills.length, attribution: 'hibachi_api_no_builder_code' };
+  return importNormalizedFillsForPlayer(playerId, creds.accountId, fills);
 }
 
 function resetCachesForTests() {
@@ -2314,5 +2415,9 @@ module.exports = {
   __testing: {
     resetCaches: resetCachesForTests,
     proxyPoolStats: () => hibachiProxyPool.stats(),
+    normalizeTrade,
+    normalizeOrderHistoryTrade,
+    importNormalizedFillsForPlayer,
+    resolveHibachiAccountOwner,
   },
 };

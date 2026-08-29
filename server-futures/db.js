@@ -105,6 +105,21 @@ db.exec(`
     updated_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now'))
   );
 
+  -- A Hibachi trading account may be opened from more than one Clash login,
+  -- but its verified fills must have one stable owner.  Without this binding
+  -- a second game profile could silently move an existing trade history away
+  -- from the original player during reconciliation.
+  CREATE TABLE IF NOT EXISTS hibachi_account_links (
+    account_id       TEXT PRIMARY KEY,
+    player_id        TEXT NOT NULL,
+    source           TEXT NOT NULL DEFAULT 'hibachi_api',
+    linked_at        TEXT NOT NULL DEFAULT (datetime('now')),
+    last_verified_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_hibachi_account_links_player
+    ON hibachi_account_links(player_id);
+
   CREATE TABLE IF NOT EXISTS decibel_order_proofs (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     player_id       TEXT NOT NULL,
@@ -403,6 +418,7 @@ const stmts = {
         pnl = @pnl,
         fee = @fee,
         proof_json = @proof_json,
+        created_at = COALESCE(@created_at, created_at),
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
     WHERE player_id = @player_id
       AND dex = @dex
@@ -420,6 +436,7 @@ const stmts = {
         OR pnl IS NOT @pnl
         OR fee IS NOT @fee
         OR proof_json IS NOT @proof_json
+        OR (@created_at IS NOT NULL AND created_at IS NOT @created_at)
       )
   `),
   getTradeByClientOrderId: db.prepare(`
@@ -661,6 +678,7 @@ function upsertVerifiedTrade(playerId, trade) {
     pnl: trade.pnl == null ? null : String(trade.pnl),
     fee: trade.fee == null ? null : String(trade.fee),
     proof_json: trade.proofJson == null ? null : String(trade.proofJson),
+    created_at: trade.createdAt == null || trade.createdAt === '' ? null : String(trade.createdAt),
   };
   const refreshed = stmts.refreshVerifiedTradeByClientOrderId.run(params);
   const existing = stmts.getTradeByClientOrderId.get(

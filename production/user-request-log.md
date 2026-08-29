@@ -3696,3 +3696,38 @@ Follow-up:
   regression coverage, commit, push and deploy through the canonical proxy
   pipeline. No funded trade, approval, wallet signature, withdrawal or
   production database edit is authorized.
+
+## UR-2026-08-29-HIBACHI-TANGO-VOLUME-AND-ACCOUNT-ATTRIBUTION
+
+- Timestamp: 2026-08-29 Europe/Kyiv
+- Request: investigate Tango's report that connecting Hibachi API credentials
+  awarded coins but left volume at zero, while importing/logging in with the
+  Hibachi wallet created a new map; fix the cause, or if the cause is upstream,
+  make sure all legitimate activity is credited to the old `Tango` profile.
+- Production evidence: the original profile already received lifetime credit
+  for 76 verified Hibachi fills (`$138,759.861448949843`, 70,589 gold). It
+  joined tournament 27 four minutes after that first import, so none of the
+  rows entered the join-bounded tournament window. The second `tango5` profile
+  is empty. The importer discarded exchange timestamps because its normalizer
+  emitted `created_at` but the database consumed `createdAt`, and it could
+  silently move verified rows between profiles on a repeated import.
+- Approved scope: implement stable Hibachi `accountId` ownership, preserve and
+  repair verified exchange timestamps, prevent implicit cross-profile trade
+  reassignment, add focused regression coverage, and prepare an evidence-based
+  account/tournament reconciliation. The owner explicitly requests legitimate
+  production credit, but this message does not explicitly authorize a code
+  commit, push or production deployment. Do not duplicate the already-paid
+  lifetime reward or fabricate pre-join tournament volume.
+- Applied support reconciliation: after a targeted SHA-256 snapshot at
+  `/opt/clash/shared/backups/tango-account-merge-before-20260829T165625Z`,
+  transfer the verified-empty `tango5` wallet identity to `Tango`, invalidate
+  the duplicate session, archive the duplicate profile, and preserve the
+  original profile's 76 fills, `$138,759.861448949843` lifetime volume and
+  70,589 lifetime trading gold. No tournament points or duplicate gold were
+  minted.
+
+Follow-up:
+
+- The owner explicitly said `деплой`, authorizing the scoped commit, push and
+  canonical atomic production deployment of the verified Hibachi attribution
+  fix, followed by production service and Tango account verification.
