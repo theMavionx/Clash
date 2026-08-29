@@ -43,6 +43,7 @@ async function run() {
     assert.equal(referral.attach_on_next_open, true);
     assert.equal(referral.binding, null);
     assert.ok(snapshot.account && Array.isArray(snapshot.positions) && Array.isArray(snapshot.orders));
+    assert.ok(Array.isArray(snapshot.order_lifecycles));
     assert.equal(snapshot.account.address, address);
 
     const candles = await requestJson(

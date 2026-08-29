@@ -103,6 +103,53 @@ function scaled(value, decimals) {
   return numeric(value) / (10 ** decimals);
 }
 
+// DomFi's v2 account API returns display decimals (for example `"19.691429"`
+// USDC and `"20.00"` leverage), while the market/config API and older account
+// payloads use contract-scaled integers. Detect the response representation as
+// a group so an exact decimal value in one field cannot be mistaken for a raw
+// integer in another.
+function accountPayloadUsesDisplayDecimals(raw) {
+  return [
+    raw?.open_price,
+    raw?.wanted_price,
+    raw?.close_price,
+    raw?.collateral,
+    raw?.initial_collateral,
+    raw?.leverage,
+    raw?.trade_notional,
+    raw?.tp,
+    raw?.sl,
+    raw?.realized_pnl_usdc,
+  ].some(value => typeof value === 'number' || /[.eE]/u.test(String(value ?? '')));
+}
+
+function accountDecimal(value, decimals, displayDecimals) {
+  if (value == null || value === '') return 0;
+  return displayDecimals ? numeric(value) : scaled(value, decimals);
+}
+
+function positionMetrics(raw) {
+  const displayDecimals = accountPayloadUsesDisplayDecimals(raw);
+  const entry = accountDecimal(raw?.open_price ?? raw?.wanted_price, 18, displayDecimals);
+  const collateral = accountDecimal(raw?.collateral ?? raw?.initial_collateral, 6, displayDecimals);
+  const leverage = accountDecimal(raw?.leverage, 2, displayDecimals);
+  // Protocol exposure is collateral * leverage. Current v2 account payloads
+  // call their base-asset quantity `trade_notional`, so treating that field as
+  // USD exposure produces an incorrect amount even after decimal conversion.
+  const derivedNotional = collateral > 0 && leverage > 0 ? collateral * leverage : 0;
+  const legacyNotional = accountDecimal(raw?.trade_notional, 18, displayDecimals);
+  const notional = derivedNotional || (displayDecimals ? legacyNotional * entry : legacyNotional);
+  const amount = entry > 0 ? notional / entry : 0;
+  return {
+    displayDecimals,
+    entry,
+    collateral,
+    leverage,
+    notional,
+    amount,
+  };
+}
+
 function trimNumber(value, decimals = 8) {
   const n = Number(value);
   if (!Number.isFinite(n)) return '0';
@@ -344,11 +391,10 @@ function marketSymbol(pairIndex, markets) {
 function normalizePosition(raw, markets, prices) {
   if (String(raw?.kind || '') !== 'open_position' || raw?.pair_index == null || raw?.index == null) return null;
   const symbol = marketSymbol(raw.pair_index, markets);
-  const entry = scaled(raw.open_price, 18);
-  const collateral = scaled(raw.collateral, 6);
-  const leverage = scaled(raw.leverage, 2);
-  const notional = raw.trade_notional != null ? scaled(raw.trade_notional, 18) : collateral * leverage;
-  const amount = entry > 0 ? notional / entry : 0;
+  const metrics = positionMetrics(raw);
+  const {
+    displayDecimals, entry, collateral, leverage, notional, amount,
+  } = metrics;
   const mark = numeric(prices.find(row => row.symbol === symbol)?.mark, entry);
   const isLong = raw.buy_side === true;
   const pnl = entry > 0 && mark > 0 ? (mark - entry) * amount * (isLong ? 1 : -1) : 0;
@@ -364,8 +410,8 @@ function normalizePosition(raw, markets, prices) {
     mark_price: mark,
     pnl_usd: pnl,
     liquidation_price: null,
-    take_profit: scaled(raw.tp, 18) || null,
-    stop_loss: scaled(raw.sl, 18) || null,
+    take_profit: accountDecimal(raw.tp, 18, displayDecimals) || null,
+    stop_loss: accountDecimal(raw.sl, 18, displayDecimals) || null,
     pair_index: Number(raw.pair_index),
     trade_index: Number(raw.index),
     trade_id: raw.trade_id == null ? null : String(raw.trade_id),
@@ -380,9 +426,10 @@ function normalizePendingOrder(raw, markets) {
     && !/(cancel|execut|timeout|close)/u.test(eventType);
   if (String(raw?.kind || '') === 'open_position' || raw?.pair_index == null || !isCancelableOpenLimit) return null;
   const symbol = marketSymbol(raw.pair_index, markets);
-  const collateral = scaled(raw.collateral, 6);
-  const leverage = scaled(raw.leverage, 2);
-  const targetPrice = scaled(raw.wanted_price ?? raw.open_price, 18);
+  const displayDecimals = accountPayloadUsesDisplayDecimals(raw);
+  const collateral = accountDecimal(raw.collateral, 6, displayDecimals);
+  const leverage = accountDecimal(raw.leverage, 2, displayDecimals);
+  const targetPrice = accountDecimal(raw.wanted_price ?? raw.open_price, 18, displayDecimals);
   const orderId = raw.order_id ?? raw.limit_index ?? '';
   return {
     symbol,
@@ -398,10 +445,33 @@ function normalizePendingOrder(raw, markets) {
     pair_index: Number(raw.pair_index),
     trade_index: raw.index == null ? null : Number(raw.index),
     limit_index: raw.limit_index == null ? raw.index : Number(raw.limit_index),
-    take_profit: scaled(raw.tp, 18) || null,
-    stop_loss: scaled(raw.sl, 18) || null,
+    take_profit: accountDecimal(raw.tp, 18, displayDecimals) || null,
+    stop_loss: accountDecimal(raw.sl, 18, displayDecimals) || null,
     status: 'open',
     _raw: raw,
+  };
+}
+
+function normalizeOrderLifecycle(raw, markets) {
+  if (!raw || raw.pair_index == null || !raw.initiated_tx_hash) return null;
+  return {
+    order_id: raw.order_id == null ? null : String(raw.order_id),
+    trade_id: raw.trade_id == null ? null : String(raw.trade_id),
+    symbol: marketSymbol(raw.pair_index, markets),
+    pair_index: Number(raw.pair_index),
+    action: String(raw.action || ''),
+    order_type: String(raw.order_type || ''),
+    status: String(raw.status || ''),
+    is_pending: raw.is_pending === true,
+    is_cancelled: raw.is_cancelled === true,
+    cancel_reason: raw.cancel_reason || null,
+    initiated_tx_hash: String(raw.initiated_tx_hash),
+    executed_tx_hash: raw.executed_tx_hash || null,
+    position_ref: raw.position_ref || null,
+    initiated_block: raw.initiated_block == null ? null : Number(raw.initiated_block),
+    executed_block: raw.executed_block == null ? null : Number(raw.executed_block),
+    timeout_block: raw.timeout_block == null ? null : Number(raw.timeout_block),
+    timestamp: Number(raw.timestamp || 0),
   };
 }
 
@@ -566,10 +636,12 @@ async function getAccountSnapshot(address) {
   const prices = await getPrices();
   const positions = positionRows.map(row => normalizePosition(row, markets, prices)).filter(Boolean);
   const orders = normalizeOrders(positionRows, lifecycleRows, markets);
+  const orderLifecycles = lifecycleRows.map(row => normalizeOrderLifecycle(row, markets)).filter(Boolean);
   return {
     account: accountFromPositions(wallet, positions),
     positions,
     orders,
+    order_lifecycles: orderLifecycles,
     wallet_balance: await walletBalancePromise,
   };
 }
@@ -583,10 +655,11 @@ async function getRawAccountTrades(address, options = {}) {
 
 function normalizeTradeHistory(raw, markets) {
   const symbol = marketSymbol(raw.pair_index, markets);
-  const notional = scaled(raw.trade_notional, 18);
-  const leverage = scaled(raw.leverage, 2);
-  const openPrice = scaled(raw.open_price, 18);
-  const closePrice = raw.close_price == null ? null : scaled(raw.close_price, 18);
+  const metrics = positionMetrics(raw);
+  const {
+    displayDecimals, notional, leverage, entry: openPrice, amount,
+  } = metrics;
+  const closePrice = raw.close_price == null ? null : accountDecimal(raw.close_price, 18, displayDecimals);
   const openedAt = isoFromUnixMs(raw.open_timestamp);
   const closedAt = isoFromUnixMs(raw.close_timestamp);
   const direction = raw.buy_side ? 'long' : 'short';
@@ -599,16 +672,16 @@ function normalizeTradeHistory(raw, markets) {
     direction,
     side: `${isClosed ? 'close' : 'open'}_${direction}`,
     action: `${isClosed ? 'close' : 'open'}_${direction}`,
-    amount: openPrice > 0 ? notional / openPrice : 0,
-    collateral: scaled(raw.collateral, 6),
+    amount,
+    collateral: metrics.collateral,
     leverage,
     notional_usd: notional,
     price: isClosed && closePrice > 0 ? closePrice : openPrice,
     open_price: openPrice,
     close_price: closePrice,
-    realized_pnl: raw.realized_pnl_usdc == null ? null : scaled(raw.realized_pnl_usdc, 6),
-    realized_pnl_amount: raw.realized_pnl_usdc == null ? null : scaled(raw.realized_pnl_usdc, 6),
-    funding_fee: raw.funding_fee == null ? null : scaled(raw.funding_fee, 6),
+    realized_pnl: raw.realized_pnl_usdc == null ? null : accountDecimal(raw.realized_pnl_usdc, 6, displayDecimals),
+    realized_pnl_amount: raw.realized_pnl_usdc == null ? null : accountDecimal(raw.realized_pnl_usdc, 6, displayDecimals),
+    funding_fee: raw.funding_fee == null ? null : accountDecimal(raw.funding_fee, 6, displayDecimals),
     status: String(raw.status || ''),
     open_tx_hash: raw.open_tx_hash || null,
     close_tx_hash: raw.close_tx_hash || null,
@@ -620,9 +693,33 @@ function normalizeTradeHistory(raw, markets) {
   };
 }
 
+function normalizeOpenPositionHistory(raw, markets) {
+  if (String(raw?.kind || '') !== 'open_position') return null;
+  return normalizeTradeHistory({
+    ...raw,
+    trade_index: raw.trade_index ?? raw.index,
+    status: raw.status || 'open',
+    open_timestamp: raw.open_timestamp ?? raw.timestamp,
+    open_tx_hash: raw.open_tx_hash || raw.transaction_hash || null,
+  }, markets);
+}
+
 async function getAccountTradeHistory(address, options = {}) {
-  const [rows, markets] = await Promise.all([getRawAccountTrades(address, options), getMarketInfo()]);
-  return rows.map(row => normalizeTradeHistory(row, markets));
+  const [rows, openRows, markets] = await Promise.all([
+    getRawAccountTrades(address, options),
+    rawPositions(address, options),
+    getMarketInfo(),
+  ]);
+  const byTradeId = new Map();
+  for (const row of openRows) {
+    const trade = normalizeOpenPositionHistory(row, markets);
+    if (trade?.trade_id) byTradeId.set(trade.trade_id, trade);
+  }
+  for (const row of rows) {
+    const trade = normalizeTradeHistory(row, markets);
+    if (trade?.trade_id) byTradeId.set(trade.trade_id, trade);
+  }
+  return [...byTradeId.values()].sort((a, b) => Number(b.timestamp || 0) - Number(a.timestamp || 0));
 }
 
 async function getReferralCode(options = {}) {
@@ -767,6 +864,8 @@ module.exports = {
   isEvmAddress,
   normalizeAddress,
   normalizeMarket,
+  normalizeOpenPositionHistory,
+  normalizeOrderLifecycle,
   normalizePosition,
   normalizePendingOrder,
   normalizeTradeHistory,

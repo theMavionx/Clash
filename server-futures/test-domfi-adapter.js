@@ -54,6 +54,63 @@ assert.equal(position.pnl_usd, 2);
 assert.equal(position.take_profit, 55);
 assert.equal(position.stop_loss, 48);
 
+const currentApiPositionRaw = {
+  kind: 'open_position',
+  trade_id: '3619',
+  order_id: '3619',
+  event_type: 'MarketOpenExecuted',
+  pair_index: 2,
+  buy_side: true,
+  open_price: '7.023670739956961086',
+  collateral: '19.691429',
+  initial_collateral: '19.691429',
+  leverage: '20.00',
+  trade_notional: '56.071617617202434738',
+  tp: '10.184322572937593574',
+  sl: null,
+  timestamp: 1_788_000_819_000,
+  index: 0,
+  transaction_hash: `0x${'33'.repeat(32)}`,
+};
+const usdtDomMarket = { ...market, symbol: 'USDTDOM', pair_index: 2 };
+const currentApiPosition = domfi.normalizePosition(
+  currentApiPositionRaw,
+  [usdtDomMarket],
+  [{ symbol: 'USDTDOM', mark: '7.023185091425839' }],
+);
+assert.equal(currentApiPosition.margin, 19.691429);
+assert.equal(currentApiPosition.leverage, 20);
+assert.ok(Math.abs(currentApiPosition.size_usd - 393.82858) < 1e-9);
+assert.ok(Math.abs(Number(currentApiPosition.amount) - 56.0716176172) < 1e-9);
+assert.ok(currentApiPosition.pnl_usd < 0 && currentApiPosition.pnl_usd > -0.1);
+assert.equal(currentApiPosition.take_profit, 10.184322572937594);
+
+const currentOpenHistory = domfi.normalizeOpenPositionHistory(currentApiPositionRaw, [usdtDomMarket]);
+assert.equal(currentOpenHistory.status, 'open');
+assert.equal(currentOpenHistory.symbol, 'USDTDOM');
+assert.equal(currentOpenHistory.notional_usd, 393.82858);
+assert.equal(currentOpenHistory.open_tx_hash, currentApiPositionRaw.transaction_hash);
+assert.equal(currentOpenHistory.opened_at, '2026-08-29T10:53:39.000Z');
+
+const lifecycle = domfi.normalizeOrderLifecycle({
+  order_id: '3619',
+  trade_id: '3619',
+  pair_index: 2,
+  action: 'open',
+  order_type: 'market',
+  status: 'executed',
+  is_pending: false,
+  is_cancelled: false,
+  initiated_tx_hash: `0x${'44'.repeat(32)}`,
+  executed_tx_hash: currentApiPositionRaw.transaction_hash,
+  position_ref: { pair_index: 2, index: 0, trade_id: '3619' },
+  initiated_block: 50605729,
+  executed_block: 50605736,
+}, [usdtDomMarket]);
+assert.equal(lifecycle.status, 'executed');
+assert.equal(lifecycle.symbol, 'USDTDOM');
+assert.equal(lifecycle.executed_block, 50605736);
+
 const pendingOrder = domfi.normalizePendingOrder({
   kind: 'pending_order',
   order_id: 'open-limit-42',

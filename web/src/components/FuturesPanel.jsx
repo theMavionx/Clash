@@ -4489,6 +4489,26 @@ function FuturesPanel() {
   // Cleanup leverage debounce timer on unmount
   useEffect(() => () => clearTimeout(levTimerRef.current), []);
 
+  // The terminal is shared across venues, but their symbols are not. In
+  // particular, DomFi lists dominance markets such as BTCDOM/USDTDOM and has
+  // no plain BTC market. Select the first live venue market whenever the
+  // carried-over/default symbol is unavailable, before the chart requests
+  // candles for a symbol the venue cannot serve.
+  useEffect(() => {
+    if (!Array.isArray(markets) || markets.length === 0) return;
+    const normalizedSymbol = String(symbol || '').toUpperCase();
+    const selectedIsAvailable = markets.some((market) => (
+      String(market?.symbol || '').toUpperCase() === normalizedSymbol
+      || String(marketDisplaySymbol(market) || '').toUpperCase() === normalizedSymbol
+    ));
+    if (selectedIsAvailable) return;
+    const firstLiveMarket = markets.find(market => (
+      market?.is_paused !== true && String(market?.status || '').toLowerCase() !== 'paused'
+    )) || markets[0];
+    const nextSymbol = marketDisplaySymbol(firstLiveMarket) || firstLiveMarket?.symbol;
+    if (nextSymbol) setSymbol(nextSymbol);
+  }, [markets, symbol]);
+
   // On symbol change ONLY: clear stale input so the user doesn't accidentally
   // fire an order sized for the previous pair, and clamp the carried-over
   // leverage to the new pair's cap. We deliberately do NOT depend on

@@ -12,12 +12,14 @@ import {
   DOMFI_USDC,
   appendDomfiReferralSuffix,
   assertDomfiConfig,
+  classifyDomfiMarketOrder,
   domfiReferralCodeIdForOpen,
   fetchDomfiJson,
   normalizeDomfiWalletBalanceSnapshot,
   encodeDomfiReferralSuffix,
   prepareDomfiCloseCalldata,
   prepareDomfiOpenCalldata,
+  waitForDomfiMarketOrder,
 } from './src/lib/domfiClient.js';
 
 const wallet = '0x1111111111111111111111111111111111111111';
@@ -125,6 +127,53 @@ assert.deepEqual(normalizeDomfiWalletBalanceSnapshot({
 assert.equal(normalizeDomfiWalletBalanceSnapshot({ available: false }), null);
 assert.equal(normalizeDomfiWalletBalanceSnapshot({ available: true, usdc_raw: 'invalid' }), null);
 
+const initiatedTxHash = `0x${'ab'.repeat(32)}`;
+const executedLifecycle = {
+  order_lifecycles: [{
+    initiated_tx_hash: initiatedTxHash.toUpperCase().replace(/^0X/u, '0x'),
+    executed_tx_hash: `0x${'cd'.repeat(32)}`,
+    pair_index: 2,
+    status: 'executed',
+    is_pending: false,
+    is_cancelled: false,
+  }],
+};
+assert.equal(classifyDomfiMarketOrder(executedLifecycle, {
+  txHash: initiatedTxHash,
+  pairIndex: 2,
+}).status, 'executed');
+assert.deepEqual(classifyDomfiMarketOrder({
+  order_lifecycles: [{
+    initiated_tx_hash: initiatedTxHash,
+    pair_index: 2,
+    status: 'canceled',
+    is_cancelled: true,
+    cancel_reason: 'price moved past slippage',
+  }],
+}, { txHash: initiatedTxHash, pairIndex: 2 }), {
+  status: 'canceled',
+  lifecycle: {
+    initiated_tx_hash: initiatedTxHash,
+    pair_index: 2,
+    status: 'canceled',
+    is_cancelled: true,
+    cancel_reason: 'price moved past slippage',
+  },
+  reason: 'price moved past slippage',
+});
+let lifecycleReads = 0;
+const trackedOrder = await waitForDomfiMarketOrder(async () => {
+  lifecycleReads += 1;
+  return lifecycleReads === 1 ? { order_lifecycles: [] } : executedLifecycle;
+}, {
+  txHash: initiatedTxHash,
+  pairIndex: 2,
+  timeoutMs: 1_000,
+  intervalMs: 0,
+});
+assert.equal(trackedOrder.status, 'executed');
+assert.equal(lifecycleReads, 2);
+
 const originalFetch = globalThis.fetch;
 let retryCalls = 0;
 try {
@@ -157,5 +206,7 @@ const registerPanelSource = readFileSync(new URL('./src/components/RegisterPanel
 assert.match(registerPanelSource, /const venue = dex === 'domfi' \? 'DOMFI'/u);
 assert.match(hookSource, /Promise\.allSettled/u);
 assert.match(hookSource, /normalizeDomfiWalletBalanceSnapshot\(snapshot\?\.wallet_balance\)/u);
+assert.match(hookSource, /waitForDomfiMarketOrder\(fetchPrivate/u);
+assert.match(futuresPanelSource, /firstLiveMarket/u);
 
 console.log('DomFi client calldata/referral tests passed.');

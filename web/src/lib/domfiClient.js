@@ -230,9 +230,77 @@ export function prepareDomfiCloseCalldata({ pairIndex, tradeIndex, closePercent 
 
 const DOMFI_READ_RETRY_DELAYS_MS = [0, 300, 900];
 const DOMFI_TRANSIENT_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
+export const DOMFI_MARKET_ORDER_TRACK_TIMEOUT_MS = 45_000;
+export const DOMFI_MARKET_ORDER_TRACK_INTERVAL_MS = 1_500;
 
 function domfiRetryDelay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function normalizedTxHash(value) {
+  const hash = String(value || '').trim().toLowerCase();
+  return /^0x[0-9a-f]{64}$/u.test(hash) ? hash : '';
+}
+
+export function classifyDomfiMarketOrder(snapshot, { txHash, pairIndex }) {
+  const expectedHash = normalizedTxHash(txHash);
+  const expectedPair = Number(pairIndex);
+  if (!expectedHash || !Number.isInteger(expectedPair)) return { status: 'pending', lifecycle: null };
+  const lifecycles = Array.isArray(snapshot?.order_lifecycles) ? snapshot.order_lifecycles : [];
+  const lifecycle = lifecycles.find(row => (
+    normalizedTxHash(row?.initiated_tx_hash) === expectedHash
+    && Number(row?.pair_index) === expectedPair
+  ));
+  if (!lifecycle) return { status: 'pending', lifecycle: null };
+  const status = String(lifecycle.status || '').trim().toLowerCase();
+  const canceled = lifecycle.is_cancelled === true
+    || /cancel|failed|rejected|expired|timed[_ -]?out/u.test(status);
+  if (canceled) {
+    return {
+      status: 'canceled',
+      lifecycle,
+      reason: String(lifecycle.cancel_reason || lifecycle.status || 'DomFi market order was cancelled'),
+    };
+  }
+  if (status === 'executed' || (lifecycle.is_pending === false && lifecycle.executed_tx_hash)) {
+    return { status: 'executed', lifecycle };
+  }
+  return { status: 'pending', lifecycle };
+}
+
+export async function waitForDomfiMarketOrder(fetchSnapshot, {
+  txHash,
+  pairIndex,
+  timeoutMs = DOMFI_MARKET_ORDER_TRACK_TIMEOUT_MS,
+  intervalMs = DOMFI_MARKET_ORDER_TRACK_INTERVAL_MS,
+} = {}) {
+  if (typeof fetchSnapshot !== 'function') throw new Error('DomFi lifecycle refresh is unavailable');
+  const startedAt = Date.now();
+  let lastSnapshot = null;
+  let lastLifecycle = null;
+  let lastReadError = null;
+  do {
+    try {
+      lastSnapshot = await fetchSnapshot();
+      const outcome = classifyDomfiMarketOrder(lastSnapshot, { txHash, pairIndex });
+      lastLifecycle = outcome.lifecycle;
+      if (outcome.status !== 'pending') return { ...outcome, snapshot: lastSnapshot };
+      lastReadError = null;
+    } catch (error) {
+      // A transient read/indexing failure must not turn a successfully mined
+      // write into a false transaction failure. Keep tracking until timeout.
+      lastReadError = error;
+    }
+    const remainingMs = timeoutMs - (Date.now() - startedAt);
+    if (remainingMs <= 0) break;
+    await domfiRetryDelay(Math.min(Math.max(0, intervalMs), remainingMs));
+  } while (Date.now() - startedAt < timeoutMs);
+  return {
+    status: 'pending',
+    lifecycle: lastLifecycle,
+    snapshot: lastSnapshot,
+    read_error: lastReadError || null,
+  };
 }
 
 export async function fetchDomfiJson(pathname, options = {}) {

@@ -5,6 +5,7 @@ import { useDex } from '../contexts/DexContext';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { usePlayer } from './useGodot';
 import { registeredDexWallet } from '../lib/playerDexAccounts';
+import { reportClientEvent } from '../lib/clientLogger';
 import {
   DOMFI_CHAIN_ID,
   DOMFI_ERC20_ABI,
@@ -23,6 +24,7 @@ import {
   normalizeDomfiWalletBalanceSnapshot,
   prepareDomfiCloseCalldata,
   prepareDomfiOpenCalldata,
+  waitForDomfiMarketOrder,
 } from '../lib/domfiClient';
 
 const POLL_INTERVAL_MS = 30_000;
@@ -82,6 +84,7 @@ export function useDomfi() {
   const [prices, setPrices] = useState([]);
   const [positions, setPositions] = useState([]);
   const [orders, setOrders] = useState([]);
+  const [orderLifecycles, setOrderLifecycles] = useState([]);
   const [account, setAccount] = useState(null);
   const [walletUsdc, setWalletUsdc] = useState(null);
   const [walletEth, setWalletEth] = useState(null);
@@ -163,6 +166,7 @@ export function useDomfi() {
     const nextAccount = snapshot?.account || null;
     const nextPositions = Array.isArray(snapshot?.positions) ? snapshot.positions : [];
     const nextOrders = Array.isArray(snapshot?.orders) ? snapshot.orders : [];
+    const nextOrderLifecycles = Array.isArray(snapshot?.order_lifecycles) ? snapshot.order_lifecycles : [];
     const previousUsdc = Number(walletUsdc);
     const freeUsdc = balanceSnapshot?.usdcRaw != null
       ? domfiUsdcDisplay(balanceSnapshot.usdcRaw)
@@ -180,9 +184,16 @@ export function useDomfi() {
     });
     setPositions(Array.isArray(nextPositions) ? nextPositions : []);
     setOrders(Array.isArray(nextOrders) ? nextOrders : []);
+    setOrderLifecycles(nextOrderLifecycles);
     if (nextReferral) setReferralStatus(nextReferral);
     setAccountReady(true);
-    return { account: nextAccount, positions: nextPositions, orders: nextOrders, referral: nextReferral };
+    return {
+      account: nextAccount,
+      positions: nextPositions,
+      orders: nextOrders,
+      order_lifecycles: nextOrderLifecycles,
+      referral: nextReferral,
+    };
   }, [fetchBalance, isActiveDex, markets, walletAddr, walletUsdc]);
 
   const refresh = useCallback(async () => {
@@ -239,6 +250,13 @@ export function useDomfi() {
     window.setTimeout(() => claimGoldRef.current?.(), 10_000);
   }, []);
 
+  const schedulePrivateRefresh = useCallback(() => {
+    if (typeof window === 'undefined') return;
+    for (const delay of [5_000, 15_000, 30_000]) {
+      window.setTimeout(() => fetchPrivate().catch(() => {}), delay);
+    }
+  }, [fetchPrivate]);
+
   const submitOpen = useCallback(async ({ symbol, side, collateral, leverage, price, orderType, slippage, options = {} }) => {
     if (actionRef.current) return { error: 'Another DomFi action is already pending' };
     actionRef.current = true;
@@ -293,13 +311,49 @@ export function useDomfi() {
         referralCodeId,
       });
       const hash = await sendData(data);
-      await new Promise(resolve => setTimeout(resolve, 1_500));
-      await fetchPrivate();
+      reportClientEvent('domfi.order.submitted', {
+        tx_hash: hash,
+        pair_index: market.pair_index,
+        symbol: market.symbol,
+        order_type: orderType,
+      }, {
+        source: 'domfi.order',
+        message: `[domfi] ${orderType} order submitted`,
+        immediate: true,
+      });
+      const outcome = orderType === 'market'
+        ? await waitForDomfiMarketOrder(fetchPrivate, {
+          txHash: hash,
+          pairIndex: market.pair_index,
+        })
+        : { status: 'placed', snapshot: await fetchPrivate() };
+      reportClientEvent(`domfi.order.${outcome.status}`, {
+        tx_hash: hash,
+        pair_index: market.pair_index,
+        symbol: market.symbol,
+        order_type: orderType,
+        lifecycle_status: outcome.lifecycle?.status || null,
+        executed_tx_hash: outcome.lifecycle?.executed_tx_hash || null,
+        cancel_reason: outcome.reason || null,
+      }, {
+        level: outcome.status === 'canceled' ? 'error' : (outcome.status === 'pending' ? 'warn' : 'info'),
+        source: 'domfi.order',
+        message: `[domfi] ${orderType} order ${outcome.status}`,
+        immediate: true,
+      });
+      if (outcome.status === 'canceled') {
+        throw new Error(outcome.reason || 'DomFi market order was cancelled');
+      }
+      if (outcome.status === 'pending') schedulePrivateRefresh();
       scheduleClaimGold();
       return {
         success: true,
-        status: 'submitted',
+        status: outcome.status,
+        info: outcome.status === 'pending'
+          ? `${side.toUpperCase()} ${market.symbol} submitted — waiting for DomFi execution`
+          : null,
         tx_hash: hash,
+        executed_tx_hash: outcome.lifecycle?.executed_tx_hash || null,
         pair_index: market.pair_index,
         symbol: market.symbol,
         referral_attached: referralCodeId != null,
@@ -312,7 +366,7 @@ export function useDomfi() {
       actionRef.current = false;
       setLoading(false);
     }
-  }, [config, ensureApproval, fetchPrivate, freshReferral, markets, publicClient, scheduleClaimGold, sendData, walletAddr]);
+  }, [config, ensureApproval, fetchPrivate, freshReferral, markets, publicClient, scheduleClaimGold, schedulePrivateRefresh, sendData, walletAddr]);
 
   const placeMarketOrder = useCallback(async (symbol, side, amount, slippage = '0.5', leverage = 1, options = {}) => {
     const price = Number(prices.find(row => row.symbol === symbol)?.mark || 0);
@@ -503,6 +557,7 @@ export function useDomfi() {
     accountReady,
     positions,
     orders,
+    orderLifecycles,
     prices,
     markets,
     walletUsdc,

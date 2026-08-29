@@ -3674,3 +3674,25 @@ Follow-up:
   regression coverage, commit, push and deploy through the canonical atomic
   production pipeline. No funded trade, withdrawal, wallet signature, or
   production database edit is authorized.
+
+## UR-2026-08-29-DOMFI-DEFAULT-MARKET-AND-ORDER-LIFECYCLE
+
+- Timestamp: 2026-08-29 Europe/Kyiv
+- Request: "the only problem with domfi is that the default chart that loads
+  up is BTC but there's no BTC on their dex so its empty" and "I tried to long
+  USDTDOM, transaction successful but nothing happens"; inspect logs, fix both
+  issues and deploy.
+- Production evidence: client telemetry repeatedly requested DomFi candles for
+  unsupported symbol `BTC`. The affected USDTDOM request transaction was
+  successfully indexed by DomFi and reached `MarketOpenExecuted` seven blocks
+  later. The current API returned `$19.691429` collateral, `20.00x` leverage
+  and `7.023670739956961086` entry, but Clash divided those already formatted
+  values by contract precision again and displayed a near-zero position.
+- Approved scope: select a valid live market whenever a venue does not support
+  the carried/default symbol, support current and legacy DomFi account decimal
+  formats, derive exposure from collateral × leverage, track asynchronous
+  market-order lifecycle to execution/cancellation, include open positions in
+  verified History/import for volume/gold/quests, add focused telemetry and
+  regression coverage, commit, push and deploy through the canonical proxy
+  pipeline. No funded trade, approval, wallet signature, withdrawal or
+  production database edit is authorized.
