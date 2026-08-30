@@ -3746,3 +3746,11 @@ Follow-up:
   repair; commit, push and deploy through the canonical production pipeline.
   Do not manufacture fills, tournament activity or duplicate previously paid
   Gold.
+
+Follow-up:
+
+- The owner explicitly requests that Tango's verified Hibachi fills made after
+  tournament 27 started be credited even though the player registered four
+  minutes later. Scope the changed eligibility rule to tournaments that opt in,
+  reconcile only exact non-duplicate fills inside the configured tournament
+  window, force-recalculate the affected closed daily pool, and deploy.

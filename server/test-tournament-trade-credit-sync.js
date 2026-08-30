@@ -23,7 +23,7 @@ try {
   `).run().lastInsertRowid);
   db.db.prepare(`
     INSERT INTO tournament_participants (tournament_id,player_id,joined_at,team_dex)
-    VALUES (?,'a','2026-07-01 00:00:00','ostium'),(?,'b','2026-07-01 00:00:00','ostium')
+    VALUES (?,'a','2026-07-10 00:00:00','ostium'),(?,'b','2026-07-01 00:00:00','ostium')
   `).run(tournamentId, tournamentId);
 
   assert.strictEqual(db.getTournamentTradeSyncState(tournamentId, 'a', 'ostium'), null);
@@ -80,6 +80,38 @@ try {
     pnl_delta_usd: 0,
   });
 
+  const preJoinRow = {
+    id: 'fill-pre-join',
+    dex: 'ostium',
+    notional_usd: 50,
+    pnl: 0,
+    created_at: '2026-07-05 10:00:00',
+  };
+  const preJoinDefault = db.recordTournamentTradeRows('a', [preJoinRow], {
+    tournamentId,
+    source: 'trade_history',
+  });
+  assert.strictEqual(preJoinDefault.credited_rows, 0, 'registration remains the default lower bound');
+
+  db.db.prepare(`
+    UPDATE tournaments
+       SET reward_config = '{"credit_trades_from_tournament_start":true}'
+     WHERE id = ?
+  `).run(tournamentId);
+  const preJoinOptIn = db.recordTournamentTradeRows('a', [preJoinRow], {
+    tournamentId,
+    source: 'trade_history',
+  });
+  assert.strictEqual(preJoinOptIn.credited_rows, 1, 'opt-in credits a verified fill made after tournament start');
+  assert.strictEqual(preJoinOptIn.volume_usd, 50);
+
+  const beforeTournament = db.recordTournamentTradeRows('a', [{
+    ...preJoinRow,
+    id: 'fill-before-tournament',
+    created_at: '2026-06-30 23:59:59',
+  }], { tournamentId, source: 'trade_history' });
+  assert.strictEqual(beforeTournament.credited_rows, 0, 'opt-in never credits fills before tournament start');
+
   const delayedPnl = db.recordTournamentTradeRows('a', [{ ...rows[0], pnl: 7.5 }], {
     tournamentId,
     source: 'trade_history',
@@ -108,13 +140,13 @@ try {
     SELECT trades_count, volume_usd, pnl_usd
     FROM tournament_participants WHERE tournament_id = ? AND player_id = 'a'
   `).get(tournamentId);
-  assert.deepStrictEqual(participant, { trades_count: 2, volume_usd: 200, pnl_usd: 5.5 });
+  assert.deepStrictEqual(participant, { trades_count: 3, volume_usd: 250, pnl_usd: 5.5 });
 
   const activity = db.db.prepare(`
     SELECT SUM(trades_count) AS trades_count, SUM(volume_usd) AS volume_usd, SUM(pnl_usd) AS pnl_usd
     FROM tournament_daily_activity WHERE tournament_id = ? AND player_id = 'a'
   `).get(tournamentId);
-  assert.deepStrictEqual(activity, { trades_count: 2, volume_usd: 200, pnl_usd: 5.5 });
+  assert.deepStrictEqual(activity, { trades_count: 3, volume_usd: 250, pnl_usd: 5.5 });
   console.log('tournament trade credit sync: ok');
 } finally {
   db.db.close();

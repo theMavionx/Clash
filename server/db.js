@@ -4118,7 +4118,11 @@ function sqlDateMs(v) {
 
 function tradeInTournamentWindow(t, row) {
   const tradeMs = sqlDateMs(row?.created_at) ?? Date.now();
-  const startMs = Math.max(sqlDateMs(t.start_at) ?? 0, sqlDateMs(t.joined_at) ?? 0);
+  const tournamentStartMs = sqlDateMs(t.start_at) ?? 0;
+  const participantStartMs = sqlDateMs(t.joined_at) ?? 0;
+  const startMs = tournamentCreditsTradesFromStart(t)
+    ? tournamentStartMs
+    : Math.max(tournamentStartMs, participantStartMs);
   const endMs = Math.min(sqlDateMs(t.end_at) ?? Infinity, sqlDateMs(t.left_at) ?? Infinity);
   return tradeMs >= startMs && tradeMs <= endMs;
 }
@@ -4201,6 +4205,10 @@ function parseTournamentRewardConfig(value) {
       manual_winners: manualWinners,
     },
   };
+}
+
+function tournamentCreditsTradesFromStart(t) {
+  return parseTournamentRewardConfig(t?.reward_config).credit_trades_from_tournament_start === true;
 }
 
 function normalizeLuckyRaiderManualWinners(value) {
