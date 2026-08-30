@@ -3754,3 +3754,53 @@ Follow-up:
   minutes later. Scope the changed eligibility rule to tournaments that opt in,
   reconcile only exact non-duplicate fills inside the configured tournament
   window, force-recalculate the affected closed daily pool, and deploy.
+
+## UR-2026-08-30-DECIBEL-OPTIONAL-DEPOSIT
+
+- Timestamp: 2026-08-30 Europe/Kyiv
+- Request: "не нравится это почему я не могу ниче смотреть без депа? я думаю
+  можна прибрати це як обовязковий пункт", with the Decibel full-panel deposit
+  gate screenshot.
+- Scope: allow browsing the exchange without a deposit, retain optional
+  funding through Account, and preserve collateral validation for new orders.
+  Implement and verify locally; no new production deployment is authorized by
+  this request.
+
+## UR-2026-08-30-VENUE-PICKER-CLOSE
+
+- Timestamp: 2026-08-30 Europe/Kyiv
+- Request: "тут немає кнопки закрити хрестика", with the Choose Trading Venue
+  overlay screenshot.
+- Scope: add an accessible close button so the venue picker can be dismissed
+  without choosing/changing an exchange; preserve reopening and selection.
+  Implement and verify locally, preserving the pending optional-deposit work.
+  No commit, push or production deployment was requested.
+
+## UR-2026-08-30-DEX-SWITCH-RECONNECT
+
+- Timestamp: 2026-08-30 Europe/Kyiv
+- Request: after selecting another exchange/network, do not treat the old
+  wallet as already connected or immediately show the bottom reconnect
+  prompt; show recovery only for a wallet actually connected on that venue.
+- Scope: distinguish initial venue wallet connection from recovery of a
+  prior connection, preserve game login and explicit wallet verification.
+  Implement and verify locally with the existing pending UI changes.
+  No production deployment was requested.
+
+## UR-2026-08-30-ROBINHOOD-VENUE-LOGO
+
+- Timestamp: 2026-08-30 Europe/Kyiv
+- Request: "додай сюди ще лого робінгуд те що зелене знайди в інеті візьми якесь",
+  with the Robinhood Lighter venue-card screenshot.
+- Scope: find an existing green Robinhood logo online and add it alongside
+  Lighter on that venue card. Keep the asset local, preserve other venues and
+  wallet/trading behavior, and verify locally. No deployment requested.
+
+## UR-2026-08-30-PUBLISH-PENDING-UI
+
+- Timestamp: 2026-08-30 Europe/Kyiv
+- Request: "закинь всі зміни на прод".
+- Authorization: commit, push and deploy all four pending changes from this
+  task: optional Decibel deposit, venue-picker close, venue-specific reconnect,
+  and the companion Robinhood logo. Run the existing production checks and
+  verify the deployed build. Preserve unrelated holder-rebate work in main.

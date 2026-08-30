@@ -21,8 +21,9 @@ import { getAvailableDexConfigs, isDexAvailableInContext, useDex } from '../cont
 import ChunkErrorBoundary from './ChunkErrorBoundary';
 import { addClientBreadcrumb, lazyWithClientReload } from '../lib/clientLogger';
 import { readSoundEnabled } from '../lib/soundSettings';
-import { uiButton } from '../styles/theme';
+import { uiButton, uiIconButton } from '../styles/theme';
 import {
+  playerDexPreferenceKey,
   readLastPlayerDexPreference,
   readLastPlayerDexPreferenceAsync,
   writeLastPlayerDexPreference,
@@ -127,12 +128,38 @@ function shouldBypassVenuePickerForLocalGuest(player) {
   return currentUrlRequestsLocalGuest() || localStorageHasLocalGuestMarker() || isLocalGuestPlayer(player);
 }
 
-function VenuePickerOverlay({ isSolanaMobile, onPick }) {
+function VenuePickerOverlay({ isSolanaMobile, onPick, onClose }) {
   const dexOptions = getAvailableDexConfigs({ isInFrame: false, isSolanaMobile });
   return (
     <div style={venueStyles.overlay}>
-      <div style={venueStyles.panel}>
-        <div style={venueStyles.header}>CHOOSE TRADING VENUE</div>
+      <div
+        style={venueStyles.panel}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="venue-picker-title"
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') {
+            event.preventDefault();
+            event.stopPropagation();
+            onClose();
+          }
+        }}
+      >
+        <div style={venueStyles.header}>
+          <span id="venue-picker-title">CHOOSE TRADING VENUE</span>
+          <button
+            type="button"
+            style={venueStyles.closeButton}
+            onClick={onClose}
+            aria-label="Close trading venue picker"
+            title="Close"
+            autoFocus
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" aria-hidden="true">
+              <path d="m6 6 12 12M18 6 6 18" />
+            </svg>
+          </button>
+        </div>
         <div style={venueStyles.body}>
           <div style={venueStyles.copy}>
             Your game account is ready. Pick where you want to trade now; you can switch venue later from Trade/Profile without creating a new account.
@@ -147,12 +174,20 @@ function VenuePickerOverlay({ isSolanaMobile, onPick }) {
               >
                 <span style={{
                   ...venueStyles.logoWrap,
+                  ...(cfg.companionLogo ? venueStyles.logoPair : {}),
                 }}>
                   <img
                     src={cfg.logo}
-                    alt={cfg.label}
-                    style={venueStyles.logo}
+                    alt={cfg.logoLabel || cfg.label}
+                    style={cfg.companionLogo ? venueStyles.pairedLogo : venueStyles.logo}
                   />
+                  {cfg.companionLogo && (
+                    <img
+                      src={cfg.companionLogo}
+                      alt={cfg.companionLogoLabel}
+                      style={venueStyles.pairedLogo}
+                    />
+                  )}
                 </span>
                 <span style={venueStyles.cardText}>
                   <strong>{cfg.label}</strong>
@@ -181,6 +216,8 @@ export default function GameUI() {
   const guideAudioMutedRef = useRef(false);
   const guideAudioRestoreTimerRef = useRef(null);
   const venueSelectionRef = useRef({ id: 0, controller: null });
+  // Dismissal is session-local and player-specific, not a saved venue choice.
+  const dismissedVenuePickersRef = useRef(new Set());
   useAgentActions();
 
   const [showTroops, setShowTroops] = useState(false);
@@ -229,6 +266,8 @@ export default function GameUI() {
       return;
     }
     const preferenceOwner = { ...player, token };
+    const preferenceOwnerKey = playerDexPreferenceKey(preferenceOwner);
+    if (dismissedVenuePickersRef.current.has(preferenceOwnerKey)) return;
     const applySavedDex = (savedDex) => {
       if (!savedDex || !isDexAvailableInContext(savedDex, { isInFrame: false, isSolanaMobile })) return false;
       setDex(savedDex);
@@ -245,11 +284,18 @@ export default function GameUI() {
     if (applySavedDex(readLastPlayerDexPreference(preferenceOwner))) return;
     let cancelled = false;
     readLastPlayerDexPreferenceAsync(preferenceOwner).then((savedDex) => {
-      if (cancelled) return;
+      if (cancelled || dismissedVenuePickersRef.current.has(preferenceOwnerKey)) return;
       if (!applySavedDex(savedDex)) setShowVenuePicker(true);
     });
     return () => { cancelled = true; };
   }, [isSolanaMobile, player, setDex, showRegister, solanaMobileReady]);
+
+  const dismissVenuePicker = useCallback(() => {
+    const token = player?.token || (typeof window !== 'undefined' ? window._playerToken : null);
+    dismissedVenuePickersRef.current.add(playerDexPreferenceKey({ ...player, token }));
+    setShowVenuePicker(false);
+    addClientBreadcrumb('venue_picker.dismiss');
+  }, [player]);
 
   const chooseVenue = useCallback(async (nextDex) => {
     const token = player?.token || (typeof window !== 'undefined' ? window._playerToken : null);
@@ -508,6 +554,7 @@ export default function GameUI() {
         <VenuePickerOverlay
           isSolanaMobile={isSolanaMobile}
           onPick={chooseVenue}
+          onClose={dismissVenuePicker}
         />
       )}
       <ActionButtons
@@ -601,7 +648,11 @@ const venueStyles = {
     fontFamily: '"Inter","Segoe UI",sans-serif',
   },
   header: {
-    height: 54,
+    position: 'relative',
+    minHeight: 62,
+    flexShrink: 0,
+    padding: '14px 64px',
+    boxSizing: 'border-box',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -611,9 +662,18 @@ const venueStyles = {
     fontSize: 18,
     fontWeight: 700,
     textShadow: 'none',
+    textAlign: 'center',
+  },
+  closeButton: {
+    ...uiIconButton('secondary', 44),
+    position: 'absolute',
+    right: 10,
+    top: '50%',
+    transform: 'translateY(-50%)',
   },
   body: {
     padding: 18,
+    minHeight: 0,
     overflowY: 'auto',
   },
   copy: {
@@ -653,6 +713,16 @@ const venueStyles = {
     maxHeight: 32,
     objectFit: 'contain',
     filter: 'none',
+  },
+  logoPair: {
+    width: 64,
+    gap: 4,
+  },
+  pairedLogo: {
+    width: 28,
+    height: 28,
+    objectFit: 'contain',
+    flexShrink: 0,
   },
   cardText: {
     display: 'flex',

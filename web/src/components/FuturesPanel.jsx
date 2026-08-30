@@ -2662,219 +2662,6 @@ const flashFundingModalStyles = {
   },
 };
 
-// Decibel deposit gate. Shown after the user has activated trading but
-// before they've moved any USDC onto the subaccount. The whole panel
-// turns into a deposit prompt — there's nothing else to do here, since
-// you can't open positions with $0 of collateral. Mirrors the activate
-// gate's full-screen "no escape until you finish" UX.
-const DecibelDepositGate = ({
-  panelRef, fullscreen, isMobile, isDragging, posRef,
-  onClose, onPointerDown,
-  walletUsdc, depositToTradingAccount, loading, error,
-}) => {
-  const [amt, setAmt] = useState('5');
-  const [busy, setBusy] = useState(false);
-  const [localErr, setLocalErr] = useState(null);
-  // Derived state for the input + submit button. Decibel's `min_size`
-  // varies per market but is roughly $1 worth at typical leverages, so $5
-  // is the sensible "starter" floor and $1 is the hard minimum we let
-  // through. Anything less just isn't enough to open a single lot on most
-  // markets without floating-point quirks rounding the size to zero.
-  const wallet = Number(walletUsdc ?? 0);
-  const amtN = Number(amt) || 0;
-  const tooSmall = amtN < 1;
-  const overWallet = amtN > wallet + 1e-9;
-  const canSubmit = !busy && !loading && !tooSmall && !overWallet && wallet > 0;
-
-  const handleDeposit = async () => {
-    setLocalErr(null);
-    if (!canSubmit) return;
-    setBusy(true);
-    try {
-      const res = await depositToTradingAccount(amtN);
-      if (res?.error) setLocalErr(res.error);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <>
-      <style>{animCSS}</style>
-      <div ref={panelRef} className={`futures-terminal-shell ${fullscreen ? 'futures-fullscreen futures-terminal-shell--fullscreen' : 'futures-terminal-shell--compact'}`} style={{
-        ...(fullscreen ? S.containerFull : S.container),
-        ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '1px solid var(--terminal-border)' } : {}),
-        transform: (fullscreen || isMobile) ? undefined : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
-        transition: isDragging ? 'none' : 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
-      }}>
-        <div style={S.header} onPointerDown={onPointerDown}>
-          <span style={S.headerTitle}>Deposit USDC to start</span>
-          <button type="button" data-nodrag onClick={onClose} style={S.closeBtn} aria-label="Close deposit dialog">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-          </button>
-        </div>
-        <div style={{
-          ...S.body,
-          alignItems: 'stretch',
-          overflowY: 'auto',
-          overflowX: 'hidden',
-          padding: 0,
-        }}>
-        <div style={{
-          margin: 'auto',
-          width: '100%',
-          maxWidth: 420,
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          gap: 'clamp(10px, 2vh, 16px)',
-          padding: 'clamp(14px, 3vh, 24px) clamp(14px, 4vw, 24px)',
-          flexShrink: 0,
-        }}>
-          <div style={{
-            width: 'clamp(64px, 12vh, 96px)',
-            height: 'clamp(64px, 12vh, 96px)',
-            borderRadius: '50%',
-            background: 'var(--terminal-warning-soft)',
-            border: '1px solid #FB8C00',
-            boxShadow: '0 6px 0 #E65100, 0 10px 22px rgba(0,0,0,0.28)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontSize: 'clamp(32px, 6vh, 48px)',
-            flexShrink: 0,
-          }}>💵</div>
-          <div style={{
-            color: 'var(--terminal-text)', fontSize: 'clamp(17px, 2.6vh, 22px)', fontWeight: 700,
-            textAlign: 'center', letterSpacing: '0.4px',
-          }}>Fund your trading account</div>
-          <div style={{
-            color: 'var(--terminal-text-muted)', fontSize: 13, fontWeight: 600,
-            textAlign: 'center', maxWidth: 380, lineHeight: 1.5,
-          }}>
-            You can't trade without USDC for collateral. Deposit at least
-            <b> $5</b> from your Petra wallet to start earning real PnL plus
-            in-game gold rewards based on your trade volume.
-          </div>
-
-          {/* Wallet snapshot — what's available to deposit. */}
-          <div style={{
-            width: '100%', maxWidth: 380,
-            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-            background: 'var(--terminal-warning-soft)', border: '1px solid var(--terminal-border)',
-            borderRadius: 12, padding: '10px 14px',
-          }}>
-            <div style={{fontSize: 12, fontWeight: 700, color: 'var(--terminal-text-muted)'}}>In your wallet</div>
-            <div style={{fontSize: 16, fontWeight: 700, color: 'var(--terminal-text)'}}>
-              ${wallet.toFixed(2)} USDC
-            </div>
-          </div>
-
-          {/* Amount input — defaults to $5. Quick-pick buttons let users
-              tap an amount instead of typing on mobile. */}
-          <div style={{width: '100%', maxWidth: 380, display: 'flex', flexDirection: 'column', gap: 8}}>
-            <div style={{
-              display: 'flex', alignItems: 'center', gap: 8,
-              background: 'var(--terminal-warning-soft)', border: '1px solid var(--terminal-border)',
-              borderRadius: 12, padding: '10px 14px',
-            }}>
-              <div style={{fontSize: 18, fontWeight: 700, color: 'var(--terminal-text)'}}>$</div>
-              <input
-                type="number" min="1" step="0.5"
-                value={amt}
-                onChange={(e) => setAmt(e.target.value)}
-                disabled={busy || loading}
-                style={{
-                  flex: 1, border: 'none', outline: 'none',
-                  background: 'transparent', fontSize: 18, fontWeight: 700,
-                  color: 'var(--terminal-text)', minWidth: 0,
-                }}
-              />
-              <div style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text-muted)'}}>USDC</div>
-            </div>
-            <div style={{display: 'flex', gap: 6}}>
-              {[5, 10, 25, 50].filter(v => v <= wallet || v === 5).map(v => (
-                <button
-                  key={v}
-                  onClick={() => setAmt(String(v))}
-                  disabled={busy || loading || v > wallet}
-                  style={{
-                    flex: 1, padding: '6px 0',
-                    background: amtN === v ? 'var(--terminal-text)' : 'var(--terminal-warning-soft)',
-                    color: amtN === v ? 'var(--terminal-surface)' : 'var(--terminal-text)',
-                    border: '1px solid var(--terminal-border)', borderRadius: 8,
-                    fontSize: 12, fontWeight: 600, cursor: 'pointer',
-                    opacity: v > wallet ? 0.4 : 1,
-                  }}
-                >${v}</button>
-              ))}
-              {wallet > 0 && (
-                <button
-                  onClick={() => setAmt(String(Math.floor(wallet * 100) / 100))}
-                  disabled={busy || loading}
-                  style={{
-                    flex: 1, padding: '6px 0',
-                    background: 'var(--terminal-warning-soft)', color: 'var(--terminal-text)',
-                    border: '1px solid var(--terminal-border)', borderRadius: 8,
-                    fontSize: 12, fontWeight: 600, cursor: 'pointer',
-                  }}
-                >MAX</button>
-              )}
-            </div>
-          </div>
-
-          <button
-            style={{
-              ...terminalButton(canSubmit ? 'var(--terminal-warning)' : 'var(--terminal-text-faint)', canSubmit ? 'var(--terminal-warning)' : 'var(--terminal-text-muted)'),
-              padding: '16px 36px',
-              fontSize: 16, fontWeight: 700, letterSpacing: '0.5px',
-              width: '100%', maxWidth: 380,
-              opacity: canSubmit ? 1 : 0.7,
-              cursor: canSubmit ? 'pointer' : 'not-allowed',
-            }}
-            onClick={handleDeposit}
-            disabled={!canSubmit}
-          >
-            {busy || loading
-              ? 'WAITING FOR PETRA…'
-              : tooSmall
-                ? 'MINIMUM $1'
-                : overWallet
-                  ? 'NOT ENOUGH USDC'
-                  : `DEPOSIT $${amtN.toFixed(2)}`}
-          </button>
-
-          {wallet === 0 && (
-            <div style={{
-              fontSize: 12, color: 'var(--terminal-text-muted)', fontWeight: 700,
-              textAlign: 'center', maxWidth: 380, padding: '10px 14px',
-              background: 'var(--terminal-warning-soft)', border: '1px solid var(--terminal-border)',
-              borderRadius: 8, lineHeight: 1.5,
-            }}>
-              Your Petra wallet has no USDC yet. Get USDC on Aptos via
-              a bridge (e.g. <b>Wormhole</b> or <b>LayerZero</b>) or buy
-              direct on a CEX that supports Aptos withdrawals.
-            </div>
-          )}
-
-          <div style={{
-            fontSize: 11, color: 'var(--terminal-text-muted)', fontWeight: 700,
-            textAlign: 'center', maxWidth: 320, lineHeight: 1.4,
-          }}>
-            You can withdraw any time — funds stay on Aptos under your control.
-          </div>
-          {(localErr || error) && (
-            <div style={{
-              color: 'var(--terminal-short-strong)', fontSize: 12, fontWeight: 700,
-              textAlign: 'center', maxWidth: 380, padding: '8px 12px',
-              background: 'var(--terminal-short-soft)', borderRadius: 8, border: '1px solid var(--terminal-short-border)',
-            }}>{localErr || error}</div>
-          )}
-        </div>
-        </div>
-      </div>
-    </>
-  );
-};
-
 // Symbol picker dropdown with logo, max leverage, price, 24h change
 const SymbolPicker = memo(function SymbolPicker({ markets, prices, symbol, onSelect, fullscreen, signals }) {
   const [search, setSearch] = useState('');
@@ -3909,7 +3696,7 @@ function FuturesPanel() {
     // subaccountAddr lets the gate distinguish "fresh user" (no
     // subaccount yet) from "returning user" (subaccount on-chain but
     // delegation missing — usually after rejecting the delegate step).
-    activationStep, isReady, setupVerified, serviceAvailability, subaccountAddr, gasSponsored, apiWalletAddr, inviteStatus, builderConfig, builderAccepted, hotstuffSetupStatus,
+    activationStep, setupVerified, serviceAvailability, subaccountAddr, gasSponsored, apiWalletAddr, inviteStatus, builderConfig, builderAccepted, hotstuffSetupStatus,
     gmxUiFeeStatus, gmxUiFeeReceiver, gmxUiFeeBps, gmxUiFeeOwnerConnected, refreshGmxUiFeeStatus, activateGmxUiFee,
     bridgeDepositSourceChainId, setBridgeDepositSourceChainId, bridgeDepositSources,
     ondoDepositNetwork, ondoDepositNetworks, setOndoDepositNetwork,
@@ -4610,9 +4397,8 @@ function FuturesPanel() {
     ? pacBalanceBase + (hlUnifiedAccount ? 0 : hlSpotAvailable)
     : pacBalanceBase;
   // Mark-to-market portfolio value. Used for the displayed "balance" number
-  // and the no-funds deposit CTA gate so a losing trade doesn't make the UI
-  // claim the account has $0 (and pop the deposit prompt) when the position
-  // still has equity.
+  // and the non-blocking funding hint so a losing trade doesn't make the UI
+  // claim the account has $0 when the position still has equity.
   const pacAccountValueBase = Math.max(0, parseFloat(
     account?.account_equity                // Pacifica unified
       ?? account?.perp_equity_balance      // Decibel
@@ -5168,6 +4954,16 @@ function FuturesPanel() {
         let collateralUsdc = amountInUsdc
           ? parseFloat(amount)
           : (collateralReferencePrice > 0 ? (parseFloat(tokenAmount) * collateralReferencePrice) / leverage : 0);
+        // Funding is optional for browsing. Check only a new order's margin,
+        // before leverage updates or signing; close/cancel/TP-SL stay available.
+        if (dex === 'decibel' && balanceCheckPending) {
+          setLocalAlert('Decibel account balance is still loading. Try again when it updates.');
+          return;
+        }
+        if (dex === 'decibel' && collateralUsdc > pacBalance + 0.000001) {
+          setLocalAlert(`Decibel has $${pacBalance.toFixed(2)} free collateral. Reduce margin or deposit USDC in Account to open this trade. You can browse without a deposit.`);
+          return;
+        }
         if (dex === 'ostium' && (!Number.isFinite(collateralUsdc) || collateralUsdc < OSTIUM_MIN_MARGIN_USD)) {
           setLocalAlert(`Ostium minimum margin is ${OSTIUM_MIN_MARGIN_USD} USDC. Increase margin before signing.`);
           return;
@@ -5492,7 +5288,7 @@ function FuturesPanel() {
       setTradeBusy(false);
       setTradePhase(null);
     }
-  }, [amount, tokenAmount, positionUsdc, limitPrice, symbol, orderType, amountInUsdc, currentPrice, orderSizingPrice, currentMarket, placeMarketOrder, placeLimitOrder, leverage, leverageSettings, setLeverageApi, dex, pacAgent, bindAgent, bindingAgent, pacBalance, pacificaMaxMargin, ostiumMaxMargin, pacificaTakerFeeRate, phoenixTakerFeeRate, hotstuffTakerFeeRate, flashMaxMargin, positions, lotSize, hasWallet, setupVerified, isLighterDex, lighterNeedsIntegratorApproval, lighterVenueLabel, flashMarketBlockReason, ostiumMarketBlockMessage, maxLev, marginModes, resolveOpenTpslForSide, setTpsl]);
+  }, [amount, tokenAmount, positionUsdc, limitPrice, symbol, orderType, amountInUsdc, currentPrice, orderSizingPrice, currentMarket, placeMarketOrder, placeLimitOrder, leverage, leverageSettings, setLeverageApi, dex, pacAgent, bindAgent, bindingAgent, pacBalance, balanceCheckPending, pacificaMaxMargin, ostiumMaxMargin, pacificaTakerFeeRate, phoenixTakerFeeRate, hotstuffTakerFeeRate, flashMaxMargin, positions, lotSize, hasWallet, setupVerified, isLighterDex, lighterNeedsIntegratorApproval, lighterVenueLabel, flashMarketBlockReason, ostiumMarketBlockMessage, maxLev, marginModes, resolveOpenTpslForSide, setTpsl]);
 
   // ==================== TRADE CONTROLS (reusable) ====================
   // Symbol info bar — token + market data (above chart)
@@ -5745,10 +5541,10 @@ function FuturesPanel() {
       ...(parentScroll ? {width: '100%', padding: 10, boxSizing: 'border-box'} : {}),
     }}>
 
-      {/* Deposit/Withdraw row — gate on account VALUE, not free margin.
+      {/* Optional funding hint — use account VALUE, not free margin.
           A user with an open position has available_to_spend ≈ 0 but
-          account_equity > 0; gating on free margin would pop the deposit
-          prompt for any user with a position. */}
+          account_equity > 0; free margin would show a misleading hint
+          for a funded account with an open position. */}
       {!balanceCheckPending && pacAccountValue < 0.01 && (
         <div
           style={S.noBalanceHint}
@@ -5762,7 +5558,9 @@ function FuturesPanel() {
             }
           }}
         >
-          No balance — go to Account tab to deposit USDC
+          {dex === 'decibel'
+            ? 'Browse without a deposit — add USDC in Account when you want to trade'
+            : 'No balance — go to Account tab to deposit USDC'}
         </div>
       )}
 
@@ -9634,7 +9432,7 @@ function FuturesPanel() {
   //              + "what's happening" hint + "approve in Petra" prompt.
   //              No buttons (the user is blocked from doing anything else
   //              until they finish or reject the Petra popup).
-  // Once activation finishes (`isReady` flips true) the gate falls away
+  // Once activation verifies (`setupVerified` is true) the gate falls away
   // and the regular trade tabs render.
   // Show the gate while verification is loading too — that prevents a
   // flash of trading UI before we can confirm the on-chain delegation.
@@ -9828,42 +9626,6 @@ function FuturesPanel() {
           </div>
         </div>
       </>
-    );
-  }
-
-  // ==================== DECIBEL DEPOSIT GATE ====================
-  // User is fully activated but has no USDC on the subaccount yet — no
-  // collateral means no trading. Take over the panel with a deposit
-  // prompt, same vibe as the activate gate. The user enters an amount,
-  // hits DEPOSIT, Petra signs `deposit_to_subaccount_at`, gate falls
-  // away once the balance shows up.
-  //
-  // Skipped if any of:
-  //   • `dataReady` is false (still loading) — avoid flashing the gate
-  //     before the first poll comes in
-  //   - `accountReady` is false (still loading the Decibel balance read)
-  //   • user has open positions (they're in the middle of trading)
-  //   • subaccount has any equity OR withdrawable USDC > 0
-  if (
-    dex === 'decibel' && hasWallet && isReady && dataReady && accountReady
-    && (positions?.length || 0) === 0
-    && Number(account?.perp_equity_balance ?? 0) <= 0
-    && Number(account?.usdc_cross_withdrawable_balance ?? 0) <= 0
-  ) {
-    return (
-      <DecibelDepositGate
-        panelRef={panelRef}
-        fullscreen={fullscreen}
-        isMobile={isMobile}
-        isDragging={isDragging}
-        posRef={posRef}
-        onClose={handleClose}
-        onPointerDown={handlePointerDown}
-        walletUsdc={walletUsdc}
-        depositToTradingAccount={depositToPacifica}
-        loading={loading}
-        error={error}
-      />
     );
   }
 

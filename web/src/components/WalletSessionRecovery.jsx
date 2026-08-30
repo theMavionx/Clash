@@ -11,6 +11,7 @@ import { openSolanaWallet } from '../lib/solanaWalletUi';
 import { addClientBreadcrumb } from '../lib/clientLogger';
 import EvmWalletModal from './EvmWalletModal';
 import { uiButton, uiIconButton } from '../styles/theme';
+import { createTradingWalletSessionHistory, normalizeVenueWallet, tradingWalletSessionKey } from '../lib/tradingWalletSession';
 
 const DEX_PICKED_KEY = 'clash_dex_picked';
 const SHOW_AFTER_MS = 1200;
@@ -82,33 +83,58 @@ export default function WalletSessionRecovery() {
   const privy = useOptionalPrivy();
   const { isInFrame } = useFarcaster();
 
-  const [visible, setVisible] = useState(false);
+  const [visibleRepairKey, setVisibleRepairKey] = useState(null);
   const [evmModalOpen, setEvmModalOpen] = useState(false);
   const loggedRef = useRef(null);
+  const [sessionHistory] = useState(() => createTradingWalletSessionHistory());
 
   const meta = DEX_WALLET[dex] || DEFAULT_WALLET_META;
   const solAddress = solWallet?.publicKey?.toBase58?.() || null;
   const privySolAddress = (privy.solanaWallets || []).find(w => w?.address)?.address || null;
-  const liveWallet = meta.kind === 'evm'
+  const solAdapterReady = !!solAddress && solWallet?.connected === true;
+  const privySolReady = !!privySolAddress && privy.authenticated === true
+    && privy.ready === true && typeof privy.solanaSignTransaction === 'function';
+  const liveAddress = meta.kind === 'evm'
     ? evmWallet?.address
     : meta.kind === 'aptos'
     ? aptosWallet?.address
-    : (solAddress || privySolAddress);
+    : (solAdapterReady ? solAddress : privySolReady ? privySolAddress : null);
+  const liveWallet = normalizeVenueWallet(dex, liveAddress);
+  const hasLiveSigner = !!liveWallet && (
+    meta.kind === 'evm'
+      ? evmWallet?.isReady === true
+      : meta.kind === 'aptos'
+      ? aptosWallet?.connected === true
+      : (solAdapterReady || privySolReady)
+  );
   const otherWallet = meta.kind === 'evm'
     ? (solAddress || aptosWallet?.address || privySolAddress || null)
     : meta.kind === 'aptos'
     ? (evmWallet?.address || solAddress || privySolAddress || null)
     : (evmWallet?.address || aptosWallet?.address || null);
   const sessionToken = player?.token || (typeof window !== 'undefined' ? window._playerToken : null);
-  const playerId = player?.player_id || player?.id || player?.player_name || 'player';
-  const linkedWallet = player?.wallet || null;
-  const repairKey = `${playerId}:${dex}`;
+  const playerId = player?.player_id || player?.id || null;
+  const repairKey = tradingWalletSessionKey(playerId, dex);
+  const previouslyConnectedWallet = sessionHistory.read(playerId, dex);
   const localGuestSession = isLocalGuestSession(player);
-  const needsRepair = !!sessionToken
+  const eligibleSession = !!sessionToken
+    && !!repairKey
     && !ui?.showRegister
     && dexPicked()
-    && !localGuestSession
-    && !liveWallet;
+    && !localGuestSession;
+  const needsRepair = eligibleSession && !!previouslyConnectedWallet && !hasLiveSigner;
+  const visible = visibleRepairKey === repairKey;
+
+  useEffect(() => {
+    // Choosing a venue is not a wallet connection. Observe a signer only
+    // when the owner actually opens that venue's trading panel.
+    if (!eligibleSession || !ui?.futuresOpen || !hasLiveSigner) return;
+    sessionHistory.remember(playerId, dex, liveWallet);
+  }, [dex, eligibleSession, hasLiveSigner, liveWallet, playerId, sessionHistory, ui?.futuresOpen]);
+
+  useEffect(() => {
+    setEvmModalOpen(false);
+  }, [repairKey]);
 
   const openSolanaConnect = useCallback(() => {
     openSolanaWallet({
@@ -128,7 +154,7 @@ export default function WalletSessionRecovery() {
     }
     if (meta.kind === 'evm') {
       const restored = await evmWallet.reconnectStoredProvider?.();
-      if (!restored && !evmWallet.address) setEvmModalOpen(true);
+      if (!restored && !evmWallet.isReady) setEvmModalOpen(true);
       return;
     }
     if (meta.kind === 'aptos') {
@@ -149,12 +175,12 @@ export default function WalletSessionRecovery() {
       try { await privy.logout?.(); } catch { /* noop */ }
     }
     sendToGodot('logout');
-    setVisible(false);
+    setVisibleRepairKey(null);
   }, [aptosWallet, dex, evmWallet, meta.kind, privy, sendToGodot, solWallet]);
 
   useEffect(() => {
     if (!needsRepair) {
-      setVisible(false);
+      setVisibleRepairKey(null);
       return undefined;
     }
 
@@ -171,34 +197,37 @@ export default function WalletSessionRecovery() {
           has_other_wallet: !!otherWallet,
         }, 'warn');
       }
-      setVisible(true);
+      setVisibleRepairKey(repairKey);
     }, SHOW_AFTER_MS);
 
     return () => clearTimeout(timer);
   }, [dex, evmWallet, meta.kind, needsRepair, otherWallet, repairKey]);
 
   useEffect(() => {
-    if (liveWallet || !sessionToken) setVisible(false);
-  }, [liveWallet, sessionToken]);
+    if (hasLiveSigner || !sessionToken) {
+      setVisibleRepairKey(null);
+      setEvmModalOpen(false);
+    }
+  }, [hasLiveSigner, sessionToken]);
 
   useEffect(() => {
     if (!needsRepair) return undefined;
     const onVisible = () => {
-      if (document.visibilityState === 'visible') setVisible(true);
+      if (document.visibilityState === 'visible') setVisibleRepairKey(repairKey);
     };
     document.addEventListener('visibilitychange', onVisible);
     return () => document.removeEventListener('visibilitychange', onVisible);
-  }, [needsRepair]);
+  }, [needsRepair, repairKey]);
 
   const shortOther = useMemo(() => {
     if (!otherWallet) return null;
     return `${String(otherWallet).slice(0, 6)}...${String(otherWallet).slice(-4)}`;
   }, [otherWallet]);
 
-  const shortLinked = useMemo(() => {
-    if (!linkedWallet) return null;
-    return `${String(linkedWallet).slice(0, 6)}...${String(linkedWallet).slice(-4)}`;
-  }, [linkedWallet]);
+  const shortPrevious = useMemo(() => {
+    if (!previouslyConnectedWallet) return null;
+    return `${previouslyConnectedWallet.slice(0, 6)}...${previouslyConnectedWallet.slice(-4)}`;
+  }, [previouslyConnectedWallet]);
 
   if (!visible || !needsRepair) {
     return (
@@ -233,7 +262,7 @@ export default function WalletSessionRecovery() {
         <div id="wallet-recovery-title" style={S.title}>Wallet session needs repair</div>
         <div id="wallet-recovery-description" style={S.text}>
           You are still signed in to the game, but {meta.label} needs a live {meta.chain} wallet to trade.
-          {shortLinked ? ` Linked wallet: ${shortLinked}.` : ''}
+          {shortPrevious ? ` Previously connected wallet: ${shortPrevious}.` : ''}
           {shortOther ? ` A different wallet is active (${shortOther}).` : ''}
         </div>
         <div style={S.actions}>

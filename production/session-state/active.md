@@ -1,6 +1,120 @@
 # Active Session State
 
-Last updated: 2026-08-20
+Last updated: 2026-08-30
+
+## Pending UI Production Release (2026-08-30)
+
+- Owner explicitly authorized publishing all four pending UI changes:
+  optional Decibel deposit, venue-picker close, venue-specific wallet recovery,
+  and the Robinhood companion logo. Unrelated holder-rebate work stays local.
+- Candidate: `codex/optional-deposit-preview`, based on current origin/main
+  `bb871ba1`. Production source/current release were verified at the same base;
+  configured SSH proxy works and source has no runtime edits (only deploy lock).
+- 31 focused behavior tests, 17 actual React SSR cases, and 23 auth/bridge/theme
+  checks pass. Canonical `check-repo.ps1 -Mode Deploy` passes, including exchange,
+  backend, Godot probes, full lint and web build. Missing local better-sqlite3
+  binaries were restored with npm rebuild before rerunning the complete gate.
+- Browser visual/manual-wallet verification remains unavailable in this host;
+  no funded trade, wallet signature or production account repair is included.
+- Using existing export/upload and atomic deploy scripts; the referenced
+  deploy-clash skill is unavailable. Deploy and live build verification follow.
+- Audit logs are local under
+  `C:/Users/Admin/AppData/Local/Temp/clash-ui-release-a1951daf4e984c7dbcbfdf211f4d5ece`.
+
+## Robinhood Venue Logo Checkpoint (2026-08-30)
+
+- Added the requested green Robinhood feather beside Lighter on the
+  Robinhood Lighter Choose Trading Venue card. Ordinary Lighter is unchanged.
+- Local `web/public/robinhood.svg` uses the Simple Icons asset downloaded from
+  `https://cdn.simpleicons.org/robinhood`; its original #CCFF00 fill and path
+  are preserved. Source/trademark notes are included in the SVG.
+- `DexContext.jsx` supplies optional companion-logo metadata and `GameUI.jsx`
+  renders the two centered 28px marks in a 64px group. No auth, wallet,
+  trading, API, or other venue behavior changed.
+- Venue-picker tests: 11 pass, including both logos, unchanged ordinary
+  Lighter, asset safety, selection and close behavior. RH Lighter integration
+  source contract and production web build pass. Browser visual verification
+  could not run: automation initialization failed with kernel-assets os error 3.
+- Local/uncommitted in `codex/optional-deposit-preview` at
+  `C:/Users/Admin/AppData/Local/Temp/clash-etoro-4fa3e60ff21c47e99dd6c27f498f62d1`,
+  alongside the preceding UI changes. No commit, push or deployment requested
+  or performed; unrelated original-worktree changes remain untouched.
+
+## Venue-Specific Wallet Recovery Checkpoint (2026-08-30)
+
+- Owner requested no immediate bottom Reconnect prompt after choosing a new
+  exchange/network; recovery should follow a real previous connection there.
+- Root cause: `WalletSessionRecovery` used game token + any picked DEX + no
+  current network wallet, and labeled `player.wallet` as the venue's linked
+  wallet even when it was a different-chain game-login address.
+- Changed `web/src/components/WalletSessionRecovery.jsx` and added
+  `web/src/lib/tradingWalletSession.js`. Recovery requires a normalized live
+  signer previously observed while that player's selected trading panel was
+  open. A DEX choice, stored server wallet or shared provider outside Trade is
+  not enough. History is per player/venue, memory plus per-tab sessionStorage.
+- History is UI-only; it does not authenticate, link or authorize a wallet.
+  No backend account linkage, wallet-provider auto-restore or signing rule was
+  changed. Existing connect/setup screens remain the initial connection flow.
+- The banner now shows the previously observed trading wallet instead of the
+  game-login wallet. Recovery/modal visibility is scoped to player/venue and
+  clears on restored signer or changed venue. No new network polling was added.
+- `npm run test:wallet-session-recovery`: 12 behavioral/render tests pass
+  (first connect, Solana->EVM, real disconnect/reconnect, per-venue/player
+  isolation, reload, stale timers, Aptos, adapter/Privy Solana, blocked storage).
+  Optional-deposit, venue-close, auth/Godot bridge/theme regression suites also
+  pass. Focused ESLint has no warnings/errors; web build and diff-check pass.
+- No real wallet transaction or live browser flow was run; browser automation
+  initialization was unavailable in the preceding tasks in this environment.
+- Local/uncommitted alongside the other two UI changes in
+  `codex/optional-deposit-preview` at
+  `C:/Users/Admin/AppData/Local/Temp/clash-etoro-4fa3e60ff21c47e99dd6c27f498f62d1`.
+  No commit, push, production deployment or production data changes.
+
+## Venue Picker Close Checkpoint (2026-08-30)
+
+- Added the requested 44px close/X button to Choose Trading Venue in
+  `web/src/components/GameUI.jsx`, plus Escape dismissal and a named dialog.
+- The title stays centered, the close control has dedicated header space,
+  and the header does not shrink while the exchange list scrolls.
+- Closing records a player-specific in-memory dismissal only: no venue switch,
+  saved preference write, auth change or API call. Player refreshes and late
+  saved-preference reads cannot immediately reopen it. Explicit reopen still
+  works, and a different player's onboarding is not suppressed.
+- Added `web/test-venue-picker-close.mjs`: all 8 behavior/render tests pass.
+  Auth, Godot bridge and shared-theme regressions (23 checks), focused GameUI
+  ESLint (0 warnings/errors), production web build and diff whitespace pass.
+- Visual browser/click validation remains unverified; browser initialization
+  was unavailable in this environment in the preceding optional-deposit task.
+- Work is local/uncommitted with the optional-deposit change in
+  `codex/optional-deposit-preview` at
+  `C:/Users/Admin/AppData/Local/Temp/clash-etoro-4fa3e60ff21c47e99dd6c27f498f62d1`.
+  No commit/push/deployment was requested or performed.
+
+## Decibel Optional Deposit Checkpoint (2026-08-30)
+
+- Owner requested removal of the full-panel deposit requirement for browsing.
+- Implemented locally in branch `codex/optional-deposit-preview`, based on
+  `bb871ba103796b211eeb71cd41899fac5d419185` (latest origin/main at task start).
+- Implementation worktree:
+  `C:/Users/Admin/AppData/Local/Temp/clash-etoro-4fa3e60ff21c47e99dd6c27f498f62d1`.
+- Removed `DecibelDepositGate` and its early return in
+  `web/src/components/FuturesPanel.jsx`; Account funding remains optional.
+- New Decibel orders validate loaded/free collateral before leverage/signing.
+  Existing activation/referral and close/cancel/TP-SL behavior remains intact.
+- Added `web/test-decibel-optional-deposit.mjs` (8 behavioral/source checks)
+  and `web/tests/decibel-deposit-preview.mjs` (local mocked UI/SSR fixture).
+- Verified 7 tabs at both 1280px and 390px in real React SSR rendering,
+  loading/funded accounts, and zero-free-collateral risk controls (17 checks).
+- Existing referral, history routing, scrolling, position-action, theme
+  regression checks pass; production web build passes; focused ESLint has
+  0 errors and 7 pre-existing warnings; git diff --check passes.
+- Browser automation could not initialize: `failed to write kernel assets:
+  The system cannot find the path specified (os error 3)` on two attempts.
+  Browser visual/click testing and live wallet transactions are not verified.
+  The temporary preview server has been stopped.
+- No commit, push, deployment, or production data changes for this request.
+  Original main-worktree holder-rebate edits were preserved.
+
 
 ## Current Focus
 
