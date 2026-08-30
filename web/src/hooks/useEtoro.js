@@ -9,11 +9,11 @@ import {
   normalizeEtoroCredentials,
   readEtoroCredentials,
   saveEtoroCredentials,
+  ETORO_TRADING_SETTINGS_URL,
 } from '../lib/etoroClient';
 
 const FUTURES_API = '/api/futures';
 const ETORO_APP_URL = 'https://www.etoro.com/portfolio';
-const ETORO_BUILDERS_URL = 'https://builders.etoro.com/';
 
 function playerToken(player) {
   return player?.token || (typeof window !== 'undefined' ? window._playerToken : '') || '';
@@ -134,7 +134,7 @@ export function useEtoro() {
   const activate = useCallback(async (input = {}) => {
     if (!token) return disabled('Missing Clash game session.');
     const next = normalizeEtoroCredentials(input);
-    if (!next) return disabled('Enter the eToro API key, user key, and choose Real or Demo.');
+    if (!next) return disabled('Enter the API key and user key for an eToro Real account. Demo is not supported.');
     setLoading(true);
     setError('');
     try {
@@ -377,7 +377,7 @@ export function useEtoro() {
     setLeverage: async () => ({ success: true, ui_only: true }),
     depositToPacifica: openEtoro,
     withdraw: openEtoro,
-    openReferralJoin: () => window.open(ETORO_BUILDERS_URL, '_blank', 'noopener,noreferrer'),
+    openReferralJoin: () => window.open(ETORO_TRADING_SETTINGS_URL, '_blank', 'noopener,noreferrer'),
     claimGold,
     goldEarned,
     clearGoldEarned: () => setGoldEarned(null),

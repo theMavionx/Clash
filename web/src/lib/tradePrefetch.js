@@ -5,14 +5,11 @@ const COMMON_PRIVATE_DEXES = new Set([
   'avantis',
   'gmx',
   'ostium',
-  'monad',
   'hyperliquid',
   'risex',
   'nado',
-  'ondo',
   'leverup',
   'hotstuff',
-  'grvt',
 ]);
 
 let fetchCacheInstalled = false;
@@ -337,7 +334,7 @@ function buildDexSpecificRequests({ dex, token, walletAddress, signal }) {
 
   if (dex === 'gmtrade') {
     addPrefetchRequest(requests, futuresUrl('/gmtrade/health'), { headers, signal });
-    if (address) {
+    if (address && token) {
       addPrefetchRequest(requests, futuresUrl(`/gmtrade/referral?address=${encoded(address)}`), { headers, signal });
       addPrefetchRequest(requests, futuresUrl(`/gmtrade/account?address=${encoded(address)}`), { headers, signal });
       addPrefetchRequest(requests, futuresUrl(`/gmtrade/positions?address=${encoded(address)}`), { headers, signal });
@@ -348,7 +345,7 @@ function buildDexSpecificRequests({ dex, token, walletAddress, signal }) {
 
   if (dex === 'flash') {
     addPrefetchRequest(requests, futuresUrl('/flash/health'), { headers, signal });
-    if (address) {
+    if (address && token) {
       addPrefetchRequest(requests, futuresUrl(`/flash/referral?address=${encoded(address)}`), { headers, signal });
       addPrefetchRequest(requests, futuresUrl(`/flash/account?address=${encoded(address)}`), { headers, signal });
       addPrefetchRequest(requests, futuresUrl(`/flash/positions?address=${encoded(address)}`), { headers, signal });
@@ -359,7 +356,7 @@ function buildDexSpecificRequests({ dex, token, walletAddress, signal }) {
 
   if (dex === 'bulk') {
     addPrefetchRequest(requests, futuresUrl('/bulk/config'), { headers, signal });
-    if (address) {
+    if (address && token) {
       addPrefetchRequest(requests, futuresUrl(`/bulk/account?address=${encoded(address)}`), { headers, signal });
       addPrefetchRequest(requests, futuresUrl(`/bulk/builder-status?address=${encoded(address)}`), { headers, signal });
     }
@@ -378,7 +375,7 @@ function buildDexSpecificRequests({ dex, token, walletAddress, signal }) {
 
   if (dex === 'lighter') {
     addPrefetchRequest(requests, futuresUrl('/lighter/config'), { headers, signal });
-    if (address) {
+    if (address && token) {
       addPrefetchRequest(requests, futuresUrl(`/lighter/account?address=${encoded(address)}`), { headers, signal });
     }
     return requests;
@@ -386,28 +383,35 @@ function buildDexSpecificRequests({ dex, token, walletAddress, signal }) {
 
   if (dex === 'rhlighter') {
     addPrefetchRequest(requests, futuresUrl('/rh-lighter/config'), { headers, signal });
-    if (address) {
+    if (address && token) {
       addPrefetchRequest(requests, futuresUrl(`/rh-lighter/account?address=${encoded(address)}`), { headers, signal });
     }
     return requests;
   }
 
-  if (dex === 'grvt') {
+  if (dex === 'grvt' && token) {
     addPrefetchRequest(requests, futuresUrl('/grvt/config?dex=grvt'), { headers, signal });
+    // GRVT supports authenticated generic positions/orders, but not account.
+    // Unsupported generic reads fall through to the legacy Pacifica handler.
+    if (address) {
+      const qs = `dex=grvt&address=${encoded(address)}`;
+      addPrefetchRequest(requests, futuresUrl(`/positions?${qs}`), { headers, signal });
+      addPrefetchRequest(requests, futuresUrl(`/orders?${qs}`), { headers, signal });
+    }
     return requests;
   }
 
-  if (dex === 'hotstuff') {
+  if (dex === 'hotstuff' && token) {
     addPrefetchRequest(requests, futuresUrl('/hotstuff/status?dex=hotstuff'), { headers, signal });
     return requests;
   }
 
-  if (dex === 'risex' && address) {
+  if (dex === 'risex' && address && token) {
     addPrefetchRequest(requests, futuresUrl(`/risex/invite-status?dex=risex&account=${encoded(address)}`), { headers, signal });
     return requests;
   }
 
-  if (dex === 'decibel') {
+  if (dex === 'decibel' && token) {
     addPrefetchRequest(requests, futuresUrl('/decibel/signer'), { headers, signal });
     return requests;
   }

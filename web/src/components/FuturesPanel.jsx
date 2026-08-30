@@ -1,4 +1,7 @@
 import { Fragment, useState, memo, useCallback, useMemo, useRef, useEffect } from 'react';
+import LighterOneTapConnect from './LighterOneTapConnect';
+import EtoroSetupGuide from './trading/EtoroSetupGuide';
+import { ETORO_TRADING_SETTINGS_URL } from '../lib/etoroClient';
 import { useSend } from '../hooks/useGodot';
 import { useLayout } from '../hooks/useIsMobile';
 import { useWallet } from '@solana/wallet-adapter-react';
@@ -3703,11 +3706,11 @@ function FuturesPanel() {
     lighterNeedsIntegratorApproval, lighterNeedsReferral, lighterReferralChecking, lighterReferralStatus,
     lighterVenueLabel, lighterReferralRequired, lighterIntegratorConfigured, lighterConfig,
     lighterCredentials, detectAccount: detectLighterAccount,
+    connectOneTap: connectLighterOneTap, lighterConnectStatus,
     registerBuilderCode,
     fetchTradeHistory, fetchFundingHistory, fetchCandles,
     regionAccess, retryRegionAccess,
     refresh: refreshTrading,
-    etoroCredentials,
   } = trading;
   const isLighterDex = dex === 'lighter' || dex === 'rhlighter';
   const openedSortedPositions = useOpenedSortedPositions(positions);
@@ -4130,7 +4133,6 @@ function FuturesPanel() {
   const [katanaApiSecretInput, setKatanaApiSecretInput] = useState('');
   const [etoroApiKeyInput, setEtoroApiKeyInput] = useState('');
   const [etoroUserKeyInput, setEtoroUserKeyInput] = useState('');
-  const [etoroEnvironmentInput, setEtoroEnvironmentInput] = useState('demo');
   const [lighterAccountIndexInput, setLighterAccountIndexInput] = useState('');
   const [lighterApiKeyIndexInput, setLighterApiKeyIndexInput] = useState('');
   const [lighterApiPrivateKeyInput, setLighterApiPrivateKeyInput] = useState('');
@@ -6243,7 +6245,7 @@ function FuturesPanel() {
                   color: 'var(--terminal-text-muted)', fontSize: 12, fontWeight: 600,
                   textAlign: 'center', maxWidth: 300, lineHeight: 1.4,
                 }}>
-                  Your EVM login identifies the Clash player. On the next screen you connect a separate eToro Real or Demo API account.
+                  Your EVM login identifies the Clash player. On the next screen you connect a separate eToro Real API account.
                 </div>
                 {renderPrivyEmailButton('#6FCF17', '#4A9E12')}
                 <button
@@ -6253,7 +6255,7 @@ function FuturesPanel() {
                   <span>CONNECT EVM LOGIN WALLET</span>
                 </button>
                 <div style={{display: 'flex', alignItems: 'center', gap: 4, color: '#4A9E12', fontSize: 11, fontWeight: 600, letterSpacing: '0.5px', marginTop: 4}}>
-                  <span>ETORO API ACCOUNT · REAL / DEMO</span>
+                  <span>ETORO API ACCOUNT · REAL MONEY</span>
                 </div>
               </>
             ) : dex === 'hibachi' ? (
@@ -7274,7 +7276,6 @@ function FuturesPanel() {
     const isRunning = referralLinking || loading;
     const canSave = etoroApiKeyInput.trim().length > 0
       && etoroUserKeyInput.trim().length > 0
-      && (etoroEnvironmentInput === 'demo' || etoroEnvironmentInput === 'real')
       && !isRunning;
     const credentialState = isRunning ? 'active' : 'pending';
     return (
@@ -7299,7 +7300,7 @@ function FuturesPanel() {
                 <span style={hlGateStyles.kicker}>{isRunning ? 'VERIFYING ETORO' : 'API ACCESS REQUIRED'}</span>
                 <span style={hlGateStyles.title}>Connect your eToro account</span>
                 <span style={hlGateStyles.subtitle}>
-                  Create a Read/Write API key in eToro, then paste the API key and user key. Start with Demo unless you intentionally want real-money orders.
+                  Create a Real user key with Write permission in eToro, then connect using your application API key and user key. Trading uses real funds.
                 </span>
               </div>
 
@@ -7316,7 +7317,7 @@ function FuturesPanel() {
                     {credentialState === 'active' ? <span style={hlGateStyles.spinner} /> : 2}
                   </span>
                   <span style={hlGateStyles.stepText}>
-                    <span style={{ ...hlGateStyles.stepLabel, ...hlGateStyles[`stepLabel_${credentialState}`] }}>Verify Real or Demo API keys</span>
+                    <span style={{ ...hlGateStyles.stepLabel, ...hlGateStyles[`stepLabel_${credentialState}`] }}>Verify Real account API keys</span>
                     <span style={hlGateStyles.stepHint}>Clash checks portfolio, eligible CFD/margin instruments, positions, and orders.</span>
                   </span>
                 </li>
@@ -7329,26 +7330,20 @@ function FuturesPanel() {
                 </li>
               </ol>
 
+              <EtoroSetupGuide />
+
               <div style={{display: 'flex', flexDirection: 'column', gap: 10, background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 12, padding: 12}}>
-                <label style={{display: 'flex', flexDirection: 'column', gap: 5}}>
+                <div style={{display: 'flex', flexDirection: 'column', gap: 5}}>
                   <span style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text)', textTransform: 'uppercase'}}>Environment</span>
-                  <select
-                    value={etoroEnvironmentInput}
-                    onChange={(event) => setEtoroEnvironmentInput(event.target.value)}
-                    disabled={isRunning}
-                    style={{...S.input, padding: '10px 12px', fontSize: 14}}
-                  >
-                    <option value="demo">Demo — test funds</option>
-                    <option value="real">Real — real funds</option>
-                  </select>
-                </label>
+                  <div style={{...S.input, padding: '10px 12px', fontSize: 14}}>Real — real funds</div>
+                </div>
                 <label style={{display: 'flex', flexDirection: 'column', gap: 5}}>
                   <span style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text)', textTransform: 'uppercase'}}>eToro API key</span>
                   <input
                     type="password"
                     value={etoroApiKeyInput}
                     onChange={(event) => setEtoroApiKeyInput(event.target.value)}
-                    placeholder="Paste x-api-key"
+                    placeholder="Application API key (x-api-key)"
                     autoComplete="new-password"
                     disabled={isRunning}
                     style={{...S.input, padding: '10px 12px', fontSize: 14}}
@@ -7360,16 +7355,14 @@ function FuturesPanel() {
                     type="password"
                     value={etoroUserKeyInput}
                     onChange={(event) => setEtoroUserKeyInput(event.target.value)}
-                    placeholder="Paste x-user-key"
+                    placeholder="ETORO_USER_KEY (x-user-key)"
                     autoComplete="new-password"
                     disabled={isRunning}
                     style={{...S.input, padding: '10px 12px', fontSize: 14}}
                   />
                 </label>
-                <div style={{fontSize: 11, fontWeight: 600, lineHeight: 1.4, color: etoroEnvironmentInput === 'real' ? 'var(--terminal-short-strong)' : 'var(--terminal-text-faint)'}}>
-                  {etoroEnvironmentInput === 'real'
-                    ? 'REAL mode sends real-money orders. Confirm the environment before saving.'
-                    : 'Demo mode uses the eToro virtual portfolio and cannot place real-money orders.'}
+                <div style={{fontSize: 11, fontWeight: 600, lineHeight: 1.4, color: 'var(--terminal-short-strong)'}}>
+                  Trading uses real money. Connecting verifies your account; it does not place an order. Previous Demo connections must be replaced with Real account keys.
                 </div>
               </div>
 
@@ -7385,27 +7378,27 @@ function FuturesPanel() {
                     const result = await activate({
                       apiKey: etoroApiKeyInput.trim(),
                       userKey: etoroUserKeyInput.trim(),
-                      environment: etoroEnvironmentInput,
+                      environment: 'real',
                     });
                     if (result?.error) setLocalAlert(result.error);
                     else {
                       setEtoroApiKeyInput('');
                       setEtoroUserKeyInput('');
-                      setSuccessMsg(`eToro ${etoroEnvironmentInput === 'real' ? 'Real' : 'Demo'} account connected.`);
+                      setSuccessMsg('eToro Real account connected.');
                     }
                   } finally {
                     setReferralLinking(false);
                   }
                 }}
               >
-                {isRunning ? 'VERIFYING ETORO...' : `CONNECT ${etoroEnvironmentInput.toUpperCase()} ACCOUNT`}
+                {isRunning ? 'VERIFYING ETORO...' : 'CONNECT REAL ACCOUNT'}
               </button>
               <button
                 type="button"
                 style={hlGateStyles.secondaryBtn}
-                onClick={() => window.open('https://builders.etoro.com/', '_blank', 'noopener,noreferrer')}
+                onClick={() => window.open(ETORO_TRADING_SETTINGS_URL, '_blank', 'noopener,noreferrer')}
               >
-                OPEN ETORO BUILDERS
+                OPEN ETORO TRADING SETTINGS
               </button>
 
               {(error || localAlert) && <div style={hlGateStyles.errorBox}>{humanizeTradeError(error || localAlert, dex)}</div>}
@@ -7420,10 +7413,10 @@ function FuturesPanel() {
   }
 
   // ==================== LIGHTER API KEY GATE ====================
-  if (isLighterDex && hasWallet && setupVerified !== true) {
-    const isRunning = referralLinking || loading;
+  if (isLighterDex && hasWallet && (setupVerified !== true || lighterCredentialFormOpen)) {
+    const isRunning = referralLinking || loading || !!lighterConnectStatus;
     const hasLighterCredentials = lighterCredentials?.accountIndex != null;
-    const showLighterCredentialForm = !hasLighterCredentials || lighterCredentialFormOpen;
+    const showLighterCredentialForm = lighterCredentialFormOpen;
     const lighterCanSave = showLighterCredentialForm
       && lighterAccountIndexInput.trim().length > 0
       && lighterApiKeyIndexInput.trim().length > 0
@@ -7450,7 +7443,7 @@ function FuturesPanel() {
         ? 'Checking Lighter referral'
         : lighterNeedsIntegratorApproval && hasReferrer === true
           ? 'Approve Clash integrator'
-          : 'Add Lighter API credentials';
+          : `Connect ${lighterVenueLabel || 'Lighter'} with your wallet`;
     const lighterGateSubtitle = !lighterIntegratorConfigured
       ? 'Market data is live, but Clash has not configured its Robinhood Lighter integrator account yet. Opening orders stay disabled so no trade can bypass partner attribution.'
       : lighterNeedsReferral
@@ -7528,6 +7521,22 @@ function FuturesPanel() {
                   </span>
                 </li>
               </ol>
+              {!hasLighterCredentials && (
+                <LighterOneTapConnect key={dex + ':' + walletAddr}
+                  label={lighterVenueLabel || 'Lighter'} wallet={walletAddr}
+                  connect={connectLighterOneTap} status={lighterConnectStatus}
+                  disabled={referralLinking}
+                  referralCode={lighterReferralRequired === false ? '' : referralCode}
+                  feeBps={lighterConfig?.builderFeeBps ?? 1}
+                  onConnected={() => { setLighterCredentialFormOpen(false); setLocalAlert(''); }}
+                />
+              )}
+              {!hasLighterCredentials && (
+                <button type="button" disabled={isRunning} onClick={() => setLighterCredentialFormOpen(value => !value)}
+                  style={{...hlGateStyles.secondaryBtn, minHeight: 44, fontSize: 12}}>
+                  {showLighterCredentialForm ? 'Hide manual API key entry' : 'Advanced: use an existing API key'}
+                </button>
+              )}
               {showLighterCredentialForm && (
               <div style={{display: 'flex', flexDirection: 'column', gap: 10, background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 12, padding: 12}}>
                 <label style={{display: 'flex', flexDirection: 'column', gap: 5}}>
@@ -7571,6 +7580,12 @@ function FuturesPanel() {
                   The API key is stored only in this browser, encrypted by browser storage. Clash does not write it to the database.
                 </div>
               </div>
+              )}
+              {showLighterCredentialForm && setupVerified === true && (
+                <button type="button" style={hlGateStyles.secondaryBtn} disabled={isRunning}
+                  onClick={() => { setLighterCredentialFormOpen(false); setLighterApiPrivateKeyInput(''); setLocalAlert(''); }}>
+                  Cancel key change
+                </button>
               )}
               {lighterReferralRequired !== false && hasLighterCredentials && lighterReferralChecking && (
                 <div style={{fontSize: 12, fontWeight: 600, color: 'var(--terminal-text)', lineHeight: 1.35, border: '1px solid var(--terminal-border)', background: 'var(--terminal-surface-subtle)', borderRadius: 12, padding: 12}}>
@@ -9692,7 +9707,7 @@ function FuturesPanel() {
               </div>
             ) : (
               <div className="futures-terminal-chart" role="tabpanel" style={{flex: '0 0 clamp(220px, 38vh, 360px)', position: 'relative', minHeight: 180}}>
-                <TradingViewWidget symbol={symbol} pythSymbol={currentMarket?.pyth_symbol} positions={positions} orders={displayOrders} currentPrice={currentPrice} chartOverlay={explainBadge} dex={dex} fetchCandles={fetchCandles} />
+                <TradingViewWidget symbol={symbol} pythSymbol={currentMarket?.pyth_symbol} positions={positions} orders={displayOrders} currentPrice={currentPrice} priceIncrement={currentMarket?.tick_size} chartOverlay={explainBadge} dex={dex} fetchCandles={fetchCandles} />
                 {fundingBadge}
               </div>
             )}
@@ -9747,7 +9762,7 @@ function FuturesPanel() {
           {/* Top: chart + orderbook + controls */}
           <div className="futures-terminal-workspace__primary" style={{display: 'flex', flex: '1 1 auto', minHeight: 0, overflow: 'hidden'}}>
             <div className="futures-terminal-chart" style={{flex: `0 0 ${chartPct}%`, maxWidth: `${chartPct}%`, minHeight: 0, overflow: 'hidden', position: 'relative'}}>
-              <TradingViewWidget symbol={symbol} pythSymbol={currentMarket?.pyth_symbol} positions={positions} orders={displayOrders} currentPrice={currentPrice} chartOverlay={explainBadge} dex={dex} fetchCandles={fetchCandles} />
+              <TradingViewWidget symbol={symbol} pythSymbol={currentMarket?.pyth_symbol} positions={positions} orders={displayOrders} currentPrice={currentPrice} priceIncrement={currentMarket?.tick_size} chartOverlay={explainBadge} dex={dex} fetchCandles={fetchCandles} />
             </div>
             {supportsOrderBook && (
               <>
@@ -9820,7 +9835,7 @@ function FuturesPanel() {
       <>
         {renderSymbolBar()}
         <div className="futures-terminal-chart futures-terminal-chart--compact" style={{...S.chartArea, position: 'relative'}}>
-          <TradingViewWidget symbol={symbol} pythSymbol={currentMarket?.pyth_symbol} positions={positions} orders={displayOrders} currentPrice={currentPrice} chartOverlay={explainBadge} dex={dex} fetchCandles={fetchCandles} />
+          <TradingViewWidget symbol={symbol} pythSymbol={currentMarket?.pyth_symbol} positions={positions} orders={displayOrders} currentPrice={currentPrice} priceIncrement={currentMarket?.tick_size} chartOverlay={explainBadge} dex={dex} fetchCandles={fetchCandles} />
           {fundingBadge}
         </div>
         {renderTradeControls()}
@@ -10429,7 +10444,7 @@ function FuturesPanel() {
     const walletBalanceLabel = dex === 'hyperliquid'
       ? 'Arbitrum Wallet USDC'
       : dex === 'etoro'
-      ? `eToro ${String(account?.environment || etoroCredentials?.environment || 'Demo').toUpperCase()} available USD`
+      ? 'eToro REAL available USD'
       : dex === 'leverup'
       ? 'Monad Wallet USDC'
       : dex === 'hotstuff'
@@ -10553,9 +10568,7 @@ function FuturesPanel() {
                   whiteSpace: 'nowrap',
                 }}
                 onClick={async () => {
-                  const environment = account?.environment || etoroCredentials?.environment || 'demo';
                   await disconnect?.();
-                  setEtoroEnvironmentInput(environment);
                   setEtoroApiKeyInput('');
                   setEtoroUserKeyInput('');
                   setLocalAlert('Paste the replacement eToro API key and user key.');
@@ -10567,7 +10580,7 @@ function FuturesPanel() {
             <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8}}>
               <div style={{background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 10, padding: '8px 10px'}}>
                 <div style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text-faint)', textTransform: 'uppercase'}}>Environment</div>
-                <div style={{fontSize: 13, fontWeight: 800, color: account?.environment === 'real' ? 'var(--terminal-short-strong)' : 'var(--terminal-long)'}}>{String(account?.environment || etoroCredentials?.environment || 'demo').toUpperCase()}</div>
+                <div style={{fontSize: 13, fontWeight: 800, color: 'var(--terminal-short-strong)'}}>REAL</div>
               </div>
               <div style={{background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 10, padding: '8px 10px'}}>
                 <div style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text-faint)', textTransform: 'uppercase'}}>Account</div>
@@ -10626,10 +10639,7 @@ function FuturesPanel() {
                   border: '1px solid var(--terminal-info-border)',
                   whiteSpace: 'nowrap',
                 }}
-                onClick={async () => {
-                  try {
-                    await disconnect?.();
-                  } catch {}
+                onClick={() => {
                   setLighterCredentialFormOpen(true);
                   setLighterAccountIndexInput(String(lighterCredentials.accountIndex ?? ''));
                   setLighterApiKeyIndexInput(String(lighterCredentials.apiKeyIndex ?? ''));

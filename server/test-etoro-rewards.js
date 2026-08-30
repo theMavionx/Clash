@@ -103,12 +103,12 @@ async function run() {
       amount: '0.0004',
       price: '50000',
       orderId: '9001',
-      clientOrderId: 'etoro:demo:position:9001',
+      clientOrderId: 'etoro:real:position:9001',
       status: 'filled',
       dex: 'etoro',
       notional_usd: 20,
       verifiedSource: 'etoro_api',
-      proofJson: JSON.stringify({ source: 'etoro_portfolio', environment: 'demo', position_id: 9001 }),
+      proofJson: JSON.stringify({ source: 'etoro_portfolio', environment: 'real', position_id: 9001 }),
       createdAt: new Date(Date.now() - 60_000).toISOString(),
     });
     assert.equal(imported.inserted, 1);

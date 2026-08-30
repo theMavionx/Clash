@@ -597,7 +597,7 @@ function ProfileModal({ onClose }) {
     {
       id: 'etoro',
       label: 'eToro',
-      details: 'API key, user key, Real/Demo',
+      details: 'Real money · API key and user key',
       hook: etoroHook,
       walletLabel: 'eToro API account',
     },
@@ -632,14 +632,14 @@ function ProfileModal({ onClose }) {
     {
       id: 'lighter',
       label: 'Lighter',
-      details: 'account index, API key index, private key',
+      details: 'Wallet-approved connection · no manual key entry',
       hook: lighterHook,
       walletLabel: 'EVM wallet',
     },
     {
       id: 'rhlighter',
       label: 'Robinhood Lighter',
-      details: 'separate RH account index, API key index, private key',
+      details: 'Wallet-approved connection · separate RH account',
       hook: rhLighterHook,
       walletLabel: 'EVM wallet',
     },
@@ -666,13 +666,11 @@ function ProfileModal({ onClose }) {
       return { apiKey, accountId, privateKey };
     }
     if (dexId === 'etoro') {
-      const environment = window.prompt('eToro environment: demo or real', 'demo');
-      if (environment == null) return null;
-      const apiKey = window.prompt('eToro API key', '');
+      const apiKey = window.prompt('eToro Real account API key — trading uses real funds', '');
       if (apiKey == null) return null;
-      const userKey = window.prompt('eToro user key', '');
+      const userKey = window.prompt('eToro Real account user key', '');
       if (userKey == null) return null;
-      return { apiKey, userKey, environment };
+      return { apiKey, userKey, environment: 'real' };
     }
     if (dexId === 'grvt') {
       const apiKey = window.prompt('GRVT API key', '');
@@ -690,21 +688,16 @@ function ProfileModal({ onClose }) {
       if (apiSecret == null) return null;
       return { apiKey, apiSecret };
     }
-    if (dexId === 'lighter' || dexId === 'rhlighter') {
-      const venue = dexId === 'rhlighter' ? 'Robinhood Lighter' : 'Lighter';
-      const accountIndex = window.prompt(`${venue} account index`, '');
-      if (accountIndex == null) return null;
-      const apiKeyIndex = window.prompt(`${venue} API key index`, '');
-      if (apiKeyIndex == null) return null;
-      const apiPrivateKey = window.prompt(`${venue} API private key`, '');
-      if (apiPrivateKey == null) return null;
-      return { accountIndex, apiKeyIndex, apiPrivateKey };
-    }
     return null;
   }, []);
 
   const changeCredentialDex = useCallback(async (row) => {
     if (!row?.id || !row?.hook?.activate || credentialAction) return;
+    if (row.id === 'lighter' || row.id === 'rhlighter') {
+      switchToCredentialDex(row.id);
+      onClose();
+      return;
+    }
     if (dex !== row.id) {
       switchToCredentialDex(row.id);
       return;
@@ -723,7 +716,7 @@ function ProfileModal({ onClose }) {
     } finally {
       setCredentialAction('');
     }
-  }, [credentialAction, dex, promptCredentialInput, switchToCredentialDex]);
+  }, [credentialAction, dex, onClose, promptCredentialInput, switchToCredentialDex]);
 
   const clearCredentialDex = useCallback(async (row) => {
     if (!row?.id || !row?.hook?.disconnect || credentialAction) return;

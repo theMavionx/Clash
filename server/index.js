@@ -19,9 +19,12 @@ function loadEnvFile(file) {
   }
 }
 const REPO_ROOT = path.resolve(__dirname, '..');
+loadEnvFile(path.join(REPO_ROOT, '.env.public-proxy'));
 loadEnvFile(path.join(__dirname, '.env'));
 loadEnvFile(path.join(REPO_ROOT, '.env'));
 loadEnvFile(path.join(REPO_ROOT, 'web', '.env'));
+
+require('../server-futures/public-read-proxy').installPublicReadProxy();
 
 const express = require('express');
 const cors = require('cors');

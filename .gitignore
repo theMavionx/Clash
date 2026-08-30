@@ -84,6 +84,9 @@ aptos-test-wallet.txt
 backups/
 .tmp/
 
+# Local public proxy configuration references owner-only secret files.
+.env.public-proxy
+
 # Local Flash live-test harness. It can load wallet secrets from env and must
 # stay out of commits.
 tools/flash/

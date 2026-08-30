@@ -440,7 +440,7 @@ async function fetchDecibelCandles(symbol, interval, startMs, endMs) {
   }, { label: 'Decibel candlesticks' });
 }
 
-function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], orders = [], currentPrice, chartOverlay, dex = 'pacifica', fetchCandles }) {
+function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], orders = [], currentPrice, priceIncrement, chartOverlay, dex = 'pacifica', fetchCandles }) {
   const { theme } = useFuturesTheme();
   const darkTheme = theme === FUTURES_THEME_DARK;
   const containerRef = useRef(null);
@@ -448,8 +448,11 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
   const seriesRef = useRef(null);
   const linesRef = useRef([]);
   const lastCandleRef = useRef(null);
+  const candleContextRef = useRef(null);
   const [interval, setInterval_] = useState('5m');
   const [loading, setLoading] = useState(false);
+  const [chartError, setChartError] = useState('');
+  const [reloadCount, setReloadCount] = useState(0);
   const [pendingLineBadges, setPendingLineBadges] = useState([]);
 
   // Create chart once
@@ -495,10 +498,31 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
     };
   }, [darkTheme]);
 
+  useEffect(() => {
+    if (!seriesRef.current) return;
+    const tick = Number(priceIncrement);
+    const minMove = dex === 'nado' && Number.isFinite(tick) && tick > 0 ? tick : 0.01;
+    const precision = (minMove.toFixed(12).replace(/0+$/, '').split('.')[1] || '').length;
+    seriesRef.current.applyOptions({ priceFormat: { type: 'price', precision, minMove } });
+  }, [dex, priceIncrement, darkTheme]);
+
   // Load candles when symbol or interval changes
   useEffect(() => {
     if (!seriesRef.current) return;
     let cancelled = false;
+    let requestRunning = false;
+    let nadoRequest = null;
+    let nadoTimeout = null;
+    const context = [dex, symbol, interval, darkTheme].join('|');
+    // Retain candles only for retries of the SAME Nado market/timeframe.
+    // Showing the previous token's chart while switching is misleading.
+    if (candleContextRef.current !== context
+      && (dex === 'nado' || candleContextRef.current?.startsWith('nado|'))) {
+      seriesRef.current.setData([]);
+      lastCandleRef.current = null;
+    }
+    candleContextRef.current = context;
+    setChartError('');
     
     // Keep previous candles visible while the next range loads. Clearing here
     // made transient Pyth rate limits look like a permanently broken chart.
@@ -562,12 +586,30 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
     }
 
     async function load() {
+      if (cancelled || requestRunning) return;
+      requestRunning = true;
       const now = Date.now();
       const tf = INTERVALS.find(i => i.value === interval) || INTERVALS[1];
       const start = now - tf.ms;
       try {
         let candles = [];
-        if (dex === 'etoro' && typeof fetchCandles === 'function') {
+        if (dex === 'nado') {
+          const params = new URLSearchParams({
+            dex: 'nado', symbol, interval,
+            start_time: String(start), end_time: String(now),
+          });
+          nadoRequest = new AbortController();
+          nadoTimeout = window.setTimeout(() => nadoRequest?.abort(), 20_000);
+          const response = await fetch(`/api/futures/candles?${params.toString()}`, { signal: nadoRequest.signal });
+          const json = await response.json().catch(() => null);
+          if (!response.ok || !Array.isArray(json)) throw new Error('Nado candle request failed');
+          candles = json.map(normalizeBulkCandle).filter(Boolean).sort((a, b) => a.time - b.time);
+          if (cancelled) return;
+          if (!candles.length) {
+            setChartError('No Nado trading history for this period.');
+            return;
+          }
+        } else if (dex === 'etoro' && typeof fetchCandles === 'function') {
           const json = await fetchCandles(symbol, { interval, limit: 500 });
           candles = (Array.isArray(json) ? json : []).map(normalizeBulkCandle).filter(Boolean).sort((a, b) => a.time - b.time);
           if (cancelled) return;
@@ -658,7 +700,7 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
             candles = await loadPythCandles(tf, now, start);
           }
           if (cancelled) return;
-        } else if (dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'leverup' || dex === 'hotstuff' || dex === 'grvt' || dex === 'gmtrade' || dex === 'flash') {
+        } else if (dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'hyperliquid' || dex === 'risex' || dex === 'leverup' || dex === 'hotstuff' || dex === 'grvt' || dex === 'gmtrade' || dex === 'flash') {
           // These DEXes use Pyth benchmarks for chart candles. The helper
           // keeps retries bounded so rate limits do not cascade.
           candles = await loadPythCandles(tf, now, start);
@@ -675,8 +717,10 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
           }));
         }
 
+        if (cancelled || !seriesRef.current) return;
         if (!candles.length) candles = flatCandlesFromPrice(currentPriceRef.current, now, tf);
         if (!candles.length) return;
+        setChartError('');
         seriesRef.current.setData(candles);
         lastCandleRef.current = candles[candles.length - 1] || null;
         if (chartRef.current) {
@@ -684,12 +728,19 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
           chartRef.current.priceScale('right').applyOptions({ autoScale: true });
         }
       } catch {
-        const fallback = flatCandlesFromPrice(currentPriceRef.current, now, tf);
-        if (!cancelled && fallback.length && seriesRef.current) {
-          seriesRef.current.setData(fallback);
-          lastCandleRef.current = fallback[fallback.length - 1] || null;
+        if (dex === 'nado') {
+          if (!cancelled) setChartError('Nado chart is temporarily unavailable. Please retry.');
+        } else {
+          const fallback = flatCandlesFromPrice(currentPriceRef.current, now, tf);
+          if (!cancelled && fallback.length && seriesRef.current) {
+            seriesRef.current.setData(fallback);
+            lastCandleRef.current = fallback[fallback.length - 1] || null;
+          }
         }
       } finally {
+        requestRunning = false;
+        if (nadoTimeout !== null) window.clearTimeout(nadoTimeout);
+        nadoRequest = null;
         if (!cancelled) setLoading(false);
       }
     }
@@ -702,8 +753,13 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
       ? Math.max(60_000, Number(INTERVAL_SECONDS[interval] || 300) * 1000)
       : 30_000;
     const iv = window.setInterval(load, reloadMs);
-    return () => { cancelled = true; window.clearInterval(iv); };
-  }, [symbol, pythSymbol, interval, dex, darkTheme, fetchCandles]);
+    return () => {
+      cancelled = true;
+      nadoRequest?.abort();
+      if (nadoTimeout !== null) window.clearTimeout(nadoTimeout);
+      window.clearInterval(iv);
+    };
+  }, [symbol, pythSymbol, interval, dex, darkTheme, fetchCandles, reloadCount]);
 
   useEffect(() => {
     if (dex !== 'ostium' || !seriesRef.current || typeof WebSocket === 'undefined') return undefined;
@@ -962,6 +1018,12 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
       </div>
       <div style={{ flex: '1 1 auto', minHeight: 0, position: 'relative' }}>
         <div ref={containerRef} style={{ width: '100%', height: '100%' }} />
+        {chartError && !loading && (
+          <div role="status" style={{position: 'absolute', top: 12, left: 12, right: 12, zIndex: 10, padding: 12, borderRadius: 8, background: 'var(--terminal-surface)', color: 'var(--terminal-text-muted)', border: '1px solid var(--terminal-border)', textAlign: 'center', fontSize: 12}}>
+            <span>{chartError}</span>
+            <button type="button" onClick={() => setReloadCount(value => value + 1)} style={{...S.tfBtn, display: 'block', margin: '6px auto 0', minHeight: 44, color: 'var(--terminal-brand-strong)'}}>Retry chart</button>
+          </div>
+        )}
         {loading && (
           <div style={{position: 'absolute', inset: 0, zIndex: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--terminal-loading-overlay)'}}>
             <div style={{width: 36, height: 36, borderWidth: 1, borderStyle: 'solid', borderColor: 'var(--terminal-border)', borderTopColor: 'var(--terminal-orange)', borderRadius: '50%', animation: 'tv-spin 1s linear infinite'}}></div>

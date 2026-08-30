@@ -213,6 +213,35 @@ export async function removeEncryptedCredential(name) {
   removeLocalMirror(name);
 }
 
+// Used by explicit venue disconnect: delete only this identity's scoped copies,
+// including pending/retired keys, without removing other venues or the master key.
+export async function removeEncryptedCredentialNamespace(prefix) {
+  if (typeof prefix !== 'string' || prefix.length < 24 || !prefix.endsWith(':')) {
+    throw new Error('A specific credential namespace is required');
+  }
+  let db = null;
+  try { db = await openDb(); } catch {}
+  if (db) {
+    try {
+      const keys = await new Promise((resolve, reject) => {
+        const tx = db.transaction(VALUE_STORE, 'readonly');
+        const req = tx.objectStore(VALUE_STORE).getAllKeys();
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error || new Error('Could not list saved credentials'));
+      });
+      for (const key of keys) if (typeof key === 'string' && key.startsWith(prefix)) await idbDelete(db, VALUE_STORE, key);
+    } finally { db.close(); }
+  }
+  if (typeof window !== 'undefined') {
+    const names = [];
+    for (let index = 0; index < window.localStorage.length; index++) {
+      const key = window.localStorage.key(index);
+      if (key?.startsWith(LOCAL_MIRROR_PREFIX + prefix)) names.push(key);
+    }
+    for (const key of names) window.localStorage.removeItem(key);
+  }
+}
+
 export async function migratePlainLocalStorageCredential(localStorageKey, encryptedName, normalize) {
   if (typeof window === 'undefined') return null;
   let existing = null;

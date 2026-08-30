@@ -1,8 +1,7 @@
-import { createContext, useContext, useEffect, useMemo, useRef } from 'react';
+import { createContext, useContext, useMemo } from 'react';
 import { PrivyProvider, usePrivy, useSendTransaction, useWallets as usePrivyEvmWallets } from '@privy-io/react-auth';
 import {
   toSolanaWalletConnectors,
-  useCreateWallet as useCreateSolanaWallet,
   useSignMessage as usePrivySolanaSignMessage,
   useSignAndSendTransaction as usePrivySolanaSignAndSendTransaction,
   useSignTransaction as usePrivySolanaSignTransaction,
@@ -58,26 +57,13 @@ function PrivyStateBridge({ children }) {
   const { ready, authenticated, user, login, logout } = usePrivy();
   const { wallets: evmWallets } = usePrivyEvmWallets();
   const { sendTransaction: evmSendTransaction } = useSendTransaction();
-  const { ready: solanaReady, wallets: solanaWallets } = usePrivySolanaWallets();
-  const { createWallet: createSolanaWallet } = useCreateSolanaWallet();
+  const { wallets: solanaWallets } = usePrivySolanaWallets();
   const { signTransaction: solanaSignTransaction } = usePrivySolanaSignTransaction();
   const { signMessage: solanaSignMessage } = usePrivySolanaSignMessage();
   const { signAndSendTransaction: solanaSignAndSendTransaction } = usePrivySolanaSignAndSendTransaction();
-  const solanaCreateTriedRef = useRef(false);
-
-  useEffect(() => {
-    if (!authenticated) {
-      solanaCreateTriedRef.current = false;
-      return;
-    }
-    if (!ready || !solanaReady) return;
-    const hasSolanaWallet = (solanaWallets || []).some(w => w?.address);
-    if (hasSolanaWallet || solanaCreateTriedRef.current) return;
-    solanaCreateTriedRef.current = true;
-    Promise.resolve(createSolanaWallet()).catch(err => {
-      console.warn('[privy] Solana embedded wallet create failed:', err?.message || err);
-    });
-  }, [ready, authenticated, solanaReady, solanaWallets, createSolanaWallet]);
+  // Wallet creation belongs to PrivyProvider's createOnLogin flow below.
+  // useWallets returns connected wallets, not the user's wallet inventory:
+  // an empty array during hydration must not trigger a second creation.
 
   const value = useMemo(() => ({
     enabled: true,

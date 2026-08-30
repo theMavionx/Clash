@@ -2,6 +2,7 @@ import { Buffer } from 'buffer'
 globalThis.Buffer = Buffer
 
 import './lib/domMutationGuard'
+import './lib/publicReadFetch'
 import { createRoot } from 'react-dom/client'
 import './index.css'
 import './components/FuturesTerminal.css'

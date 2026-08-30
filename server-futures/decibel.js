@@ -55,6 +55,13 @@ const DECIBEL_WS = process.env.DECIBEL_WS_URL
   || 'wss://api.mainnet.aptoslabs.com/decibel/ws';
 const APTOS_FULLNODE = process.env.APTOS_FULLNODE_URL
   || 'https://fullnode.mainnet.aptoslabs.com/v1';
+// Historical fills can outlive the primary node's retention window. Only use
+// the mainnet archive automatically for the known mainnet endpoint; a custom
+// node/network must explicitly configure its matching archive.
+const APTOS_ARCHIVE_FULLNODE = process.env.APTOS_ARCHIVE_FULLNODE_URL
+  ?? (APTOS_FULLNODE.replace(/\/+$/, '') === 'https://fullnode.mainnet.aptoslabs.com/v1'
+    ? 'https://archive.mainnet.aptoslabs.com/v1'
+    : '');
 const APTOS_CHAIN_ID = 1;
 
 const DECIBEL_PACKAGE_MAINNET =
@@ -283,25 +290,47 @@ async function aptosView(functionId, args = [], typeArguments = []) {
 async function fetchAptosJsonPath(pathname, options = {}) {
   const cleanPath = String(pathname || '').replace(/^\/+/, '');
   if (!cleanPath) throw new Error('Aptos path is required');
-  const response = await fetchWithAptosKey(
-    `${APTOS_FULLNODE.replace(/\/$/, '')}/${cleanPath}`,
-    {
-      ...options,
-      headers: {
-        accept: 'application/json',
-        ...(options.headers || {}),
-      },
+  const requestOptions = {
+    ...options,
+    headers: {
+      accept: 'application/json',
+      ...(options.headers || {}),
     },
+  };
+  let response = await fetchWithAptosKey(
+    `${APTOS_FULLNODE.replace(/\/$/, '')}/${cleanPath}`,
+    requestOptions,
     `Aptos ${cleanPath}`,
   );
+  const version = /^transactions\/by_version\/(\d+)$/.exec(cleanPath)?.[1];
+  let usedArchive = false;
+  if (version && String(options.method || 'GET').toUpperCase() === 'GET'
+    && response.status === 410 && APTOS_ARCHIVE_FULLNODE
+    && APTOS_ARCHIVE_FULLNODE.replace(/\/+$/, '') !== APTOS_FULLNODE.replace(/\/+$/, '')) {
+    const failure = await response.clone().json().catch(() => null);
+    if (failure?.error_code === 'version_pruned') {
+      // Never follow the endpoint supplied in a remote error body. Archive
+      // reads still go through the key pool and all existing fill-proof checks.
+      response = await fetchWithAptosKey(
+        `${APTOS_ARCHIVE_FULLNODE.replace(/\/+$/, '')}/${cleanPath}`,
+        requestOptions,
+        `Aptos archive ${cleanPath}`,
+      );
+      usedArchive = true;
+    }
+  }
   if (!response.ok) {
     const body = await response.text().catch(() => '');
-    const error = new Error(`Aptos ${cleanPath} failed: ${response.status} ${body || response.statusText}`);
+    const error = new Error(`Aptos ${usedArchive ? 'archive ' : ''}${cleanPath} failed: ${response.status} ${body || response.statusText}`);
     error.status = response.status;
     error.body = body;
     throw error;
   }
-  return response.json();
+  const data = await response.json();
+  if (usedArchive && String(data?.version) !== version) {
+    throw new Error(`Aptos archive returned a different transaction version for ${cleanPath}`);
+  }
+  return data;
 }
 
 async function aptosPublicView(functionId, args = [], typeArguments = []) {

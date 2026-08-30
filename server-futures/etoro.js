@@ -56,12 +56,13 @@ function apiError(message, status = 502, payload = null, headers = null) {
 function credentials(input = {}) {
   const apiKey = firstText(input.apiKey, input.api_key);
   const userKey = firstText(input.userKey, input.user_key);
-  const rawEnvironment = firstText(input.environment, input.env, 'demo').toLowerCase();
-  const environment = rawEnvironment === 'real' ? 'real' : rawEnvironment === 'demo' ? 'demo' : '';
+  // An old Demo client must reconnect explicitly, never silently route to Real.
+  const rawEnvironment = firstText(input.environment, input.env).toLowerCase();
+  const environment = rawEnvironment === 'real' ? 'real' : '';
   if (!apiKey || !userKey) {
     throw apiError('eToro API key and user key are required', 400);
   }
-  if (!environment) throw apiError('eToro environment must be real or demo', 400);
+  if (!environment) throw apiError('Only eToro Real accounts are supported. Reconnect with Real API credentials.', 400);
   return { apiKey, userKey, environment };
 }
 
@@ -86,11 +87,13 @@ function credentialStatus(input = null) {
 }
 
 function environmentSegment(input) {
-  return credentials(input).environment === 'demo' ? '/demo' : '';
+  credentials(input);
+  return '';
 }
 
 function accountEnvironmentSegment(input) {
-  return credentials(input).environment === 'demo' ? '/demo' : '/real';
+  credentials(input);
+  return '/real';
 }
 
 function extractUpstreamMessage(payload, status) {
@@ -131,7 +134,7 @@ async function request(pathname, credsInput, options = {}) {
     if (!response.ok) {
       const upstream = extractUpstreamMessage(payload, response.status);
       const message = response.status === 401
-        ? 'eToro rejected the API key or user key. Use a Read/Write key for the selected Real or Demo environment.'
+        ? 'eToro rejected the API key or user key. Use a Read/Write key for your Real account.'
         : response.status === 403
           ? `eToro denied this operation: ${upstream}`
           : response.status === 429
@@ -923,7 +926,7 @@ function configStatus() {
     app_url: ETORO_APP_URL,
     authentication: 'browser_api_keys',
     browser_storage_only: true,
-    environments: ['demo', 'real'],
+    environments: ['real'],
     oauth_configured: !!(process.env.ETORO_OAUTH_CLIENT_ID && process.env.ETORO_OAUTH_CLIENT_SECRET),
     referral_configured: false,
     attribution_note: 'eToro App Store attribution requires an approved Clash OAuth application.',

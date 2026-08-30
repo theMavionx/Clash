@@ -1,5 +1,47 @@
 # User Request Log
 
+## UR-2026-08-31-DEPLOY-PENDING-INTEGRATION-FIXES
+
+- Request: "закинь все на прод".
+- Owner authorizes publishing all completed local changes from the isolated
+  codex/log-audit-20260830 worktree: log-audit fixes, Nado candles/public proxy
+  reads, Lighter one-tap, eToro Real-only setup and key-creation guide.
+- Excluded: unrelated unfinished holder-rebate work in the original checkout.
+- Existing atomic deploy scripts, preflight checks, shared data preservation
+  and rollback are required. No live user trades or manual player-data edits.
+- Status: confirming current production baseline and preparing release.
+
+## UR-2026-08-31-PUBLIC-READ-PROXY-POOL
+
+- Outcome: implemented/tested locally in codex/log-audit-20260830. Latest
+  100/100 proxies pass HTTPS, Ink RPC and Nado historical price reads.
+  Public browser/server fetch and default Axios SDKs use the guarded relay/
+  pool; private, signed, keyed-provider and WS/custom traffic is preserved.
+  Production unchanged. See implementation report
+  production/reports/bug-nado-chart-and-public-proxies-2026-08-31.md.
+
+- Timestamp: 2026-08-31 Europe/Kyiv.
+- Request: "і 100 проксі всюди постав + постав їх для безкоштовних запитів до рпс і до цін і так далі щоб вони використовувалися і тільки протестуй чи воно так буде працювати то все".
+- Scope: use latest supplied Webshare pool for supported server-side public
+  RPC/market reads, audit existing routing, test compatibility locally.
+  Keep proxy credentials server-only; no production deploy, DB mutation,
+  funded trade or signed transaction is authorized by this follow-up.
+
+## UR-2026-08-30-NADO-EMPTY-CHART
+
+- Outcome: fixed locally. Native Nado product candles replace failed Pyth
+  history, market price precision is passed, stale loads are canceled and
+  no-history/failure states have visible retry. Behavioral tests and actual
+  browser charts pass; no deployment performed.
+
+- Timestamp: 2026-08-30 Europe/Kyiv.
+- Request: "у надо якісь проблеми з графіком його ніфіга немає на жодному токені".
+- Evidence: user supplied Pyth TradingView history CORS errors for BTC/PENGU
+  and an empty KPEPE chart; client says it is trying the Clash fallback.
+- Scope: investigate and fix Nado historical candles/chart routing locally,
+  verify symbol/unit handling and real rendered charts; preserve preceding
+  local audit fixes. No new deploy or production data change requested.
+
 Purpose: durable log of explicit user requests to Codex for this repository.
 
 Rules:
@@ -3804,3 +3846,126 @@ Follow-up:
   task: optional Decibel deposit, venue-picker close, venue-specific reconnect,
   and the companion Robinhood logo. Run the existing production checks and
   verify the deployed build. Preserve unrelated holder-rebate work in main.
+
+## UR-2026-08-30-TANGO-PAST-DAY-TROPHY-COMPENSATION
+
+- Timestamp: 2026-08-30 Europe/Kyiv
+- Request: "Tango додай танго трохи кубків за попередні дні по 200 +- починаючи
+  з 2гого дня там де в нього не в усіх днях є 20 ігор зіграних бо ми облажалися
+  до цього і перерахуй тоід поінти".
+- Authorized scope: identify the correct Tango profile in the Hibachi
+  tournament, inspect completed daily rounds from day 2 onward, credit an
+  explicit owner compensation of 200 trophies per eligible day with fewer
+  than 20 played raids, and recalculate affected daily-pool points. Back up
+  affected state, make the repair idempotent and auditable, preserve real
+  battle records and trade volume, and verify the production result.
+- Result: completed on production at 2026-08-30 17:45 UTC. Days 2-5 had
+  0/0/0/17 completed raids and received +200 trophies each. Tango tournament
+  trophies: 690 -> 1490; closed-day points: 400.564647 -> 445.037110.
+  Thirteen local checks and independent DB/public leaderboard checks pass.
+  First/current day, volume, gold, real battle records and scoring rules
+  unchanged; protected before/after audit snapshots retained on the server.
+
+## UR-2026-08-30-TANGO-VARIABLE-TROPHY-TOPUP
+
+- Timestamp: 2026-08-30 Europe/Kyiv
+- Request: "додай тоді трохи більше ще стільки ж +- а ле в різні дні різну
+  кіл ькість став".
+- Authorized scope: add a second, separate compensation of approximately
+  another 800 trophies to Tango in Hibachi tournament 27, varied across the
+  same eligible closed days 2-5. Announced distribution: +180/+220/+190/+210,
+  exactly +800 total. Preserve the earlier +800 audit entries and real battle,
+  trading and player-account records. Back up, test, apply idempotently on
+  production and recalculate/verify the affected daily-pool points.
+
+## UR-2026-08-30-TANGO-MINIMUM-600-SCORE
+
+- Timestamp: 2026-08-30 Europe/Kyiv
+- Request: "так щоб в нього хоча б 600 скор був".
+- Scope clarification before the second compensation was applied: calculate
+  varied additional day 2-5 trophy amounts under the unchanged daily-pool
+  scoring formula so Tango reaches at least 600 score. The initial proposed
+  +180/+220/+190/+210 distribution is superseded if it is insufficient.
+  Preserve original compensation, volume, battles and scoring rules; retain
+  protected backup/audit entries and verify the production leaderboard.
+- Result: completed 2026-08-30 17:57 UTC. The unexecuted +800 proposal was
+  replaced by tested +460/+560/+480/+540 on days 2-5 (+2040 total).
+  Tournament trophies 1490 -> 3530; finalized points 445.037110 -> 547.791392.
+  Public leaderboard verified overall score 605.0404, including 57.248984
+  live-day points (dynamic). Eleven local checks plus production DB/hash and
+  public API checks pass. Original compensation and unrelated data preserved.
+
+## UR-2026-08-30-LOG-AUDIT-AND-BUGFIXES
+
+- Timestamp: 2026-08-30 Europe/Kyiv
+- Request: "проаналізуй логи, пошукай баги - виправ то все діло".
+- Scope: read production client/backend logs for the last 48 hours, group
+  failures, investigate and reproduce confirmed bugs, implement root-cause
+  fixes locally and run focused behavioral/regression verification. Separate
+  external-service failures and stale-build reports from current regressions.
+  No production deployment or production data mutation is authorized by
+  this request. Preserve unrelated holder-rebate and existing documentation edits.
+
+- Outcome: completed locally on `codex/log-audit-20260830` at the isolated
+  release-matched worktree. Fixed Decibel archived proof reads, missing Ink
+  marketplace support, redundant Privy wallet creation, private/unsupported
+  trade prefetch and Godot startup/retry recovery. New targeted tests and
+  regressions, lint/build, desktop/mobile browser verification pass.
+- Report: `C:/Users/Admin/AppData/Local/Temp/clash-etoro-4fa3e60ff21c47e99dd6c27f498f62d1/production/reports/bug-log-audit-2026-08-30.md`.
+- No commit, push, production restart, deploy or data mutation. Solana rent/
+  simulation failures and intermittent network failures remain operational
+  follow-ups, not falsely marked fixed.
+
+## UR-2026-08-31-LIGHTER-ONE-TAP-CONNECT
+
+- Timestamp: 2026-08-31 Europe/Kyiv
+- Request: "додай для лайтера ван тап конект як ми зробили це в клеш боті C:\Users\Admin\Documents\clashbot щоб не вводити руками ключ типу".
+- Scope: inspect the referenced ClashBot wallet-approved Lighter onboarding,
+  integrate automatic API-key setup into Clash with account/owner verification,
+  preserve existing credentials and verify the local connection/UI flows.
+- Worktree: codex/log-audit-20260830 in the existing isolated release checkout.
+  The referenced ClashBot repository is read-only. No deploy, live account
+  registration, trade, commit or production data change is authorized.
+- Status: implemented and locally verified. Wallet-approved automatic key
+  setup, multi-account choice, durable scoped recovery, Advanced manual fallback
+  and profile routing added. Native SDK preparation, 35 backend/18 frontend
+  regressions, existing Lighter/RH tests, local browser flow, lint/build pass.
+- Report: C:/Users/Admin/AppData/Local/Temp/clash-etoro-4fa3e60ff21c47e99dd6c27f498f62d1/production/reports/lighter-one-tap-connect-2026-08-31.md.
+- No commit, push, deploy or live exchange write. Real owner-wallet approval
+  remains the final live acceptance check.
+
+## UR-2026-08-31-ETORO-REAL-ONLY
+
+- Timestamp: 2026-08-31 Europe/Kyiv
+- Request: "для еторо постав тільки ріал мані".
+- Scope: remove Demo from eToro setup/profile, accept only explicit Real
+  credentials in browser and backend, and require reconnect for saved Demo
+  credentials instead of silently converting them to real-money trading.
+- Worktree: existing isolated codex/log-audit-20260830 release checkout.
+- Status: completed locally. Static Real label and explicit Real CTA replace
+  the environment selector; profile no longer asks for an environment.
+  Backend rejects Demo/unspecified credentials before any upstream request;
+  encrypted saved Demo credentials do not unlock trading or convert to Real.
+- Verification: eToro adapter contracts (including 40 rejected operations),
+  encrypted browser-storage/client tests, Real rewards/quest/tournament
+  regression, lint, syntax and production build pass. Actual FuturesPanel
+  browser fixture verifies the Real-only form and explicit Real connect payload.
+  No real exchange account/transaction was used.
+- No commit, push, deploy, production data mutation or exchange trade authorized.
+
+## UR-2026-08-31-ETORO-SETUP-GUIDE
+
+- Timestamp: 2026-08-31 Europe/Kyiv
+- Request: "додай цей гайд для еторо і лінк там зміни з еторо білдер на сторінку трейдінг сетінгс".
+- Scope: add the supplied key-creation guide to the eToro setup UI, keeping
+  the previously requested Real-only behavior, and link to Trading Settings.
+- Worktree: existing isolated codex/log-audit-20260830 release checkout.
+- Status: completed locally. Five-step expandable guide covers Real/Write,
+  optional restrictions, SMS/Phone Call and copying ETORO_USER_KEY, with a
+  clear distinction from application API key and an official docs link.
+  Setup button/shared setup action now open https://www.etoro.com/settings/trade.
+- Verification: official authentication documentation reviewed; client and
+  adapter tests, lint/build/diff checks pass. Actual local FuturesPanel browser
+  confirms guide expansion/collapse, rendered URLs and Real connect payload.
+  No logged-in eToro key generation or exchange operation was performed.
+- No deploy, account/key creation, trade, commit or production change authorized.

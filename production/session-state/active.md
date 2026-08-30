@@ -1,8 +1,169 @@
 # Active Session State
 
+## eToro Key Guide and Trading Settings Link — Local Verification (2026-08-31)
+
+- Added supplied five-step instructions as an expandable setup guide:
+  Settings/Trading, create key, Real + Write, SMS/Phone Call, copy user key.
+- Explicitly distinguishes ETORO_USER_KEY from application x-api-key.
+- Setup CTA/shared hook action now open https://www.etoro.com/settings/trade
+  instead of Builders; official authentication reference linked in the guide.
+- Same isolated codex/log-audit-20260830 worktree; prior changes preserved.
+  Client/adapter regressions, lint/build/diff checks and actual local
+  FuturesPanel expansion/collapse/Real-submit browser test pass.
+- No deploy, commit, production mutation or live eToro key creation/trade.
+
+## eToro Real-only Setup — Local Verification (2026-08-31)
+
+- Owner requested only real-money eToro accounts.
+- Same isolated worktree: codex/log-audit-20260830 at
+  C:/Users/Admin/AppData/Local/Temp/clash-etoro-4fa3e60ff21c47e99dd6c27f498f62d1.
+- Removed Demo picker/profile prompt, kept clear real-money notice.
+  Browser and server accept only explicitly Real credentials; saved Demo
+  keys require reconnect and never silently become real-money authorization.
+- Adapter/client/encrypted storage tests, Real rewards/quest/tournament
+  regression, actual FuturesPanel local browser form submission, lint/build
+  and diff checks pass. Fixture: web/tests/etoro-real-preview.mjs.
+- No commit, push, deploy, production data change or exchange request/trade.
+
+## Lighter One-Tap Connection — Local Verification (2026-08-31)
+
+- Owner requested ClashBot-style Lighter setup without manual API-key entry.
+- Implemented in the existing isolated codex/log-audit-20260830 worktree:
+  C:/Users/Admin/AppData/Local/Temp/clash-etoro-4fa3e60ff21c47e99dd6c27f498f62d1.
+- Wallet-owned account discovery, free-slot native ChangePubKey generation,
+  signature verification, exact player/deployment-bound challenge, one-send
+  reconciliation and encrypted per-account/challenge browser recovery.
+- Default wallet CTA and account selector; Advanced manual path retained.
+  Profile no longer prompts for a Lighter key. Existing referrals/integrator
+  gates and working keys are preserved.
+- 35 backend and 18 frontend checks, real SDK offline preparation, existing
+  Lighter/RH tests, actual local hook/UI flow, lint/build verified.
+- Report: production/reports/lighter-one-tap-connect-2026-08-31.md in that worktree.
+- No deploy/commit/push/production mutation or live key registration/trade.
+  Real owner-wallet registration remains an explicitly authorized smoke check.
+
+## Nado Charts and Public Proxy Pool — Local Verification (2026-08-31)
+
+- Requests: repair empty Nado charts; use latest supplied 100 Webshare proxies
+  for public RPC/price reads and test locally. No deploy authorized.
+- Same isolated worktree/branch as the completed log audit:
+  C:/Users/Admin/AppData/Local/Temp/clash-etoro-4fa3e60ff21c47e99dd6c27f498f62d1,
+  codex/log-audit-20260830, base 534e91d2.
+- Nado chart now uses native product candles (six intervals), x18 normalization,
+  market tick precision, cache/coalescing, cancellation and visible retry.
+  Pyth history was 404 both directly and through production fallback/proxy.
+- Public-only HTTPS relay/transport now covers browser and Node fetch/default
+  Axios SDKs. Credentials remain server-only, private/signing/write/keyed/WS
+  and custom transports unchanged. Local ignored .env.public-proxy references
+  the owner's latest Webshare file for both public reads and existing Hibachi.
+- All 100 proxies pass HTTPS, Ink RPC and native Nado historical prices.
+  Additional public RPC/API matrix and browser chart/RPC relay checks pass.
+  Combined tests: 70 pass; 20 proxy tests also pass on Node 20; build passes.
+- Full report and limitations: implementation worktree
+  production/reports/bug-nado-chart-and-public-proxies-2026-08-31.md.
+- No commit, push, deploy or production mutation. Earlier log-audit fixes
+  and unrelated original-checkout holder-rebate work are preserved.
+
 Last updated: 2026-08-30
 
-## Pending UI Production Release (2026-08-30)
+## Log Audit Completed Locally (2026-08-30)
+
+- Owner requested log analysis and fixes, not deployment or production data edits.
+- Working in isolated release-matched worktree on `codex/log-audit-20260830`
+  at base `534e91d2`; original checkout's holder-rebate edits are preserved.
+- Read-only audit: timestamped client logs for the last 48 hours and bounded
+  current PM2 tails. PM2 lines are undated, so historical whole-file counts
+  must not be described as 48-hour counts.
+- Confirmed: Decibel historical proof reads get Aptos `410 version_pruned`
+  (same version returns valid transaction from official archive); Ink is
+  auto-started but absent from marketplace indexer's supported-chain map.
+- Fixed redundant Privy Solana creation, authenticated/unsupported venue
+  prefetch, and loader recovery (fresh script element on retry, visible owned
+  startup errors, missing Engine and WebGL cooldown recovery).
+- Current Solana metadata/payment-worker failures include insufficient rent
+  funds; no treasury operations, trading, production writes or restarts allowed.
+- Verification passed: 18 archive scenarios, marketplace indexing on 4 chains,
+  30 new client tests, reward/auth/history regressions, web lint/build and
+  actual desktop/mobile browser startup-failure and retry flow.
+- Detailed evidence, reproductions and operational follow-ups:
+  `production/reports/bug-log-audit-2026-08-30.md`.
+- No commit/push/deploy or production mutation. Release approval is still needed.
+
+## Tango Minimum-600 Score Follow-up Completed (2026-08-30)
+
+- Owner first requested another approximately 800 trophies with varied daily
+  amounts, then clarified before mutation: Tango should have at least 600 score.
+  The initial +180/+220/+190/+210 proposal was not applied; it would only
+  produce approximately 544 overall points with the then-current live round.
+- Same Tango player/tournament 27 as the preceding compensation. Under the
+  unchanged proportional daily-pool formula, the tested additional grants are
+  +460/+560/+480/+540 on days 2/3/4/5 (round keys Aug 25/26/27/28), +2040 total.
+  These amounts were communicated before applying and deliberately differ.
+- Production applied at 17:57 UTC: four new idempotent events with source
+  `owner_manual_trophy_adjustment` and prefix `tango-hibachi27-topup-20260830:`.
+  Original four +200 events remain intact. Tournament trophies 1490 -> 3530.
+  Day trophy totals now 660/760/680/866; no battle/win records were fabricated.
+- Canonical admin force-rescore completed for all four days. Closed awarded
+  points 445.037110 -> 547.791392; daily totals 106.484297 / 205.278938 /
+  133.625653 / 80.794875. Other participants' trophy shares change under the
+  existing formula; pool sizes, volume-category awards and rules are unchanged.
+- Eleven local tests on a copy of production scoring inputs pass using the
+  actual deployed scorer: exact inputs, eligibility, original grant required,
+  drift/backup/partial-write rollback, data isolation, arithmetic, idempotence
+  and full targeted undo preserving the first compensation.
+- Independent read-only DB/hash checks plus both public HTTPS daily-point and
+  leaderboard APIs pass at 17:57:54 UTC: Tango rank 8, 3530 trophies and
+  projected score 605.0404 = 547.791392 finalized + 57.248984 live-day estimate.
+  The requested minimum 600 was verified. Live estimates can subsequently
+  change as other players trade/raid; no fixed-score override was installed.
+- Global account, gold, trades/volume, actual raids, day 1/current-day ledger
+  and tournament configuration are preserved by the adjustment transaction.
+  No code deploy or restart was necessary.
+- Protected production snapshots/script/results/verification:
+  `/opt/clash/shared/backups/tango-hibachi27-topup-20260830/`.
+  Local calculation/test fixtures:
+  `C:/Users/Admin/AppData/Local/Temp/clash-tango-topup-6963cfe315924430a98d606b60fa7515/`.
+
+
+## Tango Past-Day Compensation Completed (2026-08-30)
+
+- Owner authorized +200 tournament trophies on completed days from day 2
+  with fewer than 20 completed ranked raids, plus daily-pool recalculation.
+- Verified exact profile `dba9164a-cc0d-4956-a769-9e76cc0b7a3d`, name Tango,
+  game wallet `0x7ee6803416af2b74644d7fe57e1f26579e4b0ffa`, Hibachi wallet
+  `0xa5b777f3240e17340b83991848dfe31f1df5cd44`, tournament 27.
+- Days 2-5 use round keys 2026-08-25 through 2026-08-28, with cutoff 22:00 UTC
+  and completed raid counts 0/0/0/17. Added exactly 200 trophies to each:
+  +800 total, participant trophies 690 -> 1490. Day 1 and current day 6
+  (50 completed raids) were excluded. No wins or battle rows were fabricated.
+- Four idempotent ledger entries use source `owner_manual_trophy_adjustment`
+  and event prefix `tango-hibachi27-missed-raids-20260830:`. The DB transaction
+  verifies account identity and historical inputs, writes a protected snapshot
+  before mutation, and changes only the participant trophy total plus ledger.
+- All 13 local checks pass against an isolated fixture of production inputs
+  using the actual 534e91d2 daily-pool scorer: threshold, historical drift,
+  backup/mid-write rollback, unchanged unrelated data, idempotence and exact undo.
+- Production mutation completed at 17:45 UTC; all four days were rescored
+  through the existing authenticated admin daily-points/run API. No code
+  deployment, scoring weights, pool sizes, raid limits or server restart.
+- Closed awarded points 400.564647 -> 445.037110 (+44.472463). Day totals:
+  88.180200 / 196.659136 / 101.901385 / 36.688760 for days 2/3/4/5.
+  Trophy-pool shares were redistributed for all participants as required by
+  the existing proportional scoring. Volume-category awards were unchanged.
+- Independent read-only DB checks and public HTTPS daily-points/leaderboard
+  verification passed at 17:48 UTC: 1490 trophies, 445.03711 closed points,
+  rank 8 and 502.163 projected including the live day (live values can change).
+  Main player account, gold, volume, trades, battle rows, first-day awards,
+  current-day ledger and tournament configuration were preserved by the repair.
+- Protected production audit/rollback snapshots, hashes, scripts and report:
+  `/opt/clash/shared/backups/tango-hibachi27-missed-raids-20260830/`.
+  Local fixture/test evidence:
+  `C:/Users/Admin/AppData/Local/Temp/clash-tango-compensation-4609a617f0d74760b368c65abfd82b88/`.
+  No browser visual check was needed for this data repair; client-visible
+  values were confirmed through the exact public APIs used by the leaderboard.
+
+
+## UI Production Release Completed (2026-08-30)
 
 - Owner explicitly authorized publishing all four pending UI changes:
   optional Decibel deposit, venue-picker close, venue-specific wallet recovery,
@@ -17,7 +178,21 @@ Last updated: 2026-08-30
 - Browser visual/manual-wallet verification remains unavailable in this host;
   no funded trade, wallet signature or production account repair is included.
 - Using existing export/upload and atomic deploy scripts; the referenced
-  deploy-clash skill is unavailable. Deploy and live build verification follow.
+  deploy-clash skill is unavailable. Commit `534e91d2` was pushed to origin/main
+  and deployed as `/opt/clash/releases/20260830171738-534e91d2` at 17:21 UTC.
+- Live verification passed: current symlink/source SHA match, four feature
+  markers appear in the release-owned JS, the old mandatory-deposit text is
+  absent, and public HTML/logo/service-worker/feature JS match the deployed
+  files byte-for-byte through Cloudflare. All checked resources and /api/online
+  return 200; API, futures, Hermes jobs and MCP processes are online and their
+  local health endpoints pass. The unchanged Godot runtime was reused.
+- Previous release `20260830121824-bb871ba1` remains for rollback; canonical
+  retention removed older `20260830110828-d40eb84a` build artifacts. No manual
+  production data repair or additional trading action was performed.
+- Separate operational warning: the existing Solana payment-sync startup
+  reported a transaction simulation failure, then the watcher started online.
+  No payment-sync code changed in this UI release; this warning was reported
+  to the owner and was not treated as a passing funded-transaction check.
 - Audit logs are local under
   `C:/Users/Admin/AppData/Local/Temp/clash-ui-release-a1951daf4e984c7dbcbfdf211f4d5ece`.
 

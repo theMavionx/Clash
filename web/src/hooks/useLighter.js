@@ -2,10 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDex } from '../contexts/DexContext';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { usePlayer } from './useGodot';
+import { connectLighterAccount, lighterCredentialMatches } from '../lib/lighterOnboarding';
 import {
   migratePlainLocalStorageCredential,
   readEncryptedCredential,
   removeEncryptedCredential,
+  removeEncryptedCredentialNamespace,
   writeEncryptedCredential,
 } from '../lib/encryptedCredentialStorage';
 import {
@@ -59,10 +61,26 @@ function normalizeCredentials(value) {
     readOnlyToken: String(value?.readOnlyToken || value?.read_only_token || value?.authToken || '').trim(),
     readOnlyTokenExpiresAt: Number(value?.readOnlyTokenExpiresAt || value?.read_only_token_expires_at || 0) || 0,
     integratorApproved: value?.integratorApproved === true,
+    onboardingOwner: String(value?.onboardingOwner || ''),
+    onboardingPlayerId: String(value?.onboardingPlayerId || ''),
+    onboardingDeployment: String(value?.onboardingDeployment || ''),
   };
 }
 
-async function loadCredentials(storageKey) {
+function scopedCredentialKey(storageKey, scope) {
+  return scope?.playerId && scope?.wallet
+    ? `${storageKey}:one-tap:${scope.playerId}:${scope.wallet.toLowerCase()}`
+    : null;
+}
+
+async function loadCredentials(storageKey, scope, accountIndex) {
+  const scopedKey = scopedCredentialKey(storageKey, scope);
+  if (scopedKey && accountIndex != null) {
+    const forAccount = normalizeCredentials(await readEncryptedCredential(`${scopedKey}:account:${accountIndex}`));
+    if (forAccount) return forAccount;
+  }
+  const scoped = scopedKey ? normalizeCredentials(await readEncryptedCredential(scopedKey)) : null;
+  if (scoped) return scoped;
   const migrated = await migratePlainLocalStorageCredential(storageKey, storageKey, normalizeCredentials);
   const stored = migrated || await readEncryptedCredential(storageKey);
   return normalizeCredentials(stored);
@@ -71,13 +89,28 @@ async function loadCredentials(storageKey) {
 async function saveCredentials(storageKey, creds) {
   const normalized = normalizeCredentials(creds);
   if (!normalized) throw new Error('Enter a valid Lighter account index');
+  const scopedKey = scopedCredentialKey(storageKey, { playerId: normalized.onboardingPlayerId, wallet: normalized.onboardingOwner });
+  if (scopedKey) {
+    await writeEncryptedCredential(`${scopedKey}:account:${normalized.accountIndex}:key:${normalized.apiKeyIndex}`, normalized);
+    await writeEncryptedCredential(`${scopedKey}:account:${normalized.accountIndex}`, normalized);
+    await writeEncryptedCredential(scopedKey, normalized);
+  }
   await writeEncryptedCredential(storageKey, normalized);
   try { window.localStorage.removeItem(storageKey); } catch {}
   return normalized;
 }
 
-async function clearCredentials(storageKey) {
-  await removeEncryptedCredential(storageKey);
+async function clearCredentials(storageKey, scope) {
+  const scopedKey = scopedCredentialKey(storageKey, scope);
+  if (scopedKey) {
+    await removeEncryptedCredentialNamespace(scopedKey + ':');
+    await removeEncryptedCredential(scopedKey);
+  }
+  const latest = await readEncryptedCredential(storageKey);
+  if (!latest?.onboardingOwner || (latest.onboardingPlayerId === scope?.playerId
+    && latest.onboardingOwner.toLowerCase() === scope?.wallet?.toLowerCase())) {
+    await removeEncryptedCredential(storageKey);
+  }
   try { window.localStorage.removeItem(storageKey); } catch {}
 }
 
@@ -166,7 +199,18 @@ function useLighterProfile(profile) {
   const player = usePlayer();
   const evmWallet = useEvmWallet();
   const token = player?.token || (typeof window !== 'undefined' ? window._playerToken : '') || '';
-  const [credentials, setCredentials] = useState(null);
+  const playerId = player?.player_id || player?.id || '';
+  const [storedCredentials, setCredentials] = useState(null);
+  const credentials = lighterCredentialMatches(storedCredentials, { deployment: dexId, playerId, wallet: evmWallet?.address })
+    ? storedCredentials : null;
+  const [lighterConnectStatus, setLighterConnectStatus] = useState('');
+  const connectingRef = useRef(null);
+  const connectionContextRef = useRef(null);
+  connectionContextRef.current = { token, playerId, wallet: evmWallet?.address, dex, mounted: true };
+  useEffect(() => {
+    connectionContextRef.current.mounted = true;
+    return () => { connectionContextRef.current.mounted = false; };
+  }, []);
   const [markets, setMarkets] = useState([]);
   const [prices, setPrices] = useState([]);
   const [account, setAccount] = useState(null);
@@ -178,15 +222,16 @@ function useLighterProfile(profile) {
   const [referralStatus, setReferralStatus] = useState(null);
   const [venueConfig, setVenueConfig] = useState(null);
   const claimGoldRef = useRef(null);
+  const refreshLatestRef = useRef(null);
 
   useEffect(() => {
     if (!isActiveDex) return;
     let cancelled = false;
-    loadCredentials(storageKey)
+    loadCredentials(storageKey, { playerId, wallet: evmWallet?.address })
       .then((loaded) => { if (!cancelled) setCredentials(loaded); })
       .catch((e) => { if (!cancelled) setError(e?.message || String(e)); });
     return () => { cancelled = true; };
-  }, [isActiveDex, storageKey]);
+  }, [isActiveDex, storageKey, playerId, evmWallet?.address]);
 
   const headers = useMemo(() => ({
     ...(token ? { 'x-token': token } : {}),
@@ -299,6 +344,7 @@ function useLighterProfile(profile) {
       setLoading(false);
     }
   }, [browserApi, credentials, dexId, headers, isActiveDex, label, refreshReadOnlyToken, refreshReferralStatus, routePrefix, storageKey, token]);
+  refreshLatestRef.current = refresh;
 
   useEffect(() => {
     if (!isActiveDex) return undefined;
@@ -317,7 +363,8 @@ function useLighterProfile(profile) {
     });
   }, [label, refresh]);
 
-  const updateCredentials = useCallback(async (next) => {
+  const updateCredentials = useCallback(async (next, assertCurrent = () => {}) => {
+    assertCurrent();
     if (!token) throw new Error('Login required');
     const candidate = normalizeCredentials(next);
     if (candidate?.accountIndex == null || candidate.apiKeyIndex == null || !candidate.apiPrivateKey) {
@@ -328,12 +375,14 @@ function useLighterProfile(profile) {
       headers: { ...headers, 'content-type': 'application/json' },
       body: JSON.stringify(credentialPayload(candidate)),
     });
+    assertCurrent();
     const tokenResult = await fetchJson(`${FUTURES_API}/${routePrefix}/auth-token`, {
       method: 'POST',
       headers: { ...headers, 'content-type': 'application/json' },
       body: JSON.stringify(credentialPayload(candidate, { deadline: AUTH_TOKEN_DEADLINE_SECONDS })),
     });
     const authToken = tokenResult.auth_token;
+    assertCurrent();
     if (!authToken) throw new Error(`${label} auth token was not returned`);
     const saved = await saveCredentials(storageKey, {
       ...candidate,
@@ -341,6 +390,7 @@ function useLighterProfile(profile) {
       readOnlyTokenExpiresAt: Date.now() + (AUTH_TOKEN_DEADLINE_SECONDS * 1000),
       integratorApproved: candidate.integratorApproved,
     });
+    assertCurrent();
     setCredentials(saved);
     let checkedReferral = null;
     let referralError = '';
@@ -376,11 +426,12 @@ function useLighterProfile(profile) {
   }, [evmWallet?.address, headers, label, routePrefix, token]);
 
   const disconnect = useCallback(async () => {
-    await clearCredentials(storageKey);
+    if (connectingRef.current) throw new Error('Wait for Lighter connection to finish');
+    await clearCredentials(storageKey, { playerId, wallet: evmWallet?.address });
     setCredentials(null);
     setAccount(null);
     setReferralStatus(null);
-  }, [storageKey]);
+  }, [storageKey, playerId, evmWallet?.address]);
 
   const ensureCredentials = useCallback(() => {
     if (credentials?.accountIndex == null || credentials.apiKeyIndex == null || !credentials.apiPrivateKey) {
@@ -389,7 +440,8 @@ function useLighterProfile(profile) {
     return credentials;
   }, [credentials]);
 
-  const approveIntegrator = useCallback(async (overrideCredentials = null) => {
+  const approveIntegrator = useCallback(async (overrideCredentials = null, assertCurrent = () => {}) => {
+    assertCurrent();
     if (!token) throw new Error('Login required');
     const creds = overrideCredentials ? normalizeCredentials(overrideCredentials) : ensureCredentials();
     if (creds?.accountIndex == null || creds.apiKeyIndex == null || !creds.apiPrivateKey) {
@@ -406,10 +458,12 @@ function useLighterProfile(profile) {
       body: JSON.stringify(credentialPayload(creds)),
     });
     const message = prepared.message_to_sign || prepared.messageToSign;
+    assertCurrent();
     let l1Signature = '';
     if (prepared.requires_l1_signature !== false && message) {
       l1Signature = await walletClient.signMessage({ account: walletAddr, message });
     }
+    assertCurrent();
     const submitted = await fetchJson(`${FUTURES_API}/${routePrefix}/approve-integrator/submit`, {
       method: 'POST',
       headers: { ...headers, 'content-type': 'application/json' },
@@ -421,19 +475,23 @@ function useLighterProfile(profile) {
         l1Signature,
       })),
     });
+    assertCurrent();
     const saved = await saveCredentials(storageKey, { ...creds, integratorApproved: true });
+    assertCurrent();
     setCredentials(saved);
-    window.setTimeout(() => refresh().catch(() => {}), 900);
+    window.setTimeout(() => refreshLatestRef.current?.().catch(() => {}), 900);
     return submitted;
-  }, [ensureCredentials, evmWallet, headers, label, refresh, routePrefix, storageKey, token]);
+  }, [ensureCredentials, evmWallet, headers, label, routePrefix, storageKey, token]);
 
-  const acceptClashReferral = useCallback(async () => {
+  const acceptClashReferral = useCallback(async (overrideCredentials = null, assertCurrent = () => {}) => {
+    assertCurrent();
     if (!token) throw new Error('Login required');
-    const creds = ensureCredentials();
+    const creds = overrideCredentials ? normalizeCredentials(overrideCredentials) : ensureCredentials();
     setLoading(true);
     setError('');
     try {
       const readCredentials = await refreshReadOnlyToken(creds);
+      assertCurrent();
       const result = await fetchJson(`${FUTURES_API}/${routePrefix}/referral/use`, {
         method: 'POST',
         headers: { ...headers, 'content-type': 'application/json' },
@@ -443,6 +501,7 @@ function useLighterProfile(profile) {
           wallet: evmWallet?.address || '',
         }),
       });
+      assertCurrent();
       const checked = normalizeReferralStatus(result?.referral_status, profile);
       if (!checked?.referral_satisfied) {
         setReferralStatus(checked);
@@ -461,6 +520,91 @@ function useLighterProfile(profile) {
   const openReferralJoin = useCallback(() => {
     if (profile.referralUrl) window.open(profile.referralUrl, '_blank', 'noopener,noreferrer');
   }, [profile.referralUrl]);
+
+  const connectOneTap = useCallback(async ({ accountIndex } = {}) => {
+    if (connectingRef.current) return connectingRef.current;
+    const context = { token, playerId, wallet: evmWallet?.address, dex: dexId };
+    const assertCurrent = () => {
+      const current = connectionContextRef.current;
+      if (!current?.mounted || current.token !== context.token || current.playerId !== context.playerId
+        || current.dex !== context.dex || current.wallet?.toLowerCase() !== context.wallet?.toLowerCase()) {
+        throw new Error('Wallet, login or exchange changed. Reopen Lighter to continue safely.');
+      }
+    };
+    const client = evmWallet?.getWalletClient?.(1) || evmWallet?.walletClient;
+    if (!token || !playerId || !client || !context.wallet) throw new Error('Connect your EVM wallet and sign in first');
+    assertCurrent();
+    const pendingKey = `${scopedCredentialKey(storageKey, context)}:pending`;
+    const api = async (suffix, body) => {
+      assertCurrent();
+      const result = await fetchJson(`${FUTURES_API}/${routePrefix}${suffix}`, {
+        method: body ? 'POST' : 'GET',
+        headers: { ...headers, ...(body ? { 'content-type': 'application/json' } : {}) },
+        body: body ? JSON.stringify(body) : undefined,
+        signal: AbortSignal.timeout(60_000),
+      });
+      assertCurrent();
+      return result;
+    };
+    const pending = (async () => {
+      setError('');
+      try {
+        const result = await connectLighterAccount({
+          deployment: dexId, playerId, wallet: context.wallet, accountIndex, api, assertCurrent,
+          signMessage: message => client.signMessage({ account: context.wallet, message }),
+          onStatus: setLighterConnectStatus,
+          storage: {
+            loadPending: index => readEncryptedCredential(`${pendingKey}:${index}`),
+            savePending: async value => {
+              // Immutable identity copy survives older prompts or other tabs updating
+              // the active-account pointer after challenge expiry/server restart.
+              const durableKey = `${pendingKey}:${value.accountIndex}:${value.challengeId}`;
+              await writeEncryptedCredential(durableKey, value);
+              const readback = await readEncryptedCredential(durableKey);
+              if (readback?.credentials?.apiPrivateKey !== value.credentials.apiPrivateKey) throw new Error('Could not retain the pending key');
+              await writeEncryptedCredential(`${pendingKey}:${value.accountIndex}`, value);
+            },
+            clearPending: async (index, challengeId) => {
+              const key = `${pendingKey}:${index}`;
+              const current = await readEncryptedCredential(key);
+              if (current?.challengeId === challengeId) await removeEncryptedCredential(key);
+            },
+            retirePending: async value => {
+              const key = `${pendingKey}:retired:${value.accountIndex}:${value.challengeId}`;
+              await writeEncryptedCredential(key, value);
+              const readback = await readEncryptedCredential(key);
+              if (readback?.credentials?.apiPrivateKey !== value.credentials.apiPrivateKey) throw new Error('Could not retain the expired key');
+            },
+            loadCredentials: index => loadCredentials(storageKey, context, index),
+            saveCredentials: value => saveCredentials(storageKey, value),
+          },
+        });
+        if (result.requiresAccountSelection) return result;
+        assertCurrent();
+        setLighterConnectStatus('verify');
+        const verified = await updateCredentials(result.credentials, assertCurrent);
+        assertCurrent();
+        if (verified.referralStatusError) throw new Error(verified.referralStatusError);
+        if (referralRequired && verified.referralStatus?.referral_satisfied !== true) {
+          setLighterConnectStatus('referral');
+          await acceptClashReferral(verified, assertCurrent);
+          assertCurrent();
+        }
+        const config = await api('/config');
+        const remoteAccount = await api('/account?account_index=' + verified.accountIndex);
+        if (remoteAccount?.integrator_approved !== true && config?.integratorReady === true) {
+          setLighterConnectStatus('integrator');
+          await approveIntegrator(verified, assertCurrent);
+          assertCurrent();
+        }
+        setVenueConfig(config);
+        setAccount(await api('/account?account_index=' + verified.accountIndex));
+        return { connected: true };
+      } finally { setLighterConnectStatus(''); }
+    })();
+    connectingRef.current = pending;
+    try { return await pending; } finally { connectingRef.current = null; }
+  }, [acceptClashReferral, approveIntegrator, dexId, evmWallet, headers, playerId, referralRequired, refresh, routePrefix, storageKey, token, updateCredentials]);
 
   const submitOrder = useCallback(async (payload) => {
     if (!token) throw new Error('Login required');
@@ -730,7 +874,7 @@ function useLighterProfile(profile) {
     try {
       window.dispatchEvent(new CustomEvent('clash:trading-reward-claimed', {
         detail: { dex: dexId, gold: Number(data?.gold || 0), reason },
-      }));
+    }));
     } catch {}
     return data;
   }, [credentialHeaderPrefix, credentials, dexId, evmWallet?.address, headers, label, refreshReadOnlyToken, routePrefix, token]);
@@ -785,6 +929,8 @@ function useLighterProfile(profile) {
       apiKeyIndex: credentials.apiKeyIndex,
       integratorApproved: credentials.integratorApproved === true,
     } : null,
+    connectOneTap,
+    lighterConnectStatus,
     loading,
     error,
     clearError: () => setError(''),

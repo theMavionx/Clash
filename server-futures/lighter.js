@@ -4,6 +4,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { getAddress, isAddressEqual, recoverMessageAddress } = require('viem');
+const { createLighterOnboarding } = require('./lighter-onboarding');
 
 function optionalInteger(value, fallback = null) {
   const text = String(value ?? '').trim();
@@ -262,7 +263,7 @@ async function request(path, options = {}) {
     : JSON.stringify(options.body || {});
   const queryKey = method === 'GET' ? `${profile.api}:${path}` : `${profile.api}:${path}:${bodyValue}`;
   const now = Date.now();
-  if (method === 'GET') {
+  if (method === 'GET' && !options.fresh) {
     const cached = cache.get(queryKey);
     if (cached && now - cached.at < LIGHTER_PUBLIC_CACHE_TTL_MS) return cached.data;
   }
@@ -293,7 +294,7 @@ async function request(path, options = {}) {
       err.data = data;
       throw err;
     }
-    if (method === 'GET') {
+    if (method === 'GET' && !options.fresh) {
       cache.set(queryKey, { at: now, data });
       if (cache.size > 250) cache = new Map([...cache.entries()].slice(-150));
     }
@@ -1472,7 +1473,13 @@ function config() {
   };
 }
 
+const oneTapOnboarding = createLighterOnboarding({ getProfile: currentProfile, request, runSigner });
+
 const adapterFunctions = {
+  discoverAccounts: owner => oneTapOnboarding.discover(owner),
+  prepareApiKey: input => oneTapOnboarding.prepare(input),
+  submitApiKey: input => oneTapOnboarding.submit(input),
+  recoverApiKey: input => oneTapOnboarding.recover(input),
   config,
   getIntegratorStatus,
   getMarketInfo,

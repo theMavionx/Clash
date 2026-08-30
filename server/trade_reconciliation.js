@@ -471,7 +471,7 @@ function adapterCredentials(dex, wallet, headers = {}, opts = {}) {
   if (dex === 'etoro') {
     const apiKey = headerValue(headers, 'x-etoro-api-key') || opts.apiKey || opts.api_key;
     const userKey = headerValue(headers, 'x-etoro-user-key') || opts.userKey || opts.user_key;
-    const environment = headerValue(headers, 'x-etoro-environment') || opts.environment || 'demo';
+    const environment = headerValue(headers, 'x-etoro-environment') || opts.environment || '';
     if (!apiKey || !userKey) return null;
     return { apiKey, userKey, environment };
   }

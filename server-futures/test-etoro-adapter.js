@@ -87,8 +87,8 @@ async function run() {
     const parsed = new URL(url);
     const body = options.body ? JSON.parse(options.body) : null;
     calls.push({ path: parsed.pathname, query: parsed.searchParams, method: options.method || 'GET', headers: options.headers, body });
-    const expectedUserKey = options.headers['x-api-key'] === DEMO.apiKey ? DEMO.userKey : REAL.userKey;
-    assert.equal(options.headers['x-user-key'], expectedUserKey);
+    assert.equal(options.headers['x-user-key'], REAL.userKey);
+    assert.ok(!parsed.pathname.includes('/demo'), 'Never call a Demo endpoint');
     assert.match(options.headers['x-request-id'], /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu);
 
     if (parsed.pathname === '/api/v1/market-data/search') return response(200, { instruments: [instrument] });
@@ -110,7 +110,6 @@ async function run() {
         openTimestamp: '2026-08-25T10:00:00Z', closeTimestamp: '2026-08-26T10:00:00Z',
       }]);
     }
-    if (parsed.pathname.endsWith('/trade/demo/history')) return response(200, []);
     if (options.method === 'POST' && parsed.pathname.endsWith('/orders')) {
       return response(200, { orderId: 12345, referenceId: options.headers['x-request-id'] });
     }
@@ -183,11 +182,26 @@ async function run() {
   const candles = await etoro.getCandles(REAL, 'BTC', { interval: '5m', limit: 10 });
   assert.deepEqual(candles[0], { time: 1787832000, open: 50000, high: 51500, low: 49900, close: 51000, volume: 12 });
 
-  await etoro.getAccountSnapshot(DEMO, { force: true });
-  assert.ok(calls.some(call => call.path === '/api/v1/trading/info/demo/pnl'));
-  assert.ok(calls.some(call => call.path === '/api/v2/trading/info/demo/eligibility'));
-  await etoro.placeOrder(DEMO, { symbol: 'BTC', side: 'bid', amount: 100, leverage: 1, orderType: 'market' });
-  assert.ok(calls.some(call => call.method === 'POST' && call.path === '/api/v2/trading/execution/demo/orders'));
+  assert.deepEqual(etoro.configStatus().environments, ['real']);
+  assert.equal(etoro.credentialStatus(DEMO).has_credentials, false);
+  const beforeRejectedCalls = calls.length;
+  for (const environment of ['demo', 'DEMO', 'paper', '', undefined]) {
+    const invalid = { ...DEMO, environment };
+    assert.throws(() => etoro.credentials(invalid), /Only eToro Real/u);
+    for (const operation of [
+      () => etoro.getAccountSnapshot(invalid, { force: true }),
+      () => etoro.placeOrder(invalid, { symbol: 'BTC', side: 'bid', amount: 100, leverage: 1 }),
+      () => etoro.cancelOrder(invalid, 12345),
+      () => etoro.closePosition(invalid, 9001, { fullClose: true }),
+      () => etoro.updatePosition(invalid, 9001, { stopLoss: 46000 }),
+      () => etoro.getTradeHistory(invalid),
+      () => etoro.getCandles(invalid, 'BTC'),
+      () => etoro.importTradesForPlayer('player-1', invalid),
+    ]) {
+      await assert.rejects(operation, error => error.status === 400 && /Only eToro Real/u.test(error.message));
+    }
+  }
+  assert.equal(calls.length, beforeRejectedCalls, 'Rejected credentials must never make upstream requests or become Real');
 
   const persisted = [];
   const dbPath = require.resolve('./db');

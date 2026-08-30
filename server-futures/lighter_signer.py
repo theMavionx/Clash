@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import asyncio
+import ctypes
 import json
 import os
 import sys
@@ -80,10 +81,15 @@ def _client(lighter, payload):
     private_key = str(payload["api_private_key"]).strip()
     if not private_key:
         raise ValueError("api_private_key is required")
+    options = {}
+    if payload.get("one_tap"):
+        from lighter import nonce_manager
+        options["nonce_management_type"] = nonce_manager.NonceManagerType.NONE
     return lighter.SignerClient(
         url=str(payload.get("api_url") or "https://mainnet.zklighter.elliot.ai"),
         account_index=account_index,
         api_private_keys={api_key_index: private_key},
+        **options,
     )
 
 
@@ -120,6 +126,34 @@ async def _main():
 
         payload = _read_payload()
         action = str(payload.get("action") or "")
+
+        if action == "api_key_prepare":
+            private_key, public_key, error = lighter.SignerClient.create_api_key(None)
+            if error:
+                raise RuntimeError("Lighter could not generate an API key")
+            client = _client(lighter, {**payload, "api_private_key": private_key, "one_tap": True})
+            try:
+                result = client.signer.SignChangePubKey(
+                    ctypes.c_char_p(public_key.encode("utf-8")),
+                    0,
+                    int(payload["nonce"]),
+                    int(payload["api_key_index"]),
+                    client.account_index,
+                )
+                signer_error = decode_and_free(result.err)
+                if signer_error:
+                    raise RuntimeError("Lighter could not prepare key registration")
+                return {
+                    "ok": True,
+                    "api_private_key": private_key,
+                    "public_key": public_key,
+                    "tx_type": result.txType,
+                    "tx_info": decode_and_free(result.txInfo),
+                    "tx_hash": decode_and_free(result.txHash),
+                    "message_to_sign": decode_and_free(result.messageToSign),
+                }
+            finally:
+                await client.close()
 
         if action == "check_client":
             client = _client(lighter, payload)

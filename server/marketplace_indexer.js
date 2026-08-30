@@ -50,10 +50,16 @@ async function publicClient(chainKey) {
     nativeCurrency: { name: 'Monad', symbol: 'MON', decimals: 18 },
     rpcUrls: { default: { http: ['https://rpc.monad.xyz'] } },
   });
+  const ink = chains.ink || defineChain({
+    id: 57073, name: 'Ink',
+    nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
+    rpcUrls: { default: { http: ['https://rpc-gel.inkonchain.com'] } },
+  });
   const map = {
     base:     { viem: chains.base,     defaultRpc: 'https://mainnet.base.org' },
     arbitrum: { viem: chains.arbitrum, defaultRpc: 'https://arb1.arbitrum.io/rpc' },
     monad:    { viem: monad,           defaultRpc: 'https://rpc.monad.xyz' },
+    ink:      { viem: ink,             defaultRpc: 'https://rpc-gel.inkonchain.com' },
   };
   const spec = map[chainKey];
   if (!spec) throw new Error(`Unsupported chain ${chainKey}`);
@@ -87,6 +93,7 @@ function dataUint(hex, i)     { return BigInt(hexSlot(hex, i)).toString(); }
 const CHAIN_TUNING = {
   // Base: Alchemy/standard public RPCs allow 10k blocks per getLogs.
   base:     { windowSize: 4_000,  pollIntervalMs: 12_000, lookbackBlocks:  216_000 },   // ~5d at 2s blocks
+  ink:      { windowSize: 4_000,  pollIntervalMs: 12_000, lookbackBlocks:  216_000 },
   // Arbitrum: 10k blocks too, but blocks are ~0.25s.
   arbitrum: { windowSize: 4_000,  pollIntervalMs: 12_000, lookbackBlocks: 2_000_000 },  // ~5d at 0.25s
   // Monad: STRICT 100-block limit on rpc.monad.xyz. Poll faster + multiple

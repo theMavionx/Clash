@@ -6,12 +6,14 @@ import {
 } from './encryptedCredentialStorage.js';
 
 export const ETORO_STORAGE_KEY = 'clash_etoro_credentials_v1';
+export const ETORO_TRADING_SETTINGS_URL = 'https://www.etoro.com/settings/trade';
 
 export function normalizeEtoroCredentials(input) {
   const apiKey = String(input?.apiKey || input?.api_key || '').trim();
   const userKey = String(input?.userKey || input?.user_key || '').trim();
-  const rawEnvironment = String(input?.environment || input?.env || 'demo').trim().toLowerCase();
-  const environment = rawEnvironment === 'real' ? 'real' : rawEnvironment === 'demo' ? 'demo' : '';
+  // Never reinterpret saved Demo (or unspecified) credentials as real-money consent.
+  const rawEnvironment = String(input?.environment || input?.env || '').trim().toLowerCase();
+  const environment = rawEnvironment === 'real' ? 'real' : '';
   if (!apiKey || !userKey || !environment) return null;
   return { apiKey, userKey, environment };
 }
@@ -40,7 +42,7 @@ export async function readEtoroCredentials() {
 
 export async function saveEtoroCredentials(input) {
   const credentials = normalizeEtoroCredentials(input);
-  if (!credentials) throw new Error('eToro API key, user key, and Real/Demo environment are required');
+  if (!credentials) throw new Error('Connect an eToro Real account with its API key and user key. Demo is not supported.');
   await writeEncryptedCredential(ETORO_STORAGE_KEY, credentials);
   return credentials;
 }

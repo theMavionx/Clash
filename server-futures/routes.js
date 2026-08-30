@@ -2890,6 +2890,9 @@ router.get('/orderbook', async (req, res) => {
   }
 });
 
+const publicReadProxy = require('./public-read-proxy');
+router.post('/public-read', publicReadProxy.createPublicReadHandler(publicReadProxy.installPublicReadProxy()));
+
 router.get('/candles', async (req, res) => {
   const dex = String(req.query.dex || 'pacifica').toLowerCase();
   const symbol = req.query.symbol;
@@ -2900,7 +2903,9 @@ router.get('/candles', async (req, res) => {
     return res.status(400).json({ error: 'symbol, interval, start_time required' });
   }
   try {
-    const candles = dex === 'domfi'
+    const candles = dex === 'nado'
+      ? await nado.getCandles(symbol, { interval, from: start_time, to: end_time })
+      : dex === 'domfi'
       ? await domfi.getCandles(symbol, {
         interval,
         from: start_time,
@@ -2917,7 +2922,8 @@ router.get('/candles', async (req, res) => {
       : await pacifica.getCandles(symbol, interval, start_time, end_time);
     res.json(candles);
   } catch (e) {
-    res.status(500).json({ error: 'Failed to get candles', detail: e?.message || String(e) });
+    const status = dex === 'nado' ? ([400, 404].includes(e.status) ? e.status : 502) : 500;
+    res.status(status).json({ error: 'Failed to get candles', detail: e?.message || String(e) });
   }
 });
 
@@ -6369,6 +6375,36 @@ function registerLighterDeploymentRoutes(prefix, adapter, label) {
       res.status(e.status || 502).json({ error: `Failed to load ${label} account`, detail: e.message });
     }
   });
+
+  router.get(`${prefix}/accounts`, auth, async (req, res) => {
+    if (!requireDeploymentDex(req, res)) return;
+    res.set('Cache-Control', 'no-store');
+    try {
+      res.json(await adapter.discoverAccounts(req.query.wallet));
+    } catch (e) {
+      res.status(e.status || 502).json({ error: `Failed to find ${label} accounts`, detail: e.message });
+    }
+  });
+
+  for (const stage of ['prepare', 'submit', 'recover']) {
+    router.post(`${prefix}/api-key/${stage}`, auth, async (req, res) => {
+      if (!requireDeploymentDex(req, res)) return;
+      res.set('Cache-Control', 'no-store');
+      const input = req.body || {};
+      try {
+        const result = stage === 'prepare'
+          ? await adapter.prepareApiKey({ playerId: req.playerId, wallet: input.wallet, accountIndex: input.accountIndex })
+          : stage === 'submit'
+            ? await adapter.submitApiKey({ playerId: req.playerId, challengeId: input.challengeId, signature: input.signature })
+            : await adapter.recoverApiKey({ wallet: input.wallet, accountIndex: input.accountIndex,
+              apiKeyIndex: input.apiKeyIndex, apiPrivateKey: input.apiPrivateKey, publicKey: input.publicKey });
+        res.json(result);
+      } catch (e) {
+        // No payload/native signer logging: preparation contains a fresh private key.
+        res.status(e.status || 502).json({ error: `Could not ${stage} ${label} connection`, detail: e.message, code: e.code });
+      }
+    });
+  }
 
   const post = (suffix, action, failure, fallbackStatus = 400) => {
     router.post(`${prefix}${suffix}`, auth, async (req, res) => {

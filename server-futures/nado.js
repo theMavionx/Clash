@@ -40,6 +40,11 @@ let readClient = null;
 let marketsCache = null;
 const accountCache = new Map();
 const positionsCache = new Map();
+const candlesCache = new Map();
+const candlesInflight = new Map();
+const CANDLE_INTERVALS = { '1m': 60, '5m': 300, '15m': 900, '1h': 3600, '4h': 14400, '1d': 86400 };
+const CANDLE_CACHE_TTL_MS = 15_000;
+const CANDLE_CACHE_MAX = 128;
 
 function isEvmAddress(addr) {
   return /^0x[0-9a-fA-F]{40}$/.test(String(addr || '').trim());
@@ -94,11 +99,12 @@ function unpackBuilderAppendix(appendix) {
   }
 }
 
-async function nadoIndexerQuery(body) {
+async function nadoIndexerQuery(body, { signal } = {}) {
   const r = await fetch(NADO_INDEXER_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal,
   });
   if (!r.ok) throw new Error(`Nado indexer HTTP ${r.status}: ${(await r.text()).slice(0, 180)}`);
   return r.json();
@@ -250,6 +256,71 @@ async function getMarketInfo() {
 async function marketMap() {
   const markets = await getMarketInfo();
   return new Map(markets.map(m => [Number(m.market_id), m]));
+}
+
+// Use native product candles, not an unrelated Pyth feed. In particular KPEPE
+// and KBONK have their own contract units; never strip the K prefix or rescale.
+async function getCandles(symbol, { interval = '5m', from, to = Date.now() } = {}) {
+  const fail = (message, status = 400) => Object.assign(new Error(message), { status });
+  const marketSymbol = symbolOf(symbol);
+  const granularity = CANDLE_INTERVALS[interval];
+  const seconds = value => {
+    const number = Number(value);
+    return Number.isFinite(number) && number > 0
+      ? Math.floor(number / (number > 1e12 ? 1000 : 1)) : 0;
+  };
+  const start = seconds(from);
+  const end = seconds(to);
+  if (!/^[A-Z0-9]{1,30}$/.test(marketSymbol)) throw fail('Invalid Nado candle symbol');
+  if (!Object.hasOwn(CANDLE_INTERVALS, interval)) throw fail('Unsupported Nado candle interval');
+  if (!start || !end || end < start) throw fail('Invalid Nado candle time range');
+  const minTime = Math.floor(start / granularity) * granularity;
+  const maxTime = Math.floor(end / granularity) * granularity;
+  const limit = (maxTime - minTime) / granularity + 1;
+  if (limit > 500) throw fail('Nado candle range exceeds 500 bars');
+  // Aligned windows coalesce callers that differ by a few seconds.
+  const key = [marketSymbol, granularity, minTime, maxTime].join('|');
+  const cached = candlesCache.get(key);
+  if (cached && Date.now() - cached.at < CANDLE_CACHE_TTL_MS) return cached.rows;
+  if (candlesInflight.has(key)) return candlesInflight.get(key);
+  const pending = (async () => {
+    const market = (await getMarketInfo()).find(row => row.symbol === marketSymbol);
+    if (!market) throw fail('Unknown Nado market', 404);
+    const payload = await nadoIndexerQuery({
+      candlesticks: {
+        product_id: market.market_id,
+        granularity,
+        max_time: maxTime,
+        limit,
+      },
+    }, { signal: AbortSignal.timeout(12_000) });
+    if (!Array.isArray(payload?.candlesticks)) throw fail('Invalid Nado candle response', 502);
+    const byTime = new Map();
+    let validBars = 0;
+    for (const row of payload.candlesticks) {
+      const time = Number(row?.timestamp);
+      const values = ['open_x18', 'high_x18', 'low_x18', 'close_x18'].map(field => (
+        new BigNumber(row?.[field] ?? NaN).div(DECIMAL_SCALE).toNumber()
+      ));
+      const [open, high, low, close] = values;
+      if (Number(row?.product_id) !== market.market_id || Number(row?.granularity) !== granularity
+        || !Number.isSafeInteger(time) || time % granularity !== 0
+        || values.some(value => !Number.isFinite(value) || value <= 0)
+        || high < Math.max(open, close) || low > Math.min(open, close)) continue;
+      validBars++;
+      if (time < minTime || time > maxTime) continue;
+      // Archive is newest-first. Preserve the first valid version of a bar.
+      if (!byTime.has(time)) byTime.set(time, { time, open, high, low, close });
+    }
+    const rows = [...byTime.values()].sort((a, b) => a.time - b.time);
+    if (payload.candlesticks.length && !validBars) throw fail('No valid Nado candles returned', 502);
+    candlesCache.delete(key);
+    candlesCache.set(key, { at: Date.now(), rows });
+    while (candlesCache.size > CANDLE_CACHE_MAX) candlesCache.delete(candlesCache.keys().next().value);
+    return rows;
+  })().finally(() => candlesInflight.delete(key));
+  candlesInflight.set(key, pending);
+  return pending;
 }
 
 async function getPrices() {
@@ -612,6 +683,7 @@ module.exports = {
   normalizeAddress,
   getMarketInfo,
   getPrices,
+  getCandles,
   getAccountByAddress,
   getPositionsByAddress,
   getOrdersByAddress,

@@ -937,27 +937,33 @@ function loadGodotEngineScript() {
       return;
     }
 
-    const script = document.createElement('script');
-    script.dataset.clashGodotScript = 'true';
     const cleanSrc = `${GODOT_FILES}/Work.js`;
     const bustedSrc = `${cleanSrc}${CACHE_BUST}`;
-    let triedRetry = false;
-    script.src = bustedSrc;
-    script.onload = resolve;
-    script.onerror = () => {
-      if (!triedRetry) {
-        triedRetry = true;
-        const retrySrc = `${bustedSrc}&retry=${encodeURIComponent(Date.now())}`;
-        reportGodotAssetError('godot.script_query_failed', bustedSrc, new Error('script load error'), {
-          retry_url: retrySrc,
-        });
-        script.src = retrySrc;
-        return;
-      }
-      window.__clashGodotScriptPromise = null;
-      reject(new Error('Godot Work.js failed to load'));
+    const appendAttempt = (src, isRetry) => {
+      // A script element is "already started" after its first load, including
+      // failure. Changing that same element's src does not start a new fetch.
+      const script = document.createElement('script');
+      script.dataset.clashGodotScript = 'true';
+      script.src = src;
+      script.onload = resolve;
+      script.onerror = () => {
+        script.onload = null;
+        script.onerror = null;
+        script.remove();
+        if (!isRetry) {
+          const retrySrc = `${bustedSrc}&retry=${encodeURIComponent(Date.now())}`;
+          reportGodotAssetError('godot.script_query_failed', bustedSrc, new Error('script load error'), {
+            retry_url: retrySrc,
+          });
+          appendAttempt(retrySrc, true);
+          return;
+        }
+        window.__clashGodotScriptPromise = null;
+        reject(new Error('Godot Work.js failed to load'));
+      };
+      document.body.appendChild(script);
     };
-    document.body.appendChild(script);
+    appendAttempt(bustedSrc, false);
   });
 
   return window.__clashGodotScriptPromise;
@@ -1133,6 +1139,7 @@ function GodotCanvas({ onEngineReady }) {
   const [isLoaded, setIsLoaded] = useState(false);
   const [, setStuck] = useState(false);
   const [webglReloading, setWebglReloading] = useState(false);
+  const [loadingError, setLoadingError] = useState('');
   const [godotSkipped, setGodotSkipped] = useState(false);
   const [, setLoadingDetail] = useState(DEFAULT_LOADING_DETAIL);
   const lastProgressRef = useRef({ value: 0, time: 0 });
@@ -1410,6 +1417,7 @@ function GodotCanvas({ onEngineReady }) {
           source: 'godot.webgl',
           message: 'WebGL context was lost again during reload cooldown',
         });
+        setLoadingError('Graphics stopped again. Close other tabs and retry loading the game.');
         return;
       }
 
@@ -1471,8 +1479,7 @@ function GodotCanvas({ onEngineReady }) {
       const GODOT = window.Engine || window.Godot;
       if (!GODOT) {
         addClientBreadcrumb('godot.engine_missing', {}, 'error');
-        console.error('Godot engine not found');
-        return;
+        throw new Error('Godot engine not found after loading its script');
       }
       addClientBreadcrumb('godot.start', {
         pixel_ratio: getGodotPixelRatio(),
@@ -1839,6 +1846,7 @@ function GodotCanvas({ onEngineReady }) {
           stage: stageStateRef.current,
           loaded: isLoadedStateRef.current,
         });
+        setLoadingError('The game could not load. Check your connection and try again.');
         console.error('Godot start error:', err);
       });
     };
@@ -1877,6 +1885,7 @@ function GodotCanvas({ onEngineReady }) {
           stage: stageStateRef.current,
           loaded: isLoadedStateRef.current,
         });
+        setLoadingError('The game could not load. Check your connection and try again.');
       });
     return () => {
       disposed = true;
@@ -1913,9 +1922,9 @@ function GodotCanvas({ onEngineReady }) {
     };
   }, []);
 
-  const showLoadingOverlay = !isLoaded || webglReloading;
+  const showLoadingOverlay = !isLoaded || webglReloading || !!loadingError;
   const displayedProgress = webglReloading ? 100 : stageProgress;
-  const progressLabel = webglReloading
+  const progressLabel = loadingError ? 'UNABLE TO LOAD GAME' : webglReloading
     ? 'RELOADING GAME'
     : 'LOADING GAME';
 
@@ -1956,7 +1965,7 @@ function GodotCanvas({ onEngineReady }) {
             </div>
 
             {/* Progress bar */}
-            <div style={barContainerStyle}>
+            {!loadingError && <div style={barContainerStyle}>
               <div
                 style={{
                   width: `${displayedProgress}%`,
@@ -1967,7 +1976,7 @@ function GodotCanvas({ onEngineReady }) {
                   transition: 'width 0.1s linear',
                 }}
               />
-            </div>
+            </div>}
 
             {/* Percentage */}
             <div style={{
@@ -1980,10 +1989,23 @@ function GodotCanvas({ onEngineReady }) {
               letterSpacing: '1px',
               textAlign: 'center',
             }}>
-              {webglReloading ? 'Restoring graphics...' : `${stageProgress}%`}
+              {loadingError ? '' : webglReloading ? 'Restoring graphics...' : `${stageProgress}%`}
             </div>
 
-            {webglReloading && (
+            {loadingError && (
+              <div role="alert" style={{ maxWidth: 440, padding: '16px 20px', margin: '0 16px', borderRadius: 12, background: '#101827', color: '#fff', textAlign: 'center' }}>
+                <p style={{ margin: '0 0 14px', lineHeight: 1.5 }}>{loadingError}</p>
+                <button
+                  type="button"
+                  onClick={() => window.location.reload()}
+                  style={{ minHeight: 44, padding: '10px 24px', borderRadius: 8, border: '2px solid #ffe066', background: '#ffe066', color: '#171717', fontWeight: 700, cursor: 'pointer' }}
+                >
+                  Retry loading game
+                </button>
+              </div>
+            )}
+
+            {webglReloading && !loadingError && (
               <div style={{
                 color: 'rgba(255,255,255,0.75)',
                 marginTop: '10px',
@@ -2002,7 +2024,7 @@ function GodotCanvas({ onEngineReady }) {
         ref={canvasRef}
         id="godot-canvas"
         tabIndex={0}
-        style={{ ...canvasStyle, visibility: isLoaded && !webglReloading ? 'visible' : 'hidden' }}
+        style={{ ...canvasStyle, visibility: isLoaded && !webglReloading && !loadingError ? 'visible' : 'hidden' }}
       />
     </>
   );
