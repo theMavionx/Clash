@@ -271,6 +271,7 @@ try { db.exec("ALTER TABLE trade_history ADD COLUMN notional_usd REAL NOT NULL D
 try { db.exec("ALTER TABLE trade_history ADD COLUMN verified_source TEXT NOT NULL DEFAULT 'client'"); } catch {}
 try { db.exec("ALTER TABLE trade_history ADD COLUMN fee TEXT"); } catch {}
 try { db.exec("ALTER TABLE trade_history ADD COLUMN proof_json TEXT"); } catch {}
+try { db.exec("ALTER TABLE trade_history ADD COLUMN reward_duplicate INTEGER NOT NULL DEFAULT 0"); } catch {}
 try { db.exec("ALTER TABLE trade_history ADD COLUMN updated_at TEXT"); } catch {}
 try { db.exec("UPDATE trade_history SET updated_at = COALESCE(updated_at, created_at, strftime('%Y-%m-%d %H:%M:%f', 'now')) WHERE updated_at IS NULL"); } catch {}
 try {

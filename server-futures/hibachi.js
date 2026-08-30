@@ -5,7 +5,8 @@ const { createHibachiProxyPool } = require('./hibachi-proxy-pool');
 
 const HIBACHI_API = String(process.env.HIBACHI_API_URL || 'https://api.hibachi.xyz').replace(/\/+$/u, '');
 const HIBACHI_DATA_API = String(process.env.HIBACHI_DATA_API_URL || 'https://data-api.hibachi.xyz').replace(/\/+$/u, '');
-const HIBACHI_FILL_LOOKBACK_LIMIT = Math.max(10, Math.min(250, Number(process.env.HIBACHI_FILL_LOOKBACK_LIMIT || 100)));
+const HIBACHI_FILL_BACKFILL_MAX = Math.max(250, Math.min(5_000, Number(process.env.HIBACHI_FILL_BACKFILL_MAX || 5_000)));
+const HIBACHI_FILL_LOOKBACK_LIMIT = Math.max(10, Math.min(HIBACHI_FILL_BACKFILL_MAX, Number(process.env.HIBACHI_FILL_LOOKBACK_LIMIT || 100)));
 const HIBACHI_FILL_LOOKBACK_MS = Math.max(
   60_000,
   Math.min(30 * 24 * 60 * 60 * 1000, Number(process.env.HIBACHI_FILL_LOOKBACK_MS || 7 * 24 * 60 * 60 * 1000)),
@@ -2188,12 +2189,17 @@ async function getAccountOrderHistory(credsInput, {
   endTime,
 } = {}) {
   const creds = credentials(credsInput);
-  const max = Math.max(1, Math.min(250, Number(limit) || HIBACHI_FILL_LOOKBACK_LIMIT));
+  const max = Math.max(1, Math.min(HIBACHI_FILL_BACKFILL_MAX, Number(limit) || HIBACHI_FILL_LOOKBACK_LIMIT));
   const endMs = Number.isFinite(Number(endTime)) ? Number(endTime) : Date.now();
   const startMs = Number.isFinite(Number(startTime)) ? Number(startTime) : endMs - HIBACHI_FILL_LOOKBACK_MS;
   const out = [];
   let cursorOrderId = null;
-  for (let page = 0; page < 4 && out.length < max; page++) {
+  // The account-trades endpoint exposes only a short recent window.  Walk the
+  // order-history cursor far enough to reconstruct a full seven-day volume
+  // window when the caller explicitly requests a catch-up, while keeping a
+  // hard request/row bound for rate-limit safety.
+  const maxPages = Math.min(100, Math.max(4, Math.ceil(max / 50) + 2));
+  for (let page = 0; page < maxPages && out.length < max; page++) {
     const path = ordersHistoryPath(creds, { startTime: startMs, endTime: endMs, cursorOrderId });
     const j = await cachedAuthedGet(path, creds, {
       ttlMs: 1_500,
@@ -2212,7 +2218,7 @@ async function getAccountOrderHistory(credsInput, {
 
 async function getAccountTradeHistory(credsInput, { limit = HIBACHI_FILL_LOOKBACK_LIMIT, startTime, endTime } = {}) {
   const creds = credentials(credsInput);
-  const max = Math.max(1, Math.min(250, Number(limit) || HIBACHI_FILL_LOOKBACK_LIMIT));
+  const max = Math.max(1, Math.min(HIBACHI_FILL_BACKFILL_MAX, Number(limit) || HIBACHI_FILL_LOOKBACK_LIMIT));
   const [tradesResult, ordersResult] = await Promise.allSettled([
     (async () => {
       const j = await cachedAuthedGet(tradesPath(creds), creds, {
@@ -2316,7 +2322,17 @@ function importNormalizedFillsForPlayer(playerId, accountId, fills, dbModule = r
   let imported = 0;
   let updated = 0;
   let skipped = 0;
-  for (const trade of Array.isArray(fills) ? fills : []) {
+  // Prefer execution rows in a fresh batch.  Across separate API polls the
+  // order-history aggregate can become visible before the corresponding
+  // execution row.  Treat that aggregate as the canonical reward row instead
+  // of inserting the later execution under a second client id; an order with
+  // several fills still keeps all execution rows when no aggregate was
+  // previously persisted.
+  const orderedFills = [...(Array.isArray(fills) ? fills : [])].sort((a, b) => {
+    const priority = row => row?.source === 'trades' ? 0 : 1;
+    return priority(a) - priority(b);
+  });
+  for (const trade of orderedFills) {
     try {
       const before = dbModule.db.prepare(`
         SELECT id, player_id FROM trade_history
@@ -2328,6 +2344,25 @@ function importNormalizedFillsForPlayer(playerId, accountId, fills, dbModule = r
         console.warn(`[hibachi] refused to reassign verified trade ${trade.clientOrderId} from ${before.player_id} to ${owner.playerId}`);
         skipped++;
         continue;
+      }
+      const orderId = trade?.orderId == null ? '' : String(trade.orderId);
+      if (!before && orderId) {
+        const sameOrder = dbModule.db.prepare(`
+          SELECT id, client_order_id
+          FROM trade_history
+          WHERE player_id = ? AND dex = 'hibachi'
+            AND CAST(order_id AS TEXT) = ?
+            AND COALESCE(reward_duplicate, 0) = 0
+          ORDER BY id ASC
+        `).all(owner.playerId, orderId);
+        const aggregateClientId = `hibachi:${owner.accountId}:${orderId}`;
+        const hasExecution = sameOrder.some(row => String(row.client_order_id || '') !== aggregateClientId);
+        const hasAggregate = sameOrder.some(row => String(row.client_order_id || '') === aggregateClientId);
+        if ((trade.source === 'orders_history' && hasExecution)
+          || (trade.source === 'trades' && hasAggregate)) {
+          skipped++;
+          continue;
+        }
       }
       const r = dbModule.upsertVerifiedTrade(owner.playerId, trade);
       if (r?.inserted) imported += r.inserted;

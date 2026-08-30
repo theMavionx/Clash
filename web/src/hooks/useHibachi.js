@@ -1036,7 +1036,9 @@ export function useHibachi() {
     const fire = async () => {
       await claimGoldRef.current?.({ reason: 'poll' });
     };
-    const kickoff = setTimeout(fire, 3000);
+    // Run one bounded seven-day catch-up after credentials become available;
+    // regular minute polls stay incremental and cheap.
+    const kickoff = setTimeout(() => claimGoldRef.current?.({ reason: 'initial backfill', forceReconcile: true }), 3000);
     const iv = setInterval(() => {
       if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
       fire();

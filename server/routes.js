@@ -9816,6 +9816,20 @@ function resolveKnownDexWalletForPlayerId(playerId, dex) {
     if (!raw || !dexAcceptsWallet(normalizedDex, raw)) return '';
     return canonicalWalletIdentifier(raw);
   };
+  // Hibachi attribution is bound to the verified accountId.  Once rewards
+  // have been credited, trading_rewards.wallet is the stable profile wallet;
+  // an older login wallet in player_dex_accounts must not overwrite it on
+  // every poll (that loop caused Tango to alternate between two linked EVM
+  // addresses and made support reconciliation non-deterministic).
+  if (normalizedDex === 'hibachi') {
+    try {
+      const row = db.db.prepare(
+        'SELECT wallet FROM trading_rewards WHERE player_id = ? AND dex = ?'
+      ).get(playerId, normalizedDex);
+      const wallet = tryWallet(row?.wallet);
+      if (wallet) return wallet;
+    } catch {}
+  }
   try {
     const row = db.db.prepare(`
       SELECT wallet_address
@@ -9876,6 +9890,16 @@ function upsertPlayerDexAccountFromLoginWallet(playerId, dex, wallet, status = '
 
 function resolveClaimWalletForDex(player, dex, currentWallet = null) {
   const normalizedDex = String(dex || '').toLowerCase();
+  if (normalizedDex === 'hibachi') {
+    try {
+      const row = db.db.prepare(
+        'SELECT wallet FROM trading_rewards WHERE player_id = ? AND dex = ?'
+      ).get(player.id, normalizedDex);
+      if (row && dexAcceptsWallet(normalizedDex, row.wallet)) {
+        return canonicalWalletIdentifier(row.wallet);
+      }
+    } catch {}
+  }
   try {
     const row = db.db.prepare(`
       SELECT wallet_address
@@ -14938,6 +14962,7 @@ try {
       last_trade_id INTEGER NOT NULL DEFAULT 0,
       total_volume REAL NOT NULL DEFAULT 0,
       total_gold   INTEGER NOT NULL DEFAULT 0,
+      pending_gold INTEGER NOT NULL DEFAULT 0,
       first_deposit INTEGER NOT NULL DEFAULT 0,
       first_trade  INTEGER NOT NULL DEFAULT 0,
       last_daily   TEXT,
@@ -15098,6 +15123,7 @@ try {
         last_trade_id INTEGER NOT NULL DEFAULT 0,
         total_volume REAL NOT NULL DEFAULT 0,
         total_gold   INTEGER NOT NULL DEFAULT 0,
+        pending_gold INTEGER NOT NULL DEFAULT 0,
         first_deposit INTEGER NOT NULL DEFAULT 0,
         first_trade  INTEGER NOT NULL DEFAULT 0,
         last_daily   TEXT,
@@ -15114,17 +15140,35 @@ try {
     db.db.exec(`
       INSERT OR REPLACE INTO trading_rewards (
         player_id, dex, wallet, last_trade_id, total_volume, total_gold,
-        first_deposit, first_trade, last_daily, pnl_gold_pool, updated_at
+        pending_gold, first_deposit, first_trade, last_daily, pnl_gold_pool, updated_at
       )
       SELECT
         player_id, ${dexExpr}, wallet, last_trade_id, total_volume, total_gold,
-        first_deposit, first_trade, last_daily, COALESCE(pnl_gold_pool, 0), updated_at
+        0, first_deposit, first_trade, last_daily, COALESCE(pnl_gold_pool, 0), updated_at
       FROM trading_rewards_old_migrate
     `);
     db.db.exec('DROP TABLE trading_rewards_old_migrate');
   }
 } catch (e) {
   console.warn('[trading_rewards] per-dex migration failed:', e.message);
+}
+try { db.db.exec(`ALTER TABLE trading_rewards ADD COLUMN pending_gold INTEGER NOT NULL DEFAULT 0`); } catch {}
+try {
+  db.db.exec(`
+    CREATE TABLE IF NOT EXISTS trading_reward_adjustments (
+      adjustment_key    TEXT PRIMARY KEY,
+      player_id         TEXT NOT NULL,
+      dex               TEXT NOT NULL,
+      pending_gold_delta INTEGER NOT NULL,
+      reason            TEXT NOT NULL,
+      metadata_json     TEXT NOT NULL DEFAULT '{}',
+      created_at        TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_trading_reward_adjustments_player
+      ON trading_reward_adjustments(player_id, dex, created_at);
+  `);
+} catch (e) {
+  console.warn('[trading_rewards] adjustment ledger setup failed:', e.message);
 }
 
 // Rate limiter for claim-gold (max 1 per 250ms per player).
@@ -15641,6 +15685,50 @@ function futuresDbReadonly() {
   return _futuresDb;
 }
 
+// Trading Gold is an earned entitlement, not disposable overflow.  Older
+// claim code passed the complete reward to addResources(), which correctly
+// capped the live balance but permanently discarded the excess while still
+// recording the full amount in total_gold/gold_history.  Keep the excess on
+// the per-DEX reward row and release only what currently fits.  This helper is
+// synchronous so callers can include it in the same SQLite transaction as the
+// trade cursor update.
+function settlePendingTradingGold(playerId, dex, metadata = {}) {
+  const reward = db.db.prepare(`
+    SELECT pending_gold
+    FROM trading_rewards
+    WHERE player_id = ? AND dex = ?
+  `).get(playerId, dex);
+  const pendingBefore = Math.max(0, Math.floor(Number(reward?.pending_gold || 0)));
+  if (pendingBefore <= 0) {
+    return { released: 0, pending: 0, capacity_remaining: 0 };
+  }
+  const resources = db.getResources(playerId);
+  const cap = Math.max(0, Math.floor(Number(db.getResourceCaps(playerId)?.gold || 0)));
+  const currentGold = Math.max(0, Math.floor(Number(resources?.gold || 0)));
+  const capacity = Math.max(0, cap - currentGold);
+  const released = Math.min(pendingBefore, capacity);
+  if (released > 0) {
+    db.addResources(playerId, released, 0, 0, {
+      sourceType: 'trade_claim_pending_release',
+      metadata: { dex, pending_before: pendingBefore, ...metadata },
+    });
+    db.db.prepare(`
+      UPDATE trading_rewards
+      SET pending_gold = MAX(0, pending_gold - ?), updated_at = datetime('now')
+      WHERE player_id = ? AND dex = ?
+    `).run(released, playerId, dex);
+  }
+  return {
+    released,
+    pending: pendingBefore - released,
+    capacity_remaining: Math.max(0, capacity - released),
+  };
+}
+
+function releasePendingTradingGold(playerId, dex, metadata = {}) {
+  return db.db.transaction(() => settlePendingTradingGold(playerId, dex, metadata))();
+}
+
 router.post('/trading/claim-gold', auth, async (req, res) => {
   const claimStartedAt = Date.now();
   // Rate limit
@@ -15820,7 +15908,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       wallet,
       headers: req.headers,
       reason: 'claim_gold',
-      limit: dex === 'hibachi' ? 250 : 100,
+      limit: dex === 'hibachi' ? (forceHibachiCatchup ? 5_000 : 250) : 100,
       force: forceHibachiCatchup,
     });
     const hibachiReconciliation = dex === 'hibachi' ? {
@@ -15857,6 +15945,8 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       db.db.prepare('INSERT INTO trading_rewards (player_id, dex, wallet) VALUES (?, ?, ?)').run(req.player.id, dex, wallet || '');
       reward = db.db.prepare('SELECT * FROM trading_rewards WHERE player_id = ? AND dex = ?').get(req.player.id, dex);
     }
+    const pendingAtStart = releasePendingTradingGold(req.player.id, dex, { phase: 'claim_start' });
+    reward = db.db.prepare('SELECT * FROM trading_rewards WHERE player_id = ? AND dex = ?').get(req.player.id, dex);
     // GMX briefly used a $50 minimum notional in this claim path. Hyperliquid
     // had a similar early-rollout risk while we were tuning import timing.
     // If a row has never paid anything, rewind the cursor once so verified
@@ -15895,7 +15985,8 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
             AND id > ?
         `).get(hyperliquidWalletPrefix, reward.last_trade_id || 0)?.n || 0;
         newTrades = fdb.prepare(`
-          SELECT id, symbol, side, amount, notional_usd, pnl, status, verified_source, client_order_id, created_at
+          SELECT id, symbol, side, amount, notional_usd, pnl, status, verified_source, client_order_id, created_at,
+                 COALESCE(reward_duplicate, 0) AS reward_duplicate
           FROM trade_history
           WHERE dex = ? AND status = 'filled'
             ${sourceWhere}
@@ -15909,7 +16000,8 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
         `).all(dex, rewardSettleDelaySql, reward.last_trade_id || 0, req.player.id, hyperliquidWalletPrefix);
       } else {
         newTrades = fdb.prepare(`
-          SELECT id, symbol, side, amount, notional_usd, pnl, status, verified_source, client_order_id, created_at
+          SELECT id, symbol, side, amount, notional_usd, pnl, status, verified_source, client_order_id, created_at,
+                 COALESCE(reward_duplicate, 0) AS reward_duplicate
           FROM trade_history
           WHERE player_id = ? AND dex = ? AND status = 'filled'
             ${sourceWhere}
@@ -15960,7 +16052,9 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       const readyAt = firstMs ? firstMs + TRADE_REWARD_SETTLE_DELAY_SECONDS * 1000 : Date.now() + TRADE_REWARD_SETTLE_DELAY_SECONDS * 1000;
       const retryAfterMs = Math.max(1000, readyAt - Date.now());
       return {
-        gold: 0,
+        gold: pendingAtStart.released,
+        earned_gold: 0,
+        pending_gold: pendingAtStart.pending,
         reason: `Trade is settling - rewards unlock in ${Math.ceil(retryAfterMs / 1000)}s`,
         dex,
         retry_after_ms: retryAfterMs,
@@ -15999,7 +16093,9 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
           metadata: { credited_rows: pnlSync.credited_rows },
         });
         return res.json(withHibachiReconciliation({
-          gold: 0,
+          gold: pendingAtStart.released,
+          earned_gold: 0,
+          pending_gold: pendingAtStart.pending,
           reason: `Tournament PnL synced: $${pnlSync.pnl_usd.toFixed(2)}`,
           dex,
           tournament_pnl_usd: pnlSync.pnl_usd,
@@ -16033,7 +16129,9 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
           metadata: { credited_rows: pnlSync.credited_rows },
         });
         return res.json(withHibachiReconciliation({
-          gold: 0,
+          gold: pendingAtStart.released,
+          earned_gold: 0,
+          pending_gold: pendingAtStart.pending,
           reason: `Tournament PnL synced: $${pnlSync.pnl_usd.toFixed(2)}`,
           dex,
           tournament_pnl_usd: pnlSync.pnl_usd,
@@ -16049,9 +16147,11 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
         rawVolumeUsd,
       });
       return res.json(withHibachiReconciliation({
-        gold: 0,
+        gold: pendingAtStart.released,
         reason: 'No new trades',
         dex,
+        earned_gold: 0,
+        pending_gold: pendingAtStart.pending,
         detail: hyperliquidClaimDebug(),
       }));
     }
@@ -16188,35 +16288,32 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       // behaviour.
       const tournamentGold = boostedTotalGold > 0 ? db.applyGoldReward(req.player.id, boostedTotalGold) : 0;
       const prosperityGold = db.applyAltarProsperityResourceBonus(req.player.id, { gold: tournamentGold, wood: 0, ore: 0 });
-      const paidGold = prosperityGold.gold;
+      const earnedGold = prosperityGold.gold;
       db.db.prepare(`
         UPDATE trading_rewards SET
           last_trade_id = ?, total_volume = total_volume + ?, total_gold = total_gold + ?,
+          pending_gold = pending_gold + ?,
           first_deposit = CASE WHEN ? > 0 OR first_trade = 1 THEN 1 ELSE first_deposit END,
           first_trade = CASE WHEN ? > 0 THEN 1 ELSE first_trade END,
           last_daily = CASE WHEN ? > 0 THEN ? ELSE last_daily END,
           updated_at = datetime('now')
         WHERE player_id = ? AND dex = ?
-      `).run(maxId, newVolume, paidGold, creditedOpens, creditedOpens, creditedTrades, today, req.player.id, dex);
-      if (paidGold > 0) {
-        db.addResources(req.player.id, paidGold, 0, 0, {
-          sourceType: 'trade_claim',
-          metadata: {
-            dex,
-            credited_trades: creditedTrades,
-            credited_opens: creditedOpens,
-            credited_volume_usd: newVolume,
-            pnl_usd: newPnl,
-            reasons,
-          },
-        });
+      `).run(maxId, newVolume, earnedGold, earnedGold, creditedOpens, creditedOpens, creditedTrades, today, req.player.id, dex);
+      if (earnedGold > 0) {
         // Record the payout in gold_history so ProfileModal's trading-stats
-        // timeline shows the same ledger as Pacifica. Reason must contain
+        // timeline shows lifetime earned Gold, while pending_gold preserves
+        // any part that cannot fit in storage yet. Reason must contain
         // "trade" / "profit" / "daily" / "deposit" / "volume" for the
         // daily_trade_gold task verifier's heuristic (see tasks.js).
         db.db.prepare('INSERT INTO gold_history (player_id, amount, reason) VALUES (?, ?, ?)')
-          .run(req.player.id, paidGold, reasons.join(' + ') || 'Trading reward');
+          .run(req.player.id, earnedGold, reasons.join(' + ') || 'Trading reward');
       }
+      const settlement = settlePendingTradingGold(req.player.id, dex, {
+        phase: 'new_reward',
+        earned_gold: earnedGold,
+        credited_trades: creditedTrades,
+        credited_volume_usd: newVolume,
+      });
       // Tournament leaderboard: track every credited trade's volume + pnl
       // so volume_usd / pnl_usd / trades_count update in lockstep with the
       // gold credit. No-op outside tournaments. Bumping inside the txn
@@ -16233,7 +16330,9 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       syncDecibelTournamentPnl();
       return {
         raced: false,
-        paid: paidGold,
+        paid: settlement.released,
+        earned: earnedGold,
+        pending: settlement.pending,
         tournament_gold: tournamentGold,
         prosperity_bonus_pct: prosperityGold.prosperity_bonus_pct,
         prosperity_bonus: prosperityGold.bonus.gold,
@@ -16258,6 +16357,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       tournamentGold: txnResult.tournament_gold || 0,
       altarBonusGold: txnResult.prosperity_bonus || 0,
       totalGoldPaid: txnResult.paid || 0,
+      totalGoldEarned: txnResult.earned || 0,
       clampedTradeCount,
       settlingTradeCount: Number(settlingTrades.n || 0),
       metadata: {
@@ -16274,20 +16374,29 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
         reason: 'Already claimed by parallel request',
         totalGoldPaid: 0,
       });
-      return res.json(withHibachiReconciliation({ gold: 0, reason: 'Already claimed by parallel request', dex }));
+      return res.json(withHibachiReconciliation({
+        gold: pendingAtStart.released,
+        earned_gold: 0,
+        pending_gold: pendingAtStart.pending,
+        reason: 'Already claimed by parallel request',
+        dex,
+      }));
     }
     if (creditedTrades > 0) {
       await refreshStartedTaskProgressForTradeClaim(req.player, dex, req.headers);
     }
-    if (txnResult.paid > 0) {
-      console.log(`[claim-gold ${dex}] player=${req.player.name} -> PAID gold=${txnResult.paid} base_gold=${totalGold} nft_boosted_gold=${boostedTotalGold} new_volume=$${newVolume.toFixed(2)} pnl=$${newPnl.toFixed(2)} credited_trades=${creditedTrades} reasons="${reasons.join(' + ')}"`);
+    if (txnResult.earned > 0 || txnResult.paid > 0 || pendingAtStart.released > 0) {
+      const releasedGold = pendingAtStart.released + Number(txnResult.paid || 0);
+      console.log(`[claim-gold ${dex}] player=${req.player.name} -> EARNED gold=${txnResult.earned || 0} released=${releasedGold} pending=${txnResult.pending || 0} base_gold=${totalGold} nft_boosted_gold=${boostedTotalGold} new_volume=$${newVolume.toFixed(2)} pnl=$${newPnl.toFixed(2)} credited_trades=${creditedTrades} reasons="${reasons.join(' + ')}"`);
       recordClaimTelemetry({
         ...selfClaimTelemetryBase,
         result: 'paid',
         reason: reasons.join(' + ') || 'Trading reward',
       });
       return res.json(withHibachiReconciliation({
-        gold: txnResult.paid,
+        gold: releasedGold,
+        earned_gold: txnResult.earned || 0,
+        pending_gold: txnResult.pending || 0,
         reason: reasons.join(' + ') || 'Trading reward',
         dex,
         nft_boost: nftGoldBoostPayload(nftGoldBoost),
@@ -16304,7 +16413,9 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       totalGoldPaid: 0,
     });
     return res.json(withHibachiReconciliation({
-      gold: 0,
+      gold: pendingAtStart.released,
+      earned_gold: 0,
+      pending_gold: pendingAtStart.pending,
       reason: newTrades.length ? 'Below reward threshold' : 'No new trades',
       dex,
       detail: hyperliquidClaimDebug(),
@@ -16326,6 +16437,8 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       db.db.prepare('INSERT INTO trading_rewards (player_id, dex, wallet) VALUES (?, ?, ?)').run(req.player.id, dex, wallet);
       reward = db.db.prepare('SELECT * FROM trading_rewards WHERE player_id = ? AND dex = ?').get(req.player.id, dex);
     }
+    const pendingAtStartPac = releasePendingTradingGold(req.player.id, dex, { phase: 'claim_start' });
+    reward = db.db.prepare('SELECT * FROM trading_rewards WHERE player_id = ? AND dex = ?').get(req.player.id, dex);
     const pacLastTradeIdBefore = Number(reward.last_trade_id || 0);
     // Auto-link wallet to player account ONLY when going from FC placeholder
     // to real wallet — never accept body.wallet as an arbitrary override.
@@ -16360,7 +16473,12 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
         rawVolumeUsd: pacRawVolumeUsd,
         metadata: { api_total: allTrades.length, api_ms: apiMs },
       });
-      return res.json({ gold: 0, reason: 'No new trades' });
+      return res.json({
+        gold: pendingAtStartPac.released,
+        earned_gold: 0,
+        pending_gold: pendingAtStartPac.pending,
+        reason: 'No new trades',
+      });
     }
     // Pacifica trade history is fill-level: one user order can appear as
     // several history_id rows with the same order_id. Sum fill volume/PnL, but
@@ -16474,31 +16592,27 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       // also lands in tournament_participants.gold for the leaderboard.
       const tournamentGold = boostedTotalGold > 0 ? db.applyGoldReward(req.player.id, boostedTotalGold) : 0;
       const prosperityGold = db.applyAltarProsperityResourceBonus(req.player.id, { gold: tournamentGold, wood: 0, ore: 0 });
-      const paidGold = prosperityGold.gold;
+      const earnedGold = prosperityGold.gold;
       db.db.prepare(`
         UPDATE trading_rewards SET
           last_trade_id = ?, total_volume = total_volume + ?, total_gold = total_gold + ?,
+          pending_gold = pending_gold + ?,
           first_deposit = CASE WHEN ? > 0 OR first_trade = 1 THEN 1 ELSE first_deposit END,
           first_trade = CASE WHEN ? > 0 THEN 1 ELSE first_trade END,
           last_daily = CASE WHEN ? > 0 THEN ? ELSE last_daily END,
           pnl_gold_pool = ?, updated_at = datetime('now')
         WHERE player_id = ? AND dex = ?
-      `).run(maxTradeId, newVolume, paidGold, uniqueOpenTradeCount, uniqueOpenTradeCount, uniqueTradeCount, today, pnlPool, req.player.id, dex);
-      if (paidGold > 0) {
-        db.addResources(req.player.id, paidGold, 0, 0, {
-          sourceType: 'trade_claim',
-          metadata: {
-            dex,
-            unique_trades: uniqueTradeCount,
-            unique_opens: uniqueOpenTradeCount,
-            credited_volume_usd: newVolume,
-            pnl_usd: netPnl,
-            reasons,
-          },
-        });
+      `).run(maxTradeId, newVolume, earnedGold, earnedGold, uniqueOpenTradeCount, uniqueOpenTradeCount, uniqueTradeCount, today, pnlPool, req.player.id, dex);
+      if (earnedGold > 0) {
         const reason = reasons.join(' + ') || 'Trading reward';
-        db.db.prepare('INSERT INTO gold_history (player_id, amount, reason) VALUES (?, ?, ?)').run(req.player.id, paidGold, reason);
+        db.db.prepare('INSERT INTO gold_history (player_id, amount, reason) VALUES (?, ?, ?)').run(req.player.id, earnedGold, reason);
       }
+      const settlement = settlePendingTradingGold(req.player.id, dex, {
+        phase: 'new_reward',
+        earned_gold: earnedGold,
+        credited_trades: uniqueTradeCount,
+        credited_volume_usd: newVolume,
+      });
       // Tournament leaderboard: bump trades_count + volume_usd + pnl_usd
       // in lockstep with the gold credit. closePnl already excludes losses
       // (only positive realized PnL counts) but leaderboards typically
@@ -16516,7 +16630,9 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       }
       return {
         raced: false,
-        paid: paidGold,
+        paid: settlement.released,
+        earned: earnedGold,
+        pending: settlement.pending,
         tournament_gold: tournamentGold,
         prosperity_bonus_pct: prosperityGold.prosperity_bonus_pct,
         prosperity_bonus: prosperityGold.bonus.gold,
@@ -16541,6 +16657,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       tournamentGold: txnResPac.tournament_gold || 0,
       altarBonusGold: txnResPac.prosperity_bonus || 0,
       totalGoldPaid: txnResPac.paid || 0,
+      totalGoldEarned: txnResPac.earned || 0,
       metadata: {
         reasons,
         api_total: allTrades.length,
@@ -16556,20 +16673,28 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
         reason: 'Already claimed by parallel request',
         totalGoldPaid: 0,
       });
-      return res.json({ gold: 0, reason: 'Already claimed by parallel request' });
+      return res.json({
+        gold: pendingAtStartPac.released,
+        earned_gold: 0,
+        pending_gold: pendingAtStartPac.pending,
+        reason: 'Already claimed by parallel request',
+      });
     }
-    console.log(`[claim-gold pacifica] player=${req.player.name} -> ${txnResPac.paid > 0 ? 'PAID' : 'ZERO'} gold=${txnResPac.paid} base_gold=${totalGold} nft_boosted_gold=${boostedTotalGold} new_volume=$${newVolume.toFixed(2)} unique_trades=${uniqueTradeCount} unique_opens=${uniqueOpenTradeCount} reasons="${reasons.join(' + ')}" maxId=${maxTradeId}`);
+    const releasedPacGold = pendingAtStartPac.released + Number(txnResPac.paid || 0);
+    console.log(`[claim-gold pacifica] player=${req.player.name} -> ${txnResPac.earned > 0 ? 'EARNED' : 'ZERO'} earned=${txnResPac.earned || 0} released=${releasedPacGold} pending=${txnResPac.pending || 0} base_gold=${totalGold} nft_boosted_gold=${boostedTotalGold} new_volume=$${newVolume.toFixed(2)} unique_trades=${uniqueTradeCount} unique_opens=${uniqueOpenTradeCount} reasons="${reasons.join(' + ')}" maxId=${maxTradeId}`);
     recordClaimTelemetry({
       ...pacClaimTelemetryBase,
-      result: txnResPac.paid > 0 ? 'paid' : 'zero_payout',
+      result: txnResPac.earned > 0 ? 'paid' : 'zero_payout',
       reason: reasons.join(' + ') || 'No new rewards',
     });
     await refreshStartedTaskProgressForTradeClaim(req.player, dex, req.headers);
 
     res.json({
-      gold: Math.floor(txnResPac.paid),
+      gold: Math.floor(releasedPacGold),
+      earned_gold: Math.floor(txnResPac.earned || 0),
+      pending_gold: Math.floor(txnResPac.pending || 0),
       reason: reasons.join(' + ') || 'No new rewards',
-      total_gold_earned: (reward.total_gold || 0) + txnResPac.paid,
+      total_gold_earned: (reward.total_gold || 0) + Number(txnResPac.earned || 0),
       nft_boost: nftGoldBoostPayload(nftGoldBoost),
       tournament_gold: txnResPac.tournament_gold || 0,
       altar_prosperity_bonus_pct: txnResPac.prosperity_bonus_pct || 0,

@@ -3731,3 +3731,18 @@ Follow-up:
 - The owner explicitly said `деплой`, authorizing the scoped commit, push and
   canonical atomic production deployment of the verified Hibachi attribution
   fix, followed by production service and Tango account verification.
+
+## UR-2026-08-30-HIBACHI-TANGO-LIFETIME-TOURNAMENT-RECONCILIATION
+
+- Timestamp: 2026-08-30 Europe/Kyiv
+- Request: investigate `@tango` / `kanx.asly@outlook.com` still showing zero
+  Hibachi tournament volume despite roughly $1.3M shown by Hibachi, and the
+  mismatch between 71,836 lifetime trading Gold and the player's visible
+  Gold/trophy state; correct all legitimate account data and deploy the root
+  fix to production.
+- Approved scope: read production identity, Hibachi fills, reward, tournament,
+  resource, trophy and client/server logs; implement and test the underlying
+  reconciliation correction; create targeted snapshots before any account
+  repair; commit, push and deploy through the canonical production pipeline.
+  Do not manufacture fills, tournament activity or duplicate previously paid
+  Gold.

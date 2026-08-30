@@ -201,6 +201,14 @@ function walletMatchesDex(dex, wallet) {
 function resolveWalletForDex(player, dex, currentWallet = null) {
   if (!player?.id) return currentWallet || null;
   const normalizedDex = String(dex || player.dex || '').toLowerCase();
+  if (normalizedDex === 'hibachi') {
+    try {
+      const row = db.db.prepare(
+        'SELECT wallet FROM trading_rewards WHERE player_id = ? AND dex = ?'
+      ).get(player.id, normalizedDex);
+      if (row && walletMatchesDex(normalizedDex, row.wallet)) return canonicalWallet(row.wallet);
+    } catch {}
+  }
   try {
     const row = db.db.prepare(`
       SELECT wallet_address

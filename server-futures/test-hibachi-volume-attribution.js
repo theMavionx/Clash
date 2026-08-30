@@ -131,3 +131,72 @@ test('a pre-existing verified owner is inferred before creating an account link'
     'original-player',
   );
 });
+
+test('order-history aggregates and later execution rows cannot double-count one Hibachi order', () => {
+  const accountId = '30591';
+  const playerId = 'cross-poll-player';
+  const orderId = '7000001';
+  const aggregate = hibachi.__testing.normalizeOrderHistoryTrade(accountId, {
+    orderId,
+    symbol: 'BTC/USDT-P',
+    side: 'BUY',
+    status: 'FILLED',
+    filledQuantity: '0.001',
+    avgFillPrice: '100000',
+    closedAt: '2026-08-30T10:00:00.000Z',
+  });
+  const execution = hibachi.__testing.normalizeTrade(accountId, {
+    id: 'trade-7000001',
+    symbol: 'BTC/USDT-P',
+    side: 'BID',
+    price: '100000',
+    quantity: '0.001',
+    bidAccountId: 30591,
+    bidOrderId: orderId,
+    timestamp: Date.parse('2026-08-30T10:00:00.000Z'),
+  });
+
+  const first = hibachi.__testing.importNormalizedFillsForPlayer(playerId, accountId, [aggregate], futures);
+  assert.equal(first.imported, 1);
+  const second = hibachi.__testing.importNormalizedFillsForPlayer(playerId, accountId, [execution], futures);
+  assert.deepEqual({ imported: second.imported, skipped: second.skipped }, { imported: 0, skipped: 1 });
+
+  const totals = futures.db.prepare(`
+    SELECT COUNT(*) AS trades, SUM(notional_usd) AS volume
+    FROM trade_history
+    WHERE player_id = ? AND dex = 'hibachi' AND COALESCE(reward_duplicate, 0) = 0
+  `).get(playerId);
+  assert.deepEqual(totals, { trades: 1, volume: 100 });
+});
+
+test('an order-history aggregate is ignored when executions already exist', () => {
+  const accountId = '30592';
+  const playerId = 'execution-first-player';
+  const orderId = '7000002';
+  const execution = hibachi.__testing.normalizeTrade(accountId, {
+    id: 'trade-7000002',
+    symbol: 'ETH/USDT-P',
+    side: 'ASK',
+    price: '4000',
+    quantity: '0.05',
+    askAccountId: 30592,
+    askOrderId: orderId,
+    timestamp: Date.parse('2026-08-30T10:05:00.000Z'),
+  });
+  const aggregate = hibachi.__testing.normalizeOrderHistoryTrade(accountId, {
+    orderId,
+    symbol: 'ETH/USDT-P',
+    side: 'SELL',
+    status: 'FILLED',
+    filledQuantity: '0.05',
+    avgFillPrice: '4000',
+    closedAt: '2026-08-30T10:05:00.000Z',
+  });
+
+  assert.equal(hibachi.__testing.importNormalizedFillsForPlayer(playerId, accountId, [execution], futures).imported, 1);
+  const fallback = hibachi.__testing.importNormalizedFillsForPlayer(playerId, accountId, [aggregate], futures);
+  assert.deepEqual({ imported: fallback.imported, skipped: fallback.skipped }, { imported: 0, skipped: 1 });
+  assert.equal(futures.db.prepare(`
+    SELECT COUNT(*) AS count FROM trade_history WHERE player_id = ? AND dex = 'hibachi'
+  `).get(playerId).count, 1);
+});

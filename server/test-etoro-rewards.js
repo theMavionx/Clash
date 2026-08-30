@@ -53,7 +53,7 @@ async function run() {
   try {
     clashDb.db.prepare(`
       INSERT INTO players (id, name, token, dex, wallet, gold, wood, ore)
-      VALUES (?, 'eToro Rewards Test', ?, 'etoro', ?, 0, 0, 0)
+      VALUES (?, 'eToro Rewards Test', ?, 'etoro', ?, 5500, 0, 0)
     `).run(playerId, token, wallet);
     clashDb.db.prepare(`
       INSERT INTO player_dex_accounts (
@@ -134,17 +134,49 @@ async function run() {
     const payload = await response.json();
     assert.equal(response.status, 200, JSON.stringify(payload));
     assert.equal(payload.dex, 'etoro');
-    assert.equal(payload.gold, 2520, 'the $20 trade plus first/daily bonuses must receive the 2x tournament boost');
+    assert.equal(payload.gold, 500, 'only the Gold that fits in storage is released immediately');
+    assert.equal(payload.earned_gold, 2520, 'the complete boosted reward remains earned');
+    assert.equal(payload.pending_gold, 2020, 'overflow must be preserved instead of discarded');
 
     const reward = clashDb.db.prepare(`
-      SELECT last_trade_id, total_volume, total_gold, first_deposit, first_trade
+      SELECT last_trade_id, total_volume, total_gold, pending_gold, first_deposit, first_trade
       FROM trading_rewards WHERE player_id = ? AND dex = 'etoro'
     `).get(playerId);
     assert.ok(reward.last_trade_id > 0);
     assert.equal(reward.total_volume, 20);
     assert.equal(reward.total_gold, 2520);
+    assert.equal(reward.pending_gold, 2020);
     assert.equal(reward.first_deposit, 1);
     assert.equal(reward.first_trade, 1);
+    assert.equal(clashDb.getResources(playerId).gold, 6000);
+
+    // Spending creates storage room. A claim with no new trades must release
+    // the preserved entitlement without incrementing lifetime Gold or the
+    // tournament ledger a second time.
+    clashDb.db.prepare('UPDATE players SET gold = 1000 WHERE id = ?').run(playerId);
+    await new Promise(resolve => setTimeout(resolve, 30));
+    const releaseResponse = await fetch(`${api}/trading/claim-gold`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-token': token,
+        'x-dex': 'etoro',
+      },
+      body: JSON.stringify({ dex: 'etoro' }),
+    });
+    const released = await releaseResponse.json();
+    assert.equal(releaseResponse.status, 200, JSON.stringify(released));
+    assert.equal(released.gold, 2020);
+    assert.equal(released.earned_gold, 0);
+    assert.equal(released.pending_gold, 0);
+    assert.equal(clashDb.getResources(playerId).gold, 3020);
+    const afterRelease = clashDb.db.prepare(`
+      SELECT total_gold, pending_gold FROM trading_rewards WHERE player_id = ? AND dex = 'etoro'
+    `).get(playerId);
+    assert.deepEqual(afterRelease, { total_gold: 2520, pending_gold: 0 });
+    assert.equal(clashDb.db.prepare(`
+      SELECT SUM(amount) AS amount FROM gold_history WHERE player_id = ?
+    `).get(playerId).amount, 2520);
 
     const progress = clashDb.db.prepare(`
       SELECT progress, progress_value, target_value
@@ -173,7 +205,44 @@ async function run() {
     assert.equal(etoroAnalytics.earned_usd, 0);
     assert.equal(etoroAnalytics.estimated_fee_usd, 0, 'unapproved App Store attribution must not invent revenue');
 
-    console.log('eToro Gold, quest, tournament, and zero-attribution analytics tests passed.');
+    const hibachiPlayerId = 'hibachi-wallet-stability-player';
+    const hibachiToken = 'hibachi-wallet-stability-token';
+    const staleWallet = '0x2222222222222222222222222222222222222222';
+    const canonicalWallet = '0x3333333333333333333333333333333333333333';
+    clashDb.db.prepare(`
+      INSERT INTO players (id, name, token, dex, wallet, gold, wood, ore)
+      VALUES (?, 'Hibachi Wallet Stability', ?, 'hibachi', ?, 0, 0, 0)
+    `).run(hibachiPlayerId, hibachiToken, staleWallet);
+    clashDb.db.prepare(`
+      INSERT INTO player_dex_accounts (
+        player_id, dex, chain_type, wallet_address, status, metadata_json
+      ) VALUES (?, 'hibachi', 'evm', ?, 'ready', '{}')
+    `).run(hibachiPlayerId, staleWallet);
+    clashDb.db.prepare(`
+      INSERT INTO trading_rewards (
+        player_id, dex, wallet, first_deposit, first_trade
+      ) VALUES (?, 'hibachi', ?, 1, 1)
+    `).run(hibachiPlayerId, canonicalWallet);
+
+    const hibachiClaim = await fetch(`${api}/trading/claim-gold`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-token': hibachiToken,
+        'x-dex': 'hibachi',
+      },
+      body: JSON.stringify({ dex: 'hibachi' }),
+    });
+    assert.equal(hibachiClaim.status, 200, await hibachiClaim.text());
+    const linkedHibachiWallet = clashDb.db.prepare(`
+      SELECT wallet_address
+      FROM player_dex_accounts
+      WHERE player_id = ? AND dex = 'hibachi' AND status = 'ready'
+      ORDER BY updated_at DESC, id DESC LIMIT 1
+    `).get(hibachiPlayerId)?.wallet_address;
+    assert.equal(linkedHibachiWallet, canonicalWallet, 'the stable reward wallet must repair a stale Hibachi DEX row');
+
+    console.log('Trading reward overflow, eToro parity, and Hibachi wallet-stability tests passed.');
   } finally {
     await new Promise(resolve => server.close(resolve));
   }
