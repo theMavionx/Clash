@@ -25,7 +25,7 @@ const ACTION_RECENT_MAX = 18;
 const ACTION_CONTEXT_MAX_AGE_MS = 30 * 60_000;
 const FETCH_RECOVERY_WINDOW_MS = 10 * 60_000;
 const EVENT_DEDUPE_WINDOW_MS = 30_000;
-const REDACT_KEY_RE = /(token|secret|private|password|authorization|signature|signedmessage|signed_message|x-token|cookie)/i;
+const REDACT_KEY_RE = /(token|secret|private|password|authorization|signature|signedmessage|signed_message|x-token|cookie|api.?key|credential)/i;
 const IMPORTANT_BREADCRUMB_RE = /(Phoenix|phoenix|solana|wallet|rpc|transaction|fetch)/i;
 const NOISY_LOG_RE = /^\[load\] stage(1 download|2 signal)/;
 const NOISY_SERVER_RE = /^(WalletConnect Core is already initialized|Backpack couldn't override `window\.ethereum`|Mobile Wallet Adapter was registered as a Standard Wallet)/;
@@ -781,7 +781,8 @@ function reportFetchRecovery(req, response, requestId, durationMs) {
   }));
 }
 
-function readResponseSnippet(response) {
+function readResponseSnippet(response, path = '') {
+  if (String(path).includes('/players/trading-credentials')) return Promise.resolve('[secure credential response omitted]');
   const type = response.headers?.get?.('content-type') || '';
   if (type && !/(json|text|javascript|xml|html|plain)/i.test(type)) {
     return Promise.resolve(`[${type || 'binary'} response omitted]`);
@@ -814,7 +815,7 @@ function patchFetch() {
         else fetchFailures.delete(fetchFailureKey(req));
         addBreadcrumbInternal(storeFailure ? 'fetch.http_error' : 'fetch.expected_http_status', base, storeFailure ? (response.status >= 500 ? 'error' : 'warn') : 'debug');
         if (storeFailure) {
-          readResponseSnippet(response).then((snippet) => {
+          readResponseSnippet(response, req.path).then((snippet) => {
             enqueue(makeEvent(response.status >= 500 ? 'error' : 'warn', [
               `fetch ${req.method} ${req.path} -> ${response.status}`,
             ], 'fetch', '', {

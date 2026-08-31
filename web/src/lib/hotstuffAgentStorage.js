@@ -6,6 +6,8 @@ import {
   migratePlainLocalStorageCredential,
   readEncryptedCredential,
   writeEncryptedCredential,
+  captureCredentialScope,
+  assertCredentialScope,
 } from './encryptedCredentialStorage';
 
 export const HOTSTUFF_AGENT_STORAGE_PREFIX = 'clash_hotstuff_agent_v1';
@@ -55,7 +57,9 @@ export async function loadHotstuffStoredAgent(owner) {
   }
 }
 
-export async function saveHotstuffStoredAgent(owner, privateKey, validUntil = Date.now() + AGENT_VALIDITY_MS) {
+export async function saveHotstuffStoredAgent(owner, privateKey, validUntil = Date.now() + AGENT_VALIDITY_MS, options = {}) {
+  const scope = options.scope || captureCredentialScope();
+  assertCredentialScope(scope);
   if (!owner || typeof window === 'undefined') return null;
   const normalized = normalizePrivateKey(privateKey);
   if (!normalized) return null;
@@ -67,16 +71,18 @@ export async function saveHotstuffStoredAgent(owner, privateKey, validUntil = Da
     validUntil,
   };
   try {
-    await writeEncryptedCredential(agentStorageKey(owner), record);
-    try { window.localStorage.removeItem(agentStorageKey(owner)); } catch { /* noop */ }
+    await writeEncryptedCredential(agentStorageKey(owner), record, { scope });
+    assertCredentialScope(scope);
   } catch {
     return null;
   }
   return { ...record, account };
 }
 
-export async function newHotstuffStoredAgent(owner) {
-  return saveHotstuffStoredAgent(owner, generatePrivateKey(), Date.now() + AGENT_VALIDITY_MS);
+export async function newHotstuffStoredAgent(owner, options = {}) {
+  const scope = options.scope || captureCredentialScope();
+  assertCredentialScope(scope);
+  return saveHotstuffStoredAgent(owner, generatePrivateKey(), Date.now() + AGENT_VALIDITY_MS, { scope });
 }
 
 export function hotstuffAgentStillValid(row) {

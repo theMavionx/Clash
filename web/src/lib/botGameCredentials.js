@@ -5,6 +5,9 @@
 import { getAddress } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import {
+  assertCredentialScope,
+  captureCredentialScope,
+  listCredentialNames,
   migratePlainLocalStorageCredential,
   readEncryptedCredential,
   writeEncryptedCredential,
@@ -28,6 +31,7 @@ import { getPhoenixOneTapSession, importPhoenixOneTapSigner, PHOENIX_ONE_TAP_STO
 import { ensureGameExchangeReady, evmWalletsForPlayer, solanaWalletsForPlayer } from './botGameAuth';
 import { botApiUrl, botAuthHeaders, fetchBotApiJson } from './botApiClient';
 import { readHyperliquidAgentAsync } from './hyperliquidClient';
+import { readNadoLinkedSigner, rememberNadoLinkedSigner } from './nadoLinkedSignerStorage';
 
 const GRVT_BUILDER_ACCOUNT_ID = String(import.meta.env.VITE_GRVT_BUILDER_ACCOUNT_ID || '').trim();
 const GRVT_BUILDER_FEE_RATE = String(import.meta.env.VITE_GRVT_BUILDER_FEE_RATE || '0.01').trim();
@@ -71,35 +75,22 @@ function normalizePk(value) {
   return raw.startsWith('0x') ? raw : `0x${raw}`;
 }
 
-const ENCRYPTED_MIRROR_PREFIX = 'clash_encrypted_credential_mirror_v1:';
+function botCredentialScope(player, token, scope) {
+  const captured = scope || captureCredentialScope();
+  assertCredentialScope(captured, token === undefined ? {} : { token });
+  if (player?.id && String(player.id) !== captured.playerId) throw new Error('Trading account changed. Please retry.');
+  return captured;
+}
 
 function listBrowserStorageOwnerSuffixes(prefix) {
   const owners = [];
   const add = (value) => {
     const v = String(value || '').trim();
     if (!v) return;
-    const lower = v.toLowerCase();
-    if (!owners.some((row) => row.toLowerCase() === lower)) owners.push(v);
+    const normalized = isEvmAddress(v) ? v.toLowerCase() : v;
+    if (!owners.includes(normalized)) owners.push(normalized);
   };
-  if (typeof window === 'undefined') return owners;
-  const storages = [];
-  try { if (window.localStorage) storages.push(window.localStorage); } catch { /* noop */ }
-  try { if (window.sessionStorage) storages.push(window.sessionStorage); } catch { /* noop */ }
-  for (const storage of storages) {
-    try {
-      for (let i = 0; i < storage.length; i += 1) {
-        const key = storage.key(i);
-        if (!key) continue;
-        if (key.startsWith(prefix)) {
-          add(key.slice(prefix.length));
-          continue;
-        }
-        if (key.startsWith(ENCRYPTED_MIRROR_PREFIX) && key.slice(ENCRYPTED_MIRROR_PREFIX.length).startsWith(prefix)) {
-          add(key.slice(ENCRYPTED_MIRROR_PREFIX.length + prefix.length));
-        }
-      }
-    } catch { /* noop */ }
-  }
+  for (const key of listCredentialNames()) if (key.startsWith(prefix)) add(key.slice(prefix.length));
   return owners;
 }
 
@@ -159,8 +150,7 @@ async function loadGrvtCredentials() {
       fundingAccountAddress: String(value.fundingAccountAddress || ''),
     };
   };
-  const migrated = await migratePlainLocalStorageCredential(GRVT_STORAGE_KEY, GRVT_STORAGE_KEY, normalize);
-  const stored = migrated || await readEncryptedCredential(GRVT_STORAGE_KEY);
+  const stored = await readEncryptedCredential(GRVT_STORAGE_KEY);
   return normalize(stored);
 }
 
@@ -171,13 +161,13 @@ async function loadGrvtOneTapSigner() {
     if (!isPrivateKey(pk)) return null;
     return { privateKey: pk, address: privateKeyToAccount(pk).address };
   };
-  const migrated = await migratePlainLocalStorageCredential(GRVT_ONE_TAP_KEY, GRVT_ONE_TAP_KEY, normalize);
-  const stored = migrated || await readEncryptedCredential(GRVT_ONE_TAP_KEY);
+  const stored = await readEncryptedCredential(GRVT_ONE_TAP_KEY);
   return normalize(stored);
 }
 
 /** Save GRVT Secret Private Key (one-tap) — same key as Futures → GRVT Account. */
-export async function saveGrvtOneTapSigner(privateKey) {
+export async function saveGrvtOneTapSigner(privateKey, options = {}) {
+  const scope = botCredentialScope(null, undefined, options.scope);
   const pk = normalizePk(privateKey);
   if (!isPrivateKey(pk)) {
     throw new Error('Invalid GRVT Secret Private Key (expected 0x + 64 hex).');
@@ -187,8 +177,8 @@ export async function saveGrvtOneTapSigner(privateKey) {
     privateKey: pk,
     address: account.address,
     savedAt: Date.now(),
-  });
-  try { window.localStorage.removeItem(GRVT_ONE_TAP_KEY); } catch {}
+  }, { scope });
+  assertCredentialScope(scope);
   return { address: account.address };
 }
 
@@ -202,8 +192,7 @@ async function loadHotstuffAgent(owner) {
     if (Number(value?.validUntil || 0) && Number(value.validUntil) <= Date.now() + 60_000) return null;
     return { privateKey: pk, address: privateKeyToAccount(pk).address, owner };
   };
-  const migrated = await migratePlainLocalStorageCredential(key, key, (v) => normalize(v));
-  const stored = migrated || await readEncryptedCredential(key);
+  const stored = await readEncryptedCredential(key);
   return normalize(stored);
 }
 
@@ -218,8 +207,7 @@ async function loadHibachiCredentials() {
       privateKey: pk,
     };
   };
-  const migrated = await migratePlainLocalStorageCredential(HIBACHI_STORAGE_KEY, HIBACHI_STORAGE_KEY, normalize);
-  const stored = migrated || await readEncryptedCredential(HIBACHI_STORAGE_KEY);
+  const stored = await readEncryptedCredential(HIBACHI_STORAGE_KEY);
   return normalize(stored);
 }
 
@@ -232,8 +220,7 @@ async function loadKatanaCredentials() {
       wallet: String(value.wallet),
     };
   };
-  const migrated = await migratePlainLocalStorageCredential(KATANA_STORAGE_KEY, KATANA_STORAGE_KEY, normalize);
-  const stored = migrated || await readEncryptedCredential(KATANA_STORAGE_KEY);
+  const stored = await readEncryptedCredential(KATANA_STORAGE_KEY);
   return normalize(stored);
 }
 
@@ -246,13 +233,13 @@ async function loadKatanaOneTapSigner(wallet) {
     if (!isPrivateKey(pk)) return null;
     return { privateKey: pk, address: privateKeyToAccount(pk).address };
   };
-  const migrated = await migratePlainLocalStorageCredential(key, key, normalize);
-  const stored = migrated || await readEncryptedCredential(key);
+  const stored = await readEncryptedCredential(key);
   return normalize(stored);
 }
 
 /** Save Katana delegated private key (one-tap) — same as Futures → Katana Account. */
-export async function saveKatanaOneTapSigner(privateKey, wallet) {
+export async function saveKatanaOneTapSigner(privateKey, wallet, options = {}) {
+  const scope = botCredentialScope(null, undefined, options.scope);
   const pk = normalizePk(privateKey);
   if (!isPrivateKey(pk)) {
     throw new Error('Invalid Katana delegated private key (expected 0x + 64 hex).');
@@ -267,8 +254,8 @@ export async function saveKatanaOneTapSigner(privateKey, wallet) {
     privateKey: pk,
     address: account.address,
     savedAt: Date.now(),
-  });
-  try { window.localStorage.removeItem(key); } catch {}
+  }, { scope });
+  assertCredentialScope(scope);
   return {
     privateKey: pk,
     subAccount: '0',
@@ -285,7 +272,8 @@ export async function saveKatanaOneTapSigner(privateKey, wallet) {
 const HOTSTUFF_AGENT_VALIDITY_MS = 180 * 24 * 60 * 60 * 1000;
 
 /** Save Hotstuff trading agent private key for Bots. */
-export async function saveHotstuffAgent(privateKey, wallet) {
+export async function saveHotstuffAgent(privateKey, wallet, options = {}) {
+  const scope = botCredentialScope(null, undefined, options.scope);
   const pk = normalizePk(privateKey);
   if (!isPrivateKey(pk)) {
     throw new Error('Invalid Hotstuff agent private key (0x + 64 hex).');
@@ -302,8 +290,8 @@ export async function saveHotstuffAgent(privateKey, wallet) {
     address: account.address,
     validUntil: Date.now() + HOTSTUFF_AGENT_VALIDITY_MS,
   };
-  await writeEncryptedCredential(key, record);
-  try { window.localStorage.removeItem(key); } catch {}
+  await writeEncryptedCredential(key, record, { scope });
+  assertCredentialScope(scope);
   return {
     privateKey: pk,
     subAccount: '0',
@@ -313,9 +301,10 @@ export async function saveHotstuffAgent(privateKey, wallet) {
 }
 
 /** Save Avantis smart-wallet delegate for Bots. */
-export function saveAvantisDelegate(privateKey, wallet) {
+export function saveAvantisDelegate(privateKey, wallet, options = {}) {
+  const scope = botCredentialScope(null, undefined, options.scope);
   const owner = String(wallet || '').trim().toLowerCase();
-  const record = importAvantisSmartWalletDelegate(wallet, privateKey);
+  const record = importAvantisSmartWalletDelegate(wallet, privateKey, { scope });
   const pk = normalizePk(privateKey);
   return {
     privateKey: pk,
@@ -326,15 +315,17 @@ export function saveAvantisDelegate(privateKey, wallet) {
 }
 
 /** Save Ostium Futures-parity delegate for Bots (same storage as one-tap). */
-export async function saveOstiumDelegateForBots(privateKey, wallet) {
+export async function saveOstiumDelegateForBots(privateKey, wallet, options = {}) {
+  const scope = botCredentialScope(null, undefined, options.scope);
   const owner = String(wallet || '').trim().toLowerCase();
   if (!isEvmAddress(owner)) {
     throw new Error('Connect your Arbitrum wallet (0x…) for Ostium.');
   }
   const signer = ostiumDelegateFromPrivateKey(privateKey);
-  await persistOstiumDelegateWallet(owner, signer);
+  await persistOstiumDelegateWallet(owner, signer, { scope });
+  assertCredentialScope(scope);
   // Keep legacy smart-wallet key in sync for older gather paths.
-  try { importOstiumSmartWalletDelegate(owner, signer.privateKey); } catch { /* optional */ }
+  try { importOstiumSmartWalletDelegate(owner, signer.privateKey, { scope }); } catch { /* optional */ }
   return {
     privateKey: signer.privateKey,
     subAccount: '0',
@@ -344,7 +335,8 @@ export async function saveOstiumDelegateForBots(privateKey, wallet) {
 }
 
 /** Save Hibachi API key + account id + signing key for Bots. */
-export async function saveHibachiBotCredentials({ apiKey, accountId, privateKey }) {
+export async function saveHibachiBotCredentials({ apiKey, accountId, privateKey }, options = {}) {
+  const scope = botCredentialScope(null, undefined, options.scope);
   const key = String(apiKey || '').trim();
   const account = String(accountId || '').trim();
   const pk = normalizePk(privateKey);
@@ -356,8 +348,8 @@ export async function saveHibachiBotCredentials({ apiKey, accountId, privateKey 
     accountId: account,
     privateKey: pk,
     savedAt: Date.now(),
-  });
-  try { window.localStorage.removeItem(HIBACHI_STORAGE_KEY); } catch {}
+  }, { scope });
+  assertCredentialScope(scope);
   return {
     privateKey: pk,
     subAccount: account,
@@ -372,7 +364,8 @@ export async function saveHibachiBotCredentials({ apiKey, accountId, privateKey 
 }
 
 /** Save RISEx session signer for Bots. */
-export function saveRisexSessionSigner(privateKey, wallet) {
+export function saveRisexSessionSigner(privateKey, wallet, options = {}) {
+  const scope = botCredentialScope(null, undefined, options.scope);
   const pk = normalizePk(privateKey);
   if (!isPrivateKey(pk)) throw new Error('Invalid RISEx session private key (0x + 64 hex).');
   const owner = String(wallet || '').trim().toLowerCase();
@@ -380,7 +373,7 @@ export function saveRisexSessionSigner(privateKey, wallet) {
   const session = rememberRisexSigner(owner, {
     privateKey: pk,
     expiresAt: Math.floor(Date.now() / 1000) + RISEX_SIGNER_TTL_SECONDS,
-  });
+  }, { scope });
   return {
     privateKey: pk,
     subAccount: '0',
@@ -397,7 +390,8 @@ export function saveRisexSessionSigner(privateKey, wallet) {
 }
 
 /** Save Katana API credentials (key/secret/wallet) for Bots. */
-export async function saveKatanaCredentials({ apiKey, apiSecret, wallet }) {
+export async function saveKatanaCredentials({ apiKey, apiSecret, wallet }, options = {}) {
+  const scope = botCredentialScope(null, undefined, options.scope);
   const key = String(apiKey || '').trim();
   const secret = String(apiSecret || '').trim();
   const owner = String(wallet || '').trim().toLowerCase();
@@ -408,17 +402,20 @@ export async function saveKatanaCredentials({ apiKey, apiSecret, wallet }) {
     apiSecret: secret,
     wallet: owner,
     savedAt: Date.now(),
-  });
-  try { window.localStorage.removeItem(KATANA_STORAGE_KEY); } catch {}
+  }, { scope });
+  assertCredentialScope(scope);
   return { wallet: owner };
 }
 
 /** Full Katana save (API + optional one-tap) with payload for direct sync. */
-export async function saveKatanaBotCredentials({ apiKey, apiSecret, wallet, oneTapPrivateKey }) {
-  const saved = await saveKatanaCredentials({ apiKey, apiSecret, wallet });
+export async function saveKatanaBotCredentials({ apiKey, apiSecret, wallet, oneTapPrivateKey }, options = {}) {
+  const scope = botCredentialScope(null, undefined, options.scope);
+  const saved = await saveKatanaCredentials({ apiKey, apiSecret, wallet }, { scope });
+  assertCredentialScope(scope);
   let signerMeta = {};
   if (oneTapPrivateKey?.trim()) {
-    const signer = await saveKatanaOneTapSigner(oneTapPrivateKey, saved.wallet);
+    const signer = await saveKatanaOneTapSigner(oneTapPrivateKey, saved.wallet, { scope });
+    assertCredentialScope(scope);
     signerMeta = { signer_address: signer.address };
   }
   const pk = oneTapPrivateKey?.trim() ? normalizePk(oneTapPrivateKey) : null;
@@ -451,30 +448,19 @@ function checksumEvmAddress(addr) {
 }
 
 /** Save Nado linked signer private key for Bots. */
-export function saveNadoLinkedSigner(privateKey, wallet) {
+export function saveNadoLinkedSigner(privateKey, wallet, options = {}) {
+  const scope = botCredentialScope(null, undefined, options.scope);
   const pk = normalizePk(privateKey);
   if (!isPrivateKey(pk)) throw new Error('Invalid Nado linked signer key (0x + 64 hex).');
   const ownerKey = String(wallet || '').trim().toLowerCase();
   if (!isEvmAddress(ownerKey)) throw new Error('Nado owner wallet required.');
   const ownerWallet = checksumEvmAddress(wallet);
   const account = privateKeyToAccount(pk);
-  const key = `${NADO_LINKED_PREFIX}:${ownerKey}`;
-  const payload = JSON.stringify({
+  rememberNadoLinkedSigner(ownerKey, {
     privateKey: pk,
     address: account.address.toLowerCase(),
     expiresAt: Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60,
-  });
-  const storages = [];
-  try { if (typeof window !== 'undefined' && window.localStorage) storages.push(window.localStorage); } catch { /* noop */ }
-  try { if (typeof window !== 'undefined' && window.sessionStorage) storages.push(window.sessionStorage); } catch { /* noop */ }
-  let saved = false;
-  for (const storage of storages) {
-    try {
-      storage.setItem(key, payload);
-      saved = true;
-    } catch { /* noop */ }
-  }
-  if (!saved) throw new Error('Failed to save Nado linked signer in the browser.');
+  }, { scope });
   return {
     privateKey: pk,
     subAccount: NADO_SUBACCOUNT_NAME,
@@ -491,10 +477,11 @@ export function saveNadoLinkedSigner(privateKey, wallet) {
 }
 
 /** Save Phoenix one-tap authority secret (Solana base58) for Bots. */
-export function savePhoenixBotSigner(privateKey, solOwner) {
+export function savePhoenixBotSigner(privateKey, solOwner, options = {}) {
+  const scope = botCredentialScope(null, undefined, options.scope);
   const owner = String(solOwner || '').trim();
   if (!owner) throw new Error('Phoenix Solana owner wallet required.');
-  const imported = importPhoenixOneTapSigner(owner, privateKey);
+  const imported = importPhoenixOneTapSigner(owner, privateKey, { scope });
   const session = getPhoenixOneTapSession(imported.owner);
   if (!session?.secretKey) {
     throw new Error('Phoenix session not saved after import.');
@@ -517,31 +504,6 @@ export function savePhoenixBotSigner(privateKey, solOwner) {
     },
     hint: 'Phoenix one-tap session authority',
   };
-}
-
-function readNadoLinkedSigner(owner) {
-  if (!isEvmAddress(owner)) return null;
-  const key = `${NADO_LINKED_PREFIX}:${String(owner).toLowerCase()}`;
-  const storages = [];
-  try { if (typeof window !== 'undefined' && window.localStorage) storages.push(window.localStorage); } catch { /* noop */ }
-  try { if (typeof window !== 'undefined' && window.sessionStorage) storages.push(window.sessionStorage); } catch { /* noop */ }
-  let raw = null;
-  for (const storage of storages) {
-    try {
-      raw = storage.getItem(key);
-      if (raw) break;
-    } catch { /* noop */ }
-  }
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw);
-    const pk = normalizePk(parsed?.privateKey);
-    if (!isPrivateKey(pk)) return null;
-    if (Number(parsed?.expiresAt || 0) <= Math.floor(Date.now() / 1000) + 60) return null;
-    return { privateKey: pk, address: privateKeyToAccount(pk).address.toLowerCase() };
-  } catch {
-    return null;
-  }
 }
 
 /** Temporarily disabled in Bots — broken auth or needs access codes. Flash is fully retired (hidden). */
@@ -767,18 +729,27 @@ function pacificaSolanaWallets(player, ctx = {}) {
 }
 
 async function readPacificaAgentForPlayer(player, ctx = {}) {
+  const scope = botCredentialScope(player, ctx.playerToken, ctx.credentialScope);
   const wallets = pacificaSolanaWallets(player, ctx);
   for (const sol of wallets) {
-    const agent = await readPacificaAgent(sol);
+    const agent = await readPacificaAgent(sol, { scope });
+    assertCredentialScope(scope);
     if (agent?.privateKey) return agent;
   }
-  return findAnyPacificaAgent(wallets);
+  return findAnyPacificaAgent(wallets, { scope });
 }
 
 /**
  * @returns {Promise<{ ok: true, privateKey: string, subAccount: string, metadata: object, hint?: string } | { ok: false, error: string }>}
  */
 export async function gatherGameCredentials(exchangeId, player, ctx = {}) {
+  const scope = botCredentialScope(player, ctx.playerToken, ctx.credentialScope);
+  const result = await gatherGameCredentialsInner(exchangeId, player, { ...ctx, credentialScope: scope });
+  assertCredentialScope(scope);
+  return result;
+}
+
+async function gatherGameCredentialsInner(exchangeId, player, ctx) {
   const ex = String(exchangeId || '').toLowerCase();
   if (!isBotsExchangeEnabled(ex)) {
     const label = GAME_WALLET_EXCHANGE_LABELS[ex] || ex.toUpperCase();
@@ -896,7 +867,7 @@ export async function gatherGameCredentials(exchangeId, player, ctx = {}) {
       return { ok: false, error: 'Connect Arbitrum wallet in the game (Ostium).' };
     }
     for (const w of wallets) {
-      const futuresDelegate = await loadOstiumDelegate(w).catch(() => null);
+      const futuresDelegate = await loadOstiumDelegate(w, { scope: ctx.credentialScope }).catch(() => null);
       if (futuresDelegate?.privateKey) {
         return {
           ok: true,
@@ -1300,6 +1271,7 @@ export async function probeGameCredentials(player, exchangeId, ctx = {}) {
 
 /** Scan all game-flow exchanges and mark sync status in Bots. */
 export async function scanGameCredentialStatuses(player, syncedAccounts = [], ctx = {}) {
+  const scope = botCredentialScope(player, ctx.playerToken, ctx.credentialScope);
   const active = new Set(
     (Array.isArray(syncedAccounts) ? syncedAccounts : [])
       .filter((row) => String(row?.status || '').toLowerCase() === 'active')
@@ -1307,7 +1279,8 @@ export async function scanGameCredentialStatuses(player, syncedAccounts = [], ct
   );
   const rows = [];
   for (const exchange of GAME_WALLET_EXCHANGES) {
-    const probe = await probeGameCredentials(player, exchange, ctx);
+    const probe = await probeGameCredentials(player, exchange, { ...ctx, credentialScope: scope });
+    assertCredentialScope(scope);
     rows.push({
       ...probe,
       label: GAME_WALLET_EXCHANGE_LABELS[exchange] || exchange.toUpperCase(),
@@ -1341,6 +1314,8 @@ export async function syncGameAccountToPhantom({
   walletCtx = {},
 }) {
   if (!token) return { ok: false, error: 'Log in to the game (player token required).' };
+  const scope = botCredentialScope(player, token, walletCtx.credentialScope);
+  walletCtx = { ...walletCtx, playerToken: token, credentialScope: scope };
   const ex = String(exchangeId || '').toLowerCase();
   if (!isBotsExchangeEnabled(ex)) {
     const label = GAME_WALLET_EXCHANGE_LABELS[ex] || ex.toUpperCase();
@@ -1351,9 +1326,11 @@ export async function syncGameAccountToPhantom({
     // single remote linked signer immediately before exporting the local key.
     // Keep gather/probe read-only so merely opening Bots never prompts a wallet.
     const ready = await ensureGameExchangeReady(ex, player, walletCtx);
+    assertCredentialScope(scope, { token });
     if (!ready?.ok) return ready;
   }
   const gathered = await gatherGameCredentials(ex, player, walletCtx);
+  assertCredentialScope(scope, { token });
   if (!gathered.ok) return { ok: false, error: gathered.error };
 
   const secretRef = formatSecretRef(gathered.privateKey, {
@@ -1361,6 +1338,7 @@ export async function syncGameAccountToPhantom({
     encryptSecret,
   });
 
+  assertCredentialScope(scope, { token });
   const createRes = await fetch(botApiUrl('/api/v1/accounts'), {
     method: 'POST',
     headers: botAuthHeaders(token, { 'content-type': 'application/json' }),
@@ -1385,6 +1363,7 @@ export async function syncGameAccountToPhantom({
     body: { error: { message: err?.message || 'network error' } },
   }));
 
+  assertCredentialScope(scope, { token });
   if (!createRes.ok || !createRes.body?.data) {
     return {
       ok: false,
@@ -1405,6 +1384,7 @@ export async function syncGameAccountToPhantom({
     method: 'POST',
     headers: botAuthHeaders(token),
   }).catch(() => null);
+  assertCredentialScope(scope, { token });
 
   return { ok: true, exchange: ex, hint: gathered.hint };
 }
@@ -1415,6 +1395,7 @@ export async function syncGameAccountToPhantom({
  */
 export async function reconnectGameAccountToPhantom(opts) {
   if (!opts?.token) return { ok: false, error: 'Log in to the game (player token required).' };
+  const scope = botCredentialScope(opts.player, opts.token, opts.walletCtx?.credentialScope);
   const ex = String(opts.exchangeId || '').toLowerCase();
   if (!ex) return { ok: false, error: 'Exchange id required.' };
 
@@ -1422,8 +1403,8 @@ export async function reconnectGameAccountToPhantom(opts) {
     method: 'POST',
     headers: botAuthHeaders(opts.token),
   }).catch(() => null);
-
-  return syncGameAccountToPhantom(opts);
+  assertCredentialScope(scope, { token: opts.token });
+  return syncGameAccountToPhantom({ ...opts, walletCtx: { ...opts.walletCtx, credentialScope: scope } });
 }
 
 /**
@@ -1439,8 +1420,10 @@ export async function syncDirectAccountToPhantom({
   keyTransMethod = 'encrypt',
   label,
   hint,
+  credentialScope,
 }) {
   if (!token) return { ok: false, error: 'Log in to the game (player token required).' };
+  const scope = botCredentialScope(null, token, credentialScope);
   const ex = String(exchangeId || '').toLowerCase();
   if (!isBotsExchangeEnabled(ex)) {
     return { ok: false, error: `${GAME_WALLET_EXCHANGE_LABELS[ex] || ex} temporarily disabled in Bots.` };
@@ -1449,6 +1432,7 @@ export async function syncDirectAccountToPhantom({
   if (!pk) return { ok: false, error: 'Private key missing for direct sync.' };
 
   const secretRef = formatSecretRef(pk, { method: keyTransMethod, encryptSecret });
+  assertCredentialScope(scope, { token });
   const createRes = await fetch(botApiUrl('/api/v1/accounts'), {
     method: 'POST',
     headers: botAuthHeaders(token, { 'content-type': 'application/json' }),
@@ -1469,6 +1453,7 @@ export async function syncDirectAccountToPhantom({
     body: { error: { message: err?.message || 'network error' } },
   }));
 
+  assertCredentialScope(scope, { token });
   if (!createRes.ok || !createRes.body?.data) {
     return {
       ok: false,
@@ -1489,6 +1474,7 @@ export async function syncDirectAccountToPhantom({
     method: 'POST',
     headers: botAuthHeaders(token),
   }).catch(() => null);
+  assertCredentialScope(scope, { token });
 
   return { ok: true, exchange: ex, hint };
 }
@@ -1505,8 +1491,12 @@ export async function saveThenSyncGameAccount({
   saveFn,
   probeBalance = true,
 }) {
-  const saved = await saveFn();
+  const scope = botCredentialScope(player, token, walletCtx.credentialScope);
+  walletCtx = { ...walletCtx, credentialScope: scope, playerToken: token };
+  const saved = await saveFn({ scope });
+  assertCredentialScope(scope, { token });
   const gathered = await gatherGameCredentials(exchangeId, player, walletCtx);
+  assertCredentialScope(scope, { token });
   if (gathered.ok) {
     return setupAndSyncGameAccount({
       token,
@@ -1539,10 +1529,13 @@ export async function saveThenSyncGameAccount({
       keyTransMethod,
       label,
       hint: saved.hint,
+      credentialScope: scope,
     });
+    assertCredentialScope(scope, { token });
     if (!direct.ok) return direct;
     if (probeBalance) {
       const bal = await probeExchangeBalance(token, exchangeId).catch(() => null);
+      assertCredentialScope(scope, { token });
       return { ...direct, balance: bal?.balance };
     }
     return direct;
@@ -1585,6 +1578,7 @@ async function setupAndSyncGameAccountInner({
   walletCtx: walletCtxIn = {},
 }) {
   if (!token) return { ok: false, error: 'Log in to the game (player token required).' };
+  const scope = botCredentialScope(player, token, walletCtxIn.credentialScope);
   const ex = String(exchangeId || '').toLowerCase();
   if (!supportsGameWalletSync(ex)) {
     return { ok: false, error: `${GAME_WALLET_EXCHANGE_LABELS[ex] || ex} does not support game-wallet sync in Bots.` };
@@ -1608,6 +1602,7 @@ async function setupAndSyncGameAccountInner({
     ...walletCtxIn,
     // Prefer explicit Petra from BotsPanel over nested ctx leftovers.
     ...(aptosAddr ? { aptosWalletAddress: aptosAddr, petraWalletAddress: aptosAddr } : {}),
+    credentialScope: scope,
   };
 
   const ready = await ensureGameExchangeReady(ex, player, {
@@ -1625,6 +1620,7 @@ async function setupAndSyncGameAccountInner({
     playerToken: token,
     ...walletCtx,
   });
+  assertCredentialScope(scope, { token });
   if (!ready.ok) return ready;
 
   const sync = await syncGameAccountToPhantom({
@@ -1641,6 +1637,7 @@ async function setupAndSyncGameAccountInner({
       ...walletCtx,
     },
   });
+  assertCredentialScope(scope, { token });
   if (!sync.ok) return sync;
 
   const warnings = [];
@@ -1654,7 +1651,9 @@ async function setupAndSyncGameAccountInner({
         player,
         evmWalletAddress: walletAddress,
         solanaWalletAddress,
+        credentialScope: scope,
       });
+      assertCredentialScope(scope, { token });
       if (!auth.ok) warnings.push(`GRVT builder: ${auth.error}`);
     } catch (e) {
       warnings.push(`GRVT builder: ${e?.message || 'authorize failed'}`);
@@ -1662,8 +1661,10 @@ async function setupAndSyncGameAccountInner({
   }
 
   let balance = null;
+  assertCredentialScope(scope, { token });
   if (probeBalance) {
     const probe = await probeExchangeBalance(token, ex);
+    assertCredentialScope(scope, { token });
     if (probe.ok) balance = probe.balance;
     else warnings.push(`balance probe: ${probe.error}`);
   }
@@ -1739,9 +1740,12 @@ export async function authorizeGrvtBuilderForGame({
   walletAddress,
   player,
   evmWalletAddress,
+  credentialScope,
 } = {}) {
   if (!playerToken) return { ok: false, error: 'Log in to the game (player token required).' };
+  const scope = botCredentialScope(player, playerToken, credentialScope);
   const creds = await loadGrvtCredentials();
+  assertCredentialScope(scope, { token: playerToken });
   if (!creds?.apiKey || !creds?.subAccountId) {
     return { ok: false, error: 'No GRVT API key. Futures → GRVT → save API key.' };
   }
@@ -1768,6 +1772,7 @@ export async function authorizeGrvtBuilderForGame({
 
   try {
     await ensureGrvtChain(evmProvider);
+    assertCredentialScope(scope, { token: playerToken });
   } catch (e) {
     return { ok: false, error: e?.message || 'GRVT chain switch failed' };
   }
@@ -1814,6 +1819,7 @@ export async function authorizeGrvtBuilderForGame({
     return { ok: false, error: e?.message || 'GRVT builder signature rejected' };
   }
   const sig = splitSignature(rawSignature);
+  assertCredentialScope(scope, { token: playerToken });
   const res = await fetch('/api/futures/grvt/authorize-builder', {
     method: 'POST',
     headers: {
@@ -1840,6 +1846,7 @@ export async function authorizeGrvtBuilderForGame({
     }),
   });
   const data = await res.json().catch(() => ({}));
+  assertCredentialScope(scope, { token: playerToken });
   if (!res.ok) {
     return {
       ok: false,

@@ -3,6 +3,7 @@ import { parseUnits } from 'viem';
 import { useDex } from '../contexts/DexContext';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { usePlayer } from './useGodot';
+import { useCredentialOperationScope } from './useCredentialOperationScope';
 import { registeredDexWallet } from '../lib/playerDexAccounts';
 import {
   LEVERUP_ACTION_TYPE_NAMES,
@@ -94,6 +95,7 @@ export function useLeverup() {
   const { address, getWalletClient, getPublicClient, ensureChain } = useEvmWallet();
   const player = usePlayer();
   const walletAddr = isAddress(address) ? String(address).toLowerCase() : null;
+  const { capture: captureCredentialOperation, assert: assertCredentialOperation } = useCredentialOperationScope({ player, wallet: walletAddr, dex });
   const gameToken = useMemo(() => (
     (typeof window !== 'undefined' ? window._playerToken : null) || player?.token || null
   ), [player?.token]);
@@ -268,6 +270,8 @@ export function useLeverup() {
   }, [fetchJson, gameToken, walletAddr, walletMismatch]);
 
   const verifyOneTap = useCallback(async ({ quiet = false } = {}) => {
+    let scope;
+    try { scope = captureCredentialOperation(); } catch { return false; }
     if (!walletAddr || walletMismatch) {
       signerRef.current = null;
       setOneTapTrading({ enabled: false, approved: false, signer: null, permissions: '0', mode: 'leverup_v2' });
@@ -290,6 +294,7 @@ export function useLeverup() {
         args: [walletAddr, stored.address],
       });
       const approved = isLeverupAgentAuthorized(auth, stored.address);
+      assertCredentialOperation(scope);
       const allowance = await publicClient.readContract({
         address: LEVERUP_USDC,
         abi: LEVERUP_ERC20_ABI,
@@ -297,6 +302,7 @@ export function useLeverup() {
         args: [walletAddr, LEVERUP_DIAMOND],
       });
       const allowanceReady = allowance === maxLeverupApproval();
+      assertCredentialOperation(scope);
       const enabled = approved && allowanceReady;
       setOneTapTrading({
         enabled,
@@ -309,12 +315,13 @@ export function useLeverup() {
       setSetupVerified(enabled);
       return enabled;
     } catch (requestError) {
+      try { assertCredentialOperation(scope); } catch { return false; }
       if (!quiet) setError(requestError?.shortMessage || requestError?.message || 'LeverUp signer verification failed');
       setOneTapTrading({ enabled: false, approved: false, signer: stored.address, permissions: '0', mode: 'leverup_v2' });
       setSetupVerified(false);
       return false;
     }
-  }, [getPublicClient, walletAddr, walletMismatch]);
+  }, [getPublicClient, walletAddr, walletMismatch, captureCredentialOperation, assertCredentialOperation]);
 
   const activate = useCallback(async () => {
     if (!walletAddr) return { error: 'Connect your EVM wallet first' };
@@ -322,12 +329,14 @@ export function useLeverup() {
     setLoading(true);
     setError(null);
     try {
+      const scope = captureCredentialOperation();
       await ensureChain(LEVERUP_CHAIN_ID);
+      assertCredentialOperation(scope);
       const publicClient = getPublicClient(LEVERUP_CHAIN_ID);
       const walletClient = getWalletClient(LEVERUP_CHAIN_ID);
       if (!walletClient?.writeContract) throw new Error('Monad wallet signer is unavailable');
       let stored = readLeverupAgent(walletAddr);
-      if (!stored) stored = createAndStoreLeverupAgent(walletAddr);
+      if (!stored) stored = createAndStoreLeverupAgent(walletAddr, { scope });
       signerRef.current = stored;
 
       setActivationStep('Checking existing LeverUp V2 agent');
@@ -337,6 +346,7 @@ export function useLeverup() {
         functionName: 'getAgentByName',
         args: [walletAddr, LEVERUP_AGENT_NAME],
       });
+      assertCredentialOperation(scope);
       if (String(namedAgent).toLowerCase() !== LEVERUP_ZERO_ADDRESS
         && String(namedAgent).toLowerCase() !== stored.address.toLowerCase()) {
         setActivationStep('Revoking an unavailable old browser signer');
@@ -348,6 +358,7 @@ export function useLeverup() {
           args: [LEVERUP_AGENT_NAME],
         });
         await publicClient.waitForTransactionReceipt({ hash: revokeHash });
+        assertCredentialOperation(scope);
       }
 
       const currentAuth = await publicClient.readContract({
@@ -356,6 +367,7 @@ export function useLeverup() {
         functionName: 'getAgentAuth',
         args: [walletAddr, stored.address],
       });
+      assertCredentialOperation(scope);
       if (!isLeverupAgentAuthorized(currentAuth, stored.address)) {
         setActivationStep('Authorizing Clash one-click trading');
         const authHash = await walletClient.writeContract({
@@ -366,6 +378,7 @@ export function useLeverup() {
           args: [stored.address, LEVERUP_AGENT_NAME, LEVERUP_CURRENT_PERMISSION_MASK],
         });
         const receipt = await publicClient.waitForTransactionReceipt({ hash: authHash });
+        assertCredentialOperation(scope);
         if (receipt.status !== 'success') throw new Error('LeverUp agent authorization failed onchain');
       }
 
@@ -375,6 +388,7 @@ export function useLeverup() {
         functionName: 'allowance',
         args: [walletAddr, LEVERUP_DIAMOND],
       });
+      assertCredentialOperation(scope);
       if (allowance !== maxLeverupApproval()) {
         setActivationStep('Approving USDC for LeverUp trading');
         const approveHash = await walletClient.writeContract({
@@ -385,10 +399,12 @@ export function useLeverup() {
           args: [LEVERUP_DIAMOND, maxLeverupApproval()],
         });
         const receipt = await publicClient.waitForTransactionReceipt({ hash: approveHash });
+        assertCredentialOperation(scope);
         if (receipt.status !== 'success') throw new Error('LeverUp USDC approval failed onchain');
         feeTokenStatesRef.current = { wallet: null, at: 0, states: new Map() };
       }
       const verified = await verifyOneTap();
+      assertCredentialOperation(scope);
       if (!verified) throw new Error('LeverUp one-click signer did not verify onchain');
       await fetchAccount();
       return { success: true, signer: stored.address };
@@ -400,15 +416,17 @@ export function useLeverup() {
       setActivationStep(null);
       setLoading(false);
     }
-  }, [ensureChain, fetchAccount, getPublicClient, getWalletClient, verifyOneTap, walletAddr, walletMismatch]);
+  }, [ensureChain, fetchAccount, getPublicClient, getWalletClient, verifyOneTap, walletAddr, walletMismatch, captureCredentialOperation, assertCredentialOperation]);
 
   const disableOneTap = useCallback(async () => {
     if (!walletAddr) return { success: true };
-    const stored = readLeverupAgent(walletAddr);
-    if (!stored) return { success: true };
     setLoading(true);
     try {
+      const scope = captureCredentialOperation();
+      const stored = readLeverupAgent(walletAddr);
+      if (!stored) return { success: true };
       await ensureChain(LEVERUP_CHAIN_ID);
+      assertCredentialOperation(scope);
       const publicClient = getPublicClient(LEVERUP_CHAIN_ID);
       const walletClient = getWalletClient(LEVERUP_CHAIN_ID);
       const auth = await publicClient.readContract({
@@ -417,6 +435,7 @@ export function useLeverup() {
         functionName: 'getAgentAuth',
         args: [walletAddr, stored.address],
       });
+      assertCredentialOperation(scope);
       if (String(auth?.agent || '').toLowerCase() !== LEVERUP_ZERO_ADDRESS) {
         const hash = await walletClient.writeContract({
           account: walletAddr,
@@ -426,9 +445,11 @@ export function useLeverup() {
           args: [stored.address],
         });
         const receipt = await publicClient.waitForTransactionReceipt({ hash });
+        assertCredentialOperation(scope);
         if (receipt.status !== 'success') throw new Error('LeverUp signer revocation failed onchain');
       }
-      clearLeverupAgent(walletAddr);
+      await clearLeverupAgent(walletAddr, { scope });
+      assertCredentialOperation(scope);
       signerRef.current = null;
       setOneTapTrading({ enabled: false, approved: false, signer: null, permissions: '0', mode: 'leverup_v2' });
       setSetupVerified(false);
@@ -440,7 +461,7 @@ export function useLeverup() {
     } finally {
       setLoading(false);
     }
-  }, [ensureChain, getPublicClient, getWalletClient, walletAddr]);
+  }, [ensureChain, getPublicClient, getWalletClient, walletAddr, captureCredentialOperation, assertCredentialOperation]);
 
   const setOneTapTradingEnabled = useCallback(async (enabled = true) => (
     enabled ? activate() : disableOneTap()

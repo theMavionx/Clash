@@ -11,6 +11,7 @@ import { encodeFunctionData, formatUnits, formatEther, parseEther } from 'viem';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { useDex } from '../contexts/DexContext';
 import { usePlayer } from './useGodot';
+import { useCredentialOperationScope } from './useCredentialOperationScope';
 import { registeredDexWallet } from '../lib/playerDexAccounts';
 import {
   TRADING_ADDRESS, TRADING_STORAGE_ADDRESS, USDC_ADDRESS,
@@ -508,6 +509,7 @@ export function useAvantis() {
   // GodotProvider's player state (authoritative) and keep it in a ref so
   // the existing `[walletAddr]` deps don't need to include token churn.
   const player = usePlayer();
+  const { capture: captureCredentialOperation, assert: assertCredentialOperation } = useCredentialOperationScope({ player, wallet: walletAddr, dex });
   const tokenRef = useRef(null);
   useEffect(() => {
     tokenRef.current = player?.token || null;
@@ -990,12 +992,16 @@ export function useAvantis() {
   // ───── Guards ─────
   const enableSmartWallet = useCallback(async () => {
     if (!walletClient || !walletAddr || !publicClient) throw new Error('Wallet not connected');
+    const scope = captureCredentialOperation();
     const result = await enableAvantisSmartWallet({
       walletClient,
       walletAddr,
       publicClient,
       ensureChain,
+      scope,
+      assertCurrent: () => assertCredentialOperation(scope),
     });
+    assertCredentialOperation(scope);
     const status = await refreshSmartWallet();
     return {
       tx_hash: result.tx_hash,
@@ -1005,11 +1011,13 @@ export function useAvantis() {
       eth: status?.eth ?? 0,
       valid_until: result.valid_until,
     };
-  }, [walletClient, walletAddr, publicClient, ensureChain, refreshSmartWallet]);
+  }, [walletClient, walletAddr, publicClient, ensureChain, refreshSmartWallet, captureCredentialOperation, assertCredentialOperation]);
 
   const revokeSmartWallet = useCallback(async () => {
     if (!walletClient || !walletAddr || !publicClient) throw new Error('Wallet not connected');
+    const scope = captureCredentialOperation();
     await ensureChain();
+    assertCredentialOperation(scope);
     const hash = await walletClient.writeContract({
       address: TRADING_ADDRESS,
       abi: TRADING_ABI,
@@ -1017,10 +1025,12 @@ export function useAvantis() {
       args: [],
     });
     await waitForReceiptWithTimeout(publicClient, hash);
-    forgetAvantisSmartWalletDelegate(walletAddr);
+    assertCredentialOperation(scope);
+    await forgetAvantisSmartWalletDelegate(walletAddr, { scope });
+    assertCredentialOperation(scope);
     await refreshSmartWallet();
     return { tx_hash: hash, status: 'revoked' };
-  }, [walletClient, walletAddr, publicClient, ensureChain, refreshSmartWallet]);
+  }, [walletClient, walletAddr, publicClient, ensureChain, refreshSmartWallet, captureCredentialOperation, assertCredentialOperation]);
 
   const fundSmartWallet = useCallback(async (amountEth = '0.001') => {
     if (!walletClient || !walletAddr || !publicClient) throw new Error('Wallet not connected');

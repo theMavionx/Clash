@@ -3,6 +3,7 @@ import { formatUnits, parseUnits } from 'viem';
 import { useDex } from '../contexts/DexContext';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { usePlayer } from './useGodot';
+import { useCredentialOperationScope } from './useCredentialOperationScope';
 import { registeredDexWallet } from '../lib/playerDexAccounts';
 import {
   RISE_CHAIN_ID,
@@ -86,6 +87,7 @@ export function useRisex() {
   const { address, provider, getWalletClient, getPublicClient, ensureChain } = useEvmWallet();
   const player = usePlayer();
   const walletAddr = address || null;
+  const { capture: captureCredentialOperation, assert: assertCredentialOperation } = useCredentialOperationScope({ player, wallet: walletAddr, dex });
 
   const [account, setAccount] = useState(null);
   const [positions, setPositions] = useState([]);
@@ -789,10 +791,13 @@ export function useRisex() {
     setError(null);
     setSetupVerified(false);
     try {
+      const scope = captureCredentialOperation();
       if (!walletAddr) throw new Error('Connect your EVM wallet first');
       if (!token) throw new Error('Game session is not ready. Reconnect your wallet.');
       if (typeof ensureChain === 'function') await ensureChain(RISE_CHAIN_ID);
+      assertCredentialOperation(scope);
       let invite = await fetchInviteStatus();
+      assertCredentialOperation(scope);
       const needsInvite = invite && invite.hasAccess === false;
       const inviteCode = normalizeRisexInviteCode(opts?.inviteCode || '');
       const totalSteps = needsInvite ? 5 : 4;
@@ -801,11 +806,14 @@ export function useRisex() {
         if (!inviteCode) throw new Error('Enter your RISEx invite code first');
         setActivationStep({ index: 1, total: totalSteps, label: 'Redeem RISEx invite' });
         await redeemInviteCode(inviteCode);
+        assertCredentialOperation(scope);
         invite = await fetchInviteStatus();
+        assertCredentialOperation(scope);
         if (invite && invite.hasAccess === false) throw new Error('RISEx invite access is still not active');
       }
       let signer = readRisexSigner(walletAddr);
       let verified = signer ? await refreshSignerStatus() : { signerReady: false };
+      assertCredentialOperation(scope);
       if (!signer || !verified.signerReady) {
         setActivationStep({
           index: setupOffset + 1,
@@ -823,7 +831,8 @@ export function useRisex() {
             headers: authHeaders({ 'Content-Type': undefined }),
           }),
         ]);
-        signer = getOrCreateRisexSigner(walletAddr);
+        assertCredentialOperation(scope);
+        signer = getOrCreateRisexSigner(walletAddr, { scope });
         const payload = await createRisexRegisterPayload({
           account: walletAddr,
           signer,
@@ -832,15 +841,19 @@ export function useRisex() {
           provider,
           walletClient,
         });
+        assertCredentialOperation(scope);
         await fetchJson('/api/futures/risex/register-signer?dex=risex', {
           method: 'POST',
           headers: authHeaders(),
           body: JSON.stringify(payload),
         });
-        rememberRisexSigner(walletAddr, signer);
+        assertCredentialOperation(scope);
+        rememberRisexSigner(walletAddr, signer, { scope });
         verified = { signerReady: false };
         for (let i = 0; i < 5; i += 1) {
+          assertCredentialOperation(scope);
           verified = await refreshSignerStatus();
+          assertCredentialOperation(scope);
           if (verified.signerReady) break;
           await new Promise(r => setTimeout(r, 1000));
         }
@@ -850,6 +863,7 @@ export function useRisex() {
       }
 
       const config = verified.builder || await fetchBuilderConfig({ force: true });
+      assertCredentialOperation(scope);
       const hasApproval = verified.builderApproved === true;
       if (!hasApproval) {
         setActivationStep({
@@ -858,6 +872,7 @@ export function useRisex() {
           label: 'Approve Clash builder fee (1 bps)',
         });
         await approveBuilderFee(signer, config);
+        assertCredentialOperation(scope);
       }
 
       setActivationStep({
@@ -866,6 +881,7 @@ export function useRisex() {
         label: 'Enable RISEx TP/SL triggers',
       });
       await ensureTpslAllowance();
+      assertCredentialOperation(scope);
 
       setActivationStep({
         index: setupOffset + 4,
@@ -873,6 +889,7 @@ export function useRisex() {
         label: 'Verify RISEx setup',
       });
       verified = await refreshSignerStatus();
+      assertCredentialOperation(scope);
       if (!verified.ready) {
         throw new Error('RISEx setup was submitted but builder approval is not active yet');
       }
@@ -901,22 +918,28 @@ export function useRisex() {
     fetchBuilderConfig,
     approveBuilderFee,
     ensureTpslAllowance,
+    captureCredentialOperation,
+    assertCredentialOperation,
   ]);
 
   const ensureReady = useCallback(async () => {
+    const scope = captureCredentialOperation();
     if (!walletAddr) throw new Error('Connect your EVM wallet first');
     if (walletMismatch) throw new Error('Connected wallet does not match your registered RISEx wallet');
     const checked = await refreshSignerStatus();
+    assertCredentialOperation(scope);
     if (checked.ready) return readRisexSigner(walletAddr);
     if (readRisexSigner(walletAddr) && !checked.signerReady) {
-      forgetRisexSigner(walletAddr);
+      await forgetRisexSigner(walletAddr, { scope });
+      assertCredentialOperation(scope);
     }
     const activated = await activate();
+    assertCredentialOperation(scope);
     if (activated?.error) throw new Error(activated.error);
     const signer = readRisexSigner(walletAddr);
     if (!signer) throw new Error('RISEx signer is not available');
     return signer;
-  }, [walletAddr, walletMismatch, refreshSignerStatus, activate]);
+  }, [walletAddr, walletMismatch, refreshSignerStatus, activate, captureCredentialOperation, assertCredentialOperation]);
 
   const submitTpslCancel = useCallback(async (orderId, suppliedSigner = null) => {
     const signer = suppliedSigner || await ensureReady();
@@ -937,13 +960,17 @@ export function useRisex() {
   }, [ensureReady, fetchJson, authHeaders, walletAddr]);
 
   const placeOrder = useCallback(async (orderParams) => {
+    const scope = captureCredentialOperation();
     const submit = async () => {
+      assertCredentialOperation(scope);
       const signer = await ensureReady();
+      assertCredentialOperation(scope);
       const [domain, nonceState] = await Promise.all([
         fetchJson('/api/futures/risex/eip712-domain?dex=risex', { headers: authHeaders({ 'Content-Type': undefined }) }),
         fetchJson(`/api/futures/risex/nonce-state?dex=risex&account=${walletAddr}`, { headers: authHeaders({ 'Content-Type': undefined }) }),
       ]);
       const hash = encodeRisexOrder(orderParams);
+      assertCredentialOperation(scope);
       const permit = await createRisexPermit({
         account: walletAddr,
         signer,
@@ -951,6 +978,7 @@ export function useRisex() {
         nonceState,
         hash,
       });
+      assertCredentialOperation(scope);
       return fetchJson('/api/futures/risex/orders/place?dex=risex', {
         method: 'POST',
         headers: authHeaders(),
@@ -964,6 +992,7 @@ export function useRisex() {
     try {
       return await submit();
     } catch (e) {
+      assertCredentialOperation(scope);
       const message = String(e?.message || e);
       const builderRejected = /builder|fee approval|RISEX_BUILDER/i.test(message);
       const signerRejected = /SignerNotAuthorized|InvalidSignature|NotAuthorized|session key|signer/i.test(message);
@@ -976,11 +1005,13 @@ export function useRisex() {
         console.warn('[useRisex] builder approval rejected by RISEx; re-approving', message);
       } else {
         console.warn('[useRisex] stale signer rejected by RISEx; clearing and re-registering', message);
-        forgetRisexSigner(walletAddr);
+        await forgetRisexSigner(walletAddr, { scope });
       }
       setSetupVerified(false);
       setSignerState(null);
+      assertCredentialOperation(scope);
       const activated = await activate();
+      assertCredentialOperation(scope);
       if (activated?.error) throw new Error(activated.error);
       return submit();
     }
@@ -993,6 +1024,8 @@ export function useRisex() {
     fetchBuilderConfig,
     fetchBuilderApprovalStatus,
     builderConfig,
+    captureCredentialOperation,
+    assertCredentialOperation,
   ]);
 
   const importFills = useCallback(async ({ attempts = CLAIM_LOOKBACK_ATTEMPTS, delayMs = 1500 } = {}) => {

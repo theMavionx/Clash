@@ -51,7 +51,7 @@ export default function LighterOneTapConnect({ label = 'Lighter', wallet, connec
       <div style={{fontSize: 11, lineHeight: 1.5, color: 'var(--terminal-text-faint)'}}>
         Existing keys and referrals stay unchanged. {referralCode ? `If no referral exists, this connects with ${referralCode}. ` : ''}
         Clash routing approval is {feeBps} bps and may require another wallet confirmation.
-        The generated key is encrypted in this browser; it is not stored in the Clash database.
+        The generated key is encrypted on this device. Encrypted server sync requires wallet verification; it does not enable bots or server-side trading.
       </div>
       {error && <div role="alert" style={{padding: 12, borderRadius: 10, fontSize: 12, lineHeight: 1.5, color: 'var(--terminal-danger, #ff7777)', background: 'var(--terminal-danger-soft, #4b2222)'}}>{error}</div>}
     </section>

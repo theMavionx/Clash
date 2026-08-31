@@ -2,23 +2,13 @@
  * Nado linked signer browser storage (shared by Futures + Bots).
  */
 import { privateKeyToAccount } from 'viem/accounts';
+import {
+  assertCredentialScope, captureCredentialScope, peekEncryptedCredential,
+  removeEncryptedCredential, writeEncryptedCredential,
+} from './encryptedCredentialStorage.js';
 
 export const NADO_LINKED_SIGNER_STORAGE_PREFIX = 'clash_nado_linked_signer_v1';
 export const NADO_LINKED_SIGNER_TTL_SECONDS = 30 * 24 * 60 * 60;
-
-const runtimeLinkedSignerCache = new Map();
-
-function linkedSignerStorages() {
-  if (typeof window === 'undefined') return null;
-  const storages = [];
-  try {
-    if (window.localStorage) storages.push(window.localStorage);
-  } catch { /* noop */ }
-  try {
-    if (window.sessionStorage) storages.push(window.sessionStorage);
-  } catch { /* noop */ }
-  return storages.length ? storages : null;
-}
 
 export function linkedSignerStorageKey(owner) {
   return `${NADO_LINKED_SIGNER_STORAGE_PREFIX}:${String(owner || '').toLowerCase()}`;
@@ -43,20 +33,8 @@ export function linkedSignerFromPrivateKey(
 
 export function readNadoLinkedSigner(owner) {
   const key = linkedSignerStorageKey(owner);
-  const storages = linkedSignerStorages();
-  const raw = runtimeLinkedSignerCache.get(key) || (() => {
-    if (!storages) return null;
-    for (const storage of storages) {
-      try {
-        const value = storage.getItem(key);
-        if (value) return value;
-      } catch { /* try next */ }
-    }
-    return null;
-  })();
-  if (!raw) return null;
   try {
-    const parsed = JSON.parse(raw);
+    const parsed = peekEncryptedCredential(key);
     if (!isPrivateKey(parsed?.privateKey)) return null;
     if (Number(parsed?.expiresAt || 0) <= Math.floor(Date.now() / 1000) + 60) return null;
     return linkedSignerFromPrivateKey(parsed.privateKey, parsed.expiresAt);
@@ -65,23 +43,28 @@ export function readNadoLinkedSigner(owner) {
   }
 }
 
-export function rememberNadoLinkedSigner(owner, record) {
+export function rememberNadoLinkedSigner(owner, record, options = {}) {
   if (!owner || !record?.privateKey) return record;
+  const scope = options.scope || captureCredentialScope();
+  assertCredentialScope(scope);
   const next = linkedSignerFromPrivateKey(record.privateKey, record.expiresAt);
-  const payload = JSON.stringify({
+  const payload = {
     privateKey: next.privateKey,
     address: next.address,
     expiresAt: next.expiresAt,
-  });
+  };
   const key = linkedSignerStorageKey(owner);
-  runtimeLinkedSignerCache.set(key, payload);
-  const storages = linkedSignerStorages();
-  if (storages) {
-    for (const storage of storages) {
-      try { storage.setItem(key, payload); } catch { /* best-effort */ }
-    }
-  }
+  writeEncryptedCredential(key, payload, { scope }).catch(() => {});
   return next;
+}
+
+export function forgetNadoLinkedSigner(owner, options = {}) {
+  if (!owner) return;
+  const scope = options.scope || captureCredentialScope();
+  assertCredentialScope(scope);
+  const pending = removeEncryptedCredential(linkedSignerStorageKey(owner), { scope });
+  pending.catch(() => {});
+  return pending;
 }
 
 export function nadoSignerAddress(value) {

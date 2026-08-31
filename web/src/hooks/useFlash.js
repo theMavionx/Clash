@@ -5,6 +5,7 @@ import { GPLSESSION_PROGRAMS, SessionTokenManager } from '@magicblock-labs/gum-s
 import { Connection, PublicKey, Transaction, VersionedTransaction } from '@solana/web3.js';
 import { useDex } from '../contexts/DexContext';
 import { usePlayer } from './useGodot';
+import { useCredentialOperationScope } from './useCredentialOperationScope';
 import { registeredDexWallet } from '../lib/playerDexAccounts';
 import {
   clearFlashOneTapAgent,
@@ -1286,6 +1287,7 @@ export function useFlash() {
   const registeredFlashWallet = isActiveDex ? (registeredDexWallet(player, 'flash', 'solana') || '') : '';
   const accountOwner = connectedWalletAddr || registeredFlashWallet;
   const walletAddr = connectedWalletAddr;
+  const { capture: captureCredential, assert: assertCredential } = useCredentialOperationScope({ player, token, wallet: walletAddr, dex: 'flash' });
 
   const [config, setConfig] = useState(null);
   const [markets, setMarkets] = useState([]);
@@ -2058,10 +2060,12 @@ export function useFlash() {
   }, [readFlashAccountSnapshot]);
 
   const setOneTapTradingEnabled = useCallback(async (nextEnabled = true) => {
+    const scope = captureCredential();
     if (!walletAddr) return { error: 'Connect a Solana wallet first' };
     if (walletMismatch) return { error: 'Connected Solana wallet does not match your registered Flash wallet' };
     if (!nextEnabled) {
-      await clearFlashOneTapAgent(walletAddr).catch(() => null);
+      await clearFlashOneTapAgent(walletAddr, { scope });
+      assertCredential(scope);
       oneTapAgentRef.current = null;
       setOneTapTrading(disabledFlashOneTapState());
       return { ok: true, enabled: false };
@@ -2072,13 +2076,15 @@ export function useFlash() {
     setActionLoading(true);
     try {
       const existing = await getFlashOneTapAgent(walletAddr).catch(() => null);
+      assertCredential(scope);
       if (flashOneTapIsUsable(existing, walletAddr)) {
         oneTapAgentRef.current = existing;
         setOneTapTrading(flashOneTapState(existing));
         return { ok: true, enabled: true, signer: existing.publicKey, sessionToken: existing.sessionToken, already_ready: true };
       }
-      if (existing) await clearFlashOneTapAgent(walletAddr).catch(() => null);
-      const agent = await getOrCreateFlashOneTapAgent(walletAddr);
+      if (existing) await clearFlashOneTapAgent(walletAddr, { scope });
+      const agent = await getOrCreateFlashOneTapAgent(walletAddr, { scope });
+      assertCredential(scope);
       const anchorWallet = makeAnchorWallet(solWallet);
       if (!anchorWallet) throw new Error('This Solana wallet cannot sign the Flash session setup transaction.');
       const { connection: setupConnection } = await selectTxConnection({ txKind: 'account', endpoint: 'flash-session-setup' });
@@ -2235,6 +2241,7 @@ export function useFlash() {
         setupSignature = landedSignature;
       }
       await confirmSignature(setupSignature, setupConnection);
+      assertCredential(scope);
       const stored = await markFlashOneTapAgent(walletAddr, {
         enabled: true,
         delegated: true,
@@ -2245,7 +2252,8 @@ export function useFlash() {
         sessionTokenVersion: 2,
         cluster: 'mainnet-beta',
         validUntil,
-      });
+      }, { scope });
+      assertCredential(scope);
       oneTapAgentRef.current = stored;
       setOneTapTrading(flashOneTapState(stored));
       console.info('[Flash one tap] create session done', {
@@ -2263,14 +2271,15 @@ export function useFlash() {
         raw_message: e?.message || String(e || ''),
         data: e?.data || '',
       });
-      await clearFlashOneTapAgent(walletAddr).catch(() => null);
+      // Confirmation may fail after the session landed: preserve its encrypted
+      // signer for recovery, and never clear another login's record here.
       oneTapAgentRef.current = null;
       setOneTapTrading(disabledFlashOneTapState({ enabled: false, approved: false }));
       return { error: msg };
     } finally {
       setActionLoading(false);
     }
-  }, [confirmSignature, selectTxConnection, solWallet, walletAddr, walletMismatch]);
+  }, [confirmSignature, selectTxConnection, solWallet, walletAddr, walletMismatch, captureCredential, assertCredential]);
 
   const tryBuildAndSend = useCallback(async (endpoint, body = {}) => {
     try {

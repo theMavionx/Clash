@@ -6371,7 +6371,7 @@ function FuturesPanel() {
                   color: 'var(--terminal-text-muted)', fontSize: 12, fontWeight: 600,
                   textAlign: 'center', maxWidth: 280, lineHeight: 1.4,
                 }}>
-                  Ostium is non-custodial on Arbitrum. Clash can use a browser-only delegate for one tap trading; USDC stays in your wallet.
+                  Ostium is non-custodial on Arbitrum. One tap orders sign locally with a delegate; USDC stays in your wallet. The key is encrypted on this device, with encrypted server sync after wallet verification.
                 </div>
                 {renderPrivyEmailButton('var(--terminal-text)', 'var(--terminal-text-control)')}
                 <button
@@ -6580,7 +6580,7 @@ function FuturesPanel() {
                   color: 'var(--terminal-text-muted)', fontSize: 12, fontWeight: 600,
                   textAlign: 'center', maxWidth: 310, lineHeight: 1.4,
                 }}>
-                  Connect the EVM wallet that owns your Aster account. Setup creates a browser-only V3 Agent with trading permission and no withdrawal permission.
+                  Connect the EVM wallet that owns your Aster account. Setup creates a V3 Agent with trading permission and no withdrawal permission. Its key is encrypted on this device, with encrypted server sync after wallet verification.
                 </div>
                 {renderPrivyEmailButton('#D98A43', '#9A4F1D')}
                 <button
@@ -6933,7 +6933,7 @@ function FuturesPanel() {
       {
         id: 'agent',
         label: 'Authorize the Clash browser signer',
-        hint: 'One Monad transaction grants only LeverUp V2 actions 0-13. The private key stays in this browser.',
+        hint: 'One Monad transaction authorizes LeverUp V2 trading. The key is encrypted on this device; encrypted server sync requires wallet verification.',
         status: leverupAgentApproved ? 'done' : 'active',
       },
       {
@@ -6967,7 +6967,7 @@ function FuturesPanel() {
             <TradingSetupGate
               kicker="LEVERUP V2 ONE-CLICK"
               title="Enable gasless LeverUp trading"
-              subtitle="Authorize a browser-only trading signer once. Future orders use LeverUp V2 EIP-712 intents without repeated wallet popups."
+              subtitle="Authorize a trading signer once. Future orders sign locally using LeverUp V2 EIP-712 intents without repeated wallet popups."
               logo={DEX_CONFIG.leverup.logo}
               logoAlt="LeverUp V2"
               logoBackground="#151713"
@@ -7005,7 +7005,7 @@ function FuturesPanel() {
                 variant: 'secondary',
                 onClick: () => window.open('https://app.leverup.xyz', '_blank', 'noopener,noreferrer'),
               }}
-              footnote="The local signer can submit LeverUp trading actions only. Reset revokes it onchain before removing the browser key."
+              footnote="The signer submits LeverUp trading actions only. Reset revokes it onchain, removes it on this device and queues deletion from the encrypted server copy."
             />
           </div>
         </div>
@@ -7028,7 +7028,7 @@ function FuturesPanel() {
       {
         id: 'agent',
         label: 'Authorize the Clash Aster Agent',
-        hint: 'The Agent key stays in this browser and can trade perps only. Withdraw permission is disabled.',
+        hint: 'The Agent key is encrypted on this device; encrypted server sync requires wallet verification. Perps trading is allowed; withdrawals are disabled.',
         status: agentApproved ? 'done' : 'active',
       },
       {
@@ -7065,7 +7065,7 @@ function FuturesPanel() {
             <TradingSetupGate
               kicker="ASTER CODE · FUTURES API V3"
               title={builderConfigured ? 'Enable Aster one-tap trading' : 'Aster integration is awaiting the builder wallet'}
-              subtitle={`One owner signature creates a browser-only API Agent. Every opening order is then forced through the approved Clash builder at ${asterFeeLabel}.`}
+              subtitle={`One owner signature creates an API Agent that signs locally. Every opening order is then forced through the approved Clash builder at ${asterFeeLabel}.`}
               logo={DEX_CONFIG.aster.logo}
               logoAlt="Aster"
               logoBackground="#17140F"
@@ -7403,7 +7403,7 @@ function FuturesPanel() {
 
               {(error || localAlert) && <div style={hlGateStyles.errorBox}>{humanizeTradeError(error || localAlert, dex)}</div>}
               <div style={{fontSize: 11, lineHeight: 1.4, color: 'var(--terminal-text-faint)'}}>
-                Keys are encrypted in this browser. Clash servers use them only while proxying your explicit eToro requests and do not store them.
+                Keys are encrypted on this device, with encrypted server sync after wallet verification. eToro requests still require your explicit action; syncing keys does not enable automated trading.
               </div>
             </div>
           </div>
@@ -7577,7 +7577,7 @@ function FuturesPanel() {
                   />
                 </label>
                 <div style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text-faint)', lineHeight: 1.35}}>
-                  The API key is stored only in this browser, encrypted by browser storage. Clash does not write it to the database.
+                  The API key is encrypted on this device. Encrypted server sync requires wallet verification and does not enable automated trading.
                 </div>
               </div>
               )}
@@ -7809,7 +7809,7 @@ function FuturesPanel() {
                   </span>
                   <span style={hlGateStyles.stepText}>
                     <span style={{ ...hlGateStyles.stepLabel, ...(isRunning ? hlGateStyles.stepLabel_active : hlGateStyles.stepLabel_pending) }}>Store Hibachi API key locally</span>
-                    <span style={hlGateStyles.stepHint}>The browser stores your API key, account id, and API private key for signed order requests.</span>
+                    <span style={hlGateStyles.stepHint}>API credentials are encrypted on this device for signed order requests. Encrypted server sync requires wallet verification.</span>
                   </span>
                 </li>
                 <li style={hlGateStyles.stepItem}>
@@ -7888,7 +7888,7 @@ function FuturesPanel() {
                   />
                 </label>
                 <div style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text-faint)', lineHeight: 1.35}}>
-                  Stored in this browser only. Use the private key shown when you create the Hibachi API key.
+                  Encrypted on this device; encrypted server sync requires wallet verification. Use the private key shown when you create the Hibachi API key.
                 </div>
                 <label style={{display: 'flex', alignItems: 'flex-start', gap: 8, cursor: isRunning ? 'default' : 'pointer'}}>
                   <input
@@ -8094,7 +8094,7 @@ function FuturesPanel() {
                       if (res?.error) setLocalAlert(res.error);
                       else {
                         setGrvtApiKeyInput('');
-                        setSuccessMsg('GRVT API key saved in this browser.');
+                        setSuccessMsg('GRVT API key saved encrypted on this device. Server sync requires wallet verification.');
                       }
                     } finally {
                       setReferralLinking(false);
@@ -8148,7 +8148,7 @@ function FuturesPanel() {
                 <span style={hlGateStyles.kicker}>{isRunning ? 'CHECKING' : 'ACTION REQUIRED'}</span>
                 <span style={hlGateStyles.title}>Katana Perps setup</span>
                 <span style={hlGateStyles.subtitle}>
-                  Add your Katana API key and secret, then approve a local delegated key once for one tap trading. Clash stores keys encrypted in this browser only.
+                  Add your Katana API key and secret, then approve a local delegated key once for one tap trading. Keys are encrypted on this device; encrypted server sync requires wallet verification.
                 </span>
               </div>
 
@@ -8197,7 +8197,7 @@ function FuturesPanel() {
                         ? `Missing: ${missingKatanaFields.join(', ')}`
                         : katanaOneTapReady
                         ? `Delegated signer ${oneTapTrading?.signer?.slice?.(0, 6) || ''}...${oneTapTrading?.signer?.slice?.(-4) || ''} is authorized.`
-                        : 'One wallet signature authorizes a browser-only delegated key. Orders then skip wallet popups.'}
+                        : 'One wallet signature authorizes a delegated key that signs locally. Orders then skip wallet popups.'}
                     </span>
                   </span>
                 </li>
@@ -8243,7 +8243,7 @@ function FuturesPanel() {
                   />
                 </label>
                 <div style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text-faint)', lineHeight: 1.35}}>
-                  Do not enter a wallet private key. Katana one tap creates a local delegated key and stores it encrypted in this browser only.
+                  Do not enter a wallet private key. Katana one tap creates a delegated key encrypted on this device, with encrypted server sync after wallet verification.
                 </div>
               </div>
 
@@ -10548,7 +10548,7 @@ function FuturesPanel() {
               </button>
             </div>
             <div style={{fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-faint)', lineHeight: 1.35}}>
-              Stored encrypted in this browser. Balance, margin, positions, and orders are read from Hibachi.
+              Encrypted on this device; encrypted server sync requires wallet verification. Balance, margin, positions, and orders are read from Hibachi.
             </div>
           </div>
         )}
@@ -10588,7 +10588,7 @@ function FuturesPanel() {
               </div>
             </div>
             <div style={{fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-faint)', lineHeight: 1.35}}>
-              Credentials are encrypted in this browser. eToro CFD/margin eligibility controls available direction and leverage.
+              Credentials are encrypted on this device; encrypted server sync requires wallet verification. eToro CFD/margin eligibility controls direction and leverage.
             </div>
           </div>
         )}
@@ -10610,9 +10610,9 @@ function FuturesPanel() {
                 onClick={async () => {
                   try {
                     await disconnect?.();
-                    setLocalAlert('Hotstuff browser trading agent cleared. Set up Hotstuff again to trade.');
+                    setLocalAlert('Hotstuff agent removed on this device. Server deletion is queued if not yet synced; exchange permissions are unchanged.');
                   } catch (e) {
-                    setLocalAlert(e?.message || 'Failed to clear Hotstuff browser trading agent.');
+                    setLocalAlert(e?.message || 'Failed to remove the saved Hotstuff trading agent.');
                   }
                 }}
               >
@@ -10620,7 +10620,7 @@ function FuturesPanel() {
               </button>
             </div>
             <div style={{fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-faint)', lineHeight: 1.35}}>
-              Stored encrypted in this browser. Clearing it only removes the local Hotstuff order signer; your Hotstuff account and funds stay unchanged.
+              Encrypted on this device, with encrypted server sync after wallet verification. Clear removes this device’s copy and queues server deletion; it does not revoke the agent on Hotstuff or change your funds.
             </div>
           </div>
         )}
@@ -10662,7 +10662,7 @@ function FuturesPanel() {
               </div>
             </div>
             <div style={{fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-faint)', lineHeight: 1.35}}>
-              Stored encrypted in this browser only. Changing the key removes the saved approval and asks you to approve the Clash integrator again.
+              Encrypted on this device; encrypted server sync requires wallet verification. Changing the key resets the saved approval and asks you to approve the Clash integrator again.
             </div>
           </div>
         )}
@@ -10783,7 +10783,7 @@ function FuturesPanel() {
           <div style={S.fullCard}>
             <div style={S.row}>
               <span style={{...S.label, color: 'var(--terminal-info)'}}>GRVT account</span>
-              <span style={S.detail}>Browser only</span>
+              <span style={S.detail}>Encrypted keys</span>
             </div>
             <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8}}>
               <div style={{background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 10, padding: '8px 10px'}}>
@@ -10824,7 +10824,7 @@ function FuturesPanel() {
               Change account
             </button>
             <span style={{display: 'block', marginTop: 8, fontSize: 11, color: 'var(--terminal-text-muted)', fontWeight: 700, lineHeight: 1.35}}>
-              GRVT credentials are stored encrypted in this browser only. Private keys are never sent to Clash servers.
+              GRVT credentials are encrypted on this device and on Clash servers when synced after wallet verification. Order signatures remain local; sync does not enable bots.
             </span>
           </div>
         )}
@@ -10926,7 +10926,7 @@ function FuturesPanel() {
                 </label>
               )}
               <div style={{fontSize: 11, color: 'var(--terminal-text-muted)', fontWeight: 600, lineHeight: 1.35}}>
-                API key is used to read your GRVT account. One tap private key stays encrypted in this browser and is used only to sign orders locally.
+                The API key reads your GRVT account; the one tap key signs orders locally. Both are encrypted on this device, with encrypted server sync after wallet verification.
               </div>
               <div style={{display: 'flex', gap: 8}}>
                 <button
@@ -11391,9 +11391,9 @@ function FuturesPanel() {
                   : isHibachi
                   ? <>Hibachi deposit and withdrawal are not exposed through this Clash API flow. Use the official Hibachi app to manage funds on <b>{chainName}</b>.</>
                   : isOstium
-                  ? <>USDC stays in your <b>Arbitrum wallet</b>. One-time setup approves Ostium USDC spending and registers a browser-only delegate. The delegate pays trade gas from a small ETH float; Clash does not sponsor gas.</>
+                  ? <>USDC stays in your <b>Arbitrum wallet</b>. Setup approves Ostium spending and registers a delegate that signs locally. Its key is encrypted on this device, with encrypted server sync after wallet verification. The delegate pays gas from a small ETH float.</>
                   : isLeverup
-                  ? <>USDC stays in your <b>Monad wallet</b>. One-time setup authorizes a browser-only LeverUp V2 agent and approves USDC. V2 order intents are gasless after setup; keep a small <b>MON</b> balance for authorization or allowance changes.</>
+                  ? <>USDC stays in your <b>Monad wallet</b>. Setup authorizes a LeverUp V2 agent and approves USDC. Its key is encrypted on this device, with encrypted server sync after wallet verification. Order intents sign locally; keep <b>MON</b> for setup changes.</>
                   : <>Funds stay in YOUR wallet. Each trade prompts a signature. Make sure you have <b>USDC</b> + a small <b>ETH</b> gas float on <b>{chainName}</b>.</>}
               </span>
             </div>

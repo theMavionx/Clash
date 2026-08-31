@@ -1,4 +1,5 @@
 import { memo, useState, useEffect, useMemo, useCallback } from 'react';
+import { credentialVault } from '../lib/encryptedCredentialStorage';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { usePrivy } from '@privy-io/react-auth';
@@ -300,6 +301,7 @@ function ProfileModal({ onClose }) {
   // because branches silently miss hybrid cases (e.g. user is on Avantis
   // but Privy is also authenticated from a prior Pacifica session).
   const logoutEverything = async () => {
+    credentialVault.lock();
     try {
       localStorage.setItem('clash_manual_reconnect_required', '1');
       window.dispatchEvent(new CustomEvent('clash-auth-manual-reconnect-required'));
@@ -720,12 +722,12 @@ function ProfileModal({ onClose }) {
 
   const clearCredentialDex = useCallback(async (row) => {
     if (!row?.id || !row?.hook?.disconnect || credentialAction) return;
-    if (typeof window !== 'undefined' && !window.confirm(`Clear saved ${row.label} API credentials from this browser?`)) return;
+    if (typeof window !== 'undefined' && !window.confirm(`Remove saved ${row.label} credentials on this device and queue server deletion? This does not revoke the API key at ${row.label}.`)) return;
     setCredentialAction(`${row.id}:clear`);
     setCredentialMessage('');
     try {
       await row.hook.disconnect();
-      setCredentialMessage(`${row.label} API credentials cleared from this browser.`);
+      setCredentialMessage(`${row.label} credentials removed on this device. Server deletion is queued if not yet synced. Exchange permissions are unchanged.`);
     } catch (e) {
       setCredentialMessage(e?.message || `Failed to clear ${row.label} credentials.`);
     } finally {
@@ -1239,7 +1241,7 @@ function ProfileModal({ onClose }) {
               <div style={S.credentialsHead}>
                 <div>
                   <div style={S.walletListTitle}>DEX API credentials</div>
-                  <div style={S.credentialsHint}>Stored encrypted in this browser. Secrets are never displayed here.</div>
+                  <div style={S.credentialsHint}>Encrypted on this device; encrypted server sync requires wallet verification. Secrets are never displayed here. Sync does not enable bots.</div>
                 </div>
               </div>
               {credentialMessage && <div style={S.credentialsMessage}>{credentialMessage}</div>}

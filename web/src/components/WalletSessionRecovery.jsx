@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { credentialVault } from '../lib/encryptedCredentialStorage';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { useDex } from '../contexts/DexContext';
@@ -165,6 +166,7 @@ export default function WalletSessionRecovery() {
   }, [aptosWallet, dex, evmWallet, meta.kind, openSolanaConnect]);
 
   const handleLogout = useCallback(async () => {
+    credentialVault.lock();
     addClientBreadcrumb('wallet.recovery_logout_click', { dex, kind: meta.kind }, 'warn');
     try { localStorage.removeItem(DEX_PICKED_KEY); } catch { /* storage disabled */ }
     try { window._playerToken = null; } catch { /* noop */ }

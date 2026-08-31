@@ -25,6 +25,8 @@ import {
 } from './lib/updateCoordinator';
 import { installTradeFetchCache, prefetchDexTradeData } from './lib/tradePrefetch';
 import WalletSessionRecovery from './components/WalletSessionRecovery';
+import CredentialVaultBoundary from './components/CredentialVaultBoundary';
+import { credentialVault } from './lib/encryptedCredentialStorage';
 // Loading splash assets — served directly from `web/public/` so art can be
 // swapped without rebuilding the bundle. We layer background + logo
 // separately so the logo can be hidden on narrow (phone-portrait) screens
@@ -74,6 +76,7 @@ function prepareLocalGuestSession() {
       const rawAuth = window.localStorage.getItem(GAME_AUTH_STORAGE_KEY);
       if (isLocalGuestAuthRecord(rawAuth)) {
         window.localStorage.removeItem(GAME_AUTH_STORAGE_KEY);
+        credentialVault.lock();
         window._playerToken = null;
       }
       window.localStorage.removeItem('clash.localGuest');
@@ -94,6 +97,7 @@ function prepareLocalGuestSession() {
     }
 
     window.localStorage.removeItem(GAME_AUTH_STORAGE_KEY);
+    credentialVault.lock();
     window.localStorage.setItem('clash.localGuest', guestId);
     window._playerToken = null;
   } catch {
@@ -170,7 +174,7 @@ function AppInner() {
           <div style={styles.container}>
             <ClientInteractiveMarker />
             <GodotCanvas />
-            <GameUI />
+            <CredentialVaultBoundary><GameUI /></CredentialVaultBoundary>
             <ClashMigrationNotice />
             <ClientUpdateNotice />
           </div>

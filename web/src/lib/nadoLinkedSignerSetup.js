@@ -10,15 +10,16 @@ import {
   NADO_CHAIN_ENV,
   NADO_SUBACCOUNT_NAME,
   inkChain,
-} from './nadoConfig';
+} from './nadoConfig.js';
 import {
   linkedSignerFromPrivateKey,
   nadoAddressToBytes32,
   nadoSignerAddress,
   readNadoLinkedSigner,
   rememberNadoLinkedSigner,
-} from './nadoLinkedSignerStorage';
-import { reconcileNadoLinkedSigner } from './nadoLinkedSignerReconcile';
+} from './nadoLinkedSignerStorage.js';
+import { reconcileNadoLinkedSigner } from './nadoLinkedSignerReconcile.js';
+import { assertCredentialScope, captureCredentialScope } from './encryptedCredentialStorage.js';
 
 function createLinkedSignerWalletClient(record) {
   const account = privateKeyToAccount(record.privateKey);
@@ -106,14 +107,22 @@ async function getRemoteLinkedSigner(client, walletAddr) {
 /**
  * Enable Nado one-tap linked signer (wallet signs linkSigner if needed).
  */
-export async function ensureNadoLinkedSignerReady(ctx = {}) {
+export async function ensureNadoLinkedSignerReady(ctx = {}, options = {}) {
+  const scope = options.scope || ctx.scope || ctx.credentialScope || captureCredentialScope();
+  const assertCurrent = () => {
+    assertCredentialScope(scope);
+    (options.assertCurrent || ctx.assertCurrent)?.();
+  };
+  assertCurrent();
   try {
     if (typeof ctx.ensureChain === 'function') {
       await ctx.ensureChain(INK_CHAIN_ID);
+      assertCurrent();
     }
     // Re-resolve AFTER switch so getWalletClient sees Ink provider state.
     const { owner, walletClient, publicClient } = resolveWalletClients(ctx);
     await assertProviderOnInk(walletClient);
+    assertCurrent();
 
     const stored = readNadoLinkedSigner(owner);
     if (stored) {
@@ -123,6 +132,7 @@ export async function ensureNadoLinkedSignerReady(ctx = {}) {
         linkedSignerWalletClient: createLinkedSignerWalletClient(stored),
       });
       const remote = await getRemoteLinkedSigner(linkedClient, owner).catch(() => null);
+      assertCurrent();
       if (nadoSignerAddress(remote?.signer) === stored.address) {
         return { ok: true, wallet: owner };
       }
@@ -131,24 +141,38 @@ export async function ensureNadoLinkedSignerReady(ctx = {}) {
     const ownerClient = createNadoClient(NADO_CHAIN_ENV, { publicClient, walletClient });
     await reconcileNadoLinkedSigner({
       stored: readNadoLinkedSigner(owner),
-      createStandardSigner: async () => linkedSignerFromPrivateKey(
-        (await ownerClient.subaccount.createStandardLinkedSigner(NADO_SUBACCOUNT_NAME)).privateKey,
-      ),
-      getRemote: () => getRemoteLinkedSigner(ownerClient, owner),
+      createStandardSigner: async () => {
+        assertCurrent();
+        const created = await ownerClient.subaccount.createStandardLinkedSigner(NADO_SUBACCOUNT_NAME);
+        assertCurrent();
+        return linkedSignerFromPrivateKey(created.privateKey);
+      },
+      getRemote: async () => {
+        assertCurrent();
+        const remote = await getRemoteLinkedSigner(ownerClient, owner);
+        assertCurrent();
+        return remote;
+      },
       linkSigner: async signer => {
+        assertCurrent();
         try {
           await ownerClient.subaccount.linkSigner({
             subaccountName: NADO_SUBACCOUNT_NAME,
             signer,
           });
+          assertCurrent();
         } catch (err) {
           throw rewriteChainIdError(err);
         }
       },
-      remember: record => rememberNadoLinkedSigner(owner, record),
+      remember: record => {
+        assertCurrent();
+        return rememberNadoLinkedSigner(owner, record, { scope });
+      },
       normalizeSigner: nadoSignerAddress,
       encodeSigner: nadoAddressToBytes32,
     });
+    assertCurrent();
     return { ok: true, wallet: owner };
   } catch (err) {
     throw rewriteChainIdError(err);

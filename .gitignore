@@ -113,6 +113,7 @@ nft/move/**/.aptos/
 /current
 /releases/
 /shared/*
+!/shared/trading_credential_catalog.json
 !/shared/gameplay/
 /shared/gameplay/*
 !/shared/gameplay/flamethrower-defense.v1.json

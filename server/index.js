@@ -86,7 +86,19 @@ app.use(cors({
   },
   credentials: false,
 }));
-app.use(express.json({ limit: process.env.CLASH_JSON_LIMIT || '2mb' }));
+const parseGameJson = express.json({ limit: process.env.CLASH_JSON_LIMIT || '2mb' });
+const parseVaultJson = express.json({ limit: '40kb' });
+app.use((req, res, next) => {
+  if (!req.path.startsWith('/api/players/trading-credentials')) return parseGameJson(req, res, next);
+  res.set('Cache-Control', 'no-store, private');
+  return parseVaultJson(req, res, error => {
+    if (!error) return next();
+    // JSON parse errors can embed the submitted body in their message/stack.
+    // Do not forward credential bodies to the general logger/error handler.
+    return res.status(error.type === 'entity.too.large' ? 413 : 400)
+      .json({ error: 'Invalid secure credential request', code: 'VAULT_INVALID_INPUT' });
+  });
+});
 if (fs.existsSync(WEB_DIST_DIR)) {
   app.use(express.static(WEB_DIST_DIR, { index: false, setHeaders: setWebStaticHeaders }));
 }

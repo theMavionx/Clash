@@ -1,12 +1,15 @@
 import { createWalletClient, http } from 'viem';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
+import {
+  assertCredentialScope, captureCredentialScope, peekEncryptedCredential,
+  removeEncryptedCredential, writeEncryptedCredential,
+} from './encryptedCredentialStorage.js';
 import { base } from 'viem/chains';
-import { BASE_PRIMARY_RPC_URL } from './avantisContract';
+import { BASE_PRIMARY_RPC_URL } from './avantisContract.js';
 
 const STORAGE_PREFIX = 'clash_avantis_smart_wallet_delegate_v1';
 const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000;
 const MIN_VALID_MS = 2 * 60 * 1000;
-const runtimeCache = new Map();
 
 export const AVANTIS_SMART_WALLET_MIN_ETH = 600000000000000n; // 0.0006 ETH
 
@@ -25,70 +28,22 @@ function ttlMs() {
     : DEFAULT_TTL_MS;
 }
 
-function durableStorage() {
-  if (typeof window === 'undefined') return null;
-  try { return window.localStorage || null; } catch { return null; }
-}
-
-function fallbackStorage() {
-  if (typeof window === 'undefined') return null;
-  try { return window.sessionStorage || null; } catch { return null; }
-}
-
 function readStoredPayload(key) {
-  const cached = runtimeCache.get(key);
-  if (cached) return cached;
-
-  const durable = durableStorage();
-  let durableRaw = null;
-  if (durable) {
-    try { durableRaw = durable.getItem(key); } catch { durableRaw = null; }
-  }
-
-  const fallback = fallbackStorage();
-  let fallbackRaw = null;
-  if (fallback) {
-    try { fallbackRaw = fallback.getItem(key); } catch { fallbackRaw = null; }
-  }
-
-  const payloadValidUntil = (raw) => {
-    try { return Number(JSON.parse(raw || '{}')?.validUntil || 0); } catch { return 0; }
-  };
-  const raw = payloadValidUntil(fallbackRaw) > payloadValidUntil(durableRaw)
-    ? fallbackRaw
-    : durableRaw || fallbackRaw;
-
-  if (raw) {
-    runtimeCache.set(key, raw);
-  }
-  if (raw && durable && raw !== durableRaw) {
-    try { durable.setItem(key, raw); } catch { /* storage disabled */ }
-  }
-  return raw;
+  return peekEncryptedCredential(key);
 }
 
-function writeStoredPayload(key, payload) {
-  runtimeCache.set(key, payload);
-  const durable = durableStorage();
-  const fallback = fallbackStorage();
-  if (durable) {
-    try { durable.setItem(key, payload); } catch { /* storage disabled */ }
-  }
-  if (fallback) {
-    try { fallback.setItem(key, payload); } catch { /* storage disabled */ }
-  }
+function writeStoredPayload(key, payload, options = {}) {
+  const scope = options.scope || captureCredentialScope();
+  assertCredentialScope(scope);
+  writeEncryptedCredential(key, payload, { scope }).catch(() => {});
 }
 
-function removeStoredPayload(key) {
-  runtimeCache.delete(key);
-  const durable = durableStorage();
-  if (durable) {
-    try { durable.removeItem(key); } catch { /* storage disabled */ }
-  }
-  const fallback = fallbackStorage();
-  if (fallback) {
-    try { fallback.removeItem(key); } catch { /* storage disabled */ }
-  }
+function removeStoredPayload(key, options = {}) {
+  const scope = options.scope || captureCredentialScope();
+  assertCredentialScope(scope);
+  const pending = removeEncryptedCredential(key, { scope });
+  pending.catch(() => {});
+  return pending;
 }
 
 function storageKey(owner) {
@@ -105,14 +60,14 @@ function fromPrivateKey(privateKey, validUntil = Date.now() + ttlMs()) {
   };
 }
 
-function persist(owner, record) {
+function persist(owner, record, options = {}) {
   const key = storageKey(owner);
-  const payload = JSON.stringify({
+  const payload = {
     privateKey: record.privateKey,
     address: record.address,
     validUntil: record.validUntil,
-  });
-  writeStoredPayload(key, payload);
+  };
+  writeStoredPayload(key, payload, options);
 }
 
 export function readAvantisSmartWalletDelegate(owner) {
@@ -122,7 +77,7 @@ export function readAvantisSmartWalletDelegate(owner) {
   const raw = readStoredPayload(storageId);
   if (!raw) return null;
   try {
-    const parsed = JSON.parse(raw);
+    const parsed = raw;
     if (!isPrivateKey(parsed?.privateKey)) {
       removeStoredPayload(storageId);
       return null;
@@ -138,30 +93,32 @@ export function readAvantisSmartWalletDelegate(owner) {
   }
 }
 
-export function getOrCreateAvantisSmartWalletDelegate(owner) {
+export function getOrCreateAvantisSmartWalletDelegate(owner, options = {}) {
   const key = String(owner || '').toLowerCase();
   if (!isAddress(key)) throw new Error('Connect your Base wallet first');
+  const scope = options.scope || captureCredentialScope();
+  assertCredentialScope(scope);
   const existing = readAvantisSmartWalletDelegate(key);
   if (existing) return existing;
   const next = fromPrivateKey(generatePrivateKey(), Date.now() + ttlMs());
-  persist(key, next);
+  persist(key, next, { scope });
   return next;
 }
 
-export function forgetAvantisSmartWalletDelegate(owner) {
+export function forgetAvantisSmartWalletDelegate(owner, options = {}) {
   const key = storageKey(owner);
-  removeStoredPayload(key);
+  return removeStoredPayload(key, options);
 }
 
 /** Import delegate key pasted in Bots (same storage as Futures smart wallet). */
-export function importAvantisSmartWalletDelegate(owner, privateKey) {
+export function importAvantisSmartWalletDelegate(owner, privateKey, options = {}) {
   const key = String(owner || '').toLowerCase();
   if (!isAddress(key)) throw new Error('Connect your Base wallet (0x…).');
   const raw = String(privateKey || '').trim();
   const pk = raw.startsWith('0x') ? raw : `0x${raw}`;
   if (!isPrivateKey(pk)) throw new Error('Invalid Avantis delegate private key (0x + 64 hex).');
   const record = fromPrivateKey(pk, Date.now() + ttlMs());
-  persist(key, record);
+  persist(key, record, options);
   return record;
 }
 

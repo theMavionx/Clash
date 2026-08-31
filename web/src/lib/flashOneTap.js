@@ -4,6 +4,8 @@ import {
   readEncryptedCredential,
   removeEncryptedCredential,
   writeEncryptedCredential,
+  captureCredentialScope,
+  assertCredentialScope,
 } from './encryptedCredentialStorage';
 
 const STORAGE_PREFIX = 'clash_flash_one_tap_agent_v1';
@@ -67,8 +69,11 @@ export async function getFlashOneTapAgent(owner) {
   return { ...record, keypair };
 }
 
-export async function getOrCreateFlashOneTapAgent(owner) {
+export async function getOrCreateFlashOneTapAgent(owner, options = {}) {
+  const scope = options.scope || captureCredentialScope();
+  assertCredentialScope(scope);
   const existing = await getFlashOneTapAgent(owner);
+  assertCredentialScope(scope);
   if (existing) return existing;
   const keypair = Keypair.generate();
   const now = Date.now();
@@ -84,12 +89,16 @@ export async function getOrCreateFlashOneTapAgent(owner) {
     delegatedAt: null,
     setupSignature: '',
   };
-  await writeEncryptedCredential(storageKey(owner), record);
+  await writeEncryptedCredential(storageKey(owner), record, { scope });
+  assertCredentialScope(scope);
   return { ...record, keypair };
 }
 
-export async function markFlashOneTapAgent(owner, patch = {}) {
+export async function markFlashOneTapAgent(owner, patch = {}, options = {}) {
+  const scope = options.scope || captureCredentialScope();
+  assertCredentialScope(scope);
   const existing = await getFlashOneTapAgent(owner);
+  assertCredentialScope(scope);
   if (!existing) return null;
   const { keypair: _keypair, ...plain } = existing;
   const next = normalizeRecord({
@@ -97,11 +106,11 @@ export async function markFlashOneTapAgent(owner, patch = {}) {
     ...patch,
     updatedAt: Date.now(),
   });
-  await writeEncryptedCredential(storageKey(owner), next);
+  await writeEncryptedCredential(storageKey(owner), next, { scope });
+  assertCredentialScope(scope);
   return getFlashOneTapAgent(owner);
 }
 
-export async function clearFlashOneTapAgent(owner) {
-  await removeEncryptedCredential(storageKey(owner));
-  try { window.localStorage.removeItem(storageKey(owner)); } catch {}
+export async function clearFlashOneTapAgent(owner, options) {
+  await removeEncryptedCredential(storageKey(owner), options);
 }

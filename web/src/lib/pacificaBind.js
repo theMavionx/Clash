@@ -3,9 +3,10 @@
  */
 import bs58 from 'bs58';
 import { ed25519 } from '@noble/curves/ed25519';
-import { pacificaNow } from './pacificaTime';
-import { pacificaRequest } from './pacificaClient';
-import { persistPacificaAgent } from './pacificaAgentStorage';
+import { pacificaNow } from './pacificaTime.js';
+import { pacificaRequest } from './pacificaClient.js';
+import { persistPacificaAgent } from './pacificaAgentStorage.js';
+import { assertCredentialScope, captureCredentialScope } from './encryptedCredentialStorage.js';
 
 const PACIFICA_SIGN_EXPIRY_WINDOW_MS = 30_000;
 
@@ -32,17 +33,21 @@ function generateAgentKeypair() {
  * One-time master-wallet signature → bind agent on Pacifica + persist locally.
  * @param {{ walletAddr: string, masterSign: (msg: Uint8Array) => Promise<Uint8Array> }} opts
  */
-export async function bindPacificaAgent({ walletAddr, masterSign }) {
+export async function bindPacificaAgent({ walletAddr, masterSign, scope: suppliedScope, assertCurrent: assertCallerCurrent }) {
   if (!walletAddr || !masterSign) {
     throw new Error('Solana wallet not connected');
   }
-
+  const scope = suppliedScope || captureCredentialScope();
+  const assertCurrent = () => { assertCredentialScope(scope); assertCallerCurrent?.(); };
+  assertCurrent();
+  const gameToken = typeof window !== 'undefined' ? window._playerToken : null;
   const { secret, pubkey } = generateAgentKeypair();
   const agentPubkeyB58 = bs58.encode(pubkey);
   const timestamp = pacificaNow();
   const message = buildMessage('bind_agent_wallet', { agent_wallet: agentPubkeyB58 }, timestamp);
   const msgBytes = new TextEncoder().encode(message);
   const sigBytes = await masterSign(msgBytes);
+  assertCurrent();
   if (!sigBytes?.length) throw new Error('No signature returned');
   const signature = bs58.encode(sigBytes);
 
@@ -59,6 +64,7 @@ export async function bindPacificaAgent({ walletAddr, masterSign }) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
+  assertCurrent();
   const { response: res, text } = result;
   const data = result.data && typeof result.data === 'object' ? result.data : null;
   if (!res.ok || data?.error) {
@@ -66,14 +72,15 @@ export async function bindPacificaAgent({ walletAddr, masterSign }) {
   }
 
   const createdAt = Date.now();
-  persistPacificaAgent(walletAddr, {
+  await persistPacificaAgent(walletAddr, {
     agentSecretB58: bs58.encode(secret),
     agentPubkey: agentPubkeyB58,
     createdAt,
-  });
+  }, { scope });
+  assertCurrent();
 
   try {
-    const token = window._playerToken;
+    const token = gameToken;
     if (token) {
       fetch('/api/pacifica/agent', {
         method: 'POST',

@@ -3526,7 +3526,7 @@ function AvantisSmartWalletSetupModal({ flow, walletUsdc, onSettingsChange, onSe
           </div>
 
           <div style={topUpStyles.pendingBox}>
-            Your USDC stays in your EOA wallet. The delegate key is saved in this browser profile {expiryText}, so reloads and new tabs keep auto-trading available. It is never sent to Clash servers. Use Revoke to disable it on-chain.
+            Your USDC stays in your EOA wallet. The delegate key is encrypted on this device {expiryText}; encrypted server sync requires wallet verification. Trading still signs locally, and AI trading permissions remain separate. Use Revoke to disable the delegate on-chain.
           </div>
 
           {needsEth && (

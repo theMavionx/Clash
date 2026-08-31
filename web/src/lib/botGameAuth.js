@@ -30,6 +30,7 @@ import {
 } from './ostiumOneTapSetup';
 import { OSTIUM_CHAIN_ID } from './ostiumConfig';
 import { resolveDecibelActivation } from './decibelSubaccountCache';
+import { assertCredentialScope, captureCredentialScope } from './encryptedCredentialStorage';
 
 export function solanaWalletsForPlayer(player, dex = '', ctx = {}) {
   const out = [];
@@ -70,7 +71,8 @@ async function ensurePacificaReady(player, ctx = {}) {
   }
   for (const m of listStoredPacificaMasters()) add(m);
 
-  const existing = await findAnyPacificaAgent(preferred);
+  const existing = await findAnyPacificaAgent(preferred, { scope: ctx.credentialScope });
+  ctx.assertCurrent();
   if (existing?.privateKey) return { ok: true, wallet: existing.master };
 
   const primary = preferred[0] || '';
@@ -88,12 +90,18 @@ async function ensurePacificaReady(player, ctx = {}) {
   try {
     await bindPacificaAgent({
       walletAddr: primary,
+      scope: ctx.credentialScope,
+      assertCurrent: ctx.assertCurrent,
       masterSign: async (bytes) => {
+        ctx.assertCurrent();
         const sig = await signMessage(bytes);
+        ctx.assertCurrent();
         return sig instanceof Uint8Array ? sig : new Uint8Array(sig);
       },
     });
-    const agent = await readPacificaAgent(primary);
+    ctx.assertCurrent();
+    const agent = await readPacificaAgent(primary, { scope: ctx.credentialScope });
+    ctx.assertCurrent();
     if (agent?.privateKey) return { ok: true, wallet: primary };
     return { ok: false, error: 'Pacifica agent bind finished but the key was not saved in the browser.' };
   } catch (e) {
@@ -109,7 +117,8 @@ async function ensureHyperliquidReady(player, ctx = {}) {
   }
 
   for (const w of [primary, ...wallets.filter((x) => x !== primary)]) {
-    const agent = await readHyperliquidAgentAsync(w);
+    const agent = await readHyperliquidAgentAsync(w, { scope: ctx.credentialScope });
+    ctx.assertCurrent();
     if (agent?.privateKey) return { ok: true, wallet: w };
   }
 
@@ -119,8 +128,12 @@ async function ensureHyperliquidReady(player, ctx = {}) {
       evmProvider: ctx.evmProvider,
       walletClient: ctx.walletClient,
       ensureChain: ctx.ensureChain,
+      scope: ctx.credentialScope,
+      assertCurrent: ctx.assertCurrent,
     });
-    const agent = await readHyperliquidAgentAsync(primary);
+    ctx.assertCurrent();
+    const agent = await readHyperliquidAgentAsync(primary, { scope: ctx.credentialScope });
+    ctx.assertCurrent();
     if (agent?.privateKey) return { ok: true, wallet: primary };
     return { ok: false, error: 'Hyperliquid agent setup finished but key was not saved.' };
   } catch (e) {
@@ -140,7 +153,8 @@ async function ensureHotstuffReady(player, ctx = {}) {
   }
 
   for (const w of [primary, ...wallets.filter((x) => x !== primary)]) {
-    const agent = await loadHotstuffStoredAgent(w);
+    const agent = await loadHotstuffStoredAgent(w, { scope: ctx.credentialScope });
+    ctx.assertCurrent();
     if (agent?.privateKey) return { ok: true, wallet: w };
   }
 
@@ -153,8 +167,13 @@ async function ensureHotstuffReady(player, ctx = {}) {
       walletAddress: primary,
       walletClient,
       switchChain: ctx.switchChain || ctx.ensureChain,
+      credentialScope: ctx.credentialScope,
+      scope: ctx.credentialScope,
+      assertCurrent: ctx.assertCurrent,
     });
-    const agent = await loadHotstuffStoredAgent(primary);
+    ctx.assertCurrent();
+    const agent = await loadHotstuffStoredAgent(primary, { scope: ctx.credentialScope });
+    ctx.assertCurrent();
     if (agent?.privateKey) return { ok: true, wallet: primary };
     return { ok: false, error: 'Hotstuff agent setup finished but key was not saved.' };
   } catch (e) {
@@ -189,6 +208,9 @@ async function ensureNadoReady(player, ctx = {}) {
     // replace it. Always verify/repair remotely before the bot exports a key.
     await ensureNadoLinkedSignerReady({
       walletAddress: primary,
+      credentialScope: ctx.credentialScope,
+      scope: ctx.credentialScope,
+      assertCurrent: ctx.assertCurrent,
       // Never pass default Base walletClient — Nado is Ink (57073).
       walletClient: ctx.getWalletClient?.(INK_CHAIN_ID) || null,
       publicClient: ctx.getPublicClient?.(INK_CHAIN_ID) || null,
@@ -198,6 +220,7 @@ async function ensureNadoReady(player, ctx = {}) {
         ? () => ctx.ensureChain(INK_CHAIN_ID)
         : null,
     });
+    ctx.assertCurrent();
     const linked = readNadoLinkedSigner(primary);
     if (linked?.privateKey) return { ok: true, wallet: primary };
     return { ok: false, error: 'Nado linked signer setup finished but key was not saved.' };
@@ -221,12 +244,14 @@ async function ensureOstiumReady(player, ctx = {}) {
     : null;
 
   for (const w of ordered) {
-    const futuresDelegate = await loadOstiumDelegate(w).catch(() => null);
+    const futuresDelegate = await loadOstiumDelegate(w, { scope: ctx.credentialScope }).catch(() => null);
+    ctx.assertCurrent();
     const legacy = readOstiumSmartWalletDelegate(w);
     const hasKey = !!(futuresDelegate?.privateKey || legacy?.privateKey);
     if (!hasKey) continue;
     if (publicClient) {
-      const status = await refreshOstiumOneTapStatus(publicClient, w);
+      const status = await refreshOstiumOneTapStatus(publicClient, w, { scope: ctx.credentialScope, assertCurrent: ctx.assertCurrent });
+      ctx.assertCurrent();
       if (status?.active && !status.needsEth) {
         return { ok: true, wallet: w };
       }
@@ -268,7 +293,10 @@ async function ensureOstiumReady(player, ctx = {}) {
       publicClient,
       ensureChain,
       topUpGas: true,
+      scope: ctx.credentialScope,
+      assertCurrent: ctx.assertCurrent,
     });
+    ctx.assertCurrent();
     if (!result?.active && !result?.address) {
       return { ok: false, error: 'Ostium one-tap setup finished but delegate was not saved.' };
     }
@@ -304,7 +332,8 @@ async function ensureAvantisReady(player, ctx = {}) {
     const delegate = readAvantisSmartWalletDelegate(w);
     if (!delegate?.privateKey) continue;
     if (publicClient) {
-      const status = await refreshAvantisSmartWalletStatus(publicClient, w);
+      const status = await refreshAvantisSmartWalletStatus(publicClient, w, { scope: ctx.credentialScope, assertCurrent: ctx.assertCurrent });
+      ctx.assertCurrent();
       if (status?.active) return { ok: true, wallet: w };
     } else {
       return { ok: true, wallet: w };
@@ -331,7 +360,10 @@ async function ensureAvantisReady(player, ctx = {}) {
       walletAddr: primary,
       publicClient,
       ensureChain,
+      scope: ctx.credentialScope,
+      assertCurrent: ctx.assertCurrent,
     });
+    ctx.assertCurrent();
     if (!result.active) {
       return { ok: false, error: 'On-chain delegate did not match after setup. Try again.' };
     }
@@ -352,6 +384,7 @@ async function ensureAvantisReady(player, ctx = {}) {
 
 async function ensureKatanaReady(player, ctx = {}) {
   const creds = await loadKatanaStoredCredentials();
+  ctx.assertCurrent();
   if (!creds) {
     return { ok: false, error: 'No Katana API credentials. Activate Katana in Futures.' };
   }
@@ -360,7 +393,8 @@ async function ensureKatanaReady(player, ctx = {}) {
   if (!primary) {
     return { ok: false, error: 'Connect EVM wallet for Katana (same wallet as Futures → Katana).' };
   }
-  const stored = await loadKatanaStoredOneTapSigner(primary);
+  const stored = await loadKatanaStoredOneTapSigner(primary, { scope: ctx.credentialScope });
+  ctx.assertCurrent();
   if (stored?.privateKey) return { ok: true, wallet: primary };
   return ensureKatanaOneTapReady({
     ...ctx,
@@ -371,6 +405,7 @@ async function ensureKatanaReady(player, ctx = {}) {
 
 async function ensureDecibelReady(player, ctx = {}) {
   const resolved = await resolveDecibelActivation(player, ctx);
+  ctx.assertCurrent();
   if (!resolved.ok) {
     return {
       ok: false,
@@ -386,6 +421,7 @@ async function ensureDecibelReady(player, ctx = {}) {
         headers: { 'x-token': token, 'x-dex': 'decibel' },
       });
       const body = await res.json().catch(() => ({}));
+      ctx.assertCurrent();
       if (!res.ok) {
         return {
           ok: false,
@@ -423,7 +459,8 @@ async function ensureFlashReady(player, ctx = {}) {
   };
 
   for (const sol of preferred) {
-    const agent = await getFlashOneTapAgent(sol);
+    const agent = await getFlashOneTapAgent(sol, { scope: ctx.credentialScope });
+    ctx.assertCurrent();
     if (isUsable(agent)) return { ok: true, wallet: sol };
   }
 
@@ -445,9 +482,14 @@ async function ensureFlashReady(player, ctx = {}) {
       solWallet,
       walletAddr: primary,
       playerToken,
+      credentialScope: ctx.credentialScope,
+      scope: ctx.credentialScope,
+      assertCurrent: ctx.assertCurrent,
     });
+    ctx.assertCurrent();
     if (result?.error) return { ok: false, error: result.error };
-    const agent = await getFlashOneTapAgent(primary);
+    const agent = await getFlashOneTapAgent(primary, { scope: ctx.credentialScope });
+    ctx.assertCurrent();
     if (isUsable(agent)) return { ok: true, wallet: primary };
     return { ok: false, error: 'Flash one-tap setup finished but session is not active yet.' };
   } catch (e) {
@@ -464,6 +506,19 @@ async function ensureFlashReady(player, ctx = {}) {
  * @returns {Promise<{ ok: true } | { ok: false, error: string }>}
  */
 export async function ensureGameExchangeReady(exchangeId, player, ctx = {}) {
+  const scope = ctx.credentialScope || captureCredentialScope();
+  const assertCurrent = () => {
+    assertCredentialScope(scope, ctx.playerToken === undefined ? {} : { token: ctx.playerToken });
+    if (player?.id && String(player.id) !== scope.playerId) throw new Error('Trading account changed. Please retry.');
+    ctx.assertCurrent?.();
+  };
+  assertCurrent();
+  const result = await ensureGameExchangeReadyInner(exchangeId, player, { ...ctx, credentialScope: scope, assertCurrent });
+  assertCurrent();
+  return result;
+}
+
+async function ensureGameExchangeReadyInner(exchangeId, player, ctx) {
   const ex = String(exchangeId || '').toLowerCase();
   if (ex === 'pacifica') return ensurePacificaReady(player, ctx);
   if (ex === 'flash') return ensureFlashReady(player, ctx);

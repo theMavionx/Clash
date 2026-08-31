@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDex } from '../contexts/DexContext';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { usePlayer } from './useGodot';
+import { useCredentialOperationScope } from './useCredentialOperationScope';
 import { registeredDexWallet } from '../lib/playerDexAccounts';
 import {
   ASTER_AGENT_NAME,
@@ -87,6 +88,7 @@ export function useAster() {
   const { address, provider, getWalletClient } = useEvmWallet();
   const player = usePlayer();
   const walletAddr = isAddress(address) ? String(address).toLowerCase() : null;
+  const { capture: captureCredentialOperation, assert: assertCredentialOperation } = useCredentialOperationScope({ player, wallet: walletAddr, dex });
   const gameToken = useMemo(() => (
     (typeof window !== 'undefined' ? window._playerToken : null) || player?.token || null
   ), [player?.token]);
@@ -319,6 +321,8 @@ export function useAster() {
   }, [gameToken, normalizeOrders, normalizePositions, setupVerified, signedAgentRequest, walletAddr, walletMismatch]);
 
   const verifyOneTap = useCallback(async ({ quiet = false, recordOverride = null, builderOverride = null, requireBuilder = true } = {}) => {
+    let scope;
+    try { scope = captureCredentialOperation(); } catch { return false; }
     if (!walletAddr || walletMismatch) {
       agentRef.current = null;
       setOneTapTrading(EMPTY_ONE_TAP);
@@ -338,6 +342,7 @@ export function useAster() {
         signedAgentRequest('/fapi/v3/agent', 'GET', [], record),
         builder?.configured ? signedAgentRequest('/fapi/v3/builder', 'GET', [], record) : Promise.resolve([]),
       ]);
+      assertCredentialOperation(scope);
       const agent = (Array.isArray(agents) ? agents : []).find(row => (
         String(row?.agentAddress || '').toLowerCase() === record.address
       ));
@@ -363,12 +368,13 @@ export function useAster() {
       setSetupVerified(verified);
       return approved && (!requireBuilder || verified);
     } catch (requestError) {
+      try { assertCredentialOperation(scope); } catch { return false; }
       if (!quiet) setError(requestError?.message || 'Aster Agent verification failed');
       setOneTapTrading({ ...EMPTY_ONE_TAP, signer: record.address });
       setSetupVerified(false);
       return false;
     }
-  }, [signedAgentRequest, walletAddr, walletMismatch]);
+  }, [signedAgentRequest, walletAddr, walletMismatch, captureCredentialOperation, assertCredentialOperation]);
 
   const activate = useCallback(async () => {
     if (!walletAddr) return { error: 'Connect your EVM wallet first' };
@@ -376,10 +382,12 @@ export function useAster() {
     setLoading(true);
     setError(null);
     try {
+      const scope = captureCredentialOperation();
       const builder = await fetchConfig();
+      assertCredentialOperation(scope);
       let record = readAsterAgent(walletAddr);
       if (!record || Number(record.expired || 0) <= Date.now() + (24 * 60 * 60 * 1000)) {
-        record = createAndStoreAsterAgent(walletAddr);
+        record = createAndStoreAsterAgent(walletAddr, { scope });
       }
       agentRef.current = record;
 
@@ -399,6 +407,7 @@ export function useAster() {
         ] : []),
       ];
       await managementRequest('/fapi/v3/approveAgent', 'POST', 'ApproveAgent', approveEntries);
+      assertCredentialOperation(scope);
 
       if (builder?.configured) {
         setActivationStep({ index: 2, label: 'Verifying the Clash builder fee approval' });
@@ -406,12 +415,14 @@ export function useAster() {
         setActivationStep({ index: 2, label: 'Builder address pending; enabling read and risk controls' });
       }
       const verified = await verifyOneTap({ recordOverride: record, builderOverride: builder });
+      assertCredentialOperation(scope);
       const agentReady = verified || await verifyOneTap({
         quiet: true,
         recordOverride: record,
         builderOverride: builder,
         requireBuilder: false,
       });
+      assertCredentialOperation(scope);
       if (!verified && builder?.configured) throw new Error('Aster Agent or builder approval did not verify through API V3');
       if (agentReady) await fetchAccount({ force: true });
       return { success: true, signer: record.address, builder_pending: !builder?.configured };
@@ -423,20 +434,23 @@ export function useAster() {
       setActivationStep(null);
       setLoading(false);
     }
-  }, [fetchAccount, fetchConfig, managementRequest, verifyOneTap, walletAddr, walletMismatch]);
+  }, [fetchAccount, fetchConfig, managementRequest, verifyOneTap, walletAddr, walletMismatch, captureCredentialOperation, assertCredentialOperation]);
 
   const disconnect = useCallback(async () => {
     if (!walletAddr) return { success: true };
-    const record = readAsterAgent(walletAddr);
     setLoading(true);
     try {
+      const scope = captureCredentialOperation();
+      const record = readAsterAgent(walletAddr);
       if (record) {
         setActivationStep({ index: 1, label: 'Revoking the Clash Aster Agent' });
         await managementRequest('/fapi/v3/agent', 'DELETE', 'DelAgent', [
           ['agentAddress', record.address],
         ]);
       }
-      clearAsterAgent(walletAddr);
+      assertCredentialOperation(scope);
+      await clearAsterAgent(walletAddr, { scope });
+      assertCredentialOperation(scope);
       agentRef.current = null;
       setOneTapTrading(EMPTY_ONE_TAP);
       setSetupVerified(false);
@@ -449,7 +463,7 @@ export function useAster() {
       setActivationStep(null);
       setLoading(false);
     }
-  }, [managementRequest, walletAddr]);
+  }, [managementRequest, walletAddr, captureCredentialOperation, assertCredentialOperation]);
 
   const setOneTapTradingEnabled = useCallback(async (enabled = true) => (
     enabled ? activate() : disconnect()

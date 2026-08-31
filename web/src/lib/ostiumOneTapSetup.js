@@ -11,19 +11,27 @@ import {
   ERC20_ABI,
   TRADING_ABI,
   fetchOstiumDelegate,
-} from './ostiumContract';
+} from './ostiumContract.js';
 import {
   OSTIUM_DELEGATE_MIN_ETH,
   OSTIUM_DELEGATE_TARGET_ETH,
   OSTIUM_CHAIN_ID,
-} from './ostiumConfig';
+} from './ostiumConfig.js';
 import {
   ensureOstiumDelegate,
   loadOstiumDelegate,
-} from './ostiumDelegateWallet';
+} from './ostiumDelegateWallet.js';
+import { assertCredentialScope, captureCredentialScope } from './encryptedCredentialStorage.js';
 
 const TX_TIMEOUT_MS = 90_000;
 const MAX_UINT256 = (1n << 256n) - 1n;
+
+function operationScope(options = {}) {
+  const scope = options.scope || captureCredentialScope();
+  const assertCurrent = () => { assertCredentialScope(scope); options.assertCurrent?.(); };
+  assertCurrent();
+  return { scope, assertCurrent };
+}
 
 function safeParseEther(value, fallback) {
   try {
@@ -49,12 +57,14 @@ async function waitForReceiptWithTimeout(publicClient, hash) {
   }
 }
 
-export async function refreshOstiumOneTapStatus(publicClient, walletAddr) {
+export async function refreshOstiumOneTapStatus(publicClient, walletAddr, options = {}) {
   const owner = String(walletAddr || '').toLowerCase();
   if (!owner || !publicClient) return null;
-
-  const local = await loadOstiumDelegate(owner).catch(() => null);
+  const { scope, assertCurrent } = operationScope(options);
+  const local = await loadOstiumDelegate(owner, { scope }).catch(() => null);
+  assertCurrent();
   const onchain = await fetchOstiumDelegate(publicClient, owner);
+  assertCurrent();
   const onchainLower = String(onchain || '').toLowerCase();
 
   if (!local?.address) {
@@ -75,6 +85,7 @@ export async function refreshOstiumOneTapStatus(publicClient, walletAddr) {
   } catch {
     ethRaw = 0n;
   }
+  assertCurrent();
 
   return {
     address: local.address,
@@ -87,7 +98,8 @@ export async function refreshOstiumOneTapStatus(publicClient, walletAddr) {
   };
 }
 
-async function ensureOstiumUsdcApproval({ walletClient, walletAddr, publicClient }) {
+async function ensureOstiumUsdcApproval({ walletClient, walletAddr, publicClient, assertCurrent }) {
+  assertCurrent();
   let allowance;
   try {
     allowance = await publicClient.readContract({
@@ -99,6 +111,7 @@ async function ensureOstiumUsdcApproval({ walletClient, walletAddr, publicClient
   } catch {
     throw new Error('Could not read USDC allowance — RPC unavailable');
   }
+  assertCurrent();
   if (allowance >= MAX_UINT256 / 2n) return null;
 
   const hash = await walletClient.writeContract({
@@ -108,6 +121,7 @@ async function ensureOstiumUsdcApproval({ walletClient, walletAddr, publicClient
     args: [TRADING_STORAGE_ADDRESS, MAX_UINT256],
   });
   await waitForReceiptWithTimeout(publicClient, hash);
+  assertCurrent();
   return hash;
 }
 
@@ -122,8 +136,11 @@ async function topUpDelegateGasFromMetamask({
   publicClient,
   delegateAddress,
   force = false,
+  assertCurrent,
 }) {
+  assertCurrent();
   const current = await publicClient.getBalance({ address: delegateAddress }).catch(() => 0n);
+  assertCurrent();
   if (current >= DELEGATE_GAS_MIN_WEI && !force) {
     return { skipped: true, eth: Number(formatEther(current)) };
   }
@@ -158,6 +175,7 @@ async function topUpDelegateGasFromMetamask({
   }
 
   const walletBalance = await publicClient.getBalance({ address: walletAddr }).catch(() => null);
+  assertCurrent();
   const cushion = gasCost > 0n ? gasCost : parseEther('0.00005');
   if (walletBalance != null && walletBalance < amount + cushion) {
     const err = new Error(
@@ -176,7 +194,9 @@ async function topUpDelegateGasFromMetamask({
     gas: gasLimit,
   });
   await waitForReceiptWithTimeout(publicClient, hash);
+  assertCurrent();
   const after = await publicClient.getBalance({ address: delegateAddress }).catch(() => current + amount);
+  assertCurrent();
   return {
     skipped: false,
     tx_hash: hash,
@@ -194,22 +214,30 @@ export async function topUpOstiumDelegateGas({
   publicClient,
   ensureChain,
   force = true,
+  scope: suppliedScope,
+  assertCurrent: assertCallerCurrent,
 }) {
   if (!walletClient || !walletAddr || !publicClient) {
     throw new Error('Connect your Arbitrum MetaMask first');
   }
+  const { scope, assertCurrent } = operationScope({ scope: suppliedScope, assertCurrent: assertCallerCurrent });
   if (typeof ensureChain === 'function') {
     await ensureChain(OSTIUM_CHAIN_ID);
+    assertCurrent();
   }
-  const delegate = await ensureOstiumDelegate(walletAddr);
+  const delegate = await ensureOstiumDelegate(walletAddr, { scope });
+  assertCurrent();
   const topUp = await topUpDelegateGasFromMetamask({
     walletClient,
     walletAddr,
     publicClient,
     delegateAddress: delegate.address,
     force,
+    assertCurrent,
   });
-  const status = await refreshOstiumOneTapStatus(publicClient, walletAddr);
+  assertCurrent();
+  const status = await refreshOstiumOneTapStatus(publicClient, walletAddr, { scope, assertCurrent });
+  assertCurrent();
   return {
     address: delegate.address,
     eth: status?.eth ?? topUp.eth,
@@ -232,17 +260,23 @@ export async function enableOstiumOneTap({
   publicClient,
   ensureChain,
   topUpGas = true,
+  scope: suppliedScope,
+  assertCurrent: assertCallerCurrent,
 }) {
   if (!walletClient || !walletAddr || !publicClient) {
     throw new Error('Connect your Arbitrum MetaMask first');
   }
+  const { scope, assertCurrent } = operationScope({ scope: suppliedScope, assertCurrent: assertCallerCurrent });
   if (typeof ensureChain === 'function') {
     await ensureChain(OSTIUM_CHAIN_ID);
+    assertCurrent();
   }
 
-  const delegate = await ensureOstiumDelegate(walletAddr);
+  const delegate = await ensureOstiumDelegate(walletAddr, { scope });
+  assertCurrent();
   let setDelegateHash = null;
   const current = await fetchOstiumDelegate(publicClient, walletAddr);
+  assertCurrent();
   if (String(current || '').toLowerCase() !== String(delegate.address).toLowerCase()) {
     setDelegateHash = await walletClient.writeContract({
       address: TRADING_ADDRESS,
@@ -251,9 +285,11 @@ export async function enableOstiumOneTap({
       args: [delegate.address],
     });
     await waitForReceiptWithTimeout(publicClient, setDelegateHash);
+    assertCurrent();
   }
 
-  await ensureOstiumUsdcApproval({ walletClient, walletAddr, publicClient });
+  await ensureOstiumUsdcApproval({ walletClient, walletAddr, publicClient, assertCurrent });
+  assertCurrent();
 
   let topUp = { skipped: true };
   if (topUpGas) {
@@ -262,10 +298,13 @@ export async function enableOstiumOneTap({
       walletAddr,
       publicClient,
       delegateAddress: delegate.address,
+      assertCurrent,
     });
+    assertCurrent();
   }
 
-  const status = await refreshOstiumOneTapStatus(publicClient, walletAddr);
+  const status = await refreshOstiumOneTapStatus(publicClient, walletAddr, { scope, assertCurrent });
+  assertCurrent();
   if (!status?.active) {
     throw new Error('On-chain delegate did not match after setup. Confirm MetaMask txs and retry.');
   }

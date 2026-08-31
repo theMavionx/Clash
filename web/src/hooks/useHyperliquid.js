@@ -3,6 +3,7 @@ import { formatUnits, parseUnits } from 'viem';
 import { useDex } from '../contexts/DexContext';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { usePlayer } from './useGodot';
+import { useCredentialOperationScope } from './useCredentialOperationScope';
 import { registeredDexWallet } from '../lib/playerDexAccounts';
 import {
   createHyperliquidExchangeClient,
@@ -327,12 +328,14 @@ async function waitForBuilderApproval(walletAddr, builder) {
   return { ok: false, status: last };
 }
 
-async function waitForAgentApproval(walletAddr, agent) {
+async function waitForAgentApproval(walletAddr, agent, assertCurrent = () => {}) {
   const deadline = Date.now() + AGENT_APPROVAL_TIMEOUT_MS;
   let last = [];
   while (Date.now() <= deadline) {
+    assertCurrent();
     const info = createHyperliquidInfoClient();
     last = await info.extraAgents({ user: walletAddr }).catch(() => []);
+    assertCurrent();
     const approved = isHyperliquidAgentApproved(agent, last);
     if (approved) return { ok: true, approved, agents: last };
     await sleep(AGENT_APPROVAL_POLL_MS);
@@ -433,6 +436,7 @@ export function useHyperliquid() {
   const { address, provider, getWalletClient, getPublicClient, ensureChain } = useEvmWallet();
   const player = usePlayer();
   const walletAddr = address || null;
+  const { capture: captureCredentialOperation, assert: assertCredentialOperation } = useCredentialOperationScope({ player, wallet: walletAddr, dex });
 
   const [account, setAccount] = useState(null);
   const [positions, setPositions] = useState([]);
@@ -520,7 +524,8 @@ export function useHyperliquid() {
 
   const ensureAgentApproved = useCallback(async () => {
     if (!walletAddr) throw new Error('Connect your EVM wallet first');
-    const agent = getOrCreateHyperliquidAgent(walletAddr);
+    const scope = captureCredentialOperation();
+    const agent = getOrCreateHyperliquidAgent(walletAddr, { scope });
     setAgentApproval(prev => ({
       ...prev,
       address: agent.address,
@@ -530,9 +535,10 @@ export function useHyperliquid() {
 
     const info = createHyperliquidInfoClient();
     const agents = await info.extraAgents({ user: walletAddr }).catch(() => []);
+    assertCredentialOperation(scope);
     const approved = isHyperliquidAgentApproved(agent, agents);
     if (approved) {
-      const remembered = rememberHyperliquidAgent(walletAddr, agent, approved.validUntil);
+      const remembered = rememberHyperliquidAgent(walletAddr, agent, approved.validUntil, { scope });
       setAgentApproval({
         address: remembered.address,
         validUntil: approved.validUntil,
@@ -543,6 +549,7 @@ export function useHyperliquid() {
     }
 
     if (typeof ensureChain === 'function') await ensureChain(HYPERLIQUID_ARBITRUM_CHAIN_ID);
+    assertCredentialOperation(scope);
     setAgentApproval({
       address: agent.address,
       validUntil: agent.validUntil,
@@ -553,13 +560,15 @@ export function useHyperliquid() {
       agentAddress: agent.address,
       agentName: hyperliquidAgentName(agent.validUntil),
     });
+    assertCredentialOperation(scope);
     if (result?.error) throw new Error(String(result.error));
 
-    const verified = await waitForAgentApproval(walletAddr, agent);
+    const verified = await waitForAgentApproval(walletAddr, agent, () => assertCredentialOperation(scope));
+    assertCredentialOperation(scope);
     if (!verified.ok) {
       throw new Error('Hyperliquid agent approval was signed but is not visible yet. Wait a few seconds and retry.');
     }
-    const remembered = rememberHyperliquidAgent(walletAddr, agent, verified.approved.validUntil);
+    const remembered = rememberHyperliquidAgent(walletAddr, agent, verified.approved.validUntil, { scope });
     setAgentApproval({
       address: remembered.address,
       validUntil: verified.approved.validUntil,
@@ -567,10 +576,11 @@ export function useHyperliquid() {
       approving: false,
     });
     return remembered.account;
-  }, [walletAddr, ensureChain, exchange]);
+  }, [walletAddr, ensureChain, exchange, captureCredentialOperation, assertCredentialOperation]);
 
   const ensureOneTapTradingReady = useCallback(async () => {
     if (!walletAddr) throw new Error('Connect your EVM wallet first');
+    const scope = captureCredentialOperation();
     const agent = readHyperliquidAgent(walletAddr);
     if (agent && agentApproval?.approved === true) {
       if (!oneTapEnabled) setOneTapEnabled(true);
@@ -579,7 +589,9 @@ export function useHyperliquid() {
     setError('One tap trading is required. Approve the Arbitrum agent signature to open Hyperliquid orders.');
     try {
       if (typeof ensureChain === 'function') await ensureChain(HYPERLIQUID_ARBITRUM_CHAIN_ID);
+      assertCredentialOperation(scope);
       const agentAccount = await ensureAgentApproved();
+      assertCredentialOperation(scope);
       setOneTapEnabled(true);
       setError(null);
       return agentAccount;
@@ -590,18 +602,22 @@ export function useHyperliquid() {
       }
       throw e;
     }
-  }, [walletAddr, agentApproval?.approved, oneTapEnabled, ensureChain, ensureAgentApproved, setOneTapEnabled]);
+  }, [walletAddr, agentApproval?.approved, oneTapEnabled, ensureChain, ensureAgentApproved, setOneTapEnabled, captureCredentialOperation, assertCredentialOperation]);
 
   const tradingExchange = useCallback(async () => {
+    const scope = captureCredentialOperation();
     const agentAccount = await ensureOneTapTradingReady();
+    assertCredentialOperation(scope);
     return createHyperliquidExchangeClient(agentAccount);
-  }, [ensureOneTapTradingReady]);
+  }, [ensureOneTapTradingReady, captureCredentialOperation, assertCredentialOperation]);
 
   const refreshAgentApproval = useCallback(async () => {
     if (!walletAddr) {
       setAgentApproval(null);
       return null;
     }
+    let scope;
+    try { scope = captureCredentialOperation(); } catch { return null; }
     const agent = readHyperliquidAgent(walletAddr);
     if (!agent) {
       const status = { address: null, validUntil: null, approved: false, userCanApprove: true, approving: false };
@@ -610,8 +626,9 @@ export function useHyperliquid() {
     }
     const info = createHyperliquidInfoClient();
     const agents = await info.extraAgents({ user: walletAddr }).catch(() => []);
+    try { assertCredentialOperation(scope); } catch { return null; }
     const approved = isHyperliquidAgentApproved(agent, agents);
-    if (approved) rememberHyperliquidAgent(walletAddr, agent, approved.validUntil);
+    if (approved) rememberHyperliquidAgent(walletAddr, agent, approved.validUntil, { scope });
     const status = {
       address: agent.address,
       validUntil: approved?.validUntil || agent.validUntil,
@@ -621,7 +638,7 @@ export function useHyperliquid() {
     };
     setAgentApproval(status);
     return status;
-  }, [walletAddr]);
+  }, [walletAddr, captureCredentialOperation, assertCredentialOperation]);
 
   const refreshBuilderApproval = useCallback(async (opts = {}) => {
     const builder = hyperliquidBuilderParams();

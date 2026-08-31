@@ -14,6 +14,7 @@ const COMMON_PRIVATE_DEXES = new Set([
 
 let fetchCacheInstalled = false;
 let nativeFetch = null;
+let cacheEpoch = 0;
 
 const responseCache = new Map();
 const inflightFetches = new Map();
@@ -66,6 +67,7 @@ function readRequestHeader(input, init, headerName) {
 function isTradeReadUrl(url, method) {
   if (!url || method !== 'GET') return false;
   const path = url.pathname;
+  if (path.includes('/players/trading-credentials')) return false;
   const host = url.hostname.toLowerCase();
   const isSameOrigin = url.origin === window.location.origin;
 
@@ -160,14 +162,16 @@ function responseFromCacheEntry(entry) {
   });
 }
 
-async function saveResponseToCache(key, response, ttlMs) {
+async function saveResponseToCache(key, response, ttlMs, requestEpoch) {
   if (!response || !response.ok || ttlMs <= 0) return;
+  if (/no-store/i.test(response.headers?.get?.('cache-control') || '')) return;
   try {
     const headers = {};
     response.headers.forEach((value, header) => {
       if (header.toLowerCase() !== 'set-cookie') headers[header] = value;
     });
     const body = await response.clone().arrayBuffer();
+    if (requestEpoch !== cacheEpoch) return;
     responseCache.set(key, {
       body,
       status: response.status,
@@ -208,7 +212,7 @@ export function installTradeFetchCache() {
       clearTradePrefetchCache();
       return nativeFetch(input, init);
     }
-    if (!isTradeReadUrl(url, method)) {
+    if (init?.cache === 'no-store' || input?.cache === 'no-store' || !isTradeReadUrl(url, method)) {
       return nativeFetch(input, init);
     }
 
@@ -227,13 +231,14 @@ export function installTradeFetchCache() {
       return response.clone();
     }
 
+    const requestEpoch = cacheEpoch;
     const requestPromise = nativeFetch(input, init)
       .then(async (response) => {
-        await saveResponseToCache(key, response, ttlMs);
+        await saveResponseToCache(key, response, ttlMs, requestEpoch);
         return response;
       })
       .finally(() => {
-        inflightFetches.delete(key);
+        if (inflightFetches.get(key) === requestPromise) inflightFetches.delete(key);
       });
 
     if (!hasAbortSignal) inflightFetches.set(key, requestPromise);
@@ -544,6 +549,7 @@ export function getTradePrefetchSnapshot() {
 }
 
 export function clearTradePrefetchCache() {
+  cacheEpoch++;
   responseCache.clear();
   inflightFetches.clear();
   lastPrefetchByKey.clear();

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDex } from '../contexts/DexContext';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { usePlayer } from './useGodot';
+import { useCredentialOperationScope } from './useCredentialOperationScope';
 import { connectLighterAccount, lighterCredentialMatches } from '../lib/lighterOnboarding';
 import {
   migratePlainLocalStorageCredential,
@@ -9,6 +10,8 @@ import {
   removeEncryptedCredential,
   removeEncryptedCredentialNamespace,
   writeEncryptedCredential,
+  captureCredentialScope,
+  assertCredentialScope,
 } from '../lib/encryptedCredentialStorage';
 import {
   fetchLighterMarketsDirect,
@@ -86,32 +89,36 @@ async function loadCredentials(storageKey, scope, accountIndex) {
   return normalizeCredentials(stored);
 }
 
-async function saveCredentials(storageKey, creds) {
+async function saveCredentials(storageKey, creds, options = {}) {
+  const scope = options.scope || captureCredentialScope();
+  assertCredentialScope(scope);
   const normalized = normalizeCredentials(creds);
   if (!normalized) throw new Error('Enter a valid Lighter account index');
   const scopedKey = scopedCredentialKey(storageKey, { playerId: normalized.onboardingPlayerId, wallet: normalized.onboardingOwner });
   if (scopedKey) {
-    await writeEncryptedCredential(`${scopedKey}:account:${normalized.accountIndex}:key:${normalized.apiKeyIndex}`, normalized);
-    await writeEncryptedCredential(`${scopedKey}:account:${normalized.accountIndex}`, normalized);
-    await writeEncryptedCredential(scopedKey, normalized);
+    await writeEncryptedCredential(`${scopedKey}:account:${normalized.accountIndex}:key:${normalized.apiKeyIndex}`, normalized, { scope });
+    await writeEncryptedCredential(`${scopedKey}:account:${normalized.accountIndex}`, normalized, { scope });
+    await writeEncryptedCredential(scopedKey, normalized, { scope });
   }
-  await writeEncryptedCredential(storageKey, normalized);
-  try { window.localStorage.removeItem(storageKey); } catch {}
+  await writeEncryptedCredential(storageKey, normalized, { scope });
+  assertCredentialScope(scope);
   return normalized;
 }
 
-async function clearCredentials(storageKey, scope) {
+async function clearCredentials(storageKey, scope, options = {}) {
+  const vaultScope = options.scope || captureCredentialScope();
+  assertCredentialScope(vaultScope);
   const scopedKey = scopedCredentialKey(storageKey, scope);
   if (scopedKey) {
-    await removeEncryptedCredentialNamespace(scopedKey + ':');
-    await removeEncryptedCredential(scopedKey);
+    await removeEncryptedCredentialNamespace(scopedKey + ':', { scope: vaultScope });
+    await removeEncryptedCredential(scopedKey, { scope: vaultScope });
   }
   const latest = await readEncryptedCredential(storageKey);
+  assertCredentialScope(vaultScope);
   if (!latest?.onboardingOwner || (latest.onboardingPlayerId === scope?.playerId
     && latest.onboardingOwner.toLowerCase() === scope?.wallet?.toLowerCase())) {
-    await removeEncryptedCredential(storageKey);
+    await removeEncryptedCredential(storageKey, { scope: vaultScope });
   }
-  try { window.localStorage.removeItem(storageKey); } catch {}
 }
 
 async function fetchJson(url, options = {}) {
@@ -223,6 +230,7 @@ function useLighterProfile(profile) {
   const [venueConfig, setVenueConfig] = useState(null);
   const claimGoldRef = useRef(null);
   const refreshLatestRef = useRef(null);
+  const { capture: captureCredential, assert: assertCredential } = useCredentialOperationScope({ player, token, wallet: evmWallet?.address, dex: dexId });
 
   useEffect(() => {
     if (!isActiveDex) return;
@@ -239,6 +247,7 @@ function useLighterProfile(profile) {
   }), [dexId, token]);
 
   const refreshReadOnlyToken = useCallback(async (sourceCredentials) => {
+    const scope = captureCredential();
     const creds = normalizeCredentials(sourceCredentials);
     if (tokenStillFresh(creds)) return creds;
     if (creds?.accountIndex == null || creds.apiKeyIndex == null || !creds.apiPrivateKey) {
@@ -251,14 +260,16 @@ function useLighterProfile(profile) {
     });
     const authToken = tokenResult.auth_token;
     if (!authToken) throw new Error(`${label} auth token was not returned`);
+    assertCredential(scope);
     const saved = await saveCredentials(storageKey, {
       ...creds,
       readOnlyToken: authToken,
       readOnlyTokenExpiresAt: Date.now() + (AUTH_TOKEN_DEADLINE_SECONDS * 1000),
-    });
+    }, { scope });
+    assertCredential(scope);
     setCredentials(saved);
     return saved;
-  }, [headers, label, routePrefix, storageKey]);
+  }, [headers, label, routePrefix, storageKey, captureCredential, assertCredential]);
 
   const refreshReferralStatus = useCallback(async (sourceCredentials) => {
     const creds = normalizeCredentials(sourceCredentials);
@@ -285,6 +296,7 @@ function useLighterProfile(profile) {
     setLoading(true);
     setError('');
     try {
+      const scope = credentials && token ? captureCredential() : null;
       const [marketData, priceData, accountData, configData] = await Promise.all([
         fetchWithBrowserFallback(
           'markets',
@@ -306,10 +318,12 @@ function useLighterProfile(profile) {
       setAccount(accountData || null);
       setVenueConfig(configData || null);
       if (credentials && accountData?.integrator_approved !== credentials.integratorApproved) {
+        assertCredential(scope);
         const reconciled = await saveCredentials(storageKey, {
           ...credentials,
           integratorApproved: accountData?.integrator_approved === true,
-        });
+        }, { scope });
+        assertCredential(scope);
         setCredentials(reconciled);
       }
       if (credentials?.accountIndex != null && token) {
@@ -343,7 +357,7 @@ function useLighterProfile(profile) {
     } finally {
       setLoading(false);
     }
-  }, [browserApi, credentials, dexId, headers, isActiveDex, label, refreshReadOnlyToken, refreshReferralStatus, routePrefix, storageKey, token]);
+  }, [browserApi, credentials, dexId, headers, isActiveDex, label, refreshReadOnlyToken, refreshReferralStatus, routePrefix, storageKey, token, captureCredential, assertCredential]);
   refreshLatestRef.current = refresh;
 
   useEffect(() => {
@@ -364,6 +378,7 @@ function useLighterProfile(profile) {
   }, [label, refresh]);
 
   const updateCredentials = useCallback(async (next, assertCurrent = () => {}) => {
+    const scope = captureCredential();
     assertCurrent();
     if (!token) throw new Error('Login required');
     const candidate = normalizeCredentials(next);
@@ -384,12 +399,14 @@ function useLighterProfile(profile) {
     const authToken = tokenResult.auth_token;
     assertCurrent();
     if (!authToken) throw new Error(`${label} auth token was not returned`);
+    assertCredential(scope);
     const saved = await saveCredentials(storageKey, {
       ...candidate,
       readOnlyToken: authToken,
       readOnlyTokenExpiresAt: Date.now() + (AUTH_TOKEN_DEADLINE_SECONDS * 1000),
       integratorApproved: candidate.integratorApproved,
-    });
+    }, { scope });
+    assertCredential(scope);
     assertCurrent();
     setCredentials(saved);
     let checkedReferral = null;
@@ -406,7 +423,7 @@ function useLighterProfile(profile) {
       referralStatus: checkedReferral,
       referralStatusError: referralError,
     };
-  }, [headers, label, refreshReferralStatus, routePrefix, storageKey, token]);
+  }, [headers, label, refreshReferralStatus, routePrefix, storageKey, token, captureCredential, assertCredential]);
 
   const detectAccount = useCallback(async (address = '') => {
     const l1Address = String(address || evmWallet?.address || '').trim();
@@ -426,12 +443,14 @@ function useLighterProfile(profile) {
   }, [evmWallet?.address, headers, label, routePrefix, token]);
 
   const disconnect = useCallback(async () => {
+    const scope = captureCredential();
     if (connectingRef.current) throw new Error('Wait for Lighter connection to finish');
-    await clearCredentials(storageKey, { playerId, wallet: evmWallet?.address });
+    await clearCredentials(storageKey, { playerId, wallet: evmWallet?.address }, { scope });
+    assertCredential(scope);
     setCredentials(null);
     setAccount(null);
     setReferralStatus(null);
-  }, [storageKey, playerId, evmWallet?.address]);
+  }, [storageKey, playerId, evmWallet?.address, captureCredential, assertCredential]);
 
   const ensureCredentials = useCallback(() => {
     if (credentials?.accountIndex == null || credentials.apiKeyIndex == null || !credentials.apiPrivateKey) {
@@ -441,6 +460,7 @@ function useLighterProfile(profile) {
   }, [credentials]);
 
   const approveIntegrator = useCallback(async (overrideCredentials = null, assertCurrent = () => {}) => {
+    const scope = captureCredential();
     assertCurrent();
     if (!token) throw new Error('Login required');
     const creds = overrideCredentials ? normalizeCredentials(overrideCredentials) : ensureCredentials();
@@ -476,12 +496,14 @@ function useLighterProfile(profile) {
       })),
     });
     assertCurrent();
-    const saved = await saveCredentials(storageKey, { ...creds, integratorApproved: true });
+    assertCredential(scope);
+    const saved = await saveCredentials(storageKey, { ...creds, integratorApproved: true }, { scope });
+    assertCredential(scope);
     assertCurrent();
     setCredentials(saved);
     window.setTimeout(() => refreshLatestRef.current?.().catch(() => {}), 900);
     return submitted;
-  }, [ensureCredentials, evmWallet, headers, label, routePrefix, storageKey, token]);
+  }, [ensureCredentials, evmWallet, headers, label, routePrefix, storageKey, token, captureCredential, assertCredential]);
 
   const acceptClashReferral = useCallback(async (overrideCredentials = null, assertCurrent = () => {}) => {
     assertCurrent();
@@ -522,9 +544,11 @@ function useLighterProfile(profile) {
   }, [profile.referralUrl]);
 
   const connectOneTap = useCallback(async ({ accountIndex } = {}) => {
+    const scope = captureCredential();
     if (connectingRef.current) return connectingRef.current;
     const context = { token, playerId, wallet: evmWallet?.address, dex: dexId };
     const assertCurrent = () => {
+      assertCredential(scope);
       const current = connectionContextRef.current;
       if (!current?.mounted || current.token !== context.token || current.playerId !== context.playerId
         || current.dex !== context.dex || current.wallet?.toLowerCase() !== context.wallet?.toLowerCase()) {
@@ -559,24 +583,28 @@ function useLighterProfile(profile) {
               // Immutable identity copy survives older prompts or other tabs updating
               // the active-account pointer after challenge expiry/server restart.
               const durableKey = `${pendingKey}:${value.accountIndex}:${value.challengeId}`;
-              await writeEncryptedCredential(durableKey, value);
+              assertCurrent();
+              await writeEncryptedCredential(durableKey, value, { scope });
               const readback = await readEncryptedCredential(durableKey);
+              assertCurrent();
               if (readback?.credentials?.apiPrivateKey !== value.credentials.apiPrivateKey) throw new Error('Could not retain the pending key');
-              await writeEncryptedCredential(`${pendingKey}:${value.accountIndex}`, value);
+              await writeEncryptedCredential(`${pendingKey}:${value.accountIndex}`, value, { scope });
             },
             clearPending: async (index, challengeId) => {
               const key = `${pendingKey}:${index}`;
               const current = await readEncryptedCredential(key);
-              if (current?.challengeId === challengeId) await removeEncryptedCredential(key);
+              assertCurrent();
+              if (current?.challengeId === challengeId) await removeEncryptedCredential(key, { scope });
             },
             retirePending: async value => {
               const key = `${pendingKey}:retired:${value.accountIndex}:${value.challengeId}`;
-              await writeEncryptedCredential(key, value);
+              assertCurrent();
+              await writeEncryptedCredential(key, value, { scope });
               const readback = await readEncryptedCredential(key);
               if (readback?.credentials?.apiPrivateKey !== value.credentials.apiPrivateKey) throw new Error('Could not retain the expired key');
             },
             loadCredentials: index => loadCredentials(storageKey, context, index),
-            saveCredentials: value => saveCredentials(storageKey, value),
+            saveCredentials: value => { assertCurrent(); return saveCredentials(storageKey, value, { scope }); },
           },
         });
         if (result.requiresAccountSelection) return result;
@@ -604,7 +632,7 @@ function useLighterProfile(profile) {
     })();
     connectingRef.current = pending;
     try { return await pending; } finally { connectingRef.current = null; }
-  }, [acceptClashReferral, approveIntegrator, dexId, evmWallet, headers, playerId, referralRequired, refresh, routePrefix, storageKey, token, updateCredentials]);
+  }, [acceptClashReferral, approveIntegrator, dexId, evmWallet, headers, playerId, referralRequired, refresh, routePrefix, storageKey, token, updateCredentials, captureCredential, assertCredential]);
 
   const submitOrder = useCallback(async (payload) => {
     if (!token) throw new Error('Login required');

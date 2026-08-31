@@ -14,6 +14,13 @@ const logAiAnalyzer = require('./log_ai_analyzer');
 const tournamentAiBuilder = require('./tournament_ai_builder');
 const tasks = require('./tasks');
 const { createTaskRewardService } = require('./task_rewards');
+const { createTradingCredentialVault, createTradingCredentialSessionService } = require('./trading_credential_vault');
+const {
+  createTradingCredentialRouter, readTradingCredentialSessionCookie,
+  setTradingCredentialSessionCookie, clearTradingCredentialSessionCookie,
+} = require('./trading_credential_routes');
+const { createTradingCredentialUnlockRouter } = require('./trading_credential_unlock');
+const tradingCredentialCatalog = require('./trading_credential_catalog');
 const elfa = require('./elfa');
 const diag = require('./diag');
 const earnings = require('./earnings');
@@ -72,6 +79,23 @@ const { SanctumRewardError, createSanctumRewardsService } = require('./sanctum_r
 const { createDualFixedWindowRateLimiter } = require('./sanctum_rate_limit');
 
 const router = express.Router();
+const tradingCredentialVault = createTradingCredentialVault({ db: db.db, catalog: tradingCredentialCatalog });
+const tradingCredentialSessions = createTradingCredentialSessionService({ db: db.db });
+const tradingCredentialSecureCookies = !['development', 'test'].includes(process.env.NODE_ENV);
+const tradingCredentialOptions = {
+  db: db.db, authenticate: auth, catalog: tradingCredentialCatalog,
+  vault: tradingCredentialVault, sessions: tradingCredentialSessions,
+  secureCookies: tradingCredentialSecureCookies, allowLocalOrigins: !tradingCredentialSecureCookies,
+};
+const tradingCredentialUnlockRouter = createTradingCredentialUnlockRouter({
+  ...tradingCredentialOptions, sessionService: tradingCredentialSessions,
+});
+router.use('/players/trading-credentials', tradingCredentialUnlockRouter);
+router.use('/players/trading-credentials', createTradingCredentialRouter({
+  ...tradingCredentialOptions,
+  getIdentity: tradingCredentialIdentity,
+  onSessionLogout: req => tradingCredentialUnlockRouter.revokePlayerChallenges(req.player.id),
+}));
 const taskRewards = createTaskRewardService({
   db: db.db,
   getResources: db.getResources,
@@ -10109,6 +10133,42 @@ function markPlayerSeekerIfPresent(playerId, body) {
   return seeker;
 }
 
+// Informational wallet metadata is not an authorization or migration proof.
+function tradingCredentialIdentity(player) {
+  const anchored = tradingCredentialSessions.owners(player.id);
+  const loginWallet = isValidWallet(player.wallet) ? canonicalWalletIdentifier(player.wallet) : null;
+  return { playerId: player.id, wallets: anchored, loginWallet };
+}
+
+// Only call with the verifier's canonical wallet after a fresh successful proof.
+// Cached bearer probes and weak wallet-link/select routes never reach this helper.
+function maybeIssueTradingCredentialSession(req, res, player, verifiedWallet) {
+  if (!verifiedWallet || !isValidWallet(verifiedWallet) || !player?.token) return;
+  // Legacy Aptos login can accept a rotated-out original key. Only the dedicated
+  // vault unlock verifier checks the account's current on-chain authentication key.
+  if (!['evm', 'solana'].includes(walletChainType(verifiedWallet))) {
+    clearTradingCredentialSessionCookie(res, { secure: tradingCredentialSecureCookies });
+    return;
+  }
+  try {
+    const current = db.authenticatePlayer(player.token);
+    if (!current || current.id !== player.id || current.is_bot || current.is_guest || isLocalGuestWallet(current.wallet)) return;
+    if (!tradingCredentialVault.keyStatus().configured) {
+      clearTradingCredentialSessionCookie(res, { secure: tradingCredentialSecureCookies });
+      return;
+    }
+    const session = tradingCredentialSessions.issue({
+      playerId: current.id, authToken: current.token, verifiedWallet,
+      existingSessionToken: readTradingCredentialSessionCookie(req, { secure: tradingCredentialSecureCookies }),
+    });
+    setTradingCredentialSessionCookie(res, session, { secure: tradingCredentialSecureCookies });
+  } catch {
+    // Keep ordinary game authentication available; no secrets or proof payloads
+    // are included in logs/errors. An unanchored wallet must use explicit unlock.
+    clearTradingCredentialSessionCookie(res, { secure: tradingCredentialSecureCookies });
+  }
+}
+
 router.post('/players/register', async (req, res) => {
   const { name, wallet, dex, fid } = req.body;
   const renameRequested = req.body?.renameRequested === true || req.body?.rename_requested === true;
@@ -10119,10 +10179,12 @@ router.post('/players/register', async (req, res) => {
   }
   const hasRequestedDex = VALID_DEXES.has(dex);
   let requestedDex = hasRequestedDex ? dex : 'pacifica';
+  let verifiedCredentialWallet = null;
   if (wallet && !localGuestWallet) {
     const proofDex = VALID_DEXES.has(dex) ? dex : '';
     const authProof = await verifyWalletAuthProof(req, { wallet, dex: proofDex });
     if (!authProof.ok) return res.status(authProof.status || 401).json({ error: authProof.error });
+    verifiedCredentialWallet = authProof.wallet || null;
   }
   const seekerCapability = normalizeSeekerCapability(req.body || {});
   const referralCode = String(req.body?.referralCode || req.body?.ref || req.body?.invite || '').trim();
@@ -10193,6 +10255,7 @@ router.post('/players/register', async (req, res) => {
         });
       }
       const state = db.getFullPlayerState(existing.id);
+      maybeIssueTradingCredentialSession(req, res, existing, verifiedCredentialWallet);
       return res.json({ ...state, token: existing.token });
     }
   }
@@ -10242,6 +10305,7 @@ router.post('/players/register', async (req, res) => {
   }
   const state = db.getFullPlayerState(result.id);
   logAuth('Player registered', { name: trimmed, wallet: wallet || null, dex: requestedDex });
+  maybeIssueTradingCredentialSession(req, res, result, verifiedCredentialWallet);
   res.json({ ...state, token: result.token });
 });
 
@@ -11918,6 +11982,7 @@ router.post('/players/login-wallet', async (req, res) => {
     });
   }
   const state = db.getFullPlayerState(player.id);
+  maybeIssueTradingCredentialSession(req, res, player, authProof.wallet);
   res.json({ ...state, token: player.token });
 });
 

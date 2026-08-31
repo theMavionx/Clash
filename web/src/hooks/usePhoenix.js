@@ -5,6 +5,7 @@ import { useSignAndSendTransaction as usePrivySignAndSend, useSignTransaction as
 import { DEFAULT_MARKET_ORDER_SLIPPAGE, Direction, MAX_SUBACCOUNTS, MarginType, OrderFlags, SelfTradeBehavior, Side, StopLossOrderKind, buildDepositIxsResolved, buildNormalizedMarketParamsBySymbol, buildWithdrawIxsResolved, computeTraderMarginFromInputs, createPhoenixTraderStateManager, flight, priceUsdToTicks, quoteLots } from '@ellipsis-labs/rise';
 import { useDex } from '../contexts/DexContext';
 import { usePlayer } from './useGodot';
+import { useCredentialOperationScope } from './useCredentialOperationScope';
 import { registeredDexWallet } from '../lib/playerDexAccounts';
 import {
   asPhoenixArray,
@@ -2561,6 +2562,7 @@ export function usePhoenix() {
   const walletSource = adapterAddr ? 'adapter' : (privyAddr ? 'privy' : 'none');
   const privyActive = walletSource === 'privy';
   const walletAddr = adapterAddr || privyAddr || null;
+  const { capture: captureCredentialOperation, assert: assertCredentialOperation } = useCredentialOperationScope({ player, wallet: walletAddr, dex });
   const ownerPk = useMemo(() => walletAddr ? new PublicKey(walletAddr) : null, [walletAddr]);
   const registeredSolanaWallet = registeredDexWallet(player, 'phoenix', 'solana') || null;
   const walletMismatch = false;
@@ -3261,6 +3263,8 @@ export function usePhoenix() {
   }, [ownerPk, walletMismatch, walletMismatchMessage, connection, sendTransaction, signTransaction, solWallet, privyActive, privySendTx, privySignTx, privyWalletObj]);
 
   const refreshOneTapTradingState = useCallback(async () => {
+    let scope;
+    try { scope = captureCredentialOperation(); } catch { return null; }
     if (PHOENIX_ONE_TAP_DISABLED) {
       const next = disabledPhoenixOneTapState();
       setOneTapTrading(next);
@@ -3288,6 +3292,7 @@ export function usePhoenix() {
       return null;
     }
     const gasLamports = await getPhoenixOneTapSolLamports(connection, session.publicKey);
+    try { assertCredentialOperation(scope); } catch { return null; }
     const delegatedSubaccounts = phoenixSessionDelegatedSubaccounts(session);
     const builderReady = phoenixOneTapSessionBuilderReady(session);
     const accessReady = session.accessReady === true;
@@ -3301,8 +3306,9 @@ export function usePhoenix() {
         required_builder_routing: phoenixOneTapBuilderRoutingStamp(),
         delegated_subaccounts: delegatedSubaccounts,
       }, 'warn');
-      clearPhoenixOneTapSession(walletAddr);
-      const replacement = getOrCreatePhoenixOneTapSession(walletAddr);
+      await clearPhoenixOneTapSession(walletAddr, { scope });
+      try { assertCredentialOperation(scope); } catch { return null; }
+      const replacement = getOrCreatePhoenixOneTapSession(walletAddr, { scope });
       reportPhoenixOneTapEvent('replacement_session_initialized', {
         owner: shortPhoenixAddress(walletAddr),
         owner_full: walletAddr,
@@ -3348,7 +3354,7 @@ export function usePhoenix() {
       policy: session.policy || PHOENIX_ONE_TAP_POLICY,
     });
     return session;
-  }, [connection, walletAddr, walletMismatch]);
+  }, [connection, walletAddr, walletMismatch, captureCredentialOperation, assertCredentialOperation]);
 
   useEffect(() => {
     void refreshOneTapTradingState();
@@ -5253,7 +5259,9 @@ export function usePhoenix() {
     setLoading(true);
     setError(null);
     try {
+      const scope = captureCredentialOperation();
       const orderClient = await getTransactionClient(true);
+      assertCredentialOperation(scope);
       if (nextEnabled) {
         if (!isPhoenixFlightEnabled()) {
           throw new Error('Phoenix builder routing is not configured. One tap trading cannot be enabled without builder code.');
@@ -5273,6 +5281,7 @@ export function usePhoenix() {
             ]);
             const revokeIxs = [];
             for (const subaccountIndex of revokeSubaccounts) {
+              assertCredentialOperation(scope);
               revokeIxs.push(await orderClient.ixs.buildDelegateTrader({
                 traderWallet: walletAddr,
                 traderPdaIndex: 0,
@@ -5280,6 +5289,7 @@ export function usePhoenix() {
                 newPositionAuthority: walletAddr,
               }));
             }
+            assertCredentialOperation(scope);
             if (revokeIxs.length) {
               reportPhoenixOneTapEvent('legacy_delegate_revoke_build', {
                 owner: shortPhoenixAddress(walletAddr),
@@ -5294,9 +5304,11 @@ export function usePhoenix() {
                 preferWalletSendTransaction: true,
                 fastBlockhash: true,
               });
+              assertCredentialOperation(scope);
             }
           }
-          clearPhoenixOneTapSession(walletAddr);
+          await clearPhoenixOneTapSession(walletAddr, { scope });
+          assertCredentialOperation(scope);
           console.info('[Phoenix one tap] invalid old session discarded before new setup', {
             old_delegate: shortPhoenixAddress(existing.publicKey),
             old_delegate_full: existing.publicKey || null,
@@ -5312,8 +5324,9 @@ export function usePhoenix() {
             required_builder_routing: phoenixOneTapBuilderRoutingStamp(),
           }, 'warn');
         }
-        const session = getOrCreatePhoenixOneTapSession(walletAddr);
+        const session = getOrCreatePhoenixOneTapSession(walletAddr, { scope });
         const gasLamports = await getPhoenixOneTapSolLamports(connection, session.publicKey);
+        assertCredentialOperation(scope);
         const topUpLamports = Math.max(
           0,
           PHOENIX_ONE_TAP_MIN_SOL_LAMPORTS - Number(gasLamports || 0),
@@ -5343,6 +5356,7 @@ export function usePhoenix() {
         }, 'info');
         let topUpSignature = null;
         if (topUpInstructions.length) {
+          assertCredentialOperation(scope);
           topUpSignature = await sendIxs(
             topUpInstructions,
             'phoenix.one_tap.embedded_topup',
@@ -5352,6 +5366,7 @@ export function usePhoenix() {
               fastBlockhash: true,
             },
           );
+          assertCredentialOperation(scope);
         }
         const rootInviteStatus = cachedPhoenixInviteStatus(walletAddr) || inviteStatus || {};
         const inviteCandidates = [];
@@ -5369,6 +5384,7 @@ export function usePhoenix() {
         let embeddedInviteCheck = await checkInviteWalletWithFallback(session.publicKey).catch(error => ({
           error: error?.message || String(error || ''),
         }));
+        assertCredentialOperation(scope);
         reportPhoenixOneTapEvent('embedded_invite_check', {
           owner: shortPhoenixAddress(walletAddr),
           owner_full: walletAddr,
@@ -5390,6 +5406,7 @@ export function usePhoenix() {
             traderPdaIndex: 0,
             traderSubaccountIndex: 0,
           });
+          assertCredentialOperation(scope);
           reportPhoenixOneTapEvent('embedded_register_build', {
             owner: shortPhoenixAddress(walletAddr),
             owner_full: walletAddr,
@@ -5407,7 +5424,9 @@ export function usePhoenix() {
             fastBlockhash: true,
             maxAttempts: 2,
           });
+          assertCredentialOperation(scope);
         } catch (registerError) {
+          assertCredentialOperation(scope);
           const text = registerError?.message || String(registerError || '');
           if (!/already|exists|initialized/i.test(text)) throw registerError;
           reportPhoenixOneTapEvent('embedded_register_already_exists', {
@@ -5425,16 +5444,19 @@ export function usePhoenix() {
             traderSubaccountIndex: 0,
             attempts: 10,
           });
+          assertCredentialOperation(scope);
           if (!embeddedTraderAccountReady) {
             throw new Error('Phoenix one tap trader account is not visible on-chain yet; retry in a few seconds');
           }
           let activated = false;
           let lastInviteError = null;
           for (const candidate of embeddedReferralCandidates) {
+            assertCredentialOperation(scope);
             try {
               const activation = await activateReferralTxWithFallback(session.publicKey, candidate.code, {
                 keypair: session.keypair,
               });
+              assertCredentialOperation(scope);
               activated = true;
               reportPhoenixOneTapEvent('embedded_invite_activated', {
                 owner: shortPhoenixAddress(walletAddr),
@@ -5447,6 +5469,7 @@ export function usePhoenix() {
               }, 'info');
               break;
             } catch (inviteError) {
+              assertCredentialOperation(scope);
               lastInviteError = inviteError;
               reportPhoenixOneTapEvent('embedded_invite_activate_failed', {
                 owner: shortPhoenixAddress(walletAddr),
@@ -5465,14 +5488,17 @@ export function usePhoenix() {
           embeddedInviteCheck = await checkInviteWalletWithFallback(session.publicKey).catch(error => ({
             error: error?.message || String(error || ''),
           }));
+          assertCredentialOperation(scope);
         }
         let accessSummary = null;
         let accessState = null;
         for (let attempt = 0; attempt < 8; attempt += 1) {
           if (attempt > 0) await new Promise(resolve => setTimeout(resolve, 900));
+          assertCredentialOperation(scope);
           accessState = await getTraderStateViewWithFallback(session.publicKey, { pdaIndex: 0 }).catch(error => ({
             _error: error?.message || String(error || ''),
           }));
+          assertCredentialOperation(scope);
           accessSummary = phoenixTraderAccessSummary(accessState, 0);
           reportPhoenixOneTapEvent('embedded_access_check', {
             owner: shortPhoenixAddress(walletAddr),
@@ -5494,7 +5520,7 @@ export function usePhoenix() {
             accessSummary,
             lastAccessError: accessState?._error || null,
             builderRouting: phoenixOneTapBuilderRoutingStamp(),
-          });
+          }, { scope });
           throw new Error(`Phoenix one tap account is ${accessSummary?.state || 'not active'} and cannot open trades yet. Try Enable one tap again in a few seconds.`);
         }
         markPhoenixOneTapSession(walletAddr, {
@@ -5509,7 +5535,7 @@ export function usePhoenix() {
           lastSetupSignature: registerSignature || topUpSignature,
           lastTopUpSignature: topUpSignature,
           lastRegisterSignature: registerSignature,
-        });
+        }, { scope });
         reportPhoenixOneTapEvent('setup_done', {
           owner: shortPhoenixAddress(walletAddr),
           owner_full: walletAddr,
@@ -5523,6 +5549,7 @@ export function usePhoenix() {
           builder_routing: phoenixOneTapBuilderRoutingStamp(),
         }, 'info');
         await refreshOneTapTradingState();
+        assertCredentialOperation(scope);
         await refreshTraderState({ force: true }).catch(() => null);
         return true;
       }
@@ -5535,6 +5562,7 @@ export function usePhoenix() {
         ]);
         const revokeIxs = [];
         for (const subaccountIndex of revokeSubaccounts) {
+          assertCredentialOperation(scope);
           revokeIxs.push(await orderClient.ixs.buildDelegateTrader({
             traderWallet: walletAddr,
             traderPdaIndex: 0,
@@ -5542,6 +5570,7 @@ export function usePhoenix() {
             newPositionAuthority: walletAddr,
           }));
         }
+        assertCredentialOperation(scope);
         reportPhoenixOneTapEvent('disable_build', {
           owner: shortPhoenixAddress(walletAddr),
           owner_full: walletAddr,
@@ -5556,6 +5585,7 @@ export function usePhoenix() {
           preferWalletSendTransaction: true,
           fastBlockhash: true,
         });
+        assertCredentialOperation(scope);
         reportPhoenixOneTapEvent('disable_done', {
           owner: shortPhoenixAddress(walletAddr),
           owner_full: walletAddr,
@@ -5564,7 +5594,8 @@ export function usePhoenix() {
           revoke_subaccounts: revokeSubaccounts,
         }, 'info');
       }
-      clearPhoenixOneTapSession(walletAddr);
+      await clearPhoenixOneTapSession(walletAddr, { scope });
+      assertCredentialOperation(scope);
       await refreshOneTapTradingState();
       await refreshTraderState({ force: true }).catch(() => null);
       return true;
@@ -5589,7 +5620,7 @@ export function usePhoenix() {
     } finally {
       setLoading(false);
     }
-  }, [activateReferralTxWithFallback, checkInviteWalletWithFallback, collectOneTapDelegationSubaccounts, connection, getTraderStateViewWithFallback, getTransactionClient, inviteStatus, ownerPk, refreshOneTapTradingState, refreshTraderState, sendIxs, waitForPhoenixTraderAccountOnChain, walletAddr, walletMismatch, walletMismatchMessage]);
+  }, [activateReferralTxWithFallback, checkInviteWalletWithFallback, collectOneTapDelegationSubaccounts, connection, getTraderStateViewWithFallback, getTransactionClient, inviteStatus, ownerPk, refreshOneTapTradingState, refreshTraderState, sendIxs, waitForPhoenixTraderAccountOnChain, walletAddr, walletMismatch, walletMismatchMessage, captureCredentialOperation, assertCredentialOperation]);
 
   useEffect(() => {
     if (!isActiveDex || !walletAddr || walletMismatch || traderRegistered) return undefined;

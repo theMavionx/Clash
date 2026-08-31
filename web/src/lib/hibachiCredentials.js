@@ -26,17 +26,15 @@ export async function readHibachiCredentials() {
   return normalizeHibachiCredentials(stored);
 }
 
-export async function writeHibachiCredentials(value) {
+export async function writeHibachiCredentials(value, options) {
   const normalized = normalizeHibachiCredentials(value);
   if (!normalized) throw new Error('Complete Hibachi API credentials are required');
-  await writeEncryptedCredential(HIBACHI_CREDENTIALS_STORAGE_KEY, normalized);
-  try { window.localStorage.removeItem(HIBACHI_CREDENTIALS_STORAGE_KEY); } catch {}
+  await writeEncryptedCredential(HIBACHI_CREDENTIALS_STORAGE_KEY, normalized, options);
   return normalized;
 }
 
-export async function clearHibachiCredentials() {
-  await removeEncryptedCredential(HIBACHI_CREDENTIALS_STORAGE_KEY);
-  try { window.localStorage.removeItem(HIBACHI_CREDENTIALS_STORAGE_KEY); } catch {}
+export async function clearHibachiCredentials(options) {
+  await removeEncryptedCredential(HIBACHI_CREDENTIALS_STORAGE_KEY, options);
 }
 
 export function hibachiCredentialPayload(credentials, extra = {}) {

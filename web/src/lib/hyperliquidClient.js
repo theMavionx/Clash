@@ -1,6 +1,9 @@
 import { ExchangeClient, HttpTransport, InfoClient } from '@nktkas/hyperliquid';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
-import { readEncryptedCredential, writeEncryptedCredential } from './encryptedCredentialStorage';
+import {
+  assertCredentialScope, captureCredentialScope, peekEncryptedCredential,
+  readEncryptedCredential, removeEncryptedCredential, writeEncryptedCredential,
+} from './encryptedCredentialStorage.js';
 
 export const HYPERLIQUID_TESTNET = String(import.meta.env.VITE_HYPERLIQUID_TESTNET || '').trim() === '1';
 export const HYPERLIQUID_API_URL = String(import.meta.env.VITE_HYPERLIQUID_API_URL || '').trim();
@@ -30,7 +33,6 @@ const AGENT_STORAGE_PREFIX = 'clash_hyperliquid_agent_v1';
 const AGENT_NAME = 'clashofperps';
 const AGENT_DEFAULT_TTL_MS = 24 * 60 * 60 * 1000;
 const AGENT_MIN_VALID_MS = 2 * 60 * 1000;
-const runtimeAgentCache = new Map();
 
 function cleanNum(value, fallback = 0) {
   const n = Number(value);
@@ -59,13 +61,15 @@ export function createHyperliquidInfoClient() {
   return new InfoClient({ transport: hyperliquidTransport() });
 }
 
-export function getOrCreateHyperliquidAgent(owner) {
+export function getOrCreateHyperliquidAgent(owner, options = {}) {
   const key = String(owner || '').toLowerCase();
   if (!isHyperliquidAddress(key)) throw new Error('Connect your EVM wallet first');
+  const scope = options.scope || captureCredentialScope();
+  assertCredentialScope(scope);
   const existing = readPersistedAgent(key);
   if (existing) return existing;
   const next = agentFromPrivateKey(generatePrivateKey(), Date.now() + agentTtlMs());
-  persistAgent(key, next);
+  persistAgent(key, next, { scope });
   return next;
 }
 
@@ -75,11 +79,20 @@ export function readHyperliquidAgent(owner) {
   return readPersistedAgent(key);
 }
 
-export function rememberHyperliquidAgent(owner, record, validUntil) {
+export function rememberHyperliquidAgent(owner, record, validUntil, options = {}) {
   if (!owner || !record?.privateKey) return record;
   const next = agentFromPrivateKey(record.privateKey, validUntil || record.validUntil);
-  persistAgent(owner, next);
+  persistAgent(owner, next, options);
   return next;
+}
+
+export function forgetHyperliquidAgent(owner, options = {}) {
+  if (!owner) return;
+  const scope = options.scope || captureCredentialScope();
+  assertCredentialScope(scope);
+  const pending = removeEncryptedCredential(agentStorageKey(owner), { scope });
+  pending.catch(() => {});
+  return pending;
 }
 
 export function hyperliquidAgentName(validUntil) {
@@ -123,11 +136,6 @@ function isPrivateKey(value) {
   return /^0x[0-9a-fA-F]{64}$/.test(String(value || '').trim());
 }
 
-function agentStorage() {
-  if (typeof window === 'undefined') return null;
-  try { return window.localStorage || window.sessionStorage || null; } catch { return null; }
-}
-
 function agentStorageKey(owner) {
   return `${AGENT_STORAGE_PREFIX}:${String(owner || '').toLowerCase()}`;
 }
@@ -155,50 +163,37 @@ function agentFromStoredRecord(parsed) {
   return agentFromPrivateKey(parsed.privateKey, parsed.validUntil);
 }
 
-function persistAgent(owner, record) {
-  const payload = JSON.stringify({
-    privateKey: record.privateKey,
-    address: record.address,
-    validUntil: record.validUntil,
-  });
+function persistAgent(owner, record, options = {}) {
+  const scope = options.scope || captureCredentialScope();
+  assertCredentialScope(scope);
   const key = agentStorageKey(owner);
-  runtimeAgentCache.set(key, payload);
-  const storage = agentStorage();
-  if (storage) {
-    try { storage.setItem(key, payload); } catch { /* storage disabled */ }
-  }
   writeEncryptedCredential(key, {
     privateKey: record.privateKey,
     address: record.address,
     validUntil: record.validUntil,
-  }).catch(() => {});
+  }, { scope }).catch(() => {});
 }
 
 function readPersistedAgent(owner) {
   const key = agentStorageKey(owner);
-  const storage = agentStorage();
-  const raw = runtimeAgentCache.get(key) || (() => {
-    if (!storage) return null;
-    try { return storage.getItem(key); } catch { return null; }
-  })();
-  if (!raw) return null;
   try {
-    return agentFromStoredRecord(JSON.parse(raw));
+    return agentFromStoredRecord(peekEncryptedCredential(key));
   } catch {
     return null;
   }
 }
 
-/** Fallback when localStorage is blocked (Tracking Prevention / private mode). */
-export async function readHyperliquidAgentAsync(owner) {
-  const sync = readHyperliquidAgent(owner);
-  if (sync) return sync;
+/** Read through the authenticated encrypted store without reintroducing raw copies. */
+export async function readHyperliquidAgentAsync(owner, options = {}) {
   const key = agentStorageKey(owner);
   try {
+    const scope = options.scope || captureCredentialScope();
+    assertCredentialScope(scope);
+    const sync = readHyperliquidAgent(owner);
+    if (sync) return sync;
     const parsed = await readEncryptedCredential(key);
-    const agent = agentFromStoredRecord(parsed);
-    if (agent) persistAgent(owner, agent);
-    return agent;
+    assertCredentialScope(scope);
+    return agentFromStoredRecord(parsed);
   } catch {
     return null;
   }

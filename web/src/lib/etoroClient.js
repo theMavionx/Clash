@@ -40,15 +40,15 @@ export async function readEtoroCredentials() {
   return normalizeEtoroCredentials(migrated || await readEncryptedCredential(ETORO_STORAGE_KEY));
 }
 
-export async function saveEtoroCredentials(input) {
+export async function saveEtoroCredentials(input, options) {
   const credentials = normalizeEtoroCredentials(input);
   if (!credentials) throw new Error('Connect an eToro Real account with its API key and user key. Demo is not supported.');
-  await writeEncryptedCredential(ETORO_STORAGE_KEY, credentials);
+  await writeEncryptedCredential(ETORO_STORAGE_KEY, credentials, options);
   return credentials;
 }
 
-export async function clearEtoroCredentials() {
-  await removeEncryptedCredential(ETORO_STORAGE_KEY);
+export async function clearEtoroCredentials(options) {
+  await removeEncryptedCredential(ETORO_STORAGE_KEY, options);
 }
 
 export function etoroHeaders(token, credentials) {

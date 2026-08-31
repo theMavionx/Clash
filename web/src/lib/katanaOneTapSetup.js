@@ -8,6 +8,8 @@ import {
   migratePlainLocalStorageCredential,
   readEncryptedCredential,
   writeEncryptedCredential,
+  captureCredentialScope,
+  assertCredentialScope,
 } from './encryptedCredentialStorage';
 
 const FUTURES_API = '/api/futures';
@@ -124,14 +126,13 @@ export async function loadKatanaStoredOneTapSigner(wallet) {
   return normalized ? signerFromPrivateKey(normalized.privateKey) : null;
 }
 
-async function writeOneTapSigner(wallet, signer) {
+async function writeOneTapSigner(wallet, signer, options) {
   const key = oneTapSignerStorageKey(wallet);
   await writeEncryptedCredential(key, {
     privateKey: signer.privateKey,
     address: signer.address,
     savedAt: Date.now(),
-  });
-  try { window.localStorage.removeItem(key); } catch {}
+  }, options);
 }
 
 function resolveWalletClient(ctx, walletAddress) {
@@ -205,8 +206,12 @@ async function authorizeKatanaOneTapSigner({
  * Enable Katana one-tap delegated signer (wallet signs delegated-key registration if needed).
  */
 export async function ensureKatanaOneTapReady(ctx = {}) {
+  const scope = ctx.credentialScope || captureCredentialScope();
+  const assertCurrent = () => assertCredentialScope(scope, { token: ctx.playerToken });
+  assertCurrent();
   const playerToken = ctx.playerToken || '';
   const credentials = await loadKatanaStoredCredentials();
+  assertCurrent();
   if (!credentials) {
     return { ok: false, error: 'No Katana API credentials. Activate Katana in Futures.' };
   }
@@ -219,6 +224,7 @@ export async function ensureKatanaOneTapReady(ctx = {}) {
 
   try {
     const existing = await loadKatanaStoredOneTapSigner(walletAddress);
+    assertCurrent();
     const signer = existing || signerFromPrivateKey(generatePrivateKey());
     const auth = await authorizeKatanaOneTapSigner({
       playerToken,
@@ -230,7 +236,9 @@ export async function ensureKatanaOneTapReady(ctx = {}) {
     if (!auth?.ok) {
       return { ok: false, error: auth?.error || 'Katana one-tap authorization failed' };
     }
-    await writeOneTapSigner(walletAddress, signer);
+    assertCurrent();
+    await writeOneTapSigner(walletAddress, signer, { scope });
+    assertCurrent();
     return { ok: true, wallet: walletAddress, signer: signer.address };
   } catch (e) {
     const msg = String(e?.message || e || '');

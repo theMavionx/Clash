@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback, useRef, createContext, useContext, useMemo, createElement } from 'react';
 import { setClientActivity } from '../lib/updateCoordinator';
+import { credentialVault } from '../lib/encryptedCredentialStorage';
 
 // Separate contexts so components only re-render when their slice changes
 const SendContext = createContext(null);
@@ -163,6 +164,7 @@ export function GodotProvider({ children }) {
   useEffect(() => {
     const handlePlayerPatch = (event) => {
       const patch = event?.detail || {};
+      if (Object.prototype.hasOwnProperty.call(patch, 'token') && patch.token !== window._playerToken) credentialVault.lock({ revoke: false });
       setPlayerState(prev => {
         if (!prev) return prev;
         const next = { ...prev, ...patch };
@@ -189,6 +191,9 @@ export function GodotProvider({ children }) {
           setReady(true);
           break;
         case 'state':
+          if (Object.prototype.hasOwnProperty.call(data, 'token') && data.token !== window._playerToken) {
+            credentialVault.lock({ revoke: !data.token });
+          }
           notifyGodotUiReady('state');
           setPlayerState(prev => {
             const next = { ...(prev || {}), ...data };

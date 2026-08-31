@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createNadoClient } from '@nadohq/client';
 import { getOrderNonce, NADO_ABIS, NADO_DEPLOYMENTS } from '@nadohq/shared';
 import { createWalletClient, formatUnits, http, parseUnits, zeroAddress } from 'viem';
-import { privateKeyToAccount } from 'viem/accounts';
 import { useDex } from '../contexts/DexContext';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { usePlayer } from './useGodot';
@@ -43,6 +42,11 @@ import {
   requireNadoReferralVerification,
 } from '../lib/nadoReferral';
 import { reconcileNadoLinkedSigner } from '../lib/nadoLinkedSignerReconcile';
+import {
+  forgetNadoLinkedSigner, linkedSignerFromPrivateKey, nadoAddressToBytes32,
+  nadoSignerAddress, readNadoLinkedSigner, rememberNadoLinkedSigner,
+} from '../lib/nadoLinkedSignerStorage';
+import { useCredentialOperationScope } from './useCredentialOperationScope';
 
 const POLL_INTERVAL_MS = 45_000;
 const NADO_REFRESH_BACKOFF_MS = 60_000;
@@ -50,11 +54,8 @@ const NADO_REFRESH_WARNING_INTERVAL_MS = 5 * 60_000;
 const CLAIM_LOOKBACK_ATTEMPTS = 5;
 const NADO_WITHDRAW_FEE_USDT = 1;
 const NADO_LEGACY_TRIGGER_CACHE_PREFIX = 'nado_trigger_orders:';
-const NADO_LINKED_SIGNER_STORAGE_PREFIX = 'clash_nado_linked_signer_v1';
-const NADO_LINKED_SIGNER_TTL_SECONDS = 30 * 24 * 60 * 60;
 const NADO_TRIGGER_ACTIVE_STATUSES = ['waiting_price', 'waiting_dependency', 'triggering', 'twap_executing'];
 const ZERO_ADDRESS = zeroAddress.toLowerCase();
-const runtimeLinkedSignerCache = new Map();
 
 function num(value, fallback = 0) {
   const n = Number(value);
@@ -185,110 +186,6 @@ function clearLegacyTriggerOrders(wallet) {
   }
 }
 
-function linkedSignerStorages() {
-  if (typeof window === 'undefined') return null;
-  const storages = [];
-  try {
-    if (window.localStorage) storages.push(window.localStorage);
-  } catch { /* noop */ }
-  try {
-    if (window.sessionStorage) storages.push(window.sessionStorage);
-  } catch { /* noop */ }
-  return storages.length ? storages : null;
-}
-
-function linkedSignerStorageKey(owner) {
-  return `${NADO_LINKED_SIGNER_STORAGE_PREFIX}:${String(owner || '').toLowerCase()}`;
-}
-
-function isPrivateKey(value) {
-  return /^0x[0-9a-fA-F]{64}$/.test(String(value || '').trim());
-}
-
-function nadoAddressToBytes32(address) {
-  const clean = String(address || '').trim().toLowerCase();
-  if (!isNadoAddress(clean)) throw new Error('Nado signer address is invalid');
-  return `${clean}${'0'.repeat(24)}`;
-}
-
-function nadoSignerAddress(value) {
-  const clean = String(value || '').trim().toLowerCase();
-  if (isNadoAddress(clean)) return clean;
-  if (!/^0x[0-9a-f]{64}$/.test(clean)) return clean;
-
-  const rightPadded = `0x${clean.slice(2, 42)}`;
-  if (/^0+$/.test(clean.slice(42)) && isNadoAddress(rightPadded)) return rightPadded;
-
-  const leftPadded = `0x${clean.slice(26)}`;
-  if (/^0+$/.test(clean.slice(2, 26)) && isNadoAddress(leftPadded)) return leftPadded;
-
-  return clean;
-}
-
-function linkedSignerFromPrivateKey(privateKey, expiresAt = Math.floor(Date.now() / 1000) + NADO_LINKED_SIGNER_TTL_SECONDS) {
-  const account = privateKeyToAccount(privateKey);
-  return {
-    account,
-    privateKey,
-    address: account.address.toLowerCase(),
-    expiresAt: Number(expiresAt) || Math.floor(Date.now() / 1000) + NADO_LINKED_SIGNER_TTL_SECONDS,
-  };
-}
-
-function readNadoLinkedSigner(owner) {
-  const key = linkedSignerStorageKey(owner);
-  const storages = linkedSignerStorages();
-  const raw = runtimeLinkedSignerCache.get(key) || (() => {
-    if (!storages) return null;
-    for (const storage of storages) {
-      try {
-        const value = storage.getItem(key);
-        if (value) return value;
-      } catch { /* try next storage */ }
-    }
-    return null;
-  })();
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw);
-    if (!isPrivateKey(parsed?.privateKey)) return null;
-    if (Number(parsed?.expiresAt || 0) <= Math.floor(Date.now() / 1000) + 60) return null;
-    return linkedSignerFromPrivateKey(parsed.privateKey, parsed.expiresAt);
-  } catch {
-    return null;
-  }
-}
-
-function rememberNadoLinkedSigner(owner, record) {
-  if (!owner || !record?.privateKey) return record;
-  const next = linkedSignerFromPrivateKey(record.privateKey, record.expiresAt);
-  const payload = JSON.stringify({
-    privateKey: next.privateKey,
-    address: next.address,
-    expiresAt: next.expiresAt,
-  });
-  const key = linkedSignerStorageKey(owner);
-  runtimeLinkedSignerCache.set(key, payload);
-  const storages = linkedSignerStorages();
-  if (storages) {
-    for (const storage of storages) {
-      try { storage.setItem(key, payload); } catch { /* browser storage is best-effort */ }
-    }
-  }
-  return next;
-}
-
-function forgetNadoLinkedSigner(owner) {
-  const key = linkedSignerStorageKey(owner);
-  runtimeLinkedSignerCache.delete(key);
-  const storages = linkedSignerStorages();
-  if (storages) {
-    for (const storage of storages) {
-      try { storage.removeItem(key); } catch { /* noop */ }
-    }
-  }
-}
-
 function createLinkedSignerWalletClient(record) {
   if (!record?.account) return null;
   return createWalletClient({
@@ -339,6 +236,7 @@ export function useNado() {
   const { address, getWalletClient, getPublicClient, ensureChain } = useEvmWallet();
   const player = usePlayer();
   const walletAddr = address || null;
+  const { capture: captureNadoCredentialScope, assert: assertNadoCredentialScope } = useCredentialOperationScope({ player, wallet: walletAddr, dex });
 
   const [account, setAccount] = useState(null);
   const [positions, setPositions] = useState([]);
@@ -541,6 +439,8 @@ export function useNado() {
       setActiveLinkedSigner(null);
       return { ready: false };
     }
+    let scope;
+    try { scope = captureNadoCredentialScope(); } catch (scopeError) { return { ready: false, error: scopeError }; }
     const stored = readNadoLinkedSigner(walletAddr);
     if (!stored) {
       setActiveLinkedSigner(null);
@@ -549,22 +449,25 @@ export function useNado() {
     setActiveLinkedSigner(stored, { approved: false, checking: true });
     try {
       const remote = await getRemoteLinkedSigner();
+      assertNadoCredentialScope(scope);
       const remoteSigner = nadoSignerAddress(remote?.signer);
       const approved = !!remoteSigner && remoteSigner !== ZERO_ADDRESS && remoteSigner === stored.address;
       if (!approved) {
-        forgetNadoLinkedSigner(walletAddr);
+        await forgetNadoLinkedSigner(walletAddr, { scope });
+        assertNadoCredentialScope(scope);
         setActiveLinkedSigner(null, { remoteSigner: remoteSigner || null, approved: false });
         return { ready: false, remote };
       }
-      const next = rememberNadoLinkedSigner(walletAddr, stored);
+      const next = rememberNadoLinkedSigner(walletAddr, stored, { scope });
       setActiveLinkedSigner(next, { approved: true, remoteSigner });
       return { ready: true, record: next, remote };
     } catch (e) {
+      try { assertNadoCredentialScope(scope); } catch { return { ready: false, error: e }; }
       console.warn('[useNado] linked signer status:', e?.message || e);
       setActiveLinkedSigner(stored, { approved: false, error: nadoErrorMessage(e) });
       return { ready: false, record: stored, error: e };
     }
-  }, [walletAddr, getRemoteLinkedSigner, setActiveLinkedSigner]);
+  }, [walletAddr, getRemoteLinkedSigner, setActiveLinkedSigner, captureNadoCredentialScope, assertNadoCredentialScope]);
 
   const fetchMarkets = useCallback(async () => {
     try {
@@ -825,7 +728,9 @@ export function useNado() {
   }, [walletAddr, walletMismatch, ensureChain]);
 
   const enableLinkedSigner = useCallback(async () => {
+    const scope = captureNadoCredentialScope();
     await ensureReady();
+    assertNadoCredentialScope(scope);
     const client = createClient({ useLinkedSigner: false });
     const stored = readNadoLinkedSigner(walletAddr);
     // Use Nado's standard deterministic signer when Clash has no recoverable
@@ -835,41 +740,61 @@ export function useNado() {
     // storage loss and safely rotates the remote signer back to a usable key.
     const { record: remembered, remote } = await reconcileNadoLinkedSigner({
       stored,
-      createStandardSigner: async () => linkedSignerFromPrivateKey(
-        (await client.subaccount.createStandardLinkedSigner(NADO_SUBACCOUNT_NAME)).privateKey,
-      ),
-      getRemote: getRemoteLinkedSigner,
-      linkSigner: signer => client.subaccount.linkSigner({
-        subaccountName: NADO_SUBACCOUNT_NAME,
-        signer,
-      }),
-      remember: record => rememberNadoLinkedSigner(walletAddr, record),
+      createStandardSigner: async () => {
+        assertNadoCredentialScope(scope);
+        const result = await client.subaccount.createStandardLinkedSigner(NADO_SUBACCOUNT_NAME);
+        assertNadoCredentialScope(scope);
+        return linkedSignerFromPrivateKey(result.privateKey);
+      },
+      getRemote: async () => {
+        assertNadoCredentialScope(scope);
+        const result = await getRemoteLinkedSigner();
+        assertNadoCredentialScope(scope);
+        return result;
+      },
+      linkSigner: async signer => {
+        assertNadoCredentialScope(scope);
+        const result = await client.subaccount.linkSigner({ subaccountName: NADO_SUBACCOUNT_NAME, signer });
+        assertNadoCredentialScope(scope);
+        return result;
+      },
+      remember: record => {
+        assertNadoCredentialScope(scope);
+        return rememberNadoLinkedSigner(walletAddr, record, { scope });
+      },
       normalizeSigner: nadoSignerAddress,
       encodeSigner: nadoAddressToBytes32,
     });
+    assertNadoCredentialScope(scope);
     const verifiedSigner = nadoSignerAddress(remote?.signer);
     setActiveLinkedSigner(remembered, { approved: true, remoteSigner: verifiedSigner });
     return remembered;
-  }, [walletAddr, ensureReady, createClient, getRemoteLinkedSigner, setActiveLinkedSigner]);
+  }, [walletAddr, ensureReady, createClient, getRemoteLinkedSigner, setActiveLinkedSigner, captureNadoCredentialScope, assertNadoCredentialScope]);
 
   const ensureLinkedSignerReady = useCallback(async () => {
+    const scope = captureNadoCredentialScope();
     await ensureReady();
+    assertNadoCredentialScope(scope);
     if (
       linkedSignerApprovedRef.current
       && linkedSignerRef.current
       && linkedSignerWalletClientRef.current
     ) return linkedSignerRef.current;
     const refreshed = await refreshLinkedSignerStatus();
+    assertNadoCredentialScope(scope);
     if (refreshed.ready && refreshed.record) return refreshed.record;
     return enableLinkedSigner();
-  }, [ensureReady, refreshLinkedSignerStatus, enableLinkedSigner]);
+  }, [ensureReady, refreshLinkedSignerStatus, enableLinkedSigner, captureNadoCredentialScope, assertNadoCredentialScope]);
 
   const disableLinkedSigner = useCallback(async () => {
     if (!walletAddr) return { success: true };
     const stored = linkedSignerRef.current || readNadoLinkedSigner(walletAddr);
     try {
+      const scope = captureNadoCredentialScope();
       await ensureReady();
+      assertNadoCredentialScope(scope);
       const remote = await getRemoteLinkedSigner().catch(() => null);
+      assertNadoCredentialScope(scope);
       const remoteSigner = nadoSignerAddress(remote?.signer);
       if (stored?.address && remoteSigner === stored.address) {
         const client = createClient({ useLinkedSigner: false });
@@ -877,8 +802,10 @@ export function useNado() {
           subaccountName: NADO_SUBACCOUNT_NAME,
           signer: nadoAddressToBytes32(zeroAddress),
         });
+        assertNadoCredentialScope(scope);
       }
-      forgetNadoLinkedSigner(walletAddr);
+      await forgetNadoLinkedSigner(walletAddr, { scope });
+      assertNadoCredentialScope(scope);
       setActiveLinkedSigner(null);
       replaceTriggerOrders([]);
       clearLegacyTriggerOrders(walletAddr);
@@ -888,7 +815,7 @@ export function useNado() {
       setError(msg);
       return { error: msg };
     }
-  }, [walletAddr, ensureReady, getRemoteLinkedSigner, createClient, setActiveLinkedSigner, replaceTriggerOrders]);
+  }, [walletAddr, ensureReady, getRemoteLinkedSigner, createClient, setActiveLinkedSigner, replaceTriggerOrders, captureNadoCredentialScope, assertNadoCredentialScope]);
 
   const fetchTriggerOrdersFromNado = useCallback(async ({ ensureWallet = false, ensureSigner = false, allowWalletSignature = false } = {}) => {
     if (!walletAddr) return [];

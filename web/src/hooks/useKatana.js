@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useDex } from '../contexts/DexContext';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { usePlayer } from './useGodot';
+import { useCredentialOperationScope } from './useCredentialOperationScope';
 import { KATANA_CHAIN_ID, KATANA_PERPS_REFERRAL_CODE, KATANA_PERPS_REFERRAL_URL } from '../lib/katanaConfig';
 import { signTypedDataCompat } from '../lib/risexClient';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
@@ -92,20 +93,18 @@ async function loadOneTapSigner(wallet) {
   return normalized ? signerFromPrivateKey(normalized.privateKey) : null;
 }
 
-async function writeOneTapSigner(wallet, signer) {
+async function writeOneTapSigner(wallet, signer, options) {
   const key = oneTapSignerStorageKey(wallet);
   await writeEncryptedCredential(key, {
     privateKey: signer.privateKey,
     address: signer.address,
     savedAt: Date.now(),
-  });
-  try { window.localStorage.removeItem(key); } catch {}
+  }, options);
 }
 
-async function clearOneTapSigner(wallet) {
+async function clearOneTapSigner(wallet, options) {
   const key = oneTapSignerStorageKey(wallet);
-  await removeEncryptedCredential(key);
-  try { window.localStorage.removeItem(key); } catch {}
+  await removeEncryptedCredential(key, options);
 }
 
 function stripDomainTypes(types = {}) {
@@ -221,6 +220,7 @@ export function useKatana() {
   const isActiveDex = dex === 'katana';
   const walletAddr = isActiveDex ? (evm.address || '') : '';
   const token = playerToken(player);
+  const { capture: captureCredential, assert: assertCredential } = useCredentialOperationScope({ player, token, wallet: walletAddr, dex: 'katana' });
 
   const [markets, setMarkets] = useState([]);
   const [prices, setPrices] = useState([]);
@@ -522,6 +522,7 @@ export function useKatana() {
   }, []);
 
   const activate = useCallback(async ({ apiKey, apiSecret } = {}) => {
+    const scope = captureCredential();
     if (!token) return disabled('Missing game session token.');
     if (!walletAddr) return disabled('Connect a Katana wallet first.');
     try {
@@ -529,7 +530,9 @@ export function useKatana() {
       const next = normalizeKatanaCredentials({ apiKey, apiSecret, wallet: walletAddr });
       if (!next) return disabled('Katana API key and secret required.');
       logKatana('activate credentials submit', { wallet: walletAddr, has_api_key: !!apiKey, has_api_secret: !!apiSecret });
-      await writeEncryptedCredential(STORAGE_KEY, next);
+      assertCredential(scope);
+      await writeEncryptedCredential(STORAGE_KEY, next, { scope });
+      assertCredential(scope);
       setCredentials(next);
       const nextStatus = { ...(status || {}), ...credentialStatus(next) };
       setStatus(nextStatus);
@@ -543,7 +546,7 @@ export function useKatana() {
       logKatana('activate failed', { status: e?.status, message: e?.message, data: e?.data });
       return { error: e?.message || 'Failed to save Katana credentials' };
     }
-  }, [evm, loadPrivate, status, token, walletAddr]);
+  }, [evm, loadPrivate, status, token, walletAddr, captureCredential, assertCredential]);
 
   const authorizeOneTapSigner = useCallback(async (signer) => {
     if (!token) return disabled('Missing game session token.');
@@ -600,8 +603,10 @@ export function useKatana() {
   }, [credentials, signKatanaTypedData, token, walletAddr]);
 
   const setKatanaOneTapTradingEnabled = useCallback(async (enabled, privateKey = '') => {
+    const scope = captureCredential();
     if (!enabled) {
-      await clearOneTapSigner(walletAddr);
+      await clearOneTapSigner(walletAddr, { scope });
+      assertCredential(scope);
       oneTapSignerRef.current = null;
       setOneTapSigner(null);
       setOneTapAuthorized(false);
@@ -613,7 +618,9 @@ export function useKatana() {
         : (oneTapSignerRef.current || signerFromPrivateKey(generatePrivateKey()));
       const auth = await authorizeOneTapSigner(signer);
       if (auth?.error) return auth;
-      await writeOneTapSigner(walletAddr, signer);
+      assertCredential(scope);
+      await writeOneTapSigner(walletAddr, signer, { scope });
+      assertCredential(scope);
       oneTapSignerRef.current = signer;
       setOneTapSigner(signer);
       setOneTapAuthorized(true);
@@ -621,7 +628,7 @@ export function useKatana() {
     } catch (e) {
       return { error: e?.message || 'Failed to enable Katana one tap trading' };
     }
-  }, [authorizeOneTapSigner, walletAddr]);
+  }, [authorizeOneTapSigner, walletAddr, captureCredential, assertCredential]);
 
   const claimGold = useCallback(async ({ reason = 'katana' } = {}) => {
     if (!token) return disabled('Missing game session token.');
@@ -1006,7 +1013,7 @@ export function useKatana() {
       signer: oneTapSigner?.address || '',
       note: tradeReady
         ? (oneTapSigner?.address && oneTapAuthorized
-          ? 'Katana orders are signed by an authorized browser-only delegated key.'
+          ? 'Katana orders sign locally with the authorized delegate. Its key is encrypted on this device; encrypted server sync requires wallet verification.'
           : 'Enable one tap to authorize a local delegated key once; otherwise each order uses wallet EIP-712.')
         : 'Save Katana API credentials before trading.',
     },
@@ -1024,8 +1031,11 @@ export function useKatana() {
     depositToPacifica: openKatanaApp,
     withdraw: openKatanaApp,
     disconnect: async () => {
-      await removeEncryptedCredential(STORAGE_KEY);
-      await clearOneTapSigner(walletAddr);
+      const scope = captureCredential();
+      await removeEncryptedCredential(STORAGE_KEY, { scope });
+      assertCredential(scope);
+      await clearOneTapSigner(walletAddr, { scope });
+      assertCredential(scope);
       oneTapSignerRef.current = null;
       setOneTapSigner(null);
       setOneTapAuthorized(false);

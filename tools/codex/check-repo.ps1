@@ -122,6 +122,12 @@ $PowerShellFiles = @(
 
 Invoke-Step "combat grid snapshot" { node tools/combat-grid/generate-combat-grid-config.cjs --check }
 Invoke-Step "combat grid regression" { node server/test-combat-grid-sync.js }
+Invoke-Step "encrypted trading vault, wallet proof and deployment key safety" {
+    node --test server/test-trading-credential-vault.js server/test-trading-credential-unlock.js server/test-provision-trading-credential-key.js
+}
+Invoke-Step "trading credential migration, login isolation and secure browser cache" {
+    node --test web/test-credential-vault-sync.mjs web/test-encrypted-credential-storage.mjs web/test-credential-vault-unlock.mjs web/test-credential-legacy-adapters.mjs web/test-bot-credential-scope.mjs web/test-credential-vault-cache.mjs
+}
 Invoke-Step "quest reward storage, recovery and HTTP idempotency" { node --test server/test-task-rewards.js web/test-quest-reward-delivery.mjs }
 Invoke-Step "casualty report regression" { node server/test-casualty-report.js }
 Invoke-Step "battle result idempotency regression" { node server/test-battle-result-idempotency.js }

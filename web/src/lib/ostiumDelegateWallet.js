@@ -1,13 +1,15 @@
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import {
+  assertCredentialScope,
+  captureCredentialScope,
+  listCredentialNames,
   readEncryptedCredential,
   removeEncryptedCredential,
   writeEncryptedCredential,
-} from './encryptedCredentialStorage';
+} from './encryptedCredentialStorage.js';
 
 const STORAGE_PREFIX = 'clash_ostium_delegate_wallet_v1';
 const ARCHIVE_PREFIX = 'clash_ostium_delegate_wallet_archive_v1';
-const LOCAL_MIRROR_PREFIX = 'clash_encrypted_credential_mirror_v1:';
 
 function normalizeAddress(value) {
   return String(value || '').trim().toLowerCase();
@@ -27,12 +29,8 @@ function knownEncryptedNames(wallet) {
     storageKey(normalizedWallet),
     archiveStorageKey(normalizedWallet),
   ]);
-  if (typeof window === 'undefined') return [...names];
   try {
-    for (let i = 0; i < window.localStorage.length; i += 1) {
-      const key = window.localStorage.key(i);
-      if (!key?.startsWith(LOCAL_MIRROR_PREFIX)) continue;
-      const name = key.slice(LOCAL_MIRROR_PREFIX.length);
+    for (const name of listCredentialNames()) {
       if (name.startsWith(`${STORAGE_PREFIX}:`) || name.startsWith(`${ARCHIVE_PREFIX}:`)) {
         names.add(name);
       }
@@ -104,19 +102,25 @@ function uniqueDelegates(rows) {
   return out;
 }
 
-export async function loadOstiumDelegate(wallet) {
+export async function loadOstiumDelegate(wallet, options = {}) {
   const normalizedWallet = normalizeAddress(wallet);
   if (!normalizedWallet) return null;
-  const [normalized] = await loadOstiumDelegates(normalizedWallet);
+  const scope = options.scope || captureCredentialScope();
+  assertCredentialScope(scope);
+  const [normalized] = await loadOstiumDelegates(normalizedWallet, { scope });
+  assertCredentialScope(scope);
   return normalized ? ostiumDelegateFromPrivateKey(normalized.privateKey) : null;
 }
 
-export async function loadOstiumDelegates(wallet) {
+export async function loadOstiumDelegates(wallet, options = {}) {
   const normalizedWallet = normalizeAddress(wallet);
   if (!normalizedWallet) return [];
+  const scope = options.scope || captureCredentialScope();
+  assertCredentialScope(scope);
   const rows = [];
   for (const name of knownEncryptedNames(normalizedWallet)) {
     const stored = await readEncryptedCredential(name).catch(() => null);
+    assertCredentialScope(scope);
     try {
       if (name.startsWith(`${ARCHIVE_PREFIX}:`)) {
         rows.push(...normalizeArchive(stored, normalizedWallet));
@@ -133,18 +137,23 @@ export async function loadOstiumDelegates(wallet) {
     .map(row => ostiumDelegateFromPrivateKey(row.privateKey));
 }
 
-export async function ensureOstiumDelegate(wallet) {
+export async function ensureOstiumDelegate(wallet, options = {}) {
   const normalizedWallet = normalizeAddress(wallet);
   if (!normalizedWallet) throw new Error('Connect your Ostium wallet first');
-  const existing = await loadOstiumDelegate(normalizedWallet);
+  const scope = options.scope || captureCredentialScope();
+  assertCredentialScope(scope);
+  const existing = await loadOstiumDelegate(normalizedWallet, { scope });
+  assertCredentialScope(scope);
   if (existing) return existing;
   const signer = ostiumDelegateFromPrivateKey(generatePrivateKey());
-  return saveOstiumDelegate(normalizedWallet, signer);
+  return saveOstiumDelegate(normalizedWallet, signer, { scope });
 }
 
-export async function saveOstiumDelegate(wallet, signer) {
+export async function saveOstiumDelegate(wallet, signer, options = {}) {
   const normalizedWallet = normalizeAddress(wallet);
   if (!normalizedWallet || !signer?.privateKey) throw new Error('Ostium delegate signer is missing');
+  const scope = options.scope || captureCredentialScope();
+  assertCredentialScope(scope);
   const normalizedSigner = ostiumDelegateFromPrivateKey(signer.privateKey);
   const createdAt = Number(signer.createdAt || Date.now());
   const activeRecord = {
@@ -156,8 +165,10 @@ export async function saveOstiumDelegate(wallet, signer) {
   };
   await writeEncryptedCredential(storageKey(normalizedWallet), {
     ...activeRecord,
-  });
-  const existing = await loadOstiumDelegates(normalizedWallet).catch(() => []);
+  }, { scope });
+  assertCredentialScope(scope);
+  const existing = await loadOstiumDelegates(normalizedWallet, { scope }).catch(() => []);
+  assertCredentialScope(scope);
   const archive = uniqueDelegates([
     activeRecord,
     ...existing.map(row => ({
@@ -168,13 +179,18 @@ export async function saveOstiumDelegate(wallet, signer) {
       updatedAt: Number(row.updatedAt || Date.now()),
     })),
   ]).slice(0, 12);
-  await writeEncryptedCredential(archiveStorageKey(normalizedWallet), { wallet: normalizedWallet, delegates: archive });
+  await writeEncryptedCredential(archiveStorageKey(normalizedWallet), { wallet: normalizedWallet, delegates: archive }, { scope });
+  assertCredentialScope(scope);
   return normalizedSigner;
 }
 
-export async function clearOstiumDelegate(wallet) {
+export async function clearOstiumDelegate(wallet, options = {}) {
   const normalizedWallet = normalizeAddress(wallet);
   if (!normalizedWallet) return;
-  await removeEncryptedCredential(storageKey(normalizedWallet));
-  await removeEncryptedCredential(archiveStorageKey(normalizedWallet));
+  const scope = options.scope || captureCredentialScope();
+  assertCredentialScope(scope);
+  await removeEncryptedCredential(storageKey(normalizedWallet), { scope });
+  assertCredentialScope(scope);
+  await removeEncryptedCredential(archiveStorageKey(normalizedWallet), { scope });
+  assertCredentialScope(scope);
 }

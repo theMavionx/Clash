@@ -6,6 +6,10 @@ import {
   stringToHex,
 } from 'viem';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
+import {
+  assertCredentialScope, captureCredentialScope, peekEncryptedCredential,
+  removeEncryptedCredential, writeEncryptedCredential,
+} from './encryptedCredentialStorage.js';
 
 export const LEVERUP_CHAIN_ID = 143;
 export const LEVERUP_DIAMOND = '0xea1b8E4aB7f14F7dCA68c5B214303B13078FC5ec';
@@ -175,7 +179,7 @@ export function leverupStorageKey(trader) {
 export function readLeverupAgent(trader) {
   if (typeof window === 'undefined' || !trader) return null;
   try {
-    const parsed = JSON.parse(localStorage.getItem(leverupStorageKey(trader)) || 'null');
+    const parsed = peekEncryptedCredential(leverupStorageKey(trader));
     if (!/^0x[0-9a-fA-F]{64}$/u.test(String(parsed?.privateKey || ''))) return null;
     const account = privateKeyToAccount(parsed.privateKey);
     if (parsed.address && String(parsed.address).toLowerCase() !== account.address.toLowerCase()) return null;
@@ -185,18 +189,24 @@ export function readLeverupAgent(trader) {
   }
 }
 
-export function createAndStoreLeverupAgent(trader) {
+export function createAndStoreLeverupAgent(trader, options = {}) {
   if (typeof window === 'undefined') throw new Error('Browser storage is unavailable');
+  const scope = options.scope || captureCredentialScope();
+  assertCredentialScope(scope);
   const privateKey = generatePrivateKey();
   const account = privateKeyToAccount(privateKey);
   const record = { version: 2, privateKey, address: account.address, createdAt: Date.now() };
-  localStorage.setItem(leverupStorageKey(trader), JSON.stringify(record));
+  writeEncryptedCredential(leverupStorageKey(trader), record, { scope }).catch(() => {});
   return { privateKey, address: account.address };
 }
 
-export function clearLeverupAgent(trader) {
+export function clearLeverupAgent(trader, options = {}) {
   if (typeof window === 'undefined' || !trader) return;
-  localStorage.removeItem(leverupStorageKey(trader));
+  const scope = options.scope || captureCredentialScope();
+  assertCredentialScope(scope);
+  const pending = removeEncryptedCredential(leverupStorageKey(trader), { scope });
+  pending.catch(() => {});
+  return pending;
 }
 
 export function isLeverupAgentAuthorized(auth, agentAddress) {

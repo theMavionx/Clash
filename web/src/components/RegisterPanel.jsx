@@ -1,4 +1,5 @@
 import { memo, useState, useCallback, useEffect, useRef } from 'react';
+import { credentialVault } from '../lib/encryptedCredentialStorage';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import EvmWalletModal from './EvmWalletModal';
@@ -701,6 +702,7 @@ function RegisterPanel() {
   }, [actions, aptos]);
 
   const disconnectStoredWallet = useCallback(() => {
+    credentialVault.lock();
     try {
       localStorage.removeItem(GAME_AUTH_STORAGE_KEY);
       localStorage.removeItem(DEX_PICKED_KEY);

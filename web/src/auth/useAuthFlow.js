@@ -23,6 +23,7 @@
 // parent flips `showRegister=false`, unmounting the panel.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { credentialVault } from '../lib/encryptedCredentialStorage';
 import { useWallet as useSolWallet } from '@solana/wallet-adapter-react';
 import { SolanaMobileWalletAdapterWalletName } from '@solana-mobile/wallet-standard-mobile';
 import { useSignMessage as usePrivySolanaSignMessage } from '@privy-io/react-auth/solana';
@@ -1264,6 +1265,7 @@ export function useAuthFlow() {
   }, []);
 
   const changeWallet = useCallback(async () => {
+    credentialVault.lock();
     // This is an explicit account-boundary action. Keep the selected DEX so
     // the user returns to the correct venue setup, but remove every wallet
     // resolver that could immediately re-select the previous account.
@@ -1386,6 +1388,7 @@ export function useAuthFlow() {
   }, [clearManualReconnectRequired]);
 
   const logout = useCallback(() => {
+    credentialVault.lock();
     registerAttemptManagerRef.current?.cancelCurrent();
     lastRegisteredRef.current = null;
     fcEvmTriedRef.current = false;

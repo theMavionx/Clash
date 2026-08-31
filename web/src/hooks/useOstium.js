@@ -6,6 +6,8 @@ import { CancelOrderType, MIN_OPEN_SIZE_USD, OrderType, OstiumClient } from '@os
 import { useDex } from '../contexts/DexContext';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { usePlayer } from './useGodot';
+import { useCredentialOperationScope } from './useCredentialOperationScope';
+import { peekEncryptedCredential } from '../lib/encryptedCredentialStorage';
 import {
   ostiumOrderMatchesTarget,
   resolveOstiumCancelTarget,
@@ -760,6 +762,7 @@ export function useOstium() {
   } = useEvmWallet();
   const player = usePlayer();
   const walletAddr = address || null;
+  const { capture: captureCredentialOperation, assert: assertCredentialOperation } = useCredentialOperationScope({ player, wallet: walletAddr, dex });
 
   const [account, setAccount] = useState(null);
   const [positions, setPositions] = useState([]);
@@ -1216,7 +1219,12 @@ export function useOstium() {
     return sendBuiltTx(tx, 'ostium.approve_usdc');
   }, [sendBuiltTx]);
 
-  const loadDelegateCandidates = useCallback(async (preferredSigner = null) => {
+  const loadDelegateCandidates = useCallback(async (preferredSigner = null, options = {}) => {
+    const scope = options.scope || captureCredentialOperation();
+    assertCredentialOperation(scope);
+    // A removed active record must not be resurrected from a hook ref or archive.
+    const storageKey = `clash_ostium_delegate_wallet_v1:${String(walletAddr || '').toLowerCase()}`;
+    if (!peekEncryptedCredential(storageKey)?.privateKey) return [];
     const rows = [];
     const push = (signer) => {
       if (!signer?.privateKey || !signer?.address) return;
@@ -1224,43 +1232,59 @@ export function useOstium() {
       if (rows.some(row => String(row.address).toLowerCase() === key)) return;
       rows.push(signer);
     };
-    push(preferredSigner);
-    push(delegateSignerRef.current);
-    const stored = await loadOstiumDelegates(walletAddr).catch(() => []);
+    const stored = await loadOstiumDelegates(walletAddr, { scope }).catch(() => []);
+    assertCredentialOperation(scope);
+    if (!peekEncryptedCredential(storageKey)?.privateKey) return [];
+    for (const cached of [preferredSigner, delegateSignerRef.current]) {
+      if (stored.some(row => row.privateKey === cached?.privateKey)) push(cached);
+    }
     stored.forEach(push);
     return rows;
-  }, [walletAddr]);
+  }, [walletAddr, captureCredentialOperation, assertCredentialOperation]);
 
-  const promoteDelegateSigner = useCallback(async (signer, reason = 'unknown') => {
+  const promoteDelegateSigner = useCallback(async (signer, reason = 'unknown', options = {}) => {
     if (!signer?.privateKey) return null;
-    setDelegateSigner(signer);
-    delegateSignerRef.current = signer;
-    await saveOstiumDelegate(walletAddr, signer).catch((e) => {
+    const scope = options.scope || captureCredentialOperation();
+    assertCredentialOperation(scope);
+    if (!peekEncryptedCredential(`clash_ostium_delegate_wallet_v1:${String(walletAddr || '').toLowerCase()}`)?.privateKey) {
+      throw new Error('Saved Ostium delegate was removed. Enable one tap again to continue.');
+    }
+    await saveOstiumDelegate(walletAddr, signer, { scope }).catch((e) => {
       console.warn('[useOstium] failed to save promoted delegate:', e?.message || e);
     });
+    assertCredentialOperation(scope);
+    setDelegateSigner(signer);
+    delegateSignerRef.current = signer;
     console.info('[useOstium] one tap delegate selected', {
       reason,
       delegate: signer.address,
       wallet: walletAddr,
     });
     return signer;
-  }, [walletAddr]);
+  }, [walletAddr, captureCredentialOperation, assertCredentialOperation]);
 
-  const findRegisteredDelegateSigner = useCallback(async (client, preferredSigner = null) => {
-    const candidates = await loadDelegateCandidates(preferredSigner);
+  const findRegisteredDelegateSigner = useCallback(async (client, preferredSigner = null, options = {}) => {
+    const scope = options.scope || captureCredentialOperation();
+    assertCredentialOperation(scope);
+    const candidates = await loadDelegateCandidates(preferredSigner, { scope });
+    assertCredentialOperation(scope);
     if (!candidates.length) return { signer: null, registered: null, candidates };
     const registered = await readRegisteredDelegate(client, candidates[0].address);
+    assertCredentialOperation(scope);
     const registeredKey = String(registered || '').toLowerCase();
     const signer = registeredKey
       ? candidates.find(row => String(row.address).toLowerCase() === registeredKey) || null
       : null;
     if (signer && String(preferredSigner?.address || '').toLowerCase() !== registeredKey) {
-      await promoteDelegateSigner(signer, 'registered_on_chain');
+      await promoteDelegateSigner(signer, 'registered_on_chain', { scope });
+      assertCredentialOperation(scope);
     }
     return { signer, registered, candidates };
-  }, [loadDelegateCandidates, promoteDelegateSigner, readRegisteredDelegate]);
+  }, [loadDelegateCandidates, promoteDelegateSigner, readRegisteredDelegate, captureCredentialOperation, assertCredentialOperation]);
 
-  const refreshDelegateStatus = useCallback(async (providedSigner = null) => {
+  const refreshDelegateStatus = useCallback(async (providedSigner = null, options = {}) => {
+    let scope;
+    try { scope = options.scope || captureCredentialOperation(); assertCredentialOperation(scope); } catch { return null; }
     if (!walletAddr || !isEvmAddress(walletAddr)) {
       setDelegateSigner(null);
       delegateSignerRef.current = null;
@@ -1278,11 +1302,14 @@ export function useOstium() {
     }
     try {
       const client = await createBuildClient();
-      const registeredMatch = await findRegisteredDelegateSigner(client, providedSigner);
+      assertCredentialOperation(scope);
+      const registeredMatch = await findRegisteredDelegateSigner(client, providedSigner, { scope });
+      assertCredentialOperation(scope);
       const signer = registeredMatch.signer
         || providedSigner
         || delegateSignerRef.current
-        || await loadOstiumDelegate(walletAddr);
+        || await loadOstiumDelegate(walletAddr, { scope });
+      assertCredentialOperation(scope);
       if (!signer?.privateKey) {
         setDelegateSigner(null);
         delegateSignerRef.current = null;
@@ -1305,6 +1332,7 @@ export function useOstium() {
         delegateGasBalance(signer.address),
         client.checkUsdcAllowance(OSTIUM_MAX_ALLOWANCE_CHECK_USD).catch(() => null),
       ]);
+      assertCredentialOperation(scope);
       const delegateReady = String(registered || '').toLowerCase() === String(signer.address).toLowerCase();
       const gasReady = gasWei != null ? gasWei >= DELEGATE_GAS_MIN_WEI : false;
       const allowanceReady = allowance?.sufficient === true;
@@ -1330,6 +1358,7 @@ export function useOstium() {
       setDelegateStatus(next);
       return { ...next, privateKey: signer.privateKey };
     } catch (e) {
+      try { assertCredentialOperation(scope); } catch { return null; }
       const msg = errorMessage(e, 'Failed to check Ostium one tap');
       console.warn('[useOstium] one tap status:', msg);
       setDelegateStatus(status => ({
@@ -1339,18 +1368,25 @@ export function useOstium() {
       }));
       return null;
     }
-  }, [createBuildClient, delegateGasBalance, findRegisteredDelegateSigner, readRegisteredDelegate, walletAddr]);
+  }, [createBuildClient, delegateGasBalance, findRegisteredDelegateSigner, readRegisteredDelegate, walletAddr, captureCredentialOperation, assertCredentialOperation]);
 
-  const ensureOneTapReady = useCallback(async ({ topUpGas = true, requireAllowance = true, setupIfNeeded = true } = {}) => {
+  const ensureOneTapReady = useCallback(async ({ topUpGas = true, requireAllowance = true, setupIfNeeded = true, scope: suppliedScope } = {}) => {
+    const scope = suppliedScope || captureCredentialOperation();
+    assertCredentialOperation(scope);
     if (!walletAddr || !isEvmAddress(walletAddr)) throw new Error('Connect your EVM wallet first');
     if (typeof ensureChain === 'function') await ensureChain(OSTIUM_CHAIN_ID);
+    assertCredentialOperation(scope);
     const selfClient = await createBuildClient();
-    const registeredMatch = await findRegisteredDelegateSigner(selfClient);
+    assertCredentialOperation(scope);
+    const registeredMatch = await findRegisteredDelegateSigner(selfClient, null, { scope });
+    assertCredentialOperation(scope);
     const signer = registeredMatch.signer || (setupIfNeeded
-      ? await ensureOstiumDelegate(walletAddr)
-      : (delegateSignerRef.current || await loadOstiumDelegate(walletAddr)));
+      ? await ensureOstiumDelegate(walletAddr, { scope })
+      : (delegateSignerRef.current || await loadOstiumDelegate(walletAddr, { scope })));
+    assertCredentialOperation(scope);
     if (!signer?.privateKey) throw new Error('Ostium one tap is not enabled');
-    await promoteDelegateSigner(signer, registeredMatch.signer ? 'ensure_ready_registered' : 'ensure_ready_active');
+    await promoteDelegateSigner(signer, registeredMatch.signer ? 'ensure_ready_registered' : 'ensure_ready_active', { scope });
+    assertCredentialOperation(scope);
     if (requireAllowance) {
       if (setupIfNeeded) {
         await ensureMaxAllowance(selfClient);
@@ -1360,19 +1396,24 @@ export function useOstium() {
       }
     }
     const registered = registeredMatch.registered || await readRegisteredDelegate(selfClient, signer.address);
+    assertCredentialOperation(scope);
     if (String(registered || '').toLowerCase() !== String(signer.address).toLowerCase()) {
       if (!setupIfNeeded) throw new Error('Ostium one tap delegate is not approved on-chain.');
       const tx = selfClient.getSetDelegateTx(signer.address);
       await sendBuiltTx(tx, 'ostium.set_delegate');
+      assertCredentialOperation(scope);
     }
     const gasWei = await delegateGasBalance(signer.address).catch(() => null);
+    assertCredentialOperation(scope);
     if (gasWei != null && gasWei < DELEGATE_GAS_MIN_WEI && !(topUpGas && setupIfNeeded)) {
       throw new Error(`Ostium one tap delegate needs Arbitrum ETH gas top-up. Current delegate gas is ${formatEthAmount(gasWei)} ETH.`);
     }
     if (topUpGas && setupIfNeeded) await topUpDelegateGas(signer.address);
-    await refreshDelegateStatus(signer);
+    assertCredentialOperation(scope);
+    await refreshDelegateStatus(signer, { scope });
+    assertCredentialOperation(scope);
     return signer;
-  }, [createBuildClient, delegateGasBalance, ensureChain, ensureMaxAllowance, findRegisteredDelegateSigner, promoteDelegateSigner, readRegisteredDelegate, refreshDelegateStatus, sendBuiltTx, topUpDelegateGas, walletAddr]);
+  }, [createBuildClient, delegateGasBalance, ensureChain, ensureMaxAllowance, findRegisteredDelegateSigner, promoteDelegateSigner, readRegisteredDelegate, refreshDelegateStatus, sendBuiltTx, topUpDelegateGas, walletAddr, captureCredentialOperation, assertCredentialOperation]);
 
   const submitWithDelegateOrWallet = useCallback(async ({
     buildSelfTx,
@@ -1388,6 +1429,7 @@ export function useOstium() {
     dedupeKey = null,
     requireSuccessfulEstimate = false,
   }) => {
+    const scope = captureCredentialOperation();
     const lockKey = dedupeKey || label;
     if (submissionLocksRef.current.has(lockKey)) {
       throw new Error('Ostium is already submitting this action. Wait for the current transaction to finish.');
@@ -1396,15 +1438,20 @@ export function useOstium() {
     try {
       if (forceWallet) {
         const selfClient = await createBuildClient();
+        assertCredentialOperation(scope);
         if (requiredCollateral != null) await ensureAllowance(selfClient, requiredCollateral);
+        assertCredentialOperation(scope);
         const tx = buildSelfTx(selfClient);
         return sendBuiltTx(tx, `${label}.wallet`, { requireSuccessfulEstimate });
       }
-      const existingSigner = delegateSignerRef.current || await loadOstiumDelegate(walletAddr).catch(() => null);
+      const existingSigner = delegateSignerRef.current || await loadOstiumDelegate(walletAddr, { scope }).catch(() => null);
+      assertCredentialOperation(scope);
       const hadOneTapEnabled = !!existingSigner?.privateKey;
       try {
-        const signer = await ensureOneTapReady({ topUpGas, requireAllowance, setupIfNeeded });
+        const signer = await ensureOneTapReady({ topUpGas, requireAllowance, setupIfNeeded, scope });
+        assertCredentialOperation(scope);
         const delegatedClient = await createDelegatedClient(signer);
+        assertCredentialOperation(scope);
         if (typeof buildDelegateTx === 'function') {
           // Avoid SDK submitPrepared here: it fire-and-forgets Ostium /v1/trade
           // attribution after the tx hash, and that endpoint is user-visible
@@ -1415,13 +1462,15 @@ export function useOstium() {
         const result = await submitDelegate(delegatedClient);
         return await waitForSubmittedTx(result, `${label}.delegated`);
       } catch (delegateError) {
+        assertCredentialOperation(scope);
         const text = String(delegateError?.message || delegateError || '');
         if (/user rejected|denied|cancelled/i.test(text)) throw delegateError;
         if (isOstiumValidationError(delegateError)) throw delegateError;
         const fallbackBlocked = allowWalletFallback === false
           || (allowWalletFallback === 'when_one_tap_enabled' && hadOneTapEnabled);
         if (fallbackBlocked) {
-          await refreshDelegateStatus(existingSigner).catch(() => null);
+          await refreshDelegateStatus(existingSigner, { scope }).catch(() => null);
+          assertCredentialOperation(scope);
           const err = new Error(`Ostium one tap failed for ${label.replace(/^ostium\./u, '')}: ${text || 'delegated submission failed'}`);
           err.code = 'OSTIUM_ONE_TAP_FAILED';
           err.cause = delegateError;
@@ -1429,14 +1478,16 @@ export function useOstium() {
         }
         console.warn('[useOstium] delegated path failed, falling back to wallet signature:', text);
         const selfClient = await createBuildClient();
+        assertCredentialOperation(scope);
         if (requiredCollateral != null) await ensureAllowance(selfClient, requiredCollateral);
+        assertCredentialOperation(scope);
         const tx = buildSelfTx(selfClient);
         return sendBuiltTx(tx, `${label}.self`, { requireSuccessfulEstimate });
       }
     } finally {
       submissionLocksRef.current.delete(lockKey);
     }
-  }, [createBuildClient, createDelegatedClient, ensureAllowance, ensureOneTapReady, refreshDelegateStatus, sendBuiltTx, sendDelegateBuiltTx, waitForSubmittedTx, walletAddr]);
+  }, [createBuildClient, createDelegatedClient, ensureAllowance, ensureOneTapReady, refreshDelegateStatus, sendBuiltTx, sendDelegateBuiltTx, waitForSubmittedTx, walletAddr, captureCredentialOperation, assertCredentialOperation]);
 
   const fetchMarkets = useCallback(async () => {
     try {
@@ -1881,12 +1932,15 @@ export function useOstium() {
     }
     let cancelled = false;
     (async () => {
-      const signer = await loadOstiumDelegate(walletAddr).catch(() => null);
+      let scope;
+      try { scope = captureCredentialOperation(); } catch { return; }
+      const signer = await loadOstiumDelegate(walletAddr, { scope }).catch(() => null);
+      try { assertCredentialOperation(scope); } catch { return; }
       if (cancelled) return;
       if (signer) {
         setDelegateSigner(signer);
         delegateSignerRef.current = signer;
-        await refreshDelegateStatus(signer);
+        await refreshDelegateStatus(signer, { scope });
       } else {
         setDelegateSigner(null);
         delegateSignerRef.current = null;
@@ -1903,7 +1957,7 @@ export function useOstium() {
       }
     })();
     return () => { cancelled = true; };
-  }, [isActiveDex, refreshDelegateStatus, walletAddr]);
+  }, [isActiveDex, refreshDelegateStatus, walletAddr, captureCredentialOperation, assertCredentialOperation]);
 
   const importFills = useCallback(async ({ attempts = CLAIM_LOOKBACK_ATTEMPTS, delayMs = 1500 } = {}) => {
     if (!walletAddr || !token) return null;
@@ -2487,16 +2541,22 @@ export function useOstium() {
     setLoading(true);
     setError(null);
     try {
+      const scope = captureCredentialOperation();
       if (!enabled) {
-        const signer = delegateSignerRef.current || await loadOstiumDelegate(walletAddr).catch(() => null);
+        const signer = delegateSignerRef.current || await loadOstiumDelegate(walletAddr, { scope }).catch(() => null);
+        assertCredentialOperation(scope);
         if (signer?.address) {
           const client = await createBuildClient();
+          assertCredentialOperation(scope);
           const registered = await readRegisteredDelegate(client, signer.address);
+          assertCredentialOperation(scope);
           if (String(registered || '').toLowerCase() === String(signer.address).toLowerCase()) {
             await sendBuiltTx(client.getRemoveDelegateTx(), 'ostium.remove_delegate');
+            assertCredentialOperation(scope);
           }
         }
-        await clearOstiumDelegate(walletAddr);
+        await clearOstiumDelegate(walletAddr, { scope });
+        assertCredentialOperation(scope);
         setDelegateSigner(null);
         delegateSignerRef.current = null;
         setDelegateStatus({
@@ -2511,7 +2571,8 @@ export function useOstium() {
         });
         return { success: true, enabled: false };
       }
-      const signer = await ensureOneTapReady({ topUpGas: true });
+      const signer = await ensureOneTapReady({ topUpGas: true, scope });
+      assertCredentialOperation(scope);
       return { success: true, enabled: true, signer: signer.address };
     } catch (e) {
       const msg = errorMessage(e, 'Ostium one tap setup failed');
@@ -2521,14 +2582,17 @@ export function useOstium() {
     } finally {
       setLoading(false);
     }
-  }, [createBuildClient, ensureOneTapReady, readRegisteredDelegate, refreshDelegateStatus, sendBuiltTx, walletAddr]);
+  }, [createBuildClient, ensureOneTapReady, readRegisteredDelegate, refreshDelegateStatus, sendBuiltTx, walletAddr, captureCredentialOperation, assertCredentialOperation]);
 
   const activateOstium = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
+      const scope = captureCredentialOperation();
       if (typeof ensureChain === 'function') await ensureChain(OSTIUM_CHAIN_ID);
-      const signer = await ensureOneTapReady({ topUpGas: true });
+      assertCredentialOperation(scope);
+      const signer = await ensureOneTapReady({ topUpGas: true, scope });
+      assertCredentialOperation(scope);
       await fetchAccount();
       return { success: true, enabled: true, signer: signer.address };
     } catch (e) {
@@ -2538,7 +2602,7 @@ export function useOstium() {
     } finally {
       setLoading(false);
     }
-  }, [ensureChain, ensureOneTapReady, fetchAccount]);
+  }, [ensureChain, ensureOneTapReady, fetchAccount, captureCredentialOperation, assertCredentialOperation]);
 
   const openOstiumApp = useCallback(async () => {
     const url = walletAddr && isEvmAddress(walletAddr)

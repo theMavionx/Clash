@@ -501,6 +501,7 @@ prepare_shared_runtime() {
     ensure_env_default "ADMIN_KEY" "$(openssl rand -hex 16)"
     ensure_env_default "REWARD_SECRET" "$(openssl rand -hex 32)"
     ensure_env_default "NODE_ENV" "production"
+    ensure_env_default "CLASH_CREDENTIAL_VAULT_KEY_FILE" "$SHARED_DIR/trading-credential-vault/keyring.json"
     ensure_env_default "ELFA_API_KEY" ""
     # The API key stays server-only and is never lifted into the Vite/browser
     # build environment. clashSOL is live, so force the audited public mint in
@@ -1001,6 +1002,11 @@ copy_source_to_release() {
     mkdir -p "$RELEASE_DIR/shared/gameplay"
     install -p -m 0644 "$flamethrower_config" \
         "$RELEASE_DIR/shared/gameplay/flamethrower-defense.v1.json"
+    # Public versioned credential schema only; never copy shared runtime keys.
+    [ -f "$SOURCE_DIR/shared/trading_credential_catalog.json" ] \
+        || die "Missing versioned trading credential catalog"
+    install -p -m 0644 "$SOURCE_DIR/shared/trading_credential_catalog.json" \
+        "$RELEASE_DIR/shared/trading_credential_catalog.json"
 
     log "Generating server combat grid snapshot from deployed Godot scene..."
     node "$RELEASE_DIR/tools/combat-grid/generate-combat-grid-config.cjs" \
@@ -1316,8 +1322,15 @@ validate_release() {
     [ -f "$WEB_DIST/godot/godot-runtime-manifest.json" ] || die "Missing web/dist/godot/godot-runtime-manifest.json"
     [ -f "$RELEASE_DIR/shared/gameplay/flamethrower-defense.v1.json" ] \
         || die "Missing shared Flamethrower gameplay config in release"
+    [ -f "$RELEASE_DIR/shared/trading_credential_catalog.json" ] \
+        || die "Missing shared trading credential catalog in release"
     node --check "$SERVER_DIR/db.js"
     node --check "$SERVER_DIR/routes.js"
+    # Exercise the real Linux crypto/permissions path before switching production.
+    # These suites use memory-only/temporary fixture databases and unfunded keys.
+    node --test "$SERVER_DIR/test-trading-credential-vault.js" \
+        "$SERVER_DIR/test-trading-credential-unlock.js" \
+        "$SERVER_DIR/test-provision-trading-credential-key.js"
     if [ -f "$MCP_DIR/src/server.mjs" ]; then
         node --check "$MCP_DIR/src/server.mjs"
         [ -f "$MCP_DIR/SKILLS.md" ] || die "Missing mcp/SKILLS.md"
@@ -2175,6 +2188,11 @@ main() {
     validate_release
     backup_tournaments_before_schema_migration
     sync_legacy_databases_before_switch
+    log "Validating dedicated trading credential encryption key and protected backup..."
+    node "$SERVER_DIR/provision_trading_credential_key.js" \
+        "$(env_file_value CLASH_CREDENTIAL_VAULT_KEY_FILE)" \
+        "$(env_file_value CLASH_MAIN_DB || true)" \
+        "$SHARED_DIR/trading-credential-key-backups"
     switch_current_release
     write_nginx_config
     if ! { restart_services && verify_runtime_services; }; then

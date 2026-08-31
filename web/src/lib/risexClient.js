@@ -7,10 +7,14 @@ import {
 } from 'viem';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import {
+  assertCredentialScope, captureCredentialScope, peekEncryptedCredential,
+  removeEncryptedCredential, writeEncryptedCredential,
+} from './encryptedCredentialStorage.js';
+import {
   RISEX_AUTH_ADDRESS,
   RISEX_ROUTER_ADDRESS,
   RISE_CHAIN_ID,
-} from './risexConfig';
+} from './risexConfig.js';
 
 export const RISEX_SIGNER_STORAGE_PREFIX = 'clash_risex_signer_v1';
 export const RISEX_REGISTER_MESSAGE = 'Registering signer for RISEx';
@@ -101,7 +105,6 @@ const EIP712_DOMAIN_TYPES = [
 ];
 
 const MAX_BITMAP_INDEX = 207;
-const runtimeSignerCache = new Map();
 const ACTION_PLACE_ORDER_HASH = keccak256(stringToHex('RISE_PERPS_PLACE_ORDER_V1'));
 const ACTION_CANCEL_ORDER_HASH = keccak256(stringToHex('RISE_PERPS_CANCEL_ORDER_V1'));
 const ACTION_APPROVE_BUILDER_FEE_HASH = keccak256(stringToHex('RISE_APPROVE_BUILDER_FEE_V1'));
@@ -234,11 +237,6 @@ export function normalizeRisexPrices(markets = []) {
   }));
 }
 
-function signerStorage() {
-  if (typeof window === 'undefined') return null;
-  try { return window.localStorage || window.sessionStorage || null; } catch { return null; }
-}
-
 function signerStorageKey(owner) {
   return `${RISEX_SIGNER_STORAGE_PREFIX}:${String(owner || '').toLowerCase()}`;
 }
@@ -259,14 +257,8 @@ function signerFromPrivateKey(privateKey, expiresAt = Math.floor(Date.now() / 10
 
 export function readRisexSigner(owner) {
   const key = signerStorageKey(owner);
-  const storage = signerStorage();
-  const raw = runtimeSignerCache.get(key) || (() => {
-    if (!storage) return null;
-    try { return storage.getItem(key); } catch { return null; }
-  })();
-  if (!raw) return null;
   try {
-    const parsed = JSON.parse(raw);
+    const parsed = peekEncryptedCredential(key);
     if (!isPrivateKey(parsed?.privateKey)) return null;
     if (Number(parsed?.expiresAt || 0) <= Math.floor(Date.now() / 1000) + 60) return null;
     return signerFromPrivateKey(parsed.privateKey, parsed.expiresAt);
@@ -275,37 +267,37 @@ export function readRisexSigner(owner) {
   }
 }
 
-export function rememberRisexSigner(owner, record) {
+export function rememberRisexSigner(owner, record, options = {}) {
   if (!owner || !record?.privateKey) return record;
+  const scope = options.scope || captureCredentialScope();
+  assertCredentialScope(scope);
   const next = signerFromPrivateKey(record.privateKey, record.expiresAt);
-  const payload = JSON.stringify({
+  const payload = {
     privateKey: next.privateKey,
     address: next.address,
     expiresAt: next.expiresAt,
-  });
+  };
   const key = signerStorageKey(owner);
-  runtimeSignerCache.set(key, payload);
-  const storage = signerStorage();
-  if (storage) {
-    try { storage.setItem(key, payload); } catch { /* storage disabled */ }
-  }
+  writeEncryptedCredential(key, payload, { scope }).catch(() => {});
   return next;
 }
 
-export function forgetRisexSigner(owner) {
+export function forgetRisexSigner(owner, options = {}) {
   const key = signerStorageKey(owner);
-  runtimeSignerCache.delete(key);
-  const storage = signerStorage();
-  if (storage) {
-    try { storage.removeItem(key); } catch { /* storage disabled */ }
-  }
+  const scope = options.scope || captureCredentialScope();
+  assertCredentialScope(scope);
+  const pending = removeEncryptedCredential(key, { scope });
+  pending.catch(() => {});
+  return pending;
 }
 
-export function getOrCreateRisexSigner(owner) {
+export function getOrCreateRisexSigner(owner, options = {}) {
   if (!isRisexAddress(owner)) throw new Error('Connect your EVM wallet first');
+  const scope = options.scope || captureCredentialScope();
+  assertCredentialScope(scope);
   const existing = readRisexSigner(owner);
   if (existing) return existing;
-  return rememberRisexSigner(owner, signerFromPrivateKey(generatePrivateKey()));
+  return rememberRisexSigner(owner, signerFromPrivateKey(generatePrivateKey()), { scope });
 }
 
 export function risexDomain(input = {}) {

@@ -1,3 +1,6 @@
+import { createCredentialVaultSync } from './credentialVaultSync.js';
+import { describeCredential, canMigrateCredential } from './credentialVaultCatalog.js';
+
 const DB_NAME = 'clash_browser_credentials_v1';
 const DB_VERSION = 1;
 const KEY_STORE = 'keys';
@@ -73,11 +76,12 @@ function readLocalMirror(name) {
 }
 
 function writeLocalMirror(name, record) {
-  if (typeof window === 'undefined') return;
+  if (typeof window === 'undefined') return false;
   try {
     window.localStorage.setItem(localMirrorKey(name), JSON.stringify(record));
+    return true;
   } catch {
-    // Browser storage can be unavailable in embedded wallet contexts.
+    return false;
   }
 }
 
@@ -89,7 +93,8 @@ function removeLocalMirror(name) {
 async function getMasterKey(db) {
   const localKey = await getLocalMasterKey();
   if (localKey) {
-    try { await idbSet(db, KEY_STORE, MASTER_KEY_ID, localKey); } catch {}
+    // Keep the legacy IndexedDB-only key immutable: several old records may
+    // still need it while individual records migrate to the local-backed key.
     return localKey;
   }
   const existing = await idbGet(db, KEY_STORE, MASTER_KEY_ID);
@@ -104,16 +109,26 @@ async function getMasterKey(db) {
   return key;
 }
 
+let localMasterPromise;
 async function getLocalMasterKey() {
+  if (!localMasterPromise) localMasterPromise = loadLocalMasterKey().then(key => {
+    if (!key) localMasterPromise = null;
+    return key;
+  });
+  return localMasterPromise;
+}
+async function loadLocalMasterKey() {
   if (!hasSubtleCrypto() || typeof window === 'undefined') return null;
+  let raw;
+  try { raw = window.localStorage.getItem(LOCAL_MASTER_KEY); }
+  catch { return null; } // Healthy IndexedDB remains usable in privacy contexts.
   try {
-    const raw = window.localStorage.getItem(LOCAL_MASTER_KEY);
     if (raw) {
       const jwk = JSON.parse(raw);
       return await crypto.subtle.importKey('jwk', jwk, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
     }
   } catch {
-    // Fall through and generate a fresh local-backed key.
+    throw new Error('Existing encrypted browser key is unavailable. Do not clear browser data; reconnect secure storage.');
   }
   try {
     const key = await crypto.subtle.generateKey(
@@ -143,26 +158,31 @@ function base64ToBytes(value) {
   return bytes;
 }
 
-export async function writeEncryptedCredential(name, value) {
+async function writeRawCredential(name, value) {
   let db = null;
+  try {
   try { db = await openDb(); } catch {}
   const key = db ? await getMasterKey(db) : await getLocalMasterKey();
   if (!key) throw new Error('Encrypted browser storage is not available');
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const encoded = new TextEncoder().encode(JSON.stringify(value || null));
-  const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, encoded));
+  const ciphertext = new Uint8Array(await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv, additionalData: new TextEncoder().encode(name) }, key, encoded));
   const record = {
-    version: 1,
+    version: 2,
     iv: bytesToBase64(iv),
     ciphertext: bytesToBase64(ciphertext),
     updatedAt: Date.now(),
   };
-  if (db) await idbSet(db, VALUE_STORE, name, record);
-  writeLocalMirror(name, record);
+  let saved = false;
+  if (db) { await idbSet(db, VALUE_STORE, name, record); saved = true; }
+  if (!writeLocalMirror(name, record) && !saved) throw new Error('Encrypted browser storage could not save this key.');
+  } finally { db?.close(); }
 }
 
-export async function readEncryptedCredential(name) {
+async function readRawCredential(name) {
   let db = null;
+  try {
   try { db = await openDb(); } catch {}
   let record = db ? await idbGet(db, VALUE_STORE, name) : null;
   if (!record?.iv || !record?.ciphertext) {
@@ -174,7 +194,8 @@ export async function readEncryptedCredential(name) {
   if (!record?.iv || !record?.ciphertext) return null;
   const tryDecrypt = async (key) => {
     const plain = await crypto.subtle.decrypt(
-      { name: 'AES-GCM', iv: base64ToBytes(record.iv) },
+      { name: 'AES-GCM', iv: base64ToBytes(record.iv),
+        ...(record.version === 2 ? { additionalData: new TextEncoder().encode(name) } : {}) },
       key,
       base64ToBytes(record.ciphertext),
     );
@@ -193,31 +214,38 @@ export async function readEncryptedCredential(name) {
     try {
       const value = await tryDecrypt(legacyKey);
       if (localKey) {
-        try { await writeEncryptedCredential(name, value); } catch {}
+        try { await writeRawCredential(name, value); } catch {}
       }
       return value;
-    } catch {
-      return null;
-    }
+    } catch { /* Preserve ciphertext when neither known key can decrypt it. */ }
   }
-  return null;
+  throw new Error('A saved trading key could not be decrypted. Existing encrypted data has been preserved.');
+  } finally { db?.close(); }
 }
 
-export async function removeEncryptedCredential(name) {
+async function removeRawCredential(name) {
+  let db;
   try {
-    const db = await openDb();
+    db = await openDb();
     await idbDelete(db, VALUE_STORE, name);
   } catch {
     // Still remove the local mirror if IndexedDB is unavailable.
-  }
+  } finally { db?.close(); }
   removeLocalMirror(name);
 }
 
 // Used by explicit venue disconnect: delete only this identity's scoped copies,
 // including pending/retired keys, without removing other venues or the master key.
-export async function removeEncryptedCredentialNamespace(prefix) {
+export async function removeEncryptedCredentialNamespace(prefix, options = {}) {
   if (typeof prefix !== 'string' || prefix.length < 24 || !prefix.endsWith(':')) {
     throw new Error('A specific credential namespace is required');
+  }
+  const ownedNames = listCredentialNames().filter(name => name.startsWith(prefix));
+  if (ownedNames.length || /^clash_(?:rh_)?lighter_credentials_v1:one-tap:/u.test(prefix)) {
+    const scope = options.scope || captureCredentialScope();
+    assertCredentialScope(scope);
+    for (const name of ownedNames) await removeEncryptedCredential(name, { scope });
+    return;
   }
   let db = null;
   try { db = await openDb(); } catch {}
@@ -244,6 +272,9 @@ export async function removeEncryptedCredentialNamespace(prefix) {
 
 export async function migratePlainLocalStorageCredential(localStorageKey, encryptedName, normalize) {
   if (typeof window === 'undefined') return null;
+  // Allowlisted exchange credentials are migrated only by proof-bound ownership
+  // or explicit confirmation in the vault UI; no implicit shared-browser fallback.
+  if (describeCredential(encryptedName)) return readEncryptedCredential(encryptedName);
   let existing = null;
   try { existing = await readEncryptedCredential(encryptedName); } catch {}
   if (existing) return existing;
@@ -258,4 +289,59 @@ export async function migratePlainLocalStorageCredential(localStorageKey, encryp
   }
   try { window.localStorage.removeItem(localStorageKey); } catch {}
   return normalized;
+}
+
+async function listRawCredentialNames() {
+  const names = new Set();
+  let db;
+  try {
+    db = await openDb();
+    const keys = await new Promise((resolve, reject) => {
+      const req = db.transaction(VALUE_STORE, 'readonly').objectStore(VALUE_STORE).getAllKeys();
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+    keys.forEach(key => { if (typeof key === 'string') names.add(key); });
+  } catch { /* The encrypted local mirror also works without IndexedDB. */ }
+  finally { db?.close(); }
+  if (typeof window !== 'undefined') for (const store of [window.localStorage, window.sessionStorage]) {
+    for (let index = 0; index < store.length; index++) {
+      const key = store.key(index);
+      if (key?.startsWith(LOCAL_MIRROR_PREFIX)) names.add(key.slice(LOCAL_MIRROR_PREFIX.length));
+      else if (describeCredential(key)) names.add(key);
+    }
+  }
+  return [...names];
+}
+
+export const credentialVault = createCredentialVaultSync({
+  describe: describeCredential, canMigrate: canMigrateCredential,
+  storage: { read: readRawCredential, write: writeRawCredential, remove: removeRawCredential,
+    list: listRawCredentialNames,
+    readPlain(name) {
+      if (typeof window === 'undefined') return null;
+      for (const store of [window.localStorage, window.sessionStorage]) {
+        try { const value = JSON.parse(store.getItem(name) || 'null'); if (value) return value; } catch {}
+      }
+      return null;
+    },
+    removePlain(name) {
+      if (typeof window === 'undefined') return;
+      for (const store of [window.localStorage, window.sessionStorage]) { try { store.removeItem(name); } catch {} }
+    },
+  },
+});
+
+export const captureCredentialScope = () => credentialVault.capture();
+export const assertCredentialScope = (scope, options) => credentialVault.assert(scope, options);
+export const peekEncryptedCredential = name => credentialVault.peek(name);
+export const listCredentialNames = () => credentialVault.names();
+export function writeEncryptedCredential(name, value, options) {
+  return describeCredential(name) ? credentialVault.write(name, value, options) : writeRawCredential(name, value);
+}
+export function readEncryptedCredential(name) {
+  return describeCredential(name) ? credentialVault.read(name) : readRawCredential(name);
+}
+export function removeEncryptedCredential(name, options) {
+  return describeCredential(name) ? credentialVault.remove(name, options) : removeRawCredential(name);
 }

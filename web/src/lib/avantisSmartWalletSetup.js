@@ -10,12 +10,13 @@ import {
   ERC20_ABI,
   TRADING_ABI,
   fetchAvantisDelegate,
-} from './avantisContract';
+} from './avantisContract.js';
 import {
   AVANTIS_SMART_WALLET_MIN_ETH,
   getOrCreateAvantisSmartWalletDelegate,
   readAvantisSmartWalletDelegate,
-} from './avantisSmartWallet';
+} from './avantisSmartWallet.js';
+import { assertCredentialScope, captureCredentialScope } from './encryptedCredentialStorage.js';
 
 const TX_TIMEOUT_MS = 90_000;
 const MAX_UINT256 = (1n << 256n) - 1n;
@@ -34,12 +35,15 @@ async function waitForReceiptWithTimeout(publicClient, hash) {
 }
 
 /** On-chain + local delegate status (no React state). */
-export async function refreshAvantisSmartWalletStatus(publicClient, walletAddr) {
+export async function refreshAvantisSmartWalletStatus(publicClient, walletAddr, options = {}) {
   const owner = String(walletAddr || '').toLowerCase();
   if (!owner || !publicClient) return null;
-
+  const scope = options.scope || captureCredentialScope();
+  const assertCurrent = () => { assertCredentialScope(scope); options.assertCurrent?.(); };
+  assertCurrent();
   const local = readAvantisSmartWalletDelegate(owner);
   const onchain = await fetchAvantisDelegate(publicClient, owner);
+  assertCurrent();
   const onchainLower = String(onchain || '').toLowerCase();
 
   let ethRaw = 0n;
@@ -50,7 +54,7 @@ export async function refreshAvantisSmartWalletStatus(publicClient, walletAddr) 
       ethRaw = 0n;
     }
   }
-
+  assertCurrent();
   if (!local) {
     return {
       address: null,
@@ -74,14 +78,18 @@ export async function refreshAvantisSmartWalletStatus(publicClient, walletAddr) 
   };
 }
 
-let approvalInFlight = null;
+const approvalsInFlight = new Map();
 
 /** Approve USDC for Avantis TradingStorage (max allowance, one popup). */
-export async function ensureAvantisUsdcApproval({ walletClient, walletAddr, publicClient }) {
+export async function ensureAvantisUsdcApproval({ walletClient, walletAddr, publicClient, scope: suppliedScope, assertCurrent: assertCallerCurrent }) {
   if (!walletClient || !walletAddr || !publicClient) {
     throw new Error('Wallet not connected');
   }
-  if (approvalInFlight) return approvalInFlight;
+  const scope = suppliedScope || captureCredentialScope();
+  const assertCurrent = () => { assertCredentialScope(scope); assertCallerCurrent?.(); };
+  assertCurrent();
+  const operationKey = `${scope.playerId}:${scope.epoch}:${String(walletAddr).toLowerCase()}`;
+  if (approvalsInFlight.has(operationKey)) return approvalsInFlight.get(operationKey);
 
   const run = (async () => {
     let allowance;
@@ -95,6 +103,7 @@ export async function ensureAvantisUsdcApproval({ walletClient, walletAddr, publ
     } catch {
       throw new Error('Could not read USDC allowance — RPC unavailable');
     }
+    assertCurrent();
     if (allowance >= MAX_UINT256) return null;
 
     const hash = await walletClient.writeContract({
@@ -104,9 +113,11 @@ export async function ensureAvantisUsdcApproval({ walletClient, walletAddr, publ
       args: [TRADING_STORAGE_ADDRESS, MAX_UINT256],
     });
     await waitForReceiptWithTimeout(publicClient, hash);
+    assertCurrent();
 
     let visible = false;
     for (let i = 0; i < 8; i++) {
+      assertCurrent();
       try {
         const cur = await publicClient.readContract({
           address: USDC_ADDRESS,
@@ -114,6 +125,7 @@ export async function ensureAvantisUsdcApproval({ walletClient, walletAddr, publ
           functionName: 'allowance',
           args: [walletAddr, TRADING_STORAGE_ADDRESS],
         });
+        assertCurrent();
         if (cur >= MAX_UINT256) {
           visible = true;
           break;
@@ -127,34 +139,41 @@ export async function ensureAvantisUsdcApproval({ walletClient, walletAddr, publ
     return hash;
   })();
 
-  approvalInFlight = run;
+  approvalsInFlight.set(operationKey, run);
   try {
     return await run;
   } finally {
-    approvalInFlight = null;
+    if (approvalsInFlight.get(operationKey) === run) approvalsInFlight.delete(operationKey);
   }
 }
 
 /**
  * One-click Smart Wallet: local delegate + on-chain setDelegate + USDC approve.
- * User signs 1–2 wallet popups; delegate key stays in browser storage.
+ * User signs 1–2 wallet popups; delegate is saved in the player-scoped vault.
  */
 export async function enableAvantisSmartWallet({
   walletClient,
   walletAddr,
   publicClient,
   ensureChain,
+  scope: suppliedScope,
+  assertCurrent: assertCallerCurrent,
 }) {
   if (!walletClient || !walletAddr || !publicClient) {
     throw new Error('Wallet not connected');
   }
+  const scope = suppliedScope || captureCredentialScope();
+  const assertCurrent = () => { assertCredentialScope(scope); assertCallerCurrent?.(); };
+  assertCurrent();
   if (typeof ensureChain === 'function') {
     await ensureChain();
+    assertCurrent();
   }
 
-  const delegate = getOrCreateAvantisSmartWalletDelegate(walletAddr);
+  const delegate = getOrCreateAvantisSmartWalletDelegate(walletAddr, { scope });
   let hash = null;
   const current = await fetchAvantisDelegate(publicClient, walletAddr);
+  assertCurrent();
   if (String(current || '').toLowerCase() !== String(delegate.address).toLowerCase()) {
     hash = await walletClient.writeContract({
       address: TRADING_ADDRESS,
@@ -163,10 +182,13 @@ export async function enableAvantisSmartWallet({
       args: [delegate.address],
     });
     await waitForReceiptWithTimeout(publicClient, hash);
+    assertCurrent();
   }
 
-  await ensureAvantisUsdcApproval({ walletClient, walletAddr, publicClient });
-  const status = await refreshAvantisSmartWalletStatus(publicClient, walletAddr);
+  await ensureAvantisUsdcApproval({ walletClient, walletAddr, publicClient, scope, assertCurrent });
+  assertCurrent();
+  const status = await refreshAvantisSmartWalletStatus(publicClient, walletAddr, { scope, assertCurrent });
+  assertCurrent();
 
   return {
     tx_hash: hash,

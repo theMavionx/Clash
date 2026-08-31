@@ -9,7 +9,7 @@ import {
   ETORO_STORAGE_KEY,
   ETORO_TRADING_SETTINGS_URL,
 } from './src/lib/etoroClient.js';
-import { readEncryptedCredential, writeEncryptedCredential } from './src/lib/encryptedCredentialStorage.js';
+import { credentialVault, readEncryptedCredential, writeEncryptedCredential } from './src/lib/encryptedCredentialStorage.js';
 
 assert.deepEqual(normalizeEtoroCredentials({
   api_key: ' api ', user_key: ' user ', environment: 'REAL',
@@ -30,21 +30,66 @@ for (const environment of ['demo', 'DEMO', 'paper', '', undefined]) {
   assert.deepEqual(etoroHeaders('session', invalid), { 'x-token': 'session', 'x-dex': 'etoro' });
   await assert.rejects(saveEtoroCredentials(invalid), /Real account/u);
 }
-// Exercise the actual encrypted credential reader with isolated local storage.
+// Exercise the real encrypted adapter behind the authenticated player bootstrap.
+// The mock manifest deliberately leaves wallet-proof sync locked: local encrypted
+// persistence must work, but no secret may be sent to an unverified server session.
 const storage = new Map();
 const previousWindow = globalThis.window;
-globalThis.window = { crypto: globalThis.crypto, localStorage: {
-  getItem: key => storage.get(key) ?? null,
-  setItem: (key, value) => storage.set(key, value),
-  removeItem: key => storage.delete(key),
-} };
+const previousFetch = globalThis.fetch;
+const requests = [];
+const createStorage = entries => ({
+  get length() { return entries.size; },
+  key: index => [...entries.keys()][index] ?? null,
+  getItem: key => entries.get(key) ?? null,
+  setItem: (key, value) => entries.set(key, String(value)),
+  removeItem: key => entries.delete(key),
+});
+globalThis.window = {
+  crypto: globalThis.crypto,
+  _playerToken: 'fixture-token-a',
+  localStorage: createStorage(storage),
+  sessionStorage: createStorage(new Map()),
+};
+globalThis.fetch = async (url, options = {}) => {
+  assert.equal(url, '/api/players/trading-credentials', 'No private sync or external network calls before wallet proof');
+  assert.equal(options.method || 'GET', 'GET');
+  assert.equal(options.body, undefined, 'Manifest requests never contain credential values');
+  const token = options.headers['x-token'];
+  const playerId = { 'fixture-token-a': 'fixture-player-a', 'fixture-token-b': 'fixture-player-b' }[token];
+  assert.ok(playerId, 'Bootstrap uses an explicitly mocked authenticated identity');
+  requests.push(playerId);
+  return { ok: true, json: async () => ({ identity: { playerId }, records: [], unlocked: false, keyStatus: { configured: true } }) };
+};
 try {
+  assert.equal(await readEtoroCredentials(), null, 'Signed-out callers cannot read trading credentials');
+  assert.throws(() => writeEncryptedCredential(ETORO_STORAGE_KEY, { apiKey: 'api', userKey: 'user', environment: 'real' }), /Trading account changed/u);
+  await assert.rejects(saveEtoroCredentials({ apiKey: 'real-api', userKey: 'real-user', environment: 'real' }), /Trading account changed/u);
+  assert.equal(storage.size, 0, 'Rejected pre-bootstrap writes create no credential or encryption records');
+  await credentialVault.begin({ playerId: 'fixture-player-a', token: 'fixture-token-a' });
+  assert.equal(credentialVault.getSnapshot().ready, true, 'Authenticated bootstrap completed');
+  assert.equal(credentialVault.getSnapshot().unlocked, false, 'Wallet proof is still required for server sync');
   await writeEncryptedCredential(ETORO_STORAGE_KEY, { apiKey: 'api', userKey: 'user', environment: 'demo' });
   assert.equal(await readEtoroCredentials(), null, 'Saved Demo does not unlock trading');
   assert.equal((await readEncryptedCredential(ETORO_STORAGE_KEY)).environment, 'demo', 'Saved Demo is not silently converted or destroyed');
   await saveEtoroCredentials({ apiKey: 'real-api', userKey: 'real-user', environment: 'real' });
   assert.equal((await readEtoroCredentials()).environment, 'real', 'Explicit Real reconnect is persisted');
+  assert.ok([...storage.keys()].some(key => key.includes('clash_player_credential_v1:fixture-player-a:')), 'Ciphertext is player-namespaced');
+  for (const raw of storage.values()) assert.doesNotMatch(raw, /real-api|real-user/u, 'No API secrets are persisted as plaintext');
+  assert.equal(storage.has(ETORO_STORAGE_KEY), false, 'No browser-global plaintext credential is created');
+  assert.equal(credentialVault.getSnapshot().pending, 1, 'Server upload stays pending until wallet verification');
+
+  credentialVault.lock({ revoke: false });
+  assert.equal(await readEtoroCredentials(), null, 'Logout clears the readable session cache');
+  window._playerToken = 'fixture-token-b';
+  await credentialVault.begin({ playerId: 'fixture-player-b', token: 'fixture-token-b' });
+  assert.equal(await readEtoroCredentials(), null, 'Player B cannot restore player A credentials from the same browser');
+  window._playerToken = 'fixture-token-a';
+  await credentialVault.begin({ playerId: 'fixture-player-a', token: 'fixture-token-a' });
+  assert.deepEqual(await readEtoroCredentials(), { apiKey: 'real-api', userKey: 'real-user', environment: 'real' }, 'Player A restores the actual encrypted local record after a fresh bootstrap');
+  assert.deepEqual(requests, ['fixture-player-a', 'fixture-player-b', 'fixture-player-a']);
 } finally {
+  credentialVault.lock({ revoke: false });
+  globalThis.fetch = previousFetch;
   if (previousWindow === undefined) delete globalThis.window;
   else globalThis.window = previousWindow;
 }

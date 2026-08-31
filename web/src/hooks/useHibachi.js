@@ -5,6 +5,7 @@ import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { BASE_CHAIN_ID, USDC_ADDRESS as BASE_USDC_ADDRESS } from '../lib/avantisContract';
 import { ARBITRUM_CHAIN_ID, ARBITRUM_USDC_DECIMALS, ARBITRUM_USDC_NATIVE } from '../lib/gmxConfig';
 import { usePlayer } from './useGodot';
+import { useCredentialOperationScope } from './useCredentialOperationScope';
 import { registeredDexWallet } from '../lib/playerDexAccounts';
 import {
   clearHibachiCredentials,
@@ -456,6 +457,7 @@ export function useHibachi() {
 
   const token = (typeof window !== 'undefined' ? window._playerToken : null) || player?.token || null;
   const walletAddr = evmWallet?.address || null;
+  const { capture: captureCredential, assert: assertCredential } = useCredentialOperationScope({ player, token, wallet: walletAddr, dex: 'hibachi' });
   const registeredEvmWallet = registeredDexWallet(player, 'hibachi', 'evm') || null;
   const walletMismatch = false;
 
@@ -1047,6 +1049,7 @@ export function useHibachi() {
   }, [isActiveDex, walletAddr, credentials, token]);
 
   const activate = useCallback(async (input = null) => {
+    const scope = captureCredential();
     setLoading(true);
     setError(null);
     try {
@@ -1071,7 +1074,9 @@ export function useHibachi() {
         headers: authHeaders(),
         body: JSON.stringify(hibachiCredentialPayload(next)),
       });
-      await writeHibachiCredentials(next);
+      assertCredential(scope);
+      await writeHibachiCredentials(next, { scope });
+      assertCredential(scope);
       setCredentials(next);
       setAccount(verifiedAccount || null);
       setDataReady(true);
@@ -1083,16 +1088,18 @@ export function useHibachi() {
     } finally {
       setLoading(false);
     }
-  }, [authHeaders, credentials, fetchJson, token, walletAddr]);
+  }, [authHeaders, credentials, fetchJson, token, walletAddr, captureCredential, assertCredential]);
 
   const disconnect = useCallback(async () => {
-    await clearHibachiCredentials();
+    const scope = captureCredential();
+    await clearHibachiCredentials({ scope });
+    assertCredential(scope);
     setCredentials(null);
     setAccount(null);
     setPositions([]);
     setOrders([]);
     setDataReady(false);
-  }, []);
+  }, [captureCredential, assertCredential]);
 
   const placeMarketOrder = useCallback(async (symbol, side, amount, _slippage = '0.5', leverage = 1, options = {}) => {
     setLoading(true);

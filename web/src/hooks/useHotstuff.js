@@ -4,6 +4,7 @@ import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { useDex } from '../contexts/DexContext';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { usePlayer } from './useGodot';
+import { useCredentialOperationScope } from './useCredentialOperationScope';
 import {
   buildHotstuffAttachedTpslOrders,
   buildHotstuffTpslOrder,
@@ -219,7 +220,7 @@ async function loadStoredAgent(owner) {
   }
 }
 
-async function saveStoredAgent(owner, privateKey, validUntil = Date.now() + AGENT_VALIDITY_MS) {
+async function saveStoredAgent(owner, privateKey, validUntil = Date.now() + AGENT_VALIDITY_MS, options) {
   if (!owner || typeof window === 'undefined') return null;
   const normalized = normalizePrivateKey(privateKey);
   if (!normalized) return null;
@@ -231,8 +232,7 @@ async function saveStoredAgent(owner, privateKey, validUntil = Date.now() + AGEN
     validUntil,
   };
   try {
-    await writeEncryptedCredential(agentStorageKey(owner), record);
-    try { window.localStorage.removeItem(agentStorageKey(owner)); } catch {}
+    await writeEncryptedCredential(agentStorageKey(owner), record, options);
   } catch (e) {
     console.warn('[useHotstuff] save browser agent failed:', e?.message || e);
     return null;
@@ -240,15 +240,14 @@ async function saveStoredAgent(owner, privateKey, validUntil = Date.now() + AGEN
   return { ...record, account };
 }
 
-async function newStoredAgent(owner) {
-  return saveStoredAgent(owner, generatePrivateKey(), Date.now() + AGENT_VALIDITY_MS);
+async function newStoredAgent(owner, options) {
+  return saveStoredAgent(owner, generatePrivateKey(), Date.now() + AGENT_VALIDITY_MS, options);
 }
 
-async function clearStoredAgent(owner) {
+async function clearStoredAgent(owner, options) {
   if (!owner || typeof window === 'undefined') return;
   const key = agentStorageKey(owner);
-  await removeEncryptedCredential(key);
-  try { window.localStorage.removeItem(key); } catch {}
+  await removeEncryptedCredential(key, options);
 }
 
 function agentStillValid(row) {
@@ -328,6 +327,7 @@ export function useHotstuff() {
   const agentRegistrationCacheRef = useRef({ wallet: null, agent: null, at: 0 });
   const active = dex === 'hotstuff';
   const hsWalletAddr = useMemo(() => hotstuffAddress(walletAddr), [walletAddr]);
+  const { capture: captureCredential, assert: assertCredential } = useCredentialOperationScope({ player, wallet: hsWalletAddr, dex: 'hotstuff' });
 
   const info = useMemo(() => createHotstuffInfoClient(), []);
   const hotstuffWalletClient = useMemo(() => (
@@ -731,8 +731,12 @@ export function useHotstuff() {
   }, [active, hasHotstuffAccount, hsWalletAddr, info]);
 
   const ensureTradingAgent = useCallback(async () => {
+    const scope = captureCredential();
     if (!hsWalletAddr) throw new Error('Connect your Hotstuff EVM wallet first');
-    let agent = await loadStoredAgent(hsWalletAddr) || await newStoredAgent(hsWalletAddr);
+    let agent = await loadStoredAgent(hsWalletAddr);
+    assertCredential(scope);
+    agent ||= await newStoredAgent(hsWalletAddr, { scope });
+    assertCredential(scope);
     if (!agent) throw new Error('Could not create Hotstuff browser trading agent');
 
     const cached = agentRegistrationCacheRef.current || {};
@@ -773,10 +777,12 @@ export function useHotstuff() {
       validUntil,
       nonce: Date.now(),
     });
-    agent = await saveStoredAgent(hsWalletAddr, agent.privateKey, validUntil) || agent;
+    assertCredential(scope);
+    agent = await saveStoredAgent(hsWalletAddr, agent.privateKey, validUntil, { scope }) || agent;
+    assertCredential(scope);
     agentRegistrationCacheRef.current = { wallet: hsWalletAddr, agent: agent.address, at: Date.now() };
     return agent;
-  }, [exchange, hsWalletAddr, info, setupStatus.agentAddress, setupStatus.agentReady, setupVerified]);
+  }, [exchange, hsWalletAddr, info, setupStatus.agentAddress, setupStatus.agentReady, setupVerified, captureCredential, assertCredential]);
 
   const activate = useCallback(async (opts = {}) => {
     if (!hsWalletAddr || !walletClient) throw new Error('Connect your EVM wallet first');
@@ -815,8 +821,10 @@ export function useHotstuff() {
   }, [ensureTradingAgent, exchange, hasHotstuffAccount, hsWalletAddr, info, switchChain, walletClient]);
 
   const disconnect = useCallback(async () => {
+    const scope = captureCredential();
     if (!hsWalletAddr) throw new Error('Connect your Hotstuff EVM wallet first');
-    await clearStoredAgent(hsWalletAddr);
+    await clearStoredAgent(hsWalletAddr, { scope });
+    assertCredential(scope);
     agentRegistrationCacheRef.current = { wallet: null, agent: null, at: 0 };
     setSetupStatus(prev => ({
       ...prev,
@@ -826,7 +834,7 @@ export function useHotstuff() {
     setSetupVerified(false);
     setPositions([]);
     setOrders([]);
-  }, [hsWalletAddr]);
+  }, [hsWalletAddr, captureCredential, assertCredential]);
 
   const openReferralJoin = useCallback(() => {
     if (!HOTSTUFF_REFERRAL_URL) return;

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useDex } from '../contexts/DexContext';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { usePlayer } from './useGodot';
+import { useCredentialOperationScope } from './useCredentialOperationScope';
 import {
   clearEtoroCredentials,
   etoroCredentialStatus,
@@ -30,6 +31,7 @@ export function useEtoro() {
   const active = dex === 'etoro';
   const token = playerToken(player);
   const walletAddr = active ? (evm.address || '') : '';
+  const { capture: captureCredential, assert: assertCredential } = useCredentialOperationScope({ player, token, wallet: walletAddr, dex: 'etoro' });
 
   const [credentials, setCredentials] = useState(null);
   const [credentialsLoaded, setCredentialsLoaded] = useState(false);
@@ -132,6 +134,7 @@ export function useEtoro() {
   }, [active, credentialsLoaded, refresh]);
 
   const activate = useCallback(async (input = {}) => {
+    const scope = captureCredential();
     if (!token) return disabled('Missing Clash game session.');
     const next = normalizeEtoroCredentials(input);
     if (!next) return disabled('Enter the API key and user key for an eToro Real account. Demo is not supported.');
@@ -144,7 +147,9 @@ export function useEtoro() {
         method: 'POST',
         body: { environment: next.environment },
       });
-      await saveEtoroCredentials(next);
+      assertCredential(scope);
+      await saveEtoroCredentials(next, { scope });
+      assertCredential(scope);
       setCredentials(next);
       applySnapshot(verified);
       setConfig(previous => ({ ...(previous || {}), credential_status: verified?.credential_status }));
@@ -156,7 +161,7 @@ export function useEtoro() {
     } finally {
       setLoading(false);
     }
-  }, [applySnapshot, token]);
+  }, [applySnapshot, token, captureCredential, assertCredential]);
 
   const claimGold = useCallback(async ({ reason = 'etoro' } = {}) => {
     if (!token || !credentials) return disabled('Save eToro credentials before importing rewards.');
@@ -307,7 +312,9 @@ export function useEtoro() {
   }, [credentials, token]);
 
   const disconnect = useCallback(async () => {
-    await clearEtoroCredentials();
+    const scope = captureCredential();
+    await clearEtoroCredentials({ scope });
+    assertCredential(scope);
     setCredentials(null);
     setAccount(null);
     setPositions([]);
@@ -316,7 +323,7 @@ export function useEtoro() {
     setPrices([]);
     setAccountReady(false);
     setError('');
-  }, []);
+  }, [captureCredential, assertCredential]);
 
   const openEtoro = useCallback(() => {
     window.open(ETORO_APP_URL, '_blank', 'noopener,noreferrer');

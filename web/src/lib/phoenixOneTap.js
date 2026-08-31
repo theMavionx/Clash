@@ -1,6 +1,10 @@
 import { Keypair, PublicKey } from '@solana/web3.js';
 import bs58 from 'bs58';
-import { kitInstructionToWeb3 } from './phoenixTx';
+import { kitInstructionToWeb3 } from './phoenixTx.js';
+import {
+  assertCredentialScope, captureCredentialScope, peekEncryptedCredential,
+  removeEncryptedCredential, writeEncryptedCredential,
+} from './encryptedCredentialStorage.js';
 
 export const PHOENIX_ONE_TAP_STORAGE_PREFIX = 'clash:phoenix:one_tap:v1';
 export const PHOENIX_ONE_TAP_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -12,10 +16,6 @@ export const PHOENIX_ONE_TAP_POLICY = {
 
 function storageKey(owner) {
   return `${PHOENIX_ONE_TAP_STORAGE_PREFIX}:${String(owner || '').trim()}`;
-}
-
-function hasBrowserStorage() {
-  return typeof window !== 'undefined' && !!window.localStorage;
 }
 
 function encodeSecret(secretKey) {
@@ -47,16 +47,15 @@ function normalizePolicy(policy = {}) {
 }
 
 export function readPhoenixOneTapRecord(owner) {
-  if (!hasBrowserStorage() || !owner) return null;
+  if (!owner) return null;
   try {
-    const raw = window.localStorage.getItem(storageKey(owner));
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
+    const parsed = peekEncryptedCredential(storageKey(owner));
+    if (!parsed) return null;
     const normalizedOwner = normalizeOwner(owner);
     if (normalizeOwner(parsed?.owner) !== normalizedOwner) return null;
     if (!parsed?.secretKey || !parsed?.publicKey) return null;
     if (Number(parsed?.expiresAt || 0) <= Date.now()) {
-      window.localStorage.removeItem(storageKey(owner));
+      clearPhoenixOneTapSession(owner);
       return null;
     }
     return {
@@ -69,19 +68,23 @@ export function readPhoenixOneTapRecord(owner) {
   }
 }
 
-export function writePhoenixOneTapRecord(owner, record) {
-  if (!hasBrowserStorage() || !owner || !record) return null;
+export function writePhoenixOneTapRecord(owner, record, options = {}) {
+  if (!owner || !record) return null;
+  const scope = options.scope || captureCredentialScope();
+  assertCredentialScope(scope);
   const normalizedOwner = normalizeOwner(owner);
   const next = {
     ...record,
     owner: normalizedOwner,
     policy: normalizePolicy(record.policy),
   };
-  window.localStorage.setItem(storageKey(normalizedOwner), JSON.stringify(next));
+  writeEncryptedCredential(storageKey(normalizedOwner), next, { scope }).catch(() => {});
   return next;
 }
 
-export function getOrCreatePhoenixOneTapSession(owner) {
+export function getOrCreatePhoenixOneTapSession(owner, options = {}) {
+  const scope = options.scope || captureCredentialScope();
+  assertCredentialScope(scope);
   const existing = readPhoenixOneTapRecord(owner);
   if (existing) {
     return {
@@ -101,7 +104,7 @@ export function getOrCreatePhoenixOneTapSession(owner) {
     enabled: false,
     approved: false,
     policy: PHOENIX_ONE_TAP_POLICY,
-  });
+  }, { scope });
   return {
     ...record,
     keypair,
@@ -120,7 +123,9 @@ export function getPhoenixOneTapSession(owner) {
   }
 }
 
-export function markPhoenixOneTapSession(owner, patch = {}) {
+export function markPhoenixOneTapSession(owner, patch = {}, options = {}) {
+  const scope = options.scope || captureCredentialScope();
+  assertCredentialScope(scope);
   const record = readPhoenixOneTapRecord(owner);
   if (!record) return null;
   return writePhoenixOneTapRecord(owner, {
@@ -128,19 +133,23 @@ export function markPhoenixOneTapSession(owner, patch = {}) {
     ...patch,
     updatedAt: Date.now(),
     policy: normalizePolicy({ ...record.policy, ...(patch.policy || {}) }),
-  });
+  }, { scope });
 }
 
-export function clearPhoenixOneTapSession(owner) {
-  if (!hasBrowserStorage() || !owner) return;
-  window.localStorage.removeItem(storageKey(owner));
+export function clearPhoenixOneTapSession(owner, options = {}) {
+  if (!owner) return;
+  const scope = options.scope || captureCredentialScope();
+  assertCredentialScope(scope);
+  const pending = removeEncryptedCredential(storageKey(owner), { scope });
+  pending.catch(() => {});
+  return pending;
 }
 
 /** Import Phoenix one-tap authority secret (base58/hex) for Bots sync. */
-export function importPhoenixOneTapSigner(owner, secretInput) {
-  if (!hasBrowserStorage() || !owner) {
-    throw new Error('Browser storage unavailable');
-  }
+export function importPhoenixOneTapSigner(owner, secretInput, options = {}) {
+  if (!owner) throw new Error('Phoenix owner wallet is required');
+  const scope = options.scope || captureCredentialScope();
+  assertCredentialScope(scope);
   const normalizedOwner = normalizeOwner(owner);
   let secretBytes;
   const raw = String(secretInput || '').trim();
@@ -163,7 +172,7 @@ export function importPhoenixOneTapSigner(owner, secretInput) {
       enabled: true,
       approved: true,
       policy: PHOENIX_ONE_TAP_POLICY,
-    });
+    }, { scope });
     return { owner: normalizedOwner, publicKey: keypair.publicKey.toBase58() };
   } catch {
     throw new Error('Invalid Phoenix Solana secret (base58 or hex).');

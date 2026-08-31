@@ -1,4 +1,8 @@
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
+import {
+  assertCredentialScope, captureCredentialScope, peekEncryptedCredential,
+  removeEncryptedCredential, writeEncryptedCredential,
+} from './encryptedCredentialStorage.js';
 
 export const ASTER_API_VERSION = 'v3';
 export const ASTER_SIGNING_CHAIN_ID = 1666;
@@ -81,8 +85,9 @@ export function readAsterAgent(owner) {
   const key = ownerKey(owner);
   if (!key || typeof window === 'undefined') return null;
   try {
-    const parsed = JSON.parse(window.localStorage.getItem(key) || 'null');
+    const parsed = peekEncryptedCredential(key);
     if (!/^0x[0-9a-fA-F]{64}$/u.test(String(parsed?.privateKey || ''))) return null;
+    if (parsed.owner && String(parsed.owner).toLowerCase() !== String(owner).toLowerCase()) return null;
     const account = privateKeyToAccount(parsed.privateKey);
     return {
       owner: String(owner).toLowerCase(),
@@ -96,9 +101,11 @@ export function readAsterAgent(owner) {
   }
 }
 
-export function createAndStoreAsterAgent(owner) {
+export function createAndStoreAsterAgent(owner, options = {}) {
   const key = ownerKey(owner);
   if (!key || typeof window === 'undefined') throw new Error('Aster owner wallet is required');
+  const scope = options.scope || captureCredentialScope();
+  assertCredentialScope(scope);
   const privateKey = generatePrivateKey();
   const account = privateKeyToAccount(privateKey);
   const record = {
@@ -108,13 +115,18 @@ export function createAndStoreAsterAgent(owner) {
     createdAt: Date.now(),
     expired: Date.now() + ASTER_AGENT_TTL_MS,
   };
-  window.localStorage.setItem(key, JSON.stringify(record));
+  writeEncryptedCredential(key, record, { scope }).catch(() => {});
   return record;
 }
 
-export function clearAsterAgent(owner) {
+export function clearAsterAgent(owner, options = {}) {
   const key = ownerKey(owner);
-  if (key && typeof window !== 'undefined') window.localStorage.removeItem(key);
+  if (!key) return;
+  const scope = options.scope || captureCredentialScope();
+  assertCredentialScope(scope);
+  const pending = removeEncryptedCredential(key, { scope });
+  pending.catch(() => {});
+  return pending;
 }
 
 export function encodeAsterParams(entries) {

@@ -1,5 +1,8 @@
 import bs58 from 'bs58';
-import { readEncryptedCredential, writeEncryptedCredential } from './encryptedCredentialStorage';
+import {
+  assertCredentialScope, captureCredentialScope, listCredentialNames, peekEncryptedCredential,
+  readEncryptedCredential, removeEncryptedCredential, writeEncryptedCredential,
+} from './encryptedCredentialStorage.js';
 
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -9,6 +12,7 @@ export function storageKeyFor(master) {
 
 function normalizeStoredAgent(obj, fallbackMaster) {
   if (!obj?.agentSecretB58 || !obj?.agentPubkey) return null;
+  if (obj.master && String(obj.master) !== String(fallbackMaster)) return null;
   if (obj.createdAt && Date.now() - Number(obj.createdAt) > SESSION_TTL_MS) return null;
   return {
     privateKey: String(obj.agentSecretB58),
@@ -18,7 +22,9 @@ function normalizeStoredAgent(obj, fallbackMaster) {
   };
 }
 
-export function persistPacificaAgent(master, record) {
+export function persistPacificaAgent(master, record, options = {}) {
+  const scope = options.scope || captureCredentialScope();
+  assertCredentialScope(scope);
   const key = storageKeyFor(master);
   const stored = {
     agentSecretB58: record.agentSecretB58,
@@ -26,58 +32,44 @@ export function persistPacificaAgent(master, record) {
     master: String(master || record.master || ''),
     createdAt: record.createdAt || Date.now(),
   };
-  try {
-    window.localStorage.setItem(key, JSON.stringify(stored));
-  } catch {
-    // Tracking Prevention / private mode — encrypted mirror still works.
-  }
-  writeEncryptedCredential(key, stored).catch(() => {});
+  const pending = writeEncryptedCredential(key, stored, { scope });
+  pending.catch(() => {});
+  return pending;
 }
 
-export async function readPacificaAgent(masterWallet) {
+export async function readPacificaAgent(masterWallet, options = {}) {
   const master = String(masterWallet || '').trim();
   if (!master) return null;
   const key = storageKeyFor(master);
   try {
-    const raw = window.localStorage.getItem(key);
-    if (raw) {
-      const agent = normalizeStoredAgent(JSON.parse(raw), master);
-      if (agent) return agent;
-    }
-  } catch {
-    // Fall through to encrypted storage.
-  }
-  try {
-    const stored = await readEncryptedCredential(key);
-    const agent = normalizeStoredAgent(stored, master);
-    if (agent) {
-      persistPacificaAgent(master, {
-        agentSecretB58: agent.privateKey,
-        agentPubkey: agent.agentPubkey,
-        createdAt: agent.createdAt,
-      });
-      return agent;
-    }
+    const scope = options.scope || captureCredentialScope();
+    assertCredentialScope(scope);
+    const stored = peekEncryptedCredential(key) || await readEncryptedCredential(key);
+    assertCredentialScope(scope);
+    return normalizeStoredAgent(stored, master);
   } catch {
     // ignore
   }
   return null;
 }
 
-export function forgetPacificaAgent(master) {
+export function forgetPacificaAgent(master, options = {}) {
   const key = storageKeyFor(master);
-  try { window.localStorage.removeItem(key); } catch {}
+  const scope = options.scope || captureCredentialScope();
+  assertCredentialScope(scope);
+  const pending = removeEncryptedCredential(key, { scope });
+  pending.catch(() => {});
+  return pending;
 }
 
 const STORAGE_PREFIX = 'clash_pacifica_agent:';
 
-/** All master wallets from local storage (game may have saved agent without dex_accounts). */
+/** Only the current authenticated player's hydrated agent names are discoverable. */
 export function listStoredPacificaMasters() {
   const out = [];
   if (typeof window === 'undefined') return out;
   try {
-    for (let i = 0; i < window.localStorage.length; i += 1) {
-      const key = window.localStorage.key(i);
+    for (const key of listCredentialNames()) {
       if (!key?.startsWith(STORAGE_PREFIX)) continue;
       const master = key.slice(STORAGE_PREFIX.length).trim();
       if (master) out.push(master);
@@ -89,13 +81,20 @@ export function listStoredPacificaMasters() {
 }
 
 /** Find any valid agent (when player.wallet is EVM but Pacifica is on Solana). */
-export async function findAnyPacificaAgent(preferredMasters = []) {
+export async function findAnyPacificaAgent(preferredMasters = [], options = {}) {
+  let scope;
+  try {
+    scope = options.scope || captureCredentialScope();
+    assertCredentialScope(scope);
+  } catch { return null; }
   const seen = new Set();
   const tryMaster = async (master) => {
     const m = String(master || '').trim();
     if (!m || seen.has(m)) return null;
     seen.add(m);
-    const agent = await readPacificaAgent(m);
+    assertCredentialScope(scope);
+    const agent = await readPacificaAgent(m, { scope });
+    assertCredentialScope(scope);
     return agent?.privateKey ? agent : null;
   };
   for (const m of preferredMasters) {
