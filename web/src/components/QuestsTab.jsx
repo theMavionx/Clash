@@ -4,6 +4,8 @@ import woodIcon from '../assets/resources/wood_bar.png';
 import stoneIcon from '../assets/resources/stone_bar.png';
 import { usePlayer } from '../hooks/useGodot';
 import GoldRewardToast from './GoldRewardToast';
+import QuestRewardReserve from './QuestRewardReserve';
+import { questRewardPending, syncQuestResources } from '../lib/questRewardDelivery';
 import { GOLD_REWARD_PANEL_TOAST_STYLE } from './goldRewardToastStyles';
 import { useDex } from '../contexts/DexContext';
 import { readEncryptedCredential, writeEncryptedCredential } from '../lib/encryptedCredentialStorage';
@@ -484,6 +486,7 @@ function QuestCard({ task, onStart, onClaim, loading, busyAction }) {
   const autoRestarted = isClaimed && task.repeatable && Number(task.cooldown_hours || 0) <= 0;
   const canReClaim = isClaimed && task.repeatable && !autoRestarted;
   const showClaimed = isClaimed && !task.repeatable;
+  const hasPendingReward = Object.values(questRewardPending(task.reward_pending)).some(amount => amount > 0);
   const exclusiveBadge = questEligibilityBadge(task);
   const isStarting = busyAction === 'start';
   const isClaiming = busyAction === 'claim';
@@ -513,7 +516,7 @@ function QuestCard({ task, onStart, onClaim, loading, busyAction }) {
         <span style={S.cardTitle}>{task.title}</span>
         <span style={S.badgeRow}>
           {exclusiveBadge && <span style={S.badgeExclusive}>{exclusiveBadge}</span>}
-          {showClaimed && <span style={S.badgeDone}>Claimed</span>}
+          {showClaimed && <span style={S.badgeDone}>{hasPendingReward ? 'Reward saved' : 'Claimed'}</span>}
           {task.repeatable && <span style={S.badgeRepeat}>{autoRestarted ? 'Active again' : 'Repeatable'}</span>}
         </span>
       </div>
@@ -568,6 +571,7 @@ function QuestCard({ task, onStart, onClaim, loading, busyAction }) {
           <button style={S.btnRefresh} onClick={() => onClaim(task.id)} disabled={loading}>{isRefreshing ? 'Refreshing...' : 'Refresh'}</button>
         )}
       </div>
+      <QuestRewardReserve pending={task.reward_pending} />
       {showNftUnlock && (
         <div style={S.nftUnlockRow}>
           <span style={S.nftUnlockText}>Unlock up to 100% rewards boost with NFTs</span>
@@ -631,6 +635,12 @@ function QuestsTab({ markets = [] }) {
   const fetchTasks = useCallback(async (tok) => {
     if (!tok) { setLoaded(true); return; }
     try {
+      // Also deliver saved rewards while the quest panel is open; the game
+      // does not continuously poll /resources on every building interaction.
+      try {
+        const balance = await fetch(`${GAME_API}/resources`, { headers: { 'x-token': tok } });
+        if (balance.ok) syncQuestResources(await balance.json());
+      } catch { /* Quest history stays usable during a resource-refresh retry. */ }
       const headers = await taskHeaders(tok);
       const activeDex = String(dex || '').toLowerCase();
       if (activeDex === 'pacifica') headers['x-skip-live-progress'] = 'browser';
@@ -715,16 +725,7 @@ function QuestsTab({ markets = [] }) {
           const rr = await fetch(`${GAME_API}/resources`, { headers: { 'x-token': token } });
           if (!rr.ok) return;
           const resources = await rr.json();
-          const nextResources = {
-            gold: Number(resources.gold || 0),
-            wood: Number(resources.wood || 0),
-            ore: Number(resources.ore || 0),
-          };
-          window.onGodotMessage?.({
-            action: 'resources',
-            data: nextResources,
-          });
-          window.godotBridge?.(JSON.stringify({ action: 'set_resources', data: nextResources }));
+          syncQuestResources(resources);
         } catch {}
       };
       const r = await fetch(`${GAME_API}/tasks/${id}/claim`, {
@@ -738,9 +739,7 @@ function QuestsTab({ markets = [] }) {
           wood: Number(j.reward?.wood || 0),
           ore: Number(j.reward?.ore || 0),
         };
-        if (reward.gold || reward.wood || reward.ore) {
-          window.onGodotMessage?.({ action: 'resources_add', data: reward });
-        }
+        syncQuestResources(j.resources);
         await refreshResources();
         if (reward.gold > 0) {
           setFlash({
@@ -755,6 +754,7 @@ function QuestsTab({ markets = [] }) {
             ...task,
             started: true,
             claimed_at: j.auto_restarted ? null : new Date().toISOString(),
+            reward_pending: j.reward_pending || task.reward_pending,
             progress_value: j.auto_restarted ? 0 : Number(j.progress_value || task.progress_value || 0),
             target_value: Number(j.target_value || task.target_value || 0),
           };

@@ -1,5 +1,15 @@
 # User Request Log
 
+## UR-2026-08-31-TANGO-QUEST-RESOURCE-CLAIM
+
+- Request: "це танго знову ж таки пише виправ і задеплой якщо треба через проксі перевір в чому там проблема".
+- Evidence: Tango reports missing wood/stone after claiming the one-trade
+  USD 100,000-volume quest; screenshot shows Claimed and +8,888 of each resource.
+- Scope: read-only production account/quest/log audit first; fix confirmed
+  reward/account-sync defect, verify locally and deploy using existing scripts.
+  Preserve unrelated work, do not invent trades/volume or duplicate rewards.
+- Status: investigating authoritative claim and resource history.
+
 ## UR-2026-08-31-DEPLOY-PENDING-INTEGRATION-FIXES
 
 - Request: "закинь все на прод".
@@ -9,7 +19,12 @@
 - Excluded: unrelated unfinished holder-rebate work in the original checkout.
 - Existing atomic deploy scripts, preflight checks, shared data preservation
   and rollback are required. No live user trades or manual player-data edits.
-- Status: confirming current production baseline and preparing release.
+- Status: DEPLOYED and verified. Commit 3b1abf083a81b9eab24b09abb9096f480403d1a3,
+  current /opt/clash/releases/20260830222226-3b1abf08. Health, exact CDN assets,
+  live Nado candles, public proxy RPC, Lighter Linux native offline setup and
+  anonymous-request rejection checks passed. Five Clash processes online,
+  zero restarts. Prior release retained; unrelated holder rebates excluded.
+  Existing bridge/Solana background warnings remain; no funded trading tested.
 
 ## UR-2026-08-31-PUBLIC-READ-PROXY-POOL
 

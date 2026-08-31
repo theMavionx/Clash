@@ -13,6 +13,7 @@ const hermesJobs = require('./hermes_jobs');
 const logAiAnalyzer = require('./log_ai_analyzer');
 const tournamentAiBuilder = require('./tournament_ai_builder');
 const tasks = require('./tasks');
+const { createTaskRewardService } = require('./task_rewards');
 const elfa = require('./elfa');
 const diag = require('./diag');
 const earnings = require('./earnings');
@@ -71,6 +72,12 @@ const { SanctumRewardError, createSanctumRewardsService } = require('./sanctum_r
 const { createDualFixedWindowRateLimiter } = require('./sanctum_rate_limit');
 
 const router = express.Router();
+const taskRewards = createTaskRewardService({
+  db: db.db,
+  getResources: db.getResources,
+  getResourceCaps: db.getResourceCaps,
+  addResources: db.addResources,
+});
 const sanctumService = createSanctumService({ db: db.db });
 const sanctumRewardsService = createSanctumRewardsService({
   db: db.db,
@@ -10312,6 +10319,7 @@ router.post('/players/device-capability', auth, (req, res) => {
 
 // Login (get state by token)
 router.get('/players/me', auth, (req, res) => {
+  taskRewards.settle(req.player.id);
   const state = db.getFullPlayerState(req.player.id);
   res.json(state);
 });
@@ -12169,7 +12177,7 @@ router.post('/players/dex-accounts/:dex/link', auth, (req, res) => {
 
 // Get current resources
 router.get('/resources', auth, (req, res) => {
-  res.json(db.getResources(req.player.id));
+  res.json(taskRewards.settle(req.player.id).resources);
 });
 
 // Add resources (admin only — players earn resources through gameplay)
@@ -16989,6 +16997,7 @@ async function refreshStartedTaskProgressForTradeClaim(player, dex, requestHeade
 // rate-limit it. Claim/start endpoints are idempotent and DB race-protected.
 router.get('/tasks', auth, async (req, res) => {
   const list = tasks.getActiveTasks();
+  const pendingRewards = taskRewards.pendingByTask(req.player.id);
   const out = [];
   const progressContext = {};
   const requestedDex = requestedTaskDexFromHeaders(req.headers);
@@ -17029,6 +17038,7 @@ router.get('/tasks', auth, async (req, res) => {
       reward_gold: rewardBoost.gold,
       reward_wood: rewardBoost.wood,
       reward_ore: rewardBoost.ore,
+      reward_pending: pendingRewards[t.id] || { gold: 0, wood: 0, ore: 0 },
       reward_base: rewardBoost.base,
       reward_boost: {
         nft_pct: rewardBoost.boost_pct || 0,
@@ -17333,7 +17343,7 @@ router.post('/tasks/:id/claim', auth, async (req, res) => {
       wood: nftReward.wood || 0,
       ore: nftReward.ore || 0,
     });
-    db.addResources(req.player.id, reward.gold, reward.wood, reward.ore, {
+    const delivery = taskRewards.credit(req.player.id, id, reward, {
       sourceType: 'task_claim',
       relatedTaskId: id,
       metadata: {
@@ -17382,7 +17392,7 @@ router.post('/tasks/:id/claim', auth, async (req, res) => {
     } else {
       db.db.prepare(`UPDATE player_tasks SET claimed_at = datetime('now') WHERE player_id = ? AND task_id = ?`).run(req.player.id, id);
     }
-    return { raced: false, reward, nftReward };
+    return { raced: false, reward, nftReward, delivery };
   });
   const payoutRes = payout();
   if (payoutRes.raced) {
@@ -17403,6 +17413,8 @@ router.post('/tasks/:id/claim', auth, async (req, res) => {
     });
   }
   const paidReward = payoutRes.reward || { gold: task.reward_gold || 0, wood: task.reward_wood || 0, ore: task.reward_ore || 0 };
+  const deliveredReward = payoutRes.delivery.released;
+  const pendingReward = payoutRes.delivery.pending;
   const paidNftReward = payoutRes.nftReward || { base: { gold: task.reward_gold, wood: task.reward_wood, ore: task.reward_ore }, nft_bonus: { gold: 0, wood: 0, ore: 0 }, boost_pct: 0, multiplier: 1, details: [] };
   console.log(`[task ${id} claim] player=${req.player.name} -> PAID gold=${paidReward.gold||0} wood=${paidReward.wood||0} ore=${paidReward.ore||0} nft_boost=${paidNftReward.boost_pct||0}% prosperity=${paidReward.prosperity_bonus_pct||0}% (${task.title})`);
   recordTaskTelemetry('paid', {
@@ -17423,6 +17435,8 @@ router.post('/tasks/:id/claim', auth, async (req, res) => {
       nft_reward_details: paidNftReward.details || [],
       altar_prosperity_bonus_pct: paidReward.prosperity_bonus_pct || 0,
       altar_prosperity_bonus: paidReward.bonus || { gold: 0, wood: 0, ore: 0 },
+      reward_delivered: deliveredReward,
+      reward_pending: pendingReward,
     },
   });
 
@@ -17434,7 +17448,11 @@ router.post('/tasks/:id/claim', auth, async (req, res) => {
     ok: true,
     completed: true,
     auto_restarted: Boolean(task.repeatable && (Number(task.cooldown_hours) || 0) <= 0),
-    reward: { gold: paidReward.gold, wood: paidReward.wood, ore: paidReward.ore },
+    // Legacy clients must animate only the resources actually delivered.
+    reward: deliveredReward,
+    reward_earned: { gold: paidReward.gold, wood: paidReward.wood, ore: paidReward.ore },
+    reward_pending: pendingReward,
+    resources: payoutRes.delivery.resources,
     reward_base: paidNftReward.base || { gold: task.reward_gold, wood: task.reward_wood, ore: task.reward_ore },
     reward_after_nft_boost: { gold: paidNftReward.gold || 0, wood: paidNftReward.wood || 0, ore: paidNftReward.ore || 0 },
     reward_boost: {
@@ -17519,6 +17537,7 @@ router.get('/admin/elfa/stats', adminAuth, (req, res) => {
 
 // Get full player state (resources + buildings + troops)
 router.get('/state', auth, (req, res) => {
+  taskRewards.settle(req.player.id);
   const state = db.getFullPlayerState(req.player.id);
   if (!state) return res.status(404).json({ error: 'Player not found' });
   res.json(state);

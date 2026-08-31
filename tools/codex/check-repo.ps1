@@ -75,6 +75,9 @@ $NodeFiles = @(
     "server/index.js",
     "server/routes.js",
     "server/db.js",
+    "server/task_rewards.js",
+    "server/recover_task_reward_losses.js",
+    "server/test-task-rewards.js",
     "server/tournament_trade_sync.js",
     "server/test-tournament-trade-cursor.js",
     "server-futures/aptos-key-pool.js",
@@ -119,6 +122,7 @@ $PowerShellFiles = @(
 
 Invoke-Step "combat grid snapshot" { node tools/combat-grid/generate-combat-grid-config.cjs --check }
 Invoke-Step "combat grid regression" { node server/test-combat-grid-sync.js }
+Invoke-Step "quest reward storage, recovery and HTTP idempotency" { node --test server/test-task-rewards.js web/test-quest-reward-delivery.mjs }
 Invoke-Step "casualty report regression" { node server/test-casualty-report.js }
 Invoke-Step "battle result idempotency regression" { node server/test-battle-result-idempotency.js }
 Invoke-Step "battle casualty HTTP regression" { node server/test-battle-casualty-http.js }

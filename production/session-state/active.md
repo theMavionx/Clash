@@ -1,5 +1,32 @@
 # Active Session State
 
+## Integration Release — Production Verified (2026-08-31)
+
+- Owner authorized "закинь все на прод". Completed scoped changes published
+  from codex/log-audit-20260830 as 3b1abf083a81b9eab24b09abb9096f480403d1a3;
+  origin/main fast-forwarded. Original checkout/unfinished holder rebates preserved.
+- Current production: /opt/clash/releases/20260830222226-3b1abf08.
+  Canonical export-upload-deploy.ps1/deploy.sh completed through the supplied
+  proxy pool. Godot runtime reused unchanged; shared databases preserved.
+- Shipped prior log-audit fixes, Nado native charts, protected public-read proxy
+  pool, Lighter/RH wallet-approved setup, eToro Real-only setup and key guide.
+- Full Deploy checks PASS; targeted suite 127/127; Node 20 compatibility 64/64.
+  Production Linux lighter-sdk 1.1.1 offline ChangePubKey test PASS (no send).
+- Production health/CDN exact-byte checks PASS; live Nado BTC/KPEPE/PENGU
+  candles populated; Ink eth_chainId relayed via proxy; relay rejects writes;
+  both /lighter and /rh-lighter preparation reject anonymous requests.
+- Main API and futures report 100 configured server-only proxies. All five
+  Clash processes online, zero restarts after 2.5 minutes. No new futures,
+  jobs or MCP stderr since startup. Hibachi reconcile reports zero errors.
+- Existing bridge retry "fetch failed" and Solana payment-sync simulation
+  warnings remain operational follow-ups, not claimed fixed by this release.
+- Previous 20260830171738-534e91d2 retained for rollback. Established retention
+  removed old 20260830121824-bb871ba1 build artifacts; no player data removed.
+- No manual production DB change, live wallet key registration or funded order
+  was performed for verification. Owner-wallet Lighter acceptance remains.
+- Detailed release report in the implementation worktree:
+  production/releases/integration-release-2026-08-31.md.
+
 ## eToro Key Guide and Trading Settings Link — Local Verification (2026-08-31)
 
 - Added supplied five-step instructions as an expandable setup guide:

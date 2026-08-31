@@ -43,7 +43,31 @@ The deploy script builds/validates before switching current, verifies all
 required processes/health endpoints, and automatically rolls back a failed
 runtime verification. Prior release is retained by the established policy.
 
-Status: preflight passed; deployment and production verification pending.
+Status: DEPLOYED; production verification PASS.
+
+- Published SHA: 3b1abf083a81b9eab24b09abb9096f480403d1a3.
+- Active release: /opt/clash/releases/20260830222226-3b1abf08.
+- Script finished 2026-08-30 22:25:47 UTC (2026-08-31 Kyiv).
+- Health passed: main API, futures, MCP and public API through CDN.
+- CDN exact bytes matched deployed index.html, sw.js and seven owned JS
+  bundles, including FuturesPanel, GodotCanvas and ProfileModal.
+- eToro Real-only server configuration and new guide/setup UI markers passed.
+- Live Nado 5m history returned BTC 97, KPEPE 40 and PENGU 52 valid bars.
+- Public Ink eth_chainId returned 0xdef1 with proxy transport header;
+  transaction-write relay was rejected with 400 before any upstream write.
+- Both Lighter routes reject anonymous preparation (401). First verification
+  probe used an incorrect RH route spelling; corrected to /rh-lighter, matching
+  frontend/backend routes, and the complete verification then passed.
+- Official lighter-sdk 1.1.1 native ChangePubKey offline test passed on the
+  production Linux runtime; no live registration or transaction was sent.
+- Main API and futures each report 100 configured server-only proxies.
+- Five Clash PM2 processes remained online with zero restarts after 2.5 min.
+  No new futures/jobs/MCP stderr since startup; Hibachi reconcile errors=0.
+- Existing bridge retry fetch failures and Solana payment-sync simulation
+  warnings remain. They were not repaired or represented as working here.
+- Established retention removed 20260830121824-bb871ba1 build artifacts.
+  Previous current 20260830171738-534e91d2 remains available for rollback;
+  shared player databases were not removed or manually edited. Disk: 23 GiB free.
 
 ## Explicit limitations
 
