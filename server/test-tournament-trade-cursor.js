@@ -29,6 +29,7 @@ fdb.exec(`
     verified_source TEXT NOT NULL,
     client_order_id TEXT,
     proof_json TEXT,
+    reward_duplicate INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   );
@@ -59,6 +60,7 @@ const base = {
 
 const bootstrap = loadIncrementalTournamentTrades(base);
 assert.deepStrictEqual(bootstrap.rows.map((row) => row.id), [2, 3]);
+assert.deepStrictEqual(bootstrap.rows.map((row) => row.reward_duplicate), [0, 0]);
 assert.strictEqual(bootstrap.newRows, 2);
 assert.strictEqual(bootstrap.reconciledRows, 0);
 assert.strictEqual(bootstrap.cursor.last_trade_id, 3);
@@ -85,12 +87,30 @@ const afterNewState = {
   last_updated_at: withNewFill.cursor.last_updated_at,
   last_updated_trade_id: withNewFill.cursor.last_updated_trade_id,
 };
+
+// The loader must propagate reward_duplicate so recordTournamentTradeRows can
+// reject exchange order-history aggregates while still advancing its cursor.
+fdb.prepare(`
+  UPDATE trade_history
+  SET reward_duplicate = 1, updated_at = '2026-07-04 10:00:01.000'
+  WHERE id = 5
+`).run();
+const withDuplicateMarker = loadIncrementalTournamentTrades({
+  ...base,
+  state: afterNewState,
+});
+assert.strictEqual(withDuplicateMarker.rows.find((row) => row.id === 5).reward_duplicate, 1);
+const afterDuplicateState = {
+  last_trade_id: withDuplicateMarker.cursor.last_trade_id,
+  last_updated_at: withDuplicateMarker.cursor.last_updated_at,
+  last_updated_trade_id: withDuplicateMarker.cursor.last_updated_trade_id,
+};
 fdb.prepare(`
   UPDATE trade_history
   SET pnl = '7.5', updated_at = '2026-07-05 09:00:00.000'
   WHERE id = 2
 `).run();
-const withDelayedPnl = loadIncrementalTournamentTrades({ ...base, state: afterNewState });
+const withDelayedPnl = loadIncrementalTournamentTrades({ ...base, state: afterDuplicateState });
 assert.deepStrictEqual(withDelayedPnl.rows.map((row) => row.id), [2]);
 assert.strictEqual(withDelayedPnl.newRows, 0);
 assert.strictEqual(withDelayedPnl.reconciledRows, 1);

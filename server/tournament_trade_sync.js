@@ -110,7 +110,7 @@ function loadIncrementalTournamentTrades(options = {}) {
     fdb,
     sql: `
       SELECT id, symbol, side, amount, notional_usd, pnl, status, created_at, dex,
-             client_order_id, proof_json,
+             client_order_id, proof_json, reward_duplicate,
              ${updatedAtSelect}
       FROM trade_history
       WHERE player_id = ? AND dex = ? AND id > ?
@@ -135,7 +135,7 @@ function loadIncrementalTournamentTrades(options = {}) {
       fdb,
       sql: `
         SELECT id, symbol, side, amount, notional_usd, pnl, status, created_at, dex,
-               client_order_id, proof_json, updated_at
+               client_order_id, proof_json, reward_duplicate, updated_at
         FROM trade_history
         WHERE player_id = ? AND dex = ? AND ${reconciliationIdWhere}
           AND status = 'filled'
@@ -169,7 +169,7 @@ function loadIncrementalTournamentTrades(options = {}) {
     // updated_at, this bounded overlap is replaced by the indexed update cursor.
     reconciledRows = fdb.prepare(`
       SELECT id, symbol, side, amount, notional_usd, pnl, status, created_at, dex,
-             client_order_id, proof_json,
+             client_order_id, proof_json, reward_duplicate,
              created_at AS updated_at
       FROM trade_history
       WHERE player_id = ? AND dex = ? AND ${reconciliationIdWhere}
