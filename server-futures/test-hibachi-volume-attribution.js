@@ -132,7 +132,7 @@ test('a pre-existing verified owner is inferred before creating an account link'
   );
 });
 
-test('order-history aggregates and later execution rows cannot double-count one Hibachi order', () => {
+test('order-history aggregates are never imported as reward volume', () => {
   const accountId = '30591';
   const playerId = 'cross-poll-player';
   const orderId = '7000001';
@@ -157,9 +157,9 @@ test('order-history aggregates and later execution rows cannot double-count one 
   });
 
   const first = hibachi.__testing.importNormalizedFillsForPlayer(playerId, accountId, [aggregate], futures);
-  assert.equal(first.imported, 1);
+  assert.deepEqual({ imported: first.imported, skipped: first.skipped }, { imported: 0, skipped: 1 });
   const second = hibachi.__testing.importNormalizedFillsForPlayer(playerId, accountId, [execution], futures);
-  assert.deepEqual({ imported: second.imported, skipped: second.skipped }, { imported: 0, skipped: 1 });
+  assert.deepEqual({ imported: second.imported, skipped: second.skipped }, { imported: 1, skipped: 0 });
 
   const totals = futures.db.prepare(`
     SELECT COUNT(*) AS trades, SUM(notional_usd) AS volume
@@ -199,4 +199,158 @@ test('an order-history aggregate is ignored when executions already exist', () =
   assert.equal(futures.db.prepare(`
     SELECT COUNT(*) AS count FROM trade_history WHERE player_id = ? AND dex = 'hibachi'
   `).get(playerId).count, 1);
+});
+
+test('unsafe Hibachi u64 ids remain exact and adjacent fills do not collapse', () => {
+  const accountId = '30593';
+  const payload = hibachi.__testing.parseHibachiJson(`{
+    "trades": [
+      {
+        "id": 18446744073709551614,
+        "symbol": "BTC/USDT-P",
+        "side": "BID",
+        "price": "100",
+        "quantity": "1",
+        "bidAccountId": 30593,
+        "bidOrderId": 18446744073709551614,
+        "askOrderId": 1,
+        "timestamp": 1788256800000
+      },
+      {
+        "id": 18446744073709551615,
+        "symbol": "BTC/USDT-P",
+        "side": "BID",
+        "price": "100",
+        "quantity": "1",
+        "bidAccountId": 30593,
+        "bidOrderId": 18446744073709551615,
+        "askOrderId": 2,
+        "timestamp": 1788256801000
+      }
+    ]
+  }`);
+  assert.equal(payload.trades[0].id, '18446744073709551614');
+  assert.equal(payload.trades[1].id, '18446744073709551615');
+  assert.equal(payload.trades[0].bidOrderId, '18446744073709551614');
+
+  const fills = payload.trades.map((trade) => hibachi.__testing.normalizeTrade(accountId, trade));
+  assert.notEqual(fills[0].clientOrderId, fills[1].clientOrderId);
+  const result = hibachi.__testing.importNormalizedFillsForPlayer('unsafe-u64-player', accountId, fills, futures);
+  assert.deepEqual({ imported: result.imported, skipped: result.skipped }, { imported: 2, skipped: 0 });
+  const totals = futures.db.prepare(`
+    SELECT COUNT(*) AS trades, SUM(notional_usd) AS volume
+    FROM trade_history
+    WHERE player_id = ? AND dex = 'hibachi'
+  `).get('unsafe-u64-player');
+  assert.deepEqual(totals, { trades: 2, volume: 200 });
+});
+
+test('multiple executions of one order are retained while its aggregate is removed', () => {
+  const accountId = '30594';
+  const orderId = '18446744073709551615';
+  const executionOne = hibachi.__testing.normalizeTrade(accountId, {
+    id: '900000000000000001', symbol: 'ETH/USDT-P', side: 'BID', price: '4000', quantity: '0.01',
+    bidAccountId: accountId, bidOrderId: orderId, timestamp: 1788256800000,
+  });
+  const executionTwo = hibachi.__testing.normalizeTrade(accountId, {
+    id: '900000000000000002', symbol: 'ETH/USDT-P', side: 'BID', price: '4000', quantity: '0.015',
+    bidAccountId: accountId, bidOrderId: orderId, timestamp: 1788256801000,
+  });
+  const aggregate = hibachi.__testing.normalizeOrderHistoryTrade(accountId, {
+    orderId, symbol: 'ETH/USDT-P', side: 'BUY', status: 'FILLED',
+    filledQuantity: '0.025', avgFillPrice: '4000', closedAt: 1788256801000,
+  });
+
+  const merged = hibachi.__testing.dedupeTradeRows([aggregate, executionOne, executionTwo]);
+  assert.equal(merged.length, 2);
+  assert.ok(merged.every((row) => row.source === 'trades'));
+  assert.equal(merged.reduce((sum, row) => sum + row.notional_usd, 0), 100);
+});
+
+test('sub-$10 partial fills remain available for exact tournament volume', () => {
+  const fill = hibachi.__testing.normalizeTrade('30597', {
+    id: 'tiny-partial-1',
+    symbol: 'BTC/USDT-P',
+    side: 'BID',
+    price: '77000',
+    quantity: '0.000025',
+    bidAccountId: '30597',
+    bidOrderId: '8000001',
+    timestamp: 1788256800000,
+  });
+  assert.ok(fill);
+  assert.equal(fill.notional_usd, 1.925);
+});
+
+test('account trade history walks Hibachi execution pages instead of stopping at 100', async () => {
+  const originalFetch = global.fetch;
+  const now = Date.now();
+  const requestedPages = [];
+  global.fetch = async (url) => {
+    const parsed = new URL(String(url));
+    if (parsed.pathname === '/trade/orders/history') {
+      return new Response(JSON.stringify({ orders: [] }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    assert.equal(parsed.pathname, '/trade/account/trades');
+    const page = Number(parsed.searchParams.get('page') || 0);
+    requestedPages.push(page);
+    const count = page === 0 ? 100 : (page === 1 ? 2 : 0);
+    const offset = page * 100;
+    const trades = Array.from({ length: count }, (_, index) => ({
+      id: String(1_000_000 + offset + index),
+      symbol: 'BTC/USDT-P',
+      side: 'BID',
+      price: '100',
+      quantity: '1',
+      bidAccountId: 30595,
+      bidOrderId: String(2_000_000 + offset + index),
+      askOrderId: '1',
+      timestamp: now - (offset + index) * 1000,
+    }));
+    return new Response(JSON.stringify({ trades }), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+  try {
+    hibachi.__testing.resetCaches();
+    const history = await hibachi.getAccountTradeHistory({
+      apiKey: 'test-api-key',
+      accountId: 30595,
+      privateKey: 'test-private-key',
+    }, { limit: 250, startTime: now - 60 * 60 * 1000, endTime: now + 1000 });
+    assert.equal(history.length, 102);
+    assert.deepEqual(requestedPages, [0, 1]);
+  } finally {
+    global.fetch = originalFetch;
+    hibachi.__testing.resetCaches();
+  }
+});
+
+test('reward import fails closed when execution history is unavailable', async () => {
+  const originalFetch = global.fetch;
+  global.fetch = async (url) => {
+    const parsed = new URL(String(url));
+    if (parsed.pathname === '/trade/account/trades') {
+      return new Response(JSON.stringify({ error: 'temporary failure' }), {
+        status: 503,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+    return new Response(JSON.stringify({ orders: [] }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  };
+  try {
+    hibachi.__testing.resetCaches();
+    const result = await hibachi.importFillsForPlayer('unavailable-history-player', {
+      apiKey: 'test-api-key',
+      accountId: 30596,
+      privateKey: 'test-private-key',
+    }, { limit: 250 });
+    assert.equal(result.ok, false);
+    assert.equal(result.imported, 0);
+    assert.equal(result.retryable, true);
+  } finally {
+    global.fetch = originalFetch;
+    hibachi.__testing.resetCaches();
+  }
 });

@@ -514,7 +514,11 @@ function adapterCredentials(dex, wallet, headers = {}, opts = {}) {
 
 async function runDexAdapter(player, dex, wallet, opts = {}) {
   const playerId = player?.id;
-  const limit = Math.max(1, Math.min(1000, Number(opts.limit || 100)));
+  // Hibachi's documented trade endpoint is paged at 100 executions. A forced
+  // tournament catch-up intentionally walks more than the generic 1,000-row
+  // adapter ceiling so high-frequency accounts cannot lose older fills.
+  const adapterLimit = dex === 'hibachi' ? 5_000 : 1_000;
+  const limit = Math.max(1, Math.min(adapterLimit, Number(opts.limit || 100)));
   if (!USER_SCOPED_IMPORT_DEXES.has(dex)) {
     return { ok: true, skipped: 'worker_indexed', dex };
   }

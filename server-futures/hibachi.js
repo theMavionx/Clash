@@ -11,8 +11,8 @@ const HIBACHI_FILL_LOOKBACK_MS = Math.max(
   60_000,
   Math.min(30 * 24 * 60 * 60 * 1000, Number(process.env.HIBACHI_FILL_LOOKBACK_MS || 7 * 24 * 60 * 60 * 1000)),
 );
+const HIBACHI_TRADES_PAGE_SIZE = 100;
 const HIBACHI_MAX_FEES_PERCENT = String(process.env.HIBACHI_MAX_FEES_PERCENT || '0.001');
-const HIBACHI_REWARD_MIN_NOTIONAL_USD = Math.max(0, Number(process.env.HIBACHI_REWARD_MIN_NOTIONAL_USD || 10));
 const HIBACHI_IP_BLOCKED_MESSAGE = 'Hibachi is not available from your IP address. Try a supported network or IP region.';
 const HIBACHI_RATE_LIMITED_MESSAGE = 'Hibachi is temporarily rate-limiting requests. Wait a few seconds, then try again.';
 const HIBACHI_TRADING_PERMISSION_REQUIRED_MESSAGE = 'This Hibachi API key is read-only. In Hibachi, create or edit the key and enable Read-write > Trading (Withdraws and Transfers are not required), then use EDIT API in Clash.';
@@ -44,6 +44,59 @@ if (hibachiProxyPool.configured) {
 function num(value, fallback = 0) {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
+}
+
+// JSON.parse rounds integer literals above Number.MAX_SAFE_INTEGER. Hibachi
+// uses u64 identifiers for trades/orders, so two adjacent ids can otherwise
+// collapse to the same JavaScript number and one fill is silently discarded.
+// Preserve every unsafe integer literal as its exact decimal string before
+// handing the payload to JSON.parse; numeric prices/quantities remain numbers.
+function parseHibachiJson(text) {
+  const source = String(text ?? '');
+  if (!source) return null;
+  let out = '';
+  let index = 0;
+  while (index < source.length) {
+    const char = source[index];
+    if (char === '"') {
+      const start = index;
+      index += 1;
+      while (index < source.length) {
+        if (source[index] === '\\') {
+          index += 2;
+          continue;
+        }
+        if (source[index] === '"') {
+          index += 1;
+          break;
+        }
+        index += 1;
+      }
+      out += source.slice(start, index);
+      continue;
+    }
+    if (char === '-' || /\d/u.test(char)) {
+      const match = source.slice(index).match(/^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/u);
+      if (match) {
+        const token = match[0];
+        const integerToken = !/[.eE]/u.test(token);
+        let unsafeInteger = false;
+        if (integerToken) {
+          try {
+            const exact = BigInt(token);
+            unsafeInteger = exact > BigInt(Number.MAX_SAFE_INTEGER)
+              || exact < BigInt(Number.MIN_SAFE_INTEGER);
+          } catch {}
+        }
+        out += unsafeInteger ? JSON.stringify(token) : token;
+        index += token.length;
+        continue;
+      }
+    }
+    out += char;
+    index += 1;
+  }
+  return JSON.parse(out);
 }
 
 function symbolOf(value) {
@@ -953,7 +1006,7 @@ async function request(base, method, path, { apiKey, accountId, body } = {}) {
       const r = await fetch(`${base}${path}`, requestOptions);
       const text = await r.text();
       let data = null;
-      try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+      try { data = text ? parseHibachiJson(text) : null; } catch { data = text; }
       if (!r.ok) {
         const errorText = typeof data === 'string'
           ? data
@@ -1651,8 +1704,12 @@ function ordersPath(creds) {
   return `/trade/orders?accountId=${encodeURIComponent(creds.accountId)}`;
 }
 
-function tradesPath(creds) {
-  return `/trade/account/trades?accountId=${encodeURIComponent(creds.accountId)}`;
+function tradesPath(creds, { page = 0 } = {}) {
+  const params = new URLSearchParams({
+    accountId: String(creds.accountId),
+    page: String(Math.max(0, Math.floor(Number(page) || 0))),
+  });
+  return `/trade/account/trades?${params.toString()}`;
 }
 
 function ordersHistoryPath(creds, { startTime, endTime, cursorOrderId } = {}) {
@@ -2062,10 +2119,15 @@ async function cancelOrder(credsInput, { orderId, nonce } = {}) {
 
 function normalizeTrade(accountId, trade) {
   const notional = Math.abs(num(trade.price) * num(trade.quantity));
-  if (!trade?.symbol || !Number.isFinite(notional) || notional < HIBACHI_REWARD_MIN_NOTIONAL_USD || notional > 10_000_000) return null;
+  // Store every positive exchange fill for exact account/tournament volume.
+  // The main rewards service applies its own $10 anti-spam threshold when
+  // awarding gold; filtering here made legitimate partial fills disappear
+  // from the leaderboard as well.
+  if (!trade?.symbol || !Number.isFinite(notional) || notional <= 0 || notional > 10_000_000) return null;
   const sideText = String(trade.side || '').toUpperCase();
   const side = sideText === 'ASK' || sideText === 'SELL' ? 'short' : 'long';
-  const id = trade.id || trade.tradeId || `${trade.bidOrderId || ''}:${trade.askOrderId || ''}:${trade.timestamp || ''}`;
+  const id = trade.id ?? trade.tradeId ?? `${trade.bidOrderId || ''}:${trade.askOrderId || ''}:${trade.timestamp || ''}`;
+  const orderId = String(trade.bidAccountId) === String(accountId) ? trade.bidOrderId : trade.askOrderId;
   const createdAt = timestampIso(trade.timestamp);
   return {
     symbol: symbolOf(trade.symbol),
@@ -2073,7 +2135,7 @@ function normalizeTrade(accountId, trade) {
     orderType: String(trade.orderType || '').toLowerCase() || 'market',
     amount: String(Math.abs(num(trade.quantity))),
     price: String(trade.price || ''),
-    orderId: String(trade.bidAccountId) === String(accountId) ? trade.bidOrderId : trade.askOrderId,
+    orderId: orderId == null ? null : String(orderId),
     clientOrderId: `hibachi:${accountId}:${id}`,
     status: 'filled',
     dex: 'hibachi',
@@ -2131,7 +2193,7 @@ function normalizeOrderHistoryTrade(accountId, order) {
   const notional = Number.isFinite(providedNotional) && providedNotional > 0
     ? Math.abs(providedNotional)
     : Math.abs(price * quantity);
-  if (!symbol || !Number.isFinite(notional) || notional < HIBACHI_REWARD_MIN_NOTIONAL_USD || notional > 10_000_000) return null;
+  if (!symbol || !Number.isFinite(notional) || notional <= 0 || notional > 10_000_000) return null;
 
   const sideText = String(order?.side || order?.orderSide || order?.order_side || '').toUpperCase();
   const side = /ASK|SELL|SHORT/u.test(sideText) ? 'short' : 'long';
@@ -2160,27 +2222,85 @@ function normalizeOrderHistoryTrade(accountId, order) {
     createdAt,
     created_at: createdAt,
     source: 'orders_history',
+    rewardDuplicate: 1,
     _raw: order,
   };
 }
 
 function dedupeTradeRows(list) {
-  const seen = new Set();
-  const out = [];
+  const seenExecutions = new Set();
+  const executionOrders = new Set();
+  const executions = [];
+  const aggregates = [];
   for (const row of Array.isArray(list) ? list : []) {
     if (!row) continue;
-    const keys = [
-      row.clientOrderId ? `client:${row.clientOrderId}` : null,
-      row.orderId ? `order:${row.orderId}` : null,
-      row.symbol && row.side && row.created_at && row.amount && row.price
-        ? `shape:${row.symbol}:${row.side}:${row.created_at}:${row.amount}:${row.price}`
-        : null,
-    ].filter(Boolean);
-    if (keys.some(key => seen.has(key))) continue;
-    keys.forEach(key => seen.add(key));
-    out.push(row);
+    if (row.source === 'trades') {
+      const key = row.clientOrderId
+        ? `client:${row.clientOrderId}`
+        : `shape:${row.symbol}:${row.side}:${row.created_at}:${row.amount}:${row.price}`;
+      if (seenExecutions.has(key)) continue;
+      seenExecutions.add(key);
+      if (row.orderId != null && row.orderId !== '') executionOrders.add(String(row.orderId));
+      executions.push(row);
+    } else {
+      aggregates.push(row);
+    }
   }
-  return out;
+  const seenAggregateOrders = new Set();
+  const fallbackAggregates = aggregates.filter((row) => {
+    const orderId = row.orderId == null ? '' : String(row.orderId);
+    if (orderId && (executionOrders.has(orderId) || seenAggregateOrders.has(orderId))) return false;
+    if (orderId) seenAggregateOrders.add(orderId);
+    return true;
+  });
+  return [...executions, ...fallbackAggregates];
+}
+
+async function getAccountExecutionHistory(credsInput, {
+  limit = HIBACHI_FILL_LOOKBACK_LIMIT,
+  startTime,
+  endTime,
+} = {}) {
+  const creds = credentials(credsInput);
+  const max = Math.max(1, Math.min(HIBACHI_FILL_BACKFILL_MAX, Number(limit) || HIBACHI_FILL_LOOKBACK_LIMIT));
+  const endMs = Number.isFinite(Number(endTime)) ? Number(endTime) : Date.now();
+  const startMs = Number.isFinite(Number(startTime)) ? Number(startTime) : endMs - HIBACHI_FILL_LOOKBACK_MS;
+  const out = [];
+  const pageSignatures = new Set();
+  const maxPages = Math.min(100, Math.max(1, Math.ceil(max / HIBACHI_TRADES_PAGE_SIZE)));
+
+  for (let page = 0; page < maxPages && out.length < max; page += 1) {
+    const j = await cachedAuthedGet(tradesPath(creds, { page }), creds, {
+      ttlMs: 1_500,
+      staleMs: 15_000,
+    });
+    const pageRows = rows(j?.trades || j);
+    if (!pageRows.length) break;
+    const signature = pageRows
+      .slice(0, 3)
+      .map((trade) => String(
+        trade?.id
+        ?? trade?.tradeId
+        ?? `${trade?.bidOrderId || ''}:${trade?.askOrderId || ''}:${trade?.timestamp || ''}`,
+      ))
+      .join(':');
+    if (pageSignatures.has(signature)) break;
+    pageSignatures.add(signature);
+
+    const normalized = pageRows
+      .map((trade) => normalizeTrade(creds.accountId, trade))
+      .filter(Boolean)
+      .filter((trade) => {
+        const at = timestampMs(trade.created_at);
+        return at == null || (at >= startMs && at <= endMs);
+      });
+    out.push(...normalized);
+
+    const pageTimes = pageRows.map((trade) => timestampMs(trade?.timestamp)).filter(Number.isFinite);
+    if (pageTimes.length && Math.max(...pageTimes) < startMs) break;
+    if (pageRows.length < HIBACHI_TRADES_PAGE_SIZE) break;
+  }
+  return dedupeTradeRows(out).slice(0, max);
 }
 
 async function getAccountOrderHistory(credsInput, {
@@ -2216,21 +2336,20 @@ async function getAccountOrderHistory(credsInput, {
   return out.slice(0, max);
 }
 
-async function getAccountTradeHistory(credsInput, { limit = HIBACHI_FILL_LOOKBACK_LIMIT, startTime, endTime } = {}) {
+async function getAccountTradeHistory(credsInput, {
+  limit = HIBACHI_FILL_LOOKBACK_LIMIT,
+  startTime,
+  endTime,
+  requireExecutions = false,
+} = {}) {
   const creds = credentials(credsInput);
   const max = Math.max(1, Math.min(HIBACHI_FILL_BACKFILL_MAX, Number(limit) || HIBACHI_FILL_LOOKBACK_LIMIT));
   const [tradesResult, ordersResult] = await Promise.allSettled([
-    (async () => {
-      const j = await cachedAuthedGet(tradesPath(creds), creds, {
-        ttlMs: 1_500,
-        staleMs: 15_000,
-      });
-      return rows(j?.trades || j).map(t => normalizeTrade(creds.accountId, t)).filter(Boolean);
-    })(),
+    getAccountExecutionHistory(creds, { limit: max, startTime, endTime }),
     getAccountOrderHistory(creds, { limit: max, startTime, endTime }),
   ]);
 
-  if (tradesResult.status === 'rejected' && ordersResult.status === 'rejected') {
+  if (tradesResult.status === 'rejected' && (requireExecutions || ordersResult.status === 'rejected')) {
     throw tradesResult.reason || ordersResult.reason;
   }
   const combined = [
@@ -2322,18 +2441,19 @@ function importNormalizedFillsForPlayer(playerId, accountId, fills, dbModule = r
   let imported = 0;
   let updated = 0;
   let skipped = 0;
-  // Prefer execution rows in a fresh batch.  Across separate API polls the
-  // order-history aggregate can become visible before the corresponding
-  // execution row.  Treat that aggregate as the canonical reward row instead
-  // of inserting the later execution under a second client id; an order with
-  // several fills still keeps all execution rows when no aggregate was
-  // previously persisted.
+  // Volume is credited exclusively from execution rows. Order-history rows
+  // are aggregates and are kept only as a read/display fallback; importing
+  // both representations is what previously doubled some tournament volume.
   const orderedFills = [...(Array.isArray(fills) ? fills : [])].sort((a, b) => {
     const priority = row => row?.source === 'trades' ? 0 : 1;
     return priority(a) - priority(b);
   });
   for (const trade of orderedFills) {
     try {
+      if (trade?.source !== 'trades') {
+        skipped++;
+        continue;
+      }
       const before = dbModule.db.prepare(`
         SELECT id, player_id FROM trade_history
         WHERE dex = 'hibachi'
@@ -2344,25 +2464,6 @@ function importNormalizedFillsForPlayer(playerId, accountId, fills, dbModule = r
         console.warn(`[hibachi] refused to reassign verified trade ${trade.clientOrderId} from ${before.player_id} to ${owner.playerId}`);
         skipped++;
         continue;
-      }
-      const orderId = trade?.orderId == null ? '' : String(trade.orderId);
-      if (!before && orderId) {
-        const sameOrder = dbModule.db.prepare(`
-          SELECT id, client_order_id
-          FROM trade_history
-          WHERE player_id = ? AND dex = 'hibachi'
-            AND CAST(order_id AS TEXT) = ?
-            AND COALESCE(reward_duplicate, 0) = 0
-          ORDER BY id ASC
-        `).all(owner.playerId, orderId);
-        const aggregateClientId = `hibachi:${owner.accountId}:${orderId}`;
-        const hasExecution = sameOrder.some(row => String(row.client_order_id || '') !== aggregateClientId);
-        const hasAggregate = sameOrder.some(row => String(row.client_order_id || '') === aggregateClientId);
-        if ((trade.source === 'orders_history' && hasExecution)
-          || (trade.source === 'trades' && hasAggregate)) {
-          skipped++;
-          continue;
-        }
       }
       const r = dbModule.upsertVerifiedTrade(owner.playerId, trade);
       if (r?.inserted) imported += r.inserted;
@@ -2391,7 +2492,7 @@ async function importFillsForPlayer(playerId, credsInput, opts = {}) {
   const creds = credentials(credsInput);
   let fills = [];
   try {
-    fills = await getAccountTradeHistory(creds, opts);
+    fills = await getAccountTradeHistory(creds, { ...opts, requireExecutions: true });
   } catch (e) {
     console.warn('[hibachi] trade history import read failed:', e.message);
     return {
@@ -2452,6 +2553,9 @@ module.exports = {
     proxyPoolStats: () => hibachiProxyPool.stats(),
     normalizeTrade,
     normalizeOrderHistoryTrade,
+    parseHibachiJson,
+    tradesPath,
+    dedupeTradeRows,
     importNormalizedFillsForPlayer,
     resolveHibachiAccountOwner,
   },
