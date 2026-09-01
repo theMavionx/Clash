@@ -9,6 +9,7 @@ import { uiButton, uiIconButton } from './src/styles/theme.js';
 import { playerDexPreferenceKey } from './src/lib/lastPlayerDex.js';
 
 const source = readFileSync(new URL('./src/components/GameUI.jsx', import.meta.url), 'utf8').replaceAll('\r\n', '\n');
+const profileSource = readFileSync(new URL('./src/components/ProfileModal.jsx', import.meta.url), 'utf8').replaceAll('\r\n', '\n');
 const dexSource = readFileSync(new URL('./src/contexts/DexContext.jsx', import.meta.url), 'utf8');
 const logoVenues = ['lighter', 'rhlighter'].map(id => {
   const config = dexSource.match(new RegExp('  ' + id + ': (\\{[\\s\\S]*?\\n  \\}),'));
@@ -99,7 +100,7 @@ function actualEffect(anchor) {
 }
 
 const autoOpen = actualEffect('if (!solanaMobileReady) return;');
-const manualOpen = actualEffect('const openVenuePicker = (event) =>');
+const manualOpen = actualCallback('openVenuePicker');
 function setup() {
   const state = {visible:true,dex:'hibachi',writes:[],events:new Map(),asyncReads:0};
   let resolveRead;
@@ -125,7 +126,7 @@ function setup() {
       removeEventListener:name=>state.events.delete(name),
     },
   });
-  const run = callback => vm.runInContext('(' + callback + ')', context)();
+  const run = (callback, ...args) => vm.runInContext('(' + callback + ')', context)(...args);
   return {state,context,run,resolveRead:value=>resolveRead(value)};
 }
 
@@ -212,11 +213,19 @@ test('a different player can still receive the automatic picker', async () => {
 test('explicit reopen still works after dismissal', () => {
   const {state,run} = setup();
   run(actualCallback('dismissVenuePicker'));
-  const cleanup = run(manualOpen);
-  state.events.get('clash-open-venue-picker')({detail:{source:'profile'}});
+  run(manualOpen, {source:'profile', currentDex:'hibachi'});
   assert.equal(state.visible, true);
   assert.equal(state.dex, 'hibachi');
   assert.deepEqual(state.writes, []);
-  cleanup();
-  assert.equal(state.events.size, 0);
+  assert.match(source, /window\.addEventListener\('clash-open-venue-picker', handleOpenVenuePicker\)/u);
+});
+
+test('Profile switch uses a direct GameUI callback before the event fallback', () => {
+  assert.match(source, /<ProfileModal[\s\S]*?onSwitchDex=\{\(\) => \{[\s\S]*?setShowProfile\(false\);[\s\S]*?openVenuePicker\(\{ source: 'profile', currentDex: dex \}\);/u);
+  assert.match(profileSource, /function ProfileModal\(\{ onClose, onSwitchDex \}\)/u);
+  const start = profileSource.indexOf('const switchDex = async () =>');
+  const end = profileSource.indexOf('const handleDisconnect', start);
+  assert.ok(start >= 0 && end > start, 'profile switch action is present');
+  const action = profileSource.slice(start, end);
+  assert.match(action, /if \(typeof onSwitchDex === 'function'\) \{[\s\S]*?onSwitchDex\(\);[\s\S]*?return;/u);
 });

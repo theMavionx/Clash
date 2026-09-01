@@ -10,7 +10,7 @@ const short = value => value ? `${value.slice(0, 8)}…${value.slice(-6)}` : '';
 
 export default function CredentialVaultBoundary({ children }) {
   const player = usePlayer();
-  const token = player?.token || null;
+  const token = player?.token || (typeof window !== 'undefined' ? window._playerToken : null);
   const playerId = player?.player_id || player?.id ? String(player.player_id || player.id) : null;
   const guest = !!player?.is_guest || String(player?.wallet || '').startsWith('local_guest_');
   const state = useSyncExternalStore(credentialVault.subscribe, credentialVault.getSnapshot, credentialVault.getSnapshot);
@@ -37,6 +37,14 @@ export default function CredentialVaultBoundary({ children }) {
   }
   if (!token || !playerId || guest) return children;
   const hydrated = state.playerId === playerId && (state.ready || state.phase === 'error');
+  // Healthy login-time sync is deliberately invisible. Keep the recovery
+  // surface only when an upload/conflict/error really needs the player's
+  // attention (and always in development for the isolated vault fixture).
+  const needsAttention = state.pending > 0
+    || state.candidates.length > 0
+    || state.conflicts.length > 0
+    || !!state.error;
+  const showManager = import.meta.env.DEV || needsAttention;
   // GodotCanvas remains mounted outside this boundary. Old account hooks cannot
   // run while this player's secrets are loading, even for a single render.
   return <>
@@ -45,9 +53,9 @@ export default function CredentialVaultBoundary({ children }) {
         {state.phase === 'error' ? 'Trading key sync needs attention.' : 'Syncing secure trading keys…'}
         {state.phase === 'error' && <button type="button" style={{ ...button, marginLeft: 10 }} onClick={() => run(() => credentialVault.refresh())}>Retry</button>}
       </div>}
-    <button type="button" style={{ ...button, position: 'fixed', left: '50%', bottom: 9, transform: 'translateX(-50%)',
+    {showManager && <button type="button" style={{ ...button, position: 'fixed', left: '50%', bottom: 9, transform: 'translateX(-50%)',
       zIndex: 1100, background: '#172436', fontSize: 11, padding: '6px 10px', border: '1px solid #52647a' }}
-      onClick={() => setOpen(true)}>Trading keys · {state.pending ? `${state.pending} pending` : state.unlocked ? 'synced' : 'verify to sync'}</button>
+      onClick={() => setOpen(true)}>{needsAttention ? 'Trading key sync · action needed' : 'Manage trading key sync'}</button>}
     {open && <div style={{ position: 'fixed', inset: 0, zIndex: 3000, background: '#000a', display: 'grid', placeItems: 'center', padding: 16 }}>
       <section role="dialog" aria-modal="true" aria-labelledby="vault-title" style={{ ...box, width: 'min(520px, 100%)', maxHeight: '85vh', overflowY: 'auto' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>

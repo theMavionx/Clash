@@ -78,7 +78,7 @@ function chainLabel(chain) {
   return 'Wallet';
 }
 
-function ProfileModal({ onClose }) {
+function ProfileModal({ onClose, onSwitchDex }) {
   const player = usePlayer();
   const resources = useResources();
   const { sendToGodot } = useSend();
@@ -321,6 +321,10 @@ function ProfileModal({ onClose }) {
   };
 
   const switchDex = async () => {
+    if (typeof onSwitchDex === 'function') {
+      onSwitchDex();
+      return;
+    }
     try {
       window.dispatchEvent(new CustomEvent('clash-open-venue-picker', {
         detail: { source: 'profile', currentDex: dex },

@@ -367,26 +367,28 @@ export default function GameUI() {
     venueSelectionRef.current.controller?.abort();
   }, []);
 
-  useEffect(() => {
-    const openVenuePicker = (event) => {
-      if (shouldBypassVenuePickerForLocalGuest(player)) {
-        setDex(LOCAL_GUEST_DEFAULT_DEX);
-        setShowVenuePicker(false);
-        addClientBreadcrumb('venue_picker.local_guest_open_blocked', {
-          source: event?.detail?.source || 'unknown',
-          dex: LOCAL_GUEST_DEFAULT_DEX,
-        });
-        return;
-      }
-      addClientBreadcrumb('venue_picker.open', {
-        source: event?.detail?.source || 'unknown',
-        currentDex: event?.detail?.currentDex || null,
+  const openVenuePicker = useCallback((detail = {}) => {
+    if (shouldBypassVenuePickerForLocalGuest(player)) {
+      setDex(LOCAL_GUEST_DEFAULT_DEX);
+      setShowVenuePicker(false);
+      addClientBreadcrumb('venue_picker.local_guest_open_blocked', {
+        source: detail.source || 'unknown',
+        dex: LOCAL_GUEST_DEFAULT_DEX,
       });
-      setShowVenuePicker(true);
-    };
-    window.addEventListener('clash-open-venue-picker', openVenuePicker);
-    return () => window.removeEventListener('clash-open-venue-picker', openVenuePicker);
+      return;
+    }
+    addClientBreadcrumb('venue_picker.open', {
+      source: detail.source || 'unknown',
+      currentDex: detail.currentDex || null,
+    });
+    setShowVenuePicker(true);
   }, [player, setDex]);
+
+  useEffect(() => {
+    const handleOpenVenuePicker = (event) => openVenuePicker(event?.detail || {});
+    window.addEventListener('clash-open-venue-picker', handleOpenVenuePicker);
+    return () => window.removeEventListener('clash-open-venue-picker', handleOpenVenuePicker);
+  }, [openVenuePicker]);
 
   useEffect(() => {
     if (!selectedBuilding) setShowTroops(false);
@@ -583,7 +585,13 @@ export default function GameUI() {
           )}
 
           {showProfile && (
-            <ProfileModal onClose={() => setShowProfile(false)} />
+            <ProfileModal
+              onClose={() => setShowProfile(false)}
+              onSwitchDex={() => {
+                setShowProfile(false);
+                openVenuePicker({ source: 'profile', currentDex: dex });
+              }}
+            />
           )}
 
           {showBattleLog && (

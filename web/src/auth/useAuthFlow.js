@@ -1260,9 +1260,13 @@ export function useAuthFlow() {
   const unpickDex = useCallback(() => {
     writeDexPicked(false);
     setDexPickedState(false);
+    // CHANGE DEX is an explicit request to return to the venue picker. A
+    // stale wallet-recovery gate must not keep the flow on manual_connect,
+    // where the badge disappears but no picker is rendered.
+    clearManualReconnectRequired();
     // Also allow the FC EVM attempt to re-run on re-entry.
     fcEvmTriedRef.current = false;
-  }, []);
+  }, [clearManualReconnectRequired]);
 
   const changeWallet = useCallback(async () => {
     credentialVault.lock();

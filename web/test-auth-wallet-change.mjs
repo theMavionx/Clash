@@ -51,8 +51,16 @@ test('Change and Back wait for reset, then open the chain-correct wallet picker'
   assert.match(panel, /onChangeDex=\{actions\.unpickDex\}/u);
 });
 
-test('explicit DEX unpick always reaches the DEX picker even with remembered auth', () => {
+test('explicit DEX unpick clears reconnect recovery and always reaches the picker', () => {
   const source = read('src/auth/useAuthFlow.js');
+  const start = source.indexOf('const unpickDex = useCallback');
+  const end = source.indexOf('const changeWallet = useCallback', start);
+  assert.ok(start >= 0 && end > start, 'unpickDex action is present');
+  const action = source.slice(start, end);
+  assert.match(action, /writeDexPicked\(false\)/u);
+  assert.match(action, /setDexPickedState\(false\)/u);
+  assert.match(action, /clearManualReconnectRequired\(\)/u);
+  assert.match(action, /\[clearManualReconnectRequired\]/u);
   assert.match(source, /if \(!dexPicked && !manualReconnectRequired\) return 'pick_dex'/u);
   assert.doesNotMatch(source, /if \(!dexPicked && !storedAuthWallet && !manualReconnectRequired\) return 'pick_dex'/u);
 });
