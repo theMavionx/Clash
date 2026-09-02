@@ -20,7 +20,7 @@ export const DEX_CONFIG = {
     label: 'IMPERIAL',
     shortLabel: 'IMP',
     emoji: 'IMP',
-    logo: '/imperial.png',
+    logo: '/imperial-brand.png',
     logoIsWordmark: false,
     color: '#7C5CFC',
     colorDark: '#4C35B8',
