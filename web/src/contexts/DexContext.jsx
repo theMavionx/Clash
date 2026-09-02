@@ -15,6 +15,21 @@ const DexContext = createContext(null);
 const STORAGE_KEY = 'clash_dex';
 
 export const DEX_CONFIG = {
+  imperial: {
+    id: 'imperial',
+    label: 'IMPERIAL',
+    shortLabel: 'IMP',
+    emoji: 'IMP',
+    logo: '/imperial.png',
+    logoIsWordmark: false,
+    color: '#7C5CFC',
+    colorDark: '#4C35B8',
+    colorLight: 'rgba(124,92,252,0.16)',
+    borderColor: '#9277FF',
+    chain: 'Solana',
+    chainShort: 'SOL',
+    description: 'Smart-routed Solana perps with optional leverage boost',
+  },
   bulk: {
     id: 'bulk',
     label: 'BULK',
@@ -407,6 +422,7 @@ export const DEX_CONFIG = {
 };
 
 export const DEX_ORDER = [
+  'imperial',
   'bulk',
   'lighter',
   'rhlighter',
@@ -439,7 +455,7 @@ export function isDexAvailableInContext(dexId, { isInFrame = false, isSolanaMobi
   // Vault holds a Solana keypair, and Mobile Wallet Adapter is Solana-native.
   // Base/Arbitrum/Aptos/Monad signing would either dead-end or fall through
   // to a non-native wallet flow.
-  if (isSolanaMobile && dexId !== 'pacifica' && dexId !== 'phoenix' && dexId !== 'gmtrade' && dexId !== 'flash' && dexId !== 'bulk') return false;
+  if (isSolanaMobile && dexId !== 'pacifica' && dexId !== 'phoenix' && dexId !== 'gmtrade' && dexId !== 'flash' && dexId !== 'bulk' && dexId !== 'imperial') return false;
   // Farcaster mini apps expose Solana and, on some clients, EVM providers.
   // Aptos wallet-standard providers such as Petra are not available there, so
   // Decibel would leave users stuck on an impossible connect step.

@@ -2509,6 +2509,8 @@ const BULK_BUILDER_ADDRESS = String(
 const BULK_BUILDER_FEE_BPS = Math.max(1, Math.min(15, Number(process.env.BULK_BUILDER_FEE_BPS || 1)));
 const ONDO_BUILDER_CODE = String(process.env.ONDO_PERPS_BUILDER_CODE || '').trim();
 const ONDO_BUILDER_FEE_BPS = 1;
+const IMPERIAL_API = String(process.env.IMPERIAL_API_URL || 'https://api.imperial.space/api/v1').replace(/\/+$/, '');
+const IMPERIAL_BUILDER_CODE = String(process.env.IMPERIAL_BUILDER_CODE || 'CLASH').trim().toUpperCase();
 const ASTER_BUILDER_ADDRESS = String(
   process.env.ASTER_BUILDER_ADDRESS || process.env.ASTER_BUILDER_CODE || '',
 ).trim().toLowerCase();
@@ -3375,6 +3377,64 @@ async function fetchBulkEarnings() {
   };
 }
 
+function imperialBuilderAmounts(summary) {
+  const accruedBase = Number(summary?.accruedUsdcBase);
+  const paidBase = Number(summary?.paidUsdcBase);
+  const claimableBase = Number(summary?.claimableUsdcBase);
+  const earned = Number.isFinite(accruedBase)
+    ? accruedBase / 1_000_000
+    : Number(summary?.earnedUsd ?? summary?.totalFeesUsd ?? summary?.builderFeesUsd);
+  return {
+    earned,
+    paid: Number.isFinite(paidBase) ? paidBase / 1_000_000 : null,
+    claimable: Number.isFinite(claimableBase) ? claimableBase / 1_000_000 : null,
+  };
+}
+
+async function fetchImperialEarnings() {
+  const local = readVerifiedFuturesDexStats('imperial', 'imperial_api', {
+    rowWhere: tradeRecon.verifiedSourceClauseForDex('imperial').replace(/^verified_source\s*=\s*'imperial_api'\s+AND\s+/i, ''),
+  });
+  let summary = null;
+  let summaryError = null;
+  try {
+    summary = await fetchJson(`${IMPERIAL_API}/mobile/builder/summary?code=${encodeURIComponent(IMPERIAL_BUILDER_CODE)}`);
+  } catch (cause) {
+    summaryError = cause?.message || String(cause);
+  }
+  // Imperial's builder summary reports lifetime amounts in 6-decimal USDC
+  // base units. Keep legacy decimal field fallbacks for backwards compatibility.
+  const amounts = imperialBuilderAmounts(summary);
+  const earned = amounts.earned;
+  const feeBps = Number(summary?.feeBps ?? summary?.builderFeeBps);
+  const exact = Number.isFinite(earned);
+  const estimated = Number.isFinite(feeBps) ? local.volume_usd * feeBps / 10_000 : 0;
+  return {
+    earned_usd: exact ? roundUsd(earned) : 0,
+    paid_usd: amounts.paid === null ? null : roundUsd(amounts.paid),
+    claimable_usd: amounts.claimable === null ? null : roundUsd(amounts.claimable),
+    currency: 'USDC (Imperial/Solana)',
+    builder_code: IMPERIAL_BUILDER_CODE,
+    configured: summary?.active === true || summary?.configured === true,
+    active: summary?.active === true,
+    volume_usd: local.volume_usd,
+    volume_24h_usd: local.volume_24h_usd,
+    trades: local.trades,
+    trades_24h: local.trades_24h,
+    traders: local.traders,
+    estimated_fee_usd: exact ? 0 : roundUsd(estimated),
+    builder_fee_bps: Number.isFinite(feeBps) ? feeBps : null,
+    latest_fill_at: local.latest_fill_at,
+    recent_proofs: local.recent_proofs,
+    exact,
+    model: exact ? 'imperial_builder_summary_exact' : 'imperial_clash_order_proof',
+    source_detail: exact ? 'imperial_mobile_builder_summary' : 'imperial_exact_execution_proof',
+    note: exact
+      ? 'Exact Imperial builder summary plus local CLASH-attributed execution volume.'
+      : `Imperial builder summary is unavailable (${summaryError || 'no fee total'}). Local volume counts only exact executions tied to server-issued CLASH orders; no unverified fee amount is added to earnings.`,
+  };
+}
+
 async function fetchOndoEarnings() {
   const local = readVerifiedFuturesDexStats('ondo', 'ondo_builder_fill', {
     rowWhere: ondoVerifiedBuilderProofWhere(),
@@ -3646,6 +3706,7 @@ const ANALYTICS_DEXES = [
   { key: 'lighter', label: 'Lighter' },
   { key: 'rhlighter', label: 'Robinhood Lighter' },
   { key: 'bulk', label: 'Bulk' },
+  { key: 'imperial', label: 'Imperial' },
 ];
 
 const ANALYTICS_WINDOWS = [
@@ -3729,6 +3790,7 @@ function tradeSourceWhereForAnalytics(dex) {
   if (dex === 'lighter') return "verified_source = 'lighter_integrator'";
   if (dex === 'rhlighter') return "verified_source = 'rhlighter_integrator'";
   if (dex === 'bulk') return tradeRecon.verifiedSourceClauseForDex('bulk');
+  if (dex === 'imperial') return tradeRecon.verifiedSourceClauseForDex('imperial');
   if (dex === 'phoenix') return "verified_source IN ('worker', 'tx')";
   if (dex === 'gmx') return "verified_source IN ('worker', 'client', 'server')";
   if (dex === 'ostium') return "verified_source = 'ostium_api'";
@@ -3985,6 +4047,16 @@ function revenueModelForDex(dex, dateForRate = null) {
       address: BULK_BUILDER_ADDRESS,
       model: 'bulk_signed_builder_volume_estimate',
       source_detail: 'bulk_v0_1_2_signed_order_proof',
+    };
+  }
+  if (dex === 'imperial') {
+    return {
+      configured: false,
+      rate: null,
+      rate_label: 'read from Imperial builder summary',
+      builder_code: IMPERIAL_BUILDER_CODE,
+      model: 'imperial_builder_summary_exact',
+      source_detail: 'imperial_mobile_builder_summary',
     };
   }
   if (dex === 'ondo') {
@@ -4413,6 +4485,10 @@ const FAILED_EARNINGS_META = {
     address: BULK_BUILDER_ADDRESS,
     currency: 'USDC (Bulk/Solana)',
   },
+  imperial: {
+    builder_code: IMPERIAL_BUILDER_CODE,
+    currency: 'USDC (Imperial/Solana)',
+  },
   ondo: {
     builder_code: ONDO_BUILDER_CODE || null,
     builder_fee_bps: ONDO_BUILDER_FEE_BPS,
@@ -4444,6 +4520,7 @@ const EARNINGS_READER_CONFIG = {
   lighter: { source: 'lighter_integrator_fills_fee_sum', read: () => fetchLighterEarnings() },
   rhlighter: { source: 'rh_lighter_public_partner_stats', read: () => fetchRhLighterEarnings() },
   bulk: { source: 'bulk_v0_1_2_signed_order_proof', read: () => fetchBulkEarnings() },
+  imperial: { source: 'imperial_mobile_builder_summary', read: () => fetchImperialEarnings() },
   ondo: { source: 'ondo_clashofperps_order_proof_x_authenticated_fill_volume_x_1bps', read: () => fetchOndoEarnings() },
 };
 
@@ -4471,6 +4548,7 @@ const EARNINGS_DEX_ORDER = [
   'lighter',
   'rhlighter',
   'bulk',
+  'imperial',
   'ondo',
 ];
 
@@ -5035,5 +5113,6 @@ module.exports = {
     upsertAsterBuilderFills,
     readAsterExactIndexedEarnings,
     formatLeverupBrokerEarnings,
+    imperialBuilderAmounts,
   },
 };

@@ -1574,6 +1574,7 @@ function renderPlayers() {
   const ltrCount    = players.filter(p => p.dex === 'lighter').length;
   const rhlCount    = players.filter(p => p.dex === 'rhlighter').length;
   const blkCount    = players.filter(p => p.dex === 'bulk').length;
+  const impCount    = players.filter(p => p.dex === 'imperial').length;
   const katCount   = players.filter(p => p.dex === 'katana').length;
   const noDex      = players.filter(p => !p.dex).length;
   // Heartbeat-based presence — counted client-side from /admin/players
@@ -1606,6 +1607,7 @@ function renderPlayers() {
     '<div class="stat" style="border-color:#38bdf8"><div class="v" style="color:#7dd3fc;font-size:22px">' + ltrCount + '</div><div class="l">Lighter</div></div>' +
     '<div class="stat" style="border-color:#16a34a"><div class="v" style="color:#86efac;font-size:22px">' + rhlCount + '</div><div class="l">RH Lighter</div></div>' +
     '<div class="stat" style="border-color:#e5e7eb"><div class="v" style="color:#f8fafc;font-size:22px">' + blkCount + '</div><div class="l">Bulk</div></div>' +
+    '<div class="stat" style="border-color:#9277ff"><div class="v" style="color:#b8a7ff;font-size:22px">' + impCount + '</div><div class="l">Imperial</div></div>' +
     (noDex > 0 ? '<div class="stat"><div class="v" style="font-size:18px;color:#9ca3af">' + noDex + '</div><div class="l">No DEX set</div></div>' : '') +
     '<div class="stat"><div class="v">' + shielded + '</div><div class="l">Shielded</div></div>' +
     '<div class="stat"><div class="v">' + players.reduce((s,p) => s + p.buildings_count, 0) + '</div><div class="l">Buildings</div></div>' +
@@ -1633,6 +1635,7 @@ function renderPlayers() {
     if (d === 'lighter') return '<span class="badge" style="background:#0c4a6e;color:#bae6fd">LTR</span>';
     if (d === 'rhlighter') return '<span class="badge" style="background:#14532d;color:#bbf7d0">RHL</span>';
     if (d === 'bulk') return '<span class="badge" style="background:#111827;color:#f8fafc">BLK</span>';
+    if (d === 'imperial') return '<span class="badge" style="background:#312e81;color:#ddd6fe">IMP</span>';
     return '<span class="badge badge-off">—</span>';
   }
   function statusBadge(p) {
@@ -2760,6 +2763,7 @@ async function loadStats() {
     const ltrCount = (byDex.find(x => x.dex === 'lighter') || {}).n || 0;
     const rhlCount = (byDex.find(x => x.dex === 'rhlighter') || {}).n || 0;
     const blkCount = (byDex.find(x => x.dex === 'bulk') || {}).n || 0;
+    const impCount = (byDex.find(x => x.dex === 'imperial') || {}).n || 0;
     const noneCount = (byDex.find(x => x.dex === 'unknown') || {}).n || 0;
     const pacRew = rewardsMap.pacifica || {};
     const avtRew = rewardsMap.avantis  || {};
@@ -2781,6 +2785,7 @@ async function loadStats() {
     const ltrRew = rewardsMap.lighter || {};
     const rhlRew = rewardsMap.rhlighter || {};
     const blkRew = rewardsMap.bulk || {};
+    const impRew = rewardsMap.imperial || {};
     document.getElementById('dexStats').innerHTML =
       dexCard('pacifica', 'Pacifica · Solana', '#7C3AED', pacCount, pacRew.total_gold || 0, pacRew.total_volume || 0, activityLines('pacifica')) +
       dexCard('avantis',  'Avantis · Base',    '#0EA5E9', avtCount, avtRew.total_gold || 0, avtRew.total_volume || 0, activityLines('avantis')) +
@@ -2802,6 +2807,7 @@ async function loadStats() {
       dexCard('lighter',   'Lighter',           '#38bdf8', ltrCount, ltrRew.total_gold || 0, ltrRew.total_volume || 0, activityLines('lighter')) +
       dexCard('rhlighter', 'Robinhood Lighter', '#16a34a', rhlCount, rhlRew.total_gold || 0, rhlRew.total_volume || 0, activityLines('rhlighter')) +
       dexCard('bulk',      'Bulk',              '#e5e7eb', blkCount, blkRew.total_gold || 0, blkRew.total_volume || 0, activityLines('bulk')) +
+      dexCard('imperial',  'Imperial · Solana', '#9277ff', impCount, impRew.total_gold || 0, impRew.total_volume || 0, activityLines('imperial')) +
       (noneCount > 0 ? '<div style="flex:1;min-width:180px;background:#1f2937;border:1px dashed #6b7280;border-radius:12px;padding:16px;display:flex;align-items:center;justify-content:center"><div style="text-align:center"><div style="font-size:28px;font-weight:800;color:#9ca3af">' + noneCount + '</div><div style="font-size:11px;color:#6b7280;margin-top:4px">No DEX set<br/>(legacy accounts)</div></div></div>' : '');
 
     const grvtBuilder = dex.grvt_builder || {};
@@ -2988,6 +2994,7 @@ async function loadStats() {
       if (d === 'lighter') return '<span class="badge" style="background:#0c4a6e;color:#bae6fd">LTR</span>';
       if (d === 'rhlighter') return '<span class="badge" style="background:#14532d;color:#bbf7d0">RHL</span>';
       if (d === 'bulk') return '<span class="badge" style="background:#111827;color:#f8fafc">BLK</span>';
+      if (d === 'imperial') return '<span class="badge" style="background:#312e81;color:#ddd6fe">IMP</span>';
       return '<span class="badge badge-off">—</span>';
     }
     document.getElementById('topPlayersBody').innerHTML = (s.topPlayers||[]).map(p =>
@@ -3246,6 +3253,7 @@ const TOURNAMENT_DEX_LABELS_ADMIN = {
   lighter: 'Lighter',
   rhlighter: 'Robinhood Lighter',
   bulk: 'Bulk',
+  imperial: 'Imperial',
 };
 const TOURNAMENT_DEXES_ADMIN = Object.keys(TOURNAMENT_DEX_LABELS_ADMIN);
 const TOURNAMENT_TEAM_METRIC_LABELS_ADMIN = {
@@ -4541,6 +4549,7 @@ function renderRevenueAnalytics(data) {
     { key: 'lighter', label: 'Lighter' },
     { key: 'rhlighter', label: 'Robinhood Lighter' },
     { key: 'bulk', label: 'Bulk' },
+    { key: 'imperial', label: 'Imperial' },
   ];
   const windowKeys = ['24h', '7d', '30d', 'all'];
   const revenueCell = (row) => {
@@ -4630,6 +4639,7 @@ async function loadEarnings(force) {
       ['lighter',  'Lighter',  '#7dd3fc', '#38bdf8'],
       ['rhlighter', 'Robinhood Lighter', '#86efac', '#16a34a'],
       ['bulk',     'Bulk',     '#f8fafc', '#111827'],
+      ['imperial', 'Imperial', '#c4b5fd', '#7c5cfc'],
     ];
     const total = Number(data.total_usd) || 0;
     const snapshotHistory = data.snapshot_history || {};

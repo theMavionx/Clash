@@ -16,7 +16,7 @@ test('every selectable exchange has an explicit trade-history strategy', async (
   const localBlock = historySource.match(/LOCAL_INDEX_HISTORY_DEXES = new Set\(\[([^\]]+)\]\)/u)?.[1] || '';
   const localDexes = new Set([...localBlock.matchAll(/'([^']+)'/gu)].map(match => match[1]));
 
-  assert.equal(dexes.length, 24);
+  assert.equal(dexes.length, 25);
   for (const dex of dexes) {
     const explicitBranch = historySource.includes(`dex === '${dex}'`);
     const defaultPacifica = dex === 'pacifica' && historySource.includes("dex !== 'pacifica'");

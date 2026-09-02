@@ -1,6 +1,6 @@
 export const TOURNAMENT_DEXES = [
   'pacifica', 'avantis', 'domfi', 'etoro', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix', 'hyperliquid',
-  'risex', 'nado', 'ondo', 'hibachi', 'grvt', 'hotstuff', 'katana', 'gmtrade', 'flash', 'lighter', 'rhlighter', 'bulk',
+  'risex', 'nado', 'ondo', 'hibachi', 'grvt', 'hotstuff', 'katana', 'gmtrade', 'flash', 'lighter', 'rhlighter', 'bulk', 'imperial',
 ];
 
 export const DEX_LABELS = {
@@ -27,6 +27,7 @@ export const DEX_LABELS = {
   lighter: 'Lighter',
   rhlighter: 'Robinhood Lighter',
   bulk: 'Bulk',
+  imperial: 'Imperial',
 };
 
 export const PRIZE_PRESETS = [

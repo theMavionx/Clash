@@ -36,6 +36,7 @@ const bulk = require('./bulk');
 const ostium = require('./ostium');
 const domfi = require('./domfi');
 const etoro = require('./etoro');
+const imperial = require('./imperial');
 const { createPublicClient, decodeFunctionData, formatUnits, http } = require('viem');
 const { base } = require('viem/chains');
 const { Keypair, PublicKey, VersionedTransaction } = require('@solana/web3.js');
@@ -920,7 +921,7 @@ function auth(req, res, next) {
   // Trust the SERVER-stored dex, not whatever the client asks for. The client
   // header/query is still useful as a best-effort sanity check: if it explicitly
   // asks for the wrong dex, reject so the UI can prompt the user to /set-dex.
-  const SUPPORTED_DEXES = new Set(['avantis', 'domfi', 'etoro', 'pacifica', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'ondo', 'leverup', 'aster', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash', 'lighter', 'rhlighter', 'bulk']);
+  const SUPPORTED_DEXES = new Set(['avantis', 'domfi', 'etoro', 'pacifica', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'ondo', 'leverup', 'aster', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash', 'lighter', 'rhlighter', 'bulk', 'imperial']);
   const storedDex = SUPPORTED_DEXES.has(player.dex) ? player.dex : 'pacifica';
   const askedDex = (req.query.dex || req.headers['x-dex'] || storedDex).toLowerCase();
   const normalizedAsked = SUPPORTED_DEXES.has(askedDex) ? askedDex : 'pacifica';
@@ -1145,7 +1146,7 @@ function flashBodyWallet(req) {
 // Get or create custodial wallet for player
 router.post('/wallet', auth, (req, res) => {
   try {
-    if (req.dex === 'avantis' || req.dex === 'domfi' || req.dex === 'etoro' || req.dex === 'gmx' || req.dex === 'ostium' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'ondo' || req.dex === 'leverup' || req.dex === 'aster' || req.dex === 'hibachi' || req.dex === 'hotstuff' || req.dex === 'grvt' || req.dex === 'katana' || req.dex === 'gmtrade' || req.dex === 'flash' || req.dex === 'bulk') {
+    if (req.dex === 'avantis' || req.dex === 'domfi' || req.dex === 'etoro' || req.dex === 'gmx' || req.dex === 'ostium' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'ondo' || req.dex === 'leverup' || req.dex === 'aster' || req.dex === 'hibachi' || req.dex === 'hotstuff' || req.dex === 'grvt' || req.dex === 'katana' || req.dex === 'gmtrade' || req.dex === 'flash' || req.dex === 'bulk' || req.dex === 'imperial') {
       return res.status(410).json({
         error: req.dex === 'etoro'
           ? 'eToro uses the dedicated browser API-account setup.'
@@ -1177,7 +1178,7 @@ router.post('/wallet', auth, (req, res) => {
 
 // Get wallet info (public key only — never expose secret)
 router.get('/wallet', auth, (req, res) => {
-  if (req.dex === 'avantis' || req.dex === 'domfi' || req.dex === 'etoro' || req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'ondo' || req.dex === 'leverup' || req.dex === 'aster' || req.dex === 'hibachi' || req.dex === 'hotstuff' || req.dex === 'grvt' || req.dex === 'katana' || req.dex === 'gmtrade' || req.dex === 'flash' || req.dex === 'ostium' || req.dex === 'bulk') {
+  if (req.dex === 'avantis' || req.dex === 'domfi' || req.dex === 'etoro' || req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'ondo' || req.dex === 'leverup' || req.dex === 'aster' || req.dex === 'hibachi' || req.dex === 'hotstuff' || req.dex === 'grvt' || req.dex === 'katana' || req.dex === 'gmtrade' || req.dex === 'flash' || req.dex === 'ostium' || req.dex === 'bulk' || req.dex === 'imperial') {
     return res.status(410).json({
       error: req.dex === 'etoro'
         ? 'eToro uses the dedicated browser API-account setup.'
@@ -2795,6 +2796,7 @@ router.get('/markets', async (req, res) => {
       : dex === 'lighter' ? await lighter.getMarketInfo()
       : dex === 'rhlighter' ? await rhLighter.getMarketInfo()
       : dex === 'bulk' ? await bulk.getMarkets()
+      : dex === 'imperial' ? await imperial.getMarketInfo()
       : await pacifica.getMarketInfo();
     res.json(info);
   } catch (e) {
@@ -2828,6 +2830,7 @@ router.get('/prices', async (req, res) => {
       : dex === 'lighter' ? await lighter.getPrices()
       : dex === 'rhlighter' ? await rhLighter.getPrices()
       : dex === 'bulk' ? await bulk.getPrices()
+      : dex === 'imperial' ? await imperial.getPrices()
       : await pacifica.getPrices();
     res.json(prices);
   } catch (e) {
@@ -2883,6 +2886,8 @@ router.get('/orderbook', async (req, res) => {
       ? await katana.getOrderbook(symbol, limit || 25, level || agg_level || 2)
       : dex === 'bulk'
       ? await bulk.getOrderBook(symbol, { nlevels: limit || 25, aggregation: agg_level })
+      : dex === 'imperial'
+      ? { bids: [], asks: [], source: 'imperial_smart_router', message: 'Imperial selects the underlying venue when it quotes the order; there is no single router order book.' }
       : await pacifica.getOrderbook(symbol, agg_level);
     res.json(book);
   } catch (e) {
@@ -6965,6 +6970,200 @@ router.post('/gmtrade/trade-report', auth, async (req, res) => {
   }
 });
 
+// ---------- Imperial Router ----------
+function ensureImperial(req, res) {
+  if (req.dex === 'imperial') return true;
+  res.status(409).json({
+    error: `Account is registered for '${req.dex}'. Switch DEX to imperial before calling Imperial endpoints.`,
+    stored_dex: req.dex,
+    requested_dex: 'imperial',
+  });
+  return false;
+}
+
+function imperialOwner(req, res) {
+  if (!ensureImperial(req, res)) return null;
+  const linked = String(req.dexWallet || req.playerWallet || '').trim();
+  if (!imperial.isSolanaAddress(linked)) {
+    res.status(409).json({ error: 'Link a Solana wallet to the Imperial DEX account first.' });
+    return null;
+  }
+  const requested = String(req.body?.wallet || req.query?.wallet || '').trim();
+  if (requested && requested !== linked) {
+    res.status(403).json({ error: 'Imperial wallet does not match the server-linked DEX wallet.' });
+    return null;
+  }
+  return linked;
+}
+
+function imperialJwt(req, res) {
+  const token = String(req.headers['x-imperial-jwt'] || '').trim();
+  if (!token) {
+    res.status(401).json({ error: 'Connect Imperial with the linked Solana wallet first.' });
+    return null;
+  }
+  return token;
+}
+
+function imperialRouteError(res, cause, fallback = 'Imperial request failed') {
+  const status = Math.max(400, Math.min(599, Number(cause?.status) || 502));
+  console.warn('[imperial route]', status, cause?.message || fallback);
+  res.status(status).json({ error: cause?.message || fallback, details: cause?.details || undefined });
+}
+
+router.get('/imperial/config', auth, async (req, res) => {
+  if (!ensureImperial(req, res)) return;
+  const [status, builder] = await Promise.all([
+    imperial.request('/status').catch((cause) => ({ error: cause.message })),
+    imperial.getBuilderStatus(),
+  ]);
+  res.json({ ...imperial.configStatus(), status, builder_status: builder });
+});
+
+router.post('/imperial/connect', auth, async (req, res) => {
+  try {
+    const owner = imperialOwner(req, res);
+    if (!owner) return;
+    const session = await imperial.connect({ ...req.body, wallet: owner });
+    let partner = null;
+    try { partner = await imperial.registerPartner(session.jwt); } catch (cause) { partner = { error: cause.message }; }
+    res.json({ ...session, partner_status: partner, builder_status: await imperial.getBuilderStatus() });
+  } catch (cause) { imperialRouteError(res, cause, 'Failed to connect Imperial'); }
+});
+
+router.post('/imperial/revoke', auth, async (req, res) => {
+  try {
+    if (!imperialOwner(req, res)) return;
+    const jwt = imperialJwt(req, res);
+    if (!jwt) return;
+    res.json(await imperial.revoke(jwt));
+  } catch (cause) { imperialRouteError(res, cause, 'Failed to revoke Imperial session'); }
+});
+
+router.get('/imperial/route', auth, async (req, res) => {
+  try {
+    const owner = imperialOwner(req, res);
+    if (!owner) return;
+    res.json(await imperial.getRoute({ ...req.query, wallet: owner }));
+  } catch (cause) { imperialRouteError(res, cause, 'Failed to quote Imperial route'); }
+});
+
+router.get('/imperial/snapshot', auth, async (req, res) => {
+  try {
+    const owner = imperialOwner(req, res);
+    const jwt = imperialJwt(req, res);
+    if (!owner || !jwt) return;
+    res.json(await imperial.snapshot(jwt, owner, req.query.profileIndex));
+  } catch (cause) { imperialRouteError(res, cause, 'Failed to load Imperial account'); }
+});
+
+router.get('/imperial/history', auth, async (req, res) => {
+  try {
+    const owner = imperialOwner(req, res);
+    const jwt = imperialJwt(req, res);
+    if (!owner || !jwt) return;
+    res.json(await imperial.history(jwt, owner, req.query));
+  } catch (cause) { imperialRouteError(res, cause, 'Failed to load Imperial history'); }
+});
+
+router.post('/imperial/orders', auth, async (req, res) => {
+  try {
+    const owner = imperialOwner(req, res);
+    const jwt = imperialJwt(req, res);
+    if (!owner || !jwt) return;
+    res.json(await imperial.placeOrder({ playerId: req.playerId, owner, jwt, body: req.body || {}, db }));
+  } catch (cause) { imperialRouteError(res, cause, 'Failed to place Imperial order'); }
+});
+
+router.delete('/imperial/orders/:orderPda', auth, async (req, res) => {
+  try {
+    const owner = imperialOwner(req, res);
+    const jwt = imperialJwt(req, res);
+    if (!owner || !jwt) return;
+    res.json(await imperial.cancelOrder(jwt, owner, req.params.orderPda));
+  } catch (cause) { imperialRouteError(res, cause, 'Failed to cancel Imperial order'); }
+});
+
+router.patch('/imperial/orders/:orderPda', auth, async (req, res) => {
+  try {
+    const owner = imperialOwner(req, res);
+    const jwt = imperialJwt(req, res);
+    if (!owner || !jwt) return;
+    res.json(await imperial.updateOrder(jwt, owner, req.params.orderPda, req.body || {}));
+  } catch (cause) { imperialRouteError(res, cause, 'Failed to update Imperial order'); }
+});
+
+router.post('/imperial/positions/:positionId/close', auth, async (req, res) => {
+  try {
+    const owner = imperialOwner(req, res);
+    const jwt = imperialJwt(req, res);
+    if (!owner || !jwt) return;
+    res.json(await imperial.closePosition({ playerId: req.playerId, owner, jwt, positionId: req.params.positionId, body: req.body || {}, db }));
+  } catch (cause) { imperialRouteError(res, cause, 'Failed to close Imperial position'); }
+});
+
+router.patch('/imperial/positions/:positionId/tpsl', auth, async (req, res) => {
+  try {
+    const owner = imperialOwner(req, res);
+    const jwt = imperialJwt(req, res);
+    if (!owner || !jwt) return;
+    res.json(await imperial.setPositionTpsl({ playerId: req.playerId, owner, jwt, positionId: req.params.positionId, body: req.body || {}, db }));
+  } catch (cause) { imperialRouteError(res, cause, 'Failed to set Imperial TP/SL'); }
+});
+
+router.patch('/imperial/positions/:positionId/collateral', auth, async (req, res) => {
+  try {
+    const owner = imperialOwner(req, res);
+    const jwt = imperialJwt(req, res);
+    if (!owner || !jwt) return;
+    res.json(await imperial.editCollateral(jwt, owner, req.params.positionId, req.body || {}));
+  } catch (cause) { imperialRouteError(res, cause, 'Failed to edit Imperial collateral'); }
+});
+
+router.post('/imperial/deposit-tx', auth, async (req, res) => {
+  try {
+    const owner = imperialOwner(req, res);
+    const jwt = imperialJwt(req, res);
+    if (!owner || !jwt) return;
+    res.json(await imperial.buildDeposit(jwt, owner, req.body || {}));
+  } catch (cause) { imperialRouteError(res, cause, 'Failed to build Imperial deposit transaction'); }
+});
+
+router.post('/imperial/v2/deposit', auth, async (req, res) => {
+  try {
+    const owner = imperialOwner(req, res);
+    const jwt = imperialJwt(req, res);
+    if (!owner || !jwt) return;
+    res.json(await imperial.depositToV2(jwt, owner, req.body || {}));
+  } catch (cause) { imperialRouteError(res, cause, 'Failed to fund Imperial Flash V2 collateral'); }
+});
+
+router.post('/imperial/profile/sync', auth, async (req, res) => {
+  try {
+    const owner = imperialOwner(req, res);
+    const jwt = imperialJwt(req, res);
+    if (!owner || !jwt) return;
+    res.json(await imperial.syncProfile(jwt, owner, req.body || {}));
+  } catch (cause) { imperialRouteError(res, cause, 'Failed to sync Imperial profile'); }
+});
+
+router.post('/imperial/profile/margin-mode', auth, async (req, res) => {
+  try {
+    const owner = imperialOwner(req, res);
+    const jwt = imperialJwt(req, res);
+    if (!owner || !jwt) return;
+    res.json(await imperial.setMarginMode(jwt, owner, req.body || {}));
+  } catch (cause) { imperialRouteError(res, cause, 'Failed to update Imperial margin mode'); }
+});
+
+router.post('/imperial/import-trades', auth, async (req, res) => {
+  try {
+    const owner = imperialOwner(req, res);
+    if (!owner) return;
+    res.json(await imperial.importTradesForPlayer({ playerId: req.playerId, owner, db, limit: req.body?.limit }));
+  } catch (cause) { imperialRouteError(res, cause, 'Failed to import Imperial trades'); }
+});
+
 router.post('/trade-report', auth, async (req, res) => {
   try {
     if (!TRADE_REPORT_DEXES.has(req.dex)) {
@@ -7062,7 +7261,7 @@ router.get('/deposits', auth, (req, res) => {
 // Get USDC & native balance on custodial wallet
 const balanceCache = new Map();
 router.get('/balance', auth, async (req, res) => {
-  if (req.dex === 'domfi' || req.dex === 'etoro' || req.dex === 'gmx' || req.dex === 'ostium' || req.dex === 'monad' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'ondo' || req.dex === 'leverup' || req.dex === 'aster' || req.dex === 'hibachi' || req.dex === 'katana' || req.dex === 'gmtrade' || req.dex === 'flash' || req.dex === 'bulk') {
+  if (req.dex === 'domfi' || req.dex === 'etoro' || req.dex === 'gmx' || req.dex === 'ostium' || req.dex === 'monad' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'ondo' || req.dex === 'leverup' || req.dex === 'aster' || req.dex === 'hibachi' || req.dex === 'katana' || req.dex === 'gmtrade' || req.dex === 'flash' || req.dex === 'bulk' || req.dex === 'imperial') {
     return res.status(410).json({ error: `${req.dex} balances are read directly by the client wallet.` });
   }
   const wallet = db.getWallet(req.playerId, req.dex);

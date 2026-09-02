@@ -14,7 +14,7 @@ const TOURNAMENT_DEXES = new Set([
   'pacifica', 'avantis', 'domfi', 'etoro', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix',
   'hyperliquid', 'risex', 'nado', 'ondo', 'hibachi', 'grvt', 'hotstuff', 'katana',
   'gmtrade', 'flash', 'lighter', 'rhlighter',
-  'bulk',
+  'bulk', 'imperial',
 ]);
 const TOURNAMENT_FIELDS = new Set([
   'event_kind', 'name', 'description', 'dex', 'dex_scope', 'eligible_dexes', 'mode',

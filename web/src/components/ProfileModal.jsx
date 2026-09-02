@@ -25,6 +25,7 @@ import { useKatana } from '../hooks/useKatana';
 import { useLighter, useRhLighter } from '../hooks/useLighter';
 import { useOstium } from '../hooks/useOstium';
 import { useBulk } from '../hooks/useBulk';
+import { useImperial } from '../hooks/useImperial';
 import { useDex, DEX_CONFIG } from '../contexts/DexContext';
 import { useFuturesMode } from '../contexts/FuturesModeContext';
 import {
@@ -112,7 +113,10 @@ function ProfileModal({ onClose, onSwitchDex }) {
   const rhLighterHook = useRhLighter();
   const ostiumHook = useOstium();
   const bulkHook = useBulk();
-  const tradingHook = dex === 'avantis'
+  const imperialHook = useImperial();
+  const tradingHook = dex === 'imperial'
+    ? imperialHook
+    : dex === 'avantis'
     ? avantisHook
     : dex === 'domfi'
     ? domfiHook
@@ -202,7 +206,7 @@ function ProfileModal({ onClose, onSwitchDex }) {
     ? (walletAddr || null)            // EVM from useAvantis/useGmx/useMonad
     : dex === 'decibel'
     ? (walletAddr || null)            // Aptos from useDecibel
-    : dex === 'phoenix'
+    : dex === 'phoenix' || dex === 'imperial'
     ? (walletAddr || null)            // Solana from usePhoenix
     : (adapterAddr || walletAddr || null); // Solana adapter / Privy
   const linkedWallet = player?.wallet || null;
@@ -211,7 +215,7 @@ function ProfileModal({ onClose, onSwitchDex }) {
     ? (liveWallet ? 'evm' : null)
     : dex === 'decibel'
     ? (liveWallet ? 'aptos' : null)
-    : dex === 'phoenix'
+    : dex === 'phoenix' || dex === 'imperial'
     ? (liveWallet ? 'solana' : null)
     : (adapterAddr ? 'adapter' : (liveWallet ? 'privy' : null));
 

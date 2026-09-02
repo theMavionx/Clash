@@ -179,6 +179,34 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_bulk_builder_proofs_player_account
     ON bulk_order_builder_proofs(player_id, account, created_at);
 
+  -- Imperial is a router, so the underlying venue alone cannot prove that a
+  -- fill used Clash attribution. Keep the server-issued order/signature proof
+  -- and reconcile rewards only against these records.
+  CREATE TABLE IF NOT EXISTS imperial_order_proofs (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    player_id       TEXT NOT NULL,
+    wallet          TEXT NOT NULL,
+    profile_index   INTEGER NOT NULL CHECK (profile_index BETWEEN 0 AND 5),
+    order_pda       TEXT,
+    tx_signature    TEXT,
+    symbol          TEXT NOT NULL,
+    side            TEXT NOT NULL,
+    order_type      TEXT NOT NULL,
+    builder_code    TEXT NOT NULL,
+    underwriter     INTEGER NOT NULL,
+    request_json    TEXT NOT NULL,
+    response_json   TEXT NOT NULL,
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_imperial_proof_order
+    ON imperial_order_proofs(order_pda) WHERE order_pda IS NOT NULL;
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_imperial_proof_signature
+    ON imperial_order_proofs(tx_signature) WHERE tx_signature IS NOT NULL;
+  CREATE INDEX IF NOT EXISTS idx_imperial_proof_player_wallet
+    ON imperial_order_proofs(player_id, wallet, created_at);
+
   -- Ondo's authenticated fill feed does not repeat the builderCode payload.
   -- Persist every server-routed order so later fill imports can prove that a
   -- fill originated from Clash and carried the configured one-bps builder fee.
@@ -550,6 +578,18 @@ const stmts = {
     ORDER BY created_at DESC
     LIMIT 1
   `),
+  recordImperialOrderProof: db.prepare(`
+    INSERT OR IGNORE INTO imperial_order_proofs (
+      player_id, wallet, profile_index, order_pda, tx_signature, symbol, side,
+      order_type, builder_code, underwriter, request_json, response_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `),
+  listImperialOrderProofs: db.prepare(`
+    SELECT * FROM imperial_order_proofs
+    WHERE player_id = ? AND wallet = ?
+    ORDER BY created_at ASC, id ASC
+    LIMIT ?
+  `),
   recordAsterBuilderOrder: db.prepare(`
     INSERT INTO aster_builder_orders (
       order_id, player_id, account, client_order_id, signer, symbol, side,
@@ -903,6 +943,28 @@ function getOndoBuilderOrderByClient(clientOrderId, playerId, account) {
   ) || null;
 }
 
+function recordImperialOrderProof({
+  playerId, wallet, profileIndex = 0, orderPda = null, txSignature = null,
+  symbol, side, orderType, builderCode, underwriter, requestJson, responseJson,
+}) {
+  if (!playerId || !wallet || !symbol || !builderCode || (!orderPda && !txSignature)) return { changes: 0 };
+  const info = stmts.recordImperialOrderProof.run(
+    String(playerId), String(wallet), Number(profileIndex),
+    orderPda ? String(orderPda) : null, txSignature ? String(txSignature) : null,
+    String(symbol).toUpperCase(), String(side).toLowerCase(), String(orderType).toLowerCase(),
+    String(builderCode).toUpperCase(), Number(underwriter),
+    typeof requestJson === 'string' ? requestJson : JSON.stringify(requestJson || {}),
+    typeof responseJson === 'string' ? responseJson : JSON.stringify(responseJson || {}),
+  );
+  return { changes: info.changes || 0 };
+}
+
+function listImperialOrderProofs(playerId, wallet, limit = 500) {
+  return stmts.listImperialOrderProofs.all(
+    String(playerId), String(wallet), Math.max(1, Math.min(2000, Number(limit) || 500)),
+  );
+}
+
 function recordAsterBuilderOrder({
   orderId,
   playerId,
@@ -984,6 +1046,8 @@ module.exports = {
   recordOndoBuilderOrder,
   getOndoBuilderOrder,
   getOndoBuilderOrderByClient,
+  recordImperialOrderProof,
+  listImperialOrderProofs,
   recordAsterBuilderOrder,
   getAsterBuilderOrder,
   getAsterBuilderOrderByClient,

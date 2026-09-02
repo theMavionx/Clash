@@ -263,7 +263,7 @@ function verifySolanaWalletSignature(wallet, message, signature, encoding = '') 
 const WALLET_AUTH_ACTION = 'wallet-auth';
 const WALLET_AUTH_MAX_AGE_MS = 10 * 60 * 1000;
 const EVM_DEXES = new Set(['avantis', 'domfi', 'etoro', 'gmx', 'ostium', 'monad', 'hyperliquid', 'risex', 'nado', 'ondo', 'leverup', 'aster', 'hibachi', 'hotstuff', 'grvt', 'katana', 'lighter', 'rhlighter']);
-const SOLANA_DEXES = new Set(['pacifica', 'phoenix', 'gmtrade', 'flash', 'bulk']);
+const SOLANA_DEXES = new Set(['pacifica', 'phoenix', 'gmtrade', 'flash', 'bulk', 'imperial']);
 let aptosTsSdkPromise = null;
 
 function walletChainTypeForDex(wallet, dex = '') {
@@ -9804,13 +9804,14 @@ router.post('/replay-telemetry', (req, res) => {
 // 'pacifica' — which is exactly the bug that produced phantom Pacifica
 // accounts whenever a user picked GMX in the picker (the chosen DEX never
 // reached the database).
-const VALID_DEXES = new Set(['pacifica', 'avantis', 'domfi', 'etoro', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'ondo', 'leverup', 'aster', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash', 'lighter', 'rhlighter', 'bulk']);
+const VALID_DEXES = new Set(['pacifica', 'avantis', 'domfi', 'etoro', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'ondo', 'leverup', 'aster', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash', 'lighter', 'rhlighter', 'bulk', 'imperial']);
 const DEX_REQUIRED_CHAIN = {
   pacifica: 'solana',
   phoenix: 'solana',
   gmtrade: 'solana',
   flash: 'solana',
   bulk: 'solana',
+  imperial: 'solana',
   decibel: 'aptos',
   avantis: 'evm',
   domfi: 'evm',
@@ -10044,7 +10045,7 @@ function safelySetPlayerActiveDex(player, dex, wallet = null, source = 'unknown'
 // once gmx-rewards-worker.js shipped (subsquid GraphQL → trade_history
 // rows with verified_source='worker'); we now include it in this set so
 // quest progression and per-DEX baselines pick up GMX trades.
-const REWARD_INDEXED_DEXES = new Set(['avantis', 'domfi', 'etoro', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'ondo', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash', 'lighter', 'rhlighter', 'bulk']);
+const REWARD_INDEXED_DEXES = new Set(['avantis', 'domfi', 'etoro', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'ondo', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash', 'lighter', 'rhlighter', 'bulk', 'imperial']);
 // (Removed: `currentFuturesRewardBaseline` and `ensureTradingRewardRow`
 // helpers — dead code surfaced by audit. The intended use was to seed
 // `trading_rewards.last_trade_id` from MAX(trade_history.id) so a fresh
@@ -15974,7 +15975,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
   // simply gets "No new trades" — that's the desired no-op, NOT a fall-
   // through to the Pacifica branch which would 400 with "wallet required"
   // or worse, hit Pacifica's REST with a non-Solana address.
-  if (dex === 'avantis' || dex === 'domfi' || dex === 'etoro' || dex === 'decibel' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'aster' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'gmtrade' || dex === 'flash' || dex === 'lighter' || dex === 'rhlighter' || dex === 'bulk') {
+  if (dex === 'avantis' || dex === 'domfi' || dex === 'etoro' || dex === 'decibel' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'aster' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'gmtrade' || dex === 'flash' || dex === 'lighter' || dex === 'rhlighter' || dex === 'bulk' || dex === 'imperial') {
     const forceHibachiCatchup = dex === 'hibachi' && req.body?.force_reconcile === true;
     const reconcile = await tradeRecon.reconcileTradesForPlayer(req.player, {
       dex,
@@ -16024,7 +16025,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
     // had a similar early-rollout risk while we were tuning import timing.
     // If a row has never paid anything, rewind the cursor once so verified
     // rows can be credited under the current rules.
-    if ((dex === 'domfi' || dex === 'etoro' || dex === 'gmx' || dex === 'ostium' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'flash' || dex === 'lighter' || dex === 'rhlighter' || dex === 'bulk')
+    if ((dex === 'domfi' || dex === 'etoro' || dex === 'gmx' || dex === 'ostium' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'flash' || dex === 'lighter' || dex === 'rhlighter' || dex === 'bulk' || dex === 'imperial')
       && Number(reward.last_trade_id || 0) > 0
       && Number(reward.total_volume || 0) === 0
       && Number(reward.total_gold || 0) === 0) {
@@ -16238,7 +16239,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       ? 0
       : dex === 'flash'
         ? FLASH_REWARD_MIN_NOTIONAL_USD
-      : (dex === 'domfi' || dex === 'etoro' || dex === 'decibel' || dex === 'ostium' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'gmtrade' || dex === 'flash' || dex === 'lighter' || dex === 'rhlighter' || dex === 'bulk') ? 10 : 50;
+      : (dex === 'domfi' || dex === 'etoro' || dex === 'decibel' || dex === 'ostium' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'gmtrade' || dex === 'flash' || dex === 'lighter' || dex === 'rhlighter' || dex === 'bulk' || dex === 'imperial') ? 10 : 50;
     const SANE_MAX_NOTIONAL = 10_000_000;
 
     let totalGold = 0;
@@ -16851,7 +16852,7 @@ router.get('/trading/stats', auth, async (req, res) => {
   // (trade_history). We normalise both into the same { symbol, price,
   // amount, fee, created_at } shape so ProfileModal renders uniformly.
   let trades = [];
-  if (dex === 'avantis' || dex === 'domfi' || dex === 'etoro' || dex === 'decibel' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'gmtrade' || dex === 'flash' || dex === 'lighter' || dex === 'rhlighter' || dex === 'bulk') {
+  if (dex === 'avantis' || dex === 'domfi' || dex === 'etoro' || dex === 'decibel' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'gmtrade' || dex === 'flash' || dex === 'lighter' || dex === 'rhlighter' || dex === 'bulk' || dex === 'imperial') {
     await tradeRecon.reconcileTradesForPlayer(req.player, {
       dex,
       wallet: req.player.wallet,
@@ -16904,7 +16905,7 @@ router.get('/trading/stats', auth, async (req, res) => {
 
 // ==================== TASKS (QUESTS) ====================
 
-const LIVE_TASK_PROGRESS_DEXES = new Set(['pacifica', 'avantis', 'domfi', 'etoro', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'ondo', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash', 'lighter', 'rhlighter', 'bulk']);
+const LIVE_TASK_PROGRESS_DEXES = new Set(['pacifica', 'avantis', 'domfi', 'etoro', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'ondo', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash', 'lighter', 'rhlighter', 'bulk', 'imperial']);
 const TRADE_HISTORY_TASK_TYPES = new Set(['volume', 'positions', 'combo_volume_attack']);
 const TASK_PROGRESS_REFRESH_TIMEOUT_MS = Math.max(1000, Number(process.env.TASK_PROGRESS_REFRESH_TIMEOUT_MS || 5000));
 const PACIFICA_TASK_PREFETCH_TIMEOUT_MS = Math.max(
@@ -19608,7 +19609,7 @@ router.get('/admin/players/:id/trading-debug', adminAuth, (req, res) => {
   let futuresTrades = [];
   try {
     const fdb = futuresDbReadonly();
-    if (fdb && (player.dex === 'avantis' || player.dex === 'domfi' || player.dex === 'etoro' || player.dex === 'decibel' || player.dex === 'gmx' || player.dex === 'ostium' || player.dex === 'monad' || player.dex === 'phoenix' || player.dex === 'hyperliquid' || player.dex === 'risex' || player.dex === 'nado' || player.dex === 'ondo' || player.dex === 'hibachi' || player.dex === 'hotstuff' || player.dex === 'grvt' || player.dex === 'katana' || player.dex === 'gmtrade' || player.dex === 'flash' || player.dex === 'lighter' || player.dex === 'rhlighter' || player.dex === 'bulk')) {
+    if (fdb && (player.dex === 'avantis' || player.dex === 'domfi' || player.dex === 'etoro' || player.dex === 'decibel' || player.dex === 'gmx' || player.dex === 'ostium' || player.dex === 'monad' || player.dex === 'phoenix' || player.dex === 'hyperliquid' || player.dex === 'risex' || player.dex === 'nado' || player.dex === 'ondo' || player.dex === 'hibachi' || player.dex === 'hotstuff' || player.dex === 'grvt' || player.dex === 'katana' || player.dex === 'gmtrade' || player.dex === 'flash' || player.dex === 'lighter' || player.dex === 'rhlighter' || player.dex === 'bulk' || player.dex === 'imperial')) {
       futuresTrades = fdb.prepare(
         `SELECT id, symbol, side, amount, price, notional_usd, pnl, status, verified_source, dex, created_at
          FROM trade_history WHERE player_id = ? AND dex = ?
@@ -21229,7 +21230,7 @@ router.get('/admin/stats', adminAuth, (req, res) => {
   // Pacifica is intentionally absent from this set — it's custodial and
   // the futures worker doesn't index its trades the same way; Pacifica
   // activity comes through the on-chain Solana RPC path elsewhere.
-  const ACTIVITY_DEXES = ['avantis', 'domfi', 'etoro', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'ondo', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash', 'lighter', 'rhlighter', 'bulk'];
+  const ACTIVITY_DEXES = ['avantis', 'domfi', 'etoro', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'ondo', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash', 'lighter', 'rhlighter', 'bulk', 'imperial'];
   const dexActivity = {};   // { avantis: {...}, decibel: {...}, gmx: {...} }
   const dexTop = {};        // { avantis: [...], decibel: [...], gmx: [...] }
   const futuresByPlayer = new Map();
@@ -21897,7 +21898,7 @@ function parseBool(v) {
 const TOURNAMENT_POINTS_SORT = 'points';
 const TOURNAMENT_COMBINED_SORT = 'volume_trophies_50_50';
 const TOURNAMENT_SORT_KEYS = ['pnl_usd', 'trophies', 'volume_usd', 'gold', TOURNAMENT_POINTS_SORT, TOURNAMENT_COMBINED_SORT];
-const TOURNAMENT_DEXES = ['pacifica', 'avantis', 'domfi', 'etoro', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'ondo', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash', 'lighter', 'rhlighter', 'bulk'];
+const TOURNAMENT_DEXES = ['pacifica', 'avantis', 'domfi', 'etoro', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'ondo', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash', 'lighter', 'rhlighter', 'bulk', 'imperial'];
 const TOURNAMENT_DEX_LABELS = {
   pacifica: 'Pacifica',
   avantis: 'Avantis',
@@ -21921,6 +21922,7 @@ const TOURNAMENT_DEX_LABELS = {
   lighter: 'Lighter',
   rhlighter: 'Robinhood Lighter',
   bulk: 'Bulk',
+  imperial: 'Imperial',
 };
 const TOURNAMENT_MODES = ['individual', 'dex_vs_dex'];
 const TOURNAMENT_TEAM_PRIZE_MODES = ['winner_takes_all', 'custom_split'];
@@ -23917,6 +23919,7 @@ const FUTURES_TOURNAMENT_SYNC_DEXES = new Set([
   'lighter',
   'rhlighter',
   'bulk',
+  'imperial',
 ]);
 const tournamentParticipantSyncCache = new Map();
 
@@ -26873,6 +26876,7 @@ function referralFuturesEstimateBps(dex) {
   if (d === 'gmtrade') return referralNumberEnv('GMTRADE_BUILDER_FEE_BPS', 'VITE_GMTRADE_BUILDER_FEE_BPS');
   if (d === 'flash') return referralNumberEnv('FLASH_BUILDER_FEE_BPS', 'VITE_FLASH_BUILDER_FEE_BPS', 'GMTRADE_BUILDER_FEE_BPS', 'VITE_GMTRADE_BUILDER_FEE_BPS');
   if (d === 'bulk') return referralNumberEnv('BULK_BUILDER_FEE_BPS') || 1;
+  if (d === 'imperial') return referralNumberEnv('IMPERIAL_BUILDER_FEE_BPS');
   return 0;
 }
 
@@ -26914,6 +26918,14 @@ function referralFuturesGrossUsd(row) {
     const notional = referralFuturesNotional(row);
     return verified && bps > 0 && notional > 0 ? notional * (bps / 10000) : 0;
   }
+  if (dex === 'imperial') {
+    const proof = referralFuturesProof(row);
+    const verified = String(proof?.builderCode || '').toUpperCase() === String(process.env.IMPERIAL_BUILDER_CODE || 'CLASH').toUpperCase()
+      && !!proof?.signature;
+    const bps = Number(proof?.builderFeeBps || referralFuturesEstimateBps('imperial'));
+    const notional = referralFuturesNotional(row);
+    return verified && bps > 0 && notional > 0 ? notional * (bps / 10000) : 0;
+  }
   const estimatedBps = referralFuturesEstimateBps(dex);
   const notional = referralFuturesNotional(row);
   return estimatedBps > 0 && notional > 0 ? notional * (estimatedBps / 10000) : 0;
@@ -26942,6 +26954,7 @@ function futuresRowsForReferralSync(limit = 5000, { exact = true } = {}) {
           OR verified_source = 'lighter_integrator'
           OR verified_source = 'rhlighter_integrator'
           OR verified_source = 'bulk_builder_signed'
+          OR verified_source = 'imperial_api'
           OR (
             verified_source = 'hotstuff_api'
             AND (

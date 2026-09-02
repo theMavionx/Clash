@@ -4,7 +4,7 @@ export const EVM_AUTH_DEX_IDS = Object.freeze([
 ]);
 
 export const SOLANA_AUTH_DEX_IDS = Object.freeze([
-  'pacifica', 'phoenix', 'gmtrade', 'flash', 'bulk',
+  'pacifica', 'phoenix', 'gmtrade', 'flash', 'bulk', 'imperial',
 ]);
 
 const EVM_AUTH_DEXES = new Set(EVM_AUTH_DEX_IDS);

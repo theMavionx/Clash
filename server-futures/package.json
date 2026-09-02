@@ -28,7 +28,9 @@
     "test:ondo-rewards": "node test-ondo-reward-proof.js",
     "test:aster-adapter": "node test-aster-adapter.js",
     "test:aster-tracking": "node test-aster-builder-tracking.js",
-    "test:gmx-ui-fee": "node test-gmx-ui-fee-attribution.js"
+    "test:gmx-ui-fee": "node test-gmx-ui-fee-attribution.js",
+    "test:imperial": "node --test test-imperial-adapter.js",
+    "test:imperial:live": "node --test test-imperial-openapi-live.js"
   },
   "type": "commonjs",
   "dependencies": {

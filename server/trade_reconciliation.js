@@ -29,6 +29,7 @@ const FUTURES_REWARD_DEXES = new Set([
   'lighter',
   'rhlighter',
   'bulk',
+  'imperial',
 ]);
 
 const DEX_REQUIRED_CHAIN = {
@@ -37,6 +38,7 @@ const DEX_REQUIRED_CHAIN = {
   gmtrade: 'solana',
   flash: 'solana',
   bulk: 'solana',
+  imperial: 'solana',
   decibel: 'aptos',
   avantis: 'evm',
   domfi: 'evm',
@@ -78,6 +80,7 @@ const VERIFIED_SOURCES_BY_DEX = {
   lighter: ['lighter_integrator'],
   rhlighter: ['rhlighter_integrator'],
   bulk: ['bulk_builder_signed'],
+  imperial: ['imperial_api'],
 };
 
 const USER_SCOPED_IMPORT_DEXES = new Set([
@@ -97,6 +100,7 @@ const USER_SCOPED_IMPORT_DEXES = new Set([
   'lighter',
   'rhlighter',
   'bulk',
+  'imperial',
 ]);
 
 const CREDENTIAL_SCOPED_IMPORT_DEXES = new Set([
@@ -325,6 +329,16 @@ function bulkBuilderEligibilityClause() {
   )`;
 }
 
+function imperialBuilderEligibilityClause() {
+  const proof = 'trade_history.proof_json';
+  const code = sqlQuote(String(process.env.IMPERIAL_BUILDER_CODE || 'CLASH').trim().toUpperCase());
+  return `(
+    json_valid(COALESCE(${proof}, ''))
+    AND upper(COALESCE(json_extract(${proof}, '$.builderCode'), '')) = ${code}
+    AND COALESCE(json_extract(${proof}, '$.signature'), '') != ''
+  )`;
+}
+
 function verifiedSourceClauseForDex(dex) {
   const normalizedDex = String(dex || '').toLowerCase();
   const sources = VERIFIED_SOURCES_BY_DEX[normalizedDex] || ['worker'];
@@ -336,6 +350,9 @@ function verifiedSourceClauseForDex(dex) {
   }
   if (normalizedDex === 'bulk') {
     return `verified_source = ${sqlQuote(sources[0])} AND ${bulkBuilderEligibilityClause()}`;
+  }
+  if (normalizedDex === 'imperial') {
+    return `verified_source = ${sqlQuote(sources[0])} AND ${imperialBuilderEligibilityClause()}`;
   }
   if (sources.length === 1) return `verified_source = ${sqlQuote(sources[0])}`;
   return `verified_source IN (${sources.map(sqlQuote).join(', ')})`;
@@ -509,6 +526,11 @@ function adapterCredentials(dex, wallet, headers = {}, opts = {}) {
     if (!token) return null;
     return { token };
   }
+  if (dex === 'imperial') {
+    const jwt = headerValue(headers, 'x-imperial-jwt') || opts.jwt || opts.imperialJwt;
+    if (!jwt) return null;
+    return { jwt };
+  }
   return null;
 }
 
@@ -609,6 +631,12 @@ async function runDexAdapter(player, dex, wallet, opts = {}) {
   if (dex === 'bulk') {
     const bulk = require('../server-futures/bulk');
     return { dex, ...(await bulk.importFillsForPlayer(playerId, wallet, { limit })) };
+  }
+
+  if (dex === 'imperial') {
+    const futuresDb = futuresDbWritable();
+    const imperial = require('../server-futures/imperial');
+    return { dex, ...(await imperial.importTradesForPlayer({ playerId, owner: wallet, db: futuresDb, limit })) };
   }
 
   if (dex === 'hibachi') {

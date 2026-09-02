@@ -75,6 +75,15 @@ for (const dex of ['lighter', 'rhlighter']) {
   });
 }
 
+test('imperial: warmup reads only public markets, prices and builder config', async () => {
+  const anonymous = await run('imperial');
+  assert.equal(anonymous.length, 2);
+  const authenticated = await run('imperial', 'fixture-token');
+  assert.equal(authenticated.length, 3);
+  assert.ok(authenticated.includes('/api/futures/imperial/config'));
+  assert.ok(!authenticated.some(url => /\/imperial\/(snapshot|history)/.test(url)));
+});
+
 for (const dex of ['monad', 'ondo', 'hibachi']) {
   test(`${dex}: never prefetch unsupported generic endpoints that fall through to Pacifica`, async () => {
     for (const token of [null, 'fixture-token']) {

@@ -367,8 +367,10 @@ function ConnectVenueGate({
 }
 
 function ConnectPacifica({ onOpenWalletModal, onPrivyLogin, privyEnabled, privyAuthed, dex = 'pacifica' }) {
-  const venue = dex === 'bulk' ? 'BULK' : dex === 'flash' ? 'FLASH TRADE' : dex === 'gmtrade' ? 'GMTRADE' : dex === 'phoenix' ? 'PHOENIX' : 'PACIFICA';
-  const connectCopy = dex === 'bulk'
+  const venue = dex === 'imperial' ? 'IMPERIAL' : dex === 'bulk' ? 'BULK' : dex === 'flash' ? 'FLASH TRADE' : dex === 'gmtrade' ? 'GMTRADE' : dex === 'phoenix' ? 'PHOENIX' : 'PACIFICA';
+  const connectCopy = dex === 'imperial'
+    ? 'Connect your Solana wallet to browse Imperial markets and create a signed mobile session. Clash routes orders through Imperial with the CLASH builder code; your private key never leaves your wallet.'
+    : dex === 'bulk'
     ? 'Connect your Solana wallet to start playing. Bulk orders are signed by your own wallet, include the Clash builder code, and never expose your private key.'
     : dex === 'gmtrade'
     ? 'Connect your Solana wallet to start playing. Please accept our referral code in Clash to receive a GMTrade fee discount. Trades are signed by your own wallet - we never hold your keys.'
@@ -377,7 +379,7 @@ function ConnectPacifica({ onOpenWalletModal, onPrivyLogin, privyEnabled, privyA
     : 'Connect your Solana wallet to start playing. Trades are signed by your own wallet - we never hold your keys.';
   const steps = [
     { id: 'wallet', label: 'Connect a Solana wallet', hint: 'Choose email or a wallet app. The connected wallet remains self-custodial.', status: 'active' },
-    { id: 'venue', label: `Verify ${venue} access`, hint: dex === 'bulk' ? 'Clash checks beta access and the builder approval.' : 'Clash verifies the venue account and required attribution.', status: 'pending' },
+    { id: 'venue', label: `Verify ${venue} access`, hint: dex === 'imperial' ? 'Clash verifies the Imperial session, routing and CLASH builder status.' : dex === 'bulk' ? 'Clash checks beta access and the builder approval.' : 'Clash verifies the venue account and required attribution.', status: 'pending' },
     { id: 'ready', label: 'Unlock trading', hint: 'Balances and markets load only after the venue setup succeeds.', status: 'pending' },
   ];
   const actions = [];
@@ -905,6 +907,7 @@ function RegisterPanel() {
     if (dex === 'gmtrade') return 'GMTRADE LOGIN';
     if (dex === 'flash') return 'FLASH TRADE LOGIN';
     if (dex === 'bulk') return 'BULK LOGIN';
+    if (dex === 'imperial') return 'IMPERIAL LOGIN';
     if (dex === 'phoenix') return 'PHOENIX LOGIN';
     return 'PACIFICA LOGIN';
   })();

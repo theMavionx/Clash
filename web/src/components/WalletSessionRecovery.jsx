@@ -42,6 +42,7 @@ const DEX_WALLET = {
   gmtrade: { kind: 'solana', chain: 'Solana', label: 'GMTrade', cta: 'Reconnect Solana wallet' },
   flash: { kind: 'solana', chain: 'Solana', label: 'Flash Trade', cta: 'Reconnect Solana wallet' },
   bulk: { kind: 'solana', chain: 'Solana', label: 'Bulk', cta: 'Reconnect Solana wallet' },
+  imperial: { kind: 'solana', chain: 'Solana', label: 'Imperial', cta: 'Reconnect Solana wallet' },
 };
 const DEFAULT_WALLET_META = { kind: 'evm', chain: 'EVM', label: 'This exchange', cta: 'Reconnect EVM wallet', targetChain: 'base' };
 

@@ -29,6 +29,7 @@ import { useGmtrade } from '../hooks/useGmtrade';
 import { useFlash } from '../hooks/useFlash';
 import { useLighter, useRhLighter } from '../hooks/useLighter';
 import { useBulk } from '../hooks/useBulk';
+import { useImperial } from '../hooks/useImperial';
 import { useOstium } from '../hooks/useOstium';
 import { RISEX_BRIDGE_CHAINS } from '../lib/risexConfig';
 import { NADO_REFERRAL_ACCESS } from '../lib/nadoReferral';
@@ -166,8 +167,9 @@ const DEX_ERROR_LABELS = {
   phoenix: 'Phoenix',
   risex: 'RISEx',
   bulk: 'Bulk',
+  imperial: 'Imperial',
 };
-const OPEN_TPSL_NATIVE_ORDER_ATTACH_DEXES = new Set(['avantis', 'domfi', 'etoro', 'bulk', 'decibel', 'flash', 'gmx', 'hibachi', 'hotstuff', 'hyperliquid', 'katana', 'lighter', 'rhlighter', 'nado', 'ondo', 'ostium', 'pacifica']);
+const OPEN_TPSL_NATIVE_ORDER_ATTACH_DEXES = new Set(['avantis', 'domfi', 'etoro', 'bulk', 'decibel', 'flash', 'gmx', 'hibachi', 'hotstuff', 'hyperliquid', 'imperial', 'katana', 'lighter', 'rhlighter', 'nado', 'ondo', 'ostium', 'pacifica']);
 const OPEN_TPSL_NATIVE_LIMIT_ATTACH_DEXES = new Set([...OPEN_TPSL_NATIVE_ORDER_ATTACH_DEXES, 'grvt', 'leverup', 'phoenix']);
 const OPEN_TPSL_POST_MARKET_DEXES = new Set([
   'decibel',
@@ -189,6 +191,7 @@ const OPEN_TPSL_POST_MARKET_DEXES = new Set([
   'grvt',
   'gmtrade',
   'hibachi',
+  'imperial',
 ]);
 
 function finiteNumber(value) {
@@ -3629,12 +3632,15 @@ function FuturesPanel() {
   const lighterHook = useLighter();
   const rhLighterHook = useRhLighter();
   const bulkHook = useBulk();
+  const imperialHook = useImperial();
   const ostiumHook = useOstium();
   // Aptos wallet handle — used for the "Connect Petra" CTA on the Decibel
   // pre-connect screen. Lives outside the trading hooks because the
   // wallet context is shared with future Aptos-using features.
   const aptosWallet = useAptosWallet();
-  const trading = dex === 'avantis'
+  const trading = dex === 'imperial'
+    ? imperialHook
+    : dex === 'avantis'
     ? avantisHook
     : dex === 'domfi'
     ? domfiHook
@@ -3709,6 +3715,8 @@ function FuturesPanel() {
     connectOneTap: connectLighterOneTap, lighterConnectStatus,
     registerBuilderCode,
     fetchTradeHistory, fetchFundingHistory, fetchCandles,
+    imperialProfileIndex, setImperialProfileIndex, imperialBoostEnabled, setImperialBoostEnabled,
+    imperialRoutePreview, previewImperialRoute,
     regionAccess, retryRegionAccess,
     refresh: refreshTrading,
   } = trading;
@@ -3778,7 +3786,7 @@ function FuturesPanel() {
     accountReady === false
     || (account == null && walletUsdc == null)
   );
-  const isSolanaDex = dex === 'pacifica' || dex === 'phoenix' || dex === 'gmtrade' || dex === 'flash' || dex === 'bulk';
+  const isSolanaDex = dex === 'pacifica' || dex === 'phoenix' || dex === 'gmtrade' || dex === 'flash' || dex === 'bulk' || dex === 'imperial';
   const [solanaWalletGrace, setSolanaWalletGrace] = useState(true);
   useEffect(() => {
     if (!isSolanaDex || hasWallet) {
@@ -4618,6 +4626,23 @@ function FuturesPanel() {
     return Number.isFinite(t) && Number.isFinite(p) && t > 0 && p > 0 ? t * p : 0;
   }, [amount, amountInUsdc, leverage, tokenAmount, currentPrice, orderSizingPrice, dex]);
 
+  // Imperial decides the underlying venue server-side. Keep this quote
+  // informational; placeOrder obtains a fresh authoritative route again so a
+  // stale UI quote can never choose the venue or boost amount.
+  useEffect(() => {
+    if (dex !== 'imperial' || typeof previewImperialRoute !== 'function' || !(positionUsdc > 0) || !symbol) return undefined;
+    const timer = setTimeout(() => {
+      previewImperialRoute({
+        symbol,
+        side: openTpslPreviewSide === 'short' ? 'short' : 'long',
+        notional: positionUsdc,
+        leverage,
+        holdHours: 24,
+      }).catch?.(() => {});
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [dex, leverage, openTpslPreviewSide, positionUsdc, previewImperialRoute, symbol]);
+
   // Buying power = max possible position size = balance × leverage.
   const makeOpenTpslPosition = useCallback((sideForPosition) => {
     const entry = Number(orderSizingPrice || currentPrice) || 0;
@@ -4899,7 +4924,7 @@ function FuturesPanel() {
       const phoenixMarginPrice = dex === 'phoenix'
         ? (Number(currentPrice) > 0 ? Number(currentPrice) : tradePrice)
         : tradePrice;
-      const isCollateralDex = dex === 'avantis' || dex === 'domfi' || dex === 'etoro' || dex === 'bulk' || dex === 'decibel' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'leverup' || dex === 'aster' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'gmtrade' || dex === 'flash';
+      const isCollateralDex = dex === 'avantis' || dex === 'domfi' || dex === 'etoro' || dex === 'bulk' || dex === 'imperial' || dex === 'decibel' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'leverup' || dex === 'aster' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'gmtrade' || dex === 'flash';
       const attachedTpsl = resolveOpenTpslForSide(side);
       if (!attachedTpsl?.ok) return;
       if (dex === 'etoro' && (Number(leverage) > 1 || side === 'ask') && !(Number(attachedTpsl?.options?.stopLoss) > 0)) {
@@ -5202,6 +5227,7 @@ function FuturesPanel() {
       let result;
       const tradeOptions = {
         ...(Number.isFinite(positionUsdc) && positionUsdc > 0 ? { notional_usd: positionUsdc } : {}),
+        ...(dex === 'imperial' && Number.isFinite(tradePrice) && tradePrice > 0 ? { market_price: tradePrice } : {}),
         ...(attachedTpsl?.options || {}),
         ...(dex === 'phoenix' ? { margin_mode: marginModes[symbol] ? 'isolated' : 'cross' } : {}),
         ...(dex === 'gmtrade' && (currentMarket?.market_token || currentMarket?.marketToken)
@@ -5317,8 +5343,10 @@ function FuturesPanel() {
   const oracle = curPriceData ? parseFloat(curPriceData.oracle || 0) : 0;
   const nadoReferralOpenBlocked = dex === 'nado' && referralAccess !== NADO_REFERRAL_ACCESS.READY;
   const decibelReferralOpenBlocked = dex === 'decibel' && hasReferrer !== true;
+  const imperialBuilderOpenBlocked = dex === 'imperial' && builderConfig?.active !== true;
   const tradeButtonBlocked = nadoReferralOpenBlocked
     || decibelReferralOpenBlocked
+    || imperialBuilderOpenBlocked
     || (dex === 'flash' && !!flashMarketBlockReason)
     || (dex === 'ostium' && !!ostiumMarketBlockMessage);
   const tradeButtonBlockMessage = nadoReferralOpenBlocked
@@ -5329,6 +5357,8 @@ function FuturesPanel() {
       ? (referralStatus?.unavailable
         ? 'Decibel referral verification is temporarily unavailable. Retry before opening a trade.'
         : `Accept Decibel referral ${referralCode || 'NQSW0V'} before opening a trade.`)
+    : imperialBuilderOpenBlocked
+      ? `Imperial builder code ${builderConfig?.code || 'CLASH'} is awaiting activation by Imperial. Markets stay available, but new orders are disabled so volume cannot lose builder attribution.`
     : dex === 'ostium'
       ? ostiumMarketBlockMessage
       : `${symbol} is not open for Flash trading right now (${flashMarketBlockReason}).`;
@@ -5708,6 +5738,42 @@ function FuturesPanel() {
               {amountInUsdc && currentPrice && (
                 <> · ≈ {parseFloat(tokenAmount).toFixed(6)} {symbol}</>
               )}
+            </div>
+          </div>
+        )}
+
+        {dex === 'imperial' && (
+          <div style={{
+            display: 'flex', flexDirection: 'column', gap: 7, padding: '9px 10px', borderRadius: 9,
+            border: '1px solid rgba(146,119,255,.45)', background: 'rgba(124,92,252,.10)',
+          }}>
+            <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8}}>
+              <div>
+                <div style={{fontSize: 11, fontWeight: 850, color: 'var(--terminal-text)'}}>IMPERIAL SMART ROUTE</div>
+                <div style={{fontSize: 10, color: 'var(--terminal-text-muted)'}}>
+                  {imperialRoutePreview?.error
+                    ? imperialRoutePreview.error
+                    : `Venue: ${imperialRoutePreview?.underwriter || imperialRoutePreview?.venue || imperialRoutePreview?.selectedVenue || 'quoting...'}`}
+                </div>
+              </div>
+              <button type="button" onClick={() => setImperialBoostEnabled?.(!imperialBoostEnabled)} style={{
+                ...S.btnSmall, minWidth: 58, color: '#fff',
+                background: imperialBoostEnabled ? '#7C5CFC' : 'var(--terminal-surface-raised)',
+                border: `1px solid ${imperialBoostEnabled ? '#9277FF' : 'var(--terminal-border)'}`,
+              }}>
+                BOOST {imperialBoostEnabled ? 'ON' : 'OFF'}
+              </button>
+            </div>
+            <div style={{display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 10, color: 'var(--terminal-text-muted)'}}>
+              <span>Deposit ${Number(imperialRoutePreview?.requiredDeposit?.requiredDepositUsd || imperialRoutePreview?.requiredDepositUsd || (positionUsdc / Math.max(1, leverage)) || 0).toFixed(2)}</span>
+              <span>Loan ${Number(imperialRoutePreview?.loanSplit?.loanAmountUsd || 0).toFixed(2)}</span>
+              <label style={{display: 'flex', alignItems: 'center', gap: 4}}>
+                Profile
+                <select value={imperialProfileIndex ?? 0} onChange={event => setImperialProfileIndex?.(Number(event.target.value))}
+                  style={{background: 'var(--terminal-surface)', color: 'var(--terminal-text)', border: '1px solid var(--terminal-border)', borderRadius: 5}}>
+                  {[0, 1, 2, 3, 4, 5].map(index => <option key={index} value={index}>{index + 1}</option>)}
+                </select>
+              </label>
             </div>
           </div>
         )}
@@ -7186,6 +7252,53 @@ function FuturesPanel() {
                 onClick: () => window.open('https://app.ondoperps.xyz', '_blank', 'noopener,noreferrer'),
               }}
               footnote="Ondo authentication uses Ethereum mainnet (chain ID 1). Accepting the builder code does not give Clash custody or withdrawal permission."
+            />
+          </div>
+        </div>
+      </>
+    );
+  }
+  // ==================== IMPERIAL WALLET SESSION GATE ====================
+  if (dex === 'imperial' && hasWallet && setupVerified !== true) {
+    const isRunning = Boolean(activationStep && activationStep !== 'connect') || loading;
+    const steps = [
+      { id: 'wallet', label: 'Verify linked Solana wallet', hint: 'A short-lived signed message creates the Imperial mobile API session.', status: 'done' },
+      { id: 'session', label: 'Connect Imperial', hint: 'The session is encrypted and scoped to this exact wallet.', status: isRunning ? 'active' : 'pending' },
+      { id: 'builder', label: 'Verify CLASH builder code', hint: 'Every open and close is server-routed with CLASH attribution.', status: builderConfig?.active ? 'done' : 'pending' },
+    ];
+    return (
+      <>
+        <style>{animCSS}</style>
+        <div ref={panelRef} className={`futures-terminal-shell ${fullscreen ? 'futures-fullscreen futures-terminal-shell--fullscreen' : 'futures-terminal-shell--compact'}`} style={{
+          ...(fullscreen ? S.containerFull : S.container),
+          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '1px solid var(--terminal-border)' } : {}),
+          transform: (fullscreen || isMobile) ? undefined : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
+        }}>
+          <div style={S.header} onPointerDown={handlePointerDown}>
+            <span style={S.headerTitle}>Imperial setup</span>
+            <button data-nodrag onClick={handleClose} style={S.closeBtn} aria-label="Close Imperial setup">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
+          <div style={{...S.body, alignItems: 'stretch', overflowY: 'auto', overflowX: 'hidden', padding: 0, background: 'var(--terminal-surface)'}}>
+            <TradingSetupGate
+              kicker="SOLANA SMART ROUTER"
+              title="Connect Imperial"
+              subtitle="Imperial finds a route across supported Solana perp venues. Clash verifies the wallet and injects its builder code on the server."
+              logo={DEX_CONFIG.imperial.logo}
+              logoAlt="Imperial"
+              logoBackground="#151126"
+              steps={steps}
+              working={isRunning}
+              workingText="Waiting for your Solana wallet signature..."
+              statusContent={<div><strong>Builder code:</strong> {builderConfig?.code || inviteStatus?.builder_code || 'CLASH'} · {builderConfig?.active ? 'active' : 'awaiting Imperial registration'}</div>}
+              error={error ? humanizeTradeError(error, dex) : ''}
+              primaryAction={{
+                label: isRunning ? 'CONNECTING...' : 'CONNECT IMPERIAL', disabled: isRunning,
+                onClick: async () => { const result = await activate?.(); if (result?.error) setLocalAlert(result.error); },
+              }}
+              secondaryAction={{ label: 'OPEN IMPERIAL', variant: 'secondary', onClick: () => openReferralJoin?.() }}
+              footnote="Your wallet keeps custody. Boost borrowing adds liquidation and financing risk; review the quoted route before trading."
             />
           </div>
         </div>

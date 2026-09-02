@@ -368,6 +368,11 @@ function buildDexSpecificRequests({ dex, token, walletAddress, signal }) {
     return requests;
   }
 
+  if (dex === 'imperial') {
+    if (token) addPrefetchRequest(requests, futuresUrl('/imperial/config'), { headers, signal });
+    return requests;
+  }
+
   if (dex === 'aster') {
     addPrefetchRequest(requests, futuresUrl('/aster/config'), { headers, signal });
     return requests;
