@@ -12,6 +12,7 @@ function transport(fetchImpl, lines = ['127.0.0.1:8001:user:password', '127.0.0.
   return createPublicReadTransport({ pool, fetchImpl, ...options });
 }
 const allowed = [
+  ['https://data-api.hibachi.xyz/market/inventory', { method: 'GET', headers: { accept: 'application/json', 'Hibachi-Client': 'ClashOfPerps/1.0' } }],
   [RPC, readOptions],
   ['https://mainnet.base.org', readOptions],
   ['https://api.mainnet-beta.solana.com', { method: 'POST', body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getLatestBlockhash', params: [] }) }],

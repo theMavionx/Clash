@@ -4029,3 +4029,11 @@ Follow-up:
   replace `/opt/clash/shared/hibachi-proxies.txt` while retaining a restricted
   rollback copy, run the standard atomic release script, then verify PM2 health,
   release identity and representative public DEX/RPC endpoints.
+- Initial production release `20260903165457-cb8f9e73` completed with all PM2
+  processes online and zero restarts. External smoke checks returned HTTP 200 for
+  the frontend, Hibachi markets/prices, Pacifica, Nado and Imperial; the bounded
+  relay reported `X-Clash-Public-Transport: proxy`.
+- Post-deploy boundary review moved unauthenticated Hibachi market reads onto the
+  shared fallback transport while preserving the dedicated account-affine pool
+  for authenticated GETs and all trading mutations. Focused Hibachi/public-read
+  tests pass before the follow-up atomic release.

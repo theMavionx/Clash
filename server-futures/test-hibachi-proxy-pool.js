@@ -84,7 +84,7 @@ test('Hibachi proxy pool rotates public traffic, keeps account affinity, and coo
   assert.equal(pool.stats().active, 3);
 });
 
-test('Hibachi REST reads fail over after 429 while order POST is never replayed', async () => {
+test('public Hibachi reads use shared transport; account GET fails over while order POST never replays', async () => {
   const originalFetch = global.fetch;
   const originalProxies = process.env.HIBACHI_PROXIES;
   const originalWsEnabled = process.env.HIBACHI_WS_ENABLED;
@@ -97,13 +97,6 @@ test('Hibachi REST reads fail over after 429 while order POST is never replayed'
   global.fetch = async (url, options = {}) => {
     calls.push({ url: String(url), options });
     if (String(url).endsWith('/market/inventory')) {
-      const inventoryCalls = calls.filter(call => call.url.endsWith('/market/inventory'));
-      if (inventoryCalls.length === 1) {
-        return jsonResponse({
-          title: 'Error 1015: You are being rate limited',
-          retry_after: 30,
-        }, 429);
-      }
       return jsonResponse({
         markets: [{
           contract: {
@@ -120,6 +113,13 @@ test('Hibachi REST reads fail over after 429 while order POST is never replayed'
       });
     }
     if (String(url).includes('/trade/account/info?accountId=7')) {
+      const accountCalls = calls.filter(call => call.url.includes('/trade/account/info?accountId=7'));
+      if (accountCalls.length === 1) {
+        return jsonResponse({
+          title: 'Error 1015: You are being rate limited',
+          retry_after: 30,
+        }, 429);
+      }
       return jsonResponse({
         accountCategory: 'CRYPTO',
         balance: '100',
@@ -138,9 +138,17 @@ test('Hibachi REST reads fail over after 429 while order POST is never replayed'
     const markets = await hibachi.getMarketInfo();
     assert.deepEqual(markets.data.map(row => row.symbol), ['BTC']);
     const inventoryCalls = calls.filter(call => call.url.endsWith('/market/inventory'));
-    assert.equal(inventoryCalls.length, 2);
-    assert.ok(inventoryCalls.every(call => call.options.dispatcher instanceof FakeProxyAgent === false));
-    assert.notEqual(inventoryCalls[0].options.dispatcher, inventoryCalls[1].options.dispatcher);
+    assert.equal(inventoryCalls.length, 1);
+    assert.equal(inventoryCalls[0].options.dispatcher, undefined);
+
+    await hibachi.getAccount(
+      { apiKey: 'test-api-key', accountId: 7, privateKey: 'test-hmac-secret' },
+      { forceLive: true },
+    );
+    const accountCalls = calls.filter(call => call.url.includes('/trade/account/info?accountId=7'));
+    assert.equal(accountCalls.length, 2);
+    assert.ok(accountCalls.every(call => call.options.dispatcher));
+    assert.notEqual(accountCalls[0].options.dispatcher, accountCalls[1].options.dispatcher);
 
     await assert.rejects(
       () => hibachi.placeOrder(
@@ -154,7 +162,7 @@ test('Hibachi REST reads fail over after 429 while order POST is never replayed'
     const stats = hibachi.__testing.proxyPoolStats();
     assert.equal(stats.configured, 4);
     assert.equal(stats.rateLimits, 2);
-    assert.equal(stats.successes, 2);
+    assert.equal(stats.successes, 1);
   } finally {
     global.fetch = originalFetch;
     if (originalProxies === undefined) delete process.env.HIBACHI_PROXIES;

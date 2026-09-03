@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted for local implementation and testing; production rollout not yet authorized.
+Accepted and deployed to production on 2026-09-03.
 
 ## Date
 
@@ -49,6 +49,10 @@ and direct fallback can be disabled operationally.
 The browser still calls the bounded same-origin relay. The relay returns
 `X-Clash-Public-Transport: proxy`, `direct`, or `direct-fallback`. Private and
 unknown requests bypass this component exactly as before.
+
+Hibachi public inventory, exchange-info, price, and stats reads use the same
+shared transport. Hibachi account-bound GETs and trading mutations retain the
+separate account-affine pool and never inherit the direct public fallback.
 
 ### Architecture Diagram
 

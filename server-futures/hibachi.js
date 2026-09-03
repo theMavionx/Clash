@@ -980,7 +980,12 @@ async function request(base, method, path, { apiKey, accountId, body } = {}) {
     payload = JSON.stringify(body);
   }
   if (apiKey) headers.Authorization = apiKey;
-  const maxAttempts = normalizedMethod === 'GET' && hibachiProxyPool.configured
+  // Public market reads belong to the shared allowlisted transport, which owns
+  // proxy rotation, its circuit breaker, and the server-direct fallback. Keep
+  // this dedicated pool only for account-bound traffic so affinity is stable
+  // and authenticated/signed requests can never inherit the public fallback.
+  const useAccountProxy = hibachiProxyPool.configured && Boolean(apiKey || accountId);
+  const maxAttempts = normalizedMethod === 'GET' && useAccountProxy
     ? Math.min(hibachiProxyPool.readAttempts, hibachiProxyPool.stats().configured)
     : 1;
   const excluded = new Set();
@@ -992,10 +997,12 @@ async function request(base, method, path, { apiKey, accountId, body } = {}) {
     const ctrl = new AbortController();
     const timeout = setTimeout(() => ctrl.abort(), 12_000);
     try {
-      lease = hibachiProxyPool.acquire({
-        affinityKey: proxyAffinityKey(apiKey, accountId),
-        excluded,
-      });
+      if (useAccountProxy) {
+        lease = hibachiProxyPool.acquire({
+          affinityKey: proxyAffinityKey(apiKey, accountId),
+          excluded,
+        });
+      }
       const requestOptions = {
         method: normalizedMethod,
         headers,
