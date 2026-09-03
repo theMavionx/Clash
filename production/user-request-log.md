@@ -3997,3 +3997,35 @@ Follow-up:
   build pass. The existing DEX-selection planning test also passes; deeper
   SQLite server tests are unavailable in this checkout because server
   dependencies are not installed.
+
+## UR-2026-09-03-PROXY-POOL-DIRECT-FALLBACK
+
+- Timestamp: 2026-09-03 Europe/Kyiv
+- Request: "нові проксі + якщо вони не працюють має бути фолбек на сервер якось так".
+- Scope: validate the supplied 100-proxy Webshare pool and make public market/RPC
+  reads fail over safely to the server's direct network path when the proxy pool
+  has transport failures.
+- Status: completed locally in isolated worktree `codex/proxy-fallback`. The
+  transport remains proxy-first, retries a second proxy, then uses direct server
+  egress only for allowlisted public read requests. Three consecutive exhausted
+  proxy requests open a 30-second circuit breaker. Provider HTTP responses such
+  as 401/403/404/429/5xx do not trigger direct retries, and private, authenticated,
+  signed, write and WebSocket traffic remains outside this transport.
+- Verification: all 100 supplied proxies returned HTTP 200 from Hibachi; 100/100
+  passed Ink RPC and 100/100 passed Nado price checks. A deliberately dead pool
+  fell back successfully for Hibachi, Pacifica and Ink. Twenty-six focused Node
+  tests, four browser-relay tests, syntax/diff checks and the production web build
+  pass.
+- No proxy credentials were added to Git. No commit, push, deploy, production
+  configuration change, process restart or production data mutation authorized.
+
+## UR-2026-09-03-PROXY-POOL-DIRECT-FALLBACK-DEPLOY
+
+- Timestamp: 2026-09-03 Europe/Kyiv
+- Request: "деплой".
+- Authorization: explicit production deployment approval for the validated proxy
+  pool replacement and public-read direct-fallback implementation above.
+- Deployment plan: publish the reviewed commit through `origin/main`, atomically
+  replace `/opt/clash/shared/hibachi-proxies.txt` while retaining a restricted
+  rollback copy, run the standard atomic release script, then verify PM2 health,
+  release identity and representative public DEX/RPC endpoints.

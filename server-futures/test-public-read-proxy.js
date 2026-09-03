@@ -6,10 +6,10 @@ const { createPublicReadTransport, installAxiosPublicReads, createPublicReadHand
 const RPC = 'https://rpc-gel.inkonchain.com/';
 const readBody = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_chainId', params: [] });
 const readOptions = { method: 'POST', body: readBody, headers: { 'content-type': 'application/json' } };
-function transport(fetchImpl, lines = ['127.0.0.1:8001:user:password', '127.0.0.1:8002:user:password']) {
+function transport(fetchImpl, lines = ['127.0.0.1:8001:user:password', '127.0.0.1:8002:user:password'], options = {}) {
   class FakeAgent { constructor(url) { this.url = url; } destroy() {} }
   const pool = new HibachiProxyPool(lines, { ProxyAgentClass: FakeAgent, readAttempts: 2 });
-  return createPublicReadTransport({ pool, fetchImpl });
+  return createPublicReadTransport({ pool, fetchImpl, ...options });
 }
 const allowed = [
   [RPC, readOptions],
@@ -60,7 +60,7 @@ test('rotates public HTTPS reads, preserves TLS, never sends proxy credentials a
   assert.equal(t.stats().inFlight, 0);
 });
 
-test('transport failure retries once on a different proxy; no direct fallback', async () => {
+test('transport failure retries once on a different proxy and then falls back directly', async () => {
   let calls = 0;
   const t = transport(async (url, options) => {
     assert.ok(options.dispatcher);
@@ -69,9 +69,45 @@ test('transport failure retries once on a different proxy; no direct fallback', 
   });
   await t.fetch(RPC, readOptions);
   assert.equal(calls, 2); assert.equal(t.stats().transportFailures, 1);
-  const broken = transport(async () => { throw new Error('password=secret'); });
-  await assert.rejects(broken.fetch(RPC, readOptions), error => error.message === 'Public read proxy transport unavailable');
+  const fallbackCalls = [];
+  const broken = transport(async (url, options) => {
+    fallbackCalls.push({ url, proxied: Boolean(options.dispatcher) });
+    if (options.dispatcher) throw new Error('password=secret');
+    return new Response('{"direct":true}');
+  });
+  const response = await broken.fetch(RPC, readOptions);
+  assert.deepEqual(await response.json(), { direct: true });
   assert.equal(broken.stats().requests, 2);
+  assert.equal(broken.stats().directFallbacks, 1);
+  assert.equal(broken.stats().directFallbackSuccesses, 1);
+  assert.equal(broken.transportFor(response), 'direct-fallback');
+  assert.deepEqual(fallbackCalls.map(row => row.proxied), [true, true, false]);
+});
+
+test('circuit breaker skips a repeatedly broken proxy pool while preserving direct public reads', async () => {
+  const calls = [];
+  const broken = transport(async (url, options) => {
+    calls.push(Boolean(options.dispatcher));
+    if (options.dispatcher) throw new Error('proxy auth failed');
+    return new Response('{}');
+  }, undefined, { circuitFailureThreshold: 1, circuitCooldownMs: 60_000 });
+  await broken.fetch(RPC, readOptions);
+  await broken.fetch(RPC, readOptions);
+  assert.deepEqual(calls, [true, true, false, false]);
+  assert.equal(broken.stats().circuitOpen, true);
+  assert.equal(broken.stats().circuitOpens, 1);
+  assert.equal(broken.stats().directFallbacks, 2);
+});
+
+test('direct fallback can be disabled without changing private-request behavior', async () => {
+  const broken = transport(async () => { throw new Error('proxy unavailable'); }, undefined, {
+    allowDirectFallback: false,
+  });
+  await assert.rejects(
+    broken.fetch(RPC, readOptions),
+    error => error.message === 'Public read proxy transport unavailable',
+  );
+  assert.equal(broken.stats().directFallbacks, 0);
 });
 
 test('provider failures do not trigger proxy rotation; 429 is respected across the host', async () => {
@@ -164,4 +200,16 @@ test('relay passes JSON/status only, marks proxy use and blocks redirect/oversiz
     await createPublicReadHandler(transport(async () => response))({ body: { url: RPC, method: 'POST', body: readBody } }, fail);
     assert.equal(fail.code, 502);
   }
+});
+
+test('relay accurately marks a direct fallback after proxy transport failure', async () => {
+  const handler = createPublicReadHandler(transport(async (url, options) => {
+    if (options.dispatcher) throw new Error('CONNECT 407');
+    return new Response('{"result":"0xdef1"}', { headers: { 'content-type': 'application/json' } });
+  }));
+  const res = relayResponse();
+  await handler({ body: { url: RPC, method: 'POST', body: readBody } }, res);
+  assert.equal(res.code, 200);
+  assert.equal(res.headers['X-Clash-Public-Transport'], 'direct-fallback');
+  assert.equal(res.body.toString(), '{"result":"0xdef1"}');
 });
