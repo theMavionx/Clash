@@ -3984,3 +3984,16 @@ Follow-up:
   confirms guide expansion/collapse, rendered URLs and Real connect payload.
   No logged-in eToro key generation or exchange operation was performed.
 - No deploy, account/key creation, trade, commit or production change authorized.
+
+## UR-2026-09-03-IMPERIAL-DEX-SYNC
+
+- Timestamp: 2026-09-03 Europe/Kyiv
+- Request: Imperial setup reports: "Account is registered for 'hibachi'. Switch DEX in your profile before calling imperial endpoints."
+- Scope: diagnose and fix the Imperial wallet/session onboarding race so the server-authoritative active DEX is Imperial before Imperial futures endpoints are called.
+- Status: fixed locally. Imperial now links the exact Solana wallet and waits
+  for the game backend to select `imperial` before config/session requests.
+  The previous fire-and-forget race is removed; wallet conflicts fail before
+  DEX selection. Four focused client tests, focused ESLint and production web
+  build pass. The existing DEX-selection planning test also passes; deeper
+  SQLite server tests are unavailable in this checkout because server
+  dependencies are not installed.

@@ -9,6 +9,7 @@ import { useCredentialOperationScope } from './useCredentialOperationScope';
 import {
   IMPERIAL_APP_URL,
   clearImperialSession,
+  ensureImperialDexAccount,
   fetchImperialJson,
   readImperialSession,
   saveImperialSession,
@@ -44,7 +45,7 @@ function normalizedPosition(row) {
 }
 
 export function useImperial() {
-  const { dex } = useDex();
+  const { dex, setDex } = useDex();
   const player = usePlayer();
   const solWallet = useWallet();
   const { connection } = useConnection();
@@ -86,6 +87,7 @@ export function useImperial() {
   const [loading, setLoading] = useState(false);
   const [goldEarned, setGoldEarned] = useState(null);
   const actionRef = useRef(false);
+  const dexAccountSyncRef = useRef(null);
 
   const api = useCallback((path, options = {}) => fetchImperialJson(`${API}${path}`, {
     token, session: options.noSession ? null : session, ...options,
@@ -101,13 +103,50 @@ export function useImperial() {
     return () => { cancelled = true; };
   }, [active, walletAddr]);
 
+  const ensureDexAccount = useCallback(async () => {
+    const key = `${token}:${walletAddr}`;
+    if (!active || !token || !walletAddr) {
+      throw new Error('Connect a Solana wallet before connecting Imperial.');
+    }
+    if (dexAccountSyncRef.current?.key === key) return dexAccountSyncRef.current.promise;
+
+    const promise = ensureImperialDexAccount({
+      gameApi: GAME_API,
+      token,
+      wallet: walletAddr,
+      walletSource: adapterAddress ? (solWallet.wallet?.adapter?.name || 'solana-wallet') : 'privy-solana',
+    }).then((result) => {
+      if (dexAccountSyncRef.current?.key !== key) return result;
+      const selected = result.selected || {};
+      const nextToken = selected.token || token;
+      setDex('imperial');
+      window.onGodotMessage?.({
+        action: 'state',
+        data: {
+          ...(selected.player || { dex: 'imperial' }),
+          ...(nextToken ? { token: nextToken } : {}),
+        },
+      });
+      return result;
+    }).catch((cause) => {
+      if (dexAccountSyncRef.current?.key === key) dexAccountSyncRef.current = null;
+      throw cause;
+    });
+    dexAccountSyncRef.current = { key, promise };
+    return promise;
+  }, [active, adapterAddress, setDex, solWallet.wallet?.adapter?.name, token, walletAddr]);
+
   useEffect(() => {
-    if (!active || !token || !walletAddr) return;
-    fetch(`${GAME_API}/players/dex-accounts/imperial/link`, {
-      method: 'POST', headers: { 'content-type': 'application/json', 'x-token': token },
-      body: JSON.stringify({ wallet: walletAddr, walletSource: adapterAddress ? (solWallet.wallet?.adapter?.name || 'solana-wallet') : 'privy-solana' }),
-    }).catch(() => {});
-  }, [active, adapterAddress, solWallet.wallet?.adapter?.name, token, walletAddr]);
+    if (!active || !token || !walletAddr) {
+      dexAccountSyncRef.current = null;
+      return;
+    }
+    let cancelled = false;
+    ensureDexAccount().catch((cause) => {
+      if (!cancelled) setError(cause?.message || 'Could not activate Imperial for this account.');
+    });
+    return () => { cancelled = true; };
+  }, [active, ensureDexAccount, token, walletAddr]);
 
   const signConnectMessage = useCallback(async messageBytes => {
     if (adapterAddress && typeof solWallet.signMessage === 'function') {
@@ -164,6 +203,7 @@ export function useImperial() {
   const refresh = useCallback(async () => {
     if (!active || !token) return null;
     try {
+      await ensureDexAccount();
       const nextConfig = await api('/imperial/config', { noSession: true });
       setConfig(nextConfig);
       if (!session || !walletAddr) return nextConfig;
@@ -176,7 +216,7 @@ export function useImperial() {
       setError(cause?.message || 'Imperial data is unavailable');
       return null;
     }
-  }, [active, api, applySnapshot, profileIndex, session, token, walletAddr]);
+  }, [active, api, applySnapshot, ensureDexAccount, profileIndex, session, token, walletAddr]);
 
   useEffect(() => {
     if (!active || !sessionLoaded) return;
@@ -187,9 +227,10 @@ export function useImperial() {
 
   const activate = useCallback(async () => {
     if (!walletAddr) return { error: 'Connect a Solana wallet that supports message signing.' };
-    const scope = capture();
     setLoading(true); setError('');
     try {
+      await ensureDexAccount();
+      const scope = capture();
       const nonce = Math.floor(Date.now() / 1000);
       const message = `imperial:mobile-connect:${walletAddr}:${nonce}`;
       const signature = await signConnectMessage(new TextEncoder().encode(message));
@@ -203,7 +244,7 @@ export function useImperial() {
     } catch (cause) {
       const message = cause?.message || 'Imperial connection failed'; setError(message); return { error: message };
     } finally { setLoading(false); }
-  }, [api, assert, capture, signConnectMessage, walletAddr]);
+  }, [api, assert, capture, ensureDexAccount, signConnectMessage, walletAddr]);
 
   const runAction = useCallback(async (path, options = {}) => {
     if (!session) return { error: 'Connect Imperial first.' };
