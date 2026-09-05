@@ -4055,3 +4055,18 @@ Follow-up:
   initialized canonical Bulk mainnet root account. Builder fees remain disabled
   until that address is activated; trading and Clash reward attribution use
   exact server-routed signed-order proofs in the interim.
+
+## UR-2026-09-05-BULK-PHANTOM-SIGNING-DEPLOY
+
+- Timestamp: 2026-09-05 Europe/Kyiv
+- Request: fix the production Bulk error `WalletSignMessageError: You cannot
+  sign solana transactions using sign message`, merge the previously local
+  `codex/imperial-ui` work into the main release if needed, and deploy.
+- Authorization: explicit code changes, commit, push and production deployment.
+- Scope: keep Bulk's documented offchain envelope unchanged, route matching
+  injected Phantom wallets through the provider's binary-safe hexadecimal
+  display mode, preserve adapter and Privy paths for other wallets, verify the
+  Bulk and Imperial flows, and publish an atomic production release.
+- Branch finding: `codex/imperial-ui` tip `50ede2d8` is already an ancestor of
+  current `origin/main`; no merge commit is required and the deployed build
+  already exposes Imperial.

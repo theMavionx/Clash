@@ -4,6 +4,7 @@ import { useSignMessage as usePrivySignMessage, useWallets as usePrivyWallets } 
 import bs58 from 'bs58';
 import { useDex } from '../contexts/DexContext';
 import { usePlayer } from './useGodot';
+import { signBulkMessage } from '../lib/bulkWallet';
 
 const GAME_API = import.meta.env.VITE_GAME_API || '/api';
 const FUTURES_API = import.meta.env.VITE_FUTURES_API || '/api/futures';
@@ -291,19 +292,13 @@ export function useBulk() {
   }, [active, token, walletAddr, solWallet?.wallet?.adapter?.name]);
 
   const masterSign = useCallback(async (message) => {
-    if (adapterAddress && typeof solWallet.signMessage === 'function') {
-      return solWallet.signMessage(message);
-    }
-    if (privyWallet && privySignMessage) {
-      const result = await privySignMessage({ message, wallet: privyWallet });
-      const signature = result?.signature || result;
-      if (signature instanceof Uint8Array) return signature;
-      if (Array.isArray(signature)) return Uint8Array.from(signature);
-      if (typeof signature === 'string') {
-        try { return Uint8Array.from(bs58.decode(signature)); } catch { return base64Bytes(signature); }
-      }
-    }
-    throw new Error('Connect a Solana wallet that supports message signing.');
+    return signBulkMessage({
+      message,
+      adapterAddress,
+      solWallet,
+      privyWallet,
+      privySignMessage,
+    });
   }, [adapterAddress, solWallet, privyWallet, privySignMessage]);
 
   const signAndSubmit = useCallback(async (payload) => {
