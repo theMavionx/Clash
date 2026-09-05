@@ -944,6 +944,12 @@ function formatPositionLeverageBadge(value) {
   return n && n > 0 ? `${n}x` : '-';
 }
 
+function formatPositionPrice(value, dex) {
+  const price = Number(value);
+  return dex === 'imperial' && price >= 1
+    ? price.toLocaleString('en-US', {minimumFractionDigits:2,maximumFractionDigits:2}) : fmtPrice(price);
+}
+
 function isFlashPositionLike(pos) {
   const source = String(pos?.source || '').toLowerCase();
   return source.includes('flash') || !!pos?._flash || !!pos?.metric?.sizeUsdUi || !!pos?.metric?.collateralUsdUi;
@@ -1049,14 +1055,15 @@ function getPositionMetrics(pos, prices, leverageSettings = {}, feeContext = {})
     positionValueUsd: posValueUsd,
   });
   const pnlVal = isDust ? 0 : cleanSignedZero(pnlFees.netPnlUsd);
-  const rawLev = displayLeverage(pos.leverage);
+  const rawLev = feeContext?.dex === 'imperial' && numOrNull(pos.leverage) > 0
+    ? Math.round(Number(pos.leverage) * 100) / 100 : displayLeverage(pos.leverage);
   const collateralLev = margin > 0 && posValueUsd > 0 ? Math.round((posValueUsd / margin) * 10) / 10 : null;
   const flashLev = isFlashPosition ? flashPositionDisplayLeverageStable(pos, posValueUsd, margin) : null;
   const setLev = isDust ? null : (isFlashPosition
     ? (flashLev ?? rawLev ?? collateralLev)
     : (rawLev && rawLev > 0 ? rawLev : (collateralLev || (leverageSettings[pos.symbol] || 1))));
   const rawProvidedPct = numOrNull(pos.pnl_pct ?? (pos.return_on_equity != null ? Number(pos.return_on_equity) * 100 : null));
-  const preserveProvidedPct = isHibachiPosition || isOstiumPosition;
+  const preserveProvidedPct = isHibachiPosition || isOstiumPosition || feeContext?.dex === 'imperial';
   const pricePct = entryP && markP
     ? ((markP - entryP) / entryP * 100 * (pos.side === 'bid' ? 1 : -1) * (typeof setLev === 'number' ? setLev : 1))
     : null;
@@ -2979,7 +2986,7 @@ const PositionsList = memo(function PositionsList({
             </div>
             <div style={S.row}>
               <span style={S.detail}>{isDust ? 'Dust' : 'Size'}: {isDust ? `$${dustUsd.toFixed(2)}` : (pos.amount_display || formatPositionAmount(pos.amount))} {!isDust && <span style={{color: 'var(--terminal-text-muted)'}}>(${posValueUsd.toFixed(2)})</span>}</span>
-              <span style={S.detail}>Entry: ${fmtPrice(parseFloat(pos.entry_price))}</span>
+              <span style={S.detail}>Entry: ${formatPositionPrice(pos.entry_price, dex)}</span>
             </div>
             <div style={S.row}>
               <span style={S.detail}>Mark: {markP ? `$${markP.toLocaleString()}` : '—'}</span>
@@ -5425,6 +5432,11 @@ function FuturesPanel() {
           </>
         )}
         <div style={{...S.symbolBarActions, ...(compactSymbolBar ? S.symbolBarActionsCompact : {}), gap: compactSymbolBar ? 4 : 8}}>
+          {dex === 'imperial' && <ImperialRouteCard quote={imperialRoutePreview} availableVenues={currentMarket?.venues} builderFeeBps={trading.builderConfig?.data?.feeBps}
+            notional={positionUsdc} requestedLeverage={leverage} holdHours={24}
+            pinnedVenue={imperialPinnedVenue} onVenueChange={setImperialPinnedVenue}
+            excludedVenues={imperialExcludedVenues} onExcludedVenuesChange={setImperialExcludedVenues}
+            profileIndex={imperialProfileIndex ?? 0} onProfileChange={setImperialProfileIndex} />}
           {dex === 'avantis' || dex === 'domfi' || dex === 'etoro' || dex === 'gmx' || dex === 'ostium' || dex === 'decibel' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'leverup' || dex === 'aster' || dex === 'hibachi' || dex === 'katana' || dex === 'gmtrade' || dex === 'flash' || isLighterDex || dex === 'bulk' ? (
             // Read-only badge for venues where the production margin mode is
             // not user-toggleable in our integration.
@@ -5574,22 +5586,6 @@ function FuturesPanel() {
         : {}),
       ...(parentScroll ? {width: '100%', padding: 10, boxSizing: 'border-box'} : {}),
     }}>
-
-      {dex === 'imperial' && (
-        <ImperialRouteCard
-          quote={imperialRoutePreview}
-          availableVenues={currentMarket?.venues}
-          notional={positionUsdc}
-          requestedLeverage={leverage}
-          holdHours={24}
-          pinnedVenue={imperialPinnedVenue}
-          onVenueChange={setImperialPinnedVenue}
-          excludedVenues={imperialExcludedVenues}
-          onExcludedVenuesChange={setImperialExcludedVenues}
-          profileIndex={imperialProfileIndex ?? 0}
-          onProfileChange={setImperialProfileIndex}
-        />
-      )}
 
       {/* Optional funding hint — use account VALUE, not free margin.
           A user with an open position has available_to_spend ≈ 0 but
@@ -10135,10 +10131,10 @@ function FuturesPanel() {
               </div>
               <div style={S.row}>
                 <span style={S.detail}>{isDust ? 'Dust' : 'Size'}: {isDust ? `$${dustUsd.toFixed(2)}` : (pos.amount_display || formatPositionAmount(pos.amount))} {!isDust && <span style={{color: 'var(--terminal-text-muted)'}}>(${posValueUsd.toFixed(2)})</span>}</span>
-                <span style={S.detail}>Entry: ${fmtPrice(parseFloat(pos.entry_price))}</span>
+                <span style={S.detail}>Entry: ${formatPositionPrice(pos.entry_price, dex)}</span>
               </div>
               <div style={S.row}>
-                <span style={S.detail}>Mark: ${fmtPrice(markP)}</span>
+                <span style={S.detail}>Mark: ${formatPositionPrice(markP, dex)}</span>
                 <PositionPnlReadout
                   pnlDisplay={pnlDisplay}
                   pnlColor={pnlColor}
@@ -10160,7 +10156,7 @@ function FuturesPanel() {
                 return (
                   <div style={S.row}>
                     <span style={{ ...S.detail, color: danger ? 'var(--terminal-short)' : 'var(--terminal-text-muted)' }}>
-                      Liq: ${fmtPrice(liq)}
+                      {dex === 'imperial' ? 'API Liq' : 'Liq'}: ${formatPositionPrice(liq, dex)}
                       {markP > 0 && <span style={{ marginLeft: 6, fontWeight: 700 }}>({distPct.toFixed(1)}% away)</span>}
                     </span>
                     <span style={S.detail} />

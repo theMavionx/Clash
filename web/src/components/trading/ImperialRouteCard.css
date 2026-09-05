@@ -2,13 +2,23 @@
 .imperial-route-trigger, .imperial-route-settings { display:flex; align-items:center; justify-content:center; gap:8px; min-height:40px; border:1px solid var(--terminal-border); border-radius:8px; background:var(--terminal-surface-raised); color:inherit; cursor:pointer; font:inherit; font-size:12px; }
 .imperial-route-card .imperial-route-trigger { padding:6px 10px; flex:0 1 auto; width:auto; justify-content:flex-start; min-width:0; margin:0; }
 .imperial-route-trigger strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; font-weight:600; line-height:20px; }
+.imperial-route-trigger .imperial-route-leverage { display:block; margin:0; padding:0; color:var(--terminal-text-muted); font-size:13px; font-weight:400; line-height:20px; white-space:nowrap; }
+.imperial-route-trigger .imperial-route-chevron { display:block; flex:none; width:14px; height:14px; margin:0; padding:0; align-self:center; }
 .imperial-route-trigger > span { flex-shrink:0; }
+.imperial-route-card .imperial-route-trigger--icon { width:34px; height:34px; min-height:34px; padding:5px; justify-content:center; flex:none; }
+.imperial-route-card { flex:none; }
 .imperial-route-settings { width:40px; flex:none; }
 .imperial-venue-mark { display:inline-flex; align-items:center; justify-content:center; width:22px; height:22px; flex:none; overflow:hidden; border-radius:6px; }
 .imperial-venue-mark img { width:100%; height:100%; object-fit:contain; pointer-events:none; }
-.imperial-route-dialog { position:fixed; inset:auto; margin:0; padding:0; border:1px solid var(--terminal-border); border-radius:12px; width:min(380px, calc(100vw - 24px)); max-width:calc(100vw - 24px); max-height:640px; overflow:auto; overscroll-behavior:contain; box-sizing:border-box; background:var(--terminal-surface, #111827); color:var(--terminal-text, #edf2fa); box-shadow:0 12px 36px #0006; font-family:inherit; }
+.imperial-route-dialog { position:fixed; inset:auto; margin:0; padding:0; border:1px solid var(--terminal-border); border-radius:12px; width:min(300px, calc(100vw - 24px)); max-width:calc(100vw - 24px); max-height:640px; overflow:auto; overscroll-behavior:contain; box-sizing:border-box; background:var(--terminal-surface, #111827); color:var(--terminal-text, #edf2fa); box-shadow:0 12px 36px #0006; font-family:inherit; }
 .imperial-route-dialog::backdrop { background:transparent; }
 .imperial-route-dialog { scrollbar-width:thin; scrollbar-color:var(--terminal-border, #2b3948) transparent; }
+.imperial-route-dialog .imperial-route-auto, .imperial-route-dialog .imperial-route-manage { font-size:12px; line-height:18px; }
+.imperial-route-dialog .imperial-route-auto > span { font-size:12px; line-height:18px; }
+.imperial-route-dialog .imperial-route-option__select, .imperial-route-dialog .imperial-route-auto, .imperial-route-dialog .imperial-route-option__expand { min-height:36px; padding-top:6px; padding-bottom:6px; }
+.imperial-route-dialog .imperial-route-manage { min-height:36px; padding:8px; }
+.imperial-route-dialog .imperial-route-popup__header button { width:28px; height:28px; min-height:28px; padding:0; line-height:28px; font-size:20px; }
+.imperial-route-dialog .imperial-venue-mark { width:18px; height:18px; }
 .imperial-route-popup { padding:12px; }
 .imperial-route-popup__header { display:flex; align-items:center; justify-content:space-between; color:var(--terminal-text-muted); font-size:12px; margin-bottom:6px; }
 .imperial-route-popup__header button { width:36px; height:36px; background:transparent; border:0; border-radius:6px; color:var(--terminal-text); font-size:24px; cursor:pointer; }

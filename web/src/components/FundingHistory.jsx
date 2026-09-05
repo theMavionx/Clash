@@ -200,8 +200,8 @@ function FundingHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [
           if (!cancelled) setPayments((Array.isArray(rows) ? rows : []).map(normalizeAsterFunding).filter(row => row.symbol));
           return;
         }
-        if (dex === 'bulk') {
-          if (typeof fetchFundingHistory !== 'function') throw new Error('Bulk mainnet funding reader is not ready');
+        if (dex === 'bulk' || dex === 'imperial') {
+          if (typeof fetchFundingHistory !== 'function') throw new Error(`${dex} funding reader is not ready`);
           const rows = await fetchFundingHistory({ limit: 100, signal: controller.signal });
           if (!cancelled) setPayments(Array.isArray(rows) ? rows : []);
           return;
@@ -284,7 +284,7 @@ function FundingHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [
       <tbody>
         {filtered.slice(0, 100).map((p, i) => {
           const payout = Number(p.payout || 0);
-          const rate = Number(p.rate);
+          const rate = p.rate == null ? NaN : Number(p.rate);
           const color = payout >= 0 ? 'var(--terminal-long)' : 'var(--terminal-short)';
           const side = String(p.side || p.action || '').toLowerCase();
           const isLong = side === 'bid' || side.includes('long');

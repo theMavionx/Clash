@@ -18,7 +18,7 @@ const GRVT_STORAGE_KEY = 'clash_grvt_credentials_v1';
 const KATANA_STORAGE_KEY = 'clash_katana_credentials_v1';
 
 const EVM_ADDRESS_RE = /^0x[a-fA-F0-9]{40}$/u;
-const LOCAL_INDEX_HISTORY_DEXES = new Set(['avantis', 'gmx', 'gmtrade', 'flash', 'lighter', 'rhlighter', 'imperial']);
+const LOCAL_INDEX_HISTORY_DEXES = new Set(['avantis', 'gmx', 'gmtrade', 'flash', 'lighter', 'rhlighter']);
 
 function rows(payload) {
   if (Array.isArray(payload)) return payload;
@@ -728,10 +728,10 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
           if (!cancelled) setTrades((Array.isArray(marketRows) ? marketRows : []).map(normalizeAsterTrade).filter(Boolean));
           return;
         }
-        if (dex === 'bulk') {
-          if (typeof fetchTradeHistory !== 'function') throw new Error('Bulk mainnet history reader is not ready');
+        if (dex === 'bulk' || dex === 'imperial') {
+          if (typeof fetchTradeHistory !== 'function') throw new Error(`${dex} history reader is not ready`);
           const data = await fetchTradeHistory({ limit: 100, signal: controller.signal });
-          if (!cancelled) setTrades(rows(data).map(t => normalizeGenericTrade(t, 'bulk', marketsRef.current)).filter(Boolean));
+          if (!cancelled) setTrades(rows(data).map(t => normalizeGenericTrade(t, dex, marketsRef.current)).filter(Boolean));
           return;
         }
         if (LOCAL_INDEX_HISTORY_DEXES.has(dex)) {

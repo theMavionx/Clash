@@ -24,7 +24,7 @@ const base = {
 const venuePnlDexes = [
   'pacifica', 'avantis', 'decibel', 'monad', 'hyperliquid', 'risex', 'nado',
   'ondo', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'lighter',
-  'bulk', 'ostium', 'gmx', 'flash',
+  'bulk', 'ostium', 'gmx', 'flash', 'imperial',
 ];
 
 for (const dex of venuePnlDexes) {

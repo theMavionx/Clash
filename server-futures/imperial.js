@@ -108,6 +108,8 @@ async function request(path, { method = 'GET', jwt = '', body, query, signal, fe
 function configStatus() {
   return {
     api_url: API_BASE,
+    ws_url: new URL('/ws', API_BASE).href.replace(/^http/, 'ws'),
+    market_ws_url: new URL('/ws/market', API_BASE).href.replace(/^http/, 'ws'),
     app_url: 'https://app.imperial.space/perps/sol',
     builder_code: BUILDER_CODE,
     partner_code_configured: !!PARTNER_CODE,
@@ -144,7 +146,7 @@ async function connect(body, fetchImpl = fetch) {
   const connected = await request('/mobile/connect', { method: 'POST', body: { wallet: owner, message, signature }, fetchImpl });
   const exchanged = await request('/mobile/exchange', { method: 'POST', body: { code: connected?.code }, fetchImpl });
   if (!exchanged?.jwt) throw error('Imperial did not return a session token.', 502);
-  return { jwt: exchanged.jwt, expiresAt: exchanged.expiresAt || null, wallet: owner };
+  return { jwt: exchanged.jwt, expiresAt: exchanged.expiresAt || exchanged.expires_at || null, wallet: owner };
 }
 
 async function revoke(jwt, fetchImpl = fetch) {
@@ -412,6 +414,9 @@ async function authoritativePosition(jwt, owner, id, fetchImpl = fetch) {
 
 async function closePosition({ playerId, owner, jwt, positionId, body, db, fetchImpl = fetch }) {
   const linked = wallet(owner);
+  if (body?.fullClose === false && (!Number.isInteger(Number(body.closeBps)) || Number(body.closeBps) < 1 || Number(body.closeBps) > 10000)) {
+    throw error('A partial Imperial close requires closeBps between 1 and 10000.');
+  }
   // Never trap an existing position behind builder onboarding. New entries are
   // fail-closed in placeOrder(), but a close must remain available even while
   // Imperial is activating CLASH. Add attribution whenever the code is active.
@@ -569,7 +574,7 @@ function normalizedMarketRows(raw) {
       const price = numberFrom(entry?.price ?? entry?.markPrice, 0);
       return entry && price > 0 ? [{ venue, ...entry, price }] : [];
     });
-    const preferred = venues.find(entry => entry.venue === 'phoenix') || venues[0] || {};
+    const preferred = row?.index?.price > 0 ? row.index : venues.find(entry => entry.venue === 'phoenix') || venues[0] || {};
     return { symbol: row?.symbol, price: numberFrom(preferred.price, 0), markPrice: numberFrom(preferred.price, 0), venues };
   }).filter(row => row.symbol && row.price > 0);
 }
@@ -605,19 +610,25 @@ async function getPrices(fetchImpl = fetch) {
     .map(row => ({ symbol: row.symbol, price: row.price, mark_price: row.markPrice, venues: row.venues }));
 }
 
+async function positionSnapshot(owner, selectedProfile = 0, fetchImpl = fetch) {
+  const idx = profileIndex(selectedProfile);
+  const raw = await request('/positions', {query:{walletAddress:wallet(owner)},fetchImpl});
+  return {positions:apiList(raw).filter(row => row.profileIndex == null || Number(row.profileIndex) === idx), phoenixCrossSeats:raw.phoenixCrossSeats};
+}
+
 async function snapshot(jwt, owner, selectedProfile = 0, fetchImpl = fetch) {
   const linked = wallet(owner);
   const idx = profileIndex(selectedProfile);
-  const [balancesRaw, v2BalancesRaw, positionsRaw, ordersRaw, tradesRaw, marksRaw, fundingRaw, builder, partner] = await Promise.all([
+  const [balancesRaw, v2BalancesRaw, positionsRaw, ordersRaw, marksRaw, fundingRaw, builder, partner, profileRaw] = await Promise.all([
     request('/mobile/balances', { jwt, fetchImpl }),
     request('/mobile/v2/balance', { jwt, fetchImpl }).catch(() => ({ profiles: [] })),
-    request('/positions', { query: { walletAddress: linked }, fetchImpl }),
+    positionSnapshot(linked, idx, fetchImpl),
     request('/orders', { query: { walletAddress: linked }, fetchImpl }),
-    request('/trades', { query: { walletAddress: linked, limit: 200 }, fetchImpl }),
     request('/mark-prices', { fetchImpl }),
     request('/funding-rates', { fetchImpl }),
     getBuilderStatus(fetchImpl),
     partnerStatus(jwt, fetchImpl),
+    request(`/passthrough/users/${linked}/profiles`, {jwt,fetchImpl}).catch(() => null),
   ]);
   const balances = apiList(balancesRaw);
   const selected = balances.find(row => Number(row?.profileIndex ?? row?.index) === idx) || balances[idx] || {};
@@ -634,12 +645,13 @@ async function snapshot(jwt, owner, selectedProfile = 0, fetchImpl = fetch) {
       profile_usdc: profileUsdc,
       flash_v2_available_usdc: v2AvailableUsdc,
       profile_index: idx,
+      margin_mode: apiList(profileRaw).find(row => Number(row.profileIndex) === idx)?.marginMode ?? null,
       profiles: balances.map(row => ({ ...row, usdcUsd: numberFrom(row?.usdc, 0) / 1_000_000 })),
       v2_profiles: v2Balances.map(row => ({ ...row, availableUsdcUsd: numberFrom(row?.availableUsdc, 0) / 1_000_000 })),
     },
-    positions: apiList(positionsRaw),
-    orders: [...apiList(ordersRaw?.jupiterOrders), ...apiList(ordersRaw?.passthroughOrders), ...apiList(ordersRaw)],
-    trades: apiList(tradesRaw),
+    positions: positionsRaw.positions,
+    phoenixCrossSeats: positionsRaw.phoenixCrossSeats,
+    orders: [...apiList(ordersRaw?.jupiterOrders), ...apiList(ordersRaw?.passthroughOrders), ...apiList(ordersRaw)].filter(row => row.profileIndex == null || Number(row.profileIndex) === idx),
     marks: normalizedMarketRows(marksRaw),
     funding: normalizedFundingRows(fundingRaw),
     builder_status: builder,
@@ -651,13 +663,23 @@ async function history(jwt, owner, options = {}, fetchImpl = fetch) {
   const linked = wallet(owner);
   const idx = profileIndex(options.profileIndex);
   const limit = Math.max(1, Math.min(200, Number(options.limit || 100)));
-  const [orders, pnl, funding] = await Promise.all([
+  const sameProfile = row => row?.profileIndex == null || Number(row.profileIndex) === idx;
+  // Independent tabs must not wait for (or fail with) unrelated history feeds.
+  if (options.kind === 'trades') {
+    const trades = await request('/trades', {query:{walletAddress:linked,limit},fetchImpl});
+    return {trades:apiList(trades).filter(sameProfile),totalCount:trades.totalCount};
+  }
+  if (options.kind === 'funding') {
+    const funding = await request('/funding-history', {query:{walletAddress:linked,limit},fetchImpl});
+    return {funding:apiList(funding),totalCount:funding.totalCount,scope:'wallet'};
+  }
+  const [orders, pnl, funding, trades] = await Promise.all([
     request('/order-history', { query: { walletAddress: linked, limit }, fetchImpl }),
     request('/pnl-history', { query: { walletAddress: linked, resolution: options.resolution === '1h' ? '1h' : '1d' }, fetchImpl }),
     request('/funding-history', { query: { walletAddress: linked, limit }, fetchImpl }),
+    request('/trades', { query: { walletAddress: linked, limit }, fetchImpl }),
   ]);
-  const sameProfile = row => row?.profileIndex === undefined || Number(row.profileIndex) === idx;
-  return { orders: apiList(orders).filter(sameProfile), pnl: apiList(pnl), funding: apiList(funding).filter(sameProfile) };
+  return { orders: apiList(orders).filter(sameProfile), pnl: apiList(pnl), funding: apiList(funding).filter(sameProfile), trades:apiList(trades).filter(sameProfile) };
 }
 
 async function buildDeposit(jwt, owner, body, fetchImpl = fetch) {
@@ -729,13 +751,13 @@ function executionRowsFromActions(trades, proof) {
     for (const [index, action] of apiList(trade?.actions).entries()) {
       const signatures = [action?.tx1Signature, action?.tx2Signature, action?.tx3Signature, action?.signature].filter(Boolean).map(String);
       if (!signatures.includes(expected)) continue;
-      const rawNotional = action?.orderSizeUsd ?? action?.sizeDeltaUsd ?? action?.sizeUsd ?? action?.notionalUsd;
+      const rawNotional = action?.sizeDeltaUsd ?? action?.sizeDelta ?? action?.sizeUsd ?? action?.notionalUsd;
       const raw = numberFrom(rawNotional, 0);
       const notional = raw;
-      if (notional <= 0 || !/success|fill|execut|confirm/i.test(String(action?.status || 'success'))) continue;
+      if (notional <= 0 || !action?.tx2Signature || !/^(converted|success|filled|executed|confirmed|settled)$/i.test(String(action?.status || ''))) continue;
       const priceRaw = action?.entryPrice ?? action?.price ?? trade?.entryPrice;
       const priceNum = numberFrom(priceRaw, 0);
-      out.push({ signature: expected, notional, amount: String(action?.sizeDelta ?? notional), price: String(priceNum || ''), pnl: action?.pnlRealized ?? null, fee: action?.platformFee ?? action?.jupiterFee ?? action?.proOrderFee ?? null, createdAt: asIso(action?.tx1Timestamp ?? action?.timestamp, proof.created_at), index, raw: action });
+      out.push({ signature: expected, notional, amount: String(action?.sizeDeltaTokens ?? (priceNum > 0 ? notional / priceNum : notional)), price: String(priceNum || ''), pnl: action?.pnlRealized ?? null, fee: action?.platformFee ?? action?.jupiterFee ?? action?.proOrderFee ?? null, createdAt: asIso(action?.tx2Timestamp ?? action?.timestamp, proof.created_at), index, raw: action });
     }
   }
   return out;
@@ -776,7 +798,7 @@ async function importTradesForPlayer({ playerId, owner, jwt, db, limit = 500, fe
           verifiedSource: 'imperial_api',
           pnl: row.pnl,
           fee: row.fee,
-          proofJson: JSON.stringify({ builderCode: proof.builder_code, builderFeeBps: numberFrom(storedRequest?._clashBuilderFeeBps, 0) || null, underwriter: proof.underwriter, orderPda: proof.order_pda, signature: row.signature, execution: row.raw }),
+          proofJson: JSON.stringify({ builderCode: proof.builder_code, builderFeeBps: numberFrom(storedRequest?._clashBuilderFeeBps, 0) || null, builderFeeBasisUsd: numberFrom(row.raw?.collateralDeposited, 0) || null, underwriter: proof.underwriter, orderPda: proof.order_pda, signature: row.signature, execution: row.raw }),
           createdAt: row.createdAt,
         });
         imported += result.inserted || 0;
@@ -793,7 +815,7 @@ module.exports = {
   API_BASE, BUILDER_CODE, PARTNER_CODE, REQUIRE_BUILDER, UNDERWRITER, UNDERWRITER_LABEL,
   apiList, isSolanaAddress, wallet, profileIndex, request, configStatus, getBuilderStatus,
   connect, revoke, partnerStatus, registerPartner, getRoute, makeOpenOrder, placeOrder,
-  closePosition, setPositionTpsl, cancelOrder, updateOrder, editCollateral, snapshot, history, buildDeposit, depositToV2, setMarginMode, syncProfile,
+  closePosition, setPositionTpsl, cancelOrder, updateOrder, editCollateral, snapshot, positionSnapshot, history, buildDeposit, depositToV2, setMarginMode, syncProfile,
   getMarketInfo, getPrices,
   importTradesForPlayer, executionRowsFromOrder, executionRowsFromActions, normalizedMarketRows, normalizedFundingRows,
 };

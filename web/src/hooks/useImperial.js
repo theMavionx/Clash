@@ -4,6 +4,8 @@ import { useSignMessage as usePrivySignMessage, useSignTransaction as usePrivySi
 import { VersionedTransaction } from '@solana/web3.js';
 import bs58 from 'bs58';
 import { imperialOrderSide } from '../lib/imperialOrderSide';
+import { imperialPosition, imperialCloseBps, imperialTradeRows, imperialFundingRows } from '../lib/imperialData';
+import { openImperialStream } from '../lib/imperialStream';
 import { useDex } from '../contexts/DexContext';
 import { usePlayer } from './useGodot';
 import { useCredentialOperationScope } from './useCredentialOperationScope';
@@ -26,23 +28,7 @@ const n = (value, fallback = 0) => Number.isFinite(Number(value)) ? Number(value
 const tokenFor = player => player?.token || window._playerToken || '';
 
 function normalizedPosition(row) {
-  const side = String(row?.side || '').toLowerCase() === 'short' || Number(row?.side) === 1 ? 'ask' : 'bid';
-  const sizeUsd = n(row?.sizeUsd ?? row?.size_usd);
-  const mark = n(row?.markPrice ?? row?.mark_price);
-  return {
-    ...row,
-    symbol: symbolOf(row?.asset || row?.symbol),
-    side,
-    amount: n(row?.sizeTokenAmount ?? row?.size ?? row?.quantity, mark > 0 ? sizeUsd / mark : sizeUsd),
-    size: n(row?.sizeTokenAmount ?? row?.size ?? row?.quantity, mark > 0 ? sizeUsd / mark : sizeUsd),
-    entry_price: n(row?.entryPrice ?? row?.entry_price),
-    mark_price: mark,
-    unrealized_pnl: n(row?.pnlUsd ?? row?.PnL ?? row?.pnl ?? row?.unrealizedPnl),
-    liquidation_price: n(row?.ourLiquidationPriceUsd ?? row?.liquidationPrice),
-    leverage: n(row?.effectiveLeverageX ?? row?.baseLeverageX, 1),
-    trade_index: String(row?.id ?? row?.positionPda ?? row?.position_pda),
-    pair_index: n(row?.underwriter),
-  };
+  return imperialPosition(row);
 }
 
 export function useImperial() {
@@ -91,6 +77,12 @@ export function useImperial() {
   const actionRef = useRef(false);
   const dexAccountSyncRef = useRef(null);
   const routeRequestRef = useRef(0);
+  const positionsVersionRef = useRef(0);
+  const indexMarksRef = useRef(new Map());
+  const refreshVersionRef = useRef(0);
+  const positionReadRef = useRef(0);
+  const actionTimersRef = useRef(new Set());
+  const [streamStatus, setStreamStatus] = useState('connecting');
 
   useEffect(() => {
     setRoutePreview(null);
@@ -102,6 +94,7 @@ export function useImperial() {
   }), [session, token]);
 
   useEffect(() => {
+    setSession(null); setPositions([]); setOrders([]); setAccount(null);
     if (!active || !walletAddr) { setSession(null); setSessionLoaded(true); return; }
     let cancelled = false;
     setSessionLoaded(false);
@@ -175,9 +168,9 @@ export function useImperial() {
     throw new Error('Connect a Solana wallet that supports message signing.');
   }, [adapterAddress, privySignMessage, privyWallet, solWallet]);
 
-  const applySnapshot = useCallback(snapshot => {
+  const applySnapshot = useCallback((snapshot, positionsVersion) => {
     setAccount(snapshot?.account || null);
-    setPositions(list(snapshot?.positions).map(normalizedPosition));
+    if (positionsVersion === positionsVersionRef.current) setPositions(list(snapshot?.positions).map(normalizedPosition));
     setOrders(list(snapshot?.orders).map(row => ({
       ...row, symbol: symbolOf(row?.asset || row?.symbol),
       order_id: String(row?.orderPda ?? row?.order_pda ?? row?.id),
@@ -191,10 +184,11 @@ export function useImperial() {
     for (const row of marks) {
       const symbol = symbolOf(row?.symbol || row?.asset);
       if (!symbol) continue;
-      const price = n(row?.markPrice ?? row?.mark_price ?? row?.price);
-      const venue = row?.venue || row?.underwriter || '';
+      const streamed = indexMarksRef.current.get(symbol);
+      const price = streamed && Date.now() - streamed.at < 30000 ? streamed.price : n(row?.markPrice ?? row?.mark_price ?? row?.price);
+      const venue = row?.venue ?? row?.underwriter ?? '';
       const current = bySymbol.get(symbol) || { symbol, price, mark_price: price, max_leverage: 250, lot_size: 0.000001, venues: [] };
-      current.venues.push({ venue, price });
+      current.venues.push(...(Array.isArray(row.venues) ? row.venues : venue ? [{ venue, price }] : []));
       if (!(current.price > 0) && price > 0) current.price = current.mark_price = price;
       bySymbol.set(symbol, current);
     }
@@ -210,28 +204,93 @@ export function useImperial() {
 
   const refresh = useCallback(async () => {
     if (!active || !token) return null;
+    const requestVersion = ++refreshVersionRef.current;
+    const positionsVersion = positionsVersionRef.current;
     try {
       await ensureDexAccount();
       const nextConfig = await api('/imperial/config', { noSession: true });
+      if (requestVersion !== refreshVersionRef.current) return null;
       setConfig(nextConfig);
       if (!session || !walletAddr) return nextConfig;
       const snapshot = await api(`/imperial/snapshot?wallet=${encodeURIComponent(walletAddr)}&profileIndex=${profileIndex}`);
-      applySnapshot(snapshot);
+      if (requestVersion !== refreshVersionRef.current) return null;
+      applySnapshot(snapshot, positionsVersion);
       setError('');
       return snapshot;
     } catch (cause) {
+      if (requestVersion !== refreshVersionRef.current) return null;
       if (cause?.status === 401) setSession(null);
       setError(cause?.message || 'Imperial data is unavailable');
       return null;
     }
   }, [active, api, applySnapshot, ensureDexAccount, profileIndex, session, token, walletAddr]);
 
+  const refreshPositions = useCallback(async () => {
+    if (!active || !session || !walletAddr) return null;
+    const version = positionsVersionRef.current;
+    const requestId = ++positionReadRef.current;
+    const result = await api(`/imperial/positions?wallet=${encodeURIComponent(walletAddr)}&profileIndex=${profileIndex}`);
+    if (version === positionsVersionRef.current && requestId === positionReadRef.current) setPositions(list(result.positions).map(normalizedPosition));
+    return result;
+  }, [active, api, profileIndex, session, walletAddr]);
+
+  useEffect(() => {
+    if (!active || !session || !walletAddr) return;
+    setPositions([]); setOrders([]);
+    const sameProfile = row => row.profileIndex == null || Number(row.profileIndex) === profileIndex;
+    let refreshTimer;
+    const reconcile = () => {
+      clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(() => refresh(), 400);
+    };
+    const stop = openImperialStream({
+      url: config?.ws_url || 'wss://api.imperial.space/ws',
+      subscriptions: [{type:'subscribe', wallet:walletAddr, positionState:true, tradeEvents:true}],
+      onStatus: setStreamStatus,
+      onMessage: message => {
+        if (message.wallet !== walletAddr) return;
+        if (message.type === 'position_state' && Array.isArray(message.positions)) {
+          positionsVersionRef.current++;
+          setPositions(message.positions.filter(sameProfile).map(normalizedPosition));
+        } else if (['orders_updated','position_closed','position_liquidated'].includes(message.type)) reconcile();
+        else if (message.type === 'order_rejected') { setError(`Imperial rejected the order: ${message.reasonCode || 'see history'}`); reconcile(); }
+      },
+    });
+    return () => { stop(); clearTimeout(refreshTimer); refreshVersionRef.current++; positionsVersionRef.current++; };
+  }, [active, config?.ws_url, profileIndex, refresh, session, walletAddr]);
+
+  useEffect(() => {
+    if (!active || !session) return;
+    return openImperialStream({
+      url: config?.market_ws_url || 'wss://api.imperial.space/ws/market',
+      subscriptions: [{type:'subscribe_mark_prices'},{type:'subscribe_funding_rates'}],
+      onMessage: message => {
+        if (message.type === 'mark_price_update' && message.venue === 'index' && Number(message.price) > 0) {
+          const symbol = symbolOf(message.symbol), price = Number(message.price);
+          indexMarksRef.current.set(symbol, {price,at:Date.now()});
+          setPrices(rows => [...rows.filter(row => row.symbol !== symbol), {symbol,price,mark_price:price}]);
+          setMarkets(rows => rows.map(row => row.symbol === symbol ? {...row,price,mark_price:price} : row));
+        } else if (message.type === 'funding_rate_update' && message.venue === 'phoenix' && message.longFundingRatePerHourPercent != null) {
+          setMarkets(rows => rows.map(row => row.symbol === symbolOf(message.symbol) ? {...row,funding_rate:Number(message.longFundingRatePerHourPercent)/100} : row));
+        }
+      },
+    });
+  }, [active, config?.market_ws_url, session]);
+
   useEffect(() => {
     if (!active || !sessionLoaded) return;
     refresh();
-    const timer = setInterval(() => { if (document.visibilityState === 'visible') refresh(); }, 20_000);
+    const timer = setInterval(() => { if (document.visibilityState === 'visible') refresh(); }, 30_000);
     return () => clearInterval(timer);
   }, [active, refresh, sessionLoaded]);
+
+  useEffect(() => {
+    if (!active || !session || streamStatus === 'live') return;
+    const poll = () => { if (document.visibilityState === 'visible') refreshPositions().catch(() => {}); };
+    poll();
+    const timer = setInterval(poll, 5000);
+    return () => clearInterval(timer);
+  }, [active, refreshPositions, session, streamStatus]);
 
   const activate = useCallback(async () => {
     if (!walletAddr) return { error: 'Connect a Solana wallet that supports message signing.' };
@@ -258,14 +317,26 @@ export function useImperial() {
     if (!session) return { error: 'Connect Imperial first.' };
     if (actionRef.current) return { error: 'Another Imperial action is pending.' };
     actionRef.current = true; setLoading(true); setError('');
+    const scope = capture();
     try {
       const result = await api(path, { method: options.method || 'POST', body: options.body });
-      setTimeout(() => refresh(), 1200);
-      setTimeout(() => api('/imperial/import-trades', { method: 'POST', body: { wallet: walletAddr, limit: 500 } }).catch(() => {}), 5000);
+      assert(scope);
+      const later = (fn, delay) => {
+        const timer = setTimeout(() => { actionTimersRef.current.delete(timer); fn(); }, delay);
+        actionTimersRef.current.add(timer);
+      };
+      later(() => refreshPositions().catch(() => {}), 1200);
+      later(() => refresh(), 3000);
+      later(() => api('/imperial/import-trades', { method: 'POST', body: { wallet: walletAddr, limit: 500 } }).catch(() => {}), 5000);
       return result;
     } catch (cause) { const message = cause?.message || 'Imperial action failed'; setError(message); return { error: message }; }
     finally { actionRef.current = false; setLoading(false); }
-  }, [api, refresh, session, walletAddr]);
+  }, [api, assert, capture, refresh, refreshPositions, session, walletAddr]);
+
+  useEffect(() => {
+    const timers = actionTimersRef.current;
+    return () => { for (const timer of timers) clearTimeout(timer); timers.clear(); };
+  }, [active, walletAddr, profileIndex, session]);
 
   const previewRoute = useCallback(async ({ symbol, side, notional, leverage, holdHours = 24 }) => {
     const requestId = ++routeRequestRef.current;
@@ -294,7 +365,12 @@ export function useImperial() {
     body: { wallet: walletAddr, symbol, side: imperialOrderSide(side), amount, notionalUsd: n(options.notional_usd, n(amount) * n(leverage, 1)), leverage, price, orderType: 'limit', profileIndex, pinnedUnderwriter: pinnedVenue, excludedVenues: excludedVenues.join(','), takeProfit: options.takeProfit ?? options.take_profit ?? options.tp, stopLoss: options.stopLoss ?? options.stop_loss ?? options.sl },
   }), [excludedVenues, pinnedVenue, profileIndex, runAction, walletAddr]);
 
-  const closePosition = useCallback((_symbol, _side, _amount, _pair, tradeIndex, fullClose = true) => runAction(`/imperial/positions/${encodeURIComponent(tradeIndex)}/close`, { body: { wallet: walletAddr, fullClose } }), [runAction, walletAddr]);
+  const closePosition = useCallback((_symbol, _side, amount, _pair, tradeIndex, fullClose = true) => {
+    try {
+      const closeBps = imperialCloseBps(positions, tradeIndex, amount, fullClose);
+      return runAction(`/imperial/positions/${encodeURIComponent(tradeIndex)}/close`, { body: { wallet: walletAddr, fullClose, closeBps } });
+    } catch (cause) { return Promise.resolve({error:cause.message}); }
+  }, [positions, runAction, walletAddr]);
   const cancelOrder = useCallback((_symbol, orderId) => runAction(`/imperial/orders/${encodeURIComponent(orderId)}`, { method: 'DELETE' }), [runAction]);
   const setTpsl = useCallback((_symbol, _side, takeProfit, stopLoss, _pair, tradeIndex) => runAction(`/imperial/positions/${encodeURIComponent(tradeIndex)}/tpsl`, { method: 'PATCH', body: { wallet: walletAddr, takeProfit, stopLoss } }), [runAction, walletAddr]);
 
@@ -325,13 +401,13 @@ export function useImperial() {
 
   const fetchTradeHistory = useCallback(async options => {
     if (!session) return [];
-    const result = await api(`/imperial/history?wallet=${encodeURIComponent(walletAddr)}&profileIndex=${profileIndex}&limit=${options?.limit || 100}`);
-    return result?.orders || [];
+    const result = await api(`/imperial/history?kind=trades&wallet=${encodeURIComponent(walletAddr)}&profileIndex=${profileIndex}&limit=${options?.limit || 100}`, {signal:options?.signal});
+    return imperialTradeRows(result?.trades);
   }, [api, profileIndex, session, walletAddr]);
   const fetchFundingHistory = useCallback(async options => {
     if (!session) return [];
-    const result = await api(`/imperial/history?wallet=${encodeURIComponent(walletAddr)}&profileIndex=${profileIndex}&limit=${options?.limit || 100}`);
-    return result?.funding || [];
+    const result = await api(`/imperial/history?kind=funding&wallet=${encodeURIComponent(walletAddr)}&profileIndex=${profileIndex}&limit=${options?.limit || 100}`, {signal:options?.signal});
+    return imperialFundingRows(result?.funding);
   }, [api, profileIndex, session, walletAddr]);
   const fetchCandles = useCallback(async (symbol, options = {}) => {
     const params = new URLSearchParams({ dex: 'phoenix', symbol: symbolOf(symbol), interval: String(options.interval || '5m'), limit: String(options.limit || 500) });
@@ -361,7 +437,7 @@ export function useImperial() {
     connected: !!walletAddr, hasWallet: !!walletAddr, walletAddr, walletMismatch: false,
     account, positions, orders, markets, prices, balance: n(account?.equity ?? account?.balance),
     freeCollateral: n(account?.available_to_spend), walletUsdc: null, spotUsdc: null,
-    leverageSettings: {}, marginModes: {}, dataReady: setupVerified && markets.length > 0,
+    leverageSettings: {}, marginModes: Object.fromEntries(markets.map(row => [row.symbol, account?.margin_mode !== 'unified'])), dataReady: setupVerified && markets.length > 0,
     accountReady: !!account, setupVerified, isReady: setupVerified, activationStep: setupVerified ? 'ready' : 'connect',
     inviteStatus: { ...(config || {}), account_exists: !!account, session_saved: setupVerified },
     builderConfig: config?.builder_status || null, referralStatus: config?.partner_status || null,
@@ -370,17 +446,17 @@ export function useImperial() {
     imperialExcludedVenues: excludedVenues, setImperialExcludedVenues: setExcludedVenues,
     imperialRoutePreview: routePreview, previewImperialRoute: previewRoute,
     loading: loading || (active && !sessionLoaded), error, clearError: () => setError(''),
-    refresh, fetchAccount: refresh, fetchPositions: refresh, fetchOrders: refresh,
+    refresh, fetchAccount: refresh, fetchPositions: refreshPositions, fetchOrders: refresh,
     fetchTradeHistory, fetchFundingHistory, fetchCandles,
     placeMarketOrder, placeLimitOrder, closePosition, cancelOrder,
     setTpsl,
     setLeverage: async () => ({ success: true, ui_only: true }),
-    setMarginMode: (_symbol, mode) => runAction('/imperial/profile/margin-mode', { body: { wallet: walletAddr, profileIndex, marginMode: mode } }),
+    setMarginMode: (_symbol, mode) => runAction('/imperial/profile/margin-mode', { body: { wallet: walletAddr, profileIndex, marginMode: mode === true || mode === 'isolated' ? 'isolated' : 'unified' } }),
     depositToPacifica: amount => transfer(amount, 'deposit'), withdraw: amount => transfer(amount, 'withdraw'),
     activate, disconnect, openReferralJoin: () => window.open(IMPERIAL_APP_URL, '_blank', 'noopener,noreferrer'),
     claimGold, goldEarned, clearGoldEarned: () => setGoldEarned(null),
   }), [account, activate, active, excludedVenues, pinnedVenue, cancelOrder, claimGold, closePosition, config, disconnect, error,
     fetchCandles, fetchFundingHistory, fetchTradeHistory, goldEarned, loading, markets, orders, placeLimitOrder,
-    placeMarketOrder, positions, previewRoute, prices, profileIndex, refresh, routePreview, runAction, sessionLoaded,
+    placeMarketOrder, positions, previewRoute, prices, profileIndex, refresh, refreshPositions, routePreview, runAction, sessionLoaded,
     setTpsl, setupVerified, transfer, walletAddr]);
 }

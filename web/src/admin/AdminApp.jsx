@@ -4748,6 +4748,13 @@ function EarningsDexCard({ row, snapshot = null, refreshing = false, onRefresh }
       <div className="earnings-meta">
         {address ? <span className="admin-mono">{short(address, 10, 5)}</span> : null}
         {extra.map((item) => <span key={item}>{item}</span>)}
+        {row.dex === 'imperial' && <>
+          <span>Builder {row.builder_code || 'CLASH'} · {row.active ? 'active' : 'unavailable'}</span>
+          <span>{row.builder_fee_bps ?? '—'} bps on collateral per open/close</span>
+          <span>Accrued {row.exact ? fmtUsd(Number(row.earned_usd), 6) : 'unavailable'}</span>
+          <span>Paid {row.paid_usd == null ? 'unavailable' : fmtUsd(Number(row.paid_usd), 6)}</span>
+          <span>Claimable {row.claimable_usd == null ? 'unavailable' : fmtUsd(Number(row.claimable_usd), 6)}</span>
+        </>}
       </div>
       {note && <div className="earnings-note">{note}</div>}
     </div>
@@ -5958,6 +5965,7 @@ function dexAccent(dex) {
     katana: '#eab308',
     gmtrade: '#22c55e',
     flash: '#22c55e',
+    imperial: '#d7b36b',
   };
   return map[String(dex || '').toLowerCase()] || 'var(--admin-blue)';
 }

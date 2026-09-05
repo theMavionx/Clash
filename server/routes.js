@@ -26924,8 +26924,8 @@ function referralFuturesGrossUsd(row) {
     const verified = String(proof?.builderCode || '').toUpperCase() === String(process.env.IMPERIAL_BUILDER_CODE || 'CLASH').toUpperCase()
       && !!proof?.signature;
     const bps = Number(proof?.builderFeeBps || referralFuturesEstimateBps('imperial'));
-    const notional = referralFuturesNotional(row);
-    return verified && bps > 0 && notional > 0 ? notional * (bps / 10000) : 0;
+    const collateral = Number(proof?.builderFeeBasisUsd);
+    return verified && bps > 0 && collateral > 0 ? collateral * (bps / 10000) : 0;
   }
   const estimatedBps = referralFuturesEstimateBps(dex);
   const notional = referralFuturesNotional(row);

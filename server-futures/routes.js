@@ -7080,6 +7080,14 @@ router.get('/imperial/route', auth, async (req, res) => {
   } catch (cause) { imperialRouteError(res, cause, 'Failed to quote Imperial route'); }
 });
 
+router.get('/imperial/positions', auth, async (req, res) => {
+  try {
+    const owner = imperialOwner(req, res);
+    if (!owner) return;
+    res.json(await imperial.positionSnapshot(owner, req.query.profileIndex));
+  } catch (cause) { imperialRouteError(res, cause, 'Failed to load Imperial positions'); }
+});
+
 router.get('/imperial/snapshot', auth, async (req, res) => {
   try {
     const owner = imperialOwner(req, res);

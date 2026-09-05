@@ -4097,3 +4097,15 @@ Follow-up:
 
 - Owner: “а чого воно все криво так стоїть? + там має бути вибір як на скріншоті і поп ап чомусь в іншій стороні екрану відкривається”.
 - Fix selector sizing, anchor the popup to the trading ticket, and offer venue selection before entering size. Verify off-centre desktop and mobile layouts before the authorized production update.
+
+## UR-2026-09-05-IMPERIAL-INLINE-ALIGNMENT
+
+- Owner: “я не розумію чому 20х і стрілочка не по цетру і тупо криво стоять”.
+- Read-only production DOM check: label 13px/20px, leverage 11px/16.5px, text chevron inherits16px/normal. Normalize label metrics and replace chevron glyph with centred SVG; verify visually.
+
+## UR-2026-09-05-IMPERIAL-AUDIT
+
+- Owner: position exists in Imperial but missing/delayed in Clash; recheck every integration function against docs; verify CLASH attribution and accrued fee; add Imperial throughout admin.
+- Follow-up: popup is too large relative to trading window; replace the separate route row with one icon near the top, with all routing/settings inside its compact popup.
+- Follow-up: inaccurate position data (1x, CROSS, PnL%, liquidation price) and large delay; use WS/live updates where supported. “додавай всі мої задачі всписок і виконуй потім на прод”.
+- Checklist: production/reports/imperial-integration-audit-2026-09-05.md.

@@ -3412,7 +3412,8 @@ async function fetchImperialEarnings() {
   const earned = amounts.earned;
   const feeBps = Number(summary?.feeBps ?? summary?.builderFeeBps);
   const exact = Number.isFinite(earned);
-  const estimated = Number.isFinite(feeBps) ? local.volume_usd * feeBps / 10_000 : 0;
+  // Imperial charges on collateral, not leveraged notional. Without a provider
+  // summary, volume alone cannot establish fees or payouts.
   return {
     earned_usd: exact ? roundUsd(earned) : 0,
     paid_usd: amounts.paid === null ? null : roundUsd(amounts.paid),
@@ -3426,7 +3427,8 @@ async function fetchImperialEarnings() {
     trades: local.trades,
     trades_24h: local.trades_24h,
     traders: local.traders,
-    estimated_fee_usd: exact ? 0 : roundUsd(estimated),
+    estimated_fee_usd: null,
+    builder_fee_basis: 'collateral',
     builder_fee_bps: Number.isFinite(feeBps) ? feeBps : null,
     latest_fill_at: local.latest_fill_at,
     recent_proofs: local.recent_proofs,

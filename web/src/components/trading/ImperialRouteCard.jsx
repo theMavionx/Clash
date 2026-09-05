@@ -136,6 +136,7 @@ export default function ImperialRouteCard({
   profileIndex = 0,
   onProfileChange,
   availableVenues = [],
+  builderFeeBps,
 }) {
   const selectedVenue = venueKey(quote?.venue ?? quote?.underwriter ?? quote?.selectedVenue);
   const candidates = useMemo(() => candidateRows(quote, availableVenues, pinnedVenue), [quote, availableVenues, pinnedVenue]);
@@ -157,7 +158,8 @@ export default function ImperialRouteCard({
         width: vv?.width || window.innerWidth, height: vv?.height || window.innerHeight };
       const rect = anchorRef.current.getBoundingClientRect();
       const desiredHeight = dialog.firstElementChild.getBoundingClientRect().height + 2;
-      const position = imperialPopoverPosition(rect, viewport, desiredHeight);
+      const panelWidth = anchorRef.current.closest('.futures-market-strip, main')?.getBoundingClientRect().width || 320;
+      const position = imperialPopoverPosition(rect, viewport, desiredHeight, panelWidth);
       for (const [key, value] of Object.entries(position)) dialog.style[key] = `${value}px`;
     };
     place();
@@ -185,25 +187,18 @@ export default function ImperialRouteCard({
 
   return (
     <section ref={anchorRef} className="imperial-route-card" aria-label="Imperial route">
-      <button type="button" className="imperial-route-trigger" aria-haspopup="dialog"
+      <button type="button" className="imperial-route-trigger imperial-route-trigger--icon" aria-haspopup="dialog"
+        aria-label={`Imperial route: ${displayVenue ? venueLabel(displayVenue) : 'Auto'}, ${auto ? 'automatic' : 'manual'}`}
+        title={`Imperial route · ${displayVenue ? venueLabel(displayVenue) : 'Auto-route'} · ${auto ? 'Auto' : 'Manual'}`}
         aria-expanded={Boolean(view)} onClick={() => { setExpandedVenue(''); setView('venues'); }}>
-        {displayVenue && <VenueMark venue={displayVenue} />}
-        <strong>{displayVenue ? venueLabel(displayVenue) : 'Auto-route'}</strong>
-        {requestedLeverage > 0 && <span className="imperial-route-muted">{leverage(requestedLeverage)}</span>}
-        <span aria-hidden="true">⌄</span>
-      </button>
-      <button type="button" className="imperial-route-settings" aria-label="Route settings"
-        onClick={() => setView('settings')}>
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
-          <path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3" fill="currentColor"/><circle cx="15" cy="17" r="3" fill="currentColor"/>
-        </svg>
+        {displayVenue ? <VenueMark venue={displayVenue} /> : <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3"/><circle cx="15" cy="17" r="3"/></svg>}
       </button>
       <dialog ref={dialogRef} className="imperial-route-dialog" aria-label={view === 'settings' ? 'Route settings' : 'Choose venue'}
         onCancel={() => setView(null)} onClose={() => setView(null)}
         onClick={event => { if (event.target === event.currentTarget) setView(null); }}>
         <div className="imperial-route-popup">
           <header className="imperial-route-popup__header">
-            <span>{view === 'settings' ? 'Route settings' : 'Venue'}</span>
+            <span>{view === 'settings' ? 'Route settings' : `Venue${requestedLeverage > 0 ? ` · ${leverage(requestedLeverage)}` : ''}`}</span>
             <button type="button" aria-label="Close route dialog" onClick={() => setView(null)}>×</button>
           </header>
           {view === 'settings' ? (
@@ -282,6 +277,7 @@ export default function ImperialRouteCard({
                 })}
               </div>
               {quote?.reason && <p className="imperial-route-muted imperial-route-reason">{auto ? quote.reason : `${venueLabel(displayVenue)} selected for this order.`}</p>}
+              {builderFeeBps > 0 && <p className="imperial-route-muted">Additional CLASH fee: {builderFeeBps} bps ({builderFeeBps / 100}%) on collateral, per open/close.</p>}
               <button type="button" className="imperial-route-manage" onClick={() => setView('settings')}>Manage allowed venues</button>
             </>
           )}

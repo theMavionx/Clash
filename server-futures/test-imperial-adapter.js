@@ -137,6 +137,19 @@ test('Imperial close derives venue, side and profile from the authoritative posi
   assert.equal(bodies[0].closeBps, 10_000);
   assert.equal(bodies[0].builderCode, 'CLASH');
   assert.equal(bodies[0].marketPrice, 50_000_000_000_000);
+  await imperial.closePosition({ playerId:'p1',owner:WALLET,jwt:'jwt',positionId:'position-1',body:{fullClose:false,closeBps:2500},fetchImpl });
+  assert.equal(bodies[1].closeBps,2500);
+});
+
+test('Imperial history tabs read independently and preserve funding micro units', async () => {
+  const calls=[];
+  const fetchImpl=async url=>{const path=new URL(url).pathname;calls.push(path);
+    if(path.endsWith('/trades'))return response(200,{dataList:[{id:'a',profileIndex:0},{id:'b',profileIndex:1}]});
+    if(path.endsWith('/funding-history'))return response(200,{events:[{amount:'49000',eventAt:1788637758}]});
+    throw new Error('unrelated history read');};
+  assert.equal((await imperial.history('jwt',WALLET,{kind:'trades'},fetchImpl)).trades.length,1);
+  assert.equal((await imperial.history('jwt',WALLET,{kind:'funding'},fetchImpl)).funding[0].amount,'49000');
+  assert.equal(calls.length,2);
 });
 
 test('Imperial keeps risk-reducing close available while CLASH activation is pending', async () => {
@@ -222,11 +235,33 @@ test('Imperial snapshot follows the documented read query names and native USDC 
   assert.equal(snapshot.account.flash_v2_available_usdc, 7.5);
   assert.equal(snapshot.marks[0].price, 150);
   assert.equal(snapshot.funding[0].fundingRate, 0.0001);
-  for (const suffix of ['/positions', '/orders', '/trades']) {
+  for (const suffix of ['/positions', '/orders']) {
     const [path] = [...queries.keys()].filter(key => key.endsWith(suffix));
     assert.equal(queries.get(path).walletAddress, WALLET);
     assert.equal(queries.get(path).wallet, undefined);
   }
+});
+
+test('Imperial converted lifecycle actions import actual executed notional, not requested size', () => {
+  const action = {status:'converted', tx1Signature:'submit',tx2Signature:'fill',tx2Timestamp:1788637758,
+    sizeDelta:'70', sizeDeltaTokens:'0.00087763',orderSizeUsd:'100',entryPrice:'79760.284249',collateralDeposited:'3.5'};
+  const [row] = imperial.executionRowsFromActions({dataList:[{actions:[action]}]}, {tx_signature:'submit'});
+  assert.equal(row.notional,70); assert.equal(row.amount,'0.00087763');
+  assert.equal(row.createdAt,'2026-09-05T19:49:18.000Z');
+  assert.equal(imperial.executionRowsFromActions([{actions:[{...action,tx2Signature:null}]}], {tx_signature:'submit'}).length,0);
+  assert.equal(imperial.executionRowsFromActions([{actions:[{...action,status:'failed'}]}], {tx_signature:'submit'}).length,0);
+});
+
+test('Imperial partial close without an explicit fraction fails before any request', async () => {
+  await assert.rejects(imperial.closePosition({owner:WALLET,body:{fullClose:false},fetchImpl:()=>{throw new Error('must not fetch');}}), /requires closeBps/);
+});
+
+test('Imperial lightweight positions read is profile-scoped and independent of balances/history', async () => {
+  const result = await imperial.positionSnapshot(WALLET,1,async url => {
+    assert.equal(new URL(url).pathname,'/api/v1/positions');
+    return response(200,{dataList:[{id:'other',profileIndex:0},{id:'mine',profileIndex:1}]});
+  });
+  assert.deepEqual(result.positions.map(row=>row.id),['mine']);
 });
 
 test('Imperial submits entry plus TP/SL as one native batch with CLASH on every leg', async () => {

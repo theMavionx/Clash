@@ -1,0 +1,50 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {imperialPosition,imperialCloseBps,imperialTradeRows,imperialFundingRows} from './src/lib/imperialData.js';
+import {openImperialStream} from './src/lib/imperialStream.js';
+const raw={id:'fixture',asset:'BTC',side:'long',profileIndex:0,underwriter:'jupiter',sizeUsd:'70',sizeTokenAmount:'0.00087763',collateralUsd:'3.434131',leverageX:'20.383613787592846',pnlUsd:'-0.1157',pnlPercent:'-3.3528',markPrice:'79744',entryPrice:'79760.284249',liquidationPrice:'76062.84'};
+test('Imperial live decimals, margin, return and venue identity are preserved',()=>{
+ const p=imperialPosition(raw);
+ assert.equal(p.leverage,20.383613787592846);assert.equal(p.margin,3.434131);assert.equal(p.pnl_pct,-3.3528);
+ assert.equal(p.unrealized_pnl,-0.1157);assert.equal(p.is_isolated,true);assert.equal(p.pair_index,0);
+ assert.equal(p.amount,0.00087763);assert.equal(p.size_usd,70);assert.equal(p.mark_price,79744);
+ assert.equal(p.liquidation_price,76062.84);
+});
+test('Imperial own liquidation overrides venue price; cross leg does not invent one',()=>{
+ assert.equal(imperialPosition({...raw,ourLiquidationPriceUsd:'77000'}).liquidation_price,77000);
+ const p=imperialPosition({...raw,directVenue:{marginMode:'unified',positionInitialMarginUsd:'1'}});
+ assert.equal(p.is_isolated,false);assert.equal(p.liquidation_price,null);assert.equal(p.margin,1);
+});
+test('Imperial partial close uses requested fraction, never silently all',()=>{
+ const p=imperialPosition(raw);
+ assert.equal(imperialCloseBps([p],p.trade_index,p.amount/4,false),2500);
+ assert.equal(imperialCloseBps([p],p.trade_index,p.amount,true),10000);
+ assert.throws(()=>imperialCloseBps([],p.trade_index,p.amount/4,false),/Refresh/);
+});
+test('native executions, not order intent, populate history and micro-USD funding',()=>{
+ const lifecycle={...raw,actions:[{id:'a',status:'converted',tx2Signature:'settled',tx2Timestamp:1788637758,sizeDelta:'70',sizeDeltaTokens:'.00087763',orderSizeUsd:'100',actionType:'increase',entryPrice:'79760.28'},{status:'pending',sizeDelta:'200'}]};
+ const rows=imperialTradeRows([lifecycle]);assert.equal(rows.length,1);assert.equal(rows[0].notional_usd,70);assert.equal(rows[0].created_at,1788637758000);
+ assert.equal(imperialFundingRows([{amount:'49000',eventAt:1788637758}])[0].payout,-.049);
+ assert.equal(imperialFundingRows([{amount:'-1000',eventAt:1788637758}])[0].payout,.001);
+ assert.equal(imperialPosition({...raw,tpslOrders:[{orderType:'take_profit',triggerPriceUsd:'81000'}]}).take_profit,81000);
+});
+test('wallet stream subscribes, rejects out-of-order frames, accepts empty state and cleans up',()=>{
+ let socket;const received=[],statuses=[];const intervals=new Set();
+ const timers={setInterval(fn){intervals.add(fn);return fn},clearInterval(fn){intervals.delete(fn)},setTimeout(){},clearTimeout(){}};
+ class FakeSocket{constructor(url){socket=this;this.url=url;this.sent=[];this.readyState=1}send(m){this.sent.push(JSON.parse(m))}close(){this.closed=true}}
+ const stop=openImperialStream({url:'wss://api.imperial.space/ws',subscriptions:[{type:'subscribe',wallet:'fixture',positionState:true}],WebSocketImpl:FakeSocket,timers,onMessage:m=>received.push(m),onStatus:s=>statuses.push(s)});
+ socket.onopen();assert.equal(socket.sent[0].positionState,true);assert.equal(socket.sent[0].jwt,undefined);
+ for(const seq of [2,1,2,3])socket.onmessage({data:JSON.stringify({type:'position_state',seq,positions:seq===3?[]:[raw]})});
+ assert.deepEqual(received.map(m=>m.seq),[2,3]);assert.deepEqual(received[1].positions,[]);
+ assert.equal(statuses.at(-1),'live');stop();assert.equal(socket.closed,true);assert.equal(intervals.size,0);
+});
+test('stream reconnect resets sequence and stop cancels backoff',()=>{
+ const sockets=[], received=[];let pending;
+ const timers={setInterval(){},clearInterval(){},setTimeout(fn){pending=fn;return fn},clearTimeout(fn){if(pending===fn)pending=null}};
+ class Socket{constructor(){sockets.push(this);this.readyState=1}send(){}close(){this.onclose?.()}}
+ const stop=openImperialStream({url:'wss://fixture',subscriptions:[],WebSocketImpl:Socket,timers,onMessage:m=>received.push(m.seq)});
+ sockets[0].onopen();sockets[0].onmessage({data:JSON.stringify({type:'position_state',seq:9})});sockets[0].close();
+ pending();sockets[1].onopen();sockets[1].onmessage({data:JSON.stringify({type:'position_state',seq:1})});
+ assert.deepEqual(received,[9,1]);assert.equal(sockets[0].onmessage,null);
+ sockets[1].close();stop();assert.equal(pending,null);
+});

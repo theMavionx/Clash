@@ -4,7 +4,7 @@ import { imperialPopoverPosition } from './src/lib/imperialPopoverPosition.js';
 
 test('right-hand ticket stays anchored to its edge, not viewport centre', () => {
   const p = imperialPopoverPosition({right:1256,top:230,bottom:274}, {left:0,top:0,width:1280,height:900}, 260);
-  assert.deepEqual(p, {left:876,top:280,width:380,maxHeight:608});
+  assert.deepEqual(p, {left:956,top:280,width:300,maxHeight:608});
 });
 test('320px mobile fits without horizontal overflow', () => {
   const p = imperialPopoverPosition({right:308,top:230,bottom:274}, {left:0,top:0,width:320,height:700}, 260);

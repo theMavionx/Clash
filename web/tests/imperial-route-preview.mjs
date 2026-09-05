@@ -4,9 +4,11 @@ import { createServer } from 'vite';
 import react from '@vitejs/plugin-react';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
+import { WebSocketServer } from 'ws';
 const require = createRequire(import.meta.url);
 const imperial = require('../../server-futures/imperial.js');
 const wallet = '11111111111111111111111111111111';
+const position = {id:'ws-fixture',wallet,asset:'BTC',side:'long',profileIndex:0,underwriter:'jupiter',sizeUsd:'70',sizeTokenAmount:'.00087763',collateralUsd:'3.434131',leverageX:'20.383613787592846',pnlUsd:'-.1157',pnlPercent:'-3.3528',markPrice:'79744',entryPrice:'79760.284249',liquidationPrice:'76063.27'};
 const root = fileURLToPath(new URL('../', import.meta.url));
 const entry = '/__imperial-preview.jsx';
 const mock = '/__imperial-deps.js';
@@ -14,7 +16,7 @@ const plugin = {
   name: 'imperial-preview', enforce: 'pre',
   resolveId(id, importer) {
     if ([entry, mock].includes(id)) return id;
-    if (importer?.endsWith('/useImperial.js') && id !== 'react' && !id.includes('imperialOrderSide')) return mock;
+    if (importer?.endsWith('/useImperial.js') && id !== 'react' && !/imperial(OrderSide|Data|Stream)/.test(id)) return mock;
   },
   load(id) {
     if (id === mock) return `
@@ -69,17 +71,19 @@ const plugin = {
           setResult(result);
         }
         return <main>
-          <div className="chart"><span>SOL / USD · chart area</span><svg viewBox="0 0 360 100"><path d="M0 85 L30 65 L55 76 L90 45 L115 60 L150 40 L190 48 L220 20 L260 34 L300 10 L360 25" fill="none" stroke="#3bcf9c" strokeWidth="2"/></svg></div>
+          <header style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}><strong>SOL / USD</strong>
           <ImperialRouteCard quote={api.imperialRoutePreview} notional={empty ? 0 : 100} requestedLeverage={lev}
             availableVenues={[{venue:'phoenix'},{venue:'jupiter'}]}
             pinnedVenue={api.imperialPinnedVenue} onVenueChange={api.setImperialPinnedVenue}
             excludedVenues={api.imperialExcludedVenues} onExcludedVenuesChange={api.setImperialExcludedVenues}
-            profileIndex={api.imperialProfileIndex} onProfileChange={api.setImperialProfileIndex}/>
+            profileIndex={api.imperialProfileIndex} onProfileChange={api.setImperialProfileIndex} builderFeeBps={10}/></header>
+          <div className="chart"><span>Chart area</span><svg viewBox="0 0 360 100"><path d="M0 85 L30 65 L55 76 L90 45 L115 60 L150 40 L190 48 L220 20 L260 34 L300 10 L360 25" fill="none" stroke="#3bcf9c" strokeWidth="2"/></svg></div>
           <nav>{['market','limit'].map(v=><button aria-pressed={type===v} key={v} onClick={()=>setType(v)}>{v==='market'?'Market':'Limit'}</button>)}</nav>
           <label>Leverage <input aria-label="Leverage" type="number" value={lev} onChange={e=>setLev(Number(e.target.value))}/></label>
           <p>Position size $100 · margin ${'$'}{(100/lev).toFixed(2)}</p>
           <div className="actions"><button onClick={()=>order('bid')}>Long (simulated)</button><button onClick={()=>order('ask')}>Short (simulated)</button></div>
           <p>Local verification. Public route reads; simulated orders only.</p>
+          <output aria-label="Stream position">{JSON.stringify(api.positions.map(p=>({leverage:p.leverage,mark:p.mark_price,pnl:p.unrealized_pnl,pct:p.pnl_pct,isolated:p.is_isolated})))}</output>
           <pre aria-label="Order result">{result ? JSON.stringify(result,null,2) : ''}</pre>
         </main>;
       }
@@ -96,7 +100,12 @@ const plugin = {
           const body = raw ? JSON.parse(raw) : {};
           let result = {};
           if (url.pathname.endsWith('/route')) result = await imperial.getRoute(Object.fromEntries(url.searchParams));
-          else if (url.pathname.endsWith('/snapshot')) result = {account:{equity:100,available_to_spend:100},marks:[{symbol:'SOL',price:100,venue:'phoenix'}]};
+          else if (url.pathname.endsWith('/config')) result = {ws_url:'ws://127.0.0.1:5188',market_ws_url:'ws://127.0.0.1:5188'};
+          else if (url.pathname.endsWith('/positions')) result = {positions:[position]};
+          else if (url.pathname.endsWith('/snapshot')) {
+            await new Promise(resolve=>setTimeout(resolve,1500));
+            result = {account:{equity:100,available_to_spend:100},positions:[{...position,pnlUsd:'-99',markPrice:'1'}],marks:[{symbol:'SOL',price:100,venue:'phoenix'}]};
+          }
           else if (url.pathname.endsWith('/orders') && req.method === 'POST') {
             let wire;
             const route = await imperial.getRoute({ ...body, notional:body.notionalUsd });
@@ -138,4 +147,18 @@ const server=await createServer({root,configFile:false,plugins:[plugin,react()],
   optimizeDeps:{noDiscovery:true,include:['react','react-dom/client'],entries:[]},
   server:{host:'127.0.0.1',port:5187,strictPort:true},define:{'import.meta.env.VITE_PRIVY_APP_ID':'""'}});
 await server.listen();
+const stream = new WebSocketServer({host:'127.0.0.1',port:5188});
+stream.on('connection',socket=>{
+  let timer,seq=0;
+  socket.on('message',data=>{
+    const message=JSON.parse(data.toString());
+    if(message.type==='ping')socket.send(JSON.stringify({type:'pong'}));
+    if(message.type==='subscribe'){
+      clearInterval(timer);
+      const send=()=>socket.send(JSON.stringify({type:'position_state',wallet,seq:++seq,positions:[{...position,markPrice:String(79744+seq/100)}]}));
+      send();timer=setInterval(send,1000);
+    }
+  });
+  socket.on('close',()=>clearInterval(timer));
+});
 console.log('Imperial UI verification: http://127.0.0.1:5187');
