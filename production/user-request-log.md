@@ -4082,3 +4082,13 @@ Follow-up:
   per-route fees/slippage/borrow/liquidation estimate, required deposit and
   boost loan; a live public Imperial quote was used to verify the response
   shape before build and deployment.
+
+## UR-2026-09-05-IMPERIAL-ROUTE-POPOVER
+
+- Owner requested compact Imperial routing immediately below the mobile chart,
+  above Market/Limit; click-open popups for venues, costs and settings; working
+  Auto-route/manual venue selection; remove the separate boost switch and
+  verify automatic leverage/loan behavior against Imperial documentation.
+- Includes the pending venue logos from the preceding request.
+- Follow-up: “Imperial side must be long or short” prevents opening a trade.
+  Confirmed shared ticket passes bid/ask; normalize at client and server boundaries.

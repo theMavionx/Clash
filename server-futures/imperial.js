@@ -37,6 +37,13 @@ function profileIndex(value) {
   return out;
 }
 
+function orderSide(value) {
+  const side = String(value ?? '').trim().toLowerCase();
+  if (['long', 'bid', 'buy'].includes(side)) return 'long';
+  if (['short', 'ask', 'sell'].includes(side)) return 'short';
+  throw error('Imperial side must be long or short.');
+}
+
 function positive(value, label) {
   const out = Number(value);
   if (!Number.isFinite(out) || out <= 0) throw error(`${label} must be greater than zero.`);
@@ -66,7 +73,7 @@ function apiList(value) {
 async function request(path, { method = 'GET', jwt = '', body, query, signal, fetchImpl = fetch } = {}) {
   const url = new URL(`${API_BASE}${path.startsWith('/') ? path : `/${path}`}`);
   for (const [key, value] of Object.entries(query || {})) {
-    if (value !== undefined && value !== null && value !== '') url.searchParams.set(key, String(value));
+    if (value !== undefined && value !== null && (value !== '' || key === 'excludedVenues')) url.searchParams.set(key, String(value));
   }
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -161,8 +168,17 @@ async function registerPartner(jwt, fetchImpl = fetch) {
 async function getRoute(input, fetchImpl = fetch) {
   const symbol = String(input?.symbol || input?.asset || '').toUpperCase().replace(/[-/](PERP|USD|USDC)$/i, '');
   if (!symbol) throw error('Imperial market symbol is required.');
-  const side = String(input?.side || '').toLowerCase();
-  if (!['long', 'short'].includes(side)) throw error('Imperial side must be long or short.');
+  const side = orderSide(input?.side);
+  const pinnedInput = input?.stickyVenue ?? input?.pinnedUnderwriter;
+  const pinned = venueName(pinnedInput);
+  if (pinnedInput != null && pinnedInput !== '' && !pinned) throw error('Unknown Imperial venue.');
+  let excluded;
+  if (input?.excludedVenues != null) {
+    const entries = Array.isArray(input.excludedVenues) ? input.excludedVenues : String(input.excludedVenues).split(',');
+    const names = entries.map(value => String(value).trim()).filter(Boolean);
+    if (names.some(value => !venueName(value))) throw error('Unknown excluded Imperial venue.');
+    excluded = [...new Set(names.map(venueName))].join(',');
+  }
   return request('/route', {
     query: {
       asset: symbol,
@@ -172,9 +188,9 @@ async function getRoute(input, fetchImpl = fetch) {
       holdHours: Math.max(1, Math.min(720, Number(input?.holdHours || 24))),
       wallet: input?.wallet || undefined,
       profileIndex: input?.profileIndex ?? undefined,
-      stickyVenue: venueName(input?.stickyVenue ?? input?.pinnedUnderwriter) || undefined,
+      stickyVenue: pinned || undefined,
       subaccountDefaultVenue: venueName(input?.subaccountDefaultVenue) || undefined,
-      excludedVenues: input?.excludedVenues || undefined,
+      excludedVenues: excluded,
     },
     fetchImpl,
   });
@@ -236,7 +252,7 @@ async function encodedMarketPrice({ symbol, side, underwriter, price, resting = 
 
 function makeOpenOrder(owner, body, route) {
   const symbol = String(body?.symbol || '').toUpperCase().replace(/[-/](PERP|USD|USDC)$/i, '');
-  const side = String(body?.side || '').toLowerCase();
+  const side = orderSide(body?.side);
   const notional = positive(body?.notionalUsd ?? body?.notional_usd ?? body?.amount, 'Notional');
   const leverage = positive(body?.leverage || 1, 'Leverage');
   const selected = venueId(route);
@@ -259,7 +275,9 @@ function makeOpenOrder(owner, body, route) {
     fundingStatus: 0,
     builderCode: BUILDER_CODE,
   };
-  const loanUsd = body?.boost === true ? routeLoanUsd(route) : 0;
+  // The router calculates reach/safer-liq borrowing for the requested leverage.
+  // Never accept a loan amount from the client.
+  const loanUsd = routeLoanUsd(route);
   if (loanUsd > 0) out.loanAmountUsd = usdMicro(loanUsd, 'Boost loan');
   return out;
 }
@@ -301,6 +319,7 @@ function recordOrderProof(db, base, payload, result, orderType) {
 
 async function placeOrder({ playerId, owner, jwt, body, db, fetchImpl = fetch }) {
   const linked = wallet(owner);
+  body = { ...body, side: orderSide(body?.side) };
   const builderStatus = await assertBuilder(fetchImpl);
   const route = await getRoute({
     symbol: body?.symbol,
@@ -311,7 +330,18 @@ async function placeOrder({ playerId, owner, jwt, body, db, fetchImpl = fetch })
     wallet: linked,
     profileIndex: profileIndex(body?.profileIndex),
     pinnedUnderwriter: body?.pinnedUnderwriter,
+    excludedVenues: body?.excludedVenues,
   }, fetchImpl);
+  const pinned = venueName(body?.pinnedUnderwriter);
+  if (body?.pinnedUnderwriter != null && body.pinnedUnderwriter !== '' && !pinned) {
+    throw error('Unknown Imperial venue.');
+  }
+  if (pinned && UNDERWRITER_LABEL[venueId(route)] !== pinned) {
+    throw error('The selected venue cannot serve this order. Choose Auto-route or another venue.', 422);
+  }
+  if (route?.clamped === true) {
+    throw error(`Imperial supports up to ${route.clampedMaxLeverage ?? route.maxLeverage}x for this route. Lower leverage or choose another venue.`, 422);
+  }
   const payload = makeOpenOrder(linked, body, route);
   payload.marketPrice = await encodedMarketPrice({
     symbol: payload.symbol,

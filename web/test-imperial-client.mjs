@@ -1,6 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ensureImperialDexAccount, normalizeImperialSession } from './src/lib/imperialClient.js';
+import { imperialOrderSide } from './src/lib/imperialOrderSide.js';
+
+test('Imperial maps shared ticket directions to routing sides and rejects unknown input', () => {
+  for (const side of ['bid', 'long', 'buy']) assert.equal(imperialOrderSide(side), 'long');
+  for (const side of ['ask', 'short', 'sell']) assert.equal(imperialOrderSide(side), 'short');
+  for (const side of ['', null, undefined, 'oops']) assert.throws(() => imperialOrderSide(side));
+});
 
 const WALLET = '11111111111111111111111111111111';
 

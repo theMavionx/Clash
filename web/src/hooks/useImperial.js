@@ -3,6 +3,7 @@ import { useConnection, useWallet } from '@solana/wallet-adapter-react';
 import { useSignMessage as usePrivySignMessage, useSignTransaction as usePrivySignTransaction, useWallets as usePrivyWallets } from '@privy-io/react-auth/solana';
 import { VersionedTransaction } from '@solana/web3.js';
 import bs58 from 'bs58';
+import { imperialOrderSide } from '../lib/imperialOrderSide';
 import { useDex } from '../contexts/DexContext';
 import { usePlayer } from './useGodot';
 import { useCredentialOperationScope } from './useCredentialOperationScope';
@@ -81,13 +82,20 @@ export function useImperial() {
   const [markets, setMarkets] = useState([]);
   const [prices, setPrices] = useState([]);
   const [profileIndex, setProfileIndex] = useState(0);
-  const [boostEnabled, setBoostEnabled] = useState(true);
+  const [pinnedVenue, setPinnedVenue] = useState(null);
+  const [excludedVenues, setExcludedVenues] = useState([]);
   const [routePreview, setRoutePreview] = useState(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [goldEarned, setGoldEarned] = useState(null);
   const actionRef = useRef(false);
   const dexAccountSyncRef = useRef(null);
+  const routeRequestRef = useRef(0);
+
+  useEffect(() => {
+    setRoutePreview(null);
+    return () => { routeRequestRef.current += 1; };
+  }, [active, token, walletAddr, profileIndex, pinnedVenue, excludedVenues]);
 
   const api = useCallback((path, options = {}) => fetchImperialJson(`${API}${path}`, {
     token, session: options.noSession ? null : session, ...options,
@@ -260,26 +268,31 @@ export function useImperial() {
   }, [api, refresh, session, walletAddr]);
 
   const previewRoute = useCallback(async ({ symbol, side, notional, leverage, holdHours = 24 }) => {
+    const requestId = ++routeRequestRef.current;
     if (!active || !token || !(Number(notional) > 0)) return null;
+    setRoutePreview(null);
     try {
-      const params = new URLSearchParams({ symbol: symbolOf(symbol), side, notional: String(notional), leverage: String(leverage || 1), holdHours: String(holdHours), profileIndex: String(profileIndex), wallet: walletAddr });
+      const params = new URLSearchParams({ symbol: symbolOf(symbol), side: imperialOrderSide(side), notional: String(notional), leverage: String(leverage || 1), holdHours: String(holdHours), profileIndex: String(profileIndex), wallet: walletAddr });
+      if (pinnedVenue !== null) params.set('pinnedUnderwriter', pinnedVenue);
+      params.set('excludedVenues', excludedVenues.join(','));
       const route = await api(`/imperial/route?${params}`, { noSession: true });
-      const quotedMax = n(route?.maxLeverage ?? route?.maxLeverageX ?? route?.route?.maxLeverage, 0);
-      if (quotedMax > 0) {
-        const target = symbolOf(symbol);
-        setMarkets(current => current.map(row => row.symbol === target ? { ...row, max_leverage: quotedMax } : row));
-      }
+      if (requestId !== routeRequestRef.current) return null;
+      // This is the venue's native cap, not Imperial's effective leverage
+      // when the router attaches a loan split.
       setRoutePreview(route); return route;
-    } catch (cause) { setRoutePreview({ error: cause.message }); return null; }
-  }, [active, api, profileIndex, token, walletAddr]);
+    } catch (cause) {
+      if (requestId === routeRequestRef.current) setRoutePreview({ error: cause.message });
+      return null;
+    }
+  }, [active, api, excludedVenues, pinnedVenue, profileIndex, token, walletAddr]);
 
   const placeMarketOrder = useCallback((symbol, side, amount, slippage = '0.5', leverage = 1, options = {}) => runAction('/imperial/orders', {
-    body: { wallet: walletAddr, symbol, side, amount, notionalUsd: n(options.notional_usd, n(amount) * n(leverage, 1)), leverage, marketPrice: n(options.market_price, 0) || undefined, slippageBps: Math.round(n(slippage, .5) * 100), orderType: 'market', profileIndex, boost: boostEnabled, takeProfit: options.takeProfit ?? options.take_profit ?? options.tp, stopLoss: options.stopLoss ?? options.stop_loss ?? options.sl },
-  }), [boostEnabled, profileIndex, runAction, walletAddr]);
+    body: { wallet: walletAddr, symbol, side: imperialOrderSide(side), amount, notionalUsd: n(options.notional_usd, n(amount) * n(leverage, 1)), leverage, marketPrice: n(options.market_price, 0) || undefined, slippageBps: Math.round(n(slippage, .5) * 100), orderType: 'market', profileIndex, pinnedUnderwriter: pinnedVenue, excludedVenues: excludedVenues.join(','), takeProfit: options.takeProfit ?? options.take_profit ?? options.tp, stopLoss: options.stopLoss ?? options.stop_loss ?? options.sl },
+  }), [excludedVenues, pinnedVenue, profileIndex, runAction, walletAddr]);
 
   const placeLimitOrder = useCallback((symbol, side, price, amount, _tif, leverage = 1, options = {}) => runAction('/imperial/orders', {
-    body: { wallet: walletAddr, symbol, side, amount, notionalUsd: n(options.notional_usd, n(amount) * n(leverage, 1)), leverage, price, orderType: 'limit', profileIndex, boost: boostEnabled, takeProfit: options.takeProfit ?? options.take_profit ?? options.tp, stopLoss: options.stopLoss ?? options.stop_loss ?? options.sl },
-  }), [boostEnabled, profileIndex, runAction, walletAddr]);
+    body: { wallet: walletAddr, symbol, side: imperialOrderSide(side), amount, notionalUsd: n(options.notional_usd, n(amount) * n(leverage, 1)), leverage, price, orderType: 'limit', profileIndex, pinnedUnderwriter: pinnedVenue, excludedVenues: excludedVenues.join(','), takeProfit: options.takeProfit ?? options.take_profit ?? options.tp, stopLoss: options.stopLoss ?? options.stop_loss ?? options.sl },
+  }), [excludedVenues, pinnedVenue, profileIndex, runAction, walletAddr]);
 
   const closePosition = useCallback((_symbol, _side, _amount, _pair, tradeIndex, fullClose = true) => runAction(`/imperial/positions/${encodeURIComponent(tradeIndex)}/close`, { body: { wallet: walletAddr, fullClose } }), [runAction, walletAddr]);
   const cancelOrder = useCallback((_symbol, orderId) => runAction(`/imperial/orders/${encodeURIComponent(orderId)}`, { method: 'DELETE' }), [runAction]);
@@ -353,7 +366,8 @@ export function useImperial() {
     inviteStatus: { ...(config || {}), account_exists: !!account, session_saved: setupVerified },
     builderConfig: config?.builder_status || null, referralStatus: config?.partner_status || null,
     imperialProfileIndex: profileIndex, setImperialProfileIndex: setProfileIndex,
-    imperialBoostEnabled: boostEnabled, setImperialBoostEnabled: setBoostEnabled,
+    imperialPinnedVenue: pinnedVenue, setImperialPinnedVenue: setPinnedVenue,
+    imperialExcludedVenues: excludedVenues, setImperialExcludedVenues: setExcludedVenues,
     imperialRoutePreview: routePreview, previewImperialRoute: previewRoute,
     loading: loading || (active && !sessionLoaded), error, clearError: () => setError(''),
     refresh, fetchAccount: refresh, fetchPositions: refresh, fetchOrders: refresh,
@@ -365,7 +379,7 @@ export function useImperial() {
     depositToPacifica: amount => transfer(amount, 'deposit'), withdraw: amount => transfer(amount, 'withdraw'),
     activate, disconnect, openReferralJoin: () => window.open(IMPERIAL_APP_URL, '_blank', 'noopener,noreferrer'),
     claimGold, goldEarned, clearGoldEarned: () => setGoldEarned(null),
-  }), [account, activate, active, boostEnabled, cancelOrder, claimGold, closePosition, config, disconnect, error,
+  }), [account, activate, active, excludedVenues, pinnedVenue, cancelOrder, claimGold, closePosition, config, disconnect, error,
     fetchCandles, fetchFundingHistory, fetchTradeHistory, goldEarned, loading, markets, orders, placeLimitOrder,
     placeMarketOrder, positions, previewRoute, prices, profileIndex, refresh, routePreview, runAction, sessionLoaded,
     setTpsl, setupVerified, transfer, walletAddr]);

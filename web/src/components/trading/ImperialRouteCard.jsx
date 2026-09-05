@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import './ImperialRouteCard.css';
 
 const VENUE_LABELS = {
@@ -21,12 +21,36 @@ const VENUE_MARKS = {
   touch: 'T',
 };
 
+const VENUE_KEYS_BY_ID = {
+  0: 'jupiter',
+  1: 'flash',
+  2: 'phoenix',
+  3: 'gmtrade',
+  4: 'flash_v2',
+  5: 'pairs',
+  6: 'touch',
+};
+
+const VENUE_LOGOS = {
+  phoenix: '/phoenix-mark-orange.svg',
+  jupiter: '/tokens/JUP.svg',
+  flash: '/flash-trade.png',
+  flash_v2: '/flash-trade.png',
+  gmtrade: '/gmtrade.svg',
+  pairs: '/imperial-brand.png',
+  touch: '/imperial-brand.png',
+};
+
 function number(value, fallback = 0) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
 function venueKey(value) {
+  if (value !== '' && value !== null && value !== undefined
+    && Number.isInteger(Number(value)) && VENUE_KEYS_BY_ID[Number(value)]) {
+    return VENUE_KEYS_BY_ID[Number(value)];
+  }
   return String(value || '').trim().toLowerCase().replace(/[ -]+/g, '_');
 }
 
@@ -54,8 +78,22 @@ function leverage(value) {
   return `${amount >= 100 ? amount.toFixed(0) : amount.toFixed(1)}x`;
 }
 
+function VenueMark({ venue }) {
+  const key = venueKey(venue);
+  const src = VENUE_LOGOS[key];
+  return (
+    <span className={`imperial-venue-mark imperial-venue-mark--${key || 'unknown'}`} aria-hidden="true">
+      {src ? (
+        <img src={src} alt="" decoding="async" draggable="false" />
+      ) : (
+        <span>{VENUE_MARKS[key] || venueLabel(key).slice(0, 1)}</span>
+      )}
+    </span>
+  );
+}
+
 function candidateRows(quote) {
-  const selected = venueKey(quote?.venue || quote?.underwriter || quote?.selectedVenue);
+  const selected = venueKey(quote?.venue ?? quote?.underwriter ?? quote?.selectedVenue);
   const rows = Array.isArray(quote?.candidates) ? quote.candidates : [];
   if (rows.length) return rows;
   return selected ? [{
@@ -83,135 +121,138 @@ export default function ImperialRouteCard({
   notional,
   requestedLeverage,
   holdHours = 24,
-  boostEnabled,
-  onBoostChange,
+  pinnedVenue = null,
+  onVenueChange,
+  excludedVenues = [],
+  onExcludedVenuesChange,
   profileIndex = 0,
   onProfileChange,
 }) {
-  const selectedVenue = venueKey(quote?.venue || quote?.underwriter || quote?.selectedVenue);
+  const selectedVenue = venueKey(quote?.venue ?? quote?.underwriter ?? quote?.selectedVenue);
   const candidates = useMemo(() => candidateRows(quote), [quote]);
-  const [expandedVenue, setExpandedVenue] = useState(selectedVenue);
+  const [expandedVenue, setExpandedVenue] = useState('');
+  const [view, setView] = useState(null);
+  const dialogRef = useRef(null);
+  const auto = pinnedVenue === null || pinnedVenue === '';
+  const displayVenue = auto ? selectedVenue : venueKey(pinnedVenue);
 
   useEffect(() => {
-    if (selectedVenue) setExpandedVenue(selectedVenue);
-  }, [selectedVenue]);
+    const dialog = dialogRef.current;
+    if (view && !dialog.open) dialog.showModal();
+    else if (!view && dialog.open) dialog.close();
+    if (!view) setExpandedVenue('');
+  }, [view]);
 
-  const selected = candidates.find(candidate => venueKey(candidate?.venue) === selectedVenue) || candidates[0] || null;
-  const underlyingLeverage = number(selected?.loanSplit?.venueLeverage || selected?.maxLeverage || quote?.maxLeverage);
-  const boostedLeverage = number(requestedLeverage);
-  const showBoostArrow = boostEnabled && number(selected?.loanSplit?.loanAmountUsd || quote?.loanSplit?.loanAmountUsd) > 0
-    && boostedLeverage > underlyingLeverage;
+  function choose(venue) {
+    onVenueChange?.(venue);
+    setView(null);
+    setExpandedVenue('');
+  }
 
   return (
-    <section className="imperial-route-card" aria-label="Imperial route comparison">
-      <div className="imperial-route-card__header">
-        <div className="imperial-route-card__title-wrap">
-          <span className="imperial-route-card__eyebrow">IMPERIAL ROUTER</span>
-          <div className="imperial-route-card__title">
-            {selected ? (
-              <>
-                <span className={`imperial-venue-mark imperial-venue-mark--${selectedVenue}`} aria-hidden="true">
-                  {VENUE_MARKS[selectedVenue] || venueLabel(selectedVenue).slice(0, 1)}
-                </span>
-                <strong>{venueLabel(selectedVenue)}</strong>
-                <span className="imperial-route-card__leverage">
-                  {leverage(underlyingLeverage)}{showBoostArrow ? ` → ${leverage(boostedLeverage)}` : ''}
-                </span>
-                <span className="imperial-route-best">BEST</span>
-              </>
-            ) : <strong>Finding the best venue…</strong>}
-          </div>
-        </div>
-        <span className="imperial-auto-route"><i />Auto-route&nbsp; ON</span>
-      </div>
-
-      {quote?.error ? (
-        <div className="imperial-route-card__error">{quote.error}</div>
-      ) : selected ? (
-        <>
-          <p className="imperial-route-card__reason">
-            {quote?.reason || `${venueLabel(selectedVenue)} has the best estimated all-in cost for this order.`}
-          </p>
-
-          <div className="imperial-route-list">
-            {candidates.map((candidate, index) => {
-              const key = venueKey(candidate?.venue) || `route-${index}`;
-              const costs = candidate?.costBreakdown || {};
-              const expanded = expandedVenue === key;
-              const isBest = key === selectedVenue || (!selectedVenue && index === 0);
-              const loan = number(candidate?.loanSplit?.loanAmountUsd);
-              const deposit = number(candidate?.requiredDeposit?.requiredDepositUsd);
-              const total = number(costs?.total ?? candidate?.expectedCostUsd);
-              return (
-                <div key={key} className={`imperial-route-option${isBest ? ' imperial-route-option--best' : ''}`}>
-                  <button
-                    type="button"
-                    className="imperial-route-option__toggle"
-                    aria-expanded={expanded}
-                    onClick={() => setExpandedVenue(current => current === key ? '' : key)}
-                  >
-                    <span className={`imperial-venue-mark imperial-venue-mark--${key}`} aria-hidden="true">
-                      {VENUE_MARKS[key] || venueLabel(key).slice(0, 1)}
-                    </span>
-                    <span className="imperial-route-option__name">{venueLabel(key)}</span>
-                    <span className="imperial-route-option__leverage">{leverage(candidate?.maxLeverage)}</span>
-                    {isBest && <span className="imperial-route-option__best">best</span>}
-                    <span className="imperial-route-option__total">{usd(total)}</span>
-                    <svg className={expanded ? 'is-open' : ''} width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
-                      <path d="m6 9 6 6 6-6" />
-                    </svg>
-                  </button>
-
-                  {expanded && (
-                    <div className="imperial-route-option__details">
-                      <CostLine label="Open fee" value={costs?.openFee} notional={notional} />
-                      <CostLine label="Close fee" value={costs?.closeFee} notional={notional} />
-                      <CostLine label="Entry slippage" value={costs?.openSlip} notional={notional} />
-                      <CostLine label="Exit slippage" value={costs?.closeSlip} notional={notional} />
-                      <CostLine label={`Borrow (${holdHours}h)`} value={costs?.borrow} notional={notional} />
-                      <CostLine
-                        label="Liquidation risk"
-                        value={costs?.expectedLiqCost}
-                        notional={notional}
-                        suffix={`${(number(costs?.pLiq) * 100).toFixed(1)}% prob.`}
-                      />
-                      {number(costs?.loanCost) > 0 && <CostLine label="Boost loan" value={costs.loanCost} notional={notional} />}
-                      <div className="imperial-route-total">
-                        <span>Estimated total</span>
-                        <strong>{usd(total)}</strong>
+    <section className="imperial-route-card" aria-label="Imperial route">
+      <button type="button" className="imperial-route-trigger" aria-haspopup="dialog"
+        aria-expanded={Boolean(view)} onClick={() => setView('venues')}>
+        {displayVenue && <VenueMark venue={displayVenue} />}
+        <strong>{displayVenue ? venueLabel(displayVenue) : 'Auto-route'}</strong>
+        {requestedLeverage > 0 && <span className="imperial-route-muted">{leverage(requestedLeverage)}</span>}
+        <span className="imperial-route-mode">{auto ? 'Auto' : 'Manual'}</span>
+        <span aria-hidden="true">⌄</span>
+      </button>
+      <button type="button" className="imperial-route-settings" aria-label="Route settings"
+        onClick={() => setView('settings')}>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
+          <path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3" fill="currentColor"/><circle cx="15" cy="17" r="3" fill="currentColor"/>
+        </svg>
+      </button>
+      <dialog ref={dialogRef} className="imperial-route-dialog" aria-label={view === 'settings' ? 'Route settings' : 'Choose venue'}
+        onCancel={() => setView(null)} onClose={() => setView(null)}
+        onClick={event => { if (event.target === event.currentTarget) setView(null); }}>
+        <div className="imperial-route-popup">
+          <header className="imperial-route-popup__header">
+            <span>{view === 'settings' ? 'Route settings' : 'Venue'}</span>
+            <button type="button" aria-label="Close route dialog" onClick={() => setView(null)}>×</button>
+          </header>
+          {view === 'settings' ? (
+            <>
+              <p className="imperial-route-muted">Allowed venues for auto-route</p>
+              {Object.keys(VENUE_LABELS).map(key => (
+                <label className="imperial-route-allowed" key={key}>
+                  <VenueMark venue={key} /><span>{venueLabel(key)}</span>
+                  <input type="checkbox" checked={!excludedVenues.includes(key)}
+                    disabled={!excludedVenues.includes(key) && excludedVenues.length >= Object.keys(VENUE_LABELS).length - 1}
+                    onChange={event => onExcludedVenuesChange?.(event.target.checked
+                      ? excludedVenues.filter(value => value !== key) : [...excludedVenues, key])} />
+                </label>
+              ))}
+              <p className="imperial-route-muted">An existing position may keep its venue. Imperial reports any override in the quote.</p>
+              <label className="imperial-route-profile">
+                <span>Trading profile</span>
+                <select value={profileIndex} onChange={event => onProfileChange?.(Number(event.target.value))}>
+                  {[0, 1, 2, 3, 4, 5].map(index => <option key={index} value={index}>{index + 1}</option>)}
+                </select>
+              </label>
+              <button type="button" className="imperial-route-manage" onClick={() => setView('venues')}>Back to venues</button>
+            </>
+          ) : (
+            <>
+              <button type="button" className="imperial-route-auto" role="switch" aria-checked={auto}
+                disabled={auto && !selectedVenue}
+                onClick={() => choose(auto ? selectedVenue : null)}>
+                <span>Auto-route</span><span className={auto ? 'imperial-route-best' : 'imperial-route-muted'}>{auto ? 'on' : 'off'}</span>
+              </button>
+              {quote?.error && <p role="alert" className="imperial-route-error">{quote.error}</p>}
+              {!candidates.length && !quote?.error && <p className="imperial-route-muted">{notional > 0 ? 'Comparing routes…' : 'Enter a position size to compare routes and fees.'}</p>}
+              <div className="imperial-route-list">
+                {candidates.map((candidate, index) => {
+                  const key = venueKey(candidate?.venue) || `route-${index}`;
+                  const costs = candidate?.costBreakdown || {};
+                  const expanded = expandedVenue === key;
+                  const chosen = key === displayVenue;
+                  const loan = number(candidate?.loanSplit?.loanAmountUsd);
+                  // The winner's top-level deposit accounts for its loan split.
+                  const deposit = key === selectedVenue ? quote?.requiredDeposit : candidate?.requiredDeposit;
+                  const total = costs?.total ?? candidate?.expectedCostUsd;
+                  return (
+                    <div key={key} className={`imperial-route-option${chosen ? ' is-selected' : ''}`}>
+                      <div className="imperial-route-option__row">
+                        <button type="button" className="imperial-route-option__select" aria-pressed={chosen}
+                          disabled={Boolean(candidate.filteredReason)} onClick={() => choose(key)}>
+                          <VenueMark venue={key} /><strong>{venueLabel(key)}</strong>
+                          <span className="imperial-route-muted">{leverage(candidate?.maxLeverage)}</span>
+                          {auto && key === selectedVenue && <span className="imperial-route-best">best</span>}
+                          {!auto && chosen && <span className="imperial-route-best" aria-label="Selected">✓</span>}
+                        </button>
+                        <button type="button" className="imperial-route-option__expand"
+                          aria-label={`${venueLabel(key)} fee details`} aria-expanded={expanded}
+                          onClick={() => setExpandedVenue(expanded ? '' : key)}>{expanded ? '⌃' : '⌄'}</button>
                       </div>
-                      <div className="imperial-route-capital">
-                        <span>Deposit <strong>{usd(deposit)}</strong></span>
-                        <span>Boost loan <strong>{usd(loan)}</strong></span>
-                      </div>
+                      {candidate.filteredReason && <p className="imperial-route-muted">{candidate.filteredReason}</p>}
+                      {expanded && (
+                        <div className="imperial-route-option__details">
+                          <CostLine label="Open fee" value={costs.openFee} notional={notional} />
+                          <CostLine label="Close fee" value={costs.closeFee} notional={notional} />
+                          <CostLine label="Entry slippage" value={costs.openSlip} notional={notional} />
+                          <CostLine label="Exit slippage" value={costs.closeSlip} notional={notional} />
+                          <CostLine label={`Borrow (${holdHours}h)`} value={costs.borrow} notional={notional} />
+                          <CostLine label="Liquidation risk" value={costs.expectedLiqCost} notional={notional}
+                            suffix={`${(number(costs.pLiq) * 100).toFixed(1)}% prob.`} />
+                          {number(costs.loanCost) > 0 && <CostLine label="Loan cost" value={costs.loanCost} notional={notional} />}
+                          <div className="imperial-route-total"><span>Estimated total</span><strong>{usd(total)}</strong></div>
+                          {deposit && <div className="imperial-route-capital"><span>Required deposit</span><strong>{usd(deposit.requiredDepositUsd)}</strong></div>}
+                          {loan > 0 && <div className="imperial-route-capital"><span>Automatic loan</span><strong>{usd(loan)}</strong></div>}
+                        </div>
+                      )}
                     </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </>
-      ) : (
-        <p className="imperial-route-card__empty">Enter a position size to compare live routes and fees.</p>
-      )}
-
-      <div className="imperial-route-card__controls">
-        <button
-          type="button"
-          className={`imperial-route-boost${boostEnabled ? ' is-on' : ''}`}
-          aria-pressed={Boolean(boostEnabled)}
-          onClick={() => onBoostChange?.(!boostEnabled)}
-        >
-          <span>Leverage boost</span>
-          <i>{boostEnabled ? 'ON' : 'OFF'}</i>
-        </button>
-        <label className="imperial-route-profile">
-          <span>Profile</span>
-          <select value={profileIndex} onChange={event => onProfileChange?.(Number(event.target.value))}>
-            {[0, 1, 2, 3, 4, 5].map(index => <option key={index} value={index}>{index + 1}</option>)}
-          </select>
-        </label>
-      </div>
+                  );
+                })}
+              </div>
+              {quote?.reason && <p className="imperial-route-muted imperial-route-reason">{auto ? quote.reason : `${venueLabel(displayVenue)} selected for this order.`}</p>}
+              <button type="button" className="imperial-route-manage" onClick={() => setView('settings')}>Manage allowed venues</button>
+            </>
+          )}
+        </div>
+      </dialog>
     </section>
   );
 }

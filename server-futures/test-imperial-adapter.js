@@ -6,6 +6,84 @@ const imperial = require('./imperial');
 
 const WALLET = '11111111111111111111111111111111';
 
+for (const orderType of ['market', 'limit']) {
+  for (const [inputSide, canonicalSide, wireSide] of [['bid', 'long', 0], ['ask', 'short', 1]]) {
+    test(`Imperial ${orderType} ${inputSide} uses the pinned Jupiter route and correct side`, async () => {
+      let posted;
+      let routed;
+      const fetchImpl = async (url, options = {}) => {
+        const parsed = new URL(url);
+        if (parsed.pathname.endsWith('/mobile/builder/summary')) return response(200, { active: true });
+        if (parsed.pathname.endsWith('/route')) {
+          routed = Object.fromEntries(parsed.searchParams);
+          return response(200, { venue: 'jupiter', maxLeverage: 250 });
+        }
+        if (parsed.pathname.endsWith('/mobile/orders/preflight')) return response(200, { ok: true });
+        if (parsed.pathname.endsWith('/mobile/orders')) {
+          posted = JSON.parse(options.body);
+          return response(200, { orderPda: 'fixture-order' });
+        }
+        throw new Error(`Unexpected request ${url}`);
+      };
+      await imperial.placeOrder({ owner: WALLET, jwt: 'fixture', playerId: 'p1', fetchImpl,
+        body: { symbol: 'SOL', side: inputSide, notionalUsd: 100, leverage: 10, marketPrice: 100,
+          price: 90, orderType, pinnedUnderwriter: 0, excludedVenues: 'flash,gmtrade' } });
+      assert.equal(routed.side, canonicalSide);
+      assert.equal(routed.stickyVenue, 'jupiter');
+      assert.equal(routed.excludedVenues, 'flash,gmtrade');
+      assert.equal(posted.side, wireSide);
+      assert.equal(posted.underwriter, 0);
+      assert.equal(posted.orderType, orderType === 'market' ? 0 : 1);
+      assert.equal(posted.sizeUsd, 100_000_000);
+      assert.equal(posted.collateralAmount, 10_000_000);
+      assert.equal(posted.loanAmountUsd, undefined);
+      assert.equal(posted.builderCode, 'CLASH');
+    });
+  }
+}
+
+test('Imperial automatic loan comes from fresh quote without a boost flag', async () => {
+  let posted;
+  const fetchImpl = async (url, options = {}) => {
+    const path = new URL(url).pathname;
+    if (path.endsWith('/mobile/builder/summary')) return response(200, { active: true });
+    if (path.endsWith('/route')) return response(200, { venue: 'phoenix', maxLeverage: 24.78, clamped: false, loanSplit: { loanAmountUsd: 2.75 } });
+    if (path.endsWith('/mobile/orders/preflight')) return response(200, { ok: true });
+    if (path.endsWith('/mobile/orders')) { posted = JSON.parse(options.body); return response(200, { orderPda: 'fixture' }); }
+    throw new Error(path);
+  };
+  await imperial.placeOrder({ owner: WALLET, jwt: 'fixture', fetchImpl, body: {
+    symbol: 'SOL', side: 'bid', notionalUsd: 100, leverage: 50, marketPrice: 100, loanAmountUsd: 999999,
+  } });
+  assert.equal(posted.loanAmountUsd, 2_750_000);
+  assert.equal(posted.collateralAmount, 2_000_000);
+});
+
+test('Imperial refuses venue substitution and clamped leverage before submission', async () => {
+  for (const route of [{ venue: 'phoenix' }, { venue: 'jupiter', clamped: true, clampedMaxLeverage: 10 }]) {
+    const fetchImpl = async url => {
+      const path = new URL(url).pathname;
+      if (path.endsWith('/mobile/builder/summary')) return response(200, { active: true });
+      if (path.endsWith('/route')) return response(200, route);
+      assert.fail('Must stop before preflight/submission');
+    };
+    await assert.rejects(imperial.placeOrder({ owner: WALLET, jwt: 'fixture', fetchImpl,
+      body: { symbol: 'SOL', side: 'ask', amount: 100, leverage: 50, pinnedUnderwriter: 0 } }), /selected venue|Lower leverage/);
+  }
+});
+
+test('Imperial clearing exclusions is explicit and invalid directions fail before requests', async () => {
+  await imperial.getRoute({ symbol: 'SOL', side: 'bid', notional: 100, excludedVenues: '' }, async url => {
+    const params = new URL(url).searchParams;
+    assert.equal(params.get('side'), 'long');
+    assert.equal(params.get('excludedVenues'), '');
+    assert.equal(params.has('stickyVenue'), false);
+    return response(200, {});
+  });
+  await assert.rejects(imperial.placeOrder({ owner: WALLET, body: { side: 'oops' },
+    fetchImpl: () => assert.fail('Invalid input must not reach Imperial') }), /side must/);
+});
+
 function response(status, data) {
   return { ok: status >= 200 && status < 300, status, text: async () => JSON.stringify(data) };
 }

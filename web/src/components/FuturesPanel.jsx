@@ -3716,7 +3716,8 @@ function FuturesPanel() {
     connectOneTap: connectLighterOneTap, lighterConnectStatus,
     registerBuilderCode,
     fetchTradeHistory, fetchFundingHistory, fetchCandles,
-    imperialProfileIndex, setImperialProfileIndex, imperialBoostEnabled, setImperialBoostEnabled,
+    imperialProfileIndex, setImperialProfileIndex, imperialPinnedVenue, setImperialPinnedVenue,
+    imperialExcludedVenues, setImperialExcludedVenues,
     imperialRoutePreview, previewImperialRoute,
     regionAccess, retryRegionAccess,
     refresh: refreshTrading,
@@ -5574,6 +5575,21 @@ function FuturesPanel() {
       ...(parentScroll ? {width: '100%', padding: 10, boxSizing: 'border-box'} : {}),
     }}>
 
+      {dex === 'imperial' && (
+        <ImperialRouteCard
+          quote={imperialRoutePreview}
+          notional={positionUsdc}
+          requestedLeverage={leverage}
+          holdHours={24}
+          pinnedVenue={imperialPinnedVenue}
+          onVenueChange={setImperialPinnedVenue}
+          excludedVenues={imperialExcludedVenues}
+          onExcludedVenuesChange={setImperialExcludedVenues}
+          profileIndex={imperialProfileIndex ?? 0}
+          onProfileChange={setImperialProfileIndex}
+        />
+      )}
+
       {/* Optional funding hint — use account VALUE, not free margin.
           A user with an open position has available_to_spend ≈ 0 but
           account_equity > 0; free margin would show a misleading hint
@@ -5741,19 +5757,6 @@ function FuturesPanel() {
               )}
             </div>
           </div>
-        )}
-
-        {dex === 'imperial' && (
-          <ImperialRouteCard
-            quote={imperialRoutePreview}
-            notional={positionUsdc}
-            requestedLeverage={leverage}
-            holdHours={24}
-            boostEnabled={imperialBoostEnabled}
-            onBoostChange={setImperialBoostEnabled}
-            profileIndex={imperialProfileIndex ?? 0}
-            onProfileChange={setImperialProfileIndex}
-          />
         )}
 
         {/* Size slider — % of wallet balance committed as margin */}
