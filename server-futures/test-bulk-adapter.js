@@ -77,7 +77,7 @@ function run() {
   assert.equal(bulk.config().api_url, 'https://mainnet-api1.bulk.trade/api/v1');
   assert.equal(bulk.config().ws_url, 'wss://mainnet-ws1.bulk.trade');
   assert.equal(bulk.config().signature_domain, 1);
-  assert.equal(bulk.config().signature_mode, 'offchain');
+  assert.equal(bulk.config().signature_mode, 'base58');
 
   console.log('Bulk mainnet adapter signing and builder-routing tests passed');
 }

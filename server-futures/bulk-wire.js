@@ -301,6 +301,10 @@ function offchainMessage(actions, nonce, account, signer = account, signatureDom
   ]);
 }
 
+function base58Message(actions, nonce, account, signatureDomain = 'mainnet') {
+  return Buffer.from(bs58.encode(serializeTransaction(actions, nonce, account, signatureDomain)), 'utf8');
+}
+
 function transactionOrderIds(actions, nonce, account) {
   return actions.map((action, index) => orderIdForAction(action, index, nonce, account));
 }
@@ -312,6 +316,7 @@ module.exports = {
   decimalToFixed,
   clearSignActionLine,
   clearSignPayload,
+  base58Message,
   decode32,
   normalizeBuilderCode,
   orderIdForAction,

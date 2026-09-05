@@ -7,7 +7,7 @@ const bs58 = bs58Module.default || bs58Module;
 const BULK_API_BASE = String(process.env.BULK_API_URL || 'https://mainnet-api1.bulk.trade/api/v1').replace(/\/+$/, '');
 const BULK_WS_URL = String(process.env.BULK_WS_URL || 'wss://mainnet-ws1.bulk.trade').trim();
 const BULK_NETWORK = String(process.env.BULK_NETWORK || 'mainnet').trim().toLowerCase();
-const BULK_SIGNATURE_MODE = String(process.env.BULK_SIGNATURE_MODE || 'offchain').trim().toLowerCase();
+const BULK_SIGNATURE_MODE = String(process.env.BULK_SIGNATURE_MODE || 'base58').trim().toLowerCase();
 const BULK_BUILDER_ADDRESS = String(
   process.env.BULK_BUILDER_ADDRESS || 'Drvzmh5iRfHRuKHgmm6Q77CqxhqvsXaLvrKkfMP8qci9',
 ).trim();
@@ -398,10 +398,14 @@ function prepareTransaction(account, body = {}) {
   if (!isSolanaAddress(account)) throw error('Bulk account must be a Solana address');
   const nonce = BigInt(body.nonce || (BigInt(Date.now()) * 1_000_000n + BigInt(Math.floor(Math.random() * 1_000_000))));
   const actions = buildActions(body);
-  const signatureMode = BULK_SIGNATURE_MODE === 'raw' ? 'raw' : 'offchain';
+  const signatureMode = ['raw', 'offchain', 'base58'].includes(BULK_SIGNATURE_MODE)
+    ? BULK_SIGNATURE_MODE
+    : 'base58';
   const message = signatureMode === 'offchain'
     ? wire.offchainMessage(actions, nonce, account, account, BULK_NETWORK)
-    : wire.serializeTransaction(actions, nonce, account, BULK_NETWORK);
+    : signatureMode === 'base58'
+      ? wire.base58Message(actions, nonce, account, BULK_NETWORK)
+      : wire.serializeTransaction(actions, nonce, account, BULK_NETWORK);
   return {
     transaction: { actions, nonce: nonce.toString(), account, signer: account },
     message_base64: message.toString('base64'),
@@ -420,10 +424,12 @@ function verifyTransaction(transaction) {
   const signature = String(transaction?.signature || '').trim();
   if (!isSolanaAddress(account) || signer !== account) throw error('Bulk transaction signer/account mismatch');
   const signatureMode = String(transaction?.signature_mode || BULK_SIGNATURE_MODE).trim().toLowerCase();
-  if (!['raw', 'offchain'].includes(signatureMode)) throw error('Unsupported Bulk signature mode');
+  if (!['raw', 'offchain', 'base58'].includes(signatureMode)) throw error('Unsupported Bulk signature mode');
   const message = signatureMode === 'offchain'
     ? wire.offchainMessage(transaction.actions, transaction.nonce, account, signer, BULK_NETWORK)
-    : wire.serializeTransaction(transaction.actions, transaction.nonce, account, BULK_NETWORK);
+    : signatureMode === 'base58'
+      ? wire.base58Message(transaction.actions, transaction.nonce, account, BULK_NETWORK)
+      : wire.serializeTransaction(transaction.actions, transaction.nonce, account, BULK_NETWORK);
   let signatureBytes;
   try { signatureBytes = Buffer.from(bs58.decode(signature)); } catch { throw error('Bulk signature must be base58'); }
   if (signatureBytes.length !== 64 || !nacl.sign.detached.verify(message, signatureBytes, wire.decode32(signer))) {
@@ -528,7 +534,9 @@ async function submitTransaction(playerId, linkedAccount, transaction) {
   const upstream = await request('/order', {
     method: 'POST',
     body: upstreamTransaction,
-    headers: verified.signatureMode === 'offchain' ? { 'x-bulk-sig-mode': 'offchain' } : undefined,
+    headers: verified.signatureMode === 'raw'
+      ? undefined
+      : { 'x-bulk-sig-mode': verified.signatureMode },
   });
   // Persist the server-verified builder proof before surfacing a mixed batch
   // rejection. Bulk returns one status per action; an entry order may be
@@ -637,7 +645,9 @@ function config() {
     sdk_version: '0.1.26-compatible',
     network: BULK_NETWORK,
     signature_domain: wire.signatureDomainByte(BULK_NETWORK),
-    signature_mode: BULK_SIGNATURE_MODE === 'raw' ? 'raw' : 'offchain',
+    signature_mode: ['raw', 'offchain', 'base58'].includes(BULK_SIGNATURE_MODE)
+      ? BULK_SIGNATURE_MODE
+      : 'base58',
     self_custody: true,
     closed_beta: BULK_CLOSED_BETA,
     builder_enabled: BULK_BUILDER_ENABLED,

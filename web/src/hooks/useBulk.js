@@ -291,9 +291,10 @@ export function useBulk() {
     return () => { cancelled = true; };
   }, [active, token, walletAddr, solWallet?.wallet?.adapter?.name]);
 
-  const masterSign = useCallback(async (message) => {
+  const masterSign = useCallback(async (message, signatureMode) => {
     return signBulkMessage({
       message,
+      signatureMode,
       adapterAddress,
       solWallet,
       privyWallet,
@@ -309,7 +310,10 @@ export function useBulk() {
         method: 'POST',
         body: JSON.stringify({ ...payload, account: walletAddr }),
       });
-      const signatureBytes = await masterSign(base64Bytes(prepared.message_base64));
+      const signatureBytes = await masterSign(
+        base64Bytes(prepared.message_base64),
+        prepared.signature_mode || 'base58',
+      );
       if (!signatureBytes || signatureBytes.length !== 64) throw new Error('Bulk wallet returned an invalid Ed25519 signature.');
       const transaction = {
         ...prepared.transaction,

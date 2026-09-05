@@ -41,6 +41,7 @@ const expectedSignature = Uint8Array.from({ length: 64 }, (_, index) => index);
 let phantomRequest = null;
 const phantomSignature = await signBulkMessage({
   message,
+  signatureMode: 'offchain',
   adapterAddress: 'BulkOwner111111111111111111111111111111111',
   solWallet: { signMessage: () => { throw new Error('generic adapter must not be used for matching Phantom'); } },
   phantomProvider: {
@@ -56,6 +57,25 @@ assert.deepEqual(phantomSignature, expectedSignature);
 assert.equal(phantomRequest.method, 'signMessage');
 assert.equal(phantomRequest.params.message, message);
 assert.equal(phantomRequest.params.display, 'hex');
+
+let printableAdapterCalled = false;
+await signBulkMessage({
+  message: new TextEncoder().encode('BulkBase58Payload'),
+  signatureMode: 'base58',
+  adapterAddress: 'BulkOwner111111111111111111111111111111111',
+  solWallet: {
+    signMessage: async () => {
+      printableAdapterCalled = true;
+      return expectedSignature;
+    },
+  },
+  phantomProvider: {
+    isPhantom: true,
+    publicKey: { toBase58: () => 'BulkOwner111111111111111111111111111111111' },
+    request: async () => { throw new Error('base58 messages must use the standard adapter'); },
+  },
+});
+assert.equal(printableAdapterCalled, true);
 
 let adapterCalled = false;
 const adapterSignature = await signBulkMessage({

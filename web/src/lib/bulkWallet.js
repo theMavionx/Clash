@@ -38,9 +38,13 @@ export async function signBulkMessage({
   solWallet,
   privyWallet,
   privySignMessage,
+  signatureMode = 'base58',
   phantomProvider = globalThis.window?.phantom?.solana || globalThis.window?.solana,
 }) {
   if (adapterAddress) {
+    if (signatureMode === 'base58' && typeof solWallet?.signMessage === 'function') {
+      return solWallet.signMessage(message);
+    }
     const phantom = matchingPhantomProvider(adapterAddress, phantomProvider);
     if (phantom) {
       // Bulk's documented offchain format is a binary Solana v0 envelope.

@@ -4070,3 +4070,15 @@ Follow-up:
 - Branch finding: `codex/imperial-ui` tip `50ede2d8` is already an ancestor of
   current `origin/main`; no merge commit is required and the deployed build
   already exposes Imperial.
+- Production follow-up: owner confirmed Phantom still rejected the binary
+  offchain envelope even with hexadecimal display. Live zero-margin mainnet
+  probes then verified printable `base58` signing for both settings and market
+  actions: a valid market signature reached `rejectedRiskLimit`, while a
+  nonce-tampered signature returned `bad signature`; no trade executed. Clash
+  therefore uses Bulk's `x-bulk-sig-mode: base58` path for wallet compatibility.
+- Imperial UI follow-up: the earlier route-comparison card was found as an
+  uncommitted change in the dedicated Imperial worktree, so it is included in
+  this release. The panel now shows auto-route status, every live candidate,
+  per-route fees/slippage/borrow/liquidation estimate, required deposit and
+  boost loan; a live public Imperial quote was used to verify the response
+  shape before build and deployment.

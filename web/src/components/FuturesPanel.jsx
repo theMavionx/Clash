@@ -1,6 +1,7 @@
 import { Fragment, useState, memo, useCallback, useMemo, useRef, useEffect } from 'react';
 import LighterOneTapConnect from './LighterOneTapConnect';
 import EtoroSetupGuide from './trading/EtoroSetupGuide';
+import ImperialRouteCard from './trading/ImperialRouteCard';
 import { ETORO_TRADING_SETTINGS_URL } from '../lib/etoroClient';
 import { useSend } from '../hooks/useGodot';
 import { useLayout } from '../hooks/useIsMobile';
@@ -5743,39 +5744,16 @@ function FuturesPanel() {
         )}
 
         {dex === 'imperial' && (
-          <div style={{
-            display: 'flex', flexDirection: 'column', gap: 7, padding: '9px 10px', borderRadius: 9,
-            border: '1px solid rgba(146,119,255,.45)', background: 'rgba(124,92,252,.10)',
-          }}>
-            <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8}}>
-              <div>
-                <div style={{fontSize: 11, fontWeight: 850, color: 'var(--terminal-text)'}}>IMPERIAL SMART ROUTE</div>
-                <div style={{fontSize: 10, color: 'var(--terminal-text-muted)'}}>
-                  {imperialRoutePreview?.error
-                    ? imperialRoutePreview.error
-                    : `Venue: ${imperialRoutePreview?.underwriter || imperialRoutePreview?.venue || imperialRoutePreview?.selectedVenue || 'quoting...'}`}
-                </div>
-              </div>
-              <button type="button" onClick={() => setImperialBoostEnabled?.(!imperialBoostEnabled)} style={{
-                ...S.btnSmall, minWidth: 58, color: '#fff',
-                background: imperialBoostEnabled ? '#7C5CFC' : 'var(--terminal-surface-raised)',
-                border: `1px solid ${imperialBoostEnabled ? '#9277FF' : 'var(--terminal-border)'}`,
-              }}>
-                BOOST {imperialBoostEnabled ? 'ON' : 'OFF'}
-              </button>
-            </div>
-            <div style={{display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 10, color: 'var(--terminal-text-muted)'}}>
-              <span>Deposit ${Number(imperialRoutePreview?.requiredDeposit?.requiredDepositUsd || imperialRoutePreview?.requiredDepositUsd || (positionUsdc / Math.max(1, leverage)) || 0).toFixed(2)}</span>
-              <span>Loan ${Number(imperialRoutePreview?.loanSplit?.loanAmountUsd || 0).toFixed(2)}</span>
-              <label style={{display: 'flex', alignItems: 'center', gap: 4}}>
-                Profile
-                <select value={imperialProfileIndex ?? 0} onChange={event => setImperialProfileIndex?.(Number(event.target.value))}
-                  style={{background: 'var(--terminal-surface)', color: 'var(--terminal-text)', border: '1px solid var(--terminal-border)', borderRadius: 5}}>
-                  {[0, 1, 2, 3, 4, 5].map(index => <option key={index} value={index}>{index + 1}</option>)}
-                </select>
-              </label>
-            </div>
-          </div>
+          <ImperialRouteCard
+            quote={imperialRoutePreview}
+            notional={positionUsdc}
+            requestedLeverage={leverage}
+            holdHours={24}
+            boostEnabled={imperialBoostEnabled}
+            onBoostChange={setImperialBoostEnabled}
+            profileIndex={imperialProfileIndex ?? 0}
+            onProfileChange={setImperialProfileIndex}
+          />
         )}
 
         {/* Size slider — % of wallet balance committed as margin */}
@@ -7264,7 +7242,7 @@ function FuturesPanel() {
     const steps = [
       { id: 'wallet', label: 'Verify linked Solana wallet', hint: 'A short-lived signed message creates the Imperial mobile API session.', status: 'done' },
       { id: 'session', label: 'Connect Imperial', hint: 'The session is encrypted and scoped to this exact wallet.', status: isRunning ? 'active' : 'pending' },
-      { id: 'builder', label: 'Verify CLASH builder code', hint: 'Every open and close is server-routed with CLASH attribution.', status: builderConfig?.active ? 'done' : 'pending' },
+      { id: 'builder', label: 'Apply CLASH routing', hint: 'The server adds CLASH to every open and close. No separate wallet approval is required.', status: builderConfig?.active ? 'done' : 'pending' },
     ];
     return (
       <>
@@ -7291,10 +7269,15 @@ function FuturesPanel() {
               steps={steps}
               working={isRunning}
               workingText="Waiting for your Solana wallet signature..."
-              statusContent={<div><strong>Builder code:</strong> {builderConfig?.code || inviteStatus?.builder_code || 'CLASH'} · {builderConfig?.active ? 'active' : 'awaiting Imperial registration'}</div>}
+              statusContent={(
+                <div>
+                  <strong>Builder code:</strong> {builderConfig?.code || inviteStatus?.builder_code || 'CLASH'} · {builderConfig?.active ? 'server verified' : 'checking server registration'}
+                  <div style={{marginTop: 4, color: 'var(--terminal-text-muted)'}}>Imperial does not require a separate per-user builder approval.</div>
+                </div>
+              )}
               error={error ? humanizeTradeError(error, dex) : ''}
               primaryAction={{
-                label: isRunning ? 'CONNECTING...' : 'CONNECT IMPERIAL', disabled: isRunning,
+                label: isRunning ? 'CONNECTING...' : 'SIGN & CONNECT', disabled: isRunning,
                 onClick: async () => { const result = await activate?.(); if (result?.error) setLocalAlert(result.error); },
               }}
               secondaryAction={{ label: 'OPEN IMPERIAL', variant: 'secondary', onClick: () => openReferralJoin?.() }}

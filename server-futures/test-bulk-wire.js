@@ -81,6 +81,11 @@ function run() {
   assert.equal(offchain[16], 0, 'Solana offchain envelope version');
   assert.equal(offchain[17], 1, 'mainnet application domain');
   assert.equal(offchain[49], 1, 'payload is UTF-8 because canonical text contains newlines');
+  const base58Message = wire.base58Message([officialMarket], officialNonce, officialAccount, 'mainnet');
+  assert.equal(base58Message.toString('utf8'), bs58.encode(wire.serializeTransaction(
+    [officialMarket], officialNonce, officialAccount, 'mainnet',
+  )));
+  assert.match(base58Message.toString('utf8'), /^[1-9A-HJ-NP-Za-km-z]+$/);
 
   console.log('Bulk mainnet wire and wallet-compatible offchain signing tests passed');
 }
