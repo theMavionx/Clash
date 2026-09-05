@@ -6229,7 +6229,7 @@ function FuturesPanel() {
                   Connect your Solana wallet
                 </div>
                 <div style={{color: 'var(--terminal-text-muted)', fontSize: 12, fontWeight: 600, textAlign: 'center', maxWidth: 310, lineHeight: 1.45}}>
-                  Bulk is in closed beta. Connect the wallet you will fund on Bulk; Clash signs every action locally and never receives your private key.
+                  Bulk runs on mainnet. Connect the wallet you funded on Bulk; Clash asks the wallet to sign every action locally and never receives your private key.
                 </div>
                 {renderPrivyEmailButton('#383832', '#11110F')}
                 <button
@@ -7349,14 +7349,14 @@ function FuturesPanel() {
               kicker={bulkUnavailable ? 'CLOSED BETA' : isChecking ? 'VERIFYING ACCOUNT' : 'BUILDER APPROVAL REQUIRED'}
               title={bulkUnavailable ? 'Bulk trading is not open yet' : isChecking ? 'Checking your Bulk account' : 'Approve Clash builder routing'}
               subtitle={bulkUnavailable
-                ? (serviceAvailability?.message || 'Bulk trading is not available during the closed beta. You can still join through the Clash referral.')
+                ? (serviceAvailability?.message || 'Bulk mainnet is temporarily unavailable. You can still open Bulk through the Clash referral.')
                 : 'Approve once, then every order remains self-custodial and independently signed by this wallet.'}
               logo={DEX_CONFIG.bulk.logo}
               logoAlt="Bulk"
               logoBackground="#1B1B18"
               steps={bulkSteps}
               working={isChecking || isRunning}
-              workingText={isChecking ? 'Checking Bulk beta access...' : activationStep?.label || 'Waiting for your wallet signature...'}
+              workingText={isChecking ? 'Checking Bulk mainnet access...' : activationStep?.label || 'Waiting for your wallet signature...'}
               statusContent={(
                 <>
                   <div><strong>Builder:</strong> {builderConfig?.address || 'Drvzmh5iRfHRuKHgmm6Q77CqxhqvsXaLvrKkfMP8qci9'}</div>

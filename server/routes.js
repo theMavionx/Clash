@@ -26913,7 +26913,8 @@ function referralFuturesGrossUsd(row) {
   }
   if (dex === 'bulk') {
     const proof = referralFuturesProof(row);
-    const verified = proof?.source === 'bulk_v0_1_2_signed_order' && proof?.builder?.verified === true;
+    const verified = ['bulk_v0_1_2_signed_order', 'bulk_mainnet_signed_order'].includes(proof?.source)
+      && proof?.builder?.verified === true;
     const bps = Number(proof?.builder?.fee_bps || 0);
     const notional = referralFuturesNotional(row);
     return verified && bps > 0 && notional > 0 ? notional * (bps / 10000) : 0;

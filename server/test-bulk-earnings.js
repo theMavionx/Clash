@@ -11,7 +11,7 @@ process.env.BULK_BUILDER_FEE_BPS = '1';
 
 function proof(address, fee = 1, verified = true) {
   return JSON.stringify({
-    source: 'bulk_v0_1_2_signed_order',
+    source: 'bulk_mainnet_signed_order',
     builder: { address, fee_bps: fee, verified },
   });
 }
@@ -55,7 +55,7 @@ async function run() {
   assert.equal(result.row.trades, 1);
   assert.equal(result.row.volume_usd, 1000);
   assert.equal(result.row.estimated_fee_usd, 0.1);
-  assert.equal(result.row.earned_usd, 0, 'closed-beta estimate must not be added to exact earnings');
+  assert.equal(result.row.earned_usd, 0, 'builder estimate must not be added to exact earnings');
   assert.equal(result.row.model, 'bulk_signed_builder_volume_estimate');
   console.log('Bulk proof-gated earnings estimate reader: ok');
 }

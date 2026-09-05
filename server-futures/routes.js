@@ -6315,6 +6315,38 @@ router.get('/bulk/builder-status', auth, async (req, res) => {
   }
 });
 
+router.get('/bulk/trade-history', auth, async (req, res) => {
+  if (!requireBulkDex(req, res)) return;
+  try {
+    const account = bulkLinkedWallet(req, req.query.account || req.query.address || req.query.wallet);
+    res.set('Cache-Control', 'private, no-store');
+    res.json(await bulk.getFillsPage(account, {
+      limit: req.query.limit,
+      cursor: req.query.cursor,
+      startSlot: req.query.startSlot || req.query.start_slot,
+      endSlot: req.query.endSlot || req.query.end_slot,
+    }));
+  } catch (e) {
+    res.status(e.status || 502).json({ error: 'Failed to load Bulk trade history', detail: e.message });
+  }
+});
+
+router.get('/bulk/funding-history', auth, async (req, res) => {
+  if (!requireBulkDex(req, res)) return;
+  try {
+    const account = bulkLinkedWallet(req, req.query.account || req.query.address || req.query.wallet);
+    res.set('Cache-Control', 'private, no-store');
+    res.json(await bulk.getHistoryPage('fundingHistory', account, {
+      limit: req.query.limit,
+      cursor: req.query.cursor,
+      startSlot: req.query.startSlot || req.query.start_slot,
+      endSlot: req.query.endSlot || req.query.end_slot,
+    }));
+  } catch (e) {
+    res.status(e.status || 502).json({ error: 'Failed to load Bulk funding history', detail: e.message });
+  }
+});
+
 router.post('/bulk/prepare', auth, (req, res) => {
   if (!requireBulkDex(req, res)) return;
   try {

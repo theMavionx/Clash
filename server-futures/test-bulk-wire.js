@@ -32,8 +32,8 @@ function run() {
   const actions = [
     { abc: { to: BUILDER, fee: 1 } },
     { m: { c: 'BTC-USD', b: true, sz: '0.5', r: false, i: false, builderCode: { to: BUILDER, fee: 1 } } },
-    { tp: { c: 'BTC-USD', d: true, sz: '0.5', tr: '70000', lim: null } },
-    { st: { c: 'BTC-USD', d: false, sz: '0.5', tr: '62000', lim: null } },
+    { tp: { c: 'BTC-USD', d: true, sz: '0.5', tr: '70000', lim: null, i: false } },
+    { st: { c: 'BTC-USD', d: false, sz: '0.5', tr: '62000', lim: null, i: false } },
   ];
   const message = wire.serializeTransaction(actions, 42n, ZERO_ACCOUNT);
   const keypair = nacl.sign.keyPair.fromSeed(new Uint8Array(32));
@@ -52,7 +52,37 @@ function run() {
   );
   assert.throws(() => wire.serializeAction({ abc: { to: BUILDER, fee: 16 } }), /1\.\.15/);
 
-  console.log('Bulk v0.1.2 wire tests passed');
+  const officialAccount = '4Ze3bbJbmBjAUutV3LT1XUmqZG67fAR5PUr7vkXUgU2g';
+  const officialNonce = 1788619000000000000n;
+  assert.equal(
+    wire.serializeTransaction([{ abc: { to: BUILDER, fee: 1 } }], officialNonce, officialAccount, 'mainnet').toString('base64'),
+    'AQAAAAAAAAAoAAAAvxbBm7Vq7N/m/gytVTW+09+F5bOHR0z590F5QpJs+u4BALCDBYFz0hg074iHn4oDnet2DXKJlq9flChSjDRT3Mt9get63FUd9QE=',
+    'must match bulk-keychain 0.1.26 mainnet builder approval bytes',
+  );
+  const officialMarket = {
+    m: { c: 'BTC-USD', b: true, sz: '0.001', r: false, i: false, builderCode: { to: BUILDER, fee: 1 } },
+  };
+  assert.equal(
+    wire.serializeTransaction([officialMarket], officialNonce, officialAccount, 'mainnet').toString('base64'),
+    'AQAAAAAAAAAAAAAABwAAAAAAAABCVEMtVVNEAaCGAQAAAAAAAAABvxbBm7Vq7N/m/gytVTW+09+F5bOHR0z590F5QpJs+u4BALCDBYFz0hg074iHn4oDnet2DXKJlq9flChSjDRT3Mt9get63FUd9QE=',
+    'must match bulk-keychain 0.1.26 mainnet market bytes',
+  );
+  assert.equal(
+    wire.orderIdForAction(officialMarket, 0, officialNonce, officialAccount),
+    '834QMdcacus849YhJJbuWXJy4zXWhCf33obuMyarMf8x',
+    'order IDs use the commission-free canonical order hash',
+  );
+
+  const clear = wire.clearSignPayload([officialMarket], officialNonce, officialAccount, 'mainnet');
+  assert.match(clear, /^Bulk Exchange Transaction\nNetwork: mainnet\n/);
+  assert.match(clear, /\[0\] Market BTC-USD Buy sz=0\.00100000 ro=false iso=false\n$/);
+  const offchain = wire.offchainMessage([officialMarket], officialNonce, officialAccount, officialAccount, 'mainnet');
+  assert.equal(offchain.subarray(0, 16).toString('hex'), `ff${Buffer.from('solana offchain').toString('hex')}`);
+  assert.equal(offchain[16], 0, 'Solana offchain envelope version');
+  assert.equal(offchain[17], 1, 'mainnet application domain');
+  assert.equal(offchain[49], 1, 'payload is UTF-8 because canonical text contains newlines');
+
+  console.log('Bulk mainnet wire and wallet-compatible offchain signing tests passed');
 }
 
 run();

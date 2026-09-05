@@ -200,6 +200,12 @@ function FundingHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [
           if (!cancelled) setPayments((Array.isArray(rows) ? rows : []).map(normalizeAsterFunding).filter(row => row.symbol));
           return;
         }
+        if (dex === 'bulk') {
+          if (typeof fetchFundingHistory !== 'function') throw new Error('Bulk mainnet funding reader is not ready');
+          const rows = await fetchFundingHistory({ limit: 100, signal: controller.signal });
+          if (!cancelled) setPayments(Array.isArray(rows) ? rows : []);
+          return;
+        }
         if (dex === 'domfi' || dex === 'hyperliquid' || dex === 'nado' || dex === 'leverup' || dex === 'ostium') {
           if (!cancelled) setPayments([]);
           return;

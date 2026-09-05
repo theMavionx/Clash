@@ -1,6 +1,7 @@
 const assert = require('assert');
 const nacl = require('tweetnacl');
 const bs58Module = require('bs58');
+process.env.BULK_BUILDER_ENABLED = '1';
 const bulk = require('./bulk');
 
 const bs58 = bs58Module.default || bs58Module;
@@ -43,7 +44,7 @@ function run() {
   const wrongBuilder = JSON.parse(JSON.stringify(order.transaction));
   wrongBuilder.actions[0].m.builderCode.to = account;
   const wrongBuilderPrepared = {
-    transaction: wrongBuilder,
+    transaction: { ...wrongBuilder, signature_mode: 'raw' },
     message_base64: require('./bulk-wire').serializeTransaction(
       wrongBuilder.actions,
       wrongBuilder.nonce,
@@ -64,16 +65,21 @@ function run() {
     /side must be bid or ask/,
   );
 
-  const betaError = Object.assign(new Error('Bulk API 500: HTTP 500'), { status: 500 });
-  assert.equal(bulk.isReadUnavailableError(betaError), true);
-  const unavailable = bulk.unavailableReadState('builder_status', account, betaError);
+  const upstreamError = Object.assign(new Error('Bulk API 500: HTTP 500'), { status: 500 });
+  assert.equal(bulk.isReadUnavailableError(upstreamError), true);
+  const unavailable = bulk.unavailableReadState('builder_status', account, upstreamError);
   assert.equal(unavailable.available, false);
-  assert.equal(unavailable.closed_beta, true);
+  assert.equal(unavailable.closed_beta, false);
   assert.equal(unavailable.approved, false);
   assert.equal(unavailable.builder_address, bulk.BULK_BUILDER_ADDRESS);
   assert.ok(unavailable.retry_after_ms >= 30_000);
 
-  console.log('Bulk adapter signing and builder-routing tests passed');
+  assert.equal(bulk.config().api_url, 'https://mainnet-api1.bulk.trade/api/v1');
+  assert.equal(bulk.config().ws_url, 'wss://mainnet-ws1.bulk.trade');
+  assert.equal(bulk.config().signature_domain, 1);
+  assert.equal(bulk.config().signature_mode, 'offchain');
+
+  console.log('Bulk mainnet adapter signing and builder-routing tests passed');
 }
 
 run();

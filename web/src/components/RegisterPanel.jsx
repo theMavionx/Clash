@@ -379,7 +379,7 @@ function ConnectPacifica({ onOpenWalletModal, onPrivyLogin, privyEnabled, privyA
     : 'Connect your Solana wallet to start playing. Trades are signed by your own wallet - we never hold your keys.';
   const steps = [
     { id: 'wallet', label: 'Connect a Solana wallet', hint: 'Choose email or a wallet app. The connected wallet remains self-custodial.', status: 'active' },
-    { id: 'venue', label: `Verify ${venue} access`, hint: dex === 'imperial' ? 'Clash verifies the Imperial session, routing and CLASH builder status.' : dex === 'bulk' ? 'Clash checks beta access and the builder approval.' : 'Clash verifies the venue account and required attribution.', status: 'pending' },
+    { id: 'venue', label: `Verify ${venue} access`, hint: dex === 'imperial' ? 'Clash verifies the Imperial session, routing and CLASH builder status.' : dex === 'bulk' ? 'Clash verifies the Bulk mainnet account and supported signing mode.' : 'Clash verifies the venue account and required attribution.', status: 'pending' },
     { id: 'ready', label: 'Unlock trading', hint: 'Balances and markets load only after the venue setup succeeds.', status: 'pending' },
   ];
   const actions = [];

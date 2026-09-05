@@ -9,6 +9,7 @@ const bs58 = bs58Module.default || bs58Module;
 const tempDb = path.join(os.tmpdir(), `clash-bulk-proof-${process.pid}-${Date.now()}.sqlite`);
 process.env.NODE_ENV = 'development';
 process.env.CLASH_FUTURES_DB = tempDb;
+process.env.BULK_BUILDER_ENABLED = '1';
 
 const db = require('./db');
 const bulk = require('./bulk');
@@ -115,6 +116,7 @@ async function run() {
   const proofJson = JSON.parse(trades[0].proof_json);
   assert.equal(proofJson.builder.verified, true);
   assert.equal(proofJson.builder.address, bulk.BULK_BUILDER_ADDRESS);
+  assert.equal(proofJson.source, 'bulk_mainnet_signed_order');
 
   console.log('Bulk signed-order proof and fill-attribution tests passed');
 }

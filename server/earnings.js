@@ -2507,6 +2507,7 @@ const BULK_BUILDER_ADDRESS = String(
   process.env.BULK_BUILDER_ADDRESS || 'Drvzmh5iRfHRuKHgmm6Q77CqxhqvsXaLvrKkfMP8qci9',
 ).trim();
 const BULK_BUILDER_FEE_BPS = Math.max(1, Math.min(15, Number(process.env.BULK_BUILDER_FEE_BPS || 1)));
+const BULK_BUILDER_ENABLED = !/^(0|false|no)$/i.test(String(process.env.BULK_BUILDER_ENABLED || '0').trim());
 const ONDO_BUILDER_CODE = String(process.env.ONDO_PERPS_BUILDER_CODE || '').trim();
 const ONDO_BUILDER_FEE_BPS = 1;
 const IMPERIAL_API = String(process.env.IMPERIAL_API_URL || 'https://api.imperial.space/api/v1').replace(/\/+$/, '');
@@ -3350,7 +3351,7 @@ async function fetchBulkEarnings() {
   const expectedAddress = BULK_BUILDER_ADDRESS.replace(/'/g, "''");
   const proofWhere = `
     json_valid(COALESCE(proof_json, ''))
-    AND json_extract(proof_json, '$.source') = 'bulk_v0_1_2_signed_order'
+    AND json_extract(proof_json, '$.source') IN ('bulk_v0_1_2_signed_order', 'bulk_mainnet_signed_order')
     AND CAST(json_extract(proof_json, '$.builder.verified') AS INTEGER) = 1
     AND json_extract(proof_json, '$.builder.address') = '${expectedAddress}'
     AND CAST(json_extract(proof_json, '$.builder.fee_bps') AS INTEGER) = ${BULK_BUILDER_FEE_BPS}
@@ -3371,9 +3372,12 @@ async function fetchBulkEarnings() {
     builder_fee_pct: BULK_BUILDER_FEE_BPS / 100,
     latest_fill_at: local.latest_fill_at,
     recent_proofs: local.recent_proofs,
+    configured: BULK_BUILDER_ENABLED,
     model: 'bulk_signed_builder_volume_estimate',
-    source_detail: 'bulk_v0_1_2_signed_order_proof',
-    note: `Bulk fills count only when their stored v0.1.2 signed-order proof matches ${BULK_BUILDER_ADDRESS} at ${BULK_BUILDER_FEE_BPS} bps. Bulk does not expose cumulative public builder earnings during closed beta, so $${roundUsd(estimated).toFixed(4)} is shown as an estimate and is not added to exact total earned.`,
+    source_detail: 'bulk_mainnet_signed_order_proof',
+    note: BULK_BUILDER_ENABLED
+      ? `Bulk fills count only when their stored mainnet signed-order proof matches ${BULK_BUILDER_ADDRESS} at ${BULK_BUILDER_FEE_BPS} bps. Bulk does not expose cumulative public builder earnings, so $${roundUsd(estimated).toFixed(4)} is shown as an estimate and is not added to exact total earned.`
+      : `Bulk builder fees are disabled until ${BULK_BUILDER_ADDRESS} is activated as a canonical Bulk mainnet payout account. Previously verified builder fills remain visible.`,
   };
 }
 
@@ -4039,14 +4043,14 @@ function revenueModelForDex(dex, dateForRate = null) {
   if (dex === 'bulk') {
     const bps = BULK_BUILDER_FEE_BPS;
     return {
-      configured: true,
-      rate: bps / 10000,
-      rate_label: `${bps} bps signed builder estimate`,
-      builder_fee_bps: bps,
-      builder_fee_pct: bps / 100,
+      configured: BULK_BUILDER_ENABLED,
+      rate: BULK_BUILDER_ENABLED ? bps / 10000 : 0,
+      rate_label: BULK_BUILDER_ENABLED ? `${bps} bps signed builder estimate` : 'builder payout account not activated',
+      builder_fee_bps: BULK_BUILDER_ENABLED ? bps : 0,
+      builder_fee_pct: BULK_BUILDER_ENABLED ? bps / 100 : 0,
       address: BULK_BUILDER_ADDRESS,
       model: 'bulk_signed_builder_volume_estimate',
-      source_detail: 'bulk_v0_1_2_signed_order_proof',
+      source_detail: 'bulk_mainnet_signed_order_proof',
     };
   }
   if (dex === 'imperial') {
@@ -4519,7 +4523,7 @@ const EARNINGS_READER_CONFIG = {
   flash: { source: 'flash_v2_verified_tx_local_estimate', read: () => fetchFlashEarnings() },
   lighter: { source: 'lighter_integrator_fills_fee_sum', read: () => fetchLighterEarnings() },
   rhlighter: { source: 'rh_lighter_public_partner_stats', read: () => fetchRhLighterEarnings() },
-  bulk: { source: 'bulk_v0_1_2_signed_order_proof', read: () => fetchBulkEarnings() },
+  bulk: { source: 'bulk_mainnet_signed_order_proof', read: () => fetchBulkEarnings() },
   imperial: { source: 'imperial_mobile_builder_summary', read: () => fetchImperialEarnings() },
   ondo: { source: 'ondo_clashofperps_order_proof_x_authenticated_fill_volume_x_1bps', read: () => fetchOndoEarnings() },
 };

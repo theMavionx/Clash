@@ -79,7 +79,7 @@ const VERIFIED_SOURCES_BY_DEX = {
   flash: ['flash_tx'],
   lighter: ['lighter_integrator'],
   rhlighter: ['rhlighter_integrator'],
-  bulk: ['bulk_builder_signed'],
+  bulk: ['bulk_builder_signed', 'bulk_clash_signed'],
   imperial: ['imperial_api'],
 };
 
@@ -322,10 +322,21 @@ function bulkBuilderEligibilityClause() {
   const feeBps = Math.max(1, Math.min(15, Number(process.env.BULK_BUILDER_FEE_BPS || 1)));
   return `(
     ${valid}
-    AND ${json('$.source')} = 'bulk_v0_1_2_signed_order'
-    AND CAST(${json('$.builder.verified')} AS INTEGER) = 1
-    AND ${json('$.builder.address')} = ${address}
-    AND CAST(${json('$.builder.fee_bps')} AS INTEGER) = ${feeBps}
+    AND (
+      (
+        verified_source = 'bulk_builder_signed'
+        AND ${json('$.source')} IN ('bulk_v0_1_2_signed_order', 'bulk_mainnet_signed_order')
+        AND CAST(${json('$.builder.verified')} AS INTEGER) = 1
+        AND ${json('$.builder.address')} = ${address}
+        AND CAST(${json('$.builder.fee_bps')} AS INTEGER) = ${feeBps}
+      )
+      OR (
+        verified_source = 'bulk_clash_signed'
+        AND ${json('$.source')} = 'bulk_mainnet_signed_order'
+        AND CAST(${json('$.routed_by_clash')} AS INTEGER) = 1
+        AND CAST(COALESCE(${json('$.builder.verified')}, 0) AS INTEGER) = 0
+      )
+    )
   )`;
 }
 
@@ -349,7 +360,7 @@ function verifiedSourceClauseForDex(dex) {
     return `verified_source = ${sqlQuote(sources[0])} AND ${risexBuilderEligibilityClause()}`;
   }
   if (normalizedDex === 'bulk') {
-    return `verified_source = ${sqlQuote(sources[0])} AND ${bulkBuilderEligibilityClause()}`;
+    return bulkBuilderEligibilityClause();
   }
   if (normalizedDex === 'imperial') {
     return `verified_source = ${sqlQuote(sources[0])} AND ${imperialBuilderEligibilityClause()}`;

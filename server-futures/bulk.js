@@ -4,17 +4,23 @@ const db = require('./db');
 const wire = require('./bulk-wire');
 
 const bs58 = bs58Module.default || bs58Module;
-const BULK_API_BASE = String(process.env.BULK_API_URL || 'https://exchange-api.bulk.trade/api/v1').replace(/\/+$/, '');
-const BULK_WS_URL = String(process.env.BULK_WS_URL || 'wss://exchange-wss.bulk.trade').trim();
+const BULK_API_BASE = String(process.env.BULK_API_URL || 'https://mainnet-api1.bulk.trade/api/v1').replace(/\/+$/, '');
+const BULK_WS_URL = String(process.env.BULK_WS_URL || 'wss://mainnet-ws1.bulk.trade').trim();
+const BULK_NETWORK = String(process.env.BULK_NETWORK || 'mainnet').trim().toLowerCase();
+const BULK_SIGNATURE_MODE = String(process.env.BULK_SIGNATURE_MODE || 'offchain').trim().toLowerCase();
 const BULK_BUILDER_ADDRESS = String(
   process.env.BULK_BUILDER_ADDRESS || 'Drvzmh5iRfHRuKHgmm6Q77CqxhqvsXaLvrKkfMP8qci9',
 ).trim();
 const BULK_BUILDER_FEE_BPS = Math.max(1, Math.min(15, Number(process.env.BULK_BUILDER_FEE_BPS || 1)));
+// Fail open for trading but fail closed for fees: Bulk rejects orders whose
+// builder recipient is not an initialized mainnet root account. Enable only
+// after BULK_BUILDER_ADDRESS is activated and verified on mainnet.
+const BULK_BUILDER_ENABLED = !/^(0|false|no)$/i.test(String(process.env.BULK_BUILDER_ENABLED || '0').trim());
 const BULK_REFERRAL_URL = String(
   process.env.BULK_REFERRAL_URL || 'https://early.bulk.trade/deposit?ref=clashofperps',
 ).trim();
 const BULK_TIMEOUT_MS = Math.max(1_000, Math.min(20_000, Number(process.env.BULK_TIMEOUT_MS || 8_000)));
-const BULK_CLOSED_BETA = !/^(0|false|no)$/i.test(String(process.env.BULK_CLOSED_BETA || '1').trim());
+const BULK_CLOSED_BETA = !/^(0|false|no)$/i.test(String(process.env.BULK_CLOSED_BETA || '0').trim());
 const BULK_UNAVAILABLE_RETRY_MS = Math.max(30_000, Number(process.env.BULK_UNAVAILABLE_RETRY_MS || 5 * 60_000));
 const SOLANA_ADDRESS_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const MARKET_CACHE_MS = Math.max(30_000, Number(process.env.BULK_MARKET_CACHE_MS || 5 * 60_000));
@@ -39,7 +45,7 @@ function isSolanaAddress(value) {
 
 function isReadUnavailableError(cause) {
   const status = Number(cause?.status || 0);
-  return BULK_CLOSED_BETA && (status >= 500 || status === 408 || status === 429);
+  return status >= 500 || status === 408 || status === 429;
 }
 
 function unavailableReadState(kind, account, cause) {
@@ -50,7 +56,7 @@ function unavailableReadState(kind, account, cause) {
     resource: kind,
     account: account || null,
     retry_after_ms: BULK_UNAVAILABLE_RETRY_MS,
-    message: 'Bulk account data is not available during the closed beta.',
+    message: 'Bulk mainnet account data is temporarily unavailable.',
     upstream_status: Number(cause?.status || 0) || null,
     ...(kind === 'builder_status' ? {
       approved: false,
@@ -69,7 +75,7 @@ function parseMaybeJson(value) {
   return current;
 }
 
-async function request(path, { method = 'GET', body, query, timeoutMs = BULK_TIMEOUT_MS } = {}) {
+async function request(path, { method = 'GET', body, query, headers, timeoutMs = BULK_TIMEOUT_MS } = {}) {
   const url = new URL(`${BULK_API_BASE}${path.startsWith('/') ? path : `/${path}`}`);
   for (const [key, value] of Object.entries(query || {})) {
     if (value != null && value !== '') url.searchParams.set(key, String(value));
@@ -79,7 +85,11 @@ async function request(path, { method = 'GET', body, query, timeoutMs = BULK_TIM
   try {
     const response = await fetch(url, {
       method,
-      headers: { accept: 'application/json', ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
+      headers: {
+        accept: 'application/json',
+        ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+        ...(headers || {}),
+      },
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: controller.signal,
     });
@@ -190,8 +200,8 @@ async function getKlines(symbol, opts = {}) {
       limit,
     },
   }));
-  // The closed-beta API currently ignores `limit` and may return its full
-  // retained range. Keep the public Clash response bounded for browser use.
+  // Keep the public Clash response bounded even if an upstream deployment
+  // returns a wider retained range than requested.
   return rows.slice(-limit);
 }
 
@@ -207,9 +217,33 @@ async function getOrderBook(symbol, opts = {}) {
   });
 }
 
-async function accountQuery(type, account) {
+async function accountQuery(type, account, options = {}) {
   if (!isSolanaAddress(account)) throw error('Bulk account must be a Solana address');
-  return request('/account', { method: 'POST', body: { type, user: account } });
+  const cursor = options.cursor ? String(options.cursor) : '';
+  const requestedLimit = Number(options.limit);
+  const limit = Number.isFinite(requestedLimit)
+    ? Math.max(1, Math.min(5000, Math.trunc(requestedLimit)))
+    : undefined;
+  const historySlot = (value, label) => {
+    if (value == null || value === '') return undefined;
+    const parsed = Number(value);
+    if (!Number.isSafeInteger(parsed) || parsed < 0) throw error(`Bulk ${label} must be a non-negative safe integer`);
+    return parsed;
+  };
+  const startSlot = cursor ? undefined : historySlot(options.startSlot, 'startSlot');
+  const endSlot = cursor ? undefined : historySlot(options.endSlot, 'endSlot');
+  return request('/account', {
+    method: 'POST',
+    body: {
+      type,
+      user: account,
+      ...(limit != null ? { limit } : {}),
+      ...(cursor ? { cursor } : {
+        ...(startSlot != null ? { startSlot } : {}),
+        ...(endSlot != null ? { endSlot } : {}),
+      }),
+    },
+  });
 }
 
 async function getAccount(account) {
@@ -221,14 +255,39 @@ async function getOpenOrders(account) {
   return asArray(raw).map(row => row?.openOrder || row).filter(Boolean);
 }
 
-async function getFills(account) {
-  const raw = await accountQuery('fills', account);
-  return asArray(raw).map(row => row?.fill || row?.fills || row).filter(Boolean);
+async function getHistoryPage(type, account, options = {}) {
+  const raw = await accountQuery(type, account, {
+    limit: options.limit || 5000,
+    cursor: options.cursor,
+    startSlot: options.startSlot,
+    endSlot: options.endSlot,
+  });
+  return {
+    data: asArray(raw),
+    page: raw?.page || null,
+  };
 }
 
-async function getPositionHistory(account) {
-  const raw = await accountQuery('positions', account);
-  return asArray(raw).map(row => row?.position || row?.positions || row).filter(Boolean);
+async function getFillsPage(account, options = {}) {
+  const page = await getHistoryPage('fills', account, options);
+  return {
+    ...page,
+    data: page.data.map(row => row?.fill || row?.fills || row).filter(Boolean),
+  };
+}
+
+async function getFills(account, options = {}) {
+  return (await getFillsPage(account, options)).data;
+}
+
+async function getPositionHistory(account, options = {}) {
+  const page = await getHistoryPage('positions', account, options);
+  return page.data.map(row => row?.position || row?.positions || row).filter(Boolean);
+}
+
+async function getFundingHistory(account, options = {}) {
+  const page = await getHistoryPage('fundingHistory', account, options);
+  return page.data.map(row => row?.fundingPayment || row?.funding || row).filter(Boolean);
 }
 
 function builderApprovalFromAccount(account) {
@@ -240,6 +299,16 @@ function builderApprovalFromAccount(account) {
 }
 
 async function getBuilderStatus(account) {
+  if (!BULK_BUILDER_ENABLED) {
+    return {
+      approved: true,
+      approval: null,
+      builder_enabled: false,
+      builder_address: BULK_BUILDER_ADDRESS,
+      builder_fee_bps: 0,
+      attribution: 'clash_signed_order',
+    };
+  }
   const snapshot = await getAccount(account);
   const approval = builderApprovalFromAccount(snapshot);
   return {
@@ -247,6 +316,8 @@ async function getBuilderStatus(account) {
     approval,
     builder_address: BULK_BUILDER_ADDRESS,
     builder_fee_bps: BULK_BUILDER_FEE_BPS,
+    builder_enabled: true,
+    attribution: 'bulk_builder_code',
   };
 }
 
@@ -261,13 +332,25 @@ function buildActions(body = {}) {
   const symbol = apiSymbol(body.symbol);
   const side = String(body.side || '').toLowerCase();
   const isBuy = side === 'bid' || side === 'buy' || side === 'long';
-  const builderCode = { to: BULK_BUILDER_ADDRESS, fee: BULK_BUILDER_FEE_BPS };
-  if (kind === 'approve_builder') return [{ abc: builderCode }];
+  const builderCode = BULK_BUILDER_ENABLED
+    ? { to: BULK_BUILDER_ADDRESS, fee: BULK_BUILDER_FEE_BPS }
+    : undefined;
+  if (kind === 'approve_builder') {
+    if (!builderCode) throw error('Bulk builder attribution is not enabled on this deployment');
+    return [{ abc: builderCode }];
+  }
   if (kind === 'market' || kind === 'limit') {
     if (!['bid', 'buy', 'long', 'ask', 'sell', 'short'].includes(side)) throw error('Bulk side must be bid or ask');
     const size = positive(body.size, 'Bulk order size');
     const main = kind === 'market'
-      ? { m: { c: symbol, b: isBuy, sz: size, r: body.reduce_only === true, i: body.isolated === true, builderCode } }
+      ? { m: {
+        c: symbol,
+        b: isBuy,
+        sz: size,
+        r: body.reduce_only === true,
+        i: body.isolated === true,
+        ...(builderCode ? { builderCode } : {}),
+      } }
       : { l: {
         c: symbol,
         b: isBuy,
@@ -276,16 +359,16 @@ function buildActions(body = {}) {
         tif: String(body.tif || 'GTC').toUpperCase(),
         r: body.reduce_only === true,
         i: body.isolated === true,
-        builderCode,
+        ...(builderCode ? { builderCode } : {}),
       } };
     const actions = [main];
     const tp = Number(body.take_profit || 0);
     const sl = Number(body.stop_loss || 0);
     if (Number.isFinite(tp) && tp > 0) {
-      actions.push({ tp: { c: symbol, d: isBuy, sz: size, tr: String(tp), lim: null } });
+      actions.push({ tp: { c: symbol, d: isBuy, sz: size, tr: String(tp), lim: null, i: body.isolated === true } });
     }
     if (Number.isFinite(sl) && sl > 0) {
-      actions.push({ st: { c: symbol, d: !isBuy, sz: size, tr: String(sl), lim: null } });
+      actions.push({ st: { c: symbol, d: !isBuy, sz: size, tr: String(sl), lim: null, i: body.isolated === true } });
     }
     return actions;
   }
@@ -297,14 +380,14 @@ function buildActions(body = {}) {
   if (kind === 'leverage') {
     const leverage = Number(body.leverage);
     if (!Number.isFinite(leverage) || leverage < 1 || leverage > 100) throw error('Bulk leverage out of range');
-    return [{ updateUserSettings: { m: [[symbol, leverage]] } }];
+    return [{ updateUserSettings: { m: { [symbol]: leverage } } }];
   }
   if (kind === 'tpsl') {
     const size = positive(body.size, 'Bulk TP/SL size');
     const isLong = side === 'bid' || side === 'buy' || side === 'long';
     const actions = [];
-    if (Number(body.take_profit) > 0) actions.push({ tp: { c: symbol, d: isLong, sz: size, tr: String(body.take_profit), lim: null } });
-    if (Number(body.stop_loss) > 0) actions.push({ st: { c: symbol, d: !isLong, sz: size, tr: String(body.stop_loss), lim: null } });
+    if (Number(body.take_profit) > 0) actions.push({ tp: { c: symbol, d: isLong, sz: size, tr: String(body.take_profit), lim: null, i: body.isolated === true } });
+    if (Number(body.stop_loss) > 0) actions.push({ st: { c: symbol, d: !isLong, sz: size, tr: String(body.stop_loss), lim: null, i: body.isolated === true } });
     if (!actions.length) throw error('take_profit or stop_loss required');
     return actions;
   }
@@ -315,12 +398,19 @@ function prepareTransaction(account, body = {}) {
   if (!isSolanaAddress(account)) throw error('Bulk account must be a Solana address');
   const nonce = BigInt(body.nonce || (BigInt(Date.now()) * 1_000_000n + BigInt(Math.floor(Math.random() * 1_000_000))));
   const actions = buildActions(body);
-  const message = wire.serializeTransaction(actions, nonce, account);
+  const signatureMode = BULK_SIGNATURE_MODE === 'raw' ? 'raw' : 'offchain';
+  const message = signatureMode === 'offchain'
+    ? wire.offchainMessage(actions, nonce, account, account, BULK_NETWORK)
+    : wire.serializeTransaction(actions, nonce, account, BULK_NETWORK);
   return {
     transaction: { actions, nonce: nonce.toString(), account, signer: account },
     message_base64: message.toString('base64'),
     order_ids: wire.transactionOrderIds(actions, nonce, account),
-    builder: { address: BULK_BUILDER_ADDRESS, fee_bps: BULK_BUILDER_FEE_BPS },
+    network: BULK_NETWORK,
+    signature_mode: signatureMode,
+    builder: BULK_BUILDER_ENABLED
+      ? { enabled: true, address: BULK_BUILDER_ADDRESS, fee_bps: BULK_BUILDER_FEE_BPS }
+      : { enabled: false, address: BULK_BUILDER_ADDRESS, fee_bps: 0 },
   };
 }
 
@@ -329,7 +419,11 @@ function verifyTransaction(transaction) {
   const signer = String(transaction?.signer || account).trim();
   const signature = String(transaction?.signature || '').trim();
   if (!isSolanaAddress(account) || signer !== account) throw error('Bulk transaction signer/account mismatch');
-  const message = wire.serializeTransaction(transaction.actions, transaction.nonce, account);
+  const signatureMode = String(transaction?.signature_mode || BULK_SIGNATURE_MODE).trim().toLowerCase();
+  if (!['raw', 'offchain'].includes(signatureMode)) throw error('Unsupported Bulk signature mode');
+  const message = signatureMode === 'offchain'
+    ? wire.offchainMessage(transaction.actions, transaction.nonce, account, signer, BULK_NETWORK)
+    : wire.serializeTransaction(transaction.actions, transaction.nonce, account, BULK_NETWORK);
   let signatureBytes;
   try { signatureBytes = Buffer.from(bs58.decode(signature)); } catch { throw error('Bulk signature must be base58'); }
   if (signatureBytes.length !== 64 || !nacl.sign.detached.verify(message, signatureBytes, wire.decode32(signer))) {
@@ -340,9 +434,14 @@ function verifyTransaction(transaction) {
     const kind = Object.keys(action || {})[0];
     if (!allowed.has(kind)) throw error(`Bulk action '${kind}' is not allowed through Clash`);
     if (kind === 'm' || kind === 'l') {
-      const builder = wire.normalizeBuilderCode(action[kind]?.builderCode);
-      if (builder.to !== BULK_BUILDER_ADDRESS || builder.fee !== BULK_BUILDER_FEE_BPS) {
-        throw error('Bulk order builder attribution mismatch');
+      const rawBuilder = action[kind]?.builderCode;
+      if (BULK_BUILDER_ENABLED) {
+        const builder = wire.normalizeBuilderCode(rawBuilder);
+        if (builder.to !== BULK_BUILDER_ADDRESS || builder.fee !== BULK_BUILDER_FEE_BPS) {
+          throw error('Bulk order builder attribution mismatch');
+        }
+      } else if (rawBuilder !== undefined) {
+        throw error('Bulk builder attribution is disabled on this deployment');
       }
     }
     if (kind === 'abc') {
@@ -352,7 +451,7 @@ function verifyTransaction(transaction) {
       }
     }
   }
-  return { account, message, signatureBytes };
+  return { account, message, signatureBytes, signatureMode };
 }
 
 function responseStatuses(payload) {
@@ -369,7 +468,7 @@ function responseRejection(payload) {
     if (!status || typeof status !== 'object') continue;
     if (status.error) return status.error?.message || status.error;
     const key = Object.keys(status)[0] || '';
-    if (/^(rejected|error|failed)/i.test(key)) {
+    if (/^(rejected|error|failed)|failed$|rejected$/i.test(key)) {
       return status[key]?.message || status[key]?.reason || key;
     }
   }
@@ -401,8 +500,8 @@ function persistSubmittedProofs(playerId, transaction, upstream) {
         transaction.account,
         body.c,
         body.b ? 'bid' : 'ask',
-        BULK_BUILDER_ADDRESS,
-        BULK_BUILDER_FEE_BPS,
+        BULK_BUILDER_ENABLED ? BULK_BUILDER_ADDRESS : '',
+        BULK_BUILDER_ENABLED ? BULK_BUILDER_FEE_BPS : 0,
         String(transaction.nonce),
         index,
         transaction.signature,
@@ -419,13 +518,18 @@ async function submitTransaction(playerId, linkedAccount, transaction) {
   const verified = verifyTransaction(transaction);
   if (verified.account !== String(linkedAccount || '').trim()) throw error('Bulk wallet does not match the linked game account', 403);
   const hasOrder = (transaction.actions || []).some(action => action?.m || action?.l);
-  if (hasOrder) {
+  if (hasOrder && BULK_BUILDER_ENABLED) {
     const builder = await getBuilderStatus(verified.account);
     if (!builder.approved) {
       throw error('Approve the Clash builder code on your Bulk account before trading', 428, builder);
     }
   }
-  const upstream = await request('/order', { method: 'POST', body: transaction });
+  const { signature_mode: _signatureMode, ...upstreamTransaction } = transaction;
+  const upstream = await request('/order', {
+    method: 'POST',
+    body: upstreamTransaction,
+    headers: verified.signatureMode === 'offchain' ? { 'x-bulk-sig-mode': 'offchain' } : undefined,
+  });
   // Persist the server-verified builder proof before surfacing a mixed batch
   // rejection. Bulk returns one status per action; an entry order may be
   // accepted even if a later conditional action is rejected. A persisted proof
@@ -450,6 +554,7 @@ function orderIdForFill(account, fill) {
 }
 
 function fillIdentity(account, fill) {
+  if (fill?.tradeId || fill?.trade_id) return `bulk:fill:${account}:${fill.tradeId || fill.trade_id}`;
   const orderId = orderIdForFill(account, fill);
   const ts = String(fill?.timestamp || fill?.ts || '0');
   const price = String(fill?.price || fill?.px || '0');
@@ -462,14 +567,15 @@ function proofForFill(account, fill) {
   if (!orderId) return null;
   return db.db.prepare(`
     SELECT * FROM bulk_order_builder_proofs
-    WHERE order_id = ? AND account = ? AND builder_address = ? AND builder_fee_bps = ?
+    WHERE order_id = ? AND account = ?
     LIMIT 1
-  `).get(orderId, account, BULK_BUILDER_ADDRESS, BULK_BUILDER_FEE_BPS) || null;
+  `).get(orderId, account) || null;
 }
 
 async function importFillsForPlayer(playerId, account, opts = {}) {
   if (!isSolanaAddress(account)) throw error('Bulk account must be a Solana address');
-  const fills = (await getFills(account)).slice(0, Math.max(1, Math.min(5000, Number(opts.limit || 5000))));
+  const importLimit = Math.max(1, Math.min(5000, Number(opts.limit || 5000)));
+  const fills = (await getFills(account, { limit: importLimit })).slice(0, importLimit);
   let imported = 0;
   let ignored = 0;
   for (const fill of fills) {
@@ -480,6 +586,8 @@ async function importFillsForPlayer(playerId, account, opts = {}) {
     const price = Number(fill.price ?? fill.px ?? 0);
     const notional = size * price;
     if (!(size > 0) || !(price > 0) || !Number.isFinite(notional)) { ignored += 1; continue; }
+    const builderVerified = proof.builder_address === BULK_BUILDER_ADDRESS
+      && Number(proof.builder_fee_bps) === BULK_BUILDER_FEE_BPS;
     const result = db.addTrade(playerId, {
       symbol,
       side: (() => {
@@ -495,12 +603,19 @@ async function importFillsForPlayer(playerId, account, opts = {}) {
       status: 'filled',
       dex: 'bulk',
       notional_usd: notional,
-      verifiedSource: 'bulk_builder_signed',
+      verifiedSource: builderVerified ? 'bulk_builder_signed' : 'bulk_clash_signed',
       fee: fill.fee == null ? null : String(fill.fee),
       proofJson: JSON.stringify({
-        source: 'bulk_v0_1_2_signed_order',
+        source: 'bulk_mainnet_signed_order',
         account,
-        builder: { address: proof.builder_address, fee_bps: proof.builder_fee_bps, verified: true },
+        network: BULK_NETWORK,
+        routed_by_clash: true,
+        builder: {
+          enabled: builderVerified,
+          address: proof.builder_address || null,
+          fee_bps: Number(proof.builder_fee_bps || 0),
+          verified: builderVerified,
+        },
         order: { id: proof.order_id, nonce: proof.nonce, signature: proof.signature },
         fill,
       }),
@@ -517,10 +632,15 @@ function config() {
     ws_url: BULK_WS_URL,
     referral_url: BULK_REFERRAL_URL,
     builder_address: BULK_BUILDER_ADDRESS,
-    builder_fee_bps: BULK_BUILDER_FEE_BPS,
-    sdk_version: '0.1.2',
+    builder_fee_bps: BULK_BUILDER_ENABLED ? BULK_BUILDER_FEE_BPS : 0,
+    api_version: '1.0.19',
+    sdk_version: '0.1.26-compatible',
+    network: BULK_NETWORK,
+    signature_domain: wire.signatureDomainByte(BULK_NETWORK),
+    signature_mode: BULK_SIGNATURE_MODE === 'raw' ? 'raw' : 'offchain',
     self_custody: true,
     closed_beta: BULK_CLOSED_BETA,
+    builder_enabled: BULK_BUILDER_ENABLED,
     unavailable_retry_ms: BULK_UNAVAILABLE_RETRY_MS,
   };
 }
@@ -528,8 +648,11 @@ function config() {
 module.exports = {
   BULK_API_BASE,
   BULK_BUILDER_ADDRESS,
+  BULK_BUILDER_ENABLED,
   BULK_BUILDER_FEE_BPS,
   BULK_REFERRAL_URL,
+  BULK_NETWORK,
+  BULK_SIGNATURE_MODE,
   accountQuery,
   apiSymbol,
   builderApprovalFromAccount,
@@ -537,7 +660,10 @@ module.exports = {
   config,
   getAccount,
   getBuilderStatus,
+  getFillsPage,
   getFills,
+  getFundingHistory,
+  getHistoryPage,
   getKlines,
   getMarkets,
   getOpenOrders,

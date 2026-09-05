@@ -4037,3 +4037,21 @@ Follow-up:
   shared fallback transport while preserving the dedicated account-affine pool
   for authenticated GETs and all trading mutations. Focused Hibachi/public-read
   tests pass before the follow-up atomic release.
+
+## UR-2026-09-05-BULK-MAINNET-IMPERIAL-PROD
+
+- Timestamp: 2026-09-05 Europe/Kyiv
+- Request: fix Bulk after its mainnet launch (`/bulk/account` 409/404 and
+  Phantom `WalletSignMessageError`), verify the implementation against all
+  current Bulk documentation, ensure Imperial is present, then deploy all fixes
+  to production.
+- Authorization: explicit code changes, commit, push and production deployment.
+- Scope: migrate Bulk HTTP/WebSocket/signature domains to mainnet, implement the
+  official wallet-compatible offchain signing envelope, update every supported
+  transaction and account-history schema, remove the server-DEX selection race,
+  preserve Clash-routed reward proofs, audit Imperial against its live OpenAPI,
+  build, deploy atomically and verify the public production release.
+- Builder boundary: the configured CLASH payout address is not currently an
+  initialized canonical Bulk mainnet root account. Builder fees remain disabled
+  until that address is activated; trading and Clash reward attribution use
+  exact server-routed signed-order proofs in the interim.

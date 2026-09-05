@@ -3,6 +3,7 @@ const bulk = require('./bulk');
 
 async function run() {
   const originalFetch = global.fetch;
+  const account = '8opHzTAnfzRpPEx21XtnrVTX28YQuCpAjcn1PczScKh';
   try {
     global.fetch = async (input) => {
       const url = new URL(String(input));
@@ -18,6 +19,36 @@ async function run() {
     };
     const book = await bulk.getOrderBook('BTC', { nlevels: 3 });
     assert.equal(book.levels[0][0].px, 100);
+
+    const historyQueries = [];
+    global.fetch = async (input, init = {}) => {
+      const url = new URL(String(input));
+      assert.equal(url.pathname.endsWith('/account'), true);
+      const body = JSON.parse(init.body);
+      historyQueries.push(body);
+      if (body.type === 'fills') {
+        return new Response(JSON.stringify({
+          data: [{ tradeId: '9:3', symbol: 'BTC-USD', amount: 0.1, price: 100 }],
+          page: { nextCursor: 'next-page', hasMore: true, asOfSlot: 12, startSlot: 5, endSlot: 12, coverage: 'complete' },
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      if (body.type === 'fundingHistory') {
+        return new Response(JSON.stringify({
+          data: [{ symbol: 'BTC-USD', size: 0.1, payment: -0.02, fundingRate: 0.0001 }],
+          page: { nextCursor: null, hasMore: false, asOfSlot: 12, startSlot: 5, endSlot: 12, coverage: 'complete' },
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      throw new Error(`Unexpected account history type ${body.type}`);
+    };
+    const fills = await bulk.getFillsPage(account, { limit: 2, startSlot: '5', endSlot: '12' });
+    assert.equal(fills.data[0].tradeId, '9:3');
+    assert.equal(fills.page.nextCursor, 'next-page');
+    const funding = await bulk.getFundingHistory(account, { limit: 2, cursor: 'next-page' });
+    assert.equal(funding[0].payment, -0.02);
+    assert.deepEqual(historyQueries, [
+      { type: 'fills', user: account, limit: 2, startSlot: 5, endSlot: 12 },
+      { type: 'fundingHistory', user: account, limit: 2, cursor: 'next-page' },
+    ]);
   } finally {
     global.fetch = originalFetch;
   }
