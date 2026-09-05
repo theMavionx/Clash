@@ -5578,6 +5578,7 @@ function FuturesPanel() {
       {dex === 'imperial' && (
         <ImperialRouteCard
           quote={imperialRoutePreview}
+          availableVenues={currentMarket?.venues}
           notional={positionUsdc}
           requestedLeverage={leverage}
           holdHours={24}

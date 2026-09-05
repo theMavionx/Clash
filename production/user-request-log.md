@@ -4092,3 +4092,8 @@ Follow-up:
 - Includes the pending venue logos from the preceding request.
 - Follow-up: “Imperial side must be long or short” prevents opening a trade.
   Confirmed shared ticket passes bid/ask; normalize at client and server boundaries.
+
+## UR-2026-09-05-IMPERIAL-ANCHOR
+
+- Owner: “а чого воно все криво так стоїть? + там має бути вибір як на скріншоті і поп ап чомусь в іншій стороні екрану відкривається”.
+- Fix selector sizing, anchor the popup to the trading ticket, and offer venue selection before entering size. Verify off-centre desktop and mobile layouts before the authorized production update.

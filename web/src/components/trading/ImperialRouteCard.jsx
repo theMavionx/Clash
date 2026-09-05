@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { imperialPopoverPosition } from '../../lib/imperialPopoverPosition';
 import './ImperialRouteCard.css';
 
 const VENUE_LABELS = {
@@ -92,11 +93,10 @@ function VenueMark({ venue }) {
   );
 }
 
-function candidateRows(quote) {
+function candidateRows(quote, availableVenues, pinnedVenue) {
   const selected = venueKey(quote?.venue ?? quote?.underwriter ?? quote?.selectedVenue);
   const rows = Array.isArray(quote?.candidates) ? quote.candidates : [];
-  if (rows.length) return rows;
-  return selected ? [{
+  const quoted = rows.length ? rows : selected ? [{
     venue: selected,
     expectedCostUsd: quote?.expectedCostUsd,
     costBreakdown: quote?.costBreakdown,
@@ -104,6 +104,14 @@ function candidateRows(quote) {
     requiredDeposit: quote?.requiredDeposit,
     loanSplit: quote?.loanSplit,
   }] : [];
+  const result = [...quoted];
+  for (const value of [...availableVenues, ...(pinnedVenue ? [pinnedVenue] : [])]) {
+    const key = venueKey(value?.venue ?? value);
+    if (VENUE_LABELS[key] && !result.some(row => venueKey(row.venue) === key)) {
+      result.push({ venue: key, awaitingQuote: true });
+    }
+  }
+  return result;
 }
 
 function CostLine({ label, value, notional, suffix }) {
@@ -127,20 +135,46 @@ export default function ImperialRouteCard({
   onExcludedVenuesChange,
   profileIndex = 0,
   onProfileChange,
+  availableVenues = [],
 }) {
   const selectedVenue = venueKey(quote?.venue ?? quote?.underwriter ?? quote?.selectedVenue);
-  const candidates = useMemo(() => candidateRows(quote), [quote]);
+  const candidates = useMemo(() => candidateRows(quote, availableVenues, pinnedVenue), [quote, availableVenues, pinnedVenue]);
   const [expandedVenue, setExpandedVenue] = useState('');
   const [view, setView] = useState(null);
   const dialogRef = useRef(null);
+  const anchorRef = useRef(null);
   const auto = pinnedVenue === null || pinnedVenue === '';
   const displayVenue = auto ? selectedVenue : venueKey(pinnedVenue);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const dialog = dialogRef.current;
     if (view && !dialog.open) dialog.showModal();
     else if (!view && dialog.open) dialog.close();
-    if (!view) setExpandedVenue('');
+    if (!view) return;
+    const place = () => {
+      const vv = window.visualViewport;
+      const viewport = { left: vv?.offsetLeft || 0, top: vv?.offsetTop || 0,
+        width: vv?.width || window.innerWidth, height: vv?.height || window.innerHeight };
+      const rect = anchorRef.current.getBoundingClientRect();
+      const desiredHeight = dialog.firstElementChild.getBoundingClientRect().height + 2;
+      const position = imperialPopoverPosition(rect, viewport, desiredHeight);
+      for (const [key, value] of Object.entries(position)) dialog.style[key] = `${value}px`;
+    };
+    place();
+    const observer = new ResizeObserver(place);
+    observer.observe(dialog.firstElementChild);
+    observer.observe(anchorRef.current);
+    window.addEventListener('resize', place);
+    window.addEventListener('scroll', place, true);
+    window.visualViewport?.addEventListener('resize', place);
+    window.visualViewport?.addEventListener('scroll', place);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', place);
+      window.removeEventListener('scroll', place, true);
+      window.visualViewport?.removeEventListener('resize', place);
+      window.visualViewport?.removeEventListener('scroll', place);
+    };
   }, [view]);
 
   function choose(venue) {
@@ -150,13 +184,12 @@ export default function ImperialRouteCard({
   }
 
   return (
-    <section className="imperial-route-card" aria-label="Imperial route">
+    <section ref={anchorRef} className="imperial-route-card" aria-label="Imperial route">
       <button type="button" className="imperial-route-trigger" aria-haspopup="dialog"
-        aria-expanded={Boolean(view)} onClick={() => setView('venues')}>
+        aria-expanded={Boolean(view)} onClick={() => { setExpandedVenue(''); setView('venues'); }}>
         {displayVenue && <VenueMark venue={displayVenue} />}
         <strong>{displayVenue ? venueLabel(displayVenue) : 'Auto-route'}</strong>
         {requestedLeverage > 0 && <span className="imperial-route-muted">{leverage(requestedLeverage)}</span>}
-        <span className="imperial-route-mode">{auto ? 'Auto' : 'Manual'}</span>
         <span aria-hidden="true">⌄</span>
       </button>
       <button type="button" className="imperial-route-settings" aria-label="Route settings"
@@ -219,7 +252,7 @@ export default function ImperialRouteCard({
                         <button type="button" className="imperial-route-option__select" aria-pressed={chosen}
                           disabled={Boolean(candidate.filteredReason)} onClick={() => choose(key)}>
                           <VenueMark venue={key} /><strong>{venueLabel(key)}</strong>
-                          <span className="imperial-route-muted">{leverage(candidate?.maxLeverage)}</span>
+                          {candidate?.maxLeverage > 0 && <span className="imperial-route-muted">{leverage(candidate.maxLeverage)}</span>}
                           {auto && key === selectedVenue && <span className="imperial-route-best">best</span>}
                           {!auto && chosen && <span className="imperial-route-best" aria-label="Selected">✓</span>}
                         </button>
@@ -228,7 +261,8 @@ export default function ImperialRouteCard({
                           onClick={() => setExpandedVenue(expanded ? '' : key)}>{expanded ? '⌃' : '⌄'}</button>
                       </div>
                       {candidate.filteredReason && <p className="imperial-route-muted">{candidate.filteredReason}</p>}
-                      {expanded && (
+                      {expanded && candidate.awaitingQuote && <p className="imperial-route-muted">Enter a position size to calculate fees for this venue.</p>}
+                      {expanded && !candidate.awaitingQuote && (
                         <div className="imperial-route-option__details">
                           <CostLine label="Open fee" value={costs.openFee} notional={notional} />
                           <CostLine label="Close fee" value={costs.closeFee} notional={notional} />

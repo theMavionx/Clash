@@ -59,7 +59,8 @@ const plugin = {
         const [lev, setLev] = useState(50);
         const [type, setType] = useState('market');
         const [result, setResult] = useState(null);
-        useEffect(() => { api.previewImperialRoute({symbol:'SOL',side:'bid',notional:100,leverage:lev}); }, [api.previewImperialRoute,lev]);
+        const empty = location.search.includes('empty');
+        useEffect(() => { if (!empty) api.previewImperialRoute({symbol:'SOL',side:'bid',notional:100,leverage:lev}); }, [api.previewImperialRoute,lev,empty]);
         async function order(side) {
           const options = {notional_usd:100, market_price:100};
           const result = type === 'market'
@@ -69,7 +70,8 @@ const plugin = {
         }
         return <main>
           <div className="chart"><span>SOL / USD · chart area</span><svg viewBox="0 0 360 100"><path d="M0 85 L30 65 L55 76 L90 45 L115 60 L150 40 L190 48 L220 20 L260 34 L300 10 L360 25" fill="none" stroke="#3bcf9c" strokeWidth="2"/></svg></div>
-          <ImperialRouteCard quote={api.imperialRoutePreview} notional={100} requestedLeverage={lev}
+          <ImperialRouteCard quote={api.imperialRoutePreview} notional={empty ? 0 : 100} requestedLeverage={lev}
+            availableVenues={[{venue:'phoenix'},{venue:'jupiter'}]}
             pinnedVenue={api.imperialPinnedVenue} onVenueChange={api.setImperialPinnedVenue}
             excludedVenues={api.imperialExcludedVenues} onExcludedVenuesChange={api.setImperialExcludedVenues}
             profileIndex={api.imperialProfileIndex} onProfileChange={api.setImperialProfileIndex}/>
@@ -120,7 +122,7 @@ const plugin = {
         res.setHeader('content-type','text/html');
         res.end(await server.transformIndexHtml(req.url, `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"/><title>Imperial local verification</title>
         <style>:root{--terminal-text:#e6edf7;--terminal-text-muted:#96a3b6;--terminal-surface:#111821;--terminal-surface-raised:#1b2531;--terminal-border:#2b3948;--terminal-long:#37d399;}
-        body{margin:0;background:#090d13;color:#e6edf7;font:14px system-ui;}main{max-width:390px;margin:24px auto;padding:12px;box-sizing:border-box;}body.wide main{max-width:760px;}
+        body{margin:0;background:#090d13;color:#e6edf7;font:14px system-ui;}main{max-width:390px;margin:24px 12px 24px auto;padding:12px;box-sizing:border-box;overflow:auto;max-height:calc(100vh - 48px);}body.wide main{max-width:760px;}
         .chart{height:190px;display:flex;flex-direction:column;justify-content:space-between;border-bottom:1px solid #293447;margin-bottom:8px;color:#9ba9b9;padding:10px;}nav{display:flex;margin:10px 0;}nav button{flex:1;}
         nav button,.actions button{border:1px solid #314052;background:#17212d;color:#dce6f4;padding:12px;border-radius:8px;cursor:pointer;}nav button[aria-pressed=true]{border-color:#ff873e;}
         label input{width:70px;background:#18222e;color:white;padding:8px;border:1px solid #314052;}p{color:#96a3b6;font-size:12px;}
