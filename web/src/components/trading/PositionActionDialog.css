@@ -1,0 +1,16 @@
+.position-action-dialog {
+  position:fixed; inset:0; margin:auto; box-sizing:border-box;
+  width:min(400px,calc(100vw - 24px)); max-width:calc(100vw - 24px);
+  max-height:calc(100dvh - 32px); padding:0; overflow:auto;
+  border:1px solid var(--terminal-border,#304056); border-radius:14px;
+  background:var(--terminal-surface,#111827); color:var(--terminal-text,#edf2fa);
+  font:14px/1.4 system-ui,sans-serif; box-shadow:0 20px 70px #0008;
+  overscroll-behavior:contain;
+}
+.position-action-dialog::backdrop { background:#0008; }
+.position-action-dialog__header { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:10px 12px; border-bottom:1px solid var(--terminal-border,#304056); }
+.position-action-dialog__header h2 { margin:0; font:600 14px/20px system-ui,sans-serif; }
+.position-action-dialog__header button { display:flex; align-items:center; justify-content:center; flex:none; width:36px; height:36px; padding:0; border:1px solid var(--terminal-border,#304056); border-radius:8px; background:transparent; color:inherit; font:24px/1 system-ui,sans-serif; cursor:pointer; }
+.position-action-dialog__body { padding:12px; min-width:0; }
+.position-action-dialog__error { color:var(--terminal-short,#ff7676); font-size:12px; margin-top:10px; overflow-wrap:anywhere; }
+.position-action-dialog button:focus-visible { outline:2px solid var(--terminal-long,#37d399); outline-offset:2px; }

@@ -4109,3 +4109,13 @@ Follow-up:
 - Follow-up: popup is too large relative to trading window; replace the separate route row with one icon near the top, with all routing/settings inside its compact popup.
 - Follow-up: inaccurate position data (1x, CROSS, PnL%, liquidation price) and large delay; use WS/live updates where supported. “додавай всі мої задачі всписок і виконуй потім на прод”.
 - Checklist: production/reports/imperial-integration-audit-2026-09-05.md.
+
+## UR-2026-09-06-IMPERIAL-FOLLOWUP
+
+- Owner: “тп і стоп лос і все інше зроби поп апом а не дроп давн”. Convert position editors/close confirmation to dialogs across layouts.
+- Owner: “тут он нічого немає чомусь майже”. Investigate missing Oracle, 24h change, volume and OI in Imperial market strip.
+- Owner: Imperial position 56ee3679-4f0b-4520-a606-0cb5e3dca862 TP/SL PATCH returns 422; repair contract and error handling.
+- Owner: “у нас рахує показує не правильно перевір”. Compare BTC Phoenix $846.04 position: Clash PnL -$0.6230/-14.05%, Imperial -$0.27/-6.44%; fix precision and investigate source/latency.
+- Owner: “всі ці задачі виконай”. Complete and locally verify the above; no funded trading actions during testing.
+- Follow-up settings: owner requested `[features.context_management] experimental_mode = true` in the local Codex config. Added and validated with installed CLI0.153.0 (`context_management` true); current running turn activation not claimed. Unrelated config fields preserved.
+- Findings/verification: production/reports/imperial-followup-2026-09-06.md.

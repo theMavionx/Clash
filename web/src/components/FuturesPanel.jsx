@@ -2,6 +2,7 @@ import { Fragment, useState, memo, useCallback, useMemo, useRef, useEffect } fro
 import LighterOneTapConnect from './LighterOneTapConnect';
 import EtoroSetupGuide from './trading/EtoroSetupGuide';
 import ImperialRouteCard from './trading/ImperialRouteCard';
+import PositionActionDialog from './trading/PositionActionDialog';
 import { ETORO_TRADING_SETTINGS_URL } from '../lib/etoroClient';
 import { useSend } from '../hooks/useGodot';
 import { useLayout } from '../hooks/useIsMobile';
@@ -1087,6 +1088,7 @@ function getPositionMetrics(pos, prices, leverageSettings = {}, feeContext = {})
     netPnlPct: pnlPct,
     pnlFees,
   });
+  if (pos.live_mark_basis === 'index') pnlDisplay.primaryLabel = 'Est.';
   const pnlDirection = isDust ? 1 : signedMetricDirection(
     pnlDisplay.primaryPnlUsd,
     pnlDisplay.primaryPnlPct,
@@ -1857,14 +1859,17 @@ function OpenTpslEditor({
   const entry = firstPositive(metrics?.entryP, pos?.entry_price, metrics?.markP, pos?.mark_price);
   const isNativeLimitAttach = OPEN_TPSL_NATIVE_LIMIT_ATTACH_DEXES.has(String(dex || '').toLowerCase());
   const showLimitNotice = enabled && orderType === 'limit' && !isNativeLimitAttach;
+  const [dialogOpen, setDialogOpen] = useState(false);
   return (
     <div style={enabled ? S.openTpslBoxActive : S.openTpslBox}>
-      <button type="button" style={S.openTpslHeader} onClick={() => onEnabledChange(!enabled)}>
+      <button type="button" style={S.openTpslHeader} aria-haspopup="dialog" onClick={() => setDialogOpen(true)}>
         <span style={S.openTpslTitle}>TP/SL</span>
         <span style={enabled ? S.openTpslToggleOn : S.openTpslToggleOff}>{enabled ? 'ON' : 'OFF'}</span>
       </button>
-      {enabled && (
-        <div style={S.openTpslBody}>
+      {dialogOpen && (
+        <PositionActionDialog title="Order · Take profit / Stop loss" onClose={() => setDialogOpen(false)}>
+          <label style={S.tpslMetaRow}><span>Attach TP/SL to this order</span><input type="checkbox" checked={enabled} onChange={event => onEnabledChange(event.target.checked)} /></label>
+          <fieldset disabled={!enabled} style={{border: 0, padding: 0, margin: 0, minWidth: 0, opacity: enabled ? 1 : 0.5}}>
           <div style={S.tpslMetaRow}>
             <span>Entry {entry > 0 ? `$${fmtPrice(entry)}` : '-'}</span>
             <span>{orderType === 'limit' ? 'Limit order' : 'Market order'}</span>
@@ -1902,7 +1907,9 @@ function OpenTpslEditor({
                 ? 'Optional triggers sent with the order when the exchange supports it.'
                 : `${tpslModeLabel(mode)} is converted from margin PnL into trigger price before signing.`}
           </div>
-        </div>
+          </fieldset>
+          <button type="button" style={{...S.tpslModeButton, width:'100%', marginTop:12}} onClick={() => setDialogOpen(false)}>Done</button>
+        </PositionActionDialog>
       )}
     </div>
   );
@@ -2912,7 +2919,7 @@ const OrdersList = memo(function OrdersList({ orders, cancelOrder, positions = [
 const PositionsList = memo(function PositionsList({
   positions, orders, prices, dataReady, leverageSettings, marginModes, loading, error,
   closePosition, setTpsl, clearError, isBasic, dex, setLocalAlert = () => {}, setSuccessMsg = () => {},
-  setShareTrade = () => {}, markets = [], account = null,
+  setShareTrade = () => {}, markets = [], account = null, localAlert = null,
 }) {
   const [expandedPos, setExpandedPos] = useState(null);
   const [closePct, setClosePct] = useState(100);
@@ -2942,8 +2949,8 @@ const PositionsList = memo(function PositionsList({
           { dex, markets, account },
         );
         const tpslMetrics = { entryP, markP, amt, margin, setLev, posValueUsd };
-        const posKey = `${pos.symbol}-${pos.side}`;
-        const expanded = expandedPos?.startsWith(posKey) ? expandedPos.split(':')[1] : null;
+        const posKey = positionStableKey(pos);
+        const expanded = expandedPos?.startsWith(`${posKey}:`) ? expandedPos.slice(posKey.length + 1) : null;
         const tpslBusy = tpslSubmittingPos === posKey;
         const ostiumTpMax = ostiumTpInputMax(dex, pos);
         const initialTpsl = tpslInitial.key === posKey ? tpslInitial : { tp: '', sl: '' };
@@ -3002,9 +3009,10 @@ const PositionsList = memo(function PositionsList({
             {/* Action buttons. Basic mode hides TP/SL — risk management
                 features are deliberately stripped from the simplified UX. */}
             <div style={{display: 'flex', gap: 6, marginTop: 4}}>
-              <button style={S.btnRed} onClick={() => { setClosePct(100); setExpandedPos(expanded === 'close' ? null : `${posKey}:close`); }}>{isDust ? 'Clean up' : 'Close'}</button>
+              <button style={S.btnRed} aria-haspopup="dialog" onClick={() => { setLocalAlert(''); clearError?.(); setClosePct(100); setExpandedPos(expanded === 'close' ? null : `${posKey}:close`); }}>{isDust ? 'Clean up' : 'Close'}</button>
               {!isDust && !isBasic && (
                 <button style={S.btnBlue} onClick={() => {
+                  setLocalAlert(''); clearError?.();
                   if (expanded === 'tpsl') {
                     setExpandedPos(null);
                     setTpslInitial({ key: null, tp: '', sl: '' });
@@ -3039,7 +3047,7 @@ const PositionsList = memo(function PositionsList({
 
             {/* Close slider */}
             {expanded === 'close' && (
-              <div style={S.expandPanel}>
+              <PositionActionDialog title={`Close ${pos.symbol}`} onClose={() => setExpandedPos(null)} feedback={localAlert || error}>
                 <div style={S.row}>
                   <span style={{fontSize: 13, fontWeight: 700, color: 'var(--terminal-text)'}}>{isDust ? 'Clean up Flash dust' : `Close ${closePct}%`}</span>
                   <span style={{fontSize: 11, color: 'var(--terminal-text-muted)', fontWeight: 700}}>
@@ -3055,12 +3063,13 @@ const PositionsList = memo(function PositionsList({
                   <button style={{...S.btnRed, width: '100%'}} onClick={() => closePosition(pos.symbol, pos.side, String((dex === 'avantis' ? parseFloat(pos.margin) : parseFloat(pos.amount)) * (isDust ? 1 : closePct / 100)), pos.pair_index, pos.trade_index, isDust || closePct >= 100, dex === 'flash' ? { position: pos, inputUsdUi: String((dustUsd || posValueUsd) * (isDust ? 1 : closePct / 100)) } : undefined)} disabled={loading}>
                   {loading ? <ClosingButtonLabel /> : (isDust ? 'Clean up dust' : `Close ${closePct}%`)}
                 </button>
-              </div>
+              </PositionActionDialog>
             )}
 
             {/* TP/SL panel — same isBasic gate so the inputs never reach
                 the DOM in Basic mode (and never get accidentally fired). */}
             {!isDust && !isBasic && expanded === 'tpsl' && (
+              <PositionActionDialog title={`${pos.symbol} · Take profit / Stop loss`} onClose={() => setExpandedPos(null)} feedback={localAlert || error}>
               <TpslEditor
                 mode={tpslInputMode}
                 onModeChange={(nextMode) => {
@@ -3104,6 +3113,7 @@ const PositionsList = memo(function PositionsList({
                   }
                 }}
               />
+              </PositionActionDialog>
             )}
           </div>
         );
@@ -3137,7 +3147,7 @@ const BottomPanel = memo(function BottomPanel({
   filteredPositions, filteredOrders, orders, positions,
   prices, walletAddr, dataReady, leverageSettings,
   closePosition, cancelOrder, setTpsl, dex, loading, historyAccountAddr, markets,
-  account,
+  account, localAlert = null, error = null, clearError = () => {},
   fetchTradeHistory, fetchFundingHistory,
   activeSymbol,
   setLocalAlert = () => {}, setSuccessMsg = () => {}, setShareTrade = () => {},
@@ -3287,9 +3297,9 @@ const BottomPanel = memo(function BottomPanel({
                   <tr style={S.tr}>
                     <td style={S.td}>{p.symbol}</td>
                     <td style={{...S.td, color: p.side === 'bid' ? 'var(--terminal-long)' : 'var(--terminal-short)', fontWeight: 750}}>{p.side === 'bid' ? 'LONG' : 'SHORT'}</td>
-                    <td style={S.td}>{isDust ? 'Dust' : p.amount} <span style={{color: 'var(--terminal-text-muted)', fontSize: 11}}>(${(isDust ? dustUsd : tblPosValue).toFixed(2)})</span></td>
-                    <td style={S.td}>${fmtPrice(entryPrice)}</td>
-                    <td style={S.td}>{markPrice ? `$${fmtPrice(markPrice)}` : '—'}</td>
+                    <td style={S.td}>{isDust ? 'Dust' : fmtAmount(p.amount)} <span style={{color: 'var(--terminal-text-muted)', fontSize: 11}}>(${(isDust ? dustUsd : tblPosValue).toFixed(2)})</span></td>
+                    <td style={S.td}>${formatPositionPrice(entryPrice, dex)}</td>
+                    <td style={S.td}>{markPrice ? `$${formatPositionPrice(markPrice, dex)}` : '—'}</td>
                     <td style={{...S.td, color: pnlColor, fontWeight: 700}} title={positionPnlFeeTitle(pnlFees)}>
                       <div>{pnlDisplay.primaryLabel} {formatSignedPnlUsd(pnlDisplay.primaryPnlUsd)}</div>
                       {pnlDisplay.secondaryNetPnlUsd != null && (
@@ -3315,7 +3325,9 @@ const BottomPanel = memo(function BottomPanel({
                           style={{...S.tblCloseBtn, opacity: loading || pendingClose ? 0.5 : 1, cursor: loading || pendingClose ? 'not-allowed' : 'pointer'}}
                           disabled={loading || !!pendingClose}
                           aria-expanded={expanded === 'close'}
+                          aria-haspopup="dialog"
                           onClick={() => {
+                            setLocalAlert(''); clearError();
                             setClosePct(100);
                             setExpandedPositionAction(expanded === 'close' ? null : `${rowKey}:close`);
                           }}
@@ -3325,7 +3337,9 @@ const BottomPanel = memo(function BottomPanel({
                             type="button"
                             style={S.tblRiskBtn}
                             aria-expanded={expanded === 'tpsl'}
+                            aria-haspopup="dialog"
                             onClick={() => {
+                              setLocalAlert(''); clearError();
                               if (expanded === 'tpsl') {
                                 setExpandedPositionAction(null);
                                 setTpslInitial({ key: null, tp: '', sl: '' });
@@ -3358,9 +3372,7 @@ const BottomPanel = memo(function BottomPanel({
                     </td>
                   </tr>
                   {expanded === 'close' && (
-                    <tr style={S.tblExpandedRow}>
-                      <td colSpan={10} style={S.tblExpandedCell}>
-                        <div style={S.tblExpandedPanel}>
+                    <PositionActionDialog title={`Close ${p.symbol}`} onClose={() => setExpandedPositionAction(null)} feedback={localAlert || error}>
                           <div style={S.row}>
                             <span style={S.tblExpandedTitle}>{isDust ? 'Clean up Flash dust' : `Close ${closePct}%`}</span>
                             <span style={S.tblExpandedAmount}>{formatCloseAmountLabel(p, closePct, tblPosValue, isDust, dustUsd)}</span>
@@ -3391,14 +3403,10 @@ const BottomPanel = memo(function BottomPanel({
                               ? <ClosingButtonLabel text={pendingPhaseLabel(pendingClose.phase, 'Closing...')} />
                               : loading ? <ClosingButtonLabel /> : (isDust ? 'Clean up dust' : `Close ${closePct}%`)}
                           </button>
-                        </div>
-                      </td>
-                    </tr>
+                    </PositionActionDialog>
                   )}
                   {!isDust && expanded === 'tpsl' && (
-                    <tr style={S.tblExpandedRow}>
-                      <td colSpan={10} style={S.tblExpandedCell}>
-                        <div style={S.tblExpandedPanel}>
+                    <PositionActionDialog title={`${p.symbol} · Take profit / Stop loss`} onClose={() => setExpandedPositionAction(null)} feedback={localAlert || error}>
                           <TpslEditor
                             mode={tpslInputMode}
                             onModeChange={(nextMode) => {
@@ -3462,9 +3470,7 @@ const BottomPanel = memo(function BottomPanel({
                               }
                             }}
                           />
-                        </div>
-                      </td>
-                    </tr>
+                    </PositionActionDialog>
                   )}
                   </Fragment>
                 );
@@ -5334,20 +5340,21 @@ function FuturesPanel() {
     return { ...(currentMarket || {}), ...(priceRow || {}) };
   }, [prices, symbol, currentMarket]);
   const change24h = useMemo(() => {
+    if (dex === 'imperial' && curPriceData.price_change_24h == null) return null;
     return marketChange24h(curPriceData);
-  }, [curPriceData]);
+  }, [curPriceData, dex]);
   const vol24h = curPriceData ? marketVolume24h(curPriceData) : 0;
   const oi = curPriceData ? marketOpenInterest(curPriceData) : 0;
   const ostiumSideOi = dex === 'ostium' ? marketSideOpenInterest(curPriceData) : null;
   const hasOstiumSideOi = Boolean(ostiumSideOi?.hasSide);
-  const volume24hText = formatCompactUsd(vol24h);
+  const volume24hText = dex === 'imperial' && curPriceData.volume_24h === 0 ? '$0' : formatCompactUsd(vol24h);
   const oiLabel = hasOstiumSideOi ? 'OI L/S' : 'OI';
   const oiText = hasOstiumSideOi
     ? `${formatCompactNumber(ostiumSideOi.long)} / ${formatCompactNumber(ostiumSideOi.short)}`
-    : formatCompactUsd(oi);
+    : dex === 'imperial' && curPriceData.open_interest === 0 ? '$0' : formatCompactUsd(oi);
   const oiTitle = hasOstiumSideOi
     ? `Open Interest Long / Short${ostiumSideOi.cap > 0 ? `, cap ${formatCompactUsd(ostiumSideOi.cap)}` : ''}`
-    : 'Open Interest';
+    : dex === 'imperial' ? 'Imperial routed open interest (not total venue OI)' : 'Open Interest';
   const fundingInfoLabel = dex === 'ostium' ? 'Net L/S 8h' : fundingLabel;
   const oracle = curPriceData ? parseFloat(curPriceData.oracle || 0) : 0;
   const nadoReferralOpenBlocked = dex === 'nado' && referralAccess !== NADO_REFERRAL_ACCESS.READY;
@@ -5425,8 +5432,8 @@ function FuturesPanel() {
           <>
             <div style={S.infoCell}><span style={S.infoCellLabel}>Mark</span><span style={S.infoCellValue}>{currentPrice ? fmtPrice(parseFloat(currentPrice)) : '—'}</span></div>
             <div style={S.infoCell}><span style={S.infoCellLabel}>Oracle</span><span style={S.infoCellValue}>{oracle > 0 ? fmtPrice(oracle) : '—'}</span></div>
-            <div style={S.infoCell}><span style={S.infoCellLabel}>24h</span><span style={{...S.infoCellValue, color: change24h >= 0 ? 'var(--terminal-long)' : 'var(--terminal-short)'}}>{change24h >= 0 ? '+' : ''}{change24h.toFixed(2)}%</span></div>
-            <div style={S.infoCell}><span style={S.infoCellLabel}>Volume</span><span style={S.infoCellValue}>{volume24hText}</span></div>
+            <div style={S.infoCell} title={change24h == null ? 'Imperial does not provide a 24h price change in this feed' : undefined}><span style={S.infoCellLabel}>24h</span><span style={{...S.infoCellValue, color: change24h == null ? 'var(--terminal-text-muted)' : change24h >= 0 ? 'var(--terminal-long)' : 'var(--terminal-short)'}}>{change24h == null ? '—' : `${change24h >= 0 ? '+' : ''}${change24h.toFixed(2)}%`}</span></div>
+            <div style={S.infoCell} title={dex === 'imperial' ? 'Imperial routed volume over 24h, both legs (not total venue volume)' : undefined}><span style={S.infoCellLabel}>Volume</span><span style={S.infoCellValue}>{volume24hText}</span></div>
             <div style={{...S.infoCell, ...(hasOstiumSideOi ? S.infoCellWide : null)}} title={oiTitle}><span style={S.infoCellLabel}>{oiLabel}</span><span style={{...S.infoCellValue, ...(hasOstiumSideOi ? S.infoCellValueCompact : null)}}>{oiText}</span></div>
             <div style={{...S.infoCell, ...(dex === 'ostium' ? S.infoCellWide : null)}}><span style={S.infoCellLabel}>{fundingInfoLabel}</span><span style={{...S.infoCellValue, ...(dex === 'ostium' ? S.infoCellValueCompact : null), color: fundingColor}}>{fundingText}</span></div>
           </>
@@ -9835,6 +9842,7 @@ function FuturesPanel() {
                   marginModes={marginModes}
                   loading={loading}
                   error={error}
+                  localAlert={localAlert}
                   closePosition={closePosition}
                   setTpsl={setTpsl}
                   clearError={clearError}
@@ -9888,6 +9896,9 @@ function FuturesPanel() {
           {/* Bottom: positions/orders panel */}
           <BottomPanel
             bottomH={bottomH}
+            clearError={clearError}
+            error={error}
+            localAlert={localAlert}
             bottomTab={bottomTab}
             setBottomTab={setBottomTab}
             showFilter={showFilter}
@@ -9969,8 +9980,8 @@ function FuturesPanel() {
           );
           const amt = numOrNull(pos.amount) || 0;
           const tpslMetrics = { entryP, markP, amt, margin, setLev, posValueUsd };
-          const posKey = `${pos.symbol}-${pos.side}`;
-          const expanded = expandedPos?.startsWith(posKey) ? expandedPos.split(':')[1] : null;
+          const posKey = positionStableKey(pos);
+          const expanded = expandedPos?.startsWith(`${posKey}:`) ? expandedPos.slice(posKey.length + 1) : null;
           const tpslBusy = tpslSubmittingPos === posKey;
           const ostiumTpMax = ostiumTpInputMax(dex, pos);
           const initialTpsl = tpslInitial.key === posKey ? tpslInitial : { tp: '', sl: '' };
@@ -10169,9 +10180,10 @@ function FuturesPanel() {
                   Pro too (per-user-request) — same icon as Basic for
                   consistency. */}
               <div style={{display: 'flex', gap: 6, marginTop: 4}}>
-                <button style={S.btnRed} onClick={() => { setClosePct(100); setExpandedPos(expanded === 'close' ? null : `${posKey}:close`); }}>{isDust ? 'Clean up' : 'Close'}</button>
+                <button style={S.btnRed} aria-haspopup="dialog" onClick={() => { setLocalAlert(''); clearError?.(); setClosePct(100); setExpandedPos(expanded === 'close' ? null : `${posKey}:close`); }}>{isDust ? 'Clean up' : 'Close'}</button>
                 {!isDust && !isBasic && (
                   <button style={S.btnBlue} onClick={() => {
+                    setLocalAlert(''); clearError?.();
                     if (expanded === 'tpsl') {
                       setExpandedPos(null);
                       setTpslInitial({ key: null, tp: '', sl: '' });
@@ -10217,7 +10229,7 @@ function FuturesPanel() {
 
               {/* Close slider */}
               {expanded === 'close' && (
-                <div style={S.expandPanel}>
+                <PositionActionDialog title={`Close ${pos.symbol}`} onClose={() => setExpandedPos(null)} feedback={localAlert || error}>
                   <div style={S.row}>
                     <span style={{fontSize: 13, fontWeight: 700, color: 'var(--terminal-text)'}}>{isDust ? 'Clean up Flash dust' : `Close ${closePct}%`}</span>
                     <span style={{fontSize: 11, color: 'var(--terminal-text-muted)', fontWeight: 700}}>
@@ -10235,11 +10247,12 @@ function FuturesPanel() {
                       ? <ClosingButtonLabel text={pendingPhaseLabel(pendingClose.phase, 'Closing...')} />
                       : loading ? <ClosingButtonLabel /> : (isDust ? 'Clean up dust' : `Close ${closePct}%`)}
                   </button>
-                </div>
+                </PositionActionDialog>
               )}
 
               {/* TP/SL panel — gated on Basic mode (button is hidden too). */}
               {!isDust && !isBasic && expanded === 'tpsl' && (
+                <PositionActionDialog title={`${pos.symbol} · Take profit / Stop loss`} onClose={() => setExpandedPos(null)} feedback={localAlert || error}>
                 <TpslEditor
                   mode={tpslInputMode}
                   onModeChange={(nextMode) => {
@@ -10284,6 +10297,7 @@ function FuturesPanel() {
                   }
                 }}
               />
+                </PositionActionDialog>
               )}
             </div>
           );

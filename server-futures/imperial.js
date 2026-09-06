@@ -297,7 +297,7 @@ function makeAttachedCloseOrders(entry, body) {
       orderType: 5,
       action: 1,
       triggerCondition,
-      sizeUsd: 0,
+      sizeUsd: entry.sizeUsd,
       collateralAmount: 0,
       closeBps: 10_000,
       triggerPrice: Math.round(price * 1_000_000_000),
@@ -469,6 +469,7 @@ async function setPositionTpsl({ playerId, owner, jwt, positionId, body, db, fet
   ].filter(([, value]) => Number(value) > 0);
   if (!levels.length) throw error('Set at least one valid Imperial TP or SL price.');
   const results = [];
+  const prepared = [];
   for (const [kind, value, triggerCondition] of levels) {
     const payload = {
       wallet: linked,
@@ -478,7 +479,8 @@ async function setPositionTpsl({ playerId, owner, jwt, positionId, body, db, fet
       orderType: 5,
       action: 1,
       triggerCondition,
-      sizeUsd: 0,
+      // Resting protection is sized at placement, unlike a market full close.
+      sizeUsd: usdMicro(position.sizeUsd ?? position.size_usd, 'Position size'),
       collateralAmount: 0,
       closeBps: 10_000,
       slippageBps: 50,
@@ -491,7 +493,17 @@ async function setPositionTpsl({ playerId, owner, jwt, positionId, body, db, fet
     };
     const preflight = await request('/mobile/orders/preflight', { method: 'POST', jwt, body: payload, fetchImpl });
     if (preflight?.ok === false) throw error(preflight?.error || `Imperial rejected the ${kind} during preflight.`, 422, preflight);
-    const result = await request('/mobile/orders', { method: 'POST', jwt, body: payload, fetchImpl });
+    prepared.push({kind,payload,preflight});
+  }
+  // Validate both legs before submitting either. API submission is sequential,
+  // not atomic: if the second write fails, disclose the already-created leg.
+  for (const {kind,payload,preflight} of prepared) {
+    let result;
+    try { result = await request('/mobile/orders', { method: 'POST', jwt, body: payload, fetchImpl }); }
+    catch (cause) {
+      if (!results.length) throw cause;
+      throw error(`Imperial created ${results.map(row => row.kind).join(', ')}, but ${kind} failed: ${cause.message}. Review existing protection before retrying.`, cause.status || 502, {partialSuccess:true,orders:results});
+    }
     if (activeBuilderCode) db?.recordImperialOrderProof?.({ playerId, wallet: linked, profileIndex: payload.profileIndex, symbol: payload.symbol, side: isShort ? 'short' : 'long', orderType: kind, builderCode: activeBuilderCode, underwriter: selected, orderPda: result?.orderPda || null, txSignature: result?.signature || result?.txSignature || null, requestJson: { ...payload, _clashBuilderFeeBps: numberFrom(builderStatus?.data?.feeBps ?? builderStatus?.data?.builderFeeBps, 0) || null }, responseJson: result });
     results.push({ kind, preflight, ...result });
   }
@@ -566,7 +578,19 @@ async function editCollateral(jwt, owner, positionId, body, fetchImpl = fetch) {
   });
 }
 
-function normalizedMarketRows(raw) {
+// Share a bounded public stats read across player snapshots; prices must not
+// become unavailable just because the secondary statistics endpoint failed.
+const marketStatsCache = new WeakMap();
+async function marketStats(fetchImpl) {
+  const cached = marketStatsCache.get(fetchImpl);
+  if (cached && cached.until > Date.now()) return cached.promise;
+  const promise = request('/stats/markets', { query: { period: '24h' }, fetchImpl }).catch(() => null);
+  marketStatsCache.set(fetchImpl, { until: Date.now() + 30000, promise });
+  return promise;
+}
+
+function normalizedMarketRows(raw, stats = null) {
+  const statsBySymbol = new Map(apiList(stats).map(row => [row.symbol, row]));
   const venueKeys = ['jupiter', 'flash', 'phoenix', 'gmtrade', 'flash_v2', 'pairs', 'touch'];
   return apiList(raw).map(row => {
     const venues = venueKeys.flatMap(venue => {
@@ -574,8 +598,19 @@ function normalizedMarketRows(raw) {
       const price = numberFrom(entry?.price ?? entry?.markPrice, 0);
       return entry && price > 0 ? [{ venue, ...entry, price }] : [];
     });
-    const preferred = row?.index?.price > 0 ? row.index : venues.find(entry => entry.venue === 'phoenix') || venues[0] || {};
-    return { symbol: row?.symbol, price: numberFrom(preferred.price, 0), markPrice: numberFrom(preferred.price, 0), venues };
+    const fresh = venues.filter(entry => entry.fetchedAtUnixMs != null && Date.now()-Number(entry.fetchedAtUnixMs)<60000);
+    const preferred = row?.index?.price > 0 ? row.index : fresh.find(entry => entry.venue === 'phoenix') || fresh[0] || venues[0] || {};
+    const statistics = statsBySymbol.get(row?.symbol);
+    return { symbol: row?.symbol, price: numberFrom(preferred.price, 0), markPrice: numberFrom(preferred.price, 0), venues,
+      oracle: row?.index?.price > 0 ? Number(row.index.price) : null,
+      oracle_source: row?.index?.source || null,
+      oracle_at: row?.index?.fetchedAtUnixMs ?? null,
+      // Imperial's own routed activity, not the total activity of each venue.
+      volume_24h: stats ? numberFrom(statistics?.volumeUsd, 0) : null,
+      open_interest: stats ? numberFrom(statistics?.openInterestUsd, 0) : null,
+      price_change_24h: null,
+      stats_source: stats ? 'imperial' : null,
+    };
   }).filter(row => row.symbol && row.price > 0);
 }
 
@@ -591,12 +626,13 @@ function normalizedFundingRows(raw) {
 }
 
 async function getMarketInfo(fetchImpl = fetch) {
-  const [marksRaw, fundingRaw] = await Promise.all([
+  const [marksRaw, fundingRaw, stats] = await Promise.all([
     request('/mark-prices', { fetchImpl }),
     request('/funding-rates', { fetchImpl }),
+    marketStats(fetchImpl),
   ]);
   const fundingBySymbol = new Map(normalizedFundingRows(fundingRaw).map(row => [row.symbol, row]));
-  return normalizedMarketRows(marksRaw).map(row => ({
+  return normalizedMarketRows(marksRaw, stats).map(row => ({
     ...row,
     funding_rate: fundingBySymbol.get(row.symbol)?.fundingRate || 0,
     funding_venues: fundingBySymbol.get(row.symbol)?.venues || [],
@@ -619,7 +655,7 @@ async function positionSnapshot(owner, selectedProfile = 0, fetchImpl = fetch) {
 async function snapshot(jwt, owner, selectedProfile = 0, fetchImpl = fetch) {
   const linked = wallet(owner);
   const idx = profileIndex(selectedProfile);
-  const [balancesRaw, v2BalancesRaw, positionsRaw, ordersRaw, marksRaw, fundingRaw, builder, partner, profileRaw] = await Promise.all([
+  const [balancesRaw, v2BalancesRaw, positionsRaw, ordersRaw, marksRaw, fundingRaw, builder, partner, profileRaw, stats] = await Promise.all([
     request('/mobile/balances', { jwt, fetchImpl }),
     request('/mobile/v2/balance', { jwt, fetchImpl }).catch(() => ({ profiles: [] })),
     positionSnapshot(linked, idx, fetchImpl),
@@ -629,6 +665,7 @@ async function snapshot(jwt, owner, selectedProfile = 0, fetchImpl = fetch) {
     getBuilderStatus(fetchImpl),
     partnerStatus(jwt, fetchImpl),
     request(`/passthrough/users/${linked}/profiles`, {jwt,fetchImpl}).catch(() => null),
+    marketStats(fetchImpl),
   ]);
   const balances = apiList(balancesRaw);
   const selected = balances.find(row => Number(row?.profileIndex ?? row?.index) === idx) || balances[idx] || {};
@@ -652,7 +689,7 @@ async function snapshot(jwt, owner, selectedProfile = 0, fetchImpl = fetch) {
     positions: positionsRaw.positions,
     phoenixCrossSeats: positionsRaw.phoenixCrossSeats,
     orders: [...apiList(ordersRaw?.jupiterOrders), ...apiList(ordersRaw?.passthroughOrders), ...apiList(ordersRaw)].filter(row => row.profileIndex == null || Number(row.profileIndex) === idx),
-    marks: normalizedMarketRows(marksRaw),
+    marks: normalizedMarketRows(marksRaw, stats),
     funding: normalizedFundingRows(fundingRaw),
     builder_status: builder,
     partner_status: partner,

@@ -4,7 +4,7 @@ import { useSignMessage as usePrivySignMessage, useSignTransaction as usePrivySi
 import { VersionedTransaction } from '@solana/web3.js';
 import bs58 from 'bs58';
 import { imperialOrderSide } from '../lib/imperialOrderSide';
-import { imperialPosition, imperialCloseBps, imperialTradeRows, imperialFundingRows } from '../lib/imperialData';
+import { imperialPosition, imperialLivePosition, imperialMarketUpdate, imperialCloseBps, imperialTradeRows, imperialFundingRows } from '../lib/imperialData';
 import { openImperialStream } from '../lib/imperialStream';
 import { useDex } from '../contexts/DexContext';
 import { usePlayer } from './useGodot';
@@ -187,7 +187,9 @@ export function useImperial() {
       const streamed = indexMarksRef.current.get(symbol);
       const price = streamed && Date.now() - streamed.at < 30000 ? streamed.price : n(row?.markPrice ?? row?.mark_price ?? row?.price);
       const venue = row?.venue ?? row?.underwriter ?? '';
-      const current = bySymbol.get(symbol) || { symbol, price, mark_price: price, max_leverage: 250, lot_size: 0.000001, venues: [] };
+      const current = bySymbol.get(symbol) || { ...row, symbol, price, mark_price: price,
+        ...(streamed && Date.now()-streamed.at<30000 ? {oracle:streamed.price,oracle_at:streamed.at,oracle_source:'pyth_lazer'} : {}),
+        max_leverage: 250, lot_size: 0.000001, venues: [] };
       current.venues.push(...(Array.isArray(row.venues) ? row.venues : venue ? [{ venue, price }] : []));
       if (!(current.price > 0) && price > 0) current.price = current.mark_price = price;
       bySymbol.set(symbol, current);
@@ -198,7 +200,13 @@ export function useImperial() {
     }
     const nextMarkets = [...bySymbol.values()];
     setMarkets(nextMarkets);
-    setPrices(nextMarkets.map(row => ({ symbol: row.symbol, price: row.price })));
+    setPrices(previous => nextMarkets.map(row => {
+      const live = previous.find(item => item.symbol === row.symbol);
+      return {...row, venues: row.venues.map(quote => {
+        const fresh = live?.venues?.find(item => item.venue === quote.venue);
+        return Number(fresh?.fetchedAtUnixMs) > Number(quote.fetchedAtUnixMs || 0) ? fresh : quote;
+      })};
+    }));
     setConfig(previous => ({ ...(previous || {}), builder_status: snapshot?.builder_status, partner_status: snapshot?.partner_status }));
   }, []);
 
@@ -265,11 +273,13 @@ export function useImperial() {
       url: config?.market_ws_url || 'wss://api.imperial.space/ws/market',
       subscriptions: [{type:'subscribe_mark_prices'},{type:'subscribe_funding_rates'}],
       onMessage: message => {
-        if (message.type === 'mark_price_update' && message.venue === 'index' && Number(message.price) > 0) {
+        if (message.type === 'mark_price_update' && Number(message.price) > 0) {
           const symbol = symbolOf(message.symbol), price = Number(message.price);
-          indexMarksRef.current.set(symbol, {price,at:Date.now()});
-          setPrices(rows => [...rows.filter(row => row.symbol !== symbol), {symbol,price,mark_price:price}]);
-          setMarkets(rows => rows.map(row => row.symbol === symbol ? {...row,price,mark_price:price} : row));
+          const at=Number(message.fetched_at_unix_ms ?? message.fetchedAtUnixMs);
+          if (message.venue === 'index' && Number.isFinite(at) && Date.now()-at<30000 && at<=Date.now()+5000) indexMarksRef.current.set(symbol, {price,at});
+          const update = rows => imperialMarketUpdate(rows,message);
+          setPrices(update);
+          setMarkets(update);
         } else if (message.type === 'funding_rate_update' && message.venue === 'phoenix' && message.longFundingRatePerHourPercent != null) {
           setMarkets(rows => rows.map(row => row.symbol === symbolOf(message.symbol) ? {...row,funding_rate:Number(message.longFundingRatePerHourPercent)/100} : row));
         }
@@ -329,7 +339,11 @@ export function useImperial() {
       later(() => refresh(), 3000);
       later(() => api('/imperial/import-trades', { method: 'POST', body: { wallet: walletAddr, limit: 500 } }).catch(() => {}), 5000);
       return result;
-    } catch (cause) { const message = cause?.message || 'Imperial action failed'; setError(message); return { error: message }; }
+    } catch (cause) {
+      const message = cause?.message || 'Imperial action failed';
+      if (cause?.data?.details?.partialSuccess) await refresh();
+      setError(message); return { error: message };
+    }
     finally { actionRef.current = false; setLoading(false); }
   }, [api, assert, capture, refresh, refreshPositions, session, walletAddr]);
 
@@ -433,9 +447,10 @@ export function useImperial() {
   }, [api, assert, capture, walletAddr]);
 
   const setupVerified = !!session;
+  const livePositions = useMemo(() => positions.map(row => imperialLivePosition(row, prices)), [positions, prices]);
   return useMemo(() => ({
     connected: !!walletAddr, hasWallet: !!walletAddr, walletAddr, walletMismatch: false,
-    account, positions, orders, markets, prices, balance: n(account?.equity ?? account?.balance),
+    account, positions: livePositions, orders, markets, prices, balance: n(account?.equity ?? account?.balance),
     freeCollateral: n(account?.available_to_spend), walletUsdc: null, spotUsdc: null,
     leverageSettings: {}, marginModes: Object.fromEntries(markets.map(row => [row.symbol, account?.margin_mode !== 'unified'])), dataReady: setupVerified && markets.length > 0,
     accountReady: !!account, setupVerified, isReady: setupVerified, activationStep: setupVerified ? 'ready' : 'connect',
@@ -457,6 +472,6 @@ export function useImperial() {
     claimGold, goldEarned, clearGoldEarned: () => setGoldEarned(null),
   }), [account, activate, active, excludedVenues, pinnedVenue, cancelOrder, claimGold, closePosition, config, disconnect, error,
     fetchCandles, fetchFundingHistory, fetchTradeHistory, goldEarned, loading, markets, orders, placeLimitOrder,
-    placeMarketOrder, positions, previewRoute, prices, profileIndex, refresh, refreshPositions, routePreview, runAction, sessionLoaded,
+    placeMarketOrder, livePositions, previewRoute, prices, profileIndex, refresh, refreshPositions, routePreview, runAction, sessionLoaded,
     setTpsl, setupVerified, transfer, walletAddr]);
 }

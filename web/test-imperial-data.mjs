@@ -1,8 +1,41 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {imperialPosition,imperialCloseBps,imperialTradeRows,imperialFundingRows} from './src/lib/imperialData.js';
+import {imperialPosition,imperialLivePosition,imperialMarketUpdate,imperialCloseBps,imperialTradeRows,imperialFundingRows} from './src/lib/imperialData.js';
 import {openImperialStream} from './src/lib/imperialStream.js';
 const raw={id:'fixture',asset:'BTC',side:'long',profileIndex:0,underwriter:'jupiter',sizeUsd:'70',sizeTokenAmount:'0.00087763',collateralUsd:'3.434131',leverageX:'20.383613787592846',pnlUsd:'-0.1157',pnlPercent:'-3.3528',markPrice:'79744',entryPrice:'79760.284249',liquidationPrice:'76062.84'};
+
+test('reported Phoenix leveraged position uses live venue price and cash capital, not stale API PnL',()=>{
+ const position=imperialPosition({...raw,underwriter:'phoenix',sizeUsd:'846.0401',sizeTokenAmount:null,
+  entryPrice:'79815.103773',markPrice:'79815.103773',collateralUsd:'4.135005',ownedCollateralUsd:'4.43556',borrowedCollateralUsd:'18.057119',
+  maxSizeUsd:'846.0401',feesOwed:'0.318039595',totalFeesUsd:'0.304995',effectiveLeverageX:'190.74',pnlUsd:'-0.623034595',pnlPercent:'-14.046357055253452',
+  actions:[{actionType:'increase',sizeDelta:'846.0401',collateralDeposited:'4.44',platformFee:'.00444',jupiterFee:'.296115'}]});
+ const quotes=[{symbol:'BTC',price:1,venues:[{venue:'jupiter',price:1,fetchedAtUnixMs:100000},{venue:'phoenix',price:79820,fetchedAtUnixMs:100000}]}];
+ const live=imperialLivePosition(position,quotes,100000);
+ assert.equal(live.mark_price,79820);assert.equal(live.unrealized_pnl.toFixed(2),'-0.27');assert.equal(live.pnl_pct.toFixed(2),'-6.44');
+ assert.equal(live.leverage,190.74);assert.equal(live.amount,position.amount);assert.equal(live.pnl_includes_fees,true);
+ assert.equal(imperialLivePosition(position,quotes,160001),position,'stale quotes must not recompute');
+ assert.equal(imperialLivePosition(position,[],100000),position);
+ assert.equal(imperialPosition({...raw,sizeTokenAmount:null,sizeUsd:100,entryPrice:100,markPrice:200}).amount,1);
+ const reduced=imperialLivePosition({...position,side:'ask'},quotes,100000);
+ assert.ok(reduced.unrealized_pnl < live.unrealized_pnl);
+});
+
+test('Imperial native tp/sl aliases are displayed',()=>{
+ const p=imperialPosition({...raw,tpslOrders:[{orderType:'tp',triggerPriceUsd:'81000'},{orderType:'sl',triggerPriceUsd:'79000'}]});
+ assert.equal(p.take_profit,81000);assert.equal(p.stop_loss,79000);
+});
+
+test('market WS respects upstream timestamps, including stale snapshots and out-of-order frames',()=>{
+ const initial=[{symbol:'BTC',volume_24h:123,open_interest:456,venues:[]}];
+ const event={type:'mark_price_update',symbol:'BTC',venue:'index',price:79820,fetched_at_unix_ms:100000};
+ assert.equal(imperialMarketUpdate(initial,{...event,fetched_at_unix_ms:1},100000),initial);
+ const live=imperialMarketUpdate(initial,event,100001);
+ assert.equal(live[0].oracle,79820);assert.equal(live[0].oracle_at,100000);assert.equal(live[0].volume_24h,123);
+ assert.equal(imperialMarketUpdate(live,{...event,fetched_at_unix_ms:99999},100001),live);
+ const row=imperialPosition({...raw,underwriter:'phoenix',feesOwed:0,actions:[]});
+ assert.equal(imperialLivePosition(row,live,100001).live_mark_basis,'index');
+ assert.equal(imperialLivePosition(row,live,160001),row);
+});
 test('Imperial live decimals, margin, return and venue identity are preserved',()=>{
  const p=imperialPosition(raw);
  assert.equal(p.leverage,20.383613787592846);assert.equal(p.margin,3.434131);assert.equal(p.pnl_pct,-3.3528);

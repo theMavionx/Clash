@@ -6,6 +6,51 @@ const imperial = require('./imperial');
 
 const WALLET = '11111111111111111111111111111111';
 
+test('resting TP/SL uses authoritative nonzero notional: regression for production 422', async () => {
+ for (const side of ['long','short']) {
+  const posted=[];
+  const fetchImpl=async(url,options={})=>{
+   const path=new URL(url).pathname;
+   if(path.endsWith('/mobile/builder/summary'))return response(200,{active:true});
+   if(path.endsWith('/positions'))return response(200,{dataList:[{id:'owned',asset:'BTC',side,profileIndex:2,underwriter:'phoenix',sizeUsd:'846.0401'}]});
+   const payload=JSON.parse(options.body);
+   if(path.endsWith('/preflight'))return response(200,payload.sizeUsd>0?{ok:true}:{ok:false,error:'sizeUsd must be greater than 0'});
+   if(path.endsWith('/mobile/orders')){posted.push(payload);return response(200,{orderPda:`fixture-${posted.length}`});}
+   throw new Error(path);
+  };
+  await imperial.setPositionTpsl({owner:WALLET,jwt:'fixture',positionId:'owned',body:{takeProfit:81000,stopLoss:79000,sizeUsd:999},fetchImpl});
+  assert.equal(posted.length,2);
+  for(const p of posted){assert.equal(p.sizeUsd,846040100);assert.equal(p.closeBps,10000);assert.equal(p.action,1);assert.equal(p.profileIndex,2);assert.equal(p.builderCode,'CLASH');assert.equal(p.underwriter,2);}
+  assert.equal(posted[0].triggerCondition,side==='short'?1:0);assert.equal(posted[1].triggerCondition,side==='short'?0:1);
+ }
+});
+
+test('market statistics and oracle preserve documented units and unknown vs zero',()=>{
+ const raw=[{symbol:'BTC',index:{price:80000,source:'pyth_lazer'},phoenix:{price:80001}}];
+ const [known]=imperial.normalizedMarketRows(raw,{rows:[{symbol:'BTC',volumeUsd:'12345.67',openInterestUsd:'0'}]});
+ assert.equal(known.oracle,80000);assert.equal(known.volume_24h,12345.67);assert.equal(known.open_interest,0);
+ assert.equal(imperial.normalizedMarketRows(raw)[0].volume_24h,null);assert.equal(known.price_change_24h,null);
+});
+
+test('both TP/SL legs preflight before writes and partial writes are disclosed',async()=>{
+ for(const failure of ['preflight','submission']){
+  let checks=0,writes=0;
+  const fetchImpl=async(url)=>{
+   const path=new URL(url).pathname;
+   if(path.endsWith('/mobile/builder/summary'))return response(200,{active:true});
+   if(path.endsWith('/positions'))return response(200,{dataList:[{id:'p',asset:'BTC',side:'long',underwriter:'phoenix',sizeUsd:100}]});
+   if(path.endsWith('/preflight')){checks++;return response(200,checks===2&&failure==='preflight'?{ok:false,error:'Invalid stop'}:{ok:true});}
+   if(path.endsWith('/mobile/orders')){writes++;assert.equal(checks,2);return writes===2?response(422,{error:'Rejected stop'}):response(200,{orderPda:'created-tp'});}
+   throw new Error(path);
+  };
+  await assert.rejects(imperial.setPositionTpsl({owner:WALLET,jwt:'fixture',positionId:'p',body:{takeProfit:81000,stopLoss:79000},fetchImpl}),err=>{
+   if(failure==='submission'){assert.equal(err.details.partialSuccess,true);assert.equal(err.details.orders[0].orderPda,'created-tp');assert.match(err.message,/Review existing protection/);}
+   return true;
+  });
+  assert.equal(writes,failure==='preflight'?0:2);
+ }
+});
+
 for (const orderType of ['market', 'limit']) {
   for (const [inputSide, canonicalSide, wireSide] of [['bid', 'long', 0], ['ask', 'short', 1]]) {
     test(`Imperial ${orderType} ${inputSide} uses the pinned Jupiter route and correct side`, async () => {
@@ -286,7 +331,7 @@ test('Imperial submits entry plus TP/SL as one native batch with CLASH on every 
   assert.equal(batchBody.entry.builderCode, 'CLASH');
   assert.equal(batchBody.entry.marketPrice, 100_000_000);
   assert.equal(batchBody.closeOrders.length, 2);
-  assert.ok(batchBody.closeOrders.every(order => order.builderCode === 'CLASH' && order.action === 1 && order.closeBps === 10_000 && order.marketPrice === 0));
+  assert.ok(batchBody.closeOrders.every(order => order.builderCode === 'CLASH' && order.action === 1 && order.closeBps === 10_000 && order.marketPrice === 0 && order.sizeUsd === batchBody.entry.sizeUsd && order.sizeUsd > 0));
   assert.equal(proofs.length, 3);
   assert.equal(result.attachedTpsl, true);
 });

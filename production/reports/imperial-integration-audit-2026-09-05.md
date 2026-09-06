@@ -9,7 +9,7 @@
 - [x] Audit existing Imperial API calls against OpenAPI; limitations are explicitly recorded below, not counted as funded end-to-end tests.
 - [x] Verify this player's server order proof and exact builder accrual; distinguish accrual from paid funds and estimated fees.
 - [x] Audit Imperial admin membership (selectors, labels, filters, earnings, balances, analytics, tournaments, referrals); add missing accent and exact commission details.
-- [ ] Run focused contracts/unit tests and actual browser flows without funded trades; build/preflight, deploy and verify public assets/health.
+- [x] Run focused contracts/unit tests and actual local browser flows without funded trades; build/preflight, deploy and verify public assets/health. Authenticated production UI remains owner-signature gated.
 
 ## Confirmed evidence (read-only)
 
@@ -57,3 +57,13 @@
 - Resting-order metadata/symbol/unit parity and collateral editing cannot be fully exercised with this account (zero orders, lifecycle lacks marketMint). Advanced cancel/modify/collateral paths are not certified by this audit.
 - No funded order, signing, deposit, withdrawal, close, cancel, reward adjustment or builder payout was performed by the agent.
 - Actual React hook browser test: fixture WS sends valid position every1s while REST waits1.5s and returns intentionally wrong mark1/PnL-99. After30s the DOM still shows leverage20.383613787592846, mark79744.30, pnl-0.1157, pct-3.3528, isolatedtrue. This verifies stream binding and stale REST rejection, not only the isolated mapper.
+
+## Production outcome
+
+- Code commit485c82c9 fast-forwarded to origin/main and deployed by canonical export-upload-deploy.ps1. Release `/opt/clash/releases/20260905203413-485c82c9`; runtime verification passed20:37:07UTC.
+- Public `FuturesPanel-wq3xyb52.js` HTTP200 SHA256 `54783590875133a740972bae9cb7309967b288b78d8a1b3eaaabe4017d75ac36` exactly matches the release-owned file. Current public entry is `main-C8BCKDeo.js`.
+- Public /api/online and Imperial markets HTTP200; private Imperial positions without auth correctly401. Local service endpoints4000/api/online,3999/,4100/health pass.
+- Canonical retention removed build20260905185631-a7da6e8f; previous20260905192009-dc637368 preserved for rollback. No manual DB correction or credential change.
+- Bounded read of latest10000 client-log rows found only older Imperial errors (18:40 order400;14:20 network fetch failures; Sep3 onboarding409). No claim that all historical client errors have been repaired.
+- Production browser reached saved-session welcome, then required wallet signing and timed out. Agent stopped before Play/name submission or wallet signature; authenticated production position UI not verified. Local actual-hook WS/stale-response test and read-only real Imperial position stream did pass.
+- Build/install warns about existing dependencies, including npm vulnerabilities and Node20-vs-Node22 package engine requirements. No forced dependency upgrade was mixed into this release.

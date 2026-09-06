@@ -8,7 +8,7 @@ import { WebSocketServer } from 'ws';
 const require = createRequire(import.meta.url);
 const imperial = require('../../server-futures/imperial.js');
 const wallet = '11111111111111111111111111111111';
-const position = {id:'ws-fixture',wallet,asset:'BTC',side:'long',profileIndex:0,underwriter:'jupiter',sizeUsd:'70',sizeTokenAmount:'.00087763',collateralUsd:'3.434131',leverageX:'20.383613787592846',pnlUsd:'-.1157',pnlPercent:'-3.3528',markPrice:'79744',entryPrice:'79760.284249',liquidationPrice:'76063.27'};
+const position = {id:'ws-fixture',wallet,asset:'BTC',side:'long',profileIndex:0,underwriter:'phoenix',sizeUsd:'846.0401',sizeTokenAmount:null,collateralUsd:'4.135005',effectiveLeverageX:'190.74',pnlUsd:'-.623034595',pnlPercent:'-14.0463',markPrice:'79815.103773',entryPrice:'79815.103773',ourLiquidationPriceUsd:'79584',ownedCollateralUsd:'4.43556',borrowedCollateralUsd:'18.057119',feesOwed:'.318039595',actions:[{actionType:'increase',sizeDelta:'846.0401',collateralDeposited:'4.44',platformFee:'.00444',jupiterFee:'.296115'}]};
 const root = fileURLToPath(new URL('../', import.meta.url));
 const entry = '/__imperial-preview.jsx';
 const mock = '/__imperial-deps.js';
@@ -83,7 +83,8 @@ const plugin = {
           <p>Position size $100 · margin ${'$'}{(100/lev).toFixed(2)}</p>
           <div className="actions"><button onClick={()=>order('bid')}>Long (simulated)</button><button onClick={()=>order('ask')}>Short (simulated)</button></div>
           <p>Local verification. Public route reads; simulated orders only.</p>
-          <output aria-label="Stream position">{JSON.stringify(api.positions.map(p=>({leverage:p.leverage,mark:p.mark_price,pnl:p.unrealized_pnl,pct:p.pnl_pct,isolated:p.is_isolated})))}</output>
+          <output aria-label="Stream position">{JSON.stringify(api.positions.map(p=>({leverage:p.leverage,mark:p.mark_price,pnl:p.unrealized_pnl,pct:p.pnl_pct,isolated:p.is_isolated,basis:p.live_mark_basis})))}</output>
+          <output aria-label="Market statistics">{JSON.stringify(api.markets.find(row=>row.symbol==='BTC'))}</output>
           <pre aria-label="Order result">{result ? JSON.stringify(result,null,2) : ''}</pre>
         </main>;
       }
@@ -104,7 +105,7 @@ const plugin = {
           else if (url.pathname.endsWith('/positions')) result = {positions:[position]};
           else if (url.pathname.endsWith('/snapshot')) {
             await new Promise(resolve=>setTimeout(resolve,1500));
-            result = {account:{equity:100,available_to_spend:100},positions:[{...position,pnlUsd:'-99',markPrice:'1'}],marks:[{symbol:'SOL',price:100,venue:'phoenix'}]};
+            result = {account:{equity:100,available_to_spend:100},positions:[{...position,pnlUsd:'-99',markPrice:'1'}],marks:[{symbol:'SOL',price:100,venue:'phoenix'},{symbol:'BTC',price:79815,volume_24h:123456,open_interest:654321,venues:[]}]};
           }
           else if (url.pathname.endsWith('/orders') && req.method === 'POST') {
             let wire;
@@ -155,8 +156,15 @@ stream.on('connection',socket=>{
     if(message.type==='ping')socket.send(JSON.stringify({type:'pong'}));
     if(message.type==='subscribe'){
       clearInterval(timer);
-      const send=()=>socket.send(JSON.stringify({type:'position_state',wallet,seq:++seq,positions:[{...position,markPrice:String(79744+seq/100)}]}));
+      const send=()=>socket.send(JSON.stringify({type:'position_state',wallet,seq:++seq,positions:[position]}));
       send();timer=setInterval(send,1000);
+    }
+    if(message.type==='subscribe_mark_prices'){
+      clearInterval(timer);
+      const send=()=>{
+        socket.send(JSON.stringify({type:'mark_price_update',symbol:'BTC',venue:'phoenix',price:1,fetched_at_unix_ms:Date.now()-72000000}));
+        socket.send(JSON.stringify({type:'mark_price_update',symbol:'BTC',venue:'index',price:79820+(++seq)/100,fetched_at_unix_ms:Date.now()}));
+      };send();timer=setInterval(send,1000);
     }
   });
   socket.on('close',()=>clearInterval(timer));
