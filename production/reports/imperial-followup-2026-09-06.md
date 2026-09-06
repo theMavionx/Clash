@@ -30,11 +30,15 @@
 
 - Focused server adapter + data/WS tests; shared PnL and fullscreen action regressions; all-venue history routing tests.
 - Real local BottomPanel/PositionsList/OpenTpslEditor browser fixture, no trading hooks invoked: table height67.2px before/after opening;400px desktop modal;366.4px modal on390×740 viewport; closeX/Esc/focus return; disabled fields until enable; failed submit feedback inside modal; 10% close forwards0.001060000000007768BTC with fullClose=false. No action on open/dismiss.
-- Web production build and full canonical Deploy preflight passed (2026-09-06). 25 focused server adapter tests and9 data/WS tests passed; shared PnL/history/fullscreen checks also passed. Existing lint/chunk-size warnings remain.
+- Web production build and full canonical Deploy preflight passed (2026-09-06). 25 focused server adapter tests and10 data/WS tests passed; shared PnL/history/fullscreen checks also passed. Existing lint/chunk-size warnings remain.
 - Funded TP/SL submission not executed by agent. Protection placement remains subject to Imperial preflight/account state and execution. Cross-margin legs keep API PnL; no invented individual liquidation formula. Upstream liquidation/site discrepancies from prior report remain outside these fixes.
 - Real React useImperial fixture after34s: venue frames intentionally20h old and slow REST mark1/PnL-99 rejected; current index79820.34, PnL-0.26253559/-6.3491%, leverage190.74. Stats123456/654321 survive WS updates and periodic snapshots. Only local mock sockets/credentials; no real trading calls.
 - No production data edits, key changes, funded orders, cancellation, deposits or withdrawals.
 
 ## Release
 
-- Pending canonical preflight and deployment verification.
+- Implementation d5dbfddd and final snapshot/funding separation b93f6eb1 pushed to origin/main. Final canonical release `/opt/clash/releases/20260906073509-b93f6eb1`, runtime checks passed07:37:53UTC, deployment completed07:37:58UTC.
+- Public entry `/assets/main-Br9Ye19w.js`. Public `FuturesPanel-hAzZJsPM.js` HTTP200 SHA256 `d4f00b9686428a11a83994121742e795533b9449c0f011e1b91750d61b450669` matches the release-owned file exactly.
+- Public /api/online200; local main4000/api/online, futures3999/ and Hermes4100/health all200. Production Imperial public markets includes routed volume/OI and source/timestamp metadata.
+- Canonical retention removed dc637368 and485c82c9 build directories across the two releases; prior d5dbfddd remains available for rollback. No manual cleanup of player data.
+- Authenticated production TP/SL was not submitted; no financial action was performed. Browser tests used actual UI components and the actual hook with local mocked actions/streams. Existing dependency vulnerability/engine warnings were not addressed via an unreviewed dependency upgrade.

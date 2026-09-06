@@ -329,6 +329,10 @@ function positive(value, label) {
 
 function buildActions(body = {}) {
   const kind = String(body.kind || '').trim().toLowerCase();
+  if (kind === 'register_agent' || kind === 'revoke_agent') {
+    if (!isSolanaAddress(body.agent)) throw error('Valid Bulk agent public key required');
+    return [{ agentWalletCreation: { a: body.agent, d: kind === 'revoke_agent' } }];
+  }
   const symbol = apiSymbol(body.symbol);
   const side = String(body.side || '').toLowerCase();
   const isBuy = side === 'bid' || side === 'buy' || side === 'long';
@@ -398,16 +402,23 @@ function prepareTransaction(account, body = {}) {
   if (!isSolanaAddress(account)) throw error('Bulk account must be a Solana address');
   const nonce = BigInt(body.nonce || (BigInt(Date.now()) * 1_000_000n + BigInt(Math.floor(Math.random() * 1_000_000))));
   const actions = buildActions(body);
-  const signatureMode = ['raw', 'offchain', 'base58'].includes(BULK_SIGNATURE_MODE)
+  const signer = String(body.signer || account).trim();
+  if (!isSolanaAddress(signer)) throw error('Valid Bulk signer required');
+  const ownerOnly = actions.some(action => action.abc || action.agentWalletCreation);
+  if (ownerOnly && signer !== account) throw error('Bulk permissions require the account owner', 403);
+  if (actions.some(action => action.agentWalletCreation?.a === account)) throw error('Agent must differ from the owner');
+  // Agents can sign canonical bytes directly. Owner agent-management retains
+  // the documented legacy Base58 wallet path; never invent clear-sign labels.
+  const signatureMode = signer !== account ? 'raw' : actions.some(action => action.agentWalletCreation) ? 'base58' : ['raw', 'offchain', 'base58'].includes(BULK_SIGNATURE_MODE)
     ? BULK_SIGNATURE_MODE
     : 'base58';
   const message = signatureMode === 'offchain'
-    ? wire.offchainMessage(actions, nonce, account, account, BULK_NETWORK)
+    ? wire.offchainMessage(actions, nonce, account, signer, BULK_NETWORK)
     : signatureMode === 'base58'
       ? wire.base58Message(actions, nonce, account, BULK_NETWORK)
       : wire.serializeTransaction(actions, nonce, account, BULK_NETWORK);
   return {
-    transaction: { actions, nonce: nonce.toString(), account, signer: account },
+    transaction: { actions, nonce: nonce.toString(), account, signer },
     message_base64: message.toString('base64'),
     order_ids: wire.transactionOrderIds(actions, nonce, account),
     network: BULK_NETWORK,
@@ -422,7 +433,7 @@ function verifyTransaction(transaction) {
   const account = String(transaction?.account || '').trim();
   const signer = String(transaction?.signer || account).trim();
   const signature = String(transaction?.signature || '').trim();
-  if (!isSolanaAddress(account) || signer !== account) throw error('Bulk transaction signer/account mismatch');
+  if (!isSolanaAddress(account) || !isSolanaAddress(signer)) throw error('Bulk transaction signer/account mismatch');
   const signatureMode = String(transaction?.signature_mode || BULK_SIGNATURE_MODE).trim().toLowerCase();
   if (!['raw', 'offchain', 'base58'].includes(signatureMode)) throw error('Unsupported Bulk signature mode');
   const message = signatureMode === 'offchain'
@@ -435,10 +446,16 @@ function verifyTransaction(transaction) {
   if (signatureBytes.length !== 64 || !nacl.sign.detached.verify(message, signatureBytes, wire.decode32(signer))) {
     throw error('Bulk Ed25519 signature verification failed', 401);
   }
-  const allowed = new Set(['m', 'l', 'cx', 'cxa', 'st', 'tp', 'trl', 'updateUserSettings', 'abc']);
+  const allowed = new Set(['m', 'l', 'cx', 'cxa', 'st', 'tp', 'trl', 'updateUserSettings', 'abc', 'agentWalletCreation']);
   for (const action of transaction.actions || []) {
     const kind = Object.keys(action || {})[0];
     if (!allowed.has(kind)) throw error(`Bulk action '${kind}' is not allowed through Clash`);
+    if ((kind === 'abc' || kind === 'agentWalletCreation') && signer !== account) {
+      throw error('Bulk permissions require the account owner', 403);
+    }
+    if (kind === 'agentWalletCreation' && (transaction.actions.length !== 1 || action[kind].a === account)) {
+      throw error('Bulk agent management must be a single owner action for a different key');
+    }
     if (kind === 'm' || kind === 'l') {
       const rawBuilder = action[kind]?.builderCode;
       if (BULK_BUILDER_ENABLED) {
@@ -457,7 +474,7 @@ function verifyTransaction(transaction) {
       }
     }
   }
-  return { account, message, signatureBytes, signatureMode };
+  return { account, signer, message, signatureBytes, signatureMode };
 }
 
 function responseStatuses(payload) {
@@ -497,11 +514,12 @@ function persistSubmittedProofs(playerId, transaction, upstream) {
       const kind = Object.keys(action || {})[0];
       if (kind !== 'm' && kind !== 'l') return;
       const body = action[kind];
-      const response = statuses[index] || null;
-      const responseBody = response && typeof response === 'object' ? response[Object.keys(response)[0]] : null;
-      const responseOrderId = responseBody?.oid || responseBody?.orderId || null;
+      // A fill can include counterparty statuses before ours; array index is
+      // not action identity. Only the canonical signed order ID belongs to us.
+      const response = statuses.find(status => Object.values(status || {}).some(value =>
+        (value?.oid || value?.orderId) === orderIds[index])) || null;
       insert.run(
-        responseOrderId || orderIds[index],
+        orderIds[index],
         playerId,
         transaction.account,
         body.c,
@@ -512,7 +530,8 @@ function persistSubmittedProofs(playerId, transaction, upstream) {
         index,
         transaction.signature,
         response ? String(Object.keys(response)[0] || 'submitted') : 'submitted',
-        JSON.stringify(upstream || null),
+        JSON.stringify({ ...(upstream || {}), clash_verified_signer: transaction.signer,
+          clash_signature_mode: transaction.signature_mode || BULK_SIGNATURE_MODE }),
       );
     });
   });
@@ -523,6 +542,14 @@ function persistSubmittedProofs(playerId, transaction, upstream) {
 async function submitTransaction(playerId, linkedAccount, transaction) {
   const verified = verifyTransaction(transaction);
   if (verified.account !== String(linkedAccount || '').trim()) throw error('Bulk wallet does not match the linked game account', 403);
+  if (verified.signer !== verified.account) {
+    // Never trust browser readiness or a stale grant cache. Bulk also checks
+    // authorization at execution time, closing the revocation race.
+    const snapshot = await getAccount(verified.account);
+    if (!(snapshot.authorizedAgentWallets || []).includes(verified.signer)) {
+      throw error('Bulk one-tap key is not authorized. Re-enable one-tap or use your wallet.', 403);
+    }
+  }
   const hasOrder = (transaction.actions || []).some(action => action?.m || action?.l);
   if (hasOrder && BULK_BUILDER_ENABLED) {
     const builder = await getBuilderStatus(verified.account);
@@ -624,7 +651,8 @@ async function importFillsForPlayer(playerId, account, opts = {}) {
           fee_bps: Number(proof.builder_fee_bps || 0),
           verified: builderVerified,
         },
-        order: { id: proof.order_id, nonce: proof.nonce, signature: proof.signature },
+        order: { id: proof.order_id, nonce: proof.nonce, signature: proof.signature,
+          signer: parseMaybeJson(proof.response_json)?.clash_verified_signer || null },
         fill,
       }),
       createdAt: fill.timestamp ? new Date(Number(fill.timestamp) > 1e15 ? Number(fill.timestamp) / 1e6 : Number(fill.timestamp)).toISOString() : null,
@@ -651,6 +679,7 @@ function config() {
     self_custody: true,
     closed_beta: BULK_CLOSED_BETA,
     builder_enabled: BULK_BUILDER_ENABLED,
+    one_tap_supported: true,
     unavailable_retry_ms: BULK_UNAVAILABLE_RETRY_MS,
   };
 }

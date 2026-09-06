@@ -1,5 +1,20 @@
 # User Request Log
 
+## UR-2026-09-06-BULK-PNL-RELEASE
+
+- Owner: “в булк теж трохи криво закинь потім все на прод”. Screenshots: native Bulk BTC +$0.12/+0.25%, Clash +$0.1212/+4.99%, leverage20x.
+- Implement and verify the percentage/precision correction and the pending scoped BULK/Imperial changes, then integrate and deploy via established scripts. Owner approves release; no funded trade, wallet permission, treasury or manual production accounting mutation is included.
+
+## UR-2026-09-06-IMPERIAL-PNL-ESTIMATE
+
+- Owner: “в імперіал от ще криво показує трохи”. Screenshots: Phoenix BTC $846.04, Imperial mark80012/PnL+1.72/+41.55%; Clash mark79982.02/Est.+1.40/+33.87%.
+- Compare mark source/freshness and arithmetic against the screenshot; read-only upstream verification and local regression checks, no funded actions or production changes.
+
+## UR-2026-09-06-IMPERIAL-CLOSE-PROD
+
+- Owner: “в імперіал по маркету не криє досі на проді”.
+- Investigate Imperial production market-close request, API contract and logs. No funded close or production mutation during diagnosis.
+
 ## UR-2026-08-31-TANGO-QUEST-RESOURCE-CLAIM
 
 - Request: "це танго знову ж таки пише виправ і задеплой якщо треба через проксі перевір в чому там проблема".
@@ -4119,3 +4134,14 @@ Follow-up:
 - Owner: “всі ці задачі виконай”. Complete and locally verify the above; no funded trading actions during testing.
 - Follow-up settings: owner requested `[features.context_management] experimental_mode = true` in the local Codex config. Added and validated with installed CLI0.153.0 (`context_management` true); current running turn activation not claimed. Unrelated config fields preserved.
 - Findings/verification: production/reports/imperial-followup-2026-09-06.md.
+
+## UR-2026-09-06-BULK-PNL-ATTRIBUTION
+
+- Owner: “ще в булк не рахує теж правильно пнл і терба перевірити також чи білдер код працює наший і рефка і все інше”.
+- Compare screenshot dollar PnL -0.008770 vs -0.0088 and percentage -0.36% vs -0.018%; inspect current mainnet builder/referral state and related order attribution. Read-only external verification; no funded/signing actions or production configuration changes.
+
+## UR-2026-09-06-BULK-ONETAP-CLOSE
+
+- Owner: “спробуй варобуй ще ван тап реалізувати для булка також не закривається по маркету ордер чомусь хз”.
+- Implement native wallet-authorized BULK one-tap trading and repair market-close UI/hook contract. Verify local mocked signing/lifecycle/close flows; no funded actions, approvals or deployment requested in this turn.
+- Local implementation and verification: `production/reports/bulk-one-tap-close-2026-09-06.md`; no production changes.

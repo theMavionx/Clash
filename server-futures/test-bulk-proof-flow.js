@@ -32,7 +32,7 @@ async function run() {
   const keypair = nacl.sign.keyPair.fromSeed(Uint8Array.from({ length: 32 }, (_, index) => 200 - index));
   const account = bs58.encode(keypair.publicKey);
   const other = bs58.encode(nacl.sign.keyPair().publicKey);
-  const acceptedOrderId = bs58.encode(Uint8Array.from({ length: 32 }, (_, index) => index + 11));
+  let acceptedOrderId;
   const ignoredOrderId = bs58.encode(Uint8Array.from({ length: 32 }, (_, index) => index + 71));
   let mode = 'submit';
 
@@ -91,6 +91,7 @@ async function run() {
     size: '0.02',
     nonce: '1785750000000001',
   });
+  acceptedOrderId = prepared.order_ids[0];
   const submitted = await bulk.submitTransaction('bulk-proof-player', account, sign(prepared, keypair.secretKey));
   assert.equal(submitted.success, true);
   assert.deepEqual(submitted.order_ids, [prepared.order_ids[0]]);

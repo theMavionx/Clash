@@ -26,6 +26,30 @@ test('Imperial native tp/sl aliases are displayed',()=>{
  assert.equal(p.take_profit,81000);assert.equal(p.stop_loss,79000);
 });
 
+test('reported 80012 venue versus 79982.02 index explains the PnL gap without changing fees',()=>{
+ const position=imperialPosition({...raw,underwriter:'phoenix',sizeUsd:'846.0401',sizeTokenAmount:null,
+  entryPrice:'79815.103773',collateralUsd:'4.135005',ownedCollateralUsd:'4.43556',borrowedCollateralUsd:'18.057119',
+  maxSizeUsd:'846.0401',feesOwed:'.37',effectiveLeverageX:'190.74',
+  actions:[{actionType:'increase',sizeDelta:'846.0401',collateralDeposited:'4.44',platformFee:'.00444',jupiterFee:'.296115'}]});
+ // Exact historical fee at screenshot time is unavailable. Hold it fixed:
+ // the difference between these two outputs depends only on the quote.
+ const now=100000;
+ const market={symbol:'BTC',oracle:79982.02,oracle_at:now,
+  venues:[{venue:'phoenix',price:79655,fetchedAtUnixMs:1}]};
+ const estimate=imperialLivePosition(position,[market],now);
+ assert.equal(estimate.live_mark_basis,'index');
+ assert.equal(estimate.mark_price,79982.02);
+ const native=imperialLivePosition(position,[{...market,
+  venues:[{venue:'phoenix',price:80012,fetchedAtUnixMs:now}]}],now);
+ assert.equal(native.live_mark_basis,'venue');
+ assert.equal(native.mark_price,80012);
+ assert.ok(Math.abs((native.unrealized_pnl-estimate.unrealized_pnl)-.317788)<1e-9);
+ assert.ok(Math.abs((native.pnl_pct-estimate.pnl_pct)-7.6853111423)<1e-8);
+ assert.equal(native.feesOwed,estimate.feesOwed);
+ assert.equal(native.amount,estimate.amount);
+ assert.equal(native.leverage,estimate.leverage);
+});
+
 test('market WS respects upstream timestamps, including stale snapshots and out-of-order frames',()=>{
  const initial=[{symbol:'BTC',volume_24h:123,open_interest:456,venues:[]}];
  const event={type:'mark_price_update',symbol:'BTC',venue:'index',price:79820,fetched_at_unix_ms:100000};
@@ -77,6 +101,16 @@ test('wallet stream subscribes, rejects out-of-order frames, accepts empty state
  for(const seq of [2,1,2,3])socket.onmessage({data:JSON.stringify({type:'position_state',seq,positions:seq===3?[]:[raw]})});
  assert.deepEqual(received.map(m=>m.seq),[2,3]);assert.deepEqual(received[1].positions,[]);
  assert.equal(statuses.at(-1),'live');stop();assert.equal(socket.closed,true);assert.equal(intervals.size,0);
+});
+
+test('completed Imperial market close appears in History only with execution proof',()=>{
+ const close={id:'closed-action',status:'completed',actionType:'decrease',tx2Signature:'fixture-execution',
+  tx2Timestamp:1788690628,sizeDelta:'-846.0401',sizeDeltaTokens:'0.01060000',entryPrice:'80023'};
+ const rows=imperialTradeRows([{...raw,actions:[close,{...close,id:'pending',status:'pending'},
+  {...close,id:'no-proof',tx2Signature:null},{...close,id:'failed',status:'failed'}]}]);
+ assert.equal(rows.length,1);assert.equal(rows[0].side,'close_long');
+ assert.equal(rows[0].notional_usd,846.0401);assert.equal(rows[0].amount,.0106);
+ assert.equal(rows[0].price,80023);assert.equal(rows[0].created_at,1788690628000);
 });
 test('stream reconnect resets sequence and stop cancels backoff',()=>{
  const sockets=[], received=[];let pending;

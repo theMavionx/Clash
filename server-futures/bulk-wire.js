@@ -179,6 +179,10 @@ function serializeAction(action) {
       ...settings.flatMap(([symbol, leverage]) => [writeString(symbol), writeF64(leverage)]),
     ]);
   }
+  if (kind === 'agentWalletCreation') {
+    if (typeof body.d !== 'boolean') fail('Bulk agent delete flag must be boolean');
+    return concat([writeU32(17), decode32(body.a, 'agent wallet'), writeBool(body.d)]);
+  }
   if (kind === 'abc') {
     const builder = normalizeBuilderCode(body);
     return concat([writeU32(40), decode32(builder.to, 'builder recipient'), writeU8(builder.fee)]);

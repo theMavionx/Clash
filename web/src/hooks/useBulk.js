@@ -5,6 +5,10 @@ import bs58 from 'bs58';
 import { useDex } from '../contexts/DexContext';
 import { usePlayer } from './useGodot';
 import { signBulkMessage } from '../lib/bulkWallet';
+import { bulkCloseRequest } from '../lib/bulkTrading';
+import { normalizeBulkPosition } from '../lib/bulkClient';
+import { createBulkOneTap } from '../lib/bulkOneTap';
+import { captureCredentialScope, assertCredentialScope, readEncryptedCredential, writeEncryptedCredential } from '../lib/encryptedCredentialStorage';
 
 const GAME_API = import.meta.env.VITE_GAME_API || '/api';
 const FUTURES_API = import.meta.env.VITE_FUTURES_API || '/api/futures';
@@ -85,12 +89,21 @@ export function useBulk() {
   const [activationStep, setActivationStep] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [actionError, setActionError] = useState('');
   const [dataReady, setDataReady] = useState(false);
   const [goldEarned, setGoldEarned] = useState(null);
   const [serviceAvailability, setServiceAvailability] = useState({ available: true, closedBeta: false, message: '' });
   const [dexAccountReady, setDexAccountReady] = useState(false);
   const actionRef = useRef(null);
   const accountRetryAtRef = useRef(0);
+  const ownerSendRef = useRef(null);
+  const [agentRevision, refreshAgentState] = useState(0);
+  const network = config?.network || 'mainnet';
+  const identity = useMemo(() => ({ walletAddr, token, network }), [walletAddr, token, network]);
+  const identityRef = useRef(identity);
+  identityRef.current = identity;
+  const mountedRef = useRef(true);
+  useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; }; }, []);
 
   const api = useCallback(async (path, options = {}) => {
     const response = await fetch(`${FUTURES_API}${path}`, {
@@ -112,6 +125,21 @@ export function useBulk() {
     }
     return data;
   }, [token]);
+
+  const agentController = useMemo(() => createBulkOneTap({
+    account: walletAddr, network,
+    capture: captureCredentialScope, assert: assertCredentialScope,
+    read: readEncryptedCredential, write: writeEncryptedCredential,
+    fetchAccount: () => api(`/bulk/account?account=${encodeURIComponent(walletAddr)}`),
+    sendOwner: (payload, check) => ownerSendRef.current(payload, true, check),
+    isCurrent: () => mountedRef.current && identityRef.current === identity,
+    onChange: () => refreshAgentState(value => value + 1),
+  }), [walletAddr, network, api, identity]);
+  useEffect(() => {
+    if (active && dexAccountReady && config?.one_tap_supported) agentController.load();
+  }, [active, dexAccountReady, config?.one_tap_supported, agentController]);
+  const oneTapTrading = useMemo(() => ({ ...agentController.state(), revision: agentRevision,
+    supported: config?.one_tap_supported === true }), [agentController, agentRevision, config?.one_tap_supported]);
 
   const refreshPublic = useCallback(async () => {
     if (!active) return;
@@ -138,20 +166,7 @@ export function useBulk() {
       available_to_withdraw: Number(margin.transferableBalance ?? margin.availableBalance ?? margin.available_balance ?? next.available_to_withdraw ?? 0),
       total_margin_used: Number(margin.marginUsed ?? margin.margin_used ?? next.total_margin_used ?? 0),
     };
-    const nextPositions = rows(next.positions).map(position => {
-      const size = Number(position.size || 0);
-      return {
-        ...position,
-        symbol: symbolOf(position.symbol || position.coin),
-        side: size >= 0 ? 'bid' : 'ask',
-        amount: Math.abs(size),
-        size: Math.abs(size),
-        entry_price: Number(position.price ?? position.entryPrice ?? 0),
-        mark_price: Number(position.fairPrice ?? position.fair_price ?? 0),
-        unrealized_pnl: Number(position.unrealizedPnl ?? position.unrealized_pnl ?? 0),
-        liquidation_price: Number(position.liquidationPrice ?? position.liquidation_price ?? 0),
-      };
-    }).filter(position => Number(position.size) > 0);
+    const nextPositions = rows(next.positions).map(normalizeBulkPosition).filter(position => position.size > 0);
     const nextOrders = rows(next.openOrders || next.open_orders).map(order => ({
       ...order,
       symbol: symbolOf(order.sym || order.symbol),
@@ -187,6 +202,7 @@ export function useBulk() {
         api(`/bulk/account?account=${encodeURIComponent(walletAddr)}`),
         api(`/bulk/builder-status?account=${encodeURIComponent(walletAddr)}`),
       ]);
+      if (!mountedRef.current || identityRef.current !== identity) return;
       if (snapshot?.available === false || builder?.available === false) {
         const unavailable = snapshot?.available === false ? snapshot : builder;
         const retryAfterMs = Math.max(UPSTREAM_RETRY_MS, Number(unavailable?.retry_after_ms || 0));
@@ -212,6 +228,7 @@ export function useBulk() {
     } catch (cause) {
       // A closed-beta wallet with no Bulk account may return 500 until its
       // first signed approval/deposit. Keep the activation UI usable.
+      if (!mountedRef.current || identityRef.current !== identity) return;
       setAccount(prev => prev || { balance: 0, account_equity: 0, available_to_spend: 0, free_margin: 0 });
       setPositions([]);
       setOrders([]);
@@ -224,12 +241,13 @@ export function useBulk() {
         : { available: true, closedBeta: false, accountMissing, message: accountMissing ? 'Open and fund your Bulk mainnet account first.' : '' });
       setError(cause?.status === 409 || accountMissing || unavailable ? '' : (cause?.message || 'Bulk account is not available yet'));
     }
-  }, [active, walletAddr, token, dexAccountReady, api, applyAccount]);
+  }, [active, walletAddr, token, dexAccountReady, api, applyAccount, identity]);
 
   useEffect(() => {
     accountRetryAtRef.current = 0;
     setServiceAvailability({ available: true, closedBeta: false, message: '' });
-  }, [active, walletAddr]);
+    setActionError('');
+  }, [active, identity]);
 
   useEffect(() => {
     if (!active) return;
@@ -302,18 +320,29 @@ export function useBulk() {
     });
   }, [adapterAddress, solWallet, privyWallet, privySignMessage]);
 
-  const signAndSubmit = useCallback(async (payload) => {
+  const signAndSubmit = useCallback(async (payload, ownerOnly = false, assertSetup = () => {}) => {
     if (!walletAddr || !token) throw new Error('Connect your Solana wallet first.');
     if (actionRef.current) throw new Error('Another Bulk wallet request is still pending.');
+    if (!ownerOnly && agentController.state().busy) throw new Error('Wait for Bulk one-tap setup to finish.');
+    const check = () => {
+      if (!mountedRef.current || identityRef.current !== identity) throw new Error('Bulk wallet or player changed. Please retry.');
+      assertSetup();
+    };
     const promise = (async () => {
+      check();
+      const signer = !ownerOnly && payload.kind !== 'approve_builder' ? agentController.signer() : null;
       const prepared = await api('/bulk/prepare', {
         method: 'POST',
-        body: JSON.stringify({ ...payload, account: walletAddr }),
+        body: JSON.stringify({ ...payload, account: walletAddr, signer: signer || walletAddr }),
       });
-      const signatureBytes = await masterSign(
+      check();
+      if (prepared.transaction?.account !== walletAddr || prepared.transaction?.signer !== (signer || walletAddr)
+        || prepared.network !== network) throw new Error('Bulk prepared transaction scope mismatch.');
+      const signatureBytes = signer ? agentController.sign(prepared) : await masterSign(
         base64Bytes(prepared.message_base64),
         prepared.signature_mode || 'base58',
       );
+      check();
       if (!signatureBytes || signatureBytes.length !== 64) throw new Error('Bulk wallet returned an invalid Ed25519 signature.');
       const transaction = {
         ...prepared.transaction,
@@ -330,7 +359,8 @@ export function useBulk() {
     })();
     actionRef.current = promise;
     try { return await promise; } finally { actionRef.current = null; }
-  }, [api, masterSign, token, walletAddr]);
+  }, [api, masterSign, token, walletAddr, identity, network, agentController]);
+  ownerSendRef.current = signAndSubmit;
 
   const priceFor = useCallback((symbol, fallback = 0) => {
     const key = symbolOf(symbol);
@@ -409,11 +439,21 @@ export function useBulk() {
     } catch (cause) { return { error: cause?.message || String(cause) }; }
   }, [signAndSubmit]);
 
-  const closePosition = useCallback(async (position) => {
-    const size = Math.abs(Number(position?.size || position?.amount || 0));
-    const closeSide = position?.side === 'bid' ? 'ask' : 'bid';
-    return placeMarketOrder(position?.symbol, closeSide, 0, '0.5', 1, { reduce_only: true, size_base: size });
-  }, [placeMarketOrder]);
+  const closePosition = useCallback(async (symbolOrPosition, side, amount, _pair, tradeIndex) => {
+    setActionError('');
+    try {
+      const payload = bulkCloseRequest(positions, symbolOrPosition, side, amount, tradeIndex);
+      const result = await signAndSubmit(payload);
+      // A market submission is not proof the entire position was filled.
+      await refreshAccount();
+      setTimeout(() => refreshAccount().catch(() => {}), 1_500);
+      return { ...result, status: 'submitted', info: 'Reduce-only market close submitted to Bulk.' };
+    } catch (cause) {
+      const detail = cause?.message || String(cause);
+      if (mountedRef.current && identityRef.current === identity) setActionError(detail);
+      return { error: detail };
+    }
+  }, [positions, refreshAccount, signAndSubmit, identity]);
 
   const setTpsl = useCallback(async (symbol, closeSide, takeProfit, stopLoss, _pair, _trade, amount) => {
     try {
@@ -527,7 +567,7 @@ export function useBulk() {
   }, [config?.referral_url]);
 
   const disconnect = useCallback(() => solWallet.disconnect?.(), [solWallet]);
-  const clearError = useCallback(() => setError(''), []);
+  const clearError = useCallback(() => { setError(''); setActionError(''); }, []);
   const clearGoldEarned = useCallback(() => setGoldEarned(null), []);
   const walletUsdc = null;
   const setupStatus = serviceAvailability.available === false
@@ -545,13 +585,17 @@ export function useBulk() {
     walletUsdc,
     spotUsdc: walletUsdc,
     leverageSettings,
-    loading,
-    error,
+    loading: loading || oneTapTrading.busy,
+    error: actionError || error,
     dataReady,
     accountReady: dexAccountReady && Boolean(account),
     setupVerified,
     setupStatus,
     serviceAvailability,
+    oneTapTrading,
+    setOneTapTradingEnabled: enabled => agentController.setEnabled(enabled),
+    revokeOneTapTrading: () => agentController.revoke(),
+    reloadOneTapTrading: () => agentController.load(),
     activationStep,
     isReady: setupVerified === true,
     builderConfig: config ? { address: config.builder_address, fee_bps: config.builder_fee_bps } : null,
@@ -581,10 +625,10 @@ export function useBulk() {
     withdraw: openReferralJoin,
     disconnect,
   }), [
-    walletAddr, account, positions, orders, prices, markets, leverageSettings, loading, error,
+    walletAddr, account, positions, orders, prices, markets, leverageSettings, loading, error, actionError,
     dataReady, dexAccountReady, setupVerified, setupStatus, serviceAvailability, activationStep, config, goldEarned, clearError,
     clearGoldEarned, refreshPublic, refreshAccount, importFills, placeMarketOrder, placeLimitOrder,
     cancelOrder, closePosition, setLeverage, setTpsl, activate, openReferralJoin, disconnect,
-    fetchTradeHistory, fetchFundingHistory,
+    fetchTradeHistory, fetchFundingHistory, oneTapTrading, agentController,
   ]);
 }

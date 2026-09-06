@@ -104,7 +104,7 @@ export function imperialCloseBps(positions, id, amount, fullClose) {
 export function imperialTradeRows(lifecycles) {
   return (lifecycles || []).flatMap(lifecycle => (lifecycle.actions || []).flatMap(action => {
     const size = Math.abs(number(action.sizeDelta) ?? 0);
-    if (!action.tx2Signature || !size || !/^(converted|settled|executed|filled|confirmed|success)$/i.test(action.status || '')) return [];
+    if (!action.tx2Signature || !size || !/^(converted|settled|executed|filled|confirmed|success|completed)$/i.test(action.status || '')) return [];
     const close = /decrease|close|liquidat/i.test(action.actionType || '');
     const side = `${close ? 'close' : 'open'}_${String(lifecycle.side).toLowerCase() === 'short' ? 'short' : 'long'}`;
     const price = number(action.entryPrice);

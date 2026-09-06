@@ -31,6 +31,7 @@ import { useGmtrade } from '../hooks/useGmtrade';
 import { useFlash } from '../hooks/useFlash';
 import { useLighter, useRhLighter } from '../hooks/useLighter';
 import { useBulk } from '../hooks/useBulk';
+import BulkOneTapControl from './trading/BulkOneTapControl';
 import { useImperial } from '../hooks/useImperial';
 import { useOstium } from '../hooks/useOstium';
 import { RISEX_BRIDGE_CHAINS } from '../lib/risexConfig';
@@ -947,7 +948,7 @@ function formatPositionLeverageBadge(value) {
 
 function formatPositionPrice(value, dex) {
   const price = Number(value);
-  return dex === 'imperial' && price >= 1
+  return ['imperial', 'bulk'].includes(dex) && price >= 1
     ? price.toLocaleString('en-US', {minimumFractionDigits:2,maximumFractionDigits:2}) : fmtPrice(price);
 }
 
@@ -1064,7 +1065,7 @@ function getPositionMetrics(pos, prices, leverageSettings = {}, feeContext = {})
     ? (flashLev ?? rawLev ?? collateralLev)
     : (rawLev && rawLev > 0 ? rawLev : (collateralLev || (leverageSettings[pos.symbol] || 1))));
   const rawProvidedPct = numOrNull(pos.pnl_pct ?? (pos.return_on_equity != null ? Number(pos.return_on_equity) * 100 : null));
-  const preserveProvidedPct = isHibachiPosition || isOstiumPosition || feeContext?.dex === 'imperial';
+  const preserveProvidedPct = isHibachiPosition || isOstiumPosition || ['imperial', 'bulk'].includes(feeContext?.dex);
   const pricePct = entryP && markP
     ? ((markP - entryP) / entryP * 100 * (pos.side === 'bid' ? 1 : -1) * (typeof setLev === 'number' ? setLev : 1))
     : null;
@@ -1088,7 +1089,13 @@ function getPositionMetrics(pos, prices, leverageSettings = {}, feeContext = {})
     netPnlPct: pnlPct,
     pnlFees,
   });
-  if (pos.live_mark_basis === 'index') pnlDisplay.primaryLabel = 'Est.';
+  if (pos.live_mark_basis === 'index') {
+    pnlDisplay.primaryLabel = 'Est.';
+    pnlFees.displayNote = 'Estimated using the index price because the execution-venue quote is unavailable or stale. May differ from Imperial.';
+  }
+  if (pos.pnl_percentage_basis === 'entry_notional') {
+    pnlFees.displayNote = 'BULK position return: unrealized PnL / entry notional. Not leveraged margin ROI; funding and fees are shown separately by BULK.';
+  }
   const pnlDirection = isDust ? 1 : signedMetricDirection(
     pnlDisplay.primaryPnlUsd,
     pnlDisplay.primaryPnlPct,
@@ -1113,6 +1120,7 @@ function getPositionMetrics(pos, prices, leverageSettings = {}, feeContext = {})
 }
 
 function positionPnlFeeTitle(pnlFees) {
+  if (pnlFees?.displayNote) return pnlFees.displayNote;
   if (!pnlFees?.feeAdjusted) return undefined;
   const money = value => `$${Math.abs(Number(value) || 0).toFixed(4)}`;
   const parts = [
@@ -2996,7 +3004,7 @@ const PositionsList = memo(function PositionsList({
               <span style={S.detail}>Entry: ${formatPositionPrice(pos.entry_price, dex)}</span>
             </div>
             <div style={S.row}>
-              <span style={S.detail}>Mark: {markP ? `$${markP.toLocaleString()}` : '—'}</span>
+              <span style={S.detail} title={pos.live_mark_basis === 'index' ? 'Index estimate — execution-venue quote is unavailable or stale' : undefined}>{pos.live_mark_basis === 'index' ? 'Index (est.)' : 'Mark'}: {markP ? `$${['imperial', 'bulk'].includes(dex) ? formatPositionPrice(markP, dex) : markP.toLocaleString()}` : '—'}</span>
               <PositionPnlReadout
                 pnlDisplay={pnlDisplay}
                 pnlColor={pnlColor}
@@ -3299,7 +3307,10 @@ const BottomPanel = memo(function BottomPanel({
                     <td style={{...S.td, color: p.side === 'bid' ? 'var(--terminal-long)' : 'var(--terminal-short)', fontWeight: 750}}>{p.side === 'bid' ? 'LONG' : 'SHORT'}</td>
                     <td style={S.td}>{isDust ? 'Dust' : fmtAmount(p.amount)} <span style={{color: 'var(--terminal-text-muted)', fontSize: 11}}>(${(isDust ? dustUsd : tblPosValue).toFixed(2)})</span></td>
                     <td style={S.td}>${formatPositionPrice(entryPrice, dex)}</td>
-                    <td style={S.td}>{markPrice ? `$${formatPositionPrice(markPrice, dex)}` : '—'}</td>
+                    <td style={S.td} title={p.live_mark_basis === 'index' ? 'Index estimate — execution-venue quote is unavailable or stale' : undefined}>
+                      {markPrice ? `$${formatPositionPrice(markPrice, dex)}` : '—'}
+                      {p.live_mark_basis === 'index' && <div style={{fontSize: 10, color: 'var(--terminal-text-muted)'}}>Index · est.</div>}
+                    </td>
                     <td style={{...S.td, color: pnlColor, fontWeight: 700}} title={positionPnlFeeTitle(pnlFees)}>
                       <div>{pnlDisplay.primaryLabel} {formatSignedPnlUsd(pnlDisplay.primaryPnlUsd)}</div>
                       {pnlDisplay.secondaryNetPnlUsd != null && (
@@ -3710,7 +3721,7 @@ function FuturesPanel() {
     closePosition, depositToPacifica, withdraw, activate, disconnect, setTpsl, setMarginMode, moveSpotToPerp, switchToRise, switchToInk,
     oneTapWalletFallback, executeOneTapWalletFallback, clearOneTapWalletFallback,
     // Avantis-only — undefined on the Pacifica branch.
-    hasReferrer, linkOurReferrer, oneTapTrading, setOneTapTradingEnabled, connectPerpl, openReferralJoin, approveIntegrator, referralCode, referralUrl, referralTermsUrl, referralAccess, referralStatus, walletMismatch, registeredEvmWallet,
+    hasReferrer, linkOurReferrer, oneTapTrading, setOneTapTradingEnabled, revokeOneTapTrading, reloadOneTapTrading, connectPerpl, openReferralJoin, approveIntegrator, referralCode, referralUrl, referralTermsUrl, referralAccess, referralStatus, walletMismatch, registeredEvmWallet,
     // Pacifica agent-wallet — undefined on Avantis (Pacifica-only feature)
     pacAgent, bindAgent, bindingAgent, bindAgentError, forgetAgentLocally, revokeAgentOnServer,
     // Decibel-only — drives the blocking activation modal + gate screen.
@@ -5705,6 +5716,7 @@ function FuturesPanel() {
           </div>
         </div>
 
+        {dex === 'bulk' && oneTapTrading?.supported && <BulkOneTapControl state={oneTapTrading} setEnabled={setOneTapTradingEnabled} revoke={revokeOneTapTrading} reload={reloadOneTapTrading} />}
         {(dex === 'nado' || dex === 'flash') && (
           <div style={{
             display: 'flex',
@@ -10145,7 +10157,7 @@ function FuturesPanel() {
                 <span style={S.detail}>Entry: ${formatPositionPrice(pos.entry_price, dex)}</span>
               </div>
               <div style={S.row}>
-                <span style={S.detail}>Mark: ${formatPositionPrice(markP, dex)}</span>
+                <span style={S.detail} title={pos.live_mark_basis === 'index' ? 'Index estimate — execution-venue quote is unavailable or stale' : undefined}>{pos.live_mark_basis === 'index' ? 'Index (est.)' : 'Mark'}: ${formatPositionPrice(markP, dex)}</span>
                 <PositionPnlReadout
                   pnlDisplay={pnlDisplay}
                   pnlColor={pnlColor}

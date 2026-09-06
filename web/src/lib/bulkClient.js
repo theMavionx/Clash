@@ -1,3 +1,31 @@
+import { bulkPositionId } from './bulkTrading.js';
+
+const finite = value => value == null || value === '' || !Number.isFinite(Number(value)) ? null : Number(value);
+
+/** Native uPnL is authoritative. BULK's position return is unleveraged;
+ * margin ROI is a different metric and must not replace it in shared UI. */
+export function normalizeBulkPosition(position) {
+  const signedSize = finite(position.size) ?? 0;
+  const amount = Math.abs(signedSize);
+  const symbol = String(position.symbol || position.coin || '').toUpperCase().replace(/[-/](USD|USDC|PERP)$/i, '');
+  const entry = finite(position.price ?? position.entryPrice);
+  const mark = finite(position.fairPrice ?? position.fair_price);
+  const pnl = finite(position.unrealizedPnl ?? position.unrealized_pnl)
+    ?? (entry != null && mark != null ? signedSize * (mark - entry) : null);
+  const entryNotional = entry > 0 ? amount * entry : null;
+  return {
+    ...position, dex: 'bulk', source: 'bulk', pnl_source: 'bulk_api', symbol,
+    side: signedSize >= 0 ? 'bid' : 'ask', amount, size: amount,
+    entry_price: entry, mark_price: mark, unrealized_pnl: pnl,
+    entry_notional: entryNotional,
+    pnl_pct: entryNotional > 0 && pnl != null ? pnl / entryNotional * 100 : null,
+    pnl_percentage_basis: 'entry_notional',
+    liquidation_price: finite(position.liquidationPrice ?? position.liquidation_price),
+    is_isolated: position.iso === true,
+    trade_index: bulkPositionId(position),
+  };
+}
+
 function normalizeLevel(level, index) {
   const price = Array.isArray(level)
     ? level[0]
