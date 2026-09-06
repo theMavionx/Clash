@@ -6,6 +6,46 @@ const imperial = require('./imperial');
 
 const WALLET = '11111111111111111111111111111111';
 
+test('priced TP/SL uses StopLimit, never zero-trigger-only PrivateTpSl (Custom25)', async () => {
+  for (const [venue, underwriter] of [['jupiter',0],['flash',1],['phoenix',2],['gmtrade',3],['flash_v2',4]]) {
+    for (const side of ['long','short']) {
+      const writes=[];
+      const fetchImpl=async(url,options={})=>{
+        const path=new URL(url).pathname;
+        if(path.endsWith('/mobile/builder/summary'))return response(200,{active:true,feeBps:10});
+        if(path.endsWith('/positions'))return response(200,{dataList:[{id:'sol',asset:'SOL',side,profileIndex:0,underwriter:venue,sizeUsd:'52.915'}]});
+        if(path.endsWith('/route'))return response(200,{venue,markPrice:105.83,priceExponent:-8});
+        if(path.endsWith('/flash/markets'))return response(200,[{symbol:'SOL',side,priceExponent:-8}]);
+        const payload=JSON.parse(options.body);
+        if(path.endsWith('/preflight'))return response(200,{ok:true});
+        const orders=path.endsWith('/batch')?payload.closeOrders:[payload];
+        for(const order of orders){
+          // Match the actual mainnet program invariant, not a permissive mock.
+          assert.notEqual(order.orderType,5,'PrivateTpSl with a nonzero trigger fails Custom25');
+          assert.equal(order.orderType,2);
+          assert.equal(order.action,1);
+          assert.equal(order.underwriter,underwriter);
+          assert.equal(order.side,side==='short'?1:0);
+          assert.equal(order.closeBps,10000);
+          assert.equal(order.sizeUsd,52915000);
+          assert.equal(order.marketPrice,0);
+          assert.equal(order.builderCode,'CLASH');
+          writes.push(order);
+        }
+        return path.endsWith('/batch')?response(200,{entry:{success:true,signature:'entry'},closeOrders:orders.map((_,i)=>({success:true,orderPda:`child-${i}`}))}):response(200,{success:true,orderPda:`leg-${writes.length}`});
+      };
+      const levels=side==='long'?{takeProfit:106.67,stopLoss:104.57}:{takeProfit:104.57,stopLoss:106.67};
+      await imperial.setPositionTpsl({owner:WALLET,jwt:'fixture',positionId:'sol',body:levels,fetchImpl});
+      for(const orderType of ['market','limit'])await imperial.placeOrder({owner:WALLET,jwt:'fixture',fetchImpl,body:{symbol:'SOL',side,notionalUsd:52.915,leverage:10,marketPrice:105.83,price:105,orderType,pinnedUnderwriter:underwriter,...levels}});
+      assert.equal(writes.length,6);
+      writes.forEach((order,i)=>{
+        assert.equal(order.triggerPrice,Math.round((i%2===0?levels.takeProfit:levels.stopLoss)*1e9));
+        assert.equal(order.triggerCondition,i%2===0?(side==='short'?1:0):(side==='short'?0:1));
+      });
+    }
+  }
+});
+
 test('resting TP/SL uses authoritative nonzero notional: regression for production 422', async () => {
  for (const side of ['long','short']) {
   const posted=[];

@@ -1,7 +1,32 @@
 # Active Session State
 
+## Imperial SOL TP/SL Custom25 — Active (2026-09-06)
+
+- Owner requested the complete fix and production release. Baseline01a5590c.
+- Client log1636333 at14:32:03UTC: positiond64e5e33-ad27-413c-bf36-9a7f834a06d0,
+  HTTP400, upstreamCustom25/UnknownTradeFailure, signature null. Earlier zero-size
+  HTTP422 is separate and already fixed. Root cause reproduced via read-only
+  mainnet simulation: PrivateTpSl(5) requires trigger_price0. Ordinary priced
+  TP/SL now uses StopLimit(2) for both open positions and attached entry legs.
+- Regression red/green and31 adapter/import tests pass. Real adapter TP/SL
+  payloads both pass program simulation (slot444834485); legacy shape fails25.
+  Live order counter unchanged, no order created. Canonical Deploy gate PASS;
+  lint0 errors, Godot probes and web build pass. Ready for approved release.
+- Report: production/reports/imperial-tpsl-custom25-2026-09-06.md.
+- No funded retry or live protection write is authorized as an automated test.
+
 ## BULK / Imperial Gold and Builder Diagnostics (2026-09-06)
 
+- Production verified: `01a5590c`, release `20260906154342-01a5590c`, canonical
+  deploy completed15:48:25UTC. Public HTML/main/FuturesPanel/admin hashes match;
+  main/futures/MCP health pass and all five services online with zero restarts.
+  Rollback31a02aa3 retained; olderb93f6eb1 build pruned by standard retention.
+- Protected diagnostics200: BULK one-tap/owner submissions are visible, builder
+  disabled fee0; Imperial CLASH active10bps, exact accrued$0.040312,2 eligible
+  fills/$780. Production claims still0 until updated owner session reconciles.
+- Approved NFT price-sync attempt expired by block height; normal watcher started.
+  Existing API upstream429 warnings remain. No manual retry, funded test trade,
+  builder activation, recipient funding or reward-ledger repair was performed.
 - Owner-approved release candidate in `Clash-main-proxy-fallback`, branch
   `codex/bulk-mainnet`, based on deployed `31a02aa3`; original dirty checkout preserved.
 - Fixed missing automatic reward claims in both hooks, correct payout notice and
@@ -18,8 +43,8 @@
   tamper tests pass. Canonical Deploy gate passed, including lint and web build.
 - BULK production builder remains disabled (effective fee zero). Imperial CLASH
   builder is active. No funded order, grant, recipient funding or manual DB repair.
-- Standard deployment is explicitly approved, including its existing automatic
-  on-chain NFT price synchronization. Release/public verification is next.
+- Standard deployment was explicitly approved, including its existing automatic
+  on-chain NFT price synchronization; release/public verification is complete.
 - Owner approved the TP/SL visual direction and delegated remaining design choices.
   The combined release includes its local draft editor: Submit saves/enables,
   X/Escape discard, explicit Remove disables saved next-order attachment.

@@ -6,6 +6,10 @@ const REQUIRE_BUILDER = !/^(0|false|no)$/i.test(String(process.env.IMPERIAL_REQU
 
 const UNDERWRITER = Object.freeze({ jupiter: 0, flash: 1, phoenix: 2, gmtrade: 3, flash_v2: 4, pairs: 5, touch: 6 });
 const UNDERWRITER_LABEL = Object.freeze(Object.fromEntries(Object.entries(UNDERWRITER).map(([name, id]) => [id, name])));
+// Public, priced TP/SL is a keeper-triggered StopLimit decrease. PrivateTpSl
+// (5) requires triggerPrice=0 on-chain; a priced order fails with Custom25.
+// Use the explicit type instead of relying on venue-specific API rewrites.
+const PRICED_TPSL_ORDER_TYPE = 2;
 
 function error(message, status = 400, details = null) {
   return Object.assign(new Error(message), { status, details });
@@ -294,7 +298,7 @@ function makeAttachedCloseOrders(entry, body) {
     if (!(price > 0)) return [];
     return [{
       ...entry,
-      orderType: 5,
+      orderType: PRICED_TPSL_ORDER_TYPE,
       action: 1,
       triggerCondition,
       sizeUsd: entry.sizeUsd,
@@ -476,7 +480,7 @@ async function setPositionTpsl({ playerId, owner, jwt, positionId, body, db, fet
       profileIndex: profileIndex(position?.profileIndex),
       symbol: String(position?.asset || position?.symbol || '').toUpperCase(),
       side: isShort ? 1 : 0,
-      orderType: 5,
+      orderType: PRICED_TPSL_ORDER_TYPE,
       action: 1,
       triggerCondition,
       // Resting protection is sized at placement, unlike a market full close.

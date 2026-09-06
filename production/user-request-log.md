@@ -1,5 +1,17 @@
 # User Request Log
 
+## UR-2026-09-06-IMPERIAL-CUSTOM25-FIX-RELEASE
+
+- Owner: “Окрема помилка SOL TP/SL `Custom25` ще не виправлена виправляй дороблюй і на прод”.
+- Explicitly authorizes implementation, verification and production release of the SOL TP/SL failure fix. Diagnose actual upstream cause; no speculative funded retries, position/order mutations or wallet approvals used as tests. Continue in the existing isolated worktree and preserve previous release-result documentation.
+
+## UR-2026-09-06-BULK-BUILDER-ACTIVATE
+
+- Follow-up: “а яка там адреса стоїть? я попрошу зареєструватися і перевіряй просто на проді в браузері якщо нот фаунд то не прсои додати білдер код користувача”. Owner will arrange recipient registration; retain disabled approval step while missing. Browser verification: production config shows exact Drvz...qci9 recipient, builder_enabled=false, fee0; official docs playground sent unsigned fullAccount to mainnet-api1 and returned404 ACCOUNT_NOT_FOUND for that exact address. Existing disabled-mode hook skips approve_builder; no production config or wallet action was changed.
+- Owner: “а чому булк білдер код вимкнений”, then “спробуй активувати його длдати”.
+- Explain the disabled state and attempt supported builder activation. Verify the configured recipient first; do not invent a funded deposit, change the payout destination, or sign wallet approvals without the required owner action. Current configured fee defaults to1bps; this is not a new owner choice of fee.
+- Fresh unsigned mainnet fullAccount query again returned404 ACCOUNT_NOT_FOUND for Drvzmh5iRfHRuKHgmm6Q77CqxhqvsXaLvrKkfMP8qci9. Official builder docs require an existing canonical root payout account and master-wallet-signed trader approval. Production flag remains disabled; recipient-wallet onboarding requires owner participation before enabling fees.
+
 ## UR-2026-09-06-TPSL-VISUAL-APPROVAL
 
 - Owner: “я погоджую роби як хочеш головнев стиль проекта і красиво”.

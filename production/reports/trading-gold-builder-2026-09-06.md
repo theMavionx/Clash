@@ -4,7 +4,7 @@
 
 - ID: BUG-TRADING-GOLD-20260906
 - Severity: S2-Major; priority P1.
-- Status: locally verified release candidate; production rollout pending.
+- Status: deployed and production-verified as `01a5590c` on 2026-09-06.
 - Reported: 2026-09-06 by owner. Baseline: deployed `31a02aa3`.
 - Category: server/web integration; systems: execution indexing, Gold, referrals,
   protected earnings admin. Regression history: unknown.
@@ -139,3 +139,37 @@ separately approved the existing deployment's automatic on-chain NFT price sync.
 Use canonical scripts, preserve the rollback release, and verify service health,
 public release assets, builder config and protected diagnostics without claiming
 Gold or submitting an order on the owner's behalf.
+
+## Production release result
+
+- Commit `01a5590c2d0dbb787cbed8593e2649318084d266` fast-forwarded `origin/main`.
+  Canonical `export-upload-deploy.ps1 -Branch main -ProxyFile ''` completed at
+  15:48:25 UTC. Active release: `/opt/clash/releases/20260906154342-01a5590c`.
+- No Godot-visible changes; runtime `20260827162052-bb6735d5` reused unchanged.
+  Standard release validation, credential-key safety and runtime health passed.
+  All five Clash processes were online with zero restarts after API uptime163s.
+- Public HTML and main/FuturesPanel/admin JavaScript returned200 from the owner's
+  local network and SHA256 matched the release-owned files exactly. Server-side
+  outbound requests to the public domain returned403, so public delivery was
+  checked from the normal local client instead; no firewall rule was changed.
+  `/api/online` returned200 publicly and locally; futures3999 and MCP health passed.
+- Protected BULK/Imperial earnings GETs returned200 and every diagnostic section
+  was available. BULK has3 recorded submissions:1 owner,1 one-tap,1 unknown;
+  no currently indexed proof-eligible execution. Public config confirms
+  `one_tap_supported=true`, `builder_enabled=false`, effective fee0.
+- Imperial has2 distinct proof-eligible indexed fills totaling$780 at this
+  snapshot; CLASH is active at10bps with exact accrued$0.040312. Historical
+  duplicate opening rows no longer inflate the eligible count.
+- Neither venue had a production Gold claim at the post-release snapshot.
+  Automatic payout requires a normal updated owner session to load/reconcile;
+  no live payout or historical manual repair is claimed verified.
+- The approved one-shot NFT price-sync attempted transaction
+  `5XJjVsdHZeVBAU6wuxkat41HRHaubNg7H9cpTWq535Y8gxdKkwzjn2DrCgZntyq8RNYmdoyo4PAw5WKaJfaW1Bn5`
+  and reported block-height expiry. The standard watcher was subsequently
+  started. This warning is not claimed fixed and no manual retry was sent.
+- Existing upstream RPC429 warnings continue in API stderr (present before this
+  release). No new futures, jobs, MCP or payment-watcher stderr in the sampled
+  interval. Existing dependency audit/Node-engine warnings remain outside scope.
+- Retained rollback `/opt/clash/releases/20260906122519-31a02aa3`. Standard
+  retention removed old build `20260906073509-b93f6eb1`; its code remains in Git
+  and can be rebuilt. No player database or reward ledger was manually removed.
