@@ -202,7 +202,11 @@ export function useImperial() {
     setMarkets(nextMarkets);
     setPrices(previous => nextMarkets.map(row => {
       const live = previous.find(item => item.symbol === row.symbol);
-      return {...row, venues: row.venues.map(quote => {
+      const priceRow = {...row};
+      // Funding WS updates the market catalogue. Do not let a price snapshot
+      // shadow that live rate in the shared {...market, ...price} header merge.
+      delete priceRow.funding_rate;
+      return {...priceRow, venues: row.venues.map(quote => {
         const fresh = live?.venues?.find(item => item.venue === quote.venue);
         return Number(fresh?.fetchedAtUnixMs) > Number(quote.fetchedAtUnixMs || 0) ? fresh : quote;
       })};

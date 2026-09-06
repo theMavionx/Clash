@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
 import {imperialPosition,imperialLivePosition,imperialMarketUpdate,imperialCloseBps,imperialTradeRows,imperialFundingRows} from './src/lib/imperialData.js';
 import {openImperialStream} from './src/lib/imperialStream.js';
 const raw={id:'fixture',asset:'BTC',side:'long',profileIndex:0,underwriter:'jupiter',sizeUsd:'70',sizeTokenAmount:'0.00087763',collateralUsd:'3.434131',leverageX:'20.383613787592846',pnlUsd:'-0.1157',pnlPercent:'-3.3528',markPrice:'79744',entryPrice:'79760.284249',liquidationPrice:'76062.84'};
@@ -35,6 +36,12 @@ test('market WS respects upstream timestamps, including stale snapshots and out-
  const row=imperialPosition({...raw,underwriter:'phoenix',feesOwed:0,actions:[]});
  assert.equal(imperialLivePosition(row,live,100001).live_mark_basis,'index');
  assert.equal(imperialLivePosition(row,live,160001),row);
+});
+
+test('snapshot price rows do not shadow the live market funding rate',()=>{
+ const source=readFileSync(new URL('./src/hooks/useImperial.js',import.meta.url),'utf8');
+ assert.match(source,/delete priceRow\.funding_rate/);
+ assert.match(source,/return \{\.\.\.priceRow, venues:/);
 });
 test('Imperial live decimals, margin, return and venue identity are preserved',()=>{
  const p=imperialPosition(raw);
