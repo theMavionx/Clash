@@ -16,14 +16,15 @@ assert.equal(catalog.validate(storageName, { secretKey: bs58.encode(agent.secret
 assert.equal(catalog.validate(storageName, { secretKey: bs58.encode(owner.secretKey.slice(0, 32)), account }, 'fixture'), false, 'primary-wallet keys are forbidden in the vault');
 const sign = (prepared, key) => ({ ...prepared.transaction, signature_mode: prepared.signature_mode,
   signature: bs58.encode(nacl.sign.detached(Buffer.from(prepared.message_base64, 'base64'), key.secretKey)) });
-let authorized = [], writes = 0, response = { status: 'ok', response: { data: { statuses: [] } } };
+let authorized = [], builderApprovals = [], writes = 0, submittedBody = null;
+let response = { status: 'ok', response: { data: { statuses: [] } } };
 global.fetch = async (url, init) => {
   const body = JSON.parse(init.body);
   if (String(url).endsWith('/account')) {
     assert.equal(body.user, account);
-    return Response.json([{ fullAccount: { authorizedAgentWallets: authorized } }]);
+    return Response.json([{ fullAccount: { authorizedAgentWallets: authorized, builderCodeApprovals: builderApprovals } }]);
   }
-  assert.equal(String(url).endsWith('/order'), true); writes++;
+  assert.equal(String(url).endsWith('/order'), true); writes++; submittedBody = body;
   return Response.json(response);
 };
 (async () => {
@@ -73,5 +74,67 @@ global.fetch = async (url, init) => {
   assert.equal(proof.builder_fee_bps, 0);
   assert.equal(JSON.parse(proof.response_json).clash_verified_signer, signer);
   assert.equal(db.db.prepare('SELECT * FROM bulk_order_builder_proofs WHERE order_id=?').get(address(stranger)), undefined);
+  await checkEnabledBuilder();
   console.log('BULK one-tap: owner management, raw delegate signatures, fresh grants, revocation, five action types and canonical proof correlation passed.');
 })().catch(error => { console.error(error); process.exitCode = 1; }).finally(() => db.db.close());
+
+/** Load a separate test-only configuration without changing the disabled adapter. */
+function enabledBuilderFixture() {
+  const modulePath = require.resolve('./bulk');
+  const cached = require.cache[modulePath], previous = process.env.BULK_BUILDER_ENABLED;
+  try {
+    process.env.BULK_BUILDER_ENABLED = '1';
+    delete require.cache[modulePath];
+    return require('./bulk');
+  } finally {
+    require.cache[modulePath] = cached;
+    process.env.BULK_BUILDER_ENABLED = previous;
+  }
+}
+
+async function rejectBuilderTampering(enabled, signed, builderCode) {
+  const modified = structuredClone(signed);
+  const kind = Object.keys(modified.actions[0])[0];
+  if (builderCode === undefined) delete modified.actions[0][kind].builderCode;
+  else modified.actions[0][kind].builderCode = builderCode;
+  const before = writes;
+  await assert.rejects(enabled.submitTransaction('fixture', account, modified), /signature verification/);
+  modified.signature = bs58.encode(nacl.sign.detached(
+    wire.serializeTransaction(modified.actions, modified.nonce, account, enabled.BULK_NETWORK), agent.secretKey));
+  await assert.rejects(enabled.submitTransaction('fixture', account, modified), /builderCode object required|builder attribution mismatch/);
+  assert.equal(writes, before, 'even a valid agent signature cannot omit or redirect builder attribution');
+}
+
+async function checkEnabledBuilder() {
+  const enabled = enabledBuilderFixture();
+  const builder = { to: enabled.BULK_BUILDER_ADDRESS, fee: enabled.BULK_BUILDER_FEE_BPS };
+  authorized = [signer];
+  response = { status: 'ok', response: { data: { statuses: [] } } };
+  for (const [index, kind] of ['market', 'limit'].entries()) {
+    const prepared = enabled.prepareTransaction(account, { kind, symbol: 'BTC', side: 'ask',
+      size: '0.000609', price: '79000', reduce_only: true, signer, nonce: String(700 + index),
+      builderCode: { to: address(stranger), fee: 15 } });
+    assert.equal(prepared.signature_mode, 'raw');
+    assert.deepEqual(Object.values(prepared.transaction.actions[0])[0].builderCode, builder);
+    const signed = sign(prepared, agent), before = writes;
+    builderApprovals = [];
+    await assert.rejects(enabled.submitTransaction('fixture', account, signed), /Approve the Clash builder code/);
+    assert.equal(writes, before, 'agent authority cannot replace native builder approval');
+    builderApprovals = [{ recipient: builder.to, maxFee: builder.fee }];
+    await enabled.submitTransaction('fixture', account, signed);
+    assert.equal(writes, before + 1);
+    assert.equal(submittedBody.signer, signer);
+    assert.deepEqual(Object.values(submittedBody.actions[0])[0].builderCode, builder);
+    const stored = db.db.prepare('SELECT * FROM bulk_order_builder_proofs WHERE order_id=?').get(prepared.order_ids[0]);
+    assert.equal(stored.builder_address, builder.to);
+    assert.equal(stored.builder_fee_bps, builder.fee);
+    await assert.rejects(enabled.submitTransaction('fixture', account, { ...signed, signer: address(stranger) }), /signature verification/);
+    for (const changed of [undefined, { ...builder, to: address(stranger) }, { ...builder, fee: builder.fee === 15 ? 14 : builder.fee + 1 }]) {
+      await rejectBuilderTampering(enabled, signed, changed);
+    }
+  }
+  assert.equal(bulk.config().builder_enabled, false);
+  assert.equal(bulk.config().builder_fee_bps, 0);
+  assert.equal(process.env.BULK_BUILDER_ENABLED, '0');
+  console.log('BULK builder-enabled fixture: exact delegated builder tuple, persisted proof, native approval and signer/body tampering checks passed; default remains fee zero.');
+}

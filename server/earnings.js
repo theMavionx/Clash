@@ -33,6 +33,7 @@ const {
   fetchWithAptosKeys,
 } = require('./aptos_api');
 const tradeRecon = require('./trade_reconciliation');
+const { readTradingDiagnostics } = require('./trading_diagnostics');
 const {
   GMX_UI_FEE_BPS,
   GMX_UI_FEE_RECEIVER,
@@ -2649,6 +2650,7 @@ function readVerifiedFuturesDexStats(
   const Db = loadSqlite();
   if (!Db || !FS.existsSync(FUTURES_DB)) {
     return {
+      available: false,
       trades: 0,
       trades_24h: 0,
       traders: 0,
@@ -2752,6 +2754,7 @@ function readVerifiedFuturesDexStats(
       earned_24h_usd: roundUsd(recent.earned_usd),
       fee_usd: roundUsd(summary.fee_usd),
       fee_24h_usd: roundUsd(recent.fee_usd),
+      available: true,
       latest_fill_at: summary.latest_fill_at || null,
       recent_proofs: proofs,
     };
@@ -2766,6 +2769,7 @@ function readVerifiedFuturesDexStats(
       earned_24h_usd: 0,
       fee_usd: 0,
       fee_24h_usd: 0,
+      available: false,
       latest_fill_at: null,
       recent_proofs: [],
     };
@@ -3347,7 +3351,19 @@ async function fetchRhLighterEarnings() {
   };
 }
 
-async function fetchBulkEarnings() {
+function readLocalTradingDiagnostics(dex, mainDb) {
+  let futuresDb = null;
+  try {
+    const Db = loadSqlite();
+    if (Db && FS.existsSync(FUTURES_DB)) {
+      futuresDb = new Db(FUTURES_DB, { readonly: true, fileMustExist: true });
+    }
+  } catch { /* Missing/busy storage is unknown, not a successful zero. */ }
+  try { return readTradingDiagnostics({ futuresDb, mainDb, dex }); }
+  finally { futuresDb?.close(); }
+}
+
+async function fetchBulkEarnings({ mainDb = null } = {}) {
   const expectedAddress = BULK_BUILDER_ADDRESS.replace(/'/g, "''");
   const proofWhere = `
     json_valid(COALESCE(proof_json, ''))
@@ -3357,26 +3373,31 @@ async function fetchBulkEarnings() {
     AND CAST(json_extract(proof_json, '$.builder.fee_bps') AS INTEGER) = ${BULK_BUILDER_FEE_BPS}
   `;
   const local = readVerifiedFuturesDexStats('bulk', 'bulk_builder_signed', { rowWhere: proofWhere });
-  const estimated = local.volume_usd * (BULK_BUILDER_FEE_BPS / 10000);
+  const estimated = local.available ? local.volume_usd * (BULK_BUILDER_FEE_BPS / 10000) : null;
   return {
     earned_usd: 0,
     currency: 'USDC (Bulk/Solana)',
     address: BULK_BUILDER_ADDRESS,
-    volume_usd: local.volume_usd,
-    volume_24h_usd: local.volume_24h_usd,
-    trades: local.trades,
-    trades_24h: local.trades_24h,
-    traders: local.traders,
-    estimated_fee_usd: roundUsd(estimated),
+    volume_usd: local.available ? local.volume_usd : null,
+    volume_24h_usd: local.available ? local.volume_24h_usd : null,
+    trades: local.available ? local.trades : null,
+    trades_24h: local.available ? local.trades_24h : null,
+    traders: local.available ? local.traders : null,
+    estimated_fee_usd: estimated == null ? null : roundUsd(estimated),
     builder_fee_bps: BULK_BUILDER_FEE_BPS,
     builder_fee_pct: BULK_BUILDER_FEE_BPS / 100,
     latest_fill_at: local.latest_fill_at,
     recent_proofs: local.recent_proofs,
     configured: BULK_BUILDER_ENABLED,
+    exact: false,
+    builder_enabled: BULK_BUILDER_ENABLED,
+    effective_builder_fee_bps: BULK_BUILDER_ENABLED ? BULK_BUILDER_FEE_BPS : 0,
+    builder_recipient_readiness: 'unverified',
+    trading_diagnostics: readLocalTradingDiagnostics('bulk', mainDb),
     model: 'bulk_signed_builder_volume_estimate',
     source_detail: 'bulk_mainnet_signed_order_proof',
     note: BULK_BUILDER_ENABLED
-      ? `Bulk fills count only when their stored mainnet signed-order proof matches ${BULK_BUILDER_ADDRESS} at ${BULK_BUILDER_FEE_BPS} bps. Bulk does not expose cumulative public builder earnings, so $${roundUsd(estimated).toFixed(4)} is shown as an estimate and is not added to exact total earned.`
+      ? `Bulk fills count only when their stored mainnet signed-order proof matches ${BULK_BUILDER_ADDRESS} at ${BULK_BUILDER_FEE_BPS} bps. Bulk does not expose cumulative public builder earnings; ${estimated == null ? 'the local estimate is unavailable' : `$${roundUsd(estimated).toFixed(4)} is a local estimate`} and is not added to exact total earned.`
       : `Bulk builder fees are disabled until ${BULK_BUILDER_ADDRESS} is activated as a canonical Bulk mainnet payout account. Previously verified builder fills remain visible.`,
   };
 }
@@ -3395,7 +3416,7 @@ function imperialBuilderAmounts(summary) {
   };
 }
 
-async function fetchImperialEarnings() {
+async function fetchImperialEarnings({ mainDb = null } = {}) {
   const local = readVerifiedFuturesDexStats('imperial', 'imperial_api', {
     rowWhere: tradeRecon.verifiedSourceClauseForDex('imperial').replace(/^verified_source\s*=\s*'imperial_api'\s+AND\s+/i, ''),
   });
@@ -3422,11 +3443,15 @@ async function fetchImperialEarnings() {
     builder_code: IMPERIAL_BUILDER_CODE,
     configured: summary?.active === true || summary?.configured === true,
     active: summary?.active === true,
-    volume_usd: local.volume_usd,
-    volume_24h_usd: local.volume_24h_usd,
-    trades: local.trades,
-    trades_24h: local.trades_24h,
-    traders: local.traders,
+    builder_status: summaryError ? 'unavailable'
+      : summary?.active === true ? 'active' : summary?.active === false ? 'inactive' : 'unverified',
+    builder_recipient_readiness: 'unverified',
+    trading_diagnostics: readLocalTradingDiagnostics('imperial', mainDb),
+    volume_usd: local.available ? local.volume_usd : null,
+    volume_24h_usd: local.available ? local.volume_24h_usd : null,
+    trades: local.available ? local.trades : null,
+    trades_24h: local.available ? local.trades_24h : null,
+    traders: local.available ? local.traders : null,
     estimated_fee_usd: null,
     builder_fee_basis: 'collateral',
     builder_fee_bps: Number.isFinite(feeBps) ? feeBps : null,
@@ -4525,8 +4550,8 @@ const EARNINGS_READER_CONFIG = {
   flash: { source: 'flash_v2_verified_tx_local_estimate', read: () => fetchFlashEarnings() },
   lighter: { source: 'lighter_integrator_fills_fee_sum', read: () => fetchLighterEarnings() },
   rhlighter: { source: 'rh_lighter_public_partner_stats', read: () => fetchRhLighterEarnings() },
-  bulk: { source: 'bulk_mainnet_signed_order_proof', read: () => fetchBulkEarnings() },
-  imperial: { source: 'imperial_mobile_builder_summary', read: () => fetchImperialEarnings() },
+  bulk: { source: 'bulk_mainnet_signed_order_proof', read: ({ mainDb }) => fetchBulkEarnings({ mainDb }) },
+  imperial: { source: 'imperial_mobile_builder_summary', read: ({ mainDb }) => fetchImperialEarnings({ mainDb }) },
   ondo: { source: 'ondo_clashofperps_order_proof_x_authenticated_fill_volume_x_1bps', read: () => fetchOndoEarnings() },
 };
 

@@ -1,5 +1,35 @@
 # Active Session State
 
+## BULK / Imperial Gold and Builder Diagnostics (2026-09-06)
+
+- Owner-approved release candidate in `Clash-main-proxy-fallback`, branch
+  `codex/bulk-mainnet`, based on deployed `31a02aa3`; original dirty checkout preserved.
+- Fixed missing automatic reward claims in both hooks, correct payout notice and
+  authoritative resource refresh, with identity-scoped cancellation and catch-up.
+- Imperial completed closes and limit-fill fixed-point units are normalized;
+  immutable execution identity replaces array index. Existing row IDs are reused,
+  shared eligibility excludes legacy duplicates across cursors, and referral sync
+  now uses the same predicate. No historical ledger rewrite or rate change.
+- Admin exposes proof-eligible fills, owner/one-tap signer counts, effective builder
+  state and Gold paid/pending/claims; unavailable amounts remain unknown.
+- Real React browser suite: 22 passes. Actual Express/SQLite Gold claims pass for
+  both venues, including repeat/cap/bonus cases. Importer tests: 30 total with
+  existing adapter suite. Shared SQL/referral, admin and enabled-builder agent
+  tamper tests pass. Canonical Deploy gate passed, including lint and web build.
+- BULK production builder remains disabled (effective fee zero). Imperial CLASH
+  builder is active. No funded order, grant, recipient funding or manual DB repair.
+- Standard deployment is explicitly approved, including its existing automatic
+  on-chain NFT price synchronization. Release/public verification is next.
+- Owner approved the TP/SL visual direction and delegated remaining design choices.
+  The combined release includes its local draft editor: Submit saves/enables,
+  X/Escape discard, explicit Remove disables saved next-order attachment.
+  Ten actual React/native-dialog tests pass. Parent verified real browser Submit,
+  X/Escape, Remove and mobile Submit; dark/light responsive screenshots reviewed
+  by art director. Final canonical Deploy gate passed after all UI changes.
+- SOL TP/SL 400 at 14:32 UTC is upstream `Custom25 / UnknownTradeFailure`, with
+  null signature, distinct from the earlier fixed zero-size 422. No blind retry.
+- Report: `production/reports/trading-gold-builder-2026-09-06.md`.
+
 ## Integration Release — Production Verified (2026-08-31)
 
 - Owner authorized "закинь все на прод". Completed scoped changes published

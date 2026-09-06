@@ -1,5 +1,48 @@
 # User Request Log
 
+## UR-2026-09-06-TPSL-VISUAL-APPROVAL
+
+- Owner: “я погоджую роби як хочеш головнев стиль проекта і красиво”.
+- Approves the proposed TP/SL visual direction and delegates remaining visual decisions in the project style. Proceed with implementation, independent UX/art review, screenshot/behavior verification and the already-authorized combined deployment without additional phase-design questions.
+
+## UR-2026-09-06-DEPLOY-PAYMENT-SYNC-APPROVAL
+
+- Owner explicitly answered: “Так, запускай стандартний деплой із цією синхронізацією”.
+- Approves the existing standard production deployment including its automatic on-chain NFT price synchronization. This is not permission to fund a BULK recipient, submit test trades, create wallet grants or manually alter player rewards.
+
+## UR-2026-09-06-TPSL-SUBMIT-BEHAVIOR
+
+- Owner: “якщо я натискаю на тп сл він відразу стає активним і кнопка сабмиіт має бути якщо я на хрестик закриваю то не стає активним зось таке типу”.
+- Opening gives an immediately editable local draft. Submit saves/activates attached TP/SL settings; closing with X/Escape discards unsaved changes and retains prior saved settings. Submit must not open a funded order.
+
+## UR-2026-09-06-BUILDER-ADMIN-RELEASE
+
+- Local timestamp: 2026-09-06 17:40 +03:00.
+- Owner: “перевір чи в ван тапі є білдер код теж я ніби відкрив одну угоду через ван тап і в цілому перевір чи білдер код наш працюжє + додай до адмінки все то діло і знвоу ж таки все перевір і на прод закинь”.
+- Audit owner/agent signed builder routing, authoritative recipient/code status and revenue proof; expose truthful BULK/Imperial trading/reward diagnostics in existing protected admin. Verify fixes and deploy scoped completed work. No implicit approval to fund/init a payout recipient, create wallet grants, submit trades or manually rewrite production reward ledgers.
+
+## UR-2026-09-06-TPSL-DIALOG-POLISH
+
+- Local timestamp: 2026-09-06 17:42 +03:00.
+- Owner: “отут юай доволі корявий не дороблений зроби красиво все перевір сам скрінами і тд”. Screenshot shows Order TP/SL dialog with disabled-looking fields, clipped validation and mismatched Price/percent presentation.
+- Polish the existing draft protection dialog without submitting an order; verify actual desktop/mobile screenshots and state/input/keyboard behavior. Included in current scoped verification/release work.
+
+## UR-2026-09-06-IMPERIAL-TPSL-HTTP400
+
+- Owner supplies console evidence: PATCH /api/futures/imperial/positions/d64e5e33-ad27-413c-bf36-9a7f834a06d0/tpsl returns400. Separate Pacifica clock offset-661ms log is not evidence of causality.
+
+## UR-2026-09-06-BULK-IMPERIAL-GOLD
+
+- Local timestamp: 2026-09-06 17:34 +03:00.
+- Owner: “золото ще не дає за торігвлю ні на булк ні на імперіал”.
+- Diagnose the verified execution/import/reconciliation/gold-claim chain for both venues, using read-only production evidence. Fix locally confirmed defects and verify without inventing volume or manually crediting production gold. No new production repair or deploy approval implied.
+
+## UR-2026-09-06-IMPERIAL-SOL-TPSL-TASK
+
+- Local timestamp: 2026-09-06 17:34 +03:00.
+- Owner asks to add a separate task: SOL LONG TP/SL in Imperial fails after Set. Entry105.83, mark105.69, TP106.67, SL104.57. Error: “Failed to place order — please try again. Your position may still be open. Check Trade History before trying again.”
+- Separate isolated Codex task for TP/SL investigation and local fix; gold investigation stays here. No live trading/permissions or production mutation authorized.
+
 ## UR-2026-09-06-BULK-PNL-RELEASE
 
 - Owner: “в булк теж трохи криво закинь потім все на прод”. Screenshots: native Bulk BTC +$0.12/+0.25%, Clash +$0.1212/+4.99%, leverage20x.

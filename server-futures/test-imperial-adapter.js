@@ -232,8 +232,9 @@ test('Imperial rewards import only exact fills linked to persisted Clash order p
   const fetchImpl = async url => {
     const path = new URL(url).pathname;
     if (path.endsWith('/order-history/order-1')) return response(200, {
-      status: 'filled', fills: [{ txSignature: 'fill-sig', sizeUsd: 1250, price: 145.2, status: 'filled', timestamp: '2026-09-02T00:01:00Z' }],
+      orderPda: 'order-1', profileIndex: 0, status: 'filled', fills: [{ txSignature: 'fill-sig', sizeUsd: '1250000000', price: '145200000000', status: 'filled', timestamp: '2026-09-02T00:01:00Z' }],
     });
+    if (path.endsWith('/trades')) return response(200, { dataList: [] });
     throw new Error(`unexpected ${path}`);
   };
   const result = await imperial.importTradesForPlayer({ playerId: 'p1', owner: WALLET, jwt: 'jwt', db, fetchImpl });

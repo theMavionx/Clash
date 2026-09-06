@@ -26,4 +26,12 @@ Owner approval: UR-2026-09-06-BULK-PNL-RELEASE, “в булк теж трохи
 
 ## Deployment
 
-Canonical atomic deployment with runtime health gate and rollback retention pending. Production precheck: current b93f6eb1, source has only the canonical ignored deploy lock, 122GB free disk and 13GB available RAM. Final release and public-asset verification will be recorded after completion.
+- Implementation `31a02aa33549a83e43485e6e3b3c1923d52d32fc` fast-forward pushed to `origin/main`. Original dirty checkout untouched.
+- Canonical `deploy/export-upload-deploy.ps1 -Branch main` exhausted 20 configured proxies before any remote mutation. Retried the same script with its supported empty `-ProxyFile` parameter over direct pinned-host SSH; succeeded.
+- Production precheck: prior b93f6eb1, source had only the canonical ignored deploy lock, 122GB free disk and 13GB available RAM.
+- Active release `/opt/clash/releases/20260906122519-31a02aa3`; runtime health gate passed12:29:33UTC, deploy completed12:29:40UTC. Linux credential tests passed before activation. Main API4000, futures3999, MCP4100 healthy.
+- Public `/` HTTP200 references `/assets/main-C796f6Ru.js`. Public `FuturesPanel-C2OEpwZN.js` HTTP200 SHA256 `0906a8978a2021e20c0a9516d561996b7e0d6e84963cb8022c97aea02bc36ee8` matches the release file exactly; contains one-tap, entry-notional return and index estimate labels.
+- Public `/api/futures/bulk/config`: mainnet, `one_tap_supported=true`, `builder_enabled=false`, builder fee0. No trading grant/order smoke executed.
+- Canonical retention removed old build `20260906073034-d5dbfddd`. Previous b93f6eb1 remains for rollback; player databases were not manually repaired or cleared.
+- Existing canonical Solana NFT payment-sync ran during restart and reported a price-configuration update for dragon:clash:21510.002152 →129533.678757 $CLASH at token price$0.00007720, target$10,12:29:14.827UTC. This was the existing deploy-script synchronization, not a BULK/Imperial trade or a manual treasury transfer. Owner notified of this side effect.
+- Browser fixture shutdown recorded an extension-origin Phantom `Cannot redefine property: ethereum` injection error and Vite buffer warning; neither prevented the verified component flows. This does not certify real wallet-provider behavior.

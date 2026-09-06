@@ -340,14 +340,62 @@ function bulkBuilderEligibilityClause() {
   )`;
 }
 
-function imperialBuilderEligibilityClause() {
-  const proof = 'trade_history.proof_json';
+function imperialProofFields(alias) {
+  const proof = `(CASE WHEN json_valid(COALESCE(${alias}.proof_json, '')) THEN ${alias}.proof_json ELSE '{}' END)`;
+  const json = path => `json_extract(${proof}, ${sqlQuote(path)})`;
+  const text = path => `NULLIF(CAST(${json(path)} AS TEXT), '')`;
+  const tail = `substr(${alias}.client_order_id, 10)`;
+  const separator = `instr(${tail}, ':')`;
+  const legacyProfile = `substr(${tail}, ${separator} + 1, 1)`;
+  const legacyScope = `CASE WHEN ${alias}.client_order_id LIKE 'imperial:%'
+    AND ${separator} > 1 AND ${legacyProfile} IN ('0','1','2','3','4','5')
+    AND substr(${tail}, ${separator} + 2, 1) = ':'
+    THEN substr(${tail}, 1, ${separator} + 1) END`;
+  return {
+    json,
+    scope: `COALESCE(CASE WHEN ${text('$.wallet')} IS NOT NULL
+      AND CAST(${json('$.profileIndex')} AS TEXT) IN ('0','1','2','3','4','5')
+      THEN ${text('$.wallet')} || ':' || CAST(${json('$.profileIndex')} AS TEXT) END, ${legacyScope})`,
+    actionId: `COALESCE(${text('$.executionId')}, ${text('$.execution.id')})`,
+    signature: `COALESCE(${text('$.executionSignature')}, ${text('$.execution.tx2Signature')}, ${text('$.execution.txSignature')})`,
+    uniqueSignature: `${json('$.executionSignatureUnique')} = 1`,
+  };
+}
+
+function imperialBaseEligibility(fields) {
   const code = sqlQuote(String(process.env.IMPERIAL_BUILDER_CODE || 'CLASH').trim().toUpperCase());
-  return `(
-    json_valid(COALESCE(${proof}, ''))
-    AND upper(COALESCE(json_extract(${proof}, '$.builderCode'), '')) = ${code}
-    AND COALESCE(json_extract(${proof}, '$.signature'), '') != ''
-  )`;
+  return `upper(COALESCE(${fields.json('$.builderCode')}, '')) = ${code}
+    AND COALESCE(${fields.json('$.signature')}, '') != ''`;
+}
+
+function imperialSignatureUnambiguous(fields) {
+  const candidate = imperialProofFields('imperial_signature');
+  return `(SELECT COUNT(DISTINCT ${candidate.actionId}) FROM trade_history imperial_signature
+    WHERE imperial_signature.player_id = trade_history.player_id
+      AND imperial_signature.dex = 'imperial' AND imperial_signature.status = 'filled'
+      AND imperial_signature.verified_source = 'imperial_api'
+      AND ${imperialBaseEligibility(candidate)}
+      AND ${candidate.scope} = ${fields.scope}
+      AND ${candidate.signature} = ${fields.signature}) <= 1`;
+}
+
+function imperialBuilderEligibilityClause() {
+  const current = imperialProofFields('trade_history');
+  const earlier = imperialProofFields('imperial_earlier');
+  const unambiguous = imperialSignatureUnambiguous(current);
+  // The predecessor search deliberately ignores caller time windows/cursors.
+  // Otherwise a legacy duplicate above a paid cursor would earn a second time.
+  return `(${imperialBaseEligibility(current)}
+    AND (${current.actionId} IS NOT NULL OR ${current.signature} IS NULL OR ${unambiguous})
+    AND NOT EXISTS (SELECT 1 FROM trade_history imperial_earlier
+      WHERE imperial_earlier.player_id = trade_history.player_id
+        AND imperial_earlier.dex = 'imperial' AND imperial_earlier.id < trade_history.id
+        AND imperial_earlier.status = 'filled' AND imperial_earlier.verified_source = 'imperial_api'
+        AND ${imperialBaseEligibility(earlier)} AND ${earlier.scope} = ${current.scope}
+        AND ((${current.actionId} IS NOT NULL AND ${earlier.actionId} = ${current.actionId})
+          OR ((${current.actionId} IS NULL OR ${earlier.actionId} IS NULL)
+            AND ${current.signature} IS NOT NULL AND ${earlier.signature} = ${current.signature}
+            AND (${current.uniqueSignature} OR ${earlier.uniqueSignature}) AND ${unambiguous}))))`;
 }
 
 function verifiedSourceClauseForDex(dex) {

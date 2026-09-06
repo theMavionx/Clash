@@ -8,6 +8,7 @@ import { imperialPosition, imperialLivePosition, imperialMarketUpdate, imperialC
 import { openImperialStream } from '../lib/imperialStream';
 import { useDex } from '../contexts/DexContext';
 import { usePlayer } from './useGodot';
+import { useTradingGoldSync } from './useTradingGoldSync';
 import { useCredentialOperationScope } from './useCredentialOperationScope';
 import {
   IMPERIAL_APP_URL,
@@ -73,7 +74,11 @@ export function useImperial() {
   const [routePreview, setRoutePreview] = useState(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const [goldEarned, setGoldEarned] = useState(null);
+  const { claimGold, scheduleGoldClaim, goldEarned, clearGoldEarned } = useTradingGoldSync({
+    active, ready: sessionLoaded && session?.wallet === walletAddr, dex: 'imperial', playerId: player?.player_id || player?.id,
+    token, wallet: walletAddr, sessionKey: `${session?.jwt || ''}:${profileIndex}`,
+    imperialJwt: session?.jwt || '', gameApi: GAME_API,
+  });
   const actionRef = useRef(false);
   const dexAccountSyncRef = useRef(null);
   const routeRequestRef = useRef(0);
@@ -341,7 +346,8 @@ export function useImperial() {
       };
       later(() => refreshPositions().catch(() => {}), 1200);
       later(() => refresh(), 3000);
-      later(() => api('/imperial/import-trades', { method: 'POST', body: { wallet: walletAddr, limit: 500 } }).catch(() => {}), 5000);
+      if (result?.success !== false && !result?.error
+        && (path === '/imperial/orders' || /\/positions\/[^/]+\/(close|tpsl)$/.test(path))) scheduleGoldClaim();
       return result;
     } catch (cause) {
       const message = cause?.message || 'Imperial action failed';
@@ -349,7 +355,7 @@ export function useImperial() {
       setError(message); return { error: message };
     }
     finally { actionRef.current = false; setLoading(false); }
-  }, [api, assert, capture, refresh, refreshPositions, session, walletAddr]);
+  }, [api, assert, capture, refresh, refreshPositions, session, scheduleGoldClaim]);
 
   useEffect(() => {
     const timers = actionTimersRef.current;
@@ -433,16 +439,6 @@ export function useImperial() {
     return response.ok ? response.json() : [];
   }, []);
 
-  const claimGold = useCallback(async () => {
-    if (!session) return { error: 'Connect Imperial first.' };
-    await api('/imperial/import-trades', { method: 'POST', body: { wallet: walletAddr, limit: 1000 } });
-    const response = await fetch('/api/trading/claim-gold', { method: 'POST', headers: { 'content-type': 'application/json', 'x-token': token, 'x-dex': 'imperial', 'x-imperial-jwt': session.jwt }, body: JSON.stringify({ dex: 'imperial', wallet: walletAddr }) });
-    const result = await response.json().catch(() => ({}));
-    if (!response.ok) return { error: result?.error || 'Imperial reward claim failed' };
-    if (n(result?.gold) > 0) { setGoldEarned(result); window.onGodotMessage?.({ action: 'resources_add', data: { gold: n(result.gold), wood: 0, ore: 0 } }); }
-    return result;
-  }, [api, session, token, walletAddr]);
-
   const disconnect = useCallback(async () => {
     const scope = capture();
     await api('/imperial/revoke', { method: 'POST', body: { wallet: walletAddr } }).catch(() => null);
@@ -473,8 +469,8 @@ export function useImperial() {
     setMarginMode: (_symbol, mode) => runAction('/imperial/profile/margin-mode', { body: { wallet: walletAddr, profileIndex, marginMode: mode === true || mode === 'isolated' ? 'isolated' : 'unified' } }),
     depositToPacifica: amount => transfer(amount, 'deposit'), withdraw: amount => transfer(amount, 'withdraw'),
     activate, disconnect, openReferralJoin: () => window.open(IMPERIAL_APP_URL, '_blank', 'noopener,noreferrer'),
-    claimGold, goldEarned, clearGoldEarned: () => setGoldEarned(null),
-  }), [account, activate, active, excludedVenues, pinnedVenue, cancelOrder, claimGold, closePosition, config, disconnect, error,
+    claimGold, goldEarned, clearGoldEarned,
+  }), [account, activate, active, excludedVenues, pinnedVenue, cancelOrder, claimGold, clearGoldEarned, closePosition, config, disconnect, error,
     fetchCandles, fetchFundingHistory, fetchTradeHistory, goldEarned, loading, markets, orders, placeLimitOrder,
     placeMarketOrder, livePositions, previewRoute, prices, profileIndex, refresh, refreshPositions, routePreview, runAction, sessionLoaded,
     setTpsl, setupVerified, transfer, walletAddr]);

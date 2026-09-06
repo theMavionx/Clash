@@ -754,50 +754,91 @@ function asIso(value, fallback) {
 }
 
 function executionRowsFromOrder(detail, proof) {
+  detail = detail?.data || detail;
+  if (!detail || detail.orderPda !== proof.order_pda
+    || Number(detail.profileIndex) !== Number(proof.profile_index)
+    || (proof.tx_signature && detail.creationSignature !== proof.tx_signature)) return [];
   const fills = apiList(detail?.fills).length ? apiList(detail?.fills) : apiList(detail?.data?.fills);
-  const source = fills.length ? fills : [detail];
-  return source.flatMap((fill, index) => {
-    const status = String(fill?.status || detail?.displayStatus || detail?.status || '').toLowerCase();
-    const signature = fill?.txSignature || fill?.transactionSignature || fill?.signature || detail?.executionSignature || proof.tx_signature;
-    const rawNotional = fill?.sizeUsd ?? fill?.notionalUsd ?? fill?.filledSizeUsd ?? detail?.filledSizeUsd;
-    const notional = numberFrom(rawNotional, 0);
-    const normalizedNotional = notional;
-    if (!signature || normalizedNotional <= 0 || (status && !/fill|execut|success|confirm/.test(status))) return [];
-    const priceRaw = fill?.price ?? fill?.executionPrice ?? detail?.price ?? detail?.averagePrice;
-    const priceNumber = numberFrom(priceRaw, 0);
-    const price = priceNumber;
+  // Order-history uses raw fixed-point values, unlike the human-unit /trades
+  // action feed. Never infer units from magnitude or use requested order size.
+  const source = fills.length ? fills : Number(detail.fillCount) === 1 ? [{
+    status: detail.status, txSignature: detail.executionSignature,
+    sizeUsd: detail.filledSizeUsd, price: detail.avgFillPrice,
+    feesUsd: detail.feesUsd, time: detail.executedAt,
+  }] : [];
+  return source.flatMap(fill => {
+    const status = String(fill?.status || '').toLowerCase();
+    const signature = fill?.txSignature;
+    const notional = Math.abs(numberFrom(fill?.sizeUsd, 0)) / 1e6;
+    const price = numberFrom(fill?.price, 0) / 1e9;
+    // Without an immutable fill ID, multiple executions in one transaction
+    // cannot be distinguished safely. Leave them for the action feed.
+    if (!signature || source.filter(item => item?.txSignature === signature).length !== 1
+      || notional <= 0 || price <= 0 || !/^(completed|filled|executed|success|confirmed|settled)$/.test(status)) return [];
     return [{
       signature: String(signature),
-      notional: normalizedNotional,
-      amount: String(fill?.size ?? fill?.quantity ?? normalizedNotional),
-      price: price > 0 ? String(price) : null,
-      pnl: fill?.pnlRealized ?? fill?.realizedPnl ?? null,
-      fee: fill?.feesUsd ?? fill?.fees ?? fill?.feeUsd ?? null,
+      executionId: null,
+      executionSignature: String(signature),
+      executionSignatureUnique: true,
+      notional,
+      amount: String(notional / price),
+      price: String(price),
+      pnl: null,
+      fee: fill?.feesUsd == null ? null : numberFrom(fill.feesUsd, 0) / 1e6,
       createdAt: asIso(fill?.time ?? fill?.timestamp ?? fill?.createdAt ?? detail?.executedAt ?? detail?.createdAt, proof.created_at),
-      index,
       raw: fill,
     }];
   });
 }
 
-function executionRowsFromActions(trades, proof) {
+function executionRowsFromActions(trades, proof, executionSignatures = []) {
   const expected = String(proof.tx_signature || '');
-  if (!expected) return [];
+  if (!expected && !executionSignatures.length) return [];
   const out = [];
+  const allActions = apiList(trades).flatMap(trade => apiList(trade?.actions));
   for (const trade of apiList(trades)) {
-    for (const [index, action] of apiList(trade?.actions).entries()) {
-      const signatures = [action?.tx1Signature, action?.tx2Signature, action?.tx3Signature, action?.signature].filter(Boolean).map(String);
-      if (!signatures.includes(expected)) continue;
+    if (trade?.profileIndex != null && Number(trade.profileIndex) !== Number(proof.profile_index ?? 0)) continue;
+    if (trade?.walletAddress && trade.walletAddress !== proof.wallet) continue;
+    for (const action of apiList(trade?.actions)) {
+      const matching = allActions.filter(item => item?.tx2Signature && item.tx2Signature === action?.tx2Signature);
+      const executionSignatureUnique = matching.length === 1;
+      const creationMatch = !!expected && [action?.tx1Signature, action?.signature].filter(Boolean).map(String).includes(expected);
+      // A shared settlement transaction is not proof that all of its actions
+      // belong to this Clash order. Enrich by final signature only if unique.
+      const finalMatch = executionSignatureUnique && (String(action?.tx2Signature || '') === expected
+        || executionSignatures.includes(String(action?.tx2Signature || '')));
+      if (!creationMatch && !finalMatch) continue;
       const rawNotional = action?.sizeDeltaUsd ?? action?.sizeDelta ?? action?.sizeUsd ?? action?.notionalUsd;
       const raw = numberFrom(rawNotional, 0);
-      const notional = raw;
-      if (notional <= 0 || !action?.tx2Signature || !/^(converted|success|filled|executed|confirmed|settled)$/i.test(String(action?.status || ''))) continue;
+      const notional = Math.abs(raw);
+      if (notional <= 0 || !action?.tx2Signature || !/^(completed|converted|success|filled|executed|confirmed|settled)$/i.test(String(action?.status || ''))) continue;
+      const executionId = action?.id ? String(action.id) : null;
+      const executionSignature = String(action.tx2Signature);
+      if (!executionId && !executionSignatureUnique) continue;
       const priceRaw = action?.entryPrice ?? action?.price ?? trade?.entryPrice;
       const priceNum = numberFrom(priceRaw, 0);
-      out.push({ signature: expected, notional, amount: String(action?.sizeDeltaTokens ?? (priceNum > 0 ? notional / priceNum : notional)), price: String(priceNum || ''), pnl: action?.pnlRealized ?? null, fee: action?.platformFee ?? action?.jupiterFee ?? action?.proOrderFee ?? null, createdAt: asIso(action?.tx2Timestamp ?? action?.timestamp, proof.created_at), index, raw: action });
+      out.push({ signature: expected, executionId, executionSignature, executionSignatureUnique, notional, amount: String(Math.abs(numberFrom(action?.sizeDeltaTokens, priceNum > 0 ? notional / priceNum : notional))), price: String(priceNum || ''), pnl: action?.pnlRealized ?? null, fee: action?.platformFee ?? action?.jupiterFee ?? action?.proOrderFee ?? null, createdAt: asIso(action?.tx2Timestamp ?? action?.timestamp, proof.created_at), raw: action });
     }
   }
   return out;
+}
+
+function existingImperialClientOrderId(db, playerId, owner, profile, row) {
+  if (!db?.db?.prepare) return null;
+  const prefix = `imperial:${owner}:${profile}:`;
+  const candidates = db.db.prepare(`SELECT client_order_id, proof_json FROM trade_history
+    WHERE player_id = ? AND dex = 'imperial' AND status = 'filled'
+      AND verified_source = 'imperial_api' AND substr(client_order_id, 1, ?) = ? ORDER BY id`).all(String(playerId), prefix.length, prefix);
+  for (const candidate of candidates) {
+    let prior;
+    try { prior = JSON.parse(candidate.proof_json); } catch { continue; }
+    if (prior?.builderCode !== BUILDER_CODE || !prior.signature) continue;
+    const id = prior.executionId || prior.execution?.id;
+    const signature = prior.executionSignature || prior.execution?.tx2Signature || prior.execution?.txSignature;
+    if (row.executionId && id && String(id) === row.executionId) return candidate.client_order_id;
+    if ((!id || !row.executionId) && row.executionSignatureUnique && signature === row.executionSignature) return candidate.client_order_id;
+  }
+  return null;
 }
 
 async function importTradesForPlayer({ playerId, owner, jwt, db, limit = 500, fetchImpl = fetch }) {
@@ -811,12 +852,21 @@ async function importTradesForPlayer({ playerId, owner, jwt, db, limit = 500, fe
   for (const proof of proofs) {
     try {
       let rows = [];
+      if (proof.builder_code !== BUILDER_CODE) continue;
       if (proof.order_pda) {
         const detail = await request(`/order-history/${encodeURIComponent(proof.order_pda)}`, { jwt, fetchImpl });
-        rows = executionRowsFromOrder(detail, proof);
+        const orderRows = executionRowsFromOrder(detail, proof);
+        if (orderRows.length) {
+          trades ||= await request('/trades', { query: { walletAddress: linked, limit: 200 }, fetchImpl });
+          const actionRows = executionRowsFromActions(trades, { ...proof, wallet: linked }, orderRows.map(row => row.executionSignature));
+          const allActions = apiList(trades).flatMap(trade => apiList(trade?.actions));
+          rows = [...actionRows, ...orderRows.filter(row =>
+            !actionRows.some(action => action.executionSignature === row.executionSignature)
+            && allActions.filter(action => action?.tx2Signature === row.executionSignature).length <= 1)];
+        }
       } else if (proof.tx_signature) {
         trades ||= await request('/trades', { query: { walletAddress: linked, limit: 200 }, fetchImpl });
-        rows = executionRowsFromActions(trades, proof);
+        rows = executionRowsFromActions(trades, { ...proof, wallet: linked });
       }
       for (const row of rows) {
         let storedRequest = {};
@@ -828,14 +878,15 @@ async function importTradesForPlayer({ playerId, owner, jwt, db, limit = 500, fe
           amount: row.amount,
           price: row.price,
           orderId: null,
-          clientOrderId: `imperial:${linked}:${proof.profile_index}:${row.signature}:${row.index}`,
+          clientOrderId: existingImperialClientOrderId(db, playerId, linked, proof.profile_index, row)
+            || `imperial:${linked}:${proof.profile_index}:exec:${row.executionId ? `id:${row.executionId}` : `sig:${row.executionSignature}`}`,
           status: 'filled',
           dex: 'imperial',
           notional_usd: row.notional,
           verifiedSource: 'imperial_api',
           pnl: row.pnl,
           fee: row.fee,
-          proofJson: JSON.stringify({ builderCode: proof.builder_code, builderFeeBps: numberFrom(storedRequest?._clashBuilderFeeBps, 0) || null, builderFeeBasisUsd: numberFrom(row.raw?.collateralDeposited, 0) || null, underwriter: proof.underwriter, orderPda: proof.order_pda, signature: row.signature, execution: row.raw }),
+          proofJson: JSON.stringify({ builderCode: proof.builder_code, builderFeeBps: numberFrom(storedRequest?._clashBuilderFeeBps, 0) || null, builderFeeBasisUsd: numberFrom(row.raw?.collateralDeposited, 0) || null, underwriter: proof.underwriter, orderPda: proof.order_pda, signature: row.signature, wallet: linked, profileIndex: Number(proof.profile_index), executionId: row.executionId, executionSignature: row.executionSignature, executionSignatureUnique: row.executionSignatureUnique, execution: row.raw }),
           createdAt: row.createdAt,
         });
         imported += result.inserted || 0;

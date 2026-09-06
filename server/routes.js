@@ -26955,7 +26955,7 @@ function futuresRowsForReferralSync(limit = 5000, { exact = true } = {}) {
           OR verified_source = 'lighter_integrator'
           OR verified_source = 'rhlighter_integrator'
           OR verified_source = 'bulk_builder_signed'
-          OR verified_source = 'imperial_api'
+          OR (dex = 'imperial' AND ${tradeRecon.verifiedSourceClauseForDex('imperial')})
           OR (
             verified_source = 'hotstuff_api'
             AND (

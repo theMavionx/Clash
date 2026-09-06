@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { adminDelete, adminDownload, adminGet, adminPatch, adminPost, adminPut, clearAdminKey, getStoredAdminKey, storeAdminKey } from './api';
+import TradingDiagnostics from './TradingDiagnostics';
 import {
   DEX_LABELS,
   PRIZE_PRESETS,
@@ -4689,7 +4690,7 @@ function EarningsPanel({ data, reload }) {
         <CompactTable title="DEX Local Model" subtitle={`Local volume x configured rate analytics for comparison only. Updated ${fmtTime(revenue.last_updated)}.`} columns={['DEX', 'Estimated fee', 'Volume', 'Trades', 'Model', 'Configured']} rows={normalizeDexRows(byDex).map((row) => [DEX_LABELS[row.dex] || row.dex || '-', fmtMaybeUsd(row.estimated_fee_usd ?? row.fee_usd), fmtMaybeUsd(row.volume_usd ?? row.total_volume_usd), row.trades || row.trades_count || 0, row.rate_label || row.model || row.source_detail || '-', row.configured === false ? <span className="admin-badge off">no</span> : <span className="admin-badge green">yes</span>])} />
         <CompactTable title="Tournament Local Model" subtitle="Tournament volume attribution using configured fee models. Not exact provider earnings." columns={['Tournament', 'DEX', 'Players', 'Volume', 'Estimated fee']} rows={(tournaments || []).slice(0, 80).map((row) => [row.name || `#${row.tournament_id || row.id}`, DEX_LABELS[row.dex] || row.dex || '-', row.players || '-', fmtMaybeUsd(row.volume_usd), fmtMaybeUsd(row.estimated_fee_usd)])} />
       </div>
-      <CompactTable title="Exact Earnings Sources" subtitle={`Live/cached source reads. Total ${fmtMaybeUsd(exactTotalUsd)}.`} columns={['DEX', 'Earned', 'Volume', 'Trades', 'Currency', 'Source']} rows={exactEarningsRows.map((row) => [DEX_LABELS[row.dex] || row.dex, fmtMaybeUsd(row.earned_usd), fmtMaybeUsd(row.volume_usd), row.trades ?? row.local_trades ?? '-', row.currency || '-', row.source_detail || row.source || row.note || '-'])} />
+      <CompactTable title="Exact Earnings Sources" subtitle={`Live/cached source reads. Known total ${fmtMaybeUsd(exactTotalUsd)}; unavailable amounts are excluded.`} columns={['DEX', 'Earned', 'Volume', 'Trades', 'Currency', 'Source']} rows={exactEarningsRows.map((row) => [DEX_LABELS[row.dex] || row.dex, ['bulk', 'imperial'].includes(row.dex) && row.exact === false ? 'Unknown' : fmtMaybeUsd(row.earned_usd), fmtMaybeUsd(row.volume_usd), row.trades ?? row.local_trades ?? '-', row.currency || '-', row.source_detail || row.source || row.note || '-'])} />
       <div className="admin-card">
         <div className="admin-card-head"><div><div className="admin-card-title">Earnings Audit</div><div className="admin-card-sub">Full source payload is available when finance needs to inspect a provider mismatch.</div></div><button className="admin-btn" onClick={reload}>Refresh</button></div>
         <div className="admin-card-body"><details><summary className="admin-help">Open raw provider payload</summary><pre className="admin-mono admin-scroll" style={{ overflow: 'auto', maxHeight: 420, whiteSpace: 'pre-wrap' }}>{JSON.stringify(localData || {}, null, 2)}</pre></details></div>
@@ -4700,7 +4701,8 @@ function EarningsPanel({ data, reload }) {
 
 function EarningsDexCard({ row, snapshot = null, refreshing = false, onRefresh }) {
   const accent = dexAccent(row.dex);
-  const earned = fmtUsd(Number(row.earned_usd || 0), 4);
+  const earned = ['bulk', 'imperial'].includes(row.dex) && row.exact === false
+    ? 'Exact earnings unknown' : fmtUsd(Number(row.earned_usd || 0), 4);
   const trades = row.trades ?? row.local_trades ?? row.matched_events ?? row.transfer_events ?? null;
   const volume = row.volume_usd ?? row.local_volume_usd ?? row.hyperliquid_cum_volume_usd ?? null;
   const note = row.note || row.source_detail || row.source || '';
@@ -4712,7 +4714,7 @@ function EarningsDexCard({ row, snapshot = null, refreshing = false, onRefresh }
     trades != null ? `${num(trades)} trades` : '',
     volume != null ? `${fmtMaybeUsd(volume)} vol` : '',
     row.rebate_pct != null ? `${row.rebate_pct}% rebate` : '',
-    row.builder_fee_pct != null ? `${row.builder_fee_pct}% fee` : '',
+    row.builder_fee_pct != null ? `${row.dex === 'bulk' && row.builder_enabled === false ? 0 : row.builder_fee_pct}% fee` : '',
     row.withdrawable_usd != null ? `${fmtMaybeUsd(row.withdrawable_usd)} withdrawable` : '',
     row.unclaimed_rewards_usd != null ? `${fmtMaybeUsd(row.unclaimed_rewards_usd)} unclaimed` : '',
     row.estimated_fee_usd != null ? `estimate ${fmtMaybeUsd(row.estimated_fee_usd)}` : '',
@@ -4757,6 +4759,7 @@ function EarningsDexCard({ row, snapshot = null, refreshing = false, onRefresh }
         </>}
       </div>
       {note && <div className="earnings-note">{note}</div>}
+      {['bulk', 'imperial'].includes(row.dex) && <TradingDiagnostics row={row} />}
     </div>
   );
 }

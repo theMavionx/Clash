@@ -49,6 +49,11 @@ async function run() {
   assert.equal(result.row.volume_usd, 1000);
   assert.equal(result.row.earned_usd, 0, 'an unavailable builder summary must not invent exact earnings');
   assert.equal(result.row.model, 'imperial_clash_order_proof');
+  fs.unlinkSync(tempDb);
+  const missing = await earnings.fetchEarningsDex('imperial', { force: true });
+  assert.equal(missing.row.trades, null, 'missing index is unknown, not zero fills');
+  assert.equal(missing.row.volume_usd, null);
+  assert.equal(missing.row.trading_diagnostics.executions.status, 'unavailable');
   console.log('Imperial proof-gated earnings reader: ok');
 }
 

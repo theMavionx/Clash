@@ -4,6 +4,7 @@ import { useSignMessage as usePrivySignMessage, useWallets as usePrivyWallets } 
 import bs58 from 'bs58';
 import { useDex } from '../contexts/DexContext';
 import { usePlayer } from './useGodot';
+import { useTradingGoldSync } from './useTradingGoldSync';
 import { signBulkMessage } from '../lib/bulkWallet';
 import { bulkCloseRequest } from '../lib/bulkTrading';
 import { normalizeBulkPosition } from '../lib/bulkClient';
@@ -91,9 +92,12 @@ export function useBulk() {
   const [error, setError] = useState('');
   const [actionError, setActionError] = useState('');
   const [dataReady, setDataReady] = useState(false);
-  const [goldEarned, setGoldEarned] = useState(null);
   const [serviceAvailability, setServiceAvailability] = useState({ available: true, closedBeta: false, message: '' });
   const [dexAccountReady, setDexAccountReady] = useState(false);
+  const { claimGold, scheduleGoldClaim, goldEarned, clearGoldEarned } = useTradingGoldSync({
+    active, ready: dexAccountReady, dex: 'bulk', playerId: player?.player_id || player?.id,
+    token, wallet: walletAddr, sessionKey: config?.network || 'mainnet', gameApi: GAME_API,
+  });
   const actionRef = useRef(null);
   const accountRetryAtRef = useRef(0);
   const ownerSendRef = useRef(null);
@@ -355,11 +359,13 @@ export function useBulk() {
       });
       const rejected = orderError(submitted, '');
       if (rejected) throw new Error(rejected);
+      if (submitted?.success !== false && !submitted?.error
+        && ['market', 'limit', 'tpsl'].includes(payload.kind)) scheduleGoldClaim();
       return submitted;
     })();
     actionRef.current = promise;
     try { return await promise; } finally { actionRef.current = null; }
-  }, [api, masterSign, token, walletAddr, identity, network, agentController]);
+  }, [api, masterSign, token, walletAddr, identity, network, agentController, scheduleGoldClaim]);
   ownerSendRef.current = signAndSubmit;
 
   const priceFor = useCallback((symbol, fallback = 0) => {
@@ -506,7 +512,6 @@ export function useBulk() {
       method: 'POST',
       body: JSON.stringify({ account: walletAddr, limit: 5000 }),
     });
-    if (Number(result?.imported || 0) > 0) setGoldEarned({ trades: result.imported });
     return result;
   }, [api, token, walletAddr]);
 
@@ -568,7 +573,6 @@ export function useBulk() {
 
   const disconnect = useCallback(() => solWallet.disconnect?.(), [solWallet]);
   const clearError = useCallback(() => { setError(''); setActionError(''); }, []);
-  const clearGoldEarned = useCallback(() => setGoldEarned(null), []);
   const walletUsdc = null;
   const setupStatus = serviceAvailability.available === false
     ? 'unavailable'
@@ -603,6 +607,7 @@ export function useBulk() {
     goldEarned,
     clearError,
     clearGoldEarned,
+    claimGold,
     refresh: async () => { await Promise.all([refreshPublic(), refreshAccount()]); return importFills(); },
     fetchAccount: refreshAccount,
     fetchPositions: refreshAccount,
@@ -627,7 +632,7 @@ export function useBulk() {
   }), [
     walletAddr, account, positions, orders, prices, markets, leverageSettings, loading, error, actionError,
     dataReady, dexAccountReady, setupVerified, setupStatus, serviceAvailability, activationStep, config, goldEarned, clearError,
-    clearGoldEarned, refreshPublic, refreshAccount, importFills, placeMarketOrder, placeLimitOrder,
+    clearGoldEarned, claimGold, refreshPublic, refreshAccount, importFills, placeMarketOrder, placeLimitOrder,
     cancelOrder, closePosition, setLeverage, setTpsl, activate, openReferralJoin, disconnect,
     fetchTradeHistory, fetchFundingHistory, oneTapTrading, agentController,
   ]);

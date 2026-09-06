@@ -1,4 +1,4 @@
-import { Fragment, useState, memo, useCallback, useMemo, useRef, useEffect } from 'react';
+import { Fragment, useState, memo, useCallback, useMemo, useRef, useEffect, useId } from 'react';
 import LighterOneTapConnect from './LighterOneTapConnect';
 import EtoroSetupGuide from './trading/EtoroSetupGuide';
 import ImperialRouteCard from './trading/ImperialRouteCard';
@@ -1763,9 +1763,57 @@ function tpslInputPlaceholder(leg, mode) {
   return leg === 'tp' ? 'TP Price' : 'SL Price';
 }
 
-function TpslValueInput({ leg, mode, value, onChange, pos, metrics, maxPrice }) {
+function openTpslInputGuidance(mode, pos, metrics) {
+  if (mode === 'price') return '';
+  if (!(firstPositive(metrics?.entryP, pos?.entry_price, metrics?.markP, pos?.mark_price) > 0)) {
+    return 'An entry price is needed for PnL targets. Use Price mode while the price is unavailable.';
+  }
+  if (!(tpslPositionAmount(pos, metrics) > 0)) {
+    return 'Enter an order amount to use PnL targets, or switch to Price mode.';
+  }
+  if (mode === 'pct' && !(tpslCollateralUsd(pos, metrics) > 0)) {
+    return 'Order margin is needed for % PnL. Use Price or $ PnL mode.';
+  }
+  return '';
+}
+
+function TpslValueInput({ leg, mode, value, onChange, pos, metrics, maxPrice, draft = false, validationError = '' }) {
+  const inputId = useId();
   const resolved = tpslPriceFromInput({ pos, metrics, leg, mode, value });
   const hasValue = String(value ?? '').trim() !== '';
+  if (draft) {
+    const guidance = openTpslInputGuidance(mode, pos, metrics);
+    const error = validationError || (hasValue && (!guidance || !(Number(value) > 0)) ? resolved.error : '');
+    const preview = hasValue && !resolved.error && resolved.price > 0
+      ? `Trigger $${fmtPrice(resolved.price)}`
+      : 'No target set';
+    const entry = firstPositive(metrics?.entryP, pos?.entry_price, metrics?.markP, pos?.mark_price);
+    const amount = tpslPositionAmount(pos, metrics);
+    const collateral = tpslCollateralUsd(pos, metrics);
+    // Invert the same entry/amount/side conversion used by PnL target inputs.
+    // This is gross PnL; execution fees and funding are not order-draft data.
+    const pnl = !error && resolved.price > 0 && entry > 0 && amount > 0
+      ? (resolved.price - entry) * amount * (positionOpenSide(pos) === 'ask' ? -1 : 1) : null;
+    const signed = number => `${number < 0 ? '−' : '+'}${Math.abs(number).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+    return (
+      <div className="open-tpsl-draft__target" data-leg={leg}>
+        <label htmlFor={inputId} className="open-tpsl-draft__target-label">
+          <strong>{leg === 'tp' ? 'Take profit' : 'Stop loss'}</strong>
+          <span id={`${inputId}-unit`}>{mode === 'price' ? 'Trigger price · USD' : mode === 'pct' ? `${leg === 'tp' ? 'Profit' : 'Loss'} · % of margin` : `${leg === 'tp' ? 'Profit' : 'Loss'} · USD`}</span>
+        </label>
+        <input id={inputId} type="number" inputMode="decimal" min="0" step="any"
+          placeholder="Optional" value={value} onChange={event => onChange(event.target.value)}
+          aria-label={leg === 'tp' ? 'Take profit target' : 'Stop loss target'}
+          aria-describedby={`${inputId}-unit ${inputId}-preview`} aria-invalid={Boolean(error)} />
+        <div id={`${inputId}-preview`} className="open-tpsl-draft__preview" data-error={Boolean(error)} aria-live="polite">
+          <span>{error || (guidance ? 'Trigger preview needs order details' : preview)}</span>
+          <span>{pnl != null
+            ? `Est. PnL ${signed(pnl)} USD${collateral > 0 ? ` (${signed(pnl / collateral * 100)}%)` : ''}`
+            : 'Est. PnL unavailable'}</span>
+        </div>
+      </div>
+    );
+  }
   const preview = hasValue && !resolved.error && resolved.price > 0
     ? `Trigger $${fmtPrice(resolved.price)}`
     : (hasValue && resolved.error ? resolved.error : (leg === 'tp' ? 'Take profit' : 'Stop loss'));
@@ -1866,57 +1914,89 @@ function OpenTpslEditor({
 }) {
   const entry = firstPositive(metrics?.entryP, pos?.entry_price, metrics?.markP, pos?.mark_price);
   const isNativeLimitAttach = OPEN_TPSL_NATIVE_LIMIT_ATTACH_DEXES.has(String(dex || '').toLowerCase());
-  const showLimitNotice = enabled && orderType === 'limit' && !isNativeLimitAttach;
-  const [dialogOpen, setDialogOpen] = useState(false);
+  const showLimitNotice = orderType === 'limit' && !isNativeLimitAttach;
+  // The parent owns saved order settings. Editing and dismissing this snapshot
+  // cannot mutate them or call a venue; only explicit save/remove commits.
+  const [draft, setDraft] = useState(null);
+  const guidanceId = useId();
+  const draftPos = { ...pos, side: draft?.side || previewSide };
+  const inputGuidance = draft ? openTpslInputGuidance(draft.mode, draftPos, metrics) : '';
+  const targets = draft ? ['tp', 'sl'].map(leg => tpslPriceFromInput({
+    pos: draftPos, metrics, leg, mode: draft.mode, value: draft[leg],
+  })) : [];
+  const hasTarget = draft && [draft.tp, draft.sl].some(value => String(value ?? '').trim() !== '');
+  const targetErrors = targets.map((target, index) => {
+    if (inputGuidance || target.error || !(target.price > 0)) return '';
+    let error = '';
+    validateTpslBeforeSubmit({
+      dex, pos: draftPos, tpPrice: index === 0 ? target.price : null, slPrice: index === 1 ? target.price : null,
+      setLocalAlert: message => { error = message; },
+    });
+    return error;
+  });
+  const validationError = targetErrors.find(Boolean) || '';
+  const disabledReason = inputGuidance || (!hasTarget ? 'Add at least one target to save TP/SL.'
+    : targets.find(target => target.error)?.error || validationError);
+  const saveDraft = () => {
+    if (!draft || disabledReason) return;
+    onModeChange(draft.mode);
+    onPreviewSideChange(draft.side);
+    onTpChange(draft.tp);
+    onSlChange(draft.sl);
+    onEnabledChange(true);
+    setDraft(null);
+  };
   return (
     <div style={enabled ? S.openTpslBoxActive : S.openTpslBox}>
-      <button type="button" style={S.openTpslHeader} aria-haspopup="dialog" onClick={() => setDialogOpen(true)}>
+      <button type="button" style={S.openTpslHeader} aria-haspopup="dialog" onClick={() => setDraft({
+        mode, side: positionOpenSide({ side: previewSide }), tp: tpValue, sl: slValue,
+      })}>
         <span style={S.openTpslTitle}>TP/SL</span>
         <span style={enabled ? S.openTpslToggleOn : S.openTpslToggleOff}>{enabled ? 'ON' : 'OFF'}</span>
       </button>
-      {dialogOpen && (
-        <PositionActionDialog title="Order · Take profit / Stop loss" onClose={() => setDialogOpen(false)}>
-          <label style={S.tpslMetaRow}><span>Attach TP/SL to this order</span><input type="checkbox" checked={enabled} onChange={event => onEnabledChange(event.target.checked)} /></label>
-          <fieldset disabled={!enabled} style={{border: 0, padding: 0, margin: 0, minWidth: 0, opacity: enabled ? 1 : 0.5}}>
-          <div style={S.tpslMetaRow}>
-            <span>Entry {entry > 0 ? `$${fmtPrice(entry)}` : '-'}</span>
-            <span>{orderType === 'limit' ? 'Limit order' : 'Market order'}</span>
-          </div>
-          <div style={S.tpslModeRow}>
-            <span style={S.tpslModeLabel}>Side</span>
-            <div style={S.tpslModeGroup}>
-              <button type="button" style={previewSide === 'bid' ? S.tpslModeActive : S.tpslModeButton} onClick={() => onPreviewSideChange('bid')}>LONG</button>
-              <button type="button" style={previewSide === 'ask' ? S.tpslModeActive : S.tpslModeButton} onClick={() => onPreviewSideChange('ask')}>SHORT</button>
-            </div>
-          </div>
-          <div style={S.tpslModeRow}>
-            <span style={S.tpslModeLabel}>Input</span>
-            <div style={S.tpslModeGroup}>
+      {draft && (
+        <PositionActionDialog title="Take profit / Stop loss" onClose={() => setDraft(null)}>
+          <form className="open-tpsl-draft" onSubmit={event => { event.preventDefault(); saveDraft(); }}>
+            <dl className="open-tpsl-draft__context">
+              <div><dt>Entry price</dt><dd>{entry > 0 ? `$${fmtPrice(entry)}` : 'Not available'}</dd></div>
+              <div><dt>Order type</dt><dd>{orderType === 'limit' ? 'Limit order' : 'Market order'}</dd></div>
+            </dl>
+            <fieldset className="open-tpsl-draft__selection">
+              <legend>Side</legend>
+              <div className="open-tpsl-draft__segments">
+                {['bid', 'ask'].map(side => <button key={side} type="button" aria-pressed={draft.side === side}
+                  onClick={() => setDraft(current => ({ ...current, side }))}>{side === 'bid' ? 'LONG' : 'SHORT'}</button>)}
+              </div>
+            </fieldset>
+            <fieldset className="open-tpsl-draft__selection">
+              <legend>Input mode</legend>
+              <div className="open-tpsl-draft__segments">
               {TPSL_INPUT_MODES.map(item => (
-                <button
-                  key={item.id}
-                  type="button"
-                  style={mode === item.id ? S.tpslModeActive : S.tpslModeButton}
-                  onClick={() => onModeChange(item.id)}
-                >
+                <button key={item.id} type="button" aria-pressed={draft.mode === item.id}
+                  onClick={() => setDraft(current => ({ ...current, mode: item.id }))}>
                   {item.label}
                 </button>
               ))}
+              </div>
+            </fieldset>
+            <div className="open-tpsl-draft__targets">
+              <TpslValueInput draft leg="tp" mode={draft.mode} value={draft.tp} onChange={tp => setDraft(current => ({ ...current, tp }))} pos={draftPos} metrics={metrics} validationError={targetErrors[0]} />
+              <TpslValueInput draft leg="sl" mode={draft.mode} value={draft.sl} onChange={sl => setDraft(current => ({ ...current, sl }))} pos={draftPos} metrics={metrics} validationError={targetErrors[1]} />
             </div>
-          </div>
-          <div style={S.openTpslInputGrid}>
-            <TpslValueInput leg="tp" mode={mode} value={tpValue} onChange={onTpChange} pos={pos} metrics={metrics} />
-            <TpslValueInput leg="sl" mode={mode} value={slValue} onChange={onSlChange} pos={pos} metrics={metrics} />
-          </div>
-          <div style={showLimitNotice ? S.openTpslNoticeWarn : S.openTpslNotice}>
-            {showLimitNotice
-              ? `${dexErrorLabel(dex)} limit TP/SL can be placed after the limit fills.`
-              : mode === 'price'
-                ? 'Optional triggers sent with the order when the exchange supports it.'
-                : `${tpslModeLabel(mode)} is converted from margin PnL into trigger price before signing.`}
-          </div>
-          </fieldset>
-          <button type="button" style={{...S.tpslModeButton, width:'100%', marginTop:12}} onClick={() => setDialogOpen(false)}>Done</button>
+            <div className="open-tpsl-draft__notes">
+              <p id={guidanceId} className="open-tpsl-draft__guidance" data-error={Boolean(validationError)} aria-live="polite">
+                {disabledReason || (draft.mode === 'price' ? 'Targets are checked again against the order price before signing.' : 'TP is profit and SL is loss, converted into trigger prices.')}
+              </p>
+              {showLimitNotice && <p>{dexErrorLabel(dex)} limit TP/SL can be placed after the limit fills.</p>}
+              <p>Estimated PnL excludes fees and funding.</p>
+              <p>Submit saves settings for your next order. It does not place a trade.</p>
+            </div>
+            <button type="submit" className="open-tpsl-draft__submit" disabled={Boolean(disabledReason)} aria-describedby={guidanceId}>Submit</button>
+            {enabled && <button type="button" className="open-tpsl-draft__remove" onClick={() => {
+              onEnabledChange(false);
+              setDraft(null);
+            }}>Remove TP/SL from next order</button>}
+          </form>
         </PositionActionDialog>
       )}
     </div>

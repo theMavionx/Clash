@@ -57,6 +57,12 @@ async function run() {
   assert.equal(result.row.estimated_fee_usd, 0.1);
   assert.equal(result.row.earned_usd, 0, 'builder estimate must not be added to exact earnings');
   assert.equal(result.row.model, 'bulk_signed_builder_volume_estimate');
+  fs.unlinkSync(tempDb);
+  const missing = await earnings.fetchEarningsDex('bulk', { force: true });
+  assert.equal(missing.row.trades, null, 'missing index is unknown, not zero fills');
+  assert.equal(missing.row.volume_usd, null);
+  assert.equal(missing.row.estimated_fee_usd, null);
+  assert.equal(missing.row.trading_diagnostics.executions.status, 'unavailable');
   console.log('Bulk proof-gated earnings estimate reader: ok');
 }
 
