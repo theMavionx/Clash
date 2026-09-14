@@ -1,11 +1,11 @@
 # Active Session State
 
-## LeverUp Trading Competition Option — Active (2026-09-14)
+## LeverUp Trading Competition Option — Released (2026-09-14)
 
 - Owner reports that LeverUp is missing from admin trading-competition settings
   and explicitly authorized completing all possible support plus production
   deployment, including tournament scoring, Gold and tasks/quests.
-- Baseline is origin/main `3434063f`; work is isolated in
+- Baseline was origin/main `3434063f`; work was isolated in
   `Clash-main-proxy-fallback` so the owner's dirty main worktree stays untouched.
 - Initial reproduction confirms LeverUp is deliberately excluded from the shared
   tournament DEX registries and an existing LeverUp regression test asserts that
@@ -23,10 +23,19 @@
   browser protocol regression, syntax and diff checks all pass. Full canonical
   Deploy gate passes including Godot probes, lint0 errors (135 existing warnings)
   and production web build.
+- Released commit `5aff5fd8` to `origin/main` and production release
+  `20260914105559-5aff5fd8`. Current/source match; API, futures and MCP health are
+  HTTP 200; all five Clash PM2 services are online with zero restarts.
+- Production confirms broker `2` active and verified on-chain with the expected
+  receiver, both future-only LeverUp proof tables present, the tournament CHECK
+  accepting `leverup`, and the externally active admin bundle containing
+  `LeverUp`. No production tournament or funded trade was created.
+- The standard deploy-time Solana payment sync refreshed `dragon:clash` to
+  `102082.482646` CLASH per 10 USD using the fetched `0.00009796` USD price.
 - Report: production/reports/leverup-tournament-rewards-2026-09-14.md.
-- Next: fast-forward commit/push, canonical production deploy, then verify active
-  release, database schema, broker config, admin option, read-only reconciliation,
-  public assets, services and new-error deltas without placing a funded trade.
+- Next: observe the first real post-release owner LeverUp execution and confirm
+  its proof row, imported fill and automatic Gold/task/tournament attribution.
+  Historical/pre-release LeverUp activity remains intentionally ineligible.
 
 ## Imperial SOL TP/SL Custom25 — Released (2026-09-06)
 
