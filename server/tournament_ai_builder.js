@@ -12,7 +12,7 @@ const MAX_CURRENT_DRAFT_CHARS = 30000;
 const DEFAULT_TIMEOUT_MS = 45000;
 const TOURNAMENT_DEXES = new Set([
   'pacifica', 'avantis', 'domfi', 'etoro', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix',
-  'hyperliquid', 'risex', 'nado', 'ondo', 'hibachi', 'grvt', 'hotstuff', 'katana',
+  'hyperliquid', 'risex', 'nado', 'ondo', 'leverup', 'hibachi', 'grvt', 'hotstuff', 'katana',
   'gmtrade', 'flash', 'lighter', 'rhlighter',
   'bulk', 'imperial',
 ]);

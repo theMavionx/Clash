@@ -242,6 +242,36 @@ const ACTION_DATA_TYPES = Object.freeze({
   13: ['bytes32'],
 });
 
+const LEVERUP_ECONOMIC_OPERATIONS = new Set([
+  'OPEN_MARKET_TRADE',
+  'OPEN_POSITION',
+  'POSITION_INCREASED',
+  'EXECUTE_LIMIT_ORDER_SUCCESSFUL',
+  'CLOSE_TRADE_SUCCESSFUL',
+  'CLOSE_POSITION',
+  'POSITION_DECREASED',
+  'EXECUTE_CLOSE_SUCCESSFUL',
+  'EXECUTE_CLOSE_SUCCESSFUL_V2',
+  'EXECUTE_DECREASE_ORDER_SUCCESSFUL',
+]);
+const LEVERUP_ORDER_PROOF_OPERATIONS = new Set([
+  'OPEN_LIMIT_ORDER',
+  'DECREASE_ORDER_CREATED',
+  'DECREASE_ORDER_UPDATED',
+]);
+const LEVERUP_ASYNC_EXECUTION_OPERATIONS = new Set([
+  'EXECUTE_LIMIT_ORDER_SUCCESSFUL',
+  'EXECUTE_DECREASE_ORDER_SUCCESSFUL',
+]);
+const LEVERUP_CLOSE_OPERATIONS = new Set([
+  'CLOSE_TRADE_SUCCESSFUL',
+  'CLOSE_POSITION',
+  'POSITION_DECREASED',
+  'EXECUTE_CLOSE_SUCCESSFUL',
+  'EXECUTE_CLOSE_SUCCESSFUL_V2',
+  'EXECUTE_DECREASE_ORDER_SUCCESSFUL',
+]);
+
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 const MARKETS_TTL_MS = 15_000;
 const MARKET_DETAILS_TTL_MS = 30_000;
@@ -649,6 +679,326 @@ async function getTradeHistory(address, query = {}) {
   );
 }
 
+function normalizeHash(value) {
+  const hash = String(value || '').trim().toLowerCase();
+  return /^0x[0-9a-f]{64}$/u.test(hash) ? hash : null;
+}
+
+function safeJson(value) {
+  return JSON.stringify(value, bigintJson);
+}
+
+function intentStatusEvidence(payload) {
+  const root = payload && typeof payload === 'object' ? payload : {};
+  const nested = root.data && typeof root.data === 'object' ? root.data : {};
+  const result = root.result && typeof root.result === 'object' ? root.result : {};
+  const state = { ...root, ...result, ...nested };
+  const txHash = normalizeHash(
+    state.txnHash
+      || state.txHash
+      || state.transactionHash
+      || state.transaction_hash
+      || state.hash,
+  );
+  if (state.executed === true && state.success === true && txHash) {
+    return { status: 'executed_success', txHash };
+  }
+  if (state.skipped === true || (state.executed === true && state.success !== true)) {
+    return { status: 'failed', txHash };
+  }
+  return { status: 'pending', txHash };
+}
+
+function safeIntentTargets(action, values) {
+  const hashes = [];
+  if (action === 1 || action === 3 || action === 4 || action === 5
+      || action === 6 || action === 7 || action === 9 || action === 10
+      || action === 11 || action === 13) {
+    const hash = normalizeHash(values[0]);
+    if (hash) hashes.push(hash);
+  } else if (action === 8) {
+    for (const value of (Array.isArray(values[0]) ? values[0] : [])) {
+      const hash = normalizeHash(value);
+      if (hash) hashes.push(hash);
+    }
+  } else if (action === 12) {
+    for (const row of (Array.isArray(values[0]) ? values[0] : [])) {
+      const hash = normalizeHash(row?.[0]);
+      if (hash) hashes.push(hash);
+    }
+  }
+  return {
+    pair_base: action === 0 || action === 2 ? normalizeAddress(values[0]) : null,
+    position_or_order_hashes: hashes,
+  };
+}
+
+function explicitHistoryTrader(row) {
+  return normalizeAddress(
+    row?.trader
+      || row?.user
+      || row?.account
+      || row?.position?.trader
+      || row?.position?.user,
+  );
+}
+
+function historyRowBelongsToWallet(row, wallet) {
+  const explicit = explicitHistoryTrader(row);
+  return !explicit || explicit === wallet;
+}
+
+function decimalUnits(value, decimals) {
+  try {
+    if (value == null || value === '') return 0;
+    return Number(formatUnits(BigInt(String(value)), decimals));
+  } catch {
+    return 0;
+  }
+}
+
+function decimalValueOrUnits(value, decimals) {
+  const text = String(value ?? '').trim();
+  if (/^-?\d+\.\d+$/u.test(text)) {
+    const parsed = Number(text);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return decimalUnits(value, decimals);
+}
+
+function historyPrice(row, isClose) {
+  const detail = row?.detail || {};
+  const position = row?.position || {};
+  const raw = isClose
+    ? (row?.closePrice ?? detail.closePrice ?? position?.closeInfo?.closePrice)
+    : (row?.entryPrice ?? detail.atPrice ?? detail.price ?? position.entryPrice);
+  return decimalUnits(raw, 18);
+}
+
+function tokenValueUsd(value, row) {
+  const amount = decimalUnits(value, 18);
+  // The history API currently serializes tokenInPrice as a decimal string
+  // (for example "0.024837940000000000"), while older/raw payloads can use
+  // 18-decimal integer units. Accept both without guessing from magnitude.
+  const explicitPrice = decimalValueOrUnits(row?.tokenInPrice, 18);
+  const tokenIn = normalizeAddress(row?.tokenIn || row?.position?.tokenIn);
+  const stableToken = tokenIn === normalizeAddress(LEVERUP_LVUSD)
+    || tokenIn === normalizeAddress(LEVERUP_USDC);
+  const tokenPrice = explicitPrice > 0 ? explicitPrice : (stableToken ? 1 : 0);
+  if (!(tokenPrice > 0)) return null;
+  return amount * tokenPrice;
+}
+
+function historyFeeUsd(row) {
+  const detail = row?.detail || {};
+  const values = [detail.openFee, detail.closeFee, detail.executionFee, detail.fundingFee, detail.holdingFee]
+    .filter(value => value != null && value !== '');
+  if (!values.length) return null;
+  const usdValues = values.map(value => tokenValueUsd(value, row)).filter(Number.isFinite);
+  return usdValues.length ? usdValues.reduce((sum, value) => sum + Math.abs(value), 0) : null;
+}
+
+function historyOrderType(operation) {
+  if (operation === 'EXECUTE_LIMIT_ORDER_SUCCESSFUL') return 'limit';
+  if (operation === 'POSITION_INCREASED') return 'increase';
+  if (operation === 'POSITION_DECREASED') return 'partial_close';
+  if (operation === 'EXECUTE_DECREASE_ORDER_SUCCESSFUL') return 'trigger_close';
+  if (LEVERUP_CLOSE_OPERATIONS.has(operation)) return 'close';
+  return 'market';
+}
+
+function historyClientOrderId(wallet, row) {
+  const id = String(row?.id || '').trim();
+  if (id) return `leverup:fill:${wallet}:${id}`;
+  const txHash = normalizeHash(row?.transactionHash) || 'unknown';
+  return `leverup:fill:${wallet}:${txHash}:${String(row?.logIndex ?? row?.hash ?? '0')}`;
+}
+
+function historyRows(payload) {
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload?.content)) return payload.content;
+  if (Array.isArray(payload?.data?.content)) return payload.data.content;
+  if (Array.isArray(payload?.data)) return payload.data;
+  return [];
+}
+
+async function readHistoryPages(wallet, limit, reader) {
+  const rows = [];
+  const pageSize = 100;
+  const maxRows = Math.max(1, Math.min(5000, Number(limit) || 500));
+  for (let page = 0; rows.length < maxRows; page += 1) {
+    const payload = await reader(wallet, { page, size: Math.min(pageSize, maxRows - rows.length) });
+    const batch = historyRows(payload);
+    rows.push(...batch.slice(0, maxRows - rows.length));
+    const totalPages = Number(payload?.totalPages ?? payload?.page?.totalPages ?? payload?.data?.totalPages);
+    const last = payload?.last === true || payload?.data?.last === true;
+    if (!batch.length || batch.length < pageSize || last
+        || (Number.isFinite(totalPages) && page + 1 >= totalPages)) break;
+  }
+  return rows;
+}
+
+function normalizedHistoryTrade(row, wallet, routeProof) {
+  const operation = String(row?.operationType || '').trim().toUpperCase();
+  if (!LEVERUP_ECONOMIC_OPERATIONS.has(operation)) return null;
+  const isClose = LEVERUP_CLOSE_OPERATIONS.has(operation);
+  const amount = decimalUnits(row?.qty ?? row?.detail?.positionSize ?? row?.position?.qty, 10);
+  const price = historyPrice(row, isClose);
+  const notional = amount * price;
+  if (!(amount > 0) || !(price > 0) || !Number.isFinite(notional)) return null;
+  const isLong = row?.isLong === true || row?.position?.isLong === true;
+  const symbol = symbolOf(row?.pair || row?.position?.pair || row?.symbol || row?.pairBase);
+  if (!symbol) return null;
+  const rawPnl = row?.pnl ?? row?.detail?.pnl;
+  const pnl = isClose && rawPnl != null ? tokenValueUsd(rawPnl, row) : null;
+  const fee = historyFeeUsd(row);
+  const transactionHash = normalizeHash(row?.transactionHash);
+  return {
+    symbol,
+    side: `${isClose ? 'close' : 'open'}_${isLong ? 'long' : 'short'}`,
+    orderType: historyOrderType(operation),
+    amount: String(amount),
+    price: String(price),
+    orderId: transactionHash || normalizeHash(row?.hash),
+    clientOrderId: historyClientOrderId(wallet, row),
+    status: 'filled',
+    dex: 'leverup',
+    notional_usd: notional,
+    verifiedSource: 'leverup_broker_fill',
+    pnl: pnl == null || !Number.isFinite(pnl) ? null : String(pnl),
+    fee: fee == null || !Number.isFinite(fee) ? null : String(fee),
+    proofJson: safeJson({
+      source: 'leverup_official_history',
+      wallet,
+      chain_id: LEVERUP_CHAIN_ID,
+      broker: {
+        id: Number(routeProof.broker_id),
+        receiver: routeProof.broker_receiver || null,
+        verified: Number(routeProof.reward_eligible) === 1,
+      },
+      route: routeProof.route,
+      fill: row,
+    }),
+    createdAt: row?.blockTime || null,
+  };
+}
+
+async function importFillsForPlayer(playerId, address, options = {}) {
+  const wallet = normalizeAddress(address);
+  if (!playerId) throw Object.assign(new Error('LeverUp player ID required'), { status: 400 });
+  if (!wallet) throw Object.assign(new Error('Valid LeverUp EVM address required'), { status: 400 });
+  const store = options.db || require('./db');
+  const statusReader = options.statusReader || getIntentStatus;
+  const historyReader = options.historyReader || getTradeHistory;
+  let statusChecked = 0;
+  let statusErrors = 0;
+  for (const proof of store.listPendingLeverupIntentProofs(playerId, wallet, options.statusLimit || 100)) {
+    try {
+      const statusPayload = await statusReader(proof.intent_hash);
+      const evidence = intentStatusEvidence(statusPayload);
+      store.updateLeverupIntentStatus({
+        playerId,
+        wallet,
+        intentHash: proof.intent_hash,
+        status: evidence.status,
+        txHash: evidence.txHash,
+        statusJson: statusPayload,
+      });
+      statusChecked += 1;
+    } catch {
+      // A transient relayer/status failure must not turn an unproven intent
+      // into a reward. Leave it pending and retry on a later reconciliation.
+      statusErrors += 1;
+    }
+  }
+
+  const intentProofs = store.listLeverupIntentProofs(playerId, wallet, options.proofLimit || 5000)
+    .filter(row => Number(row.reward_eligible) === 1
+      && row.status === 'executed_success'
+      && normalizeHash(row.tx_hash));
+  if (!intentProofs.length) {
+    return {
+      ok: true, wallet, checked: 0, imported: 0, updated: 0, ignored: 0,
+      status_checked: statusChecked, status_errors: statusErrors,
+      skipped: 'no_executed_clash_intents',
+    };
+  }
+  const intentByTx = new Map(intentProofs.map(row => [normalizeHash(row.tx_hash), row]));
+  const rows = await readHistoryPages(
+    wallet,
+    Math.max(500, Number(options.limit) || 500),
+    historyReader,
+  );
+
+  let learnedOrders = 0;
+  for (const row of rows) {
+    const operation = String(row?.operationType || '').trim().toUpperCase();
+    if (!LEVERUP_ORDER_PROOF_OPERATIONS.has(operation) || !historyRowBelongsToWallet(row, wallet)) continue;
+    const txHash = normalizeHash(row?.transactionHash);
+    const intent = intentByTx.get(txHash);
+    const orderHash = normalizeHash(row?.hash || row?.orderHash);
+    if (!intent || !orderHash) continue;
+    const result = store.recordLeverupOrderProof({
+      playerId,
+      wallet,
+      orderHash,
+      intentHash: intent.intent_hash,
+      brokerId: intent.broker_id,
+      kind: operation,
+      positionHash: normalizeHash(row?.positionHash || row?.position?.positionHash),
+      createdTxHash: txHash,
+      proofJson: {
+        source: 'leverup_official_history',
+        wallet,
+        operation,
+        intent_hash: intent.intent_hash,
+        lifecycle: row,
+      },
+    });
+    learnedOrders += Number(result?.changes || 0) > 0 ? 1 : 0;
+  }
+
+  let imported = 0;
+  let updated = 0;
+  let ignored = 0;
+  for (const row of rows) {
+    const operation = String(row?.operationType || '').trim().toUpperCase();
+    if (!LEVERUP_ECONOMIC_OPERATIONS.has(operation)) continue;
+    if (explicitHistoryTrader(row) !== wallet) { ignored += 1; continue; }
+    const txHash = normalizeHash(row?.transactionHash);
+    let intent = intentByTx.get(txHash) || null;
+    let route = intent ? { kind: 'intent_tx', intent_hash: intent.intent_hash } : null;
+    if (!intent && LEVERUP_ASYNC_EXECUTION_OPERATIONS.has(operation)) {
+      const orderHash = normalizeHash(row?.hash || row?.orderHash);
+      const order = orderHash ? store.getLeverupOrderProof(playerId, wallet, orderHash) : null;
+      if (order && Number(order.reward_eligible) === 1 && order.intent_status === 'executed_success') {
+        intent = order;
+        route = { kind: 'broker_order', intent_hash: order.intent_hash, order_hash: order.order_hash };
+      }
+    }
+    if (!intent || !route) { ignored += 1; continue; }
+    const trade = normalizedHistoryTrade(row, wallet, {
+      ...intent,
+      route,
+    });
+    if (!trade) { ignored += 1; continue; }
+    const result = store.upsertVerifiedTrade(playerId, trade);
+    imported += Number(result?.inserted || 0);
+    updated += Number(result?.updated || 0);
+  }
+  return {
+    ok: true,
+    wallet,
+    checked: rows.length,
+    imported,
+    updated,
+    ignored,
+    learned_orders: learnedOrders,
+    status_checked: statusChecked,
+    status_errors: statusErrors,
+  };
+}
+
 async function getFeeConfig() {
   return request(LEVERUP_RELAYER_URL, '/v2/trading/anti-ddos-config');
 }
@@ -811,22 +1161,52 @@ async function validateIntentEnvelope(payload, expectedTrader = null, { brokerCo
   };
 }
 
-async function submitIntent(payload, expectedTrader = null) {
-  const body = await validateIntentEnvelope(payload, expectedTrader);
-  const result = await request(LEVERUP_RELAYER_URL, '/v2/trading/submit-intent?blockchain=MONAD', {
-    method: 'POST',
-    body: JSON.stringify(body),
-  });
+async function submitIntentDetailed(payload, expectedTrader = null, options = {}) {
+  const broker = options.brokerConfig || await getBrokerConfig();
+  const body = await validateIntentEnvelope(payload, expectedTrader, { brokerConfig: broker });
+  const values = decodeIntentActionData(body.action, body.actionData);
+  const result = options.submitter
+    ? await options.submitter(body)
+    : await request(LEVERUP_RELAYER_URL, '/v2/trading/submit-intent?blockchain=MONAD', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
   const intentHash = typeof result === 'string'
     ? result
     : result?.intentHash || result?.intent_hash || result?.data?.intentHash || result?.data?.intent_hash;
-  if (!/^0x[0-9a-fA-F]{64}$/u.test(String(intentHash || ''))) {
+  const normalizedIntentHash = normalizeHash(intentHash);
+  if (!normalizedIntentHash) {
     const error = new Error('LeverUp relayer did not return a valid intent hash');
     error.status = 502;
     error.payload = result;
     throw error;
   }
-  return intentHash;
+  const brokerIds = actionBrokerValues(body.action, values);
+  const rewardEligible = broker.active === true
+    && Number(broker.brokerId) > 0
+    && brokerIds.length > 0
+    && brokerIds.every(value => value === Number(broker.brokerId));
+  return {
+    intentHash: normalizedIntentHash,
+    proof: {
+      version: 'leverup_v2',
+      trader: body.trader,
+      action: body.action,
+      nonce: body.nonce,
+      deadline: body.deadline,
+      fee_token: body.feeToken,
+      anti_ddos_fee: body.antiDdosFee,
+      broker_id: rewardEligible ? Number(broker.brokerId) : 0,
+      broker_receiver: rewardEligible ? normalizeAddress(broker.receiver) : null,
+      broker_status: broker.status || null,
+      reward_eligible: rewardEligible,
+      targets: safeIntentTargets(body.action, values),
+    },
+  };
+}
+
+async function submitIntent(payload, expectedTrader = null) {
+  return (await submitIntentDetailed(payload, expectedTrader)).intentHash;
 }
 
 async function getIntentStatus(intentHash) {
@@ -847,6 +1227,8 @@ module.exports = {
   getBrokerConfig,
   getFeeConfig,
   getIntentStatus,
+  intentStatusEvidence,
+  importFillsForPlayer,
   getMarketInfo,
   getOrdersByAddress,
   getPositionsByAddress,
@@ -855,11 +1237,16 @@ module.exports = {
   isEvmAddress,
   normalizeAddress,
   submitIntent,
+  submitIntentDetailed,
   validateIntentEnvelope,
   __test: {
     actionBrokerValues,
     brokerConfigFromRecord,
     decodeIntentActionData,
+    historyRows,
+    intentStatusEvidence,
+    normalizedHistoryTrade,
+    readHistoryPages,
     normalizeLimitOrder,
     readMarketValues,
     readPerMarketLists,

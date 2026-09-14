@@ -13,6 +13,7 @@
     "test:sanctum-migration": "node test-sanctum-migration.js",
     "test:sanctum-rate-limit": "node test-sanctum-rate-limit.js",
     "test:leverup-earnings": "node test-leverup-earnings.js",
+    "test:leverup-rewards": "node test-leverup-reward-flow.js && node test-leverup-tournament-migration.js",
     "test:domfi-rewards": "node test-domfi-rewards.js",
     "test:etoro-rewards": "node test-etoro-rewards.js",
     "test:ondo-claim": "node test-ondo-claim-reconciliation.js",

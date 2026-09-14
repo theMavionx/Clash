@@ -261,6 +261,59 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_aster_builder_orders_client
     ON aster_builder_orders(player_id, account, client_order_id);
 
+  -- LeverUp's public history proves that a position-changing event executed,
+  -- but it does not repeat the broker from the signed V2 intent. Persist the
+  -- server-validated intent and its eventual relayer tx hash so rewards can
+  -- join an official fill back to broker-attributed Clash order flow. Only
+  -- future intents are tracked; historical wallet activity is intentionally
+  -- not adopted or backfilled as reward eligible.
+  CREATE TABLE IF NOT EXISTS leverup_intent_proofs (
+    intent_hash       TEXT PRIMARY KEY,
+    player_id         TEXT NOT NULL,
+    wallet            TEXT NOT NULL,
+    action            INTEGER NOT NULL,
+    nonce             TEXT NOT NULL,
+    broker_id         INTEGER NOT NULL,
+    broker_receiver   TEXT,
+    reward_eligible   INTEGER NOT NULL DEFAULT 0 CHECK (reward_eligible IN (0, 1)),
+    status            TEXT NOT NULL DEFAULT 'submitted'
+                      CHECK (status IN ('submitted','pending','executed_success','failed')),
+    tx_hash           TEXT,
+    proof_json        TEXT NOT NULL,
+    status_json       TEXT,
+    created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at        TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_leverup_intent_player_wallet
+    ON leverup_intent_proofs(player_id, wallet, created_at);
+  CREATE INDEX IF NOT EXISTS idx_leverup_intent_pending
+    ON leverup_intent_proofs(player_id, wallet, status, created_at);
+  CREATE INDEX IF NOT EXISTS idx_leverup_intent_tx
+    ON leverup_intent_proofs(tx_hash) WHERE tx_hash IS NOT NULL;
+
+  -- Limit and decrease orders execute later in keeper transactions. Learn
+  -- their order hashes only from lifecycle rows emitted by a successful,
+  -- reward-eligible Clash intent; later official execution rows must match
+  -- this durable mapping before they can enter trade_history.
+  CREATE TABLE IF NOT EXISTS leverup_order_proofs (
+    player_id         TEXT NOT NULL,
+    wallet            TEXT NOT NULL,
+    order_hash        TEXT NOT NULL,
+    intent_hash       TEXT NOT NULL REFERENCES leverup_intent_proofs(intent_hash),
+    broker_id         INTEGER NOT NULL,
+    kind              TEXT NOT NULL,
+    position_hash     TEXT,
+    created_tx_hash   TEXT NOT NULL,
+    proof_json        TEXT NOT NULL,
+    created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at        TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (player_id, wallet, order_hash)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_leverup_order_intent
+    ON leverup_order_proofs(intent_hash);
+
   CREATE TABLE IF NOT EXISTS gmtrade_pending_trade_reports (
     signature       TEXT PRIMARY KEY,
     player_id       TEXT NOT NULL,
@@ -619,6 +672,65 @@ const stmts = {
     SELECT * FROM aster_builder_orders
     WHERE client_order_id = ? AND player_id = ? AND account = ?
     ORDER BY created_at DESC
+    LIMIT 1
+  `),
+  recordLeverupIntentProof: db.prepare(`
+    INSERT OR IGNORE INTO leverup_intent_proofs (
+      intent_hash, player_id, wallet, action, nonce, broker_id,
+      broker_receiver, reward_eligible, proof_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `),
+  getLeverupIntentProof: db.prepare(`
+    SELECT * FROM leverup_intent_proofs
+    WHERE intent_hash = ? AND player_id = ? AND wallet = ?
+    LIMIT 1
+  `),
+  listLeverupIntentProofs: db.prepare(`
+    SELECT * FROM leverup_intent_proofs
+    WHERE player_id = ? AND wallet = ?
+    ORDER BY created_at DESC, intent_hash DESC
+    LIMIT ?
+  `),
+  listPendingLeverupIntentProofs: db.prepare(`
+    SELECT * FROM leverup_intent_proofs
+    WHERE player_id = ? AND wallet = ? AND status IN ('submitted','pending')
+    ORDER BY created_at DESC, intent_hash DESC
+    LIMIT ?
+  `),
+  updateLeverupIntentStatus: db.prepare(`
+    UPDATE leverup_intent_proofs
+    SET status = CASE
+          WHEN status = 'executed_success' THEN status
+          ELSE @status
+        END,
+        tx_hash = COALESCE(@tx_hash, tx_hash),
+        status_json = @status_json,
+        updated_at = datetime('now')
+    WHERE intent_hash = @intent_hash
+      AND player_id = @player_id
+      AND wallet = @wallet
+  `),
+  recordLeverupOrderProof: db.prepare(`
+    INSERT INTO leverup_order_proofs (
+      player_id, wallet, order_hash, intent_hash, broker_id, kind,
+      position_hash, created_tx_hash, proof_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(player_id, wallet, order_hash) DO UPDATE SET
+      intent_hash = excluded.intent_hash,
+      broker_id = excluded.broker_id,
+      kind = excluded.kind,
+      position_hash = COALESCE(excluded.position_hash, leverup_order_proofs.position_hash),
+      created_tx_hash = excluded.created_tx_hash,
+      proof_json = excluded.proof_json,
+      updated_at = datetime('now')
+    WHERE leverup_order_proofs.intent_hash = excluded.intent_hash
+  `),
+  getLeverupOrderProof: db.prepare(`
+    SELECT order_proof.*, intent.reward_eligible, intent.status AS intent_status,
+           intent.broker_receiver
+    FROM leverup_order_proofs order_proof
+    JOIN leverup_intent_proofs intent ON intent.intent_hash = order_proof.intent_hash
+    WHERE order_proof.player_id = ? AND order_proof.wallet = ? AND order_proof.order_hash = ?
     LIMIT 1
   `),
   getDexWorkerState: db.prepare('SELECT value FROM dex_worker_state WHERE dex = ? AND key = ?'),
@@ -1024,6 +1136,138 @@ function getAsterBuilderOrderByClient(clientOrderId, playerId, account) {
   ) || null;
 }
 
+function recordLeverupIntentProof({
+  intentHash,
+  playerId,
+  wallet,
+  action,
+  nonce,
+  brokerId = 0,
+  brokerReceiver = null,
+  rewardEligible = false,
+  proofJson,
+}) {
+  const normalizedIntent = String(intentHash || '').trim().toLowerCase();
+  const normalizedWallet = String(wallet || '').trim().toLowerCase();
+  if (!/^0x[0-9a-f]{64}$/u.test(normalizedIntent)
+      || !/^0x[0-9a-f]{40}$/u.test(normalizedWallet)
+      || !playerId
+      || !Number.isInteger(Number(action))
+      || !/^\d{10,20}$/u.test(String(nonce || ''))) {
+    return { changes: 0, conflict: false };
+  }
+  const safeProof = typeof proofJson === 'string'
+    ? proofJson
+    : JSON.stringify(proofJson && typeof proofJson === 'object' ? proofJson : {});
+  const info = stmts.recordLeverupIntentProof.run(
+    normalizedIntent,
+    String(playerId),
+    normalizedWallet,
+    Number(action),
+    String(nonce),
+    Number(brokerId) || 0,
+    brokerReceiver == null ? null : String(brokerReceiver).trim().toLowerCase(),
+    rewardEligible === true ? 1 : 0,
+    safeProof,
+  );
+  const row = stmts.getLeverupIntentProof.get(normalizedIntent, String(playerId), normalizedWallet);
+  return { changes: info.changes || 0, conflict: !row, row: row || null };
+}
+
+function getLeverupIntentProof(playerId, wallet, intentHash) {
+  if (!playerId || !wallet || !intentHash) return null;
+  return stmts.getLeverupIntentProof.get(
+    String(intentHash).trim().toLowerCase(),
+    String(playerId),
+    String(wallet).trim().toLowerCase(),
+  ) || null;
+}
+
+function listLeverupIntentProofs(playerId, wallet, limit = 1000) {
+  if (!playerId || !wallet) return [];
+  return stmts.listLeverupIntentProofs.all(
+    String(playerId),
+    String(wallet).trim().toLowerCase(),
+    Math.max(1, Math.min(5000, Number(limit) || 1000)),
+  );
+}
+
+function listPendingLeverupIntentProofs(playerId, wallet, limit = 100) {
+  if (!playerId || !wallet) return [];
+  return stmts.listPendingLeverupIntentProofs.all(
+    String(playerId),
+    String(wallet).trim().toLowerCase(),
+    Math.max(1, Math.min(500, Number(limit) || 100)),
+  );
+}
+
+function updateLeverupIntentStatus({
+  intentHash,
+  playerId,
+  wallet,
+  status,
+  txHash = null,
+  statusJson = null,
+}) {
+  if (!['submitted', 'pending', 'executed_success', 'failed'].includes(String(status || ''))) {
+    return { changes: 0 };
+  }
+  const normalizedTx = txHash == null || txHash === '' ? null : String(txHash).trim().toLowerCase();
+  if (normalizedTx && !/^0x[0-9a-f]{64}$/u.test(normalizedTx)) return { changes: 0 };
+  const info = stmts.updateLeverupIntentStatus.run({
+    intent_hash: String(intentHash || '').trim().toLowerCase(),
+    player_id: String(playerId || ''),
+    wallet: String(wallet || '').trim().toLowerCase(),
+    status: String(status),
+    tx_hash: normalizedTx,
+    status_json: statusJson == null
+      ? null
+      : (typeof statusJson === 'string' ? statusJson : JSON.stringify(statusJson)),
+  });
+  return { changes: info.changes || 0 };
+}
+
+function recordLeverupOrderProof({
+  playerId,
+  wallet,
+  orderHash,
+  intentHash,
+  brokerId,
+  kind,
+  positionHash = null,
+  createdTxHash,
+  proofJson,
+}) {
+  const normalizedWallet = String(wallet || '').trim().toLowerCase();
+  const normalizedOrder = String(orderHash || '').trim().toLowerCase();
+  const normalizedIntent = String(intentHash || '').trim().toLowerCase();
+  const normalizedTx = String(createdTxHash || '').trim().toLowerCase();
+  if (!playerId
+      || !/^0x[0-9a-f]{40}$/u.test(normalizedWallet)
+      || !/^0x[0-9a-f]{64}$/u.test(normalizedOrder)
+      || !/^0x[0-9a-f]{64}$/u.test(normalizedIntent)
+      || !/^0x[0-9a-f]{64}$/u.test(normalizedTx)) return { changes: 0 };
+  const safeProof = typeof proofJson === 'string'
+    ? proofJson
+    : JSON.stringify(proofJson && typeof proofJson === 'object' ? proofJson : {});
+  const info = stmts.recordLeverupOrderProof.run(
+    String(playerId), normalizedWallet, normalizedOrder, normalizedIntent,
+    Number(brokerId) || 0, String(kind || 'order'),
+    positionHash == null ? null : String(positionHash).trim().toLowerCase(),
+    normalizedTx, safeProof,
+  );
+  return { changes: info.changes || 0 };
+}
+
+function getLeverupOrderProof(playerId, wallet, orderHash) {
+  if (!playerId || !wallet || !orderHash) return null;
+  return stmts.getLeverupOrderProof.get(
+    String(playerId),
+    String(wallet).trim().toLowerCase(),
+    String(orderHash).trim().toLowerCase(),
+  ) || null;
+}
+
 // ---------- Exports ----------
 
 module.exports = {
@@ -1051,6 +1295,13 @@ module.exports = {
   recordAsterBuilderOrder,
   getAsterBuilderOrder,
   getAsterBuilderOrderByClient,
+  recordLeverupIntentProof,
+  getLeverupIntentProof,
+  listLeverupIntentProofs,
+  listPendingLeverupIntentProofs,
+  updateLeverupIntentStatus,
+  recordLeverupOrderProof,
+  getLeverupOrderProof,
   recordDecibelOrderProof,
   getDecibelOrderProof,
   upgradeDecibelWorkerTradeByClient,

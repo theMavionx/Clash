@@ -4,6 +4,7 @@ import { useDex } from '../contexts/DexContext';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { usePlayer } from './useGodot';
 import { useCredentialOperationScope } from './useCredentialOperationScope';
+import { useTradingGoldSync } from './useTradingGoldSync';
 import { registeredDexWallet } from '../lib/playerDexAccounts';
 import {
   LEVERUP_ACTION_TYPE_NAMES,
@@ -30,6 +31,7 @@ import {
 const POLL_INTERVAL_MS = 15_000;
 const FEE_REFRESH_MS = 60_000;
 const FEE_TOKEN_STATE_TTL_MS = 30_000;
+const GAME_API = import.meta.env.VITE_GAME_API || '/api';
 
 function isAddress(value) {
   return /^0x[0-9a-fA-F]{40}$/u.test(String(value || '').trim());
@@ -134,6 +136,16 @@ export function useLeverup() {
   const registeredWallet = registeredDexWallet(player, 'leverup', 'evm');
   const registeredEvmWallet = isAddress(registeredWallet) ? String(registeredWallet).toLowerCase() : null;
   const walletMismatch = !!(registeredEvmWallet && walletAddr && registeredEvmWallet !== walletAddr);
+  const { claimGold, scheduleGoldClaim, goldEarned, clearGoldEarned } = useTradingGoldSync({
+    active,
+    ready: setupVerified === true && !walletMismatch,
+    dex: 'leverup',
+    playerId: player?.player_id || player?.id,
+    token: gameToken,
+    wallet: walletAddr,
+    sessionKey: `${LEVERUP_CHAIN_ID}:${registeredEvmWallet || walletAddr || ''}`,
+    gameApi: GAME_API,
+  });
 
   useEffect(() => { feeConfigRef.current = feeConfig; }, [feeConfig]);
   useEffect(() => { brokerRef.current = builderConfig; }, [builderConfig]);
@@ -541,13 +553,14 @@ export function useLeverup() {
       if (status?.executed || status?.skipped) {
         feeTokenStatesRef.current = { ...feeTokenStatesRef.current, at: 0 };
         if (status?.success !== true) throw new Error(actionResultError(status));
+        if (submitted?.rewardTracking === true) scheduleGoldClaim();
         setTimeout(() => { void fetchAccount(); }, 1_500);
         return { success: true, intentHash, transactionHash: status?.txnHash || null, status };
       }
       await new Promise(resolve => window.setTimeout(resolve, 500));
     }
     throw new Error('LeverUp V2 intent execution timed out');
-  }, [fetchAccount, fetchFeeConfig, fetchJson, readFeeTokenStates, verifyOneTap, walletAddr, walletMismatch]);
+  }, [fetchAccount, fetchFeeConfig, fetchJson, readFeeTokenStates, scheduleGoldClaim, verifyOneTap, walletAddr, walletMismatch]);
 
   const placeMarketOrder = useCallback(async (symbol, side, collateral, slippage = '0.5', leverage = 1, options = {}) => {
     setLoading(true);
@@ -849,6 +862,9 @@ export function useLeverup() {
     builderConfig,
     builderAccepted: builderConfig?.active === true,
     brokerPending: builderConfig?.active !== true,
+    claimGold,
+    goldEarned,
+    clearGoldEarned,
     openReferralJoin: openOfficialApp,
     referralUrl: LEVERUP_APP_URL,
     chainId: LEVERUP_CHAIN_ID,

@@ -3244,6 +3244,7 @@ const TOURNAMENT_DEX_LABELS_ADMIN = {
   risex: 'RISEx',
   nado: 'Nado',
   ondo: 'Ondo Perps',
+  leverup: 'LeverUp V2',
   hibachi: 'Hibachi',
   grvt: 'GRVT',
   hotstuff: 'Hotstuff',

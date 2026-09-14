@@ -1,6 +1,34 @@
 # Active Session State
 
-## Imperial SOL TP/SL Custom25 — Active (2026-09-06)
+## LeverUp Trading Competition Option — Active (2026-09-14)
+
+- Owner reports that LeverUp is missing from admin trading-competition settings
+  and explicitly authorized completing all possible support plus production
+  deployment, including tournament scoring, Gold and tasks/quests.
+- Baseline is origin/main `3434063f`; work is isolated in
+  `Clash-main-proxy-fallback` so the owner's dirty main worktree stays untouched.
+- Initial reproduction confirms LeverUp is deliberately excluded from the shared
+  tournament DEX registries and an existing LeverUp regression test asserts that
+  exclusion because per-player broker-attributed reward proof was unavailable.
+- Root correction now persists future accepted broker-verified V2 intents and
+  exact async-order proofs, imports only official wallet-matched economic rows,
+  and requires durable proof joins before Gold/tasks/tournaments can read them.
+  No historical backfill, signature/actionData storage or unproven wallet-history
+  credit is allowed.
+- LeverUp is now present in web/API/legacy-admin tournament registries and the
+  main SQLite CHECK migration; Gold, live task refresh, tournament sync, stats,
+  diagnostics and exchange-balance telemetry are wired. The client schedules
+  identity-safe Gold claims only for successfully executed tracked intents.
+- Focused importer, actual Express Gold+quests+tournament flow, schema migration,
+  browser protocol regression, syntax and diff checks all pass. Full canonical
+  Deploy gate passes including Godot probes, lint0 errors (135 existing warnings)
+  and production web build.
+- Report: production/reports/leverup-tournament-rewards-2026-09-14.md.
+- Next: fast-forward commit/push, canonical production deploy, then verify active
+  release, database schema, broker config, admin option, read-only reconciliation,
+  public assets, services and new-error deltas without placing a funded trade.
+
+## Imperial SOL TP/SL Custom25 — Released (2026-09-06)
 
 - Owner requested the complete fix and production release. Baseline01a5590c.
 - Client log1636333 at14:32:03UTC: positiond64e5e33-ad27-413c-bf36-9a7f834a06d0,
@@ -11,7 +39,12 @@
 - Regression red/green and31 adapter/import tests pass. Real adapter TP/SL
   payloads both pass program simulation (slot444834485); legacy shape fails25.
   Live order counter unchanged, no order created. Canonical Deploy gate PASS;
-  lint0 errors, Godot probes and web build pass. Ready for approved release.
+  lint0 errors, Godot probes and web build pass.
+- Released3434063f at16:15:14UTC, active20260906161228-3434063f. Adapter SHA256
+  matches tested file; public index/main/FuturesPanel hashes and API health pass.
+  All five services online, zero restarts, no new futures errors. Existing API
+  upstream429 warnings remain. Standard approved NFT-price sync succeeded.
+  Rollback01a5590c retained; older31a02aa3 build pruned by canonical retention.
 - Report: production/reports/imperial-tpsl-custom25-2026-09-06.md.
 - No funded retry or live protection write is authorized as an automated test.
 

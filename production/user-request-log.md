@@ -1,5 +1,16 @@
 # User Request Log
 
+## UR-2026-09-14-LEVERUP-TOURNAMENT-OPTION-DEPLOY
+
+- Owner: “Im trying to set up the trading comp for leverup, I can't see the leverup as an option on the trading comp settings   виправ і зедплой”.
+- Follow-up: “дороблюй тоді там все ми ніби тестували левер ап працює ніби”; “дороблюй все макисмально можливо і закидуй на прод щоб золото і таски рахувало теж”.
+- Diagnose why LeverUp is absent from trading-competition settings; complete proof-safe LeverUp fill indexing for tournament volume/PnL, Gold, quests/tasks and admin configuration; verify the real local admin and reward flows plus focused regressions; then commit, push, and deploy the reviewed change to production. LeverUp trading itself was already integrated and tested; no funded trade is authorized as an automated test.
+
+## UR-2026-09-08-REFERRAL-BUILDER-REGISTER
+
+- Owner: “меін треба список всі рефок і білдер кодів з кожної біржі де є. і також це все в ексель файлі бажано щоб було”.
+- Build an up-to-date, source-backed register of every integrated exchange, including referral codes/URLs and public builder, broker, integrator, affiliate or UI-fee identifiers where they exist. Verify effective production configuration and activation status when available, exclude secrets/private keys, and deliver the result as an Excel workbook.
+
 ## UR-2026-09-06-IMPERIAL-CUSTOM25-FIX-RELEASE
 
 - Owner: “Окрема помилка SOL TP/SL `Custom25` ще не виправлена виправляй дороблюй і на прод”.

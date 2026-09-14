@@ -108,6 +108,7 @@ const FUTURES_TASK_DEXES = new Set([
   'risex',
   'nado',
   'ondo',
+  'leverup',
   'hibachi',
   'hotstuff',
   'grvt',

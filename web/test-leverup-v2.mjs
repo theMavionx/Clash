@@ -186,6 +186,25 @@ for (const [action, actionValues] of brokerActionFixtures) {
   );
 }
 
+const trackedEnvelope = await signLeverupIntent({
+  trader,
+  privateKey,
+  action: OneClickAction.MARKET_OPEN,
+  actionValues: brokerActionFixtures.get(OneClickAction.MARKET_OPEN),
+  feeToken: LEVERUP_ZERO_ADDRESS,
+  antiDdosFee: 0n,
+});
+const trackedIntentHash = `0x${'ab'.repeat(32)}`;
+const trackedSubmission = await leverupServer.submitIntentDetailed(trackedEnvelope, trader, {
+  brokerConfig: { ...clashBroker, receiver: onchainBrokerRecord.receiver, status: 'verified_onchain' },
+  submitter: async () => trackedIntentHash,
+});
+assert.equal(trackedSubmission.intentHash, trackedIntentHash);
+assert.equal(trackedSubmission.proof.reward_eligible, true, 'accepted broker #2 intents must produce future-only reward proof');
+assert.equal(trackedSubmission.proof.broker_id, 2);
+assert.equal(trackedSubmission.proof.broker_receiver, onchainBrokerRecord.receiver.toLowerCase());
+assert.doesNotMatch(JSON.stringify(trackedSubmission.proof), /signature|actionData/u, 'durable reward proof must omit the agent signature and actionData');
+
 const retryAccount = '0x3333333333333333333333333333333333333333';
 const retryMarkets = [
   { pairBase: '0x4444444444444444444444444444444444444444' },
@@ -298,6 +317,11 @@ const deploySource = await readFile(new URL('../deploy/deploy.sh', import.meta.u
 const hookSource = await readFile(new URL('./src/hooks/useLeverup.js', import.meta.url), 'utf8');
 const panelSource = await readFile(new URL('./src/components/FuturesPanel.jsx', import.meta.url), 'utf8');
 const tournamentSource = await readFile(new URL('./src/admin/tournamentUtils.js', import.meta.url), 'utf8');
+const reconciliationSource = await readFile(new URL('../server/trade_reconciliation.js', import.meta.url), 'utf8');
+const tasksSource = await readFile(new URL('../server/tasks.js', import.meta.url), 'utf8');
+const routesSource = await readFile(new URL('../server/routes.js', import.meta.url), 'utf8');
+const futuresDbSource = await readFile(new URL('../server-futures/db.js', import.meta.url), 'utf8');
+const balanceTelemetrySource = await readFile(new URL('./src/lib/exchangeBalanceTelemetry.js', import.meta.url), 'utf8');
 const leverupIconSource = await readFile(new URL('./public/leverup.svg', import.meta.url), 'utf8');
 const tournamentDexBlock = tournamentSource.slice(0, tournamentSource.indexOf('];') + 2);
 assert.match(serverSource, /symbol:\s*symbolOf\(row\.pairName \|\| row\.symbol\)/u, 'synthetic pair names must remain distinct');
@@ -315,7 +339,15 @@ assert.match(
 );
 assert.match(panelSource, /OPEN_TPSL_POST_MARKET_DEXES[\s\S]*?'leverup'/u, 'market TP\/SL must be created as broker-attributed V2 decrease orders');
 assert.match(panelSource, /OPEN_TPSL_NATIVE_LIMIT_ATTACH_DEXES[\s\S]*?'leverup'/u, 'limit TP\/SL must remain attached while the future position does not yet exist');
-assert.doesNotMatch(tournamentDexBlock, /leverup/u, 'LeverUp cannot enter tournaments before broker-attributed rewards exist');
+assert.match(tournamentDexBlock, /leverup/u, 'LeverUp must be available in tournament settings once broker-attributed rewards exist');
+assert.match(reconciliationSource, /leverup:\s*\['leverup_broker_fill'\]/u, 'LeverUp reward reads must accept only its proof-backed importer source');
+assert.match(reconciliationSource, /FROM leverup_order_proofs/u, 'async LeverUp executions must join durable broker order proofs');
+assert.match(tasksSource, /FUTURES_TASK_DEXES[\s\S]*?'leverup'/u, 'LeverUp fills must feed task progress');
+assert.match(routesSource, /FUTURES_TOURNAMENT_SYNC_DEXES[\s\S]*?'leverup'/u, 'LeverUp fills must feed tournament reconciliation');
+assert.match(futuresDbSource, /CREATE TABLE IF NOT EXISTS leverup_intent_proofs/u, 'accepted LeverUp intents must be persisted for future-only reward proof');
+assert.match(balanceTelemetrySource, /SUPPORTED_EXCHANGES[\s\S]*?'leverup'/u, 'LeverUp equity must feed exchange balance telemetry');
+assert.match(hookSource, /useTradingGoldSync/u, 'LeverUp must run the shared identity-safe Gold sync');
+assert.match(hookSource, /submitted\?\.rewardTracking === true[\s\S]*?scheduleGoldClaim\(\)/u, 'only a broker-proof-tracked LeverUp intent may schedule an automatic Gold claim');
 assert.match(panelSource, /dex === 'monad' \|\| dex === 'leverup'/u, 'LeverUp wallet connect must target Monad');
 assert.match(panelSource, /supportsOrderBook = .*dex === 'leverup'/u, 'LeverUp must render its oracle-pricing state instead of foreign depth');
 assert.match(panelSource, /adds no extra fee for the trader/u, 'LeverUp setup must explain that broker attribution adds no surcharge');

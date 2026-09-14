@@ -4982,8 +4982,33 @@ router.post('/leverup/intents', auth, async (req, res) => {
   try {
     const owner = requireLeverupOwner(req, res);
     if (!owner) return;
-    const intentHash = await leverup.submitIntent(req.body || {}, owner.account);
-    return res.json({ intentHash });
+    const submitted = await leverup.submitIntentDetailed(req.body || {}, owner.account);
+    let rewardTracking = false;
+    try {
+      const proof = submitted.proof;
+      const recorded = db.recordLeverupIntentProof({
+        intentHash: submitted.intentHash,
+        playerId: req.playerId,
+        wallet: owner.account,
+        action: proof.action,
+        nonce: proof.nonce,
+        brokerId: proof.broker_id,
+        brokerReceiver: proof.broker_receiver,
+        rewardEligible: proof.reward_eligible,
+        proofJson: proof,
+      });
+      rewardTracking = !recorded.conflict && Number(recorded.row?.reward_eligible) === 1;
+    } catch (proofError) {
+      // The relayer already accepted the signed intent. Never misreport that
+      // trading action as failed because local reward-proof persistence had a
+      // problem; surface tracking state separately and fail rewards closed.
+      console.error('[leverup] accepted intent reward proof persistence failed:', proofError.message);
+    }
+    return res.json({
+      intentHash: submitted.intentHash,
+      rewardTracking,
+      rewardEligibility: submitted.proof.reward_eligible ? 'broker_verified' : 'broker_not_verified',
+    });
   } catch (error) {
     return sendLeverupError(res, error, 'Failed to submit LeverUp V2 intent');
   }
@@ -4993,7 +5018,21 @@ router.get('/leverup/intents/:intentHash', auth, async (req, res) => {
   try {
     const owner = requireLeverupOwner(req, res);
     if (!owner) return;
-    return res.json(await leverup.getIntentStatus(req.params.intentHash));
+    const payload = await leverup.getIntentStatus(req.params.intentHash);
+    try {
+      const evidence = leverup.intentStatusEvidence(payload);
+      db.updateLeverupIntentStatus({
+        intentHash: req.params.intentHash,
+        playerId: req.playerId,
+        wallet: owner.account,
+        status: evidence.status,
+        txHash: evidence.txHash,
+        statusJson: payload,
+      });
+    } catch (proofError) {
+      console.error('[leverup] intent status reward proof update failed:', proofError.message);
+    }
+    return res.json(payload);
   } catch (error) {
     return sendLeverupError(res, error, 'Failed to load LeverUp intent status');
   }

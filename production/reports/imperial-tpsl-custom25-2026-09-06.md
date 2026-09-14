@@ -5,7 +5,7 @@
 - ID: BUG-IMPERIAL-TPSL-CUSTOM25
 - Severity: S2-Major; priority: P1; system: Imperial trading integration.
 - Reported: 2026-09-06 by owner; baseline: 01a5590c (incident build 31a02aa3).
-- Status: corrected locally; production release verification pending.
+- Status: fixed and production verified, commit3434063f.
 - Category: API/on-chain contract mismatch. Deterministic for a priced type5
   reaching the passthrough program; historical regression status unknown.
 
@@ -70,4 +70,24 @@ new endpoints, schema changes, live protection writes or fee changes.
 
 Owner explicitly authorized completing this fix and deploying it. Release uses
 the existing canonical scripts; the referenced deploy-clash skill is not present
-in the available project skill directories. Production verification pending.
+in the available project skill directories.
+
+- Fast-forward published3434063f95864b0ca349255b6a83f253eaa00162 to origin/main.
+- Canonical deploy completed16:15:14UTC, active release
+  `/opt/clash/releases/20260906161228-3434063f`. Godotbb6735d5 reused unchanged.
+- Deployed adapter SHA256 equals the locally tested file:
+  `def387a7fbad7a3dfa403c4cc921bec648aeee2fa7857c9919d3f201fd329fdc`.
+- Local API4000/futures3999/MCP4100 health200; all five services online with
+  zero restarts. Futures/jobs/MCP/payment watcher have no new stderr. Existing
+  upstream RPC429 warnings continue in the main API; not introduced by this fix.
+- Public HTTPS index, main-Bk8wBRYJ.js and FuturesPanel-ZzOX9wAC.js all200 and
+  byte-for-byte SHA256 matches to the release-owned files; /api/online200.
+- Approved standard NFT payment sync reported updated successfully at16:14:55UTC,
+  then started its normal watcher. Target remains10USD; quoted CLASH price
+  0.00007433USD changed the payment amount21510.002152 ->134535.18095CLASH.
+  No manual extra price-sync transaction or trading transaction was submitted.
+- Rollback01a5590c retained. Canonical retention removed the older31a02aa3 build;
+  its source remains in Git for rebuilding. No player database was deleted.
+- Live owner-signed TP/SL placement and eventual trigger execution were not run;
+  the owner must explicitly submit desired protection. Simulation is not a live
+  order. All requested code/release work is complete.

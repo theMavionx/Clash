@@ -20,6 +20,7 @@ const FUTURES_REWARD_DEXES = new Set([
   'risex',
   'nado',
   'ondo',
+  'leverup',
   'hibachi',
   'hotstuff',
   'grvt',
@@ -50,6 +51,7 @@ const DEX_REQUIRED_CHAIN = {
   risex: 'evm',
   nado: 'evm',
   ondo: 'evm',
+  leverup: 'evm',
   hibachi: 'evm',
   hotstuff: 'evm',
   grvt: 'evm',
@@ -71,6 +73,7 @@ const VERIFIED_SOURCES_BY_DEX = {
   risex: ['risex_builder_onchain'],
   nado: ['nado_api'],
   ondo: ['ondo_builder_fill'],
+  leverup: ['leverup_broker_fill'],
   hibachi: ['hibachi_api'],
   hotstuff: ['hotstuff_api'],
   grvt: ['grvt_builder'],
@@ -93,6 +96,7 @@ const USER_SCOPED_IMPORT_DEXES = new Set([
   'hotstuff',
   'nado',
   'ondo',
+  'leverup',
   'risex',
   'hibachi',
   'katana',
@@ -398,6 +402,53 @@ function imperialBuilderEligibilityClause() {
             AND (${current.uniqueSignature} OR ${earlier.uniqueSignature}) AND ${unambiguous}))))`;
 }
 
+function leverupBuilderEligibilityClause() {
+  // A source label or client-supplied JSON is never sufficient. Direct fills
+  // must join the official history tx back to a successful tracked intent;
+  // keeper executions must join an order hash learned from that same intent.
+  // Both paths are scoped to the trade row's player and wallet.
+  return `(json_valid(COALESCE(proof_json, ''))
+    AND json_extract(proof_json, '$.broker.verified') = 1
+    AND CAST(json_extract(proof_json, '$.broker.id') AS INTEGER) > 0
+    AND lower(COALESCE(json_extract(proof_json, '$.fill.position.trader'), ''))
+        = lower(COALESCE(json_extract(proof_json, '$.wallet'), ''))
+    AND (
+      (json_extract(proof_json, '$.route.kind') = 'intent_tx'
+        AND EXISTS (
+          SELECT 1 FROM leverup_intent_proofs leverup_intent
+          WHERE leverup_intent.player_id = trade_history.player_id
+            AND leverup_intent.wallet = lower(COALESCE(json_extract(trade_history.proof_json, '$.wallet'), ''))
+            AND leverup_intent.intent_hash = lower(COALESCE(json_extract(trade_history.proof_json, '$.route.intent_hash'), ''))
+            AND leverup_intent.tx_hash = lower(COALESCE(json_extract(trade_history.proof_json, '$.fill.transactionHash'), ''))
+            AND leverup_intent.status = 'executed_success'
+            AND leverup_intent.reward_eligible = 1
+            AND leverup_intent.broker_id = CAST(json_extract(trade_history.proof_json, '$.broker.id') AS INTEGER)
+            AND lower(COALESCE(leverup_intent.broker_receiver, ''))
+                = lower(COALESCE(json_extract(trade_history.proof_json, '$.broker.receiver'), ''))
+        ))
+      OR
+      (json_extract(proof_json, '$.route.kind') = 'broker_order'
+        AND EXISTS (
+          SELECT 1
+          FROM leverup_order_proofs leverup_order
+          JOIN leverup_intent_proofs leverup_intent
+            ON leverup_intent.intent_hash = leverup_order.intent_hash
+          WHERE leverup_order.player_id = trade_history.player_id
+            AND leverup_order.wallet = lower(COALESCE(json_extract(trade_history.proof_json, '$.wallet'), ''))
+            AND leverup_order.order_hash = lower(COALESCE(json_extract(trade_history.proof_json, '$.route.order_hash'), ''))
+            AND leverup_order.order_hash = lower(COALESCE(json_extract(trade_history.proof_json, '$.fill.hash'), ''))
+            AND leverup_intent.intent_hash = lower(COALESCE(json_extract(trade_history.proof_json, '$.route.intent_hash'), ''))
+            AND leverup_intent.status = 'executed_success'
+            AND leverup_intent.reward_eligible = 1
+            AND leverup_intent.broker_id = CAST(json_extract(trade_history.proof_json, '$.broker.id') AS INTEGER)
+            AND leverup_order.broker_id = leverup_intent.broker_id
+            AND leverup_order.created_tx_hash = leverup_intent.tx_hash
+            AND lower(COALESCE(leverup_intent.broker_receiver, ''))
+                = lower(COALESCE(json_extract(trade_history.proof_json, '$.broker.receiver'), ''))
+        ))
+    ))`;
+}
+
 function verifiedSourceClauseForDex(dex) {
   const normalizedDex = String(dex || '').toLowerCase();
   const sources = VERIFIED_SOURCES_BY_DEX[normalizedDex] || ['worker'];
@@ -412,6 +463,9 @@ function verifiedSourceClauseForDex(dex) {
   }
   if (normalizedDex === 'imperial') {
     return `verified_source = ${sqlQuote(sources[0])} AND ${imperialBuilderEligibilityClause()}`;
+  }
+  if (normalizedDex === 'leverup') {
+    return `verified_source = ${sqlQuote(sources[0])} AND ${leverupBuilderEligibilityClause()}`;
   }
   if (sources.length === 1) return `verified_source = ${sqlQuote(sources[0])}`;
   return `verified_source IN (${sources.map(sqlQuote).join(', ')})`;
@@ -585,6 +639,7 @@ function adapterCredentials(dex, wallet, headers = {}, opts = {}) {
     if (!token) return null;
     return { token };
   }
+
   if (dex === 'imperial') {
     const jwt = headerValue(headers, 'x-imperial-jwt') || opts.jwt || opts.imperialJwt;
     if (!jwt) return null;
@@ -678,6 +733,17 @@ async function runDexAdapter(player, dex, wallet, opts = {}) {
       ...(await ondo.importFillsForPlayer(playerId, identity.wallet, creds.token, {
         limit,
         pageCap: opts.pageCap || 4,
+      })),
+    };
+  }
+
+  if (dex === 'leverup') {
+    const leverup = require('../server-futures/leverup');
+    if (!leverup.isEvmAddress(wallet)) return { ok: false, skipped: 'invalid_evm_wallet', dex };
+    return {
+      dex,
+      ...(await leverup.importFillsForPlayer(playerId, wallet, {
+        limit: Math.max(500, limit),
       })),
     };
   }
@@ -796,6 +862,7 @@ module.exports = {
   canonicalWallet,
   resolveWalletForDex,
   risexBuilderEligibilityClause,
+  leverupBuilderEligibilityClause,
   verifiedSourceClauseForDex,
   verifiedSourceWhereForDex,
   futuresDbReadonly,
