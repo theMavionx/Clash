@@ -6,7 +6,7 @@
 - Severity: S2-Major; Priority: P1; Category: Network
 - Reported: 2026-09-15 by owner; frequency unknown; regression unknown.
 - Baseline: 7410f627, production application release 3bc445d9.
-- Status: implemented locally; deployment verification pending.
+- Status: deployed and verified on 2026-09-15.
 
 ## Reproduction and evidence
 
@@ -55,7 +55,7 @@ do not establish that proxies are always faster.
 - Isolated candidate tested from production using the protected 99-entry pool:
   eight concurrent pairs/fees reads returned HTTP 200 and valid JSON via eight
   distinct proxies (489–1687 ms), zero failures/retries/direct fallback.
-- Production application deployment and post-release smoke pending.
+- Same 13 focused tests passed using the production Node.js runtime before cutover.
 - Official submit documentation fetch was unavailable; implementation does not
   assume relayer idempotency or introduce replay based on undocumented behavior.
 - No funded trades, wallet authorization or signed production submissions in tests.
@@ -65,3 +65,23 @@ do not establish that proxies are always faster.
 Proxies cannot repair a provider outage or rate-limit policy. An accepted command
 whose response is lost remains uncertain and requires status/account reconciliation;
 this change prevents transport retries but does not add durable intent recovery.
+
+## Release verification
+
+- Commit `8892890c` pushed to origin/main and deployed with the canonical atomic
+  scripts to `/opt/clash/releases/20260915105335-8892890c`; completed 10:57:20 UTC.
+- Live module SHA-256 matches the verified local file:
+  `59891b653917733835e4c4816bbb3c08208c35d901444de1471a45309da5e84c`.
+- API and futures startup logs confirm 99 proxies / 16 concurrent requests.
+  All five Clash services online, zero post-release restarts; canonical runtime
+  verification passed. API/futures/MCP health all HTTP 200.
+- Active API returned HTTP 200 for 24 markets, 24 prices and 52 fee configuration
+  rows. Public-domain fee-config also returned HTTP 200.
+- Browser-ingested LeverUp error/warning count was zero from 10:56:16 to
+  10:57:30 UTC. This short window does not establish successful funded trading.
+- Previous application release `20260915101711-3bc445d9` retained for rollback.
+  Standard retention removed `20260914105559-5aff5fd8` (rebuildable from Git).
+- Existing deploy-time payment sync refreshed dragon:clash to 101368.474405 CLASH
+  per 10 USD at price 0.00009865; this was the canonical payment-configuration
+  operation, not a LeverUp test trade. No new application dependencies added;
+  existing npm audit/engine warnings remain outside this transport change.
