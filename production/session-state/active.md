@@ -1,12 +1,14 @@
 # Active Session State
 
-## Fresh User Log Audit / CSS Recovery — Verified (2026-09-15 evening)
+## Fresh User Log Audit / CSS Recovery — Released (2026-09-15 evening)
 
 - Owner requested fresh user-log checks and repairs. Current LeverUp reads are
   healthy; post-release logs do not establish any new LeverUp order execution.
 - Found missed CSS preload-error recovery, implemented a narrow classification/URL
   fix, tested critical-action deferral and real browser recovery, full Deploy gate passed.
 - Audit and release evidence: `production/reports/live-log-audit-2026-09-15.md`.
+- Released `665fef02`; public fixed clientLogger matches release bytes, health and
+  LeverUp read smoke passed. Previous proxy-transport release retained for rollback.
 
 ## LeverUp Proxy Transport — Released (2026-09-15)
 

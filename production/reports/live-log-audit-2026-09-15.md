@@ -5,7 +5,7 @@
 - BUG-CLIENT-CSS-20260915; S2-Major / P1; Network / client boot.
 - Owner requested fresh user-log inspection and immediate repair of actionable issues.
 - Baseline production: `20260915105335-8892890c`. Audit began 20:07 UTC.
-- Status: CSS recovery defect reproduced and fixed locally; deployment pending.
+- Status: CSS recovery defect reproduced, fixed and deployed.
 
 ## Evidence
 
@@ -60,3 +60,20 @@ boot recovery already existing for equivalent JS failures.
 - Existing log retry regression and canonical Deploy gate passed, including web
   lint/build, trading regressions and Godot behavior probes (existing warnings only).
 - No funded trades, authentication changes, user record repairs or proxy changes.
+
+## Release verification
+
+- Application commit `665fef02`, release `/opt/clash/releases/20260915201518-665fef02`;
+  canonical deployment completed 20:20:23 UTC. All five Clash services online,
+  zero post-release restarts and runtime health verification passed.
+- Public `clientLogger-D-B9_jb3.js` returned HTTP 200, contains the corrected CSS
+  error matcher and matches the current release bytes exactly (20,210 bytes).
+- API/MCP health and LeverUp markets/prices/fee-config return HTTP 200. Reported
+  `GameUI-BUuIXdIE.css` remains available publicly with HTTP 200.
+- Previous release `20260915105335-8892890c` retained for rollback; standard
+  retention removed `20260915101711-3bc445d9` (rebuildable from Git).
+- Standard deploy-time payment sync refreshed dragon:clash to 134643.866972 CLASH
+  per 10 USD at price 0.00007427. No LeverUp test orders were submitted.
+- Existing open error pages may require one manual reload to obtain the fix.
+  Point-in-time health checks and a quiet short log window cannot prove every
+  user's experience or unobserved LeverUp trade execution.
