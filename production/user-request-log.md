@@ -4227,3 +4227,7 @@ Follow-up:
 
 - Owner: «зовнішні таймаути LeverUp … як і в хібачі можеш використовувати наші 100 проксі для розпарелелизації команд … LeverUp дозволила».
 - Implement bounded LeverUp proxy distribution using the existing protected pool, verify timeout recovery and never automatically duplicate signed trading submissions.
+## UR-2026-09-15-LIVE-LOG-AUDIT
+
+- Owner: «перевір що там зараз по логах чи у юзерів все працює якщо ні то випарвляй зараз».
+- Inspect fresh browser/server failures and order evidence, reproduce actionable defects and fix/verify them without funded test orders or exposing user credentials.

@@ -31,7 +31,7 @@ const NOISY_LOG_RE = /^\[load\] stage(1 download|2 signal)/;
 const NOISY_SERVER_RE = /^(WalletConnect Core is already initialized|Backpack couldn't override `window\.ethereum`|Mobile Wallet Adapter was registered as a Standard Wallet)/;
 const EXTENSION_ERROR_RE = /(chrome-extension:\/\/|moz-extension:\/\/|safari-web-extension:\/\/|Cannot redefine property: ethereum|Invalid property descriptor|tpweb3_|tronlinkParams|Backpack was unable to override window\.ethereum|Attempting to use a disconnected port object)/i;
 const NOISY_CLIENT_EVENT_RE = /^(page-load: iframe=|SDK imported, calling ready\(\)|ready\(\) done)/;
-const CHUNK_ERROR_RE = /(Failed to fetch dynamically imported module|Importing a module script failed|Loading chunk \d+ failed|ChunkLoadError|dynamically imported module)/i;
+const CHUNK_ERROR_RE = /(Failed to fetch dynamically imported module|Importing a module script failed|Loading chunk \d+ failed|ChunkLoadError|dynamically imported module|Unable to preload CSS)/i;
 const EXPECTED_BROWSER_NOISE_RE = /(AudioContext was not allowed to start|The AudioContext was not allowed to start|user didn't interact with the document first)/i;
 const DIAGNOSTIC_CONSOLE_RE = /^(?:\[godot\] load phase\b|\[authFlow\] state\b)/i;
 const EXPECTED_SETUP_CONSOLE_RE = /^(?:\[Phoenix setup\] invite_check_result\b|\[aptos-adapter\] WalletNotConnectedError\b)/i;
@@ -869,8 +869,8 @@ function patchHistory() {
 
 function extractChunkUrl(error) {
   const text = `${error?.message || ''}\n${error?.stack || ''}`;
-  const match = text.match(/https?:\/\/[^\s)'"]+\.js[^\s)'"]*/i)
-    || text.match(/\/assets\/[^\s)'"]+\.js[^\s)'"]*/i);
+  const match = text.match(/https?:\/\/[^\s)'"]+\.(?:js|css)[^\s)'"]*/i)
+    || text.match(/\/assets\/[^\s)'"]+\.(?:js|css)[^\s)'"]*/i);
   return match ? match[0] : null;
 }
 
