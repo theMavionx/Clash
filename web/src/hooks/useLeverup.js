@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { parseUnits } from 'viem';
+import { formatUnits } from 'viem';
+import { buildLeverupOpenAmounts, leverupUnits, leverupActionError } from '../lib/leverupOrderAmounts';
 import { useDex } from '../contexts/DexContext';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { usePlayer } from './useGodot';
@@ -56,11 +57,11 @@ function normalizeLongSide(value) {
 }
 
 function rawPrice(value) {
-  return parseUnits(String(num(value).toFixed(18)), 18);
+  return leverupUnits(value, 18);
 }
 
 function rawQty(value) {
-  return parseUnits(String(num(value).toFixed(10)), 10);
+  return leverupUnits(value, 10);
 }
 
 function validateLeverupOrderRisk(market, margin, leverage) {
@@ -88,7 +89,7 @@ function validateLeverupOrderRisk(market, margin, leverage) {
 }
 
 function actionResultError(status) {
-  return status?.skipReason || status?.reason || 'LeverUp V2 intent failed';
+  return leverupActionError(status);
 }
 
 export function useLeverup() {
@@ -487,7 +488,7 @@ export function useLeverup() {
   const findPrice = useCallback((symbol) => {
     const normalized = normalizeSymbol(symbol);
     const row = prices.find(price => normalizeSymbol(price.symbol) === normalized);
-    return num(row?.mark ?? row?.price ?? row?.mid);
+    return row?.mark ?? row?.price ?? row?.mid ?? 0;
   }, [prices]);
 
   const readFeeTokenStates = useCallback(async (action = null, { force = false } = {}) => {
@@ -579,15 +580,13 @@ export function useLeverup() {
       const marketSlippagePct = isLong
         ? num(market.slippage_long_pct)
         : num(market.slippage_short_pct);
-      const slippageP = Math.max(0.001, num(slippage, 0.5), marketSlippagePct) / 100;
-      const qty = (margin * lev) / mark;
-      const bound = mark * (isLong ? 1 + slippageP : 1 - slippageP);
-      const openFee = margin * lev * Math.max(0, num(market.open_fee_rate));
-      const totalAmountIn = margin + openFee;
-      if (num(walletUsdc) + 1e-9 < totalAmountIn) {
-        throw new Error(`LeverUp needs ${totalAmountIn.toFixed(6)} USDC including the ${openFee.toFixed(6)} USDC open fee`);
+      const amounts = buildLeverupOpenAmounts({ margin: collateral, leverage, price: mark,
+        feeRate: market.open_fee_rate || 0, isLong,
+        slippage: Math.max(0.001, num(slippage, 0.5), marketSlippagePct) });
+      const { amountIn } = amounts;
+      if (leverupUnits(walletUsdc ?? 0, 6) < amountIn) {
+        throw new Error(`LeverUp needs ${formatUnits(amountIn, 6)} USDC including the ${formatUnits(amounts.openFee, 6)} USDC open fee`);
       }
-      const amountIn = parseUnits(totalAmountIn.toFixed(6), 6);
       const broker = brokerRef.current?.active ? Number(brokerRef.current.brokerId) : 0;
       return await submitAction(OneClickAction.MARKET_OPEN, [
         market.pairBase || market.market,
@@ -595,8 +594,8 @@ export function useLeverup() {
         LEVERUP_USDC,
         LEVERUP_LVUSD,
         amountIn,
-        rawQty(qty),
-        rawPrice(bound),
+        amounts.qty,
+        amounts.price,
         0n,
         0n,
         broker,
@@ -624,12 +623,12 @@ export function useLeverup() {
       const lev = Math.max(1, num(leverage, 1));
       if (!(margin > 0)) throw new Error('Enter a positive USDC margin');
       validateLeverupOrderRisk(market, margin, lev);
-      const openFee = margin * lev * Math.max(0, num(market.open_fee_rate));
-      const totalAmountIn = margin + openFee;
-      if (num(walletUsdc) + 1e-9 < totalAmountIn) {
-        throw new Error(`LeverUp needs ${totalAmountIn.toFixed(6)} USDC including the ${openFee.toFixed(6)} USDC open fee`);
+      const amounts = buildLeverupOpenAmounts({ margin: collateral, leverage, price,
+        feeRate: market.open_fee_rate || 0 });
+      const { amountIn } = amounts;
+      if (leverupUnits(walletUsdc ?? 0, 6) < amountIn) {
+        throw new Error(`LeverUp needs ${formatUnits(amountIn, 6)} USDC including the ${formatUnits(amounts.openFee, 6)} USDC open fee`);
       }
-      const amountIn = parseUnits(totalAmountIn.toFixed(6), 6);
       const broker = brokerRef.current?.active ? Number(brokerRef.current.brokerId) : 0;
       // V2 limit opens can carry protective prices before a position exists.
       // Market opens use broker-attributed decrease orders after indexing instead.
@@ -641,8 +640,8 @@ export function useLeverup() {
         LEVERUP_USDC,
         LEVERUP_LVUSD,
         amountIn,
-        rawQty((margin * lev) / limitPrice),
-        rawPrice(limitPrice),
+        amounts.qty,
+        amounts.price,
         stopLoss > 0 ? rawPrice(stopLoss) : 0n,
         takeProfit > 0 ? rawPrice(takeProfit) : 0n,
         broker,

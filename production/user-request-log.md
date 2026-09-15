@@ -1,5 +1,13 @@
 # User Request Log
 
+## UR-2026-09-15-LEVERUP-ORDERS
+
+- Owner: "LeverUp issues виправ і задеплйо перевір логи юзерів в браузері";
+  forwarded report of malformed live UI request data/possible precision errors
+  preventing some users from placing orders.
+- Scope: inspect stored browser telemetry, reproduce, fix and test LeverUp order
+  construction, then deploy and verify. No funded test trades authorized.
+
 ## UR-2026-09-14-LEVERUP-TOURNAMENT-OPTION-DEPLOY
 
 - Owner: “Im trying to set up the trading comp for leverup, I can't see the leverup as an option on the trading comp settings   виправ і зедплой”.

@@ -279,6 +279,8 @@ const BROKER_TTL_MS = 60_000;
 let marketsCache = null;
 let marketDetailsCache = null;
 let brokerCache = null;
+let feeConfigCache = null;
+let feeConfigPending = null;
 
 function isEvmAddress(value) {
   return /^0x[0-9a-fA-F]{40}$/u.test(String(value || '').trim());
@@ -1000,7 +1002,18 @@ async function importFillsForPlayer(playerId, address, options = {}) {
 }
 
 async function getFeeConfig() {
-  return request(LEVERUP_RELAYER_URL, '/v2/trading/anti-ddos-config');
+  if (feeConfigCache && Date.now() - feeConfigCache.at < 30_000) return feeConfigCache.rows;
+  if (!feeConfigPending) {
+    feeConfigPending = request(LEVERUP_RELAYER_URL, '/v2/trading/anti-ddos-config')
+      .then(rows => {
+        if (!Array.isArray(rows)) throw new Error('LeverUp returned invalid execution fee configuration');
+        feeConfigCache = { at: Date.now(), rows };
+        return rows;
+      })
+      .finally(() => { feeConfigPending = null; });
+  }
+  // Only fresh configuration is reused; never cache failures or replay a POST.
+  return feeConfigPending;
 }
 
 function brokerConfigFromRecord(broker) {

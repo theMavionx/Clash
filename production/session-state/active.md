@@ -1,5 +1,17 @@
 # Active Session State
 
+## LeverUp Basic Order Inputs — Release In Progress (2026-09-15)
+
+- Owner authorized fixing LeverUp order failures, browser-log audit and deploy.
+- Read-only production audit: eleven market opens rejected as Position is too
+  small; separate upstream timeout failures also present.
+- Reproduced missing LeverUp collateral routing in Basic: converted USDC to BTC,
+  then passed it to the hook as USDC with default 1x instead of selected leverage.
+- Fixed Basic routing, exact decimal open amounts, decoded failures and shared
+  fresh fee-config reads. New seven tests and existing V2 regressions pass.
+- Canonical Deploy gate and browser fixture in progress. No funded test trades.
+- Report: `production/reports/bug-leverup-order-inputs-2026-09-15.md`.
+
 ## LeverUp Trading Competition Option — Released (2026-09-14)
 
 - Owner reports that LeverUp is missing from admin trading-competition settings

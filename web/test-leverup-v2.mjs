@@ -334,7 +334,7 @@ assert.match(deploySource, /set_env_value "LEVERUP_BROKER_RECEIVER" "0xB36402e87
 assert.match(earningsSource, /leverup_get_broker_by_id_lifetime_and_pending/u, 'admin must expose exact aggregate on-chain broker commissions');
 assert.match(
   hookSource,
-  /rawPrice\(limitPrice\),\s*stopLoss > 0 \? rawPrice\(stopLoss\) : 0n,\s*takeProfit > 0 \? rawPrice\(takeProfit\) : 0n/u,
+  /amounts\.price,\s*stopLoss > 0 \? rawPrice\(stopLoss\) : 0n,\s*takeProfit > 0 \? rawPrice\(takeProfit\) : 0n/u,
   'V2 limit-open actionData must preserve the documented stopLoss then takeProfit field order',
 );
 assert.match(panelSource, /OPEN_TPSL_POST_MARKET_DEXES[\s\S]*?'leverup'/u, 'market TP\/SL must be created as broker-attributed V2 decrease orders');
