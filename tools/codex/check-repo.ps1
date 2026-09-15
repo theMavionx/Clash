@@ -176,6 +176,7 @@ Invoke-Step "RH Lighter tournament schema migration" { node server/test-rhlighte
 Invoke-Step "LeverUp V2 broker routing" { node web/test-leverup-v2.mjs }
 Invoke-Step "LeverUp Basic order amounts and precision" { node --test web/test-leverup-order-flow.mjs }
 Invoke-Step "LeverUp fee configuration concurrency" { node --test server-futures/test-leverup-fee-cache.js }
+Invoke-Step "LeverUp proxy transport and submission safety" { node --test server-futures/test-leverup-transport.js }
 Invoke-Step "LeverUp broker earnings" { node server/test-leverup-earnings.js }
 Invoke-Step "LeverUp broker-proof fill import" { node server-futures/test-leverup-rewards.js }
 Invoke-Step "LeverUp Gold, quests, and tournament attribution" { node server/test-leverup-reward-flow.js }

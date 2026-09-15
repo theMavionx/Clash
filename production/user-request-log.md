@@ -4219,3 +4219,11 @@ Follow-up:
 - Owner: “спробуй варобуй ще ван тап реалізувати для булка також не закривається по маркету ордер чомусь хз”.
 - Implement native wallet-authorized BULK one-tap trading and repair market-close UI/hook contract. Verify local mocked signing/lifecycle/close flows; no funded actions, approvals or deployment requested in this turn.
 - Local implementation and verification: `production/reports/bulk-one-tap-close-2026-09-06.md`; no production changes.
+## UR-2026-09-15-PROXY-ROTATION
+
+- Owner requests replacing dead proxies with the supplied Webshare pool and immediate production application.
+- Validate from production, preserve a protected rollback copy, rotate runtime configuration and verify consumers. Never record credentials in tracked files or logs.
+## UR-2026-09-15-LEVERUP-PROXY-TRANSPORT
+
+- Owner: «зовнішні таймаути LeverUp … як і в хібачі можеш використовувати наші 100 проксі для розпарелелизації команд … LeverUp дозволила».
+- Implement bounded LeverUp proxy distribution using the existing protected pool, verify timeout recovery and never automatically duplicate signed trading submissions.

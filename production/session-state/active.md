@@ -1,5 +1,15 @@
 # Active Session State
 
+## LeverUp Proxy Transport — Verified Candidate (2026-09-15)
+
+- Owner requested LeverUp use the new proxy pool for parallel independent requests.
+- Dedicated REST transport, bounded concurrency, safe-read failover and no replay of
+  uncertain signed submissions implemented in the isolated LeverUp worktree.
+- Canonical Deploy gate and production-origin isolated read probes passed.
+- Details: `production/reports/bug-leverup-proxy-transport-2026-09-15.md`.
+- Runtime pool already rotated to 99 working proxies; one supplied entry excluded
+  after repeated connect failures. Protected rollback preserved; no secrets tracked.
+
 ## LeverUp Basic Order Inputs — Released (2026-09-15)
 
 - Owner authorized fixing LeverUp order failures, browser-log audit and deploy.

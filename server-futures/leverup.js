@@ -17,10 +17,11 @@ const LEVERUP_SERVICE_URL = String(
 const LEVERUP_RELAYER_URL = String(
   process.env.LEVERUP_RELAYER_URL || 'https://oneclick-01-keeper.leverup.xyz',
 ).replace(/\/+$/u, '');
-const LEVERUP_REQUEST_TIMEOUT_MS = Math.max(
-  1_000,
-  Math.min(20_000, Number(process.env.LEVERUP_REQUEST_TIMEOUT_MS || 8_000)),
-);
+const leverupTransport = require('./leverup-transport').createLeverupTransport();
+if (leverupTransport.stats().configured) {
+  console.log('[leverup-proxy] configured', leverupTransport.stats().configured,
+    'proxies; max concurrent', leverupTransport.stats().maxConcurrent);
+}
 const LEVERUP_RPC_URLS = String(
   process.env.LEVERUP_MONAD_RPC_URLS
     || process.env.MONAD_RPC_URLS
@@ -309,41 +310,28 @@ function bigintJson(_key, value) {
 }
 
 async function request(baseUrl, path, options = {}) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), LEVERUP_REQUEST_TIMEOUT_MS);
-  try {
-    const response = await fetch(`${baseUrl}${path}`, {
-      ...options,
-      headers: {
-        Accept: 'application/json',
-        ...(options.body ? { 'Content-Type': 'application/json' } : {}),
-        ...(options.headers || {}),
-      },
-      signal: controller.signal,
-    });
-    const text = await response.text();
-    let payload;
-    try { payload = text ? JSON.parse(text) : null; } catch { payload = text; }
-    if (!response.ok) {
-      const detail = typeof payload === 'string'
-        ? payload
-        : payload?.error || payload?.message || payload?.reason || text;
-      const error = new Error(`LeverUp HTTP ${response.status}${detail ? `: ${String(detail).slice(0, 300)}` : ''}`);
-      error.status = response.status;
-      error.payload = payload;
-      throw error;
-    }
-    return payload;
-  } catch (error) {
-    if (error?.name === 'AbortError') {
-      const timeoutError = new Error('LeverUp request timed out');
-      timeoutError.status = 504;
-      throw timeoutError;
-    }
+  const readOnly = !options.method || options.method === 'GET'
+    || (baseUrl === LEVERUP_SERVICE_URL && path === '/v1/oracle/price/pairs/latest' && options.method === 'POST');
+  const { response, text } = await leverupTransport.request(`${baseUrl}${path}`, {
+    ...options,
+    headers: {
+      Accept: 'application/json',
+      ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+      ...(options.headers || {}),
+    },
+  }, { readOnly });
+  let payload;
+  try { payload = text ? JSON.parse(text) : null; } catch { payload = text; }
+  if (!response.ok) {
+    const detail = typeof payload === 'string'
+      ? payload
+      : payload?.error || payload?.message || payload?.reason || text;
+    const error = new Error(`LeverUp HTTP ${response.status}${detail ? `: ${String(detail).slice(0, 300)}` : ''}`);
+    error.status = response.status;
+    error.payload = payload;
     throw error;
-  } finally {
-    clearTimeout(timer);
   }
+  return payload;
 }
 
 async function readMarketValues(functionName, marketAddresses, client = publicClient) {
@@ -1253,6 +1241,8 @@ module.exports = {
   submitIntentDetailed,
   validateIntentEnvelope,
   __test: {
+    request,
+    transportStats: () => leverupTransport.stats(),
     actionBrokerValues,
     brokerConfigFromRecord,
     decodeIntentActionData,
