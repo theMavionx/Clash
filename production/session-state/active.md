@@ -1,6 +1,6 @@
 # Active Session State
 
-## LeverUp Basic Order Inputs — Release In Progress (2026-09-15)
+## LeverUp Basic Order Inputs — Released (2026-09-15)
 
 - Owner authorized fixing LeverUp order failures, browser-log audit and deploy.
 - Read-only production audit: eleven market opens rejected as Position is too
@@ -9,7 +9,12 @@
   then passed it to the hook as USDC with default 1x instead of selected leverage.
 - Fixed Basic routing, exact decimal open amounts, decoded failures and shared
   fresh fee-config reads. New seven tests and existing V2 regressions pass.
-- Canonical Deploy gate and browser fixture in progress. No funded test trades.
+- Canonical Deploy gate and real Basic browser fixture passed. Released commit
+  `3bc445d9`, production `20260915101711-3bc445d9`; exact public bundle bytes,
+  three health endpoints, broker 2 and concurrent fee reads verified. All five
+  services online with zero restarts. No funded LeverUp test trades.
+- Previous release retained. Initial post-deploy browser window has no new
+  LeverUp errors; a user-initiated live order remains the execution smoke test.
 - Report: `production/reports/bug-leverup-order-inputs-2026-09-15.md`.
 
 ## LeverUp Trading Competition Option — Released (2026-09-14)

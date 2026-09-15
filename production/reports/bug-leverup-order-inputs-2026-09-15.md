@@ -6,7 +6,7 @@
 - Reported 2026-09-15 by owner with forwarded LeverUp integration feedback.
 - Baseline live build `20260914105559-5aff5fd8`; source baseline `08d0ba2e`.
 - Category: UI/request units; reproducible on every LeverUp Basic confirmation.
-- Status: full local verification passed; production release in progress.
+- Status: deployed and post-release verified.
 
 ## Reproduction
 
@@ -77,8 +77,10 @@ This is a unit/routing defect, not merely a rounding error.
 - Repeated full canonical Deploy gate passed, including rewards/tournaments,
   all Godot behavior probes, lint and web build. Cached Godot resources emit
   UID-to-path fallback warnings but all required behavior assertions pass.
-- No funded trade, on-chain transaction, wallet authorization or database repair
-  was performed. Live execution after release requires a user-initiated order.
+- No funded LeverUp trade, LeverUp on-chain transaction, wallet authorization or
+  database repair was performed. Live execution after release requires a
+  user-initiated order. The canonical deploy's existing payment-sync step is
+  noted separately below.
 
 ## References
 
@@ -88,8 +90,27 @@ This is a unit/routing defect, not merely a rounding error.
 
 ## Release
 
-Canonical preflight passed. Pending commit, owner-authorized production deploy
-and post-release build/health checks. Work is isolated in `Clash-leverup-order-fix`,
+Canonical preflight passed. Work is isolated in `Clash-leverup-order-fix`,
 branch `codex/leverup-order-precision`; unrelated original and Seeker drafts are
 excluded. The referenced deploy-clash skill is not installed; use existing
 canonical scripts without bypassing checks.
+
+- Released commit `3bc445d9647f819748e2c92c25446dd36400cabb` to `origin/main`
+  and `/opt/clash/releases/20260915101711-3bc445d9`. Source HEAD and current
+  symlink match. Deploy completed at 10:22:57 UTC through the pinned direct SSH
+  route and canonical export-upload-deploy/deploy.sh scripts.
+- Canonical runtime verification passed; independent API, futures and MCP
+  health checks return HTTP 200. All five Clash services are online with zero
+  post-release restarts.
+- Public main-DvUpObA_.js, both FuturesPanel chunks and useOstium-D8CaEJGV.js
+  match current-release bytes exactly. The latter shared hook chunk contains
+  the new integer sizing and decoded-error logic. Broker 2 remains active and
+  verified_onchain; five simultaneous fee-config reads return HTTP 200.
+- Initial post-release browser-log query finds zero new LeverUp errors. This
+  short quiet window is not evidence of a completed live user trade.
+- Retention removed build `20260906161228-3434063f`; previous release
+  `20260914105559-5aff5fd8` remains available for rollback. No player data was
+  deleted. The removed build can be rebuilt from its Git revision.
+- The existing canonical Solana payment sync updated `dragon:clash` to
+  `99206.349207` CLASH per 10 USD using fetched price `0.0001008` USD. This is
+  the standard deploy-time payment configuration refresh, not a LeverUp trade.
