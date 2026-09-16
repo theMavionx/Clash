@@ -1,5 +1,12 @@
 # User Request Log
 
+## UR-2026-09-16-POSITION-TPSL-POLISH
+
+- Owner requested removing the numeric leverage input shown in a screenshot,
+  then restyling the existing-position TP/SL editor to match the improved terminal.
+- Preserve slider, position target conversion and explicit save behavior. Include
+  these follow-ups in the previously authorized production UI rollout after checks.
+
 ## UR-2026-09-15-LEVERUP-ORDERS
 
 - Owner: "LeverUp issues виправ і задеплйо перевір логи юзерів в браузері";

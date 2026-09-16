@@ -4,6 +4,7 @@ import EtoroSetupGuide from './trading/EtoroSetupGuide';
 import ImperialRouteCard from './trading/ImperialRouteCard';
 import PositionActionDialog from './trading/PositionActionDialog';
 import './trading/OpenTpslEditor.css';
+import './trading/PositionTpslEditor.css';
 import { ETORO_TRADING_SETTINGS_URL } from '../lib/etoroClient';
 import { useSend } from '../hooks/useGodot';
 import { useLayout } from '../hooks/useIsMobile';
@@ -1817,10 +1818,17 @@ function TpslValueInput({ leg, mode, value, onChange, pos, metrics, maxPrice, dr
   }
   const preview = hasValue && !resolved.error && resolved.price > 0
     ? `Trigger $${fmtPrice(resolved.price)}`
-    : (hasValue && resolved.error ? resolved.error : (leg === 'tp' ? 'Take profit' : 'Stop loss'));
+    : (hasValue && resolved.error ? resolved.error : 'No target set');
   return (
-    <div style={S.tpslField}>
+    <div className="position-tpsl__target">
+      <label htmlFor={inputId}>{leg === 'tp' ? 'Take profit' : 'Stop loss'}</label>
+      <div className="position-tpsl__input-wrap">
       <input
+        id={inputId}
+        inputMode="decimal"
+        aria-label={leg === 'tp' ? 'Take profit target' : 'Stop loss target'}
+        aria-describedby={`${inputId}-preview`}
+        aria-invalid={Boolean(hasValue && resolved.error)}
         type="number"
         min="0"
         step={mode === 'price' ? 'any' : '0.1'}
@@ -1828,12 +1836,11 @@ function TpslValueInput({ leg, mode, value, onChange, pos, metrics, maxPrice, dr
         value={value}
         max={mode === 'price' ? maxPrice : undefined}
         onChange={e => onChange(e.target.value)}
-        style={S.tpslInput}
+        onWheel={event => { if (event.currentTarget === document.activeElement) event.currentTarget.blur(); }}
       />
-      <div style={{
-        ...S.tpslPreview,
-        color: hasValue && resolved.error ? 'var(--terminal-short-strong)' : (leg === 'tp' ? 'var(--terminal-long)' : 'var(--terminal-warning)'),
-      }}>
+      <span>{mode === 'price' ? 'USD' : mode === 'pct' ? '% margin' : 'USD PnL'}</span>
+      </div>
+      <div id={`${inputId}-preview`} className="position-tpsl__preview" data-error={Boolean(hasValue && resolved.error)} aria-live="polite">
         {preview}
       </div>
     </div>
@@ -1860,20 +1867,20 @@ function TpslEditor({
   const mark = firstPositive(metrics?.markP, pos?.mark_price, pos?.price, entry);
   const isLong = positionOpenSide(pos) !== 'ask';
   return (
-    <div style={S.tpslEditor}>
-      <div style={S.tpslMetaRow}>
-        <span>Entry {entry > 0 ? `$${fmtPrice(entry)}` : '-'}</span>
-        <span>Mark {mark > 0 ? `$${fmtPrice(mark)}` : '-'}</span>
-        <span>{isLong ? 'LONG' : 'SHORT'}</span>
+    <div className="position-tpsl">
+      <div className="position-tpsl__context">
+        <dl><div><dt>Entry price</dt><dd>{entry > 0 ? `$${fmtPrice(entry)}` : '—'}</dd></div>
+          <div><dt>Mark price</dt><dd>{mark > 0 ? `$${fmtPrice(mark)}` : '—'}</dd></div></dl>
+        <span className="position-tpsl__side" data-side={isLong ? 'long' : 'short'}>{isLong ? 'LONG' : 'SHORT'}</span>
       </div>
-      <div style={S.tpslModeRow}>
-        <span style={S.tpslModeLabel}>Input</span>
-        <div style={S.tpslModeGroup}>
+      <div className="position-tpsl__mode-row">
+        <span>Set targets by</span>
+        <div className="position-tpsl__modes" role="group" aria-label="Position TP/SL input mode">
           {TPSL_INPUT_MODES.map(item => (
             <button
               key={item.id}
               type="button"
-              style={mode === item.id ? S.tpslModeActive : S.tpslModeButton}
+              aria-pressed={mode === item.id}
               onClick={() => onModeChange(item.id)}
             >
               {item.label}
@@ -1881,17 +1888,19 @@ function TpslEditor({
           ))}
         </div>
       </div>
-      <div style={S.tpslInputGrid}>
+      <div className="position-tpsl__targets">
         <TpslValueInput leg="tp" mode={mode} value={tpValue} onChange={onTpChange} pos={pos} metrics={metrics} maxPrice={ostiumTpMax} />
         <TpslValueInput leg="sl" mode={mode} value={slValue} onChange={onSlChange} pos={pos} metrics={metrics} />
-        <button style={S.btnBlue} onClick={onSubmit} disabled={busy || loading || !hasChanges}>
-          {busy ? <ClosingButtonLabel text={busyLabel || 'Setting...'} /> : 'Set'}
-        </button>
       </div>
-      <div style={S.tpslHint}>
+      <div className="position-tpsl__hint">
         {mode === 'price'
           ? 'Enter trigger price.'
           : `${tpslModeLabel(mode)} uses position PnL: TP = profit, SL = loss.`}
+      </div>
+      <div className="position-tpsl__footer">
+        <button type="button" onClick={onSubmit} disabled={busy || loading || !hasChanges}>
+          {busy ? <ClosingButtonLabel text={busyLabel || 'Setting...'} /> : 'Save TP/SL'}
+        </button>
       </div>
     </div>
   );
@@ -6027,7 +6036,6 @@ function FuturesPanel() {
               <div style={{fontSize: isMobile ? 34 : 48, fontWeight: 700, color: 'var(--terminal-text)', textAlign: 'center', padding: isMobile ? '2px 0' : '10px 0'}}>{leverage}x</div>
               <input type="range" min="1" max={maxLev} value={leverage} className="grad-slider" onChange={e => handleLeverageChange(e.target.value)} style={{...S.slider, '--val': `${maxLev > 1 ? ((leverage - 1) / (maxLev - 1)) * 100 : 0}%`}} />
               <div style={S.sliderLabels}><span>1x</span><span>{Math.floor(maxLev/4)}x</span><span>{Math.floor(maxLev/2)}x</span><span>{Math.floor(maxLev*3/4)}x</span><span>{maxLev}x</span></div>
-              <input type="number" aria-label="Leverage multiplier" inputMode="numeric" min="1" max={maxLev} value={leverage} onChange={e => handleLeverageChange(e.target.value)} style={S.input} />
               <button type="button" style={S.typeActive} onClick={() => setShowLeverage(false)}>Done</button>
               {leverage > maxLev * 0.5 && (
                 <div style={{fontSize: 11, color: 'var(--terminal-short)', fontWeight: 700, textAlign: 'center', marginTop: 4}}>

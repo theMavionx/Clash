@@ -72,3 +72,14 @@ These follow-up changes are not in aa8f3f81; second release prepared after verif
 - Rollback retained: `20260916065900-aa8f3f81`. Standard last-two retention removed
   older `20260915201518-665fef02` deployment files, recoverable by rebuilding Git.
   Shared databases and pre-migration backup were retained.
+
+## Position protection polish follow-up
+- Owner additionally requested removing numeric leverage entry and replacing
+  the old position TP/SL appearance. Slider and selected leverage remain.
+- team-ui styling pass adds scoped context grid, side badge, labeled full-width
+  targets, unit suffixes, selected-mode styling and orange Save TP/SL footer.
+  Position conversion, venue arguments and disabled-state guards are unchanged.
+- 22 focused tests and fullscreen position action regression pass. Integrated
+  browser checks confirm desktop/320px modal appearance and mock save callback
+  with TP85000/SL75000; no funded exchange action. Numeric wheel blurs the input
+  without blocking dialog scrolling. Canonical Deploy gate passed before release.

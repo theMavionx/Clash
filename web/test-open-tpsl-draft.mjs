@@ -75,14 +75,27 @@ test('missing details, venue limits and delayed attachment are explained inline'
   await page.getByLabel('Fixture venue').selectOption('bulk');
   assert.doesNotMatch(await page.locator('.open-tpsl-inline').textContent(), /after the limit fills/);
 });
-test('existing position Set stays separate; order draft edits never send financial requests', async () => {
+test('existing position save stays separate; editing does not send financial requests', async () => {
   await page.getByRole('button',{name:'Toggle existing position editor'}).click();
   const editor=page.getByRole('region',{name:'Existing position editor'});
-  assert.equal(await editor.getByRole('button',{name:'Set',exact:true}).isDisabled(),true);
-  await editor.getByPlaceholder('TP Price').fill('120');
+  assert.equal(await editor.getByRole('button',{name:'Save TP/SL',exact:true}).isDisabled(),true);
+  await editor.getByLabel('Take profit target',{exact:true}).fill('120');
   assert.equal(await page.getByLabel('Financial calls').textContent(),'0');
-  await editor.getByRole('button',{name:'Set',exact:true}).click();
+  await editor.getByRole('button',{name:'Save TP/SL',exact:true}).click();
   assert.equal(await page.evaluate(()=>window.fixture.calls[0].tp.price),120);
+});
+test('position mode keyboard controls keep profit/loss conversion and explicit save', async () => {
+  const editor=page.getByRole('region',{name:'Existing position editor'});
+  await editor.getByRole('button',{name:'$ PnL',exact:true}).focus();
+  await page.keyboard.press('Space');
+  assert.equal(await editor.getByRole('button',{name:'$ PnL',exact:true}).getAttribute('aria-pressed'),'true');
+  await editor.getByLabel('Take profit target',{exact:true}).fill('10');
+  await editor.getByLabel('Stop loss target',{exact:true}).fill('4');
+  assert.equal(await page.getByLabel('Financial calls').textContent(),'1');
+  await editor.getByRole('button',{name:'Save TP/SL',exact:true}).click();
+  const call=await page.evaluate(()=>window.fixture.calls[1]);
+  assert.equal(call.tp.price,105);
+  assert.equal(call.sl.price,98);
 });
 test('inline fields fit 320px phone and desktop in both themes', async () => {
   for (const theme of ['light','dark']) for (const width of [320,390,1000]) {
@@ -91,5 +104,13 @@ test('inline fields fit 320px phone and desktop in both themes', async () => {
     const dimensions=await page.locator('.open-tpsl-inline').evaluate(el=>({width:el.getBoundingClientRect().width,scroll:el.scrollWidth,client:el.clientWidth}));
     assert.ok(dimensions.width<=width);
     assert.ok(dimensions.scroll<=dimensions.client+1);
+    const editor=page.getByRole('region',{name:'Existing position editor'});
+    const positionDimensions=await editor.evaluate(el=>({scroll:el.scrollWidth,client:el.clientWidth}));
+    assert.ok(positionDimensions.scroll<=positionDimensions.client+1);
+    for(const label of ['Take profit target','Stop loss target']) {
+      const field=await editor.getByLabel(label,{exact:true}).boundingBox();
+      assert.ok(field.height>=44, `${label} needs a usable touch target`);
+      assert.ok(field.x>=0 && field.x+field.width<=width, `${label} must fit viewport`);
+    }
   }
 });

@@ -45,6 +45,7 @@ import {createRoot} from 'react-dom/client';
 import {OpenTpslEditor,TpslEditor,tpslSubmitValue,tpslPriceFromInput} from '${componentId}';
 import '/src/components/FuturesTerminal.css';
 import '/src/components/trading/OpenTpslEditor.css';
+import '/src/components/trading/PositionTpslEditor.css';
 const params = new URLSearchParams(location.search);
 window.fixture = {calls:[], arithmetic:tpslPriceFromInput};
 function App(){

@@ -43,9 +43,10 @@ for (const orderType of ['market', 'limit']) for (const side of ['bid', 'ask']) 
     assert.deepEqual(view.calls, [{ side, orderType }]);
   });
 }
-test('leverage presets removed, numeric control retained and submit safety unchanged', () => {
+test('leverage presets and numeric entry removed, slider and submit safety retained', () => {
   assert.doesNotMatch(controls, /S\.levPreset/);
-  assert.match(controls, /aria-label="Leverage multiplier"/);
+  assert.doesNotMatch(controls, /aria-label="Leverage multiplier"/);
+  assert.match(controls, /type="range" min="1" max=\{maxLev\} value=\{leverage\}/);
   assert.match(controls, /disabled=\{tradeButtonBusy \|\| tradeButtonBlocked\}/);
   assert.match(source, /side: openTpslPreviewSide === 'ask' \? 'short' : 'long'/);
 });
