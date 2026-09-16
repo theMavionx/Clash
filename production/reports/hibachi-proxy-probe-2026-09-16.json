@@ -1,0 +1,1411 @@
+{
+  "checkedAt": "2026-09-16T06:16:53.186Z",
+  "location": "local workstation",
+  "total": 100,
+  "marketPassed": 100,
+  "accountOriginPassed": 45,
+  "bothPassed": 45,
+  "note": "Public unauthenticated checks only; does not prove account permissions or production VPS reachability.",
+  "results": [
+    {
+      "row": 1,
+      "proxyId": "810c69583d",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 1322
+      },
+      "accountOrigin": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 1301
+      }
+    },
+    {
+      "row": 2,
+      "proxyId": "5f9bb42645",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 702
+      },
+      "accountOrigin": {
+        "ok": false,
+        "status": 401,
+        "latencyMs": 761
+      }
+    },
+    {
+      "row": 3,
+      "proxyId": "1031104df8",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 692
+      },
+      "accountOrigin": {
+        "ok": false,
+        "status": 401,
+        "latencyMs": 700
+      }
+    },
+    {
+      "row": 4,
+      "proxyId": "59146c8164",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 510
+      },
+      "accountOrigin": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 495
+      }
+    },
+    {
+      "row": 5,
+      "proxyId": "76d8aa69be",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 663
+      },
+      "accountOrigin": {
+        "ok": false,
+        "status": 401,
+        "latencyMs": 712
+      }
+    },
+    {
+      "row": 6,
+      "proxyId": "c2336ada18",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 697
+      },
+      "accountOrigin": {
+        "ok": false,
+        "status": 401,
+        "latencyMs": 734
+      }
+    },
+    {
+      "row": 7,
+      "proxyId": "69ad3c9cdb",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 475
+      },
+      "accountOrigin": {
+        "ok": false,
+        "status": 401,
+        "latencyMs": 478
+      }
+    },
+    {
+      "row": 8,
+      "proxyId": "ae86f2d036",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 512
+      },
+      "accountOrigin": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 467
+      }
+    },
+    {
+      "row": 9,
+      "proxyId": "86f5586639",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 944
+      },
+      "accountOrigin": {
+        "ok": false,
+        "status": 401,
+        "latencyMs": 1153
+      }
+    },
+    {
+      "row": 10,
+      "proxyId": "02cf96eb30",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 372
+      },
+      "accountOrigin": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 400
+      }
+    },
+    {
+      "row": 11,
+      "proxyId": "6678aa2a84",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 859
+      },
+      "accountOrigin": {
+        "ok": false,
+        "status": 401,
+        "latencyMs": 907
+      }
+    },
+    {
+      "row": 12,
+      "proxyId": "a3a2a6300d",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 1096
+      },
+      "accountOrigin": {
+        "ok": false,
+        "status": 401,
+        "latencyMs": 907
+      }
+    },
+    {
+      "row": 13,
+      "proxyId": "d54a1904f8",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 670
+      },
+      "accountOrigin": {
+        "ok": false,
+        "status": 401,
+        "latencyMs": 719
+      }
+    },
+    {
+      "row": 14,
+      "proxyId": "3015b4d72b",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 510
+      },
+      "accountOrigin": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 592
+      }
+    },
+    {
+      "row": 15,
+      "proxyId": "9624259140",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 703
+      },
+      "accountOrigin": {
+        "ok": false,
+        "status": 401,
+        "latencyMs": 726
+      }
+    },
+    {
+      "row": 16,
+      "proxyId": "b5f14c885a",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 969
+      },
+      "accountOrigin": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 984
+      }
+    },
+    {
+      "row": 17,
+      "proxyId": "82d25f9f6a",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 451
+      },
+      "accountOrigin": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 968
+      }
+    },
+    {
+      "row": 18,
+      "proxyId": "040cbc97c9",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 6289
+      },
+      "accountOrigin": {
+        "ok": false,
+        "status": 401,
+        "latencyMs": 918
+      }
+    },
+    {
+      "row": 19,
+      "proxyId": "bed8c8ea61",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 453
+      },
+      "accountOrigin": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 461
+      }
+    },
+    {
+      "row": 20,
+      "proxyId": "5535456d13",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 918
+      },
+      "accountOrigin": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 1079
+      }
+    },
+    {
+      "row": 21,
+      "proxyId": "34e0256b54",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 409
+      },
+      "accountOrigin": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 408
+      }
+    },
+    {
+      "row": 22,
+      "proxyId": "62c92b4429",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 928
+      },
+      "accountOrigin": {
+        "ok": false,
+        "status": 401,
+        "latencyMs": 973
+      }
+    },
+    {
+      "row": 23,
+      "proxyId": "0403fc3fa6",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 943
+      },
+      "accountOrigin": {
+        "ok": false,
+        "status": 401,
+        "latencyMs": 1140
+      }
+    },
+    {
+      "row": 24,
+      "proxyId": "41a3b7ce1f",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 912
+      },
+      "accountOrigin": {
+        "ok": false,
+        "status": 401,
+        "latencyMs": 911
+      }
+    },
+    {
+      "row": 25,
+      "proxyId": "fc569c5c25",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 575
+      },
+      "accountOrigin": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 947
+      }
+    },
+    {
+      "row": 26,
+      "proxyId": "8a9b505744",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 614
+      },
+      "accountOrigin": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 474
+      }
+    },
+    {
+      "row": 27,
+      "proxyId": "b8032e011a",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 911
+      },
+      "accountOrigin": {
+        "ok": false,
+        "status": 401,
+        "latencyMs": 1269
+      }
+    },
+    {
+      "row": 28,
+      "proxyId": "e191725695",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 947
+      },
+      "accountOrigin": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 492
+      }
+    },
+    {
+      "row": 29,
+      "proxyId": "bac5023822",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 555
+      },
+      "accountOrigin": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 590
+      }
+    },
+    {
+      "row": 30,
+      "proxyId": "1ce7e1b709",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 1075
+      },
+      "accountOrigin": {
+        "ok": false,
+        "status": 401,
+        "latencyMs": 1101
+      }
+    },
+    {
+      "row": 31,
+      "proxyId": "a029d4b9ea",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 473
+      },
+      "accountOrigin": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 499
+      }
+    },
+    {
+      "row": 32,
+      "proxyId": "4cce5adf26",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 638
+      },
+      "accountOrigin": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 538
+      }
+    },
+    {
+      "row": 33,
+      "proxyId": "d21bb0d4c3",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 588
+      },
+      "accountOrigin": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 495
+      }
+    },
+    {
+      "row": 34,
+      "proxyId": "23a16065bd",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 690
+      },
+      "accountOrigin": {
+        "ok": false,
+        "status": 401,
+        "latencyMs": 713
+      }
+    },
+    {
+      "row": 35,
+      "proxyId": "e7392c0430",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 946
+      },
+      "accountOrigin": {
+        "ok": false,
+        "status": 401,
+        "latencyMs": 846
+      }
+    },
+    {
+      "row": 36,
+      "proxyId": "cf6185358b",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 770
+      },
+      "accountOrigin": {
+        "ok": false,
+        "status": 401,
+        "latencyMs": 790
+      }
+    },
+    {
+      "row": 37,
+      "proxyId": "39d699e7e9",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 928
+      },
+      "accountOrigin": {
+        "ok": false,
+        "status": 401,
+        "latencyMs": 894
+      }
+    },
+    {
+      "row": 38,
+      "proxyId": "6a1ecbd572",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 1357
+      },
+      "accountOrigin": {
+        "ok": false,
+        "status": 401,
+        "latencyMs": 921
+      }
+    },
+    {
+      "row": 39,
+      "proxyId": "4486f7e225",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 411
+      },
+      "accountOrigin": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 402
+      }
+    },
+    {
+      "row": 40,
+      "proxyId": "864606a8ec",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 483
+      },
+      "accountOrigin": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 988
+      }
+    },
+    {
+      "row": 41,
+      "proxyId": "0884678749",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 660
+      },
+      "accountOrigin": {
+        "ok": false,
+        "status": 401,
+        "latencyMs": 669
+      }
+    },
+    {
+      "row": 42,
+      "proxyId": "6b5bcbbd74",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 1109
+      },
+      "accountOrigin": {
+        "ok": false,
+        "status": 401,
+        "latencyMs": 680
+      }
+    },
+    {
+      "row": 43,
+      "proxyId": "37544b5bd9",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 932
+      },
+      "accountOrigin": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 955
+      }
+    },
+    {
+      "row": 44,
+      "proxyId": "fdc553f85f",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 714
+      },
+      "accountOrigin": {
+        "ok": false,
+        "status": 401,
+        "latencyMs": 751
+      }
+    },
+    {
+      "row": 45,
+      "proxyId": "0b7326554e",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 1162
+      },
+      "accountOrigin": {
+        "ok": false,
+        "status": 401,
+        "latencyMs": 1173
+      }
+    },
+    {
+      "row": 46,
+      "proxyId": "16e384e9c6",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 876
+      },
+      "accountOrigin": {
+        "ok": false,
+        "status": 401,
+        "latencyMs": 910
+      }
+    },
+    {
+      "row": 47,
+      "proxyId": "0ad11e0642",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 778
+      },
+      "accountOrigin": {
+        "ok": false,
+        "status": 401,
+        "latencyMs": 1015
+      }
+    },
+    {
+      "row": 48,
+      "proxyId": "0e744b680d",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 713
+      },
+      "accountOrigin": {
+        "ok": false,
+        "status": 401,
+        "latencyMs": 734
+      }
+    },
+    {
+      "row": 49,
+      "proxyId": "b3281c42de",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 557
+      },
+      "accountOrigin": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 655
+      }
+    },
+    {
+      "row": 50,
+      "proxyId": "775c31fba9",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 1144
+      },
+      "accountOrigin": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 680
+      }
+    },
+    {
+      "row": 51,
+      "proxyId": "13cfcb7cee",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 427
+      },
+      "accountOrigin": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 453
+      }
+    },
+    {
+      "row": 52,
+      "proxyId": "6cbf1bdb8f",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 668
+      },
+      "accountOrigin": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 591
+      }
+    },
+    {
+      "row": 53,
+      "proxyId": "e15095b827",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 1589
+      },
+      "accountOrigin": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 516
+      }
+    },
+    {
+      "row": 54,
+      "proxyId": "e0778f68ac",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 416
+      },
+      "accountOrigin": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 918
+      }
+    },
+    {
+      "row": 55,
+      "proxyId": "de3debc70e",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 550
+      },
+      "accountOrigin": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 506
+      }
+    },
+    {
+      "row": 56,
+      "proxyId": "bcf136a876",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 526
+      },
+      "accountOrigin": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 560
+      }
+    },
+    {
+      "row": 57,
+      "proxyId": "b46a2f15cb",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 957
+      },
+      "accountOrigin": {
+        "ok": false,
+        "status": 401,
+        "latencyMs": 981
+      }
+    },
+    {
+      "row": 58,
+      "proxyId": "4b369d7147",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 1062
+      },
+      "accountOrigin": {
+        "ok": false,
+        "status": 401,
+        "latencyMs": 879
+      }
+    },
+    {
+      "row": 59,
+      "proxyId": "981e9dd82a",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 718
+      },
+      "accountOrigin": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 501
+      }
+    },
+    {
+      "row": 60,
+      "proxyId": "d25b649074",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 347
+      },
+      "accountOrigin": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 448
+      }
+    },
+    {
+      "row": 61,
+      "proxyId": "dedcac2a6a",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 435
+      },
+      "accountOrigin": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 486
+      }
+    },
+    {
+      "row": 62,
+      "proxyId": "7027ce90ed",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 1358
+      },
+      "accountOrigin": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 1211
+      }
+    },
+    {
+      "row": 63,
+      "proxyId": "ef9271764d",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 533
+      },
+      "accountOrigin": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 961
+      }
+    },
+    {
+      "row": 64,
+      "proxyId": "8aa5e2f0ca",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 710
+      },
+      "accountOrigin": {
+        "ok": false,
+        "status": 401,
+        "latencyMs": 702
+      }
+    },
+    {
+      "row": 65,
+      "proxyId": "1b8bfe6264",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 1177
+      },
+      "accountOrigin": {
+        "ok": false,
+        "status": 401,
+        "latencyMs": 827
+      }
+    },
+    {
+      "row": 66,
+      "proxyId": "546d7ab9ca",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 676
+      },
+      "accountOrigin": {
+        "ok": false,
+        "status": 401,
+        "latencyMs": 679
+      }
+    },
+    {
+      "row": 67,
+      "proxyId": "c222585d09",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 936
+      },
+      "accountOrigin": {
+        "ok": false,
+        "status": 401,
+        "latencyMs": 876
+      }
+    },
+    {
+      "row": 68,
+      "proxyId": "14be18d90c",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 711
+      },
+      "accountOrigin": {
+        "ok": false,
+        "status": 401,
+        "latencyMs": 702
+      }
+    },
+    {
+      "row": 69,
+      "proxyId": "87da8d6cba",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 470
+      },
+      "accountOrigin": {
+        "ok": false,
+        "status": 401,
+        "latencyMs": 964
+      }
+    },
+    {
+      "row": 70,
+      "proxyId": "6879d8f23e",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 709
+      },
+      "accountOrigin": {
+        "ok": false,
+        "status": 401,
+        "latencyMs": 745
+      }
+    },
+    {
+      "row": 71,
+      "proxyId": "3651b865b8",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 1231
+      },
+      "accountOrigin": {
+        "ok": false,
+        "status": 401,
+        "latencyMs": 931
+      }
+    },
+    {
+      "row": 72,
+      "proxyId": "43f2d22d7e",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 894
+      },
+      "accountOrigin": {
+        "ok": false,
+        "status": 401,
+        "latencyMs": 1099
+      }
+    },
+    {
+      "row": 73,
+      "proxyId": "4ac1fdd9a5",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 681
+      },
+      "accountOrigin": {
+        "ok": false,
+        "status": 401,
+        "latencyMs": 724
+      }
+    },
+    {
+      "row": 74,
+      "proxyId": "722b66e04b",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 1216
+      },
+      "accountOrigin": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 1204
+      }
+    },
+    {
+      "row": 75,
+      "proxyId": "4e10ac61dd",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 497
+      },
+      "accountOrigin": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 507
+      }
+    },
+    {
+      "row": 76,
+      "proxyId": "3ad45764dc",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 846
+      },
+      "accountOrigin": {
+        "ok": false,
+        "status": 401,
+        "latencyMs": 849
+      }
+    },
+    {
+      "row": 77,
+      "proxyId": "4d848617fe",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 662
+      },
+      "accountOrigin": {
+        "ok": false,
+        "status": 401,
+        "latencyMs": 688
+      }
+    },
+    {
+      "row": 78,
+      "proxyId": "99c1c33057",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 918
+      },
+      "accountOrigin": {
+        "ok": false,
+        "status": 401,
+        "latencyMs": 897
+      }
+    },
+    {
+      "row": 79,
+      "proxyId": "659fcb0696",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 959
+      },
+      "accountOrigin": {
+        "ok": false,
+        "status": 401,
+        "latencyMs": 455
+      }
+    },
+    {
+      "row": 80,
+      "proxyId": "35d3310b4d",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 674
+      },
+      "accountOrigin": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 1012
+      }
+    },
+    {
+      "row": 81,
+      "proxyId": "1aad5fe18b",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 538
+      },
+      "accountOrigin": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 533
+      }
+    },
+    {
+      "row": 82,
+      "proxyId": "33fb89a339",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 946
+      },
+      "accountOrigin": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 968
+      }
+    },
+    {
+      "row": 83,
+      "proxyId": "4261d0f715",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 791
+      },
+      "accountOrigin": {
+        "ok": false,
+        "status": 401,
+        "latencyMs": 1062
+      }
+    },
+    {
+      "row": 84,
+      "proxyId": "5accd7781e",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 464
+      },
+      "accountOrigin": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 471
+      }
+    },
+    {
+      "row": 85,
+      "proxyId": "adb3bfeaf1",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 423
+      },
+      "accountOrigin": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 426
+      }
+    },
+    {
+      "row": 86,
+      "proxyId": "2dc07fe6b4",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 824
+      },
+      "accountOrigin": {
+        "ok": false,
+        "status": 401,
+        "latencyMs": 913
+      }
+    },
+    {
+      "row": 87,
+      "proxyId": "44db5dbb2b",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 963
+      },
+      "accountOrigin": {
+        "ok": false,
+        "status": 401,
+        "latencyMs": 912
+      }
+    },
+    {
+      "row": 88,
+      "proxyId": "31bfd08e50",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 897
+      },
+      "accountOrigin": {
+        "ok": false,
+        "status": 401,
+        "latencyMs": 893
+      }
+    },
+    {
+      "row": 89,
+      "proxyId": "5036a90262",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 861
+      },
+      "accountOrigin": {
+        "ok": false,
+        "status": 401,
+        "latencyMs": 1134
+      }
+    },
+    {
+      "row": 90,
+      "proxyId": "924789f42d",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 897
+      },
+      "accountOrigin": {
+        "ok": false,
+        "status": 401,
+        "latencyMs": 1132
+      }
+    },
+    {
+      "row": 91,
+      "proxyId": "b9241e0eae",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 741
+      },
+      "accountOrigin": {
+        "ok": false,
+        "status": 401,
+        "latencyMs": 1030
+      }
+    },
+    {
+      "row": 92,
+      "proxyId": "b37b59f39f",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 1041
+      },
+      "accountOrigin": {
+        "ok": false,
+        "status": 401,
+        "latencyMs": 801
+      }
+    },
+    {
+      "row": 93,
+      "proxyId": "aa26b09aa3",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 462
+      },
+      "accountOrigin": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 487
+      }
+    },
+    {
+      "row": 94,
+      "proxyId": "ccf8d691ab",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 937
+      },
+      "accountOrigin": {
+        "ok": false,
+        "status": 401,
+        "latencyMs": 1018
+      }
+    },
+    {
+      "row": 95,
+      "proxyId": "738d4d276b",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 510
+      },
+      "accountOrigin": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 517
+      }
+    },
+    {
+      "row": 96,
+      "proxyId": "e3f76f962c",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 1039
+      },
+      "accountOrigin": {
+        "ok": false,
+        "status": 401,
+        "latencyMs": 688
+      }
+    },
+    {
+      "row": 97,
+      "proxyId": "c9b0093235",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 758
+      },
+      "accountOrigin": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 739
+      }
+    },
+    {
+      "row": 98,
+      "proxyId": "94256096bf",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 453
+      },
+      "accountOrigin": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 451
+      }
+    },
+    {
+      "row": 99,
+      "proxyId": "b9cf0c2216",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 476
+      },
+      "accountOrigin": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 430
+      }
+    },
+    {
+      "row": 100,
+      "proxyId": "001f3dcb99",
+      "market": {
+        "ok": true,
+        "status": 200,
+        "latencyMs": 481
+      },
+      "accountOrigin": {
+        "ok": false,
+        "status": 401,
+        "latencyMs": 454
+      }
+    }
+  ]
+}

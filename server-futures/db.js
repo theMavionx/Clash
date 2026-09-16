@@ -120,6 +120,26 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_hibachi_account_links_player
     ON hibachi_account_links(player_id);
 
+  CREATE TABLE IF NOT EXISTS hibachi_trade_records (
+    account_id TEXT NOT NULL,
+    trade_id TEXT NOT NULL,
+    player_id TEXT NOT NULL,
+    username TEXT NOT NULL CHECK(length(trim(username)) > 0),
+    market TEXT NOT NULL,
+    volume_quote TEXT NOT NULL,
+    volume_currency TEXT NOT NULL,
+    quantity TEXT NOT NULL,
+    price TEXT NOT NULL,
+    side TEXT NOT NULL,
+    order_id TEXT,
+    executed_at TEXT NOT NULL,
+    recorded_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    PRIMARY KEY(account_id, trade_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_hibachi_trade_records_player
+    ON hibachi_trade_records(player_id, executed_at, account_id, trade_id);
+
   CREATE TABLE IF NOT EXISTS decibel_order_proofs (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     player_id       TEXT NOT NULL,

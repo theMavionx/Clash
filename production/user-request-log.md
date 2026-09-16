@@ -4231,3 +4231,36 @@ Follow-up:
 
 - Owner: «перевір що там зараз по логах чи у юзерів все працює якщо ні то випарвляй зараз».
 - Inspect fresh browser/server failures and order evidence, reproduce actionable defects and fix/verify them without funded test orders or exposing user credentials.
+## UR-2026-09-16-TRADING-PANEL-CLASHBOT
+
+- Owner requests redesigning the trading panel using `C:/Users/Admin/Documents/clashbot` as the source for styles, functions, settings and mobile/desktop convenience while retaining Clash's existing brand color.
+- Inspect the reference read-only, map feature parity and preserve working exchange/signing integrations. Use the team-ui design approval stages before implementation; this request does not authorize deploying this new redesign.
+### UR-2026-09-16-TRADING-PANEL-CLASHBOT — scope approval
+
+- Owner approved: «Дизайн і UX для нашої торгової панелі (рекомендовано)».
+- Reference design/UX only; no new bot/copy-trading systems. Proceed to visual proposal.
+
+### UR-2026-09-16-TRADING-PANEL-CLASHBOT — screenshot layout clarification
+
+- Owner supplied Hibachi and Clashbot manual-terminal screenshots: «треба зробити зручний інтерфейс … тільки графік нижче опускай … порівняй хібачі і клеш бот».
+- Owner confirmed: «Розтягнути вниз, позиції нижче».
+- Use dense chart/orderbook/order-form desktop layout; extend chart downward and move positions/history below it. Preserve current brand and existing execution behavior.
+
+- Owner approved the final visual proposal and implementation: «реалізовуй».
+
+## UR-2026-09-16-HIBACHI-RECONCILIATION-PROXIES
+
+- Owner requests mandatory DB records containing «trade id, username, volume, market» for reconciliation; inspect rate limits, use existing proxy manager, test which proxies work with Hibachi and compare `C:/Users/Admin/Documents/ChatGPT/pilotbot`.
+- Implement durable server-verified records and safe bounded proxy failover; reference repository read-only. No duplicate signed order retries, no bypass of account/provider limits, no exposure of proxy credentials. No new production DB changes or deploy under this request.
+
+## UR-2026-09-16-HIBACHI-PERFORMANCE
+
+- Owner requests measuring Hibachi latency and substantial improvements using WebSockets. Measure before optimization, retain reconciliation and safe REST fallback, never replay ambiguous trading writes. No funded test trades.
+
+## UR-2026-09-16-TRADING-RELEASE
+
+- Owner: «все на прод». Explicit approval to release the prepared trading panel, Hibachi reconciliation/proxy safety and WS performance changes, including additive production migration. Run canonical deployment gates, preserve rollback and verify live health/logs. No funded test orders.
+
+## UR-2026-09-16-TERMINAL-WHEEL
+
+- Owner: «майже в усіх областях не працює колесо миші виправ», with local terminal screenshot. Fix scroll behavior before the authorized release; verify actual wheel interactions across terminal regions.

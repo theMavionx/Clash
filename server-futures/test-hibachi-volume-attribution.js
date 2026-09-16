@@ -13,6 +13,8 @@ process.env.HIBACHI_WS_ENABLED = 'false';
 
 const futures = require('./db');
 const hibachi = require('./hibachi');
+const importFills = (playerId, accountId, fills, dbModule) =>
+  hibachi.__testing.importNormalizedFillsForPlayer(playerId, accountId, fills, dbModule, {username:'Test Trader'});
 
 test.after(() => {
   futures.db.close();
@@ -42,14 +44,14 @@ test('Hibachi fills keep their exchange timestamp and refresh legacy import time
   assert.equal(trade.created_at, trade.createdAt);
   assert.equal(String(trade.orderId), '991');
 
-  const inserted = hibachi.__testing.importNormalizedFillsForPlayer('player-tango', accountId, [trade], futures);
+  const inserted = importFills('player-tango', accountId, [trade], futures);
   assert.deepEqual(
     { ok: inserted.ok, imported: inserted.imported, updated: inserted.updated, adopted: inserted.adopted },
     { ok: true, imported: 1, updated: 0, adopted: 0 },
   );
 
   const corrected = hibachi.__testing.normalizeTrade(accountId, { ...fixture, timestamp: correctedTimestamp });
-  const refreshed = hibachi.__testing.importNormalizedFillsForPlayer('player-tango', accountId, [corrected], futures);
+  const refreshed = importFills('player-tango', accountId, [corrected], futures);
   assert.deepEqual(
     { ok: refreshed.ok, imported: refreshed.imported, updated: refreshed.updated },
     { ok: true, imported: 0, updated: 1 },
@@ -89,7 +91,7 @@ test('one Hibachi account cannot move verified fills to another Clash profile', 
     timestamp: Date.parse('2026-08-26T07:00:00.000Z'),
   });
 
-  const result = hibachi.__testing.importNormalizedFillsForPlayer('player-new-map', accountId, [conflictingTrade], futures);
+  const result = importFills('player-new-map', accountId, [conflictingTrade], futures);
   assert.equal(result.ok, false);
   assert.equal(result.status, 409);
   assert.equal(result.code, 'HIBACHI_ACCOUNT_LINKED');
@@ -119,7 +121,7 @@ test('a pre-existing verified owner is inferred before creating an account link'
   });
   futures.addTrade('original-player', existing);
 
-  const result = hibachi.__testing.importNormalizedFillsForPlayer('second-player', accountId, [existing], futures);
+  const result = importFills('second-player', accountId, [existing], futures);
   assert.equal(result.ok, false);
   assert.equal(result.code, 'HIBACHI_ACCOUNT_LINKED');
   assert.equal(
@@ -156,9 +158,9 @@ test('order-history aggregates are never imported as reward volume', () => {
     timestamp: Date.parse('2026-08-30T10:00:00.000Z'),
   });
 
-  const first = hibachi.__testing.importNormalizedFillsForPlayer(playerId, accountId, [aggregate], futures);
+  const first = importFills(playerId, accountId, [aggregate], futures);
   assert.deepEqual({ imported: first.imported, skipped: first.skipped }, { imported: 0, skipped: 1 });
-  const second = hibachi.__testing.importNormalizedFillsForPlayer(playerId, accountId, [execution], futures);
+  const second = importFills(playerId, accountId, [execution], futures);
   assert.deepEqual({ imported: second.imported, skipped: second.skipped }, { imported: 1, skipped: 0 });
 
   const totals = futures.db.prepare(`
@@ -193,8 +195,8 @@ test('an order-history aggregate is ignored when executions already exist', () =
     closedAt: '2026-08-30T10:05:00.000Z',
   });
 
-  assert.equal(hibachi.__testing.importNormalizedFillsForPlayer(playerId, accountId, [execution], futures).imported, 1);
-  const fallback = hibachi.__testing.importNormalizedFillsForPlayer(playerId, accountId, [aggregate], futures);
+  assert.equal(importFills(playerId, accountId, [execution], futures).imported, 1);
+  const fallback = importFills(playerId, accountId, [aggregate], futures);
   assert.deepEqual({ imported: fallback.imported, skipped: fallback.skipped }, { imported: 0, skipped: 1 });
   assert.equal(futures.db.prepare(`
     SELECT COUNT(*) AS count FROM trade_history WHERE player_id = ? AND dex = 'hibachi'
@@ -235,7 +237,7 @@ test('unsafe Hibachi u64 ids remain exact and adjacent fills do not collapse', (
 
   const fills = payload.trades.map((trade) => hibachi.__testing.normalizeTrade(accountId, trade));
   assert.notEqual(fills[0].clientOrderId, fills[1].clientOrderId);
-  const result = hibachi.__testing.importNormalizedFillsForPlayer('unsafe-u64-player', accountId, fills, futures);
+  const result = importFills('unsafe-u64-player', accountId, fills, futures);
   assert.deepEqual({ imported: result.imported, skipped: result.skipped }, { imported: 2, skipped: 0 });
   const totals = futures.db.prepare(`
     SELECT COUNT(*) AS trades, SUM(notional_usd) AS volume
@@ -353,4 +355,48 @@ test('reward import fails closed when execution history is unavailable', async (
     global.fetch = originalFetch;
     hibachi.__testing.resetCaches();
   }
+});
+
+test('reconciliation record preserves u64 ID, exact quote volume, server username and first-name snapshot', () => {
+  const trade = hibachi.__testing.normalizeTrade('99001', {
+    id:'18446744073709551614',symbol:'BTC/USDT-P',side:'BID',
+    price:'80123.4',quantity:'0.0000123456789',bidAccountId:'99001',
+    bidOrderId:'18446744073709551613',timestamp:Date.parse('2026-09-16T06:00:00Z'),
+    apiKey:'must-not-be-stored',
+  });
+  const save = username => hibachi.__testing.importNormalizedFillsForPlayer('record-owner','99001',[trade],futures,{username});
+  assert.equal(save('Original username').ok,true);
+  assert.equal(save('Renamed username').ok,true);
+  const records = futures.db.prepare('SELECT * FROM hibachi_trade_records WHERE account_id=?').all('99001');
+  assert.equal(records.length,1);
+  assert.equal(records[0].trade_id,'18446744073709551614');
+  assert.equal(records[0].order_id,'18446744073709551613');
+  assert.equal(records[0].username,'Original username');
+  assert.equal(records[0].volume_quote,'0.98917776877626');
+  assert.equal(records[0].market,'BTC/USDT-P');
+  assert.equal(records[0].volume_currency,'USDT');
+  assert.doesNotMatch(JSON.stringify(records),/must-not-be-stored|apiKey/);
+  const reopened = new (require('better-sqlite3'))(dbPath,{readonly:true});
+  try { assert.equal(reopened.prepare('SELECT count(*) AS n FROM hibachi_trade_records WHERE account_id=?').get('99001').n,1); }
+  finally { reopened.close(); }
+});
+
+test('missing username or failed record write rolls back trade credit and returns a retryable failure', () => {
+  const trade = hibachi.__testing.normalizeTrade('99002', {
+    id:'rollback-record',symbol:'ETH/USDT-P',side:'BID',price:'3000',quantity:'1',
+    bidAccountId:'99002',bidOrderId:'r1',timestamp:Date.now(),
+  });
+  const missing = hibachi.__testing.importNormalizedFillsForPlayer('rollback-owner','99002',[trade],futures);
+  assert.equal(missing.ok,false);
+  assert.equal(missing.recordFailures,1);
+  assert.equal(futures.db.prepare('SELECT count(*) AS n FROM trade_history WHERE client_order_id=?').get(trade.clientOrderId).n,0);
+  futures.db.exec("CREATE TRIGGER test_record_failure BEFORE INSERT ON hibachi_trade_records BEGIN SELECT RAISE(ABORT,'test disk failure'); END");
+  try {
+    const failure = hibachi.__testing.importNormalizedFillsForPlayer('rollback-owner','99002',[trade],futures,{username:'Server name'});
+    assert.equal(failure.ok,false);
+    assert.equal(failure.retryable,true);
+    assert.equal(failure.imported,0);
+    assert.equal(futures.db.prepare('SELECT count(*) AS n FROM trade_history WHERE client_order_id=?').get(trade.clientOrderId).n,0);
+  } finally { futures.db.exec('DROP TRIGGER test_record_failure'); }
+  assert.equal(hibachi.__testing.importNormalizedFillsForPlayer('rollback-owner','99002',[trade],futures,{username:'Server name'}).imported,1);
 });

@@ -1957,6 +1957,7 @@ function OpenTpslEditor({
       {draft && (
         <PositionActionDialog title="Take profit / Stop loss" onClose={() => setDraft(null)}>
           <form className="open-tpsl-draft" onSubmit={event => { event.preventDefault(); saveDraft(); }}>
+            <div className="open-tpsl-draft__content">
             <dl className="open-tpsl-draft__context">
               <div><dt>Entry price</dt><dd>{entry > 0 ? `$${fmtPrice(entry)}` : 'Not available'}</dd></div>
               <div><dt>Order type</dt><dd>{orderType === 'limit' ? 'Limit order' : 'Market order'}</dd></div>
@@ -1991,11 +1992,14 @@ function OpenTpslEditor({
               <p>Estimated PnL excludes fees and funding.</p>
               <p>Submit saves settings for your next order. It does not place a trade.</p>
             </div>
+            </div>
+            <div className="open-tpsl-draft__actions">
             <button type="submit" className="open-tpsl-draft__submit" disabled={Boolean(disabledReason)} aria-describedby={guidanceId}>Submit</button>
             {enabled && <button type="button" className="open-tpsl-draft__remove" onClick={() => {
               onEnabledChange(false);
               setDraft(null);
             }}>Remove TP/SL from next order</button>}
+            </div>
           </form>
         </PositionActionDialog>
       )}
@@ -4313,8 +4317,8 @@ function FuturesPanel() {
 
   // Resizable panel sizes (percentages / pixels)
   const [bottomH, setBottomH] = useState(160);
-  const [obWidth, setObWidth] = useState(240);
-  const [chartPct, setChartPct] = useState(55);
+  const [obWidth, setObWidth] = useState(300);
+  const [ticketWidth, setTicketWidth] = useState(370);
   const [mobileMarketView, setMobileMarketView] = useState('chart');
 
   const bottomHRef = useRef(bottomH);
@@ -4354,7 +4358,7 @@ function FuturesPanel() {
     const startW = obWidthRef.current;
     const onMove = (ev) => {
       const moveX = ev.touches ? ev.touches[0].clientX : ev.clientX;
-      setObWidth(Math.max(160, Math.min(350, startW + (moveX - startX))));
+      setObWidth(Math.max(280, Math.min(320, startW + (moveX - startX))));
     };
     const onUp = () => { 
       window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); 
@@ -4368,13 +4372,11 @@ function FuturesPanel() {
   }, []);
 
   const dragChart = useCallback((e) => {
+    const startX = e.touches ? e.touches[0].clientX : e.clientX;
+    const startWidth = ticketWidth;
     const onMove = (ev) => {
-      const container = panelRef.current;
-      if (!container) return;
       const moveX = ev.touches ? ev.touches[0].clientX : ev.clientX;
-      const rect = container.getBoundingClientRect();
-      const pct = ((moveX - rect.left) / rect.width) * 100;
-      setChartPct(Math.max(20, Math.min(70, pct)));
+      setTicketWidth(Math.max(340, Math.min(400, startWidth - (moveX - startX))));
     };
     const onUp = () => { 
       window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); 
@@ -4385,7 +4387,7 @@ function FuturesPanel() {
     document.body.style.userSelect = 'none';
     window.addEventListener('mousemove', onMove); window.addEventListener('mouseup', onUp);
     window.addEventListener('touchmove', onMove, {passive: false}); window.addEventListener('touchend', onUp);
-  }, []);
+  }, [ticketWidth]);
 
   const handleClose = useCallback(() => setFuturesOpen(false), [setFuturesOpen]);
 
@@ -5662,6 +5664,10 @@ function FuturesPanel() {
   const renderTradeControls = ({ compactMobile = false, parentScroll = false } = {}) => (
     <div
       className={`futures-order-ticket${fullscreen && !parentScroll ? ' grad-scrollbar futures-trade-controls-scroll' : ''}${compactMobile ? ' futures-order-ticket--compact' : ''}`}
+      onWheelCapture={event => {
+        // Scrolling the ticket must not silently change a focused order amount.
+        if (event.target instanceof HTMLInputElement && event.target.type === 'number') event.target.blur();
+      }}
       style={{
       display: 'flex',
       flexDirection: 'column',
@@ -5678,7 +5684,7 @@ function FuturesPanel() {
             boxSizing: 'border-box',
             scrollbarGutter: 'stable',
             WebkitOverflowScrolling: 'touch',
-            overscrollBehaviorY: 'contain',
+            overscrollBehaviorY: 'auto',
             touchAction: 'pan-y',
           }
         : {}),
@@ -5742,10 +5748,10 @@ function FuturesPanel() {
       )}
 
       {/* Trade controls */}
-      <div style={S.tradeBox}>
-        <div style={S.row}>
-          <button style={orderType === 'market' ? S.typeActive : S.typeBtn} onClick={() => { clearTradeFeedback(); setOrderType('market'); }}>Market</button>
-          <button style={orderType === 'limit' ? S.typeActive : S.typeBtn} onClick={() => { clearTradeFeedback(); setOrderType('limit'); }}>Limit</button>
+      <div className="futures-order-ticket__fields" style={S.tradeBox}>
+        <div style={S.row} role="group" aria-label="Order type">
+          <button type="button" aria-pressed={orderType === 'market'} style={orderType === 'market' ? S.typeActive : S.typeBtn} onClick={() => { clearTradeFeedback(); setOrderType('market'); }}>Market</button>
+          <button type="button" aria-pressed={orderType === 'limit'} style={orderType === 'limit' ? S.typeActive : S.typeBtn} onClick={() => { clearTradeFeedback(); setOrderType('limit'); }}>Limit</button>
         </div>
 
         {orderType === 'limit' && (
@@ -5764,6 +5770,8 @@ function FuturesPanel() {
             </div>
             <input
               type="number"
+              aria-label="Limit price"
+              inputMode="decimal"
               placeholder={currentPrice || '0'}
               value={limitPrice}
               onChange={e => { clearTradeFeedback(); setLimitPrice(e.target.value); }}
@@ -5784,7 +5792,7 @@ function FuturesPanel() {
                 </svg>
               </button>
             </div>
-            <input type="number" placeholder={amountInUsdc ? (dex === 'flash' ? `Max ${pacBalance.toFixed(2)}` : '20') : '0.01'} value={amount}
+            <input type="number" aria-label={amountInUsdc ? 'Margin in USDC' : `Amount in ${symbol}`} inputMode="decimal" placeholder={amountInUsdc ? (dex === 'flash' ? `Max ${pacBalance.toFixed(2)}` : '20') : '0.01'} value={amount}
               onChange={e => { clearTradeFeedback(); setAmount(e.target.value); setSizePct(0); }} style={S.input} />
           </div>
           <div style={{flex: compactMobile ? '0 0 92px' : 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 3}}>
@@ -5882,10 +5890,12 @@ function FuturesPanel() {
               buying power ${maxUsdc.toFixed(0)}
             </span>
           </div>
-          <input type="range" min="0" max="100" step={dex === 'flash' ? '1' : '5'} value={sizePct} className="grad-slider"
+          <input type="range" aria-label="Position size percentage" min="0" max="100" step={dex === 'flash' ? '1' : '5'} value={sizePct} className="grad-slider"
             onChange={e => handleSizePct(Number(e.target.value))} style={{...S.slider, '--val': `${sizePct}%`}} />
-          <div style={S.sliderLabels}>
-            <span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span>
+          <div className="futures-size-presets" style={S.sliderLabels}>
+            {[0, 25, 50, 75, 100].map(value => (
+              <button type="button" key={value} aria-pressed={sizePct === value} onClick={() => handleSizePct(value)}>{value}%</button>
+            ))}
           </div>
         </div>
 
@@ -9901,7 +9911,7 @@ function FuturesPanel() {
                 />
               </div>
             ) : (
-              <div className="futures-terminal-chart" role="tabpanel" style={{flex: '0 0 clamp(220px, 38vh, 360px)', position: 'relative', minHeight: 180}}>
+              <div className="futures-terminal-chart" role="tabpanel" aria-label="Market chart" style={{flex: '0 0 clamp(360px, 48dvh, 520px)', position: 'relative', minHeight: 360}}>
                 <TradingViewWidget symbol={symbol} pythSymbol={currentMarket?.pyth_symbol} positions={positions} orders={displayOrders} currentPrice={currentPrice} priceIncrement={currentMarket?.tick_size} chartOverlay={explainBadge} dex={dex} fetchCandles={fetchCandles} />
                 {fundingBadge}
               </div>
@@ -9953,17 +9963,29 @@ function FuturesPanel() {
       }
 
       return (
-        <div className="futures-terminal-workspace" style={{display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden'}}>
+        <div className="futures-terminal-workspace futures-terminal-workspace--desktop" style={{display: 'flex', flexDirection: 'column', flex: '1 0 auto', minHeight: 0, overflow: 'visible'}}>
           {renderSymbolBar()}
+          {supportsOrderBook && (
+            <div className="futures-mobile-market-tabs futures-tablet-market-tabs" role="group" aria-label="Market view">
+              {['chart', 'book'].map(view => (
+                <button type="button" key={view} aria-pressed={mobileMarketView === view}
+                  className={mobileMarketView === view ? 'is-active' : ''}
+                  onClick={() => setMobileMarketView(view)}>
+                  {view === 'chart' ? 'Chart' : 'Order book'}
+                </button>
+              ))}
+            </div>
+          )}
           {/* Top: chart + orderbook + controls */}
-          <div className="futures-terminal-workspace__primary" style={{display: 'flex', flex: '1 1 auto', minHeight: 0, overflow: 'hidden'}}>
-            <div className="futures-terminal-chart" style={{flex: `0 0 ${chartPct}%`, maxWidth: `${chartPct}%`, minHeight: 0, overflow: 'hidden', position: 'relative'}}>
+          <div className="futures-terminal-workspace__primary" data-market-view={supportsOrderBook ? mobileMarketView : 'chart'} style={{'--terminal-book-width': `${obWidth}px`, display: 'flex', flex: '1 0 auto', minHeight: 620, overflow: 'hidden'}}>
+            <div className="futures-terminal-chart" style={{flex: '1 1 0', minWidth: 0, minHeight: 0, overflow: 'hidden', position: 'relative'}}>
               <TradingViewWidget symbol={symbol} pythSymbol={currentMarket?.pyth_symbol} positions={positions} orders={displayOrders} currentPrice={currentPrice} priceIncrement={currentMarket?.tick_size} chartOverlay={explainBadge} dex={dex} fetchCandles={fetchCandles} />
             </div>
             {supportsOrderBook && (
               <>
                 {/* Drag handle: chart ↔ orderbook */}
-                <div style={S.dragHandleV} onMouseDown={dragChart} />
+                <div className="futures-terminal-split" style={S.dragHandleV} onMouseDown={dragChart} role="separator" aria-label="Resize chart" aria-orientation="vertical" tabIndex={0} aria-valuemin={340} aria-valuemax={400} aria-valuenow={ticketWidth} aria-valuetext={`${ticketWidth} pixel order ticket`}
+                  onKeyDown={e => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); setTicketWidth(value => Math.max(340, Math.min(400, value + (e.key === 'ArrowRight' ? -10 : 10)))); } }} />
                 <div className="futures-terminal-book" style={{flex: `0 0 ${obWidth}px`, minHeight: 0, overflow: 'hidden'}}>
                   {/* Decibel paints an authenticated snapshot first, then
                       follows its live depth WebSocket with key failover. */}
@@ -9978,13 +10000,15 @@ function FuturesPanel() {
                   />
                 </div>
                 {/* Drag handle: orderbook ↔ controls */}
-                <div style={S.dragHandleV} onMouseDown={dragOb} />
+                <div className="futures-terminal-split" style={S.dragHandleV} onMouseDown={dragOb} role="separator" aria-label="Resize order book" aria-orientation="vertical" tabIndex={0} aria-valuemin={280} aria-valuemax={320} aria-valuenow={obWidth}
+                  onKeyDown={e => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); setObWidth(value => Math.max(280, Math.min(320, value + (e.key === 'ArrowRight' ? 10 : -10)))); } }} />
               </>
             )}
-            <div className="futures-terminal-ticket" style={{flex: '1 1 0', minWidth: 0, minHeight: 0, overflow: 'hidden'}}>{renderTradeControls()}</div>
+            <div className="futures-terminal-ticket" style={{flex: `0 0 ${ticketWidth}px`, minWidth: 0, minHeight: 0, overflow: 'hidden'}}>{renderTradeControls()}</div>
           </div>
           {/* Drag handle: top ↔ bottom */}
-          <div style={S.dragHandleH} onMouseDown={dragBottom} />
+          <div className="futures-terminal-split futures-terminal-split--horizontal" style={S.dragHandleH} onMouseDown={dragBottom} role="separator" aria-label="Resize trading activity" aria-orientation="horizontal" tabIndex={0} aria-valuemin={60} aria-valuemax={500} aria-valuenow={bottomH}
+            onKeyDown={e => { if (e.key === 'ArrowUp' || e.key === 'ArrowDown') { e.preventDefault(); setBottomH(value => clampBottomHeight(value + (e.key === 'ArrowUp' ? 20 : -20))); } }} />
           {/* Bottom: positions/orders panel */}
           <BottomPanel
             bottomH={bottomH}

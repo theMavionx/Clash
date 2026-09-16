@@ -86,10 +86,14 @@ test('the complete Futures surface consumes the shared token contract', () => {
   }
 });
 
-test('canvas chart recreates with dedicated light and dark colors', () => {
+test('canvas chart resolves scoped terminal colors and recreates with the theme', () => {
   const chart = read('src/components/TradingViewWidget.jsx');
   assert.match(chart, /useFuturesTheme\(\)/u);
   assert.match(chart, /darkTheme \? '#111827' : '#FFFFFF'/u);
+  assert.match(chart, /getComputedStyle\(containerRef.current\)/u);
+  for (const token of ['--terminal-surface', '--terminal-text-muted', '--terminal-chart-grid', '--terminal-border']) {
+    assert.ok(chart.includes(`color('${token}'`), `canvas resolves ${token}`);
+  }
   assert.match(chart, /darkTheme \? '#34D399' : '#087A55'/u);
   assert.match(chart, /darkTheme \? '#F87171' : '#D14343'/u);
   assert.match(chart, /\}, \[darkTheme\]\);/u);

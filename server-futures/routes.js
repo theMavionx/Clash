@@ -5666,6 +5666,7 @@ router.post('/hibachi/import-fills', auth, async (req, res) => {
     if (!creds) return;
     const result = await hibachi.importFillsForPlayer(req.playerId, creds, {
       limit: req.body?.limit,
+      username: req.playerName,
     });
     if (result.imported > 0) {
       console.log(`[hibachi] imported ${result.imported} fill(s) for player=${req.playerName} account=${creds.accountId}`);
@@ -5680,6 +5681,20 @@ router.post('/hibachi/import-fills', auth, async (req, res) => {
   }
 });
 
+// Player-scoped reconciliation records. No exchange keys or account secrets.
+router.get('/hibachi/trade-records', auth, (req, res) => {
+  const parsedLimit = Number(req.query.limit);
+  const limit = Number.isFinite(parsedLimit) && parsedLimit > 0 ? Math.min(500,Math.floor(parsedLimit)) : 100;
+  const parsedOffset = Number(req.query.offset);
+  const offset = Number.isSafeInteger(parsedOffset) && parsedOffset > 0 ? Math.min(parsedOffset,1_000_000) : 0;
+  res.set('Cache-Control','no-store');
+  const records = db.db.prepare(`SELECT trade_id, username, player_id, account_id,
+    market, volume_quote AS volume, volume_currency, quantity, price, side, order_id,
+    executed_at, recorded_at FROM hibachi_trade_records WHERE player_id=?
+    ORDER BY executed_at, account_id, trade_id LIMIT ? OFFSET ?`).all(req.playerId,limit,offset);
+  res.json({records,limit,offset});
+});
+
 router.post('/hibachi/trade-history', auth, async (req, res) => {
   try {
     const creds = requireHibachiOwner(req, res);
@@ -5687,6 +5702,8 @@ router.post('/hibachi/trade-history', auth, async (req, res) => {
     const rows = await hibachi.getAccountTradeHistory(creds, {
       limit: req.body?.limit,
     });
+    const recorded = hibachi.recordFillsForPlayer(req.playerId, creds.accountId, rows, db, {username:req.playerName});
+    if (!recorded.ok) return res.status(Number(recorded.status) || 503).json(recorded);
     res.json(Array.isArray(rows) ? rows : []);
   } catch (e) {
     console.warn('[hibachi] trade-history failed:', e.message);

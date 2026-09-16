@@ -5,6 +5,8 @@ import test from 'node:test';
 
 const root = path.resolve(import.meta.dirname);
 const read = (file) => fs.readFileSync(path.join(root, file), 'utf8');
+// Count global theme declarations, not deliberate trading-only overrides.
+const sharedThemeBlocks = css => [...css.matchAll(/(?:^|\n):root[^{}]*\{([^{}]*)\}/gu)].map(match => match[1]).join('\n');
 
 function componentFiles(dir = path.join(root, 'src/components')) {
   return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -28,7 +30,7 @@ test('the app root owns the shared visual and accessibility behavior', () => {
 });
 
 test('critical shared tokens exist in both light and dark themes', () => {
-  const css = read('src/components/FuturesTerminal.css');
+  const css = sharedThemeBlocks(read('src/components/FuturesTerminal.css'));
   for (const token of ['brand', 'brand-ring', 'text-disabled', 'shadow-card', 'icon', 'icon-active']) {
     const matches = css.match(new RegExp(`--terminal-${token}:`, 'gu')) || [];
     assert.equal(matches.length, 2, `--terminal-${token} must exist in light and dark themes`);
@@ -109,9 +111,10 @@ test('shared button contract owns geometry, semantic tones, and icon controls', 
 
 test('shared depth tokens add restrained volume in both themes', () => {
   const css = read('src/components/FuturesTerminal.css');
+  const shared = sharedThemeBlocks(css);
   const player = read('src/components/PlayerInfo.jsx');
-  assert.equal((css.match(/--terminal-shadow-control:/gu) || []).length, 2);
-  assert.equal((css.match(/--terminal-shadow-card:/gu) || []).length, 2);
+  assert.equal((shared.match(/--terminal-shadow-control:/gu) || []).length, 2);
+  assert.equal((shared.match(/--terminal-shadow-card:/gu) || []).length, 2);
   assert.doesNotMatch(css, /\.clash-ui-root button \{[\s\S]{0,180}box-shadow:/u);
   assert.match(player, /0 0 0 2px rgba\(255,255,255,0\.86\)/u);
 });

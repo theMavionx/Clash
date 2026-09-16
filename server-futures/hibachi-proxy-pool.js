@@ -79,6 +79,8 @@ class HibachiProxyPool {
     this.maxFailureCooldownMs = boundedInteger(options.maxFailureCooldownMs, 5 * 60_000, this.failureCooldownMs, 60 * 60_000);
     this.geoCooldownMs = boundedInteger(options.geoCooldownMs, 30 * 60_000, 60_000, 24 * 60 * 60_000);
     this.roundRobin = 0;
+    this.maxInFlightPerProxy = boundedInteger(options.maxInFlightPerProxy, 32, 1, 256);
+    this.maxInFlight = boundedInteger(options.maxInFlight, 256, 1, 256);
 
     const unique = new Set();
     this.entries = [];
@@ -123,6 +125,9 @@ class HibachiProxyPool {
   acquire({ affinityKey = '', excluded = new Set() } = {}) {
     if (!this.configured) return null;
     const now = this.now();
+    if (this.entries.reduce((sum, entry) => sum + entry.inFlight, 0) >= this.maxInFlight) {
+      throw Object.assign(new Error('Hibachi proxy concurrency is full; retry shortly.'), {code:'HIBACHI_PROXY_POOL_BUSY',status:503,retryAfter:1});
+    }
     const count = this.entries.length;
     const start = affinityKey
       ? stableIndex(affinityKey, count)
@@ -133,6 +138,7 @@ class HibachiProxyPool {
       if (excluded.has(index)) continue;
       const entry = this.entries[index];
       if (entry.cooldownUntil > now) continue;
+      if (entry.inFlight >= this.maxInFlightPerProxy) continue;
       entry.inFlight += 1;
       entry.requests += 1;
       return {
@@ -143,6 +149,9 @@ class HibachiProxyPool {
       };
     }
 
+    if (this.entries.some((entry,index)=>!excluded.has(index) && entry.cooldownUntil <= now)) {
+      throw Object.assign(new Error('Available Hibachi proxies are busy; retry shortly.'), {code:'HIBACHI_PROXY_POOL_BUSY',status:503,retryAfter:1});
+    }
     if (this.allowDirectFallback) return null;
     const nextReadyAt = this.entries
       .filter((_, index) => !excluded.has(index))
@@ -218,6 +227,8 @@ class HibachiProxyPool {
       geoBlocks: this.entries.reduce((total, entry) => total + entry.geoBlocks, 0),
       directFallback: this.allowDirectFallback,
       readAttempts: this.readAttempts,
+      maxInFlight: this.maxInFlight,
+      maxInFlightPerProxy: this.maxInFlightPerProxy,
     };
   }
 
@@ -241,7 +252,7 @@ class HibachiProxyPool {
 function createHibachiProxyPool(options = {}) {
   const env = options.env || process.env;
   const lines = options.proxyLines || proxySourceLines(env, options.fsImpl || fs);
-  return new HibachiProxyPool(lines, {
+  const pool = new HibachiProxyPool(lines, {
     ProxyAgentClass: options.ProxyAgentClass || ProxyAgent,
     now: options.now || Date.now,
     allowDirectFallback: options.allowDirectFallback ?? enabled(env.HIBACHI_PROXY_DIRECT_FALLBACK, false),
@@ -250,7 +261,23 @@ function createHibachiProxyPool(options = {}) {
     failureCooldownMs: options.failureCooldownMs ?? env.HIBACHI_PROXY_FAILURE_COOLDOWN_MS,
     maxFailureCooldownMs: options.maxFailureCooldownMs ?? env.HIBACHI_PROXY_MAX_FAILURE_COOLDOWN_MS,
     geoCooldownMs: options.geoCooldownMs ?? env.HIBACHI_PROXY_GEO_COOLDOWN_MS,
+    maxInFlight: options.maxInFlight ?? env.HIBACHI_PROXY_MAX_IN_FLIGHT ?? 32,
+    maxInFlightPerProxy: options.maxInFlightPerProxy ?? env.HIBACHI_PROXY_MAX_IN_FLIGHT_PER_PROXY ?? 4,
   });
+  // Optional operator-supplied probe report from THIS deployment host. Unknown,
+  // failed and stale routes never become eligible for authenticated traffic.
+  const healthFile = String(env.HIBACHI_PROXY_HEALTH_FILE || '').trim();
+  if (healthFile) {
+    const report = JSON.parse((options.fsImpl || fs).readFileSync(healthFile, 'utf8'));
+    const age = (options.now || Date.now)() - Date.parse(report.checkedAt);
+    if (!Number.isFinite(age) || age < -60_000 || age > 24*60*60_000 || !Array.isArray(report.results)) {
+      throw new Error('Hibachi proxy health report is stale or invalid; probe again on this host.');
+    }
+    const allowed = new Set(report.results.filter(row=>row.market?.ok === true && row.accountOrigin?.ok === true).map(row=>row.proxyId));
+    pool.entries = pool.entries.filter(entry=>allowed.has(entry.id));
+    if (!pool.configured) throw new Error('No checked Hibachi account proxy is available.');
+  }
+  return pool;
 }
 
 module.exports = {

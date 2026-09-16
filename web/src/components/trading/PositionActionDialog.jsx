@@ -18,7 +18,7 @@ export default function PositionActionDialog({ title, onClose, children, feedbac
   }, []);
   if (typeof document === 'undefined') return null;
   return createPortal(
-    <dialog ref={ref} className="position-action-dialog" aria-labelledby={titleId}
+    <dialog ref={ref} className="position-action-dialog futures-terminal-portal" aria-labelledby={titleId}
       onCancel={event => { event.preventDefault(); event.stopPropagation(); onClose(); }}
       onClick={event => event.stopPropagation()} onKeyDown={event => event.stopPropagation()}>
       <header className="position-action-dialog__header">

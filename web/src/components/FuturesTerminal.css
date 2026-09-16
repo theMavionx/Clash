@@ -291,6 +291,123 @@ html {
   font: inherit;
 }
 
+/* Manual terminal skin. Tokens intentionally stop at this shell: game HUD,
+   unrelated dialogs and the user's saved theme remain independent. Explicit
+   trading portals share the skin without inheriting shell layout rules. */
+.futures-terminal-shell,
+.futures-terminal-portal {
+  --terminal-canvas: #f3f4f2;
+  --terminal-surface: #ffffff;
+  --terminal-surface-subtle: #f7f8f6;
+  --terminal-surface-muted: #eef1ed;
+  --terminal-surface-raised: #ffffff;
+  --terminal-border: #dce1da;
+  --terminal-border-strong: #b8c1b6;
+  --terminal-shadow-control: none;
+  --terminal-shadow-card: none;
+  font-variant-numeric: tabular-nums;
+}
+
+[data-ui-theme='dark'] .futures-terminal-shell,
+[data-futures-theme='dark'] .futures-terminal-shell,
+[data-ui-theme='dark'] .futures-terminal-portal,
+[data-futures-theme='dark'] .futures-terminal-portal {
+  --terminal-canvas: #141715;
+  --terminal-surface: #1e221f;
+  --terminal-surface-subtle: #242a25;
+  --terminal-surface-muted: #191d1a;
+  --terminal-surface-raised: #262d27;
+  --terminal-border: #343b35;
+  --terminal-border-strong: #555f56;
+  --terminal-text: #f3f5f2;
+  --terminal-text-muted: #b2bbb0;
+  --terminal-text-faint: #a1ab9f;
+  --terminal-chart-grid: #2a322c;
+}
+
+.futures-terminal-header { flex-shrink: 0; }
+.futures-terminal-header button { box-shadow: none !important; }
+.futures-market-strip {
+  border: 1px solid var(--terminal-border);
+  border-radius: 14px;
+  min-height: 64px;
+  padding: 10px 12px !important;
+  margin-bottom: 8px;
+}
+.futures-terminal-workspace__primary {
+  /* The account pane follows the tall market workspace, never steals chart height. */
+  height: max(620px, calc(100dvh - 180px));
+  flex: 0 0 auto !important;
+}
+.futures-terminal-workspace__primary > .futures-terminal-chart,
+.futures-terminal-workspace__primary > .futures-terminal-book,
+.futures-terminal-workspace__primary > .futures-terminal-ticket,
+.futures-terminal-activity {
+  border: 1px solid var(--terminal-border);
+  border-radius: 14px;
+  background: var(--terminal-surface);
+  min-width: 0;
+}
+.futures-terminal-workspace__primary > .futures-terminal-ticket {
+  min-width: 340px !important;
+  max-width: 400px;
+}
+.futures-terminal-workspace__primary > .futures-terminal-book {
+  flex-basis: var(--terminal-book-width, 300px) !important;
+}
+.futures-terminal-split {
+  flex: 0 0 8px !important;
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 4px;
+}
+.futures-terminal-split:hover,
+.futures-terminal-split:focus-visible {
+  background: var(--terminal-brand-soft) !important;
+  outline: 2px solid var(--terminal-orange);
+  outline-offset: -2px;
+}
+.futures-terminal-workspace__primary > .futures-terminal-chart:only-child {
+  flex: 1;
+}
+.futures-terminal-workspace__primary > .futures-terminal-chart + .futures-terminal-ticket {
+  margin-left: 8px;
+}
+.futures-order-ticket { padding: 12px !important; font-size: 13px; }
+.futures-order-ticket__fields {
+  border: 0 !important;
+  border-radius: 0 !important;
+  padding: 0 !important;
+  gap: 12px !important;
+}
+.futures-order-ticket input:not([type='range']):not([type='checkbox']),
+.futures-order-ticket select {
+  border-radius: 12px !important;
+  min-height: 44px;
+  box-sizing: border-box;
+}
+.futures-order-ticket button { box-shadow: none !important; }
+.futures-order-ticket__submit { border-radius: 12px !important; }
+.futures-size-presets button {
+  min-width: 36px;
+  min-height: 32px;
+  padding: 4px 6px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--terminal-text-muted);
+  cursor: pointer;
+  font-size: 11px;
+}
+.futures-size-presets button[aria-pressed='true'],
+.futures-size-presets button:hover {
+  color: var(--terminal-brand-text);
+  background: var(--terminal-brand-soft);
+  border-color: var(--terminal-orange);
+}
+.futures-tablet-market-tabs { display: none !important; }
+.futures-terminal-chart--compact { flex: 0 0 360px !important; min-height: 360px !important; }
+
 .futures-terminal-shell--compact {
   border: 1px solid var(--terminal-border) !important;
   border-radius: 16px !important;
@@ -425,13 +542,21 @@ html {
   }
 
   .futures-terminal-workspace__primary > .futures-terminal-book {
-    flex-basis: 160px !important;
+    display: none;
+    flex: 1 1 0 !important;
   }
 
   .futures-terminal-workspace__primary > .futures-terminal-chart {
-    flex-basis: 48% !important;
-    max-width: 48% !important;
+    flex: 1 1 0 !important;
+    max-width: none !important;
   }
+
+  .futures-tablet-market-tabs { display: flex !important; margin: 0 0 8px; }
+  .futures-terminal-workspace__primary { gap: 8px; }
+  .futures-terminal-workspace__primary > .futures-terminal-split { display: none !important; }
+  .futures-terminal-workspace__primary[data-market-view='book'] > .futures-terminal-book { display: block; }
+  .futures-terminal-workspace__primary[data-market-view='book'] > .futures-terminal-chart { display: none; }
+  .futures-terminal-workspace__primary > .futures-terminal-ticket { min-width: 300px !important; max-width: 340px; }
 
   .futures-order-ticket {
     gap: 6px !important;
@@ -472,6 +597,20 @@ html {
   .futures-order-ticket--compact {
     padding: 10px 10px max(18px, env(safe-area-inset-bottom)) !important;
   }
+
+  .futures-terminal-workspace--mobile { gap: 8px; }
+  .futures-terminal-workspace--mobile > .futures-terminal-chart,
+  .futures-terminal-workspace--mobile > .futures-terminal-book,
+  .futures-terminal-workspace--mobile > .futures-terminal-ticket {
+    border: 1px solid var(--terminal-border);
+    border-radius: 14px;
+  }
+  .futures-terminal-header button,
+  .futures-terminal-shell .futures-trading-chart button,
+  .futures-order-ticket button,
+  .futures-market-strip button { min-height: 44px; }
+  .futures-order-ticket input:not([type='range']):not([type='checkbox']),
+  .futures-order-ticket select { font-size: 16px !important; }
 
   .futures-order-ticket__submit {
     min-height: 48px;

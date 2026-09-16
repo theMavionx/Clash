@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const { secp256k1 } = require('@noble/curves/secp256k1');
 const { createReconnectingJsonWebSocket } = require('./reconnecting-json-websocket');
 const { createHibachiProxyPool } = require('./hibachi-proxy-pool');
+const { recordVerifiedFill } = require('./hibachi-trade-records');
 
 const HIBACHI_API = String(process.env.HIBACHI_API_URL || 'https://api.hibachi.xyz').replace(/\/+$/u, '');
 const HIBACHI_DATA_API = String(process.env.HIBACHI_DATA_API_URL || 'https://data-api.hibachi.xyz').replace(/\/+$/u, '');
@@ -35,6 +36,27 @@ const HIBACHI_WS_SNAPSHOT_WAIT_MS = Math.max(250, Math.min(5_000, Number(process
 const HIBACHI_WS_SNAPSHOT_MAX_AGE_MS = Math.max(1_000, Math.min(120_000, Number(process.env.HIBACHI_WS_SNAPSHOT_MAX_AGE_MS || 45_000)));
 const HIBACHI_WS_IDLE_CLOSE_MS = Math.max(15_000, Math.min(10 * 60_000, Number(process.env.HIBACHI_WS_IDLE_CLOSE_MS || 120_000)));
 const hibachiProxyPool = createHibachiProxyPool();
+const restOriginCooldown = new Map();
+const restOriginAccessBlock = new Map();
+
+function retryAfterSeconds(header, body, now = Date.now()) {
+  const numeric = Number(header);
+  if (header && Number.isFinite(numeric) && numeric > 0) return Math.ceil(numeric);
+  const date = header ? Date.parse(header) : NaN;
+  if (Number.isFinite(date) && date > now) return Math.ceil((date-now)/1000);
+  const fallback = Number(body);
+  return Number.isFinite(fallback) && fallback > 0 ? Math.ceil(fallback) : 30;
+}
+
+function checkRestOriginCooldown(base) {
+  if ((restOriginAccessBlock.get(base) || 0) > Date.now()) {
+    throw Object.assign(new Error(HIBACHI_IP_BLOCKED_MESSAGE), {code:'HIBACHI_IP_BLOCKED',status:403});
+  }
+  const remaining = (restOriginCooldown.get(base) || 0) - Date.now();
+  if (remaining > 0) throw Object.assign(new Error(HIBACHI_RATE_LIMITED_MESSAGE), {
+    code:'HIBACHI_RATE_LIMITED',status:429,retryAfter:Math.ceil(remaining/1000),
+  });
+}
 
 if (hibachiProxyPool.configured) {
   const stats = hibachiProxyPool.stats();
@@ -547,8 +569,11 @@ function applyAccountStreamMessage(snapshot, message) {
 
   const topic = String(message?.topic || message?.event || message?.type || '').toLowerCase();
   const data = message?.data || message?.result || message?.params || message;
+  // Heartbeats/order/trade events are not position snapshots. In particular an
+  // order event with a symbol must never remove an existing position.
+  if (!/balance|position/.test(topic)) return null;
   if (/balance/.test(topic) || data?.balance != null || data?.accountBalance != null || data?.account_balance != null) {
-    next.balance = firstPresent(data.balance, data.accountBalance, data.account_balance, data.accountEquity, data.account_equity, data.equity, next.balance);
+    next.balance = firstPresent(data.updatedCollateralBalance, data.balance, data.accountBalance, data.account_balance, data.accountEquity, data.account_equity, data.equity, next.balance);
     next.maximalWithdraw = firstPresent(
       data.maximalWithdraw,
       data.maximal_withdraw,
@@ -563,7 +588,12 @@ function applyAccountStreamMessage(snapshot, message) {
       next.maximalWithdraw,
     );
   }
-  if (/position/.test(topic) || data?.position || data?.positions || data?.symbol) {
+  if (topic === 'position_update' && data?.updatedPosition && data?.symbol) {
+    // Hibachi has one net position per symbol, including a side flip or close.
+    next.positions = next.positions.filter(p => symbolOf(positionSymbol(p)) !== symbolOf(data.symbol));
+    const update = { ...data.updatedPosition, symbol:data.symbol };
+    if (positionQuantity(update) > 0 && update.direction !== 'Closed') next.positions.push(update);
+  } else if (/position/.test(topic)) {
     const updates = rows(data?.positions || data?.position || data);
     if (updates.length > 0) {
       for (const update of updates) next.positions = mergePositionUpdate(next.positions, update);
@@ -603,7 +633,9 @@ class HibachiAccountStream {
       reconnectMinMs: 1000,
       reconnectMaxMs: 60_000,
       handshakeTimeoutMs: HIBACHI_WS_CONNECT_TIMEOUT_MS,
-      pingIntervalMs: 15_000,
+      // Official account stream lease is 10s; ping before it can expire.
+      pingIntervalMs: 5_000,
+      parseMessage: parseHibachiJson,
       pongTimeoutMs: HIBACHI_WS_CONNECT_TIMEOUT_MS,
       pingMessage: () => {
         if (!this.listenKey) return null;
@@ -626,9 +658,11 @@ class HibachiAccountStream {
       },
       onMessage: msg => this.handleMessage(msg),
       onClose: event => {
+        this.markStale({clearSnapshot:true});
         this.lastError = new Error(`Hibachi account WS closed ${event?.code || ''} ${event?.reason || ''}`.trim());
       },
       onError: event => {
+        this.markStale({clearSnapshot:true});
         this.lastError = event instanceof Error ? event : new Error(event?.message || 'Hibachi account WS error');
       },
       onStatus: status => {
@@ -675,6 +709,7 @@ class HibachiAccountStream {
 
   async ensureStarted() {
     this.touch();
+    if (HIBACHI_WS_ENABLED) this.client.connect();
     const fresh = this.freshSnapshot();
     if (fresh) return fresh;
     if (!HIBACHI_WS_ENABLED) return null;
@@ -704,7 +739,14 @@ class HibachiAccountStream {
   }
 
   handleMessage(message) {
+    if (Array.isArray(message)) { for (const item of message) this.handleMessage(item); return; }
     if (!message || typeof message !== 'object') return;
+    if (message.event === 'stream_expired') {
+      this.listenKey = null;
+      this.markStale({clearSnapshot:true});
+      this.client.reconnect();
+      return;
+    }
     const full = fullAccountSnapshot(message);
     if (full) {
       this.listenKey = message?.result?.listenKey || message?.listenKey || this.listenKey;
@@ -738,6 +780,7 @@ class HibachiAccountStream {
       this.snapshot = null;
       this.snapshotAt = 0;
     }
+    if (accountStreams.get(accountStreamKey(this.creds)) === this) accountStreams.delete(accountStreamKey(this.creds));
   }
 }
 
@@ -745,6 +788,7 @@ function accountStream(creds) {
   const key = accountStreamKey(creds);
   let stream = accountStreams.get(key);
   if (!stream) {
+    if (accountStreams.size >= HIBACHI_PRIVATE_READ_MAX_ENTRIES) accountStreams.values().next().value.close();
     stream = new HibachiAccountStream(creds);
     accountStreams.set(key, stream);
   }
@@ -756,6 +800,8 @@ class HibachiTradeStream {
     this.creds = { accountId: creds.accountId, apiKey: creds.apiKey };
     this.messageId = Math.floor(Math.random() * 1_000_000);
     this.pending = new Map();
+    this.connecting = null;
+    this.retryAfter = 0;
     this.idleTimer = null;
     this.lastTouch = Date.now();
     this.client = createReconnectingJsonWebSocket({
@@ -766,6 +812,7 @@ class HibachiTradeStream {
       reconnectMaxMs: 60_000,
       handshakeTimeoutMs: HIBACHI_WS_CONNECT_TIMEOUT_MS,
       pingIntervalMs: 0,
+      parseMessage: parseHibachiJson,
       onMessage: msg => this.handleMessage(msg),
       onClose: event => this.handleClose(new Error(`Hibachi trade WS closed ${event?.code || ''} ${event?.reason || ''}`.trim())),
       onError: event => this.handleClose(event instanceof Error ? event : new Error(event?.message || 'Hibachi trade WS error')),
@@ -805,6 +852,14 @@ class HibachiTradeStream {
     throw new Error('Hibachi trade WS connect timed out');
   }
 
+  warm() {
+    if (this.connecting || Date.now() < this.retryAfter) return;
+    this.connecting = this.ensureOpen().catch(() => {
+      this.retryAfter = Date.now() + 30000;
+      this.client.close();
+    }).finally(() => { this.connecting = null; });
+  }
+
   handleMessage(message) {
     if (!message?.id) return;
     const pending = this.pending.get(Number(message.id));
@@ -828,8 +883,6 @@ class HibachiTradeStream {
       item.reject(error || new Error('Hibachi trade WS closed'));
     }
     this.ws = null;
-    clearTimeout(this.idleTimer);
-    this.idleTimer = null;
   }
 
   async rpc(method, params = {}) {
@@ -854,8 +907,11 @@ class HibachiTradeStream {
   }
 
   close() {
+    clearTimeout(this.idleTimer);
+    this.idleTimer = null;
     this.handleClose();
     this.client.close();
+    if (tradeStreams.get(tradeStreamKey(this.creds)) === this) tradeStreams.delete(tradeStreamKey(this.creds));
   }
 }
 
@@ -863,6 +919,7 @@ function tradeStream(creds) {
   const key = tradeStreamKey(creds);
   let stream = tradeStreams.get(key);
   if (!stream) {
+    if (tradeStreams.size >= HIBACHI_PRIVATE_READ_MAX_ENTRIES) tradeStreams.values().next().value.close();
     stream = new HibachiTradeStream(creds);
     tradeStreams.set(key, stream);
   }
@@ -958,6 +1015,8 @@ function proxyAffinityKey(apiKey, accountId) {
 
 function isProxyTransportError(error) {
   if (Number(error?.status) === 407) return true;
+  if (Number(error?.status) >= 400) return false;
+  if (/redirect/iu.test(String(error?.cause?.message || error?.message || ''))) return false;
   const code = String(error?.cause?.code || error?.code || '');
   if (/^(?:ECONN|EHOST|ENET|ETIMEDOUT|UND_ERR_)/u.test(code)) return true;
   return /fetch failed|network|socket|connect|proxy|tunnel|timed out|aborted/iu.test(String(error?.message || ''));
@@ -965,7 +1024,8 @@ function isProxyTransportError(error) {
 
 function shouldRetryHibachiRead(error, method, lease) {
   if (!lease || !['GET', 'HEAD'].includes(method)) return false;
-  return isRateLimitedError(error) || isIpBlockedError(error) || isProxyTransportError(error);
+  // A new IP must not bypass provider/account rate or regional restrictions.
+  return !isRateLimitedError(error) && !isIpBlockedError(error) && isProxyTransportError(error);
 }
 
 async function request(base, method, path, { apiKey, accountId, body } = {}) {
@@ -990,12 +1050,17 @@ async function request(base, method, path, { apiKey, accountId, body } = {}) {
     : 1;
   const excluded = new Set();
   let lastError = null;
+  const deadline = Date.now() + 12_000;
 
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    checkRestOriginCooldown(base);
     await acquireRestRateSlot(path);
+    checkRestOriginCooldown(base);
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw Object.assign(new Error('Hibachi request deadline exceeded.'), {code:'HIBACHI_TIMEOUT',status:504});
     let lease = null;
     const ctrl = new AbortController();
-    const timeout = setTimeout(() => ctrl.abort(), 12_000);
+    const timeout = setTimeout(() => ctrl.abort(), remaining);
     try {
       if (useAccountProxy) {
         lease = hibachiProxyPool.acquire({
@@ -1008,6 +1073,7 @@ async function request(base, method, path, { apiKey, accountId, body } = {}) {
         headers,
         body: payload,
         signal: ctrl.signal,
+        redirect: 'error',
       };
       if (lease?.dispatcher) requestOptions.dispatcher = lease.dispatcher;
       const r = await fetch(`${base}${path}`, requestOptions);
@@ -1019,11 +1085,8 @@ async function request(base, method, path, { apiKey, accountId, body } = {}) {
           ? data
           : [data?.title, data?.detail, data?.message, data?.error, text].filter(Boolean).join(' ');
         if (r.status === 429) {
-          const headerRetryAfter = Number(r.headers.get('retry-after'));
-          const bodyRetryAfter = Number(data?.retry_after ?? data?.retryAfter);
-          const retryAfter = Number.isFinite(headerRetryAfter) && headerRetryAfter > 0
-            ? headerRetryAfter
-            : (Number.isFinite(bodyRetryAfter) && bodyRetryAfter > 0 ? bodyRetryAfter : null);
+          const retryAfter = retryAfterSeconds(r.headers.get('retry-after'), data?.retry_after ?? data?.retryAfter);
+          restOriginCooldown.set(base, Math.max(restOriginCooldown.get(base) || 0, Date.now()+retryAfter*1000));
           const err = new Error(retryAfter
             ? `Hibachi is temporarily rate-limiting requests. Retry in ${Math.ceil(retryAfter)} seconds.`
             : HIBACHI_RATE_LIMITED_MESSAGE);
@@ -1034,9 +1097,11 @@ async function request(base, method, path, { apiKey, accountId, body } = {}) {
           throw err;
         }
         const explicitGeoBlock = r.status === 451
+          || (String(data?.errorCode) === '6' && /^Cannot access Hibachi from [A-Z]{2}[.!]?$/u.test(String(data?.message || '')))
           || Number(data?.error_code) === 1009
           || /(?:country|region|jurisdiction|geographic|geo-location|ip address).{0,80}(?:unsupported|restricted|blocked|prohibited|not available)|(?:unsupported|restricted|blocked|prohibited|not available).{0,80}(?:country|region|jurisdiction|geographic|geo-location|ip address)/iu.test(errorText);
-        if ((r.status === 403 || r.status === 451) && explicitGeoBlock) {
+        if ((r.status === 401 || r.status === 403 || r.status === 451) && explicitGeoBlock) {
+          restOriginAccessBlock.set(base, Date.now()+30*60_000);
           const err = new Error(HIBACHI_IP_BLOCKED_MESSAGE);
           err.code = 'HIBACHI_IP_BLOCKED';
           err.status = r.status;
@@ -1925,8 +1990,12 @@ async function getOrders(credsInput, opts = {}) {
   let j = null;
   const forceLive = Boolean(opts.forceLive || opts.force_live);
   if (!forceLive && HIBACHI_WS_ENABLED) {
-    try {
-      const response = await tradeStream(creds).rpc('orders.status');
+    const stream = tradeStream(creds);
+    // Cold/blocked WS must not add its 4s handshake deadline to a REST read.
+    // Warm once in background; subsequent reads reuse the open connection.
+    if (stream.client.readyState() !== 1) stream.warm();
+    else try {
+      const response = await stream.rpc('orders.status');
       j = response?.result || response;
     } catch (e) {
       logHibachiWs('orders_fallback_rest', creds, { message: e.message || String(e) });
@@ -2426,7 +2495,7 @@ function resolveHibachiAccountOwner(dbModule, requestedPlayerId, accountId) {
   return { accountId: normalizedAccountId, playerId: normalizedPlayerId };
 }
 
-function importNormalizedFillsForPlayer(playerId, accountId, fills, dbModule = require('./db')) {
+function importNormalizedFillsForPlayer(playerId, accountId, fills, dbModule = require('./db'), {username} = {}) {
   let owner;
   try {
     owner = resolveHibachiAccountOwner(dbModule, playerId, accountId);
@@ -2448,6 +2517,7 @@ function importNormalizedFillsForPlayer(playerId, accountId, fills, dbModule = r
   let imported = 0;
   let updated = 0;
   let skipped = 0;
+  let recordFailures = 0;
   // Volume is credited exclusively from execution rows. Order-history rows
   // are aggregates and are kept only as a read/display fallback; importing
   // both representations is what previously doubled some tournament volume.
@@ -2470,21 +2540,30 @@ function importNormalizedFillsForPlayer(playerId, accountId, fills, dbModule = r
       if (before && String(before.player_id) !== owner.playerId) {
         console.warn(`[hibachi] refused to reassign verified trade ${trade.clientOrderId} from ${before.player_id} to ${owner.playerId}`);
         skipped++;
+        recordFailures++;
         continue;
       }
-      const r = dbModule.upsertVerifiedTrade(owner.playerId, trade);
+      const r = dbModule.db.transaction(() => {
+        const saved = dbModule.upsertVerifiedTrade(owner.playerId, trade);
+        recordVerifiedFill(dbModule.db, {playerId:owner.playerId, username, accountId:owner.accountId, trade});
+        return saved;
+      })();
       if (r?.inserted) imported += r.inserted;
       else if (r?.updated) updated += r.updated;
       else skipped++;
     } catch (e) {
       skipped++;
+      recordFailures++;
       if (!/UNIQUE|constraint/i.test(e.message || '')) {
         console.warn('[hibachi] addTrade failed:', e.message);
       }
     }
   }
   return {
-    ok: true,
+    ok: recordFailures === 0,
+    ...(recordFailures ? {status:503, code:'HIBACHI_RECORD_PERSIST_FAILED', retryable:true,
+      error:'Some verified executions could not be recorded. Retry history synchronization; do not resubmit orders.'} : {}),
+    recordFailures,
     imported,
     updated,
     adopted: 0,
@@ -2515,10 +2594,15 @@ async function importFillsForPlayer(playerId, credsInput, opts = {}) {
       attribution: 'hibachi_api_no_builder_code',
     };
   }
-  return importNormalizedFillsForPlayer(playerId, creds.accountId, fills);
+  return importNormalizedFillsForPlayer(playerId, creds.accountId, fills, require('./db'), {username:opts.username});
 }
 
 function resetCachesForTests() {
+  for (const stream of [...accountStreams.values(), ...tradeStreams.values()]) stream.close();
+  accountStreams.clear();
+  tradeStreams.clear();
+  restOriginCooldown.clear();
+  restOriginAccessBlock.clear();
   for (const cache of [inventoryCache, exchangeInfoCache, contractMapCache]) {
     cache.at = 0;
     cache.payload = null;
@@ -2555,7 +2639,10 @@ module.exports = {
   cancelOrder,
   getAccountTradeHistory,
   importFillsForPlayer,
+  recordFillsForPlayer: importNormalizedFillsForPlayer,
   __testing: {
+    applyAccountStreamMessage,
+    HibachiAccountStream,
     resetCaches: resetCachesForTests,
     proxyPoolStats: () => hibachiProxyPool.stats(),
     normalizeTrade,
@@ -2565,5 +2652,6 @@ module.exports = {
     dedupeTradeRows,
     importNormalizedFillsForPlayer,
     resolveHibachiAccountOwner,
+    retryAfterSeconds,
   },
 };

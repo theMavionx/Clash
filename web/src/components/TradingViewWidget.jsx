@@ -459,17 +459,31 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
   useEffect(() => {
     if (!containerRef.current) return;
 
+    // Resolve the containing terminal's scoped palette for the canvas renderer.
+    // Fallbacks retain the shared appearance when rendered outside a terminal.
+    const styles = getComputedStyle(containerRef.current);
+    const color = (token, fallback) => styles.getPropertyValue(token).trim() || fallback;
+    const background = color('--terminal-surface', darkTheme ? '#111827' : '#FFFFFF');
+    const textColor = color('--terminal-text-muted', darkTheme ? '#AAB4C3' : '#6B7280');
+    const gridColor = color('--terminal-chart-grid', darkTheme ? '#202A39' : '#F3F4F6');
+    const borderColor = color('--terminal-border', darkTheme ? '#2C3748' : '#E5E7EB');
     const chart = createChart(containerRef.current, {
-      // lightweight-charts paints to canvas, so it needs resolved color values;
-      // CSS custom properties are only used by the surrounding DOM shell.
-      layout: { background: { color: darkTheme ? '#111827' : '#FFFFFF' }, textColor: darkTheme ? '#AAB4C3' : '#6B7280', fontSize: 11, fontFamily: 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' },
-      grid: { vertLines: { color: darkTheme ? '#202A39' : '#F3F4F6' }, horzLines: { color: darkTheme ? '#202A39' : '#F3F4F6' } },
+      layout: { background: { color: background }, textColor, fontSize: 11, fontFamily: 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' },
+      grid: { vertLines: { color: gridColor }, horzLines: { color: gridColor } },
       crosshair: { mode: 0 },
-      rightPriceScale: { borderColor: darkTheme ? '#2C3748' : '#E5E7EB', scaleMargins: { top: 0.1, bottom: 0.1 } },
-      timeScale: { borderColor: darkTheme ? '#2C3748' : '#E5E7EB', timeVisible: true, secondsVisible: false },
-      handleScroll: true,
-      handleScale: true,
+      rightPriceScale: { borderColor, scaleMargins: { top: 0.1, bottom: 0.1 } },
+      timeScale: { borderColor, timeVisible: true, secondsVisible: false },
+      handleScroll: { mouseWheel: false, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false },
+      handleScale: { mouseWheel: false, pinch: true, axisPressedMouseMove: true },
     });
+
+    // Let ordinary wheel/touch scroll the surrounding trading workspace.
+    // Shift+wheel explicitly opts into chart zoom; dragging/pinching still work.
+    const chartContainer = containerRef.current;
+    const onChartWheel = event => {
+      chart.applyOptions({ handleScale: { mouseWheel: event.shiftKey } });
+    };
+    chartContainer.addEventListener('wheel', onChartWheel, {capture:true, passive:true});
 
     const series = chart.addSeries(CandlestickSeries, {
       upColor: darkTheme ? '#34D399' : '#087A55', downColor: darkTheme ? '#F87171' : '#D14343',
@@ -491,6 +505,7 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
     ro.observe(containerRef.current);
 
     return () => {
+      chartContainer.removeEventListener('wheel', onChartWheel, true);
       ro.disconnect();
       chart.remove();
       chartRef.current = null;
@@ -1001,7 +1016,7 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
   }, [positions, orders, symbol, darkTheme]);
 
   return (
-    <section className="futures-trading-chart" style={{ width: '100%', height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column', background: 'var(--terminal-surface)' }} aria-label={`${symbol} price chart`}>
+    <section className="futures-trading-chart" style={{ width: '100%', height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column', background: 'var(--terminal-surface)' }} aria-label={`${symbol} price chart`} title="Scroll to move the panel. Shift + wheel to zoom the chart; drag to pan.">
       {/* Timeframe selector */}
       <div style={S.tfBar}>
         {INTERVALS.map(tf => (

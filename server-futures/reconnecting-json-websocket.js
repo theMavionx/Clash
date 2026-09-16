@@ -12,6 +12,7 @@ function createReconnectingJsonWebSocket({
   pongTimeoutMs = 10000,
   pingMessage = { type: 'ping' },
   isPong = msg => msg?.type === 'pong' || msg?.type === 'ping' || msg?.status === 200,
+  parseMessage = JSON.parse,
   onOpen,
   onMessage,
   onClose,
@@ -44,8 +45,8 @@ function createReconnectingJsonWebSocket({
 
   const sendJson = payload => {
     if (!ws || ws.readyState !== WebSocket.OPEN) return false;
-    ws.send(JSON.stringify(payload));
-    return true;
+    try { ws.send(JSON.stringify(payload)); return true; }
+    catch { return false; }
   };
 
   const armPing = () => {
@@ -87,17 +88,20 @@ function createReconnectingJsonWebSocket({
     const target = typeof getUrl === 'function' ? getUrl() : url;
     if (!target) return false;
     emitStatus({ status: 'connecting', at: Date.now() });
-    ws = new WebSocket(target, { headers: typeof headers === 'function' ? headers() : headers, handshakeTimeout: handshakeTimeoutMs });
-    ws.on('open', event => {
+    const current = new WebSocket(target, { headers: typeof headers === 'function' ? headers() : headers, handshakeTimeout: handshakeTimeoutMs });
+    ws = current;
+    current.on('open', event => {
+      if (ws !== current || stopped) return;
       retryMs = reconnectMinMs;
       emitStatus({ status: 'open', at: Date.now() });
       armPing();
       onOpen?.(event, api);
     });
-    ws.on('message', raw => {
+    current.on('message', raw => {
+      if (ws !== current || stopped) return;
       let msg = null;
       const text = Buffer.isBuffer(raw) ? raw.toString('utf8') : String(raw || '');
-      try { msg = JSON.parse(text); } catch { msg = text; }
+      try { msg = parseMessage(text); } catch { msg = text; }
       if (isPong?.(msg)) {
         clearTimer(pongTimer);
         pongTimer = null;
@@ -105,13 +109,14 @@ function createReconnectingJsonWebSocket({
       }
       onMessage?.(msg, raw, api);
     });
-    ws.on('error', event => {
+    current.on('error', event => {
+      if (ws !== current || stopped) return;
       emitStatus({ status: 'error', at: Date.now(), message: event?.message || String(event || '') });
       onError?.(event, api);
     });
-    ws.on('close', (code, reason) => {
-      const closed = ws;
-      if (ws === closed) ws = null;
+    current.on('close', (code, reason) => {
+      if (ws !== current) return;
+      ws = null;
       clearTimer(pingTimer);
       clearTimer(pongTimer);
       pingTimer = null;

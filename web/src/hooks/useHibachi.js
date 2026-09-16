@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { formatUnits } from 'viem';
+import { openHibachiPriceStream, mergeHibachiStreamPrices } from '../lib/hibachiPriceStream';
 import { useDex } from '../contexts/DexContext';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { BASE_CHAIN_ID, USDC_ADDRESS as BASE_USDC_ADDRESS } from '../lib/avantisContract';
@@ -648,13 +649,33 @@ export function useHibachi() {
   const fetchPrices = useCallback(async () => {
     try {
       const payload = await fetchHibachiPublicJson('/api/futures/prices?dex=hibachi');
-      const rows = normalizeEnvelope(payload);
+      const rows = mergeHibachiStreamPrices(normalizeEnvelope(payload), livePricesRef.current);
       allPricesRef.current = rows;
       setPrices(filterMarketsForHibachiAccount(rows, account));
     } catch (e) {
       console.warn('[useHibachi] prices:', e?.message || e);
     }
   }, [account, fetchHibachiPublicJson]);
+
+  const livePricesRef = useRef(new Map());
+  const priceStreamSymbols = markets.map(m => m.market_name || `${m.symbol}/USDT-P`).sort().join(',');
+  useEffect(() => {
+    if (!isActiveDex || !priceStreamSymbols || typeof WebSocket === 'undefined') return undefined;
+    let stop;
+    const start = () => {
+      stop?.(); stop = null;
+      livePricesRef.current.clear();
+      if (document.visibilityState !== 'visible') return;
+      stop = openHibachiPriceStream({symbols:priceStreamSymbols.split(','), onPrices: updates => {
+        for (const [symbol, value] of updates) livePricesRef.current.set(symbol, value);
+        allPricesRef.current = mergeHibachiStreamPrices(allPricesRef.current, updates);
+        setPrices(previous => mergeHibachiStreamPrices(previous, updates));
+      }});
+    };
+    start();
+    document.addEventListener('visibilitychange', start);
+    return () => { document.removeEventListener('visibilitychange', start); stop?.(); livePricesRef.current.clear(); };
+  }, [isActiveDex, priceStreamSymbols]);
 
   const authedPost = useCallback(async (path, body = {}) => {
     if (!walletAddr) throw new Error('Connect EVM wallet first');
