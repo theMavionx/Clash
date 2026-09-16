@@ -1,5 +1,14 @@
 # Active Session State
 
+## Position TP/SL polish — Released (2026-09-16)
+
+- Owner requested numeric leverage input removal and better existing-position
+  protection dialog styling. Slider remains; formulas and venue save calls unchanged.
+- Released `89b35e4e`, current `20260916075134-89b35e4e`. Full Deploy gate,
+  22 focused tests, desktop/mobile mock save and wheel checks passed.
+- Public JS and CSS byte-match; five services online; no new futures/MCP errors.
+  Rollback and remaining upstream limitations in trading-release-2026-09-16.md.
+
 ## Trading terminal / Hibachi — Released (2026-09-16)
 
 - Commit `aa8f3f81`, release `20260916065900-aa8f3f81`; canonical Deploy gate,

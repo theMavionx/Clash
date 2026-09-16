@@ -83,3 +83,15 @@ These follow-up changes are not in aa8f3f81; second release prepared after verif
   browser checks confirm desktop/320px modal appearance and mock save callback
   with TP85000/SL75000; no funded exchange action. Numeric wheel blurs the input
   without blocking dialog scrolling. Canonical Deploy gate passed before release.
+- Released `89b35e4e` as `20260916075134-89b35e4e`, completed07:54:32UTC.
+  At07:54:48UTC five services online with zero restarts; public API reads200,
+  private records401. Public FuturesPanel-D9M32tC6.js (967571bytes) and
+  FuturesPanel-B1Jqibo_.css both HTTP200 and exact SHA256 match to release.
+  Numeric leverage marker absent; position editor and style markers present.
+- Client log window: one info, no warnings/errors; no new futures/MCP error
+  bytes. Main API log grew16002bytes, no matched syntax/record-write errors;
+  preexisting upstream warning issue is not addressed by this styling change.
+- Actual dialog wheel at800x420 scrolled body to138.4px and preserved TP85000.
+- Retained rollback `20260916071622-f484e531`; standard retention removed older
+  `20260916065900-aa8f3f81` release files (rebuildable from Git). Shared DBs and
+  pre-migration backup retained. Standard payment-sync also refreshed its quote.
