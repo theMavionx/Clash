@@ -8,8 +8,10 @@
 - Backup and rollback details: `production/reports/trading-release-2026-09-16.md`.
 - Owner now requests leverage-preset removal, one submit with side selector,
   and compact inline entry TP/SL. Follow-up implemented; full Deploy gate,
-  21 focused tests and integrated mock desktop/mobile flow passed. Approved
-  second deployment pending; see release report for scope and limitations.
+  21 focused tests and integrated mock desktop/mobile flow passed. Released
+  `f484e531` as `20260916071622-f484e531`; public JS matches, five services online,
+  no new futures/MCP errors. Main API upstream429 warnings remain; no real
+  trade-record import observed. See release report for scope and limitations.
 
 ## Fresh User Log Audit / CSS Recovery — Released (2026-09-15 evening)
 

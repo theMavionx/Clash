@@ -54,3 +54,21 @@ These follow-up changes are not in aa8f3f81; second release prepared after verif
 - Mock callbacks are not funded exchange execution. No real orders placed.
 - team-ui workflow guided shared ticket direction, inline controls and responsive
   verification. Keyboard/label coverage is focused; no gamepad certification claimed.
+
+## Follow-up production result
+- UI commit `f484e531`; current release `/opt/clash/releases/20260916071622-f484e531`.
+  Canonical deployment completed07:19:52UTC; live verification07:20:09UTC.
+- All five services online, zero restarts. Hibachi markets/prices, LeverUp markets,
+  /api/online HTTP200; private records route401 without authentication.
+- Public FuturesPanel-C4yzOkmw.js HTTP200, 966957bytes, exact SHA256 match to
+  release; inline TP/SL, side selector and enabled-empty guard markers present.
+- New client log window empty; no new futures/MCP error bytes. Main API log
+  increment remains predominantly upstream429 retry warnings (227/229 lines in
+  follow-up sample); no matched syntax/SQLite/record errors. Unrelated upstream
+  rate limits remain a limitation, not proven fixed by this UI release.
+- Real trade-record import remains unobserved (zero rows); no funded trades used.
+- Additional integrated check: keyboard Space toggles protection; wheel over
+  focused SL scrolls parent166.4->248.8 while preserving value75000.
+- Rollback retained: `20260916065900-aa8f3f81`. Standard last-two retention removed
+  older `20260915201518-665fef02` deployment files, recoverable by rebuilding Git.
+  Shared databases and pre-migration backup were retained.
