@@ -5695,6 +5695,16 @@ router.get('/hibachi/trade-records', auth, (req, res) => {
   res.json({records,limit,offset});
 });
 
+router.post('/hibachi/funding-history', auth, async (req, res) => {
+  try {
+    const creds = requireHibachiOwner(req, res);
+    if (!creds) return;
+    res.json(await hibachi.getAccountFundingHistory(creds, { limit: req.body?.limit }));
+  } catch (e) {
+    res.status(hibachiErrorStatus(e)).json(hibachiErrorBody(e, 'Failed to load Hibachi funding history'));
+  }
+});
+
 router.post('/hibachi/trade-history', auth, async (req, res) => {
   try {
     const creds = requireHibachiOwner(req, res);

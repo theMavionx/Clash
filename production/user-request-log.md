@@ -1,5 +1,13 @@
 # User Request Log
 
+## UR-2026-09-16-TERMINAL-HISTORY-AUDIT
+
+- Owner requested another practical trading UI polish/optimization pass and
+  verification that Hibachi history and related views work. Continue approved
+  production rollout after local tests; no funded test orders.
+- Bounded fixes: Hibachi funding routing, history ordering/labels/refresh/error
+  states, button contrast and disabled-state clarity. Existing trading logic retained.
+
 ## UR-2026-09-16-POSITION-TPSL-POLISH
 
 - Owner requested removing the numeric leverage input shown in a screenshot,

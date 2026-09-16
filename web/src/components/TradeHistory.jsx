@@ -448,16 +448,19 @@ function normalizeGenericTrade(fill, dexName, markets = []) {
     : isClose
       ? (isShort ? 'close_short' : 'close_long')
       : (isShort ? 'open_short' : 'open_long');
+  // Hibachi execution side is buy/sell, not proof that a position was opened
+  // or closed. One fill may even cross zero. Keep the exchange meaning.
+  const displaySide = dexName === 'hibachi' ? (isShort ? 'ask' : 'bid') : side;
   const amount = Math.abs(Number(fill?.amount ?? fill?.size ?? fill?.quantity ?? fill?.base_size ?? fill?.baseSize ?? 0));
   const price = fill?.price ?? fill?.fill_price ?? fill?.fillPrice ?? fill?.execution_price ?? fill?.executionPrice ?? fill?.avgExecutionPrice;
   const ts = fill?.created_at ?? fill?.createdAt ?? fill?.timestamp ?? fill?.time ?? fill?.event_time ?? fill?.executedAt;
   return {
     ...fill,
     _dex: dexName,
-    id: fill?.id || fill?.fill_id || fill?.fillId || fill?.trade_id || fill?.tradeId || fill?.order_id || fill?.orderId || fill?.client_order_id || `${dexName}:${symbol}:${ts}:${price}:${amount}`,
+    id: (dexName === 'hibachi' ? fill?.clientOrderId : null) || fill?.id || fill?.fill_id || fill?.fillId || fill?.trade_id || fill?.tradeId || fill?.order_id || fill?.orderId || fill?.client_order_id || `${dexName}:${symbol}:${ts}:${price}:${amount}`,
     symbol,
-    side,
-    action: side,
+    side: displaySide,
+    action: displaySide,
     amount,
     price,
     fee: Math.abs(Number(fill?.fee ?? fill?.fee_amount ?? fill?.feeAmount ?? 0)),
@@ -533,6 +536,7 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
 
     setLoading(true);
     setError('');
+    setTrades([]);
 
     async function load() {
       try {
@@ -765,6 +769,7 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
             : (e?.message || 'Could not load trade history'));
         }
       } finally {
+        clearTimeout(timeout);
         if (!cancelled) setLoading(false);
       }
     }
@@ -796,10 +801,10 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
   const sortBy = filters?.sortBy || 'time';
   const dir = filters?.sortDir === 'asc' ? 1 : -1;
   filtered = [...filtered].sort((a, b) => {
-    if (sortBy === 'time') return dir * (timeMs(b.created_at) - timeMs(a.created_at));
+    if (sortBy === 'time') return dir * (timeMs(a.created_at) - timeMs(b.created_at));
     if (sortBy === 'symbol') return dir * (a.symbol || '').localeCompare(b.symbol || '');
-    if (sortBy === 'size') return dir * (Math.abs(parseFloat(b.amount || 0)) - Math.abs(parseFloat(a.amount || 0)));
-    if (sortBy === 'price') return dir * (parseFloat(b.price || 0) - parseFloat(a.price || 0));
+    if (sortBy === 'size') return dir * (Math.abs(parseFloat(a.amount || 0)) - Math.abs(parseFloat(b.amount || 0)));
+    if (sortBy === 'price') return dir * (parseFloat(a.price || 0) - parseFloat(b.price || 0));
     return 0;
   });
 
@@ -816,14 +821,14 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
   }
   if (!filtered.length) {
     const name = dex === 'decibel' ? 'Decibel ' : dex === 'domfi' ? 'DomFi ' : dex === 'etoro' ? 'eToro ' : dex === 'ostium' ? 'Ostium ' : dex === 'monad' ? 'Perpl ' : dex === 'phoenix' ? 'Phoenix ' : dex === 'hyperliquid' ? 'Hyperliquid ' : dex === 'risex' ? 'RISEx ' : dex === 'nado' ? 'Nado ' : dex === 'ondo' ? 'Ondo ' : dex === 'leverup' ? 'LeverUp ' : dex === 'aster' ? 'Aster ' : dex === 'hotstuff' ? 'Hotstuff ' : dex === 'grvt' ? 'GRVT ' : dex === 'gmtrade' ? 'GMTrade ' : dex === 'flash' ? 'Flash Trade ' : dex === 'hibachi' ? 'Hibachi ' : dex === 'katana' ? 'Katana ' : dex === 'gmx' ? 'GMX ' : dex === 'avantis' ? 'Avantis ' : dex === 'lighter' ? 'Lighter ' : dex === 'rhlighter' ? 'Robinhood Lighter ' : dex === 'bulk' ? 'Bulk ' : dex === 'imperial' ? 'Imperial ' : '';
-    return <div style={S.state}>No {name}trade history</div>;
+    return <div style={S.state}>{trades.length ? 'No trades match these filters' : `No recent ${name}trade history`}<div><button type="button" style={S.retryButton} onClick={() => setReloadKey(key => key + 1)}>Refresh</button></div></div>;
   }
 
   const isDecibel = dex === 'decibel';
   const showPnl = dex === 'decibel' || dex === 'domfi' || dex === 'etoro' || dex === 'ostium' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'leverup' || dex === 'aster' || dex === 'hotstuff' || dex === 'grvt' || dex === 'gmtrade' || dex === 'flash' || dex === 'hibachi' || dex === 'katana' || dex === 'gmx' || dex === 'avantis' || dex === 'lighter' || dex === 'rhlighter' || dex === 'bulk' || dex === 'imperial';
 
   return (
-    <div style={S.scroller}>
+    <div><div style={S.toolbar}><span>Recent trades · {filtered.length}</span><button type="button" style={S.retryButton} onClick={() => setReloadKey(key => key + 1)}>Refresh</button></div><div style={S.scroller}>
     <table style={S.table}>
       <thead><tr>
         <th style={S.th}>Time</th>
@@ -840,7 +845,7 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
           const side = String(t.side || t.action || '').toLowerCase();
           const isOpen = side.includes('open');
           const isLong = side.includes('long') || side === 'bid';
-          const label = isOpen ? (isLong ? 'Open Long' : 'Open Short') : (isLong ? 'Close Long' : 'Close Short');
+          const label = dex === 'hibachi' ? (isLong ? 'Buy' : 'Sell') : isOpen ? (isLong ? 'Open Long' : 'Open Short') : (isLong ? 'Close Long' : 'Close Short');
           const color = isLong ? 'var(--terminal-long)' : 'var(--terminal-short)';
           const ts = timeMs(t.created_at);
           const time = ts ? new Date(ts).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '-';
@@ -856,7 +861,7 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
               <td style={S.td}>${Number(t.fee || 0).toFixed(4)}</td>
               {showPnl && (
                 <td style={{ ...S.td, color: pnl >= 0 ? 'var(--terminal-long)' : 'var(--terminal-short)', fontWeight: 700 }}>
-                  {signedUsd(pnl)}
+                  {dex === 'hibachi' && t.realized_pnl_amount == null ? '—' : signedUsd(pnl)}
                 </td>
               )}
               {isDecibel && (
@@ -869,13 +874,14 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
         })}
       </tbody>
     </table>
-    </div>
+    </div></div>
   );
 }
 
 export default memo(TradeHistory);
 
 const S = {
+  toolbar: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 12px', color: 'var(--terminal-text-muted)', fontSize: 12 },
   state: { padding: 20, textAlign: 'center', color: 'var(--terminal-text-muted)' },
   scroller: { width: '100%', overflowX: 'auto', WebkitOverflowScrolling: 'touch' },
   table: { width: '100%', minWidth: 680, borderCollapse: 'collapse', fontSize: 12, fontVariantNumeric: 'tabular-nums' },

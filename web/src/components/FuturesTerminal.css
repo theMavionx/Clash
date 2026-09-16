@@ -319,8 +319,8 @@ html {
   cursor: pointer;
 }
 .futures-ticket-side-selector button[aria-pressed='true'] {
-  color: var(--terminal-orange);
-  background: color-mix(in srgb, var(--terminal-orange) 16%, transparent);
+  color: var(--terminal-brand-text);
+  background: var(--terminal-brand-soft);
 }
 .futures-ticket-topbar button:focus-visible,
 .futures-ticket-side-selector button:focus-visible {
@@ -539,8 +539,17 @@ html {
 }
 
 .futures-order-ticket__submit {
+  /* Orange stays the brand fill; dark lettering meets normal-text contrast. */
+  --terminal-on-accent: #111827;
+  --terminal-text-on-accent: #111827;
   min-height: 44px;
   transition: background-color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
+}
+
+.futures-order-ticket__submit:disabled {
+  cursor: not-allowed !important;
+  opacity: 0.65 !important;
+  box-shadow: none;
 }
 
 .futures-order-ticket__submit:hover:not(:disabled) {

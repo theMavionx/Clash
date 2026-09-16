@@ -1,5 +1,15 @@
 # Active Session State
 
+## Hibachi history / usability audit — Verified locally (2026-09-16)
+
+- Fixed funding cross-exchange fallthrough, history sort direction and Hibachi
+  execution labels/unknown PnL. Added refresh/retry and market-update stability.
+- CSS-only contrast/disabled-state polish; no financial mutation logic changed.
+- Full Deploy gate,22 backend regression tests and12 history UI/routing tests pass.
+- Production audit:55081 indexed Hibachi trades/38profiles; no Hibachi-tagged
+  recent client telemetry. Real authenticated user history still needs user session.
+- Preparing authorized release; report `bug-hibachi-history-2026-09-16.md`.
+
 ## Position TP/SL polish — Released (2026-09-16)
 
 - Owner requested numeric leverage input removal and better existing-position

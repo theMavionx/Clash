@@ -1,9 +1,10 @@
-import { memo, useEffect, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import { getReadClient } from '../lib/decibel';
 import { fetchPerplPositionHistory } from '../lib/perplClient';
 import { phoenixFetch, phoenixSymbol } from '../lib/phoenixClient';
 import { pacificaFetch } from '../lib/pacificaClient';
 import { readOndoSession } from '../lib/ondoClient';
+import { readHibachiCredentials, hibachiCredentialPayload } from '../lib/hibachiCredentials';
 
 const READ_TIMEOUT_MS = 8000;
 
@@ -124,10 +125,13 @@ function FundingHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [
   const [payments, setPayments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [reloadKey, setReloadKey] = useState(0);
+  const marketsRef = useRef(markets);
+  marketsRef.current = markets;
 
   useEffect(() => {
     const addr = dex === 'decibel' ? accountAddr : (accountAddr || walletAddr);
-    if (!addr) {
+    if (!addr && dex !== 'hibachi') {
       setPayments([]);
       setError('');
       setLoading(false);
@@ -135,14 +139,32 @@ function FundingHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [
     }
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), READ_TIMEOUT_MS);
+    let timedOut = false;
+    const timeout = setTimeout(() => { timedOut = true; controller.abort(); }, dex === 'hibachi' ? 60_000 : READ_TIMEOUT_MS);
     let cancelled = false;
 
     setLoading(true);
     setError('');
+    setPayments([]);
 
     async function load() {
       try {
+        if (dex === 'hibachi') {
+          const creds = await readHibachiCredentials();
+          if (!creds) throw new Error('Reconnect Hibachi API credentials in Account to view funding history');
+          const token = typeof window !== 'undefined' ? window._playerToken : '';
+          const response = await fetch('/api/futures/hibachi/funding-history', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-dex': 'hibachi', ...(token ? { 'x-token': token } : {}) },
+            body: JSON.stringify(hibachiCredentialPayload(creds, { limit: 100 })),
+            signal: controller.signal,
+          });
+          const data = await response.json();
+          if (!response.ok) throw new Error(data?.detail || data?.error || 'Could not load Hibachi funding history');
+          if (!Array.isArray(data)) throw new Error('Unexpected Hibachi funding history response');
+          if (!cancelled) setPayments(data);
+          return;
+        }
         if (dex === 'decibel') {
           const read = await getReadClient();
           const res = await read.userFundingHistory.getByAddr({
@@ -151,7 +173,7 @@ function FundingHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [
             offset: 0,
             fetchOptions: { signal: controller.signal },
           });
-          if (!cancelled) setPayments((res?.items || []).map(p => normalizeDecibelFunding(p, markets)));
+          if (!cancelled) setPayments((res?.items || []).map(p => normalizeDecibelFunding(p, marketsRef.current)));
           return;
         }
         if (dex === 'monad') {
@@ -161,7 +183,7 @@ function FundingHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [
             : Array.isArray(data?.positions) ? data.positions
             : Array.isArray(data?.items) ? data.items
             : [];
-          if (!cancelled) setPayments(rows.map(p => normalizePerplFunding(p, markets)).filter(Boolean));
+          if (!cancelled) setPayments(rows.map(p => normalizePerplFunding(p, marketsRef.current)).filter(Boolean));
           return;
         }
         if (dex === 'phoenix') {
@@ -211,16 +233,18 @@ function FundingHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [
           return;
         }
 
+        if (dex !== 'pacifica') throw new Error('Funding history is not available for this exchange yet');
         const d = await pacificaFetch(`/funding/history?account=${encodeURIComponent(addr)}`, {
           signal: controller.signal,
         });
         if (!cancelled) setPayments(Array.isArray(d.data) ? d.data : []);
       } catch (e) {
-        if (!cancelled && e?.name !== 'AbortError') {
+        if (!cancelled && (e?.name !== 'AbortError' || timedOut)) {
           setPayments([]);
-          setError(e?.message || 'Could not load funding history');
+          setError(timedOut ? 'Funding history timed out. Retry the request.' : (e?.message || 'Could not load funding history'));
         }
       } finally {
+        clearTimeout(timeout);
         if (!cancelled) setLoading(false);
       }
     }
@@ -231,7 +255,7 @@ function FundingHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [
       clearTimeout(timeout);
       controller.abort();
     };
-  }, [walletAddr, accountAddr, dex, markets, fetchFundingHistory]);
+  }, [walletAddr, accountAddr, dex, fetchFundingHistory, reloadKey]);
 
   let filtered = payments;
 
@@ -252,9 +276,9 @@ function FundingHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [
   const sortBy = filters?.sortBy || 'time';
   const dir = filters?.sortDir === 'asc' ? 1 : -1;
   filtered = [...filtered].sort((a, b) => {
-    if (sortBy === 'time') return dir * (timeMs(b.created_at) - timeMs(a.created_at));
+    if (sortBy === 'time') return dir * (timeMs(a.created_at) - timeMs(b.created_at));
     if (sortBy === 'symbol') return dir * (a.symbol || '').localeCompare(b.symbol || '');
-    if (sortBy === 'amount') return dir * (Math.abs(parseFloat(b.payout || 0)) - Math.abs(parseFloat(a.payout || 0)));
+    if (sortBy === 'amount') return dir * (Math.abs(parseFloat(a.payout || 0)) - Math.abs(parseFloat(b.payout || 0)));
     return 0;
   });
 
@@ -262,15 +286,15 @@ function FundingHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [
     return <div style={S.state}>Loading...</div>;
   }
   if (error) {
-    return <div style={{ ...S.state, color: 'var(--terminal-short)', fontWeight: 700 }}>{error}</div>;
+    return <div style={S.state} role="status"><div>{error}</div><button type="button" style={S.retryButton} onClick={() => setReloadKey(key => key + 1)}>Retry</button></div>;
   }
   if (!filtered.length) {
     const name = dex === 'decibel' ? 'Decibel ' : dex === 'ostium' ? 'Ostium rollover ' : dex === 'monad' ? 'Perpl ' : dex === 'phoenix' ? 'Phoenix ' : dex === 'hyperliquid' ? 'Hyperliquid ' : dex === 'nado' ? 'Nado ' : dex === 'ondo' ? 'Ondo ' : dex === 'leverup' ? 'LeverUp ' : dex === 'aster' ? 'Aster ' : '';
-    return <div style={S.state}>No {name}funding payments</div>;
+    return <div style={S.state}>{payments.length ? 'No funding payments match these filters' : `No ${dex === 'hibachi' ? 'Hibachi ' : name}funding payments`}<div><button type="button" style={S.retryButton} onClick={() => setReloadKey(key => key + 1)}>Refresh</button></div></div>;
   }
 
   return (
-    <div style={S.scroller}>
+    <div><div style={S.toolbar}><span>Recent funding payments</span><button type="button" style={S.retryButton} onClick={() => setReloadKey(key => key + 1)}>Refresh</button></div><div style={S.scroller}>
     <table style={S.table}>
       <thead><tr>
         <th style={S.th}>Time</th>
@@ -306,13 +330,15 @@ function FundingHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [
         })}
       </tbody>
     </table>
-    </div>
+    </div></div>
   );
 }
 
 export default memo(FundingHistory);
 
 const S = {
+  toolbar: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 12px', color: 'var(--terminal-text-muted)', fontSize: 12 },
+  retryButton: { padding: '8px 12px', borderRadius: 6, border: '1px solid var(--terminal-border)', background: 'transparent', color: 'var(--terminal-text)', cursor: 'pointer' },
   state: { padding: 20, textAlign: 'center', color: 'var(--terminal-text-muted)' },
   scroller: { width: '100%', overflowX: 'auto', WebkitOverflowScrolling: 'touch' },
   table: { width: '100%', minWidth: 620, borderCollapse: 'collapse', fontSize: 12, fontVariantNumeric: 'tabular-nums' },

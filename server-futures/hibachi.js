@@ -2412,6 +2412,30 @@ async function getAccountOrderHistory(credsInput, {
   return out.slice(0, max);
 }
 
+async function getAccountFundingHistory(credsInput, { limit = 100 } = {}) {
+  const creds = credentials(credsInput);
+  const count = Math.max(1, Math.min(100, Math.trunc(Number(limit) || 100)));
+  const query = new URLSearchParams({ accountId: creds.accountId, limit: String(count), page: '0' });
+  const data = await cachedAuthedGet(`/trade/account/settlements_history?${query}`, creds, {
+    ttlMs: 5_000, staleMs: 0,
+  });
+  if (!Array.isArray(data?.settlements)) throw new Error('Unexpected Hibachi funding history response');
+  return data.settlements.slice(0, count).map((row, index) => {
+    if (!row?.symbol || !['long', 'short'].includes(String(row.direction).toLowerCase())
+      || ![row.settledAmount, row.quantity].every(value => value != null && String(value).trim() !== '' && Number.isFinite(Number(value)))
+      || timestampMs(row.timestamp) == null) throw new Error('Invalid Hibachi funding history entry');
+    return {
+    id: `${row.timestamp}:${row.symbol}:${row.direction}:${index}`,
+    symbol: symbolOf(row.symbol),
+    side: String(row.direction).toLowerCase() === 'long' ? 'bid' : 'ask',
+    payout: row.settledAmount,
+    amount: row.quantity,
+    rate: null,
+    created_at: timestampIso(row.timestamp),
+    };
+  });
+}
+
 async function getAccountTradeHistory(credsInput, {
   limit = HIBACHI_FILL_LOOKBACK_LIMIT,
   startTime,
@@ -2638,6 +2662,7 @@ module.exports = {
   placeOrder,
   cancelOrder,
   getAccountTradeHistory,
+  getAccountFundingHistory,
   importFillsForPlayer,
   recordFillsForPlayer: importNormalizedFillsForPlayer,
   __testing: {

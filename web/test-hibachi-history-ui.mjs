@@ -1,0 +1,20 @@
+import assert from 'node:assert/strict';
+import {before,after,test} from 'node:test';
+import {pathToFileURL} from 'node:url';
+import {homedir} from 'node:os';
+import {join} from 'node:path';
+import {startHistoryPreview} from './tests/hibachi-history-preview.mjs';
+const {chromium}=await import(pathToFileURL(join(homedir(),'.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright/index.mjs')).href);
+let server,browser,page;
+let failure=false,empty=false;
+const calls=[],errors=[];
+const trades=[{clientOrderId:'hibachi:7:90071992547409931',orderId:'same-order',symbol:'BTC',side:'long',amount:'0.01',price:'80000',fee:'0.1',pnl:null,created_at:'2026-09-15T10:00:00Z'},
+{clientOrderId:'hibachi:7:90071992547409932',orderId:'same-order',symbol:'ETH',side:'short',amount:'1',price:'4000',fee:'0.2',pnl:'3',created_at:'2026-09-16T10:00:00Z'}];
+before(async()=>{server=await startHistoryPreview();browser=await chromium.launch({channel:'msedge',headless:true});page=await browser.newPage();page.on('pageerror',e=>errors.push(e.message));await page.route('**/api/futures/hibachi/*',async route=>{calls.push({url:route.request().url(),body:route.request().postDataJSON()});await route.fulfill({status:failure?503:200,contentType:'application/json',body:JSON.stringify(failure?{error:'Fixture upstream unavailable'}:empty?[]:route.request().url().includes('funding')?[{id:'f1',symbol:'BTC',side:'bid',payout:'-0.125',amount:'0.01',rate:null,created_at:'2026-09-16T10:00:00Z'}]:trades)});});await page.goto(server.resolvedUrls.local[0]);});
+after(async()=>{await browser?.close();await server?.close();assert.deepEqual(errors,[]);});
+test('Hibachi trades display newest first, honest execution sides and unknown PnL',async()=>{await page.getByRole('cell',{name:'ETH',exact:true}).waitFor();const rows=await page.locator('tbody tr').allTextContents();assert.match(rows[0],/ETH.*Sell/);assert.match(rows[1],/BTC.*Buy/);assert.match(rows[1],/—/);assert.equal(calls[0].body.account_id,'7');});
+test('manual refresh surfaces upstream error with retry, then recovers',async()=>{failure=true;await page.getByRole('button',{name:'Refresh',exact:true}).click();await page.getByText('Fixture upstream unavailable').waitFor();failure=false;await page.getByRole('button',{name:'Retry',exact:true}).click();await page.getByRole('cell',{name:'ETH',exact:true}).waitFor();});
+test('market price ticks do not restart history reads',async()=>{const count=calls.length;await page.getByRole('button',{name:'Market tick'}).click();await page.getByRole('cell',{name:'ETH',exact:true}).waitFor();assert.equal(calls.length,count);});
+test('funding uses Hibachi route and preserves signed payment without inventing rate',async()=>{await page.getByRole('button',{name:'Funding',exact:true}).click();await page.getByRole('cell',{name:'-$0.125000',exact:true}).waitFor();assert.match(calls.at(-1).url,/hibachi\/funding-history/);assert.equal(await page.getByRole('cell',{name:'-',exact:true}).count(),1);const count=calls.length;await page.getByRole('button',{name:'Market tick'}).click();assert.equal(calls.length,count);});
+test('table scroll is contained on mobile and empty funding offers refresh',async()=>{await page.setViewportSize({width:320,height:700});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));empty=true;await page.getByRole('button',{name:'Refresh',exact:true}).click();await page.getByText('No Hibachi funding payments').waitFor();assert.equal(await page.getByRole('button',{name:'Refresh',exact:true}).count(),1);});
+test('unsupported venue never silently falls through to Pacifica',async()=>{await page.getByLabel('Venue').selectOption('grvt');await page.getByText('Funding history is not available for this exchange yet').waitFor();});
