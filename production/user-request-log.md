@@ -4264,3 +4264,10 @@ Follow-up:
 ## UR-2026-09-16-TERMINAL-WHEEL
 
 - Owner: «майже в усіх областях не працює колесо миші виправ», with local terminal screenshot. Fix scroll behavior before the authorized release; verify actual wheel interactions across terminal regions.
+
+## UR-2026-09-16-TERMINAL-TICKET-REVISION
+
+- Owner authorizes additional tasks and production release: «реалізуй їх теж і на прод».
+- Remove leverage presets shown in screenshot (1x/5x/10x/25x/50x), retain deliberate leverage adjustment.
+- Owner requests one submit button, Buy/Long–Sell/Short selector above, compact Market/Limit tabs like Clashbot. Keep brand color and existing trading semantics.
+- Owner rejects oversized entry TP/SL dialog and requests Clashbot convenience. Implement compact inline entry TP/SL fields tied to selected side; preserve validation and existing position-management flows.

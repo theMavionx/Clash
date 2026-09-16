@@ -3,6 +3,7 @@ import LighterOneTapConnect from './LighterOneTapConnect';
 import EtoroSetupGuide from './trading/EtoroSetupGuide';
 import ImperialRouteCard from './trading/ImperialRouteCard';
 import PositionActionDialog from './trading/PositionActionDialog';
+import './trading/OpenTpslEditor.css';
 import { ETORO_TRADING_SETTINGS_URL } from '../lib/etoroClient';
 import { useSend } from '../hooks/useGodot';
 import { useLayout } from '../hooks/useIsMobile';
@@ -1897,113 +1898,70 @@ function TpslEditor({
 }
 
 function OpenTpslEditor({
-  enabled,
-  onEnabledChange,
-  mode,
-  onModeChange,
-  previewSide,
-  onPreviewSideChange,
-  tpValue,
-  slValue,
-  onTpChange,
-  onSlChange,
-  pos,
-  metrics,
-  dex,
-  orderType,
+  enabled, onEnabledChange, mode, onModeChange, previewSide,
+  tpValue, slValue, onTpChange, onSlChange, pos, metrics, dex, orderType,
 }) {
+  const id = useId();
+  // This is the order draft, not an independent trade or position editor.
+  // Direction always follows the ticket's Buy/Long and Sell/Short selection.
+  const draftPos = { ...pos, side: previewSide };
+  const guidance = openTpslInputGuidance(mode, draftPos, metrics);
+  const showLimitNotice = orderType === 'limit'
+    && !OPEN_TPSL_NATIVE_LIMIT_ATTACH_DEXES.has(String(dex || '').toLowerCase());
   const entry = firstPositive(metrics?.entryP, pos?.entry_price, metrics?.markP, pos?.mark_price);
-  const isNativeLimitAttach = OPEN_TPSL_NATIVE_LIMIT_ATTACH_DEXES.has(String(dex || '').toLowerCase());
-  const showLimitNotice = orderType === 'limit' && !isNativeLimitAttach;
-  // The parent owns saved order settings. Editing and dismissing this snapshot
-  // cannot mutate them or call a venue; only explicit save/remove commits.
-  const [draft, setDraft] = useState(null);
-  const guidanceId = useId();
-  const draftPos = { ...pos, side: draft?.side || previewSide };
-  const inputGuidance = draft ? openTpslInputGuidance(draft.mode, draftPos, metrics) : '';
-  const targets = draft ? ['tp', 'sl'].map(leg => tpslPriceFromInput({
-    pos: draftPos, metrics, leg, mode: draft.mode, value: draft[leg],
-  })) : [];
-  const hasTarget = draft && [draft.tp, draft.sl].some(value => String(value ?? '').trim() !== '');
-  const targetErrors = targets.map((target, index) => {
-    if (inputGuidance || target.error || !(target.price > 0)) return '';
-    let error = '';
-    validateTpslBeforeSubmit({
-      dex, pos: draftPos, tpPrice: index === 0 ? target.price : null, slPrice: index === 1 ? target.price : null,
-      setLocalAlert: message => { error = message; },
-    });
-    return error;
-  });
-  const validationError = targetErrors.find(Boolean) || '';
-  const disabledReason = inputGuidance || (!hasTarget ? 'Add at least one target to save TP/SL.'
-    : targets.find(target => target.error)?.error || validationError);
-  const saveDraft = () => {
-    if (!draft || disabledReason) return;
-    onModeChange(draft.mode);
-    onPreviewSideChange(draft.side);
-    onTpChange(draft.tp);
-    onSlChange(draft.sl);
-    onEnabledChange(true);
-    setDraft(null);
-  };
+  const amount = tpslPositionAmount(draftPos, metrics);
+  const collateral = tpslCollateralUsd(draftPos, metrics);
   return (
-    <div style={enabled ? S.openTpslBoxActive : S.openTpslBox}>
-      <button type="button" style={S.openTpslHeader} aria-haspopup="dialog" onClick={() => setDraft({
-        mode, side: positionOpenSide({ side: previewSide }), tp: tpValue, sl: slValue,
-      })}>
-        <span style={S.openTpslTitle}>TP/SL</span>
-        <span style={enabled ? S.openTpslToggleOn : S.openTpslToggleOff}>{enabled ? 'ON' : 'OFF'}</span>
-      </button>
-      {draft && (
-        <PositionActionDialog title="Take profit / Stop loss" onClose={() => setDraft(null)}>
-          <form className="open-tpsl-draft" onSubmit={event => { event.preventDefault(); saveDraft(); }}>
-            <div className="open-tpsl-draft__content">
-            <dl className="open-tpsl-draft__context">
-              <div><dt>Entry price</dt><dd>{entry > 0 ? `$${fmtPrice(entry)}` : 'Not available'}</dd></div>
-              <div><dt>Order type</dt><dd>{orderType === 'limit' ? 'Limit order' : 'Market order'}</dd></div>
-            </dl>
-            <fieldset className="open-tpsl-draft__selection">
-              <legend>Side</legend>
-              <div className="open-tpsl-draft__segments">
-                {['bid', 'ask'].map(side => <button key={side} type="button" aria-pressed={draft.side === side}
-                  onClick={() => setDraft(current => ({ ...current, side }))}>{side === 'bid' ? 'LONG' : 'SHORT'}</button>)}
-              </div>
-            </fieldset>
-            <fieldset className="open-tpsl-draft__selection">
-              <legend>Input mode</legend>
-              <div className="open-tpsl-draft__segments">
-              {TPSL_INPUT_MODES.map(item => (
-                <button key={item.id} type="button" aria-pressed={draft.mode === item.id}
-                  onClick={() => setDraft(current => ({ ...current, mode: item.id }))}>
-                  {item.label}
-                </button>
-              ))}
-              </div>
-            </fieldset>
-            <div className="open-tpsl-draft__targets">
-              <TpslValueInput draft leg="tp" mode={draft.mode} value={draft.tp} onChange={tp => setDraft(current => ({ ...current, tp }))} pos={draftPos} metrics={metrics} validationError={targetErrors[0]} />
-              <TpslValueInput draft leg="sl" mode={draft.mode} value={draft.sl} onChange={sl => setDraft(current => ({ ...current, sl }))} pos={draftPos} metrics={metrics} validationError={targetErrors[1]} />
+    <section className="open-tpsl-inline" aria-label="Order take profit and stop loss">
+      <label className="open-tpsl-inline__toggle">
+        <span>Take Profit / Stop Loss</span>
+        <input type="checkbox" role="switch" checked={enabled}
+          aria-controls={`${id}-fields`} onChange={event => onEnabledChange(event.target.checked)} />
+      </label>
+      {enabled && <div id={`${id}-fields`} className="open-tpsl-inline__fields">
+        <div className="open-tpsl-inline__modes" role="group" aria-label="TP/SL input mode">
+          {TPSL_INPUT_MODES.map(item => <button key={item.id} type="button"
+            aria-pressed={mode === item.id} onClick={() => onModeChange(item.id)}>{item.label}</button>)}
+        </div>
+        {['tp', 'sl'].map(leg => {
+          const value = leg === 'tp' ? tpValue : slValue;
+          const onChange = leg === 'tp' ? onTpChange : onSlChange;
+          const hasValue = String(value ?? '').trim() !== '';
+          const resolved = tpslPriceFromInput({ pos: draftPos, metrics, leg, mode, value });
+          let error = hasValue ? resolved.error : '';
+          if (hasValue && !error && !guidance && resolved.price > 0) {
+            validateTpslBeforeSubmit({
+              dex, pos: draftPos,
+              tpPrice: leg === 'tp' ? resolved.price : null,
+              slPrice: leg === 'sl' ? resolved.price : null,
+              setLocalAlert: message => { error = message; },
+            });
+          }
+          const pnl = !error && hasValue && resolved.price > 0 && entry > 0 && amount > 0
+            ? (resolved.price - entry) * amount * (positionOpenSide(draftPos) === 'ask' ? -1 : 1) : null;
+          const label = leg === 'tp' ? 'Take profit' : 'Stop loss';
+          const unit = mode === 'price' ? 'USD price' : mode === 'pct' ? '% margin' : 'USD PnL';
+          const preview = error || (hasValue && guidance ? guidance
+            : pnl != null ? `Trigger $${fmtPrice(resolved.price)} · ${pnl < 0 ? '−' : '+'}$${fmtPrice(Math.abs(pnl))}${collateral > 0 ? ` (${(pnl / collateral * 100).toFixed(2)}%)` : ''}`
+              : 'Optional');
+          return <div key={leg} className="open-tpsl-inline__target">
+            <label htmlFor={`${id}-${leg}`}>{label}</label>
+            <div className="open-tpsl-inline__input">
+              <input id={`${id}-${leg}`} type="number" inputMode="decimal" min="0" step="any"
+                aria-label={`${label} target`} aria-invalid={Boolean(error)}
+                aria-describedby={`${id}-${leg}-preview`} value={value}
+                placeholder={mode === 'price' ? (leg === 'tp' ? 'TP price' : 'SL price') : (leg === 'tp' ? 'Gain' : 'Loss')}
+                onChange={event => onChange(event.target.value)} />
+              <span>{unit}</span>
             </div>
-            <div className="open-tpsl-draft__notes">
-              <p id={guidanceId} className="open-tpsl-draft__guidance" data-error={Boolean(validationError)} aria-live="polite">
-                {disabledReason || (draft.mode === 'price' ? 'Targets are checked again against the order price before signing.' : 'TP is profit and SL is loss, converted into trigger prices.')}
-              </p>
-              {showLimitNotice && <p>{dexErrorLabel(dex)} limit TP/SL can be placed after the limit fills.</p>}
-              <p>Estimated PnL excludes fees and funding.</p>
-              <p>Submit saves settings for your next order. It does not place a trade.</p>
-            </div>
-            </div>
-            <div className="open-tpsl-draft__actions">
-            <button type="submit" className="open-tpsl-draft__submit" disabled={Boolean(disabledReason)} aria-describedby={guidanceId}>Submit</button>
-            {enabled && <button type="button" className="open-tpsl-draft__remove" onClick={() => {
-              onEnabledChange(false);
-              setDraft(null);
-            }}>Remove TP/SL from next order</button>}
-            </div>
-          </form>
-        </PositionActionDialog>
-      )}
-    </div>
+            <small id={`${id}-${leg}-preview`} data-error={Boolean(error)} aria-live="polite">{preview}</small>
+          </div>;
+        })}
+        {guidance && <small className="open-tpsl-inline__note">{guidance}</small>}
+        {showLimitNotice && <small className="open-tpsl-inline__note">{dexErrorLabel(dex)} limit TP/SL can be placed after the limit fills.</small>}
+        <small className="open-tpsl-inline__note">Estimates exclude fees and funding.</small>
+      </div>}
+    </section>
   );
 }
 
@@ -4742,7 +4700,7 @@ function FuturesPanel() {
     const timer = setTimeout(() => {
       previewImperialRoute({
         symbol,
-        side: openTpslPreviewSide === 'short' ? 'short' : 'long',
+        side: openTpslPreviewSide === 'ask' ? 'short' : 'long',
         notional: positionUsdc,
         leverage,
         holdHours: 24,
@@ -4792,8 +4750,12 @@ function FuturesPanel() {
 
   const resolveOpenTpslForSide = useCallback((sideForPosition) => {
     const hasAnyInput = String(openTpPrice || '').trim() !== '' || String(openSlPrice || '').trim() !== '';
-    if (!openTpslEnabled || !hasAnyInput) {
+    if (!openTpslEnabled) {
       return { ok: true, hasTpsl: false, options: {} };
+    }
+    if (!hasAnyInput) {
+      setLocalAlert('Enter a take-profit or stop-loss target, or turn off TP/SL.');
+      return { ok: false };
     }
     const pos = makeOpenTpslPosition(sideForPosition);
     const metrics = makeOpenTpslMetrics(pos);
@@ -4949,8 +4911,14 @@ function FuturesPanel() {
 
   const levTimerRef = useRef(null);
   const handleLeverageChange = useCallback((val) => {
+    const requested = Number(val);
+    const cap = Number(maxLev);
+    // Native number inputs can emit empty, negative or nonfinite drafts despite
+    // min/max attributes. Never send those drafts to a venue's live settings API.
+    if (String(val ?? '').trim() === '' || !Number.isFinite(requested) || requested < 1
+      || !Number.isFinite(cap) || cap < 1) return;
     clearTradeFeedback();
-    let v = Math.min(Number(val), maxLev);
+    let v = Math.min(requested, cap);
     if (dex === 'etoro' && Array.isArray(currentMarket?.leverage_values) && currentMarket.leverage_values.length) {
       v = currentMarket.leverage_values.reduce((closest, option) => (
         Math.abs(Number(option) - v) < Math.abs(Number(closest) - v) ? Number(option) : Number(closest)
@@ -5749,9 +5717,16 @@ function FuturesPanel() {
 
       {/* Trade controls */}
       <div className="futures-order-ticket__fields" style={S.tradeBox}>
-        <div style={S.row} role="group" aria-label="Order type">
-          <button type="button" aria-pressed={orderType === 'market'} style={orderType === 'market' ? S.typeActive : S.typeBtn} onClick={() => { clearTradeFeedback(); setOrderType('market'); }}>Market</button>
-          <button type="button" aria-pressed={orderType === 'limit'} style={orderType === 'limit' ? S.typeActive : S.typeBtn} onClick={() => { clearTradeFeedback(); setOrderType('limit'); }}>Limit</button>
+        <div className="futures-ticket-topbar">
+          <div role="group" aria-label="Order type">
+            <button type="button" aria-pressed={orderType === 'market'} onClick={() => { clearTradeFeedback(); setOrderType('market'); }}>Market</button>
+            <button type="button" aria-pressed={orderType === 'limit'} onClick={() => { clearTradeFeedback(); setOrderType('limit'); }}>Limit</button>
+          </div>
+          <button type="button" aria-label={`Adjust leverage, ${leverage}x`} aria-expanded={showLeverage} onClick={() => setShowLeverage(!showLeverage)}>Leverage {leverage}x</button>
+        </div>
+        <div className="futures-ticket-side-selector" role="group" aria-label="Order side">
+          <button type="button" aria-pressed={openTpslPreviewSide === 'bid'} onClick={() => { clearTradeFeedback(); setOpenTpslPreviewSide('bid'); }}>Buy / Long</button>
+          <button type="button" aria-pressed={openTpslPreviewSide === 'ask'} onClick={() => { clearTradeFeedback(); setOpenTpslPreviewSide('ask'); }}>Sell / Short</button>
         </div>
 
         {orderType === 'limit' && (
@@ -5794,13 +5769,6 @@ function FuturesPanel() {
             </div>
             <input type="number" aria-label={amountInUsdc ? 'Margin in USDC' : `Amount in ${symbol}`} inputMode="decimal" placeholder={amountInUsdc ? (dex === 'flash' ? `Max ${pacBalance.toFixed(2)}` : '20') : '0.01'} value={amount}
               onChange={e => { clearTradeFeedback(); setAmount(e.target.value); setSizePct(0); }} style={S.input} />
-          </div>
-          <div style={{flex: compactMobile ? '0 0 92px' : 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 3}}>
-            <span style={S.label}>Leverage</span>
-            <button style={S.levBtn} onClick={() => setShowLeverage(!showLeverage)}>
-              {leverage}x
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" style={{transform: showLeverage ? 'rotate(180deg)' : '', transition: '0.2s'}}><polyline points="6 9 12 15 18 9"/></svg>
-            </button>
           </div>
         </div>
 
@@ -6059,25 +6027,8 @@ function FuturesPanel() {
               <div style={{fontSize: isMobile ? 34 : 48, fontWeight: 700, color: 'var(--terminal-text)', textAlign: 'center', padding: isMobile ? '2px 0' : '10px 0'}}>{leverage}x</div>
               <input type="range" min="1" max={maxLev} value={leverage} className="grad-slider" onChange={e => handleLeverageChange(e.target.value)} style={{...S.slider, '--val': `${maxLev > 1 ? ((leverage - 1) / (maxLev - 1)) * 100 : 0}%`}} />
               <div style={S.sliderLabels}><span>1x</span><span>{Math.floor(maxLev/4)}x</span><span>{Math.floor(maxLev/2)}x</span><span>{Math.floor(maxLev*3/4)}x</span><span>{maxLev}x</span></div>
-              <div style={{display: 'grid', gridTemplateColumns: isMobile ? 'repeat(3, minmax(0, 1fr))' : 'repeat(4, minmax(0, 1fr))', gap: 6, marginTop: 6}}>
-                {/* Presets auto-adapt: always include the pair's own maxLev as
-                    a shortcut so users can one-tap the ceiling (e.g. 75x for
-                    ETH on Avantis). Coerce maxLev to Number — it arrives as a
-                    string from the API, and Set dedup treats 75 !== "75". */}
-                {(() => {
-                  const cap = Number(maxLev) || 100;
-                  return Array.from(new Set([1, 5, 10, 25, 50, 75, 100, 200, cap]))
-                    .filter(v => v <= cap)
-                    .sort((a, b) => a - b)
-                    .map(v => (
-                      <button key={v} style={{...(leverage === v ? S.levPresetActive : S.levPreset), flex: 'initial', minWidth: 0}}
-                        onClick={() => {
-                          handleLeverageChange(v);
-                          if (isMobile) setShowLeverage(false);
-                        }}>{v}x</button>
-                    ));
-                })()}
-              </div>
+              <input type="number" aria-label="Leverage multiplier" inputMode="numeric" min="1" max={maxLev} value={leverage} onChange={e => handleLeverageChange(e.target.value)} style={S.input} />
+              <button type="button" style={S.typeActive} onClick={() => setShowLeverage(false)}>Done</button>
               {leverage > maxLev * 0.5 && (
                 <div style={{fontSize: 11, color: 'var(--terminal-short)', fontWeight: 700, textAlign: 'center', marginTop: 4}}>
                   High leverage increases liquidation risk
@@ -6099,11 +6050,8 @@ function FuturesPanel() {
         )}
 
         <div style={S.row}>
-          <button type="button" className="futures-order-ticket__submit futures-order-ticket__submit--long" style={{...S.tradeBtn, ...S.tradeBtnLong, opacity: tradeButtonBlocked ? 0.55 : 1}} onClick={() => handleTrade('bid')} disabled={tradeButtonBusy || tradeButtonBlocked}>
-            <span style={S.tradeBtnText}>{tradeButtonBusy ? tradeButtonPendingLabel : 'LONG'}</span>
-          </button>
-          <button type="button" className="futures-order-ticket__submit futures-order-ticket__submit--short" style={{...S.tradeBtn, ...S.tradeBtnShort, opacity: tradeButtonBlocked ? 0.55 : 1}} onClick={() => handleTrade('ask')} disabled={tradeButtonBusy || tradeButtonBlocked}>
-            <span style={S.tradeBtnText}>{tradeButtonBusy ? tradeButtonPendingLabel : 'SHORT'}</span>
+          <button type="button" className="futures-order-ticket__submit" style={{...S.tradeBtn, background: 'var(--terminal-orange)', color: 'var(--terminal-text-on-accent, #fff)', opacity: tradeButtonBlocked ? 0.55 : 1}} onClick={() => handleTrade(openTpslPreviewSide)} disabled={tradeButtonBusy || tradeButtonBlocked}>
+            <span style={S.tradeBtnText}>{tradeButtonBusy ? tradeButtonPendingLabel : `${orderType === 'limit' ? 'Place limit' : 'Submit'} ${openTpslPreviewSide === 'ask' ? 'short' : 'long'}`}</span>
           </button>
         </div>
       </div>

@@ -44,6 +44,7 @@ import React,{useState} from 'react';
 import {createRoot} from 'react-dom/client';
 import {OpenTpslEditor,TpslEditor,tpslSubmitValue,tpslPriceFromInput} from '${componentId}';
 import '/src/components/FuturesTerminal.css';
+import '/src/components/trading/OpenTpslEditor.css';
 const params = new URLSearchParams(location.search);
 window.fixture = {calls:[], arithmetic:tpslPriceFromInput};
 function App(){
@@ -69,6 +70,7 @@ function App(){
  <label>Order<select aria-label="Fixture order type" value={orderType} onChange={e=>setOrderType(e.target.value)}><option>market</option><option>limit</option></select></label>
  </div>
  <OpenTpslEditor {...saved} onEnabledChange={change('enabled')} onModeChange={change('mode')} onPreviewSideChange={change('previewSide')} onTpChange={change('tpValue')} onSlChange={change('slValue')} pos={pos} metrics={metrics} dex={dex} orderType={orderType}/>
+ <label>Side<select aria-label="Fixture side" value={saved.previewSide} onChange={e=>change('previewSide')(e.target.value)}><option value="bid">Long</option><option value="ask">Short</option></select></label>
  <h2>Saved parent state</h2><output aria-label="Saved order settings">{JSON.stringify(saved)}</output>
  <p>Financial calls: <output aria-label="Financial calls">{callCount}</output></p>
  <button type="button" onClick={()=>setLive(v=>!v)}>Toggle existing position editor</button>

@@ -52,10 +52,12 @@ test('reference palette is scoped to terminal and its explicit trading portal', 
   assert.match(css, /prefers-reduced-motion: reduce/);
 });
 
-test('TP/SL header and actions stay outside its scrolling draft contents', () => {
+test('entry TP/SL is inline while existing position dialogs retain scrolling actions', () => {
   assert.match(dialogCss, /\.position-action-dialog\[open\]/);
   assert.match(dialogCss, /\.open-tpsl-draft__content\s*\{[^}]*overflow:auto/s);
   assert.match(dialogCss, /\.open-tpsl-draft__actions\s*\{[^}]*flex:none/s);
-  assert.match(panel, /className="open-tpsl-draft__content"/);
-  assert.match(panel, /className="open-tpsl-draft__actions"/);
+  const entry = panel.slice(panel.indexOf('function OpenTpslEditor('), panel.indexOf('function OpenTpslEditor(') + 10000);
+  assert.match(entry, /className="open-tpsl-inline"/);
+  assert.match(entry, /role="switch"/);
+  assert.match(dialog, /dialog.showModal\(\)/);
 });

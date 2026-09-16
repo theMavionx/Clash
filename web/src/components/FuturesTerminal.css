@@ -275,6 +275,59 @@ html {
   color: var(--terminal-text-faint);
 }
 
+.futures-ticket-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-bottom: 1px solid var(--terminal-border);
+}
+.futures-ticket-topbar > div { display: flex; gap: 16px; }
+.futures-ticket-topbar button {
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--terminal-text-muted);
+  padding: 10px 0;
+  min-height: 44px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.futures-ticket-topbar button[aria-pressed='true'] {
+  color: var(--terminal-text);
+  border-bottom-color: var(--terminal-orange);
+}
+.futures-ticket-side-selector {
+  display: flex;
+  gap: 4px;
+  padding: 5px;
+  border: 1px solid var(--terminal-border);
+  border-radius: 12px;
+}
+.futures-ticket-side-selector button {
+  flex: 1;
+  min-width: 0;
+  min-height: 44px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--terminal-text-muted);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.futures-ticket-side-selector button[aria-pressed='true'] {
+  color: var(--terminal-orange);
+  background: color-mix(in srgb, var(--terminal-orange) 16%, transparent);
+}
+.futures-ticket-topbar button:focus-visible,
+.futures-ticket-side-selector button:focus-visible {
+  outline: 2px solid var(--terminal-orange);
+  outline-offset: 2px;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .clash-ui-root *,
   .futures-terminal-shell * {

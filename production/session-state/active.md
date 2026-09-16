@@ -1,5 +1,16 @@
 # Active Session State
 
+## Trading terminal / Hibachi — Released (2026-09-16)
+
+- Commit `aa8f3f81`, release `20260916065900-aa8f3f81`; canonical Deploy gate,
+  actual wheel browser tests, live API/asset checks passed. Five services online.
+- Exact Hibachi trade-record table created; no actual post-release imports yet.
+- Backup and rollback details: `production/reports/trading-release-2026-09-16.md`.
+- Owner now requests leverage-preset removal, one submit with side selector,
+  and compact inline entry TP/SL. Follow-up implemented; full Deploy gate,
+  21 focused tests and integrated mock desktop/mobile flow passed. Approved
+  second deployment pending; see release report for scope and limitations.
+
 ## Fresh User Log Audit / CSS Recovery — Released (2026-09-15 evening)
 
 - Owner requested fresh user-log checks and repairs. Current LeverUp reads are
