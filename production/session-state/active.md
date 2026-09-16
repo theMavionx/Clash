@@ -1,6 +1,6 @@
 # Active Session State
 
-## Hibachi history / usability audit — Verified locally (2026-09-16)
+## Hibachi history / usability audit — Released (2026-09-16)
 
 - Fixed funding cross-exchange fallthrough, history sort direction and Hibachi
   execution labels/unknown PnL. Added refresh/retry and market-update stability.
@@ -8,7 +8,9 @@
 - Full Deploy gate,22 backend regression tests and12 history UI/routing tests pass.
 - Production audit:55081 indexed Hibachi trades/38profiles; no Hibachi-tagged
   recent client telemetry. Real authenticated user history still needs user session.
-- Preparing authorized release; report `bug-hibachi-history-2026-09-16.md`.
+- Released3eef0d2d as20260916081717-3eef0d2d; public assets match and five services
+  online. Funding route rejects anonymous access; no new futures/MCP errors.
+  Report `bug-hibachi-history-2026-09-16.md` records remaining live-user limitation.
 
 ## Position TP/SL polish — Released (2026-09-16)
 

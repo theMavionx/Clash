@@ -5,7 +5,7 @@
 - ID: BUG-HIBACHI-HISTORY-20260916
 - Severity: S2-Major (history routing); S3-Minor (presentation)
 - Priority: P1-Immediate
-- Status: Locally fixed, release verification pending
+- Status: Released; private authenticated user-session verification remains unobserved
 - Reported: 2026-09-16 by owner during terminal usability review
 
 ## Classification / environment
@@ -50,3 +50,17 @@ unknown values distinct from zero, recoverable failures.
 
 ## Related
 production/reports/trading-release-2026-09-16.md
+
+## Production release
+- Commit3eef0d2d, release20260916081717-3eef0d2d; canonical deploy completed08:20:24UTC.
+- Full Deploy gate and final web build passed;22 Hibachi backend tests,12 history
+  UI/routing tests, plus20 focused CSS/layout/theme/ticket tests passed.
+- At08:20:31UTC five services online, zero restarts; health, Hibachi markets/prices
+  and LeverUp markets200; funding POST and trade-records GET401 without auth.
+- Public FuturesPanel-A5Q1K3Hb.js970010bytes and main-DQxE_4oG.css both HTTP200
+  and byte-identical SHA256 to release, new funding-path/disabled-state markers present.
+- No new futures/MCP error bytes; client log window empty. Main API log grew13827
+  bytes with no matched syntax/record errors; preexisting upstream warning issue
+  is outside this history/UI change. No claim of globally clean logs.
+- Rollback20260916075134-89b35e4e retained; standard retention removed older
+  20260916071622-f484e531 files, rebuildable from Git. No DB migration/deletion.
