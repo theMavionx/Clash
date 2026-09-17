@@ -1,5 +1,10 @@
 # User Request Log
 
+## UR-2026-09-17-LEVERUP-MARKET-DATA
+
+- Owner: «чому тут половини даних немає де ордербук … треба доробити щоб він теж був»; clarified «можеш прибрати просто поки ордер бук».
+- Hide the LeverUp book temporarily, reclaim chart space, correct missing Oracle/OI wiring and misleading chart fallback. Preserve other venues.
+
 ## UR-2026-09-17-LEVERUP-LVUSD
 
 - Owner forwarded: “not showing my free balance accurately … upon closing the trade usdc swapped into lvusd automatically and now on game ui there is no option i can trade with lvusd”. Screenshot shows LeverUp terminal USDC-only margin and $0.72 free. Diagnose and repair missing settlement-token support; no funded test trades.

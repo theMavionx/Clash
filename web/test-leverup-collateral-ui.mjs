@@ -8,9 +8,17 @@ try {
   for(const width of [1280,390]){
     const page=await browser.newPage({viewport:{width,height:900}});
     const errors=[];page.on('pageerror',e=>errors.push(e.message));
+    await page.route('**/api/futures/pyth/history?**',r=>r.fulfill({status:200,contentType:'application/json',body:JSON.stringify({s:'error',errmsg:'Upstream unavailable'})}));
     await page.goto('http://127.0.0.1:5196/?dex=leverup&terminal=1&theme=dark');
     const select=page.getByLabel('LeverUp collateral token');
     await select.waitFor();
+    assert.equal(await page.locator('.futures-terminal-book').count(),0,'LeverUp does not reserve an empty book column');
+    assert.equal(await page.getByRole('button',{name:'Order book',exact:true}).count(),0);
+    if(process.env.TEST_REAL_CHART==='1'){
+      await page.getByText('LeverUp chart history is unavailable from Pyth. Live oracle price is shown above.').waitFor();
+      await page.getByRole('button',{name:'Retry chart',exact:true}).click();
+      await page.getByText('LeverUp chart history is unavailable from Pyth. Live oracle price is shown above.').waitFor();
+    }
     await page.getByLabel('Margin in USDC',{exact:true}).fill('10');
     await select.selectOption('lvUSD');
     const margin=page.getByLabel('Margin in lvUSD',{exact:true});

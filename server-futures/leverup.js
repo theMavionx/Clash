@@ -443,6 +443,7 @@ async function getMarketInfo() {
       max_short_oi_usd: Number(formatUnits(BigInt(detail?.pairConfig?.maxShortOiUsd || 0), 18)),
       long_open_interest_qty: Number(formatUnits(BigInt(liveInfo?.longQty || 0), 10)),
       short_open_interest_qty: Number(formatUnits(BigInt(liveInfo?.shortQty || 0), 10)),
+      open_interest_available: Boolean(liveInfo),
       // MarketInfoV2 returns the live signed per-second funding rate. Clash's
       // terminal displays a conventional 8-hour rate as a decimal fraction.
       funding_rate: Number(formatUnits(BigInt(liveInfo?.fundingFeeRate || 0), 18)) * 28_800,
@@ -470,6 +471,9 @@ async function getPrices() {
       price,
       mark_price: price,
       oracle_price: price,
+      open_interest_usd: market.open_interest_available
+        ? (market.long_open_interest_qty + market.short_open_interest_qty) * price
+        : null,
     };
   }).filter(row => row.price > 0);
 }

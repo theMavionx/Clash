@@ -551,7 +551,7 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
         to: String(toSec),
       });
       const read = async (url) => {
-        const r = await fetch(url);
+        const r = await fetch(url, dex === 'leverup' ? { signal: AbortSignal.timeout(10_000) } : undefined);
         const json = await r.json().catch(() => null);
         if (!r.ok) {
           return {
@@ -733,6 +733,10 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
         }
 
         if (cancelled || !seriesRef.current) return;
+        if (!candles.length && dex === 'leverup') {
+          setChartError('LeverUp chart history is unavailable from Pyth. Live oracle price is shown above.');
+          return;
+        }
         if (!candles.length) candles = flatCandlesFromPrice(currentPriceRef.current, now, tf);
         if (!candles.length) return;
         setChartError('');
@@ -743,7 +747,9 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
           chartRef.current.priceScale('right').applyOptions({ autoScale: true });
         }
       } catch {
-        if (dex === 'nado') {
+        if (dex === 'leverup') {
+          if (!cancelled) setChartError('LeverUp chart history is unavailable from Pyth. Live oracle price is shown above.');
+        } else if (dex === 'nado') {
           if (!cancelled) setChartError('Nado chart is temporarily unavailable. Please retry.');
         } else {
           const fallback = flatCandlesFromPrice(currentPriceRef.current, now, tf);

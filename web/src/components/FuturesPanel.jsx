@@ -5414,7 +5414,7 @@ function FuturesPanel() {
     return { ...(currentMarket || {}), ...(priceRow || {}) };
   }, [prices, symbol, currentMarket]);
   const change24h = useMemo(() => {
-    if (dex === 'imperial' && curPriceData.price_change_24h == null) return null;
+    if ((dex === 'imperial' || dex === 'leverup') && curPriceData.price_change_24h == null) return null;
     return marketChange24h(curPriceData);
   }, [curPriceData, dex]);
   const vol24h = curPriceData ? marketVolume24h(curPriceData) : 0;
@@ -5425,7 +5425,7 @@ function FuturesPanel() {
   const oiLabel = hasOstiumSideOi ? 'OI L/S' : 'OI';
   const oiText = hasOstiumSideOi
     ? `${formatCompactNumber(ostiumSideOi.long)} / ${formatCompactNumber(ostiumSideOi.short)}`
-    : dex === 'imperial' && curPriceData.open_interest === 0 ? '$0' : formatCompactUsd(oi);
+    : (dex === 'imperial' && curPriceData.open_interest === 0) || (dex === 'leverup' && curPriceData.open_interest_usd === 0) ? '$0' : formatCompactUsd(oi);
   const oiTitle = hasOstiumSideOi
     ? `Open Interest Long / Short${ostiumSideOi.cap > 0 ? `, cap ${formatCompactUsd(ostiumSideOi.cap)}` : ''}`
     : dex === 'imperial' ? 'Imperial routed open interest (not total venue OI)' : 'Open Interest';
@@ -9822,7 +9822,7 @@ function FuturesPanel() {
 
   // ==================== TRADE TAB ====================
   const renderTrade = () => {
-    const supportsOrderBook = dex === 'pacifica' || dex === 'phoenix' || dex === 'decibel' || dex === 'ondo' || dex === 'bulk' || dex === 'leverup' || dex === 'aster';
+    const supportsOrderBook = dex === 'pacifica' || dex === 'phoenix' || dex === 'decibel' || dex === 'ondo' || dex === 'bulk' || dex === 'aster';
     // Funding / borrow rate badge (top-right of chart).
     const fundingBadge = currentMarket ? (
       <div style={{ ...S.fundingOverlay, ...(hasOstiumRollover ? S.fundingOverlayCompact : null) }}>

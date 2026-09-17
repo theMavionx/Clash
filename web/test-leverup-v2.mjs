@@ -349,7 +349,7 @@ assert.match(balanceTelemetrySource, /SUPPORTED_EXCHANGES[\s\S]*?'leverup'/u, 'L
 assert.match(hookSource, /useTradingGoldSync/u, 'LeverUp must run the shared identity-safe Gold sync');
 assert.match(hookSource, /submitted\?\.rewardTracking === true[\s\S]*?scheduleGoldClaim\(\)/u, 'only a broker-proof-tracked LeverUp intent may schedule an automatic Gold claim');
 assert.match(panelSource, /dex === 'monad' \|\| dex === 'leverup'/u, 'LeverUp wallet connect must target Monad');
-assert.match(panelSource, /supportsOrderBook = .*dex === 'leverup'/u, 'LeverUp must render its oracle-pricing state instead of foreign depth');
+assert.doesNotMatch(panelSource, /supportsOrderBook = .*dex === 'leverup'/u, 'LeverUp book is hidden until genuine depth is available');
 assert.match(panelSource, /adds no extra fee for the trader/u, 'LeverUp setup must explain that broker attribution adds no surcharge');
 assert.match(serverSource, /readPerMarketLists\('getPositionsV4'/u, 'failed position multicalls must retry instead of becoming a false empty account');
 assert.match(serverSource, /readPerMarketLists\('getLimitOrders'/u, 'failed limit-order multicalls must retry instead of hiding orders');

@@ -221,6 +221,7 @@ export function useLeverup() {
       dex: 'leverup',
       symbol: normalizeSymbol(row.symbol),
       mark: String(row.mark_price ?? row.price ?? row.mark ?? 0),
+      oracle: row.oracle_price == null ? null : String(row.oracle_price),
       mid: String(row.mark_price ?? row.price ?? row.mark ?? 0),
       bid: String(row.mark_price ?? row.price ?? row.mark ?? 0),
       ask: String(row.mark_price ?? row.price ?? row.mark ?? 0),
