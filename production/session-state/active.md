@@ -1,5 +1,12 @@
 # Active Session State
 
+## LeverUp closed-position reconciliation — Release candidate (2026-09-17)
+
+- Added synchronous duplicate-close guard and confirmed full-close row removal; stale account/TP-SL snapshots cannot restore a closed instance.
+- Wallet/hash/open-timestamp identity; account-scope checks, partial/rejected closes preserve rows.
+- Seven focused actual-hook tests, mounted React close flow and full Deploy gate passed.
+- Report: `production/reports/bug-leverup-close-sync-2026-09-17.md`.
+
 ## LeverUp market data — Released (2026-09-17)
 
 - Owner chose to remove LeverUp book for now; chart reclaims column on desktop and book tab is absent on mobile.

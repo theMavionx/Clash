@@ -64,6 +64,11 @@ function rawQty(value) {
   return leverupUnits(value, 10);
 }
 
+function positionKey(wallet, position) {
+  // Timestamp distinguishes a newly opened instance if a venue reuses a hash.
+  return `${String(wallet || '').toLowerCase()}:${String(position?.positionHash || '').toLowerCase()}:${Number(position?.timestamp) || 0}`;
+}
+
 function validateLeverupOrderRisk(market, margin, leverage) {
   const notional = margin * leverage;
   const tiers = (Array.isArray(market?.leverage_tiers) ? market.leverage_tiers : [])
@@ -139,6 +144,10 @@ export function useLeverup() {
   const feeTokenStatesRef = useRef({ wallet: null, at: 0, states: new Map() });
   const brokerRef = useRef(builderConfig);
   const pricesRef = useRef([]);
+  // Wallet-scoped confirmed closes outlive stale RPC/indexer snapshots.
+  // Never infer a close from an empty response or an unsuccessful intent.
+  const closedPositionsRef = useRef(new Set());
+  const closingPositionsRef = useRef(new Set());
 
   const registeredWallet = registeredDexWallet(player, 'leverup', 'evm');
   const registeredEvmWallet = isAddress(registeredWallet) ? String(registeredWallet).toLowerCase() : null;
@@ -233,14 +242,18 @@ export function useLeverup() {
 
   const fetchAccount = useCallback(async () => {
     if (!walletAddr || !gameToken || walletMismatch) return null;
+    const scope = captureCredentialOperation();
     const query = `?dex=leverup&address=${encodeURIComponent(walletAddr)}`;
     const [accountRow, positionRows, orderRows] = await Promise.all([
       fetchJson(`/api/futures/leverup/account${query}`),
       fetchJson(`/api/futures/leverup/positions${query}`),
       fetchJson(`/api/futures/leverup/orders${query}`),
     ]);
+    assertCredentialOperation(scope);
     const latestPrices = new Map(pricesRef.current.map(row => [normalizeSymbol(row.symbol), num(row.mark ?? row.price)]));
-    const normalizedPositions = (Array.isArray(positionRows) ? positionRows : []).map((row) => {
+    const normalizedPositions = (Array.isArray(positionRows) ? positionRows : [])
+      .filter(row => !closedPositionsRef.current.has(positionKey(walletAddr, row)))
+      .map((row) => {
       const markPrice = latestPrices.get(normalizeSymbol(row.symbol)) || num(row.mark_price || row.entry_price);
       const entryPrice = num(row.entry_price);
       const qty = num(row.qty ?? row.size ?? row.amount);
@@ -288,7 +301,7 @@ export function useLeverup() {
     setPositions(normalizedPositions);
     setOrders(normalizedOrders);
     return enrichedAccount;
-  }, [fetchJson, gameToken, walletAddr, walletMismatch]);
+  }, [fetchJson, gameToken, walletAddr, walletMismatch, captureCredentialOperation, assertCredentialOperation]);
 
   const verifyOneTap = useCallback(async ({ quiet = false } = {}) => {
     let scope;
@@ -563,7 +576,7 @@ export function useLeverup() {
         feeTokenStatesRef.current = { ...feeTokenStatesRef.current, at: 0 };
         if (status?.success !== true) throw new Error(actionResultError(status));
         if (submitted?.rewardTracking === true) scheduleGoldClaim();
-        setTimeout(() => { void fetchAccount(); }, 1_500);
+        setTimeout(() => { void fetchAccount().catch(() => null); }, 1_500);
         return { success: true, intentHash, transactionHash: status?.txnHash || null, status };
       }
       await new Promise(resolve => window.setTimeout(resolve, 500));
@@ -697,24 +710,38 @@ export function useLeverup() {
       ? symbolOrPosition
       : positions.find(row => normalizeSymbol(row.symbol) === normalizeSymbol(symbolOrPosition));
     if (!position?.positionHash) return { error: 'LeverUp position hash is missing' };
+    const key = positionKey(walletAddr, position);
+    if (closedPositionsRef.current.has(key)) return { error: 'This LeverUp position is already closed. Refresh your account.' };
+    if (closingPositionsRef.current.has(key)) return { error: 'This LeverUp position is already being closed. Wait for confirmation.' };
+    closingPositionsRef.current.add(key);
     setLoading(true);
     setError(null);
     try {
+      const scope = captureCredentialOperation();
       const broker = brokerRef.current?.active ? Number(brokerRef.current.brokerId) : 0;
       const currentQty = num(position.qty ?? position.size ?? position.amount);
       const requestedQty = num(amountArg, currentQty);
       const partial = requestedQty > 0 && currentQty > 0 && requestedQty < currentQty - 1e-10;
-      return partial
+      const result = partial
         ? await submitAction(OneClickAction.PARTIAL_CLOSE, [position.positionHash, rawQty(requestedQty), broker])
         : await submitAction(OneClickAction.MARKET_CLOSE, [position.positionHash, broker]);
+      if (result?.success === true && !partial) {
+        closedPositionsRef.current.add(key);
+        assertCredentialOperation(scope);
+        setPositions(rows => rows.filter(row => positionKey(walletAddr, row) !== key));
+      }
+      // Keep successful execution successful even if the subsequent read fails.
+      if (result?.success === true) void fetchAccount().catch(() => null);
+      return result;
     } catch (requestError) {
       const message = requestError?.shortMessage || requestError?.message || 'LeverUp close failed';
       setError(message);
       return { error: message };
     } finally {
+      closingPositionsRef.current.delete(key);
       setLoading(false);
     }
-  }, [positions, submitAction]);
+  }, [positions, submitAction, walletAddr, fetchAccount, captureCredentialOperation, assertCredentialOperation]);
 
   const cancelOrder = useCallback(async (symbolOrOrder, orderIdArg) => {
     const order = typeof symbolOrOrder === 'object' ? symbolOrOrder : null;
@@ -750,7 +777,7 @@ export function useLeverup() {
         await new Promise(resolve => window.setTimeout(resolve, attempt === 0 ? 500 : 750));
         const query = `?dex=leverup&address=${encodeURIComponent(walletAddr)}`;
         const rows = await fetchJson(`/api/futures/leverup/positions${query}`);
-        const nextPositions = Array.isArray(rows) ? rows : [];
+        const nextPositions = (Array.isArray(rows) ? rows : []).filter(row => !closedPositionsRef.current.has(positionKey(walletAddr, row)));
         setPositions(nextPositions);
         position = findPosition(nextPositions);
       }
@@ -840,7 +867,7 @@ export function useLeverup() {
     const accountInterval = window.setInterval(() => {
       if (document.visibilityState !== 'visible') return;
       void fetchPrices();
-      if (walletAddr && setupVerified === true) void fetchAccount();
+      if (walletAddr && setupVerified === true) void fetchAccount().catch(() => null);
     }, POLL_INTERVAL_MS);
     const refreshFeeState = () => {
       if (document.visibilityState !== 'visible') return;

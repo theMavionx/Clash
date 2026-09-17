@@ -1,5 +1,10 @@
 # User Request Log
 
+## UR-2026-09-17-LEVERUP-CLOSE-SYNC
+
+- Owner: «може вона в фронтенді показувалася і висіла як не закрита то виправ це» after audit found a second close 24 seconds after success for the same trader and position hash.
+- Fix confirmed-close UI reconciliation and duplicate-close protection; verify delayed snapshots and partial closes without funded transactions.
+
 ## UR-2026-09-17-LEVERUP-MARKET-DATA
 
 - Owner: «чому тут половини даних немає де ордербук … треба доробити щоб він теж був»; clarified «можеш прибрати просто поки ордер бук».

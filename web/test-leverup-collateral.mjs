@@ -22,6 +22,7 @@ test('actual backend account reader includes lvUSD and preserves atomic balance 
 test('actual account enrichment retains lvUSD after close without mislabelling wallet USDC',async()=>{
   let saved,wallet;
   const context=vm.createContext({useCallback:f=>f,walletAddr:LEVERUP_USDC,gameToken:'test',walletMismatch:false,
+    captureCredentialOperation:()=>({}),assertCredentialOperation(){},closedPositionsRef:{current:new Set()},positionKey:(w,h)=>w+':'+h,
     pricesRef:{current:[]},num:(v,f=0)=>Number.isFinite(Number(v))?Number(v):f,normalizeSymbol:x=>x,normalizeLongSide:()=>true,
     fetchJson:async path=>path.includes('/account')?{wallet_usdc:0.72,wallet_lvusd:20}:[],
     setAccount:v=>saved=v,setWalletUsdc:v=>wallet=v,setPositions(){},setOrders(){}});
