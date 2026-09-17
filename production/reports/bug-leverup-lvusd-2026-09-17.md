@@ -3,7 +3,7 @@
 ## Summary
 - ID: BUG-LEVERUP-LVUSD-20260917
 - Severity: S2-Major; priority: P1
-- Status: fixed locally; deployment verification pending
+- Status: released and live read/asset health verified
 - Reported: 2026-09-17, owner forwarding user screenshot
 - Category: trading / UI / account data; regression: unknown
 - Affected build: production 3eef0d2d; desktop and mobile browser terminal.
@@ -33,3 +33,12 @@ Actual: server reads only USDC, hook overwrites account availability with USDC, 
 
 ## Limits
 No funded order, live user wallet approval, or swap was performed. User-specific wallet holdings were not independently inspected (no account identifier supplied). Combined USD display is nominal protocol collateral, not a guaranteed USDC redemption value. Local tests verify encoding and UI, not real exchange execution.
+
+## Release verification
+- App commit `3c6a6b2d`; canonical atomic deployment completed 2026-09-17 06:56:38 UTC, current `/opt/clash/releases/20260917065142-3c6a6b2d`.
+- At 06:56:55 UTC all five Clash services online, zero restarts. Public bundle `FuturesPanel-GxFI3ywU.js` HTTP 200 and SHA256 byte-matches the release file with collateral selector.
+- Online / LeverUp markets / fee-config HTTP 200; unauthenticated LeverUp account HTTP 401.
+- New production adapter read both exact token balances using a public contract address as a read-only smoke fixture; finite summed free collateral verified. This is not the reporting user's wallet.
+- Futures error log unchanged at 374019 bytes from pre-deploy baseline; no new errors in that observation window.
+- Rollback retained `/opt/clash/releases/20260916081717-3eef0d2d`. Standard retention removed old `20260916075134-89b35e4e` release only (rebuildable from Git), shared data retained.
+- Existing dependency/Node-engine warnings remain. Deploy's system dependency step upgraded sqlite3/libsqlite3 packages; no host reboot performed (pending kernel notice remains).
