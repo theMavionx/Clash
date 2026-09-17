@@ -1,11 +1,12 @@
 # Active Session State
 
-## LeverUp market data — Release candidate (2026-09-17)
+## LeverUp market data — Released (2026-09-17)
 
 - Owner chose to remove LeverUp book for now; chart reclaims column on desktop and book tab is absent on mobile.
 - Oracle alias and marked-to-market OI wired; unknown 24h change no longer shown as zero.
 - Pyth BTC history currently returns upstream 404; removed fake flat candles and added explicit bounded error/retry behavior for LeverUp.
 - Thirteen targeted test entries, real chart/terminal desktop/mobile fixture and full Deploy gate passed. Report `bug-leverup-market-data-2026-09-17.md`.
+- Released `79fc4046` as `20260917071700-79fc4046`; public JS byte-match, actual BTC oracle/OI read, five online services and no new futures errors verified. Pyth history remains unavailable; no funded orders.
 
 ## LeverUp lvUSD collateral — Released (2026-09-17)
 

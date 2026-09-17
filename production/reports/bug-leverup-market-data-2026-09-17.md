@@ -2,7 +2,7 @@
 
 ## Summary
 - ID: BUG-LEVERUP-MARKET-DATA-20260917; severity S2; priority P1.
-- Reported by owner, 2026-09-17; status: local verified, release pending.
+- Reported by owner, 2026-09-17; status: released, live API/assets verified.
 - Trading UI/data integration; reproducible on desktop/mobile; regression unknown.
 - Baseline production 3c6a6b2d.
 
@@ -31,3 +31,10 @@ Expected: available market metrics are displayed, unavailable data is explicitly
 
 ## Remaining limitation
 Pyth BTC history is currently unavailable; this change does not restore upstream candles or provide another history provider. Live oracle/market reads remain available. No genuine LeverUp L2 source was established, and no depth is invented.
+
+## Release evidence
+- Commit `79fc4046`, current `/opt/clash/releases/20260917071700-79fc4046`; canonical deploy completed 07:20:18 UTC.
+- Verified 07:21:04 UTC: five services online with zero restarts, online/prices HTTP 200, BTC oracle 76470.26010896 and marked OI 21039.892411664212 USD.
+- Public `FuturesPanel-DYqQ_mjD.js` byte-matches release; corresponding canonical source commit confirms LeverUp excluded from book capability. Runtime release intentionally omits source-only files; verifier uses commit-checked canonical checkout for source assertion.
+- Futures error log unchanged at 374072 bytes from predeploy baseline.
+- Rollback retained `20260917065142-3c6a6b2d`; standard retention removed `20260916081717-3eef0d2d` release (rebuildable from Git), not shared data.
