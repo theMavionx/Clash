@@ -1,11 +1,12 @@
 # Active Session State
 
-## LeverUp closed-position reconciliation — Release candidate (2026-09-17)
+## LeverUp closed-position reconciliation — Released (2026-09-17)
 
 - Added synchronous duplicate-close guard and confirmed full-close row removal; stale account/TP-SL snapshots cannot restore a closed instance.
 - Wallet/hash/open-timestamp identity; account-scope checks, partial/rejected closes preserve rows.
 - Seven focused actual-hook tests, mounted React close flow and full Deploy gate passed.
 - Report: `production/reports/bug-leverup-close-sync-2026-09-17.md`.
+- Released `34257b81` as `20260917143924-34257b81`; public guard chunk byte-match, live price/auth/health checks, five online services, no new futures errors verified. No funded test close.
 
 ## LeverUp market data — Released (2026-09-17)
 

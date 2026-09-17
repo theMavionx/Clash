@@ -2,7 +2,7 @@
 
 ## Summary
 - ID: BUG-LEVERUP-CLOSE-SYNC-20260917; severity S2; priority P1.
-- Owner report 2026-09-17; baseline app 79fc4046; status: local verified, release pending.
+- Owner report 2026-09-17; baseline app 79fc4046; status: released and live assets/health verified.
 - Trading UI / asynchronous reconciliation; regression unknown.
 
 ## Evidence and reproduction
@@ -29,3 +29,10 @@ Reproduce locally: defer account read, confirm full close, then return the old p
 
 ## Limits
 No funded transaction or user-wallet signature performed. Tombstones are local to this mounted trading hook, not persisted across full reloads; reload reads authoritative account state. Uncertain relayer outcomes are not inferred to be success. Partial-close quantity reconciliation remains authoritative-server driven.
+
+## Release
+- App commit `34257b81`; canonical deploy completed 14:44:30 UTC, current `/opt/clash/releases/20260917143924-34257b81`.
+- At 14:44:43 UTC: five Clash services online, zero restarts; online/LeverUp prices HTTP 200; anonymous positions correctly HTTP 401.
+- Public shared chunk `useOstium-COVJIf3j.js` contains both LeverUp close guards and SHA256 byte-matches the active release. Bundler chunk name is shared, not an Ostium behavior change.
+- Futures error log unchanged at 375233 bytes from predeploy baseline.
+- Previous `20260917071700-79fc4046` retained for rollback. Standard retention removed older `20260917065142-3c6a6b2d`, rebuildable from Git; shared user data retained.
