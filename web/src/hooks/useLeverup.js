@@ -109,6 +109,12 @@ export function useLeverup() {
   const [orders, setOrders] = useState([]);
   const [account, setAccount] = useState(null);
   const [walletUsdc, setWalletUsdc] = useState(null);
+  const [collateralSymbol, setCollateralSymbol] = useState('USDC');
+  const collateralToken = collateralSymbol === 'lvUSD' ? LEVERUP_LVUSD : LEVERUP_USDC;
+  const collateralDecimals = collateralSymbol === 'lvUSD' ? 18 : 6;
+  const collateralBalance = collateralSymbol === 'lvUSD'
+    ? (account?.wallet_lvusd_exact ?? account?.wallet_lvusd ?? 0)
+    : (account?.wallet_usdc_exact ?? walletUsdc ?? 0);
   const [feeConfig, setFeeConfig] = useState([]);
   const [builderConfig, setBuilderConfig] = useState({
     configured: false,
@@ -250,7 +256,8 @@ export function useLeverup() {
         pnl: unrealizedPnl,
       };
     });
-    const walletBalance = num(accountRow?.wallet_usdc ?? accountRow?.available_balance);
+    const usdcBalance = num(accountRow?.wallet_usdc ?? accountRow?.available_balance);
+    const walletBalance = usdcBalance + num(accountRow?.wallet_lvusd);
     const totalMargin = normalizedPositions.reduce((sum, row) => sum + Math.max(0, num(row.margin)), 0);
     const totalUnrealizedPnl = normalizedPositions.reduce((sum, row) => sum + num(row.unrealized_pnl), 0);
     const normalizedOrders = Array.isArray(orderRows) ? orderRows : [];
@@ -276,7 +283,7 @@ export function useLeverup() {
       orders_count: normalizedOrders.length,
     };
     setAccount(enrichedAccount);
-    setWalletUsdc(walletBalance);
+    setWalletUsdc(usdcBalance);
     setPositions(normalizedPositions);
     setOrders(normalizedOrders);
     return enrichedAccount;
@@ -563,6 +570,32 @@ export function useLeverup() {
     throw new Error('LeverUp V2 intent execution timed out');
   }, [fetchAccount, fetchFeeConfig, fetchJson, readFeeTokenStates, scheduleGoldClaim, verifyOneTap, walletAddr, walletMismatch]);
 
+  const ensureCollateralAllowance = useCallback(async (amount) => {
+    const scope = captureCredentialOperation();
+    if (!walletAddr || walletMismatch) throw new Error('Connect the LeverUp wallet linked to this Clash account');
+    const publicClient = getPublicClient(LEVERUP_CHAIN_ID);
+    const [balance, allowance] = await Promise.all([
+      publicClient.readContract({ address: collateralToken, abi: LEVERUP_ERC20_ABI, functionName: 'balanceOf', args: [walletAddr] }),
+      publicClient.readContract({ address: collateralToken, abi: LEVERUP_ERC20_ABI, functionName: 'allowance', args: [walletAddr, LEVERUP_DIAMOND] }),
+    ]);
+    assertCredentialOperation(scope);
+    if (balance < amount) throw new Error(`Insufficient ${collateralSymbol} balance including the open fee`);
+    if (allowance < amount) {
+      await ensureChain(LEVERUP_CHAIN_ID);
+      assertCredentialOperation(scope);
+      setActivationStep(`Approve ${collateralSymbol} for LeverUp trading in your wallet`);
+      try {
+        const walletClient = getWalletClient(LEVERUP_CHAIN_ID);
+        const hash = await walletClient.writeContract({ account: walletAddr, address: collateralToken,
+          abi: LEVERUP_ERC20_ABI, functionName: 'approve', args: [LEVERUP_DIAMOND, maxLeverupApproval()] });
+        const receipt = await publicClient.waitForTransactionReceipt({ hash });
+        assertCredentialOperation(scope);
+        if (receipt.status !== 'success') throw new Error(`${collateralSymbol} approval failed onchain`);
+      } finally { setActivationStep(null); }
+    }
+    feeTokenStatesRef.current = { wallet: null, at: 0, states: new Map() };
+  }, [captureCredentialOperation, assertCredentialOperation, walletAddr, walletMismatch, getPublicClient, getWalletClient, ensureChain, collateralToken, collateralSymbol]);
+
   const placeMarketOrder = useCallback(async (symbol, side, collateral, slippage = '0.5', leverage = 1, options = {}) => {
     setLoading(true);
     setError(null);
@@ -574,24 +607,25 @@ export function useLeverup() {
       if (market.disabled) throw new Error(`LeverUp ${symbol} market is not open for new positions`);
       const margin = num(collateral);
       const lev = Math.max(1, num(leverage, 1));
-      if (!(margin > 0)) throw new Error('Enter a positive USDC margin');
+      if (!(margin > 0)) throw new Error(`Enter a positive ${collateralSymbol} margin`);
       validateLeverupOrderRisk(market, margin, lev);
       const isLong = normalizeLongSide(side);
       const marketSlippagePct = isLong
         ? num(market.slippage_long_pct)
         : num(market.slippage_short_pct);
       const amounts = buildLeverupOpenAmounts({ margin: collateral, leverage, price: mark,
-        feeRate: market.open_fee_rate || 0, isLong,
+        feeRate: market.open_fee_rate || 0, isLong, collateralDecimals,
         slippage: Math.max(0.001, num(slippage, 0.5), marketSlippagePct) });
       const { amountIn } = amounts;
-      if (leverupUnits(walletUsdc ?? 0, 6) < amountIn) {
-        throw new Error(`LeverUp needs ${formatUnits(amountIn, 6)} USDC including the ${formatUnits(amounts.openFee, 6)} USDC open fee`);
+      if (leverupUnits(collateralBalance, collateralDecimals) < amountIn) {
+        throw new Error(`LeverUp needs ${formatUnits(amountIn, collateralDecimals)} ${collateralSymbol} including the open fee`);
       }
+      await ensureCollateralAllowance(amountIn);
       const broker = brokerRef.current?.active ? Number(brokerRef.current.brokerId) : 0;
       return await submitAction(OneClickAction.MARKET_OPEN, [
         market.pairBase || market.market,
         isLong,
-        LEVERUP_USDC,
+        collateralToken,
         LEVERUP_LVUSD,
         amountIn,
         amounts.qty,
@@ -600,7 +634,7 @@ export function useLeverup() {
         0n,
         broker,
         0n,
-      ], { additionalSpends: [{ token: LEVERUP_USDC, amount: amountIn }] });
+      ], { additionalSpends: [{ token: collateralToken, amount: amountIn }] });
     } catch (requestError) {
       const message = requestError?.shortMessage || requestError?.message || 'LeverUp market order failed';
       setError(message);
@@ -608,7 +642,7 @@ export function useLeverup() {
     } finally {
       setLoading(false);
     }
-  }, [findMarket, findPrice, submitAction, walletUsdc]);
+  }, [findMarket, findPrice, submitAction, collateralToken, collateralDecimals, collateralSymbol, collateralBalance, ensureCollateralAllowance]);
 
   const placeLimitOrder = useCallback(async (symbol, side, price, collateral, _tif = 'GTC', leverage = 1, options = {}) => {
     setLoading(true);
@@ -621,14 +655,15 @@ export function useLeverup() {
       if (market.disabled) throw new Error(`LeverUp ${symbol} market is not open for new positions`);
       const margin = num(collateral);
       const lev = Math.max(1, num(leverage, 1));
-      if (!(margin > 0)) throw new Error('Enter a positive USDC margin');
+      if (!(margin > 0)) throw new Error(`Enter a positive ${collateralSymbol} margin`);
       validateLeverupOrderRisk(market, margin, lev);
       const amounts = buildLeverupOpenAmounts({ margin: collateral, leverage, price,
-        feeRate: market.open_fee_rate || 0 });
+        feeRate: market.open_fee_rate || 0, collateralDecimals });
       const { amountIn } = amounts;
-      if (leverupUnits(walletUsdc ?? 0, 6) < amountIn) {
-        throw new Error(`LeverUp needs ${formatUnits(amountIn, 6)} USDC including the ${formatUnits(amounts.openFee, 6)} USDC open fee`);
+      if (leverupUnits(collateralBalance, collateralDecimals) < amountIn) {
+        throw new Error(`LeverUp needs ${formatUnits(amountIn, collateralDecimals)} ${collateralSymbol} including the open fee`);
       }
+      await ensureCollateralAllowance(amountIn);
       const broker = brokerRef.current?.active ? Number(brokerRef.current.brokerId) : 0;
       // V2 limit opens can carry protective prices before a position exists.
       // Market opens use broker-attributed decrease orders after indexing instead.
@@ -637,7 +672,7 @@ export function useLeverup() {
       return await submitAction(OneClickAction.LIMIT_OPEN, [
         market.pairBase || market.market,
         normalizeLongSide(side),
-        LEVERUP_USDC,
+        collateralToken,
         LEVERUP_LVUSD,
         amountIn,
         amounts.qty,
@@ -646,7 +681,7 @@ export function useLeverup() {
         takeProfit > 0 ? rawPrice(takeProfit) : 0n,
         broker,
         0n,
-      ], { additionalSpends: [{ token: LEVERUP_USDC, amount: amountIn }] });
+      ], { additionalSpends: [{ token: collateralToken, amount: amountIn }] });
     } catch (requestError) {
       const message = requestError?.shortMessage || requestError?.message || 'LeverUp limit order failed';
       setError(message);
@@ -654,7 +689,7 @@ export function useLeverup() {
     } finally {
       setLoading(false);
     }
-  }, [findMarket, submitAction, walletUsdc]);
+  }, [findMarket, submitAction, collateralToken, collateralDecimals, collateralSymbol, collateralBalance, ensureCollateralAllowance]);
 
   const closePosition = useCallback(async (symbolOrPosition, _sideArg, amountArg) => {
     const position = typeof symbolOrPosition === 'object'
@@ -867,6 +902,8 @@ export function useLeverup() {
     openReferralJoin: openOfficialApp,
     referralUrl: LEVERUP_APP_URL,
     chainId: LEVERUP_CHAIN_ID,
-    collateralSymbol: 'USDC',
+    collateralSymbol,
+    collateralBalance: Number(collateralBalance),
+    setCollateralSymbol,
   };
 }

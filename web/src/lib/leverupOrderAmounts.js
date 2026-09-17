@@ -1,7 +1,6 @@
 import { decodeErrorResult } from 'viem';
 
 const USD = 10n ** 18n;
-const USDC_TO_USD = 10n ** 12n;
 const QTY = 10n ** 10n;
 
 // Expand decimal/scientific input without passing it through binary floats.
@@ -20,19 +19,21 @@ export function leverupUnits(value, decimals) {
   return shift >= 0 ? digits * 10n ** BigInt(shift) : digits / 10n ** BigInt(-shift);
 }
 
-export function buildLeverupOpenAmounts({ margin, leverage, price, feeRate = 0, slippage = 0, isLong = true }) {
-  const marginRaw = leverupUnits(margin, 6);
+export function buildLeverupOpenAmounts({ margin, leverage, price, feeRate = 0, slippage = 0, isLong = true, collateralDecimals = 6 }) {
+  if (collateralDecimals !== 6 && collateralDecimals !== 18) throw new Error('Unsupported LeverUp collateral precision');
+  const tokenToUsd = 10n ** BigInt(18 - collateralDecimals);
+  const marginRaw = leverupUnits(margin, collateralDecimals);
   const leverageRaw = leverupUnits(leverage, 18);
   const priceRaw = leverupUnits(price, 18);
   const feeRaw = leverupUnits(feeRate, 18);
   const slippageRaw = leverupUnits(slippage, 18);
   if (marginRaw <= 0n || leverageRaw < USD || priceRaw <= 0n) throw new Error('Enter a positive USDC margin, price and leverage of at least 1x');
   if (slippageRaw >= 100n * USD) throw new Error('LeverUp slippage must be below 100%');
-  const notionalRaw = marginRaw * USDC_TO_USD * leverageRaw / USD;
+  const notionalRaw = marginRaw * tokenToUsd * leverageRaw / USD;
   const qty = notionalRaw * QTY / priceRaw;
   if (qty <= 0n) throw new Error('LeverUp order is below the minimum quantity precision');
-  // Round the fee up to one USDC atomic unit so collateral covers it exactly.
-  const divisor = USD * USDC_TO_USD;
+  // Round up to one atomic unit of the selected collateral token.
+  const divisor = USD * tokenToUsd;
   const openFee = (notionalRaw * feeRaw + divisor - 1n) / divisor;
   const amountIn = marginRaw + openFee;
   const delta = priceRaw * slippageRaw / (100n * USD);

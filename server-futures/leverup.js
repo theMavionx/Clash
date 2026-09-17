@@ -477,19 +477,24 @@ async function getPrices() {
 async function getAccountByAddress(address) {
   const account = normalizeAddress(address);
   if (!account) throw Object.assign(new Error('Valid LeverUp EVM address required'), { status: 400 });
-  const [balanceRaw, allowanceRaw] = await Promise.all([
+  const [balanceRaw, allowanceRaw, lvusdRaw] = await Promise.all([
     publicClient.readContract({ address: LEVERUP_USDC, abi: ERC20_ABI, functionName: 'balanceOf', args: [account] }),
     publicClient.readContract({ address: LEVERUP_USDC, abi: ERC20_ABI, functionName: 'allowance', args: [account, LEVERUP_DIAMOND] }),
+    publicClient.readContract({ address: LEVERUP_LVUSD, abi: ERC20_ABI, functionName: 'balanceOf', args: [account] }),
   ]);
   const balance = Number(formatUnits(balanceRaw, 6));
+  const lvusd = Number(formatUnits(lvusdRaw, 18));
   return {
     address: account,
     exists: true,
-    balance,
-    total_balance: balance,
-    available_balance: balance,
-    free_collateral: balance,
+    balance: balance + lvusd,
+    total_balance: balance + lvusd,
+    available_balance: balance + lvusd,
+    free_collateral: balance + lvusd,
     wallet_usdc: balance,
+    wallet_lvusd: lvusd,
+    wallet_usdc_exact: formatUnits(balanceRaw, 6),
+    wallet_lvusd_exact: formatUnits(lvusdRaw, 18),
     usdc_allowance: Number(formatUnits(allowanceRaw, 6)),
     collateral: 'USDC',
     chain_id: LEVERUP_CHAIN_ID,

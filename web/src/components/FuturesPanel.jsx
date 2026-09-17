@@ -4206,6 +4206,7 @@ function FuturesPanel() {
   const [tradePhase, setTradePhase] = useState(null); // 'preparing' | 'signing' | 'confirming' | null
   const [tradeBusy, setTradeBusy] = useState(false);
   const [amountInUsdc, setAmountInUsdc] = useState(true);
+  useEffect(() => { if (dex === 'leverup') setAmountInUsdc(true); }, [dex]);
   const [sizePct, setSizePct] = useState(0);
   const [depositAmt, setDepositAmt] = useState('');
   const [nadoDepositAsset, setNadoDepositAsset] = useState('usdt0');
@@ -4472,7 +4473,9 @@ function FuturesPanel() {
         ?? account?.balance                         // last-resort
         ?? 0)
   ));
-  const pacBalance = dex === 'domfi'
+  const pacBalance = dex === 'leverup'
+    ? Math.max(0, Number(leverupHook.collateralBalance || 0))
+    : dex === 'domfi'
     ? Math.max(0, Number(account?.available_to_spend ?? walletUsdc ?? 0))
     : dex === 'gmtrade'
     ? Math.max(0, Number(walletUsdc || 0))
@@ -4507,6 +4510,7 @@ function FuturesPanel() {
   // equity while still returning available margin, so keep the header total
   // internally consistent until the complete snapshot arrives.
   const headerAccountValue = Math.max(pacAccountValue, pacBalance);
+  const headerFreeBalance = dex === 'leverup' ? pacBalanceBase : pacBalance;
   useEffect(() => {
     const hasObservedAccount = Boolean(walletAddr) && !loading && (
       accountReady === true
@@ -5599,10 +5603,10 @@ function FuturesPanel() {
             aria-busy={balanceCheckPending}
             aria-label={balanceCheckPending
               ? 'Loading trading account balance'
-              : `Balance $${headerAccountValue.toFixed(2)}, free margin $${pacBalance.toFixed(2)}`}
+              : `Balance $${headerAccountValue.toFixed(2)}, free margin $${headerFreeBalance.toFixed(2)}`}
             title={balanceCheckPending
               ? 'Loading trading account balance'
-              : `Balance: $${headerAccountValue.toFixed(2)} total account value\nFree: $${pacBalance.toFixed(2)} available for new trades`}
+              : `Balance: $${headerAccountValue.toFixed(2)} total account value\nFree: $${headerFreeBalance.toFixed(2)} available for new trades${dex === 'leverup' ? ' (USDC + lvUSD nominal collateral; select token in Margin)' : ''}`}
           >
             <div style={{...S.balanceMetric, ...(compactSymbolBar ? S.balanceMetricCompact : {}), ...(isMobile ? S.balanceMetricMobile : {})}}>
               <span style={S.balanceMetricLabel}>Balance</span>
@@ -5622,7 +5626,7 @@ function FuturesPanel() {
                 ...S.balanceMetricValue,
                 color: balanceCheckPending ? 'var(--terminal-text-muted)' : 'var(--terminal-long)',
               }}>
-                {balanceCheckPending ? '—' : formatAccountHeaderUsd(pacBalance, isMobile)}
+                {balanceCheckPending ? '—' : formatAccountHeaderUsd(headerFreeBalance, isMobile)}
               </span>
             </div>
           </div>
@@ -5768,16 +5772,27 @@ function FuturesPanel() {
           <div style={{flex: compactMobile ? '1 1 auto' : 2, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 3}}>
             <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
               <span style={S.label}>{amountInUsdc ? 'Margin' : 'Amount'}</span>
-              <button style={S.unitToggle} onClick={() => { clearTradeFeedback(); setAmountInUsdc(!amountInUsdc); }}>
+              {dex === 'leverup' ? (
+                <select aria-label="LeverUp collateral token" style={S.unitToggle}
+                  value={leverupHook.collateralSymbol} disabled={loading}
+                  onChange={e => { clearTradeFeedback(); leverupHook.setCollateralSymbol(e.target.value); setAmountInUsdc(true); setAmount(''); setSizePct(0); }}>
+                  <option value="USDC">USDC</option>
+                  <option value="lvUSD">lvUSD</option>
+                </select>
+              ) : <button style={S.unitToggle} onClick={() => { clearTradeFeedback(); setAmountInUsdc(!amountInUsdc); }}>
                 {amountInUsdc ? 'USDC' : symbol}
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" style={{marginLeft: 3}}>
                   <polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/>
                   <polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/>
                 </svg>
-              </button>
+              </button>}
             </div>
-            <input type="number" aria-label={amountInUsdc ? 'Margin in USDC' : `Amount in ${symbol}`} inputMode="decimal" placeholder={amountInUsdc ? (dex === 'flash' ? `Max ${pacBalance.toFixed(2)}` : '20') : '0.01'} value={amount}
+            <input type="number" aria-label={dex === 'leverup' ? `Margin in ${leverupHook.collateralSymbol}` : amountInUsdc ? 'Margin in USDC' : `Amount in ${symbol}`} inputMode="decimal" placeholder={amountInUsdc ? (dex === 'flash' ? `Max ${pacBalance.toFixed(2)}` : '20') : '0.01'} value={amount}
               onChange={e => { clearTradeFeedback(); setAmount(e.target.value); setSizePct(0); }} style={S.input} />
+            {dex === 'leverup' && <span style={S.detail}>
+              Available: {Number(account?.wallet_usdc || 0).toFixed(2)} USDC · {Number(account?.wallet_lvusd || 0).toFixed(2)} lvUSD.
+              {' '}Orders use {leverupHook.collateralSymbol}; closed positions settle in lvUSD.
+            </span>}
           </div>
         </div>
 

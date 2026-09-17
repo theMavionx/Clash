@@ -1,5 +1,9 @@
 # User Request Log
 
+## UR-2026-09-17-LEVERUP-LVUSD
+
+- Owner forwarded: “not showing my free balance accurately … upon closing the trade usdc swapped into lvusd automatically and now on game ui there is no option i can trade with lvusd”. Screenshot shows LeverUp terminal USDC-only margin and $0.72 free. Diagnose and repair missing settlement-token support; no funded test trades.
+
 ## UR-2026-09-16-TERMINAL-HISTORY-AUDIT
 
 - Owner requested another practical trading UI polish/optimization pass and

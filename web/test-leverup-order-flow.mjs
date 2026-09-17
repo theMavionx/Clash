@@ -97,6 +97,8 @@ test('actual LeverUp hook market and limit callbacks build expected action field
   const context = vm.createContext({
     buildLeverupOpenAmounts, leverupUnits, formatUnits, OneClickAction,
     LEVERUP_USDC, LEVERUP_LVUSD,
+    collateralToken: LEVERUP_USDC, collateralDecimals: 6, collateralSymbol: 'USDC', collateralBalance: '100',
+    ensureCollateralAllowance: async () => {},
     rawPrice: value => leverupUnits(value, 18),
     num: (value, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback,
     normalizeLongSide: side => ['long', 'bid', 'buy'].includes(side),
@@ -121,4 +123,28 @@ test('actual LeverUp hook market and limit callbacks build expected action field
   assert.equal(fields[10], 0n);
   assert.match((await context.market('BTC', 'long', '101', '0.5', 20)).error, /USDC/);
   assert.equal(calls.length, 2, 'insufficient collateral fails before signing');
+  context.collateralToken = LEVERUP_LVUSD;
+  context.collateralDecimals = 18;
+  context.collateralSymbol = 'lvUSD';
+  context.collateralBalance = '20';
+  assert.equal((await context.market('BTC', 'long', '10', '0.5', 20)).success, true);
+  assert.equal(calls[2][1][2], LEVERUP_LVUSD);
+  assert.equal(calls[2][1][4], 10080000000000000000n);
+  assert.equal(calls[2][1][5], 20000000n);
+  assert.equal(calls[2][2].additionalSpends[0].token, LEVERUP_LVUSD);
+  assert.equal((await context.limit('BTC', 'long', '100000', '10', 'GTC', 20)).success, true);
+  assert.equal(calls[3][1][2], LEVERUP_LVUSD);
+  assert.equal(calls[3][1][4], 10080000000000000000n);
+  assert.match((await context.market('BTC', 'long', '21', '0.5', 20)).error, /lvUSD/);
+  assert.equal(calls.length, 4);
+});
+
+test('lvUSD preserves 18 decimals and does not change quantity versus USDC', () => {
+  const input = { margin: '10', leverage: 20, price: 100000, feeRate: '0.0004' };
+  const usdc = buildLeverupOpenAmounts(input);
+  const lvusd = buildLeverupOpenAmounts({ ...input, collateralDecimals: 18 });
+  assert.equal(lvusd.qty, usdc.qty);
+  assert.equal(lvusd.amountIn, usdc.amountIn * 10n ** 12n);
+  assert.equal(buildLeverupOpenAmounts({ margin: '1.000000000000000001', leverage: 1, price: 1, collateralDecimals: 18 }).amountIn, 1000000000000000001n);
+  assert.throws(() => buildLeverupOpenAmounts({ ...input, collateralDecimals: 8 }));
 });

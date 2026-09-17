@@ -1,5 +1,12 @@
 # Active Session State
 
+## LeverUp lvUSD collateral — Release candidate (2026-09-17)
+
+- Fixed USDC-only account reads and market/limit collateral, added explicit USDC/lvUSD selection and nominal combined free balance.
+- Exact token scaling (6/18), fresh selected-token balance/allowance check, wallet-confirmed approval; no automatic swap.
+- Eleven collateral/protocol/order test entries, thirteen transport/fee-cache tests, mounted desktop/mobile terminal flow and full Deploy gate passed.
+- No funded test or user-specific wallet read. Report: `production/reports/bug-leverup-lvusd-2026-09-17.md`.
+
 ## Hibachi history / usability audit — Released (2026-09-16)
 
 - Fixed funding cross-exchange fallthrough, history sort direction and Hibachi
