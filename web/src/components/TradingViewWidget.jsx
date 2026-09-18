@@ -15,12 +15,8 @@ import { pacificaFetch } from '../lib/pacificaClient';
 import { OSTIUM_PRICE_STREAM_WS } from '../lib/ostiumConfig';
 import { FUTURES_THEME_DARK, useFuturesTheme } from '../hooks/useFuturesTheme';
 
-// Pyth Benchmarks serves historical candles in TradingView UDF format for
-// every Pyth feed. Query it directly from the user's browser first so public
-// rate limits are distributed per user/IP. The Clash endpoint is only a
-// fallback for CORS/network failures or transient direct errors.
-const PYTH_HISTORY_API = '/api/futures/pyth/history';
-const PYTH_HISTORY_DIRECT_API = 'https://benchmarks.pyth.network/v1/shims/tradingview/history';
+// Display-only reference candles. Retired Pyth endpoints must not be retried.
+const PYTH_HISTORY_API = '/api/futures/chart/history';
 const INTERVALS = [
   { label: '1m', value: '1m', ms: 2 * 60 * 60 * 1000, pyth: '1' },
   { label: '5m', value: '5m', ms: 12 * 60 * 60 * 1000, pyth: '5' },
@@ -150,18 +146,6 @@ function candlesFromPythResponse(json) {
     Number.isFinite(c.low) &&
     Number.isFinite(c.close)
   ));
-}
-
-function flatCandlesFromPrice(price, nowMs, tf) {
-  const value = Number(price);
-  if (!Number.isFinite(value) || value <= 0) return [];
-  const toSec = Math.floor(nowMs / 1000);
-  const spanMs = Math.min(tf?.ms || 60 * 60 * 1000, 60 * 60 * 1000);
-  const fromSec = Math.max(1, Math.floor((nowMs - spanMs) / 1000));
-  return [
-    { time: fromSec, open: value, high: value, low: value, close: value },
-    { time: toSec, open: value, high: value, low: value, close: value },
-  ];
 }
 
 function decibelMarketName(sym) {
@@ -449,6 +433,8 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
   const linesRef = useRef([]);
   const lastCandleRef = useRef(null);
   const candleContextRef = useRef(null);
+  const referenceSourceRef = useRef(null);
+  const [referenceSource, setReferenceSource] = useState(null);
   const [interval, setInterval_] = useState('5m');
   const [loading, setLoading] = useState(false);
   const [chartError, setChartError] = useState('');
@@ -526,15 +512,17 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
     if (!seriesRef.current) return;
     let cancelled = false;
     let requestRunning = false;
+    let loadedReferenceSource = null;
     let nadoRequest = null;
     let nadoTimeout = null;
     const context = [dex, symbol, interval, darkTheme].join('|');
     // Retain candles only for retries of the SAME Nado market/timeframe.
     // Showing the previous token's chart while switching is misleading.
-    if (candleContextRef.current !== context
-      && (dex === 'nado' || candleContextRef.current?.startsWith('nado|'))) {
+    if (candleContextRef.current !== context) {
       seriesRef.current.setData([]);
       lastCandleRef.current = null;
+      referenceSourceRef.current = null;
+      setReferenceSource(null);
     }
     candleContextRef.current = context;
     setChartError('');
@@ -551,7 +539,7 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
         to: String(toSec),
       });
       const read = async (url) => {
-        const r = await fetch(url, dex === 'leverup' ? { signal: AbortSignal.timeout(10_000) } : undefined);
+        const r = await fetch(url, { signal: AbortSignal.timeout(18_000) });
         const json = await r.json().catch(() => null);
         if (!r.ok) {
           return {
@@ -563,17 +551,9 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
         return json || { s: 'error', errmsg: 'empty Pyth history response' };
       };
       try {
-        const direct = await read(`${PYTH_HISTORY_DIRECT_API}?${params.toString()}`);
-        if (direct?.s !== 'error') return direct;
-        const proxied = await read(`${PYTH_HISTORY_API}?${params.toString()}`);
-        return proxied?.s === 'error' ? direct : proxied;
-      } catch (e) {
-        console.warn('[chart] direct Pyth history failed, trying Clash fallback:', e?.message || e);
-        try {
-          return await read(`${PYTH_HISTORY_API}?${params.toString()}`);
-        } catch {
-          return { s: 'error', errmsg: e?.message || 'Pyth history request failed' };
-        }
+        return await read(`${PYTH_HISTORY_API}?${params.toString()}`);
+      } catch {
+        return { s: 'error', errmsg: 'Reference chart history request failed' };
       }
     }
 
@@ -597,12 +577,16 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
         json = await fetchBenchmarks(sym, tf.pyth, fromSec, toSec);
       }
 
+      if (!cancelled && json.s === 'ok') {
+        loadedReferenceSource = json.source || 'Reference';
+      }
       return candlesFromPythResponse(json);
     }
 
     async function load() {
       if (cancelled || requestRunning) return;
       requestRunning = true;
+      loadedReferenceSource = null;
       const now = Date.now();
       const tf = INTERVALS.find(i => i.value === interval) || INTERVALS[1];
       const start = now - tf.ms;
@@ -716,30 +700,29 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
           }
           if (cancelled) return;
         } else if (dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'hyperliquid' || dex === 'risex' || dex === 'leverup' || dex === 'hotstuff' || dex === 'grvt' || dex === 'gmtrade' || dex === 'flash') {
-          // These DEXes use Pyth benchmarks for chart candles. The helper
-          // keeps retries bounded so rate limits do not cascade.
+          // Reference candles are display-only; venue mark/oracle stays separate.
           candles = await loadPythCandles(tf, now, start);
           if (cancelled) return;
         } else {
-          const json = await pacificaFetch(`/kline?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}&start_time=${start}&end_time=${now}`);
-          if (cancelled || !json.data) return;
-          candles = json.data.map(c => ({
-            time: Math.floor(c.t / 1000),
-            open: parseFloat(c.o),
-            high: parseFloat(c.h),
-            low: parseFloat(c.l),
-            close: parseFloat(c.c),
-          }));
+          try {
+            const json = await pacificaFetch(`/kline?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}&start_time=${start}&end_time=${now}`);
+            if (cancelled) return;
+            candles = (Array.isArray(json?.data) ? json.data : []).map(c => ({
+              time: Math.floor(c.t / 1000), open: parseFloat(c.o), high: parseFloat(c.h),
+              low: parseFloat(c.l), close: parseFloat(c.c),
+            }));
+          } catch { /* Fall back only for display, never for execution prices. */ }
+          if (!candles.length) candles = await loadPythCandles(tf, now, start);
         }
 
         if (cancelled || !seriesRef.current) return;
-        if (!candles.length && dex === 'leverup') {
-          setChartError('LeverUp chart history is unavailable from Pyth. Live oracle price is shown above.');
+        if (!candles.length) {
+          setChartError('Chart history is unavailable for this market. Live venue price is shown above.');
           return;
         }
-        if (!candles.length) candles = flatCandlesFromPrice(currentPriceRef.current, now, tf);
-        if (!candles.length) return;
         setChartError('');
+        referenceSourceRef.current = loadedReferenceSource;
+        setReferenceSource(loadedReferenceSource);
         seriesRef.current.setData(candles);
         lastCandleRef.current = candles[candles.length - 1] || null;
         if (chartRef.current) {
@@ -747,17 +730,7 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
           chartRef.current.priceScale('right').applyOptions({ autoScale: true });
         }
       } catch {
-        if (dex === 'leverup') {
-          if (!cancelled) setChartError('LeverUp chart history is unavailable from Pyth. Live oracle price is shown above.');
-        } else if (dex === 'nado') {
-          if (!cancelled) setChartError('Nado chart is temporarily unavailable. Please retry.');
-        } else {
-          const fallback = flatCandlesFromPrice(currentPriceRef.current, now, tf);
-          if (!cancelled && fallback.length && seriesRef.current) {
-            seriesRef.current.setData(fallback);
-            lastCandleRef.current = fallback[fallback.length - 1] || null;
-          }
-        }
+        if (!cancelled) setChartError('Chart history is temporarily unavailable. Please retry.');
       } finally {
         requestRunning = false;
         if (nadoTimeout !== null) window.clearTimeout(nadoTimeout);
@@ -792,7 +765,7 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
     const bucketSeconds = INTERVAL_SECONDS[interval] || 300;
 
     const applyTick = (tick) => {
-      if (cancelled || !seriesRef.current || !ostiumTickMatchesSymbol(tick, symbol)) return;
+      if (cancelled || referenceSourceRef.current || !seriesRef.current || !ostiumTickMatchesSymbol(tick, symbol)) return;
       const price = ostiumTickPrice(tick);
       if (price == null) return;
       const tickSeconds = unixSeconds(tick?.timestampSeconds) || Math.floor(Date.now() / 1000);
@@ -883,7 +856,7 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
         for await (const update of streams.candles(phxSymbol, interval, controller.signal)) {
           if (cancelled) break;
           const candle = normalizePhoenixCandle(update);
-          if (!candle || !seriesRef.current) continue;
+          if (!candle || !seriesRef.current || referenceSourceRef.current) continue;
           seriesRef.current.update(candle);
         }
       } catch (error) {
@@ -1022,7 +995,7 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
   }, [positions, orders, symbol, darkTheme]);
 
   return (
-    <section className="futures-trading-chart" style={{ width: '100%', height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column', background: 'var(--terminal-surface)' }} aria-label={`${symbol} price chart`} title="Scroll to move the panel. Shift + wheel to zoom the chart; drag to pan.">
+    <section className="futures-trading-chart" data-chart-source={referenceSource || dex} style={{ width: '100%', height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column', background: 'var(--terminal-surface)' }} aria-label={`${symbol} price chart${referenceSource ? ` — ${referenceSource} reference` : ''}`} title={`${referenceSource ? `${referenceSource} reference; execution uses the venue price. ` : ''}Scroll to move the panel. Shift + wheel to zoom the chart; drag to pan.`}>
       {/* Timeframe selector */}
       <div style={S.tfBar}>
         {INTERVALS.map(tf => (

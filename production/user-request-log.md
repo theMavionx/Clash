@@ -1,5 +1,9 @@
 # User Request Log
 
+## UR-2026-09-18-FREE-CHART-HISTORY
+
+- Owner requests repair of missing LeverUp/Pyth history, asks to inspect other exchanges and use a free alternative, suggests Binance. Prefers no extra visible badges. Keep factual source in chart tooltip/accessibility/API metadata; never alter venue execution/oracle prices.
+
 ## UR-2026-09-18-LEVERUP-ALLOWANCE-DIAGNOSTICS
 
 - Owner supplied the affected public wallet (account `ouin`, suffix 804a), then asked “і додай більше логів ще щоб точно все записало і тдл”. Continue fixing confirmed finite-allowance rejection and add privacy-safe setup diagnostics, retaining exact per-order spending checks.

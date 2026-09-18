@@ -1,5 +1,19 @@
 # Active Session State
 
+## Free reference charts — Release candidate (2026-09-18)
+
+- Pyth retired public history; authenticated replacement has no configured key. Owner approved free alternative without a prominent badge.
+- Binance native USD index primary, Kraken/Coinbase native USD spot fallback; truthful source in response/tooltip, no fabricated history or trading-price changes.
+- Ten shared venue paths, focused 25 tests, desktop/mobile real-chart retry, six live Binance timeframes and full Deploy gate passed. Unsupported markets remain explicit no_data.
+- Report: `production/reports/chart-history-migration-2026-09-18.md`. Deployment pending.
+
+## LeverUp finite allowance and diagnostics — Released (2026-09-18)
+
+- Supplied wallet resolved the reporter; confirmed on-chain signer and finite 18.193803 USDC allowance. The old unlimited-allowance equality wrongly rejected a valid cap.
+- Setup accepts nonzero allowance; each order still requires sufficient exact allowance/balance. Post-approval amount recheck and allowlisted privacy-safe setup diagnostics added.
+- Released `9fa7dd51` as `20260918100251-9fa7dd51`; full Deploy gate, nine setup tests and existing regressions passed. Public bundle byte-match, five services online, price/health/auth checks and unchanged futures errors verified 10:08:32 UTC.
+- No funded user approval/order performed. Prior 01f14322 fixed receipt consistency but did not solve the finite-cap defect.
+
 ## LeverUp setup verification — Released (2026-09-18)
 
 - Receipt-block authorization/allowance verification and durable signer persistence before authorization; preserve specific failures instead of generic signer error.

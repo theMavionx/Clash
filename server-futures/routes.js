@@ -62,7 +62,7 @@ const bs58 = bs58Module.default || bs58Module;
 const WALLET_AUTH_ACTION = 'wallet-auth';
 const WALLET_AUTH_MAX_AGE_MS = 10 * 60 * 1000;
 
-const PYTH_BENCHMARKS = 'https://benchmarks.pyth.network/v1/shims/tradingview';
+const { fetchChartHistory } = require('./chart-history');
 const PYTH_HISTORY_CACHE_TTL_MS = 60_000;
 const PYTH_HISTORY_STALE_MS = 15 * 60_000;
 const PYTH_HISTORY_MAX_BARS = 720;
@@ -648,35 +648,7 @@ function normalizePythHistoryQuery(query) {
 }
 
 async function fetchPythHistory(query) {
-  const params = new URLSearchParams({
-    symbol: query.symbol,
-    resolution: query.resolution,
-    from: String(query.from),
-    to: String(query.to),
-  });
-  const ctrl = new AbortController();
-  const timeout = setTimeout(() => ctrl.abort(), 10_000);
-  try {
-    const upstream = await fetch(`${PYTH_BENCHMARKS}/history?${params.toString()}`, {
-      signal: ctrl.signal,
-      headers: {
-        accept: 'application/json',
-        'user-agent': 'ClashOfPerps/1.0 pyth-history-proxy',
-      },
-    });
-    const text = await upstream.text();
-    let data = null;
-    try { data = text ? JSON.parse(text) : null; } catch {}
-    if (!upstream.ok) {
-      const detail = data?.errmsg || data?.error || text || `HTTP ${upstream.status}`;
-      const err = new Error(`Pyth benchmarks ${upstream.status}: ${detail}`);
-      err.status = upstream.status;
-      throw err;
-    }
-    return data || { s: 'error', errmsg: 'empty Pyth response' };
-  } finally {
-    clearTimeout(timeout);
-  }
+  return fetchChartHistory(query);
 }
 
 // Record every verified Decibel fill that is economically non-zero. Gold
@@ -2932,7 +2904,8 @@ router.get('/candles', async (req, res) => {
   }
 });
 
-router.get('/pyth/history', async (req, res) => {
+// Legacy alias retained for already-open clients; source is explicit in response.
+router.get(['/chart/history', '/pyth/history'], async (req, res) => {
   let query;
   try {
     query = normalizePythHistoryQuery(req.query);

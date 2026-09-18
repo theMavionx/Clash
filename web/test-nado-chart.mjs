@@ -23,7 +23,8 @@ function harness(fetchImpl = async () => new Response(JSON.stringify(bars))) {
   const chart = { addSeries: () => series, applyOptions: () => {}, remove: () => {},
     timeScale: () => ({ fitContent: () => {} }), priceScale: () => ({ applyOptions: () => {} }) };
   const context = {
-    React, console, URLSearchParams, AbortController,
+    React, console, URLSearchParams, AbortController, AbortSignal,
+    getComputedStyle: () => ({ getPropertyValue: () => '' }),
     FUTURES_THEME_DARK: 'dark', useFuturesTheme: () => ({ theme: 'dark' }),
     createChart: () => chart, CandlestickSeries: {}, LineSeries: {},
     ResizeObserver: class { observe() {} disconnect() {} },
@@ -55,7 +56,7 @@ function harness(fetchImpl = async () => new Response(JSON.stringify(bars))) {
     props = { ...props, ...next };
     stateIndex = refIndex = effectIndex = 0;
     tree = Component(props);
-    refs[0].current = { clientWidth: 800, clientHeight: 500 };
+    refs[0].current = { clientWidth: 800, clientHeight: 500, addEventListener(){}, removeEventListener(){} };
     pending.splice(0).forEach(effect => effect());
     return tree;
   }
@@ -66,6 +67,15 @@ function harness(fetchImpl = async () => new Response(JSON.stringify(bars))) {
 }
 function descendants(node) {
   return React.isValidElement(node) ? [node, ...React.Children.toArray(node.props.children).flatMap(descendants)] : [];
+}
+
+for (const dex of ['leverup','avantis','gmx','ostium','hyperliquid','risex','hotstuff','grvt','gmtrade','flash']) {
+  test(`${dex} shared chart uses same-origin reference history without retired Pyth calls`,async()=>{
+    const h=harness(async()=>new Response(JSON.stringify({s:'ok',source:'Binance USD index',t:[1788122700],o:[78000],h:[78010],l:[77990],c:[78005]})));
+    h.render({dex,symbol:'BTC'});await flush();
+    assert.equal(h.calls.length,1);assert.match(h.calls[0].url,/^\/api\/futures\/chart\/history\?/);
+    assert.equal(h.writes.at(-1)[0].close,78005);assert.match(h.markup(),/Binance USD index reference/);h.unmount();
+  });
 }
 
 test('Nado uses only same-origin native candles and six-decimal KPEPE price format', async () => {
