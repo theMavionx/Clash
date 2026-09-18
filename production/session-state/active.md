@@ -1,5 +1,12 @@
 # Active Session State
 
+## LeverUp setup verification — Released (2026-09-18)
+
+- Receipt-block authorization/allowance verification and durable signer persistence before authorization; preserve specific failures instead of generic signer error.
+- Five focused setup tests, credential/protocol/close regression suite and full Deploy gate passed; read-only live Monad fixed-block allowance supported.
+- Released `01f14322` as `20260918063801-01f14322`; public bundle byte-match, five online services, endpoints and unchanged futures errors verified 06:42:11 UTC.
+- Exact reporter identity (owner recalls York/Йорк) not established from near-name production searches; exact nickname/public wallet or approval hash still needed. No funded user test. Report `bug-leverup-setup-verification-2026-09-18.md`.
+
 ## LeverUp collateral preference — Released (2026-09-18)
 
 - Explicit USDC/lvUSD selection now persists per wallet/browser; new wallets retain USDC. No automatic swap/approval.

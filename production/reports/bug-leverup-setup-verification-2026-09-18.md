@@ -25,3 +25,10 @@
 ## Remaining checks
 - User-specific onchain transaction diagnosis pending public hash/address.
 - Existing dependency audit/engine warnings are outside this change.
+
+## Production release
+- Application `01f14322`, release `20260918063801-01f14322`; canonical deployment completed 06:41:57 UTC, 2026-09-18.
+- At 06:42:11 UTC public `useOstium-CNmancoE.js` containing confirmed-block verification byte-matched release; five Clash PM2 services online, zero restarts; online/prices 200, unauthenticated positions 401. Futures error log unchanged at 384521 bytes.
+- Live read-only Monad allowance call at block 105822022 passed; no user authorization, approval or trading test transaction.
+- Rollback `20260918060101-df54e2c6` retained. Normal retention removed `20260917143924-34257b81`; shared databases preserved and old source recoverable from Git.
+- Canonical deployment's existing Solana payment-sync completed its separate pricing update successfully; no changes to that subsystem.
