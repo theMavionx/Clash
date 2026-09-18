@@ -21,3 +21,11 @@
 - Provider unit tests: normalization/validation, bounds/order, Binance preference, fallback, 4H aggregation, unsupported market behavior, fail-closed errors.
 - Mounted browser actual chart retry recovery and canvas at desktop 1280 and phone 390, collateral persistence/mock order regression pass. No funded trade.
 - Full canonical Deploy gate passed, including production web build; provider/widget focused suites: 25 passing tests.
+
+## Production release
+- Application `75de0e9c`, release `20260918101946-75de0e9c`; canonical deployment completed 10:22:45 UTC.
+- At 10:23:10 UTC public `FuturesPanel-DFyGp6Yo.js` byte-matched. All five Clash services online with zero restarts; online/prices HTTP 200, unauthenticated positions HTTP 401.
+- Public `/chart/history` BTC all six resolutions returned HTTP 200, s=ok, source=Binance USD index, 40-41 correctly ordered/validated bars. Legacy alias ETH returned 13 bars. Unsupported Metal.XAU/USD returned explicit no_data.
+- Futures error log unchanged at 385320 bytes during deployment and smoke. This is not a claim that all future provider requests or every asset are error-free.
+- Previous `20260918100251-9fa7dd51` retained for rollback. Standard retention removed `20260918063801-01f14322`; shared DB preserved and source recoverable from Git.
+- Existing deploy-time Solana payment-price sync ran successfully; no changes made to that subsystem and no funded trading test.

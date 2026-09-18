@@ -1,11 +1,12 @@
 # Active Session State
 
-## Free reference charts — Release candidate (2026-09-18)
+## Free reference charts — Released (2026-09-18)
 
 - Pyth retired public history; authenticated replacement has no configured key. Owner approved free alternative without a prominent badge.
 - Binance native USD index primary, Kraken/Coinbase native USD spot fallback; truthful source in response/tooltip, no fabricated history or trading-price changes.
 - Ten shared venue paths, focused 25 tests, desktop/mobile real-chart retry, six live Binance timeframes and full Deploy gate passed. Unsupported markets remain explicit no_data.
-- Report: `production/reports/chart-history-migration-2026-09-18.md`. Deployment pending.
+- Released `75de0e9c` as `20260918101946-75de0e9c`; public bundle byte-match and six BTC timeframes/ETH legacy alias verified 10:23:10 UTC. Five services online, zero restarts, futures errors unchanged; rollback 9fa7dd51 retained.
+- Report: `production/reports/chart-history-migration-2026-09-18.md`. No funded trading test.
 
 ## LeverUp finite allowance and diagnostics — Released (2026-09-18)
 

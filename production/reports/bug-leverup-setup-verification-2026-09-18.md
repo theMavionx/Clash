@@ -1,10 +1,17 @@
 # LeverUp setup verification reports the wrong failure
 
+## Follow-up production release (2026-09-18 10:08 UTC)
+- Finite-cap correction and privacy-safe diagnostics released as `9fa7dd51`, release `20260918100251-9fa7dd51`; canonical Deploy gate passed.
+- At 10:08:32 UTC public `useOstium-DcheXv0K.js` byte-matched; all five services online with zero restarts, online/prices 200, unauthenticated positions 401, futures errors unchanged at 385320 bytes.
+- Supplied wallet resolves the earlier identity blocker; exact approval transaction remains unavailable. No funded user action was performed and a successful user retry is not yet established.
+- Rollback `20260918063801-01f14322` retained then; canonical retention removed `20260918060101-df54e2c6`, preserving shared databases and Git source.
+- Earlier diagnostic-only and identity-pending notes below describe prior checkpoints, not this completed release.
+
 ## Reopened: finite allowance gate (2026-09-18 09:56 UTC)
 - Follow-up: owner supplied the affected wallet; it matches account `ouin` (suffix 804a). Live block 105861120 confirms agent address matches, all required permission bits present, USDC allowance 18193803 raw. Recent approval-event request failed at RPC; exact historical wallet approval edits remain unverified.
 - Follow-up implementation: accept positive finite setup allowance and reuse it instead of forcing another unlimited approval. Per-order guard retains balance/amount enforcement and now re-reads receipt-block allowance after wallet approval; insufficient capped approval fails before submission.
 - Added central logger events for attempt/stage, transaction submission/receipt, auth+allowance result, success/failure and per-order allowance checks. Explicit field allowlist excludes keys, signatures, arbitrary RPC error objects; central privacy masking remains in force. Immediate flush is best-effort, not guaranteed delivery during network failure/closed browsers.
-- Seventeen focused entries passed, including nine setup/privacy/order-allowance cases; full Deploy gate pending for this follow-up. No live approval/order performed.
+- Seventeen focused entries passed, including nine setup/privacy/order-allowance cases; full Deploy gate subsequently passed. No live approval/order performed.
 - Owner reports the new allowance-specific error across multiple wallets. Earlier fixed-block mitigation did not resolve this reported case.
 - Read-only live audit of three LeverUp accounts updated within 24 hours at Monad block 105860802: all have a named signer; two have finite nonzero allowances, one has maxUint256. Reporter identity still unknown; these accounts must not be attributed to the screenshot.
 - Actual verifyOneTap callback reproduced rejection with a valid signer and 18193803 raw USDC allowance (18.193803 USDC): approved=true, allowanceReady=false, enabled=false solely due to strict equality to maxUint256.
