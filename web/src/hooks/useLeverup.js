@@ -5,6 +5,7 @@ import { useDex } from '../contexts/DexContext';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { usePlayer } from './useGodot';
 import { useCredentialOperationScope } from './useCredentialOperationScope';
+import { useLeverupCollateral } from './useLeverupCollateral';
 import { useTradingGoldSync } from './useTradingGoldSync';
 import { registeredDexWallet } from '../lib/playerDexAccounts';
 import {
@@ -114,7 +115,7 @@ export function useLeverup() {
   const [orders, setOrders] = useState([]);
   const [account, setAccount] = useState(null);
   const [walletUsdc, setWalletUsdc] = useState(null);
-  const [collateralSymbol, setCollateralSymbol] = useState('USDC');
+  const [collateralSymbol, setCollateralSymbol] = useLeverupCollateral(walletAddr);
   const collateralToken = collateralSymbol === 'lvUSD' ? LEVERUP_LVUSD : LEVERUP_USDC;
   const collateralDecimals = collateralSymbol === 'lvUSD' ? 18 : 6;
   const collateralBalance = collateralSymbol === 'lvUSD'

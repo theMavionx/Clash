@@ -21,6 +21,13 @@ try {
     }
     await page.getByLabel('Margin in USDC',{exact:true}).fill('10');
     await select.selectOption('lvUSD');
+    await page.reload();
+    await select.waitFor();
+    assert.equal(await select.inputValue(),'lvUSD','explicit choice survives a full page reload');
+    await page.goto('http://127.0.0.1:5196/?dex=leverup&terminal=1&theme=dark&wallet=b');
+    await select.waitFor();assert.equal(await select.inputValue(),'USDC','another wallet keeps its own default');
+    await page.goto('http://127.0.0.1:5196/?dex=leverup&terminal=1&theme=dark');
+    await select.waitFor();assert.equal(await select.inputValue(),'lvUSD','returning wallet restores its choice');
     const margin=page.getByLabel('Margin in lvUSD',{exact:true});
     assert.equal(await margin.inputValue(),'','switching token clears the previous order amount');
     assert.match(await page.locator('body').innerText(),/0.72 USDC.*20.00 lvUSD/);

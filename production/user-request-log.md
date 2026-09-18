@@ -1,5 +1,10 @@
 # User Request Log
 
+## UR-2026-09-18-LEVERUP-COLLATERAL-PREFERENCE
+
+- Owner: “if instead of usdc you can set lvusd as default … Or atleast if i changed it once it stay same виправ теж це і на прод відразу”.
+- Preserve explicit collateral choice per wallet across panel remount/browser reload; keep existing default for wallets without a choice. Owner explicitly authorizes production release.
+
 ## UR-2026-09-17-LEVERUP-CLOSE-SYNC
 
 - Owner: «може вона в фронтенді показувалася і висіла як не закрита то виправ це» after audit found a second close 24 seconds after success for the same trader and position hash.

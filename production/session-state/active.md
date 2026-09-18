@@ -1,5 +1,11 @@
 # Active Session State
 
+## LeverUp collateral preference — Release candidate (2026-09-18)
+
+- Explicit USDC/lvUSD selection now persists per wallet/browser; new wallets retain USDC. No automatic swap/approval.
+- Preference validation/storage-denial/quota tests and desktop/mobile reload/wallet-isolation flow pass. Full Deploy gate passed.
+- Report `bug-leverup-collateral-preference-2026-09-18.md`.
+
 ## LeverUp closed-position reconciliation — Released (2026-09-17)
 
 - Added synchronous duplicate-close guard and confirmed full-close row removal; stale account/TP-SL snapshots cannot restore a closed instance.

@@ -39,6 +39,7 @@ if (realWidgets) {
 }
 const mocks = `
 import React from 'react';
+import {useLeverupCollateral} from '/src/hooks/useLeverupCollateral.js';
 const params = new URLSearchParams(location.search);
 const balance = Number(params.get('balance') || 0);
 const noop = () => {};
@@ -78,8 +79,9 @@ export const configureFixture = (tab, patch = {}) => {
 };
 ${hookNames.filter(name=>name!=='Leverup').map(name => 'export const use' + name + ' = () => trading;').join('\n')}
 export const useLeverup = () => {
-  const [collateralSymbol,setCollateralSymbol]=React.useState('USDC');
-  return {...trading,collateralSymbol,setCollateralSymbol,collateralBalance:collateralSymbol==='lvUSD'?20:0.72,
+  const walletAddr='0x'+(params.get('wallet')==='b'?'2':'1').repeat(40);
+  const [collateralSymbol,setCollateralSymbol]=useLeverupCollateral(walletAddr);
+  return {...trading,walletAddr,collateralSymbol,setCollateralSymbol,collateralBalance:collateralSymbol==='lvUSD'?20:0.72,
     walletUsdc:0.72,account:{wallet_usdc:0.72,wallet_lvusd:20,account_equity:20.72,available_to_spend:20.72}};
 };
 export const useSend = () => ({setFuturesOpen:noop});
