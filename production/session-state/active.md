@@ -1,10 +1,11 @@
 # Active Session State
 
-## LeverUp stocks/commodities chart coverage — Release candidate (2026-09-18)
+## LeverUp stocks/commodities chart coverage — Released (2026-09-18)
 
 - Official catalog's 52 HYPERLIQUID markets have exact venueSymbol but no Pyth feed. Adapter previously dropped that metadata; native chart identifiers now travel through all three terminal layouts to validated candleSnapshot reads.
 - Live reads returned candles for all 52 mappings; 31 focused tests, actual GOLD desktop/mobile chart/timeframe and full Deploy gate passed. No execution/approval changes or funded tests.
-- Report: `production/reports/leverup-native-chart-coverage-2026-09-18.md`; deployment pending.
+- Released `9992eb4e` as `20260918103439-9992eb4e`; public API52/52 mappings and six GOLD timeframes passed10:40:20UTC, bundle byte-match and five online services verified. First pass had one COPPER timeout; repeated full pass succeeded, zero code errors. Rollback75de0e9c retained.
+- Report: `production/reports/leverup-native-chart-coverage-2026-09-18.md`.
 - Reporter wallet suffix804a: zero post-allowance-release client logs at 10:25:49 UTC, so no user retry proven. Correction9fa7dd51 already live; owner advised full reload/retry to capture new stage diagnostics.
 
 ## Free reference charts — Released (2026-09-18)
