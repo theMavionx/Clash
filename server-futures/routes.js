@@ -618,7 +618,7 @@ function normalizePythHistoryQuery(query) {
   const resolution = String(query.resolution || '').trim();
   const from = Math.floor(Number(query.from));
   const to = Math.floor(Number(query.to));
-  if (!symbol || symbol.length > 96 || !/^[A-Za-z0-9._/-]+$/.test(symbol)) {
+  if (!symbol || symbol.length > 96 || !/^[A-Za-z0-9._/:-]+$/.test(symbol)) {
     throw new Error('valid symbol required');
   }
   if (!/^(1|5|15|60|240|D|1D)$/.test(resolution)) {

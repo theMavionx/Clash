@@ -71,6 +71,10 @@ const trading = {
   closePosition:record('close'), cancelOrder:record('cancel'), setTpsl:record('tpsl'),
   fetchTradeHistory:async()=>[], fetchFundingHistory:async()=>[],
 };
+if (params.has('native-chart')) {
+  trading.markets[0] = {symbol:'GOLD',max_leverage:50,lot_size:'0.001',tick_size:'0.1',chart_symbol:'Hyperliquid.xyz:GOLD'};
+  trading.prices[0] = {symbol:'GOLD',mark:'4381',mid:'4381',oracle:'4381'};
+}
 let initialTab = 'Trade';
 export const getInitialTab = () => initialTab;
 export const configureFixture = (tab, patch = {}) => {

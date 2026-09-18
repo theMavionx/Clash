@@ -9883,7 +9883,7 @@ function FuturesPanel() {
               </div>
             ) : (
               <div className="futures-terminal-chart" role="tabpanel" aria-label="Market chart" style={{flex: '0 0 clamp(360px, 48dvh, 520px)', position: 'relative', minHeight: 360}}>
-                <TradingViewWidget symbol={symbol} pythSymbol={currentMarket?.pyth_symbol} positions={positions} orders={displayOrders} currentPrice={currentPrice} priceIncrement={currentMarket?.tick_size} chartOverlay={explainBadge} dex={dex} fetchCandles={fetchCandles} />
+                <TradingViewWidget symbol={symbol} pythSymbol={currentMarket?.pyth_symbol} chartSymbol={currentMarket?.chart_symbol} positions={positions} orders={displayOrders} currentPrice={currentPrice} priceIncrement={currentMarket?.tick_size} chartOverlay={explainBadge} dex={dex} fetchCandles={fetchCandles} />
                 {fundingBadge}
               </div>
             )}
@@ -9950,7 +9950,7 @@ function FuturesPanel() {
           {/* Top: chart + orderbook + controls */}
           <div className="futures-terminal-workspace__primary" data-market-view={supportsOrderBook ? mobileMarketView : 'chart'} style={{'--terminal-book-width': `${obWidth}px`, display: 'flex', flex: '1 0 auto', minHeight: 620, overflow: 'hidden'}}>
             <div className="futures-terminal-chart" style={{flex: '1 1 0', minWidth: 0, minHeight: 0, overflow: 'hidden', position: 'relative'}}>
-              <TradingViewWidget symbol={symbol} pythSymbol={currentMarket?.pyth_symbol} positions={positions} orders={displayOrders} currentPrice={currentPrice} priceIncrement={currentMarket?.tick_size} chartOverlay={explainBadge} dex={dex} fetchCandles={fetchCandles} />
+              <TradingViewWidget symbol={symbol} pythSymbol={currentMarket?.pyth_symbol} chartSymbol={currentMarket?.chart_symbol} positions={positions} orders={displayOrders} currentPrice={currentPrice} priceIncrement={currentMarket?.tick_size} chartOverlay={explainBadge} dex={dex} fetchCandles={fetchCandles} />
             </div>
             {supportsOrderBook && (
               <>
@@ -10029,7 +10029,7 @@ function FuturesPanel() {
       <>
         {renderSymbolBar()}
         <div className="futures-terminal-chart futures-terminal-chart--compact" style={{...S.chartArea, position: 'relative'}}>
-          <TradingViewWidget symbol={symbol} pythSymbol={currentMarket?.pyth_symbol} positions={positions} orders={displayOrders} currentPrice={currentPrice} priceIncrement={currentMarket?.tick_size} chartOverlay={explainBadge} dex={dex} fetchCandles={fetchCandles} />
+          <TradingViewWidget symbol={symbol} pythSymbol={currentMarket?.pyth_symbol} chartSymbol={currentMarket?.chart_symbol} positions={positions} orders={displayOrders} currentPrice={currentPrice} priceIncrement={currentMarket?.tick_size} chartOverlay={explainBadge} dex={dex} fetchCandles={fetchCandles} />
           {fundingBadge}
         </div>
         {renderTradeControls()}

@@ -10,12 +10,12 @@ function candle(row) {
   if (![t,o,h,l,c].every(Number.isFinite) || t <= 0 || Math.min(o,h,l,c) <= 0 || h < Math.max(o,l,c) || l > Math.min(o,h,c)) return null;
   return [t,o,h,l,c,Number.isFinite(v) && v >= 0 ? v : 0];
 }
-function udf(rows, query, source, pair) {
+function udf(rows, query, source, pair, priceType = 'spot_reference') {
   const unique = new Map();
   for (const row of rows) { const c = candle(row); if (c && c[0] >= query.from && c[0] <= query.to) unique.set(c[0],c); }
   const sorted = [...unique.values()].sort((a,b)=>a[0]-b[0]).slice(-720);
   return { s: sorted.length ? 'ok' : 'no_data', source, pair,
-    price_type: source==='Binance USD index'?'index_reference':'spot_reference', t: sorted.map(r=>r[0]), o: sorted.map(r=>r[1]),
+    price_type: source==='Binance USD index'?'index_reference':priceType, t: sorted.map(r=>r[0]), o: sorted.map(r=>r[1]),
     h: sorted.map(r=>r[2]), l: sorted.map(r=>r[3]), c: sorted.map(r=>r[4]), v: sorted.map(r=>r[5]) };
 }
 async function json(url, fetchImpl) {
@@ -25,6 +25,26 @@ async function json(url, fetchImpl) {
 }
 async function fetchChartHistory(query, {fetchImpl=fetch}={}) {
   const pair = pairFor(query.symbol), minutes = MINUTES[query.resolution];
+  // LeverUp publishes these exact execution-venue identifiers. Never derive
+  // stocks/commodities from ticker guesses or substitute spot/tokenized assets.
+  const native = /^Hyperliquid\.((?:[a-z0-9]{1,12}:)?[A-Za-z0-9_-]{1,30})$/.exec(String(query.symbol));
+  if (native && minutes) {
+    const coin = native[1];
+    const interval = minutes === 1440 ? '1d' : minutes >= 60 ? `${minutes / 60}h` : `${minutes}m`;
+    const response = await fetchImpl('https://api.hyperliquid.xyz/info', {
+      method: 'POST', signal: AbortSignal.timeout(8000),
+      headers: { 'content-type': 'application/json', accept: 'application/json' },
+      body: JSON.stringify({ type: 'candleSnapshot', req: {
+        coin, interval, startTime: query.from * 1000, endTime: query.to * 1000,
+      } }),
+    });
+    if (!response.ok) throw new Error(`Venue chart provider HTTP ${response.status}`);
+    const data = await response.json();
+    if (!Array.isArray(data)) throw new Error('Invalid venue chart response');
+    const rows = data.filter(row => row.s === coin && row.i === interval)
+      .map(row => [Number(row.t) / 1000, row.o, row.h, row.l, row.c, row.v]);
+    return udf(rows, query, 'Hyperliquid perpetual', coin, 'venue_perpetual');
+  }
   if (!pair || !minutes) return {s:'no_data', reason:'unsupported_reference_market', source:null};
   const market = `${pair.base}/${pair.quote}`;
   if (pair.type==='crypto') {

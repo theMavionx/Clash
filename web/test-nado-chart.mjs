@@ -69,6 +69,15 @@ function descendants(node) {
   return React.isValidElement(node) ? [node, ...React.Children.toArray(node.props.children).flatMap(descendants)] : [];
 }
 
+test('LeverUp uses the official execution chart identifier and clears stale candles when it changes',async()=>{
+ const h=harness(async()=>new Response(JSON.stringify({s:'ok',source:'Hyperliquid perpetual',t:[1788122700],o:[100],h:[102],l:[99],c:[101]})));
+ h.render({dex:'leverup',symbol:'SAMSUNG',chartSymbol:'Hyperliquid.xyz:SMSN'});await flush();
+ assert.equal(new URL(h.calls[0].url,'http://local').searchParams.get('symbol'),'Hyperliquid.xyz:SMSN');
+ assert.match(h.markup(),/Hyperliquid perpetual reference/);
+ h.render({chartSymbol:'Hyperliquid.xyz:SKHX'});assert.deepEqual(h.writes.at(-1),[]);await flush();
+ assert.equal(new URL(h.calls.at(-1).url,'http://local').searchParams.get('symbol'),'Hyperliquid.xyz:SKHX');h.unmount();
+});
+
 for (const dex of ['leverup','avantis','gmx','ostium','hyperliquid','risex','hotstuff','grvt','gmtrade','flash']) {
   test(`${dex} shared chart uses same-origin reference history without retired Pyth calls`,async()=>{
     const h=harness(async()=>new Response(JSON.stringify({s:'ok',source:'Binance USD index',t:[1788122700],o:[78000],h:[78010],l:[77990],c:[78005]})));

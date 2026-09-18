@@ -424,7 +424,7 @@ async function fetchDecibelCandles(symbol, interval, startMs, endMs) {
   }, { label: 'Decibel candlesticks' });
 }
 
-function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], orders = [], currentPrice, priceIncrement, chartOverlay, dex = 'pacifica', fetchCandles }) {
+function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, chartSymbol = null, positions = [], orders = [], currentPrice, priceIncrement, chartOverlay, dex = 'pacifica', fetchCandles }) {
   const { theme } = useFuturesTheme();
   const darkTheme = theme === FUTURES_THEME_DARK;
   const containerRef = useRef(null);
@@ -515,7 +515,7 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
     let loadedReferenceSource = null;
     let nadoRequest = null;
     let nadoTimeout = null;
-    const context = [dex, symbol, interval, darkTheme].join('|');
+    const context = [dex, symbol, chartSymbol, pythSymbol, interval, darkTheme].join('|');
     // Retain candles only for retries of the SAME Nado market/timeframe.
     // Showing the previous token's chart while switching is misleading.
     if (candleContextRef.current !== context) {
@@ -558,7 +558,7 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
     }
 
     async function loadPythCandles(tf, now, start) {
-      const primary = pythSymbol || toPythSymbol(symbol);
+      const primary = chartSymbol || pythSymbol || toPythSymbol(symbol);
       const fallback = benchmarksFallback(primary);
       const toSec = Math.floor(now / 1000);
       let fromSec = Math.floor(start / 1000);
@@ -753,7 +753,7 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
       if (nadoTimeout !== null) window.clearTimeout(nadoTimeout);
       window.clearInterval(iv);
     };
-  }, [symbol, pythSymbol, interval, dex, darkTheme, fetchCandles, reloadCount]);
+  }, [symbol, pythSymbol, chartSymbol, interval, dex, darkTheme, fetchCandles, reloadCount]);
 
   useEffect(() => {
     if (dex !== 'ostium' || !seriesRef.current || typeof WebSocket === 'undefined') return undefined;

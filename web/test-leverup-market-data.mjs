@@ -5,6 +5,21 @@ import {readFileSync} from 'node:fs';
 import {formatUnits} from 'viem';
 const server=readFileSync(new URL('../server-futures/leverup.js',import.meta.url),'utf8');
 const hook=readFileSync(new URL('./src/hooks/useLeverup.js',import.meta.url),'utf8');
+
+test('market adapter and hook preserve official non-Pyth execution venue chart identifiers',async()=>{
+  const rows=[{pairName:'GOLD/USD',pairType:'COMMODITIES',executionVenue:'HYPERLIQUID',venueSymbol:'xyz:GOLD',status:'AVAILABLE'},
+    {pairName:'SAMSUNG/USD',pairType:'STOCKS',executionVenue:'HYPERLIQUID',venueSymbol:'xyz:SMSN',status:'AVAILABLE'},
+    {pairName:'BTC/USD',pairType:'CRYPTO',executionVenue:'POOL',pythSymbol:'Crypto.BTC/USD',status:'AVAILABLE'}];
+  const c=vm.createContext({formatUnits,Date,Map,MARKET_DETAILS_TTL_MS:60000,
+    marketDetailsCache:{at:Date.now(),value:{trading:new Map(),live:new Map()}},
+    getRawMarkets:async()=>rows,symbolOf:s=>s.split('/')[0],asNumber:(v,d=0)=>Number(v??d)});
+  vm.runInContext(server.slice(server.indexOf('async function getMarketInfo()'),server.indexOf('async function getPrices()'))+'\nglobalThis.read=getMarketInfo;',c);
+  const markets=await c.read();assert.equal(markets[0].chart_symbol,'Hyperliquid.xyz:GOLD');assert.equal(markets[1].chart_symbol,'Hyperliquid.xyz:SMSN');assert.equal(markets[2].chart_symbol,null);assert.equal(markets[0].pyth_symbol,null);
+  let normalized;
+  const h=vm.createContext({useCallback:f=>f,fetchJson:async()=>markets,normalizeSymbol:s=>s,num:(v,d)=>Number(v??d),setMarkets:r=>normalized=r,setDataReady:()=>{}});
+  vm.runInContext(hook.slice(hook.indexOf('  const fetchMarkets ='),hook.indexOf('  const fetchPrices ='))+'\nglobalThis.read=fetchMarkets;',h);
+  await h.read();assert.equal(normalized[1].chart_symbol,'Hyperliquid.xyz:SMSN');
+});
 test('LeverUp oracle prices carry marked-to-market OI; unavailable OI is not fabricated as zero',async()=>{
   let available=true;
   const c=vm.createContext({formatUnits,LEVERUP_SERVICE_URL:'fixture',isEvmAddress:()=>true,

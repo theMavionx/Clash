@@ -426,6 +426,11 @@ async function getMarketInfo() {
       reduce_only: String(row.status || '').toUpperCase() === 'REDUCE_ONLY',
       icon: row.icon || null,
       pyth_symbol: row.pythSymbol || null,
+      execution_venue: row.executionVenue || null,
+      venue_symbol: row.venueSymbol || null,
+      chart_symbol: row.executionVenue === 'HYPERLIQUID'
+        && /^(?:[a-z0-9]{1,12}:)?[A-Za-z0-9_-]{1,30}$/.test(row.venueSymbol || '')
+        ? `Hyperliquid.${row.venueSymbol}` : null,
       pyth_price_feed_id: row.pythPriceFeedId || null,
       price_decimals: asNumber(row.priceDisplayDecimals, 2),
       volume_24h: asNumber(row.volumeUSD ?? row.volume),

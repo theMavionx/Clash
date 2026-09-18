@@ -1,5 +1,10 @@
 # User Request Log
 
+## UR-2026-09-18-CHART-COVERAGE-AND-REPORTER-RECHECK
+
+- Owner requests completing stocks/commodities history coverage: «то виправляй це теж».
+- Owner asks whether the multi-wallet setup failure for supplied wallet suffix 804a was fixed. Verify fresh account-specific telemetry; distinguish deployed finite-allowance correction from a proven successful user retry.
+
 ## UR-2026-09-18-FREE-CHART-HISTORY
 
 - Owner requests repair of missing LeverUp/Pyth history, asks to inspect other exchanges and use a free alternative, suggests Binance. Prefers no extra visible badges. Keep factual source in chart tooltip/accessibility/API metadata; never alter venue execution/oracle prices.

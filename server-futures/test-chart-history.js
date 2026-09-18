@@ -2,6 +2,23 @@ const {test}=require('node:test'),assert=require('node:assert/strict');
 const {fetchChartHistory}=require('./chart-history');
 const query={symbol:'Crypto.BTC/USD',resolution:'5',from:1000,to:2000};
 const response=data=>({ok:true,json:async()=>data});
+test('native execution-venue candles preserve namespaced instruments and all six timeframes',async()=>{
+ for(const [resolution,interval] of [['1','1m'],['5','5m'],['15','15m'],['60','1h'],['240','4h'],['1D','1d']]){
+  const data=await fetchChartHistory({...query,symbol:'Hyperliquid.xyz:GOLD',resolution},{fetchImpl:async(url,options)=>{
+   assert.equal(url,'https://api.hyperliquid.xyz/info');assert.equal(options.method,'POST');
+   assert.deepEqual(JSON.parse(options.body),{type:'candleSnapshot',req:{coin:'xyz:GOLD',interval,startTime:1000000,endTime:2000000}});
+   return response([{s:'xyz:GOLD',i:interval,t:1500000,o:'10',h:'12',l:'9',c:'11',v:'2'},
+    {s:'xyz:NVDA',i:interval,t:1600000,o:'10',h:'12',l:'9',c:'11',v:'2'}]);
+  }});
+  assert.equal(data.source,'Hyperliquid perpetual');assert.equal(data.price_type,'venue_perpetual');assert.equal(data.pair,'xyz:GOLD');assert.deepEqual(data.t,[1500]);
+ }
+});
+test('native empty/failing charts never fall through to a different asset provider',async()=>{
+ for(const value of [[],{error:'bad'}]){let calls=0;const run=fetchChartHistory({...query,symbol:'Hyperliquid.io:GPRO'},{fetchImpl:async()=>{calls++;return response(value);}});
+  if(Array.isArray(value))assert.equal((await run).s,'no_data');else await assert.rejects(run,/Invalid venue/);assert.equal(calls,1);
+ }
+ const data=await fetchChartHistory({...query,symbol:'Hyperliquid.https://evil'},{fetchImpl:async()=>{throw Error('must not request');}});assert.equal(data.s,'no_data');
+});
 test('native USD Kraken candles normalized, sorted, bounded and source-attributed',async()=>{
  const data=await fetchChartHistory(query,{fetchImpl:async url=>{assert.match(url,/pair=XBTUSD/);return response({error:[],result:{last:9999,XXBTZUSD:[[1500,'10','12','9','11','10','2',1],[1200,'9','10','8','10','9','3',1],[3000,'9','10','8','10','9','1',1],[1600,'11','8','9','10','9','1',1]]}});}});
  assert.equal(data.source,'Kraken');assert.deepEqual(data.t,[1200,1500]);assert.deepEqual(data.c,[10,11]);assert.equal(data.price_type,'spot_reference');
