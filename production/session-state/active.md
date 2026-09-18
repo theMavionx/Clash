@@ -1,10 +1,11 @@
 # Active Session State
 
-## LeverUp collateral preference — Release candidate (2026-09-18)
+## LeverUp collateral preference — Released (2026-09-18)
 
 - Explicit USDC/lvUSD selection now persists per wallet/browser; new wallets retain USDC. No automatic swap/approval.
 - Preference validation/storage-denial/quota tests and desktop/mobile reload/wallet-isolation flow pass. Full Deploy gate passed.
 - Report `bug-leverup-collateral-preference-2026-09-18.md`.
+- Released `df54e2c6` as `20260918060101-df54e2c6`; public preference chunk byte-match, five online services, API checks and unchanged futures error log verified at 06:07:48 UTC. No funded test trade. Unrelated one-shot Solana payment-sync signature expired during deploy; watcher online, details in report.
 
 ## LeverUp closed-position reconciliation — Released (2026-09-17)
 
