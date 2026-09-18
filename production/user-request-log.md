@@ -1,5 +1,9 @@
 # User Request Log
 
+## UR-2026-09-18-LEVERUP-SETUP-VERIFY
+
+- Owner reports repeated “LeverUp one-click signer did not verify onchain” during setup and asks “виправ срочно”. Investigate authorization, allowance, credential persistence and RPC consistency; preserve fail-closed trading verification.
+
 ## UR-2026-09-18-LEVERUP-COLLATERAL-PREFERENCE
 
 - Owner: “if instead of usdc you can set lvusd as default … Or atleast if i changed it once it stay same виправ теж це і на прод відразу”.

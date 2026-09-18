@@ -196,8 +196,11 @@ export function createAndStoreLeverupAgent(trader, options = {}) {
   const privateKey = generatePrivateKey();
   const account = privateKeyToAccount(privateKey);
   const record = { version: 2, privateKey, address: account.address, createdAt: Date.now() };
-  writeEncryptedCredential(leverupStorageKey(trader), record, { scope }).catch(() => {});
-  return { privateKey, address: account.address };
+  const saved = writeEncryptedCredential(leverupStorageKey(trader), record, { scope });
+  const agent = { privateKey, address: account.address };
+  if (options.awaitPersistence) return saved.then(() => { assertCredentialScope(scope); return agent; });
+  saved.catch(() => {});
+  return agent;
 }
 
 export function clearLeverupAgent(trader, options = {}) {
