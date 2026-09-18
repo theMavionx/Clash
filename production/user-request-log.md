@@ -1,5 +1,13 @@
 # User Request Log
 
+## UR-2026-09-18-LEVERUP-ALLOWANCE-DIAGNOSTICS
+
+- Owner supplied the affected public wallet (account `ouin`, suffix 804a), then asked “і додай більше логів ще щоб точно все записало і тдл”. Continue fixing confirmed finite-allowance rejection and add privacy-safe setup diagnostics, retaining exact per-order spending checks.
+
+## UR-2026-09-18-LEVERUP-FINITE-ALLOWANCE-AUDIT
+
+- Owner reports multiple wallets still failing with “USDC allowance is not confirmed” and asks “перевіряй логи”. Read-only production/client-log and onchain audit; do not infer a particular reporter wallet.
+
 ## UR-2026-09-18-LEVERUP-SETUP-VERIFY
 
 - Owner reports repeated “LeverUp one-click signer did not verify onchain” during setup and asks “виправ срочно”. Investigate authorization, allowance, credential persistence and RPC consistency; preserve fail-closed trading verification.

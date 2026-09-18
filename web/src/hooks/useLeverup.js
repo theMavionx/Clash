@@ -6,6 +6,7 @@ import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { usePlayer } from './useGodot';
 import { useCredentialOperationScope } from './useCredentialOperationScope';
 import { useLeverupCollateral } from './useLeverupCollateral';
+import { logLeverupSetup, leverupFailureKind } from '../lib/leverupDiagnostics';
 import { useTradingGoldSync } from './useTradingGoldSync';
 import { registeredDexWallet } from '../lib/playerDexAccounts';
 import {
@@ -304,7 +305,7 @@ export function useLeverup() {
     return enrichedAccount;
   }, [fetchJson, gameToken, walletAddr, walletMismatch, captureCredentialOperation, assertCredentialOperation]);
 
-  const verifyOneTap = useCallback(async ({ quiet = false, blockNumber, throwOnFailure = false, expectedSigner } = {}) => {
+  const verifyOneTap = useCallback(async ({ quiet = false, blockNumber, throwOnFailure = false, expectedSigner, attempt } = {}) => {
     let scope;
     try { scope = captureCredentialOperation(); } catch { return false; }
     if (!walletAddr || walletMismatch) {
@@ -341,7 +342,9 @@ export function useLeverup() {
         args: [walletAddr, LEVERUP_DIAMOND],
         ...(blockNumber == null ? {} : { blockNumber }),
       });
-      const allowanceReady = allowance === maxLeverupApproval();
+      // Setup accepts a wallet's finite spending cap; order-level checks below
+      // enforce the exact collateral requirement before any intent is signed.
+      const allowanceReady = allowance > 0n;
       assertCredentialOperation(scope);
       const enabled = approved && allowanceReady;
       setOneTapTrading({
@@ -353,12 +356,16 @@ export function useLeverup() {
         mode: 'leverup_v2',
       });
       setSetupVerified(enabled);
+      if (!quiet || !enabled) logLeverupSetup('verification', { attempt, wallet: walletAddr, chain_id: LEVERUP_CHAIN_ID,
+        block: blockNumber, agent_approved: approved, allowance_raw: allowance, allowance_ready: allowanceReady }, !enabled);
       if (!enabled && throwOnFailure) throw new Error(approved
         ? 'LeverUp USDC allowance is not confirmed. Retry setup to check the approval; no order was submitted.'
         : 'LeverUp agent permissions are not confirmed onchain. Retry setup; no order was submitted.');
       return enabled;
     } catch (requestError) {
       try { assertCredentialOperation(scope); } catch { return false; }
+      logLeverupSetup('verification_failed', { attempt, wallet: walletAddr, chain_id: LEVERUP_CHAIN_ID,
+        block: blockNumber, failure_kind: leverupFailureKind(requestError) }, true);
       if (!quiet) setError(requestError?.shortMessage || requestError?.message || 'LeverUp signer verification failed');
       setOneTapTrading({ enabled: false, approved: false, signer: stored.address, permissions: '0', mode: 'leverup_v2' });
       setSetupVerified(false);
@@ -372,6 +379,15 @@ export function useLeverup() {
     if (walletMismatch) return { error: 'Connected wallet does not match the LeverUp wallet linked to this Clash account' };
     setLoading(true);
     setError(null);
+    const attempt = `setup-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    let stage = 'start';
+    const step = label => { stage = label; setActivationStep(label);
+      logLeverupSetup('stage', { attempt, stage, wallet: walletAddr, chain_id: LEVERUP_CHAIN_ID }); };
+    const receiptLog = (hash, receipt) => logLeverupSetup('receipt', { attempt, stage,
+      wallet: walletAddr, chain_id: LEVERUP_CHAIN_ID, tx_hash: hash, tx_status: receipt.status, block: receipt.blockNumber }, receipt.status !== 'success');
+    const submittedLog = hash => logLeverupSetup('submitted', { attempt, stage,
+      wallet: walletAddr, chain_id: LEVERUP_CHAIN_ID, tx_hash: hash });
+    step('Connecting Monad wallet');
     try {
       const scope = captureCredentialOperation();
       await ensureChain(LEVERUP_CHAIN_ID);
@@ -381,14 +397,14 @@ export function useLeverup() {
       if (!walletClient?.writeContract) throw new Error('Monad wallet signer is unavailable');
       let stored = readLeverupAgent(walletAddr);
       if (!stored) {
-        setActivationStep('Saving encrypted LeverUp browser signer');
+        step('Saving encrypted LeverUp browser signer');
         stored = await createAndStoreLeverupAgent(walletAddr, { scope, awaitPersistence: true });
         assertCredentialOperation(scope);
       }
       signerRef.current = stored;
       let verificationBlock;
 
-      setActivationStep('Checking existing LeverUp V2 agent');
+      step('Checking existing LeverUp V2 agent');
       const namedAgent = await publicClient.readContract({
         address: LEVERUP_DIAMOND,
         abi: LEVERUP_AUTH_ABI,
@@ -398,7 +414,7 @@ export function useLeverup() {
       assertCredentialOperation(scope);
       if (String(namedAgent).toLowerCase() !== LEVERUP_ZERO_ADDRESS
         && String(namedAgent).toLowerCase() !== stored.address.toLowerCase()) {
-        setActivationStep('Revoking an unavailable old browser signer');
+        step('Revoking an unavailable old browser signer');
         const revokeHash = await walletClient.writeContract({
           account: walletAddr,
           address: LEVERUP_DIAMOND,
@@ -406,8 +422,10 @@ export function useLeverup() {
           functionName: 'revokeAgentByName',
           args: [LEVERUP_AGENT_NAME],
         });
+        submittedLog(revokeHash);
         const receipt = await publicClient.waitForTransactionReceipt({ hash: revokeHash });
         assertCredentialOperation(scope);
+        receiptLog(revokeHash, receipt);
         if (receipt.status !== 'success') throw new Error('LeverUp previous signer revocation failed onchain');
         verificationBlock = receipt.blockNumber;
       }
@@ -421,7 +439,7 @@ export function useLeverup() {
       });
       assertCredentialOperation(scope);
       if (!isLeverupAgentAuthorized(currentAuth, stored.address)) {
-        setActivationStep('Authorizing Clash one-click trading');
+        step('Authorizing Clash one-click trading');
         const authHash = await walletClient.writeContract({
           account: walletAddr,
           address: LEVERUP_DIAMOND,
@@ -429,8 +447,10 @@ export function useLeverup() {
           functionName: 'authorizeAgent',
           args: [stored.address, LEVERUP_AGENT_NAME, LEVERUP_CURRENT_PERMISSION_MASK],
         });
+        submittedLog(authHash);
         const receipt = await publicClient.waitForTransactionReceipt({ hash: authHash });
         assertCredentialOperation(scope);
+        receiptLog(authHash, receipt);
         if (receipt.status !== 'success') throw new Error('LeverUp agent authorization failed onchain');
         verificationBlock = receipt.blockNumber;
       }
@@ -443,8 +463,10 @@ export function useLeverup() {
         ...(verificationBlock == null ? {} : { blockNumber: verificationBlock }),
       });
       assertCredentialOperation(scope);
-      if (allowance !== maxLeverupApproval()) {
-        setActivationStep('Approving USDC for LeverUp trading');
+      logLeverupSetup('allowance', { attempt, wallet: walletAddr, chain_id: LEVERUP_CHAIN_ID,
+        allowance_raw: allowance, allowance_ready: allowance > 0n, block: verificationBlock });
+      if (allowance <= 0n) {
+        step('Approving USDC for LeverUp trading');
         const approveHash = await walletClient.writeContract({
           account: walletAddr,
           address: LEVERUP_USDC,
@@ -452,20 +474,25 @@ export function useLeverup() {
           functionName: 'approve',
           args: [LEVERUP_DIAMOND, maxLeverupApproval()],
         });
+        submittedLog(approveHash);
         const receipt = await publicClient.waitForTransactionReceipt({ hash: approveHash });
         assertCredentialOperation(scope);
+        receiptLog(approveHash, receipt);
         if (receipt.status !== 'success') throw new Error('LeverUp USDC approval failed onchain');
         verificationBlock = receipt.blockNumber;
         feeTokenStatesRef.current = { wallet: null, at: 0, states: new Map() };
       }
-      setActivationStep('Verifying confirmed LeverUp authorization and USDC allowance');
-      const verified = await verifyOneTap({ blockNumber: verificationBlock, throwOnFailure: true, expectedSigner: stored.address });
+      step('Verifying confirmed LeverUp authorization and USDC allowance');
+      const verified = await verifyOneTap({ blockNumber: verificationBlock, throwOnFailure: true, expectedSigner: stored.address, attempt });
       assertCredentialOperation(scope);
       if (!verified) throw new Error('LeverUp setup could not be verified. Reconnect the original wallet and retry.');
       await fetchAccount().catch(() => null);
+      logLeverupSetup('success', { attempt, wallet: walletAddr, chain_id: LEVERUP_CHAIN_ID });
       return { success: true, signer: stored.address };
     } catch (requestError) {
       const message = requestError?.shortMessage || requestError?.message || 'LeverUp setup failed';
+      logLeverupSetup('failed', { attempt, stage, wallet: walletAddr, chain_id: LEVERUP_CHAIN_ID,
+        failure_kind: leverupFailureKind(requestError) }, true);
       setError(message);
       return { error: message };
     } finally {
@@ -615,6 +642,8 @@ export function useLeverup() {
       publicClient.readContract({ address: collateralToken, abi: LEVERUP_ERC20_ABI, functionName: 'allowance', args: [walletAddr, LEVERUP_DIAMOND] }),
     ]);
     assertCredentialOperation(scope);
+    logLeverupSetup('order_allowance', { wallet: walletAddr, chain_id: LEVERUP_CHAIN_ID,
+      asset: collateralSymbol, allowance_raw: allowance, required_raw: amount, allowance_ready: allowance >= amount });
     if (balance < amount) throw new Error(`Insufficient ${collateralSymbol} balance including the open fee`);
     if (allowance < amount) {
       await ensureChain(LEVERUP_CHAIN_ID);
@@ -627,6 +656,13 @@ export function useLeverup() {
         const receipt = await publicClient.waitForTransactionReceipt({ hash });
         assertCredentialOperation(scope);
         if (receipt.status !== 'success') throw new Error(`${collateralSymbol} approval failed onchain`);
+        const confirmedAllowance = await publicClient.readContract({ address: collateralToken, abi: LEVERUP_ERC20_ABI,
+          functionName: 'allowance', args: [walletAddr, LEVERUP_DIAMOND], blockNumber: receipt.blockNumber });
+        assertCredentialOperation(scope);
+        logLeverupSetup('order_approval', { wallet: walletAddr, chain_id: LEVERUP_CHAIN_ID, asset: collateralSymbol,
+          tx_hash: hash, block: receipt.blockNumber, tx_status: receipt.status,
+          allowance_raw: confirmedAllowance, required_raw: amount, allowance_ready: confirmedAllowance >= amount }, confirmedAllowance < amount);
+        if (confirmedAllowance < amount) throw new Error(`${collateralSymbol} approval is below the required order amount. Increase the spending cap in your wallet; no order was submitted.`);
       } finally { setActivationStep(null); }
     }
     feeTokenStatesRef.current = { wallet: null, at: 0, states: new Map() };
