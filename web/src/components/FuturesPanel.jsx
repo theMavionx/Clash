@@ -2809,8 +2809,8 @@ const SymbolPicker = memo(function SymbolPicker({ markets, prices, symbol, onSel
             <th style={{...SP.th, textAlign: 'right'}}>24h</th>
           </tr></thead>
           <tbody>{rows.map(r => (
-            <tr key={r.key} onClick={() => onSelect(r.symbol)}
-              style={{...SP.row, background: r.symbol === symbol ? 'var(--terminal-surface-subtle)' : 'transparent', cursor: 'pointer'}}>
+            <tr key={r.key} className="futures-symbol-row" onClick={() => onSelect(r.symbol)}
+              style={{...SP.row, background: r.symbol === symbol ? 'var(--terminal-selected, var(--terminal-surface-subtle))' : 'transparent', cursor: 'pointer'}}>
               <td style={SP.td}>
                 <div style={{display: 'flex', alignItems: 'center', gap: 5}}>
                   <TokenIcon sym={r.iconSym} size={18} />
@@ -5634,7 +5634,7 @@ function FuturesPanel() {
       </div>
       {showSymbolPicker && (
         <div style={{position: 'fixed', inset: 0, zIndex: 400, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', paddingTop: 60}} onClick={() => setShowSymbolPicker(false)}>
-          <div style={{width: fullscreen ? 480 : '90%', maxWidth: 600, maxHeight: '80vh', background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 16, padding: 12, boxShadow: '0 15px 40px rgba(0,0,0,0.4)', display: 'flex', flexDirection: 'column'}} onClick={e => e.stopPropagation()}>
+          <div style={{width: fullscreen ? 480 : '90%', maxWidth: 600, maxHeight: '80vh', background: 'var(--terminal-dropdown, var(--terminal-surface))', border: '1px solid var(--terminal-border)', borderRadius: 16, padding: 12, boxShadow: '0 15px 40px rgba(0,0,0,0.4)', display: 'flex', flexDirection: 'column'}} onClick={e => e.stopPropagation()}>
             <SymbolPicker markets={markets} prices={prices} symbol={symbol} onSelect={(s) => { setSymbol(s); setShowSymbolPicker(false); }} fullscreen={fullscreen} signals={elfaSignals} />
           </div>
         </div>
@@ -8980,7 +8980,7 @@ function FuturesPanel() {
 
               {spotBal > 0.000001 && (
                 <button
-                  style={{...S.btnSmall, width: '100%', marginTop: 8, background: 'var(--terminal-long)', color: 'var(--terminal-on-accent)', border: '1px solid var(--terminal-long)'}}
+                  style={{...S.btnSmall, width: '100%', marginTop: 8, background: 'var(--terminal-long)', color: 'var(--terminal-on-trade, var(--terminal-on-accent))', border: '1px solid var(--terminal-long)'}}
                   onClick={async () => {
                     const amountText = spotBal.toFixed(6).replace(/(\.\d*?)0+$/u, '$1').replace(/\.$/u, '');
                     const r = await moveSpotToPerp?.(amountText);
@@ -10118,7 +10118,7 @@ function FuturesPanel() {
                     <span style={{
                       fontSize: 12, fontWeight: 700,
                       padding: '2px 8px', borderRadius: 6,
-                      color: 'var(--terminal-on-accent)',
+                      color: 'var(--terminal-on-trade, var(--terminal-on-accent))',
                       background: pos.side === 'bid' ? 'var(--terminal-long)' : 'var(--terminal-short)',
                       letterSpacing: '0.5px',
                       textShadow: 'none',
@@ -10883,7 +10883,7 @@ function FuturesPanel() {
                     padding: '5px 9px',
                     fontSize: 11,
                     background: 'var(--terminal-long)',
-                    color: 'var(--terminal-on-accent)',
+                    color: 'var(--terminal-on-trade, var(--terminal-on-accent))',
                     border: '1px solid var(--terminal-long)',
                     opacity: (risexWalletBusy || loading) ? 0.65 : 1,
                     whiteSpace: 'nowrap',
@@ -11042,7 +11042,7 @@ function FuturesPanel() {
               </div>
               <button
                 type="button"
-                style={{...S.btnSmall, width: '100%', padding: '10px 12px', background: 'var(--terminal-long)', color: 'var(--terminal-on-accent)', border: '1px solid var(--terminal-long)'}}
+                style={{...S.btnSmall, width: '100%', padding: '10px 12px', background: 'var(--terminal-long)', color: 'var(--terminal-on-trade, var(--terminal-on-accent))', border: '1px solid var(--terminal-long)'}}
                 disabled={loading}
                 onClick={async () => {
                   const res = await activate?.({ autoBuilderKey: true });
@@ -11143,7 +11143,7 @@ function FuturesPanel() {
                     flex: 1,
                     padding: '9px 10px',
                     background: 'var(--terminal-long)',
-                    color: 'var(--terminal-on-accent)',
+                    color: 'var(--terminal-on-trade, var(--terminal-on-accent))',
                     border: '1px solid var(--terminal-long)',
                     opacity: loading || !grvtApiKeyInput.trim() || (grvtAccountOneTap && !oneTapTrading?.enabled && !grvtPrivateKeyInput.trim()) ? 0.65 : 1,
                   }}
@@ -11286,7 +11286,7 @@ function FuturesPanel() {
                   <button
                     style={{
                       ...S.btnSmall, padding: '6px 10px', fontSize: 11,
-                      background: accentLight, color: 'var(--terminal-on-accent)',
+                      background: accentLight, color: isFlash || isHibachi || isHyperliquid ? 'var(--terminal-on-trade, var(--terminal-on-accent))' : 'var(--terminal-on-accent)',
                       border: `1px solid ${accentBtnBorder}`, whiteSpace: 'nowrap',
                     }}
                     onClick={async () => { try { await navigator.clipboard.writeText(walletAddr); } catch {} }}
@@ -11313,7 +11313,7 @@ function FuturesPanel() {
                   <button
                     style={{
                       ...S.btnSmall, padding: '6px 10px', fontSize: 11,
-                      background: accentLight, color: 'var(--terminal-on-accent)',
+                      background: accentLight, color: isFlash || isHibachi || isHyperliquid ? 'var(--terminal-on-trade, var(--terminal-on-accent))' : 'var(--terminal-on-accent)',
                       border: `1px solid ${accentBtnBorder}`, whiteSpace: 'nowrap',
                     }}
                     onClick={() => {
@@ -11499,7 +11499,7 @@ function FuturesPanel() {
                     ...S.btnSmall,
                     width: '100%',
                     background: 'var(--terminal-long)',
-                    color: 'var(--terminal-on-accent)',
+                    color: 'var(--terminal-on-trade, var(--terminal-on-accent))',
                     border: '1px solid var(--terminal-long)',
                     opacity: isFundingBusy ? 0.65 : 1,
                   }}
@@ -11660,7 +11660,7 @@ function FuturesPanel() {
                 </button>
                 {Number(spotUsdc || 0) > 0.000001 && (
                   <button
-                    style={{...S.btnSmall, width: '100%', background: 'var(--terminal-long)', color: 'var(--terminal-on-accent)', border: '1px solid var(--terminal-long)'}}
+                    style={{...S.btnSmall, width: '100%', background: 'var(--terminal-long)', color: 'var(--terminal-on-trade, var(--terminal-on-accent))', border: '1px solid var(--terminal-long)'}}
                     onClick={async () => {
                       const amountText = Number(spotUsdc || 0).toFixed(6).replace(/(\.\d*?)0+$/u, '$1').replace(/\.$/u, '');
                       const r = await moveSpotToPerp?.(amountText);
@@ -12518,10 +12518,10 @@ const S = {
   },
   tabInactive: {
     display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, minHeight: 36,
-    background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 10,
+    background: 'var(--terminal-secondary-button, var(--terminal-surface))', border: '1px solid var(--terminal-border)', borderRadius: 10,
     color: 'var(--terminal-text-muted)', boxShadow: 'none', cursor: 'pointer', padding: '6px 9px',
   },
-  closeBtn: uiIconButton('secondary', 36),
+  closeBtn: uiIconButton('secondary', 36, { background: 'var(--terminal-secondary-button, var(--terminal-surface))' }),
   body: {
     flex: 1, padding: 'var(--terminal-body-padding, 12px)', display: 'flex', flexDirection: 'column', gap: 10,
     overflowY: 'auto', overflowX: 'hidden', background: 'var(--terminal-canvas)', scrollbarGutter: 'stable',
@@ -12617,7 +12617,7 @@ const S = {
     whiteSpace: 'nowrap',
   },
   input: {
-    background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border-strong)', borderRadius: 9,
+    background: 'var(--terminal-input, var(--terminal-surface))', border: '1px solid var(--terminal-border-strong)', borderRadius: 9,
     padding: '10px', color: 'var(--terminal-text)', fontSize: 15, fontWeight: 650, outline: 'none',
     width: '100%', boxSizing: 'border-box', minWidth: 0,
   },
@@ -12660,7 +12660,7 @@ const S = {
     height: 18,
     borderRadius: '50%',
     background: 'var(--terminal-short)',
-    color: 'var(--terminal-on-accent)',
+    color: 'var(--terminal-on-trade, var(--terminal-on-accent))',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -12752,10 +12752,10 @@ const S = {
     border: '1px solid var(--terminal-border)', overflow: 'hidden', boxShadow: 'inset 0 3px 6px rgba(0,0,0,0.1)',
     position: 'relative',
   },
-  headerBtn: uiIconButton('secondary', 36),
+  headerBtn: uiIconButton('secondary', 36, { background: 'var(--terminal-secondary-button, var(--terminal-surface))' }),
   symbolBtn: {
     display: 'flex', alignItems: 'center', gap: 6, padding: '5px 10px',
-    background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 9, cursor: 'pointer', color: 'var(--terminal-text)',
+    background: 'var(--terminal-secondary-button, var(--terminal-surface))', border: '1px solid var(--terminal-border)', borderRadius: 9, cursor: 'pointer', color: 'var(--terminal-text)',
   },
   symbolBtnCompact: {
     flex: '0 1 auto', minWidth: 0, overflow: 'hidden', boxSizing: 'border-box',
@@ -12819,7 +12819,7 @@ const S = {
     background: 'var(--terminal-surface-subtle)', borderRadius: 10, border: '1px solid var(--terminal-border)', animation: 'slideDown 0.2s',
   },
   chip: {
-    padding: '5px 10px', background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)',
+    padding: '5px 10px', background: 'var(--terminal-secondary-button, var(--terminal-surface))', border: '1px solid var(--terminal-border)',
     borderRadius: 7, cursor: 'pointer', fontWeight: 700, fontSize: 12, color: 'var(--terminal-text)',
   },
   chipActive: {
@@ -12839,7 +12839,7 @@ const S = {
     minWidth: 0, boxSizing: 'border-box',
   },
   typeBtn: {
-    flex: 1, padding: '8px', background: 'var(--terminal-surface-muted)', border: '1px solid var(--terminal-border)',
+    flex: 1, padding: '8px', background: 'var(--terminal-secondary-button, var(--terminal-surface-muted))', border: '1px solid var(--terminal-border)',
     borderRadius: 8, cursor: 'pointer', fontWeight: 700, fontSize: 12, color: 'var(--terminal-text-muted)', textTransform: 'uppercase',
   },
   typeActive: {
@@ -12859,16 +12859,16 @@ const S = {
   },
   levCloseBtn: {
     width: 28, height: 28, borderRadius: '50%', background: 'var(--terminal-short)', border: '1px solid var(--terminal-surface)',
-    color: 'var(--terminal-on-accent)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0,
+    color: 'var(--terminal-on-trade, var(--terminal-on-accent))', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0,
   },
   marginSwapBtn: {
-    padding: '8px 12px', background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border-strong)', borderRadius: 8,
+    padding: '8px 12px', background: 'var(--terminal-secondary-button, var(--terminal-surface-subtle))', border: '1px solid var(--terminal-border-strong)', borderRadius: 8,
     color: 'var(--terminal-text-control)', fontSize: 13, cursor: 'pointer', display: 'inline-flex', alignItems: 'center',
     height: '100%', boxSizing: 'border-box', whiteSpace: 'nowrap', flexShrink: 0,
     lineHeight: 1,
   },
   levPreset: {
-    flex: 1, padding: '8px 0', background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 8,
+    flex: 1, padding: '8px 0', background: 'var(--terminal-secondary-button, var(--terminal-surface-subtle))', border: '1px solid var(--terminal-border)', borderRadius: 8,
     fontWeight: 600, fontSize: 13, color: 'var(--terminal-text)', cursor: 'pointer', textAlign: 'center',
   },
   levPresetActive: {
@@ -12877,13 +12877,13 @@ const S = {
     boxShadow: 'none',
   },
   unitToggle: {
-    padding: '3px 8px', background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border-strong)', borderRadius: 6,
+    padding: '3px 8px', background: 'var(--terminal-secondary-button, var(--terminal-surface-subtle))', border: '1px solid var(--terminal-border-strong)', borderRadius: 6,
     fontSize: 11, fontWeight: 750, color: 'var(--terminal-text-control)', cursor: 'pointer', textTransform: 'uppercase',
     display: 'flex', alignItems: 'center',
   },
   midPriceBtn: {
     padding: '2px 9px',
-    background: 'var(--terminal-surface-subtle)',
+    background: 'var(--terminal-secondary-button, var(--terminal-surface-subtle))',
     border: '1px solid var(--terminal-border-strong)',
     borderRadius: 6,
     fontSize: 11,
@@ -12894,7 +12894,7 @@ const S = {
     lineHeight: 1.2,
   },
   levBtn: {
-    width: '100%', background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border-strong)', borderRadius: 9,
+    width: '100%', background: 'var(--terminal-secondary-button, var(--terminal-surface))', border: '1px solid var(--terminal-border-strong)', borderRadius: 9,
     padding: '10px', color: 'var(--terminal-text)', fontSize: 15, fontWeight: 700, cursor: 'pointer',
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
     boxSizing: 'border-box', minWidth: 0,
@@ -12930,10 +12930,10 @@ const S = {
   tradeBtn: { flex: 1, minWidth: 0, padding: '11px 6px', borderRadius: 10, border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', boxShadow: 'none' },
   tradeBtnLong: { background: 'var(--terminal-long)' },
   tradeBtnShort: { background: 'var(--terminal-short)' },
-  tradeBtnText: { color: 'var(--terminal-on-accent)', fontSize: 15, fontWeight: 750, letterSpacing: '0.04em' },
+  tradeBtnText: { color: 'var(--terminal-on-trade, var(--terminal-on-accent))', fontSize: 15, fontWeight: 750, letterSpacing: '0.04em' },
   // Positions
   posCard: {
-    background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 12,
+    background: 'var(--terminal-panel, var(--terminal-surface-subtle))', border: '1px solid var(--terminal-border)', borderRadius: 12,
     padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 5,
     // `flex: 0 0 auto` keeps the card sized to its content. Older value
     // `0 1 380px` set flex-basis=380px which, inside a column flex parent,
@@ -13035,7 +13035,7 @@ const S = {
     fontSize: 11, fontWeight: 600, color: 'var(--terminal-warning)', lineHeight: 1.2,
   },
   btnRed: {
-    ...uiButton('danger', { flex: 1, minHeight: 36, padding: '8px', fontSize: 12 }),
+    ...uiButton('danger', { flex: 1, minHeight: 36, padding: '8px', fontSize: 12, color: 'var(--terminal-on-trade, var(--terminal-on-accent))', '--terminal-button-icon': 'var(--terminal-on-trade, var(--terminal-on-accent))' }),
     textAlign: 'center',
   },
   closeLoadingLabel: {
@@ -13060,7 +13060,7 @@ const S = {
     color: 'var(--terminal-on-accent)', fontWeight: 600, fontSize: 12, cursor: 'pointer', boxShadow: 'none',
   },
   btnSmall: {
-    padding: '8px 10px', background: 'var(--terminal-border)', border: '1px solid var(--terminal-border-strong)', borderRadius: 8,
+    padding: '8px 10px', background: 'var(--terminal-secondary-button, var(--terminal-border))', border: '1px solid var(--terminal-border-strong)', borderRadius: 8,
     fontWeight: 600, fontSize: 12, color: 'var(--terminal-text)', cursor: 'pointer',
   },
   marketClosedHint: {
@@ -13131,14 +13131,14 @@ const S = {
     color: '#E65100', fontSize: 12, fontWeight: 700, textAlign: 'center', cursor: 'pointer',
   },
   balCard: {
-    flex: 1, background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 12,
+    flex: 1, background: 'var(--terminal-panel, var(--terminal-surface-subtle))', border: '1px solid var(--terminal-border)', borderRadius: 12,
     padding: 10, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2,
   },
   balCardLabel: { fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-muted)', textTransform: 'uppercase' },
   balCardValue: { fontSize: 18, fontWeight: 700, color: 'var(--terminal-text)' },
   cancelBtn: {
     width: 26, height: 26, borderRadius: '50%', background: 'var(--terminal-short)', border: '1px solid var(--terminal-surface)',
-    color: 'var(--terminal-on-accent)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+    color: 'var(--terminal-on-trade, var(--terminal-on-accent))', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
     fontSize: 13, fontWeight: 700, padding: 0,
   },
   // Bottom panel (fullscreen)
@@ -13184,12 +13184,12 @@ const S = {
   th: { padding: '6px 12px', textAlign: 'left', color: 'var(--terminal-text-faint)', fontWeight: 700, fontSize: 11, textTransform: 'uppercase', background: 'var(--terminal-surface-subtle)' },
   td: { padding: '6px 12px', color: 'var(--terminal-text)', fontSize: 12, borderBottom: '1px solid var(--terminal-border)' },
   tr: { background: 'var(--terminal-surface)' },
-  tblCloseBtn: uiButton('danger', { minHeight: 28, padding: '2px 8px', borderRadius: 8, fontSize: 11 }),
+  tblCloseBtn: uiButton('danger', { minHeight: 28, padding: '2px 8px', borderRadius: 8, fontSize: 11, color: 'var(--terminal-on-trade, var(--terminal-on-accent))', '--terminal-button-icon': 'var(--terminal-on-trade, var(--terminal-on-accent))' }),
   tblActionGroup: {
     display: 'inline-flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4,
   },
-  tblRiskBtn: uiButton('secondary', { minHeight: 28, padding: '2px 8px', borderRadius: 8, fontSize: 11 }),
-  tblShareBtn: uiIconButton('secondary', 28, { borderRadius: 8 }),
+  tblRiskBtn: uiButton('secondary', { minHeight: 28, padding: '2px 8px', borderRadius: 8, fontSize: 11, background: 'var(--terminal-secondary-button, var(--terminal-surface))' }),
+  tblShareBtn: uiIconButton('secondary', 28, { borderRadius: 8, background: 'var(--terminal-secondary-button, var(--terminal-surface))' }),
   tblExpandedRow: { background: 'var(--terminal-surface-subtle)' },
   tblExpandedCell: {
     padding: '8px 12px 12px', borderBottom: '1px solid var(--terminal-border)',

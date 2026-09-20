@@ -365,17 +365,75 @@ html {
 [data-futures-theme='dark'] .futures-terminal-shell,
 [data-ui-theme='dark'] .futures-terminal-portal,
 [data-futures-theme='dark'] .futures-terminal-portal {
-  --terminal-canvas: #141715;
-  --terminal-surface: #1e221f;
-  --terminal-surface-subtle: #242a25;
-  --terminal-surface-muted: #191d1a;
-  --terminal-surface-raised: #262d27;
-  --terminal-border: #343b35;
-  --terminal-border-strong: #555f56;
-  --terminal-text: #f3f5f2;
-  --terminal-text-muted: #b2bbb0;
-  --terminal-text-faint: #a1ab9f;
-  --terminal-chart-grid: #2a322c;
+  --terminal-canvas: #000000;
+  --terminal-surface: #111112;
+  --terminal-surface-subtle: #1a1b1e;
+  --terminal-surface-muted: #1a1b1e;
+  --terminal-surface-raised: #1d1f21;
+  --terminal-input: #1a1b1e;
+  --terminal-panel: #111112;
+  --terminal-secondary-button: #1a1b1e;
+  --terminal-dropdown: #1d1f21;
+  --terminal-selected: #2a2c32;
+  --terminal-hover: #393c44;
+  --terminal-border: #ffffff12;
+  --terminal-border-strong: #ffffff12;
+  --terminal-text: #e8e9ef;
+  --terminal-text-control: #e8e9ef;
+  --terminal-text-secondary: #979899;
+  --terminal-text-muted: #979899;
+  --terminal-text-faint: #979899;
+  --terminal-text-disabled: #979899;
+  --terminal-icon: #979899;
+  --terminal-long: #3ce362;
+  --terminal-long-strong: #3ce362;
+  --terminal-short: #ff4953;
+  --terminal-short-strong: #ff4953;
+  --terminal-on-trade: #111112;
+  --terminal-neutral-button: #1a1b1e;
+  --terminal-neutral-button-hover: #393c44;
+  --terminal-chart-grid: #ffffff12;
+  --terminal-depth-long: rgba(60, 227, 98, 0.14);
+  --terminal-depth-short: rgba(255, 73, 83, 0.14);
+  --terminal-loading-overlay: rgba(0, 0, 0, 0.82);
+  --terminal-chip-overlay: rgba(17, 17, 18, 0.7);
+  color-scheme: dark;
+}
+
+/* Role overrides stay inside the dark trading UI, including native portals. */
+:is([data-ui-theme='dark'], [data-futures-theme='dark']) :is(.futures-terminal-shell, .futures-terminal-portal) :is(input:not([type='checkbox']):not([type='radio']):not([type='range']), select, textarea) {
+  background-color: var(--terminal-input) !important;
+}
+
+:is([data-ui-theme='dark'], [data-futures-theme='dark']) :is(.futures-terminal-shell, .futures-terminal-portal) button:hover:not(:disabled) {
+  --terminal-secondary-button: var(--terminal-hover);
+  --terminal-text-muted: #e8e9ef;
+  --terminal-text-secondary: #e8e9ef;
+  --terminal-text-faint: #e8e9ef;
+}
+
+:is([data-ui-theme='dark'], [data-futures-theme='dark']) :is(.futures-terminal-shell, .futures-terminal-portal) .futures-symbol-row:hover {
+  background: var(--terminal-hover) !important;
+  --terminal-text-muted: #e8e9ef;
+}
+
+/* Keep signed market changes readable against the lighter hover row. */
+:is([data-ui-theme='dark'], [data-futures-theme='dark']) :is(.futures-terminal-shell, .futures-terminal-portal) .futures-symbol-row:hover td:last-child {
+  background: var(--terminal-dropdown);
+}
+
+:is([data-ui-theme='dark'], [data-futures-theme='dark']) :is(.futures-terminal-shell, .futures-terminal-portal) :is(button, input, select, textarea, a, [tabindex]):focus-visible {
+  outline: 2px solid var(--terminal-orange) !important;
+  outline-offset: 2px;
+}
+
+:is([data-ui-theme='dark'], [data-futures-theme='dark']) :is(.futures-terminal-shell, .futures-terminal-portal) .imperial-route-dialog {
+  background: var(--terminal-dropdown);
+}
+
+:is([data-ui-theme='dark'], [data-futures-theme='dark']) :is(.futures-terminal-shell, .futures-terminal-portal) .imperial-route-option:hover {
+  background: var(--terminal-hover);
+  --terminal-text-muted: #e8e9ef;
 }
 
 .futures-terminal-header { flex-shrink: 0; }

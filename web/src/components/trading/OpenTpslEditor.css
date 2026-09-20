@@ -10,7 +10,7 @@
 .open-tpsl-inline__modes button[aria-pressed="true"] { color: var(--terminal-orange); border-color: var(--terminal-orange); }
 .open-tpsl-inline__target { display: grid; gap: 4px; min-width: 0; }
 .open-tpsl-inline__target > label { font-size: 12px; color: var(--terminal-text-muted); }
-.open-tpsl-inline__input { display: flex; align-items: center; min-width: 0; border: 1px solid var(--terminal-border); border-radius: 7px; background: var(--terminal-surface); padding-right: 10px; }
+.open-tpsl-inline__input { display: flex; align-items: center; min-width: 0; border: 1px solid var(--terminal-border); border-radius: 7px; background: var(--terminal-input, var(--terminal-surface)); padding-right: 10px; }
 .open-tpsl-inline__input input { width: 100%; min-width: 0; min-height: 42px; box-sizing: border-box; border: 0; background: transparent; color: var(--terminal-text); padding: 8px 10px; font: inherit; }
 .open-tpsl-inline__input > span { white-space: nowrap; font-size: 11px; color: var(--terminal-text-muted); }
 .open-tpsl-inline__target small, .open-tpsl-inline__note { font-size: 11px; line-height: 1.4; color: var(--terminal-text-muted); overflow-wrap: anywhere; }

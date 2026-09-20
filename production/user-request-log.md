@@ -1,5 +1,14 @@
 # User Request Log
 
+## UR-2026-09-20-TERMINAL-PALETTE-DEPLOY
+
+- Owner: «гуд деплой» after reviewing the local palette and screenshot gallery. Authorizes the reviewed terminal palette release, required source commit/push and canonical deployment. Preserve unrelated work; no funded trading tests.
+
+## UR-2026-09-20-TERMINAL-PALETTE
+
+- Owner specifies dark terminal palette: background #000000; panels/chart #111112; fields/secondary buttons #1A1B1E; menus #1D1F21; selected #2A2C32; hover #393C44; text #E8E9EF; secondary text #979899; long/profit #3CE362; short/loss #FF4953; dividers #FFFFFF12. Orange accent may remain.
+- Follow-up: make screenshots of the entire interface afterward; explicitly do NOT deploy to production. Local preview and desktop/mobile verification only; no commit/push/deploy for this request.
+
 ## UR-2026-09-18-CHART-COVERAGE-AND-REPORTER-RECHECK
 
 - Owner requests completing stocks/commodities history coverage: «то виправляй це теж».

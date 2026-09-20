@@ -338,7 +338,7 @@ export default memo(FundingHistory);
 
 const S = {
   toolbar: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 12px', color: 'var(--terminal-text-muted)', fontSize: 12 },
-  retryButton: { padding: '8px 12px', borderRadius: 6, border: '1px solid var(--terminal-border)', background: 'transparent', color: 'var(--terminal-text)', cursor: 'pointer' },
+  retryButton: { padding: '8px 12px', borderRadius: 6, border: '1px solid var(--terminal-border)', background: 'var(--terminal-secondary-button, transparent)', color: 'var(--terminal-text)', cursor: 'pointer' },
   state: { padding: 20, textAlign: 'center', color: 'var(--terminal-text-muted)' },
   scroller: { width: '100%', overflowX: 'auto', WebkitOverflowScrolling: 'touch' },
   table: { width: '100%', minWidth: 620, borderCollapse: 'collapse', fontSize: 12, fontVariantNumeric: 'tabular-nums' },

@@ -15,6 +15,7 @@ const mockId = '/__decibel-deposit-mocks.jsx';
 const entryId = '/__decibel-deposit-entry.jsx';
 const check = process.argv.includes('--check');
 const realWidgets = process.argv.includes('--terminal');
+const palette = process.argv.includes('--palette');
 const contextImports = new Set([
   '../contexts/DexContext', '../contexts/AptosWalletContext',
   '../contexts/FuturesModeContext', '../contexts/EvmWalletContext',
@@ -37,6 +38,7 @@ if (realWidgets) {
   mockComponents.delete('TradingViewWidget');
   mockComponents.delete('OrderBook');
 }
+if (palette) for (const name of ['TradeHistory', 'FundingHistory', 'QuestsTab']) mockComponents.delete(name);
 const mocks = `
 import React from 'react';
 import {useLeverupCollateral} from '/src/hooks/useLeverupCollateral.js';
@@ -89,6 +91,7 @@ export const useLeverup = () => {
     walletUsdc:0.72,account:{wallet_usdc:0.72,wallet_lvusd:20,account_equity:20.72,available_to_spend:20.72}};
 };
 export const useSend = () => ({setFuturesOpen:noop});
+export const usePlayer = () => ({token:'local-palette-fixture'});
 export const useLayout = () => ({isMobile:window.innerWidth < 768});
 export const useWallet = () => ({select:noop,connect:noop,wallets:[]});
 export const useWalletModal = () => ({setVisible:noop});
@@ -106,7 +109,7 @@ export const reportExchangeBalanceSnapshots = noop;
 // Real chart and book components can consume deterministic local feed adapters.
 export const aptosFetchOptionsForKey = (options) => options;
 export const runWithAptosBrowserKeys = (callback) => callback('local-fixture');
-export const getReadClient = async () => ({candlesticks:{getByName:async ({endTime,interval}) => {
+export const getReadClient = async () => ({userTradeHistory:{getByAddr:async()=>({items:[]})},userFundingHistory:{getByAddr:async()=>({items:[]})},candlesticks:{getByName:async ({endTime,interval}) => {
   const seconds = {'1m':60,'5m':300,'15m':900,'1h':3600,'4h':14400,'1d':86400}[interval] || 300;
   const end = Math.floor(endTime / 1000 / seconds) * seconds;
   return Array.from({length:120}, (_,i) => {
@@ -153,6 +156,9 @@ const fixture = {
   load(id) { if(id === mockId) return mocks; if(id === entryId) return entry; },
   transform(code,id) {
     const path = id.replaceAll('\\', '/');
+    if (palette && /\/src\/components\/(TradeHistory|FundingHistory|QuestsTab)\.jsx$/.test(path)) {
+      return code.replace(/from '\.\.\/(lib\/decibel|hooks\/useGodot|contexts\/DexContext)'/g, `from '${mockId}'`);
+    }
     if (realWidgets && (path.endsWith('/src/components/TradingViewWidget.jsx') || path.endsWith('/src/components/OrderBook.jsx'))) {
       return code.replace(/from '\.\.\/lib\/(decibel|aptosBrowserKeyPool|decibelOrderBook)'/g, `from '${mockId}'`);
     }
@@ -188,7 +194,7 @@ const fixture = {
         <div id="root"></div><output id="fixture-actions">LOCAL MOCK — no real transactions\n</output>
         <script type="module" src="${entryId}"></script></body></html>`);
       res.setHeader('Content-Type','text/html; charset=utf-8');
-      res.setHeader('Content-Security-Policy', "connect-src 'self' ws://127.0.0.1:25188; form-action 'none'");
+      res.setHeader('Content-Security-Policy', `connect-src 'self' ws://127.0.0.1:${process.env.FIXTURE_HMR_PORT || 25188}; form-action 'none'`);
       res.end(html);
     });
   },

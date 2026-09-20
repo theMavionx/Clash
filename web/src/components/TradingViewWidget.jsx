@@ -453,6 +453,8 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, chartSymbol = nu
     const textColor = color('--terminal-text-muted', darkTheme ? '#AAB4C3' : '#6B7280');
     const gridColor = color('--terminal-chart-grid', darkTheme ? '#202A39' : '#F3F4F6');
     const borderColor = color('--terminal-border', darkTheme ? '#2C3748' : '#E5E7EB');
+    const longColor = color('--terminal-long', darkTheme ? '#34D399' : '#087A55');
+    const shortColor = color('--terminal-short', darkTheme ? '#F87171' : '#D14343');
     const chart = createChart(containerRef.current, {
       layout: { background: { color: background }, textColor, fontSize: 11, fontFamily: 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' },
       grid: { vertLines: { color: gridColor }, horzLines: { color: gridColor } },
@@ -472,9 +474,9 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, chartSymbol = nu
     chartContainer.addEventListener('wheel', onChartWheel, {capture:true, passive:true});
 
     const series = chart.addSeries(CandlestickSeries, {
-      upColor: darkTheme ? '#34D399' : '#087A55', downColor: darkTheme ? '#F87171' : '#D14343',
-      borderUpColor: darkTheme ? '#34D399' : '#087A55', borderDownColor: darkTheme ? '#F87171' : '#D14343',
-      wickUpColor: darkTheme ? '#34D399' : '#087A55', wickDownColor: darkTheme ? '#F87171' : '#D14343',
+      upColor: longColor, downColor: shortColor,
+      borderUpColor: longColor, borderDownColor: shortColor,
+      wickUpColor: longColor, wickDownColor: shortColor,
     });
 
     chartRef.current = chart;
@@ -882,6 +884,9 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, chartSymbol = nu
 
     function drawLines() {
       if (!seriesRef.current) return;
+      const styles = containerRef.current ? getComputedStyle(containerRef.current) : null;
+      const longColor = styles?.getPropertyValue('--terminal-long').trim() || (darkTheme ? '#34D399' : '#087A55');
+      const shortColor = styles?.getPropertyValue('--terminal-short').trim() || (darkTheme ? '#F87171' : '#D14343');
       // Remove old lines
       linesRef.current.forEach(l => {
         try { seriesRef.current.removePriceLine(l); } catch {}
@@ -903,9 +908,7 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, chartSymbol = nu
           const pnlStr = fmtLineUsd(pnl);
           const line = seriesRef.current.createPriceLine({
             price: entry,
-            color: isLong
-              ? (darkTheme ? '#34D399' : '#087A55')
-              : (darkTheme ? '#F87171' : '#D14343'),
+            color: isLong ? longColor : shortColor,
             lineWidth: 2,
             lineStyle: 2, // dashed
             axisLabelVisible: true,
@@ -915,8 +918,8 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, chartSymbol = nu
         }
 
         for (const [kind, color, label] of [
-          ['tp', darkTheme ? '#34D399' : '#087A55', 'TP'],
-          ['sl', darkTheme ? '#F87171' : '#D14343', 'SL'],
+          ['tp', longColor, 'TP'],
+          ['sl', shortColor, 'SL'],
         ]) {
           const price = positionTpslLinePrice(pos, kind);
           if (!(price > 0)) continue;
@@ -952,9 +955,9 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, chartSymbol = nu
         const color = pending
           ? (darkTheme ? '#FBBF24' : '#B7791F')
           : isTP
-            ? (darkTheme ? '#34D399' : '#087A55')
+            ? longColor
             : isSL
-              ? (darkTheme ? '#F87171' : '#D14343')
+              ? shortColor
               : stopPrice > 0
                 ? (darkTheme ? '#F47A3C' : '#F26522')
                 : (isBid ? (darkTheme ? '#60A5FA' : '#2563EB') : (darkTheme ? '#C4B5FD' : '#7C3AED'));

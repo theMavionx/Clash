@@ -1,5 +1,5 @@
 .imperial-route-card { display:flex; align-items:center; justify-content:flex-end; gap:6px; min-width:0; color:var(--terminal-text); }
-.imperial-route-trigger, .imperial-route-settings { display:flex; align-items:center; justify-content:center; gap:8px; min-height:40px; border:1px solid var(--terminal-border); border-radius:8px; background:var(--terminal-surface-raised); color:inherit; cursor:pointer; font:inherit; font-size:12px; }
+.imperial-route-trigger, .imperial-route-settings { display:flex; align-items:center; justify-content:center; gap:8px; min-height:40px; border:1px solid var(--terminal-border); border-radius:8px; background:var(--terminal-secondary-button,var(--terminal-surface-raised)); color:inherit; cursor:pointer; font:inherit; font-size:12px; }
 .imperial-route-card .imperial-route-trigger { padding:6px 10px; flex:0 1 auto; width:auto; justify-content:flex-start; min-width:0; margin:0; }
 .imperial-route-trigger strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; font-weight:600; line-height:20px; }
 .imperial-route-trigger .imperial-route-leverage { display:block; margin:0; padding:0; color:var(--terminal-text-muted); font-size:13px; font-weight:400; line-height:20px; white-space:nowrap; }
@@ -22,10 +22,10 @@
 .imperial-route-popup { padding:12px; }
 .imperial-route-popup__header { display:flex; align-items:center; justify-content:space-between; color:var(--terminal-text-muted); font-size:12px; margin-bottom:6px; }
 .imperial-route-popup__header button { width:36px; height:36px; background:transparent; border:0; border-radius:6px; color:var(--terminal-text); font-size:24px; cursor:pointer; }
-.imperial-route-auto { display:flex; align-items:center; justify-content:space-between; width:100%; padding:10px; min-height:44px; border:0; border-radius:8px; background:var(--terminal-surface-raised); color:inherit; font:inherit; font-size:13px; cursor:pointer; }
+.imperial-route-auto { display:flex; align-items:center; justify-content:space-between; width:100%; padding:10px; min-height:44px; border:0; border-radius:8px; background:var(--terminal-secondary-button,var(--terminal-surface-raised)); color:inherit; font:inherit; font-size:13px; cursor:pointer; }
 .imperial-route-list { display:flex; flex-direction:column; gap:4px; margin-top:4px; }
 .imperial-route-option { border-radius:8px; }
-.imperial-route-option.is-selected { background:var(--terminal-surface-raised); }
+.imperial-route-option.is-selected { background:var(--terminal-selected,var(--terminal-surface-raised)); }
 .imperial-route-option__row { display:flex; align-items:center; min-width:0; }
 .imperial-route-option__select { display:flex; flex:1; align-items:center; gap:7px; padding:8px; min-width:0; min-height:44px; background:transparent; border:0; color:inherit; text-align:left; cursor:pointer; }
 .imperial-route-option__select strong { font-size:12px; }

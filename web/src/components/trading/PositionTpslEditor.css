@@ -12,7 +12,7 @@
 .position-tpsl__targets { display: grid; gap: 14px; min-width: 0; }
 .position-tpsl__target { display: grid; gap: 6px; min-width: 0; }
 .position-tpsl__target > label { font-size: 13px; font-weight: 600; }
-.position-tpsl__input-wrap { display: flex; align-items: center; min-width: 0; border: 1px solid var(--terminal-border); border-radius: 8px; background: var(--terminal-surface-muted); padding-right: 12px; }
+.position-tpsl__input-wrap { display: flex; align-items: center; min-width: 0; border: 1px solid var(--terminal-border); border-radius: 8px; background: var(--terminal-input, var(--terminal-surface-muted)); padding-right: 12px; }
 .position-tpsl__input-wrap input { box-sizing: border-box; width: 100%; min-width: 0; min-height: 44px; padding: 10px 12px; border: 0; background: transparent; color: var(--terminal-text); font: 500 16px/22px system-ui,sans-serif; }
 .position-tpsl__input-wrap input::placeholder { color: var(--terminal-text-muted); font-size: 13px; font-weight: 400; }
 .position-tpsl__input-wrap > span { flex: none; font-size: 11px; color: var(--terminal-text-muted); }
