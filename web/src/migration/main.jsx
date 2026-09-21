@@ -6,7 +6,7 @@ import '../dashboard/dashboard.css';
 import './migration.css';
 import { targetSymbol, targetRatio } from './target-asset';
 import { t, migrationErrorText, migrationStateText } from './strings';
-import { expiryMs, formatUnits, formatUtc, validRequest, maxMigrationAmount } from './model';
+import { expiryMs, formatUnits, formatUtc, validRequest, maxMigrationAmount, depositDefinitelyRejected } from './model';
 import { MigrationWalletPicker, MigrationWalletProvider } from './WalletConnection';
 
 async function api(path, token, body) {
@@ -14,7 +14,7 @@ async function api(path, token, body) {
     headers: { ...(token ? { Authorization: 'Bearer ' + token } : {}), ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) { const trace = /^[0-9a-f-]{36}$/.test(data.traceId || '') ? ` Reference: ${data.traceId}` : ''; const error = new Error(migrationErrorText(data.error) + trace); error.migrationSafe = true; error.status = response.status; throw error; }
+  if (!response.ok) { const trace = /^[0-9a-f-]{36}$/.test(data.traceId || '') ? ` Reference: ${data.traceId}` : ''; const error = new Error(migrationErrorText(data.error) + trace); error.migrationSafe = true; error.status = response.status; error.code = data.error; throw error; }
   return data;
 }
 
@@ -145,25 +145,33 @@ function Migration() {
       if (!(expiryMs(pending.expiresAt) > Date.now())) { setNotice(t('expired')); return; }
       const payload = { id: pending.id, transaction: Buffer.from(signed.serialize({ requireAllSignatures: false })).toString('base64') };
       setPendingSubmission(payload); setConfirmed(false);
-      try { await api('/submit', active.token, payload); }
+      let result;
+      try { result = await api('/submit', active.token, payload); }
       catch (error) {
         if (epoch !== generation.current) return;
         if (error.status === 401) throw error;
+        if (depositDefinitelyRejected(error)) setPendingSubmission(null);
         setNotice(error.migrationSafe ? error.message : t('checking'));
         await refresh(active.token);
         return;
       }
       if (epoch !== generation.current) return;
-      setQuote(null); setPendingSubmission(null); setConfirmed(false); setNotice(t('submitted')); await refresh(active.token);
+      setQuote(null); setPendingSubmission(null); setConfirmed(false); setNotice(result.status === 'expired' ? t('expired') : result.status === 'cancelled' ? migrationStateText('cancelled') : t('submitted')); await refresh(active.token);
     });
   }
   async function retrySubmission() {
     if (!pendingSubmission) return;
     await action(async () => {
       const epoch = generation.current, active = session;
-      await api('/submit', active.token, pendingSubmission);
+      let result;
+      try { result = await api('/submit', active.token, pendingSubmission); }
+      catch (error) {
+        if (epoch !== generation.current) return;
+        if (depositDefinitelyRejected(error)) setPendingSubmission(null);
+        throw error;
+      }
       if (epoch !== generation.current) return;
-      setQuote(null); setPendingSubmission(null); setConfirmed(false); setNotice(t('submitted')); await refresh();
+      setQuote(null); setPendingSubmission(null); setConfirmed(false); setNotice(result.status === 'expired' ? t('expired') : result.status === 'cancelled' ? migrationStateText('cancelled') : t('submitted')); await refresh();
     });
   }
   async function cancelQuote() {

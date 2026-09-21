@@ -82,8 +82,14 @@ try {
       await page.locator('.migration-notice').filter({ hasText: 'The wallet changed the prepared deposit transaction.' }).waitFor();
       assert.match(await page.locator('.migration-notice').innerText(), /Reference: d110cb96-7b5c-495d-b792-92d1728d1d34/);
       assert.equal(submitted, 0);
-      await page.getByRole('button', { name: 'Retry same submission' }).click();
+      assert.equal(await page.getByRole('button', { name: 'Retry same submission' }).count(), 0);
+      const cancel = page.getByRole('button', { name: 'Cancel review', exact: true });
+      assert.equal(await cancel.isEnabled(), true);
+      await cancel.click();
       assert.equal(await page.evaluate(() => window.signCalls), 1);
+      await page.getByRole('button', { name: 'Review migration', exact: true }).click();
+      await page.getByRole('checkbox').check();
+      await page.getByRole('button', { name: 'Sign deposit and migrate' }).click();
     }
     await page.getByText('Deposit submitted — awaiting confirmation', { exact: true }).waitFor(); assert.equal(submitted, 1);
     await page.evaluate(() => window.scrollTo(0, 0));
@@ -97,6 +103,7 @@ try {
   const recovery = await browser.newPage();
   const recoveryErrors = []; recovery.on('pageerror', error => recoveryErrors.push(error.message));
   let state = 'quoted', unauthorized = false, cancelled = 0, recoverySubmits = 0;
+  let expireFirstSubmit = true;
   const restoredQuote = { id: 'recover1', status: 'quoted', inputUnits: '1000000', outputUnits: '1000000000000000000', targetDecimals: 18, destination: '0x' + '1'.repeat(40), sourceMint: 'SOURCE_TEST_MINT', targetToken: '0x' + '2'.repeat(40), feeLamports: '15000000', expiresAt: Date.now() + 120000, transaction: encoded };
   await recovery.addInitScript(installTestWallet, { wallet: owner.toBase58(), publicKey: [...owner.toBytes()] });
   await recovery.route('**/api/migration/**', async route => {
@@ -104,7 +111,13 @@ try {
     if (path === 'account' && unauthorized) return route.fulfill({ status: 401, json: { error: 'AUTH_REQUIRED' } });
     if (path === 'cancel') { assert.equal(route.request().postDataJSON().id, 'recover1'); cancelled++; state = 'expired'; }
     if (path === 'quote') state = 'quoted';
-    if (path === 'submit') { recoverySubmits++; state = 'deposit_signed'; return route.abort('failed'); }
+    if (path === 'submit') {
+      if (expireFirstSubmit) {
+        expireFirstSubmit = false; state = 'expired';
+        return route.fulfill({ json: { id: 'recover1', status: 'expired' } });
+      }
+      recoverySubmits++; state = 'deposit_signed'; return route.abort('failed');
+    }
     const payload = {
       status: { enabled: true, ready: true, sourceDecimals: 6, ratio: '1', feeUsd: '2', snapshot: { slot: 1 } },
       challenge: { id: 'test', message: 'Local test signature only' }, verify: { token: 'recovery', wallet: owner.toBase58(), expiresAt: Date.now() + 60000 },
@@ -125,8 +138,13 @@ try {
   await recovery.getByRole('button', { name: 'Review migration', exact: true }).click();
   await recovery.getByRole('checkbox').check();
   await recovery.getByRole('button', { name: 'Sign deposit and migrate' }).click();
+  await recovery.locator('.migration-notice').filter({ hasText: 'This quote has expired.' }).waitFor();
+  assert.equal(await recovery.getByText('Deposit submitted — awaiting confirmation', { exact: true }).count(), 0);
+  await recovery.getByRole('button', { name: 'Review migration', exact: true }).click();
+  await recovery.getByRole('checkbox').check();
+  await recovery.getByRole('button', { name: 'Sign deposit and migrate' }).click();
   await recovery.getByText('Deposit submitted — awaiting confirmation', { exact: true }).waitFor();
-  assert.equal(recoverySubmits, 1); assert.equal(await recovery.evaluate(() => window.signCalls), 1);
+  assert.equal(recoverySubmits, 1); assert.equal(await recovery.evaluate(() => window.signCalls), 2);
   assert.equal(await recovery.getByRole('button', { name: 'Sign deposit and migrate' }).count(), 0);
   unauthorized = true;
   await recovery.getByRole('button', { name: 'Refresh status', exact: true }).click();

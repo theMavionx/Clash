@@ -419,6 +419,13 @@ function createMigrationChain(env = process.env, deps = {}) {
       recentBlockhash: block.blockhash,
     });
     tx.add(
+      // Phantom adds priority-fee instructions to unsigned app transactions
+      // without a compute budget. Pin it before quoting so wallet signing does
+      // not change the message approved by the server. Maximum priority fee:
+      // 200,000 CU * 10,000 micro-lamports / 1,000,000 = 2,000 lamports.
+      // getFeeForMessage below includes it in the existing service-fee budget.
+      ComputeBudgetProgram.setComputeUnitLimit({ units: 200000 }),
+      ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 10000 }),
       createAssociatedTokenAccountIdempotentInstruction(
         payer,
         destination,

@@ -1,0 +1,11 @@
+# Phantom deposit signing compatibility — 2026-09-21
+
+Production diagnostics: request 594096c0-c13c-4684-90ab-479df909fc2f received TRANSACTION_CHANGED at /submit; owner identified Phantom. The stored unsigned legacy message had no compute-budget instructions. Phantom documents automatic priority-fee insertion when signing unsigned app transactions without a priority-fee instruction: https://docs.phantom.com/developer-powertools/solana-priority-fees . The submitted message was deliberately not retained, so its exact historical diff is not available.
+
+Fix: prepare new deposit quotes with explicit 200,000 CU limit and 10,000 micro-lamports/CU price (maximum priority fee 2,000 lamports = 0.000002 SOL). This prevents the documented automatic enhancement, pins fees before wallet approval, and remains covered by the existing getFeeForMessage + ATA rent < service fee guard. Exact serialized-message equality, owner signature, treasury identity, full signature verification and pre-broadcast simulation remain unchanged. No wallet modifications are allowlisted. Existing quotes are immutable; expired requests require a new quote.
+
+Verification: 35 focused migration tests passed. Regression emulates documented Phantom behavior with generated local keys: old construction fails TRANSACTION_CHANGED before simulation; new construction signs and verifies unchanged. Modified priority-fee instruction is rejected, and fee budget excess fails closed. No actual Phantom extension signing was performed by the agent.
+
+Read-only production check: request expired with null deposit/payout hashes; latest wallet signature predates this attempt. Simulated the stored request with the new compute instructions using paid Alchemy, sigVerify=false and replaceRecentBlockhash=true: err=null, unitsConsumed=30448. No signed transaction was produced or broadcast by this simulation.
+
+Additional recovery hardening: only explicit pre-acceptance rejection clears the signed retry lock, allowing cancellation/new quote; network/unknown outcomes retain same-payload recovery. Expired/cancelled idempotent submit results no longer display accepted-deposit notice. Seven model tests and desktop/mobile mocked-wallet browser recovery checks pass. Canonical Deploy gate passed; final frontend checks and deployment pending.

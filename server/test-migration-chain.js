@@ -6,6 +6,8 @@ const {
   Transaction,
   SystemProgram,
   VersionedTransaction,
+  ComputeBudgetProgram,
+  ComputeBudgetInstruction,
 } = require("@solana/web3.js");
 const bs58 = require("bs58").default || require("bs58");
 const {
@@ -102,11 +104,11 @@ test("CLASH deposit derives Token-2022 accounts, transfer program and immutable-
   const tx = Transaction.from(Buffer.from(result.transaction, "base64"));
   assert.equal(result.depositDestination, destination.toBase58());
   assert.equal(
-    tx.instructions[0].keys[5].pubkey.toBase58(),
+    tx.instructions[2].keys[5].pubkey.toBase58(),
     TOKEN_2022_PROGRAM_ID.toBase58(),
   );
   const transfer = decodeTransferCheckedInstruction(
-    tx.instructions[1],
+    tx.instructions[3],
     TOKEN_2022_PROGRAM_ID,
   );
   assert.equal(transfer.data.amount, 1234567n);
@@ -115,6 +117,51 @@ test("CLASH deposit derives Token-2022 accounts, transfer program and immutable-
     transfer.keys.destination.pubkey.toBase58(),
     destination.toBase58(),
   );
+  assert.equal(ComputeBudgetInstruction.decodeSetComputeUnitLimit(tx.instructions[0]).units, 200000);
+  assert.equal(ComputeBudgetInstruction.decodeSetComputeUnitPrice(tx.instructions[1]).microLamports, 10000n);
+});
+test("Phantom priority-fee augmentation reproduces old rejection; pinned quote signs unchanged", async () => {
+  const user = Keypair.generate(), payer = Keypair.generate();
+  const r = { id: 'phantom-compatibility', wallet: user.publicKey.toBase58(),
+    solanaTreasury: payer.publicKey.toBase58(), inputUnits: '4000000000', feeLamports: '20000000' };
+  let simulations = 0, networkFee = 12000;
+  const adapter = createMigrationChain({}, { connection: {
+    getTokenAccountBalance: async () => ({ value: { amount: '4000000000' } }),
+    getBalance: async () => 1000000000,
+    getLatestBlockhash: async () => ({ blockhash: Keypair.generate().publicKey.toBase58(), lastValidBlockHeight: 100 }),
+    getFeeForMessage: async message => {
+      assert.equal(message.instructions.length, 6);
+      return { value: networkFee };
+    },
+    getMinimumBalanceForRentExemption: async () => 2074080,
+    simulateTransaction: async tx => { simulations++; assert.ok(tx instanceof VersionedTransaction); return { value: { err: null } }; },
+  } });
+  const prepared = await adapter.prepareDeposit(r);
+  const phantomSign = encoded => {
+    const tx = Transaction.from(Buffer.from(encoded, 'base64'));
+    // Phantom's documented unsigned-transaction enhancement rule.
+    if (!tx.instructions.some(ix => ix.programId.equals(ComputeBudgetProgram.programId))) {
+      tx.instructions.unshift(ComputeBudgetProgram.setComputeUnitLimit({ units: 200000 }),
+        ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 10000 }));
+    }
+    tx.partialSign(user);
+    return tx.serialize({ requireAllSignatures: false }).toString('base64');
+  };
+  const old = Transaction.from(Buffer.from(prepared.transaction, 'base64'));
+  old.instructions = old.instructions.slice(2);
+  const oldEncoded = old.serialize({ requireAllSignatures: false }).toString('base64');
+  await assert.rejects(adapter.signDeposit({ ...r, transaction: oldEncoded }, phantomSign(oldEncoded), bs58.encode(payer.secretKey)), /TRANSACTION_CHANGED/);
+  assert.equal(simulations, 0);
+  const result = await adapter.signDeposit({ ...r, ...prepared }, phantomSign(prepared.transaction), bs58.encode(payer.secretKey));
+  assert.ok(Transaction.from(Buffer.from(result.raw, 'base64')).verifySignatures());
+  assert.equal(simulations, 1);
+  const tampered = Transaction.from(Buffer.from(prepared.transaction, 'base64'));
+  tampered.instructions[1] = ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 1000000000 });
+  tampered.partialSign(user);
+  await assert.rejects(adapter.signDeposit({ ...r, ...prepared }, tampered.serialize({ requireAllSignatures: false }).toString('base64'), bs58.encode(payer.secretKey)), /TRANSACTION_CHANGED/);
+  assert.equal(simulations, 1, 'Wallet must not raise the sponsored fee');
+  networkFee = 20000000;
+  await assert.rejects(adapter.prepareDeposit(r), /NETWORK_FEE_EXCEEDS_QUOTE/);
 });
 test("current capture includes extended Token-2022 accounts instead of filtering them out", async () => {
   const owner = Keypair.generate().publicKey,

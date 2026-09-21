@@ -1,7 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { formatUnits, parseUnits, validRequest, expiryMs, snapshotUtcIso, formatUtc, maxMigrationAmount } from './model.js';
+import { formatUnits, parseUnits, validRequest, expiryMs, snapshotUtcIso, formatUtc, maxMigrationAmount, depositDefinitelyRejected } from './model.js';
 import { migrationErrorText } from './strings.js';
+test('only known definitive deposit rejection unlocks cancellation, never unknown network outcomes', () => {
+  for (const code of ['TRANSACTION_CHANGED', 'INVALID_SIGNATURE', 'DEPOSIT_SIMULATION_FAILED', 'QUOTE_EXPIRED']) {
+    assert.equal(depositDefinitelyRejected({ status: 400, code }), true);
+  }
+  for (const error of [null, new Error('offline'), { status: 400, code: 'UNKNOWN' },
+    { status: 503, code: 'TRANSACTION_CHANGED' }, { status: 429, code: 'RATE_LIMIT' },
+    { status: 409, code: 'WORKER_BUSY' }]) assert.equal(depositDefinitelyRejected(error), false);
+});
 test('integer amounts preserve billion-token supply and 18 decimal payouts', () => {
   assert.equal(formatUnits('1000000000000000000000000000', 18), '1000000000');
   assert.equal(parseUnits('1000000000.000001'), 1000000000000001n);
