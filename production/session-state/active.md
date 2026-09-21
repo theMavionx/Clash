@@ -1,9 +1,9 @@
 # Active Session State
 
-## Inclusion queue deployed; safe sale retry in progress (2026-09-21)
+## Inclusion queue and safe sale retry deployed (2026-09-21)
 
 - Release 20260921185438-41f8ca68 healthy. Exact on-chain CLASH 1:1 transfers verified for d4ed39d3 (398,371.932257) and b58cf5c4 (6,512,792.978019). Included receipts unblock later nonces; final paid accounting remains separate. MAX wallet consumed all allocation; added explicit reason, no amount-rule change.
-- Owner approved bounded Jupiter error6001 retries after proven finalized zero debit. ADR0054; adapter proof and core linkage under test. Existing failed sale89573677 remains production review until rollout. Do not manually reset or resend. Thresholds $400/$100 unchanged, cap10%.
+- Owner approved bounded Jupiter error6001 retries after proven finalized zero debit. ADR0054; release20260921190236-1f4f53bd healthy,105 migration tests passed locally and Linux. Worker archived failed89573677 and completed linked95a66d37 at1%, then normal eed0f5db at0.5%: finalized exact14,545,454.545456 CLASH sold since rollout. DB accounting correct; nextb485ea1a pending at19:08UTC. One price-impact deferral recovered with fresh quote without weakening guard. Thresholds $400/$100 unchanged, cap10%, max4 replacement attempts. Report production/reports/migration-slippage-retries-2026-09-21.md. No manual reset/resend. Prior41f8ca68 retained for rollback.
 
 ## Confirmed-deposit liquidation — live verified (2026-09-21)
 

@@ -3,6 +3,7 @@
 ## UR-2026-09-21-MIGRATION-SLIPPAGE-RETRIES
 
 - Owner: «Так, додай безпечні повторні спроби» after explicit explanation that Jupiter rejected the finalized sale without CLASH debit. Authorizes bounded fresh-price retries with gradually increased slippage within current 10% cap; ambiguous transactions stay blocked. ADR0054, independent evidence implementation and core review, focused regression tests before canonical production release. No threshold reduction or manual database reset.
+- Follow-up: «так але токени по 400 баксів зараз не продаються чомусь». Confirmed old review blocker while release in progress; kept400 target. After1f4f53bd rollout two finalized successful sales confirmed, total14,545,454.545456 CLASH, next batch pending. A transient price-impact guard deferred one attempt then recovered automatically; no limit changes.
 
 ## UR-2026-09-21-MIGRATION-INCLUSION-QUEUE
 
