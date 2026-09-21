@@ -17,6 +17,22 @@
 .migration-wallet-menu{position:absolute;right:0;top:calc(100% + 10px);width:230px;padding:8px;border:1px solid var(--border-strong);background:#1d1f21;border-radius:10px;box-shadow:0 12px 40px #0009}
 .migration-wallet-menu button{display:flex;width:100%;align-items:center;justify-content:space-between;background:transparent;border:0;text-align:left}
 .migration-menu-address{font-size:12px;color:var(--muted-strong);overflow-wrap:anywhere;margin:8px 10px 14px;line-height:1.5}
+.migration-wallet-dialog{position:fixed;inset:0;width:calc(100vw - 32px);max-width:420px;max-height:calc(100dvh - 32px);overflow:auto;margin:auto;padding:24px;box-sizing:border-box;border:1px solid #ffffff12;border-radius:18px;background:#111112;color:#e8e9ef;box-shadow:0 28px 90px #0009;color-scheme:dark}
+.migration-wallet-dialog::backdrop{background:#000b;backdrop-filter:blur(5px)}
+.migration-wallet-modal-heading{display:flex;align-items:center;justify-content:space-between;margin-bottom:22px}
+.migration-wallet-symbol{display:grid;place-items:center;width:48px;height:48px;background:#1a1b1e;border:1px solid #ffffff12;border-radius:13px}.migration-wallet-symbol img{width:26px;height:26px}
+.migration-app .migration-wallet-close{display:grid;place-items:center;width:44px;height:44px;min-height:44px;padding:0;border:1px solid #ffffff12;border-radius:50%;font-size:26px;font-weight:400;background:#1a1b1e;color:#979899}
+.migration-wallet-dialog h2{font-size:24px;line-height:1.25;letter-spacing:-.035em;font-weight:600;margin:0 0 10px}
+.migration-wallet-dialog>p{font-size:14px;line-height:1.6;color:#979899;margin:0 0 24px}
+.migration-wallet-list{display:grid;gap:10px;margin:24px 0}
+.migration-app .migration-wallet-list button{display:flex;align-items:center;gap:12px;width:100%;min-height:66px;text-align:left;background:#1a1b1e;border:1px solid #ffffff12;border-radius:12px;padding:12px;font-size:15px}
+.migration-wallet-option-icon{display:grid;place-items:center;flex:0 0 36px;width:36px;height:36px;border-radius:10px;background:#2a2c32;font-size:18px;font-weight:700;overflow:hidden}.migration-wallet-option-icon img{display:block;width:32px;height:32px;object-fit:contain}
+.migration-wallet-list small{margin-left:auto;font-size:11px;color:#979899;font-weight:400}.migration-wallet-list button>span:last-child{color:#979899;font-size:22px}
+.migration-wallet-list button>span:nth-child(2){min-width:0;overflow-wrap:anywhere}.migration-wallet-list small,.migration-wallet-list button>span:last-child{flex-shrink:0}
+.migration-wallet-install{display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding-top:16px;border-top:1px solid #ffffff12;font-size:12px;color:#979899}.migration-wallet-install>span{margin-right:auto}.migration-wallet-install a{display:inline-flex;align-items:center;min-height:44px;color:#e8e9ef;text-decoration:none}.migration-wallet-install a:hover{text-decoration:underline}
+.migration-wallet-dialog>p.migration-wallet-safety{margin:16px 0 0;font-size:11px;line-height:1.6;color:#979899}
+@media(max-width:400px){.migration-wallet-dialog{padding:20px}.migration-wallet-dialog h2{font-size:22px}}
+@media(prefers-reduced-motion:reduce){.migration-wallet-dialog,.migration-wallet-dialog *{animation:none!important;transition:none!important}}
 .migration-shell{width:min(100% - 64px,1040px);margin:48px auto 24px}
 .migration-intro{margin-bottom:28px;max-width:690px}
 .migration-shell h1{font-size:clamp(28px,4vw,38px);font-weight:600;letter-spacing:-.04em;margin:8px 0 14px;line-height:1.15}

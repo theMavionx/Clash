@@ -5,6 +5,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { Keypair, SystemProgram, Transaction } from '@solana/web3.js';
+import { installTestWallet } from './wallet-test-fixture.mjs';
 const { chromium } = await import(pathToFileURL(join(homedir(), '.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright/index.mjs')).href);
 const browser = await chromium.launch({ channel: 'msedge', headless: true });
 const owner = Keypair.generate().publicKey;
@@ -17,12 +18,7 @@ try {
     const context = await browser.newContext({ viewport: { width, height: 900 } });
     const page = await context.newPage(); const errors = []; let submitted = 0;
     page.on('pageerror', error => { if (!errors.length) errors.push(error.stack); });
-    await page.addInitScript(({ wallet }) => {
-      const events = {};
-      window.phantom = { solana: { publicKey: { toBase58: () => wallet }, connect: async () => {}, signMessage: async () => ({ signature: new Uint8Array(64) }), signTransaction: async transaction => transaction,
-        on: (name, listener) => { events[name] = listener; }, removeListener: name => { delete events[name]; }, disconnect: () => events.disconnect?.() } };
-      window.mockWalletChange = () => events.accountChanged?.();
-    }, { wallet: owner.toBase58() });
+    await page.addInitScript(installTestWallet, { wallet: owner.toBase58(), publicKey: [...owner.toBytes()] });
     await page.route('**/api/migration/**', async route => {
       const path = new URL(route.request().url()).pathname.split('/').pop();
       const data = {
@@ -46,13 +42,16 @@ try {
     await page.screenshot({ path: new URL(`disconnected-${width}.png`, output).pathname.replace(/^\/(\w:)/, '$1'), fullPage: true });
     const headerConnect = page.locator('header').getByRole('button', { name: 'Connect wallet', exact: true });
     await headerConnect.click();
-    assert.equal(await page.getByRole('menuitem', { name: 'Phantom', exact: true }).evaluate(node => node === document.activeElement), true);
-    await page.keyboard.press('ArrowDown');
-    assert.equal(await page.getByRole('menuitem', { name: 'Solflare', exact: true }).evaluate(node => node === document.activeElement), true);
+    const picker = page.getByRole('dialog', { name: 'Connect your Solana wallet', exact: true });
+    await picker.waitFor();
+    assert.equal(await picker.evaluate(node => node.contains(document.activeElement)), true);
+    await page.screenshot({ path: new URL(`wallet-picker-${width}.png`, output).pathname.replace(/^\/(\w:)/, '$1'), fullPage: true });
+    assert.equal(await page.evaluate(() => window.connectCalls), 0, 'Opening picker must not connect or sign');
+    for (let i = 0; i < 8; i++) { await page.keyboard.press('Tab'); assert.equal(await picker.evaluate(node => node.contains(document.activeElement)), true); }
     await page.keyboard.press('Escape');
     assert.equal(await headerConnect.evaluate(node => node === document.activeElement), true);
     await page.locator('form').getByRole('button', { name: 'Connect wallet', exact: true }).click();
-    await page.getByRole('menuitem', { name: 'Phantom', exact: true }).click();
+    await page.getByRole('dialog').getByRole('button', { name: /Phantom/ }).click();
     await page.getByLabel('CLASH to migrate', { exact: true }).fill('1');
     await page.getByLabel('Robinhood EVM recipient address').fill('0x' + '1'.repeat(40));
     await page.getByRole('button', { name: 'Review migration', exact: true }).click();
@@ -75,10 +74,7 @@ try {
   const recoveryErrors = []; recovery.on('pageerror', error => recoveryErrors.push(error.message));
   let state = 'quoted', unauthorized = false, cancelled = 0, recoverySubmits = 0;
   const restoredQuote = { id: 'recover1', status: 'quoted', inputUnits: '1000000', outputUnits: '1000000000000000000', targetDecimals: 18, destination: '0x' + '1'.repeat(40), sourceMint: 'SOURCE_TEST_MINT', targetToken: '0x' + '2'.repeat(40), feeLamports: '15000000', expiresAt: Date.now() + 120000, transaction: encoded };
-  await recovery.addInitScript(({ wallet }) => {
-    window.signCalls = 0;
-    window.phantom = { solana: { publicKey: { toBase58: () => wallet }, connect: async () => {}, signMessage: async () => ({ signature: new Uint8Array(64) }), signTransaction: async tx => { window.signCalls++; return tx; }, on: () => {}, removeListener: () => {} } };
-  }, { wallet: owner.toBase58() });
+  await recovery.addInitScript(installTestWallet, { wallet: owner.toBase58(), publicKey: [...owner.toBytes()] });
   await recovery.route('**/api/migration/**', async route => {
     const path = new URL(route.request().url()).pathname.split('/').pop();
     if (path === 'account' && unauthorized) return route.fulfill({ status: 401, json: { error: 'AUTH_REQUIRED' } });
@@ -95,7 +91,7 @@ try {
   });
   await recovery.goto('http://127.0.0.1:5211/migration');
   await recovery.locator('header').getByRole('button', { name: 'Connect wallet', exact: true }).click();
-  await recovery.getByRole('menuitem', { name: 'Phantom', exact: true }).click();
+  await recovery.getByRole('dialog').getByRole('button', { name: /Phantom/ }).click();
   await recovery.getByRole('button', { name: 'Cancel review' }).waitFor();
   assert.equal(await recovery.evaluate(() => window.signCalls), 0); // Existing quote restored without signing.
   await recovery.getByRole('button', { name: 'Cancel review' }).click();
@@ -110,9 +106,84 @@ try {
   assert.equal(await recovery.getByRole('button', { name: 'Sign deposit and migrate' }).count(), 0);
   unauthorized = true;
   await recovery.getByRole('button', { name: 'Refresh status', exact: true }).click();
-  await recovery.locator('header').getByRole('button', { name: 'Connect wallet', exact: true }).waitFor();
+  await recovery.locator('header').getByRole('button', { name: 'Verify wallet', exact: true }).waitFor();
   assert.equal(await recovery.getByText('Deposit submitted — awaiting confirmation', { exact: true }).count(), 0);
   assert.deepEqual(recoveryErrors, []); await recovery.close();
+  // Auth cancellation can retry; disconnect while the signature is pending cannot publish stale auth.
+  const safety = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  await safety.addInitScript(installTestWallet, { wallet: owner.toBase58(), publicKey: [...owner.toBytes()] });
+  let verifies = 0;
+  await safety.route('**/api/migration/**', async route => {
+    const path = new URL(route.request().url()).pathname.split('/').pop();
+    if (path === 'verify') verifies++;
+    await route.fulfill({ json: {
+      status: { enabled: true, ready: true, sourceDecimals: 6, ratio: '1', feeUsd: '2' },
+      challenge: { id: 'safety', message: 'Test wallet ownership only' },
+      verify: { wallet: owner.toBase58(), token: 'safety', expiresAt: Date.now() + 60000 },
+      account: { remainingUnits: '1000000000', balanceUnits: '1000000000', requests: [] },
+    }[path] || {} });
+  });
+  await safety.goto('http://127.0.0.1:5211/migration');
+  await safety.evaluate(() => { window.rejectMessage = true; });
+  await safety.locator('header').getByRole('button', { name: 'Connect wallet', exact: true }).click();
+  await safety.getByRole('dialog').getByRole('button', { name: /Phantom/ }).click();
+  await safety.waitForFunction(() => window.messageCalls === 1);
+  assert.equal(verifies, 0);
+  await safety.evaluate(() => { window.rejectMessage = false; window.messageGate = new Promise(resolve => { window.releaseMessage = resolve; }); });
+  await safety.locator('header').getByRole('button', { name: 'Verify wallet', exact: true }).click();
+  await safety.getByRole('menuitem', { name: 'Verify wallet', exact: true }).click();
+  await safety.waitForFunction(() => window.messageCalls === 2);
+  await safety.evaluate(() => { window.mockWalletChange(); window.releaseMessage(); });
+  await safety.locator('header').getByRole('button', { name: 'Connect wallet', exact: true }).waitFor();
+  assert.equal(verifies, 0, 'Disconnected wallet must not send stale verification');
+  await safety.close();
+  const empty = await browser.newPage({ viewport: { width: 320, height: 700 } });
+  await empty.route('**/api/migration/status', route => route.fulfill({ json: { enabled: false, ready: false, ratio: '1', feeUsd: '2' } }));
+  await empty.goto('http://127.0.0.1:5211/migration');
+  await empty.locator('header').getByRole('button', { name: 'Connect wallet', exact: true }).click();
+  const emptyPicker = empty.getByRole('dialog', { name: 'Connect your Solana wallet', exact: true });
+  await emptyPicker.waitFor();
+  assert.ok(await emptyPicker.getByRole('link').count() >= 2, 'No wallet state offers installation links');
+  await empty.screenshot({ path: new URL('wallet-picker-empty-320.png', output).pathname.replace(/^\/(\w:)/, '$1'), fullPage: true });
+  await empty.getByRole('button', { name: 'Close wallet picker', exact: true }).click();
+  await emptyPicker.waitFor({ state: 'hidden' });
+  await empty.close();
+  const legacy = await browser.newPage();
+  await legacy.addInitScript(({ address }) => {
+    window.phantom = { solana: { publicKey: { toBase58: () => address }, connect: async () => {}, signMessage: async () => ({ signature: new Uint8Array(64) }), signTransaction: async tx => tx, on: () => {}, removeListener: () => {} } };
+  }, { address: owner.toBase58() });
+  await legacy.route('**/api/migration/**', route => route.fulfill({ json: {
+    status: { ready: false, enabled: false, ratio: '1', feeUsd: '2' }, challenge: { id: 'legacy', message: 'Test legacy wallet' },
+    verify: { wallet: owner.toBase58(), token: 'legacy' }, account: { requests: [] },
+  }[new URL(route.request().url()).pathname.split('/').pop()] || {} }));
+  await legacy.goto('http://127.0.0.1:5211/migration');
+  await legacy.locator('header').getByRole('button', { name: 'Connect wallet', exact: true }).click();
+  await legacy.getByRole('dialog').getByRole('button', { name: /Phantom/ }).click();
+  await legacy.locator('header').getByRole('button', { name: new RegExp(owner.toBase58().slice(0, 5)) }).waitFor();
+  await legacy.close();
+  const unsupported = await browser.newPage();
+  await unsupported.addInitScript(installTestWallet, { wallet: owner.toBase58(), publicKey: [...owner.toBytes()], unsupportedAccount: true });
+  let unsupportedAuthCalls = 0;
+  await unsupported.route('**/api/migration/**', route => {
+    if (!route.request().url().endsWith('/status')) unsupportedAuthCalls++;
+    return route.fulfill({ json: { ready: false, enabled: false, ratio: '1', feeUsd: '2' } });
+  });
+  await unsupported.goto('http://127.0.0.1:5211/migration');
+  await unsupported.locator('header').getByRole('button', { name: 'Connect wallet', exact: true }).click();
+  await unsupported.getByRole('dialog').getByRole('button', { name: /Phantom/ }).click();
+  await unsupported.waitForFunction(() => window.connectCalls === 1);
+  await unsupported.getByRole('status').filter({ hasText: /sign/i }).waitFor();
+  assert.equal(unsupportedAuthCalls, 0, 'Unsupported account must not request authentication');
+  assert.equal(await unsupported.evaluate(() => window.messageCalls), 0);
+  await unsupported.close();
+  const longName = await browser.newPage({ viewport: { width: 320, height: 700 } });
+  await longName.addInitScript(installTestWallet, { wallet: owner.toBase58(), publicKey: [...owner.toBytes()], name: 'LongBrandedSolanaWalletNameWithoutSpaces' });
+  await longName.route('**/api/migration/status', route => route.fulfill({ json: { ready: false, enabled: false, ratio: '1', feeUsd: '2' } }));
+  await longName.goto('http://127.0.0.1:5211/migration');
+  await longName.locator('header').getByRole('button', { name: 'Connect wallet', exact: true }).click();
+  await longName.getByRole('dialog').getByRole('button', { name: /LongBranded/ }).waitFor();
+  assert.equal(await longName.getByRole('dialog').evaluate(node => node.scrollWidth <= node.clientWidth), true, 'Long discovered wallet name must wrap without overflow');
+  await longName.close();
   const admin = await browser.newPage({ viewport: { width: 1440, height: 1000 }, timezoneId: 'Pacific/Honolulu' });
   const writes = []; const adminErrors = [];
   let snapshotLocked = false, adminSnapshot = { slot: 100, wallets: 10, createdAt: 1790000000000 };

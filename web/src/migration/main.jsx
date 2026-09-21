@@ -6,6 +6,7 @@ import '../dashboard/dashboard.css';
 import './migration.css';
 import { t, migrationErrorText, migrationStateText } from './strings';
 import { expiryMs, formatUnits, formatUtc, validRequest } from './model';
+import { MigrationWalletPicker, MigrationWalletProvider } from './WalletConnection';
 
 async function api(path, token, body) {
   const response = await fetch('/api/migration' + path, { method: body === undefined ? 'GET' : 'POST', cache: 'no-store',
@@ -22,11 +23,14 @@ function Migration() {
   const [confirmed, setConfirmed] = useState(false), [busy, setBusy] = useState(false), [notice, setNotice] = useState(''), [now, setNow] = useState(Date.now());
   const [pendingSubmission, setPendingSubmission] = useState(null);
   const [walletMenu, setWalletMenu] = useState(false);
+  const [walletPicker, setWalletPicker] = useState(false), [connectedAddress, setConnectedAddress] = useState('');
   const menuRef = useRef(null), menuTrigger = useRef(null);
-  const generation = useRef(0), provider = useRef(null), locked = useRef(false);
+  const generation = useRef(0), provider = useRef(null), locked = useRef(false), walletCleanup = useRef(() => {});
   const clear = () => { generation.current++; setSession(null); setAccount(null); setQuote(null); setConfirmed(false); setAmount(''); setPendingSubmission(null); setWalletMenu(false); };
   function showWalletMenu(event) { menuTrigger.current = event.currentTarget; setWalletMenu(true); }
   function closeWalletMenu(restore = true) { setWalletMenu(false); if (restore) menuTrigger.current?.focus(); }
+  function chooseWallet() { closeWalletMenu(false); setWalletPicker(true); }
+  async function disconnectWallet() { const wallet = provider.current; walletCleanup.current(); provider.current = null; setConnectedAddress(''); clear(); await wallet?.disconnect().catch(() => {}); menuTrigger.current?.focus(); }
   useEffect(() => {
     if (!walletMenu) return;
     menuRef.current?.querySelector('[role="menuitem"]')?.focus();
@@ -79,30 +83,43 @@ function Migration() {
     return () => clearInterval(interval);
   }, [session]); // Wallet verification stays in memory only.
   useEffect(() => { if (session?.expiresAt && expiryMs(session.expiresAt) <= now) { clear(); setNotice(t('sessionExpired')); } }, [session, now]);
-  useEffect(() => {
-    const wallet = provider.current; if (!wallet) return;
-    const changed = () => { clear(); setNotice(t('changed')); };
-    wallet.on?.('accountChanged', changed); wallet.on?.('disconnect', changed);
-    return () => { wallet.removeListener?.('accountChanged', changed); wallet.removeListener?.('disconnect', changed); };
-  }, [session]);
+  useEffect(() => () => walletCleanup.current(), []);
   async function action(fn) {
     if (locked.current) return;
     locked.current = true; setBusy(true); setNotice('');
     try { await fn(); } catch (error) { failure(error); } finally { locked.current = false; setBusy(false); }
   }
-  async function connect(kind) {
+  async function connect(wallet) {
     await action(async () => {
       clear();
-      const wallet = kind === 'Phantom' ? window.phantom?.solana : window.solflare;
-      if (!wallet?.signMessage || !wallet?.signTransaction) { setNotice(t('walletMissing')); return; }
+      setConnectedAddress('');
+      walletCleanup.current();
+      if (!wallet) return;
       provider.current = wallet;
-      await wallet.connect();
-      const address = wallet.publicKey?.toBase58(); if (!address) throw new Error();
       const epoch = generation.current;
+      let expectedAddress = wallet.publicKey?.toBase58() || '';
+      const changed = key => {
+        const nextAddress = key?.toBase58() || '';
+        if (expectedAddress && nextAddress !== expectedAddress) { clear(); setNotice(t('changed')); }
+        expectedAddress = nextAddress; setConnectedAddress(nextAddress);
+      };
+      const disconnected = () => { clear(); expectedAddress = ''; setConnectedAddress(''); setNotice(t('changed')); };
+      wallet.on('connect', changed); wallet.on('disconnect', disconnected);
+      walletCleanup.current = () => { wallet.off('connect', changed); wallet.off('disconnect', disconnected); };
+      try { await wallet.connect(); } catch { setNotice(t('verifyFailed')); return; }
+      const address = wallet.publicKey?.toBase58();
+      if (!address || epoch !== generation.current) return;
+      expectedAddress = address; setConnectedAddress(address);
+      if (!wallet.signMessage || !wallet.signTransaction) { setNotice(t('walletUnsupported')); return; }
+      const current = () => epoch === generation.current && wallet.publicKey?.toBase58() === address && provider.current === wallet;
       const challenge = await api('/challenge', null, { wallet: address });
-      const signed = await wallet.signMessage(new TextEncoder().encode(challenge.message), 'utf8');
+      if (!current()) return;
+      let signed;
+      try { signed = await wallet.signMessage(new TextEncoder().encode(challenge.message)); }
+      catch { if (current()) setNotice(t('verifyFailed')); return; }
+      if (!current()) return;
       const auth = await api('/verify', null, { id: challenge.id, signature: Buffer.from(signed.signature || signed).toString('base64') });
-      if (epoch !== generation.current || wallet.publicKey?.toBase58() !== address) return;
+      if (!current()) return;
       setSession(auth); await refresh(auth.token);
     });
   }
@@ -129,6 +146,7 @@ function Migration() {
       setPendingSubmission(payload); setConfirmed(false);
       try { await api('/submit', active.token, payload); }
       catch (error) {
+        if (epoch !== generation.current) return;
         if (error.status === 401) throw error;
         setNotice(t('checking'));
         await refresh(active.token);
@@ -141,13 +159,17 @@ function Migration() {
   async function retrySubmission() {
     if (!pendingSubmission) return;
     await action(async () => {
-      await api('/submit', session.token, pendingSubmission);
+      const epoch = generation.current, active = session;
+      await api('/submit', active.token, pendingSubmission);
+      if (epoch !== generation.current) return;
       setQuote(null); setPendingSubmission(null); setConfirmed(false); setNotice(t('submitted')); await refresh();
     });
   }
   async function cancelQuote() {
     await action(async () => {
+      const epoch = generation.current;
       await api('/cancel', session.token, { id: quote.id });
+      if (epoch !== generation.current) return;
       setQuote(null); setPendingSubmission(null); setConfirmed(false); await refresh();
     });
   }
@@ -155,14 +177,15 @@ function Migration() {
   const expired = quote && !(expiryMs(quote.expiresAt) > now);
   return <div className="dashboard-app migration-app">
     <a className="skip-link" href="#migration-main">Skip to migration</a>
-    <header className="migration-header"><div className="migration-header-inner"><a className="migration-brand" href="/" aria-label={t('home')}><span className="migration-logo-crop"><img src="/splash-logo.png" alt=""/></span></a><div className="migration-wallet-control"><button className={session ? 'migration-wallet-button' : 'migration-primary'} aria-haspopup="menu" aria-expanded={walletMenu} aria-controls="migration-wallet-menu" disabled={busy} onClick={event => walletMenu ? closeWalletMenu() : showWalletMenu(event)}>{session ? `${session.wallet.slice(0, 5)}…${session.wallet.slice(-4)}` : t('connectWallet')}<span aria-hidden="true">⌄</span></button>{walletMenu && <div ref={menuRef} id="migration-wallet-menu" className="migration-wallet-menu" role="menu" aria-label={t('walletMenu')} onKeyDown={menuKeys}>{session ? <><p className="migration-menu-address">{session.wallet}</p><button role="menuitem" onClick={() => { clear(); provider.current?.disconnect?.(); menuTrigger.current?.focus(); }}>{t('disconnect')}</button></> : ['Phantom', 'Solflare'].map(kind => <button role="menuitem" key={kind} onClick={() => { closeWalletMenu(); connect(kind); }}>{kind}<span aria-hidden="true">↗</span></button>)}</div>}</div></div></header>
+    <header className="migration-header"><div className="migration-header-inner"><a className="migration-brand" href="/" aria-label={t('home')}><span className="migration-logo-crop"><img src="/splash-logo.png" alt=""/></span></a><div className="migration-wallet-control"><button className={session ? 'migration-wallet-button' : 'migration-primary'} aria-haspopup={connectedAddress ? 'menu' : 'dialog'} aria-expanded={connectedAddress ? walletMenu : walletPicker} disabled={busy && !connectedAddress} onClick={event => { if (connectedAddress) { if (walletMenu) closeWalletMenu(); else showWalletMenu(event); } else chooseWallet(); }}>{session ? `${session.wallet.slice(0, 5)}…${session.wallet.slice(-4)}` : connectedAddress ? t('verifyWallet') : busy ? t('busy') : t('connectWallet')}<span aria-hidden="true">{connectedAddress ? '⌄' : <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7"><rect x="3" y="5" width="18" height="15" rx="3"/><path d="M3 8h18M16 13h5"/></svg>}</span></button>{walletMenu && <div ref={menuRef} id="migration-wallet-menu" className="migration-wallet-menu" role="menu" aria-label={t('walletActions')} onKeyDown={menuKeys}><p className="migration-menu-address">{connectedAddress}</p>{!session && <button role="menuitem" disabled={busy} onClick={() => { closeWalletMenu(); connect(provider.current); }}>{t('verifyWallet')}</button>}<button role="menuitem" disabled={busy} onClick={chooseWallet}>{t('changeWallet')}</button><button role="menuitem" onClick={disconnectWallet}>{t('disconnect')}</button></div>}</div></div></header>
+    <MigrationWalletPicker open={walletPicker} onClose={() => setWalletPicker(false)} onChoose={connect} returnFocusRef={menuTrigger}/>
     <main id="migration-main" className="migration-shell">
       <div className="migration-intro"><p className="migration-eyebrow"><span className="migration-network"><img src="/tokens/SOL.svg" width="20" height="20" alt=""/>{t('sourceNetwork')}</span><span aria-hidden="true">→</span><span className="migration-network"><img src="/robinhood.svg" width="20" height="20" alt=""/>{t('destinationNetworkName')}</span></p><h1 className="migration-title"><img src="/icons/icon-192.png" width="48" height="48" alt=""/><span>{t('title')}</span></h1><p className="migration-muted">{t('intro')}</p></div>
       <div role="status" aria-live="polite" className="migration-notice">{notice}</div>
       <div className="migration-workspace"><section className="migration-card migration-form-card" aria-label="Migration form" aria-busy={busy}>
           <div className="migration-heading"><h2>{t('transfer')}</h2><span className="migration-token">CLASH</span></div>
           {session && <dl className="migration-balances">{['eligible', 'remaining', 'balance'].map((key, i) => <div key={key}><dt>{t(key)}</dt><dd>{formatUnits(account?.[['eligibleUnits','remainingUnits','balanceUnits'][i]], status?.sourceDecimals)} <span>CLASH</span></dd></div>)}</dl>}
-          {!quote ? <form onSubmit={review}><label>{t('amount')}<div className="migration-amount-field"><input aria-label={t('amount')} inputMode="decimal" placeholder="0.00" value={amount} onChange={e => setAmount(e.target.value)} required disabled={busy || !available || !session}/><span aria-hidden="true">CLASH</span></div></label><label>{t('destination')}<input spellCheck="false" autoComplete="off" placeholder="0x…" value={destination} onChange={e => setDestination(e.target.value.trim())} required disabled={busy || !available || !session}/></label>{!session ? <><p className="migration-muted migration-connect-hint">{t('connectHint')}</p><button type="button" className="migration-primary migration-submit" disabled={busy} aria-haspopup="menu" aria-expanded={walletMenu} aria-controls="migration-wallet-menu" onClick={showWalletMenu}>{t('connectWallet')}</button></> : <button className="migration-primary migration-submit" disabled={busy || !available || !account || !validRequest(amount, destination, account, status?.sourceDecimals)}>{busy ? t('busy') : t('review')}</button>}</form> : <div className="migration-review">
+          {!quote ? <form onSubmit={review}><label>{t('amount')}<div className="migration-amount-field"><input aria-label={t('amount')} inputMode="decimal" placeholder="0.00" value={amount} onChange={e => setAmount(e.target.value)} required disabled={busy || !available || !session}/><span aria-hidden="true">CLASH</span></div></label><label>{t('destination')}<input spellCheck="false" autoComplete="off" placeholder="0x…" value={destination} onChange={e => setDestination(e.target.value.trim())} required disabled={busy || !available || !session}/></label>{!session ? <><p className="migration-muted migration-connect-hint">{t('connectHint')}</p><button type="button" className="migration-primary migration-submit" disabled={busy} aria-haspopup={connectedAddress ? undefined : 'dialog'} onClick={() => connectedAddress ? connect(provider.current) : chooseWallet()}>{busy ? t('busy') : connectedAddress ? t('verifyWallet') : t('connectWallet')}</button></> : <button className="migration-primary migration-submit" disabled={busy || !available || !account || !validRequest(amount, destination, account, status?.sourceDecimals)}>{busy ? t('busy') : t('review')}</button>}</form> : <div className="migration-review">
             <h2>{t('review')}</h2><dl>{[[t('amount'), formatUnits(quote.inputUnits, status.sourceDecimals) + ' CLASH'], [t('receive'), formatUnits(quote.outputUnits, quote.targetDecimals) + ' CLASH'], [t('destination'), quote.destination], [t('source'), quote.sourceMint], [t('target'), quote.targetToken], [t('solFee'), formatUnits(quote.feeLamports, 9) + ' SOL'], [t('expires'), new Date(expiryMs(quote.expiresAt)).toLocaleString()]].map(([key,value]) => <div key={key}><dt>{key}</dt><dd>{value}</dd></div>)}</dl>
             <p className="migration-muted">{t('gas')}</p><label className="migration-checkbox"><input type="checkbox" checked={confirmed} disabled={busy} onChange={e => setConfirmed(e.target.checked)}/>{t('confirm')}</label>
             {expired && <p role="alert">{t('expired')}</p>}{pendingSubmission && <p role="status">{t('checking')}</p>}<div className="migration-actions">{pendingSubmission ? <button disabled={busy || !available} onClick={retrySubmission}>{t('retrySubmission')}</button> : <button className="migration-primary" disabled={busy || !confirmed || expired || !available} onClick={submit}>{busy ? t('busy') : t('send')}</button>}<button disabled={busy || !!pendingSubmission} onClick={cancelQuote}>{t('cancel')}</button></div>
@@ -174,4 +197,4 @@ function Migration() {
     </main>
   </div>;
 }
-createRoot(document.getElementById('migration-root')).render(<Migration/>);
+createRoot(document.getElementById('migration-root')).render(<MigrationWalletProvider><Migration/></MigrationWalletProvider>);

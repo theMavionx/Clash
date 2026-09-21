@@ -1,5 +1,9 @@
 # User Request Log
 
+## UR-2026-09-21-MIGRATION-WALLET-CONNECT
+
+- Owner rejects current connect dropdown and requests a proper free wallet connector, including research. Use existing free Solana Wallet Adapter/Wallet Standard with an accessible branded picker; preserve sign-only/authentication/deposit semantics and verify before the authorized migration release. No keys or migration settings changed.
+
 ## UR-2026-09-21-MIGRATION-HERO-LOGOS
 
 - Owner requests CLASH token, Solana and Robinhood logos in the migration introduction. Reuse verified project assets, preserve network labels and responsive layout; no migration logic/settings changes. Continue the previously authorized migration release workflow.
