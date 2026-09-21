@@ -4,6 +4,6 @@ Request 5f9bfc93-916a-44fa-8187-b954399f1477 failed TRANSACTION_CHANGED on relea
 
 Add safe error diagnostics: booleans for fee payer, blockhash, account order, header, program IDs, instruction data and account metas, plus expected/received instruction counts. Router independently allowlists fields and types. No raw messages, signatures, wallet addresses or arbitrary exception details are logged by this addition. Strict message equality remains unchanged.
 
-13 focused chain/HTTP tests passed including structured-difference generation and sentinel redaction. Deployment and another owner-signed attempt are required to identify the concrete difference. This is diagnostic instrumentation, not a claimed repair of the outstanding wallet compatibility error.
+13 focused chain/HTTP tests passed including structured-difference generation and sentinel redaction; core regression tests also passed. Deployed canonical release 20260921121432-30d84544; read-only verification confirms new diagnostics installed, enabled=true, ready=true. Another owner-signed attempt is required to identify the concrete difference. This is diagnostic instrumentation, not a claimed repair of the outstanding wallet compatibility error.
 
 The console warning comes from wallet-standard-wallet-adapter-react filtering the duplicate legacy Phantom adapter. It is not an exception and does not account for the server's validation error. User browser was inspected read-only; no signing or deposit control was activated.
