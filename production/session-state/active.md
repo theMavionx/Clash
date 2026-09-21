@@ -1,5 +1,12 @@
 # Active Session State
 
+## Migration current inventory — Released and enabled (2026-09-21)
+
+- EVM treasury health uses one pinned latest block, removing finalized funding delay. Quote reservations and finalized payout receipt/exact transfer checks retained. ADR0046.
+- Live read-only eth_call/estimateGas for1/20USDG succeeded; nonce unchanged, no broadcast. 33 focused tests/full Deploy gate passed. Release `20260921111429-07eb1b42` passed runtime health.
+- Under owner's request to proceed testing and earlier enable instruction, guarded API enabled migration only after readytrue and zero requests/sales. Public API now enabledtrue/readytrue, no blockers; official USDG ratio0.001, wallets, snapshot and all other config unchanged. Agent has not sent any funded transaction.
+- Report: `production/reports/migration-live-inventory-2026-09-21.md`. Real owner-signed deposit flow remains to be tested. Migration automation is ACTIVE now; do not treat earlier paused notes as current.
+
 ## USDG migration payout — Released/configured (2026-09-21)
 
 - Official Robinhood USDG `0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168`, fixed ratio0.001 (1000 CLASH = 1 USDG). Exact-address metadata/supply policy only; other tokens retain one-billion rule. UI/history display actual quoted payout token.
