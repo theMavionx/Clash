@@ -4,6 +4,7 @@
 
 - Owner first requests verifying sales and1:1 payouts, then explicitly changes behavior: sell without waiting for Robinhood payout completion. Remove paid-only dependence, accept only finalized confirmed source deposits in deposited/payout_signed/paid states. Keep$400normal/$100minimum and ten-minute residual thresholds. Preserve payout amounts/liabilities, pause, finality, shared lease and signed-send recovery. ADR0052 documents custody trade-off. No additional manual funded trade authorized or initiated.
 - Initial read-only check: four new finalized deposits have exact1:1 units, no request errors; pending payout schedules explain NO_PAID_LOTS under old policy. Prior4000CLASH test sale completed. Further post-release verification required.
+- Completed: release20260921183819-66212b86,99 local/84Linux focused tests/fullgate passed. Two new automatic sales finalized totaling8,248,299.319729CLASH at0.5%slippage while source request payout still queued. Live read-only exact receipt and soldUnits verification passed;1:1 payout commitments/config untouched. One mined EVM receipt independently proves exact7,383,457.750202CLASH transfer; finality still awaited.
 
 ## UR-2026-09-21-PHANTOM-CONSOLE
 

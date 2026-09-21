@@ -1,5 +1,11 @@
 # Active Session State
 
+## Confirmed-deposit liquidation — live verified (2026-09-21)
+
+- Owner requests no waiting for Robinhood payout before selling. Released20260921183819-66212b86; eligibility now finalized deposited/payout_signed/paid with confirmation metadata, not paid-only. Review/unconfirmed excluded; shared lease, source finality, pause,400/100USD thresholds/600s residual wait retained. ADR0052 documents independent sale vs payout liability.
+-99 local focused tests,84 Linux tests, canonical Deploy gate/health passed. Live enabled/readytrue; config/snapshot/deadline unchanged. Two finalized automatic sales verified at18:42:29UTC:4,081,632.653062+4,166,666.666667=8,248,299.319729CLASH, both0.5%slippage, from still-deposited665efe81... lot. soldUnits matches sum, payout commitment unchanged. No separate manual trade executed.
+- Actual Robinhood receipt0x53f16f22e967f4adf4a5bb291719945b4c46b3fd5ac4ff3519877406a0cf882c succeeded with exact7,383,457.750202CLASH1:1 Transfer; DB pendingfinality, remaining payouts queued. Do not claim all settled. Report production/reports/migration-confirmed-deposit-sales-2026-09-21.md. Prior620ae4e2 retained; older compiledb0bb9a4f removed, source rebuildable.
+
 ## Migration ACTIVATED after owner-funded CLASH (2026-09-21)
 
 - Owner explicitly requested activation again after funding. Fresh production readiness returned readytrue/no reasons. Authenticated PUT config enabledtrue succeeded; fresh admin/public status verifies enabledtrue, readytrue, closedfalse. Only enabled changed; target CLASH, ratio1, snapshot21:00Kyiv checksumd11bea7378654376fa333dc6da42d6e65e2704e26a2560a8d48f1f4cf4a70913, closing deadline1790100250842 and remaining settings preserved.
