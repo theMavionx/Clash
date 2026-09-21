@@ -35,3 +35,9 @@ Actual Solana Mobile association behavior still requires device evidence after d
 ## Verdict: APPROVED WITH SUGGESTIONS
 
 Release requires passing focused regression tests and atomic deployment health checks. No manual adjustment of allocation or financial state is part of this package.
+
+## Release verification
+
+Released d1780be3 via canonical deploy, completed 2026-09-21 21:15:40 UTC (2026-09-22 Kyiv).134 server tests passed both locally and Linux;21 client tests plus browser delayed-signature/expired-late-result/single-signature retry checks passed. Public migration page returned200 with new bundle at390/1440 widths, no page exceptions or overflow. Live readiness enabled/ready true, ratio1;30paid and2included payouts, no pending deposit/review backlog. New worker diagnostics observed without errors in the first minute. Real mobile device retest is still required.
+
+Dependency audits flag pre-existing affected packages, including high severity bigint-buffer transitively under SPL-token and further issues in other application packages. No force remediation was applied because npm proposes incompatible dependency changes. This review is not a full-site security certification.

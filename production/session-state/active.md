@@ -1,5 +1,13 @@
 # Active Session State
 
+## Migration admission and mobile diagnostics deployed (2026-09-22 Kyiv)
+
+- Owner explicitly approved rollout. Release `/opt/clash/releases/20260921211307-d1780be3` completed 21:15:40 UTC; prior `20260921192256-1fdf2bf1` retained. Canonical deploy automatically removed older compiled `20260921191517-eb2296a6` (source remains rebuildable).
+- Bounded FIFO admission, foreground yield between persisted worker states, same-payload retry only for explicit WORKER_BUSY, sign-only timeout/late response discard, reservation explanation, authenticated client-stage diagnostics and redacted verification metadata are live. Cross-process lease/signature/expiry/nonce guards unchanged.
+- 134 server/security tests passed locally and Linux, 21 client tests plus mocked desktop/mobile delayed-signature/expiry/busy flow passed. Public page HTTP200, new `migration-Bo2P7QW2.js`, no JS page errors or horizontal overflow at 390/1440. At21:16:22UTC enabled/ready true, ratio1,30paid/2included payouts and no deposit/review backlog; new tick logs 406–573ms, no post-rollout errors observed in that short window.
+- Actual device wallet failure before submit remains unproven without a new device attempt. Do not claim complete end-to-end mobile success. G1Zx previous quote expired unsigned; no manual reset or resend.
+- Dependency risk remains: npm audit for local server reports14 affected package entries (3high,11moderate), including transitive bigint-buffer, stream-json, uuid; installer reports additional findings in other app packages. Automated proposed changes include incompatible SPL-token downgrade; no force-upgrade or claim of full security clearance. Needs separately tested dependency remediation.
+
 ## Deposit review isolation and expired-attempt recovery live (2026-09-21)
 
 - Release20260921191517-eb2296a6 healthy,112tests Linux/local. Deposit-only review no longer blocks unrelated EVM payouts. Exact1:1 inclusion verified for ff1825ce866,894.740711CLASH and262ed666577,628.172995CLASH while AW4 review preserved. See migration-deposit-review-isolation report.
