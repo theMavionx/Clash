@@ -30,6 +30,12 @@ function Resolve-GodotExe {
 }
 
 $NodeFiles = @(
+    "server/migration_core.js",
+    "server/migration_chain.js",
+    "server/migration_routes.js",
+    "server/test-migration.js",
+    "server/test-migration-chain.js",
+    "server/test-migration-http.js",
     "tools/combat-grid/generate-combat-grid-config.cjs",
     "server/combat_grid_config.js",
     "server/test-combat-grid-sync.js",
@@ -241,6 +247,9 @@ foreach ($File in $PowerShellFiles) {
 }
 
 if ($Mode -in @("Full", "Deploy")) {
+    Invoke-Step "CLASH migration ledger, signing and HTTP regressions" {
+        node --test server/test-migration.js server/test-migration-chain.js server/test-migration-http.js
+    }
     if (Test-Path "web/package.json") {
         Invoke-Step "web lint" { npm.cmd --prefix web run lint }
     }

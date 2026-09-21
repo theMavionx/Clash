@@ -52,6 +52,7 @@ function setWebStaticHeaders(res, filePath) {
     rel === 'index.html'
     || rel === 'admin.html'
     || rel === 'dashboard.html'
+    || rel === 'migration.html'
     || rel === 'sw.js'
     || rel === 'manifest.json'
     || rel === 'godot/godot-runtime-manifest.json'
@@ -89,7 +90,7 @@ app.use(cors({
 const parseGameJson = express.json({ limit: process.env.CLASH_JSON_LIMIT || '2mb' });
 const parseVaultJson = express.json({ limit: '40kb' });
 app.use((req, res, next) => {
-  if (!req.path.startsWith('/api/players/trading-credentials')) return parseGameJson(req, res, next);
+  if (!req.path.startsWith('/api/players/trading-credentials') && !req.path.startsWith('/api/migration')) return parseGameJson(req, res, next);
   res.set('Cache-Control', 'no-store, private');
   return parseVaultJson(req, res, error => {
     if (!error) return next();
@@ -126,6 +127,13 @@ app.use((req, res, next) => {
 
 // Health check — HTML page for browser
 const esc = (s) => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+
+app.get(['/migration', '/migration/'], (_req, res) => {
+  const migration = path.join(WEB_DIST_DIR, 'migration.html');
+  if (!fs.existsSync(migration)) return res.status(404).send('Migration build not found');
+  setNoStoreWebHeaders(res);
+  res.sendFile(migration);
+});
 
 app.get(['/dashboard', '/dashboard/'], (_req, res) => {
   const dashboard = path.join(WEB_DIST_DIR, 'dashboard.html');
@@ -5507,6 +5515,8 @@ setInterval(() => { if (KEY) loadAll(); }, 15000);
 });
 
 // All game API routes
+const migrationService = require('./migration_routes').createMigrationRouter({db:clashDb.db});
+app.use('/api/migration', migrationService.router);
 app.use('/api', router);
 
 app.get('/r/:code', (req, res) => {

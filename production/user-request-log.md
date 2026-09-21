@@ -1,5 +1,12 @@
 # User Request Log
 
+## UR-2026-09-21-CLASH-MIGRATION
+
+- Latest owner approval: «так роби і на прод відрауз». Authorizes migration implementation, commit/push and deployment; no funded agent test transactions. Missing operational prerequisites must keep acceptance closed.
+- Owner requests a custodial CLASH migration at `/migration` from Solana to Robinhood mainnet, no new contracts, editable destination token address, same admin authentication, encrypted operator keys, fixed signed-wallet snapshot eligibility and default 1:1 conversion. Source mint found in existing App: `9mM1Mc4Ta9UJJ32v5qsHef91PiXi7EWyiSsqF5WXpump` (must verify on-chain).
+- Charge $2 in SOL inclusive of sponsored network fees, use paid Alchemy RPC only, send destination inventory after finalized deposit, sell deposits to SOL at $400 thresholds or residual $100 batches after ten minutes. Start slippage at 5% with configurable bounded escalation. Owner wants automatic operation and immediate production deployment, not a mandatory one-user rollout; acceptance still requires security/behavior verification and complete operator configuration.
+- Official Robinhood documentation confirms chain ID 4663, ETH gas and Alchemy mainnet RPC. Implementation/design work is not a live transfer authorization for agent test transactions.
+
 ## UR-2026-09-20-TERMINAL-PALETTE-DEPLOY
 
 - Owner: «гуд деплой» after reviewing the local palette and screenshot gallery. Authorizes the reviewed terminal palette release, required source commit/push and canonical deployment. Preserve unrelated work; no funded trading tests.

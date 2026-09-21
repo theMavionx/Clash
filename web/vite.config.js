@@ -147,6 +147,21 @@ export default defineConfig({
   },
   plugins: [
     react(),
+    {
+      name: 'migration-page-route',
+      configureServer(server) {
+        server.middlewares.use((req, res, next) => {
+          if (/^\/migration\/?(?:\?|$)/.test(req.url || '')) req.url = req.url.replace(/^\/migration\/?/, '/migration.html');
+          next();
+        });
+      },
+      configurePreviewServer(server) {
+        server.middlewares.use((req, res, next) => {
+          if (/^\/migration\/?(?:\?|$)/.test(req.url || '')) req.url = req.url.replace(/^\/migration\/?/, '/migration.html');
+          next();
+        });
+      },
+    },
     // Add cache headers for Godot assets in preview/production
     {
       name: 'godot-cache-headers',
@@ -180,6 +195,7 @@ export default defineConfig({
         main: resolve(__dirname, 'index.html'),
         admin: resolve(__dirname, 'admin.html'),
         dashboard: resolve(__dirname, 'dashboard.html'),
+        migration: resolve(__dirname, 'migration.html'),
       },
     },
   },

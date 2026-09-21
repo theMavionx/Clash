@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { adminDelete, adminDownload, adminGet, adminPatch, adminPost, adminPut, clearAdminKey, getStoredAdminKey, storeAdminKey } from './api';
 import TradingDiagnostics from './TradingDiagnostics';
+import MigrationAdmin from './MigrationAdmin';
 import {
   DEX_LABELS,
   PRIZE_PRESETS,
@@ -134,6 +135,7 @@ const NAV = [
   { id: 'tasks', label: 'Tasks', hint: 'Quest config and progress', icon: 'TS' },
   { id: 'stats', label: 'Stats', hint: 'Activity and devices', icon: 'ST' },
   { id: 'clash', label: '$CLASH', hint: 'Buybacks and burns', icon: 'CT' },
+  { id: 'migration', label: 'Migration', hint: 'CLASH cross-chain migration', icon: 'MG' },
   { id: 'earnings', label: 'Earnings', hint: 'Revenue analytics', icon: 'ER' },
   { id: 'referrals', label: 'Referrals', hint: 'Invites, commissions, payouts', icon: 'RF' },
   { id: 'shop', label: 'Shop', hint: 'Billing and AI chat', icon: 'SH' },
@@ -417,6 +419,7 @@ export default function AdminApp() {
             {active === 'replays' && <ReplaysPanel replays={replays} />}
             {active === 'stats' && <StatsPanel data={simpleData.stats} />}
             {active === 'clash' && <ClashTransactionsPanel data={simpleData.clash} reload={refreshActive} />}
+            {active === 'migration' && <MigrationAdmin />}
             {active === 'tasks' && <TasksPanel data={simpleData.tasks} reload={refreshActive} />}
             {active === 'client' && <ClientLogsPanel data={simpleData.client} reload={refreshActive} />}
             {active === 'logs' && <ServerLogsPanel data={simpleData.logs} reload={refreshActive} />}

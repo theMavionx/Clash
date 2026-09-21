@@ -1883,6 +1883,16 @@ server {
         add_header Cross-Origin-Opener-Policy "same-origin-allow-popups" always;
     }
 
+    location = /migration {
+        try_files /migration.html =404;
+        add_header Cache-Control "no-cache, no-store, must-revalidate";
+        add_header Cross-Origin-Opener-Policy "same-origin-allow-popups" always;
+    }
+
+    location = /migration/ {
+        return 308 /migration;
+    }
+
     location = /dashboard/ {
         return 308 /dashboard;
     }
