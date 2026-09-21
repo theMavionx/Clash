@@ -4373,3 +4373,7 @@ Follow-up:
 - Remove leverage presets shown in screenshot (1x/5x/10x/25x/50x), retain deliberate leverage adjustment.
 - Owner requests one submit button, Buy/Long–Sell/Short selector above, compact Market/Limit tabs like Clashbot. Keep brand color and existing trading semantics.
 - Owner rejects oversized entry TP/SL dialog and requests Clashbot convenience. Implement compact inline entry TP/SL fields tied to selected side; preserve validation and existing position-management flows.
+## UR-2026-09-21-MIGRATION-MNEMONIC
+
+- Owner: «додай щоб можна було секретну фразу ввеси з 12 слів». Add explicit local BIP39 Solana derivation, preview and address confirmation; never collect a real phrase in chat or persist/transmit the phrase. Preserve encrypted canonical-key storage.
+- Follow-up: «і щоб адресу показувало при додаванні». Display the full derived public address before confirmation and stored treasury address after save.

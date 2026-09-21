@@ -253,7 +253,7 @@ if ($Mode -in @("Full", "Deploy")) {
         node --test server/test-migration.js server/test-migration-chain.js server/test-migration-http.js server/test-migration-history.js
     }
     Invoke-Step "CLASH migration UI amount and state regressions" {
-        node --test web/src/migration/model.test.mjs web/src/migration/solana-key-preview.test.mjs
+        node --test web/src/migration/model.test.mjs web/src/migration/solana-key-preview.test.mjs web/src/migration/solana-mnemonic.test.mjs
     }
     if (Test-Path "web/package.json") {
         Invoke-Step "web lint" { npm.cmd --prefix web run lint }

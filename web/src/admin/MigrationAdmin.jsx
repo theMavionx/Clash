@@ -4,6 +4,7 @@ import '../migration/admin.css';
 import { migrationErrorText, migrationStateText } from '../migration/strings';
 import { formatUtc as utcTime, snapshotUtcIso } from '../migration/model';
 import { deriveSolanaHexKey, previewSolanaHexAddress } from '../migration/solana-key-preview';
+import { deriveSolanaMnemonic, previewSolanaMnemonic, solanaMnemonicPath } from '../migration/solana-mnemonic';
 
 const fields = [
   ['targetToken', 'Robinhood CLASH contract (chain 4663)', 'text'], ['ratio', 'CLASH received per source CLASH', 'text'],
@@ -19,28 +20,30 @@ export default function MigrationAdmin() {
   const [data, setData] = useState(null), [config, setConfig] = useState(null), [busy, setBusy] = useState(false), [notice, setNotice] = useState('');
   const [kind, setKind] = useState('solana'), [secret, setSecret] = useState(''), [snapshotConfirm, setSnapshotConfirm] = useState(false);
   const [snapshotAt, setSnapshotAt] = useState('');
+  const [accountIndex, setAccountIndex] = useState('0');
+  const derivedMode = kind === 'solanaHex' || kind === 'solanaMnemonic';
   const [previewAddress, setPreviewAddress] = useState(''), [previewConfirmed, setPreviewConfirmed] = useState(false), [credentialNotice, setCredentialNotice] = useState('');
   function resetPreview() { setPreviewAddress(''); setPreviewConfirmed(false); setCredentialNotice(''); }
   function previewSolana() {
     resetPreview();
-    try { setPreviewAddress(previewSolanaHexAddress(secret.trim())); }
-    catch { setCredentialNotice('Enter a valid 32-byte hex key to preview its Solana address. Nothing was saved.'); }
+    try { setPreviewAddress(kind === 'solanaMnemonic' ? previewSolanaMnemonic(secret, accountIndex) : previewSolanaHexAddress(secret.trim())); }
+    catch { setCredentialNotice(kind === 'solanaMnemonic' ? 'Enter 12 valid English BIP39 words (including checksum) and an account index from 0 to 9999. Nothing was saved.' : 'Enter a valid 32-byte hex key to preview its Solana address. Nothing was saved.'); }
   }
   function storeCredential(event) {
     event.preventDefault();
     if (busy || !secret.trim()) return;
     let value = secret.trim();
-    if (kind === 'solanaHex') {
+    if (derivedMode) {
       if (!previewAddress || !previewConfirmed) return;
       try {
-        const derived = deriveSolanaHexKey(value);
+        const derived = kind === 'solanaMnemonic' ? deriveSolanaMnemonic(value, accountIndex) : deriveSolanaHexKey(value);
         if (derived.address !== previewAddress) { resetPreview(); setCredentialNotice('The key changed. Preview and confirm the address again.'); return; }
         value = derived.secret;
       } catch { resetPreview(); setCredentialNotice('The key could not be derived. Nothing was saved.'); return; }
     }
     if (!window.confirm('Save this credential? Active settlements may prevent wallet rotation.')) return;
     setSecret(''); resetPreview();
-    run('/keys', { kind: kind === 'solanaHex' ? 'solana' : kind, secret: value });
+    run('/keys', { kind: derivedMode ? 'solana' : kind, secret: value });
   }
   const selectedUtc = snapshotUtcIso(snapshotAt);
   const snapshotLocked = !data || data.canReplaceSnapshot === false;
@@ -64,9 +67,25 @@ export default function MigrationAdmin() {
       <div className="form-grid">{fields.map(([name, label, type]) => <label key={name}>{label}<input type={type} required value={config[name] ?? ''} disabled={busy} min={type === 'number' ? 0 : undefined} max={name.includes('Slippage') || name === 'slippageBps' ? 1000 : undefined} step="any" onChange={e => setConfig({ ...config, [name]: ['idleSeconds', 'slippageBps', 'maxSlippageBps'].includes(name) ? Number(e.target.value) : e.target.value })}/></label>)}</div>
       <label><input type="checkbox" checked={!!config.enabled} disabled={busy} onChange={e => setConfig({ ...config, enabled: e.target.checked })}/> Enable migrations and automated settlement when ready</label><p>Sales settle into SOL. Slippage starts at 5% by default and is capped at 10%. Unknown transaction outcomes are reconciled, not blindly retried.</p><button className="btn primary" disabled={busy}>Save configuration</button>
     </form></section>}
-    <section className="card"><h3>Treasury credentials</h3><p>Dedicated migration wallets only. Private keys are write-only; never enter a seed phrase. Existing admin authentication is used.</p><dl><dt>Solana treasury</dt><dd style={{ overflowWrap: 'anywhere' }}>{data?.wallets?.solana?.address || data?.wallets?.solana || 'Not configured'}</dd><dt>Robinhood treasury</dt><dd style={{ overflowWrap: 'anywhere' }}>{data?.wallets?.evm?.address || data?.wallets?.evm || 'Not configured'}</dd></dl>
+    <section className="card"><h3>Treasury credentials</h3><p>Dedicated migration wallets only. Credentials are write-only. Recovery phrases are processed locally only in the explicit 12-word mode; only the selected Solana private key is sent for encrypted storage. Never use your main wallet recovery phrase.</p><dl><dt>Solana treasury</dt><dd style={{ overflowWrap: 'anywhere' }}>{data?.wallets?.solana?.address || data?.wallets?.solana || 'Not configured'}</dd><dt>Robinhood treasury</dt><dd style={{ overflowWrap: 'anywhere' }}>{data?.wallets?.evm?.address || data?.wallets?.evm || 'Not configured'}</dd></dl>
       <p>Robinhood Alchemy API key: {data?.wallets?.robinhoodRpc ? 'Configured' : 'Not configured'}. Enable Robinhood Chain mainnet in your paid Alchemy app. Enter the raw API key, not an RPC URL. Public-node fallback is not used.</p>
-      <form autoComplete="off" onSubmit={storeCredential}><label>Credential<select value={kind} disabled={busy} onChange={e => { setKind(e.target.value); setSecret(''); resetPreview(); }}><option value="solana">Solana private key</option><option value="solanaHex">Solana from 32-byte hex (explicit derivation)</option><option value="evm">Robinhood EVM private key</option><option value="jupiter">Jupiter API key</option><option value="robinhoodRpc">Robinhood Alchemy API key</option></select></label>{kind === 'solanaHex' && <p>This derives a Solana address from these bytes. It is not a conversion of your Ethereum account and may differ from MetaMask’s Solana address. This does not transfer existing funds or recover MetaMask’s Solana account. Compare the address below with your existing Solana address before saving.</p>}<label>New secret<input type="password" autoComplete="new-password" value={secret} disabled={busy} onChange={e => { setSecret(e.target.value); resetPreview(); }} required spellCheck="false"/></label>{kind === 'solanaHex' && <><button type="button" className="btn" disabled={busy || !secret.trim()} onClick={previewSolana}>Preview Solana address</button>{previewAddress && <><p>Derived Solana address: <code style={{ overflowWrap: 'anywhere' }}>{previewAddress}</code></p><label><input type="checkbox" checked={previewConfirmed} disabled={busy} onChange={e => setPreviewConfirmed(e.target.checked)}/> I checked this Solana address and want to use it as the treasury.</label></>}</>}<div role="status" aria-live="polite">{credentialNotice}</div><button className="btn" disabled={busy || !secret.trim() || (kind === 'solanaHex' && (!previewAddress || !previewConfirmed))}>Store encrypted credential</button></form>
+      <form autoComplete="off" onSubmit={storeCredential}>
+        <label>Credential<select value={kind} disabled={busy} onChange={e => { setKind(e.target.value); setSecret(''); setAccountIndex('0'); resetPreview(); }}>
+          <option value="solana">Solana private key</option>
+          <option value="solanaHex">Solana from 32-byte hex (explicit derivation)</option>
+          <option value="solanaMnemonic">Solana from 12-word recovery phrase</option>
+          <option value="evm">Robinhood EVM private key</option><option value="jupiter">Jupiter API key</option><option value="robinhoodRpc">Robinhood Alchemy API key</option>
+        </select></label>
+        {kind === 'solanaHex' && <p>This derives a Solana address from these bytes. It is not a conversion of your Ethereum account and may differ from MetaMask’s Solana address. This does not transfer existing funds or recover MetaMask’s Solana account. Compare the address below with your existing Solana address before saving.</p>}
+        {kind === 'solanaMnemonic' && <>
+          <p>12 English BIP39 words, without an extra BIP39 passphrase. Account 0 is the first account. Compare the full preview address with your wallet before saving; other derivation paths are not supported here.</p>
+          <label>Solana account index<input type="number" min="0" max="9999" step="1" value={accountIndex} disabled={busy} onChange={e => { setAccountIndex(e.target.value); resetPreview(); }}/></label>
+          <p>Derivation path: <code>{/^(0|[1-9][0-9]{0,3})$/.test(accountIndex) ? solanaMnemonicPath(accountIndex) : 'Select a valid account index'}</code></p>
+        </>}
+        <label>New secret<input type="password" autoComplete="new-password" autoCapitalize="none" value={secret} disabled={busy} onChange={e => { setSecret(e.target.value); resetPreview(); }} required spellCheck="false"/></label>
+        {derivedMode && <><button type="button" className="btn" disabled={busy || !secret.trim()} onClick={previewSolana}>Preview Solana address</button>{previewAddress && <><p>Derived Solana address: <code style={{ overflowWrap: 'anywhere' }}>{previewAddress}</code></p><label><input type="checkbox" checked={previewConfirmed} disabled={busy} onChange={e => setPreviewConfirmed(e.target.checked)}/> I checked this Solana address and want to use it as the treasury.</label></>}</>}
+        <div role="status" aria-live="polite">{credentialNotice}</div><button className="btn" disabled={busy || !secret.trim() || (derivedMode && (!previewAddress || !previewConfirmed))}>Store encrypted credential</button>
+      </form>
     </section>
     <section className="card"><h3>Eligibility snapshot</h3>{data?.snapshot ? <><p>{data.snapshot.requestedAt != null ? 'Snapshot cutoff' : 'Captured at'}: {utcTime(data.snapshot.requestedAt ?? data.snapshot.createdAt)}</p><p>Finalized slot {data.snapshot.slot}{data.snapshot.blockTime != null ? ` · Block time ${utcTime(data.snapshot.blockTime)}` : ''}</p><p>{data.snapshot.wallets} {data.snapshot.mode === 'historical' ? 'wallets evaluated so far (not all holders)' : 'wallets captured'}</p></> : <p>No snapshot cutoff saved. Select a past UTC date and time to determine eligible balances.</p>}<p>The snapshot is immutable once migration requests exist. Later purchases never increase a wallet’s allocation.</p>
       <form onSubmit={event => { event.preventDefault(); const at = snapshotUtcIso(snapshotAt); if (busy || snapshotLocked || !snapshotConfirm || !at) return; setSnapshotConfirm(false); run('/snapshot', { confirm: true, at }); }}>
