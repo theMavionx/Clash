@@ -1,5 +1,9 @@
 # User Request Log
 
+## UR-2026-09-21-VIRTUAL-SITE-VERIFICATION-REPLACEMENT
+
+- Owner supplied replacement `virtual-protocol-site-verification` content `71ff5861617a9a0a29495408f32b8450` for the main Clash of Perps site. Replace the old value rather than duplicate the tag; deploy and verify public homepage HTML. Preserve paused migration configuration and unrelated work.
+
 ## UR-2026-09-21-CLASH-ONE-TO-ONE-PENDING-CONTRACT
 
 - Owner: «поміняй на клеш 1 до 1 замість юсдг контаркт адресу поки прибери я потім скину справжню». Change live migration configuration to ratio1 and empty targetToken, pause new migration/settlement until the actual Robinhood CLASH contract is supplied. Preserve existing requests' immutable payout asset/amounts and financial history; no fabricated contract, no funded test, no change to wallet keys or other settings.
