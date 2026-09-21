@@ -1,5 +1,10 @@
 # Active Session State
 
+## Deposit review isolation live; expired-attempt recovery pending (2026-09-21)
+
+- Release20260921191517-eb2296a6 healthy,112tests Linux/local. Deposit-only review no longer blocks unrelated EVM payouts. Exact1:1 inclusion verified for ff1825ce866,894.740711CLASH and262ed666577,628.172995CLASH while AW4 review preserved. See migration-deposit-review-isolation report.
+- Owner next asks to fix reviewed user's UI dead end. ADR0055; strict finalized expired/unlanded proof twice30seconds apart before restoring allocation; retainoriginal raw/hash/sends, require fresh quote andwalletsignature.119server+12modeltests anddesktop/mobilebrowser passed. Independent adapter/core/UI agents reviewed; canonical gate/deploy pending. Never manually reset81f01d62 or resendoldbytes.
+
 ## Inclusion queue and safe sale retry deployed (2026-09-21)
 
 - Release 20260921185438-41f8ca68 healthy. Exact on-chain CLASH 1:1 transfers verified for d4ed39d3 (398,371.932257) and b58cf5c4 (6,512,792.978019). Included receipts unblock later nonces; final paid accounting remains separate. MAX wallet consumed all allocation; added explicit reason, no amount-rule change.

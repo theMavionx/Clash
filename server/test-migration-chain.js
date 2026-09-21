@@ -27,6 +27,100 @@ const {
   validateTargetSupply,
 } = require("./migration_chain");
 const { LIGHTHOUSE, hasOnlyLighthouseAssertions, verifyLighthouseDeployment } = require('./migration_deposit_policy');
+
+function depositExpiryFixture(lighthouse = false) {
+  const payer = Keypair.generate(), user = Keypair.generate();
+  const tx = new Transaction({ feePayer: payer.publicKey,
+    recentBlockhash: Keypair.generate().publicKey.toBase58() }).add(
+    SystemProgram.transfer({ fromPubkey: user.publicKey, toPubkey: payer.publicKey, lamports: 1234 }));
+  const transaction = tx.serialize({ requireAllSignatures: false }).toString('base64');
+  if (lighthouse) tx.add(new TransactionInstruction({ programId: new PublicKey(LIGHTHOUSE),
+    keys: [{ pubkey: user.publicKey, isSigner: false, isWritable: false }], data: Buffer.from([5, 0, 7, 0, 0]) }));
+  tx.sign(payer, user);
+  const r = { transaction, depositRaw: tx.serialize().toString('base64'), depositHash: bs58.encode(tx.signature),
+    wallet: user.publicKey.toBase58(), solanaTreasury: payer.publicKey.toBase58(), lastValidBlockHeight: 100 };
+  const state = { slot: 500, height: 133, valid: { context: { slot: 500 }, value: false },
+    status: { context: { slot: 500 }, value: [null] }, receipt: null, statusReads: 0, lateStatus: null };
+  const connection = {
+    getSlot: async commitment => { assert.equal(commitment, 'finalized'); return state.slot; },
+    getBlockHeight: async config => { assert.deepEqual(config, { commitment: 'finalized', minContextSlot: state.slot }); return state.height; },
+    isBlockhashValid: async (hash, config) => {
+      assert.equal(hash, tx.recentBlockhash);
+      assert.deepEqual(config, { commitment: 'finalized', minContextSlot: state.slot }); return state.valid;
+    },
+    getSignatureStatuses: async (hashes, config) => {
+      assert.deepEqual(hashes, [r.depositHash]); assert.equal(config.searchTransactionHistory, true);
+      state.statusReads++;
+      return state.statusReads > 1 && state.lateStatus ? state.lateStatus : state.status;
+    },
+    getTransaction: async (hash, config) => {
+      assert.equal(hash, r.depositHash);
+      assert.deepEqual(config, { commitment: 'finalized', maxSupportedTransactionVersion: 0 }); return state.receipt;
+    },
+  };
+  const chain = createMigrationChain({}, { connection });
+  return { r, state, connection, tx, payer, user, read: () => chain.depositExpiryEvidence(r) };
+}
+
+test('deposit expiry proof requires finalized height margin and immutable signed identity without sends', async () => {
+  for (const lighthouse of [false, true]) {
+    const f = depositExpiryFixture(lighthouse);
+    assert.deepEqual(await f.read(), { kind: 'expired_unlanded', slot: 500, height: 133 });
+    assert.equal(f.state.statusReads, 2, 'absence checked again after transaction lookup');
+  }
+});
+
+test('deposit expiry proof rejects stale contexts, late receipts, invalid identity and durable nonce', async () => {
+  const mutations = [
+    f => { f.r.lastValidBlockHeight = 0; },
+    f => { f.r.lastValidBlockHeight = Number.MAX_SAFE_INTEGER; },
+    f => { f.r.lastValidBlockHeight = 1.5; },
+    f => { f.r.depositRaw = 'invalid'; },
+    f => { f.r.transaction = ''; },
+    f => { f.r.depositHash = bs58.encode(Buffer.alloc(64, 1)); },
+    f => { f.r.solanaTreasury = f.user.publicKey.toBase58(); },
+    f => { f.r.wallet = Keypair.generate().publicKey.toBase58(); },
+    f => {
+      f.tx.signatures[1].signature[0] ^= 1;
+      f.r.depositRaw = f.tx.serialize({ verifySignatures: false }).toString('base64');
+    },
+    f => {
+      f.tx.instructions[0].data[4] ^= 1; f.tx.sign(f.payer, f.user);
+      f.r.depositRaw = f.tx.serialize().toString('base64'); f.r.depositHash = bs58.encode(f.tx.signature);
+    },
+    f => {
+      f.tx.instructions.unshift(SystemProgram.nonceAdvance({ noncePubkey: Keypair.generate().publicKey,
+        authorizedPubkey: f.payer.publicKey }));
+      f.tx.sign(f.payer, f.user); f.r.transaction = f.tx.serialize().toString('base64');
+      f.r.depositRaw = f.r.transaction; f.r.depositHash = bs58.encode(f.tx.signature);
+    },
+    f => { f.state.slot = 0; },
+    f => { f.state.height = 132; },
+    f => { f.state.height = NaN; },
+    f => { f.state.valid.value = true; },
+    f => { f.state.valid.context.slot = 499; },
+    f => { f.state.valid.context = {}; },
+    f => { f.state.status.context.slot = 499; },
+    f => { f.state.status.value = []; },
+    f => { f.state.status.value = [{ confirmationStatus: 'processed' }]; },
+    f => { f.state.status.value = [{ confirmationStatus: 'finalized', err: null }]; },
+    f => { f.state.receipt = { slot: 400, meta: { err: null } }; },
+    f => { f.state.receipt = undefined; },
+    f => { f.state.lateStatus = { context: { slot: 501 }, value: [{ confirmationStatus: 'confirmed' }] }; },
+  ];
+  for (const mutate of mutations) {
+    const f = depositExpiryFixture(); mutate(f);
+    assert.equal(await f.read(), null, mutate.toString());
+  }
+});
+
+test('deposit expiry proof propagates RPC failures rather than treating errors as absence', async () => {
+  for (const name of ['getSlot', 'getBlockHeight', 'isBlockhashValid', 'getSignatureStatuses', 'getTransaction']) {
+    const f = depositExpiryFixture(); f.connection[name] = async () => { throw Error('RPC unavailable'); };
+    await assert.rejects(f.read(), /RPC unavailable/);
+  }
+});
+
 test('Lighthouse compatibility preserves exact transfers, permissions, fees, signatures and receipt identity', async () => {
   const payer = Keypair.generate(), user = Keypair.generate();
   const base = new Transaction({ feePayer: payer.publicKey, recentBlockhash: Keypair.generate().publicKey.toBase58() }).add(

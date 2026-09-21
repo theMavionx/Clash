@@ -1,5 +1,9 @@
 # User Request Log
 
+## UR-2026-09-21-MIGRATION-EXPIRED-RECOVERY
+
+- Owner screenshot «і от випарв ще» points to deposit reconciliation dead end. Implement strict finalized expired/unlanded evidence, repeated with advancing chain after30seconds, before freeing original deposit allocation. Preserve signed record/hash and audit; never replace/resend it. UI offers newquote with explicit fresh wallet signature only after recovery. RPC uncertainty keeps review. Independent agent owns proof adapter/tests; UI agent owns recovery affordance/browser test. Existing migration/fee/deadline gates remain.
+
 ## UR-2026-09-21-MIGRATION-REVIEW-ISOLATION
 
 - Owner: «зроби щоб не блокувлао це іншим депозити». Isolate positively identified deposit-only review from other users' outgoing payout queue. Keep its own eligibility/liability reserved and continue reconciliation; unknown reviews or any prepared payout evidence still block outgoing nonce progression. Explain multi-file core/test/ADR change and verify before existing authorized production rollout. No manual release or resubmission of reviewed funds.

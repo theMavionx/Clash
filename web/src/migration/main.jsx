@@ -6,7 +6,7 @@ import '../dashboard/dashboard.css';
 import './migration.css';
 import { targetSymbol, targetRatio } from './target-asset';
 import { t, migrationErrorText, migrationStateText } from './strings';
-import { expiryMs, formatUnits, formatUtc, validRequest, maxMigrationAmount, maxMigrationHint, depositDefinitelyRejected, closingCountdown } from './model';
+import { expiryMs, formatUnits, formatUtc, validRequest, maxMigrationAmount, maxMigrationHint, canRequoteExpiredDeposit, depositDefinitelyRejected, closingCountdown } from './model';
 import { MigrationWalletPicker, MigrationWalletProvider } from './WalletConnection';
 import { migrationApi as api, startMigrationPolling } from './transport';
 
@@ -184,6 +184,13 @@ function Migration() {
   const maxAmount = maxMigrationAmount(account, status?.sourceDecimals);
   const maxHint = session && !quote ? maxMigrationHint(account) : '';
   const expired = quote && !(expiryMs(quote.expiresAt) > now);
+  function startReplacementQuote(row) {
+    if (!canRequoteExpiredDeposit(row) || busy || !available || quote || pendingSubmission) return;
+    setAmount(formatUnits(row.inputUnits, status?.sourceDecimals));
+    setDestination(row.destination);
+    setNotice(t('requoteReady'));
+    document.getElementById('migration-amount')?.focus();
+  }
   return <div className="dashboard-app migration-app">
     <a className="skip-link" href="#migration-main">Skip to migration</a>
     <header className="migration-header"><div className="migration-header-inner"><a className="migration-brand" href="/" aria-label={t('home')}><span className="migration-logo-crop"><img src="/splash-logo.png" alt=""/></span></a><div className="migration-wallet-control"><button className={session ? 'migration-wallet-button' : 'migration-primary'} aria-haspopup={connectedAddress ? 'menu' : 'dialog'} aria-expanded={connectedAddress ? walletMenu : walletPicker} disabled={busy && !connectedAddress} onClick={event => { if (connectedAddress) { if (walletMenu) closeWalletMenu(); else showWalletMenu(event); } else chooseWallet(); }}>{session ? `${session.wallet.slice(0, 5)}…${session.wallet.slice(-4)}` : connectedAddress ? t('verifyWallet') : busy ? t('busy') : t('connectWallet')}<span aria-hidden="true">{connectedAddress ? '⌄' : <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7"><rect x="3" y="5" width="18" height="15" rx="3"/><path d="M3 8h18M16 13h5"/></svg>}</span></button>{walletMenu && <div ref={menuRef} id="migration-wallet-menu" className="migration-wallet-menu" role="menu" aria-label={t('walletActions')} onKeyDown={menuKeys}><p className="migration-menu-address">{connectedAddress}</p>{!session && <button role="menuitem" disabled={busy} onClick={() => { closeWalletMenu(); connect(provider.current); }}>{t('verifyWallet')}</button>}<button role="menuitem" disabled={busy} onClick={chooseWallet}>{t('changeWallet')}</button><button role="menuitem" onClick={disconnectWallet}>{t('disconnect')}</button></div>}</div></div></header>
@@ -203,7 +210,7 @@ function Migration() {
           </div>}
       </section>
       <aside className="migration-card migration-details" aria-label="Migration availability"><h2>{t('details')}</h2><p className={'migration-availability' + (available ? ' is-ready' : '')}><span aria-hidden="true"/>{!status ? t('loading') : available ? t('ready') : t('paused')}</p><dl className="migration-facts"><div><dt>{t('ratio')}</dt><dd>{targetRatio(status?.targetToken, status?.ratio || '1')}</dd></div><div><dt>{t('fee')}</dt><dd>${status?.feeUsd || '2'} <span>in SOL</span></dd></div><div><dt>{t('network')}</dt><dd>Robinhood <span>Mainnet</span></dd></div><div><dt>{t(status?.snapshot?.requestedAt != null ? 'snapshotCutoff' : 'snapshot')}</dt><dd>{status?.snapshot?.requestedAt != null ? formatUtc(status.snapshot.requestedAt) : status?.snapshot?.slot || t('unavailable')}</dd></div></dl><p className="migration-muted migration-disclosure">{t('custody')}</p><p className="migration-muted migration-disclosure">{t('gas')}</p></aside></div>
-      {session && <section className="migration-card"><div className="migration-heading"><h2>{t('history')}</h2><button disabled={busy} onClick={() => action(() => refresh())}>{t('refresh')}</button></div>{!account?.requests?.length ? <p className="migration-muted">{t('empty')}</p> : account.requests.map(row => <article className="migration-request" key={row.id}><strong>{formatUnits(row.inputUnits, status?.sourceDecimals)} CLASH → {formatUnits(row.outputUnits, row.targetDecimals)} {targetSymbol(row.targetToken)}</strong><p>{migrationStateText(row.status, row.payoutIncludedAt)}</p><code>{row.destination}</code><small>{row.id}</small>{row.depositHash && <a target="_blank" rel="noopener noreferrer" href={'https://solscan.io/tx/' + encodeURIComponent(row.depositHash)}>{t('deposit')}</a>}{row.payoutHash && <p>{t('payout')}: <code>{row.payoutHash}</code></p>}{row.errorCode && <p>{migrationErrorText(row.errorCode)}</p>}</article>)}</section>}
+      {session && <section className="migration-card"><div className="migration-heading"><h2>{t('history')}</h2><button disabled={busy} onClick={() => action(() => refresh())}>{t('refresh')}</button></div>{!account?.requests?.length ? <p className="migration-muted">{t('empty')}</p> : account.requests.map(row => <article className="migration-request" key={row.id}><strong>{formatUnits(row.inputUnits, status?.sourceDecimals)} CLASH → {formatUnits(row.outputUnits, row.targetDecimals)} {targetSymbol(row.targetToken)}</strong><p>{migrationStateText(row.status, row.payoutIncludedAt)}</p><code>{row.destination}</code><small>{row.id}</small>{row.depositHash && <a target="_blank" rel="noopener noreferrer" href={'https://solscan.io/tx/' + encodeURIComponent(row.depositHash)}>{t('deposit')}</a>}{row.payoutHash && <p>{t('payout')}: <code>{row.payoutHash}</code></p>}{row.errorCode && <p>{migrationErrorText(row.errorCode)}</p>}{canRequoteExpiredDeposit(row) && <button type="button" disabled={busy || !available || !!quote || !!pendingSubmission} onClick={() => startReplacementQuote(row)}>{t('createNewQuote')}</button>}</article>)}</section>}
       <footer className="migration-footer"><span>Clash of Perps</span><a href="/dashboard">{t('stats')} ↗</a></footer>
     </main>
   </div>;

@@ -28,6 +28,9 @@ export function maxMigrationHint(account) {
   if (BigInt(account.balanceUnits) === 0n) return 'maxNoBalance';
   return '';
 }
+export function canRequoteExpiredDeposit(row) {
+  return row?.status === 'deposit_failed' && row.errorCode === 'DEPOSIT_EXPIRED_UNLANDED' && !row.payoutHash;
+}
 export function validRequest(amount, address, account, decimals = 6) {
   const units = parseUnits(amount, decimals);
   return units !== null && units > 0n && /^0x[0-9a-fA-F]{40}$/.test(address) && !/^0x0{40}$/i.test(address)

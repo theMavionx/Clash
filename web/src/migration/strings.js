@@ -33,6 +33,7 @@ export const messages = {
   unavailable: 'Not configured', invalid: 'Enter a positive amount within your available allocation and a valid EVM address.',
   checking: 'Checking your existing submission. Do not sign another deposit. Refresh status to reconcile this request.',
   retrySubmission: 'Retry same submission', sessionExpired: 'Your wallet verification expired. Connect and verify again to restore your requests.',
+  createNewQuote: 'Create new quote', requoteReady: 'Original amount and recipient restored. Review the details, request a fresh quote, and approve it in your wallet only when ready.',
 };
 export const t = (key) => messages[key] || key;
 const errors = {
@@ -82,7 +83,8 @@ const errors = {
   MIGRATION_UNAVAILABLE: 'Migration is temporarily unavailable. Refresh status before retrying.',
   WORKER_BUSY: 'Settlement is currently processing another request. Wait briefly and refresh.',
   SUPPLY_CAP: 'The migration supply limit has been reached.',
-  DEPOSIT_REQUIRES_RECONCILIATION: 'Your deposit needs reconciliation. Do not submit another payment; contact support.',
+  DEPOSIT_REQUIRES_RECONCILIATION: 'We are checking whether your Solana deposit reached the network. Do not submit another payment while this check is in progress.',
+  DEPOSIT_EXPIRED_UNLANDED: 'This deposit expired without landing on Solana. No tokens were transferred by this transaction and its allocation was released. You can create a fresh quote; it will require a new wallet approval.',
   PAYOUT_REQUIRES_RECONCILIATION: 'Your payout needs reconciliation. Do not deposit again; contact support.',
   PAYOUT_NONCE_ALREADY_RESERVED: 'Your payout is queued while an earlier transaction is reconciled. Do not deposit again.',
   KEY_ROTATION_HAS_LIABILITIES: 'Wallet rotation is blocked while settlement obligations exist.',
@@ -97,7 +99,7 @@ const errors = {
 };
 export const migrationErrorText = code => errors[code] || messages.failed;
 const states = { quoted: 'Awaiting your deposit signature', deposit_signed: 'Deposit submitted — awaiting confirmation', deposit_pending: 'Deposit submitted — awaiting confirmation', deposited: 'Processing — your Robinhood payout is queued', payout_signed: 'Processing — Robinhood payout submitted, awaiting confirmation', paid: 'Migration complete', expired: 'Quote expired', cancelled: 'Quote cancelled', deposit_failed: 'Deposit failed — no payout sent', submitted: 'Transaction submitted', confirmed: 'Transaction confirmed', prepared: 'Transaction prepared', failed: 'Transaction failed', sold: 'Sale confirmed' };
-export const migrationStateText = (value, includedAt) => value === 'payout_signed' && Number.isSafeInteger(includedAt) && includedAt > 0
+export const migrationStateText = (value, includedAt) => value === 'review' ? 'Checking transaction — do not deposit again' : value === 'payout_signed' && Number.isSafeInteger(includedAt) && includedAt > 0
   ? 'Tokens transferred — awaiting network finality'
   : states[value] || 'Awaiting settlement update';
 export function payoutTimingText(policy) {

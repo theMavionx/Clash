@@ -1036,6 +1036,81 @@ test("expired ambiguous deposit can reconcile later without releasing eligibilit
   assert.equal(f.state.payouts, 1);
 });
 
+async function expiredDepositFixture(t) {
+  const f = fixture(t); await f.setup();
+  const q = await f.q('10');
+  await f.service.submit(f.user.publicKey.toBase58(), q.id, 'valid');
+  f.state.deposit = 'expired'; await f.service.tick();
+  f.qid = q.id;
+  f.readRequest = () => {
+    const row = f.db.prepare('SELECT status,payload FROM migration_requests WHERE id=?').get(q.id);
+    return { ...JSON.parse(row.payload), status: row.status };
+  };
+  f.proof = { kind: 'expired_unlanded', height: 200, slot: 400 };
+  f.chain.depositExpiryEvidence = async () => f.proof;
+  return f;
+}
+
+test('expired deposit recovery requires advancing finalized proof twice and preserves signed history across restart', async t => {
+  const f = await expiredDepositFixture(t), original = f.readRequest();
+  await f.service.tick();
+  assert.equal((await f.service.account(f.user.publicKey.toBase58())).remainingUnits, '990000000');
+  const restarted = createMigration(f.options);
+  f.advance(29999); f.proof = { ...f.proof, height: 201, slot: 401 };
+  await restarted.tick(); assert.equal(f.readRequest().status, 'review');
+  f.advance(1); await restarted.tick();
+  const recovered = f.readRequest();
+  assert.equal(recovered.status, 'deposit_failed');
+  assert.equal(recovered.errorCode, 'DEPOSIT_EXPIRED_UNLANDED');
+  assert.equal(recovered.depositHash, original.depositHash);
+  assert.equal(recovered.depositRaw, original.depositRaw);
+  assert.equal(recovered.payoutHash, undefined);
+  assert.equal((await restarted.account(f.user.publicKey.toBase58())).remainingUnits, '1000000000');
+  assert.equal(f.db.prepare("SELECT count(*) n FROM migration_sends WHERE kind='deposit'").get().n, 1);
+  await restarted.tick();
+  assert.equal(f.db.prepare("SELECT count(*) n FROM migration_audit WHERE event=?").get('deposit_expiry_verified:' + f.qid).n, 1);
+  const next = await f.q('10', 'fresh-after-expiry');
+  assert.notEqual(next.id, f.qid);
+  assert.equal(f.state.broadcasts.length, 0, 'recovery and new quote cannot broadcast');
+  assert.equal(f.state.payouts, 0);
+});
+
+test('expiry recovery rejects stale, insufficient and uncertain evidence and restarts fence after RPC error', async t => {
+  const f = await expiredDepositFixture(t); await f.service.tick(); f.advance(30000);
+  await f.service.tick(); assert.equal(f.readRequest().status, 'review', 'same finalized anchor cannot recover');
+  f.chain.depositExpiryEvidence = async () => { throw Error('RPC unavailable'); };
+  await f.service.tick(); assert.equal(f.readRequest().depositExpiryProbe, undefined);
+  assert.equal(f.readRequest().errorCode, 'DEPOSIT_REQUIRES_RECONCILIATION');
+  f.proof = { kind: 'expired_unlanded', height: 250, slot: 450 };
+  f.chain.depositExpiryEvidence = async () => f.proof;
+  await f.service.tick(); assert.equal(f.readRequest().status, 'review');
+  f.advance(30000); f.proof = null; await f.service.tick();
+  assert.equal(f.readRequest().depositExpiryProbe, undefined);
+  f.proof = { kind: 'expired_unlanded', height: 132, slot: 451 };
+  await f.service.tick(); assert.equal(f.readRequest().depositExpiryProbe, undefined);
+  assert.equal(f.readRequest().status, 'review');
+  assert.equal((await f.service.account(f.user.publicKey.toBase58())).remainingUnits, '990000000');
+});
+
+test('late confirmed deposit wins over candidate expiry and cannot release its allocation', async t => {
+  const f = await expiredDepositFixture(t); await f.service.tick(); f.advance(30000);
+  f.state.deposit = 'confirmed'; await f.service.tick();
+  assert.equal(f.readRequest().status, 'deposited');
+  assert.equal((await f.service.account(f.user.publicKey.toBase58())).remainingUnits, '990000000');
+  assert.equal(f.readRequest().depositExpiryVerifiedAt, undefined);
+});
+
+test('verified expired deposit does not bypass pause or closing deadline for a new quote', async t => {
+  const f = await expiredDepositFixture(t); await f.service.setDeadline({ durationSeconds: 60 });
+  await f.service.tick(); await f.service.updateConfig({ enabled: false });
+  f.advance(60000); f.proof = { ...f.proof, height: 201, slot: 401 }; await f.service.tick();
+  assert.equal(f.readRequest().status, 'deposit_failed');
+  await assert.rejects(f.q('10', 'paused-recovery-123456'), /MIGRATION_PAUSED/);
+  await f.service.updateConfig({ enabled: true });
+  await assert.rejects(f.q('10', 'closed-recovery-123456'), /MIGRATION_CLOSED/);
+  assert.equal(f.state.broadcasts.length, 0);
+});
+
 test("worker rotates past twenty unresolved reviews", async (t) => {
   const f = fixture(t);
   await f.setup();

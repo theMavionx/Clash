@@ -557,6 +557,48 @@ function createMigrationChain(env = process.env, deps = {}) {
       return "expired";
     return "pending";
   }
+  // Expiry is not a wall-clock timeout. Require a finalized chain past the
+  // validity window and fresh historical absence; callers observe twice before
+  // releasing allocation. Never modify/resign the original transaction here.
+  async function depositExpiryEvidence(r) {
+    let tx;
+    try {
+      if (!Number.isSafeInteger(r.lastValidBlockHeight) || r.lastValidBlockHeight <= 0 ||
+          r.lastValidBlockHeight > Number.MAX_SAFE_INTEGER - 32 || !r.depositRaw || !r.transaction)
+        return null;
+      tx = Transaction.from(Buffer.from(r.depositRaw, "base64"));
+      const expected = Transaction.from(Buffer.from(r.transaction, "base64"));
+      if (!tx.signature || bs58.encode(tx.signature) !== r.depositHash ||
+          tx.feePayer?.toBase58() !== r.solanaTreasury ||
+          !tx.signatures.some(s => s.publicKey.toBase58() === r.wallet && s.signature) ||
+          !tx.verifySignatures() || tx.recentBlockhash !== expected.recentBlockhash ||
+          (!tx.serializeMessage().equals(expected.serializeMessage()) &&
+            !hasOnlyLighthouseAssertions(tx, expected)) ||
+          tx.instructions.some(ix => ix.programId.equals(SystemProgram.programId) &&
+            ix.data.length >= 4 && ix.data.readUInt32LE(0) === 4)) return null;
+    } catch { return null; }
+    const c = sol();
+    const slot = await c.getSlot("finalized");
+    if (!Number.isSafeInteger(slot) || slot <= 0) return null;
+    const height = await c.getBlockHeight({ commitment: "finalized", minContextSlot: slot });
+    if (!Number.isSafeInteger(height) || height <= r.lastValidBlockHeight + 32) return null;
+    const valid = await c.isBlockhashValid(tx.recentBlockhash, {
+      commitment: "finalized", minContextSlot: slot,
+    });
+    if (valid?.value !== false || !Number.isSafeInteger(valid.context?.slot) || valid.context.slot < slot)
+      return null;
+    const absent = async () => {
+      const status = await c.getSignatureStatuses([r.depositHash], { searchTransactionHistory: true });
+      return Number.isSafeInteger(status?.context?.slot) && status.context.slot >= slot &&
+        Array.isArray(status.value) && status.value.length === 1 && status.value[0] === null;
+    };
+    if (!(await absent())) return null;
+    const receipt = await c.getTransaction(r.depositHash, {
+      commitment: "finalized", maxSupportedTransactionVersion: 0,
+    });
+    if (receipt !== null || !(await absent())) return null;
+    return { kind: "expired_unlanded", slot, height };
+  }
   async function depositStatus(r) {
     const status = await solStatus(r.depositHash, r.lastValidBlockHeight);
     if (status !== "confirmed") return status;
@@ -978,6 +1020,7 @@ function createMigrationChain(env = process.env, deps = {}) {
     prepareDeposit,
     signDeposit,
     depositStatus,
+    depositExpiryEvidence,
     broadcastSolana,
     preparePayout,
     payoutStatus,

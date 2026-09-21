@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { formatUnits, parseUnits, validRequest, expiryMs, snapshotUtcIso, formatUtc, maxMigrationAmount, maxMigrationHint, depositDefinitelyRejected, closingCountdown, deadlineUtcMs } from './model.js';
+import { formatUnits, parseUnits, validRequest, expiryMs, snapshotUtcIso, formatUtc, maxMigrationAmount, maxMigrationHint, canRequoteExpiredDeposit, depositDefinitelyRejected, closingCountdown, deadlineUtcMs } from './model.js';
 import { migrationErrorText, migrationStateText, payoutTimingText } from './strings.js';
 
 test('countdown has exact day and deadline boundaries, never negative or a per-visit reset', () => {
@@ -64,6 +64,13 @@ test('MAX explains loading, consumed allocation, and empty wallet without changi
   assert.equal(maxMigrationHint({ balanceUnits: '900', remainingUnits: '0' }), 'maxNoAllocation');
   assert.equal(maxMigrationHint({ balanceUnits: '0', remainingUnits: '900' }), 'maxNoBalance');
   assert.equal(maxMigrationHint({ balanceUnits: '1', remainingUnits: '900' }), '');
+});
+test('fresh quote recovery is available only for proven unlanded terminal deposit without payout', () => {
+  const row = { status: 'deposit_failed', errorCode: 'DEPOSIT_EXPIRED_UNLANDED' };
+  assert.equal(canRequoteExpiredDeposit(row), true);
+  for (const value of [null, { ...row, payoutHash: 'existing-payout' }, { ...row, status: 'review' }, { ...row, status: 'paid' }, { ...row, errorCode: 'DEPOSIT_REQUIRES_RECONCILIATION' }]) assert.equal(canRequoteExpiredDeposit(value), false);
+  assert.match(migrationStateText('review'), /do not deposit again/);
+  assert.match(migrationErrorText('DEPOSIT_EXPIRED_UNLANDED'), /new wallet approval/);
 });
 test('request validation rejects overspend, fractional base units and invalid recipient', () => {
   const a = { remainingUnits: '2000000', balanceUnits: '1000000' }, recipient = '0x' + '1'.repeat(40);

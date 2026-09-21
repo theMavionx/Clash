@@ -910,15 +910,43 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
       audit("payout_scheduled:" + r.id + ":" + r.payoutNotBefore);
     }).immediate();
   }
+  function depositOnlyReview(r) {
+    return r.status === "review" && r.errorCode === "DEPOSIT_REQUIRES_RECONCILIATION" &&
+      r.depositHash && !r.payoutHash && !r.payoutRaw && r.payoutNonce == null &&
+      (!r.soldUnits || r.soldUnits === "0");
+  }
+  async function reconcileDepositExpiry(r) {
+    if (!depositOnlyReview(r) || !Number.isSafeInteger(r.lastValidBlockHeight) ||
+      !chain.depositExpiryEvidence) return;
+    const evidence = await chain.depositExpiryEvidence(r);
+    fence();
+    if (evidence?.kind !== "expired_unlanded" || !Number.isSafeInteger(evidence.height) ||
+      evidence.height <= r.lastValidBlockHeight + 32 || !Number.isSafeInteger(evidence.slot) || evidence.slot <= 0) {
+      delete r.depositExpiryProbe;
+      save(r);
+      return;
+    }
+    const previous = r.depositExpiryProbe;
+    if (previous?.hash === r.depositHash && Number.isSafeInteger(previous.at) &&
+      now() - previous.at >= 30000 && evidence.height > previous.height && evidence.slot > previous.slot) {
+      r.status = "deposit_failed";
+      r.errorCode = "DEPOSIT_EXPIRED_UNLANDED";
+      r.depositExpiryVerifiedAt = now();
+      r.depositExpiryEvidence = { ...evidence, first: previous, at: now(), hash: r.depositHash };
+      // Keep original signed bytes, hash and migration_sends. A new quote must
+      // pass every normal gate and obtain a new explicit wallet signature.
+      db.transaction(() => { save(r); audit("deposit_expiry_verified:" + r.id); }).immediate();
+    } else if (!previous || previous.hash !== r.depositHash) {
+      r.depositExpiryProbe = { ...evidence, at: now(), hash: r.depositHash };
+      save(r);
+    }
+  }
   async function payoutQueueReady() {
     const outstanding = rows();
     // An unresolved incoming Solana deposit owns no outgoing EVM nonce.
     // Keep its allocation/liability reserved, but isolate its review from other
     // users. Unknown reviews or any evidence of a prepared payout still block.
-    if (outstanding.some(r => r.status === "review" && !(
-      r.errorCode === "DEPOSIT_REQUIRES_RECONCILIATION" && r.depositHash &&
-      !r.payoutHash && !r.payoutRaw && r.payoutNonce == null
-    ))) return false;
+    if (outstanding.some(r => r.status === "review" && !depositOnlyReview(r))) return false;
     for (const previous of outstanding.filter(r => r.status === "payout_signed")) {
       // Never trust persisted inclusion alone: a receipt can disappear in a reorg.
       const result = await chain.payoutStatus(previous, { inclusionOnly: true });
@@ -938,14 +966,16 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
         .slice(0, 20)) {
         try {
           if (r.status === "review") {
+            const depositState = !r.payoutHash && r.depositHash ? await chain.depositStatus(r) : null;
             if (
               !r.payoutHash &&
               r.depositHash &&
-              (await chain.depositStatus(r)) === "confirmed"
+              depositState === "confirmed"
             ) {
               r.status = "deposited";
               r.depositedAt = r.depositedAt || now();
               r.errorCode = null;
+              delete r.depositExpiryProbe;
               schedulePayout(r);
               save(r);
             } else if (
@@ -958,6 +988,8 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
               save(r);
               audit("payout_reconciled:" + r.id);
             }
+            else if (depositState === "expired") await reconcileDepositExpiry(r);
+            else if (r.depositExpiryProbe) { delete r.depositExpiryProbe; save(r); }
           }
           if (r.status === "quoted" && r.expiresAt < now()) {
             r.status = "expired";
@@ -1037,7 +1069,10 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
           const code = e instanceof MigrationError ? e.code : "UPSTREAM_RETRY";
           // Preserve the reason/stage of a review across transient provider
           // errors; otherwise an isolated incoming deposit becomes global again.
-          if (r.status === "review" && r.errorCode) r.lastReconciliationError = code;
+          if (r.status === "review" && r.errorCode) {
+            r.lastReconciliationError = code;
+            delete r.depositExpiryProbe;
+          }
           else r.errorCode = code;
           save(r);
         } finally {
