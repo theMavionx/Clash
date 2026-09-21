@@ -480,10 +480,23 @@ function createMigrationChain(env = process.env, deps = {}) {
     );
     const tx = Transaction.from(Buffer.from(encoded, "base64")),
       expected = Transaction.from(Buffer.from(r.transaction, "base64"));
-    check(
-      tx.serializeMessage().equals(expected.serializeMessage()),
-      "TRANSACTION_CHANGED",
-    );
+    if (!tx.serializeMessage().equals(expected.serializeMessage())) {
+      const error = new MigrationError("TRANSACTION_CHANGED");
+      const left = tx.compileMessage(), right = expected.compileMessage();
+      // Only structural booleans/counts, never transaction bytes or signatures.
+      error.transactionDifference = {
+        feePayer: !tx.feePayer.equals(expected.feePayer),
+        blockhash: tx.recentBlockhash !== expected.recentBlockhash,
+        accountOrder: JSON.stringify(left.accountKeys.map(k => k.toBase58())) !== JSON.stringify(right.accountKeys.map(k => k.toBase58())),
+        header: JSON.stringify(left.header) !== JSON.stringify(right.header),
+        expectedInstructions: expected.instructions.length,
+        receivedInstructions: tx.instructions.length,
+        programs: tx.instructions.some((ix, i) => !expected.instructions[i]?.programId.equals(ix.programId)),
+        data: tx.instructions.some((ix, i) => !expected.instructions[i]?.data.equals(ix.data)),
+        accounts: tx.instructions.some((ix, i) => JSON.stringify(ix.keys.map(k => [k.pubkey.toBase58(), k.isSigner, k.isWritable])) !== JSON.stringify(expected.instructions[i]?.keys.map(k => [k.pubkey.toBase58(), k.isSigner, k.isWritable]))),
+      };
+      throw error;
+    }
     const signer = tx.signatures.find(
       (s) => s.publicKey.toBase58() === r.wallet,
     );

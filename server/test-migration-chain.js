@@ -150,7 +150,14 @@ test("Phantom priority-fee augmentation reproduces old rejection; pinned quote s
   const old = Transaction.from(Buffer.from(prepared.transaction, 'base64'));
   old.instructions = old.instructions.slice(2);
   const oldEncoded = old.serialize({ requireAllSignatures: false }).toString('base64');
-  await assert.rejects(adapter.signDeposit({ ...r, transaction: oldEncoded }, phantomSign(oldEncoded), bs58.encode(payer.secretKey)), /TRANSACTION_CHANGED/);
+  await assert.rejects(adapter.signDeposit({ ...r, transaction: oldEncoded }, phantomSign(oldEncoded), bs58.encode(payer.secretKey)), error => {
+    assert.equal(error.code, 'TRANSACTION_CHANGED');
+    assert.equal(error.transactionDifference.expectedInstructions, 4);
+    assert.equal(error.transactionDifference.receivedInstructions, 6);
+    assert.equal(error.transactionDifference.blockhash, false);
+    assert.equal(error.transactionDifference.feePayer, false);
+    return true;
+  });
   assert.equal(simulations, 0);
   const result = await adapter.signDeposit({ ...r, ...prepared }, phantomSign(prepared.transaction), bs58.encode(payer.secretKey));
   assert.ok(Transaction.from(Buffer.from(result.raw, 'base64')).verifySignatures());

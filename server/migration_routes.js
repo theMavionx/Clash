@@ -55,6 +55,7 @@ function createMigrationRouter({
         requestId: typeof candidate === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(candidate) ? candidate : null,
         httpStatus: res.statusCode, durationMs: Date.now() - started,
         errorCode: res.locals.migrationErrorCode || (res.statusCode >= 400 ? "HTTP_REJECTED" : null),
+        ...(res.locals.transactionDifference ? { transactionDifference: res.locals.transactionDifference } : {}),
       });
     });
     res.set("Cache-Control", "no-store, private");
@@ -91,6 +92,17 @@ function createMigrationRouter({
       res.json(result);
     } catch (e) {
       res.locals.migrationErrorCode = e instanceof MigrationError && /^[A-Z][A-Z0-9_]{0,79}$/.test(e.code) ? e.code : "MIGRATION_UNAVAILABLE";
+      if (e instanceof MigrationError && e.code === "TRANSACTION_CHANGED" && e.transactionDifference) {
+        const diff = {};
+        for (const field of ['feePayer', 'blockhash', 'accountOrder', 'header', 'programs', 'data', 'accounts']) {
+          if (typeof e.transactionDifference[field] === 'boolean') diff[field] = e.transactionDifference[field];
+        }
+        for (const field of ['expectedInstructions', 'receivedInstructions']) {
+          const n = e.transactionDifference[field];
+          if (Number.isInteger(n) && n >= 0 && n <= 1232) diff[field] = n;
+        }
+        res.locals.transactionDifference = diff;
+      }
       res.status(e instanceof MigrationError ? e.status : 503).json({
         error: res.locals.migrationErrorCode,
         traceId: res.locals.migrationTraceId,
