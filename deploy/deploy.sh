@@ -1007,6 +1007,11 @@ copy_source_to_release() {
         || die "Missing versioned trading credential catalog"
     install -p -m 0644 "$SOURCE_DIR/shared/trading_credential_catalog.json" \
         "$RELEASE_DIR/shared/trading_credential_catalog.json"
+    # Public token metadata consumed by migration API and browser; no runtime secrets.
+    [ -f "$SOURCE_DIR/shared/migration-assets.json" ] \
+        || die "Missing versioned migration asset metadata"
+    install -p -m 0644 "$SOURCE_DIR/shared/migration-assets.json" \
+        "$RELEASE_DIR/shared/migration-assets.json"
 
     log "Generating server combat grid snapshot from deployed Godot scene..."
     node "$RELEASE_DIR/tools/combat-grid/generate-combat-grid-config.cjs" \
@@ -1324,6 +1329,8 @@ validate_release() {
         || die "Missing shared Flamethrower gameplay config in release"
     [ -f "$RELEASE_DIR/shared/trading_credential_catalog.json" ] \
         || die "Missing shared trading credential catalog in release"
+    [ -f "$RELEASE_DIR/shared/migration-assets.json" ] \
+        || die "Missing migration asset metadata in release"
     node --check "$SERVER_DIR/db.js"
     node --check "$SERVER_DIR/routes.js"
     # Exercise the real Linux crypto/permissions path before switching production.
