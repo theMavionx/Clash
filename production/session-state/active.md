@@ -1,5 +1,14 @@
 # Active Session State
 
+## Migration ACTIVATED after owner-funded CLASH (2026-09-21)
+
+- Owner explicitly requested activation again after funding. Fresh production readiness returned readytrue/no reasons. Authenticated PUT config enabledtrue succeeded; fresh admin/public status verifies enabledtrue, readytrue, closedfalse. Only enabled changed; target CLASH, ratio1, snapshot21:00Kyiv checksumd11bea7378654376fa333dc6da42d6e65e2704e26a2560a8d48f1f4cf4a70913, closing deadline1790100250842 and remaining settings preserved.
+- Migration automation is ACTIVE: real deposits/payouts/sales can now execute under configured safeguards. No manual funded transaction submitted. This supersedes the earlier inventory-blocked/paused state.
+
+## Owner requests activation — blocked by inventory (2026-09-21)
+
+- Explicit activation authority received. Fresh authenticated admin readiness still TARGET_INVENTORY_EMPTY, enabledfalse. Configured CLASH payout treasury0x33859e82dfA5039c4A37DaCe86Ee799C95d4f466 requires funding with token0xceB9A7C4eC7bf0EE14Bac1f16C97571bC22DB979 on Robinhood. Do not bypass inventory gate. No production write or transfer attempted; snapshot/deadline/config unchanged. User must fund treasury before activation can succeed.
+
 ## Migration closing timer and21:00Kyiv snapshot (2026-09-21)
 
 - Released20260921180004-620ae4e2, health passed. Shared editable deadline closes2026-09-22T18:04:10.842Z (22September21:04Kyiv); closesAt1790100250842. Admin UTC custom time/24h restart/disable. Server blocks new admission at expiry, accepted settlements remain eligible for processing. Timer runs while paused; enabledfalse preserved.

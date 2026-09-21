@@ -82,7 +82,7 @@ async function main(args = process.argv.slice(2), env = process.env) {
   if (options.help) {
     console.log("Migration sales: --db <absolute existing DB> [--once] [--interval-ms 15000] [--execute]\n" +
       "Default: read-only balance/eligibility checks; no signing, simulation or broadcast.\n" +
-      "--execute: owner-controlled real sales of paid migration lots only. Requires enabled migration.\n" +
+      "--execute: owner-controlled real sales of confirmed Solana deposit lots; no wait for Robinhood payout. Requires enabled migration.\n" +
       "Uses existing encrypted treasury/Jupiter keys, admin batch thresholds and shared worker lease.\n" +
       "The main API must remain running to reconcile deposits/payouts. Ctrl+C stops this runner, not the embedded worker.");
     return;

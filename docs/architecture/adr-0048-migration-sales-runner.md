@@ -4,6 +4,8 @@
 
 Accepted for local implementation; not deployed or activated by this task.
 
+Later amendment: [ADR-0052](adr-0052-confirmed-deposit-sales.md) supersedes only the paid-only lot gate with finalized confirmed-deposit eligibility, per owner's2026-09-21 instruction. Historical text below records the original decision.
+
 ## Date
 
 2026-09-21

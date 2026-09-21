@@ -1,5 +1,22 @@
 # User Request Log
 
+## UR-2026-09-21-MIGRATION-SELL-AFTER-DEPOSIT
+
+- Owner first requests verifying sales and1:1 payouts, then explicitly changes behavior: sell without waiting for Robinhood payout completion. Remove paid-only dependence, accept only finalized confirmed source deposits in deposited/payout_signed/paid states. Keep$400normal/$100minimum and ten-minute residual thresholds. Preserve payout amounts/liabilities, pause, finality, shared lease and signed-send recovery. ADR0052 documents custody trade-off. No additional manual funded trade authorized or initiated.
+- Initial read-only check: four new finalized deposits have exact1:1 units, no request errors; pending payout schedules explain NO_PAID_LOTS under old policy. Prior4000CLASH test sale completed. Further post-release verification required.
+
+## UR-2026-09-21-PHANTOM-CONSOLE
+
+- Owner reports Phantom public-apps404 and serviceWorker tabs.get negative tabId. Read-only diagnosis: no corresponding application-source call, extension-context stack; production ready/enabled with three successful new submit200 events (two confirmed deposits, third signed at check). Not enough evidence to link errors to a specific blocked user. Structured bug report records uncertainties; no external mutations/deploy for this diagnosis.
+
+## UR-2026-09-21-MIGRATION-ENABLE-FUNDED
+
+- Owner: enable migration, tokens are now present. Fresh authenticated readiness readytrue/no reasons; enabled through guarded admin API. Verified enabledtrue/readytrue/closedfalse, only enabled changed. Snapshot21:00Kyiv, ratio1, token and existing deadline unchanged. No manual funded transaction initiated; automation is active.
+
+## UR-2026-09-21-MIGRATION-ENABLE
+
+- Owner explicitly requests enabling migration now. Fresh authenticated production readiness check returned readyfalse, TARGET_INVENTORY_EMPTY for configured RobinhoodCLASH0xceB9A7C4eC7bf0EE14Bac1f16C97571bC22DB979, treasury0x33859e82dfA5039c4A37DaCe86Ee799C95d4f466. No enable write attempted because treasury lacks payout inventory; retain pause and request funding. Snapshot21:00Kyiv, ratio1 and closing deadline unchanged; five requests settled/expired and salecompleted.
+
 ## UR-2026-09-21-MIGRATION-SNAPSHOT-2100
 
 - Owner explicitly confirmed replacement cutoff today21September2026 at21:00Europe/Kyiv (18:00UTC), replacing20:28. Use guarded settled replacement, archive prior snapshot and eligibility, preserve consumed allocation/history, financial settings and closing deadline. Verify before/after via authenticated API and ledger hash.

@@ -543,16 +543,86 @@ test("read-only sale preview cannot mutate DB or load any secret", async t => {
   assert.deepEqual(fs.readFileSync(file), before);
 });
 
-test("sales-only runner cannot advance payouts; pending payout tokens remain unavailable", async t => {
+test("sales-only runner cannot confirm deposits or advance payouts", async t => {
   const f = fixture(t);
   await f.setup();
   const q = await f.q();
   await f.service.submit(f.user.publicKey.toBase58(), q.id, "valid");
   f.state.deposit = "confirmed";
   f.advance(600001);
-  assert.equal((await f.service.tickSales()).reason, "NO_PAID_LOTS");
+  assert.equal((await f.service.tickSales()).reason, "NO_CONFIRMED_DEPOSIT_LOTS");
   assert.equal(f.state.payouts, 0);
   assert.equal(f.state.broadcasts.length, 0);
+});
+
+test("confirmed deposit sells before delayed payout; restart and payout preserve exact amounts and sold units", async t => {
+  const f = fixture(t); await f.setup();
+  await f.service.updateConfig({ payoutDelayMinSeconds: 420, payoutDelayMaxSeconds: 420 });
+  const q = await f.q('400');
+  await f.service.submit(f.user.publicKey.toBase58(), q.id, 'valid');
+  await f.service.tick();
+  assert.equal(f.state.sales, 0, 'unconfirmed source deposit never sells');
+  f.state.deposit = 'confirmed';
+  await f.service.tick();
+  assert.equal(f.state.sales, 1, 'same reconciliation cycle makes the confirmed $400 batch eligible');
+  assert.equal(f.state.payouts, 0, 'sale does not bypass payout delay');
+  const read = () => { const r = f.db.prepare('SELECT status,payload FROM migration_requests').get(); return { ...JSON.parse(r.payload), status: r.status }; };
+  const before = read();
+  assert.equal(before.status, 'deposited');
+  const restarted = createMigration(f.options);
+  f.state.sale = 'confirmed';
+  await restarted.tickSales();
+  await restarted.tickSales();
+  assert.equal(f.state.sales, 1, 'completed lot cannot be sold twice');
+  assert.equal(read().soldUnits, '400000000');
+  assert.equal(read().status, 'deposited', 'sale never marks user paid');
+  f.advance(420000); f.state.payout = 'confirmed';
+  await restarted.tick();
+  const after = read();
+  assert.equal(after.status, 'paid');
+  assert.equal(after.soldUnits, '400000000');
+  assert.equal(after.outputUnits, before.outputUnits);
+  assert.equal(BigInt(after.outputUnits), BigInt(after.inputUnits) * 1000000000000n);
+  assert.equal(after.destination, before.destination);
+  assert.equal(after.payoutNotBefore, before.payoutNotBefore);
+  assert.equal(f.state.payouts, 1);
+  assert.equal(f.state.sales, 1);
+});
+
+test("sale eligibility admits confirmed deposited/payout-signed/paid only and requires persisted confirmation proof", async t => {
+  const f = fixture(t); await f.setup();
+  const q = await f.q('100');
+  await f.service.submit(f.user.publicKey.toBase58(), q.id, 'valid');
+  f.state.deposit = 'confirmed'; await f.service.tick();
+  const original = JSON.parse(f.db.prepare('SELECT payload FROM migration_requests').get().payload);
+  f.advance(600001);
+  for (const status of ['quoted', 'deposit_signed', 'deposit_failed', 'expired', 'review', 'unknown']) {
+    f.db.prepare('UPDATE migration_requests SET status=?').run(status);
+    assert.equal((await f.service.salesPreview()).reason, 'NO_CONFIRMED_DEPOSIT_LOTS', status);
+  }
+  for (const status of ['deposited', 'payout_signed', 'paid']) {
+    f.db.prepare('UPDATE migration_requests SET status=?').run(status);
+    assert.equal((await f.service.salesPreview()).state, 'ready', status);
+    for (const invalid of [{ depositedAt: null }, { depositedAt: 0 }, { depositedAt: '1700000000000' }, { depositHash: '' }, { depositHash: null }]) {
+      f.db.prepare('UPDATE migration_requests SET payload=?').run(JSON.stringify({ ...original, ...invalid }));
+      assert.equal((await f.service.salesPreview()).reason, 'NO_CONFIRMED_DEPOSIT_LOTS');
+    }
+    f.db.prepare('UPDATE migration_requests SET payload=?').run(JSON.stringify(original));
+  }
+  assert.equal(f.state.sales, 0); assert.equal(f.state.payouts, 0);
+});
+
+test("confirmed unpaid deposits retain residual wait and hard $100 floor", async t => {
+  const f = fixture(t); await f.setup();
+  const q = await f.q('100');
+  await f.service.submit(f.user.publicKey.toBase58(), q.id, 'valid');
+  f.state.deposit = 'confirmed'; await f.service.tick();
+  assert.equal((await f.service.salesPreview()).reason, 'BATCH_THRESHOLD_WAIT');
+  f.advance(600000);
+  assert.equal((await f.service.salesPreview()).state, 'ready');
+  f.chain.prices = async () => ({ clashUsdMicros: '999999', solUsdMicros: '100000000' });
+  assert.equal((await f.service.salesPreview()).reason, 'SALE_BELOW_MINIMUM');
+  assert.equal(f.state.payouts, 0); assert.equal(f.state.sales, 0);
 });
 
 test("sales runner shares lease with embedded worker and restores identical pending bytes", async t => {

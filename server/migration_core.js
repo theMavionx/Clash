@@ -1029,13 +1029,17 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
     const treasury = address("solana");
     if (!treasury) return { state: "waiting", reason: "SOLANA_KEY_REQUIRED" };
     const balance = await chain.saleBalance(treasury);
-    const available = rows().filter(r => r.status === "paid" &&
+    // Finalized source deposits fund liquidation independently of the EVM payout.
+    // Review/unknown states remain held; a wallet balance alone is not a deposit proof.
+    const available = rows().filter(r => ["deposited", "payout_signed", "paid"].includes(r.status) &&
+      Number.isSafeInteger(r.depositedAt) && r.depositedAt > 0 &&
+      typeof r.depositHash === "string" && r.depositHash.length > 0 &&
       BigInt(r.inputUnits) > BigInt(r.soldUnits || 0));
     const total = available.reduce((n, r) => n + BigInt(r.inputUnits) - BigInt(r.soldUnits || 0), 0n);
     const view = { treasury, tokenBalanceUnits: balance.tokenUnits,
       solLamports: balance.solLamports, eligibleUnits: String(total) };
     const waiting = reason => ({ ...view, state: "waiting", reason });
-    if (!available.length) return waiting("NO_PAID_LOTS");
+    if (!available.length) return waiting("NO_CONFIRMED_DEPOSIT_LOTS");
     if (available.some(r => r.solanaTreasury !== treasury)) return waiting("SALE_TREASURY_MISMATCH");
     if (BigInt(balance.solLamports) < 10000000n) return waiting("SOL_GAS_REQUIRED");
     const price = await chain.prices();
