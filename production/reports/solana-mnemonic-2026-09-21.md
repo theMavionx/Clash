@@ -5,4 +5,6 @@
 - ADR0044 records boundary/risks and pinned dependency selection. JavaScript memory erasure is not guaranteed; dedicated wallets required guidance.
 - Four crypto tests passed (hex and mnemonic), including independent Node crypto reference and actual server parser; focused lint passed. Full mocked desktop/mobile browser suite passed including address preview, invalid checksum, account-change consent reset, no phrase in requests/storage, canonical save and input clearing. Screenshot reviewed: `web/artifacts/migration/admin-solana-mnemonic-preview.png` (public test phrase only).
 - Initial browser run timed out while dependencies were installing; restarted local Vite after install and complete rerun passed. Existing npm peer conflict required the project's legacy-peer-deps compatibility mode. No unrelated dependency upgrades.
-- Full canonical Deploy gate passed (existing bundle-size warnings). Release pending. No funded transaction test.
+- Full canonical Deploy gate passed (existing bundle-size warnings). No funded transaction test.
+- Released `f09764e3` as `20260921102300-f09764e3`; canonical runtime health passed. Public `/assets/admin-CPtu0jnu.js` verified to contain mnemonic mode, address preview and account index; migration status HTTP200. Real owner phrase/account match not tested; owner must compare the displayed address.
+- Canonical retention pruned old compiled release `20260921093833-9b23cdda`, retaining two releases; source recoverable from Git. No ledger or credential data deleted.

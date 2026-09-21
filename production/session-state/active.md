@@ -1,5 +1,11 @@
 # Active Session State
 
+## Solana 12-word treasury import — Released (2026-09-21)
+
+- Explicit local English BIP39 twelve-word mode, account index and visible derivation path, full public-address preview and confirmation before canonical key save. Phrase not sent/stored. Existing server encryption/rotation safeguards unchanged; extra passphrases/alternate paths unsupported.
+- Independent crypto reference, actual server parser, full mocked browser flow, lint and canonical Deploy gate passed. Released `f09764e3` as `20260921102300-f09764e3`; runtime health/public admin bundle/status200 verified. No real phrase or funded transaction used.
+- ADR0044; report `production/reports/solana-mnemonic-2026-09-21.md`. Owner must compare address before saving.
+
 ## Explicit Solana hex preview — Released (2026-09-21)
 
 - Separate opt-in 32-byte hex derivation mode with local public-address preview, explicit address confirmation and canonical 64-byte encrypted save. Does not recover or convert MetaMask's Solana account. Normal backend validation unchanged.
