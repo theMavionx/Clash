@@ -1,5 +1,9 @@
 # User Request Log
 
+## UR-2026-09-21-VIRTUAL-SITE-VERIFICATION
+
+- Owner supplied `<meta name="virtual-protocol-site-verification" content="f7df695b5f05f510d6179835489bedc4" />` and requested adding it to Clash of Perps head with immediate production deployment. Add to the static homepage HTML, preserve existing verification tags, verify generated and public live HTML.
+
 ## UR-2026-09-21-MIGRATION-PAYOUT-DELAY
 
 - Follow-up: «додай включення виключення і налаштування цієї затримки в адмінці ... перевір чи в юпітера немає ... підписки і ... працює». Add validated admin on/off and range; check official Jupiter pricing and existing key via read-only build request. Do not subscribe, change billing, sign or sell in a diagnostic check.
