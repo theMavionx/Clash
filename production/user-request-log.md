@@ -3,6 +3,7 @@
 ## UR-2026-09-21-MIGRATION-EXPIRED-RECOVERY
 
 - Owner screenshot «і от випарв ще» points to deposit reconciliation dead end. Implement strict finalized expired/unlanded evidence, repeated with advancing chain after30seconds, before freeing original deposit allocation. Preserve signed record/hash and audit; never replace/resend it. UI offers newquote with explicit fresh wallet signature only after recovery. RPC uncertainty keeps review. Independent agent owns proof adapter/tests; UI agent owns recovery affordance/browser test. Existing migration/fee/deadline gates remain.
+- Completed release1fdf2bf1; at19:26:33UTC read-only verification confirmed81f01d62 terminal expired/unlanded and full3mCLASH allocation restored, sourcefunds intact. Secondreview recovered too. No replacementdeposit signed on user's behalf.119server+12modeltests andbrowserchecks pass; report andADR0055 retained.
 
 ## UR-2026-09-21-MIGRATION-REVIEW-ISOLATION
 

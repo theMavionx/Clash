@@ -18,3 +18,11 @@ UI explains checking, then offers Create new quote only after verified terminal 
 ## Limits
 
 Historical RPC completeness remains trusted, not cryptographic absence proof. Unknown/malformed/stale results retain review. Original broadcast failure is not diagnosed by successful current simulation. A real new owner-signed deposit remains a separate user action after recovery; no funded test is fabricated.
+
+## Production rollout
+
+Release20260921192256-1fdf2bf1 completed19:25:41UTC; runtime health passed. All119 server tests also passed with Linux release dependencies. Full existing browser flow andMAX regression passed in addition to recovery-specific tests. Public live mobile page returned200/no page errors, with new recovery code/label in served bundles. Read-only candidate adapter confirmed positive evidence for both existing reviews before activation. First automatic probes persisted after restart; final recovery checked below.
+
+Canonical retention keeps eb2296a6 rollback release; old compiled1f4f53bd cleaned, source remains in Git. No manual request-status edit, signature or deposit broadcast performed during recovery verification.
+
+At19:26:33UTC both reviewed rows had automatically transitioned to deposit_failed / DEPOSIT_EXPIRED_UNLANDED with one audit event each. AW4 request81f01d62 verifiedAt1790018771481: remainingUnits3000000000000 and finalized balance3000000000000 (3,000,000CLASH), no payout hash, original signed raw/hash retained. c6b95455 also recovered with its original record intact. The owner must refresh, create a new quote and explicitly sign; no successful replacement deposit is claimed.

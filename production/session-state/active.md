@@ -1,9 +1,9 @@
 # Active Session State
 
-## Deposit review isolation live; expired-attempt recovery pending (2026-09-21)
+## Deposit review isolation and expired-attempt recovery live (2026-09-21)
 
 - Release20260921191517-eb2296a6 healthy,112tests Linux/local. Deposit-only review no longer blocks unrelated EVM payouts. Exact1:1 inclusion verified for ff1825ce866,894.740711CLASH and262ed666577,628.172995CLASH while AW4 review preserved. See migration-deposit-review-isolation report.
-- Owner next asks to fix reviewed user's UI dead end. ADR0055; strict finalized expired/unlanded proof twice30seconds apart before restoring allocation; retainoriginal raw/hash/sends, require fresh quote andwalletsignature.119server+12modeltests anddesktop/mobilebrowser passed. Independent adapter/core/UI agents reviewed; canonical gate/deploy pending. Never manually reset81f01d62 or resendoldbytes.
+- ADR0055 recovery released20260921192256-1fdf2bf1 healthy.119server tests passed locally/Linux,12modeltests plusfullbrowser/MAX/recovery desktop-mobile checks passed. At19:26:33UTC81f01d62 andc6b95455 automatically recovered after two advancing finalized expiry/absence proofs30seconds apart. AW4 remaining allocation and finalized walletbalance both3,000,000CLASH, original raw/hash retained, no payout. User must refresh and Create new quote with fresh signature. No manual reset/resend or replacement funded test. eb2296a6 rollback retained. See migration-expired-deposit-recovery report.
 
 ## Inclusion queue and safe sale retry deployed (2026-09-21)
 
