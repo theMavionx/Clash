@@ -39,9 +39,9 @@ test('collateral approval uses selected token; rejection, insufficient balance a
   const context=vm.createContext({useCallback:f=>f,LEVERUP_CHAIN_ID,LEVERUP_DIAMOND,LEVERUP_ERC20_ABI,maxLeverupApproval,
     collateralToken:LEVERUP_LVUSD,collateralSymbol:'lvUSD',walletAddr:LEVERUP_USDC,walletMismatch:false,
     captureCredentialOperation:()=>({}),assertCredentialOperation:()=>{if(stale)throw Error('Account changed');},
-    ensureChain:async()=>{},setActivationStep(){},feeTokenStatesRef:{current:{}},
+    ensureChain:async()=>{},setActivationStep(){},logLeverupSetup(){},feeTokenStatesRef:{current:{}},
     getPublicClient:()=>({readContract:async p=>p.functionName==='balanceOf'?balance:allowance,waitForTransactionReceipt:async()=>({status})}),
-    getWalletClient:()=>({writeContract:async p=>{writes++;assert.equal(p.address,LEVERUP_LVUSD);assert.equal(p.args[0],LEVERUP_DIAMOND);return 'test';}})});
+    getWalletClient:()=>({writeContract:async p=>{writes++;assert.equal(p.address,LEVERUP_LVUSD);assert.equal(p.args[0],LEVERUP_DIAMOND);if(status==='success')allowance=maxLeverupApproval();return 'test';}})});
   const block=hook.slice(hook.indexOf('  const ensureCollateralAllowance ='),hook.indexOf('  const placeMarketOrder ='));
   vm.runInContext(block+'\nglobalThis.approve=ensureCollateralAllowance;',context);
   await context.approve(10n*10n**18n);assert.equal(writes,1);

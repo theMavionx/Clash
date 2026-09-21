@@ -7062,7 +7062,7 @@ function FuturesPanel() {
       },
       {
         id: 'allowance',
-        label: 'Approve USDC trading allowance',
+        label: `Approve ${leverupHook.collateralSymbol || 'lvUSD'} trading allowance`,
         hint: 'LeverUp pulls collateral from your wallet only when you submit an order.',
         status: leverupAllowanceReady ? 'done' : (leverupAgentApproved ? 'active' : 'pending'),
       },

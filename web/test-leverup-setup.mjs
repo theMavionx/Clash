@@ -3,11 +3,11 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {readFileSync} from 'node:fs';
 const source=readFileSync(new URL('./src/hooks/useLeverup.js',import.meta.url),'utf8');
-function fixture({saveFails=false,staleLatest=false,approvalReverts=false,rpcFails=false,missingStored=false,initialAllowance=0n,initialAuth=false,approvedAmount=9n}={}) {
+function fixture({saveFails=false,staleLatest=false,approvalReverts=false,rpcFails=false,missingStored=false,initialAllowance=0n,initialAuth=false,approvedAmount=9n,asset='USDC'}={}) {
  const writes=[],reads=[],events=[];let saved=missingStored?null:{address:'agent'},auth=initialAuth,allowance=initialAllowance,error;
  const client={readContract:async p=>{reads.push(p);if(rpcFails&&auth)throw Error('RPC unavailable');if(p.functionName==='getAgentByName')return 'zero';if(p.functionName==='getAgentAuth')return {agent:'agent',permissions:auth?1n:0n};return staleLatest&&p.blockNumber==null?0n:allowance;},
   waitForTransactionReceipt:async({hash})=>({status:approvalReverts&&hash==='approve'?'reverted':'success',blockNumber:hash==='approve'?102n:101n})};
- const c=vm.createContext({useCallback:f=>f,walletAddr:'wallet',walletMismatch:false,signerRef:{current:null},feeTokenStatesRef:{current:{}},logLeverupSetup:(...v)=>events.push(v),leverupFailureKind:()=> 'test',
+ const c=vm.createContext({useCallback:f=>f,walletAddr:'wallet',walletMismatch:false,collateralToken:asset==='lvUSD'?'lvusd':'usdc',collateralSymbol:asset,signerRef:{current:null},feeTokenStatesRef:{current:{}},logLeverupSetup:(...v)=>events.push(v),leverupFailureKind:()=> 'test',
  captureCredentialOperation:()=>({}),assertCredentialOperation:()=>{},setLoading(){},setActivationStep(){},setError:v=>error=v,setOneTapTrading(){},setSetupVerified(){},
  readLeverupAgent:()=>saved,createAndStoreLeverupAgent:async(w,o)=>{assert.equal(o.awaitPersistence,true);if(saveFails)throw Error('Storage unavailable');saved={address:'agent'};return saved;},
  getPublicClient:()=>client,getWalletClient:()=>({writeContract:async p=>{writes.push(p);if(p.functionName==='authorizeAgent')auth=true;if(p.functionName==='approve')allowance=approvedAmount;return p.functionName;}}),ensureChain:async()=>{},fetchAccount:async()=>{},
@@ -18,6 +18,12 @@ function fixture({saveFails=false,staleLatest=false,approvalReverts=false,rpcFai
 test('post-approval verification reads receipt block, not lagging latest RPC state',async()=>{
  const f=fixture({staleLatest:true});assert.equal((await f.run()).success,true);
  assert.deepEqual(f.reads.slice(-2).map(p=>p.blockNumber),[102n,102n]);assert.equal(f.writes.length,2);
+});
+test('lvUSD setup reads and approves only selected collateral, not unrelated USDC',async()=>{
+ const f=fixture({asset:'lvUSD'});assert.equal((await f.run()).success,true);
+ assert.ok(f.reads.filter(p=>p.functionName==='allowance').every(p=>p.address==='lvusd'));
+ assert.equal(f.writes.find(p=>p.functionName==='approve').address,'lvusd');
+ const ready=fixture({asset:'lvUSD',initialAuth:true,initialAllowance:5n});assert.equal((await ready.run()).success,true);assert.equal(ready.writes.length,0);
 });
 test('failed durable signer save stops before any onchain authorization',async()=>{
  const f=fixture({missingStored:true,saveFails:true});assert.match((await f.run()).error,/Storage unavailable/);assert.equal(f.writes.length,0);

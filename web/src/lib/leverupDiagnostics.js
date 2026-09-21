@@ -2,7 +2,8 @@ import { reportClientEvent } from './clientLogger';
 
 // Explicit allowlist: never serialize RPC errors, requests, signatures or keys.
 const fields = ['attempt', 'stage', 'wallet', 'chain_id', 'block', 'tx_hash', 'tx_status',
-  'agent_approved', 'allowance_raw', 'allowance_ready', 'required_raw', 'asset', 'failure_kind'];
+  'agent_approved', 'allowance_raw', 'allowance_ready', 'required_raw', 'asset', 'failure_kind',
+  'intent_hash', 'action', 'reward_tracking', 'executed', 'success', 'skipped'];
 export function logLeverupSetup(event, data = {}, failed = false) {
   const safe = {};
   for (const key of fields) {

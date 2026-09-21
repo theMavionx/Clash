@@ -336,7 +336,7 @@ export function useLeverup() {
       const approved = isLeverupAgentAuthorized(auth, stored.address);
       assertCredentialOperation(scope);
       const allowance = await publicClient.readContract({
-        address: LEVERUP_USDC,
+        address: collateralToken,
         abi: LEVERUP_ERC20_ABI,
         functionName: 'allowance',
         args: [walletAddr, LEVERUP_DIAMOND],
@@ -357,9 +357,9 @@ export function useLeverup() {
       });
       setSetupVerified(enabled);
       if (!quiet || !enabled) logLeverupSetup('verification', { attempt, wallet: walletAddr, chain_id: LEVERUP_CHAIN_ID,
-        block: blockNumber, agent_approved: approved, allowance_raw: allowance, allowance_ready: allowanceReady }, !enabled);
+        block: blockNumber, asset: collateralSymbol, agent_approved: approved, allowance_raw: allowance, allowance_ready: allowanceReady }, !enabled);
       if (!enabled && throwOnFailure) throw new Error(approved
-        ? 'LeverUp USDC allowance is not confirmed. Retry setup to check the approval; no order was submitted.'
+        ? `LeverUp ${collateralSymbol} allowance is not confirmed. Retry setup to check the approval; no order was submitted.`
         : 'LeverUp agent permissions are not confirmed onchain. Retry setup; no order was submitted.');
       return enabled;
     } catch (requestError) {
@@ -372,7 +372,7 @@ export function useLeverup() {
       if (throwOnFailure) throw requestError;
       return false;
     }
-  }, [getPublicClient, walletAddr, walletMismatch, captureCredentialOperation, assertCredentialOperation]);
+  }, [getPublicClient, walletAddr, walletMismatch, captureCredentialOperation, assertCredentialOperation, collateralToken, collateralSymbol]);
 
   const activate = useCallback(async () => {
     if (!walletAddr) return { error: 'Connect your EVM wallet first' };
@@ -456,7 +456,7 @@ export function useLeverup() {
       }
 
       const allowance = await publicClient.readContract({
-        address: LEVERUP_USDC,
+        address: collateralToken,
         abi: LEVERUP_ERC20_ABI,
         functionName: 'allowance',
         args: [walletAddr, LEVERUP_DIAMOND],
@@ -464,12 +464,12 @@ export function useLeverup() {
       });
       assertCredentialOperation(scope);
       logLeverupSetup('allowance', { attempt, wallet: walletAddr, chain_id: LEVERUP_CHAIN_ID,
-        allowance_raw: allowance, allowance_ready: allowance > 0n, block: verificationBlock });
+        asset: collateralSymbol, allowance_raw: allowance, allowance_ready: allowance > 0n, block: verificationBlock });
       if (allowance <= 0n) {
-        step('Approving USDC for LeverUp trading');
+        step(`Approving ${collateralSymbol} for LeverUp trading`);
         const approveHash = await walletClient.writeContract({
           account: walletAddr,
-          address: LEVERUP_USDC,
+          address: collateralToken,
           abi: LEVERUP_ERC20_ABI,
           functionName: 'approve',
           args: [LEVERUP_DIAMOND, maxLeverupApproval()],
@@ -478,11 +478,11 @@ export function useLeverup() {
         const receipt = await publicClient.waitForTransactionReceipt({ hash: approveHash });
         assertCredentialOperation(scope);
         receiptLog(approveHash, receipt);
-        if (receipt.status !== 'success') throw new Error('LeverUp USDC approval failed onchain');
+        if (receipt.status !== 'success') throw new Error(`LeverUp ${collateralSymbol} approval failed onchain`);
         verificationBlock = receipt.blockNumber;
         feeTokenStatesRef.current = { wallet: null, at: 0, states: new Map() };
       }
-      step('Verifying confirmed LeverUp authorization and USDC allowance');
+      step(`Verifying confirmed LeverUp authorization and ${collateralSymbol} allowance`);
       const verified = await verifyOneTap({ blockNumber: verificationBlock, throwOnFailure: true, expectedSigner: stored.address, attempt });
       assertCredentialOperation(scope);
       if (!verified) throw new Error('LeverUp setup could not be verified. Reconnect the original wallet and retry.');
@@ -499,7 +499,7 @@ export function useLeverup() {
       setActivationStep(null);
       setLoading(false);
     }
-  }, [ensureChain, fetchAccount, getPublicClient, getWalletClient, verifyOneTap, walletAddr, walletMismatch, captureCredentialOperation, assertCredentialOperation]);
+  }, [ensureChain, fetchAccount, getPublicClient, getWalletClient, verifyOneTap, walletAddr, walletMismatch, captureCredentialOperation, assertCredentialOperation, collateralToken, collateralSymbol]);
 
   const disableOneTap = useCallback(async () => {
     if (!walletAddr) return { success: true };
@@ -619,9 +619,13 @@ export function useLeverup() {
       throw new Error('LeverUp relayer did not return an intent hash');
     }
     const deadline = Date.now() + 90_000;
+    logLeverupSetup('intent_submitted', { wallet: walletAddr, intent_hash: intentHash,
+      action, reward_tracking: submitted?.rewardTracking === true });
     while (Date.now() < deadline) {
       const status = await fetchJson(`/api/futures/leverup/intents/${intentHash}?dex=leverup&account=${walletAddr}`);
       if (status?.executed || status?.skipped) {
+        logLeverupSetup('intent_result', { wallet: walletAddr, intent_hash: intentHash, action,
+          executed: status.executed === true, skipped: status.skipped === true, success: status.success === true }, status.success !== true);
         feeTokenStatesRef.current = { ...feeTokenStatesRef.current, at: 0 };
         if (status?.success !== true) throw new Error(actionResultError(status));
         if (submitted?.rewardTracking === true) scheduleGoldClaim();
@@ -630,7 +634,9 @@ export function useLeverup() {
       }
       await new Promise(resolve => window.setTimeout(resolve, 500));
     }
-    throw new Error('LeverUp V2 intent execution timed out');
+    logLeverupSetup('intent_pending', { wallet: walletAddr, intent_hash: intentHash, action,
+      failure_kind: 'relayer_pending' }, true);
+    throw new Error('LeverUp has not confirmed execution yet. Check positions and history before retrying; trading volume is counted only after a verified fill.');
   }, [fetchAccount, fetchFeeConfig, fetchJson, readFeeTokenStates, scheduleGoldClaim, verifyOneTap, walletAddr, walletMismatch]);
 
   const ensureCollateralAllowance = useCallback(async (amount) => {

@@ -1,5 +1,9 @@
 # User Request Log
 
+## UR-2026-09-22-LEVERUP-SETUP
+
+- Owner reports failed LeverUp 1-click and missing volume; explicitly requests fix and deploy with concise communication. Production setup logs include successful agent/allowance verification, while four recent intents remain pending at the upstream relayer. Verified trade ledger has31 LeverUp broker fills totaling13173.590773732283 USD. Correct hardcoded USDC setup to use selected collateral (including lvUSD), retain exact order/fee allowance checks and broker proof requirement; do not count unconfirmed orders or claim control over LeverUp's external UI.
+
 ## UR-2026-09-21-MIGRATION-EXPIRED-RECOVERY
 
 - Owner screenshot «і от випарв ще» points to deposit reconciliation dead end. Implement strict finalized expired/unlanded evidence, repeated with advancing chain after30seconds, before freeing original deposit allocation. Preserve signed record/hash and audit; never replace/resend it. UI offers newquote with explicit fresh wallet signature only after recovery. RPC uncertainty keeps review. Independent agent owns proof adapter/tests; UI agent owns recovery affordance/browser test. Existing migration/fee/deadline gates remain.
