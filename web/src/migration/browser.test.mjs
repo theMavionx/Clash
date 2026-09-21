@@ -37,6 +37,10 @@ try {
     });
     await page.goto('http://127.0.0.1:5211/migration');
     await page.getByText('Migration available', { exact: true }).waitFor();
+    const heroImages = page.locator('.migration-intro img');
+    assert.equal(await heroImages.count(), 3, 'Hero shows CLASH, Solana and Robinhood logos');
+    await page.waitForFunction(() => [...document.querySelectorAll('.migration-intro img')].every(img => img.complete && img.naturalWidth > 0));
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'Hero must not overflow mobile viewport');
     if (width === 320) await page.getByText('2026-09-20 13:45:00 UTC', { exact: true }).waitFor();
     assert.equal(await page.getByLabel('CLASH to migrate', { exact: true }).isDisabled(), true);
     await page.screenshot({ path: new URL(`disconnected-${width}.png`, output).pathname.replace(/^\/(\w:)/, '$1'), fullPage: true });

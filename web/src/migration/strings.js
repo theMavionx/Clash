@@ -1,6 +1,6 @@
 // Isolated English catalogue; no trading/game localization dependency on this public entry.
 export const messages = {
-  title: 'CLASH Migration', subtitle: 'Solana → Robinhood', home: 'Clash of Perps', stats: 'Statistics',
+  title: 'CLASH Migration', subtitle: 'Solana → Robinhood', sourceNetwork: 'Solana', destinationNetworkName: 'Robinhood', home: 'Clash of Perps', stats: 'Statistics',
   connectWallet: 'Connect wallet', walletMenu: 'Choose wallet', transfer: 'Migrate your CLASH', details: 'Migration details', network: 'Destination network',
   connectHint: 'Connect your Solana wallet to check your allocation and begin.',
   snapshotCutoff: 'Snapshot cutoff (UTC)',

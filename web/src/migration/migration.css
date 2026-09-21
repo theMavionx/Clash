@@ -21,7 +21,11 @@
 .migration-intro{margin-bottom:28px;max-width:690px}
 .migration-shell h1{font-size:clamp(28px,4vw,38px);font-weight:600;letter-spacing:-.04em;margin:8px 0 14px;line-height:1.15}
 .migration-shell h2{font-size:17px;font-weight:600;letter-spacing:-.02em;margin:0}
-.migration-eyebrow{color:#f98035;font-size:13px;letter-spacing:.03em;margin:0}
+.migration-eyebrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap;color:#f98035;font-size:13px;letter-spacing:.03em;margin:0 0 12px}
+.migration-network{display:inline-flex;align-items:center;gap:7px;white-space:nowrap}
+.migration-network img{display:block;width:20px;height:20px;object-fit:contain;flex-shrink:0}
+.migration-title{display:flex;align-items:center;gap:14px}
+.migration-title>img{display:block;width:48px;height:48px;object-fit:contain;flex-shrink:0;border-radius:12px;border:1px solid var(--border)}
 .migration-muted{color:var(--muted-strong);font-size:14px;line-height:1.65}
 .migration-workspace{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr);gap:20px;align-items:start}
 .migration-card{padding:24px;border:1px solid var(--border);border-radius:12px;background:var(--surface);margin-bottom:20px}
@@ -55,3 +59,4 @@
 .migration-footer{display:flex;align-items:center;justify-content:space-between;gap:16px;color:var(--muted-strong);font-size:12px;min-height:60px}.migration-footer a{text-decoration:none;min-height:44px;display:flex;align-items:center}
 @media(max-width:720px){.migration-header-inner{width:calc(100% - 32px);min-height:68px;gap:12px}.migration-logo-crop{width:160px;height:26px}.migration-logo-crop img{width:215px;left:-23px;top:-14px}.migration-header button{font-size:12px;padding:10px 12px}.migration-wallet-control>button{gap:8px}.migration-shell{width:calc(100% - 32px);margin-top:28px}.migration-workspace{grid-template-columns:minmax(0,1fr);gap:0}.migration-card{padding:20px}.migration-intro{margin-bottom:24px}.migration-facts{gap:16px}.migration-balances{grid-template-columns:1fr}.migration-balances>div{display:flex;justify-content:space-between;gap:12px}.migration-balances dt{margin:0}.migration-heading{gap:12px;flex-wrap:wrap}.migration-wallet-menu{width:220px}}
 @media(max-width:360px){.migration-logo-crop{width:137px;height:24px}.migration-logo-crop img{width:185px;left:-20px;top:-12px}.migration-header-inner{gap:8px}.migration-header button{padding:10px}.migration-card{padding:16px}}
+@media(max-width:720px){.migration-title{gap:10px}.migration-title>img{width:40px;height:40px;border-radius:10px}}

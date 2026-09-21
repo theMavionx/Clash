@@ -1,5 +1,9 @@
 # User Request Log
 
+## UR-2026-09-21-MIGRATION-HERO-LOGOS
+
+- Owner requests CLASH token, Solana and Robinhood logos in the migration introduction. Reuse verified project assets, preserve network labels and responsive layout; no migration logic/settings changes. Continue the previously authorized migration release workflow.
+
 ## UR-2026-09-21-MIGRATION-SNAPSHOT-TIME
 
 - Owner: «та ні постав снепшот по часу щоб можна було вибрати бо так геть не зручно».
