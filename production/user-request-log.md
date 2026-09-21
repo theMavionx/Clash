@@ -1,8 +1,14 @@
 # User Request Log
 
+## UR-2026-09-21-MIGRATION-SNAPSHOT-2100
+
+- Owner explicitly confirmed replacement cutoff today21September2026 at21:00Europe/Kyiv (18:00UTC), replacing20:28. Use guarded settled replacement, archive prior snapshot and eligibility, preserve consumed allocation/history, financial settings and closing deadline. Verify before/after via authenticated API and ledger hash.
+- Completed: finalized slot449129586, exact18:00UTC cutoff; publicAPI verified. Old snapshot archived, full config/deadline and requests/sales/sends hash unchanged. Migration remains paused.
+
 ## UR-2026-09-21-MIGRATION-CLOSING-TIMER
 
 - Owner requests top-of-page "Bridge will close in" countdown, initially one day, and clarifies administrator must be able to change it. Implement durable shared server deadline, editable UTC time, restart24h and disable controls. Apply24h from production configuration time; do not enable migration or change cutoff/financial settings. Expiry blocks new quote/deposit acceptance but never abandons already accepted settlements.
+- Completed: released20260921180004-620ae4e2; configured24h ending2026-09-22T18:04:10.842Z (21:04Kyiv).96 local/81Linux focused tests, full Deploy gate and live1440/390/320px countdown/reload/no-overflow checks passed. Pause/config/snapshot/ledger unchanged.
 
 ## UR-2026-09-21-MIGRATION-CLASH-TARGET-CONTRACT
 

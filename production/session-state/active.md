@@ -1,5 +1,12 @@
 # Active Session State
 
+## Migration closing timer and21:00Kyiv snapshot (2026-09-21)
+
+- Released20260921180004-620ae4e2, health passed. Shared editable deadline closes2026-09-22T18:04:10.842Z (22September21:04Kyiv); closesAt1790100250842. Admin UTC custom time/24h restart/disable. Server blocks new admission at expiry, accepted settlements remain eligible for processing. Timer runs while paused; enabledfalse preserved.
+-96 focused local tests,81 isolated Linux tests, full Deploy gate, mocked admin/mobile and live1440/390/320px countdown/reload/no-overflow checks passed. ADR0051 separates closing deadline from settlement pause. No funded migration tests. Existing dependency warnings remain. Canonical collectible price sync performed its normal on-chain update; prior compiled a83e0d8e removed, b0bb9a4f retained for rollback (pause before rolling back deadline enforcement).
+- Owner explicitly confirmed new snapshot21September21:00Kyiv =18:00UTC. Guarded settled replacement applied: slot449129586, requestedAt/blockTime1790013600000, checksumd11bea7378654376fa333dc6da42d6e65e2704e26a2560a8d48f1f4cf4a70913. Previous20:28snapshot and cached entitlement archived. Full config/deadline and financial ledger hash unchanged; consumed allocations retained. Public API verified. Historical eligibility lazy cache starts empty; not an empty snapshot of holders.
+- TargetCLASH0xceB9A7C4eC7bf0EE14Bac1f16C97571bC22DB979, ratio1, migration still paused/notready. Report: production/reports/migration-closing-timer-2026-09-21.md.
+
 ## Robinhood CLASH configured / public timing copy removed (2026-09-21)
 
 - Owner-supplied target `0xceB9A7C4eC7bf0EE14Bac1f16C97571bC22DB979` verified via paid Alchemy: chain4663, symbolCLASH, nameClash of Perps by Virtuals, decimals18, supply1billion, contract code present. Authenticated admin update changed targetToken only; ratio1, cutoff20:28Kyiv, delay150–420s, fees/sales controls and financial records preserved. Enabled remains false. Current blocker TARGET_INVENTORY_EMPTY: treasury `0x33859e82dfA5039c4A37DaCe86Ee799C95d4f466` has0CLASH; ETH0.034034470748419104 at block68987131. Do not enable/send funds automatically; actual-token transfer simulation/testing remains after funding.
