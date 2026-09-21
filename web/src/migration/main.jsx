@@ -14,7 +14,7 @@ async function api(path, token, body) {
     headers: { ...(token ? { Authorization: 'Bearer ' + token } : {}), ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) { const error = new Error(migrationErrorText(data.error)); error.migrationSafe = true; error.status = response.status; throw error; }
+  if (!response.ok) { const trace = /^[0-9a-f-]{36}$/.test(data.traceId || '') ? ` Reference: ${data.traceId}` : ''; const error = new Error(migrationErrorText(data.error) + trace); error.migrationSafe = true; error.status = response.status; throw error; }
   return data;
 }
 
@@ -149,7 +149,7 @@ function Migration() {
       catch (error) {
         if (epoch !== generation.current) return;
         if (error.status === 401) throw error;
-        setNotice(t('checking'));
+        setNotice(error.migrationSafe ? error.message : t('checking'));
         await refresh(active.token);
         return;
       }

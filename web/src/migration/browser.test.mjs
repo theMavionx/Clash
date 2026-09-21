@@ -18,11 +18,16 @@ try {
   for (const width of [1440, 390, 320]) {
     const context = await browser.newContext({ viewport: { width, height: 900 } });
     const page = await context.newPage(); const errors = []; let submitted = 0, quoteCalls = 0;
+    let rejectSubmit = width === 1440;
     const usdg = width === 390 ? '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168' : null;
     page.on('pageerror', error => { if (!errors.length) errors.push(error.stack); });
     await page.addInitScript(installTestWallet, { wallet: owner.toBase58(), publicKey: [...owner.toBytes()] });
     await page.route('**/api/migration/**', async route => {
       const path = new URL(route.request().url()).pathname.split('/').pop();
+      if (path === 'submit' && rejectSubmit) {
+        rejectSubmit = false;
+        return route.fulfill({ status: 400, json: { error: 'TRANSACTION_CHANGED', traceId: 'd110cb96-7b5c-495d-b792-92d1728d1d34' } });
+      }
       const data = {
         status: { enabled: true, ready: true, sourceDecimals: 6, ratio: usdg ? '0.001' : '1', targetToken: usdg || '0x' + '2'.repeat(40), feeUsd: '2', snapshot: { slot: 360000000, ...(width === 320 ? { mode: 'historical', requestedAt: Date.parse('2026-09-20T13:45:00Z') } : {}) } },
         challenge: { id: 'challenge', message: 'Local test signature only' }, verify: { token: 'mock-session', wallet: owner.toBase58() },
@@ -73,6 +78,13 @@ try {
     await page.screenshot({ path: new URL(`review-${width}.png`, output).pathname.replace(/^\/(\w:)/, '$1'), fullPage: true });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     await page.getByRole('checkbox').check(); await sign.click();
+    if (width === 1440) {
+      await page.locator('.migration-notice').filter({ hasText: 'The wallet changed the prepared deposit transaction.' }).waitFor();
+      assert.match(await page.locator('.migration-notice').innerText(), /Reference: d110cb96-7b5c-495d-b792-92d1728d1d34/);
+      assert.equal(submitted, 0);
+      await page.getByRole('button', { name: 'Retry same submission' }).click();
+      assert.equal(await page.evaluate(() => window.signCalls), 1);
+    }
     await page.getByText('Deposit submitted — awaiting confirmation', { exact: true }).waitFor(); assert.equal(submitted, 1);
     await page.evaluate(() => window.scrollTo(0, 0));
     await page.screenshot({ path: new URL(`submitted-${width}.png`, output).pathname.replace(/^\/(\w:)/, '$1'), fullPage: true });
