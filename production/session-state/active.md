@@ -1,5 +1,11 @@
 # Active Session State
 
+## Migration hero logos — Released (2026-09-21)
+
+- Existing CLASH token icon beside title; Solana/Robinhood marks beside visible network names. UI-only; all settings/keys unchanged.
+- Browser regression at1440/390/320, five model tests, production build and visual review passed. Released `ed382d97` as `20260921085938-ed382d97`; runtime health passed and all three production images loaded without console errors.
+- Report: `production/reports/migration-hero-logos-2026-09-21.md`. No funded transaction.
+
 ## Historical migration cutoff — Released (2026-09-21)
 
 - Admin now selects a past date/time explicitly in UTC; paid Alchemy resolves a finalized slot and retrieves each authenticated wallet's historical balance, including subsequently closed token accounts. Immutable cached allocations, no current-balance fallback, and request-time snapshot lock retained.
