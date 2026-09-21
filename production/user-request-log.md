@@ -4511,6 +4511,19 @@ Follow-up:
 
 ## UR-2026-09-21-MIGRATION-DIAGNOSTICS
 
+- UR-2026-09-22-DEPLOY-MIGRATION: «ивклададай і шукай баги виправляй їх додавай більше логів». Owner explicitly authorizes deployment of accumulated migration queue/signing/diagnostics changes. Review focused helpers, fix verified issues, add redacted verification shape diagnostics, run regression tests and canonical atomic deploy. No owner impersonation, manual payout or weakened signature/finality checks.
+
+- UR-2026-09-22-G1ZX: «G1Zx5jojvRNHwSYNTdu9tDAET6H2HCpmKYPHKJeN5NCK глянь і виправ і інших перевір ...». Read-only production: unsigned request 95d40c3d-f17e-4581-90ca-dda79bb5251d expired, no submit diagnostic/hash, current balance equals full 17706178.177617 CLASH allocation. Other two pending payout receipts report included, no pending deposits/reviews. Add bounded sign-only wallet waiting and explicit reservation explanation; do not reset production records or resend funds.
+  - Added local sign-only deadline (60 seconds or quote expiry, whichever comes first), late-response discard, refresh after signing failure and reservation copy. Verified 21 client tests, mocked desktop/mobile signing including expired late response, and production build. Actual device-specific failure before submit remains unknown without client telemetry. Latest unsuccessful wallet audit also found 2GYNArgr8iJWnAsm17EjNCaXDdidfQHpX6b9Cw64HH8u with unsigned expired 2252499.294573 CLASH quote; other prior failures have later requests. No production deployment or balance/allocation mutation.
+
+- UR-2026-09-21-BRIDGE-STATUS: «також перевір як там з іншими заявками чи йде нормально брідж токенів і тд». Read-only production audit at 19:56 UTC: 28 paid, one payout included (15m CLASH), no deposit_signed/deposited/review backlog. Latest 12 CLASH payout receipts succeeded and matched exact recipient, amount and 1:1 conversion. Four latest sale rows completed. Recent diagnostics still contain verify INVALID_SIGNATURE and admission WORKER_BUSY; local queue/telemetry change remains undeployed. No funds sent or production data changed.
+
+- UR-2026-09-21-MOBILE-BUSY: «додай більше логів ... WORKER_BUSY ... і виправ це». Add bounded admission and safe mobile signing diagnostics; preserve cross-process leases, exact signed bytes, expiry and settlement guards. Verify concurrency, diagnostic redaction and client behavior before release.
+  - Implemented locally: FIFO admission (24 waiters, 15s maximum wait), background tick coalescing/yield between persisted request states, up to two retries only for explicit admission WORKER_BUSY with identical payload, authenticated owned-request signing telemetry with an independent bounded ingress budget. Cross-process lease and expiry checks remain authoritative.
+  - Verified: 133 offline server/security tests, 17 client model/transport tests, mocked mobile/desktop browser flow (delayed signing, busy reply, one signature), Vite production build and diff checks. Live-read script requires paid RPC environment and was not run successfully locally. Real Solana Mobile wallet flow remains unverified. No production deploy or financial action in this change.
+
+- 2026-09-21: Owner requests production log inspection for browser deposits hanging on Solana Mobile until expiry. Recent quote/submit requests include WORKER_BUSY 409 alongside successful submissions. Quote lifetime is 90 seconds; signing has no application timeout. Device-specific cause remains unconfirmed because diagnostics lack client signing stages and adapter identity. Read-only production investigation; no funded action or production changes.
+
 - Owner: «додай логи нормально щоб були тоді». Persist bounded structured migration diagnostics and safe submission error references. Never log credentials or signed transactions.
 
 ## UR-2026-09-21-MIGRATION-LIVE-INVENTORY

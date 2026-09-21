@@ -1,6 +1,28 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { migrationApi, startMigrationPolling } from './transport.js';
+test('explicit WORKER_BUSY retries identical signed bytes or quote idempotency key only', async () => {
+  for (const path of ['/submit', '/quote']) {
+    const sent = [];
+    const result = await migrationApi(path, 'token', { id: 'q', transaction: 'signed', idempotencyKey: 'same' }, {
+      wait: async () => {}, fetchImpl: async (_url, options) => {
+        sent.push(options.body);
+        return sent.length < 3 ? { ok: false, status: 409, json: async () => ({ error: 'WORKER_BUSY' }) } :
+          { ok: true, json: async () => ({ ok: true }) };
+      },
+    });
+    assert.equal(result.ok, true); assert.equal(sent.length, 3); assert.equal(new Set(sent).size, 1);
+  }
+});
+test('busy retries are bounded and unknown errors are never auto-replayed', async () => {
+  for (const [code, status, count] of [['WORKER_BUSY',409,3], ['MIGRATION_UNAVAILABLE',503,1], ['QUOTE_EXPIRED',409,1]]) {
+    let calls = 0;
+    await assert.rejects(migrationApi('/submit', 'token', {}, { wait: async () => {}, fetchImpl: async () => {
+      calls++; return { ok: false, status, json: async () => ({ error: code }) };
+    }}));
+    assert.equal(calls, count);
+  }
+});
 test('timeout releases hung write with exactly one request, never an automatic second deposit', async () => {
   let calls=0;
   const fetchImpl=(_url,{signal})=>{calls++;return new Promise((_,reject)=>signal.addEventListener('abort',()=>reject(new Error('aborted'))));};

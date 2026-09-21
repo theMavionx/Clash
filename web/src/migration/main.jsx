@@ -9,6 +9,8 @@ import { t, migrationErrorText, migrationStateText } from './strings';
 import { expiryMs, formatUnits, formatUtc, validRequest, maxMigrationAmount, maxMigrationHint, canRequoteExpiredDeposit, depositDefinitelyRejected, closingCountdown } from './model';
 import { MigrationWalletPicker, MigrationWalletProvider } from './WalletConnection';
 import { migrationApi as api, startMigrationPolling } from './transport';
+import { reportMigrationStage, walletKind } from './diagnostics';
+import { signMigrationDeposit } from './wallet-signing';
 
 function Migration() {
   const [status, setStatus] = useState(null), [account, setAccount] = useState(null), [session, setSession] = useState(null);
@@ -43,7 +45,7 @@ function Migration() {
       items[index]?.focus();
     }
   }
-  function failure(error) { if (error.status === 401) { clear(); setNotice(t('sessionExpired')); } else setNotice(error.migrationSafe ? error.message : error.code === 4001 ? t('verifyFailed') : t('failed')); }
+  function failure(error) { if (error?.status === 401) { clear(); setNotice(['INVALID_SIGNATURE', 'AUTH_EXPIRED'].includes(error.code) ? t('verifyFailed') : t('sessionExpired')); } else setNotice(error?.migrationSafe ? error.message : error?.code === 4001 ? t('verifyFailed') : t('failed')); }
   async function refresh(token = session?.token) {
     const epoch = generation.current, sequence = ++refreshSequence.current;
     // Account history must remain readable even while treasury readiness RPC fails.
@@ -114,7 +116,7 @@ function Migration() {
       try { signed = await wallet.signMessage(new TextEncoder().encode(challenge.message)); }
       catch { if (current()) setNotice(t('verifyFailed')); return; }
       if (!current()) return;
-      const auth = await api('/verify', null, { id: challenge.id, signature: Buffer.from(signed.signature || signed).toString('base64') });
+      const auth = await api('/verify', null, { id: challenge.id, signature: Buffer.from(signed.signature || signed).toString('base64'), adapter: walletKind(wallet.name) });
       if (!current()) return;
       setSession(auth); await refresh(auth.token);
     });
@@ -135,14 +137,32 @@ function Migration() {
       const epoch = generation.current, active = session, pending = quote;
       if (provider.current?.publicKey?.toBase58() !== active.wallet) { clear(); return; }
       const tx = Transaction.from(Buffer.from(pending.transaction, 'base64'));
-      const signed = await provider.current.signTransaction(tx);
+      const started = performance.now(), adapter = provider.current.name;
+      const log = (stage, errorCode) => reportMigrationStage(active.token, pending.id, stage,
+        { adapter, elapsedMs: Math.round(performance.now() - started), errorCode });
+      const visibility = () => log(document.hidden ? 'page_hidden' : 'page_visible');
+      document.addEventListener('visibilitychange', visibility);
+      const waiting = setTimeout(() => log('sign_waiting'), 20000);
+      log('sign_started');
+      let signed;
+      try { signed = await signMigrationDeposit(() => provider.current.signTransaction(tx), expiryMs(pending.expiresAt)); log('sign_returned'); }
+      catch (error) {
+        log(error?.code === 'QUOTE_EXPIRED' ? 'sign_expired' : 'sign_failed',
+          error?.code === 'WALLET_SIGN_TIMEOUT' ? 'timeout' : error?.code === 'QUOTE_EXPIRED' ? 'expired' : error?.code === 4001 ? 'rejected' : 'wallet_error');
+        if (epoch !== generation.current) return;
+        try { await refresh(active.token); } catch { /* Preserve the signing outcome. */ }
+        throw error;
+      }
+      finally { clearTimeout(waiting); document.removeEventListener('visibilitychange', visibility); }
       if (epoch !== generation.current || provider.current?.publicKey?.toBase58() !== active.wallet) return;
-      if (!(expiryMs(pending.expiresAt) > Date.now())) { setNotice(t('expired')); return; }
+      if (!(expiryMs(pending.expiresAt) > Date.now())) { log('sign_expired', 'expired'); setNotice(t('expired')); return; }
       const payload = { id: pending.id, transaction: Buffer.from(signed.serialize({ requireAllSignatures: false })).toString('base64') };
       setPendingSubmission(payload); setConfirmed(false);
       let result;
-      try { result = await api('/submit', active.token, payload); }
+      log('submit_started');
+      try { result = await api('/submit', active.token, payload); log('submit_returned'); }
       catch (error) {
+        log('submit_failed', 'server_error');
         if (epoch !== generation.current) return;
         if (error.status === 401) throw error;
         if (depositDefinitelyRejected(error)) setPendingSubmission(null);
@@ -202,6 +222,7 @@ function Migration() {
       <div className="migration-workspace"><section className="migration-card migration-form-card" aria-label="Migration form" aria-busy={busy}>
           <div className="migration-heading"><h2>{t('transfer')}</h2><span className="migration-token">CLASH</span></div>
           {session && <dl className="migration-balances">{['eligible', 'remaining', 'balance'].map((key, i) => <div key={key}><dt>{t(key)}</dt><dd>{formatUnits(account?.[['eligibleUnits','remainingUnits','balanceUnits'][i]], status?.sourceDecimals)} <span>CLASH</span></dd></div>)}</dl>}
+          {session && quote && !expired && !pendingSubmission && <p className="migration-muted" role="note">{t('quoteReservation')}</p>}
           {maxHint && <p id="migration-max-hint" className="migration-muted" role="status">{t(maxHint)}</p>}
           {!quote ? <form onSubmit={review}><div className="migration-amount-control"><label htmlFor="migration-amount">{t('amount')}</label><div className="migration-amount-field"><input id="migration-amount" aria-label={t('amount')} inputMode="decimal" placeholder="0.00" value={amount} onChange={e => setAmount(e.target.value)} required disabled={busy || !available || !session}/><div className="migration-amount-actions"><span aria-hidden="true">CLASH</span><button type="button" className="migration-max" aria-label={t('useMax')} disabled={busy || !available || !session || !maxAmount} onClick={() => setAmount(maxAmount)}>{t('max')}</button></div></div></div><label>{t('destination')}<input spellCheck="false" autoComplete="off" placeholder="0x…" value={destination} onChange={e => setDestination(e.target.value.trim())} required disabled={busy || !available || !session}/></label>{!session ? <><p className="migration-muted migration-connect-hint">{t('connectHint')}</p><button type="button" className="migration-primary migration-submit" disabled={busy} aria-haspopup={connectedAddress ? undefined : 'dialog'} onClick={() => connectedAddress ? connect(provider.current) : chooseWallet()}>{busy ? t('busy') : connectedAddress ? t('verifyWallet') : t('connectWallet')}</button></> : <button className="migration-primary migration-submit" disabled={busy || !available || !account || !validRequest(amount, destination, account, status?.sourceDecimals)}>{busy ? t('busy') : t('review')}</button>}</form> : <div className="migration-review">
             <h2>{t('review')}</h2><dl>{[[t('amount'), formatUnits(quote.inputUnits, status.sourceDecimals) + ' CLASH'], [t('receive'), formatUnits(quote.outputUnits, quote.targetDecimals) + ' ' + targetSymbol(quote.targetToken)], [t('destination'), quote.destination], [t('source'), quote.sourceMint], [t('target'), quote.targetToken], [t('solFee'), formatUnits(quote.feeLamports, 9) + ' SOL'], [t('expires'), new Date(expiryMs(quote.expiresAt)).toLocaleString()]].map(([key,value]) => <div key={key}><dt>{key}</dt><dd>{value}</dd></div>)}</dl>

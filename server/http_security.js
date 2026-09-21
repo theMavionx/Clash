@@ -118,9 +118,10 @@ function createMigrationIngress({ env = process.env, now = Date.now } = {}) {
     const isAdmin = route === "/admin" || route.startsWith("/admin/");
     const verifiedAdmin = isAdmin && validAdmin(req, env);
     const group = isAdmin ? (verifiedAdmin ? "admin" : "denied_admin") :
+      route === "/client-events" ? "diagnostics" :
       ["/challenge", "/verify"].includes(route) ? "auth" : req.method === "GET" ? "read" : "write";
-    const perIp = { admin: 120, denied_admin: 10, auth: 20, read: 180, write: 30 }[group];
-    const global = { admin: 600, denied_admin: 120, auth: 300, read: 3000, write: 300 }[group];
+    const perIp = { admin: 120, denied_admin: 10, auth: 20, read: 180, write: 30, diagnostics: 60 }[group];
+    const global = { admin: 600, denied_admin: 120, auth: 300, read: 3000, write: 300, diagnostics: 600 }[group];
     for (const [key, limit] of [[`global:${group}`, global], [`${group}:${rateAddress(req)}`, perIp]]) {
       const verdict = take(key, limit);
       if (!verdict.ok) return res.set("Retry-After", String(verdict.retryAfter)).status(429).json({ error: "RATE_LIMIT" });

@@ -107,6 +107,45 @@ function fixture(t) {
       }),
   };
 }
+test('foreground quotes wait for worker boundary, duplicate submissions sign exactly once', async t => {
+  const f = fixture(t), second = Keypair.generate().publicKey.toBase58();
+  f.chain.snapshot = async () => ({ slot: 123, balances: { [f.user.publicKey.toBase58()]: '1000000000', [second]: '1000000000' } });
+  await f.setup();
+  const first = await f.q();
+  await f.service.submit(f.user.publicKey.toBase58(), first.id, 'valid');
+  let unblock, reads = 0, saleReads = 0;
+  f.chain.depositStatus = async () => { reads++; return new Promise(resolve => { unblock = () => resolve('pending'); }); };
+  f.chain.saleBalance = async () => { saleReads++; throw Error('worker should yield before sales'); };
+  const tick = f.service.tick();
+  await new Promise(resolve => setImmediate(resolve));
+  const quote = f.service.quote(second, { amount: '100', destination: B, idempotencyKey: 'second-owner-quote' });
+  assert.equal((await f.service.tick()).skipped, true);
+  unblock(); await tick;
+  const q = await quote;
+  assert.equal(reads, 1); assert.equal(saleReads, 0);
+  let signs = 0;
+  f.chain.signDeposit = async r => { signs++; await new Promise(resolve => setImmediate(resolve)); return { raw: 'signed-' + r.id, hash: 'sol-' + r.id }; };
+  const results = await Promise.all([f.service.submit(second, q.id, 'valid'), f.service.submit(second, q.id, 'valid')]);
+  assert.equal(signs, 1);
+  assert.equal(results[0].depositHash, results[1].depositHash);
+  assert.equal(f.db.prepare('SELECT COUNT(*) n FROM migration_sends WHERE request_id=?').get(q.id).n, 1);
+});
+
+test('queued quote is idempotent and admission deadline is checked after waiting', async t => {
+  const f = fixture(t); await f.setup();
+  const [a,b] = await Promise.all([f.q(), f.q()]);
+  assert.equal(a.id, b.id);
+  await f.service.cancel(f.user.publicKey.toBase58(), a.id);
+  await f.service.setDeadline({ closesAt: f.options.now() + 1000 });
+  let unblock;
+  f.chain.keyAddress = () => new Promise(resolve => { unblock = () => resolve('configured'); });
+  const active = f.service.setKey('jupiter', 'new-test-key');
+  await new Promise(resolve => setImmediate(resolve));
+  const queued = f.q('100', 'new-quote-after-close');
+  const rejection = assert.rejects(queued, /MIGRATION_CLOSED/);
+  f.advance(1001); unblock(); await active; await rejection;
+});
+
 test("exact amount parsing and display preserve precision", () => {
   assert.equal(units("1.000001"), 1000001n);
   assert.equal(decimal(1000001n), "1.000001");

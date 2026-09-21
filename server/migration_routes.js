@@ -41,6 +41,7 @@ function createMigrationRouter({
     db,
     chain: chain || createMigrationChain(env),
     keyFile: keyFile || env.MIGRATION_KEY_FILE || defaultKey,
+    record,
   });
   const publicStatus = createReadCache(() => service.status());
   const operations = { admin: 0, public: 0 };
@@ -50,16 +51,18 @@ function createMigrationRouter({
     res.set("X-Migration-Trace-Id", traceId);
     res.locals.migrationTraceId = traceId;
     res.on("finish", () => {
-      if (req.method === "GET" && res.statusCode < 400) return;
+      if ((req.method === "GET" || req.path === "/client-events") && res.statusCode < 400) return;
       const candidate = res.locals.migrationRequestId || req.body?.id;
       // Never capture headers, bodies, raw URLs, signatures or provider error text.
       record({ event: "http_completed", traceId,
         method: ["GET", "POST", "PUT", "DELETE"].includes(req.method) ? req.method : "OTHER",
         stage: req.route?.path || "middleware",
         requestId: typeof candidate === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(candidate) ? candidate : null,
+        wallet: res.locals.migrationWallet || null,
         httpStatus: res.statusCode, durationMs: Date.now() - started,
         errorCode: res.locals.migrationErrorCode || (res.statusCode >= 400 ? "HTTP_REJECTED" : null),
         ...(res.locals.transactionDifference ? { transactionDifference: res.locals.transactionDifference } : {}),
+        ...(res.locals.verification ? { verification: res.locals.verification } : {}),
       });
     });
     res.set("Cache-Control", "no-store, private");
@@ -98,10 +101,29 @@ function createMigrationRouter({
       operations[group]--;
     }
   };
-  const auth = (req) =>
-    service.authenticate(
+  const auth = (req) => {
+    const wallet = service.authenticate(
       String(req.headers.authorization || "").replace(/^Bearer /, ""),
     );
+    req.res.locals.migrationWallet = wallet;
+    return wallet;
+  };
+  router.post('/client-events', run(req => {
+    const wallet = auth(req), body = req.body || {};
+    const stages = ['sign_started', 'sign_waiting', 'sign_returned', 'sign_failed',
+      'sign_expired', 'page_hidden', 'page_visible', 'submit_started', 'submit_returned', 'submit_failed'];
+    if (!stages.includes(body.stage) || typeof body.id !== 'string' ||
+      !/^[0-9a-f-]{36}$/i.test(body.id)) throw new MigrationError('INVALID_DIAGNOSTIC');
+    if (!db.prepare('SELECT 1 FROM migration_requests WHERE id=? AND wallet=?').get(body.id, wallet))
+      throw new MigrationError('REQUEST_NOT_FOUND', 404);
+    record({ event: 'client_stage', source: 'untrusted_client', wallet, requestId: body.id,
+      stage: body.stage,
+      adapter: ['phantom', 'solflare', 'mobile', 'seeker', 'other'].includes(body.adapter) ? body.adapter : 'other',
+      elapsedMs: Number.isSafeInteger(body.elapsedMs) && body.elapsedMs >= 0 ? Math.min(body.elapsedMs, 3600000) : null,
+      errorCode: ['rejected', 'aborted', 'expired', 'timeout', 'wallet_error', 'server_error'].includes(body.errorCode) ? body.errorCode : null,
+    });
+    return { ok: true };
+  }));
   const admin = (req, res, next) => {
     if (!validAdmin(req, env))
       return res.status(403).json({ error: "Forbidden" });
@@ -120,7 +142,18 @@ function createMigrationRouter({
   );
   router.post(
     "/verify",
-    run((req) => service.verify(req.body?.id, req.body?.signature)),
+    run((req) => {
+      const id = req.body?.id, sig = req.body?.signature;
+      const challenge = typeof id === 'string' && /^[0-9a-f-]{36}$/i.test(id)
+        ? db.prepare('SELECT wallet,expires FROM migration_auth WHERE id=?').get(id) : null;
+      req.res.locals.verification = {
+        challengeFound: !!challenge, challengeExpired: challenge ? challenge.expires <= Date.now() : null,
+        challengeWallet: challenge?.wallet || null, // Claimed owner, not authenticated until verification passes.
+        signatureBytes: typeof sig === 'string' && sig.length <= 100 ? Buffer.from(sig, 'base64').length : null,
+        adapter: ['phantom', 'solflare', 'mobile', 'seeker'].includes(req.body?.adapter) ? req.body.adapter : 'other',
+      };
+      return service.verify(id, sig);
+    }),
   );
   router.get(
     "/account",

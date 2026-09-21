@@ -78,7 +78,7 @@ function wallet(value) {
 const digest = (value) =>
   crypto.createHash("sha256").update(value).digest("hex");
 const active = "'quoted','deposit_signed','deposited','payout_signed','review'";
-function createMigration({ db, chain, now = Date.now, keyFile }) {
+function createMigration({ db, chain, now = Date.now, keyFile, record = () => {} }) {
   if (!db.readonly) {
     db.exec(`CREATE TABLE IF NOT EXISTS migration_config(id INTEGER PRIMARY KEY CHECK(id=1),value TEXT NOT NULL,revision INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS migration_secrets(kind TEXT PRIMARY KEY,value TEXT NOT NULL,address TEXT NOT NULL);
@@ -103,7 +103,7 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
     );
   }
   const owner = crypto.randomUUID();
-  let busy = false;
+  const gate = require("./migration_gate").createMigrationGate({ record });
   function config() {
     return {
       ...DEFAULTS,
@@ -272,10 +272,13 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
       })
       .immediate();
   }
-  async function exclusive(fn) {
+  async function exclusive(fn, operation = "mutation", background = false) {
     check(!db.readonly, "READ_ONLY_WORKER", 409);
-    check(!busy, "WORKER_BUSY", 409);
-    busy = true;
+    let release;
+    try { release = await gate.acquire(operation, background); }
+    catch { throw new MigrationError("WORKER_BUSY", 409); }
+    if (!release) return { ok: true, skipped: true };
+    const started = Date.now();
     let heartbeat;
     try {
       lease();
@@ -288,8 +291,9 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
       return await fn();
     } finally {
       clearInterval(heartbeat);
-      db.prepare("DELETE FROM migration_lease WHERE owner=?").run(owner);
-      busy = false;
+      try { db.prepare("DELETE FROM migration_lease WHERE owner=?").run(owner); }
+      finally { release(); }
+      try { record({ event: "operation_completed", operation, durationMs: Date.now() - started }); } catch { /* diagnostics only */ }
     }
   }
   function configuredReasons() {
@@ -862,7 +866,7 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
         audit("quote_created:" + id);
       }).immediate();
       return quoteView(r);
-    });
+    }, "quote");
   }
   async function submit(w, id, transaction) {
     return exclusive(async () => {
@@ -888,7 +892,7 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
         audit("deposit_signed:" + id);
       }).immediate();
       return publicRequest(r);
-    });
+    }, "submit");
   }
   // Persist once under the worker lease. Restarts/reconciliation must not reroll
   // the delay; already-signed payouts never pass through this scheduling gate.
@@ -1081,10 +1085,12 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
             "UPDATE migration_requests SET updated_at=? WHERE id=?",
           ).run(now(), r.id);
         }
+        // Yield at a persisted state boundary; never interrupt signing or sending.
+        if (gate.pending) break;
       }
-      await processSales();
+      if (!gate.pending) await processSales();
       return { ok: true };
-    });
+    }, "tick", true);
   }
   // Shared by the embedded worker and the owner-operated CLI. This path never
   // decrypts a key, signs, broadcasts, acquires a lease or writes to the DB.

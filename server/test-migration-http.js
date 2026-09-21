@@ -5,6 +5,49 @@ const express = require("express");
 const Database = require("better-sqlite3");
 const { createMigrationRouter } = require("./migration_routes");
 const { MigrationError } = require("./migration_core");
+
+test('verification failure logs only signature shape and challenge metadata', async t => {
+  const db = new Database(':memory:'), events = [], app = express();
+  app.use(express.json());
+  const m = createMigrationRouter({ db, chain: {}, autoStart: false, logger: e => events.push(e) });
+  const id = 'd110cb96-7b5c-495d-b792-92d1728d1d34', wallet = 'G1Zx5jojvRNHwSYNTdu9tDAET6H2HCpmKYPHKJeN5NCK';
+  db.prepare('INSERT INTO migration_auth VALUES(?,?,?,?)').run(id, wallet, 'PRIVATE_MESSAGE_SENTINEL', Date.now() + 300000);
+  app.use('/api/migration', m.router);
+  const server = await new Promise(resolve => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });
+  t.after(() => { server.closeAllConnections(); server.close(); db.close(); });
+  const signature = Buffer.alloc(64).toString('base64');
+  const response = await fetch(`http://127.0.0.1:${server.address().port}/api/migration/verify`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, signature, adapter: 'mobile' }),
+  });
+  assert.equal(response.status, 401);
+  assert.equal((await response.json()).error, 'INVALID_SIGNATURE');
+  assert.deepEqual(events.at(-1).verification, { challengeFound: true, challengeExpired: false, challengeWallet: wallet, signatureBytes: 64, adapter: 'mobile' });
+  assert.ok(!JSON.stringify(events).includes(signature));
+  assert.ok(!JSON.stringify(events).includes('PRIVATE_MESSAGE_SENTINEL'));
+});
+
+test('client telemetry is authenticated, owned, allowlisted and never persists transaction content', async t => {
+  const db = new Database(':memory:'), events = [], app = express();
+  app.use(express.json());
+  const m = createMigrationRouter({ db, chain: {}, autoStart: false, logger: e => events.push(e) });
+  const id = 'd110cb96-7b5c-495d-b792-92d1728d1d34';
+  db.prepare('INSERT INTO migration_requests VALUES(?,?,?,?,?,?,?)').run(id, 'owner', 'idem', 'quoted', '{}', 0, 0);
+  app.use('/api/migration', m.router);
+  const server = await new Promise(resolve => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });
+  t.after(() => { server.closeAllConnections(); server.close(); db.close(); });
+  const url = `http://127.0.0.1:${server.address().port}/api/migration/client-events`;
+  const send = body => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const body = { id, stage: 'sign_started', adapter: 'mobile', elapsedMs: 12, signature: 'SECRET_SENTINEL', transaction: 'SECRET_SENTINEL', message: 'SECRET_SENTINEL' };
+  assert.equal((await send(body)).status, 401);
+  m.service.authenticate = () => 'other';
+  assert.equal((await send(body)).status, 404);
+  m.service.authenticate = () => 'owner';
+  assert.equal((await send(body)).status, 200);
+  assert.equal((await send({ ...body, stage: 'SECRET_SENTINEL' })).status, 400);
+  assert.equal(events.filter(e => e.event === 'client_stage').length, 1);
+  assert.equal(events.find(e => e.event === 'client_stage').wallet, 'owner');
+  assert.ok(!JSON.stringify(events).includes('SECRET_SENTINEL'));
+});
 test("submit diagnostics persist safe codes and correlation IDs without credentials", async (t) => {
   const db = new Database(":memory:"), events = [];
   const app = express();

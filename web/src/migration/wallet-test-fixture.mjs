@@ -15,7 +15,7 @@ export function installTestWallet({ wallet, publicKey, unsupportedAccount = fals
       'standard:disconnect': { version: '1.0.0', disconnect: async () => { standard.accounts = []; emit(); } },
       'standard:events': { version: '1.0.0', on: (name, fn) => { if (name === 'change') listeners.add(fn); return () => listeners.delete(fn); } },
       'solana:signMessage': { version: '1.0.0', signMessage: async (...inputs) => { window.messageCalls++; if (window.rejectMessage) throw Object.assign(new Error('User rejected request'), { code: 4001 }); if (window.messageGate) await window.messageGate; return inputs.map(input => ({ signedMessage: input.message, signature: new Uint8Array(64) })); } },
-      'solana:signTransaction': { version: '1.0.0', supportedTransactionVersions: ['legacy', 0], signTransaction: async (...inputs) => { window.signCalls++; return inputs.map(input => ({ signedTransaction: input.transaction })); } },
+      'solana:signTransaction': { version: '1.0.0', supportedTransactionVersions: ['legacy', 0], signTransaction: async (...inputs) => { window.signCalls++; if (window.transactionGate) await window.transactionGate; return inputs.map(input => ({ signedTransaction: input.transaction })); } },
     },
   };
   standard.name = name;
