@@ -1,5 +1,10 @@
 # Active Session State
 
+## Migration header edge — Released (2026-09-21)
+
+- Header cap removed:24px desktop and16px mobile gutters; main shell unchanged. Browser geometry/regression, visual review and build passed.
+- Released `9b23cdda` as `20260921093833-9b23cdda`; canonical health and live24px logo offset/no overflow verified. Report: `production/reports/migration-header-edge-2026-09-21.md`.
+
 ## Migration MAX — Released (2026-09-21)
 
 - Exact min(balance, remaining eligibility) amount fill; no submit/sign action, safe disabled states. Six model tests, expanded browser regression, responsive visual review and build passed.
