@@ -13,6 +13,7 @@ function ledgerRow(row) {
     depositHash: p.depositHash || null, payoutHash: p.payoutHash || null,
     createdAt: row.created_at, updatedAt: row.updated_at,
     depositedAt: timestamp(p.depositedAt), payoutNotBefore: timestamp(p.payoutNotBefore),
+    payoutIncludedAt: timestamp(p.payoutIncludedAt),
     paidAt: timestamp(p.paidAt), errorCode: p.errorCode || null };
 }
 /** Paginated, exact-integer ledger over all persisted requests, including old history. */

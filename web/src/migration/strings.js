@@ -16,6 +16,9 @@ export const messages = {
   connect: 'Connect and verify Solana wallet', disconnect: 'Disconnect', wallet: 'Connected wallet',
   eligible: 'Snapshot allocation', remaining: 'Remaining allocation', balance: 'Current CLASH balance',
   amount: 'CLASH to migrate', max: 'MAX', useMax: 'Use maximum available CLASH', destination: 'Robinhood EVM recipient address', review: 'Review migration',
+  maxLoading: 'Waiting for your balance and allocation. Use Refresh status if this does not update.',
+  maxNoAllocation: 'No remaining allocation. Existing migration requests reserve your allocation; check Your migrations below before depositing again.',
+  maxNoBalance: 'No CLASH is currently available in this Solana wallet. Check Your migrations below for any deposit already submitted.',
   confirm: 'I control this Robinhood mainnet address. I understand that this migration is irreversible.',
   send: 'Sign deposit and migrate', cancel: 'Cancel review', receive: 'You receive', solFee: 'Service fee in SOL',
   source: 'Solana CLASH mint', target: 'Robinhood payout token contract', expires: 'Quote expires',
@@ -81,6 +84,7 @@ const errors = {
   SUPPLY_CAP: 'The migration supply limit has been reached.',
   DEPOSIT_REQUIRES_RECONCILIATION: 'Your deposit needs reconciliation. Do not submit another payment; contact support.',
   PAYOUT_REQUIRES_RECONCILIATION: 'Your payout needs reconciliation. Do not deposit again; contact support.',
+  PAYOUT_NONCE_ALREADY_RESERVED: 'Your payout is queued while an earlier transaction is reconciled. Do not deposit again.',
   KEY_ROTATION_HAS_LIABILITIES: 'Wallet rotation is blocked while settlement obligations exist.',
   ENCRYPTION_UNAVAILABLE: 'Server-side credential encryption is not configured.',
   INVALID_KEY: 'The credential format is invalid. Use a dedicated private key, not a seed phrase.',
@@ -93,7 +97,9 @@ const errors = {
 };
 export const migrationErrorText = code => errors[code] || messages.failed;
 const states = { quoted: 'Awaiting your deposit signature', deposit_signed: 'Deposit submitted — awaiting confirmation', deposit_pending: 'Deposit submitted — awaiting confirmation', deposited: 'Processing — your Robinhood payout is queued', payout_signed: 'Processing — Robinhood payout submitted, awaiting confirmation', paid: 'Migration complete', expired: 'Quote expired', cancelled: 'Quote cancelled', deposit_failed: 'Deposit failed — no payout sent', submitted: 'Transaction submitted', confirmed: 'Transaction confirmed', prepared: 'Transaction prepared', failed: 'Transaction failed', sold: 'Sale confirmed' };
-export const migrationStateText = value => states[value] || 'Awaiting settlement update';
+export const migrationStateText = (value, includedAt) => value === 'payout_signed' && Number.isSafeInteger(includedAt) && includedAt > 0
+  ? 'Tokens transferred — awaiting network finality'
+  : states[value] || 'Awaiting settlement update';
 export function payoutTimingText(policy) {
   const suffix = ' Network confirmation or queue delays may take longer. You can close this page; processing continues automatically.';
   if (!policy) return 'Robinhood tokens are sent after your Solana deposit is confirmed.' + suffix;

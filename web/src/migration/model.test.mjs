@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { formatUnits, parseUnits, validRequest, expiryMs, snapshotUtcIso, formatUtc, maxMigrationAmount, depositDefinitelyRejected, closingCountdown, deadlineUtcMs } from './model.js';
+import { formatUnits, parseUnits, validRequest, expiryMs, snapshotUtcIso, formatUtc, maxMigrationAmount, maxMigrationHint, depositDefinitelyRejected, closingCountdown, deadlineUtcMs } from './model.js';
 import { migrationErrorText, migrationStateText, payoutTimingText } from './strings.js';
 
 test('countdown has exact day and deadline boundaries, never negative or a per-visit reset', () => {
@@ -26,6 +26,9 @@ test('deadline picker accepts past/future UTC but rejects invalid calendar value
 test('payout copy distinguishes confirmed deposit processing and discloses actual scheduling range', () => {
   assert.match(migrationStateText('deposited'), /Processing/);
   assert.match(migrationStateText('payout_signed'), /awaiting confirmation/);
+  assert.match(migrationStateText('payout_signed', 1700000000000), /Tokens transferred.*finality/);
+  assert.match(migrationStateText('payout_signed', null), /awaiting confirmation/);
+  assert.match(migrationStateText('deposited', 1700000000000), /queued/);
   assert.doesNotMatch(migrationStateText('deposit_signed'), /Processing/);
   const text = payoutTimingText({ enabled: true, minSeconds: 150, maxSeconds: 420 });
   assert.match(text, /2.5–7 minutes/);
@@ -53,6 +56,14 @@ test('MAX uses exact lesser balance/remaining allocation and fails closed withou
   assert.equal(maxMigrationAmount({ balanceUnits: '9999999', remainingUnits: '1' }), '0.000001');
   assert.equal(maxMigrationAmount({ balanceUnits: '1000000000000000000000000001', remainingUnits: '1000000000000000000000000001' }, 18), '1000000000.000000000000000001');
   for (const account of [null, {}, { balanceUnits: '0', remainingUnits: '1' }, { balanceUnits: '1', remainingUnits: '0' }, { balanceUnits: '-1', remainingUnits: '2' }, { balanceUnits: 'bad', remainingUnits: '2' }, { balanceUnits: 3, remainingUnits: '2' }]) assert.equal(maxMigrationAmount(account), '');
+});
+test('MAX explains loading, consumed allocation, and empty wallet without changing limits', () => {
+  assert.equal(maxMigrationHint(null), 'maxLoading');
+  assert.equal(maxMigrationHint({ balanceUnits: 'bad', remainingUnits: '0' }), 'maxLoading');
+  assert.equal(maxMigrationHint({ balanceUnits: '0', remainingUnits: '0' }), 'maxNoAllocation');
+  assert.equal(maxMigrationHint({ balanceUnits: '900', remainingUnits: '0' }), 'maxNoAllocation');
+  assert.equal(maxMigrationHint({ balanceUnits: '0', remainingUnits: '900' }), 'maxNoBalance');
+  assert.equal(maxMigrationHint({ balanceUnits: '1', remainingUnits: '900' }), '');
 });
 test('request validation rejects overspend, fractional base units and invalid recipient', () => {
   const a = { remainingUnits: '2000000', balanceUnits: '1000000' }, recipient = '0x' + '1'.repeat(40);

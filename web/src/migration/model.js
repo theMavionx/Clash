@@ -20,6 +20,14 @@ export function maxMigrationAmount(account, decimals = 6) {
   const maximum = balance < remaining ? balance : remaining;
   return maximum > 0n ? formatUnits(maximum, decimals) : '';
 }
+/** Explain an unavailable MAX without suggesting another deposit for reserved funds. */
+export function maxMigrationHint(account) {
+  const values = [account?.balanceUnits, account?.remainingUnits];
+  if (!values.every(value => typeof value === 'string' && /^\d+$/.test(value))) return 'maxLoading';
+  if (BigInt(account.remainingUnits) === 0n) return 'maxNoAllocation';
+  if (BigInt(account.balanceUnits) === 0n) return 'maxNoBalance';
+  return '';
+}
 export function validRequest(amount, address, account, decimals = 6) {
   const units = parseUnits(amount, decimals);
   return units !== null && units > 0n && /^0x[0-9a-fA-F]{40}$/.test(address) && !/^0x0{40}$/i.test(address)

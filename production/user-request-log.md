@@ -1,5 +1,13 @@
 # User Request Log
 
+## UR-2026-09-21-MIGRATION-INCLUSION-QUEUE
+
+- Owner explicitly asks not to block next payouts on finalized head. Implement verified canonical exact-transfer inclusion gate, retain final paid accounting, immutable bytes/reorg recovery and nonce reservation. Add included UI state. ADR0053. User additionally explicitly requests parallel agents for MAXwallet8WHzJS5t8SXdjyghRmZsgPnUJCkqDfpkiWSGpRb3KZtV: live balance0, eligible/used6512792978019units, requestb58cf5c4...deposited full amount; MAX correctly unavailable after deposit, improve reason text. Independent payout safety reviewer found no blocker; add multi-reorg regression.
+
+## UR-2026-09-21-MIGRATION-PAYOUT-QUEUE-D4ED
+
+- Owner asks why398371.932257CLASH requestd4ed39d3-63b8-4d87-af36-0c63a01a05e6 not received. Read-only diagnosis: depositedAt1790015533152, payoutNotBefore1790015689489 already elapsed, no payout hash. Current code serializes all payouts until prior payout_signed/review resolves. Priorbf4f3585... nonce83 receipt success block69015968, but Alchemy finalized block69013766 (timestamp1790015434000) vs latest69022935 at1790016351000: finalized head~15minutes behind latest. Exact transfer previously verified. This is queue head-of-line blocking on finality, not insufficient funds or1:1 math. No transaction/config/code change performed for a why/status request; preserving duplicate-payment protection. Fix should separate safe nonce sequencing after verified inclusion from final settled accounting, with reorg/restart tests.
+
 ## UR-2026-09-21-MIGRATION-SELL-AFTER-DEPOSIT
 
 - Owner first requests verifying sales and1:1 payouts, then explicitly changes behavior: sell without waiting for Robinhood payout completion. Remove paid-only dependence, accept only finalized confirmed source deposits in deposited/payout_signed/paid states. Keep$400normal/$100minimum and ten-minute residual thresholds. Preserve payout amounts/liabilities, pause, finality, shared lease and signed-send recovery. ADR0052 documents custody trade-off. No additional manual funded trade authorized or initiated.

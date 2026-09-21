@@ -248,6 +248,7 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
       createdAt: r.createdAt,
       depositedAt: r.depositedAt || null,
       payoutNotBefore: r.payoutNotBefore || null,
+      payoutIncludedAt: r.payoutIncludedAt || null,
       errorCode: r.errorCode || null,
     };
   }
@@ -907,6 +908,16 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
       audit("payout_scheduled:" + r.id + ":" + r.payoutNotBefore);
     }).immediate();
   }
+  async function payoutQueueReady() {
+    const outstanding = rows();
+    if (outstanding.some(r => r.status === "review")) return false;
+    for (const previous of outstanding.filter(r => r.status === "payout_signed")) {
+      // Never trust persisted inclusion alone: a receipt can disappear in a reorg.
+      const result = await chain.payoutStatus(previous, { inclusionOnly: true });
+      if (result !== "included" && result !== "confirmed") return false;
+    }
+    return true;
+  }
   async function tick() {
     return exclusive(async () => {
       prepareRpc();
@@ -965,14 +976,14 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
           }
           if (r.status === "deposited") schedulePayout(r);
           if (r.status === "deposited" && config().enabled && now() >= r.payoutNotBefore) {
-            // Serialize payout nonces: only one unresolved EVM transaction is allowed.
-            if (
-              rows().some(
-                (x) => x.status === "payout_signed" || x.status === "review",
-              )
-            )
-              continue;
+            // Serialize unmined sends, but do not wait for finality of verified transfers.
+            if (!(await payoutQueueReady())) continue;
             const signed = await chain.preparePayout(r, secret("evm"));
+            fence();
+            check(config().enabled, "MIGRATION_PAUSED", 409);
+            check(!rows().some(x => x.id !== r.id && x.payoutHash &&
+              x.evmTreasury?.toLowerCase() === r.evmTreasury.toLowerCase() &&
+              x.payoutNonce === signed.nonce), "PAYOUT_NONCE_ALREADY_RESERVED", 409);
             r.payoutRaw = signed.raw;
             r.payoutHash = signed.hash;
             r.payoutNonce = signed.nonce;
@@ -994,13 +1005,24 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
               r.errorCode = null;
               save(r);
               audit("payout_confirmed:" + r.id);
+            } else if (result === "included") {
+              const firstInclusion = !r.payoutIncludedAt;
+              r.payoutIncludedAt = r.payoutIncludedAt || now();
+              r.errorCode = null;
+              save(r);
+              if (firstInclusion) audit("payout_included:" + r.id);
             } else if (result === "failed" || result === "conflict") {
+              r.payoutIncludedAt = null;
               r.status = "review";
               r.errorCode = "PAYOUT_REQUIRES_RECONCILIATION";
               save(r);
-            } else if (config().enabled) {
-              fence();
-              await chain.broadcastEvm(r.payoutRaw);
+            } else {
+              r.payoutIncludedAt = null;
+              save(r);
+              if (config().enabled) {
+                fence();
+                await chain.broadcastEvm(r.payoutRaw);
+              }
             }
           }
         } catch (e) {

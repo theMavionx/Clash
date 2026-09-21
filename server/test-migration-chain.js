@@ -451,13 +451,57 @@ test("treasury readiness uses one latest block, not delayed finalized inventory"
   inventory = 0n; eth = 0n;
   assert.deepEqual((await adapter.health(config, keys)).reasons, ['TARGET_INVENTORY_EMPTY', 'ETH_GAS_REQUIRED']);
 });
-test("relaxed inventory does not relax payout receipt finality", async () => {
+function inclusionFixture() {
+  const { encodeEventTopics, encodeAbiParameters, parseAbi } = require('viem');
+  const r = { payoutHash: '0x' + '11'.repeat(32), payoutNonce: 5,
+    evmTreasury: '0x' + '22'.repeat(20), destination: '0x' + '33'.repeat(20),
+    targetToken: '0x' + '44'.repeat(20), outputUnits: '123' };
+  const state = { final: 199n, canonical: '0xabc', nonce: 5, finalReads: 0, finalError: false,
+    receipt: { blockNumber: 200n, blockHash: '0xabc', status: 'success', logs: [{
+      address: r.targetToken,
+      topics: encodeEventTopics({ abi: parseAbi(['event Transfer(address indexed from,address indexed to,uint256 value)']),
+        eventName: 'Transfer', args: { from: r.evmTreasury, to: r.destination } }),
+      data: encodeAbiParameters([{ type: 'uint256' }], [123n]),
+    }] } };
   const adapter = createMigrationChain({}, { publicClient: {
     getChainId: async () => 4663,
-    getTransactionReceipt: async () => ({ blockNumber: 200n, status: 'success' }),
-    getBlock: async args => { assert.equal(args.blockTag, 'finalized'); return { number: 199n }; },
+    getTransactionReceipt: async () => state.receipt,
+    getTransactionCount: async () => state.nonce,
+    getBlock: async args => {
+      if (args.blockTag === 'finalized') { state.finalReads++; if (state.finalError) throw Error('RPC outage'); return { number: state.final }; }
+      assert.equal(args.blockNumber, 200n); return { hash: state.canonical };
+    },
   } });
-  assert.equal(await adapter.payoutStatus({ payoutHash: '0x' + '11'.repeat(32) }), 'pending');
+  return { r, state, adapter };
+}
+
+test('exact canonical inclusion advances queue but only finalized receipt confirms payment', async () => {
+  const f = inclusionFixture();
+  assert.equal(await f.adapter.payoutStatus(f.r), 'included');
+  f.state.finalError = true;
+  assert.equal(await f.adapter.payoutStatus(f.r, { inclusionOnly: true }), 'included');
+  assert.equal(f.state.finalReads, 1, 'queue check does not depend on finalized RPC');
+  f.state.finalError = false; f.state.final = 200n;
+  assert.equal(await f.adapter.payoutStatus(f.r), 'confirmed');
+});
+
+test('inclusion rejects wrong token/recipient/amount, failed receipt and orphaned block before finality', async () => {
+  for (const mutate of [f => { f.r.targetToken = '0x' + '55'.repeat(20); },
+    f => { f.r.destination = '0x' + '66'.repeat(20); },
+    f => { f.r.evmTreasury = '0x' + '77'.repeat(20); },
+    f => { f.r.outputUnits = '124'; }]) {
+    const f = inclusionFixture(); mutate(f);
+    assert.equal(await f.adapter.payoutStatus(f.r, { inclusionOnly: true }), 'conflict');
+    assert.equal(f.state.finalReads, 0);
+  }
+  const failed = inclusionFixture(); failed.state.receipt.status = 'reverted';
+  assert.equal(await failed.adapter.payoutStatus(failed.r), 'failed');
+  const orphan = inclusionFixture(); orphan.state.canonical = '0xdef';
+  assert.equal(await orphan.adapter.payoutStatus(orphan.r), 'pending');
+  orphan.state.receipt = null;
+  assert.equal(await orphan.adapter.payoutStatus(orphan.r), 'pending');
+  orphan.state.nonce = 6;
+  assert.equal(await orphan.adapter.payoutStatus(orphan.r), 'conflict');
 });
 test("payout simulation failure still prevents transaction preparation", async () => {
   const key = '0x' + '11'.repeat(32);

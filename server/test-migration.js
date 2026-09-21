@@ -57,7 +57,7 @@ function fixture(t) {
     broadcastSolana: async (raw) => state.broadcasts.push(raw),
     preparePayout: async (r) => {
       state.payouts++;
-      return { raw: "evm-" + r.id, hash: "hash-" + r.id, nonce: 1 };
+      return { raw: "evm-" + r.id, hash: "hash-" + r.id, nonce: state.payouts };
     },
     payoutStatus: async () => state.payout,
     broadcastEvm: async (raw) => state.broadcasts.push(raw),
@@ -746,6 +746,91 @@ test("unsigned quotes resume and cancel; signed deposit cannot cancel", async (t
     /ALREADY_SUBMITTED/,
   );
 });
+async function otherWalletQuote(f, id) {
+  const wallet = Keypair.generate().publicKey.toBase58();
+  f.db.prepare('INSERT INTO migration_entitlements VALUES(?,?)').run(wallet, '1000000000');
+  const q = await f.service.quote(wallet, { amount: '20', destination: B, idempotencyKey: id });
+  await f.service.submit(wallet, q.id, 'valid');
+  return { wallet, q };
+}
+
+test('included payout releases next nonce before finality, survives restart, and never rebroadcasts included bytes', async t => {
+  const f = fixture(t); await f.setup();
+  await f.service.updateConfig({ payoutDelayEnabled: false });
+  const q1 = await f.q('10');
+  await f.service.submit(f.user.publicKey.toBase58(), q1.id, 'valid');
+  await otherWalletQuote(f, 'next-request-123456');
+  f.state.deposit = 'confirmed'; f.state.payout = 'included';
+  await f.service.tick();
+  assert.equal(f.state.payouts, 2);
+  let account = await f.service.admin();
+  assert.ok(account.requests.every(r => r.status === 'payout_signed' && r.payoutIncludedAt));
+  assert.equal(f.state.broadcasts.filter(x => x.startsWith('evm-')).length, 0);
+  const restarted = createMigration(f.options); await restarted.tick();
+  assert.equal(f.state.payouts, 2);
+  f.state.payout = 'confirmed'; await restarted.tick();
+  account = await restarted.admin();
+  assert.ok(account.requests.every(r => r.status === 'paid'));
+  assert.equal(f.db.prepare("SELECT count(*) n FROM migration_sends WHERE kind='payout'").get().n, 2);
+});
+
+test('missing/orphaned inclusion and RPC failure block new signing despite persisted inclusion timestamp', async t => {
+  const f = fixture(t); await f.setup(); await f.service.updateConfig({ payoutDelayEnabled: false });
+  const q1 = await f.q('10'); await f.service.submit(f.user.publicKey.toBase58(), q1.id, 'valid');
+  f.state.deposit = 'confirmed'; f.state.payout = 'included'; await f.service.tick();
+  await otherWalletQuote(f, 'pending-next-123456');
+  const original = f.chain.payoutStatus;
+  f.chain.payoutStatus = async () => { throw Error('provider offline'); };
+  await f.service.tick(); assert.equal(f.state.payouts, 1);
+  f.chain.payoutStatus = original; f.state.payout = 'pending';
+  await f.service.tick(); assert.equal(f.state.payouts, 1);
+  assert.equal((await f.service.account(f.user.publicKey.toBase58())).requests.find(r => r.id === q1.id).payoutIncludedAt, null);
+  assert.ok(f.state.broadcasts.includes('evm-' + q1.id), 'only original signed bytes retry');
+  f.state.payout = 'included'; await f.service.tick();
+  assert.equal(f.state.payouts, 2);
+});
+
+test('two included payouts reorg together: original bytes retry and third payout waits', async t => {
+  const f = fixture(t); await f.setup(); await f.service.updateConfig({ payoutDelayEnabled: false });
+  const first = await f.q('10'); await f.service.submit(f.user.publicKey.toBase58(), first.id, 'valid');
+  const second = await otherWalletQuote(f, 'reorg-second-123456');
+  f.state.deposit = 'confirmed'; f.state.payout = 'included'; await f.service.tick();
+  assert.equal(f.state.payouts, 2);
+  const third = await otherWalletQuote(f, 'reorg-third-123456');
+  const restarted = createMigration(f.options); f.state.payout = 'pending'; await restarted.tick();
+  assert.equal(f.state.payouts, 2);
+  assert.equal((await restarted.account(third.wallet)).requests[0].status, 'deposited');
+  assert.deepEqual(f.state.broadcasts.filter(x => x.startsWith('evm-')).sort(),
+    ['evm-' + first.id, 'evm-' + second.q.id].sort());
+  f.state.payout = 'included'; await restarted.tick();
+  assert.equal(f.state.payouts, 3);
+});
+
+test('nonce rollback after inclusion check cannot persist a second payout at an already reserved nonce', async t => {
+  const f = fixture(t); await f.setup(); await f.service.updateConfig({ payoutDelayEnabled: false });
+  const q1 = await f.q('10'); await f.service.submit(f.user.publicKey.toBase58(), q1.id, 'valid');
+  f.state.deposit = 'confirmed'; f.state.payout = 'included'; await f.service.tick();
+  const { q: q2, wallet } = await otherWalletQuote(f, 'nonce-rollback-123456');
+  f.chain.preparePayout = async () => ({ raw: 'never-send', hash: 'never-persist', nonce: 1 });
+  await f.service.tick();
+  const second = (await f.service.account(wallet)).requests.find(r => r.id === q2.id);
+  assert.equal(second.status, 'deposited'); assert.equal(second.errorCode, 'PAYOUT_NONCE_ALREADY_RESERVED');
+  assert.equal(second.payoutHash, null);
+  assert.equal(f.db.prepare("SELECT count(*) n FROM migration_sends WHERE kind='payout'").get().n, 1);
+  assert.ok(!f.state.broadcasts.includes('never-send'));
+});
+
+test('pause during payout preparation cannot persist or broadcast a new payout', async t => {
+  const f = fixture(t); await f.setup(); await f.service.updateConfig({ payoutDelayEnabled: false });
+  const q = await f.q('10'); await f.service.submit(f.user.publicKey.toBase58(), q.id, 'valid');
+  f.state.deposit = 'confirmed';
+  const original = f.chain.preparePayout;
+  f.chain.preparePayout = async r => { await f.service.updateConfig({ enabled: false }); return original(r); };
+  await f.service.tick();
+  assert.equal(f.db.prepare("SELECT count(*) n FROM migration_sends WHERE kind='payout'").get().n, 0);
+  assert.equal((await f.service.account(f.user.publicKey.toBase58())).requests[0].status, 'deposited');
+});
+
 test("nonce conflict retains liability and cannot produce a replacement payout", async (t) => {
   const f = fixture(t);
   await f.setup();

@@ -28,7 +28,7 @@ try {
     const closesAt = Date.now() + 86400000;
     const context = await browser.newContext({ viewport: { width, height: 900 } });
     const page = await context.newPage(); const errors = []; let submitted = 0, quoteCalls = 0;
-    let rejectSubmit = width === 1440, depositConfirmed = false;
+    let rejectSubmit = width === 1440, depositConfirmed = false, payoutIncluded = false;
     const usdg = width === 390 ? '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168' : null;
     page.on('pageerror', error => { if (!errors.length) errors.push(error.stack); });
     await page.addInitScript(installTestWallet, { wallet: owner.toBase58(), publicKey: [...owner.toBytes()] });
@@ -41,7 +41,7 @@ try {
       const data = {
         status: { closesAt, serverTime: Date.now(), payoutDelay: { enabled: true, minSeconds: 150, maxSeconds: 420 }, enabled: true, ready: true, sourceDecimals: 6, ratio: usdg ? '0.001' : '1', targetToken: usdg || '0x' + '2'.repeat(40), feeUsd: '2', snapshot: { slot: 360000000, ...(width === 320 ? { mode: 'historical', requestedAt: Date.parse('2026-09-20T13:45:00Z') } : {}) } },
         challenge: { id: 'challenge', message: 'Local test signature only' }, verify: { token: 'mock-session', wallet: owner.toBase58() },
-        account: { eligibleUnits: '1000000000', remainingUnits: width === 390 ? '234567891' : '1000000000', balanceUnits: width === 320 ? '123456789' : '1000000000', requests: submitted ? [{ id: 'q1', targetToken: usdg || '0x' + '2'.repeat(40), inputUnits: '1000000', outputUnits: usdg ? '1000' : '1000000000000000000', targetDecimals: usdg ? 6 : 18, status: depositConfirmed ? 'deposited' : 'deposit_pending', destination: '0x' + '1'.repeat(40) }] : [] },
+        account: { eligibleUnits: '1000000000', remainingUnits: width === 390 ? '234567891' : '1000000000', balanceUnits: width === 320 ? '123456789' : '1000000000', requests: submitted ? [{ id: 'q1', targetToken: usdg || '0x' + '2'.repeat(40), inputUnits: '1000000', outputUnits: usdg ? '1000' : '1000000000000000000', targetDecimals: usdg ? 6 : 18, payoutIncludedAt: payoutIncluded ? Date.now() : null, status: payoutIncluded ? 'payout_signed' : depositConfirmed ? 'deposited' : 'deposit_pending', destination: '0x' + '1'.repeat(40) }] : [] },
         quote: { id: 'q1', inputUnits: '1000000', outputUnits: usdg ? '1000' : '1000000000000000000', targetDecimals: usdg ? 6 : 18, destination: '0x' + '1'.repeat(40), sourceMint: 'SOURCE_TEST_MINT', targetToken: usdg || '0x' + '2'.repeat(40), feeLamports: '15000000', expiresAt: Date.now() + 120000, transaction: encoded },
         submit: { id: 'q1', status: 'deposit_pending' },
       };
@@ -112,6 +112,11 @@ try {
     await page.getByRole('button', { name: 'Refresh status', exact: true }).click();
     await page.getByText('Processing — your Robinhood payout is queued', { exact: true }).waitFor();
     await page.screenshot({ path: new URL(`processing-${width}.png`, output).pathname.replace(/^\/(\w:)/, '$1'), fullPage: true });
+    payoutIncluded = true;
+    await page.getByRole('button', { name: 'Refresh status', exact: true }).click();
+    await page.getByText('Tokens transferred — awaiting network finality', { exact: true }).waitFor();
+    assert.equal(await page.getByText('Migration complete', { exact: true }).count(), 0);
+    await page.screenshot({ path: new URL(`included-${width}.png`, output).pathname.replace(/^\/(\w:)/, '$1'), fullPage: true });
     await page.evaluate(() => window.mockWalletChange());
     await page.locator('header').getByRole('button', { name: 'Connect wallet', exact: true }).waitFor();
     assert.equal(await page.getByText('Deposit submitted — awaiting confirmation', { exact: true }).count(), 0);

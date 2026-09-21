@@ -638,7 +638,7 @@ function createMigrationChain(env = process.env, deps = {}) {
     });
     return { raw, hash: keccak256(raw), nonce };
   }
-  async function payoutStatus(r) {
+  async function payoutStatus(r, { inclusionOnly = false } = {}) {
     await chainCheck();
     let receipt;
     try {
@@ -654,8 +654,6 @@ function createMigrationChain(env = process.env, deps = {}) {
         ? "conflict"
         : "pending";
     }
-    const final = await evm().getBlock({ blockTag: "finalized" });
-    if (final.number < receipt.blockNumber) return "pending";
     const canonical = await evm().getBlock({
       blockNumber: receipt.blockNumber,
     });
@@ -678,10 +676,12 @@ function createMigrationChain(env = process.env, deps = {}) {
           l.args.from.toLowerCase() === r.evmTreasury.toLowerCase() &&
           l.args.to.toLowerCase() === r.destination.toLowerCase(),
       );
-    return transfers.reduce((s, l) => s + l.args.value, 0n) ===
-      BigInt(r.outputUnits)
-      ? "confirmed"
-      : "conflict";
+    if (transfers.reduce((s, l) => s + l.args.value, 0n) !== BigInt(r.outputUnits))
+      return "conflict";
+    // Inclusion advances nonce sequencing, not final settlement accounting.
+    if (inclusionOnly) return "included";
+    const final = await evm().getBlock({ blockTag: "finalized" });
+    return final.number >= receipt.blockNumber ? "confirmed" : "included";
   }
   async function broadcastEvm(serializedTransaction) {
     await chainCheck();
