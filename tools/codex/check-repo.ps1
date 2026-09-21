@@ -250,6 +250,9 @@ if ($Mode -in @("Full", "Deploy")) {
     Invoke-Step "CLASH migration ledger, signing and HTTP regressions" {
         node --test server/test-migration.js server/test-migration-chain.js server/test-migration-http.js
     }
+    Invoke-Step "CLASH migration UI amount and state regressions" {
+        node --test web/src/migration/model.test.mjs
+    }
     if (Test-Path "web/package.json") {
         Invoke-Step "web lint" { npm.cmd --prefix web run lint }
     }

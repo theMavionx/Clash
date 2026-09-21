@@ -1,6 +1,8 @@
 // Isolated English catalogue; no trading/game localization dependency on this public entry.
 export const messages = {
-  title: 'CLASH migration', subtitle: 'Solana → Robinhood mainnet', home: 'Clash of Perps', stats: 'Statistics',
+  title: 'CLASH Migration', subtitle: 'Solana → Robinhood', home: 'Clash of Perps', stats: 'Statistics',
+  connectWallet: 'Connect wallet', walletMenu: 'Choose wallet', transfer: 'Migrate your CLASH', details: 'Migration details', network: 'Destination network',
+  connectHint: 'Connect your Solana wallet to check your allocation and begin.',
   intro: 'Move your eligible CLASH to Robinhood. Your snapshot balance determines your migration limit. Later purchases do not increase it.',
   loading: 'Checking migration availability…', paused: 'Migration is currently unavailable. No payment will be requested.',
   ready: 'Migration available', snapshot: 'Snapshot slot', ratio: 'Conversion ratio', fee: 'Service fee',

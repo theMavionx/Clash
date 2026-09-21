@@ -13,7 +13,7 @@ const encoded = tx.serialize({ requireAllSignatures: false }).toString('base64')
 const output = new URL('../../artifacts/migration/', import.meta.url);
 await mkdir(output, { recursive: true });
 try {
-  for (const width of [1440, 390]) {
+  for (const width of [1440, 390, 320]) {
     const context = await browser.newContext({ viewport: { width, height: 900 } });
     const page = await context.newPage(); const errors = []; let submitted = 0;
     page.on('pageerror', error => { if (!errors.length) errors.push(error.stack); });
@@ -36,7 +36,18 @@ try {
       await route.fulfill({ json: data[path] || {} });
     });
     await page.goto('http://127.0.0.1:5211/migration');
-    await page.getByRole('button', { name: 'Phantom', exact: true }).click();
+    await page.getByText('Migration available', { exact: true }).waitFor();
+    assert.equal(await page.getByLabel('CLASH to migrate', { exact: true }).isDisabled(), true);
+    await page.screenshot({ path: new URL(`disconnected-${width}.png`, output).pathname.replace(/^\/(\w:)/, '$1'), fullPage: true });
+    const headerConnect = page.locator('header').getByRole('button', { name: 'Connect wallet', exact: true });
+    await headerConnect.click();
+    assert.equal(await page.getByRole('menuitem', { name: 'Phantom', exact: true }).evaluate(node => node === document.activeElement), true);
+    await page.keyboard.press('ArrowDown');
+    assert.equal(await page.getByRole('menuitem', { name: 'Solflare', exact: true }).evaluate(node => node === document.activeElement), true);
+    await page.keyboard.press('Escape');
+    assert.equal(await headerConnect.evaluate(node => node === document.activeElement), true);
+    await page.locator('form').getByRole('button', { name: 'Connect wallet', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'Phantom', exact: true }).click();
     await page.getByLabel('CLASH to migrate', { exact: true }).fill('1');
     await page.getByLabel('Robinhood EVM recipient address').fill('0x' + '1'.repeat(40));
     await page.getByRole('button', { name: 'Review migration', exact: true }).click();
@@ -50,7 +61,7 @@ try {
     await page.evaluate(() => window.scrollTo(0, 0));
     await page.screenshot({ path: new URL(`submitted-${width}.png`, output).pathname.replace(/^\/(\w:)/, '$1'), fullPage: true });
     await page.evaluate(() => window.mockWalletChange());
-    await page.getByRole('button', { name: 'Phantom', exact: true }).waitFor();
+    await page.locator('header').getByRole('button', { name: 'Connect wallet', exact: true }).waitFor();
     assert.equal(await page.getByText('Deposit submitted — awaiting confirmation', { exact: true }).count(), 0);
     assert.deepEqual(errors, []);
     await context.close();
@@ -78,7 +89,8 @@ try {
     return route.fulfill({ json: payload[path] || {} });
   });
   await recovery.goto('http://127.0.0.1:5211/migration');
-  await recovery.getByRole('button', { name: 'Phantom', exact: true }).click();
+  await recovery.locator('header').getByRole('button', { name: 'Connect wallet', exact: true }).click();
+  await recovery.getByRole('menuitem', { name: 'Phantom', exact: true }).click();
   await recovery.getByRole('button', { name: 'Cancel review' }).waitFor();
   assert.equal(await recovery.evaluate(() => window.signCalls), 0); // Existing quote restored without signing.
   await recovery.getByRole('button', { name: 'Cancel review' }).click();
@@ -93,7 +105,7 @@ try {
   assert.equal(await recovery.getByRole('button', { name: 'Sign deposit and migrate' }).count(), 0);
   unauthorized = true;
   await recovery.getByRole('button', { name: 'Refresh status', exact: true }).click();
-  await recovery.getByRole('button', { name: 'Phantom', exact: true }).waitFor();
+  await recovery.locator('header').getByRole('button', { name: 'Connect wallet', exact: true }).waitFor();
   assert.equal(await recovery.getByText('Deposit submitted — awaiting confirmation', { exact: true }).count(), 0);
   assert.deepEqual(recoveryErrors, []); await recovery.close();
   const admin = await browser.newPage({ viewport: { width: 1440, height: 1000 } });

@@ -1,5 +1,11 @@
 # User Request Log
 
+## UR-2026-09-21-MIGRATION-BRANDING
+
+- Owner follow-up: «так роби і поскоріше не питай дозволу». Approves recommended branded header and two-column responsive layout and asks to skip further design approval gates; proceed with implementation and verification.
+- Owner: «Дуже убого сайт виглядає конект гаманця зроби згори лого додай клеш оф перпс клеш а і так далі щоб не так убого то все виглядало».
+- Improve migration branding and layout, place wallet connect in header, reuse existing Clash assets; preserve migration security and settlement behavior. Owner explicitly waived further design gates. Continue the owner-authorized migration production workflow after verification; never enable fund acceptance as part of a visual revision.
+
 ## UR-2026-09-21-CLASH-MIGRATION
 
 - Latest owner approval: «так роби і на прод відрауз». Authorizes migration implementation, commit/push and deployment; no funded agent test transactions. Missing operational prerequisites must keep acceptance closed.
