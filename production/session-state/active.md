@@ -1,5 +1,11 @@
 # Active Session State
 
+## Migration branding — Released (2026-09-21)
+
+- Owner approved branded header/top wallet selector and waived further design prompts. Actual gold logo, compact black/orange form/details layout and mobile stacking released as `20260921082545-cca25d71`.
+- Full Deploy gate, four UI model tests, mocked financial-flow regressions and actual production browser checks at1440/390/320px passed. No overflow/JS errors; five services online/zero restarts; public asset byte-match.
+- Backend, keys and acceptance unchanged (still disabled). Report: `production/reports/migration-branding-2026-09-21.md`.
+
 ## CLASH custodial migration — Deployed, configuration required (2026-09-21)
 
 - `/migration` and existing Admin > Migration deployed as `20260921074659-3bb38d33`; ratio1:1, fee$2 SOL, chain4663, exact ledger and encrypted write-only treasury keys.
