@@ -79,10 +79,23 @@ const errors = {
   ENCRYPTION_UNAVAILABLE: 'Server-side credential encryption is not configured.',
   INVALID_KEY: 'The credential format is invalid. Use a dedicated private key, not a seed phrase.',
   INVALID_CONFIG: 'One or more configuration values are invalid.',
+  INVALID_PAYOUT_DELAY: 'Payout delay must use whole seconds between 0 and 3600, with minimum no greater than maximum.',
+  INVALID_PAYOUT_SCHEDULE: 'Your payout schedule needs review. Do not deposit again; contact support with your migration reference.',
   INVALID_SLIPPAGE: 'Slippage values must respect the 10% maximum.',
   INVALID_TARGET_TOKEN: 'The target token failed contract validation.',
   INVALID_SNAPSHOT: 'Snapshot validation failed. No eligibility snapshot was activated.',
 };
 export const migrationErrorText = code => errors[code] || messages.failed;
-const states = { quoted: 'Awaiting your deposit signature', deposit_signed: 'Deposit submitted — awaiting confirmation', deposit_pending: 'Deposit submitted — awaiting confirmation', deposited: 'Deposit confirmed — payout queued', payout_signed: 'Payout submitted — awaiting confirmation', paid: 'Migration complete', expired: 'Quote expired', cancelled: 'Quote cancelled', deposit_failed: 'Deposit failed — no payout sent', submitted: 'Transaction submitted', confirmed: 'Transaction confirmed', prepared: 'Transaction prepared', failed: 'Transaction failed', sold: 'Sale confirmed' };
+const states = { quoted: 'Awaiting your deposit signature', deposit_signed: 'Deposit submitted — awaiting confirmation', deposit_pending: 'Deposit submitted — awaiting confirmation', deposited: 'Processing — your Robinhood payout is queued', payout_signed: 'Processing — Robinhood payout submitted, awaiting confirmation', paid: 'Migration complete', expired: 'Quote expired', cancelled: 'Quote cancelled', deposit_failed: 'Deposit failed — no payout sent', submitted: 'Transaction submitted', confirmed: 'Transaction confirmed', prepared: 'Transaction prepared', failed: 'Transaction failed', sold: 'Sale confirmed' };
 export const migrationStateText = value => states[value] || 'Awaiting settlement update';
+export function payoutTimingText(policy) {
+  const suffix = ' Network confirmation or queue delays may take longer. You can close this page; processing continues automatically.';
+  if (!policy) return 'Robinhood tokens are sent after your Solana deposit is confirmed.' + suffix;
+  if (policy.enabled === false) return 'No intentional delay for newly confirmed deposits. Previously scheduled payouts keep their schedule.' + suffix;
+  if (!Number.isInteger(policy.minSeconds) || !Number.isInteger(policy.maxSeconds) ||
+      policy.minSeconds < 0 || policy.maxSeconds < policy.minSeconds || policy.maxSeconds > 3600) return payoutTimingText();
+  const minutes = value => Number((value / 60).toFixed(2));
+  const range = policy.minSeconds === policy.maxSeconds ? minutes(policy.minSeconds) : `${minutes(policy.minSeconds)}–${minutes(policy.maxSeconds)}`;
+  const unit = policy.minSeconds === 60 && policy.maxSeconds === 60 ? 'minute' : 'minutes';
+  return `New Robinhood payouts are scheduled ${range} ${unit} after your Solana deposit is confirmed.` + suffix;
+}

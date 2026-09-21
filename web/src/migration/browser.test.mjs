@@ -27,7 +27,7 @@ try {
   for (const width of [1440, 390, 320]) {
     const context = await browser.newContext({ viewport: { width, height: 900 } });
     const page = await context.newPage(); const errors = []; let submitted = 0, quoteCalls = 0;
-    let rejectSubmit = width === 1440;
+    let rejectSubmit = width === 1440, depositConfirmed = false;
     const usdg = width === 390 ? '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168' : null;
     page.on('pageerror', error => { if (!errors.length) errors.push(error.stack); });
     await page.addInitScript(installTestWallet, { wallet: owner.toBase58(), publicKey: [...owner.toBytes()] });
@@ -38,9 +38,9 @@ try {
         return route.fulfill({ status: 400, json: { error: 'TRANSACTION_CHANGED', traceId: 'd110cb96-7b5c-495d-b792-92d1728d1d34' } });
       }
       const data = {
-        status: { enabled: true, ready: true, sourceDecimals: 6, ratio: usdg ? '0.001' : '1', targetToken: usdg || '0x' + '2'.repeat(40), feeUsd: '2', snapshot: { slot: 360000000, ...(width === 320 ? { mode: 'historical', requestedAt: Date.parse('2026-09-20T13:45:00Z') } : {}) } },
+        status: { payoutDelay: { enabled: true, minSeconds: 150, maxSeconds: 420 }, enabled: true, ready: true, sourceDecimals: 6, ratio: usdg ? '0.001' : '1', targetToken: usdg || '0x' + '2'.repeat(40), feeUsd: '2', snapshot: { slot: 360000000, ...(width === 320 ? { mode: 'historical', requestedAt: Date.parse('2026-09-20T13:45:00Z') } : {}) } },
         challenge: { id: 'challenge', message: 'Local test signature only' }, verify: { token: 'mock-session', wallet: owner.toBase58() },
-        account: { eligibleUnits: '1000000000', remainingUnits: width === 390 ? '234567891' : '1000000000', balanceUnits: width === 320 ? '123456789' : '1000000000', requests: submitted ? [{ id: 'q1', targetToken: usdg || '0x' + '2'.repeat(40), inputUnits: '1000000', outputUnits: usdg ? '1000' : '1000000000000000000', targetDecimals: usdg ? 6 : 18, status: 'deposit_pending', destination: '0x' + '1'.repeat(40) }] : [] },
+        account: { eligibleUnits: '1000000000', remainingUnits: width === 390 ? '234567891' : '1000000000', balanceUnits: width === 320 ? '123456789' : '1000000000', requests: submitted ? [{ id: 'q1', targetToken: usdg || '0x' + '2'.repeat(40), inputUnits: '1000000', outputUnits: usdg ? '1000' : '1000000000000000000', targetDecimals: usdg ? 6 : 18, status: depositConfirmed ? 'deposited' : 'deposit_pending', destination: '0x' + '1'.repeat(40) }] : [] },
         quote: { id: 'q1', inputUnits: '1000000', outputUnits: usdg ? '1000' : '1000000000000000000', targetDecimals: usdg ? 6 : 18, destination: '0x' + '1'.repeat(40), sourceMint: 'SOURCE_TEST_MINT', targetToken: usdg || '0x' + '2'.repeat(40), feeLamports: '15000000', expiresAt: Date.now() + 120000, transaction: encoded },
         submit: { id: 'q1', status: 'deposit_pending' },
       };
@@ -50,6 +50,7 @@ try {
     });
     await page.goto('http://127.0.0.1:5211/migration');
     await page.getByText('Migration available', { exact: true }).waitFor();
+    await page.locator('.migration-payout-timing').filter({ hasText: '2.5–7 minutes' }).waitFor();
     assert.equal(await page.locator('.migration-brand').evaluate(node => node.getBoundingClientRect().left), width > 720 ? 24 : 16, 'Brand uses compact page-edge gutter, not centered max-width margin');
     const heroImages = page.locator('.migration-intro img');
     assert.equal(await heroImages.count(), 3, 'Hero shows CLASH, Solana and Robinhood logos');
@@ -103,6 +104,10 @@ try {
     await page.getByText('Deposit submitted — awaiting confirmation', { exact: true }).waitFor(); assert.equal(submitted, 1);
     await page.evaluate(() => window.scrollTo(0, 0));
     await page.screenshot({ path: new URL(`submitted-${width}.png`, output).pathname.replace(/^\/(\w:)/, '$1'), fullPage: true });
+    depositConfirmed = true;
+    await page.getByRole('button', { name: 'Refresh status', exact: true }).click();
+    await page.getByText('Processing — your Robinhood payout is queued', { exact: true }).waitFor();
+    await page.screenshot({ path: new URL(`processing-${width}.png`, output).pathname.replace(/^\/(\w:)/, '$1'), fullPage: true });
     await page.evaluate(() => window.mockWalletChange());
     await page.locator('header').getByRole('button', { name: 'Connect wallet', exact: true }).waitFor();
     assert.equal(await page.getByText('Deposit submitted — awaiting confirmation', { exact: true }).count(), 0);
@@ -248,11 +253,11 @@ try {
       requests: [{ id: 'ledger-test', wallet: owner.toBase58(), destination: '0x'+'1'.repeat(40), status: 'paid',
         inputUnits:'4000000000', outputUnits:'4000000', feeLamports:'20000000', targetDecimals:6,
         targetToken:'0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168', createdAt:1790000000000,
-        depositedAt:1790000001000, paidAt:1790000002000 }],
+        depositedAt:1790000001000, payoutNotBefore:1790000151000, paidAt:1790000152000 }],
     } });
     if (route.request().method() !== 'GET') writes.push(route.request().postDataJSON());
     if (route.request().url().endsWith('/snapshot') && route.request().method() === 'POST') adminSnapshot = { ...adminSnapshot, mode: 'historical', requestedAt: Date.parse(route.request().postDataJSON().at), blockTime: Date.parse(route.request().postDataJSON().at) - 1000, wallets: 0 };
-    return route.fulfill({ json: { config: { enabled: false, ratio: '1', targetToken: '0x' + '2'.repeat(40), feeUsd: '2', batchUsd: 400, idleSeconds: 600, residualUsd: 100, slippageBps: 500, maxSlippageBps: 1000 }, readiness: { ready: false, reasons: ['SNAPSHOT_REQUIRED'] }, snapshot: adminSnapshot, canReplaceSnapshot: !snapshotLocked, wallets: { solana: owner.toBase58(), evm: '0x' + '3'.repeat(40) }, requests: [], sales: [], audit: [{ event: 'snapshot_published', at: 1790000000000 }] } });
+    return route.fulfill({ json: { config: { payoutDelayEnabled: true, payoutDelayMinSeconds: 150, payoutDelayMaxSeconds: 420, enabled: false, ratio: '1', targetToken: '0x' + '2'.repeat(40), feeUsd: '2', batchUsd: 400, idleSeconds: 600, residualUsd: 100, slippageBps: 500, maxSlippageBps: 1000 }, readiness: { ready: false, reasons: ['SNAPSHOT_REQUIRED'] }, snapshot: adminSnapshot, canReplaceSnapshot: !snapshotLocked, wallets: { solana: owner.toBase58(), evm: '0x' + '3'.repeat(40) }, requests: [], sales: [], audit: [{ event: 'snapshot_published', at: 1790000000000 }] } });
   });
   await admin.goto('http://127.0.0.1:5211/src/migration/admin-preview.html');
   await admin.getByRole('heading', { name: 'Configuration', exact: true }).waitFor();
@@ -271,6 +276,7 @@ try {
   assert.equal(await cutoffInput.getAttribute('max'), new Date().toISOString().slice(0, 16));
   assert.match((await admin.locator('tbody').allTextContents()).join(' '), /UTC/);
   await admin.getByRole('heading', { name: 'Migration ledger', exact: true }).waitFor();
+  await admin.getByText(/Payout eligible after:/).waitFor();
   await admin.getByText('4000 CLASH', { exact: false }).waitFor();
   const ledgerCard = admin.getByRole('heading', { name: 'Migration ledger', exact: true }).locator('..');
   await ledgerCard.screenshot({ path: new URL('admin-ledger-desktop.png', output).pathname.replace(/^\/(\w:)/, '$1') });
@@ -284,12 +290,20 @@ try {
   assert.equal(await admin.getByLabel('New secret', { exact: true }).inputValue(), '');
   assert.deepEqual(writes[0], { kind: 'solana', secret: 'local-test-private-key' });
   assert.equal(await admin.evaluate(() => JSON.stringify(localStorage).includes('local-test-private-key')), false);
+  const delayToggle = admin.getByLabel('Enable Robinhood payout delay', { exact: true });
+  assert.equal(await delayToggle.isChecked(), true);
+  await delayToggle.uncheck();
+  await admin.getByLabel('Minimum Robinhood payout delay (seconds)', { exact: true }).fill('120');
+  await admin.getByLabel('Maximum Robinhood payout delay (seconds, ≤ 3600)', { exact: true }).fill('300');
   await admin.getByRole('button', { name: 'Save configuration' }).click();
   await admin.getByText('Saved. Readiness and settlement status refreshed.').waitFor();
   assert.equal(writes[1].maxSlippageBps, 1000);
   assert.equal(writes[1].batchUsd, '400');
   assert.equal(writes[1].residualUsd, '100');
   assert.equal(writes[1].feeUsd, '2');
+  assert.equal(writes[1].payoutDelayEnabled, false);
+  assert.equal(writes[1].payoutDelayMinSeconds, 120);
+  assert.equal(writes[1].payoutDelayMaxSeconds, 300);
   await admin.getByRole('combobox').selectOption('robinhoodRpc');
   await admin.getByLabel('New secret', { exact: true }).fill('local-test-alchemy-key');
   await admin.getByRole('button', { name: 'Store encrypted credential' }).click();

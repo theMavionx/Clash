@@ -12,10 +12,12 @@ const fields = [
   ['feeUsd', 'Service fee (USD)', 'number'], ['batchUsd', 'Normal sale batch (USD)', 'number'],
   ['idleSeconds', 'Residual sale delay (seconds)', 'number'], ['residualUsd', 'Residual batch maximum (USD)', 'number'],
   ['slippageBps', 'Initial slippage (basis points)', 'number'], ['maxSlippageBps', 'Maximum slippage (≤ 1000 basis points)', 'number'],
+  ['payoutDelayMinSeconds', 'Minimum Robinhood payout delay (seconds)', 'number'],
+  ['payoutDelayMaxSeconds', 'Maximum Robinhood payout delay (seconds, ≤ 3600)', 'number'],
 ];
 function configPayload(config) {
-  return Object.fromEntries(['enabled', ...fields.map(([name]) => name)].map(name => [name,
-    name === 'enabled' ? !!config[name] : ['idleSeconds', 'slippageBps', 'maxSlippageBps'].includes(name) ? Number(config[name]) : String(config[name] ?? '')]));
+  return Object.fromEntries(['enabled', 'payoutDelayEnabled', ...fields.map(([name]) => name)].map(name => [name,
+    ['enabled', 'payoutDelayEnabled'].includes(name) ? !!config[name] : ['idleSeconds', 'slippageBps', 'maxSlippageBps', 'payoutDelayMinSeconds', 'payoutDelayMaxSeconds'].includes(name) ? Number(config[name]) : String(config[name] ?? '')]));
 }
 export default function MigrationAdmin() {
   const [data, setData] = useState(null), [config, setConfig] = useState(null), [busy, setBusy] = useState(false), [notice, setNotice] = useState('');
@@ -66,6 +68,8 @@ export default function MigrationAdmin() {
     </section>
     {config && <section className="card"><h3>Configuration</h3><p>Updates apply to new quotes only. Existing requests retain their recipient, token and conversion ratio.</p><form onSubmit={e => { e.preventDefault(); if (window.confirm('Apply migration configuration? Enabling permits real deposits, payouts and automated sales once all readiness checks pass.')) run('/config', configPayload(config), 'PUT'); }}>
       <div className="form-grid">{fields.map(([name, label, type]) => <label key={name}>{label}<input type={type} required value={config[name] ?? ''} disabled={busy} min={type === 'number' ? 0 : undefined} max={name.includes('Slippage') || name === 'slippageBps' ? 1000 : undefined} step="any" onChange={e => setConfig({ ...config, [name]: ['idleSeconds', 'slippageBps', 'maxSlippageBps'].includes(name) ? Number(e.target.value) : e.target.value })}/></label>)}</div>
+      <label><input type="checkbox" checked={!!config.payoutDelayEnabled} disabled={busy} onChange={e => setConfig({ ...config, payoutDelayEnabled: e.target.checked })}/> Enable Robinhood payout delay</label>
+      <p>Random delay after confirmed Solana deposit: default 150–420 seconds (2.5–7 minutes). Allowed range: 0–3600 seconds, minimum ≤ maximum. Disabling removes the intentional delay for newly confirmed deposits only. Already scheduled or signed payouts keep their schedule. Network confirmation and the settlement queue may take longer.</p>
       <label><input type="checkbox" checked={!!config.enabled} disabled={busy} onChange={e => setConfig({ ...config, enabled: e.target.checked })}/> Enable migrations and automated settlement when ready</label><p>Sales settle into SOL. Every new sale requires at least $100 estimated input value, including residual batches. Simulation starts at the smaller of 0.5% and the configured initial slippage, and never exceeds the configured maximum (at most 10%). Unknown transaction outcomes are reconciled, not blindly retried.</p><button className="btn primary" disabled={busy}>Save configuration</button>
     </form></section>}
     <section className="card"><h3>Treasury credentials</h3><p>Dedicated migration wallets only. Credentials are write-only. Recovery phrases are processed locally only in the explicit 12-word mode; only the selected Solana private key is sent for encrypted storage. Never use your main wallet recovery phrase.</p><dl><dt>Solana treasury</dt><dd style={{ overflowWrap: 'anywhere' }}>{data?.wallets?.solana?.address || data?.wallets?.solana || 'Not configured'}</dd><dt>Robinhood treasury</dt><dd style={{ overflowWrap: 'anywhere' }}>{data?.wallets?.evm?.address || data?.wallets?.evm || 'Not configured'}</dd></dl>

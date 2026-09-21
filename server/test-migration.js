@@ -228,6 +228,9 @@ test("crash after signing restores identical raw transaction and never allocates
   assert.equal(f.state.broadcasts[0], "signed-" + q.id);
   f.state.deposit = "confirmed";
   await f.service.tick();
+  assert.equal(f.state.payouts, 0);
+  f.advance(420000);
+  await f.service.tick();
   assert.equal(f.state.payouts, 1);
   const second = createMigration(f.options);
   await second.tick();
@@ -242,6 +245,90 @@ test("crash after signing restores identical raw transaction and never allocates
   await second.tick();
   assert.equal(f.state.payouts, 1);
 });
+test("Robinhood payout delay survives restart and cannot sign before its persisted deadline", async t => {
+  const f = fixture(t); await f.setup();
+  const q = await f.q();
+  await f.service.submit(f.user.publicKey.toBase58(), q.id, "valid");
+  await f.service.tick(); // Solana transmission is not delayed.
+  assert.equal(f.state.broadcasts[0], "signed-" + q.id);
+  assert.equal(JSON.parse(f.db.prepare('SELECT payload FROM migration_requests').get().payload).payoutNotBefore, undefined);
+  f.state.deposit = "confirmed";
+  await f.service.tick();
+  const read = () => JSON.parse(f.db.prepare('SELECT payload FROM migration_requests').get().payload);
+  const scheduled = read(), delay = scheduled.payoutNotBefore - scheduled.depositedAt;
+  assert.ok(delay >= 150000 && delay <= 420000);
+  assert.equal(f.state.payouts, 0);
+  assert.equal((await f.service.account(f.user.publicKey.toBase58())).requests[0].payoutNotBefore, scheduled.payoutNotBefore);
+  assert.equal(require('./migration_ledger').readMigrationLedger(f.db).requests[0].payoutNotBefore, scheduled.payoutNotBefore);
+  const restarted = createMigration(f.options);
+  f.advance(delay - 1);
+  await restarted.tick();
+  assert.equal(read().payoutNotBefore, scheduled.payoutNotBefore);
+  assert.equal(f.state.payouts, 0);
+  assert.equal(f.state.sales, 0);
+  f.advance(1); await restarted.tick();
+  assert.equal(f.state.payouts, 1);
+  assert.equal(f.state.broadcasts.filter(s => s === 'evm-' + q.id).length, 1);
+  assert.equal(f.db.prepare("SELECT count(*) n FROM migration_audit WHERE event LIKE 'payout_scheduled:%'").get().n, 1);
+  f.state.payout = 'confirmed'; await restarted.tick(); await restarted.tick();
+  assert.equal(f.state.payouts, 1);
+});
+
+test("pause retains scheduled delay and an elapsed schedule can resume without rerolling", async t => {
+  const f = fixture(t); await f.setup();
+  const q = await f.q();
+  await f.service.submit(f.user.publicKey.toBase58(), q.id, 'valid');
+  f.state.deposit = 'confirmed';
+  await f.service.updateConfig({ enabled: false }); await f.service.tick();
+  const due = (await f.service.account(f.user.publicKey.toBase58())).requests[0].payoutNotBefore;
+  f.advance(420001); await f.service.tick();
+  assert.equal(f.state.payouts, 0);
+  await f.service.updateConfig({ enabled: true }); await f.service.tick();
+  assert.equal(f.state.payouts, 1);
+  assert.equal((await f.service.account(f.user.publicKey.toBase58())).requests[0].payoutNotBefore, due);
+});
+
+test("legacy confirmed deposits schedule from original confirmation; corrupt deadlines fail closed", async t => {
+  const f = fixture(t); await f.setup(); const q = await f.q();
+  const p = JSON.parse(f.db.prepare('SELECT payload FROM migration_requests WHERE id=?').get(q.id).payload);
+  p.depositedAt = f.options.now(); p.depositHash = 'legacy-deposit';
+  f.db.prepare("UPDATE migration_requests SET status='deposited',payload=? WHERE id=?").run(JSON.stringify(p), q.id);
+  f.advance(420001); await f.service.tick();
+  const current = JSON.parse(f.db.prepare('SELECT payload FROM migration_requests WHERE id=?').get(q.id).payload);
+  assert.equal(current.depositedAt, p.depositedAt);
+  assert.ok(current.payoutNotBefore <= p.depositedAt + 420000);
+  assert.equal(f.state.payouts, 1);
+  // A different isolated ledger must not bypass a malformed stored deadline.
+  const bad = fixture(t); await bad.setup(); const bq = await bad.q();
+  const bp = JSON.parse(bad.db.prepare('SELECT payload FROM migration_requests').get().payload);
+  bp.depositedAt = bad.options.now(); bp.payoutNotBefore = 'invalid';
+  bad.db.prepare("UPDATE migration_requests SET status='deposited',payload=? WHERE id=?").run(JSON.stringify(bp), bq.id);
+  await bad.service.tick(); assert.equal(bad.state.payouts, 0);
+  assert.equal((await bad.service.account(bad.user.publicKey.toBase58())).requests[0].errorCode, 'INVALID_PAYOUT_SCHEDULE');
+});
+
+test("admin payout delay validates ranges, disable bypasses new waits but never rerolls existing ones", async t => {
+  const f = fixture(t); await f.setup();
+  for (const input of [{payoutDelayEnabled:'false'}, {payoutDelayMinSeconds:-1},
+    {payoutDelayMaxSeconds:3601}, {payoutDelayMinSeconds:421}, {payoutDelayMaxSeconds:2.5}])
+    await assert.rejects(f.service.updateConfig(input), /INVALID_PAYOUT_DELAY/);
+  await f.service.updateConfig({payoutDelayMinSeconds:60,payoutDelayMaxSeconds:60});
+  assert.deepEqual((await f.service.status()).payoutDelay,{enabled:true,minSeconds:60,maxSeconds:60});
+  const q = await f.q(); await f.service.submit(f.user.publicKey.toBase58(),q.id,'valid');
+  f.state.deposit='confirmed'; await f.service.tick();
+  const before=(await f.service.account(f.user.publicKey.toBase58())).requests[0];
+  assert.equal(before.payoutNotBefore-before.depositedAt,60000);
+  await f.service.updateConfig({payoutDelayEnabled:false});
+  await f.service.tick(); assert.equal(f.state.payouts,0);
+  f.advance(60000); f.state.payout='confirmed'; await f.service.tick();
+  assert.equal(f.state.payouts,1);
+  const q2=await f.q('100','delay-disabled-request');
+  await f.service.submit(f.user.publicKey.toBase58(),q2.id,'valid');
+  await f.service.tick(); assert.equal(f.state.payouts,2);
+  const after=(await f.service.account(f.user.publicKey.toBase58())).requests.find(r=>r.id===q2.id);
+  assert.equal(after.payoutNotBefore,after.depositedAt);
+});
+
 test("signed expired deposit remains reserved for reconciliation, not offered a second deposit", async (t) => {
   const f = fixture(t);
   await f.setup();
@@ -341,6 +428,8 @@ async function paidLot(f, amount = "100") {
   await f.service.submit(f.user.publicKey.toBase58(), q.id, "valid");
   f.state.deposit = "confirmed";
   f.state.payout = "confirmed";
+  await f.service.tick();
+  f.advance(420000);
   await f.service.tick();
   f.advance(600001);
   return q;
@@ -456,6 +545,8 @@ test("idle time never permits a sale below $100; exact minimum is allowed", asyn
   const q = await f.q("0.000001", "minimum-top-up-123456");
   await f.service.submit(f.user.publicKey.toBase58(), q.id, "valid");
   await f.service.tick();
+  f.advance(420000);
+  await f.service.tick();
   assert.equal(f.state.sales, 1);
   const sale = JSON.parse(f.db.prepare("SELECT payload FROM migration_sales").get().payload);
   assert.equal(sale.inputUnits, "100000000");
@@ -520,6 +611,7 @@ test("nonce conflict retains liability and cannot produce a replacement payout",
   f.state.deposit = "confirmed";
   f.state.payout = "conflict";
   await f.service.tick();
+  f.advance(420000);
   await f.service.tick();
   assert.equal(f.state.payouts, 1);
   assert.equal(
@@ -542,6 +634,8 @@ test("expired ambiguous deposit can reconcile later without releasing eligibilit
   f.chain.depositStatus = original;
   f.state.deposit = "confirmed";
   f.state.payout = "confirmed";
+  await f.service.tick();
+  f.advance(420000);
   await f.service.tick();
   assert.equal(
     (await f.service.account(f.user.publicKey.toBase58())).requests[0].status,

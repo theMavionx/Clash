@@ -1,7 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { formatUnits, parseUnits, validRequest, expiryMs, snapshotUtcIso, formatUtc, maxMigrationAmount, depositDefinitelyRejected } from './model.js';
-import { migrationErrorText } from './strings.js';
+import { migrationErrorText, migrationStateText, payoutTimingText } from './strings.js';
+
+test('payout copy distinguishes confirmed deposit processing and discloses actual scheduling range', () => {
+  assert.match(migrationStateText('deposited'), /Processing/);
+  assert.match(migrationStateText('payout_signed'), /awaiting confirmation/);
+  assert.doesNotMatch(migrationStateText('deposit_signed'), /Processing/);
+  const text = payoutTimingText({ enabled: true, minSeconds: 150, maxSeconds: 420 });
+  assert.match(text, /2.5–7 minutes/);
+  assert.match(text, /may take longer/);
+  assert.doesNotMatch(text, /within 5 minutes/);
+  assert.match(payoutTimingText({ enabled: false }), /No intentional delay/);
+  assert.match(payoutTimingText({ enabled: true, minSeconds: 60, maxSeconds: 60 }), /scheduled 1 minute after/);
+  assert.doesNotMatch(payoutTimingText({ enabled: true, minSeconds: -1, maxSeconds: 0 }), /-1/);
+});
 test('only known definitive deposit rejection unlocks cancellation, never unknown network outcomes', () => {
   for (const code of ['TRANSACTION_CHANGED', 'INVALID_SIGNATURE', 'DEPOSIT_SIMULATION_FAILED', 'QUOTE_EXPIRED']) {
     assert.equal(depositDefinitelyRejected({ status: 400, code }), true);

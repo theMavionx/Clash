@@ -42,7 +42,7 @@ export default function MigrationLedger() {
           <td style={{ overflowWrap: 'anywhere', minWidth: 180 }}>{row.id}<br/>{formatUtc(row.createdAt)}</td>
           <td style={{ overflowWrap: 'anywhere', minWidth: 180 }}><strong>Solana</strong><br/>{row.wallet}<br/><strong>Robinhood</strong><br/>{row.destination}</td>
           <td style={{ minWidth: 160 }}>{formatUnits(row.inputUnits, 6)} CLASH<br/>→ {formatUnits(row.outputUnits, row.targetDecimals)} {targetSymbol(row.targetToken)}<br/>Fee: {formatUnits(row.feeLamports, 9)} SOL</td>
-          <td style={{ minWidth: 200 }}>{migrationStateText(row.status)}<br/>Deposit: {row.depositedAt ? formatUtc(row.depositedAt) : 'Not confirmed'}<br/>Payout: {row.paidAt ? formatUtc(row.paidAt) : 'Not confirmed'}{row.errorCode && <p>{row.errorCode}</p>}</td>
+          <td style={{ minWidth: 200 }}>{migrationStateText(row.status)}<br/>Deposit: {row.depositedAt ? formatUtc(row.depositedAt) : 'Not confirmed'}{row.payoutNotBefore && <><br/>Payout eligible after: {formatUtc(row.payoutNotBefore)}</>}<br/>Payout: {row.paidAt ? formatUtc(row.paidAt) : 'Not confirmed'}{row.errorCode && <p>{row.errorCode}</p>}</td>
           <td style={{ overflowWrap: 'anywhere', minWidth: 180 }}>{row.depositHash && <p>Deposit: <a href={'https://solscan.io/tx/' + encodeURIComponent(row.depositHash)} target="_blank" rel="noopener noreferrer">{row.depositHash}</a></p>}{row.payoutHash && <p>Payout: <code>{row.payoutHash}</code></p>}</td>
         </tr>)}</tbody></table></div>
       {!data.requests.length && <p>No requests match this filter.</p>}

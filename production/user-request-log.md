@@ -1,5 +1,11 @@
 # User Request Log
 
+## UR-2026-09-21-MIGRATION-PAYOUT-DELAY
+
+- Follow-up: «додай включення виключення і налаштування цієї затримки в адмінці ... перевір чи в юпітера немає ... підписки і ... працює». Add validated admin on/off and range; check official Jupiter pricing and existing key via read-only build request. Do not subscribe, change billing, sign or sell in a diagnostic check.
+
+- Owner: «додати затримку з видачею токенів на робінгуд ... від 2 з половиною до 7 хвилин ... саме ті токени що на робінгуді надсилаються». Persist a per-request random 150–420 second delay after confirmed Solana deposit, enforced before Robinhood signing. Processing copy must honestly describe 2.5–7 minutes (not guarantee five minutes); network/queue delays can take longer. Existing signed payouts reconcile unchanged. Expose schedule in admin; test restart, boundaries and no duplicate payout.
+
 ## UR-2026-09-21-PRODUCTION-RELIABILITY
 
 - Follow-up: «так потім все деплой» — deploy the completed, verified package after release checks. «ми його не використовуємо і він безкоштовний» — do not rotate Tatum in this task; retain the disclosure record without repeating its value.

@@ -17,6 +17,9 @@ const DEFAULTS = Object.freeze({
   residualUsd: "100",
   slippageBps: 500,
   maxSlippageBps: 1000,
+  payoutDelayEnabled: true,
+  payoutDelayMinSeconds: 150,
+  payoutDelayMaxSeconds: 420,
 });
 class MigrationError extends Error {
   constructor(code, status = 400) {
@@ -240,6 +243,8 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
       depositHash: r.depositHash || null,
       payoutHash: r.payoutHash || null,
       createdAt: r.createdAt,
+      depositedAt: r.depositedAt || null,
+      payoutNotBefore: r.payoutNotBefore || null,
       errorCode: r.errorCode || null,
     };
   }
@@ -319,6 +324,7 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
       targetToken: c.targetToken,
       ratio: c.ratio,
       feeUsd: c.feeUsd,
+      payoutDelay: { enabled: c.payoutDelayEnabled, minSeconds: c.payoutDelayMinSeconds, maxSeconds: c.payoutDelayMaxSeconds },
       snapshot: snapshot(),
     };
   }
@@ -341,6 +347,10 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
       for (const k of Object.keys(DEFAULTS))
         if (input[k] !== undefined) c[k] = input[k];
       check(typeof c.enabled === "boolean", "INVALID_CONFIG");
+      check(typeof c.payoutDelayEnabled === "boolean" &&
+        Number.isInteger(c.payoutDelayMinSeconds) && Number.isInteger(c.payoutDelayMaxSeconds) &&
+        c.payoutDelayMinSeconds >= 0 && c.payoutDelayMinSeconds <= c.payoutDelayMaxSeconds &&
+        c.payoutDelayMaxSeconds <= 3600, "INVALID_PAYOUT_DELAY");
       check(
         c.targetToken === "" || isAddress(c.targetToken),
         "INVALID_TARGET_TOKEN",
@@ -828,6 +838,26 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
       return publicRequest(r);
     });
   }
+  // Persist once under the worker lease. Restarts/reconciliation must not reroll
+  // the delay; already-signed payouts never pass through this scheduling gate.
+  function schedulePayout(r) {
+    if (r.payoutNotBefore != null) {
+      check(Number.isSafeInteger(r.payoutNotBefore) && r.payoutNotBefore > 0,
+        "INVALID_PAYOUT_SCHEDULE");
+      return;
+    }
+    const depositedAt = r.depositedAt || now();
+    check(Number.isSafeInteger(depositedAt) && depositedAt > 0, "INVALID_PAYOUT_SCHEDULE");
+    r.depositedAt = depositedAt;
+    const c = config();
+    const delayMs = c.payoutDelayEnabled
+      ? crypto.randomInt(c.payoutDelayMinSeconds * 1000, c.payoutDelayMaxSeconds * 1000 + 1) : 0;
+    r.payoutNotBefore = depositedAt + delayMs;
+    db.transaction(() => {
+      save(r);
+      audit("payout_scheduled:" + r.id + ":" + r.payoutNotBefore);
+    }).immediate();
+  }
   async function tick() {
     return exclusive(async () => {
       prepareRpc();
@@ -846,8 +876,9 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
               (await chain.depositStatus(r)) === "confirmed"
             ) {
               r.status = "deposited";
-              r.depositedAt = now();
+              r.depositedAt = r.depositedAt || now();
               r.errorCode = null;
+              schedulePayout(r);
               save(r);
             } else if (
               r.payoutHash &&
@@ -870,7 +901,7 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
             if (result === "confirmed") {
               r.status = "deposited";
               r.depositedAt = now();
-              save(r);
+              schedulePayout(r);
             } else if (result === "failed") {
               r.status = "deposit_failed";
               save(r);
@@ -883,7 +914,8 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
               await chain.broadcastSolana(r.depositRaw);
             }
           }
-          if (r.status === "deposited" && config().enabled) {
+          if (r.status === "deposited") schedulePayout(r);
+          if (r.status === "deposited" && config().enabled && now() >= r.payoutNotBefore) {
             // Serialize payout nonces: only one unresolved EVM transaction is allowed.
             if (
               rows().some(

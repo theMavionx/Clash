@@ -1,5 +1,10 @@
 # Active Session State
 
+## Robinhood migration payout delay — implementing (2026-09-21)
+
+- Default random 150–420s after confirmed Solana deposit; durable per-request deadline and admin toggle/range (0–3600 whole seconds). Existing schedules and signed payouts preserved. Public Processing copy accurately describes current policy, no five-minute guarantee.
+- 74 focused tests and mocked browser flows pass. Full Deploy gate running. Jupiter read-only authenticated build returned200, CLASH→SOL route at0.5%; no signing/sale. Free API plan exists but account billing subscription is not verified. Report: `production/reports/migration-payout-delay-2026-09-21.md`.
+
 ## Security / reliability / migration ledger — released (2026-09-21)
 
 - Owner explicitly approved deploying the tested security/reliability package and showing per-user migration accounting in admin. Tatum rotation declined; do not disclose its value again.

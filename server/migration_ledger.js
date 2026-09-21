@@ -12,7 +12,8 @@ function ledgerRow(row) {
     feeLamports: integer(p.feeLamports), targetToken: p.targetToken, targetDecimals: p.targetDecimals,
     depositHash: p.depositHash || null, payoutHash: p.payoutHash || null,
     createdAt: row.created_at, updatedAt: row.updated_at,
-    depositedAt: timestamp(p.depositedAt), paidAt: timestamp(p.paidAt), errorCode: p.errorCode || null };
+    depositedAt: timestamp(p.depositedAt), payoutNotBefore: timestamp(p.payoutNotBefore),
+    paidAt: timestamp(p.paidAt), errorCode: p.errorCode || null };
 }
 /** Paginated, exact-integer ledger over all persisted requests, including old history. */
 function readMigrationLedger(db, { wallet = '', page = 1 } = {}) {
