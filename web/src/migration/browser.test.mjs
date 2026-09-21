@@ -242,7 +242,7 @@ try {
   await longName.close();
   const admin = await browser.newPage({ viewport: { width: 1440, height: 1000 }, timezoneId: 'Pacific/Honolulu' });
   const writes = []; const adminErrors = [];
-  let snapshotLocked = false, adminSnapshot = { slot: 100, wallets: 10, createdAt: 1790000000000 };
+  let snapshotLocked = false, settledReplacement = false, adminSnapshot = { slot: 100, wallets: 10, createdAt: 1790000000000 };
   admin.on('pageerror', error => { if (!adminErrors.length) adminErrors.push(error.stack); });
   admin.on('dialog', dialog => dialog.accept());
   await admin.route('**/api/migration/admin**', route => {
@@ -257,7 +257,7 @@ try {
     } });
     if (route.request().method() !== 'GET') writes.push(route.request().postDataJSON());
     if (route.request().url().endsWith('/snapshot') && route.request().method() === 'POST') adminSnapshot = { ...adminSnapshot, mode: 'historical', requestedAt: Date.parse(route.request().postDataJSON().at), blockTime: Date.parse(route.request().postDataJSON().at) - 1000, wallets: 0 };
-    return route.fulfill({ json: { config: { payoutDelayEnabled: true, payoutDelayMinSeconds: 150, payoutDelayMaxSeconds: 420, enabled: false, ratio: '1', targetToken: '0x' + '2'.repeat(40), feeUsd: '2', batchUsd: 400, idleSeconds: 600, residualUsd: 100, slippageBps: 500, maxSlippageBps: 1000 }, readiness: { ready: false, reasons: ['SNAPSHOT_REQUIRED'] }, snapshot: adminSnapshot, canReplaceSnapshot: !snapshotLocked, wallets: { solana: owner.toBase58(), evm: '0x' + '3'.repeat(40) }, requests: [], sales: [], audit: [{ event: 'snapshot_published', at: 1790000000000 }] } });
+    return route.fulfill({ json: { config: { payoutDelayEnabled: true, payoutDelayMinSeconds: 150, payoutDelayMaxSeconds: 420, enabled: false, ratio: '1', targetToken: '0x' + '2'.repeat(40), feeUsd: '2', batchUsd: 400, idleSeconds: 600, residualUsd: 100, slippageBps: 500, maxSlippageBps: 1000 }, readiness: { ready: false, reasons: ['SNAPSHOT_REQUIRED'] }, snapshot: adminSnapshot, canReplaceSnapshot: !snapshotLocked, canReplaceSettledSnapshot: settledReplacement, wallets: { solana: owner.toBase58(), evm: '0x' + '3'.repeat(40) }, requests: [], sales: [], audit: [{ event: 'snapshot_published', at: 1790000000000 }] } });
   });
   await admin.goto('http://127.0.0.1:5211/src/migration/admin-preview.html');
   await admin.getByRole('heading', { name: 'Configuration', exact: true }).waitFor();
@@ -369,6 +369,17 @@ try {
   assert.equal(JSON.stringify(writes).includes(testPhrase), false);
   assert.equal(Keypair.fromSecretKey(Uint8Array.from(JSON.parse(writes[5].secret))).publicKey.toBase58(), previewSolanaMnemonic(testPhrase, '1'));
   assert.equal(await secretInput.inputValue(), ''); assert.equal(await keySave.isDisabled(), true);
+  assert.deepEqual(adminErrors, []);
+  settledReplacement = true;
+  adminSnapshot = { slot: 123, wallets: 1, mode: 'historical', requestedAt: Date.parse('2026-09-20T13:45:00Z'), checksum: 'old-snapshot-checksum' };
+  await admin.getByRole('button', { name: 'Refresh status', exact: true }).click();
+  await admin.getByRole('note').filter({ hasText: 'Previously migrated CLASH' }).waitFor();
+  assert.equal(await cutoffInput.isDisabled(), false);
+  await cutoffInput.fill('2026-09-21T17:28');
+  await cutoffConfirm.check();
+  await cutoffSave.click();
+  await admin.getByText('Snapshot cutoff: 2026-09-21 17:28:00 UTC', { exact: true }).waitFor();
+  assert.deepEqual(writes.at(-1), { confirm: true, at: '2026-09-21T17:28:00.000Z', replaceSettled: true, expectedChecksum: 'old-snapshot-checksum' });
   assert.deepEqual(adminErrors, []);
   await admin.screenshot({ path: new URL('admin-1440.png', output).pathname.replace(/^\/(\w:)/, '$1'), fullPage: true });
   await admin.close();

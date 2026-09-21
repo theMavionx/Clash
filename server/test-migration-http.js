@@ -136,4 +136,18 @@ test("public HTTP is fail-closed, admin uses existing password and disallowed or
   assert.equal(snapshot.mode, "historical");
   assert.equal(snapshot.requestedAt, Date.parse(at));
   assert.equal(snapshot.slot, 123);
+  let received;
+  m.service.takeSnapshot = async input => { received = input; return { ok: true }; };
+  const replacement = { confirm: true, at, replaceSettled: true, expectedChecksum: 'current-checksum' };
+  assert.equal((await fetch(url + '/admin/snapshot', { method: 'POST',
+    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(replacement) })).status, 403);
+  assert.equal(received, undefined);
+  assert.equal((await fetch(url + '/admin/snapshot', { method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-admin-key': 'test-admin-password' },
+    body: JSON.stringify({ ...replacement, confirm: false }) })).status, 400);
+  assert.equal(received, undefined);
+  assert.equal((await fetch(url + '/admin/snapshot', { method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-admin-key': 'test-admin-password' },
+    body: JSON.stringify(replacement) })).status, 200);
+  assert.deepEqual(received, { at, replaceSettled: true, expectedChecksum: 'current-checksum' });
 });

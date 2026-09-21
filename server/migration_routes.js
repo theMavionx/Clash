@@ -169,7 +169,9 @@ function createMigrationRouter({
     run((req) => {
       if (req.body?.confirm !== true)
         throw new MigrationError("CONFIRMATION_REQUIRED");
-      return service.takeSnapshot({ at: req.body?.at });
+      return service.takeSnapshot({ at: req.body?.at,
+        replaceSettled: req.body?.replaceSettled === true,
+        expectedChecksum: req.body?.expectedChecksum });
     }),
   );
   router.post(

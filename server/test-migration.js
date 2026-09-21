@@ -687,6 +687,108 @@ function historicalFixture(f) {
   const at = new Date(f.options.now() - 86400000).toISOString();
   return at;
 }
+
+async function settledSnapshotFixture(t) {
+  const f = fixture(t);
+  await f.setup();
+  await f.q('100');
+  f.db.prepare("UPDATE migration_requests SET status='paid'").run();
+  await f.service.updateConfig({ enabled: false });
+  const old = (await f.service.status()).snapshot;
+  f.advance(60000);
+  f.chain.snapshotAt = async at => ({ slot: 456, requestedAt: Date.parse(at), blockTime: Date.parse(at) });
+  f.chain.historicalBalance = async () => '700000000';
+  return { ...f, old, input: { at: new Date(f.options.now() - 1000).toISOString(),
+    replaceSettled: true, expectedChecksum: old.checksum } };
+}
+
+test('settled snapshot replacement archives eligibility and preserves paid usage and immutable history', async t => {
+  const f = await settledSnapshotFixture(t);
+  const before = f.db.prepare('SELECT * FROM migration_requests').all();
+  const admin = await f.service.admin();
+  assert.equal(admin.canReplaceSnapshot, false);
+  assert.equal(admin.canReplaceSettledSnapshot, true);
+  await assert.rejects(f.service.takeSnapshot({ at: f.input.at }), /SNAPSHOT_LOCKED/);
+  const next = await f.service.takeSnapshot(f.input);
+  assert.equal(next.requestedAt, Date.parse(f.input.at));
+  const archived = f.db.prepare('SELECT * FROM migration_snapshot_archive').get();
+  assert.deepEqual(JSON.parse(archived.snapshot), f.old);
+  assert.equal(archived.replacement_checksum, next.checksum);
+  assert.equal(f.db.prepare('SELECT units FROM migration_entitlements_archive').get().units, '1000000000');
+  assert.deepEqual(f.db.prepare('SELECT * FROM migration_requests').all(), before);
+  const info = await f.service.account(f.user.publicKey.toBase58());
+  assert.equal(info.eligibleUnits, '700000000');
+  assert.equal(info.usedUnits, '100000000');
+  assert.equal(info.remainingUnits, '600000000');
+  assert.equal(f.service.config().enabled, false);
+  assert.equal(f.state.payouts, 0);
+  assert.deepEqual(f.state.broadcasts, []);
+  await assert.rejects(f.service.takeSnapshot(f.input), /CONFIGURATION_CHANGED/);
+});
+
+test('snapshot replacement rejects enabled migration, every unresolved request and open sale', async t => {
+  const f = await settledSnapshotFixture(t);
+  await f.service.updateConfig({ enabled: true });
+  await assert.rejects(f.service.takeSnapshot(f.input), /SNAPSHOT_REPLACEMENT_BLOCKED/);
+  await f.service.updateConfig({ enabled: false });
+  for (const status of ['quoted', 'deposit_signed', 'deposited', 'payout_signed', 'review', 'unknown']) {
+    f.db.prepare('UPDATE migration_requests SET status=?').run(status);
+    assert.equal((await f.service.admin()).canReplaceSettledSnapshot, false);
+    await assert.rejects(f.service.takeSnapshot(f.input), /SNAPSHOT_REPLACEMENT_BLOCKED/);
+  }
+  f.db.prepare("UPDATE migration_requests SET status='paid'").run();
+  for (const status of ['signed', 'review', 'unknown']) {
+    f.db.prepare('INSERT OR REPLACE INTO migration_sales VALUES(?,?,?,?,?)').run('sale', status, '{}', 1, 1);
+    await assert.rejects(f.service.takeSnapshot(f.input), /SNAPSHOT_REPLACEMENT_BLOCKED/);
+  }
+  f.db.prepare("UPDATE migration_sales SET status='completed'").run();
+  await f.service.takeSnapshot(f.input);
+});
+
+test('snapshot replacement requires expected version and strictly later time and finalized slot', async t => {
+  const f = await settledSnapshotFixture(t);
+  await assert.rejects(f.service.takeSnapshot({ ...f.input, expectedChecksum: undefined }), /CONFIGURATION_CHANGED/);
+  await assert.rejects(f.service.takeSnapshot({ ...f.input, expectedChecksum: 'stale' }), /CONFIGURATION_CHANGED/);
+  await assert.rejects(f.service.takeSnapshot({ ...f.input, at: undefined }), /INVALID_SNAPSHOT_TIME/);
+  await assert.rejects(f.service.takeSnapshot({ ...f.input, at: new Date(f.old.createdAt).toISOString() }), /SNAPSHOT_MUST_ADVANCE/);
+  f.chain.snapshotAt = async at => ({ slot: f.old.slot, requestedAt: Date.parse(at), blockTime: Date.parse(at) });
+  await assert.rejects(f.service.takeSnapshot(f.input), /SNAPSHOT_MUST_ADVANCE/);
+  assert.equal((await f.service.status()).snapshot.checksum, f.old.checksum);
+});
+
+test('replacement provider failure and archive failure leave old snapshot and entitlements intact', async t => {
+  const f = await settledSnapshotFixture(t), resolve = f.chain.snapshotAt;
+  f.chain.snapshotAt = async () => { throw Error('provider failed'); };
+  await assert.rejects(f.service.takeSnapshot(f.input), /provider failed/);
+  f.chain.snapshotAt = resolve;
+  f.db.exec("CREATE TRIGGER fail_snapshot_insert BEFORE INSERT ON migration_snapshot_meta BEGIN SELECT RAISE(ABORT,'test failure'); END");
+  await assert.rejects(f.service.takeSnapshot(f.input), /test failure/);
+  assert.equal(f.db.prepare('SELECT count(*) n FROM migration_snapshot_archive').get().n, 0);
+  assert.equal(f.db.prepare('SELECT count(*) n FROM migration_entitlements_archive').get().n, 0);
+  assert.equal((await f.service.status()).snapshot.checksum, f.old.checksum);
+  assert.equal(f.db.prepare('SELECT units FROM migration_entitlements').get().units, '1000000000');
+});
+
+test('replacement rechecks pause and unresolved requests after historical network lookup', async t => {
+  const f = await settledSnapshotFixture(t), resolve = f.chain.snapshotAt;
+  f.chain.snapshotAt = async at => {
+    f.db.prepare("UPDATE migration_requests SET status='review'").run();
+    return resolve(at);
+  };
+  await assert.rejects(f.service.takeSnapshot(f.input), /SNAPSHOT_REPLACEMENT_BLOCKED/);
+  assert.equal((await f.service.status()).snapshot.checksum, f.old.checksum);
+  assert.equal(f.db.prepare('SELECT count(*) n FROM migration_snapshot_archive').get().n, 0);
+});
+
+test('new snapshot below already paid usage yields zero remaining without erasing payments', async t => {
+  const f = await settledSnapshotFixture(t);
+  await f.service.takeSnapshot(f.input);
+  f.chain.historicalBalance = async () => '1000000';
+  const info = await f.service.account(f.user.publicKey.toBase58());
+  assert.equal(info.usedUnits, '100000000');
+  assert.equal(info.remainingUnits, '0');
+  assert.equal(info.requests[0].status, 'paid');
+});
 test("historical cutoff hydrates once, later purchases do not increase allocation, request locks replacement", async (t) => {
   const f = fixture(t);
   await f.setup();

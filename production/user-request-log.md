@@ -1,5 +1,14 @@
 # User Request Log
 
+## UR-2026-09-21-MIGRATION-SNAPSHOT-2028
+
+- Owner: «постав час теперішній 20 28 за києвом сьогоднішній день про снепшот». Requested cutoff2026-09-21T17:28:00Z (20:28 Europe/Kyiv). Existing snapshot locked by settled test requests: implement guarded replacement while paused with no unresolved requests/sales, archive old eligibility, preserve all financial records and consumed allocations. Keep migration paused and target contract blank. Verify, deploy required support and apply the specific authorized cutoff through admin API; no funded test or re-enablement.
+
+## UR-2026-09-21-MIGRATION-READINESS-RECHECK
+
+- Owner: «так ще раз проаналізуй сайт міграції чи все готове і лишилося тільки контракт вставити так?». Read-only production readiness/configuration and implementation review; no enabling, configuration changes, deployment or funded tests authorized by this inspection request.
+- Result:79 focused tests pass; live paused ratio1/empty target, no pending requests, providers/Jupiter reads succeed and gas reserves above thresholds. Actual CLASH contract, treasury token funding, target-specific readiness/simulation, explicit enable and owner test remain. Snapshot2026-09-21 10:43UTC locked by existing requests; test4000CLASH allocation remains consumed. Report: production/reports/migration-readiness-recheck-2026-09-21.md.
+
 ## UR-2026-09-21-VIRTUAL-SITE-VERIFICATION-REPLACEMENT
 
 - Owner supplied replacement `virtual-protocol-site-verification` content `71ff5861617a9a0a29495408f32b8450` for the main Clash of Perps site. Replace the old value rather than duplicate the tag; deploy and verify public homepage HTML. Preserve paused migration configuration and unrelated work.

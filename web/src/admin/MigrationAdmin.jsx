@@ -49,7 +49,8 @@ export default function MigrationAdmin() {
     run('/keys', { kind: derivedMode ? 'solana' : kind, secret: value });
   }
   const selectedUtc = snapshotUtcIso(snapshotAt);
-  const snapshotLocked = !data || data.canReplaceSnapshot === false;
+  const replacingSettled = data?.canReplaceSnapshot === false && data?.canReplaceSettledSnapshot === true;
+  const snapshotLocked = !data || (data.canReplaceSnapshot === false && !replacingSettled);
   async function load() {
     const next = await adminFetch('/migration/admin'); setData(next); setConfig(next.config);
   }
@@ -92,8 +93,9 @@ export default function MigrationAdmin() {
         <div role="status" aria-live="polite">{credentialNotice}</div><button className="btn" disabled={busy || !secret.trim() || (derivedMode && (!previewAddress || !previewConfirmed))}>Store encrypted credential</button>
       </form>
     </section>
-    <section className="card"><h3>Eligibility snapshot</h3>{data?.snapshot ? <><p>{data.snapshot.requestedAt != null ? 'Snapshot cutoff' : 'Captured at'}: {utcTime(data.snapshot.requestedAt ?? data.snapshot.createdAt)}</p><p>Finalized slot {data.snapshot.slot}{data.snapshot.blockTime != null ? ` · Block time ${utcTime(data.snapshot.blockTime)}` : ''}</p><p>{data.snapshot.wallets} {data.snapshot.mode === 'historical' ? 'wallets evaluated so far (not all holders)' : 'wallets captured'}</p></> : <p>No snapshot cutoff saved. Select a past UTC date and time to determine eligible balances.</p>}<p>The snapshot is immutable once migration requests exist. Later purchases never increase a wallet’s allocation.</p>
-      <form onSubmit={event => { event.preventDefault(); const at = snapshotUtcIso(snapshotAt); if (busy || snapshotLocked || !snapshotConfirm || !at) return; setSnapshotConfirm(false); run('/snapshot', { confirm: true, at }); }}>
+    <section className="card"><h3>Eligibility snapshot</h3>{data?.snapshot ? <><p>{data.snapshot.requestedAt != null ? 'Snapshot cutoff' : 'Captured at'}: {utcTime(data.snapshot.requestedAt ?? data.snapshot.createdAt)}</p><p>Finalized slot {data.snapshot.slot}{data.snapshot.blockTime != null ? ` · Block time ${utcTime(data.snapshot.blockTime)}` : ''}</p><p>{data.snapshot.wallets} {data.snapshot.mode === 'historical' ? 'wallets evaluated so far (not all holders)' : 'wallets captured'}</p></> : <p>No snapshot cutoff saved. Select a past UTC date and time to determine eligible balances.</p>}<p>After requests exist, a later cutoff can replace the snapshot only while paused with no unresolved migrations or sales. The old snapshot is archived; payment history and already used allocation are preserved.</p>
+      {replacingSettled && <p role="note">Replacing this cutoff recalculates balances at the new time. Previously migrated CLASH remains deducted from the new allocation; this does not reset the campaign.</p>}
+      <form onSubmit={event => { event.preventDefault(); const at = snapshotUtcIso(snapshotAt); if (busy || snapshotLocked || !snapshotConfirm || !at) return; setSnapshotConfirm(false); run('/snapshot', { confirm: true, at, ...(replacingSettled ? { replaceSettled: true, expectedChecksum: data.snapshot.checksum } : {}) }); }}>
         <label>Snapshot cutoff (UTC)<input type="datetime-local" required step="60" max={new Date().toISOString().slice(0, 16)} value={snapshotAt} disabled={busy || snapshotLocked} aria-describedby="migration-snapshot-help migration-snapshot-preview" aria-invalid={!!snapshotAt && !selectedUtc} onChange={event => { setSnapshotAt(event.target.value); setSnapshotConfirm(false); }}/></label>
         <p id="migration-snapshot-help">Enter UTC, not your device’s local time. The cutoff must be in the past and finalized on Solana.</p>
         <p id="migration-snapshot-preview" aria-live="polite">{selectedUtc ? `Selected cutoff: ${utcTime(selectedUtc)}` : snapshotAt ? 'Choose a valid past UTC date and time. Future dates cannot be saved.' : 'Select a UTC cutoff to continue.'}</p>

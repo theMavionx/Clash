@@ -81,6 +81,8 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
     CREATE TABLE IF NOT EXISTS migration_secrets(kind TEXT PRIMARY KEY,value TEXT NOT NULL,address TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS migration_snapshot(id INTEGER PRIMARY KEY CHECK(id=1),slot INTEGER NOT NULL,created_at INTEGER NOT NULL,total TEXT NOT NULL,wallets INTEGER NOT NULL,checksum TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS migration_snapshot_meta(id INTEGER PRIMARY KEY CHECK(id=1),mode TEXT NOT NULL,requested_at INTEGER,block_time INTEGER);
+    CREATE TABLE IF NOT EXISTS migration_snapshot_archive(checksum TEXT PRIMARY KEY,snapshot TEXT NOT NULL,replaced_at INTEGER NOT NULL,replacement_checksum TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS migration_entitlements_archive(snapshot_checksum TEXT NOT NULL,wallet TEXT NOT NULL,units TEXT NOT NULL,PRIMARY KEY(snapshot_checksum,wallet));
     CREATE TABLE IF NOT EXISTS migration_entitlements(wallet TEXT PRIMARY KEY,units TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS migration_auth(id TEXT PRIMARY KEY,wallet TEXT NOT NULL,message TEXT NOT NULL,expires INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS migration_sessions(hash TEXT PRIMARY KEY,wallet TEXT NOT NULL,expires INTEGER NOT NULL);
@@ -436,13 +438,25 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
       return { address: addr };
     });
   }
+  // A new cutoff must never redefine an unresolved deposit or erase used allocation.
+  function canReplaceSettledSnapshot() {
+    return !!snapshot() && !config().enabled &&
+      !db.prepare("SELECT 1 FROM migration_requests WHERE status NOT IN ('paid','expired','deposit_failed') LIMIT 1").get() &&
+      !db.prepare("SELECT 1 FROM migration_sales WHERE status != 'completed' LIMIT 1").get();
+  }
+  function checkSnapshotReplacement(input) {
+    if (input.replaceSettled !== true) {
+      check(!db.prepare("SELECT 1 FROM migration_requests LIMIT 1").get(), "SNAPSHOT_LOCKED", 409);
+      return;
+    }
+    check(canReplaceSettledSnapshot(), "SNAPSHOT_REPLACEMENT_BLOCKED", 409);
+    check(typeof input.expectedChecksum === "string" && input.expectedChecksum === snapshot().checksum,
+      "CONFIGURATION_CHANGED", 409);
+    check(typeof input.at === "string", "INVALID_SNAPSHOT_TIME");
+  }
   async function takeSnapshot(input = {}) {
     return exclusive(async () => {
-      check(
-        !db.prepare("SELECT 1 FROM migration_requests LIMIT 1").get(),
-        "SNAPSHOT_LOCKED",
-        409,
-      );
+      checkSnapshotReplacement(input);
       const historical = input.at !== undefined;
       const requestedAt = historical ? snapshotTime(input.at) : null;
       check(!historical || requestedAt <= now(), "INVALID_SNAPSHOT_TIME");
@@ -457,6 +471,11 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
             s.blockTime <= requestedAt),
         "INVALID_SNAPSHOT",
       );
+      if (input.replaceSettled === true) {
+        const old = snapshot();
+        check(requestedAt > (old.requestedAt ?? old.blockTime ?? old.createdAt) && s.slot > old.slot,
+          "SNAPSHOT_MUST_ADVANCE", 409);
+      }
       const entries = Object.entries(historical ? {} : s.balances)
         .filter(([w]) => PublicKey.isOnCurve(new PublicKey(w).toBytes()))
         .sort(([a], [b]) => a.localeCompare(b));
@@ -467,12 +486,18 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
           Number.isSafeInteger(s.slot),
         "INVALID_SNAPSHOT",
       );
+      const checksum = digest(JSON.stringify(historical
+        ? { mode: "historical", mint: SOURCE_MINT, slot: s.slot, requestedAt, blockTime: s.blockTime }
+        : entries));
       db.transaction(() => {
-        check(
-          !db.prepare("SELECT 1 FROM migration_requests LIMIT 1").get(),
-          "SNAPSHOT_LOCKED",
-          409,
-        );
+        checkSnapshotReplacement(input);
+        const previous = snapshot();
+        if (input.replaceSettled === true) {
+          db.prepare("INSERT INTO migration_snapshot_archive VALUES(?,?,?,?)")
+            .run(previous.checksum, JSON.stringify(previous), now(), checksum);
+          db.prepare("INSERT INTO migration_entitlements_archive SELECT ?,wallet,units FROM migration_entitlements")
+            .run(previous.checksum);
+        }
         db.prepare("DELETE FROM migration_entitlements").run();
         const insert = db.prepare(
           "INSERT INTO migration_entitlements VALUES(?,?)",
@@ -488,19 +513,7 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
           now(),
           String(total),
           entries.length,
-          digest(
-            JSON.stringify(
-              historical
-                ? {
-                    mode: "historical",
-                    mint: SOURCE_MINT,
-                    slot: s.slot,
-                    requestedAt,
-                    blockTime: s.blockTime,
-                  }
-                : entries,
-            ),
-          ),
+          checksum,
         );
         db.prepare(
           "INSERT OR REPLACE INTO migration_snapshot_meta VALUES(1,?,?,?)",
@@ -510,6 +523,8 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
           s.blockTime ?? null,
         );
         audit("snapshot_published");
+        if (input.replaceSettled === true)
+          audit("snapshot_replaced:" + previous.checksum + ":" + checksum);
       }).immediate();
       return snapshot();
     });
@@ -1116,6 +1131,7 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
       canReplaceSnapshot: !db
         .prepare("SELECT 1 FROM migration_requests LIMIT 1")
         .get(),
+      canReplaceSettledSnapshot: canReplaceSettledSnapshot(),
       wallets: {
         solana: address("solana"),
         evm: address("evm"),

@@ -35,6 +35,10 @@ export const t = (key) => messages[key] || key;
 const errors = {
   USDG_METADATA_MISMATCH: 'The official USDG contract metadata did not match expectations. Payouts are blocked for safety.',
   INVALID_SNAPSHOT_TIME: 'Choose a valid past UTC snapshot cutoff. Future dates are not allowed.',
+  SNAPSHOT_LOCKED: 'Existing requests lock the snapshot. Pause migration and resolve all pending migrations and sales before replacing it.',
+  SNAPSHOT_REPLACEMENT_BLOCKED: 'Pause migration and resolve every pending migration and sale before replacing the snapshot.',
+  SNAPSHOT_MUST_ADVANCE: 'The replacement cutoff must be later than the existing snapshot and select a later finalized slot.',
+  CONFIGURATION_CHANGED: 'Configuration changed during this operation. Refresh status and review the current settings before retrying.',
   SNAPSHOT_NOT_FINALIZED: 'This cutoff is not finalized on Solana yet. Choose an earlier UTC time or wait.',
   HISTORY_UNAVAILABLE: 'Historical balance data is temporarily unavailable. No cutoff or eligibility change was applied.',
   HISTORY_SLOT_MISMATCH: 'Historical data did not match the finalized cutoff slot. Please contact support.',
@@ -74,7 +78,6 @@ const errors = {
   SUPPLY_CAP: 'The migration supply limit has been reached.',
   DEPOSIT_REQUIRES_RECONCILIATION: 'Your deposit needs reconciliation. Do not submit another payment; contact support.',
   PAYOUT_REQUIRES_RECONCILIATION: 'Your payout needs reconciliation. Do not deposit again; contact support.',
-  SNAPSHOT_LOCKED: 'The snapshot is locked because migration requests already exist.',
   KEY_ROTATION_HAS_LIABILITIES: 'Wallet rotation is blocked while settlement obligations exist.',
   ENCRYPTION_UNAVAILABLE: 'Server-side credential encryption is not configured.',
   INVALID_KEY: 'The credential format is invalid. Use a dedicated private key, not a seed phrase.',
