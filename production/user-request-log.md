@@ -1,5 +1,9 @@
 # User Request Log
 
+## UR-2026-09-21-MIGRATION-REMOVE-TIMING-PARAGRAPH
+
+- Owner explicitly requests removing the public paragraph beginning «New Robinhood payouts are scheduled 2.5–7 minutes…» urgently. Remove only its rendering; preserve actual payout delay, admin controls, and truthful Processing history state. Add to current authorized production rollout.
+
 ## UR-2026-09-21-MIGRATION-SNAPSHOT-2028
 
 - Owner: «постав час теперішній 20 28 за києвом сьогоднішній день про снепшот». Requested cutoff2026-09-21T17:28:00Z (20:28 Europe/Kyiv). Existing snapshot locked by settled test requests: implement guarded replacement while paused with no unresolved requests/sales, archive old eligibility, preserve all financial records and consumed allocations. Keep migration paused and target contract blank. Verify, deploy required support and apply the specific authorized cutoff through admin API; no funded test or re-enablement.

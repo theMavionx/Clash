@@ -50,7 +50,8 @@ try {
     });
     await page.goto('http://127.0.0.1:5211/migration');
     await page.getByText('Migration available', { exact: true }).waitFor();
-    await page.locator('.migration-payout-timing').filter({ hasText: '2.5–7 minutes' }).waitFor();
+    assert.equal(await page.locator('.migration-payout-timing').count(), 0, 'Owner removed the public timing paragraph, not the actual payout delay');
+    assert.equal(await page.getByText(/New Robinhood payouts are scheduled/).count(), 0);
     assert.equal(await page.locator('.migration-brand').evaluate(node => node.getBoundingClientRect().left), width > 720 ? 24 : 16, 'Brand uses compact page-edge gutter, not centered max-width margin');
     const heroImages = page.locator('.migration-intro img');
     assert.equal(await heroImages.count(), 3, 'Hero shows CLASH, Solana and Robinhood logos');
