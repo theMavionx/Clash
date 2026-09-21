@@ -8,4 +8,6 @@ Implemented ADR-0047 policy, immutable deployed-program byte pin, complete signa
 
 Read-only paid Alchemy verification: pinned program executable is non-upgradeable, ProgramData CJ5WEjifs4d77pEA9DpewppByFjHcAkNv3YYSuSoDk7c and executable SHA-256 match. Six constructed executable=false assertions appended to the actual stored quote pass policy and live unsigned simulation: err=null, 34384 CU. This was not the user's original signed payload and did not sign/broadcast/spend.
 
-Canonical gate/deployment pending. Actual Phantom submission and end-to-end payout remain owner-test requirements.
+Canonical Deploy gate passed. Released through export-upload-deploy.ps1 as 20260921123029-7d43430d. Live deployed-module check confirms immutable executable pin succeeds, enabled=true and ready=true. Actual Phantom submission and end-to-end payout remain owner-test requirements.
+
+Canonical retention removed compiled release 20260921120059-600193a1; the previous release is retained for rollback and older code is rebuildable from Git. No shared ledger, keys or user data were removed.
