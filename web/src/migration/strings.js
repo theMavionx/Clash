@@ -18,9 +18,9 @@ export const messages = {
   amount: 'CLASH to migrate', max: 'MAX', useMax: 'Use maximum available CLASH', destination: 'Robinhood EVM recipient address', review: 'Review migration',
   confirm: 'I control this Robinhood mainnet address. I understand that this migration is irreversible.',
   send: 'Sign deposit and migrate', cancel: 'Cancel review', receive: 'You receive', solFee: 'Service fee in SOL',
-  source: 'Solana CLASH mint', target: 'Robinhood CLASH contract', expires: 'Quote expires',
+  source: 'Solana CLASH mint', target: 'Robinhood payout token contract', expires: 'Quote expires',
   custody: 'This is an operator-custodied migration, not a trustless bridge. Tokens are sent from the migration treasury after the Solana deposit is finalized.',
-  gas: 'The service fee includes sponsored transaction costs. Keep enough SOL for the displayed fee. The recipient receives CLASH, not ETH for future transfers.',
+  gas: 'The service fee includes sponsored transaction costs. Keep enough SOL for the displayed fee. The recipient receives the quoted payout token, not ETH for future transfers.',
   history: 'Your migrations', empty: 'No migration requests yet.', refresh: 'Refresh status', busy: 'Please wait…',
   failed: 'The request could not be completed. Refresh status before retrying. No automatic second payment will be made.',
   walletMissing: 'This wallet is not installed. Open this page in its wallet browser or install its official extension.',
@@ -33,6 +33,7 @@ export const messages = {
 };
 export const t = (key) => messages[key] || key;
 const errors = {
+  USDG_METADATA_MISMATCH: 'The official USDG contract metadata did not match expectations. Payouts are blocked for safety.',
   INVALID_SNAPSHOT_TIME: 'Choose a valid past UTC snapshot cutoff. Future dates are not allowed.',
   SNAPSHOT_NOT_FINALIZED: 'This cutoff is not finalized on Solana yet. Choose an earlier UTC time or wait.',
   HISTORY_UNAVAILABLE: 'Historical balance data is temporarily unavailable. No cutoff or eligibility change was applied.',

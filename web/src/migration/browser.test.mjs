@@ -18,15 +18,16 @@ try {
   for (const width of [1440, 390, 320]) {
     const context = await browser.newContext({ viewport: { width, height: 900 } });
     const page = await context.newPage(); const errors = []; let submitted = 0, quoteCalls = 0;
+    const usdg = width === 390 ? '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168' : null;
     page.on('pageerror', error => { if (!errors.length) errors.push(error.stack); });
     await page.addInitScript(installTestWallet, { wallet: owner.toBase58(), publicKey: [...owner.toBytes()] });
     await page.route('**/api/migration/**', async route => {
       const path = new URL(route.request().url()).pathname.split('/').pop();
       const data = {
-        status: { enabled: true, ready: true, sourceDecimals: 6, ratio: '1', feeUsd: '2', snapshot: { slot: 360000000, ...(width === 320 ? { mode: 'historical', requestedAt: Date.parse('2026-09-20T13:45:00Z') } : {}) } },
+        status: { enabled: true, ready: true, sourceDecimals: 6, ratio: usdg ? '0.001' : '1', targetToken: usdg || '0x' + '2'.repeat(40), feeUsd: '2', snapshot: { slot: 360000000, ...(width === 320 ? { mode: 'historical', requestedAt: Date.parse('2026-09-20T13:45:00Z') } : {}) } },
         challenge: { id: 'challenge', message: 'Local test signature only' }, verify: { token: 'mock-session', wallet: owner.toBase58() },
-        account: { eligibleUnits: '1000000000', remainingUnits: width === 390 ? '234567891' : '1000000000', balanceUnits: width === 320 ? '123456789' : '1000000000', requests: submitted ? [{ id: 'q1', inputUnits: '1000000', outputUnits: '1000000000000000000', targetDecimals: 18, status: 'deposit_pending', destination: '0x' + '1'.repeat(40) }] : [] },
-        quote: { id: 'q1', inputUnits: '1000000', outputUnits: '1000000000000000000', targetDecimals: 18, destination: '0x' + '1'.repeat(40), sourceMint: 'SOURCE_TEST_MINT', targetToken: '0x' + '2'.repeat(40), feeLamports: '15000000', expiresAt: Date.now() + 120000, transaction: encoded },
+        account: { eligibleUnits: '1000000000', remainingUnits: width === 390 ? '234567891' : '1000000000', balanceUnits: width === 320 ? '123456789' : '1000000000', requests: submitted ? [{ id: 'q1', targetToken: usdg || '0x' + '2'.repeat(40), inputUnits: '1000000', outputUnits: usdg ? '1000' : '1000000000000000000', targetDecimals: usdg ? 6 : 18, status: 'deposit_pending', destination: '0x' + '1'.repeat(40) }] : [] },
+        quote: { id: 'q1', inputUnits: '1000000', outputUnits: usdg ? '1000' : '1000000000000000000', targetDecimals: usdg ? 6 : 18, destination: '0x' + '1'.repeat(40), sourceMint: 'SOURCE_TEST_MINT', targetToken: usdg || '0x' + '2'.repeat(40), feeLamports: '15000000', expiresAt: Date.now() + 120000, transaction: encoded },
         submit: { id: 'q1', status: 'deposit_pending' },
       };
       if (path === 'submit') { submitted++; assert.equal(route.request().postDataJSON().id, 'q1'); }
@@ -67,6 +68,7 @@ try {
     await page.getByRole('button', { name: 'Review migration', exact: true }).click();
     const sign = page.getByRole('button', { name: 'Sign deposit and migrate' });
     await sign.waitFor(); assert.equal(await sign.isDisabled(), true);
+    if (usdg) { await page.getByText('0.001 USDG', { exact: true }).waitFor(); await page.getByText('1000 CLASH = 1 USDG', { exact: true }).waitFor(); }
     await page.evaluate(() => window.scrollTo(0, 0));
     await page.screenshot({ path: new URL(`review-${width}.png`, output).pathname.replace(/^\/(\w:)/, '$1'), fullPage: true });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);

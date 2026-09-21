@@ -1,0 +1,9 @@
+{
+  "robinhoodUsdg": {
+    "chainId": 4663,
+    "address": "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168",
+    "symbol": "USDG",
+    "decimals": 6,
+    "source": "https://docs.paxos.com/guides/stablecoin/usdg/mainnet"
+  }
+}

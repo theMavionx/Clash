@@ -224,6 +224,7 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
   function publicRequest(r) {
     return {
       id: r.id,
+      targetToken: r.targetToken,
       inputUnits: r.inputUnits,
       outputUnits: r.outputUnits,
       targetDecimals: r.targetDecimals,

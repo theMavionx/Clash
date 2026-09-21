@@ -4377,3 +4377,6 @@ Follow-up:
 
 - Owner: «додай щоб можна було секретну фразу ввеси з 12 слів». Add explicit local BIP39 Solana derivation, preview and address confirmation; never collect a real phrase in chat or persist/transmit the phrase. Preserve encrypted canonical-key storage.
 - Follow-up: «і щоб адресу показувало при додаванні». Display the full derived public address before confirmation and stored treasury address after save.
+## UR-2026-09-21-MIGRATION-USDG
+
+- Owner: «тоді постав usdg а курс постав такий щоб по ціні було 1 до 1 +- там не знаю 1000 клеш = 1 Usdg». Use official Robinhood USDG for temporary test payouts at explicit fixed 0.001 ratio. Preserve snapshot/acceptance/treasury settings; do not enable migration or send funded tests automatically. Correct payout labels and restrict supply-rule exception to exact official USDG.

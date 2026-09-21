@@ -7,7 +7,7 @@ import { deriveSolanaHexKey, previewSolanaHexAddress } from '../migration/solana
 import { deriveSolanaMnemonic, previewSolanaMnemonic, solanaMnemonicPath } from '../migration/solana-mnemonic';
 
 const fields = [
-  ['targetToken', 'Robinhood CLASH contract (chain 4663)', 'text'], ['ratio', 'CLASH received per source CLASH', 'text'],
+  ['targetToken', 'Robinhood payout token contract (chain 4663)', 'text'], ['ratio', 'Payout tokens per source CLASH (0.001 = 1000 CLASH for 1 token)', 'text'],
   ['feeUsd', 'Service fee (USD)', 'number'], ['batchUsd', 'Normal sale batch (USD)', 'number'],
   ['idleSeconds', 'Residual sale delay (seconds)', 'number'], ['residualUsd', 'Residual batch maximum (USD)', 'number'],
   ['slippageBps', 'Initial slippage (basis points)', 'number'], ['maxSlippageBps', 'Maximum slippage (≤ 1000 basis points)', 'number'],
@@ -61,7 +61,7 @@ export default function MigrationAdmin() {
   return <div className="admin-grid migration-admin" aria-busy={busy}>
     <section className="card"><h2>CLASH migration</h2><p>Solana → Robinhood mainnet · Chain 4663 · Existing token supply: 1,000,000,000 CLASH</p><p><a href="/migration" target="_blank" rel="noopener noreferrer">Open public migration page</a></p><div role="status" aria-live="polite">{notice}</div>
       <button className="btn" disabled={busy} onClick={() => load().catch(() => setNotice('Refresh failed.'))}>Refresh status</button>
-      {data && <><p><strong>{data.config?.enabled ? 'Enabled' : 'Paused'} · {data.readiness?.ready ? 'Ready' : 'Not ready'}</strong></p><ul>{(data.readiness?.reasons || []).map((reason, i) => <li key={i}>{typeof reason === 'string' ? reason : reason.code || 'Readiness check failed'}</li>)}</ul><p>Robinhood treasury requires CLASH inventory and ETH gas. SOL collected on Solana cannot directly pay Robinhood gas.</p><button className="btn danger" disabled={busy || !data.config?.enabled} onClick={() => run('/config', { enabled: false }, 'PUT')}>Pause new migrations</button></>}
+      {data && <><p><strong>{data.config?.enabled ? 'Enabled' : 'Paused'} · {data.readiness?.ready ? 'Ready' : 'Not ready'}</strong></p><ul>{(data.readiness?.reasons || []).map((reason, i) => <li key={i}>{typeof reason === 'string' ? reason : reason.code || 'Readiness check failed'}</li>)}</ul><p>Robinhood treasury requires inventory of the configured payout token and ETH gas. SOL collected on Solana cannot directly pay Robinhood gas.</p><button className="btn danger" disabled={busy || !data.config?.enabled} onClick={() => run('/config', { enabled: false }, 'PUT')}>Pause new migrations</button></>}
     </section>
     {config && <section className="card"><h3>Configuration</h3><p>Updates apply to new quotes only. Existing requests retain their recipient, token and conversion ratio.</p><form onSubmit={e => { e.preventDefault(); if (window.confirm('Apply migration configuration? Enabling permits real deposits, payouts and automated sales once all readiness checks pass.')) run('/config', configPayload(config), 'PUT'); }}>
       <div className="form-grid">{fields.map(([name, label, type]) => <label key={name}>{label}<input type={type} required value={config[name] ?? ''} disabled={busy} min={type === 'number' ? 0 : undefined} max={name.includes('Slippage') || name === 'slippageBps' ? 1000 : undefined} step="any" onChange={e => setConfig({ ...config, [name]: ['idleSeconds', 'slippageBps', 'maxSlippageBps'].includes(name) ? Number(e.target.value) : e.target.value })}/></label>)}</div>

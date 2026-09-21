@@ -113,6 +113,22 @@ test("exact amount parsing and display preserve precision", () => {
   assert.throws(() => units("0.0000001"));
   assert.throws(() => units(1));
 });
+test("USDG fixed ratio pays one token per thousand and preserves quoted asset", async t => {
+  const f = fixture(t);
+  await f.setup();
+  const { address } = require("../shared/migration-assets.json").robinhoodUsdg;
+  f.chain.health = async () => ({ reasons: [], targetDecimals: 6, inventory: "100000000" });
+  await f.service.updateConfig({ targetToken: address, ratio: "0.001" });
+  const q = await f.q("1000");
+  assert.equal(q.outputUnits, "1000000");
+  assert.equal(q.targetToken.toLowerCase(), address.toLowerCase());
+  await f.service.updateConfig({ targetToken: A, ratio: "1" });
+  const same = await f.q("1000");
+  assert.equal(same.outputUnits, "1000000");
+  assert.equal(same.targetToken, q.targetToken);
+  const account = await f.service.account(f.user.publicKey.toBase58());
+  assert.equal(account.requests[0].targetToken, q.targetToken);
+});
 test("unconfigured service fails closed; secret encryption and redaction", async (t) => {
   const f = fixture(t);
   assert.equal((await f.service.status()).ready, false);

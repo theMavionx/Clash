@@ -43,9 +43,18 @@ const {
 } = require("./migration_core");
 const { alchemySolanaRpcUrl } = require("./solana_rpc");
 const { createMigrationHistory } = require("./migration_history");
+const { robinhoodUsdg } = require("../shared/migration-assets.json");
+function validateTargetSupply(address, decimals, supply, symbol) {
+  if (address.toLowerCase() === robinhoodUsdg.address.toLowerCase()) {
+    check(decimals === robinhoodUsdg.decimals && symbol === robinhoodUsdg.symbol && supply > 0n, "USDG_METADATA_MISMATCH", 503);
+  } else {
+    check(supply === 1000000000n * 10n ** BigInt(decimals), "TARGET_SUPPLY_MUST_BE_ONE_BILLION", 503);
+  }
+}
 const SOL = "So11111111111111111111111111111111111111112";
 const JUP = "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4";
 const ERC20 = parseAbi([
+  "function symbol() view returns (string)",
   "function decimals() view returns (uint8)",
   "function totalSupply() view returns (uint256)",
   "function balanceOf(address) view returns (uint256)",
@@ -300,11 +309,8 @@ function createMigrationChain(env = process.env, deps = {}) {
       "TARGET_DECIMALS",
       503,
     );
-    check(
-      (await read("totalSupply")) === 1000000000n * 10n ** BigInt(decimals),
-      "TARGET_SUPPLY_MUST_BE_ONE_BILLION",
-      503,
-    );
+    validateTargetSupply(c.targetToken, decimals, await read("totalSupply"),
+      c.targetToken.toLowerCase() === robinhoodUsdg.address.toLowerCase() ? await read("symbol") : undefined);
     const inventory = await read("balanceOf", [account.address]);
     const reasons = [];
     if (!inventory) reasons.push("TARGET_INVENTORY_EMPTY");
@@ -859,6 +865,7 @@ function createMigrationChain(env = process.env, deps = {}) {
   };
 }
 module.exports = {
+  validateTargetSupply,
   createMigrationChain,
   directFetch,
   solKey,

@@ -21,7 +21,18 @@ const {
   createMigrationChain,
   alchemyUrl,
   directFetch,
+  validateTargetSupply,
 } = require("./migration_chain");
+test("USDG supply exception is confined to official Robinhood token and metadata", () => {
+  const { address } = require("../shared/migration-assets.json").robinhoodUsdg;
+  validateTargetSupply(address, 6, 123456789n, "USDG");
+  assert.throws(() => validateTargetSupply(address, 18, 123n, "USDG"), /USDG_METADATA/);
+  assert.throws(() => validateTargetSupply(address, 6, 123n, "USDC"), /USDG_METADATA/);
+  assert.throws(() => validateTargetSupply(address, 6, 0n, "USDG"), /USDG_METADATA/);
+  const other = "0x1111111111111111111111111111111111111111";
+  assert.throws(() => validateTargetSupply(other, 6, 123n, "USDG"), /ONE_BILLION/);
+  validateTargetSupply(other, 6, 1000000000000000n, "CLASH");
+});
 test("RPC rejects public endpoints and credential exfiltration destinations", async () => {
   assert.throws(() =>
     alchemyUrl(
