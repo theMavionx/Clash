@@ -8,4 +8,6 @@ No headers, bodies, query strings, provider exception messages, credentials, wal
 
 Verified: 34 focused migration tests passed, including actual HTTP rejected-submit persistence, admin access protection, credential sentinels, unknown-error redaction and logging-storage failure isolation. Existing desktop/mobile mocked-wallet browser suite passed, including lost-response reconciliation without re-signing. No funded transaction was initiated.
 
-Deployment verification pending; this document does not claim the historical failure is fixed.
+Canonical Deploy gate passed (including lint and production build). The added browser HTTP 400 scenario passed: exact safe reason and reference remain visible, and retry does not re-sign. Retention cap test passed.
+
+Deployed with canonical export-upload-deploy.ps1 to release 20260921114035-da416276. Live read-only unauthenticated account probe returned AUTH_REQUIRED and a correlation ID; admin diagnostics contained the matching persisted event (stage /account, HTTP 401, duration 1 ms). Enabled and ready both remain true. No funded test or migration-setting change. This does not establish or fix the original historical HTTP 400 cause.
