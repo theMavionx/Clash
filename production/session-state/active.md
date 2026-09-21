@@ -1,5 +1,11 @@
 # Active Session State
 
+## USDG migration payout — Released/configured (2026-09-21)
+
+- Official Robinhood USDG `0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168`, fixed ratio0.001 (1000 CLASH = 1 USDG). Exact-address metadata/supply policy only; other tokens retain one-billion rule. UI/history display actual quoted payout token.
+- Focused crypto/ledger/label tests, browser USDG mobile flow, full Deploy gate, packaging regression and Bash syntax passed. First stage failed before activation due missing shared metadata; explicit public-file packaging fixed it. Released `d94b9f9d` as `20260921104708-d94b9f9d`; health/public bundle/status verified.
+- Config updated through admin API; only targetToken/ratio changed. Owner snapshot slot449031692, wallets and other config preserved. Acceptance remains false; readiness `RPC_UNAVAILABLE`. Paid Alchemy probe returned403, no public fallback or funded test. ADR0045/report `production/reports/migration-usdg-2026-09-21.md`.
+
 ## Solana 12-word treasury import — Released (2026-09-21)
 
 - Explicit local English BIP39 twelve-word mode, account index and visible derivation path, full public-address preview and confirmation before canonical key save. Phrase not sent/stored. Existing server encryption/rotation safeguards unchanged; extra passphrases/alternate paths unsupported.
