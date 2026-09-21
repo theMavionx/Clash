@@ -1,11 +1,11 @@
 # Active Session State
 
-## Security / reliability / migration ledger — release candidate (2026-09-21)
+## Security / reliability / migration ledger — released (2026-09-21)
 
 - Owner explicitly approved deploying the tested security/reliability package and showing per-user migration accounting in admin. Tatum rotation declined; do not disclose its value again.
-- Local candidate adds bounded ingress/WS authorization, safe durable runtime errors, browser redaction, migration timeout/recovery and paginated exact-value per-wallet admin ledger. Includes prior sales runner and hard $100 minimum for all new sales.
-- Canonical Deploy gate passed; latest 84 focused tests, zero-error lint/build and desktop/mobile mocked browser flows passed. Existing dependency/infra risks remain documented; no funded test or financial config change.
-- Worktree `Clash-leverup-order-fix`, branch `codex/leverup-order-precision`; no unrelated artifacts staged. Deployment pending; see `production/reports/production-reliability-2026-09-21.md` and security report. Do not infer this candidate is already live.
+- Release `20260921141323-563e93cf` adds bounded ingress/WS authorization, safe durable runtime errors, browser redaction, migration timeout/recovery and paginated exact-value per-wallet admin ledger. Includes prior sales runner and hard $100 minimum for all new sales.
+- Canonical Deploy gate passed; 84 focused tests, 55 Linux checks, zero-error lint/build and desktop/mobile mocked browser flows passed. Live nginx/health passed; migration enabled/ready, admin protected; five requests, one confirmed 4000 CLASH / 4 USDG migration. Safe malformed-JSON 400 trace persisted and verified.
+- Worktree `Clash-leverup-order-fix`, branch `codex/leverup-order-precision`; no unrelated artifacts staged. See production reliability/security reports. Remaining futures critical SDK advisories, root services/Node20, port8080/origin/backups risks are not resolved. No funded migration test or financial config change; canonical collectible payment-price sync did submit its normal on-chain update during deployment (documented).
 
 ## Migration current inventory — Released and enabled (2026-09-21)
 

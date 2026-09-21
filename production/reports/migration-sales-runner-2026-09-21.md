@@ -66,3 +66,7 @@ None outstanding for the local deliverable. Production execution remains an owne
 Split argument parsing and safe-record formatting if CLI options grow. At higher migration volume, replace full-history row reads inherited from the existing core with indexed pending-lot queries. Review states require operational chain reconciliation, not a force-retry button.
 
 ### Verdict: APPROVED WITH SUGGESTIONS
+
+## Rollout checkpoint — 2026-09-21
+
+Included in owner-approved release `20260921141323-563e93cf`; canonical Deploy gate and live health passed. Hard $100 floor verified in deployed module; financial config remains batch $400/residual $100/idle 600 seconds. No CLI execution or funded sale was initiated for verification. Existing embedded worker remains active and one earlier completed sale remains recorded. See the production reliability report for the distinct collectible payment-price sync performed by the canonical deployment script.

@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted for local implementation; production rollout pending review and owner approval.
+Accepted and deployed with owner approval in `20260921141323-563e93cf` on 2026-09-21. Scoped ingress controls verified live; infrastructure and dependency follow-ups remain open (production reliability report).
 
 ## Date
 

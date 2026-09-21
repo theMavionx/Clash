@@ -1,6 +1,6 @@
 # Security hardening — 2026-09-21
 
-Status: local implementation and verification only. No release, production configuration/database change, credential rotation, real financial transaction or production load attack performed. Live release remains `20260921123029-7d43430d`. This is a scoped review, not a penetration-test certificate or a guarantee against DDoS.
+Original review status: local implementation and verification only. **Rollout update:** owner-approved package deployed as `20260921141323-563e93cf`; full nginx/runtime/live smoke and 55 Linux checks passed. See [production reliability report](production-reliability-2026-09-21.md) for verification, deployment side effects and newly identified futures SDK advisories. Tatum rotation explicitly declined by owner. Historical findings below are retained; broad infrastructure/dependency risks remain open. This is a scoped review, not a penetration-test certificate or a guarantee against DDoS.
 
 ## Outcomes
 

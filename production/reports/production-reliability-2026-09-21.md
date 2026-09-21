@@ -97,4 +97,21 @@ Focused release candidate passed; no unconditional production-security or zero-d
 
 ## Deployment
 
-Pending. Owner approval received in this conversation. `deploy-clash` skill is not available in the loaded catalog or checked skill directories; use the canonical repository deployment script with existing credentials, health gates and rollback instead. No new firewall restrictions or Tatum rotation in this release.
+Deployed with owner approval using `deploy/export-upload-deploy.ps1 -Branch main`: commit `563e93cf`, release `20260921141323-563e93cf`, completed at 14:17 UTC. `deploy-clash` skill was unavailable in the loaded catalog and checked skill directories; canonical scripts, health gates and rollback were used instead. No new firewall restrictions or Tatum rotation.
+
+- Linux candidate verification: **55 passed, zero failed/skipped**, including POSIX credential permission/provisioning checks that cannot execute on Windows.
+- Full live nginx syntax passed; migration per-client/global rate limits, connection limit, 40 KiB body limit and query-free access logging are installed.
+- Public `/migration` returned 200 with CSP, nosniff, no-referrer and HSTS. Status returned 200, enabled=true, ready=true. Unauthorized admin ledger returned 403; header-authenticated ledger returned 200.
+- Five Clash processes online with zero restarts at the post-deployment check. No migration errors observed since activation; this short window is not a continuous availability guarantee.
+- Live ledger: five requests from one wallet; one confirmed deposit of 4,000 CLASH, gross fee 0.017127687 SOL, one confirmed payout of 4 USDG, four expired quotes. One existing completed sale. Financial settings unchanged: ratio 0.001, batch $400, residual $100, idle 600 seconds, configured slippage 500/1000 bps; deployed hard minimum is $100.
+- One deliberate malformed-JSON diagnostic probe returned 400 (not 500); matching response/header trace ID was persisted as safe `server.http` metadata. No headers, secrets or submitted bodies in that record. This is the only observed new HTTP error in the checked window.
+- No owner-wallet signing, migration deposit/payout or discretionary treasury sale was initiated as a test. **Canonical deployment side effect:** existing Solana collectible payment-price sync submitted its normal update for dragon/CLASH, changing the collectible's quoted CLASH amount from 21,510.002152 to 47,326.076669 at its $10 price target. This was not a migration sale; do not describe this deployment as performing no on-chain writes whatsoever.
+- Canonical retention removed compiled release `20260921121432-30d84544`; current release and previous rollback `20260921123029-7d43430d` retained. Source remains in Git; deleted compiled directory would require rebuilding.
+
+## Remaining production risks
+
+- New futures audit also reports three critical dependency nodes: `@phala/dcap-qvl-web` (QE identity verification advisory), inherited through `@magicblock-labs/ephemeral-rollups-sdk` and `magic-trade-client`; npm reports no automatic fix. Application imports from magic-trade-client are address helpers/IDL; bounded search found no direct `verifyTeeRpcIntegrity` calls, but this is **not** a complete reachability proof. Dedicated compatible SDK remediation remains required; no blind SDK replacement or venue disablement was performed.
+- Local futures audit: 36 findings (3 critical, 13 high, 11 moderate, 9 low); deployment installation: 32 (3 critical, 13 high, 7 moderate, 9 low). Audit totals differ by environment/resolution and do not prove each vulnerability is exploitable in this application. Other server/web advisories remain as recorded in the security review.
+- Host Node is 20.20.2; some installed SDKs declare Node >=22. Upgrade needs coordinated testing across services. Main Clash PM2 services run as root. External port 8080, origin firewall/AOP, paid-RPC quotas, least privilege and restore-tested encrypted backups remain open.
+- Admin identity here means a verified source Solana wallet, not an inferred game nickname. Unsolicited treasury transfers are not reconstructed into migration requests. Logs are bounded (seven days for client/runtime errors, latest 10,000 migration diagnostics); durable financial request records are separate.
+- Real funded multi-wallet acceptance and external DDoS/origin penetration tests were not run. Do not claim all bugs, dependency vulnerabilities or denial-of-service risk are eliminated.
