@@ -1,5 +1,10 @@
 # Active Session State
 
+## Migration MAX — Released (2026-09-21)
+
+- Exact min(balance, remaining eligibility) amount fill; no submit/sign action, safe disabled states. Six model tests, expanded browser regression, responsive visual review and build passed.
+- Released `8e440adc` as `20260921093253-8e440adc`; production MAX/control state, zero console errors and canonical health verified. No funded transaction/settings change. Report: `production/reports/migration-max-2026-09-21.md`.
+
 ## Migration wallet connector — Released (2026-09-21)
 
 - Free existing Solana Wallet Adapter/Wallet Standard discovery replaces manual connect dropdown with accessible responsive native dialog. Legacy injected compatibility, no-wallet guidance, verification retry and change/disconnect supported. No new dependencies or keys.
