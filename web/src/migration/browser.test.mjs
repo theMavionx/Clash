@@ -25,6 +25,7 @@ try {
   assert.equal(initialStatusCalls, 2, 'Disconnected page recovers automatically after initial provider failure');
   await retryPage.close();
   for (const width of [1440, 390, 320]) {
+    const closesAt = Date.now() + 86400000;
     const context = await browser.newContext({ viewport: { width, height: 900 } });
     const page = await context.newPage(); const errors = []; let submitted = 0, quoteCalls = 0;
     let rejectSubmit = width === 1440, depositConfirmed = false;
@@ -38,7 +39,7 @@ try {
         return route.fulfill({ status: 400, json: { error: 'TRANSACTION_CHANGED', traceId: 'd110cb96-7b5c-495d-b792-92d1728d1d34' } });
       }
       const data = {
-        status: { payoutDelay: { enabled: true, minSeconds: 150, maxSeconds: 420 }, enabled: true, ready: true, sourceDecimals: 6, ratio: usdg ? '0.001' : '1', targetToken: usdg || '0x' + '2'.repeat(40), feeUsd: '2', snapshot: { slot: 360000000, ...(width === 320 ? { mode: 'historical', requestedAt: Date.parse('2026-09-20T13:45:00Z') } : {}) } },
+        status: { closesAt, serverTime: Date.now(), payoutDelay: { enabled: true, minSeconds: 150, maxSeconds: 420 }, enabled: true, ready: true, sourceDecimals: 6, ratio: usdg ? '0.001' : '1', targetToken: usdg || '0x' + '2'.repeat(40), feeUsd: '2', snapshot: { slot: 360000000, ...(width === 320 ? { mode: 'historical', requestedAt: Date.parse('2026-09-20T13:45:00Z') } : {}) } },
         challenge: { id: 'challenge', message: 'Local test signature only' }, verify: { token: 'mock-session', wallet: owner.toBase58() },
         account: { eligibleUnits: '1000000000', remainingUnits: width === 390 ? '234567891' : '1000000000', balanceUnits: width === 320 ? '123456789' : '1000000000', requests: submitted ? [{ id: 'q1', targetToken: usdg || '0x' + '2'.repeat(40), inputUnits: '1000000', outputUnits: usdg ? '1000' : '1000000000000000000', targetDecimals: usdg ? 6 : 18, status: depositConfirmed ? 'deposited' : 'deposit_pending', destination: '0x' + '1'.repeat(40) }] : [] },
         quote: { id: 'q1', inputUnits: '1000000', outputUnits: usdg ? '1000' : '1000000000000000000', targetDecimals: usdg ? 6 : 18, destination: '0x' + '1'.repeat(40), sourceMint: 'SOURCE_TEST_MINT', targetToken: usdg || '0x' + '2'.repeat(40), feeLamports: '15000000', expiresAt: Date.now() + 120000, transaction: encoded },
@@ -50,6 +51,8 @@ try {
     });
     await page.goto('http://127.0.0.1:5211/migration');
     await page.getByText('Migration available', { exact: true }).waitFor();
+    await page.getByText('Bridge will close in', { exact: true }).waitFor();
+    assert.match(await page.getByRole('timer').innerText(), /^(1d 00:00:00|23:59:\d\d)$/);
     assert.equal(await page.locator('.migration-payout-timing').count(), 0, 'Owner removed the public timing paragraph, not the actual payout delay');
     assert.equal(await page.getByText(/New Robinhood payouts are scheduled/).count(), 0);
     assert.equal(await page.locator('.migration-brand').evaluate(node => node.getBoundingClientRect().left), width > 720 ? 24 : 16, 'Brand uses compact page-edge gutter, not centered max-width margin');
@@ -244,6 +247,7 @@ try {
   const admin = await browser.newPage({ viewport: { width: 1440, height: 1000 }, timezoneId: 'Pacific/Honolulu' });
   const writes = []; const adminErrors = [];
   let snapshotLocked = false, settledReplacement = false, adminSnapshot = { slot: 100, wallets: 10, createdAt: 1790000000000 };
+  let adminClosesAt = null;
   admin.on('pageerror', error => { if (!adminErrors.length) adminErrors.push(error.stack); });
   admin.on('dialog', dialog => dialog.accept());
   await admin.route('**/api/migration/admin**', route => {
@@ -257,8 +261,12 @@ try {
         depositedAt:1790000001000, payoutNotBefore:1790000151000, paidAt:1790000152000 }],
     } });
     if (route.request().method() !== 'GET') writes.push(route.request().postDataJSON());
+    if (route.request().url().endsWith('/deadline') && route.request().method() === 'PUT') {
+      const body = route.request().postDataJSON();
+      adminClosesAt = body.durationSeconds ? Date.now() + body.durationSeconds * 1000 : body.closesAt;
+    }
     if (route.request().url().endsWith('/snapshot') && route.request().method() === 'POST') adminSnapshot = { ...adminSnapshot, mode: 'historical', requestedAt: Date.parse(route.request().postDataJSON().at), blockTime: Date.parse(route.request().postDataJSON().at) - 1000, wallets: 0 };
-    return route.fulfill({ json: { config: { payoutDelayEnabled: true, payoutDelayMinSeconds: 150, payoutDelayMaxSeconds: 420, enabled: false, ratio: '1', targetToken: '0x' + '2'.repeat(40), feeUsd: '2', batchUsd: 400, idleSeconds: 600, residualUsd: 100, slippageBps: 500, maxSlippageBps: 1000 }, readiness: { ready: false, reasons: ['SNAPSHOT_REQUIRED'] }, snapshot: adminSnapshot, canReplaceSnapshot: !snapshotLocked, canReplaceSettledSnapshot: settledReplacement, wallets: { solana: owner.toBase58(), evm: '0x' + '3'.repeat(40) }, requests: [], sales: [], audit: [{ event: 'snapshot_published', at: 1790000000000 }] } });
+    return route.fulfill({ json: { config: { closesAt: adminClosesAt, payoutDelayEnabled: true, payoutDelayMinSeconds: 150, payoutDelayMaxSeconds: 420, enabled: false, ratio: '1', targetToken: '0x' + '2'.repeat(40), feeUsd: '2', batchUsd: 400, idleSeconds: 600, residualUsd: 100, slippageBps: 500, maxSlippageBps: 1000 }, readiness: { ready: false, reasons: ['SNAPSHOT_REQUIRED'] }, snapshot: adminSnapshot, canReplaceSnapshot: !snapshotLocked, canReplaceSettledSnapshot: settledReplacement, wallets: { solana: owner.toBase58(), evm: '0x' + '3'.repeat(40) }, requests: [], sales: [], audit: [{ event: 'snapshot_published', at: 1790000000000 }] } });
   });
   await admin.goto('http://127.0.0.1:5211/src/migration/admin-preview.html');
   await admin.getByRole('heading', { name: 'Configuration', exact: true }).waitFor();
@@ -381,8 +389,34 @@ try {
   await cutoffSave.click();
   await admin.getByText('Snapshot cutoff: 2026-09-21 17:28:00 UTC', { exact: true }).waitFor();
   assert.deepEqual(writes.at(-1), { confirm: true, at: '2026-09-21T17:28:00.000Z', replaceSettled: true, expectedChecksum: 'old-snapshot-checksum' });
+  await admin.getByLabel('Bridge closes at (UTC)', { exact: true }).fill('2026-09-22T18:00');
+  await admin.getByRole('button', { name: 'Save closing time', exact: true }).click();
+  await admin.getByText('Current deadline: 2026-09-22 18:00:00 UTC', { exact: true }).waitFor();
+  assert.deepEqual(writes.at(-1), { closesAt: Date.parse('2026-09-22T18:00:00Z') });
+  await admin.getByRole('button', { name: 'Set 24 hours from now', exact: true }).click();
+  await admin.getByText('Saved. Readiness and settlement status refreshed.').waitFor();
+  assert.deepEqual(writes.at(-1), { durationSeconds: 86400 });
+  await admin.getByRole('button', { name: 'Disable closing timer', exact: true }).click();
+  await admin.getByText('No scheduled closing time.', { exact: true }).waitFor();
+  assert.deepEqual(writes.at(-1), { closesAt: null });
   assert.deepEqual(adminErrors, []);
   await admin.screenshot({ path: new URL('admin-1440.png', output).pathname.replace(/^\/(\w:)/, '$1'), fullPage: true });
   await admin.close();
+  const clockPage = await browser.newPage({ viewport: { width: 320, height: 844 } });
+  await clockPage.addInitScript(() => { const realNow = Date.now; Date.now = () => realNow() + 5 * 86400000; });
+  let showDeadline = true;
+  await clockPage.route('**/api/migration/status', route => route.fulfill({ json: {
+    enabled: true, ready: true, ratio: '1', sourceDecimals: 6,
+    serverTime: Date.now(), closesAt: showDeadline ? Date.now() + 1500 : null,
+  } }));
+  await clockPage.goto('http://127.0.0.1:5211/migration');
+  await clockPage.getByText('Bridge will close in', { exact: true }).waitFor();
+  await clockPage.getByText('Bridge is closed', { exact: true }).waitFor();
+  assert.equal(await clockPage.getByRole('timer').innerText(), '00:00:00');
+  assert.equal(await clockPage.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+  showDeadline = false; await clockPage.reload();
+  await clockPage.getByText('Migration available', { exact: true }).waitFor();
+  assert.equal(await clockPage.getByRole('timer').count(), 0);
+  await clockPage.close();
   console.log('PASS: desktop/mobile flow; active quote restoration/cancel; lost-submit-response reconciliation without re-sign; 401 session reset; admin write-only keys, bounded config, snapshot replacement and UTC audit.');
 } finally { await browser.close(); }

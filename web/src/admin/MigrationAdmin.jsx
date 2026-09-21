@@ -3,7 +3,7 @@ import { adminFetch } from './api';
 import MigrationLedger from './MigrationLedger';
 import '../migration/admin.css';
 import { migrationErrorText, migrationStateText } from '../migration/strings';
-import { formatUtc as utcTime, snapshotUtcIso } from '../migration/model';
+import { formatUtc as utcTime, snapshotUtcIso, deadlineUtcMs } from '../migration/model';
 import { deriveSolanaHexKey, previewSolanaHexAddress } from '../migration/solana-key-preview';
 import { deriveSolanaMnemonic, previewSolanaMnemonic, solanaMnemonicPath } from '../migration/solana-mnemonic';
 
@@ -23,6 +23,7 @@ export default function MigrationAdmin() {
   const [data, setData] = useState(null), [config, setConfig] = useState(null), [busy, setBusy] = useState(false), [notice, setNotice] = useState('');
   const [kind, setKind] = useState('solana'), [secret, setSecret] = useState(''), [snapshotConfirm, setSnapshotConfirm] = useState(false);
   const [snapshotAt, setSnapshotAt] = useState('');
+  const [deadlineAt, setDeadlineAt] = useState('');
   const [accountIndex, setAccountIndex] = useState('0');
   const derivedMode = kind === 'solanaHex' || kind === 'solanaMnemonic';
   const [previewAddress, setPreviewAddress] = useState(''), [previewConfirmed, setPreviewConfirmed] = useState(false), [credentialNotice, setCredentialNotice] = useState('');
@@ -53,6 +54,7 @@ export default function MigrationAdmin() {
   const snapshotLocked = !data || (data.canReplaceSnapshot === false && !replacingSettled);
   async function load() {
     const next = await adminFetch('/migration/admin'); setData(next); setConfig(next.config);
+    setDeadlineAt(next.config?.closesAt ? new Date(next.config.closesAt).toISOString().slice(0, 16) : '');
   }
   useEffect(() => { load().catch(() => setNotice('Unable to load migration status. Check your admin session.')); }, []);
   async function run(path, body, method = 'POST') {
@@ -66,6 +68,16 @@ export default function MigrationAdmin() {
     <section className="card"><h2>CLASH migration</h2><p>Solana → Robinhood mainnet · Chain 4663 · Existing token supply: 1,000,000,000 CLASH</p><p><a href="/migration" target="_blank" rel="noopener noreferrer">Open public migration page</a></p><div role="status" aria-live="polite">{notice}</div>
       <button className="btn" disabled={busy} onClick={() => load().catch(() => setNotice('Refresh failed.'))}>Refresh status</button>
       {data && <><p><strong>{data.config?.enabled ? 'Enabled' : 'Paused'} · {data.readiness?.ready ? 'Ready' : 'Not ready'}</strong></p><ul>{(data.readiness?.reasons || []).map((reason, i) => <li key={i}>{typeof reason === 'string' ? reason : reason.code || 'Readiness check failed'}</li>)}</ul><p>Robinhood treasury requires inventory of the configured payout token and ETH gas. SOL collected on Solana cannot directly pay Robinhood gas.</p><button className="btn danger" disabled={busy || !data.config?.enabled} onClick={() => run('/config', { enabled: false }, 'PUT')}>Pause new migrations</button></>}
+    </section>
+    <section className="card"><h3>Bridge closing timer</h3><p>{data?.config?.closesAt ? `Current deadline: ${utcTime(data.config.closesAt)}` : 'No scheduled closing time.'}</p>
+      <p>The shared timer continues while migration is paused. Closing blocks new deposits only; previously accepted deposits and payouts continue processing.</p>
+      <form onSubmit={event => { event.preventDefault(); const closesAt = deadlineUtcMs(deadlineAt); if (closesAt === null || busy) return; if (window.confirm(`Set bridge closing time to ${utcTime(closesAt)}? A past time closes new deposits immediately.`)) run('/deadline', { closesAt }, 'PUT'); }}>
+        <label>Bridge closes at (UTC)<input type="datetime-local" step="60" required value={deadlineAt} disabled={busy || !data} onChange={event => setDeadlineAt(event.target.value)}/></label>
+        <p>Enter UTC, not your device timezone. Saving does not enable migration or change the eligibility snapshot.</p>
+        <button className="btn primary" disabled={busy || !data || deadlineUtcMs(deadlineAt) === null}>Save closing time</button>
+        <button className="btn" type="button" disabled={busy || !data} onClick={() => { if (window.confirm('Start a new 24-hour countdown from the server time now? This changes the public deadline but does not enable migration.')) run('/deadline', { durationSeconds: 86400 }, 'PUT'); }}>Set 24 hours from now</button>
+        <button className="btn" type="button" disabled={busy || !data?.config?.closesAt} onClick={() => { if (window.confirm('Remove the closing deadline and hide the timer? Migration remains subject to the existing enabled/paused setting.')) run('/deadline', { closesAt: null }, 'PUT'); }}>Disable closing timer</button>
+      </form>
     </section>
     {config && <section className="card"><h3>Configuration</h3><p>Updates apply to new quotes only. Existing requests retain their recipient, token and conversion ratio.</p><form onSubmit={e => { e.preventDefault(); if (window.confirm('Apply migration configuration? Enabling permits real deposits, payouts and automated sales once all readiness checks pass.')) run('/config', configPayload(config), 'PUT'); }}>
       <div className="form-grid">{fields.map(([name, label, type]) => <label key={name}>{label}<input type={type} required value={config[name] ?? ''} disabled={busy} min={type === 'number' ? 0 : undefined} max={name.includes('Slippage') || name === 'slippageBps' ? 1000 : undefined} step="any" onChange={e => setConfig({ ...config, [name]: ['idleSeconds', 'slippageBps', 'maxSlippageBps'].includes(name) ? Number(e.target.value) : e.target.value })}/></label>)}</div>

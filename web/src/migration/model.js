@@ -33,7 +33,7 @@ export function expiryMs(value) {
 export function depositDefinitelyRejected(error) {
   return error?.status >= 400 && error.status < 500 && [
     'INVALID_TRANSACTION', 'TRANSACTION_CHANGED', 'INVALID_SIGNATURE',
-    'TREASURY_CHANGED', 'DEPOSIT_SIMULATION_FAILED', 'QUOTE_EXPIRED',
+    'TREASURY_CHANGED', 'DEPOSIT_SIMULATION_FAILED', 'QUOTE_EXPIRED', 'MIGRATION_CLOSED',
   ].includes(error.code);
 }
 // datetime-local is a wall-clock input. Interpret it explicitly as UTC, never device time.
@@ -46,4 +46,19 @@ export function snapshotUtcIso(value, now = Date.now()) {
 export function formatUtc(value) {
   const date = new Date(expiryMs(value));
   return Number.isFinite(date.getTime()) ? date.toISOString().replace('T', ' ').replace('.000Z', ' UTC') : '—';
+}
+/** Wall-clock picker is explicitly UTC, independent of the administrator's device timezone. */
+export function deadlineUtcMs(value) {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value || '')) return null;
+  const ms = Date.parse(value + ':00.000Z');
+  return Number.isSafeInteger(ms) && ms > 0 && ms <= Date.UTC(2100, 0, 1) &&
+    new Date(ms).toISOString().slice(0, 16) === value ? ms : null;
+}
+export function closingCountdown(closesAt, now) {
+  if (!Number.isSafeInteger(closesAt) || closesAt <= 0 || !Number.isFinite(now)) return null;
+  const seconds = Math.max(0, Math.ceil((closesAt - now) / 1000));
+  const days = Math.floor(seconds / 86400);
+  const clock = [Math.floor(seconds / 3600) % 24, Math.floor(seconds / 60) % 60, seconds % 60]
+    .map(value => String(value).padStart(2, '0')).join(':');
+  return { closed: closesAt <= now, text: (days ? days + 'd ' : '') + clock };
 }

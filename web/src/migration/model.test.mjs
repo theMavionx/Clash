@@ -1,7 +1,27 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { formatUnits, parseUnits, validRequest, expiryMs, snapshotUtcIso, formatUtc, maxMigrationAmount, depositDefinitelyRejected } from './model.js';
+import { formatUnits, parseUnits, validRequest, expiryMs, snapshotUtcIso, formatUtc, maxMigrationAmount, depositDefinitelyRejected, closingCountdown, deadlineUtcMs } from './model.js';
 import { migrationErrorText, migrationStateText, payoutTimingText } from './strings.js';
+
+test('countdown has exact day and deadline boundaries, never negative or a per-visit reset', () => {
+  const now = Date.parse('2026-09-21T18:00:00Z'), end = now + 86400000;
+  assert.deepEqual(closingCountdown(end, now), { closed: false, text: '1d 00:00:00' });
+  assert.deepEqual(closingCountdown(end, now + 1000), { closed: false, text: '23:59:59' });
+  assert.deepEqual(closingCountdown(end, end - 1), { closed: false, text: '00:00:01' });
+  assert.deepEqual(closingCountdown(end, end), { closed: true, text: '00:00:00' });
+  assert.deepEqual(closingCountdown(end, end + 100000), { closed: true, text: '00:00:00' });
+  assert.equal(closingCountdown(null, now), null);
+  assert.equal(closingCountdown('tomorrow', now), null);
+});
+
+test('deadline picker accepts past/future UTC but rejects invalid calendar values', () => {
+  assert.equal(deadlineUtcMs('2026-09-22T18:00'), Date.parse('2026-09-22T18:00:00Z'));
+  assert.equal(deadlineUtcMs('2026-09-20T18:00'), Date.parse('2026-09-20T18:00:00Z'));
+  assert.equal(deadlineUtcMs('2026-02-30T12:00'), null);
+  assert.equal(deadlineUtcMs(''), null);
+  assert.equal(deadlineUtcMs('2101-01-01T00:00'), null);
+  assert.equal(depositDefinitelyRejected({ status: 409, code: 'MIGRATION_CLOSED' }), true);
+});
 
 test('payout copy distinguishes confirmed deposit processing and discloses actual scheduling range', () => {
   assert.match(migrationStateText('deposited'), /Processing/);

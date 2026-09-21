@@ -1,5 +1,9 @@
 # User Request Log
 
+## UR-2026-09-21-MIGRATION-CLOSING-TIMER
+
+- Owner requests top-of-page "Bridge will close in" countdown, initially one day, and clarifies administrator must be able to change it. Implement durable shared server deadline, editable UTC time, restart24h and disable controls. Apply24h from production configuration time; do not enable migration or change cutoff/financial settings. Expiry blocks new quote/deposit acceptance but never abandons already accepted settlements.
+
 ## UR-2026-09-21-MIGRATION-CLASH-TARGET-CONTRACT
 
 - Owner supplied Robinhood token contract `0xceB9A7C4eC7bf0EE14Bac1f16C97571bC22DB979`: «ось ще адрес контракта постав токена». Verify exact chain/contract metadata and preserve ratio1, snapshot and all other settings; configure target only, no automatic activation or funded transfer.

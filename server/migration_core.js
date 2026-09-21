@@ -20,6 +20,7 @@ const DEFAULTS = Object.freeze({
   payoutDelayEnabled: true,
   payoutDelayMinSeconds: 150,
   payoutDelayMaxSeconds: 420,
+  closesAt: null,
 });
 class MigrationError extends Error {
   constructor(code, status = 400) {
@@ -320,6 +321,9 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
     return {
       ...r,
       enabled: c.enabled,
+      closesAt: c.closesAt,
+      serverTime: now(),
+      closed: c.closesAt !== null && now() >= c.closesAt,
       sourceMint: SOURCE_MINT,
       sourceDecimals: 6,
       chainId: 4663,
@@ -330,7 +334,32 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
       snapshot: snapshot(),
     };
   }
+  function requireAdmissionOpen() {
+    const deadline = config().closesAt;
+    check(deadline === null || now() < deadline, "MIGRATION_CLOSED", 409);
+  }
+  // Deadline is separate from the settlement kill switch: accepted sends keep reconciling.
+  async function setDeadline(input = {}) {
+    return exclusive(async () => {
+      const relative = Object.hasOwn(input, "durationSeconds");
+      check(Object.keys(input).length === 1 && (relative || Object.hasOwn(input, "closesAt")),
+        "INVALID_DEADLINE");
+      if (relative) check(Number.isInteger(input.durationSeconds) && input.durationSeconds >= 60 &&
+        input.durationSeconds <= 366 * 86400, "INVALID_DEADLINE");
+      const closesAt = relative ? now() + input.durationSeconds * 1000 : input.closesAt;
+      check(closesAt === null || (Number.isSafeInteger(closesAt) && closesAt > 0 &&
+        closesAt <= Date.UTC(2100, 0, 1)), "INVALID_DEADLINE");
+      const c = { ...config(), closesAt };
+      fence();
+      db.prepare("UPDATE migration_config SET value=?,revision=revision+1 WHERE id=1")
+        .run(JSON.stringify(c));
+      audit("deadline_updated:" + (closesAt === null ? "disabled" : closesAt));
+      return { closesAt, serverTime: now() };
+    });
+  }
   function updateConfig(input) {
+    // Use the dedicated endpoint; ordinary configuration saves cannot overwrite a newer timer.
+    check(!Object.hasOwn(input, "closesAt"), "USE_DEADLINE_ENDPOINT");
     // Emergency pause never waits for a worker/network lease or decrypts keys.
     if (input.enabled === false && Object.keys(input).length === 1) {
       const c = { ...config(), enabled: false };
@@ -713,6 +742,7 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
           .prepare("SELECT revision FROM migration_config WHERE id=1")
           .get().revision;
       check(c.enabled, "MIGRATION_PAUSED", 409);
+      requireAdmissionOpen();
       check(!configuredReasons().length, "CONFIGURATION_INCOMPLETE", 409);
       check(
         !rows().some(
@@ -795,7 +825,7 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
           destination: getAddress(input.destination),
           ratio: c.ratio,
           feeLamports: String(fee),
-          expiresAt: now() + 90000,
+          expiresAt: Math.min(now() + 90000, c.closesAt ?? Infinity),
           solanaTreasury: address("solana"),
           evmTreasury: address("evm"),
           soldUnits: "0",
@@ -805,6 +835,7 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
       Object.assign(r, await chain.prepareDeposit(r));
       fence();
       db.transaction(() => {
+        requireAdmissionOpen();
         check(
           config().enabled &&
             db.prepare("SELECT revision FROM migration_config WHERE id=1").get()
@@ -836,8 +867,11 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
       check(r, "REQUEST_NOT_FOUND", 404);
       if (r.status !== "quoted") return publicRequest(r);
       check(config().enabled, "MIGRATION_PAUSED", 409);
+      requireAdmissionOpen();
       check(r.expiresAt > now(), "QUOTE_EXPIRED", 409);
       const signed = await chain.signDeposit(r, transaction, secret("solana"));
+      requireAdmissionOpen();
+      check(config().enabled, "MIGRATION_PAUSED", 409);
       r.depositRaw = signed.raw;
       r.depositHash = signed.hash;
       r.status = "deposit_signed";
@@ -1161,6 +1195,7 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
     status,
     config,
     updateConfig,
+    setDeadline,
     setKey,
     takeSnapshot,
     challenge,

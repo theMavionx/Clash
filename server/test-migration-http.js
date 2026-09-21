@@ -150,4 +150,17 @@ test("public HTTP is fail-closed, admin uses existing password and disallowed or
     headers: { 'Content-Type': 'application/json', 'x-admin-key': 'test-admin-password' },
     body: JSON.stringify(replacement) })).status, 200);
   assert.deepEqual(received, { at, replaceSettled: true, expectedChecksum: 'current-checksum' });
+  const deadlineHeaders = { 'Content-Type': 'application/json', 'x-admin-key': 'test-admin-password' };
+  assert.equal((await fetch(url + '/admin/deadline', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ durationSeconds: 86400 }) })).status, 403);
+  const closesAt = Date.now() + 200;
+  assert.equal((await fetch(url + '/admin/deadline', { method: 'PUT', headers: deadlineHeaders, body: JSON.stringify({ closesAt }) })).status, 200);
+  const firstDeadline = await (await fetch(url + '/status')).json();
+  assert.equal(firstDeadline.closesAt, closesAt);
+  assert.equal(firstDeadline.closed, false);
+  await new Promise(resolve => setTimeout(resolve, 220));
+  const cachedDeadline = await (await fetch(url + '/status')).json();
+  assert.equal(cachedDeadline.closed, true, 'Readiness cache must not freeze the closing state or server clock');
+  assert.ok(cachedDeadline.serverTime > firstDeadline.serverTime);
+  assert.equal((await fetch(url + '/admin/deadline', { method: 'PUT', headers: deadlineHeaders, body: JSON.stringify({ closesAt: null }) })).status, 200);
+  assert.equal((await (await fetch(url + '/status')).json()).closesAt, null);
 });

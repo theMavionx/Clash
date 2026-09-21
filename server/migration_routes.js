@@ -109,7 +109,10 @@ function createMigrationRouter({
   };
   router.get(
     "/status",
-    run(() => publicStatus.get()),
+    run(async () => {
+      const state = await publicStatus.get(), serverTime = Date.now();
+      return { ...state, serverTime, closed: state.closesAt != null && serverTime >= state.closesAt };
+    }),
   );
   router.post(
     "/challenge",
@@ -153,6 +156,11 @@ function createMigrationRouter({
       throw error;
     }
   }));
+  router.put(
+    "/admin/deadline",
+    admin,
+    run(req => service.setDeadline(req.body || {})),
+  );
   router.put(
     "/admin/config",
     admin,

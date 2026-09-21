@@ -114,6 +114,79 @@ test("exact amount parsing and display preserve precision", () => {
   assert.throws(() => units("0.0000001"));
   assert.throws(() => units(1));
 });
+
+test('shared deadline persists across restarts and only changes the admission deadline', async t => {
+  const f = fixture(t);
+  const before = f.service.config();
+  const result = await f.service.setDeadline({ durationSeconds: 86400 });
+  assert.equal(result.closesAt - f.options.now(), 86400000);
+  assert.deepEqual(f.service.config(), { ...before, closesAt: result.closesAt });
+  const restarted = createMigration(f.options);
+  f.advance(3600000);
+  assert.equal((await restarted.status()).closesAt, result.closesAt);
+  assert.equal((await restarted.status()).serverTime, f.options.now());
+  await restarted.setDeadline({ closesAt: null });
+  assert.deepEqual(restarted.config(), before);
+  assert.equal(f.state.broadcasts.length, 0);
+});
+
+test('deadline validation is strict and general config cannot overwrite it', async t => {
+  const f = fixture(t);
+  for (const input of [{}, { closesAt: 'tomorrow' }, { closesAt: 0 }, { closesAt: 1.5 },
+    { closesAt: Infinity }, { closesAt: Date.UTC(2101, 0, 1) }, { durationSeconds: 59 },
+    { durationSeconds: 31622401 }, { durationSeconds: '86400' },
+    { durationSeconds: 86400, closesAt: null }, { closesAt: null, enabled: true }]) {
+    await assert.rejects(f.service.setDeadline(input), /INVALID_DEADLINE/);
+  }
+  assert.throws(() => f.service.updateConfig({ closesAt: null }), /USE_DEADLINE_ENDPOINT/);
+});
+
+test('deadline boundary rejects new quotes and unsigned deposits but never blocks accepted settlement', async t => {
+  const f = fixture(t); await f.setup();
+  await f.service.setDeadline({ durationSeconds: 60 });
+  const q = await f.q();
+  assert.equal(q.expiresAt, f.options.now() + 60000);
+  await f.service.submit(f.user.publicKey.toBase58(), q.id, 'valid');
+  f.advance(60000);
+  assert.equal((await f.service.status()).closed, true);
+  await assert.rejects(f.q('1', 'another-deadline-id'), /MIGRATION_CLOSED/);
+  assert.equal((await f.service.submit(f.user.publicKey.toBase58(), q.id, 'valid')).status, 'deposit_signed');
+  f.state.deposit = 'confirmed';
+  await f.service.tick(); f.advance(420000); await f.service.tick();
+  assert.equal(f.state.payouts, 1);
+  f.state.payout = 'confirmed'; await f.service.tick();
+  assert.equal((await f.service.account(f.user.publicKey.toBase58())).requests[0].status, 'paid');
+});
+
+test('deadline closing during quote preparation or signing leaves no accepted deposit', async t => {
+  const f = fixture(t); await f.setup();
+  await f.service.setDeadline({ durationSeconds: 60 });
+  const prepare = f.chain.prepareDeposit;
+  f.chain.prepareDeposit = async r => { f.advance(60000); return prepare(r); };
+  await assert.rejects(f.q(), /MIGRATION_CLOSED/);
+  assert.equal(f.db.prepare('SELECT count(*) n FROM migration_requests').get().n, 0);
+  f.chain.prepareDeposit = prepare;
+  await f.service.setDeadline({ durationSeconds: 60 });
+  const q = await f.q(), sign = f.chain.signDeposit;
+  f.chain.signDeposit = async (...args) => { f.advance(60000); return sign(...args); };
+  await assert.rejects(f.service.submit(f.user.publicKey.toBase58(), q.id, 'valid'), /MIGRATION_CLOSED/);
+  assert.equal(f.db.prepare('SELECT count(*) n FROM migration_sends').get().n, 0);
+  assert.equal(f.db.prepare('SELECT status FROM migration_requests').get().status, 'quoted');
+  assert.deepEqual(f.state.broadcasts, []);
+});
+
+test('admin deadline extension or removal restores admission without resetting eligibility', async t => {
+  const f = fixture(t); await f.setup();
+  await f.service.setDeadline({ closesAt: f.options.now() - 1 });
+  await assert.rejects(f.q(), /MIGRATION_CLOSED/);
+  await f.service.setDeadline({ durationSeconds: 86400 });
+  const q = await f.q();
+  await f.service.setDeadline({ closesAt: f.options.now() });
+  await assert.rejects(f.service.submit(f.user.publicKey.toBase58(), q.id, 'valid'), /MIGRATION_CLOSED/);
+  await f.service.setDeadline({ closesAt: null });
+  assert.equal((await f.service.submit(f.user.publicKey.toBase58(), q.id, 'valid')).status, 'deposit_signed');
+  assert.equal((await f.service.account(f.user.publicKey.toBase58())).usedUnits, q.inputUnits);
+});
 test("USDG fixed ratio pays one token per thousand and preserves quoted asset", async t => {
   const f = fixture(t);
   await f.setup();

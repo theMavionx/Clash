@@ -6,7 +6,7 @@ import '../dashboard/dashboard.css';
 import './migration.css';
 import { targetSymbol, targetRatio } from './target-asset';
 import { t, migrationErrorText, migrationStateText } from './strings';
-import { expiryMs, formatUnits, formatUtc, validRequest, maxMigrationAmount, depositDefinitelyRejected } from './model';
+import { expiryMs, formatUnits, formatUtc, validRequest, maxMigrationAmount, depositDefinitelyRejected, closingCountdown } from './model';
 import { MigrationWalletPicker, MigrationWalletProvider } from './WalletConnection';
 import { migrationApi as api, startMigrationPolling } from './transport';
 
@@ -49,7 +49,7 @@ function Migration() {
     // Account history must remain readable even while treasury readiness RPC fails.
     const [state, history] = await Promise.allSettled([api('/status'), token ? api('/account', token) : Promise.resolve(null)]);
     if (epoch !== generation.current || sequence !== refreshSequence.current) return;
-    if (state.status === 'fulfilled') setStatus(state.value);
+    if (state.status === 'fulfilled') setStatus({ ...state.value, clockReceivedAt: performance.now() });
     else setStatus(previous => previous ? { ...previous, ready: false } : null);
     if (token) {
       if (history.status === 'rejected') throw history.reason;
@@ -177,7 +177,10 @@ function Migration() {
       setQuote(null); setPendingSubmission(null); setConfirmed(false); await refresh();
     });
   }
-  const available = status?.enabled && status?.ready;
+  const serverNow = Number.isFinite(status?.serverTime) && Number.isFinite(status?.clockReceivedAt)
+    ? status.serverTime + Math.max(0, performance.now() - status.clockReceivedAt) : now;
+  const countdown = closingCountdown(status?.closesAt, serverNow);
+  const available = status?.enabled && status?.ready && !countdown?.closed;
   const maxAmount = maxMigrationAmount(account, status?.sourceDecimals);
   const expired = quote && !(expiryMs(quote.expiresAt) > now);
   return <div className="dashboard-app migration-app">
@@ -185,6 +188,7 @@ function Migration() {
     <header className="migration-header"><div className="migration-header-inner"><a className="migration-brand" href="/" aria-label={t('home')}><span className="migration-logo-crop"><img src="/splash-logo.png" alt=""/></span></a><div className="migration-wallet-control"><button className={session ? 'migration-wallet-button' : 'migration-primary'} aria-haspopup={connectedAddress ? 'menu' : 'dialog'} aria-expanded={connectedAddress ? walletMenu : walletPicker} disabled={busy && !connectedAddress} onClick={event => { if (connectedAddress) { if (walletMenu) closeWalletMenu(); else showWalletMenu(event); } else chooseWallet(); }}>{session ? `${session.wallet.slice(0, 5)}…${session.wallet.slice(-4)}` : connectedAddress ? t('verifyWallet') : busy ? t('busy') : t('connectWallet')}<span aria-hidden="true">{connectedAddress ? '⌄' : <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7"><rect x="3" y="5" width="18" height="15" rx="3"/><path d="M3 8h18M16 13h5"/></svg>}</span></button>{walletMenu && <div ref={menuRef} id="migration-wallet-menu" className="migration-wallet-menu" role="menu" aria-label={t('walletActions')} onKeyDown={menuKeys}><p className="migration-menu-address">{connectedAddress}</p>{!session && <button role="menuitem" disabled={busy} onClick={() => { closeWalletMenu(); connect(provider.current); }}>{t('verifyWallet')}</button>}<button role="menuitem" disabled={busy} onClick={chooseWallet}>{t('changeWallet')}</button><button role="menuitem" onClick={disconnectWallet}>{t('disconnect')}</button></div>}</div></div></header>
     <MigrationWalletPicker open={walletPicker} onClose={() => setWalletPicker(false)} onChoose={connect} returnFocusRef={menuTrigger}/>
     <main id="migration-main" className="migration-shell">
+      {countdown && <section className={'migration-countdown' + (countdown.closed ? ' is-closed' : '')} aria-label="Bridge closing time"><span>{countdown.closed ? 'Bridge is closed' : 'Bridge will close in'}</span><strong role="timer" aria-live="off">{countdown.text}</strong></section>}
       <div className="migration-intro"><p className="migration-eyebrow"><span className="migration-network"><img src="/tokens/SOL.svg" width="20" height="20" alt=""/>{t('sourceNetwork')}</span><span aria-hidden="true">→</span><span className="migration-network"><img src="/robinhood.svg" width="20" height="20" alt=""/>{t('destinationNetworkName')}</span></p><h1 className="migration-title"><img src="/icons/icon-192.png" width="48" height="48" alt=""/><span>{t('title')}</span></h1><p className="migration-muted">{t('intro')}</p>{targetSymbol(status?.targetToken) === 'USDG' && <p className="migration-muted">Temporary USDG payout mode: {targetRatio(status?.targetToken, status?.ratio)}. This is a fixed conversion rate, not a live market quote.</p>}</div>
       <div role="status" aria-live="polite" className="migration-notice">{notice}</div>
       <div className="migration-workspace"><section className="migration-card migration-form-card" aria-label="Migration form" aria-busy={busy}>
