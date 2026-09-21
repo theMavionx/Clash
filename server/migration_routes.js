@@ -97,7 +97,7 @@ function createMigrationRouter({
         for (const field of ['feePayer', 'blockhash', 'accountOrder', 'header', 'programs', 'data', 'accounts']) {
           if (typeof e.transactionDifference[field] === 'boolean') diff[field] = e.transactionDifference[field];
         }
-        for (const field of ['expectedInstructions', 'receivedInstructions']) {
+        for (const field of ['expectedInstructions', 'receivedInstructions', 'lighthouseInstructions']) {
           const n = e.transactionDifference[field];
           if (Number.isInteger(n) && n >= 0 && n <= 1232) diff[field] = n;
         }

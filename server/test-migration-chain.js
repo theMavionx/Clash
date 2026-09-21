@@ -8,6 +8,7 @@ const {
   VersionedTransaction,
   ComputeBudgetProgram,
   ComputeBudgetInstruction,
+  TransactionInstruction,
 } = require("@solana/web3.js");
 const bs58 = require("bs58").default || require("bs58");
 const {
@@ -25,6 +26,77 @@ const {
   directFetch,
   validateTargetSupply,
 } = require("./migration_chain");
+const { LIGHTHOUSE, hasOnlyLighthouseAssertions, verifyLighthouseDeployment } = require('./migration_deposit_policy');
+test('Lighthouse compatibility preserves exact transfers, permissions, fees, signatures and receipt identity', async () => {
+  const payer = Keypair.generate(), user = Keypair.generate();
+  const base = new Transaction({ feePayer: payer.publicKey, recentBlockhash: Keypair.generate().publicKey.toBase58() }).add(
+    ComputeBudgetProgram.setComputeUnitLimit({ units: 200000 }),
+    ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 10000 }),
+    SystemProgram.transfer({ fromPubkey: user.publicKey, toPubkey: payer.publicKey, lamports: 1234 }),
+  );
+  const encoded = base.serialize({ requireAllSignatures: false }).toString('base64');
+  const expected = Transaction.from(Buffer.from(encoded, 'base64'));
+  const assertion = () => new TransactionInstruction({ programId: new PublicKey(LIGHTHOUSE),
+    keys: [{ pubkey: user.publicKey, isSigner: false, isWritable: false }], data: Buffer.from([5, 0, 7, 0, 0]) });
+  const enhanced = () => {
+    const tx = Transaction.from(Buffer.from(encoded, 'base64'));
+    tx.instructions.unshift(...Array.from({ length: 3 }, assertion));
+    tx.add(...Array.from({ length: 3 }, assertion));
+    return tx;
+  };
+  const roundTrip = tx => Transaction.from(tx.serialize({ requireAllSignatures: false }));
+  const guarded = enhanced(); guarded.partialSign(user);
+  assert.equal(hasOnlyLighthouseAssertions(roundTrip(guarded), expected), true);
+  for (const mutate of [
+    tx => { tx.instructions[0].programId = Keypair.generate().publicKey; },
+    tx => { tx.instructions[0].data = Buffer.from([0, 0, 0]); }, // MemoryWrite
+    tx => { tx.instructions[0].data = Buffer.from([1, 0, 0]); }, // MemoryClose
+    tx => { tx.instructions[0].data = Buffer.from([16, 0, 0]); }, // CPI-capable Merkle assertion
+    tx => { tx.instructions[0].keys[0].pubkey = Keypair.generate().publicKey; },
+    tx => { tx.instructions[4] = ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 999999 }); },
+    tx => { tx.instructions[5].data[4] ^= 1; }, // transfer amount
+    tx => { tx.instructions.reverse(); },
+    tx => { tx.instructions.splice(5, 1); },
+    tx => { tx.instructions.push(tx.instructions[5]); }, // duplicate monetary instruction
+    tx => { tx.recentBlockhash = Keypair.generate().publicKey.toBase58(); },
+    tx => { tx.feePayer = user.publicKey; },
+    tx => { tx.instructions[0].keys.push({ pubkey: payer.publicKey, isWritable: true, isSigner: true }); },
+    tx => { tx.instructions[0].keys[0] = { pubkey: ComputeBudgetProgram.programId, isWritable: true, isSigner: false }; },
+  ]) {
+    const bad = enhanced(); mutate(bad);
+    assert.equal(hasOnlyLighthouseAssertions(roundTrip(bad), expected), false);
+  }
+  let verified = 0, simulated = 0, receipt;
+  const adapter = createMigrationChain({}, { verifyLighthouse: async () => { verified++; return true; }, connection: {
+    simulateTransaction: async () => { simulated++; return { value: { err: null } }; },
+    getSignatureStatuses: async () => ({ value: [{ confirmationStatus: 'finalized', err: null }] }),
+    getTransaction: async () => ({ meta: { err: null }, transaction: { message: receipt } }),
+  } });
+  const r = { transaction: encoded, wallet: user.publicKey.toBase58(), solanaTreasury: payer.publicKey.toBase58() };
+  await assert.rejects(adapter.signDeposit(r, enhanced().serialize({ requireAllSignatures: false }).toString('base64'), bs58.encode(payer.secretKey)), /INVALID_SIGNATURE/);
+  const signed = await adapter.signDeposit(r, guarded.serialize({ requireAllSignatures: false }).toString('base64'), bs58.encode(payer.secretKey));
+  assert.equal(verified, 1); assert.equal(simulated, 1);
+  const complete = Transaction.from(Buffer.from(signed.raw, 'base64'));
+  assert.ok(complete.verifySignatures());
+  receipt = complete.compileMessage();
+  assert.equal(await adapter.depositStatus({ ...r, depositRaw: signed.raw, depositHash: signed.hash }), 'confirmed');
+  receipt = expected.compileMessage();
+  await assert.rejects(adapter.depositStatus({ ...r, depositRaw: signed.raw, depositHash: signed.hash }), /DEPOSIT_MESSAGE_MISMATCH/);
+  const failClosed = createMigrationChain({}, { connection: {}, verifyLighthouse: async () => false });
+  await assert.rejects(failClosed.signDeposit(r, guarded.serialize({ requireAllSignatures: false }).toString('base64'), bs58.encode(payer.secretKey)), /LIGHTHOUSE_DEPLOYMENT_MISMATCH/);
+});
+test('Lighthouse deployment pin rejects missing, upgradeable and replaced executable accounts', async () => {
+  assert.equal(await verifyLighthouseDeployment({ getMultipleAccountsInfo: async () => [null, null] }), false);
+  const programData = new PublicKey('CJ5WEjifs4d77pEA9DpewppByFjHcAkNv3YYSuSoDk7c');
+  const owner = new PublicKey('BPFLoaderUpgradeab1e11111111111111111111111');
+  const program = { executable: true, owner, data: Buffer.alloc(36) };
+  program.data.writeUInt32LE(2); programData.toBuffer().copy(program.data, 4);
+  const data = { executable: false, owner, data: Buffer.alloc(46) }; data.data.writeUInt32LE(3);
+  data.data[12] = 1;
+  assert.equal(await verifyLighthouseDeployment({ getMultipleAccountsInfo: async () => [program, data] }), false);
+  data.data[12] = 0;
+  assert.equal(await verifyLighthouseDeployment({ getMultipleAccountsInfo: async () => [program, data] }), false, 'Wrong executable hash rejected even when immutable');
+});
 test("USDG supply exception is confined to official Robinhood token and metadata", () => {
   const { address } = require("../shared/migration-assets.json").robinhoodUsdg;
   validateTargetSupply(address, 6, 123456789n, "USDG");

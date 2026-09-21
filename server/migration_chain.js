@@ -44,6 +44,7 @@ const {
 const { alchemySolanaRpcUrl } = require("./solana_rpc");
 const { createMigrationHistory } = require("./migration_history");
 const { robinhoodUsdg } = require("../shared/migration-assets.json");
+const { LIGHTHOUSE, hasOnlyLighthouseAssertions, verifyLighthouseDeployment } = require("./migration_deposit_policy");
 function validateTargetSupply(address, decimals, supply, symbol) {
   if (address.toLowerCase() === robinhoodUsdg.address.toLowerCase()) {
     check(decimals === robinhoodUsdg.decimals && symbol === robinhoodUsdg.symbol && supply > 0n, "USDG_METADATA_MISMATCH", 503);
@@ -176,6 +177,7 @@ function createMigrationChain(env = process.env, deps = {}) {
   );
   let connection = deps.connection,
     publicClient = deps.publicClient;
+  let lighthouseVerified = false;
   let adminRpcKey = "";
   function setRpcKey(value) {
     if ((value || "") !== adminRpcKey) {
@@ -480,7 +482,9 @@ function createMigrationChain(env = process.env, deps = {}) {
     );
     const tx = Transaction.from(Buffer.from(encoded, "base64")),
       expected = Transaction.from(Buffer.from(r.transaction, "base64"));
-    if (!tx.serializeMessage().equals(expected.serializeMessage())) {
+    const identical = tx.serializeMessage().equals(expected.serializeMessage());
+    const guarded = !identical && hasOnlyLighthouseAssertions(tx, expected);
+    if (!identical && !guarded) {
       const error = new MigrationError("TRANSACTION_CHANGED");
       const left = tx.compileMessage(), right = expected.compileMessage();
       // Only structural booleans/counts, never transaction bytes or signatures.
@@ -491,11 +495,16 @@ function createMigrationChain(env = process.env, deps = {}) {
         header: JSON.stringify(left.header) !== JSON.stringify(right.header),
         expectedInstructions: expected.instructions.length,
         receivedInstructions: tx.instructions.length,
+        lighthouseInstructions: tx.instructions.filter(ix => ix.programId.toBase58() === LIGHTHOUSE).length,
         programs: tx.instructions.some((ix, i) => !expected.instructions[i]?.programId.equals(ix.programId)),
         data: tx.instructions.some((ix, i) => !expected.instructions[i]?.data.equals(ix.data)),
         accounts: tx.instructions.some((ix, i) => JSON.stringify(ix.keys.map(k => [k.pubkey.toBase58(), k.isSigner, k.isWritable])) !== JSON.stringify(expected.instructions[i]?.keys.map(k => [k.pubkey.toBase58(), k.isSigner, k.isWritable]))),
       };
       throw error;
+    }
+    if (guarded && !lighthouseVerified) {
+      check(await (deps.verifyLighthouse || verifyLighthouseDeployment)(sol()), "LIGHTHOUSE_DEPLOYMENT_MISMATCH", 503);
+      lighthouseVerified = true;
     }
     const signer = tx.signatures.find(
       (s) => s.publicKey.toBase58() === r.wallet,
@@ -548,7 +557,7 @@ function createMigrationChain(env = process.env, deps = {}) {
         .serialize()
         .equals(
           Transaction.from(
-            Buffer.from(r.transaction, "base64"),
+            Buffer.from(r.depositRaw || r.transaction, "base64"),
           ).serializeMessage(),
         ),
       "DEPOSIT_MESSAGE_MISMATCH",

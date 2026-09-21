@@ -4385,6 +4385,7 @@ Follow-up:
 - Owner: «ну то виправляй я хз що там змінилося»; wallet clarified as Phantom. Fix quote construction compatibility with documented Phantom priority-fee injection, retaining exact-message/signature/fee-budget checks. Reproduce the old failure and test the new flow without funded transactions.
 - Follow-up: «доведи все до прод формату а не оце отаке баговане щоб все було». Review migration submission/recovery safety and harden definitive rejection and expired-response UX; verify and release. A real owner-signed deposit/payout remains necessary to validate end-to-end production behavior.
 - Follow-up production attempt still returned TRANSACTION_CHANGED despite explicit compute instructions. Do not claim the fee patch solved the actual wallet failure. Add redacted structural message difference diagnostics before changing any acceptance policy; user supplied duplicate-adapter warning is a separate library advisory.
+- Next attempt bd5dc3ac reported 6 expected / 12 received instructions with unchanged fee payer and blockhash. Implement strictly bounded compatibility for documented Phantom Lighthouse assertions, including immutable executable pinning and accepted-message receipt matching. Exact identities of the historical extra instructions were not retained; do not claim this is already proven on the owner's wallet.
 
 ## UR-2026-09-21-MIGRATION-DIAGNOSTICS
 
