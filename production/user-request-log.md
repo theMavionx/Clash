@@ -1,5 +1,10 @@
 # User Request Log
 
+## UR-2026-09-21-CLASH-ONE-TO-ONE-PENDING-CONTRACT
+
+- Owner: «поміняй на клеш 1 до 1 замість юсдг контаркт адресу поки прибери я потім скину справжню». Change live migration configuration to ratio1 and empty targetToken, pause new migration/settlement until the actual Robinhood CLASH contract is supplied. Preserve existing requests' immutable payout asset/amounts and financial history; no fabricated contract, no funded test, no change to wallet keys or other settings.
+- Completed via authenticated admin config API200; public200 shows enabledfalse/targetTokenempty/ratio1/TARGET_TOKEN_REQUIRED. Only three requested/safety fields changed; ledger totals unchanged, UI formatter confirms CLASH1:1.
+
 ## UR-2026-09-21-VIRTUAL-SITE-VERIFICATION
 
 - Owner supplied `<meta name="virtual-protocol-site-verification" content="f7df695b5f05f510d6179835489bedc4" />` and requested adding it to Clash of Perps head with immediate production deployment. Add to the static homepage HTML, preserve existing verification tags, verify generated and public live HTML.

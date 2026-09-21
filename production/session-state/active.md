@@ -1,5 +1,10 @@
 # Active Session State
 
+## Migration CLASH 1:1 — paused pending real contract (2026-09-21)
+
+- Owner requested replacing temporary1000CLASH=1USDG mode with CLASH1:1 and removing the target contract until they supply the real address.
+- Live authenticated configuration updated only `enabled=false`, `targetToken=""`, `ratio="1"`. Public status200 confirms paused/not-ready with TARGET_TOKEN_REQUIRED; payout delay150–420s and all other settings unchanged. Existing five requests/one4000CLASH deposit/one4USDG completed payout preserved; historical USDG must remain correctly labeled. Actual UI formatter verifies empty target displays1CLASH=1CLASH. No code deployment needed, no financial transaction initiated. Do not enable until owner supplies and validates actual Robinhood CLASH contract/inventory.
+
 ## Virtual Protocol site verification — released (2026-09-21)
 
 - Added owner's exact verification meta to static homepage head; existing ory verification retained. Source and local built HTML checked for exactly one tag; Vite build and diff check passed.
