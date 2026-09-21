@@ -1,11 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { formatUnits, parseUnits, validRequest, expiryMs, snapshotUtcIso, formatUtc } from './model.js';
+import { formatUnits, parseUnits, validRequest, expiryMs, snapshotUtcIso, formatUtc, maxMigrationAmount } from './model.js';
 import { migrationErrorText } from './strings.js';
 test('integer amounts preserve billion-token supply and 18 decimal payouts', () => {
   assert.equal(formatUnits('1000000000000000000000000000', 18), '1000000000');
   assert.equal(parseUnits('1000000000.000001'), 1000000000000001n);
   assert.equal(formatUnits('1', 18), '0.000000000000000001');
+});
+test('MAX uses exact lesser balance/remaining allocation and fails closed without data', () => {
+  assert.equal(maxMigrationAmount({ balanceUnits: '1234567', remainingUnits: '9999999' }), '1.234567');
+  assert.equal(maxMigrationAmount({ balanceUnits: '9999999', remainingUnits: '1' }), '0.000001');
+  assert.equal(maxMigrationAmount({ balanceUnits: '1000000000000000000000000001', remainingUnits: '1000000000000000000000000001' }, 18), '1000000000.000000000000000001');
+  for (const account of [null, {}, { balanceUnits: '0', remainingUnits: '1' }, { balanceUnits: '1', remainingUnits: '0' }, { balanceUnits: '-1', remainingUnits: '2' }, { balanceUnits: 'bad', remainingUnits: '2' }, { balanceUnits: 3, remainingUnits: '2' }]) assert.equal(maxMigrationAmount(account), '');
 });
 test('request validation rejects overspend, fractional base units and invalid recipient', () => {
   const a = { remainingUnits: '2000000', balanceUnits: '1000000' }, recipient = '0x' + '1'.repeat(40);

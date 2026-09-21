@@ -16,7 +16,7 @@ await mkdir(output, { recursive: true });
 try {
   for (const width of [1440, 390, 320]) {
     const context = await browser.newContext({ viewport: { width, height: 900 } });
-    const page = await context.newPage(); const errors = []; let submitted = 0;
+    const page = await context.newPage(); const errors = []; let submitted = 0, quoteCalls = 0;
     page.on('pageerror', error => { if (!errors.length) errors.push(error.stack); });
     await page.addInitScript(installTestWallet, { wallet: owner.toBase58(), publicKey: [...owner.toBytes()] });
     await page.route('**/api/migration/**', async route => {
@@ -24,11 +24,12 @@ try {
       const data = {
         status: { enabled: true, ready: true, sourceDecimals: 6, ratio: '1', feeUsd: '2', snapshot: { slot: 360000000, ...(width === 320 ? { mode: 'historical', requestedAt: Date.parse('2026-09-20T13:45:00Z') } : {}) } },
         challenge: { id: 'challenge', message: 'Local test signature only' }, verify: { token: 'mock-session', wallet: owner.toBase58() },
-        account: { eligibleUnits: '1000000000', remainingUnits: '1000000000', balanceUnits: '1000000000', requests: submitted ? [{ id: 'q1', inputUnits: '1000000', outputUnits: '1000000000000000000', targetDecimals: 18, status: 'deposit_pending', destination: '0x' + '1'.repeat(40) }] : [] },
+        account: { eligibleUnits: '1000000000', remainingUnits: width === 390 ? '234567891' : '1000000000', balanceUnits: width === 320 ? '123456789' : '1000000000', requests: submitted ? [{ id: 'q1', inputUnits: '1000000', outputUnits: '1000000000000000000', targetDecimals: 18, status: 'deposit_pending', destination: '0x' + '1'.repeat(40) }] : [] },
         quote: { id: 'q1', inputUnits: '1000000', outputUnits: '1000000000000000000', targetDecimals: 18, destination: '0x' + '1'.repeat(40), sourceMint: 'SOURCE_TEST_MINT', targetToken: '0x' + '2'.repeat(40), feeLamports: '15000000', expiresAt: Date.now() + 120000, transaction: encoded },
         submit: { id: 'q1', status: 'deposit_pending' },
       };
       if (path === 'submit') { submitted++; assert.equal(route.request().postDataJSON().id, 'q1'); }
+      if (path === 'quote') quoteCalls++;
       await route.fulfill({ json: data[path] || {} });
     });
     await page.goto('http://127.0.0.1:5211/migration');
@@ -39,6 +40,7 @@ try {
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'Hero must not overflow mobile viewport');
     if (width === 320) await page.getByText('2026-09-20 13:45:00 UTC', { exact: true }).waitFor();
     assert.equal(await page.getByLabel('CLASH to migrate', { exact: true }).isDisabled(), true);
+    assert.equal(await page.getByRole('button', { name: 'Use maximum available CLASH', exact: true }).isDisabled(), true);
     await page.screenshot({ path: new URL(`disconnected-${width}.png`, output).pathname.replace(/^\/(\w:)/, '$1'), fullPage: true });
     const headerConnect = page.locator('header').getByRole('button', { name: 'Connect wallet', exact: true });
     await headerConnect.click();
@@ -52,6 +54,12 @@ try {
     assert.equal(await headerConnect.evaluate(node => node === document.activeElement), true);
     await page.locator('form').getByRole('button', { name: 'Connect wallet', exact: true }).click();
     await page.getByRole('dialog').getByRole('button', { name: /Phantom/ }).click();
+    const maxButton = page.getByRole('button', { name: 'Use maximum available CLASH', exact: true });
+    await maxButton.click();
+    assert.equal(await page.getByLabel('CLASH to migrate', { exact: true }).inputValue(), width === 320 ? '123.456789' : width === 390 ? '234.567891' : '1000');
+    assert.equal(quoteCalls, 0); assert.equal(submitted, 0);
+    assert.equal(await page.evaluate(() => window.signCalls), 0);
+    await page.screenshot({ path: new URL(`max-${width}.png`, output).pathname.replace(/^\/(\w:)/, '$1'), fullPage: true });
     await page.getByLabel('CLASH to migrate', { exact: true }).fill('1');
     await page.getByLabel('Robinhood EVM recipient address').fill('0x' + '1'.repeat(40));
     await page.getByRole('button', { name: 'Review migration', exact: true }).click();

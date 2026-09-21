@@ -1,5 +1,9 @@
 # User Request Log
 
+## UR-2026-09-21-MIGRATION-MAX
+
+- Owner requests MAX beside migration amount. Fill exact minimum of current CLASH balance and remaining snapshot allocation; no quote/sign/submit action. Disable without authenticated usable account data, while busy, or when migration unavailable. Preserve desktop/mobile layout and continue authorized migration release.
+
 ## UR-2026-09-21-MIGRATION-WALLET-CONNECT
 
 - Owner rejects current connect dropdown and requests a proper free wallet connector, including research. Use existing free Solana Wallet Adapter/Wallet Standard with an accessible branded picker; preserve sign-only/authentication/deposit semantics and verify before the authorized migration release. No keys or migration settings changed.

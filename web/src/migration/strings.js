@@ -15,7 +15,7 @@ export const messages = {
   ready: 'Migration available', snapshot: 'Snapshot slot', ratio: 'Conversion ratio', fee: 'Service fee',
   connect: 'Connect and verify Solana wallet', disconnect: 'Disconnect', wallet: 'Connected wallet',
   eligible: 'Snapshot allocation', remaining: 'Remaining allocation', balance: 'Current CLASH balance',
-  amount: 'CLASH to migrate', destination: 'Robinhood EVM recipient address', review: 'Review migration',
+  amount: 'CLASH to migrate', max: 'MAX', useMax: 'Use maximum available CLASH', destination: 'Robinhood EVM recipient address', review: 'Review migration',
   confirm: 'I control this Robinhood mainnet address. I understand that this migration is irreversible.',
   send: 'Sign deposit and migrate', cancel: 'Cancel review', receive: 'You receive', solFee: 'Service fee in SOL',
   source: 'Solana CLASH mint', target: 'Robinhood CLASH contract', expires: 'Quote expires',

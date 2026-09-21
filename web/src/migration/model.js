@@ -12,6 +12,14 @@ export function parseUnits(value, decimals = 6) {
   if (fraction.length > decimals || whole.length > 40) return null;
   return BigInt(whole + fraction.padEnd(decimals, '0'));
 }
+export function maxMigrationAmount(account, decimals = 6) {
+  if (!Number.isInteger(decimals) || decimals < 0 || decimals > 36) return '';
+  const values = [account?.balanceUnits, account?.remainingUnits];
+  if (!values.every(value => typeof value === 'string' && /^\d+$/.test(value))) return '';
+  const [balance, remaining] = values.map(value => BigInt(value));
+  const maximum = balance < remaining ? balance : remaining;
+  return maximum > 0n ? formatUnits(maximum, decimals) : '';
+}
 export function validRequest(amount, address, account, decimals = 6) {
   const units = parseUnits(amount, decimals);
   return units !== null && units > 0n && /^0x[0-9a-fA-F]{40}$/.test(address) && !/^0x0{40}$/i.test(address)
