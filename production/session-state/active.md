@@ -1,5 +1,10 @@
 # Active Session State
 
+## Virtual Protocol site verification — released (2026-09-21)
+
+- Added owner's exact verification meta to static homepage head; existing ory verification retained. Source and local built HTML checked for exactly one tag; Vite build and diff check passed.
+- Canonical deploy `20260921153758-25022c21` completed15:40UTC, runtime health passed. Public `https://clashofperps.fun/` returned200 with exact tag once inside head. Verification service approval itself was not triggered or claimed. Retention removed compiled `20260921141323-563e93cf`; previous rollback `20260921152559-77c87c98` retained, source rebuildable from Git.
+
 ## Robinhood migration payout delay — released (2026-09-21)
 
 - Default random 150–420s after confirmed Solana deposit; durable per-request deadline and admin toggle/range (0–3600 whole seconds). Existing schedules and signed payouts preserved. Public Processing copy accurately describes current policy, no five-minute guarantee.

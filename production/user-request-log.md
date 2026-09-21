@@ -3,6 +3,7 @@
 ## UR-2026-09-21-VIRTUAL-SITE-VERIFICATION
 
 - Owner supplied `<meta name="virtual-protocol-site-verification" content="f7df695b5f05f510d6179835489bedc4" />` and requested adding it to Clash of Perps head with immediate production deployment. Add to the static homepage HTML, preserve existing verification tags, verify generated and public live HTML.
+- Completed: release `20260921153758-25022c21`; build/runtime checks passed and public homepage200 contains exact tag once in head.
 
 ## UR-2026-09-21-MIGRATION-PAYOUT-DELAY
 
