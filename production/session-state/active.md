@@ -1,5 +1,12 @@
 # Active Session State
 
+## Historical migration cutoff — Released (2026-09-21)
+
+- Admin now selects a past date/time explicitly in UTC; paid Alchemy resolves a finalized slot and retrieves each authenticated wallet's historical balance, including subsequently closed token accounts. Immutable cached allocations, no current-balance fallback, and request-time snapshot lock retained.
+- Live validation uncovered actual source CLASH uses Token-2022; corrected mint validation, deposit ATAs/instructions/rent and sale source ATA. Metadata-only extensions permitted.
+- Released `46cf9b18` as `20260921084906-46cf9b18`. Full Deploy gate,32 focused server tests,5 UI tests, timezone/browser regression and nonzero mainnet historical read passed. Public page/API/admin protection, bundle byte-match and five online services verified.
+- No real cutoff set; acceptance remains disabled. No funded transfer test. Do not roll back to pre-history code while accepting migrations. Report: `production/reports/migration-snapshot-time-2026-09-21.md`; ADR0041.
+
 ## Migration branding — Released (2026-09-21)
 
 - Owner approved branded header/top wallet selector and waived further design prompts. Actual gold logo, compact black/orange form/details layout and mobile stacking released as `20260921082545-cca25d71`.
