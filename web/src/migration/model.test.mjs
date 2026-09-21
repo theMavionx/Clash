@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { formatUnits, parseUnits, validRequest, expiryMs } from './model.js';
+import { formatUnits, parseUnits, validRequest, expiryMs, snapshotUtcIso, formatUtc } from './model.js';
 import { migrationErrorText } from './strings.js';
 test('integer amounts preserve billion-token supply and 18 decimal payouts', () => {
   assert.equal(formatUnits('1000000000000000000000000000', 18), '1000000000');
@@ -22,4 +22,10 @@ test('only allowlisted server error codes become user-facing text', () => {
   assert.match(migrationErrorText('ELIGIBILITY_EXCEEDED'), /snapshot allocation/);
   assert.equal(migrationErrorText('private key upstream stacktrace'), migrationErrorText('UNKNOWN'));
   assert.doesNotMatch(migrationErrorText('private key upstream stacktrace'), /private key/);
+});
+test('snapshot datetime input is strictly UTC and rejects blank, invalid and future values', () => {
+  const now = Date.parse('2026-09-21T12:00:00Z');
+  assert.equal(snapshotUtcIso('2026-09-20T13:45', now), '2026-09-20T13:45:00.000Z');
+  for (const value of ['', '2026-02-30T12:00', '2026-13-01T12:00', '2026-09-21T12:01', '2026-09-20T13:45+03:00']) assert.equal(snapshotUtcIso(value, now), null);
+  assert.equal(formatUtc('2026-09-20T13:45:00.000Z'), '2026-09-20 13:45:00 UTC');
 });

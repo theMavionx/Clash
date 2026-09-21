@@ -31,6 +31,8 @@ function Resolve-GodotExe {
 
 $NodeFiles = @(
     "server/migration_core.js",
+    "server/migration_history.js",
+    "server/test-migration-history.js",
     "server/migration_chain.js",
     "server/migration_routes.js",
     "server/test-migration.js",
@@ -248,7 +250,7 @@ foreach ($File in $PowerShellFiles) {
 
 if ($Mode -in @("Full", "Deploy")) {
     Invoke-Step "CLASH migration ledger, signing and HTTP regressions" {
-        node --test server/test-migration.js server/test-migration-chain.js server/test-migration-http.js
+        node --test server/test-migration.js server/test-migration-chain.js server/test-migration-http.js server/test-migration-history.js
     }
     Invoke-Step "CLASH migration UI amount and state regressions" {
         node --test web/src/migration/model.test.mjs

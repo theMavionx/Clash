@@ -1,5 +1,10 @@
 # User Request Log
 
+## UR-2026-09-21-MIGRATION-SNAPSHOT-TIME
+
+- Owner: «та ні постав снепшот по часу щоб можна було вибрати бо так геть не зручно».
+- Add an explicit date/time cutoff backed by true paid Alchemy historical balances, not current balances mislabeled as historical. Preserve immutable eligibility once requests exist and never select a production cutoff on the owner's behalf. Continue the authorized migration workflow with tests before deployment.
+
 ## UR-2026-09-21-MIGRATION-BRANDING
 
 - Owner follow-up: «так роби і поскоріше не питай дозволу». Approves recommended branded header and two-column responsive layout and asks to skip further design approval gates; proceed with implementation and verification.

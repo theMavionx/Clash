@@ -11,7 +11,11 @@ if (process.env.MIGRATION_DIAGNOSTIC_ENV_FILE) {
   }
 }
 const { alchemySolanaRpcUrl } = require("./solana_rpc");
-const { directFetch, alchemyUrl } = require("./migration_chain");
+const {
+  directFetch,
+  alchemyUrl,
+  createMigrationChain,
+} = require("./migration_chain");
 const { SOURCE_MINT } = require("./migration_core");
 async function rpc(url, method, params = []) {
   const r = await directFetch(url, {
@@ -45,6 +49,33 @@ async function rpc(url, method, params = []) {
       slot: supply.context.slot,
     }),
   );
+  if (process.env.MIGRATION_DIAGNOSTIC_HISTORY_AT) {
+    const adapter = createMigrationChain();
+    const cutoff = await adapter.snapshotAt(
+      process.env.MIGRATION_DIAGNOSTIC_HISTORY_AT,
+    );
+    const largest = await rpc(sol, "getTokenLargestAccounts", [
+      SOURCE_MINT,
+      { commitment: "finalized" },
+    ]);
+    const account = await rpc(sol, "getAccountInfo", [
+      largest.value[0].address,
+      { encoding: "jsonParsed", commitment: "finalized" },
+    ]);
+    const amount = await adapter.historicalBalance(
+      account.value.data.parsed.info.owner,
+      cutoff.slot,
+    );
+    console.log(
+      JSON.stringify({
+        readOnly: true,
+        ...cutoff,
+        tokenProgram: account.value.owner,
+        historicalNonzero: BigInt(amount) > 0n,
+      }),
+    );
+    return;
+  }
   const chain = Number(BigInt(await rpc(evm, "eth_chainId")));
   if (chain !== 4663) throw Error("Wrong target chain");
   console.log(

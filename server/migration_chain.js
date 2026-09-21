@@ -13,6 +13,10 @@ const {
 } = require("@solana/web3.js");
 const {
   TOKEN_PROGRAM_ID,
+  TOKEN_2022_PROGRAM_ID,
+  getExtensionTypes,
+  ExtensionType,
+  getAccountLen,
   ASSOCIATED_TOKEN_PROGRAM_ID,
   AccountLayout,
   getMint,
@@ -38,6 +42,7 @@ const {
   SOURCE_MINT,
 } = require("./migration_core");
 const { alchemySolanaRpcUrl } = require("./solana_rpc");
+const { createMigrationHistory } = require("./migration_history");
 const SOL = "So11111111111111111111111111111111111111112";
 const JUP = "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4";
 const ERC20 = parseAbi([
@@ -144,6 +149,22 @@ function alchemyUrl(url, host) {
   }
 }
 function createMigrationChain(env = process.env, deps = {}) {
+  const history = createMigrationHistory(
+    deps.historyRpc ||
+      (async (method, params) => {
+        const endpoint = alchemyUrl(
+          alchemySolanaRpcUrl(env),
+          "solana-mainnet.g.alchemy.com",
+        );
+        const r = await json(endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+        });
+        check(!r.error && r.result !== undefined, "HISTORY_UNAVAILABLE", 503);
+        return r.result;
+      }),
+  );
   let connection = deps.connection,
     publicClient = deps.publicClient;
   let adminRpcKey = "";
@@ -218,11 +239,20 @@ function createMigrationChain(env = process.env, deps = {}) {
       sol(),
       new PublicKey(SOURCE_MINT),
       "finalized",
-      TOKEN_PROGRAM_ID,
+      TOKEN_2022_PROGRAM_ID,
     );
     check(
       m.decimals === 6 && m.supply > 0n && m.supply <= 1000000000n * 1000000n,
       "SOURCE_MINT_MISMATCH",
+      503,
+    );
+    check(
+      getExtensionTypes(m.tlvData).every((type) =>
+        [ExtensionType.MetadataPointer, ExtensionType.TokenMetadata].includes(
+          type,
+        ),
+      ),
+      "SOURCE_TOKEN_EXTENSIONS_UNSUPPORTED",
       503,
     );
     return m;
@@ -288,13 +318,10 @@ function createMigrationChain(env = process.env, deps = {}) {
   }
   async function snapshot() {
     await mint();
-    const r = await sol().getProgramAccounts(TOKEN_PROGRAM_ID, {
+    const r = await sol().getProgramAccounts(TOKEN_2022_PROGRAM_ID, {
       commitment: "finalized",
       withContext: true,
-      filters: [
-        { dataSize: 165 },
-        { memcmp: { offset: 0, bytes: SOURCE_MINT } },
-      ],
+      filters: [{ memcmp: { offset: 0, bytes: SOURCE_MINT } }],
     });
     check(
       r.context?.slot && Array.isArray(r.value),
@@ -354,8 +381,18 @@ function createMigrationChain(env = process.env, deps = {}) {
       payer = new PublicKey(r.solanaTreasury),
       m = new PublicKey(SOURCE_MINT);
     check(!payer.equals(user), "TREASURY_CANNOT_MIGRATE");
-    const source = getAssociatedTokenAddressSync(m, user),
-      destination = getAssociatedTokenAddressSync(m, payer);
+    const source = getAssociatedTokenAddressSync(
+        m,
+        user,
+        false,
+        TOKEN_2022_PROGRAM_ID,
+      ),
+      destination = getAssociatedTokenAddressSync(
+        m,
+        payer,
+        false,
+        TOKEN_2022_PROGRAM_ID,
+      );
     const sourceBalance = await c.getTokenAccountBalance(source, "finalized");
     check(
       BigInt(sourceBalance.value.amount) >= BigInt(r.inputUnits),
@@ -376,6 +413,7 @@ function createMigrationChain(env = process.env, deps = {}) {
         destination,
         payer,
         m,
+        TOKEN_2022_PROGRAM_ID,
       ),
       createTransferCheckedInstruction(
         source,
@@ -384,6 +422,8 @@ function createMigrationChain(env = process.env, deps = {}) {
         user,
         BigInt(r.inputUnits),
         6,
+        [],
+        TOKEN_2022_PROGRAM_ID,
       ),
       SystemProgram.transfer({
         fromPubkey: user,
@@ -399,7 +439,9 @@ function createMigrationChain(env = process.env, deps = {}) {
     const fee = (await c.getFeeForMessage(tx.compileMessage(), "finalized"))
       .value;
     check(fee !== null, "FEE_UNAVAILABLE", 503);
-    const rent = await c.getMinimumBalanceForRentExemption(165);
+    const rent = await c.getMinimumBalanceForRentExemption(
+      getAccountLen([ExtensionType.ImmutableOwner]),
+    );
     check(
       BigInt(fee + rent) < BigInt(r.feeLamports),
       "NETWORK_FEE_EXCEEDS_QUOTE",
@@ -599,6 +641,8 @@ function createMigrationChain(env = process.env, deps = {}) {
     const ata = getAssociatedTokenAddressSync(
       new PublicKey(SOURCE_MINT),
       signer.publicKey,
+      false,
+      TOKEN_2022_PROGRAM_ID,
     );
     const beforeTokens = BigInt(
         (await c.getTokenAccountBalance(ata, "finalized")).value.amount,
@@ -796,6 +840,11 @@ function createMigrationChain(env = process.env, deps = {}) {
     keyAddress,
     health,
     snapshot,
+    snapshotAt: async (at) => {
+      await mint();
+      return history.snapshotAt(at);
+    },
+    historicalBalance: history.historicalBalance,
     balance,
     prices,
     prepareDeposit,

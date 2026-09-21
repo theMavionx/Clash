@@ -9,6 +9,15 @@ const {
 } = require("@solana/web3.js");
 const bs58 = require("bs58").default || require("bs58");
 const {
+  TOKEN_2022_PROGRAM_ID,
+  getAssociatedTokenAddressSync,
+  decodeTransferCheckedInstruction,
+  MintLayout,
+  AccountLayout,
+} = require("@solana/spl-token");
+const { PublicKey } = require("@solana/web3.js");
+const { SOURCE_MINT } = require("./migration_core");
+const {
   createMigrationChain,
   alchemyUrl,
   directFetch,
@@ -34,6 +43,125 @@ test("RPC rejects public endpoints and credential exfiltration destinations", as
     ),
     "https://solana-mainnet.g.alchemy.com/v2/test",
   );
+});
+test("CLASH deposit derives Token-2022 accounts, transfer program and immutable-owner rent", async () => {
+  const user = Keypair.generate(),
+    payer = Keypair.generate();
+  const mint = new PublicKey(SOURCE_MINT);
+  const source = getAssociatedTokenAddressSync(
+    mint,
+    user.publicKey,
+    false,
+    TOKEN_2022_PROGRAM_ID,
+  );
+  const destination = getAssociatedTokenAddressSync(
+    mint,
+    payer.publicKey,
+    false,
+    TOKEN_2022_PROGRAM_ID,
+  );
+  const adapter = createMigrationChain(
+    {},
+    {
+      connection: {
+        getTokenAccountBalance: async (p) => {
+          assert.equal(p.toBase58(), source.toBase58());
+          return { value: { amount: "10000000" } };
+        },
+        getBalance: async () => 1000000000,
+        getLatestBlockhash: async () => ({
+          blockhash: Keypair.generate().publicKey.toBase58(),
+          lastValidBlockHeight: 100,
+        }),
+        getFeeForMessage: async () => ({ value: 10000 }),
+        getMinimumBalanceForRentExemption: async (size) => {
+          assert.equal(size, 170);
+          return 2074080;
+        },
+      },
+    },
+  );
+  const result = await adapter.prepareDeposit({
+    id: "token-2022-test",
+    wallet: user.publicKey.toBase58(),
+    solanaTreasury: payer.publicKey.toBase58(),
+    inputUnits: "1234567",
+    feeLamports: "20000000",
+  });
+  const tx = Transaction.from(Buffer.from(result.transaction, "base64"));
+  assert.equal(result.depositDestination, destination.toBase58());
+  assert.equal(
+    tx.instructions[0].keys[5].pubkey.toBase58(),
+    TOKEN_2022_PROGRAM_ID.toBase58(),
+  );
+  const transfer = decodeTransferCheckedInstruction(
+    tx.instructions[1],
+    TOKEN_2022_PROGRAM_ID,
+  );
+  assert.equal(transfer.data.amount, 1234567n);
+  assert.equal(transfer.data.decimals, 6);
+  assert.equal(
+    transfer.keys.destination.pubkey.toBase58(),
+    destination.toBase58(),
+  );
+});
+test("current capture includes extended Token-2022 accounts instead of filtering them out", async () => {
+  const owner = Keypair.generate().publicKey,
+    mint = new PublicKey(SOURCE_MINT);
+  const mintData = Buffer.alloc(82),
+    accountData = Buffer.alloc(170),
+    zero = PublicKey.default;
+  MintLayout.encode(
+    {
+      mintAuthorityOption: 0,
+      mintAuthority: zero,
+      supply: 1000000000000000n,
+      decimals: 6,
+      isInitialized: true,
+      freezeAuthorityOption: 0,
+      freezeAuthority: zero,
+    },
+    mintData,
+  );
+  AccountLayout.encode(
+    {
+      mint,
+      owner,
+      amount: 123456n,
+      delegateOption: 0,
+      delegate: zero,
+      state: 1,
+      isNativeOption: 0,
+      isNative: 0n,
+      delegatedAmount: 0n,
+      closeAuthorityOption: 0,
+      closeAuthority: zero,
+    },
+    accountData,
+  );
+  const adapter = createMigrationChain(
+    {},
+    {
+      connection: {
+        getAccountInfo: async () => ({
+          data: mintData,
+          owner: TOKEN_2022_PROGRAM_ID,
+        }),
+        getProgramAccounts: async (program, options) => {
+          assert.equal(program.toBase58(), TOKEN_2022_PROGRAM_ID.toBase58());
+          assert.ok(options.filters.every((f) => !f.dataSize));
+          return {
+            context: { slot: 123 },
+            value: [
+              { account: { data: accountData, owner: TOKEN_2022_PROGRAM_ID } },
+            ],
+          };
+        },
+      },
+    },
+  );
+  const s = await adapter.snapshot();
+  assert.equal(s.balances[owner.toBase58()], "123456");
 });
 test("sponsored signer signs only the exact stored message with valid wallet signature", async () => {
   const payer = Keypair.generate(),

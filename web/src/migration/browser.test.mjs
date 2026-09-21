@@ -26,7 +26,7 @@ try {
     await page.route('**/api/migration/**', async route => {
       const path = new URL(route.request().url()).pathname.split('/').pop();
       const data = {
-        status: { enabled: true, ready: true, sourceDecimals: 6, ratio: '1', feeUsd: '2', snapshot: { slot: 360000000 } },
+        status: { enabled: true, ready: true, sourceDecimals: 6, ratio: '1', feeUsd: '2', snapshot: { slot: 360000000, ...(width === 320 ? { mode: 'historical', requestedAt: Date.parse('2026-09-20T13:45:00Z') } : {}) } },
         challenge: { id: 'challenge', message: 'Local test signature only' }, verify: { token: 'mock-session', wallet: owner.toBase58() },
         account: { eligibleUnits: '1000000000', remainingUnits: '1000000000', balanceUnits: '1000000000', requests: submitted ? [{ id: 'q1', inputUnits: '1000000', outputUnits: '1000000000000000000', targetDecimals: 18, status: 'deposit_pending', destination: '0x' + '1'.repeat(40) }] : [] },
         quote: { id: 'q1', inputUnits: '1000000', outputUnits: '1000000000000000000', targetDecimals: 18, destination: '0x' + '1'.repeat(40), sourceMint: 'SOURCE_TEST_MINT', targetToken: '0x' + '2'.repeat(40), feeLamports: '15000000', expiresAt: Date.now() + 120000, transaction: encoded },
@@ -37,6 +37,7 @@ try {
     });
     await page.goto('http://127.0.0.1:5211/migration');
     await page.getByText('Migration available', { exact: true }).waitFor();
+    if (width === 320) await page.getByText('2026-09-20 13:45:00 UTC', { exact: true }).waitFor();
     assert.equal(await page.getByLabel('CLASH to migrate', { exact: true }).isDisabled(), true);
     await page.screenshot({ path: new URL(`disconnected-${width}.png`, output).pathname.replace(/^\/(\w:)/, '$1'), fullPage: true });
     const headerConnect = page.locator('header').getByRole('button', { name: 'Connect wallet', exact: true });
@@ -108,19 +109,31 @@ try {
   await recovery.locator('header').getByRole('button', { name: 'Connect wallet', exact: true }).waitFor();
   assert.equal(await recovery.getByText('Deposit submitted — awaiting confirmation', { exact: true }).count(), 0);
   assert.deepEqual(recoveryErrors, []); await recovery.close();
-  const admin = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+  const admin = await browser.newPage({ viewport: { width: 1440, height: 1000 }, timezoneId: 'Pacific/Honolulu' });
   const writes = []; const adminErrors = [];
+  let snapshotLocked = false, adminSnapshot = { slot: 100, wallets: 10, createdAt: 1790000000000 };
   admin.on('pageerror', error => { if (!adminErrors.length) adminErrors.push(error.stack); });
   admin.on('dialog', dialog => dialog.accept());
   await admin.route('**/api/migration/admin**', route => {
     if (route.request().method() !== 'GET') writes.push(route.request().postDataJSON());
-    return route.fulfill({ json: { config: { enabled: false, ratio: '1', targetToken: '0x' + '2'.repeat(40), feeUsd: '2', batchUsd: 400, idleSeconds: 600, residualUsd: 100, slippageBps: 500, maxSlippageBps: 1000 }, readiness: { ready: false, reasons: ['SNAPSHOT_REQUIRED'] }, snapshot: { slot: 100, wallets: 10, createdAt: 1790000000000 }, canReplaceSnapshot: true, wallets: { solana: owner.toBase58(), evm: '0x' + '3'.repeat(40) }, requests: [], sales: [], audit: [{ event: 'snapshot_published', at: 1790000000000 }] } });
+    if (route.request().url().endsWith('/snapshot') && route.request().method() === 'POST') adminSnapshot = { ...adminSnapshot, mode: 'historical', requestedAt: Date.parse(route.request().postDataJSON().at), blockTime: Date.parse(route.request().postDataJSON().at) - 1000, wallets: 0 };
+    return route.fulfill({ json: { config: { enabled: false, ratio: '1', targetToken: '0x' + '2'.repeat(40), feeUsd: '2', batchUsd: 400, idleSeconds: 600, residualUsd: 100, slippageBps: 500, maxSlippageBps: 1000 }, readiness: { ready: false, reasons: ['SNAPSHOT_REQUIRED'] }, snapshot: adminSnapshot, canReplaceSnapshot: !snapshotLocked, wallets: { solana: owner.toBase58(), evm: '0x' + '3'.repeat(40) }, requests: [], sales: [], audit: [{ event: 'snapshot_published', at: 1790000000000 }] } });
   });
   await admin.goto('http://127.0.0.1:5211/src/migration/admin-preview.html');
   await admin.getByRole('heading', { name: 'Configuration', exact: true }).waitFor();
-  assert.equal(await admin.getByRole('button', { name: 'Capture snapshot' }).isDisabled(), true);
-  await admin.getByLabel('I confirm this current finalized snapshot defines eligible wallets.').check();
-  assert.equal(await admin.getByRole('button', { name: 'Capture snapshot' }).isDisabled(), false);
+  const cutoffInput = admin.getByLabel('Snapshot cutoff (UTC)', { exact: true });
+  const cutoffSave = admin.getByRole('button', { name: 'Save snapshot cutoff', exact: true });
+  const cutoffConfirm = admin.getByLabel('I confirm the selected UTC cutoff defines eligible wallets.');
+  assert.equal(await cutoffInput.inputValue(), ''); assert.equal(await cutoffSave.isDisabled(), true);
+  assert.equal(await cutoffConfirm.isDisabled(), true);
+  await cutoffInput.fill('2099-01-01T12:00');
+  assert.equal(await cutoffInput.getAttribute('aria-invalid'), 'true'); assert.equal(await cutoffSave.isDisabled(), true);
+  await cutoffInput.fill('2026-09-20T13:45');
+  await cutoffConfirm.check(); assert.equal(await cutoffSave.isDisabled(), false);
+  await cutoffInput.fill('2026-09-20T14:45'); assert.equal(await cutoffConfirm.isChecked(), false);
+  await cutoffInput.fill('2026-09-20T13:45');
+  await cutoffConfirm.check();
+  assert.equal(await cutoffInput.getAttribute('max'), new Date().toISOString().slice(0, 16));
   assert.match(await admin.locator('tbody').innerText(), /UTC/);
   await admin.getByLabel('New secret', { exact: true }).fill('local-test-private-key');
   await admin.getByRole('button', { name: 'Store encrypted credential' }).click();
@@ -141,6 +154,14 @@ try {
   assert.deepEqual(writes[2], { kind: 'robinhoodRpc', secret: 'local-test-alchemy-key' });
   assert.equal(await admin.getByLabel('New secret', { exact: true }).inputValue(), '');
   assert.equal(await admin.evaluate(() => JSON.stringify(localStorage).includes('local-test-alchemy-key')), false);
+  await cutoffSave.click();
+  await admin.getByText('0 wallets evaluated so far (not all holders)', { exact: true }).waitFor();
+  assert.deepEqual(writes[3], { confirm: true, at: '2026-09-20T13:45:00.000Z' });
+  await admin.locator('section').filter({ has: admin.getByRole('heading', { name: 'Eligibility snapshot', exact: true }) }).screenshot({ path: new URL('admin-snapshot-utc.png', output).pathname.replace(/^\/(\w:)/, '$1') });
+  snapshotLocked = true; adminSnapshot = null;
+  await admin.getByRole('button', { name: 'Refresh status', exact: true }).click();
+  await admin.getByText('No snapshot cutoff saved. Select a past UTC date and time to determine eligible balances.').waitFor();
+  assert.equal(await cutoffInput.isDisabled(), true); assert.equal(await cutoffConfirm.isDisabled(), true); assert.equal(await cutoffSave.isDisabled(), true);
   assert.deepEqual(adminErrors, []);
   await admin.screenshot({ path: new URL('admin-1440.png', output).pathname.replace(/^\/(\w:)/, '$1'), fullPage: true });
   await admin.close();

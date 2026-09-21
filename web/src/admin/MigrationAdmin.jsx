@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { adminFetch } from './api';
 import '../migration/admin.css';
 import { migrationErrorText, migrationStateText } from '../migration/strings';
-import { expiryMs } from '../migration/model';
+import { formatUtc as utcTime, snapshotUtcIso } from '../migration/model';
 
 const fields = [
   ['targetToken', 'Robinhood CLASH contract (chain 4663)', 'text'], ['ratio', 'CLASH received per source CLASH', 'text'],
@@ -14,10 +14,12 @@ function configPayload(config) {
   return Object.fromEntries(['enabled', ...fields.map(([name]) => name)].map(name => [name,
     name === 'enabled' ? !!config[name] : ['idleSeconds', 'slippageBps', 'maxSlippageBps'].includes(name) ? Number(config[name]) : String(config[name] ?? '')]));
 }
-function utcTime(value) { const date = new Date(expiryMs(value)); return Number.isFinite(date.getTime()) ? date.toISOString().replace('T', ' ').replace('.000Z', ' UTC') : '—'; }
 export default function MigrationAdmin() {
   const [data, setData] = useState(null), [config, setConfig] = useState(null), [busy, setBusy] = useState(false), [notice, setNotice] = useState('');
   const [kind, setKind] = useState('solana'), [secret, setSecret] = useState(''), [snapshotConfirm, setSnapshotConfirm] = useState(false);
+  const [snapshotAt, setSnapshotAt] = useState('');
+  const selectedUtc = snapshotUtcIso(snapshotAt);
+  const snapshotLocked = !data || data.canReplaceSnapshot === false;
   async function load() {
     const next = await adminFetch('/migration/admin'); setData(next); setConfig(next.config);
   }
@@ -42,7 +44,15 @@ export default function MigrationAdmin() {
       <p>Robinhood Alchemy API key: {data?.wallets?.robinhoodRpc ? 'Configured' : 'Not configured'}. Enable Robinhood Chain mainnet in your paid Alchemy app. Enter the raw API key, not an RPC URL. Public-node fallback is not used.</p>
       <form autoComplete="off" onSubmit={e => { e.preventDefault(); if (!secret.trim()) return; if (!window.confirm('Save this credential? Active settlements may prevent wallet rotation.')) return; const value = secret.trim(); setSecret(''); run('/keys', { kind, secret: value }); }}><label>Credential<select value={kind} disabled={busy} onChange={e => { setKind(e.target.value); setSecret(''); }}><option value="solana">Solana private key</option><option value="evm">Robinhood EVM private key</option><option value="jupiter">Jupiter API key</option><option value="robinhoodRpc">Robinhood Alchemy API key</option></select></label><label>New secret<input type="password" autoComplete="new-password" value={secret} disabled={busy} onChange={e => setSecret(e.target.value)} required spellCheck="false"/></label><button className="btn" disabled={busy || !secret.trim()}>Store encrypted credential</button></form>
     </section>
-    <section className="card"><h3>Eligibility snapshot</h3>{data?.snapshot ? <p>Finalized slot {data.snapshot.slot} · {data.snapshot.wallets} wallets · {utcTime(data.snapshot.createdAt)}</p> : <p>No snapshot captured. Capture uses current finalized on-chain balances, not a historical date.</p>}<p>The snapshot is immutable once migration requests exist. Later purchases never increase a wallet’s allocation.</p><label><input type="checkbox" checked={snapshotConfirm} disabled={busy || (!!data?.snapshot && !data?.canReplaceSnapshot)} onChange={e => setSnapshotConfirm(e.target.checked)}/> I confirm this current finalized snapshot defines eligible wallets.</label><button className="btn" disabled={busy || !snapshotConfirm || (!!data?.snapshot && !data?.canReplaceSnapshot)} onClick={() => { setSnapshotConfirm(false); run('/snapshot', { confirm: true }); }}>Capture snapshot</button></section>
+    <section className="card"><h3>Eligibility snapshot</h3>{data?.snapshot ? <><p>{data.snapshot.requestedAt != null ? 'Snapshot cutoff' : 'Captured at'}: {utcTime(data.snapshot.requestedAt ?? data.snapshot.createdAt)}</p><p>Finalized slot {data.snapshot.slot}{data.snapshot.blockTime != null ? ` · Block time ${utcTime(data.snapshot.blockTime)}` : ''}</p><p>{data.snapshot.wallets} {data.snapshot.mode === 'historical' ? 'wallets evaluated so far (not all holders)' : 'wallets captured'}</p></> : <p>No snapshot cutoff saved. Select a past UTC date and time to determine eligible balances.</p>}<p>The snapshot is immutable once migration requests exist. Later purchases never increase a wallet’s allocation.</p>
+      <form onSubmit={event => { event.preventDefault(); const at = snapshotUtcIso(snapshotAt); if (busy || snapshotLocked || !snapshotConfirm || !at) return; setSnapshotConfirm(false); run('/snapshot', { confirm: true, at }); }}>
+        <label>Snapshot cutoff (UTC)<input type="datetime-local" required step="60" max={new Date().toISOString().slice(0, 16)} value={snapshotAt} disabled={busy || snapshotLocked} aria-describedby="migration-snapshot-help migration-snapshot-preview" aria-invalid={!!snapshotAt && !selectedUtc} onChange={event => { setSnapshotAt(event.target.value); setSnapshotConfirm(false); }}/></label>
+        <p id="migration-snapshot-help">Enter UTC, not your device’s local time. The cutoff must be in the past and finalized on Solana.</p>
+        <p id="migration-snapshot-preview" aria-live="polite">{selectedUtc ? `Selected cutoff: ${utcTime(selectedUtc)}` : snapshotAt ? 'Choose a valid past UTC date and time. Future dates cannot be saved.' : 'Select a UTC cutoff to continue.'}</p>
+        <label><input type="checkbox" checked={snapshotConfirm} disabled={busy || snapshotLocked || !selectedUtc} onChange={e => setSnapshotConfirm(e.target.checked)}/> I confirm the selected UTC cutoff defines eligible wallets.</label>
+        <button className="btn" disabled={busy || snapshotLocked || !selectedUtc || !snapshotConfirm}>Save snapshot cutoff</button>
+      </form>
+    </section>
     <section className="card"><h3>Settlement</h3><p>Reconcile existing transactions and run one safe worker pass. This may send real payouts or sales when enabled.</p><button className="btn" disabled={busy} onClick={() => { if (window.confirm('Run a settlement pass? This can send real transactions.')) run('/tick', {}); }}>Run reconciliation</button></section>
     {['requests', 'sales', 'audit'].map(name => <section className="card" key={name}><h3>{name === 'requests' ? 'Migration requests' : name === 'sales' ? 'Solana sales' : 'Audit events'}</h3>{!data?.[name]?.length ? <p>No records.</p> : <div className="table-wrap"><table><thead><tr><th>ID</th><th>Status / event</th><th>Time</th><th>Reference</th></tr></thead><tbody>{data[name].map((row, i) => <tr key={row.id || i}><td>{row.id || '—'}</td><td>{row.status ? migrationStateText(row.status) : row.event || row.action}</td><td>{utcTime(row.createdAt || row.created_at || row.at)}</td><td style={{ overflowWrap: 'anywhere', maxWidth: 380 }}>{row.payoutHash || row.depositHash || row.hash || row.wallet || row.errorCode || '—'}</td></tr>)}</tbody></table></div>}</section>)}
   </div>;

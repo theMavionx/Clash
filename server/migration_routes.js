@@ -58,11 +58,9 @@ function createMigrationRouter({
     try {
       res.json(await fn(req));
     } catch (e) {
-      res
-        .status(e instanceof MigrationError ? e.status : 503)
-        .json({
-          error: e instanceof MigrationError ? e.code : "MIGRATION_UNAVAILABLE",
-        });
+      res.status(e instanceof MigrationError ? e.status : 503).json({
+        error: e instanceof MigrationError ? e.code : "MIGRATION_UNAVAILABLE",
+      });
     }
   };
   const auth = (req) =>
@@ -127,7 +125,7 @@ function createMigrationRouter({
     run((req) => {
       if (req.body?.confirm !== true)
         throw new MigrationError("CONFIRMATION_REQUIRED");
-      return service.takeSnapshot();
+      return service.takeSnapshot({ at: req.body?.at });
     }),
   );
   router.post(

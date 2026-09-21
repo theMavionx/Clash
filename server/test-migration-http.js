@@ -10,7 +10,13 @@ test("public HTTP is fail-closed, admin uses existing password and disallowed or
   app.use(express.json({ limit: "40kb" }));
   const m = createMigrationRouter({
     db,
-    chain: {},
+    chain: {
+      snapshotAt: async (at) => ({
+        slot: 123,
+        requestedAt: Date.parse(at),
+        blockTime: Date.parse(at) - 1000,
+      }),
+    },
     env: { ADMIN_KEY: "test-admin-password", NODE_ENV: "production" },
     autoStart: false,
   });
@@ -65,4 +71,18 @@ test("public HTTP is fail-closed, admin uses existing password and disallowed or
     }),
   });
   assert.ok(!(await bad.text()).includes("SENTINEL"));
+  const at = new Date(Date.now() - 3600000).toISOString();
+  const save = await fetch(url + "/admin/snapshot", {
+    method: "POST",
+    headers: {
+      "x-admin-key": "test-admin-password",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ confirm: true, at }),
+  });
+  assert.equal(save.status, 200);
+  const snapshot = await save.json();
+  assert.equal(snapshot.mode, "historical");
+  assert.equal(snapshot.requestedAt, Date.parse(at));
+  assert.equal(snapshot.slot, 123);
 });

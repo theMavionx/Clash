@@ -3,6 +3,7 @@ export const messages = {
   title: 'CLASH Migration', subtitle: 'Solana → Robinhood', home: 'Clash of Perps', stats: 'Statistics',
   connectWallet: 'Connect wallet', walletMenu: 'Choose wallet', transfer: 'Migrate your CLASH', details: 'Migration details', network: 'Destination network',
   connectHint: 'Connect your Solana wallet to check your allocation and begin.',
+  snapshotCutoff: 'Snapshot cutoff (UTC)',
   intro: 'Move your eligible CLASH to Robinhood. Your snapshot balance determines your migration limit. Later purchases do not increase it.',
   loading: 'Checking migration availability…', paused: 'Migration is currently unavailable. No payment will be requested.',
   ready: 'Migration available', snapshot: 'Snapshot slot', ratio: 'Conversion ratio', fee: 'Service fee',
@@ -26,6 +27,14 @@ export const messages = {
 };
 export const t = (key) => messages[key] || key;
 const errors = {
+  INVALID_SNAPSHOT_TIME: 'Choose a valid past UTC snapshot cutoff. Future dates are not allowed.',
+  SNAPSHOT_NOT_FINALIZED: 'This cutoff is not finalized on Solana yet. Choose an earlier UTC time or wait.',
+  HISTORY_UNAVAILABLE: 'Historical balance data is temporarily unavailable. No cutoff or eligibility change was applied.',
+  HISTORY_SLOT_MISMATCH: 'Historical data did not match the finalized cutoff slot. Please contact support.',
+  HISTORY_INVALID: 'Historical balance data failed validation. Please contact support.',
+  SOURCE_TOKEN_EXTENSIONS_UNSUPPORTED: 'The source token has unsupported transfer extensions. Migration is blocked for safety.',
+  HISTORY_TOO_LARGE: 'This wallet history exceeds the safe processing limit. Please contact support.',
+  SNAPSHOT_TIME_UNAVAILABLE: 'The finalized block time could not be verified. Try again later.',
   EVM_RPC_ERROR: 'Robinhood RPC access failed. Enable Robinhood Chain mainnet in the paid Alchemy app and verify its API key.',
   PAID_ALCHEMY_RPC_REQUIRED: 'A paid Alchemy RPC connection is required. Public-node fallback is not permitted.',
   SOLANA_RPC_ERROR: 'The paid Solana RPC connection failed. Verify Alchemy access before retrying.',

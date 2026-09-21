@@ -44,6 +44,21 @@ function decimal(n, d = 6) {
     .padStart(d + 1, "0");
   return d ? `${s.slice(0, -d)}.${s.slice(-d)}`.replace(/\.?0+$/, "") : s;
 }
+function snapshotTime(value) {
+  check(
+    typeof value === "string" &&
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(value),
+    "INVALID_SNAPSHOT_TIME",
+  );
+  const ms = Date.parse(value);
+  check(
+    Number.isFinite(ms) &&
+      new Date(ms).toISOString() ===
+        (value.includes(".") ? value : value.replace("Z", ".000Z")),
+    "INVALID_SNAPSHOT_TIME",
+  );
+  return ms;
+}
 function wallet(value) {
   try {
     const p = new PublicKey(value);
@@ -60,6 +75,7 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
   db.exec(`CREATE TABLE IF NOT EXISTS migration_config(id INTEGER PRIMARY KEY CHECK(id=1),value TEXT NOT NULL,revision INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS migration_secrets(kind TEXT PRIMARY KEY,value TEXT NOT NULL,address TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS migration_snapshot(id INTEGER PRIMARY KEY CHECK(id=1),slot INTEGER NOT NULL,created_at INTEGER NOT NULL,total TEXT NOT NULL,wallets INTEGER NOT NULL,checksum TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS migration_snapshot_meta(id INTEGER PRIMARY KEY CHECK(id=1),mode TEXT NOT NULL,requested_at INTEGER,block_time INTEGER);
     CREATE TABLE IF NOT EXISTS migration_entitlements(wallet TEXT PRIMARY KEY,units TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS migration_auth(id TEXT PRIMARY KEY,wallet TEXT NOT NULL,message TEXT NOT NULL,expires INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS migration_sessions(hash TEXT PRIMARY KEY,wallet TEXT NOT NULL,expires INTEGER NOT NULL);
@@ -89,6 +105,9 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
   }
   function snapshot() {
     const s = db.prepare("SELECT * FROM migration_snapshot").get();
+    const meta = db
+      .prepare("SELECT * FROM migration_snapshot_meta WHERE id=1")
+      .get();
     return s
       ? {
           slot: s.slot,
@@ -96,6 +115,9 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
           totalUnits: s.total,
           wallets: s.wallets,
           checksum: s.checksum,
+          mode: meta?.mode || "captured",
+          requestedAt: meta?.requested_at ?? null,
+          blockTime: meta?.block_time ?? null,
         }
       : null;
   }
@@ -393,21 +415,33 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
       return { address: addr };
     });
   }
-  async function takeSnapshot() {
+  async function takeSnapshot(input = {}) {
     return exclusive(async () => {
       check(
         !db.prepare("SELECT 1 FROM migration_requests LIMIT 1").get(),
         "SNAPSHOT_LOCKED",
         409,
       );
-      const s = await chain.snapshot(SOURCE_MINT);
+      const historical = input.at !== undefined;
+      const requestedAt = historical ? snapshotTime(input.at) : null;
+      check(!historical || requestedAt <= now(), "INVALID_SNAPSHOT_TIME");
+      const s = historical
+        ? await chain.snapshotAt(input.at)
+        : await chain.snapshot(SOURCE_MINT);
       fence();
-      const entries = Object.entries(s.balances)
+      check(
+        !historical ||
+          (s.requestedAt === requestedAt &&
+            Number.isSafeInteger(s.blockTime) &&
+            s.blockTime <= requestedAt),
+        "INVALID_SNAPSHOT",
+      );
+      const entries = Object.entries(historical ? {} : s.balances)
         .filter(([w]) => PublicKey.isOnCurve(new PublicKey(w).toBytes()))
         .sort(([a], [b]) => a.localeCompare(b));
       const total = entries.reduce((n, [, v]) => n + BigInt(v), 0n);
       check(
-        total > 0n &&
+        (historical || total > 0n) &&
           total <= 1000000000n * 1000000n &&
           Number.isSafeInteger(s.slot),
         "INVALID_SNAPSHOT",
@@ -433,7 +467,26 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
           now(),
           String(total),
           entries.length,
-          digest(JSON.stringify(entries)),
+          digest(
+            JSON.stringify(
+              historical
+                ? {
+                    mode: "historical",
+                    mint: SOURCE_MINT,
+                    slot: s.slot,
+                    requestedAt,
+                    blockTime: s.blockTime,
+                  }
+                : entries,
+            ),
+          ),
+        );
+        db.prepare(
+          "INSERT OR REPLACE INTO migration_snapshot_meta VALUES(1,?,?,?)",
+        ).run(
+          historical ? "historical" : "captured",
+          requestedAt,
+          s.blockTime ?? null,
         );
         audit("snapshot_published");
       }).immediate();
@@ -512,7 +565,44 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
       remainingUnits: String(eligible > used ? eligible - used : 0n),
     };
   }
+  async function ensureEntitlement(w) {
+    const s = snapshot();
+    if (
+      s?.mode !== "historical" ||
+      db.prepare("SELECT 1 FROM migration_entitlements WHERE wallet=?").get(w)
+    )
+      return;
+    const amount = await chain.historicalBalance(w, s.slot);
+    check(
+      typeof amount === "string" &&
+        /^\d+$/.test(amount) &&
+        BigInt(amount) <= 1000000000000000n,
+      "HISTORY_INVALID",
+      503,
+    );
+    db.transaction(() => {
+      const current = snapshot();
+      check(
+        current?.checksum === s.checksum &&
+          current.slot === s.slot &&
+          current.mode === "historical",
+        "CONFIGURATION_CHANGED",
+        409,
+      );
+      const inserted = db
+        .prepare("INSERT OR IGNORE INTO migration_entitlements VALUES(?,?)")
+        .run(w, amount).changes;
+      if (inserted) {
+        const total = BigInt(current.totalUnits) + BigInt(amount);
+        check(total <= 1000000000000000n, "HISTORY_INVALID", 503);
+        db.prepare(
+          "UPDATE migration_snapshot SET total=?,wallets=wallets+1 WHERE id=1",
+        ).run(String(total));
+      }
+    }).immediate();
+  }
   async function account(w) {
+    await ensureEntitlement(w);
     const own = rows()
       .filter((r) => r.wallet === w)
       .reverse();
@@ -600,6 +690,7 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
         "INVALID_DESTINATION",
       );
       const amount = units(input.amount);
+      await ensureEntitlement(w);
       check(
         amount > 0n && amount <= BigInt(entitlement(w).remainingUnits),
         "ELIGIBILITY_EXCEEDED",
@@ -660,6 +751,8 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
           solanaTreasury: address("solana"),
           evmTreasury: address("evm"),
           soldUnits: "0",
+          snapshotSlot: snapshot()?.slot,
+          snapshotChecksum: snapshot()?.checksum,
         };
       Object.assign(r, await chain.prepareDeposit(r));
       fence();
@@ -725,7 +818,8 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
         try {
           if (r.status === "review") {
             if (
-              !r.payoutHash && r.depositHash &&
+              !r.payoutHash &&
+              r.depositHash &&
               (await chain.depositStatus(r)) === "confirmed"
             ) {
               r.status = "deposited";
@@ -810,8 +904,9 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
           save(r);
         } finally {
           fence();
-          db.prepare("UPDATE migration_requests SET updated_at=? WHERE id=?")
-            .run(now(), r.id);
+          db.prepare(
+            "UPDATE migration_requests SET updated_at=? WHERE id=?",
+          ).run(now(), r.id);
         }
       }
       await processSales();
@@ -973,6 +1068,7 @@ module.exports = {
   check,
   units,
   decimal,
+  snapshotTime,
   SOURCE_MINT,
   DEFAULTS,
 };

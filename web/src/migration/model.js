@@ -21,3 +21,14 @@ export function expiryMs(value) {
   if (typeof value === 'number') return value < 1e12 ? value * 1000 : value;
   return Date.parse(value);
 }
+// datetime-local is a wall-clock input. Interpret it explicitly as UTC, never device time.
+export function snapshotUtcIso(value, now = Date.now()) {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value || '')) return null;
+  const time = Date.parse(value + ':00.000Z');
+  if (!Number.isFinite(time) || time > now || new Date(time).toISOString().slice(0, 16) !== value) return null;
+  return new Date(time).toISOString();
+}
+export function formatUtc(value) {
+  const date = new Date(expiryMs(value));
+  return Number.isFinite(date.getTime()) ? date.toISOString().replace('T', ' ').replace('.000Z', ' UTC') : '—';
+}

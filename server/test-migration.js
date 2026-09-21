@@ -345,7 +345,9 @@ test("expired ambiguous deposit can reconcile later without releasing eligibilit
   f.state.deposit = "expired";
   await f.service.tick();
   const original = f.chain.depositStatus;
-  f.chain.depositStatus = async () => { throw new Error("temporary RPC outage"); };
+  f.chain.depositStatus = async () => {
+    throw new Error("temporary RPC outage");
+  };
   await f.service.tick();
   f.chain.depositStatus = original;
   f.state.deposit = "confirmed";
@@ -362,17 +364,141 @@ test("worker rotates past twenty unresolved reviews", async (t) => {
   const f = fixture(t);
   await f.setup();
   const q = await f.q();
-  const row = f.db.prepare("SELECT * FROM migration_requests WHERE id=?").get(q.id);
+  const row = f.db
+    .prepare("SELECT * FROM migration_requests WHERE id=?")
+    .get(q.id);
   for (let i = 0; i < 21; i++) {
-    f.db.prepare("INSERT INTO migration_requests VALUES(?,?,?,?,?,?,?)").run(
-      "review-" + i, "wallet-" + i, "idem-" + i, "review",
-      JSON.stringify({ ...JSON.parse(row.payload), depositHash: "unknown-" + i }),
-      row.created_at - 1, row.updated_at - 1,
-    );
+    f.db
+      .prepare("INSERT INTO migration_requests VALUES(?,?,?,?,?,?,?)")
+      .run(
+        "review-" + i,
+        "wallet-" + i,
+        "idem-" + i,
+        "review",
+        JSON.stringify({
+          ...JSON.parse(row.payload),
+          depositHash: "unknown-" + i,
+        }),
+        row.created_at - 1,
+        row.updated_at - 1,
+      );
   }
   f.advance(100000);
   await f.service.tick();
   f.advance(1000);
   await f.service.tick();
-  assert.equal(f.db.prepare("SELECT status FROM migration_requests WHERE id=?").get(q.id).status, "expired");
+  assert.equal(
+    f.db.prepare("SELECT status FROM migration_requests WHERE id=?").get(q.id)
+      .status,
+    "expired",
+  );
+});
+
+function historicalFixture(f) {
+  f.chain.snapshotAt = async (at) => ({
+    slot: 456,
+    requestedAt: Date.parse(at),
+    blockTime: Date.parse(at) - 1000,
+  });
+  const at = new Date(f.options.now() - 86400000).toISOString();
+  return at;
+}
+test("historical cutoff hydrates once, later purchases do not increase allocation, request locks replacement", async (t) => {
+  const f = fixture(t);
+  await f.setup();
+  const at = historicalFixture(f);
+  let calls = 0;
+  f.chain.historicalBalance = async (_owner, slot) => {
+    assert.equal(slot, 456);
+    calls++;
+    return "150000000";
+  };
+  const s = await f.service.takeSnapshot({ at });
+  assert.equal(s.mode, "historical");
+  assert.equal(s.requestedAt, Date.parse(at));
+  assert.equal(s.wallets, 0);
+  const info = await f.service.account(f.user.publicKey.toBase58());
+  assert.equal(info.eligibleUnits, "150000000");
+  assert.equal(info.balanceUnits, "1000000000");
+  f.chain.historicalBalance = async () => {
+    throw Error("must use immutable cache");
+  };
+  await f.service.account(f.user.publicKey.toBase58());
+  await assert.rejects(f.q("151"), /ELIGIBILITY_EXCEEDED/);
+  await f.q("100");
+  assert.equal(calls, 1);
+  await assert.rejects(f.service.takeSnapshot({ at }), /SNAPSHOT_LOCKED/);
+  assert.equal((await f.service.status()).snapshot.wallets, 1);
+});
+test("direct quote hydrates history and a cached zero never falls back to current holdings", async (t) => {
+  const f = fixture(t);
+  await f.setup();
+  const at = historicalFixture(f);
+  let calls = 0;
+  f.chain.historicalBalance = async () => {
+    calls++;
+    return "0";
+  };
+  await f.service.takeSnapshot({ at });
+  await assert.rejects(f.q("1"), /ELIGIBILITY_EXCEEDED/);
+  await assert.rejects(f.q("1"), /ELIGIBILITY_EXCEEDED/);
+  assert.equal(calls, 1);
+  assert.equal(
+    (await f.service.account(f.user.publicKey.toBase58())).eligibleUnits,
+    "0",
+  );
+});
+test("historical provider failure preserves old snapshot and failed wallet read never caches zero", async (t) => {
+  const f = fixture(t);
+  await f.setup();
+  const at = historicalFixture(f);
+  const old = (await f.service.status()).snapshot;
+  const resolve = f.chain.snapshotAt;
+  f.chain.snapshotAt = async () => {
+    throw Error("provider unavailable");
+  };
+  await assert.rejects(f.service.takeSnapshot({ at }));
+  assert.equal((await f.service.status()).snapshot.checksum, old.checksum);
+  f.chain.snapshotAt = resolve;
+  await f.service.takeSnapshot({ at });
+  f.chain.historicalBalance = async () => {
+    throw Error("provider unavailable");
+  };
+  await assert.rejects(f.service.account(f.user.publicKey.toBase58()));
+  assert.equal(
+    f.db.prepare("SELECT count(*) n FROM migration_entitlements").get().n,
+    0,
+  );
+  await assert.rejects(
+    f.service.takeSnapshot({
+      at: new Date(f.options.now() + 10000).toISOString(),
+    }),
+    /INVALID_SNAPSHOT_TIME/,
+  );
+});
+test("snapshot replacement during async history read cannot publish stale entitlement", async (t) => {
+  const f = fixture(t);
+  await f.setup();
+  const at = historicalFixture(f);
+  await f.service.takeSnapshot({ at });
+  let finish;
+  const started = new Promise((resolve) => {
+    f.chain.historicalBalance = () => {
+      resolve();
+      return new Promise((r) => {
+        finish = r;
+      });
+    };
+  });
+  const account = f.service.account(f.user.publicKey.toBase58());
+  await started;
+  await f.service.takeSnapshot({
+    at: new Date(Date.parse(at) - 60000).toISOString(),
+  });
+  finish("100000000");
+  await assert.rejects(account, /CONFIGURATION_CHANGED/);
+  assert.equal(
+    f.db.prepare("SELECT count(*) n FROM migration_entitlements").get().n,
+    0,
+  );
 });
