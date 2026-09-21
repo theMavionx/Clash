@@ -1,5 +1,12 @@
 # Active Session State
 
+## CLASH custodial migration — Deployed, configuration required (2026-09-21)
+
+- `/migration` and existing Admin > Migration deployed as `20260921074659-3bb38d33`; ratio1:1, fee$2 SOL, chain4663, exact ledger and encrypted write-only treasury keys.
+- Full Deploy gate,22 server tests,4 UI unit tests and desktop/mobile mocked browser flow passed. Public page/API, admin403, release asset byte-match and five online services verified.
+- Acceptance disabled until destination contract, treasury keys/funds/inventory, Jupiter key and finalized snapshot are configured. Existing paid Alchemy key returns403 on Robinhood; admin supports a separate paid Robinhood-enabled key. No funded mainnet test performed.
+- Operator checklist and recovery limits: `production/reports/clash-migration-2026-09-21.md`. Never lose the separate shared migration-master.key; never duplicate an ambiguous payout/sale.
+
 ## LeverUp stocks/commodities chart coverage — Released (2026-09-18)
 
 - Official catalog's 52 HYPERLIQUID markets have exact venueSymbol but no Pyth feed. Adapter previously dropped that metadata; native chart identifiers now travel through all three terminal layouts to validated candleSnapshot reads.
