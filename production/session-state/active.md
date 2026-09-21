@@ -1,5 +1,11 @@
 # Active Session State
 
+## Explicit Solana hex preview — Released (2026-09-21)
+
+- Separate opt-in 32-byte hex derivation mode with local public-address preview, explicit address confirmation and canonical 64-byte encrypted save. Does not recover or convert MetaMask's Solana account. Normal backend validation unchanged.
+- Crypto tests, full mocked browser regression and canonical Deploy gate passed. Released `8257a869` as `20260921100126-8257a869`; runtime health, public bundle controls, status200/admin403 verified. No real key imported or funded transaction performed.
+- Report: `production/reports/solana-hex-preview-2026-09-21.md`; ADR0043. Owner must compare the derived public address before saving.
+
 ## Migration header edge — Released (2026-09-21)
 
 - Header cap removed:24px desktop and16px mobile gutters; main shell unchanged. Browser geometry/regression, visual review and build passed.

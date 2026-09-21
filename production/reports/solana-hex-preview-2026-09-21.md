@@ -5,4 +5,6 @@
 - Key/mode edits invalidate preview and consent; fields cleared on submission. Owner must compare public address and choose whether to save. No actual owner key acquired or treasury chosen during development/deployment.
 - Two crypto tests passed: RFC8032 seed/public-key vector, canonical64 validation, prefix/case and malformed formats. Full mocked browser regression passed including zero writes before save, disabled save, reset confirmation, no storage leaks and explicit canonical save to mocked server.
 - UX review found no blocker; hardened preview to avoid unnecessary serializedsecret. JS heap/string erasure cannot be guaranteed; no such claim made. Screenshot uses public test vector only.
-- Full canonical Deploy gate passed, including crypto tests/lint/build (existing build-size warnings). Release verification pending. No funded transaction or automatic credential update.
+- Full canonical Deploy gate passed, including crypto tests/lint/build (existing build-size warnings). No funded transaction or automatic credential update.
+- Released `8257a869` as `20260921100126-8257a869`; canonical runtime health passed. Public admin bundle `/assets/admin-B8uhLwnD.js` contains the explicit mode, preview control and non-conversion warning. Migration status HTTP200; unauthenticated admin HTTP403. Real owner-key/address comparison remains for the owner.
+- Canonical release retention removed old compiled release `20260921093253-8e440adc`, retaining two releases; source remains in Git. No migration ledger or credentials deleted.
