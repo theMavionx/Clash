@@ -1,5 +1,9 @@
 # User Request Log
 
+## UR-2026-09-21-SOLANA-HEX-PREVIEW
+
+- Owner explicitly asks to try32-byte Ethereum private key bytes as Solana seed, hoping resulting address matches existing wallet. Add clearly labeled local preview with address comparison/explicit save consent; never imply guaranteed MetaMask match, weaken normal key parser, or choose/save owner treasury automatically. No real secret requested.
+
 ## UR-2026-09-21-MIGRATION-HEADER-EDGE
 
 - Owner requests header logo closer to page edge. Remove desktop1200px centered header cap, use24px desktop gutter, preserve16px mobile gutter and main content layout. UI-only continuation of approved release.
