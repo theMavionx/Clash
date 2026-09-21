@@ -1,12 +1,19 @@
 # User Request Log
 
+## UR-2026-09-21-MIGRATION-CLASH-TARGET-CONTRACT
+
+- Owner supplied Robinhood token contract `0xceB9A7C4eC7bf0EE14Bac1f16C97571bC22DB979`: «ось ще адрес контракта постав токена». Verify exact chain/contract metadata and preserve ratio1, snapshot and all other settings; configure target only, no automatic activation or funded transfer.
+- Completed: live metadata/code/supply verified, target-only authenticated config update200; ratio1 and cutoff preserved. Paused with TARGET_INVENTORY_EMPTY (0CLASH in treasury); no actual-token funded transfer tested.
+
 ## UR-2026-09-21-MIGRATION-REMOVE-TIMING-PARAGRAPH
 
 - Owner explicitly requests removing the public paragraph beginning «New Robinhood payouts are scheduled 2.5–7 minutes…» urgently. Remove only its rendering; preserve actual payout delay, admin controls, and truthful Processing history state. Add to current authorized production rollout.
+- Completed: release20260921174301-b0bb9a4f, local browser/build and actual public desktop/mobile DOM checks passed; paragraph absent, delay remains150–420s.
 
 ## UR-2026-09-21-MIGRATION-SNAPSHOT-2028
 
 - Owner: «постав час теперішній 20 28 за києвом сьогоднішній день про снепшот». Requested cutoff2026-09-21T17:28:00Z (20:28 Europe/Kyiv). Existing snapshot locked by settled test requests: implement guarded replacement while paused with no unresolved requests/sales, archive old eligibility, preserve all financial records and consumed allocations. Keep migration paused and target contract blank. Verify, deploy required support and apply the specific authorized cutoff through admin API; no funded test or re-enablement.
+- Completed: authenticated replacement applied exactslot449122416/cutoff17:28UTC; old snapshot/two hydrated entries archived, financial hash unchanged, acceptance paused.89 focused/76 Linux tests, full Deploy gate and admin browser checks passed. Later owner supplied target contract, recorded above.
 
 ## UR-2026-09-21-MIGRATION-READINESS-RECHECK
 

@@ -1,5 +1,16 @@
 # Active Session State
 
+## Robinhood CLASH configured / public timing copy removed (2026-09-21)
+
+- Owner-supplied target `0xceB9A7C4eC7bf0EE14Bac1f16C97571bC22DB979` verified via paid Alchemy: chain4663, symbolCLASH, nameClash of Perps by Virtuals, decimals18, supply1billion, contract code present. Authenticated admin update changed targetToken only; ratio1, cutoff20:28Kyiv, delay150–420s, fees/sales controls and financial records preserved. Enabled remains false. Current blocker TARGET_INVENTORY_EMPTY: treasury `0x33859e82dfA5039c4A37DaCe86Ee799C95d4f466` has0CLASH; ETH0.034034470748419104 at block68987131. Do not enable/send funds automatically; actual-token transfer simulation/testing remains after funding.
+- UI follow-up deployed `20260921174301-b0bb9a4f` at17:46UTC. Live headless Edge desktop/mobile read-only smoke:200, requested timing paragraph absent, 1CLASH=1CLASH, exact17:28UTC cutoff, configured target, unchanged actual delay, no overflow/page errors. Canonical health passed. Prior rollback `20260921173928-a83e0d8e` retained; older compiled `20260921171534-f444d627` removed, source rebuildable. No migration financial sends initiated.
+
+## Migration snapshot advanced to20:28 Kyiv — applied (2026-09-21)
+
+- Owner requested cutoff2026-09-21T17:28:00Z. Deployed guarded replacement support `20260921173928-a83e0d8e`; authenticated API applied exact finalized slot449122416, checksum7020a106c12140cb5582f22545669d04b4cd4aba9a8a5eb38caa420487295f67. Public status confirmed. Migration stays disabled, ratio1, target contract empty; delay150–420s retained.
+- Old snapshot and two hydrated eligibility entries archived. Requests/sales/sends hash unchanged against protected scoped migration backup; paid4000CLASH->4USDG history and consumed allocation preserved. ADR0050 supersedes permanent snapshot lock: replacement requires explicit confirmation/checksum, pause, no unresolved requests/sales, and later time/slot.89 local focused tests,76 Linux tests, full Deploy gate and mocked desktop/mobile admin flow passed.
+- Owner follow-up removes public2.5–7minute timing paragraph only; UI removal released as described above. Report: production/reports/migration-snapshot-2028-2026-09-21.md. No funded migration tests or re-enablement.
+
 ## Virtual Protocol replacement verification — released (2026-09-21)
 
 - Replaced homepage verification content with owner's new `71ff5861617a9a0a29495408f32b8450`; exactly one tag inside head, old value absent in source, local build and public homepage200. Vite build/diff check passed. Verification service approval itself was not triggered or claimed.
