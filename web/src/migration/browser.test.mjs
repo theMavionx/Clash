@@ -15,6 +15,15 @@ const encoded = tx.serialize({ requireAllSignatures: false }).toString('base64')
 const output = new URL('../../artifacts/migration/', import.meta.url);
 await mkdir(output, { recursive: true });
 try {
+  const retryPage = await browser.newPage();
+  let initialStatusCalls = 0;
+  await retryPage.route('**/api/migration/status', route => ++initialStatusCalls === 1
+    ? route.fulfill({ status: 503, json: { error: 'MIGRATION_UNAVAILABLE' } })
+    : route.fulfill({ json: { enabled: true, ready: true, sourceDecimals: 6 } }));
+  await retryPage.goto('http://127.0.0.1:5211/migration');
+  await retryPage.getByText('Migration available', { exact: true }).waitFor({ timeout: 20000 });
+  assert.equal(initialStatusCalls, 2, 'Disconnected page recovers automatically after initial provider failure');
+  await retryPage.close();
   for (const width of [1440, 390, 320]) {
     const context = await browser.newContext({ viewport: { width, height: 900 } });
     const page = await context.newPage(); const errors = []; let submitted = 0, quoteCalls = 0;
@@ -232,6 +241,15 @@ try {
   admin.on('pageerror', error => { if (!adminErrors.length) adminErrors.push(error.stack); });
   admin.on('dialog', dialog => dialog.accept());
   await admin.route('**/api/migration/admin**', route => {
+    if (new URL(route.request().url()).pathname.endsWith('/ledger')) return route.fulfill({ json: {
+      page: 1, pageSize: 50, pages: 1, summary: { requests: 1, wallets: 1, confirmedDeposits: 1,
+        confirmedInputUnits: '4000000000', confirmedFeeLamports: '20000000', paidRequests: 1,
+        payouts: [{ targetToken: '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168', decimals: 6, units: '4000000' }] },
+      requests: [{ id: 'ledger-test', wallet: owner.toBase58(), destination: '0x'+'1'.repeat(40), status: 'paid',
+        inputUnits:'4000000000', outputUnits:'4000000', feeLamports:'20000000', targetDecimals:6,
+        targetToken:'0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168', createdAt:1790000000000,
+        depositedAt:1790000001000, paidAt:1790000002000 }],
+    } });
     if (route.request().method() !== 'GET') writes.push(route.request().postDataJSON());
     if (route.request().url().endsWith('/snapshot') && route.request().method() === 'POST') adminSnapshot = { ...adminSnapshot, mode: 'historical', requestedAt: Date.parse(route.request().postDataJSON().at), blockTime: Date.parse(route.request().postDataJSON().at) - 1000, wallets: 0 };
     return route.fulfill({ json: { config: { enabled: false, ratio: '1', targetToken: '0x' + '2'.repeat(40), feeUsd: '2', batchUsd: 400, idleSeconds: 600, residualUsd: 100, slippageBps: 500, maxSlippageBps: 1000 }, readiness: { ready: false, reasons: ['SNAPSHOT_REQUIRED'] }, snapshot: adminSnapshot, canReplaceSnapshot: !snapshotLocked, wallets: { solana: owner.toBase58(), evm: '0x' + '3'.repeat(40) }, requests: [], sales: [], audit: [{ event: 'snapshot_published', at: 1790000000000 }] } });
@@ -251,7 +269,15 @@ try {
   await cutoffInput.fill('2026-09-20T13:45');
   await cutoffConfirm.check();
   assert.equal(await cutoffInput.getAttribute('max'), new Date().toISOString().slice(0, 16));
-  assert.match(await admin.locator('tbody').innerText(), /UTC/);
+  assert.match((await admin.locator('tbody').allTextContents()).join(' '), /UTC/);
+  await admin.getByRole('heading', { name: 'Migration ledger', exact: true }).waitFor();
+  await admin.getByText('4000 CLASH', { exact: false }).waitFor();
+  const ledgerCard = admin.getByRole('heading', { name: 'Migration ledger', exact: true }).locator('..');
+  await ledgerCard.screenshot({ path: new URL('admin-ledger-desktop.png', output).pathname.replace(/^\/(\w:)/, '$1') });
+  await admin.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await admin.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'Ledger table scroll stays inside the mobile card');
+  await ledgerCard.screenshot({ path: new URL('admin-ledger-mobile.png', output).pathname.replace(/^\/(\w:)/, '$1') });
+  await admin.setViewportSize({ width: 1440, height: 1000 });
   await admin.getByLabel('New secret', { exact: true }).fill('local-test-private-key');
   await admin.getByRole('button', { name: 'Store encrypted credential' }).click();
   await admin.getByText('Saved. Readiness and settlement status refreshed.').waitFor();

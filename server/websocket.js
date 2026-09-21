@@ -73,17 +73,30 @@ function flushPendingAgentEvents(playerId, ws, { log = true } = {}) {
 }
 
 function setupWebSocket() {
-  const wss = new WebSocket.Server({ noServer: true });
+  const wss = new WebSocket.Server({ noServer: true, maxPayload: 64 * 1024, perMessageDeflate: false });
 
   wss.on('connection', (ws, req) => {
     const clientId = nextClientId++;
     let playerId = null;
     let playerToken = null;
+    let messageCount = 0, windowStart = Date.now();
+    const authDeadline = setTimeout(() => {
+      if (!playerId) ws.terminate();
+    }, 10000);
+    authDeadline.unref?.();
+    ws.on('error', () => {
+      // ws already initiates a protocol close for oversized/invalid frames.
+      if (ws.readyState === WebSocket.OPEN) ws.terminate();
+    });
 
     ws.on('message', (raw) => {
+      if (Date.now() - windowStart >= 10000) { messageCount = 0; windowStart = Date.now(); }
+      if (++messageCount > (playerId ? 60 : 5)) { ws.close(1008, 'Rate limit'); return; }
       let msg;
       try {
         msg = JSON.parse(raw);
+        if (!msg || typeof msg !== 'object' || Array.isArray(msg) ||
+          typeof msg.type !== 'string' || msg.type.length > 64) throw new Error('Invalid message');
       } catch {
         ws.send(JSON.stringify({ error: 'Invalid JSON' }));
         return;
@@ -95,13 +108,15 @@ function setupWebSocket() {
           ws.send(JSON.stringify({ error: 'Must authenticate first. Send: { type: "auth", token: "..." }' }));
           return;
         }
-        const player = db.authenticatePlayer(msg.token);
+        const player = typeof msg.token === 'string' && msg.token.length <= 256
+          ? db.authenticatePlayer(msg.token) : null;
         if (!player) {
           ws.send(JSON.stringify({ error: 'Invalid token' }));
           ws.close();
           return;
         }
         playerId = player.id;
+        clearTimeout(authDeadline);
         playerToken = msg.token;
         clients.set(clientId, { ws, playerId: player.id, playerName: player.name, token: playerToken });
         console.log(`\x1b[35mWS\x1b[0m auth \x1b[90m${player.name} (${player.id.slice(0,8)})\x1b[0m`);
@@ -123,10 +138,12 @@ function setupWebSocket() {
 
       // Handle game messages
       console.log(`\x1b[35mWS\x1b[0m ${msg.type} \x1b[90m${playerId.slice(0,8)}\x1b[0m`);
-      handleMessage(ws, playerId, msg);
+      try { handleMessage(ws, playerId, msg); }
+      catch { ws.send(JSON.stringify({ error: 'Request failed' })); }
     });
 
     ws.on('close', () => {
+      clearTimeout(authDeadline);
       if (playerToken) {
         const info = clients.get(clientId);
         clients.delete(clientId);
@@ -171,13 +188,10 @@ function handleMessage(ws, playerId, msg) {
       break;
 
     case 'add_resources':
-      result = db.addResources(playerId, Number(msg.gold) || 0, Number(msg.wood) || 0, Number(msg.ore) || 0);
-      ws.send(JSON.stringify({ type: 'resources', data: result }));
-      break;
-
     case 'subtract_resources':
-      result = db.subtractResources(playerId, Number(msg.gold) || 0, Number(msg.wood) || 0, Number(msg.ore) || 0);
-      ws.send(JSON.stringify({ type: 'resources', data: result }));
+      // These HTTP operations require adminAuth. A player WS token must not
+      // bypass that boundary or grant arbitrary gold/wood/ore.
+      ws.send(JSON.stringify({ error: 'Admin resource endpoint required', code: 'ADMIN_REQUIRED' }));
       break;
 
     case 'place_building':

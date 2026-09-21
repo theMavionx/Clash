@@ -7,6 +7,7 @@ const zlib = require('zlib');
 const nacl = require('tweetnacl');
 const bs58 = require('bs58').default || require('bs58');
 const db = require('./db');
+const { createWindow, rateAddress } = require('./http_security');
 const townHallFlagStorage = require('./town_hall_flag_storage');
 const hermesClient = require('./hermes_client');
 const hermesJobs = require('./hermes_jobs');
@@ -9475,7 +9476,7 @@ const CLIENT_LOG_WINDOW_MS = 60_000;
 const CLIENT_LOG_BATCH_MAX = 50;
 const CLIENT_LOG_RETENTION_DAYS = 7;
 const CLIENT_LOG_MAX_PER_WINDOW = 3000;  // bumped 30 → 3000 (100×) per user request
-const clientLogBuckets = new Map(); // ip → { count, resetAt }
+const clientLogBudget = createWindow({ windowMs: CLIENT_LOG_WINDOW_MS });
 const insertClientLog = db.db.prepare(`
   INSERT INTO client_logs
     (player_id, ip, level, source, url, ua, message, stack, payload)
@@ -9513,7 +9514,7 @@ function clampText(v, max) {
 function normalizeClientLevel(v) {
   const s = String(v || 'info').toLowerCase();
   if (['log', 'info', 'warn', 'error', 'debug', 'unhandledrejection', 'onerror'].includes(s)) return s;
-  return s.replace(/[^a-z0-9_-]/g, '').slice(0, 24) || 'info';
+  return 'info';
 }
 
 function normalizeStoredClientLog(row) {
@@ -9615,29 +9616,22 @@ function mirrorClientLogToServer(row) {
 }
 
 function clientLogRateOk(ip, n) {
-  const now = Date.now();
-  const b = clientLogBuckets.get(ip);
-  if (b && b.resetAt > now) {
-    if (b.count + n > CLIENT_LOG_MAX_PER_WINDOW) return false;
-    b.count += n;
-    return true;
-  }
-  clientLogBuckets.set(ip, { count: n, resetAt: now + CLIENT_LOG_WINDOW_MS });
-  return true;
+  return clientLogBudget('global', 6000, n).ok &&
+    clientLogBudget('ip:' + ip, CLIENT_LOG_MAX_PER_WINDOW, n).ok;
 }
 
 setInterval(() => {
-  const now = Date.now();
-  for (const [k, v] of clientLogBuckets) if (v.resetAt < now) clientLogBuckets.delete(k);
   try { pruneClientLogs.run(`-${CLIENT_LOG_RETENTION_DAYS} days`); } catch {}
 }, 5 * 60_000).unref?.();
 
 // Public client-log ingestion is non-critical and can be abused for DoS, so
 // persist only bounded batches and leave full details to encrypted diagnostics.
 router.post('/client-log', (req, res) => {
-  try { pruneClientLogs.run(`-${CLIENT_LOG_RETENTION_DAYS} days`); } catch {}
-  const ip = clampText(req.headers['x-real-ip'] || req.ip || 'anon', 64);
+  const ip = rateAddress(req);
   const rawEvents = Array.isArray(req.body?.events) ? req.body.events : [req.body || {}];
+  if (!rawEvents.length || rawEvents.length > CLIENT_LOG_BATCH_MAX ||
+    rawEvents.some(ev => !ev || typeof ev !== 'object' || Array.isArray(ev)))
+    return res.status(400).json({ ok: false });
   const events = rawEvents.slice(0, CLIENT_LOG_BATCH_MAX);
   if (!clientLogRateOk(ip, events.length)) return res.status(429).json({ ok: false });
   let playerId = null;
@@ -9653,7 +9647,7 @@ router.post('/client-log', (req, res) => {
     player_id: playerId,
     ip,
     level: normalizeClientLevel(ev.level),
-    source: clampText(ev.source, 64),
+    source: String(ev.source || '').startsWith('server.') ? 'client.untrusted' : clampText(ev.source, 64),
     url: clampText(ev.url, 512),
     ua: clampText(ev.ua, 256),
     message: clampText(ev.message || ev.msg || '', 2048) || '(empty)',
@@ -9666,7 +9660,7 @@ router.post('/client-log', (req, res) => {
     for (const row of rows) mirrorClientLogToServer(row);
     res.json({ ok: true, stored: rows.length });
   } catch (e) {
-    console.warn('[client-log] insert failed:', e.message);
+    console.warn('[client-log] insert failed: STORAGE_UNAVAILABLE');
     res.status(500).json({ ok: false });
   }
 });

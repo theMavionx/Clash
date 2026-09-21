@@ -34,6 +34,9 @@ const clashDb = require('./db');
 const earnings = require('./earnings');
 const { startDailyLogAiScheduler } = require('./log_ai_analyzer');
 const { setupWebSocket, getOnlinePlayers } = require('./websocket');
+const { securityHeaders, safeRequestPath, createMigrationIngress, validAdmin,
+  allowedOrigin, botUpgradePlayer, createWindow, rateAddress, createClientLogIngress } = require('./http_security');
+const { createRuntimeDiagnostics } = require('./runtime_diagnostics');
 
 const PORT = process.env.PORT || 4000;
 const WEB_DIST_DIR = path.join(REPO_ROOT, 'web', 'dist');
@@ -66,6 +69,10 @@ function setWebStaticHeaders(res, filePath) {
 }
 
 const app = express();
+app.disable('x-powered-by');
+app.use(securityHeaders);
+const runtimeDiagnostics = createRuntimeDiagnostics({ db: clashDb.db, warn: code => console.warn(code) });
+app.use(runtimeDiagnostics.middleware);
 // Production traffic is normally behind nginx on the same host. Trust only
 // loopback proxy headers so per-IP rate limits do not collapse all users into
 // 127.0.0.1, while still ignoring spoofed X-Forwarded-For from the open web.
@@ -82,15 +89,21 @@ const ALLOWED_ORIGINS = new Set(
 app.use(cors({
   origin(origin, cb) {
     if (!origin) return cb(null, true);
-    if (ALLOWED_ORIGINS.has(origin) || LOCALHOST_RE.test(origin)) return cb(null, true);
-    return cb(new Error(`CORS: origin '${origin}' not allowed`));
+    if (ALLOWED_ORIGINS.has(origin) || (process.env.NODE_ENV !== 'production' && LOCALHOST_RE.test(origin))) return cb(null, true);
+    return cb(Object.assign(new Error('Origin not allowed'), { code: 'ORIGIN_NOT_ALLOWED' }));
   },
   credentials: false,
 }));
+// Bound and authenticate sensitive traffic before parsing credential bodies.
+app.use('/api/migration', createMigrationIngress());
+app.use('/api/client-log', createClientLogIngress());
 const parseGameJson = express.json({ limit: process.env.CLASH_JSON_LIMIT || '2mb' });
-const parseVaultJson = express.json({ limit: '40kb' });
+const parseLogJson = express.json({ limit: '100kb', inflate: false });
+const parseVaultJson = express.json({ limit: '40kb', inflate: false });
 app.use((req, res, next) => {
-  if (!req.path.startsWith('/api/players/trading-credentials') && !req.path.startsWith('/api/migration')) return parseGameJson(req, res, next);
+  const requestPath = req.path.toLowerCase();
+  if (requestPath === '/api/client-log' || requestPath === '/api/client-log/') return parseLogJson(req, res, next);
+  if (!requestPath.startsWith('/api/players/trading-credentials') && !requestPath.startsWith('/api/migration')) return parseGameJson(req, res, next);
   res.set('Cache-Control', 'no-store, private');
   return parseVaultJson(req, res, error => {
     if (!error) return next();
@@ -107,15 +120,16 @@ if (fs.existsSync(WEB_DIST_DIR)) {
 function dashboardAuth(req, res, next) {
   if (process.env.PUBLIC_DASHBOARD === '1') return next();
   const adminKey = process.env.ADMIN_KEY || process.env.CLASH_ADMIN_KEY;
-  const provided = req.headers['x-admin-key'] || req.query.admin_key;
-  if (adminKey && provided === adminKey) return next();
+  if (validAdmin(req, { ADMIN_KEY: adminKey })) return next();
+  if (process.env.NODE_ENV !== 'production' && adminKey && req.query.admin_key === adminKey) return next();
   return res.status(404).send('Not found');
 }
 
 // Request logger
 app.use((req, res, next) => {
   const start = Date.now();
-  const { method, url } = req;
+  const { method } = req;
+  const url = safeRequestPath(req);
   res.on('finish', () => {
     const ms = Date.now() - start;
     const status = res.statusCode;
@@ -1411,7 +1425,9 @@ app.get('/api/admin/panel', (req, res) => {
 </div>
 
 <script>
-let KEY = localStorage.getItem('admin_key') || '';
+let KEY = sessionStorage.getItem('admin_key') || localStorage.getItem('admin_key') || '';
+if (KEY) sessionStorage.setItem('admin_key', KEY);
+localStorage.removeItem('admin_key');
 let players = [], replays = [];
 let localToolsPlayer = '';
 const ADMIN_BUILDING_TOOL_DEFS = [
@@ -1471,7 +1487,8 @@ async function doLogin() {
   KEY = document.getElementById('key').value;
   try {
     await api('/admin/players');
-    localStorage.setItem('admin_key', KEY);
+    sessionStorage.setItem('admin_key', KEY);
+    localStorage.removeItem('admin_key');
     document.getElementById('login').style.display = 'none';
     document.getElementById('app').style.display = 'block';
     loadAll();
@@ -1482,6 +1499,8 @@ async function doLogin() {
 
 function logout() {
   localStorage.removeItem('admin_key');
+  sessionStorage.removeItem('admin_key');
+  KEY = '';
   document.getElementById('login').style.display = 'flex';
   document.getElementById('app').style.display = 'none';
 }
@@ -5530,22 +5549,15 @@ app.get('/r/:code', (req, res) => {
 });
 startDailyLogAiScheduler();
 
-// Error handler
-// In production, log the compact message + first stack frame — full stacks
-// reveal file paths / line numbers, which is useful for an attacker probing
-// the API but noisy in prod log aggregators. In dev (NODE_ENV !== 'production')
-// keep the full stack for local debugging.
-app.use((err, req, res, _next) => {
-  if (process.env.NODE_ENV === 'production') {
-    const firstFrame = String(err.stack || '').split('\n')[1] || '';
-    console.error(`[err] ${req.method} ${req.url} → ${err.message} ${firstFrame.trim()}`);
-  } else {
-    console.error(err.stack);
-  }
-  res.status(500).json({ error: 'Internal server error' });
-});
+// Persist bounded, secret-free correlation metadata; never raw exception text.
+app.use(runtimeDiagnostics.errorHandler);
 
 const server = http.createServer(app);
+server.headersTimeout = 15000;
+server.requestTimeout = 30000;
+server.keepAliveTimeout = 5000;
+server.maxHeadersCount = 100;
+server.maxRequestsPerSocket = 1000;
 
 // Game WS (/ws) and bot WS (/api/v1/bot/ws) share one HTTP server — route
 // upgrades explicitly so /api/v1/bot/ws is not rejected by the game socket.
@@ -5553,31 +5565,23 @@ const gameWss = setupWebSocket();
 
 // Proxy WebSocket connections for the bot (port 8080)
 const WebSocket = require('ws');
-const botWss = new WebSocket.Server({ noServer: true });
+const botWss = new WebSocket.Server({ noServer: true, maxPayload: 256 * 1024, perMessageDeflate: false });
 botWss.on('connection', (clientWs, upgradeReq) => {
-  const url = require('url').parse(upgradeReq.url, true);
-  const token = upgradeReq.headers['x-token'] || url.query?.token;
-  let tenantId = 'default';
-  if (token) {
-    try {
-      const db = require('./db');
-      const player = db.authenticatePlayer(token);
-      if (player) {
-        tenantId = player.id;
-      }
-    } catch (err) {
-      console.warn('[bot-ws-proxy] player auth failed:', err.message);
-    }
-  }
+  const tenantId = upgradeReq.clashBotPlayerId;
+  if (!tenantId) { clientWs.close(1008, 'Authentication required'); return; }
 
   const BOT_WS_URL = process.env.CLASH_BOT_WS_URL || 'ws://127.0.0.1:8080';
   const botWs = new WebSocket(`${BOT_WS_URL}/ws`, {
+    maxPayload: 4 * 1024 * 1024,
+    perMessageDeflate: false,
     headers: {
       'X-Tenant-Id': tenantId,
     },
   });
 
+  const botMessages = createWindow({ windowMs: 10000 });
   clientWs.on('message', (message) => {
+    if (!botMessages('messages', 60).ok) { clientWs.close(1008, 'Rate limit'); return; }
     if (botWs.readyState === WebSocket.OPEN) {
       botWs.send(message);
     }
@@ -5595,15 +5599,25 @@ botWss.on('connection', (clientWs, upgradeReq) => {
   botWs.on('error', () => clientWs.close());
 });
 
+const upgradeLimit = createWindow();
 server.on('upgrade', (request, socket, head) => {
+  if (!allowedOrigin(request.headers.origin) || !upgradeLimit(rateAddress(request), 60).ok) {
+    socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
+    return;
+  }
   const pathname = require('url').parse(request.url).pathname;
   if (pathname === '/api/v1/bot/ws' || pathname === '/ws-bot') {
+    if (botWss.clients.size >= 500) { socket.destroy(); return; }
+    const player = botUpgradePlayer(request, token => clashDb.authenticatePlayer(token));
+    if (!player) { socket.end('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n'); return; }
+    request.clashBotPlayerId = player.id;
     botWss.handleUpgrade(request, socket, head, (ws) => {
       botWss.emit('connection', ws, request);
     });
     return;
   }
   if (pathname === '/ws') {
+    if (gameWss.clients.size >= 2000) { socket.destroy(); return; }
     gameWss.handleUpgrade(request, socket, head, (ws) => {
       gameWss.emit('connection', ws, request);
     });

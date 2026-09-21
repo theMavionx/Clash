@@ -1,5 +1,32 @@
 # User Request Log
 
+## UR-2026-09-21-PRODUCTION-RELIABILITY
+
+- Follow-up: «так потім все деплой» — deploy the completed, verified package after release checks. «ми його не використовуємо і він безкоштовний» — do not rotate Tatum in this task; retain the disclosure record without repeating its value.
+- Follow-up: «а і все записуй кожного юзера хто що скільки скинув і тд в адмінці все показуй» — expose durable per-wallet migration amounts, fees, recipient, timestamps and transaction/status evidence in admin; distinguish quotes, confirmed deposits and confirmed payouts.
+
+- Owner: «ну і зроби прод варіант нашого сайту щоб все безеперібйно працювало пошукай ще баги, перевір інші нюанси, помилки зберігай». Prepare and verify production readiness, investigate further defects, and persist safe error diagnostics and reproducible bug reports. Preserve all prior security/sales work. Never promise zero downtime or weaken custody checks; no funded tests or blind infrastructure changes.
+
+## UR-2026-09-21-SECURITY-HARDENING
+
+- Owner: «перевір як все з безпекою з ддос атаками з ключами і так далі максимальний захист став». Audit API/admin/migration credentials and denial-of-service exposure; implement tested defensive controls locally and perform bounded read-only production configuration checks. No attack traffic, credential disclosure/rotation, financial execution or unreviewed production firewall changes. Preserve pending local sales/minimum changes.
+
+## UR-2026-09-21-MIGRATION-MINIMUM-SALE
+
+- Owner: «постав щоб нижче 100 не продавалося». Require at least $100 estimated value for every new migration sale, including idle residual batches; no smaller final remainder. Verify exact boundary, rounding, accumulated lots and unchanged in-flight reconciliation. Prepare locally without running real sales.
+
+## UR-2026-09-21-MIGRATION-SMALL-SALE-CHECK
+
+- Owner: «а постав зараз скільки і нас там того клеша мінімально і спробуй перевірити чи скрипт продасть його». Read current treasury and sale ledger; test a low threshold in an isolated local fixture. Do not lower production thresholds to trigger a financial trade or sign/broadcast a sale.
+
+## UR-2026-09-21-MIGRATION-AUTO-SALES-SCRIPT
+
+- Owner: «то напиши авто скрипт він чекати баланс ще має і тд». Build a local owner-operated sales runner using the existing migration ledger and lease. Default read-only checks, wait for paid migration lots/finalized source balance/gas, bounded low-to-high slippage simulation, persisted identical-transaction recovery and redacted logs. No production activation, financial transaction, commit or deployment in this task.
+
+## UR-2026-09-21-MIGRATION-SALE-TEST
+
+- Owner: «а тепер пробуй продати той клеш що ти отримав тестово ключ в тебе є юпітера». Check the received 4000 CLASH and Jupiter quote read-only; do not sign or broadcast a financial trade. Final execution remains with the owner. Keep API and wallet credentials private.
+
 ## UR-2026-09-21-SOLANA-HEX-PREVIEW
 
 - Owner explicitly asks to try32-byte Ethereum private key bytes as Solana seed, hoping resulting address matches existing wallet. Add clearly labeled local preview with address comparison/explicit save consent; never imply guaranteed MetaMask match, weaken normal key parser, or choose/save owner treasury automatically. No real secret requested.

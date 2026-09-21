@@ -14,10 +14,14 @@ export function getStoredAdminKey() {
   try {
     const keyFromQuery = queryAdminKey();
     if (keyFromQuery) {
-      localStorage.setItem(KEY_STORAGE, keyFromQuery);
+      sessionStorage.setItem(KEY_STORAGE, keyFromQuery);
+      localStorage.removeItem(KEY_STORAGE);
       return keyFromQuery;
     }
-    return localStorage.getItem(KEY_STORAGE) || '';
+    const key = sessionStorage.getItem(KEY_STORAGE) || localStorage.getItem(KEY_STORAGE) || '';
+    if (key) sessionStorage.setItem(KEY_STORAGE, key);
+    localStorage.removeItem(KEY_STORAGE);
+    return key;
   } catch {
     return '';
   }
@@ -25,7 +29,8 @@ export function getStoredAdminKey() {
 
 export function storeAdminKey(key) {
   try {
-    localStorage.setItem(KEY_STORAGE, key || '');
+    sessionStorage.setItem(KEY_STORAGE, key || '');
+    localStorage.removeItem(KEY_STORAGE);
   } catch {
     /* storage disabled */
   }
@@ -34,6 +39,7 @@ export function storeAdminKey(key) {
 export function clearAdminKey() {
   try {
     localStorage.removeItem(KEY_STORAGE);
+    sessionStorage.removeItem(KEY_STORAGE);
   } catch {
     /* storage disabled */
   }

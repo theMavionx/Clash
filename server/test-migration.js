@@ -40,6 +40,7 @@ function fixture(t) {
       balances: { [user.publicKey.toBase58()]: "1000000000" },
     }),
     balance: async () => "1000000000",
+    saleBalance: async () => ({ tokenUnits: "1000000000", solLamports: "100000000" }),
     prices: async () => ({
       solUsdMicros: "100000000",
       clashUsdMicros: "1000000",
@@ -162,6 +163,21 @@ test("challenge signature binds owner, one-time nonce and expiration", async (t)
   );
   f.advance(3600001);
   assert.throws(() => f.service.authenticate(session.token), /AUTH_REQUIRED/);
+});
+
+test("repeated challenges reuse live nonce and sessions remain bounded per wallet", async t => {
+  const f = fixture(t), wallet = f.user.publicKey.toBase58();
+  const first = f.service.challenge(wallet);
+  for (let i = 0; i < 30; i++) assert.equal(f.service.challenge(wallet).id, first.id);
+  assert.equal(f.db.prepare("SELECT count(*) n FROM migration_auth").get().n, 1);
+  for (let i = 0; i < 10; i++) {
+    const challenge = f.service.challenge(wallet);
+    const signature = Buffer.from(nacl.sign.detached(Buffer.from(challenge.message), f.user.secretKey)).toString("base64");
+    f.service.verify(challenge.id, signature);
+    f.advance(1);
+  }
+  assert.equal(f.db.prepare("SELECT count(*) n FROM migration_sessions WHERE wallet=?").get(wallet).n, 8);
+  assert.throws(() => f.service.verify("x".repeat(10000), "x".repeat(10000)), /INVALID_SIGNATURE/);
 });
 test("quote reserves allowance and inventory, retries are idempotent", async (t) => {
   const f = fixture(t);
@@ -289,7 +305,7 @@ test("second worker cannot acquire live lease during an awaited call", async (t)
 test("liquidation consumes only confirmed lots once; residual waits ten minutes", async (t) => {
   const f = fixture(t);
   await f.setup();
-  const q = await f.q("50");
+  const q = await f.q("100");
   await f.service.submit(f.user.publicKey.toBase58(), q.id, "valid");
   f.state.deposit = "confirmed";
   f.state.payout = "confirmed";
@@ -308,7 +324,7 @@ test("liquidation consumes only confirmed lots once; residual waits ten minutes"
     JSON.parse(
       f.db.prepare("SELECT payload FROM migration_requests").get().payload,
     ).soldUnits,
-    "50000000",
+    "100000000",
   );
 });
 test("slippage cannot exceed owner-approved 10 percent", async (t) => {
@@ -317,6 +333,164 @@ test("slippage cannot exceed owner-approved 10 percent", async (t) => {
     f.service.updateConfig({ maxSlippageBps: 1001 }),
     /INVALID_SLIPPAGE/,
   );
+});
+
+async function paidLot(f, amount = "100") {
+  await f.setup();
+  const q = await f.q(amount);
+  await f.service.submit(f.user.publicKey.toBase58(), q.id, "valid");
+  f.state.deposit = "confirmed";
+  f.state.payout = "confirmed";
+  await f.service.tick();
+  f.advance(600001);
+  return q;
+}
+
+test("sales runner waits for actual finalized balance and gas; unrelated holdings are never sold", async t => {
+  const f = fixture(t);
+  await paidLot(f);
+  f.chain.saleBalance = async () => ({ tokenUnits: "99999999", solLamports: "100000000" });
+  assert.equal((await f.service.tickSales()).reason, "SALE_BALANCE_UNAVAILABLE");
+  assert.equal(f.state.sales, 0);
+  f.chain.saleBalance = async () => ({ tokenUnits: "999999999999", solLamports: "9999999" });
+  assert.equal((await f.service.tickSales()).reason, "SOL_GAS_REQUIRED");
+  f.chain.saleBalance = async () => ({ tokenUnits: "999999999999", solLamports: "100000000" });
+  const preview = await f.service.salesPreview();
+  assert.equal(preview.state, "ready");
+  assert.equal(preview.inputUnits, "100000000");
+  assert.equal(preview.slippageBps, 50);
+  assert.equal(preview.maxSlippageBps, 1000);
+  assert.equal(f.state.sales, 0);
+  assert.equal((await f.service.tickSales()).state, "signed");
+  assert.equal(f.state.sales, 1);
+});
+
+test("read-only sale preview cannot mutate DB or load any secret", async t => {
+  const f = fixture(t);
+  await paidLot(f);
+  const file = path.join(path.dirname(f.options.keyFile), "preview.db");
+  await f.db.backup(file);
+  const before = fs.readFileSync(file);
+  const db = new Database(file, { readonly: true });
+  const preview = createMigration({ db, chain: f.chain, now: f.options.now });
+  try {
+    assert.equal((await preview.salesPreview()).state, "ready");
+    await assert.rejects(preview.tickSales(), /READ_ONLY_WORKER/);
+    assert.equal(f.state.sales, 0);
+  } finally { db.close(); }
+  assert.deepEqual(fs.readFileSync(file), before);
+});
+
+test("sales-only runner cannot advance payouts; pending payout tokens remain unavailable", async t => {
+  const f = fixture(t);
+  await f.setup();
+  const q = await f.q();
+  await f.service.submit(f.user.publicKey.toBase58(), q.id, "valid");
+  f.state.deposit = "confirmed";
+  f.advance(600001);
+  assert.equal((await f.service.tickSales()).reason, "NO_PAID_LOTS");
+  assert.equal(f.state.payouts, 0);
+  assert.equal(f.state.broadcasts.length, 0);
+});
+
+test("sales runner shares lease with embedded worker and restores identical pending bytes", async t => {
+  const f = fixture(t);
+  await paidLot(f);
+  let release;
+  const original = f.chain.prepareSale;
+  f.chain.prepareSale = () => new Promise(resolve => { release = async () => resolve(await original()); });
+  const run = f.service.tickSales();
+  await new Promise(resolve => setImmediate(resolve));
+  const other = createMigration(f.options);
+  await assert.rejects(other.tick(), /WORKER_BUSY/);
+  await assert.rejects(other.tickSales(), /WORKER_BUSY/);
+  await release();
+  await run;
+  f.chain.prepareSale = original;
+  await other.tickSales();
+  await other.tickSales();
+  assert.equal(f.state.sales, 1);
+  assert.deepEqual(f.state.broadcasts.filter(x => x === "sale"), ["sale", "sale"]);
+  f.state.sale = "expired";
+  assert.equal((await other.tickSales()).state, "review");
+  const sent = f.state.broadcasts.length;
+  await other.tickSales();
+  assert.equal(f.state.sales, 1);
+  assert.equal(f.state.broadcasts.length, sent);
+  f.state.sale = "confirmed";
+  await other.tickSales();
+  await other.tickSales();
+  assert.equal(JSON.parse(f.db.prepare("SELECT payload FROM migration_requests").get().payload).soldUnits, "100000000");
+});
+
+test("emergency pause during sale simulation prevents persisting or sending prepared trade", async t => {
+  const f = fixture(t);
+  await paidLot(f);
+  const original = f.chain.prepareSale;
+  f.chain.prepareSale = async () => {
+    await f.service.updateConfig({ enabled: false });
+    return original();
+  };
+  const before = f.state.broadcasts.length;
+  assert.equal((await f.service.tickSales()).reason, "MIGRATION_PAUSED");
+  assert.equal(f.db.prepare("SELECT count(*) n FROM migration_sales").get().n, 0);
+  assert.equal(f.state.broadcasts.length, before);
+});
+
+test("wait diagnostics are deduplicated and never expose provider exception text", async t => {
+  const f = fixture(t);
+  await f.setup();
+  f.chain.saleBalance = async () => { throw Error("https://provider/secret-key"); };
+  await f.service.tickSales();
+  await f.service.tickSales();
+  const audit = f.db.prepare("SELECT event FROM migration_audit WHERE event LIKE 'sale_%'").all();
+  assert.deepEqual(audit, [{ event: "sale_deferred:UPSTREAM_RETRY" }]);
+});
+
+test("idle time never permits a sale below $100; exact minimum is allowed", async t => {
+  const f = fixture(t);
+  await paidLot(f, "99.999999");
+  f.advance(7 * 86400000);
+  assert.equal((await f.service.tickSales()).reason, "SALE_BELOW_MINIMUM");
+  assert.equal(f.state.sales, 0);
+  const q = await f.q("0.000001", "minimum-top-up-123456");
+  await f.service.submit(f.user.publicKey.toBase58(), q.id, "valid");
+  await f.service.tick();
+  assert.equal(f.state.sales, 1);
+  const sale = JSON.parse(f.db.prepare("SELECT payload FROM migration_sales").get().payload);
+  assert.equal(sale.inputUnits, "100000000");
+  assert.equal(sale.lots.length, 2);
+});
+
+test("sub-$100 remainder waits after a completed $100 residual sale", async t => {
+  const f = fixture(t);
+  await paidLot(f, "150");
+  assert.equal((await f.service.tickSales()).inputUnits, "100000000");
+  f.state.sale = "confirmed";
+  await f.service.tickSales();
+  f.advance(86400000);
+  assert.equal((await f.service.tickSales()).reason, "SALE_BELOW_MINIMUM");
+  assert.equal(f.state.sales, 1);
+  const row = JSON.parse(f.db.prepare("SELECT payload FROM migration_requests").get().payload);
+  assert.equal(row.soldUnits, "100000000");
+});
+
+test("residual rounding cannot produce a batch just below the minimum", async t => {
+  const f = fixture(t);
+  await paidLot(f, "100");
+  f.chain.prices = async () => ({ clashUsdMicros: "3000000", solUsdMicros: "100000000" });
+  const plan = await f.service.salesPreview();
+  assert.equal(plan.inputUnits, "33333334");
+  assert.ok(BigInt(plan.inputUnits) * 3000000n / 1000000n >= units("100"));
+});
+
+test("normal $400 batches remain unchanged and config cannot bypass $100 floor", async t => {
+  const f = fixture(t);
+  await paidLot(f, "500");
+  const sale = JSON.parse(f.db.prepare("SELECT payload FROM migration_sales").get().payload);
+  assert.equal(sale.inputUnits, "400000000");
+  await assert.rejects(f.service.updateConfig({ residualUsd: "99.999999" }), /SALE_MINIMUM_100_USD/);
+  await assert.rejects(f.service.updateConfig({ batchUsd: "99", residualUsd: "99" }), /SALE_MINIMUM_100_USD/);
 });
 test("unsigned quotes resume and cancel; signed deposit cannot cancel", async (t) => {
   const f = fixture(t);

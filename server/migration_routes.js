@@ -5,6 +5,8 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const { createMigration, MigrationError } = require("./migration_core");
 const { createMigrationChain } = require("./migration_chain");
+const { createMigrationIngress, validAdmin, createReadCache } = require("./http_security");
+const { readMigrationLedger } = require("./migration_ledger");
 function createMigrationRouter({
   db,
   env = process.env,
@@ -40,7 +42,9 @@ function createMigrationRouter({
     chain: chain || createMigrationChain(env),
     keyFile: keyFile || env.MIGRATION_KEY_FILE || defaultKey,
   });
-  const rates = new Map();
+  const publicStatus = createReadCache(() => service.status());
+  const operations = { admin: 0, public: 0 };
+  router.use(createMigrationIngress({ env }));
   router.use((req, res, next) => {
     const started = Date.now(), traceId = crypto.randomUUID();
     res.set("X-Migration-Trace-Id", traceId);
@@ -60,34 +64,17 @@ function createMigrationRouter({
     });
     res.set("Cache-Control", "no-store, private");
     res.set("X-Content-Type-Options", "nosniff");
-    const origin = req.headers.origin;
-    if (
-      origin &&
-      !["https://clashofperps.fun", "https://www.clashofperps.fun"].includes(
-        origin,
-      ) &&
-      !(
-        env.NODE_ENV !== "production" &&
-        /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin)
-      )
-    )
-      return res.status(403).json({ error: "ORIGIN_NOT_ALLOWED" });
-    const now = Date.now(),
-      ip = req.ip || "unknown";
-    for (const [key, r] of rates) if (r.until < now) rates.delete(key);
-    let r = rates.get(ip);
-    if (!r) {
-      if (rates.size >= 10000)
-        return res.status(429).json({ error: "RATE_LIMIT" });
-      r = { count: 0, until: now + 60000 };
-      rates.set(ip, r);
-    }
-    if (++r.count > 90) return res.status(429).json({ error: "RATE_LIMIT" });
     next();
   });
   const run = (fn) => async (req, res) => {
+    const group = req.path.toLowerCase().startsWith("/admin") ? "admin" : "public";
+    if (operations[group] >= (group === "admin" ? 4 : 24))
+      return res.set("Retry-After", "2").status(503).json({ error: "MIGRATION_BUSY" });
+    // Count underlying operations until settled, even if the client disconnects.
+    operations[group]++;
     try {
       const result = await fn(req);
+      if (group === "admin" && req.method !== "GET") publicStatus.clear();
       res.locals.migrationRequestId = result?.id;
       res.json(result);
     } catch (e) {
@@ -107,6 +94,8 @@ function createMigrationRouter({
         error: res.locals.migrationErrorCode,
         traceId: res.locals.migrationTraceId,
       });
+    } finally {
+      operations[group]--;
     }
   };
   const auth = (req) =>
@@ -114,15 +103,13 @@ function createMigrationRouter({
       String(req.headers.authorization || "").replace(/^Bearer /, ""),
     );
   const admin = (req, res, next) => {
-    const a = Buffer.from(String(req.headers["x-admin-key"] || "")),
-      b = Buffer.from(env.ADMIN_KEY || "");
-    if (!b.length || a.length !== b.length || !crypto.timingSafeEqual(a, b))
+    if (!validAdmin(req, env))
       return res.status(403).json({ error: "Forbidden" });
     next();
   };
   router.get(
     "/status",
-    run(() => service.status()),
+    run(() => publicStatus.get()),
   );
   router.post(
     "/challenge",
@@ -158,6 +145,14 @@ function createMigrationRouter({
   router.get("/admin/diagnostics", admin, run(() => ({
     events: db.prepare("SELECT payload FROM migration_diagnostics ORDER BY id DESC LIMIT 200").all().map(row => JSON.parse(row.payload)),
   })));
+  router.get('/admin/ledger', admin, run(req => {
+    try { return readMigrationLedger(db, { wallet: req.query.wallet || '', page: req.query.page || 1 }); }
+    catch (error) {
+      if (['INVALID_LEDGER_FILTER', 'INVALID_LEDGER_PAGE'].includes(error.message))
+        throw new MigrationError(error.message, 400);
+      throw error;
+    }
+  }));
   router.put(
     "/admin/config",
     admin,

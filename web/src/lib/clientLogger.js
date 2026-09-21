@@ -25,7 +25,7 @@ const ACTION_RECENT_MAX = 18;
 const ACTION_CONTEXT_MAX_AGE_MS = 30 * 60_000;
 const FETCH_RECOVERY_WINDOW_MS = 10 * 60_000;
 const EVENT_DEDUPE_WINDOW_MS = 30_000;
-const REDACT_KEY_RE = /(token|secret|private|password|authorization|signature|signedmessage|signed_message|x-token|cookie|api.?key|credential)/i;
+const REDACT_KEY_RE = /(token|secret|private|password|authorization|signature|signedmessage|signed_message|x-token|cookie|api.?key|credential|mnemonic|seed|recoveryphrase)/i;
 const IMPORTANT_BREADCRUMB_RE = /(Phoenix|phoenix|solana|wallet|rpc|transaction|fetch)/i;
 const NOISY_LOG_RE = /^\[load\] stage(1 download|2 signal)/;
 const NOISY_SERVER_RE = /^(WalletConnect Core is already initialized|Backpack couldn't override `window\.ethereum`|Mobile Wallet Adapter was registered as a Standard Wallet)/;
@@ -132,7 +132,8 @@ function maskAddress(addr) {
 
 function redactText(value) {
   return String(value)
-    .replace(/([?&](?:api[-_]?key|apikey)=)[^&\s"')]+/gi, '$1[redacted]')
+    .replace(/([?&](?:api[-_]?key|apikey|admin_key|token|access_token|secret|signature|password)=)[^&\s"')]+/gi, '$1[redacted]')
+    .replace(/(Bearer\s+)[A-Za-z0-9._~-]+/gi, '$1[redacted]')
     .replace(/(\/v2\/)[A-Za-z0-9_-]{16,}/g, '$1[redacted]')
     .replace(/0x[a-fA-F0-9]{32,64}/g, (m) => maskAddress(m))
     .replace(/\b[1-9A-HJ-NP-Za-km-z]{32,48}\b/g, (m) => maskAddress(m));
@@ -147,8 +148,8 @@ function sanitize(value, depth = 0, seen = new WeakSet()) {
   if (value instanceof Error) {
     return {
       name: value.name,
-      message: truncate(value.message, 1200),
-      stack: truncate(value.stack || '', 3000),
+      message: truncate(redactText(value.message), 1200),
+      stack: truncate(redactText(value.stack || ''), 3000),
     };
   }
   if (depth >= 3) return '[Object]';
@@ -179,7 +180,7 @@ function sanitizeDeep(value) {
 
 function argToText(arg) {
   if (typeof arg === 'string') return redactText(arg);
-  if (arg instanceof Error) return `${arg.name}: ${arg.message}`;
+  if (arg instanceof Error) return redactText(`${arg.name}: ${arg.message}`);
   try { return JSON.stringify(sanitize(arg)); } catch { return String(arg); }
 }
 
@@ -630,10 +631,10 @@ function makeEvent(level, args, source, stack, extra = {}) {
     level,
     source,
     message: truncate(args.map(argToText).join(' '), 1800),
-    stack: truncate(stack || '', 3500),
+    stack: truncate(redactText(stack || ''), 3500),
     payload: payloadString(payload),
     ua: navigator.userAgent,
-    url: location.href,
+    url: location.origin + location.pathname,
   };
 }
 

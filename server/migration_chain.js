@@ -40,6 +40,7 @@ const {
   MigrationError,
   units,
   SOURCE_MINT,
+  MIN_SALE_USD,
 } = require("./migration_core");
 const { alchemySolanaRpcUrl } = require("./solana_rpc");
 const { createMigrationHistory } = require("./migration_history");
@@ -54,6 +55,18 @@ function validateTargetSupply(address, decimals, supply, symbol) {
 }
 const SOL = "So11111111111111111111111111111111111111112";
 const JUP = "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4";
+function saleSlippageSteps(start, maximum) {
+  check(Number.isInteger(start) && Number.isInteger(maximum) &&
+    start >= 1 && start <= maximum && maximum <= 1000, "INVALID_SLIPPAGE");
+  return [...new Set([start, 50, 100, 200, 500, 1000, maximum])]
+    .filter(n => n >= start && n <= maximum).sort((a, b) => a - b);
+}
+function isJupiterSlippageError(error, instructions) {
+  const failure = error?.InstructionError;
+  return Array.isArray(failure) && Number.isInteger(failure[0]) &&
+    failure[1]?.Custom === 6001 &&
+    instructions[failure[0]]?.programId.toBase58() === JUP;
+}
 const ERC20 = parseAbi([
   "function symbol() view returns (string)",
   "function decimals() view returns (uint8)",
@@ -678,6 +691,9 @@ function createMigrationChain(env = process.env, deps = {}) {
     const signer = solKey(key),
       c = sol();
     check(apiKey, "JUPITER_KEY_REQUIRED", 503);
+    check(typeof input.inputUnits === "string" && /^\d+$/.test(input.inputUnits) &&
+      BigInt(input.inputUnits) > 0n, "INVALID_AMOUNT");
+    const steps = saleSlippageSteps(input.slippageBps, input.maxSlippageBps);
     const ata = getAssociatedTokenAddressSync(
       new PublicKey(SOURCE_MINT),
       signer.publicKey,
@@ -689,12 +705,9 @@ function createMigrationChain(env = process.env, deps = {}) {
       ),
       beforeSol = BigInt(await c.getBalance(signer.publicKey, "finalized"));
     check(beforeTokens >= BigInt(input.inputUnits), "SALE_BALANCE_UNAVAILABLE");
-    for (
-      let slippage = input.slippageBps;
-      slippage <= input.maxSlippageBps;
-      slippage = Math.min(slippage + 250, input.maxSlippageBps + 1)
-    ) {
-      const q = await json(
+    check(beforeSol >= 10000000n, "SOL_GAS_REQUIRED");
+    for (const slippage of steps) {
+      const q = await (deps.json || json)(
         "https://api.jup.ag/swap/v2/build?" +
           new URLSearchParams({
             inputMint: SOURCE_MINT,
@@ -726,7 +739,11 @@ function createMigrationChain(env = process.env, deps = {}) {
           minimum >= (BigInt(q.outAmount) * BigInt(10000 - slippage)) / 10000n,
         "INVALID_SWAP_THRESHOLD",
       );
-      const price = await prices();
+      const price = await (deps.prices || prices)();
+      // Price may change while obtaining a route. Recheck the minimum for each
+      // attempt before simulation/signing, not only when selecting the batch.
+      check(BigInt(input.inputUnits) * BigInt(price.clashUsdMicros) / 1000000n >=
+        units(MIN_SALE_USD), "SALE_BELOW_MINIMUM", 409);
       const fair =
         (BigInt(input.inputUnits) * BigInt(price.clashUsdMicros) * 1000n) /
         BigInt(price.solUsdMicros);
@@ -812,11 +829,12 @@ function createMigrationChain(env = process.env, deps = {}) {
         },
       });
       if (sim.value.err) {
-        if (
-          JSON.stringify(sim.value.err).includes("6001") &&
-          slippage < input.maxSlippageBps
-        )
-          continue;
+        const slippageFailure = isJupiterSlippageError(sim.value.err, instructions);
+        input.onAttempt?.(slippage, slippageFailure ? "SLIPPAGE" : "FAILED");
+        if (slippageFailure) {
+          if (slippage < input.maxSlippageBps) continue;
+          throw new MigrationError("SLIPPAGE_LIMIT", 409);
+        }
         throw new MigrationError("SALE_SIMULATION_FAILED", 409);
       }
       const after = sim.value.accounts;
@@ -829,6 +847,7 @@ function createMigrationChain(env = process.env, deps = {}) {
           BigInt(after[1].lamports) >= beforeSol + minimum - 25000n,
         "SALE_SIMULATION_BALANCE_MISMATCH",
       );
+      input.onAttempt?.(slippage, "OK");
       tx.sign([signer]);
       return {
         raw: Buffer.from(tx.serialize()).toString("base64"),
@@ -841,6 +860,21 @@ function createMigrationChain(env = process.env, deps = {}) {
       };
     }
     throw new MigrationError("SLIPPAGE_LIMIT", 409);
+  }
+  async function saleBalance(owner) {
+    const treasury = new PublicKey(owner);
+    const ata = getAssociatedTokenAddressSync(new PublicKey(SOURCE_MINT), treasury,
+      false, TOKEN_2022_PROGRAM_ID);
+    const account = await sol().getAccountInfo(ata, "finalized");
+    let tokenUnits = "0";
+    if (account) {
+      check(account.owner.equals(TOKEN_2022_PROGRAM_ID), "SALE_TOKEN_ACCOUNT_MISMATCH", 503);
+      const decoded = AccountLayout.decode(account.data);
+      check(decoded.owner.equals(treasury) && decoded.mint.toBase58() === SOURCE_MINT,
+        "SALE_TOKEN_ACCOUNT_MISMATCH", 503);
+      tokenUnits = String(decoded.amount);
+    }
+    return { tokenUnits, solLamports: String(await sol().getBalance(treasury, "finalized")) };
   }
   async function saleStatus(s) {
     const status = await solStatus(s.hash, s.lastValidBlockHeight);
@@ -895,10 +929,13 @@ function createMigrationChain(env = process.env, deps = {}) {
     payoutStatus,
     broadcastEvm,
     prepareSale,
+    saleBalance,
     saleStatus,
   };
 }
 module.exports = {
+  saleSlippageSteps,
+  isJupiterSlippageError,
   validateTargetSupply,
   createMigrationChain,
   directFetch,

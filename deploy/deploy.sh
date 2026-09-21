@@ -1547,15 +1547,53 @@ MCPTEMPCONF
     SOLANA_TATUM_API_KEY="$(first_env_file_value "SOLANA_TATUM_API_KEY" "TATUM_API_KEY")"
 
     cat > /etc/nginx/sites-available/$DOMAIN << 'SSLCONF'
+# Do not put query tokens, API credentials or Referer query strings in access logs.
+log_format clash_safe '$remote_addr - $remote_user [$time_local] '
+                      '"$request_method $uri $server_protocol" $status $body_bytes_sent '
+                      '"-" "$http_user_agent"';
+limit_req_zone $binary_remote_addr zone=clash_migration_ip:10m rate=3r/s;
+limit_req_zone $server_name zone=clash_migration_global:1m rate=30r/s;
+limit_conn_zone $binary_remote_addr zone=clash_migration_conn:10m;
 server {
     listen 80;
     server_name clashofperps.fun;
+    access_log /var/log/nginx/clash-access.log clash_safe;
     location / { return 301 https://$host$request_uri; }
 }
 
 server {
     listen 443 ssl http2;
     server_name clashofperps.fun;
+
+    server_tokens off;
+    access_log /var/log/nginx/clash-access.log clash_safe;
+    client_header_timeout 15s;
+    client_body_timeout 30s;
+    keepalive_timeout 15s;
+    # Only Cloudflare's verified network may supply this header (2026-09-21).
+    set_real_ip_from 173.245.48.0/20;
+    set_real_ip_from 103.21.244.0/22;
+    set_real_ip_from 103.22.200.0/22;
+    set_real_ip_from 103.31.4.0/22;
+    set_real_ip_from 141.101.64.0/18;
+    set_real_ip_from 108.162.192.0/18;
+    set_real_ip_from 190.93.240.0/20;
+    set_real_ip_from 188.114.96.0/20;
+    set_real_ip_from 197.234.240.0/22;
+    set_real_ip_from 198.41.128.0/17;
+    set_real_ip_from 162.158.0.0/15;
+    set_real_ip_from 104.16.0.0/13;
+    set_real_ip_from 104.24.0.0/14;
+    set_real_ip_from 172.64.0.0/13;
+    set_real_ip_from 131.0.72.0/22;
+    set_real_ip_from 2400:cb00::/32;
+    set_real_ip_from 2606:4700::/32;
+    set_real_ip_from 2803:f800::/32;
+    set_real_ip_from 2405:b500::/32;
+    set_real_ip_from 2405:8100::/32;
+    set_real_ip_from 2a06:98c0::/29;
+    set_real_ip_from 2c0f:f248::/32;
+    real_ip_header CF-Connecting-IP;
 
     ssl_certificate /etc/letsencrypt/live/clashofperps.fun/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/clashofperps.fun/privkey.pem;
@@ -1862,6 +1900,26 @@ server {
         proxy_send_timeout 3600s;
     }
 
+    # Bound migration bodies/connections before they reach Node or expensive RPC.
+    location ~* ^/api/migration(?:/|$) {
+        limit_req zone=clash_migration_ip burst=30 nodelay;
+        limit_req zone=clash_migration_global burst=60 nodelay;
+        limit_req_status 429;
+        limit_conn clash_migration_conn 12;
+        limit_conn_status 429;
+        client_max_body_size 40k;
+        client_body_timeout 15s;
+        proxy_pass http://127.0.0.1:4000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 30s;
+    }
+
     location /api/ {
         proxy_pass http://127.0.0.1:4000/api/;
         proxy_http_version 1.1;
@@ -1894,6 +1952,32 @@ server {
         try_files /migration.html =404;
         add_header Cache-Control "no-cache, no-store, must-revalidate";
         add_header Cross-Origin-Opener-Policy "same-origin-allow-popups" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Referrer-Policy "no-referrer" always;
+        add_header X-Frame-Options "SAMEORIGIN" always;
+        add_header Content-Security-Policy "frame-ancestors 'self'; object-src 'none'; base-uri 'self'" always;
+        add_header Strict-Transport-Security "max-age=86400" always;
+    }
+
+    location = /migration.html {
+        try_files /migration.html =404;
+        add_header Cache-Control "no-store" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Referrer-Policy "no-referrer" always;
+        add_header X-Frame-Options "SAMEORIGIN" always;
+        add_header Content-Security-Policy "frame-ancestors 'self'; object-src 'none'; base-uri 'self'" always;
+        add_header Strict-Transport-Security "max-age=86400" always;
+    }
+
+    location = /admin.html {
+        try_files /admin.html =404;
+        add_header Cache-Control "no-store" always;
+        add_header Cross-Origin-Opener-Policy "same-origin-allow-popups" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Referrer-Policy "no-referrer" always;
+        add_header X-Frame-Options "SAMEORIGIN" always;
+        add_header Content-Security-Policy "frame-ancestors 'self'; object-src 'none'; base-uri 'self'" always;
+        add_header Strict-Transport-Security "max-age=86400" always;
     }
 
     location = /migration/ {

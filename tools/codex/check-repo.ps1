@@ -249,6 +249,9 @@ foreach ($File in $PowerShellFiles) {
 }
 
 if ($Mode -in @("Full", "Deploy")) {
+    Invoke-Step "Security, persisted diagnostics and migration ledger regressions" {
+        node --test server/test-http-security.js server/test-websocket-security.js server/test-runtime-diagnostics.js server/test-migration-ledger.js server/test-migration-sales.js web/test-admin-security.mjs web/test-client-logger-redaction.mjs web/src/migration/transport.test.mjs
+    }
     Invoke-Step "CLASH migration ledger, signing and HTTP regressions" {
         node --test server/test-migration.js server/test-migration-chain.js server/test-migration-http.js server/test-migration-history.js
     }

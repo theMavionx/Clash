@@ -8,15 +8,7 @@ import { targetSymbol, targetRatio } from './target-asset';
 import { t, migrationErrorText, migrationStateText } from './strings';
 import { expiryMs, formatUnits, formatUtc, validRequest, maxMigrationAmount, depositDefinitelyRejected } from './model';
 import { MigrationWalletPicker, MigrationWalletProvider } from './WalletConnection';
-
-async function api(path, token, body) {
-  const response = await fetch('/api/migration' + path, { method: body === undefined ? 'GET' : 'POST', cache: 'no-store',
-    headers: { ...(token ? { Authorization: 'Bearer ' + token } : {}), ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) { const trace = /^[0-9a-f-]{36}$/.test(data.traceId || '') ? ` Reference: ${data.traceId}` : ''; const error = new Error(migrationErrorText(data.error) + trace); error.migrationSafe = true; error.status = response.status; error.code = data.error; throw error; }
-  return data;
-}
+import { migrationApi as api, startMigrationPolling } from './transport';
 
 function Migration() {
   const [status, setStatus] = useState(null), [account, setAccount] = useState(null), [session, setSession] = useState(null);
@@ -27,6 +19,7 @@ function Migration() {
   const [walletPicker, setWalletPicker] = useState(false), [connectedAddress, setConnectedAddress] = useState('');
   const menuRef = useRef(null), menuTrigger = useRef(null);
   const generation = useRef(0), provider = useRef(null), locked = useRef(false), walletCleanup = useRef(() => {});
+  const refreshSequence = useRef(0);
   const clear = () => { generation.current++; setSession(null); setAccount(null); setQuote(null); setConfirmed(false); setAmount(''); setPendingSubmission(null); setWalletMenu(false); };
   function showWalletMenu(event) { menuTrigger.current = event.currentTarget; setWalletMenu(true); }
   function closeWalletMenu(restore = true) { setWalletMenu(false); if (restore) menuTrigger.current?.focus(); }
@@ -52,13 +45,15 @@ function Migration() {
   }
   function failure(error) { if (error.status === 401) { clear(); setNotice(t('sessionExpired')); } else setNotice(error.migrationSafe ? error.message : error.code === 4001 ? t('verifyFailed') : t('failed')); }
   async function refresh(token = session?.token) {
-    const epoch = generation.current;
-    const next = await api('/status');
-    if (epoch !== generation.current) return;
-    setStatus(next);
+    const epoch = generation.current, sequence = ++refreshSequence.current;
+    // Account history must remain readable even while treasury readiness RPC fails.
+    const [state, history] = await Promise.allSettled([api('/status'), token ? api('/account', token) : Promise.resolve(null)]);
+    if (epoch !== generation.current || sequence !== refreshSequence.current) return;
+    if (state.status === 'fulfilled') setStatus(state.value);
+    else setStatus(previous => previous ? { ...previous, ready: false } : null);
     if (token) {
-      const info = await api('/account', token);
-      if (epoch !== generation.current) return;
+      if (history.status === 'rejected') throw history.reason;
+      const info = history.value;
       setAccount(info);
       setQuote(previous => {
         const row = info.requests?.find(item => item.id === previous?.id);
@@ -71,20 +66,20 @@ function Migration() {
         return previous;
       });
     }
+    if (state.status === 'rejected') throw state.reason;
   }
   useEffect(() => {
-    let alive = true;
-    api('/status').then(data => { if (alive) setStatus(data); }).catch(() => { if (alive) setNotice(t('failed')); });
     const clock = setInterval(() => setNow(Date.now()), 1000);
-    return () => { alive = false; clearInterval(clock); };
+    return () => clearInterval(clock);
   }, []);
   useEffect(() => {
-    if (!session) return;
-    const interval = setInterval(() => { refresh(session.token).catch(failure); }, 12000);
-    return () => clearInterval(interval);
+    const epoch = generation.current;
+    return startMigrationPolling(() => refresh(session?.token), {
+      onError: error => { if (epoch === generation.current) failure(error); },
+    });
   }, [session]); // Wallet verification stays in memory only.
   useEffect(() => { if (session?.expiresAt && expiryMs(session.expiresAt) <= now) { clear(); setNotice(t('sessionExpired')); } }, [session, now]);
-  useEffect(() => () => walletCleanup.current(), []);
+  useEffect(() => () => { generation.current++; walletCleanup.current(); }, []);
   async function action(fn) {
     if (locked.current) return;
     locked.current = true; setBusy(true); setNotice('');

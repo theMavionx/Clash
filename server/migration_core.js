@@ -6,6 +6,7 @@ const nacl = require("tweetnacl");
 const { PublicKey } = require("@solana/web3.js");
 const { isAddress, getAddress } = require("viem");
 const SOURCE_MINT = "9mM1Mc4Ta9UJJ32v5qsHef91PiXi7EWyiSsqF5WXpump";
+const MIN_SALE_USD = "100";
 const DEFAULTS = Object.freeze({
   enabled: false,
   targetToken: "",
@@ -72,7 +73,8 @@ const digest = (value) =>
   crypto.createHash("sha256").update(value).digest("hex");
 const active = "'quoted','deposit_signed','deposited','payout_signed','review'";
 function createMigration({ db, chain, now = Date.now, keyFile }) {
-  db.exec(`CREATE TABLE IF NOT EXISTS migration_config(id INTEGER PRIMARY KEY CHECK(id=1),value TEXT NOT NULL,revision INTEGER NOT NULL);
+  if (!db.readonly) {
+    db.exec(`CREATE TABLE IF NOT EXISTS migration_config(id INTEGER PRIMARY KEY CHECK(id=1),value TEXT NOT NULL,revision INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS migration_secrets(kind TEXT PRIMARY KEY,value TEXT NOT NULL,address TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS migration_snapshot(id INTEGER PRIMARY KEY CHECK(id=1),slot INTEGER NOT NULL,created_at INTEGER NOT NULL,total TEXT NOT NULL,wallets INTEGER NOT NULL,checksum TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS migration_snapshot_meta(id INTEGER PRIMARY KEY CHECK(id=1),mode TEXT NOT NULL,requested_at INTEGER,block_time INTEGER);
@@ -83,10 +85,15 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
     CREATE TABLE IF NOT EXISTS migration_sends(hash TEXT PRIMARY KEY,request_id TEXT NOT NULL,kind TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS migration_sales(id TEXT PRIMARY KEY,status TEXT NOT NULL,payload TEXT NOT NULL,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS migration_audit(id INTEGER PRIMARY KEY,event TEXT NOT NULL,at INTEGER NOT NULL);
-    CREATE TABLE IF NOT EXISTS migration_lease(id INTEGER PRIMARY KEY CHECK(id=1),owner TEXT NOT NULL,expires INTEGER NOT NULL);`);
-  db.prepare("INSERT OR IGNORE INTO migration_config VALUES(1,?,1)").run(
-    JSON.stringify(DEFAULTS),
-  );
+    CREATE TABLE IF NOT EXISTS migration_lease(id INTEGER PRIMARY KEY CHECK(id=1),owner TEXT NOT NULL,expires INTEGER NOT NULL);
+    CREATE INDEX IF NOT EXISTS migration_auth_expiry ON migration_auth(expires);
+    CREATE INDEX IF NOT EXISTS migration_auth_wallet ON migration_auth(wallet,expires);
+    CREATE INDEX IF NOT EXISTS migration_sessions_expiry ON migration_sessions(expires);
+    CREATE INDEX IF NOT EXISTS migration_sessions_wallet ON migration_sessions(wallet,expires);`);
+    db.prepare("INSERT OR IGNORE INTO migration_config VALUES(1,?,1)").run(
+      JSON.stringify(DEFAULTS),
+    );
+  }
   const owner = crypto.randomUUID();
   let busy = false;
   function config() {
@@ -255,6 +262,7 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
       .immediate();
   }
   async function exclusive(fn) {
+    check(!db.readonly, "READ_ONLY_WORKER", 409);
     check(!busy, "WORKER_BUSY", 409);
     busy = true;
     let heartbeat;
@@ -344,6 +352,8 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
           "INVALID_CONFIG",
         );
       check(units(c.residualUsd) <= units(c.batchUsd), "INVALID_CONFIG");
+      check(units(c.batchUsd) >= units(MIN_SALE_USD) &&
+        units(c.residualUsd) >= units(MIN_SALE_USD), "SALE_MINIMUM_100_USD");
       check(
         Number.isInteger(c.idleSeconds) &&
           c.idleSeconds >= 60 &&
@@ -498,6 +508,12 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
     w = wallet(w);
     db.prepare("DELETE FROM migration_auth WHERE expires<?").run(now());
     db.prepare("DELETE FROM migration_sessions WHERE expires<?").run(now());
+    // Repeated requests for one public wallet do not create unbounded nonce rows
+    // or invalidate a challenge another browser is currently signing.
+    const existing = db.prepare("SELECT id,message FROM migration_auth WHERE wallet=? AND expires>? ORDER BY expires DESC LIMIT 1")
+      .get(w, now() + 30000);
+    if (existing) return existing;
+    check(db.prepare("SELECT count(*) n FROM migration_auth").get().n < 10000, "AUTH_CAPACITY", 429);
     const id = crypto.randomUUID();
     const message = `clashofperps.fun\nCLASH migration wallet verification\nWallet: ${w}\nNonce: ${id}\nExpires: ${new Date(now() + 300000).toISOString()}\nThis signature does not transfer tokens.`;
     db.prepare("INSERT INTO migration_auth VALUES(?,?,?,?)").run(
@@ -509,6 +525,8 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
     return { id, message };
   }
   function verify(id, sig) {
+    check(typeof id === "string" && /^[0-9a-f-]{36}$/i.test(id) &&
+      typeof sig === "string" && sig.length <= 100, "INVALID_SIGNATURE", 401);
     return db
       .transaction(() => {
         const r = db.prepare("SELECT * FROM migration_auth WHERE id=?").get(id);
@@ -527,6 +545,10 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
         db.prepare("DELETE FROM migration_auth WHERE id=?").run(id);
         const token = crypto.randomBytes(32).toString("base64url"),
           expiresAt = now() + 3600000;
+        db.prepare("DELETE FROM migration_sessions WHERE expires<?").run(now());
+        check(db.prepare("SELECT count(*) n FROM migration_sessions").get().n < 50000, "AUTH_CAPACITY", 429);
+        // Retain up to eight active browser sessions for this verified wallet.
+        db.prepare("DELETE FROM migration_sessions WHERE hash IN (SELECT hash FROM migration_sessions WHERE wallet=? ORDER BY expires DESC LIMIT -1 OFFSET 7)").run(r.wallet);
         db.prepare("INSERT INTO migration_sessions VALUES(?,?,?)").run(
           digest(token),
           r.wallet,
@@ -914,6 +936,63 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
       return { ok: true };
     });
   }
+  // Shared by the embedded worker and the owner-operated CLI. This path never
+  // decrypts a key, signs, broadcasts, acquires a lease or writes to the DB.
+  async function salesPreview() {
+    const open = sales().find(r => ["signed", "review"].includes(r.status));
+    if (open) return { state: open.status === "review" ? "review" : "pending",
+      saleId: open.id, hash: open.hash, inputUnits: open.inputUnits,
+      reason: open.errorCode || "SALE_AWAITING_FINALITY" };
+    const c = config();
+    if (!c.enabled) return { state: "waiting", reason: "MIGRATION_PAUSED" };
+    const treasury = address("solana");
+    if (!treasury) return { state: "waiting", reason: "SOLANA_KEY_REQUIRED" };
+    const balance = await chain.saleBalance(treasury);
+    const available = rows().filter(r => r.status === "paid" &&
+      BigInt(r.inputUnits) > BigInt(r.soldUnits || 0));
+    const total = available.reduce((n, r) => n + BigInt(r.inputUnits) - BigInt(r.soldUnits || 0), 0n);
+    const view = { treasury, tokenBalanceUnits: balance.tokenUnits,
+      solLamports: balance.solLamports, eligibleUnits: String(total) };
+    const waiting = reason => ({ ...view, state: "waiting", reason });
+    if (!available.length) return waiting("NO_PAID_LOTS");
+    if (available.some(r => r.solanaTreasury !== treasury)) return waiting("SALE_TREASURY_MISMATCH");
+    if (BigInt(balance.solLamports) < 10000000n) return waiting("SOL_GAS_REQUIRED");
+    const price = await chain.prices();
+    const priceUnits = BigInt(price.clashUsdMicros);
+    check(priceUnits > 0n, "PRICE_UNAVAILABLE", 503);
+    const value = total * priceUnits / 1000000n;
+    if (value < units(MIN_SALE_USD)) return waiting("SALE_BELOW_MINIMUM");
+    const normal = value >= units(c.batchUsd);
+    const oldest = Math.min(...available.map(r => r.depositedAt));
+    check(Number.isFinite(oldest), "SALE_LOT_TIMESTAMP_INVALID", 409);
+    if (!normal && now() - oldest < c.idleSeconds * 1000)
+      return { ...waiting("BATCH_THRESHOLD_WAIT"), nextEligibleAt: oldest + c.idleSeconds * 1000 };
+    // Round up one base unit if necessary: a $100 target rounded down can
+    // otherwise create a $99.999999 batch despite the minimum-value gate.
+    const target = units(normal ? c.batchUsd : c.residualUsd);
+    if (target < units(MIN_SALE_USD)) return waiting("SALE_BELOW_MINIMUM");
+    const limit = (target * 1000000n + priceUnits - 1n) / priceUnits;
+    let left = total < limit ? total : limit;
+    if (left <= 0n) return waiting("SALE_AMOUNT_TOO_SMALL");
+    if (BigInt(balance.tokenUnits) < left) return waiting("SALE_BALANCE_UNAVAILABLE");
+    const inputUnits = String(left), lots = [];
+    for (const r of available) {
+      const amount = BigInt(r.inputUnits) - BigInt(r.soldUnits || 0);
+      const n = amount < left ? amount : left;
+      if (n > 0n) lots.push({ id: r.id, units: String(n) });
+      left -= n;
+      if (!left) break;
+    }
+    return { ...view, state: "ready", inputUnits, lots,
+      slippageBps: Math.min(50, c.slippageBps), maxSlippageBps: c.maxSlippageBps };
+  }
+  let lastSaleEvent;
+  function saleEvent(event) {
+    if (lastSaleEvent !== event) { audit(event); lastSaleEvent = event; }
+  }
+  async function tickSales() {
+    return exclusive(() => processSales());
+  }
   async function processSales() {
     let open = sales().find(
       (r) => r.status === "signed" || r.status === "review",
@@ -929,6 +1008,7 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
               save(r);
             }
             open.status = "completed";
+            open.errorCode = null;
             saveSale(open);
             audit("sale_confirmed:" + open.id);
           }).immediate();
@@ -940,51 +1020,32 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
           fence();
           await chain.broadcastSolana(open.raw);
         }
-      } catch {
-        /* Pending bytes remain authoritative; no replacement trade. */
+      } catch (e) {
+        // Pending bytes remain authoritative; never make a replacement trade.
+        const reason = e instanceof MigrationError ? e.code : "UPSTREAM_RETRY";
+        saleEvent("sale_pending:" + reason);
+        return { state: "pending", saleId: open.id, hash: open.hash, reason };
       }
-      return;
+      return { state: open.status, saleId: open.id, hash: open.hash,
+        reason: open.errorCode || null };
     }
-    const c = config();
-    if (!c.enabled) return;
-    const available = rows().filter(
-      (r) =>
-        r.status === "paid" && BigInt(r.inputUnits) > BigInt(r.soldUnits || 0),
-    );
-    if (!available.length) return;
     try {
-      const price = await chain.prices(),
-        total = available.reduce(
-          (s, r) => s + BigInt(r.inputUnits) - BigInt(r.soldUnits || 0),
-          0n,
-        ),
-        value = (total * BigInt(price.clashUsdMicros)) / 1000000n;
-      const normal = value >= units(c.batchUsd);
-      if (
-        !normal &&
-        now() - Math.min(...available.map((r) => r.depositedAt)) <
-          c.idleSeconds * 1000
-      )
-        return;
-      const limit =
-        (units(normal ? c.batchUsd : c.residualUsd) * 1000000n) /
-        BigInt(price.clashUsdMicros);
-      let left = total < limit ? total : limit;
-      if (left <= 0n) return;
-      const inputUnits = String(left),
-        lots = [];
-      for (const r of available) {
-        const a = BigInt(r.inputUnits) - BigInt(r.soldUnits || 0),
-          n = a < left ? a : left;
-        if (n > 0n) lots.push({ id: r.id, units: String(n) });
-        left -= n;
-        if (!left) break;
+      const plan = await salesPreview();
+      if (plan.state !== "ready") {
+        saleEvent("sale_waiting:" + plan.reason);
+        return plan;
       }
+      const { inputUnits, lots } = plan;
+      check(config().enabled, "MIGRATION_PAUSED", 409);
       const prepared = await chain.prepareSale(
         {
           inputUnits,
-          slippageBps: c.slippageBps,
-          maxSlippageBps: c.maxSlippageBps,
+          slippageBps: plan.slippageBps,
+          maxSlippageBps: plan.maxSlippageBps,
+          onAttempt: (bps, outcome) => {
+            fence();
+            saleEvent("sale_simulation:" + bps + ":" + outcome);
+          },
         },
         secret("solana"),
         secret("jupiter"),
@@ -998,6 +1059,7 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
         ...prepared,
       };
       fence();
+      check(config().enabled, "MIGRATION_PAUSED", 409);
       db.prepare("INSERT INTO migration_sales VALUES(?,?,?,?,?)").run(
         sale.id,
         sale.status,
@@ -1006,11 +1068,12 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
         now(),
       );
       audit("sale_signed:" + sale.id);
+      return { state: "signed", saleId: sale.id, hash: sale.hash,
+        inputUnits, slippageBps: sale.slippageBps };
     } catch (e) {
-      audit(
-        "sale_deferred:" +
-          (e instanceof MigrationError ? e.code : "UPSTREAM_RETRY"),
-      );
+      const reason = e instanceof MigrationError ? e.code : "UPSTREAM_RETRY";
+      saleEvent("sale_deferred:" + reason);
+      return { state: "waiting", reason };
     }
   }
   async function admin() {
@@ -1060,6 +1123,8 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
     submit,
     cancel,
     tick,
+    tickSales,
+    salesPreview,
     admin,
   };
 }
@@ -1071,5 +1136,6 @@ module.exports = {
   decimal,
   snapshotTime,
   SOURCE_MINT,
+  MIN_SALE_USD,
   DEFAULTS,
 };
