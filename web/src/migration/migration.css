@@ -1,7 +1,7 @@
 .migration-app{--surface:#111112;--surface-raised:#1a1b1e;--border:#ffffff12;--border-strong:#393c44;--text:#e8e9ef;--muted-strong:#979899;background:#000;color:var(--text);min-height:100dvh}
 .migration-app *{min-width:0}
 .migration-header{position:sticky;top:0;z-index:30;border-bottom:1px solid var(--border);background:#000}
-.migration-header-inner{width:min(100% - 64px,1200px);min-height:80px;margin:auto;display:flex;align-items:center;justify-content:space-between;gap:16px}
+.migration-header-inner{width:calc(100% - 48px);min-height:80px;margin:auto;display:flex;align-items:center;justify-content:space-between;gap:16px}
 .migration-brand{display:flex;align-items:center;min-height:44px;text-decoration:none}
 .migration-logo-crop{position:relative;display:block;width:222px;height:32px;overflow:hidden}
 .migration-logo-crop img{position:absolute;width:298px;max-width:none;height:auto;left:-32px;top:-20px}

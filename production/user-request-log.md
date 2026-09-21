@@ -1,5 +1,9 @@
 # User Request Log
 
+## UR-2026-09-21-MIGRATION-HEADER-EDGE
+
+- Owner requests header logo closer to page edge. Remove desktop1200px centered header cap, use24px desktop gutter, preserve16px mobile gutter and main content layout. UI-only continuation of approved release.
+
 ## UR-2026-09-21-MIGRATION-MAX
 
 - Owner requests MAX beside migration amount. Fill exact minimum of current CLASH balance and remaining snapshot allocation; no quote/sign/submit action. Disable without authenticated usable account data, while busy, or when migration unavailable. Preserve desktop/mobile layout and continue authorized migration release.

@@ -34,6 +34,7 @@ try {
     });
     await page.goto('http://127.0.0.1:5211/migration');
     await page.getByText('Migration available', { exact: true }).waitFor();
+    assert.equal(await page.locator('.migration-brand').evaluate(node => node.getBoundingClientRect().left), width > 720 ? 24 : 16, 'Brand uses compact page-edge gutter, not centered max-width margin');
     const heroImages = page.locator('.migration-intro img');
     assert.equal(await heroImages.count(), 3, 'Hero shows CLASH, Solana and Robinhood logos');
     await page.waitForFunction(() => [...document.querySelectorAll('.migration-intro img')].every(img => img.complete && img.naturalWidth > 0));
