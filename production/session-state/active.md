@@ -1,5 +1,11 @@
 # Active Session State
 
+## Virtual Protocol replacement verification — released (2026-09-21)
+
+- Replaced homepage verification content with owner's new `71ff5861617a9a0a29495408f32b8450`; exactly one tag inside head, old value absent in source, local build and public homepage200. Vite build/diff check passed. Verification service approval itself was not triggered or claimed.
+- Canonical release `20260921171534-f444d627` completed17:19UTC, runtime health passed. Migration remains disabled, ratio1, empty targetToken, TARGET_TOKEN_REQUIRED. Canonical collectible payment-price sync performed its normal on-chain update; migration configuration was untouched.
+- Retention removed compiled `20260921152559-77c87c98`; previous rollback `20260921153758-25022c21` retained, source rebuildable from Git.
+
 ## Migration CLASH 1:1 — paused pending real contract (2026-09-21)
 
 - Owner requested replacing temporary1000CLASH=1USDG mode with CLASH1:1 and removing the target contract until they supply the real address.

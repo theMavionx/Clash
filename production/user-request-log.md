@@ -3,6 +3,7 @@
 ## UR-2026-09-21-VIRTUAL-SITE-VERIFICATION-REPLACEMENT
 
 - Owner supplied replacement `virtual-protocol-site-verification` content `71ff5861617a9a0a29495408f32b8450` for the main Clash of Perps site. Replace the old value rather than duplicate the tag; deploy and verify public homepage HTML. Preserve paused migration configuration and unrelated work.
+- Completed: release `20260921171534-f444d627`, canonical runtime checks passed; public homepage200 contains exactly one new tag in head and no old value. Local Vite build/source/built HTML checks passed. Migration remains paused with empty contract and ratio1.
 
 ## UR-2026-09-21-CLASH-ONE-TO-ONE-PENDING-CONTRACT
 
