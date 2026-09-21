@@ -11,8 +11,14 @@
 - Expanded mocked browser suite passed: standard-wallet discovery at1440/390/320, all existing financial/admin flows, keyboard containment/Escape/return, rejection/retry, disconnect during pending signature (zero stale verify calls), legacy injected compatibility, unsupported signing account (zero auth/sign calls), no-wallet state and long unbroken wallet name at320px.
 - First development run timed out while Vite optimized newly imported existing dependencies; rerun then found real Tab containment gap. Explicit trap fixed it and full suite rerun passed, including subsequent long-name test.
 - UX/security and art reviews completed. Parent inspected desktop/mobile/empty-state screenshots under untracked `web/artifacts/migration/`.
-- Focused lint: zero errors, two pre-existing main.jsx warnings. Full canonical Deploy gate passed, including production build (existing large-chunk warnings). Release verification pending.
+- Focused lint: zero errors, two pre-existing main.jsx warnings. Full canonical Deploy gate passed, including production build (existing large-chunk warnings).
 - No funded wallet transaction or physical mobile-wallet handoff performed. Do not claim universal iOS/browser support; wallet/browser capabilities vary.
 
 ## References
 - ADR0042; https://github.com/anza-xyz/wallet-adapter
+
+## Production verification
+- Released `d051ab43` as `20260921091852-d051ab43`; canonical service/local health checks passed09:21:34UTC.
+- Actual production browser: header opens the new accessible dialog, close receives initial focus, no-wallet guidance/official links visible, Escape closes and restores header focus. No console errors.
+- Public status remains enabled=false, ready=false, snapshot=null; no migration settings or funds changed.
+- Standard two-release retention removed old build `20260921084906-46cf9b18`, reproducible from source; preceding logo release retained. User ledger untouched.

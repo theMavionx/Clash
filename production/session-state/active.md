@@ -1,5 +1,12 @@
 # Active Session State
 
+## Migration wallet connector — Released (2026-09-21)
+
+- Free existing Solana Wallet Adapter/Wallet Standard discovery replaces manual connect dropdown with accessible responsive native dialog. Legacy injected compatibility, no-wallet guidance, verification retry and change/disconnect supported. No new dependencies or keys.
+- Stale auth guarded across connect/challenge/sign/verify; sign-only server-submitted deposits retained. Expanded browser regression and full Deploy gate passed. Physical mobile-wallet/funded flow not tested.
+- Released `d051ab43` as `20260921091852-d051ab43`; canonical health passed; actual production dialog/Escape/focus return and zero console errors verified. Acceptance/settings unchanged.
+- ADR0042 and report `production/reports/migration-wallet-connector-2026-09-21.md`.
+
 ## Migration hero logos — Released (2026-09-21)
 
 - Existing CLASH token icon beside title; Solana/Robinhood marks beside visible network names. UI-only; all settings/keys unchanged.
