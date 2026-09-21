@@ -508,6 +508,125 @@ async function paidLot(f, amount = "100") {
   return q;
 }
 
+async function retryableSale(t) {
+  const f = fixture(t);
+  await paidLot(f);
+  f.chain.prepareSale = async plan => {
+    const n = ++f.state.sales;
+    return { raw: 'retry-sale-' + n, hash: 'retry-hash-' + n, lastValidBlockHeight: 150 + n, slippageBps: plan.slippageBps };
+  };
+  f.chain.saleFailureEvidence = async () => ({ kind: 'slippage', code: 6001, slot: 999 });
+  f.readSales = () => f.db.prepare('SELECT status,payload FROM migration_sales ORDER BY created_at').all().map(r => ({ ...JSON.parse(r.payload), status: r.status }));
+  f.sold = () => JSON.parse(f.db.prepare('SELECT payload FROM migration_requests').get().payload).soldUnits;
+  await f.service.tickSales();
+  return f;
+}
+
+test('finalized Jupiter slippage retries after 30s with fresh bytes; restart and confirmation are exactly once', async t => {
+  const f = await retryableSale(t), first = f.readSales()[0];
+  f.state.sale = 'failed';
+  assert.equal((await f.service.tickSales()).reason, 'SALE_RETRY_BACKOFF');
+  assert.equal(f.sold(), '0');
+  assert.equal(f.readSales()[0].failedSlot, 999);
+  const restarted = createMigration(f.options);
+  f.advance(29999);
+  assert.equal((await restarted.tickSales()).reason, 'SALE_RETRY_BACKOFF');
+  assert.equal(f.state.sales, 1);
+  f.advance(1);
+  assert.equal((await restarted.tickSales()).state, 'signed');
+  const [parent, child] = f.readSales();
+  assert.equal(parent.retryPending, false);
+  assert.equal(parent.retriedBy, child.id);
+  assert.equal(child.retryOf, first.id);
+  assert.equal(child.retryRoot, first.id);
+  assert.equal(child.retryCount, 1);
+  assert.equal(child.slippageBps, 100);
+  assert.notEqual(child.raw, first.raw);
+  assert.notEqual(child.hash, first.hash);
+  assert.equal(f.sold(), '0');
+  f.state.sale = 'confirmed';
+  await restarted.tickSales(); await restarted.tickSales();
+  assert.equal(f.sold(), '100000000');
+  assert.equal(f.state.sales, 2);
+  assert.equal(f.readSales()[1].status, 'completed');
+});
+
+test('Jupiter slippage escalation stops at four children and 1000bps, never consumes failed lots', async t => {
+  const f = await retryableSale(t);
+  f.state.sale = 'failed';
+  for (const bps of [100, 200, 500, 1000]) {
+    assert.equal((await f.service.tickSales()).reason, 'SALE_RETRY_BACKOFF');
+    f.advance(30000);
+    assert.equal((await f.service.tickSales()).slippageBps, bps);
+  }
+  assert.equal((await f.service.tickSales()).reason, 'SALE_SLIPPAGE_RETRY_LIMIT');
+  f.advance(60000); await f.service.tickSales();
+  assert.equal(f.state.sales, 5);
+  assert.equal(f.readSales().at(-1).retryCount, 4);
+  assert.equal(f.readSales().at(-1).status, 'review');
+  assert.equal(f.sold(), '0');
+});
+
+test('ambiguous, expired and unverified sale failure never authorize a replacement', async t => {
+  for (const mode of ['expired', 'no-evidence', 'wrong-code', 'bad-slot', 'rpc-error', 'pending']) {
+    await t.test(mode, async t => {
+      const f = await retryableSale(t);
+      f.state.sale = mode === 'expired' ? 'expired' : mode === 'pending' ? 'pending' : 'failed';
+      f.chain.saleFailureEvidence = async () => {
+        if (mode === 'rpc-error') throw new Error('provider unavailable');
+        return mode === 'no-evidence' ? null : { kind: 'slippage', code: mode === 'wrong-code' ? 6002 : 6001, slot: mode === 'bad-slot' ? 0 : 999 };
+      };
+      await f.service.tickSales(); f.advance(60000); await f.service.tickSales();
+      assert.equal(f.state.sales, 1);
+      assert.equal(f.sold(), '0');
+      assert.equal(f.readSales()[0].status, ['rpc-error', 'pending'].includes(mode) ? 'signed' : 'review');
+    });
+  }
+});
+
+test('pause and lowered slippage cap stop a scheduled fresh sale', async t => {
+  const f = await retryableSale(t);
+  f.state.sale = 'failed'; await f.service.tickSales(); f.advance(30000);
+  await f.service.updateConfig({ enabled: false });
+  assert.equal((await f.service.tickSales()).reason, 'MIGRATION_PAUSED');
+  await f.service.updateConfig({ enabled: true, slippageBps: 50, maxSlippageBps: 50 });
+  assert.equal((await f.service.tickSales()).reason, 'SALE_SLIPPAGE_RETRY_LIMIT');
+  assert.equal(f.state.sales, 1);
+  assert.equal(f.readSales()[0].retryPending, true);
+});
+
+test('retry child insertion failure rolls parent linkage back atomically', async t => {
+  const f = await retryableSale(t);
+  f.state.sale = 'failed'; await f.service.tickSales(); f.advance(30000);
+  f.db.exec("CREATE TRIGGER test_reject_retry BEFORE INSERT ON migration_sales BEGIN SELECT RAISE(ABORT, 'test injection'); END");
+  assert.equal((await f.service.tickSales()).reason, 'UPSTREAM_RETRY');
+  assert.equal(f.readSales().length, 1);
+  assert.equal(f.readSales()[0].retryPending, true);
+  assert.equal(f.readSales()[0].retriedBy, undefined);
+  assert.equal(f.sold(), '0');
+  f.db.exec('DROP TRIGGER test_reject_retry');
+  assert.equal((await f.service.tickSales()).state, 'signed');
+  const [parent, child] = f.readSales();
+  assert.equal(parent.retriedBy, child.id);
+  assert.equal(child.retryCount, 1);
+});
+
+test('configuration lease prevents a concurrent slippage cap change during retry preparation', async t => {
+  const f = await retryableSale(t);
+  f.state.sale = 'failed'; await f.service.tickSales(); f.advance(30000);
+  const prepare = f.chain.prepareSale;
+  f.chain.prepareSale = async plan => {
+    const result = await prepare(plan);
+    await assert.rejects(f.service.updateConfig({ slippageBps: 50, maxSlippageBps: 50 }), /WORKER_BUSY/);
+    return result;
+  };
+  assert.equal((await f.service.tickSales()).state, 'signed');
+  assert.equal(f.readSales().length, 2);
+  assert.equal(f.readSales()[1].slippageBps, 100);
+  assert.equal(f.readSales()[0].retryPending, false);
+  assert.equal(f.sold(), '0');
+});
+
 test("sales runner waits for actual finalized balance and gas; unrelated holdings are never sold", async t => {
   const f = fixture(t);
   await paidLot(f);

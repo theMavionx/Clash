@@ -1,5 +1,10 @@
 # Active Session State
 
+## Inclusion queue deployed; safe sale retry in progress (2026-09-21)
+
+- Release 20260921185438-41f8ca68 healthy. Exact on-chain CLASH 1:1 transfers verified for d4ed39d3 (398,371.932257) and b58cf5c4 (6,512,792.978019). Included receipts unblock later nonces; final paid accounting remains separate. MAX wallet consumed all allocation; added explicit reason, no amount-rule change.
+- Owner approved bounded Jupiter error6001 retries after proven finalized zero debit. ADR0054; adapter proof and core linkage under test. Existing failed sale89573677 remains production review until rollout. Do not manually reset or resend. Thresholds $400/$100 unchanged, cap10%.
+
 ## Confirmed-deposit liquidation — live verified (2026-09-21)
 
 - Owner requests no waiting for Robinhood payout before selling. Released20260921183819-66212b86; eligibility now finalized deposited/payout_signed/paid with confirmation metadata, not paid-only. Review/unconfirmed excluded; shared lease, source finality, pause,400/100USD thresholds/600s residual wait retained. ADR0052 documents independent sale vs payout liability.

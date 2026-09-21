@@ -7,6 +7,8 @@ const { PublicKey } = require("@solana/web3.js");
 const { isAddress, getAddress } = require("viem");
 const SOURCE_MINT = "9mM1Mc4Ta9UJJ32v5qsHef91PiXi7EWyiSsqF5WXpump";
 const MIN_SALE_USD = "100";
+const MAX_SALE_RETRIES = 4;
+const SALE_RETRY_DELAY_MS = 30000;
 const DEFAULTS = Object.freeze({
   enabled: false,
   targetToken: "",
@@ -449,7 +451,7 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
       check(
         ["jupiter", "robinhoodRpc"].includes(kind) ||
           (!pending() &&
-            !sales().some((r) => r.status !== "completed") &&
+            !sales().some((r) => !["completed", "failed"].includes(r.status) || r.retryPending) &&
             !rows().some(
               (r) =>
                 r.status === "paid" &&
@@ -472,7 +474,7 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
   function canReplaceSettledSnapshot() {
     return !!snapshot() && !config().enabled &&
       !db.prepare("SELECT 1 FROM migration_requests WHERE status NOT IN ('paid','expired','deposit_failed') LIMIT 1").get() &&
-      !db.prepare("SELECT 1 FROM migration_sales WHERE status != 'completed' LIMIT 1").get();
+      !sales().some(r => !["completed", "failed"].includes(r.status) || r.retryPending);
   }
   function checkSnapshotReplacement(input) {
     if (input.replaceSettled !== true) {
@@ -1048,6 +1050,11 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
       reason: open.errorCode || "SALE_AWAITING_FINALITY" };
     const c = config();
     if (!c.enabled) return { state: "waiting", reason: "MIGRATION_PAUSED" };
+    const retry = sales().find(r => r.status === "failed" && r.retryPending);
+    const retryBps = retry ? nextSaleRetryBps(retry, c.maxSlippageBps) : null;
+    if (retry && retryBps === null) return { state: "review", reason: "SALE_SLIPPAGE_RETRY_LIMIT", saleId: retry.id };
+    if (retry && now() < retry.retryNotBefore)
+      return { state: "waiting", reason: "SALE_RETRY_BACKOFF", nextEligibleAt: retry.retryNotBefore, saleId: retry.id };
     const treasury = address("solana");
     if (!treasury) return { state: "waiting", reason: "SOLANA_KEY_REQUIRED" };
     const balance = await chain.saleBalance(treasury);
@@ -1091,7 +1098,15 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
       if (!left) break;
     }
     return { ...view, state: "ready", inputUnits, lots,
-      slippageBps: Math.min(50, c.slippageBps), maxSlippageBps: c.maxSlippageBps };
+      slippageBps: retryBps ?? Math.min(50, c.slippageBps), maxSlippageBps: c.maxSlippageBps,
+      ...(retry ? { retryOf: retry.id, retryRoot: retry.retryRoot || retry.id, retryCount: (retry.retryCount || 0) + 1 } : {}) };
+  }
+  function nextSaleRetryBps(sale, maximum) {
+    const count = sale.retryCount || 0;
+    if (!Number.isInteger(count) || count < 0 || count >= MAX_SALE_RETRIES ||
+      !Number.isInteger(sale.slippageBps) || sale.slippageBps < 1) return null;
+    return [...new Set([50, 100, 200, 500, 1000, maximum])].sort((a, b) => a - b)
+      .find(bps => bps > sale.slippageBps && bps <= maximum && bps <= 1000) ?? null;
   }
   let lastSaleEvent;
   function saleEvent(event) {
@@ -1120,8 +1135,25 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
             audit("sale_confirmed:" + open.id);
           }).immediate();
         } else if (result === "failed" || result === "expired") {
+          const evidence = result === "failed" && chain.saleFailureEvidence
+            ? await chain.saleFailureEvidence(open) : null;
+          const verifiedSlippage = evidence?.kind === "slippage" && evidence.code === 6001 &&
+            Number.isSafeInteger(evidence.slot) && evidence.slot > 0;
+          const nextBps = verifiedSlippage ? nextSaleRetryBps(open, config().maxSlippageBps) : null;
+          if (verifiedSlippage && nextBps !== null) {
+            open.status = "failed";
+            open.errorCode = "JUPITER_SLIPPAGE";
+            open.failedSlot = evidence.slot;
+            open.retryPending = true;
+            open.retryNotBefore = now() + SALE_RETRY_DELAY_MS;
+            db.transaction(() => {
+              saveSale(open);
+              audit("sale_retry_scheduled:" + open.id + ":" + nextBps);
+            }).immediate();
+            return { state: "waiting", reason: "SALE_RETRY_BACKOFF", saleId: open.id, nextEligibleAt: open.retryNotBefore };
+          }
           open.status = "review";
-          open.errorCode = "SALE_REQUIRES_RECONCILIATION";
+          open.errorCode = verifiedSlippage ? "SALE_SLIPPAGE_RETRY_LIMIT" : "SALE_REQUIRES_RECONCILIATION";
           saveSale(open);
         } else if (config().enabled && open.status === "signed") {
           fence();
@@ -1164,17 +1196,23 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
         inputUnits,
         lots,
         ...prepared,
+        ...(plan.retryOf ? { retryOf: plan.retryOf, retryRoot: plan.retryRoot, retryCount: plan.retryCount } : {}),
       };
       fence();
       check(config().enabled, "MIGRATION_PAUSED", 409);
-      db.prepare("INSERT INTO migration_sales VALUES(?,?,?,?,?)").run(
-        sale.id,
-        sale.status,
-        JSON.stringify(sale),
-        now(),
-        now(),
-      );
-      audit("sale_signed:" + sale.id);
+      db.transaction(() => {
+        if (plan.retryOf) {
+          const parent = sales().find(s => s.id === plan.retryOf);
+          check(parent?.status === "failed" && parent.retryPending, "SALE_RETRY_CHANGED", 409);
+          parent.retryPending = false;
+          parent.retriedBy = sale.id;
+          saveSale(parent);
+        }
+        db.prepare("INSERT INTO migration_sales VALUES(?,?,?,?,?)").run(
+          sale.id, sale.status, JSON.stringify(sale), now(), now(),
+        );
+        audit("sale_signed:" + sale.id);
+      }).immediate();
       return { state: "signed", saleId: sale.id, hash: sale.hash,
         inputUnits, slippageBps: sale.slippageBps };
     } catch (e) {
@@ -1209,6 +1247,11 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
           hash: s.hash,
           errorCode: s.errorCode,
           createdAt: s.createdAt,
+          retryOf: s.retryOf || null,
+          retryCount: s.retryCount || 0,
+          retryPending: !!s.retryPending,
+          retryNotBefore: s.retryNotBefore || null,
+          slippageBps: s.slippageBps,
         })),
       audit: db
         .prepare(

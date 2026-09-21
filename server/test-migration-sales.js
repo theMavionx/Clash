@@ -119,6 +119,87 @@ test("wrong simulated token delta remains fail-closed", async () => {
   assert.deepEqual(f.state.quotes, [50]);
 });
 
+async function failureFixture() {
+  const f = swapFixture();
+  const sale = await f.run();
+  const signed = VersionedTransaction.deserialize(Buffer.from(sale.raw, "base64"));
+  const index = signed.message.staticAccountKeys.findIndex(k => k.toBase58() === sale.sourceAta);
+  const balances = () => [{ accountIndex: index, mint: SOURCE_MINT, owner: sale.treasury,
+    uiTokenAmount: { amount: "10000000000" } }];
+  const state = {
+    status: { confirmationStatus: "finalized", slot: 456, err: { InstructionError: [2, { Custom: 6001 }] } },
+    tx: { slot: 456, transaction: { signatures: [sale.hash], message: signed.message },
+      meta: { err: { InstructionError: [2, { Custom: 6001 }] },
+        preTokenBalances: balances(), postTokenBalances: balances() } },
+  };
+  const chain = createMigrationChain({}, { connection: {
+    getSignatureStatuses: async (hashes, options) => {
+      assert.deepEqual(hashes, [sale.hash]); assert.equal(options.searchTransactionHistory, true);
+      return { value: [state.status] };
+    },
+    getTransaction: async (hash, options) => {
+      assert.equal(hash, sale.hash); assert.equal(options.commitment, "finalized");
+      return state.tx;
+    },
+  } });
+  return { sale, state, read: () => chain.saleFailureEvidence(sale) };
+}
+
+test("finalized failed exact signed Jupiter transaction proves retryable slippage without any sends", async () => {
+  const f = await failureFixture();
+  assert.deepEqual(await f.read(), { kind: "slippage", slot: 456, code: 6001 });
+});
+
+test("sale retry evidence rejects ambiguity, unrelated errors, identity mismatch and token debit", async () => {
+  const mutations = [
+    f => { f.state.status = null; },
+    f => { f.state.status.confirmationStatus = "confirmed"; },
+    f => { f.state.status.err = null; },
+    f => { f.state.tx = null; },
+    f => { f.state.tx.slot++; },
+    f => { f.state.tx.meta.err = null; },
+    f => { f.state.tx.meta.err.InstructionError[1].Custom = 6002; },
+    f => { f.state.status.err.InstructionError[0] = 0; },
+    f => { f.state.tx.meta.err.InstructionError[0] = 0; },
+    f => { f.state.status.err.InstructionError[0] = 0; f.state.tx.meta.err.InstructionError[0] = 0; },
+    f => { f.sale.hash = bs58.encode(Buffer.alloc(64, 1)); },
+    f => { f.sale.treasury = Keypair.generate().publicKey.toBase58(); },
+    f => { f.sale.sourceAta = Keypair.generate().publicKey.toBase58(); },
+    f => { f.state.tx.transaction.signatures[0] = "wrong"; },
+    f => { f.state.tx.transaction.message.recentBlockhash = Keypair.generate().publicKey.toBase58(); },
+    f => { f.sale.raw = "invalid"; },
+    f => {
+      const signed = VersionedTransaction.deserialize(Buffer.from(f.sale.raw, "base64"));
+      signed.signatures[0][0] ^= 1;
+      f.sale.raw = Buffer.from(signed.serialize()).toString("base64");
+      f.sale.hash = bs58.encode(signed.signatures[0]);
+      f.state.tx.transaction.signatures[0] = f.sale.hash;
+    },
+    f => { f.state.tx.meta.preTokenBalances = []; },
+    f => { f.state.tx.meta.postTokenBalances[0].owner = Keypair.generate().publicKey.toBase58(); },
+    f => { f.state.tx.meta.postTokenBalances[0].uiTokenAmount.amount = "9999999999"; },
+    f => { f.state.tx.meta.postTokenBalances[0].uiTokenAmount.amount = "10000000001"; },
+    f => { f.state.tx.meta.postTokenBalances.push({ ...f.state.tx.meta.postTokenBalances[0] }); },
+    f => {
+      const other = { ...f.state.tx.meta.preTokenBalances[0], accountIndex: 99,
+        uiTokenAmount: { amount: "10" } };
+      f.state.tx.meta.preTokenBalances.push(other);
+      f.state.tx.meta.postTokenBalances.push({ ...other, uiTokenAmount: { amount: "9" } });
+    },
+  ];
+  for (const mutate of mutations) {
+    const f = await failureFixture(); mutate(f);
+    assert.equal(await f.read(), null, mutate.toString());
+  }
+});
+
+test("sale failure evidence surfaces RPC failure without authorizing replacement", async () => {
+  const chain = createMigrationChain({}, { connection: {
+    getSignatureStatuses: async () => { throw Error("RPC offline"); },
+  } });
+  await assert.rejects(chain.saleFailureEvidence({ hash: "test" }), /RPC offline/);
+});
+
 test("fresh quote price dropping below $100 prevents simulation and signing", async () => {
   const f = swapFixture();
   f.deps.prices = async () => ({ clashUsdMicros: "24999", solUsdMicros: "100000000" });

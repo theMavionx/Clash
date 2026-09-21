@@ -1,5 +1,9 @@
 # User Request Log
 
+## UR-2026-09-21-MIGRATION-SLIPPAGE-RETRIES
+
+- Owner: «Так, додай безпечні повторні спроби» after explicit explanation that Jupiter rejected the finalized sale without CLASH debit. Authorizes bounded fresh-price retries with gradually increased slippage within current 10% cap; ambiguous transactions stay blocked. ADR0054, independent evidence implementation and core review, focused regression tests before canonical production release. No threshold reduction or manual database reset.
+
 ## UR-2026-09-21-MIGRATION-INCLUSION-QUEUE
 
 - Owner explicitly asks not to block next payouts on finalized head. Implement verified canonical exact-transfer inclusion gate, retain final paid accounting, immutable bytes/reorg recovery and nonce reservation. Add included UI state. ADR0053. User additionally explicitly requests parallel agents for MAXwallet8WHzJS5t8SXdjyghRmZsgPnUJCkqDfpkiWSGpRb3KZtV: live balance0, eligible/used6512792978019units, requestb58cf5c4...deposited full amount; MAX correctly unavailable after deposit, improve reason text. Independent payout safety reviewer found no blocker; add multi-reorg regression.

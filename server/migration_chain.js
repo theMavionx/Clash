@@ -876,6 +876,60 @@ function createMigrationChain(env = process.env, deps = {}) {
     }
     return { tokenUnits, solLamports: String(await sol().getBalance(treasury, "finalized")) };
   }
+  // Positive proof only: missing/expired receipts never authorize replacement bytes.
+  async function saleFailureEvidence(s) {
+    const status = (await sol().getSignatureStatuses([s.hash], {
+      searchTransactionHistory: true,
+    })).value[0];
+    if (status?.confirmationStatus !== "finalized" || !status.err) return null;
+    const tx = await sol().getTransaction(s.hash, {
+      commitment: "finalized", maxSupportedTransactionVersion: 0,
+    });
+    if (!tx || !Number.isSafeInteger(tx.slot) || tx.slot !== status.slot || !tx.meta?.err)
+      return null;
+    try {
+      const signed = VersionedTransaction.deserialize(Buffer.from(s.raw, "base64"));
+      const message = signed.message.serialize();
+      const treasury = new PublicKey(s.treasury);
+      if (signed.message.header.numRequiredSignatures !== 1 ||
+          !signed.message.staticAccountKeys[0].equals(treasury) ||
+          bs58.encode(signed.signatures[0]) !== s.hash ||
+          !nacl.sign.detached.verify(message, signed.signatures[0], treasury.toBytes()) ||
+          tx.transaction.signatures?.[0] !== s.hash ||
+          !Buffer.from(tx.transaction.message.serialize()).equals(Buffer.from(message))) return null;
+      const keys = [...signed.message.staticAccountKeys,
+        ...(tx.meta.loadedAddresses?.writable || []), ...(tx.meta.loadedAddresses?.readonly || [])];
+      const instructions = signed.message.compiledInstructions.map(ix => ({
+        programId: keys[ix.programIdIndex],
+      }));
+      if (!isJupiterSlippageError(status.err, instructions) ||
+          !isJupiterSlippageError(tx.meta.err, instructions) ||
+          status.err.InstructionError[0] !== tx.meta.err.InstructionError[0]) return null;
+      const ata = getAssociatedTokenAddressSync(new PublicKey(SOURCE_MINT), treasury,
+        false, TOKEN_2022_PROGRAM_ID).toBase58();
+      if (s.sourceAta !== ata) return null;
+      const index = keys.findIndex(key => key.toBase58() === ata);
+      if (index < 0) return null;
+      const balance = list => {
+        if (!Array.isArray(list)) return null;
+        const source = list.filter(row => row.accountIndex === index);
+        if (source.length !== 1 || source[0].mint !== SOURCE_MINT || source[0].owner !== s.treasury)
+          return null;
+        const amount = source[0].uiTokenAmount?.amount;
+        if (typeof amount !== "string" || !/^\d+$/.test(amount)) return null;
+        const total = list.filter(row => row.mint === SOURCE_MINT && row.owner === s.treasury)
+          .reduce((n, row) => n + BigInt(row.uiTokenAmount.amount), 0n);
+        return { source: BigInt(amount), total };
+      };
+      const before = balance(tx.meta.preTokenBalances), after = balance(tx.meta.postTokenBalances);
+      if (!before || !after || before.source !== after.source || before.total !== after.total)
+        return null;
+      return { kind: "slippage", slot: tx.slot, code: 6001 };
+    } catch {
+      // Malformed or mismatched evidence stays in review; never infer safety.
+      return null;
+    }
+  }
   async function saleStatus(s) {
     const status = await solStatus(s.hash, s.lastValidBlockHeight);
     if (status !== "confirmed") return status;
@@ -931,6 +985,7 @@ function createMigrationChain(env = process.env, deps = {}) {
     prepareSale,
     saleBalance,
     saleStatus,
+    saleFailureEvidence,
   };
 }
 module.exports = {
