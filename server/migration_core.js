@@ -912,7 +912,13 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
   }
   async function payoutQueueReady() {
     const outstanding = rows();
-    if (outstanding.some(r => r.status === "review")) return false;
+    // An unresolved incoming Solana deposit owns no outgoing EVM nonce.
+    // Keep its allocation/liability reserved, but isolate its review from other
+    // users. Unknown reviews or any evidence of a prepared payout still block.
+    if (outstanding.some(r => r.status === "review" && !(
+      r.errorCode === "DEPOSIT_REQUIRES_RECONCILIATION" && r.depositHash &&
+      !r.payoutHash && !r.payoutRaw && r.payoutNonce == null
+    ))) return false;
     for (const previous of outstanding.filter(r => r.status === "payout_signed")) {
       // Never trust persisted inclusion alone: a receipt can disappear in a reorg.
       const result = await chain.payoutStatus(previous, { inclusionOnly: true });
@@ -1028,7 +1034,11 @@ function createMigration({ db, chain, now = Date.now, keyFile }) {
             }
           }
         } catch (e) {
-          r.errorCode = e instanceof MigrationError ? e.code : "UPSTREAM_RETRY";
+          const code = e instanceof MigrationError ? e.code : "UPSTREAM_RETRY";
+          // Preserve the reason/stage of a review across transient provider
+          // errors; otherwise an isolated incoming deposit becomes global again.
+          if (r.status === "review" && r.errorCode) r.lastReconciliationError = code;
+          else r.errorCode = code;
           save(r);
         } finally {
           fence();

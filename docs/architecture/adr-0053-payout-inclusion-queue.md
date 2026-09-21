@@ -48,5 +48,9 @@ Run focused tests, browser status flow, independent safety review and canonical 
 Success before finality advances queue; wrong token/from/to/amount, failed/orphaned receipt or RPC failure blocks. Restart and multi-payout reorg reuse original bytes. Nonce rollback cannot persist duplicate. Pause during preparation prevents persistence. Included UI never claims final settlement. Finality alone marks paid.
 
 ## Related Decisions
+### Amendment: isolate incoming deposit review (2026-09-21)
+
+Owner requests that a disputed deposit must not block other users. A review is nonblocking only when its error is DEPOSIT_REQUIRES_RECONCILIATION, it has a deposit signature, and it has no payout hash, raw bytes or nonce (including nonce0). It reserves the same wallet allocation and treasury liability, remains excluded from liquidation, and continues normal reconciliation. Any unknown review or outgoing payout evidence retains the barrier. Preserve canonical review reason through RPC errors, recording lastReconciliationError separately. No request is marked expired/paid or released by this amendment. Restart, deposit-specific RPC outage, late confirmation and all outgoing-marker variants are regression tested. Same nonce and receipt checks apply to unaffected users.
+
 - ADR0046 current treasury inventory vs settlement finality
 - ADR0052 independent confirmed-deposit sales

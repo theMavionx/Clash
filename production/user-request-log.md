@@ -1,5 +1,13 @@
 # User Request Log
 
+## UR-2026-09-21-MIGRATION-REVIEW-ISOLATION
+
+- Owner: «зроби щоб не блокувлао це іншим депозити». Isolate positively identified deposit-only review from other users' outgoing payout queue. Keep its own eligibility/liability reserved and continue reconciliation; unknown reviews or any prepared payout evidence still block outgoing nonce progression. Explain multi-file core/test/ADR change and verify before existing authorized production rollout. No manual release or resubmission of reviewed funds.
+
+## UR-2026-09-21-MIGRATION-AW4-EXPIRED-CHECK
+
+- Owner asks to inspect expired request e9e4ce97-b063-40f7-a896-6c6d19ad30ed for 3,000,000 CLASH. Read-only DB/RPC: two DEPOSIT_SIMULATION_FAILED submissions, no stored deposit signature, expired after90seconds. Same wallet later request81f01d62 enteredreview after signed transaction hash was absent from finalized history and blockheight expired. Current source balance still3,000,000 CLASH;0.081016589 SOL. Current read-only simulation of later signed bytes with replacement blockhash succeeds; original simulation failure detail was not stored. No resend, cancellation, payout or production DB edit performed. Global review barrier in payoutQueueReady currently also blocks new payouts; two deposited requests queued at check. Recovery needs positive no-deposit reconciliation and fresh owner signature, not blind expiry reset.
+
 ## UR-2026-09-21-MIGRATION-SLIPPAGE-RETRIES
 
 - Owner: «Так, додай безпечні повторні спроби» after explicit explanation that Jupiter rejected the finalized sale without CLASH debit. Authorizes bounded fresh-price retries with gradually increased slippage within current 10% cap; ambiguous transactions stay blocked. ADR0054, independent evidence implementation and core review, focused regression tests before canonical production release. No threshold reduction or manual database reset.

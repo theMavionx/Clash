@@ -873,6 +873,51 @@ async function otherWalletQuote(f, id) {
   return { wallet, q };
 }
 
+test('deposit-only review stays reserved but cannot block another wallet payout, including after restart and RPC outage', async t => {
+  const f = fixture(t); await f.setup();
+  await f.service.updateConfig({ payoutDelayEnabled: false });
+  const first = await f.q('10');
+  await f.service.submit(f.user.publicKey.toBase58(), first.id, 'valid');
+  f.state.deposit = 'expired'; await f.service.tick();
+  const second = await otherWalletQuote(f, 'review-isolation-next');
+  f.chain.depositStatus = async r => {
+    if (r.id === first.id) throw Error('RPC unavailable for disputed deposit');
+    return 'confirmed';
+  };
+  f.state.payout = 'confirmed';
+  const restarted = createMigration(f.options); await restarted.tick();
+  const firstAccount = await restarted.account(f.user.publicKey.toBase58());
+  assert.equal(firstAccount.requests[0].status, 'review');
+  assert.equal(firstAccount.remainingUnits, '990000000');
+  assert.equal((await restarted.account(second.wallet)).requests[0].status, 'paid');
+  assert.equal(f.state.payouts, 1);
+  await assert.rejects(restarted.cancel(f.user.publicKey.toBase58(), first.id), /ALREADY_SUBMITTED/);
+  f.chain.depositStatus = async () => 'confirmed';
+  await restarted.tick(); await restarted.tick();
+  assert.equal((await restarted.account(f.user.publicKey.toBase58())).requests[0].status, 'paid');
+  assert.equal(f.state.payouts, 2, 'late-confirmed deposit gets exactly one payout');
+});
+
+test('unknown review or any outgoing payout evidence still blocks the shared nonce queue', async t => {
+  for (const change of [{ errorCode: 'UNKNOWN_REVIEW' }, { depositHash: null },
+    { payoutHash: 'uncertain-payout' }, { payoutRaw: 'uncertain-bytes' }, { payoutNonce: 0 }]) {
+    await t.test(JSON.stringify(change), async t => {
+      const f = fixture(t); await f.setup();
+      await f.service.updateConfig({ payoutDelayEnabled: false });
+      const first = await f.q('10');
+      await f.service.submit(f.user.publicKey.toBase58(), first.id, 'valid');
+      f.state.deposit = 'expired'; await f.service.tick();
+      const row = f.db.prepare('SELECT payload FROM migration_requests WHERE id=?').get(first.id);
+      f.db.prepare('UPDATE migration_requests SET payload=? WHERE id=?').run(JSON.stringify({ ...JSON.parse(row.payload), ...change }), first.id);
+      const second = await otherWalletQuote(f, 'review-blocked-next');
+      f.chain.depositStatus = async r => r.id === first.id ? 'expired' : 'confirmed';
+      f.state.payout = 'pending'; await f.service.tick();
+      assert.equal((await f.service.account(second.wallet)).requests[0].status, 'deposited');
+      assert.equal(f.state.payouts, 0);
+    });
+  }
+});
+
 test('included payout releases next nonce before finality, survives restart, and never rebroadcasts included bytes', async t => {
   const f = fixture(t); await f.setup();
   await f.service.updateConfig({ payoutDelayEnabled: false });
