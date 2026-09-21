@@ -296,3 +296,52 @@ test("wrong EVM chain prevents signing and broadcasting", async () => {
   );
   await assert.rejects(a.broadcastEvm("0x00"), /WRONG_CHAIN/);
 });
+test("treasury readiness uses one latest block, not delayed finalized inventory", async () => {
+  const data = Buffer.alloc(82);
+  MintLayout.encode({ mintAuthorityOption: 0, mintAuthority: PublicKey.default,
+    supply: 1000000000000000n, decimals: 6, isInitialized: true,
+    freezeAuthorityOption: 0, freezeAuthority: PublicKey.default }, data);
+  let inventory = 20000000n, eth = 1000000000000000n;
+  const reads = [];
+  const pinned = args => { assert.equal(args.blockNumber, 123n); assert.equal(args.blockTag, undefined); };
+  const adapter = createMigrationChain({}, {
+    connection: { getAccountInfo: async () => ({ data, owner: TOKEN_2022_PROGRAM_ID }), getBalance: async () => 1000000000 },
+    publicClient: {
+      getChainId: async () => 4663,
+      getBlock: async args => { assert.equal(args.blockTag, 'latest'); return { number: 123n }; },
+      getCode: async args => { pinned(args); return '0x1234'; },
+      getBalance: async args => { pinned(args); return eth; },
+      readContract: async args => {
+        pinned(args); reads.push(args.functionName);
+        return { decimals: 6, symbol: 'USDG', totalSupply: 100000000000n, balanceOf: inventory }[args.functionName];
+      },
+    },
+  });
+  const config = { targetToken: require('../shared/migration-assets.json').robinhoodUsdg.address };
+  const keys = { solana: JSON.stringify([...Keypair.generate().secretKey]), evm: '0x' + '11'.repeat(32) };
+  const health = await adapter.health(config, keys);
+  assert.deepEqual(health.reasons, []); assert.equal(health.inventory, '20000000');
+  assert.deepEqual(reads, ['decimals', 'totalSupply', 'symbol', 'balanceOf']);
+  inventory = 0n; eth = 0n;
+  assert.deepEqual((await adapter.health(config, keys)).reasons, ['TARGET_INVENTORY_EMPTY', 'ETH_GAS_REQUIRED']);
+});
+test("relaxed inventory does not relax payout receipt finality", async () => {
+  const adapter = createMigrationChain({}, { publicClient: {
+    getChainId: async () => 4663,
+    getTransactionReceipt: async () => ({ blockNumber: 200n, status: 'success' }),
+    getBlock: async args => { assert.equal(args.blockTag, 'finalized'); return { number: 199n }; },
+  } });
+  assert.equal(await adapter.payoutStatus({ payoutHash: '0x' + '11'.repeat(32) }), 'pending');
+});
+test("payout simulation failure still prevents transaction preparation", async () => {
+  const key = '0x' + '11'.repeat(32);
+  const address = require('viem/accounts').privateKeyToAccount(key).address;
+  const adapter = createMigrationChain({}, { publicClient: {
+    getChainId: async () => 4663,
+    getTransactionCount: async () => 0,
+    simulateContract: async () => { throw Error('SIMULATED_REVERT'); },
+    estimateGas: async () => { assert.fail('Must stop before estimating/signing'); },
+  } });
+  await assert.rejects(adapter.preparePayout({ evmTreasury: address, destination: '0x' + '22'.repeat(20),
+    targetToken: require('../shared/migration-assets.json').robinhoodUsdg.address, outputUnits: '1000000' }, key), /SIMULATED_REVERT/);
+});

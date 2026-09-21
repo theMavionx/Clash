@@ -293,7 +293,12 @@ function createMigrationChain(env = process.env, deps = {}) {
     await mint();
     const treasury = solKey(keys.solana).publicKey,
       account = evmKey(keys.evm);
-    const code = await evm().getCode({ address: c.targetToken });
+    // Treasury availability is not settlement finality. Pin reads to one current
+    // block; quote reservations and pre-send simulation still protect spending.
+    const head = await evm().getBlock({ blockTag: "latest" });
+    check(typeof head?.number === "bigint", "EVM_HEAD_UNAVAILABLE", 503);
+    const blockNumber = head.number;
+    const code = await evm().getCode({ address: c.targetToken, blockNumber });
     check(code && code !== "0x", "TARGET_NOT_CONTRACT", 503);
     const read = (functionName, args = []) =>
       evm().readContract({
@@ -301,7 +306,7 @@ function createMigrationChain(env = process.env, deps = {}) {
         abi: ERC20,
         functionName,
         args,
-        blockTag: "finalized",
+        blockNumber,
       });
     const decimals = Number(await read("decimals"));
     check(
@@ -315,7 +320,7 @@ function createMigrationChain(env = process.env, deps = {}) {
     const reasons = [];
     if (!inventory) reasons.push("TARGET_INVENTORY_EMPTY");
     if (
-      (await evm().getBalance({ address: account.address })) < 100000000000000n
+      (await evm().getBalance({ address: account.address, blockNumber })) < 100000000000000n
     )
       reasons.push("ETH_GAS_REQUIRED");
     if ((await sol().getBalance(treasury, "finalized")) < 10000000)

@@ -4380,3 +4380,7 @@ Follow-up:
 ## UR-2026-09-21-MIGRATION-USDG
 
 - Owner: «тоді постав usdg а курс постав такий щоб по ціні було 1 до 1 +- там не знаю 1000 клеш = 1 Usdg». Use official Robinhood USDG for temporary test payouts at explicit fixed 0.001 ratio. Preserve snapshot/acceptance/treasury settings; do not enable migration or send funded tests automatically. Correct payout labels and restrict supply-rule exception to exact official USDG.
+## UR-2026-09-21-MIGRATION-LIVE-INVENTORY
+
+- Owner: «зсимулюй і прибери такі жоскі перевікри». Read-only simulate USDG transfer, remove finalized-head delay from spendable treasury readiness; preserve receipt finality, liabilities, exact recipient/amount/token, nonce and simulation guards. No funded transfer or automatic enablement authorized by this test request.
+- Follow-up: «ну то став тоді контаркт долара цього і давай будемо тестувати». USDG contract/rate already configured. Together with earlier explicit instruction to enable immediately for owner testing, enable via guarded API only after production readiness passes. Agent does not sign/send an owner test deposit.
