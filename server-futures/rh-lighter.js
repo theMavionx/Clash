@@ -6,7 +6,7 @@ function configuredIntegratorIndex() {
     || process.env.VITE_RH_LIGHTER_INTEGRATOR_ACCOUNT_INDEX
     || '',
   ).trim();
-  if (!raw) return 0;
+  if (!raw) return 3156;
   const value = Number(raw);
   return Number.isInteger(value) && value > 0 ? value : 0;
 }

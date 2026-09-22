@@ -81,16 +81,19 @@ def _client(lighter, payload):
     private_key = str(payload["api_private_key"]).strip()
     if not private_key:
         raise ValueError("api_private_key is required")
-    options = {}
-    if payload.get("one_tap"):
-        from lighter import nonce_manager
-        options["nonce_management_type"] = nonce_manager.NonceManagerType.NONE
-    return lighter.SignerClient(
+    # clashbot: nonce reads are owned by Node egress, not SDK synchronous requests.
+    from lighter import nonce_manager
+    value = lighter.SignerClient(
         url=str(payload.get("api_url") or "https://mainnet.zklighter.elliot.ai"),
         account_index=account_index,
         api_private_keys={api_key_index: private_key},
-        **options,
+        nonce_management_type=nonce_manager.NonceManagerType.NONE,
     )
+    proxy_url = str(payload.get("proxy_url") or "").strip()
+    if proxy_url:
+        value.api_client.configuration.proxy = proxy_url
+        value.api_client.rest_client.proxy = proxy_url
+    return value
 
 
 def _read_payload():
@@ -191,7 +194,7 @@ async def _main():
                     int(payload.get("max_spot_maker_fee") or 0),
                     int(payload.get("approval_expiry") or -1),
                     int(payload.get("skip_nonce") or 0),
-                    int(payload.get("nonce") or -1),
+                    int(payload["nonce"]),
                     int(payload["api_key_index"]),
                     client.account_index,
                 )
@@ -254,6 +257,7 @@ async def _main():
                 integrator_taker_fee=int(payload.get("integrator_taker_fee") or 0),
                 integrator_maker_fee=int(payload.get("integrator_maker_fee") or 0),
                 api_key_index=int(payload["api_key_index"]),
+                nonce=int(payload["nonce"]),
             ))
             return await _send_and_close(client, tx)
 
@@ -273,6 +277,7 @@ async def _main():
                 integrator_taker_fee=int(payload.get("integrator_taker_fee") or 0),
                 integrator_maker_fee=int(payload.get("integrator_maker_fee") or 0),
                 api_key_index=int(payload["api_key_index"]),
+                nonce=int(payload["nonce"]),
             ))
             return await _send_and_close(client, tx)
 
@@ -281,6 +286,7 @@ async def _main():
                 int(payload["market_index"]),
                 int(payload["order_index"]),
                 api_key_index=int(payload["api_key_index"]),
+                nonce=int(payload["nonce"]),
             ))
             return await _send_and_close(client, tx)
 
@@ -290,6 +296,7 @@ async def _main():
                 int(payload["fraction"]),
                 int(payload["margin_mode"]),
                 api_key_index=int(payload["api_key_index"]),
+                nonce=int(payload["nonce"]),
             ))
             return await _send_and_close(client, tx)
 

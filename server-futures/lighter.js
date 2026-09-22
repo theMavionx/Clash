@@ -5,6 +5,10 @@ const os = require('os');
 const path = require('path');
 const { getAddress, isAddressEqual, recoverMessageAddress } = require('viem');
 const { createLighterOnboarding } = require('./lighter-onboarding');
+const { createLighterEgress, createSignerQueue, safeSignerError } = require('./lighter-egress');
+const signerQueue = createSignerQueue();
+let egress;
+function lighterEgress() { return egress ||= createLighterEgress(); }
 
 function optionalInteger(value, fallback = null) {
   const text = String(value ?? '').trim();
@@ -129,6 +133,7 @@ function normalizeLighterTimestamp(value) {
 function redactSignerPayload(payload = {}) {
   const out = { ...payload };
   if (out.api_private_key) out.api_private_key = '[redacted]';
+  if (out.proxy_url) out.proxy_url = '[redacted]';
   if (out.tx_info && String(out.tx_info).length > 240) out.tx_info = `${String(out.tx_info).slice(0, 240)}...`;
   if (out.l1_signature) out.l1_signature = `${String(out.l1_signature).slice(0, 10)}...`;
   return out;
@@ -210,21 +215,45 @@ async function verifyL1ApprovalSignature({ accountIndex, txInfo, messageToSign, 
   return { owner, recovered, message };
 }
 
-function runSigner(action, payload = {}) {
+async function runSigner(action, payload = {}) {
+  const profile = currentProfile();
+  const key = `${profile.api}:${payload.account_index}:${payload.api_key_index}`;
+  return signerQueue(key, async () => {
+    const needsNonce = ['create_order', 'create_grouped_orders', 'cancel_order', 'update_leverage', 'approve_integrator_prepare'].includes(action);
+    if (needsNonce) {
+      const data = await request(`/api/v1/nextNonce?account_index=${payload.account_index}&api_key_index=${payload.api_key_index}`, { fresh: true });
+      if (!['number', 'string'].includes(typeof data?.nonce) || String(data.nonce).trim() === ''
+        || !Number.isSafeInteger(Number(data.nonce)) || Number(data.nonce) < 0) {
+        throw Object.assign(new Error('Lighter returned an invalid nonce; no transaction signed'), { status: 502 });
+      }
+      payload = { ...payload, nonce: Number(data.nonce) };
+    }
+    return runSignerProcess(action, payload);
+  });
+}
+
+function runSignerProcess(action, payload = {}) {
   const profile = currentProfile();
   if (profile.signerRunner) {
     return Promise.resolve(profile.signerRunner(action, payload));
   }
+  const lease = lighterEgress().acquire(profile, `${payload.account_index}:${payload.api_key_index}`);
+  payload = { ...payload, ...(lease.proxyUrl ? { proxy_url: lease.proxyUrl } : {}) };
   return new Promise((resolve, reject) => {
     const child = spawn(LIGHTER_PYTHON_BIN, [LIGHTER_SIGNER_SCRIPT], {
       cwd: __dirname,
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
+      // Native SDK account checks use Go HTTP; aiohttp uses proxy_url below.
+      ...(lease.proxyUrl ? { env: { ...process.env, HTTP_PROXY: lease.proxyUrl,
+        HTTPS_PROXY: lease.proxyUrl, http_proxy: lease.proxyUrl, https_proxy: lease.proxyUrl,
+        NO_PROXY: '', no_proxy: '' } } : {}),
     });
     let stdout = '';
     let stderr = '';
     const timer = setTimeout(() => {
       child.kill('SIGKILL');
+      lease.release({ failed: true });
       reject(Object.assign(new Error(`Lighter signer timed out after ${LIGHTER_SIGNER_TIMEOUT_MS}ms`), {
         status: 504,
         payload: redactSignerPayload({ action, ...payload }),
@@ -232,8 +261,15 @@ function runSigner(action, payload = {}) {
     }, LIGHTER_SIGNER_TIMEOUT_MS);
     child.stdout.on('data', chunk => { stdout += chunk.toString('utf8'); });
     child.stderr.on('data', chunk => { stderr += chunk.toString('utf8'); });
+    child.stdin.on('error', () => {
+      clearTimeout(timer);
+      lease.release({ failed: true });
+      child.kill();
+      reject(Object.assign(new Error('Lighter signer input failed; check operation status before retrying'), { status: 502 }));
+    });
     child.on('error', (e) => {
       clearTimeout(timer);
+      lease.release({ failed: true });
       reject(Object.assign(new Error(`Lighter signer failed to start: ${e.message}`), { status: 500 }));
     });
     child.on('close', (code) => {
@@ -241,14 +277,15 @@ function runSigner(action, payload = {}) {
       let data = null;
       try { data = stdout ? JSON.parse(stdout) : null; } catch {}
       if (code !== 0 || !data || data.ok === false) {
-        const msg = data?.error || stderr.trim() || stdout.trim() || `signer exited ${code}`;
+        const msg = safeSignerError(data?.error || stderr.trim() || stdout.trim() || `signer exited ${code}`, payload);
+        lease.release({ status: /429|rate.?limit/iu.test(msg) ? 429 : /20558|restricted jurisdiction/iu.test(msg) ? 403 : undefined, failed: true });
         const status = /code=\d+|bad request|invalid|fail to l1 signature|signature|expired|expiry|nonce|restricted jurisdiction/iu.test(String(msg)) ? 400 : 502;
         return reject(Object.assign(new Error(`Lighter signer ${action} failed: ${msg}`), {
           status,
-          data,
           payload: redactSignerPayload({ action, ...payload }),
         }));
       }
+      lease.release();
       resolve(data);
     });
     child.stdin.end(JSON.stringify({ action, api_url: profile.api, ...payload }));
@@ -270,7 +307,7 @@ async function request(path, options = {}) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), LIGHTER_REQUEST_TIMEOUT_MS);
   try {
-    const res = await fetch(`${profile.api}${path}`, {
+    const res = await lighterEgress().fetch(profile, `${profile.api}${path}`, {
       method,
       signal: ctrl.signal,
       headers: {

@@ -4534,3 +4534,15 @@ Follow-up:
 
 - Owner: «зсимулюй і прибери такі жоскі перевікри». Read-only simulate USDG transfer, remove finalized-head delay from spendable treasury readiness; preserve receipt finality, liabilities, exact recipient/amount/token, nonce and simulation guards. No funded transfer or automatic enablement authorized by this test request.
 - Follow-up: «ну то став тоді контаркт долара цього і давай будемо тестувати». USDG contract/rate already configured. Together with earlier explicit instruction to enable immediately for owner testing, enable via guarded API only after production readiness passes. Agent does not sign/send an owner test deposit.
+## UR-2026-09-22-MIGRATION-FEE-MESSAGE
+
+- Owner requests investigation and correction of reference 2479eae3-0992-4fdc-a7c0-cbdd87f262a1. Production diagnostics identify POST /quote 400 INSUFFICIENT_SOL_FEE; no migration request was created. Read-only finalized wallet balance: 6385510 lamports. Add actionable insufficient SOL/CLASH messages and regression tests; preserve fee validation and no automatic payments.
+## UR-2026-09-22-ALLOCATION-TRANSFER
+
+- Owner explicitly authorizes migration exception for 3qpPgETKeriGXrBtJCw9LmvUh2eiCABMnFCWduFQSd31 following wallet transfer. Verified finalized transfer 2dD9y8MA9ikt58RvFs5Wyou8bhCWJ3yZ51DaErtcYXrQgQvwkfFLSCQYCnhSnmrioiyC3h1CAHQYC4YSTPRqU9vs from G1Zx5jojvRNHwSYNTdu9tDAET6H2HCpmKYPHKJeN5NCK: 17706178177617 base units. Source requests all expired without deposit/payout hashes. Atomic production allocation transfer preserves total allocation and writes diagnostic audit; source allocation zero, destination receives original allocation. No funds sent or validation bypassed.
+## UR-2026-09-22-ROBINHOOD-LIGHTER-PORT
+
+- Owner requests porting connection, proxy handling, trading and missing one-tap support from C:/Users/Admin/Documents/clashbot, adapting incompatibilities and testing. Source repository is read-only reference; preserve other venues, never copy credentials, verify with non-funded local tests.
+## UR-2026-09-22-RH-LIGHTER-DEPLOY
+
+- Owner: «викладай». Explicit authorization to commit, push and deploy the tested Robinhood Lighter integration. Exclude unrelated migration message edits and local artifacts; run post-deploy read-only service and venue checks. No funded order authorized.

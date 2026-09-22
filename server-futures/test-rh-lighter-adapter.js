@@ -19,6 +19,7 @@ function jsonResponse(payload, status = 200) {
 global.fetch = async (url) => {
   const parsed = new URL(String(url));
   requests.push(parsed.toString());
+  if (parsed.pathname === '/api/v1/nextNonce') return jsonResponse({ nonce: 0 });
   if (parsed.pathname === '/api/v1/account') {
     const index = Number(parsed.searchParams.get('value'));
     if (parsed.hostname === 'rh.test' && index === 730898) {

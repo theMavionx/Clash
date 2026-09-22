@@ -186,7 +186,7 @@ test('UI defaults to wallet flow and profile does not prompt for a Lighter priva
   assert.match(hook,/value\.accountIndex\}:\$\{value\.challengeId/);
 });
 
-test('explicit clear removes all identity-scoped recovery copies, not master key or other wallets', async () => {
+test('signed-out clear cannot delete identity-scoped recovery copies or another wallet', async () => {
   const previous=globalThis.window;
   const prefix='clash_lighter_credentials_v1:one-tap:player-a:0x123:';
   const mirror='clash_encrypted_credential_mirror_v1:';
@@ -195,8 +195,8 @@ test('explicit clear removes all identity-scoped recovery copies, not master key
   globalThis.window={localStorage:{get length(){return values.size;},key:index=>[...values.keys()][index],removeItem:key=>values.delete(key)}};
   try {
     await assert.rejects(removeEncryptedCredentialNamespace('clash:'),/specific/);
-    await removeEncryptedCredentialNamespace(prefix);
-    assert.equal(values.size,2);
+    await assert.rejects(removeEncryptedCredentialNamespace(prefix), /Trading account changed/);
+    assert.equal(values.size,4);
     assert.ok(values.has('clash_encrypted_credential_master_v2'));
   } finally {globalThis.window=previous;}
 });
