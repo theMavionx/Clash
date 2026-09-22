@@ -37,6 +37,14 @@
 > multi-building family. Optional on-chain purchases such as Altar never block
 > core Town Hall progression, and the retired Port is not part of the gate.
 
+> **2026-09-22 CLASH holder addendum:** An additional Robinhood CLASH loyalty
+> faucet awards 1,000 / 5,000 / 10,000 Gold for the minimum observed USD
+> holding across an eligible completed UTC day of at least $50 / $100 / $500.
+> Rewards mature at 00:00 UTC and are claimed under Gold storage capacity;
+> unclaimed remainders persist. This is additive to trading and clashSOL Gold.
+> The owner-specified payouts materially exceed this document's historical
+> ~360 Gold/day baseline; see `design/balance/clash-holder-daily-gold-2026-09-22.md`.
+
 ### Town Hall 6 Progression
 
 - Town Hall 5 -> 6 costs 55,000 gold, 75,000 wood, and 68,000 ore.

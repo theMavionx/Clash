@@ -28,6 +28,7 @@ import { addClientBreadcrumb } from '../lib/clientLogger';
 import NftBridgePanel from './NftBridgePanel';
 import NftMarketplacePanel from './CustodialMarketplacePanel';
 import SanctumShopTab from './SanctumShopTab';
+import ClashHolderGoldTab from './ClashHolderGoldTab';
 import altarImg from '../assets/units/altar.png';
 
 const demonKingImg = '/cdn/nft/1/default.jpg';
@@ -114,6 +115,7 @@ function ChainLogoBadge({ chain, fallback, small = false }) {
 const SHOP_TABS = [
   { id: 'resources',   label: 'Game Resources', mobileLabel: 'Resources' },
   { id: 'clashsol',    label: 'clashSOL',       mobileLabel: 'clashSOL' },
+  { id: 'holder-gold', label: 'CLASH Gold',     mobileLabel: 'Gold' },
   ...(SHOW_NFT_MINT_TAB ? [{ id: 'nft', label: 'NFT', mobileLabel: 'NFT' }] : []),
   { id: 'marketplace', label: 'Marketplace',    mobileLabel: 'Market' },
 ];
@@ -588,6 +590,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
   const [shopPurchaseResult, setShopPurchaseResult] = useState(null);
   const [marketplaceStats, setMarketplaceStats] = useState(DEFAULT_MARKETPLACE_STATS);
   const [clashSolClaimReady, setClashSolClaimReady] = useState(false);
+  const [holderGoldClaimReady, setHolderGoldClaimReady] = useState(false);
 
   const localEvmWallet = useMemo(
     () => makeNftEvmWallet(nftEvmWallet?.provider, nftEvmWallet?.address),
@@ -1385,6 +1388,9 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
                     {tab.id === 'clashsol' && clashSolClaimReady && (
                       <span style={styles.shopTabClaimBadge}>CLAIM</span>
                     )}
+                    {tab.id === 'holder-gold' && holderGoldClaimReady && (
+                      <span style={styles.shopTabClaimBadge}>CLAIM</span>
+                    )}
                   </button>
                 );
               })}
@@ -1394,7 +1400,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
                 viewport clips overflow so only the active tab is visible;
                 each slide owns its own vertical scroll so the panel size
                 stays stable across tabs. */}
-            {activeShopTab !== 'clashsol' && (
+            {activeShopTab !== 'clashsol' && activeShopTab !== 'holder-gold' && (
             <div style={styles.shopActionRow}>
               {canSwitchPaymentChain && (
                 <button
@@ -1499,6 +1505,26 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
                     onConnect={handleSolanaReady}
                     sessionToken={sessionToken}
                     onClaimReadyChange={setClashSolClaimReady}
+                    onResourcesChanged={handleClashSolResourcesChanged}
+                  />
+                </div>
+
+                {/* ─── Robinhood CLASH holder Gold ──────────────── */}
+                <div
+                  className="shop-scroll"
+                  style={{
+                    ...styles.slide,
+                    ...(marketplaceFullScroll ? styles.slideHiddenForMarketplaceScroll : null),
+                  }}
+                  aria-hidden={activeShopTab !== 'holder-gold'}
+                  inert={activeShopTab !== 'holder-gold' ? true : undefined}
+                >
+                  <ClashHolderGoldTab
+                    evmWallet={evmWallet}
+                    evmAddress={evmAddress}
+                    onConnect={() => handleBridgeEvmModal('robinhood')}
+                    sessionToken={sessionToken}
+                    onClaimReadyChange={setHolderGoldClaimReady}
                     onResourcesChanged={handleClashSolResourcesChanged}
                   />
                 </div>

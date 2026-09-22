@@ -79,6 +79,7 @@ const {
 } = require('./aptos_api');
 const { SanctumError, createSanctumService } = require('./sanctum');
 const { SanctumRewardError, createSanctumRewardsService } = require('./sanctum_rewards');
+const { ClashHolderRewardError, createClashHolderRewardsService } = require('./clash_holder_rewards');
 const { createDualFixedWindowRateLimiter } = require('./sanctum_rate_limit');
 
 const router = express.Router();
@@ -110,6 +111,10 @@ const sanctumRewardsService = createSanctumRewardsService({
   db: db.db,
   getResourceCaps: db.getResourceCaps,
 });
+const clashHolderRewardsService = createClashHolderRewardsService({
+  db: db.db,
+  getResourceCaps: db.getResourceCaps,
+});
 const sanctumOrderRateLimiter = createDualFixedWindowRateLimiter({
   windowMs: Number(process.env.SANCTUM_ORDER_RATE_WINDOW_MS || 60_000),
   playerMax: Number(process.env.SANCTUM_ORDER_RATE_PER_PLAYER || 10),
@@ -119,6 +124,12 @@ const sanctumBalanceRateLimiter = createDualFixedWindowRateLimiter({
   windowMs: Number(process.env.SANCTUM_BALANCE_RATE_WINDOW_MS || 60_000),
   playerMax: Number(process.env.SANCTUM_BALANCE_RATE_PER_PLAYER || 30),
   ipMax: Number(process.env.SANCTUM_BALANCE_RATE_PER_IP || 90),
+});
+const clashHolderRefreshRateLimiter = createDualFixedWindowRateLimiter({
+  windowMs: 60_000, playerMax: 2, ipMax: 20,
+});
+const clashHolderClaimRateLimiter = createDualFixedWindowRateLimiter({
+  windowMs: 60_000, playerMax: 5, ipMax: 30,
 });
 
 // Temporary lenient battle mode: still runs server-side replay verification and
@@ -6339,6 +6350,71 @@ function enforceSanctumRateLimit(req, res, limiter, message) {
   res.status(429).json({ error: message, code: 'RATE_LIMITED' });
   return false;
 }
+
+function sendClashHolderError(res, error) {
+  if (error instanceof ClashHolderRewardError) {
+    return res.status(error.status).json({ error: error.message, code: error.code });
+  }
+  // RPC URLs can contain paid API credentials; never echo upstream exceptions.
+  console.warn('[clash-holder] operation failed', { code: String(error?.code || error?.name || 'READ_FAILED').slice(0, 80) });
+  return res.status(503).json({ error: 'CLASH holding check is temporarily unavailable. Try again shortly.', code: 'HOLDING_CHECK_UNAVAILABLE' });
+}
+
+router.get('/clash-holder/rewards/status', auth, (req, res) => {
+  try {
+    res.set('Cache-Control', 'no-store');
+    return res.json(clashHolderRewardsService.status({ playerId: req.player.id }));
+  } catch (error) { return sendClashHolderError(res, error); }
+});
+
+router.post('/clash-holder/rewards/link-wallet', auth, async (req, res) => {
+  try {
+    if (!enforceSanctumRateLimit(req, res, clashHolderRefreshRateLimiter,
+      'Too many CLASH holding checks. Try again in a minute.')) return undefined;
+    const wallet = String(req.body?.wallet || '').trim();
+    if (rejectBlacklistedWallet(req, res, wallet, 'clash-holder-link')) return undefined;
+    const proof = await verifyWalletAuthProof(req, { wallet, dex: 'robinhood' });
+    if (!proof.ok || proof.chain !== 'evm') {
+      return res.status(proof.status || 401).json({ error: proof.error || 'An EVM wallet signature is required', code: 'WALLET_PROOF_FAILED' });
+    }
+    const existing = getUnifiedPlayerByWalletAnyForm(proof.wallet);
+    if (existing && existing.id !== req.player.id) {
+      return res.status(409).json({ error: 'This wallet belongs to another Clash account', code: 'WALLET_ALREADY_LINKED' });
+    }
+    clashHolderRewardsService.linkWallet({ playerId: req.player.id, wallet: proof.wallet });
+    // Read immediately so players can see on-chain holding and price status.
+    let sampleWarning = null;
+    try { await clashHolderRewardsService.recordObservation({ playerId: req.player.id, wallet: proof.wallet }); }
+    catch { sampleWarning = 'Wallet linked. First holding sample will retry automatically.'; }
+    res.set('Cache-Control', 'no-store');
+    return res.json({ ok: true, reward: clashHolderRewardsService.status({ playerId: req.player.id }), sample_warning: sampleWarning });
+  } catch (error) { return sendClashHolderError(res, error); }
+});
+
+router.post('/clash-holder/rewards/refresh', auth, async (req, res) => {
+  try {
+    if (!enforceSanctumRateLimit(req, res, clashHolderRefreshRateLimiter,
+      'Too many CLASH holding checks. Try again in a minute.')) return undefined;
+    const wallet = clashHolderRewardsService.resolveLinkedWallet(req.player.id);
+    if (!wallet) throw new ClashHolderRewardError('WALLET_NOT_LINKED', 'Link your Robinhood CLASH wallet first', 409);
+    await clashHolderRewardsService.recordObservation({ playerId: req.player.id, wallet });
+    res.set('Cache-Control', 'no-store');
+    return res.json({ ok: true, reward: clashHolderRewardsService.status({ playerId: req.player.id }) });
+  } catch (error) { return sendClashHolderError(res, error); }
+});
+
+router.post('/clash-holder/rewards/claim', auth, (req, res) => {
+  try {
+    if (!enforceSanctumRateLimit(req, res, clashHolderClaimRateLimiter,
+      'Too many Gold claims. Try again in a minute.')) return undefined;
+    if (!clashHolderRewardsService.resolveLinkedWallet(req.player.id)) {
+      throw new ClashHolderRewardError('WALLET_NOT_LINKED', 'Link your Robinhood CLASH wallet first', 409);
+    }
+    const claim = clashHolderRewardsService.claim({ playerId: req.player.id });
+    res.set('Cache-Control', 'no-store');
+    return res.json({ ok: true, ...claim, reward: clashHolderRewardsService.status({ playerId: req.player.id }) });
+  } catch (error) { return sendClashHolderError(res, error); }
+});
 
 router.get('/sanctum/clashsol/status', async (_req, res) => {
   try {
@@ -27747,4 +27823,5 @@ module.exports = {
   logAuth,
   logError,
   sanctumRewardsService,
+  clashHolderRewardsService,
 };

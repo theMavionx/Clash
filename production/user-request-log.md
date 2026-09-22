@@ -4564,3 +4564,7 @@ Follow-up:
 ## UR-2026-09-22-ROBINHOOD-INCLUSION
 
 - Owner explicitly requests no long finalization wait for NFT and all Robinhood operations. Successful canonical receipt with exact payment validation remains required; unknown transactions are never blindly resent. Apply to migration payout completion as well, without weakening Solana deposit proof or absence proofs used to release unpaid reservations. Owner separately delegates LeverUp missing-volume wallet 0xB98cBF09e757E440CA228795EE32e1C44D7BCfb5 to another agent and authorizes deployment after verification.
+
+## UR-2026-09-22-CLASH-HOLDER-DAILY-GOLD
+
+- Owner: «hold 50$+ in clash to get some free gold everyday in clash of perps оцпе ще додай перевірку і додай кожноденний клейм в 00 по ютс 50$ - це 1к золота в день 100 - 5к, 500+ це 10к кожен день оформи красиво в стиль проекту перевір сам і повністю це все діло налаштуй щоб воно вже працювало». Implement server-verified Robinhood CLASH holder tiers, once-per-UTC-day claim and styled UI; run behavior and balance checks. Existing unrelated dirty worktrees remain untouched.

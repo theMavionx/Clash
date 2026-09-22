@@ -2275,6 +2275,64 @@ try {
   try { db.exec(`ALTER TABLE sanctum_daily_rewards ADD COLUMN claimed_gold INTEGER NOT NULL DEFAULT 0`); } catch {}
 } catch (e) { console.warn('[db] sanctum rewards migration:', e.message); }
 
+// Robinhood CLASH loyalty rewards. A completed UTC day's lowest sampled USD
+// holding determines one immutable entitlement; claims may be split only when
+// the player's Gold storage is full. The wallet/day keys prevent double pay.
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS clash_holder_wallets (
+      player_id TEXT PRIMARY KEY REFERENCES players(id) ON DELETE CASCADE,
+      wallet TEXT NOT NULL UNIQUE,
+      verified_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS clash_holder_observations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      player_id TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      wallet TEXT NOT NULL,
+      observed_day_utc TEXT NOT NULL,
+      sample_bucket INTEGER NOT NULL,
+      balance_wei TEXT NOT NULL,
+      price_pico TEXT NOT NULL,
+      usd_micros INTEGER NOT NULL CHECK(usd_micros >= 0),
+      block_number INTEGER NOT NULL,
+      observed_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(wallet, observed_day_utc, sample_bucket)
+    );
+    CREATE INDEX IF NOT EXISTS idx_clash_holder_observations_day
+      ON clash_holder_observations(observed_day_utc, player_id, observed_at);
+    CREATE TABLE IF NOT EXISTS clash_holder_daily_rewards (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      player_id TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      wallet TEXT NOT NULL,
+      reward_day_utc TEXT NOT NULL,
+      minimum_usd_micros INTEGER NOT NULL,
+      sample_count INTEGER NOT NULL,
+      reward_gold INTEGER NOT NULL,
+      claimed_gold INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL CHECK(status IN ('ready', 'claimed', 'zero', 'insufficient')),
+      claimed_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(player_id, reward_day_utc),
+      UNIQUE(wallet, reward_day_utc)
+    );
+    CREATE INDEX IF NOT EXISTS idx_clash_holder_rewards_player
+      ON clash_holder_daily_rewards(player_id, reward_day_utc DESC);
+    CREATE TABLE IF NOT EXISTS clash_holder_snapshot_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      player_id TEXT,
+      wallet TEXT,
+      observed_day_utc TEXT NOT NULL,
+      sample_bucket INTEGER NOT NULL,
+      result TEXT NOT NULL CHECK(result IN ('success', 'failed')),
+      error TEXT,
+      block_number INTEGER,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+} catch (e) { console.warn('[db] CLASH holder rewards migration:', e.message); }
+
 // Internal telemetry. These are append-only event ledgers for admin analytics:
 // where claim-gold/shop/task flows fail, and how resources move through the
 // economy. Keep them server-owned so client code cannot spoof analytics.

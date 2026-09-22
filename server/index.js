@@ -29,7 +29,7 @@ require('../server-futures/public-read-proxy').installPublicReadProxy();
 const express = require('express');
 const cors = require('cors');
 const http = require('http');
-const { router, sanctumRewardsService } = require('./routes');
+const { router, sanctumRewardsService, clashHolderRewardsService } = require('./routes');
 const clashDb = require('./db');
 const earnings = require('./earnings');
 const { startDailyLogAiScheduler } = require('./log_ai_analyzer');
@@ -5637,6 +5637,15 @@ server.listen(PORT, '127.0.0.1', () => {
     .catch((error) => console.warn('[sanctum-rewards] snapshot scheduler failed:', error?.message || error));
   setTimeout(runSanctumSnapshots, 20_000).unref?.();
   setInterval(runSanctumSnapshots, 30 * 60 * 1000).unref?.();
+  const runClashHolderSnapshots = () => clashHolderRewardsService.snapshotAllEligiblePlayers()
+    .then((result) => {
+      if (result.attempted || result.failed || result.finalized.created) {
+        console.log('[clash-holder] daily snapshot:', result);
+      }
+    })
+    .catch((error) => console.warn('[clash-holder] scheduler failed', String(error?.code || error?.name || 'SNAPSHOT_FAILED').slice(0, 80)));
+  setTimeout(runClashHolderSnapshots, 25_000).unref?.();
+  setInterval(runClashHolderSnapshots, 30 * 60 * 1000).unref?.();
 
   // Marketplace event indexer. Polls each chain for Listed/Cancelled/Sold
   // events and writes them into marketplace_listings.

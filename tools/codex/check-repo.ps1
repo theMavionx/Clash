@@ -77,9 +77,12 @@ $NodeFiles = @(
     "server/test-etoro-rewards.js",
     "server/sanctum.js",
     "server/sanctum_rewards.js",
+    "server/clash_holder_rewards.js",
     "server/sanctum_rate_limit.js",
     "server/test-sanctum.js",
     "server/test-sanctum-rewards.js",
+    "server/test-clash-holder-rewards.js",
+    "server/test-clash-holder-rewards-http.js",
     "server/test-sanctum-migration.js",
     "server/test-sanctum-rate-limit.js",
     "server/index.js",
@@ -195,6 +198,8 @@ Invoke-Step "Decibel browser referral" { node web/test-decibel-referral.mjs }
 Invoke-Step "RH Lighter browser integration" { node web/test-rh-lighter.mjs }
 Invoke-Step "Sanctum swap integration" { node server/test-sanctum.js }
 Invoke-Step "Sanctum daily holder rewards" { node server/test-sanctum-rewards.js }
+Invoke-Step "Robinhood CLASH holder daily Gold" { node server/test-clash-holder-rewards.js }
+Invoke-Step "Robinhood CLASH holder signed-wallet HTTP flow" { node server/test-clash-holder-rewards-http.js }
 Invoke-Step "Sanctum schema migration" { node server/test-sanctum-migration.js }
 Invoke-Step "Sanctum upstream quotas" { node server/test-sanctum-rate-limit.js }
 Invoke-Step "Sanctum Battle Shop" { node web/test-sanctum-shop.mjs }
