@@ -4552,3 +4552,15 @@ Follow-up:
 ## UR-2026-09-22-ROBINHOOD-PAYMENT-CLARIFIED
 
 - Owner clarified: preserve existing payment-based CLASH discounts and bonuses, not holding eligibility; migrate payment token/network to Robinhood and deploy. Preserve old payment redemption. Price new purchases using Robinhood token price, not the retired Solana mint price.
+
+## UR-2026-09-22-NFT-PAYMENT-SCOPE
+
+- Owner: «нфт можеш не переносити на робінгуд просто всю оплату якщо це зробив повністю то деплой на прод». NFT itself can remain on Solana; all CLASH payment paths should use Robinhood. Inspection confirms the already-deployed 9e502c84 covers generic shop/AI/flag payments but not the Solana Candy Machine NFT payment. Do not describe the entire payment migration as complete or repeat a deployment on that basis.
+
+## UR-2026-09-22-NFT-RH-COMPLETE
+
+- Owner: «то дороблюй тоді це», then «так у нас там все є перевір для цього». Complete Robinhood CLASH payment for Solana NFT delivery using existing infrastructure. Production read-only checks confirm Dragon collection authority matches existing signer and signer has SOL for fees. No mint/payment during preflight. Preserve NFT chain, discount, supply and historical purchases; deploy only after completion and verification.
+
+## UR-2026-09-22-ROBINHOOD-INCLUSION
+
+- Owner explicitly requests no long finalization wait for NFT and all Robinhood operations. Successful canonical receipt with exact payment validation remains required; unknown transactions are never blindly resent. Apply to migration payout completion as well, without weakening Solana deposit proof or absence proofs used to release unpaid reservations. Owner separately delegates LeverUp missing-volume wallet 0xB98cBF09e757E440CA228795EE32e1C44D7BCfb5 to another agent and authorizes deployment after verification.

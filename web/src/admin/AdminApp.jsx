@@ -5397,6 +5397,23 @@ function MarketplacePanel({ data, reload }) {
   );
 }
 
+function RobinhoodNftOrders() {
+  const [orders, setOrders] = useState([]);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    let stopped = false;
+    const refresh = async () => {
+      try { const result = await adminGet('/admin/nft/robinhood/orders'); if (!stopped) { setOrders(result.orders || []); setError(''); } }
+      catch { if (!stopped) setError('NFT payment queue could not be loaded'); }
+    };
+    void refresh(); const timer = setInterval(refresh,15000);
+    return () => { stopped=true; clearInterval(timer); };
+  }, []);
+  return <CompactTable title="Robinhood CLASH → Solana NFT" subtitle={error || 'Payment, delivery and recovery audit. Amounts below are CLASH base units (18 decimals).'}
+    columns={['Order / Player','Payer / Recipient','Amount','State','Payment / Delivery','Error']}
+    rows={orders.map(row => [<span>{row.id}<br/>{row.player_id}</span>,<span>{row.buyer}<br/>{row.recipient}</span>,row.amount,row.state,<span>{row.payment_tx || '—'}<br/>{row.delivery_tx || '—'}</span>,row.last_error || '—'])} />;
+}
+
 function NftPanel({ data }) {
   if (!data) return <LoadingCard title="NFT / Bridge" />;
   const supply = data.supply || {};
@@ -5413,6 +5430,7 @@ function NftPanel({ data }) {
   ];
   return (
     <div className="admin-grid">
+      <RobinhoodNftOrders />
       <StatsGrid stats={[
         { label: 'NFT supply', value: `${num(supply.total)} / ${num(supply.cap)}`, tone: 'gold' },
         { label: 'Remaining', value: num(supply.remaining), tone: 'blue' },

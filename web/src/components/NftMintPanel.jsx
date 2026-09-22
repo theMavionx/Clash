@@ -4,6 +4,7 @@ import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { createPublicClient, createWalletClient, custom, http } from 'viem';
 import { arbitrum, base } from 'viem/chains';
 import { robinhoodChain, robinhoodPublicClient, ensureRobinhoodChain } from '../lib/robinhoodConfig';
+import { buyRobinhoodNft, nftRequest } from '../lib/robinhoodNft';
 import EvmWalletModal from './EvmWalletModal';
 import { useOptionalPrivy } from './PrivyAuthProvider';
 import { useDex } from '../contexts/DexContext';
@@ -138,7 +139,7 @@ const PAYMENT_OPTIONS = {
   solana: [
     { id: 'sol-usdc', chain: 'solana', method: 'USDC', price: '$15.00', token: 'USDC' },
     { id: 'sol-sol', chain: 'solana', method: 'SOL', price: '~$15.00', token: 'SOL' },
-    { id: 'sol-clash', chain: 'solana', method: 'CLASH', price: '$10.00', token: 'CLASH', dealLabel: 'Best deal', dealText: 'Save $5.00', requiresClash: true },
+    { id: 'rh-clash', chain: 'solana', method: 'CLASH · Robinhood', price: '$10.00', token: 'CLASH', dealLabel: 'Best deal', dealText: 'Pay on Robinhood · NFT on Solana', requiresClash: true },
     { id: 'sol-skr', chain: 'solana', method: 'SKR', price: '$13.00', token: 'SKR', dealLabel: 'SKR discount', dealText: 'Save $2.00', requiresSkr: true },
   ],
   // Arbitrum + Monad shops are deployed and saleActive — direct mint with
@@ -553,6 +554,24 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
   const [view, setView] = useState(initialView === 'bridge' ? 'bridge' : 'shop');
   const [evmModalOpen, setEvmModalOpen] = useState(false);
   const [evmModalTargetOverride, setEvmModalTargetOverride] = useState(null);
+  const [rhNftEnabled, setRhNftEnabled] = useState(false);
+  const [rhNftOrders, setRhNftOrders] = useState([]);
+  useEffect(() => {
+    let cancelled = false;
+    const token = window._playerToken;
+    const refresh = async () => {
+      try {
+        const config = await nftRequest('config', token || '');
+        if (!cancelled) setRhNftEnabled(config.enabled);
+        if (token) {
+          const status = await nftRequest('orders',token);
+          if (!cancelled) setRhNftOrders(status.orders);
+        }
+      } catch { /* Keep current order visible during a temporary outage. */ }
+    };
+    void refresh(); const timer = setInterval(refresh, 15000);
+    return () => { cancelled=true; clearInterval(timer); };
+  }, []);
   const [nftEvmWallet, setNftEvmWallet] = useState(null);
   const [evmChainId, setEvmChainId] = useState(null);
   const [busy, setBusy] = useState(null);
@@ -675,8 +694,8 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
     const groups = mintConfig?.solana?.paymentGroups || mintConfig?.solana?.groups || {};
     return options
       .filter((option) => !option.requiresSkr || !!groups.skr)
-      .filter((option) => !option.requiresClash || !!groups.clash);
-  }, [mintConfig?.solana?.groups, mintConfig?.solana?.paymentGroups, selectedChain]);
+      .filter((option) => !option.requiresClash || rhNftEnabled);
+  }, [mintConfig?.solana?.groups, mintConfig?.solana?.paymentGroups, selectedChain, rhNftEnabled]);
   const selected = useMemo(
     () => paymentOptions.find((option) => option.id === selectedPayment) || paymentOptions[0],
     [paymentOptions, selectedPayment],
@@ -912,6 +931,16 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
   }, [adapterSolWallet, dex, isInFrame, preparingPrivySolWallet, setSolanaModalVisible, solAddress, usingPrivySolWallet]);
 
   const handlePrimary = useCallback(() => {
+    if (selected.id === 'rh-clash') {
+      if (!solAddress) { handleSolanaReady(); return; }
+      if (!evmAddress) { setEvmModalTargetOverride('robinhood'); setEvmModalOpen(true); return; }
+      setBusy('mint'); setNotice('Confirm Robinhood payment. Your Dragon NFT will be delivered on Solana.');
+      buyRobinhoodNft({ token: window._playerToken, evmWallet, solWallet }).then(order => {
+        setRhNftOrders(previous => [order,...previous.filter(r => r.id!==order.id)]);
+        setNotice(order.message);
+      }).catch(error => setNotice(error.message)).finally(() => setBusy(null));
+      return;
+    }
     const quantity = clampQuantity(mintQuantity);
     if (SALE_NFT_MINT_LOCKED) {
       setNotice('???');
@@ -1329,6 +1358,15 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
               />
             ) : (
             <>
+            {rhNftOrders.filter(order => order.state !== 'expired').slice(0,3).map(order => (
+              <div key={order.id} role="status" style={{ padding: '10px 14px', marginBottom: 8, border: '1px solid #FFFFFF12', borderRadius: 10, fontSize: 13 }}>
+                <strong>Dragon · CLASH on Robinhood</strong>
+                <div>{order.message}</div>
+                <small>Order {order.id}</small>
+                {order.state !== 'delivered' && <div>You can close this page; payment verification and NFT delivery continue automatically.</div>}
+                {order.asset && <div><a href={`https://solscan.io/account/${order.asset}`} target="_blank" rel="noreferrer">View NFT on Solana</a></div>}
+              </div>
+            ))}
             <div ref={shopTabsRef} style={styles.shopTabs} className="shop-tabs-scroll" aria-label="Battle Shop sections">
               {SHOP_TABS.map((tab) => {
                 const active = activeShopTab === tab.id;
@@ -1543,9 +1581,9 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
 
                       <QuantityStepper
                         label="Quantity"
-                        value={mintQuantity}
+                        value={selected.id === 'rh-clash' ? 1 : mintQuantity}
                         onChange={setMintQuantity}
-                        max={MAX_BATCH_QUANTITY}
+                        max={selected.id === 'rh-clash' ? 1 : MAX_BATCH_QUANTITY}
                         disabled={saleMintSoldOut || !!busy}
                       />
 
@@ -1566,7 +1604,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
                         </span>
                         <span>
                           {primaryState.label}
-                          {primaryState.ready && mintQuantity > 1 ? ` x${mintQuantity}` : ''}
+                          {primaryState.ready && selected.id !== 'rh-clash' && mintQuantity > 1 ? ` x${mintQuantity}` : ''}
                         </span>
                       </button>
                     </>

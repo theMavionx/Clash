@@ -569,12 +569,13 @@ function inclusionFixture() {
   return { r, state, adapter };
 }
 
-test('exact canonical inclusion advances queue but only finalized receipt confirms payment', async () => {
+test('exact canonical Robinhood inclusion confirms settlement without finalized RPC', async () => {
   const f = inclusionFixture();
-  assert.equal(await f.adapter.payoutStatus(f.r), 'included');
+  assert.equal(await f.adapter.payoutStatus(f.r), 'confirmed');
   f.state.finalError = true;
   assert.equal(await f.adapter.payoutStatus(f.r, { inclusionOnly: true }), 'included');
-  assert.equal(f.state.finalReads, 1, 'queue check does not depend on finalized RPC');
+  assert.equal(await f.adapter.payoutStatus(f.r), 'confirmed');
+  assert.equal(f.state.finalReads, 0, 'neither queue nor settlement depends on finalized RPC');
   f.state.finalError = false; f.state.final = 200n;
   assert.equal(await f.adapter.payoutStatus(f.r), 'confirmed');
 });

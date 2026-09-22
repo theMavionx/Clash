@@ -965,10 +965,19 @@ async function importFillsForPlayer(playerId, address, options = {}) {
   let imported = 0;
   let updated = 0;
   let ignored = 0;
+  // Counts explain missing rewards without retaining signatures or treating
+  // unrelated wallet activity as a Clash-attributed trade.
+  const ignoredReasons = { wallet_mismatch: 0, no_clash_route: 0, invalid_fill: 0 };
+  let economicRows = 0;
   for (const row of rows) {
     const operation = String(row?.operationType || '').trim().toUpperCase();
     if (!LEVERUP_ECONOMIC_OPERATIONS.has(operation)) continue;
-    if (explicitHistoryTrader(row) !== wallet) { ignored += 1; continue; }
+    economicRows += 1;
+    if (explicitHistoryTrader(row) !== wallet) {
+      ignored += 1;
+      ignoredReasons.wallet_mismatch += 1;
+      continue;
+    }
     const txHash = normalizeHash(row?.transactionHash);
     let intent = intentByTx.get(txHash) || null;
     let route = intent ? { kind: 'intent_tx', intent_hash: intent.intent_hash } : null;
@@ -980,12 +989,20 @@ async function importFillsForPlayer(playerId, address, options = {}) {
         route = { kind: 'broker_order', intent_hash: order.intent_hash, order_hash: order.order_hash };
       }
     }
-    if (!intent || !route) { ignored += 1; continue; }
+    if (!intent || !route) {
+      ignored += 1;
+      ignoredReasons.no_clash_route += 1;
+      continue;
+    }
     const trade = normalizedHistoryTrade(row, wallet, {
       ...intent,
       route,
     });
-    if (!trade) { ignored += 1; continue; }
+    if (!trade) {
+      ignored += 1;
+      ignoredReasons.invalid_fill += 1;
+      continue;
+    }
     const result = store.upsertVerifiedTrade(playerId, trade);
     imported += Number(result?.inserted || 0);
     updated += Number(result?.updated || 0);
@@ -997,6 +1014,9 @@ async function importFillsForPlayer(playerId, address, options = {}) {
     imported,
     updated,
     ignored,
+    ignored_reasons: ignoredReasons,
+    economic_rows: economicRows,
+    eligible_intents: intentProofs.length,
     learned_orders: learnedOrders,
     status_checked: statusChecked,
     status_errors: statusErrors,

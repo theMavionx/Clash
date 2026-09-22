@@ -9,6 +9,7 @@ process.env.GAME_SHOP_ROBINHOOD_RPC_URL = 'https://robinhood-mainnet.g.alchemy.c
 process.env.GAME_SHOP_ROBINHOOD_TREASURY = '0x' + '22'.repeat(20);
 process.env.GAME_SHOP_SOLANA_QUOTE_KEY = require('node:crypto').randomBytes(32).toString('hex');
 const shop = require('./robinhood_shop');
+require('./robinhood_nft_delivery').preflight = async () => ({ balance: 1000000000 });
 const nativeFetch = global.fetch;
 let receipt = null, head = '0x66', blockTime = Math.floor(Date.now()/1000);
 global.fetch = async (url, options) => {
@@ -62,7 +63,28 @@ const server = app.listen(0, '127.0.0.1', async () => {
     assert.equal((await post('/shop/evm/redeem', body)).data.alreadyRedeemed, true);
     assert.equal((await post('/shop/evm/redeem', { ...body, txHash: '0x'+txHash.slice(2).toUpperCase() })).data.alreadyRedeemed, true);
     assert.equal(db.db.prepare('SELECT COUNT(*) n FROM utility_purchases WHERE tx_hash = ?').get(txHash).n, 1);
+    const nacl = require('tweetnacl');
+    const bs58 = require('bs58').default || require('bs58');
+    const recipientKeys = nacl.sign.keyPair();
+    const recipient = bs58.encode(recipientKeys.publicKey);
+    const challenge = await post('/shop/nft-robinhood/challenge', { buyer, recipient });
+    assert.equal(challenge.status, 200);
+    const nftBody = { buyer, recipient, expires: challenge.data.expires,
+      signature: bs58.encode(nacl.sign.detached(new TextEncoder().encode(challenge.data.message), recipientKeys.secretKey)) };
+    const nft = await post('/shop/nft-robinhood/quote', nftBody);
+    assert.equal(nft.status, 200, JSON.stringify(nft));
+    assert.equal(nft.data.state, 'awaiting_payment');
+    assert.equal(nft.data.recipient, recipient);
+    assert.equal((await post('/shop/nft-robinhood/quote', nftBody)).data.id, nft.data.id);
+    assert.equal((await post('/shop/nft-robinhood/quote', { ...nftBody, buyer: '0x'+'33'.repeat(20) })).status, 400);
+    const base = `http://127.0.0.1:${server.address().port}`;
+    assert.equal((await nativeFetch(base+'/shop/nft-robinhood/orders')).status, 401);
+    const owned = await (await nativeFetch(base+'/shop/nft-robinhood/orders', { headers: { 'x-token': 'rh-test-token' } })).json();
+    assert.equal(owned.orders.length, 1);
+    assert.equal('signed_tx' in owned.orders[0], false);
+    assert.equal((await nativeFetch(base+'/admin/nft/robinhood/orders')).status, 403);
     console.log('PASS Robinhood shop: prices, RPC allowlist, real HTTP quote/redeem, confirmation, exact amount, buyer, 150 credits, idempotency');
+    console.log('PASS Robinhood NFT HTTP: authenticated recipient proof, quote reservation, replay, wrong signer and unauthenticated access rejected, no signed bytes exposed');
     process.exitCode = 0;
   } catch (e) { console.error(e); process.exitCode = 1; }
   finally { global.fetch = nativeFetch; server.close(() => process.exit(process.exitCode)); }

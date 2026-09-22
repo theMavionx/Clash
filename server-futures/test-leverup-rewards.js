@@ -178,6 +178,11 @@ async function run() {
     { imported: imported.imported, updated: imported.updated, learned: imported.learned_orders },
     { imported: 4, updated: 0, learned: 2 },
   );
+  assert.equal(imported.economic_rows, 7);
+  assert.equal(imported.eligible_intents, 4);
+  assert.deepEqual(imported.ignored_reasons, {
+    wallet_mismatch: 1, no_clash_route: 2, invalid_fill: 0,
+  }, 'unrelated wallet/broker activity is explained, never credited');
   const trades = db.db.prepare(`
     SELECT * FROM trade_history WHERE player_id = 'player-1' AND dex = 'leverup' ORDER BY id
   `).all();

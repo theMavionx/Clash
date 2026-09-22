@@ -8,6 +8,7 @@ const nacl = require('tweetnacl');
 const bs58 = require('bs58').default || require('bs58');
 const db = require('./db');
 const robinhoodShop = require('./robinhood_shop');
+const robinhoodNftDelivery = require('./robinhood_nft_delivery');
 const { createWindow, rateAddress } = require('./http_security');
 const townHallFlagStorage = require('./town_hall_flag_storage');
 const hermesClient = require('./hermes_client');
@@ -8662,6 +8663,80 @@ router.post('/shop/evm/redeem', auth, async (req, res) => {
   }
 });
 
+// Robinhood CLASH payment, Solana Dragon delivery. No NFT bridge/burn is involved.
+const rhNftEnabled = () => process.env.NFT_ROBINHOOD_PAYMENTS_ENABLED !== '0';
+const rhNftCollection = () => nftCollectionConfig('dragon');
+const rhNftOrders = require('./robinhood_nft_orders').createNftOrders({
+  db: db.db, rpc: (method, params) => gameShopEvmRpcCall('robinhood', method, params),
+  prepare: async (buyer, recipient) => {
+    if (!rhNftEnabled()) throw new Error('Robinhood NFT payments are not enabled');
+    const config = gameShopEvmConfig('robinhood');
+    if (!config?.ready || !config.saleActive) throw new Error('Robinhood treasury unavailable');
+    const { getAddress } = await import('viem'); getAddress(buyer);
+    const chain = await gameShopEvmRpcCall('robinhood', 'eth_chainId', []);
+    const decimals = await gameShopEvmRpcCall('robinhood', 'eth_call', [{ to: robinhoodShop.TOKEN, data: '0x313ce567' }, 'latest']);
+    if (Number(chain) !== 4663 || Number(decimals) !== 18) throw new Error('Robinhood payment network/token mismatch');
+    const deployment = nftCollectionDeployment('dragon', 'solana');
+    await robinhoodNftDelivery.preflight(deployment, recipient);
+    return { treasury: config.treasury, amount: usdToNativeUnits('10', await robinhoodShop.price(), 18).toString() };
+  },
+  reserve: (id, recipient) => {
+    const collection = rhNftCollection();
+    const reserved = reserveCollectionServerSupply(collection, { chain: 'solana', buyer: recipient, payment: 'robinhood-clash', quantity: 1 });
+    const key = collectionSupplySettingKey(collection);
+    const state = readAppSettingJson(key, null);
+    state.reservations.find(r => r.id === reserved.reservation.id).expiresAt = '2099-01-01T00:00:00.000Z';
+    writeAppSettingJson(key,state);
+    return reserved.reservation.id;
+  },
+  release: reservationId => {
+    const key = collectionSupplySettingKey(rhNftCollection());
+    const state = readAppSettingJson(key, null);
+    if (!state) throw new Error('NFT supply ledger unavailable');
+    state.reservations = state.reservations.filter(r => r.id !== reservationId);
+    writeAppSettingJson(key,state);
+  },
+  deliver: (row, persist) => robinhoodNftDelivery.deliver(nftCollectionDeployment('dragon','solana'),row,persist),
+  complete: (row, result) => {
+    const collection = rhNftCollection();
+    const confirmed = confirmCollectionServerMintTx(collection, { reservationId: row.reservation_id, tx: result.signature,
+      chain: 'solana', quantity: 1, tokenIds: [result.asset], buyer: row.recipient });
+    recordCollectionMintRarities(collection, { ...confirmed, playerId: row.player_id });
+    db.bindPlayerCollectionNft(row.player_id, 'dragon', row.recipient, { chain: 'solana', tokenId: result.asset, level: 1 }, { source: 'robinhood-purchase', txHash: result.signature });
+  },
+});
+const rhNftRate = createWindow();
+const rhNftMessage = (playerId, buyer, recipient, expires) => `Clash of Perps NFT delivery\nPlayer: ${playerId}\nRobinhood payer: ${buyer.toLowerCase()}\nSolana recipient: ${recipient}\nExpires: ${expires}`;
+router.get('/shop/nft-robinhood/config', (req,res) => res.json({ enabled: rhNftEnabled(), priceUsd: '10', paymentChain: 'robinhood', deliveryChain: 'solana' }));
+router.post('/shop/nft-robinhood/challenge', auth, (req,res) => {
+  const buyer = String(req.body?.buyer || ''), recipient = String(req.body?.recipient || '');
+  if (!/^0x[0-9a-f]{40}$/i.test(buyer) || !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(recipient)) return res.status(400).json({ error: 'Invalid wallet address' });
+  const expires = Math.floor(Date.now()/1000)+300;
+  res.json({ expires, message: rhNftMessage(req.player.id,buyer,recipient,expires) });
+});
+router.post('/shop/nft-robinhood/quote', auth, async (req,res) => {
+  if (!rhNftRate(req.player.id,6).ok) return res.status(429).json({ error: 'Please wait before another NFT quote' });
+  try {
+    const { buyer, recipient, expires, signature } = req.body || {};
+    const now = Math.floor(Date.now()/1000);
+    if (!Number.isSafeInteger(expires) || expires < now || expires > now+300) throw new Error('Recipient verification expired');
+    const { PublicKey } = require('@solana/web3.js');
+    const valid = nacl.sign.detached.verify(new TextEncoder().encode(rhNftMessage(req.player.id,buyer,recipient,expires)), bs58.decode(signature), new PublicKey(recipient).toBytes());
+    if (!valid) throw new Error('Recipient wallet signature invalid');
+    res.json(await rhNftOrders.quote(req.player.id,buyer,recipient));
+  } catch (error) { res.status(400).json({ error: String(error.message).replace(/https?:\S+/g,'[RPC]').slice(0,180) }); }
+});
+router.get('/shop/nft-robinhood/orders', auth, (req,res) => {
+  const rows = db.db.prepare('SELECT * FROM robinhood_nft_orders WHERE player_id=? ORDER BY created_at DESC LIMIT 20').all(req.player.id);
+  res.json({ orders: rows.map(rhNftOrders.publicOrder) });
+});
+router.get('/admin/nft/robinhood/orders', adminAuth, (req,res) => {
+  res.json({ orders: db.db.prepare('SELECT id,player_id,buyer,recipient,amount,state,payment_tx,asset,delivery_tx,attempts,last_error,created_at,updated_at FROM robinhood_nft_orders ORDER BY created_at DESC LIMIT 200').all() });
+});
+// Continue paid orders even when admission is disabled. The bounded worker
+// never holds a SQLite transaction across RPC calls.
+setInterval(() => rhNftOrders.tick().catch(() => console.warn('[rh-nft] worker unavailable')), 15000).unref();
+
 // ---------- Game shop: Aptos (Decibel-side) USDC/APT transfer ----------
 
 function aptosFullnode() {
@@ -16057,7 +16132,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
     const withHibachiReconciliation = payload => hibachiReconciliation
       ? { ...payload, reconciliation: hibachiReconciliation }
       : payload;
-    if (reconcile.imported || reconcile.adopted || reconcile.updated || reconcile.errors || (reconcile.skipped && reconcile.skipped !== 'cooldown' && reconcile.skipped !== 'worker_indexed')) {
+    if (reconcile.imported || reconcile.adopted || reconcile.updated || reconcile.errors || (dex === 'leverup' && reconcile.ignored) || (reconcile.skipped && reconcile.skipped !== 'cooldown' && reconcile.skipped !== 'worker_indexed')) {
       console.log(`[claim-gold ${dex}] reconcile player=${req.player.name} ${JSON.stringify({
         imported: reconcile.imported || 0,
         adopted: reconcile.adopted || 0,
@@ -16065,6 +16140,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
         checked: reconcile.checked || 0,
         skipped: reconcile.skipped || null,
         errors: reconcile.errors || 0,
+        ...(dex === 'leverup' ? { ignored: reconcile.ignored || 0, ignored_reasons: reconcile.ignored_reasons || {}, economic_rows: reconcile.economic_rows || 0, eligible_intents: reconcile.eligible_intents || 0 } : {}),
       })}`);
     }
     const fdb = futuresDbReadonly();

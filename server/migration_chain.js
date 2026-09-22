@@ -720,10 +720,10 @@ function createMigrationChain(env = process.env, deps = {}) {
       );
     if (transfers.reduce((s, l) => s + l.args.value, 0n) !== BigInt(r.outputUnits))
       return "conflict";
-    // Inclusion advances nonce sequencing, not final settlement accounting.
+    // Owner-selected Robinhood policy: exact successful canonical inclusion
+    // is sufficient for settlement; do not wait for the delayed L1 finality tag.
     if (inclusionOnly) return "included";
-    const final = await evm().getBlock({ blockTag: "finalized" });
-    return final.number >= receipt.blockNumber ? "confirmed" : "included";
+    return "confirmed";
   }
   async function broadcastEvm(serializedTransaction) {
     await chainCheck();
