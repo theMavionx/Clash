@@ -4546,3 +4546,9 @@ Follow-up:
 ## UR-2026-09-22-RH-LIGHTER-DEPLOY
 
 - Owner: «викладай». Explicit authorization to commit, push and deploy the tested Robinhood Lighter integration. Exclude unrelated migration message edits and local artifacts; run post-deploy read-only service and venue checks. No funded order authorized.
+## UR-2026-09-22-ROBINHOOD-HOLDER-BENEFITS
+
+- Owner requests moving CLASH discounts, shop and announcements from Solana to Robinhood holdings and production deployment. Existing shop discounts are payment-based (Solana CLASH/Base COP), not balance-based; holder threshold and payment-method policy must be specified before changing financial eligibility. Migration and historic payment records must remain intact. Announcement updated locally to known Robinhood contract; do not claim holder discount live until implemented and tested.
+## UR-2026-09-22-ROBINHOOD-PAYMENT-CLARIFIED
+
+- Owner clarified: preserve existing payment-based CLASH discounts and bonuses, not holding eligibility; migrate payment token/network to Robinhood and deploy. Preserve old payment redemption. Price new purchases using Robinhood token price, not the retired Solana mint price.

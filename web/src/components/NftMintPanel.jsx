@@ -3,6 +3,7 @@ import { useWallet as useSolWallet } from '@solana/wallet-adapter-react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { createPublicClient, createWalletClient, custom, http } from 'viem';
 import { arbitrum, base } from 'viem/chains';
+import { robinhoodChain, robinhoodPublicClient, ensureRobinhoodChain } from '../lib/robinhoodConfig';
 import EvmWalletModal from './EvmWalletModal';
 import { useOptionalPrivy } from './PrivyAuthProvider';
 import { useDex } from '../contexts/DexContext';
@@ -43,18 +44,21 @@ const nftInkPublicClient = createPublicClient({ chain: inkChain, transport: http
 const MAX_BATCH_QUANTITY = 10;
 
 const EVM_CHAIN_ID_BY_NFT_CHAIN = {
+  robinhood: 4663,
   base: BASE_CHAIN_ID,
   arbitrum: ARBITRUM_CHAIN_ID,
   monad: MONAD_CHAIN_ID,
   ink: INK_CHAIN_ID,
 };
 const EVM_VIEM_CHAIN_BY_ID = {
+  4663: robinhoodChain,
   [BASE_CHAIN_ID]: base,
   [ARBITRUM_CHAIN_ID]: arbitrum,
   [MONAD_CHAIN_ID]: monadChain,
   [INK_CHAIN_ID]: inkChain,
 };
 const EVM_PUBLIC_CLIENT_BY_ID = {
+  4663: robinhoodPublicClient,
   [BASE_CHAIN_ID]: nftBasePublicClient,
   [ARBITRUM_CHAIN_ID]: nftArbitrumPublicClient,
   [MONAD_CHAIN_ID]: nftMonadPublicClient,
@@ -83,6 +87,7 @@ const TOKEN_LOGO_SRC = {
 function tokenLogo(token) { return TOKEN_LOGO_SRC[token] || null; }
 
 const CHAIN_LOGO_SRC = {
+  robinhood: '/robinhood.svg',
   base: '/tokens/BASE.svg',
   arbitrum: '/tokens/ARB.svg',
   monad: '/tokens/MON.svg',
@@ -203,6 +208,7 @@ function makeNftEvmWallet(provider, address) {
       if (id === ARBITRUM_CHAIN_ID) return ensureArbitrumChain(provider);
       if (id === MONAD_CHAIN_ID) return ensureMonadChain(provider);
       if (id === INK_CHAIN_ID) return ensureInkChain(provider);
+      if (id === 4663) return ensureRobinhoodChain(provider);
       return ensureBaseChain(provider);
     },
     getPublicClient: (targetChainId = BASE_CHAIN_ID) => (
@@ -340,7 +346,7 @@ function salePaymentDealText(option, config) {
 
 function shopUnitUsd(product, chain, payment) {
   const baseUsd = Number(product?.priceUsd || 0);
-  if (chain === 'solana' && payment === 'clash') {
+  if (chain === 'robinhood' && payment === 'clash') {
     const clashUsd = product?.clashPriceUsd != null ? Number(product.clashPriceUsd) : baseUsd * 0.8;
     return Number.isFinite(clashUsd) ? clashUsd : baseUsd;
   }
@@ -349,7 +355,7 @@ function shopUnitUsd(product, chain, payment) {
 
 function isShopDiscounted(product, chain, payment) {
   const baseUsd = Number(product?.priceUsd || 0);
-  return (chain === 'solana' && payment === 'clash')
+  return (chain === 'robinhood' && payment === 'clash')
     && shopUnitUsd(product, chain, payment) < baseUsd;
 }
 
@@ -464,6 +470,7 @@ function getMysterySupplyInfo() {
 // whatever chain they're already trading on, with the wallet already
 // connected for that DEX.
 const DEX_TO_SHOP_CHAIN = {
+  rhlighter: 'robinhood',
   avantis:  'base',
   etoro:    'base',
   pacifica: 'solana',
@@ -598,6 +605,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
   const marketplaceEvmChainId = EVM_CHAIN_ID_BY_NFT_CHAIN[marketplaceChain] || BASE_CHAIN_ID;
   const evmOnMarketplaceChain = evmChainId === marketplaceEvmChainId;
   const shopReadiness = {
+    robinhood: !!gameShopConfig?.robinhood?.ready && !!gameShopConfig?.robinhood?.saleActive,
     base:     !!gameShopConfig?.base?.ready    && !!gameShopConfig?.base?.saleActive,
     solana:   !!gameShopConfig?.solana?.ready   && !!gameShopConfig?.solana?.saleActive,
     arbitrum: !!gameShopConfig?.arbitrum?.ready && !!gameShopConfig?.arbitrum?.saleActive,
@@ -648,7 +656,8 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
   // SHOP_PAYMENTS_BY_CHAIN below.
   useEffect(() => {
     const validPayments = {
-      solana:   ['usdc', 'sol', 'clash', 'skr'],
+      solana:   ['usdc', 'sol', 'skr'],
+      robinhood: ['clash'],
       aptos:    ['usdc', 'apt'],
       arbitrum: ['usdc', 'eth'],
       monad:    ['usdc', 'mon'],
@@ -657,7 +666,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
     };
     const allowed = validPayments[shopChain] || ['usdc'];
     if (!allowed.includes(shopPayment)) {
-      setShopPayment('usdc');
+      setShopPayment(allowed[0]);
     }
   }, [shopChain, shopPayment]);
   const paymentOptions = useMemo(() => {
@@ -1024,7 +1033,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
       }
     } else if (shopChain === 'base') {
       if (!evmAddress || !evmOnShopChain) { await handleShopChainReady(); return; }
-    } else if (shopChain === 'arbitrum' || shopChain === 'monad' || shopChain === 'ink') {
+    } else if (shopChain === 'arbitrum' || shopChain === 'monad' || shopChain === 'ink' || shopChain === 'robinhood') {
       if (!evmAddress || !evmOnShopChain) { await handleShopChainReady(); return; }
     }
 
@@ -1060,7 +1069,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
           payment: shopPayment,
           quantity,
         });
-      } else if (shopChain === 'arbitrum' || shopChain === 'monad' || shopChain === 'ink') {
+      } else if (shopChain === 'arbitrum' || shopChain === 'monad' || shopChain === 'ink' || shopChain === 'robinhood') {
         result = await buyEvmShopItem({
           evmWallet,
           buyer: evmAddress,
@@ -1419,7 +1428,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
                     payment={shopPayment}
                     onPaymentChange={setShopPayment}
                     skrReady={!!gameShopConfig?.solana?.skrReady}
-                    clashReady={!!gameShopConfig?.solana?.clashReady}
+                    clashReady={!!gameShopConfig?.robinhood?.ready}
                     evmAddress={evmAddress}
                     evmOnChain={evmOnShopChain}
                     solAddress={solAddress}
@@ -1696,6 +1705,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
 // on Solana is gated on `solana.skrReady` server-side — the option is
 // pruned at render time if the operator hasn't configured the mint.
 const SHOP_PAYMENTS_BY_CHAIN = {
+  robinhood: [{ id: 'clash', label: 'CLASH', sub: 'Token benefits' }],
   base: [
     { id: 'usdc', label: 'USDC', sub: 'Stable' },
     { id: 'eth',  label: 'ETH',  sub: 'Native' },
@@ -1715,7 +1725,6 @@ const SHOP_PAYMENTS_BY_CHAIN = {
   solana: [
     { id: 'usdc', label: 'USDC', sub: 'Stable' },
     { id: 'sol',  label: 'SOL',  sub: 'Native' },
-    { id: 'clash', label: 'CLASH', sub: '20% off' },
     { id: 'skr',  label: 'SKR',  sub: 'Seeker' },
   ],
   aptos: [
@@ -1735,6 +1744,7 @@ const SHOP_PAYMENT_TOKEN_ICONS = {
 };
 
 const SHOP_CHAIN_LABEL = {
+  robinhood: 'Robinhood',
   base:     'Base',
   arbitrum: 'Arbitrum',
   monad:    'Monad',
@@ -1744,11 +1754,12 @@ const SHOP_CHAIN_LABEL = {
 };
 
 const SHOP_CHAIN_CHOICES = [
+  { id: 'robinhood', title: 'Robinhood', subtitle: 'CLASH · token benefits', badge: 'EVM' },
   { id: 'base', title: 'Base', subtitle: 'USDC / ETH', badge: 'EVM' },
   { id: 'arbitrum', title: 'Arbitrum', subtitle: 'USDC / ETH', badge: 'EVM' },
   { id: 'monad', title: 'Monad', subtitle: 'USDC / MON', badge: 'EVM' },
   { id: 'ink', title: 'Ink', subtitle: 'USDC / ETH', badge: 'EVM' },
-  { id: 'solana', title: 'Solana', subtitle: 'USDC / SOL / CLASH / SKR', badge: 'SOL' },
+  { id: 'solana', title: 'Solana', subtitle: 'USDC / SOL / SKR', badge: 'SOL' },
   { id: 'aptos', title: 'Aptos', subtitle: 'USDC / APT', badge: 'APT' },
 ];
 
@@ -1763,6 +1774,7 @@ function getShopPaymentLabel(chain, payment) {
 
 function getShopPurchaseExplorer(chain, tx) {
   if (!tx) return null;
+  if (chain === 'robinhood') return `https://robinhoodchain.blockscout.com/tx/${tx}`;
   if (chain === 'base') return `https://basescan.org/tx/${tx}`;
   if (chain === 'arbitrum') return `https://arbiscan.io/tx/${tx}`;
   if (chain === 'monad') return `https://explorer.monad.xyz/tx/${tx}`;

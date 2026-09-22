@@ -9,7 +9,8 @@ import { useOptionalPrivy } from './PrivyAuthProvider';
 import { useFarcaster } from '../hooks/useFarcaster';
 import useHydratedNftPlayer from '../hooks/useHydratedNftPlayer';
 import { fetchOwnedNftsForPlayerWallets, nftLevelImageUrl, nftRarityBadgeStyle, nftRarityCardStyle, nftRarityLabel, normalizeNftRarity, resolveDemonKingPlayerInventorySyncTarget, syncDemonKingNfts } from '../lib/nftV3Client';
-import { buySolanaShopItem } from '../lib/gameShop';
+import { buyEvmShopItem } from '../lib/gameShop';
+import EvmWalletModal from './EvmWalletModal';
 import { uiButton, uiIconButton } from '../styles/theme';
 import { makePrivySolanaWallet, pickPrivySolanaWallet } from '../lib/privySolanaWallet';
 import { openSolanaWallet } from '../lib/solanaWalletUi';
@@ -685,6 +686,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
   const { isMobile } = useLayout();
   const nftPlayer = useHydratedNftPlayer(player);
   const evmWallet = useEvmWallet();
+  const [flagWalletOpen, setFlagWalletOpen] = useState(false);
   const evmAddress = evmWallet?.address || null;
   const solWallet = useSolWallet();
   const { setVisible: openWalletModal } = useWalletModal();
@@ -1179,10 +1181,10 @@ function BuildingInfoPanel({ onOpenTroops }) {
       return;
     }
     const requiresPayment = shouldChargeForTownHallFlagUpload(flagEntitlement);
-    const buyer = paymentSolWallet?.publicKey?.toBase58?.() || '';
+    const buyer = evmWallet?.address || '';
     if (requiresPayment && !buyer) {
-      setFlagStatus('Connect a Solana wallet to pay with CLASH');
-      openSolanaConnect();
+      setFlagStatus('Connect a Robinhood wallet to pay with CLASH');
+      setFlagWalletOpen(true);
       return;
     }
     setFlagBusy(true);
@@ -1193,8 +1195,9 @@ function BuildingInfoPanel({ onOpenTroops }) {
       let payment = null;
       if (requiresPayment) {
         setFlagStatus('Confirm CLASH payment...');
-        payment = await buySolanaShopItem({
-          solWallet: paymentSolWallet,
+        payment = await buyEvmShopItem({
+          evmWallet,
+          chain: 'robinhood',
           buyer,
           token,
           sku: TOWN_HALL_FLAG_SKU,
@@ -1209,7 +1212,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-token': token },
         body: JSON.stringify({
-          txSignature: payment?.signature || undefined,
+          txSignature: payment?.txHash || undefined,
           imageData,
           mimeType: 'image/png',
         }),
@@ -1226,7 +1229,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
     } finally {
       setFlagBusy(false);
     }
-  }, [applyTownHallFlagLocal, flagBusy, flagEntitlement, flagFile, flagPreview, openSolanaConnect, paymentSolWallet, player?.token]);
+  }, [applyTownHallFlagLocal, flagBusy, flagEntitlement, flagFile, flagPreview, evmWallet, player?.token]);
 
   const handleTownHallFlagReset = useCallback(async () => {
     if (flagBusy) return;
@@ -1735,7 +1738,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
     const currentFlag = building.town_hall_flag_url || building.flag_url || player?.town_hall_flag?.image_url || '';
     const preview = flagPreview || currentFlag;
     const hasCustomFlag = !!currentFlag;
-    const hasSolanaPaymentWallet = !!paymentSolWallet?.publicKey?.toBase58?.();
+    const hasPaymentWallet = !!evmWallet?.address;
     const recoveryUploadAvailable = flagEntitlement.loaded && flagEntitlement.recoveryUploadAvailable;
     const flagEntitlementReady = flagEntitlement.loaded && !flagEntitlement.loading && !flagEntitlement.error;
     const flagUploadDisabled = flagBusy || !flagFile || !flagEntitlementReady;
@@ -1795,7 +1798,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
             <div style={styles.flagCopy}>
               {recoveryUploadAvailable
                 ? 'Your previous purchase is verified. Choose the flag image again and restore it without another payment.'
-                : 'Standard is free to restore anytime. Uploading a custom square flag costs $5 in CLASH on Solana and is visible to every player who sees your base.'}
+                : 'Standard is free to restore anytime. Uploading a custom square flag costs $5 in CLASH on Robinhood and is visible to every player who sees your base.'}
             </div>
             <label style={styles.flagFileLabel}>
               <input
@@ -1835,12 +1838,17 @@ function BuildingInfoPanel({ onOpenTroops }) {
                   ? 'Checking purchase...'
                   : recoveryUploadAvailable
                     ? 'Restore paid flag — free'
-                    : hasSolanaPaymentWallet
+                    : hasPaymentWallet
                       ? 'Pay $5 CLASH & Upload'
-                      : 'Connect Solana Wallet'}
+                      : 'Connect Robinhood Wallet'}
             </button>
           </div>
         </section>
+        <EvmWalletModal open={flagWalletOpen} targetChain="robinhood" onClose={() => setFlagWalletOpen(false)}
+          onConnected={({ provider, address, rdns }) => {
+            evmWallet.setExternalProvider(provider, address, rdns);
+            setFlagWalletOpen(false);
+          }} />
       </div>
     );
   };

@@ -12,6 +12,7 @@
 import { createContext, useContext, useEffect, useMemo, useState, useCallback } from 'react';
 import { createPublicClient, createWalletClient, http, custom, fallback, encodeFunctionData } from 'viem';
 import { base, arbitrum, mainnet } from 'viem/chains';
+import { robinhoodChain, robinhoodPublicClient, ensureRobinhoodChain } from '../lib/robinhoodConfig';
 import { BASE_CHAIN_ID, BASE_RPC_URLS, ensureBaseChain } from '../lib/avantisContract';
 import { ARBITRUM_CHAIN_ID, ARBITRUM_RPC_URLS, ensureArbitrumChain } from '../lib/gmxConfig';
 import { MONAD_CHAIN_ID, MONAD_RPC_URLS, ensureMonadChain, monadChain } from '../lib/monadConfig';
@@ -134,6 +135,7 @@ const katanaPublicClient = createPublicClient({
 // chainId → viem chain object map. Centralized so adding the next EVM DEX is
 // a single-line edit instead of a hunt through the codebase.
 const CHAIN_BY_ID = {
+  4663: robinhoodChain,
   [mainnet.id]: mainnet,
   [BASE_CHAIN_ID]: base,
   [ARBITRUM_CHAIN_ID]: arbitrum,
@@ -147,6 +149,7 @@ const CHAIN_BY_ID = {
 };
 
 const PUBLIC_CLIENT_BY_ID = {
+  4663: robinhoodPublicClient,
   [mainnet.id]: ethereumPublicClient,
   [BASE_CHAIN_ID]: publicClient,
   [ARBITRUM_CHAIN_ID]: arbitrumPublicClient,
@@ -160,6 +163,7 @@ const PUBLIC_CLIENT_BY_ID = {
 };
 
 const CHAIN_LABEL_BY_ID = {
+  4663: 'Robinhood',
   [mainnet.id]: 'Ethereum',
   [BASE_CHAIN_ID]: 'Base',
   [ARBITRUM_CHAIN_ID]: 'Arbitrum',
@@ -498,7 +502,9 @@ export function EvmWalletProvider({ children }) {
   const ensureChain = useCallback(async (targetChainId = BASE_CHAIN_ID) => {
     if (!provider) throw new Error('No EVM wallet connected');
     const id = Number(targetChainId);
-    if (id === mainnet.id) {
+    if (id === 4663) {
+      await ensureRobinhoodChain(provider);
+    } else if (id === mainnet.id) {
       await provider.request({
         method: 'wallet_switchEthereumChain',
         params: [{ chainId: '0x1' }],

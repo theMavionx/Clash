@@ -12,6 +12,13 @@ import { uiButton, uiIconButton } from '../styles/theme';
 // the rest of the game UI.
 
 const NETWORKS = {
+  robinhood: {
+    chainId: '0x1237', label: 'Robinhood', cta: 'Robinhood Chain',
+    addParams: { chainId: '0x1237', chainName: 'Robinhood Chain',
+      nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
+      rpcUrls: ['https://rpc.mainnet.chain.robinhood.com'],
+      blockExplorerUrls: ['https://robinhoodchain.blockscout.com'] },
+  },
   mainnet: {
     chainId: '0x1',
     label: 'Ethereum',

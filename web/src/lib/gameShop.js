@@ -853,7 +853,7 @@ export async function redeemEvmShopPurchase({ token, chain, txHash, memo, signat
     body: JSON.stringify({ chain, txHash, memo, signature }),
   });
   const json = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(json?.error || `Redeem failed (${response.status})`);
+  if (!response.ok) throw Object.assign(new Error(json?.error || `Redeem failed (${response.status})`), { status: response.status });
   return json;
 }
 
@@ -881,6 +881,32 @@ export async function buyEvmShopItem({ evmWallet, buyer, token, chain, sku, paym
   if (!token) throw new Error('Game session is not ready');
   if (!evmWallet?.provider || !buyer) throw new Error('EVM wallet is not connected');
   if (!chain) throw new Error('Chain not specified');
+
+  if (chain === 'robinhood') {
+    const { withRobinhoodPurchase } = await import('./robinhoodShopRecovery');
+    return withRobinhoodPurchase({ token, buyer, sku, payment, quantity,
+      send: async ({ beforeSubmit, rejected, submitted }) => {
+        const quote = await fetchEvmShopQuote({ token, chain, buyer, sku, payment, quantity });
+        if (quote.chainId !== 4663 || quote.kind !== 'erc20'
+          || quote.mint?.toLowerCase() !== '0xceb9a7c4ec7bf0ee14bac1f16c97571bc22db979') throw new Error('Invalid Robinhood CLASH quote');
+        await ensureEvmChain(evmWallet, 4663);
+        const balance = await evmWallet.getPublicClient(4663).readContract({ address: quote.mint, abi: ERC20_SHOP_ABI, functionName: 'balanceOf', args: [buyer] });
+        if (BigInt(balance) < BigInt(quote.amount)) throw new Error('Not enough CLASH on Robinhood');
+        beforeSubmit();
+        let txHash;
+        try {
+          txHash = await evmWallet.getWalletClient(4663).writeContract({ address: quote.mint, abi: ERC20_SHOP_ABI, functionName: 'transfer', args: [quote.treasury, BigInt(quote.amount)] });
+        } catch (error) {
+          if (error.code === 4001 || error.cause?.code === 4001) rejected();
+          throw error;
+        }
+        const pending = { txHash, quote };
+        submitted(pending);
+        return pending;
+      },
+      redeem: ({ txHash, quote }) => redeemEvmShopPurchase({ token, chain, txHash, memo: quote.memo, signature: quote.signature }),
+    });
+  }
 
   const quote = await fetchEvmShopQuote({ token, chain, buyer, sku, payment, quantity });
   if (!quote?.treasury) throw new Error('Shop treasury not configured');

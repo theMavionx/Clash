@@ -17,6 +17,7 @@ import { ARBITRUM_CHAIN_ID, ensureArbitrumChain } from '../lib/gmxConfig';
 import { MONAD_CHAIN_ID, ensureMonadChain, monadChain } from '../lib/monadConfig';
 import { INK_CHAIN_ID, ensureInkChain, inkChain } from '../lib/nadoConfig';
 import { fetchGameShopConfig, buySolanaShopItem, buyEvmShopItem, buyAptosShopItem } from '../lib/gameShop';
+import { robinhoodChain, robinhoodPublicClient, ensureRobinhoodChain } from '../lib/robinhoodConfig';
 import { makePrivySolanaWallet, pickPrivySolanaWallet } from '../lib/privySolanaWallet';
 import {
   avantisPlaceOrderSignature,
@@ -612,32 +613,37 @@ const aiShopArbitrumPublicClient = createPublicClient({ chain: arbitrum, transpo
 const aiShopMonadPublicClient = createPublicClient({ chain: monadChain, transport: http() });
 const aiShopInkPublicClient = createPublicClient({ chain: inkChain, transport: http() });
 const AI_SHOP_EVM_PUBLIC_CLIENTS = {
+  4663: robinhoodPublicClient,
   [BASE_CHAIN_ID]: aiShopBasePublicClient,
   [ARBITRUM_CHAIN_ID]: aiShopArbitrumPublicClient,
   [MONAD_CHAIN_ID]: aiShopMonadPublicClient,
   [INK_CHAIN_ID]: aiShopInkPublicClient,
 };
 const AI_SHOP_EVM_CHAINS = {
+  4663: robinhoodChain,
   [BASE_CHAIN_ID]: base,
   [ARBITRUM_CHAIN_ID]: arbitrum,
   [MONAD_CHAIN_ID]: monadChain,
   [INK_CHAIN_ID]: inkChain,
 };
 const AI_SHOP_CHAIN_IDS = {
+  robinhood: 4663,
   base: BASE_CHAIN_ID,
   arbitrum: ARBITRUM_CHAIN_ID,
   monad: MONAD_CHAIN_ID,
   ink: INK_CHAIN_ID,
 };
 const AI_SHOP_CHAIN_OPTIONS = [
+  { id: 'robinhood', label: 'Robinhood', sub: 'CLASH · token benefits' },
   { id: 'base', label: 'Base', sub: 'USDC / ETH' },
-  { id: 'solana', label: 'Solana', sub: 'USDC / SOL / CLASH / SKR' },
+  { id: 'solana', label: 'Solana', sub: 'USDC / SOL / SKR' },
   { id: 'arbitrum', label: 'Arbitrum', sub: 'USDC / ETH' },
   { id: 'monad', label: 'Monad', sub: 'USDC / MON' },
   { id: 'ink', label: 'Ink', sub: 'USDC / ETH' },
   { id: 'aptos', label: 'Aptos', sub: 'USDC / APT' },
 ];
 const AI_SHOP_PAYMENTS_BY_CHAIN = {
+  robinhood: [{ id: 'clash', label: 'CLASH', sub: 'Token benefits' }],
   base: [
     { id: 'usdc', label: 'USDC', sub: 'Stable' },
     { id: 'eth', label: 'ETH', sub: 'Native' },
@@ -645,7 +651,6 @@ const AI_SHOP_PAYMENTS_BY_CHAIN = {
   solana: [
     { id: 'usdc', label: 'USDC', sub: 'Stable' },
     { id: 'sol', label: 'SOL', sub: 'Native' },
-    { id: 'clash', label: 'CLASH', sub: '20% off' },
     { id: 'skr', label: 'SKR', sub: 'Seeker' },
   ],
   arbitrum: [
@@ -666,6 +671,7 @@ const AI_SHOP_PAYMENTS_BY_CHAIN = {
   ],
 };
 const DEX_TO_AI_SHOP_CHAIN = {
+  rhlighter: 'robinhood',
   avantis: 'base',
   etoro: 'base',
   pacifica: 'solana',
@@ -690,6 +696,7 @@ function makeAiChatEvmWallet(provider, address) {
       if (id === ARBITRUM_CHAIN_ID) return ensureArbitrumChain(provider);
       if (id === MONAD_CHAIN_ID) return ensureMonadChain(provider);
       if (id === INK_CHAIN_ID) return ensureInkChain(provider);
+      if (id === 4663) return ensureRobinhoodChain(provider);
       return ensureBaseChain(provider);
     },
     getPublicClient: (targetChainId = BASE_CHAIN_ID) => (
@@ -1591,7 +1598,7 @@ function AiChatPanel({ onClose }) {
 
   useEffect(() => {
     const allowed = AI_SHOP_PAYMENTS_BY_CHAIN[shopChain]?.map((p) => p.id) || ['usdc'];
-    if (!allowed.includes(shopPayment)) setShopPayment('usdc');
+    if (!allowed.includes(shopPayment)) setShopPayment(allowed[0]);
   }, [shopChain, shopPayment]);
 
   useEffect(() => {
@@ -2438,7 +2445,7 @@ function AiChatPanel({ onClose }) {
       setShopNotice(`${AI_SHOP_CHAIN_OPTIONS.find((c) => c.id === shopChain)?.label || shopChain} shop is not live yet.`);
       return;
     }
-    if (shopChain === 'base' || shopChain === 'arbitrum' || shopChain === 'monad' || shopChain === 'ink') {
+    if (shopChain === 'base' || shopChain === 'arbitrum' || shopChain === 'monad' || shopChain === 'ink' || shopChain === 'robinhood') {
       if (!evmAddress || !evmWallet) {
         setEvmModalOpen(true);
         return;
@@ -2479,7 +2486,7 @@ function AiChatPanel({ onClose }) {
           payment: shopPayment,
           quantity: 1,
         });
-      } else if (shopChain === 'arbitrum' || shopChain === 'monad' || shopChain === 'ink') {
+      } else if (shopChain === 'arbitrum' || shopChain === 'monad' || shopChain === 'ink' || shopChain === 'robinhood') {
         result = await buyEvmShopItem({
           evmWallet,
           buyer: evmAddress,
@@ -2595,7 +2602,7 @@ function AiChatPanel({ onClose }) {
   const shopReady = !!shopConfig?.[shopChain]?.ready && !!shopConfig?.[shopChain]?.saleActive;
   const shopPayments = (AI_SHOP_PAYMENTS_BY_CHAIN[shopChain] || [])
     .filter((payment) => payment.id !== 'skr' || !!shopConfig?.solana?.skrReady)
-    .filter((payment) => payment.id !== 'clash' || !!shopConfig?.solana?.clashReady);
+    .filter((payment) => payment.id !== 'clash' || !!shopConfig?.robinhood?.ready);
 
   return (
     <div style={backdropStyle} onClick={handleBackdropClick}>
@@ -2926,7 +2933,7 @@ function AiChatPanel({ onClose }) {
       <EvmWalletModal
         open={evmModalOpen}
         onClose={() => setEvmModalOpen(false)}
-        targetChain={shopChain === 'arbitrum' || shopChain === 'monad' || shopChain === 'ink' ? shopChain : 'base'}
+        targetChain={['arbitrum', 'monad', 'ink', 'robinhood'].includes(shopChain) ? shopChain : 'base'}
         onConnected={({ provider, address }) => {
           setLocalEvmWalletState({ provider, address });
           setEvmModalOpen(false);
@@ -3663,7 +3670,7 @@ function AiShopModal({
             )}
             {!loading && products.map((product) => {
               const isPack = product.kind === 'ai_messages';
-              const paidWithClash = chain === 'solana' && payment === 'clash';
+              const paidWithClash = chain === 'robinhood' && payment === 'clash';
               const credits = paidWithClash && product.copBonusCredits ? product.copBonusCredits : product.messageCredits;
               const price = paidWithClash && (product.clashPriceUsd || product.copPriceUsd) ? (product.clashPriceUsd || product.copPriceUsd) : product.priceUsd;
               const isBusy = busy === product.id;

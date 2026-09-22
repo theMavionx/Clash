@@ -7,6 +7,7 @@ const zlib = require('zlib');
 const nacl = require('tweetnacl');
 const bs58 = require('bs58').default || require('bs58');
 const db = require('./db');
+const robinhoodShop = require('./robinhood_shop');
 const { createWindow, rateAddress } = require('./http_security');
 const townHallFlagStorage = require('./town_hall_flag_storage');
 const hermesClient = require('./hermes_client');
@@ -3287,6 +3288,12 @@ const SOLANA_MEMO_PROGRAM_ID = 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr';
 // model.
 // =====================================================================
 const GAME_SHOP_EVM_CHAINS = {
+  robinhood: {
+    chainId: 4663, label: 'Robinhood', rpcUrl: () => robinhoodShop.rpcUrl(),
+    treasuryEnv: 'GAME_SHOP_ROBINHOOD_TREASURY', explorer: 'https://robinhoodchain.blockscout.com',
+    nativeSymbol: 'ETH', nativeDecimals: 18,
+    payments: { clash: { kind: 'erc20', token: robinhoodShop.TOKEN, decimals: 18, label: 'CLASH', oracleAsset: 'rhclash' } },
+  },
   base: {
     chainId: 8453,
     label: 'Base',
@@ -3377,6 +3384,7 @@ function alchemyEvmRpcUrl(chainKey) {
 }
 
 function gameShopEvmRpcUrls(chainKey) {
+  if (chainKey === 'robinhood') return [robinhoodShop.rpcUrl()];
   const spec = GAME_SHOP_EVM_CHAINS[chainKey];
   if (!spec) return [];
   const envByChain = {
@@ -3412,6 +3420,7 @@ async function gameShopEvmRpcCall(chainKey, method, params) {
     try {
       const resp = await fetch(rpcUrl, {
         method: 'POST',
+        signal: AbortSignal.timeout(12000),
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
       });
@@ -3433,6 +3442,7 @@ async function gameShopEvmRpcCall(chainKey, method, params) {
     }
   }
   if (sawNullResult) return null;
+  if (chainKey === 'robinhood') throw Object.assign(new Error('Robinhood RPC temporarily unavailable; retry verification, not payment'), { status: 503 });
   throw new Error(`${chainKey} ${method} failed across ${urls.length} RPC endpoint(s): ${String(lastError?.message || lastError || 'unknown error').slice(0, 180)}`);
 }
 
@@ -3451,6 +3461,7 @@ function evmPaymentSpec(chainKey, paymentKey) {
 }
 
 function defaultEvmPayment(chainKey) {
+  if (chainKey === 'robinhood') return 'clash';
   return GAME_SHOP_EVM_CHAINS[chainKey]?.payments?.usdc ? 'usdc' : null;
 }
 
@@ -3699,6 +3710,7 @@ const GAME_SHOP_PRODUCTS = {
     hidden: true,
     allowedPayments: {
       solana: ['clash'],
+      robinhood: ['clash'],
     },
   },
   demon_king_upgrade: {
@@ -3726,7 +3738,7 @@ function gameShopUsdPriceE6ForPayment(product, { chain = '', payment = '' } = {}
   const base = BigInt(product.usdPriceE6);
   const chainKey = String(chain).toLowerCase();
   const paymentKey = String(payment).toLowerCase();
-  if ((chainKey === 'base' && paymentKey === 'cop') || (chainKey === 'solana' && paymentKey === 'clash')) {
+  if ((chainKey === 'base' && paymentKey === 'cop') || (['solana', 'robinhood'].includes(chainKey) && paymentKey === 'clash')) {
     if (product.copUsdPriceE6) return BigInt(product.copUsdPriceE6);
     const discountBps = BigInt(getGameShopCopDiscountBps(product) || 0);
     return (base * (10_000n - discountBps)) / 10_000n;
@@ -3744,7 +3756,7 @@ function isGameShopPaymentAllowed(product, { chain = '', payment = '' } = {}) {
 
 function gameShopPaymentNotAllowedMessage(product) {
   if (product?.sku === 'town_hall_flag') {
-    return 'Town Hall flag customization must be paid with CLASH on Solana';
+    return 'Town Hall flag customization must be paid with CLASH on Robinhood';
   }
   return 'This shop item does not support the selected payment method';
 }
@@ -4111,7 +4123,8 @@ function applyGameShopProduct(playerId, product, quantity, context = {}) {
     };
   }
   if (product.kind === 'ai_messages') {
-    const paidWithCop = String(context.payment || '').toLowerCase() === 'cop';
+    const paidWithCop = String(context.payment || '').toLowerCase() === 'cop'
+      || (context.chain === 'robinhood' && context.payment === 'clash');
     const unitCredits = paidWithCop && product.copBonusCredits
       ? product.copBonusCredits
       : product.messageCredits;
@@ -6191,6 +6204,7 @@ function buildGameShopClientConfig() {
   const copDiscountBps = Math.max(0, Math.min(9000, Number(process.env.GAME_SHOP_COP_DISCOUNT_BPS || 2000)));
   const basePayments = baseEvm?.payments || [];
   return {
+    robinhood: gameShopEvmConfig('robinhood'),
     base: {
       chainId: config.chainId,
       shop: config.shop,
@@ -6213,7 +6227,7 @@ function buildGameShopClientConfig() {
       skrReady: solana.skrReady,
       clashMint: solana.clashMint,
       clashDecimals: solana.clashDecimals,
-      clashReady: solana.clashReady,
+      clashReady: false,
       clashDiscountBps: copDiscountBps,
       memoProgram: solana.memoProgram,
       saleActive: solana.saleActive,
@@ -6642,7 +6656,7 @@ router.post('/town-hall-flag', auth, (req, res) => {
       };
     }
     if (!purchase) {
-      return res.status(402).json({ error: 'Buy a Town Hall flag upload with CLASH on Solana first' });
+      return res.status(402).json({ error: 'Buy a Town Hall flag upload with CLASH on Robinhood first' });
     }
 
     const parsed = parseTownHallFlagImagePayload(token.imageData || token.image_data, token.mimeType || token.mime_type);
@@ -7836,6 +7850,9 @@ router.post('/nft/solana/upgrade/redeem', auth, async (req, res) => {
 });
 
 router.post('/shop/solana/quote', auth, async (req, res) => {
+  if (String(req.body?.payment || '').toLowerCase() === 'clash') {
+    return res.status(410).json({ error: 'CLASH payments moved to Robinhood. Select Robinhood in the shop.' });
+  }
   const quoteStartedAt = Date.now();
   const requestedSku = String(req.body?.sku || '').trim();
   const requestedPayment = String(req.body?.payment || 'usdc').toLowerCase();
@@ -8194,7 +8211,7 @@ startSolanaShopReconciler();
 
 // ---------- Game shop: generic EVM (Arbitrum, Monad) USDC transfer ----------
 
-function buildEvmShopMemo({ chainKey, chainId, sku, quantity, account, nonce, deadline, amount, treasury, payment, kind, mint }) {
+function buildEvmShopMemo({ chainKey, chainId, sku, quantity, account, nonce, deadline, amount, treasury, payment, kind, mint, buyer, usdPriceE6 }) {
   // Mirrors Solana's memo JSON. The buyer's `acc` ties the quote to a
   // specific game account so a leaked quote can't be redeemed by a
   // different player. The amount embeds a 3-digit nonce salt so the
@@ -8214,6 +8231,7 @@ function buildEvmShopMemo({ chainKey, chainId, sku, quantity, account, nonce, de
     amt: String(amount),
     to: treasury,
     mint: kind === 'erc20' ? mint : null,
+    ...(chainKey === 'robinhood' ? { buyer, usdPriceE6: String(usdPriceE6), issuedAt: Math.floor(Date.now() / 1000) } : {}),
   });
 }
 
@@ -8237,6 +8255,16 @@ function verifyEvmShopMemoSignature(memoString, signatureB58) {
     return nacl.sign.detached.verify(msg, sig, keypair.publicKey.toBytes());
   } catch { return false; }
 }
+
+const robinhoodShopReadLimit = createWindow();
+router.post('/shop/robinhood/rpc', auth, async (req, res) => {
+  if (!robinhoodShopReadLimit('global', 3000).ok || !robinhoodShopReadLimit(req.player.id, 180).ok) return res.status(429).json({ error: 'Rate limited' });
+  if (!robinhoodShop.validRead(req.body)) return res.status(400).json({ error: 'Unsupported shop read' });
+  try {
+    const result = await gameShopEvmRpcCall('robinhood', req.body.method, req.body.params);
+    res.json({ jsonrpc: '2.0', id: req.body.id, result });
+  } catch { res.status(502).json({ error: 'Robinhood read temporarily unavailable' }); }
+});
 
 router.post('/shop/evm/quote', auth, async (req, res) => {
   const quoteStartedAt = Date.now();
@@ -8278,6 +8306,16 @@ router.post('/shop/evm/quote', auth, async (req, res) => {
     const sku = requestedSku;
     const product = GAME_SHOP_PRODUCTS[sku];
     if (!product) return res.status(400).json({ error: 'Unknown shop item' });
+    if (!isGameShopPaymentAllowed(product, { chain: chainKey, payment: paymentKey })) return res.status(400).json({ error: 'Payment not supported for this item' });
+    if (chainKey === 'robinhood') {
+      const [network, decimals] = await Promise.all([
+        gameShopEvmRpcCall(chainKey, 'eth_chainId', []),
+        gameShopEvmRpcCall(chainKey, 'eth_call', [{ to: robinhoodShop.TOKEN, data: '0x313ce567' }, 'latest']),
+      ]);
+      if (Number(network) !== 4663 || Number(decimals) !== 18 || paymentSpec.token?.toLowerCase() !== robinhoodShop.TOKEN.toLowerCase()) {
+        return res.status(503).json({ error: 'Robinhood token configuration is not verified' });
+      }
+    }
     if (isRetiredGameShopProduct(product)) return res.status(410).json({ error: 'This shop item is retired' });
     if (isOwnedGameShopProduct(req.player.id, product)) {
       return res.status(409).json({ error: `${product.title || product.sku} already purchased` });
@@ -8287,12 +8325,16 @@ router.post('/shop/evm/quote', auth, async (req, res) => {
     // Total USD owed for this SKU * quantity. Both USDC (stable, 1:1) and
     // native (ETH/MON, oracle-priced) flows convert via usdToNativeUnits —
     // the only difference is the conversion rate.
-    const usdPriceE6 = BigInt(product.usdPriceE6) * BigInt(quantity);
+    const usdPriceE6 = gameShopUsdPriceE6ForPayment(product, { chain: chainKey, payment: paymentKey }) * BigInt(quantity);
     const usdAmount = unitsToDecimalString(usdPriceE6, 6);
 
     let baseAmount;
     let priceSource;
-    if (paymentSpec.stable) {
+    if (chainKey === 'robinhood' && paymentKey === 'clash') {
+      const assetUsd = await robinhoodShop.price();
+      baseAmount = usdToNativeUnits(usdAmount, assetUsd, paymentSpec.decimals);
+      priceSource = `Robinhood CLASH/USD ${assetUsd}`;
+    } else if (paymentSpec.stable) {
       // USDC pegged 1:1 to USD; assetUsd='1' makes this a pure decimals scale.
       baseAmount = usdToNativeUnits(usdAmount, '1', paymentSpec.decimals);
       priceSource = `${paymentSpec.label} 1:1 USD`;
@@ -8331,6 +8373,7 @@ router.post('/shop/evm/quote', auth, async (req, res) => {
       payment: paymentKey,
       kind: paymentSpec.kind,
       mint: paymentSpec.kind === 'erc20' ? getAddress(paymentSpec.token) : null,
+      buyer, usdPriceE6,
     });
     const signature = signEvmShopMemo(memo);
 
@@ -8405,7 +8448,7 @@ router.post('/shop/evm/redeem', auth, async (req, res) => {
     const config = gameShopEvmConfig(chainKey);
     if (!config) return res.status(400).json({ error: 'Unsupported chain' });
 
-    const txHash = requestedTxHash;
+    const txHash = chainKey === 'robinhood' ? requestedTxHash.toLowerCase() : requestedTxHash;
     if (!/^0x[0-9a-fA-F]{64}$/.test(txHash)) {
       return res.status(400).json({ error: 'Bad transaction hash' });
     }
@@ -8447,7 +8490,7 @@ router.post('/shop/evm/redeem', auth, async (req, res) => {
     if (String(memoData.chain).toLowerCase() !== chainKey) return res.status(400).json({ error: 'Chain mismatch' });
 
     const nowSec = Math.floor(Date.now() / 1000);
-    if (Number(memoData.deadline) < nowSec - 600) {
+    if (chainKey !== 'robinhood' && Number(memoData.deadline) < nowSec - 600) {
       return res.status(400).json({ error: 'Quote deadline expired' });
     }
 
@@ -8474,6 +8517,12 @@ router.post('/shop/evm/redeem', auth, async (req, res) => {
     const { getAddress } = await import('viem');
     const expectedTreasury = getAddress(memoData.to).toLowerCase();
     const expectedMint = memoKind === 'erc20' ? getAddress(memoData.mint).toLowerCase() : null;
+    if (chainKey === 'robinhood' && (Number(memoData.chainId) !== 4663 || memoPayment !== 'clash'
+      || expectedMint !== robinhoodShop.TOKEN.toLowerCase() || memoKind !== 'erc20'
+      || expectedTreasury !== String(config.treasury).toLowerCase() || expectedAmount <= 0n
+      || !/^0x[0-9a-f]{40}$/i.test(memoData.buyer || '') || !/^\d+$/.test(memoData.usdPriceE6 || ''))) {
+      return res.status(400).json({ error: 'Invalid Robinhood purchase quote' });
+    }
 
     // Resolve the decimals + sender post-verification — both branches set
     // these so the utility_purchases insert downstream has clean values
@@ -8507,20 +8556,35 @@ router.post('/shop/evm/redeem', auth, async (req, res) => {
     } else {
       // ERC20 (USDC) — Transfer event from sender → treasury.
       const receipt = await gameShopEvmRpcCall(chainKey, 'eth_getTransactionReceipt', [txHash]);
-      if (!receipt) return res.status(400).json({ error: 'Tx not found or not confirmed yet' });
+      if (!receipt) return res.status(chainKey === 'robinhood' ? 409 : 400).json({ error: 'Tx not found or not confirmed yet' });
       if (receipt.status !== '0x1') return res.status(400).json({ error: 'Tx failed on-chain' });
 
       const TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
+      if (chainKey === 'robinhood') {
+        if (String(receipt.from).toLowerCase() !== memoData.buyer.toLowerCase()) return res.status(403).json({ error: 'Payment wallet mismatch' });
+        const [chainId, block, canonical] = await Promise.all([
+          gameShopEvmRpcCall(chainKey, 'eth_chainId', []),
+          gameShopEvmRpcCall(chainKey, 'eth_getBlockByNumber', [receipt.blockNumber, false]),
+          gameShopEvmRpcCall(chainKey, 'eth_blockNumber', []),
+        ]);
+        if (Number(chainId) !== 4663 || !block || block.hash !== receipt.blockHash || BigInt(canonical) < BigInt(receipt.blockNumber) + 2n) {
+          return res.status(409).json({ error: 'Payment awaits Robinhood confirmation; retry verification, not payment' });
+        }
+        if (Number(block.timestamp) < Number(memoData.issuedAt) - 30 || Number(block.timestamp) > Number(memoData.deadline) + 600) {
+          return res.status(400).json({ error: 'Payment outside quote validity window' });
+        }
+      }
       let matched = false;
       for (const log of receipt.logs || []) {
         if (String(log.address || '').toLowerCase() !== expectedMint) continue;
-        if (log.topics?.[0] !== TRANSFER_TOPIC) continue;
+        if (log.topics?.[0] !== TRANSFER_TOPIC || log.topics.length !== 3) continue;
         const from = '0x' + log.topics[1].slice(-40);
         const to = '0x' + log.topics[2].slice(-40);
         if (to.toLowerCase() !== expectedTreasury) continue;
         const txSender = String(receipt.from || '').toLowerCase();
         if (from.toLowerCase() !== txSender) continue;
         const value = BigInt(log.data || '0x0');
+        if (chainKey === 'robinhood' && value !== expectedAmount) continue;
         if (value < expectedAmount) continue;
         matched = true;
         break;
@@ -8552,7 +8616,7 @@ router.post('/shop/evm/redeem', auth, async (req, res) => {
         expectedMint || memoPayment.toUpperCase(),  // 'ETH' / 'MON' for native payments
         expectedTreasury,
         expectedAmount.toString(),
-        (BigInt(product.usdPriceE6) * BigInt(quantity)).toString(),
+        (chainKey === 'robinhood' ? BigInt(memoData.usdPriceE6) : BigInt(product.usdPriceE6) * BigInt(quantity)).toString(),
         product.durationHours ? product.durationHours * quantity : null,
         applied.shield_until || null,
       );
@@ -8567,7 +8631,7 @@ router.post('/shop/evm/redeem', auth, async (req, res) => {
       payment: memoPayment,
       token: expectedMint || memoPayment.toUpperCase(),
       quantity,
-      usdPriceE6: (BigInt(product.usdPriceE6) * BigInt(quantity)).toString(),
+      usdPriceE6: (chainKey === 'robinhood' ? BigInt(memoData.usdPriceE6) : BigInt(product.usdPriceE6) * BigInt(quantity)).toString(),
       tokenAmount: expectedAmount.toString(),
       txHash,
       metadata: { latency_ms: Date.now() - redeemStartedAt, kind: memoKind },

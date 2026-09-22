@@ -40,8 +40,8 @@ import './index.css';
 const GodotCanvas = lazy(lazyWithClientReload(() => import('./components/GodotCanvas'), 'GodotCanvas'));
 const GameUI = lazy(lazyWithClientReload(() => import('./components/GameUI'), 'GameUI'));
 const GodModeApp = lazy(() => import('./godmode/GodModeApp'));
-const CLASH_SOLANA_MINT = '9mM1Mc4Ta9UJJ32v5qsHef91PiXi7EWyiSsqF5WXpump';
-const CLASH_TOKEN_NOTICE_KEY = 'clash_solana_token_notice_v2';
+const CLASH_ROBINHOOD_TOKEN = '0xceB9A7C4eC7bf0EE14Bac1f16C97571bC22DB979';
+const CLASH_TOKEN_NOTICE_KEY = 'clash_robinhood_token_notice_v1';
 const GAME_AUTH_STORAGE_KEY = 'clash_game_auth_v1';
 let localGuestPreflightDone = false;
 
@@ -207,7 +207,7 @@ function ClashMigrationNotice() {
 
   async function copyMint() {
     try {
-      await navigator.clipboard?.writeText?.(CLASH_SOLANA_MINT);
+      await navigator.clipboard?.writeText?.(CLASH_ROBINHOOD_TOKEN);
       setCopied(true);
       setTimeout(() => setCopied(false), 1600);
     } catch { /* clipboard unavailable */ }
@@ -224,15 +224,15 @@ function ClashMigrationNotice() {
           </div>
           <button type="button" style={styles.noticeClose} onClick={closeNotice} aria-label="Close">x</button>
         </div>
-        <h2 id="clash-migration-title" style={styles.noticeTitle}>$CLASH Token Is Live On Solana</h2>
+        <h2 id="clash-migration-title" style={styles.noticeTitle}>$CLASH Token Is Live On Robinhood</h2>
         <p style={styles.noticeText}>
-          The official Clash of Perps token is live as $CLASH on Solana.
+          The official Clash of Perps token is now on Robinhood Chain.
         </p>
         <div style={styles.noticeContractBox}>
           <span style={styles.noticeContractLabel}>Token contract</span>
           <div style={styles.noticeContractRow}>
             <button type="button" style={styles.noticeContractValue} onClick={copyMint} title="Copy token contract">
-              {CLASH_SOLANA_MINT}
+              {CLASH_ROBINHOOD_TOKEN}
             </button>
             <button type="button" style={styles.noticeCopyBtn} onClick={copyMint} aria-label="Copy token contract">
               {copied ? 'Copied' : 'Copy'}
