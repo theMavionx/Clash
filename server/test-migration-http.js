@@ -57,7 +57,7 @@ test("submit diagnostics persist safe codes and correlation IDs without credenti
   m.service.authenticate = () => "verified-wallet";
   m.service.submit = async () => {
     const error = new MigrationError("TRANSACTION_CHANGED", 400);
-    error.transactionDifference = { blockhash: true, expectedInstructions: 6, receivedInstructions: 6, accounts: 'PRIVATE_SENTINEL', raw: 'SIGNED_SENTINEL' };
+    error.transactionDifference = { blockhash: true, expectedInstructions: 6, receivedInstructions: 6, accounts: 'PRIVATE_SENTINEL', raw: 'SIGNED_SENTINEL', policyReason: 'ASSERTION_OPCODE', assertionOpcodes: [0, 5], assertionAccountCounts: [1, 1], arbitrary: 'KEY_SENTINEL' };
     throw error;
   };
   app.use("/api/migration", m.router);
@@ -76,7 +76,7 @@ test("submit diagnostics persist safe codes and correlation IDs without credenti
   assert.equal(events[0].traceId, body.traceId);
   assert.equal(events[0].stage, "/submit");
   assert.equal(events[0].errorCode, "TRANSACTION_CHANGED");
-  assert.deepEqual(events[0].transactionDifference, { blockhash: true, expectedInstructions: 6, receivedInstructions: 6 });
+  assert.deepEqual(events[0].transactionDifference, { policyReason: 'ASSERTION_OPCODE', assertionOpcodes: [0, 5], assertionAccountCounts: [1, 1], blockhash: true, expectedInstructions: 6, receivedInstructions: 6 });
   assert.ok(events[0].durationMs >= 0);
   assert.equal((await fetch(url + "/admin/diagnostics")).status, 403);
   const stored = await (await fetch(url + "/admin/diagnostics", { headers: { "x-admin-key": "ADMIN_SENTINEL" } })).json();

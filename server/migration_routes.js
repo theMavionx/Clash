@@ -84,6 +84,12 @@ function createMigrationRouter({
       res.locals.migrationErrorCode = e instanceof MigrationError && /^[A-Z][A-Z0-9_]{0,79}$/.test(e.code) ? e.code : "MIGRATION_UNAVAILABLE";
       if (e instanceof MigrationError && e.code === "TRANSACTION_CHANGED" && e.transactionDifference) {
         const diff = {};
+        const reasons = ['ENVELOPE_CHANGED', 'ACCOUNT_LIMIT', 'ORIGINAL_PRIVILEGES', 'PROGRAM_PRIVILEGES', 'NEW_ACCOUNT_PRIVILEGES', 'ASSERTION_LIMIT', 'ASSERTION_LENGTH', 'ASSERTION_OPCODE', 'ASSERTION_ACCOUNTS', 'ORIGINAL_INSTRUCTION', 'UNUSED_ACCOUNT', 'INSTRUCTION_COUNT'];
+        if (reasons.includes(e.transactionDifference.policyReason)) diff.policyReason = e.transactionDifference.policyReason;
+        for (const field of ['assertionOpcodes', 'assertionAccountCounts']) {
+          const values = e.transactionDifference[field];
+          if (Array.isArray(values) && values.length <= 16 && values.every(n => Number.isInteger(n) && n >= -1 && n <= 256)) diff[field] = values;
+        }
         for (const field of ['feePayer', 'blockhash', 'accountOrder', 'header', 'programs', 'data', 'accounts']) {
           if (typeof e.transactionDifference[field] === 'boolean') diff[field] = e.transactionDifference[field];
         }

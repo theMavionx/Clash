@@ -146,7 +146,7 @@ test('Lighthouse compatibility preserves exact transfers, permissions, fees, sig
     tx => { tx.instructions[0].data = Buffer.from([0, 0, 0]); }, // MemoryWrite
     tx => { tx.instructions[0].data = Buffer.from([1, 0, 0]); }, // MemoryClose
     tx => { tx.instructions[0].data = Buffer.from([16, 0, 0]); }, // CPI-capable Merkle assertion
-    tx => { tx.instructions[0].keys[0].pubkey = Keypair.generate().publicKey; },
+    tx => { tx.instructions[0].keys[0] = { pubkey: Keypair.generate().publicKey, isSigner: false, isWritable: true }; },
     tx => { tx.instructions[4] = ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 999999 }); },
     tx => { tx.instructions[5].data[4] ^= 1; }, // transfer amount
     tx => { tx.instructions.reverse(); },

@@ -45,7 +45,7 @@ const {
 const { alchemySolanaRpcUrl } = require("./solana_rpc");
 const { createMigrationHistory } = require("./migration_history");
 const { robinhoodUsdg } = require("../shared/migration-assets.json");
-const { LIGHTHOUSE, hasOnlyLighthouseAssertions, verifyLighthouseDeployment } = require("./migration_deposit_policy");
+const { LIGHTHOUSE, hasOnlyLighthouseAssertions, lighthouseRejection, verifyLighthouseDeployment } = require("./migration_deposit_policy");
 function validateTargetSupply(address, decimals, supply, symbol) {
   if (address.toLowerCase() === robinhoodUsdg.address.toLowerCase()) {
     check(decimals === robinhoodUsdg.decimals && symbol === robinhoodUsdg.symbol && supply > 0n, "USDG_METADATA_MISMATCH", 503);
@@ -502,6 +502,9 @@ function createMigrationChain(env = process.env, deps = {}) {
       const left = tx.compileMessage(), right = expected.compileMessage();
       // Only structural booleans/counts, never transaction bytes or signatures.
       error.transactionDifference = {
+        policyReason: lighthouseRejection(tx, expected),
+        assertionOpcodes: tx.instructions.filter(ix => ix.programId.toBase58() === LIGHTHOUSE).slice(0, 16).map(ix => ix.data[0] ?? -1),
+        assertionAccountCounts: tx.instructions.filter(ix => ix.programId.toBase58() === LIGHTHOUSE).slice(0, 16).map(ix => ix.keys.length),
         feePayer: !tx.feePayer.equals(expected.feePayer),
         blockhash: tx.recentBlockhash !== expected.recentBlockhash,
         accountOrder: JSON.stringify(left.accountKeys.map(k => k.toBase58())) !== JSON.stringify(right.accountKeys.map(k => k.toBase58())),

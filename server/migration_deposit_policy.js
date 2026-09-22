@@ -14,25 +14,40 @@ const sameInstruction = (a, b) => a.programId.equals(b.programId) && a.data.equa
   && JSON.stringify(keys(a)) === JSON.stringify(keys(b));
 
 /** Permit only additional pure assertions; every original instruction stays exact. */
-function hasOnlyLighthouseAssertions(actual, expected) {
-  if (!actual.feePayer.equals(expected.feePayer) || actual.recentBlockhash !== expected.recentBlockhash) return false;
+function lighthouseRejection(actual, expected) {
+  if (!actual.feePayer.equals(expected.feePayer) || actual.recentBlockhash !== expected.recentBlockhash) return 'ENVELOPE_CHANGED';
   const before = expected.compileMessage(), after = actual.compileMessage();
   const privileges = message => new Map(message.accountKeys.map((key, i) => [key.toBase58(),
     [message.isAccountSigner(i), message.isAccountWritable(i)]]));
   const original = privileges(before), received = privileges(after);
-  if (original.has(LIGHTHOUSE) || received.size !== original.size + 1) return false;
+  if (original.has(LIGHTHOUSE) || received.size > original.size + 17) return 'ACCOUNT_LIMIT';
   for (const [key, flags] of original) {
-    if (JSON.stringify(received.get(key)) !== JSON.stringify(flags)) return false;
+    if (JSON.stringify(received.get(key)) !== JSON.stringify(flags)) return 'ORIGINAL_PRIVILEGES';
   }
-  if (JSON.stringify(received.get(LIGHTHOUSE)) !== '[false,false]') return false;
+  if (JSON.stringify(received.get(LIGHTHOUSE)) !== '[false,false]') return 'PROGRAM_PRIVILEGES';
+  const added = new Set();
+  for (const [key, flags] of received) {
+    if (original.has(key) || key === LIGHTHOUSE) continue;
+    if (flags[0] || flags[1]) return 'NEW_ACCOUNT_PRIVILEGES';
+    added.add(key);
+  }
   let index = 0, assertions = 0;
   for (const ix of actual.instructions) {
     if (ix.programId.toBase58() === LIGHTHOUSE) {
-      if (++assertions > 16 || ix.data.length < 3 || ix.data.length > 512 || !ASSERTIONS.has(ix.data[0])
-        || ix.keys.length !== 1 || !original.has(ix.keys[0].pubkey.toBase58())) return false;
-    } else if (!expected.instructions[index] || !sameInstruction(ix, expected.instructions[index++])) return false;
+      if (++assertions > 16) return 'ASSERTION_LIMIT';
+      if (ix.data.length < 3 || ix.data.length > 512) return 'ASSERTION_LENGTH';
+      if (!ASSERTIONS.has(ix.data[0])) return 'ASSERTION_OPCODE';
+      if (ix.keys.length !== 1) return 'ASSERTION_ACCOUNTS';
+      added.delete(ix.keys[0].pubkey.toBase58());
+    } else if (!expected.instructions[index] || !sameInstruction(ix, expected.instructions[index++])) return 'ORIGINAL_INSTRUCTION';
   }
-  return assertions > 0 && index === expected.instructions.length;
+  if (added.size) return 'UNUSED_ACCOUNT';
+  return assertions > 0 && index === expected.instructions.length ? null : 'INSTRUCTION_COUNT';
+}
+
+/** Additional targets may only be read, never signed for or made writable. */
+function hasOnlyLighthouseAssertions(actual, expected) {
+  return lighthouseRejection(actual, expected) === null;
 }
 
 /** Fail closed unless the allowlisted deployed code is immutable and byte-pinned. */
@@ -47,4 +62,4 @@ async function verifyLighthouseDeployment(connection) {
     && data.data.readUInt32LE(0) === 3 && data.data[12] === 0
     && createHash("sha256").update(data.data.subarray(45)).digest("hex") === HASH);
 }
-module.exports = { LIGHTHOUSE, hasOnlyLighthouseAssertions, verifyLighthouseDeployment };
+module.exports = { LIGHTHOUSE, hasOnlyLighthouseAssertions, lighthouseRejection, verifyLighthouseDeployment };
