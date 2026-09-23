@@ -4568,3 +4568,12 @@ Follow-up:
 ## UR-2026-09-22-CLASH-HOLDER-DAILY-GOLD
 
 - Owner: «hold 50$+ in clash to get some free gold everyday in clash of perps оцпе ще додай перевірку і додай кожноденний клейм в 00 по ютс 50$ - це 1к золота в день 100 - 5к, 500+ це 10к кожен день оформи красиво в стиль проекту перевір сам і повністю це все діло налаштуй щоб воно вже працювало». Implement server-verified Robinhood CLASH holder tiers, once-per-UTC-day claim and styled UI; run behavior and balance checks. Existing unrelated dirty worktrees remain untouched.
+
+## UR-2026-09-23-SOLFLARE-SEEKER-MIGRATION
+
+- Owner relays a Solflare mobile migration failure for reference `ddeff7a1-6be6-465d-992b-27be116fc1d0`: wallet confirmed, but the deposit was not completed and the site reports that the wallet changed the prepared transaction. They suspect CLASH being held in a Seeker wallet. Inspect this request and the signed/deposit evidence before advising or changing the flow; do not trigger another payment or assume a payout is due.
+
+## UR-2026-09-23-MIGRATION-WALLET-DEADLINE
+
+- Owner reports sender `BfLMX4kfXMXQpxKEqov3CUNT5cMF3srNHgw2HNpJQDHT` cannot migrate, then requests: «і тепер додай дозвіл бірджа по гаманцю навіть якщо таймер пройшов». Add admin-controlled per-wallet deadline exceptions and apply to this sender, preserving snapshot allocation, pause, verification and settlement safeguards. Production read confirms global deadline elapsed and the sole quote expired without a deposit; eligible allocation remains 122225.280069 CLASH. Existing authorization covers deployment after verification.
+- Implemented dedicated audited admin grant/revoke and per-wallet admission checks, bounded quote lifetime, public authenticated availability, and atomic recheck after signing. Verification: 92 core/HTTP/queue tests, 38 chain/history/UI/transport tests, focused admission rerun after final atomic check, desktop/mobile browser access plus admin grant/revoke, and successful production web build. No test payments or wallet signatures from users were requested.

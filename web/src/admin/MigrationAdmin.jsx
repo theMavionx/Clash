@@ -24,6 +24,7 @@ export default function MigrationAdmin() {
   const [kind, setKind] = useState('solana'), [secret, setSecret] = useState(''), [snapshotConfirm, setSnapshotConfirm] = useState(false);
   const [snapshotAt, setSnapshotAt] = useState('');
   const [deadlineAt, setDeadlineAt] = useState('');
+  const [exceptionWallet, setExceptionWallet] = useState('');
   const [accountIndex, setAccountIndex] = useState('0');
   const derivedMode = kind === 'solanaHex' || kind === 'solanaMnemonic';
   const [previewAddress, setPreviewAddress] = useState(''), [previewConfirmed, setPreviewConfirmed] = useState(false), [credentialNotice, setCredentialNotice] = useState('');
@@ -78,6 +79,13 @@ export default function MigrationAdmin() {
         <button className="btn" type="button" disabled={busy || !data} onClick={() => { if (window.confirm('Start a new 24-hour countdown from the server time now? This changes the public deadline but does not enable migration.')) run('/deadline', { durationSeconds: 86400 }, 'PUT'); }}>Set 24 hours from now</button>
         <button className="btn" type="button" disabled={busy || !data?.config?.closesAt} onClick={() => { if (window.confirm('Remove the closing deadline and hide the timer? Migration remains subject to the existing enabled/paused setting.')) run('/deadline', { closesAt: null }, 'PUT'); }}>Disable closing timer</button>
       </form>
+    </section>
+    <section className="card"><h3>Wallet access after closing</h3><p>Allow a specific Solana wallet to migrate after the shared timer ends. Snapshot limits, balance checks and the migration pause still apply.</p>
+      <form onSubmit={event => { event.preventDefault(); if (!busy && exceptionWallet.trim()) run('/deadline-exception', { wallet: exceptionWallet.trim(), allowed: true }, 'PUT'); }}>
+        <label>Solana sender wallet<input value={exceptionWallet} onChange={event => setExceptionWallet(event.target.value)} disabled={busy || !data} autoComplete="off" spellCheck="false" placeholder="Solana address" required/></label>
+        <button className="btn primary" disabled={busy || !data || !exceptionWallet.trim()}>Allow after closing</button>
+      </form>
+      {!data?.deadlineExceptions?.length ? <p>No wallet exceptions.</p> : <ul>{data.deadlineExceptions.map(row => <li key={row.wallet}><code style={{ overflowWrap: 'anywhere' }}>{row.wallet}</code> <button className="btn" disabled={busy} onClick={() => run('/deadline-exception', { wallet: row.wallet, allowed: false }, 'PUT')}>Revoke access</button></li>)}</ul>}
     </section>
     {config && <section className="card"><h3>Configuration</h3><p>Updates apply to new quotes only. Existing requests retain their recipient, token and conversion ratio.</p><form onSubmit={e => { e.preventDefault(); if (window.confirm('Apply migration configuration? Enabling permits real deposits, payouts and automated sales once all readiness checks pass.')) run('/config', configPayload(config), 'PUT'); }}>
       <div className="form-grid">{fields.map(([name, label, type]) => <label key={name}>{label}<input type={type} required value={config[name] ?? ''} disabled={busy} min={type === 'number' ? 0 : undefined} max={name.includes('Slippage') || name === 'slippageBps' ? 1000 : undefined} step="any" onChange={e => setConfig({ ...config, [name]: ['idleSeconds', 'slippageBps', 'maxSlippageBps'].includes(name) ? Number(e.target.value) : e.target.value })}/></label>)}</div>

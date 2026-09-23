@@ -200,7 +200,8 @@ function Migration() {
   const serverNow = Number.isFinite(status?.serverTime) && Number.isFinite(status?.clockReceivedAt)
     ? status.serverTime + Math.max(0, performance.now() - status.clockReceivedAt) : now;
   const countdown = closingCountdown(status?.closesAt, serverNow);
-  const available = status?.enabled && status?.ready && !countdown?.closed;
+  const deadlineExempt = !!session && account?.wallet === connectedAddress && account?.deadlineExempt === true;
+  const available = status?.enabled && status?.ready && (!countdown?.closed || deadlineExempt);
   const maxAmount = maxMigrationAmount(account, status?.sourceDecimals);
   const maxHint = session && !quote ? maxMigrationHint(account) : '';
   const expired = quote && !(expiryMs(quote.expiresAt) > now);
@@ -217,6 +218,7 @@ function Migration() {
     <MigrationWalletPicker open={walletPicker} onClose={() => setWalletPicker(false)} onChoose={connect} returnFocusRef={menuTrigger}/>
     <main id="migration-main" className="migration-shell">
       {countdown && <section className={'migration-countdown' + (countdown.closed ? ' is-closed' : '')} aria-label="Bridge closing time"><span>{countdown.closed ? 'Bridge is closed' : 'Bridge will close in'}</span><strong role="timer" aria-live="off">{countdown.text}</strong></section>}
+      {countdown?.closed && deadlineExempt && <p className="migration-notice" role="status">Migration after closing is enabled for your wallet.</p>}
       <div className="migration-intro"><p className="migration-eyebrow"><span className="migration-network"><img src="/tokens/SOL.svg" width="20" height="20" alt=""/>{t('sourceNetwork')}</span><span aria-hidden="true">→</span><span className="migration-network"><img src="/robinhood.svg" width="20" height="20" alt=""/>{t('destinationNetworkName')}</span></p><h1 className="migration-title"><img src="/icons/icon-192.png" width="48" height="48" alt=""/><span>{t('title')}</span></h1><p className="migration-muted">{t('intro')}</p>{targetSymbol(status?.targetToken) === 'USDG' && <p className="migration-muted">Temporary USDG payout mode: {targetRatio(status?.targetToken, status?.ratio)}. This is a fixed conversion rate, not a live market quote.</p>}</div>
       <div role="status" aria-live="polite" className="migration-notice">{notice}</div>
       <div className="migration-workspace"><section className="migration-card migration-form-card" aria-label="Migration form" aria-busy={busy}>

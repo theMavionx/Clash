@@ -87,6 +87,7 @@ function createMigration({ db, chain, now = Date.now, keyFile, record = () => {}
     CREATE TABLE IF NOT EXISTS migration_snapshot_archive(checksum TEXT PRIMARY KEY,snapshot TEXT NOT NULL,replaced_at INTEGER NOT NULL,replacement_checksum TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS migration_entitlements_archive(snapshot_checksum TEXT NOT NULL,wallet TEXT NOT NULL,units TEXT NOT NULL,PRIMARY KEY(snapshot_checksum,wallet));
     CREATE TABLE IF NOT EXISTS migration_entitlements(wallet TEXT PRIMARY KEY,units TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS migration_deadline_exceptions(wallet TEXT PRIMARY KEY,created_at INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS migration_auth(id TEXT PRIMARY KEY,wallet TEXT NOT NULL,message TEXT NOT NULL,expires INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS migration_sessions(hash TEXT PRIMARY KEY,wallet TEXT NOT NULL,expires INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS migration_requests(id TEXT PRIMARY KEY,wallet TEXT NOT NULL,idem TEXT NOT NULL,status TEXT NOT NULL,payload TEXT NOT NULL,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,UNIQUE(wallet,idem));
@@ -341,9 +342,24 @@ function createMigration({ db, chain, now = Date.now, keyFile, record = () => {}
       snapshot: snapshot(),
     };
   }
-  function requireAdmissionOpen() {
+  function deadlineExempt(w) {
+    return !!db.prepare("SELECT 1 FROM migration_deadline_exceptions WHERE wallet=?").get(w);
+  }
+  function requireAdmissionOpen(w) {
     const deadline = config().closesAt;
-    check(deadline === null || now() < deadline, "MIGRATION_CLOSED", 409);
+    check(deadline === null || now() < deadline || deadlineExempt(w), "MIGRATION_CLOSED", 409);
+  }
+  function setDeadlineException(input = {}) {
+    check(Object.keys(input).length === 2 && typeof input.wallet === "string" &&
+      typeof input.allowed === "boolean", "INVALID_DEADLINE_EXCEPTION");
+    const w = wallet(input.wallet);
+    // Short local transaction: revocation also takes effect while an RPC is in flight.
+    db.transaction(() => {
+      if (input.allowed) db.prepare("INSERT OR IGNORE INTO migration_deadline_exceptions VALUES(?,?)").run(w, now());
+      else db.prepare("DELETE FROM migration_deadline_exceptions WHERE wallet=?").run(w);
+      audit("deadline_exception_" + (input.allowed ? "granted:" : "revoked:") + w);
+    }).immediate();
+    return { wallet: w, deadlineExempt: input.allowed };
   }
   // Deadline is separate from the settlement kill switch: accepted sends keep reconciling.
   async function setDeadline(input = {}) {
@@ -692,6 +708,7 @@ function createMigration({ db, chain, now = Date.now, keyFile, record = () => {}
       .reverse();
     return {
       wallet: w,
+      deadlineExempt: deadlineExempt(w),
       ...entitlement(w),
       balanceUnits: await chain.balance(w, SOURCE_MINT),
       requests: own.slice(0, 100).map(publicRequest),
@@ -749,7 +766,7 @@ function createMigration({ db, chain, now = Date.now, keyFile, record = () => {}
           .prepare("SELECT revision FROM migration_config WHERE id=1")
           .get().revision;
       check(c.enabled, "MIGRATION_PAUSED", 409);
-      requireAdmissionOpen();
+      requireAdmissionOpen(w);
       check(!configuredReasons().length, "CONFIGURATION_INCOMPLETE", 409);
       check(
         !rows().some(
@@ -832,7 +849,7 @@ function createMigration({ db, chain, now = Date.now, keyFile, record = () => {}
           destination: getAddress(input.destination),
           ratio: c.ratio,
           feeLamports: String(fee),
-          expiresAt: Math.min(now() + 90000, c.closesAt ?? Infinity),
+          expiresAt: Math.min(now() + 90000, deadlineExempt(w) ? Infinity : c.closesAt ?? Infinity),
           solanaTreasury: address("solana"),
           evmTreasury: address("evm"),
           soldUnits: "0",
@@ -842,7 +859,7 @@ function createMigration({ db, chain, now = Date.now, keyFile, record = () => {}
       Object.assign(r, await chain.prepareDeposit(r));
       fence();
       db.transaction(() => {
-        requireAdmissionOpen();
+        requireAdmissionOpen(w);
         check(
           config().enabled &&
             db.prepare("SELECT revision FROM migration_config WHERE id=1").get()
@@ -874,15 +891,16 @@ function createMigration({ db, chain, now = Date.now, keyFile, record = () => {}
       check(r, "REQUEST_NOT_FOUND", 404);
       if (r.status !== "quoted") return publicRequest(r);
       check(config().enabled, "MIGRATION_PAUSED", 409);
-      requireAdmissionOpen();
+      requireAdmissionOpen(w);
       check(r.expiresAt > now(), "QUOTE_EXPIRED", 409);
       const signed = await chain.signDeposit(r, transaction, secret("solana"));
-      requireAdmissionOpen();
-      check(config().enabled, "MIGRATION_PAUSED", 409);
       r.depositRaw = signed.raw;
       r.depositHash = signed.hash;
       r.status = "deposit_signed";
       db.transaction(() => {
+        requireAdmissionOpen(w);
+        check(config().enabled, "MIGRATION_PAUSED", 409);
+        check(r.expiresAt > now(), "QUOTE_EXPIRED", 409);
         db.prepare("INSERT INTO migration_sends VALUES(?,?,?)").run(
           signed.hash,
           r.id,
@@ -1275,6 +1293,7 @@ function createMigration({ db, chain, now = Date.now, keyFile, record = () => {}
   async function admin() {
     return {
       config: config(),
+      deadlineExceptions: db.prepare("SELECT wallet,created_at AS createdAt FROM migration_deadline_exceptions ORDER BY created_at DESC,wallet").all(),
       readiness: await readiness(),
       snapshot: snapshot(),
       canReplaceSnapshot: !db
@@ -1316,6 +1335,7 @@ function createMigration({ db, chain, now = Date.now, keyFile, record = () => {}
     config,
     updateConfig,
     setDeadline,
+    setDeadlineException,
     setKey,
     takeSnapshot,
     challenge,

@@ -6,6 +6,31 @@ const Database = require("better-sqlite3");
 const { createMigrationRouter } = require("./migration_routes");
 const { MigrationError } = require("./migration_core");
 
+test('only admin can grant or revoke wallet deadline access; public status stays global', async t => {
+  const db = new Database(':memory:'), app = express();
+  app.use(express.json());
+  const m = createMigrationRouter({ db, chain: {}, env: { ADMIN_KEY: 'local-admin' }, autoStart: false, logger: () => {} });
+  app.use('/api/migration', m.router);
+  const server = await new Promise(resolve => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });
+  t.after(() => { server.closeAllConnections(); server.close(); db.close(); });
+  const url = `http://127.0.0.1:${server.address().port}/api/migration`;
+  const wallet = 'BfLMX4kfXMXQpxKEqov3CUNT5cMF3srNHgw2HNpJQDHT';
+  const set = (allowed, key) => fetch(url + '/admin/deadline-exception', { method: 'PUT',
+    headers: { 'content-type': 'application/json', ...(key ? { 'x-admin-key': key } : {}) }, body: JSON.stringify({ wallet, allowed }) });
+  assert.equal((await set(true)).status, 403);
+  assert.equal((await set(true, 'wrong')).status, 403);
+  const grant = await set(true, 'local-admin');
+  assert.equal(grant.status, 200);
+  assert.deepEqual(await grant.json(), { wallet, deadlineExempt: true });
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM migration_deadline_exceptions').get().n, 1);
+  const publicStatus = await (await fetch(url + '/status')).json();
+  assert.equal(publicStatus.deadlineExceptions, undefined);
+  assert.equal(publicStatus.deadlineExempt, undefined);
+  assert.equal((await fetch(url + '/account')).status, 401);
+  assert.equal((await set(false, 'local-admin')).status, 200);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM migration_deadline_exceptions').get().n, 0);
+});
+
 test('verification failure logs only signature shape and challenge metadata', async t => {
   const db = new Database(':memory:'), events = [], app = express();
   app.use(express.json());

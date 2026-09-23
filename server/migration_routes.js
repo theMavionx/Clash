@@ -196,6 +196,11 @@ function createMigrationRouter({
     }
   }));
   router.put(
+    "/admin/deadline-exception",
+    admin,
+    run(req => service.setDeadlineException(req.body || {})),
+  );
+  router.put(
     "/admin/deadline",
     admin,
     run(req => service.setDeadline(req.body || {})),

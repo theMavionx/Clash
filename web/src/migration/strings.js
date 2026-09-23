@@ -67,6 +67,7 @@ const errors = {
   MIGRATION_PAUSED: 'Migration is paused. No new deposit can be submitted.',
   MIGRATION_CLOSED: 'The bridge is closed for new deposits. Previously accepted migrations continue processing.',
   INVALID_DEADLINE: 'Choose a valid UTC closing date and time, or a duration from 1 minute to 366 days.',
+  INVALID_DEADLINE_EXCEPTION: 'Enter a Solana sender wallet and choose whether to allow migration after closing.',
   USE_DEADLINE_ENDPOINT: 'Use the Bridge closing timer controls to change the deadline.',
   QUOTE_EXPIRED: 'This quote expired. Cancel this review and request a new quote.',
   WALLET_SIGN_TIMEOUT: 'The wallet did not return a signature in time. This page has not submitted this deposit. Close the pending wallet prompt, then refresh status before trying again.',

@@ -5,7 +5,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const Database = require("better-sqlite3");
-const { Keypair } = require("@solana/web3.js");
+const { Keypair, PublicKey } = require("@solana/web3.js");
 const nacl = require("tweetnacl");
 const { createMigration, units, decimal } = require("./migration_core");
 const A = "0x1111111111111111111111111111111111111111",
@@ -167,6 +167,79 @@ test('shared deadline persists across restarts and only changes the admission de
   await restarted.setDeadline({ closesAt: null });
   assert.deepEqual(restarted.config(), before);
   assert.equal(f.state.broadcasts.length, 0);
+});
+
+test('wallet deadline exception survives restart, preserves eligibility and admits only that wallet', async t => {
+  const f = fixture(t); await f.setup();
+  const w = f.user.publicKey.toBase58(), other = Keypair.generate().publicKey.toBase58();
+  await f.service.setDeadline({ closesAt: f.options.now() - 1 });
+  await assert.rejects(f.q(), /MIGRATION_CLOSED/);
+  assert.equal((await f.service.account(w)).deadlineExempt, false);
+  f.service.setDeadlineException({ wallet: w, allowed: true });
+  f.service.setDeadlineException({ wallet: w, allowed: true });
+  const restarted = createMigration(f.options);
+  assert.equal((await restarted.account(w)).deadlineExempt, true);
+  assert.equal((await restarted.admin()).deadlineExceptions.length, 1);
+  assert.equal((await restarted.status()).closed, true);
+  assert.equal((await restarted.account(w)).eligibleUnits, '1000000000');
+  await assert.rejects(restarted.quote(other, { amount: '1', destination: B, idempotencyKey: 'other-wallet-123456' }), /MIGRATION_CLOSED/);
+  await assert.rejects(f.q('1001'), /ELIGIBILITY_EXCEEDED/);
+  const q = await f.q();
+  assert.equal(q.expiresAt, f.options.now() + 90000);
+  assert.equal((await restarted.submit(w, q.id, 'valid')).status, 'deposit_signed');
+  f.service.setDeadlineException({ wallet: w, allowed: false });
+  assert.equal((await restarted.account(w)).deadlineExempt, false);
+  assert.equal((await restarted.submit(w, q.id, 'valid')).status, 'deposit_signed');
+  f.state.deposit = 'confirmed';
+  await f.service.tick(); f.advance(420000); await f.service.tick();
+  assert.equal(f.state.payouts, 1);
+  assert.equal((await restarted.account(w)).remainingUnits, '900000000');
+});
+
+test('deadline exceptions do not bypass pause or expiry; revocation interrupts unsigned work', async t => {
+  const f = fixture(t); await f.setup();
+  const w = f.user.publicKey.toBase58();
+  await f.service.setDeadline({ closesAt: f.options.now() - 1 });
+  f.service.setDeadlineException({ wallet: w, allowed: true });
+  await f.service.updateConfig({ enabled: false });
+  await assert.rejects(f.q(), /MIGRATION_PAUSED/);
+  await f.service.updateConfig({ enabled: true });
+  const prepare = f.chain.prepareDeposit;
+  f.chain.prepareDeposit = async r => {
+    f.service.setDeadlineException({ wallet: w, allowed: false });
+    return prepare(r);
+  };
+  await assert.rejects(f.q(), /MIGRATION_CLOSED/);
+  assert.equal(f.db.prepare('SELECT COUNT(*) n FROM migration_requests').get().n, 0);
+  f.chain.prepareDeposit = prepare;
+  f.service.setDeadlineException({ wallet: w, allowed: true });
+  const q = await f.q();
+  const sign = f.chain.signDeposit;
+  f.chain.signDeposit = async (r, raw) => {
+    f.service.setDeadlineException({ wallet: w, allowed: false });
+    return sign(r, raw);
+  };
+  await assert.rejects(f.service.submit(w, q.id, 'valid'), /MIGRATION_CLOSED/);
+  assert.equal(f.db.prepare('SELECT COUNT(*) n FROM migration_sends').get().n, 0);
+  f.service.setDeadlineException({ wallet: w, allowed: true });
+  f.chain.signDeposit = async (r, raw) => { f.advance(90001); return sign(r, raw); };
+  await assert.rejects(f.service.submit(w, q.id, 'valid'), /QUOTE_EXPIRED/);
+  assert.equal(f.db.prepare('SELECT COUNT(*) n FROM migration_sends').get().n, 0);
+  assert.equal(f.db.prepare('SELECT status FROM migration_requests WHERE id=?').get(q.id).status, 'quoted');
+});
+
+test('deadline exception inputs are strict and only canonical Solana owners can be granted', t => {
+  const f = fixture(t), w = f.user.publicKey.toBase58();
+  for (const input of [{}, { wallet: w }, { wallet: w, allowed: 'true' },
+    { wallet: w, allowed: true, enabled: true }]) {
+    assert.throws(() => f.service.setDeadlineException(input), /INVALID_DEADLINE_EXCEPTION/);
+  }
+  assert.throws(() => f.service.setDeadlineException({ wallet: B, allowed: true }), /INVALID_WALLET/);
+  const [pda] = PublicKey.findProgramAddressSync([Buffer.from('deadline-test')], f.user.publicKey);
+  assert.throws(() => f.service.setDeadlineException({ wallet: pda.toBase58(), allowed: true }), /INVALID_WALLET/);
+  f.service.setDeadlineException({ wallet: w, allowed: true });
+  f.service.setDeadlineException({ wallet: w, allowed: false });
+  assert.match(f.db.prepare('SELECT event FROM migration_audit ORDER BY id DESC LIMIT 1').get().event, /^deadline_exception_revoked:/);
 });
 
 test('deadline validation is strict and general config cannot overwrite it', async t => {
