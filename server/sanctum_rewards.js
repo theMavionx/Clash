@@ -195,12 +195,17 @@ function createSanctumRewardsService({
     const current = db.prepare(`
       SELECT wallet FROM sanctum_reward_wallets WHERE player_id = ? LIMIT 1
     `).get(playerId);
+    const today = utcDay(now());
     if (current?.wallet && current.wallet !== normalized) {
+      // Only a non-zero sample can be double-counted after a switch. A wallet
+      // that held no clashSOL all day may be replaced; its empty samples are
+      // dropped so today matures for the new wallet alone.
       const observedToday = db.prepare(`
         SELECT 1 FROM sanctum_balance_observations
         WHERE player_id = ? AND wallet = ? AND observed_day_utc = ?
+          AND balance_atomics GLOB '*[1-9]*'
         LIMIT 1
-      `).get(playerId, current.wallet, utcDay(now()));
+      `).get(playerId, current.wallet, today);
       if (observedToday) {
         throw new SanctumRewardError(
           'WALLET_SWITCH_LOCKED',
@@ -210,14 +215,22 @@ function createSanctumRewardsService({
         );
       }
     }
-    db.prepare(`
-      INSERT INTO sanctum_reward_wallets (player_id, wallet, verified_at, updated_at)
-      VALUES (?, ?, datetime('now'), datetime('now'))
-      ON CONFLICT(player_id) DO UPDATE SET
-        wallet = excluded.wallet,
-        verified_at = datetime('now'),
-        updated_at = datetime('now')
-    `).run(playerId, normalized);
+    db.transaction(() => {
+      if (current?.wallet && current.wallet !== normalized) {
+        db.prepare(`
+          DELETE FROM sanctum_balance_observations
+          WHERE player_id = ? AND wallet = ? AND observed_day_utc = ?
+        `).run(playerId, current.wallet, today);
+      }
+      db.prepare(`
+        INSERT INTO sanctum_reward_wallets (player_id, wallet, verified_at, updated_at)
+        VALUES (?, ?, datetime('now'), datetime('now'))
+        ON CONFLICT(player_id) DO UPDATE SET
+          wallet = excluded.wallet,
+          verified_at = datetime('now'),
+          updated_at = datetime('now')
+      `).run(playerId, normalized);
+    })();
     return normalized;
   }
 

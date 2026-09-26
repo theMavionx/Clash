@@ -173,6 +173,36 @@ async function run() {
     readBalance: async () => ({ balanceAtomics: '0', slot: 1 }),
   });
   const isolatedFinalization = isolationService.finalizeCompletedRewards();
+
+  // An empty reward wallet sampled today may be replaced; its zero samples are dropped.
+  const switchDb = makeDb();
+  const switchWallets = [Keypair.generate().publicKey.toBase58(), Keypair.generate().publicKey.toBase58()];
+  switchDb.prepare('INSERT INTO players (id, name, gold) VALUES (?, ?, 0)').run('switcher', 'Switcher');
+  const switchBalances = new Map([[switchWallets[0], '0'], [switchWallets[1], '1000000000']]);
+  const switchService = createSanctumRewardsService({
+    db: switchDb,
+    now: () => Date.parse('2026-08-18T12:00:00.000Z'),
+    getResourceCaps: () => ({ gold: 2_000_000_000, wood: 10_000, ore: 10_000 }),
+    readBalance: async (wallet) => ({ balanceAtomics: switchBalances.get(wallet) || '0', slot: 1 }),
+  });
+  switchService.linkRewardWallet({ playerId: 'switcher', wallet: switchWallets[0] });
+  await switchService.recordBalanceObservation({
+    playerId: 'switcher', wallet: switchWallets[0], observedAt: Date.parse('2026-08-18T11:00:00.000Z'),
+  });
+  switchService.linkRewardWallet({ playerId: 'switcher', wallet: switchWallets[1] });
+  assert.equal(switchService.resolveLinkedWallet('switcher'), switchWallets[1]);
+  assert.equal(
+    switchDb.prepare('SELECT COUNT(*) AS n FROM sanctum_balance_observations WHERE wallet = ?').get(switchWallets[0]).n,
+    0,
+    'zero samples of the replaced wallet must be dropped',
+  );
+  await switchService.recordBalanceObservation({
+    playerId: 'switcher', wallet: switchWallets[1], observedAt: Date.parse('2026-08-18T11:30:00.000Z'),
+  });
+  await expectCode(
+    () => switchService.linkRewardWallet({ playerId: 'switcher', wallet: switchWallets[0] }),
+    'WALLET_SWITCH_LOCKED',
+  );
   assert.equal(isolatedFinalization.created, 2, 'one oversized holder must not block other wallets');
   assert.equal(
     isolationDb.prepare('SELECT reward_gold FROM sanctum_daily_rewards WHERE player_id = ?').get('huge-holder').reward_gold,
