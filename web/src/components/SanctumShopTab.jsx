@@ -19,7 +19,28 @@ import {
   linkClashSolRewardWallet,
   serializeSignedSanctumTransaction,
 } from '../lib/sanctumLst';
+import { useFarcaster } from '../hooks/useFarcaster';
 import './SanctumShopTab.css';
+
+// The @farcaster/mini-app-solana adapter passes UTF-8 strings to provider.signMessage(),
+// but Warpcast native expects base64-encoded bytes, so the signature covers the wrong
+// payload. Call the provider directly with base64 (same as useAuthFlow/usePacifica).
+let farcasterSolanaProvider = null;
+async function signFarcasterSolanaMessage(messageBytes) {
+  try {
+    if (!farcasterSolanaProvider) {
+      const { sdk } = await import('@farcaster/miniapp-sdk');
+      farcasterSolanaProvider = await sdk.wallet.getSolanaProvider();
+    }
+    if (!farcasterSolanaProvider?.signMessage) return null;
+    const msgB64 = btoa(Array.from(messageBytes, b => String.fromCharCode(b)).join(''));
+    const res = await farcasterSolanaProvider.signMessage(msgB64);
+    if (!res?.signature) return null;
+    return Uint8Array.from(atob(res.signature), c => c.charCodeAt(0));
+  } catch {
+    return null;
+  }
+}
 
 const SOLSCAN_TOKEN_URL = 'https://solscan.io/token/';
 const SANCTUM_EXPLORE_URL = 'https://app.sanctum.so/explore/clashSOL';
@@ -253,6 +274,7 @@ export default function SanctumShopTab({
 }) {
   const adapterWallet = useWallet();
   const privy = useOptionalPrivy();
+  const { isInFrame } = useFarcaster();
   const [section, setSection] = useState('rewards');
   const [direction, setDirection] = useState('stake');
   const [amount, setAmount] = useState('0.1');
@@ -655,6 +677,10 @@ export default function SanctumShopTab({
   }, [clearSwapProgress, swapProgress?.signature]);
 
   const signRewardMessage = useCallback(async (messageBytes) => {
+    if (isInFrame) {
+      const fcSignature = await signFarcasterSolanaMessage(messageBytes);
+      if (fcSignature) return fcSignature;
+    }
     const adapterAddress = adapterWallet?.publicKey?.toBase58?.() || '';
     if (adapterAddress === walletAddress && typeof adapterWallet?.signMessage === 'function') {
       return adapterWallet.signMessage(messageBytes);
@@ -665,7 +691,7 @@ export default function SanctumShopTab({
     }
     if (typeof solWallet?.signMessage === 'function') return solWallet.signMessage(messageBytes);
     throw new Error('This wallet cannot sign the reward-link message');
-  }, [adapterWallet, privy, privyWallet, solWallet, walletAddress]);
+  }, [adapterWallet, isInFrame, privy, privyWallet, solWallet, walletAddress]);
 
   const linkWallet = useCallback(async () => {
     if (!walletAddress) {
