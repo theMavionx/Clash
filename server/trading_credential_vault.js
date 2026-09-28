@@ -384,7 +384,12 @@ function authorizeSessionWallet(options, input, wallet) {
   if (owners.length && !existing) fail('VAULT_WALLET_MISMATCH', 'Unlock with an existing verified credential wallet first', 403);
   const vaultExists = options.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='trading_credential_vault'").get();
   const hasRecords = vaultExists && options.db.prepare('SELECT 1 FROM trading_credential_vault WHERE player_id=? LIMIT 1').get(input.playerId);
-  if (!owners.length && hasRecords) fail('VAULT_OWNER_UNAVAILABLE', 'Credential owner verification is unavailable', 403);
+  // Keys may be saved with only the game session, so records can exist before
+  // any owner wallet. Only the player's own login wallet may then claim them;
+  // a stolen game token alone cannot anchor an attacker wallet and read keys.
+  if (!owners.length && hasRecords && (!input.loginWallet || wallet !== input.loginWallet)) {
+    fail('VAULT_OWNER_UNAVAILABLE', 'Credential owner verification is unavailable', 403);
+  }
   options.db.prepare('INSERT INTO trading_credential_owners(player_id,wallet,verified_at) VALUES(?,?,?)')
     .run(input.playerId, wallet, new Date(options.now()).toISOString());
 }

@@ -166,7 +166,10 @@ test('ownerless preexisting vault data cannot be silently adopted by first arbit
   const h = harness(); t.after(() => h.db.close());
   h.vault.put('alice', putInput());
   assert.throws(() => h.sessions.issue({ playerId: 'alice', authToken: 'alice-token', verifiedWallet: WALLET }), code('VAULT_OWNER_UNAVAILABLE'));
+  assert.throws(() => h.sessions.issue({ playerId: 'alice', authToken: 'alice-token', verifiedWallet: OTHER_WALLET, loginWallet: WALLET }), code('VAULT_OWNER_UNAVAILABLE'));
   assert.deepEqual(h.sessions.owners('alice'), []);
+  h.sessions.issue({ playerId: 'alice', authToken: 'alice-token', verifiedWallet: WALLET, loginWallet: WALLET });
+  assert.deepEqual(h.sessions.owners('alice'), [WALLET]);
 });
 
 async function httpHarness(t, options = {}) {
@@ -190,23 +193,27 @@ async function httpHarness(t, options = {}) {
     return { status: response.status, headers: response.headers, body: await response.json() };
   };
   const unlock = (playerId = 'alice', wallet = WALLET) => {
-    const session = h.sessions.issue({ playerId, authToken: `${playerId}-token`, verifiedWallet: wallet });
+    const session = h.sessions.issue({ playerId, authToken: `${playerId}-token`, verifiedWallet: wallet, loginWallet: wallet });
     return `clash_vault_dev=${session.token}`;
   };
   return { ...h, call, unlock };
 }
 
-test('real HTTP: bearer cannot restore/write; wallet cookie permits owned sync and no-secret manifest', async t => {
+test('real HTTP: bearer can write but not restore/delete; wallet cookie permits owned sync and no-secret manifest', async t => {
   const h = await httpHarness(t);
   assert.equal((await h.call('/', { token: '' })).status, 401);
   const locked = await h.call('/');
   assert.equal(locked.body.unlocked, false); assert.equal(locked.body.identity.playerId, 'alice');
   assert.match(locked.headers.get('cache-control'), /no-store/u);
   assert.equal((await h.call('/restore', { method: 'POST', body: {} })).status, 403);
-  assert.equal((await h.call(`/${recordId}`, { method: 'PUT', body: putInput() })).status, 403);
+  const bearerSaved = await h.call(`/${recordId}`, { method: 'PUT', body: putInput() });
+  assert.equal(bearerSaved.status, 200); assert.equal(bearerSaved.body.record.revision, 1);
+  assert.equal(JSON.stringify(bearerSaved.body).includes(API_KEY), false);
+  assert.equal((await h.call(`/${recordId}`, { method: 'DELETE',
+    body: { expectedRevision: 1, operationId: crypto.randomUUID() } })).status, 403);
   const cookie = h.unlock();
-  const saved = await h.call(`/${recordId}`, { method: 'PUT', cookie, body: { ...putInput(), playerId: 'bob', player_id: 'bob' } });
-  assert.equal(saved.status, 200); assert.equal(saved.body.record.revision, 1);
+  const saved = await h.call(`/${recordId}`, { method: 'PUT', cookie, body: { ...putInput(undefined, { expectedRevision: 1 }), playerId: 'bob', player_id: 'bob' } });
+  assert.equal(saved.status, 200); assert.equal(saved.body.record.revision, 2);
   const metadata = await h.call('/', { cookie });
   assert.equal(metadata.body.unlocked, true); assert.deepEqual(metadata.body.unlockWallets, [WALLET]);
   assert.equal(JSON.stringify(metadata.body).includes(API_KEY), false);

@@ -154,13 +154,13 @@ test('server identity mismatch never hydrates locally saved secrets', async () =
   assert.throws(() => h.manager.capture(), /wait/i);
 });
 
-test('locked hydrated sessions can capture scope and persist locally without claiming upload', async () => {
+test('locked hydrated sessions can capture scope and upload without restoring', async () => {
   const h = harness(); h.state.unlocked = false; await h.begin();
   await h.manager.write(NAME, { apiKey: 'pending-fixture' }, { scope: h.manager.capture() });
-  assert.equal(h.manager.getSnapshot().pending, 1); assert.equal(h.calls.filter(call => call.method === 'PUT').length, 0);
-  assert.equal(h.memory.get(`${PREFIX}alice:${NAME}`).dirty, true);
-  h.state.unlocked = true; await h.manager.refresh();
-  assert.equal(h.manager.getSnapshot().pending, 0); assert.equal(h.records('alice').get(NAME).value.apiKey, 'pending-fixture');
+  assert.equal(h.manager.getSnapshot().pending, 0); assert.equal(h.calls.filter(call => call.method === 'PUT').length, 1);
+  assert.equal(h.calls.filter(call => call.path?.endsWith?.('/restore')).length, 0);
+  assert.equal(h.memory.get(`${PREFIX}alice:${NAME}`).dirty, false);
+  assert.equal(h.records('alice').get(NAME).value.apiKey, 'pending-fixture');
 });
 
 test('late revision-one restore cannot roll back an acknowledged revision-two write', async () => {
@@ -274,6 +274,16 @@ test('missing server key configuration is explicit and local data remains pendin
   await h.manager.write(NAME, { apiKey: 'offline-fixture' });
   assert.equal(h.manager.getSnapshot().pending, 1); assert.equal(h.records('alice').size, 0);
   assert.equal(h.memory.get(`${PREFIX}alice:${NAME}`).value.apiKey, 'offline-fixture');
+});
+
+test('locked session still saves keys to the server but never deletes or restores them', async () => {
+  const h = harness(); h.state.unlocked = false; await h.begin();
+  await h.manager.write(NAME, { apiKey: 'locked-fixture' });
+  assert.equal(h.manager.getSnapshot().pending, 0);
+  assert.equal(h.records('alice').get(NAME).value.apiKey, 'locked-fixture');
+  await h.manager.write(NAME, null);
+  assert.equal(h.manager.getSnapshot().pending, 1);
+  assert.equal(h.records('alice').get(NAME).deleted, false);
 });
 
 test('queued operation superseded by conflict does not rewrite rejected dirty material over clean disk record', async () => {

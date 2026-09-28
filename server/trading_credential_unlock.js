@@ -264,7 +264,8 @@ function createTradingCredentialUnlockRouter(input) {
       if (!validPlayer(req.player, req)) fail('VAULT_AUTH_REQUIRED', 'Player login changed. Sign in again.', 401);
       const cookie = authorizeWallet(req, challenge.wallet, options);
       const session = options.sessionService.issue({ playerId: req.player.id, authToken: req.headers['x-token'],
-        verifiedWallet: challenge.wallet, existingSessionToken: cookie });
+        verifiedWallet: challenge.wallet, existingSessionToken: cookie,
+        loginWallet: canonicalUnlockWallet(req.player.wallet)?.wallet || null });
       setTradingCredentialSessionCookie(res, session, { secure: options.secureCookies });
       res.json({ ok: true, unlocked: true, verifiedWallet: session.verifiedWallet, expiresAt: session.expiresAt });
     } catch (error) { jsonError(res, error); }

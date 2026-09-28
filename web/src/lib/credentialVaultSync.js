@@ -125,7 +125,9 @@ export function createCredentialVaultSync({ storage, describe, canMigrate,
   }
   async function flushOne(session, name, operation) {
     assertSession(session);
-    if (!session.unlocked || !operation.dirty) return;
+    if (!operation.dirty) return;
+    // Saving needs only the game session; deleting still needs the wallet unlock.
+    if (!session.unlocked && (operation.deleted || !session.authenticated || !session.keyConfigured)) return;
     const id = await recordId(name);
     assertSession(session);
     // Serial queues rebase later *local* operations after the preceding acknowledged revision.
@@ -152,7 +154,10 @@ export function createCredentialVaultSync({ storage, describe, canMigrate,
       session.error = null;
     } catch (error) {
       assertSession(session);
-      if (error.status === 409) {
+      if (error.status === 409 && !session.unlocked) {
+        // Resolving needs the saved remote value, which requires the wallet unlock.
+        session.error = 'A newer saved key exists. Verify your wallet to review it.';
+      } else if (error.status === 409) {
         await archiveConflict(session, name, operation);
         const manifest = await request(session);
         const metadata = manifest.records.find(row => row.id === id);
@@ -240,6 +245,7 @@ export function createCredentialVaultSync({ storage, describe, canMigrate,
       if (String(manifest.identity?.playerId || '') !== session.playerId) throw new Error('Trading account identity could not be verified.');
       session.authenticated = true;
       session.unlocked = !!manifest.unlocked;
+      session.keyConfigured = !!manifest.keyStatus?.configured;
       session.verifiedWallet = manifest.session?.verifiedWallet || null;
       session.unlockWallets = manifest.unlockWallets?.length ? manifest.unlockWallets
         : [manifest.identity?.loginWallet || manifest.identity?.wallet].filter(Boolean);
@@ -273,10 +279,10 @@ export function createCredentialVaultSync({ storage, describe, canMigrate,
         } else if (!local || local.revision !== row.revision) session.cache.delete(row.storageKey);
       }
       session.ready = true;
+      for (const [name, row] of [...session.entries]) if (row.dirty) {
+        await queue(session, name, () => flushOne(session, name, row));
+      }
       if (session.unlocked) {
-        for (const [name, row] of [...session.entries]) if (row.dirty) {
-          await queue(session, name, () => flushOne(session, name, row));
-        }
         const restored = await request(session, '/restore', { method: 'POST', body: '{}' });
         for (const row of restored.records || []) {
           if (!session.entries.get(row.storageKey)?.dirty) await acceptRemote(session, row);

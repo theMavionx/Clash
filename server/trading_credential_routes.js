@@ -144,6 +144,16 @@ function secretEndpoint(options, vault, sessions, handler) {
   });
 }
 
+// Saving a key only needs the player's game session: it returns metadata, never
+// secret values, so the server keeps every connected key for background sync.
+// Reading and deleting saved keys still require the wallet-verified session.
+function writeEndpoint(vault, handler) {
+  return endpoint(async (req, res) => {
+    if (!vault.keyStatus().configured) throw new TradingCredentialError('VAULT_UNAVAILABLE', 'Secure credential storage is unavailable', 503);
+    res.json(await handler(req));
+  });
+}
+
 function mountEndpoints(router, options, vault, sessions) {
   router.get('/', endpoint(async (req, res) => {
     const keyStatus = vault.keyStatus(), session = await sessionAuthorization(options, sessions, req);
@@ -154,7 +164,7 @@ function mountEndpoints(router, options, vault, sessions) {
       session: session ? { verifiedWallet: session.verifiedWallet, expiresAt: session.expiresAt } : null });
   }));
   router.post('/restore', secretEndpoint(options, vault, sessions, req => ({ records: vault.restore(req.player.id, req.body.ids) })));
-  router.put('/:id', secretEndpoint(options, vault, sessions, req => vault.put(req.player.id, { ...req.body, id: req.params.id })));
+  router.put('/:id', writeEndpoint(vault, req => vault.put(req.player.id, { ...req.body, id: req.params.id })));
   router.delete('/:id', secretEndpoint(options, vault, sessions, req => vault.remove(req.player.id, { ...req.body, id: req.params.id })));
   router.post('/session/logout', endpoint(async (req, res) => {
     const token = readTradingCredentialSessionCookie(req, { secure: options.secureCookies });
