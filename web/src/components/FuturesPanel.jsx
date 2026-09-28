@@ -10733,7 +10733,7 @@ function FuturesPanel() {
                   whiteSpace: 'nowrap',
                 }}
                 onClick={() => {
-                  disconnect?.();
+                  Promise.resolve(disconnect?.()).finally(() => hibachiHook.startAddAccount?.());
                   setHibachiApiKeyInput('');
                   setHibachiAccountIdInput('');
                   setHibachiPrivateKeyInput('');
@@ -10744,8 +10744,37 @@ function FuturesPanel() {
                 EDIT API
               </button>
             </div>
+            <div style={{...S.row, gap: 8, marginTop: 8}}>
+              <select
+                aria-label="Hibachi account"
+                value={hibachiHook.activeAccountId || ''}
+                onChange={event => { hibachiHook.switchAccount?.(event.target.value); }}
+                style={{
+                  flex: 1, minWidth: 0, padding: '6px 8px', fontSize: 12, borderRadius: 8,
+                  background: 'var(--terminal-surface)', color: 'var(--terminal-text)',
+                  border: '1px solid var(--terminal-border)',
+                }}
+              >
+                {(hibachiHook.accounts || []).map(item => (
+                  <option key={item.accountId} value={item.accountId}>Account {item.accountId}</option>
+                ))}
+              </select>
+              <button
+                style={{...S.btnSmall, padding: '6px 10px', fontSize: 11, whiteSpace: 'nowrap'}}
+                onClick={() => {
+                  hibachiHook.startAddAccount?.();
+                  setHibachiApiKeyInput('');
+                  setHibachiAccountIdInput('');
+                  setHibachiPrivateKeyInput('');
+                  setHibachiTradingPermissionConfirmed(false);
+                  setLocalAlert('Enter the API credentials of another Hibachi account or sub-account (e.g. FX).');
+                }}
+              >
+                + ACCOUNT
+              </button>
+            </div>
             <div style={{fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-faint)', lineHeight: 1.35}}>
-              Encrypted on this device; encrypted server sync requires wallet verification. Balance, margin, positions, and orders are read from Hibachi.
+              Each Hibachi account or sub-account needs its own API key. Keys are encrypted and saved to your Clash account. Balance, margin, positions, and orders are read from the selected account.
             </div>
           </div>
         )}

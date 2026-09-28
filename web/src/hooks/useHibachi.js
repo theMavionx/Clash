@@ -12,7 +12,10 @@ import {
   clearHibachiCredentials,
   hibachiCredentialHeaders,
   hibachiCredentialPayload,
+  readHibachiAccounts,
   readHibachiCredentials,
+  upsertHibachiAccount,
+  writeHibachiAccounts,
   writeHibachiCredentials,
 } from '../lib/hibachiCredentials';
 import {
@@ -422,6 +425,7 @@ export function useHibachi() {
   const player = usePlayer();
   const evmWallet = useEvmWallet();
   const [credentials, setCredentials] = useState(null);
+  const [accounts, setAccounts] = useState([]);
   const [account, setAccount] = useState(null);
   const [positions, setPositions] = useState([]);
   const [orders, setOrders] = useState([]);
@@ -468,7 +472,11 @@ export function useHibachi() {
     (async () => {
       try {
         const stored = await readHibachiCredentials();
-        if (!cancelled) setCredentials(stored);
+        const storedAccounts = await readHibachiAccounts().catch(() => []);
+        if (!cancelled) {
+          setCredentials(stored);
+          setAccounts(stored ? upsertHibachiAccount(storedAccounts, stored) : storedAccounts);
+        }
       } catch (e) {
         console.warn('[useHibachi] encrypted credential load failed:', e?.message || e);
       }
@@ -1098,6 +1106,10 @@ export function useHibachi() {
       assertCredential(scope);
       await writeHibachiCredentials(next, { scope });
       assertCredential(scope);
+      const nextAccounts = upsertHibachiAccount(await readHibachiAccounts().catch(() => accounts), next);
+      await writeHibachiAccounts(nextAccounts, { scope });
+      assertCredential(scope);
+      setAccounts(nextAccounts);
       setCredentials(next);
       setAccount(verifiedAccount || null);
       setDataReady(true);
@@ -1109,18 +1121,46 @@ export function useHibachi() {
     } finally {
       setLoading(false);
     }
-  }, [authHeaders, credentials, fetchJson, token, walletAddr, captureCredential, assertCredential]);
+  }, [accounts, authHeaders, credentials, fetchJson, token, walletAddr, captureCredential, assertCredential]);
 
-  const disconnect = useCallback(async () => {
-    const scope = captureCredential();
-    await clearHibachiCredentials({ scope });
-    assertCredential(scope);
-    setCredentials(null);
+  const resetAccountData = useCallback(() => {
     setAccount(null);
     setPositions([]);
     setOrders([]);
     setDataReady(false);
-  }, [captureCredential, assertCredential]);
+  }, []);
+
+  // Removes the active account; the next saved sub-account (if any) becomes active.
+  const disconnect = useCallback(async () => {
+    const scope = captureCredential();
+    const remaining = accounts.filter(item => item.accountId !== credentials?.accountId);
+    await writeHibachiAccounts(remaining, { scope });
+    assertCredential(scope);
+    const next = remaining[0] || null;
+    if (next) await writeHibachiCredentials(next, { scope });
+    else await clearHibachiCredentials({ scope });
+    assertCredential(scope);
+    setAccounts(remaining);
+    setCredentials(next);
+    resetAccountData();
+  }, [accounts, credentials?.accountId, captureCredential, assertCredential, resetAccountData]);
+
+  const switchAccount = useCallback(async (accountId) => {
+    const next = accounts.find(item => item.accountId === String(accountId));
+    if (!next || next.accountId === credentials?.accountId) return;
+    const scope = captureCredential();
+    await writeHibachiCredentials(next, { scope });
+    assertCredential(scope);
+    resetAccountData();
+    setCredentials(next);
+  }, [accounts, credentials?.accountId, captureCredential, assertCredential, resetAccountData]);
+
+  // Shows the connect form for another sub-account without forgetting saved ones;
+  // reloading or cancelling keeps the stored active account.
+  const startAddAccount = useCallback(() => {
+    resetAccountData();
+    setCredentials(null);
+  }, [resetAccountData]);
 
   const placeMarketOrder = useCallback(async (symbol, side, amount, _slippage = '0.5', leverage = 1, options = {}) => {
     setLoading(true);
@@ -1400,6 +1440,10 @@ export function useHibachi() {
     withdraw: unsupportedFundingAction,
     activate,
     disconnect,
+    accounts: accounts.map(item => ({ accountId: item.accountId })),
+    activeAccountId: credentials?.accountId || null,
+    switchAccount,
+    startAddAccount,
     claimGold,
     fetchOrders,
     isSelfCustody: true,

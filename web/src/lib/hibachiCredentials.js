@@ -37,6 +37,43 @@ export async function clearHibachiCredentials(options) {
   await removeEncryptedCredential(HIBACHI_CREDENTIALS_STORAGE_KEY, options);
 }
 
+// Every connected Hibachi account (main account and FX/other sub-accounts).
+// The active one is still mirrored under HIBACHI_CREDENTIALS_STORAGE_KEY so all
+// trading, history and tournament code keeps reading a single credential.
+export const HIBACHI_ACCOUNTS_STORAGE_KEY = 'clash_hibachi_accounts_v1';
+const MAX_HIBACHI_ACCOUNTS = 10;
+
+export function normalizeHibachiAccounts(value) {
+  const list = Array.isArray(value) ? value : Array.isArray(value?.accounts) ? value.accounts : [];
+  const byId = new Map();
+  for (const item of list) {
+    const normalized = normalizeHibachiCredentials(item);
+    if (normalized && !byId.has(normalized.accountId)) byId.set(normalized.accountId, normalized);
+  }
+  return [...byId.values()].slice(0, MAX_HIBACHI_ACCOUNTS);
+}
+
+export async function readHibachiAccounts() {
+  return normalizeHibachiAccounts(await readEncryptedCredential(HIBACHI_ACCOUNTS_STORAGE_KEY));
+}
+
+export async function writeHibachiAccounts(accounts, options) {
+  const normalized = normalizeHibachiAccounts(accounts);
+  if (normalized.length) {
+    await writeEncryptedCredential(HIBACHI_ACCOUNTS_STORAGE_KEY, { accounts: normalized }, options);
+  } else {
+    await removeEncryptedCredential(HIBACHI_ACCOUNTS_STORAGE_KEY, options);
+  }
+  return normalized;
+}
+
+export function upsertHibachiAccount(accounts, credentials) {
+  const normalized = normalizeHibachiCredentials(credentials);
+  if (!normalized) return normalizeHibachiAccounts(accounts);
+  const rest = normalizeHibachiAccounts(accounts).filter(item => item.accountId !== normalized.accountId);
+  return normalizeHibachiAccounts([...rest, normalized]);
+}
+
 export function hibachiCredentialPayload(credentials, extra = {}) {
   return {
     api_key: credentials?.apiKey,
