@@ -5647,6 +5647,27 @@ server.listen(PORT, '127.0.0.1', () => {
   setTimeout(runClashHolderSnapshots, 25_000).unref?.();
   setInterval(runClashHolderSnapshots, 30 * 60 * 1000).unref?.();
 
+  // Hibachi fills from server-stored keys, so trades placed outside the game
+  // still reach trade records, volume and tournaments.
+  //   HIBACHI_VAULT_SYNC=0                  → disable
+  //   HIBACHI_VAULT_SYNC_INTERVAL_MS=3600000 → run interval (default 1h)
+  if (process.env.HIBACHI_VAULT_SYNC !== '0') {
+    try {
+      const { createTradingCredentialVault } = require('./trading_credential_vault');
+      const { createHibachiVaultSync } = require('./hibachi_vault_sync');
+      const tradeRecon = require('./trade_reconciliation');
+      const playerById = clashDb.db.prepare('SELECT * FROM players WHERE id = ?');
+      createHibachiVaultSync({
+        db: clashDb.db,
+        vault: createTradingCredentialVault({ db: clashDb.db, catalog: require('./trading_credential_catalog') }),
+        getPlayer: playerId => playerById.get(playerId),
+        reconcile: (player, opts) => tradeRecon.reconcileTradesForPlayer(player, opts),
+      }).start({ intervalMs: Math.max(5 * 60 * 1000, Number(process.env.HIBACHI_VAULT_SYNC_INTERVAL_MS) || 60 * 60 * 1000) });
+    } catch (error) {
+      console.warn('[hibachi-vault-sync] disabled:', error?.message || error);
+    }
+  }
+
   // Marketplace event indexer. Polls each chain for Listed/Cancelled/Sold
   // events and writes them into marketplace_listings.
   //
