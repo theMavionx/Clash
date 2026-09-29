@@ -54,6 +54,7 @@ async function run() {
       if (player.id === 'p-fail') return { ok: false, error: 'Hibachi 401' };
       return { ok: true, imported: 3, updated: 1 };
     },
+    lastExecutedAt: accountId => (accountId === '10' ? '2026-09-29T08:00:00.000Z' : null),
     log: { log() {}, warn: message => warnings.push(message) },
   });
 
@@ -65,6 +66,9 @@ async function run() {
   const okCall = calls.find(call => call.player === 'p-ok').opts;
   assert.equal(okCall.dex, 'hibachi');
   assert.equal(okCall.reason, 'vault_sync:10');
+  assert.equal(okCall.limit, 5000);
+  assert.equal(okCall.startTime, Date.parse('2026-09-29T08:00:00.000Z') - 15 * 60 * 1000, 'incremental from last stored fill with overlap');
+  assert.equal(calls.find(call => call.player === 'p-listonly').opts.startTime, undefined, 'no stored fills uses default lookback');
   assert.deepEqual(okCall.credentials, { apiKey: 'a', accountId: '10', privateKey: 'x' });
   assert.notEqual(calls[2].opts.reason, calls[3].opts.reason, 'sub-accounts need separate reconcile cooldowns');
   assert.equal(warnings.length, 1);

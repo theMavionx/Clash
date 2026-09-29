@@ -768,7 +768,8 @@ async function runDexAdapter(player, dex, wallet, opts = {}) {
     const creds = adapterCredentials(dex, wallet, opts.headers, opts.credentials || opts);
     if (!creds) return { ok: false, skipped: 'browser_credentials_required', dex };
     const hibachi = require('../server-futures/hibachi');
-    return { dex, ...(await hibachi.importFillsForPlayer(playerId, creds, { limit, username: player.name })) };
+    const startTime = Number.isFinite(Number(opts.startTime)) ? Number(opts.startTime) : undefined;
+    return { dex, ...(await hibachi.importFillsForPlayer(playerId, creds, { limit, username: player.name, startTime })) };
   }
 
   if (dex === 'katana') {

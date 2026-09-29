@@ -16,8 +16,13 @@ const { tradingCredentialId } = require('./trading_credential_vault');
 const HIBACHI_STORAGE_KEY = 'clash_hibachi_credentials_v1';
 // Every connected account/sub-account (e.g. FX), stored as { accounts: [...] }.
 const HIBACHI_ACCOUNTS_STORAGE_KEY = 'clash_hibachi_accounts_v1';
-const DEFAULT_INTERVAL_MS = 60 * 60 * 1000;
-const DEFAULT_LIMIT = 500;
+const DEFAULT_INTERVAL_MS = 10 * 60 * 1000;
+// Upper bound per account per run. Runs are incremental from the last stored
+// fill, so paging stops as soon as it reaches already-recorded executions.
+const DEFAULT_LIMIT = 5_000;
+// Re-read a little before the newest stored fill so late-arriving executions
+// with slightly older timestamps are never skipped; duplicates are upserts.
+const INCREMENTAL_OVERLAP_MS = 15 * 60 * 1000;
 
 function parseCredentials(value) {
   let raw = value;
@@ -44,7 +49,15 @@ function parseAccountList(value) {
   return list.map(parseCredentials).filter(Boolean);
 }
 
-function createHibachiVaultSync({ db, vault, getPlayer, reconcile, limit = DEFAULT_LIMIT, log = console }) {
+function createHibachiVaultSync({
+  db, vault, getPlayer, reconcile, lastExecutedAt = () => null, limit = DEFAULT_LIMIT, log = console,
+}) {
+  function incrementalStart(accountId) {
+    let last = null;
+    try { last = Date.parse(lastExecutedAt(accountId) || ''); } catch { last = null; }
+    return Number.isFinite(last) ? last - INCREMENTAL_OVERLAP_MS : undefined;
+  }
+
   const credentialId = tradingCredentialId(HIBACHI_STORAGE_KEY);
   const accountsId = tradingCredentialId(HIBACHI_ACCOUNTS_STORAGE_KEY);
   let running = false;
@@ -93,6 +106,7 @@ function createHibachiVaultSync({ db, vault, getPlayer, reconcile, limit = DEFAU
               reason: `vault_sync:${credentials.accountId}`,
               credentials,
               limit,
+              startTime: incrementalStart(credentials.accountId),
             });
             if (result?.ok === false) {
               summary.failed++;
