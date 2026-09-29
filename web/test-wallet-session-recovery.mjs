@@ -154,6 +154,22 @@ test('Solana game login -> first EVM venue does not reconnect or claim a linked 
   assert.equal(f.storage.data.size,0);
 });
 
+test('QFEX recovery follows the actual Solana login wallet without requesting EVM', async () => {
+  const f = mount();
+  f.state.dex = 'qfex';
+  f.state.ui.futuresOpen = true;
+  f.render();
+  f.state.sol = { publicKey: null, connected: false };
+  f.render();
+  const html = f.advance();
+  assert.ok(hasBanner(html));
+  assert.ok(html.includes('Solana login'));
+  assert.equal(f.state.reconnects, 0);
+  const reconnect = elements(f.tree()).find(el => el.type === 'button' && el.props.children === 'Reconnect Clash login wallet');
+  await reconnect.props.onClick();
+  assert.equal(f.state.solConnects, 1);
+});
+
 test('a selected venue or stored server wallet is not connection evidence', () => {
   const f=mount();
   f.state.player.dex_accounts=[{dex:'avantis',wallet_address:EVM,status:'ready'}];

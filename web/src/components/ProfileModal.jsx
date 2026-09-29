@@ -82,7 +82,7 @@ function chainLabel(chain) {
 function ProfileModal({ onClose, onSwitchDex }) {
   const player = usePlayer();
   const resources = useResources();
-  const { sendToGodot } = useSend();
+  const { sendToGodot, setFuturesOpen } = useSend();
   const { publicKey, connected, disconnect, select, wallets, connect } = useWallet();
   const { setVisible: openWalletModal } = useWalletModal();
   const { isInFrame: inFrame } = useFarcaster();
@@ -114,7 +114,9 @@ function ProfileModal({ onClose, onSwitchDex }) {
   const ostiumHook = useOstium();
   const bulkHook = useBulk();
   const imperialHook = useImperial();
-  const tradingHook = dex === 'imperial'
+  const tradingHook = dex === 'qfex'
+    ? { account: null, walletAddr: player?.wallet || '' }
+    : dex === 'imperial'
     ? imperialHook
     : dex === 'avantis'
     ? avantisHook
@@ -210,7 +212,7 @@ function ProfileModal({ onClose, onSwitchDex }) {
     ? (walletAddr || null)            // Solana from usePhoenix
     : (adapterAddr || walletAddr || null); // Solana adapter / Privy
   const linkedWallet = player?.wallet || null;
-  const activeWallet = liveWallet || linkedWallet;
+  const activeWallet = dex === 'qfex' ? linkedWallet : liveWallet || linkedWallet;
   const walletSource = (dex === 'avantis' || dex === 'domfi' || dex === 'etoro' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'leverup' || dex === 'aster' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'lighter' || dex === 'rhlighter')
     ? (liveWallet ? 'evm' : null)
     : dex === 'decibel'
@@ -1043,6 +1045,10 @@ function ProfileModal({ onClose, onSwitchDex }) {
           )}
 
           {/* Wallets */}
+          {dex === 'qfex' && <div style={{ padding: 12 }}>
+            <p>QFEX uses separate API credentials. Your Clash login wallet does not determine the QFEX trading account.</p>
+            <button style={uiButton('primary', { width: '100%', minHeight: 44 })} onClick={() => { onClose(); setFuturesOpen(true); }}>OPEN QFEX SETUP &amp; ACCOUNT</button>
+          </div>}
           {profileWallets.length ? (
             <div style={S.walletListBox}>
               <div style={S.walletListTitle}>Wallets</div>

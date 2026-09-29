@@ -400,7 +400,8 @@ function TradeDataPrefetchBridge() {
       ? (evmWallet?.source || null)
       : (solWallet?.wallet?.adapter?.name || (privySolAddress ? 'privy_solana' : null));
   const token = player?.token || (typeof window !== 'undefined' ? window._playerToken : null) || null;
-  const canPrefetch = !!dex && (ui?.ready || !!token || !!walletAddress);
+  // API-key QFEX manages its own public and authenticated polling in useQfex.
+  const canPrefetch = dex !== 'qfex' && !!dex && (ui?.ready || !!token || !!walletAddress);
 
   useEffect(() => {
     installTradeFetchCache();

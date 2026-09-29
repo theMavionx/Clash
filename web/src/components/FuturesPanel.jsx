@@ -1,6 +1,9 @@
 import { Fragment, useState, memo, useCallback, useMemo, useRef, useEffect, useId } from 'react';
 import LighterOneTapConnect from './LighterOneTapConnect';
 import EtoroSetupGuide from './trading/EtoroSetupGuide';
+import QfexSetup from './trading/QfexSetup';
+import QfexSyncStatus from './trading/QfexSyncStatus';
+import { useQfex } from '../hooks/useQfex';
 import ImperialRouteCard from './trading/ImperialRouteCard';
 import PositionActionDialog from './trading/PositionActionDialog';
 import './trading/OpenTpslEditor.css';
@@ -151,6 +154,7 @@ const DEX_ERROR_LABELS = {
   avantis: 'Avantis',
   domfi: 'DomFi',
   etoro: 'eToro',
+  qfex: 'QFEX',
   decibel: 'Decibel',
   flash: 'Flash',
   gmtrade: 'GMTrade',
@@ -174,7 +178,7 @@ const DEX_ERROR_LABELS = {
   bulk: 'Bulk',
   imperial: 'Imperial',
 };
-const OPEN_TPSL_NATIVE_ORDER_ATTACH_DEXES = new Set(['avantis', 'domfi', 'etoro', 'bulk', 'decibel', 'flash', 'gmx', 'hibachi', 'hotstuff', 'hyperliquid', 'imperial', 'katana', 'lighter', 'rhlighter', 'nado', 'ondo', 'ostium', 'pacifica']);
+const OPEN_TPSL_NATIVE_ORDER_ATTACH_DEXES = new Set(['qfex', 'avantis', 'domfi', 'etoro', 'bulk', 'decibel', 'flash', 'gmx', 'hibachi', 'hotstuff', 'hyperliquid', 'imperial', 'katana', 'lighter', 'rhlighter', 'nado', 'ondo', 'ostium', 'pacifica']);
 const OPEN_TPSL_NATIVE_LIMIT_ATTACH_DEXES = new Set([...OPEN_TPSL_NATIVE_ORDER_ATTACH_DEXES, 'grvt', 'leverup', 'phoenix']);
 const OPEN_TPSL_POST_MARKET_DEXES = new Set([
   'decibel',
@@ -3069,7 +3073,7 @@ const PositionsList = memo(function PositionsList({
                 features are deliberately stripped from the simplified UX. */}
             <div style={{display: 'flex', gap: 6, marginTop: 4}}>
               <button style={S.btnRed} aria-haspopup="dialog" onClick={() => { setLocalAlert(''); clearError?.(); setClosePct(100); setExpandedPos(expanded === 'close' ? null : `${posKey}:close`); }}>{isDust ? 'Clean up' : 'Close'}</button>
-              {!isDust && !isBasic && (
+              {!isDust && !isBasic && dex !== 'qfex' && (
                 <button style={S.btnBlue} onClick={() => {
                   setLocalAlert(''); clearError?.();
                   if (expanded === 'tpsl') {
@@ -3127,7 +3131,7 @@ const PositionsList = memo(function PositionsList({
 
             {/* TP/SL panel — same isBasic gate so the inputs never reach
                 the DOM in Basic mode (and never get accidentally fired). */}
-            {!isDust && !isBasic && expanded === 'tpsl' && (
+            {!isDust && !isBasic && dex !== 'qfex' && expanded === 'tpsl' && (
               <PositionActionDialog title={`${pos.symbol} · Take profit / Stop loss`} onClose={() => setExpandedPos(null)} feedback={localAlert || error}>
               <TpslEditor
                 mode={tpslInputMode}
@@ -3225,7 +3229,7 @@ const BottomPanel = memo(function BottomPanel({
     { id: 'positions', label: `Positions (${filteredPositions.length})` },
     { id: 'orders', label: `Orders (${filteredOrders.length})` },
     ...(dex === 'avantis' || dex === 'flash' ? [] : [{ id: 'history', label: 'History' }]),
-    ...(dex === 'avantis' || dex === 'domfi' || dex === 'etoro' || dex === 'flash' ? [] : [{ id: 'funding', label: 'Funding' }]),
+    ...(dex === 'qfex' || dex === 'avantis' || dex === 'domfi' || dex === 'etoro' || dex === 'flash' ? [] : [{ id: 'funding', label: 'Funding' }]),
   ];
 
   return (
@@ -3394,7 +3398,7 @@ const BottomPanel = memo(function BottomPanel({
                             setExpandedPositionAction(expanded === 'close' ? null : `${rowKey}:close`);
                           }}
                         >{pendingClose ? <ClosingButtonLabel text="" /> : 'Close'}</button>
-                        {!isDust && (
+                        {!isDust && dex !== 'qfex' && (
                           <button
                             type="button"
                             style={S.tblRiskBtn}
@@ -3467,7 +3471,7 @@ const BottomPanel = memo(function BottomPanel({
                           </button>
                     </PositionActionDialog>
                   )}
-                  {!isDust && expanded === 'tpsl' && (
+                  {!isDust && dex !== 'qfex' && expanded === 'tpsl' && (
                     <PositionActionDialog title={`${p.symbol} · Take profit / Stop loss`} onClose={() => setExpandedPositionAction(null)} feedback={localAlert || error}>
                           <TpslEditor
                             mode={tpslInputMode}
@@ -3654,13 +3658,13 @@ function FuturesPanel() {
   // eToro leveraged/short orders require an explicit Stop Loss. The Basic
   // wizard has no TP/SL step, so eToro always uses the Pro form where the
   // required risk control is visible instead of inventing one for the user.
-  const isBasic = futuresMode === 'basic' && dex !== 'etoro';
+  const isBasic = futuresMode === 'basic' && dex !== 'etoro' && dex !== 'qfex';
   // In Basic mode the user only opens market trades from the wizard, so
   // limit/conditional Orders are not relevant. Hide that tab + redirect if
   // it's somehow active (e.g. Pro→Basic switch while Orders was selected).
   const visibleTabs = useMemo(() => TABS.filter((tab) => {
     if (isBasic && (tab.id === 'Orders' || tab.id === 'History' || tab.id === 'Funding')) return false;
-    if (tab.id === 'Funding' && (dex === 'avantis' || dex === 'domfi' || dex === 'etoro' || dex === 'flash')) return false;
+    if (tab.id === 'Funding' && (dex === 'qfex' || dex === 'avantis' || dex === 'domfi' || dex === 'etoro' || dex === 'flash')) return false;
     return true;
   }), [dex, isBasic]);
   const handleTabsWheel = useCallback((event) => {
@@ -3689,6 +3693,7 @@ function FuturesPanel() {
   const avantisHook = useAvantis();
   const domfiHook = useDomfi();
   const etoroHook = useEtoro();
+  const qfexHook = useQfex();
   const decibelHook = useDecibel();
   const gmxHook = useGmx();
   const monadHook = useMonad();
@@ -3722,6 +3727,8 @@ function FuturesPanel() {
     ? domfiHook
     : dex === 'etoro'
     ? etoroHook
+    : dex === 'qfex'
+    ? qfexHook
     : dex === 'decibel'
     ? decibelHook
     : dex === 'gmx'
@@ -3956,7 +3963,10 @@ function FuturesPanel() {
   }, [isMobile]);
 
   const [activeTab, setActiveTab] = useState('Trade');
-  const [symbol, setSymbol] = useState('BTC');
+  const [selectedSymbol, setSymbol] = useState('BTC');
+  const symbol = dex === 'qfex' && !markets.some(market => market.symbol === selectedSymbol)
+    ? (markets.find(market => !market.is_paused)?.symbol || markets[0]?.symbol || '')
+    : selectedSymbol;
   const [amount, setAmount] = useState('');
   const [leverage, setLeverage] = useState(() => leverageSettings[symbol] || 20);
   const [showLeverage, setShowLeverage] = useState(false);
@@ -5285,7 +5295,7 @@ function FuturesPanel() {
       // executes against whatever leverage was last persisted (e.g. 40× from
       // a previous session even though the slider shows 20×). Avantis/GMX
       // take leverage per-trade in the place-order call, so no pre-flush.
-      if (dex === 'pacifica' || dex === 'bulk' || dex === 'decibel' || dex === 'hotstuff' || isLighterDex) {
+      if (dex === 'qfex' || dex === 'pacifica' || dex === 'bulk' || dex === 'decibel' || dex === 'hotstuff' || isLighterDex) {
         if (levTimerRef.current) {
           clearTimeout(levTimerRef.current);
           levTimerRef.current = null;
@@ -7448,6 +7458,10 @@ function FuturesPanel() {
     );
   }
   // ==================== ETORO API KEY GATE ====================
+  if (dex === 'qfex' && setupVerified !== true) {
+    return <div ref={panelRef} className="futures-terminal-shell" style={{ ...(fullscreen ? S.containerFull : S.container), overflowY: 'auto', ...(isMobile ? { left: 8, right: 8, width: 'auto' } : {}) }}><QfexSetup activate={activate} loading={loading} error={error} onClose={handleClose} markets={markets} fetchCandles={fetchCandles} /></div>;
+  }
+
   if (dex === 'etoro' && hasWallet && setupVerified !== true) {
     const isRunning = referralLinking || loading;
     const canSave = etoroApiKeyInput.trim().length > 0
@@ -10268,7 +10282,7 @@ function FuturesPanel() {
                   consistency. */}
               <div style={{display: 'flex', gap: 6, marginTop: 4}}>
                 <button style={S.btnRed} aria-haspopup="dialog" onClick={() => { setLocalAlert(''); clearError?.(); setClosePct(100); setExpandedPos(expanded === 'close' ? null : `${posKey}:close`); }}>{isDust ? 'Clean up' : 'Close'}</button>
-                {!isDust && !isBasic && (
+                {!isDust && !isBasic && dex !== 'qfex' && (
                   <button style={S.btnBlue} onClick={() => {
                     setLocalAlert(''); clearError?.();
                     if (expanded === 'tpsl') {
@@ -10338,7 +10352,7 @@ function FuturesPanel() {
               )}
 
               {/* TP/SL panel — gated on Basic mode (button is hidden too). */}
-              {!isDust && !isBasic && expanded === 'tpsl' && (
+              {!isDust && !isBasic && dex !== 'qfex' && expanded === 'tpsl' && (
                 <PositionActionDialog title={`${pos.symbol} · Take profit / Stop loss`} onClose={() => setExpandedPos(null)} feedback={localAlert || error}>
                 <TpslEditor
                   mode={tpslInputMode}
@@ -10675,6 +10689,17 @@ function FuturesPanel() {
       : dex === 'ondo' && ondoWalletState === 'error'
       ? 'var(--terminal-short-strong)'
       : 'var(--terminal-text)';
+
+    if (dex === 'qfex') return <div style={{ ...S.fullCard, display: 'grid', gap: 14 }}>
+      <h3>QFEX account</h3>
+      <div>Account: {account?.account_id || 'Checking…'}</div>
+      <div>Equity: ${Number(account?.equity || 0).toFixed(2)}</div>
+      <div>Available margin: ${Number(account?.available_to_spend || 0).toFixed(2)}</div>
+      {qfexHook.pendingAction && <div role="alert">A QFEX action is awaiting confirmation ({qfexHook.pendingAction.status || 'unknown'}). New requests are blocked until its outcome is confirmed. <button style={S.btnSmall} onClick={() => qfexHook.reconcilePending().catch(reason => setLocalAlert(reason.message))}>Check outcome</button></div>}
+      <p>Manage deposits, withdrawals and API permissions directly in QFEX.</p>
+      <p>{inviteStatus?.reward_eligible ? 'Gold, tasks and tournaments use verified eligible QFEX fills.' : 'Builder attribution is not configured. Trading is available; builder-linked rewards are not yet enabled.'}</p>
+      <button style={S.btnSmall} disabled={loading} onClick={async () => { try { await disconnect(); } catch (reason) { setLocalAlert(reason.message); } }}>Change API credentials</button>
+    </div>;
 
     return (
       <div style={{display: 'flex', flexDirection: 'column', gap: 10}}>
@@ -12255,6 +12280,7 @@ function FuturesPanel() {
           </div>
         )}
         <main className="futures-panel-body futures-terminal-body" style={S.body}>
+          {dex === 'qfex' && activeTab !== 'Quests' && <QfexSyncStatus status={qfexHook.syncStatus} onRetry={qfexHook.claimGold} />}
           <div key={activeTab} style={{
             animation: 'fadeIn 0.25s ease-out',
             display: 'flex',

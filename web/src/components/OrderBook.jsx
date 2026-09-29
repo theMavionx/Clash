@@ -4,6 +4,7 @@ import { PACIFICA_WS_URL, pacificaFetch } from '../lib/pacificaClient';
 import { startDecibelOrderBook } from '../lib/decibelOrderBook';
 import { normalizeBulkOrderBook } from '../lib/bulkClient';
 import { ONDO_WS_URL, buildOndoWsPing, ondoMarketName } from '../lib/ondoClient';
+import { fetchQfexJson } from '../lib/qfexClient';
 
 const PRICE_STEPS = [0.01, 0.02, 0.1, 1];
 const FUTURES_API = import.meta.env.VITE_FUTURES_API || '/api/futures';
@@ -99,6 +100,20 @@ function OrderBook({
   const wsRef = useRef(null);
 
   useEffect(() => {
+    if (dex === 'qfex') {
+      let cancelled = false;
+      const controller = new AbortController();
+      const load = async () => {
+        try {
+          const json = await fetchQfexJson(`/api/futures/qfex/orderbook?symbol=${encodeURIComponent(symbol)}`, { token: window._playerToken, signal: controller.signal });
+          if (!cancelled) setBook(normalizePhoenixBook(json));
+        } catch { if (!cancelled) setBook({ bids: [], asks: [] }); }
+      };
+      setBook({ bids: [], asks: [] });
+      load();
+      const timer = window.setInterval(load, 5000);
+      return () => { cancelled = true; controller.abort(); window.clearInterval(timer); };
+    }
     if (dex === 'aster') {
       let cancelled = false;
       let controller = new AbortController();

@@ -14,6 +14,7 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 const mockId = '/__decibel-deposit-mocks.jsx';
 const entryId = '/__decibel-deposit-entry.jsx';
 const check = process.argv.includes('--check');
+const qfex = process.argv.includes('--qfex');
 const realWidgets = process.argv.includes('--terminal');
 const palette = process.argv.includes('--palette');
 const contextImports = new Set([
@@ -29,7 +30,7 @@ const mockComponents = new Set([
   'GoldRewardToast', 'FuturesModeSelect', 'BasicTradeFlow', 'ShareTradeModal',
 ]);
 const hookNames = [
-  'Pacifica', 'Avantis', 'Domfi', 'Etoro', 'Decibel', 'Gmx', 'Monad',
+  'Pacifica', 'Avantis', 'Domfi', 'Etoro', 'Qfex', 'Decibel', 'Gmx', 'Monad',
   'Phoenix', 'Hyperliquid', 'Risex', 'Nado', 'Ondo', 'Leverup', 'Aster',
   'Hibachi', 'Hotstuff', 'Grvt', 'Katana', 'Gmtrade', 'Flash',
   'Lighter', 'RhLighter', 'Bulk', 'Ostium', 'Imperial',
@@ -95,8 +96,8 @@ export const usePlayer = () => ({token:'local-palette-fixture'});
 export const useLayout = () => ({isMobile:window.innerWidth < 768});
 export const useWallet = () => ({select:noop,connect:noop,wallets:[]});
 export const useWalletModal = () => ({setVisible:noop});
-export const useDex = () => ({dex:params.get('dex')==='leverup'?'leverup':'decibel'});
-export const DEX_CONFIG = {decibel:{label:'Decibel',name:'Decibel',color:'#e47d35',logo:'/decibel.png'},leverup:{label:'LeverUp',name:'LeverUp',color:'#e47d35',logo:'/decibel.png'}};
+export const useDex = () => ({dex:${qfex ? "'qfex'" : "params.get('dex')==='leverup'?'leverup':'decibel'"}});
+export const DEX_CONFIG = {qfex:{label:'QFEX',name:'QFEX',color:'#5C78FF'},decibel:{label:'Decibel',name:'Decibel',color:'#e47d35',logo:'/decibel.png'},leverup:{label:'LeverUp',name:'LeverUp',color:'#e47d35',logo:'/decibel.png'}};
 export const useAptosWallet = () => ({});
 export const useFuturesMode = () => ({mode:'pro',needsSelection:false});
 export const useFarcaster = () => ({isInFrame:false});
@@ -156,6 +157,7 @@ const fixture = {
   load(id) { if(id === mockId) return mocks; if(id === entryId) return entry; },
   transform(code,id) {
     const path = id.replaceAll('\\', '/');
+    if (path.endsWith('/src/components/trading/QfexSetup.jsx')) return code.replace("import TradingViewWidget from '../TradingViewWidget';", `import {TradingViewWidget} from '${mockId}';`);
     if (palette && /\/src\/components\/(TradeHistory|FundingHistory|QuestsTab)\.jsx$/.test(path)) {
       return code.replace(/from '\.\.\/(lib\/decibel|hooks\/useGodot|contexts\/DexContext)'/g, `from '${mockId}'`);
     }
@@ -201,7 +203,7 @@ const fixture = {
 };
 const server = await createServer({
   root, configFile:false, plugins:[fixture,react()],
-  server:{host:'127.0.0.1',port:Number(process.env.FIXTURE_PORT || 5188),strictPort:true,middlewareMode:check,hmr:{port:check ? 25189 : Number(process.env.FIXTURE_HMR_PORT || 25188)}},
+  server:{host:'127.0.0.1',port:Number(process.env.FIXTURE_PORT || 5188),strictPort:true,middlewareMode:check,hmr:check ? false : {port:Number(process.env.FIXTURE_HMR_PORT || 25188)}},
 });
 if (check) {
   // An isolated SSR environment: no browser session, exchange credentials,
@@ -212,6 +214,24 @@ if (check) {
   try {
     const {default:FuturesPanel} = await server.ssrLoadModule('/src/components/FuturesPanel.jsx');
     const {configureFixture} = await server.ssrLoadModule(mockId);
+    if (qfex) {
+      for (const width of [1280,390]) {
+        window.innerWidth = width;
+        configureFixture('Trade', { setupVerified:false });
+        let html = renderToStaticMarkup(createElement(FuturesPanel));
+        assert.ok(html.includes('Connect QFEX') && html.includes('type="password"') && html.includes('Browse markets'));
+        assert.ok(!html.includes('Connect EVM') && !html.includes('Connect Petra'));
+        configureFixture('Trade', { setupVerified:true, account:{account_id:'fixture-123',equity:120,available_to_spend:100}, inviteStatus:{reward_eligible:false}, positions:[{symbol:'BTC',side:'bid',amount:'0.001',entry_price:'80000',leverage:10,margin:8}] });
+        for (const [tab, expected] of [['Trade','Chart preview: BTC'],['Positions','Close'],['Orders','No Orders'],['History','No trade history'],['Account','Builder attribution is not configured'],['Quests','Quests (mock account)']]) {
+          configureFixture(tab);
+          html = renderToStaticMarkup(createElement(FuturesPanel));
+          assert.ok(html.includes(expected), `QFEX ${tab} at ${width}`);
+          if (tab === 'Account') assert.ok(html.includes('fixture-123') && !html.includes('Deposit USDC'));
+          if (tab === 'Positions') assert.ok(!html.includes('>TP/SL<'));
+        }
+        console.log(`PASS QFEX setup, public browse and six connected tabs at ${width}`);
+      }
+    } else {
     for (const width of [1280,390]) {
       window.innerWidth = width;
       for (const [tab, expected] of [
@@ -246,6 +266,7 @@ if (check) {
     html = renderToStaticMarkup(createElement(FuturesPanel));
     assert.ok(html.includes('>Close<') && html.includes('>TP/SL<'), 'Risk management remains available with no free collateral');
     console.log('PASS zero-free-collateral position controls');
+    }
   } finally {
     await server.close();
   }

@@ -610,7 +610,7 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, chartSymbol = nu
             setChartError('No Nado trading history for this period.');
             return;
           }
-        } else if (dex === 'etoro' && typeof fetchCandles === 'function') {
+        } else if ((dex === 'etoro' || dex === 'qfex') && typeof fetchCandles === 'function') {
           const json = await fetchCandles(symbol, { interval, limit: 500 });
           candles = (Array.isArray(json) ? json : []).map(normalizeBulkCandle).filter(Boolean).sort((a, b) => a.time - b.time);
           if (cancelled) return;

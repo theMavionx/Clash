@@ -16,6 +16,7 @@
     "test:leverup-rewards": "node test-leverup-reward-flow.js && node test-leverup-tournament-migration.js",
     "test:domfi-rewards": "node test-domfi-rewards.js",
     "test:etoro-rewards": "node test-etoro-rewards.js",
+    "test:qfex-rewards": "node test-qfex-reward-flow.js && node test-qfex-tournament-migration.js",
     "test:ondo-claim": "node test-ondo-claim-reconciliation.js",
     "test:ondo-earnings": "node test-ondo-earnings.js",
     "test:aster-earnings": "node test-aster-earnings.js",

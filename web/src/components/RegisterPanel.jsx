@@ -135,6 +135,7 @@ function DexPicker({ onPick, isInFrame, isSolanaMobile }) {
                 {cfg.chain} · {
                   cfg.id === 'avantis' || cfg.id === 'domfi' ? 'SELF-CUSTODY · EVM' :
                   cfg.id === 'etoro' ? 'API ACCOUNT · CEX' :
+                  cfg.id === 'qfex' ? 'API ACCOUNT' :
                   cfg.id === 'gmx' ? 'SELF-CUSTODY · EVM' :
                   cfg.id === 'ostium' ? 'SELF-CUSTODY · EVM' :
                   cfg.id === 'hyperliquid' ? 'SELF-CUSTODY · EVM' :
@@ -813,7 +814,7 @@ function RegisterPanel() {
             />
           );
         }
-        if (!dexPicked) {
+        if (!dexPicked || dex === 'qfex') {
           return (
             <ConnectAccount
               onOpenWalletModal={openSolanaConnect}
@@ -888,6 +889,7 @@ function RegisterPanel() {
     if (dex === 'avantis') return 'AVANTIS LOGIN';
     if (dex === 'domfi') return 'DOMFI LOGIN';
     if (dex === 'etoro') return 'ETORO LOGIN';
+    if (dex === 'qfex') return 'QFEX · CLASH LOGIN';
     if (dex === 'decibel') return 'DECIBEL LOGIN';
     if (dex === 'gmx') return 'GMX LOGIN';
     if (dex === 'ostium') return 'OSTIUM LOGIN';
@@ -955,7 +957,7 @@ function RegisterPanel() {
       <EvmWalletModal
         open={evmModalOpen}
         onClose={() => setEvmModalOpen(false)}
-        targetChain={!dexPicked ? 'baseConnect' : dex === 'gmx' || dex === 'ostium' || dex === 'hyperliquid' ? 'arbitrum' : dex === 'monad' || dex === 'leverup' ? 'monad' : dex === 'risex' ? 'rise' : dex === 'nado' ? 'ink' : dex === 'hibachi' ? 'base' : dex === 'grvt' || dex === 'aster' ? 'baseConnect' : dex === 'katana' ? 'katana' : dex === 'hotstuff' || dex === 'ondo' ? 'mainnet' : dex === 'lighter' || dex === 'rhlighter' ? 'baseConnect' : 'base'}
+        targetChain={!dexPicked || dex === 'qfex' ? 'baseConnect' : dex === 'gmx' || dex === 'ostium' || dex === 'hyperliquid' ? 'arbitrum' : dex === 'monad' || dex === 'leverup' ? 'monad' : dex === 'risex' ? 'rise' : dex === 'nado' ? 'ink' : dex === 'hibachi' ? 'base' : dex === 'grvt' || dex === 'aster' ? 'baseConnect' : dex === 'katana' ? 'katana' : dex === 'hotstuff' || dex === 'ondo' ? 'mainnet' : dex === 'lighter' || dex === 'rhlighter' ? 'baseConnect' : 'base'}
         onConnected={handleEvmConnected}
       />
     </div>

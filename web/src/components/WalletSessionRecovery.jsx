@@ -90,7 +90,12 @@ export default function WalletSessionRecovery() {
   const loggedRef = useRef(null);
   const [sessionHistory] = useState(() => createTradingWalletSessionHistory());
 
-  const meta = DEX_WALLET[dex] || DEFAULT_WALLET_META;
+  const loginWallet = String(player?.wallet || '');
+  const qfexWalletKind = /^0x[0-9a-f]{40}$/i.test(loginWallet) ? 'evm'
+    : /^0x[0-9a-f]{64}$/i.test(loginWallet) ? 'aptos' : 'solana';
+  const meta = dex === 'qfex'
+    ? { kind: qfexWalletKind, chain: qfexWalletKind === 'evm' ? 'EVM login' : qfexWalletKind === 'aptos' ? 'Aptos login' : 'Solana login', label: 'QFEX', cta: 'Reconnect Clash login wallet', targetChain: 'baseConnect' }
+    : DEX_WALLET[dex] || DEFAULT_WALLET_META;
   const solAddress = solWallet?.publicKey?.toBase58?.() || null;
   const privySolAddress = (privy.solanaWallets || []).find(w => w?.address)?.address || null;
   const solAdapterReady = !!solAddress && solWallet?.connected === true;

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, memo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, useLayoutEffect, memo } from 'react';
 import goldIcon from '../assets/resources/gold_bar.png';
 import woodIcon from '../assets/resources/wood_bar.png';
 import stoneIcon from '../assets/resources/stone_bar.png';
@@ -13,6 +13,8 @@ import { pacificaFetch } from '../lib/pacificaClient';
 import { listStoredPacificaMasters, readPacificaAgent } from '../lib/pacificaAgentStorage';
 import { nftRarityCardStyle, normalizeNftRarity } from '../lib/nftV3Client';
 import { uiButton } from '../styles/theme';
+import { readQfexTaskHeaders, fetchQfexJson } from '../lib/qfexClient';
+import QfexSyncStatus from './trading/QfexSyncStatus';
 
 
 const GAME_API = import.meta.env.VITE_GAME_API || '/api';
@@ -589,6 +591,9 @@ function QuestsTab({ markets = [] }) {
   const [busyTask, setBusyTask] = useState(null);
   const [error, setError] = useState(null);
   const [flash, setFlash] = useState(null);
+  const [qfexSync, setQfexSync] = useState(null);
+  const taskScope = useRef(null);
+  const fetchingTasks = useRef(null);
   // Subscribe to the reactive player state so this component re-runs when
   // the token arrives. Previously we read `window._playerToken` at mount,
   // which is a stale snapshot — in Farcaster mini-apps the SDK → auto-login
@@ -598,11 +603,17 @@ function QuestsTab({ markets = [] }) {
   const player = usePlayer();
   const { dex } = useDex();
   const token = player?.token || (typeof window !== 'undefined' ? window._playerToken : null);
+  useLayoutEffect(() => {
+    taskScope.current = { token, dex };
+    setQfexSync(null);
+    return () => { taskScope.current = null; };
+  }, [token, dex]);
 
   const taskHeaders = useCallback(async (tok) => {
     const base = { 'x-token': tok };
     const activeDex = String(dex || '').toLowerCase();
     if (activeDex) base['x-dex'] = activeDex;
+    if (activeDex === 'qfex') return readQfexTaskHeaders(tok);
     if (activeDex === 'hibachi') {
       try {
         const creds = normalizeHibachiTaskCredentials(await readEncryptedCredential(HIBACHI_STORAGE_KEY));
@@ -634,15 +645,48 @@ function QuestsTab({ markets = [] }) {
 
   const fetchTasks = useCallback(async (tok) => {
     if (!tok) { setLoaded(true); return; }
+    const scope = taskScope.current;
+    const current = () => scope && taskScope.current === scope && scope.token === tok;
+    if (!current() || fetchingTasks.current === scope) return;
+    fetchingTasks.current = scope;
     try {
       // Also deliver saved rewards while the quest panel is open; the game
       // does not continuously poll /resources on every building interaction.
       try {
         const balance = await fetch(`${GAME_API}/resources`, { headers: { 'x-token': tok } });
-        if (balance.ok) syncQuestResources(await balance.json());
+        if (balance.ok) {
+          const resources = await balance.json();
+          if (current()) syncQuestResources(resources);
+        }
       } catch { /* Quest history stays usable during a resource-refresh retry. */ }
-      const headers = await taskHeaders(tok);
+      if (!current()) return;
+      let headers;
+      try { headers = await taskHeaders(tok); }
+      catch (reason) {
+        if (dex !== 'qfex') throw reason;
+        if (!current()) return;
+        setQfexSync({ error: reason.message });
+        headers = { 'x-token': tok, 'x-dex': 'qfex' };
+      }
+      if (!current()) return;
       const activeDex = String(dex || '').toLowerCase();
+      if (activeDex === 'qfex') {
+        if (headers['x-qfex-secret-key']) {
+          setQfexSync(previous => ({ ...previous, syncing: true, error: null }));
+          try {
+            const result = await fetchQfexJson('/api/futures/qfex/import-trades', {
+              token: tok, credentials: { publicKey: headers['x-qfex-public-key'],
+                secretKey: headers['x-qfex-secret-key'], accountId: headers['x-qfex-account-id'] },
+              method: 'POST', body: {}, signal: AbortSignal.timeout(30000),
+            });
+            if (result?.ok !== true) throw new Error(result?.error || 'Trade history is temporarily unavailable.');
+            if (current()) setQfexSync(result);
+          } catch (reason) {
+            if (current()) setQfexSync({ error: reason?.name === 'TimeoutError' ? 'History request timed out.' : reason.message });
+          }
+        } else setQfexSync(previous => previous?.error ? previous : { disconnected: true });
+      }
+      if (!current()) return;
       if (activeDex === 'pacifica') headers['x-skip-live-progress'] = 'browser';
       const r = await fetch(`${GAME_API}/tasks`, { headers });
       if (!r.ok) throw new Error('status ' + r.status);
@@ -656,14 +700,17 @@ function QuestsTab({ markets = [] }) {
           console.warn('[Quests] Pacifica browser progress refresh failed:', e?.message || e);
         }
       }
-      setTasks(nextTasks);
+      if (current()) { setTasks(nextTasks); setError(null); }
     } catch (e) {
       // Surface non-2xx so the user sees why the list is empty instead of
       // staring at a silent "No quests available" — Farcaster users hit this
       // when their token hasn't finished propagating and the 401 was swallowed.
-      setError('Could not load quests — ' + (e?.message || 'network error'));
+      if (current()) setError('Could not load quests — ' + (e?.message || 'network error'));
     }
-    finally { setLoaded(true); }
+    finally {
+      if (current()) setLoaded(true);
+      if (fetchingTasks.current === scope) fetchingTasks.current = null;
+    }
   }, [dex, player, taskHeaders]);
 
   useEffect(() => {
@@ -808,6 +855,7 @@ function QuestsTab({ markets = [] }) {
   if (!visibleTasks.length) {
     return (
       <div style={S.empty}>
+        {dex === 'qfex' && <QfexSyncStatus status={qfexSync} onRetry={() => fetchTasks(token)} />}
         <div style={S.emptyIcon}>⚔️</div>
         <div style={S.emptyTitle}>{tasks.length ? 'No quests for this DEX' : 'No quests available'}</div>
         <div style={S.emptyDesc}>{tasks.length ? 'Switch DEX or check back later.' : 'Check back later for new quests from the admin.'}</div>
@@ -817,6 +865,7 @@ function QuestsTab({ markets = [] }) {
 
   return (
     <div style={S.wrap}>
+      {dex === 'qfex' && <QfexSyncStatus status={qfexSync} onRetry={() => fetchTasks(token)} />}
       {flash && (
         <GoldRewardToast
           amount={flash.amount}

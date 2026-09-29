@@ -4,6 +4,7 @@ import { normalizeAptosAddress, normalizeEvmAddress, normalizeSolanaAddress } fr
 const STORAGE_PREFIX = 'clash:trading-wallet-session:v1:';
 
 export function normalizeVenueWallet(dex, address) {
+  if (dex === 'qfex') return normalizeEvmAddress(address) || normalizeAptosAddress(address) || normalizeSolanaAddress(address);
   switch (authWalletKindForDex(dex)) {
     case 'evm': return normalizeEvmAddress(address);
     case 'aptos': return normalizeAptosAddress(address);
@@ -15,7 +16,7 @@ export function normalizeVenueWallet(dex, address) {
 export function tradingWalletSessionKey(playerId, dex) {
   const owner = String(playerId || '').trim();
   const venue = String(dex || '').trim().toLowerCase();
-  if (!owner || authWalletKindForDex(venue) === 'unknown') return '';
+  if (!owner || (venue !== 'qfex' && authWalletKindForDex(venue) === 'unknown')) return '';
   return STORAGE_PREFIX + JSON.stringify([owner, venue]);
 }
 

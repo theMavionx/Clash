@@ -10,7 +10,7 @@ const APTOS_WALLET_RE = /^0x[0-9a-fA-F]{1,64}$/;
 const FUTURES_REWARD_DEXES = new Set([
   'avantis',
   'domfi',
-  'etoro',
+  'etoro', 'qfex',
   'decibel',
   'gmx',
   'ostium',
@@ -64,6 +64,7 @@ const VERIFIED_SOURCES_BY_DEX = {
   avantis: ['worker'],
   domfi: ['domfi_api'],
   etoro: ['etoro_api'],
+  qfex: ['qfex_builder_api'],
   decibel: ['decibel_fill', 'server'],
   gmx: ['worker', 'server'],
   ostium: ['ostium_api'],
@@ -89,7 +90,7 @@ const VERIFIED_SOURCES_BY_DEX = {
 const USER_SCOPED_IMPORT_DEXES = new Set([
   'decibel',
   'domfi',
-  'etoro',
+  'etoro', 'qfex',
   'hyperliquid',
   'ostium',
   'gmtrade',
@@ -108,7 +109,7 @@ const USER_SCOPED_IMPORT_DEXES = new Set([
 ]);
 
 const CREDENTIAL_SCOPED_IMPORT_DEXES = new Set([
-  'etoro',
+  'etoro', 'qfex',
   'hibachi',
   'katana',
   'grvt',
@@ -449,9 +450,46 @@ function leverupBuilderEligibilityClause() {
     ))`;
 }
 
+function qfexBuilderEligibilityClause() {
+  return `(CASE WHEN json_valid(trade_history.proof_json) THEN (
+    trade_history.client_order_id = 'qfex:' || json_extract(proof_json, '$.account_id') || ':fill:' || json_extract(proof_json, '$.fill.id')
+    AND trade_history.order_id = json_extract(proof_json, '$.fill.order_id')
+    AND trade_history.symbol = json_extract(proof_json, '$.fill.symbol')
+    AND json_extract(proof_json, '$.execution.trade_id') = json_extract(proof_json, '$.fill.id')
+    AND json_extract(proof_json, '$.execution.order_id') = trade_history.order_id
+    AND json_extract(proof_json, '$.execution.symbol') = trade_history.symbol
+    AND CAST(json_extract(proof_json, '$.execution.price') AS REAL) = CAST(trade_history.price AS REAL)
+    AND abs(CAST(json_extract(proof_json, '$.execution.quantity') AS REAL)) = CAST(trade_history.amount AS REAL)
+    AND abs(unixepoch(trade_history.created_at) - CAST(json_extract(proof_json, '$.execution.timestamp') AS REAL)) < 1
+    AND CAST(trade_history.amount AS REAL) = abs(CAST(json_extract(proof_json, '$.fill.quantity') AS REAL))
+    AND CAST(trade_history.price AS REAL) = CAST(json_extract(proof_json, '$.fill.price') AS REAL)
+    AND CAST(trade_history.price AS REAL) > 0 AND CAST(trade_history.amount AS REAL) > 0
+    AND abs(trade_history.notional_usd - CAST(trade_history.amount AS REAL) * CAST(trade_history.price AS REAL)) <= max(0.00000001, trade_history.notional_usd * 0.000000001)
+    AND EXISTS (SELECT 1 FROM qfex_action_intents qi
+      JOIN qfex_account_claims qa ON qa.account_id = qi.account_id AND qa.player_id = qi.player_id
+      WHERE qi.player_id = trade_history.player_id
+        AND qi.account_id = json_extract(trade_history.proof_json, '$.account_id')
+        AND qi.action_id = json_extract(trade_history.proof_json, '$.action_id')
+        AND qi.order_id = trade_history.order_id AND qi.kind = 'add_order' AND qi.status = 'accepted'
+        AND json_valid(qi.params_json)
+        AND json_extract(qi.params_json, '$.symbol') = trade_history.symbol
+        AND json_extract(qi.params_json, '$.side') = json_extract(trade_history.proof_json, '$.fill.side')
+        AND trade_history.side = CASE
+          WHEN json_extract(qi.params_json, '$.reduce_only') = 1 THEN
+            CASE json_extract(qi.params_json, '$.side') WHEN 'SELL' THEN 'close_long' ELSE 'close_short' END
+          ELSE CASE json_extract(qi.params_json, '$.side') WHEN 'BUY' THEN 'open_long' ELSE 'open_short' END END
+        AND length(qi.builder_code) = 36
+        AND qi.builder_code = json_extract(trade_history.proof_json, '$.builder_code'))
+    AND NOT EXISTS (SELECT 1 FROM trade_history earlier
+      WHERE earlier.dex = 'qfex' AND earlier.id < trade_history.id
+        AND earlier.client_order_id = trade_history.client_order_id)
+  ) ELSE 0 END)`;
+}
+
 function verifiedSourceClauseForDex(dex) {
   const normalizedDex = String(dex || '').toLowerCase();
   const sources = VERIFIED_SOURCES_BY_DEX[normalizedDex] || ['worker'];
+  if (normalizedDex === 'qfex') return `verified_source = ${sqlQuote(sources[0])} AND ${qfexBuilderEligibilityClause()}`;
   if (normalizedDex === 'ostium') {
     return `verified_source = ${sqlQuote(sources[0])} AND ${ostiumBuilderEligibilityClause()}`;
   }
@@ -598,6 +636,12 @@ function shouldSkipForCooldown(playerId, dex, wallet, reason, ms, force) {
 }
 
 function adapterCredentials(dex, wallet, headers = {}, opts = {}) {
+  if (dex === 'qfex') {
+    const publicKey = headerValue(headers, 'x-qfex-public-key') || opts.publicKey;
+    const secretKey = headerValue(headers, 'x-qfex-secret-key') || opts.secretKey;
+    const accountId = headerValue(headers, 'x-qfex-account-id') || opts.accountId;
+    return publicKey && secretKey ? { publicKey, secretKey, accountId } : null;
+  }
   if (dex === 'etoro') {
     const apiKey = headerValue(headers, 'x-etoro-api-key') || opts.apiKey || opts.api_key;
     const userKey = headerValue(headers, 'x-etoro-user-key') || opts.userKey || opts.user_key;
@@ -668,6 +712,12 @@ async function runDexAdapter(player, dex, wallet, opts = {}) {
       return { ok: false, skipped: 'adapter_missing', dex };
     }
     return { dex, ...(await decibelRewards.importRecentLimitFillsForPlayer(playerId, wallet)) };
+  }
+
+  if (dex === 'qfex') {
+    const creds = adapterCredentials(dex, wallet, opts.headers, opts.credentials || opts);
+    if (!creds) return { ok: false, skipped: 'browser_credentials_required', dex };
+    return { dex, ...(await require('../server-futures/qfex').importTradesForPlayer(playerId, creds, { limit })) };
   }
 
   if (dex === 'etoro') {

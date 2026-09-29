@@ -2,6 +2,7 @@ import { createContext, useContext, useState, useCallback, useEffect, useRef } f
 import bulkLogo from '../assets/bulk.png';
 import pacificaLogo from '../assets/pacifica.png';
 import avantisLogo from '../assets/avantis.svg';
+import qfexLogo from '../assets/qfex.svg';
 // Decibel uses the project favicon (yellow square with the brand mark) as its
 // official logo. Served from /public so we reference it as a root URL string.
 const decibelLogo = '/favicon.png';
@@ -15,6 +16,13 @@ const DexContext = createContext(null);
 const STORAGE_KEY = 'clash_dex';
 
 export const DEX_CONFIG = {
+  qfex: {
+    id: 'qfex', label: 'QFEX', shortLabel: 'QFEX', emoji: 'Q',
+    logo: qfexLogo, logoIsWordmark: false,
+    color: '#5C78FF', colorDark: '#3048B8', colorLight: 'rgba(92,120,255,0.16)',
+    borderColor: '#5C78FF', chain: 'QFEX', chainShort: 'API',
+    description: 'Trade with your QFEX API key',
+  },
   imperial: {
     id: 'imperial',
     label: 'IMPERIAL',
@@ -444,6 +452,7 @@ export const DEX_ORDER = [
   'avantis',
   'domfi',
   'etoro',
+  'qfex',
   'ostium',
   'gmx',
   'monad',
@@ -455,7 +464,7 @@ export function isDexAvailableInContext(dexId, { isInFrame = false, isSolanaMobi
   // Vault holds a Solana keypair, and Mobile Wallet Adapter is Solana-native.
   // Base/Arbitrum/Aptos/Monad signing would either dead-end or fall through
   // to a non-native wallet flow.
-  if (isSolanaMobile && dexId !== 'pacifica' && dexId !== 'phoenix' && dexId !== 'gmtrade' && dexId !== 'flash' && dexId !== 'bulk' && dexId !== 'imperial') return false;
+  if (isSolanaMobile && dexId !== 'qfex' && dexId !== 'pacifica' && dexId !== 'phoenix' && dexId !== 'gmtrade' && dexId !== 'flash' && dexId !== 'bulk' && dexId !== 'imperial') return false;
   // Farcaster mini apps expose Solana and, on some clients, EVM providers.
   // Aptos wallet-standard providers such as Petra are not available there, so
   // Decibel would leave users stuck on an impossible connect step.

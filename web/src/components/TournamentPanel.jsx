@@ -30,6 +30,7 @@ const DEX_LABELS = {
   avantis: 'Avantis',
   domfi: 'DomFi',
   etoro: 'eToro',
+  qfex: 'QFEX',
   decibel: 'Decibel',
   gmx: 'GMX',
   monad: 'Perpl',

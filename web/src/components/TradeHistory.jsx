@@ -559,10 +559,10 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
           if (!cancelled) setTrades(rows(data).map(t => normalizeGenericTrade(t, 'domfi', marketsRef.current)).filter(Boolean));
           return;
         }
-        if (dex === 'etoro') {
-          if (typeof fetchTradeHistory !== 'function') throw new Error('eToro history reader is not ready');
+        if (dex === 'etoro' || dex === 'qfex') {
+          if (typeof fetchTradeHistory !== 'function') throw new Error('Exchange history reader is not ready');
           const data = await fetchTradeHistory({ limit: 100, signal: controller.signal });
-          if (!cancelled) setTrades(rows(data).map(t => normalizeGenericTrade(t, 'etoro', marketsRef.current)).filter(Boolean));
+          if (!cancelled) setTrades(rows(data).map(t => normalizeGenericTrade(t, dex, marketsRef.current)).filter(Boolean));
           return;
         }
         if (dex === 'monad') {
