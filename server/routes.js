@@ -2974,8 +2974,22 @@ function trustedServerBoundNft(row) {
     || source.startsWith('bridge-relay');
 }
 
+// The daily ownership job re-reads the chain for every known holder wallet and
+// deactivates NFTs that moved, so its bindings stay valid until the next run.
+// Without this, holders whose NFT wallet is not a linked login wallet (e.g.
+// a tournament reward delivered to a separate Solana wallet) could never load
+// the troop once the 30-minute interactive binding expired.
+const DAILY_OWNERSHIP_SYNC_TTL_MS = 36 * 60 * 60_000;
+
+function freshDailyOwnershipBinding(row) {
+  if (!row || row.active === false || row.active === 0) return false;
+  if (String(row.source || '').trim().toLowerCase() !== 'daily-ownership-sync') return false;
+  if (!row.verifiedAt) return false;
+  return Date.now() - sqliteDateMs(row.verifiedAt) <= DAILY_OWNERSHIP_SYNC_TTL_MS;
+}
+
 function freshNftLoadBinding(row) {
-  return freshDemonKingBinding(row) || trustedServerBoundNft(row);
+  return freshDemonKingBinding(row) || trustedServerBoundNft(row) || freshDailyOwnershipBinding(row);
 }
 
 function evmLinkedWalletsForPlayer(player, getAddress) {
@@ -3225,7 +3239,7 @@ async function verifyNftBackedTroopLoadToken(player, entry, ownerHintRaw) {
     return { error: `${cfg.label} NFT owner mismatch`, status: 403 };
   }
   if (ownerHint && ownerHint !== cachedOwner) {
-    if (!trustedServerBoundNft(cached)) {
+    if (!trustedServerBoundNft(cached) && !freshDailyOwnershipBinding(cached)) {
       return { error: `${cfg.label} NFT owner mismatch`, status: 403 };
     }
     console.warn('[nft-load] cached NFT owner hint mismatch ignored for server-bound NFT', {
