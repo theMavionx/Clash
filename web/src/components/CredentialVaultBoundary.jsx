@@ -48,10 +48,14 @@ export default function CredentialVaultBoundary({ children }) {
   // GodotCanvas remains mounted outside this boundary. Old account hooks cannot
   // run while this player's secrets are loading, even for a single render.
   return <>
-    {hydrated ? <div key={`${playerId}:${state.epoch}`} style={{ display: 'contents' }}>{children}</div> :
+    {/* Sync runs in the background and never blocks the UI. Children remount once
+        when hydration finishes so hooks reload the synced keys; writes made before
+        then are rejected by the vault scope check ("Wait for secure trading storage"). */}
+    <div key={`${playerId}:${state.epoch}:${hydrated ? 'ready' : 'sync'}`} style={{ display: 'contents' }}>{children}</div>
+    {state.playerId === playerId && state.phase === 'error' &&
       <div role="status" style={{ ...box, position: 'fixed', top: 20, left: '50%', transform: 'translateX(-50%)', zIndex: 1200 }}>
-        {state.phase === 'error' ? 'Trading key sync needs attention.' : 'Syncing secure trading keys…'}
-        {state.phase === 'error' && <button type="button" style={{ ...button, marginLeft: 10 }} onClick={() => run(() => credentialVault.refresh())}>Retry</button>}
+        Trading key sync needs attention.
+        <button type="button" style={{ ...button, marginLeft: 10 }} onClick={() => run(() => credentialVault.refresh())}>Retry</button>
       </div>}
     {showManager && <button type="button" style={{ ...button, position: 'fixed', left: '50%', bottom: 9, transform: 'translateX(-50%)',
       zIndex: 1100, background: '#172436', fontSize: 11, padding: '6px 10px', border: '1px solid #52647a' }}

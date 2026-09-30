@@ -73,6 +73,7 @@ async function request(path, creds = null, query = {}) {
     console.warn('[qfex] upstream rejected', { path, status: response.status, contentType, html: /<html|<!doctype/i.test(snippet), snippet });
     if (response.status === 401) throw failure('QFEX rejected the API key or signature', 401, 'QFEX_UNAUTHORIZED');
     if (response.status === 403) throw failure('QFEX denied access. Check the API key permissions (view orders, positions and balance) and account scope.', 403, 'QFEX_FORBIDDEN');
+    if (response.status === 404) throw failure('QFEX endpoint not found', 404, 'QFEX_NOT_FOUND');
     if (response.status === 429) throw failure('QFEX rate limit reached. Try again shortly.', 429, 'QFEX_RATE_LIMITED');
     if (!body) throw failure(`QFEX returned an unexpected non-JSON response (${response.status}). Try again shortly.`, 502, 'QFEX_UPSTREAM_ERROR');
     throw failure(`QFEX read rejected (${response.status})`, 502, 'QFEX_UPSTREAM_REJECTED');
@@ -159,7 +160,12 @@ async function getCandles(symbol, options = {}) {
 /** Resolve the real account identity; credential fingerprints cannot claim rewards. */
 async function resolveAccount(credsInput) {
   const creds = credentials(credsInput);
-  const result = await request('/user/public-accounts', creds);
+  // /user/public-accounts returns 404 on production for some keys; the equity
+  // listing documents the same account_id/is_master shape, so use it as fallback.
+  const result = await request('/user/public-accounts', creds).catch(error => {
+    if (error?.code !== 'QFEX_NOT_FOUND') throw error;
+    return request('/user/subaccounts/equity', creds);
+  });
   const account = (result.accounts || []).find(a => creds.accountId ? a.account_id === creds.accountId : a.is_master === true);
   if (!account || !UUID.test(account.account_id)) throw failure('QFEX account identity could not be verified', 403);
   return { ...creds, accountId: account.account_id.toLowerCase() };
