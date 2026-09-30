@@ -59,9 +59,28 @@ async function request(path, creds = null, query = {}) {
     response = await fetchImpl(url.toString(), { headers: creds ? authHeaders(credentials(creds)) : {},
       signal: AbortSignal.timeout(timeoutMs), redirect: 'error' });
   } catch { throw failure('QFEX read unavailable or timed out', 502, 'QFEX_READ_FAILED'); }
-  const body = await response.json().catch(() => null);
-  if (!response.ok) throw failure(`QFEX read rejected (${response.status})`, response.status === 401 ? 401 : 502);
-  if (!body || typeof body !== 'object') throw failure('Invalid QFEX response', 502);
+  // Read text once so non-JSON upstream pages (Cloudflare/WAF/5xx HTML) can be diagnosed.
+  let text = '';
+  let body = null;
+  if (typeof response.text === 'function') {
+    text = await response.text().catch(() => '');
+    try { body = text ? JSON.parse(text) : null; } catch { body = null; }
+  } else body = await response.json().catch(() => null);
+  if (!response.ok) {
+    const contentType = String(response.headers?.get?.('content-type') || '');
+    const snippet = text.replace(/\s+/g, ' ').slice(0, 300);
+    // Never include request headers/credentials here, only the upstream response.
+    console.warn('[qfex] upstream rejected', { path, status: response.status, contentType, html: /<html|<!doctype/i.test(snippet), snippet });
+    if (response.status === 401) throw failure('QFEX rejected the API key or signature', 401, 'QFEX_UNAUTHORIZED');
+    if (response.status === 403) throw failure('QFEX denied access. Check the API key permissions (view orders, positions and balance) and account scope.', 403, 'QFEX_FORBIDDEN');
+    if (response.status === 429) throw failure('QFEX rate limit reached. Try again shortly.', 429, 'QFEX_RATE_LIMITED');
+    if (!body) throw failure(`QFEX returned an unexpected non-JSON response (${response.status}). Try again shortly.`, 502, 'QFEX_UPSTREAM_ERROR');
+    throw failure(`QFEX read rejected (${response.status})`, 502, 'QFEX_UPSTREAM_REJECTED');
+  }
+  if (!body || typeof body !== 'object') {
+    console.warn('[qfex] invalid upstream body', { path, status: response.status, snippet: text.replace(/\s+/g, ' ').slice(0, 300) });
+    throw failure('Invalid QFEX response', 502, 'QFEX_UPSTREAM_ERROR');
+  }
   return body;
 }
 
