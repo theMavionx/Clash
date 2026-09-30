@@ -17,7 +17,7 @@ function makeDb() {
       wood INTEGER NOT NULL DEFAULT 0,
       ore INTEGER NOT NULL DEFAULT 0,
       is_bot INTEGER NOT NULL DEFAULT 0,
-      last_activity_at TEXT
+      last_seen_at TEXT
     );
     CREATE TABLE player_wallets (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

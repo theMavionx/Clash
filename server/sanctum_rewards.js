@@ -435,7 +435,7 @@ function createSanctumRewardsService({
     }
     const total = allocations.reduce((sum, row) => sum + row.amount, 0);
     if (total <= 0) throw new SanctumRewardError('NOTHING_TO_CLAIM', 'No clashSOL Gold fits in storage', 409);
-    db.prepare(`UPDATE players SET gold = gold + ?, last_activity_at = datetime('now') WHERE id = ?`)
+    db.prepare(`UPDATE players SET gold = gold + ? WHERE id = ?`)
       .run(total, playerId);
     const updateReward = db.prepare(`
       UPDATE sanctum_daily_rewards
