@@ -265,7 +265,8 @@ function tradeCommand(creds, type, params, options = {}) {
 
 function runTradeCommand(creds, type, params, options = {}) {
   return new Promise((resolve, reject) => {
-    let sent = false, settled = false, authenticated = false;
+    let sent = false, settled = false, authenticated = false, opened = false;
+    const seen = []; // message shapes only (no payload), for timeout diagnostics
     const ws = socketFactory(`${TRADE_ORIGIN}?api_key=${encodeURIComponent(creds.publicKey)}`);
     const finish = (error, result) => {
       if (settled) return;
@@ -278,14 +279,24 @@ function runTradeCommand(creds, type, params, options = {}) {
       sent = true;
       ws.send(JSON.stringify({ type, params }), error => { if (error) finish(failure('QFEX command delivery uncertain', 502)); });
     };
-    const timer = setTimeout(() => finish(failure('QFEX timed out; refresh account before another action', 504, 'QFEX_TIMEOUT')), timeoutMs);
-    ws.on('open', () => ws.send(JSON.stringify({ type: 'auth', params: { hmac: sign(creds), account_id: creds.accountId,
-      ...(options.builderCode ? { builder_code: options.builderCode } : {}) } })));
-    ws.on('error', () => finish(failure('QFEX connection failed', 502)));
+    const timer = setTimeout(() => {
+      console.warn('[qfex] trade socket timeout', { command: type, opened, authenticated, sent, seen: seen.slice(0, 8) });
+      finish(failure('QFEX timed out; refresh account before another action', 504, 'QFEX_TIMEOUT'));
+    }, timeoutMs);
+    ws.on('open', () => { opened = true; ws.send(JSON.stringify({ type: 'auth', params: { hmac: sign(creds), account_id: creds.accountId,
+      ...(options.builderCode ? { builder_code: options.builderCode } : {}) } })); });
+    ws.on('unexpected-response', (_request, response) => {
+      const denied = response.statusCode === 401 || response.statusCode === 403;
+      console.warn('[qfex] trade socket handshake rejected', { command: type, status: response.statusCode });
+      finish(failure(denied ? 'QFEX rejected the API key for trading. Check that it has the Execute orders permission and the right account.'
+        : 'QFEX connection failed', denied ? 401 : 502, 'QFEX_TRADE_REJECTED'));
+    });
+    ws.on('error', error => { console.warn('[qfex] trade socket error', { command: type, message: String(error?.message || '').slice(0, 120) }); finish(failure('QFEX connection failed', 502)); });
     ws.on('close', () => finish(failure('QFEX connection closed before confirmation', 502)));
     ws.on('message', raw => {
       try {
         const message = JSON.parse(raw.toString());
+        seen.push(message.type || Object.keys(message).filter(key => key !== '$schema').join('+').slice(0, 60));
         if (message.err) {
           const error = failure(`QFEX rejected request: ${message.err.error_code || 'UnknownError'}`, 422);
           error.definiteRejection = message.err.error_code !== 'ServerError';
