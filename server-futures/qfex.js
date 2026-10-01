@@ -91,10 +91,87 @@ function builderCode() {
   return code || null;
 }
 
+/** Builder-account API key allowed to register wallet users (`register_user`). */
+function builderCredentials() {
+  const publicKey = String(process.env.QFEX_BUILDER_PUBLIC_KEY || '').trim();
+  const secretKey = String(process.env.QFEX_BUILDER_SECRET_KEY || '').trim();
+  return publicKey && secretKey ? { publicKey, secretKey, accountId: '' } : null;
+}
+
+function walletRegistrationReady() {
+  try { return !!(builderCode() && builderCredentials()); } catch { return false; }
+}
+
+const EVM_ADDRESS = /^0x[0-9a-fA-F]{40}$/u;
+const walletRegistrations = new Map();
+
+/** Fetch the exact wallet message QFEX wants signed; the builder code is server-side only. */
+async function getWalletMessage(address) {
+  const code = builderCode();
+  if (!code || !builderCredentials()) throw failure('QFEX wallet registration is not configured yet.', 503, 'QFEX_WALLET_UNAVAILABLE');
+  const wallet = String(address || '').trim();
+  if (!EVM_ADDRESS.test(wallet)) throw failure('A valid EVM wallet address is required.', 400, 'QFEX_WALLET_ADDRESS');
+  const url = new URL('/builder/web3/message', API_ORIGIN);
+  url.searchParams.set('address', wallet);
+  url.searchParams.set('builder_code', code);
+  let response;
+  try {
+    response = await fetchImpl(url.toString(), { signal: AbortSignal.timeout(timeoutMs), redirect: 'error' });
+  } catch { throw failure('QFEX is unavailable. Try again shortly.', 502, 'QFEX_READ_FAILED'); }
+  const body = await response.json().catch(() => null);
+  if (!response.ok || typeof body?.message !== 'string' || body.message.length > 2000) {
+    console.warn('[qfex] wallet message rejected', { status: response.status });
+    throw failure('QFEX could not prepare the wallet message.', 502, 'QFEX_WALLET_MESSAGE');
+  }
+  return { message: body.message, address: wallet, expires_in_seconds: 600 };
+}
+
+/**
+ * Exchange a signed wallet message for a trading-only API key on the user's main account.
+ * Each success replaces the user's previous builder key, so attempts are rate limited.
+ */
+async function registerWalletKey(input = {}, options = {}) {
+  const code = builderCode();
+  const builder = builderCredentials();
+  if (!code || !builder) throw failure('QFEX wallet registration is not configured yet.', 503, 'QFEX_WALLET_UNAVAILABLE');
+  const message = typeof input.message === 'string' ? input.message : '';
+  const signature = String(input.signature || '').trim();
+  if (!message || message.length > 2000 || !message.includes(code) || !/^0x[0-9a-fA-F]{130,1000}$/u.test(signature)) {
+    throw failure('Invalid wallet message or signature. Request a new message and sign again.', 400, 'QFEX_WALLET_SIGNATURE');
+  }
+  const limiterKey = String(options.playerId || 'anonymous');
+  const last = walletRegistrations.get(limiterKey) || 0;
+  if (Date.now() - last < 15000) throw failure('Please wait a few seconds before trying again.', 429, 'QFEX_RATE_LIMITED');
+  walletRegistrations.set(limiterKey, Date.now());
+  if (walletRegistrations.size > 1000) walletRegistrations.delete(walletRegistrations.keys().next().value);
+  let response;
+  try {
+    response = await fetchImpl(new URL('/builder/web3/api-key', API_ORIGIN).toString(), {
+      method: 'POST', headers: { 'content-type': 'application/json', ...authHeaders(builder) },
+      body: JSON.stringify({ message, signature }), signal: AbortSignal.timeout(timeoutMs), redirect: 'error' });
+  } catch { throw failure('QFEX is unavailable. Try again shortly.', 502, 'QFEX_READ_FAILED'); }
+  const body = await response.json().catch(() => null);
+  if (!response.ok) {
+    // Status and QFEX's problem detail only; never the request body or any key material.
+    console.warn('[qfex] wallet registration rejected', { status: response.status, detail: String(body?.detail || body?.title || '').slice(0, 160) });
+    if (response.status === 403) throw failure('Wallet registration is not enabled for this builder yet.', 503, 'QFEX_WALLET_UNAVAILABLE');
+    if (response.status === 400 || response.status === 401 || response.status === 422) {
+      throw failure('QFEX rejected the signature. Request a new message and sign again. New QFEX accounts may need to finish onboarding first.', 422, 'QFEX_WALLET_SIGNATURE');
+    }
+    throw failure('QFEX could not create the trading key. Try again shortly.', 502, 'QFEX_WALLET_REGISTER');
+  }
+  const accountId = String(body?.account_id || '').toLowerCase();
+  if (!UUID.test(accountId) || !body?.public_key || !body?.secret_key) {
+    throw failure('QFEX returned an incomplete trading key.', 502, 'QFEX_WALLET_REGISTER');
+  }
+  return { public_key: String(body.public_key), secret_key: String(body.secret_key), account_id: accountId };
+}
+
 /** Report configuration without exposing API secrets. */
 function configStatus() {
   return { ok: true, dex: 'qfex', api_origin: API_ORIGIN, app_url: 'https://qfex.com',
-    authentication: 'api_keys', builder_configured: !!builderCode(), reward_eligible: !!builderCode(),
+    authentication: 'api_keys', wallet_registration: walletRegistrationReady(),
+    builder_configured: !!builderCode(), reward_eligible: !!builderCode(),
     attribution_note: builderCode() ? 'Clash session builder attribution enabled.' : 'Builder code pending; trading available, Gold rewards unavailable.' };
 }
 
@@ -624,6 +701,6 @@ function setTestDependencies(options = {}) {
   timeoutMs = options.timeoutMs || 12000; marketCache = null; snapshotCache.clear(); socketCounts.clear();
 }
 
-module.exports = { credentials, sign, configStatus, request, normalizeMarket, getMarkets, getPrices,
+module.exports = { getWalletMessage, registerWalletKey, credentials, sign, configStatus, request, normalizeMarket, getMarkets, getPrices,
   getOrderbook, getCandles, resolveAccount, getAccountSnapshot, getTradeHistory, placeOrder,
   cancelOrder, closePosition, setLeverage, importTradesForPlayer, setTestDependencies, exactNumber, ensureSchema, getActionStatus };

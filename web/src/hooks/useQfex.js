@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useDex } from '../contexts/DexContext';
 import { usePlayer } from './useGodot';
 import { useCredentialOperationScope } from './useCredentialOperationScope';
+import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { beginQfexAction, finishQfexAction, pendingQfexAction, mayResendQfexAction, clearQfexCredentials, fetchQfexJson, normalizeQfexCredentials, readQfexCredentials, saveQfexCredentials } from '../lib/qfexClient';
 
 const API = '/api/futures/qfex';
@@ -12,6 +13,7 @@ const rows = value => Array.isArray(value) ? value : Array.isArray(value?.data) 
 export function useQfex() {
   const { dex } = useDex();
   const player = usePlayer();
+  const evmWallet = useEvmWallet();
   const token = player?.token || (typeof window !== 'undefined' ? window._playerToken : '') || '';
   const active = dex === 'qfex';
   const playerId = String(player?.id || player?.player_id || '');
@@ -112,6 +114,27 @@ export function useQfex() {
       return { error: reason.message };
     } finally { if (version === generation.current) setLoading(false); }
   }, [assert, capture, request]);
+
+  // Sign one wallet message; the server exchanges it for a trading-only QFEX API key
+  // (no withdrawals) that is then verified and stored like a manually entered key.
+  const connectWithWallet = useCallback(async () => {
+    const address = evmWallet?.address;
+    const client = evmWallet?.getWalletClient?.(1) || evmWallet?.walletClient;
+    if (!active || !token) return { error: 'Sign in first.' };
+    if (!address || !client) return { error: 'Connect an EVM wallet (MetaMask, Rabby, Phantom EVM…) to continue.' };
+    setLoading(true); setError('');
+    try {
+      const { message } = await request(`/wallet/message?address=${encodeURIComponent(address)}`, { credentials: null });
+      const signature = await client.signMessage({ account: address, message });
+      const keys = await request('/wallet/register', { credentials: null, method: 'POST', body: { message, signature } });
+      return await activate({ publicKey: keys?.public_key, secretKey: keys?.secret_key, accountId: keys?.account_id });
+    } catch (reason) {
+      const rejected = /reject|denied|cancel/i.test(String(reason?.message || ''));
+      const text = rejected ? 'Signature cancelled.' : (reason?.message || 'Wallet connection failed.');
+      setError(text);
+      return { error: text };
+    } finally { setLoading(false); }
+  }, [active, activate, evmWallet, request, token]);
 
   const claimGold = useCallback(async () => {
     if (!active || !credentials || !token) return { error: 'Connect QFEX first.' };
@@ -222,7 +245,7 @@ export function useQfex() {
     marginModes: {},
     dataReady: ready, accountReady: ready, isReady: ready, setupVerified: ready,
     inviteStatus: config, pendingAction, reconcilePending, loading: loading || (active && !loaded), error, clearError: () => setError(''),
-    activate, disconnect, refresh, fetchAccount: refresh, fetchPositions: refresh, fetchOrders: refresh,
+    activate, connectWithWallet, walletRegistration: config?.wallet_registration === true, evmAddress: evmWallet?.address || '', disconnect, refresh, fetchAccount: refresh, fetchPositions: refresh, fetchOrders: refresh,
     placeMarketOrder, placeLimitOrder, cancelOrder, closePosition, setLeverage, fetchTradeHistory, fetchCandles,
     setTpsl: async () => ({ error: 'Manage QFEX TP/SL directly in QFEX.' }),
     depositToPacifica: async () => ({ error: 'Manage funding directly in QFEX.' }),

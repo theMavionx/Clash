@@ -34,6 +34,8 @@ function attachQfexRoutes(router, auth, adapter = require('./qfex')) {
   route('get', 'candles', req => adapter.getCandles(req.query.symbol, {
     interval: req.query.interval || req.query.resolution, limit: req.query.limit,
   }), { credentials: false });
+  route('get', 'wallet/message', req => adapter.getWalletMessage(req.query.address), { credentials: false });
+  route('post', 'wallet/register', req => adapter.registerWalletKey(req.body, context(req)), { credentials: false });
   route('post', 'credentials/check', async (req, creds) => ({ ok: true,
     ...adapter.configStatus(), ...(await adapter.getAccountSnapshot(creds, { ...context(req), force: true })),
   }));

@@ -512,3 +512,49 @@ test('absent action status returns verified account and explicit not-found code 
   assert.equal(env.db.prepare('SELECT COUNT(*) AS count FROM qfex_action_intents').get().count, 0);
   assert.equal(env.commands.length, 0);
 });
+
+test('wallet registration: message uses the server builder code and the key request is HMAC-signed by the builder only', async () => {
+  const builderCode = crypto.randomUUID();
+  const saved = { code: process.env.QFEX_BUILDER_CODE, pub: process.env.QFEX_BUILDER_PUBLIC_KEY, secret: process.env.QFEX_BUILDER_SECRET_KEY };
+  Object.assign(process.env, { QFEX_BUILDER_CODE: builderCode, QFEX_BUILDER_PUBLIC_KEY: 'qfex_pub_builder', QFEX_BUILDER_SECRET_KEY: 'builder-secret' });
+  try {
+    const calls = [];
+    const wallet = '0x0000000000000000000000000000000000000001';
+    const message = `www.qfex.com wants you to sign in\n${wallet}\n\nAuthorize QFEX to create a trading-only API key for builder ${builderCode} on my main account.`;
+    const signature = `0x${'ab'.repeat(65)}`;
+    qfex.setTestDependencies({ fetch: async (url, options = {}) => {
+      calls.push({ url: String(url), options });
+      if (String(url).includes('/builder/web3/message')) return { ok: true, status: 200, json: async () => ({ message }) };
+      return { ok: true, status: 201, json: async () => ({ user_id: ACCOUNT, account_id: ACCOUNT, public_key: 'qfex_pub_user', secret_key: 'qfex_secret_user' }) };
+    } });
+    assert.equal(qfex.configStatus().wallet_registration, true);
+    await assert.rejects(qfex.getWalletMessage('not-an-address'), error => error.code === 'QFEX_WALLET_ADDRESS');
+    assert.equal((await qfex.getWalletMessage(wallet)).message, message);
+    assert.equal(new URL(calls[0].url).searchParams.get('builder_code'), builderCode);
+    await assert.rejects(qfex.registerWalletKey({ message: 'other', signature }, { playerId: 'p1' }), error => error.code === 'QFEX_WALLET_SIGNATURE');
+    const keys = await qfex.registerWalletKey({ message, signature }, { playerId: 'p2' });
+    assert.deepEqual(keys, { public_key: 'qfex_pub_user', secret_key: 'qfex_secret_user', account_id: ACCOUNT });
+    const post = calls.at(-1);
+    assert.equal(post.options.method, 'POST');
+    assert.equal(post.options.headers['x-qfex-public-key'], 'qfex_pub_builder');
+    assert.equal(JSON.stringify(Object.keys(JSON.parse(post.options.body)).sort()), JSON.stringify(['message', 'signature']));
+    assert.ok(!JSON.stringify(post.options.headers).includes('builder-secret'));
+    await assert.rejects(qfex.registerWalletKey({ message, signature }, { playerId: 'p2' }), error => error.status === 429);
+  } finally {
+    for (const [name, value] of Object.entries({ QFEX_BUILDER_CODE: saved.code, QFEX_BUILDER_PUBLIC_KEY: saved.pub, QFEX_BUILDER_SECRET_KEY: saved.secret })) {
+      if (value === undefined) delete process.env[name]; else process.env[name] = value;
+    }
+  }
+});
+
+test('wallet registration stays disabled and reveals no secrets without builder credentials', async () => {
+  const saved = { pub: process.env.QFEX_BUILDER_PUBLIC_KEY, secret: process.env.QFEX_BUILDER_SECRET_KEY };
+  delete process.env.QFEX_BUILDER_PUBLIC_KEY; delete process.env.QFEX_BUILDER_SECRET_KEY;
+  try {
+    assert.equal(qfex.configStatus().wallet_registration, false);
+    await assert.rejects(qfex.getWalletMessage('0x0000000000000000000000000000000000000001'), error => error.code === 'QFEX_WALLET_UNAVAILABLE');
+  } finally {
+    if (saved.pub !== undefined) process.env.QFEX_BUILDER_PUBLIC_KEY = saved.pub;
+    if (saved.secret !== undefined) process.env.QFEX_BUILDER_SECRET_KEY = saved.secret;
+  }
+});

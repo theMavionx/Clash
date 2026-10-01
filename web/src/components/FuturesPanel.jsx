@@ -7459,7 +7459,7 @@ function FuturesPanel() {
   }
   // ==================== ETORO API KEY GATE ====================
   if (dex === 'qfex' && setupVerified !== true) {
-    return <div ref={panelRef} className="futures-terminal-shell" style={{ ...(fullscreen ? S.containerFull : S.container), overflowY: 'auto', ...(isMobile ? { left: 8, right: 8, width: 'auto' } : {}) }}><QfexSetup activate={activate} loading={loading} error={error} onClose={handleClose} markets={markets} fetchCandles={fetchCandles} /></div>;
+    return <div ref={panelRef} className="futures-terminal-shell" style={{ ...(fullscreen ? S.containerFull : S.container), overflowY: 'auto', ...(isMobile ? { left: 8, right: 8, width: 'auto' } : {}) }}><QfexSetup activate={activate} loading={loading} error={error} onClose={handleClose} walletRegistration={qfexHook.walletRegistration} connectWithWallet={qfexHook.connectWithWallet} evmAddress={qfexHook.evmAddress} /></div>;
   }
 
   if (dex === 'etoro' && hasWallet && setupVerified !== true) {
