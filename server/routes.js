@@ -26960,6 +26960,60 @@ function startTournamentDailyPoolScheduler() {
 }
 
 startTournamentDailyPoolScheduler();
+
+// LeverUp fills used to be imported only when a client called claim-gold, so a
+// trade stayed missing from the tournament until the player reopened the LeverUp
+// terminal (LeverUp's indexer can also lag minutes behind the order). This sweeper
+// imports recent Clash-routed LeverUp activity server-side and credits the
+// tournament, independent of any open client.
+//   LEVERUP_FILL_SYNC=0                  -> disable
+//   LEVERUP_FILL_SYNC_INTERVAL_MS=45000  -> sweep interval (min 15s)
+//   LEVERUP_FILL_SYNC_WINDOW_HOURS=2     -> only players with an intent this recent
+let leverupFillSweepRunning = false;
+async function runLeverupFillSweep() {
+  if (leverupFillSweepRunning) return;
+  leverupFillSweepRunning = true;
+  try {
+    const fdb = futuresDbReadonly();
+    if (!fdb) return;
+    const hours = Math.max(1, Math.min(24, Number(process.env.LEVERUP_FILL_SYNC_WINDOW_HOURS) || 2));
+    const targets = fdb.prepare(`SELECT player_id, wallet, MAX(created_at) AS latest
+      FROM leverup_intent_proofs
+      WHERE reward_eligible = 1 AND created_at >= datetime('now', ?)
+      GROUP BY player_id, wallet ORDER BY latest DESC LIMIT 40`).all(`-${hours} hours`);
+    let imported = 0, credited = 0, failed = 0;
+    for (const target of targets) {
+      try {
+        const player = db.db.prepare('SELECT * FROM players WHERE id = ?').get(target.player_id);
+        if (!player) continue;
+        const reconcile = await tradeRecon.reconcileTradesForPlayer(player, {
+          dex: 'leverup', wallet: target.wallet, reason: 'leverup_worker', limit: 100,
+        });
+        imported += Number(reconcile?.imported || 0) + Number(reconcile?.updated || 0);
+        if (reconcile?.ok === false) failed += 1;
+        // Idempotent: credits any trade_history rows the tournament has not seen yet.
+        const sync = syncFuturesTournamentRows(player.id, 'leverup');
+        credited += Number(sync?.main?.credited_rows || 0);
+      } catch (error) {
+        failed += 1;
+        console.warn('[leverup-fill-sync] player failed:', String(error?.message || error).slice(0, 160));
+      }
+    }
+    if (imported || credited || failed) {
+      console.log(`[leverup-fill-sync] players=${targets.length} imported=${imported} tournament_credited=${credited} failed=${failed}`);
+    }
+  } catch (error) {
+    console.warn('[leverup-fill-sync] sweep failed:', String(error?.message || error).slice(0, 160));
+  } finally {
+    leverupFillSweepRunning = false;
+  }
+}
+
+if (process.env.LEVERUP_FILL_SYNC !== '0') {
+  const leverupFillSyncMs = Math.max(15_000, Number(process.env.LEVERUP_FILL_SYNC_INTERVAL_MS) || 45_000);
+  setTimeout(runLeverupFillSweep, 20_000).unref?.();
+  setInterval(runLeverupFillSweep, leverupFillSyncMs).unref?.();
+}
 luckyRaiderPayouts.startLuckyRaiderPayoutWorker();
 
 // ==================== ENCRYPTED CLIENT DIAGNOSTICS ====================
