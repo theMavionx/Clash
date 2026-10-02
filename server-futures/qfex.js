@@ -391,8 +391,10 @@ function runTradeCommand(creds, type, params, options = {}) {
           error.definiteRejection = message.err.error_code !== 'ServerError';
           return finish(error);
         }
-        if (message.type === 'auth') {
-          if (message.result !== 'success') return finish(failure('QFEX authentication rejected', 401));
+        // Docs show {type:'auth',result:'success'}; production replies {type:'authenticated'}.
+        if (message.type === 'auth' || message.type === 'authenticated') {
+          if (message.type === 'auth' && message.result !== 'success') return finish(failure('QFEX authentication rejected', 401));
+          if (message.success === false || message.error) return finish(failure('QFEX authentication rejected', 401));
           if (authenticated) return; authenticated = true;
           if (type === 'add_order' || type === 'cancel_order') ws.send(JSON.stringify({ type: 'subscribe', params: { channels: ['order_responses'] } }));
           else sendCommand();
