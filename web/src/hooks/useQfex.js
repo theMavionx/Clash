@@ -3,6 +3,7 @@ import { useDex } from '../contexts/DexContext';
 import { usePlayer } from './useGodot';
 import { useCredentialOperationScope } from './useCredentialOperationScope';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
+import { getAddress } from 'viem';
 import { beginQfexAction, finishQfexAction, pendingQfexAction, mayResendQfexAction, clearQfexCredentials, fetchQfexJson, normalizeQfexCredentials, readQfexCredentials, saveQfexCredentials } from '../lib/qfexClient';
 
 const API = '/api/futures/qfex';
@@ -118,7 +119,9 @@ export function useQfex() {
   // Sign one wallet message; the server exchanges it for a trading-only QFEX API key
   // (no withdrawals) that is then verified and stored like a manually entered key.
   const connectWithWallet = useCallback(async () => {
-    const address = evmWallet?.address;
+    // SIWE (EIP-4361) requires the checksummed address; a lowercase address can map to a new QFEX user.
+    let address = '';
+    try { address = evmWallet?.address ? getAddress(evmWallet.address) : ''; } catch { address = ''; }
     const client = evmWallet?.getWalletClient?.(1) || evmWallet?.walletClient;
     if (!active || !token) return { error: 'Sign in first.' };
     if (!address || !client) return { error: 'Connect an EVM wallet (MetaMask, Rabby, Phantom EVM…) to continue.' };

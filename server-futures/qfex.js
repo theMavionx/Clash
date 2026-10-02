@@ -121,8 +121,10 @@ const walletRegistrations = new Map();
 async function getWalletMessage(address) {
   const code = builderCode();
   if (!code || !builderCredentials()) throw failure('QFEX wallet registration is not configured yet.', 503, 'QFEX_WALLET_UNAVAILABLE');
-  const wallet = String(address || '').trim();
-  if (!EVM_ADDRESS.test(wallet)) throw failure('A valid EVM wallet address is required.', 400, 'QFEX_WALLET_ADDRESS');
+  const raw = String(address || '').trim();
+  if (!EVM_ADDRESS.test(raw)) throw failure('A valid EVM wallet address is required.', 400, 'QFEX_WALLET_ADDRESS');
+  // SIWE requires the EIP-55 checksummed address; lowercase can resolve to a new QFEX user.
+  const wallet = require('ethers').getAddress(raw.toLowerCase());
   const url = new URL('/builder/web3/message', API_ORIGIN);
   url.searchParams.set('address', wallet);
   url.searchParams.set('builder_code', code);
