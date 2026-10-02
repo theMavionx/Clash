@@ -239,10 +239,20 @@ async function resolveAccount(credsInput) {
   const creds = credentials(credsInput);
   // /user/public-accounts returns 404 on production for some keys; the equity
   // listing documents the same account_id/is_master shape, so use it as fallback.
-  const result = await request('/user/public-accounts', creds).catch(error => {
-    if (error?.code !== 'QFEX_NOT_FOUND') throw error;
-    return request('/user/subaccounts/equity', creds);
-  });
+  let result;
+  try {
+    result = await request('/user/public-accounts', creds).catch(error => {
+      if (error?.code !== 'QFEX_NOT_FOUND') throw error;
+      return request('/user/subaccounts/equity', creds);
+    });
+  } catch (error) {
+    // Wallet-registered keys are scoped to the main account and cannot list accounts.
+    // QFEX rejects a requested account the key does not own, so a successful
+    // positions read with that account header proves ownership.
+    if (!['QFEX_FORBIDDEN', 'QFEX_NOT_FOUND'].includes(error?.code) || !UUID.test(creds.accountId)) throw error;
+    await request('/user/positions', creds);
+    return { ...creds, accountId: creds.accountId.toLowerCase() };
+  }
   const account = (result.accounts || []).find(a => creds.accountId ? a.account_id === creds.accountId : a.is_master === true);
   if (!account || !UUID.test(account.account_id)) throw failure('QFEX account identity could not be verified', 403);
   return { ...creds, accountId: account.account_id.toLowerCase() };
