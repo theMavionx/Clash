@@ -74,6 +74,8 @@ async function request(path, creds = null, query = {}) {
     if (response.status === 401) throw failure('QFEX rejected the API key or signature', 401, 'QFEX_UNAUTHORIZED');
     if (response.status === 403) throw failure('QFEX denied access. Check the API key permissions (view orders, positions and balance) and account scope.', 403, 'QFEX_FORBIDDEN');
     if (response.status === 404) throw failure('QFEX endpoint not found', 404, 'QFEX_NOT_FOUND');
+    // A new, never-funded QFEX account has no balance snapshot yet.
+    if (response.status === 500 && /position balance not found/i.test(String(body?.detail || ''))) throw failure('QFEX account has no balance yet', 409, 'QFEX_NO_BALANCE');
     if (response.status === 429) throw failure('QFEX rate limit reached. Try again shortly.', 429, 'QFEX_RATE_LIMITED');
     if (!body) throw failure(`QFEX returned an unexpected non-JSON response (${response.status}). Try again shortly.`, 502, 'QFEX_UPSTREAM_ERROR');
     throw failure(`QFEX read rejected (${response.status})`, 502, 'QFEX_UPSTREAM_REJECTED');
@@ -250,7 +252,7 @@ async function resolveAccount(credsInput) {
     // QFEX rejects a requested account the key does not own, so a successful
     // positions read with that account header proves ownership.
     if (!['QFEX_FORBIDDEN', 'QFEX_NOT_FOUND'].includes(error?.code) || !UUID.test(creds.accountId)) throw error;
-    await request('/user/positions', creds);
+    await request('/user/positions', creds).catch(e => { if (e?.code !== 'QFEX_NO_BALANCE') throw e; });
     return { ...creds, accountId: creds.accountId.toLowerCase() };
   }
   const account = (result.accounts || []).find(a => creds.accountId ? a.account_id === creds.accountId : a.is_master === true);
@@ -423,7 +425,7 @@ async function loadAccountSnapshot(credsInput, options) {
   const creds = await resolveAccount(credsInput);
   if (options.playerId) claimAccount(options.playerId, creds.accountId);
   const [raw, orderResult, leverage, availableLeverage, markets] = await Promise.all([
-    request('/user/positions', creds), tradeCommand(creds, 'get_user_orders', { limit: 1000, offset: 0 }),
+    request('/user/positions', creds).catch(e => { if (e?.code === 'QFEX_NO_BALANCE') return { balance: {}, positions: [] }; throw e; }), tradeCommand(creds, 'get_user_orders', { limit: 1000, offset: 0 }),
     tradeCommand(creds, 'get_user_leverage', { limit: 1000, offset: 0 }),
     tradeCommand(creds, 'get_available_leverage_levels', { limit: 1000, offset: 0 }), getMarkets()]);
   const balance = raw.balance || {};
