@@ -87,6 +87,16 @@ async function request(path, creds = null, query = {}) {
   return body;
 }
 
+/** Positions + balance; the primary account must omit the requested-account header per docs. */
+async function readPositions(creds) {
+  try {
+    return await request('/user/positions', creds);
+  } catch (error) {
+    if (error?.code !== 'QFEX_NO_BALANCE' || !creds?.accountId) throw error;
+    return request('/user/positions', { ...creds, accountId: '' });
+  }
+}
+
 function builderCode() {
   const code = String(process.env.QFEX_BUILDER_CODE || '').trim();
   if (code && !UUID.test(code)) throw failure('QFEX builder configuration is invalid', 503);
@@ -252,7 +262,7 @@ async function resolveAccount(credsInput) {
     // QFEX rejects a requested account the key does not own, so a successful
     // positions read with that account header proves ownership.
     if (!['QFEX_FORBIDDEN', 'QFEX_NOT_FOUND'].includes(error?.code) || !UUID.test(creds.accountId)) throw error;
-    await request('/user/positions', creds).catch(e => { if (e?.code !== 'QFEX_NO_BALANCE') throw e; });
+    await readPositions(creds).catch(e => { if (e?.code !== 'QFEX_NO_BALANCE') throw e; });
     return { ...creds, accountId: creds.accountId.toLowerCase() };
   }
   const account = (result.accounts || []).find(a => creds.accountId ? a.account_id === creds.accountId : a.is_master === true);
@@ -318,8 +328,11 @@ function finishAction(row, status, result) {
 }
 
 function responseFor(message, type, params) {
-  if (type === 'get_user_trades' && Array.isArray(message.user_trades)) {
-    return { data: message.user_trades, count: message.count };
+  // Docs: {user_trades, count}; production: {user_trades_response: [...] | {user_trades, count}}.
+  if (type === 'get_user_trades') {
+    const reply = message.user_trades_response ?? message;
+    const rows = Array.isArray(reply) ? reply : reply?.user_trades;
+    if (Array.isArray(rows)) return { data: rows, count: reply?.count ?? message.count };
   }
   if (type === 'get_user_orders') return message.all_orders_response;
   if (type === 'get_user_leverage') return message.user_leverage_response;
@@ -433,7 +446,7 @@ async function loadAccountSnapshot(credsInput, options) {
   const creds = await resolveAccount(credsInput);
   if (options.playerId) claimAccount(options.playerId, creds.accountId);
   const [raw, orderResult, leverage, availableLeverage, markets] = await Promise.all([
-    request('/user/positions', creds).catch(e => { if (e?.code === 'QFEX_NO_BALANCE') return { balance: {}, positions: [] }; throw e; }), tradeCommand(creds, 'get_user_orders', { limit: 1000, offset: 0 }),
+    readPositions(creds).catch(e => { if (e?.code === 'QFEX_NO_BALANCE') return { balance: {}, positions: [] }; throw e; }), tradeCommand(creds, 'get_user_orders', { limit: 1000, offset: 0 }),
     tradeCommand(creds, 'get_user_leverage', { limit: 1000, offset: 0 }),
     tradeCommand(creds, 'get_available_leverage_levels', { limit: 1000, offset: 0 }), getMarkets()]);
   const balance = raw.balance || {};
@@ -599,7 +612,7 @@ async function cancelOrder(credsInput, input = {}, options = {}) {
 async function closePosition(credsInput, input = {}, options = {}) {
   const creds = await resolveAccount(credsInput);
   const symbol = symbolOf(input.symbol || input.positionId);
-  const raw = await request('/user/positions', creds);
+  const raw = await readPositions(creds);
   const position = (raw.positions || []).find(p => p.symbol === symbol && number(p.position) !== 0);
   if (!position) throw failure('No QFEX position exists for this symbol', 409);
   const quantity = input.quantity ?? input.amount ?? Math.abs(number(position.position));
