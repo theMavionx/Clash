@@ -392,6 +392,12 @@ function runTradeCommand(creds, type, params, options = {}) {
           return finish(error);
         }
         // Docs show {type:'auth',result:'success'}; production replies {type:'authenticated'}.
+        if (!message.type && Object.hasOwn(message, 'authenticated')) {
+          const value = message.authenticated;
+          console.warn('[qfex] trade socket auth reply', { value_type: typeof value, value: typeof value === 'object' ? Object.keys(value || {}).slice(0, 8) : value });
+          if (value === false || value?.success === false || value?.error) return finish(failure('QFEX authentication rejected', 401));
+          message.type = 'authenticated';
+        }
         if (message.type === 'auth' || message.type === 'authenticated') {
           if (message.type === 'auth' && message.result !== 'success') return finish(failure('QFEX authentication rejected', 401));
           if (message.success === false || message.error) return finish(failure('QFEX authentication rejected', 401));
